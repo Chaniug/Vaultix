@@ -1,0 +1,311 @@
+name: Android Stable Release
+
+# 稳定版发布流程（参考 Bastion 的 Android-Release.yml，按 Vaultix 分支模型调整）：
+#
+# 触发方式：
+#   1. push 到 rele 分支（main 验证无误后合入 rele 即发布）—— 版本号读取仓库根 VERSION 文件
+#   2. 推送 v* 标签（如 v0.1.0）
+#   3. 手动 workflow_dispatch（可填版本号，默认上一个 stable +1）
+#
+# 与 ci-debug.yml 的区别：
+#   - 默认开启混淆与资源压缩（minifyEnabled=true）
+#   - 发布的 Release 不标记 prerelease，且设为 Latest
+#   - 产出带 SHA-256 校验和的稳定 APK
+#
+# 签名：优先用仓库 Secrets（SIGNING_KEYSTORE_BASE64 等）；未配置时生成一次性密钥并告警，
+#       仅用于验证流水线，不可作正式分发。正式发布前请在仓库 Settings → Secrets 配置固定密钥。
+
+on:
+  push:
+    branches: [ rele ]
+    tags: [ 'v*' ]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (no v prefix), e.g. 0.1.0. 留空则自动建议：上一个 stable tag 的 patch +1'
+        required: false
+        default: ''
+      keep_releases:
+        description: '发布后保留多少个 stable release'
+        required: false
+        default: '10'
+      prune_dry_run:
+        description: '旧 Release 清理只报告不删除'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-stable-release
+  cancel-in-progress: false
+
+jobs:
+  build-stable:
+    name: Build & Publish Stable Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      GRADLE_OPTS: -Dorg.gradle.caching=true -Dorg.gradle.parallel=true
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Install Android SDK platform 36
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/ensure-android-sdk.sh"
+
+      - name: Validate signing secrets
+        shell: bash
+        run: |
+          missing=0
+          for name in SIGNING_KEYSTORE_BASE64 SIGNING_STORE_PASSWORD SIGNING_KEY_ALIAS SIGNING_KEY_PASSWORD; do
+            if [ -z "${!name}" ]; then
+              echo "::warning title=Missing signing secret::$name 未配置，将生成一次性密钥（仅验证用）。"
+              missing=1
+            fi
+          done
+
+      - name: Decode / generate keystore
+        shell: bash
+        run: |
+          if [ -n "${{ secrets.SIGNING_KEYSTORE_BASE64 }}" ]; then
+            printf '%s' "${{ secrets.SIGNING_KEYSTORE_BASE64 }}" | base64 -d > "$GITHUB_WORKSPACE/release.jks"
+          else
+            echo "::warning title=No signing key::生成一次性 debug 密钥（stable 发布请配置 SIGNING_* Secrets）。"
+            keytool -genkeypair -v -keystore "$GITHUB_WORKSPACE/release.jks" \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -alias androidkey -keypass android -storepass android \
+              -dname "CN=Vaultix, O=Vaultix"
+          fi
+          if [ ! -s "$GITHUB_WORKSPACE/release.jks" ]; then
+            echo "::error title=Keystore failed::release.jks 创建失败。"
+            exit 1
+          fi
+        env:
+          GITHUB_WORKSPACE: ${{ github.workspace }}
+
+      - name: Read VERSION file (rele push fallback)
+        id: version_file
+        if: github.ref == 'refs/heads/rele'
+        shell: bash
+        run: |
+          v=""
+          if [ -f VERSION ]; then
+            v="$(tr -d '[:space:]' < VERSION)"
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "VERSION 文件内容: '${v:-<空>}'"
+
+      - name: Suggest next stable version
+        id: suggest
+        shell: bash
+        run: |
+          last_tag="$(git tag -l 'v*' --sort=-v:refname 2>/dev/null | head -1 || true)"
+          if [ -n "$last_tag" ] && [[ "$last_tag" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            maj="${BASH_REMATCH[1]}"; min="${BASH_REMATCH[2]}"; pat="${BASH_REMATCH[3]}"
+            suggested="${maj}.${min}.$((pat + 1))"
+          else
+            suggested="0.1.0"
+          fi
+          echo "suggested=$suggested" >> "$GITHUB_OUTPUT"
+          echo "Suggested version (上一个 stable +1): $suggested" >&2
+
+      - name: Resolve release version & tag
+        id: meta
+        shell: bash
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            tag="${{ github.ref_name }}"
+            version="${tag#v}"
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            # push 到 rele：优先用 VERSION 文件，否则用建议值
+            version="${{ steps.version_file.outputs.version || steps.suggest.outputs.suggested }}"
+            tag="v${version}"
+          else
+            version="${{ github.event.inputs.version || steps.suggest.outputs.suggested }}"
+            tag="v${version}"
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      # build.gradle 用 `git describe --tags --exact-match HEAD` 取 release 版本名：
+      # 命中则 versionName = tag 去掉 v（与 Release 标题一致）；否则 fallback 成 "1.0.<commit 数>"。
+      # 手动 dispatch / rele push 时 HEAD 只是普通 commit、tag 尚未创建，会走 fallback 导致版本号错乱。
+      # 这里先在本地打上目标 tag，让上面那条分支命中。仅本地生效，不 push；
+      # push tag 触发时 tag 本就存在，-f 覆盖亦幂等。
+      - name: Create local tag so versionName matches the release tag
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -f "${{ steps.meta.outputs.tag }}" HEAD
+          git describe --tags --exact-match HEAD
+
+      - name: Build Release APK (stable, minified)
+        shell: bash
+        run: |
+          set -o pipefail
+          KS_OPTS="-Pandroid.injected.signing.store.file=$GITHUB_WORKSPACE/release.jks"
+          KS_OPTS="$KS_OPTS -Pandroid.injected.signing.store.password=${SIGNING_STORE_PASSWORD:-android}"
+          KS_OPTS="$KS_OPTS -Pandroid.injected.signing.key.alias=${SIGNING_KEY_ALIAS:-androidkey}"
+          KS_OPTS="$KS_OPTS -Pandroid.injected.signing.key.password=${SIGNING_KEY_PASSWORD:-android}"
+          ./gradlew :app:assembleRelease \
+            --build-cache \
+            --stacktrace \
+            -PversionName="${{ steps.meta.outputs.version }}" \
+            $KS_OPTS
+        env:
+          GITHUB_WORKSPACE: ${{ github.workspace }}
+
+      - name: Stop Gradle Daemon
+        if: always()
+        shell: bash
+        run: ./gradlew --stop || true
+
+      - name: Collect APK + SHA-256
+        id: apk_meta
+        shell: bash
+        run: |
+          cd app/build/outputs/apk/release
+          apk_list="$(find . -maxdepth 1 -type f \( -iname '*.apk' \) -printf '%f\n' | sort)"
+          apk_count="$(printf '%s\n' "$apk_list" | sed '/^$/d' | wc -l | tr -d ' ')"
+          if [ "$apk_count" = "0" ]; then
+            echo "No release APK found"; ls -la; exit 1
+          fi
+          echo "Detected release APKs:"
+          printf '%s\n' "$apk_list" | sed '/^$/d' | sed 's/^/ - /'
+          # 生成 checksum 文件
+          sha256sum *.apk > checksums-sha256.txt
+          echo "::notice title=checksums::$(cat checksums-sha256.txt | tr '\n' ' ')"
+          {
+            echo "apk_list<<EOF"
+            printf '%s\n' "$apk_list" | sed '/^$/d' | sed 's/^/> *   `/; s/$/`/'
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Remove existing release/tag for this version (idempotent re-run)
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+          tag="${{ steps.meta.outputs.tag }}"
+          rid="$(gh api "repos/${{ github.repository }}/releases/tags/$tag" --jq '.id' 2>/dev/null)"
+          if [[ "$rid" =~ ^[0-9]+$ ]]; then
+            echo "Deleting existing release id=${rid} for tag ${tag}"
+            gh api -X DELETE "repos/${{ github.repository }}/releases/${rid}" 2>/dev/null
+          fi
+          gh api -X DELETE "repos/${{ github.repository }}/git/refs/tags/$tag" 2>/dev/null
+          true
+
+      - name: Self-test changelog generator
+        shell: bash
+        run: python3 "${{ github.workspace }}/.github/scripts/generate_changelog.py" --self-test
+
+      - name: Generate changelog since last release
+        id: changelog
+        shell: bash
+        run: |
+          set +e
+          cur="${{ steps.meta.outputs.tag }}"
+          prev="$(git tag -l 'v*' --sort=-v:refname | grep -v "^${cur}$" | head -1 || true)"
+          notes="$(python3 "${{ github.workspace }}/.github/scripts/generate_changelog.py" --prev "$prev" --head HEAD --repo "${{ github.workspace }}")"
+          if [ -z "$notes" ]; then
+            notes="- 无变更记录"
+          fi
+          {
+            echo "notes<<EOF"
+            echo "$notes"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "Previous tag: ${prev:-none}"
+
+      - name: Publish Stable Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: "Vaultix v${{ steps.meta.outputs.version }} (Stable)"
+          body: |
+            > **✅ 正式稳定版 (Stable Release)**
+            >
+            > 本版本为正式发布版本，已开启代码混淆与资源压缩，建议使用此版本。
+            > 版本更新请通过「设置 → 检查更新」获取（指向本仓库 Release）。
+            > ---
+            > **构建信息：**
+            > * **Version**: `${{ steps.meta.outputs.version }}`
+            > * **Commit**: `${{ github.sha }}`
+            > * **Ref**: `${{ github.ref }}`
+            > **Generated APKs:**
+            ${{ steps.apk_meta.outputs.apk_list }}
+
+            ## 更新内容 (What's Changed)
+            ${{ steps.changelog.outputs.notes }}
+
+            ## 校验和 (SHA-256)
+            ```
+            $(cat app/build/outputs/apk/release/checksums-sha256.txt 2>/dev/null || echo "见附件 checksums-sha256.txt")
+            ```
+          files: |
+            app/build/outputs/apk/release/*.apk
+            app/build/outputs/apk/release/checksums-sha256.txt
+          draft: false
+          prerelease: false
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # 发布后清理旧 Release，防止版本列表无限膨胀（仅删 Release，保留 tag）。
+      - name: Prune old releases
+        if: success()
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          KEEP: ${{ github.event.inputs.keep_releases || '10' }}
+          DRY_RUN: ${{ github.event.inputs.prune_dry_run || 'false' }}
+        run: |
+          set -euo pipefail
+          gh release list --limit 200 --json tagName,createdAt > /tmp/releases.json
+          python3 - <<'PY'
+          import json, os, subprocess, sys
+          keep = int(os.environ.get("KEEP", "10"))
+          dry_run = os.environ.get("DRY_RUN", "false").lower() == "true"
+          with open("/tmp/releases.json") as h:
+              releases = json.load(h)
+          items = sorted(releases, key=lambda r: r.get("createdAt") or "", reverse=True)
+          doomed = items[keep:]
+          print(f"total={len(releases)} to_delete={len(doomed)} (保留最新 {keep} 个)")
+          for rel in doomed:
+              print(f"  - 将删除 {rel['tagName']}")
+          if dry_run:
+              print("dry_run=true，跳过删除"); sys.exit(0)
+          failed = 0
+          for rel in doomed:
+              tag = rel["tagName"]
+              res = subprocess.run(["gh", "release", "delete", tag, "--yes"], capture_output=True, text=True)
+              if res.returncode != 0:
+                  failed += 1
+                  print(f"::warning title=Release delete failed::{tag}: {res.stderr.strip()}")
+              else:
+                  print(f"已删除 {tag}")
+          print(f"清理完成：{len(doomed) - failed} 成功，{failed} 失败")
+          PY

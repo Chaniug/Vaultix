@@ -1,0 +1,220 @@
+name: Android CI (Debug)
+
+# 开发分支（main）的 debug 构建链路，参考 Bastion 的 main.yml：
+#   - push / PR 到 main 时：编译并产出 Debug APK（最快出包路径）
+#   - push 到 main 时：把 debug APK 发到 `preview` Release（prerelease），方便真机直接下载验证
+#   - PR / 手动触发时：额外跑 Lint 作为质量门
+#
+# 稳定版走 release.yml（rele 分支 / v* tag / 手动），本工作流不负责正式发布。
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '**/*.kt'
+      - '**/*.java'
+      - '**/*.xml'
+      - '**/*.json'
+      - '**/*.gradle'
+      - '**/*.gradle.kts'
+      - '**/*.kts'
+      - 'gradle/**'
+      - 'gradlew'
+      - 'gradlew.bat'
+      - '.github/workflows/ci-debug.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - '**/*.kt'
+      - '**/*.java'
+      - '**/*.xml'
+      - '**/*.json'
+      - '**/*.gradle'
+      - '**/*.gradle.kts'
+      - '**/*.kts'
+      - 'gradle/**'
+      - 'gradlew'
+      - 'gradlew.bat'
+      - '.github/workflows/ci-debug.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write   # 发 debug APK 到 preview Release 需要
+
+# 连续推送时新 run 排队而非取消旧 run：旧 run 跑完会把构建/配置缓存暖热，后续 run 命中缓存更快。
+concurrency:
+  group: android-ci-debug-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  android-ci:
+    name: Lint, test diagnostics, and debug build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      GRADLE_OPTS: -Dorg.gradle.caching=true -Dorg.gradle.parallel=true -Dorg.gradle.configuration-cache=true -Dorg.gradle.configuration-cache.problems=warn
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-read-only: ${{ github.event_name == 'pull_request' }}
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Install Android SDK platform 36
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/ensure-android-sdk.sh"
+
+      - name: Run lint
+        if: github.event_name != 'push'
+        run: ./gradlew :app:lintDebug --stacktrace
+
+      # push 时注入仓库固定签名，使 preview 与 stable release 签名一致、可互相覆盖安装
+      - name: Decode signing keystore
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          if [ -n "${{ secrets.SIGNING_KEYSTORE_BASE64 }}" ]; then
+            printf '%s' "${{ secrets.SIGNING_KEYSTORE_BASE64 }}" | base64 -d > "$GITHUB_WORKSPACE/release.jks"
+          else
+            # 未配置签名密钥时的兜底：生成一次性 debug 密钥（仅用于预览验证，不可用于正式分发）
+            echo "::warning title=No SIGNING_KEYSTORE_BASE64::未配置签名密钥，生成一次性 debug 密钥用于预览包。"
+            keytool -genkeypair -v -keystore "$GITHUB_WORKSPACE/release.jks" \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -alias androidkey -keypass android -storepass android \
+              -dname "CN=Vaultix Preview, O=Vaultix"
+          fi
+          if [ ! -s "$GITHUB_WORKSPACE/release.jks" ]; then
+            echo "::error title=Keystore decode failed::release.jks was not created or is empty."
+            exit 1
+          fi
+        env:
+          GITHUB_WORKSPACE: ${{ github.workspace }}
+
+      - name: Build Debug APK (build gate)
+        run: |
+          set +e
+          # versionName 形如 1.0.0-dev-78db0ed：dev 标识 + 短 commit SHA（可直接 git show 定位代码）。
+          # 用 GITHUB_SHA 而非 git rev-parse：本 job 是 fetch-depth=1 浅克隆，本地 git 无历史，
+          # 而 GITHUB_SHA 由 Actions 注入，不受克隆深度影响。
+          KS_FILE="${{ github.event_name == 'push' && format('{0}/release.jks', github.workspace) || '' }}"
+          KS_OPTS=""
+          if [ -n "$KS_FILE" ]; then
+            KS_OPTS="-Pandroid.injected.signing.store.file=$KS_FILE -Pandroid.injected.signing.store.password=android -Pandroid.injected.signing.key.alias=androidkey -Pandroid.injected.signing.key.password=android"
+          fi
+          ./gradlew :app:assembleDebug --stacktrace \
+            -PpreviewVersionSuffix=dev-$(echo ${GITHUB_SHA} | cut -c1-7) $KS_OPTS 2>&1 | tee /tmp/build_log.txt
+          BUILD_EXIT=${PIPESTATUS[0]}
+          if [ "$BUILD_EXIT" -ne 0 ]; then
+            echo "::notice title=Build gate diagnostics::build_failed=true"
+            grep -E "^e: |error:|FAILURE|Caused by:|Could not|What went wrong|BUILD FAILED" /tmp/build_log.txt | head -40 | while IFS= read -r line; do
+              echo "::notice title=build_gate::$line"
+            done
+            exit "$BUILD_EXIT"
+          fi
+          echo "::notice title=Build gate diagnostics::build_failed=false"
+
+      - name: List debug APK outputs
+        run: find app/build/outputs/apk/debug -maxdepth 1 -type f -print || true
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: debug-apk
+          path: |
+            app/build/outputs/apk/debug/*.apk
+            app/build/outputs/apk/debug/*.APK
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Collect debug APK metadata
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        id: apk_meta
+        shell: bash
+        run: |
+          cd app/build/outputs/apk/debug
+          apk_list="$(find . -maxdepth 1 -type f \( -iname '*.apk' -o -iname '*.APK' \) -printf '%f\n' | sort)"
+          apk_count="$(printf '%s\n' "$apk_list" | sed '/^$/d' | wc -l | tr -d ' ')"
+          if [ "$apk_count" = "0" ]; then
+            echo "No debug APK found"; ls -la; exit 1
+          fi
+          apk_markdown="$(printf '%s\n' "$apk_list" | sed '/^$/d' | sed 's/^/> *   `/; s/$/`/')"
+          echo "apk_count=${apk_count}" >> "$GITHUB_OUTPUT"
+          {
+            echo "apk_list<<EOF"
+            printf '%s\n' "$apk_markdown"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Cleanup previous preview release (assets + release + tag)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          release_id="$(gh api repos/${{ github.repository }}/releases/tags/preview --jq '.id' 2>/dev/null || true)"
+          if [[ "$release_id" =~ ^[0-9]+$ ]]; then
+            echo "Deleting existing preview release id=${release_id}"
+            gh api -X DELETE repos/${{ github.repository }}/releases/${release_id} 2>/dev/null || true
+          else
+            echo "No existing preview release to delete"
+          fi
+          gh api -X DELETE repos/${{ github.repository }}/git/refs/tags/preview 2>/dev/null || true
+          echo "Cleanup done"
+
+      - name: Publish Debug APK to preview Release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: preview
+          target_commitish: ${{ github.sha }}
+          name: "⚠️ Development Preview (dev-${{ github.sha }})"
+          body: |
+            > **⚠️ 开发预览版本 (Debug APK)**
+            >
+            > 此版本为 debug 构建产物，用于快速体验最新代码，可能包含未完成功能或 Bug。
+            > 正式使用请下载 Stable 版本（rele 分支发布）。
+            > ---
+            > **构建信息：**
+            > * **Build Type**: `debug`
+            > * **Commit SHA**: `${{ github.sha }}`
+            > * **Ref**: `${{ github.ref }}`
+            > **Generated APKs:**
+            ${{ steps.apk_meta.outputs.apk_list }}
+          files: |
+            app/build/outputs/apk/debug/*.apk
+            app/build/outputs/apk/debug/*.APK
+          draft: false
+          prerelease: true
+          make_latest: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run unit tests (non-blocking)
+        id: unit_tests
+        continue-on-error: true
+        run: ./gradlew :app:testDebugUnitTest --continue --stacktrace
+
+      - name: Upload unit test reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: debug-unit-test-reports
+          path: |
+            app/build/reports/tests/testDebugUnitTest
+            app/build/test-results/testDebugUnitTest
+          if-no-files-found: ignore
+          retention-days: 3
