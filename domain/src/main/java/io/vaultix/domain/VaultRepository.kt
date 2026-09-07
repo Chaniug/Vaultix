@@ -147,3 +147,42 @@ sealed interface VaultSyncReport {
     /** 该库类型暂不支持同步（KDBX 等后续里程碑） */
     data object Unsupported : VaultSyncReport
 }
+
+/**
+ * 同步触发来源（编排器用；语义与 Bastion SyncTriggerReason 对齐，见 data:repository
+ * 的 BitwardenSyncOrchestrator）。非 MANUAL 的自动触发默认「静默」：成功后不打断 UI，
+ * 失败仍要可见。
+ */
+enum class SyncTrigger {
+    /** 手动（按钮）：最高优先级、跳过节流 */
+    MANUAL,
+
+    /** 进入条目页 */
+    PAGE_ENTER,
+
+    /** 应用回前台 */
+    APP_RESUME,
+
+    /** WorkManager 周期后台同步 */
+    PERIODIC,
+
+    /** 失败后的自动重试 */
+    RETRY,
+}
+
+/**
+ * 单库同步运行时状态（Bastion VaultSyncStatus 语义子集）：UI 顶部细进度条 /
+ * 库列表同步状态 / 设置页同步信息的统一数据源。
+ */
+data class VaultSyncStatus(
+    val isRunning: Boolean = false,
+    val trigger: SyncTrigger? = null,
+    /** 自动触发（非 MANUAL）为静默：成功不打扰 UI，失败仍要可见。 */
+    val isSilent: Boolean = false,
+    val lastSuccessAt: Long? = null,
+    val lastSuccessCipherCount: Int? = null,
+    val lastErrorAt: Long? = null,
+    val lastError: String? = null,
+    val retryAttempt: Int = 0,
+    val nextRetryAt: Long? = null,
+)
