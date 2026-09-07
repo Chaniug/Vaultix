@@ -16,10 +16,14 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -27,6 +31,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeTopAppBar
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -34,6 +40,9 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -69,6 +78,9 @@ fun VaultListScreen(
     val quickUnlockSuggest by viewModel.quickUnlockSuggest.collectAsStateWithLifecycle()
     val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
     val activity = rememberFragmentActivity()
+    val context = LocalContext.current
+    val snackbarHostState = remember { SnackbarHostState() }
+    var vaultToRemove by remember { mutableStateOf<VaultSummary?>(null) }
     // 认证对话框文案
     val enrollTitle = stringResource(R.string.quick_unlock_enroll_title)
     val cancelText = stringResource(R.string.action_cancel)
@@ -87,11 +99,18 @@ fun VaultListScreen(
                         onError = { _, _ -> /* 取消/失败：横幅保留，可再试 */ },
                     )
                 }
+                VaultListViewModel.Event.Removed ->
+                    snackbarHostState.showSnackbar(context.getString(R.string.vault_removed))
+                is VaultListViewModel.Event.RemoveFailed ->
+                    snackbarHostState.showSnackbar(
+                        context.getString(R.string.item_save_failed, event.message),
+                    )
             }
         }
     }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             LargeTopAppBar(
                 title = { Text(text = stringResource(R.string.vault_list_title)) },
@@ -144,12 +163,40 @@ fun VaultListScreen(
                             vault = vault,
                             syncStatus = syncStatuses[vault.id],
                             onClick = { onOpenVault(vault) },
+                            onRemove = { vaultToRemove = vault },
                         )
                     }
                 }
                 }
             }
         }
+    }
+
+    val removing = vaultToRemove
+    if (removing != null) {
+        AlertDialog(
+            onDismissRequest = { vaultToRemove = null },
+            title = { Text(stringResource(R.string.vault_remove_title)) },
+            text = { Text(stringResource(R.string.vault_remove_message, removing.name)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        vaultToRemove = null
+                        viewModel.removeVault(removing.id)
+                    },
+                ) {
+                    Text(
+                        text = stringResource(R.string.vault_remove_confirm),
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { vaultToRemove = null }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
+        )
     }
 }
 
@@ -229,6 +276,7 @@ private fun VaultCard(
     vault: VaultSummary,
     syncStatus: VaultSyncStatus?,
     onClick: () -> Unit,
+    onRemove: () -> Unit,
 ) {
     Card(
         onClick = onClick,
@@ -238,7 +286,7 @@ private fun VaultCard(
         ),
     ) {
         Row(
-            modifier = Modifier.padding(16.dp),
+            modifier = Modifier.padding(start = 16.dp, top = 16.dp, bottom = 16.dp, end = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(modifier = Modifier.weight(1f)) {
@@ -258,6 +306,35 @@ private fun VaultCard(
                     modifier = Modifier.size(18.dp),
                 )
             }
+            VaultCardMenu(onRemove = onRemove)
+        }
+    }
+}
+
+/** 卡片更多菜单：移除库（破坏性动作入口；确认对话框在列表层）。 */
+@Composable
+private fun VaultCardMenu(onRemove: () -> Unit) {
+    var menuOpen by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { menuOpen = true }) {
+            Icon(
+                imageVector = Icons.Filled.MoreVert,
+                contentDescription = stringResource(R.string.vault_more_actions),
+            )
+        }
+        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+            DropdownMenuItem(
+                text = {
+                    Text(
+                        text = stringResource(R.string.vault_remove_menu),
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                },
+                onClick = {
+                    menuOpen = false
+                    onRemove()
+                },
+            )
         }
     }
 }

@@ -50,6 +50,14 @@ interface VaultRepository {
     /** 锁定全部库（应用退到后台 / 手动锁定时调用）。 */
     fun lockAll()
 
+    /**
+     * 移除库（本地删除，云端数据不受影响）：
+     * 清内存会话 → 删本地快速解锁痕迹（包裹密钥/开关）→ 清待推送队列 →
+     * 删 vault 行（ciphers/folders 经外键级联）。同服务器重加账号不会残留
+     * 旧队列。抛异常 = 移除失败（调用方提示重试）。
+     */
+    suspend fun removeVault(vaultId: String)
+
     /** 触发一次同步（推送 dirty → revision 预检 → 全量拉取 → 安全校验 → 落库）。 */
     suspend fun syncVault(vaultId: String): VaultSyncReport
 

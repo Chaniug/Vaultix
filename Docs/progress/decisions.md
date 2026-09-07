@@ -38,3 +38,6 @@
 | 2026-09-08 | **写路径类型守恒守卫** | type5=sshKey 显式建模；未知类型（未来 type>5）在领域层按 Login 展示但更新前校验 `existing.type == serverTypeOf(item.type)`，不一致即拒存（防 type 漂移改写服务端条目）；UI 对非 Login 类型编辑只开放名称/备注并明示 |
 | 2026-09-08 | **全量同步后收敛服务端已移除行 + flush 4xx 弃单** | 拉取成功后删除本地「不在服务端集合且无 pending ops」的 cipher/folder 行（排除离线未推送数据；Bastion deleteNotIn 语义）；上传遇 4xx（401/408/429 除外）视为服务端目标已不存在 → 永久弃单，本地行由下次全量同步裁决——修复毒丸条目卡死队列（审计 M1-5/6） |
 | 2026-09-08 | **回收站视图 = 本地先行 + dirty 队列（恢复/永久删除）** | 恢复：本地清 deletedDate（主列表立即出现）→ RESTORE 入队补推；永久删除：DELETE 入队 → 本地行立即移除（离线时队列联网补推，服务端 404 弃单）。observeItem 对已删除行视同不存在（详情 null 语义不变）；回收站行随全量同步收敛（服务端 30 天清除 / 永久删除后消失） |
+| 2026-09-08 | **请求预挂 Bearer + 过期前预刷新 + 刷新失败三分（登录失效修复，Bastion 对齐）** | 真机高频「登录失效」三根因：请求从不带 Authorization（每次 401 再刷新）、host→server 登记仅登录时（重启+快速解锁后必失效）、刷新失败不分类（CF 403/网络抖动误报失效）。修复：拦截器按 host 预挂 Bearer（expiresIn 落盘、到期前 60s 预刷新，Bastion accessTokenExpiresAt 语义）；refresh 结果三分——400/401=Invalid（重登）/403/429/5xx/网络=Transient（保留登录态，绝不踢重登）；sync 层 401 按最近刷新类型归类 |
+| 2026-09-08 | **移除库 = 本地数据全清 + 凭据登出（云端不动）** | ⋮ 菜单 + 二次确认；清内存会话 → 快速解锁痕迹 → authRepository.logout（token/登记）→ 待推送队列（先于删行，防同服务器重加账号误推旧队列）→ vault 行级联删 ciphers/folders |
+| 2026-09-08 | **KSP2/工程经验：KDoc 别写字面 `/**`；@Provides 签名用接口类型** | KDoc 内 `/api/**` 中的 `/*` 开启嵌套块注释 → 外层注释到 EOF 未闭合，KSP 报出误导性的「类无法解析」连锁错误；另 KSP2 对 @Provides 签名中的具体新类解析有 bug → 返回类型用接口（如 okhttp3.Interceptor），具体类在函数体内构造 |

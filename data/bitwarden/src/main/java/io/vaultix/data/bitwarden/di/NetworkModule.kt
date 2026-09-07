@@ -26,6 +26,8 @@ import dagger.hilt.components.SingletonComponent
 import io.vaultix.data.bitwarden.api.BitwardenIdentityApi
 import io.vaultix.data.bitwarden.auth.BitwardenTokenRefresher
 import io.vaultix.data.bitwarden.api.BitwardenVaultApi
+import io.vaultix.data.bitwarden.auth.BitwardenAuthRepository
+import io.vaultix.data.bitwarden.network.AccessTokenProvider
 import io.vaultix.data.bitwarden.network.BitwardenAuthenticator
 import io.vaultix.data.bitwarden.network.BitwardenEndpoints
 import io.vaultix.data.bitwarden.network.BitwardenJson
@@ -79,11 +81,18 @@ object NetworkModule {
     fun provideTokenRefresher(impl: BitwardenTokenRefresher): TokenRefresher = impl
 
     @Provides @Singleton
+    fun provideAccessTokenProvider(impl: BitwardenAuthRepository): AccessTokenProvider =
+        AccessTokenProvider { host -> impl.accessTokenForHost(host) }
+
+    @Provides @Singleton
     fun provideAuthenticator(refresher: Provider<TokenRefresher>): Authenticator =
         BitwardenAuthenticator(refresher)
 
     @Provides @Singleton
-    fun provideOkHttpClient(authenticator: Authenticator): OkHttpClient =
+    fun provideOkHttpClient(
+        authenticator: Authenticator,
+        authInterceptor: okhttp3.Interceptor,
+    ): OkHttpClient =
         OkHttpClient.Builder()
             .connectTimeout(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
             .readTimeout(READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
@@ -92,6 +101,7 @@ object NetworkModule {
             .retryOnConnectionFailure(true)
             .pingInterval(PING_INTERVAL_SECONDS, TimeUnit.SECONDS)
             .authenticator(authenticator)
+            // 请求头指纹（User-Agent 等，见文件头溯源）
             .addInterceptor { chain ->
                 val request = chain.request().newBuilder()
                     .header("User-Agent", USER_AGENT)
@@ -105,7 +115,15 @@ object NetworkModule {
                     .build()
                 chain.proceed(request)
             }
+            // 预挂 Bearer：避免「每次请求先 401 再刷新」→ 重启后快速解锁必失效
+            .addInterceptor(authInterceptor)
             .build()
+
+    @Provides @Singleton
+    fun provideAuthInterceptor(
+        provider: Provider<AccessTokenProvider>,
+    ): okhttp3.Interceptor =
+        io.vaultix.data.bitwarden.network.BitwardenAuthInterceptor(provider)
 
     /**
      * 只提供 Builder，不固定 baseUrl：用户可配置官方或自托管服务器，

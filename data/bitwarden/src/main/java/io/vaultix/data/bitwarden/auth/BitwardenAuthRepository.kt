@@ -25,6 +25,8 @@ import io.vaultix.data.bitwarden.api.TokenResponse
 import io.vaultix.data.bitwarden.di.BitwardenApiFactory
 import io.vaultix.data.bitwarden.network.BitwardenJson
 import io.vaultix.datastore.SecureCredentialStore
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonArray
@@ -60,6 +62,17 @@ class BitwardenAuthRepository @Inject constructor(
 
     /** 刷新互斥：并发 401 时只放行一次，其余等待结果，避免重复刷新。 */
     private val refreshMutex = Mutex()
+
+    /**
+     * 最近一次刷新失败的类型（按 server；无记录 = 未刷新过或最后成功）。
+     * 供上层区分「凭据真失效（需重登）」与「瞬时故障（保留登录态重试）」，
+     * 语义对齐 Bastion RefreshOutcome（GPL-3.0 参考）：
+     * - [RefreshFailure.Invalid]：400/401，refresh token 被服务端拒绝 → 需重登；
+     * - [RefreshFailure.Transient]：403/429/5xx/网络异常 → 可重试，**绝不误报失效**。
+     */
+    enum class RefreshFailure { Invalid, Transient }
+
+    private val lastRefreshFailure = ConcurrentHashMap<String, RefreshFailure>()
 
     suspend fun login(
         server: String,
@@ -138,9 +151,10 @@ class BitwardenAuthRepository @Inject constructor(
         }
         val token = requestToken(api, fields, deviceId, deviceName, twoFactor != null)
 
-        persist(server, token.accessToken, token.refreshToken)
+        persist(server, token.accessToken, token.refreshToken, token.expiresIn)
         // 受保护的账号对称密钥：后续用它解密所有条目，务必一并持久化
         token.key?.let { credentials.putString(CredentialKeys.protectedKey(server), it) }
+        lastRefreshFailure.remove(server)
         noteServer(server)
 
         return AuthSession(
@@ -185,12 +199,17 @@ class BitwardenAuthRepository @Inject constructor(
         }
     }
 
-    /** 用 refresh_token 换新 access_token；并发调用只刷新一次。 */
-    suspend fun refresh(server: String): Result<String> = runCatching {
-        refreshMutex.withLock {
-            val refreshToken = credentials.getString(CredentialKeys.refresh(server))
-                ?: error("No refresh token stored for ")
+    /**
+     * 用 refresh_token 换新 access_token；并发调用只刷新一次。
+     * @suppress TooGenericExceptionCaught：网络栈未知异常统一按 Transient 处理
+     * （保留登录态可重试），与 Bastion refreshTokenDetailed 语义一致。
+     */
+    @Suppress("TooGenericExceptionCaught")
+    suspend fun refresh(server: String): RefreshOutcome = refreshMutex.withLock {
+        val refreshToken = credentials.getString(CredentialKeys.refresh(server))
+            ?: return@withLock RefreshOutcome.Invalid
 
+        try {
             val token = apiFactory.identity(server).token(
                 mapOf(
                     "grant_type" to "refresh_token",
@@ -198,18 +217,73 @@ class BitwardenAuthRepository @Inject constructor(
                     "client_id" to CLIENT_ID,
                 ),
             )
-            persist(server, token.accessToken, token.refreshToken)
-            token.accessToken
+            persist(server, token.accessToken, token.refreshToken, token.expiresIn)
+            lastRefreshFailure.remove(server)
+            RefreshOutcome.Success(token.accessToken)
+        } catch (error: HttpException) {
+            val failure = refreshFailureKind(error.code())
+            if (failure == RefreshFailure.Invalid) {
+                // 服务端明确拒绝 refresh token（invalid_grant / 已吊销）→ 必须重新登录
+                lastRefreshFailure[server] = RefreshFailure.Invalid
+                RefreshOutcome.Invalid
+            } else {
+                // 403（WAF/反代拦截）/429/5xx：瞬时故障，保留登录态与凭据
+                lastRefreshFailure[server] = RefreshFailure.Transient
+                RefreshOutcome.Transient("刷新令牌时服务器返回 ${error.code()}")
+            }
+        } catch (error: Exception) {
+            lastRefreshFailure[server] = RefreshFailure.Transient
+            RefreshOutcome.Transient(error.message ?: "刷新令牌时网络异常")
+        }
+    }
+
+    /**
+     * 该 server 最近一次刷新失败类型；null = 无失败记录（登录成功 / 尚未刷新过）。
+     * 供同步层把 401 归类为「真失效（重登）」或「瞬时（可重试）」。
+     */
+    fun refreshFailureOf(server: String): RefreshFailure? = lastRefreshFailure[server]
+
+    /**
+     * 出站请求预挂 Bearer 用（对齐 Bastion：只在 access token 有效期内直带，
+     * 过期前 60s 预刷新；调用方为 OkHttp 同步线程，内部自行桥接 IO）。
+     *
+     * @return 可用的 access token；无会话 / 刷新被服务端拒绝返回 null
+     * （null → 请求不带 Authorization，401 兜底或上层引导重登）。
+     */
+    fun accessTokenForHost(host: String): String? {
+        val server = serverByHost[host] ?: return null
+        return runBlocking(Dispatchers.IO) { resolveAccessToken(server) }
+    }
+
+    /** 取当前可用 token：有效期内直取；过期/临期 → 预刷新（Bastion 语义）。 */
+    private suspend fun resolveAccessToken(server: String): String? {
+        val stored = currentAccessToken(server) ?: return null
+        val expiry = credentials.getString(CredentialKeys.accessExpiry(server))?.toLongOrNull()
+        val fresh = expiry != null && expiry > System.currentTimeMillis() + REFRESH_LEAD_MS
+        if (fresh) return stored
+        // 过期或即将过期：预刷新。瞬时失败时退回旧 token（若仍有效期内）——
+        // 仍可能成功；被服务端拒绝（Invalid）才返回 null。
+        return when (val outcome = refresh(server)) {
+            is RefreshOutcome.Success -> outcome.accessToken
+            RefreshOutcome.Invalid -> null
+            is RefreshOutcome.Transient -> currentAccessToken(server)
         }
     }
 
     fun currentAccessToken(server: String): String? =
         credentials.getString(CredentialKeys.access(server))
 
+    /** 登记 host→server（登录 / 解锁成功时调用；供 401 刷新与请求拦截器反查）。 */
+    fun registerServer(server: String) {
+        noteServer(server)
+    }
+
     fun logout(server: String) {
         credentials.remove(CredentialKeys.access(server))
         credentials.remove(CredentialKeys.refresh(server))
+        credentials.remove(CredentialKeys.accessExpiry(server))
         credentials.remove(CredentialKeys.protectedKey(server))
+        lastRefreshFailure.remove(server)
         hostOf(server)?.let { serverByHost.remove(it) }
     }
 
@@ -242,8 +316,13 @@ class BitwardenAuthRepository @Inject constructor(
     private fun hostOf(server: String): String? =
         runCatching { URL(server).host }.getOrNull()?.takeIf { it.isNotBlank() }
 
-    private fun persist(server: String, access: String, refresh: String?) {
+    /** access token 到期毫秒 = now + expiresIn 秒（Bastion accessTokenExpiresAt 同款）。 */
+    private fun persist(server: String, access: String, refresh: String?, expiresIn: Int) {
         credentials.putString(CredentialKeys.access(server), access)
+        credentials.putString(
+            CredentialKeys.accessExpiry(server),
+            (System.currentTimeMillis() + expiresIn * MILLIS_PER_SECOND).toString(),
+        )
         if (!refresh.isNullOrBlank()) {
             credentials.putString(CredentialKeys.refresh(server), refresh)
         }
@@ -278,7 +357,35 @@ class BitwardenAuthRepository @Inject constructor(
         const val CLIENT_ID = "mobile"
         /** 官方 DeviceType 枚举：0 = Android（此前误用 1 = iOS，服务器端显示错误设备类型）。 */
         const val DEVICE_TYPE = "0"
+        /** 预刷新提前量（Bastion 同值 60s）：到期前即换新，避免请求撞 401。 */
+        const val REFRESH_LEAD_MS = 60_000L
+        const val MILLIS_PER_SECOND = 1_000L
     }
+}
+
+/**
+ * refresh 结果三分（语义对齐 Bastion RefreshOutcome）：
+ * - [Success]：新 access token 已持久化；
+ * - [Invalid]：refresh token 被服务端拒绝（400/401）或本地缺失 → 需要重新登录；
+ * - [Transient]：网络异常 / 403（WAF）/429/5xx → 登录态保留，可稍后重试，
+ *   **绝不因此把用户踢去重新登录**。
+ */
+sealed interface RefreshOutcome {
+    data class Success(val accessToken: String) : RefreshOutcome
+    data object Invalid : RefreshOutcome
+    data class Transient(val detail: String) : RefreshOutcome
+}
+
+/**
+ * HTTP 状态 → 刷新失败类型（纯函数，可单测）：
+ * 只有 400/401 认定凭据真失效；403/429/5xx 归瞬时（对齐 Bastion：403 是
+ * WAF/反代拦截，重试基本无效但**绝不等于登录过期**）。
+ * @suppress MagicNumber：400/401 为 HTTP 状态码语义常量，命名化反而降低可读性。
+ */
+@Suppress("MagicNumber")
+internal fun refreshFailureKind(code: Int): BitwardenAuthRepository.RefreshFailure = when (code) {
+    400, 401 -> BitwardenAuthRepository.RefreshFailure.Invalid
+    else -> BitwardenAuthRepository.RefreshFailure.Transient
 }
 
 /** 2FA 提交参数。 */

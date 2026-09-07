@@ -19,6 +19,12 @@
     <string name="vault_item_count">%1$d 项</string>
     <string name="vault_add_fab">添加密码库</string>
     <string name="vault_cloud_label">Bitwarden 同步库</string>
+    <string name="vault_more_actions">更多操作</string>
+    <string name="vault_remove_menu">移除密码库</string>
+    <string name="vault_remove_title">移除密码库</string>
+    <string name="vault_remove_message">将从本机移除「%1$s」：本地条目缓存、待同步队列与本机解锁设置都会被删除；云端数据不受影响，可随时重新添加。</string>
+    <string name="vault_remove_confirm">移除</string>
+    <string name="vault_removed">已移除密码库</string>
     <string name="vault_syncing">正在同步…</string>
     <string name="vault_sync_failed">同步失败：%1$s</string>
 

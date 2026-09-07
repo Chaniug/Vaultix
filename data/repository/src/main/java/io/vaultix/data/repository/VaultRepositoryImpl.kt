@@ -8,6 +8,7 @@ import io.vaultix.data.bitwarden.auth.TwoFactorInvalidException
 import io.vaultix.data.bitwarden.auth.TwoFactorRequiredException
 import io.vaultix.data.bitwarden.sync.BitwardenSyncService
 import io.vaultix.data.bitwarden.sync.SyncOutcome
+import io.vaultix.database.dao.PendingOpDao
 import io.vaultix.database.dao.VaultDao
 import io.vaultix.database.entity.VaultEntity
 import io.vaultix.datastore.LocalUnlockKeyStore
@@ -43,6 +44,7 @@ import javax.inject.Singleton
 @Singleton
 class VaultRepositoryImpl @Inject constructor(
     private val vaultDao: VaultDao,
+    private val pendingOpDao: PendingOpDao,
     private val authRepository: BitwardenAuthRepository,
     private val sessions: VaultSessionManager,
     private val syncService: BitwardenSyncService,
@@ -138,6 +140,20 @@ class VaultRepositoryImpl @Inject constructor(
         runBlocking { sessions.lockAll() }
     }
 
+    override suspend fun removeVault(vaultId: String) {
+        // 1) 内存会话清零（幂等；随后 keyOf 即 null，UI 观察的 unlocked 状态随之消失）
+        sessions.lock(vaultId)
+        // 2) 本地快速解锁痕迹（包裹密钥 + 开关）——尽力而为，失败不阻断移除
+        runCatching { disableLocalUnlock(vaultId) }
+        // 3) 认证凭据与 host→server 登记清除（服务端会话保留，属正常）
+        authRepository.logout(vaultId)
+        // 4) 待推送队列显式清空（该表无外键，须先清，防止同服务器重加账号后
+        //    把旧账号的离线改动推到新账号）
+        pendingOpDao.clearVault(vaultId)
+        // 5) vault 行删除：ciphers / folders 经外键 CASCADE 一并移除
+        vaultDao.delete(vaultId)
+    }
+
     // ---- 本地快速解锁（Keystore 用户认证 KEK 包裹，见类 KDoc）----
 
     override fun localUnlockAvailable(vaultId: String): Flow<Boolean> =
@@ -179,6 +195,9 @@ class VaultRepositoryImpl @Inject constructor(
             } finally {
                 fullKey.fill(0)
             }
+            // 进程重启后走快速解锁（不重登）：access token 持久化仍在，登记
+            // host→server 使请求拦截器能预挂 Bearer / 401 时可刷新
+            authRepository.registerServer(vaultId)
             UnlockResult.Success
         }.getOrElse { error ->
             when (error) {

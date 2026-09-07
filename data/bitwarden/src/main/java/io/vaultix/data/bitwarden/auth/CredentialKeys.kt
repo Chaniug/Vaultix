@@ -18,10 +18,14 @@ package io.vaultix.data.bitwarden.auth
 internal object CredentialKeys {
     private const val PREFIX_ACCESS = "bw_access::"
     private const val PREFIX_REFRESH = "bw_refresh::"
+    private const val PREFIX_ACCESS_EXPIRY = "bw_access_expiry_ms::"
     private const val PREFIX_PROTECTED_KEY = "bw_protected_key::"
 
     fun access(server: String): String = PREFIX_ACCESS + server
     fun refresh(server: String): String = PREFIX_REFRESH + server
+
+    /** access token 到期毫秒时间戳（Bastion accessTokenExpiresAt 语义：过期前预刷新）。 */
+    fun accessExpiry(server: String): String = PREFIX_ACCESS_EXPIRY + server
 
     /** 受保护的账号对称密钥（EncString），需用 StretchedMasterKey 解包。 */
     fun protectedKey(server: String): String = PREFIX_PROTECTED_KEY + server

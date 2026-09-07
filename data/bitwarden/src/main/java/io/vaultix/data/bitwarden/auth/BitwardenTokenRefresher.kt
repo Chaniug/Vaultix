@@ -25,11 +25,13 @@ import javax.inject.Singleton
  * 401 反应式恢复的 [TokenRefresher] 实现（对应 Docs/17 网络健壮性条目）。
  *
  * ⚠️ 关键点：OkHttp Authenticator.authenticate 是**同步回调**，不是 suspend 函数，
- * 因此这里必须用 unBlocking(Dispatchers.IO) 桥接到挂起的刷新逻辑——
- * 这是 Bastion 实战中确认过的写法（其 efreshForHost 内部同样是 runBlocking）。
+ * 因此这里必须用 runBlocking(Dispatchers.IO) 桥接到挂起的刷新逻辑——
+ * 这是 Bastion 实战中确认过的写法（其 refreshForHost 内部同样是 runBlocking）。
  *
- * 刷新失败返回 null，交由上层触发重新登录，而不是无限重试
- * （重试次数由 BitwardenAuthenticator 的 priorResponse != null 判定截断）。
+ * 这是 access token 过期后的**兜底**路径：正常请求已由请求拦截器预挂有效
+ * Bearer（过期前 60s 预刷新，见 BitwardenAuthRepository.accessTokenForHost）。
+ * 刷新失败（含 Transient）返回 null → 401 原样上行，由上层按
+ * refreshFailureOf(server) 区分「真失效需重登」与「瞬时故障可重试」。
  */
 @Singleton
 class BitwardenTokenRefresher @Inject constructor(
@@ -39,7 +41,8 @@ class BitwardenTokenRefresher @Inject constructor(
     override fun refresh(host: String): String? {
         val server = authRepository.findServerByHost(host) ?: return null
         return runBlocking(Dispatchers.IO) {
-            authRepository.refresh(server).getOrNull()
+            val outcome = authRepository.refresh(server)
+            (outcome as? RefreshOutcome.Success)?.accessToken
         }
     }
 }

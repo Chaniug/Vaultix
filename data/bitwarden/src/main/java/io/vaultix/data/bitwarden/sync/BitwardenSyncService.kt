@@ -16,6 +16,7 @@
 package io.vaultix.data.bitwarden.sync
 
 import io.vaultix.data.bitwarden.api.BitwardenVaultApi
+import io.vaultix.data.bitwarden.auth.BitwardenAuthRepository
 import io.vaultix.data.bitwarden.di.BitwardenApiFactory
 import io.vaultix.data.bitwarden.model.CipherDto
 import io.vaultix.data.bitwarden.model.CipherRequest
@@ -54,12 +55,13 @@ class BitwardenSyncService @Inject constructor(
     private val cipherDao: CipherDao,
     private val folderDao: FolderDao,
     private val pendingOpDao: PendingOpDao,
+    private val authRepository: BitwardenAuthRepository,
     private val json: Json,
 ) {
 
     suspend fun sync(vaultId: String, server: String, force: Boolean = false): SyncOutcome =
         runCatching { executeSync(vaultId, server, force) }
-            .getOrElse { error -> classifyError(error) }
+            .getOrElse { error -> classifyError(error, server) }
 
     private suspend fun executeSync(vaultId: String, server: String, force: Boolean): SyncOutcome {
         // 1) 先推送本地改动：新建/修改不应被整库下载挡住（Bastion 事故结论之一）
@@ -246,15 +248,28 @@ class BitwardenSyncService @Inject constructor(
         revisionDate = revisionDate,
     )
 
-    /** 把异常映射成可执行的同步结果，避免上层只能笼统提示"同步失败"。 */
-    private fun classifyError(error: Throwable): SyncOutcome = when (error) {
-        is HttpException -> if (error.code() == HTTP_UNAUTHORIZED) {
-            SyncOutcome.FatalError("登录已失效，请重新登录")
-        } else {
-            SyncOutcome.RetryableError("服务端返回 ")
+    /**
+     * 把异常映射成可执行的同步结果，避免上层只能笼统提示"同步失败"。
+     *
+     * 401 需结合最近一次刷新结果归类（对齐 Bastion：只有 400/401 拒绝 refresh
+     * 才认定凭据失效；403/429/5xx/网络瞬断是 Transient，绝不误报「登录失效」）：
+     * - 刷新为 [BitwardenAuthRepository.RefreshFailure.Invalid] 或未知 → 登录已失效；
+     * - 刷新为 [BitwardenAuthRepository.RefreshFailure.Transient] → 可稍后重试。
+     */
+    private fun classifyError(error: Throwable, server: String): SyncOutcome {
+        if (error is HttpException && error.code() == HTTP_UNAUTHORIZED) {
+            val failure = authRepository.refreshFailureOf(server)
+            return if (failure == BitwardenAuthRepository.RefreshFailure.Transient) {
+                SyncOutcome.RetryableError("登录状态校验暂时失败，请稍后重试")
+            } else {
+                SyncOutcome.FatalError("登录已失效，请重新登录")
+            }
         }
-        is IOException -> SyncOutcome.RetryableError(error.message ?: "网络不可用")
-        else -> SyncOutcome.FatalError(error.message ?: "未知错误")
+        return when (error) {
+            is HttpException -> SyncOutcome.RetryableError("服务端返回 ${error.code()}")
+            is IOException -> SyncOutcome.RetryableError(error.message ?: "网络不可用")
+            else -> SyncOutcome.FatalError(error.message ?: "未知错误")
+        }
     }
 
     private companion object {

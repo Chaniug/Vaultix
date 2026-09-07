@@ -289,5 +289,12 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 - **回收站视图（同批追加）**：observeTrash（deletedDate 非空流）+ restoreItem
   （本地清 deletedDate → RESTORE 入队）+ permanentDeleteItem（DELETE 入队 → 本地
   删行）；条目页顶栏 Delete 图标进 TrashScreen；observeItem 对已删行保持 null
+- **登录失效修复（真机驱动，Bastion 对齐）**：请求拦截器预挂 Bearer + expiresIn
+  落盘 + 过期前 60s 预刷新（accessTokenForHost）；refresh 结果三分——400/401=
+  Invalid（重登），403/429/5xx/网络=Transient（**绝不误报失效**，CF 场景关键）；
+  sync 401 按 refreshFailureOf(server) 归类；解锁路径 registerServer（重启+快速
+  解锁不失效）；拦截器/Authenticator 均 Provider 懒解析断 Dagger 环
+- **工程经验**：KDoc 里禁止字面 `/**`（如 /api/**）——块注释嵌套直到 EOF 不闭合，
+  KSP 报误导性连锁错；KSP2 对 @Provides 签名里的具体新类解析有 bug → 签名用接口
 - 未做（推迟）：非 Login 专属字段展示/编辑（M2-1）、附件/历史（M2-2）、文件夹管理
   UI（M2-3）——见审计报告 §2 表

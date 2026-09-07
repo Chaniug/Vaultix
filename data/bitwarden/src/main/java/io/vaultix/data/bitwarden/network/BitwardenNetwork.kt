@@ -49,6 +49,17 @@ fun interface TokenRefresher {
 }
 
 /**
+ * 出站请求的 access token 提供者（认证层实现，见 di/NetworkModule）。
+ *
+ * 与 [TokenRefresher] 的分工：本接口给**每个请求**预挂 Bearer（避免先 401 再
+ * 刷新的两段式请求），刷新只作为 access token 过期后的兜底。
+ */
+fun interface AccessTokenProvider {
+    /** 该 host 当前有效的 access token；无会话返回 null（请求不带 Authorization）。 */
+    fun accessToken(host: String): String?
+}
+
+/**
  * 401 自动恢复：任意 Bitwarden 请求收到 401 时，按 host 刷新 token 后重试一次。
  *
  * ⚠️ 防死循环：`priorResponse != null` 说明已经重试过，直接放弃返回 null。

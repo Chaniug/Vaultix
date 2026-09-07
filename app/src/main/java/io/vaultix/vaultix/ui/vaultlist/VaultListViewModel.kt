@@ -37,11 +37,13 @@ import javax.inject.Inject
 class VaultListViewModel @Inject constructor(
     private val vaultRepository: VaultRepository,
     private val preferences: VaultixPreferences,
-    syncOrchestrator: BitwardenSyncOrchestrator,
+    private val syncOrchestrator: BitwardenSyncOrchestrator,
 ) : ViewModel() {
 
     sealed interface Event {
         data class PromptForEnroll(val vaultId: String, val cipher: Cipher) : Event
+        data object Removed : Event
+        data class RemoveFailed(val message: String) : Event
     }
 
     private val _events = MutableSharedFlow<Event>(extraBufferCapacity = 4)
@@ -87,6 +89,23 @@ class VaultListViewModel @Inject constructor(
     /** 用户点「以后再说」：不再打扰（设置页仍可启用）。 */
     fun dismissQuickUnlockPrompt() {
         viewModelScope.launch { preferences.setQuickUnlockPromptDismissed(true) }
+    }
+
+    /**
+     * 移除库：本地数据删除（repository 清会话/队列/行）→ 编排器清该库同步状态
+     * （退避任务/状态流）。云端数据不受影响；失败发 [Event.RemoveFailed]。
+     */
+    fun removeVault(vaultId: String) {
+        viewModelScope.launch {
+            runCatching { vaultRepository.removeVault(vaultId) }
+                .onSuccess {
+                    syncOrchestrator.clearVault(vaultId)
+                    _events.emit(Event.Removed)
+                }
+                .onFailure { error ->
+                    _events.emit(Event.RemoveFailed(error.message ?: "未知错误"))
+                }
+        }
     }
 
     /** 用户点「启用」：准备包装 Cipher 并交给 UI 弹认证。 */
