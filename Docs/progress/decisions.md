@@ -31,3 +31,6 @@
 | 2026-09-08 | **签名 Secrets 修复（根因 2 条，CI 已全绿）** | ① Secrets 不自动进 env：必须 step env 显式注入（此前 `${SIGNING_STORE_PASSWORD}` 恒空 → 一次性密钥）；② PKCS12 jks 私钥密码 = store 密码，KEY_PASSWORD 传同值（独立随机 keypass 被 keytool 忽略导致 AGP 读 key 失败）。判定只看 `##[notice]固定密钥`/`##[warning]一次性` 行，勿信脚本回显 |
 | 2026-09-08 | **Bastion 冻结为 reference implementation；Vaultix = 唯一演进线** | Bastion 仍有人使用，代码与 GitHub 均不再改动；新功能/重构/修复全部在 Vaultix 进行。参考索引见 `Docs/18-Bastion参考地图.md` |
 | 2026-09-08 | **从 Bastion 只搬三类资产，不做文件级搬迁** | Bastion 主源码约 664 文件 / 25.8 万行（单模块 `:app`），直接灌入 13 模块架构会重演纠缠；只搬 ①行为知识 ②测试向量与保真矩阵 ③无依赖的核，逐功能在 Vaultix 重写，以"对拍清单"验收（流程见 `Docs/18-Bastion参考地图.md` §5） |
+| 2026-09-08 | **同步请求统一走编排器，UI 不再直调 syncVault** | 触发分类（MANUAL/PAGE_ENTER/APP_RESUME）→ 节流/解锁门卫/失败退避/状态流由 `BitwardenSyncOrchestrator` 单点保证；提示条语义：静默自动成功不打扰，手动成功短暂提示，最近错误常驻可重试；库列表行内仅显示运行中/失败（Bastion 静默同步语义） |
+| 2026-09-08 | **新建/编辑密码框加强度条（提示非门槛）** | 评分卡 `PasswordStrength`（Bastion 移植，core:common，0–100 五档）；仅 UI 提示不拦截保存（安全规则属后续「设置→安全规则」范围） |
+| 2026-09-08 | **测试注入口走 internal 次构造（Hilt 双构造模式）** | @Inject 构造只能含可绑定参数（VaultRepository/VaultSessionManager）；scope/config/now 等测试参数（虚拟时间/调度器）放 internal 完整构造，同模块测试可见、生产不可误用 |

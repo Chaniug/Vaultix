@@ -255,3 +255,17 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
   - M2 KDBX：`app/utils/KeePassKdbxService.kt`、`app/keepass/KeePassFieldRegistry.kt`、`app/data/LocalKeePassDatabase.kt`
   - M1 核对：`app/bitwarden/service/BitwardenSyncService.kt`、`app/bitwarden/api/BitwardenApiFactory.kt`
   - Bastion 内部文档：仓库根 `docs/`（bitwarden同步与密码库生态.md 等）；文档可能滞后代码，以 dev 代码为最终事实
+
+## 同步编排 UI 接线完成（2026-09-08 第九轮）
+- `BitwardenSyncOrchestrator` **Hilt 双构造**：@Inject 两绑定参数（VaultRepository/
+  VaultSessionManager）公开构造委托 internal 五参完整构造（scope/config/now 仅供
+  测试虚拟时间注入）——经验：@Inject 构造只能含可绑定参数，测试注入口走 internal
+  次构造；Kotlin 次构造参数不能带 val，属性须提到类体统一赋值
+- 触发接线：条目页 init=PAGE_ENTER（90s 节流）、手动刷新=MANUAL force、回前台=
+  AutoLockController.onStart 对已解锁库逐库 APP_RESUME（180s 节流、库锁门卫在
+  编排器内）；**UI 不再直调 syncVault**
+- 提示语义（Bastion 静默同步）：自动同步成功不打扰；手动成功短暂提示；最近错误
+  （errorAt>successAt）常驻提示可重试；库列表行内仅显示「同步中/同步失败」，静默
+  成功不显示
+- 新建/编辑密码框带**强度条**（PasswordStrength 0–100，弱→非常强五档文案与颜色
+  递进；空密码不渲染；仅提示非强制门槛）

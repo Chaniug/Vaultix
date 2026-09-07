@@ -51,13 +51,44 @@ import kotlin.math.min
  * 编排器只管「拉取同步」的节流/重试/状态。
  */
 @Singleton
-class BitwardenSyncOrchestrator @Inject constructor(
-    private val vaultRepository: VaultRepository,
-    private val sessions: VaultSessionManager,
-    private val scope: CoroutineScope = productionScope(),
-    private val config: Config = Config(),
-    private val now: () -> Long = { System.currentTimeMillis() },
-) {
+class BitwardenSyncOrchestrator {
+    private val vaultRepository: VaultRepository
+    private val sessions: VaultSessionManager
+    private val scope: CoroutineScope
+    private val config: Config
+    private val now: () -> Long
+
+    /**
+     * 完整构造：scope/config/now 仅供测试注入（虚拟时间/虚拟调度器），
+     * internal 防止生产误用（同模块测试可直接调用）。
+     */
+    internal constructor(
+        vaultRepository: VaultRepository,
+        sessions: VaultSessionManager,
+        scope: CoroutineScope,
+        config: Config,
+        now: () -> Long,
+    ) {
+        this.vaultRepository = vaultRepository
+        this.sessions = sessions
+        this.scope = scope
+        this.config = config
+        this.now = now
+    }
+
+    /** Hilt 生产构造：scope 取进程级 SupervisorJob，策略用默认 Config。 */
+    @Inject
+    constructor(
+        vaultRepository: VaultRepository,
+        sessions: VaultSessionManager,
+    ) : this(
+        vaultRepository,
+        sessions,
+        CoroutineScope(SupervisorJob() + Dispatchers.Default),
+        Config(),
+        { System.currentTimeMillis() },
+    )
+
     data class Config(
         val pageEnterThrottleMs: Long = PAGE_ENTER_THROTTLE_MS,
         val appResumeThrottleMs: Long = APP_RESUME_THROTTLE_MS,
@@ -92,10 +123,6 @@ class BitwardenSyncOrchestrator @Inject constructor(
     }
 
     companion object {
-        /** 生产 scope：独立 SupervisorJob + Default（进程生命周期）。 */
-        private fun productionScope(): CoroutineScope =
-            CoroutineScope(SupervisorJob() + Dispatchers.Default)
-
         // 节流/退避参数与触发优先级（@suppress MagicNumber：数值为策略常量）
         @Suppress("MagicNumber")
         private const val PAGE_ENTER_THROTTLE_MS = 90_000L
@@ -189,6 +216,8 @@ class BitwardenSyncOrchestrator @Inject constructor(
                         isRunning = false,
                         lastSuccessAt = now(),
                         lastSuccessCipherCount = outcome.cipherCount,
+                        lastErrorAt = null,
+                        lastError = null,
                         retryAttempt = 0,
                         nextRetryAt = null,
                     )
@@ -200,6 +229,8 @@ class BitwardenSyncOrchestrator @Inject constructor(
                     it.copy(
                         isRunning = false,
                         lastSuccessAt = now(),
+                        lastErrorAt = null,
+                        lastError = null,
                         retryAttempt = 0,
                         nextRetryAt = null,
                     )

@@ -3,9 +3,12 @@ package io.vaultix.vaultix.ui.vaultlist
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import io.vaultix.data.repository.BitwardenSyncOrchestrator
 import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.domain.VaultRepository
+import io.vaultix.domain.VaultSyncStatus
 import io.vaultix.model.VaultSummary
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -23,15 +26,18 @@ import javax.inject.Inject
  * 库列表。
  *
  * - vaults：库列表（含锁定状态）
+ * - syncStatuses：各库同步运行时状态（同步中 / 最近错误），供卡片行内轻提示
  * - quickUnlockSuggest：登录后引导横幅对象——「已解锁但未启用本地快速解锁」
  *   且用户未点过「以后再说」时出现（设备能力由 UI 层判定）
  * - [Event.PromptForEnroll]：UI 收到即弹 BiometricPrompt，认证成功回调
  *   [enrollWithCipher] 完成密钥包裹
  */
+@OptIn(ExperimentalCoroutinesApi::class)
 @HiltViewModel
 class VaultListViewModel @Inject constructor(
     private val vaultRepository: VaultRepository,
     private val preferences: VaultixPreferences,
+    syncOrchestrator: BitwardenSyncOrchestrator,
 ) : ViewModel() {
 
     sealed interface Event {
@@ -47,6 +53,14 @@ class VaultListViewModel @Inject constructor(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
             initialValue = emptyList(),
+        )
+
+    /** 各库同步状态（编排器 per-vault；空 map = 从未同步过，不显示）。 */
+    val syncStatuses: StateFlow<Map<String, VaultSyncStatus>> = syncOrchestrator.statusByVault
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
+            initialValue = emptyMap(),
         )
 
     /** 首个「已解锁但未启用快速解锁」的库（banner 对象；null = 不显示）。 */

@@ -1,12 +1,16 @@
 package io.vaultix.vaultix.ui.common
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -16,17 +20,22 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import io.vaultix.common.PasswordStrength
 import io.vaultix.vaultix.R
 
 /**
  * 登录条目表单对话框（新建 / 编辑共用，Docs/08 S10 最小版：仅登录条目字段）。
  *
  * 密码只在对话框存续期间存在于内存；关闭/保存后由调用方保证不再持有副本。
+ * 密码框下方为实时强度条（[PasswordStrength]，算法移植 Bastion 见其溯源声明；
+ * 非强制门槛，仅提示）。
  * 编辑场景用 [initialXxx] 预填；切换目标条目时（key 变化）状态自动重置。
  */
 @Composable
@@ -82,6 +91,7 @@ fun ItemFormDialog(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                     modifier = Modifier.fillMaxWidth(),
                 )
+                PasswordStrengthHint(password = password)
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
                     value = notes,
@@ -112,4 +122,49 @@ fun ItemFormDialog(
             }
         },
     )
+}
+
+/**
+ * 密码强度条（Docs/08 S10）：分值 0–100 → 五档（弱/一般/良好/强/非常强），
+ * 仅做提示不做门槛；空密码不渲染（保持编辑空表单轻量）。
+ * 颜色递进：弱=error，一般=tertiary，良好及以上=primary。
+ */
+@Composable
+private fun PasswordStrengthHint(password: String) {
+    if (password.isEmpty()) return
+    val score = PasswordStrength.score(password)
+    val level = PasswordStrength.levelOf(score)
+    val color = when (level) {
+        PasswordStrength.Level.WEAK -> MaterialTheme.colorScheme.error
+        PasswordStrength.Level.FAIR -> MaterialTheme.colorScheme.tertiary
+        PasswordStrength.Level.GOOD,
+        PasswordStrength.Level.STRONG,
+        PasswordStrength.Level.VERY_STRONG,
+        -> MaterialTheme.colorScheme.primary
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        LinearProgressIndicator(
+            progress = { score / 100f },
+            color = color,
+            trackColor = MaterialTheme.colorScheme.surfaceVariant,
+            modifier = Modifier
+                .weight(1f)
+                .height(6.dp)
+                .clip(RoundedCornerShape(3.dp)),
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = stringResource(strengthLabelRes(level)),
+            style = MaterialTheme.typography.labelMedium,
+            color = color,
+        )
+    }
+}
+
+private fun strengthLabelRes(level: PasswordStrength.Level): Int = when (level) {
+    PasswordStrength.Level.WEAK -> R.string.password_strength_weak
+    PasswordStrength.Level.FAIR -> R.string.password_strength_fair
+    PasswordStrength.Level.GOOD -> R.string.password_strength_good
+    PasswordStrength.Level.STRONG -> R.string.password_strength_strong
+    PasswordStrength.Level.VERY_STRONG -> R.string.password_strength_very_strong
 }

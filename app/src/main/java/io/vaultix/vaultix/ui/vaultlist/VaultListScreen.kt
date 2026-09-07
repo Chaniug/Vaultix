@@ -42,6 +42,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.vaultix.domain.VaultSyncStatus
 import io.vaultix.model.VaultSummary
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.AppFlavor
@@ -64,6 +65,7 @@ fun VaultListScreen(
     viewModel: VaultListViewModel = hiltViewModel(),
 ) {
     val vaults by viewModel.vaults.collectAsStateWithLifecycle()
+    val syncStatuses by viewModel.syncStatuses.collectAsStateWithLifecycle()
     val quickUnlockSuggest by viewModel.quickUnlockSuggest.collectAsStateWithLifecycle()
     val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
     val activity = rememberFragmentActivity()
@@ -138,7 +140,11 @@ fun VaultListScreen(
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     items(vaults, key = { it.id }) { vault ->
-                        VaultCard(vault = vault, onClick = { onOpenVault(vault) })
+                        VaultCard(
+                            vault = vault,
+                            syncStatus = syncStatuses[vault.id],
+                            onClick = { onOpenVault(vault) },
+                        )
                     }
                 }
                 }
@@ -219,7 +225,11 @@ private fun EmptyVaultState(onConnectBitwarden: () -> Unit) {
 }
 
 @Composable
-private fun VaultCard(vault: VaultSummary, onClick: () -> Unit) {
+private fun VaultCard(
+    vault: VaultSummary,
+    syncStatus: VaultSyncStatus?,
+    onClick: () -> Unit,
+) {
     Card(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth(),
@@ -238,6 +248,7 @@ private fun VaultCard(vault: VaultSummary, onClick: () -> Unit) {
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                SyncStatusLine(syncStatus = syncStatus)
             }
             if (!vault.unlocked) {
                 Icon(
@@ -249,4 +260,30 @@ private fun VaultCard(vault: VaultSummary, onClick: () -> Unit) {
             }
         }
     }
+}
+
+/**
+ * 卡片行内同步状态轻提示（Bastion SyncStatusIndicator 语义的轻量裁剪）：
+ * - 同步中 → 「正在同步…」（primary）；
+ * - 最近一次结果是失败且尚无更新的成功 → 「同步失败：…」（error）；
+ * - 其余（含静默成功）不显示，保持列表安静（Bastion 静默同步语义）。
+ */
+@Composable
+private fun SyncStatusLine(syncStatus: VaultSyncStatus?) {
+    val s = syncStatus ?: return
+    val errorIsLatest = (s.lastErrorAt ?: Long.MIN_VALUE) >= (s.lastSuccessAt ?: Long.MIN_VALUE)
+    val lastError = s.lastError
+    val (text, color) = when {
+        s.isRunning -> stringResource(R.string.vault_syncing) to MaterialTheme.colorScheme.primary
+        errorIsLatest && lastError != null ->
+            stringResource(R.string.vault_sync_failed, lastError) to MaterialTheme.colorScheme.error
+        else -> return
+    }
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelSmall,
+        color = color,
+        maxLines = 1,
+        modifier = Modifier.padding(top = 2.dp),
+    )
 }
