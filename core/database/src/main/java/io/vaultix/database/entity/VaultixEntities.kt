@@ -24,6 +24,8 @@ data class VaultEntity(
     val displayName: String,
     /** 服务端 URL 或本地文件 URI */
     val origin: String,
+    /** 账号标签（Bitwarden = 邮箱，用于「Bitwarden · alice@mail.com」；KDBX 为 null），v2 新增 */
+    val account: String? = null,
     /** 上次同步的服务端 revision（Bitwarden 用；KDBX 为 null） */
     val revisionDate: String? = null,
     val createdAt: Long,

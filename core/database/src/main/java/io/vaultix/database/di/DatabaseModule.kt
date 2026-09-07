@@ -28,7 +28,9 @@ object DatabaseModule {
 
     @Provides @Singleton
     fun provideDatabase(@ApplicationContext context: Context): VaultixDatabase =
-        Room.databaseBuilder(context, VaultixDatabase::class.java, "vaultix.db").build()
+        Room.databaseBuilder(context, VaultixDatabase::class.java, "vaultix.db")
+            .addMigrations(VaultixDatabase.MIGRATION_1_2)
+            .build()
 
     @Provides fun provideVaultDao(db: VaultixDatabase): VaultDao = db.vaultDao()
     @Provides fun provideCipherDao(db: VaultixDatabase): CipherDao = db.cipherDao()

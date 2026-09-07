@@ -1,9 +1,29 @@
 package io.vaultix.data.repository
 
+import dagger.Binds
+import dagger.Module
+import dagger.hilt.InstallIn
+import dagger.hilt.components.SingletonComponent
+import io.vaultix.domain.ItemRepository
+import io.vaultix.domain.VaultRepository
+import javax.inject.Singleton
+
 /**
- * 数据仓库层：VaultRepository / ItemRepository / SourceRegistry（依据 Docs/01）。
- * 仓库接口定义在 [io.vaultix.domain]，实现在此处（Docs/11：XxxRepository 接口在 domain，
- * XxxRepositoryImpl 在 data）。
+ * data:repository 装配：domain 接口 → data 实现（Docs/11：XxxRepository 接口在
+ * domain，XxxRepositoryImpl 在 data）。
  *
- * 首批骨架仅占位，后续按 Docs/04(Bitwarden 同步) / Docs/05(KDBX 存储) 填充具体实现。
+ * 说明：vaults/ciphers DAO、Json、网络服务等依赖均来自 core:database / core:datastore /
+ * data:bitwarden 各自的 Hilt 模块，此处只做接口绑定。
  */
+@Module
+@InstallIn(SingletonComponent::class)
+abstract class RepositoryModule {
+
+    @Binds
+    @Singleton
+    abstract fun bindVaultRepository(impl: VaultRepositoryImpl): VaultRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindItemRepository(impl: ItemRepositoryImpl): ItemRepository
+}

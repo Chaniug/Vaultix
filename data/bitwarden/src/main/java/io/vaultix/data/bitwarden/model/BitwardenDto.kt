@@ -114,3 +114,23 @@ data class CipherRequest(
     @SerialName("login") val login: LoginDto? = null,
     @SerialName("fields") val fields: List<CustomFieldDto> = emptyList(),
 )
+
+/**
+ * 把「已加密的上传请求体」还原成可本地落库的 [CipherDto]。
+ *
+ * 用途：新建条目经 `POST /ciphers` 成功后，服务端会分配新 id（请求体本身
+ * 不含 id 字段），本地临时行需要按服务端 id 重建。请求里的字段全部是 EncString
+ * 密文，与服务端存的一致（服务端不会二次加密），因此无需再拉一次全量条目。
+ */
+fun CipherRequest.toStoredCipherDto(id: String, revisionDate: String): CipherDto = CipherDto(
+    id = id,
+    type = type,
+    name = name,
+    notes = notes,
+    favorite = favorite,
+    folderId = folderId,
+    revisionDate = revisionDate,
+    reprompt = reprompt,
+    login = login,
+    fields = fields,
+)

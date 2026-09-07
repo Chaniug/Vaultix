@@ -10,6 +10,8 @@ package io.vaultix.database
 
 import androidx.room.Database
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import io.vaultix.database.dao.CipherDao
 import io.vaultix.database.dao.FolderDao
 import io.vaultix.database.dao.PendingOpDao
@@ -34,7 +36,7 @@ import io.vaultix.database.entity.VaultEntity
         FolderEntity::class,
         PendingOpEntity::class,
     ],
-    version = 1,
+    version = 2,
     exportSchema = true,
 )
 abstract class VaultixDatabase : RoomDatabase() {
@@ -42,4 +44,13 @@ abstract class VaultixDatabase : RoomDatabase() {
     abstract fun cipherDao(): CipherDao
     abstract fun folderDao(): FolderDao
     abstract fun pendingOpDao(): PendingOpDao
+
+    companion object {
+        /** v1→v2：vaults 增加 account 列（Bitwarden 账号邮箱，用于库列表展示）。 */
+        val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE vaults ADD COLUMN account TEXT")
+            }
+        }
+    }
 }

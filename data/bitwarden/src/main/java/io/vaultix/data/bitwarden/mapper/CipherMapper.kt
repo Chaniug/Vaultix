@@ -40,6 +40,7 @@ class CipherMapper @Inject constructor(
         id = dto.id,
         title = dto.name?.let { decryptToString(it, key) }.orEmpty(),
         username = dto.login?.username?.let { decryptToString(it, key) }.orEmpty(),
+        password = dto.login?.password?.let { decryptToString(it, key) }.orEmpty(),
         notes = dto.notes?.let { decryptToString(it, key) }.orEmpty(),
         type = mapType(dto.type),
     )
@@ -58,6 +59,7 @@ class CipherMapper @Inject constructor(
         notes = item.notes.takeIf { it.isNotBlank() }?.let { crypto.encryptString(it, key) },
         login = LoginDto(
             username = item.username.takeIf { it.isNotBlank() }?.let { crypto.encryptString(it, key) },
+            password = item.password.takeIf { it.isNotBlank() }?.let { crypto.encryptString(it, key) },
         ),
     )
 

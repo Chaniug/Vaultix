@@ -23,8 +23,22 @@ kotlin {
 
 dependencies {
     implementation(projects.core.model)
+    implementation(projects.core.crypto)
+    implementation(projects.core.database)
+    implementation(projects.core.datastore)
     implementation(projects.domain)
+    implementation(projects.data.bitwarden)
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
     implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.kotlinx.serialization.json)
+    // HttpException 分类（401 / 400 two_factor）需要 retrofit 类型
+    implementation(libs.retrofit.core)
+
+    // 测试
+    testImplementation(libs.junit)
+    testImplementation(libs.truth)
+    testImplementation(libs.turbine)
+    testImplementation(libs.mockk)
+    testImplementation(libs.kotlinx.coroutines.test)
 }

@@ -19,8 +19,10 @@ import io.vaultix.data.bitwarden.api.BitwardenVaultApi
 import io.vaultix.data.bitwarden.di.BitwardenApiFactory
 import io.vaultix.data.bitwarden.model.CipherDto
 import io.vaultix.data.bitwarden.model.CipherRequest
+import io.vaultix.data.bitwarden.model.CipherResponse
 import io.vaultix.data.bitwarden.model.FolderDto
 import io.vaultix.data.bitwarden.model.SyncResponse
+import io.vaultix.data.bitwarden.model.toStoredCipherDto
 import io.vaultix.database.dao.CipherDao
 import io.vaultix.database.dao.FolderDao
 import io.vaultix.database.dao.PendingOpDao
@@ -58,7 +60,7 @@ class BitwardenSyncService @Inject constructor(
 
     private suspend fun executeSync(vaultId: String, server: String, force: Boolean): SyncOutcome {
         // 1) 先推送本地改动：新建/修改不应被整库下载挡住（Bastion 事故结论之一）
-        pushPendingOperations(vaultId, server)
+        flushPending(vaultId, server)
 
         val localRevision = vaultDao.get(vaultId)?.revisionDate
         val remoteRevision = fetchRevision(server)
@@ -84,27 +86,68 @@ class BitwardenSyncService @Inject constructor(
         return SyncOutcome.Success(response.ciphers.size, response.folders.size)
     }
 
-    /** 推送 dirty 队列；失败保留条目并累加重试次数，不做破坏性清理。 */
-    private suspend fun pushPendingOperations(vaultId: String, server: String) {
+    /**
+     * 推送该库全部待上传操作（新建走轻量 `POST /ciphers`，不等整库下载）。
+     *
+     * - 单条失败**不中断**：条目保留在队列并累计重试次数，供下次 flush / sync 再试；
+     * - 新建条目推送成功后服务端会分配新 id（请求体不含 id 字段），若与本地临时 id
+     *   不一致，本地行按服务端 id 重建（密文来自请求体，服务端不会二次加密，
+     *   无需额外拉取），避免下次全量同步后出现同内容双行。
+     *
+     * @return 全部推送成功为 Success；有失败条目时为 failure（队列中仍保留）。
+     */
+    suspend fun flushPending(vaultId: String, server: String): Result<Unit> {
         val ops = pendingOpDao.listByVault(vaultId)
-        if (ops.isEmpty()) return
+        if (ops.isEmpty()) return Result.success(Unit)
 
         val api = apiFactory.vault(server)
+        var firstError: Throwable? = null
         for (op in ops) {
             runCatching { executeOperation(api, op) }
-                .onSuccess { pendingOpDao.remove(op.localId) }
-                .onFailure { pendingOpDao.incrementRetry(op.localId) }
+                .onSuccess { response ->
+                    if (op.op == OP_CREATE) remapCreatedLocalRow(op, response)
+                    pendingOpDao.remove(op.localId)
+                }
+                .onFailure {
+                    pendingOpDao.incrementRetry(op.localId)
+                    firstError = firstError ?: it
+                }
         }
+        return firstError?.let { Result.failure(it) } ?: Result.success(Unit)
     }
 
-    private suspend fun executeOperation(api: BitwardenVaultApi, op: PendingOpEntity) {
+    /**
+     * 新建条目被服务端分配新 id 后，把本地临时行迁移到服务端 id：
+     * 删除临时行 → 用请求密文（已加密字段与服务端一致）重建正式行。
+     */
+    private suspend fun remapCreatedLocalRow(op: PendingOpEntity, response: CipherResponse?) {
+        val serverId = response?.id?.takeIf { it.isNotBlank() } ?: return
+        if (serverId == op.cipherId) return // 服务端保留了客户端 id（少见），无需处理
+        val temp = cipherDao.get(op.cipherId) ?: return
+        val request = op.payload?.let { payload ->
+            runCatching { json.decodeFromString<CipherRequest>(payload) }.getOrNull()
+        } ?: return
+
+        val dto = request.toStoredCipherDto(serverId, response.revisionDate)
+        cipherDao.deleteByIds(listOf(op.cipherId))
+        cipherDao.upsertAll(listOf(dto.toEntity(temp.vaultId)))
+    }
+
+    private suspend fun executeOperation(api: BitwardenVaultApi, op: PendingOpEntity): CipherResponse? {
         val body = op.payload?.let { json.decodeFromString<CipherRequest>(it) }
-        when (op.op) {
-            OP_CREATE -> if (body != null) api.createCipher(body)
-            OP_UPDATE -> if (body != null) api.updateCipher(op.cipherId, body)
-            OP_SOFT_DELETE -> api.softDeleteCipher(op.cipherId)
-            OP_DELETE -> api.permanentDeleteCipher(op.cipherId)
+        return when (op.op) {
+            OP_CREATE -> if (body != null) api.createCipher(body) else null
+            OP_UPDATE -> if (body != null) api.updateCipher(op.cipherId, body) else null
+            OP_SOFT_DELETE -> {
+                api.softDeleteCipher(op.cipherId)
+                null
+            }
+            OP_DELETE -> {
+                api.permanentDeleteCipher(op.cipherId)
+                null
+            }
             OP_RESTORE -> api.restoreCipher(op.cipherId)
+            else -> null // 未知 op 类型：按成功移除（防毒丸条目卡死整条队列）
         }
     }
 

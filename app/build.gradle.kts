@@ -5,6 +5,7 @@ plugins {
     alias(libs.plugins.android.application)
     // 注意：AGP 9 起内置 Kotlin，不再 apply kotlin-android（会与内置扩展冲突）
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.hilt)
     alias(libs.plugins.ksp)
 }
@@ -111,6 +112,13 @@ dependencies {
     // 平台能力
     implementation(libs.androidx.biometric)
     implementation(libs.coil.compose)
+
+    // ---- 项目模块：UI 只依赖 domain 接口 + data:repository 实现 ----
+    implementation(projects.core.model)
+    implementation(projects.core.common)
+    implementation(projects.core.ui)
+    implementation(projects.domain)
+    implementation(projects.data.repository)
 
     // 测试
     testImplementation(libs.junit)

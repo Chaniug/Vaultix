@@ -1,3 +1,70 @@
 <resources>
     <string name="app_name">Vaultix</string>
+
+    <!-- 通用 -->
+    <string name="action_back">返回</string>
+    <string name="action_cancel">取消</string>
+    <string name="action_save">保存</string>
+    <string name="action_retry">重试</string>
+
+    <!-- 库列表 S3 -->
+    <string name="vault_list_title">我的密码库</string>
+    <string name="vault_list_empty_title">还没有密码库</string>
+    <string name="vault_list_empty_body">连接 Bitwarden 账号，把密码带到手机里</string>
+    <string name="vault_connect_bitwarden">连接 Bitwarden</string>
+    <string name="vault_open_kdbx">打开 KDBX 文件</string>
+    <string name="vault_kdbx_coming_soon">KDBX 本地库将在 M2 里程碑支持</string>
+    <string name="vault_badge_unlocked">已解锁</string>
+    <string name="vault_badge_locked">已锁定</string>
+    <string name="vault_item_count">%1$d 项</string>
+    <string name="vault_add_fab">添加密码库</string>
+    <string name="vault_cloud_label">Bitwarden 同步库</string>
+
+    <!-- 添加库 S4 -->
+    <string name="add_vault_title">连接 Bitwarden</string>
+    <string name="add_vault_subtitle">输入你的 Bitwarden 账号（自托管可选）</string>
+    <string name="add_vault_server">服务器地址</string>
+    <string name="add_vault_server_hint">https://vault.bitwarden.com</string>
+    <string name="add_vault_email">邮箱</string>
+    <string name="add_vault_password">主密码</string>
+    <string name="add_vault_password_visible">显示密码</string>
+    <string name="add_vault_password_hidden">隐藏密码</string>
+    <string name="add_vault_submit">连接并解锁</string>
+    <string name="add_vault_working">正在派生密钥并解锁…（约需 1–3 秒）</string>
+
+    <!-- 解锁 S6 -->
+    <string name="unlock_title">解锁</string>
+    <string name="unlock_submit">解锁</string>
+    <string name="unlock_password">主密码</string>
+
+    <!-- 错误文案 -->
+    <string name="error_fields_missing">请填写邮箱和主密码</string>
+    <string name="error_invalid_server">服务器地址需以 http(s):// 开头</string>
+    <string name="error_invalid_credentials">邮箱或主密码不正确</string>
+    <string name="error_two_factor">该账号开启了两步验证（2FA）。M1 暂不支持 2FA 登录，请先在官方客户端登录并关闭 2FA，或使用应用密码。</string>
+    <string name="error_network">无法连接服务器，请检查网络后重试</string>
+    <string name="error_key_unavailable">服务器未返回账号密钥信息，请联系服务器管理员</string>
+    <string name="error_vault_missing">本地不存在该密码库，请返回重新添加</string>
+    <string name="error_unknown">出错了：%1$s</string>
+
+    <!-- 条目列表 S7 -->
+    <string name="items_empty_title">还没有保存的密码</string>
+    <string name="items_empty_body">点右下角 ＋ 新建条目</string>
+    <string name="items_sync">同步</string>
+    <string name="items_syncing">正在同步…</string>
+    <string name="items_sync_done">已同步 %1$d 个条目</string>
+    <string name="items_sync_skipped">已是最新</string>
+    <string name="items_sync_blocked">同步被安全机制暂停：%1$s</string>
+    <string name="items_sync_fatal">同步失败：%1$s</string>
+    <string name="items_lock">立即锁定</string>
+    <string name="items_new_item">新建条目</string>
+    <string name="items_item_unnamed">（未命名）</string>
+    <string name="item_field_name">名称</string>
+    <string name="item_field_username">用户名</string>
+    <string name="item_field_password">密码</string>
+    <string name="item_field_notes">备注</string>
+    <string name="item_name_required">名称不能为空</string>
+    <string name="item_saved_synced">已保存并同步到云端</string>
+    <string name="item_saved_queued">已保存到本地，联网后自动同步</string>
+    <string name="item_save_failed">保存失败：%1$s</string>
 </resources>

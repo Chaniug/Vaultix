@@ -136,3 +136,24 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 ## M1 数据链路全景（已通）
 登录 → MasterKey → 解包账号对称密钥 → 解密条目字段 → VaultItem（可显示）
 剩余：UI 层（登录页 / 列表页）、WorkManager 周期同步、Detekt 门禁
+
+## P0 最小闭环完成（2026-09-08）
+- **UI 最小闭环已通**：库列表 → 连接 Bitwarden 表单 → 解锁 → 条目列表 → 新建条目
+  （scope 口径经用户确认：不做搜索/筛选/多选/详情页）
+- **关键语义：`VaultEntity.id = 规范化服务器 URL`**（trimEnd('/')）——与认证层
+  token 按 server 键控一致；代价是**同一服务器仅支持一个账号**（decisions 已记录）
+- Room v2：vaults 增 `account`（邮箱）列，Migration 1→2（DatabaseModule 已挂）
+- `VaultSessionManager`（data:repository）：内存持 `SymmetricCryptoKey`、
+  lock 清零幂等、unlock 覆盖先清旧密钥；**5 个 JVM 单测**（含清零断言）
+- domain 首个真实接口：`VaultRepository` / `ItemRepository`（+UnlockResult/SyncReport/
+  VaultSaveOutcome）；data:repository 首个真实实现
+- **新建条目链路**：本地 uuid 密文行 + pending_ops(CREATE) → `flushPending`
+  轻量推送（Bastion 教训：不等整库下载）→ 服务端新 id 时**本地行重映射**
+  （删临时行 + 请求密文重建，`CipherRequest.toStoredCipherDto`；请求密文即服务端密文）
+- `CipherMapper` 补 password 双向字段（VaultItem 现 6 字段）
+- 解锁 == 联网重新登录（M1 无离线解锁）；2FA 登录不支持但**错误分类**可区分
+  （401 / 400 two_factor）并给可执行提示
+- UI 文案在 `strings.xml`；sync 提示文案暂由 data 层中文直供（简化，已记录）
+- app → domain/data:repository 依赖已装配；offline flavor 用 `AppFlavor.supportsBitwarden`
+  隐藏入口，两 flavor 编译均绿
+- M1 剩余：条目编辑/删除、自动锁定（AppLifecycleObserver）、移除库、文案收编
