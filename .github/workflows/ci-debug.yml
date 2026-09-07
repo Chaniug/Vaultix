@@ -69,10 +69,20 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
         with:
+          gradle-version: 8.11.1
           cache-read-only: ${{ github.event_name == 'pull_request' }}
 
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
+
+      # 兜底：若仓库尚未提交 gradle-wrapper.jar（二进制），用 CI 安装的同版本 Gradle 现场生成 wrapper，
+      # 保证 ./gradlew 始终可用。仓库补上真实 jar 后此步骤自动跳过。
+      - name: Ensure gradle wrapper jar
+        run: |
+          if [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
+            echo "::warning title=Missing wrapper jar::gradle-wrapper.jar 缺失，CI 现场生成（建议本地执行 'gradle wrapper' 后提交）。"
+            gradle wrapper --gradle-version 8.11.1
+          fi
 
       - name: Install Android SDK platform 36
         run: bash "$GITHUB_WORKSPACE/.github/scripts/ensure-android-sdk.sh"
@@ -108,7 +118,8 @@ jobs:
       - name: Build Debug APK (build gate)
         run: |
           set +e
-          # versionName 形如 1.0.0-dev-78db0ed：dev 标识 + 短 commit SHA（可直接 git show 定位代码）。
+          # 构建 full + offline 两个分发维度（见 Docs/11 的 flavor 定义）。
+          # versionName 形如 0.1.0-dev-78db0ed：版本号 + dev 标识 + 短 commit SHA（可直接 git show 定位代码）。
           # 用 GITHUB_SHA 而非 git rev-parse：本 job 是 fetch-depth=1 浅克隆，本地 git 无历史，
           # 而 GITHUB_SHA 由 Actions 注入，不受克隆深度影响。
           KS_FILE="${{ github.event_name == 'push' && format('{0}/release.jks', github.workspace) || '' }}"
@@ -121,8 +132,8 @@ jobs:
             KS_OPTS="$KS_OPTS -Pandroid.injected.signing.key.alias=${SIGNING_KEY_ALIAS:-androidkey}"
             KS_OPTS="$KS_OPTS -Pandroid.injected.signing.key.password=${SIGNING_KEY_PASSWORD:-android}"
           fi
-          ./gradlew :app:assembleDebug --stacktrace \
-            -PpreviewVersionSuffix=dev-$(echo ${GITHUB_SHA} | cut -c1-7) $KS_OPTS 2>&1 | tee /tmp/build_log.txt
+          ./gradlew :app:assembleFullDebug :app:assembleOfflineDebug --stacktrace \
+            -PversionName="0.1.0-dev-$(echo ${GITHUB_SHA} | cut -c1-7)" $KS_OPTS 2>&1 | tee /tmp/build_log.txt
           BUILD_EXIT=${PIPESTATUS[0]}
           if [ "$BUILD_EXIT" -ne 0 ]; then
             echo "::notice title=Build gate diagnostics::build_failed=true"
@@ -134,15 +145,15 @@ jobs:
           echo "::notice title=Build gate diagnostics::build_failed=false"
 
       - name: List debug APK outputs
-        run: find app/build/outputs/apk/debug -maxdepth 1 -type f -print || true
+        run: find app/build/outputs/apk/*/debug -maxdepth 1 -type f -print || true
 
       - name: Upload APK
         uses: actions/upload-artifact@v7
         with:
           name: debug-apk
           path: |
-            app/build/outputs/apk/debug/*.apk
-            app/build/outputs/apk/debug/*.APK
+            app/build/outputs/apk/*/debug/*.apk
+            app/build/outputs/apk/*/debug/*.APK
           if-no-files-found: error
           retention-days: 3
 
@@ -151,7 +162,7 @@ jobs:
         id: apk_meta
         shell: bash
         run: |
-          cd app/build/outputs/apk/debug
+          cd app/build/outputs/apk/*/debug
           apk_list="$(find . -maxdepth 1 -type f \( -iname '*.apk' -o -iname '*.APK' \) -printf '%f\n' | sort)"
           apk_count="$(printf '%s\n' "$apk_list" | sed '/^$/d' | wc -l | tr -d ' ')"
           if [ "$apk_count" = "0" ]; then
@@ -202,8 +213,8 @@ jobs:
             > **Generated APKs:**
             ${{ steps.apk_meta.outputs.apk_list }}
           files: |
-            app/build/outputs/apk/debug/*.apk
-            app/build/outputs/apk/debug/*.APK
+            app/build/outputs/apk/*/debug/*.apk
+            app/build/outputs/apk/*/debug/*.APK
           draft: false
           prerelease: true
           make_latest: false

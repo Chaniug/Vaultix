@@ -1,0 +1,4 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- Compose 应用的基础主题：仅要求无 ActionBar，具体配色由 Compose Material3 提供 -->
+    <style name="Theme.Vaultix" parent="android:Theme.Material.Light.NoActionBar" />
+</resources>

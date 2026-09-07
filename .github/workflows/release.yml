@@ -64,9 +64,19 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: 8.11.1
 
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
+
+      # 兜底：若仓库尚未提交 gradle-wrapper.jar（二进制），用 CI 安装的同版本 Gradle 现场生成 wrapper。
+      - name: Ensure gradle wrapper jar
+        run: |
+          if [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
+            echo "::warning title=Missing wrapper jar::gradle-wrapper.jar 缺失，CI 现场生成（建议本地执行 'gradle wrapper' 后提交）。"
+            gradle wrapper --gradle-version 8.11.1
+          fi
 
       - name: Install Android SDK platform 36
         run: bash "$GITHUB_WORKSPACE/.github/scripts/ensure-android-sdk.sh"
@@ -185,20 +195,22 @@ jobs:
         id: apk_meta
         shell: bash
         run: |
-          cd app/build/outputs/apk/release
-          apk_list="$(find . -maxdepth 1 -type f \( -iname '*.apk' \) -printf '%f\n' | sort)"
-          apk_count="$(printf '%s\n' "$apk_list" | sed '/^$/d' | wc -l | tr -d ' ')"
+          cd app/build/outputs/apk
+          # flavor 化后产物分布在 full/release、offline/release 等子目录，递归收集
+          apk_files="$(find . -type f -iname '*.apk' | sort)"
+          apk_list="$(printf '%s\n' "$apk_files" | sed 's|^\./||')"
+          apk_count="$(printf '%s\n' "$apk_files" | sed '/^$/d' | wc -l | tr -d ' ')"
           if [ "$apk_count" = "0" ]; then
-            echo "No release APK found"; ls -la; exit 1
+            echo "No release APK found"; ls -Rla; exit 1
           fi
           echo "Detected release APKs:"
-          printf '%s\n' "$apk_list" | sed '/^$/d' | sed 's/^/ - /'
-          # 生成 checksum 文件
-          sha256sum *.apk > checksums-sha256.txt
-          echo "::notice title=checksums::$(cat checksums-sha256.txt | tr '\n' ' ')"
+          printf '%s\n' "$apk_list" | sed 's/^/ - /'
+          # 生成 checksum 文件（写到工作区根，后续 Release 附件引用）
+          sha256sum $apk_files > "$GITHUB_WORKSPACE/checksums-sha256.txt"
+          echo "::notice title=checksums::$(cat "$GITHUB_WORKSPACE/checksums-sha256.txt" | tr '\n' ' ')"
           {
             echo "apk_list<<EOF"
-            printf '%s\n' "$apk_list" | sed '/^$/d' | sed 's/^/> *   `/; s/$/`/'
+            printf '%s\n' "$apk_list" | sed 's/^/> *   `/; s/$/`/'
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
@@ -263,11 +275,11 @@ jobs:
 
             ## 校验和 (SHA-256)
             ```
-            $(cat app/build/outputs/apk/release/checksums-sha256.txt 2>/dev/null || echo "见附件 checksums-sha256.txt")
+            $(cat "$GITHUB_WORKSPACE/checksums-sha256.txt" 2>/dev/null || echo "见附件 checksums-sha256.txt")
             ```
           files: |
-            app/build/outputs/apk/release/*.apk
-            app/build/outputs/apk/release/checksums-sha256.txt
+            app/build/outputs/apk/**/release/*.apk
+            ${{ github.workspace }}/checksums-sha256.txt
           draft: false
           prerelease: false
           make_latest: true

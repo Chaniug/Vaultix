@@ -1,0 +1,13 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- 盾形图标：象征安全密码库（占位，后续替换为原创品牌图标） -->
+    <path
+        android:fillColor="#1B5E20"
+        android:pathData="M54,16 L88,32 L88,72 C88,90 72,98 54,100 C36,98 20,90 20,72 L20,32 Z" />
+    <path
+        android:fillColor="#A5D6A7"
+        android:pathData="M54,32 L72,40 L72,66 C72,76 64,80 54,82 C44,80 36,76 36,66 L36,40 Z" />
+</vector>
