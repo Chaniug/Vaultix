@@ -1,17 +1,51 @@
 # 下一步任务清单
 
-> 更新于 2026-09-08（第三轮）。P0 全部落地 + Detekt 门禁上线。
+> 更新于 2026-09-08（第七轮）。签名修复完成（CI 全绿、单包发布）、快速解锁落地。
 > 状态：`TODO` / `DOING` / `DONE` / `BLOCKED`
 
-## 已完成（第四轮 2026-09-08 · 自动锁定升级，参考 Bastion）
+## 已完成（第六-七轮 2026-09-08 · 真机联调 + 签名修复 + 快速解锁 + 兼容）
 
-- [x] **自动锁档位化（对齐 Bastion autoLockMinutes）**：0=切后台立即锁 /
-      >0=离开 N 分钟锁（默认 5）/ <0=从不；回前台时屏幕仍 keyguard 锁定 → 立即锁
-- [x] 判定逻辑抽纯函数 `AutoLockPolicy`（app）+ 4 单测；Controller v2（onStop 立即档 /
-      超时 / keyguard / lockEvents 回根）
-- [x] **Hilt 构造期环修复**：Authenticator 注入 `Provider<TokenRefresher>` 懒断环
-      （OkHttpClient↔Retrofit.Builder 环系 M1 潜伏，ViewModel 注入点暴露）
-- [x] 双 flavor 编译 + app/data 单测 + detekt 全绿
+- [x] **签名彻底修复（63be53c CI 全绿）**：Secrets env 注入 + PKCS12 keypass=storepass
+      （详见 decisions/MEMORY）；preview 只发 **full 单包**（bbf843c）
+- [x] **prelogin/同步兼容**：Vaultwarden camelCase 双形态；CF 后自托管请求头组
+      （Bastion 同值：Chrome UA/Sec-Ch-Ua/Keyguard-Client/Bitwarden-Client-*）
+- [x] **2FA 登录**（经典 OAuth 扩展）+ 多方式选择（TOTP/邮箱/Duo/YubiKey/org-Duo；
+      YubiKey 44 位动态码输入）
+- [x] **type 0 遗留密文默认放行**（官方/Bastion 对齐；修复「未命名」条目）
+- [x] **设备登记 Header**（connect/token 带 device-type/identifier/name；type 0=Android）
+- [x] **本地快速解锁（免主密码/免 2FA）**：Keystore user-auth KEK 包裹 + 生物识别/
+      设备 PIN 解封；解锁页按钮 + 登录后启用横幅 + 设置页管理
+- [x] 设置页（自动锁档位/剪贴板清除/防截屏/动态取色/立即锁定/快速解锁管理/关于）
+- [x] 双 flavor 编译 + 单测 + detekt 全绿
+
+## P0 · M1 收尾（剩余）
+
+- [ ] **真机回归**：新固定签名包（63be53c+）上验证 登录(2FA)→同步→未命名已修复→
+      快速解锁启用→锁屏后生物识别重开→设备管理可见
+- [ ] WorkManager 周期同步（P2 前移候选：用户期待「打开即最新」）
+- [ ] 移除库入口（二次确认）；回收站视图
+- [ ] UI 文案抽查迁 strings.xml（同步提示文案仍由 data 层直供）
+
+## P1 · 质量基础设施（剩余）
+
+- [ ] Baseline Profile；Gradle 配置缓存；ViewModel 单测；:app 单测用例
+
+## P2 · 自动化
+
+- [ ] WorkManager 周期同步 + 网络约束（`Docs/17` §3.3：禁止常驻轮询）
+
+## P3 · M2（KDBX）
+
+- [ ] `data:kdbx` 引擎（kotpass），按 `Docs/02` §3.4 做往返保真度测试
+
+## 已知未决（接力者注意）
+
+- 快速解锁 payload 在 SecureCredentialStore（key `local_unlock_key::<vaultId>`），
+  开关在 DataStore；删除 KEK 仅由系统指纹变更触发（单库 disable 只删 payload+开关，
+  多库时 KEK 共享保留——未来多库需「全库清空」入口）
+- 同一服务器仅一个账号（vaultId=server）；设备 id 存 SecureCredentialStore（卸载即换，
+  服务器端会累积旧设备记录，属正常）
+- Detekt 用 2.0.0-alpha.6；2.0 稳定后升级重新生成默认配置核对
 
 ## 已完成（第三轮 2026-09-08 · 质量门禁）
 

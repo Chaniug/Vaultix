@@ -217,3 +217,32 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 - 新 jks 密码：**D:\vaultix-signing-passwords.txt**（项目外；用户需自行备份
   jks+密码，缺一则无法再发布）；旧 jks 备份为 vaultix-release-old-*.jks
 - 迁移提示：一次性签名 → 固定签名需**最后一次卸载重装**，此后包可正常覆盖
+- **签名两大根因（终于修好，63be53c CI 全绿）**：
+  1) GitHub Secrets 不会自动变环境变量——workflow 里 `${SIGNING_STORE_PASSWORD}`
+     恒空回落 android → decode 必失败。必须 step env 显式注入（两个 workflow 已修）。
+  2) jks 为 **PKCS12：私钥密码 = store 密码**（keytool 忽略不同 keypass）。
+     此前把独立随机 KEY_PASSWORD 传 GitHub → AGP "Failed to read key"。
+     现 SIGNING_KEY_PASSWORD = STORE_PASSWORD（同值），不可再拆开。
+- **判定签名不要信日志脚本回显**（两个分支的 echo 都会被打印）：
+  只看 `##[notice]固定密钥解码并校验通过`（成功）或 `##[warning]…一次性`（失败）行
+
+## 本地快速解锁（2026-09-08 完成，Bastion 同款模型）
+- 登录/主密码解锁后：账号对称密钥 64B 用 **Keystore user-auth KEK**（AES-GCM）
+  包裹落盘（SecureCredentialStore key `local_unlock_key::<vaultId>`），锁库只清内存；
+  再次解锁 = BiometricPrompt（API30+ 生物识别或设备 PIN，26-29 仅强生物识别）
+  → 本地解封 → 免主密码/免 2FA/离线。指纹增删自动 invalidate KEK → 回退主密码
+- 代码位：`core:datastore/LocalUnlockKeyStore`；domain VaultRepository 新增
+  localUnlockAvailable/enrollLocalUnlock/prepareLocalUnlock/prepareLocalEnroll/
+  completeLocalUnlock/disableLocalUnlock；VaultixPreferences per-vault 开关 +
+  横幅 dismissed 标记
+- UI：MainActivity→FragmentActivity（BiometricPrompt 宿主，fragment-ktx 依赖）；
+  `BiometricPrompter`（DEVICE_CREDENTIAL 组合规则：30+ 无负按钮/低版本需负按钮）；
+  UnlockScreen「生物识别/设备 PIN 解锁」按钮（fallback 主密码）；
+  VaultList 登录后一次性启用横幅（拒绝后不再打扰，设置页可关）
+- 登录设备登记：connect/token 必须把 device-type/device-identifier/device-name
+  放 **HTTP Header**（仅 body 字段服务器不认）；deviceType 0=Android（曾误用 1=iOS）
+
+## 2FA 多方式（2026-09-08）
+- TwoFactorStep 列出服务器下发全部「可输码」provider（TOTP/邮箱/Duo/YubiKey/org-Duo），
+  枚举官方值 2=Duo、3=YubiKey、4=U2F、7=WebAuthn（U2F/WebAuthn 浏览器专用不展示）
+- YubiKey OTP 44 位字母数字输入（触控生成），数字类仍 6 位

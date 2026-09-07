@@ -25,3 +25,7 @@
 | 2026-09-08 | **Detekt 阈值 = Docs/16 硬上限，建议值不设门禁** | LongMethod ≤150 / LargeClass ≤1200 / 参数 ≤8 / 单类函数 ≤40（建议 60/600/6/11 仅风格参考）；Compose PascalCase（ignoreAnnotated）与命名参数数字豁免；crypto「有意捕获」用带理由 @Suppress |
 | 2026-09-08 | **自动锁档位改为分钟制（对齐 Bastion autoLockMinutes）** | `0`=切后台立即锁；`>0`=离开 N 分钟锁（默认 5）；`<0`=从不自动锁；回前台时设备屏幕仍 keyguard 锁定 → 立即锁（Bastion「屏幕锁定时必须重新验证」）；判定逻辑抽纯函数 `AutoLockPolicy` 可单测。Vaultix 密钥只在内存 → Bastion 的「-2 重启后锁定」无需建模 |
 | 2026-09-08 | **Hilt 断环：Authenticator 注入 `Provider<TokenRefresher>`** | OkHttpClient→Authenticator→TokenRefresher→AuthRepository→ApiFactory→Retrofit.Builder→OkHttpClient 构造期环（此前未被任何注入点展开，ViewModel 注入点出现后暴露）；401 回调时才解析 refresher，彼时认证仓库必已构造完成 |
+| 2026-09-08 | **本地快速解锁（Keystore 包裹，Bastion/官方模型）** | 登录成功后用 Keystore user-auth KEK 包裹账号对称密钥落盘；锁库只清内存；再开 = 生物识别/设备 PIN 本地解封（离线、免主密码、免 2FA）。API 30+ 支持 DEVICE_CREDENTIAL，26-29 仅强生物识别；指纹变更自动失效回退主密码 |
+| 2026-09-08 | **设备登记走 HTTP Header（修正）** | connect/token 的 device-type/device-identifier/device-name 仅放 body 时服务器端设备管理不认（真机验证）；Header + body 双放（Bastion 实测组合）；deviceType 0=Android（原误用 1=iOS） |
+| 2026-09-08 | **preview 只发 full 一个 debug 包** | offline 分发（仅 KDBX）M2 前无功能；保留 offline 编译验证防 flavor 退化 |
+| 2026-09-08 | **签名 Secrets 修复（根因 2 条，CI 已全绿）** | ① Secrets 不自动进 env：必须 step env 显式注入（此前 `${SIGNING_STORE_PASSWORD}` 恒空 → 一次性密钥）；② PKCS12 jks 私钥密码 = store 密码，KEY_PASSWORD 传同值（独立随机 keypass 被 keytool 忽略导致 AGP 读 key 失败）。判定只看 `##[notice]固定密钥`/`##[warning]一次性` 行，勿信脚本回显 |
