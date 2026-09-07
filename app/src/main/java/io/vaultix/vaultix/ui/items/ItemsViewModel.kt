@@ -14,9 +14,12 @@ import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultSummary
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -84,9 +87,20 @@ class ItemsViewModel @Inject constructor(
                 _state.update { it.copy(syncNote = toSyncNote(statuses[vaultId])) }
             }
         }
-        // 进入页面即静默同步（编排器内含解锁门卫与 90s 节流）
-        syncOrchestrator.requestSync(vaultId, SyncTrigger.PAGE_ENTER)
+        // 2026-09-08（用户反馈）：进入页面**不再自动同步**——自动同步只随本地
+        // 修改（保存/删除 → flush 推送）触发；拉取统一走 retrySync()（顶栏按钮 /
+        // 下拉刷新）。编排器 PERIODIC/解锁门卫保留备用。
     }
+
+    /** 同步进行中（下拉刷新指示器用；手动触发后 Orchestrator 状态流转驱动）。 */
+    val isSyncing: StateFlow<Boolean> =
+        syncOrchestrator.statusByVault.map { statuses ->
+            statuses[vaultId]?.isRunning == true
+        }.stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.Eagerly,
+            initialValue = false,
+        )
 
     fun retrySync() {
         // 手动同步：force 跳过节流；运行中请求会按优先级合并

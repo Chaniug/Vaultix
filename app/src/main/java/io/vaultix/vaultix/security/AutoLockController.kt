@@ -6,9 +6,7 @@ import android.os.SystemClock
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import dagger.hilt.android.qualifiers.ApplicationContext
-import io.vaultix.data.repository.BitwardenSyncOrchestrator
 import io.vaultix.datastore.VaultixPreferences
-import io.vaultix.domain.SyncTrigger
 import io.vaultix.domain.VaultRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -36,12 +34,15 @@ import javax.inject.Singleton
  *
  * 注册：VaultixApplication.onCreate 里
  * `ProcessLifecycleOwner.get().lifecycle.addObserver(autoLockController)`。
+ *
+ * 2026-09-08（用户反馈）：**不再在回前台时自动同步**——自动同步只随「本地修改」
+ * （保存/删除等 → flush 推送）触发；拉取统一走条目页手动同步（下拉 / 顶栏按钮）。
+ * 本类回前台只做锁定判定。
  */
 @Singleton
 class AutoLockController @Inject constructor(
     @ApplicationContext context: Context,
     private val vaultRepository: VaultRepository,
-    private val syncOrchestrator: BitwardenSyncOrchestrator,
     prefs: VaultixPreferences,
 ) : DefaultLifecycleObserver {
 
@@ -62,15 +63,10 @@ class AutoLockController @Inject constructor(
     @Volatile
     private var anyUnlocked = false
 
-    /** 最近一次解锁集合快照（回前台时逐个触发被动同步）。 */
-    @Volatile
-    private var unlockedVaultIds: Set<String> = emptySet()
-
     init {
         scope.launch { prefs.autoLockMinutes.collect { autoLockMinutes = it } }
         scope.launch {
             vaultRepository.observeUnlockedVaultIds().collect { ids ->
-                unlockedVaultIds = ids
                 anyUnlocked = ids.isNotEmpty()
             }
         }
@@ -99,12 +95,8 @@ class AutoLockController @Inject constructor(
         )
         if (AutoLockPolicy.screenLockRequiresRelock(screenLocked) || timedOut) {
             lockAllNow()
-        } else {
-            // 回前台被动同步（180s 节流由编排器保证；库锁定态由编排器门卫跳过）
-            unlockedVaultIds.forEach { vaultId ->
-                syncOrchestrator.requestSync(vaultId, SyncTrigger.APP_RESUME)
-            }
         }
+        // 不做自动同步（用户反馈：自动同步太频繁；拉取只在手动 / 本地修改后）
     }
 
     /** 供「立即锁定」等入口直接调用（幂等）。 */

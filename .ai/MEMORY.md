@@ -301,3 +301,9 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
   KSP 报误导性连锁错；KSP2 对 @Provides 签名里的具体新类解析有 bug → 签名用接口
 - 未做（推迟）：非 Login 专属字段展示/编辑（M2-1）、附件/历史（M2-2）、文件夹管理
   UI（M2-3）——见审计报告 §2 表
+
+## 同步触发策略收敛（2026-09-08 用户真机反馈）
+- 用户实测「基本正常」但自动同步太频繁 → **移除 PAGE_ENTER/APP_RESUME 自动拉取**；
+  自动同步只随本地修改的 flush 推送；拉取 = 手动（顶栏刷新图标 + 下拉刷新 PullToRefreshBox）
+- ItemsViewModel 不再 init 自动同步，暴露 isSyncing 驱动下拉指示器；AutoLockController
+  回归纯锁定职责（移除 orchestrator 注入）
