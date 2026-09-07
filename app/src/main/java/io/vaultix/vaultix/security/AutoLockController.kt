@@ -1,8 +1,11 @@
 package io.vaultix.vaultix.security
 
+import android.app.KeyguardManager
+import android.content.Context
 import android.os.SystemClock
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
+import dagger.hilt.android.qualifiers.ApplicationContext
 import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.domain.VaultRepository
 import kotlinx.coroutines.CoroutineScope
@@ -17,31 +20,38 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * 自动锁定（Docs/10 §4「AppLifecycleObserver + InactivityTimer」的最小实现）。
+ * 自动锁定（Docs/10 §4「AppLifecycleObserver + InactivityTimer」）。
  *
- * 计时语义参考 Bastion（GPL-3.0，Copyright 2025 JoyinJoester）会话管理的实战
- * 经验：用 [SystemClock.elapsedRealtime]（不受系统时间修改影响）计时、切后台起算、
- * 回前台校验；本文件为独立实现。
- *
- * - 任一库解锁后，切后台记录时间戳；
- * - 回到前台时若离开时长 ≥ [VaultixPreferences.autoLockTimeoutMs] → lockAll，
- *   并自增 [lockEvents] 代次，供 UI 强制回到库列表根路由；
- * - timeout ≤ 0 / 进程被杀 / 手动锁定不在本类处理（进程死亡密钥天然消失）。
+ * 判定语义对齐 Bastion（GPL-3.0，Copyright 2025 JoyinJoester）的
+ * `SessionManager.canSkipVerification` 与 `autoLockMinutes` 档位模型，
+ * 决策逻辑抽在 [AutoLockPolicy]（纯函数、可单测），本类只做事件接线：
+ * - 档位 0（立即）：切后台即 lockAll；>0：切后台记 [SystemClock.elapsedRealtime]，
+ *   回前台超时即 lockAll；<0（从不）：只手动锁；
+ * - 回前台时若设备屏幕仍处于 keyguard 锁定 → 立即 lockAll（Bastion：
+ *   「屏幕锁定时必须重新验证」，本类对 UI 场景落成锁定而非免验证判定）；
+ * - 锁定后自增 [lockEvents] 代次，供 UI 强制回到库列表根路由；
+ * - 进程死亡密钥天然清零（Bastion 的「重启后锁定」无需建模）。
  *
  * 注册：VaultixApplication.onCreate 里
  * `ProcessLifecycleOwner.get().lifecycle.addObserver(autoLockController)`。
  */
 @Singleton
 class AutoLockController @Inject constructor(
+    @ApplicationContext context: Context,
     private val vaultRepository: VaultRepository,
     prefs: VaultixPreferences,
 ) : DefaultLifecycleObserver {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val keyguardManager =
+        context.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
 
     private val _lockEvents = MutableStateFlow(0)
     /** 锁定代次：UI 收集到新值即强制回到库列表根（防状态穿透）。 */
     val lockEvents: StateFlow<Int> = _lockEvents.asStateFlow()
+
+    @Volatile
+    private var autoLockMinutes: Int = AutoLockPolicy.DEFAULT_MINUTES
 
     @Volatile
     private var backgroundedAtMs: Long? = null
@@ -49,11 +59,8 @@ class AutoLockController @Inject constructor(
     @Volatile
     private var anyUnlocked = false
 
-    @Volatile
-    private var timeoutMs: Long = DEFAULT_AUTO_LOCK_MS
-
     init {
-        scope.launch { prefs.autoLockTimeoutMs.collect { timeoutMs = it } }
+        scope.launch { prefs.autoLockMinutes.collect { autoLockMinutes = it } }
         scope.launch {
             vaultRepository.observeUnlockedVaultIds().collect { ids ->
                 anyUnlocked = ids.isNotEmpty()
@@ -62,16 +69,27 @@ class AutoLockController @Inject constructor(
     }
 
     override fun onStop(owner: LifecycleOwner) {
-        if (anyUnlocked) {
+        if (!anyUnlocked) return
+        if (AutoLockPolicy.lockImmediatelyOnBackground(autoLockMinutes)) {
+            // 档位 0：切后台立即锁（不等回前台再判断）
+            lockAllNow()
+        } else {
             backgroundedAtMs = SystemClock.elapsedRealtime()
         }
     }
 
     override fun onStart(owner: LifecycleOwner) {
-        val stoppedAt = backgroundedAtMs ?: return
+        if (!anyUnlocked) return
+        val stoppedAt = backgroundedAtMs
         backgroundedAtMs = null
-        val elapsed = SystemClock.elapsedRealtime() - stoppedAt
-        if (anyUnlocked && timeoutMs > 0 && elapsed >= timeoutMs) {
+
+        val screenLocked = keyguardManager?.isKeyguardLocked == true
+        val timedOut = AutoLockPolicy.backgroundTimeoutElapsed(
+            nowMs = SystemClock.elapsedRealtime(),
+            backgroundedAtMs = stoppedAt,
+            minutes = autoLockMinutes,
+        )
+        if (AutoLockPolicy.screenLockRequiresRelock(screenLocked) || timedOut) {
             lockAllNow()
         }
     }
@@ -82,10 +100,5 @@ class AutoLockController @Inject constructor(
             vaultRepository.lockAll()
             _lockEvents.update { it + 1 }
         }
-    }
-
-    private companion object {
-        /** 与 VaultixPreferences.DEFAULT_AUTO_LOCK_MS 对齐（偏好流首值到达前的兜底）。 */
-        const val DEFAULT_AUTO_LOCK_MS = 5 * 60 * 1000L
     }
 }

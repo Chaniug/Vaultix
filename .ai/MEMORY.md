@@ -184,3 +184,16 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 - 清理动作范例：ItemDetailScreen 拆分 DetailBodyContent 降圈复杂度 17→≤14、
   ItemRepositoryImpl 解密 flowOn 注入 @CryptoDispatcher（InjectDispatcher 规则）、
   RepositoryModule abstract class→interface、网络超时 30s 常量、`delay(2_000)` 常量
+
+## 自动锁定升级（2026-09-08 第四轮，参考 Bastion）
+- **档位（分钟）**：`VaultixPreferences.autoLockMinutes`（int key auto_lock_minutes，
+  默认 5）：0=切后台立即锁 / >0=离开 N 分钟锁 / <0=从不；**-2 重启后锁定不需要**
+  （密钥只在内存，重启天然锁）
+- 判定纯函数 `AutoLockPolicy`（app/security）+ 4 单测；`AutoLockController` v2：
+  onStop 立即档/计时，onStart keyguard 仍锁或超时 → lockAll + lockEvents 回根
+- **Hilt 断环范例（重要）**：OkHttpClient↔Retrofit.Builder 构造期环曾潜伏数轮，
+  直到 ViewModel 注入点展开全链才暴露；解法 = `BitwardenAuthenticator` 注入
+  `Provider<TokenRefresher>`，401 回调时才 get()（懒断环；eager 会死锁）。
+  设计网络栈时注意 client→auth→client 自环
+- 待办：档位 UI（Bastion 选项 0/1/5/10/15/30/60/300/1440/-1 与
+  getAutoLockDisplayName 文案可参考）→ 设置页最小版任务

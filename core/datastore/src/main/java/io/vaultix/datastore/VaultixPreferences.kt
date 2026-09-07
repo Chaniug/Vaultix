@@ -13,11 +13,11 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import java.io.IOException
 import javax.inject.Inject
@@ -34,13 +34,17 @@ class VaultixPreferences @Inject constructor(
 ) {
 
     private companion object {
-        val AUTO_LOCK_TIMEOUT_MS = longPreferencesKey("auto_lock_timeout_ms")
+        val AUTO_LOCK_MINUTES = intPreferencesKey("auto_lock_minutes")
         val CLIPBOARD_CLEAR_MS = longPreferencesKey("clipboard_clear_ms")
         val DYNAMIC_COLOR = booleanPreferencesKey("dynamic_color")
         val SCREEN_SECURITY = booleanPreferencesKey("screen_security")
         val DEFAULT_VAULT_ID = stringPreferencesKey("default_vault_id")
 
-        const val DEFAULT_AUTO_LOCK_MS = 5 * 60 * 1000L
+        /**
+         * 自动锁定档位（分钟，语义对齐 Bastion autoLockMinutes）：
+         * 0 = 切后台立即锁定；>0 = 离开超过 N 分钟锁定；<0 = 从不自动锁定。
+         */
+        const val DEFAULT_AUTO_LOCK_MINUTES = 5
         const val DEFAULT_CLIPBOARD_CLEAR_MS = 30 * 1000L
     }
 
@@ -50,9 +54,11 @@ class VaultixPreferences @Inject constructor(
             if (error is IOException) emit(emptyPreferences()) else throw error
         }
 
-    val autoLockTimeoutMs: Flow<Long> =
-        safeData.map { it[AUTO_LOCK_TIMEOUT_MS] ?: DEFAULT_AUTO_LOCK_MS }
+    /** 自动锁定档位（分钟；0=立即 / N=空闲分钟 / 负=从不），语义见 companion 注释。 */
+    val autoLockMinutes: Flow<Int> =
+        safeData.map { it[AUTO_LOCK_MINUTES] ?: DEFAULT_AUTO_LOCK_MINUTES }
 
+    /** 敏感内容复制后自动清空剪贴板的延迟（0 = 不清除）。 */
     val clipboardClearMs: Flow<Long> =
         safeData.map { it[CLIPBOARD_CLEAR_MS] ?: DEFAULT_CLIPBOARD_CLEAR_MS }
 
@@ -65,8 +71,8 @@ class VaultixPreferences @Inject constructor(
 
     val defaultVaultId: Flow<String?> = safeData.map { it[DEFAULT_VAULT_ID] }
 
-    suspend fun setAutoLockTimeoutMs(value: Long) {
-        dataStore.edit { it[AUTO_LOCK_TIMEOUT_MS] = value }
+    suspend fun setAutoLockMinutes(minutes: Int) {
+        dataStore.edit { it[AUTO_LOCK_MINUTES] = minutes }
     }
 
     suspend fun setClipboardClearMs(value: Long) {
@@ -86,7 +92,4 @@ class VaultixPreferences @Inject constructor(
             if (id == null) prefs.remove(DEFAULT_VAULT_ID) else prefs[DEFAULT_VAULT_ID] = id
         }
     }
-
-    /** 同步取一次（用于启动时判断，非 UI 收集场景）。 */
-    suspend fun autoLockTimeoutOnce(): Long = autoLockTimeoutMs.first()
 }

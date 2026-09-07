@@ -3,6 +3,16 @@
 > 更新于 2026-09-08（第三轮）。P0 全部落地 + Detekt 门禁上线。
 > 状态：`TODO` / `DOING` / `DONE` / `BLOCKED`
 
+## 已完成（第四轮 2026-09-08 · 自动锁定升级，参考 Bastion）
+
+- [x] **自动锁档位化（对齐 Bastion autoLockMinutes）**：0=切后台立即锁 /
+      >0=离开 N 分钟锁（默认 5）/ <0=从不；回前台时屏幕仍 keyguard 锁定 → 立即锁
+- [x] 判定逻辑抽纯函数 `AutoLockPolicy`（app）+ 4 单测；Controller v2（onStop 立即档 /
+      超时 / keyguard / lockEvents 回根）
+- [x] **Hilt 构造期环修复**：Authenticator 注入 `Provider<TokenRefresher>` 懒断环
+      （OkHttpClient↔Retrofit.Builder 环系 M1 潜伏，ViewModel 注入点暴露）
+- [x] 双 flavor 编译 + app/data 单测 + detekt 全绿
+
 ## 已完成（第三轮 2026-09-08 · 质量门禁）
 
 - [x] **Detekt 门禁（P1）**：`dev.detekt` 2.0.0-alpha.6（官方兼容表对齐
@@ -28,10 +38,10 @@
 
 ## P0 · M1 收尾（剩余）
 
+- [ ] **设置页最小版**：自动锁档位（Bastion 选项 0/1/5/10/15/30/60/300/1440/-1，
+      逻辑已就绪仅差 UI）+ 剪贴板清除时长 + 移除库入口（二次确认）
 - [ ] **2FA / 新设备 OTP 登录**（当前 UI 明示不支持；需 identity 层 two-factor
       分支 + 输入步骤 UI，参考 Bastion BitwardenLoginScreen 交互，勿整搬）
-- [ ] 设置页最小版（自动锁定时长 / 剪贴板清除时长目前无 UI 可调）+ 移除库入口
-      （二次确认：仅移除本地记录）
 - [ ] 解锁页 5 次失败冷却 30s（Docs/08 S6 规格）
 - [ ] 回收站视图（软删除条目的恢复 / 永久删除）
 - [ ] UI 文案抽查迁 `strings.xml`（详情/编辑已用资源；sync 提示文案仍由 data 层中文直供）

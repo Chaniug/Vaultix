@@ -22,3 +22,5 @@
 | 2026-09-08 | **剪贴板清空 =「触发即忘」+ 清空前校验** | 借鉴 Bastion ClipboardUtils（GPL 溯源标注）；不清掉用户之后复制的新内容；时长取 clipboardClearMs |
 | 2026-09-08 | **Detekt 取 2.0.0-alpha.6（dev.detekt）** | 官方兼容表精确对齐 Kotlin 2.4.10 / AGP 9.3 / Gradle 9.5（1.23.x 只到 Kotlin 2.0）；Analysis API 默认开、按 compilation 自动注册；2.0 稳定后升级 |
 | 2026-09-08 | **Detekt 阈值 = Docs/16 硬上限，建议值不设门禁** | LongMethod ≤150 / LargeClass ≤1200 / 参数 ≤8 / 单类函数 ≤40（建议 60/600/6/11 仅风格参考）；Compose PascalCase（ignoreAnnotated）与命名参数数字豁免；crypto「有意捕获」用带理由 @Suppress |
+| 2026-09-08 | **自动锁档位改为分钟制（对齐 Bastion autoLockMinutes）** | `0`=切后台立即锁；`>0`=离开 N 分钟锁（默认 5）；`<0`=从不自动锁；回前台时设备屏幕仍 keyguard 锁定 → 立即锁（Bastion「屏幕锁定时必须重新验证」）；判定逻辑抽纯函数 `AutoLockPolicy` 可单测。Vaultix 密钥只在内存 → Bastion 的「-2 重启后锁定」无需建模 |
+| 2026-09-08 | **Hilt 断环：Authenticator 注入 `Provider<TokenRefresher>`** | OkHttpClient→Authenticator→TokenRefresher→AuthRepository→ApiFactory→Retrofit.Builder→OkHttpClient 构造期环（此前未被任何注入点展开，ViewModel 注入点出现后暴露）；401 回调时才解析 refresher，彼时认证仓库必已构造完成 |

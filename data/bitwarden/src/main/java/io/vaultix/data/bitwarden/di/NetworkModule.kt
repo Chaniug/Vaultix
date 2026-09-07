@@ -27,6 +27,7 @@ import okhttp3.OkHttpClient
 import retrofit2.Retrofit
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
+import javax.inject.Provider
 import javax.inject.Singleton
 
 @Module
@@ -51,7 +52,7 @@ object NetworkModule {
     fun provideTokenRefresher(impl: BitwardenTokenRefresher): TokenRefresher = impl
 
     @Provides @Singleton
-    fun provideAuthenticator(refresher: TokenRefresher): Authenticator =
+    fun provideAuthenticator(refresher: Provider<TokenRefresher>): Authenticator =
         BitwardenAuthenticator(refresher)
 
     @Provides @Singleton

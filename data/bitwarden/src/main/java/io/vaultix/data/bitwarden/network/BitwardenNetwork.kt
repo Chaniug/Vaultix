@@ -21,6 +21,7 @@ import okhttp3.Authenticator
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.Route
+import javax.inject.Provider
 
 /**
  * 全局 Json 实例。
@@ -51,16 +52,20 @@ fun interface TokenRefresher {
  * 401 自动恢复：任意 Bitwarden 请求收到 401 时，按 host 刷新 token 后重试一次。
  *
  * ⚠️ 防死循环：`priorResponse != null` 说明已经重试过，直接放弃返回 null。
+ *
+ * ⚠️ 注入的是 [Provider]<TokenRefresher> 而非实例：刷新实现（认证仓库）经
+ * ApiFactory → Retrofit.Builder → OkHttpClient 与本类构成构造期依赖环，
+ * 这里延迟到收到 401 时才解析——彼时认证仓库必然已构造完成（Dagger 断环点）。
  */
 class BitwardenAuthenticator(
-    private val refresher: TokenRefresher,
+    private val refresherProvider: Provider<TokenRefresher>,
 ) : Authenticator {
 
     override fun authenticate(route: Route?, response: Response): Request? {
         if (response.priorResponse != null) return null
 
         val host = response.request.url.host
-        val newToken = refresher.refresh(host) ?: return null
+        val newToken = refresherProvider.get().refresh(host) ?: return null
         if (newToken.isBlank()) return null
 
         return response.request.newBuilder()
