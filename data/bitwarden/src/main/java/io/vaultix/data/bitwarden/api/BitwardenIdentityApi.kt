@@ -19,6 +19,7 @@ import kotlinx.serialization.Serializable
 import retrofit2.http.Body
 import retrofit2.http.FieldMap
 import retrofit2.http.FormUrlEncoded
+import retrofit2.http.Header
 import retrofit2.http.POST
 
 /**
@@ -36,10 +37,20 @@ interface BitwardenIdentityApi {
     /**
      * connect/token：grant_type=password 为登录，refresh_token 为刷新。
      * 以 FieldMap 承接，避免为每种 grant 各建一个请求模型。
+     *
+     * ⚠️ 设备信息必须同时放 **HTTP Header**（device-type / device-identifier /
+     * device-name）：Bitwarden/Vaultwarden 依此登记设备并在服务端设备管理中
+     * 展示与信任（2026-09-08 真机验证：只放 body 字段服务器端不认；header
+     * 组合与 Bastion 实测可用方案一致，GPL-3.0 溯源）。
      */
     @FormUrlEncoded
     @POST("connect/token")
-    suspend fun token(@FieldMap fields: Map<String, String>): TokenResponse
+    suspend fun token(
+        @FieldMap fields: Map<String, String>,
+        @Header("device-type") deviceType: String? = null,
+        @Header("device-identifier") deviceIdentifier: String? = null,
+        @Header("device-name") deviceName: String? = null,
+    ): TokenResponse
 }
 
 @Serializable

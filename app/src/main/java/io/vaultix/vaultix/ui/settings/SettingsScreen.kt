@@ -16,6 +16,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Security
@@ -67,6 +68,8 @@ fun SettingsScreen(
     var showAutoLockDialog by rememberSaveable { mutableStateOf(false) }
     var showClipboardDialog by rememberSaveable { mutableStateOf(false) }
     var showAboutDialog by rememberSaveable { mutableStateOf(false) }
+    var showQuickUnlockDialog by rememberSaveable { mutableStateOf(false) }
+    val quickUnlockVaults by viewModel.quickUnlockVaults.collectAsStateWithLifecycle()
 
     Scaffold(
         topBar = {
@@ -120,6 +123,12 @@ fun SettingsScreen(
                 subtitle = stringResource(R.string.setting_lock_now_desc),
                 titleColor = MaterialTheme.colorScheme.error,
                 onClick = viewModel::lockAllNow,
+            )
+            SettingsRow(
+                icon = { Icon(Icons.Filled.Fingerprint, contentDescription = null) },
+                title = stringResource(R.string.settings_quick_unlock),
+                subtitle = stringResource(R.string.settings_quick_unlock_desc),
+                onClick = { showQuickUnlockDialog = true },
             )
 
             // ---- 外观 ----
@@ -194,6 +203,60 @@ fun SettingsScreen(
             },
         )
     }
+    if (showQuickUnlockDialog) {
+        QuickUnlockManageDialog(
+            vaults = quickUnlockVaults,
+            onDisable = viewModel::disableQuickUnlock,
+            onDismiss = { showQuickUnlockDialog = false },
+        )
+    }
+}
+
+/** 快速解锁管理：列出各库启用状态，可逐个关闭（启用入口 = 登录后列表横幅）。 */
+@Composable
+private fun QuickUnlockManageDialog(
+    vaults: List<SettingsViewModel.QuickUnlockVaultUi>,
+    onDisable: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.settings_quick_unlock)) },
+        text = {
+            if (vaults.isEmpty()) {
+                Text(stringResource(R.string.quick_unlock_manage_none))
+            } else {
+                Column {
+                    vaults.forEach { vault ->
+                        ListItem(
+                            headlineContent = { Text(vault.name) },
+                            supportingContent = {
+                                Text(
+                                    if (vault.enabled) {
+                                        stringResource(R.string.quick_unlock_enabled)
+                                    } else {
+                                        stringResource(R.string.quick_unlock_disabled)
+                                    },
+                                )
+                            },
+                            trailingContent = {
+                                if (vault.enabled) {
+                                    TextButton(onClick = { onDisable(vault.vaultId) }) {
+                                        Text(stringResource(R.string.quick_unlock_disable))
+                                    }
+                                }
+                            },
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.action_back))
+            }
+        },
+    )
 }
 
 /** 单选列表对话框：自动锁定档位（0/1/5/10/15/30/60/300/1440/-1 + 自定义）。 */

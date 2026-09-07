@@ -136,7 +136,7 @@ class BitwardenAuthRepository @Inject constructor(
                 put("twoFactorRemember", "0")
             }
         }
-        val token = requestToken(api, fields, twoFactor != null)
+        val token = requestToken(api, fields, deviceId, deviceName, twoFactor != null)
 
         persist(server, token.accessToken, token.refreshToken)
         // 受保护的账号对称密钥：后续用它解密所有条目，务必一并持久化
@@ -157,10 +157,18 @@ class BitwardenAuthRepository @Inject constructor(
     private suspend fun requestToken(
         api: BitwardenIdentityApi,
         fields: Map<String, String>,
+        deviceId: String,
+        deviceName: String,
         submittedTwoFactor: Boolean,
     ): TokenResponse {
         return try {
-            api.token(fields)
+            api.token(
+                fields = fields,
+                // 设备登记/信任依赖 HTTP Header（Bastion 实测组合，GPL-3.0 溯源）
+                deviceType = DEVICE_TYPE,
+                deviceIdentifier = deviceId,
+                deviceName = deviceName,
+            )
         } catch (error: HttpException) {
             val providers = parseTwoFactorProviders(
                 error.response()?.errorBody()?.string(),
@@ -268,7 +276,8 @@ class BitwardenAuthRepository @Inject constructor(
         const val DEFAULT_ARGON2_MEMORY_MB = 64
         const val DEFAULT_ARGON2_PARALLELISM = 4
         const val CLIENT_ID = "mobile"
-        const val DEVICE_TYPE = "1"
+        /** 官方 DeviceType 枚举：0 = Android（此前误用 1 = iOS，服务器端显示错误设备类型）。 */
+        const val DEVICE_TYPE = "0"
     }
 }
 

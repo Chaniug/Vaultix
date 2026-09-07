@@ -4,10 +4,13 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import io.vaultix.datastore.VaultixPreferences
+import io.vaultix.domain.VaultRepository
 import io.vaultix.vaultix.security.AutoLockController
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -20,6 +23,7 @@ import javax.inject.Inject
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     private val preferences: VaultixPreferences,
+    private val vaultRepository: VaultRepository,
     private val autoLockController: AutoLockController,
 ) : ViewModel() {
 
@@ -28,6 +32,13 @@ class SettingsViewModel @Inject constructor(
         val clipboardClearMs: Long = 30_000L,
         val dynamicColor: Boolean = true,
         val screenSecurity: Boolean = true,
+    )
+
+    /** 本地快速解锁管理列表（每库：是否已启用）。 */
+    data class QuickUnlockVaultUi(
+        val vaultId: String,
+        val name: String,
+        val enabled: Boolean,
     )
 
     val state: StateFlow<UiState> = combine(
@@ -48,6 +59,26 @@ class SettingsViewModel @Inject constructor(
         initialValue = UiState(),
     )
 
+    val quickUnlockVaults: StateFlow<List<QuickUnlockVaultUi>> =
+        vaultRepository.observeVaults()
+            .flatMapLatest { vaults ->
+                combine(
+                    vaults.map { vault ->
+                        vaultRepository.localUnlockAvailable(vault.id).map { enabled ->
+                            QuickUnlockVaultUi(
+                                vaultId = vault.id,
+                                name = vault.name,
+                                enabled = enabled,
+                            )
+                        }
+                    },
+                ) { items -> items.toList() }
+            }.stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(5_000),
+                initialValue = emptyList(),
+            )
+
     fun setAutoLockMinutes(minutes: Int) {
         viewModelScope.launch { preferences.setAutoLockMinutes(minutes) }
     }
@@ -62,6 +93,11 @@ class SettingsViewModel @Inject constructor(
 
     fun setScreenSecurity(enabled: Boolean) {
         viewModelScope.launch { preferences.setScreenSecurity(enabled) }
+    }
+
+    /** 关闭某库的本地快速解锁（删除包裹密钥与开关）。 */
+    fun disableQuickUnlock(vaultId: String) {
+        viewModelScope.launch { vaultRepository.disableLocalUnlock(vaultId) }
     }
 
     /** 立即锁定全部库：AutoLockController 会自增锁定代次，导航壳自动回库列表。 */
