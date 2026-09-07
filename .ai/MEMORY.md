@@ -197,3 +197,23 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
   设计网络栈时注意 client→auth→client 自环
 - 待办：档位 UI（Bastion 选项 0/1/5/10/15/30/60/300/1440/-1 与
   getAutoLockDisplayName 文案可参考）→ 设置页最小版任务
+
+## 2FA 登录 + 签名修复（2026-09-08 第五轮，真机驱动）
+- **2FA（经典 OAuth 扩展，Bastion 同款）**：password grant 400 → 解析
+  `TwoFactorProviders`（字符串/数值数组、Pascal/camel 键均兼容）→ UI 验证码
+  步骤 → 原 grant 追加 twoFactorToken/Provider/Remember 重发；码错再收挑战 →
+  TwoFactorInvalid（专属文案）。AddVault/Unlock 共用 TwoFactorStep；
+  provider 0=TOTP / 1=Email（服务端自动发码，无需 email/send 端点）
+- **真机抓包关键**：Vaultwarden ≥1.33 prelogin 返回 **camelCase**（kdf…），
+  官方仍 PascalCase → DTO 双形态 + resolvedXxx（PreLoginResponseTest 回归）
+- **CF 后自托管**：请求头组与 Bastion 逐值一致（桌面 Chrome 131 UA +
+  Sec-Ch-Ua 三件套 + Keyguard-Client + Accept-Language + Bitwarden-Client-Name
+  desktop/2025.1.0），NetworkModule 文件头带 GPL 溯源
+- **签名事故（重要教训）**：CI「validateSigning 通过」≠ 固定密钥——此前
+  SIGNING_KEYSTORE_BASE64 解码失败走一次性密钥 fallback，每个包签名都不同、
+  永远无法覆盖安装（validateSigning 对 fallback 也通过，早期笔记误判）。
+  已重生成 D:\vaultix-release.jks 并重传 secrets；判断标准必须是 CI 日志
+  「固定密钥解码并校验通过」notice
+- 新 jks 密码：**D:\vaultix-signing-passwords.txt**（项目外；用户需自行备份
+  jks+密码，缺一则无法再发布）；旧 jks 备份为 vaultix-release-old-*.jks
+- 迁移提示：一次性签名 → 固定签名需**最后一次卸载重装**，此后包可正常覆盖
