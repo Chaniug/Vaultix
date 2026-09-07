@@ -159,7 +159,8 @@ jobs:
       - name: Build Debug APK (build gate)
         run: |
           set +e
-          # 构建 full + offline 两个分发维度（见 Docs/11 的 flavor 定义）。
+          # 只出 full 分发的 preview 包（offline = 仅 KDBX 本地库，M2 才有内容，
+          # 届时再随 release 一起出）。offline flavor 仍做编译验证，防止分发出包时退化。
           # versionName 形如 0.1.0-dev-78db0ed：版本号 + dev 标识 + 短 commit SHA（可直接 git show 定位代码）。
           # 用 GITHUB_SHA 而非 git rev-parse：本 job 是 fetch-depth=1 浅克隆，本地 git 无历史，
           # 而 GITHUB_SHA 由 Actions 注入，不受克隆深度影响。
@@ -173,7 +174,7 @@ jobs:
             KS_OPTS="$KS_OPTS -Pandroid.injected.signing.key.alias=${SIGNING_KEY_ALIAS:-vaultix}"
             KS_OPTS="$KS_OPTS -Pandroid.injected.signing.key.password=${SIGNING_KEY_PASSWORD:-android}"
           fi
-          ./gradlew :app:assembleFullDebug :app:assembleOfflineDebug --stacktrace \
+          ./gradlew :app:assembleFullDebug :app:compileOfflineDebugKotlin --stacktrace \
             -PversionName="0.1.0-dev-$(echo ${GITHUB_SHA} | cut -c1-7)" $KS_OPTS 2>&1 | tee /tmp/build_log.txt
           BUILD_EXIT=${PIPESTATUS[0]}
           if [ "$BUILD_EXIT" -ne 0 ]; then
