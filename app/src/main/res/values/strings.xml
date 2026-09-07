@@ -36,6 +36,7 @@
     <string name="unlock_title">解锁</string>
     <string name="unlock_submit">解锁</string>
     <string name="unlock_password">主密码</string>
+    <string name="unlock_password_label_fallback">或使用主密码</string>
 
     <!-- 错误文案 -->
     <string name="error_fields_missing">请填写邮箱和主密码</string>
@@ -79,6 +80,20 @@
     <string name="about_license_body">Vaultix 以 GPL-3.0 发布。部分设计与代码参考 Bastion（GPL-3.0，Copyright 2025 JoyinJoester），搬运处均带溯源声明。\n\n本项目为密码管理客户端，自行承担使用风险。</string>
     <string name="about_github_url">https://github.com/Chaniug/Vaultix</string>
     <string name="action_open">打开</string>
+
+    <!-- 本地快速解锁（Keystore 包裹 + 生物识别/设备 PIN） -->
+    <string name="quick_unlock_biometric_button">使用生物识别 / 设备 PIN 解锁</string>
+    <string name="quick_unlock_biometric_title">解锁 Vaultix</string>
+    <string name="quick_unlock_biometric_subtitle">验证身份以打开密码库</string>
+    <string name="quick_unlock_enroll_title">启用生物识别解锁</string>
+    <string name="quick_unlock_banner_text">锁定后可免主密码快速打开（生物识别或设备 PIN，不会再次要求两步验证）</string>
+    <string name="action_enable">启用</string>
+    <string name="action_later">以后再说</string>
+    <string name="settings_quick_unlock">生物识别快速解锁</string>
+    <string name="settings_quick_unlock_desc">锁定后免主密码/免 2FA 重新打开；关闭入口见下方列表</string>
+    <string name="quick_unlock_manage_none">尚未启用任何库</string>
+    <string name="quick_unlock_disable">关闭</string>
+    <string name="quick_unlock_local_failed">本地解锁不可用（密钥可能已失效），请用主密码登录</string>
     <!-- 自动锁定档位 -->
     <string name="auto_lock_never">从不</string>
     <string name="auto_lock_immediately">立即（切后台即锁）</string>

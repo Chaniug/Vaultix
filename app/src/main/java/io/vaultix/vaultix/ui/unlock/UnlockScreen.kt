@@ -40,14 +40,19 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.common.BiometricPrompter
 import io.vaultix.vaultix.ui.common.TwoFactorStep
+import io.vaultix.vaultix.ui.common.rememberFragmentActivity
 import io.vaultix.vaultix.ui.error.unlockErrorText
+import androidx.compose.material.icons.filled.Fingerprint
+import androidx.compose.foundation.layout.width
 
 /**
- * 解锁页（Docs/08 S6 最小版）。
+ * 解锁页（Docs/08 S6）。
  *
  * 内容居中：库图标位（首字母）、库名 + 账号、主密码输入、解锁按钮；
- * 派生密钥期间按钮禁用并展示进度（KDF 1–3 秒，S6 规格）。
+ * 已启用「本地快速解锁」时顶部出现生物识别 / 设备 PIN 按钮：认证通过即
+ * 解封本地密钥（离线、免 2FA）；失败/取消回退主密码。
  */
 @Composable
 fun UnlockScreen(
@@ -56,11 +61,33 @@ fun UnlockScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val focusManager = LocalFocusManager.current
+    val activity = rememberFragmentActivity()
+    // 认证对话框文案（LaunchedEffect 内不可直接 stringResource，先取好）
+    val biometricTitle = stringResource(R.string.quick_unlock_biometric_title)
+    val biometricSubtitle = stringResource(R.string.quick_unlock_biometric_subtitle)
+    val cancelText = stringResource(R.string.action_cancel)
 
+    // BiometricPrompt 事件：收到 cipher 即弹认证，成功回调回传 VM 完成解封
     LaunchedEffect(Unit) {
         viewModel.events.collect { event ->
             when (event) {
                 UnlockViewModel.Event.Unlocked -> onUnlocked()
+                is UnlockViewModel.Event.PromptForUnlock -> {
+                    val host = activity ?: run {
+                        viewModel.onBiometricPromptDismissed()
+                        return@collect
+                    }
+                    BiometricPrompter(host).authenticate(
+                        cipher = event.cipher,
+                        title = biometricTitle,
+                        subtitle = biometricSubtitle,
+                        cancelText = cancelText,
+                        onSuccess = viewModel::completeLocalUnlock,
+                        onError = { _, cancelled ->
+                            if (cancelled) viewModel.onBiometricPromptDismissed()
+                        },
+                    )
+                }
             }
         }
     }
@@ -112,7 +139,30 @@ fun UnlockScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            Spacer(Modifier.height(24.dp))
+            Spacer(Modifier.height(16.dp))
+            if (state.localUnlockAvailable && state.twoFactor == null) {
+                FilledTonalButton(
+                    onClick = viewModel::startLocalUnlock,
+                    enabled = !state.submitting,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Filled.Fingerprint, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(stringResource(R.string.quick_unlock_biometric_button))
+                }
+                Text(
+                    text = stringResource(R.string.unlock_password_label_fallback),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 12.dp),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                )
+                Spacer(Modifier.height(12.dp))
+            } else {
+                Spacer(Modifier.height(24.dp))
+            }
 
             OutlinedTextField(
                 value = state.password,

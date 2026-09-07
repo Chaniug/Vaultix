@@ -29,6 +29,8 @@ coreKtx = "1.19.0"
 lifecycle = "2.11.0"
 activityCompose = "1.13.0"
 navigationCompose = "2.10.0"
+# FragmentActivity：androidx.biometric 的 BiometricPrompt 宿主要求
+fragment = "1.8.6"
 # ⚠️ Hilt 与 Kotlin 强绑定：Hilt 内置的 kotlin-metadata-jvm 决定了能解析的 metadata 版本。
 #    官方对应：Kotlin 2.4.10 → Hilt 2.60.1（KSP 2.3.10）；Kotlin 2.3.21 → Hilt 2.59.2。
 #    实测：Kotlin 2.4.10 + Hilt 2.59 会报
@@ -113,6 +115,7 @@ androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecyc
 androidx-lifecycle-runtime-compose = { group = "androidx.lifecycle", name = "lifecycle-runtime-compose", version.ref = "lifecycle" }
 androidx-lifecycle-viewmodel-compose = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-compose", version.ref = "lifecycle" }
 androidx-lifecycle-process = { group = "androidx.lifecycle", name = "lifecycle-process", version.ref = "lifecycle" }
+androidx-fragment-ktx = { group = "androidx.fragment", name = "fragment-ktx", version.ref = "fragment" }
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
 androidx-navigation-compose = { group = "androidx.navigation", name = "navigation-compose", version.ref = "navigationCompose" }
 androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }

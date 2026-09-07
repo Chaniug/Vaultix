@@ -128,6 +128,9 @@ jobs:
             exit 1
           fi
         env:
+          # ⚠️ 2026-09-08 修复：Secrets 需显式注入 env，否则 ${SIGNING_STORE_PASSWORD}
+          #    恒为空回落 android，keytool 校验必失败 → 一次性密钥（与 ci-debug.yml 同坑）
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
           GITHUB_WORKSPACE: ${{ github.workspace }}
 
       - name: Read VERSION file (rele push fallback)
@@ -210,6 +213,9 @@ jobs:
             exit "$BUILD_EXIT"
           fi
         env:
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
           GITHUB_WORKSPACE: ${{ github.workspace }}
 
       - name: Stop Gradle Daemon

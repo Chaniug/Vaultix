@@ -43,10 +43,14 @@ class UnlockViewModel @Inject constructor(
         val submitting: Boolean = false,
         val error: UnlockUiError? = null,
         val twoFactor: TwoFactorUi? = null,
+        val localUnlockAvailable: Boolean = false,
     )
 
     sealed interface Event {
         data object Unlocked : Event
+
+        /** UI 收到后立即弹 BiometricPrompt（cipher 已 init，等待用户认证）。 */
+        data class PromptForUnlock(val cipher: javax.crypto.Cipher) : Event
     }
 
     val vaultId: String = checkNotNull(savedStateHandle[ARG_VAULT_ID])
@@ -63,6 +67,56 @@ class UnlockViewModel @Inject constructor(
                 _state.update { it.copy(vault = vaults.firstOrNull { v -> v.id == vaultId }) }
             }
         }
+        viewModelScope.launch {
+            vaultRepository.localUnlockAvailable(vaultId).collect { available ->
+                _state.update { it.copy(localUnlockAvailable = available) }
+            }
+        }
+    }
+
+    /** 用户点了「生物识别 / 设备 PIN 解锁」：准备解密 Cipher 并交给 UI 弹认证。 */
+    fun startLocalUnlock() {
+        if (_state.value.submitting || _state.value.localUnlockAvailable.not()) return
+        _state.update { it.copy(submitting = true, error = null) }
+        viewModelScope.launch {
+            val cipher = vaultRepository.prepareLocalUnlock(vaultId)
+            if (cipher == null) {
+                _state.update {
+                    it.copy(
+                        submitting = false,
+                        error = UnlockUiError.Unknown("本地解锁不可用，请用主密码登录"),
+                    )
+                }
+            } else {
+                _events.send(Event.PromptForUnlock(cipher))
+            }
+        }
+    }
+
+    /** BiometricPrompt 认证成功（携带本次 cipher）：解封本地密钥建立会话。 */
+    fun completeLocalUnlock(cipher: javax.crypto.Cipher) {
+        viewModelScope.launch {
+            val result = vaultRepository.completeLocalUnlock(vaultId, cipher)
+            if (result == UnlockResult.Success) {
+                _state.update {
+                    it.copy(submitting = false, password = "", twoFactor = null, error = null)
+                }
+                _events.send(Event.Unlocked)
+            } else {
+                val detail = (result as? UnlockResult.Unknown)?.detail
+                _state.update {
+                    it.copy(
+                        submitting = false,
+                        error = UnlockUiError.Unknown(detail ?: "本地解锁失败，请用主密码登录"),
+                    )
+                }
+            }
+        }
+    }
+
+    /** 认证对话框被系统错误终止（非用户取消）时收起 busy 态。 */
+    fun onBiometricPromptDismissed() {
+        _state.update { it.copy(submitting = false) }
     }
 
     fun onPasswordChange(value: String) = _state.update { it.copy(password = value, error = null) }

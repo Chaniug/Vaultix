@@ -113,6 +113,9 @@ jobs:
       # push 时注入仓库固定签名，使 preview(debug) 与 stable release 签名完全一致、可互相覆盖安装。
       # 注意：本步骤与 release.yml 使用同一套 SIGNING_* Secret，密码也复用 Secret（不再硬编码 android），
       # 这是“同一设备 debug/release 覆盖安装”的硬性前提（同 applicationId + 同签名证书）。
+      # ⚠️ 2026-09-08 修复：GitHub Secrets 不会自动变成环境变量，此前 ${SIGNING_STORE_PASSWORD}
+      #    恒为空 → 回落 android → keytool 校验必失败 → 每次构建都用一次性密钥（无法覆盖安装）。
+      #    现在通过 step env 显式注入，decode 校验与 build 签名使用同一份密码。
       - name: Decode signing keystore
         if: github.event_name == 'push'
         shell: bash
@@ -148,6 +151,9 @@ jobs:
             exit 1
           fi
         env:
+          # ⚠️ 2026-09-08 修复：Secrets 需显式注入 env，否则 ${SIGNING_STORE_PASSWORD}
+          #    恒为空回落 android，keytool 校验必失败 → 一次性密钥（无法覆盖安装）
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
           GITHUB_WORKSPACE: ${{ github.workspace }}
 
       - name: Build Debug APK (build gate)
@@ -178,6 +184,10 @@ jobs:
             exit "$BUILD_EXIT"
           fi
           echo "::notice title=Build gate diagnostics::build_failed=false"
+        env:
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
 
       - name: List debug APK outputs
         run: find app/build/outputs/apk/*/debug -maxdepth 1 -type f -print || true

@@ -1,6 +1,8 @@
 package io.vaultix.data.repository
 
 import android.os.Build
+import io.vaultix.crypto.SecureBytes
+import io.vaultix.crypto.SymmetricCryptoKey
 import io.vaultix.data.bitwarden.auth.BitwardenAuthRepository
 import io.vaultix.data.bitwarden.auth.TwoFactorInvalidException
 import io.vaultix.data.bitwarden.auth.TwoFactorRequiredException
@@ -8,7 +10,9 @@ import io.vaultix.data.bitwarden.sync.BitwardenSyncService
 import io.vaultix.data.bitwarden.sync.SyncOutcome
 import io.vaultix.database.dao.VaultDao
 import io.vaultix.database.entity.VaultEntity
+import io.vaultix.datastore.LocalUnlockKeyStore
 import io.vaultix.datastore.SecureCredentialStore
+import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.domain.UnlockResult
 import io.vaultix.domain.VaultRepository
 import io.vaultix.domain.VaultSyncReport
@@ -16,10 +20,12 @@ import io.vaultix.model.VaultKind
 import io.vaultix.model.VaultSummary
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.runBlocking
 import retrofit2.HttpException
 import java.io.IOException
 import java.util.UUID
+import javax.crypto.Cipher
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -29,9 +35,10 @@ import javax.inject.Singleton
  * 设计要点：
  * - **vaultId = 规范化服务器 URL**（trimEnd('/')）：与认证层 / 401 刷新器按
  *   server 存 token 的语义一致（M1 限制：同一服务器仅支持一个账号，见 decisions）；
- * - 「解锁」= 联网重新登录（prelogin → 派生 → token）→ 解包对称密钥进内存会话；
- *   M1 不做离线解锁（PIN / 生物识别为后续里程碑）；
- * - 本地库行只登记元数据（服务器 / 邮箱），**不落任何密钥材料**。
+ * - 「解锁」默认 = 联网重新登录（prelogin → 派生 → token）→ 解包对称密钥进内存会话；
+ * - 「本地快速解锁」= 首次登录成功后把对称密钥用 Keystore 用户认证 KEK 包裹落盘，
+ *   此后锁库只清内存；再次解锁经生物识别 / 设备 PIN 认证后本地解封，离线可用、
+ *   不重输主密码、不触发 2FA（模型与官方客户端 / Bastion 一致，见 decisions）。
  */
 @Singleton
 class VaultRepositoryImpl @Inject constructor(
@@ -40,6 +47,8 @@ class VaultRepositoryImpl @Inject constructor(
     private val sessions: VaultSessionManager,
     private val syncService: BitwardenSyncService,
     private val credentials: SecureCredentialStore,
+    private val localUnlockKeyStore: LocalUnlockKeyStore,
+    private val preferences: VaultixPreferences,
 ) : VaultRepository {
 
     override fun observeVaults(): Flow<List<VaultSummary>> =
@@ -128,6 +137,78 @@ class VaultRepositoryImpl @Inject constructor(
     override fun lockAll() {
         runBlocking { sessions.lockAll() }
     }
+
+    // ---- 本地快速解锁（Keystore 用户认证 KEK 包裹，见类 KDoc）----
+
+    override fun localUnlockAvailable(vaultId: String): Flow<Boolean> =
+        combine(
+            preferences.isLocalUnlockEnabled(vaultId),
+            flow { emit(wrappedPayload(vaultId) != null) },
+        ) { enabled, hasPayload ->
+            enabled && hasPayload && localUnlockKeyStore.keyAvailable
+        }
+
+    override suspend fun enrollLocalUnlock(vaultId: String, cipher: Cipher): Boolean {
+        val key = sessions.keyOf(vaultId) ?: return false
+        val fullKey = buildFullKey(key)
+        val wrapped = try {
+            localUnlockKeyStore.wrap(cipher, fullKey)
+        } finally {
+            fullKey.fill(0)
+        }
+        credentials.putString(LOCAL_UNLOCK_PREFIX + vaultId, wrapped)
+        preferences.setLocalUnlockEnabled(vaultId, true)
+        return true
+    }
+
+    override suspend fun prepareLocalUnlock(vaultId: String): Cipher? {
+        val payload = wrappedPayload(vaultId) ?: return null
+        return localUnlockKeyStore.newDecryptCipher(payload)
+    }
+
+    override suspend fun prepareLocalEnroll(): Cipher? =
+        localUnlockKeyStore.newEncryptCipher()
+
+    override suspend fun completeLocalUnlock(vaultId: String, cipher: Cipher): UnlockResult {
+        val payload = wrappedPayload(vaultId) ?: return UnlockResult.Unknown("未启用本地快速解锁")
+        return runCatching {
+            val fullKey = localUnlockKeyStore.unwrap(cipher, payload)
+            try {
+                val key = SymmetricCryptoKey.fromFullKey(fullKey)
+                sessions.unlock(vaultId, key)
+            } finally {
+                fullKey.fill(0)
+            }
+            UnlockResult.Success
+        }.getOrElse { error ->
+            when (error) {
+                // KEK 失效（指纹变更等）或密码错误：清开关，回退主密码登录
+                is android.security.keystore.UserNotAuthenticatedException,
+                is javax.crypto.AEADBadTagException,
+                -> {
+                    preferences.setLocalUnlockEnabled(vaultId, false)
+                    credentials.remove(LOCAL_UNLOCK_PREFIX + vaultId)
+                    UnlockResult.Unknown("本地解锁失败（密钥可能已失效），请用主密码重新登录")
+                }
+                else -> UnlockResult.Unknown(error.message)
+            }
+        }
+    }
+
+    override suspend fun disableLocalUnlock(vaultId: String) {
+        credentials.remove(LOCAL_UNLOCK_PREFIX + vaultId)
+        preferences.setLocalUnlockEnabled(vaultId, false)
+    }
+
+    /** 会话密钥 → 64B full key（enc ‖ mac）。 */
+    private fun buildFullKey(key: SymmetricCryptoKey): ByteArray {
+        val enc = key.encKey.useBytes { it.copyOf() }
+        val mac = key.macKey.useBytes { it.copyOf() }
+        return enc + mac
+    }
+
+    private fun wrappedPayload(vaultId: String): String? =
+        credentials.getString(LOCAL_UNLOCK_PREFIX + vaultId)
 
     override suspend fun syncVault(vaultId: String): VaultSyncReport {
         val row = vaultDao.get(vaultId)
@@ -234,6 +315,7 @@ class VaultRepositoryImpl @Inject constructor(
         const val HTTP_NOT_FOUND = 404
         const val KEY_DEVICE_ID = "device_id"
         const val DEFAULT_DEVICE_NAME = "Vaultix Device"
+        const val LOCAL_UNLOCK_PREFIX = "local_unlock_key::"
     }
 }
 

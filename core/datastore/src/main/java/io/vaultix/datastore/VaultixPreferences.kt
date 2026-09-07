@@ -39,6 +39,7 @@ class VaultixPreferences @Inject constructor(
         val DYNAMIC_COLOR = booleanPreferencesKey("dynamic_color")
         val SCREEN_SECURITY = booleanPreferencesKey("screen_security")
         val DEFAULT_VAULT_ID = stringPreferencesKey("default_vault_id")
+        val QUICK_UNLOCK_PROMPT_DISMISSED = booleanPreferencesKey("quick_unlock_prompt_dismissed")
 
         /**
          * 自动锁定档位（分钟，语义对齐 Bastion autoLockMinutes）：
@@ -70,6 +71,40 @@ class VaultixPreferences @Inject constructor(
         safeData.map { it[SCREEN_SECURITY] ?: true }
 
     val defaultVaultId: Flow<String?> = safeData.map { it[DEFAULT_VAULT_ID] }
+
+    /**
+     * 本地快速解锁开关（按库）。仅为元数据：真正的包裹密钥密文在
+     * [SecureCredentialStore]（key：local_unlock_key::<vaultId>）。
+     */
+    fun isLocalUnlockEnabled(vaultId: String): Flow<Boolean> =
+        safeData.map { it[localUnlockKey(vaultId)] ?: false }
+
+    suspend fun setLocalUnlockEnabled(vaultId: String, enabled: Boolean) {
+        dataStore.edit { prefs ->
+            if (enabled) {
+                prefs[localUnlockKey(vaultId)] = true
+            } else {
+                prefs.remove(localUnlockKey(vaultId))
+            }
+        }
+    }
+
+    private fun localUnlockKey(vaultId: String) =
+        booleanPreferencesKey("local_unlock_enabled_$vaultId")
+
+    /** 登录后「启用快速解锁」引导横幅是否已被用户拒绝（不再打扰，设置页仍可启用）。 */
+    fun isQuickUnlockPromptDismissed(): Flow<Boolean> =
+        safeData.map { it[QUICK_UNLOCK_PROMPT_DISMISSED] ?: false }
+
+    suspend fun setQuickUnlockPromptDismissed(dismissed: Boolean) {
+        dataStore.edit { prefs ->
+            if (dismissed) {
+                prefs[QUICK_UNLOCK_PROMPT_DISMISSED] = true
+            } else {
+                prefs.remove(QUICK_UNLOCK_PROMPT_DISMISSED)
+            }
+        }
+    }
 
     suspend fun setAutoLockMinutes(minutes: Int) {
         dataStore.edit { it[AUTO_LOCK_MINUTES] = minutes }

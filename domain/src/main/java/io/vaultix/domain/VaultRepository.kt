@@ -52,6 +52,42 @@ interface VaultRepository {
 
     /** 触发一次同步（推送 dirty → revision 预检 → 全量拉取 → 安全校验 → 落库）。 */
     suspend fun syncVault(vaultId: String): VaultSyncReport
+
+    // ---- 本地快速解锁（Docs/10 §4 会话管理的设备侧扩展）----
+
+    /**
+     * 该库是否已启用本地快速解锁（开关 + 包裹密钥均存在）。
+     * 为 true 时解锁页显示「生物识别 / 设备 PIN 解锁」，锁库后免主密码免 2FA。
+     */
+    fun localUnlockAvailable(vaultId: String): Flow<Boolean>
+
+    /**
+     * 登录 / 主密码解锁成功后启用：把会话内对称密钥用「用户已认证的 cipher」
+     * 包裹并落盘。cipher 由 UI 经 [LocalUnlockKeyStore.newEncryptCipher] 创建并
+     * 交给 BiometricPrompt 认证后传入。
+     *
+     * @return false = 会话未解锁 / KEK 不可用（UI 提示稍后再试）。
+     */
+    suspend fun enrollLocalUnlock(vaultId: String, cipher: javax.crypto.Cipher): Boolean
+
+    /**
+     * 解锁前准备：读取包裹密钥并初始化解密 Cipher（IV 来自 payload）。
+     * 返回的 cipher 必须立刻交给本次 BiometricPrompt；null = 未启用 / KEK 失效
+     * （指纹变更等）→ 回退主密码登录。
+     */
+    suspend fun prepareLocalUnlock(vaultId: String): javax.crypto.Cipher?
+
+    /**
+     * 启用前的准备：创建包装用 Cipher（KEK 用户认证），交给 BiometricPrompt
+     * 认证后传入 [enrollLocalUnlock]。null = 设备无可用认证方式。
+     */
+    suspend fun prepareLocalEnroll(): javax.crypto.Cipher?
+
+    /** 认证通过后：解封本地密钥并建立会话（完全离线，不触发 2FA）。 */
+    suspend fun completeLocalUnlock(vaultId: String, cipher: javax.crypto.Cipher): UnlockResult
+
+    /** 关闭本地快速解锁：删除包裹密钥与开关（不动主密码登录）。 */
+    suspend fun disableLocalUnlock(vaultId: String)
 }
 
 /** 解锁 / 添加库的结果分类，便于 UI 给出可执行的提示（Docs/10 §5）。 */
