@@ -117,6 +117,10 @@ dependencies {
     testImplementation(libs.truth)
     testImplementation(libs.turbine)
     testImplementation(libs.mockk)
+    // Compose BOM 必须同时声明给 androidTest 配置：ui-test-junit4 等依赖本身不带版本号
+    // （在 catalog 中无 version），仅 implementation(platform(bom)) 不会传递给 androidTest，
+    // 否则解析时版本为空（表现为 "Could not find androidx.compose.ui:ui-test-junit4:."）。
+    androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
