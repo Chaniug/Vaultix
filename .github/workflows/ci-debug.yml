@@ -95,7 +95,9 @@ jobs:
 
       - name: Run lint
         if: github.event_name != 'push'
-        run: ./gradlew :app:lintDebug --stacktrace
+        # 多 flavor 下 `lintDebug` 存在歧义（候选：lintFullDebug / lintOfflineDebug），
+        # 必须显式指定 variant；否则 PR / 手动触发时该步骤直接失败（push 时不跑 lint，故不易发现）。
+        run: ./gradlew :app:lintFullDebug :app:lintOfflineDebug --stacktrace
 
       # push 时注入仓库固定签名，使 preview(debug) 与 stable release 签名完全一致、可互相覆盖安装。
       # 注意：本步骤与 release.yml 使用同一套 SIGNING_* Secret，密码也复用 Secret（不再硬编码 android），
@@ -251,7 +253,10 @@ jobs:
       - name: Run unit tests (non-blocking)
         id: unit_tests
         continue-on-error: true
-        run: ./gradlew :app:testDebugUnitTest --continue --stacktrace
+        # 同 lint：多 flavor 下 `testDebugUnitTest` 亦有歧义，需显式指定 variant。
+        # 同时把 core:crypto 的单元测试（172 例，Kover 门禁 ≥80%）纳入 CI 验证——
+        # 此前只跑 :app 的测试，而 :app 当时并无用例，等于单测从未在 CI 真正执行。
+        run: ./gradlew :core:crypto:testDebugUnitTest :app:testFullDebugUnitTest --continue --stacktrace
 
       - name: Upload unit test reports
         if: always()
