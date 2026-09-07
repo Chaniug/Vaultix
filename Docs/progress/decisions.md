@@ -41,3 +41,4 @@
 | 2026-09-08 | **请求预挂 Bearer + 过期前预刷新 + 刷新失败三分（登录失效修复，Bastion 对齐）** | 真机高频「登录失效」三根因：请求从不带 Authorization（每次 401 再刷新）、host→server 登记仅登录时（重启+快速解锁后必失效）、刷新失败不分类（CF 403/网络抖动误报失效）。修复：拦截器按 host 预挂 Bearer（expiresIn 落盘、到期前 60s 预刷新，Bastion accessTokenExpiresAt 语义）；refresh 结果三分——400/401=Invalid（重登）/403/429/5xx/网络=Transient（保留登录态，绝不踢重登）；sync 层 401 按最近刷新类型归类 |
 | 2026-09-08 | **移除库 = 本地数据全清 + 凭据登出（云端不动）** | ⋮ 菜单 + 二次确认；清内存会话 → 快速解锁痕迹 → authRepository.logout（token/登记）→ 待推送队列（先于删行，防同服务器重加账号误推旧队列）→ vault 行级联删 ciphers/folders |
 | 2026-09-08 | **KSP2/工程经验：KDoc 别写字面 `/**`；@Provides 签名用接口类型** | KDoc 内 `/api/**` 中的 `/*` 开启嵌套块注释 → 外层注释到 EOF 未闭合，KSP 报出误导性的「类无法解析」连锁错误；另 KSP2 对 @Provides 签名中的具体新类解析有 bug → 返回类型用接口（如 okhttp3.Interceptor），具体类在函数体内构造 |
+| 2026-09-08 | **WorkManager 周期同步 M1 判推迟（P2 归位）** | 进程存活时 APP_RESUME/PAGE_ENTER 已覆盖「打开即最新」；进程被杀后会话对称密钥只在内存（重启必锁），周期任务没有可同步的解锁会话 → 收益≈0（Bastion 周期同步服务的是其本地库离线队列，Vaultix 架构无此前提）。编排器 PERIODIC 触发已预留，待 P2 与本地 KDBX 队列推送一并设计 |
