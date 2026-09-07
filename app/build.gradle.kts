@@ -22,6 +22,10 @@ android {
         versionName = providers.gradleProperty("versionName").getOrElse("0.1.0")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
+
+        // 仅构建 arm64-v8a 安装包：Vaultix 只面向现代 64 位设备（Android 17 / API 36 为主），
+        // 不再产出 armeabi-v7a / x86 / x86_64，既缩小体积又缩短构建时间。
+        ndk { abiFilters += listOf("arm64-v8a") }
     }
 
     buildTypes {

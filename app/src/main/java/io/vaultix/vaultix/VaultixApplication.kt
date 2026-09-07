@@ -1,4 +1,4 @@
-package io.vaultix
+package io.vaultix.vaultix
 
 import android.app.Application
 import dagger.hilt.android.HiltAndroidApp
