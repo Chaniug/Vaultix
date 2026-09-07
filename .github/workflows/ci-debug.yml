@@ -81,7 +81,9 @@ jobs:
         if: github.event_name != 'push'
         run: ./gradlew :app:lintDebug --stacktrace
 
-      # push 时注入仓库固定签名，使 preview 与 stable release 签名一致、可互相覆盖安装
+      # push 时注入仓库固定签名，使 preview(debug) 与 stable release 签名完全一致、可互相覆盖安装。
+      # 注意：本步骤与 release.yml 使用同一套 SIGNING_* Secret，密码也复用 Secret（不再硬编码 android），
+      # 这是“同一设备 debug/release 覆盖安装”的硬性前提（同 applicationId + 同签名证书）。
       - name: Decode signing keystore
         if: github.event_name == 'push'
         shell: bash
@@ -89,8 +91,8 @@ jobs:
           if [ -n "${{ secrets.SIGNING_KEYSTORE_BASE64 }}" ]; then
             printf '%s' "${{ secrets.SIGNING_KEYSTORE_BASE64 }}" | base64 -d > "$GITHUB_WORKSPACE/release.jks"
           else
-            # 未配置签名密钥时的兜底：生成一次性 debug 密钥（仅用于预览验证，不可用于正式分发）
-            echo "::warning title=No SIGNING_KEYSTORE_BASE64::未配置签名密钥，生成一次性 debug 密钥用于预览包。"
+            # 未配置签名密钥时的兜底：生成一次性密钥（仅用于预览验证，不可用于正式分发，且无法与 release 互相覆盖）
+            echo "::warning title=No SIGNING_KEYSTORE_BASE64::未配置签名密钥，生成一次性密钥用于预览包。正式发布请配置 SIGNING_* Secrets，否则 debug/release 无法互相覆盖安装。"
             keytool -genkeypair -v -keystore "$GITHUB_WORKSPACE/release.jks" \
               -keyalg RSA -keysize 2048 -validity 10000 \
               -alias androidkey -keypass android -storepass android \
@@ -112,7 +114,12 @@ jobs:
           KS_FILE="${{ github.event_name == 'push' && format('{0}/release.jks', github.workspace) || '' }}"
           KS_OPTS=""
           if [ -n "$KS_FILE" ]; then
-            KS_OPTS="-Pandroid.injected.signing.store.file=$KS_FILE -Pandroid.injected.signing.store.password=android -Pandroid.injected.signing.key.alias=androidkey -Pandroid.injected.signing.key.password=android"
+            # 与 release.yml 完全一致的签名参数：store.password / key.alias / key.password 均复用 Secret
+            # （缺省 android 仅用于“未配置 Secret”的兜底场景，此时无法与 release 互相覆盖）
+            KS_OPTS="-Pandroid.injected.signing.store.file=$KS_FILE"
+            KS_OPTS="$KS_OPTS -Pandroid.injected.signing.store.password=${SIGNING_STORE_PASSWORD:-android}"
+            KS_OPTS="$KS_OPTS -Pandroid.injected.signing.key.alias=${SIGNING_KEY_ALIAS:-androidkey}"
+            KS_OPTS="$KS_OPTS -Pandroid.injected.signing.key.password=${SIGNING_KEY_PASSWORD:-android}"
           fi
           ./gradlew :app:assembleDebug --stacktrace \
             -PpreviewVersionSuffix=dev-$(echo ${GITHUB_SHA} | cut -c1-7) $KS_OPTS 2>&1 | tee /tmp/build_log.txt

@@ -44,9 +44,43 @@
 > 约定流程：`main` 上开发并验证 → 确认无误后合入 `rele` → 由 `rele` 自动产出稳定 APK。
 > 也可直接推送 `vX.Y.Z` 标签触发 `release.yml`。版本号见仓库根 `VERSION` 文件（rele 合入时读取）。
 
-**Secret 配置**（仓库 `Settings → Secrets and variables → Actions`）：
-- `SIGNING_KEYSTORE_BASE64`：Base64 编码的发布密钥库（未配置时流水线生成一次性密钥，仅用于验证，不可正式分发）
-- `SIGNING_STORE_PASSWORD` / `SIGNING_KEY_ALIAS` / `SIGNING_KEY_PASSWORD`：密钥库口令、别名、密钥口令
+**Secret 配置**（仓库 `Settings → Secrets and variables → Actions → New repository secret`）：
+
+| Secret 名 | 含义 | 生成方式 |
+|---|---|---|
+| `SIGNING_KEYSTORE_BASE64` | 发布密钥库（`.jks`）的 **Base64 单行** 文本 | `base64 -w0 vaultix-release.jks` |
+| `SIGNING_STORE_PASSWORD` | 密钥库口令（store password） | keytool 生成时你填的 `-storepass` |
+| `SIGNING_KEY_ALIAS` | 密钥别名 | keytool 生成时你填的 `-alias`（**必须与实际一致**，否则签名失败） |
+| `SIGNING_KEY_PASSWORD` | 密钥口令（key password） | keytool 生成时你填的 `-keypass` |
+
+> 未配置 `SIGNING_KEYSTORE_BASE64` 时，流水线会生成**一次性**密钥仅用于验证（每次构建不同、不可正式分发，且 debug/release 无法互相覆盖）。**正式发布前务必配置以上 4 个 Secret。**
+
+**本地生成密钥库并提取 Base64（复制即用）：**
+
+```bash
+# 1) 生成发布密钥库（alias 自定，下面用 vaultix，请记牢）
+keytool -genkeypair -v -keystore vaultix-release.jks \
+  -keyalg RSA -keysize 2048 -validity 10000 \
+  -alias vaultix \
+  -storepass '改成你的store密码' \
+  -keypass  '改成你的key密码' \
+  -dname "CN=Vaultix, O=Vaultix, C=CN"
+
+# 2) 导出为单行 Base64（macOS 用 base64 vaultix-release.jks 即可，去掉 -w0）
+base64 -w0 vaultix-release.jks
+
+# 3) 按上表把输出串与密码分别填进 4 个 Secret：
+#    SIGNING_KEYSTORE_BASE64 <- 第 2 步整串
+#    SIGNING_KEY_ALIAS       <- vaultix
+#    SIGNING_STORE_PASSWORD  <- 你的 store 密码
+#    SIGNING_KEY_PASSWORD    <- 你的 key 密码
+```
+
+**release 与 debug 互相覆盖安装（同一设备升级安装）的前提：**
+
+- 两者 `applicationId` 必须相同（写 `app/build.gradle` 时 **debug 不要加 `applicationIdSuffix ".debug"`**）。
+- 两者签名证书必须相同。本仓库的 `ci-debug.yml` 与 `release.yml` **已统一复用同一套 `SIGNING_*` Secret**，因此从 `preview` Release 装的 debug 包，可直接被 `rele` 发布的 release 包覆盖安装。
+- 例外：本地 Android Studio 直接 Run 的 debug 包默认用 `~/.android/debug.keystore`（Android 自动生成），与 CI 包签名不同，无法直接覆盖，需先卸载再装，或在本地也把 debug `signingConfig` 指向同一个 `vaultix-release.jks`。
 
 详见 [`.github/workflows/ci-debug.yml`](./.github/workflows/ci-debug.yml) 与 [`.github/workflows/release.yml`](./.github/workflows/release.yml)。
 
