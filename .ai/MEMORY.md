@@ -59,3 +59,25 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
   next-steps（下一步清单）/ decisions（决策记录）
 - `.ai/`：MEMORY.md（长期约定）/ ISSUES.md（踩坑：现象-根因-解法）/ SESSION-*.md（会话日志）
 - 两者内容同步自 `.workbuddy/memory/`
+
+## 签名与发布（2026-09-07 配置完成）
+- 4 个 `SIGNING_*` Secret 已通过 `gh secret set` 上传到 GitHub（keytool 生成，RSA 2048，有效期 10000 天）
+- jks 本体：`D:\vaultix-release.jks`（**放在项目外**，且 .gitignore 已忽略 *.jks，绝不会误提交）
+- alias：`vaultix`
+- ⚠️ 密码**未记入本文件**（避免明文泄露）；用户需自行备份「jks + 密码」，二者缺一即无法再发布更新
+- debug(preview) 与 release 复用同一套密钥 → 同一设备可互相覆盖安装（前提：applicationId 相同、debug 不加 applicationIdSuffix）
+
+## CI 修复记录（2026-09-07，共 7 处，现已全绿）
+| # | 问题 | 修复 |
+|---|---|---|
+| 1 | ensure-android-sdk.sh 装 android-36，但 compileSdk=37 | 改为 android-37 |
+| 2 | runner 上 platform 目录为 android-37.0/37.1/37.2，**无** android-37 | 校验改前缀匹配 `android-37*`（本机两者都有，本地不暴露） |
+| 3 | `cd app/build/outputs/apk/*/debug` 多 flavor 展开报 too many arguments | 改为从 apk 根目录 find |
+| 4 | workflow `paths` 缺 .sh / .toml / .github/scripts/** | 补齐（否则改构建脚本不触发 CI，形成盲区） |
+| 5 | `:app:lintDebug`、`:app:testDebugUnitTest` 多 flavor 歧义 | 改 lintFullDebug+lintOfflineDebug、testFullDebugUnitTest |
+| 6 | Lint 与 Gradle 配置缓存不兼容（ConfigurationCacheError） | lint 步骤加 `--no-configuration-cache` |
+| 7 | androidTest 缺 Compose BOM，`ui-test-junit4` 版本为空 | 补 `androidTestImplementation(platform(bom))` |
+| 8 | 单测步骤只跑 `:app`（当时无用例，形同虚设） | 追加 `:core:crypto:testDebugUnitTest` |
+
+**验证结果**：push 触发（1m59s）与手动触发含 lint（3m46s）均为 success；
+日志确认签名走真实 keystore（validateSigningFullDebug/OfflineDebug 通过），"一次性密钥"提示已消失。
