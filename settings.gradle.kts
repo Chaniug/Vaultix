@@ -41,3 +41,5 @@ include(":data:bitwarden")
 
 // 注意：新增模块必须在此登记，否则目录不参与构建（孤儿目录）。
 // 后续 core:crypto / core:database / data:kdbx / data:bitwarden / feature:* 亦然。
+include(":core:database")
+include(":core:datastore")
