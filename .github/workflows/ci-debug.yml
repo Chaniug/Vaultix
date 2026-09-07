@@ -102,10 +102,16 @@ jobs:
           set -o pipefail
           KS="$GITHUB_WORKSPACE/release.jks"
           if [ -n "${{ secrets.SIGNING_KEYSTORE_BASE64 }}" ]; then
-            printf '%s' "${{ secrets.SIGNING_KEYSTORE_BASE64 }}" | base64 -d > "$KS"
-          else
-            # 未配置签名密钥时的兜底：生成一次性密钥（仅用于预览验证，不可用于正式分发，且无法与 release 互相覆盖）
-            echo "::warning title=No SIGNING_KEYSTORE_BASE64::未配置签名密钥，生成一次性密钥用于预览包。正式发布请配置 SIGNING_* Secrets，否则 debug/release 无法互相覆盖安装。"
+            printf '%s' "${{ secrets.SIGNING_KEYSTORE_BASE64 }}" | base64 -d > "$KS" 2>/tmp/b64.err || true
+            if [ -s "$KS" ] && keytool -list -keystore "$KS" -storepass "${SIGNING_STORE_PASSWORD:-android}" -noprompt >/dev/null 2>&1; then
+              echo "::notice title=signing::固定密钥解码并校验通过，将用于签名。"
+            else
+              echo "::warning title=Keystore invalid::SIGNING_KEYSTORE_BASE64 无效，改用一次性密钥仅验证流水线。"
+              rm -f "$KS"
+            fi
+          fi
+          if [ ! -s "$KS" ]; then
+            echo "::warning title=No SIGNING_KEYSTORE_BASE64::未配置有效签名密钥，生成一次性密钥用于预览包。正式发布请配置 SIGNING_* Secrets。"
             KEYTOOL="$(command -v keytool || true)"
             if [ -z "$KEYTOOL" ] && [ -n "${JAVA_HOME:-}" ]; then
               KEYTOOL="$JAVA_HOME/bin/keytool"
