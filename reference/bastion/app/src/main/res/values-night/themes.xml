@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <style name="Theme.Bastion" parent="android:Theme.Material.NoActionBar">
+        <!-- 启动预览窗口与 Material 3 夜间背景保持一致 -->
+        <item name="android:windowBackground">@color/bastion_startup_background</item>
+        <item name="android:statusBarColor">@color/bastion_startup_background</item>
+        <item name="android:navigationBarColor">@color/bastion_startup_background</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <!-- windowLightNavigationBar / enforce*Contrast require API 27/29; safely ignored on older builds -->
+        <item name="android:windowLightNavigationBar" tools:ignore="NewApi">false</item>
+        <item name="android:enforceStatusBarContrast" tools:ignore="NewApi">false</item>
+        <item name="android:enforceNavigationBarContrast" tools:ignore="NewApi">false</item>
+    </style>
+</resources>

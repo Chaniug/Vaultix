@@ -23,10 +23,11 @@
 |---|---|
 | 远程仓库 | `github.com/Chaniug/bastion` |
 | 本地 clone | `D:\Bastion\bastion`（只读参考；本机 `dl.google.com` 被 DNS 劫持无法构建 Bastion，**无需构建**） |
+| **仓库内快照（推荐入口）** | **`reference/bastion/`**（本仓库内 vendored 快照 @`369ed56`：主源码 664 + 单测 155 + 仓库 docs + BastionDocs md + workflows 参考，≈13 MB，见该目录 README）。接力 AI **无需访问 D:\Bastion**，本图路径前缀均可用 `reference/bastion/` 解析 |
 | 参考分支 | `dev`（本地 head `369ed56`，2026-09-06）。冻结后以**代码为最终事实**；Bastion 内部文档可能滞后于代码，先看其 `docs/README.md` 的时效声明 |
 | 接力入口（Bastion 侧文档） | 仓库根 `docs/README.md`、`docs/架构与路线图.md`、`docs/bitwarden同步与密码库生态.md` |
 
-路径前缀约定（下文均指 Bastion 仓库内相对路径）：
+路径前缀约定（下文均指 Bastion 仓库内相对路径，快照内结构一致）：
 
 - `app/` = `Bastion/app/src/main/java/com/bastion/app/`
 - `repo-docs/` = Bastion 仓库根 `docs/`

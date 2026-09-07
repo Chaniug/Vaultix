@@ -1,0 +1,107 @@
+name: Cleanup Actions caches
+
+# 为什么需要这个：
+# `gradle/actions/setup-gradle` 生成的缓存 key 里带 commit SHA，因此【每次 push 都会产生
+# 一整套全新条目】。而 GitHub 只在缓存「7 天未被访问」时才自动清理，于是高频推送下条目
+# 会快速堆积 —— 2026-08-29 实测堆到 151 份 / 18.4 GB，远超每仓库 10 GB 的硬上限。
+#
+# 超限的后果不是报错或收费（公开仓库 Actions 免费），而是 GitHub 持续按 LRU 淘汰最旧的缓存，
+# 导致命中率忽高忽低 —— 这正是 Android CI debug 时长在 6~11 分钟之间波动的原因。
+#
+# 策略：按缓存类型分组，每组只保留最近访问的 N 份，删除其余。缓存随时可重建，
+# 最坏情况只是下一次构建慢一点，不影响正确性。
+#
+# ⚠️ 注意：schedule 只在【默认分支】生效（当前为 dev），改默认分支时需记得这条连带影响。
+
+on:
+  schedule:
+    # 每周日 04:17 UTC
+    - cron: '17 4 * * 0'
+  workflow_dispatch:
+    inputs:
+      keep_per_type:
+        description: '每种缓存类型保留的份数'
+        required: false
+        default: '3'
+        type: string
+      dry_run:
+        description: '只报告不删除'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  cleanup:
+    name: Prune Gradle caches
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prune caches by type
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          KEEP_PER_TYPE: ${{ inputs.keep_per_type || '3' }}
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+        run: |
+          set -euo pipefail
+
+          # sizeInBytes 必须显式请求，否则下面的占用统计恒为 0
+          gh cache list --limit 1000 --json id,key,sizeInBytes,lastAccessedAt > /tmp/caches.json
+
+          python3 - <<'PY'
+          import collections, json, os, subprocess, sys
+
+          keep = int(os.environ.get("KEEP_PER_TYPE", "3"))
+          dry_run = os.environ.get("DRY_RUN", "false").lower() == "true"
+
+          with open("/tmp/caches.json") as handle:
+              caches = json.load(handle)
+
+          def cache_type(key):
+              # key 形如 gradle-transforms-v2-<hash> / gradle-home-v2|<os>|job[..]-<sha>
+              return key.split("-v2")[0]
+
+          groups = collections.defaultdict(list)
+          for entry in caches:
+              groups[cache_type(entry["key"])].append(entry)
+
+          doomed = []
+          for name, items in groups.items():
+              items.sort(key=lambda e: e.get("lastAccessedAt") or "", reverse=True)
+              doomed.extend(items[keep:])
+
+          total_bytes = sum(e.get("sizeInBytes", 0) for e in caches)
+          doomed_bytes = sum(e.get("sizeInBytes", 0) for e in doomed)
+
+          print(f"total={len(caches)} types={len(groups)} keep_per_type={keep} to_delete={len(doomed)}")
+          for name, items in sorted(groups.items()):
+              print(f"  {name:<32} {len(items):>3} 份")
+          print(f"删除后可释放约 {doomed_bytes / (1024**3):.2f} GB（当前 {total_bytes / (1024**3):.2f} GB）")
+
+          if dry_run:
+              print("dry_run=true，跳过删除")
+              sys.exit(0)
+
+          failed = 0
+          for entry in doomed:
+              result = subprocess.run(
+                  ["gh", "api", "-X", "DELETE",
+                   f"repos/{os.environ['GH_REPO']}/actions/caches/{entry['id']}"],
+                  capture_output=True, text=True,
+              )
+              if result.returncode != 0:
+                  failed += 1
+                  print(f"::warning title=Cache delete failed::id={entry['id']} {result.stderr.strip()}")
+
+          print(f"删除完成：{len(doomed) - failed} 成功，{failed} 失败")
+
+          usage = subprocess.run(
+              ["gh", "api", f"repos/{os.environ['GH_REPO']}/actions/cache/usage"],
+              capture_output=True, text=True,
+          )
+          if usage.returncode == 0:
+              print("::notice title=Cache usage (统计每小时刷新，可能滞后)::" + usage.stdout.strip())
+          PY

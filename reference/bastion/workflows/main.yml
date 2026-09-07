@@ -1,0 +1,427 @@
+name: Android CI debug
+
+on:
+  push:
+    branches: [ dev ]
+    paths:
+      - 'Bastion/**/*.kt'
+      - 'Bastion/**/*.java'
+      - 'Bastion/**/*.xml'
+      - 'Bastion/**/*.json'
+      - 'Bastion/**/*.gradle'
+      - 'Bastion/**/*.gradle.kts'
+      - 'Bastion/**/*.kts'
+      - 'Bastion/gradle/**'
+      - 'Bastion/gradlew'
+      - 'Bastion/gradlew.bat'
+      - '.github/workflows/main.yml'
+  pull_request:
+    branches: [ dev ]
+    paths:
+      - 'Bastion/**/*.kt'
+      - 'Bastion/**/*.java'
+      - 'Bastion/**/*.xml'
+      - 'Bastion/**/*.json'
+      - 'Bastion/**/*.gradle'
+      - 'Bastion/**/*.gradle.kts'
+      - 'Bastion/**/*.kts'
+      - 'Bastion/gradle/**'
+      - 'Bastion/gradlew'
+      - 'Bastion/gradlew.bat'
+      - '.github/workflows/main.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write   # 发 debug APK 到 preview Release 需要
+
+# 取消策略：false = 连续推送时新 run 排队而非取消旧 run。
+# 旧 run 跑完会把构建/配置缓存暖热，后续 run 命中缓存更快（公开仓库 CI 分钟无限，无成本顾虑）。
+concurrency:
+  group: android-ci-debug-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  android-ci:
+    name: Lint, test diagnostics, and debug build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: "Bastion"
+    env:
+      # 构建缓存 + 并行 + 配置缓存，缩短重复构建耗时（与 Preview/Release 流水线共享同一份缓存）
+      # configuration-cache.problems=warn：不兼容的任务仅告警并自动回退，不会让构建失败
+      GRADLE_OPTS: -Dorg.gradle.caching=true -Dorg.gradle.parallel=true -Dorg.gradle.configuration-cache=true -Dorg.gradle.configuration-cache.problems=warn
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+
+    steps:
+      # 浅克隆：CI debug 不依赖 git 历史，避免拉取大体积历史（.git 历史含旧构建产物），显著缩短 checkout
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-read-only: ${{ github.event_name == 'pull_request' }}
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      # 诊断：在装 android-37 之前先摸清 runner 的 SDK 环境与对 dl.google.com 的可达性
+      # （本仓库 only checks API 可读，故把关键信息打成 annotation 回传）
+      - name: Diagnose SDK environment
+        if: always()
+        run: |
+          SDKM="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+          echo "JAVA_HOME=$JAVA_HOME"
+          java -version 2>&1 | head -3 | while IFS= read -r l; do echo "::notice title=java::$l"; done
+          echo "::notice title=existing platforms::$(ls $ANDROID_SDK_ROOT/platforms 2>/dev/null | tr '\n' ' ')"
+          echo "::notice title=existing build-tools::$(ls $ANDROID_SDK_ROOT/build-tools 2>/dev/null | tr '\n' ' ')"
+          echo "::notice title=sdkmanager version::$($SDKM --version 2>&1 | head -3 | tr '\n' ' ')"
+          # 测试到 dl.google.com 的可达性
+          curl -sS -m 25 -o /tmp/repo.xml -w 'HTTP=%{http_code} size=%{size_download} exit=%{exitcode}\n' \
+            "https://dl.google.com/android/repository/repository2-3.xml" \
+            > /tmp/curl_test.txt 2>&1 || true
+          cat /tmp/curl_test.txt
+          echo "::notice title=curl dl.google.com::$(cat /tmp/curl_test.txt | tr '\n' ' ')"
+          echo "::notice title=repo.xml head::$(head -c 200 /tmp/repo.xml 2>/dev/null | tr '\n' ' ')"
+          echo "::notice title=installed pkgs::$($SDKM --list_installed 2>&1 | head -20 | tr '\n' ' ')"
+
+      # Phase A（API 37 / Android 17）：让 compileSdk 37 所需的 platforms/android-37 可用。
+      #
+      # 公共逻辑已抽到 .github/scripts/ensure-android-sdk.sh，三个 Android workflow 共用。
+      # 关键背景（2026-08 全量升级踩到，详见脚本头部注释）：
+      #   - runner 镜像把平台装成带修订号的目录名（android-37.0 / android-37.1）。
+      #   - AGP 9.3 起平台匹配是「ApiLevel 精确」的，只认 platforms;android-37.0；
+      #     链到 37.1 会直接构建失败。AGP 9.1 时代不校验修订号，故升级前一直是绿的。
+      #   - curl 兜底解压出来的 platform 缺 package.xml，AGP 会报同样的「找不到平台」。
+      - name: Install Android SDK platform 37
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/ensure-android-sdk.sh"
+
+      # Lint 较重，仅在 PR / 手动触发时运行作为质量门；push 到 dev/main 时跳过以加快反馈
+      - name: Run lint
+        if: github.event_name != 'push'
+        run: ./gradlew :app:lintDebug --stacktrace
+
+      # push 时用仓库固定 keystore 签名 debug APK，确保 preview 与 stable 签名一致、可互相覆盖安装
+      - name: Decode signing keystore
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          printf '%s' "${{ secrets.DEBUG_KEYSTORE_BASE64 }}" | base64 -d > "$GITHUB_WORKSPACE/release.jks"
+          if [ ! -s "$GITHUB_WORKSPACE/release.jks" ]; then
+            echo "::error title=Keystore decode failed::release.jks was not created or is empty."
+            exit 1
+          fi
+        env:
+          GITHUB_WORKSPACE: ${{ github.workspace }}
+
+      # 1) 门禁：仅编译并产出 Debug APK（最快出包路径，不跑测试）
+      # push 时注入固定签名，使 debug APK 与 stable release APK 签名一致，可互相覆盖安装
+      - name: Build Debug APK (build gate)
+        run: |
+          set +e
+          # versionName 形如 1.0.0-dev-78db0ed：dev 标识 + 短 commit SHA（可直接 git show 定位代码）。
+          # 用 GITHUB_SHA 而非 git rev-parse：本 job 是 fetch-depth=1 浅克隆，本地 git 无历史，
+          # 而 GITHUB_SHA 由 Actions 注入，不受克隆深度影响。
+          # 不再拼日期：versionCode 已是 epoch 秒（单调递增、保证可覆盖安装），日期属于冗余。
+          # 值里用连字符不用点：Gradle 会把 -P 值中的 "." 当任务名缩写解析并导致构建失败。
+          ./gradlew :app:assembleDebug --stacktrace \
+            -PpreviewVersionSuffix=dev-$(echo ${GITHUB_SHA} | cut -c1-7) 2>&1 | tee /tmp/build_log.txt
+          BUILD_EXIT=${PIPESTATUS[0]}
+          if [ "$BUILD_EXIT" -ne 0 ]; then
+            echo "::notice title=Build gate diagnostics::build_failed=true"
+            grep -E "^e: |error:|FAILURE|Caused by:|Could not|What went wrong|BUILD FAILED" /tmp/build_log.txt | head -40 | while IFS= read -r line; do
+              echo "::notice title=build_gate::$line"
+            done
+            exit "$BUILD_EXIT"
+          fi
+          echo "::notice title=Build gate diagnostics::build_failed=false"
+        env:
+          BASTION_KS_FILE: ${{ github.event_name == 'push' && format('{0}/release.jks', github.workspace) || '' }}
+          BASTION_KS_STORE_PASSWORD: ${{ github.event_name == 'push' && secrets.DEBUG_STORE_PASSWORD || '' }}
+          BASTION_KS_ALIAS: ${{ github.event_name == 'push' && secrets.DEBUG_KEY_ALIAS || '' }}
+          BASTION_KS_KEY_PASSWORD: ${{ github.event_name == 'push' && secrets.DEBUG_KEY_PASSWORD || '' }}
+
+      # 2) 立即上传 APK —— 在跑测试之前，push 场景最快拿到包用于真机验证
+      # 关键：Compose 报告目录是【所有 Kotlin 编译任务共用】的固定路径，后跑的会整体覆盖先跑的。
+      # 实测：单测编译 compileDebugUnitTestKotlin 在最后执行，会把主代码的报告冲掉 ——
+      # 首次上传拿到的 app-classes.txt 里清一色是 *Test / *RegressionGuardTest 类，
+      # module.json 的 107 个 composable 也全来自测试代码，数据完全不可用。
+      # 因此在 build gate 之后、单测之前把报告快照到独立目录，后面上传这份。
+      - name: Snapshot compose compiler reports before unit test compile overwrites them
+        if: always()
+        run: |
+          mkdir -p build/compose-reports
+          cp -r app/build/compose_compiler build/compose-reports/compose_compiler 2>/dev/null || echo "no compose_compiler dir"
+          cp -r app/build/compose_metrics/debug build/compose-reports/compose_metrics 2>/dev/null || echo "no compose_metrics/debug dir"
+          echo "--- snapshot summary ---"
+          find build/compose-reports -type f | head -20
+          wc -l build/compose-reports/compose_compiler/app-composables.csv 2>/dev/null || true
+
+      - name: List debug APK outputs
+        run: find app/build/outputs/apk/debug -maxdepth 1 -type f -print || true
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: debug-apk
+          path: |
+            Bastion/app/build/outputs/apk/debug/*.apk
+            Bastion/app/build/outputs/apk/debug/*.APK
+          if-no-files-found: error
+          # 保留期（2026-08-29）：此前用仓库默认 90 天，累积到 48 份约 2.2 GB。
+          # preview 包只供短期真机验证，旧的没有留存价值；同时 preview Release 也每次重建，
+          # 故短期留存即可，到期由 GitHub 自动清理。
+          # （2026-08-31）仓库允许的最大保留期为 3 天，填更大的值会被 GitHub 自动降级为 3
+          # 并打一条 warning，因此这里显式写 3，让配置与实际生效值保持一致。
+          retention-days: 3
+
+      # 2.5) push 到 dev 时，把 debug APK 发布到 preview Release，方便直接从 Release 页下载真机验证。
+      #      main 不触发本工作流（触发分支仅 dev）：dev 合并到 main 后代码一致，main 不再重复构建/发布，
+      #      preview 由 dev push 维护，与 CodeQL 仅扫 dev 的策略一致。
+      - name: Generate preview version suffix
+        if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+        id: preview_meta
+        shell: bash
+        run: |
+          suffix="build.$(date -u +%Y%m%d%H%M)"
+          echo "preview_version_suffix=$suffix" >> "$GITHUB_OUTPUT"
+
+      - name: Cleanup previous preview release (assets + release + tag)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          # 删除已存在的 preview release（含 assets），再删除 tag，确保下次全新创建
+          release_id="$(gh api repos/${{ github.repository }}/releases/tags/preview --jq '.id' 2>/dev/null || true)"
+          if [[ "$release_id" =~ ^[0-9]+$ ]]; then
+            echo "Deleting existing preview release id=${release_id}"
+            gh api -X DELETE repos/${{ github.repository }}/releases/${release_id} 2>/dev/null || true
+          else
+            echo "No existing preview release to delete"
+          fi
+          # 删除 preview tag（不存在则忽略）
+          gh api -X DELETE repos/${{ github.repository }}/git/refs/tags/preview 2>/dev/null || true
+          echo "Cleanup done"
+
+      - name: Collect debug APK metadata
+        if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+        id: apk_meta
+        shell: bash
+        run: |
+          cd app/build/outputs/apk/debug
+          apk_list="$(find . -maxdepth 1 -type f \( -iname '*.apk' -o -iname '*.APK' \) -printf '%f\n' | sort)"
+          apk_count="$(printf '%s\n' "$apk_list" | sed '/^$/d' | wc -l | tr -d ' ')"
+          if [ "$apk_count" = "0" ]; then
+            echo "No debug APK found"; ls -la; exit 1
+          fi
+          apk_markdown="$(printf '%s\n' "$apk_list" | sed '/^$/d' | sed 's/^/> *   `/; s/$/`/')"
+          echo "apk_count=${apk_count}" >> "$GITHUB_OUTPUT"
+          {
+            echo "apk_list<<EOF"
+            printf '%s\n' "$apk_markdown"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Publish Debug APK to preview Release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: preview
+          target_commitish: ${{ github.sha }}
+          name: "⚠️ Development Preview (${{ steps.preview_meta.outputs.preview_version_suffix }})"
+          body: |
+            > **⚠️ 开发预览版本 (Debug APK)**
+            >
+            > 此版本为 debug 构建产物，用于快速体验最新代码，可能包含未完成功能或 Bug。
+            > 正式使用请下载 Stable 版本。
+            > ---
+            > **构建信息：**
+            > * **Build Suffix**: `${{ steps.preview_meta.outputs.preview_version_suffix }}`
+            > * **Build Type**: `debug`
+            > * **Commit SHA**: `${{ github.sha }}`
+            > * **Ref**: `${{ github.ref }}`
+            > **Generated APKs:**
+            ${{ steps.apk_meta.outputs.apk_list }}
+          files: |
+            Bastion/app/build/outputs/apk/debug/*.apk
+            Bastion/app/build/outputs/apk/debug/*.APK
+          draft: false
+          prerelease: true
+          make_latest: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # 3) 单测（非阻塞，门禁已过不拖慢出包；保留排错信号）
+      #    注意：本步骤 continue-on-error，失败不影响 job 结论。
+      #    真正的回归判定由后面的 "Enforce unit test failure baseline" 闸门负责。
+      - name: Run unit tests (non-blocking)
+        id: unit_tests
+        continue-on-error: true
+        run: ./gradlew :app:testDebugUnitTest --continue --stacktrace
+
+      - name: Upload unit test reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: debug-unit-test-reports
+          path: |
+            Bastion/app/build/reports/tests/testDebugUnitTest
+            Bastion/app/build/test-results/testDebugUnitTest
+          if-no-files-found: ignore
+          # 保留期（2026-08-29）：单测报告只在排错当下有用（每份约 0.3 MB），
+          # 且失败名单已由后面的基线闸门打进 run summary，不必长期留存。
+          # （2026-08-31）仓库最大保留期为 3 天，填更大值会被自动降级并告警，故显式写 3。
+          retention-days: 3
+
+      # 3.5) Compose 编译器报告 / 指标：此前生成在 runner 上即随 job 结束丢弃，白生成。
+      #     上传后可每次 push 直接下载，用于定位重组热点：
+      #       - compose_metrics/*-module.json  模块级汇总（Top N unstable 类、可跳过/可重启比例）
+      #       - compose_metrics/*-composables.txt / classes.txt
+      #       - compose_compiler/*  逐个 composable 的稳定性报告（参数是否 skippable 等）
+      #     排查顺序：先看 metrics 找 Top N，再回 reports 定位具体函数。
+      #     注意：这两个目录由 :app:assembleDebug 期间的 Kotlin 编译产出，
+      #     若 build gate 编译失败则不存在，故 if-no-files-found 用 ignore 不阻断流水线。
+      - name: Upload compose compiler reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: compose-compiler-reports
+          path: |
+            Bastion/build/compose-reports
+          if-no-files-found: ignore
+          # 保留期（2026-08-31）：仓库最大保留期为 3 天，填更大值会被自动降级并告警，故显式写 3。
+          retention-days: 3
+
+      # 4) 回归基线闸门
+      #    背景：单测步骤 continue-on-error，CI 恒绿，存量 22 个失效守卫无告警，
+      #          新增失败只能靠人工扒日志发现（详见 docs/ci-test-signal-and-guard-test-debt.md）。
+      #    策略：存量债不阻塞出包，但失败数一旦【超过基线】立即 fail；
+      #          低于基线则告警提示下调 BASELINE_FAILURES，形成棘轮效应直至归零。
+      #    附带：把失败测试【名单】打进 run summary，不必再手动下载日志比对。
+      - name: Enforce unit test failure baseline
+        if: always() && steps.unit_tests.outcome != 'skipped'
+        env:
+          # 当前基线。修好测试后必须同步下调，禁止上调（上调 = 接受新回归）。
+          # 2026-08-01 Phase 1a：删除读取已删 MdbxManagerScreen.kt 的 3 个守卫函数
+          # 及整个 MdbxAndroidIntegrationGuardTest.kt，失败数 22 -> 19。
+          # 2026-08-01 Phase B.2.1：修复 TimelineSnapshotIntegrationGuardTest 过时的
+          # Room 版本断言（73 -> 74），失败数 19 -> 18（总数 525 -> 538，
+          # +13 为 B.2.2 复活的 AutofillLoggerTest，全部通过）。
+          # 2026-08-01 Phase B.2.1 批次 1：修复 13 个守卫断言的文本漂移
+          # （实现等价重构导致的源码文本失配，零主代码改动），失败数 18 -> 6。
+          # 剩余 6 个的完整根因见 docs/architecture-phaseB-cleanup.md#b21，
+          # 其中 5 个是"实现有意演进、测试过时"，1 个（ExpressiveTopBarKeyboard）
+          # 疑似真实回归，需真机验证后修实现而非改测试。
+          # 2026-08-01 Phase B.2.1 批次 2：重写 5 个"实现有意演进、测试过时"的守卫断言
+          # （#2 实例复用白名单+onNewIntent / #6 AUTH 优先包装 / #10 KeePass 反死锁 /
+          # #14 中英文案 / #16 Plus 免费化），失败数 6 -> 1（仅剩 #9 疑似真实回归）。
+          # 2026-08-01 Phase B.2.1 批次 3：修复 #9 ExpressiveTopBar 搜索框真实回归
+          # （已聚焦的搜索框被系统收起键盘后，再次点按重新唤出软键盘 keyboardController?.show()），
+          # 失败数 1 -> 0。Phase B.2.1 守卫测试债务清零（19 -> 0）。
+          BASELINE_FAILURES: "0"
+        run: |
+          python3 - <<'PY'
+          import glob, os, sys
+          import xml.etree.ElementTree as ET
+
+          baseline = int(os.environ.get("BASELINE_FAILURES", "0"))
+          paths = sorted(glob.glob("app/build/test-results/testDebugUnitTest/*.xml"))
+
+          if not paths:
+              print("::error title=No test results::单测结果 XML 缺失，无法校验回归基线。")
+              sys.exit(1)
+
+          total = 0
+          names = []
+          for path in paths:
+              try:
+                  root = ET.parse(path).getroot()
+              except ET.ParseError as exc:
+                  print(f"::warning title=Unparsable result::{path}: {exc}")
+                  continue
+              total += int(root.get("tests", 0) or 0)
+              for case in root.iter("testcase"):
+                  if case.find("failure") is None and case.find("error") is None:
+                      continue
+                  cls = (case.get("classname") or "").rsplit(".", 1)[-1]
+                  names.append(f"{cls} > {case.get('name')}")
+
+          names.sort()
+          failed = len(names)
+          verdict = "PASS" if failed <= baseline else "FAIL"
+
+          lines = [
+              "### Unit test baseline gate",
+              "",
+              f"- total: **{total}**",
+              f"- failed: **{failed}**",
+              f"- baseline: **{baseline}**",
+              f"- verdict: **{verdict}**",
+              "",
+          ]
+          if names:
+              lines += ["<details><summary>Failed tests</summary>", ""]
+              lines += [f"- `{n}`" for n in names]
+              lines += ["", "</details>"]
+
+          step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if step_summary:
+              with open(step_summary, "a", encoding="utf-8") as handle:
+                  handle.write("\n".join(lines) + "\n")
+
+          print(f"total={total} failed={failed} baseline={baseline}")
+          for name in names:
+              print(f"  FAILED  {name}")
+              # 每个失败测试单独打一条注解：step summary / 日志在协作环境里
+              # 因 blob.core.windows.net 被 DNS 劫持拿不到，唯有 checks API 注解稳定可读。
+              # 这样 `gh api .../check-runs/<id>/annotations` 能直接列出失败测试名。
+              print(f"::error title=Failed test::{name}")
+
+          # 把统计发成 annotation。原因：本仓库的协作环境里
+          # blob.core.windows.net（run log / artifact 的实际下载源）会被 DNS 劫持到
+          # 198.18.0.0/15 保留段，`gh run view --log` 与 `gh run download` 全部拿不到数据，
+          # 只有 api.github.com 通。annotation 走 checks API，因此是唯一稳定可读的回传通道。
+          # 有了它，排错时用
+          #   gh api repos/<owner>/<repo>/check-runs/<id>/annotations
+          # 就能直接看到 total/failed，不必再下载日志。
+          print(
+              f"::notice title=Unit test stats::total={total} failed={failed} "
+              f"baseline={baseline} verdict={verdict}"
+          )
+
+          if failed > baseline:
+              print(
+                  f"::error title=New test regressions::失败数 {failed} 超过基线 {baseline}，"
+                  f"本次改动引入了 {failed - baseline} 个新失败。"
+              )
+              sys.exit(1)
+
+          if failed < baseline:
+              print(
+                  f"::warning title=Baseline can be lowered::失败数 {failed} 已低于基线 {baseline}，"
+                  f"请把 BASELINE_FAILURES 下调为 {failed} 以锁定改进。"
+              )
+
+          print("Baseline gate passed.")
+          PY
+
+      # 5) 排错辅助：仅在失败时打印环境/缓存信息（成功时省几秒，出包更快）
+      - name: Diagnostics - cache & environment
+        if: failure()
+        run: |
+          echo "Gradle wrapper:"; grep distributionUrl gradle/wrapper/gradle-wrapper.properties || true
+          echo "Build cache dir size:"; du -sh ~/.gradle/caches/build-cache-1 2>/dev/null || echo "n/a"
+          echo "Gradle home size:"; du -sh ~/.gradle 2>/dev/null || echo "n/a"
+          echo "Java:"; java -version 2>&1 | head -1 || true

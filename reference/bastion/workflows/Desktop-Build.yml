@@ -1,0 +1,280 @@
+name: Desktop Build & Release
+
+on:
+  # push 到 dev 仅做构建校验（编译 + 打包验证），不发布 Release
+  push:
+    branches: [ dev ]
+    paths:
+      - 'desktop/**'
+      - '.github/workflows/Desktop-*.yml'
+  pull_request:
+    branches: [ dev ]
+    paths:
+      - 'desktop/**'
+  # 手动触发：构建并发布 Windows 桌面版 Release
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (no v prefix), e.g. 0.1.0'
+        required: true
+        default: '0.1.0'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-windows:
+    name: Build Windows Desktop
+    runs-on: windows-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: desktop
+    env:
+      # 禁用 Gradle 构建缓存：代码频繁变更，build cache 会恢复旧代码产物导致编译失败
+      # （依赖缓存仍由 setup-gradle 保留，只关任务输出缓存）
+      GRADLE_OPTS: -Dorg.gradle.caching=false -Dorg.gradle.parallel=true
+      # 强制 en-US locale：jpackage 在 zh-CN 区域下生成 MSI 会因 WiX 本地化失败（light.exe exit 216）
+      JAVA_TOOL_OPTIONS: -Duser.language=en -Duser.country=US -Dfile.encoding=UTF-8
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Install WiX toolset (for MSI packaging)
+        shell: powershell
+        run: |
+          choco install wixtoolset -y --no-progress
+
+      - name: Compile shared module
+        run: ./gradlew :shared:compileKotlinJvm --no-build-cache --stacktrace
+
+      - name: Package Windows app (MSI + EXE)
+        shell: bash
+        run: |
+          # 仅 workflow_dispatch 时把 Release 版本注入安装包版本号（BastionDesktop-<version>.msi/.exe），
+          # 与 Release 标签保持一致；push/PR 校验构建则保持 build.gradle.kts 默认版本。
+          PKG_VERSION="${{ github.event.inputs.version }}"
+          EXTRA=()
+          if [ -n "$PKG_VERSION" ]; then EXTRA+=("-Pbastion.packageVersion=$PKG_VERSION"); fi
+          ./gradlew :desktop:packageMsi :desktop:packageExe --no-build-cache --stacktrace "${EXTRA[@]}"
+
+      - name: Verify bundled JRE & launch smoke test
+        shell: pwsh
+        run: |
+          # 防止发布“缺少内置 JRE”的安装包：安装后若 runtime 目录缺失/损坏，
+          # jpackage 启动器会直接报 "Failed to launch JVM / JVM 未安装" 类错误。
+          # 用 msiexec /a 把 MSI 里的 app image 解包出来做真实验证。
+          $ErrorActionPreference = 'Stop'
+          $msi = Get-ChildItem "desktop/build/compose/binaries/main/msi" -Filter '*.msi' | Select-Object -First 1
+          if (-not $msi) { Write-Error 'no MSI found under compose/binaries/main/msi'; exit 1 }
+          $extract = Join-Path $env:RUNNER_TEMP 'bastion-msi-check'
+          New-Item -ItemType Directory -Force -Path $extract | Out-Null
+          $p = Start-Process msiexec.exe -ArgumentList "/a `"$($msi.FullName)`" /qn TARGETDIR=`"$extract`"" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Write-Error "msiexec /a failed with exit $($p.ExitCode)"; exit 1 }
+          $exe = Get-ChildItem $extract -Recurse -Filter 'BastionDesktop.exe' | Select-Object -First 1
+          if (-not $exe) { Write-Error 'BastionDesktop.exe not found inside MSI'; exit 1 }
+          $rtDir = Join-Path $exe.DirectoryName 'runtime'
+          $jvmDll = Join-Path $rtDir 'bin\server\jvm.dll'
+          if (-not (Test-Path $jvmDll)) { Write-Error "bundled JRE missing: $jvmDll"; exit 1 }
+          $rel = Get-Content (Join-Path $rtDir 'release') | Where-Object { $_ -match '^JAVA_VERSION=' }
+          if (-not $rel) { Write-Error 'invalid runtime release file'; exit 1 }
+          Write-Host "Bundled JRE OK: $rel"
+          # 冒烟测试：jpackage 启动器会派生一个子进程承载 JVM，父进程只是等待者。
+          # 只观察父进程会漏检“应用启动数秒后崩溃弹 'Failed to launch JVM'”的坏包，
+          # 因此：1) 经 cmd 重定向捕获应用 stdout/stderr（子进程继承句柄），
+          #        2) 监控整棵进程树，3) 检测错误弹窗。
+          $out = Join-Path $env:RUNNER_TEMP 'bastion-smoke-out.txt'
+          Remove-Item $out -ErrorAction SilentlyContinue
+          $app = Start-Process cmd.exe -ArgumentList "/c cd /d `"$($exe.DirectoryName)`" && `"$($exe.FullName)`" > `"$out`" 2>&1" -PassThru -WindowStyle Hidden
+          Start-Sleep -Seconds 15
+          $tree = @(Get-CimInstance Win32_Process | Where-Object { $_.ParentProcessId -eq $app.Id })
+          if ($app.HasExited) {
+            Write-Error "launcher exited during smoke test (exit code $($app.ExitCode))"
+            exit 1
+          }
+          if ($tree.Count -eq 0) {
+            Write-Error 'JVM child process not found (launcher failed to start JVM)'
+            exit 1
+          }
+          # 应用输出中的异常文本 = 应用层崩溃（如 NoClassDefFoundError/UnsatisfiedLinkError）
+          if (Test-Path $out) {
+            $content = Get-Content $out -Raw -ErrorAction SilentlyContinue
+            if ($content -match 'Exception|Error was captured in composition|NoClassDefFoundError|UnsatisfiedLinkError|Could not find or load main class') {
+              Write-Error "app crashed during smoke test. Output: $content"
+              exit 1
+            }
+          }
+          $childIds = @($tree | ForEach-Object { [int]$_.ProcessId })
+          Add-Type @"
+            using System;
+            using System.Runtime.InteropServices;
+            using System.Text;
+            public class SmokeWin {
+              [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr l);
+              public delegate bool EnumProc(IntPtr h, IntPtr l);
+              [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint procId);
+              [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+              [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+            }
+          "@
+          $errorText = $null
+          [SmokeWin]::EnumWindows({ param($h, $l)
+            $pid2 = 0
+            [SmokeWin]::GetWindowThreadProcessId($h, [ref]$pid2) | Out-Null
+            if ($pid2 -in $childIds -and [SmokeWin]::IsWindowVisible($h)) {
+              $t = New-Object System.Text.StringBuilder 1024
+              [SmokeWin]::GetWindowText($h, $t, 1024) | Out-Null
+              if ($t.ToString() -match 'Failed to launch JVM|Failed to find JVM|Could not find or load main class') {
+                $script:errorText = $t.ToString()
+                return $false
+              }
+            }
+            return $true
+          }, [IntPtr]::Zero) | Out-Null
+          if ($errorText) {
+            Write-Error "app showed error dialog: $errorText"
+            exit 1
+          }
+          Write-Host "Smoke test OK: app alive after 15s (children: $($tree.Count))"
+          & taskkill /PID $app.Id /T /F 2>$null | Out-Null
+          Remove-Item -Recurse -Force $extract -ErrorAction SilentlyContinue
+
+      - name: Stop Gradle Daemon
+        if: always()
+        shell: bash
+        run: ./gradlew --stop || true
+
+      - name: Collect packaging metadata
+        id: meta_files
+        shell: bash
+        run: |
+          echo "=== Generated binaries ==="
+          find desktop/build/compose/binaries/main -type f | sort
+          {
+            echo "msi_files<<EOF"
+            find desktop/build/compose/binaries/main/msi -name '*.msi' | sed 's/^/> *   `/' 
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "exe_files<<EOF"
+            find desktop/build/compose/binaries/main/exe -name '*.exe' | sed 's/^/> *   `/'
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload installers artifact
+        if: github.event_name != 'workflow_dispatch'
+        uses: actions/upload-artifact@v7
+        with:
+          name: bastion-desktop-installers
+          path: |
+            desktop/desktop/build/compose/binaries/main/msi/**/*.msi
+            desktop/desktop/build/compose/binaries/main/exe/**/*.exe
+          if-no-files-found: warn
+          # 保留期（2026-08-29）：安装包单个约 169 MB，是所有 artifact 里最大的一类，
+          # 此前用默认 90 天。Desktop 构建频率低但单份极大。
+          # （2026-08-31）仓库允许的最大保留期为 3 天，填更大的值会被 GitHub 自动降级为 3
+          # 并打一条 warning，因此显式写 3。若确实需要更长的验证窗口，应先调高仓库
+          # Settings → Actions → Artifact 保留上限，否则这里写多大都不生效。
+          retention-days: 3
+
+      - name: Resolve release version & tag
+        if: github.event_name == 'workflow_dispatch'
+        id: meta
+        shell: bash
+        run: |
+          version="${{ github.event.inputs.version }}"
+          tag="v${version}"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Generate changelog since last release
+        if: github.event_name == 'workflow_dispatch'
+        id: changelog
+        shell: bash
+        run: |
+          set +e
+          prev="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+          if [ -z "$prev" ]; then
+            notes="- 首次桌面端 Release"
+          else
+            notes="$(git log --oneline --no-merges ${prev}..HEAD -- desktop/ | head -50)"
+            if [ -z "$notes" ]; then notes="- 无变更记录"; fi
+          fi
+          {
+            echo "notes<<EOF"
+            echo "$notes"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "Previous tag: ${prev:-none}"
+
+      - name: Remove existing release/tag for this version (idempotent re-run)
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+          tag="${{ steps.meta.outputs.tag }}"
+          rid="$(gh api "repos/${{ github.repository }}/releases/tags/$tag" --jq '.id' 2>/dev/null)"
+          if [[ "$rid" =~ ^[0-9]+$ ]]; then
+            echo "Deleting existing release id=${rid} for tag ${tag}"
+            gh api -X DELETE "repos/${{ github.repository }}/releases/${rid}" 2>/dev/null
+          fi
+          gh api -X DELETE "repos/${{ github.repository }}/git/refs/tags/$tag" 2>/dev/null
+          true
+
+      - name: Publish Windows Release
+        if: github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: "Bastion Desktop v${{ steps.meta.outputs.version }}"
+          body: |
+            > **Windows 桌面客户端 (Desktop)**
+            >
+            > Bastion 密码管理器桌面版：Bitwarden 条目同步 / 本地 KDBX 编辑 / KDBX→OneDrive 同步。
+            >
+            > **注意：** 当前为早期预览版本，仅支持骨架功能，核心同步能力逐步接入中。
+            > ---
+            > **构建信息：**
+            > * **Version**: `${{ steps.meta.outputs.version }}`
+            > * **Commit**: `${{ github.sha }}`
+            >
+            > **下载安装（任选一种）：**
+            > * **EXE 安装版**：双击安装，自动写入开始菜单
+            > * **MSI 安装版**：双击安装，支持企业部署/组策略
+            > * 说明：EXE 比 MSI 略小（约 5%），两者都内置 JRE 17 运行时，**无需预装 Java**。
+            >
+            > **遇到 "Failed to launch JVM / 未找到 JVM" 提示怎么办？**
+            > * 该提示来自应用启动器，仅表示安装目录下的 `runtime`（内置 JRE）缺失或损坏，**不是**要求你手动安装 Java。
+            > * 常见原因：旧版本未完全卸载、安装被安全软件拦截/隔离、或安装包与已安装版本同名冲突（提示 1638）。
+            > * 处理：先卸载旧版 → 重启 → 放行杀毒软件（或将 `D:\Program Files\BastionDesktop` / `C:\Program Files\BastionDesktop` 加入白名单）→ 重新安装本版本。
+            >
+            > ## 更新内容 (What's Changed)
+            > ${{ steps.changelog.outputs.notes }}
+          files: |
+            desktop/desktop/build/compose/binaries/main/msi/**/*.msi
+            desktop/desktop/build/compose/binaries/main/exe/**/*.exe
+          draft: false
+          prerelease: true
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,40 @@
+name: Deploy Pages
+
+on:
+  push:
+    branches: [ dev ]
+    # 只有站点内容（pages/）变动才重新部署，避免每次 app 推送都重部署
+    paths:
+      - 'pages/**'
+  workflow_dispatch:
+
+# Allow this job to publish to GitHub Pages.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Cancel in-progress runs, keep the latest.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          # The static site lives in the `pages/` directory.
+          path: pages
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,110 @@
+name: Regenerate lint baseline
+
+# 手动触发：在 dev 上跑 lint，重生成 Bastion/app/lint-baseline.xml 并自动提交回 dev。
+# 用途：navigation 2.10 传递升级的 compose-ui 引入大量新 lint 问题，本地无 Android SDK
+# 无法重生成 baseline；此 workflow 借助 CI 的 SDK 环境生成，并把结果回写仓库。
+# 触发后，dev 上会多出一次 baseline 提交；随后即可移除 build.gradle 里的
+# `abortOnError false` 过渡项，让 lint 重新成为质量门。
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "分支（默认 dev）"
+        required: true
+        default: "dev"
+
+permissions:
+  contents: write   # 把重生成的 baseline 提交回分支
+
+jobs:
+  regenerate:
+    name: Regenerate lint-baseline.xml
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: "Bastion"
+    env:
+      GRADLE_OPTS: -Dorg.gradle.caching=true -Dorg.gradle.parallel=true -Dorg.gradle.configuration-cache=true -Dorg.gradle.configuration-cache.problems=warn
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.ref }}
+          fetch-depth: 1
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-read-only: false
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      # 与 Android CI debug 共用同一份 SDK 准备脚本，确保 compileSdk 37 可用
+      - name: Install Android SDK platform 37
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/ensure-android-sdk.sh"
+
+      # 重生成 lint-baseline.xml。
+      # 排查（run #1 失败）：abortOnError 已为 false，故 lint「规则级」错误不会令任务失败；
+      # 失败源于 lint 任务本身——Kotlin 2.x + navigation 2.10 组合下，全量分析（删 baseline 后）
+      # 易触发 detector JVM 崩溃或超时，且 configuration-cache 对 Lint* 任务有已知不兼容边缘。
+      # 故：保留现有 baseline 做增量更新（避全量分析）、关闭 configuration-cache、超时放宽到 60min；
+      # 并把 gradle 输出存盘，失败时可从 artifact 查看崩溃栈。
+      # continue-on-error：即便 lint 在 Kotlin 2.x 下仍崩溃，也不阻塞本 workflow（已知边界，
+      # 后续依据 artifact 崩溃栈精准 disable 对应 detector 后再移除本项）。
+      # 注意：必须用 updateLintBaselineDebug 而不是 lintDebug。
+      # lintDebug 只按现有 baseline 做校验并报告（"Lint found N errors" 后 abort），不会写回文件；
+      # updateLintBaselineDebug 才是把当前全部 issue 重写进 lint-baseline.xml 的任务。
+      # 此前误用 lintDebug，导致 nav 2.10 引入的 651 个存量错误始终没被基线吸收。
+      - name: Regenerate lint-baseline.xml
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          rm -f /tmp/lint-debug.log
+          ./gradlew :app:updateLintBaselineDebug --stacktrace -Dorg.gradle.configuration-cache=false 2>&1 | tee /tmp/lint-debug.log
+
+      # 兜底诊断：无论 lint 成功与否都上传 gradle 输出，便于在 artifact 中查看崩溃栈
+      - name: Upload lint debug log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: lint-debug-log
+          path:             /tmp/lint-debug.log
+          if-no-files-found: warn
+          # 保留期（2026-08-31）：仓库最大保留期为 3 天，填更大值会被自动降级并告警，故显式写 3。
+          retention-days: 3
+
+      # 兜底：万一自动提交失败，仍可手动从 artifact 取回
+      - name: Upload baseline as artifact (fallback)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: lint-baseline
+          path:             Bastion/app/lint-baseline.xml
+          if-no-files-found: warn
+          # 保留期（2026-08-31）：这里原本想留 30 天供手动取回兜底，但仓库最大保留期只有 3 天，
+          # 填更大值会被 GitHub 自动降级为 3 并打一条 warning，故显式写 3，避免注释与实际不符。
+          # 若真需要 30 天兜底，须先调高仓库 Settings → Actions → Artifact 保留上限。
+          retention-days: 3
+
+      # 自动提交回触发分支（默认 dev）。无变化则跳过，避免空提交触发额外构建。
+      - name: Commit baseline back to branch
+        working-directory: ${{ github.workspace }}
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "github-actions[bot]"
+          git add Bastion/app/lint-baseline.xml
+          if git diff --cached --quiet; then
+            echo "No baseline changes; nothing to commit."
+          else
+            git commit -m "chore(lint): 重生成 lint-baseline.xml（navigation 2.10 升级引入的新 lint 问题）"
+            git push origin "${{ github.event.inputs.ref }}"
+          fi

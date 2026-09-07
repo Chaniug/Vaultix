@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 系统 Splash 使用 Material 3 浅色低层容器色，降低冷启动亮度 -->
+    <color name="bastion_startup_background">#F7F2FA</color>
+</resources>

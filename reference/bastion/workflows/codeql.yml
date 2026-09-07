@@ -1,0 +1,96 @@
+name: CodeQL Advanced
+
+# 静态安全分析。触发策略（2026-08-29 调整）：
+#   PR 合并前拦截 + 每周定时兜底审计 + 手动触发；【不再】每次 push 到 dev 都跑。
+#
+# 说明：
+# - 本项目 Kotlin/Android，CodeQL 用 java-kotlin 提取器，必须在「编译过程中」挂上才能拿到完整分析，
+#   因此这里用 `./gradlew :app:assembleDebug`（已在 Android-Preview 流水线验证可成功）触发提取，
+#   而非依赖 autobuild（autobuild 会连带跑 lint/test，Android 项目易误失败）。
+# - 语言只写 kotlin（java-kotlin 同属一个 CodeQL 包，写两个会重复分析同一份代码）。
+# - 去掉 push 的原因：CodeQL 需要完整编译一遍 app（约 10 分钟），dev 日常高频推送时
+#   每次都全量重跑性价比很低，且结果通常无变化。改为 PR 时拦截 + 每周兜底，
+#   既不漏掉合并前的安全门禁，也不再占用每次推送的反馈时间。
+#
+# ⚠️ GitHub 限制（务必知悉）：
+#   schedule 触发【只在仓库默认分支】生效，其他分支上的 schedule 会被静默忽略。
+#   本仓库默认分支已于 2026-08-29 从 main 改为 dev（dev 才是实际开发主线），
+#   因此下面这条 cron 按 dev 的最新代码扫描。
+#   若日后把默认分支改回 main，定时扫描的对象会随之变为 main（即已发布代码）——
+#   改默认分支时务必记得这条连带影响。
+#   改频率：每月一次把 cron 换成 '27 3 1 * *'（每月 1 号 03:27 UTC）。
+
+on:
+  pull_request:
+    branches: [ dev ]
+  schedule:
+    # 每周一 03:27 UTC 例行全量扫描（兜底审计；按默认分支 main 的代码运行，见上方限制说明）
+    - cron: '27 3 * * 1'
+  # 随时手动触发：Actions → CodeQL Advanced → Run workflow（可选分支，用于临时扫 dev）
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+jobs:
+  analyze:
+    name: Analyze (Kotlin/Java)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        working-directory: "Bastion"
+    env:
+      # 与 Android-Preview 流水线一致：明确 Android SDK 路径（GitHub runner 已预装）
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+      # 启用 Gradle 构建缓存与并行，缩短重复构建耗时
+      GRADLE_OPTS: -Dorg.gradle.caching=true -Dorg.gradle.parallel=true
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      # compileSdk 37 的平台准备。与 Android CI debug 共用同一份脚本：
+      # AGP 9.3 只认 ApiLevel 恰好为 37.0 的平台，runner 镜像若只有 android-37.1
+      # 会直接构建失败（Failed to find Platform SDK with path: platforms;android-37.0）。
+      # CodeQL 靠编译过程提取源码模型，构建挂掉 = 扫描挂掉，所以这一步必须放在编译前。
+      - name: Install Android SDK platform 37
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/ensure-android-sdk.sh"
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: kotlin
+          # security-extended：在默认查询包基础上扩展更多安全查询，
+          # 适合密码管理器这类高安全敏感度的项目（能覆盖证书固定/弱加密/隐式 PendingIntent 等）。
+          queries: security-extended
+
+      # 手动触发编译 —— 让 CodeQL Java 提取器挂上构建过程收集源码模型。
+      # 仅跑 assembleDebug（不跑 lint/test，避免无关步骤失败导致整条流水线挂掉）。
+      - name: Build for CodeQL extraction
+        run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
+
+      - name: Stop Gradle Daemon
+        if: always()
+        run: ./gradlew --stop || true
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:kotlin"
