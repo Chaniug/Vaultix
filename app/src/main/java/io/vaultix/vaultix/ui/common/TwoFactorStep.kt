@@ -56,10 +56,8 @@ fun TwoFactorStep(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
-        // 仅在有多个可用验证方式时展示切换 chips（单方式直接进入）
-        val selectable = providers.distinct().filter {
-            it == TwoFactorProvider.AUTHENTICATOR || it == TwoFactorProvider.EMAIL
-        }
+        // 所有「可输入码」的验证方式都展示 chips（身份验证器/邮箱/Duo/YubiKey…）
+        val selectable = providers.distinct().filter(TwoFactorProvider::codeInputSupported)
         if (selectable.size > 1) {
             Spacer(Modifier.height(12.dp))
             Row {
@@ -83,21 +81,47 @@ fun TwoFactorStep(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(bottom = 8.dp),
             )
+        } else if (selectedProvider == TwoFactorProvider.YUBIKEY) {
+            Text(
+                text = stringResource(R.string.two_factor_yubikey_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
         }
 
+        val isYubiKey = selectedProvider == TwoFactorProvider.YUBIKEY
         OutlinedTextField(
             value = code,
-            onValueChange = { code = it.filter { c -> c.isDigit() }.take(CODE_LENGTH) },
+            onValueChange = { raw ->
+                code = if (isYubiKey) {
+                    // YubiKey OTP：44 位字母数字动态码（触控生成）
+                    raw.filter { c -> c.isLetterOrDigit() }.take(YUBIKEY_OTP_LENGTH)
+                } else {
+                    // TOTP / 邮箱 / Duo：6 位数字
+                    raw.filter { c -> c.isDigit() }.take(CODE_LENGTH)
+                }
+            },
             label = { Text(stringResource(R.string.two_factor_code_label)) },
-            placeholder = { Text(stringResource(R.string.two_factor_code_placeholder)) },
+            placeholder = {
+                Text(
+                    stringResource(
+                        if (isYubiKey) {
+                            R.string.two_factor_yubikey_placeholder
+                        } else {
+                            R.string.two_factor_code_placeholder
+                        },
+                    ),
+                )
+            },
             singleLine = true,
             keyboardOptions = KeyboardOptions(
-                keyboardType = KeyboardType.Number,
+                keyboardType = if (isYubiKey) KeyboardType.Ascii else KeyboardType.Number,
                 imeAction = ImeAction.Done,
             ),
             keyboardActions = KeyboardActions(onDone = {
                 focusManager.clearFocus()
-                if (code.length == CODE_LENGTH) onSubmit(code)
+                if (codeValid(isYubiKey, code)) onSubmit(code)
             }),
             enabled = !submitting,
             modifier = Modifier.fillMaxWidth(),
@@ -118,7 +142,7 @@ fun TwoFactorStep(
                 focusManager.clearFocus()
                 onSubmit(code)
             },
-            enabled = !submitting && code.length == CODE_LENGTH,
+            enabled = !submitting && codeValid(isYubiKey, code),
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text(stringResource(R.string.two_factor_submit))
@@ -129,5 +153,12 @@ fun TwoFactorStep(
     }
 }
 
+/** 码有效性：数字类 6 位；YubiKey OTP 44 位（可触控输入）。 */
+private fun codeValid(isYubiKey: Boolean, code: String): Boolean =
+    if (isYubiKey) code.length == YUBIKEY_OTP_LENGTH else code.length == CODE_LENGTH
+
 /** TOTP / 邮箱验证码位数（Bitwarden 2FA 固定 6 位）。 */
 private const val CODE_LENGTH = 6
+
+/** YubiKey OTP 长度（Yubico 动态口令 44 位）。 */
+private const val YUBIKEY_OTP_LENGTH = 44

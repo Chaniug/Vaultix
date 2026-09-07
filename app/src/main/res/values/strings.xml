@@ -54,9 +54,13 @@
     <string name="two_factor_desc">该账号已开启两步验证，输入验证码继续登录</string>
     <string name="two_factor_provider_totp">身份验证器</string>
     <string name="two_factor_provider_email">邮箱验证码</string>
+    <string name="two_factor_provider_duo">Duo</string>
+    <string name="two_factor_provider_yubikey">YubiKey 硬件密钥</string>
     <string name="two_factor_provider_other">其他验证方式</string>
     <string name="two_factor_code_label">验证码</string>
     <string name="two_factor_code_placeholder">6 位数字</string>
+    <string name="two_factor_yubikey_hint">轻触 YubiKey 自动生成动态码，或手动输入</string>
+    <string name="two_factor_yubikey_placeholder">44 位 YubiKey 动态码</string>
     <string name="two_factor_submit">验证并登录</string>
     <string name="two_factor_back">上一步</string>
     <string name="two_factor_email_hint">验证码已发送至邮箱（未收到请检查垃圾箱）</string>
