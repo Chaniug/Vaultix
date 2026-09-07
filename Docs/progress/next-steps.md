@@ -4,8 +4,11 @@
 > 回前台 APP_RESUME、密码强度条）；Bastion 冻结为 reference（Doc 18，第八轮）。
 > 状态：`TODO` / `DOING` / `DONE` / `BLOCKED`
 
-## 已完成（第九轮 2026-09-08 · 同步编排全链路接线 + 强度条）
+## 已完成（第九轮 2026-09-08 · 同步编排全链路接线 + 强度条 + Bastion 快照）
 
+- [x] **Bastion 参考快照 vendored**：`reference/bastion/`（@369ed56，1012 文件/≈13 MB：
+      主源码 664 + 单测 155 + repo docs + BastionDocs md + workflows 参考；只读、不参与
+      构建/detekt）；接力 AI 无需访问 D:\Bastion；Docs/18 §2 与 .ai/MEMORY 已更新指针
 - [x] **同步编排器（Bastion 语义移植，data:repository）**：触发分类/静默语义/
       90s·180s 节流/运行中合并回放/指数退避×5/per-vault 状态流/解锁门卫；
       单测覆盖（虚拟时间）；Hilt 双构造（@Inject 两绑定参数 + internal 五参测试构造）
