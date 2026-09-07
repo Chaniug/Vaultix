@@ -45,3 +45,17 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 主推连接 Bitwarden → 次选创建本地 KDBX → 兜底"稍后在设置里连接"
 - 需区分**库凭据**（Bitwarden 账户密码 / KDBX 主密码）与**应用锁**（PIN / 生物识别）
 - 建议 M2 后两入口并列，契合"聚合"能力
+
+## 目标平台与发布（2026-09-07 确认）
+- **Android 17 = API 37**：minSdk 26 / targetSdk 37 / compileSdk 37
+- 只出 arm64-v8a；**本地只小编译不出包，GitHub Actions 负责出包**
+  （main → debug preview Release；rele 分支或 v* tag → 签名 release APK）
+- CI 脚本 `.github/scripts/ensure-android-sdk.sh` 必须装 `platforms;android-37`
+  （原为 36，与 compileSdk=37 冲突会导致 CI 失败；已修，并保持 LF 换行）
+- 本机 SDK `C:\AndroidSDK` 有 35 / 37 / 37.0，**无 android-36**，故 compileSdk 必须 ≥ 37
+
+## 协作文件夹（均已入库，便于 AI 接力）
+- `Docs/progress/`：environment（环境+构建策略）/ current-status（进度快照）/
+  next-steps（下一步清单）/ decisions（决策记录）
+- `.ai/`：MEMORY.md（长期约定）/ ISSUES.md（踩坑：现象-根因-解法）/ SESSION-*.md（会话日志）
+- 两者内容同步自 `.workbuddy/memory/`

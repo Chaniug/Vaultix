@@ -179,11 +179,16 @@ jobs:
         id: apk_meta
         shell: bash
         run: |
-          cd app/build/outputs/apk/*/debug
-          apk_list="$(find . -maxdepth 1 -type f \( -iname '*.apk' -o -iname '*.APK' \) -printf '%f\n' | sort)"
+          # 多 flavor（full / offline）下 `cd app/build/outputs/apk/*/debug` 会被展开成多个
+          # 目录，导致 "cd: too many arguments"。改为从 apk 根目录统一查找，不进入子目录，
+          # 这样两个 flavor 的产物都能被收集到。
+          apk_root="app/build/outputs/apk"
+          apk_list="$(find "$apk_root" -type f \( -iname '*.apk' -o -iname '*.APK' \) -printf '%P\n' | sort)"
           apk_count="$(printf '%s\n' "$apk_list" | sed '/^$/d' | wc -l | tr -d ' ')"
           if [ "$apk_count" = "0" ]; then
-            echo "No debug APK found"; ls -la; exit 1
+            echo "No debug APK found under $apk_root"
+            find "$apk_root" -maxdepth 3 2>/dev/null || true
+            exit 1
           fi
           apk_markdown="$(printf '%s\n' "$apk_list" | sed '/^$/d' | sed 's/^/> *   `/; s/$/`/')"
           echo "apk_count=${apk_count}" >> "$GITHUB_OUTPUT"
