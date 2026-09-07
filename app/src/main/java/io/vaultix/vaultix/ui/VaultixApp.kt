@@ -15,6 +15,7 @@ import io.vaultix.vaultix.ui.detail.ItemDetailScreen
 import io.vaultix.vaultix.ui.items.ItemsScreen
 import io.vaultix.vaultix.ui.items.ItemsViewModel
 import io.vaultix.vaultix.ui.settings.SettingsScreen
+import io.vaultix.vaultix.ui.trash.TrashScreen
 import io.vaultix.vaultix.ui.unlock.UnlockScreen
 import io.vaultix.vaultix.ui.unlock.UnlockViewModel
 import io.vaultix.vaultix.ui.vaultlist.VaultListScreen
@@ -89,10 +90,17 @@ fun VaultixApp() {
                 viewModel = viewModel,
                 onBack = { navController.popBackStack() },
                 onLocked = { navController.popBackStack() },
+                onOpenTrash = {
+                    navController.navigate(TrashRoute(vaultId = route.vaultId))
+                },
                 onOpenItem = { item ->
                     navController.navigate(ItemRoute(vaultId = route.vaultId, itemId = item.id))
                 },
             )
+        }
+        composable<TrashRoute> { entry ->
+            val route = entry.toRoute<TrashRoute>()
+            TrashScreen(onBack = { navController.popBackStack() })
         }
         composable<ItemRoute> { entry ->
             ItemDetailScreen(

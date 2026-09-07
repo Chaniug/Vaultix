@@ -19,6 +19,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Warning
@@ -73,6 +74,7 @@ private const val NOTE_DISMISS_DELAY_MS = 2_000L
 fun ItemsScreen(
     onBack: () -> Unit,
     onLocked: () -> Unit,
+    onOpenTrash: () -> Unit,
     onOpenItem: (VaultItem) -> Unit,
     viewModel: ItemsViewModel = hiltViewModel(),
 ) {
@@ -122,6 +124,12 @@ fun ItemsScreen(
                         }
                     },
                     actions = {
+                        IconButton(onClick = onOpenTrash) {
+                            Icon(
+                                Icons.Filled.Delete,
+                                contentDescription = stringResource(R.string.trash_title),
+                            )
+                        }
                         IconButton(onClick = viewModel::retrySync) {
                             Icon(
                                 Icons.Filled.Refresh,

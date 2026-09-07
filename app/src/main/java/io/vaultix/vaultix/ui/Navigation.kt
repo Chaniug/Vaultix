@@ -23,4 +23,7 @@ data class UnlockRoute(val vaultId: String)
 data class ItemsRoute(val vaultId: String)
 
 @Serializable
+data class TrashRoute(val vaultId: String)
+
+@Serializable
 data class ItemRoute(val vaultId: String, val itemId: String)

@@ -54,9 +54,13 @@ class ItemRepositoryImpl @Inject constructor(
     override fun observeItems(vaultId: String): Flow<List<VaultItem>> =
         observeState(vaultId, cipherDao.observeByVault(vaultId))
 
+    override fun observeTrash(vaultId: String): Flow<List<VaultItem>> =
+        observeState(vaultId, cipherDao.observeTrashByVault(vaultId))
+
     override fun observeItem(vaultId: String, itemId: String): Flow<VaultItem?> {
         val single = cipherDao.observe(itemId).map { row ->
-            if (row == null) emptyList() else listOf(row)
+            // 已删除（含回收站状态）在详情语义里视同不存在 → 返回 null 触发「条目不存在」
+            if (row == null || row.deletedDate != null) emptyList() else listOf(row)
         }
         return observeState(vaultId, single).map { list -> list.firstOrNull() }
     }
@@ -166,6 +170,49 @@ class ItemRepositoryImpl @Inject constructor(
             flushAfterLocalWrite(vaultId)
         }
 
+    override suspend fun restoreItem(vaultId: String, itemId: String): Result<VaultSaveOutcome> =
+        runCatching {
+            val existing = cipherDao.get(itemId) ?: error("条目不存在：$itemId")
+            require(existing.vaultId == vaultId) { "条目不属于该库：$itemId" }
+            require(existing.deletedDate != null) { "条目不在回收站中：$itemId" }
+
+            // 本地立即清除删除标记（主列表恢复显示）；离线时队列联网补推
+            cipherDao.upsertAll(listOf(existing.copy(deletedDate = null)))
+            pendingOpDao.enqueue(
+                PendingOpEntity(
+                    vaultId = vaultId,
+                    cipherId = itemId,
+                    op = OP_RESTORE,
+                    payload = null,
+                    createdAt = System.currentTimeMillis(),
+                ),
+            )
+
+            flushAfterLocalWrite(vaultId)
+        }
+
+    override suspend fun permanentDeleteItem(vaultId: String, itemId: String): Result<VaultSaveOutcome> =
+        runCatching {
+            val existing = cipherDao.get(itemId) ?: error("条目不存在：$itemId")
+            require(existing.vaultId == vaultId) { "条目不属于该库：$itemId" }
+            require(existing.deletedDate != null) { "条目不在回收站中，无法永久删除：$itemId" }
+
+            // 本地立即移除（回收站视图随之消失）；DELETE 入队，离线时联网补推；
+            // 服务端已不存在（404）时由 flush 弃单（防毒丸）
+            pendingOpDao.enqueue(
+                PendingOpEntity(
+                    vaultId = vaultId,
+                    cipherId = itemId,
+                    op = OP_DELETE,
+                    payload = null,
+                    createdAt = System.currentTimeMillis(),
+                ),
+            )
+            cipherDao.deleteByIds(listOf(itemId))
+
+            flushAfterLocalWrite(vaultId)
+        }
+
     // ---- 内部 ----
 
     /** Room 密文行流 + 解锁状态 → 已解密明文列表流（在注入的 crypto 调度器上解码）。 */
@@ -178,11 +225,10 @@ class ItemRepositoryImpl @Inject constructor(
             }
             .flowOn(cryptoDispatcher)
 
-    /** 解密当前快照；已删除 / 解析或解密失败的条目跳过（列表可浏览优先）。 */
+    /** 解密当前快照；解析或解密失败的条目跳过（列表可浏览优先；删除过滤由查询保证）。 */
     private suspend fun decodeAll(vaultId: String, rows: List<CipherEntity>): List<VaultItem> {
         val key = sessions.keyOf(vaultId) ?: return emptyList()
         return rows.mapNotNull { row ->
-            if (row.deletedDate != null) return@mapNotNull null
             runCatching { json.decodeFromString<CipherDto>(row.encryptedPayload) }
                 .getOrNull()
                 ?.let { dto -> mapper.toDomain(dto, key) }
@@ -202,5 +248,7 @@ class ItemRepositoryImpl @Inject constructor(
         const val OP_CREATE = "CREATE"
         const val OP_UPDATE = "UPDATE"
         const val OP_SOFT_DELETE = "SOFT_DELETE"
+        const val OP_RESTORE = "RESTORE"
+        const val OP_DELETE = "DELETE"
     }
 }

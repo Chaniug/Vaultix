@@ -282,4 +282,81 @@ class ItemRepositoryImplTest {
         val after = repo.observeItem(vaultId, "cipher-4").first()
         assertNull(after)
     }
+
+    @Test
+    fun restoreItem_clearsDeletedDate_andEnqueuesRestore() = runTest {
+        sessions.unlock(vaultId, key)
+        val existing = CipherEntity(
+            id = "cipher-5",
+            vaultId = vaultId,
+            type = 1,
+            encryptedPayload = BitwardenJson.encodeToString(
+                mapper.toRequest(plainItem("cipher-5"), key)
+                    .toStoredCipherDto("cipher-5", "rev"),
+            ),
+            revisionDate = "rev",
+            deletedDate = "2026-09-08T00:00:00Z",
+        )
+        coEvery { cipherDao.get("cipher-5") } returns existing
+        coEvery { vaultDao.get(vaultId) } returns bitwardenVaultRow()
+        val rowSlot = slot<List<CipherEntity>>()
+        val opSlot = slot<PendingOpEntity>()
+        coEvery { cipherDao.upsertAll(capture(rowSlot)) } returns Unit
+        coEvery { pendingOpDao.enqueue(capture(opSlot)) } returns Unit
+        coEvery { syncService.flushPending(vaultId, vaultId) } returns Result.success(Unit)
+
+        val outcome = repo.restoreItem(vaultId, "cipher-5")
+
+        assertEquals(VaultSaveOutcome.Synced, outcome.getOrThrow())
+        assertNull(rowSlot.captured.single().deletedDate) // 主列表立即恢复显示
+        val op = opSlot.captured
+        assertEquals("RESTORE", op.op)
+        assertEquals("cipher-5", op.cipherId)
+        assertNull(op.payload)
+    }
+
+    @Test
+    fun permanentDeleteItem_removesLocalRow_andEnqueuesDelete() = runTest {
+        sessions.unlock(vaultId, key)
+        val existing = CipherEntity(
+            id = "cipher-6",
+            vaultId = vaultId,
+            type = 1,
+            encryptedPayload = "{}",
+            revisionDate = "rev",
+            deletedDate = "2026-09-08T00:00:00Z",
+        )
+        coEvery { cipherDao.get("cipher-6") } returns existing
+        coEvery { vaultDao.get(vaultId) } returns bitwardenVaultRow()
+        val opSlot = slot<PendingOpEntity>()
+        coEvery { pendingOpDao.enqueue(capture(opSlot)) } returns Unit
+        coEvery { cipherDao.deleteByIds(any()) } returns Unit
+        coEvery { syncService.flushPending(vaultId, vaultId) } returns Result.success(Unit)
+
+        val outcome = repo.permanentDeleteItem(vaultId, "cipher-6")
+
+        assertEquals(VaultSaveOutcome.Synced, outcome.getOrThrow())
+        coVerify(exactly = 1) { cipherDao.deleteByIds(listOf("cipher-6")) }
+        val op = opSlot.captured
+        assertEquals("DELETE", op.op)
+        assertNull(op.payload)
+    }
+
+    @Test
+    fun restoreOrPermanentDeleteOfActiveItem_rejected() = runTest {
+        sessions.unlock(vaultId, key)
+        val active = CipherEntity(
+            id = "cipher-7",
+            vaultId = vaultId,
+            type = 1,
+            encryptedPayload = "{}",
+            revisionDate = "rev",
+            deletedDate = null,
+        )
+        coEvery { cipherDao.get("cipher-7") } returns active
+
+        assertTrue(repo.restoreItem(vaultId, "cipher-7").isFailure)
+        assertTrue(repo.permanentDeleteItem(vaultId, "cipher-7").isFailure)
+        coVerify(exactly = 0) { pendingOpDao.enqueue(any()) }
+    }
 }

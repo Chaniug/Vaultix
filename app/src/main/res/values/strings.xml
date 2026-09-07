@@ -166,4 +166,17 @@
     <string name="detail_missing">条目不存在或已被删除</string>
     <string name="detail_item_deleted">已移入回收站</string>
     <string name="detail_copy_failed">复制失败，请重试</string>
+
+    <!-- 回收站 S19 -->
+    <string name="trash_title">回收站</string>
+    <string name="trash_empty_title">回收站是空的</string>
+    <string name="trash_empty_body">删除的条目会在这里保留 30 天后自动清除</string>
+    <string name="action_restore">恢复</string>
+    <string name="trash_restore_synced">已恢复并同步到云端</string>
+    <string name="trash_restore_queued">已恢复，联网后自动同步</string>
+    <string name="trash_delete_forever_title">永久删除</string>
+    <string name="trash_delete_forever_message">「%1$s」将从云端永久删除，此操作不可撤销。</string>
+    <string name="trash_delete_forever_confirm">永久删除</string>
+    <string name="trash_deleted_forever">已永久删除</string>
+    <string name="trash_delete_queued">已标记永久删除，联网后生效</string>
 </resources>

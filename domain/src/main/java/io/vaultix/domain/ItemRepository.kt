@@ -21,6 +21,12 @@ interface ItemRepository {
     fun observeItems(vaultId: String): Flow<List<VaultItem>>
 
     /**
+     * 观察回收站明文列表（deletedDate 非空的行；服务端回收站保留 30 天，
+     * 被服务端永久清除的行会在下次成功全量同步后被收敛删除）。
+     */
+    fun observeTrash(vaultId: String): Flow<List<VaultItem>>
+
+    /**
      * 观察单个条目明文（详情页用）。
      *
      * - [itemId] 属于其它库 / 库未解锁 / 条目不存在 → null；
@@ -54,6 +60,20 @@ interface ItemRepository {
      * （`DELETE /ciphers/{id}`；服务端 30 天后自动永久清理）。
      */
     suspend fun softDeleteItem(vaultId: String, itemId: String): Result<VaultSaveOutcome>
+
+    /**
+     * 从回收站恢复：
+     * 本地行清除 deletedDate（列表立即恢复显示）→ RESTORE 入队 → 轻量推送
+     * （`PUT /ciphers/{id}/restore`）。离线时本地先行、队列联网补推。
+     */
+    suspend fun restoreItem(vaultId: String, itemId: String): Result<VaultSaveOutcome>
+
+    /**
+     * 永久删除（不可恢复）：
+     * DELETE 入队 → 删除本地行 → 轻量推送（`DELETE /ciphers/{id}/delete`）。
+     * 离线时本地行已移除，队列保留，联网后推送（服务端 404 = 已删除 → 弃单）。
+     */
+    suspend fun permanentDeleteItem(vaultId: String, itemId: String): Result<VaultSaveOutcome>
 }
 
 /** 新建条目后的落点状态。 */

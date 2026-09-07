@@ -37,3 +37,4 @@
 | 2026-09-08 | **条目更新 = 合并上传，绝不整条重写（对齐审计批 1）** | `toUpdateRequest(item, stored, key)`：只重加密可编辑明文（name/notes/login 的 username/password），uri/totp/fido2/card/identity/sshKey/secureNote/fields 未编辑段**沿用服务端原密文**随请求提交——修复「编辑登录条目丢网址/TOTP、编辑卡/身份/SSH 条目毁载荷」的数据丢失（审计 M1-1/2） |
 | 2026-09-08 | **写路径类型守恒守卫** | type5=sshKey 显式建模；未知类型（未来 type>5）在领域层按 Login 展示但更新前校验 `existing.type == serverTypeOf(item.type)`，不一致即拒存（防 type 漂移改写服务端条目）；UI 对非 Login 类型编辑只开放名称/备注并明示 |
 | 2026-09-08 | **全量同步后收敛服务端已移除行 + flush 4xx 弃单** | 拉取成功后删除本地「不在服务端集合且无 pending ops」的 cipher/folder 行（排除离线未推送数据；Bastion deleteNotIn 语义）；上传遇 4xx（401/408/429 除外）视为服务端目标已不存在 → 永久弃单，本地行由下次全量同步裁决——修复毒丸条目卡死队列（审计 M1-5/6） |
+| 2026-09-08 | **回收站视图 = 本地先行 + dirty 队列（恢复/永久删除）** | 恢复：本地清 deletedDate（主列表立即出现）→ RESTORE 入队补推；永久删除：DELETE 入队 → 本地行立即移除（离线时队列联网补推，服务端 404 弃单）。observeItem 对已删除行视同不存在（详情 null 语义不变）；回收站行随全量同步收敛（服务端 30 天清除 / 永久删除后消失） |

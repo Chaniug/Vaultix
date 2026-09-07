@@ -286,5 +286,8 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
   （401/408/429 除外）弃单防毒丸；BitwardenSyncService 头注释已更新（编排职责在
   data:repository orchestrator）
 - UI：条目列表/详情类型徽标；非 Login 编辑隐藏登录字段并提示「专属字段只读」
+- **回收站视图（同批追加）**：observeTrash（deletedDate 非空流）+ restoreItem
+  （本地清 deletedDate → RESTORE 入队）+ permanentDeleteItem（DELETE 入队 → 本地
+  删行）；条目页顶栏 Delete 图标进 TrashScreen；observeItem 对已删行保持 null
 - 未做（推迟）：非 Login 专属字段展示/编辑（M2-1）、附件/历史（M2-2）、文件夹管理
   UI（M2-3）——见审计报告 §2 表

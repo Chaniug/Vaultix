@@ -17,6 +17,10 @@
       pending ops）；flush 4xx（401/408/429 除外）弃单
 - [x] 单测新增（mapper 载荷保真 4 例 + repository 类型守卫 1 例）；双 flavor 编译 +
       Hilt + 各模块单测 + detekt 全绿
+- [x] **回收站视图（S19，批 1 后追加）**：domain/data 新增 observeTrash /
+      restoreItem / permanentDeleteItem（本地先行 + RESTORE/DELETE 入队补推，
+      4xx 弃单）；条目页顶栏回收站入口 → TrashScreen（恢复 / 永久删除二次确认 /
+      空态 / 类型徽标）；observeItem 对已删行保持 null 语义；repository 3 例新单测
 - [x] 文档同步（MEMORY / decisions / SESSION / audit 报告）
 
 ## 已完成（第九轮 2026-09-08 · 同步编排全链路接线 + 强度条 + Bastion 快照）
@@ -65,7 +69,7 @@
       （编辑含网址/TOTP 的登录条目后字段仍在；卡/身份/SSH 条目只改名不丢字段）**
 - [ ] WorkManager 周期同步（P2 前移候选：用户期待「打开即最新」；编排器 PERIODIC
       触发已预留）
-- [ ] 移除库入口（二次确认）；回收站视图
+- [ ] **移除库入口**（二次确认）
 - [ ] UI 文案抽查迁 strings.xml（同步失败/拦截原因文案仍由 data 层直供）
 
 ## P1 · 质量基础设施（剩余）
