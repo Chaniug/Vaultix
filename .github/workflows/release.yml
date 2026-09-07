@@ -96,16 +96,27 @@ jobs:
       - name: Decode / generate keystore
         shell: bash
         run: |
+          set -o pipefail
+          KS="$GITHUB_WORKSPACE/release.jks"
           if [ -n "${{ secrets.SIGNING_KEYSTORE_BASE64 }}" ]; then
-            printf '%s' "${{ secrets.SIGNING_KEYSTORE_BASE64 }}" | base64 -d > "$GITHUB_WORKSPACE/release.jks"
+            echo "::notice title=signing::使用仓库 SIGNING_KEYSTORE_BASE64 解码固定密钥。"
+            printf '%s' "${{ secrets.SIGNING_KEYSTORE_BASE64 }}" | base64 -d > "$KS"
           else
-            echo "::warning title=No signing key::生成一次性 debug 密钥（stable 发布请配置 SIGNING_* Secrets）。"
-            keytool -genkeypair -v -keystore "$GITHUB_WORKSPACE/release.jks" \
+            echo "::warning title=No signing key::生成一次性密钥（stable 发布请配置 SIGNING_* Secrets，否则无法与 debug 互相覆盖安装）。"
+            KEYTOOL="$(command -v keytool || true)"
+            if [ -z "$KEYTOOL" ] && [ -n "${JAVA_HOME:-}" ]; then
+              KEYTOOL="$JAVA_HOME/bin/keytool"
+            fi
+            echo "::notice title=keytool path::${KEYTOOL:-<未找到>}"
+            "$KEYTOOL" -genkeypair -v -keystore "$KS" \
               -keyalg RSA -keysize 2048 -validity 10000 \
-              -alias androidkey -keypass android -storepass android \
-              -dname "CN=Vaultix, O=Vaultix"
+              -alias vaultix -keypass android -storepass android \
+              -dname "CN=Vaultix, O=Vaultix" 2>&1 || {
+                echo "::error title=keytool failed::keytool 生成密钥失败，请检查 runner JDK/keytool 可用性。"
+                exit 1
+              }
           fi
-          if [ ! -s "$GITHUB_WORKSPACE/release.jks" ]; then
+          if [ ! -s "$KS" ]; then
             echo "::error title=Keystore failed::release.jks 创建失败。"
             exit 1
           fi
@@ -177,13 +188,20 @@ jobs:
           set -o pipefail
           KS_OPTS="-Pandroid.injected.signing.store.file=$GITHUB_WORKSPACE/release.jks"
           KS_OPTS="$KS_OPTS -Pandroid.injected.signing.store.password=${SIGNING_STORE_PASSWORD:-android}"
-          KS_OPTS="$KS_OPTS -Pandroid.injected.signing.key.alias=${SIGNING_KEY_ALIAS:-androidkey}"
+          KS_OPTS="$KS_OPTS -Pandroid.injected.signing.key.alias=${SIGNING_KEY_ALIAS:-vaultix}"
           KS_OPTS="$KS_OPTS -Pandroid.injected.signing.key.password=${SIGNING_KEY_PASSWORD:-android}"
           ./gradlew :app:assembleRelease \
             --build-cache \
             --stacktrace \
-            -PversionName="${{ steps.meta.outputs.version }}" \
-            $KS_OPTS
+            -PversionName="${{ steps.meta.outputs.version }}" $KS_OPTS 2>&1 | tee /tmp/build_log.txt
+          BUILD_EXIT=${PIPESTATUS[0]}
+          if [ "$BUILD_EXIT" -ne 0 ]; then
+            echo "::notice title=Build failed::assembleRelease exit=$BUILD_EXIT"
+            grep -E "^e: |error:|FAILURE|Caused by:|Could not|What went wrong|BUILD FAILED" /tmp/build_log.txt | head -40 | while IFS= read -r line; do
+              echo "::notice title=build_err::$line"
+            done
+            exit "$BUILD_EXIT"
+          fi
         env:
           GITHUB_WORKSPACE: ${{ github.workspace }}
 

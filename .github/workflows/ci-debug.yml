@@ -99,17 +99,27 @@ jobs:
         if: github.event_name == 'push'
         shell: bash
         run: |
+          set -o pipefail
+          KS="$GITHUB_WORKSPACE/release.jks"
           if [ -n "${{ secrets.SIGNING_KEYSTORE_BASE64 }}" ]; then
-            printf '%s' "${{ secrets.SIGNING_KEYSTORE_BASE64 }}" | base64 -d > "$GITHUB_WORKSPACE/release.jks"
+            printf '%s' "${{ secrets.SIGNING_KEYSTORE_BASE64 }}" | base64 -d > "$KS"
           else
             # 未配置签名密钥时的兜底：生成一次性密钥（仅用于预览验证，不可用于正式分发，且无法与 release 互相覆盖）
             echo "::warning title=No SIGNING_KEYSTORE_BASE64::未配置签名密钥，生成一次性密钥用于预览包。正式发布请配置 SIGNING_* Secrets，否则 debug/release 无法互相覆盖安装。"
-            keytool -genkeypair -v -keystore "$GITHUB_WORKSPACE/release.jks" \
+            KEYTOOL="$(command -v keytool || true)"
+            if [ -z "$KEYTOOL" ] && [ -n "${JAVA_HOME:-}" ]; then
+              KEYTOOL="$JAVA_HOME/bin/keytool"
+            fi
+            echo "::notice title=keytool path::${KEYTOOL:-<未找到>}"
+            "$KEYTOOL" -genkeypair -v -keystore "$KS" \
               -keyalg RSA -keysize 2048 -validity 10000 \
-              -alias androidkey -keypass android -storepass android \
-              -dname "CN=Vaultix Preview, O=Vaultix"
+              -alias vaultix -keypass android -storepass android \
+              -dname "CN=Vaultix Preview, O=Vaultix" 2>&1 || {
+                echo "::error title=keytool failed::keytool 生成密钥失败，请检查 runner JDK/keytool 可用性。"
+                exit 1
+              }
           fi
-          if [ ! -s "$GITHUB_WORKSPACE/release.jks" ]; then
+          if [ ! -s "$KS" ]; then
             echo "::error title=Keystore decode failed::release.jks was not created or is empty."
             exit 1
           fi
@@ -130,7 +140,7 @@ jobs:
             # （缺省 android 仅用于“未配置 Secret”的兜底场景，此时无法与 release 互相覆盖）
             KS_OPTS="-Pandroid.injected.signing.store.file=$KS_FILE"
             KS_OPTS="$KS_OPTS -Pandroid.injected.signing.store.password=${SIGNING_STORE_PASSWORD:-android}"
-            KS_OPTS="$KS_OPTS -Pandroid.injected.signing.key.alias=${SIGNING_KEY_ALIAS:-androidkey}"
+            KS_OPTS="$KS_OPTS -Pandroid.injected.signing.key.alias=${SIGNING_KEY_ALIAS:-vaultix}"
             KS_OPTS="$KS_OPTS -Pandroid.injected.signing.key.password=${SIGNING_KEY_PASSWORD:-android}"
           fi
           ./gradlew :app:assembleFullDebug :app:assembleOfflineDebug --stacktrace \
