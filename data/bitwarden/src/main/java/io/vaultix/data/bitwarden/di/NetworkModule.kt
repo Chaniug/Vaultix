@@ -33,6 +33,13 @@ import javax.inject.Singleton
 @InstallIn(SingletonComponent::class)
 object NetworkModule {
 
+    // 网络超时策略（Docs/17 P0）：30s 内失败要能被用户感知为"失败"而非"卡死"；
+    // ping 间隔 30s 与读超时同值，防反代静默断连后长时间空等。
+    private const val CONNECT_TIMEOUT_SECONDS = 30L
+    private const val READ_TIMEOUT_SECONDS = 30L
+    private const val WRITE_TIMEOUT_SECONDS = 30L
+    private const val PING_INTERVAL_SECONDS = 30L
+
     @Provides @Singleton
     fun provideJson(): Json = BitwardenJson
 
@@ -50,12 +57,12 @@ object NetworkModule {
     @Provides @Singleton
     fun provideOkHttpClient(authenticator: Authenticator): OkHttpClient =
         OkHttpClient.Builder()
-            .connectTimeout(30, TimeUnit.SECONDS)
-            .readTimeout(30, TimeUnit.SECONDS)
-            .writeTimeout(30, TimeUnit.SECONDS)
+            .connectTimeout(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            .readTimeout(READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            .writeTimeout(WRITE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
             // 反代（nginx / Cloudflare）会静默关闭空闲连接，复用即挂死
             .retryOnConnectionFailure(true)
-            .pingInterval(30, TimeUnit.SECONDS)
+            .pingInterval(PING_INTERVAL_SECONDS, TimeUnit.SECONDS)
             .authenticator(authenticator)
             .build()
 

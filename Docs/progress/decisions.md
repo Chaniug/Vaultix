@@ -20,3 +20,5 @@
 | 2026-09-08 | **编辑沿用原条目 id，不做重映射** | PUT /ciphers/{id} 响应无新 id；本地行仅替换密文载荷，revisionDate 等下次全量同步刷新 |
 | 2026-09-08 | **自动锁定只做「切后台超时」一档** | 默认 5 分钟（autoLockTimeoutMs），elapsedRealtime 计时（Bastion 实战经验）；「立即锁/屏幕锁」等设置项待设置页 |
 | 2026-09-08 | **剪贴板清空 =「触发即忘」+ 清空前校验** | 借鉴 Bastion ClipboardUtils（GPL 溯源标注）；不清掉用户之后复制的新内容；时长取 clipboardClearMs |
+| 2026-09-08 | **Detekt 取 2.0.0-alpha.6（dev.detekt）** | 官方兼容表精确对齐 Kotlin 2.4.10 / AGP 9.3 / Gradle 9.5（1.23.x 只到 Kotlin 2.0）；Analysis API 默认开、按 compilation 自动注册；2.0 稳定后升级 |
+| 2026-09-08 | **Detekt 阈值 = Docs/16 硬上限，建议值不设门禁** | LongMethod ≤150 / LargeClass ≤1200 / 参数 ≤8 / 单类函数 ≤40（建议 60/600/6/11 仅风格参考）；Compose PascalCase（ignoreAnnotated）与命名参数数字豁免；crypto「有意捕获」用带理由 @Suppress |

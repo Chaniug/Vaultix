@@ -81,6 +81,11 @@ mockk = "1.14.11"
 #     因此可配合 Kotlin 2.4.10 + AGP 9 内置 Kotlin 使用；
 #   - 与 JaCoCo 不混用：AGP 9 内置 Kotlin 下 JaCoCo 无法插桩 Kotlin 内联函数。
 kover = "0.9.9"
+# Detekt（P1 门禁）。2.0 起插件 id 为 dev.detekt；官方兼容表 2.0.0-alpha.6 =
+# Gradle 9.6.1 / Kotlin 2.4.10 / AGP 9.3.1 / JDK25，与本站 Kotlin 2.4.10 精确对齐。
+# 2.0 特性：type resolution 默认开启并按 compilation 自动注册任务、AGP9 内置
+# Kotlin 可用、不再需要 txt 报告 / maxIssues（severity=error 即失败）。
+detekt = "2.0.0-alpha.6"
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
@@ -99,6 +104,8 @@ hilt = { id = "com.google.dagger.hilt.android", version.ref = "hilt" }
 ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 # Kover 覆盖率插件。与根工程其它插件一致，只在根声明 apply false，由模块按需应用。
 kover = { id = "org.jetbrains.kotlinx.kover", version.ref = "kover" }
+# Detekt 2.x（P1 门禁）：只在需要的模块 apply
+detekt = { id = "dev.detekt", version.ref = "detekt" }
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }

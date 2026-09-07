@@ -38,7 +38,11 @@ import org.junit.Test
  * - update：沿用原 id / revisionDate，UPDATE 入队，密文用会话密钥可还原；
  * - softDelete：本地标记 deletedDate（列表立即隐藏）+ SOFT_DELETE 入队（无 payload）；
  * - observe：未解锁返回空，解锁后明文往返一致（含 password）。
+ *
+ * 注：单测刻意直连 Dispatchers.Default（绕过 DI 门禁），生产注入点在
+ * ItemRepositoryImpl 构造（@CryptoDispatcher），此处不做注入分层。
  */
+@Suppress("InjectDispatcher")
 class ItemRepositoryImplTest {
 
     private lateinit var vaultDao: VaultDao
@@ -70,6 +74,7 @@ class ItemRepositoryImplTest {
             mapper = mapper,
             json = BitwardenJson,
             syncService = syncService,
+            cryptoDispatcher = Dispatchers.Default,
         )
     }
 

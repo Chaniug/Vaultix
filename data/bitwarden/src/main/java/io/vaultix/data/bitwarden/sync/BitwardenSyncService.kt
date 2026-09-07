@@ -64,11 +64,11 @@ class BitwardenSyncService @Inject constructor(
 
         val localRevision = vaultDao.get(vaultId)?.revisionDate
         val remoteRevision = fetchRevision(server)
+        val remoteMatchesLocal = remoteRevision != null &&
+            remoteRevision.toString() == localRevision
 
         // 2) 预检：Vaultwarden 会忽略 sinceRevisionDate 增量游标，必须显式比对
-        if (!force && localRevision != null && remoteRevision != null &&
-            remoteRevision.toString() == localRevision
-        ) {
+        if (!force && localRevision != null && remoteMatchesLocal) {
             return SyncOutcome.Skipped
         }
 

@@ -59,7 +59,7 @@ class VaultSessionManagerTest {
         val manager = VaultSessionManager()
         val key = freshKey(7)
         manager.unlock("v1", key)
-        val (encBefore, macBefore) = snapshot(key)
+        val (encBefore, _) = snapshot(key)
         assertTrue(encBefore.any { it != 0.toByte() })
 
         manager.lock("v1")

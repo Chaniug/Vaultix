@@ -1,0 +1,47 @@
+# Vaultix Detekt 门禁（P1）
+# 基线 = detekt 内置默认配置（buildUponDefaultConfig），此处只做阈值校准与
+# 项目级豁免，阈值对齐 Docs/16 工程纪律（硬上限）：
+#   单函数 ≤150 行 / 单类函数 ≤40 / 构造与函数参数 ≤8 / 单文件 ≤1200 行
+# 用法：gradlew detekt（根汇总，各模块自动按 source set/compilation 分析）。
+
+complexity:
+  LongMethod:
+    active: true
+    # Docs/16：单函数 ≤150（硬）；建议 60 只作参考，门禁取硬上限
+    allowedLines: 150
+  LargeClass:
+    active: true
+    # Docs/16：单文件 ≤1200（硬）；类行数取同值
+    allowedLines: 1200
+  LongParameterList:
+    active: true
+    # Docs/16：参数 ≤8（硬）
+    allowedFunctionParameters: 8
+    allowedConstructorParameters: 8
+  TooManyFunctions:
+    active: true
+    # Docs/16：单类函数 ≤40（硬）；2.0 按声明种类拆分计数
+    allowedFunctionsPerClass: 40
+    allowedFunctionsPerInterface: 40
+    allowedFunctionsPerObject: 40
+    allowedFunctionsPerEnum: 60
+    allowedFunctionsPerFile: 60
+
+style:
+  ReturnCount:
+    active: true
+    # 守卫子句（if 提前 return）默认不计入；其余早退风格封顶 5 个 return
+    max: 5
+    excludeGuardClauses: true
+  MagicNumber:
+    active: true
+    # UI 布局数字（16.dp / 48.dp 等）内联是 Compose 惯例；对「命名参数」字面量
+    # 放行（height = 48.dp 语义自明），未命名位置参数仍会被查
+    ignoreNamedArgument: true
+
+naming:
+  FunctionNaming:
+    active: true
+    # Compose 约定：@Composable 函数用 PascalCase（官方推荐），detekt 默认只认
+    # camelCase，此处放行标注了 @Composable 的函数
+    ignoreAnnotated: ['Composable']

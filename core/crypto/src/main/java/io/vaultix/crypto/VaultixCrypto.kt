@@ -124,6 +124,11 @@ class VaultixCrypto @Inject constructor(
      * @param parallelism 并行度 p
      * @return 32 字节 Master Key
      */
+    /**
+     * @suppress TooGenericExceptionCaught：native Argon2 失败原因不可预知（so 缺失、
+     * 链接错误、内存不足等），统一走 BC 回退；取消/线程死亡在 catch 内显式透传。
+     */
+    @Suppress("TooGenericExceptionCaught")
     fun deriveMasterKeyArgon2(
         password: String,
         salt: String,
@@ -311,7 +316,13 @@ class VaultixCrypto @Inject constructor(
         allowLegacyWithoutMac: Boolean = false,
     ): String = String(decrypt(cipherString, key, allowLegacyWithoutMac), StandardCharsets.UTF_8)
 
-    /** 解密已解析的 EncString。 */
+    /**
+     * 解密已解析的 EncString。
+     *
+     * @suppress ThrowsCount：按密文类型分发时逐一抛出契约异常（见上方 @throws 文档），
+     * 是显式 API 契约而非代码气味。
+     */
+    @Suppress("ThrowsCount")
     fun decrypt(
         parsed: ParsedCipherString,
         key: SymmetricCryptoKey,
@@ -532,6 +543,14 @@ class VaultixCrypto @Inject constructor(
         }
     }
 
+    /**
+     * BouncyCastle Argon2id 回退实现（native 失败时启用，见 [deriveMasterKeyArgon2]）。
+     *
+     * @suppress SwallowedException：catch 里的 OOM 有意不链作 cause——它只是触发
+     * 条件，替换后的异常已携带可执行诊断（请求/堆上限/安全建议），保留 OOM 链
+     * 反而掩盖信息。
+     */
+    @Suppress("SwallowedException")
     private fun deriveArgon2BouncyCastle(
         passwordBytes: ByteArray,
         saltHash: ByteArray,
@@ -580,7 +599,7 @@ class VaultixCrypto @Inject constructor(
     private fun argon2MemoryKiB(memoryMb: Int): Int {
         require(memoryMb > 0) { "Vaultix Argon2id KDF memory must be positive: $memoryMb" }
         return try {
-            Math.multiplyExact(memoryMb, 1024)
+            Math.multiplyExact(memoryMb, KIB_PER_MIB)
         } catch (error: ArithmeticException) {
             throw IllegalArgumentException(
                 "Vaultix Argon2id KDF memory is too large: ${memoryMb}MB",
@@ -590,6 +609,9 @@ class VaultixCrypto @Inject constructor(
     }
 
     companion object {
+        /** 1 MiB = 1024 KiB（Argon2 内存换算）。 */
+        const val KIB_PER_MIB = 1024
+
         /** AES-CBC 变换名（PKCS5Padding 在 JCE 中即 PKCS#7）。 */
         private const val AES_CBC_TRANSFORMATION = "AES/CBC/PKCS5Padding"
 

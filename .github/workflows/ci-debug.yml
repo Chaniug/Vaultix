@@ -27,6 +27,7 @@ on:
       - '**/*.sh'
       - '.github/scripts/**'
       - '.github/workflows/ci-debug.yml'
+      - 'config/**'
   pull_request:
     branches: [ main ]
     paths:
@@ -41,6 +42,7 @@ on:
       - 'gradlew'
       - 'gradlew.bat'
       - '.github/workflows/ci-debug.yml'
+      - 'config/**'
   workflow_dispatch:
 
 permissions:
@@ -101,6 +103,12 @@ jobs:
         # ConfigurationCacheError（并连带导致 androidTest classpath 解析失败）。
         # CI 的 GRADLE_OPTS 全局开启了 configuration-cache，故此处显式关闭。
         run: ./gradlew :app:lintFullDebug :app:lintOfflineDebug --stacktrace --no-configuration-cache
+
+      # Detekt 质量门禁（P1，Docs/16 代码规模纪律）：push / PR 均执行。
+      # 规则阈值在 config/detekt/detekt.yml；同 lint 用 --no-configuration-cache 规避
+      # AGP/Worker API 与配置缓存的兼容坑（见上一条 lint 注释）。
+      - name: Run detekt (quality gate)
+        run: ./gradlew detekt --stacktrace --no-configuration-cache
 
       # push 时注入仓库固定签名，使 preview(debug) 与 stable release 签名完全一致、可互相覆盖安装。
       # 注意：本步骤与 release.yml 使用同一套 SIGNING_* Secret，密码也复用 Secret（不再硬编码 android），
@@ -257,9 +265,12 @@ jobs:
         id: unit_tests
         continue-on-error: true
         # 同 lint：多 flavor 下 `testDebugUnitTest` 亦有歧义，需显式指定 variant。
-        # 同时把 core:crypto 的单元测试（172 例，Kover 门禁 ≥80%）纳入 CI 验证——
-        # 此前只跑 :app 的测试，而 :app 当时并无用例，等于单测从未在 CI 真正执行。
-        run: ./gradlew :core:crypto:testDebugUnitTest :app:testFullDebugUnitTest --continue --stacktrace
+        # 同时把 core:crypto（172 例，Kover 门禁 ≥80%）与 data:repository（会话/
+        # 条目写路径 11 例）的单元测试纳入 CI 验证——此前只跑 :app 的测试，
+        # 而 :app 当时并无用例，等于单测从未在 CI 真正执行。
+        run: >-
+          ./gradlew :core:crypto:testDebugUnitTest :app:testFullDebugUnitTest
+          :data:repository:testDebugUnitTest --continue --stacktrace
 
       - name: Upload unit test reports
         if: always()

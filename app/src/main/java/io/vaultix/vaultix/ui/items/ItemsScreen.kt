@@ -63,6 +63,9 @@ import io.vaultix.vaultix.ui.common.ItemFormDialog
  * - 同步状态提示条 + 手动同步 / 立即锁定动作；
  * - 行点击 → 详情页；空态居中引导；新建走 dirty 队列 + 轻量推送。
  */
+
+/** 同步成功/跳过提示的自动消失延迟（ms）。 */
+private const val NOTE_DISMISS_DELAY_MS = 2_000L
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ItemsScreen(
@@ -189,7 +192,7 @@ private fun SyncNoteBanner(
 ) {
     LaunchedEffect(note) {
         if (note is ItemsViewModel.SyncNote.Success || note is ItemsViewModel.SyncNote.Skipped) {
-            kotlinx.coroutines.delay(2_000)
+            kotlinx.coroutines.delay(NOTE_DISMISS_DELAY_MS)
             onDismiss()
         }
     }

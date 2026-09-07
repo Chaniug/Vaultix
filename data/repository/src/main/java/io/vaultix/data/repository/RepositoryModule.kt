@@ -17,13 +17,13 @@ import javax.inject.Singleton
  */
 @Module
 @InstallIn(SingletonComponent::class)
-abstract class RepositoryModule {
+interface RepositoryModule {
 
     @Binds
     @Singleton
-    abstract fun bindVaultRepository(impl: VaultRepositoryImpl): VaultRepository
+    fun bindVaultRepository(impl: VaultRepositoryImpl): VaultRepository
 
     @Binds
     @Singleton
-    abstract fun bindItemRepository(impl: ItemRepositoryImpl): ItemRepository
+    fun bindItemRepository(impl: ItemRepositoryImpl): ItemRepository
 }

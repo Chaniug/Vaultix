@@ -36,7 +36,14 @@
 | `core:crypto` 行覆盖 | 91.4% | ≥ 80% | ✅ |
 | `core:crypto` 用例数 | 172 | — | ✅ |
 | `data:repository` 单测 | 11 通过（会话 5 + 条目写路径 6） | — | ✅ |
+| Detekt（全模块 main+test） | 0 违规 | 0 | ✅ |
 | 构建 | `:app:compile{Full,Offline}DebugKotlin` 通过 | 通过 | ✅ |
+
+## 质量工具
+
+- Detekt `dev.detekt` 2.0.0-alpha.6（2026-09-08 上线，阈值 `config/detekt/detekt.yml`，
+  根工程统一启用，CI push/PR 门禁）
+- Kover ≥80% 行覆盖门禁（core:crypto）
 
 ## 技术栈（未变）
 

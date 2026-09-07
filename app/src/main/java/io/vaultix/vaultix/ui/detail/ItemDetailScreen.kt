@@ -53,6 +53,85 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.vaultix.model.VaultItem
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.ItemFormDialog
+import android.content.Context
+
+/**
+ * 详情页一次性事件 → 用户文案（Deleted 由调用方导航，返回 null）。
+ * 抽取为纯函数以控制主 Composable 的圈复杂度与行长。
+ */
+private fun detailEventMessage(context: Context, event: ItemDetailViewModel.UiEvent): String? =
+    when (event) {
+        is ItemDetailViewModel.UiEvent.CopyDone -> {
+            val res = when {
+                event.isPassword && event.clearSeconds > 0 -> R.string.copy_password_clears
+                event.isPassword -> R.string.copy_password
+                event.clearSeconds > 0 -> R.string.copy_username_clears
+                else -> R.string.copy_username
+            }
+            if (event.clearSeconds > 0) {
+                context.getString(res, event.clearSeconds)
+            } else {
+                context.getString(res)
+            }
+        }
+        ItemDetailViewModel.UiEvent.CopyFailed -> context.getString(R.string.detail_copy_failed)
+        ItemDetailViewModel.UiEvent.SaveSynced -> context.getString(R.string.item_saved_synced)
+        ItemDetailViewModel.UiEvent.SaveQueued -> context.getString(R.string.item_saved_queued)
+        is ItemDetailViewModel.UiEvent.SaveFailed ->
+            context.getString(R.string.item_save_failed, event.message)
+        ItemDetailViewModel.UiEvent.Deleted -> null
+    }
+
+/** 掩码星号数量上限（密码过长时截断显示，复制不受影响）。 */
+private const val MAX_MASK_LENGTH = 24
+
+/** 详情内容区：忙碌转圈 / 缺失提示 / 分区卡片（独立以便控制主 Composable 圈复杂度）。 */
+@Composable
+private fun DetailBodyContent(
+    modifier: Modifier,
+    busy: Boolean,
+    item: VaultItem?,
+    showPassword: Boolean,
+    onTogglePassword: () -> Unit,
+    onCopyUsername: () -> Unit,
+    onCopyPassword: () -> Unit,
+) {
+    Box(modifier = modifier) {
+        when {
+            busy -> CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+            item == null -> Text(
+                text = stringResource(R.string.detail_missing),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .padding(32.dp),
+            )
+            else -> Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+            ) {
+                if (item.username.isNotBlank() || item.password.isNotBlank()) {
+                    LoginSection(
+                        item = item,
+                        showPassword = showPassword,
+                        onTogglePassword = onTogglePassword,
+                        onCopyUsername = onCopyUsername,
+                        onCopyPassword = onCopyPassword,
+                    )
+                }
+                if (item.notes.isNotBlank()) {
+                    Spacer(Modifier.height(12.dp))
+                    NotesSection(notes = item.notes)
+                }
+                Spacer(Modifier.height(24.dp))
+            }
+        }
+    }
+}
 
 /**
  * 条目详情（Docs/08 S9 最小版）。
@@ -80,35 +159,12 @@ fun ItemDetailScreen(
     LaunchedEffect(Unit) {
         viewModel.events.collect { event ->
             when (event) {
-                ItemDetailViewModel.UiEvent.Deleted -> {
-                    onDeleted()
-                }
+                ItemDetailViewModel.UiEvent.Deleted -> onDeleted()
                 else -> {
-                    val message = when (event) {
-                        is ItemDetailViewModel.UiEvent.CopyDone -> {
-                            val res = when {
-                                event.isPassword && event.clearSeconds > 0 -> R.string.copy_password_clears
-                                event.isPassword -> R.string.copy_password
-                                event.clearSeconds > 0 -> R.string.copy_username_clears
-                                else -> R.string.copy_username
-                            }
-                            if (event.clearSeconds > 0) {
-                                context.getString(res, event.clearSeconds)
-                            } else {
-                                context.getString(res)
-                            }
-                        }
-                        ItemDetailViewModel.UiEvent.CopyFailed ->
-                            context.getString(R.string.detail_copy_failed)
-                        ItemDetailViewModel.UiEvent.SaveSynced ->
-                            context.getString(R.string.item_saved_synced)
-                        ItemDetailViewModel.UiEvent.SaveQueued ->
-                            context.getString(R.string.item_saved_queued)
-                        is ItemDetailViewModel.UiEvent.SaveFailed ->
-                            context.getString(R.string.item_save_failed, event.message)
-                        ItemDetailViewModel.UiEvent.Deleted -> "" // 已在上方处理
+                    val message = detailEventMessage(context, event)
+                    if (!message.isNullOrBlank()) {
+                        snackbarHostState.showSnackbar(message)
                     }
-                    snackbarHostState.showSnackbar(message)
                 }
             }
         }
@@ -140,51 +196,17 @@ fun ItemDetailScreen(
             )
         },
     ) { padding ->
-        Box(
+        DetailBodyContent(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding),
-        ) {
-            when {
-                state.saving || state.deleting -> {
-                    CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
-                }
-                item == null -> {
-                    Text(
-                        text = stringResource(R.string.detail_missing),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                        modifier = Modifier
-                            .align(Alignment.Center)
-                            .padding(32.dp),
-                    )
-                }
-                else -> {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .verticalScroll(rememberScrollState())
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
-                    ) {
-                        if (item.username.isNotBlank() || item.password.isNotBlank()) {
-                            LoginSection(
-                                item = item,
-                                showPassword = showPassword,
-                                onTogglePassword = { showPassword = !showPassword },
-                                onCopyUsername = viewModel::copyUsername,
-                                onCopyPassword = viewModel::copyPassword,
-                            )
-                        }
-                        if (item.notes.isNotBlank()) {
-                            Spacer(Modifier.height(12.dp))
-                            NotesSection(notes = item.notes)
-                        }
-                        Spacer(Modifier.height(24.dp))
-                    }
-                }
-            }
-        }
+            busy = state.saving || state.deleting,
+            item = item,
+            showPassword = showPassword,
+            onTogglePassword = { showPassword = !showPassword },
+            onCopyUsername = viewModel::copyUsername,
+            onCopyPassword = viewModel::copyPassword,
+        )
     }
 
     if (editOpen && item != null) {
@@ -268,9 +290,10 @@ private fun LoginSection(
                 )
             }
             if (item.password.isNotBlank()) {
+                val masked = "•".repeat(item.password.length.coerceAtMost(MAX_MASK_LENGTH))
                 DetailFieldRow(
                     label = stringResource(R.string.item_field_password),
-                    value = if (showPassword) item.password else "•".repeat(item.password.length.coerceAtMost(24)),
+                    value = if (showPassword) item.password else masked,
                     valueFontFamily = FontFamily.Monospace,
                     extraAction = {
                         IconButton(onClick = onTogglePassword) {

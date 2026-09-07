@@ -171,3 +171,16 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 - 复用小结（写 UI 前先翻 Bastion）：Bastion 详情/编辑页 3371/4732 行巨型文件
   **不可整搬**（Docs/16 反例），只借鉴其小型工具与语义（ClipboardUtils、SessionManager
   计时规则）；搬运必须 GPL 溯源声明
+
+## Detekt 门禁上线（2026-09-08 第三轮）
+- **`dev.detekt` 2.0.0-alpha.6**（官方兼容表精确对齐 Kotlin 2.4.10/AGP 9.3/Gradle 9.5；
+  1.23.x 仅到 Kotlin 2.0 不可用；2.0 稳定后需升级）
+- 根 build.gradle.kts `subprojects` 统一 apply（android-application/library 插件回调），
+  config: `config/detekt/detekt.yml` + `buildUponDefaultConfig`，阈值=Docs/16 硬上限
+  （LongMethod≤150 / LargeClass≤1200 / 参数≤8 / 单类≤40 函数）
+- 豁免：Compose `@Composable` PascalCase（ignoreAnnotated）、命名参数 MagicNumber；
+  crypto「有意捕获」用 **带理由的 @Suppress**（勿删）
+- 本地命令 `gradlew detekt`（含测试源）；CI push/PR 门禁 + `config/**` 触发路径
+- 清理动作范例：ItemDetailScreen 拆分 DetailBodyContent 降圈复杂度 17→≤14、
+  ItemRepositoryImpl 解密 flowOn 注入 @CryptoDispatcher（InjectDispatcher 规则）、
+  RepositoryModule abstract class→interface、网络超时 30s 常量、`delay(2_000)` 常量

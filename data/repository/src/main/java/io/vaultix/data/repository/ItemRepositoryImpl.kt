@@ -1,5 +1,6 @@
 package io.vaultix.data.repository
 
+import io.vaultix.crypto.di.CryptoDispatcher
 import io.vaultix.data.bitwarden.mapper.CipherMapper
 import io.vaultix.data.bitwarden.model.CipherDto
 import io.vaultix.data.bitwarden.model.toStoredCipherDto
@@ -13,7 +14,7 @@ import io.vaultix.domain.ItemRepository
 import io.vaultix.domain.VaultSaveOutcome
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultKind
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flowOn
@@ -28,8 +29,9 @@ import javax.inject.Singleton
  * 条目读写实现。
  *
  * 读取链路：Room 密文快照（CipherDto JSON，EncString 字段）→ 会话密钥 → 明文
- * [VaultItem]。解密在 [Dispatchers.Default]（Docs/10：加解密切 Default），
- * 只在解锁会话内进行；损坏条目跳过，不拖垮整个列表。
+ * [VaultItem]。解密在注入的 crypto 调度器上执行（Docs/10：加解密切 Default 类，
+ * 统一走 core:crypto 的 @CryptoDispatcher，避免硬编码），只在解锁会话内进行；
+ * 损坏条目跳过，不拖垮整个列表。
  *
  * 写入链路：
  * - 新建：本地 uuid + 密文行（立即可见）→ pending_ops 入队 → 轻量推送；
@@ -46,6 +48,7 @@ class ItemRepositoryImpl @Inject constructor(
     private val mapper: CipherMapper,
     private val json: Json,
     private val syncService: BitwardenSyncService,
+    @CryptoDispatcher private val cryptoDispatcher: CoroutineDispatcher,
 ) : ItemRepository {
 
     override fun observeItems(vaultId: String): Flow<List<VaultItem>> =
@@ -158,7 +161,7 @@ class ItemRepositoryImpl @Inject constructor(
 
     // ---- 内部 ----
 
-    /** Room 密文行流 + 解锁状态 → 已解密明文列表流（在 Default 上解码）。 */
+    /** Room 密文行流 + 解锁状态 → 已解密明文列表流（在注入的 crypto 调度器上解码）。 */
     private fun observeState(vaultId: String, source: Flow<List<CipherEntity>>): Flow<List<VaultItem>> =
         combine(source, sessions.unlockedIds) { rows, unlocked ->
             rows to (vaultId in unlocked)
@@ -166,7 +169,7 @@ class ItemRepositoryImpl @Inject constructor(
             .map { (rows, isUnlocked) ->
                 if (!isUnlocked) emptyList() else decodeAll(vaultId, rows)
             }
-            .flowOn(Dispatchers.Default)
+            .flowOn(cryptoDispatcher)
 
     /** 解密当前快照；已删除 / 解析或解密失败的条目跳过（列表可浏览优先）。 */
     private suspend fun decodeAll(vaultId: String, rows: List<CipherEntity>): List<VaultItem> {
