@@ -1,30 +1,48 @@
 package io.vaultix.vaultix.ui
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
-import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.navigation.toRoute
 import io.vaultix.vaultix.ui.addvault.AddVaultScreen
+import io.vaultix.vaultix.ui.detail.ItemDetailScreen
 import io.vaultix.vaultix.ui.items.ItemsScreen
+import io.vaultix.vaultix.ui.items.ItemsViewModel
 import io.vaultix.vaultix.ui.unlock.UnlockScreen
 import io.vaultix.vaultix.ui.unlock.UnlockViewModel
-import io.vaultix.vaultix.ui.items.ItemsViewModel
 import io.vaultix.vaultix.ui.vaultlist.VaultListScreen
 
 /**
- * 应用导航（Docs/08 §1，M1 最小闭环）：
+ * 应用导航（Docs/08 §1，M1 闭环）：
  *
  *   VaultList ──添加──▶ AddVault ──成功──▶ 返回列表（新库已解锁）
  *       │
- *       ├─ 点按已解锁库 ───────────────▶ Items
- *       └─ 点按已锁定库 ─▶ Unlock ─成功─▶ Items（替换 Unlock）
+ *       ├─ 点按已解锁库 ─────▶ Items ──点条目──▶ ItemDetail（编辑/删除）
+ *       └─ 点按已锁定库 ──▶ Unlock ──成功──▶ Items（替换 Unlock）
  *
- * 锁定任意库后回到列表。offline 分发不展示「连接 Bitwarden」入口（AppFlavor）。
+ * 自动锁定（AutoLockController.lockEvents）触发时清掉所有上层路由回列表。
+ * offline 分发不展示「连接 Bitwarden」入口（AppFlavor）。
  */
 @Composable
 fun VaultixApp() {
     val navController = rememberNavController()
+    val shellViewModel: VaultShellViewModel = hiltViewModel()
+    val lockEpoch by shellViewModel.lockEpoch.collectAsStateWithLifecycle()
+
+    LaunchedEffect(lockEpoch) {
+        if (lockEpoch > 0) {
+            navController.navigate(VaultListRoute) {
+                popUpTo(VaultListRoute) { inclusive = false }
+                launchSingleTop = true
+            }
+        }
+    }
 
     NavHost(
         navController = navController,
@@ -60,11 +78,23 @@ fun VaultixApp() {
             )
         }
         composable<ItemsRoute> { entry ->
+            val route = entry.toRoute<ItemsRoute>()
             val viewModel: ItemsViewModel = hiltViewModel(entry)
             ItemsScreen(
                 viewModel = viewModel,
                 onBack = { navController.popBackStack() },
                 onLocked = { navController.popBackStack() },
+                onOpenItem = { item ->
+                    navController.navigate(ItemRoute(vaultId = route.vaultId, itemId = item.id))
+                },
+            )
+        }
+        composable<ItemRoute> { entry ->
+            ItemDetailScreen(
+                onBack = { navController.popBackStack() },
+                onDeleted = {
+                    navController.popBackStack()
+                },
             )
         }
     }

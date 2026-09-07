@@ -9,15 +9,12 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
@@ -25,17 +22,13 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeTopAppBar
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -56,27 +49,26 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.vaultix.model.VaultItem
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.common.ItemFormDialog
 
 /**
- * 条目列表（Docs/08 S7 最小版）+ 新建条目对话框（S10 最小版：仅登录条目字段）。
+ * 条目列表（Docs/08 S7 最小版）+ 新建条目对话框（S10 最小版）。
  *
  * - 大标题随滚动缩放（Docs/16 §4 交互基线）；
  * - 同步状态提示条 + 手动同步 / 立即锁定动作；
- * - 空态居中引导；新建走 dirty 队列 + 轻量推送。
+ * - 行点击 → 详情页；空态居中引导；新建走 dirty 队列 + 轻量推送。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ItemsScreen(
     onBack: () -> Unit,
     onLocked: () -> Unit,
+    onOpenItem: (VaultItem) -> Unit,
     viewModel: ItemsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -168,7 +160,7 @@ fun ItemsScreen(
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
                 ) {
                     items(state.items, key = { it.id }) { item ->
-                        ItemRow(item)
+                        ItemRow(item = item, onClick = { onOpenItem(item) })
                     }
                 }
             }
@@ -176,7 +168,8 @@ fun ItemsScreen(
     }
 
     if (showCreateDialog) {
-        CreateItemDialog(
+        ItemFormDialog(
+            title = stringResource(R.string.items_new_item),
             saving = state.saving,
             onDismiss = { showCreateDialog = false },
             onSave = { name, username, password, notes ->
@@ -299,9 +292,9 @@ private fun EmptyItemsState() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ItemRow(item: VaultItem) {
+private fun ItemRow(item: VaultItem, onClick: () -> Unit) {
     Surface(
-        onClick = { /* M1 最小闭环：详情页留待后续 */ },
+        onClick = onClick,
         color = MaterialTheme.colorScheme.surface,
         shape = MaterialTheme.shapes.large,
         modifier = Modifier
@@ -341,85 +334,4 @@ private fun ItemRow(item: VaultItem) {
             }
         }
     }
-}
-
-/** 新建条目（仅登录条目字段；名称必填）。密码仅在本对话框内存中停留。 */
-@Composable
-private fun CreateItemDialog(
-    saving: Boolean,
-    onDismiss: () -> Unit,
-    onSave: (name: String, username: String, password: String, notes: String) -> Unit,
-) {
-    var name by rememberSaveable { mutableStateOf("") }
-    var username by rememberSaveable { mutableStateOf("") }
-    var password by rememberSaveable { mutableStateOf("") }
-    var notes by rememberSaveable { mutableStateOf("") }
-    var showNameError by rememberSaveable { mutableStateOf(false) }
-
-    AlertDialog(
-        onDismissRequest = { if (!saving) onDismiss() },
-        title = { Text(stringResource(R.string.items_new_item)) },
-        text = {
-            Column(modifier = Modifier.imePadding()) {
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it; showNameError = false },
-                    label = { Text(stringResource(R.string.item_field_name)) },
-                    singleLine = true,
-                    isError = showNameError,
-                    supportingText = if (showNameError) {
-                        { Text(stringResource(R.string.item_name_required)) }
-                    } else {
-                        null
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = username,
-                    onValueChange = { username = it },
-                    label = { Text(stringResource(R.string.item_field_username)) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = password,
-                    onValueChange = { password = it },
-                    label = { Text(stringResource(R.string.item_field_password)) },
-                    singleLine = true,
-                    visualTransformation = PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = notes,
-                    onValueChange = { notes = it },
-                    label = { Text(stringResource(R.string.item_field_notes)) },
-                    minLines = 2,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(
-                enabled = !saving,
-                onClick = {
-                    if (name.isBlank()) {
-                        showNameError = true
-                    } else {
-                        onSave(name, username, password, notes)
-                    }
-                },
-            ) {
-                Text(stringResource(R.string.action_save))
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !saving) {
-                Text(stringResource(R.string.action_cancel))
-            }
-        },
-    )
 }

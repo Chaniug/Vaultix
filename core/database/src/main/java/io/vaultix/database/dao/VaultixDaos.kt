@@ -45,6 +45,10 @@ interface CipherDao {
     @Query("SELECT * FROM ciphers WHERE id = :id")
     suspend fun get(id: String): CipherEntity?
 
+    /** 单条目流（详情页用；删除/换 id 后自动重发）。 */
+    @Query("SELECT * FROM ciphers WHERE id = :id")
+    fun observe(id: String): Flow<CipherEntity?>
+
     @Upsert suspend fun upsertAll(items: List<CipherEntity>)
 
     @Query("DELETE FROM ciphers WHERE id IN (:ids)")

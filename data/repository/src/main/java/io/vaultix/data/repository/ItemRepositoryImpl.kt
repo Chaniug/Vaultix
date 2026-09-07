@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.json.Json
+import java.time.Instant
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -30,9 +31,11 @@ import javax.inject.Singleton
  * [VaultItem]。解密在 [Dispatchers.Default]（Docs/10：加解密切 Default），
  * 只在解锁会话内进行；损坏条目跳过，不拖垮整个列表。
  *
- * 写入链路（新建）：本地 uuid + 密文行（立即可见）→ pending_ops 入队 →
- * 轻量推送（`POST /ciphers`，不等待整库下载）。服务端分配新 id 时由
- * BitwardenSyncService.flushPending 做本地行重映射。
+ * 写入链路：
+ * - 新建：本地 uuid + 密文行（立即可见）→ pending_ops 入队 → 轻量推送；
+ *   服务端分配新 id 时由 BitwardenSyncService.flushPending 重映射本地行；
+ * - 更新：沿用原 id 覆盖密文行 → UPDATE 入队 → 轻量推送（PUT /ciphers/{id}）；
+ * - 软删除：本地行标记 deletedDate（列表立即隐藏）→ SOFT_DELETE 入队 → 轻量推送。
  */
 @Singleton
 class ItemRepositoryImpl @Inject constructor(
@@ -46,13 +49,14 @@ class ItemRepositoryImpl @Inject constructor(
 ) : ItemRepository {
 
     override fun observeItems(vaultId: String): Flow<List<VaultItem>> =
-        combine(cipherDao.observeByVault(vaultId), sessions.unlockedIds) { rows, unlocked ->
-            rows to (vaultId in unlocked)
+        observeState(vaultId, cipherDao.observeByVault(vaultId))
+
+    override fun observeItem(vaultId: String, itemId: String): Flow<VaultItem?> {
+        val single = cipherDao.observe(itemId).map { row ->
+            if (row == null) emptyList() else listOf(row)
         }
-            .map { (rows, isUnlocked) ->
-                if (!isUnlocked) emptyList() else decodeAll(vaultId, rows)
-            }
-            .flowOn(Dispatchers.Default)
+        return observeState(vaultId, single).map { list -> list.firstOrNull() }
+    }
 
     override suspend fun createItem(vaultId: String, item: VaultItem): Result<VaultSaveOutcome> =
         runCatching {
@@ -89,28 +93,104 @@ class ItemRepositoryImpl @Inject constructor(
                 ),
             )
 
-            // 3) 轻量推送（不等整库下载）；失败则留在队列等下次同步
-            val row = vaultDao.get(vaultId)
-            val server = row?.origin?.takeIf { VaultKind.fromName(row.kind) == VaultKind.BITWARDEN }
-            if (server == null) {
-                VaultSaveOutcome.Queued
-            } else {
-                val flush = syncService.flushPending(vaultId, server)
-                if (flush.isSuccess) VaultSaveOutcome.Synced else VaultSaveOutcome.Queued
-            }
+            flushAfterLocalWrite(vaultId)
         }
 
-    /** 解密某库当前快照；个别条目解析/解密失败时跳过（列表可浏览优先）。 */
+    override suspend fun updateItem(vaultId: String, item: VaultItem): Result<VaultSaveOutcome> =
+        runCatching {
+            val key = sessions.keyOf(vaultId) ?: error("库未解锁，无法保存：$vaultId")
+            val existing = cipherDao.get(item.id) ?: error("条目不存在：${item.id}")
+            require(existing.vaultId == vaultId) { "条目不属于该库：${item.id}" }
+            require(existing.deletedDate == null) { "条目已在回收站，无法编辑：${item.id}" }
+
+            // 更新沿用原 id：folderId/favorite 是实体明文列，原样保留
+            val request = mapper.toRequest(item, key)
+                .copy(folderId = existing.folderId, favorite = existing.favorite)
+            val dto = request.toStoredCipherDto(id = existing.id, revisionDate = existing.revisionDate)
+
+            cipherDao.upsertAll(
+                listOf(
+                    existing.copy(
+                        type = request.type,
+                        encryptedPayload = json.encodeToString(dto),
+                        favorite = existing.favorite,
+                    ),
+                ),
+            )
+            pendingOpDao.enqueue(
+                PendingOpEntity(
+                    vaultId = vaultId,
+                    cipherId = existing.id,
+                    op = OP_UPDATE,
+                    payload = json.encodeToString(request),
+                    createdAt = System.currentTimeMillis(),
+                ),
+            )
+
+            flushAfterLocalWrite(vaultId)
+        }
+
+    override suspend fun softDeleteItem(vaultId: String, itemId: String): Result<VaultSaveOutcome> =
+        runCatching {
+            val existing = cipherDao.get(itemId) ?: error("条目不存在：$itemId")
+            require(existing.vaultId == vaultId) { "条目不属于该库：$itemId" }
+
+            // 本地立即标记删除：列表查询（deletedDate IS NULL）随之隐藏
+            cipherDao.upsertAll(
+                listOf(
+                    existing.copy(
+                        deletedDate = Instant.now().toString(),
+                    ),
+                ),
+            )
+            pendingOpDao.enqueue(
+                PendingOpEntity(
+                    vaultId = vaultId,
+                    cipherId = itemId,
+                    op = OP_SOFT_DELETE,
+                    payload = null,
+                    createdAt = System.currentTimeMillis(),
+                ),
+            )
+
+            flushAfterLocalWrite(vaultId)
+        }
+
+    // ---- 内部 ----
+
+    /** Room 密文行流 + 解锁状态 → 已解密明文列表流（在 Default 上解码）。 */
+    private fun observeState(vaultId: String, source: Flow<List<CipherEntity>>): Flow<List<VaultItem>> =
+        combine(source, sessions.unlockedIds) { rows, unlocked ->
+            rows to (vaultId in unlocked)
+        }
+            .map { (rows, isUnlocked) ->
+                if (!isUnlocked) emptyList() else decodeAll(vaultId, rows)
+            }
+            .flowOn(Dispatchers.Default)
+
+    /** 解密当前快照；已删除 / 解析或解密失败的条目跳过（列表可浏览优先）。 */
     private suspend fun decodeAll(vaultId: String, rows: List<CipherEntity>): List<VaultItem> {
         val key = sessions.keyOf(vaultId) ?: return emptyList()
         return rows.mapNotNull { row ->
+            if (row.deletedDate != null) return@mapNotNull null
             runCatching { json.decodeFromString<CipherDto>(row.encryptedPayload) }
                 .getOrNull()
                 ?.let { dto -> mapper.toDomain(dto, key) }
         }
     }
 
+    /** 写库完成后的轻量推送；非 Bitwarden 库（未来 KDBX）不入队推送逻辑。 */
+    private suspend fun flushAfterLocalWrite(vaultId: String): VaultSaveOutcome {
+        val row = vaultDao.get(vaultId)
+        val server = row?.origin?.takeIf { VaultKind.fromName(row.kind) == VaultKind.BITWARDEN }
+            ?: return VaultSaveOutcome.Queued
+        val flush = syncService.flushPending(vaultId, server)
+        return if (flush.isSuccess) VaultSaveOutcome.Synced else VaultSaveOutcome.Queued
+    }
+
     private companion object {
         const val OP_CREATE = "CREATE"
+        const val OP_UPDATE = "UPDATE"
+        const val OP_SOFT_DELETE = "SOFT_DELETE"
     }
 }

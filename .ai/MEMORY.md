@@ -157,3 +157,17 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 - app → domain/data:repository 依赖已装配；offline flavor 用 `AppFlavor.supportsBitwarden`
   隐藏入口，两 flavor 编译均绿
 - M1 剩余：条目编辑/删除、自动锁定（AppLifecycleObserver）、移除库、文案收编
+
+## P0 全部落地（2026-09-08 第二轮，详见 SESSION-2026-09-08.md「第二轮」）
+- 条目详情（S9 最小版）+ 编辑（S10 最小版）+ 软删除（回收站语义）
+- `VaultixClipboard`（app）：敏感复制 + 自动清除，**借鉴 Bastion ClipboardUtils
+  （GPL 溯源已标注）**：触发即忘延迟清空、清空前校验内容未被改写、API33+ IS_SENSITIVE；
+  时长接 `clipboardClearMs`（默认 30s）
+- `AutoLockController`（app）：ProcessLifecycleOwner 切后台计时（elapsedRealtime）、
+  回前台超时（`autoLockTimeoutMs` 默认 5 分钟）即 `lockAll()` + 锁定代次事件强制回根路由；
+  注册在 VaultixApplication（Hilt 字段注入）
+- ItemRepository 新增：`observeItem` / `updateItem`（沿用原 id）/ `softDeleteItem`
+  （本地标记 deletedDate + SOFT_DELETE 入队）；单测 11 个全绿
+- 复用小结（写 UI 前先翻 Bastion）：Bastion 详情/编辑页 3371/4732 行巨型文件
+  **不可整搬**（Docs/16 反例），只借鉴其小型工具与语义（ClipboardUtils、SessionManager
+  计时规则）；搬运必须 GPL 溯源声明

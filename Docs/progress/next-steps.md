@@ -1,40 +1,42 @@
 # 下一步任务清单
 
-> 更新于 2026-09-08。P0 最小闭环已打通（添加库 → 解锁 → 条目列表 → 新建条目）。
+> 更新于 2026-09-08（第二轮）。P0 已全部落地：详情/编辑/删除 + 自动锁定 + 复制。
 > 状态：`TODO` / `DOING` / `DONE` / `BLOCKED`
 
-## 已完成（本轮 2026-09-08，供对照）
+## 已完成（本轮 2026-09-08 第二轮，供对照）
 
-- [x] **库注册 + 会话管理**：登录成功写 `VaultEntity`（v2 加 `account` 邮箱列，
-      Migration 1→2）；`VaultSessionManager`（内存持有对称密钥、lock 清零、幂等）
-- [x] **data:repository 落地**：`VaultRepositoryImpl` / `ItemRepositoryImpl` +
-      domain 接口（`domain` 首个真实代码）；5 个会话单测通过
-- [x] **UI 最小闭环**（app 内按包组织）：库列表（空态/锁定徽标）→
-      连接 Bitwarden 表单（自托管地址 + 2FA/凭据/网络错误分类文案）→
-      解锁页 → 条目列表（空态、同步提示条、手动同步、立即锁定）→ 新建条目对话框
-      （`CipherMapper.toRequest` → 密文行 + dirty 队列 → 轻量推送）
-- [x] **新建条目推送换 id 重映射**：服务端 `POST /ciphers` 分配新 id 后本地行
-      按服务端 id 重建（密文来自请求体，无需重拉），避免全量同步后双行
-- [x] 双 flavor 编译通过（full / offline；offline 隐藏 Bitwarden 入口）
-- [x] 大标题随滚动缩放（M3 `LargeTopAppBar` + nestedScroll）已应用在库列表与条目列表
+- [x] **条目详情页（S9 最小版）**：条目行点击进入；分区卡片（用户名/密码/备注），
+      密码显隐 + 等宽；不存在/已删除态
+- [x] **敏感复制 + 剪贴板自动清除**：`VaultixClipboard`（借鉴 Bastion ClipboardUtils：
+      「触发即忘」延迟清空、清空前校验内容未被改写、API 33+ IS_SENSITIVE），
+      复用 `clipboardClearMs` 偏好（默认 30s），Snackbar 反馈含清除秒数
+- [x] **条目编辑（S10 最小版）**：详情页编辑按钮 → 预填表单（与新建共用
+      `ItemFormDialog`）→ `ItemRepository.updateItem`：沿用原 id/revisionDate/
+      folderId/favorite，密文覆盖本地行 → UPDATE 入队 → 轻量推送（PUT）
+- [x] **删除（软删除 = 回收站）**：二次确认（含回收站 30 天提示）→ 本地行标记
+      deletedDate（列表立即隐藏）→ SOFT_DELETE 入队 → 推送（DELETE /ciphers/{id}）
+- [x] **自动锁定**：`AutoLockController`（ProcessLifecycleOwner）+ 切后台计时
+      （elapsedRealtime）、回前台超时 ≥ `autoLockTimeoutMs`（默认 5 分钟）即
+      lockAll + 锁定代次事件强制导航回库列表根
+- [x] data:repository 新增 6 个写路径/解密流单测（共 11 个通过）
+- [x] 双 flavor 编译通过
 
-## P0 · M1 收尾（当前主线，还剩这些）
+## P0 · M1 收尾（剩余）
 
-- [ ] **条目编辑/删除入口**：详情页（S9）或先做编辑表单（S10），复用
-      `toRequest`；编辑 = UPDATE op 入队（注意：更新**不**换 id，直推 `PUT`）
-- [ ] **自动锁定**：`AppLifecycleObserver`（后台超时）+ 切后台即锁，
-      驱动 `VaultSessionManager.lockAll()`（Docs/10 §4）
-- [ ] 解锁/2FA 语义细化：Bitwarden 新设备 OTP / TOTP 2FA 登录（M1 目前提示不支持）
-- [ ] 移除库（本地记录）入口与二次确认
-- [ ] UI 文案后续迁 `strings.xml` 对照检查（本轮已用资源；sync 提示文案暂由
-      data 层中文直供，见 decisions）
+- [ ] **2FA / 新设备 OTP 登录**（当前 UI 明示不支持；需 identity 层 two-factor
+      分支 + 输入步骤 UI，参考 Bastion BitwardenLoginScreen 交互，勿整搬）
+- [ ] 移除库入口（含二次确认：仅移除本地记录）；设置页骨架（自动锁定时长、
+      剪贴板清除时长目前无 UI 可调，先提供设置页最小版）
+- [ ] 解锁页 5 次失败冷却 30s（Docs/08 S6 规格）
+- [ ] 回收站视图（软删除条目的恢复 / 永久删除）
+- [ ] UI 文案抽查迁 `strings.xml`（详情/编辑已用资源；sync 提示文案仍由 data 层中文直供）
 
-## P1 · 质量基础设施（趁代码量还小）
+## P1 · 质量基础设施
 
 - [ ] **Detekt**：启用 LongMethod/TooManyFunctions/LongParameterList/LargeClass
 - [ ] **Baseline Profile**（启动与首次滚动性能）
 - [ ] Gradle 配置缓存（注意：lint 需 --no-configuration-cache，见 CI 修复 #6）
-- [ ] data:repository / data:bitwarden 其余单测（VaultRepositoryImpl 分类逻辑等）
+- [ ] ViewModel 单测（ItemsViewModel / ItemDetailViewModel 用 fake repository）
 
 ## P2 · 自动化
 
@@ -46,11 +48,8 @@
 
 ## 已知未决（接力者注意）
 
-- `VaultEntity.id = 规范化服务器 URL`（M1 简化：**同一服务器仅支持一个账号**，
-  token/refresher 亦按 server 键控）；多账号同服务器需先改凭据键空间，见 decisions
-- `VaultItem` 仍是雏形（6 字段：+password），与 `Docs/02` 超集模型差距大；
-  补字段时同步补 Mapper（密码字段已双向）
-- 同步编排刻意未做节流/优先级/被动同步（M1 不需要，勿过度设计）
-- 新建条目「推送成功但响应丢失」的极端情况可能产生服务端重复条目（重试重发），
-  暂无幂等键，量级可接受，勿过度设计
-- UI 暂无搜索/筛选/多选/详情页（最小闭环口径，用户已确认）
+- 自动锁定只做了「切后台超时」一档；「切后台立即锁 / 屏幕锁定时锁」等设置项
+  待设置页落地（VaultSessionManager.lockAll 已幂等就绪）
+- `VaultItem` 仍是雏形（6 字段），与 `Docs/02` 超集模型差距大；补字段同步补 Mapper
+- 新建「推送成功但响应丢失」极端情况可能产生服务端重复条目（无幂等键），已知可接受
+- UI 尚无搜索/筛选/多选/回收站视图（均非最小闭环口径）

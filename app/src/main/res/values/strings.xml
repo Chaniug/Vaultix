@@ -67,4 +67,21 @@
     <string name="item_saved_synced">已保存并同步到云端</string>
     <string name="item_saved_queued">已保存到本地，联网后自动同步</string>
     <string name="item_save_failed">保存失败：%1$s</string>
+
+    <!-- 条目详情 S9 / 编辑 -->
+    <string name="action_edit">编辑</string>
+    <string name="action_delete">删除</string>
+    <string name="edit_item_title">编辑条目</string>
+    <string name="section_login">登录信息</string>
+    <string name="section_notes">备注</string>
+    <string name="copy_username">已复制用户名</string>
+    <string name="copy_username_clears">已复制用户名（%1$d 秒后自动清除）</string>
+    <string name="copy_password">已复制密码</string>
+    <string name="copy_password_clears">已复制密码（%1$d 秒后自动清除）</string>
+    <string name="delete_item_title">删除条目</string>
+    <string name="delete_item_message">将「%1$s」移入回收站？云端回收站会在 30 天后自动清除。</string>
+    <string name="delete_item_confirm">移入回收站</string>
+    <string name="detail_missing">条目不存在或已被删除</string>
+    <string name="detail_item_deleted">已移入回收站</string>
+    <string name="detail_copy_failed">复制失败，请重试</string>
 </resources>

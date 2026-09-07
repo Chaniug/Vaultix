@@ -1,0 +1,162 @@
+package io.vaultix.vaultix.ui.detail
+
+import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import dagger.hilt.android.lifecycle.HiltViewModel
+import io.vaultix.datastore.VaultixPreferences
+import io.vaultix.domain.ItemRepository
+import io.vaultix.domain.VaultRepository
+import io.vaultix.domain.VaultSaveOutcome
+import io.vaultix.model.VaultItem
+import io.vaultix.vaultix.util.VaultixClipboard
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import javax.inject.Inject
+
+/**
+ * 条目详情（Docs/08 S9 最小版）。
+ *
+ * - 展示与复制走 Room 明文流（[ItemRepository.observeItem]），本地编辑后自动刷新；
+ * - 复制经 [VaultixClipboard]（敏感标记 + 按偏好自动清空，UI 提示剩余秒数）；
+ * - 编辑 = [ItemRepository.updateItem]；删除 = 软删除（回收站语义）。
+ */
+@HiltViewModel
+class ItemDetailViewModel @Inject constructor(
+    savedStateHandle: SavedStateHandle,
+    private val itemRepository: ItemRepository,
+    private val vaultRepository: VaultRepository,
+    private val prefs: VaultixPreferences,
+    private val clipboard: VaultixClipboard,
+) : ViewModel() {
+
+    val vaultId: String = checkNotNull(savedStateHandle[ARG_VAULT_ID])
+    val itemId: String = checkNotNull(savedStateHandle[ARG_ITEM_ID])
+
+    /** 一次性 UI 事件。 */
+    sealed interface UiEvent {
+        data class CopyDone(val isPassword: Boolean, val clearSeconds: Long) : UiEvent
+        data object CopyFailed : UiEvent
+        data object SaveSynced : UiEvent
+        data object SaveQueued : UiEvent
+        data class SaveFailed(val message: String) : UiEvent
+        data object Deleted : UiEvent
+    }
+
+    data class UiState(
+        val item: VaultItem? = null,
+        val vaultName: String = "",
+        val saving: Boolean = false,
+        val deleting: Boolean = false,
+    )
+
+    private val _state = MutableStateFlow(UiState())
+    val state: StateFlow<UiState> = _state.asStateFlow()
+
+    private val _events = Channel<UiEvent>(Channel.BUFFERED)
+    val events = _events.receiveAsFlow()
+
+    @Volatile
+    private var clipboardClearMs: Long = DEFAULT_CLIPBOARD_CLEAR_MS
+
+    init {
+        viewModelScope.launch {
+            itemRepository.observeItem(vaultId, itemId).collect { item ->
+                _state.update { it.copy(item = item) }
+            }
+        }
+        viewModelScope.launch {
+            vaultRepository.observeVaults().collect { vaults ->
+                val name = vaults.firstOrNull { it.id == vaultId }?.name.orEmpty()
+                _state.update { it.copy(vaultName = name) }
+            }
+        }
+        viewModelScope.launch {
+            prefs.clipboardClearMs.collect { ms -> clipboardClearMs = ms }
+        }
+    }
+
+    fun copyUsername() {
+        val item = _state.value.item ?: return
+        if (item.username.isBlank()) return
+        doCopy(item.username, isPassword = false)
+    }
+
+    fun copyPassword() {
+        val item = _state.value.item ?: return
+        if (item.password.isBlank()) return
+        doCopy(item.password, isPassword = true)
+    }
+
+    private fun doCopy(text: String, isPassword: Boolean) {
+        runCatching {
+            clipboard.copy(text = text, sensitive = true, autoClearMs = clipboardClearMs)
+        }.onSuccess {
+            _events.trySend(
+                UiEvent.CopyDone(
+                    isPassword = isPassword,
+                    clearSeconds = if (clipboardClearMs > 0) clipboardClearMs / 1000 else 0,
+                ),
+            )
+        }.onFailure {
+            _events.trySend(UiEvent.CopyFailed)
+        }
+    }
+
+    fun updateItem(name: String, username: String, password: String, notes: String) {
+        val current = _state.value
+        val item = current.item ?: return
+        if (current.saving) return
+        _state.update { it.copy(saving = true) }
+        viewModelScope.launch {
+            val outcome = itemRepository.updateItem(
+                vaultId = vaultId,
+                item = item.copy(
+                    title = name,
+                    username = username,
+                    password = password,
+                    notes = notes,
+                ),
+            )
+            _state.update { it.copy(saving = false) }
+            _events.send(
+                outcome.fold(
+                    onSuccess = { saved ->
+                        when (saved) {
+                            VaultSaveOutcome.Synced -> UiEvent.SaveSynced
+                            VaultSaveOutcome.Queued -> UiEvent.SaveQueued
+                        }
+                    },
+                    onFailure = { error -> UiEvent.SaveFailed(error.message ?: "未知错误") },
+                ),
+            )
+        }
+    }
+
+    fun deleteItem() {
+        val current = _state.value
+        if (current.deleting) return
+        _state.update { it.copy(deleting = true) }
+        viewModelScope.launch {
+            val outcome = itemRepository.softDeleteItem(vaultId, itemId)
+            _state.update { it.copy(deleting = false) }
+            outcome.fold(
+                onSuccess = { _events.send(UiEvent.Deleted) },
+                onFailure = { error ->
+                    _events.send(UiEvent.SaveFailed(error.message ?: "未知错误"))
+                },
+            )
+        }
+    }
+
+    companion object {
+        const val ARG_VAULT_ID = "vaultId"
+        const val ARG_ITEM_ID = "itemId"
+        const val DEFAULT_CLIPBOARD_CLEAR_MS = 30_000L
+    }
+}
