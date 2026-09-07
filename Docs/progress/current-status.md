@@ -23,11 +23,11 @@
 | `core:model` | ✅ | VaultItem / VaultItemType |
 | `core:crypto` | ✅ | 10 个文件，行覆盖 91.4% |
 | `core:ui` | ✅ | VaultixTheme |
-| `data:bitwarden` | 🚧 | 仅 `BitwardenIdentityApi`（prelogin / token） |
+| `data:bitwarden` | 🚧 | 身份+库 API、DTO、网络层、认证链路（401 自动刷新）已完成；同步编排待做 |
 | `data:repository` | 🚧 | 仅 KDoc 占位 |
 | `domain` | 🚧 | 仅 KDoc 占位 |
-| `core:database` / `core:datastore` / `core:platform` | ⬜ | 规划中 |
-| `data:kdbx` | ⬜ | M2 |
+| `core:database` | ✅ | Room：vaults / ciphers / folders / pending_ops，只存密文 |
+| core:datastore | ✅ | DataStore 设置 + Keystore 安全凭据 |\n| data:kdbx | ⬜ | M2 |
 | `feature/*`（11 个） | ⬜ | **决定暂不拆分** |
 
 ## 质量指标

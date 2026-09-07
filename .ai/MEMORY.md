@@ -81,3 +81,26 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 
 **验证结果**：push 触发（1m59s）与手动触发含 lint（3m46s）均为 success；
 日志确认签名走真实 keystore（validateSigningFullDebug/OfflineDebug 通过），"一次性密钥"提示已消失。
+
+## Bitwarden 认证链路完成（2026-09-07）
+- `BitwardenAuthRepository`：prelogin → 派生 MasterKey → masterPasswordHash → connect/token
+  - 盐 = `email.trim().lowercase()`（官方客户端**实际行为**，非文档表述）
+  - Kdf=0→PBKDF2，Kdf=1→Argon2id（缺 memory/parallelism 时用 Bitwarden 默认值 64/4）
+  - refresh 用 `Mutex` 串行化：并发 401 只刷新一次
+- `BitwardenTokenRefresher`（替换 DI 中的空实现）两个**易踩的点**：
+  1. **OkHttp `Authenticator.authenticate` 是同步回调**，不是 suspend → 必须
+     `runBlocking(Dispatchers.IO)` 桥接（Bastion 的 `refreshForHost` 同样如此）
+  2. OkHttp 只给得到 **host**，而 token 按 server 存储 → 需维护 host→server 映射
+- `AuthSession` 持有 MasterKey 供上层解包对称密钥，`dispose()` 清零
+
+## 从 Bastion 文档中学到并已规避的坑
+1. **Vaultwarden 忽略 `sinceRevisionDate`** → 增量同步空转；必须先 `GET accounts/revision-date` 预检
+2. **死连接挂死**：反代（nginx/Cloudflare）静默关闭空闲连接，复用即挂 →
+   `retryOnConnectionFailure(true)` + `pingInterval(30s)`，超时收紧 30s（原 60s 像卡死）
+3. **401 必须反应式恢复**：按 host 刷新后重试一次，`priorResponse != null` 即停（防死循环）
+4. **上传/下载解耦**：新建条目走轻量 `POST /ciphers`，不等整库下载
+
+## 选型纠正
+- 敏感存储**未用** `androidx.security.crypto` 的 `EncryptedSharedPreferences`/`MasterKey`
+  （1.1.0 已整体废弃），改为 **Android Keystore + AES-256-GCM**：密钥不可导出、
+  每值 IV 随机。已移除 security-crypto 依赖。
