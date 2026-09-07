@@ -144,6 +144,8 @@ class VaultRepositoryImpl @Inject constructor(
     private fun classifyLoginError(error: Throwable): UnlockResult = when (error) {
         is HttpException -> when {
             error.code() == HTTP_UNAUTHORIZED -> UnlockResult.InvalidCredentials
+            // 官方 Bitwarden：prelogin 对未注册邮箱返回 404（Vaultwarden 不区分账号）
+            error.code() == HTTP_NOT_FOUND -> UnlockResult.AccountNotFound
             error.response()?.errorBody()?.string()
                 ?.contains(TWO_FACTOR_MARKER, ignoreCase = true) == true ->
                 UnlockResult.TwoFactorRequired
@@ -176,6 +178,7 @@ class VaultRepositoryImpl @Inject constructor(
     private companion object {
         const val DISPLAY_NAME_BITWARDEN = "Bitwarden"
         const val HTTP_UNAUTHORIZED = 401
+        const val HTTP_NOT_FOUND = 404
         const val TWO_FACTOR_MARKER = "two_factor"
         const val KEY_DEVICE_ID = "device_id"
         const val DEFAULT_DEVICE_NAME = "Vaultix Device"

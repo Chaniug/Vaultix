@@ -41,6 +41,11 @@ object NetworkModule {
     private const val WRITE_TIMEOUT_SECONDS = 30L
     private const val PING_INTERVAL_SECONDS = 30L
 
+    /** 客户端标识（对齐 Bastion：官方服务器按这些头决定返回结构）。 */
+    private const val USER_AGENT = "Vaultix/0.1.0 (Android)"
+    private const val CLIENT_NAME_MOBILE = "mobile"
+    private const val CLIENT_VERSION = "2026.9.1"
+
     @Provides @Singleton
     fun provideJson(): Json = BitwardenJson
 
@@ -65,6 +70,17 @@ object NetworkModule {
             .retryOnConnectionFailure(true)
             .pingInterval(PING_INTERVAL_SECONDS, TimeUnit.SECONDS)
             .authenticator(authenticator)
+            .addInterceptor { chain ->
+                val request = chain.request().newBuilder()
+                    .header("User-Agent", USER_AGENT)
+                    // Bitwarden 服务端按客户端名/版本决定返回内容（如新 cipher type、
+                    // SSH Key 字段与 2FA 流程）；不声明会降级或丢字段（Bastion 实测结论，
+                    // GPL-3.0 溯源）。统一声明「移动端 + 新版」，官方与 Vaultwarden 均接受。
+                    .header("Bitwarden-Client-Name", CLIENT_NAME_MOBILE)
+                    .header("Bitwarden-Client-Version", CLIENT_VERSION)
+                    .build()
+                chain.proceed(request)
+            }
             .build()
 
     /**

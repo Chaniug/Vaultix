@@ -44,6 +44,13 @@ sealed interface UnlockResult {
     /** 邮箱或主密码错误（401，或 OAuth invalid_grant） */
     data object InvalidCredentials : UnlockResult
 
+    /**
+     * 账号不存在：官方 Bitwarden 的 prelogin 对未注册邮箱返回 404，
+     * Vaultwarden 则一律返回默认 KDF 参数（不区分账号是否存在），
+     * 因此该分支只在官方端出现。
+     */
+    data object AccountNotFound : UnlockResult
+
     /** 账号开启了两步验证，M1 尚未支持，需提示用户先关闭或在官方客户端完成登录 */
     data object TwoFactorRequired : UnlockResult
 

@@ -10,6 +10,7 @@ sealed interface UnlockUiError {
     data object FieldsMissing : UnlockUiError
     data object InvalidServer : UnlockUiError
     data object InvalidCredentials : UnlockUiError
+    data object AccountNotFound : UnlockUiError
     data object TwoFactorRequired : UnlockUiError
     data object Network : UnlockUiError
     data object KeyUnavailable : UnlockUiError
@@ -20,6 +21,7 @@ sealed interface UnlockUiError {
 fun UnlockResult.toUnlockUiError(): UnlockUiError = when (this) {
     UnlockResult.Success -> error("Success 无需映射为 UI 错误；调用方应先处理 Success 分支")
     UnlockResult.InvalidCredentials -> UnlockUiError.InvalidCredentials
+    UnlockResult.AccountNotFound -> UnlockUiError.AccountNotFound
     UnlockResult.TwoFactorRequired -> UnlockUiError.TwoFactorRequired
     UnlockResult.Network -> UnlockUiError.Network
     UnlockResult.KeyUnavailable -> UnlockUiError.KeyUnavailable
