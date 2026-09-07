@@ -185,39 +185,34 @@ class AesCbcHmacTest {
     }
 
     // =======================================================================
-    // type 0（遗留无 MAC）：默认拒绝 / 显式放行
+    // type 0（遗留无 MAC）：默认放行（与官方 / Bastion 一致，历史数据兼容），
+    // 显式 allowLegacyWithoutMac=false 仍可拒绝
     // =======================================================================
 
     @Test
-    fun decrypt_rejectsLegacyType0ByDefault() {
-        val legacy = legacyType0("legacy data".toByteArray(StandardCharsets.UTF_8), key)
-        val error = assertThrows<LegacyCipherTypeException> { crypto.decrypt(legacy, key) }
-        assertThat(error.message).contains("outdated")
-    }
-
-    @Test
-    fun decrypt_acceptsLegacyType0WhenExplicitlyAllowed() {
+    fun decrypt_acceptsLegacyType0ByDefault() {
         val plaintext = "legacy data".toByteArray(StandardCharsets.UTF_8)
         val legacy = legacyType0(plaintext, key)
 
-        val recovered = crypto.decrypt(legacy, key, allowLegacyWithoutMac = true)
+        val recovered = crypto.decrypt(legacy, key)
         assertThat(recovered.toHex()).isEqualTo(plaintext.toHex())
     }
 
     @Test
-    fun decrypt_rejectsLegacyType0WithoutPrefixByDefault() {
-        // 无类型前缀同样按 type 0 处理，默认必须拒绝
-        val legacy = legacyType0("legacy".toByteArray(StandardCharsets.UTF_8), key)
-            .removePrefix("0.")
-        assertThrows<LegacyCipherTypeException> { crypto.decrypt(legacy, key) }
+    fun decrypt_rejectsLegacyType0WhenExplicitlyForbidden() {
+        val legacy = legacyType0("legacy data".toByteArray(StandardCharsets.UTF_8), key)
+        val error = assertThrows<LegacyCipherTypeException> {
+            crypto.decrypt(legacy, key, allowLegacyWithoutMac = false)
+        }
+        assertThat(error.message).contains("outdated")
     }
 
     @Test
-    fun decrypt_acceptsLegacyType0WithoutPrefixWhenExplicitlyAllowed() {
+    fun decrypt_acceptsLegacyType0WithoutPrefixByDefault() {
+        // 无类型前缀同样按 type 0 处理，默认放行（历史导入数据无前缀）
         val plaintext = "legacy".toByteArray(StandardCharsets.UTF_8)
         val legacy = legacyType0(plaintext, key).removePrefix("0.")
-        assertThat(crypto.decrypt(legacy, key, allowLegacyWithoutMac = true).toHex())
-            .isEqualTo(plaintext.toHex())
+        assertThat(crypto.decrypt(legacy, key).toHex()).isEqualTo(plaintext.toHex())
     }
 
     // =======================================================================

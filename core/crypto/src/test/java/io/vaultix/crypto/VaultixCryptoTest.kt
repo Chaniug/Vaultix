@@ -209,30 +209,32 @@ class VaultixCryptoTest {
         }
     }
 
-    // ========== 遗留 type 0（Docs/03 §2.4：默认拒绝）==========
+    // ========== 遗留 type 0（默认放行，与官方 / Bastion 一致；可显式拒绝）==========
 
     @Test
-    fun legacyType0IsRejectedByDefault() {
+    fun legacyType0IsDecryptableByDefault() {
         val key = SymmetricCryptoKey.random()
         try {
             val encoded = crypto.encryptString("legacy", key)
             val body = encoded.substringAfter('.').split('|')
             val legacy = "0.${body[0]}|${body[1]}"
-            assertThrows<LegacyCipherTypeException> { crypto.decrypt(legacy, key) }
+            val decrypted = crypto.decrypt(legacy, key)
+            assertEquals("legacy", String(decrypted))
         } finally {
             key.clear()
         }
     }
 
     @Test
-    fun legacyType0IsDecryptableWhenExplicitlyAllowed() {
+    fun legacyType0IsRejectedWhenExplicitlyForbidden() {
         val key = SymmetricCryptoKey.random()
         try {
             val encoded = crypto.encryptString("legacy", key)
             val body = encoded.substringAfter('.').split('|')
             val legacy = "0.${body[0]}|${body[1]}"
-            val decrypted = crypto.decrypt(legacy, key, allowLegacyWithoutMac = true)
-            assertEquals("legacy", String(decrypted))
+            assertThrows<LegacyCipherTypeException> {
+                crypto.decrypt(legacy, key, allowLegacyWithoutMac = false)
+            }
         } finally {
             key.clear()
         }

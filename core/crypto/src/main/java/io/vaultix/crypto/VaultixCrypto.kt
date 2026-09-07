@@ -293,27 +293,29 @@ class VaultixCrypto @Inject constructor(
     // ========== 解密 ==========
 
     /**
-     * 解密 EncString（严格遵循 encrypt-then-MAC：先验 MAC，再解密）。
+     * 解密 EncString（encrypt-then-MAC 优先：有 MAC 先验 MAC，无 MAC 直接解密）。
      *
      * @param cipherString EncString
      * @param key 对称密钥
      * @param allowLegacyWithoutMac 是否放行无 MAC 的遗留 type 0。
-     *        Docs/03 第 2.4 节要求默认拒绝并提示用户升级客户端重同步，故默认 false。
+     *        默认 true：与 Bitwarden 官方 / Bastion 行为一致——历史数据（旧客户端、
+     *        导入）大量为 type 0，拒绝会让条目显示为空白（2026-09-08 真机复现）。
+     *        严格场景（如未知来源密文）可显式传 false 拒绝。
      * @throws MacVerificationException MAC 不匹配
-     * @throws LegacyCipherTypeException type 0 且未显式放行
+     * @throws LegacyCipherTypeException type 0 且显式禁止放行
      * @throws UnsupportedCipherTypeException 3 / 5 / 7 等 M0 未实现类型
      */
     fun decrypt(
         cipherString: String,
         key: SymmetricCryptoKey,
-        allowLegacyWithoutMac: Boolean = false,
+        allowLegacyWithoutMac: Boolean = true,
     ): ByteArray = decrypt(parseCipherString(cipherString), key, allowLegacyWithoutMac)
 
     /** 解密并以 UTF-8 解析为字符串。 */
     fun decryptToString(
         cipherString: String,
         key: SymmetricCryptoKey,
-        allowLegacyWithoutMac: Boolean = false,
+        allowLegacyWithoutMac: Boolean = true,
     ): String = String(decrypt(cipherString, key, allowLegacyWithoutMac), StandardCharsets.UTF_8)
 
     /**
@@ -326,7 +328,7 @@ class VaultixCrypto @Inject constructor(
     fun decrypt(
         parsed: ParsedCipherString,
         key: SymmetricCryptoKey,
-        allowLegacyWithoutMac: Boolean = false,
+        allowLegacyWithoutMac: Boolean = true,
     ): ByteArray {
         when (parsed.type) {
             CipherType.AES_CBC_256_HMAC_SHA256_B64 -> {
