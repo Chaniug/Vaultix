@@ -14,6 +14,7 @@ import io.vaultix.vaultix.ui.addvault.AddVaultScreen
 import io.vaultix.vaultix.ui.detail.ItemDetailScreen
 import io.vaultix.vaultix.ui.items.ItemsScreen
 import io.vaultix.vaultix.ui.items.ItemsViewModel
+import io.vaultix.vaultix.ui.settings.SettingsScreen
 import io.vaultix.vaultix.ui.unlock.UnlockScreen
 import io.vaultix.vaultix.ui.unlock.UnlockViewModel
 import io.vaultix.vaultix.ui.vaultlist.VaultListScreen
@@ -58,7 +59,11 @@ fun VaultixApp() {
                         navController.navigate(UnlockRoute(vault.id))
                     }
                 },
+                onOpenSettings = { navController.navigate(SettingsRoute) },
             )
+        }
+        composable<SettingsRoute> {
+            SettingsScreen(onBack = { navController.popBackStack() })
         }
         composable<AddVaultRoute> {
             AddVaultScreen(

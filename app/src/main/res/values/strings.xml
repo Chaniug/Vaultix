@@ -60,6 +60,38 @@
     <string name="two_factor_back">上一步</string>
     <string name="two_factor_email_hint">验证码已发送至邮箱（未收到请检查垃圾箱）</string>
 
+    <!-- 设置（最小版；档位/交互范式参考 Bastion） -->
+    <string name="settings_title">设置</string>
+    <string name="group_security">安全</string>
+    <string name="group_appearance">外观</string>
+    <string name="group_about">关于</string>
+    <string name="setting_auto_lock">自动锁定</string>
+    <string name="setting_clipboard_clear">复制后清除剪贴板</string>
+    <string name="setting_screen_security">防截屏</string>
+    <string name="setting_screen_security_desc">阻止截屏与最近任务缩略图显示内容</string>
+    <string name="setting_dynamic_color">动态取色</string>
+    <string name="setting_dynamic_color_desc">跟随系统主题色（Android 12+）</string>
+    <string name="setting_lock_now">立即锁定</string>
+    <string name="setting_lock_now_desc">清零全部库的解锁密钥并返回列表</string>
+    <string name="about_version">版本</string>
+    <string name="about_source">源码与反馈</string>
+    <string name="about_license">开源许可</string>
+    <string name="about_license_body">Vaultix 以 GPL-3.0 发布。部分设计与代码参考 Bastion（GPL-3.0，Copyright 2025 JoyinJoester），搬运处均带溯源声明。\n\n本项目为密码管理客户端，自行承担使用风险。</string>
+    <string name="about_github_url">https://github.com/Chaniug/Vaultix</string>
+    <string name="action_open">打开</string>
+    <!-- 自动锁定档位 -->
+    <string name="auto_lock_never">从不</string>
+    <string name="auto_lock_immediately">立即（切后台即锁）</string>
+    <string name="auto_lock_minutes_fmt">%1$d 分钟</string>
+    <string name="auto_lock_hour_fmt">%1$d 小时</string>
+    <string name="auto_lock_day_fmt">%1$d 天</string>
+    <string name="auto_lock_custom">自定义…</string>
+    <string name="auto_lock_custom_title">自定义空闲分钟数</string>
+    <string name="auto_lock_custom_invalid">请输入 1–100000 的整数</string>
+    <!-- 剪贴板清除档位 -->
+    <string name="clipboard_clear_off">关闭</string>
+    <string name="clipboard_clear_seconds_fmt">%1$d 秒</string>
+
     <!-- 条目列表 S7 -->
     <string name="items_empty_title">还没有保存的密码</string>
     <string name="items_empty_body">点右下角 ＋ 新建条目</string>

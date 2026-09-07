@@ -14,12 +14,14 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeTopAppBar
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -49,6 +51,7 @@ import io.vaultix.vaultix.ui.AppFlavor
 fun VaultListScreen(
     onAddVault: () -> Unit,
     onOpenVault: (VaultSummary) -> Unit,
+    onOpenSettings: () -> Unit,
     viewModel: VaultListViewModel = hiltViewModel(),
 ) {
     val vaults by viewModel.vaults.collectAsStateWithLifecycle()
@@ -58,6 +61,14 @@ fun VaultListScreen(
         topBar = {
             LargeTopAppBar(
                 title = { Text(text = stringResource(R.string.vault_list_title)) },
+                actions = {
+                    IconButton(onClick = onOpenSettings) {
+                        Icon(
+                            imageVector = Icons.Filled.Settings,
+                            contentDescription = stringResource(R.string.settings_title),
+                        )
+                    }
+                },
                 scrollBehavior = scrollBehavior,
             )
         },

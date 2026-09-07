@@ -14,6 +14,9 @@ data object VaultListRoute
 data object AddVaultRoute
 
 @Serializable
+data object SettingsRoute
+
+@Serializable
 data class UnlockRoute(val vaultId: String)
 
 @Serializable
