@@ -23,7 +23,7 @@
 | `core:model` | ✅ | VaultItem / VaultItemType |
 | `core:crypto` | ✅ | 10 个文件，行覆盖 91.4% |
 | `core:ui` | ✅ | VaultixTheme |
-| `data:bitwarden` | 🚧 | API/DTO/网络层/认证链路/**同步编排**已完成；解密落库与 UI 待做 |
+| `data:bitwarden` | 🚧 | **数据链路全通**：API/认证/同步/解密/Mapper 均完成；仅剩 UI 层接入 |
 | `data:repository` | 🚧 | 仅 KDoc 占位 |
 | `domain` | 🚧 | 仅 KDoc 占位 |
 | `core:database` | ✅ | Room：vaults / ciphers / folders / pending_ops，只存密文 |

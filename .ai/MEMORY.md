@@ -124,3 +124,15 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 | 例：`BitwardenCrypto.kt` 的加密内核（M0 已搬） | 例：UI 层（缠了大量 Bastion 的 SettingsManager） |
 
 判断口诀：**搬"思想"和"无依赖的核"，不搬"缠成一团的业务实现"**。
+
+## 解密链路与 Mapper 完成（2026-09-07）
+- `CipherMapper`：toDomain（密文→明文，需账号对称密钥）/ toRequest（明文→密文）
+- 解密失败**降级为空串**而非抛异常：个别损坏条目不应让整个列表加载失败
+- `unpackAccountKey`：stretchMasterKey → 解包 → **stretched.clear()**（不留在内存）
+- **修复 CredentialKeys 真实 Bug**：生成脚本的 `$` 转义问题导致 key 中不含实际 server 值
+  （所有库的凭据共用一个 key，多库会互相覆盖）；改为常量前缀 + 字符串拼接
+  * 教训：用生成脚本写含 `$` 的代码时，优先用拼接而非模板插值；写完必须校验输出
+
+## M1 数据链路全景（已通）
+登录 → MasterKey → 解包账号对称密钥 → 解密条目字段 → VaultItem（可显示）
+剩余：UI 层（登录页 / 列表页）、WorkManager 周期同步、Detekt 门禁
