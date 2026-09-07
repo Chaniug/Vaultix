@@ -62,7 +62,8 @@ fun VaultListScreen(
             )
         },
         floatingActionButton = {
-            if (vaults.isNotEmpty() || AppFlavor.supportsBitwarden) {
+            // 仅 full 分发可添加 Bitwarden 库；offline 分发等 M2 的 KDBX 入口
+            if (AppFlavor.supportsBitwarden && vaults.isNotEmpty()) {
                 FloatingActionButton(onClick = onAddVault) {
                     Icon(Icons.Filled.Add, contentDescription = stringResource(R.string.vault_add_fab))
                 }
