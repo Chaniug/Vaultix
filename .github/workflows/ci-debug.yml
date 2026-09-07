@@ -21,6 +21,11 @@ on:
       - 'gradle/**'
       - 'gradlew'
       - 'gradlew.bat'
+      # 依赖版本目录与构建脚本改动同样会影响构建，必须纳入触发范围，
+      # 否则修改它们后 CI 不运行，形成「改了却验证不到」的盲区。
+      - '**/*.toml'
+      - '**/*.sh'
+      - '.github/scripts/**'
       - '.github/workflows/ci-debug.yml'
   pull_request:
     branches: [ main ]
