@@ -51,8 +51,10 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.vaultix.model.VaultItem
+import io.vaultix.model.VaultItemType
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.ItemFormDialog
+import io.vaultix.vaultix.ui.common.itemTypeLabelRes
 import android.content.Context
 
 /**
@@ -114,6 +116,14 @@ private fun DetailBodyContent(
                     .verticalScroll(rememberScrollState())
                     .padding(horizontal = 16.dp, vertical = 8.dp),
             ) {
+                if (item.type != VaultItemType.Login) {
+                    Text(
+                        text = stringResource(itemTypeLabelRes(item.type)),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                }
                 if (item.username.isNotBlank() || item.password.isNotBlank()) {
                     LoginSection(
                         item = item,
@@ -210,6 +220,8 @@ fun ItemDetailScreen(
     }
 
     if (editOpen && item != null) {
+        val isLogin = item.type == VaultItemType.Login
+        val typeName = context.getString(itemTypeLabelRes(item.type))
         ItemFormDialog(
             title = stringResource(R.string.edit_item_title),
             initialName = item.title,
@@ -217,6 +229,12 @@ fun ItemDetailScreen(
             initialPassword = item.password,
             initialNotes = item.notes,
             saving = state.saving,
+            loginFieldsVisible = isLogin,
+            editHint = if (isLogin) {
+                null
+            } else {
+                context.getString(R.string.item_edit_type_fields_readonly, typeName)
+            },
             onDismiss = { editOpen = false },
             onSave = { name, username, password, notes ->
                 viewModel.updateItem(name, username, password, notes)

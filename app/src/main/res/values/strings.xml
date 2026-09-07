@@ -115,6 +115,14 @@
     <string name="clipboard_clear_off">关闭</string>
     <string name="clipboard_clear_seconds_fmt">%1$d 秒</string>
 
+    <!-- 条目类型（类型专属字段展示/编辑推迟，见 audit/bitwarden-alignment.md） -->
+    <string name="item_type_login">登录</string>
+    <string name="item_type_secure_note">安全笔记</string>
+    <string name="item_type_card">银行卡</string>
+    <string name="item_type_identity">身份信息</string>
+    <string name="item_type_ssh_key">SSH 密钥</string>
+    <string name="item_edit_type_fields_readonly">「%1$s」的专属字段暂为只读，本次仅保存名称与备注的修改</string>
+
     <!-- 条目列表 S7 -->
     <string name="items_empty_title">还没有保存的密码</string>
     <string name="items_empty_body">点右下角 ＋ 新建条目</string>

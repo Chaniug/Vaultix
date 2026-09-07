@@ -8,6 +8,7 @@ import io.mockk.slot
 import io.vaultix.crypto.SymmetricCryptoKey
 import io.vaultix.crypto.VaultixCrypto
 import io.vaultix.data.bitwarden.mapper.CipherMapper
+import io.vaultix.data.bitwarden.model.CipherDto
 import io.vaultix.data.bitwarden.model.CipherRequest
 import io.vaultix.data.bitwarden.model.toStoredCipherDto
 import io.vaultix.data.bitwarden.network.BitwardenJson
@@ -144,7 +145,10 @@ class ItemRepositoryImplTest {
             id = "cipher-1",
             vaultId = vaultId,
             type = 1,
-            encryptedPayload = "stale",
+            encryptedPayload = BitwardenJson.encodeToString(
+                mapper.toRequest(plainItem(id = "cipher-1"), key)
+                    .toStoredCipherDto(id = "cipher-1", revisionDate = "2026-09-01T00:00:00.000Z"),
+            ),
             revisionDate = "2026-09-01T00:00:00.000Z",
             favorite = true,
             folderId = "folder-9",
@@ -170,6 +174,30 @@ class ItemRepositoryImplTest {
         assertEquals("UPDATE", op.op)
         assertEquals("cipher-1", op.cipherId)
         assertNotNull(op.payload)
+    }
+
+    @Test
+    fun updateItem_serverTypeUnknown_rejectedWithoutWrite() = runTest {
+        // 未知类型（type=99）在领域层显示为 Login，但写路径类型守恒守卫必须拒绝，
+        // 防止整条重写把服务端类型改写成 1（审计 M1-3 类型漂移）
+        sessions.unlock(vaultId, key)
+        val existing = CipherEntity(
+            id = "cipher-99",
+            vaultId = vaultId,
+            type = 99,
+            encryptedPayload = BitwardenJson.encodeToString(
+                CipherDto(id = "cipher-99", type = 99),
+            ),
+            revisionDate = "2026-09-01T00:00:00.000Z",
+        )
+        coEvery { cipherDao.get("cipher-99") } returns existing
+
+        val outcome = repo.updateItem(vaultId, plainItem(id = "cipher-99"))
+
+        assertTrue(outcome.isFailure)
+        assertTrue(outcome.exceptionOrNull()!!.message!!.contains("编辑暂不支持"))
+        coVerify(exactly = 0) { cipherDao.upsertAll(any()) }
+        coVerify(exactly = 0) { pendingOpDao.enqueue(any()) }
     }
 
     @Test

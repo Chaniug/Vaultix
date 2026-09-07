@@ -272,3 +272,19 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
   成功不显示
 - 新建/编辑密码框带**强度条**（PasswordStrength 0–100，弱→非常强五档文案与颜色
   递进；空密码不渲染；仅提示非强制门槛）
+
+## Bitwarden 对齐审计 + 批 1 落地（2026-09-08 第十轮，审计报告 Docs/progress/audit/bitwarden-alignment.md）
+- 背景：用户指出 Vaultix bitwarden 侧不如 Bastion 完整 → 全量差距审计（两枚子代理
+  超时无产出 → 主代理基于实测收敛报告），批 1 = **数据安全 + 类型保真**
+- **DTO 全载荷承载**：card/identity/secureNote/sshKey + login 的 uri/totp/fido2/
+  passwordRevisionDate 补入 CipherDto/CipherRequest（字段集对齐 Bastion
+  BitwardenApi.kt，wire 为小写 camelCase）
+- **更新 = 合并上传**（toUpdateRequest(item, stored, key)）：未编辑密文段原样并入，
+  修复三大真实数据丢失：编辑登录丢 uri/totp；编辑卡/身份/SSH 毁载荷；type5→Login
+  漂移（现 mapType 显式 5=SshKey，未知类型由 ItemRepositoryImpl 类型守恒守卫拒写）
+- **同步收敛**：全量成功后 prune 本地行（排除 pending ops）；flush 遇 4xx
+  （401/408/429 除外）弃单防毒丸；BitwardenSyncService 头注释已更新（编排职责在
+  data:repository orchestrator）
+- UI：条目列表/详情类型徽标；非 Login 编辑隐藏登录字段并提示「专属字段只读」
+- 未做（推迟）：非 Login 专属字段展示/编辑（M2-1）、附件/历史（M2-2）、文件夹管理
+  UI（M2-3）——见审计报告 §2 表

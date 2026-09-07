@@ -31,12 +31,16 @@ import io.vaultix.common.PasswordStrength
 import io.vaultix.vaultix.R
 
 /**
- * 登录条目表单对话框（新建 / 编辑共用，Docs/08 S10 最小版：仅登录条目字段）。
+ * 条目表单对话框（新建 / 编辑共用，Docs/08 S10 最小版）。
  *
  * 密码只在对话框存续期间存在于内存；关闭/保存后由调用方保证不再持有副本。
  * 密码框下方为实时强度条（[PasswordStrength]，算法移植 Bastion 见其溯源声明；
  * 非强制门槛，仅提示）。
  * 编辑场景用 [initialXxx] 预填；切换目标条目时（key 变化）状态自动重置。
+ *
+ * [loginFieldsVisible]：非 Login 类型条目编辑只允许改名称/备注（类型专属字段
+ * 只读，合并更新由 data 层保证不丢载荷），此时隐藏用户名/密码框；[editHint]
+ * 显示该限制说明。
  */
 @Composable
 fun ItemFormDialog(
@@ -46,6 +50,8 @@ fun ItemFormDialog(
     initialPassword: String = "",
     initialNotes: String = "",
     saving: Boolean = false,
+    loginFieldsVisible: Boolean = true,
+    editHint: String? = null,
     onDismiss: () -> Unit,
     onSave: (name: String, username: String, password: String, notes: String) -> Unit,
 ) {
@@ -73,25 +79,35 @@ fun ItemFormDialog(
                     },
                     modifier = Modifier.fillMaxWidth(),
                 )
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = username,
-                    onValueChange = { username = it },
-                    label = { Text(stringResource(R.string.item_field_username)) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = password,
-                    onValueChange = { password = it },
-                    label = { Text(stringResource(R.string.item_field_password)) },
-                    singleLine = true,
-                    visualTransformation = PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                PasswordStrengthHint(password = password)
+                if (editHint != null) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = editHint,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (loginFieldsVisible) {
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = username,
+                        onValueChange = { username = it },
+                        label = { Text(stringResource(R.string.item_field_username)) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = password,
+                        onValueChange = { password = it },
+                        label = { Text(stringResource(R.string.item_field_password)) },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    PasswordStrengthHint(password = password)
+                }
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
                     value = notes,

@@ -1,8 +1,23 @@
 # 下一步任务清单
 
-> 更新于 2026-09-08（第九轮）。同步编排 UI 接线完成（条目页同步条、库列表同步状态、
-> 回前台 APP_RESUME、密码强度条）；Bastion 冻结为 reference（Doc 18，第八轮）。
+> 更新于 2026-09-08（第十轮）。Bitwarden 对齐审计 + 批 1（数据安全/类型保真）
+> 落地；审计报告 `Docs/progress/audit/bitwarden-alignment.md`。
 > 状态：`TODO` / `DOING` / `DONE` / `BLOCKED`
+
+## 已完成（第十轮 2026-09-08 · Bitwarden 对齐审计 + 批 1）
+
+- [x] **对齐审计**（Docs/progress/audit/bitwarden-alignment.md）：Vaultix bitwarden 侧
+      vs Bastion reference 全量差距表 + 批次划分（M1-1..7 做 / M2-1..3 推迟 / 不做）
+- [x] **编辑丢数据修复（M1-1/2）**：DTO 全载荷承载（card/identity/sshKey/secureNote/
+      uri/totp/fido2 对齐 Bastion 字段集）；更新 = 合并上传（toUpdateRequest 只
+      重加密可编辑明文，未编辑密文段原样并入）
+- [x] **类型保真（M1-3）**：type5=SshKey 显式建模；写路径类型守恒守卫拒写未知类型
+      （防 type 漂移）；条目列表/详情类型徽标；非 Login 编辑只开放名称/备注并提示
+- [x] **同步收敛与毒丸处理（M1-5/6）**：全量成功后 prune 服务端已移除行（排除
+      pending ops）；flush 4xx（401/408/429 除外）弃单
+- [x] 单测新增（mapper 载荷保真 4 例 + repository 类型守卫 1 例）；双 flavor 编译 +
+      Hilt + 各模块单测 + detekt 全绿
+- [x] 文档同步（MEMORY / decisions / SESSION / audit 报告）
 
 ## 已完成（第九轮 2026-09-08 · 同步编排全链路接线 + 强度条 + Bastion 快照）
 
@@ -46,7 +61,8 @@
 
 - [ ] **真机回归**：新固定签名包（63be53c+）上验证 登录(2FA)→同步→未命名已修复→
       快速解锁启用→锁屏后生物识别重开→设备管理可见；同步编排行为（条目页状态条、
-      手动刷新、切后台回前台自动同步、库列表状态行）与密码强度条
+      手动刷新、切后台回前台自动同步、库列表状态行）、密码强度条、**载荷保真
+      （编辑含网址/TOTP 的登录条目后字段仍在；卡/身份/SSH 条目只改名不丢字段）**
 - [ ] WorkManager 周期同步（P2 前移候选：用户期待「打开即最新」；编排器 PERIODIC
       触发已预留）
 - [ ] 移除库入口（二次确认）；回收站视图

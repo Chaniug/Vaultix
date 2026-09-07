@@ -60,6 +60,10 @@ data class CipherDto(
     @SerialName("deletedDate") val deletedDate: String? = null,
     @SerialName("reprompt") val reprompt: Int = 0,
     @SerialName("login") val login: LoginDto? = null,
+    @SerialName("card") val card: CardDto? = null,
+    @SerialName("identity") val identity: IdentityDto? = null,
+    @SerialName("secureNote") val secureNote: SecureNoteDto? = null,
+    @SerialName("sshKey") val sshKey: SshKeyDto? = null,
     @SerialName("fields") val fields: List<CustomFieldDto> = emptyList(),
     @SerialName("passwordHistory") val passwordHistory: List<PasswordHistoryDto> = emptyList(),
     @SerialName("attachments") val attachments: List<AttachmentDto> = emptyList(),
@@ -72,12 +76,80 @@ data class LoginDto(
     @SerialName("password") val password: String? = null,
     @SerialName("totp") val totp: String? = null,
     @SerialName("uris") val uris: List<UriDto> = emptyList(),
+    @SerialName("passwordRevisionDate") val passwordRevisionDate: String? = null,
+    @SerialName("fido2Credentials") val fido2Credentials: List<Fido2CredentialDto> = emptyList(),
+)
+
+/** type 3 银行卡载荷（字段均为 EncString 密文；对齐 Bastion CipherCardApiData 字段集）。 */
+@Serializable
+data class CardDto(
+    @SerialName("cardholderName") val cardholderName: String? = null,
+    @SerialName("brand") val brand: String? = null,
+    @SerialName("number") val number: String? = null,
+    @SerialName("expMonth") val expMonth: String? = null,
+    @SerialName("expYear") val expYear: String? = null,
+    @SerialName("code") val code: String? = null,
+)
+
+/** type 4 身份载荷（对齐 Bastion CipherIdentityApiData 字段集）。 */
+@Serializable
+data class IdentityDto(
+    @SerialName("title") val title: String? = null,
+    @SerialName("firstName") val firstName: String? = null,
+    @SerialName("middleName") val middleName: String? = null,
+    @SerialName("lastName") val lastName: String? = null,
+    @SerialName("address1") val address1: String? = null,
+    @SerialName("address2") val address2: String? = null,
+    @SerialName("address3") val address3: String? = null,
+    @SerialName("city") val city: String? = null,
+    @SerialName("state") val state: String? = null,
+    @SerialName("postalCode") val postalCode: String? = null,
+    @SerialName("country") val country: String? = null,
+    @SerialName("company") val company: String? = null,
+    @SerialName("email") val email: String? = null,
+    @SerialName("phone") val phone: String? = null,
+    @SerialName("ssn") val ssn: String? = null,
+    @SerialName("username") val username: String? = null,
+    @SerialName("passportNumber") val passportNumber: String? = null,
+    @SerialName("licenseNumber") val licenseNumber: String? = null,
+)
+
+/** type 2 安全笔记载荷：目前只有子类型号（对齐 Bastion CipherSecureNoteApiData）。 */
+@Serializable
+data class SecureNoteDto(
+    @SerialName("type") val type: Int = 0,
+)
+
+/** type 5 SSH 密钥载荷（对齐 Bastion CipherSshKeyApiData 字段集）。 */
+@Serializable
+data class SshKeyDto(
+    @SerialName("privateKey") val privateKey: String? = null,
+    @SerialName("publicKey") val publicKey: String? = null,
+    @SerialName("keyFingerprint") val keyFingerprint: String? = null,
 )
 
 @Serializable
 data class UriDto(
     @SerialName("uri") val uri: String? = null,
     @SerialName("match") val match: Int? = null,
+)
+
+/** login 的 WebAuthn 通行凭证元数据（保留段，Vaultix 不修改）。 */
+@Serializable
+data class Fido2CredentialDto(
+    @SerialName("credentialId") val credentialId: String? = null,
+    @SerialName("keyType") val keyType: String? = null,
+    @SerialName("keyAlgorithm") val keyAlgorithm: String? = null,
+    @SerialName("keyCurve") val keyCurve: String? = null,
+    @SerialName("keyValue") val keyValue: String? = null,
+    @SerialName("rpId") val rpId: String? = null,
+    @SerialName("rpName") val rpName: String? = null,
+    @SerialName("counter") val counter: String? = null,
+    @SerialName("userHandle") val userHandle: String? = null,
+    @SerialName("userName") val userName: String? = null,
+    @SerialName("userDisplayName") val userDisplayName: String? = null,
+    @SerialName("discoverable") val discoverable: String? = null,
+    @SerialName("creationDate") val creationDate: String? = null,
 )
 
 /** type: 0 Text / 1 Hidden / 2 Boolean / 3 Linked */
@@ -102,7 +174,14 @@ data class AttachmentDto(
     @SerialName("key") val key: String? = null,
 )
 
-/** 创建 / 更新条目请求体。 */
+/**
+ * 创建 / 更新条目请求体。
+ *
+ * login/card/identity/secureNote/sshKey/fields 均为**可空保留段**：
+ * 上传时含值即随请求体提交，null 即省略（服务器对缺省段按官方语义处理）。
+ * 更新路径由 CipherMapper.toUpdateRequest 负责把「未编辑的密文段」原样并入，
+ * 防止整条重写清掉用户看不到的载荷（详见 CipherMapper 注释）。
+ */
 @Serializable
 data class CipherRequest(
     @SerialName("type") val type: Int,
@@ -112,6 +191,10 @@ data class CipherRequest(
     @SerialName("folderId") val folderId: String? = null,
     @SerialName("reprompt") val reprompt: Int = 0,
     @SerialName("login") val login: LoginDto? = null,
+    @SerialName("card") val card: CardDto? = null,
+    @SerialName("identity") val identity: IdentityDto? = null,
+    @SerialName("secureNote") val secureNote: SecureNoteDto? = null,
+    @SerialName("sshKey") val sshKey: SshKeyDto? = null,
     @SerialName("fields") val fields: List<CustomFieldDto> = emptyList(),
 )
 
@@ -132,5 +215,9 @@ fun CipherRequest.toStoredCipherDto(id: String, revisionDate: String): CipherDto
     revisionDate = revisionDate,
     reprompt = reprompt,
     login = login,
+    card = card,
+    identity = identity,
+    secureNote = secureNote,
+    sshKey = sshKey,
     fields = fields,
 )

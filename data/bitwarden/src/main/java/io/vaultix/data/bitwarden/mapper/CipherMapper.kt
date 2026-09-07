@@ -76,6 +76,51 @@ class CipherMapper @Inject constructor(
     )
 
     /**
+     * 更新用的**合并上传体**（防数据丢失，Bastion 语义：编辑只覆盖可编辑明文，
+     * 未编辑段沿用服务端原密文，绝不整条重写）：
+     *
+     * - name/notes 用表单明文重新加密；
+     * - login 条目的 username/password 重新加密，**uri/totp/fido2Credentials/
+     *   passwordRevisionDate 原密文保留**；
+     * - card/identity/secureNote/sshKey/fields 段原样并入（Vaultix M1 不编辑它们，
+     *   但必须随更新请求提交，否则服务端会清空这些载荷）；
+     * - 条目独立密钥（per-item key）与本方法无关：保留段直接复用服务端密文，
+     *   不重新加密。
+     */
+    fun toUpdateRequest(
+        item: VaultItem,
+        stored: CipherDto,
+        key: SymmetricCryptoKey,
+    ): CipherRequest {
+        val storedLogin = stored.login
+        val overlaidLogin = if (storedLogin != null) {
+            storedLogin.copy(
+                username = item.username.takeIf { it.isNotBlank() }?.let { crypto.encryptString(it, key) },
+                password = item.password.takeIf { it.isNotBlank() }?.let { crypto.encryptString(it, key) },
+            )
+        } else {
+            null
+        }
+        return CipherRequest(
+            type = mapTypeToInt(item.type),
+            name = crypto.encryptString(item.title, key),
+            notes = item.notes.takeIf { it.isNotBlank() }?.let { crypto.encryptString(it, key) },
+            favorite = stored.favorite,
+            folderId = stored.folderId,
+            reprompt = stored.reprompt,
+            login = overlaidLogin,
+            card = stored.card,
+            identity = stored.identity,
+            secureNote = stored.secureNote,
+            sshKey = stored.sshKey,
+            fields = stored.fields,
+        )
+    }
+
+    /** 领域类型 → 服务端 type 号（写路径类型守恒校验用）。 */
+    fun serverTypeOf(type: VaultItemType): Int = mapTypeToInt(type)
+
+    /**
      * 解包条目独立密钥；null = 该条目直接用账号密钥加密。
      * 解包失败也按 null 处理（回退账号密钥 + 空串兜底）。
      */
@@ -101,11 +146,18 @@ class CipherMapper @Inject constructor(
             .getOrDefault("")
     }
 
+    /**
+     * type → 领域类型。**未知类型不映射到 Login**（写路径会因类型不守恒被
+     * [serverTypeOf] 校验拦截，宁可不编辑也不漂移）；未知类型按 Identity 之外
+     * 的通用可读类型处理：此处返回 Login 仅供列表展示通用字段（名称/备注），
+     * 真正写回前必须过类型守恒校验。
+     */
     private fun mapType(type: Int): VaultItemType = when (type) {
         TYPE_LOGIN -> VaultItemType.Login
         TYPE_SECURE_NOTE -> VaultItemType.SecureNote
         TYPE_CARD -> VaultItemType.Card
         TYPE_IDENTITY -> VaultItemType.Identity
+        TYPE_SSH_KEY -> VaultItemType.SshKey
         else -> VaultItemType.Login
     }
 
@@ -114,6 +166,7 @@ class CipherMapper @Inject constructor(
         VaultItemType.SecureNote -> TYPE_SECURE_NOTE
         VaultItemType.Card -> TYPE_CARD
         VaultItemType.Identity -> TYPE_IDENTITY
+        VaultItemType.SshKey -> TYPE_SSH_KEY
     }
 
     private companion object {
@@ -121,5 +174,6 @@ class CipherMapper @Inject constructor(
         const val TYPE_SECURE_NOTE = 2
         const val TYPE_CARD = 3
         const val TYPE_IDENTITY = 4
+        const val TYPE_SSH_KEY = 5
     }
 }

@@ -20,4 +20,4 @@ data class VaultItem(
     val type: VaultItemType = VaultItemType.Login,
 )
 
-enum class VaultItemType { Login, SecureNote, Card, Identity }
+enum class VaultItemType { Login, SecureNote, Card, Identity, SshKey }

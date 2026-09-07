@@ -105,9 +105,16 @@ class ItemRepositoryImpl @Inject constructor(
             val existing = cipherDao.get(item.id) ?: error("条目不存在：${item.id}")
             require(existing.vaultId == vaultId) { "条目不属于该库：${item.id}" }
             require(existing.deletedDate == null) { "条目已在回收站，无法编辑：${item.id}" }
+            // 类型守恒：领域类型必须与服务端类型一致（未知类型不映射到 Login，
+            // 宁可不编辑也不发生 type 漂移 / 载荷重写）
+            require(existing.type == mapper.serverTypeOf(item.type)) {
+                "该类型条目的编辑暂不支持（服务端 type=${existing.type}），已停止保存以防数据丢失"
+            }
 
-            // 更新沿用原 id：folderId/favorite 是实体明文列，原样保留
-            val request = mapper.toRequest(item, key)
+            // 合并更新：只覆盖可编辑明文段，uri/totp/card/identity 等未编辑段沿用原密文
+            val stored = runCatching { json.decodeFromString<CipherDto>(existing.encryptedPayload) }
+                .getOrElse { error("本地密文损坏，无法编辑：${item.id}") }
+            val request = mapper.toUpdateRequest(item, stored, key)
                 .copy(folderId = existing.folderId, favorite = existing.favorite)
             val dto = request.toStoredCipherDto(id = existing.id, revisionDate = existing.revisionDate)
 

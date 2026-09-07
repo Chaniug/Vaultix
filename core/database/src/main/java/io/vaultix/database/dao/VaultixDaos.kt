@@ -63,7 +63,13 @@ interface FolderDao {
     @Query("SELECT * FROM folders WHERE vaultId = :vaultId ORDER BY id")
     fun observeByVault(vaultId: String): Flow<List<FolderEntity>>
 
+    @Query("SELECT * FROM folders WHERE vaultId = :vaultId")
+    suspend fun listByVault(vaultId: String): List<FolderEntity>
+
     @Upsert suspend fun upsertAll(items: List<FolderEntity>)
+
+    @Query("DELETE FROM folders WHERE id IN (:ids)")
+    suspend fun deleteByIds(ids: List<String>)
 
     @Query("DELETE FROM folders WHERE vaultId = :vaultId")
     suspend fun clearVault(vaultId: String)

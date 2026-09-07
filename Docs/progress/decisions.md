@@ -34,3 +34,6 @@
 | 2026-09-08 | **同步请求统一走编排器，UI 不再直调 syncVault** | 触发分类（MANUAL/PAGE_ENTER/APP_RESUME）→ 节流/解锁门卫/失败退避/状态流由 `BitwardenSyncOrchestrator` 单点保证；提示条语义：静默自动成功不打扰，手动成功短暂提示，最近错误常驻可重试；库列表行内仅显示运行中/失败（Bastion 静默同步语义） |
 | 2026-09-08 | **新建/编辑密码框加强度条（提示非门槛）** | 评分卡 `PasswordStrength`（Bastion 移植，core:common，0–100 五档）；仅 UI 提示不拦截保存（安全规则属后续「设置→安全规则」范围） |
 | 2026-09-08 | **测试注入口走 internal 次构造（Hilt 双构造模式）** | @Inject 构造只能含可绑定参数（VaultRepository/VaultSessionManager）；scope/config/now 等测试参数（虚拟时间/调度器）放 internal 完整构造，同模块测试可见、生产不可误用 |
+| 2026-09-08 | **条目更新 = 合并上传，绝不整条重写（对齐审计批 1）** | `toUpdateRequest(item, stored, key)`：只重加密可编辑明文（name/notes/login 的 username/password），uri/totp/fido2/card/identity/sshKey/secureNote/fields 未编辑段**沿用服务端原密文**随请求提交——修复「编辑登录条目丢网址/TOTP、编辑卡/身份/SSH 条目毁载荷」的数据丢失（审计 M1-1/2） |
+| 2026-09-08 | **写路径类型守恒守卫** | type5=sshKey 显式建模；未知类型（未来 type>5）在领域层按 Login 展示但更新前校验 `existing.type == serverTypeOf(item.type)`，不一致即拒存（防 type 漂移改写服务端条目）；UI 对非 Login 类型编辑只开放名称/备注并明示 |
+| 2026-09-08 | **全量同步后收敛服务端已移除行 + flush 4xx 弃单** | 拉取成功后删除本地「不在服务端集合且无 pending ops」的 cipher/folder 行（排除离线未推送数据；Bastion deleteNotIn 语义）；上传遇 4xx（401/408/429 除外）视为服务端目标已不存在 → 永久弃单，本地行由下次全量同步裁决——修复毒丸条目卡死队列（审计 M1-5/6） |

@@ -37,12 +37,15 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Bitwarden 同步编排（M1）。
+ * Bitwarden 同步执行（M1）。
  *
- * 流程：推送本地待上传 → 预检是否需要全量 → 拉取 → 安全校验 → 落库。
+ * 流程：推送本地待上传 → revision 预检 → 全量拉取 → 安全校验 → 落库 →
+ * 清理（收敛服务端已移除的本地行，Bastion deleteNotIn 语义）。
  *
- * 与 Bastion 的差异（刻意简化）：暂不实现节流、优先级队列与被动自动同步——
- * 这些服务的是高频自动同步场景，M1 以手动触发为主，过度设计反而增加维护成本。
+ * 触发分类/节流/失败退避/per-vault 状态流由 data:repository 的
+ * BitwardenSyncOrchestrator（Bastion 编排语义移植版）统一管理，本类只负责
+ * 一次执行的原子步骤。上传单条失败不中断；HTTP 4xx（408/429 除外）视为
+ * 服务端目标已不存在或不可执行 → 永久弃单（防毒丸条目卡死队列）。
  */
 @Singleton
 class BitwardenSyncService @Inject constructor(
@@ -78,9 +81,10 @@ class BitwardenSyncService @Inject constructor(
         val protection = checkProtection(vaultId, localRevision, response)
         if (protection != null) return protection
 
-        // 4) 落库
+        // 4) 落库 + 清理服务端已移除的本地行
         persistCiphers(vaultId, response.ciphers)
         persistFolders(vaultId, response.folders)
+        pruneRemovedRows(vaultId, response)
         vaultDao.updateRevision(vaultId, remoteRevision?.toString() ?: localRevision)
 
         return SyncOutcome.Success(response.ciphers.size, response.folders.size)
@@ -108,9 +112,15 @@ class BitwardenSyncService @Inject constructor(
                     if (op.op == OP_CREATE) remapCreatedLocalRow(op, response)
                     pendingOpDao.remove(op.localId)
                 }
-                .onFailure {
-                    pendingOpDao.incrementRetry(op.localId)
-                    firstError = firstError ?: it
+                .onFailure { error ->
+                    if (error.isDefinitiveHttpFailure()) {
+                        // 4xx（408/429 除外）：目标在服务端已不存在或不可执行。
+                        // 永久弃单防毒丸卡死队列；本地行由下次成功全量同步收敛。
+                        pendingOpDao.remove(op.localId)
+                    } else {
+                        pendingOpDao.incrementRetry(op.localId)
+                        firstError = firstError ?: error
+                    }
                 }
         }
         return firstError?.let { Result.failure(it) } ?: Result.success(Unit)
@@ -191,6 +201,33 @@ class BitwardenSyncService @Inject constructor(
         folderDao.upsertAll(folders.map { dto -> dto.toEntity(vaultId) })
     }
 
+    /**
+     * 全量拉取成功后，收敛服务端已移除（永久删除 / 回收站 30 天到期清除等）的本地行：
+     * - cipher：排除仍带 pending ops 的 id——离线新建/编辑尚未推送成功，服务端
+     *   全量列表里没有它们是正常状态，删除会丢本地数据；
+     * - folder：Vaultix 尚无本地文件夹待推送操作，直接按服务端集合收敛
+     *   （Bastion deleteNotIn 同款语义）。
+     */
+    private suspend fun pruneRemovedRows(vaultId: String, response: SyncResponse) {
+        val pendingIds = pendingOpDao.listByVault(vaultId).map { op -> op.cipherId }.toSet()
+
+        val serverCipherIds = response.ciphers.map { it.id }.toSet()
+        val removedCiphers = cipherDao.listByVault(vaultId)
+            .map { row -> row.id }
+            .filter { id -> id !in serverCipherIds && id !in pendingIds }
+        if (removedCiphers.isNotEmpty()) cipherDao.deleteByIds(removedCiphers)
+
+        val serverFolderIds = response.folders.map { it.id }.toSet()
+        val removedFolders = folderDao.listByVault(vaultId)
+            .map { row -> row.id }
+            .filter { id -> id !in serverFolderIds }
+        if (removedFolders.isNotEmpty()) folderDao.deleteByIds(removedFolders)
+    }
+
+    /** 服务端确定性失败（目标不存在/不可执行）；408/429 属可重试不在此列。 */
+    private fun Throwable.isDefinitiveHttpFailure(): Boolean = this is HttpException &&
+        this.code() in DEFINITIVE_HTTP_CODES
+
     private fun CipherDto.toEntity(vaultId: String) = CipherEntity(
         id = id,
         vaultId = vaultId,
@@ -227,5 +264,10 @@ class BitwardenSyncService @Inject constructor(
         const val OP_DELETE = "DELETE"
         const val OP_RESTORE = "RESTORE"
         const val HTTP_UNAUTHORIZED = 401
+
+        // 4xx 中 401（登录失效，须重新登录后重推）/408/429（可重试）除外，
+        // 其余视为确定性失败（@suppress MagicNumber：HTTP 状态码区间）
+        @Suppress("MagicNumber")
+        private val DEFINITIVE_HTTP_CODES = (400..499).filter { it !in setOf(401, 408, 429) }
     }
 }

@@ -53,8 +53,10 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.vaultix.model.VaultItem
+import io.vaultix.model.VaultItemType
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.ItemFormDialog
+import io.vaultix.vaultix.ui.common.itemTypeLabelRes
 
 /**
  * 条目列表（Docs/08 S7 最小版）+ 新建条目对话框（S10 最小版）。
@@ -332,6 +334,12 @@ private fun ItemRow(item: VaultItem, onClick: () -> Unit) {
                         text = item.username,
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else if (item.type != VaultItemType.Login) {
+                    Text(
+                        text = stringResource(itemTypeLabelRes(item.type)),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
                     )
                 }
             }
