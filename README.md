@@ -5,7 +5,7 @@
 | 项目 | 说明 |
 |---|---|
 | 项目代号 | Vaultix |
-| 目标平台 | Android 8.0（API 26）及以上，Target SDK 36（Android 16） |
+| 目标平台 | Android 8.0（API 26）及以上，**Target SDK 37（Android 17）** |
 | 技术栈 | Kotlin + Jetpack Compose + Material 3 + Coroutines/Flow + Room + Retrofit/OkHttp + Hilt |
 | 支持库类型 | ① Bitwarden / Vaultwarden 新版服务端（在线同步，仅新版 API）② KDBX 4.x 本地文件（写入恒 4.1） |
 | 开源协议 | **GPL-3.0-or-later**（与 Bitwarden 客户端一致；2026-09 由 MIT 切换，以便合规参考/复用 Bastion 等 GPL-3.0 实现）；依赖 License 见 [11-工程规范](./Docs/11-工程规范与构建体系.md) |

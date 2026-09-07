@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # ensure-android-sdk.sh —— 在 GitHub Actions (ubuntu-latest) runner 上确保
-# Vaultix 构建所需的 Android SDK 组件（compileSdk=36, targetSdk=36）就绪。
+# Vaultix 构建所需的 Android SDK 组件（compileSdk=37, targetSdk=37）就绪。
 #
 # 关键事实：GitHub ubuntu-latest runner 镜像已预装
-#   platforms;android-36, build-tools;36.0.0, platform-tools
+#   platforms;android-37, build-tools;36.0.0, platform-tools
 # 因此本脚本【优先检测、能复用就绝不联网重装】，避免无谓的网络 / --update 风险。
 set -euo pipefail
 
@@ -45,17 +45,17 @@ ensure() {
   fi
 }
 
-ensure "platforms;android-36"
+ensure "platforms;android-37"
 ensure "build-tools;36.0.0"
 ensure "platform-tools"
 
-# 最终校验：AGP 构建期需要 $SDK_ROOT/platforms/android-36 这个目录存在
-if [ ! -d "$SDK_ROOT/platforms/android-36" ]; then
-  echo "::error title=Platform android-36 missing::安装后仍未找到 $SDK_ROOT/platforms/android-36"
+# 最终校验：AGP 构建期需要 $SDK_ROOT/platforms/android-37 这个目录存在
+if [ ! -d "$SDK_ROOT/platforms/android-37" ]; then
+  echo "::error title=Platform android-37 missing::安装后仍未找到 $SDK_ROOT/platforms/android-37"
   ls "$SDK_ROOT/platforms" 2>/dev/null || true
   exit 1
 fi
 
 echo "::notice title=installed platforms::$(ls "$SDK_ROOT/platforms" 2>/dev/null | tr '\n' ' ')"
 echo "::notice title=installed build-tools::$(ls "$SDK_ROOT/build-tools" 2>/dev/null | tr '\n' ' ')"
-echo "Android SDK 就绪：compileSdk=36 可用。"
+echo "Android SDK 就绪：compileSdk=37 可用。"
