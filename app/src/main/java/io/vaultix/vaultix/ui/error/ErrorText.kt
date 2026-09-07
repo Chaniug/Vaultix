@@ -13,7 +13,7 @@ fun unlockErrorText(error: UnlockUiError?): String? {
         UnlockUiError.InvalidServer -> stringResource(R.string.error_invalid_server)
         UnlockUiError.InvalidCredentials -> stringResource(R.string.error_invalid_credentials)
         UnlockUiError.AccountNotFound -> stringResource(R.string.error_account_not_found)
-        UnlockUiError.TwoFactorRequired -> stringResource(R.string.error_two_factor)
+        UnlockUiError.TwoFactorInvalid -> stringResource(R.string.error_two_factor_invalid)
         UnlockUiError.Network -> stringResource(R.string.error_network)
         UnlockUiError.KeyUnavailable -> stringResource(R.string.error_key_unavailable)
         UnlockUiError.VaultMissing -> stringResource(R.string.error_vault_missing)

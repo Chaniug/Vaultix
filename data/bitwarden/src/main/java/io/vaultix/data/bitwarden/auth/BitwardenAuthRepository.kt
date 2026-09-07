@@ -18,12 +18,20 @@ package io.vaultix.data.bitwarden.auth
 import io.vaultix.crypto.SecureBytes
 import io.vaultix.crypto.SymmetricCryptoKey
 import io.vaultix.crypto.VaultixCrypto
+import io.vaultix.data.bitwarden.api.BitwardenIdentityApi
 import io.vaultix.data.bitwarden.api.PreLoginRequest
 import io.vaultix.data.bitwarden.api.PreLoginResponse
+import io.vaultix.data.bitwarden.api.TokenResponse
 import io.vaultix.data.bitwarden.di.BitwardenApiFactory
+import io.vaultix.data.bitwarden.network.BitwardenJson
 import io.vaultix.datastore.SecureCredentialStore
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonPrimitive
+import retrofit2.HttpException
 import java.net.URL
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
@@ -60,6 +68,51 @@ class BitwardenAuthRepository @Inject constructor(
         deviceId: String,
         deviceName: String,
     ): Result<AuthSession> = runCatching {
+        performLogin(
+            server = server,
+            email = email,
+            password = password,
+            deviceId = deviceId,
+            deviceName = deviceName,
+            twoFactor = null,
+        )
+    }
+
+    /**
+     * 两步验证登录：密码授权收到 400 `two_factor_required` 后，以相同 grant 追加
+     * `twoFactorToken`（验证码）+ `twoFactorProvider` 重发（Bitwarden 经典 OAuth
+     * 扩展，官方与 Vaultwarden 均支持；流程参考 Bastion，GPL-3.0 溯源）。
+     *
+     * 验证码错误/过期时服务端再次返回 two_factor_required → 抛
+     * [TwoFactorInvalidException]；邮箱与密码错误归类与 [login] 相同。
+     */
+    suspend fun loginWithTwoFactor(
+        server: String,
+        email: String,
+        password: String,
+        provider: Int,
+        code: String,
+        deviceId: String,
+        deviceName: String,
+    ): Result<AuthSession> = runCatching {
+        performLogin(
+            server = server,
+            email = email,
+            password = password,
+            deviceId = deviceId,
+            deviceName = deviceName,
+            twoFactor = TwoFactorSubmit(provider = provider, code = code),
+        )
+    }
+
+    private suspend fun performLogin(
+        server: String,
+        email: String,
+        password: String,
+        deviceId: String,
+        deviceName: String,
+        twoFactor: TwoFactorSubmit?,
+    ): AuthSession {
         val api = apiFactory.identity(server)
 
         val pre = api.preLogin(PreLoginRequest(email))
@@ -68,25 +121,29 @@ class BitwardenAuthRepository @Inject constructor(
         val masterKey = deriveMasterKey(pre, password, salt)
         val hash = crypto.deriveMasterPasswordHash(masterKey, password)
 
-        val token = api.token(
-            mapOf(
-                "grant_type" to "password",
-                "username" to email,
-                "password" to hash,
-                "scope" to "api offline_access",
-                "client_id" to CLIENT_ID,
-                "deviceType" to DEVICE_TYPE,
-                "deviceIdentifier" to deviceId,
-                "deviceName" to deviceName,
-            ),
-        )
+        val fields = buildMap {
+            put("grant_type", "password")
+            put("username", email)
+            put("password", hash)
+            put("scope", "api offline_access")
+            put("client_id", CLIENT_ID)
+            put("deviceType", DEVICE_TYPE)
+            put("deviceIdentifier", deviceId)
+            put("deviceName", deviceName)
+            if (twoFactor != null) {
+                put("twoFactorToken", twoFactor.code)
+                put("twoFactorProvider", twoFactor.provider.toString())
+                put("twoFactorRemember", "0")
+            }
+        }
+        val token = requestToken(api, fields, twoFactor != null)
 
         persist(server, token.accessToken, token.refreshToken)
         // 受保护的账号对称密钥：后续用它解密所有条目，务必一并持久化
         token.key?.let { credentials.putString(CredentialKeys.protectedKey(server), it) }
         noteServer(server)
 
-        AuthSession(
+        return AuthSession(
             server = server,
             email = email,
             accessToken = token.accessToken,
@@ -94,6 +151,30 @@ class BitwardenAuthRepository @Inject constructor(
             expiresIn = token.expiresIn,
             masterKey = masterKey,
         )
+    }
+
+    /** token 请求 + 2FA 错误结构解析（失败时抛可分类异常，HTTP 语义见 KDoc）。 */
+    private suspend fun requestToken(
+        api: BitwardenIdentityApi,
+        fields: Map<String, String>,
+        submittedTwoFactor: Boolean,
+    ): TokenResponse {
+        return try {
+            api.token(fields)
+        } catch (error: HttpException) {
+            val providers = parseTwoFactorProviders(
+                error.response()?.errorBody()?.string(),
+            )
+            if (providers != null) {
+                throw if (submittedTwoFactor) {
+                    // 已带验证码仍返回 2FA 挑战：验证码错误 / 过期
+                    TwoFactorInvalidException()
+                } else {
+                    TwoFactorRequiredException(providers)
+                }
+            }
+            throw error
+        }
     }
 
     /** 用 refresh_token 换新 access_token；并发调用只刷新一次。 */
@@ -180,6 +261,7 @@ class BitwardenAuthRepository @Inject constructor(
         }
     }
 
+    /** 解锁 / 添加库的结果分类，便于上层给出可执行的提示（Docs/10 §5）。 */
     private companion object {
         const val KDF_PBKDF2 = 0
         const val KDF_ARGON2ID = 1
@@ -188,4 +270,49 @@ class BitwardenAuthRepository @Inject constructor(
         const val CLIENT_ID = "mobile"
         const val DEVICE_TYPE = "1"
     }
+}
+
+/** 2FA 提交参数。 */
+private data class TwoFactorSubmit(val provider: Int, val code: String)
+
+/**
+ * 服务端要求两步验证（密码授权返回 400 two_factor_required）。
+ *
+ * @param providers Bitwarden 2FA provider 枚举：0 = Authenticator(TOTP)，
+ *                  1 = Email（服务端自动发码），3 = Duo，4 = YubiKey 等；
+ *                  M1 UI 只引导 0/1。
+ */
+class TwoFactorRequiredException(val providers: List<Int>) : Exception(
+    "Two-factor authentication required: providers=$providers",
+)
+
+/** 已带验证码提交仍返回 2FA 挑战：验证码错误或已过期。 */
+class TwoFactorInvalidException : Exception("Two-factor code is invalid or expired")
+
+/**
+ * 从 token 错误响应体解析 TwoFactorProviders（Bitwarden 经典 OAuth 扩展字段，
+ * 兼容 Vaultwarden 的字符串数组与官方客户端的数值数组两种形态）。
+ *
+ * @return 有 2FA 挑战返回 provider 列表；响应非 JSON / 无该字段返回 null（交由
+ *          上层按 HTTP 状态分类）。
+ */
+internal fun parseTwoFactorProviders(errorBody: String?): List<Int>? {
+    val root = errorBody?.let { body ->
+        runCatching { BitwardenJson.parseToJsonElement(body) as? JsonObject }.getOrNull()
+    } ?: return null
+
+    fun providersFrom(value: kotlinx.serialization.json.JsonElement?): List<Int>? {
+        val array = value as? JsonArray ?: return null
+        if (array.isEmpty()) return null
+        val providers = array.mapNotNull { element ->
+            val primitive = (element as? JsonPrimitive) ?: return@mapNotNull null
+            primitive.content.toIntOrNull()
+        }
+        return providers.takeIf { it.isNotEmpty() }
+    }
+
+    // 官方 PascalCase 与 Vaultwarden camelCase 双形态
+    val providers = providersFrom(root["TwoFactorProviders"])
+        ?: providersFrom(root["twoFactorProviders"])
+    return providers
 }

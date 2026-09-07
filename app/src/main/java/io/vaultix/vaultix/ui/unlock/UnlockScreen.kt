@@ -40,6 +40,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.common.TwoFactorStep
 import io.vaultix.vaultix.ui.error.unlockErrorText
 
 /**
@@ -78,6 +79,20 @@ fun UnlockScreen(
         ) {
             if (vault == null) {
                 CircularProgressIndicator()
+                return@Column
+            }
+            val twoFactor = state.twoFactor
+            if (twoFactor != null) {
+                // ---- 2FA 步骤（主密码已通过校验）----
+                TwoFactorStep(
+                    providers = twoFactor.providers,
+                    selectedProvider = twoFactor.provider,
+                    submitting = state.submitting,
+                    error = state.error,
+                    onProviderSelected = viewModel::selectTwoFactorProvider,
+                    onSubmit = viewModel::submitCode,
+                    onBack = viewModel::backToPassword,
+                )
                 return@Column
             }
             Text(

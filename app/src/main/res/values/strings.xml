@@ -42,11 +42,23 @@
     <string name="error_invalid_server">服务器地址需以 http(s):// 开头</string>
     <string name="error_invalid_credentials">邮箱或主密码不正确</string>
     <string name="error_account_not_found">该邮箱尚未注册（官方 Bitwarden 未找到此账号）</string>
-    <string name="error_two_factor">该账号开启了两步验证（2FA）。M1 暂不支持 2FA 登录，请先在官方客户端登录并关闭 2FA，或使用应用密码。</string>
+    <string name="error_two_factor_invalid">验证码错误或已过期，请重新输入</string>
     <string name="error_network">无法连接服务器，请检查网络后重试</string>
     <string name="error_key_unavailable">服务器未返回账号密钥信息，请联系服务器管理员</string>
     <string name="error_vault_missing">本地不存在该密码库，请返回重新添加</string>
     <string name="error_unknown">出错了：%1$s</string>
+
+    <!-- 两步验证（Bastion 同款经典 OAuth 2FA 流程） -->
+    <string name="two_factor_title">两步验证</string>
+    <string name="two_factor_desc">该账号已开启两步验证，输入验证码继续登录</string>
+    <string name="two_factor_provider_totp">身份验证器</string>
+    <string name="two_factor_provider_email">邮箱验证码</string>
+    <string name="two_factor_provider_other">其他验证方式</string>
+    <string name="two_factor_code_label">验证码</string>
+    <string name="two_factor_code_placeholder">6 位数字</string>
+    <string name="two_factor_submit">验证并登录</string>
+    <string name="two_factor_back">上一步</string>
+    <string name="two_factor_email_hint">验证码已发送至邮箱（未收到请检查垃圾箱）</string>
 
     <!-- 条目列表 S7 -->
     <string name="items_empty_title">还没有保存的密码</string>

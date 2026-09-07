@@ -27,6 +27,23 @@ interface VaultRepository {
     /** 解锁已注册的库：需要再次输入主密码（Bitwarden 云端解锁需联网做 prelogin）。 */
     suspend fun unlockVault(vaultId: String, masterPassword: String): UnlockResult
 
+    /** 两步验证：主密码已通过，提交验证码完成解锁（[UnlockResult.TwoFactorRequired] 之后调用）。 */
+    suspend fun unlockVaultWithTwoFactor(
+        vaultId: String,
+        masterPassword: String,
+        provider: Int,
+        code: String,
+    ): UnlockResult
+
+    /** 添加库的两步验证形态：与 [addBitwardenVault] 相同，但带验证码完成登录。 */
+    suspend fun addBitwardenVaultWithTwoFactor(
+        server: String,
+        email: String,
+        masterPassword: String,
+        provider: Int,
+        code: String,
+    ): UnlockResult
+
     /** 锁定单个库：清零内存中的对称密钥（幂等）。 */
     fun lockVault(vaultId: String)
 
@@ -51,8 +68,16 @@ sealed interface UnlockResult {
      */
     data object AccountNotFound : UnlockResult
 
-    /** 账号开启了两步验证，M1 尚未支持，需提示用户先关闭或在官方客户端完成登录 */
-    data object TwoFactorRequired : UnlockResult
+    /**
+     * 需要两步验证：密码已通过，服务端返回 two_factor_required。
+     * provider 0 = Authenticator(TOTP)；1 = Email（服务端自动发码）；
+     * 输入验证码后调 [VaultRepository.unlockVaultWithTwoFactor] /
+     * [VaultRepository.addBitwardenVaultWithTwoFactor] 完成登录。
+     */
+    data class TwoFactorRequired(val providers: List<Int>) : UnlockResult
+
+    /** 两步验证码错误或已过期。 */
+    data object TwoFactorInvalid : UnlockResult
 
     /** 无法连接 / 超时 */
     data object Network : UnlockResult

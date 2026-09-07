@@ -7,6 +7,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import io.vaultix.domain.UnlockResult
 import io.vaultix.domain.VaultRepository
 import io.vaultix.model.VaultSummary
+import io.vaultix.vaultix.ui.common.TwoFactorProvider
 import io.vaultix.vaultix.ui.error.UnlockUiError
 import io.vaultix.vaultix.ui.error.toUnlockUiError
 import kotlinx.coroutines.channels.Channel
@@ -19,10 +20,10 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /**
- * 解锁页（Docs/08 S6 最小版）：输入主密码 → 联网认证 → 解包密钥进会话。
+ * 解锁页（Docs/08 S6）：主密码 →（若 2FA）验证码步骤 → 解锁。
  *
- * 库信息（服务器 / 邮箱标签）从 [VaultRepository.observeVaults] 里按 vaultId 取，
- * 不额外开数据通道。
+ * 2FA 期间主密码保留在内存（完成/放弃即清）；库信息从
+ * [VaultRepository.observeVaults] 按 vaultId 取。
  */
 @HiltViewModel
 class UnlockViewModel @Inject constructor(
@@ -30,12 +31,18 @@ class UnlockViewModel @Inject constructor(
     private val vaultRepository: VaultRepository,
 ) : ViewModel() {
 
+    data class TwoFactorUi(
+        val providers: List<Int>,
+        val provider: Int,
+    )
+
     data class UiState(
         val vault: VaultSummary? = null,
         val password: String = "",
         val passwordVisible: Boolean = false,
         val submitting: Boolean = false,
         val error: UnlockUiError? = null,
+        val twoFactor: TwoFactorUi? = null,
     )
 
     sealed interface Event {
@@ -62,6 +69,14 @@ class UnlockViewModel @Inject constructor(
     fun onPasswordVisibleChange(visible: Boolean) =
         _state.update { it.copy(passwordVisible = visible) }
 
+    fun selectTwoFactorProvider(provider: Int) = _state.update { state ->
+        val tf = state.twoFactor ?: return@update state
+        state.copy(twoFactor = tf.copy(provider = provider), error = null)
+    }
+
+    /** 放弃 2FA 回到密码步骤（密码保留）。 */
+    fun backToPassword() = _state.update { it.copy(twoFactor = null, error = null) }
+
     fun submit() {
         val current = _state.value
         if (current.password.isBlank()) {
@@ -73,13 +88,66 @@ class UnlockViewModel @Inject constructor(
         _state.update { it.copy(submitting = true, error = null) }
         viewModelScope.launch {
             val result = vaultRepository.unlockVault(vaultId, current.password)
-            when (result) {
-                UnlockResult.Success -> {
-                    _state.update { it.copy(submitting = false, password = "") }
-                    _events.send(Event.Unlocked)
+            handleSubmitResult(result, submitTwoFactor = false)
+        }
+    }
+
+    /** 2FA 步骤：提交验证码完成解锁。 */
+    fun submitCode(code: String) {
+        val current = _state.value
+        val tf = current.twoFactor ?: return
+        if (current.submitting || code.isBlank()) return
+        _state.update { it.copy(submitting = true, error = null) }
+        viewModelScope.launch {
+            val result = vaultRepository.unlockVaultWithTwoFactor(
+                vaultId = vaultId,
+                masterPassword = current.password,
+                provider = tf.provider,
+                code = code.trim(),
+            )
+            handleSubmitResult(result, submitTwoFactor = true)
+        }
+    }
+
+    private suspend fun handleSubmitResult(result: UnlockResult, submitTwoFactor: Boolean) {
+        when (result) {
+            UnlockResult.Success -> {
+                _state.update {
+                    it.copy(submitting = false, password = "", twoFactor = null, error = null)
                 }
-                else -> _state.update {
-                    it.copy(submitting = false, password = "", error = result.toUnlockUiError())
+                _events.send(Event.Unlocked)
+            }
+            is UnlockResult.TwoFactorRequired -> {
+                // 切到验证码步骤；主密码保留在内存直到完成/放弃
+                _state.update {
+                    it.copy(
+                        submitting = false,
+                        error = null,
+                        twoFactor = TwoFactorUi(
+                            providers = result.providers,
+                            provider = TwoFactorProvider.defaultOf(result.providers),
+                        ),
+                    )
+                }
+            }
+            UnlockResult.TwoFactorInvalid -> {
+                _state.update { it.copy(submitting = false, error = UnlockUiError.TwoFactorInvalid) }
+            }
+            else -> {
+                if (submitTwoFactor &&
+                    (result == UnlockResult.Network || result is UnlockResult.Unknown)
+                ) {
+                    // 网络等瞬时错误：留在 2FA 步骤可重试
+                    _state.update { it.copy(submitting = false, error = result.toUnlockUiError()) }
+                } else {
+                    _state.update {
+                        it.copy(
+                            submitting = false,
+                            password = "",
+                            twoFactor = null,
+                            error = result.toUnlockUiError(),
+                        )
+                    }
                 }
             }
         }

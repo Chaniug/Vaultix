@@ -2,6 +2,8 @@ package io.vaultix.data.repository
 
 import android.os.Build
 import io.vaultix.data.bitwarden.auth.BitwardenAuthRepository
+import io.vaultix.data.bitwarden.auth.TwoFactorInvalidException
+import io.vaultix.data.bitwarden.auth.TwoFactorRequiredException
 import io.vaultix.data.bitwarden.sync.BitwardenSyncService
 import io.vaultix.data.bitwarden.sync.SyncOutcome
 import io.vaultix.database.dao.VaultDao
@@ -78,6 +80,45 @@ class VaultRepositoryImpl @Inject constructor(
         return doUnlock(email = email, server = row.origin, password = masterPassword)
     }
 
+    override suspend fun unlockVaultWithTwoFactor(
+        vaultId: String,
+        masterPassword: String,
+        provider: Int,
+        code: String,
+    ): UnlockResult {
+        val row = vaultDao.get(vaultId) ?: return UnlockResult.VaultMissing
+        if (VaultKind.fromName(row.kind) != VaultKind.BITWARDEN) {
+            return UnlockResult.Unknown("仅支持 Bitwarden 库解锁（当前类型：${row.kind}）")
+        }
+        val email = row.account ?: return UnlockResult.Unknown("该库缺少账号信息，请移除后重新添加")
+        return doUnlock(
+            email = email,
+            server = row.origin,
+            password = masterPassword,
+            twoFactor = TwoFactorAttempt(provider, code),
+        )
+    }
+
+    override suspend fun addBitwardenVaultWithTwoFactor(
+        server: String,
+        email: String,
+        masterPassword: String,
+        provider: Int,
+        code: String,
+    ): UnlockResult {
+        val normalized = normalizeServer(server)
+        val outcome = doUnlock(
+            email = email.trim(),
+            server = normalized,
+            password = masterPassword,
+            twoFactor = TwoFactorAttempt(provider, code),
+        )
+        if (outcome == UnlockResult.Success) {
+            registerVaultRow(normalized, email.trim())
+        }
+        return outcome
+    }
+
     override fun lockVault(vaultId: String) {
         // 锁定入口来自 UI 线程，key 清零需要挂起；这里包一层同步桥接，
         // 保证锁定的语义是「调用返回后密钥已不可用」。
@@ -105,15 +146,28 @@ class VaultRepositoryImpl @Inject constructor(
 
     // ---- 内部 ----
 
-    /** 登录 → 解包账号对称密钥 → 注册内存会话。 */
-    private suspend fun doUnlock(email: String, server: String, password: String): UnlockResult {
-        val login = authRepository.login(
-            server = server,
-            email = email,
-            password = password,
-            deviceId = obtainDeviceId(),
-            deviceName = deviceName(),
-        )
+    /** 登录（可选 2FA 提交）→ 解包账号对称密钥 → 注册内存会话。 */
+    private suspend fun doUnlock(
+        email: String,
+        server: String,
+        password: String,
+        twoFactor: TwoFactorAttempt? = null,
+    ): UnlockResult {
+        val deviceId = obtainDeviceId()
+        val deviceName = deviceName()
+        val login = if (twoFactor == null) {
+            authRepository.login(server, email, password, deviceId, deviceName)
+        } else {
+            authRepository.loginWithTwoFactor(
+                server = server,
+                email = email,
+                password = password,
+                provider = twoFactor.provider,
+                code = twoFactor.code,
+                deviceId = deviceId,
+                deviceName = deviceName,
+            )
+        }
         val session = login.getOrElse { return classifyLoginError(it) }
 
         val unpack = authRepository.unpackAccountKey(server, session.masterKey)
@@ -142,13 +196,12 @@ class VaultRepositoryImpl @Inject constructor(
     }
 
     private fun classifyLoginError(error: Throwable): UnlockResult = when (error) {
+        is TwoFactorRequiredException -> UnlockResult.TwoFactorRequired(error.providers)
+        is TwoFactorInvalidException -> UnlockResult.TwoFactorInvalid
         is HttpException -> when {
             error.code() == HTTP_UNAUTHORIZED -> UnlockResult.InvalidCredentials
             // 官方 Bitwarden：prelogin 对未注册邮箱返回 404（Vaultwarden 不区分账号）
             error.code() == HTTP_NOT_FOUND -> UnlockResult.AccountNotFound
-            error.response()?.errorBody()?.string()
-                ?.contains(TWO_FACTOR_MARKER, ignoreCase = true) == true ->
-                UnlockResult.TwoFactorRequired
             // 400 invalid_grant（主密码错误）与其它 4xx 一律按凭据错误提示
             else -> UnlockResult.InvalidCredentials
         }
@@ -179,8 +232,10 @@ class VaultRepositoryImpl @Inject constructor(
         const val DISPLAY_NAME_BITWARDEN = "Bitwarden"
         const val HTTP_UNAUTHORIZED = 401
         const val HTTP_NOT_FOUND = 404
-        const val TWO_FACTOR_MARKER = "two_factor"
         const val KEY_DEVICE_ID = "device_id"
         const val DEFAULT_DEVICE_NAME = "Vaultix Device"
     }
 }
+
+/** 2FA 提交参数（provider + 验证码）。 */
+private data class TwoFactorAttempt(val provider: Int, val code: String)
