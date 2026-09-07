@@ -97,7 +97,10 @@ jobs:
         if: github.event_name != 'push'
         # 多 flavor 下 `lintDebug` 存在歧义（候选：lintFullDebug / lintOfflineDebug），
         # 必须显式指定 variant；否则 PR / 手动触发时该步骤直接失败（push 时不跑 lint，故不易发现）。
-        run: ./gradlew :app:lintFullDebug :app:lintOfflineDebug --stacktrace
+        # 注意：AGP 的 LintModelWriterTask 与 Gradle 配置缓存不兼容，会抛
+        # ConfigurationCacheError（并连带导致 androidTest classpath 解析失败）。
+        # CI 的 GRADLE_OPTS 全局开启了 configuration-cache，故此处显式关闭。
+        run: ./gradlew :app:lintFullDebug :app:lintOfflineDebug --stacktrace --no-configuration-cache
 
       # push 时注入仓库固定签名，使 preview(debug) 与 stable release 签名完全一致、可互相覆盖安装。
       # 注意：本步骤与 release.yml 使用同一套 SIGNING_* Secret，密码也复用 Secret（不再硬编码 android），
