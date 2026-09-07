@@ -47,13 +47,46 @@ data class PreLoginRequest(
     @SerialName("email") val email: String,
 )
 
+/**
+ * prelogin 响应。
+ *
+ * ⚠️ 双形态兼容（2026-09-08 真机验证踩坑）：官方 Bitwarden server 返回
+ * PascalCase（`Kdf`/`KdfIterations`），**Vaultwarden ≥ 1.33 返回 camelCase**
+ * （`kdf`/`kdfIterations`，其服务端默认 JSON 命名策略为 camelCase），两形态
+ * 字段会同时出现在部分响应里。全部声明为可空默认值 + [resolvedXxx] 合并，
+ * 二者皆缺时抛出带用户可读消息的异常（UI 显示「出错了：…」而非序列化裸错）。
+ */
 @Serializable
 data class PreLoginResponse(
-    @SerialName("Kdf") val kdf: Int,
-    @SerialName("KdfIterations") val kdfIterations: Int,
+    // ---- 官方 Bitwarden：PascalCase ----
+    @SerialName("Kdf") val kdf: Int? = null,
+    @SerialName("KdfIterations") val kdfIterations: Int? = null,
     @SerialName("KdfMemory") val kdfMemory: Int? = null,
     @SerialName("KdfParallelism") val kdfParallelism: Int? = null,
-)
+    // ---- Vaultwarden ≥1.33：camelCase ----
+    @SerialName("kdf") val kdfLower: Int? = null,
+    @SerialName("kdfIterations") val kdfIterationsLower: Int? = null,
+    @SerialName("kdfMemory") val kdfMemoryLower: Int? = null,
+    @SerialName("kdfParallelism") val kdfParallelismLower: Int? = null,
+) {
+
+    fun resolvedKdf(): Int =
+        (kdf ?: kdfLower) ?: throw PreLoginFieldsMissingException()
+
+    fun resolvedIterations(): Int =
+        (kdfIterations ?: kdfIterationsLower) ?: throw PreLoginFieldsMissingException()
+
+    fun resolvedMemoryMb(): Int? = kdfMemory ?: kdfMemoryLower
+
+    fun resolvedParallelism(): Int? = kdfParallelism ?: kdfParallelismLower
+}
+
+/** prelogin 响应缺少 KDF 参数：服务端不是 Bitwarden 兼容实现或被网关改写。 */
+class PreLoginFieldsMissingException :
+    IllegalArgumentException(
+        "服务器未返回 KDF 参数（Kdf/KdfIterations），可能不是 Bitwarden 兼容服务端，" +
+            "或请求被网关拦截改写。请检查服务器地址。",
+    )
 
 @Serializable
 data class TokenResponse(

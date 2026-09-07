@@ -41,4 +41,8 @@ dependencies {
     // 依赖注入
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
+
+    // 测试（DTO 容错、解析双形态）
+    testImplementation(libs.junit)
+    testImplementation(libs.truth)
 }

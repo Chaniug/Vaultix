@@ -164,16 +164,20 @@ class BitwardenAuthRepository @Inject constructor(
         pre: PreLoginResponse,
         password: String,
         salt: String,
-    ): SecureBytes = when (pre.kdf) {
-        KDF_PBKDF2 -> crypto.deriveMasterKeyPbkdf2(password, salt, pre.kdfIterations)
-        KDF_ARGON2ID -> crypto.deriveMasterKeyArgon2(
-            password = password,
-            salt = salt,
-            iterations = pre.kdfIterations,
-            memoryMb = pre.kdfMemory ?: DEFAULT_ARGON2_MEMORY_MB,
-            parallelism = pre.kdfParallelism ?: DEFAULT_ARGON2_PARALLELISM,
-        )
-        else -> throw IllegalArgumentException("Unsupported Kdf type: {pre.kdf}")
+    ): SecureBytes {
+        val kdf = pre.resolvedKdf()
+        val iterations = pre.resolvedIterations()
+        return when (kdf) {
+            KDF_PBKDF2 -> crypto.deriveMasterKeyPbkdf2(password, salt, iterations)
+            KDF_ARGON2ID -> crypto.deriveMasterKeyArgon2(
+                password = password,
+                salt = salt,
+                iterations = iterations,
+                memoryMb = pre.resolvedMemoryMb() ?: DEFAULT_ARGON2_MEMORY_MB,
+                parallelism = pre.resolvedParallelism() ?: DEFAULT_ARGON2_PARALLELISM,
+            )
+            else -> throw IllegalArgumentException("Unsupported Kdf type: {pre.kdf}")
+        }
     }
 
     private companion object {
