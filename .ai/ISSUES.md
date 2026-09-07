@@ -37,3 +37,19 @@
 
 - `C:\AndroidSDK` 只有 35 / 37 / 37.0，故 `compileSdk` 必须 ≥ 37
 - `D:\AndroidSDK` 是空壳，不可用
+
+## 6. PowerShell 生成含 `$` 的代码时的转义陷阱（2026-09-07）
+
+- **现象**：用 here-string 生成 Kotlin 代码时，`"bw_access::$server"` 被写成
+  `"bw_access::server"`（`$` 被插值吞掉）——**所有库的凭据共用同一个 key，
+  多库场景下 token 会互相覆盖**。这是真实上线级 Bug。
+- **试过的错误转法**：`"`${'$'}server"` 产出 `$` 消失；单引号 here-string 里 `` `$ `` 保留反引号
+- **解法**：代码里改用**常量前缀 + 字符串拼接**（`PREFIX + server`），完全避开 `$`
+- **教训**：①生成脚本写完必须**校验输出文件内容**，不能只看脚本本身；
+  ②需要插值变量时优先拼接而非模板；③写含 `$` 的代码用单引号 here-string `@'...'@`
+
+## 7. 覆盖安装前提（记录，避免日后误改）
+
+debug(preview) 与 release 可互相覆盖安装的**硬性前提**：
+- 两者 applicationId 相同（debug **不加** applicationIdSuffix）
+- 两者签名相同（已统一走 SIGNING_* Secret，jks 在 `D:\vaultix-release.jks`，密码用户自留）

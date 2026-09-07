@@ -1,37 +1,44 @@
 # 下一步任务清单
 
-> 按优先级排列；每项含"为什么做"。状态：`TODO` / `DOING` / `DONE` / `BLOCKED`
+> 更新于 2026-09-07 晚。M1 数据链路已全通，剩余工作如下。
+> 状态：`TODO` / `DOING` / `DONE` / `BLOCKED`
 
-## P0 · 主线 M1（Bitwarden 同步）
+## 已完成（本轮，供对照）
 
-- [ ] **补全 `data:bitwarden` 的 Vault API**：`sync` / `accounts/revision-date` / ciphers CRUD / folders
-      *为什么：目前只有身份端点，无法真正同步*
-- [ ] **移植 401 自动刷新拦截器**（OkHttp `Authenticator`，按 host 刷新 token）
-      *为什么：Bastion 踩过坑的成果，token 过期是同步失败第一大原因*
-- [ ] 建 `core:database`（Room 密文缓存 + dirty 队列）
-      *为什么：离线可用与增量同步的前提*
-- [ ] 建 `core:datastore`（设置 + Keystore 包装）
-- [ ] 序列化容错：`ignoreUnknownKeys = true`
-      *为什么：Bitwarden 服务端新增字段时，严格解析会直接崩*
+- [x] `core:crypto`（172 例测试，行覆盖 91.4%，Argon2 向量经 argon2-cffi 校准）
+- [x] `core:database`（Room：vaults/ciphers/folders/pending_ops，只存密文）
+- [x] `core:datastore`（DataStore 设置 + Keystore 安全凭据）
+- [x] `data:bitwarden`：Identity+Vault API、DTO、Json 容错、OkHttp（30s/401/防死连接）
+- [x] 认证链路：prelogin→KDF→hash→token；refresh 用 Mutex 串行；host→server 映射
+- [x] 同步编排：预检 revision→全量→空库保护→落库；dirty 队列推送
+- [x] 解密链路：unpackAccountKey（stretch→解包→清零）+ CipherMapper 双向映射
+- [x] CI 修复 7 处（SDK 37 / 多 flavor / 触发盲区 / BOM），push 与手动触发均绿
 
-## P1 · 质量基础设施（越早越好，趁代码少）
+## P0 · M1 收尾（当前主线）
 
-- [ ] 接入 **Detekt**，启用 `LongMethod` / `TooManyFunctions` / `LongParameterList` / `LargeClass`
-      *为什么： Docs/16 的规模上限需要工具强制，否则形同虚设*
-- [ ] 配置 **Baseline Profile**
-      *为什么：显著提升启动与首次滚动性能，是官方推荐的首屏优化手段*
-- [ ] 开启 Gradle **配置缓存**与并行执行
-      *为什么：缩短构建反馈时间*
+- [ ] **UI 层接入**：登录页、库列表、条目列表（空态/错误态）
+      交互基线见 `Docs/16` §4：顶部大标题随滚动缩放、功能折叠进标题、沉浸式半透明，
+      必须由滚动位置驱动（NestedScrollConnection/ScrollState）
+      先研究 Bastion 的实现（用户亲手打磨，可直接借鉴交互），再决定移植或重写
+- [ ] **条目创建/编辑入口**：调 CipherMapper.toRequest → 入 dirty 队列
+- [ ] **解包密钥的会话管理**：unlock 后的 SymmetricCryptoKey 放哪、锁定时如何清零
 
-## P2 · UI / 交互
+## P1 · 质量基础设施（趁代码量还小）
 
-- [ ] 研究 Bastion 的**滚动缩放标题 / 功能折叠 / 沉浸式透明**实现，决定移植还是重写
-- [ ] 搭空壳导航（库列表 / 解锁 / 主列表 / 设置）+ 动态取色
+- [ ] **Detekt**：启用 LongMethod/TooManyFunctions/LongParameterList/LargeClass
+- [ ] **Baseline Profile**（启动与首次滚动性能）
+- [ ] Gradle 配置缓存（注意：lint 需 --no-configuration-cache，见 CI 修复 #6）
+
+## P2 · 自动化
+
+- [ ] WorkManager 周期同步 + 网络约束（`Docs/17` §3.3：禁止常驻轮询）
 
 ## P3 · M2（KDBX）
 
-- [ ] `data:kdbx` 引擎（kotpass），并按 `Docs/02` 3.4 做往返保真度测试
+- [ ] `data:kdbx` 引擎（kotpass），按 `Docs/02` §3.4 做往返保真度测试
 
-## 暂缓
+## 已知未决（接力者注意）
 
-- `feature/*` 模块拆分（文档已标注：暂不拆）
+- `TokenRefresher` 已接真实实现，但**尚无 UI 会话管理**（unlock/lock 状态机未建）
+- `VaultItem` 仍是 M0 雏形（5 字段），与 `Docs/02` 超集模型差距大；补字段时同步补 Mapper
+- 同步编排刻意未做节流/优先级/被动同步（M1 不需要，勿过度设计）
