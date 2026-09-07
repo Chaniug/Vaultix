@@ -58,6 +58,8 @@
 | passkey 历史迁移合并 | 仅替换 `login.fido2Credentials`、幂等标记、15s 超时保护 | `app/bitwarden/service/BitwardenHistoricalPasskeyMergeService.kt` |
 | 离线缓存语义 | 本地密文快照、逐条降级 | `app/bitwarden/cache/BitwardenOfflineSecretCache.kt` |
 
+> **已吸收（2026-09-08 研读回写，d689a37）**：登录态保持语义——Bastion `BitwardenRepository.refreshTokenDetailed` 的 `RefreshOutcome` 三分（仅 400/401=AuthInvalid 需重登；403/429/5xx/网络=Transient 保留凭据）与其 ApiFactory `shouldRetry`/403 注释（**403 不等于登录过期**），已在 Vaultix 落地为：请求预挂 Bearer + 到期前 60s 预刷新（accessTokenExpiresAt 语义）+ `refreshFailureKind` 三分 + sync 401 按 `refreshFailureOf` 归类。回归防护见 `.ai/ISSUES.md` §8。
+
 ### 4.2 领域模型与字段超集（M1 收尾必做：字段对拍矩阵，产物进 Docs/02）
 
 | 主题 | 提取内容 | Bastion 参考位置 |

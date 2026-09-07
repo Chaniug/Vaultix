@@ -1,5 +1,8 @@
 # Vaultix 项目长期笔记
 
+> **当前迭代状态**：`Docs/progress/next-steps.md`（待办清单）与 `Docs/progress/current-status.md`
+> （进度快照）为准；逐轮流水见 `.ai/SESSION-2026-09-08.md`；踩坑索引见 `.ai/ISSUES.md`。
+
 ## 产品定位（2026-09-07 用户拍板）
 - **Bitwarden 优先的客户端**，对标 **Keyguard 路线**（区别于 Monica / Bastion 的"本地优先·聚合"）
 - 支持 2 种库：Bitwarden 云端（主）+ KDBX 本地（次）

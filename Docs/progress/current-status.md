@@ -1,31 +1,41 @@
 # 当前进度快照
 
-> 最后更新：2026-09-08（第九轮）
+> 最后更新：2026-09-08（第十一轮 · M1 代码侧收官，待真机回归）
 
 ## 里程碑进度
 
 | 期 | 内容 | 状态 |
 |---|---|---|
 | M0 | 基础骨架 + `core:crypto` | ✅ DONE |
-| M1 | **Bitwarden 同步** | 🚧 DOING（登录/2FA/同步编排/条目 CRUD/自动锁/快速解锁/设置均已落地；剩真机回归、周期同步、移除库/回收站、sync 文案收编） |
-| M2 | KDBX 引擎 | ⬜ TODO（启动前通读 Docs/18 §4.3） |
+| M1 | **Bitwarden 同步** | 🚧 代码侧收官（功能全落地，仅剩**真机回归**待用户验证 d689a37 preview） |
+| M2 | KDBX 引擎 | ⬜ TODO（启动前通读 Docs/18 §4.3 + reference/bastion 快照 KDBX 资产） |
 | M3 | 平台集成（Autofill / 安全中心） | ⬜ TODO |
 | M4 / M5 | 发布准备 / 1.0 | ⬜ TODO |
+
+## M1 收官内容（2026-09-08 全部推送）
+
+- **对齐审计**（`Docs/progress/audit/bitwarden-alignment.md`）：vs Bastion reference 差距表 M1-1..7 / M2-1..3 / 不做
+- **批 1 数据安全**（b0ad421）：DTO 全载荷 + 合并更新（编辑不再丢 uri/totp/卡/SSH 载荷）+ type5 建模 + 类型守恒守卫 + 全量后 prune + flush 4xx 弃单
+- **回收站视图**（1d0f299）：恢复 / 永久删除（本地先行 + RESTORE/DELETE 队列）
+- **登录失效修复**（d689a37）：预挂 Bearer + 到期前 60s 预刷新 + 刷新失败三分（400/401 才判失效）+ 解锁路径 registerServer
+- **移除库入口**（d689a37）：⋮ 菜单 + 二次确认 → 本地全清（会话/快速解锁/凭据/队列/级联行）
+- **周期同步 M1 判推迟 → P2**（a300189）：进程被杀无解锁会话可同步，收益≈0；PERIODIC 已预留
+- 门禁每批全绿：双 flavor + Hilt（full/offline）+ 各模块单测 + detekt
 
 ## 模块状态
 
 | 模块 | 状态 | 说明 |
 |---|---|---|
-| `app` | ✅ 可用 | 库列表 / 连接 / 解锁 / 条目列表 / 详情（编辑删除复制）+ 自动锁定 + 快速解锁 + 设置页 + 同步状态条/强度条 |
+| `app` | ✅ 可用 | 库列表 / 连接 / 解锁 / 条目列表 / 详情 + 回收站 + 移除库 + 自动锁 + 快速解锁 + 设置页 + 类型徽标/强度条/同步状态条 |
 | `core:common` | ✅ | safeCall、PasswordStrength 评分卡（Bastion 移植） |
-| `core:model` | ✅ | VaultItem（6 字段）/ VaultKind / VaultSummary |
+| `core:model` | ✅ | VaultItem（Login/SecureNote/Card/Identity/SshKey）/ VaultKind / VaultSummary |
 | `core:crypto` | ✅ | 行覆盖 91.4% |
-| `core:database` | ✅ | Room v2；CipherDao.observe(id) 单条目流 |
+| `core:database` | ✅ | Room v2；ciphers（整包密文）/ folders / pending_ops / 回收站流查询 |
 | `core:datastore` | ✅ | DataStore 设置 + Keystore 凭据（含 local_unlock_key） |
 | `core:ui` | ✅ | VaultixTheme |
-| `data:bitwarden` | ✅ | 同步/认证/2FA/重映射/per-item key |
-| `data:repository` | ✅ | VaultRepositoryImpl / ItemRepositoryImpl + VaultSessionManager + BitwardenSyncOrchestrator；单测 3 测试类全绿 |
-| `domain` | 🚧 | VaultRepository / ItemRepository 接口（+SyncTrigger/VaultSyncStatus） |
+| `data:bitwarden` | ✅ | 同步/认证/2FA/合并更新/预挂 Bearer+预刷新/刷新三分（400/401=失效，其余可重试） |
+| `data:repository` | ✅ | VaultRepositoryImpl / ItemRepositoryImpl + VaultSessionManager + BitwardenSyncOrchestrator；单测覆盖会话/写路径/回收站/移除库/编排器 |
+| `domain` | ✅ | VaultRepository / ItemRepository（observe/CRUD/回收站/移除库）+ SyncTrigger/VaultSyncStatus/VaultSaveOutcome |
 | `data:kdbx` | ⬜ | M2 |
 | `feature/*` | ⬜ | 暂不拆分（按包名组织） |
 
@@ -34,23 +44,19 @@
 | 指标 | 当前值 | 目标 | 状态 |
 |---|---|---|---|
 | `core:crypto` 行覆盖 | 91.4% | ≥ 80% | ✅ |
-| `core:crypto` 用例数 | 172 | — | ✅ |
-| `data:repository` 单测 | 通过（会话/条目写路径/同步编排） | — | ✅ |
 | Detekt（全模块 main+test） | 0 违规 | 0 | ✅ |
-| 构建 | `:app:compile{Full,Offline}DebugKotlin` + Hilt 组件通过 | 通过 | ✅ |
+| 构建 | 双 flavor 编译 + Hilt 组件（full/offline）通过 | 通过 | ✅ |
+| 单测 | core:crypto 172；data:repository（会话/写路径/回收站/移除库/编排器）；data:bitwarden（2FA 解析/prelogin/per-item key/载荷保真/刷新分类）；app（AutoLockPolicy）全绿 | 全绿 | ✅ |
 
-## 质量工具
+## 待办（真机回归通过后 M1 收口）
 
-- Detekt `dev.detekt` 2.0.0-alpha.6（2026-09-08 上线，阈值 `config/detekt/detekt.yml`，
-  根工程统一启用，CI push/PR 门禁）
-- Kover ≥80% 行覆盖门禁（core:crypto）
-
-## 技术栈（未变）
-
-Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk 37 / JDK 17
+- [ ] 用户装 d689a37 preview 回归：重启+快速解锁不失效 / 1h+ 自动续期 / 弱网可重试不误报 / 载荷保真 / 回收站 / 移除库（清单见 next-steps）
+- [ ] P1 质量基础设施：Baseline Profile、ViewModel 单测、Gradle 配置缓存
+- [ ] P2：WorkManager 周期同步（决策已记录推迟理由）
+- [ ] M2：`data:kdbx`（Docs/18 §4.3 通读 → 字段对拍矩阵进 Docs/02）
 
 ## 参考资产（2026-09-08）
 
-- Bastion 冻结为 **reference implementation**（代码与 GitHub 均不再改动），Vaultix = 唯一演进线；决策见 `decisions.md`
-- `Docs/18-Bastion参考地图.md`：按里程碑的 Bastion 参考索引 + 别搬清单 + 对拍流程（M2 `data:kdbx` 启动前必读 §4.3）
-- `reference/bastion/`：仓库内 vendored 快照（@369ed56，1012 文件/≈13 MB，只读不参与构建）；接力 AI 无需访问 D:\Bastion
+- Bastion 冻结为 reference；`Docs/18-Bastion参考地图.md` 分里程碑参考索引 + 别搬清单 + 对拍流程
+- `reference/bastion/`：仓库内 vendored 快照（@369ed56，1012 文件 ≈13 MB，只读不参与构建）
+- 对齐审计报告：`Docs/progress/audit/bitwarden-alignment.md`
