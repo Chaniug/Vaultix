@@ -5,6 +5,16 @@
  * Vaultix is free software: you can redistribute it and/or modify it under the terms of the
  * GNU General Public License as published by the Free Software Foundation, either version 3
  * of the License, or (at your option) any later version.
+ *
+ * ---------------------------------------------------------------------------
+ * 溯源声明（GPL-3.0 合规）
+ * 请求头组（Cloudflare 兼容指纹）参考 Bastion 项目（GPL-3.0，Copyright 2025
+ * JoyinJoester）bitwarden/api/BitwardenApiFactory.kt 的 header interceptor：
+ * 完整桌面 Chrome UA + Sec-Ch-Ua 系列 + Keyguard-Client，用于绕过自托管站点
+ * 前置的 Cloudflare/WAF 对非浏览器 UA 的拦截；Bitwarden-Client-Name/Version
+ * 供官方服务器按客户端形态决定返回结构。数值与 Bastion 一致（其在 CF 后的
+ * Vaultwarden 实例上实测可用）。
+ * ---------------------------------------------------------------------------
  */
 package io.vaultix.data.bitwarden.di
 
@@ -41,10 +51,22 @@ object NetworkModule {
     private const val WRITE_TIMEOUT_SECONDS = 30L
     private const val PING_INTERVAL_SECONDS = 30L
 
-    /** 客户端标识（对齐 Bastion：官方服务器按这些头决定返回结构）。 */
-    private const val USER_AGENT = "Vaultix/0.1.0 (Android)"
-    private const val CLIENT_NAME_MOBILE = "mobile"
-    private const val CLIENT_VERSION = "2026.9.1"
+    // ---- Cloudflare/WAF 兼容请求指纹（与 Bastion 同值，见文件头溯源）----
+    /** 完整桌面 Chrome UA：自托管站点前置 CF 时常拦截非浏览器 UA。 */
+    private const val USER_AGENT =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+            "(KHTML, like Gecko) Chrome/131.0.6778.140 Safari/537.36"
+    private const val SEC_CH_UA = "\"Not.A/Brand\";v=\"8\", \"Chromium\";v=\"131\""
+    private const val SEC_CH_UA_MOBILE = "?0"
+    private const val SEC_CH_UA_PLATFORM = "Linux"
+    /** Keyguard 生态标识（Bastion/Keyguard 同款，部分 CF 规则依赖）。 */
+    private const val KEYGUARD_CLIENT = "1"
+    /**
+     * 官方服务器按客户端名/版本决定返回结构（新 cipher type、SSH Key 字段、2FA 流程）；
+     * 与 Bastion 一致声明 desktop，两端服务器均接受。
+     */
+    private const val CLIENT_NAME = "desktop"
+    private const val CLIENT_VERSION = "2025.1.0"
 
     @Provides @Singleton
     fun provideJson(): Json = BitwardenJson
@@ -73,10 +95,12 @@ object NetworkModule {
             .addInterceptor { chain ->
                 val request = chain.request().newBuilder()
                     .header("User-Agent", USER_AGENT)
-                    // Bitwarden 服务端按客户端名/版本决定返回内容（如新 cipher type、
-                    // SSH Key 字段与 2FA 流程）；不声明会降级或丢字段（Bastion 实测结论，
-                    // GPL-3.0 溯源）。统一声明「移动端 + 新版」，官方与 Vaultwarden 均接受。
-                    .header("Bitwarden-Client-Name", CLIENT_NAME_MOBILE)
+                    .header("Keyguard-Client", KEYGUARD_CLIENT)
+                    .header("Accept-Language", java.util.Locale.getDefault().toLanguageTag())
+                    .header("Sec-Ch-Ua", SEC_CH_UA)
+                    .header("Sec-Ch-Ua-Mobile", SEC_CH_UA_MOBILE)
+                    .header("Sec-Ch-Ua-Platform", SEC_CH_UA_PLATFORM)
+                    .header("Bitwarden-Client-Name", CLIENT_NAME)
                     .header("Bitwarden-Client-Version", CLIENT_VERSION)
                     .build()
                 chain.proceed(request)
