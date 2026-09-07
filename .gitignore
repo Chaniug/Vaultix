@@ -45,5 +45,8 @@ captures/
 # Compose compiler reports (CI uploads these)
 compose-reports/
 
+# WorkBuddy 助手工作目录（本地工作记忆，不入库）
+.workbuddy/
+
 # OS
 Thumbs.db

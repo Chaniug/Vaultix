@@ -3,7 +3,7 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
+    // 注意：AGP 9 起内置 Kotlin，不再 apply kotlin-android（会与内置扩展冲突）
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.hilt)
     alias(libs.plugins.ksp)
@@ -11,12 +11,13 @@ plugins {
 
 android {
     namespace = "io.vaultix.vaultix"
-    compileSdk = 36
+    // 本机 SDK 已安装 android-37（无 android-36），且与 Bastion 对齐
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "io.vaultix.vaultix"
         minSdk = 26
-        targetSdk = 36
+        targetSdk = 37
         versionCode = 1
         // CI 通过 -PversionName 注入版本号（如 0.1.0-dev-abc1234），本地默认 0.1.0
         versionName = providers.gradleProperty("versionName").getOrElse("0.1.0")
@@ -61,9 +62,6 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
-    }
-    kotlinOptions {
-        jvmTarget = "17"
     }
 
     buildFeatures {
@@ -124,4 +122,12 @@ dependencies {
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.hilt.android.testing)
     kspAndroidTest(libs.hilt.compiler)
+}
+
+// AGP 9 内置 Kotlin：编译器选项改在顶层 kotlin {} 块配置（kotlinOptions 已废弃）。
+// Kotlin 2.2+ 起 jvmTarget 必须用 JvmTarget 枚举，不再接受 Gradle 的 JavaVersion。
+kotlin {
+    compilerOptions {
+        jvmTarget = JvmTarget.JVM_17
+    }
 }

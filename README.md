@@ -6,9 +6,9 @@
 |---|---|
 | 项目代号 | Vaultix |
 | 目标平台 | Android 8.0（API 26）及以上，Target SDK 36（Android 16） |
-| 技术栈 | Kotlin + Jetpack Compose + Material 3 + Coroutines/Flow + Room + Ktor/OkHttp + Hilt |
+| 技术栈 | Kotlin + Jetpack Compose + Material 3 + Coroutines/Flow + Room + Retrofit/OkHttp + Hilt |
 | 支持库类型 | ① Bitwarden / Vaultwarden 新版服务端（在线同步，仅新版 API）② KDBX 4.x 本地文件（写入恒 4.1） |
-| 开源协议 | 建议 GPL-3.0-or-later（与 Bitwarden 客户端一致）；依赖 License 见 [11-工程规范](./Docs/11-工程规范与构建体系.md) |
+| 开源协议 | **GPL-3.0-or-later**（与 Bitwarden 客户端一致；2026-09 由 MIT 切换，以便合规参考/复用 Bastion 等 GPL-3.0 实现）；依赖 License 见 [11-工程规范](./Docs/11-工程规范与构建体系.md) |
 | 文档版本 | v1.0（2026-09） |
 
 ## 文档导航
@@ -31,6 +31,9 @@
 | 13 | [路线图与里程碑](./Docs/13-路线图与里程碑.md) | 分期目标与验收标准 | 所有人 |
 | 14 | [附录：代码骨架](./Docs/14-附录代码骨架.md) | 关键接口与类的代码框架 | 开发 |
 | 15 | [竞品界面参考与差异化](./Docs/15-竞品界面参考与差异化.md) | 对 Keyguard / Monica / Bastion 的参考点与差异 | 设计 / 产品 |
+| 16 | [性能与交互规范](./Docs/16-性能与交互规范.md) | 代码规模上限、JIT 约束、列表/解密性能、省电、沉浸交互 | 开发 |
+| 17 | [稳定性与防错规范](./Docs/17-稳定性与防错规范.md) | 序列化容错、网络健壮性、协程取消、崩溃兜底、待整改项 | 开发 |
+| — | [项目进度](./Docs/progress/README.md) | 环境配置、当前进度、下一步清单、决策记录 | 所有人 |
 
 ## 分支策略与自动构建
 
