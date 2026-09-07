@@ -49,9 +49,12 @@ ensure "platforms;android-37"
 ensure "build-tools;36.0.0"
 ensure "platform-tools"
 
-# 最终校验：AGP 构建期需要 $SDK_ROOT/platforms/android-37 这个目录存在
-if [ ! -d "$SDK_ROOT/platforms/android-37" ]; then
-  echo "::error title=Platform android-37 missing::安装后仍未找到 $SDK_ROOT/platforms/android-37"
+# 最终校验：AGP 构建期需要 API 37 的 platform 目录。
+# 注意：Android 16（API 36）起 platform 目录带扩展版本号，GitHub runner 镜像上的实际目录名
+# 为 android-37.0 / android-37.1 / android-37.2，而**不一定存在**名为 android-37 的目录
+# （本机 SDK 两者都有，故本地不会暴露此差异）。因此必须按前缀 android-37* 匹配。
+if ! ls -d "$SDK_ROOT/platforms"/android-37* >/dev/null 2>&1; then
+  echo "::error title=Platform android-37 missing::安装后仍未找到 $SDK_ROOT/platforms/android-37*"
   ls "$SDK_ROOT/platforms" 2>/dev/null || true
   exit 1
 fi
