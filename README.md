@@ -59,11 +59,13 @@
 
 ```bash
 # 1) 生成发布密钥库（alias 自定，下面用 vaultix，请记牢）
+#    ⚠️ Java 默认 PKCS12 格式要求 store 密码与 key 密码【相同】，
+#       务必两处填同一个密码，否则 keytool 会忽略 keypass，导致后续 CI 签名失败。
 keytool -genkeypair -v -keystore vaultix-release.jks \
   -keyalg RSA -keysize 2048 -validity 10000 \
   -alias vaultix \
-  -storepass '改成你的store密码' \
-  -keypass  '改成你的key密码' \
+  -storepass '改成你的同一个密码' \
+  -keypass  '改成你的同一个密码' \
   -dname "CN=Vaultix, O=Vaultix, C=CN"
 
 # 2) 导出为单行 Base64（macOS 用 base64 vaultix-release.jks 即可，去掉 -w0）
