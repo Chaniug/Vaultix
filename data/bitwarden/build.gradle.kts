@@ -27,6 +27,7 @@ dependencies {
     implementation(projects.core.model)
     implementation(projects.core.common)
     implementation(projects.core.crypto)
+    implementation(projects.core.datastore)
 
     // 网络层
     implementation(libs.retrofit.core)

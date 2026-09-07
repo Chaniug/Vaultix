@@ -14,6 +14,7 @@ import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
 import io.vaultix.data.bitwarden.api.BitwardenIdentityApi
+import io.vaultix.data.bitwarden.auth.BitwardenTokenRefresher
 import io.vaultix.data.bitwarden.api.BitwardenVaultApi
 import io.vaultix.data.bitwarden.network.BitwardenAuthenticator
 import io.vaultix.data.bitwarden.network.BitwardenEndpoints
@@ -40,7 +41,7 @@ object NetworkModule {
      * 认证模块就绪后应提供真实实现覆盖此绑定。
      */
     @Provides @Singleton
-    fun provideTokenRefresher(): TokenRefresher = TokenRefresher { null }
+    fun provideTokenRefresher(impl: BitwardenTokenRefresher): TokenRefresher = impl
 
     @Provides @Singleton
     fun provideAuthenticator(refresher: TokenRefresher): Authenticator =
