@@ -16,6 +16,7 @@
 package io.vaultix.data.bitwarden.auth
 
 import io.vaultix.crypto.SecureBytes
+import io.vaultix.crypto.SymmetricCryptoKey
 import io.vaultix.crypto.VaultixCrypto
 import io.vaultix.data.bitwarden.api.PreLoginRequest
 import io.vaultix.data.bitwarden.api.PreLoginResponse
@@ -81,6 +82,8 @@ class BitwardenAuthRepository @Inject constructor(
         )
 
         persist(server, token.accessToken, token.refreshToken)
+        // 受保护的账号对称密钥：后续用它解密所有条目，务必一并持久化
+        token.key?.let { credentials.putString(CredentialKeys.protectedKey(server), it) }
         noteServer(server)
 
         AuthSession(
@@ -117,8 +120,28 @@ class BitwardenAuthRepository @Inject constructor(
     fun logout(server: String) {
         credentials.remove(CredentialKeys.access(server))
         credentials.remove(CredentialKeys.refresh(server))
+        credentials.remove(CredentialKeys.protectedKey(server))
         hostOf(server)?.let { serverByHost.remove(it) }
     }
+
+    /**
+     * 解包账号对称密钥：用 StretchedMasterKey 解开服务端返回的受保护密钥。
+     *
+     * 这是「登录成功」到「能显示条目」之间必经的一步——
+     * 只有拿到账号对称密钥，才能用 [CipherMapper] 把密文 DTO 解密成 VaultItem。
+     */
+    suspend fun unpackAccountKey(server: String, masterKey: SecureBytes): Result<SymmetricCryptoKey> =
+        runCatching {
+            val protected = credentials.getString(CredentialKeys.protectedKey(server))
+                ?: error("No protected symmetric key stored for ")
+            val stretched = crypto.stretchMasterKey(masterKey)
+            try {
+                crypto.decryptSymmetricKey(protected, stretched)
+            } finally {
+                // StretchedMasterKey 用毕即清，不留在内存
+                stretched.clear()
+            }
+        }
 
     /** 供 [BitwardenTokenRefresher] 反查：OkHttp 只提供 host。 */
     fun findServerByHost(host: String): String? = serverByHost[host]

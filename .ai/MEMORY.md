@@ -104,3 +104,23 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 - 敏感存储**未用** `androidx.security.crypto` 的 `EncryptedSharedPreferences`/`MasterKey`
   （1.1.0 已整体废弃），改为 **Android Keystore + AES-256-GCM**：密钥不可导出、
   每值 IV 随机。已移除 security-crypto 依赖。
+
+## 同步编排完成（2026-09-07）—— 复用了 Bastion 的轮子
+- `BitwardenSyncService`：推送 dirty → 预检 revision → 全量拉取 → 安全校验 → 落库
+- **直接复用的 Bastion 设计（GPL-3.0，已标注溯源）**：
+  - `EmptyVaultProtection`（Bastion 注明源自 Keyguard 安全策略）：
+    * 服务端返回 0 条但本地有数据 → **阻止同步**（防服务端故障清空用户数据，不可逆）
+    * 数据量骤减 > 50% → 同样拦截并提示
+    * 按 Vaultix 的 String 型 vaultId 改写，去掉 Log 以符合项目日志规范
+  - 失败分类（参考 Bastion `SyncExecutionOutcome`）：Success / Skipped / Blocked /
+    RetryableError / FatalError，让上层能给出**可执行**提示而非笼统"同步失败"
+- **刻意不搬**：节流、优先级队列、被动自动同步（服务高频自动同步，M1 用不上，避免过度设计）
+
+## 复用 Bastion 代码的判断标准（经验，供后续参考）
+| 可复用 ✅ | 不可直接搬 ❌ |
+|---|---|
+| 与业务模型解耦的**安全策略 / 算法 / 流程模式** | 强耦合 Bastion 模型与存储的具体实现 |
+| 例：空库保护、失败分类、KDF 流程、401 刷新思路 | 例：`BitwardenSyncService.kt`(2594 行) 依赖其 Room/SecureItem/SettingsManager |
+| 例：`BitwardenCrypto.kt` 的加密内核（M0 已搬） | 例：UI 层（缠了大量 Bastion 的 SettingsManager） |
+
+判断口诀：**搬"思想"和"无依赖的核"，不搬"缠成一团的业务实现"**。
