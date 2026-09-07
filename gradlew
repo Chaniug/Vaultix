@@ -33,7 +33,7 @@ done
 
 APP_HOME=$( cd "${APP_HOME:-./}" && pwd -P ) || exit
 
-DEFAULT_JVM_OPTS='"-Xmx64m" "-Xms64m"'
+DEFAULT_JVM_OPTS="-Xmx2g -Xms512m"
 
 APP_NAME="Gradle"
 APP_BASE_NAME=$( basename "$0" )
