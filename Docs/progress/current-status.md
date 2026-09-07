@@ -48,3 +48,8 @@
 ## 技术栈（未变）
 
 Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk 37 / JDK 17
+
+## 参考资产（2026-09-08）
+
+- Bastion 冻结为 **reference implementation**（代码与 GitHub 均不再改动），Vaultix = 唯一演进线；决策见 `decisions.md`
+- 新增 `Docs/18-Bastion参考地图.md`：按里程碑的 Bastion 参考索引 + 别搬清单 + 对拍流程（M2 `data:kdbx` 启动前必读 §4.3）

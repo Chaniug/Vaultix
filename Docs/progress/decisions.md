@@ -29,3 +29,5 @@
 | 2026-09-08 | **设备登记走 HTTP Header（修正）** | connect/token 的 device-type/device-identifier/device-name 仅放 body 时服务器端设备管理不认（真机验证）；Header + body 双放（Bastion 实测组合）；deviceType 0=Android（原误用 1=iOS） |
 | 2026-09-08 | **preview 只发 full 一个 debug 包** | offline 分发（仅 KDBX）M2 前无功能；保留 offline 编译验证防 flavor 退化 |
 | 2026-09-08 | **签名 Secrets 修复（根因 2 条，CI 已全绿）** | ① Secrets 不自动进 env：必须 step env 显式注入（此前 `${SIGNING_STORE_PASSWORD}` 恒空 → 一次性密钥）；② PKCS12 jks 私钥密码 = store 密码，KEY_PASSWORD 传同值（独立随机 keypass 被 keytool 忽略导致 AGP 读 key 失败）。判定只看 `##[notice]固定密钥`/`##[warning]一次性` 行，勿信脚本回显 |
+| 2026-09-08 | **Bastion 冻结为 reference implementation；Vaultix = 唯一演进线** | Bastion 仍有人使用，代码与 GitHub 均不再改动；新功能/重构/修复全部在 Vaultix 进行。参考索引见 `Docs/18-Bastion参考地图.md` |
+| 2026-09-08 | **从 Bastion 只搬三类资产，不做文件级搬迁** | Bastion 主源码约 664 文件 / 25.8 万行（单模块 `:app`），直接灌入 13 模块架构会重演纠缠；只搬 ①行为知识 ②测试向量与保真矩阵 ③无依赖的核，逐功能在 Vaultix 重写，以"对拍清单"验收（流程见 `Docs/18-Bastion参考地图.md` §5） |

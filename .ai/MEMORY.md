@@ -246,3 +246,12 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 - TwoFactorStep 列出服务器下发全部「可输码」provider（TOTP/邮箱/Duo/YubiKey/org-Duo），
   枚举官方值 2=Duo、3=YubiKey、4=U2F、7=WebAuthn（U2F/WebAuthn 浏览器专用不展示）
 - YubiKey OTP 44 位字母数字输入（触控生成），数字类仍 6 位
+
+## Bastion 冻结为 reference（2026-09-08 用户拍板）
+- **Bastion 代码与 GitHub 均不再动**（仍有人用，保持现网版本）；Vaultix = 唯一演进线，后续"搬代码"= 在 Vaultix 架构上重写
+- 正确姿势：只搬三类资产（行为知识 / 测试向量与保真矩阵 / 无依赖的核），**不做文件级搬迁**（Bastion 主源码 ≈ 664 文件 / 25.8 万行、单模块）
+- 参考索引、别搬清单与对拍流程：`Docs/18-Bastion参考地图.md`；决策：`Docs/progress/decisions.md`
+- 高频参考（Bastion 本地 clone `D:\Bastion\bastion`，dev 分支；`app/` = `Bastion/app/src/main/java/com/bastion/app/`）：
+  - M2 KDBX：`app/utils/KeePassKdbxService.kt`、`app/keepass/KeePassFieldRegistry.kt`、`app/data/LocalKeePassDatabase.kt`
+  - M1 核对：`app/bitwarden/service/BitwardenSyncService.kt`、`app/bitwarden/api/BitwardenApiFactory.kt`
+  - Bastion 内部文档：仓库根 `docs/`（bitwarden同步与密码库生态.md 等）；文档可能滞后代码，以 dev 代码为最终事实

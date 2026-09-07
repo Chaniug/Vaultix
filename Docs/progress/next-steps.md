@@ -1,7 +1,14 @@
 # 下一步任务清单
 
-> 更新于 2026-09-08（第七轮）。签名修复完成（CI 全绿、单包发布）、快速解锁落地。
+> 更新于 2026-09-08（第八轮）。Bastion 冻结为 reference、参考地图落地（Docs/18）。
 > 状态：`TODO` / `DOING` / `DONE` / `BLOCKED`
+
+## 已完成（第八轮 2026-09-08 · Bastion 冻结决策与参考地图）
+
+- [x] **决策落地（decisions.md）**：Bastion 冻结 = reference implementation，Vaultix = 唯一演进线；只搬三类资产、不做文件级搬迁
+- [x] **新增 `Docs/18-Bastion参考地图.md`**：分里程碑参考索引（M1 同步核对 / M2 data:kdbx / M3 Autofill / 1.x）、别读别搬清单、对拍流程、GPL 溯源规范；README 导航与阅读路径已更新
+- [x] 长期记忆同步（.ai/MEMORY.md、.workbuddy/memory/MEMORY.md、SESSION-2026-09-08.md）
+- [x] M2 提示：`data:kdbx` 启动前通读 Docs/18 §4.3（Bastion KDBX 资产密度最高的参考站）
 
 ## 已完成（第六-七轮 2026-09-08 · 真机联调 + 签名修复 + 快速解锁 + 兼容）
 
