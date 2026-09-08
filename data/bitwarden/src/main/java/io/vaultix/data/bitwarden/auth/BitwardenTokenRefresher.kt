@@ -38,6 +38,7 @@ class BitwardenTokenRefresher @Inject constructor(
     private val authRepository: BitwardenAuthRepository,
 ) : TokenRefresher {
 
+    @Suppress("InjectDispatcher") // OkHttp Authenticator 是同步回调（非 suspend），必须 runBlocking 桥接
     override fun refresh(host: String): String? {
         val server = authRepository.findServerByHost(host) ?: return null
         return runBlocking(Dispatchers.IO) {

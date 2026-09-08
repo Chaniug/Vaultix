@@ -1,6 +1,5 @@
 package io.vaultix.vaultix.ui.common
 
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -14,7 +13,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
@@ -38,56 +36,52 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.vaultix.common.PasswordStrength
+import io.vaultix.model.VaultCard
+import io.vaultix.model.VaultIdentity
+import io.vaultix.model.VaultItem
+import io.vaultix.model.VaultItemType
+import io.vaultix.model.VaultUri
 import io.vaultix.vaultix.R
 
 /**
- * 条目表单对话框（新建 / 编辑共用，Docs/08 S10 最小版）。
+ * 条目表单对话框（新建 / 编辑共用，Docs/08 S10）。
  *
- * 密码只在对话框存续期间存在于内存；关闭/保存后由调用方保证不再持有副本。
- * 密码框下方为实时强度条（[PasswordStrength]，算法移植 Bastion 见其溯源声明；
- * 非强制门槛，仅提示）。
- * 编辑场景用 [initialXxx] 预填；切换目标条目时（key 变化）状态自动重置。
+ * 按 [VaultItem.type] 决定可编辑字段，**身份与银行卡已可编辑**：
+ * - Login：用户名 / 密码（含实时强度条）/ 网址（多值）/ TOTP 密钥；
+ * - Card：持卡人 / 发卡行 / 卡号 / 有效期月·年 / 安全码（对齐 Bitwarden card 载荷）；
+ * - Identity：全量 17 字段（对齐 Bitwarden identity 载荷，覆盖 Bastion 兼容缺陷）；
+ * - SecureNote / SshKey：仅名称 + 备注（类型专属段保留服务端原值，不做整条重写）。
  *
- * [loginFieldsVisible]：非 Login 类型条目编辑只允许改名称/备注（类型专属字段
- * 只读，合并更新由 data 层保证不丢载荷），此时隐藏用户名/密码框；[editHint]
- * 显示该限制说明。
+ * 密码等敏感值只在对话框存续期间存在于内存；关闭/保存后由调用方保证不再持有副本。
+ * 编辑场景用 [initial] 预填；切换目标条目时（key 变化）状态自动重置。
+ * 保存回传的是 [initial] 的 copy，未在本表单暴露的段（自定义字段 / 通行密钥 /
+ * SSH 密钥等）原样保留，由 data 层合并上传。
  */
 @Composable
 fun ItemFormDialog(
     title: String,
-    initialName: String = "",
-    initialUsername: String = "",
-    initialPassword: String = "",
-    initialNotes: String = "",
-    initialUris: List<String> = emptyList(),
-    initialTotp: String = "",
+    initial: VaultItem,
     saving: Boolean = false,
-    loginFieldsVisible: Boolean = true,
-    editHint: String? = null,
     onDismiss: () -> Unit,
-    onSave: (
-        name: String,
-        username: String,
-        password: String,
-        notes: String,
-        uris: List<String>,
-        totp: String,
-    ) -> Unit,
+    onSave: (VaultItem) -> Unit,
 ) {
-    var name by rememberSaveable(initialName) { mutableStateOf(initialName) }
-    var username by rememberSaveable(initialUsername) { mutableStateOf(initialUsername) }
-    var password by rememberSaveable(initialPassword) { mutableStateOf(initialPassword) }
-    var notes by rememberSaveable(initialNotes) { mutableStateOf(initialNotes) }
-    var totp by rememberSaveable(initialTotp) { mutableStateOf(initialTotp) }
-    val uris = rememberSaveable(
-        saver = listSaver<SnapshotStateList<String>, String>(
-            save = { it.toList() },
-            restore = { mutableStateListOf<String>().apply { addAll(it) } },
-        ),
-    ) { mutableStateListOf<String>().apply { addAll(initialUris) } }
+    val type = initial.type
+    var name by rememberSaveable(initial) { mutableStateOf(initial.title) }
+    var username by rememberSaveable(initial) { mutableStateOf(initial.username) }
+    var password by rememberSaveable(initial) { mutableStateOf(initial.password) }
+    var notes by rememberSaveable(initial) { mutableStateOf(initial.notes) }
+    var totp by rememberSaveable(initial) { mutableStateOf(initial.totp.orEmpty()) }
+    val uris = rememberSaveable(initial, saver = STRING_LIST_SAVER) {
+        mutableStateListOf<String>().apply { addAll(initial.uris.map { it.uri }) }
+    }
+    val cardValues = rememberSaveable(initial, saver = STRING_LIST_SAVER) {
+        mutableStateListOf<String>().apply { addAll(cardValuesOf(initial.card)) }
+    }
+    val identityValues = rememberSaveable(initial, saver = STRING_LIST_SAVER) {
+        mutableStateListOf<String>().apply { addAll(identityValuesOf(initial.identity)) }
+    }
     var showNameError by rememberSaveable { mutableStateOf(false) }
 
     AlertDialog(
@@ -108,49 +102,32 @@ fun ItemFormDialog(
                     },
                     modifier = Modifier.fillMaxWidth(),
                 )
-                if (editHint != null) {
+                if (type == VaultItemType.SshKey) {
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        text = editHint,
+                        text = stringResource(
+                            R.string.item_edit_type_fields_readonly,
+                            stringResource(itemTypeLabelRes(type)),
+                        ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                if (loginFieldsVisible) {
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = username,
-                        onValueChange = { username = it },
-                        label = { Text(stringResource(R.string.item_field_username)) },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = password,
-                        onValueChange = { password = it },
-                        label = { Text(stringResource(R.string.item_field_password)) },
-                        singleLine = true,
-                        visualTransformation = PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    PasswordStrengthHint(password = password)
-                    Spacer(Modifier.height(8.dp))
-                    UriListEditor(
+                Spacer(Modifier.height(8.dp))
+                when (type) {
+                    VaultItemType.Login -> LoginFields(
+                        username = username,
+                        onUsernameChange = { username = it },
+                        password = password,
+                        onPasswordChange = { password = it },
                         uris = uris,
-                        onAdd = { uris.add("") },
-                        onRemove = { uris.removeAt(it) },
+                        totp = totp,
+                        onTotpChange = { totp = it },
                     )
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = totp,
-                        onValueChange = { totp = it },
-                        label = { Text(stringResource(R.string.section_totp)) },
-                        placeholder = { Text(stringResource(R.string.item_totp_hint)) },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
+                    VaultItemType.Card -> LabeledFields(CARD_LABELS, cardValues)
+                    VaultItemType.Identity -> LabeledFields(IDENTITY_LABELS, identityValues)
+                    // 安全笔记只有名称 + 备注；SSH 密钥段保持只读（上方已提示）
+                    VaultItemType.SecureNote, VaultItemType.SshKey -> Unit
                 }
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
@@ -170,12 +147,19 @@ fun ItemFormDialog(
                         showNameError = true
                     } else {
                         onSave(
-                            name.trim(),
-                            username.trim(),
-                            password,
-                            notes.trim(),
-                            uris.filter { it.isNotBlank() },
-                            totp.trim(),
+                            buildSnapshot(
+                                initial,
+                                FormValues(
+                                    name = name,
+                                    username = username,
+                                    password = password,
+                                    notes = notes,
+                                    totp = totp,
+                                    uris = uris.toList(),
+                                    cardValues = cardValues.toList(),
+                                    identityValues = identityValues.toList(),
+                                ),
+                            ),
                         )
                     }
                 },
@@ -190,6 +174,174 @@ fun ItemFormDialog(
         },
     )
 }
+
+/** 表单当前值（保存时一次性收集；收敛参数个数以符合 ≤8 门禁）。 */
+private class FormValues(
+    val name: String,
+    val username: String,
+    val password: String,
+    val notes: String,
+    val totp: String,
+    val uris: List<String>,
+    val cardValues: List<String>,
+    val identityValues: List<String>,
+)
+
+/**
+ * 构造保存快照：只覆盖**本类型可编辑**的段，其余沿用 [initial]
+ * （自定义字段 / 通行密钥 / SSH 段等不会因编辑而丢失）。
+ */
+private fun buildSnapshot(initial: VaultItem, values: FormValues): VaultItem {
+    val base = initial.copy(title = values.name.trim(), notes = values.notes.trim())
+    return when (initial.type) {
+        VaultItemType.Login -> base.copy(
+            username = values.username.trim(),
+            password = values.password,
+            uris = values.uris.filter { it.isNotBlank() }.map { VaultUri(it) },
+            totp = values.totp.trim().takeIf { it.isNotBlank() },
+        )
+        VaultItemType.Card -> base.copy(card = buildCard(values.cardValues))
+        VaultItemType.Identity -> base.copy(identity = buildIdentity(values.identityValues))
+        // 安全笔记只有名称 + 备注；SSH 密钥段保持只读
+        VaultItemType.SecureNote, VaultItemType.SshKey -> base
+    }
+}
+
+/** 登录条目专属字段：用户名 / 密码（含强度条）/ 网址 / TOTP 密钥。 */
+@Composable
+private fun LoginFields(
+    username: String,
+    onUsernameChange: (String) -> Unit,
+    password: String,
+    onPasswordChange: (String) -> Unit,
+    uris: SnapshotStateList<String>,
+    totp: String,
+    onTotpChange: (String) -> Unit,
+) {
+    OutlinedTextField(
+        value = username,
+        onValueChange = onUsernameChange,
+        label = { Text(stringResource(R.string.item_field_username)) },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth(),
+    )
+    Spacer(Modifier.height(8.dp))
+    OutlinedTextField(
+        value = password,
+        onValueChange = onPasswordChange,
+        label = { Text(stringResource(R.string.item_field_password)) },
+        singleLine = true,
+        visualTransformation = PasswordVisualTransformation(),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+        modifier = Modifier.fillMaxWidth(),
+    )
+    PasswordStrengthHint(password = password)
+    Spacer(Modifier.height(8.dp))
+    UriListEditor(
+        uris = uris,
+        onAdd = { uris.add("") },
+        onRemove = { uris.removeAt(it) },
+    )
+    Spacer(Modifier.height(8.dp))
+    OutlinedTextField(
+        value = totp,
+        onValueChange = onTotpChange,
+        label = { Text(stringResource(R.string.section_totp)) },
+        placeholder = { Text(stringResource(R.string.item_totp_hint)) },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth(),
+    )
+}
+
+/**
+ * 按 [labels] 顺序渲染一组单行输入框，值就地写入 [values]（索引一一对应）。
+ * 银行卡与身份字段共用：避免为 17 个字段各声明一个状态变量。
+ */
+@Composable
+private fun LabeledFields(labels: List<Int>, values: SnapshotStateList<String>) {
+    labels.forEachIndexed { index, labelRes ->
+        OutlinedTextField(
+            value = values[index],
+            onValueChange = { values[index] = it },
+            label = { Text(stringResource(labelRes)) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(8.dp))
+    }
+}
+
+/** 银行卡字段 → 表单值（顺序同 [CARD_LABELS]）。 */
+private fun cardValuesOf(card: VaultCard?): List<String> = listOf(
+    card?.cardholderName.orEmpty(),
+    card?.brand.orEmpty(),
+    card?.number.orEmpty(),
+    card?.expMonth.orEmpty(),
+    card?.expYear.orEmpty(),
+    card?.code.orEmpty(),
+)
+
+/** 身份字段 → 表单值（顺序同 [IDENTITY_LABELS]，Bitwarden canonical 17 字段）。 */
+private fun identityValuesOf(identity: VaultIdentity?): List<String> = listOf(
+    identity?.title.orEmpty(),
+    identity?.firstName.orEmpty(),
+    identity?.middleName.orEmpty(),
+    identity?.lastName.orEmpty(),
+    identity?.address1.orEmpty(),
+    identity?.address2.orEmpty(),
+    identity?.address3.orEmpty(),
+    identity?.city.orEmpty(),
+    identity?.state.orEmpty(),
+    identity?.postalCode.orEmpty(),
+    identity?.country.orEmpty(),
+    identity?.company.orEmpty(),
+    identity?.email.orEmpty(),
+    identity?.phone.orEmpty(),
+    identity?.ssn.orEmpty(),
+    identity?.username.orEmpty(),
+    identity?.passportNumber.orEmpty(),
+    identity?.licenseNumber.orEmpty(),
+)
+
+/** 表单值 → 银行卡（按 [cardValuesOf] 的顺序读取）。 */
+private fun buildCard(values: List<String>): VaultCard {
+    val it = values.iterator()
+    return VaultCard(
+        cardholderName = it.nextOrEmpty(),
+        brand = it.nextOrEmpty(),
+        number = it.nextOrEmpty(),
+        expMonth = it.nextOrEmpty(),
+        expYear = it.nextOrEmpty(),
+        code = it.nextOrEmpty(),
+    )
+}
+
+/** 表单值 → 身份信息（按 [identityValuesOf] 的顺序读取）。 */
+private fun buildIdentity(values: List<String>): VaultIdentity {
+    val it = values.iterator()
+    return VaultIdentity(
+        title = it.nextOrEmpty(),
+        firstName = it.nextOrEmpty(),
+        middleName = it.nextOrEmpty(),
+        lastName = it.nextOrEmpty(),
+        address1 = it.nextOrEmpty(),
+        address2 = it.nextOrEmpty(),
+        address3 = it.nextOrEmpty(),
+        city = it.nextOrEmpty(),
+        state = it.nextOrEmpty(),
+        postalCode = it.nextOrEmpty(),
+        country = it.nextOrEmpty(),
+        company = it.nextOrEmpty(),
+        email = it.nextOrEmpty(),
+        phone = it.nextOrEmpty(),
+        ssn = it.nextOrEmpty(),
+        username = it.nextOrEmpty(),
+        passportNumber = it.nextOrEmpty(),
+        licenseNumber = it.nextOrEmpty(),
+    )
+}
+
+private fun Iterator<String>.nextOrEmpty(): String = if (hasNext()) next() else ""
 
 /**
  * 密码强度条（Docs/08 S10）：分值 0–100 → 五档（弱/一般/良好/强/非常强），
@@ -278,3 +430,41 @@ private fun UriListEditor(
         }
     }
 }
+
+/** 字符串可变列表的保存器（进程重建后恢复表单输入）。 */
+private val STRING_LIST_SAVER = listSaver<SnapshotStateList<String>, String>(
+    save = { it.toList() },
+    restore = { mutableStateListOf<String>().apply { addAll(it) } },
+)
+
+/** 银行卡可编辑字段标签（顺序 = [cardValuesOf] / [buildCard]）。 */
+private val CARD_LABELS = listOf(
+    R.string.card_cardholder,
+    R.string.card_brand,
+    R.string.card_number,
+    R.string.card_exp_month,
+    R.string.card_exp_year,
+    R.string.card_cvv,
+)
+
+/** 身份可编辑字段标签（顺序 = [identityValuesOf] / [buildIdentity]，Bitwarden canonical）。 */
+private val IDENTITY_LABELS = listOf(
+    R.string.identity_title,
+    R.string.identity_first_name,
+    R.string.identity_middle_name,
+    R.string.identity_last_name,
+    R.string.identity_address1,
+    R.string.identity_address2,
+    R.string.identity_address3,
+    R.string.identity_city,
+    R.string.identity_state,
+    R.string.identity_postal_code,
+    R.string.identity_country,
+    R.string.identity_company,
+    R.string.identity_email,
+    R.string.identity_phone,
+    R.string.identity_ssn,
+    R.string.identity_username,
+    R.string.identity_passport,
+    R.string.identity_license,
+)

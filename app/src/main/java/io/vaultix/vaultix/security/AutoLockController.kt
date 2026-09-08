@@ -46,6 +46,10 @@ class AutoLockController @Inject constructor(
     prefs: VaultixPreferences,
 ) : DefaultLifecycleObserver {
 
+    // 进程级生命周期观察者，scope 只跑极短的锁定判定。项目当前唯一的调度器限定符
+    // 是 @CryptoDispatcher（语义 = KDF/加解密 CPU 密集），复用到这里会混淆语义；
+    // 待引入通用 @DefaultDispatcher 后改为注入。
+    @Suppress("InjectDispatcher")
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val keyguardManager =
         context.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager

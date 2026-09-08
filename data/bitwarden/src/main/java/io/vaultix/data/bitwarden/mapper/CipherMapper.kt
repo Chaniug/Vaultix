@@ -142,7 +142,11 @@ class CipherMapper @Inject constructor(
         card = if (item.type == VaultItemType.Card) item.card?.let { mapCardRequest(it, key) } else null,
         sshKey = if (item.type == VaultItemType.SshKey) item.sshKey?.let { mapSshKeyRequest(it, key) } else null,
         // 身份信息：type=Identity 时整体加密写回（非身份条目不写 identity 段，防类型漂移）
-        identity = if (item.type == VaultItemType.Identity) item.identity?.let { mapIdentityRequest(it, key) } else null,
+        identity = if (item.type == VaultItemType.Identity) {
+            item.identity?.let { mapIdentityRequest(it, key) }
+        } else {
+            null
+        },
     )
 
     /**
@@ -153,8 +157,9 @@ class CipherMapper @Inject constructor(
      * - login 条目的 username/password/uri/totp/fido2Credentials 全部按表单意图重新加密
      *   （[VaultItem.fido2Credentials] 已包含服务端原值，保存流程即通过替换该列表来
      *   新增/删除「绑定到本登录条目的通行密钥」；passwordRevisionDate 原密文保留）；
-     * - card/identity/secureNote/sshKey/fields 段原样并入（Vaultix M1 不编辑它们，
-     *   但必须随更新请求提交，否则服务端会清空这些载荷）；
+     * - card / identity / sshKey：本类型条目按表单明文重新加密覆盖（可编辑），
+     *   非本类型条目沿用服务端原密文；secureNote / fields 段始终原样并入——
+     *   未编辑段必须随更新请求提交，否则服务端会清空这些载荷；
      * - 条目独立密钥（per-item key）与本方法无关：保留段直接复用服务端密文，
      *   不重新加密。
      */
@@ -163,26 +168,6 @@ class CipherMapper @Inject constructor(
         stored: CipherDto,
         key: SymmetricCryptoKey,
     ): CipherRequest {
-        val storedLogin = stored.login
-        val overlaidLogin = if (storedLogin != null) {
-            storedLogin.copy(
-                username = item.username.takeIf { it.isNotBlank() }?.let { crypto.encryptString(it, key) },
-                password = item.password.takeIf { it.isNotBlank() }?.let { crypto.encryptString(it, key) },
-                // uri/totp：用户可见段，按表单明文重新加密覆盖（item 反映最新意图）
-                uris = item.uris.map { v ->
-                    UriDto(
-                        uri = v.uri.takeIf { it.isNotBlank() }?.let { crypto.encryptString(it, key) },
-                        match = matchToInt(v.match),
-                    )
-                },
-                totp = item.totp?.takeIf { it.isNotBlank() }?.let { crypto.encryptString(it, key) },
-                // fido2Credentials：领域模型已加载全部凭证（含服务端原值），按表单意图完整重加密。
-                // 保存流程（新增/删除通行密钥）正是通过替换此处列表实现「绑定到登录条目」。
-                fido2Credentials = item.fido2Credentials.map { mapFido2Request(it, key) },
-            )
-        } else {
-            null
-        }
         return CipherRequest(
             type = mapTypeToInt(item.type),
             name = crypto.encryptString(item.title, key),
@@ -190,13 +175,74 @@ class CipherMapper @Inject constructor(
             favorite = stored.favorite,
             folderId = stored.folderId,
             reprompt = stored.reprompt,
-            login = overlaidLogin,
-            card = stored.card,
-            identity = stored.identity,
+            login = overlayLogin(item, stored, key),
+            card = overlayCard(item, stored, key),
+            identity = overlayIdentity(item, stored, key),
             secureNote = stored.secureNote,
-            sshKey = stored.sshKey,
+            sshKey = overlaySshKey(item, stored, key),
             fields = stored.fields,
         )
+    }
+
+    /**
+     * 登录段：服务端有 login 时按表单明文重新加密可编辑字段
+     * （username / password / uri / totp / fido2Credentials），
+     * 其余字段（如 passwordRevisionDate）沿用服务端原值。
+     */
+    private fun overlayLogin(
+        item: VaultItem,
+        stored: CipherDto,
+        key: SymmetricCryptoKey,
+    ): LoginDto? {
+        val storedLogin = stored.login ?: return null
+        return storedLogin.copy(
+            username = item.username.takeIf { it.isNotBlank() }?.let { crypto.encryptString(it, key) },
+            password = item.password.takeIf { it.isNotBlank() }?.let { crypto.encryptString(it, key) },
+            // uri/totp：用户可见段，按表单明文重新加密覆盖（item 反映最新意图）
+            uris = item.uris.map { v ->
+                UriDto(
+                    uri = v.uri.takeIf { it.isNotBlank() }?.let { crypto.encryptString(it, key) },
+                    match = matchToInt(v.match),
+                )
+            },
+            totp = item.totp?.takeIf { it.isNotBlank() }?.let { crypto.encryptString(it, key) },
+            // fido2Credentials：领域模型已加载全部凭证（含服务端原值），按表单意图完整重加密。
+            // 保存流程（新增/删除通行密钥）正是通过替换此处列表实现「绑定到登录条目」。
+            fido2Credentials = item.fido2Credentials.map { mapFido2Request(it, key) },
+        )
+    }
+
+    /** 银行卡段：Card 类型按表单明文重加密；其余类型沿用服务端原密文（防丢载荷）。 */
+    private fun overlayCard(
+        item: VaultItem,
+        stored: CipherDto,
+        key: SymmetricCryptoKey,
+    ): CardDto? = if (item.type == VaultItemType.Card) {
+        item.card?.let { mapCardRequest(it, key) } ?: stored.card
+    } else {
+        stored.card
+    }
+
+    /** 身份段：Identity 类型按表单明文重加密；其余类型沿用服务端原密文。 */
+    private fun overlayIdentity(
+        item: VaultItem,
+        stored: CipherDto,
+        key: SymmetricCryptoKey,
+    ): IdentityDto? = if (item.type == VaultItemType.Identity) {
+        item.identity?.let { mapIdentityRequest(it, key) } ?: stored.identity
+    } else {
+        stored.identity
+    }
+
+    /** SSH 段：SshKey 类型按表单明文重加密；其余类型沿用服务端原密文。 */
+    private fun overlaySshKey(
+        item: VaultItem,
+        stored: CipherDto,
+        key: SymmetricCryptoKey,
+    ): SshKeyDto? = if (item.type == VaultItemType.SshKey) {
+        item.sshKey?.let { mapSshKeyRequest(it, key) } ?: stored.sshKey
+    } else {
+        stored.sshKey
     }
 
     /** 领域类型 → 服务端 type 号（写路径类型守恒校验用）。 */
@@ -343,11 +389,11 @@ class CipherMapper @Inject constructor(
             keyType = encryptOpt(c.keyType ?: KEY_TYPE_PUBLIC, key),
             keyAlgorithm = encryptOpt(c.keyAlgorithm ?: KEY_ALGORITHM_ECDSA, key),
             keyCurve = encryptOpt(c.keyCurve ?: KEY_CURVE_P256, key),
-            keyValue = encryptOpt(c.keyValue ?: "", key),
+            keyValue = encryptOpt(c.keyValue.orEmpty(), key),
             rpId = encryptOpt(c.rpId, key),
             rpName = encryptOpt(c.rpName, key),
             counter = encryptOpt(c.counter.toString(), key),
-            userHandle = encryptOpt(c.userHandle ?: "", key),
+            userHandle = encryptOpt(c.userHandle.orEmpty(), key),
             userName = encryptOpt(c.userName, key),
             userDisplayName = encryptOpt(c.userDisplayName, key),
             discoverable = encryptOpt(c.discoverable.toString(), key),

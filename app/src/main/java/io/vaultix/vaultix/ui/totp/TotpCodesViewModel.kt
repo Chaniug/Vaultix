@@ -52,7 +52,8 @@ class TotpCodesViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             vaultRepository.observeVaults().collect { vaults ->
-                _state.update { it.copy(vaultName = vaults.firstOrNull { v -> v.id == vaultId }?.name ?: "") }
+                val name = vaults.firstOrNull { v -> v.id == vaultId }?.name.orEmpty()
+                _state.update { it.copy(vaultName = name) }
             }
         }
         viewModelScope.launch {

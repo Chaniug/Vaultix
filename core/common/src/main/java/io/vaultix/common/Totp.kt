@@ -236,7 +236,8 @@ object OtpUriParser {
         val authority = lower.substringAfter("otpauth://").substringBefore("/")
         if (authority != "totp" && authority != "hotp") return null
         val labelRaw = uri.substringAfter("otpauth://").substringBefore("?").substringAfter("/")
-        val (labelIssuer, labelAccount) = splitLabel(labelRaw)
+        // 只需发行方（issuer）部分用于 Steam 识别；账号部分本函数不使用
+        val labelIssuer = splitLabel(labelRaw).first
         val params = parseQuery(uri.substringAfter("?", ""))
         val secret = params["secret"]?.trim()?.takeIf { it.isNotEmpty() } ?: return null
         val period = params["period"]?.toIntOrNull() ?: 30

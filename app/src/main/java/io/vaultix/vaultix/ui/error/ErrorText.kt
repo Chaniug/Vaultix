@@ -17,6 +17,6 @@ fun unlockErrorText(error: UnlockUiError?): String? {
         UnlockUiError.Network -> stringResource(R.string.error_network)
         UnlockUiError.KeyUnavailable -> stringResource(R.string.error_key_unavailable)
         UnlockUiError.VaultMissing -> stringResource(R.string.error_vault_missing)
-        is UnlockUiError.Unknown -> stringResource(R.string.error_unknown, error.detail ?: "")
+        is UnlockUiError.Unknown -> stringResource(R.string.error_unknown, error.detail.orEmpty())
     }
 }

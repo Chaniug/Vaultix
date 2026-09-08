@@ -128,6 +128,18 @@ private const val LINKED_ID_PASSWORD = 2
 private const val LINKED_ID_URI = 3
 private const val LINKED_ID_NOTES = 4
 
+/**
+ * 详情区的复制动作集合。
+ * 收敛成单个对象是为了把 [DetailBodyContent] 的参数数压到门禁线内（≤8）。
+ */
+private class DetailActions(
+    val onCopyUsername: () -> Unit,
+    val onCopyPassword: () -> Unit,
+    val onCopyUri: (String) -> Unit,
+    val onCopyTotp: (String) -> Unit,
+    val onCopyField: (String) -> Unit,
+)
+
 /** 详情内容区：忙碌转圈 / 缺失提示 / 分区卡片（独立以便控制主 Composable 圈复杂度）。 */
 @Composable
 private fun DetailBodyContent(
@@ -136,11 +148,7 @@ private fun DetailBodyContent(
     item: VaultItem?,
     showPassword: Boolean,
     onTogglePassword: () -> Unit,
-    onCopyUsername: () -> Unit,
-    onCopyPassword: () -> Unit,
-    onCopyUri: (String) -> Unit,
-    onCopyTotp: (String) -> Unit,
-    onCopyField: (String) -> Unit,
+    actions: DetailActions,
 ) {
     Box(modifier = modifier) {
         when {
@@ -154,64 +162,80 @@ private fun DetailBodyContent(
                     .align(Alignment.Center)
                     .padding(32.dp),
             )
-            else -> Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-            ) {
-                if (item.type != VaultItemType.Login) {
-                    Text(
-                        text = stringResource(itemTypeLabelRes(item.type)),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                }
-                if (item.username.isNotBlank() || item.password.isNotBlank()) {
-                    LoginSection(
-                        item = item,
-                        showPassword = showPassword,
-                        onTogglePassword = onTogglePassword,
-                        onCopyUsername = onCopyUsername,
-                        onCopyPassword = onCopyPassword,
-                    )
-                }
-                if (item.uris.isNotEmpty()) {
-                    Spacer(Modifier.height(12.dp))
-                    UrisSection(item = item, onCopyUri = onCopyUri)
-                }
-                if (item.totp != null) {
-                    Spacer(Modifier.height(12.dp))
-                    TotpSection(item = item, onCopyTotp = onCopyTotp)
-                }
-                if (item.fido2Credentials.isNotEmpty()) {
-                    Spacer(Modifier.height(12.dp))
-                    PasskeysSection(creds = item.fido2Credentials)
-                }
-                if (item.card != null) {
-                    Spacer(Modifier.height(12.dp))
-                    CardSection(item = item, onCopyField = onCopyField)
-                }
-                if (item.sshKey != null) {
-                    Spacer(Modifier.height(12.dp))
-                    SshKeySection(item = item, onCopyField = onCopyField)
-                }
-                if (item.identity != null) {
-                    Spacer(Modifier.height(12.dp))
-                    IdentitySection(item = item, onCopyField = onCopyField)
-                }
-                if (item.customFields.isNotEmpty()) {
-                    Spacer(Modifier.height(12.dp))
-                    CustomFieldsSection(item = item, onCopyField = onCopyField)
-                }
-                if (item.notes.isNotBlank()) {
-                    Spacer(Modifier.height(12.dp))
-                    NotesSection(notes = item.notes)
-                }
-                Spacer(Modifier.height(24.dp))
-            }
+            else -> DetailSections(
+                item = item,
+                showPassword = showPassword,
+                onTogglePassword = onTogglePassword,
+                actions = actions,
+            )
         }
+    }
+}
+
+/** 分区卡片列表（按字段有无逐个渲染；独立成函数以拆分圈复杂度）。 */
+@Composable
+private fun DetailSections(
+    item: VaultItem,
+    showPassword: Boolean,
+    onTogglePassword: () -> Unit,
+    actions: DetailActions,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+    ) {
+        if (item.type != VaultItemType.Login) {
+            Text(
+                text = stringResource(itemTypeLabelRes(item.type)),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            Spacer(Modifier.height(8.dp))
+        }
+        if (item.username.isNotBlank() || item.password.isNotBlank()) {
+            LoginSection(
+                item = item,
+                showPassword = showPassword,
+                onTogglePassword = onTogglePassword,
+                onCopyUsername = actions.onCopyUsername,
+                onCopyPassword = actions.onCopyPassword,
+            )
+        }
+        if (item.uris.isNotEmpty()) {
+            Spacer(Modifier.height(12.dp))
+            UrisSection(item = item, onCopyUri = actions.onCopyUri)
+        }
+        if (item.totp != null) {
+            Spacer(Modifier.height(12.dp))
+            TotpSection(item = item, onCopyTotp = actions.onCopyTotp)
+        }
+        if (item.fido2Credentials.isNotEmpty()) {
+            Spacer(Modifier.height(12.dp))
+            PasskeysSection(creds = item.fido2Credentials)
+        }
+        if (item.card != null) {
+            Spacer(Modifier.height(12.dp))
+            CardSection(item = item, onCopyField = actions.onCopyField)
+        }
+        if (item.sshKey != null) {
+            Spacer(Modifier.height(12.dp))
+            SshKeySection(item = item, onCopyField = actions.onCopyField)
+        }
+        if (item.identity != null) {
+            Spacer(Modifier.height(12.dp))
+            IdentitySection(item = item, onCopyField = actions.onCopyField)
+        }
+        if (item.customFields.isNotEmpty()) {
+            Spacer(Modifier.height(12.dp))
+            CustomFieldsSection(item = item, onCopyField = actions.onCopyField)
+        }
+        if (item.notes.isNotBlank()) {
+            Spacer(Modifier.height(12.dp))
+            NotesSection(notes = item.notes)
+        }
+        Spacer(Modifier.height(24.dp))
     }
 }
 
@@ -258,7 +282,7 @@ fun ItemDetailScreen(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             LargeTopAppBar(
-                title = { Text(text = item?.title ?: "") },
+                title = { Text(text = item?.title.orEmpty()) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null)
@@ -278,6 +302,15 @@ fun ItemDetailScreen(
             )
         },
     ) { padding ->
+        val actions = remember(viewModel) {
+            DetailActions(
+                onCopyUsername = viewModel::copyUsername,
+                onCopyPassword = viewModel::copyPassword,
+                onCopyUri = viewModel::copyUri,
+                onCopyTotp = viewModel::copyTotp,
+                onCopyField = viewModel::copyField,
+            )
+        }
         DetailBodyContent(
             modifier = Modifier
                 .fillMaxSize()
@@ -286,35 +319,20 @@ fun ItemDetailScreen(
             item = item,
             showPassword = showPassword,
             onTogglePassword = { showPassword = !showPassword },
-            onCopyUsername = viewModel::copyUsername,
-            onCopyPassword = viewModel::copyPassword,
-            onCopyUri = viewModel::copyUri,
-            onCopyTotp = viewModel::copyTotp,
-            onCopyField = viewModel::copyField,
+            actions = actions,
         )
     }
 
     if (editOpen && item != null) {
-        val isLogin = item.type == VaultItemType.Login
-        val typeName = context.getString(itemTypeLabelRes(item.type))
+        // 表单按 item.type 决定可编辑字段：登录 / 银行卡 / 身份均已可编辑，
+        // SSH 密钥仅名称 + 备注（专属段保留服务端原值，由 data 层合并上传）。
         ItemFormDialog(
             title = stringResource(R.string.edit_item_title),
-            initialName = item.title,
-            initialUsername = item.username,
-            initialPassword = item.password,
-            initialNotes = item.notes,
-            initialUris = item.uris.map { it.uri },
-            initialTotp = item.totp ?: "",
+            initial = item,
             saving = state.saving,
-            loginFieldsVisible = isLogin,
-            editHint = if (isLogin) {
-                null
-            } else {
-                context.getString(R.string.item_edit_type_fields_readonly, typeName)
-            },
             onDismiss = { editOpen = false },
-            onSave = { name, username, password, notes, uris, totp ->
-                viewModel.updateItem(name, username, password, notes, uris, totp)
+            onSave = { updated ->
+                viewModel.updateItem(updated)
                 editOpen = false
             },
         )
@@ -924,7 +942,7 @@ private fun cardExpiryText(expMonth: String, expYear: String): String {
 @Composable
 private fun IdentitySection(item: VaultItem, onCopyField: (String) -> Unit) {
     val id = item.identity ?: return
-    val rows = listOfNotNull(
+    val rows = listOf(
         stringResource(R.string.identity_title) to id.title,
         stringResource(R.string.identity_first_name) to id.firstName,
         stringResource(R.string.identity_middle_name) to id.middleName,

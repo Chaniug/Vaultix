@@ -45,7 +45,7 @@ import javax.inject.Singleton
  */
 @Singleton
 class VaultixClipboard @Inject constructor(
-    @ApplicationContext private val context: Context,
+    @ApplicationContext context: Context,
 ) {
 
     private val appContext = context.applicationContext

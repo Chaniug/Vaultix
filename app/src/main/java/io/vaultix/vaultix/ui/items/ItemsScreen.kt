@@ -19,10 +19,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
@@ -31,6 +33,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeTopAppBar
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -82,9 +85,11 @@ fun ItemsScreen(
     viewModel: ItemsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val visibleItems by viewModel.visibleItems.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
     var showCreateDialog by rememberSaveable { mutableStateOf(false) }
+    var searchActive by rememberSaveable { mutableStateOf(false) }
     val context = LocalContext.current
 
     LaunchedEffect(Unit) {
@@ -107,16 +112,10 @@ fun ItemsScreen(
             Column {
                 LargeTopAppBar(
                     title = {
-                        Column {
-                            Text(text = state.vault?.name ?: "")
-                            if (state.vault?.account != null) {
-                                Text(
-                                    text = state.vault!!.account!!,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
+                        VaultTitle(
+                            name = state.vault?.name.orEmpty(),
+                            account = state.vault?.account,
+                        )
                     },
                     navigationIcon = {
                         IconButton(onClick = onBack) {
@@ -127,33 +126,22 @@ fun ItemsScreen(
                         }
                     },
                     actions = {
-                        IconButton(onClick = onOpenTotp) {
-                            Icon(
-                                Icons.Filled.QrCode2,
-                                contentDescription = stringResource(R.string.totp_screen_title),
-                            )
-                        }
-                        IconButton(onClick = onOpenTrash) {
-                            Icon(
-                                Icons.Filled.Delete,
-                                contentDescription = stringResource(R.string.trash_title),
-                            )
-                        }
-                        IconButton(onClick = viewModel::retrySync) {
-                            Icon(
-                                Icons.Filled.Refresh,
-                                contentDescription = stringResource(R.string.items_sync),
-                            )
-                        }
-                        IconButton(onClick = { viewModel.lockNow(onLocked) }) {
-                            Icon(
-                                Icons.Filled.Lock,
-                                contentDescription = stringResource(R.string.items_lock),
-                            )
-                        }
+                        ItemsActions(
+                            onToggleSearch = {
+                                searchActive = !searchActive
+                                if (!searchActive) viewModel.setQuery("")
+                            },
+                            onOpenTotp = onOpenTotp,
+                            onOpenTrash = onOpenTrash,
+                            onRetrySync = viewModel::retrySync,
+                            onLock = { viewModel.lockNow(onLocked) },
+                        )
                     },
                     scrollBehavior = scrollBehavior,
                 )
+                if (searchActive) {
+                    SearchField(query = state.query, onQueryChange = viewModel::setQuery)
+                }
                 SyncNoteBanner(
                     note = state.syncNote,
                     onDismiss = viewModel::dismissSyncNote,
@@ -175,8 +163,12 @@ fun ItemsScreen(
                 .fillMaxSize()
                 .padding(padding),
         ) {
-            if (state.items.isEmpty()) {
-                EmptyItemsState()
+            if (visibleItems.isEmpty()) {
+                if (state.query.isBlank()) {
+                    EmptyItemsState()
+                } else {
+                    NoSearchResultState()
+                }
             } else {
                 LazyColumn(
                     modifier = Modifier
@@ -184,7 +176,7 @@ fun ItemsScreen(
                         .nestedScroll(scrollBehavior.nestedScrollConnection),
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
                 ) {
-                    items(state.items, key = { it.id }) { item ->
+                    items(visibleItems, key = { it.id }) { item ->
                         ItemRow(item = item, onClick = { onOpenItem(item) })
                     }
                 }
@@ -193,16 +185,106 @@ fun ItemsScreen(
     }
 
     if (showCreateDialog) {
+        val blankItem = remember { VaultItem(id = "", title = "") }
         ItemFormDialog(
             title = stringResource(R.string.items_new_item),
+            initial = blankItem,
             saving = state.saving,
             onDismiss = { showCreateDialog = false },
-            onSave = { name, username, password, notes, uris, totp ->
-                viewModel.createItem(name, username, password, notes, uris, totp)
+            onSave = { item ->
+                viewModel.createItem(
+                    name = item.title,
+                    username = item.username,
+                    password = item.password,
+                    notes = item.notes,
+                    uris = item.uris.map { it.uri },
+                    totp = item.totp.orEmpty(),
+                )
                 showCreateDialog = false
             },
         )
     }
+}
+
+/** 顶栏标题：库名 + 账号（账号为空时只显示库名）。 */
+@Composable
+private fun VaultTitle(name: String, account: String?) {
+    Column {
+        Text(text = name)
+        if (account != null) {
+            Text(
+                text = account,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/** 顶栏动作（搜索在最前，其后为验证码 / 回收站 / 同步 / 锁定）。 */
+@Composable
+private fun ItemsActions(
+    onToggleSearch: () -> Unit,
+    onOpenTotp: () -> Unit,
+    onOpenTrash: () -> Unit,
+    onRetrySync: () -> Unit,
+    onLock: () -> Unit,
+) {
+    IconButton(onClick = onToggleSearch) {
+        Icon(
+            Icons.Filled.Search,
+            contentDescription = stringResource(R.string.items_search),
+        )
+    }
+    IconButton(onClick = onOpenTotp) {
+        Icon(
+            Icons.Filled.QrCode2,
+            contentDescription = stringResource(R.string.totp_screen_title),
+        )
+    }
+    IconButton(onClick = onOpenTrash) {
+        Icon(
+            Icons.Filled.Delete,
+            contentDescription = stringResource(R.string.trash_title),
+        )
+    }
+    IconButton(onClick = onRetrySync) {
+        Icon(
+            Icons.Filled.Refresh,
+            contentDescription = stringResource(R.string.items_sync),
+        )
+    }
+    IconButton(onClick = onLock) {
+        Icon(
+            Icons.Filled.Lock,
+            contentDescription = stringResource(R.string.items_lock),
+        )
+    }
+}
+
+/** 搜索框（顶栏展开态）：有输入时右侧出现清除按钮。 */
+@Composable
+private fun SearchField(query: String, onQueryChange: (String) -> Unit) {
+    OutlinedTextField(
+        value = query,
+        onValueChange = onQueryChange,
+        placeholder = { Text(stringResource(R.string.items_search_hint)) },
+        singleLine = true,
+        leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+        trailingIcon = {
+            if (query.isNotEmpty()) {
+                IconButton(onClick = { onQueryChange("") }) {
+                    Icon(
+                        Icons.Filled.Close,
+                        contentDescription = stringResource(R.string.items_search_clear),
+                    )
+                }
+            }
+        },
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+    )
 }
 
 /** 同步状态提示条：进行中 = 细进度条；成功/跳过 = 短暂提示后自动消失；警告 = 常驻到下次同步。 */
@@ -311,6 +393,22 @@ private fun EmptyItemsState() {
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 8.dp),
+        )
+    }
+}
+
+/** 搜索无命中时的空态（区别于「库里还没有条目」）。 */
+@Composable
+private fun NoSearchResultState() {
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            text = stringResource(R.string.items_search_empty),
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }

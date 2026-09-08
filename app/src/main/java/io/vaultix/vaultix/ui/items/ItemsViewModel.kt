@@ -61,6 +61,7 @@ class ItemsViewModel @Inject constructor(
     data class UiState(
         val vault: VaultSummary? = null,
         val items: List<VaultItem> = emptyList(),
+        val query: String = "",
         val syncNote: SyncNote? = null,
         val saving: Boolean = false,
     )
@@ -103,6 +104,18 @@ class ItemsViewModel @Inject constructor(
             initialValue = false,
         )
 
+    /** 设置搜索词（匹配标题 / 用户名 / 网址，空词 = 不过滤）。 */
+    fun setQuery(q: String) = _state.update { it.copy(query = q) }
+
+    /** 按当前搜索词过滤后的可见条目（空词 = 全部）。 */
+    val visibleItems: StateFlow<List<VaultItem>> = _state
+        .map { state -> filterItems(state.items, state.query) }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.Eagerly,
+            initialValue = emptyList(),
+        )
+
     fun retrySync() {
         // 手动同步：force 跳过节流；运行中请求会按优先级合并
         syncOrchestrator.requestSync(vaultId, SyncTrigger.MANUAL, force = true)
@@ -118,6 +131,17 @@ class ItemsViewModel @Inject constructor(
         viewModelScope.launch {
             vaultRepository.lockVault(vaultId)
             onLocked()
+        }
+    }
+
+    /** 搜索过滤：标题 / 用户名 / 任一网址包含搜索词即命中（忽略大小写）。 */
+    private fun filterItems(items: List<VaultItem>, query: String): List<VaultItem> {
+        val q = query.trim()
+        if (q.isBlank()) return items
+        return items.filter { item ->
+            item.title.contains(q, ignoreCase = true) ||
+                item.username.contains(q, ignoreCase = true) ||
+                item.uris.any { it.uri.contains(q, ignoreCase = true) }
         }
     }
 

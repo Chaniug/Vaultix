@@ -141,6 +141,10 @@
     <string name="items_lock">立即锁定</string>
     <string name="items_new_item">新建条目</string>
     <string name="items_item_unnamed">（未命名）</string>
+    <string name="items_search">搜索</string>
+    <string name="items_search_hint">搜索名称、用户名或网址</string>
+    <string name="items_search_empty">没有匹配的条目</string>
+    <string name="items_search_clear">清除搜索</string>
     <string name="item_field_name">名称</string>
     <string name="item_field_username">用户名</string>
     <string name="item_field_password">密码</string>
@@ -202,6 +206,8 @@
     <string name="card_brand">发卡行</string>
     <string name="card_number">卡号</string>
     <string name="card_expiry">有效期</string>
+    <string name="card_exp_month">有效期（月）</string>
+    <string name="card_exp_year">有效期（年）</string>
     <string name="card_cvv">安全码</string>
 
     <!-- SSH 密钥 S22 详情分区 -->

@@ -15,7 +15,9 @@ import io.vaultix.data.bitwarden.model.UriDto
 import io.vaultix.data.bitwarden.model.toStoredCipherDto
 import io.vaultix.data.bitwarden.network.BitwardenJson
 import io.vaultix.model.UriMatch
+import io.vaultix.model.VaultCard
 import io.vaultix.model.VaultFido2Credential
+import io.vaultix.model.VaultIdentity
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
 import io.vaultix.model.VaultUri
@@ -170,5 +172,117 @@ class CipherPayloadPreservationTest {
         assertEquals("enc:4111", decoded.card!!.number)
         assertNull(decoded.login)
         assertNull(decoded.identity)
+    }
+
+    // ---- 身份 / 银行卡「可编辑」回归（2026-09-08）----
+    // 表单已能编辑 card / identity 段，更新必须按表单明文重加密覆盖；
+    // 未编辑段与「非本类型」的段仍沿用服务端原密文（防止顺手清掉别的载荷）。
+
+    @Test
+    fun updateWritesEditedCardFields() {
+        val stored = CipherDto(
+            id = "card-1",
+            type = 3,
+            name = crypto.encryptString("白金卡", accountKey),
+            card = CardDto(
+                cardholderName = crypto.encryptString("旧持卡人", accountKey),
+                brand = crypto.encryptString("Visa", accountKey),
+                number = crypto.encryptString("4111111111111111", accountKey),
+                expMonth = crypto.encryptString("12", accountKey),
+                expYear = crypto.encryptString("2029", accountKey),
+                code = crypto.encryptString("123", accountKey),
+            ),
+        )
+
+        val request = mapper.toUpdateRequest(
+            item = VaultItem(
+                id = "card-1",
+                title = "白金卡",
+                type = VaultItemType.Card,
+                card = VaultCard(
+                    cardholderName = "新持卡人",
+                    brand = "Mastercard",
+                    number = "5500000000000004",
+                    expMonth = "01",
+                    expYear = "2030",
+                    code = "999",
+                ),
+            ),
+            stored = stored,
+            key = accountKey,
+        )
+
+        val card = request.card!!
+        assertEquals("新持卡人", crypto.decryptToString(card.cardholderName!!, accountKey))
+        assertEquals("Mastercard", crypto.decryptToString(card.brand!!, accountKey))
+        assertEquals("5500000000000004", crypto.decryptToString(card.number!!, accountKey))
+        assertEquals("01", crypto.decryptToString(card.expMonth!!, accountKey))
+        assertEquals("2030", crypto.decryptToString(card.expYear!!, accountKey))
+        assertEquals("999", crypto.decryptToString(card.code!!, accountKey))
+    }
+
+    @Test
+    fun updateWritesEditedIdentityFieldsAndClearsBlanks() {
+        val stored = CipherDto(
+            id = "id-1",
+            type = 4,
+            name = crypto.encryptString("我的身份", accountKey),
+            identity = IdentityDto(
+                firstName = crypto.encryptString("旧名", accountKey),
+                passportNumber = crypto.encryptString("E1234567", accountKey),
+            ),
+        )
+
+        val request = mapper.toUpdateRequest(
+            item = VaultItem(
+                id = "id-1",
+                title = "我的身份",
+                type = VaultItemType.Identity,
+                identity = VaultIdentity(
+                    title = "Mr",
+                    firstName = "新名",
+                    lastName = "新姓",
+                    passportNumber = "", // 清空：应写 null，而不是把空串加密上去
+                ),
+            ),
+            stored = stored,
+            key = accountKey,
+        )
+
+        val identity = request.identity!!
+        assertEquals("Mr", crypto.decryptToString(identity.title!!, accountKey))
+        assertEquals("新名", crypto.decryptToString(identity.firstName!!, accountKey))
+        assertEquals("新姓", crypto.decryptToString(identity.lastName!!, accountKey))
+        // 清空字段写 null（Bitwarden 语义），不残留服务端旧值
+        assertNull(identity.passportNumber)
+    }
+
+    @Test
+    fun updateOfLoginDoesNotClobberUnrelatedStoredSegments() {
+        val stored = CipherDto(
+            id = "login-1",
+            type = 1,
+            name = crypto.encryptString("站点", accountKey),
+            login = LoginDto(username = crypto.encryptString("u", accountKey)),
+            card = CardDto(number = "enc:keep-me"),
+            sshKey = SshKeyDto(publicKey = "enc:keep-pub"),
+        )
+
+        val request = mapper.toUpdateRequest(
+            item = VaultItem(
+                id = "login-1",
+                title = "站点",
+                username = "u2",
+                type = VaultItemType.Login,
+            ),
+            stored = stored,
+            key = accountKey,
+        )
+
+        // 登录段按表单覆盖
+        assertEquals("u2", crypto.decryptToString(request.login!!.username!!, accountKey))
+        // 非本类型的 card / sshKey 段原样保留，绝不顺手清空
+        assertEquals("enc:keep-me", request.card!!.number)
+        assertEquals("enc:keep-pub", request.sshKey!!.publicKey)
     }
 }

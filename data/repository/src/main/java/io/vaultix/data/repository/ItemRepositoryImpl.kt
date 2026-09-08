@@ -176,7 +176,7 @@ class ItemRepositoryImpl @Inject constructor(
         runCatching {
             val existing = cipherDao.get(itemId) ?: error("条目不存在：$itemId")
             require(existing.vaultId == vaultId) { "条目不属于该库：$itemId" }
-            require(existing.deletedDate != null) { "条目不在回收站中：$itemId" }
+            requireNotNull(existing.deletedDate) { "条目不在回收站中：$itemId" }
 
             // 本地立即清除删除标记（主列表恢复显示）；离线时队列联网补推
             cipherDao.upsertAll(listOf(existing.copy(deletedDate = null)))
@@ -197,7 +197,7 @@ class ItemRepositoryImpl @Inject constructor(
         runCatching {
             val existing = cipherDao.get(itemId) ?: error("条目不存在：$itemId")
             require(existing.vaultId == vaultId) { "条目不属于该库：$itemId" }
-            require(existing.deletedDate != null) { "条目不在回收站中，无法永久删除：$itemId" }
+            requireNotNull(existing.deletedDate) { "条目不在回收站中，无法永久删除：$itemId" }
 
             // 本地立即移除（回收站视图随之消失）；DELETE 入队，离线时联网补推；
             // 服务端已不存在（404）时由 flush 弃单（防毒丸）
@@ -220,7 +220,8 @@ class ItemRepositoryImpl @Inject constructor(
         itemId: String,
         credentials: List<VaultFido2Credential>,
     ): Result<VaultSaveOutcome> = runCatching {
-        val key = sessions.keyOf(vaultId) ?: error("库未解锁，无法保存：$vaultId")
+        // 「库已解锁」前置校验：未解锁直接失败，避免走到 updateItem 才报错
+        requireNotNull(sessions.keyOf(vaultId)) { "库未解锁，无法保存：$vaultId" }
         val existing = cipherDao.get(itemId) ?: error("条目不存在：$itemId")
         require(existing.vaultId == vaultId) { "条目不属于该库：$itemId" }
         require(existing.deletedDate == null) { "条目已在回收站，无法编辑：$itemId" }

@@ -112,14 +112,12 @@ fun VaultixApp() {
                 },
             )
         }
-        composable<PasskeysRoute> { entry ->
-            val route = entry.toRoute<PasskeysRoute>()
+        composable<PasskeysRoute> {
             PasskeysScreen(
                 onBack = { navController.popBackStack() },
             )
         }
-        composable<TrashRoute> { entry ->
-            val route = entry.toRoute<TrashRoute>()
+        composable<TrashRoute> {
             TrashScreen(onBack = { navController.popBackStack() })
         }
         composable<ItemRoute> { entry ->

@@ -65,7 +65,7 @@ fun SavePasskeyDialog(
                 } else {
                     ExposedDropdownMenuBox(expanded = loginExpanded, onExpandedChange = { loginExpanded = it }) {
                         OutlinedTextField(
-                            value = selectedLogin?.title ?: "",
+                            value = selectedLogin?.title.orEmpty(),
                             onValueChange = {},
                             readOnly = true,
                             label = { Text(stringResource(R.string.passkey_select_login)) },
@@ -140,12 +140,13 @@ fun SavePasskeyDialog(
         },
         confirmButton = {
             TextButton(onClick = {
-                if (selectedLogin == null || rpId.isBlank() || credentialId.isBlank()) {
+                val login = selectedLogin
+                if (login == null || rpId.isBlank() || credentialId.isBlank()) {
                     showError = true
                     return@TextButton
                 }
                 onSave(
-                    selectedLogin!!.id,
+                    login.id,
                     VaultFido2Credential(
                         credentialId = credentialId.trim(),
                         rpId = rpId.trim(),

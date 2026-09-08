@@ -350,3 +350,35 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
   `updateFido2Credentials_writesIntoLoginCipher_notSeparatePasskeyCipher` 锁定该行为，防回归。
 - **Detekt**：本轮改动零新增违例；`core:model` 通过。现存 Detekt 违例（app 18 / data:bitwarden 7 /
   data:repository 3 / core:common 1）均来自 M1 relay UI 提交（4401bf2），非本轮引入，待专项清理。
+
+## 专项清理 + 身份/银行卡可编辑 + 主页搜索（2026-09-08 本轮）
+**Detekt 门禁 31 处 → 0**（上一轮记录的存量违例已全部清零，双 flavor + 全模块）。
+- 机械类：`?: ""`→`orEmpty()`、`listOfNotNull`→`listOf`、`!!`→局部 val、未用变量/属性删除、
+  `require(x != null)`→`requireNotNull(x)`（保留「库未解锁」前置语义，勿直接删变量）、
+  `sealed class`→`sealed interface`、去掉 `unpackAccountKey` 冗余 `suspend`。
+- `InjectDispatcher` 4 处用 `@Suppress` + 理由：2 处是 OkHttp `Authenticator` **同步回调**，
+  必须 `runBlocking(Dispatchers.IO)` 桥接（框架线程边界，注入无测试收益）；AutoLockController
+  因项目只有 `@CryptoDispatcher`（语义 = KDF/CPU 密集）一个限定符，复用会混淆语义，
+  待引入通用 `@DefaultDispatcher` 再改注入。
+- 长参数/圈复杂度**靠重构不靠抑制**：`DetailBodyContent` 的 5 个复制回调收敛为 `DetailActions`；
+  `toUpdateRequest` 拆 `overlayLogin/Card/Identity/SshKey`；`ItemFormDialog` 拆 `buildSnapshot`。
+- 教训：重构后**必重跑 detekt**——本轮三次新增（ItemFormDialog 圈复杂度 18、ItemsScreen 超
+  150 行、toUpdateRequest 圈复杂度 16）都是自己引入的，编译/测试全绿也不会报。
+
+**身份 / 银行卡可编辑（用户要求）**
+- `ItemFormDialog` 重写为按 `type` 决定字段的通用表单：Login / Card(6) / Identity(17 全量) /
+  SecureNote·SshKey（仅名称+备注）。签名收敛为
+  `ItemFormDialog(title, initial: VaultItem, saving, onDismiss, onSave)`，`onSave` 回传完整快照；
+  `ItemDetailViewModel.updateItem(item: VaultItem)` 同步改为快照入参（原 6 参数版本废弃）。
+- 实现要点：用「标签列表 + 值列表」双表驱动 + `Iterator.nextOrEmpty()` 组装对象——既避开
+  17 个状态变量，也避开 `getOrNull(3)` 这类会被 MagicNumber 查的字面量下标。
+- ⚠️ **关键**：`toUpdateRequest` 原本 `card = stored.card` / `identity = stored.identity`
+  （只回传服务端原密文）→ 改为 overlay：本类型按表单明文重加密，非本类型或段缺失才沿用原密文。
+  **不改这里「可编辑」就是 UI 假象，保存后服务端数据不变。** 已加 3 个回归测试
+  （`updateWritesEditedCardFields` / `updateWritesEditedIdentityFieldsAndClearsBlanks` /
+  `updateOfLoginDoesNotClobberUnrelatedStoredSegments`）。
+- 未编辑段（secureNote / fields / passwordRevisionDate）始终沿用原密文，防丢载荷。
+
+**主页搜索**：`ItemsScreen` 顶栏加搜索图标 → 展开 `SearchField`；`ItemsViewModel` 加 `query` +
+`visibleItems`（标题/用户名/网址，忽略大小写）；空结果区分「库里没有条目」与「没有匹配」。
+

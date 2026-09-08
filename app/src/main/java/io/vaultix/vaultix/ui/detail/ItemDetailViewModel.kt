@@ -9,7 +9,6 @@ import io.vaultix.domain.ItemRepository
 import io.vaultix.domain.VaultRepository
 import io.vaultix.domain.VaultSaveOutcome
 import io.vaultix.model.VaultItem
-import io.vaultix.model.VaultUri
 import io.vaultix.vaultix.util.VaultixClipboard
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -141,30 +140,20 @@ class ItemDetailViewModel @Inject constructor(
         }
     }
 
-    fun updateItem(
-        name: String,
-        username: String,
-        password: String,
-        notes: String,
-        uris: List<String> = emptyList(),
-        totp: String = "",
-    ) {
+    /**
+     * 保存编辑结果。
+     *
+     * 入参是表单回传的**完整条目快照**（[VaultItem] copy），因此类型专属段
+     * （card / identity / sshKey / customFields / fido2Credentials）由表单决定：
+     * 已编辑的段按明文重新加密上传，未编辑的段沿用服务端原密文（data 层
+     * [io.vaultix.data.bitwarden.mapper.CipherMapper.toUpdateRequest] 保证）。
+     */
+    fun updateItem(item: VaultItem) {
         val current = _state.value
-        val item = current.item ?: return
         if (current.saving) return
         _state.update { it.copy(saving = true) }
         viewModelScope.launch {
-            val outcome = itemRepository.updateItem(
-                vaultId = vaultId,
-                item = item.copy(
-                    title = name,
-                    username = username,
-                    password = password,
-                    notes = notes,
-                    uris = uris.map { VaultUri(it) },
-                    totp = totp.takeIf { it.isNotBlank() },
-                ),
-            )
+            val outcome = itemRepository.updateItem(vaultId = vaultId, item = item)
             _state.update { it.copy(saving = false) }
             _events.send(
                 outcome.fold(

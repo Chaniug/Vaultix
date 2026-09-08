@@ -30,15 +30,15 @@ package io.vaultix.data.bitwarden.sync
  */
 object EmptyVaultProtection {
 
-    sealed class CheckResult {
+    sealed interface CheckResult {
         /** 允许同步 */
-        data object Allowed : CheckResult()
+        data object Allowed : CheckResult
 
         /** 首次同步，允许空库 */
-        data object FirstSyncAllowed : CheckResult()
+        data object FirstSyncAllowed : CheckResult
 
         /** 阻止同步，需用户确认 */
-        data class Blocked(val localCount: Int, val serverCount: Int, val reason: String) : CheckResult()
+        data class Blocked(val localCount: Int, val serverCount: Int, val reason: String) : CheckResult
     }
 
     fun checkSyncAllowed(
