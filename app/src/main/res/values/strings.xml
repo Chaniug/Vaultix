@@ -202,6 +202,17 @@
     <string name="totp_invalid">验证码无法解析（密钥格式不正确）</string>
     <string name="item_totp_hint">otpauth:// 链接或 TOTP 密钥</string>
     <string name="item_scan_totp">扫描二维码</string>
+    <string name="item_generate_password">生成密码</string>
+    <string name="gen_preview">密码预览</string>
+    <string name="gen_length">长度：%1$d</string>
+    <string name="gen_uppercase">大写字母 (A-Z)</string>
+    <string name="gen_lowercase">小写字母 (a-z)</string>
+    <string name="gen_numbers">数字 (0-9)</string>
+    <string name="gen_symbols">符号 (!@#$…)</string>
+    <string name="gen_exclude_similar">排除易混淆字符 (0OlI1)</string>
+    <string name="gen_exclude_ambiguous">排除歧义符号</string>
+    <string name="gen_use">使用</string>
+    <string name="gen_regenerate">重新生成</string>
     <string name="qr_scan_title">扫描二维码</string>
     <string name="qr_camera_permission_title">需要相机权限</string>
     <string name="qr_camera_permission_body">扫描 TOTP 二维码需要相机权限。Vaultix 只在本地识别画面内容，不会拍照、不会保存或上传任何图像。</string>

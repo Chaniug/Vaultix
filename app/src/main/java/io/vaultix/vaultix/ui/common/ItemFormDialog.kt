@@ -11,10 +11,13 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Casino
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Star
@@ -120,7 +123,13 @@ fun ItemFormDialog(
         onDismissRequest = { if (!saving) onDismiss() },
         title = { Text(text = title, style = MaterialTheme.typography.titleLarge) },
         text = {
-            Column(modifier = Modifier.imePadding()) {
+            Column(
+                modifier = Modifier
+                    .imePadding()
+                    // ⚠️ AlertDialog 内容默认不滚动：加入身份 17 字段/自定义字段编辑器后
+                    // 内容超高被静默裁剪（用户报告「验证码下方区域不可见」），必须滚动。
+                    .verticalScroll(rememberScrollState()),
+            ) {
                 FormHeader(
                     folders = folders,
                     folderId = folderId,
@@ -429,6 +438,7 @@ private fun LoginFields(
         modifier = Modifier.fillMaxWidth(),
     )
     Spacer(Modifier.height(8.dp))
+    var showGenerator by remember { mutableStateOf(false) }
     OutlinedTextField(
         value = password,
         onValueChange = onPasswordChange,
@@ -436,8 +446,26 @@ private fun LoginFields(
         singleLine = true,
         visualTransformation = PasswordVisualTransformation(),
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+        trailingIcon = {
+            // 随机密码生成（Bastion 同款能力）：弹出选项对话框后回填
+            IconButton(onClick = { showGenerator = true }) {
+                Icon(
+                    Icons.Filled.Casino,
+                    contentDescription = stringResource(R.string.item_generate_password),
+                )
+            }
+        },
         modifier = Modifier.fillMaxWidth(),
     )
+    if (showGenerator) {
+        PasswordGeneratorDialog(
+            onUse = {
+                onPasswordChange(it)
+                showGenerator = false
+            },
+            onDismiss = { showGenerator = false },
+        )
+    }
     PasswordStrengthHint(password = password)
     Spacer(Modifier.height(8.dp))
     UriListEditor(

@@ -256,7 +256,31 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 - YubiKey OTP 44 位字母数字输入（触控生成），数字类仍 6 位
 
 ## Bastion 冻结为 reference（2026-09-08 用户拍板）
-- **Bastion 代码与 GitHub 均不再动**（仍有人用，保持现网版本）；Vaultix = 唯一演进线，后续"搬代码"= 在 Vaultix 架构上重写
+- ~~Bastion 代码与 GitHub 均不再动~~；Vaultix = 唯一演进线
+
+## ⚠️ 策略变更（2026-09-08 晚，用户重新拍板，推翻「不做文件级搬迁」）
+**用户决定**：保持 Vaultix 架构（多模块 / Bitwarden canonical 模型 / CipherDto 密文存储），
+把 Bastion 的**设置、密码条目、验证码条目、通行密钥、卡包**的代码与 UI **先整体搬过来再改**
+——用户认为逐项对齐效率太低，Bastion 实现更完善。
+
+**执行边界（搬迁时必须替换的部分，勿把 Bastion 数据层一并搬入）**：
+- 包名 `com.bastion.app.*` → `io.vaultix.*`；GPL-3.0 溯源声明必须保留（双方均 GPL，搬代码合法）
+- **数据模型不搬**：Bastion 的 PasswordEntry / SecureItem / 自有 Room 表 → Vaultix 的
+  VaultItem / VaultRepository / CipherDto 密文链（否则 M1 保真成果全部作废、回到明文 Room）
+- SettingsManager / DataStore 键 → Vaultix 的 VaultixPreferences；DI → Vaultix 的 Hilt 图
+- 参考源 = `reference/bastion/`（vendored @369ed56）
+
+**搬迁顺序（用户五模块）**：① 密码条目（Add/Edit 表单 + 生成器，进行中）
+② 验证码条目（TotpGenerator 五类型 + 编辑 UI）③ 设置 ④ 通行密钥 ⑤ 卡包。
+回收站自动清理随密码条目批次一起。
+
+**本轮已落地（第一批）**：
+- core:common `PasswordGenerator.kt`：从 Bastion 搬生成核（SecureRandom + Keyguard
+  最小字符数算法 + 排除相似/歧义 + 洗牌 + PIN + 内置词表 passphrase），
+  **去除 zxcvbn / Context / Bastion logging 依赖**（强度分析沿用 Vaultix PasswordStrength）
+- `ItemFormDialog`：内容区加 `verticalScroll` —— 修复「验证码下方区域不可见」
+  （AlertDialog 不滚动，身份 17 字段/自定义字段加入后内容超高被裁剪）
+- 密码字段加「生成」按钮 + 生成选项对话框（长度/大小写/数字/符号/排除相似/排除歧义），后续"搬代码"= 在 Vaultix 架构上重写
 - 正确姿势：只搬三类资产（行为知识 / 测试向量与保真矩阵 / 无依赖的核），**不做文件级搬迁**（Bastion 主源码 ≈ 664 文件 / 25.8 万行、单模块）
 - 参考索引、别搬清单与对拍流程：`Docs/18-Bastion参考地图.md`；决策：`Docs/progress/decisions.md`
 - **仓库内快照 `reference/bastion/`**（vendored @369ed56，≈13 MB：主源码 664+单测 155+
