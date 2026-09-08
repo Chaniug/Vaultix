@@ -480,10 +480,22 @@ private fun TotpEditDialog(
             }) { Text(stringResource(R.string.action_save)) }
         },
         dismissButton = {
-            if (onDelete != null) {
-                TextButton(onClick = onDelete) { Text(stringResource(R.string.action_cancel)) }
-            } else {
-                TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
+            // ⚠️ 2026-09-08 修复数据丢失 bug：此前 onDelete != null 时这里只有一个
+            // 按钮，文案是「取消」，onClick 却绑定 onDelete（删除验证码/软删独立
+            // 条目）——用户取消编辑等于直接删除。现在「移除」与「取消」并排，
+            // 且破坏性的移除用 error 色区分。
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (onDelete != null) {
+                    TextButton(onClick = onDelete) {
+                        Text(
+                            stringResource(R.string.totp_remove_action),
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
+                TextButton(onClick = onDismiss) {
+                    Text(stringResource(R.string.action_cancel))
+                }
             }
         },
     )
