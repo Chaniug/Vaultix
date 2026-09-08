@@ -58,6 +58,15 @@ retrofit = "2.11.0"
 okhttp = "4.12.0"
 retrofitSerialization = "1.0.0"
 
+# ---- 扫码（TOTP 相机扫码，app 模块）----
+# 相机层用 CameraX（Google 现行推荐，生命周期感知）；解码用 ZXing core。
+# 选 ZXing 而非 ML Kit 的理由：① 轻量（core ~500KB，ML Kit unbundled 需 2-3MB）；
+# ② 零 GMS 依赖（ML Kit bundled 依赖 Google Play Services，国内机型不可用）；
+# ③ ZXing 是 Google Play 扫码类 SDK 集成率第一（60%+），QR 为 ISO 固定标准，
+#    解码内核成熟，不依赖 ML 模型更新。
+cameraX = "1.5.2"
+zxing = "3.5.3"
+
 # ===== core:crypto 依赖版本 =====
 # Argon2id native 实现。锁 1.6.0（与 Bastion 完全一致）：
 #   1) 1.6.0 提供 Argon2KtResult.rawHashAsByteArray() / rawHash / encodedOutput，
@@ -132,6 +141,12 @@ hilt-compiler = { group = "com.google.dagger", name = "hilt-android-compiler", v
 hilt-android-testing = { group = "com.google.dagger", name = "hilt-android-testing", version.ref = "hilt" }
 androidx-datastore = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastore" }
 androidx-biometric = { group = "androidx.biometric", name = "biometric", version.ref = "biometric" }
+
+# ---- 扫码：CameraX（相机）+ ZXing（QR 解码）----
+androidx-camera-camera2 = { group = "androidx.camera", name = "camera-camera2", version.ref = "cameraX" }
+androidx-camera-lifecycle = { group = "androidx.camera", name = "camera-lifecycle", version.ref = "cameraX" }
+androidx-camera-view = { group = "androidx.camera", name = "camera-view", version.ref = "cameraX" }
+zxing-core = { group = "com.google.zxing", name = "core", version.ref = "zxing" }
 androidx-security-crypto = { group = "androidx.security", name = "security-crypto", version.ref = "securityCrypto" }
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "coroutines" }

@@ -2,6 +2,13 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!-- 相机：仅用于扫描 TOTP 的 otpauth:// 二维码（不拍照、不上传、不落盘） -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <!-- CameraX 需要设备有后置摄像头（自动对焦可选） -->
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="false" />
+
     <application
         android:name=".VaultixApplication"
         android:allowBackup="true"

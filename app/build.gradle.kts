@@ -115,6 +115,12 @@ dependencies {
     implementation(libs.androidx.biometric)
     implementation(libs.coil.compose)
 
+    // 扫码（TOTP 相机扫码）：CameraX 取流 + ZXing 解 QR
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.view)
+    implementation(libs.zxing.core)
+
     // ---- 项目模块：UI 只依赖 domain 接口 + data:repository 实现 ----
     implementation(projects.core.model)
     implementation(projects.core.common)

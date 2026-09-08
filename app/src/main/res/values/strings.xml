@@ -199,6 +199,11 @@
     <string name="copy_totp_clears">已复制验证码（%1$d 秒后自动清除）</string>
     <string name="totp_invalid">验证码无法解析（密钥格式不正确）</string>
     <string name="item_totp_hint">otpauth:// 链接或 TOTP 密钥</string>
+    <string name="item_scan_totp">扫描二维码</string>
+    <string name="qr_scan_title">扫描二维码</string>
+    <string name="qr_camera_permission_title">需要相机权限</string>
+    <string name="qr_camera_permission_body">扫描 TOTP 二维码需要相机权限。Vaultix 只在本地识别画面内容，不会拍照、不会保存或上传任何图像。</string>
+    <string name="qr_grant_permission">授予权限</string>
     <string name="section_passkeys">通行密钥</string>
     <string name="passkey_count">%1$d 个通行密钥</string>
     <string name="passkey_readonly_hint">通行密钥由服务器管理，不可在此编辑</string>

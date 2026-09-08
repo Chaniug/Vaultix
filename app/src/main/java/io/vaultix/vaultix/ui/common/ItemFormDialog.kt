@@ -16,6 +16,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Visibility
@@ -50,6 +51,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import io.vaultix.common.PasswordStrength
 import io.vaultix.model.CustomFieldType
 import io.vaultix.model.VaultCustomField
@@ -58,6 +61,7 @@ import io.vaultix.model.VaultItemType
 import io.vaultix.model.VaultLinkedId
 import io.vaultix.model.VaultReprompt
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.qr.QrScannerContent
 
 /**
  * 条目表单对话框（新建 / 编辑共用，Docs/08 S10）。
@@ -107,6 +111,7 @@ fun ItemFormDialog(
     var favorite by rememberSaveable(initial) { mutableStateOf(initial.favorite) }
     var reprompt by rememberSaveable(initial) { mutableStateOf(initial.reprompt) }
     var showNameError by rememberSaveable { mutableStateOf(false) }
+    var scanning by rememberSaveable { mutableStateOf(false) }
 
     AlertDialog(
         onDismissRequest = { if (!saving) onDismiss() },
@@ -147,6 +152,7 @@ fun ItemFormDialog(
                         uris = uris,
                         totp = totp,
                         onTotpChange = { totp = it },
+                        onScanTotp = { scanning = true },
                     )
                     VaultItemType.Card -> LabeledFields(CARD_LABELS, cardValues)
                     VaultItemType.Identity -> LabeledFields(IDENTITY_LABELS, identityValues)
@@ -209,6 +215,26 @@ fun ItemFormDialog(
             }
         },
     )
+
+    // 扫码用**全屏 Dialog 内嵌相机**，而不是跳转到独立页面：
+    // 这样结果可以直接回填 totp 字段，不会因为导航离开而丢失已填的其他内容。
+    if (scanning) {
+        Dialog(
+            onDismissRequest = { scanning = false },
+            properties = DialogProperties(
+                usePlatformDefaultWidth = false,
+                decorFitsSystemWindows = false,
+            ),
+        ) {
+            QrScannerContent(
+                onResult = { text ->
+                    totp = text
+                    scanning = false
+                },
+                onBack = { scanning = false },
+            )
+        }
+    }
 }
 
 @Composable
@@ -315,6 +341,7 @@ private fun LoginFields(
     uris: SnapshotStateList<String>,
     totp: String,
     onTotpChange: (String) -> Unit,
+    onScanTotp: () -> Unit,
 ) {
     OutlinedTextField(
         value = username,
@@ -341,14 +368,22 @@ private fun LoginFields(
         onRemove = { uris.removeAt(it) },
     )
     Spacer(Modifier.height(8.dp))
-    OutlinedTextField(
-        value = totp,
-        onValueChange = onTotpChange,
-        label = { Text(stringResource(R.string.section_totp)) },
-        placeholder = { Text(stringResource(R.string.item_totp_hint)) },
-        singleLine = true,
-        modifier = Modifier.fillMaxWidth(),
-    )
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        OutlinedTextField(
+            value = totp,
+            onValueChange = onTotpChange,
+            label = { Text(stringResource(R.string.section_totp)) },
+            placeholder = { Text(stringResource(R.string.item_totp_hint)) },
+            singleLine = true,
+            modifier = Modifier.weight(1f),
+        )
+        IconButton(onClick = onScanTotp) {
+            Icon(
+                Icons.Filled.QrCodeScanner,
+                contentDescription = stringResource(R.string.item_scan_totp),
+            )
+        }
+    }
 }
 
 /**
