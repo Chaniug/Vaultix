@@ -152,6 +152,8 @@
     <string name="item_field_notes">备注</string>
     <string name="item_field_value">值</string>
     <string name="item_favorite">收藏</string>
+    <string name="item_folder">文件夹</string>
+    <string name="item_folder_none">无文件夹</string>
     <string name="item_reprompt">主密码二次验证</string>
     <string name="item_reprompt_hint">查看或自动填充前需要再输入一次主密码</string>
     <string name="item_add_field">添加字段</string>

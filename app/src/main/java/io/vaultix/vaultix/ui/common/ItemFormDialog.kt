@@ -56,6 +56,7 @@ import androidx.compose.ui.window.DialogProperties
 import io.vaultix.common.PasswordStrength
 import io.vaultix.model.CustomFieldType
 import io.vaultix.model.VaultCustomField
+import io.vaultix.model.VaultFolder
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
 import io.vaultix.model.VaultLinkedId
@@ -85,6 +86,7 @@ import io.vaultix.vaultix.ui.qr.QrScannerContent
 fun ItemFormDialog(
     title: String,
     initial: VaultItem,
+    folders: List<VaultFolder> = emptyList(),
     saving: Boolean = false,
     typeEditable: Boolean = false,
     onDismiss: () -> Unit,
@@ -110,6 +112,7 @@ fun ItemFormDialog(
     }
     var favorite by rememberSaveable(initial) { mutableStateOf(initial.favorite) }
     var reprompt by rememberSaveable(initial) { mutableStateOf(initial.reprompt) }
+    var folderId by rememberSaveable(initial) { mutableStateOf(initial.folderId) }
     var showNameError by rememberSaveable { mutableStateOf(false) }
     var scanning by rememberSaveable { mutableStateOf(false) }
 
@@ -118,12 +121,14 @@ fun ItemFormDialog(
         title = { Text(text = title, style = MaterialTheme.typography.titleLarge) },
         text = {
             Column(modifier = Modifier.imePadding()) {
-                if (typeEditable) {
-                    SectionLabel(text = stringResource(R.string.item_field_type))
-                    Spacer(Modifier.height(8.dp))
-                    TypePicker(selected = type, onSelect = { type = it })
-                    Spacer(Modifier.height(8.dp))
-                }
+                FormHeader(
+                    folders = folders,
+                    folderId = folderId,
+                    onFolderSelect = { folderId = it },
+                    typeEditable = typeEditable,
+                    type = type,
+                    onTypeSelect = { type = it },
+                )
                 NameField(
                     name = name,
                     onNameChange = { name = it; showNameError = false },
@@ -197,6 +202,7 @@ fun ItemFormDialog(
                                     identityValues = identityValues.toList(),
                                 ),
                                 meta = ItemMeta(
+                                    folderId = folderId,
                                     favorite = favorite,
                                     reprompt = reprompt,
                                     customFields = customFields.toList(),
@@ -244,6 +250,34 @@ private fun SectionLabel(text: String) {
         style = MaterialTheme.typography.labelLarge,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
+}
+
+/**
+ * 表单头部：文件夹（库里有文件夹才显示）+ 类型选择（仅新建显示）。
+ * 抽出的目的：控制主函数长度与圈复杂度；顺序对齐 Bitwarden 官方
+ * （文件夹在最上，其次类型、名称）。
+ */
+@Composable
+private fun FormHeader(
+    folders: List<VaultFolder>,
+    folderId: String?,
+    onFolderSelect: (String?) -> Unit,
+    typeEditable: Boolean,
+    type: VaultItemType,
+    onTypeSelect: (VaultItemType) -> Unit,
+) {
+    if (folders.isNotEmpty()) {
+        SectionLabel(text = stringResource(R.string.item_folder))
+        Spacer(Modifier.height(8.dp))
+        FolderPicker(folders = folders, selectedId = folderId, onSelect = onFolderSelect)
+        Spacer(Modifier.height(8.dp))
+    }
+    if (typeEditable) {
+        SectionLabel(text = stringResource(R.string.item_field_type))
+        Spacer(Modifier.height(8.dp))
+        TypePicker(selected = type, onSelect = onTypeSelect)
+        Spacer(Modifier.height(8.dp))
+    }
 }
 
 /** 名称输入 + 收藏星标（对齐 Bitwarden：收藏在标题行右侧）。 */
@@ -307,6 +341,50 @@ private fun RepromptToggle(
                 onRepromptChange(if (it) VaultReprompt.Password else VaultReprompt.None)
             },
         )
+    }
+}
+
+/**
+ * 文件夹选择（对齐 Bitwarden：名称上方）。
+ *
+ * 只在 [folders] 非空时由调用方渲染——未解锁 / 库还没有文件夹时隐藏，
+ * 不显示一个「永远无选项」的下拉。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun FolderPicker(
+    folders: List<VaultFolder>,
+    selectedId: String?,
+    onSelect: (String?) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val selected = folders.firstOrNull { it.id == selectedId }
+    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
+        OutlinedTextField(
+            value = selected?.name ?: stringResource(R.string.item_folder_none),
+            onValueChange = {},
+            readOnly = true,
+            label = { Text(stringResource(R.string.item_folder)) },
+            modifier = Modifier.menuAnchor().fillMaxWidth(),
+        )
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.item_folder_none)) },
+                onClick = {
+                    onSelect(null)
+                    expanded = false
+                },
+            )
+            folders.forEach { folder ->
+                DropdownMenuItem(
+                    text = { Text(folder.name) },
+                    onClick = {
+                        onSelect(folder.id)
+                        expanded = false
+                    },
+                )
+            }
+        }
     }
 }
 

@@ -5,12 +5,14 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import io.vaultix.data.repository.BitwardenSyncOrchestrator
+import io.vaultix.domain.FolderRepository
 import io.vaultix.domain.ItemRepository
 import io.vaultix.domain.SyncTrigger
 import io.vaultix.domain.VaultRepository
 import io.vaultix.domain.VaultSaveOutcome
 import io.vaultix.domain.VaultSyncStatus
 import io.vaultix.model.VaultItem
+import io.vaultix.model.VaultFolder
 import io.vaultix.model.VaultSummary
 import io.vaultix.vaultix.ui.common.ItemFilter
 import kotlinx.coroutines.channels.Channel
@@ -40,6 +42,7 @@ class ItemsViewModel @Inject constructor(
     private val vaultRepository: VaultRepository,
     private val itemRepository: ItemRepository,
     private val syncOrchestrator: BitwardenSyncOrchestrator,
+    private val folderRepository: FolderRepository,
 ) : ViewModel() {
 
     val vaultId: String = checkNotNull(savedStateHandle[ARG_VAULT_ID])
@@ -93,6 +96,11 @@ class ItemsViewModel @Inject constructor(
         // 修改（保存/删除 → flush 推送）触发；拉取统一走 retrySync()（顶栏按钮 /
         // 下拉刷新）。编排器 PERIODIC/解锁门卫保留备用。
     }
+
+    /** 该库的文件夹列表（未解锁 / 尚无文件夹时为空，UI 据此隐藏下拉）。 */
+    val folders: StateFlow<List<VaultFolder>> = folderRepository
+        .observeFolders(vaultId)
+        .stateIn(scope = viewModelScope, started = SharingStarted.Eagerly, initialValue = emptyList())
 
     /** 同步进行中（下拉刷新指示器用；手动触发后 Orchestrator 状态流转驱动）。 */
     val isSyncing: StateFlow<Boolean> =

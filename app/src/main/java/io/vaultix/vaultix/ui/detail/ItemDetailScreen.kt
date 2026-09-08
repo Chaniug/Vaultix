@@ -325,6 +325,7 @@ fun ItemDetailScreen(
         ItemFormDialog(
             title = stringResource(R.string.edit_item_title),
             initial = item,
+            folders = viewModel.folders.collectAsStateWithLifecycle().value,
             saving = state.saving,
             onDismiss = { editOpen = false },
             onSave = { updated ->

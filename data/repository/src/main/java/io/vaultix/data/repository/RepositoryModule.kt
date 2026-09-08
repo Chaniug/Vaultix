@@ -4,6 +4,7 @@ import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
+import io.vaultix.domain.FolderRepository
 import io.vaultix.domain.ItemRepository
 import io.vaultix.domain.VaultRepository
 import javax.inject.Singleton
@@ -26,4 +27,8 @@ interface RepositoryModule {
     @Binds
     @Singleton
     fun bindItemRepository(impl: ItemRepositoryImpl): ItemRepository
+
+    @Binds
+    @Singleton
+    fun bindFolderRepository(impl: FolderRepositoryImpl): FolderRepository
 }

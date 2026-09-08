@@ -86,6 +86,7 @@ fun ItemsScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val visibleItems by viewModel.visibleItems.collectAsStateWithLifecycle()
+    val folders by viewModel.folders.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
     var showCreateDialog by rememberSaveable { mutableStateOf(false) }
@@ -189,6 +190,7 @@ fun ItemsScreen(
         ItemFormDialog(
             title = stringResource(R.string.items_new_item),
             initial = blankItem,
+            folders = folders,
             saving = state.saving,
             // 新建可选类型（登录 / 银行卡 / 身份 / 安全笔记 / SSH）；
             // 编辑态不开，避免改类型让原类型载荷失去意义。

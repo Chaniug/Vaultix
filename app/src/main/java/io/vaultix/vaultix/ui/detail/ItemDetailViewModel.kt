@@ -5,16 +5,20 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import io.vaultix.datastore.VaultixPreferences
+import io.vaultix.domain.FolderRepository
 import io.vaultix.domain.ItemRepository
 import io.vaultix.domain.VaultRepository
 import io.vaultix.domain.VaultSaveOutcome
 import io.vaultix.model.VaultItem
+import io.vaultix.model.VaultFolder
 import io.vaultix.vaultix.util.VaultixClipboard
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -33,6 +37,7 @@ class ItemDetailViewModel @Inject constructor(
     private val vaultRepository: VaultRepository,
     private val prefs: VaultixPreferences,
     private val clipboard: VaultixClipboard,
+    private val folderRepository: FolderRepository,
 ) : ViewModel() {
 
     val vaultId: String = checkNotNull(savedStateHandle[ARG_VAULT_ID])
@@ -64,6 +69,11 @@ class ItemDetailViewModel @Inject constructor(
 
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
+
+    /** 该库的文件夹列表（未解锁 / 尚无文件夹时为空，UI 据此隐藏下拉）。 */
+    val folders: StateFlow<List<VaultFolder>> = folderRepository
+        .observeFolders(vaultId)
+        .stateIn(scope = viewModelScope, started = SharingStarted.Eagerly, initialValue = emptyList())
 
     private val _events = Channel<UiEvent>(Channel.BUFFERED)
     val events = _events.receiveAsFlow()
