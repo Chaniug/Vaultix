@@ -4,6 +4,25 @@
 > 落地；审计报告 `Docs/progress/audit/bitwarden-alignment.md`。
 > 状态：`TODO` / `DOING` / `DONE` / `BLOCKED`
 
+## 已完成（第十三轮 2026-09-08 · TOTP 统一界面 + 通行密钥只读列表 + 入口 hub）
+
+- [x] **TOTP 统一界面（对齐 Bitwarden 总览 + Bastion 验证器视图）**：从所有登录条目的
+      `login.totp` 归一化展示，区分「已绑定（随密码条目）/ 独立（空密码登录条目，Bitwarden
+      官方兼容形态）」两类；实时滚动刷新 + 进度条 + 点按复制；搜索发行方/账号；编辑/删除；
+      独立项可「绑定到密码条目」合并后删除
+- [x] **Steam 验证码**：Totp 引擎 Base64 密钥 + HMAC-SHA1 + 26 字符专属字母表 + 固定 5 位码；
+      otpauth 解析按 issuer/label/algorithm 识别 steam；core:common 单测 5 例覆盖
+- [x] **通行密钥只读列表（PasskeysScreen + SavePasskeyDialog）**：拉平所有登录条目的
+      fido2Credentials 展示；**只读（仅查看/删除）** 不可自建；保存（绑定）时强制挂到所选
+      登录条目，对齐 Bitwarden 无独立通行密钥条目形态（CipherMapper 已支持 fido2 逐字段加密写回）
+- [x] **入口 hub**：ItemsScreen 顶栏新增 TOTP 入口；VaultixApp 新增 TotpCodes/Passkeys 路由；
+      验证码界面顶栏「通行密钥」按钮进入 PasskeysScreen
+- [x] **搜索 + 删除**：TOTP 界面、通行密钥界面均含搜索与删除；密码条目入口沿用既有能力
+- [x] 修复编译与 detekt 0 违规门禁（超长行拆分、MagicNumber 常量化、UnusedParameter、
+      updateItem 补 vaultId、补 passkey_field_user 字符串与必要 import）；双 flavor 编译 +
+      全模块 detekt（0 违规）+ 受影响模块单测（core:common / data:bitwarden 全绿）
+- [x] 提交并推送 `origin/main`（5e652ce）
+
 ## 已完成（第十轮 2026-09-08 · Bitwarden 对齐审计 + 批 1）
 
 - [x] **对齐审计**（Docs/progress/audit/bitwarden-alignment.md）：Vaultix bitwarden 侧
