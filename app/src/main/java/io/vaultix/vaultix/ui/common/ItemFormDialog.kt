@@ -16,19 +16,26 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -39,10 +46,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import io.vaultix.common.PasswordStrength
+import io.vaultix.model.CustomFieldType
+import io.vaultix.model.VaultCustomField
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
+import io.vaultix.model.VaultLinkedId
 import io.vaultix.vaultix.R
 
 /**
@@ -86,6 +97,9 @@ fun ItemFormDialog(
     }
     val identityValues = rememberSaveable(initial, saver = STRING_LIST_SAVER) {
         mutableStateListOf<String>().apply { addAll(identityValuesOf(initial.identity)) }
+    }
+    val customFields = rememberSaveable(initial, saver = CUSTOM_FIELD_LIST_SAVER) {
+        mutableStateListOf<VaultCustomField>().apply { addAll(initial.customFields) }
     }
     var showNameError by rememberSaveable { mutableStateOf(false) }
 
@@ -140,6 +154,9 @@ fun ItemFormDialog(
                     // 安全笔记只有名称 + 备注；SSH 密钥段保持只读（上方已提示）
                     VaultItemType.SecureNote, VaultItemType.SshKey -> Unit
                 }
+                SectionLabel(text = stringResource(R.string.section_custom_fields))
+                Spacer(Modifier.height(8.dp))
+                CustomFieldsEditor(fields = customFields)
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
                     value = notes,
@@ -171,6 +188,7 @@ fun ItemFormDialog(
                                     cardValues = cardValues.toList(),
                                     identityValues = identityValues.toList(),
                                 ),
+                                meta = ItemMeta(customFields = customFields.toList()),
                             ),
                         )
                     }
@@ -369,6 +387,179 @@ private fun UriListEditor(
     }
 }
 
+/**
+ * 自定义字段编辑器（对齐 Bitwarden 官方「添加自定义字段」）。
+ *
+ * 每行可改名称 / 值 / 类型，可删除；底部可新增。值的形态随 [CustomFieldType] 变化：
+ * - [CustomFieldType.Boolean]：开关（存 `"true"` / `"false"`，与服务端一致）；
+ * - [CustomFieldType.Hidden]：默认掩码，可点开查看；
+ * - [CustomFieldType.Linked]：下拉选择所指标准字段（官方 100/300/400 分段编码）；
+ * - [CustomFieldType.Text]：普通单行文本。
+ */
+@Composable
+private fun CustomFieldsEditor(fields: SnapshotStateList<VaultCustomField>) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        fields.forEachIndexed { index, field ->
+            CustomFieldRow(
+                field = field,
+                onFieldChange = { fields[index] = it },
+                onRemove = { fields.removeAt(index) },
+            )
+            Spacer(Modifier.height(8.dp))
+        }
+        TextButton(onClick = { fields.add(VaultCustomField()) }, modifier = Modifier.fillMaxWidth()) {
+            Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Text(stringResource(R.string.item_add_field))
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CustomFieldRow(
+    field: VaultCustomField,
+    onFieldChange: (VaultCustomField) -> Unit,
+    onRemove: () -> Unit,
+) {
+    var typeExpanded by remember { mutableStateOf(false) }
+    var revealHidden by remember { mutableStateOf(false) }
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                value = field.name,
+                onValueChange = { onFieldChange(field.copy(name = it)) },
+                label = { Text(stringResource(R.string.item_field_name)) },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+            )
+            IconButton(onClick = onRemove) {
+                Icon(
+                    Icons.Filled.Delete,
+                    contentDescription = stringResource(R.string.item_remove_field),
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+        }
+        Spacer(Modifier.height(4.dp))
+        FieldValueInput(
+            field = field,
+            revealHidden = revealHidden,
+            onRevealChange = { revealHidden = it },
+            onFieldChange = onFieldChange,
+        )
+        Spacer(Modifier.height(4.dp))
+        ExposedDropdownMenuBox(expanded = typeExpanded, onExpandedChange = { typeExpanded = it }) {
+            OutlinedTextField(
+                value = stringResource(CUSTOM_FIELD_TYPE_LABELS.getValue(field.type)),
+                onValueChange = {},
+                readOnly = true,
+                label = { Text(stringResource(R.string.item_field_type)) },
+                modifier = Modifier.menuAnchor().fillMaxWidth(),
+            )
+            ExposedDropdownMenu(expanded = typeExpanded, onDismissRequest = { typeExpanded = false }) {
+                CustomFieldType.entries.forEach { type ->
+                    DropdownMenuItem(
+                        text = { Text(stringResource(CUSTOM_FIELD_TYPE_LABELS.getValue(type))) },
+                        onClick = {
+                            onFieldChange(field.copy(type = type))
+                            typeExpanded = false
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** 单个自定义字段的「值」输入：形态由字段类型决定。 */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun FieldValueInput(
+    field: VaultCustomField,
+    revealHidden: Boolean,
+    onRevealChange: (Boolean) -> Unit,
+    onFieldChange: (VaultCustomField) -> Unit,
+) {
+    when (field.type) {
+        CustomFieldType.Boolean -> Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(text = stringResource(R.string.item_field_value), modifier = Modifier.weight(1f))
+            Switch(
+                checked = field.value.equals("true", ignoreCase = true),
+                onCheckedChange = { onFieldChange(field.copy(value = it.toString())) },
+            )
+        }
+
+        CustomFieldType.Linked -> LinkedValueInput(field = field, onFieldChange = onFieldChange)
+
+        CustomFieldType.Hidden -> Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                value = field.value,
+                onValueChange = { onFieldChange(field.copy(value = it)) },
+                label = { Text(stringResource(R.string.item_field_value)) },
+                singleLine = true,
+                visualTransformation = if (revealHidden) {
+                    VisualTransformation.None
+                } else {
+                    PasswordVisualTransformation()
+                },
+                modifier = Modifier.weight(1f),
+            )
+            IconButton(onClick = { onRevealChange(!revealHidden) }) {
+                Icon(
+                    imageVector = if (revealHidden) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                    contentDescription = stringResource(R.string.item_reveal_value),
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+        }
+
+        CustomFieldType.Text -> OutlinedTextField(
+            value = field.value,
+            onValueChange = { onFieldChange(field.copy(value = it)) },
+            label = { Text(stringResource(R.string.item_field_value)) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+/** 链接型字段：选择指向的标准字段（编号用官方分段编码）。 */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun LinkedValueInput(
+    field: VaultCustomField,
+    onFieldChange: (VaultCustomField) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val selected = VaultLinkedId.fromCode(field.linkedId)
+    val fallback = R.string.item_field_value
+    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
+        OutlinedTextField(
+            value = stringResource(selected?.let { LINKED_FIELD_LABELS[it] } ?: fallback),
+            onValueChange = {},
+            readOnly = true,
+            label = { Text(stringResource(R.string.item_field_value)) },
+            modifier = Modifier.menuAnchor().fillMaxWidth(),
+        )
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            VaultLinkedId.entries.forEach { id ->
+                DropdownMenuItem(
+                    text = { Text(stringResource(LINKED_FIELD_LABELS[id] ?: fallback)) },
+                    onClick = {
+                        // 链接型字段本身不存值，只存指向（value 清空）
+                        onFieldChange(field.copy(linkedId = id.code, value = ""))
+                        expanded = false
+                    },
+                )
+            }
+        }
+    }
+}
+
 /** 字符串可变列表的保存器（进程重建后恢复表单输入）。 */
 private val STRING_LIST_SAVER = listSaver<SnapshotStateList<String>, String>(
     save = { it.toList() },
@@ -406,3 +597,37 @@ private val IDENTITY_LABELS = listOf(
     R.string.identity_passport,
     R.string.identity_license,
 )
+
+/**
+ * 每个自定义字段序列化为 4 个字符串：name / value / type 序号 / linkedId（-1 = 无）。
+ * 用字符串扁平表而非自定义 Saver：与 [STRING_LIST_SAVER] 保持同一手法，避免
+ * 为 data class 逐一写 Bundle 读写。
+ */
+private const val CUSTOM_FIELD_VALUE_COUNT = 4
+
+/** 自定义字段列表的保存器（进程重建后恢复用户已编辑的字段）。 */
+private val CUSTOM_FIELD_LIST_SAVER = listSaver<SnapshotStateList<VaultCustomField>, String>(
+    save = { list ->
+        list.flatMap { f ->
+            listOf(f.name, f.value, f.type.ordinal.toString(), (f.linkedId ?: -1).toString())
+        }
+    },
+    restore = { values ->
+        mutableStateListOf<VaultCustomField>().apply {
+            addAll(values.chunked(CUSTOM_FIELD_VALUE_COUNT).map(::customFieldOf))
+        }
+    },
+)
+
+private fun customFieldOf(parts: List<String>): VaultCustomField {
+    val it = parts.iterator()
+    return VaultCustomField(
+        name = it.nextOrEmpty(),
+        value = it.nextOrEmpty(),
+        type = CustomFieldType.entries.getOrNull(it.nextOrEmpty().toIntOrNull() ?: 0)
+            ?: CustomFieldType.Text,
+        linkedId = it.nextOrEmpty().toIntOrNull()?.takeIf { v -> v >= 0 },
+    )
+}
+
+private fun Iterator<String>.nextOrEmpty(): String = if (hasNext()) next() else ""

@@ -13,6 +13,7 @@ import io.vaultix.crypto.VaultixCrypto
 import io.vaultix.data.bitwarden.model.CardDto
 import io.vaultix.data.bitwarden.model.CipherDto
 import io.vaultix.data.bitwarden.model.CipherRequest
+import io.vaultix.data.bitwarden.model.CustomFieldDto
 import io.vaultix.data.bitwarden.model.Fido2CredentialDto
 import io.vaultix.data.bitwarden.model.IdentityDto
 import io.vaultix.data.bitwarden.model.LoginDto
@@ -150,6 +151,8 @@ class CipherMapper @Inject constructor(
         favorite = item.favorite,
         reprompt = repromptToInt(item.reprompt),
         secureNote = newSecureNote(item),
+        // 自定义字段：由表单决定（可增删改 + 4 种类型），逐字段加密写回
+        fields = item.customFields.map { mapCustomFieldRequest(it, key) },
     )
 
     /** 新建条目的 login 段（非 Login 类型不给该段）。 */
@@ -187,8 +190,9 @@ class CipherMapper @Inject constructor(
      *   （[VaultItem.fido2Credentials] 已包含服务端原值，保存流程即通过替换该列表来
      *   新增/删除「绑定到本登录条目的通行密钥」；passwordRevisionDate 原密文保留）；
      * - card / identity / sshKey：本类型条目按表单明文重新加密覆盖（可编辑），
-     *   非本类型条目沿用服务端原密文；secureNote / fields 段始终原样并入——
-     *   未编辑段必须随更新请求提交，否则服务端会清空这些载荷；
+     *   非本类型条目沿用服务端原密文；
+     * - custom fields：按表单意图整体写回（可增删改 + 4 种类型）；
+     * - secureNote 段：仅 SecureNote 类型写入，其余沿用原值；
      * - 条目独立密钥（per-item key）与本方法无关：保留段直接复用服务端密文，
      *   不重新加密。
      */
@@ -211,7 +215,9 @@ class CipherMapper @Inject constructor(
             identity = overlayIdentity(item, stored, key),
             secureNote = overlaySecureNote(item, stored),
             sshKey = overlaySshKey(item, stored, key),
-            fields = stored.fields,
+            // 自定义字段改为按**表单意图**写回（此前固定沿用 stored.fields，
+            // 等于用户在 Vaultix 里无法增删改自定义字段）
+            fields = item.customFields.map { mapCustomFieldRequest(it, key) },
         )
     }
 
@@ -364,6 +370,30 @@ class CipherMapper @Inject constructor(
         TYPE_FIELD_LINKED -> CustomFieldType.Linked
         else -> CustomFieldType.Text
     }
+
+    /** 领域类型 → Bitwarden cipher.fields[i].type（0/1/2/3）。 */
+    private fun customFieldTypeToInt(type: CustomFieldType): Int = when (type) {
+        CustomFieldType.Hidden -> TYPE_FIELD_HIDDEN
+        CustomFieldType.Boolean -> TYPE_FIELD_BOOLEAN
+        CustomFieldType.Linked -> TYPE_FIELD_LINKED
+        CustomFieldType.Text -> TYPE_FIELD_TEXT
+    }
+
+    /**
+     * 自定义字段 → 上传密文体（逐字段加密）。
+     *
+     * [VaultCustomField.linkedId] 沿用官方**分段编码**（100 登录 / 300 卡 /
+     * 400 身份，见 [io.vaultix.model.VaultLinkedId]），不做任何转换。
+     */
+    private fun mapCustomFieldRequest(
+        field: VaultCustomField,
+        key: SymmetricCryptoKey,
+    ): CustomFieldDto = CustomFieldDto(
+        name = encryptOpt(field.name, key),
+        value = encryptOpt(field.value, key),
+        type = customFieldTypeToInt(field.type),
+        linkedId = field.linkedId,
+    )
 
     private fun matchOf(match: Int?): UriMatch? = when (match) {
         TYPE_URI_MATCH_DOMAIN -> UriMatch.Domain
@@ -536,6 +566,7 @@ class CipherMapper @Inject constructor(
         const val TYPE_URI_MATCH_STARTS_WITH = 2
         const val TYPE_URI_MATCH_EXACT = 3
         const val TYPE_URI_MATCH_REGEX = 4
+        const val TYPE_FIELD_TEXT = 0
         const val TYPE_FIELD_HIDDEN = 1
         const val TYPE_FIELD_BOOLEAN = 2
         const val TYPE_FIELD_LINKED = 3

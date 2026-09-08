@@ -150,6 +150,10 @@
     <string name="item_field_username">用户名</string>
     <string name="item_field_password">密码</string>
     <string name="item_field_notes">备注</string>
+    <string name="item_field_value">值</string>
+    <string name="item_add_field">添加字段</string>
+    <string name="item_remove_field">删除此字段</string>
+    <string name="item_reveal_value">显示/隐藏值</string>
     <string name="item_name_required">名称不能为空</string>
     <!-- 密码强度（评分卡移植 Bastion，见 core:common PasswordStrength 溯源声明） -->
     <string name="password_strength_weak">弱</string>
@@ -236,7 +240,12 @@
     <string name="identity_ssn">身份证号</string>
     <string name="identity_username">用户名</string>
     <string name="identity_passport">护照号</string>
+    <string name="custom_field_type_text">文本型</string>
+    <string name="custom_field_type_hidden">隐藏型</string>
+    <string name="custom_field_type_boolean">布尔型</string>
+    <string name="custom_field_type_linked">链接型</string>
     <string name="identity_license">驾照号</string>
+    <string name="identity_full_name">全名</string>
 
     <!-- 自定义字段（Bitwarden cipher.fields） -->
     <string name="section_custom_fields">自定义字段</string>

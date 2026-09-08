@@ -1,9 +1,11 @@
 package io.vaultix.vaultix.ui.common
 
 import io.vaultix.model.VaultCard
+import io.vaultix.model.VaultCustomField
 import io.vaultix.model.VaultIdentity
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
+import io.vaultix.model.VaultReprompt
 import io.vaultix.model.VaultUri
 
 /**
@@ -31,6 +33,19 @@ class FormValues(
 )
 
 /**
+ * 条目的**通用元数据段**（与各类型无关）：文件夹 / 收藏 / 主密码二次验证 / 自定义字段。
+ *
+ * 单独成类而非塞进 [FormValues]：后者已经有 8 个参数（门禁上限），
+ * 再加就会触发 Detekt LongParameterList。
+ */
+data class ItemMeta(
+    val folderId: String? = null,
+    val favorite: Boolean = false,
+    val reprompt: VaultReprompt = VaultReprompt.None,
+    val customFields: List<VaultCustomField> = emptyList(),
+)
+
+/**
  * 构造保存快照：只覆盖**本类型可编辑**的段，其余沿用 [initial]
  * （自定义字段 / 通行密钥 / SSH 段等不会因编辑而丢失）。
  *
@@ -41,11 +56,16 @@ fun buildSnapshot(
     initial: VaultItem,
     type: VaultItemType,
     values: FormValues,
+    meta: ItemMeta = ItemMeta(),
 ): VaultItem {
     val base = initial.copy(
         type = type,
         title = values.name.trim(),
         notes = values.notes.trim(),
+        folderId = meta.folderId,
+        favorite = meta.favorite,
+        reprompt = meta.reprompt,
+        customFields = meta.customFields,
     )
     return when (type) {
         VaultItemType.Login -> base.copy(

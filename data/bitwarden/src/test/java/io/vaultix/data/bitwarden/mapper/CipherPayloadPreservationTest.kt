@@ -14,8 +14,10 @@ import io.vaultix.data.bitwarden.model.SshKeyDto
 import io.vaultix.data.bitwarden.model.UriDto
 import io.vaultix.data.bitwarden.model.toStoredCipherDto
 import io.vaultix.data.bitwarden.network.BitwardenJson
+import io.vaultix.model.CustomFieldType
 import io.vaultix.model.UriMatch
 import io.vaultix.model.VaultCard
+import io.vaultix.model.VaultCustomField
 import io.vaultix.model.VaultFido2Credential
 import io.vaultix.model.VaultIdentity
 import io.vaultix.model.VaultItem
@@ -76,7 +78,13 @@ class CipherPayloadPreservationTest {
                 totp = "enc:totp-secret",
                 fido2Credentials = listOf(Fido2CredentialDto(credentialId = "enc:fido")),
             ),
-            fields = listOf(CustomFieldDto(name = "enc:fn", value = "enc:fv", type = 0)),
+            fields = listOf(
+                CustomFieldDto(
+                    name = crypto.encryptString("字段名", accountKey),
+                    value = crypto.encryptString("字段值", accountKey),
+                    type = 0,
+                ),
+            ),
         )
 
         val request = mapper.toUpdateRequest(
@@ -89,6 +97,8 @@ class CipherPayloadPreservationTest {
                 totp = "otpauth-secret",
                 // 更新流程的 item 携带已加载的完整通行密钥列表（保存流程即通过替换此列表增删）
                 fido2Credentials = listOf(VaultFido2Credential(credentialId = "enc:fido")),
+                // 自定义字段同样是「UI 加载后原样带回」，因此明文往返应保持不变
+                customFields = listOf(VaultCustomField(name = "字段名", value = "字段值")),
             ),
             stored = stored,
             key = accountKey,
@@ -110,8 +120,10 @@ class CipherPayloadPreservationTest {
             "enc:fido",
             crypto.decryptToString(request.login!!.fido2Credentials!!.single().credentialId!!, accountKey),
         )
-        // 自定义字段为只读段：原样保留服务端密文，绝不丢失
-        assertEquals("enc:fn", request.fields!!.single().name)
+        // 自定义字段按**表单意图**写回并重新加密（UI 原样带回 → 明文往返不变）
+        val field = request.fields.single()
+        assertEquals("字段名", crypto.decryptToString(field.name!!, accountKey))
+        assertEquals("字段值", crypto.decryptToString(field.value!!, accountKey))
     }
 
     // ---- 合并更新：非登录载荷 ----
@@ -133,11 +145,22 @@ class CipherPayloadPreservationTest {
             identity = IdentityDto(firstName = "enc:fn", lastName = "enc:ln"),
             sshKey = SshKeyDto(publicKey = "enc:pub"),
             secureNote = SecureNoteDto(type = 0),
-            fields = listOf(CustomFieldDto(name = "enc:k", value = "enc:v", type = 0)),
+            fields = listOf(
+                CustomFieldDto(
+                    name = crypto.encryptString("k", accountKey),
+                    value = crypto.encryptString("v", accountKey),
+                    type = 0,
+                ),
+            ),
         )
 
         val request = mapper.toUpdateRequest(
-            item = VaultItem(id = "c3", title = "白金卡（改名）", type = VaultItemType.Card),
+            item = VaultItem(
+                id = "c3",
+                title = "白金卡（改名）",
+                type = VaultItemType.Card,
+                customFields = listOf(VaultCustomField(name = "k", value = "v")),
+            ),
             stored = stored,
             key = accountKey,
         )
@@ -150,7 +173,7 @@ class CipherPayloadPreservationTest {
         assertEquals("enc:fn", request.identity!!.firstName)
         assertEquals("enc:pub", request.sshKey!!.publicKey)
         assertEquals(0, request.secureNote!!.type)
-        assertEquals("enc:v", request.fields!!.single().value)
+        assertEquals("v", crypto.decryptToString(request.fields.single().value!!, accountKey))
     }
 
     // ---- 本地重建行 / 上传体的 JSON 往返无损 ----
@@ -381,5 +404,54 @@ class CipherPayloadPreservationTest {
         assertEquals("new-folder", request.folderId)
         assertEquals(true, request.favorite)
         assertEquals(1, request.reprompt)
+    }
+
+    // ---- 自定义字段：4 种类型可编辑（对齐 Bitwarden 官方「添加自定义字段」）----
+
+    @Test
+    fun updateWritesEditedCustomFieldsWithAllFourTypes() {
+        val stored = CipherDto(
+            id = "c1",
+            type = 1,
+            name = crypto.encryptString("条目", accountKey),
+            login = LoginDto(username = crypto.encryptString("u", accountKey)),
+            fields = listOf(CustomFieldDto(name = "enc:旧字段", value = "enc:旧值", type = 0)),
+        )
+
+        val request = mapper.toUpdateRequest(
+            item = VaultItem(
+                id = "c1",
+                title = "条目",
+                type = VaultItemType.Login,
+                username = "u",
+                customFields = listOf(
+                    VaultCustomField(name = "文本", value = "abc", type = CustomFieldType.Text),
+                    VaultCustomField(name = "隐藏", value = "secret", type = CustomFieldType.Hidden),
+                    VaultCustomField(name = "布尔", value = "true", type = CustomFieldType.Boolean),
+                    VaultCustomField(
+                        name = "链接",
+                        value = "",
+                        type = CustomFieldType.Linked,
+                        linkedId = 100, // 官方分段编码：登录·用户名
+                    ),
+                ),
+            ),
+            stored = stored,
+            key = accountKey,
+        )
+
+        val fields = request.fields
+        // 不再沿用 stored 的那 1 个旧字段
+        assertEquals(4, fields.size)
+        assertEquals("文本", crypto.decryptToString(fields[0].name!!, accountKey))
+        assertEquals("abc", crypto.decryptToString(fields[0].value!!, accountKey))
+        assertEquals(0, fields[0].type) // Text
+        assertEquals(1, fields[1].type) // Hidden
+        assertEquals("secret", crypto.decryptToString(fields[1].value!!, accountKey))
+        assertEquals(2, fields[2].type) // Boolean
+        assertEquals("true", crypto.decryptToString(fields[2].value!!, accountKey))
+        assertEquals(3, fields[3].type) // Linked
+        // linkedId 按官方分段编码原样保留（不能被当成顺序编号改写）
+        assertEquals(100, fields[3].linkedId)
     }
 }
