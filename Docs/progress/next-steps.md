@@ -97,14 +97,50 @@
 - [x] 设置页（自动锁档位/剪贴板清除/防截屏/动态取色/立即锁定/快速解锁管理/关于）
 - [x] 双 flavor 编译 + 单测 + detekt 全绿
 
+## 已完成（第十五~十六段 2026-09-08 晚 · M1 字段对齐闭合 + Bastion 对齐第一批）
+
+- [x] **领域补齐**：folderId/favorite/reprompt/secureNote 进 VaultItem，三处 Mapper 连通
+      （拉取/新建/编辑；此前拉取即丢、编辑沿用 stored 等于不可修改）；4 例单测
+- [x] **新建条目可选类型**（登录/银行卡/身份/安全笔记/SSH；此前 FAB 固定 Login）
+- [x] **linkedId 修正为 Bitwarden 官方分段编码**（100/300/400 段；原 1/2/3/4 全错）
+      + VaultLinkedId 枚举 + core:model 5 例锁定 + CI 补 :core:model
+- [x] **自定义字段 4 类型编辑器**（fields 按表单意图写回；Boolean/Hidden/Linked/Text）
+- [x] **收藏 + 主密码二次验证 UI**（标题行星标 / 附加选项开关）
+- [x] **TOTP 相机扫码**（CameraX+ZXing；全屏 Dialog 内嵌，扫码回填不丢表单输入）
+- [x] **文件夹选择**（FolderRepository 只读数据流 + FolderPicker，库无文件夹时隐藏）
+- [x] **修复验证器「取消=删除」数据丢失 bug**（文案/动作错位；移除 error 色 + 取消并排）
+- [x] **随机密码生成**（Bastion PasswordGenerator 生成核迁入，去 zxcvbn/Context；
+      生成对话框：长度/字符集/排除选项；密码框 🎰 入口）+ 7 例单测
+- [x] **修复表单「验证码下方区域不可见」**（AlertDialog 加 verticalScroll）
+- [x] 提交并推送（e6b05d6…f0f5df6，CI 全绿）；真机 adb 已连（荣耀，logcat 无崩溃）
+
+## ⚠️ 策略变更（2026-09-08 晚拍板）：Bastion 代码与 UI 分批整体搬入
+
+保持 Vaultix 架构（多模块 / Bitwarden canonical / CipherDto 密文存储），
+把 Bastion 设置/密码条目/验证码/通行密钥/卡包的代码与 UI 先搬过来再改。
+**数据模型与 Room 明文表不搬**；包名/模型/DI/偏好键必替换；GPL 溯源必保留。
+已完成第一批（密码生成器 + 表单滚动），后续批次见下。
+
+## Bastion 对齐批次（剩余）
+
+- [ ] **批次② 验证码条目对齐**：OtpType 五类型（TOTP/HOTP/Steam/Yandex/MOTP）引擎
+      （Bastion TotpGenerator 238-372 三个生成函数可迁）；编辑器类型选择与
+      HOTP counter / mOTP pin 字段；**otpauth-migration:// 批量导入**（Bastion
+      TotpUriParser.decodeMigrationPayload protobuf 解析可迁）
+- [ ] **批次③ 回收站对齐**：自动清理策略（autoDeleteDays DataStore 设置 + 到期清理 +
+      剩余天数显示；Bastion TrashViewModel 逻辑参考）
+- [ ] **批次④ 设置页**：Bastion SettingsScreen 逐项对照 Vaultix 设置页补缺
+- [ ] **批次⑤ 通行密钥**：PasskeysScreen 对比 Bastion 实现补缺（绑定编辑等）
+- [ ] **批次⑥ 卡包**：银行卡编辑已有；对照 Bastion CardWallet 补缺口
+
 ## P0 · M1 收尾（剩余）
 
-- [ ] **真机回归（待用户，装 d689a37 preview）**：新固定签名包上验证 登录(2FA)→同步→
-      未命名已修复→快速解锁→**重启后快速解锁不再报登录失效**（登录失效修复验收）→
-      锁屏后生物识别重开→设备管理可见；同步编排行为（状态条/手动刷新/回前台自动
-      同步/库列表状态行）、强度条、**载荷保真（编辑含网址/TOTP 条目后字段仍在；
-      卡/身份/SSH 条目改名不丢字段）**、回收站（恢复/永久删除）、移除库入口
-- [ ] 移除库入口 / 回收站视图的最终目测（d689a37 已含，回归时顺带）
+- [ ] **真机回归（待用户，装 f0f5df6 preview）**：字段对齐验收（新建选类型→保存→
+      官方端对拍 folder/favorite/reprompt/自定义字段 4 类型是否真写回）；
+      **linkedId 修复验收**（Linked 字段显示所指字段名与值）；TOTP 扫码；**验证器
+      取消不再删除**；随机密码生成；**先去回收站恢复此前被误删的验证码**；
+      表单可滚动到底（验证码下方区域可见）
+- [ ] 回归通过 → M1 close-out（文档归档 + 下一里程碑规划）
 
 ## P2 · 自动化（WorkManager 周期同步归位）
 

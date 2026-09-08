@@ -66,3 +66,17 @@
 - Bastion 冻结为 reference；`Docs/18-Bastion参考地图.md` 分里程碑参考索引 + 别搬清单 + 对拍流程
 - `reference/bastion/`：仓库内 vendored 快照（@369ed56，1012 文件 ≈13 MB，只读不参与构建）
 - 对齐审计报告：`Docs/progress/audit/bitwarden-alignment.md`
+
+## 当前状态（2026-09-08 晚，f0f5df6）
+
+- **M1 字段对齐已闭合**：官方「添加登录」界面的全部字段（名称/文件夹/收藏/用户名/
+  密码/验证器密钥/网址/备注/主密码二次验证/自定义字段 4 类型）均可编辑并按
+  「表单意图」正确往返服务端；新建条目可选全部五种类型
+- **Bastion 对齐第一批落地**（新策略：分批搬代码与 UI，保持 Vaultix 架构）：
+  随机密码生成 + 表单滚动修复；批次②验证码五类型 / ③回收站自动清理 / ④设置 /
+  ⑤通行密钥 / ⑥卡包 待做（清单见 next-steps.md「Bastion 对齐批次」）
+- 修复两个真机 bug：验证器「取消=删除」（文案/动作错位）、表单内容超高被裁剪
+- 单测：core:crypto 172 / core:common 23 / core:model 5 / app 20 /
+  data:repository 14 / data:bitwarden 28，全绿；全模块 detekt 0 违规
+- **待办 P0**：用户真机回归（f0f5df6 preview）→ M1 close-out
+- 等待 CI 的包版本以 `git rev-list` 短 hash 标注在 versionName（0.1.0-dev-xxxxxxx）
