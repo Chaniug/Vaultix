@@ -63,6 +63,7 @@ import io.vaultix.model.CustomFieldType
 import io.vaultix.model.VaultCard
 import io.vaultix.model.VaultCustomField
 import io.vaultix.model.VaultFido2Credential
+import io.vaultix.model.VaultIdentity
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
 import io.vaultix.model.VaultSshKey
@@ -195,6 +196,10 @@ private fun DetailBodyContent(
                 if (item.sshKey != null) {
                     Spacer(Modifier.height(12.dp))
                     SshKeySection(item = item, onCopyField = onCopyField)
+                }
+                if (item.identity != null) {
+                    Spacer(Modifier.height(12.dp))
+                    IdentitySection(item = item, onCopyField = onCopyField)
                 }
                 if (item.customFields.isNotEmpty()) {
                     Spacer(Modifier.height(12.dp))
@@ -909,5 +914,48 @@ private fun cardExpiryText(expMonth: String, expYear: String): String {
         m.isNotBlank() -> m
         y.isNotBlank() -> y
         else -> ""
+    }
+}
+
+/**
+ * 身份信息分区（type=Identity）。按 Bitwarden canonical 顺序展示 17 字段，
+ * 仅渲染非空字段，每个值可复制。覆盖 Bastion 仅显示少数字段的兼容缺陷。
+ */
+@Composable
+private fun IdentitySection(item: VaultItem, onCopyField: (String) -> Unit) {
+    val id = item.identity ?: return
+    val rows = listOfNotNull(
+        stringResource(R.string.identity_title) to id.title,
+        stringResource(R.string.identity_first_name) to id.firstName,
+        stringResource(R.string.identity_middle_name) to id.middleName,
+        stringResource(R.string.identity_last_name) to id.lastName,
+        stringResource(R.string.identity_address1) to id.address1,
+        stringResource(R.string.identity_address2) to id.address2,
+        stringResource(R.string.identity_address3) to id.address3,
+        stringResource(R.string.identity_city) to id.city,
+        stringResource(R.string.identity_state) to id.state,
+        stringResource(R.string.identity_postal_code) to id.postalCode,
+        stringResource(R.string.identity_country) to id.country,
+        stringResource(R.string.identity_company) to id.company,
+        stringResource(R.string.identity_email) to id.email,
+        stringResource(R.string.identity_phone) to id.phone,
+        stringResource(R.string.identity_ssn) to id.ssn,
+        stringResource(R.string.identity_username) to id.username,
+        stringResource(R.string.identity_passport) to id.passportNumber,
+        stringResource(R.string.identity_license) to id.licenseNumber,
+    ).filter { it.second.isNotBlank() }
+    if (rows.isEmpty()) return
+    Column {
+        SectionTitle(text = stringResource(R.string.section_identity))
+        Card(
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                rows.forEach { (label, value) ->
+                    FieldRow(label, value, onCopyField)
+                }
+            }
+        }
     }
 }

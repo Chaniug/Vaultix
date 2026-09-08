@@ -41,6 +41,15 @@ data class VaultItem(
      */
     val sshKey: VaultSshKey? = null,
     /**
+     * 身份信息字段（type=Identity）。非身份条目恒为 null。
+     * 字段对齐 Bitwarden identity 载荷（17 字段全量）；只读展示（M1 编辑暂不支持）。
+     *
+     * ⚠️ 补字段必须同步补 Mapper（CipherMapper.mapIdentity / mapIdentityRequest）
+     * 与 ItemDetailScreen.IdentitySection，见 MEMORY「保真度三级」约定——否则身份条目
+     * 在 Vaultix 里会默默丢字段（这正是 Bastion 兼容性差的根因之一）。
+     */
+    val identity: VaultIdentity? = null,
+    /**
      * 自定义字段（Bitwarden cipher.fields，可多值，顺序即服务端顺序）。
      * 类型对齐 Bitwarden：Text / Hidden / Boolean / Linked（见 [CustomFieldType]）。
      * 只读展示（M1 编辑暂不支持；写回时由 CipherMapper 直接复用服务端原密文，不丢字段）。
@@ -139,6 +148,57 @@ data class VaultSshKey(
     val publicKey: String = "",
     /** 指纹（keyFingerprint）。 */
     val keyFingerprint: String = "",
+)
+
+/**
+ * 身份信息条目字段（Bitwarden identity 载荷，解密后明文；只读展示）。
+ *
+ * ⚠️ 明文承载：仅存在于已解锁的内存中，禁止落盘、禁止进日志（Docs/09）。
+ *
+ * 字段语义对齐 Bitwarden `CipherIdentityData`（官网/服务端字段集，非 Bastion 子集）：
+ * 全量 17 字段，覆盖姓名 / 地址 / 联系方式 / 证件号。Bastion 对身份条目兼容性差
+ * （仅映射了 title/name 等少量字段，其余如 passportNumber/licenseNumber/ssn 静默丢弃），
+ * Vaultix 以 Bitwarden 全字段为规范（canonical），逐字段解密降级空串，绝不丢字段。
+ * 溯源：GPL-3.0，字段集参照 Bitwarden 开源 `CipherIdentityData`。
+ */
+@Serializable
+data class VaultIdentity(
+    /** 称谓（title，如 Mr/Mrs/Dr）。 */
+    val title: String = "",
+    /** 名（firstName）。 */
+    val firstName: String = "",
+    /** 中间名（middleName）。 */
+    val middleName: String = "",
+    /** 姓（lastName）。 */
+    val lastName: String = "",
+    /** 地址行 1（address1）。 */
+    val address1: String = "",
+    /** 地址行 2（address2）。 */
+    val address2: String = "",
+    /** 地址行 3（address3）。 */
+    val address3: String = "",
+    /** 城市（city）。 */
+    val city: String = "",
+    /** 省/州（state）。 */
+    val state: String = "",
+    /** 邮编（postalCode）。 */
+    val postalCode: String = "",
+    /** 国家（country）。 */
+    val country: String = "",
+    /** 公司（company）。 */
+    val company: String = "",
+    /** 邮箱（email）。 */
+    val email: String = "",
+    /** 电话（phone）。 */
+    val phone: String = "",
+    /** 身份证号（ssn）。 */
+    val ssn: String = "",
+    /** 用户名（username，身份下的登录名）。 */
+    val username: String = "",
+    /** 护照号（passportNumber）。 */
+    val passportNumber: String = "",
+    /** 驾照号（licenseNumber）。 */
+    val licenseNumber: String = "",
 )
 
 /**

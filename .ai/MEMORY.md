@@ -312,3 +312,41 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
   自动同步只随本地修改的 flush 推送；拉取 = 手动（顶栏刷新图标 + 下拉刷新 PullToRefreshBox）
 - ItemsViewModel 不再 init 自动同步，暴露 isSyncing 驱动下拉指示器；AutoLockController
   回归纯锁定职责（移除 orchestrator 注入）
+
+## 真机回归修复（2026-09-08 晚，2925396）
+用户装 preview 后报告三处问题，已对齐 Bastion 修复并推送：
+- **验证码界面不显示标题/账号**：`TotpCodesViewModel.toTotpEntry` 对齐 Bastion
+  `TotpDataResolver.fromAuthenticatorKey`——otpauth 解析出的 issuer/account 为空时
+  回退到条目名（cipher name）/用户名（username）。Bitwarden 的 `login.totp` 常以裸
+  base32 密钥存储（无 issuer/account），此前只显示密钥前缀、账号空白。`TotpRow`
+  改用 `entry.title` 显示。
+- **密码条自定义字段不显示**：`VaultItem` 新增 `customFields: List<VaultCustomField>`
+  + `CustomFieldType`(Text/Hidden/Boolean/Linked，对齐 Bitwarden type 0-3)；
+  `CipherMapper.toDomain` 解密并映射 `fields`（含 linkedId）；详情页新增
+  `CustomFieldsSection`（Hidden 掩码可点开、Boolean→是/否、Linked→标准字段名）。
+  写路径 `toUpdateRequest` 仍复用服务端原密文 `stored.fields`，不丢字段。
+- **条目 URI 兼容格式（androidapp:// 等）**：新增 `core:common/UriFormat.classify`
+  （移植 Bastion `BitwardenLikeAutofillMatcherNg.normalizePackageName`），归一为
+  Website/AndroidApp(packageName)/Other；详情 URI 行显示「应用」标签+包名，已安装
+  则可启动应用。单测 9 例覆盖。
+- **经验**：Bastion 冻结后取代码走 `reference/bastion/`（vendored 快照），勿碰 `D:\Bastion` 现网；
+  涉及「标题/账号回退」「隐藏字段」「URI 包识别」这类交互细节，Bastion 是权威参考。
+
+## 身份条目全字段支持 + 通行密钥绑定校验（2026-09-08，本轮）
+- **身份条目（type=4）全字段打通**：`VaultItem` 新增 `VaultIdentity`（17 字段，对齐 Bitwarden
+  `CipherIdentityData`：title/firstName/middleName/lastName/address1-3/city/state/postalCode/
+  country/company/email/phone/ssn/username/passportNumber/licenseNumber）；`CipherMapper.toDomain`
+  解密映射 `dto.identity`、`toRequest` 加密写回 `item.identity`（仅 type=Identity 时写 identity 段，
+  防类型漂移）；`ItemDetailScreen` 新增 `IdentitySection`（只读，可复制）。此前 identity 完全未进
+  领域模型，详情页静默丢字段——这正是 Bastion 兼容性差的根因之一。
+- **SSH 密钥/银行卡**：`BitwardenDto` 字段集已对齐 Bitwarden（sshKey: privateKey/publicKey/
+  keyFingerprint；card: cardholderName/brand/number/expMonth/expYear/code），读映射完整，无需改动。
+- **通行密钥绑定缺陷核对（用户点名的 Bastion 缺陷）**：Bastion 的 `PasskeyEntry.boundPasswordId`
+  恒为 null，通行密钥作为独立 Login 密文（名 `X [Passkey]`）存在，与所属密码条目并无真实关联
+  （「假绑定」）。**Vaultix 不存在此缺陷**——`PasskeysViewModel.savePasskey` /
+  `ItemRepositoryImpl.updateFido2Credentials` 把凭证写入所属登录条目的 `login.fido2Credentials`
+  （`CipherMapper.toUpdateRequest` 逐字段重加密）；`PasskeyMapper.fromCipherResponse` 的 `boundPasswordId
+  = null` 仅为 Bastion 单方的引用字段，Vaultix 不采用「独立通行密钥条目」模型。新增单测
+  `updateFido2Credentials_writesIntoLoginCipher_notSeparatePasskeyCipher` 锁定该行为，防回归。
+- **Detekt**：本轮改动零新增违例；`core:model` 通过。现存 Detekt 违例（app 18 / data:bitwarden 7 /
+  data:repository 3 / core:common 1）均来自 M1 relay UI 提交（4401bf2），非本轮引入，待专项清理。

@@ -14,6 +14,7 @@ import io.vaultix.data.bitwarden.model.CardDto
 import io.vaultix.data.bitwarden.model.CipherDto
 import io.vaultix.data.bitwarden.model.CipherRequest
 import io.vaultix.data.bitwarden.model.Fido2CredentialDto
+import io.vaultix.data.bitwarden.model.IdentityDto
 import io.vaultix.data.bitwarden.model.LoginDto
 import io.vaultix.data.bitwarden.model.SshKeyDto
 import io.vaultix.data.bitwarden.model.UriDto
@@ -22,6 +23,7 @@ import io.vaultix.model.UriMatch
 import io.vaultix.model.VaultCard
 import io.vaultix.model.VaultCustomField
 import io.vaultix.model.VaultFido2Credential
+import io.vaultix.model.VaultIdentity
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
 import io.vaultix.model.VaultSshKey
@@ -81,6 +83,13 @@ class CipherMapper @Inject constructor(
                 } else {
                     null
                 },
+                // 身份信息：type=4 时映射全量 17 字段（解密失败降级空串，不丢字段）。
+                // 对齐 Bitwarden canonical，覆盖 Bastion 仅映射少数字段的兼容缺陷。
+                identity = if (dto.type == TYPE_IDENTITY) {
+                    dto.identity?.let { mapIdentity(it, key, itemKey) }
+                } else {
+                    null
+                },
                 // 自定义字段：name/value 解密；type/linkedId 原样承载（只读展示，写回复用原密文）
                 customFields = dto.fields.mapNotNull { f ->
                     val name = decryptToString(f.name, key, itemKey)
@@ -132,6 +141,8 @@ class CipherMapper @Inject constructor(
         },
         card = if (item.type == VaultItemType.Card) item.card?.let { mapCardRequest(it, key) } else null,
         sshKey = if (item.type == VaultItemType.SshKey) item.sshKey?.let { mapSshKeyRequest(it, key) } else null,
+        // 身份信息：type=Identity 时整体加密写回（非身份条目不写 identity 段，防类型漂移）
+        identity = if (item.type == VaultItemType.Identity) item.identity?.let { mapIdentityRequest(it, key) } else null,
     )
 
     /**
@@ -348,6 +359,57 @@ class CipherMapper @Inject constructor(
         privateKey = encryptOpt(sshKey.privateKey, key),
         publicKey = encryptOpt(sshKey.publicKey, key),
         keyFingerprint = encryptOpt(sshKey.keyFingerprint, key),
+    )
+
+    /**
+     * 身份信息密文 → 领域模型（全量 17 字段，逐字段解密，失败降级空串）。
+     * 对齐 Bitwarden `CipherIdentityData`，覆盖 Bastion 仅映射少数字段的兼容缺陷。
+     */
+    private fun mapIdentity(
+        dto: IdentityDto,
+        accountKey: SymmetricCryptoKey,
+        itemKey: SymmetricCryptoKey?,
+    ): VaultIdentity = VaultIdentity(
+        title = decryptToString(dto.title, accountKey, itemKey),
+        firstName = decryptToString(dto.firstName, accountKey, itemKey),
+        middleName = decryptToString(dto.middleName, accountKey, itemKey),
+        lastName = decryptToString(dto.lastName, accountKey, itemKey),
+        address1 = decryptToString(dto.address1, accountKey, itemKey),
+        address2 = decryptToString(dto.address2, accountKey, itemKey),
+        address3 = decryptToString(dto.address3, accountKey, itemKey),
+        city = decryptToString(dto.city, accountKey, itemKey),
+        state = decryptToString(dto.state, accountKey, itemKey),
+        postalCode = decryptToString(dto.postalCode, accountKey, itemKey),
+        country = decryptToString(dto.country, accountKey, itemKey),
+        company = decryptToString(dto.company, accountKey, itemKey),
+        email = decryptToString(dto.email, accountKey, itemKey),
+        phone = decryptToString(dto.phone, accountKey, itemKey),
+        ssn = decryptToString(dto.ssn, accountKey, itemKey),
+        username = decryptToString(dto.username, accountKey, itemKey),
+        passportNumber = decryptToString(dto.passportNumber, accountKey, itemKey),
+        licenseNumber = decryptToString(dto.licenseNumber, accountKey, itemKey),
+    )
+
+    /** 领域模型身份信息 → 上传密文体（仅非空字段加密；对齐 Bitwarden identity 载荷）。 */
+    private fun mapIdentityRequest(identity: VaultIdentity, key: SymmetricCryptoKey): IdentityDto = IdentityDto(
+        title = encryptOpt(identity.title, key),
+        firstName = encryptOpt(identity.firstName, key),
+        middleName = encryptOpt(identity.middleName, key),
+        lastName = encryptOpt(identity.lastName, key),
+        address1 = encryptOpt(identity.address1, key),
+        address2 = encryptOpt(identity.address2, key),
+        address3 = encryptOpt(identity.address3, key),
+        city = encryptOpt(identity.city, key),
+        state = encryptOpt(identity.state, key),
+        postalCode = encryptOpt(identity.postalCode, key),
+        country = encryptOpt(identity.country, key),
+        company = encryptOpt(identity.company, key),
+        email = encryptOpt(identity.email, key),
+        phone = encryptOpt(identity.phone, key),
+        ssn = encryptOpt(identity.ssn, key),
+        username = encryptOpt(identity.username, key),
+        passportNumber = encryptOpt(identity.passportNumber, key),
+        licenseNumber = encryptOpt(identity.licenseNumber, key),
     )
 
     /** 非空明文 → 加密密文；空串返回 null（对应 DTO 的 `= null` 默认）。 */

@@ -210,6 +210,27 @@
     <string name="ssh_public_key">公钥</string>
     <string name="ssh_fingerprint">指纹</string>
 
+    <!-- 身份信息 详情分区（对齐 Bitwarden identity 17 字段） -->
+    <string name="section_identity">身份信息</string>
+    <string name="identity_title">称谓</string>
+    <string name="identity_first_name">名</string>
+    <string name="identity_middle_name">中间名</string>
+    <string name="identity_last_name">姓</string>
+    <string name="identity_address1">地址 1</string>
+    <string name="identity_address2">地址 2</string>
+    <string name="identity_address3">地址 3</string>
+    <string name="identity_city">城市</string>
+    <string name="identity_state">省/州</string>
+    <string name="identity_postal_code">邮编</string>
+    <string name="identity_country">国家</string>
+    <string name="identity_company">公司</string>
+    <string name="identity_email">邮箱</string>
+    <string name="identity_phone">电话</string>
+    <string name="identity_ssn">身份证号</string>
+    <string name="identity_username">用户名</string>
+    <string name="identity_passport">护照号</string>
+    <string name="identity_license">驾照号</string>
+
     <!-- 自定义字段（Bitwarden cipher.fields） -->
     <string name="section_custom_fields">自定义字段</string>
     <string name="custom_field_unnamed">未命名字段</string>

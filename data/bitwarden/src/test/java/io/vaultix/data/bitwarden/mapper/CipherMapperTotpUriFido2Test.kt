@@ -5,6 +5,7 @@ import io.vaultix.crypto.VaultixCrypto
 import io.vaultix.data.bitwarden.model.CardDto
 import io.vaultix.data.bitwarden.model.CipherDto
 import io.vaultix.data.bitwarden.model.Fido2CredentialDto
+import io.vaultix.data.bitwarden.model.IdentityDto
 import io.vaultix.data.bitwarden.model.LoginDto
 import io.vaultix.data.bitwarden.model.SshKeyDto
 import io.vaultix.data.bitwarden.model.UriDto
@@ -12,6 +13,7 @@ import io.vaultix.data.bitwarden.model.toStoredCipherDto
 import io.vaultix.model.UriMatch
 import io.vaultix.model.VaultCard
 import io.vaultix.model.VaultFido2Credential
+import io.vaultix.model.VaultIdentity
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
 import io.vaultix.model.VaultSshKey
@@ -328,5 +330,95 @@ class CipherMapperTotpUriFido2Test {
         val stored = request.toStoredCipherDto(id = "ssh3", revisionDate = "r1")
         val back = mapper.toDomain(stored, accountKey)
         assertEquals(item.sshKey, back.sshKey)
+    }
+
+    @Test
+    fun toDomainReadsIdentity() {
+        // 身份条目（type=4）：全量 17 字段必须进入领域模型（覆盖 Bastion 仅映射少数字段的兼容缺陷）
+        val stored = CipherDto(
+            id = "id1",
+            type = 4,
+            name = crypto.encryptString("张三的身份", accountKey),
+            identity = IdentityDto(
+                title = crypto.encryptString("Mr", accountKey),
+                firstName = crypto.encryptString("三", accountKey),
+                lastName = crypto.encryptString("张", accountKey),
+                address1 = crypto.encryptString("中关村大街 1 号", accountKey),
+                city = crypto.encryptString("北京", accountKey),
+                state = crypto.encryptString("北京", accountKey),
+                postalCode = crypto.encryptString("100000", accountKey),
+                country = crypto.encryptString("CN", accountKey),
+                company = crypto.encryptString("Vaultix", accountKey),
+                email = crypto.encryptString("zhang@vaultix.dev", accountKey),
+                phone = crypto.encryptString("13800000000", accountKey),
+                ssn = crypto.encryptString("110101199001011234", accountKey),
+                username = crypto.encryptString("zhang", accountKey),
+                passportNumber = crypto.encryptString("E12345678", accountKey),
+                licenseNumber = crypto.encryptString("110000000000", accountKey),
+            ),
+        )
+        val item = mapper.toDomain(stored, accountKey)
+
+        assertEquals(VaultItemType.Identity, item.type)
+        val id = item.identity!!
+        assertEquals("Mr", id.title)
+        assertEquals("三", id.firstName)
+        assertEquals("张", id.lastName)
+        assertEquals("中关村大街 1 号", id.address1)
+        assertEquals("北京", id.city)
+        assertEquals("100000", id.postalCode)
+        assertEquals("CN", id.country)
+        assertEquals("Vaultix", id.company)
+        assertEquals("zhang@vaultix.dev", id.email)
+        assertEquals("13800000000", id.phone)
+        assertEquals("110101199001011234", id.ssn)
+        assertEquals("zhang", id.username)
+        assertEquals("E12345678", id.passportNumber)
+        assertEquals("110000000000", id.licenseNumber)
+    }
+
+    @Test
+    fun toRequestWritesIdentityAndDropsLogin() {
+        val item = VaultItem(
+            id = "id2",
+            title = "张三的身份",
+            type = VaultItemType.Identity,
+            identity = VaultIdentity(
+                firstName = "三",
+                lastName = "张",
+                email = "zhang@vaultix.dev",
+                phone = "13800000000",
+                passportNumber = "E12345678",
+            ),
+        )
+        val request = mapper.toRequest(item, accountKey)
+
+        assertEquals(4, request.type)
+        assertEquals(null, request.login)
+        val id = request.identity!!
+        assertEquals("三", crypto.decryptToString(id.firstName!!, accountKey))
+        assertEquals("张", crypto.decryptToString(id.lastName!!, accountKey))
+        assertEquals("zhang@vaultix.dev", crypto.decryptToString(id.email!!, accountKey))
+        assertEquals("13800000000", crypto.decryptToString(id.phone!!, accountKey))
+        assertEquals("E12345678", crypto.decryptToString(id.passportNumber!!, accountKey))
+    }
+
+    @Test
+    fun roundTripPreservesIdentity() {
+        val item = VaultItem(
+            id = "id3",
+            title = "张三的身份",
+            type = VaultItemType.Identity,
+            identity = VaultIdentity(
+                firstName = "三",
+                lastName = "张",
+                email = "zhang@vaultix.dev",
+                passportNumber = "E12345678",
+            ),
+        )
+        val request = mapper.toRequest(item, accountKey)
+        val stored = request.toStoredCipherDto(id = "id3", revisionDate = "r1")
+        val back = mapper.toDomain(stored, accountKey)
+        assertEquals(item.identity, back.identity)
     }
 }

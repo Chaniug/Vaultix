@@ -20,6 +20,7 @@ import io.vaultix.database.entity.CipherEntity
 import io.vaultix.database.entity.PendingOpEntity
 import io.vaultix.database.entity.VaultEntity
 import io.vaultix.domain.VaultSaveOutcome
+import io.vaultix.model.VaultFido2Credential
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultKind
 import kotlinx.coroutines.Dispatchers
@@ -343,8 +344,56 @@ class ItemRepositoryImplTest {
     }
 
     @Test
-    fun restoreOrPermanentDeleteOfActiveItem_rejected() = runTest {
+    fun updateFido2Credentials_writesIntoLoginCipher_notSeparatePasskeyCipher() = runTest {
+        // 对齐 Bitwarden 标准：保存通行密钥必须写入所属登录条目的 login.fido2Credentials，
+        // 不得生成独立的 [Passkey] 条目。这正是 Bastion 的缺陷——其 PasskeyEntry.boundPasswordId
+        // 恒为 null，通行密钥作为孤立 Login 密文存在，与所属密码条目并无真实关联（假绑定）。
+        // 本测试锁定 Vaultix 的正确行为，防止回归。
         sessions.unlock(vaultId, key)
+        val existing = CipherEntity(
+            id = "cipher-pk",
+            vaultId = vaultId,
+            type = 1,
+            encryptedPayload = BitwardenJson.encodeToString(
+                mapper.toRequest(plainItem(id = "cipher-pk"), key)
+                    .toStoredCipherDto("cipher-pk", "rev"),
+            ),
+            revisionDate = "rev",
+        )
+        coEvery { cipherDao.get("cipher-pk") } returns existing
+        coEvery { vaultDao.get(vaultId) } returns bitwardenVaultRow()
+        val rowSlot = slot<List<CipherEntity>>()
+        val opSlot = slot<PendingOpEntity>()
+        coEvery { cipherDao.upsertAll(capture(rowSlot)) } returns Unit
+        coEvery { pendingOpDao.enqueue(capture(opSlot)) } returns Unit
+        coEvery { syncService.flushPending(vaultId, vaultId) } returns Result.success(Unit)
+
+        val cred = VaultFido2Credential(
+            credentialId = "cred-abc-123",
+            rpId = "github.com",
+            rpName = "GitHub",
+            userName = "alice@example.com",
+        )
+        val outcome = repo.updateFido2Credentials(vaultId, "cipher-pk", listOf(cred))
+
+        assertEquals(VaultSaveOutcome.Synced, outcome.getOrThrow())
+        // 仍是同一条目（登录条目），没有新建独立的通行密钥条目
+        val row = rowSlot.captured.single()
+        assertEquals("cipher-pk", row.id)
+        // 上传体的 login.fido2Credentials 携带该凭证（可解密回原文）
+        val op = opSlot.captured
+        assertEquals("UPDATE", op.op)
+        val request = BitwardenJson.decodeFromString<CipherRequest>(op.payload!!)
+        assertNotNull(request.login)
+        assertEquals(1, request.login?.fido2Credentials?.size)
+        val stored = request.login?.fido2Credentials?.first()!!
+        assertEquals("cred-abc-123", crypto.decryptToString(stored.credentialId!!, key))
+        assertEquals("github.com", crypto.decryptToString(stored.rpId!!, key))
+        assertEquals("GitHub", crypto.decryptToString(stored.rpName!!, key))
+    }
+
+    @Test
+    fun restoreOrPermanentDeleteOfActiveItem_rejected() = runTest {        sessions.unlock(vaultId, key)
         val active = CipherEntity(
             id = "cipher-7",
             vaultId = vaultId,
