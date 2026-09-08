@@ -24,6 +24,17 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
+ * 偏好默认值（public：UI 层 stateIn 初始值与偏好层默认保持单一真值源）。
+ */
+object VaultixPreferencesDefaults {
+    /** 回收站自动清理档位（天；0 = 不自动清空；语义对齐 Bastion autoDeleteDays）。 */
+    const val TRASH_AUTO_DELETE_DAYS = 30
+
+    /** 主题模式（对齐 Bastion themeMode：system / light / dark）。 */
+    const val THEME_MODE = "system"
+}
+
+/**
  * 应用设置（非敏感）。
  *
  * 敏感凭据（token、主密钥材料）一律走 [SecureCredentialStore]，不放在这里。
@@ -41,6 +52,8 @@ class VaultixPreferences @Inject constructor(
         val DEFAULT_VAULT_ID = stringPreferencesKey("default_vault_id")
         val QUICK_UNLOCK_PROMPT_DISMISSED = booleanPreferencesKey("quick_unlock_prompt_dismissed")
         val TRASH_AUTO_DELETE_DAYS = intPreferencesKey("trash_auto_delete_days")
+        val THEME_MODE = stringPreferencesKey("theme_mode")
+        val OLED_PURE_BLACK = booleanPreferencesKey("oled_pure_black")
 
         /**
          * 自动锁定档位（分钟，语义对齐 Bastion autoLockMinutes）：
@@ -48,13 +61,6 @@ class VaultixPreferences @Inject constructor(
          */
         const val DEFAULT_AUTO_LOCK_MINUTES = 5
         const val DEFAULT_CLIPBOARD_CLEAR_MS = 30 * 1000L
-
-        /**
-         * 回收站自动清理档位（天，语义对齐 Bastion TrashSettings.autoDeleteDays）：
-         * 0 = 不自动清空；N > 0 = 软删除后保留 N 天。
-         * Vaultix 不提供 Bastion 的 -1「禁用回收站」档位（回收站是固定能力）。
-         */
-        const val DEFAULT_TRASH_AUTO_DELETE_DAYS = 30
     }
 
     private val safeData: Flow<Preferences> = dataStore.data
@@ -79,12 +85,23 @@ class VaultixPreferences @Inject constructor(
         safeData.map { it[SCREEN_SECURITY] ?: true }
 
     /**
-     * 回收站自动清理档位（天；0 = 不自动清空，语义见 [DEFAULT_TRASH_AUTO_DELETE_DAYS] 注释）。
+     * 回收站自动清理档位（天；0 = 不自动清空，语义见 [VaultixPreferencesDefaults.TRASH_AUTO_DELETE_DAYS]）。
      * 清理时机 = 进入回收站（TrashViewModel init），策略与倒计时口径见
      * [io.vaultix.common.TrashCleanupPolicy]。
      */
     val trashAutoDeleteDays: Flow<Int> =
-        safeData.map { it[TRASH_AUTO_DELETE_DAYS] ?: DEFAULT_TRASH_AUTO_DELETE_DAYS }
+        safeData.map { it[TRASH_AUTO_DELETE_DAYS] ?: VaultixPreferencesDefaults.TRASH_AUTO_DELETE_DAYS }
+
+    /**
+     * 主题模式（`system` / `light` / `dark`，语义对齐 Bastion themeMode）。
+     * 由 MainActivity 收集驱动 [io.vaultix.vaultix.ui.theme.VaultixTheme]。
+     */
+    val themeMode: Flow<String> =
+        safeData.map { it[THEME_MODE] ?: VaultixPreferencesDefaults.THEME_MODE }
+
+    /** OLED 纯黑（对齐 Bastion oledPureBlackEnabled）：深色模式下 surface/background 用纯黑。 */
+    val oledPureBlack: Flow<Boolean> =
+        safeData.map { it[OLED_PURE_BLACK] ?: false }
 
     val defaultVaultId: Flow<String?> = safeData.map { it[DEFAULT_VAULT_ID] }
 
@@ -141,6 +158,16 @@ class VaultixPreferences @Inject constructor(
     /** 回收站自动清理档位（天；0 = 不自动清空）。 */
     suspend fun setTrashAutoDeleteDays(days: Int) {
         dataStore.edit { it[TRASH_AUTO_DELETE_DAYS] = days }
+    }
+
+    /** 主题模式（`system` / `light` / `dark`）。 */
+    suspend fun setThemeMode(mode: String) {
+        dataStore.edit { it[THEME_MODE] = mode }
+    }
+
+    /** OLED 纯黑（深色模式 surface/background 纯黑）。 */
+    suspend fun setOledPureBlack(enabled: Boolean) {
+        dataStore.edit { it[OLED_PURE_BLACK] = enabled }
     }
 
     suspend fun setDefaultVaultId(id: String?) {

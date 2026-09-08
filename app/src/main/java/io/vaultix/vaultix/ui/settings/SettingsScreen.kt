@@ -15,6 +15,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Contrast
+import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Lock
@@ -51,6 +54,9 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.vaultix.vaultix.BuildConfig
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.common.TrashAutoDeleteDialog
+import io.vaultix.vaultix.ui.common.trashAutoDeleteLabel
+import io.vaultix.vaultix.ui.theme.ThemeMode
 
 /**
  * 设置页（最小版）：安全（自动锁定 / 剪贴板清除 / 防截屏 / 立即锁定）、
@@ -131,19 +137,9 @@ fun SettingsScreen(
                 onClick = { showQuickUnlockDialog = true },
             )
 
-            // ---- 外观 ----
-            SettingsGroupTitle(stringResource(R.string.group_appearance))
-            SettingsRow(
-                icon = { Icon(Icons.Filled.Palette, contentDescription = null) },
-                title = stringResource(R.string.setting_dynamic_color),
-                subtitle = stringResource(R.string.setting_dynamic_color_desc),
-                trailing = {
-                    Switch(
-                        checked = state.dynamicColor,
-                        onCheckedChange = viewModel::setDynamicColor,
-                    )
-                },
-            )
+            // ---- 外观 / 数据（批次④：Bastion SettingsScreen 对照补缺） ----
+            AppearanceSection(viewModel, dynamicColor = state.dynamicColor)
+            DataSection(viewModel)
 
             // ---- 关于 ----
             SettingsGroupTitle(stringResource(R.string.group_about))
@@ -210,6 +206,124 @@ fun SettingsScreen(
             onDismiss = { showQuickUnlockDialog = false },
         )
     }
+}
+
+/**
+ * 外观组（批次④，对齐 Bastion 主题能力）：主题模式三态 + OLED 纯黑 + 动态取色。
+ * 状态在 ViewModel 单独流上（不进 [SettingsViewModel.UiState]，避免六流 combine 的
+ * Array 转型噪音）；切换主题立即生效（MainActivity 收集）。
+ */
+@Composable
+private fun AppearanceSection(
+    viewModel: SettingsViewModel,
+    dynamicColor: Boolean,
+) {
+    val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
+    val oledPureBlack by viewModel.oledPureBlack.collectAsStateWithLifecycle()
+    var showThemeDialog by rememberSaveable { mutableStateOf(false) }
+
+    SettingsGroupTitle(stringResource(R.string.group_appearance))
+    SettingsRow(
+        icon = { Icon(Icons.Filled.DarkMode, contentDescription = null) },
+        title = stringResource(R.string.setting_theme_mode),
+        subtitle = themeModeLabel(ThemeMode.from(themeMode)),
+        onClick = { showThemeDialog = true },
+    )
+    SettingsRow(
+        icon = { Icon(Icons.Filled.Contrast, contentDescription = null) },
+        title = stringResource(R.string.setting_oled_pure_black),
+        subtitle = stringResource(R.string.setting_oled_pure_black_desc),
+        trailing = {
+            Switch(
+                checked = oledPureBlack,
+                onCheckedChange = viewModel::setOledPureBlack,
+            )
+        },
+    )
+    SettingsRow(
+        icon = { Icon(Icons.Filled.Palette, contentDescription = null) },
+        title = stringResource(R.string.setting_dynamic_color),
+        subtitle = stringResource(R.string.setting_dynamic_color_desc),
+        trailing = {
+            Switch(
+                checked = dynamicColor,
+                onCheckedChange = viewModel::setDynamicColor,
+            )
+        },
+    )
+
+    if (showThemeDialog) {
+        ThemeModeDialog(
+            current = ThemeMode.from(themeMode),
+            onSelect = {
+                viewModel.setThemeMode(it.name.lowercase())
+                showThemeDialog = false
+            },
+            onDismiss = { showThemeDialog = false },
+        )
+    }
+}
+
+/**
+ * 数据组（批次④）：回收站自动清理档位——与回收站页顶栏入口共用
+ * [TrashAutoDeleteDialog] 与同一偏好键，改哪边都实时生效。
+ */
+@Composable
+private fun DataSection(viewModel: SettingsViewModel) {
+    val trashDays by viewModel.trashAutoDeleteDays.collectAsStateWithLifecycle()
+    var showTrashDialog by rememberSaveable { mutableStateOf(false) }
+
+    SettingsGroupTitle(stringResource(R.string.group_data))
+    SettingsRow(
+        icon = { Icon(Icons.Filled.DeleteSweep, contentDescription = null) },
+        title = stringResource(R.string.setting_trash_auto_delete),
+        subtitle = trashAutoDeleteLabel(trashDays),
+        onClick = { showTrashDialog = true },
+    )
+
+    if (showTrashDialog) {
+        TrashAutoDeleteDialog(
+            currentDays = trashDays,
+            onSelect = viewModel::setTrashAutoDeleteDays,
+            onDismiss = { showTrashDialog = false },
+        )
+    }
+}
+
+/** 单选对话框：主题模式三态（跟随系统 / 浅色 / 深色）。 */
+@Composable
+private fun ThemeModeDialog(
+    current: ThemeMode,
+    onSelect: (ThemeMode) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.setting_theme_mode)) },
+        text = {
+            Column {
+                ThemeMode.entries.forEach { mode ->
+                    SingleChoiceRow(
+                        label = themeModeLabel(mode),
+                        selected = mode == current,
+                        onClick = { onSelect(mode) },
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.action_cancel))
+            }
+        },
+    )
+}
+
+@Composable
+private fun themeModeLabel(mode: ThemeMode): String = when (mode) {
+    ThemeMode.SYSTEM -> stringResource(R.string.theme_mode_system)
+    ThemeMode.LIGHT -> stringResource(R.string.theme_mode_light)
+    ThemeMode.DARK -> stringResource(R.string.theme_mode_dark)
 }
 
 /** 快速解锁管理：列出各库启用状态，可逐个关闭（启用入口 = 登录后列表横幅）。 */

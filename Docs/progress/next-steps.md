@@ -4,6 +4,26 @@
 > 落地；审计报告 `Docs/progress/audit/bitwarden-alignment.md`。
 > 状态：`TODO` / `DOING` / `DONE` / `BLOCKED`
 
+## 已完成（第十八轮 2026-09-09 · 编辑密码查看修复 + 批次④ 设置页对齐）
+
+- [x] **修复「编辑条目看不到密码」**：编辑表单密码框此前只有随机生成按钮（无明文
+      查看开关），密码始终掩码圆点——唯一能明文看到的反而是骰子生成的随机密码；
+      补 Bitwarden 编辑页同款眼睛 toggle（新建/编辑均可用，`153da7a`）
+- [x] **主题模式三态**（对齐 Bastion themeMode）：VaultixPreferences.themeMode
+      （system/light/dark）+ ThemeMode 枚举 + VaultixTheme 接线（MainActivity 收集，
+      实时切换）；设置页「外观」组新增单选对话框
+- [x] **OLED 纯黑**（对齐 Bastion oledPureBlackEnabled）：深色模式 surface/background
+      纯黑（对动态取色与固定色板同样生效）；设置页开关
+- [x] **回收站自动清理档位收编设置页**：TrashAutoDeleteDialog 提升到 ui.common
+      （回收站顶栏与设置页共用，同一偏好键即改即生效）；新「数据」分组
+- [x] **偏好默认值真值源**：core:datastore 新 `VaultixPreferencesDefaults`
+      （TRASH_AUTO_DELETE_DAYS=30 / THEME_MODE=system），UI 层 stateIn 初始值不再硬编码
+- [x] **对照结论（Bastion SettingsScreen 8 组 vs Vaultix M1）**：已落地=安全（自动锁定/
+      剪贴板/防截屏/快速解锁/立即锁定）+ 外观（主题/OLED/动态色）+ 数据（回收站档位）+
+      关于；**推迟 M2**=自动填充服务全套（Vaultix M1 未做系统填充）、导入导出/备份、
+      开发者日志、界面布局定制、WebDAV/OneDrive 同步、清理全部数据
+- [x] 双 flavor 编译 + 全模块 detekt 0 违规 + 全项目单测 0 失败；提交推送 `origin/main`
+
 ## 已完成（第十七轮 2026-09-09 · Bastion 对齐·批次③ 回收站自动清理）
 
 - [x] **清理策略纯函数**（core:common 新文件 TrashCleanupPolicy.kt）：对齐 Bastion
@@ -180,7 +200,9 @@
       （纯 Kotlin protobuf 解析，顶栏导入入口，单条预填/批量直建）
 - [x] **批次③ 回收站对齐**（第十七轮完成）：自动清理策略（autoDeleteDays DataStore 设置 +
       进入即到期清理走 DELETE 入队保证服务端同步删 + 行内剩余天数倒计时 + 顶栏档位设置）
-- [ ] **批次④ 设置页**：Bastion SettingsScreen 逐项对照 Vaultix 设置页补缺
+- [x] **批次④ 设置页**（第十八轮完成，M1 范围）：主题模式三态 + OLED 纯黑 +
+      回收站档位收编（新数据组）；自动填充/导入导出/开发者/布局定制等 Bastion
+      大件对照结论为 M2 推迟（见第十八轮区块）
 - [ ] **批次⑤ 通行密钥**：PasskeysScreen 对比 Bastion 实现补缺（绑定编辑等）
 - [ ] **批次⑥ 卡包**：银行卡编辑已有；对照 Bastion CardWallet 补缺口
 
@@ -191,7 +213,9 @@
       **linkedId 修复验收**（Linked 字段显示所指字段名与值）；TOTP 扫码；**验证器
       取消不再删除**；随机密码生成；**先去回收站恢复此前被误删的验证码**；
       表单可滚动到底（验证码下方区域可见）；**回收站自动清理验收（批次③）**：
-      顶栏档位改 7 天后新建删除条目（倒计时显示）、改档位「从不」倒计时消失
+      顶栏档位改 7 天后新建删除条目（倒计时显示）、改档位「从不」倒计时消失；
+      **设置页验收（批次④）**：主题模式切深色/浅色即时生效、OLED 纯黑深色下背景变纯黑；
+      **编辑密码查看验收**：编辑已有登录条目点眼睛图标可明文核对原密码
 - [ ] 回归通过 → M1 close-out（文档归档 + 下一里程碑规划）
 
 ## P2 · 自动化（WorkManager 周期同步归位）

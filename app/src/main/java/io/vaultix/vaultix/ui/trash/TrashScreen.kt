@@ -1,6 +1,5 @@
 package io.vaultix.vaultix.ui.trash
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,7 +23,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeTopAppBar
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -46,6 +44,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.common.TrashAutoDeleteDialog
 import io.vaultix.vaultix.ui.common.itemTypeLabelRes
 
 /**
@@ -172,52 +171,6 @@ fun TrashScreen(
         )
     }
 }
-
-/** 自动清理档位设置（0 = 从不；档位来自 [TrashViewModel.AUTO_DELETE_PRESETS]）。 */
-@Composable
-private fun TrashAutoDeleteDialog(
-    currentDays: Int,
-    onSelect: (Int) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.trash_auto_delete_title)) },
-        text = {
-            Column {
-                Text(
-                    text = stringResource(R.string.trash_auto_delete_hint),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                TrashViewModel.AUTO_DELETE_PRESETS.forEach { days ->
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { onSelect(days) }
-                            .padding(vertical = 4.dp),
-                    ) {
-                        RadioButton(selected = days == currentDays, onClick = { onSelect(days) })
-                        Text(text = autoDeleteLabel(days), style = MaterialTheme.typography.bodyMedium)
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_done)) }
-        },
-    )
-}
-
-/** 档位文案：0 = 「从不自动清空」，其余 = 「保留 N 天后自动清空」。 */
-@Composable
-private fun autoDeleteLabel(days: Int): String =
-    if (days <= 0) {
-        stringResource(R.string.trash_auto_delete_never)
-    } else {
-        stringResource(R.string.trash_auto_delete_after_days, days)
-    }
 
 @Composable
 private fun EmptyTrashState() {

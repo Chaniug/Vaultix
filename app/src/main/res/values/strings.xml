@@ -78,6 +78,7 @@
     <string name="settings_title">设置</string>
     <string name="group_security">安全</string>
     <string name="group_appearance">外观</string>
+    <string name="group_data">数据</string>
     <string name="group_about">关于</string>
     <string name="setting_auto_lock">自动锁定</string>
     <string name="setting_clipboard_clear">复制后清除剪贴板</string>
@@ -85,6 +86,13 @@
     <string name="setting_screen_security_desc">阻止截屏与最近任务缩略图显示内容</string>
     <string name="setting_dynamic_color">动态取色</string>
     <string name="setting_dynamic_color_desc">跟随系统主题色（Android 12+）</string>
+    <string name="setting_theme_mode">主题模式</string>
+    <string name="theme_mode_system">跟随系统</string>
+    <string name="theme_mode_light">浅色</string>
+    <string name="theme_mode_dark">深色</string>
+    <string name="setting_oled_pure_black">OLED 纯黑</string>
+    <string name="setting_oled_pure_black_desc">深色模式使用纯黑背景（省电 / 减少烙印）</string>
+    <string name="setting_trash_auto_delete">回收站自动清理</string>
     <string name="setting_lock_now">立即锁定</string>
     <string name="setting_lock_now_desc">清零全部库的解锁密钥并返回列表</string>
     <string name="about_version">版本</string>

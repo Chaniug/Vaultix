@@ -10,6 +10,7 @@ import dagger.hilt.android.AndroidEntryPoint
 import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.vaultix.ui.VaultixApp
 import io.vaultix.vaultix.ui.theme.ScreenSecurityEffect
+import io.vaultix.vaultix.ui.theme.ThemeMode
 import io.vaultix.vaultix.ui.theme.VaultixTheme
 import javax.inject.Inject
 
@@ -28,12 +29,20 @@ class MainActivity : FragmentActivity() {
         enableEdgeToEdge()
         setContent {
             // 外观 / 安全偏好驱动主题与防截屏（设置页可实时开关）
+            val themeMode by preferences.themeMode
+                .collectAsStateWithLifecycle(initialValue = "system")
             val dynamicColor by preferences.dynamicColor
                 .collectAsStateWithLifecycle(initialValue = true)
+            val oledPureBlack by preferences.oledPureBlack
+                .collectAsStateWithLifecycle(initialValue = false)
             val screenSecure by preferences.screenSecurity
                 .collectAsStateWithLifecycle(initialValue = true)
 
-            VaultixTheme(dynamicColor = dynamicColor) {
+            VaultixTheme(
+                themeMode = ThemeMode.from(themeMode),
+                dynamicColor = dynamicColor,
+                oledPureBlack = oledPureBlack,
+            ) {
                 ScreenSecurityEffect(enabled = screenSecure)
                 VaultixApp()
             }

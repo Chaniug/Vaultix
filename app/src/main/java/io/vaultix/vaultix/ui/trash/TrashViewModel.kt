@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import io.vaultix.common.TrashCleanupPolicy
 import io.vaultix.datastore.VaultixPreferences
+import io.vaultix.datastore.VaultixPreferencesDefaults
 import io.vaultix.domain.ItemRepository
 import io.vaultix.domain.VaultSaveOutcome
 import io.vaultix.model.VaultItem
@@ -145,10 +146,7 @@ class TrashViewModel @Inject constructor(
     companion object {
         const val ARG_VAULT_ID = "vaultId"
 
-        /** 档位与 [VaultixPreferences.DEFAULT_TRASH_AUTO_DELETE_DAYS] 一致。 */
-        const val DEFAULT_AUTO_DELETE_DAYS = 30
-
-        /** 自动清理档位候选：0 = 从不。 */
-        val AUTO_DELETE_PRESETS: List<Int> = listOf(0, 7, 30, 90)
+        /** 单一真值源在 core:datastore（与偏好层默认一致）。 */
+        const val DEFAULT_AUTO_DELETE_DAYS = VaultixPreferencesDefaults.TRASH_AUTO_DELETE_DAYS
     }
 }

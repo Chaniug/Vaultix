@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import io.vaultix.datastore.VaultixPreferences
+import io.vaultix.datastore.VaultixPreferencesDefaults
 import io.vaultix.domain.VaultRepository
 import io.vaultix.vaultix.security.AutoLockController
 import kotlinx.coroutines.flow.SharingStarted
@@ -79,6 +80,30 @@ class SettingsViewModel @Inject constructor(
                 initialValue = emptyList(),
             )
 
+    /** 主题模式原始值（system / light / dark；UI 侧用 ThemeMode.from 解析显示与回传）。 */
+    val themeMode: StateFlow<String> = preferences.themeMode
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = VaultixPreferencesDefaults.THEME_MODE,
+        )
+
+    /** OLED 纯黑（深色模式 surface/background 纯黑）。 */
+    val oledPureBlack: StateFlow<Boolean> = preferences.oledPureBlack
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = false,
+        )
+
+    /** 回收站自动清理档位（天；0 = 不自动清空），与回收站页顶栏入口共用同一偏好。 */
+    val trashAutoDeleteDays: StateFlow<Int> = preferences.trashAutoDeleteDays
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = VaultixPreferencesDefaults.TRASH_AUTO_DELETE_DAYS,
+        )
+
     fun setAutoLockMinutes(minutes: Int) {
         viewModelScope.launch { preferences.setAutoLockMinutes(minutes) }
     }
@@ -93,6 +118,21 @@ class SettingsViewModel @Inject constructor(
 
     fun setScreenSecurity(enabled: Boolean) {
         viewModelScope.launch { preferences.setScreenSecurity(enabled) }
+    }
+
+    /** 主题模式（system / light / dark），MainActivity 收集后实时切换。 */
+    fun setThemeMode(mode: String) {
+        viewModelScope.launch { preferences.setThemeMode(mode) }
+    }
+
+    /** OLED 纯黑开关。 */
+    fun setOledPureBlack(enabled: Boolean) {
+        viewModelScope.launch { preferences.setOledPureBlack(enabled) }
+    }
+
+    /** 回收站自动清理档位（天；0 = 不自动清空）。 */
+    fun setTrashAutoDeleteDays(days: Int) {
+        viewModelScope.launch { preferences.setTrashAutoDeleteDays(days) }
     }
 
     /** 关闭某库的本地快速解锁（删除包裹密钥与开关）。 */
