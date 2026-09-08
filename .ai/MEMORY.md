@@ -37,6 +37,11 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 - version catalog 别名避免 `kotlin-` 前缀（撞内置 `kotlin {}` DSL），KGP 用别名 `kgp`
 - 类型安全项目访问器需 `enableFeaturePreview("TYPESAFE_PROJECT_ACCESSORS")`
 - 本机 SDK 在 `C:\AndroidSDK`，**无 android-36**，compileSdk 必须 ≥ 37
+- **构建/编译 daemon 堆各 4g（`gradle.properties` 的 `org.gradle.jvmargs` 与
+  `kotlin.daemon.jvmargs`），禁止回退 2g**：Vaultix 含多个 Compose 模块 +
+  Bitwarden 全载荷映射，Kotlin 编译器在分析大型 composable / 生成大段字节码
+  （Compose 重启组）时易 OOM，表现为「编译器过大无法编译」。CI `ubuntu-latest`
+  16GB 与本地沙箱均足够；日后模块继续膨胀优先上调此项而非加 `-Xms`
 
 ## 代码来源与协议
 - Vaultix = **GPL-3.0**（2026-09-07 从 MIT 切换）

@@ -276,12 +276,14 @@ jobs:
         id: unit_tests
         continue-on-error: true
         # 同 lint：多 flavor 下 `testDebugUnitTest` 亦有歧义，需显式指定 variant。
-        # 同时把 core:crypto（172 例，Kover 门禁 ≥80%）与 data:repository（会话/
-        # 条目写路径 11 例）的单元测试纳入 CI 验证——此前只跑 :app 的测试，
-        # 而 :app 当时并无用例，等于单测从未在 CI 真正执行。
+        # 纳入全部含单测的模块：core:crypto（172 例，Kover 门禁 ≥80%）、
+        # core:common（TOTP/密码强度等纯算法 16 例）、data:repository（会话/
+        # 条目写路径）、data:bitwarden（CipherMapper 载荷保真/类型守恒 28 例）。
+        # 此前只跑 :app 与部分模块，新模块的测试等于从未在 CI 真正执行（盲区）。
         run: >-
-          ./gradlew :core:crypto:testDebugUnitTest :app:testFullDebugUnitTest
-          :data:repository:testDebugUnitTest --continue --stacktrace
+          ./gradlew :core:crypto:testDebugUnitTest :core:common:testDebugUnitTest
+          :app:testFullDebugUnitTest :data:repository:testDebugUnitTest
+          :data:bitwarden:testDebugUnitTest --continue --stacktrace
 
       - name: Upload unit test reports
         if: always()

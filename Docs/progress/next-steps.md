@@ -23,6 +23,23 @@
       空态 / 类型徽标）；observeItem 对已删行保持 null 语义；repository 3 例新单测
 - [x] 文档同步（MEMORY / decisions / SESSION / audit 报告）
 
+## 已完成（第十二轮 2026-09-08 · WIP 推送 + 编译膨胀审计 + 编译器健康）
+
+- [x] **WIP 推送（76979ac）**：指纹按钮归位 / 条目字段补全(uri·totp·fido2) /
+      TOTP 引擎 / 卡包·SSH 读取打通，共 13 文件，已推 `origin/main`
+- [x] **编译膨胀审计（排查"编译器过大无法编译"）**：扫描 674 个函数 + 全模块 detekt
+      —— 代码已在质量门禁内（最大源函数 ≤153 行、无超 JVM 方法上限、配置缓存 CI 已开）；
+      **唯一真实风险 = Gradle/Kotlin daemon 仅 2GB 堆**（ISSUES #14 同根因）
+- [x] **构建堆修复（`gradle.properties`）**：`org.gradle.jvmargs` 2g→4g；新增
+      `kotlin.daemon.jvmargs=-Xmx4g -XX:ReservedCodeCacheSize=512m`（Kotlin 编译
+      daemon 独立 JVM，大模块生成字节码防 OOM）；注释锁死，防后人误改回 2g
+- [x] **CI 单测盲区补位（`ci-debug.yml`）**：原单测只跑 core:crypto / app:testFull /
+      data:repository，新加的 `:core:common`（TOTP/强度 16 例）、`:data:bitwarden`
+      （CipherMapper 保真 28 例）从未在 CI 执行 → 纳入门禁（项目反复警告的"改了却
+      验证不到"盲区）
+- [x] 验证：双 flavor 编译 + 全模块 detekt（0 违规）+ 受影响模块单测（core:common 16 /
+      data:bitwarden 28 全绿）
+
 ## 已完成（第九轮 2026-09-08 · 同步编排全链路接线 + 强度条 + Bastion 快照）
 
 - [x] **Bastion 参考快照 vendored**：`reference/bastion/`（@369ed56，1012 文件/≈13 MB：
