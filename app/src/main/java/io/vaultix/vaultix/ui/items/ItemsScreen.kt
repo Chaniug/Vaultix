@@ -190,16 +190,12 @@ fun ItemsScreen(
             title = stringResource(R.string.items_new_item),
             initial = blankItem,
             saving = state.saving,
+            // 新建可选类型（登录 / 银行卡 / 身份 / 安全笔记 / SSH）；
+            // 编辑态不开，避免改类型让原类型载荷失去意义。
+            typeEditable = true,
             onDismiss = { showCreateDialog = false },
             onSave = { item ->
-                viewModel.createItem(
-                    name = item.title,
-                    username = item.username,
-                    password = item.password,
-                    notes = item.notes,
-                    uris = item.uris.map { it.uri },
-                    totp = item.totp.orEmpty(),
-                )
+                viewModel.createItem(item)
                 showCreateDialog = false
             },
         )

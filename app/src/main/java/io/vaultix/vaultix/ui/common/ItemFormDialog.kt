@@ -1,6 +1,8 @@
 package io.vaultix.vaultix.ui.common
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -15,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -38,36 +41,38 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import io.vaultix.common.PasswordStrength
-import io.vaultix.model.VaultCard
-import io.vaultix.model.VaultIdentity
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
-import io.vaultix.model.VaultUri
 import io.vaultix.vaultix.R
 
 /**
  * 条目表单对话框（新建 / 编辑共用，Docs/08 S10）。
  *
- * 按 [VaultItem.type] 决定可编辑字段，**身份与银行卡已可编辑**：
+ * 按条目类型决定可编辑字段，**身份与银行卡已可编辑**：
  * - Login：用户名 / 密码（含实时强度条）/ 网址（多值）/ TOTP 密钥；
  * - Card：持卡人 / 发卡行 / 卡号 / 有效期月·年 / 安全码（对齐 Bitwarden card 载荷）；
  * - Identity：全量 17 字段（对齐 Bitwarden identity 载荷，覆盖 Bastion 兼容缺陷）；
- * - SecureNote / SshKey：仅名称 + 备注（类型专属段保留服务端原值，不做整条重写）。
+ * - SecureNote / SshKey：仅名称 + 备注（类型专属段保留服务端原值）。
+ *
+ * [typeEditable]：仅**新建**时开放类型选择。编辑态不允许改类型——改类型会让
+ * 原类型载荷失去意义，且写路径有类型守恒守卫。
  *
  * 密码等敏感值只在对话框存续期间存在于内存；关闭/保存后由调用方保证不再持有副本。
  * 编辑场景用 [initial] 预填；切换目标条目时（key 变化）状态自动重置。
- * 保存回传的是 [initial] 的 copy，未在本表单暴露的段（自定义字段 / 通行密钥 /
- * SSH 密钥等）原样保留，由 data 层合并上传。
+ * 保存回传的是 [initial] 的 copy，未在本表单暴露的段（自定义字段 / 通行密钥等）原样保留。
+ *
+ * 纯逻辑（快照组装 / 字段列表）见 [FormValues]，本文件只负责 UI。
  */
 @Composable
 fun ItemFormDialog(
     title: String,
     initial: VaultItem,
     saving: Boolean = false,
+    typeEditable: Boolean = false,
     onDismiss: () -> Unit,
     onSave: (VaultItem) -> Unit,
 ) {
-    val type = initial.type
+    var type by rememberSaveable(initial) { mutableStateOf(initial.type) }
     var name by rememberSaveable(initial) { mutableStateOf(initial.title) }
     var username by rememberSaveable(initial) { mutableStateOf(initial.username) }
     var password by rememberSaveable(initial) { mutableStateOf(initial.password) }
@@ -89,6 +94,12 @@ fun ItemFormDialog(
         title = { Text(text = title, style = MaterialTheme.typography.titleLarge) },
         text = {
             Column(modifier = Modifier.imePadding()) {
+                if (typeEditable) {
+                    SectionLabel(text = stringResource(R.string.item_field_type))
+                    Spacer(Modifier.height(8.dp))
+                    TypePicker(selected = type, onSelect = { type = it })
+                    Spacer(Modifier.height(8.dp))
+                }
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it; showNameError = false },
@@ -148,8 +159,9 @@ fun ItemFormDialog(
                     } else {
                         onSave(
                             buildSnapshot(
-                                initial,
-                                FormValues(
+                                initial = initial,
+                                type = type,
+                                values = FormValues(
                                     name = name,
                                     username = username,
                                     password = password,
@@ -175,35 +187,33 @@ fun ItemFormDialog(
     )
 }
 
-/** 表单当前值（保存时一次性收集；收敛参数个数以符合 ≤8 门禁）。 */
-private class FormValues(
-    val name: String,
-    val username: String,
-    val password: String,
-    val notes: String,
-    val totp: String,
-    val uris: List<String>,
-    val cardValues: List<String>,
-    val identityValues: List<String>,
-)
+@Composable
+private fun SectionLabel(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
 
-/**
- * 构造保存快照：只覆盖**本类型可编辑**的段，其余沿用 [initial]
- * （自定义字段 / 通行密钥 / SSH 段等不会因编辑而丢失）。
- */
-private fun buildSnapshot(initial: VaultItem, values: FormValues): VaultItem {
-    val base = initial.copy(title = values.name.trim(), notes = values.notes.trim())
-    return when (initial.type) {
-        VaultItemType.Login -> base.copy(
-            username = values.username.trim(),
-            password = values.password,
-            uris = values.uris.filter { it.isNotBlank() }.map { VaultUri(it) },
-            totp = values.totp.trim().takeIf { it.isNotBlank() },
-        )
-        VaultItemType.Card -> base.copy(card = buildCard(values.cardValues))
-        VaultItemType.Identity -> base.copy(identity = buildIdentity(values.identityValues))
-        // 安全笔记只有名称 + 备注；SSH 密钥段保持只读
-        VaultItemType.SecureNote, VaultItemType.SshKey -> base
+/** 新建条目的类型选择：一行可选筹码，选中态即当前类型。 */
+@Composable
+private fun TypePicker(
+    selected: VaultItemType,
+    onSelect: (VaultItemType) -> Unit,
+) {
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        VaultItemType.entries.forEach { type ->
+            FilterChip(
+                selected = type == selected,
+                onClick = { onSelect(type) },
+                label = { Text(stringResource(itemTypeLabelRes(type))) },
+            )
+        }
     }
 }
 
@@ -270,78 +280,6 @@ private fun LabeledFields(labels: List<Int>, values: SnapshotStateList<String>) 
         Spacer(Modifier.height(8.dp))
     }
 }
-
-/** 银行卡字段 → 表单值（顺序同 [CARD_LABELS]）。 */
-private fun cardValuesOf(card: VaultCard?): List<String> = listOf(
-    card?.cardholderName.orEmpty(),
-    card?.brand.orEmpty(),
-    card?.number.orEmpty(),
-    card?.expMonth.orEmpty(),
-    card?.expYear.orEmpty(),
-    card?.code.orEmpty(),
-)
-
-/** 身份字段 → 表单值（顺序同 [IDENTITY_LABELS]，Bitwarden canonical 17 字段）。 */
-private fun identityValuesOf(identity: VaultIdentity?): List<String> = listOf(
-    identity?.title.orEmpty(),
-    identity?.firstName.orEmpty(),
-    identity?.middleName.orEmpty(),
-    identity?.lastName.orEmpty(),
-    identity?.address1.orEmpty(),
-    identity?.address2.orEmpty(),
-    identity?.address3.orEmpty(),
-    identity?.city.orEmpty(),
-    identity?.state.orEmpty(),
-    identity?.postalCode.orEmpty(),
-    identity?.country.orEmpty(),
-    identity?.company.orEmpty(),
-    identity?.email.orEmpty(),
-    identity?.phone.orEmpty(),
-    identity?.ssn.orEmpty(),
-    identity?.username.orEmpty(),
-    identity?.passportNumber.orEmpty(),
-    identity?.licenseNumber.orEmpty(),
-)
-
-/** 表单值 → 银行卡（按 [cardValuesOf] 的顺序读取）。 */
-private fun buildCard(values: List<String>): VaultCard {
-    val it = values.iterator()
-    return VaultCard(
-        cardholderName = it.nextOrEmpty(),
-        brand = it.nextOrEmpty(),
-        number = it.nextOrEmpty(),
-        expMonth = it.nextOrEmpty(),
-        expYear = it.nextOrEmpty(),
-        code = it.nextOrEmpty(),
-    )
-}
-
-/** 表单值 → 身份信息（按 [identityValuesOf] 的顺序读取）。 */
-private fun buildIdentity(values: List<String>): VaultIdentity {
-    val it = values.iterator()
-    return VaultIdentity(
-        title = it.nextOrEmpty(),
-        firstName = it.nextOrEmpty(),
-        middleName = it.nextOrEmpty(),
-        lastName = it.nextOrEmpty(),
-        address1 = it.nextOrEmpty(),
-        address2 = it.nextOrEmpty(),
-        address3 = it.nextOrEmpty(),
-        city = it.nextOrEmpty(),
-        state = it.nextOrEmpty(),
-        postalCode = it.nextOrEmpty(),
-        country = it.nextOrEmpty(),
-        company = it.nextOrEmpty(),
-        email = it.nextOrEmpty(),
-        phone = it.nextOrEmpty(),
-        ssn = it.nextOrEmpty(),
-        username = it.nextOrEmpty(),
-        passportNumber = it.nextOrEmpty(),
-        licenseNumber = it.nextOrEmpty(),
-    )
-}
-
-private fun Iterator<String>.nextOrEmpty(): String = if (hasNext()) next() else ""
 
 /**
  * 密码强度条（Docs/08 S10）：分值 0–100 → 五档（弱/一般/良好/强/非常强），
@@ -437,7 +375,7 @@ private val STRING_LIST_SAVER = listSaver<SnapshotStateList<String>, String>(
     restore = { mutableStateListOf<String>().apply { addAll(it) } },
 )
 
-/** 银行卡可编辑字段标签（顺序 = [cardValuesOf] / [buildCard]）。 */
+/** 银行卡可编辑字段标签（顺序 = [cardValuesOf] / [buildCard]，必须与之一一对应）。 */
 private val CARD_LABELS = listOf(
     R.string.card_cardholder,
     R.string.card_brand,

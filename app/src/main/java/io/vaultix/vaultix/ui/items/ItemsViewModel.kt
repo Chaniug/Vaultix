@@ -11,8 +11,8 @@ import io.vaultix.domain.VaultRepository
 import io.vaultix.domain.VaultSaveOutcome
 import io.vaultix.domain.VaultSyncStatus
 import io.vaultix.model.VaultItem
-import io.vaultix.model.VaultUri
 import io.vaultix.model.VaultSummary
+import io.vaultix.vaultix.ui.common.ItemFilter
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -109,7 +109,7 @@ class ItemsViewModel @Inject constructor(
 
     /** 按当前搜索词过滤后的可见条目（空词 = 全部）。 */
     val visibleItems: StateFlow<List<VaultItem>> = _state
-        .map { state -> filterItems(state.items, state.query) }
+        .map { state -> ItemFilter.filter(state.items, state.query) }
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.Eagerly,
@@ -131,17 +131,6 @@ class ItemsViewModel @Inject constructor(
         viewModelScope.launch {
             vaultRepository.lockVault(vaultId)
             onLocked()
-        }
-    }
-
-    /** 搜索过滤：标题 / 用户名 / 任一网址包含搜索词即命中（忽略大小写）。 */
-    private fun filterItems(items: List<VaultItem>, query: String): List<VaultItem> {
-        val q = query.trim()
-        if (q.isBlank()) return items
-        return items.filter { item ->
-            item.title.contains(q, ignoreCase = true) ||
-                item.username.contains(q, ignoreCase = true) ||
-                item.uris.any { it.uri.contains(q, ignoreCase = true) }
         }
     }
 
@@ -167,29 +156,19 @@ class ItemsViewModel @Inject constructor(
         return null
     }
 
-    /** 新建条目：名称必填；成功后经 [saveEvents] 提示落点。 */
-    fun createItem(
-        name: String,
-        username: String,
-        password: String,
-        notes: String,
-        uris: List<String> = emptyList(),
-        totp: String = "",
-    ) {
-        if (_state.value.saving || name.isBlank()) return
+    /**
+     * 新建条目：名称必填；成功后经 [saveEvents] 提示落点。
+     *
+     * 入参是表单回传的**完整条目快照**，因此类型由表单决定
+     * （登录 / 银行卡 / 身份 / 安全笔记 / SSH 均可新建），不再固定为登录条目。
+     */
+    fun createItem(item: VaultItem) {
+        if (_state.value.saving || item.title.isBlank()) return
         _state.update { it.copy(saving = true) }
         viewModelScope.launch {
             val outcome = itemRepository.createItem(
                 vaultId = vaultId,
-                item = VaultItem(
-                    id = "", // id 由 data 层分配本地 uuid
-                    title = name.trim(),
-                    username = username.trim(),
-                    password = password,
-                    notes = notes.trim(),
-                    uris = uris.filter { it.isNotBlank() }.map { VaultUri(it) },
-                    totp = totp.takeIf { it.isNotBlank() },
-                ),
+                item = item.copy(id = ""), // id 由 data 层分配本地 uuid
             )
             _state.update { it.copy(saving = false) }
             val event = outcome.fold(
