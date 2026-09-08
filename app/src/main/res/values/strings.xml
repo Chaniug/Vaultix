@@ -173,6 +173,46 @@
     <string name="detail_item_deleted">已移入回收站</string>
     <string name="detail_copy_failed">复制失败，请重试</string>
 
+    <!-- 条目字段：网址 / TOTP / 通行密钥 -->
+    <string name="section_uris">网址</string>
+    <string name="item_field_uri">网址</string>
+    <string name="item_add_uri">添加网址</string>
+    <string name="item_remove_uri">删除此网址</string>
+    <string name="item_open_uri">打开网址</string>
+    <string name="copy_uri">已复制网址</string>
+    <string name="copy_uri_clears">已复制网址（%1$d 秒后自动清除）</string>
+    <string name="section_totp">动态验证码</string>
+    <string name="item_field_totp">TOTP 密钥</string>
+    <string name="copy_totp">已复制验证码</string>
+    <string name="copy_totp_clears">已复制验证码（%1$d 秒后自动清除）</string>
+    <string name="totp_invalid">验证码无法解析（密钥格式不正确）</string>
+    <string name="item_totp_hint">otpauth:// 链接或 TOTP 密钥</string>
+    <string name="section_passkeys">通行密钥</string>
+    <string name="passkey_count">%1$d 个通行密钥</string>
+    <string name="passkey_readonly_hint">通行密钥由服务器管理，不可在此编辑</string>
+    <string name="passkey_rp">依赖方</string>
+    <string name="passkey_user">账号</string>
+    <string name="passkey_created">创建于 %1$s</string>
+    <string name="passkey_unnamed">未命名凭证</string>
+
+    <!-- 银行卡 S22 详情分区 -->
+    <string name="section_card">银行卡</string>
+    <string name="card_cardholder">持卡人</string>
+    <string name="card_brand">发卡行</string>
+    <string name="card_number">卡号</string>
+    <string name="card_expiry">有效期</string>
+    <string name="card_cvv">安全码</string>
+
+    <!-- SSH 密钥 S22 详情分区 -->
+    <string name="section_ssh_key">SSH 密钥</string>
+    <string name="ssh_private_key">私钥</string>
+    <string name="ssh_public_key">公钥</string>
+    <string name="ssh_fingerprint">指纹</string>
+
+    <!-- 通用字段复制提示 -->
+    <string name="copy_field">已复制</string>
+    <string name="copy_field_clears">已复制（%1$d 秒后自动清除）</string>
+
     <!-- 回收站 S19 -->
     <string name="trash_title">回收站</string>
     <string name="trash_empty_title">回收站是空的</string>

@@ -189,8 +189,8 @@ fun ItemsScreen(
             title = stringResource(R.string.items_new_item),
             saving = state.saving,
             onDismiss = { showCreateDialog = false },
-            onSave = { name, username, password, notes ->
-                viewModel.createItem(name, username, password, notes)
+            onSave = { name, username, password, notes, uris, totp ->
+                viewModel.createItem(name, username, password, notes, uris, totp)
                 showCreateDialog = false
             },
         )

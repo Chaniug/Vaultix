@@ -10,11 +10,20 @@ package io.vaultix.data.bitwarden.mapper
 
 import io.vaultix.crypto.SymmetricCryptoKey
 import io.vaultix.crypto.VaultixCrypto
+import io.vaultix.data.bitwarden.model.CardDto
 import io.vaultix.data.bitwarden.model.CipherDto
 import io.vaultix.data.bitwarden.model.CipherRequest
+import io.vaultix.data.bitwarden.model.Fido2CredentialDto
 import io.vaultix.data.bitwarden.model.LoginDto
+import io.vaultix.data.bitwarden.model.SshKeyDto
+import io.vaultix.data.bitwarden.model.UriDto
+import io.vaultix.model.UriMatch
+import io.vaultix.model.VaultCard
+import io.vaultix.model.VaultFido2Credential
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
+import io.vaultix.model.VaultSshKey
+import io.vaultix.model.VaultUri
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -44,13 +53,31 @@ class CipherMapper @Inject constructor(
         // 条目独立密钥：解包后与账号密钥同构；用毕即清
         val itemKey = resolveItemKey(dto, key)
         return try {
+            val login = dto.login
             VaultItem(
                 id = dto.id,
                 title = decryptToString(dto.name, key, itemKey),
-                username = decryptToString(dto.login?.username, key, itemKey),
-                password = decryptToString(dto.login?.password, key, itemKey),
+                username = decryptToString(login?.username, key, itemKey),
+                password = decryptToString(login?.password, key, itemKey),
                 notes = decryptToString(dto.notes, key, itemKey),
                 type = mapType(dto.type),
+                uris = login?.uris?.map { u ->
+                    VaultUri(decryptToString(u.uri, key, itemKey), matchOf(u.match))
+                }.orEmpty(),
+                totp = login?.totp?.let { decryptToString(it, key, itemKey) }
+                    .takeIf { !it.isNullOrBlank() },
+                fido2Credentials = login?.fido2Credentials
+                    ?.let { mapFido2(it, key, itemKey) }.orEmpty(),
+                card = if (dto.type == TYPE_CARD) {
+                    dto.card?.let { mapCard(it, key, itemKey) }
+                } else {
+                    null
+                },
+                sshKey = if (dto.type == TYPE_SSH_KEY) {
+                    dto.sshKey?.let { mapSshKey(it, key, itemKey) }
+                } else {
+                    null
+                },
             )
         } finally {
             itemKey?.clear()
@@ -69,10 +96,24 @@ class CipherMapper @Inject constructor(
         type = mapTypeToInt(item.type),
         name = crypto.encryptString(item.title, key),
         notes = item.notes.takeIf { it.isNotBlank() }?.let { crypto.encryptString(it, key) },
-        login = LoginDto(
-            username = item.username.takeIf { it.isNotBlank() }?.let { crypto.encryptString(it, key) },
-            password = item.password.takeIf { it.isNotBlank() }?.let { crypto.encryptString(it, key) },
-        ),
+        login = if (item.type == VaultItemType.Login) {
+            LoginDto(
+                username = item.username.takeIf { it.isNotBlank() }?.let { crypto.encryptString(it, key) },
+                password = item.password.takeIf { it.isNotBlank() }?.let { crypto.encryptString(it, key) },
+                uris = item.uris.map { v ->
+                    UriDto(
+                        uri = v.uri.takeIf { it.isNotBlank() }?.let { crypto.encryptString(it, key) },
+                        match = matchToInt(v.match),
+                    )
+                },
+                totp = item.totp?.takeIf { it.isNotBlank() }?.let { crypto.encryptString(it, key) },
+                fido2Credentials = emptyList(),
+            )
+        } else {
+            null
+        },
+        card = if (item.type == VaultItemType.Card) item.card?.let { mapCardRequest(it, key) } else null,
+        sshKey = if (item.type == VaultItemType.SshKey) item.sshKey?.let { mapSshKeyRequest(it, key) } else null,
     )
 
     /**
@@ -97,6 +138,16 @@ class CipherMapper @Inject constructor(
             storedLogin.copy(
                 username = item.username.takeIf { it.isNotBlank() }?.let { crypto.encryptString(it, key) },
                 password = item.password.takeIf { it.isNotBlank() }?.let { crypto.encryptString(it, key) },
+                // uri/totp：用户可见段，按表单明文重新加密覆盖（item 反映最新意图）
+                uris = item.uris.map { v ->
+                    UriDto(
+                        uri = v.uri.takeIf { it.isNotBlank() }?.let { crypto.encryptString(it, key) },
+                        match = matchToInt(v.match),
+                    )
+                },
+                totp = item.totp?.takeIf { it.isNotBlank() }?.let { crypto.encryptString(it, key) },
+                // fido2Credentials：只读、客户端不创建，原样保留服务端密文，绝不重写/丢弃
+                fido2Credentials = storedLogin.fido2Credentials,
             )
         } else {
             null
@@ -169,11 +220,97 @@ class CipherMapper @Inject constructor(
         VaultItemType.SshKey -> TYPE_SSH_KEY
     }
 
+    private fun matchOf(match: Int?): UriMatch? = when (match) {
+        TYPE_URI_MATCH_DOMAIN -> UriMatch.Domain
+        TYPE_URI_MATCH_HOST -> UriMatch.Host
+        TYPE_URI_MATCH_STARTS_WITH -> UriMatch.StartsWith
+        TYPE_URI_MATCH_EXACT -> UriMatch.Exact
+        TYPE_URI_MATCH_REGEX -> UriMatch.RegularExpression
+        else -> null
+    }
+
+    private fun matchToInt(match: UriMatch?): Int? = when (match) {
+        UriMatch.Domain -> TYPE_URI_MATCH_DOMAIN
+        UriMatch.Host -> TYPE_URI_MATCH_HOST
+        UriMatch.StartsWith -> TYPE_URI_MATCH_STARTS_WITH
+        UriMatch.Exact -> TYPE_URI_MATCH_EXACT
+        UriMatch.RegularExpression -> TYPE_URI_MATCH_REGEX
+        null -> null
+    }
+
+    private fun mapFido2(
+        list: List<Fido2CredentialDto>,
+        accountKey: SymmetricCryptoKey,
+        itemKey: SymmetricCryptoKey?,
+    ): List<VaultFido2Credential> = list.map { d ->
+        VaultFido2Credential(
+            credentialId = decryptToString(d.credentialId, accountKey, itemKey),
+            rpId = decryptToString(d.rpId, accountKey, itemKey),
+            rpName = decryptToString(d.rpName, accountKey, itemKey),
+            userName = decryptToString(d.userName, accountKey, itemKey),
+            userDisplayName = decryptToString(d.userDisplayName, accountKey, itemKey),
+            userHandle = decryptToString(d.userHandle, accountKey, itemKey).takeIf { it.isNotBlank() },
+            keyAlgorithm = decryptToString(d.keyAlgorithm, accountKey, itemKey).takeIf { it.isNotBlank() },
+            creationDate = decryptToString(d.creationDate, accountKey, itemKey).takeIf { it.isNotBlank() },
+        )
+    }
+
+    /** 银行卡密文 → 领域模型（解密失败降级空串）。 */
+    private fun mapCard(
+        dto: CardDto,
+        accountKey: SymmetricCryptoKey,
+        itemKey: SymmetricCryptoKey?,
+    ): VaultCard = VaultCard(
+        cardholderName = decryptToString(dto.cardholderName, accountKey, itemKey),
+        brand = decryptToString(dto.brand, accountKey, itemKey),
+        number = decryptToString(dto.number, accountKey, itemKey),
+        expMonth = decryptToString(dto.expMonth, accountKey, itemKey),
+        expYear = decryptToString(dto.expYear, accountKey, itemKey),
+        code = decryptToString(dto.code, accountKey, itemKey),
+    )
+
+    /** SSH 密钥密文 → 领域模型（解密失败降级空串）。 */
+    private fun mapSshKey(
+        dto: SshKeyDto,
+        accountKey: SymmetricCryptoKey,
+        itemKey: SymmetricCryptoKey?,
+    ): VaultSshKey = VaultSshKey(
+        privateKey = decryptToString(dto.privateKey, accountKey, itemKey),
+        publicKey = decryptToString(dto.publicKey, accountKey, itemKey),
+        keyFingerprint = decryptToString(dto.keyFingerprint, accountKey, itemKey),
+    )
+
+    /** 领域模型银行卡 → 上传密文体（仅非空字段加密）。 */
+    private fun mapCardRequest(card: VaultCard, key: SymmetricCryptoKey): CardDto = CardDto(
+        cardholderName = encryptOpt(card.cardholderName, key),
+        brand = encryptOpt(card.brand, key),
+        number = encryptOpt(card.number, key),
+        expMonth = encryptOpt(card.expMonth, key),
+        expYear = encryptOpt(card.expYear, key),
+        code = encryptOpt(card.code, key),
+    )
+
+    /** 领域模型 SSH 密钥 → 上传密文体（仅非空字段加密）。 */
+    private fun mapSshKeyRequest(sshKey: VaultSshKey, key: SymmetricCryptoKey): SshKeyDto = SshKeyDto(
+        privateKey = encryptOpt(sshKey.privateKey, key),
+        publicKey = encryptOpt(sshKey.publicKey, key),
+        keyFingerprint = encryptOpt(sshKey.keyFingerprint, key),
+    )
+
+    /** 非空明文 → 加密密文；空串返回 null（对应 DTO 的 `= null` 默认）。 */
+    private fun encryptOpt(text: String, key: SymmetricCryptoKey): String? =
+        text.takeIf { it.isNotBlank() }?.let { crypto.encryptString(it, key) }
+
     private companion object {
         const val TYPE_LOGIN = 1
         const val TYPE_SECURE_NOTE = 2
         const val TYPE_CARD = 3
         const val TYPE_IDENTITY = 4
         const val TYPE_SSH_KEY = 5
+        const val TYPE_URI_MATCH_DOMAIN = 0
+        const val TYPE_URI_MATCH_HOST = 1
+        const val TYPE_URI_MATCH_STARTS_WITH = 2
+        const val TYPE_URI_MATCH_EXACT = 3
+        const val TYPE_URI_MATCH_REGEX = 4
     }
 }

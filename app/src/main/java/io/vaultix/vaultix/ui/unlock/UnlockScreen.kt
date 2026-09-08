@@ -140,16 +140,13 @@ fun UnlockScreen(
                 )
             }
             Spacer(Modifier.height(16.dp))
-            QuickUnlockEntry(
-                visible = state.localUnlockAvailable && state.twoFactor == null,
-                enabled = !state.submitting,
-                onStart = viewModel::startLocalUnlock,
-            )
-
             PasswordForm(
                 state = state,
                 viewModel = viewModel,
                 focusManager = focusManager,
+                quickUnlockVisible = state.localUnlockAvailable && state.twoFactor == null,
+                quickUnlockEnabled = !state.submitting,
+                onQuickUnlock = viewModel::startLocalUnlock,
             )
         }
     }
@@ -187,12 +184,15 @@ private fun QuickUnlockEntry(
     Spacer(Modifier.height(12.dp))
 }
 
-/** 主密码输入 + 错误提示 + 提交。 */
+/** 主密码输入 + 错误提示 + 提交；生物识别快捷入口内嵌于登录区域（密码框与解锁按钮之间）。 */
 @Composable
 private fun PasswordForm(
     state: UnlockViewModel.UiState,
     viewModel: UnlockViewModel,
     focusManager: androidx.compose.ui.focus.FocusManager,
+    quickUnlockVisible: Boolean,
+    quickUnlockEnabled: Boolean,
+    onQuickUnlock: () -> Unit,
 ) {
     OutlinedTextField(
         value = state.password,
@@ -233,6 +233,12 @@ private fun PasswordForm(
             }
         },
         modifier = Modifier.fillMaxWidth(),
+    )
+
+    QuickUnlockEntry(
+        visible = quickUnlockVisible,
+        enabled = quickUnlockEnabled,
+        onStart = onQuickUnlock,
     )
 
     unlockErrorText(state.error)?.let { message ->

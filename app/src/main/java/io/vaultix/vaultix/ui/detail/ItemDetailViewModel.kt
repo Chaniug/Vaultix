@@ -9,6 +9,7 @@ import io.vaultix.domain.ItemRepository
 import io.vaultix.domain.VaultRepository
 import io.vaultix.domain.VaultSaveOutcome
 import io.vaultix.model.VaultItem
+import io.vaultix.model.VaultUri
 import io.vaultix.vaultix.util.VaultixClipboard
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -40,7 +41,14 @@ class ItemDetailViewModel @Inject constructor(
 
     /** 一次性 UI 事件。 */
     sealed interface UiEvent {
-        data class CopyDone(val isPassword: Boolean, val clearSeconds: Long) : UiEvent
+        data class CopyDone(
+            val isPassword: Boolean,
+            val clearSeconds: Long,
+            val isUri: Boolean = false,
+            val isTotp: Boolean = false,
+            /** 普通字段（卡号/SSH 密钥等）复制，文案走通用「已复制」。 */
+            val isField: Boolean = false,
+        ) : UiEvent
         data object CopyFailed : UiEvent
         data object SaveSynced : UiEvent
         data object SaveQueued : UiEvent
@@ -93,7 +101,29 @@ class ItemDetailViewModel @Inject constructor(
         doCopy(item.password, isPassword = true)
     }
 
-    private fun doCopy(text: String, isPassword: Boolean) {
+    fun copyUri(uri: String) {
+        if (uri.isBlank()) return
+        doCopy(uri, isUri = true)
+    }
+
+    fun copyTotp(code: String) {
+        if (code.isBlank()) return
+        doCopy(code, isTotp = true)
+    }
+
+    /** 复制普通字段（卡号 / 卡面信息 / SSH 私钥·公钥·指纹等）。 */
+    fun copyField(text: String) {
+        if (text.isBlank()) return
+        doCopy(text, isField = true)
+    }
+
+    private fun doCopy(
+        text: String,
+        isPassword: Boolean = false,
+        isUri: Boolean = false,
+        isTotp: Boolean = false,
+        isField: Boolean = false,
+    ) {
         runCatching {
             clipboard.copy(text = text, sensitive = true, autoClearMs = clipboardClearMs)
         }.onSuccess {
@@ -101,6 +131,9 @@ class ItemDetailViewModel @Inject constructor(
                 UiEvent.CopyDone(
                     isPassword = isPassword,
                     clearSeconds = if (clipboardClearMs > 0) clipboardClearMs / 1000 else 0,
+                    isUri = isUri,
+                    isTotp = isTotp,
+                    isField = isField,
                 ),
             )
         }.onFailure {
@@ -108,7 +141,14 @@ class ItemDetailViewModel @Inject constructor(
         }
     }
 
-    fun updateItem(name: String, username: String, password: String, notes: String) {
+    fun updateItem(
+        name: String,
+        username: String,
+        password: String,
+        notes: String,
+        uris: List<String> = emptyList(),
+        totp: String = "",
+    ) {
         val current = _state.value
         val item = current.item ?: return
         if (current.saving) return
@@ -121,6 +161,8 @@ class ItemDetailViewModel @Inject constructor(
                     username = username,
                     password = password,
                     notes = notes,
+                    uris = uris.map { VaultUri(it) },
+                    totp = totp.takeIf { it.isNotBlank() },
                 ),
             )
             _state.update { it.copy(saving = false) }

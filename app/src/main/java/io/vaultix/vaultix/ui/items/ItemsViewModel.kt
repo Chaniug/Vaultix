@@ -11,6 +11,7 @@ import io.vaultix.domain.VaultRepository
 import io.vaultix.domain.VaultSaveOutcome
 import io.vaultix.domain.VaultSyncStatus
 import io.vaultix.model.VaultItem
+import io.vaultix.model.VaultUri
 import io.vaultix.model.VaultSummary
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -143,7 +144,14 @@ class ItemsViewModel @Inject constructor(
     }
 
     /** 新建条目：名称必填；成功后经 [saveEvents] 提示落点。 */
-    fun createItem(name: String, username: String, password: String, notes: String) {
+    fun createItem(
+        name: String,
+        username: String,
+        password: String,
+        notes: String,
+        uris: List<String> = emptyList(),
+        totp: String = "",
+    ) {
         if (_state.value.saving || name.isBlank()) return
         _state.update { it.copy(saving = true) }
         viewModelScope.launch {
@@ -155,6 +163,8 @@ class ItemsViewModel @Inject constructor(
                     username = username.trim(),
                     password = password,
                     notes = notes.trim(),
+                    uris = uris.filter { it.isNotBlank() }.map { VaultUri(it) },
+                    totp = totp.takeIf { it.isNotBlank() },
                 ),
             )
             _state.update { it.copy(saving = false) }

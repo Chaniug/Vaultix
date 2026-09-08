@@ -14,8 +14,10 @@ import io.vaultix.data.bitwarden.model.SshKeyDto
 import io.vaultix.data.bitwarden.model.UriDto
 import io.vaultix.data.bitwarden.model.toStoredCipherDto
 import io.vaultix.data.bitwarden.network.BitwardenJson
+import io.vaultix.model.UriMatch
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
+import io.vaultix.model.VaultUri
 import kotlinx.coroutines.Dispatchers
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -74,7 +76,14 @@ class CipherPayloadPreservationTest {
         )
 
         val request = mapper.toUpdateRequest(
-            item = VaultItem(id = "c1", title = "新名", username = "new@user", password = "new-pass"),
+            item = VaultItem(
+                id = "c1",
+                title = "新名",
+                username = "new@user",
+                password = "new-pass",
+                uris = listOf(VaultUri("https://site.example", UriMatch.Host)),
+                totp = "otpauth-secret",
+            ),
             stored = stored,
             key = accountKey,
         )
@@ -83,9 +92,14 @@ class CipherPayloadPreservationTest {
         assertEquals("新名", crypto.decryptToString(request.name!!, accountKey))
         assertEquals("new@user", crypto.decryptToString(request.login!!.username!!, accountKey))
         assertEquals("new-pass", crypto.decryptToString(request.login!!.password!!, accountKey))
-        // 未编辑密文段原样保留
-        assertEquals("enc:uri://site", request.login!!.uris!!.single().uri)
-        assertEquals("enc:totp-secret", request.login!!.totp)
+        // uri/totp 为用户可编辑段：按表单明文重新加密覆盖（非沿用服务端旧密文）
+        assertEquals(
+            "https://site.example",
+            crypto.decryptToString(request.login!!.uris!!.single().uri!!, accountKey),
+        )
+        assertEquals(1, request.login!!.uris!!.single().match) // Host = 1
+        assertEquals("otpauth-secret", crypto.decryptToString(request.login!!.totp!!, accountKey))
+        // fido2 / 自定义字段为只读段：原样保留服务端密文，绝不丢失
         assertEquals("enc:fido", request.login!!.fido2Credentials!!.single().credentialId)
         assertEquals("enc:fn", request.fields!!.single().name)
     }
