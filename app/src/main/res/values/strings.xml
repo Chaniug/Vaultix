@@ -4,6 +4,7 @@
     <!-- 通用 -->
     <string name="action_back">返回</string>
     <string name="action_cancel">取消</string>
+    <string name="action_done">完成</string>
     <string name="action_save">保存</string>
     <string name="action_retry">重试</string>
 
@@ -295,6 +296,15 @@
     <string name="trash_delete_forever_confirm">永久删除</string>
     <string name="trash_deleted_forever">已永久删除</string>
     <string name="trash_delete_queued">已标记永久删除，联网后生效</string>
+
+    <!-- 回收站自动清理（批次③，对齐 Bastion TrashSettings.autoDeleteDays） -->
+    <string name="trash_auto_delete_title">自动清理</string>
+    <string name="trash_auto_delete_hint">到期条目在进入回收站时自动从本地与云端删除</string>
+    <string name="trash_auto_delete_never">从不自动清空</string>
+    <string name="trash_auto_delete_after_days">保留 %1$d 天后自动清空</string>
+    <string name="trash_row_expires_in">%1$d 天后自动清理</string>
+    <string name="trash_row_expires_today">即将自动清理</string>
+    <string name="trash_auto_cleaned">已自动清理 %1$d 条过期条目</string>
 
     <!-- 验证码统一界面（从密码条目列表 / 库内入口进入） -->
     <string name="totp_screen_title">验证码</string>

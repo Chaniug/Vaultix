@@ -43,6 +43,10 @@ interface CipherDao {
     @Query("SELECT * FROM ciphers WHERE vaultId = :vaultId AND deletedDate IS NOT NULL ORDER BY deletedDate DESC")
     fun observeTrashByVault(vaultId: String): Flow<List<CipherEntity>>
 
+    /** 回收站行一次性快照（自动清理扫描用；口径与 [observeTrashByVault] 一致）。 */
+    @Query("SELECT * FROM ciphers WHERE vaultId = :vaultId AND deletedDate IS NOT NULL ORDER BY deletedDate DESC")
+    suspend fun getTrashByVault(vaultId: String): List<CipherEntity>
+
     @Query("SELECT * FROM ciphers WHERE vaultId = :vaultId ORDER BY id")
     suspend fun listByVault(vaultId: String): List<CipherEntity>
 

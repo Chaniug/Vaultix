@@ -1,5 +1,6 @@
 package io.vaultix.vaultix.ui.trash
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,6 +14,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -22,6 +24,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeTopAppBar
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -42,12 +45,12 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import io.vaultix.model.VaultItem
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.itemTypeLabelRes
 
 /**
- * 回收站（Docs/08 S19）：行 = 标题 + 类型徽标；动作 = 恢复 / 永久删除（二次确认）。
+ * 回收站（Docs/08 S19）：行 = 标题 + 类型徽标 + 自动清理倒计时；
+ * 动作 = 恢复 / 永久删除（二次确认）；顶栏 = 自动清理档位设置（即改即生效）。
  * 永久删除后服务端 30 天保留语义不存在——该操作立即不可恢复，文案如实说明。
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -57,11 +60,13 @@ fun TrashScreen(
     viewModel: TrashViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    val trashItems by viewModel.trashItems.collectAsStateWithLifecycle()
+    val trashRows by viewModel.trashRows.collectAsStateWithLifecycle()
+    val autoDeleteDays by viewModel.autoDeleteDays.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
 
     var pendingForeverDelete by rememberSaveable { mutableStateOf<String?>(null) }
+    var showAutoDeleteDialog by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         viewModel.events.collect { event ->
@@ -72,6 +77,8 @@ fun TrashScreen(
                 is TrashViewModel.UiEvent.DeletedForever -> context.getString(
                     if (event.synced) R.string.trash_deleted_forever else R.string.trash_delete_queued,
                 )
+                is TrashViewModel.UiEvent.AutoCleaned ->
+                    context.getString(R.string.trash_auto_cleaned, event.count)
                 is TrashViewModel.UiEvent.Failed ->
                     context.getString(R.string.item_save_failed, event.message)
             }
@@ -89,6 +96,14 @@ fun TrashScreen(
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null)
                     }
                 },
+                actions = {
+                    IconButton(onClick = { showAutoDeleteDialog = true }) {
+                        Icon(
+                            Icons.Filled.Settings,
+                            contentDescription = stringResource(R.string.trash_auto_delete_title),
+                        )
+                    }
+                },
                 scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior(),
             )
         },
@@ -98,7 +113,7 @@ fun TrashScreen(
                 .fillMaxSize()
                 .padding(padding),
         ) {
-            if (trashItems.isEmpty()) {
+            if (trashRows.isEmpty()) {
                 EmptyTrashState()
             } else {
                 LazyColumn(
@@ -106,12 +121,12 @@ fun TrashScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.fillMaxSize(),
                 ) {
-                    items(trashItems, key = { it.id }) { item ->
+                    items(trashRows, key = { it.item.id }) { row ->
                         TrashRow(
-                            item = item,
+                            row = row,
                             busy = state.busy,
-                            onRestore = { viewModel.restore(item.id) },
-                            onDeleteForever = { pendingForeverDelete = item.id },
+                            onRestore = { viewModel.restore(row.item.id) },
+                            onDeleteForever = { pendingForeverDelete = row.item.id },
                         )
                     }
                 }
@@ -119,18 +134,20 @@ fun TrashScreen(
         }
     }
 
-    val deletingItem = trashItems.firstOrNull { it.id == pendingForeverDelete }
+    val deletingItem = trashRows.firstOrNull { it.item.id == pendingForeverDelete }
     if (deletingItem != null) {
         AlertDialog(
             onDismissRequest = { pendingForeverDelete = null },
             title = { Text(stringResource(R.string.trash_delete_forever_title)) },
-            text = { Text(stringResource(R.string.trash_delete_forever_message, deletingItem.title)) },
+            text = {
+                Text(stringResource(R.string.trash_delete_forever_message, deletingItem.item.title))
+            },
             confirmButton = {
                 TextButton(
                     enabled = !state.busy,
                     onClick = {
                         pendingForeverDelete = null
-                        viewModel.deleteForever(deletingItem.id)
+                        viewModel.deleteForever(deletingItem.item.id)
                     },
                 ) {
                     Text(
@@ -146,7 +163,61 @@ fun TrashScreen(
             },
         )
     }
+
+    if (showAutoDeleteDialog) {
+        TrashAutoDeleteDialog(
+            currentDays = autoDeleteDays,
+            onSelect = viewModel::setAutoDeleteDays,
+            onDismiss = { showAutoDeleteDialog = false },
+        )
+    }
 }
+
+/** 自动清理档位设置（0 = 从不；档位来自 [TrashViewModel.AUTO_DELETE_PRESETS]）。 */
+@Composable
+private fun TrashAutoDeleteDialog(
+    currentDays: Int,
+    onSelect: (Int) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.trash_auto_delete_title)) },
+        text = {
+            Column {
+                Text(
+                    text = stringResource(R.string.trash_auto_delete_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                TrashViewModel.AUTO_DELETE_PRESETS.forEach { days ->
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onSelect(days) }
+                            .padding(vertical = 4.dp),
+                    ) {
+                        RadioButton(selected = days == currentDays, onClick = { onSelect(days) })
+                        Text(text = autoDeleteLabel(days), style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_done)) }
+        },
+    )
+}
+
+/** 档位文案：0 = 「从不自动清空」，其余 = 「保留 N 天后自动清空」。 */
+@Composable
+private fun autoDeleteLabel(days: Int): String =
+    if (days <= 0) {
+        stringResource(R.string.trash_auto_delete_never)
+    } else {
+        stringResource(R.string.trash_auto_delete_after_days, days)
+    }
 
 @Composable
 private fun EmptyTrashState() {
@@ -172,7 +243,7 @@ private fun EmptyTrashState() {
 
 @Composable
 private fun TrashRow(
-    item: VaultItem,
+    row: TrashViewModel.TrashRowUi,
     busy: Boolean,
     onRestore: () -> Unit,
     onDeleteForever: () -> Unit,
@@ -190,14 +261,25 @@ private fun TrashRow(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = item.title.ifBlank { stringResource(R.string.items_item_unnamed) },
+                        text = row.item.title.ifBlank { stringResource(R.string.items_item_unnamed) },
                         style = MaterialTheme.typography.titleMedium,
                     )
                     Text(
-                        text = stringResource(itemTypeLabelRes(item.type)),
+                        text = stringResource(itemTypeLabelRes(row.item.type)),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    row.remainingDays?.let { days ->
+                        Text(
+                            text = remainingLabel(days),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (days == 0) {
+                                MaterialTheme.colorScheme.error
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                        )
+                    }
                 }
                 TextButton(onClick = onRestore, enabled = !busy) {
                     Text(stringResource(R.string.action_restore))
@@ -214,3 +296,12 @@ private fun TrashRow(
         }
     }
 }
+
+/** 倒计时文案：剩 0 天 = 「即将自动清理」（错误色强调），否则「N 天后自动清理」。 */
+@Composable
+private fun remainingLabel(days: Int): String =
+    if (days == 0) {
+        stringResource(R.string.trash_row_expires_today)
+    } else {
+        stringResource(R.string.trash_row_expires_in, days)
+    }

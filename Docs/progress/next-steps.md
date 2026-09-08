@@ -4,6 +4,28 @@
 > 落地；审计报告 `Docs/progress/audit/bitwarden-alignment.md`。
 > 状态：`TODO` / `DOING` / `DONE` / `BLOCKED`
 
+## 已完成（第十七轮 2026-09-09 · Bastion 对齐·批次③ 回收站自动清理）
+
+- [x] **清理策略纯函数**（core:common 新文件 TrashCleanupPolicy.kt）：对齐 Bastion
+      TrashViewModel 语义（cutoff = now - days、剩余天数 = max(0, days - 整除天数)、
+      0 = 不自动清空；Vaultix 不提供 Bastion 的 -1 禁用档）；ISO-8601 容错解析
+      （本地毫秒 / 服务端微秒-纳秒均可），不可解析恒不清理（宁多留不误删）
+- [x] **数据链路**：domain 新 `TrashEntry(item, deletedDate)`，`observeTrash` 改返回
+      TrashEntry（本地软删只改列不重写密文，删除时间必须从行级取，DTO 内不可靠）；
+      CipherDao 加 `getTrashByVault` 一次性快照
+- [x] **到期清理**：`ItemRepository.cleanupExpiredTrash(vaultId, days)`——过期行走
+      permanentDeleteItem 同口径（DELETE 入队 → 删本地行 → flush），离线联网补推保证
+      服务端同步删除；失败静默 0 不打断 UI；days<=0 零副作用
+- [x] **设置**：VaultixPreferences `trashAutoDeleteDays`（默认 30 天）；回收站顶栏
+      Settings 图标 → 档位对话框（从不 / 7 / 30 / 90 天，即选即存）
+- [x] **清理时机 + UI**：进入回收站即执行到期清理（Bastion cleanupExpiredItemsNow
+      同位），实删 snackbar 报数；行内「N 天后自动清理」倒计时（剩 0 天红色
+      「即将自动清理」；档位 0 不显示）
+- [x] **单测**：TrashCleanupPolicyTest 9 例（cutoff 边界 / 倒计时整除 / 0-负档 no-op /
+      三种 ISO 格式解析）；ItemRepositoryImplTest 增 4 例（只删过期 / 0-负档零副作用 /
+      DAO 异常静默 / observeTrash 带 deletedDate）；双 flavor 编译 + 全模块 detekt
+      0 违规 + 全项目单测 0 失败；提交推送 `origin/main`
+
 ## 已完成（第十四轮 2026-09-08 · Bastion 对齐·批次② 验证码五类型 + 批量导入）
 
 - [x] **OtpType 五类型引擎**（core:common Totp.kt）：`OtpType(TOTP/HOTP/STEAM/YANDEX/MOTP)`；
@@ -156,8 +178,8 @@
 - [x] **批次② 验证码条目对齐**（第十四轮完成）：OtpType 五类型（TOTP/HOTP/Steam/Yandex/MOTP）
       引擎；编辑器类型选择与 HOTP counter / mOTP pin 字段；**otpauth-migration:// 批量导入**
       （纯 Kotlin protobuf 解析，顶栏导入入口，单条预填/批量直建）
-- [ ] **批次③ 回收站对齐**：自动清理策略（autoDeleteDays DataStore 设置 + 到期清理 +
-      剩余天数显示；Bastion TrashViewModel 逻辑参考）
+- [x] **批次③ 回收站对齐**（第十七轮完成）：自动清理策略（autoDeleteDays DataStore 设置 +
+      进入即到期清理走 DELETE 入队保证服务端同步删 + 行内剩余天数倒计时 + 顶栏档位设置）
 - [ ] **批次④ 设置页**：Bastion SettingsScreen 逐项对照 Vaultix 设置页补缺
 - [ ] **批次⑤ 通行密钥**：PasskeysScreen 对比 Bastion 实现补缺（绑定编辑等）
 - [ ] **批次⑥ 卡包**：银行卡编辑已有；对照 Bastion CardWallet 补缺口
@@ -168,7 +190,8 @@
       官方端对拍 folder/favorite/reprompt/自定义字段 4 类型是否真写回）；
       **linkedId 修复验收**（Linked 字段显示所指字段名与值）；TOTP 扫码；**验证器
       取消不再删除**；随机密码生成；**先去回收站恢复此前被误删的验证码**；
-      表单可滚动到底（验证码下方区域可见）
+      表单可滚动到底（验证码下方区域可见）；**回收站自动清理验收（批次③）**：
+      顶栏档位改 7 天后新建删除条目（倒计时显示）、改档位「从不」倒计时消失
 - [ ] 回归通过 → M1 close-out（文档归档 + 下一里程碑规划）
 
 ## P2 · 自动化（WorkManager 周期同步归位）

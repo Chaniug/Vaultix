@@ -1,6 +1,7 @@
 package io.vaultix.data.repository
 
 import io.vaultix.crypto.di.CryptoDispatcher
+import io.vaultix.common.TrashCleanupPolicy
 import io.vaultix.data.bitwarden.mapper.CipherMapper
 import io.vaultix.data.bitwarden.model.CipherDto
 import io.vaultix.data.bitwarden.model.toStoredCipherDto
@@ -11,6 +12,7 @@ import io.vaultix.database.dao.VaultDao
 import io.vaultix.database.entity.CipherEntity
 import io.vaultix.database.entity.PendingOpEntity
 import io.vaultix.domain.ItemRepository
+import io.vaultix.domain.TrashEntry
 import io.vaultix.domain.VaultSaveOutcome
 import io.vaultix.model.VaultFido2Credential
 import io.vaultix.model.VaultItem
@@ -56,8 +58,12 @@ class ItemRepositoryImpl @Inject constructor(
     override fun observeItems(vaultId: String): Flow<List<VaultItem>> =
         observeState(vaultId, cipherDao.observeByVault(vaultId))
 
-    override fun observeTrash(vaultId: String): Flow<List<VaultItem>> =
-        observeState(vaultId, cipherDao.observeTrashByVault(vaultId))
+    override fun observeTrash(vaultId: String): Flow<List<TrashEntry>> =
+        combine(cipherDao.observeTrashByVault(vaultId), sessions.unlockedIds) { rows, unlocked ->
+            rows to (vaultId in unlocked)
+        }
+            .map { (rows, isUnlocked) -> if (!isUnlocked) emptyList() else decodeTrashRows(vaultId, rows) }
+            .flowOn(cryptoDispatcher)
 
     override fun observeItem(vaultId: String, itemId: String): Flow<VaultItem?> {
         val single = cipherDao.observe(itemId).map { row ->
@@ -215,6 +221,37 @@ class ItemRepositoryImpl @Inject constructor(
             flushAfterLocalWrite(vaultId)
         }
 
+    override suspend fun cleanupExpiredTrash(vaultId: String, autoDeleteDays: Int): Int {
+        if (!TrashCleanupPolicy.shouldAutoCleanup(autoDeleteDays)) return 0
+        return runCatching {
+            val now = System.currentTimeMillis()
+            val expired = cipherDao.getTrashByVault(vaultId)
+                .filter { row ->
+                    val deleted = row.deletedDate
+                    deleted != null && TrashCleanupPolicy.isExpired(deleted, now, autoDeleteDays)
+                }
+            if (expired.isEmpty()) return@runCatching 0
+
+            // 与 permanentDeleteItem 同口径：DELETE 入队（离线联网补推）→ 删本地行
+            val createdAt = System.currentTimeMillis()
+            expired.forEach { row ->
+                pendingOpDao.enqueue(
+                    PendingOpEntity(
+                        vaultId = vaultId,
+                        cipherId = row.id,
+                        op = OP_DELETE,
+                        payload = null,
+                        createdAt = createdAt,
+                    ),
+                )
+            }
+            cipherDao.deleteByIds(expired.map { it.id })
+
+            flushAfterLocalWrite(vaultId)
+            expired.size
+        }.getOrDefault(0)
+    }
+
     override suspend fun updateFido2Credentials(
         vaultId: String,
         itemId: String,
@@ -272,6 +309,21 @@ class ItemRepositoryImpl @Inject constructor(
             runCatching { json.decodeFromString<CipherDto>(row.encryptedPayload) }
                 .getOrNull()
                 ?.let { dto -> mapper.toDomain(dto, key) }
+        }
+    }
+
+    /**
+     * 解密回收站行（与 [decodeAll] 同口径），但保留行级 [CipherEntity.deletedDate]
+     * 元数据（本地软删除只改列不重写密文，DTO 内的 deletedDate 不可靠）。
+     */
+    private suspend fun decodeTrashRows(vaultId: String, rows: List<CipherEntity>): List<TrashEntry> {
+        val key = sessions.keyOf(vaultId) ?: return emptyList()
+        return rows.mapNotNull { row ->
+            val deleted = row.deletedDate ?: return@mapNotNull null
+            runCatching { json.decodeFromString<CipherDto>(row.encryptedPayload) }
+                .getOrNull()
+                ?.let { dto -> mapper.toDomain(dto, key) }
+                ?.let { item -> TrashEntry(item = item, deletedDate = deleted) }
         }
     }
 

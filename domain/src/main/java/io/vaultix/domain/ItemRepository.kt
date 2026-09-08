@@ -24,8 +24,10 @@ interface ItemRepository {
     /**
      * 观察回收站明文列表（deletedDate 非空的行；服务端回收站保留 30 天，
      * 被服务端永久清除的行会在下次成功全量同步后被收敛删除）。
+     *
+     * 每行附带 [TrashEntry.deletedDate]（ISO-8601），供 UI 做自动清理倒计时。
      */
-    fun observeTrash(vaultId: String): Flow<List<VaultItem>>
+    fun observeTrash(vaultId: String): Flow<List<TrashEntry>>
 
     /**
      * 观察单个条目明文（详情页用）。
@@ -77,6 +79,16 @@ interface ItemRepository {
     suspend fun permanentDeleteItem(vaultId: String, itemId: String): Result<VaultSaveOutcome>
 
     /**
+     * 回收站自动清理（批次③，对齐 Bastion TrashViewModel.cleanupExpiredItemsNow）：
+     * 把删除时间早于 `now - [autoDeleteDays]` 天的回收站行按 [permanentDeleteItem]
+     * 同口径处理（DELETE 入队 → 删本地行 → 轻量推送），保证离线时服务端也会被删。
+     *
+     * @param autoDeleteDays 保留天数；`<= 0` 表示不自动清空（直接返回 0，无副作用）。
+     * @return 本次实际清理的条数（失败静默为 0——清理是后台辅助动作，不打断 UI）。
+     */
+    suspend fun cleanupExpiredTrash(vaultId: String, autoDeleteDays: Int): Int
+
+    /**
      * 设置某登录条目的通行密钥集合（整体替换）。
      *
      * 通行密钥**永远绑定在某个登录条目（密码条目）上**（对齐 Bitwarden login.fido2Credentials），
@@ -113,3 +125,14 @@ enum class VaultSaveOutcome {
     /** 网络不可用：已安全落本地并进入待推送队列 */
     Queued,
 }
+
+/**
+ * 回收站行：明文条目 + 删除时间。
+ *
+ * [deletedDate] 为 ISO-8601 字符串（与数据库行一致；本地写入 `Instant.now().toString()`，
+ * 服务端同步下行同格式），供 `TrashCleanupPolicy` 计算剩余天数倒计时。
+ */
+data class TrashEntry(
+    val item: VaultItem,
+    val deletedDate: String,
+)

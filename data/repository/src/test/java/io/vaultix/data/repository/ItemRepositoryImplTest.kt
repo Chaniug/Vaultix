@@ -33,6 +33,8 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import java.time.Duration
+import java.time.Instant
 
 /**
  * 条目写路径（Docs/02 密文落盘语义）：
@@ -95,6 +97,17 @@ class ItemRepositoryImplTest {
         username = "alice@example.com",
         password = "s3cret-pass",
         notes = "工作账号",
+    )
+
+    private fun trashRow(id: String, deletedAt: Instant) = CipherEntity(
+        id = id,
+        vaultId = vaultId,
+        type = 1,
+        encryptedPayload = BitwardenJson.encodeToString(
+            mapper.toRequest(plainItem(id), key).toStoredCipherDto(id, "rev"),
+        ),
+        revisionDate = "rev",
+        deletedDate = deletedAt.toString(),
     )
 
     @Test
@@ -407,5 +420,60 @@ class ItemRepositoryImplTest {
         assertTrue(repo.restoreItem(vaultId, "cipher-7").isFailure)
         assertTrue(repo.permanentDeleteItem(vaultId, "cipher-7").isFailure)
         coVerify(exactly = 0) { pendingOpDao.enqueue(any()) }
+    }
+
+    @Test
+    fun cleanupExpiredTrash_deletesOnlyExpiredRows_andEnqueuesDelete() = runTest {
+        sessions.unlock(vaultId, key)
+        val now = Instant.now()
+        val expired = trashRow("cipher-old", now.minus(Duration.ofDays(45)))
+        val fresh = trashRow("cipher-new", now.minus(Duration.ofDays(10)))
+        coEvery { cipherDao.getTrashByVault(vaultId) } returns listOf(expired, fresh)
+        val opSlot = slot<PendingOpEntity>()
+        coEvery { pendingOpDao.enqueue(capture(opSlot)) } returns Unit
+        coEvery { cipherDao.deleteByIds(any()) } returns Unit
+        coEvery { vaultDao.get(vaultId) } returns bitwardenVaultRow()
+        coEvery { syncService.flushPending(vaultId, vaultId) } returns Result.success(Unit)
+
+        val removed = repo.cleanupExpiredTrash(vaultId, 30)
+
+        assertEquals(1, removed)
+        // 只删过期行，未到期的保留（宁多留一天，不误删）
+        coVerify(exactly = 1) { cipherDao.deleteByIds(listOf("cipher-old")) }
+        val op = opSlot.captured
+        assertEquals("DELETE", op.op)
+        assertEquals("cipher-old", op.cipherId)
+        assertNull(op.payload)
+    }
+
+    @Test
+    fun cleanupExpiredTrash_nonPositiveDaysIsNoOp() = runTest {
+        assertEquals(0, repo.cleanupExpiredTrash(vaultId, 0))
+        assertEquals(0, repo.cleanupExpiredTrash(vaultId, -1))
+        coVerify(exactly = 0) { cipherDao.getTrashByVault(any()) }
+        coVerify(exactly = 0) { pendingOpDao.enqueue(any()) }
+        coVerify(exactly = 0) { cipherDao.deleteByIds(any()) }
+    }
+
+    @Test
+    fun cleanupExpiredTrash_survivesDaoFailure() = runTest {
+        // 清理是后台辅助动作：库操作异常静默为 0，不打断进入回收站
+        coEvery { cipherDao.getTrashByVault(vaultId) } throws IllegalStateException("db locked")
+        assertEquals(0, repo.cleanupExpiredTrash(vaultId, 30))
+    }
+
+    @Test
+    fun observeTrash_returnsEntriesWithDeletedDate() = runTest {
+        sessions.unlock(vaultId, key)
+        val deletedDate = "2026-09-01T00:00:00Z"
+        every { cipherDao.observeTrashByVault(vaultId) } returns flowOf(
+            listOf(trashRow("cipher-t", Instant.parse(deletedDate))),
+        )
+
+        val entries = repo.observeTrash(vaultId).first()
+
+        assertEquals(1, entries.size)
+        assertEquals(deletedDate, entries.single().deletedDate)
+        assertEquals("GitHub", entries.single().item.title)
     }
 }

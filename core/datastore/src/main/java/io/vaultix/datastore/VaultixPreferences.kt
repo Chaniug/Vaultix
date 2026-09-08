@@ -40,6 +40,7 @@ class VaultixPreferences @Inject constructor(
         val SCREEN_SECURITY = booleanPreferencesKey("screen_security")
         val DEFAULT_VAULT_ID = stringPreferencesKey("default_vault_id")
         val QUICK_UNLOCK_PROMPT_DISMISSED = booleanPreferencesKey("quick_unlock_prompt_dismissed")
+        val TRASH_AUTO_DELETE_DAYS = intPreferencesKey("trash_auto_delete_days")
 
         /**
          * 自动锁定档位（分钟，语义对齐 Bastion autoLockMinutes）：
@@ -47,6 +48,13 @@ class VaultixPreferences @Inject constructor(
          */
         const val DEFAULT_AUTO_LOCK_MINUTES = 5
         const val DEFAULT_CLIPBOARD_CLEAR_MS = 30 * 1000L
+
+        /**
+         * 回收站自动清理档位（天，语义对齐 Bastion TrashSettings.autoDeleteDays）：
+         * 0 = 不自动清空；N > 0 = 软删除后保留 N 天。
+         * Vaultix 不提供 Bastion 的 -1「禁用回收站」档位（回收站是固定能力）。
+         */
+        const val DEFAULT_TRASH_AUTO_DELETE_DAYS = 30
     }
 
     private val safeData: Flow<Preferences> = dataStore.data
@@ -69,6 +77,14 @@ class VaultixPreferences @Inject constructor(
     /** 是否开启 FLAG_SECURE（防截屏 / 防最近任务缩略图）。 */
     val screenSecurity: Flow<Boolean> =
         safeData.map { it[SCREEN_SECURITY] ?: true }
+
+    /**
+     * 回收站自动清理档位（天；0 = 不自动清空，语义见 [DEFAULT_TRASH_AUTO_DELETE_DAYS] 注释）。
+     * 清理时机 = 进入回收站（TrashViewModel init），策略与倒计时口径见
+     * [io.vaultix.common.TrashCleanupPolicy]。
+     */
+    val trashAutoDeleteDays: Flow<Int> =
+        safeData.map { it[TRASH_AUTO_DELETE_DAYS] ?: DEFAULT_TRASH_AUTO_DELETE_DAYS }
 
     val defaultVaultId: Flow<String?> = safeData.map { it[DEFAULT_VAULT_ID] }
 
@@ -120,6 +136,11 @@ class VaultixPreferences @Inject constructor(
 
     suspend fun setScreenSecurity(enabled: Boolean) {
         dataStore.edit { it[SCREEN_SECURITY] = enabled }
+    }
+
+    /** 回收站自动清理档位（天；0 = 不自动清空）。 */
+    suspend fun setTrashAutoDeleteDays(days: Int) {
+        dataStore.edit { it[TRASH_AUTO_DELETE_DAYS] = days }
     }
 
     suspend fun setDefaultVaultId(id: String?) {
