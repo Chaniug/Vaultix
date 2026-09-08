@@ -324,6 +324,25 @@
     <string name="totp_bound_done">已绑定到密码条目</string>
     <string name="totp_invalid_secret">密钥无法解析（格式不正确）</string>
     <string name="totp_passkey_button">通行密钥</string>
+    <string name="totp_field_type">类型</string>
+    <string name="totp_type_totp">TOTP（时间型）</string>
+    <string name="totp_type_hotp">HOTP（计数器型）</string>
+    <string name="totp_type_steam">Steam Guard</string>
+    <string name="totp_type_yandex">Yandex OTP</string>
+    <string name="totp_type_motp">mOTP</string>
+    <string name="totp_field_counter">计数器（HOTP）</string>
+    <string name="totp_field_pin">PIN 码（mOTP）</string>
+    <string name="totp_field_motp_secret">密钥（mOTP 原始字符串）</string>
+    <string name="totp_motp_hint">mOTP 固定 10 秒步长 / 6 位码，计算需 PIN 码参与</string>
+    <string name="totp_hotp_counter">计数器 %1$d</string>
+    <string name="totp_import_button">导入验证码</string>
+    <string name="totp_import_title">导入验证码</string>
+    <string name="totp_import_hint">粘贴 otpauth:// 链接、motp:// 链接、裸 Base32 密钥，或 Google Authenticator 的 otpauth-migration:// 批量导出（一次导入全部）</string>
+    <string name="totp_import_label">导入内容</string>
+    <string name="totp_import_action">导入</string>
+    <string name="totp_import_invalid">无法识别的内容（未导入）</string>
+    <string name="totp_import_imported">已导入 %1$d 条验证码</string>
+    <string name="totp_import_unsupported">暂不支持 Microsoft Authenticator（phonefactor://）导出格式</string>
 
     <!-- 通行密钥列表界面（从验证码界面「通行密钥」按钮进入） -->
     <string name="passkeys_screen_title">通行密钥</string>

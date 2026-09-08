@@ -4,6 +4,36 @@
 > 落地；审计报告 `Docs/progress/audit/bitwarden-alignment.md`。
 > 状态：`TODO` / `DOING` / `DONE` / `BLOCKED`
 
+## 已完成（第十四轮 2026-09-08 · Bastion 对齐·批次② 验证码五类型 + 批量导入）
+
+- [x] **OtpType 五类型引擎**（core:common Totp.kt）：`OtpType(TOTP/HOTP/STEAM/YANDEX/MOTP)`；
+      迁入 Bastion 三生成函数——HOTP（RFC 4226，counter 驱动）、Yandex（委托标准 TOTP）、
+      mOTP（MD5(epoch/10+secret+pin) hex 取数字前 6 位补 0）；新增统一入口
+      `TotpGenerator.generate(config)`（TotpCodesScreen 与 ItemDetailScreen 详情页共用）
+- [x] **五类型 URI 解析与生成**：`otpauth://hotp(counter)` / `otpauth://yaotp(pin)` /
+      `motp://issuer:account?secret=&pin=` / `encoder=steam` 识别（Bastion 口径）；
+      `OtpUriParser.buildUri(config)` 五类型统一出口；**编码修复**：自研 RFC 3986
+      uriEncode/uriDecode（对齐 android.net.Uri 语义，`+` 不转空格）——修复 Steam 等
+      Base64 密钥含 `+ / =` 时被 URLDecoder 误解码的隐患，label 亦按 %XX 解码
+- [x] **otpauth-migration:// 批量导入**（core:common 新文件 OtpImportParser.kt，纯 Kotlin）：
+      手工 protobuf wire format（ProtoReader）+ OtpParameters 7 字段（secret/name/issuer/
+      algorithm/digits/type/counter）+ Base64 容错（URL-safe `- _`、form 空格、缺 padding）
+      + base32Encode；`OtpScanResult{Single/Multiple/UnsupportedPhoneFactor/InvalidFormat}`
+      四分支分发（含 phonefactor:// 显式不支持、裸密钥单条）；剥离 GA name 的
+      `Issuer:` 前缀（带/不带空格两种形态）
+- [x] **编辑器类型选择**（TotpEditDialog）：类型下拉（五类型）+ 条件字段——HOTP 显
+      counter、mOTP 显 PIN（固定 10s/6 位口径在 buildTotpConfig 收敛）、Steam 隐藏参数、
+      mOTP 密钥字段标签区分；TotpEntry 贯穿 type/counter/pin（steam 改计算属性）
+- [x] **列表行为**：HOTP 行显示「计数器 N」不显示倒计时/进度条；mOTP 按 10s 步长滚动
+- [x] **导入入口**：验证码界面顶栏「导入」→ 粘贴对话框；单条预填编辑确认，批量直接
+      创建 + snackbar 报数，phonefactor/无效内容提示原因（ImportDialogWithOutcome）
+- [x] **单测**：HOTP RFC 4226 附录 D 十向量 + 8 位同源校验；mOTP 规格断言；五类型
+      buildUri↔parse roundtrip（含 Steam Base64 `+/=` 编解码无损）；migration 手工构造
+      protobuf roundtrip（TOTP+HOTP 双条/大 counter varint/SHA256+8 位/URL-safe 容错/
+      各分发分支）；core:common 60 例全绿（全项目 339 例 0 失败）
+- [x] 双 flavor 编译 + 全模块 detekt 0 违规（拆 LongMethod/复杂度超限函数、表驱动字段
+      解析、MagicNumber 常量化）；提交推送 `origin/main`
+
 ## 已完成（第十三轮 2026-09-08 · TOTP 统一界面 + 通行密钥只读列表 + 入口 hub）
 
 - [x] **TOTP 统一界面（对齐 Bitwarden 总览 + Bastion 验证器视图）**：从所有登录条目的
@@ -123,10 +153,9 @@
 
 ## Bastion 对齐批次（剩余）
 
-- [ ] **批次② 验证码条目对齐**：OtpType 五类型（TOTP/HOTP/Steam/Yandex/MOTP）引擎
-      （Bastion TotpGenerator 238-372 三个生成函数可迁）；编辑器类型选择与
-      HOTP counter / mOTP pin 字段；**otpauth-migration:// 批量导入**（Bastion
-      TotpUriParser.decodeMigrationPayload protobuf 解析可迁）
+- [x] **批次② 验证码条目对齐**（第十四轮完成）：OtpType 五类型（TOTP/HOTP/Steam/Yandex/MOTP）
+      引擎；编辑器类型选择与 HOTP counter / mOTP pin 字段；**otpauth-migration:// 批量导入**
+      （纯 Kotlin protobuf 解析，顶栏导入入口，单条预填/批量直建）
 - [ ] **批次③ 回收站对齐**：自动清理策略（autoDeleteDays DataStore 设置 + 到期清理 +
       剩余天数显示；Bastion TrashViewModel 逻辑参考）
 - [ ] **批次④ 设置页**：Bastion SettingsScreen 逐项对照 Vaultix 设置页补缺

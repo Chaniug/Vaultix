@@ -620,13 +620,8 @@ private fun TotpCodeContent(config: TotpConfig, onCopy: (String) -> Unit) {
         }
     }
     val code = remember(config, timeSeconds) {
-        TotpGenerator.generateTotp(
-            secret = config.secret,
-            timeSeconds = timeSeconds,
-            period = config.period,
-            digits = config.digits,
-            algorithm = config.algorithm,
-        )
+        // 五类型统一入口（Steam/HOTP/Yandex/mOTP 与 TotpCodesScreen 一致）
+        TotpGenerator.generate(config, timeSeconds)
     }
     val remaining = TotpGenerator.remainingSeconds(config.period, timeSeconds)
     val progress = 1f - TotpGenerator.progress(config.period, timeSeconds)

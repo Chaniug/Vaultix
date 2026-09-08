@@ -22,10 +22,10 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -54,6 +54,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -65,6 +66,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.vaultix.common.OtpType
+import io.vaultix.common.TotpConfig
 import io.vaultix.common.TotpGenerator
 import io.vaultix.model.VaultItem
 import io.vaultix.vaultix.R
@@ -92,6 +95,7 @@ fun TotpCodesScreen(
     var searchActive by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<TotpEntry?>(null) }
     var binding by remember { mutableStateOf<TotpEntry?>(null) }
+    var importOpen by remember { mutableStateOf(false) }
 
     // 实时时钟：每秒推进，驱动所有验证码滚动刷新
     var nowSeconds by remember { mutableLongStateOf(System.currentTimeMillis() / 1000) }
@@ -128,6 +132,12 @@ fun TotpCodesScreen(
                 actions = {
                     IconButton(onClick = { searchActive = true }) {
                         Icon(Icons.Filled.Search, contentDescription = stringResource(R.string.totp_search_hint))
+                    }
+                    IconButton(onClick = { importOpen = true }) {
+                        Icon(
+                            Icons.Filled.FileDownload,
+                            contentDescription = stringResource(R.string.totp_import_button),
+                        )
                     }
                     IconButton(onClick = onOpenPasskeys) {
                         Icon(Icons.Filled.Key, contentDescription = stringResource(R.string.totp_passkey_button))
@@ -175,16 +185,12 @@ fun TotpCodesScreen(
         TotpEditDialog(
             entry = entry,
             onDismiss = { editing = null },
-            onSave = { issuer, account, secret, period, digits, algorithm, steam ->
+            onSave = { issuer, account, config ->
                 viewModel.saveTotp(
                     entryId = entry.itemId.takeIf { it.isNotEmpty() && entry.totpRaw.isNotEmpty() },
                     issuer = issuer,
                     account = account,
-                    secret = secret,
-                    period = period,
-                    digits = digits,
-                    algorithm = algorithm,
-                    steam = steam,
+                    config = config,
                 )
                 editing = null
             },
@@ -207,6 +213,15 @@ fun TotpCodesScreen(
                 viewModel.bindStandaloneToLogin(entry, login.id)
                 binding = null
             },
+        )
+    }
+
+    if (importOpen) {
+        ImportDialogWithOutcome(
+            viewModel = viewModel,
+            snackbarHostState = snackbarHostState,
+            onSingle = { editing = it },
+            onDismiss = { importOpen = false },
         )
     }
 }
@@ -261,7 +276,8 @@ private fun TotpRow(
     onDelete: () -> Unit,
     onBind: () -> Unit,
 ) {
-    val code = currentCode(entry, nowSeconds)
+    val code = TotpGenerator.generate(entry.toConfig(), nowSeconds)
+    val isHotp = entry.type == OtpType.HOTP
     val remaining = TotpGenerator.remainingSeconds(entry.period, nowSeconds)
     val progress = 1f - (remaining.toFloat() / entry.period)
     val clipboard = LocalClipboardManager.current
@@ -301,11 +317,20 @@ private fun TotpRow(
                         letterSpacing = 2.sp,
                     )
                 }
-                Text(
-                    text = "${remaining}s",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                if (isHotp) {
+                    // HOTP 基于计数器，无时间衰减：展示当前 counter 而非倒计时
+                    Text(
+                        text = stringResource(R.string.totp_hotp_counter, entry.counter),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    Text(
+                        text = "${remaining}s",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 IconButton(onClick = {
                     clipboard.setText(AnnotatedString(code))
                     scope.launch { snackbarHostState.showSnackbar(code) }
@@ -317,11 +342,13 @@ private fun TotpRow(
                     )
                 }
             }
-            LinearProgressIndicator(
-                progress = { progress },
-                modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
-                trackColor = MaterialTheme.colorScheme.surfaceVariant,
-            )
+            if (!isHotp) {
+                LinearProgressIndicator(
+                    progress = { progress },
+                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                    trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                )
+            }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (!entry.bound) {
                     TextButton(onClick = onBind) { Text(stringResource(R.string.totp_action_bind)) }
@@ -347,13 +374,6 @@ private fun Badge(bound: Boolean) {
     }
 }
 
-/** 计算当前验证码（Steam 走专属字母表）。 */
-private fun currentCode(entry: TotpEntry, nowSeconds: Long): String = if (entry.steam) {
-    TotpGenerator.generateSteamTotp(entry.secret, nowSeconds, entry.period)
-} else {
-    TotpGenerator.generateTotp(entry.secret, nowSeconds, entry.period, entry.digits, entry.algorithm)
-}
-
 /** 每 3 位分组显示，便于人工录入（123456 → 123 456）。 */
 private fun groupCode(code: String): String {
     if (code.length <= TOTP_CODE_GROUP) {
@@ -371,31 +391,31 @@ private const val TOTP_TICK_MS = 1000L
 private const val TOTP_CODE_GROUP = 3
 private const val MILLIS_PER_SECOND = 1000
 
-// ===== 编辑 / 新增对话框（复用下方通用组件）=====
+// 类型固定参数（对齐 Bastion TotpData 的固定口径）
+private const val MOTP_FIXED_PERIOD = 10
+private const val MOTP_FIXED_DIGITS = 6
+private const val DEFAULT_EDIT_PERIOD = 30
+private const val DEFAULT_EDIT_DIGITS = 6
+
+// ===== 编辑 / 新增对话框（类型对齐 Bastion：TOTP/HOTP/Steam/Yandex/mOTP）=====
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun TotpEditDialog(
     entry: TotpEntry,
     onDismiss: () -> Unit,
-    onSave: (
-        issuer: String,
-        account: String,
-        secret: String,
-        period: Int,
-        digits: Int,
-        algorithm: String,
-        steam: Boolean,
-    ) -> Unit,
+    onSave: (issuer: String, account: String, config: TotpConfig) -> Unit,
     onDelete: (() -> Unit)?,
 ) {
     var issuer by remember { mutableStateOf(entry.issuer) }
     var account by remember { mutableStateOf(entry.account) }
     var secret by remember { mutableStateOf(entry.secret) }
+    var type by remember { mutableStateOf(entry.type) }
     var period by remember { mutableStateOf(entry.period.toString()) }
     var digits by remember { mutableStateOf(entry.digits.toString()) }
     var algorithm by remember { mutableStateOf(entry.algorithm) }
-    var steam by remember { mutableStateOf(entry.steam) }
+    var counter by remember { mutableStateOf(entry.counter.toString()) }
+    var pin by remember { mutableStateOf(entry.pin) }
     var showError by remember { mutableStateOf(false) }
 
     AlertDialog(
@@ -409,6 +429,8 @@ private fun TotpEditDialog(
         },
         text = {
             Column {
+                TypeDropdown(type) { type = it }
+                Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
                     value = issuer,
                     onValueChange = { issuer = it },
@@ -428,36 +450,31 @@ private fun TotpEditDialog(
                 OutlinedTextField(
                     value = secret,
                     onValueChange = { secret = it },
-                    label = { Text(stringResource(R.string.totp_field_secret)) },
+                    label = { Text(secretLabel(type)) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                Spacer(Modifier.height(8.dp))
-                Row {
-                    OutlinedTextField(
-                        value = period,
-                        onValueChange = { period = it },
-                        label = { Text(stringResource(R.string.totp_field_period)) },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        modifier = Modifier.weight(1f),
+                when (type) {
+                    OtpType.MOTP -> TotpMotpFields(pin, onPinChange = { pin = it })
+                    OtpType.STEAM -> {
+                        // Steam 固定 5 位 / 30s / SHA1，无可调参数
+                    }
+                    OtpType.HOTP -> TotpHotpFields(
+                        counter = counter,
+                        onCounterChange = { counter = it },
+                        digits = digits,
+                        onDigitsChange = { digits = it },
+                        algorithm = algorithm,
+                        onAlgorithmChange = { algorithm = it },
                     )
-                    Spacer(Modifier.width(8.dp))
-                    OutlinedTextField(
-                        value = digits,
-                        onValueChange = { digits = it },
-                        label = { Text(stringResource(R.string.totp_field_digits)) },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        modifier = Modifier.weight(1f),
+                    OtpType.TOTP, OtpType.YANDEX -> TotpTimedFields(
+                        period = period,
+                        onPeriodChange = { period = it },
+                        digits = digits,
+                        onDigitsChange = { digits = it },
+                        algorithm = algorithm,
+                        onAlgorithmChange = { algorithm = it },
                     )
-                }
-                Spacer(Modifier.height(8.dp))
-                AlgorithmDropdown(algorithm) { algorithm = it }
-                Spacer(Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(checked = steam, onCheckedChange = { steam = it })
-                    Text(stringResource(R.string.totp_steam_label))
                 }
                 if (showError) {
                     Text(
@@ -470,13 +487,11 @@ private fun TotpEditDialog(
         },
         confirmButton = {
             TextButton(onClick = {
-                val p = period.toIntOrNull()?.coerceAtLeast(1) ?: 30
-                val d = digits.toIntOrNull()?.coerceIn(1, 10) ?: 6
                 if (secret.isBlank()) {
                     showError = true
                     return@TextButton
                 }
-                onSave(issuer, account, secret, p, d, algorithm, steam)
+                onSave(issuer, account, buildTotpConfig(type, secret, period, digits, algorithm, counter, pin))
             }) { Text(stringResource(R.string.action_save)) }
         },
         dismissButton = {
@@ -500,6 +515,232 @@ private fun TotpEditDialog(
         },
     )
 }
+
+/** mOTP 专属字段:PIN 码(密钥为原始字符串,固定 10s / 6 位)。 */
+@Composable
+private fun TotpMotpFields(pin: String, onPinChange: (String) -> Unit) {
+    Spacer(Modifier.height(8.dp))
+    OutlinedTextField(
+        value = pin,
+        onValueChange = onPinChange,
+        label = { Text(stringResource(R.string.totp_field_pin)) },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth(),
+    )
+    Text(
+        text = stringResource(R.string.totp_motp_hint),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = 4.dp),
+    )
+}
+
+/** HOTP 专属字段:计数器 + 位数 + 算法(步长由 counter 代替,无刷新周期)。 */
+@Composable
+private fun TotpHotpFields(
+    counter: String,
+    onCounterChange: (String) -> Unit,
+    digits: String,
+    onDigitsChange: (String) -> Unit,
+    algorithm: String,
+    onAlgorithmChange: (String) -> Unit,
+) {
+    Spacer(Modifier.height(8.dp))
+    Row {
+        OutlinedTextField(
+            value = counter,
+            onValueChange = onCounterChange,
+            label = { Text(stringResource(R.string.totp_field_counter)) },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            modifier = Modifier.weight(1f),
+        )
+        Spacer(Modifier.width(8.dp))
+        OutlinedTextField(
+            value = digits,
+            onValueChange = onDigitsChange,
+            label = { Text(stringResource(R.string.totp_field_digits)) },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            modifier = Modifier.weight(1f),
+        )
+    }
+    Spacer(Modifier.height(8.dp))
+    AlgorithmDropdown(algorithm, onSelected = onAlgorithmChange)
+}
+
+/** TOTP / Yandex 通用字段:刷新周期 + 位数 + 算法。 */
+@Composable
+private fun TotpTimedFields(
+    period: String,
+    onPeriodChange: (String) -> Unit,
+    digits: String,
+    onDigitsChange: (String) -> Unit,
+    algorithm: String,
+    onAlgorithmChange: (String) -> Unit,
+) {
+    Spacer(Modifier.height(8.dp))
+    Row {
+        OutlinedTextField(
+            value = period,
+            onValueChange = onPeriodChange,
+            label = { Text(stringResource(R.string.totp_field_period)) },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            modifier = Modifier.weight(1f),
+        )
+        Spacer(Modifier.width(8.dp))
+        OutlinedTextField(
+            value = digits,
+            onValueChange = onDigitsChange,
+            label = { Text(stringResource(R.string.totp_field_digits)) },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            modifier = Modifier.weight(1f),
+        )
+    }
+    Spacer(Modifier.height(8.dp))
+    AlgorithmDropdown(algorithm, onSelected = onAlgorithmChange)
+}
+
+/** 按类型归一化参数并构造 [TotpConfig](mOTP/Steam 的固定口径在此收敛)。 */
+private fun buildTotpConfig(
+    type: OtpType,
+    secret: String,
+    period: String,
+    digits: String,
+    algorithm: String,
+    counter: String,
+    pin: String,
+): TotpConfig {
+    val p = period.toIntOrNull()?.coerceAtLeast(1) ?: DEFAULT_EDIT_PERIOD
+    val d = digits.toIntOrNull()?.coerceIn(1, 10) ?: DEFAULT_EDIT_DIGITS
+    return TotpConfig(
+        secret = secret.trim(),
+        period = if (type == OtpType.MOTP) MOTP_FIXED_PERIOD else p,
+        digits = if (type == OtpType.MOTP) MOTP_FIXED_DIGITS else d,
+        algorithm = if (type == OtpType.STEAM || type == OtpType.MOTP) "SHA1" else algorithm,
+        type = type,
+        counter = counter.toLongOrNull() ?: 0L,
+        pin = pin.trim(),
+    )
+}
+
+@Composable
+private fun secretLabel(type: OtpType): String = stringResource(
+    when (type) {
+        OtpType.MOTP -> R.string.totp_field_motp_secret
+        else -> R.string.totp_field_secret
+    },
+)
+
+/** 导入对话框 + 结果处理：单条预填编辑、批量提示计数、失败提示原因。 */
+@Composable
+private fun ImportDialogWithOutcome(
+    viewModel: TotpCodesViewModel,
+    snackbarHostState: SnackbarHostState,
+    onSingle: (TotpEntry) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    // 事件回调（非 composition）里无法调 stringResource，提前解析固定文案
+    val invalidMessage = stringResource(R.string.totp_import_invalid)
+    val unsupportedMessage = stringResource(R.string.totp_import_unsupported)
+    ImportDialog(
+        onDismiss = onDismiss,
+        onImport = { raw ->
+            when (val outcome = viewModel.importTotp(raw)) {
+                is ImportOutcome.Single -> onSingle(outcome.entry)
+                is ImportOutcome.Multiple -> scope.launch {
+                    snackbarHostState.showSnackbar(
+                        context.getString(R.string.totp_import_imported, outcome.count),
+                    )
+                }
+                ImportOutcome.Unsupported -> scope.launch {
+                    snackbarHostState.showSnackbar(unsupportedMessage)
+                }
+                ImportOutcome.Invalid -> scope.launch {
+                    snackbarHostState.showSnackbar(invalidMessage)
+                }
+            }
+            onDismiss()
+        },
+    )
+}
+
+/** 粘贴导入对话框：otpauth / motp / otpauth-migration / 裸密钥。 */
+@Composable
+private fun ImportDialog(
+    onDismiss: () -> Unit,
+    onImport: (String) -> Unit,
+) {
+    var text by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.totp_import_title)) },
+        text = {
+            Column {
+                Text(
+                    text = stringResource(R.string.totp_import_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    label = { Text(stringResource(R.string.totp_import_label)) },
+                    minLines = 4,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onImport(text) },
+                enabled = text.isNotBlank(),
+            ) { Text(stringResource(R.string.totp_import_action)) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
+        },
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TypeDropdown(value: OtpType, onSelected: (OtpType) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
+        OutlinedTextField(
+            value = typeLabel(value),
+            onValueChange = {},
+            readOnly = true,
+            label = { Text(stringResource(R.string.totp_field_type)) },
+            modifier = Modifier.menuAnchor().fillMaxWidth(),
+        )
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            OtpType.entries.forEach { candidate ->
+                DropdownMenuItem(
+                    text = { Text(typeLabel(candidate)) },
+                    onClick = { onSelected(candidate); expanded = false },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun typeLabel(type: OtpType): String = stringResource(
+    when (type) {
+        OtpType.TOTP -> R.string.totp_type_totp
+        OtpType.HOTP -> R.string.totp_type_hotp
+        OtpType.STEAM -> R.string.totp_type_steam
+        OtpType.YANDEX -> R.string.totp_type_yandex
+        OtpType.MOTP -> R.string.totp_type_motp
+    },
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

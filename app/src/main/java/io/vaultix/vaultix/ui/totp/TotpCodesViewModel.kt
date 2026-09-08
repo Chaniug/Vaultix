@@ -4,7 +4,12 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import io.vaultix.common.ImportedOtp
+import io.vaultix.common.OtpImportParser
+import io.vaultix.common.OtpScanResult
+import io.vaultix.common.OtpType
 import io.vaultix.common.OtpUriParser
+import io.vaultix.common.TotpConfig
 import io.vaultix.domain.ItemRepository
 import io.vaultix.domain.VaultRepository
 import io.vaultix.model.VaultItem
@@ -28,7 +33,9 @@ import javax.inject.Inject
  * 操作（均按 Bitwarden 字段语义）：
  * - 编辑：重写该登录条目的 `login.totp`（独立项同时更新标题）；
  * - 删除：独立项整体软删除；已绑定项仅清空其 `totp`，不动密码；
- * - 绑定：把独立 TOTP 合并进所选密码条目的 `totp`，并删除独立项。
+ * - 绑定：把独立 TOTP 合并进所选密码条目的 `totp`，并删除独立项；
+ * - 导入：支持 otpauth / motp / 裸密钥（单条，预填编辑确认）与
+ *   otpauth-migration:// 批量导出（多条，直接创建）。
  */
 @HiltViewModel
 class TotpCodesViewModel @Inject constructor(
@@ -99,28 +106,13 @@ class TotpCodesViewModel @Inject constructor(
      * 保存（新增或编辑）验证码条目。
      * @param entryId null = 新增独立条目；非 null = 编辑既有条目（按 id 取回原条目重写）。
      */
-    fun saveTotp(
-        entryId: String?,
-        issuer: String,
-        account: String,
-        secret: String,
-        period: Int,
-        digits: Int,
-        algorithm: String,
-        steam: Boolean,
-    ) {
-        val raw = OtpUriParser.buildOtpAuthUri(
-            secret = secret.trim(),
-            issuer = issuer.trim(),
-            account = account.trim(),
-            period = period,
-            digits = digits,
-            algorithm = algorithm,
-            steam = steam,
-        )
-        val title = issuer.takeIf { it.isNotBlank() }
-            ?: account.takeIf { it.isNotBlank() }
-            ?: "验证码"
+    fun saveTotp(entryId: String?, issuer: String, account: String, config: TotpConfig) {
+        val trimmedIssuer = issuer.trim()
+        val trimmedAccount = account.trim()
+        val raw = OtpUriParser.buildUri(config, issuer = trimmedIssuer, account = trimmedAccount)
+        val title = trimmedIssuer.takeIf { it.isNotBlank() }
+            ?: trimmedAccount.takeIf { it.isNotBlank() }
+            ?: FALLBACK_TITLE
         viewModelScope.launch {
             if (entryId == null) {
                 // 新增独立验证码：password 为空的登录条目（Bitwarden 兼容形态）
@@ -129,7 +121,7 @@ class TotpCodesViewModel @Inject constructor(
                     item = VaultItem(
                         id = "",
                         title = title,
-                        username = "",
+                        username = trimmedAccount,
                         password = "",
                         type = VaultItemType.Login,
                         totp = raw,
@@ -139,6 +131,27 @@ class TotpCodesViewModel @Inject constructor(
                 val item = _state.value.items.firstOrNull { it.id == entryId } ?: return@launch
                 itemRepository.updateItem(vaultId, item.copy(title = title, totp = raw))
             }
+        }
+    }
+
+    /**
+     * 粘贴内容导入。单条返回预填条目（UI 打开编辑对话框供确认）；
+     * 批量直接创建并在刷新后出现在列表中；其余返回失败态供 UI 提示。
+     */
+    fun importTotp(raw: String): ImportOutcome {
+        return when (val result = OtpImportParser.parse(raw)) {
+            is OtpScanResult.Single -> ImportOutcome.Single(result.item.toStandaloneEntry())
+            is OtpScanResult.Multiple -> {
+                val items = result.items
+                viewModelScope.launch {
+                    items.forEach { imported ->
+                        itemRepository.createItem(vaultId = vaultId, item = imported.toStandaloneItem())
+                    }
+                }
+                ImportOutcome.Multiple(count = items.size)
+            }
+            OtpScanResult.UnsupportedPhoneFactor -> ImportOutcome.Unsupported
+            OtpScanResult.InvalidFormat -> ImportOutcome.Invalid
         }
     }
 
@@ -154,7 +167,23 @@ class TotpCodesViewModel @Inject constructor(
 
     companion object {
         const val ARG_VAULT_ID = "vaultId"
+        private const val FALLBACK_TITLE = "验证码"
     }
+}
+
+/** 粘贴导入的结果（UI 据此决定预填编辑 / 提示批量完成 / 报错）。 */
+sealed interface ImportOutcome {
+    /** 单条：预填后的编辑条目（未落库，保存走 [TotpCodesViewModel.saveTotp]）。 */
+    data class Single(val entry: TotpEntry) : ImportOutcome
+
+    /** 批量：已直接创建 count 条。 */
+    data class Multiple(val count: Int) : ImportOutcome
+
+    /** Microsoft Authenticator 导出（phonefactor://）暂不支持。 */
+    data object Unsupported : ImportOutcome
+
+    /** 内容无法识别。 */
+    data object Invalid : ImportOutcome
 }
 
 /** VaultItem → 验证码条目（无 TOTP 返回 null）。 */
@@ -181,11 +210,45 @@ fun VaultItem.toTotpEntry(): TotpEntry? {
         period = parsed.period,
         digits = parsed.digits,
         algorithm = parsed.algorithm,
-        steam = parsed.steam,
+        type = parsed.type,
+        counter = parsed.counter,
+        pin = parsed.pin,
         bound = bound,
         boundLoginTitle = if (bound) displayTitle else null,
     )
 }
+
+/** 导入解析结果 → 预填编辑条目（未落库）。 */
+private fun ImportedOtp.toStandaloneEntry(): TotpEntry = TotpEntry(
+    itemId = "",
+    title = issuer.ifBlank { account },
+    issuer = issuer,
+    account = account,
+    label = issuer.ifBlank { account.ifBlank { config.secret.take(TITLE_SECRET_PREVIEW) } },
+    totpRaw = "",
+    secret = config.secret,
+    period = config.period,
+    digits = config.digits,
+    algorithm = config.algorithm,
+    type = config.type,
+    counter = config.counter,
+    pin = config.pin,
+    bound = false,
+    boundLoginTitle = null,
+)
+
+/** 导入解析结果 → 独立验证码条目（Bitwarden 兼容形态，直接落库）。 */
+private fun ImportedOtp.toStandaloneItem(): VaultItem = VaultItem(
+    id = "",
+    title = issuer.ifBlank { account.ifBlank { FALLBACK_TITLE_VALUE } },
+    username = account,
+    password = "",
+    type = VaultItemType.Login,
+    totp = OtpUriParser.buildUri(config, issuer = issuer, account = account),
+)
+
+private const val TITLE_SECRET_PREVIEW = 8
+private const val FALLBACK_TITLE_VALUE = "验证码"
 
 /**
  * 验证码界面的一行数据（已归一化，便于实时计算与展示）。
@@ -201,10 +264,26 @@ data class TotpEntry(
     val period: Int,
     val digits: Int,
     val algorithm: String,
-    val steam: Boolean,
+    val type: OtpType = OtpType.TOTP,
+    val counter: Long = 0,
+    val pin: String = "",
     val bound: Boolean,
     val boundLoginTitle: String?,
 ) {
+    /** 是否为 Steam Guard（type 为 STEAM；保留旧字段便于调用方逐步迁移）。 */
+    val steam: Boolean get() = type == OtpType.STEAM
+
+    /** 还原为可计算的配置（供 [TotpGenerator.generate] 统一入口）。 */
+    fun toConfig(): TotpConfig = TotpConfig(
+        secret = secret,
+        period = period,
+        digits = digits,
+        algorithm = algorithm,
+        type = type,
+        counter = counter,
+        pin = pin,
+    )
+
     companion object {
         /** 空条目（用于「新增独立验证码」对话框的初始态）。 */
         fun empty() = TotpEntry(
@@ -218,7 +297,6 @@ data class TotpEntry(
             period = 30,
             digits = 6,
             algorithm = "SHA1",
-            steam = false,
             bound = false,
             boundLoginTitle = null,
         )
