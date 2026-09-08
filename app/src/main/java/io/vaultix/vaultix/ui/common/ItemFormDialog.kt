@@ -16,6 +16,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
@@ -54,6 +56,7 @@ import io.vaultix.model.VaultCustomField
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
 import io.vaultix.model.VaultLinkedId
+import io.vaultix.model.VaultReprompt
 import io.vaultix.vaultix.R
 
 /**
@@ -101,6 +104,8 @@ fun ItemFormDialog(
     val customFields = rememberSaveable(initial, saver = CUSTOM_FIELD_LIST_SAVER) {
         mutableStateListOf<VaultCustomField>().apply { addAll(initial.customFields) }
     }
+    var favorite by rememberSaveable(initial) { mutableStateOf(initial.favorite) }
+    var reprompt by rememberSaveable(initial) { mutableStateOf(initial.reprompt) }
     var showNameError by rememberSaveable { mutableStateOf(false) }
 
     AlertDialog(
@@ -114,18 +119,12 @@ fun ItemFormDialog(
                     TypePicker(selected = type, onSelect = { type = it })
                     Spacer(Modifier.height(8.dp))
                 }
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it; showNameError = false },
-                    label = { Text(stringResource(R.string.item_field_name)) },
-                    singleLine = true,
-                    isError = showNameError,
-                    supportingText = if (showNameError) {
-                        { Text(stringResource(R.string.item_name_required)) }
-                    } else {
-                        null
-                    },
-                    modifier = Modifier.fillMaxWidth(),
+                NameField(
+                    name = name,
+                    onNameChange = { name = it; showNameError = false },
+                    favorite = favorite,
+                    onFavoriteChange = { favorite = it },
+                    showError = showNameError,
                 )
                 if (type == VaultItemType.SshKey) {
                     Spacer(Modifier.height(4.dp))
@@ -165,6 +164,9 @@ fun ItemFormDialog(
                     minLines = 2,
                     modifier = Modifier.fillMaxWidth(),
                 )
+                // 主密码二次验证（对齐 Bitwarden「附加选项」里的开关）
+                Spacer(Modifier.height(8.dp))
+                RepromptToggle(reprompt = reprompt, onRepromptChange = { reprompt = it })
             }
         },
         confirmButton = {
@@ -188,7 +190,11 @@ fun ItemFormDialog(
                                     cardValues = cardValues.toList(),
                                     identityValues = identityValues.toList(),
                                 ),
-                                meta = ItemMeta(customFields = customFields.toList()),
+                                meta = ItemMeta(
+                                    favorite = favorite,
+                                    reprompt = reprompt,
+                                    customFields = customFields.toList(),
+                                ),
                             ),
                         )
                     }
@@ -212,6 +218,70 @@ private fun SectionLabel(text: String) {
         style = MaterialTheme.typography.labelLarge,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
+}
+
+/** 名称输入 + 收藏星标（对齐 Bitwarden：收藏在标题行右侧）。 */
+@Composable
+private fun NameField(
+    name: String,
+    onNameChange: (String) -> Unit,
+    favorite: Boolean,
+    onFavoriteChange: (Boolean) -> Unit,
+    showError: Boolean,
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        OutlinedTextField(
+            value = name,
+            onValueChange = onNameChange,
+            label = { Text(stringResource(R.string.item_field_name)) },
+            singleLine = true,
+            isError = showError,
+            supportingText = if (showError) {
+                { Text(stringResource(R.string.item_name_required)) }
+            } else {
+                null
+            },
+            modifier = Modifier.weight(1f),
+        )
+        IconButton(onClick = { onFavoriteChange(!favorite) }) {
+            Icon(
+                imageVector = if (favorite) Icons.Filled.Star else Icons.Filled.StarBorder,
+                contentDescription = stringResource(R.string.item_favorite),
+                tint = if (favorite) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+            )
+        }
+    }
+}
+
+/** 主密码二次验证开关（对齐 Bitwarden「附加选项」）。 */
+@Composable
+private fun RepromptToggle(
+    reprompt: VaultReprompt,
+    onRepromptChange: (VaultReprompt) -> Unit,
+) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = stringResource(R.string.item_reprompt),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Text(
+                text = stringResource(R.string.item_reprompt_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Switch(
+            checked = reprompt == VaultReprompt.Password,
+            onCheckedChange = {
+                onRepromptChange(if (it) VaultReprompt.Password else VaultReprompt.None)
+            },
+        )
+    }
 }
 
 /** 新建条目的类型选择：一行可选筹码，选中态即当前类型。 */
