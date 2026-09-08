@@ -55,6 +55,51 @@ data class VaultItem(
      * 只读展示（M1 编辑暂不支持；写回时由 CipherMapper 直接复用服务端原密文，不丢字段）。
      */
     val customFields: List<VaultCustomField> = emptyList(),
+    /**
+     * 所属文件夹（Bitwarden cipher.folderId）。null = 未归类（「无文件夹」）。
+     *
+     * ⚠️ 2026-09-08 补入：此前领域模型缺此字段，导致**拉取时文件夹信息直接丢弃**、
+     * 新建条目也永远落在根目录（上传不带 folderId）。
+     */
+    val folderId: String? = null,
+    /** 是否收藏（Bitwarden cipher.favorite）。 */
+    val favorite: Boolean = false,
+    /**
+     * 主密码二次验证（Bitwarden cipher.reprompt）：
+     * [VaultReprompt.Password] 时查看/自动填充前需再验一次主密码。
+     */
+    val reprompt: VaultReprompt = VaultReprompt.None,
+    /**
+     * 安全笔记载荷（type=SecureNote）。非安全笔记条目恒为 null。
+     * Bitwarden 目前只有通用子类型（0），建模为其载体以便未来扩展。
+     */
+    val secureNote: VaultSecureNote? = null,
+)
+
+/**
+ * 主密码二次验证开关（对齐 Bitwarden cipher.reprompt 0/1）。
+ *
+ * 用枚举而非裸 Int：调用点不会出现 `reprompt = 1` 这类魔法数字，
+ * 与服务端 int 的互转集中在 CipherMapper。
+ */
+@Serializable
+enum class VaultReprompt {
+    /** 0 不要求 */
+    None,
+
+    /** 1 每次查看 / 自动填充前都要求输入主密码 */
+    Password,
+}
+
+/**
+ * 安全笔记载荷（Bitwarden secureNote 段）。
+ *
+ * [type] 为子类型号：目前 Bitwarden 只有 0（通用笔记）。建模成 data class
+ * 而非直接用 Int，是为了将来服务端新增子类型时不用改领域模型签名。
+ */
+@Serializable
+data class VaultSecureNote(
+    val type: Int = 0,
 )
 
 enum class VaultItemType { Login, SecureNote, Card, Identity, SshKey }

@@ -16,6 +16,7 @@ import io.vaultix.data.bitwarden.model.CipherRequest
 import io.vaultix.data.bitwarden.model.Fido2CredentialDto
 import io.vaultix.data.bitwarden.model.IdentityDto
 import io.vaultix.data.bitwarden.model.LoginDto
+import io.vaultix.data.bitwarden.model.SecureNoteDto
 import io.vaultix.data.bitwarden.model.SshKeyDto
 import io.vaultix.data.bitwarden.model.UriDto
 import io.vaultix.model.CustomFieldType
@@ -26,6 +27,8 @@ import io.vaultix.model.VaultFido2Credential
 import io.vaultix.model.VaultIdentity
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
+import io.vaultix.model.VaultReprompt
+import io.vaultix.model.VaultSecureNote
 import io.vaultix.model.VaultSshKey
 import io.vaultix.model.VaultUri
 import java.time.Instant
@@ -104,6 +107,16 @@ class CipherMapper @Inject constructor(
                         )
                     }
                 },
+                // 2026-09-08 补入：此前这四个字段未读取 → 拉取后文件夹/收藏/
+                // 主密码二次验证/安全笔记子类型全部丢失（服务端有，本端内存没有）。
+                folderId = dto.folderId,
+                favorite = dto.favorite,
+                reprompt = mapReprompt(dto.reprompt),
+                secureNote = if (dto.type == TYPE_SECURE_NOTE) {
+                    dto.secureNote?.let { mapSecureNote(it) }
+                } else {
+                    null
+                },
             )
         } finally {
             itemKey?.clear()
@@ -122,23 +135,7 @@ class CipherMapper @Inject constructor(
         type = mapTypeToInt(item.type),
         name = crypto.encryptString(item.title, key),
         notes = item.notes.takeIf { it.isNotBlank() }?.let { crypto.encryptString(it, key) },
-        login = if (item.type == VaultItemType.Login) {
-            LoginDto(
-                username = item.username.takeIf { it.isNotBlank() }?.let { crypto.encryptString(it, key) },
-                password = item.password.takeIf { it.isNotBlank() }?.let { crypto.encryptString(it, key) },
-                uris = item.uris.map { v ->
-                    UriDto(
-                        uri = v.uri.takeIf { it.isNotBlank() }?.let { crypto.encryptString(it, key) },
-                        match = matchToInt(v.match),
-                    )
-                },
-                totp = item.totp?.takeIf { it.isNotBlank() }?.let { crypto.encryptString(it, key) },
-                // 通行密钥：始终绑定在登录条目上（与 Bitwarden 一致），随条目新建一并加密写回
-                fido2Credentials = item.fido2Credentials.map { mapFido2Request(it, key) },
-            )
-        } else {
-            null
-        },
+        login = newLogin(item, key),
         card = if (item.type == VaultItemType.Card) item.card?.let { mapCardRequest(it, key) } else null,
         sshKey = if (item.type == VaultItemType.SshKey) item.sshKey?.let { mapSshKeyRequest(it, key) } else null,
         // 身份信息：type=Identity 时整体加密写回（非身份条目不写 identity 段，防类型漂移）
@@ -147,7 +144,39 @@ class CipherMapper @Inject constructor(
         } else {
             null
         },
+        // 2026-09-08 补入：新建时必须带上，否则条目永远落在根目录/未收藏/
+        // 不二次验证；安全笔记（type=2）也必须带 secureNote 段，服务端才认。
+        folderId = item.folderId,
+        favorite = item.favorite,
+        reprompt = repromptToInt(item.reprompt),
+        secureNote = newSecureNote(item),
     )
+
+    /** 新建条目的 login 段（非 Login 类型不给该段）。 */
+    private fun newLogin(item: VaultItem, key: SymmetricCryptoKey): LoginDto? {
+        if (item.type != VaultItemType.Login) return null
+        return LoginDto(
+            username = item.username.takeIf { it.isNotBlank() }?.let { crypto.encryptString(it, key) },
+            password = item.password.takeIf { it.isNotBlank() }?.let { crypto.encryptString(it, key) },
+            uris = item.uris.map { v ->
+                UriDto(
+                    uri = v.uri.takeIf { it.isNotBlank() }?.let { crypto.encryptString(it, key) },
+                    match = matchToInt(v.match),
+                )
+            },
+            totp = item.totp?.takeIf { it.isNotBlank() }?.let { crypto.encryptString(it, key) },
+            // 通行密钥：始终绑定在登录条目上（与 Bitwarden 一致），随条目新建一并加密写回
+            fido2Credentials = item.fido2Credentials.map { mapFido2Request(it, key) },
+        )
+    }
+
+    /** 新建条目的 secureNote 段：仅 SecureNote 类型，缺省补通用子类型 0。 */
+    private fun newSecureNote(item: VaultItem): SecureNoteDto? =
+        if (item.type == VaultItemType.SecureNote) {
+            item.secureNote?.let { mapSecureNoteRequest(it) } ?: SecureNoteDto()
+        } else {
+            null
+        }
 
     /**
      * 更新用的**合并上传体**（防数据丢失，Bastion 语义：编辑只覆盖可编辑明文，
@@ -172,13 +201,15 @@ class CipherMapper @Inject constructor(
             type = mapTypeToInt(item.type),
             name = crypto.encryptString(item.title, key),
             notes = item.notes.takeIf { it.isNotBlank() }?.let { crypto.encryptString(it, key) },
-            favorite = stored.favorite,
-            folderId = stored.folderId,
-            reprompt = stored.reprompt,
+            // 2026-09-08：改为按**表单意图**写入（此前固定沿用 stored，等于用户在
+            // Vaultix 里根本无法改文件夹 / 收藏 / 主密码二次验证）
+            favorite = item.favorite,
+            folderId = item.folderId,
+            reprompt = repromptToInt(item.reprompt),
             login = overlayLogin(item, stored, key),
             card = overlayCard(item, stored, key),
             identity = overlayIdentity(item, stored, key),
-            secureNote = stored.secureNote,
+            secureNote = overlaySecureNote(item, stored),
             sshKey = overlaySshKey(item, stored, key),
             fields = stored.fields,
         )
@@ -244,6 +275,35 @@ class CipherMapper @Inject constructor(
     } else {
         stored.sshKey
     }
+
+    /**
+     * 安全笔记段：SecureNote 类型按表单子类型写入（缺省补通用子类型 0，
+     * 服务端对 type=2 条目期望有该段）；其余类型沿用服务端原值。
+     */
+    private fun overlaySecureNote(item: VaultItem, stored: CipherDto): SecureNoteDto? =
+        if (item.type == VaultItemType.SecureNote) {
+            item.secureNote?.let { mapSecureNoteRequest(it) } ?: SecureNoteDto()
+        } else {
+            stored.secureNote
+        }
+
+    /** 服务端 reprompt（0/1）→ 领域枚举；未知值按 [VaultReprompt.None] 降级。 */
+    private fun mapReprompt(value: Int): VaultReprompt = when (value) {
+        REPROMPT_PASSWORD -> VaultReprompt.Password
+        else -> VaultReprompt.None
+    }
+
+    /** 领域枚举 → 服务端 reprompt（0/1）。 */
+    private fun repromptToInt(value: VaultReprompt): Int = when (value) {
+        VaultReprompt.Password -> REPROMPT_PASSWORD
+        VaultReprompt.None -> REPROMPT_NONE
+    }
+
+    /** 服务端 secureNote 段 → 领域模型（仅子类型号，无需解密）。 */
+    private fun mapSecureNote(dto: SecureNoteDto): VaultSecureNote = VaultSecureNote(type = dto.type)
+
+    /** 领域模型 → 服务端 secureNote 段。 */
+    private fun mapSecureNoteRequest(note: VaultSecureNote): SecureNoteDto = SecureNoteDto(type = note.type)
 
     /** 领域类型 → 服务端 type 号（写路径类型守恒校验用）。 */
     fun serverTypeOf(type: VaultItemType): Int = mapTypeToInt(type)
@@ -468,6 +528,9 @@ class CipherMapper @Inject constructor(
         const val TYPE_CARD = 3
         const val TYPE_IDENTITY = 4
         const val TYPE_SSH_KEY = 5
+        // 主密码二次验证（cipher.reprompt）
+        const val REPROMPT_NONE = 0
+        const val REPROMPT_PASSWORD = 1
         const val TYPE_URI_MATCH_DOMAIN = 0
         const val TYPE_URI_MATCH_HOST = 1
         const val TYPE_URI_MATCH_STARTS_WITH = 2

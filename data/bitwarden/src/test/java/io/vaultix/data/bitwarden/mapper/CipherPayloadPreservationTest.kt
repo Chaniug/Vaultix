@@ -20,6 +20,7 @@ import io.vaultix.model.VaultFido2Credential
 import io.vaultix.model.VaultIdentity
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
+import io.vaultix.model.VaultReprompt
 import io.vaultix.model.VaultUri
 import kotlinx.coroutines.Dispatchers
 import org.junit.Assert.assertEquals
@@ -284,5 +285,101 @@ class CipherPayloadPreservationTest {
         // 非本类型的 card / sshKey 段原样保留，绝不顺手清空
         assertEquals("enc:keep-me", request.card!!.number)
         assertEquals("enc:keep-pub", request.sshKey!!.publicKey)
+    }
+
+    // ---- 文件夹 / 收藏 / 主密码二次验证 / 安全笔记子类型（2026-09-08 补入）----
+    // 背景：这四个字段此前**未进领域模型** → 拉取时直接丢弃、新建时不上传、
+    // 编辑时固定沿用 stored（等于用户在 Vaultix 里根本无法修改）。
+
+    @Test
+    fun toDomainReadsFolderFavoriteAndReprompt() {
+        val item = mapper.toDomain(
+            CipherDto(
+                id = "c1",
+                type = 1,
+                name = crypto.encryptString("条目", accountKey),
+                folderId = "folder-abc",
+                favorite = true,
+                reprompt = 1,
+            ),
+            accountKey,
+        )
+        assertEquals("folder-abc", item.folderId)
+        assertEquals(true, item.favorite)
+        assertEquals(VaultReprompt.Password, item.reprompt)
+    }
+
+    @Test
+    fun toDomainReadsSecureNoteSubtype() {
+        val item = mapper.toDomain(
+            CipherDto(
+                id = "sn",
+                type = 2,
+                name = crypto.encryptString("笔记", accountKey),
+                secureNote = SecureNoteDto(type = 0),
+            ),
+            accountKey,
+        )
+        assertEquals(VaultItemType.SecureNote, item.type)
+        assertEquals(0, item.secureNote?.type)
+    }
+
+    @Test
+    fun toRequestWritesFolderFavoriteRepromptAndSecureNote() {
+        val loginRequest = mapper.toRequest(
+            item = VaultItem(
+                id = "",
+                title = "新条目",
+                type = VaultItemType.Login,
+                folderId = "folder-1",
+                favorite = true,
+                reprompt = VaultReprompt.Password,
+            ),
+            key = accountKey,
+        )
+        assertEquals("folder-1", loginRequest.folderId)
+        assertEquals(true, loginRequest.favorite)
+        assertEquals(1, loginRequest.reprompt)
+
+        // 安全笔记：即使领域模型没显式给子类型，也要补上通用子类型 0，
+        // 否则服务端收到 type=2 却没有 secureNote 段，形态不完整。
+        val noteRequest = mapper.toRequest(
+            item = VaultItem(id = "", title = "笔记", type = VaultItemType.SecureNote),
+            key = accountKey,
+        )
+        assertEquals(2, noteRequest.type)
+        assertEquals(0, noteRequest.secureNote?.type)
+    }
+
+    @Test
+    fun updateWritesEditedFolderFavoriteAndReprompt() {
+        val stored = CipherDto(
+            id = "c1",
+            type = 1,
+            name = crypto.encryptString("旧名", accountKey),
+            folderId = "old-folder",
+            favorite = false,
+            reprompt = 0,
+            login = LoginDto(username = crypto.encryptString("u", accountKey)),
+        )
+
+        val request = mapper.toUpdateRequest(
+            item = VaultItem(
+                id = "c1",
+                title = "新名",
+                type = VaultItemType.Login,
+                username = "u",
+                folderId = "new-folder", // 用户改了文件夹
+                favorite = true, // 用户收藏了
+                reprompt = VaultReprompt.Password, // 用户开了主密码二次验证
+            ),
+            stored = stored,
+            key = accountKey,
+        )
+
+        // 关键：必须是表单的新值，不能沿用 stored 的旧值
+        assertEquals("new-folder", request.folderId)
+        assertEquals(true, request.favorite)
+        assertEquals(1, request.reprompt)
     }
 }
