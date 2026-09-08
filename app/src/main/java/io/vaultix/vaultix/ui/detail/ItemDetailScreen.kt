@@ -66,11 +66,13 @@ import io.vaultix.model.VaultFido2Credential
 import io.vaultix.model.VaultIdentity
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
+import io.vaultix.model.VaultLinkedId
 import io.vaultix.model.VaultSshKey
 import io.vaultix.model.VaultUri
 import kotlinx.coroutines.delay
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.ItemFormDialog
+import io.vaultix.vaultix.ui.common.LINKED_FIELD_LABELS
 import io.vaultix.vaultix.ui.common.itemTypeLabelRes
 import android.content.Context
 
@@ -121,12 +123,6 @@ private const val MAX_MASK_LENGTH = 24
 /** 隐藏型自定义字段未展开时的掩码长度上下限。 */
 private const val HIDDEN_MASK_MIN = 6
 private const val HIDDEN_MASK_MAX = 24
-
-/** Bitwarden 关联字段编号（linkedId）常见值。 */
-private const val LINKED_ID_USERNAME = 1
-private const val LINKED_ID_PASSWORD = 2
-private const val LINKED_ID_URI = 3
-private const val LINKED_ID_NOTES = 4
 
 /**
  * 详情区的复制动作集合。
@@ -798,14 +794,12 @@ private fun CustomFieldRow(field: VaultCustomField, onCopy: () -> Unit) {
     }
 }
 
-/** Bitwarden 关联字段编号 → 标准字段名（仅覆盖常见编号，未知返回 null）。 */
+
+/** 关联字段编号 → 标准字段名（按 Bitwarden 官方分段编码；未知返回 null）。 */
 @Composable
-private fun linkedFieldName(linkedId: Int?): String? = when (linkedId) {
-    LINKED_ID_USERNAME -> stringResource(R.string.linked_username)
-    LINKED_ID_PASSWORD -> stringResource(R.string.linked_password)
-    LINKED_ID_URI -> stringResource(R.string.linked_uri)
-    LINKED_ID_NOTES -> stringResource(R.string.section_notes)
-    else -> null
+private fun linkedFieldName(linkedId: Int?): String? {
+    val id = VaultLinkedId.fromCode(linkedId) ?: return null
+    return LINKED_FIELD_LABELS[id]?.let { stringResource(it) }
 }
 
 /** 目标 Android 应用是否已安装（用于给 androidapp:// URI 显示「打开」按钮）。 */
