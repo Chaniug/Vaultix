@@ -158,6 +158,7 @@ data class CustomFieldDto(
     @SerialName("name") val name: String? = null,
     @SerialName("value") val value: String? = null,
     @SerialName("type") val type: Int = 0,
+    @SerialName("linkedId") val linkedId: Int? = null,
 )
 
 @Serializable

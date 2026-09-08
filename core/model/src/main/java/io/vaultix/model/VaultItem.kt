@@ -8,7 +8,8 @@ import kotlinx.serialization.Serializable
  *
  * ⚠️ 明文承载：仅存在于已解锁的内存中，禁止落盘、禁止进日志（Docs/09）。
  * [password] 于 2026-09-08 补入（M1 UI 新建条目需要）；[uris]/[totp]/[fido2Credentials]
- * 于本轮补入（对齐 Bitwarden 登录条目字段，修复「验证码/通行密钥读不到」）。
+ * 于本轮补入（对齐 Bitwarden 登录条目字段，修复「验证码/通行密钥读不到」）；
+ * [customFields] 于本轮补入（修复「密码条里的自定义条目不显示」）。
  * 补字段必须同步补 Mapper（CipherMapper 与未来的 KDBX Mapper），见 MEMORY「保真度三级」约定。
  */
 @Serializable
@@ -39,6 +40,12 @@ data class VaultItem(
      * 字段对齐 Bitwarden sshKey 载荷；私钥/公钥/指纹只读展示。
      */
     val sshKey: VaultSshKey? = null,
+    /**
+     * 自定义字段（Bitwarden cipher.fields，可多值，顺序即服务端顺序）。
+     * 类型对齐 Bitwarden：Text / Hidden / Boolean / Linked（见 [CustomFieldType]）。
+     * 只读展示（M1 编辑暂不支持；写回时由 CipherMapper 直接复用服务端原密文，不丢字段）。
+     */
+    val customFields: List<VaultCustomField> = emptyList(),
 )
 
 enum class VaultItemType { Login, SecureNote, Card, Identity, SshKey }
@@ -133,3 +140,47 @@ data class VaultSshKey(
     /** 指纹（keyFingerprint）。 */
     val keyFingerprint: String = "",
 )
+
+/**
+ * 自定义字段（Bitwarden cipher.fields，解密后明文；只读展示）。
+ *
+ * ⚠️ 明文承载：仅存在于已解锁的内存中，禁止落盘、禁止进日志（Docs/09）。
+ *
+ * 字段语义对齐 Bitwarden cipher.fields：
+ * - [name]：字段名（解密后的明文）；
+ * - [value]：字段值（解密后的明文；[CustomFieldType.Boolean] 时为 `"true"`/`"false"`，
+ *   [CustomFieldType.Linked] 时为 [linkedId] 的引用，需经 [CustomFieldType] 映射展示）；
+ * - [type]：字段类型，决定展示形态（隐藏/布尔/链接）；
+ * - [linkedId]：仅 [CustomFieldType.Linked] 有效，指向标准字段（如用户名/密码/网址）的编号。
+ *
+ * 注：Bastion 的等价概念为 `data/CustomField.kt`（title/value/isProtected），
+ * 但 Vaultix 以 Bitwarden 的 `type/linkedId` 四态模型为规范（canonical），与 KDBX 映射时
+ * 再降级为「名称+值+是否敏感」三态。溯源：GPL-3.0，Bastion 同理。
+ */
+@Serializable
+data class VaultCustomField(
+    /** 字段名（解密后明文）。 */
+    val name: String = "",
+    /** 字段值（解密后明文）。 */
+    val value: String = "",
+    /** 字段类型，决定展示形态。默认 Text。 */
+    val type: CustomFieldType = CustomFieldType.Text,
+    /** 链接字段指向的标准字段编号（仅 Linked 类型有效）。 */
+    val linkedId: Int? = null,
+)
+
+/** 自定义字段类型（对齐 Bitwarden cipher.fields[i].type）。 */
+@Serializable
+enum class CustomFieldType {
+    /** 0 普通文本。 */
+    Text,
+
+    /** 1 隐藏（如密保答案/API Key），展示时默认掩码，仅可复制。 */
+    Hidden,
+
+    /** 2 布尔（解密后值为 `"true"`/`"false"`）。 */
+    Boolean,
+
+    /** 3 链接标准字段（value 为 linkedId 引用，展示为对应标准字段名）。 */
+    Linked,
+}

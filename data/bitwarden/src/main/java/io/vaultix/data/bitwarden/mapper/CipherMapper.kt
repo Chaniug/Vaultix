@@ -17,8 +17,10 @@ import io.vaultix.data.bitwarden.model.Fido2CredentialDto
 import io.vaultix.data.bitwarden.model.LoginDto
 import io.vaultix.data.bitwarden.model.SshKeyDto
 import io.vaultix.data.bitwarden.model.UriDto
+import io.vaultix.model.CustomFieldType
 import io.vaultix.model.UriMatch
 import io.vaultix.model.VaultCard
+import io.vaultix.model.VaultCustomField
 import io.vaultix.model.VaultFido2Credential
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
@@ -78,6 +80,20 @@ class CipherMapper @Inject constructor(
                     dto.sshKey?.let { mapSshKey(it, key, itemKey) }
                 } else {
                     null
+                },
+                // 自定义字段：name/value 解密；type/linkedId 原样承载（只读展示，写回复用原密文）
+                customFields = dto.fields.mapNotNull { f ->
+                    val name = decryptToString(f.name, key, itemKey)
+                    if (name.isBlank() && decryptToString(f.value, key, itemKey).isBlank()) {
+                        null
+                    } else {
+                        VaultCustomField(
+                            name = name,
+                            value = decryptToString(f.value, key, itemKey),
+                            type = mapCustomFieldType(f.type),
+                            linkedId = f.linkedId,
+                        )
+                    }
                 },
             )
         } finally {
@@ -224,6 +240,14 @@ class CipherMapper @Inject constructor(
         VaultItemType.SshKey -> TYPE_SSH_KEY
     }
 
+    /** Bitwarden cipher.fields[i].type（0/1/2/3）→ 领域类型。未知值降级 Text。 */
+    private fun mapCustomFieldType(type: Int): CustomFieldType = when (type) {
+        TYPE_FIELD_HIDDEN -> CustomFieldType.Hidden
+        TYPE_FIELD_BOOLEAN -> CustomFieldType.Boolean
+        TYPE_FIELD_LINKED -> CustomFieldType.Linked
+        else -> CustomFieldType.Text
+    }
+
     private fun matchOf(match: Int?): UriMatch? = when (match) {
         TYPE_URI_MATCH_DOMAIN -> UriMatch.Domain
         TYPE_URI_MATCH_HOST -> UriMatch.Host
@@ -341,6 +365,9 @@ class CipherMapper @Inject constructor(
         const val TYPE_URI_MATCH_STARTS_WITH = 2
         const val TYPE_URI_MATCH_EXACT = 3
         const val TYPE_URI_MATCH_REGEX = 4
+        const val TYPE_FIELD_HIDDEN = 1
+        const val TYPE_FIELD_BOOLEAN = 2
+        const val TYPE_FIELD_LINKED = 3
         // 通行密钥字段默认值（对齐 Bitwarden login.fido2Credentials）
         const val KEY_TYPE_PUBLIC = "public-key"
         const val KEY_ALGORITHM_ECDSA = "ECDSA"

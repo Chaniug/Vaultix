@@ -276,7 +276,7 @@ private fun TotpRow(
         Column(modifier = Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = entry.label.ifBlank { stringResource(R.string.totp_screen_title) },
+                    text = entry.title.ifBlank { stringResource(R.string.totp_screen_title) },
                     style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.weight(1f),
                     maxLines = 1,
@@ -284,7 +284,7 @@ private fun TotpRow(
                 )
                 Badge(entry.bound)
             }
-            if (entry.account.isNotBlank() && entry.account != entry.label) {
+            if (entry.account.isNotBlank()) {
                 Text(
                     text = entry.account,
                     style = MaterialTheme.typography.bodySmall,

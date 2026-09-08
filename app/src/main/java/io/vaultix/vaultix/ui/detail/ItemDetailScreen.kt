@@ -57,7 +57,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import io.vaultix.common.OtpUriParser
 import io.vaultix.common.TotpConfig
 import io.vaultix.common.TotpGenerator
+import io.vaultix.common.UriFormat
+import io.vaultix.common.UriKind
+import io.vaultix.model.CustomFieldType
 import io.vaultix.model.VaultCard
+import io.vaultix.model.VaultCustomField
 import io.vaultix.model.VaultFido2Credential
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
@@ -112,6 +116,16 @@ private fun detailEventMessage(context: Context, event: ItemDetailViewModel.UiEv
 
 /** 掩码星号数量上限（密码过长时截断显示，复制不受影响）。 */
 private const val MAX_MASK_LENGTH = 24
+
+/** 隐藏型自定义字段未展开时的掩码长度上下限。 */
+private const val HIDDEN_MASK_MIN = 6
+private const val HIDDEN_MASK_MAX = 24
+
+/** Bitwarden 关联字段编号（linkedId）常见值。 */
+private const val LINKED_ID_USERNAME = 1
+private const val LINKED_ID_PASSWORD = 2
+private const val LINKED_ID_URI = 3
+private const val LINKED_ID_NOTES = 4
 
 /** 详情内容区：忙碌转圈 / 缺失提示 / 分区卡片（独立以便控制主 Composable 圈复杂度）。 */
 @Composable
@@ -181,6 +195,10 @@ private fun DetailBodyContent(
                 if (item.sshKey != null) {
                     Spacer(Modifier.height(12.dp))
                     SshKeySection(item = item, onCopyField = onCopyField)
+                }
+                if (item.customFields.isNotEmpty()) {
+                    Spacer(Modifier.height(12.dp))
+                    CustomFieldsSection(item = item, onCopyField = onCopyField)
                 }
                 if (item.notes.isNotBlank()) {
                     Spacer(Modifier.height(12.dp))
@@ -463,14 +481,21 @@ private fun UrisSection(item: VaultItem, onCopyUri: (String) -> Unit) {
                             color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
                         )
                     }
+                    val kind = UriFormat.classify(v.uri)
+                    val canOpen = when (kind) {
+                        is UriKind.Website -> true
+                        is UriKind.AndroidApp -> isAppInstalled(context, kind.packageName)
+                        is UriKind.Other -> false
+                    }
                     UriRow(
-                        uri = v.uri,
+                        kind = kind,
+                        canOpen = canOpen,
                         onCopy = { onCopyUri(v.uri) },
                         onOpen = {
-                            if (v.uri.startsWith("http://", ignoreCase = true) ||
-                                v.uri.startsWith("https://", ignoreCase = true)
-                            ) {
-                                openUri(context, v.uri)
+                            when (kind) {
+                                is UriKind.Website -> openUri(context, kind.raw)
+                                is UriKind.AndroidApp -> launchAndroidApp(context, kind.packageName)
+                                is UriKind.Other -> { }
                             }
                         },
                     )
@@ -480,27 +505,50 @@ private fun UrisSection(item: VaultItem, onCopyUri: (String) -> Unit) {
     }
 }
 
+/**
+ * 单个 URI 行：[UriKind] 决定展示形态：
+ * - [UriKind.AndroidApp]：显示「应用」标签 + 包名，已安装才出现打开按钮；
+ * - [UriKind.Website]：显示原始网址，点击在浏览器打开；
+ * - [UriKind.Other]：原样展示，无打开动作。
+ */
 @Composable
-private fun UriRow(uri: String, onCopy: () -> Unit, onOpen: () -> Unit) {
+private fun UriRow(kind: UriKind, canOpen: Boolean, onCopy: () -> Unit, onOpen: () -> Unit) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
             .padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
     ) {
-        Text(
-            text = uri,
-            style = MaterialTheme.typography.bodyLarge,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f).padding(end = 4.dp),
-        )
-        IconButton(onClick = onOpen) {
-            Icon(
-                Icons.Filled.Public,
-                contentDescription = stringResource(R.string.item_open_uri),
-                modifier = Modifier.size(18.dp),
-            )
+        Column(modifier = Modifier.weight(1f).padding(end = 4.dp)) {
+            if (kind is UriKind.AndroidApp) {
+                Text(
+                    text = stringResource(R.string.uri_type_android_app),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = kind.packageName,
+                    style = MaterialTheme.typography.bodyLarge,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            } else {
+                Text(
+                    text = kind.raw,
+                    style = MaterialTheme.typography.bodyLarge,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        if (canOpen) {
+            IconButton(onClick = onOpen) {
+                Icon(
+                    Icons.Filled.Public,
+                    contentDescription = stringResource(R.string.item_open_uri),
+                    modifier = Modifier.size(18.dp),
+                )
+            }
         }
         IconButton(onClick = onCopy) {
             Icon(
@@ -642,6 +690,111 @@ private fun PasskeysSection(creds: List<VaultFido2Credential>) {
 private fun openUri(context: Context, uri: String) {
     runCatching {
         context.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(uri)))
+    }
+}
+
+/** 自定义字段分区（只读展示；Bitwarden cipher.fields 对齐）。 */
+@Composable
+private fun CustomFieldsSection(item: VaultItem, onCopyField: (String) -> Unit) {
+    Column {
+        SectionTitle(text = stringResource(R.string.section_custom_fields))
+        Card(
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(modifier = Modifier.padding(vertical = 8.dp)) {
+                item.customFields.forEachIndexed { index, field ->
+                    if (index > 0) {
+                        HorizontalDivider(
+                            modifier = Modifier.padding(start = 16.dp),
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                        )
+                    }
+                    CustomFieldRow(field = field, onCopy = { onCopyField(field.value) })
+                }
+            }
+        }
+    }
+}
+
+/** 单行自定义字段：按类型展示（隐藏默认掩码可点开、布尔显示是/否、链接显示关联字段名）。 */
+@Composable
+private fun CustomFieldRow(field: VaultCustomField, onCopy: () -> Unit) {
+    var revealHidden by remember(field.name) { mutableStateOf(false) }
+    val displayValue = when (field.type) {
+        CustomFieldType.Boolean -> stringResource(
+            if (field.value.equals("true", ignoreCase = true)) {
+                R.string.custom_field_boolean_yes
+            } else {
+                R.string.custom_field_boolean_no
+            },
+        )
+        CustomFieldType.Linked -> {
+            val linkedName = linkedFieldName(field.linkedId)
+            linkedName ?: field.value.takeIf { it.isNotBlank() }
+                ?: stringResource(R.string.custom_field_linked_unknown, field.linkedId ?: 0)
+        }
+        CustomFieldType.Hidden -> if (revealHidden) {
+            field.value
+        } else {
+            "•".repeat(field.value.length.coerceAtLeast(HIDDEN_MASK_MIN).coerceAtMost(HIDDEN_MASK_MAX))
+        }
+        else -> field.value
+    }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
+    ) {
+        Column(modifier = Modifier.weight(1f).padding(end = 4.dp)) {
+            Text(
+                text = field.name.ifBlank { stringResource(R.string.custom_field_unnamed) },
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = displayValue,
+                style = MaterialTheme.typography.bodyLarge,
+                maxLines = if (field.type == CustomFieldType.Hidden && !revealHidden) 1 else 3,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        if (field.type == CustomFieldType.Hidden) {
+            IconButton(onClick = { revealHidden = !revealHidden }) {
+                Icon(
+                    imageVector = if (revealHidden) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+        }
+        IconButton(onClick = onCopy) {
+            Icon(Icons.Filled.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp))
+        }
+    }
+}
+
+/** Bitwarden 关联字段编号 → 标准字段名（仅覆盖常见编号，未知返回 null）。 */
+@Composable
+private fun linkedFieldName(linkedId: Int?): String? = when (linkedId) {
+    LINKED_ID_USERNAME -> stringResource(R.string.linked_username)
+    LINKED_ID_PASSWORD -> stringResource(R.string.linked_password)
+    LINKED_ID_URI -> stringResource(R.string.linked_uri)
+    LINKED_ID_NOTES -> stringResource(R.string.section_notes)
+    else -> null
+}
+
+/** 目标 Android 应用是否已安装（用于给 androidapp:// URI 显示「打开」按钮）。 */
+private fun isAppInstalled(context: Context, packageName: String): Boolean =
+    runCatching { context.packageManager.getLaunchIntentForPackage(packageName) != null }
+        .getOrDefault(false)
+
+/** 启动已安装的 Android 应用（androidapp://<package> 的打开动作）。 */
+private fun launchAndroidApp(context: Context, packageName: String) {
+    runCatching {
+        val intent = context.packageManager.getLaunchIntentForPackage(packageName)
+        if (intent != null) context.startActivity(intent)
     }
 }
 

@@ -71,6 +71,7 @@ class TotpCodesViewModel @Inject constructor(
             .mapNotNull { it.toTotpEntry() }
             .filter { e ->
                 q.isEmpty() ||
+                    e.title.lowercase().contains(q) ||
                     e.issuer.lowercase().contains(q) ||
                     e.account.lowercase().contains(q) ||
                     e.label.lowercase().contains(q)
@@ -160,11 +161,19 @@ fun VaultItem.toTotpEntry(): TotpEntry? {
     val raw = totp ?: return null
     val parsed = OtpUriParser.parseToDisplay(raw) ?: return null
     val bound = username.isNotBlank() || password.isNotBlank()
+    // 对齐 Bastion TotpDataResolver.fromAuthenticatorKey：otpauth 解析出的 issuer/account
+    // 为空时，回退到密码条目的名称（标题）与用户名（账号）。Bitwarden 的 login.totp
+    // 常以裸 base32 密钥存储（无 issuer/account），此时必须以条目名/用户名兜底，
+    // 否则验证码界面只剩一串密钥前缀、看不到「这是哪个网站的验证码」。
+    val displayTitle = title.ifBlank { parsed.issuer.ifBlank { parsed.label } }
+    val displayAccount = username.ifBlank {
+        parsed.account.ifBlank { if (parsed.issuer != displayTitle) parsed.issuer else "" }
+    }
     return TotpEntry(
         itemId = id,
-        title = title,
+        title = displayTitle,
         issuer = parsed.issuer,
-        account = parsed.account,
+        account = displayAccount,
         label = parsed.label,
         totpRaw = raw,
         secret = parsed.secret,
@@ -173,7 +182,7 @@ fun VaultItem.toTotpEntry(): TotpEntry? {
         algorithm = parsed.algorithm,
         steam = parsed.steam,
         bound = bound,
-        boundLoginTitle = if (bound) title else null,
+        boundLoginTitle = if (bound) displayTitle else null,
     )
 }
 

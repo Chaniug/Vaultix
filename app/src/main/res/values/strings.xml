@@ -210,6 +210,17 @@
     <string name="ssh_public_key">公钥</string>
     <string name="ssh_fingerprint">指纹</string>
 
+    <!-- 自定义字段（Bitwarden cipher.fields） -->
+    <string name="section_custom_fields">自定义字段</string>
+    <string name="custom_field_unnamed">未命名字段</string>
+    <string name="custom_field_boolean_yes">是</string>
+    <string name="custom_field_boolean_no">否</string>
+    <string name="custom_field_linked_unknown">关联字段 #%1$d</string>
+    <string name="uri_type_android_app">应用</string>
+    <string name="linked_username">用户名</string>
+    <string name="linked_password">密码</string>
+    <string name="linked_uri">网址</string>
+
     <!-- 通用字段复制提示 -->
     <string name="copy_field">已复制</string>
     <string name="copy_field_clears">已复制（%1$d 秒后自动清除）</string>
