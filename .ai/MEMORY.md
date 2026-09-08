@@ -441,3 +441,31 @@ FlowRow+FilterChip）；`buildSnapshot` 改用**当前 type**（否则选「银�
 （ML Kit bundled 依赖 GMS，国内必然踩坑）；③ QR 是 ISO 固定标准，解码内核成熟
 （相机层用现代 CameraX，不算过时）。
 
+## 剩余 P0 全部完成（2026-09-08 本轮）
+- **自定义字段 4 类型编辑器**：Mapper 的 `fields` 从「沿用 stored」改为**按表单意图**
+  写回；UI 支持文本/隐藏/布尔/链接（Boolean=开关存 "true"/"false"、Hidden=掩码可显隐、
+  Linked=下拉选官方 linkedId）。⚠️ 改行为时两个旧用例失败（它们断言旧的「沿用
+  stored」），已更新为验证「UI 原样带回 → 明文往返不变」。
+- **收藏 + 主密码二次验证 UI**：数据层上一轮已就绪，本轮接上（标题行星标 + 底部开关）。
+- **TOTP 相机扫码**（CameraX + ZXing）+ **单测 20 例**（app 15 + core:model 5）。
+
+**Detekt 两个技巧**：① `catch (ignored: X)` 可放行 SwallowedException /
+TooGenericExceptionCaught（变量名匹配 allowedExceptionNameRegex）；
+② enum 位置参数算 MagicNumber，改**命名参数** `LoginUsername(code = 100)` 即放行。
+
+## linkedId 官方分段编码（真 bug，用户「去 Bitwarden 官方找」后抓到）
+Vaultix 原把 linkedId 当顺序编号（1/2/3/4），**官方是分段编码**：
+登录 100 段、银行卡 300 段、身份 400 段（100=Username…305=Number…418=FullName）。
+→ `linkedId=100` 匹配不到，Linked 字段退化成「未知关联字段」。
+已新增 `VaultLinkedId` 枚举 + `CustomFieldLabels.kt`（用 Map，27 个 when 会撑爆复杂度）。
+> **以后对齐字段优先查 Bitwarden 官方**（bitwarden/clients / 官方 SDK），
+> 不要只看 Bastion——Bastion 自定义字段只有 3 态，且 folder/favorite 绕了自己的中间字段。
+
+## TOTP 扫码实现要点
+用**全屏 Dialog 内嵌相机**而非跳独立页（结果直接回填 totp，**不丢已填内容**；
+导航方案会因 AppNavGraph 是 internal + 表单状态被重置而不可行）。
+`AtomicBoolean` 保证只回调一次；只取 Y 平面拼 NV21（ZXing 只读 Y）。
+
+**仍未做**：文件夹下拉——`folders` 表有，但 domain/repository **没有读取接口**，
+需先新增 `observeFolders`（要解密 encryptedName）。
+
