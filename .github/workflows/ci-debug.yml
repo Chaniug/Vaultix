@@ -41,6 +41,7 @@ on:
       - 'gradle/**'
       - 'gradlew'
       - 'gradlew.bat'
+      - '.github/scripts/**'
       - '.github/workflows/ci-debug.yml'
       - 'config/**'
   workflow_dispatch:
@@ -109,6 +110,14 @@ jobs:
       # AGP/Worker API 与配置缓存的兼容坑（见上一条 lint 注释）。
       - name: Run detekt (quality gate)
         run: ./gradlew detekt --stacktrace --no-configuration-cache
+
+      # 源文件编码门禁（2026-09-08 加）：拦住中文注释乱码「静默入库」。
+      # 事故背景：BitwardenAuthRepository.kt 曾整文件被写坏——UTF-8 字节被按 GBK
+      # 误读后再次存盘，且三字节序列的尾字节被 0x3F 替换（有损，无法自动还原）。
+      # 编译与测试都不检查注释，损坏因此悄悄进了仓库，直到人工阅读才发现。
+      # 脚本判据经过校准，不会把「为」「状态」「值」等正常中文误判为乱码。
+      - name: Check source encoding (UTF-8 / mojibake gate)
+        run: python3 "$GITHUB_WORKSPACE/.github/scripts/check-encoding.py" "$GITHUB_WORKSPACE"
 
       # push 时注入仓库固定签名，使 preview(debug) 与 stable release 签名完全一致、可互相覆盖安装。
       # 注意：本步骤与 release.yml 使用同一套 SIGNING_* Secret，密码也复用 Secret（不再硬编码 android），
