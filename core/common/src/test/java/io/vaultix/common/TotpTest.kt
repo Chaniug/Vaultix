@@ -115,4 +115,51 @@ class TotpTest {
         )
         assertEquals("SHA256", config?.algorithm)
     }
+
+    // ---- Steam Guard ----
+
+    // Steam 共享密钥为 Base64（非 Base32）；取自 RFC 风格 20 字节密钥的 Base64 形式。
+    private val steamSecretB64 = "MTIzNDU2Nzg5MDEyMzQ1Njc4OTA="
+
+    @Test
+    fun generateSteamTotpKnownVectors() {
+        // 与独立参考实现（HMAC-SHA1 / 25 字符字母表 / 5 位）一致
+        assertEquals("PV9M4", TotpGenerator.generateSteamTotp(steamSecretB64, timeSeconds = 59))
+        assertEquals(
+            "PY4YB",
+            TotpGenerator.generateSteamTotp(steamSecretB64, timeSeconds = 1_111_111_109L),
+        )
+    }
+
+    @Test
+    fun parseOtpAuthDetectsSteamByIssuer() {
+        val config = OtpUriParser.parse(
+            "otpauth://totp/Steam:alice?secret=$steamSecretB64&issuer=Steam",
+        )
+        assertEquals(true, config?.steam)
+        assertEquals(STEAM_DIGITS_EXPECTED, config?.digits)
+        assertEquals(30, config?.period)
+    }
+
+    @Test
+    fun parseToDisplaySteamExposesIssuerAndAccount() {
+        val parsed = OtpUriParser.parseToDisplay(
+            "otpauth://totp/Steam:alice?secret=$steamSecretB64&issuer=Steam",
+        )
+        assertEquals(true, parsed?.steam)
+        assertEquals("Steam", parsed?.issuer)
+        assertEquals("alice", parsed?.account)
+        assertEquals("Steam", parsed?.label)
+    }
+
+    @Test
+    fun parseBareSecretYieldsDefaultTotpNotSteam() {
+        val parsed = OtpUriParser.parseToDisplay("JBSWY3DPEHPK3PXP")
+        assertEquals(false, parsed?.steam)
+        assertEquals("JBSWY3DPEHPK3PXP", parsed?.secret)
+    }
+
+    private companion object {
+        const val STEAM_DIGITS_EXPECTED = 5
+    }
 }

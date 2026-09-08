@@ -24,6 +24,7 @@ import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
 import io.vaultix.model.VaultSshKey
 import io.vaultix.model.VaultUri
+import java.time.Instant
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -107,7 +108,8 @@ class CipherMapper @Inject constructor(
                     )
                 },
                 totp = item.totp?.takeIf { it.isNotBlank() }?.let { crypto.encryptString(it, key) },
-                fido2Credentials = emptyList(),
+                // 通行密钥：始终绑定在登录条目上（与 Bitwarden 一致），随条目新建一并加密写回
+                fido2Credentials = item.fido2Credentials.map { mapFido2Request(it, key) },
             )
         } else {
             null
@@ -121,8 +123,9 @@ class CipherMapper @Inject constructor(
      * 未编辑段沿用服务端原密文，绝不整条重写）：
      *
      * - name/notes 用表单明文重新加密；
-     * - login 条目的 username/password 重新加密，**uri/totp/fido2Credentials/
-     *   passwordRevisionDate 原密文保留**；
+     * - login 条目的 username/password/uri/totp/fido2Credentials 全部按表单意图重新加密
+     *   （[VaultItem.fido2Credentials] 已包含服务端原值，保存流程即通过替换该列表来
+     *   新增/删除「绑定到本登录条目的通行密钥」；passwordRevisionDate 原密文保留）；
      * - card/identity/secureNote/sshKey/fields 段原样并入（Vaultix M1 不编辑它们，
      *   但必须随更新请求提交，否则服务端会清空这些载荷）；
      * - 条目独立密钥（per-item key）与本方法无关：保留段直接复用服务端密文，
@@ -146,8 +149,9 @@ class CipherMapper @Inject constructor(
                     )
                 },
                 totp = item.totp?.takeIf { it.isNotBlank() }?.let { crypto.encryptString(it, key) },
-                // fido2Credentials：只读、客户端不创建，原样保留服务端密文，绝不重写/丢弃
-                fido2Credentials = storedLogin.fido2Credentials,
+                // fido2Credentials：领域模型已加载全部凭证（含服务端原值），按表单意图完整重加密。
+                // 保存流程（新增/删除通行密钥）正是通过替换此处列表实现「绑定到登录条目」。
+                fido2Credentials = item.fido2Credentials.map { mapFido2Request(it, key) },
             )
         } else {
             null
@@ -290,6 +294,31 @@ class CipherMapper @Inject constructor(
         code = encryptOpt(card.code, key),
     )
 
+    /**
+     * 领域模型通行密钥 → 上传密文体（逐字段加密）。
+     *
+     * - [VaultFido2Credential.keyType]/[VaultFido2Credential.keyCurve]/[VaultFido2Credential.keyAlgorithm]
+     *   有默认值（public-key / P-256 / ECDSA），落库后与 Bitwarden 官方字段一致；
+     * - [VaultFido2Credential.creationDate] **不加密**：Bitwarden 期望可解析的 DateTime 形态
+     *   （与 Bastion Fido2CredentialCodec 约定一致），故直接以明文写入。
+     */
+    private fun mapFido2Request(c: VaultFido2Credential, key: SymmetricCryptoKey): Fido2CredentialDto =
+        Fido2CredentialDto(
+            credentialId = encryptOpt(c.credentialId, key),
+            keyType = encryptOpt(c.keyType ?: KEY_TYPE_PUBLIC, key),
+            keyAlgorithm = encryptOpt(c.keyAlgorithm ?: KEY_ALGORITHM_ECDSA, key),
+            keyCurve = encryptOpt(c.keyCurve ?: KEY_CURVE_P256, key),
+            keyValue = encryptOpt(c.keyValue ?: "", key),
+            rpId = encryptOpt(c.rpId, key),
+            rpName = encryptOpt(c.rpName, key),
+            counter = encryptOpt(c.counter.toString(), key),
+            userHandle = encryptOpt(c.userHandle ?: "", key),
+            userName = encryptOpt(c.userName, key),
+            userDisplayName = encryptOpt(c.userDisplayName, key),
+            discoverable = encryptOpt(c.discoverable.toString(), key),
+            creationDate = c.creationDate ?: Instant.now().toString(),
+        )
+
     /** 领域模型 SSH 密钥 → 上传密文体（仅非空字段加密）。 */
     private fun mapSshKeyRequest(sshKey: VaultSshKey, key: SymmetricCryptoKey): SshKeyDto = SshKeyDto(
         privateKey = encryptOpt(sshKey.privateKey, key),
@@ -312,5 +341,9 @@ class CipherMapper @Inject constructor(
         const val TYPE_URI_MATCH_STARTS_WITH = 2
         const val TYPE_URI_MATCH_EXACT = 3
         const val TYPE_URI_MATCH_REGEX = 4
+        // 通行密钥字段默认值（对齐 Bitwarden login.fido2Credentials）
+        const val KEY_TYPE_PUBLIC = "public-key"
+        const val KEY_ALGORITHM_ECDSA = "ECDSA"
+        const val KEY_CURVE_P256 = "P-256"
     }
 }

@@ -12,7 +12,9 @@ import io.vaultix.database.entity.CipherEntity
 import io.vaultix.database.entity.PendingOpEntity
 import io.vaultix.domain.ItemRepository
 import io.vaultix.domain.VaultSaveOutcome
+import io.vaultix.model.VaultFido2Credential
 import io.vaultix.model.VaultItem
+import io.vaultix.model.VaultItemType
 import io.vaultix.model.VaultKind
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.flow.Flow
@@ -212,6 +214,43 @@ class ItemRepositoryImpl @Inject constructor(
 
             flushAfterLocalWrite(vaultId)
         }
+
+    override suspend fun updateFido2Credentials(
+        vaultId: String,
+        itemId: String,
+        credentials: List<VaultFido2Credential>,
+    ): Result<VaultSaveOutcome> = runCatching {
+        val key = sessions.keyOf(vaultId) ?: error("库未解锁，无法保存：$vaultId")
+        val existing = cipherDao.get(itemId) ?: error("条目不存在：$itemId")
+        require(existing.vaultId == vaultId) { "条目不属于该库：$itemId" }
+        require(existing.deletedDate == null) { "条目已在回收站，无法编辑：$itemId" }
+        require(existing.type == mapper.serverTypeOf(VaultItemType.Login)) {
+            "通行密钥只能绑定到登录（密码）条目，无法保存到类型 ${existing.type} 的条目"
+        }
+        val item = loadItem(vaultId, itemId) ?: error("条目解析失败：$itemId")
+        // 整体替换该登录条目的通行密钥集合，走既有合并写回（fido2 逐字段重加密）
+        updateItem(vaultId, item.copy(fido2Credentials = credentials)).getOrThrow()
+    }
+
+    override suspend fun removeFido2Credential(
+        vaultId: String,
+        itemId: String,
+        credentialId: String,
+    ): Result<VaultSaveOutcome> = runCatching {
+        val item = loadItem(vaultId, itemId) ?: error("条目不存在：$itemId")
+        val remaining = item.fido2Credentials.filter { it.credentialId != credentialId }
+        updateFido2Credentials(vaultId, itemId, remaining).getOrThrow()
+    }
+
+    /** 解码单条密文行为明文领域模型（删除态/未解锁返回 null）。 */
+    private suspend fun loadItem(vaultId: String, itemId: String): VaultItem? {
+        val row = cipherDao.get(itemId) ?: return null
+        if (row.deletedDate != null) return null
+        val key = sessions.keyOf(vaultId) ?: return null
+        return runCatching { json.decodeFromString<CipherDto>(row.encryptedPayload) }
+            .getOrNull()
+            ?.let { mapper.toDomain(it, key) }
+    }
 
     // ---- 内部 ----
 

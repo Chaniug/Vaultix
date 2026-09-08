@@ -65,7 +65,25 @@ enum class UriMatch {
     RegularExpression,
 }
 
-/** 通行密钥（WebAuthn 凭证）的展示字段（解密后的明文；只读）。 */
+/**
+ * 通行密钥（WebAuthn 凭证）的领域模型（解密后明文）。
+ *
+ * ⚠️ 明文承载：仅存在于已解锁的内存中，禁止落盘、禁止进日志（Docs/09）。
+ *
+ * 存储形态（对齐 Bitwarden login.fido2Credentials）：通行密钥**永远绑定在某个
+ * 登录条目（密码条目）上**，不存在独立的通行密钥条目。因此 [VaultItem.fido2Credentials]
+ * 仅对 [VaultItemType.Login] 有意义。
+ *
+ * 字段说明：
+ * - [keyType]/[keyCurve]/[keyValue]：密钥材料（ES256/P-256 等；[keyValue] 为私钥/公钥材料，
+ *   真机由平台 WebAuthn 生成，Vaultix 仅在保存流程中承载用户提供的材料）；
+ * - [counter]：签名计数器（防重放，默认 0）；
+ * - [discoverable]：是否为可发现凭证（resident key）。
+ *
+ * 注：本模型同时用于「只读展示」与「保存流程」——保存流程会补全上述密钥/计数/可发现性字段，
+ * 写回时由 [io.vaultix.data.bitwarden.mapper.CipherMapper] 逐字段加密（creationDate 不加密，
+ * 保持 Bitwarden 期望的可解析 DateTime 形态）。
+ */
 @Serializable
 data class VaultFido2Credential(
     val credentialId: String = "",
@@ -76,6 +94,16 @@ data class VaultFido2Credential(
     val userHandle: String? = null,
     val keyAlgorithm: String? = null,
     val creationDate: String? = null,
+    /** 密钥类型（Bitwarden: "public-key"）。 */
+    val keyType: String? = null,
+    /** 曲线（Bitwarden: "P-256"）。 */
+    val keyCurve: String? = null,
+    /** 密钥材料（私钥/公钥 PEM 或原始字节，保存流程承载）。 */
+    val keyValue: String? = null,
+    /** 签名计数器（默认 0）。 */
+    val counter: Long = 0,
+    /** 是否为可发现凭证（默认 true）。 */
+    val discoverable: Boolean = true,
 )
 
 /** 银行卡条目字段（Bitwarden card 载荷，解密后明文；只读展示）。 */

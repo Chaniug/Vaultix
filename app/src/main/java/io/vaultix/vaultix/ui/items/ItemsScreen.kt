@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -77,6 +78,7 @@ fun ItemsScreen(
     onLocked: () -> Unit,
     onOpenTrash: () -> Unit,
     onOpenItem: (VaultItem) -> Unit,
+    onOpenTotp: () -> Unit,
     viewModel: ItemsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -125,6 +127,12 @@ fun ItemsScreen(
                         }
                     },
                     actions = {
+                        IconButton(onClick = onOpenTotp) {
+                            Icon(
+                                Icons.Filled.QrCode2,
+                                contentDescription = stringResource(R.string.totp_screen_title),
+                            )
+                        }
                         IconButton(onClick = onOpenTrash) {
                             Icon(
                                 Icons.Filled.Delete,

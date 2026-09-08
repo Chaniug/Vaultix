@@ -15,6 +15,7 @@ import io.vaultix.data.bitwarden.model.UriDto
 import io.vaultix.data.bitwarden.model.toStoredCipherDto
 import io.vaultix.data.bitwarden.network.BitwardenJson
 import io.vaultix.model.UriMatch
+import io.vaultix.model.VaultFido2Credential
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
 import io.vaultix.model.VaultUri
@@ -83,6 +84,8 @@ class CipherPayloadPreservationTest {
                 password = "new-pass",
                 uris = listOf(VaultUri("https://site.example", UriMatch.Host)),
                 totp = "otpauth-secret",
+                // 更新流程的 item 携带已加载的完整通行密钥列表（保存流程即通过替换此列表增删）
+                fido2Credentials = listOf(VaultFido2Credential(credentialId = "enc:fido")),
             ),
             stored = stored,
             key = accountKey,
@@ -99,8 +102,12 @@ class CipherPayloadPreservationTest {
         )
         assertEquals(1, request.login!!.uris!!.single().match) // Host = 1
         assertEquals("otpauth-secret", crypto.decryptToString(request.login!!.totp!!, accountKey))
-        // fido2 / 自定义字段为只读段：原样保留服务端密文，绝不丢失
-        assertEquals("enc:fido", request.login!!.fido2Credentials!!.single().credentialId)
+        // fido2：按 item 携带的列表完整重加密（保留既有凭证，不丢）
+        assertEquals(
+            "enc:fido",
+            crypto.decryptToString(request.login!!.fido2Credentials!!.single().credentialId!!, accountKey),
+        )
+        // 自定义字段为只读段：原样保留服务端密文，绝不丢失
         assertEquals("enc:fn", request.fields!!.single().name)
     }
 

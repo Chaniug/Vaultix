@@ -27,3 +27,11 @@ data class TrashRoute(val vaultId: String)
 
 @Serializable
 data class ItemRoute(val vaultId: String, val itemId: String)
+
+/** 验证码统一界面（从密码条目列表的入口进入）。 */
+@Serializable
+data class TotpCodesRoute(val vaultId: String)
+
+/** 通行密钥列表（从验证码界面的「通行密钥」按钮进入）。 */
+@Serializable
+data class PasskeysRoute(val vaultId: String)

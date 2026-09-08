@@ -80,7 +80,7 @@ class CipherMapperTotpUriFido2Test {
     }
 
     @Test
-    fun toRequestWritesLoginUrisTotpAndDropsFido2() {
+    fun toRequestWritesLoginUrisTotpAndFido2() {
         val item = VaultItem(
             id = "c2",
             title = "站点",
@@ -89,7 +89,17 @@ class CipherMapperTotpUriFido2Test {
             type = VaultItemType.Login,
             uris = listOf(VaultUri("https://x.com", UriMatch.Exact)),
             totp = "JBSWY3DPEHPK3PXP",
-            fido2Credentials = listOf(VaultFido2Credential(credentialId = "should-be-dropped")),
+            // 新增/保存的通行密钥必须随登录条目一并写回（绑定到密码条目）
+            fido2Credentials = listOf(
+                VaultFido2Credential(
+                    credentialId = "new-cid",
+                    rpId = "x.com",
+                    rpName = "X Corp",
+                    userName = "u@x.com",
+                    keyAlgorithm = "ECDSA",
+                    counter = 4,
+                ),
+            ),
         )
 
         val request = mapper.toRequest(item, accountKey)
@@ -104,8 +114,70 @@ class CipherMapperTotpUriFido2Test {
             "JBSWY3DPEHPK3PXP",
             crypto.decryptToString(request.login!!.totp!!, accountKey),
         )
-        // 客户端不创建通行密钥：写路径丢弃，原 domain 中的 fido2 不应出现在请求体
-        assertEquals(emptyList<Any>(), request.login!!.fido2Credentials)
+        // 通行密钥随登录条目写回：credentialId / rpId / rpName / keyAlgorithm / counter 均加密落地
+        assertEquals(1, request.login!!.fido2Credentials.size)
+        val written = request.login!!.fido2Credentials[0]
+        assertEquals("new-cid", crypto.decryptToString(written.credentialId!!, accountKey))
+        assertEquals("x.com", crypto.decryptToString(written.rpId!!, accountKey))
+        assertEquals("X Corp", crypto.decryptToString(written.rpName!!, accountKey))
+        assertEquals("ECDSA", crypto.decryptToString(written.keyAlgorithm!!, accountKey))
+        assertEquals("4", crypto.decryptToString(written.counter!!, accountKey))
+        // creationDate 不加密（Bitwarden 期望可解析 DateTime）
+        assertEquals(true, written.creationDate?.startsWith("20"))
+    }
+
+    @Test
+    fun toUpdateRequestMergesFido2IntoStoredLogin() {
+        // 既有登录条目已有一个通行密钥（服务端密文）
+        val stored = CipherDto(
+            id = "c9",
+            type = 1,
+            name = crypto.encryptString("站点", accountKey),
+            login = LoginDto(
+                username = crypto.encryptString("u@x.com", accountKey),
+                password = crypto.encryptString("p", accountKey),
+                fido2Credentials = listOf(
+                    Fido2CredentialDto(credentialId = crypto.encryptString("existing-cid", accountKey)),
+                ),
+            ),
+        )
+        val existingItem = mapper.toDomain(stored, accountKey)
+        // 保存流程：在已加载的 fido2 列表上追加一个新凭证，再更新条目
+        val updatedItem = existingItem.copy(
+            fido2Credentials = existingItem.fido2Credentials + VaultFido2Credential(
+                credentialId = "added-cid",
+                rpId = "x.com",
+                rpName = "X Corp",
+            ),
+        )
+
+        val request = mapper.toUpdateRequest(updatedItem, stored, accountKey)
+
+        assertEquals(2, request.login!!.fido2Credentials.size)
+        val ids = request.login!!.fido2Credentials.map {
+            crypto.decryptToString(it.credentialId!!, accountKey)
+        }
+        assertEquals(listOf("existing-cid", "added-cid"), ids)
+    }
+
+    @Test
+    fun standaloneTotpIsLoginWithOnlyTotp() {
+        // 独立验证码 = password 为空的 Login Cipher；toRequest 落库后被 toDomain 原样读回
+        val item = VaultItem(
+            id = "c10",
+            title = "Steam Guard",
+            username = "",
+            password = "",
+            type = VaultItemType.Login,
+            totp = "otpauth://totp/Steam:alice?secret=MTIz&issuer=Steam",
+        )
+        val request = mapper.toRequest(item, accountKey)
+        val stored = request.toStoredCipherDto(id = "c10", revisionDate = "r")
+        val back = mapper.toDomain(stored, accountKey)
+
+        assertEquals(VaultItemType.Login, back.type)
+        assertEquals("", back.password)
+        assertEquals("otpauth://totp/Steam:alice?secret=MTIz&issuer=Steam", back.totp)
     }
 
     @Test

@@ -1,5 +1,6 @@
 package io.vaultix.domain
 
+import io.vaultix.model.VaultFido2Credential
 import io.vaultix.model.VaultItem
 import kotlinx.coroutines.flow.Flow
 
@@ -74,6 +75,34 @@ interface ItemRepository {
      * 离线时本地行已移除，队列保留，联网后推送（服务端 404 = 已删除 → 弃单）。
      */
     suspend fun permanentDeleteItem(vaultId: String, itemId: String): Result<VaultSaveOutcome>
+
+    /**
+     * 设置某登录条目的通行密钥集合（整体替换）。
+     *
+     * 通行密钥**永远绑定在某个登录条目（密码条目）上**（对齐 Bitwarden login.fido2Credentials），
+     * 不存在独立的通行密钥条目。本方法用于「保存通行密钥」（追加到该登录条目）与
+     * 「删除通行密钥」（过滤掉指定 credentialId 后整体写回）。
+     *
+     * 实现：取出该条目当前明文 → 替换其 [VaultItem.fido2Credentials] → 走 [updateItem]
+     * 的合并写回（toUpdateRequest 会逐字段加密 fido2，保留其他段）。
+     */
+    suspend fun updateFido2Credentials(
+        vaultId: String,
+        itemId: String,
+        credentials: List<VaultFido2Credential>,
+    ): Result<VaultSaveOutcome>
+
+    /**
+     * 从登录条目移除单个通行密钥（按 credentialId 过滤后整体写回）。
+     *
+     * 注意：仅移除本地的该凭证引用；若服务端另存了密钥材料，下次全量同步可能重新下发，
+     * 与 Bitwarden/Keyguard 的行为一致（通行密钥由服务器/平台管理，客户端删除为本地视图收敛）。
+     */
+    suspend fun removeFido2Credential(
+        vaultId: String,
+        itemId: String,
+        credentialId: String,
+    ): Result<VaultSaveOutcome>
 }
 
 /** 新建条目后的落点状态。 */

@@ -14,7 +14,9 @@ import io.vaultix.vaultix.ui.addvault.AddVaultScreen
 import io.vaultix.vaultix.ui.detail.ItemDetailScreen
 import io.vaultix.vaultix.ui.items.ItemsScreen
 import io.vaultix.vaultix.ui.items.ItemsViewModel
+import io.vaultix.vaultix.ui.passkeys.PasskeysScreen
 import io.vaultix.vaultix.ui.settings.SettingsScreen
+import io.vaultix.vaultix.ui.totp.TotpCodesScreen
 import io.vaultix.vaultix.ui.trash.TrashScreen
 import io.vaultix.vaultix.ui.unlock.UnlockScreen
 import io.vaultix.vaultix.ui.unlock.UnlockViewModel
@@ -96,6 +98,24 @@ fun VaultixApp() {
                 onOpenItem = { item ->
                     navController.navigate(ItemRoute(vaultId = route.vaultId, itemId = item.id))
                 },
+                onOpenTotp = {
+                    navController.navigate(TotpCodesRoute(vaultId = route.vaultId))
+                },
+            )
+        }
+        composable<TotpCodesRoute> { entry ->
+            val route = entry.toRoute<TotpCodesRoute>()
+            TotpCodesScreen(
+                onBack = { navController.popBackStack() },
+                onOpenPasskeys = {
+                    navController.navigate(PasskeysRoute(vaultId = route.vaultId))
+                },
+            )
+        }
+        composable<PasskeysRoute> { entry ->
+            val route = entry.toRoute<PasskeysRoute>()
+            PasskeysScreen(
+                onBack = { navController.popBackStack() },
             )
         }
         composable<TrashRoute> { entry ->

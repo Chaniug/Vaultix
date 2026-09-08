@@ -192,6 +192,7 @@
     <string name="passkey_readonly_hint">通行密钥由服务器管理，不可在此编辑</string>
     <string name="passkey_rp">依赖方</string>
     <string name="passkey_user">账号</string>
+    <string name="passkey_field_user">用户名</string>
     <string name="passkey_created">创建于 %1$s</string>
     <string name="passkey_unnamed">未命名凭证</string>
 
@@ -225,4 +226,55 @@
     <string name="trash_delete_forever_confirm">永久删除</string>
     <string name="trash_deleted_forever">已永久删除</string>
     <string name="trash_delete_queued">已标记永久删除，联网后生效</string>
+
+    <!-- 验证码统一界面（从密码条目列表 / 库内入口进入） -->
+    <string name="totp_screen_title">验证码</string>
+    <string name="totp_search_hint">搜索发行方或账号</string>
+    <string name="totp_empty_title">还没有验证码</string>
+    <string name="totp_empty_body">从密码条目里带上 TOTP，或点右下角手动添加独立验证码</string>
+    <string name="totp_add_title">添加验证码</string>
+    <string name="totp_edit_title">编辑验证码</string>
+    <string name="totp_field_issuer">发行方</string>
+    <string name="totp_field_account">账号</string>
+    <string name="totp_field_secret">密钥（otpauth:// 或 Base32/Base64）</string>
+    <string name="totp_field_period">刷新周期（秒）</string>
+    <string name="totp_field_digits">位数</string>
+    <string name="totp_field_algorithm">算法</string>
+    <string name="totp_steam_label">Steam Guard（使用 Steam 字母表）</string>
+    <string name="totp_badge_bound">已绑定</string>
+    <string name="totp_badge_standalone">独立</string>
+    <string name="totp_bound_to">已绑定到「%1$s」</string>
+    <string name="totp_action_copy">复制验证码</string>
+    <string name="totp_action_bind">绑定到密码条目</string>
+    <string name="totp_bind_title">绑定到密码条目</string>
+    <string name="totp_bind_message">将把该验证码合并进所选密码条目，并删除这条独立验证码。</string>
+    <string name="totp_bind_confirm">绑定并删除独立项</string>
+    <string name="totp_removed">已删除验证码</string>
+    <string name="totp_remove_action">移除</string>
+    <string name="totp_saved">已保存验证码</string>
+    <string name="totp_bound_done">已绑定到密码条目</string>
+    <string name="totp_invalid_secret">密钥无法解析（格式不正确）</string>
+    <string name="totp_passkey_button">通行密钥</string>
+
+    <!-- 通行密钥列表界面（从验证码界面「通行密钥」按钮进入） -->
+    <string name="passkeys_screen_title">通行密钥</string>
+    <string name="passkeys_search_hint">搜索依赖方或账号</string>
+    <string name="passkeys_empty_title">还没有通行密钥</string>
+    <string name="passkeys_empty_body">通行密钥由服务器管理，保存在对应的密码条目里</string>
+    <string name="passkeys_add_title">保存通行密钥</string>
+    <string name="passkeys_detail_title">通行密钥详情</string>
+    <string name="passkeys_readonly_hint">通行密钥只读，仅可查看与删除（由服务器 / 平台管理）</string>
+    <string name="passkey_field_rp_id">依赖方 ID</string>
+    <string name="passkey_field_rp_name">依赖方名称</string>
+    <string name="passkey_field_credential_id">凭证 ID</string>
+    <string name="passkey_field_user_handle">用户句柄</string>
+    <string name="passkey_field_key_algorithm">密钥算法</string>
+    <string name="passkey_field_key_value">私钥材料（可选）</string>
+    <string name="passkey_field_counter">签名计数器</string>
+    <string name="passkey_field_discoverable">可发现凭证</string>
+    <string name="passkey_bound_to_login">绑定于「%1$s」</string>
+    <string name="passkey_select_login">选择密码条目</string>
+    <string name="passkey_removed">已删除通行密钥</string>
+    <string name="passkey_saved">已保存通行密钥</string>
+    <string name="passkey_save_failed">保存失败：%1$s</string>
 </resources>
