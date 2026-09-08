@@ -439,20 +439,39 @@ private fun LoginFields(
     )
     Spacer(Modifier.height(8.dp))
     var showGenerator by remember { mutableStateOf(false) }
+    // 明文查看开关：编辑已有条目时必须能确认原密码（否则只见掩码圆点，
+    // 唯一能明文看到的反而是骰子生成的随机密码——Bitwarden 编辑页同款眼睛按钮）
+    var revealPassword by remember { mutableStateOf(false) }
     OutlinedTextField(
         value = password,
         onValueChange = onPasswordChange,
         label = { Text(stringResource(R.string.item_field_password)) },
         singleLine = true,
-        visualTransformation = PasswordVisualTransformation(),
+        visualTransformation = if (revealPassword) {
+            VisualTransformation.None
+        } else {
+            PasswordVisualTransformation()
+        },
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
         trailingIcon = {
-            // 随机密码生成（Bastion 同款能力）：弹出选项对话框后回填
-            IconButton(onClick = { showGenerator = true }) {
-                Icon(
-                    Icons.Filled.Casino,
-                    contentDescription = stringResource(R.string.item_generate_password),
-                )
+            Row {
+                IconButton(onClick = { revealPassword = !revealPassword }) {
+                    Icon(
+                        imageVector = if (revealPassword) {
+                            Icons.Filled.VisibilityOff
+                        } else {
+                            Icons.Filled.Visibility
+                        },
+                        contentDescription = stringResource(R.string.item_reveal_value),
+                    )
+                }
+                // 随机密码生成（Bastion 同款能力）：弹出选项对话框后回填
+                IconButton(onClick = { showGenerator = true }) {
+                    Icon(
+                        Icons.Filled.Casino,
+                        contentDescription = stringResource(R.string.item_generate_password),
+                    )
+                }
             }
         },
         modifier = Modifier.fillMaxWidth(),
