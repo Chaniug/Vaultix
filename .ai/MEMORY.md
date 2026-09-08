@@ -382,3 +382,62 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 **主页搜索**：`ItemsScreen` 顶栏加搜索图标 → 展开 `SearchField`；`ItemsViewModel` 加 `query` +
 `visibleItems`（标题/用户名/网址，忽略大小写）；空结果区分「库里没有条目」与「没有匹配」。
 
+## 中文注释乱码修复 + 源文件编码门禁（2026-09-08 本轮）
+**事故**：`BitwardenAuthRepository.kt` 整文件中文注释被写坏（UTF-8 被按 GBK 误读后再次
+存盘，且三字节序列尾字节被 `0x3F` 替换 = **有损**），139 处 U+FFFD。编译与测试都不检查
+注释 → 静默入库（`c5a051f`），直到人工阅读才发现。
+
+- **定位**：用 `git cat-file blob <rev>:<path>` 逐提交取**原始字节**比对。
+  ⚠️ 不要用 `git show <rev>:<path> > file` —— git-bash 重定向会转码，读数不可信。
+  结果：`d689a37` 完好、`c5a051f` 损坏 → 是 `git add -A` 把工作区损坏副本提交进去了。
+  修复 = `git checkout d689a37 -- <path>` 再重放本轮改动（用 Python 二进制替换写入，
+  确保输出一定是 UTF-8）。
+- **门禁**：`.github/scripts/check-encoding.py`，CI push/PR 执行。
+  判据必须是「GBK 编码→UTF-8 解码后**全部落在 CJK 区**」；朴素的
+  「encode gbk + decode utf-8 成功即乱码」会大量误报——「为」(CE AA→U+03AA)、
+  「状态」「值」「只」等正常中文都会被误判（正常中文 GBK 次字节多 >0xBF，
+  按 UTF-8 解读落在 U+0080-U+07FF，不在 CJK 区）。
+- **教训**：`git add -A` 会把工作区任何损坏一并提交；提交前值得跑一次编码检查。
+
+**暴露缺口（待办）**：条目**编辑**已支持登录/银行卡/身份，但**新建**入口
+（ItemsScreen FAB）固定传 `VaultItem(type = Login)` → **目前无法新建身份/卡片条目**，
+只能从 Bitwarden 同步过来。补一个类型选择器即可。
+
+## 对齐 Bitwarden 官方 App：补齐 folder/favorite/reprompt/secureNote（2026-09-08 本轮）
+用户对着官方 Android 客户端截图提出「字段要补齐，不然拉取和上传都会有问题」。
+
+**根因（重要教训，务必记住）**：`folderId / favorite / reprompt / secureNote`
+在 `BitwardenDto` 里**全都有**，但 `VaultItem` 领域模型**没建模** →
+`CipherMapper.toDomain` 解析时**直接丢弃**。
+> **DTO 有字段 ≠ 数据不丢。** 以后新增/核对 DTO 字段，必须逐字段确认三处：
+> `toDomain` 读了、`toRequest` 写了、`toUpdateRequest` 写了——并且补单测。
+> 本轮另一个同类坑：`toUpdateRequest` 对这四项固定沿用 `stored` 旧值，
+> 等于用户在 Vaultix 里**改了也不上传**。
+
+**已做**（e6b05d6）：VaultItem 加 4 字段 + `VaultReprompt` 枚举（替代裸 Int，
+避免 `reprompt = 1`）+ `VaultSecureNote`；Mapper 三处连通；SecureNote 缺省补
+子类型 0（服务端对 type=2 期望有 secureNote 段）。单测 4 例，含专门防
+「退化成沿用 stored」的用例。
+
+**新建类型选择器**（af41c9e）：ItemFormDialog 加 `typeEditable`（仅新建态，
+FlowRow+FilterChip）；`buildSnapshot` 改用**当前 type**（否则选「银行卡」仍存成
+登录条目）；`createItem` 改收完整快照（与 `updateItem` 对称）。
+
+## Bastion 可搬性评估 + 扫码库选型（2026-09-08）
+- **自定义字段**：Bastion 只有 **3 态**（title/value/isProtected），**Vaultix 已是
+  4 态**（Bitwarden canonical）——Bastion 是子集，且 `CustomField.kt` 是绑
+  `PasswordEntry` 的 Room Entity。**不搬，自己写。**
+- **folder/favorite**：Bastion 用自己的 `bitwardenFolderId` 中间字段绕（它的领域
+  模型与 DTO 隔了一层）；Vaultix 是 DTO↔VaultItem 直连，**DTO 里本来就有，不用看
+  Bastion**。
+- **AddEditPasswordScreen**（3500+ 行）：强耦合 Bastion 的 SecureItem/SettingsManager
+  和它独有的「预设字段」系统（Vaultix 无此概念）。**不搬。**
+- 唯一值得借鉴：Bastion 扫码屏的**生命周期/错误恢复设计**（AtomicBoolean 防重复
+  触发、scanGeneration 重建 session），但实现绑 ZXing。
+
+**扫码库决定：CameraX + ZXing core（自己轻量封装）**
+依据 42matters Google Play SDK 数据：ZXing 集成率 60-69%（第一）、ML Kit 38-47%（第二）。
+选 ZXing 理由：① 轻量（~500KB vs ML Kit unbundled +2-3MB）；② **国内可用**
+（ML Kit bundled 依赖 GMS，国内必然踩坑）；③ QR 是 ISO 固定标准，解码内核成熟
+（相机层用现代 CameraX，不算过时）。
+
