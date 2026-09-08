@@ -469,3 +469,21 @@ Vaultix 原把 linkedId 当顺序编号（1/2/3/4），**官方是分段编码**
 **仍未做**：文件夹下拉——`folders` 表有，但 domain/repository **没有读取接口**，
 需先新增 `observeFolders`（要解密 encryptedName）。
 
+## 文件夹选择完成（2026-09-08 本轮，UI 三开关最后一块）
+`FolderDao.observeByVault` 数据库层早就有，缺的只是上层接口：
+- `VaultFolder(id, name)` 领域模型；domain 新增 `FolderRepository`（**只读**——
+  M1 不做文件夹增删改，维护由网页端/官方端管理，避免双端冲突）；
+- `FolderRepositoryImpl` 与 `observeItems` 同链路形态（密文快照 × 解锁状态 →
+  解密，crypto 调度器注入；未解锁返回空列表而非抛异常，UI 平滑降级）；
+- `ItemFormDialog` 名称上方加 `FolderPicker`：**仅当库里有文件夹才显示**
+  （避免「永远无选项」的下拉），首项「无文件夹」= folderId 置空；
+- 坑：`VaultSessionManager.keyOf` 是 **suspend**，`Flow.map` 的 lambda 是 suspend
+  上下文可直接调，但抽出的私有函数要记得标 `suspend`；
+- 门禁：主函数又超（153 行/复杂度 15）→ 拆出 `FormHeader`
+  （文件夹+类型，顺序对齐官方：文件夹 → 类型 → 名称）。
+
+## M1 字段对齐至此闭合
+官方「添加登录」界面的字段（名称/文件夹/收藏/用户名/密码/验证器密钥/网址/
+备注/主密码二次验证/自定义字段 4 类型）已**全部可编辑并正确往返服务端**；
+「检查数据泄露」（HIBP）与附件/密码历史为 P2 后置。
+
