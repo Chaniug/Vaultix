@@ -413,7 +413,7 @@
     <string name="passkeys_screen_title">通行密钥</string>
     <string name="passkeys_search_hint">搜索依赖方或账号</string>
     <string name="passkeys_empty_title">还没有通行密钥</string>
-    <string name="passkeys_empty_body">通行密钥由服务器管理，保存在对应的密码条目里</string>
+    <string name="passkeys_empty_body">通行密钥由网站 / App 创建后同步到对应的密码条目里（本库共 %1$d 个条目，其中 %2$d 个含通行密钥）。Vaultix 目前只能查看与管理，还不能用通行密钥登录。</string>
     <string name="passkeys_add_title">保存通行密钥</string>
     <string name="passkeys_detail_title">通行密钥详情</string>
     <string name="passkeys_readonly_hint">通行密钥只读，仅可查看与删除（由服务器 / 平台管理）</string>

@@ -112,7 +112,10 @@ fun PasskeysScreen(
     ) { padding ->
         val rows = viewModel.passkeyRows()
         if (state.items.isEmpty() || rows.isEmpty()) {
-            EmptyPasskeysState()
+            EmptyPasskeysState(
+                totalItems = state.items.size,
+                withFido2 = state.items.count { it.fido2Credentials.isNotEmpty() },
+            )
         } else {
             LazyColumn(
                 modifier = Modifier.fillMaxSize().padding(padding),
@@ -146,7 +149,11 @@ fun PasskeysScreen(
 }
 
 @Composable
-private fun EmptyPasskeysState() {
+/**
+ * 空态：顺带把「库里多少条目 / 多少含通行密钥」显示出来——
+ * 「读取不到」时一眼能分清是**服务端没数据**还是**本地解析不出来**。
+ */
+private fun EmptyPasskeysState(totalItems: Int, withFido2: Int) {
     Column(
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.Center,
@@ -154,7 +161,7 @@ private fun EmptyPasskeysState() {
     ) {
         Text(text = stringResource(R.string.passkeys_empty_title), style = MaterialTheme.typography.titleLarge)
         Text(
-            text = stringResource(R.string.passkeys_empty_body),
+            text = stringResource(R.string.passkeys_empty_body, totalItems, withFido2),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 8.dp, start = 24.dp, end = 24.dp),

@@ -83,6 +83,13 @@ class VaultixAutofillService : AutofillService() {
             return
         }
         val parsed = AssistStructureParser.parse(structure)
+        // 诊断（仅元数据）：浏览器填充静默失效时靠它定位「是没解析到字段，还是没匹配到条目」
+        AutofillLogger.d(
+            "fillRequest pkg=${parsed.packageName} webDomain=${parsed.webDomain} " +
+                "fallback=${parsed.fallbackWebDomain} webView=${parsed.webView} " +
+                "fields=${parsed.fields.size} hints=${parsed.fields.groupingBy { it.hint }.eachCount()} " +
+                "user=${parsed.usernameId != null} pass=${parsed.passwordId != null}",
+        )
         // 对齐 Bitwarden blocked URIs：系统界面 / 设置 / 本应用自身不提供填充。
         if (AutofillRequestContextPolicy.isBlockedPackage(parsed.packageName, packageName)) {
             callback.onSuccess(null)
@@ -139,6 +146,7 @@ class VaultixAutofillService : AutofillService() {
 
         val unlocked = vaultRepository.observeUnlockedVaultIds().first()
         if (unlocked.isEmpty()) {
+            AutofillLogger.d("locked: no unlocked vault → unlock fallback")
             return AutofillDatasets.buildFallback(
                 context = this,
                 ids = ids,
@@ -193,8 +201,13 @@ class VaultixAutofillService : AutofillService() {
             builder.addDataset(dataset)
             added++
         }
+        AutofillLogger.d(
+            "fillResponse domain=${webDomain} candidates=${vault.credentials.size} " +
+                "matched=${matched.size} datasets=$added",
+        )
         if (added > 0) return builder.build()
 
+        AutofillLogger.d("noMatch domain=$webDomain → search fallback")
         return AutofillDatasets.buildFallback(
             context = this,
             ids = ids,

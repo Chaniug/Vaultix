@@ -7,6 +7,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import io.vaultix.domain.ItemRepository
 import io.vaultix.domain.VaultRepository
 import io.vaultix.model.VaultFido2Credential
+import io.vaultix.vaultix.autofill.AutofillLogger
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -59,6 +60,11 @@ class PasskeysViewModel @Inject constructor(
         }
         viewModelScope.launch {
             itemRepository.observeItems(vaultId).collect { items ->
+                // 诊断（仅数量，不含任何字段值）：区分「服务端没数据」与「解析/解密失败」
+                AutofillLogger.d(
+                    "passkeys loaded items=${items.size} " +
+                        "withFido2=${items.count { it.fido2Credentials.isNotEmpty() }}",
+                )
                 _state.update { it.copy(items = items) }
             }
         }

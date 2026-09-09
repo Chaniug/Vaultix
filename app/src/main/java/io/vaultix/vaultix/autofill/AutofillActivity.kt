@@ -80,6 +80,15 @@ class AutofillActivity : FragmentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         val mode = AutofillIntents.modeOf(intent)
+        if (mode == AutofillIntents.MODE_COPY_TOTP) {
+            // ⚠️ 无感中转：**绝不渲染任何界面**。此前先 setContent 再回填，卡片会闪一下，
+            // 用户正好点中「打开 Vaultix 解锁」→ 表现为「点填充却跳到库页面、密码没填进去」。
+            deliverDatasetAndCopyTotp(
+                AutofillIntents.titleOf(intent),
+                AutofillIntents.subtitleOf(intent),
+            )
+            return
+        }
         val title = AutofillIntents.titleOf(intent).ifBlank { getString(R.string.autofill_unlock_title) }
         val subtitle = AutofillIntents.subtitleOf(intent)
         setContent {
@@ -92,10 +101,8 @@ class AutofillActivity : FragmentActivity() {
                 )
             }
         }
-        when (mode) {
-            AutofillIntents.MODE_REPROMPT -> startReprompt(title, subtitle)
-            AutofillIntents.MODE_COPY_TOTP -> deliverDatasetAndCopyTotp(title, subtitle)
-            else -> Unit
+        if (mode == AutofillIntents.MODE_REPROMPT) {
+            startReprompt(title, subtitle)
         }
     }
 

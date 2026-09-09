@@ -146,6 +146,16 @@ debug(preview) 与 release 可互相覆盖安装的**硬性前提**：
 - **判据**：Android 自动填充保存链路三段缺一不可——
   ① FillResponse 挂 SaveInfo → ② 框架回调 onSaveRequest → ③ 自己拉起确认界面落库
 
+## 23. 「点填充却跳到 Vaultix 主页」：中转 Activity 先渲染了 UI（2026-09-09）
+
+- **现象**：浏览器里能看到条目，点选后跳到 Vaultix 库列表页，密码没填进去
+- **根因**：为「填充后自动复制 TOTP」挂了 dataset 认证，回调 Activity 的 `onCreate`
+  **先 `setContent` 渲染提示卡片、再回填 Dataset**——用户正好点中卡片上的
+  「打开 Vaultix 解锁」按钮
+- **解法**：命中 `MODE_COPY_TOTP` 时**先判断、直接回填 + finish，绝不 setContent**
+- **判据**：自动填充的「中转」Activity 必须无感（透明、无布局、无按钮）；
+  任何需要经过 Activity 的填充副作用，都要先分流再决定是否渲染 UI
+
 ## 20. Quick Settings 磁贴「加了不显示 / 空白」（2026-09-09）
 
 - **现象**：声明了 TileService，但快捷设置里找不到，或加进去是空白方块
