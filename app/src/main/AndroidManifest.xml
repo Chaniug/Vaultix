@@ -41,13 +41,17 @@
         </activity>
 
         <!-- 自动填充的认证回灌宿主：由系统经 PendingIntent 拉起，需 exported。
-             透明主题 + 无历史栈：用完即走，不进入最近任务。 -->
+             透明主题 + 无历史栈：用完即走，不进入最近任务。
+             ⚠️ taskAffinity 必须独立于默认（包名）：否则 NEW_TASK PendingIntent 会把后台
+             含 MainActivity 的 task 拉到前台——认证 Activity 无感 finish 后露出主界面，
+             表现为「Via 点密码条目闪回 Vaultix」（autoCopyTotp 开启时必现）。 -->
         <activity
             android:name=".autofill.AutofillActivity"
             android:excludeFromRecents="true"
             android:exported="true"
             android:launchMode="singleTask"
             android:noHistory="true"
+            android:taskAffinity="io.vaultix.vaultix.autofill"
             android:theme="@style/Theme.Vaultix.Transparent" />
 
         <!-- 系统自动填充服务（M2-a）：密码填充走 AutofillService（API 26+）。
