@@ -104,6 +104,18 @@ class SettingsViewModel @Inject constructor(
             initialValue = VaultixPreferencesDefaults.TRASH_AUTO_DELETE_DAYS,
         )
 
+    /** 自动填充保存提示（登录成功后询问保存 / 更新凭据，默认开）。 */
+    val autofillSavePrompt: StateFlow<Boolean> = preferences.autofillSavePrompt
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = true,
+        )
+
+    fun setAutofillSavePrompt(enabled: Boolean) {
+        viewModelScope.launch { preferences.setAutofillSavePrompt(enabled) }
+    }
+
     fun setAutoLockMinutes(minutes: Int) {
         viewModelScope.launch { preferences.setAutoLockMinutes(minutes) }
     }

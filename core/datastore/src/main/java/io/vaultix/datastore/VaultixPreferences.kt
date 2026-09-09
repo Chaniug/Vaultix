@@ -54,6 +54,7 @@ class VaultixPreferences @Inject constructor(
         val TRASH_AUTO_DELETE_DAYS = intPreferencesKey("trash_auto_delete_days")
         val THEME_MODE = stringPreferencesKey("theme_mode")
         val OLED_PURE_BLACK = booleanPreferencesKey("oled_pure_black")
+        val AUTOFILL_SAVE_PROMPT = booleanPreferencesKey("autofill_save_prompt")
 
         /**
          * 自动锁定档位（分钟，语义对齐 Bastion autoLockMinutes）：
@@ -102,6 +103,13 @@ class VaultixPreferences @Inject constructor(
     /** OLED 纯黑（对齐 Bastion oledPureBlackEnabled）：深色模式下 surface/background 用纯黑。 */
     val oledPureBlack: Flow<Boolean> =
         safeData.map { it[OLED_PURE_BLACK] ?: false }
+
+    /**
+     * 自动填充保存提示（对齐 Bitwarden `isAutofillSavePromptDisabled` 的反向开关）：
+     * 在 App / 网页提交登录表单后询问是否保存 / 更新凭据。默认开启。
+     */
+    val autofillSavePrompt: Flow<Boolean> =
+        safeData.map { it[AUTOFILL_SAVE_PROMPT] ?: true }
 
     val defaultVaultId: Flow<String?> = safeData.map { it[DEFAULT_VAULT_ID] }
 
@@ -168,6 +176,11 @@ class VaultixPreferences @Inject constructor(
     /** OLED 纯黑（深色模式 surface/background 纯黑）。 */
     suspend fun setOledPureBlack(enabled: Boolean) {
         dataStore.edit { it[OLED_PURE_BLACK] = enabled }
+    }
+
+    /** 自动填充保存提示开关（关闭后登录成功不再询问保存）。 */
+    suspend fun setAutofillSavePrompt(enabled: Boolean) {
+        dataStore.edit { it[AUTOFILL_SAVE_PROMPT] = enabled }
     }
 
     suspend fun setDefaultVaultId(id: String?) {

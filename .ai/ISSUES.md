@@ -136,6 +136,16 @@ debug(preview) 与 release 可互相覆盖安装的**硬性前提**：
 - `Unresolved reference 'Bolt'`：`Icons.Filled.*` 并非全量 Material 图标都可用，
   换用项目里已验证存在的图标（如 `ContentCopy`）——编译前先确认图标存在
 
+## 19. 保存流程「永远不触发」：FillResponse 没挂 SaveInfo（2026-09-09）
+
+- **现象**：`onSaveRequest` 写了却从不被调用；登录新网站后不提示保存
+- **根因**：框架**只在 FillResponse 里带了 `SaveInfo`** 时才在用户提交表单后回调保存；
+  只实现 `onSaveRequest` 等于没做
+- **解法**：`AutofillSaveInfo.build(parsed)` 挂到**每个** FillResponse 上——
+  包括「无匹配项」的 fallback 分支（**没匹配恰恰是最需要保存的场景**：用户首次登录该站点）
+- **判据**：Android 自动填充保存链路三段缺一不可——
+  ① FillResponse 挂 SaveInfo → ② 框架回调 onSaveRequest → ③ 自己拉起确认界面落库
+
 ## 18. Kotlin 默认参数不能调用 suspend 函数（2026-09-09）
 
 - **现象**：`suspend fun f(clearMs: Long = prefs.preference.first())` 编译失败

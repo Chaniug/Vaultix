@@ -74,6 +74,14 @@
                 android:value="true" />
         </service>
 
+        <!-- 自动填充保存确认：框架经 onSaveRequest 回调后由本应用自己拉起（同应用内部） -->
+        <activity
+            android:name=".autofill.save.AutofillSaveActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:theme="@style/Theme.Vaultix.Transparent" />
+
         <!-- 快速填充界面：由磁贴拉起（同应用内部，无需 exported） -->
         <activity
             android:name=".autofill.shortcut.ManualFillActivity"

@@ -32,10 +32,14 @@ import io.vaultix.vaultix.autofill.engine.FillPlanner
 import io.vaultix.vaultix.autofill.match.AutofillRequestContextPolicy
 import io.vaultix.vaultix.autofill.match.BitwardenLikeAutofillMatcher
 import io.vaultix.vaultix.autofill.match.MatchConfig
+import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.vaultix.autofill.model.AutofillCredential
+import io.vaultix.vaultix.autofill.model.FieldHint
 import io.vaultix.vaultix.autofill.model.FillSuggestion
 import io.vaultix.vaultix.autofill.model.ParsedStructure
 import io.vaultix.vaultix.autofill.parser.AssistStructureParser
+import io.vaultix.vaultix.autofill.save.AutofillSaveInfo
+import io.vaultix.vaultix.autofill.save.AutofillSaveIntents
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -61,6 +65,9 @@ class VaultixAutofillService : AutofillService() {
 
     @Inject
     lateinit var itemRepository: ItemRepository
+
+    @Inject
+    lateinit var prefs: VaultixPreferences
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var activeJob: Job? = null
@@ -91,9 +98,32 @@ class VaultixAutofillService : AutofillService() {
         cancellationSignal.setOnCancelListener { job.cancel() }
     }
 
+    /**
+     * 保存回调：用户在 App / 网页提交登录表单后由框架调用（**前提是 FillResponse 挂了
+     * `SaveInfo`**，见 [AutofillSaveInfo]）。
+     *
+     * 这里只做「取当前账号密码 + 拉起确认界面」，真正的落库在 [AutofillSaveActivity]：
+     * 保存要写密文，必须在解锁会话里进行，且要让用户确认存成什么名字。
+     */
     override fun onSaveRequest(request: SaveRequest, callback: SaveCallback) {
-        // v1 只填充、不自动保存（保存流程与「新建/更新条目」复用同一套校验，见 M2 后续里程碑）
+        val parsed = request.fillContexts.lastOrNull()?.structure?.let(AssistStructureParser::parse)
+        val webDomain = parsed?.webDomain ?: parsed?.fallbackWebDomain
+        val username = parsed?.fields?.firstOrNull { it.hint == FieldHint.USERNAME }?.value.orEmpty()
+        val password = parsed?.fields?.firstOrNull { it.hint == FieldHint.PASSWORD }?.value.orEmpty()
+        // 先回执：框架不等我们，保存界面自己异步起。
         callback.onSuccess()
+        if (username.isBlank() && password.isBlank()) return
+        scope.launch {
+            if (!prefs.autofillSavePrompt.first()) return@launch
+            val intent = AutofillSaveIntents.create(
+                context = this@VaultixAutofillService,
+                packageName = parsed?.packageName,
+                webDomain = webDomain,
+                username = username,
+                password = password,
+            )
+            withContext(Dispatchers.Main) { startActivity(intent) }
+        }
     }
 
     override fun onDestroy() {
@@ -150,7 +180,9 @@ class VaultixAutofillService : AutofillService() {
             totpProvider = ::totpCode,
         )
 
+        val saveInfo = AutofillSaveInfo.build(parsed)
         val builder = FillResponse.Builder()
+        saveInfo?.let { builder.setSaveInfo(it) }
         var added = 0
         for (suggestion in plan.suggestions) {
             val dataset = datasetFor(parsed, suggestion) ?: continue
@@ -174,6 +206,7 @@ class VaultixAutofillService : AutofillService() {
             ),
             title = getString(R.string.autofill_no_match_title),
             subtitle = getString(R.string.autofill_no_match_subtitle),
+            saveInfo = saveInfo,
         )
     }
 

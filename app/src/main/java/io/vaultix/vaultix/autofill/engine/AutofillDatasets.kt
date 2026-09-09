@@ -17,6 +17,7 @@ import android.os.Build
 import android.service.autofill.Dataset
 import android.service.autofill.FillResponse
 import android.service.autofill.Presentations
+import android.service.autofill.SaveInfo
 import android.view.autofill.AutofillId
 import android.view.autofill.AutofillValue
 import android.widget.RemoteViews
@@ -87,17 +88,25 @@ object AutofillDatasets {
     fun allFillableIds(parsed: ParsedStructure): Array<AutofillId> =
         parsed.fields.filter { it.isVisible }.map { it.id }.toTypedArray()
 
-    /** 无建议时的占位：整表认证，点击后交给 Activity 引导解锁 / 搜索。 */
+    /**
+     * 无建议时的占位：整表认证，点击后交给 Activity 引导解锁 / 搜索。
+     *
+     * ⚠️ [saveInfo] 必须照样挂上：**没有匹配项恰恰是最需要保存的场景**
+     * （用户第一次在某站点注册/登录，库里没有条目）——漏了就永远收不到
+     * `onSaveRequest`，保存流程形同虚设。
+     */
     fun buildFallback(
         context: Context,
         ids: Array<AutofillId>,
         authIntent: PendingIntent,
         title: String,
         subtitle: String,
+        saveInfo: SaveInfo? = null,
     ): FillResponse? {
         if (ids.isEmpty()) return null
         val presentation = presentation(context, title, subtitle)
         val builder = FillResponse.Builder()
+        saveInfo?.let { builder.setSaveInfo(it) }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             builder.setAuthentication(
                 ids,

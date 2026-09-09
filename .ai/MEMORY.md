@@ -554,6 +554,16 @@ Vaultix 原把 linkedId 当顺序编号（1/2/3/4），**官方是分段编码**
   + `AppInfo/AppPickerDialog`（LAUNCHER intent 枚举，**不申请 QUERY_ALL_PACKAGES**），
   表单「关联应用」写入 `androidapp://<pkg>`（Bitwarden 官方形态，服务端与其它端都认）。
 
+## 自动填充保存流程完成（2026-09-09，C 项）
+- **三段缺一不可**：① FillResponse 挂 `SaveInfo`（`AutofillSaveInfo.build`，账号+密码框为
+  requiredIds；**无匹配 fallback 分支也要挂**）→ ② 框架回调 `onSaveRequest`
+  → ③ 拉起 `AutofillSaveActivity` 确认后落库。此前只差第一段，等于整个链路没生效。
+- `AutofillSaveMatcher`（纯函数）：`targetUri`（网页 `https://host` / App `androidapp://pkg`）、
+  `findExisting`（同基域 + 同账号 → 提示更新）、`defaultTitle`（域名去 www → 应用名 → 包名）。
+- 更新条目时把本次来源网址**并入 uris**（Bitwarden 同款：同账号多域名不重复建条目）。
+- 保存必须在**解锁会话**内完成——密钥只在内存，锁定态下不落盘、不排队，只引导解锁。
+- 开关 `VaultixPreferences.autofillSavePrompt`（默认开）+ 设置页「保存提示」。
+
 ## 快捷入口三件套 + 内联建议降级（2026-09-09，00f4235）
 - **键盘内联建议（`InlinePresentation`）不做 / 低优先级**：依赖输入法实现 Android 11+ 的
   IME inline suggestions API，国产输入法（搜狗/百度/讯飞/QQ/微信）基本未接入，

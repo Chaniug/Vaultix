@@ -4,6 +4,19 @@
 > 落地；审计报告 `Docs/progress/audit/bitwarden-alignment.md`。
 > 状态：`TODO` / `DOING` / `DONE` / `BLOCKED`
 
+## 已完成（第二十二轮 2026-09-09 · C 自动填充保存流程 `onSaveRequest`）
+
+- [x] **`SaveInfo` 接线**（根因）：FillResponse 挂 `AutofillSaveInfo`（账号+密码框为
+      requiredIds）；**无匹配 fallback 分支同样挂**——没匹配项才是最需要保存的场景
+- [x] **`AutofillSaveMatcher`**（纯函数 + 9 例单测）：目标 URI 归一（网页 `https://host` /
+      App `androidapp://<pkg>`）、「同基域 + 同账号」→ 更新判定、默认名称（域名去 www /
+      应用名 / 包名）
+- [x] **`AutofillSaveActivity/ViewModel`**：透明卡片确认页，新建 / 更新二合一；
+      更新时把新网址并入条目 uris（Bitwarden 同款，防同账号多域名重复条目）；
+      库未解锁只引导解锁，**不暂存明文**
+- [x] 开关 `VaultixPreferences.autofillSavePrompt`（默认开）+ 设置页「保存提示」行
+- [x] full flavor 编译 + detekt 0 违规 + 单测全绿
+
 ## 已完成（第二十一轮 2026-09-09 · 快捷入口三件套：磁贴 + 手动填充 + 智能复制接力）
 
 - [x] **键盘内联建议降级（用户拍板）**：`InlinePresentation` 依赖输入法实现 Android 11+
@@ -240,7 +253,9 @@
       → 密码已复制（粘贴到登录框）→ 点通知复制用户名；
       **永不锁定验收**：设置自动锁定为「从不」，息屏再亮屏 / 锁屏解锁后仍保持解锁；
       **自动填充验收**：Chrome / Edge / 三星浏览器分别触发填充（Edge 为重点）；
-      **关联 App 验收**：条目编辑「关联应用」→ 选中 App → 详情显示「应用」+ 包名 + 可启动
+      **关联 App 验收**：条目编辑「关联应用」→ 选中 App → 详情显示「应用」+ 包名 + 可启动；
+      **保存提示验收（第二十二轮）**：全新站点/App 登录 → 弹出保存卡片 → 库里出现新条目
+      （带网址或 `androidapp://`）；已存账号改密码登录 → 弹「更新密码」→ 条目密码被更新
 - [ ] **M2 规划**：见 `Docs/progress/bastion-parity-assessment.md`（差距约 40% 可比覆盖；
       最大两块缺口 = 系统自动填充服务 + 数据导入导出，均架构级工作量）
 - [ ] 回归通过 → M1 close-out（文档归档 + 下一里程碑规划）

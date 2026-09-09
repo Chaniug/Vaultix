@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Password
+import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Timer
@@ -146,7 +147,7 @@ fun SettingsScreen(
             DataSection(viewModel)
 
             // ---- 自动填充（M2-a：系统 AutofillService 入口） ----
-            AutofillSection()
+            AutofillSection(viewModel)
 
             // ---- 关于 ----
             SettingsGroupTitle(stringResource(R.string.group_about))
@@ -303,14 +304,26 @@ private fun DataSection(viewModel: SettingsViewModel) {
  * 具体的填充行为（解析/匹配/回填）由 [io.vaultix.vaultix.autofill.VaultixAutofillService] 承担。
  */
 @Composable
-private fun AutofillSection() {
+private fun AutofillSection(viewModel: SettingsViewModel) {
     val context = LocalContext.current
+    val savePrompt by viewModel.autofillSavePrompt.collectAsStateWithLifecycle()
     SettingsGroupTitle(stringResource(R.string.group_autofill))
     SettingsRow(
         icon = { Icon(Icons.Filled.Password, contentDescription = null) },
         title = stringResource(R.string.setting_autofill),
         subtitle = stringResource(R.string.setting_autofill_desc),
         onClick = { openSystemAutofillSettings(context) },
+    )
+    SettingsRow(
+        icon = { Icon(Icons.Filled.Save, contentDescription = null) },
+        title = stringResource(R.string.setting_autofill_save_prompt),
+        subtitle = stringResource(R.string.setting_autofill_save_prompt_desc),
+        trailing = {
+            Switch(
+                checked = savePrompt,
+                onCheckedChange = viewModel::setAutofillSavePrompt,
+            )
+        },
     )
     // 快捷磁贴：国产输入法大多不支持键盘内联建议、部分国产 ROM 会吞掉系统填充弹窗，
     // 这条「复制 + 粘贴」路径不依赖输入法和无障碍，是最稳的兜底入口（仅说明如何添加）。
