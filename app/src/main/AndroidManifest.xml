@@ -68,9 +68,10 @@
         </service>
 
         <!-- Credential Provider（M3 最高优先）：Android 14+ 起 Edge / Chrome 优先走 Credential
-             Manager 取通行密钥；不注册此服务 → 系统根本不会向 Vaultix 询问 passkey，
-             表现为「网站登录时通行密钥不出现」。仅做 public-key（通行密钥）供应，
-             密码填充仍由上面的 AutofillService 承担（同源降级，见 next-steps）。 -->
+             Manager 取凭据；不注册此服务 → 系统根本不会向 Vaultix 询问 passkey，表现为「网站登录时
+             通行密钥不出现」。注册后即被系统识别，并同时供应 public-key（通行密钥）+ password（密码）。
+             注意：启用后 Credential Manager 会接管「登录字段」自动填充，本服务必须同时声明 password
+             能力，否则密码框为空、传统 AutofillService 在凭据字段上被绕过（见 credential_provider.xml）。 -->
         <service
             android:name=".passkey.VaultixCredentialProviderService"
             android:exported="true"
@@ -93,6 +94,13 @@
             android:theme="@style/Theme.Vaultix.Transparent" />
         <activity
             android:name=".passkey.PasskeyCreateActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:theme="@style/Theme.Vaultix.Transparent" />
+        <!-- 密码「填充」宿主：由 Credential Provider 的 GET(password) 候选 PendingIntent 拉起，
+             透明卡片确认后把解密明文 (用户名, 密码) 回灌 Credential Manager（见 PasswordGetActivity）。 -->
+        <activity
+            android:name=".passkey.PasswordGetActivity"
             android:excludeFromRecents="true"
             android:exported="false"
             android:theme="@style/Theme.Vaultix.Transparent" />

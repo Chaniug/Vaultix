@@ -434,7 +434,10 @@
 
     <!-- Credential Provider（M3 最高优先）：系统层通行密钥供应 -->
     <string name="credential_unlock_title">解锁 Vaultix</string>
-    <string name="credential_unlock_subtitle">解锁后选择通行密钥</string>
+    <string name="credential_unlock_subtitle">解锁后选择凭据</string>
+    <string name="password_fill_title">填充密码</string>
+    <string name="password_fill_message">Vaultix 即将填充 %1$s 的密码</string>
+    <string name="password_fill_confirm">填充</string>
     <string name="passkey_create_title">创建通行密钥</string>
     <string name="passkey_create_for">为 %1$s 创建通行密钥</string>
     <string name="passkey_create_choose_login">保存到哪个登录条目</string>

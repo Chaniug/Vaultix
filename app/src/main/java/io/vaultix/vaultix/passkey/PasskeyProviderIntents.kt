@@ -69,4 +69,10 @@ object PasskeyProviderIntents {
         .putExtra(EXTRA_RP_NAME, rpName)
         .putExtra(EXTRA_USER_NAME, userName)
         .putExtra(EXTRA_USER_DISPLAY_NAME, userDisplayName)
+
+    /** password：仅传定位信息 (vaultId, itemId)，明文由已解锁仓储取，绝不走 Intent。 */
+    fun passwordGetIntent(context: Context, vaultId: String, itemId: String): Intent =
+        Intent(context, PasswordGetActivity::class.java)
+            .putExtra(EXTRA_VAULT_ID, vaultId)
+            .putExtra(EXTRA_ITEM_ID, itemId)
 }
