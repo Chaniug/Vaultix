@@ -124,6 +124,8 @@ enum class UriMatch {
     Exact,
     /** 4 正则匹配 */
     RegularExpression,
+    /** 5 永不匹配（排除该 URI，对齐 Bitwarden UriMatchType.Never） */
+    Never,
 }
 
 /**

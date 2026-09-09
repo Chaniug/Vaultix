@@ -401,6 +401,7 @@ class CipherMapper @Inject constructor(
         TYPE_URI_MATCH_STARTS_WITH -> UriMatch.StartsWith
         TYPE_URI_MATCH_EXACT -> UriMatch.Exact
         TYPE_URI_MATCH_REGEX -> UriMatch.RegularExpression
+        TYPE_URI_MATCH_NEVER -> UriMatch.Never
         else -> null
     }
 
@@ -410,6 +411,7 @@ class CipherMapper @Inject constructor(
         UriMatch.StartsWith -> TYPE_URI_MATCH_STARTS_WITH
         UriMatch.Exact -> TYPE_URI_MATCH_EXACT
         UriMatch.RegularExpression -> TYPE_URI_MATCH_REGEX
+        UriMatch.Never -> TYPE_URI_MATCH_NEVER
         null -> null
     }
 
@@ -566,6 +568,7 @@ class CipherMapper @Inject constructor(
         const val TYPE_URI_MATCH_STARTS_WITH = 2
         const val TYPE_URI_MATCH_EXACT = 3
         const val TYPE_URI_MATCH_REGEX = 4
+        const val TYPE_URI_MATCH_NEVER = 5
         const val TYPE_FIELD_TEXT = 0
         const val TYPE_FIELD_HIDDEN = 1
         const val TYPE_FIELD_BOOLEAN = 2
