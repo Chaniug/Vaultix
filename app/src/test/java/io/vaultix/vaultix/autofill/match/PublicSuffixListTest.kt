@@ -52,4 +52,24 @@ class PublicSuffixListTest {
     fun `lowercases host`() {
         assertThat(PublicSuffixList.baseDomain("Example.COM")).isEqualTo("example.com")
     }
+
+    @Test
+    fun `full psl wildcard compute amazonaws com`() {
+        // *.compute.amazonaws.com 是通配公共后缀，故 myapp.compute.amazonaws.com 整体即基域。
+        assertThat(PublicSuffixList.baseDomain("myapp.compute.amazonaws.com"))
+            .isEqualTo("myapp.compute.amazonaws.com")
+    }
+
+    @Test
+    fun `full psl bare compute amazonaws com is not a suffix`() {
+        // PSL 中 compute.amazonaws.com 本身不是公共后缀（仅 *.compute.amazonaws.com 是），
+        // 故公共后缀回退为 com，基域为 amazonaws.com（PSL 规范的 eTLD+1 语义）。
+        assertThat(PublicSuffixList.baseDomain("compute.amazonaws.com"))
+            .isEqualTo("amazonaws.com")
+    }
+
+    @Test
+    fun `implicit suffix for unknown tld`() {
+        assertThat(PublicSuffixList.baseDomain("example.unknowntld")).isEqualTo("example.unknowntld")
+    }
 }
