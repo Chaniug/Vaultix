@@ -53,10 +53,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -174,6 +172,7 @@ fun TotpCodesScreen(
                             onClick = { editing = entry },
                             onDelete = { viewModel.deleteTotp(entry) },
                             onBind = { if (!entry.bound) binding = entry },
+                            onCopy = viewModel::copyCode,
                         )
                     }
                 }
@@ -275,12 +274,13 @@ private fun TotpRow(
     onClick: () -> Unit,
     onDelete: () -> Unit,
     onBind: () -> Unit,
+    onCopy: (String) -> Unit,
 ) {
     val code = TotpGenerator.generate(entry.toConfig(), nowSeconds)
     val isHotp = entry.type == OtpType.HOTP
     val remaining = TotpGenerator.remainingSeconds(entry.period, nowSeconds)
     val progress = 1f - (remaining.toFloat() / entry.period)
-    val clipboard = LocalClipboardManager.current
+    val copiedMessage = stringResource(R.string.copy_totp)
     val scope = rememberCoroutineScope()
 
     Surface(
@@ -332,8 +332,10 @@ private fun TotpRow(
                     )
                 }
                 IconButton(onClick = {
-                    clipboard.setText(AnnotatedString(code))
-                    scope.launch { snackbarHostState.showSnackbar(code) }
+                    onCopy(code)
+                    scope.launch {
+                        snackbarHostState.showSnackbar(copiedMessage)
+                    }
                 }) {
                     Icon(
                         Icons.Filled.ContentCopy,

@@ -11,6 +11,16 @@
         android:name="android.hardware.camera"
         android:required="false" />
 
+    <!-- Android 11（API 30）起的包可见性：不声明就查不到完整应用列表
+         （「关联应用」只能看到少数几个 App）。只声明 LAUNCHER intent，
+         不申请 QUERY_ALL_PACKAGES（应用商店审核风险）。 -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
+
     <application
         android:name=".VaultixApplication"
         android:allowBackup="true"

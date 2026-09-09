@@ -10,11 +10,14 @@ import io.vaultix.common.OtpScanResult
 import io.vaultix.common.OtpType
 import io.vaultix.common.OtpUriParser
 import io.vaultix.common.TotpConfig
+import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.domain.ItemRepository
 import io.vaultix.domain.VaultRepository
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
+import io.vaultix.vaultix.util.VaultixClipboard
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -42,6 +45,8 @@ class TotpCodesViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val vaultRepository: VaultRepository,
     private val itemRepository: ItemRepository,
+    private val clipboard: VaultixClipboard,
+    private val preferences: VaultixPreferences,
 ) : ViewModel() {
 
     val vaultId: String = checkNotNull(savedStateHandle[ARG_VAULT_ID])
@@ -71,6 +76,23 @@ class TotpCodesViewModel @Inject constructor(
     }
 
     fun setQuery(q: String) = _state.update { it.copy(query = q) }
+
+    /**
+     * 复制验证码：走 [VaultixClipboard]（安全剪贴板）。
+     *
+     * 此前界面直接 `LocalClipboardManager.setText`——既没有 API 33+ 的 `IS_SENSITIVE`
+     * 标记（系统剪贴板预览/输入法会明文显示验证码），也不遵守 `clipboardClearMs` 自动清除。
+     */
+    fun copyCode(code: String) {
+        if (code.isBlank()) return
+        viewModelScope.launch {
+            clipboard.copy(
+                text = code,
+                label = CLIPBOARD_LABEL,
+                autoClearMs = preferences.clipboardClearMs.first(),
+            )
+        }
+    }
 
     /** 当前所有含 TOTP 的条目，按搜索过滤（issuer/account/标题）。 */
     fun filteredEntries(): List<TotpEntry> {
@@ -249,6 +271,7 @@ private fun ImportedOtp.toStandaloneItem(): VaultItem = VaultItem(
 
 private const val TITLE_SECRET_PREVIEW = 8
 private const val FALLBACK_TITLE_VALUE = "验证码"
+private const val CLIPBOARD_LABEL = "Vaultix"
 
 /**
  * 验证码界面的一行数据（已归一化，便于实时计算与展示）。

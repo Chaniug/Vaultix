@@ -101,6 +101,8 @@
     <string name="group_autofill">自动填充</string>
     <string name="setting_autofill">系统自动填充</string>
     <string name="setting_autofill_desc">在任意 App / 网页的登录框提供密码；需在系统设置中先启用 Vaultix</string>
+    <string name="setting_auto_copy_totp">填充后复制验证码</string>
+    <string name="setting_auto_copy_totp_desc">条目带验证码、但页面没有验证码框时，填充完成即把验证码放进剪贴板（沿用剪贴板清除时长）</string>
     <string name="setting_autofill_save_prompt">保存提示</string>
     <string name="setting_autofill_save_prompt_desc">在 App / 网页登录成功后询问是否保存到 Vaultix（已有同账号条目时提示更新密码）</string>
     <string name="autofill_save_title">保存登录</string>
@@ -111,7 +113,8 @@
     <string name="autofill_save_updated">已更新密码</string>
     <string name="autofill_save_locked">请先解锁 Vaultix 再保存（锁定状态下无法写入密文）</string>
     <string name="setting_manual_fill_tile">快速填充磁贴</string>
-    <string name="setting_manual_fill_tile_desc">在快捷设置（下拉通知栏）添加「快速填充」磁贴：选条目即复制密码，通知栏可接力复制用户名。不依赖输入法与无障碍</string>
+    <string name="setting_manual_fill_tile_desc">在快捷设置（下拉通知栏）添加「快速填充」磁贴：选条目即复制密码，通知栏可接力复制用户名 / 验证码。不依赖输入法与无障碍</string>
+    <string name="setting_manual_fill_tile_hint">请下拉通知栏 → 点「编辑」（铅笔图标）→ 把「快速填充」拖到可见区域。快捷设置的排列由系统管理，应用无法直接开关磁贴</string>
     <string name="autofill_unlock_title">解锁 Vaultix</string>
     <string name="autofill_unlock_subtitle">解锁后回到输入框即可填充</string>
     <string name="autofill_unlock_action">打开 Vaultix 解锁</string>
@@ -129,6 +132,7 @@
     <string name="manual_fill_notif_title">已复制「%1$s」的密码</string>
     <string name="manual_fill_notif_text">点此复制用户名</string>
     <string name="manual_fill_copy_username">复制用户名</string>
+    <string name="manual_fill_copy_totp">复制验证码</string>
     <string name="manual_fill_copied_username">已复制「%1$s」的用户名</string>
     <string name="about_version">版本</string>
     <string name="about_source">源码与反馈</string>

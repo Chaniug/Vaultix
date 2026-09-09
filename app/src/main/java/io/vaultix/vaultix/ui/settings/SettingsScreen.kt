@@ -1,5 +1,11 @@
 package io.vaultix.vaultix.ui.settings
 
+import android.app.StatusBarManager
+import android.content.ComponentName
+import android.graphics.drawable.Icon
+import android.os.Build
+import androidx.core.content.ContextCompat
+
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
@@ -61,6 +67,7 @@ import io.vaultix.vaultix.BuildConfig
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.TrashAutoDeleteDialog
 import io.vaultix.vaultix.ui.common.trashAutoDeleteLabel
+import io.vaultix.vaultix.autofill.shortcut.AutofillTileService
 import io.vaultix.vaultix.ui.theme.ThemeMode
 
 /**
@@ -307,6 +314,8 @@ private fun DataSection(viewModel: SettingsViewModel) {
 private fun AutofillSection(viewModel: SettingsViewModel) {
     val context = LocalContext.current
     val savePrompt by viewModel.autofillSavePrompt.collectAsStateWithLifecycle()
+    val autoCopyTotp by viewModel.autoCopyTotp.collectAsStateWithLifecycle()
+    var tileUnsupported by rememberSaveable { mutableStateOf(false) }
     SettingsGroupTitle(stringResource(R.string.group_autofill))
     SettingsRow(
         icon = { Icon(Icons.Filled.Password, contentDescription = null) },
@@ -325,14 +334,61 @@ private fun AutofillSection(viewModel: SettingsViewModel) {
             )
         },
     )
+    SettingsRow(
+        icon = { Icon(Icons.Filled.Timer, contentDescription = null) },
+        title = stringResource(R.string.setting_auto_copy_totp),
+        subtitle = stringResource(R.string.setting_auto_copy_totp_desc),
+        trailing = {
+            Switch(
+                checked = autoCopyTotp,
+                onCheckedChange = viewModel::setAutoCopyTotp,
+            )
+        },
+    )
     // 快捷磁贴：国产输入法大多不支持键盘内联建议、部分国产 ROM 会吞掉系统填充弹窗，
     // 这条「复制 + 粘贴」路径不依赖输入法和无障碍，是最稳的兜底入口（仅说明如何添加）。
     SettingsRow(
-        icon = { Icon(Icons.Filled.ContentCopy, contentDescription = null) },
+        icon = { Icon(Icons.Filled.Lock, contentDescription = null) },
         title = stringResource(R.string.setting_manual_fill_tile),
         subtitle = stringResource(R.string.setting_manual_fill_tile_desc),
-        onClick = { },
+        onClick = { requestAddTile(context) { tileUnsupported = true } },
     )
+    if (tileUnsupported) {
+        AlertDialog(
+            onDismissRequest = { tileUnsupported = false },
+            title = { Text(stringResource(R.string.setting_manual_fill_tile)) },
+            text = { Text(stringResource(R.string.setting_manual_fill_tile_hint)) },
+            confirmButton = {
+                TextButton(onClick = { tileUnsupported = false }) {
+                    Text(stringResource(R.string.action_done))
+                }
+            },
+        )
+    }
+}
+
+/**
+ * 把「快速填充」磁贴加到快捷设置。
+ *
+ * Android 13+ 用系统 API 弹确认框（`StatusBarManager.requestAddTileService`）；
+ * 更低版本没有公开 API，只能引导用户手动拖动（系统不允许应用替用户改快捷设置布局，
+ * 所以这里**没有也不该有**「开关」——磁贴的增删权限在系统手里）。
+ */
+private fun requestAddTile(context: Context, onUnsupported: () -> Unit) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+        onUnsupported()
+        return
+    }
+    val manager = context.getSystemService(StatusBarManager::class.java)
+    val added = runCatching {
+        manager.requestAddTileService(
+            ComponentName(context, AutofillTileService::class.java),
+            context.getString(R.string.tile_manual_fill),
+            Icon.createWithResource(context, R.drawable.ic_stat_lock),
+            ContextCompat.getMainExecutor(context),
+        ) { }
+    }.isSuccess
+    if (!added) onUnsupported()
 }
 
 /** 打开系统自动填充设置：优先请求直接把 Vaultix 设为服务，失败回退到服务列表。 */

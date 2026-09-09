@@ -28,7 +28,17 @@ object AutofillIntents {
     /** 模式：无匹配项，跳到 Vaultix 搜索。 */
     const val MODE_SEARCH = 2
 
+    /**
+     * 模式：回填 Dataset 后**自动复制验证码**（对齐 Bitwarden「填充后自动复制 TOTP」）。
+     *
+     * 框架直填（setValue）时服务层无从感知用户是否点选，只有走 dataset 认证回调
+     * 这条 API 26 就有的路径，才能保证「复制」发生在真正填充之后
+     * （Bastion 同款取舍：不用 API 33 的 FillEventHistory）。
+     */
+    const val MODE_COPY_TOTP = 3
+
     private const val EXTRA_MODE = "vaultix.autofill.mode"
+    private const val EXTRA_TOTP = "vaultix.autofill.totp"
     private const val EXTRA_TITLE = "vaultix.autofill.title"
     private const val EXTRA_SUBTITLE = "vaultix.autofill.subtitle"
     private const val EXTRA_DATASET_ID = "vaultix.autofill.dataset_id"
@@ -43,10 +53,12 @@ object AutofillIntents {
         subtitle: String,
         datasetId: String? = null,
         entries: List<Pair<AutofillId, String>> = emptyList(),
+        totpSecret: String? = null,
     ): Intent = Intent(context, AutofillActivity::class.java)
         .setAction(Intent.ACTION_MAIN)
         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         .putExtra(EXTRA_MODE, mode)
+        .putExtra(EXTRA_TOTP, totpSecret)
         .putExtra(EXTRA_TITLE, title)
         .putExtra(EXTRA_SUBTITLE, subtitle)
         .putExtra(EXTRA_DATASET_ID, datasetId)
@@ -66,6 +78,9 @@ object AutofillIntents {
     fun titleOf(intent: Intent): String = intent.getStringExtra(EXTRA_TITLE).orEmpty()
     fun subtitleOf(intent: Intent): String = intent.getStringExtra(EXTRA_SUBTITLE).orEmpty()
     fun datasetIdOf(intent: Intent): String? = intent.getStringExtra(EXTRA_DATASET_ID)
+
+    /** 待自动复制的 TOTP 密钥（仅 [MODE_COPY_TOTP] 携带）。 */
+    fun totpSecretOf(intent: Intent): String? = intent.getStringExtra(EXTRA_TOTP)
 
     /** 待回填的「目标字段 → 值」（与 [AutofillIntents.create] 入参顺序一致）。 */
     fun entriesOf(intent: Intent): List<Pair<AutofillId, String>> {

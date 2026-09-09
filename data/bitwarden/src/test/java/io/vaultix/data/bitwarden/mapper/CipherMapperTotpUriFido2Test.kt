@@ -128,6 +128,81 @@ class CipherMapperTotpUriFido2Test {
         assertEquals(true, written.creationDate?.startsWith("20"))
     }
 
+    /**
+     * 通行密钥 13 字段**往返保真**（2026-09-09 修复的数据破坏回归）。
+     *
+     * 修复前 `mapFido2` 只读 8 个字段，`mapFido2Request` 却按 13 字段写回
+     * → 编辑一次条目就把服务端已存的 `keyValue`（密钥材料）、`counter`、`discoverable`
+     * 覆盖成空/默认值，官方端与其它设备上的这条通行密钥再也签不了名（不可逆）。
+     */
+    @Test
+    fun fido2RoundTripKeepsKeyMaterialCounterAndDiscoverable() {
+        val stored = CipherDto(
+            id = "c3",
+            type = 1,
+            name = crypto.encryptString("站点", accountKey),
+            login = LoginDto(
+                username = crypto.encryptString("u@x.com", accountKey),
+                password = crypto.encryptString("p", accountKey),
+                fido2Credentials = listOf(
+                    Fido2CredentialDto(
+                        credentialId = crypto.encryptString("cid-1", accountKey),
+                        rpId = crypto.encryptString("x.com", accountKey),
+                        keyType = crypto.encryptString("public-key", accountKey),
+                        keyCurve = crypto.encryptString("P-256", accountKey),
+                        keyValue = crypto.encryptString("PRIVATE-KEY-MATERIAL", accountKey),
+                        counter = crypto.encryptString("7", accountKey),
+                        discoverable = crypto.encryptString("false", accountKey),
+                    ),
+                ),
+            ),
+        )
+
+        val item = mapper.toDomain(stored, accountKey)
+        val fido = item.fido2Credentials.single()
+
+        // 读：密钥材料 / 计数器 / 可发现性必须原样进来
+        assertEquals("PRIVATE-KEY-MATERIAL", fido.keyValue)
+        assertEquals(7L, fido.counter)
+        assertEquals(false, fido.discoverable)
+        assertEquals("public-key", fido.keyType)
+        assertEquals("P-256", fido.keyCurve)
+
+        // 写：再走一次更新，服务端值不能被默认值顶掉
+        val request = mapper.toUpdateRequest(item, stored, accountKey)
+        val written = request.login!!.fido2Credentials.single()
+        assertEquals(
+            "PRIVATE-KEY-MATERIAL",
+            crypto.decryptToString(written.keyValue!!, accountKey),
+        )
+        assertEquals("7", crypto.decryptToString(written.counter!!, accountKey))
+        assertEquals("false", crypto.decryptToString(written.discoverable!!, accountKey))
+    }
+
+    /**
+     * `creationDate` 是 Bitwarden 的**明文** DateTime（不加密）。
+     * 修复前读侧一律按密文解密，解析失败降级空串 → 通行密钥创建时间永远显示「—」。
+     */
+    @Test
+    fun creationDateInPlainTextIsReadAsIs() {
+        val stored = CipherDto(
+            id = "c4",
+            type = 1,
+            name = crypto.encryptString("站点", accountKey),
+            login = LoginDto(
+                fido2Credentials = listOf(
+                    // Bitwarden 真实形态：明文 ISO DateTime
+                    Fido2CredentialDto(creationDate = "2026-09-05T12:34:56.789Z"),
+                ),
+            ),
+        )
+
+        assertEquals(
+            "2026-09-05T12:34:56.789Z",
+            mapper.toDomain(stored, accountKey).fido2Credentials.single().creationDate,
+        )
+    }
+
     @Test
     fun toUpdateRequestMergesFido2IntoStoredLogin() {
         // 既有登录条目已有一个通行密钥（服务端密文）

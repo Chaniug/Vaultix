@@ -52,15 +52,28 @@ class SmartCopyNotifier @Inject constructor(
      * 复制密码 → 发接力通知（有用户名才发，否则一条通知没意义）。
      * 剪贴板自动清除延迟取自用户偏好（`clipboardClearMs`，0 = 不清除）。
      */
-    suspend fun copyPasswordThenOfferUsername(title: String, username: String, password: String) {
+    suspend fun copyPasswordThenOfferUsername(
+        title: String,
+        username: String,
+        password: String,
+        totpCode: String? = null,
+    ) {
         clipboard.copy(text = password, label = CLIP_LABEL, autoClearMs = prefs.clipboardClearMs.first())
-        if (username.isBlank() || !canNotify()) return
-        manager.notify(NOTIFICATION_ID, buildNotification(title, username))
+        if (!canNotify()) return
+        // 用户名和验证码都没有时，一条没有动作的通知没有意义
+        if (username.isBlank() && totpCode.isNullOrBlank()) return
+        manager.notify(NOTIFICATION_ID, buildNotification(title, username, totpCode))
     }
 
     /** 通知点击：复制用户名并收起通知。 */
     suspend fun copyUsernameAndDismiss(username: String) {
         clipboard.copy(text = username, label = CLIP_LABEL, autoClearMs = prefs.clipboardClearMs.first())
+        manager.cancel(NOTIFICATION_ID)
+    }
+
+    /** 通知点击：复制验证码并收起通知（2FA 第二步常只需要验证码）。 */
+    suspend fun copyTotpAndDismiss(code: String) {
+        clipboard.copy(text = code, label = CLIP_LABEL, autoClearMs = prefs.clipboardClearMs.first())
         manager.cancel(NOTIFICATION_ID)
     }
 
@@ -75,28 +88,45 @@ class SmartCopyNotifier @Inject constructor(
         return manager.areNotificationsEnabled()
     }
 
-    private fun buildNotification(title: String, username: String): Notification {
+    private fun buildNotification(title: String, username: String, totpCode: String?): Notification {
         ensureChannel()
-        val intent = Intent(context, SmartCopyReceiver::class.java)
-            .putExtra(EXTRA_USERNAME, username)
-            .putExtra(EXTRA_TITLE, title)
         val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        val action = PendingIntent.getBroadcast(context, REQUEST_COPY_USERNAME, intent, flags)
-        return NotificationCompat.Builder(context, CHANNEL_ID)
+        val builder = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_lock)
             .setContentTitle(context.getString(R.string.manual_fill_notif_title, title))
             .setContentText(context.getString(R.string.manual_fill_notif_text))
-            .setContentIntent(action)
-            .addAction(
-                R.drawable.ic_stat_lock,
-                context.getString(R.string.manual_fill_copy_username),
-                action,
-            )
             .setTimeoutAfter(TIMEOUT_MS)
             .setAutoCancel(true)
             // 锁屏上不泄露条目名
             .setVisibility(NotificationCompat.VISIBILITY_SECRET)
-            .build()
+
+        val actions = mutableListOf<NotificationCompat.Action>()
+        if (username.isNotBlank()) {
+            val intent = Intent(context, SmartCopyReceiver::class.java)
+                .putExtra(EXTRA_USERNAME, username)
+                .putExtra(EXTRA_TITLE, title)
+            val pending = PendingIntent.getBroadcast(context, REQUEST_COPY_USERNAME, intent, flags)
+            builder.setContentIntent(pending)
+            actions += NotificationCompat.Action(
+                R.drawable.ic_stat_lock,
+                context.getString(R.string.manual_fill_copy_username),
+                pending,
+            )
+        }
+        if (!totpCode.isNullOrBlank()) {
+            val intent = Intent(context, SmartCopyReceiver::class.java)
+                .putExtra(EXTRA_TOTP, totpCode)
+                .putExtra(EXTRA_TITLE, title)
+            val pending = PendingIntent.getBroadcast(context, REQUEST_COPY_TOTP, intent, flags)
+            if (actions.isEmpty()) builder.setContentIntent(pending)
+            actions += NotificationCompat.Action(
+                R.drawable.ic_stat_lock,
+                context.getString(R.string.manual_fill_copy_totp),
+                pending,
+            )
+        }
+        actions.forEach { builder.addAction(it) }
+        return builder.build()
     }
 
     private fun ensureChannel() {
@@ -115,6 +145,7 @@ class SmartCopyNotifier @Inject constructor(
 
         const val CHANNEL_ID = "manual_fill"
         const val EXTRA_USERNAME = "vaultix.manual_fill.username"
+        const val EXTRA_TOTP = "vaultix.manual_fill.totp"
         const val EXTRA_TITLE = "vaultix.manual_fill.title"
 
         /** 剪贴板条目标签（清除校验按 label + text 匹配）。 */
@@ -124,5 +155,6 @@ class SmartCopyNotifier @Inject constructor(
         private const val TIMEOUT_MS = 60_000L
 
         private const val REQUEST_COPY_USERNAME = 2001
+        private const val REQUEST_COPY_TOTP = 2002
     }
 }

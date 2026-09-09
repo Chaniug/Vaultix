@@ -100,6 +100,8 @@ object HintClassifier {
         val t = text.lowercase()
         if (PASSWORD_KEYWORDS.any { t.contains(it) }) return FieldHint.PASSWORD
         if (USERNAME_KEYWORDS.any { t.contains(it) }) return FieldHint.USERNAME
+        // 验证码框常常既没有 autofillHints 也没有特殊 inputType，只靠 id/placeholder 文本识别
+        if (OTP_KEYWORDS.any { t.contains(it) }) return FieldHint.OTP
         if (EMAIL_KEYWORDS.any { t.contains(it) }) return FieldHint.EMAIL_ADDRESS
         return null
     }
@@ -107,4 +109,11 @@ object HintClassifier {
     private val PASSWORD_KEYWORDS = listOf("password", "passwort", "密码", "口令")
     private val USERNAME_KEYWORDS = listOf("username", "user name", "login", "用户名", "账号", "登录")
     private val EMAIL_KEYWORDS = listOf("email", "e-mail", "邮箱")
+
+    /** 验证码关键词（移植 Bastion `OtpAutofillSideEffects.isOtpHint`，GPL-3.0，Copyright 2025 JoyinJoester）。 */
+    private val OTP_KEYWORDS = listOf(
+        "otp", "one-time", "one time", "onetimecode", "totp",
+        "2fa", "twofactor", "two-factor", "two factor", "mfa",
+        "verification", "verify", "验证码", "驗證碼", "一次性", "动态码",
+    )
 }

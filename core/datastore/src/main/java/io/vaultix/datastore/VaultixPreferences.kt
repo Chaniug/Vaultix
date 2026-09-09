@@ -55,6 +55,7 @@ class VaultixPreferences @Inject constructor(
         val THEME_MODE = stringPreferencesKey("theme_mode")
         val OLED_PURE_BLACK = booleanPreferencesKey("oled_pure_black")
         val AUTOFILL_SAVE_PROMPT = booleanPreferencesKey("autofill_save_prompt")
+        val AUTO_COPY_TOTP = booleanPreferencesKey("auto_copy_totp")
 
         /**
          * 自动锁定档位（分钟，语义对齐 Bastion autoLockMinutes）：
@@ -110,6 +111,14 @@ class VaultixPreferences @Inject constructor(
      */
     val autofillSavePrompt: Flow<Boolean> =
         safeData.map { it[AUTOFILL_SAVE_PROMPT] ?: true }
+
+    /**
+     * 自动填充后自动复制验证码（对齐 Bitwarden `isAutoCopyTotpDisabled = false`）：
+     * 条目带 TOTP 而页面没有验证码框时，填充完成即把当前验证码放进剪贴板，
+     * 用户直接粘贴即可完成 2FA 第二步。默认开启。
+     */
+    val autoCopyTotp: Flow<Boolean> =
+        safeData.map { it[AUTO_COPY_TOTP] ?: true }
 
     val defaultVaultId: Flow<String?> = safeData.map { it[DEFAULT_VAULT_ID] }
 
@@ -181,6 +190,11 @@ class VaultixPreferences @Inject constructor(
     /** 自动填充保存提示开关（关闭后登录成功不再询问保存）。 */
     suspend fun setAutofillSavePrompt(enabled: Boolean) {
         dataStore.edit { it[AUTOFILL_SAVE_PROMPT] = enabled }
+    }
+
+    /** 自动填充后自动复制验证码开关。 */
+    suspend fun setAutoCopyTotp(enabled: Boolean) {
+        dataStore.edit { it[AUTO_COPY_TOTP] = enabled }
     }
 
     suspend fun setDefaultVaultId(id: String?) {

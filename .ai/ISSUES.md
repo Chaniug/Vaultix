@@ -146,6 +146,33 @@ debug(preview) 与 release 可互相覆盖安装的**硬性前提**：
 - **判据**：Android 自动填充保存链路三段缺一不可——
   ① FillResponse 挂 SaveInfo → ② 框架回调 onSaveRequest → ③ 自己拉起确认界面落库
 
+## 20. Quick Settings 磁贴「加了不显示 / 空白」（2026-09-09）
+
+- **现象**：声明了 TileService，但快捷设置里找不到，或加进去是空白方块
+- **根因**：① 只实现 `onClick`，没有 `onStartListening`（系统拿不到 label/icon/state，
+  国产 ROM 尤其明显）；② 没调 `requestListeningState`，系统不保证回调 onClick
+- **另注**：磁贴**必须由用户手动添加**，系统没有给应用「开关磁贴」的 API——
+  设置页只能做「引导添加」（API 33+ `StatusBarManager.requestAddTileService`），不是开关
+- **解法**：`onTileAdded` / `onStartListening` 里写 `tile.label/icon/state` + `updateTile()`，
+  并 `requestListeningState(this, ComponentName(this, X::class.java))`
+
+## 21. Android 11+ 查不全已安装应用（「关联应用」列表很短）（2026-09-09）
+
+- **现象**：`queryIntentActivities(ACTION_MAIN + CATEGORY_LAUNCHER)` 只返回很少几个 App
+- **根因**：**包可见性限制**（API 30+）——不在「自动可见」白名单的查询需要 `<queries>` 声明
+- **解法**：Manifest 加 `<queries><intent><action MAIN/><category LAUNCHER/></intent></queries>`，
+  **不要**申请 `QUERY_ALL_PACKAGES`（应用商店审核风险）
+
+## 22. Mapper 读写字段不对称 → 静默数据破坏（2026-09-09，通行密钥 P0）
+
+- **现象**：编辑任一条登录条目后，服务端该条通行密钥的密钥材料被清空、计数器归零
+- **根因**：`mapFido2` 只读 8 个字段，`mapFido2Request` 却写 13 个 → 没读到的字段用默认值
+  覆盖上传（`encryptOpt("")` 返回 null = 服务端字段被置空）
+- **解法**：读侧补齐全部字段（照 Bastion `Fido2CredentialCodec` 13 字段）；
+  对「写明文、读密文」的 `creationDate` 用 `decryptOrPlain` 兼容
+- **判据**：**Mapper 读 N 字段就必须能写回 N 字段**，且要有「往返后逐字段相等」的回归测试；
+  读不到就写默认值的写法一定会造成不可逆破坏
+
 ## 18. Kotlin 默认参数不能调用 suspend 函数（2026-09-09）
 
 - **现象**：`suspend fun f(clearMs: Long = prefs.preference.first())` 编译失败

@@ -16,7 +16,10 @@ import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.view.autofill.AutofillManager
+import android.widget.Toast
 import androidx.fragment.app.FragmentActivity
+import androidx.lifecycle.ProcessLifecycleOwner
+import androidx.lifecycle.lifecycleScope
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.biometric.BiometricManager
@@ -41,10 +44,19 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import dagger.hilt.android.AndroidEntryPoint
+import io.vaultix.common.OtpUriParser
+import io.vaultix.common.TotpGenerator
+import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.vaultix.MainActivity
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.autofill.engine.AutofillDatasets
 import io.vaultix.vaultix.ui.theme.VaultixTheme
+import io.vaultix.vaultix.util.VaultixClipboard
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import javax.inject.Inject
 
 /**
  * 透明宿 Activity：由系统经 PendingIntent 拉起（见 [AutofillIntents]）。
@@ -55,6 +67,12 @@ import io.vaultix.vaultix.ui.theme.VaultixTheme
  */
 @AndroidEntryPoint
 class AutofillActivity : FragmentActivity() {
+
+    @Inject
+    lateinit var clipboard: VaultixClipboard
+
+    @Inject
+    lateinit var prefs: VaultixPreferences
 
     private var biometricPrompt: BiometricPrompt? = null
 
@@ -74,8 +92,10 @@ class AutofillActivity : FragmentActivity() {
                 )
             }
         }
-        if (mode == AutofillIntents.MODE_REPROMPT) {
-            startReprompt(title, subtitle)
+        when (mode) {
+            AutofillIntents.MODE_REPROMPT -> startReprompt(title, subtitle)
+            AutofillIntents.MODE_COPY_TOTP -> deliverDatasetAndCopyTotp(title, subtitle)
+            else -> Unit
         }
     }
 
@@ -129,6 +149,34 @@ class AutofillActivity : FragmentActivity() {
                 .setNegativeButtonText(getString(R.string.action_cancel))
         }
         return builder.build()
+    }
+
+    /**
+     * 回填 Dataset 后自动复制验证码（页面没有验证码框时的 2FA 第二步）。
+     *
+     * 复制走 [VaultixClipboard]（安全剪贴板：IS_SENSITIVE + 按偏好自动清除），
+     * 并用 **ProcessLifecycleOwner** 作用域——本 Activity 会立刻 finish()，
+     * 用 lifecycleScope 会来不及跑完（Bastion 踩过的坑）。
+     */
+    private fun deliverDatasetAndCopyTotp(title: String, subtitle: String) {
+        deliverDataset(title, subtitle)
+        val secret = AutofillIntents.totpSecretOf(intent) ?: return
+        ProcessLifecycleOwner.get().lifecycleScope.launch(Dispatchers.Default) {
+            val code = runCatching {
+                OtpUriParser.parse(secret)?.let { TotpGenerator.generate(it) }
+            }.getOrNull() ?: return@launch
+            withContext(Dispatchers.Main) {
+                clipboard.copy(
+                    text = code,
+                    autoClearMs = prefs.clipboardClearMs.first(),
+                )
+                Toast.makeText(
+                    this@AutofillActivity,
+                    getString(R.string.copy_totp),
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
+        }
     }
 
     private fun deliverDataset(title: String, subtitle: String) {

@@ -181,11 +181,15 @@ class VaultixAutofillService : AutofillService() {
         )
 
         val saveInfo = AutofillSaveInfo.build(parsed)
+        // 填充后自动复制验证码（条目标了 TOTP 但页面没有验证码框时）
+        val copyTotp = prefs.autoCopyTotp.first()
         val builder = FillResponse.Builder()
         saveInfo?.let { builder.setSaveInfo(it) }
         var added = 0
-        for (suggestion in plan.suggestions) {
-            val dataset = datasetFor(parsed, suggestion) ?: continue
+        // 上限保护：FillResponse 经 Binder 传输有大小限制，条目多时不截断会导致
+        // 整个响应失败（表现为「浏览器里一点反应都没有」）。
+        for (suggestion in plan.suggestions.take(MAX_DATASETS)) {
+            val dataset = datasetFor(parsed, suggestion, copyTotp) ?: continue
             builder.addDataset(dataset)
             added++
         }
@@ -230,14 +234,26 @@ class VaultixAutofillService : AutofillService() {
         return VaultCandidates(credentials, cards, identities)
     }
 
-    /** 单条建议 → Dataset；主密码二次验证的条目改为认证后回灌。 */
+    /**
+     * 单条建议 → Dataset。
+     *
+     * 需要「先认证再回填」的两种情况：
+     * - 主密码二次验证（[FillSuggestion.requiresReprompt]）；
+     * - 条目有验证码但**页面没有验证码框** → 走回调路径，回填后自动复制验证码
+     *   （[AutofillIntents.MODE_COPY_TOTP]，对齐 Bitwarden 的填充后自动复制 TOTP）。
+     */
     private fun datasetFor(
         parsed: ParsedStructure,
         suggestion: FillSuggestion,
+        copyTotpEnabled: Boolean,
     ): Dataset? {
         val entries = AutofillDatasets.entriesFor(parsed, suggestion)
         if (entries.isEmpty()) return null
-        val authIntent = if (suggestion.requiresReprompt) repromptIntent(suggestion, entries) else null
+        val authIntent = when {
+            suggestion.requiresReprompt -> repromptIntent(suggestion, entries)
+            copyTotpEnabled && needsTotpCopy(suggestion) -> copyTotpIntent(suggestion, entries)
+            else -> null
+        }
         return AutofillDatasets.build(
             context = this,
             entries = entries,
@@ -264,6 +280,27 @@ class VaultixAutofillService : AutofillService() {
         requestCode = suggestion.id.hashCode(),
     )
 
+    /** 条目带验证码、但本次填充不会写验证码框 → 需要回调后再复制一个。 */
+    private fun needsTotpCopy(suggestion: FillSuggestion): Boolean =
+        !suggestion.totpSecret.isNullOrBlank() && FieldHint.OTP !in suggestion.fields
+
+    private fun copyTotpIntent(
+        suggestion: FillSuggestion,
+        entries: List<Pair<android.view.autofill.AutofillId, String>>,
+    ) = AutofillIntents.pending(
+        context = this,
+        intent = AutofillIntents.create(
+            context = this,
+            mode = AutofillIntents.MODE_COPY_TOTP,
+            title = suggestion.title,
+            subtitle = suggestion.subtitle,
+            datasetId = suggestion.id,
+            entries = entries,
+            totpSecret = suggestion.totpSecret,
+        ),
+        requestCode = suggestion.id.hashCode(),
+    )
+
     /** TOTP 密钥 → 当前验证码；解析或计算失败返回 null（不阻塞账号密码填充）。 */
     private fun totpCode(raw: String): String? = runCatching {
         val config = OtpUriParser.parse(raw) ?: return null
@@ -280,5 +317,8 @@ class VaultixAutofillService : AutofillService() {
     private companion object {
         const val REQUEST_UNLOCK = 1001
         const val REQUEST_SEARCH = 1002
+
+        /** 下拉面板最多给几条建议（超出转「在 Vaultix 中搜索」，防响应过大被系统丢弃）。 */
+        const val MAX_DATASETS = 10
     }
 }

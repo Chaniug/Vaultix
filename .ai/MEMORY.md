@@ -554,6 +554,25 @@ Vaultix 原把 linkedId 当顺序编号（1/2/3/4），**官方是分段编码**
   + `AppInfo/AppPickerDialog`（LAUNCHER intent 枚举，**不申请 QUERY_ALL_PACKAGES**），
   表单「关联应用」写入 `androidapp://<pkg>`（Bitwarden 官方形态，服务端与其它端都认）。
 
+## TOTP 链路对齐（2026-09-09，第二十三轮）
+- **填充后自动复制验证码**（对齐 Bitwarden `isAutoCopyTotpDisabled=false`）：条目有 TOTP、
+  页面没有验证码框时，挂 **dataset 级 `setAuthentication`**（API 26+，Bastion 同款取舍，
+  不用 API 33 的 `FillEventHistory`）→ 回调 Activity 回填后经 `VaultixClipboard` 复制。
+  开关 `autoCopyTotp`（默认开）。
+- 字段识别补 Bastion `isOtpHint` 词表；`FillPlanner` 支持「纯 2FA 页面」（只有验证码框）
+  单独出建议；FillResponse **最多 10 条 dataset**（Binder 大小限制，超了整包被丢弃）。
+- 复制验证码一律走 `VaultixClipboard`（IS_SENSITIVE + 自动清除）：修了验证码总览页
+  直接用 `LocalClipboardManager` 的漏洞；手动填充通知新增「复制验证码」动作。
+
+## 通行密钥：能力边界（2026-09-09 核对）
+- **现状**：可列表/详情/复制凭据 ID/删除/绑定登录条目/同步服务端（绑定模型正确，
+  优于 Bastion 的「假绑定」）；**不能**真正用于 FIDO2 登录——没有 `CredentialProviderService`、
+  没有 `androidx.credentials` 接线、没有密钥生成与 attestation（版本号在 version catalog 里
+  备好但没引用）。`Docs/06` 有完整设计，属 M2-b 立项项。
+- **P0 已修**：`CipherMapper.mapFido2` 只读 8 字段却写 13 字段 → 编辑条目会清空服务端
+  `keyValue`/`counter`/`discoverable`（不可逆）；`creationDate` 明文写密文读 → 永远显示「—」，
+  现用 `decryptOrPlain` 兼容。
+
 ## 自动填充保存流程完成（2026-09-09，C 项）
 - **三段缺一不可**：① FillResponse 挂 `SaveInfo`（`AutofillSaveInfo.build`，账号+密码框为
   requiredIds；**无匹配 fallback 分支也要挂**）→ ② 框架回调 `onSaveRequest`

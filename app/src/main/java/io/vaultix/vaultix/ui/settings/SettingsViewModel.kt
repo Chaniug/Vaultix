@@ -116,6 +116,18 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { preferences.setAutofillSavePrompt(enabled) }
     }
 
+    /** 自动填充后自动复制验证码（条目带 TOTP 而页面没有验证码框时）。 */
+    val autoCopyTotp: StateFlow<Boolean> = preferences.autoCopyTotp
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = true,
+        )
+
+    fun setAutoCopyTotp(enabled: Boolean) {
+        viewModelScope.launch { preferences.setAutoCopyTotp(enabled) }
+    }
+
     fun setAutoLockMinutes(minutes: Int) {
         viewModelScope.launch { preferences.setAutoLockMinutes(minutes) }
     }

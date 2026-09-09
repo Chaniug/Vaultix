@@ -4,6 +4,26 @@
 > 落地；审计报告 `Docs/progress/audit/bitwarden-alignment.md`。
 > 状态：`TODO` / `DOING` / `DONE` / `BLOCKED`
 
+## 已完成（第二十三轮 2026-09-09 · 磁贴/应用列表修复 + TOTP 链路 + 通行密钥保真）
+
+> 用户拍板：**无障碍兜底不做**（磁贴已覆盖大部分场景）。
+
+- [x] **磁贴不显示**：补 `onTileAdded` / `onStartListening`（写 label/icon/state）+
+      `requestListeningState`；设置页那行改为可点击——API 33+ `requestAddTileService`
+      弹系统添加框，低版本给手动添加说明（快捷设置排列归系统，应用无开关权）
+- [x] **添加 App 读不全**：Manifest 补 `<queries>`（MAIN+LAUNCHER），
+      解决 Android 11+ 包可见性过滤；不申请 `QUERY_ALL_PACKAGES`
+- [x] **验证码识别**：`HintClassifier` 补 Bastion `isOtpHint` 词表（otp/2fa/验证码/一次性…）
+- [x] **纯 2FA 页面**：`FillPlanner` 新增「只有验证码框」分支（此前一条建议都不出）
+- [x] **填充后自动复制验证码**：`FillSuggestion.totpSecret` + `MODE_COPY_TOTP`
+      （dataset 级 `setAuthentication`，API 26+）+ `VaultixClipboard`；开关 `autoCopyTotp`
+- [x] **手动填充**：通知加「复制验证码」动作；验证码总览页改用 `VaultixClipboard`
+      （此前 `LocalClipboardManager` 无 IS_SENSITIVE、不自动清除）
+- [x] **上限保护**：FillResponse 最多 10 条 dataset（Binder 限制）
+- [x] **通行密钥 P0**：`mapFido2` 补齐 13 字段（修复编辑条目清空服务端密钥材料的
+      不可逆破坏）+ `creationDate` 用 `decryptOrPlain`；新增 2 例回归测试
+- [x] full flavor 编译 + detekt 0 违规 + 单测全绿（data:bitwarden 亦全绿）
+
 ## 已完成（第二十二轮 2026-09-09 · C 自动填充保存流程 `onSaveRequest`）
 
 - [x] **`SaveInfo` 接线**（根因）：FillResponse 挂 `AutofillSaveInfo`（账号+密码框为
@@ -255,7 +275,13 @@
       **自动填充验收**：Chrome / Edge / 三星浏览器分别触发填充（Edge 为重点）；
       **关联 App 验收**：条目编辑「关联应用」→ 选中 App → 详情显示「应用」+ 包名 + 可启动；
       **保存提示验收（第二十二轮）**：全新站点/App 登录 → 弹出保存卡片 → 库里出现新条目
-      （带网址或 `androidapp://`）；已存账号改密码登录 → 弹「更新密码」→ 条目密码被更新
+      （带网址或 `androidapp://`）；已存账号改密码登录 → 弹「更新密码」→ 条目密码被更新；
+      **磁贴验收（第二十三轮）**：设置 → 自动填充 → 「快速填充磁贴」点击后是否弹出添加框 /
+      手动添加后磁贴是否正常显示（不再空白）；
+      **关联应用列表验收**：条目编辑「关联应用」→ 列表是否完整（Android 11+ 需 `<queries>`）；
+      **验证码验收**：带 TOTP 的条目填充后是否自动复制验证码；纯验证码页面是否能填；
+      验证码总览页复制后是否按设置时长自动清除；
+      **通行密钥验收**：详情是否显示创建时间（此前恒为「—」）
 - [ ] **M2 规划**：见 `Docs/progress/bastion-parity-assessment.md`（差距约 40% 可比覆盖；
       最大两块缺口 = 系统自动填充服务 + 数据导入导出，均架构级工作量）
 - [ ] 回归通过 → M1 close-out（文档归档 + 下一里程碑规划）

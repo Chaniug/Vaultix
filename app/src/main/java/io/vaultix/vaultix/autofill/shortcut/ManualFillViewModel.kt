@@ -11,6 +11,8 @@ package io.vaultix.vaultix.autofill.shortcut
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import io.vaultix.common.OtpUriParser
+import io.vaultix.common.TotpGenerator
 import io.vaultix.domain.ItemRepository
 import io.vaultix.domain.VaultRepository
 import io.vaultix.model.VaultItem
@@ -50,6 +52,7 @@ class ManualFillViewModel @Inject constructor(
         val title: String,
         val username: String,
         val password: String,
+        val totp: String = "",
     )
 
     private val query = MutableStateFlow("")
@@ -70,11 +73,26 @@ class ManualFillViewModel @Inject constructor(
         query.value = value
     }
 
-    /** 选中条目：复制密码并留一条「复制用户名」的接力通知。 */
+    /**
+     * 选中条目：复制密码，并在通知里留下「复制用户名」/「复制验证码」的接力动作
+     * （条目有 TOTP 时才有验证码动作）。
+     */
     fun onPick(row: Row) {
         viewModelScope.launch {
-            notifier.copyPasswordThenOfferUsername(row.title, row.username, row.password)
+            notifier.copyPasswordThenOfferUsername(
+                title = row.title,
+                username = row.username,
+                password = row.password,
+                totpCode = totpCodeOf(row.totp),
+            )
         }
+    }
+
+    private fun totpCodeOf(raw: String): String? {
+        if (raw.isBlank()) return null
+        return runCatching {
+            OtpUriParser.parse(raw)?.let { TotpGenerator.generate(it) }
+        }.getOrNull()
     }
 
     private fun credentialFlow(ids: Set<String>): Flow<List<Row>> {
@@ -93,6 +111,7 @@ class ManualFillViewModel @Inject constructor(
         title = item.title,
         username = item.username,
         password = item.password,
+        totp = item.totp.orEmpty(),
     )
 
     private fun filterRows(rows: List<Row>, text: String): List<Row> {

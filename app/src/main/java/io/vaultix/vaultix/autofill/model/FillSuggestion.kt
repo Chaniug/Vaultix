@@ -39,6 +39,14 @@ data class FillSuggestion(
     val fields: Map<FieldHint, String>,
     /** 主密码二次验证：回填前需再验主密码（走认证回灌路径）。 */
     val requiresReprompt: Boolean = false,
+    /**
+     * 条目自带的 TOTP 密钥原文（非空 = 该条目有验证码）。
+     *
+     * 用途：页面**没有**验证码框时，填充完成后自动把当前验证码复制进剪贴板
+     * （对齐 Bitwarden `isAutoCopyTotpDisabled=false`）。只在回调 Activity 里现算码，
+     * 不在 Intent 里传明文验证码。
+     */
+    val totpSecret: String? = null,
     /** 类别（影响展示与回填字段集）。 */
     val category: FillCategory,
 )

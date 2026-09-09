@@ -33,22 +33,29 @@ class SmartCopyReceiver : BroadcastReceiver() {
     lateinit var notifier: SmartCopyNotifier
 
     override fun onReceive(context: Context, intent: Intent) {
-        val username = intent.getStringExtra(SmartCopyNotifier.EXTRA_USERNAME) ?: return
+        val username = intent.getStringExtra(SmartCopyNotifier.EXTRA_USERNAME)
+        val totp = intent.getStringExtra(SmartCopyNotifier.EXTRA_TOTP)
+        if (username.isNullOrBlank() && totp.isNullOrBlank()) return
         val title = intent.getStringExtra(SmartCopyNotifier.EXTRA_TITLE).orEmpty()
         val pendingResult = goAsync()
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
         scope.launch {
             try {
-                notifier.copyUsernameAndDismiss(username)
-                Toast.makeText(
-                    context,
-                    context.getString(R.string.manual_fill_copied_username, title),
-                    Toast.LENGTH_SHORT,
-                ).show()
+                if (!totp.isNullOrBlank()) {
+                    notifier.copyTotpAndDismiss(totp)
+                    toast(context, context.getString(R.string.copy_totp))
+                } else if (!username.isNullOrBlank()) {
+                    notifier.copyUsernameAndDismiss(username)
+                    toast(context, context.getString(R.string.manual_fill_copied_username, title))
+                }
             } finally {
                 pendingResult.finish()
                 scope.cancel()
             }
         }
+    }
+
+    private fun toast(context: Context, text: String) {
+        Toast.makeText(context, text, Toast.LENGTH_SHORT).show()
     }
 }

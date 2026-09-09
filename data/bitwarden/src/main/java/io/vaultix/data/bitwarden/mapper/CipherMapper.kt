@@ -415,6 +415,16 @@ class CipherMapper @Inject constructor(
         null -> null
     }
 
+    /**
+     * 通行密钥密文 → 领域模型。
+     *
+     * ⚠️ **必须 13 字段全读**：此前只读 8 个，写回时（`mapFido2Request`）缺的字段用默认值顶上，
+     * 等于**把服务端已存的密钥材料（keyValue）、签名计数器、可发现性覆盖掉**——
+     * 编辑一次条目，官方端/其它设备上的这条通行密钥就再也签不了名（不可逆数据破坏）。
+     *
+     * [creationDate] 例外：Bitwarden 用**明文** DateTime（不加密），故走 [decryptOrPlain]
+     * 兼容两种形态（Vaultix 历史版本可能写成密文）。
+     */
     private fun mapFido2(
         list: List<Fido2CredentialDto>,
         accountKey: SymmetricCryptoKey,
@@ -428,8 +438,32 @@ class CipherMapper @Inject constructor(
             userDisplayName = decryptToString(d.userDisplayName, accountKey, itemKey),
             userHandle = decryptToString(d.userHandle, accountKey, itemKey).takeIf { it.isNotBlank() },
             keyAlgorithm = decryptToString(d.keyAlgorithm, accountKey, itemKey).takeIf { it.isNotBlank() },
-            creationDate = decryptToString(d.creationDate, accountKey, itemKey).takeIf { it.isNotBlank() },
+            keyType = decryptToString(d.keyType, accountKey, itemKey).takeIf { it.isNotBlank() },
+            keyCurve = decryptToString(d.keyCurve, accountKey, itemKey).takeIf { it.isNotBlank() },
+            keyValue = decryptToString(d.keyValue, accountKey, itemKey).takeIf { it.isNotBlank() },
+            counter = decryptToString(d.counter, accountKey, itemKey).toLongOrNull() ?: 0,
+            discoverable = decryptToString(d.discoverable, accountKey, itemKey)
+                .takeIf { it.isNotBlank() }
+                ?.toBooleanStrictOrNull()
+                ?: true,
+            creationDate = decryptOrPlain(d.creationDate, accountKey, itemKey).takeIf { it.isNotBlank() },
         )
+    }
+
+    /**
+     * 兼容解密：明文（Bitwarden 的 creationDate 是可解析 DateTime）原样返回，密文才解密。
+     * 判断口径照 Bastion `Fido2CredentialCodec.looksLikeCipherString`（`类型.密文` 前缀）。
+     */
+    private fun decryptOrPlain(
+        raw: String?,
+        accountKey: SymmetricCryptoKey,
+        itemKey: SymmetricCryptoKey?,
+    ): String {
+        val value = raw ?: return ""
+        val head = value.substringBefore('.')
+        val looksLikeCipher = value.contains('.') && head.toIntOrNull() != null
+        if (!looksLikeCipher) return value
+        return decryptToString(value, accountKey, itemKey)
     }
 
     /** 银行卡密文 → 领域模型（解密失败降级空串）。 */

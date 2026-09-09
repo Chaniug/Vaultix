@@ -52,6 +52,10 @@ object FillPlanner {
         val suggestions = mutableListOf<FillSuggestion>()
         if (hasLoginContext(present)) {
             suggestions += buildLoginSuggestions(context, matchedLogins, present, totpProvider)
+        } else if (hasOtpOnlyContext(present)) {
+            // 纯 2FA 第二步页面（只有验证码框、没有账号密码框）：单独出「只填验证码」的建议，
+            // 否则这类页面一条建议都没有，用户只能切出去手动复制。
+            suggestions += buildOtpOnlySuggestions(matchedLogins, totpProvider)
         }
         if (hasCardContext(present)) {
             suggestions += buildCardSuggestions(cards, present)
@@ -64,6 +68,25 @@ object FillPlanner {
 
     private fun hasLoginContext(present: Set<FieldHint>): Boolean =
         FieldHint.USERNAME in present || FieldHint.PASSWORD in present
+
+    /** 只有验证码框（2FA 第二步页面）。 */
+    private fun hasOtpOnlyContext(present: Set<FieldHint>): Boolean = FieldHint.OTP in present
+
+    /** 纯验证码页面：每个带 TOTP 的条目出一条「只填验证码」的建议。 */
+    private fun buildOtpOnlySuggestions(
+        logins: List<AutofillCredential>,
+        totpProvider: (String) -> String?,
+    ): List<FillSuggestion> = logins.mapNotNull { login ->
+        if (login.totp.isBlank()) return@mapNotNull null
+        val code = totpProvider(login.totp) ?: return@mapNotNull null
+        FillSuggestion(
+            id = "otp:${login.vaultId}:${login.itemId}",
+            title = login.name.ifBlank { login.username },
+            subtitle = login.username,
+            fields = mapOf(FieldHint.OTP to code),
+            category = FillCategory.LOGIN,
+        )
+    }
 
     private fun hasCardContext(present: Set<FieldHint>): Boolean =
         FieldHint.CARD_NUMBER in present || FieldHint.CARD_CVC in present || FieldHint.CARD_EXPIRY in present
@@ -97,6 +120,7 @@ object FillPlanner {
                 subtitle = login.username,
                 fields = fields,
                 requiresReprompt = login.requiresReprompt,
+                totpSecret = login.totp.takeIf { it.isNotBlank() },
                 category = FillCategory.LOGIN,
             )
         }
