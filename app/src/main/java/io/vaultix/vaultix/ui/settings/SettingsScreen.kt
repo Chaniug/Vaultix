@@ -1,5 +1,7 @@
 package io.vaultix.vaultix.ui.settings
 
+import android.content.ActivityNotFoundException
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.clickable
@@ -22,6 +24,7 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.Password
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Timer
@@ -140,6 +143,9 @@ fun SettingsScreen(
             // ---- 外观 / 数据（批次④：Bastion SettingsScreen 对照补缺） ----
             AppearanceSection(viewModel, dynamicColor = state.dynamicColor)
             DataSection(viewModel)
+
+            // ---- 自动填充（M2-a：系统 AutofillService 入口） ----
+            AutofillSection()
 
             // ---- 关于 ----
             SettingsGroupTitle(stringResource(R.string.group_about))
@@ -287,6 +293,38 @@ private fun DataSection(viewModel: SettingsViewModel) {
             onSelect = viewModel::setTrashAutoDeleteDays,
             onDismiss = { showTrashDialog = false },
         )
+    }
+}
+
+/**
+ * 自动填充分组（M2-a）：入口仅做一件事——跳到系统「自动填充」设置，
+ * 让用户把 Vaultix 选为默认自动填充服务（OS 级开关，App 内无法自行启用）。
+ * 具体的填充行为（解析/匹配/回填）由 [io.vaultix.vaultix.autofill.VaultixAutofillService] 承担。
+ */
+@Composable
+private fun AutofillSection() {
+    val context = LocalContext.current
+    SettingsGroupTitle(stringResource(R.string.group_autofill))
+    SettingsRow(
+        icon = { Icon(Icons.Filled.Password, contentDescription = null) },
+        title = stringResource(R.string.setting_autofill),
+        subtitle = stringResource(R.string.setting_autofill_desc),
+        onClick = { openSystemAutofillSettings(context) },
+    )
+}
+
+/** 打开系统自动填充设置：优先请求直接把 Vaultix 设为服务，失败回退到服务列表。 */
+private fun openSystemAutofillSettings(context: Context) {
+    // 直接请求把 Vaultix 设为自动填充服务（Settings.ACTION_REQUEST_SET_AUTOFILL_SERVICE, API 26）。
+    val direct = Intent("android.settings.REQUEST_SET_AUTOFILL_SERVICE").apply {
+        data = Uri.parse("package:${context.packageName}")
+    }
+    try {
+        context.startActivity(direct)
+    } catch (_: ActivityNotFoundException) {
+        // 部分 OEM 不支持直接请求，退到自动填充服务选择列表
+        //（Settings.ACTION_AUTOFILL_SERVICE_SETTINGS, API 28）。
+        context.startActivity(Intent("android.settings.AUTOFILL_SERVICE_SETTINGS"))
     }
 }
 

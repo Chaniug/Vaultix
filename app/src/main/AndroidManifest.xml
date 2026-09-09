@@ -27,6 +27,21 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- 系统自动填充服务（M2-a）：密码填充走 AutofillService（API 26+）。
+             系统通过 BIND_AUTOFILL_SERVICE 权限绑定本服务；settingsActivity 指向
+             MainActivity（承载设置导航）。行为在后续里程碑（M2-a.2~a.6）逐步接入。 -->
+        <service
+            android:name=".autofill.VaultixAutofillService"
+            android:exported="true"
+            android:permission="android.permission.BIND_AUTOFILL_SERVICE">
+            <intent-filter>
+                <action android:name="android.intent.action.AUTOFILL" />
+            </intent-filter>
+            <meta-data
+                android:name="android.autofill"
+                android:resource="@xml/autofill_service" />
+        </service>
     </application>
 
 </manifest>

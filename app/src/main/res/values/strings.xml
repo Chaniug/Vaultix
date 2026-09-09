@@ -96,6 +96,11 @@
     <string name="setting_trash_auto_delete">回收站自动清理</string>
     <string name="setting_lock_now">立即锁定</string>
     <string name="setting_lock_now_desc">清零全部库的解锁密钥并返回列表</string>
+
+    <!-- 自动填充（M2-a：系统 AutofillService） -->
+    <string name="group_autofill">自动填充</string>
+    <string name="setting_autofill">系统自动填充</string>
+    <string name="setting_autofill_desc">在任意 App / 网页的登录框提供密码；需在系统设置中先启用 Vaultix</string>
     <string name="about_version">版本</string>
     <string name="about_source">源码与反馈</string>
     <string name="about_license">开源许可</string>
