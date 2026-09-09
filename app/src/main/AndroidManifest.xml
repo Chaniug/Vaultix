@@ -84,8 +84,13 @@
             android:exported="true"
             android:label="@string/app_name"
             android:permission="android.permission.BIND_CREDENTIAL_PROVIDER_SERVICE">
+            <!-- ⚠️ action 必须是 android.service.credentials.CredentialProviderService：
+                 曾误写为 android.credentials.CredentialProviderService（漏 service. 段），
+                 导致系统无法发现本 Provider——系统设置里没有启用项、Chrome/Edge 永远不弹、
+                 passkey 查不到（credential_service 恒空）。此 bug 为 Credential Provider
+                 集成「始终无法启用」的总根因。 -->
             <intent-filter>
-                <action android:name="android.credentials.CredentialProviderService" />
+                <action android:name="android.service.credentials.CredentialProviderService" />
             </intent-filter>
             <meta-data
                 android:name="android.credentials.provider"

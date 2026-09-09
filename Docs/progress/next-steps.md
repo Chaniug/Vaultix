@@ -247,9 +247,26 @@
 （`BIND_CREDENTIAL_PROVIDER_SERVICE`），Vaultix **没有** → Edge 连 fillRequest 都不发、
 网站登录时通行密钥也不出现（passkey 数据都在，应用内 hub 已就绪，只是系统层没注册）。
 
+> **🔴 总根因修复（2026-09-10 定）**：manifest `<service>` 的 intent-filter action
+> **误写为 `android.credentials.CredentialProviderService`（漏 `service.` 段）**，正确为
+> `android.service.credentials.CredentialProviderService` → 系统从未发现 Vaultix 是
+> Provider → 系统设置无启用项、`credential_service` 恒空、Edge/Chrome 永不弹、
+> passkey 查不到。此前所有「用户未启用」诊断（dumpsys 空 + 重装被清）均被此掩盖。
+> 教训：Credential Provider 注册必须逐字符对照官方模板，勿凭记忆。
+> 随附修复：①设置页「凭据提供商」行改用 `CredentialManager.createSettingsPendingIntent()`
+> 直达启用界面（老 `REQUEST_SET_AUTOFILL_SERVICE` 与凭据提供商是两个独立设置项且部分设备无反应）；
+> ②老 autofill MODE_COPY_TOTP 认证回灌从 onCreate 推迟到 onResume（onCreate 同步
+> setResult+finish 认证结果会丢 → 「验证码复制成功但密码没填」）。
+
+- [ ] **⑥（待做）provider settingsActivity**：`credential_provider.xml` 补
+      `android:settingsActivity`（系统凭据管理器「密码和账号→Vaultix」里出现管理入口，
+      对应 Keyguard/Bastion 的通行密钥专属管理页）；Activity 需处理未解锁态。
+- [ ] **⑦（待做）privileged apps allowlist**：passkey origin 校验接入
+      `CallingAppInfo.getOrigin()` + 白名单（可参考 Google gpm-passkeys-privileged-apps 列表）。
+
 - [x] **① CredentialProviderService 注册**（DSP 主入口）：manifest `<service>`
-      `android.credentials.CredentialProviderService` + `@xml/credential_provider`
-      capability（`TYPE_PUBLIC_KEY_CREDENTIAL`）
+      `android.service.credentials.CredentialProviderService` + `@xml/credential_provider`
+      capability（`TYPE_PUBLIC_KEY_CREDENTIAL` / `TYPE_PASSWORD_CREDENTIAL`）
 - [x] **② 通行密钥查询/创建**：BeginCreateCredential / BeginGetCredential 回调 →
       校验 origin（与条目 URI 匹配）→ 无锁提示解锁（PendingIntent 复用
       AutofillActivity 解锁链）→ 列出匹配 passkey（PasskeysViewModel 数据源）

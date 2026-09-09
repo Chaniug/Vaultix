@@ -353,7 +353,9 @@ private fun AutofillSection(viewModel: SettingsViewModel) {
                 R.string.setting_credential_provider_disabled_desc
             }
         ),
-        onClick = { openSystemAutofillSettings(context) },
+        // 直达「启用本 Provider」的系统界面（Android 14+ createSettingsPendingIntent）；
+        // 低版本退化到自动填充设置页（老路径服务选择）
+        onClick = { openCredentialProviderSettings(context) },
     )
     SettingsRow(
         icon = { Icon(Icons.Filled.Save, contentDescription = null) },
@@ -436,6 +438,27 @@ private fun openSystemAutofillSettings(context: Context) {
         //（Settings.ACTION_AUTOFILL_SERVICE_SETTINGS, API 28）。
         context.startActivity(Intent("android.settings.AUTOFILL_SERVICE_SETTINGS"))
     }
+}
+
+/**
+ * 打开「启用本应用为 Credential Provider」的系统界面。
+ *
+ * Android 14+ 用 [androidx.credentials.CredentialManager.createSettingsPendingIntent]
+ * ——系统据此展示自家 provider 的启用开关（此前的 REQUEST_SET_AUTOFILL_SERVICE 在
+ * 部分设备上无反应，且老自动填充与凭据提供商是两个独立设置项，互不替代）。
+ * 低版本没有 Credential Provider，退化到老自动填充设置页。
+ */
+private fun openCredentialProviderSettings(context: Context) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+        val pendingIntent = runCatching {
+            androidx.credentials.CredentialManager.create(context).createSettingsPendingIntent()
+        }.getOrNull()
+        if (pendingIntent != null) {
+            val sent = runCatching { pendingIntent.send(context, 0, null) }.isSuccess
+            if (sent) return
+        }
+    }
+    openSystemAutofillSettings(context)
 }
 
 /** 单选对话框：主题模式三态（跟随系统 / 浅色 / 深色）。 */

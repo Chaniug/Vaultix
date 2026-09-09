@@ -94,12 +94,10 @@ class AutofillActivity : FragmentActivity() {
         enableEdgeToEdge()
         val mode = AutofillIntents.modeOf(intent)
         if (mode == AutofillIntents.MODE_COPY_TOTP) {
-            // ⚠️ 无感中转：**绝不渲染任何界面**。此前先 setContent 再回填，卡片会闪一下，
-            // 用户正好点中「打开 Vaultix 解锁」→ 表现为「点填充却跳到库页面、密码没填进去」。
-            deliverDatasetAndCopyTotp(
-                AutofillIntents.titleOf(intent),
-                AutofillIntents.subtitleOf(intent),
-            )
+            // ⚠️ 无感中转：**绝不渲染任何界面**。回灌从 onCreate 推迟到 onResume
+            // （见 onResume）：认证 Activity 须完整启动后再 setResult + finish，
+            // onCreate 同步投递在部分系统版本上认证结果会丢失——此前表现即
+            // 「验证码复制成功（Activity 副作用照跑）但密码没填进（dataset 被丢弃）」。
             return
         }
         val title = AutofillIntents.titleOf(intent).ifBlank { getString(R.string.autofill_unlock_title) }
@@ -123,6 +121,21 @@ class AutofillActivity : FragmentActivity() {
             AutofillIntents.MODE_UNLOCK -> maybeBiometricUnlock(title, subtitle)
             AutofillIntents.MODE_REPROMPT -> startReprompt(title, subtitle)
             else -> Unit
+        }
+    }
+
+    private var copyTotpDelivered = false
+
+    override fun onResume() {
+        super.onResume()
+        // MODE_COPY_TOTP：Activity 已完整启动（onResume），此时回灌认证结果最稳。
+        // 一次性 guard：onResume 可能被对话框等打断重入，不得重复投递。
+        if (!copyTotpDelivered && AutofillIntents.modeOf(intent) == AutofillIntents.MODE_COPY_TOTP) {
+            copyTotpDelivered = true
+            deliverDatasetAndCopyTotp(
+                AutofillIntents.titleOf(intent),
+                AutofillIntents.subtitleOf(intent),
+            )
         }
     }
 
