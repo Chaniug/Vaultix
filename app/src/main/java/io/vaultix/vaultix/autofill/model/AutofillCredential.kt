@@ -28,6 +28,7 @@ data class AutofillCredential(
     val name: String,
     val username: String,
     val password: String,
+    val totp: String = "",
     val uris: List<AutofillUri> = emptyList(),
     val appPackageName: String = "",
     val isFavorite: Boolean = false,

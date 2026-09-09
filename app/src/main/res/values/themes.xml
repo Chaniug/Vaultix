@@ -1,4 +1,14 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
     <!-- Compose 应用的基础主题：仅要求无 ActionBar，具体配色由 Compose Material3 提供 -->
     <style name="Theme.Vaultix" parent="android:Theme.Material.Light.NoActionBar" />
+
+    <!-- 自动填充认证回灌用：窗口透明（背景由 Compose 自己画遮罩），不做转场动画 -->
+    <style name="Theme.Vaultix.Transparent" parent="Theme.Vaultix">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowContentOverlay">@null</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:backgroundDimEnabled">false</item>
+    </style>
 </resources>

@@ -28,15 +28,27 @@
             </intent-filter>
         </activity>
 
+        <!-- 自动填充的认证回灌宿主：由系统经 PendingIntent 拉起，需 exported。
+             透明主题 + 无历史栈：用完即走，不进入最近任务。 -->
+        <activity
+            android:name=".autofill.AutofillActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:noHistory="true"
+            android:theme="@style/Theme.Vaultix.Transparent" />
+
         <!-- 系统自动填充服务（M2-a）：密码填充走 AutofillService（API 26+）。
              系统通过 BIND_AUTOFILL_SERVICE 权限绑定本服务；settingsActivity 指向
              MainActivity（承载设置导航）。行为在后续里程碑（M2-a.2~a.6）逐步接入。 -->
         <service
             android:name=".autofill.VaultixAutofillService"
             android:exported="true"
+            android:label="@string/app_name"
             android:permission="android.permission.BIND_AUTOFILL_SERVICE">
             <intent-filter>
-                <action android:name="android.intent.action.AUTOFILL" />
+                <!-- 必须是 AutofillService.SERVICE_INTERFACE，否则系统「自动填充服务」列表扫不到本应用 -->
+                <action android:name="android.service.autofill.AutofillService" />
             </intent-filter>
             <meta-data
                 android:name="android.autofill"

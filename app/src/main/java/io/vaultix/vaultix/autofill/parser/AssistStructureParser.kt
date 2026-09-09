@@ -34,12 +34,14 @@ object AssistStructureParser {
         }
 
         val webDomain = webDomains.firstOrNull()
+        val webUri = webDomain?.let { "https://$it" }
         val usernameId = fields.firstOrNull { it.hint == FieldHint.USERNAME }?.id
         val passwordId = fields.firstOrNull { it.hint == FieldHint.PASSWORD }?.id
         return ParsedStructure(
             packageName = packageName,
             webScheme = null,
             webDomain = webDomain,
+            webUri = webUri,
             webView = webView,
             usernameId = usernameId,
             passwordId = passwordId,

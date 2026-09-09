@@ -101,6 +101,12 @@
     <string name="group_autofill">自动填充</string>
     <string name="setting_autofill">系统自动填充</string>
     <string name="setting_autofill_desc">在任意 App / 网页的登录框提供密码；需在系统设置中先启用 Vaultix</string>
+    <string name="autofill_unlock_title">解锁 Vaultix</string>
+    <string name="autofill_unlock_subtitle">解锁后回到输入框即可填充</string>
+    <string name="autofill_unlock_action">打开 Vaultix 解锁</string>
+    <string name="autofill_no_match_title">没有匹配的密码</string>
+    <string name="autofill_no_match_subtitle">点此在 Vaultix 中搜索</string>
+    <string name="autofill_locked_title">Vaultix 已锁定</string>
     <string name="about_version">版本</string>
     <string name="about_source">源码与反馈</string>
     <string name="about_license">开源许可</string>

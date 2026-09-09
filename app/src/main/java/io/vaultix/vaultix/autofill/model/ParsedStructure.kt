@@ -53,7 +53,9 @@ data class ParsedField(
  *
  * @param packageName 触发填充的 App 包名（用于包名匹配）。
  * @param webScheme 网页方案（http/https），WebView / 浏览器场景。
- * @param webDomain 网页域名（来自 AssistStructure.webDomain 或浏览器地址栏，M2-a.4 接入）。
+ * @param webDomain 网页域名（来自 AssistStructure.webDomain 或浏览器地址栏）。
+ * @param webUri 尽量完整的网页地址（scheme + host；Android AssistStructure 仅暴露 host，
+ *   故路径/查询段无法获取，Exact/StartsWith/Regex 匹配退化为按 host 近似，见 BitwardenLikeAutofillMatcher）。
  * @param webView 是否为 WebView / 浏览器表单（决定是否强制 inline 回填）。
  * @param usernameId 归一后的用户名字段 id（无则 null）。
  * @param passwordId 归一后的密码字段 id（无则 null）。
@@ -63,6 +65,7 @@ data class ParsedStructure(
     val packageName: String?,
     val webScheme: String?,
     val webDomain: String?,
+    val webUri: String?,
     val webView: Boolean,
     val usernameId: AutofillId?,
     val passwordId: AutofillId?,
