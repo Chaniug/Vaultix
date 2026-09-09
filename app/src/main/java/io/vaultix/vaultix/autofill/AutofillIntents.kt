@@ -45,6 +45,12 @@ object AutofillIntents {
     private const val EXTRA_IDS = "vaultix.autofill.ids"
     private const val EXTRA_VALUES = "vaultix.autofill.values"
 
+    /**
+     * MainActivity 由此开启时：解锁完成即自动 finish 返回原 App（AutofillActivity 的
+     * MODE_UNLOCK 解锁桥在用）。用户回到浏览器再点一次即秒填，不再被晾在 Vaultix 主界面。
+     */
+    const val EXTRA_MAIN_UNLOCK_EXIT = "vaultix.autofill.main_unlock_exit"
+
     /** 构造认证回灌用的显式 Intent。 */
     fun create(
         context: Context,
