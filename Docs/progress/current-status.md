@@ -81,3 +81,15 @@
   data:repository 14 / data:bitwarden 28，全绿；全模块 detekt 0 违规
 - **待办 P0**：用户真机回归（f0f5df6 preview）→ M1 close-out
 - 等待 CI 的包版本以 `git rev-list` 短 hash 标注在 versionName（0.1.0-dev-xxxxxxx）
+
+## 当前状态（2026-09-09 晚）
+
+- **新一批 autofill 修复已推**（a90e2d5 / 9e0ee12 / dc7ac19）：保存流程 onSaveRequest、
+  磁贴/App 列表修复、TOTP 链路补全、通行密钥字段保真、填充中转 Activity 不再渲染 UI
+- **回收站自动清理完成**（第十七轮）：autoDeleteDays DataStore 设置（默认 30）+
+  TrashCleanupPolicy 纯函数 + 到期清理入队；observeTrash 改携 deletedDate 的 TrashEntry
+- **★ 最高优先待办：Credential Provider 集成**（第十八轮真机诊断定案）——
+  Edge 密码填充、登录时通行密钥显示，同缺 `CredentialProviderService` 注册；
+  叠加解锁链改造（点候选不跳 MainActivity）+ inline + 字段角色推断。
+  明细见 next-steps.md「★最高优先」段；诊断全程见 .ai/SESSION-2026-09-09.md 第十八轮
+- 单元测试基线：全模块绿；detekt 0 违规（本轮诊断无代码改动，基线未动）
