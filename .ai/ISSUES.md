@@ -188,3 +188,26 @@ debug(preview) 与 release 可互相覆盖安装的**硬性前提**：
 - **现象**：`suspend fun f(clearMs: Long = prefs.preference.first())` 编译失败
   （默认参数表达式不是挂起上下文）
 - **解法**：默认参数只能是非挂起表达式 → 在函数体内读取偏好，或由调用方显式传值
+
+## 24. Credential Provider manifest action 漏 `service.` 段 → 系统从不发现 Provider（2026-09-10，总根因 P0）
+
+- **现象**：系统设置无「启用 Vaultix 凭据提供商」项、`credential_service` 恒空、
+  Chrome/Edge 永不弹密码与 passkey、passkey 查不到（数据都在，纯系统层缺失）
+- **根因**：intent-filter action 误写 `android.credentials.CredentialProviderService`
+  （漏 `service.` 段）；正确 = `android.service.credentials.CredentialProviderService`
+- **解法**：逐字符对照官方模板修正 action；同时注意权限
+  `android.permission.BIND_CREDENTIAL_PROVIDER_SERVICE`、meta-data 名
+  `android.credentials.provider`、provider.xml 根标签 `<credential-provider>`
+- **判据**：真机 dumpsys 该 provider 应出现在系统凭据服务列表；
+  **教训：此类系统级注册任何字段都不得凭记忆书写**
+
+## 25. 认证 Activity onCreate 同步 setResult+finish → 认证结果丢失（2026-09-10）
+
+- **现象**：老 autofill dataset 认证（填充后复制验证码 / 二次验证）：验证码复制成功
+  （Activity 副作用照跑）但**密码没填进**（返回的 dataset 被系统丢弃）
+- **根因**：认证 Activity 在 onCreate 里同步投递结果并 finish，早于系统完成
+  「认证会话接管」；且此前宿主 launchMode=singleTask + intent 带 NEW_TASK
+  （实例复用走 onNewIntent、跨 task 均丢 result）
+- **解法**：投递推迟到 **onResume**（一次性 guard）；launchMode 改 standard、
+  认证意图不带 NEW_TASK（引导型解锁/搜索意图才在调用点补 NEW_TASK）
+- **判据**：认证 Activity 必须走完生命周期再返回结果（对齐 Bitwarden/Bastion 认证宿主）

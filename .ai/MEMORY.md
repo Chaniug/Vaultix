@@ -507,7 +507,13 @@ Vaultix 原把 linkedId 当顺序编号（1/2/3/4），**官方是分段编码**
 - 门禁：主函数又超（153 行/复杂度 15）→ 拆出 `FormHeader`
   （文件夹+类型，顺序对齐官方：文件夹 → 类型 → 名称）。
 
-## ★ 新 bug：点候选「退到 Vaultix 不回填」（2026-09-09 用户报告，待修）
+## ★ 新 bug：点候选「退到 Vaultix 不回填」（2026-09-09 用户报告，已闭环 09-10）
+
+> 🟢 **已修复（2026-09-09~10，dba5ae1→f474654）**：本 bug 实为三根因叠加——
+> ①认证 Activity 复用后台 MainActivity task 拉前台（taskAffinity 独立修复）；
+> ②认证回灌 `EXTRA_AUTHENTICATION_RESULT` 丢失（onCreate 同步 setResult → 改 onResume；
+> create() 去 NEW_TASK、宿主去 singleTask）；③MODE_UNLOCK 解锁桥停主界面
+> （EXTRA_MAIN_UNLOCK_EXIT 已 64ade7a 修）。详见 SESSION-2026-09-10.md。
 
 现象：登录页出现带验证码的条目 → TOTP 能复制到剪贴板，但**点击候选后密码没填入，
 反而跳进 Vaultix 主界面**。
@@ -525,7 +531,18 @@ Vaultix 原把 linkedId 当顺序编号（1/2/3/4），**官方是分段编码**
 解锁成功 → 重发 fill 或直接回灌原候选 dataset → 自动回原 App；
 此解锁链将被 Credential Provider 的 BeginGetCredential 复用（同一条链）。
 
-## ★ Edge/Chrome 填充失效根因（2026-09-09 真机 dumpsys 实证）
+## ★ Edge/Chrome 填充失效根因（2026-09-09 真机 dumpsys 实证 → 09-10 总根因已修）
+
+> 🟢 **总根因落定并修复（2026-09-10 f474654）**：注册代码早已具备，但 manifest
+> intent-filter action **误写 `android.credentials.CredentialProviderService`
+> （漏 `service.` 段）**，正确为 `android.service.credentials.CredentialProviderService`。
+> 系统因此从未发现 Vaultix 是 Provider → 设置页无启用项、credential_service 恒空、
+> Edge/Chrome 永不弹、passkey 查不到。此前所有「未启用/被清」诊断均被此掩盖。
+> ⚠️ **教训：Credential Provider 注册必须逐字符对照官方模板**（action / 权限 /
+> meta-data 名 / provider.xml 根标签）。
+> 双能力已声明（TYPE_PUBLIC_KEY_CREDENTIAL + TYPE_PASSWORD_CREDENTIAL，8ba40d9）。
+> 设置页「凭据提供商」行已改用 `CredentialManager.createSettingsPendingIntent()`
+> 直达启用界面（REQUEST_SET_AUTOFILL_SERVICE 与凭据提供商是两个独立设置项）。
 
 现象：Bitwarden / Bastion 能在 Edge 填充，Vaultix 连「密码条目按钮」都不出现。
 **结论：Vaultix 缺 Credential Provider**——不是无障碍、也不是 Chromium 白名单。
