@@ -45,24 +45,33 @@ object HintClassifier {
         inputType: Int,
         text: String?,
     ): FieldHint {
-        hints?.firstOrNull()?.let { mapAutofillHint(it)?.let { hint -> return hint } }
+        // 一个节点可能带多个 hint（Chromium 常同时给 web* 与标准 hint）：全部试一遍
+        hints?.firstNotNullOfOrNull { mapAutofillHint(it) }?.let { return it }
         mapInputType(inputType)?.let { return it }
         text?.let { mapTextHeuristic(it)?.let { hint -> return hint } }
         return FieldHint.UNKNOWN
     }
 
-    /** 标准 autofill hint 字符串 → [FieldHint]（null 表示未识别）。 */
+    /**
+     * 标准 autofill hint 字符串 → [FieldHint]（null 表示未识别）。
+     *
+     * `webUsername` / `webPassword` 是 **Chromium 内核浏览器（Chrome / Edge / Brave …）
+     * 在 WebView 表单里实际下发的 hint**（对齐 Bitwarden `AutofillParserImpl` 的别名处理，
+     * KeePassDX 亦有同款常量）——缺了它们，浏览器里的账号密码框只能靠 inputType 兜底，
+     * 表现就是「浏览器里填充不认字段」。
+     */
     private fun mapAutofillHint(hint: String): FieldHint? = when (hint) {
-        "username" -> FieldHint.USERNAME
-        "password" -> FieldHint.PASSWORD
-        "newPassword" -> FieldHint.NEW_PASSWORD
-        "emailAddress" -> FieldHint.EMAIL_ADDRESS
-        "phone", "phoneNumber" -> FieldHint.PHONE_NUMBER
-        "postalCode" -> FieldHint.POSTAL_CODE
+        "username", "webUsername" -> FieldHint.USERNAME
+        "password", "webPassword" -> FieldHint.PASSWORD
+        "newPassword", "newUsername" -> FieldHint.NEW_PASSWORD
+        "emailAddress", "webEmail" -> FieldHint.EMAIL_ADDRESS
+        "phone", "phoneNumber", "webTel" -> FieldHint.PHONE_NUMBER
+        "postalCode", "postalAddress" -> FieldHint.POSTAL_CODE
         "creditCardNumber" -> FieldHint.CARD_NUMBER
         "creditCardSecurityCode" -> FieldHint.CARD_CVC
-        "creditCardExpirationDate" -> FieldHint.CARD_EXPIRY
-        "personName", "name" -> FieldHint.NAME
+        "creditCardExpirationDate", "creditCardExpirationMonth", "creditCardExpirationYear" ->
+            FieldHint.CARD_EXPIRY
+        "personName", "name", "givenName", "familyName" -> FieldHint.NAME
         "search" -> FieldHint.SEARCH
         "otp", "oneTimeCode", "smsOTPCode" -> FieldHint.OTP
         else -> null

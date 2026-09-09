@@ -14,6 +14,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -27,8 +28,12 @@ import javax.inject.Singleton
  * 决策逻辑抽在 [AutoLockPolicy]（纯函数、可单测），本类只做事件接线：
  * - 档位 0（立即）：切后台即 lockAll；>0：切后台记 [SystemClock.elapsedRealtime]，
  *   回前台超时即 lockAll；<0（从不）：只手动锁；
- * - 回前台时若设备屏幕仍处于 keyguard 锁定 → 立即 lockAll（Bastion：
+ * - 「从不」档位优先级最高（[AutoLockPolicy.shouldLockOnResume]）：息屏 / 锁屏
+ *   不再触发锁定，否则「选了永不锁定却一会儿就锁」与档位语义自相矛盾；
+ * - 其余档位：回前台时若设备屏幕仍处于 keyguard 锁定 → 立即 lockAll（Bastion：
  *   「屏幕锁定时必须重新验证」，本类对 UI 场景落成锁定而非免验证判定）；
+ * - 档位每次判定现取偏好（[VaultixPreferences.autoLockMinutes]），不缓存字段：
+ *   避免冷启动首帧仍是默认 5 分钟导致的误锁竞态；
  * - 锁定后自增 [lockEvents] 代次，供 UI 强制回到库列表根路由；
  * - 进程死亡密钥天然清零（Bastion 的「重启后锁定」无需建模）。
  *
@@ -43,7 +48,7 @@ import javax.inject.Singleton
 class AutoLockController @Inject constructor(
     @ApplicationContext context: Context,
     private val vaultRepository: VaultRepository,
-    prefs: VaultixPreferences,
+    private val prefs: VaultixPreferences,
 ) : DefaultLifecycleObserver {
 
     // 进程级生命周期观察者，scope 只跑极短的锁定判定。项目当前唯一的调度器限定符
@@ -59,16 +64,12 @@ class AutoLockController @Inject constructor(
     val lockEvents: StateFlow<Int> = _lockEvents.asStateFlow()
 
     @Volatile
-    private var autoLockMinutes: Int = AutoLockPolicy.DEFAULT_MINUTES
-
-    @Volatile
     private var backgroundedAtMs: Long? = null
 
     @Volatile
     private var anyUnlocked = false
 
     init {
-        scope.launch { prefs.autoLockMinutes.collect { autoLockMinutes = it } }
         scope.launch {
             vaultRepository.observeUnlockedVaultIds().collect { ids ->
                 anyUnlocked = ids.isNotEmpty()
@@ -78,11 +79,16 @@ class AutoLockController @Inject constructor(
 
     override fun onStop(owner: LifecycleOwner) {
         if (!anyUnlocked) return
-        if (AutoLockPolicy.lockImmediatelyOnBackground(autoLockMinutes)) {
-            // 档位 0：切后台立即锁（不等回前台再判断）
-            lockAllNow()
-        } else {
-            backgroundedAtMs = SystemClock.elapsedRealtime()
+        scope.launch {
+            // 每次判定都现取偏好：不在字段里缓存，避免「冷启动首帧仍是默认 5 分钟」
+            // 的竞态（用户选了「从不」却在进程刚起来时被按默认档位锁掉）。
+            val minutes = prefs.autoLockMinutes.first()
+            when {
+                AutoLockPolicy.neverAutoLock(minutes) -> Unit
+                // 档位 0：切后台立即锁（不等回前台再判断）
+                AutoLockPolicy.lockImmediatelyOnBackground(minutes) -> lockAllNow()
+                else -> backgroundedAtMs = SystemClock.elapsedRealtime()
+            }
         }
     }
 
@@ -91,14 +97,17 @@ class AutoLockController @Inject constructor(
         val stoppedAt = backgroundedAtMs
         backgroundedAtMs = null
 
-        val screenLocked = keyguardManager?.isKeyguardLocked == true
-        val timedOut = AutoLockPolicy.backgroundTimeoutElapsed(
-            nowMs = SystemClock.elapsedRealtime(),
-            backgroundedAtMs = stoppedAt,
-            minutes = autoLockMinutes,
-        )
-        if (AutoLockPolicy.screenLockRequiresRelock(screenLocked) || timedOut) {
-            lockAllNow()
+        scope.launch {
+            val minutes = prefs.autoLockMinutes.first()
+            val screenLocked = keyguardManager?.isKeyguardLocked == true
+            val timedOut = AutoLockPolicy.backgroundTimeoutElapsed(
+                nowMs = SystemClock.elapsedRealtime(),
+                backgroundedAtMs = stoppedAt,
+                minutes = minutes,
+            )
+            if (AutoLockPolicy.shouldLockOnResume(minutes, screenLocked, timedOut)) {
+                lockAllNow()
+            }
         }
         // 不做自动同步（用户反馈：自动同步太频繁；拉取只在手动 / 本地修改后）
     }

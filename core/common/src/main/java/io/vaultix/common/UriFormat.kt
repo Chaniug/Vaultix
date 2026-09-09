@@ -32,13 +32,19 @@ import java.util.Locale
  */
 object UriFormat {
 
+    /** Android 应用绑定前缀（Bitwarden 官方形态，服务端与其它客户端均识别）。 */
+    const val ANDROID_APP_SCHEME = "androidapp://"
+
+    /** 包名 → 条目 URI（`androidapp://<package>`）：条目关联手机 App 的唯一写法。 */
+    fun androidAppUri(packageName: String): String = ANDROID_APP_SCHEME + packageName.trim()
+
     /** 把 uri 分类为网站 / Android 应用 / 其他。 */
     fun classify(uri: String): UriKind {
         val normalized = uri.trim()
         if (normalized.isEmpty()) return UriKind.Other(raw = normalized)
 
         val lower = normalized.lowercase(Locale.ROOT)
-        if (lower.startsWith("androidapp://") || lower.startsWith("android-app://")) {
+        if (lower.startsWith(ANDROID_APP_SCHEME) || lower.startsWith("android-app://")) {
             val pkg = normalized.substringAfter("://")
                 .substringBefore('/')
                 .substringBefore('?')

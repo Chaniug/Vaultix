@@ -52,4 +52,27 @@ class AutoLockPolicyTest {
         assertTrue(AutoLockPolicy.screenLockRequiresRelock(screenLocked = true))
         assertFalse(AutoLockPolicy.screenLockRequiresRelock(screenLocked = false))
     }
+
+    // ---- 回前台综合判定 ----
+
+    @Test
+    fun resume_lockedScreen_relocks() {
+        assertTrue(AutoLockPolicy.shouldLockOnResume(minutes = 5, screenLocked = true, timedOut = false))
+        assertFalse(AutoLockPolicy.shouldLockOnResume(minutes = 5, screenLocked = false, timedOut = false))
+    }
+
+    /**
+     * 「永不自动锁定」覆盖息屏 / 锁屏规则：用户显式选了「永久开启」后不应再被锁
+     * （真实反馈：选了永不仍一会儿就锁，即本例断言的行为）。
+     */
+    @Test
+    fun resume_neverMode_skipsScreenLockAndTimeout() {
+        assertFalse(AutoLockPolicy.shouldLockOnResume(AutoLockPolicy.NEVER, screenLocked = true, timedOut = true))
+        assertFalse(AutoLockPolicy.shouldLockOnResume(AutoLockPolicy.NEVER, screenLocked = true, timedOut = false))
+    }
+
+    @Test
+    fun resume_timeout_relocks() {
+        assertTrue(AutoLockPolicy.shouldLockOnResume(minutes = 5, screenLocked = false, timedOut = true))
+    }
 }

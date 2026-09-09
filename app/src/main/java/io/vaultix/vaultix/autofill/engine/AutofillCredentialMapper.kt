@@ -55,9 +55,12 @@ object AutofillCredentialMapper {
      * 解析结果 → 填充上下文（是否在场账号/密码框 + 出现的字段语义集合）。
      * 供 [FillPlanner] 判定登录 / 卡片 / 身份上下文。
      */
-    fun toFillContext(parsed: ParsedStructure): FillContext = FillContext(
+    fun toFillContext(
+        parsed: ParsedStructure,
+        webDomain: String? = parsed.webDomain,
+    ): FillContext = FillContext(
         packageName = parsed.packageName,
-        webDomain = parsed.webDomain,
+        webDomain = webDomain,
         webUri = parsed.webUri,
         hasUsernameField = parsed.usernameId != null,
         hasPasswordField = parsed.passwordId != null,

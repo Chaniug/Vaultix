@@ -212,6 +212,14 @@
     <string name="section_uris">网址</string>
     <string name="item_field_uri">网址</string>
     <string name="item_add_uri">添加网址</string>
+    <string name="item_add_app">关联应用</string>
+    <string name="item_field_app_package">应用包名</string>
+    <string name="app_picker_title">选择应用</string>
+    <string name="app_picker_search">搜索应用名称或包名</string>
+    <string name="app_picker_empty">没有匹配的应用</string>
+    <string name="app_picker_manual">手动输入包名</string>
+    <string name="app_picker_manual_label">包名</string>
+    <string name="app_picker_manual_hint">若列表中找不到，可直接输入应用包名（例如 com.example.app）</string>
     <string name="item_remove_uri">删除此网址</string>
     <string name="item_open_uri">打开网址</string>
     <string name="copy_uri">已复制网址</string>

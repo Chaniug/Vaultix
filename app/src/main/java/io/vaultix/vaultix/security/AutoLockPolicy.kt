@@ -49,4 +49,16 @@ object AutoLockPolicy {
      * Bastion 语义：屏幕锁定时不允许免验证访问。
      */
     fun screenLockRequiresRelock(screenLocked: Boolean): Boolean = screenLocked
+
+    /**
+     * 回前台是否应锁定。
+     *
+     * **「从不自动锁定」档位优先级最高**：用户显式选了「永不锁定」时，屏幕锁定与
+     * 空闲超时两条规则全部跳过（只保留手动锁定与进程重启后的内存密钥清零）——
+     * 否则选了「永不」却仍会因息屏 / 锁屏被锁，与档位语义自相矛盾。
+     */
+    fun shouldLockOnResume(minutes: Int, screenLocked: Boolean, timedOut: Boolean): Boolean {
+        if (neverAutoLock(minutes)) return false
+        return screenLockRequiresRelock(screenLocked) || timedOut
+    }
 }

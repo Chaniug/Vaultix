@@ -127,4 +127,20 @@ class HintClassifierTest {
         assertThat(HintClassifier.classify(null, inputType, "用户名"))
             .isEqualTo(FieldHint.PASSWORD)
     }
+
+    @Test
+    fun `chromium web hints map to username and password`() {
+        // Chromium 内核浏览器（Chrome / Edge / Brave）在 WebView 表单里下发 web* hint
+        assertThat(HintClassifier.classify(listOf("webUsername"), 0, null))
+            .isEqualTo(FieldHint.USERNAME)
+        assertThat(HintClassifier.classify(listOf("webPassword"), 0, null))
+            .isEqualTo(FieldHint.PASSWORD)
+    }
+
+    @Test
+    fun `any recognized hint in a multi hint node wins`() {
+        // 一个节点可能同时带 web* 与未知 hint：不能只看第一个
+        assertThat(HintClassifier.classify(listOf("unknownHint", "webPassword"), 0, null))
+            .isEqualTo(FieldHint.PASSWORD)
+    }
 }

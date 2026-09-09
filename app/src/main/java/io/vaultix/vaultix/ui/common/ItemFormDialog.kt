@@ -17,6 +17,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Android
 import androidx.compose.material.icons.filled.Casino
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.QrCodeScanner
@@ -57,6 +58,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import io.vaultix.common.PasswordStrength
+import io.vaultix.common.UriFormat
 import io.vaultix.model.CustomFieldType
 import io.vaultix.model.VaultCustomField
 import io.vaultix.model.VaultFolder
@@ -118,6 +120,7 @@ fun ItemFormDialog(
     var folderId by rememberSaveable(initial) { mutableStateOf(initial.folderId) }
     var showNameError by rememberSaveable { mutableStateOf(false) }
     var scanning by rememberSaveable { mutableStateOf(false) }
+    var showAppPicker by rememberSaveable { mutableStateOf(false) }
 
     AlertDialog(
         onDismissRequest = { if (!saving) onDismiss() },
@@ -167,6 +170,7 @@ fun ItemFormDialog(
                         totp = totp,
                         onTotpChange = { totp = it },
                         onScanTotp = { scanning = true },
+                        onPickApp = { showAppPicker = true },
                     )
                     VaultItemType.Card -> LabeledFields(CARD_LABELS, cardValues)
                     VaultItemType.Identity -> LabeledFields(IDENTITY_LABELS, identityValues)
@@ -231,25 +235,54 @@ fun ItemFormDialog(
         },
     )
 
-    // 扫码用**全屏 Dialog 内嵌相机**，而不是跳转到独立页面：
-    // 这样结果可以直接回填 totp 字段，不会因为导航离开而丢失已填的其他内容。
-    if (scanning) {
-        Dialog(
-            onDismissRequest = { scanning = false },
-            properties = DialogProperties(
-                usePlatformDefaultWidth = false,
-                decorFitsSystemWindows = false,
-            ),
-        ) {
-            QrScannerContent(
-                onResult = { text ->
-                    totp = text
-                    scanning = false
-                },
-                onBack = { scanning = false },
-            )
-        }
+    QrScannerHost(
+        scanning = scanning,
+        onResult = { text ->
+            totp = text
+            scanning = false
+        },
+        onBack = { scanning = false },
+    )
+    AppPickerHost(
+        show = showAppPicker,
+        uris = uris,
+        onDismiss = { showAppPicker = false },
+    )
+}
+
+/**
+ * 扫码用**全屏 Dialog 内嵌相机**，而不是跳转到独立页面：
+ * 这样结果可以直接回填 totp 字段，不会因为导航离开而丢失已填的其他内容。
+ */
+@Composable
+private fun QrScannerHost(scanning: Boolean, onResult: (String) -> Unit, onBack: () -> Unit) {
+    if (!scanning) return
+    Dialog(
+        onDismissRequest = onBack,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false,
+        ),
+    ) {
+        QrScannerContent(onResult = onResult, onBack = onBack)
     }
+}
+
+/**
+ * 关联手机 App：从已安装应用里选，写入 `androidapp://<package>`
+ * （Bitwarden 官方 URI 形态，服务端与其它客户端都能识别，自动填充按包名匹配）。
+ */
+@Composable
+private fun AppPickerHost(show: Boolean, uris: SnapshotStateList<String>, onDismiss: () -> Unit) {
+    if (!show) return
+    AppPickerDialog(
+        onDismiss = onDismiss,
+        onPick = { packageName ->
+            val uri = UriFormat.androidAppUri(packageName)
+            if (uri !in uris) uris.add(uri)
+            onDismiss()
+        },
+    )
 }
 
 @Composable
@@ -429,6 +462,7 @@ private fun LoginFields(
     totp: String,
     onTotpChange: (String) -> Unit,
     onScanTotp: () -> Unit,
+    onPickApp: () -> Unit,
 ) {
     OutlinedTextField(
         value = username,
@@ -491,6 +525,7 @@ private fun LoginFields(
         uris = uris,
         onAdd = { uris.add("") },
         onRemove = { uris.removeAt(it) },
+        onPickApp = onPickApp,
     )
     Spacer(Modifier.height(8.dp))
     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -583,6 +618,7 @@ private fun UriListEditor(
     uris: SnapshotStateList<String>,
     onAdd: () -> Unit,
     onRemove: (Int) -> Unit,
+    onPickApp: () -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
         uris.forEachIndexed { index, uri ->
@@ -593,7 +629,17 @@ private fun UriListEditor(
                 OutlinedTextField(
                     value = uri,
                     onValueChange = { uris[index] = it },
-                    label = { Text(stringResource(R.string.item_field_uri)) },
+                    label = {
+                        Text(
+                            stringResource(
+                                if (uri.startsWith(UriFormat.ANDROID_APP_SCHEME, ignoreCase = true)) {
+                                    R.string.item_field_app_package
+                                } else {
+                                    R.string.item_field_uri
+                                },
+                            ),
+                        )
+                    },
                     singleLine = true,
                     modifier = Modifier
                         .weight(1f)
@@ -609,10 +655,19 @@ private fun UriListEditor(
             }
             Spacer(Modifier.height(8.dp))
         }
-        TextButton(onClick = onAdd, modifier = Modifier.fillMaxWidth()) {
-            Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(8.dp))
-            Text(stringResource(R.string.item_add_uri))
+        Row(modifier = Modifier.fillMaxWidth()) {
+            TextButton(onClick = onAdd, modifier = Modifier.weight(1f)) {
+                Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(stringResource(R.string.item_add_uri))
+            }
+            // 关联手机 App：等价于 Bitwarden 在网址里填 androidapp://包名，
+            // 但用户不该手敲包名——这里给一个应用列表直接选。
+            TextButton(onClick = onPickApp, modifier = Modifier.weight(1f)) {
+                Icon(Icons.Filled.Android, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(stringResource(R.string.item_add_app))
+            }
         }
     }
 }

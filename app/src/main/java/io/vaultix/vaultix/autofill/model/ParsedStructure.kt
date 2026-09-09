@@ -56,6 +56,8 @@ data class ParsedField(
  * @param webDomain 网页域名（来自 AssistStructure.webDomain 或浏览器地址栏）。
  * @param webUri 尽量完整的网页地址（scheme + host；Android AssistStructure 仅暴露 host，
  *   故路径/查询段无法获取，Exact/StartsWith/Regex 匹配退化为按 host 近似，见 BitwardenLikeAutofillMatcher）。
+ * @param fallbackWebDomain 浏览器未上报 [webDomain] 时的兜底域名（地址栏文本 / 结构文本），
+ *   **非权威**：只用于匹配，不用于「拒绝」判定（见 [io.vaultix.vaultix.autofill.parser.BrowserUrlBars]）。
  * @param webView 是否为 WebView / 浏览器表单（决定是否强制 inline 回填）。
  * @param usernameId 归一后的用户名字段 id（无则 null）。
  * @param passwordId 归一后的密码字段 id（无则 null）。
@@ -65,6 +67,7 @@ data class ParsedStructure(
     val packageName: String?,
     val webScheme: String?,
     val webDomain: String?,
+    val fallbackWebDomain: String? = null,
     val webUri: String?,
     val webView: Boolean,
     val usernameId: AutofillId?,

@@ -27,41 +27,82 @@ object AssistStructureParser {
 
         val fields = mutableListOf<ParsedField>()
         val webDomains = mutableListOf<String>()
+        val urlBarHosts = mutableListOf<String>()
         var webView = false
         repeat(structure.windowNodeCount) { index ->
             val root = structure.getWindowNodeAt(index)?.rootViewNode ?: return@repeat
-            webView = traverse(root, fields, webDomains) || webView
+            webView = traverse(root, fields, webDomains, urlBarHosts, packageName) || webView
         }
 
         val webDomain = webDomains.firstOrNull()
-        val webUri = webDomain?.let { "https://$it" }
-        val usernameId = fields.firstOrNull { it.hint == FieldHint.USERNAME }?.id
-        val passwordId = fields.firstOrNull { it.hint == FieldHint.PASSWORD }?.id
+        // Edge / 三星 / Opera 等浏览器的 WebView 不总会上报 webDomain：此时读地址栏
+        // （包名 + idEntry 双重匹配），再退化到结构文本扫描。该兜底只用于匹配。
+        val fallbackWebDomain = if (webDomain.isNullOrBlank()) {
+            urlBarHosts.firstOrNull() ?: BrowserUrlBars.domainFromStructureText(structure)
+        } else {
+            null
+        }
+        val effectiveDomain = webDomain ?: fallbackWebDomain
+        val webUri = effectiveDomain?.let { "https://$it" }
+        val resolved = promoteUsernameField(fields)
+        val usernameId = resolved.firstOrNull { it.hint == FieldHint.USERNAME }?.id
+        val passwordId = resolved.firstOrNull { it.hint == FieldHint.PASSWORD }?.id
         return ParsedStructure(
             packageName = packageName,
             webScheme = null,
             webDomain = webDomain,
+            fallbackWebDomain = fallbackWebDomain,
             webUri = webUri,
             webView = webView,
             usernameId = usernameId,
             passwordId = passwordId,
-            fields = fields,
+            fields = resolved,
         )
     }
 
-    /** 深度优先遍历，收集有 autofillId 的字段与 WebView 节点的域名；返回子树内是否出现 WebView。 */
+    /**
+     * 识别不到用户名字段时，把密码框**之前最近**的文本框升格为用户名。
+     *
+     * 对齐 Bitwarden `AutofillParserImpl`：浏览器 / WebView 表单里密码框几乎总有信号
+     * （`type=password`），用户名字段却常常什么信号都没有——不补这一步就只能填密码、
+     * 账号框空着，用户体感就是「填充没生效」。DFS 顺序 ≈ 视觉自上而下顺序。
+     * 邮箱框优先（多数网站拿邮箱当账号），其次才是完全无信号的未知框。
+     */
+    private fun promoteUsernameField(fields: List<ParsedField>): List<ParsedField> {
+        if (fields.any { it.hint == FieldHint.USERNAME }) return fields
+        val passwordIndex = fields.indexOfFirst { it.hint == FieldHint.PASSWORD }
+        if (passwordIndex <= 0) return fields
+        val before = fields.subList(0, passwordIndex)
+        val index = before.indexOfLast { it.isVisible && it.hint == FieldHint.EMAIL_ADDRESS }
+            .takeIf { it >= 0 }
+            ?: before.indexOfLast { it.isVisible && it.hint == FieldHint.UNKNOWN }
+        if (index < 0) return fields
+        return fields.toMutableList().apply { this[index] = this[index].copy(hint = FieldHint.USERNAME) }
+    }
+
+    /** 深度优先遍历，收集字段 / WebView 域名 / 地址栏网址；返回子树内是否出现 WebView。 */
     private fun traverse(
         node: ViewNode,
         out: MutableList<ParsedField>,
         webDomains: MutableList<String>,
+        urlBarHosts: MutableList<String>,
+        pagePackageName: String?,
     ): Boolean {
         var webView = node.className?.contains("WebView", ignoreCase = true) == true
         node.webDomain?.let { webDomains += it }
+        // 地址栏只取网址，**不作为可填充字段**：否则地址栏文本含 "login" 会被启发式
+        // 判成用户名字段，填充时把账号写进地址栏。
+        val isUrlBar = BrowserUrlBars.isUrlBarNode(pagePackageName, node.idPackage, node.idEntry)
+        if (isUrlBar) {
+            BrowserUrlBars.hostFromText(node.text?.toString())?.let { urlBarHosts += it }
+        }
         val id = node.autofillId
-        if (id != null) {
+        if (id != null && !isUrlBar) {
             val hints = node.autofillHints?.map { it.toString() }
             val inputType = node.inputType
-            val text = (node.text ?: node.hint)?.toString()
+            // 文本信号含 WebView 的 htmlInfo 属性：浏览器表单常只在这里暴露
+            // type=password / name=username，漏了就识别不出账号密码框。
+            val text = BrowserUrlBars.textSignalOf(node)
             out += ParsedField(
                 id = id,
                 hint = HintClassifier.classify(hints, inputType, text),
@@ -72,7 +113,7 @@ object AssistStructureParser {
         }
         repeat(node.childCount) { index ->
             val child = node.getChildAt(index) ?: return@repeat
-            webView = traverse(child, out, webDomains) || webView
+            webView = traverse(child, out, webDomains, urlBarHosts, pagePackageName) || webView
         }
         return webView
     }

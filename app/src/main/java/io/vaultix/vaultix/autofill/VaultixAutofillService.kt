@@ -29,7 +29,9 @@ import io.vaultix.vaultix.R
 import io.vaultix.vaultix.autofill.engine.AutofillCredentialMapper
 import io.vaultix.vaultix.autofill.engine.AutofillDatasets
 import io.vaultix.vaultix.autofill.engine.FillPlanner
+import io.vaultix.vaultix.autofill.match.AutofillRequestContextPolicy
 import io.vaultix.vaultix.autofill.match.BitwardenLikeAutofillMatcher
+import io.vaultix.vaultix.autofill.match.MatchConfig
 import io.vaultix.vaultix.autofill.model.AutofillCredential
 import io.vaultix.vaultix.autofill.model.FillSuggestion
 import io.vaultix.vaultix.autofill.model.ParsedStructure
@@ -74,6 +76,11 @@ class VaultixAutofillService : AutofillService() {
             return
         }
         val parsed = AssistStructureParser.parse(structure)
+        // 对齐 Bitwarden blocked URIs：系统界面 / 设置 / 本应用自身不提供填充。
+        if (AutofillRequestContextPolicy.isBlockedPackage(parsed.packageName, packageName)) {
+            callback.onSuccess(null)
+            return
+        }
         val job = scope.launch {
             val response = runCatching { buildResponse(parsed) }.getOrNull()
             withContext(Dispatchers.Main) {
@@ -121,13 +128,22 @@ class VaultixAutofillService : AutofillService() {
         }
 
         val vault = collectCandidates(unlocked)
+        // Edge 等浏览器不上报 webDomain → 用地址栏 / 结构文本兜底域名参与匹配。
+        val webDomain = parsed.webDomain ?: parsed.fallbackWebDomain
         val matched = BitwardenLikeAutofillMatcher.match(
             credentials = vault.credentials,
             packageName = parsed.packageName,
-            webDomain = parsed.webDomain,
+            webDomain = webDomain,
+            config = MatchConfig(
+                allowPackageMatch = AutofillRequestContextPolicy.allowPackageMatching(
+                    packageName = parsed.packageName,
+                    webDomain = webDomain,
+                    isWebView = parsed.webView,
+                ),
+            ),
         )
         val plan = FillPlanner.plan(
-            context = AutofillCredentialMapper.toFillContext(parsed),
+            context = AutofillCredentialMapper.toFillContext(parsed, webDomain),
             matchedLogins = matched,
             cards = vault.cards,
             identities = vault.identities,
