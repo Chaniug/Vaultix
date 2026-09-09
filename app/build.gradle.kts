@@ -113,6 +113,7 @@ dependencies {
 
     // 平台能力
     implementation(libs.androidx.biometric)
+    implementation(libs.androidx.credentials)
     implementation(libs.coil.compose)
 
     // 扫码（TOTP 相机扫码）：CameraX 取流 + ZXing 解 QR

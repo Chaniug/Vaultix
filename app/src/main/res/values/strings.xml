@@ -413,7 +413,7 @@
     <string name="passkeys_screen_title">通行密钥</string>
     <string name="passkeys_search_hint">搜索依赖方或账号</string>
     <string name="passkeys_empty_title">还没有通行密钥</string>
-    <string name="passkeys_empty_body">通行密钥由网站 / App 创建后同步到对应的密码条目里（本库共 %1$d 个条目，其中 %2$d 个含通行密钥）。Vaultix 目前只能查看与管理，还不能用通行密钥登录。</string>
+    <string name="passkeys_empty_body">通行密钥由网站 / App 创建后同步到对应的密码条目里（本库共 %1$d 个条目，其中 %2$d 个含通行密钥）。在系统设置里把 Vaultix 设为凭证提供方后，网站 / App 的登录页即可从 Vaultix 选择通行密钥登录。</string>
     <string name="passkeys_add_title">保存通行密钥</string>
     <string name="passkeys_detail_title">通行密钥详情</string>
     <string name="passkeys_readonly_hint">通行密钥只读，仅可查看与删除（由服务器 / 平台管理）</string>
@@ -431,4 +431,22 @@
     <string name="passkey_removed">已删除通行密钥</string>
     <string name="passkey_saved">已保存通行密钥</string>
     <string name="passkey_save_failed">保存失败：%1$s</string>
+
+    <!-- Credential Provider（M3 最高优先）：系统层通行密钥供应 -->
+    <string name="credential_unlock_title">解锁 Vaultix</string>
+    <string name="credential_unlock_subtitle">解锁后选择通行密钥</string>
+    <string name="passkey_create_title">创建通行密钥</string>
+    <string name="passkey_create_for">为 %1$s 创建通行密钥</string>
+    <string name="passkey_create_choose_login">保存到哪个登录条目</string>
+    <string name="passkey_create_biometric_title">验证身份以创建通行密钥</string>
+    <string name="passkey_create_done">已创建通行密钥</string>
+    <string name="passkey_create_failed">创建失败：%1$s</string>
+    <string name="passkey_create_new_login">新建登录条目</string>
+
+    <!-- 通行密钥断言（GET）确认 / 设备验证 -->
+    <string name="passkey_auth_title">使用通行密钥登录</string>
+    <string name="passkey_auth_subtitle">验证以使用 %1$s 的通行密钥</string>
+    <string name="passkey_auth_message">Vaultix 即将使用 %1$s 的通行密钥完成登录</string>
+    <string name="passkey_auth_confirm">使用通行密钥</string>
+    <string name="passkey_create_confirm">创建</string>
 </resources>
