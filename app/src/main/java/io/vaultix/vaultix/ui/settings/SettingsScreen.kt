@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Fingerprint
+import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Password
@@ -51,6 +52,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -62,6 +64,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.vaultix.vaultix.BuildConfig
 import io.vaultix.vaultix.R
@@ -69,6 +74,7 @@ import io.vaultix.vaultix.ui.common.TrashAutoDeleteDialog
 import io.vaultix.vaultix.ui.common.trashAutoDeleteLabel
 import io.vaultix.vaultix.autofill.shortcut.AutofillTileService
 import io.vaultix.vaultix.ui.theme.ThemeMode
+import io.vaultix.vaultix.util.CredentialProviderStatus
 
 /**
  * 设置页（最小版）：安全（自动锁定 / 剪贴板清除 / 防截屏 / 立即锁定）、
@@ -316,11 +322,37 @@ private fun AutofillSection(viewModel: SettingsViewModel) {
     val savePrompt by viewModel.autofillSavePrompt.collectAsStateWithLifecycle()
     val autoCopyTotp by viewModel.autoCopyTotp.collectAsStateWithLifecycle()
     var tileUnsupported by rememberSaveable { mutableStateOf(false) }
+    // 凭据提供商启用状态：只读检测 + 每次回前台刷新（跳系统设置开启后返回要能看到变化）
+    var credentialProviderEnabled by remember { mutableStateOf(CredentialProviderStatus.isEnabled(context)) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                credentialProviderEnabled = CredentialProviderStatus.isEnabled(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     SettingsGroupTitle(stringResource(R.string.group_autofill))
     SettingsRow(
         icon = { Icon(Icons.Filled.Password, contentDescription = null) },
         title = stringResource(R.string.setting_autofill),
         subtitle = stringResource(R.string.setting_autofill_desc),
+        onClick = { openSystemAutofillSettings(context) },
+    )
+    // Credential Provider（Android 14+）：Chromium（Chrome/Edge）取密码/通行密钥只问
+    // 系统已启用的 Provider——与「系统自动填充」同页管理，App 无法自行启用（安全设置）。
+    SettingsRow(
+        icon = { Icon(Icons.Filled.Key, contentDescription = null) },
+        title = stringResource(R.string.setting_credential_provider),
+        subtitle = stringResource(
+            if (credentialProviderEnabled) {
+                R.string.setting_credential_provider_enabled_desc
+            } else {
+                R.string.setting_credential_provider_disabled_desc
+            }
+        ),
         onClick = { openSystemAutofillSettings(context) },
     )
     SettingsRow(
