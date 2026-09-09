@@ -21,7 +21,8 @@
 - **移除库入口**（d689a37）：⋮ 菜单 + 二次确认 → 本地全清（会话/快速解锁/凭据/队列/级联行）
 - **周期同步 M1 判推迟 → P2**（a300189）：进程被杀无解锁会话可同步，收益≈0；PERIODIC 已预留
 - **同步触发策略收敛**（824c432）：移除进页/回前台自动拉取；自动同步 = 本地修改 flush；拉取 = 手动（顶栏 + 下拉刷新）
-- 门禁每批全绿：双 flavor + Hilt（full/offline）+ 各模块单测 + detekt
+- 门禁每批全绿：full flavor + Hilt + 各模块单测 + detekt（offline flavor 自 2026-09-09 起
+  暂停参与构建，见 decisions「只构建/发布 full」）
 
 ## 真机回归记录（2026-09-08）
 
@@ -51,7 +52,7 @@
 |---|---|---|---|
 | `core:crypto` 行覆盖 | 91.4% | ≥ 80% | ✅ |
 | Detekt（全模块 main+test） | 0 违规 | 0 | ✅ |
-| 构建 | 双 flavor 编译 + Hilt 组件（full/offline）通过 | 通过 | ✅ |
+| 构建 | full flavor 编译 + Hilt 通过（offline 暂停构建，2026-09-09） | 通过 | ✅ |
 | 单测 | core:crypto 172；data:repository（会话/写路径/回收站/移除库/编排器）；data:bitwarden（2FA 解析/prelogin/per-item key/载荷保真/刷新分类）；app（AutoLockPolicy）全绿 | 全绿 | ✅ |
 
 ## 待办（真机回归通过后 M1 收口）

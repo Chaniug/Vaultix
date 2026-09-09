@@ -27,7 +27,8 @@
 | 2026-09-08 | **Hilt 断环：Authenticator 注入 `Provider<TokenRefresher>`** | OkHttpClient→Authenticator→TokenRefresher→AuthRepository→ApiFactory→Retrofit.Builder→OkHttpClient 构造期环（此前未被任何注入点展开，ViewModel 注入点出现后暴露）；401 回调时才解析 refresher，彼时认证仓库必已构造完成 |
 | 2026-09-08 | **本地快速解锁（Keystore 包裹，Bastion/官方模型）** | 登录成功后用 Keystore user-auth KEK 包裹账号对称密钥落盘；锁库只清内存；再开 = 生物识别/设备 PIN 本地解封（离线、免主密码、免 2FA）。API 30+ 支持 DEVICE_CREDENTIAL，26-29 仅强生物识别；指纹变更自动失效回退主密码 |
 | 2026-09-08 | **设备登记走 HTTP Header（修正）** | connect/token 的 device-type/device-identifier/device-name 仅放 body 时服务器端设备管理不认（真机验证）；Header + body 双放（Bastion 实测组合）；deviceType 0=Android（原误用 1=iOS） |
-| 2026-09-08 | **preview 只发 full 一个 debug 包** | offline 分发（仅 KDBX）M2 前无功能；保留 offline 编译验证防 flavor 退化 |
+| 2026-09-08 | **preview 只发 full 一个 debug 包** | offline 分发（仅 KDBX）M2 前无功能；保留 offline 编译验证防 flavor 退化（**2026-09-09 已收紧，见下行**） |
+| 2026-09-09 | **只构建/发布 full；offline flavor 暂停参与构建（用户拍板）** | KDBX 引擎（`data:kdbx`）属 P3 待办，现在出 offline 包是空壳（装上没有本地库可用）；双 variant 编译让 CI 时间与缓存空间翻倍。CI 收敛为 `assembleFullDebug` / `lintFullDebug` / `assembleFullRelease`；**flavor 定义与 `AppFlavor` 分支代码保留在仓库**，待 Bitwarden 收尾后决定是否做纯本地版，届时加回 `compileOfflineDebugKotlin` / `lintOfflineDebug` / `assembleOfflineRelease`（恢复点已写在 workflow 注释里） |
 | 2026-09-08 | **签名 Secrets 修复（根因 2 条，CI 已全绿）** | ① Secrets 不自动进 env：必须 step env 显式注入（此前 `${SIGNING_STORE_PASSWORD}` 恒空 → 一次性密钥）；② PKCS12 jks 私钥密码 = store 密码，KEY_PASSWORD 传同值（独立随机 keypass 被 keytool 忽略导致 AGP 读 key 失败）。判定只看 `##[notice]固定密钥`/`##[warning]一次性` 行，勿信脚本回显 |
 | 2026-09-08 | **Bastion 冻结为 reference implementation；Vaultix = 唯一演进线** | Bastion 仍有人使用，代码与 GitHub 均不再改动；新功能/重构/修复全部在 Vaultix 进行。参考索引见 `Docs/18-Bastion参考地图.md` |
 | 2026-09-08 | **从 Bastion 只搬三类资产，不做文件级搬迁** | Bastion 主源码约 664 文件 / 25.8 万行（单模块 `:app`），直接灌入 13 模块架构会重演纠缠；只搬 ①行为知识 ②测试向量与保真矩阵 ③无依赖的核，逐功能在 Vaultix 重写，以"对拍清单"验收（流程见 `Docs/18-Bastion参考地图.md` §5） |

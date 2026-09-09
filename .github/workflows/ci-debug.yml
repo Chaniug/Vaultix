@@ -100,10 +100,12 @@ jobs:
         if: github.event_name != 'push'
         # 多 flavor 下 `lintDebug` 存在歧义（候选：lintFullDebug / lintOfflineDebug），
         # 必须显式指定 variant；否则 PR / 手动触发时该步骤直接失败（push 时不跑 lint，故不易发现）。
+        # 2026-09-09：只 lint full —— offline flavor 暂停参与构建（见下方 build 步骤注释），
+        # 对它跑 lint 无意义。恢复 offline 时同步加回 :app:lintOfflineDebug。
         # 注意：AGP 的 LintModelWriterTask 与 Gradle 配置缓存不兼容，会抛
         # ConfigurationCacheError（并连带导致 androidTest classpath 解析失败）。
         # CI 的 GRADLE_OPTS 全局开启了 configuration-cache，故此处显式关闭。
-        run: ./gradlew :app:lintFullDebug :app:lintOfflineDebug --stacktrace --no-configuration-cache
+        run: ./gradlew :app:lintFullDebug --stacktrace --no-configuration-cache
 
       # Detekt 质量门禁（P1，Docs/16 代码规模纪律）：push / PR 均执行。
       # 规则阈值在 config/detekt/detekt.yml；同 lint 用 --no-configuration-cache 规避
@@ -168,8 +170,11 @@ jobs:
       - name: Build Debug APK (build gate)
         run: |
           set +e
-          # 只出 full 分发的 preview 包（offline = 仅 KDBX 本地库，M2 才有内容，
-          # 届时再随 release 一起出）。offline flavor 仍做编译验证，防止分发出包时退化。
+          # 只构建 full 分发。offline（仅 KDBX 本地库）**暂停参与构建**（2026-09-09 用户拍板）：
+          # KDBX 引擎（data:kdbx）属 P3 待办，现在出 offline 包是空壳；且双 variant 编译
+          # 让 CI 时间/缓存空间翻倍。flavor 定义与 AppFlavor 分支代码保留在仓库中，
+          # 待 Bitwarden 收尾、决定是否做纯本地版时再恢复（届时加回
+          # :app:compileOfflineDebugKotlin / lintOfflineDebug / assembleOfflineRelease）。
           # versionName 形如 0.1.0-dev-78db0ed：版本号 + dev 标识 + 短 commit SHA（可直接 git show 定位代码）。
           # 用 GITHUB_SHA 而非 git rev-parse：本 job 是 fetch-depth=1 浅克隆，本地 git 无历史，
           # 而 GITHUB_SHA 由 Actions 注入，不受克隆深度影响。
@@ -183,7 +188,7 @@ jobs:
             KS_OPTS="$KS_OPTS -Pandroid.injected.signing.key.alias=${SIGNING_KEY_ALIAS:-vaultix}"
             KS_OPTS="$KS_OPTS -Pandroid.injected.signing.key.password=${SIGNING_KEY_PASSWORD:-android}"
           fi
-          ./gradlew :app:assembleFullDebug :app:compileOfflineDebugKotlin --stacktrace \
+          ./gradlew :app:assembleFullDebug --stacktrace \
             -PversionName="0.1.0-dev-$(echo ${GITHUB_SHA} | cut -c1-7)" $KS_OPTS 2>&1 | tee /tmp/build_log.txt
           BUILD_EXIT=${PIPESTATUS[0]}
           if [ "$BUILD_EXIT" -ne 0 ]; then
@@ -217,9 +222,9 @@ jobs:
         id: apk_meta
         shell: bash
         run: |
-          # 多 flavor（full / offline）下 `cd app/build/outputs/apk/*/debug` 会被展开成多个
-          # 目录，导致 "cd: too many arguments"。改为从 apk 根目录统一查找，不进入子目录，
-          # 这样两个 flavor 的产物都能被收集到。
+          # 从 apk 根目录统一查找而不 `cd app/build/outputs/apk/*/debug`：早期多 flavor 下
+          # 通配符会展开成多个目录导致 "cd: too many arguments"（现只出 full 单包，
+          # 但保留这种写法，恢复 offline 时无需再改）。
           apk_root="app/build/outputs/apk"
           apk_list="$(find "$apk_root" -type f \( -iname '*.apk' -o -iname '*.APK' \) -printf '%P\n' | sort)"
           apk_count="$(printf '%s\n' "$apk_list" | sed '/^$/d' | wc -l | tr -d ' ')"

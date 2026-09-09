@@ -83,7 +83,7 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 | 2 | runner 上 platform 目录为 android-37.0/37.1/37.2，**无** android-37 | 校验改前缀匹配 `android-37*`（本机两者都有，本地不暴露） |
 | 3 | `cd app/build/outputs/apk/*/debug` 多 flavor 展开报 too many arguments | 改为从 apk 根目录 find |
 | 4 | workflow `paths` 缺 .sh / .toml / .github/scripts/** | 补齐（否则改构建脚本不触发 CI，形成盲区） |
-| 5 | `:app:lintDebug`、`:app:testDebugUnitTest` 多 flavor 歧义 | 改 lintFullDebug+lintOfflineDebug、testFullDebugUnitTest |
+| 5 | `:app:lintDebug`、`:app:testDebugUnitTest` 多 flavor 歧义 | 改显式 variant（现为 lintFullDebug / testFullDebugUnitTest；offline 自 2026-09-09 起不参与构建） |
 | 6 | Lint 与 Gradle 配置缓存不兼容（ConfigurationCacheError） | lint 步骤加 `--no-configuration-cache` |
 | 7 | androidTest 缺 Compose BOM，`ui-test-junit4` 版本为空 | 补 `androidTestImplementation(platform(bom))` |
 | 8 | 单测步骤只跑 `:app`（当时无用例，形同虚设） | 追加 `:core:crypto:testDebugUnitTest` |
@@ -530,6 +530,16 @@ Vaultix 原把 linkedId 当顺序编号（1/2/3/4），**官方是分段编码**
   3. **包名闸门** `AutofillRequestContextPolicy`：浏览器无域名时**禁止**退化包名匹配
      （否则把浏览器自己当条目身份）+ Bitwarden 同款 blocked packages（android/设置/自身/一加锁）。
 - 地址栏节点**不能**进可填充字段（文本含 "login" 会被启发式判成用户名框 → 把账号填进地址栏）。
+
+## ⚠️ 只构建/发布 full 分发（2026-09-09 用户拍板）
+- `offline` flavor（仅 KDBX、无 INTERNET 权限）**暂停参与构建**：CI 收敛为
+  `assembleFullDebug` / `lintFullDebug` / `assembleFullRelease`；本地门禁也只跑 full。
+- 理由：`data:kdbx` 属 P3 待办，offline 包目前是空壳（无本地库引擎可用）；
+  双 variant 编译让 CI 时间与缓存空间翻倍。
+- **flavor 定义与 `AppFlavor` 分支代码保留在仓库**，待 Bitwarden 收尾后决定是否做纯本地版。
+  恢复点写在 workflow 注释里：加回 `compileOfflineDebugKotlin` / `lintOfflineDebug` /
+  `assembleOfflineRelease`。
+- 决策记录：`Docs/progress/decisions.md`（2026-09-09 行）。
 
 ## 用户反馈三缺陷修复（2026-09-09，6afaaa4）
 - ① **「永不锁定」仍锁**：`AutoLockPolicy.neverAutoLock` 写了却没接线，`onStart` 无条件执行

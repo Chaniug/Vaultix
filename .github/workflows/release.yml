@@ -200,7 +200,9 @@ jobs:
           KS_OPTS="$KS_OPTS -Pandroid.injected.signing.store.password=${SIGNING_STORE_PASSWORD:-android}"
           KS_OPTS="$KS_OPTS -Pandroid.injected.signing.key.alias=${SIGNING_KEY_ALIAS:-vaultix}"
           KS_OPTS="$KS_OPTS -Pandroid.injected.signing.key.password=${SIGNING_KEY_PASSWORD:-android}"
-          ./gradlew :app:assembleRelease \
+          # 只出 full 分发（2026-09-09 用户拍板）：offline（仅 KDBX）暂停参与构建，
+          # 待决定是否做纯本地版后再改回 :app:assembleRelease 双包。
+          ./gradlew :app:assembleFullRelease \
             --build-cache \
             --stacktrace \
             -PversionName="${{ steps.meta.outputs.version }}" $KS_OPTS 2>&1 | tee /tmp/build_log.txt
@@ -228,7 +230,7 @@ jobs:
         shell: bash
         run: |
           cd app/build/outputs/apk
-          # flavor 化后产物分布在 full/release、offline/release 等子目录，递归收集
+          # 产物目录随分发数变化（曾为 full/offline 两个 flavor），递归收集保持兼容
           apk_files="$(find . -type f -iname '*.apk' | sort)"
           apk_list="$(printf '%s\n' "$apk_files" | sed 's|^\./||')"
           apk_count="$(printf '%s\n' "$apk_files" | sed '/^$/d' | wc -l | tr -d ' ')"

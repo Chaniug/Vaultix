@@ -15,7 +15,8 @@
       （60s 超时、VISIBILITY_SECRET、复用 `VaultixClipboard` 自动清除与 IS_SENSITIVE）
 - [x] 设置页自动填充组加「快速填充磁贴」说明行（可发现性）
 - [x] 三件套**全程不依赖无障碍权限**（用户判断：多数场景无需无障碍即可解决）
-- [x] 双 flavor 编译 + 全模块 detekt 0 违规 + 全项目单测 0 失败
+- [x] full flavor 编译 + 全模块 detekt 0 违规 + 全项目单测 0 失败
+      （offline flavor 自本轮起暂停参与构建，见「只构建/发布 full」决策）
 
 ## 已完成（第十八轮 2026-09-09 · 编辑密码查看修复 + 批次④ 设置页对齐）
 
