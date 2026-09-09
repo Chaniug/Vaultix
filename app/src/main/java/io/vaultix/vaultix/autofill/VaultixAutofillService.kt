@@ -11,6 +11,7 @@
  */
 package io.vaultix.vaultix.autofill
 
+import android.content.Intent
 import android.os.CancellationSignal
 import android.service.autofill.AutofillService
 import android.service.autofill.Dataset
@@ -157,7 +158,7 @@ class VaultixAutofillService : AutofillService() {
                         mode = AutofillIntents.MODE_UNLOCK,
                         title = getString(R.string.autofill_unlock_title),
                         subtitle = getString(R.string.autofill_unlock_subtitle),
-                    ),
+                    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
                     requestCode = REQUEST_UNLOCK,
                 ),
                 title = getString(R.string.autofill_unlock_title),
@@ -218,7 +219,7 @@ class VaultixAutofillService : AutofillService() {
                     mode = AutofillIntents.MODE_SEARCH,
                     title = getString(R.string.autofill_no_match_title),
                     subtitle = getString(R.string.autofill_no_match_subtitle),
-                ),
+                ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
                 requestCode = REQUEST_SEARCH,
             ),
             title = getString(R.string.autofill_no_match_title),

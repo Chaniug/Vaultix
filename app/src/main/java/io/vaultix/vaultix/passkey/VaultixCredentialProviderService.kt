@@ -270,7 +270,7 @@ class VaultixCredentialProviderService : CredentialProviderService() {
             mode = AutofillIntents.MODE_UNLOCK,
             title = getString(R.string.credential_unlock_title),
             subtitle = getString(R.string.credential_unlock_subtitle),
-        )
+        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         val pendingIntent = AutofillIntents.pending(
             context = this,
             intent = intent,

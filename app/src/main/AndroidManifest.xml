@@ -42,14 +42,17 @@
 
         <!-- 自动填充的认证回灌宿主：由系统经 PendingIntent 拉起，需 exported。
              透明主题 + 无历史栈：用完即走，不进入最近任务。
-             ⚠️ taskAffinity 必须独立于默认（包名）：否则 NEW_TASK PendingIntent 会把后台
-             含 MainActivity 的 task 拉到前台——认证 Activity 无感 finish 后露出主界面，
+             ⚠️ launchMode 用 standard、不设 NEW_TASK（认证型意图）：dataset 认证（主密码
+             二次验证 / 填充后复制验证码）必须由系统以「可收回 EXTRA_AUTHENTICATION_RESULT」
+             的方式启动——singleTask 复用实例走 onNewIntent、NEW_TASK 推进独立 task 都会丢
+             认证结果（表现为「验证码复制成功但密码没填进」）。
+             ⚠️ taskAffinity 必须独立于默认（包名）：否则引导型（NEW_TASK）PendingIntent 会把
+             后台含 MainActivity 的 task 拉到前台——认证 Activity 无感 finish 后露出主界面，
              表现为「Via 点密码条目闪回 Vaultix」（autoCopyTotp 开启时必现）。 -->
         <activity
             android:name=".autofill.AutofillActivity"
             android:excludeFromRecents="true"
             android:exported="true"
-            android:launchMode="singleTask"
             android:noHistory="true"
             android:taskAffinity="io.vaultix.vaultix.autofill"
             android:theme="@style/Theme.Vaultix.Transparent" />

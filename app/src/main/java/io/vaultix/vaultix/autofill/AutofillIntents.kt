@@ -51,7 +51,16 @@ object AutofillIntents {
      */
     const val EXTRA_MAIN_UNLOCK_EXIT = "vaultix.autofill.main_unlock_exit"
 
-    /** 构造认证回灌用的显式 Intent。 */
+    /**
+     * 构造认证回灌用的显式 Intent。
+     *
+     * ⚠️ 统一**不再**附加 `NEW_TASK|CLEAR_TOP`：dataset 级认证（[MODE_REPROMPT] /
+     * [MODE_COPY_TOTP]）由系统以「能收回认证结果」的方式启动——intent 自带 NEW_TASK
+     * 会把认证 Activity 推进独立 task 且 singleTask 复用实例时走 onNewIntent，
+     * 导致 `EXTRA_AUTHENTICATION_RESULT` 丢失，表现为「验证码复制成功但密码没填进」
+     * （dc7ac19 前的闪回正掩盖了这一点）。引导型用途（MODE_UNLOCK / MODE_SEARCH /
+     * Credential Provider 解锁触发）由调用方按需补 `NEW_TASK`，见各调用点。
+     */
     fun create(
         context: Context,
         mode: Int,
@@ -62,7 +71,6 @@ object AutofillIntents {
         totpSecret: String? = null,
     ): Intent = Intent(context, AutofillActivity::class.java)
         .setAction(Intent.ACTION_MAIN)
-        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         .putExtra(EXTRA_MODE, mode)
         .putExtra(EXTRA_TOTP, totpSecret)
         .putExtra(EXTRA_TITLE, title)
