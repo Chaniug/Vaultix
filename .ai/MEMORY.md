@@ -507,6 +507,24 @@ Vaultix 原把 linkedId 当顺序编号（1/2/3/4），**官方是分段编码**
 - 门禁：主函数又超（153 行/复杂度 15）→ 拆出 `FormHeader`
   （文件夹+类型，顺序对齐官方：文件夹 → 类型 → 名称）。
 
+## ★ 新 bug：点候选「退到 Vaultix 不回填」（2026-09-09 用户报告，待修）
+
+现象：登录页出现带验证码的条目 → TOTP 能复制到剪贴板，但**点击候选后密码没填入，
+反而跳进 Vaultix 主界面**。
+
+诊断：
+- `VaultixAutofillService.onFillRequest` 锁定分支（L147-165）：所有库锁定时只返回一个
+  **MODE_UNLOCK 解锁卡片**（不返回任何真实 dataset），点击 → AutofillActivity →
+  `AutofillPromptScreen.onOpenVault` → `startActivity(MainActivity)`（L118-124）→ **跳主界面**
+- 缺陷本质：锁定状态没有「轻量解锁→自动回填」闭环，把用户丢进 Vaultix 手动操作；
+  用户心智是「点一下密码就填进去」（Bastion/Bitwarden 的解锁是 fill 流程内的认证）
+- 相关前科：MODE_COPY_TOTP 曾有同类表现，dc7ac19 已修（中转 Activity 不再渲染 UI）
+
+**修复方向（与 Credential Provider 一并做，避免返工）**：
+锁定响应改为 → 点击弹出**轻量解锁**（生物识别/主密码，无需进 MainActivity）→
+解锁成功 → 重发 fill 或直接回灌原候选 dataset → 自动回原 App；
+此解锁链将被 Credential Provider 的 BeginGetCredential 复用（同一条链）。
+
 ## ★ Edge/Chrome 填充失效根因（2026-09-09 真机 dumpsys 实证）
 
 现象：Bitwarden / Bastion 能在 Edge 填充，Vaultix 连「密码条目按钮」都不出现。
