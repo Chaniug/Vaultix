@@ -102,3 +102,42 @@ debug(preview) 与 release 可互相覆盖安装的**硬性前提**：
 
 - **现象**：一次跑 6 模块单测+detekt，daemon 直接消失（heap 2GiB 不够）「daemon disappeared unexpectedly」
 - **解法**：拆批执行（编译一批 / 单测一批 / detekt 单独）；单测失败先从 XML 报告定位再重跑
+
+## 15. 「永不锁定」档位被新规则静默覆盖（2026-09-09）
+
+- **现象**：自动锁定设为「从不 / 永久开启」后，息屏再亮屏仍然被锁
+- **根因**：① 策略函数 `neverAutoLock` 写了但控制器没调用，`onStart` 无条件执行
+  「keyguard 仍锁即锁」；② 档位缓存在 `@Volatile` 字段（初值默认 5 分钟），
+  冷启动首帧 DataStore 首值还没到达 → 按默认档误判
+- **解法**：`AutoLockPolicy.shouldLockOnResume(minutes, screenLocked, timedOut)` 让 never
+  短路；控制器每次判定现取 `prefs.autoLockMinutes.first()`，删掉缓存字段
+- **判据**：① 用户显式档位必须在**策略层**最高优先级并写单测；② 生命周期观察者里
+  不要缓存偏好字段（DataStore / Flow 首值异步到达，首帧会用到默认值）
+
+## 16. 浏览器自动填充「静默失效」的三处缺口（2026-09-09）
+
+- **现象**：Chrome 能填、Edge（`com.microsoft.emmx`）填不了（或只有密码能填）
+- **根因**：① Edge / 三星 / Opera 等 WebView **不总上报** `ViewNode.webDomain`；
+  ② Chromium 下发的是 `webUsername` / `webPassword` hint，映射表只有 `username` / `password`；
+  ③ 浏览器字段语义常常只存在于 `htmlInfo` 属性与资源 id 里
+- **解法**：地址栏 `URL_BARS` 兜底（**包名 + idEntry 双重匹配**，只判 idEntry 会误命中
+  同名资源）+ 结构文本 BFS 扫描；hint 补别名并遍历**全部** hint；文本信号加
+  `idEntry` + `htmlInfo`；只有密码框时把上方最近文本框升格为用户名
+- **坑**：地址栏节点必须**排除在可填充字段之外**——其文本常含 "login"，会被文本启发式
+  判成用户名字段，填充时把账号写进地址栏
+
+## 17. Detekt 门禁常见三连（2026-09-09）
+
+- `MatchingDeclarationName`：文件里只有**一个**顶层类/对象声明时，文件名须与其同名
+  → 把 data class 拆到独立文件（如 `AppInfo.kt` 与 `AppPickerDialog.kt` 分离）
+- 给表单 / 页面新增 UI 后 `LongMethod` / `CyclomaticComplexMethod` 超阈值 → 把
+  `if (showX) { Dialog { ... } }` 抽成 `XHost(...)` 私有 composable（比事后重构便宜得多）
+- `MagicNumber`：`fillMaxWidth(0.95f)` 这类比例值也要常量化（Compose 的 `.dp` 数字不受影响）
+- `Unresolved reference 'Bolt'`：`Icons.Filled.*` 并非全量 Material 图标都可用，
+  换用项目里已验证存在的图标（如 `ContentCopy`）——编译前先确认图标存在
+
+## 18. Kotlin 默认参数不能调用 suspend 函数（2026-09-09）
+
+- **现象**：`suspend fun f(clearMs: Long = prefs.preference.first())` 编译失败
+  （默认参数表达式不是挂起上下文）
+- **解法**：默认参数只能是非挂起表达式 → 在函数体内读取偏好，或由调用方显式传值

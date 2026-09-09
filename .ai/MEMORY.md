@@ -1,7 +1,8 @@
 # Vaultix 项目长期笔记
 
 > **当前迭代状态**：`Docs/progress/next-steps.md`（待办清单）与 `Docs/progress/current-status.md`
-> （进度快照）为准；逐轮流水见 `.ai/SESSION-2026-09-08.md`；踩坑索引见 `.ai/ISSUES.md`。
+> （进度快照）为准；逐轮流水见 `.ai/SESSION-2026-09-08.md` 与 `.ai/SESSION-2026-09-09.md`
+> （M2-a 自动填充 / 三缺陷修复 / 快捷入口）；踩坑索引见 `.ai/ISSUES.md`。
 
 ## 产品定位（2026-09-07 用户拍板）
 - **Bitwarden 优先的客户端**，对标 **Keyguard 路线**（区别于 Monica / Bastion 的"本地优先·聚合"）
@@ -510,4 +511,50 @@ Vaultix 原把 linkedId 当顺序编号（1/2/3/4），**官方是分段编码**
 官方「添加登录」界面的字段（名称/文件夹/收藏/用户名/密码/验证器密钥/网址/
 备注/主密码二次验证/自定义字段 4 类型）已**全部可编辑并正确往返服务端**；
 「检查数据泄露」（HIBP）与附件/密码历史为 P2 后置。
+
+## M2-a 系统自动填充落地（2026-09-09，详见 .ai/SESSION-2026-09-09.md）
+链路：`AssistStructure` → `AssistStructureParser` → `BitwardenLikeAutofillMatcher` →
+`FillPlanner` → `FillResponse`（Dataset 列表）。与 MainActivity 同进程，直接读已解锁库明文；
+库全锁时走 `AutofillActivity` 认证回灌（解锁 / 搜索 / reprompt 三模式）。
+
+- 匹配对齐 Bitwarden `filterCiphersForMatches`：逐 URI 自带 `UriMatch` 规则（Domain 默认
+  = eTLD+1）/ 等价域 / `androidapp://` 包名 / Never 排除；PSL 用完整 Mozilla 公共后缀表
+  （~10325 条，非 20 条 stub）。
+- **浏览器三条腿（对齐 Bitwarden `AutofillParserImpl`，缺一条就部分浏览器静默失效）**：
+  1. **域名三级兜底**：`ViewNode.webDomain` → `BrowserUrlBars`（浏览器包名 + 地址栏资源 id
+     双重匹配，30+ 浏览器）→ 结构文本 BFS 扫描（只认末段为字母的 host）；
+     兜底域名写 `ParsedStructure.fallbackWebDomain`，**只用于匹配、不用于拒绝判定**。
+  2. **字段识别四路信号**：autofillHints（含 Chromium 的 `webUsername`/`webPassword`，且要
+     遍历**全部** hint）→ htmlInfo 属性 → inputType → idEntry；只有密码框时把它**上方最近**
+     文本框升格为用户名（邮箱框优先）。
+  3. **包名闸门** `AutofillRequestContextPolicy`：浏览器无域名时**禁止**退化包名匹配
+     （否则把浏览器自己当条目身份）+ Bitwarden 同款 blocked packages（android/设置/自身/一加锁）。
+- 地址栏节点**不能**进可填充字段（文本含 "login" 会被启发式判成用户名框 → 把账号填进地址栏）。
+
+## 用户反馈三缺陷修复（2026-09-09，6afaaa4）
+- ① **「永不锁定」仍锁**：`AutoLockPolicy.neverAutoLock` 写了却没接线，`onStart` 无条件执行
+  「屏幕锁定即锁」；叠加档位缓存在 `@Volatile` 字段（初值 5 分钟），冷启动首帧 DataStore
+  未到 → 按默认档误锁。解法：`shouldLockOnResume(minutes, screenLocked, timedOut)` 让 never
+  最高优先级短路 + 每次判定现取 `prefs.autoLockMinutes.first()`（不缓存字段）。
+  > 教训：任何新增规则（息屏重验证…）都可能悄悄覆盖用户显式档位——档位语义必须在
+  > **策略层**收口并写单测；生命周期观察者里不要缓存偏好字段（首值是异步到达的）。
+- ② **Edge 填充失效**：Edge（`com.microsoft.emmx`）等 WebView 不总上报 `webDomain`
+  + 缺 `webUsername/webPassword` hint 映射 → 见上「浏览器三条腿」。
+- ③ **条目不能关联 App**：`UriFormat.ANDROID_APP_SCHEME/androidAppUri`（单一真值源）
+  + `AppInfo/AppPickerDialog`（LAUNCHER intent 枚举，**不申请 QUERY_ALL_PACKAGES**），
+  表单「关联应用」写入 `androidapp://<pkg>`（Bitwarden 官方形态，服务端与其它端都认）。
+
+## 快捷入口三件套 + 内联建议降级（2026-09-09，00f4235）
+- **键盘内联建议（`InlinePresentation`）不做 / 低优先级**：依赖输入法实现 Android 11+ 的
+  IME inline suggestions API，国产输入法（搜狗/百度/讯飞/QQ/微信）基本未接入，
+  仅 Gboard / SwiftKey 支持。用户拍板：多数场景不依赖无障碍也能解决。
+- **三件套**（全程不依赖输入法与无障碍）：`AutofillTileService`（Quick Settings 磁贴，
+  `ACTIVE_TILE` 否则部分 ROM 显示「未激活」）+ `ManualFillActivity/ViewModel`（跨库聚合已
+  解锁条目 + 搜索，选中即复制密码并自动回原 App）+ `SmartCopyNotifier/Receiver`
+  （复制密码 → 通知接力复制用户名，60s 超时、VISIBILITY_SECRET、复用 `VaultixClipboard`）。
+- **参考事实（Bastion 调研）**：其无障碍服务**不做悬浮层**（WindowManager/addView 0 命中，
+  无 SYSTEM_ALERT_WINDOW），只在 WebView 场景静默注入（`ACTION_SET_SELECTION` +
+  `ACTION_PASTE` 主路径、`ACTION_SET_TEXT` 兜底，幂等防双填 + 临时剪贴板还原 + 包名闸门）；
+  磁贴 / 通知 / 智能复制才是真正的保底，且**都不需要无障碍权限**。
+- 待办顺序：C 保存流程 `onSaveRequest`（现为空实现）→ B 无障碍注入兜底（最后）→ P0 真机回归。
 
