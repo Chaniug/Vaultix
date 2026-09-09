@@ -50,7 +50,7 @@ object FillPlanner {
     ): FillPlan {
         val present = context.presentHints
         val suggestions = mutableListOf<FillSuggestion>()
-        if (hasLoginContext(present)) {
+        if (hasLoginContext(present, context.hasCredibleUsernameField)) {
             suggestions += buildLoginSuggestions(context, matchedLogins, present, totpProvider)
         } else if (hasOtpOnlyContext(present)) {
             // 纯 2FA 第二步页面（只有验证码框、没有账号密码框）：单独出「只填验证码」的建议，
@@ -66,8 +66,19 @@ object FillPlanner {
         return FillPlan(suggestions = suggestions, needsUnlock = false)
     }
 
-    private fun hasLoginContext(present: Set<FieldHint>): Boolean =
-        FieldHint.USERNAME in present || FieldHint.PASSWORD in present
+    /**
+     * 是否出登录候选。
+     *
+     * 有密码框 → 必出（密码框是登录的强信号，搜索框等孤立输入框不可能带密码框）。
+     * 无密码框（多步登录第一步）→ 仅当用户名字段来自**强信号**（标准 autofillHints /
+     * inputType 变体）才出——纯文本启发式命中（placeholder / id / htmlInfo 含
+     * "login/账号/用户名"）的孤立文本框（搜索栏 / 昵称 / 订阅框）不得单独触发，
+     * 否则会在非登录页面乱弹密码条目（对齐 Bastion
+     * `AutofillDetectionPolicy.shouldKeepLoginField` 的 MEDIUM+ 门槛）。
+     */
+    private fun hasLoginContext(present: Set<FieldHint>, credibleUsername: Boolean): Boolean =
+        FieldHint.PASSWORD in present ||
+            (FieldHint.USERNAME in present && credibleUsername)
 
     /** 只有验证码框（2FA 第二步页面）。 */
     private fun hasOtpOnlyContext(present: Set<FieldHint>): Boolean = FieldHint.OTP in present

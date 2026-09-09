@@ -103,9 +103,11 @@ object AssistStructureParser {
             // 文本信号含 WebView 的 htmlInfo 属性：浏览器表单常只在这里暴露
             // type=password / name=username，漏了就识别不出账号密码框。
             val text = BrowserUrlBars.textSignalOf(node)
+            val classified = HintClassifier.classify(hints, inputType, text)
             out += ParsedField(
                 id = id,
-                hint = HintClassifier.classify(hints, inputType, text),
+                hint = classified.hint,
+                strength = classified.strength,
                 value = node.text?.toString(),
                 isFocused = node.isFocused,
                 isVisible = node.visibility == View.VISIBLE,

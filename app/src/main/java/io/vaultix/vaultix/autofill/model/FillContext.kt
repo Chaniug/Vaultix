@@ -26,4 +26,12 @@ data class FillContext(
     val hasPasswordField: Boolean,
     /** 页面出现的所有字段语义集合。 */
     val presentHints: Set<FieldHint>,
+    /**
+     * 是否存在**强信号**（标准 autofillHints / inputType 变体）判定的用户名字段。
+     *
+     * 无密码框时仅当该标志为 true 才出密码候选（对齐 Bastion
+     * `AutofillDetectionPolicy.shouldKeepLoginField`：孤立文本框 / 搜索栏只靠
+     * 文本启发式命中 USERNAME，属弱信号，不得单独触发登录填充）。
+     */
+    val hasCredibleUsernameField: Boolean = false,
 )

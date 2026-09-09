@@ -16,6 +16,7 @@ import io.vaultix.model.VaultItemType
 import io.vaultix.model.VaultReprompt
 import io.vaultix.vaultix.autofill.model.AutofillCredential
 import io.vaultix.vaultix.autofill.model.AutofillUri
+import io.vaultix.vaultix.autofill.model.FieldHint
 import io.vaultix.vaultix.autofill.model.FillContext
 import io.vaultix.vaultix.autofill.model.ParsedStructure
 
@@ -65,5 +66,11 @@ object AutofillCredentialMapper {
         hasUsernameField = parsed.usernameId != null,
         hasPasswordField = parsed.passwordId != null,
         presentHints = parsed.fields.map { it.hint }.toSet(),
+        // 弱信号（纯文本启发式命中）的「用户名」不算可独立触发登录的凭据：
+        // 页面没有密码框时靠它弹密码候选，正是搜索栏/孤立输入框乱弹的来源。
+        hasCredibleUsernameField = parsed.fields.any {
+            it.hint == FieldHint.USERNAME && it.strength !=
+                io.vaultix.vaultix.autofill.parser.HintClassifier.SignalStrength.LOW
+        },
     )
 }

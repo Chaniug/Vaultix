@@ -36,6 +36,8 @@ enum class FieldHint {
  *
  * @param id 框架回填时的目标 [AutofillId]（来自 [android.app.assist.AssistStructure]）。
  * @param hint 语义类型，见 [FieldHint]。
+ * @param strength 分类信号强度（标准 hint / inputType / 文本启发式；弱信号不得单独
+ *   触发密码候选，见 [io.vaultix.vaultix.autofill.parser.HintClassifier.SignalStrength]）。
  * @param value 当前已填文本（可能为空，仅用于启发式与回填校验）。
  * @param isFocused 是否为当前聚焦字段。
  * @param isVisible 是否可见（不可见字段不参与填充）。
@@ -43,6 +45,8 @@ enum class FieldHint {
 data class ParsedField(
     val id: AutofillId,
     val hint: FieldHint,
+    val strength: io.vaultix.vaultix.autofill.parser.HintClassifier.SignalStrength =
+        io.vaultix.vaultix.autofill.parser.HintClassifier.SignalStrength.MEDIUM,
     val value: String?,
     val isFocused: Boolean = true,
     val isVisible: Boolean = true,

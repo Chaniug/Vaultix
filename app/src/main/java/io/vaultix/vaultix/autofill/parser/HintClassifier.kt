@@ -25,8 +25,21 @@ import io.vaultix.vaultix.autofill.model.FieldHint
  *
  * WebView 的 className 由调用方另行标记（见 [AssistStructureParser]），不在此函数内处理，
  * 避免把缺乏信号的 WebView 字段误判而遮蔽文本启发式。
+ *
+ * 信号强度（[SignalStrength]，对齐 Bastion `EnhancedAutofillStructureParserV2.Accuracy`
+ * 的分级精神，GPL-3.0，Copyright 2025 JoyinJoester）：标准 hint 最强、inputType 次之、
+ * 文本启发式最弱。**弱信号只作兜底展示，不得单独触发密码候选**——孤立文本框
+ * （搜索栏 / 昵称 / 订阅框，placeholder 或 id 里含 "login / 账号 / 用户名" 的输入框）
+ * 若仅凭文本启发式命中 USERNAME，会在没有密码框的页面误弹密码条目（Bastion
+ * 「京东搜索栏误弹」同根因，其 P1 修复即按 MEDIUM+ 过滤）。
  */
 object HintClassifier {
+
+    /** 字段信号来源的可信度（用于「无密码框时不弹弱信号账号字段」判定）。 */
+    enum class SignalStrength { HIGH, MEDIUM, LOW }
+
+    /** 分类结果：语义 + 来源强度。 */
+    data class Classified(val hint: FieldHint, val strength: SignalStrength)
 
     // ---- InputType 常量（引用 Android 编译期常量，运行时即为真实值）----
     private const val MASK_CLASS = InputType.TYPE_MASK_CLASS
@@ -44,12 +57,14 @@ object HintClassifier {
         hints: List<String>?,
         inputType: Int,
         text: String?,
-    ): FieldHint {
+    ): Classified {
         // 一个节点可能带多个 hint（Chromium 常同时给 web* 与标准 hint）：全部试一遍
-        hints?.firstNotNullOfOrNull { mapAutofillHint(it) }?.let { return it }
-        mapInputType(inputType)?.let { return it }
-        text?.let { mapTextHeuristic(it)?.let { hint -> return hint } }
-        return FieldHint.UNKNOWN
+        hints?.firstNotNullOfOrNull { hint ->
+            mapAutofillHint(hint)?.let { Classified(it, SignalStrength.HIGH) }
+        }?.let { return it }
+        mapInputType(inputType)?.let { return Classified(it, SignalStrength.MEDIUM) }
+        text?.let { mapTextHeuristic(it)?.let { hint -> return Classified(hint, SignalStrength.LOW) } }
+        return Classified(FieldHint.UNKNOWN, SignalStrength.LOW)
     }
 
     /**

@@ -190,4 +190,57 @@ class FillPlannerTest {
         )
         assertThat(plan.suggestions).isEmpty()
     }
+
+    @Test
+    fun `username-only page with credible username suggests login`() {
+        // 多步登录第一步：用户名框带标准 hint（Chromium autocomplete=username 等）→ 出候选
+        val ctx = FillContext(
+            packageName = "com.x",
+            webDomain = "x.com",
+            webUri = "https://x.com",
+            hasUsernameField = true,
+            hasPasswordField = false,
+            presentHints = setOf(FieldHint.USERNAME),
+            hasCredibleUsernameField = true,
+        )
+        val plan = FillPlanner.plan(ctx, listOf(loginCred("1")), emptyList(), emptyList(), noTotp)
+        assertThat(plan.suggestions).hasSize(1)
+        assertThat(plan.suggestions[0].fields[FieldHint.USERNAME]).isEqualTo("user1")
+        assertThat(plan.suggestions[0].fields).doesNotContainKey(FieldHint.PASSWORD)
+    }
+
+    @Test
+    fun `weak username without password does not suggest login`() {
+        // 搜索栏 / 孤立文本框：仅文本启发式命中 USERNAME（弱信号）且页面无密码框
+        // → 不得弹密码条目（Bastion 京东搜索栏误弹同根因）
+        val ctx = FillContext(
+            packageName = "com.x",
+            webDomain = "x.com",
+            webUri = "https://x.com",
+            hasUsernameField = true,
+            hasPasswordField = false,
+            presentHints = setOf(FieldHint.USERNAME),
+            hasCredibleUsernameField = false,
+        )
+        val plan = FillPlanner.plan(ctx, listOf(loginCred("1")), emptyList(), emptyList(), noTotp)
+        assertThat(plan.suggestions).isEmpty()
+    }
+
+    @Test
+    fun `weak username with password field still suggests login`() {
+        // 密码框在场是登录强信号：此时用户名框信号弱也照常填充（注册/登录页常见）
+        val ctx = FillContext(
+            packageName = "com.x",
+            webDomain = "x.com",
+            webUri = "https://x.com",
+            hasUsernameField = true,
+            hasPasswordField = true,
+            presentHints = setOf(FieldHint.USERNAME, FieldHint.PASSWORD),
+            hasCredibleUsernameField = false,
+        )
+        val plan = FillPlanner.plan(ctx, listOf(loginCred("1")), emptyList(), emptyList(), noTotp)
+        assertThat(plan.suggestions).hasSize(1)
+        assertThat(plan.suggestions[0].fields[FieldHint.USERNAME]).isEqualTo("user1")
+        assertThat(plan.suggestions[0].fields[FieldHint.PASSWORD]).isEqualTo("pass1")
+    }
 }
