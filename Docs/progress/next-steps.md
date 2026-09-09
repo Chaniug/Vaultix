@@ -249,12 +249,18 @@
 
 - [x] **① CredentialProviderService 注册**（DSP 主入口）：manifest `<service>`
       `android.credentials.CredentialProviderService` + `@xml/credential_provider`
-      capability（`<capability name="android.credentials.TYPE_PUBLIC_KEY_CREDENTIAL">`）
+      capability（`TYPE_PUBLIC_KEY_CREDENTIAL`）
 - [x] **② 通行密钥查询/创建**：BeginCreateCredential / BeginGetCredential 回调 →
       校验 origin（与条目 URI 匹配）→ 无锁提示解锁（PendingIntent 复用
       AutofillActivity 解锁链）→ 列出匹配 passkey（PasskeysViewModel 数据源）
-- [x] **③ 密码凭据（同源降级）**：老 AutofillService 保持，Credential Provider
-      先只做 passkey（对应 Bitwarden 的 CredentialProviderService 范围）
+- [x] **③ 密码凭据供应（8ba40d9，推翻原「passkey-only」假设）**：真机实证——启用
+      provider 后 Credential Manager 接管登录字段并同时问「密码+通行密钥」；只声明
+      public-key → 密码框为空、老 AutofillService 在凭据字段被绕过（即「启用 provider
+      后 Edge 密码弹框消失」的根因）。现改为双能力供应：`credential_provider.xml` 声明
+      `TYPE_PASSWORD_CREDENTIAL`；`buildGetResponse` 处理 `BeginGetPasswordOption` →
+      已解锁库 Login 条目列 `PasswordCredentialEntry`；新增 `PasswordGetActivity` 透明确认后
+      回灌 `PasswordCredential`（与 Bitwarden Android 14+ 行为一致）；锁定态「解锁 Vaultix」
+      入口按选项具体类型生成对应 Entry
 - [x] **④ inline suggestions**（API 30+）+ `AutofillInlinePlaceholderActivity`
       （Bastion 15 行 no-op）→ Via 等老路径把候选显示在键盘上方
 - [ ] **⑤ 字段角色推断**：迁 Bastion `AutofillFieldRolePolicy`/`AutofillFieldPromotionPolicy`
@@ -262,10 +268,14 @@
 - [ ] 依赖：`androidx.credentials:credentials`（catalog 已有，确认 app 引用）+ Play services 依赖评估
 - [ ] 参考：Bitwarden 设备上 dumpsys 的 service 结构；Bastion autofill_ng 相关实现
 
-**状态（2026-09-09 收官）**：①②④ 已实现，全量 `assembleFullDebug` + `:core:common:testDebugUnitTest` + `:app:testFullDebugUnitTest` + `detekt` 全绿（WebAuthnTest 加密断言通过）。
-③ 按设计 passkey-only：Credential Provider 只供应 public-key，老 `VaultixAutofillService` 保留处理密码填充。
+**状态（2026-09-09 续）**：①②③④ 已实现（8ba40d9，编译 + detekt + 单测全绿，已推 main，
+CI debug-preview 出包中）。⏳ 待真机回归：Edge/Via 密码弹框恢复且能填充 + passkey 登录 +
+锁定→解锁→回填链。
 ⑤ 字段角色推断未启动：`AutofillFieldRolePolicy`/`AutofillFieldPromotionPolicy` 仅在 `reference/bastion/`（只读快照），待迁。
-轻量解锁链：`AutofillActivity` 已含 `MODE_COPY_TOTP` / `MODE_REPROMPT` 回灌路径；「点候选→解锁→回填」待真机 dumpsys 回归确认。
+轻量解锁链：`AutofillActivity` 已含 `MODE_COPY_TOTP` / `MODE_REPROMPT` 回灌路径；但真机
+「Via 点填充 → 弹回 Vaultix 主界面不回填」已复现 = MODE_UNLOCK 解锁后不回填缺陷，待修。
+永不加锁仍会锁（进程被杀清内存密钥）→ 参照 Bastion 生物解密管理：登录后自动 enroll 本地解锁
++ 回前台自动弹生物验证（B，待做）。
 
 诊断全过程与三层根因详见 `.ai/MEMORY.md`「★ Edge/Chrome 填充失效根因」。
 
