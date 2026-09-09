@@ -240,6 +240,30 @@
 **数据模型与 Room 明文表不搬**；包名/模型/DI/偏好键必替换；GPL 溯源必保留。
 已完成第一批（密码生成器 + 表单滚动），后续批次见下。
 
+## ★ 最高优先（2026-09-09 定）：Credential Provider 集成（Edge 填充 + 通行密钥都靠它）
+
+背景：真机 dumpsys 实证——Android 14+/17 上 Chromium（Chrome/Edge）取凭据
+**优先走 Credential Manager**；Bitwarden 注册了 `CredentialProviderService`
+（`BIND_CREDENTIAL_PROVIDER_SERVICE`），Vaultix **没有** → Edge 连 fillRequest 都不发、
+网站登录时通行密钥也不出现（passkey 数据都在，应用内 hub 已就绪，只是系统层没注册）。
+
+- [ ] **① CredentialProviderService 注册**（DSP 主入口）：manifest `<service>`
+      `android.credentials.CredentialProviderService` + `@xml/credential_provider`
+      capability（`<capability name="android.credentials.TYPE_PUBLIC_KEY_CREDENTIAL">`）
+- [ ] **② 通行密钥查询/创建**：BeginCreateCredential / BeginGetCredential 回调 →
+      校验 origin（与条目 URI 匹配）→ 无锁提示解锁（PendingIntent 复用
+      AutofillActivity 解锁链）→ 列出匹配 passkey（PasskeysViewModel 数据源）
+- [ ] **③ 密码凭据（同源降级）**：老 AutofillService 保持，Credential Provider
+      先只做 passkey（对应 Bitwarden 的 CredentialProviderService 范围）
+- [ ] **④ inline suggestions**（API 30+）+ `AutofillInlinePlaceholderActivity`
+      （Bastion 15 行 no-op）→ Via 等老路径把候选显示在键盘上方
+- [ ] **⑤ 字段角色推断**：迁 Bastion `AutofillFieldRolePolicy`/`AutofillFieldPromotionPolicy`
+      → 解决用户名框 UNKNOWN（只有密码框有条目）
+- [ ] 依赖：`androidx.credentials:credentials`（catalog 已有，确认 app 引用）+ Play services 依赖评估
+- [ ] 参考：Bitwarden 设备上 dumpsys 的 service 结构；Bastion autofill_ng 相关实现
+
+诊断全过程与三层根因详见 `.ai/MEMORY.md`「★ Edge/Chrome 填充失效根因」。
+
 ## Bastion 对齐批次（剩余）
 
 - [x] **批次② 验证码条目对齐**（第十四轮完成）：OtpType 五类型（TOTP/HOTP/Steam/Yandex/MOTP）
