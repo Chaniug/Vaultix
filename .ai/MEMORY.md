@@ -507,6 +507,29 @@ Vaultix 原把 linkedId 当顺序编号（1/2/3/4），**官方是分段编码**
 - 门禁：主函数又超（153 行/复杂度 15）→ 拆出 `FormHeader`
   （文件夹+类型，顺序对齐官方：文件夹 → 类型 → 名称）。
 
+## ★ Edge/Chrome 填充失效根因（2026-09-09 真机 dumpsys 实证）
+
+现象：Bitwarden / Bastion 能在 Edge 填充，Vaultix 连「密码条目按钮」都不出现。
+**结论：Vaultix 缺 Credential Provider**——不是无障碍、也不是 Chromium 白名单。
+
+设备 Android 17。三方注册服务对比（`dumpsys package`）：
+- Bitwarden：`AutofillService` ✅ + **`CredentialProviderService` ✅（BIND_CREDENTIAL_PROVIDER_SERVICE）**
+- Vaultix：`AutofillService` ✅ 但 **Credential Provider ❌**
+
+**原理**：Android 14+ 起 Chromium（Chrome/Edge）取凭据**优先走 Credential Manager**，
+不再主要依赖老 Autofill Framework。Edge 找不到 Vaultix 的 provider → 不发起请求
+（现场实证：Edge 前台有焦点但 fillRequest 为 0）。Via 等轻量浏览器仍走老 Autofill
+→ 我们能响应（datasets=2）。
+
+**三个待修（按优先级）**：
+1. **实现 CredentialProviderService**（Credential Manager 集成）← 让 Edge/Chrome 能用
+2. inline suggestions（API 30+）+ `AutofillInlinePlaceholderActivity`（Bastion 15 行 no-op）
+   ← 老路径下 Chromium 不显示下拉数据集，需内联候选
+3. 字段角色推断（Bastion `AutofillFieldRolePolicy`/`AutofillFieldPromotionPolicy`）
+   ← 现象：QQ/Via 上只有密码框有条目、用户名框没有（用户名框无 autocomplete hint
+   被判 UNKNOWN，FillPlanner 只在 hasUsernameField 为真时才绑 username）
+4. 无障碍兜底（Bastion `BastionAccessibilityService`）降为可选
+
 ## M1 字段对齐至此闭合
 官方「添加登录」界面的字段（名称/文件夹/收藏/用户名/密码/验证器密钥/网址/
 备注/主密码二次验证/自定义字段 4 类型）已**全部可编辑并正确往返服务端**；
