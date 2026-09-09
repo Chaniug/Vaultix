@@ -101,12 +101,26 @@
     <string name="group_autofill">自动填充</string>
     <string name="setting_autofill">系统自动填充</string>
     <string name="setting_autofill_desc">在任意 App / 网页的登录框提供密码；需在系统设置中先启用 Vaultix</string>
+    <string name="setting_manual_fill_tile">快速填充磁贴</string>
+    <string name="setting_manual_fill_tile_desc">在快捷设置（下拉通知栏）添加「快速填充」磁贴：选条目即复制密码，通知栏可接力复制用户名。不依赖输入法与无障碍</string>
     <string name="autofill_unlock_title">解锁 Vaultix</string>
     <string name="autofill_unlock_subtitle">解锁后回到输入框即可填充</string>
     <string name="autofill_unlock_action">打开 Vaultix 解锁</string>
     <string name="autofill_no_match_title">没有匹配的密码</string>
     <string name="autofill_no_match_subtitle">点此在 Vaultix 中搜索</string>
     <string name="autofill_locked_title">Vaultix 已锁定</string>
+
+    <!-- 自动填充·快捷入口（磁贴 / 手动填充 / 智能复制接力，不依赖无障碍） -->
+    <string name="tile_manual_fill">快速填充</string>
+    <string name="manual_fill_title">快速填充</string>
+    <string name="manual_fill_search">搜索条目</string>
+    <string name="manual_fill_locked">密码库已锁定，请先解锁</string>
+    <string name="manual_fill_open_vault">打开 Vaultix 解锁</string>
+    <string name="manual_fill_empty">没有匹配的条目</string>
+    <string name="manual_fill_notif_title">已复制「%1$s」的密码</string>
+    <string name="manual_fill_notif_text">点此复制用户名</string>
+    <string name="manual_fill_copy_username">复制用户名</string>
+    <string name="manual_fill_copied_username">已复制「%1$s」的用户名</string>
     <string name="about_version">版本</string>
     <string name="about_source">源码与反馈</string>
     <string name="about_license">开源许可</string>

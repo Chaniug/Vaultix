@@ -17,6 +17,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Contrast
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.DeleteSweep
@@ -310,6 +311,14 @@ private fun AutofillSection() {
         title = stringResource(R.string.setting_autofill),
         subtitle = stringResource(R.string.setting_autofill_desc),
         onClick = { openSystemAutofillSettings(context) },
+    )
+    // 快捷磁贴：国产输入法大多不支持键盘内联建议、部分国产 ROM 会吞掉系统填充弹窗，
+    // 这条「复制 + 粘贴」路径不依赖输入法和无障碍，是最稳的兜底入口（仅说明如何添加）。
+    SettingsRow(
+        icon = { Icon(Icons.Filled.ContentCopy, contentDescription = null) },
+        title = stringResource(R.string.setting_manual_fill_tile),
+        subtitle = stringResource(R.string.setting_manual_fill_tile_desc),
+        onClick = { },
     )
 }
 

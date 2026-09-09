@@ -4,6 +4,8 @@
 
     <!-- 相机：仅用于扫描 TOTP 的 otpauth:// 二维码（不拍照、不上传、不落盘） -->
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- 通知：快速填充的「复制用户名」接力通知（Android 13+ 需运行时授权） -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- CameraX 需要设备有后置摄像头（自动对焦可选） -->
     <uses-feature
         android:name="android.hardware.camera"
@@ -54,6 +56,36 @@
                 android:name="android.autofill"
                 android:resource="@xml/autofill_service" />
         </service>
+
+        <!-- Quick Settings「快速填充」磁贴：不依赖输入法内联建议、不依赖无障碍服务，
+             点一下进条目搜索 → 复制密码（通知栏可接力复制用户名）→ 回到原 App 粘贴。
+             ACTIVE_TILE 让磁贴在未被使用时也保持可交互（否则部分 ROM 上会显示「未激活」）。 -->
+        <service
+            android:name=".autofill.shortcut.AutofillTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_stat_lock"
+            android:label="@string/tile_manual_fill"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.service.quicksettings.ACTIVE_TILE"
+                android:value="true" />
+        </service>
+
+        <!-- 快速填充界面：由磁贴拉起（同应用内部，无需 exported） -->
+        <activity
+            android:name=".autofill.shortcut.ManualFillActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:theme="@style/Theme.Vaultix" />
+
+        <!-- 接力复制用户名（通知动作，仅本应用可触发） -->
+        <receiver
+            android:name=".autofill.shortcut.SmartCopyReceiver"
+            android:exported="false" />
     </application>
 
 </manifest>
