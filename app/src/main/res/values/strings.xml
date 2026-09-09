@@ -4,6 +4,7 @@
     <!-- 通用 -->
     <string name="action_back">返回</string>
     <string name="action_cancel">取消</string>
+    <string name="action_copy">复制</string>
     <string name="action_done">完成</string>
     <string name="action_save">保存</string>
     <string name="action_retry">重试</string>
@@ -378,6 +379,7 @@
     <string name="passkey_field_key_value">私钥材料（可选）</string>
     <string name="passkey_field_counter">签名计数器</string>
     <string name="passkey_field_discoverable">可发现凭证</string>
+    <string name="passkey_field_created">创建时间</string>
     <string name="passkey_bound_to_login">绑定于「%1$s」</string>
     <string name="passkey_select_login">选择密码条目</string>
     <string name="passkey_removed">已删除通行密钥</string>

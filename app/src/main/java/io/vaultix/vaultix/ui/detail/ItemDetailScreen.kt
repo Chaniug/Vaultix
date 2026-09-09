@@ -60,6 +60,9 @@ import io.vaultix.common.TotpGenerator
 import io.vaultix.common.UriFormat
 import io.vaultix.common.UriKind
 import io.vaultix.model.CustomFieldType
+import io.vaultix.common.CardBrand
+import io.vaultix.common.CardBrandDetector
+import io.vaultix.common.formatCardNumberGrouped
 import io.vaultix.model.VaultCard
 import io.vaultix.model.VaultCustomField
 import io.vaultix.model.VaultFido2Credential
@@ -846,6 +849,9 @@ private fun FieldRow(label: String, value: String, onCopy: (String) -> Unit, mon
 @Composable
 private fun CardSection(item: VaultItem, onCopyField: (String) -> Unit) {
     val card = item.card ?: return
+    // 品牌识别：优先采用已存品牌名，否则从卡号推导（对齐 Bastion CardBrandDetector）。
+    val detected = CardBrandDetector.detect(card.number, card.brand)
+    val brandLabel = if (detected != CardBrand.UNKNOWN) detected.displayName else card.brand
     Column {
         SectionTitle(text = stringResource(R.string.section_card))
         Card(
@@ -856,11 +862,16 @@ private fun CardSection(item: VaultItem, onCopyField: (String) -> Unit) {
                 if (card.cardholderName.isNotBlank()) {
                     FieldRow(stringResource(R.string.card_cardholder), card.cardholderName, onCopyField)
                 }
-                if (card.brand.isNotBlank()) {
-                    FieldRow(stringResource(R.string.card_brand), card.brand, onCopyField)
+                if (brandLabel.isNotBlank()) {
+                    FieldRow(stringResource(R.string.card_brand), brandLabel, onCopyField)
                 }
                 if (card.number.isNotBlank()) {
-                    FieldRow(stringResource(R.string.card_number), card.number, onCopyField, monospace = true)
+                    FieldRow(
+                        stringResource(R.string.card_number),
+                        formatCardNumberGrouped(card.number),
+                        onCopyField,
+                        monospace = true,
+                    )
                 }
                 val expiry = cardExpiryText(card.expMonth, card.expYear)
                 if (expiry.isNotBlank()) {

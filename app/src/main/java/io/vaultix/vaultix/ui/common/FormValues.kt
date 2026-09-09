@@ -1,5 +1,7 @@
 package io.vaultix.vaultix.ui.common
 
+import io.vaultix.common.CardBrand
+import io.vaultix.common.CardBrandDetector
 import io.vaultix.model.VaultCard
 import io.vaultix.model.VaultCustomField
 import io.vaultix.model.VaultIdentity
@@ -113,16 +115,28 @@ fun identityValuesOf(identity: VaultIdentity?): List<String> = listOf(
     identity?.licenseNumber.orEmpty(),
 )
 
-/** 表单值 → 银行卡（按 [cardValuesOf] 的顺序读取）。 */
+/** 表单值 → 银行卡（按 [cardValuesOf] 的顺序读取）。品牌为空时从卡号推导（对齐 Bastion）。 */
 fun buildCard(values: List<String>): VaultCard {
     val it = values.iterator()
+    val cardholderName = it.nextOrEmpty()
+    val brand = it.nextOrEmpty()
+    val number = it.nextOrEmpty()
+    val expMonth = it.nextOrEmpty()
+    val expYear = it.nextOrEmpty()
+    val code = it.nextOrEmpty()
+    val resolvedBrand = if (brand.isBlank()) {
+        val detected = CardBrandDetector.detect(number)
+        if (detected != CardBrand.UNKNOWN) detected.displayName else ""
+    } else {
+        brand
+    }
     return VaultCard(
-        cardholderName = it.nextOrEmpty(),
-        brand = it.nextOrEmpty(),
-        number = it.nextOrEmpty(),
-        expMonth = it.nextOrEmpty(),
-        expYear = it.nextOrEmpty(),
-        code = it.nextOrEmpty(),
+        cardholderName = cardholderName,
+        brand = resolvedBrand,
+        number = number,
+        expMonth = expMonth,
+        expYear = expYear,
+        code = code,
     )
 }
 

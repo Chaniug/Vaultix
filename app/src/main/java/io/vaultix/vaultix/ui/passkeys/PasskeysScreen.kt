@@ -17,6 +17,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Search
@@ -42,7 +43,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -211,9 +214,25 @@ private fun PasskeyRowItem(row: PasskeyRow, onClick: () -> Unit) {
 @Composable
 private fun PasskeyDetailDialog(row: PasskeyRow, onDismiss: () -> Unit, onDelete: () -> Unit) {
     val c = row.credential
+    val clipboard = LocalClipboardManager.current
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.passkeys_detail_title)) },
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = stringResource(R.string.passkeys_detail_title),
+                    modifier = Modifier.weight(1f),
+                )
+                if (c.credentialId.isNotBlank()) {
+                    IconButton(onClick = { clipboard.setText(AnnotatedString(c.credentialId)) }) {
+                        Icon(
+                            Icons.Filled.ContentCopy,
+                            contentDescription = stringResource(R.string.action_copy),
+                        )
+                    }
+                }
+            }
+        },
         text = {
             Column {
                 Text(
@@ -233,6 +252,7 @@ private fun PasskeyDetailDialog(row: PasskeyRow, onDismiss: () -> Unit, onDelete
                 DetailLine(stringResource(R.string.passkey_field_key_algorithm), c.keyAlgorithm ?: "—")
                 DetailLine(stringResource(R.string.passkey_field_counter), c.counter.toString())
                 DetailLine(stringResource(R.string.passkey_field_discoverable), if (c.discoverable) "true" else "false")
+                DetailLine(stringResource(R.string.passkey_field_created), c.creationDate ?: "—")
                 Spacer(Modifier.height(4.dp))
                 Text(
                     text = stringResource(R.string.passkey_bound_to_login, row.loginTitle),
