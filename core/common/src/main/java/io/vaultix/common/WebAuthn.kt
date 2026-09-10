@@ -140,6 +140,38 @@ object WebAuthn {
         }
     }
 
+    /**
+     * 浏览器流程专用：`clientDataHash` 是不可协商的比对基准，而 Chromium 各版本拼的
+     * clientDataJSON 字段集不完全一致（是否带 `crossOrigin`）。这里按哈希**反选**命中的变体，
+     * 把「字段差一个就登录失败」这类隐性坑一次性消掉。
+     *
+     * @return 选中的 clientDataJSON 字节（都不命中时返回无 crossOrigin 变体，与浏览器口径一致）
+     */
+    fun buildClientDataJsonForBrowser(
+        type: String,
+        challenge: ByteArray,
+        origin: String,
+        expectedHash: ByteArray?,
+    ): ByteArray {
+        if (expectedHash == null) {
+            return buildClientDataJson(type, challenge, origin, includeCrossOrigin = true)
+        }
+        val candidates = listOf(false, true).map {
+            buildClientDataJson(type, challenge, origin, includeCrossOrigin = it)
+        }
+        return candidates.firstOrNull { sha256(it).contentEquals(expectedHash) } ?: candidates.first()
+    }
+
+    /**
+     * 供现场日志：选中的 clientDataJSON 是否与系统给的哈希一致。
+     * `null` 表示非浏览器流程（没有外部哈希可比）；`false` 说明两侧拼装口径仍不同。
+     */
+    fun clientDataJsonMatchesHash(json: ByteArray, expectedHash: ByteArray?): Boolean? =
+        expectedHash?.let { sha256(json).contentEquals(it) }
+
+    private fun sha256(bytes: ByteArray): ByteArray =
+        MessageDigest.getInstance("SHA-256").digest(bytes)
+
     private fun pemToDer(pem: String): ByteArray? {
         val cleaned = pem.lines()
             .filter { !it.startsWith("-----") }
@@ -148,9 +180,114 @@ object WebAuthn {
         return runCatching { Base64.getDecoder().decode(cleaned) }.getOrNull()
     }
 
-    private fun ecPrivateFromDer(der: ByteArray): PrivateKey? = runCatching {
-        KeyFactory.getInstance("EC").generatePrivate(PKCS8EncodedKeySpec(der))
-    }.getOrNull()
+    private fun ecPrivateFromDer(der: ByteArray): PrivateKey? {
+        // 1) 标准 PKCS#8（带 namedCurve 参数）→ 交给 provider 直接解析
+        runCatching { KeyFactory.getInstance("EC").generatePrivate(PKCS8EncodedKeySpec(der)) }
+            .getOrNull()?.let { return it }
+        // 2) 宽松回退：从 PKCS#8 或 SEC1(RFC 5915) 里抠出裸标量 s，用**显式 P-256 参数**重建。
+        //    必要场景（真机实测「Cannot parse passkey key」的根因）：
+        //      a) WebCrypto `exportKey("pkcs8")` 产出的 PKCS#8 可能**不带 namedCurve 参数**，
+        //         SunEC 会抛 InvalidKeySpecException；
+        //      b) Bitwarden/KeePass 侧也可能存 SEC1（`-----BEGIN EC PRIVATE KEY-----`），
+        //         它不是 PKCS#8 结构，PKCS8EncodedKeySpec 必然失败。
+        //    抠出标量后走 ECPrivateKeySpec + secp256r1，绕开一切 provider 宽容度差异。
+        val scalar = extractEcScalar(der) ?: return null
+        return ecPrivateFromScalar(scalar)
+    }
+
+    /** DER 标签（只需这三种）。 */
+    private const val DER_TAG_INTEGER = 0x02
+    private const val DER_TAG_OCTET_STRING = 0x04
+    private const val DER_TAG_SEQUENCE = 0x30
+
+    /** DER 长格式长度的最大字节数（0x84 = 4 字节；再长不可能是 256 位密钥）。 */
+    private const val LONG_FORM_MAX_BYTES = 4
+
+    /** DER 长格式长度标志位（length 字节最高位为 1 表示后续 N 字节才是长度）。 */
+    private const val DER_LONG_FORM_FLAG = 0x80
+
+    /** 长格式长度里「字节数」部分的掩码（去掉标志位）。 */
+    private const val DER_LONG_FORM_LENGTH_MASK = 0x7F
+
+    /** 一个合法 TLV 至少 2 字节（tag + 短格式长度）。 */
+    private const val DER_MIN_TLV_BYTES = 2
+
+    /** 十六进制格式化参数。 */
+    private const val HEX_RADIX = 16
+    private const val HEX_PAD_WIDTH = 2
+    private const val HEX_PAD_CHAR = '0'
+
+    /** 一个 TLV 的视图：[start, end) 为内容区间，[next] 为下一个 TLV 的偏移。 */
+    private data class DerElement(val tag: Int, val start: Int, val end: Int, val next: Int)
+
+    /**
+     * 从 PKCS#8 / SEC1 结构中提取 EC 私钥标量（OCTET STRING 内容）。
+     *
+     * 最小 DER 解析，不依赖任何 provider：
+     * - SEC1 `ECPrivateKey ::= SEQUENCE { version INTEGER, privateKey OCTET STRING, ... }`
+     * - PKCS#8 `PrivateKeyInfo ::= SEQUENCE { version INTEGER, AlgorithmIdentifier SEQUENCE,
+     *   privateKey OCTET STRING(内含 SEC1) , ... }`（递归一层）
+     */
+    private fun extractEcScalar(der: ByteArray, offset: Int = 0): ByteArray? {
+        val root = derRead(der, offset) ?: return null
+        if (root.tag != DER_TAG_SEQUENCE) return null
+        val version = derRead(der, root.start) ?: return null
+        if (version.tag != DER_TAG_INTEGER) return null
+        val second = derRead(der, version.next) ?: return null
+        return when (second.tag) {
+            // SEC1：版本之后紧跟私钥 OCTET STRING
+            DER_TAG_OCTET_STRING -> der.copyOfRange(second.start, second.end)
+            // PKCS#8：AlgorithmIdentifier 之后是包着 SEC1 的 OCTET STRING → 递归
+            DER_TAG_SEQUENCE -> {
+                val inner = derRead(der, second.next) ?: return null
+                if (inner.tag != DER_TAG_OCTET_STRING) return null
+                extractEcScalar(der, inner.start)
+            }
+            else -> null
+        }
+    }
+
+    /** 读取 [offset] 处的 TLV；越界或非法长度返回 null。 */
+    private fun derRead(der: ByteArray, offset: Int): DerElement? {
+        if (offset < 0 || offset + DER_MIN_TLV_BYTES > der.size) return null
+        val tag = der[offset].toInt() and BYTE_MASK
+        var pos = offset + 1
+        var length = der[pos].toInt() and BYTE_MASK
+        pos++
+        if (length and DER_LONG_FORM_FLAG != 0) {
+            val lengthBytes = length and DER_LONG_FORM_LENGTH_MASK
+            if (lengthBytes == 0 || lengthBytes > LONG_FORM_MAX_BYTES || pos + lengthBytes > der.size) {
+                return null
+            }
+            length = 0
+            repeat(lengthBytes) {
+                length = (length shl BYTE_BITS) or (der[pos].toInt() and BYTE_MASK)
+                pos++
+            }
+        }
+        if (length < 0 || pos + length > der.size) return null
+        return DerElement(tag, pos, pos + length, pos + length)
+    }
+
+    /**
+     * 解析失败时的**非敏感**诊断串（长度 / 形态 / 首字节），供现场日志定位。
+     * ⚠️ 绝不返回密钥内容本身。
+     */
+    fun describeEcPrivateKeyFailure(keyValue: String?): String {
+        if (keyValue.isNullOrBlank()) return "blank"
+        val trimmed = keyValue.trim()
+        if (trimmed.startsWith("-----BEGIN", ignoreCase = true)) {
+            val der = pemToDer(trimmed) ?: return "pem-unreadable"
+            return "pem-der(len=${der.size}, first=0x${firstHex(der)})"
+        }
+        val raw = runCatching { decodeBase64UrlOrStandard(trimmed) }.getOrNull() ?: return "base64-failed"
+        return "der(len=${raw.size}, first=0x${firstHex(raw)})"
+    }
+
+    private fun firstHex(bytes: ByteArray): String =
+        bytes.firstOrNull()
+            ?.let { (it.toInt() and BYTE_MASK).toString(HEX_RADIX).padStart(HEX_PAD_WIDTH, HEX_PAD_CHAR) }
+            ?: "empty"
 
     private fun ecPrivateFromScalar(scalar: ByteArray): PrivateKey? = runCatching {
         val params = ecParameterSpec()

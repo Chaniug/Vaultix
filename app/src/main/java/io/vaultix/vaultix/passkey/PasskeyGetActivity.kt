@@ -60,6 +60,7 @@ import io.vaultix.common.WebAuthn
 import io.vaultix.domain.ItemRepository
 import io.vaultix.model.VaultFido2Credential
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.autofill.AutofillLogger
 import io.vaultix.vaultix.ui.theme.VaultixTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -68,6 +69,9 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.nio.charset.StandardCharsets
 import javax.inject.Inject
+
+/** 通行密钥现场诊断日志 tag（仅 debug 构建输出，只记非敏感元数据）。 */
+private const val PK_TAG = "VaultixPasskey"
 
 @RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
 @AndroidEntryPoint
@@ -183,6 +187,11 @@ class PasskeyGetActivity : FragmentActivity() {
         }
         val key = WebAuthn.parseEcPrivateKey(cred.keyValue)
         if (key == null) {
+            // 现场实测 Edge 侧报的就是这条：CredMan ... (Cannot parse passkey key)
+            AutofillLogger.d(
+                PK_TAG,
+                "assertion aborted: cannot parse keyValue (${WebAuthn.describeEcPrivateKeyFailure(cred.keyValue)})",
+            )
             fail(GetCredentialUnknownException("Cannot parse passkey key"))
             return
         }
@@ -192,11 +201,18 @@ class PasskeyGetActivity : FragmentActivity() {
             // ⚠️ 浏览器流程（系统给了 clientDataHash）必须逐字节复刻浏览器版 JSON：
             // 只 {type, challenge, origin}，**不能**多带 crossOrigin ——否则 RP 对返回的
             // clientDataJSON 再哈希后与已签名哈希对不上，站点报「验证失败」。
-            val clientDataBytes = WebAuthn.buildClientDataJson(
+            // 这里进一步按哈希**反选**变体（Chromium 各版本字段集不一致），并记录命中结果。
+            val clientDataBytes = WebAuthn.buildClientDataJsonForBrowser(
                 type = "webauthn.get",
                 challenge = challenge,
                 origin = origin,
-                includeCrossOrigin = clientDataHash == null,
+                expectedHash = clientDataHash,
+            )
+            AutofillLogger.d(
+                PK_TAG,
+                "assertion origin=$origin browserFlow=${clientDataHash != null} " +
+                    "jsonMatchesBrowserHash=" +
+                    "${WebAuthn.clientDataJsonMatchesHash(clientDataBytes, clientDataHash)}",
             )
             val authData = WebAuthn.buildAuthenticatorData(
                 rpId = rpId,
