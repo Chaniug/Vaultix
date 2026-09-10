@@ -555,6 +555,21 @@ Vaultix 原把 linkedId 当顺序编号（1/2/3/4），**官方是分段编码**
 > （复用 `BitwardenLikeAutofillMatcher`）、多库部分锁定的解锁引导并存。
 > 另修 provider.xml `settingsActivity`（MainActivity → 新建
 > `CredentialProviderSettingsActivity`）。详见 `.ai/ISSUES.md` 26–28。
+>
+> 🟢 **编译门禁闭环（2026-09-10 第二十六轮）**：升 1.6.0 后 CI 挂
+> `CallingAppOrigin.kt` 的 `No value passed for parameter 'privilegedAllowlist'`。
+> **反编译 `credentials-1.6.0.aar` 得到确定语义（勿再猜）**：
+> `getOrigin(allowList)` 的 allowList 是**签名背书名单**，不是可选占位——
+> `!isValidJSON` → `IllegalArgumentException`；`origin==null` → 返回 null；
+> 包名命中**且** `intersect(调用方签名指纹, 名单指纹)` 非空 → 返回 origin；否则
+> `IllegalStateException`。且 `signatures` **必填**、元素为**对象**
+> （`cert_fingerprint_sha256`）。→ 空名单 / `[]` / `["FP"]` 三种取巧**全部会抛异常**。
+> 正解 = **自证式读取**：拿调用方自己的 `signingInfo` 算 SHA-256 指纹，拼
+> 「只含它自己」的名单再读 origin（仅用于来源过滤，不做身份背书）。
+> 将来要做特权应用认定，走预留的 `trustedOriginOrNull(allowList)` + 用户信任名单
+> （即 Bitwarden `OriginManagerImpl` 三级回退的用户名单级）。
+> ⚠️ **教训：读第三方 API 不能只看方法签名猜语义，要反编译看实现**（省一轮 CI 试错）。
+> CI run `34496366032` 全绿，预览包 `dev-d082e63`。详见 `.ai/ISSUES.md` 29–30。
 
 现象：Bitwarden / Bastion 能在 Edge 填充，Vaultix 连「密码条目按钮」都不出现。
 **结论：Vaultix 缺 Credential Provider**——不是无障碍、也不是 Chromium 白名单。

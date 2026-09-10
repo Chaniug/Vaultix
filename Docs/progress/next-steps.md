@@ -1,9 +1,41 @@
 # 下一步任务清单
 
-> 更新于 2026-09-10（第二十五轮）。**CP「已启用但不弹」总根因之二 = androidx.credentials 版本停太旧。**
+> 更新于 2026-09-10（第二十六轮）。**CI 编译门禁已闭环：`CallingAppInfo.getOrigin()` 需签名命中的 allowList。**
 > 审计报告 `Docs/progress/audit/bitwarden-alignment.md`；对齐评估
 > `Docs/progress/bastion-parity-assessment.md`（**注意已过时**——autofill 三批修复未计入）。
 > 状态：`TODO` / `DOING` / `DONE` / `BLOCKED`
+
+## 已完成（第二十六轮 2026-09-10 · getOrigin 语义纠正 → CI 全绿）
+
+> 第二十五轮推 `de6ad9e` 后 CI 连续两次失败：`34495082792` 挂 detekt（`RomCompat.kt`
+> 常量返回 + 超长行，已由 `3e23740` 清理）；`34495532104` detekt 已过但 **Build Debug APK
+> 编译失败**：`CallingAppOrigin.kt:51:44 No value passed for parameter 'privilegedAllowlist'`。
+> 本轮修掉这一条，CI run `34496366032` **全绿**。
+
+- [x] **反编译真源定语义**：下载 `maven.google.com` 的 `credentials-1.6.0.aar`（634 KB），
+      `javap -c -p` 逐条读 `CallingAppInfo` / `PrivilegedApp` / `SignatureVerifier` /
+      `RequestValidationUtil`，得到 `getOrigin(allowList)` 的**确定分支**（不再靠猜签名）：
+      `!isValidJSON → IllegalArgumentException`；`origin==null → return null`；
+      `包名命中 && intersect(调用方指纹, 名单指纹) 非空 → return origin`；其余 → `IllegalStateException`。
+- [x] **纠正关键误判**：allowList **不是可选占位参数，而是签名背书名单**；`signatures` 为
+      **必填**且元素是**对象**（取 `cert_fingerprint_sha256`）。→ 空名单 / `[]` / `["FP"]`
+      三种取巧写法**全部必抛异常**，必须填调用方**自己的真实签名指纹**。
+- [x] **改为「自证式读取」**：新增 `ALLOW_LIST_TEMPLATE`（合法 JSON 结构）+
+      `signingFingerprintOrNull()`（`SHA-256(apkContentsSigners[0])`，多签名者→null，
+      对齐 Bitwarden `getSignatureFingerprintAsHexString`）；`originOrNull()` 用调用方
+      自己的指纹拼「只含它自己」的名单读 origin —— 只做**来源过滤**，不做特权应用身份背书。
+- [x] **⑦ 预留正解路径**：`trustedOriginOrNull(callingAppInfo, allowList)` 保留给将来接入
+      「用户信任的应用名单」（即 Bitwarden `OriginManagerImpl` 三级回退的用户名单一级）。
+- [x] 头部根因注释按反编译事实重写（此前那段「传放行任意包名的名单」的描述是错的，已删除）。
+- [x] **CI run `34496366032` 全绿**：detekt ✓ / 编码门禁 ✓ / 签名解码 ✓ / Build Debug APK ✓ /
+      单测（非阻塞）✓；预览包 `app-full-debug.apk`（`dev-d082e63`，31.09 MB）已发布。
+
+⏳ **真机待验证（装 `dev-d082e63` 的包）**：
+① Edge 聚焦登录框 → 应弹密码条目（**核心闭环**；`logcat -s VaultixAutofill` 的
+`caller=com.microsoft.emmx origin=https://...` 中 origin 应不再是 `-`）；
+② 同一站点有 passkey 时应一并出现；③ 点候选完成填充 / 通行密钥断言；
+④ 系统设置 → 密码和账号 → Vaultix → 齿轮 → 应落在自动填充/凭据设置页（非库列表）；
+⑤ 多库且部分锁定时应同时看到候选与「解锁 Vaultix」。
 
 ## 已完成（第二十五轮 2026-09-10 · CP「已启用但不弹」根因修复 + Bitwarden 逐行对齐）
 

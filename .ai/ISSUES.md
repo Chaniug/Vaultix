@@ -265,3 +265,39 @@ debug(preview) 与 release 可互相覆盖安装的**硬性前提**：
   含自动填充开关 + 凭据提供商状态 + 快速填充磁贴），manifest 注册为 `exported=true`
   （系统设置应用需跨进程启动），`settingsActivity` 改指此处。
   对齐 Keyguard / Bastion / Bitwarden 的「独立凭据管理页」做法。
+
+## 29. `CallingAppInfo.getOrigin()` 在 1.6.0 需要 `privilegedAllowlist` 且必须签名命中（2026-09-10）
+
+- **现象**：升级到 `androidx.credentials` 1.6.0 后 CI 编译失败：
+  `CallingAppOrigin.kt:51:44 No value passed for parameter 'privilegedAllowlist'`。
+- **根因（反编译 credentials-1.6.0.aar 确认，此前判断有误）**：
+  `getOrigin(privilegedAllowlist: String)` **不是**可选的展示参数，而是**签名背书名单**：
+  ```
+  if (!isValidJSON(allowList))  throw IllegalArgumentException   // 空串/非 JSON
+  if (origin == null)           return null                      // 系统未填，不校验
+  apps = PrivilegedApp.extractPrivilegedApps(JSONObject(allowList))
+  if (isAppPrivileged(apps))    return origin                    // 包名 + 签名指纹都命中
+  else                          throw IllegalStateException      // 命中不了
+  ```
+  且 `PrivilegedApp.createFromJSONObject` 对 `signatures` 用 `getJSONArray`（必填），
+  元素是**对象**（取 `cert_fingerprint_sha256`）；`isAppPrivileged` 单签名者走
+  `verifySignatureFingerprints` = `intersect(调用方指纹, 名单指纹)` 非空。
+  → **「空名单 / 空签名数组 / 裸字符串数组」三种取巧写法全部会抛 `IllegalStateException`**，
+    必须把调用方**自己的真实签名指纹**填进名单。
+- **为什么 Bitwarden 没这个问题**：它读 assets 里的 Google / 社区名单 + 用户信任名单
+  做**三级签名背书**（`OriginManagerImpl`），Vaultix 当前不做身份背书，故不内置名单。
+- **解法（自证式读取）**：
+  1. `ALLOW_LIST_TEMPLATE`：`signatures` 为对象数组的合法 JSON 结构；
+  2. `signingFingerprintOrNull()`：按 Bitwarden `getSignatureFingerprintAsHexString()` 口径
+     算调用方 APK 签名 SHA-256（多签名者返回 null），拼只含它自己的名单；
+  3. 只用于**读取系统已填好的 origin** 以做按来源过滤，不做任何特权应用身份认定；
+     `trustedOriginOrNull(allowList)` 预留给将来接入用户信任名单。
+- **判据**：Edge 聚焦登录框后 `logcat -s VaultixAutofill` 应出现
+  `caller=com.microsoft.emmx origin=https://...`（origin 不再是 `-`）。
+- **教训：`getOrigin()` 的 allowList 语义是「签名校验」不是「参数占位」，读 API 必须反编译看实现，不能只看签名。**
+
+## 30. CI 门禁卡在 `getOrigin` 参数（本轮修复已闭环，2026-09-10）
+
+- run `34495532104` 因 #29 的编译错误失败；本轮 `d082e63` 修复后 run `34496366032` **全绿**
+  （detekt ✓ / 编码门禁 ✓ / 签名解码 ✓ / Build Debug APK ✓ / 单测非阻塞 ✓），
+  预览包已发布：`app-full-debug.apk`（dev-d082e63，31.0 MB）。
