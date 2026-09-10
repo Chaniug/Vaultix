@@ -56,6 +56,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -73,7 +74,10 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.vaultix.vaultix.BuildConfig
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.common.BiometricPrompter
 import io.vaultix.vaultix.ui.common.TrashAutoDeleteDialog
+import io.vaultix.vaultix.ui.common.deviceCanAuthenticate
+import io.vaultix.vaultix.ui.common.rememberFragmentActivity
 import io.vaultix.vaultix.ui.common.trashAutoDeleteLabel
 import io.vaultix.vaultix.autofill.shortcut.AutofillTileService
 import io.vaultix.vaultix.ui.theme.ThemeMode
@@ -98,6 +102,8 @@ fun SettingsScreen(
     var showAboutDialog by rememberSaveable { mutableStateOf(false) }
     var showQuickUnlockDialog by rememberSaveable { mutableStateOf(false) }
     val quickUnlockVaults by viewModel.quickUnlockVaults.collectAsStateWithLifecycle()
+
+    QuickUnlockEnrollEffect(viewModel)
 
     Scaffold(
         topBar = {
@@ -227,6 +233,8 @@ fun SettingsScreen(
     if (showQuickUnlockDialog) {
         QuickUnlockManageDialog(
             vaults = quickUnlockVaults,
+            canAuthenticate = deviceCanAuthenticate(context),
+            onEnable = viewModel::startQuickUnlockEnroll,
             onDisable = viewModel::disableQuickUnlock,
             onDismiss = { showQuickUnlockDialog = false },
         )
@@ -378,10 +386,52 @@ private fun themeModeLabel(mode: ThemeMode): String = when (mode) {
     ThemeMode.DARK -> stringResource(R.string.theme_mode_dark)
 }
 
-/** 快速解锁管理：列出各库启用状态，可逐个关闭（启用入口 = 登录后列表横幅）。 */
+/**
+ * 快速解锁「启用」的认证副作用收集器。
+ *
+ * 收到 [SettingsViewModel.Event.PromptForEnroll]（已 init 的 ENCRYPT cipher）即弹
+ * BiometricPrompt；认证通过后用本次 cipher 包裹当前会话密钥并落盘，对话框内状态随之
+ * 翻为「已启用」。取消/失败什么都不做 —— 维持「未启用」，用户可再试。
+ *
+ * 独立成 composable 而非内联在 [SettingsScreen]，一是避免后者超长（detekt LongMethod），
+ * 二是把「认证副作用」与「页面布局」解耦。
+ */
+@Composable
+private fun QuickUnlockEnrollEffect(viewModel: SettingsViewModel) {
+    val activity = rememberFragmentActivity()
+    val enrollTitle = stringResource(R.string.quick_unlock_enroll_title)
+    val cancelText = stringResource(R.string.action_cancel)
+
+    LaunchedEffect(Unit) {
+        viewModel.events.collect { event ->
+            when (event) {
+                is SettingsViewModel.Event.PromptForEnroll -> {
+                    val host = activity ?: return@collect
+                    BiometricPrompter(host).authenticate(
+                        cipher = event.cipher,
+                        title = enrollTitle,
+                        cancelText = cancelText,
+                        onSuccess = { cipher -> viewModel.enrollWithCipher(event.vaultId, cipher) },
+                        onError = { _, _ -> /* 取消/失败：维持「未启用」，可再试 */ },
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 快速解锁管理：列出各库启用状态，可逐个**启用 / 关闭**。
+ *
+ * ⚠️ 历史坑：此前本对话框**只能关不能开**（启用入口仅库列表页横幅），
+ * 而横幅「以后再说」会永久置位 `isQuickUnlockPromptDismissed` → 用户彻底
+ * 失去启用路径。现已补上对称的「启用」动作，消除该入口死角。
+ */
 @Composable
 private fun QuickUnlockManageDialog(
     vaults: List<SettingsViewModel.QuickUnlockVaultUi>,
+    canAuthenticate: Boolean,
+    onEnable: (String) -> Unit,
     onDisable: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -401,7 +451,13 @@ private fun QuickUnlockManageDialog(
                                     if (vault.enabled) {
                                         stringResource(R.string.quick_unlock_enabled)
                                     } else {
-                                        stringResource(R.string.quick_unlock_disabled)
+                                        // 仅当设备确实支持认证时才提示「可启用」，
+                                        // 否则维持原「未启用」说明，避免给出无法完成的指引
+                                        if (canAuthenticate) {
+                                            stringResource(R.string.quick_unlock_disabled)
+                                        } else {
+                                            stringResource(R.string.quick_unlock_device_unsupported)
+                                        }
                                     },
                                 )
                             },
@@ -409,6 +465,10 @@ private fun QuickUnlockManageDialog(
                                 if (vault.enabled) {
                                     TextButton(onClick = { onDisable(vault.vaultId) }) {
                                         Text(stringResource(R.string.quick_unlock_disable))
+                                    }
+                                } else if (canAuthenticate) {
+                                    TextButton(onClick = { onEnable(vault.vaultId) }) {
+                                        Text(stringResource(R.string.quick_unlock_enable))
                                     }
                                 }
                             },

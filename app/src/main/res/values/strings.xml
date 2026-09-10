@@ -166,9 +166,11 @@
     <string name="settings_quick_unlock">生物识别快速解锁</string>
     <string name="settings_quick_unlock_desc">锁定后免主密码/免 2FA 重新打开；关闭入口见下方列表</string>
     <string name="quick_unlock_manage_none">尚未启用任何库</string>
+    <string name="quick_unlock_enable">启用</string>
     <string name="quick_unlock_disable">关闭</string>
     <string name="quick_unlock_enabled">已启用</string>
-    <string name="quick_unlock_disabled">未启用（登录后可在库列表顶部横幅启用）</string>
+    <string name="quick_unlock_disabled">未启用（点右侧「启用」即可）</string>
+    <string name="quick_unlock_device_unsupported">未启用（本设备未设置锁屏或生物识别，无法启用）</string>
     <string name="quick_unlock_local_failed">本地解锁不可用（密钥可能已失效），请用主密码登录</string>
     <!-- 自动锁定档位 -->
     <string name="auto_lock_never">从不</string>

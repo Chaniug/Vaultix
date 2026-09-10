@@ -7,13 +7,18 @@ import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.datastore.VaultixPreferencesDefaults
 import io.vaultix.domain.VaultRepository
 import io.vaultix.vaultix.security.AutoLockController
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import javax.crypto.Cipher
 import javax.inject.Inject
 
 /**
@@ -22,12 +27,12 @@ import javax.inject.Inject
  * 收集，剪贴板清除由详情页收集）。
  */
 @HiltViewModel
+@OptIn(ExperimentalCoroutinesApi::class)
 class SettingsViewModel @Inject constructor(
     private val preferences: VaultixPreferences,
     private val vaultRepository: VaultRepository,
     private val autoLockController: AutoLockController,
 ) : ViewModel() {
-
     data class UiState(
         val autoLockMinutes: Int = 5,
         val clipboardClearMs: Long = 30_000L,
@@ -163,6 +168,37 @@ class SettingsViewModel @Inject constructor(
     fun disableQuickUnlock(vaultId: String) {
         viewModelScope.launch { vaultRepository.disableLocalUnlock(vaultId) }
     }
+
+    /**
+     * 设置页**启用**某库的快速解锁（消除入口死角）。
+     *
+     * 背景：此前启用入口**只有**库列表页横幅（`QuickUnlockBanner`），而横幅点
+     * 「以后再说」会置位 `isQuickUnlockPromptDismissed` → 横幅永不再现，
+     * 用户就此**彻底失去启用路径**（设置页对话框只能关不能开）。
+     * 此处补上对称入口，复用与横幅完全相同的 enroll 流程。
+     *
+     * 设备无可用认证方式时静默返回（不弹无意义的认证框）；
+     * 否则准备 ENCRYPT cipher 并通知 UI 弹 BiometricPrompt。
+     */
+    fun startQuickUnlockEnroll(vaultId: String) {
+        viewModelScope.launch {
+            val cipher = vaultRepository.prepareLocalEnroll() ?: return@launch
+            _events.send(Event.PromptForEnroll(vaultId, cipher))
+        }
+    }
+
+    /** BiometricPrompt 认证通过：用本次 cipher 包裹当前会话密钥并落盘。 */
+    fun enrollWithCipher(vaultId: String, cipher: Cipher) {
+        viewModelScope.launch { vaultRepository.enrollLocalUnlock(vaultId, cipher) }
+    }
+
+    sealed interface Event {
+        /** UI 收到后弹 BiometricPrompt（cipher 已 init，等待用户认证）。 */
+        data class PromptForEnroll(val vaultId: String, val cipher: Cipher) : Event
+    }
+
+    private val _events = Channel<Event>(Channel.BUFFERED)
+    val events: Flow<Event> = _events.receiveAsFlow()
 
     /** 立即锁定全部库：AutoLockController 会自增锁定代次，导航壳自动回库列表。 */
     fun lockAllNow() = autoLockController.lockAllNow()

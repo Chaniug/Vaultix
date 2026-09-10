@@ -63,6 +63,13 @@ import io.vaultix.vaultix.R
 private val DockBarHeight = 60.dp
 
 /**
+ * 胶囊圆角百分比（50 = 50%，即两端完全半圆的「药丸」形）。
+ *
+ * `RoundedCornerShape(Int)` 的重载语义是**百分比**而非 dp，故 50 表示最大圆角。
+ */
+private const val PILL_CORNER_PERCENT = 50
+
+/**
  * 窄屏底部导航条：悬浮胶囊 + 中央「+」。
  *
  * ## ⚠️ 为什么「+」是圆角方块而不是 FAB
@@ -94,7 +101,7 @@ fun VaultixBottomDock(
     ) {
         Surface(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(50),
+            shape = RoundedCornerShape(PILL_CORNER_PERCENT),
             color = MaterialTheme.colorScheme.surfaceContainerHigh,
             tonalElevation = 3.dp,
             shadowElevation = 6.dp,

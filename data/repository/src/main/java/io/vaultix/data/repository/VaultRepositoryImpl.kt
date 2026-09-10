@@ -200,16 +200,14 @@ class VaultRepositoryImpl @Inject constructor(
             authRepository.registerServer(vaultId)
             UnlockResult.Success
         }.getOrElse { error ->
-            when (error) {
-                // KEK 失效（指纹变更等）或密码错误：清开关，回退主密码登录
-                is android.security.keystore.UserNotAuthenticatedException,
-                is javax.crypto.AEADBadTagException,
-                -> {
-                    preferences.setLocalUnlockEnabled(vaultId, false)
-                    credentials.remove(LOCAL_UNLOCK_PREFIX + vaultId)
-                    UnlockResult.Unknown("本地解锁失败（密钥可能已失效），请用主密码重新登录")
-                }
-                else -> UnlockResult.Unknown(error.message)
+            if (error.isLocalUnlockUnrecoverable()) {
+                // KEK 永久失效（新增/删除指纹）或不可恢复，
+                // 或认证会话失效 / 密文校验失败：
+                // 清干净，回退「未启用」→ UI 如实显示，用户可重新启用自愈。
+                clearBrokenLocalUnlock(vaultId)
+                UnlockResult.Unknown("本地解锁已失效（可能因指纹变更），请用主密码登录")
+            } else {
+                UnlockResult.Unknown(error.message)
             }
         }
     }
@@ -217,6 +215,32 @@ class VaultRepositoryImpl @Inject constructor(
     override suspend fun disableLocalUnlock(vaultId: String) {
         credentials.remove(LOCAL_UNLOCK_PREFIX + vaultId)
         preferences.setLocalUnlockEnabled(vaultId, false)
+    }
+
+    /**
+     * 清理已不可用的快速解锁状态（Bastion 不变量移植）。
+     *
+     * **触发场景**：Keystore KEK 被永久失效 —— 用户新增/删除指纹时
+     * `setInvalidatedByBiometricEnrollment(true)`（Vaultix 默认行为）会让 KEK 彻底不可用；
+     * 或 Keystore 返回不可恢复的陈旧密钥。
+     *
+     * **为什么必须清理**：若只吞掉异常而不清状态，开关仍是 `enabled = true`、
+     * payload 仍在，`localUnlockAvailable` 就仍返回 true → 设置页显示「已启用」，
+     * 但用户每次点指纹都失败，**且无法自愈**（重试永远失败，只能手动关闭再启用）。
+     * Bastion 用 1923 行 + 回归测试防的正是这个静默死循环。
+     *
+     * **为什么不尝试自动重建**：Vaultix 的 KEK 用
+     * `setUserAuthenticationParameters(0, …)` = **每次使用都需认证**
+     * （安全性高于 Bastion 的 `setUserAuthenticationValidityDurationSeconds(300)`）。
+     * 主密码登录路径上没有生物认证窗口，`Cipher.init()` 必然抛
+     * `UserNotAuthenticatedException`，因此**无法静默重建**。清回「未启用」
+     * 让 UI 如实反映状态、并允许用户重新启用（届时会走一次真实认证），是正确取舍。
+     */
+    private suspend fun clearBrokenLocalUnlock(vaultId: String) {
+        runCatching {
+            credentials.remove(LOCAL_UNLOCK_PREFIX + vaultId)
+            preferences.setLocalUnlockEnabled(vaultId, false)
+        }
     }
 
     /** 会话密钥 → 64B full key（enc ‖ mac）。 */
