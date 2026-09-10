@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.datastore.VaultixPreferencesDefaults
+import io.vaultix.domain.ItemRepository
 import io.vaultix.domain.VaultRepository
 import io.vaultix.vaultix.security.AutoLockController
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -14,6 +15,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
@@ -31,6 +33,7 @@ import javax.inject.Inject
 class SettingsViewModel @Inject constructor(
     private val preferences: VaultixPreferences,
     private val vaultRepository: VaultRepository,
+    private val itemRepository: ItemRepository,
     private val autoLockController: AutoLockController,
 ) : ViewModel() {
     data class UiState(
@@ -132,6 +135,50 @@ class SettingsViewModel @Inject constructor(
     fun setAutoCopyTotp(enabled: Boolean) {
         viewModelScope.launch { preferences.setAutoCopyTotp(enabled) }
     }
+
+    /** 域匹配：允许基域 / 子域名命中（默认开，对齐 Bitwarden）。 */
+    val autofillBaseDomainMatch: StateFlow<Boolean> = preferences.autofillBaseDomainMatch
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = true,
+        )
+
+    fun setAutofillBaseDomainMatch(enabled: Boolean) {
+        viewModelScope.launch { preferences.setAutofillBaseDomainMatch(enabled) }
+    }
+
+    /** 域匹配：仅精确域（默认关）。关掉「严格匹配」是浏览器填不出来时的首选排查动作。 */
+    val autofillExactDomainOnly: StateFlow<Boolean> = preferences.autofillExactDomainOnly
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = false,
+        )
+
+    fun setAutofillExactDomainOnly(enabled: Boolean) {
+        viewModelScope.launch { preferences.setAutofillExactDomainOnly(enabled) }
+    }
+
+    /**
+     * 已解锁库中的通行密钥总数（设置页「通行密钥」分组展示）。
+     *
+     * 统计口径是**当前已解锁库**：锁定库的密文读不出来，硬统计只会得到 0 并误导用户
+     * 「我没存过通行密钥」。副标题因此必须写清「已解锁库中」，与真实口径一致。
+     */
+    val passkeyCount: StateFlow<Int> = vaultRepository.observeUnlockedVaultIds()
+        .flatMapLatest { ids ->
+            val flows = ids.map { vaultId -> itemRepository.observeItems(vaultId) }
+            if (flows.isEmpty()) {
+                flowOf(0)
+            } else {
+                combine(flows) { lists -> lists.sumOf { items -> items.sumOf { it.fido2Credentials.size } } }
+            }
+        }.stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = 0,
+        )
 
     fun setAutoLockMinutes(minutes: Int) {
         viewModelScope.launch { preferences.setAutoLockMinutes(minutes) }

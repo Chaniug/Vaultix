@@ -79,7 +79,9 @@
     <string name="settings_title">设置</string>
     <string name="group_security">安全</string>
     <string name="group_appearance">外观</string>
-    <string name="group_data">数据</string>
+    <string name="group_data">数据管理</string>
+    <string name="permission_management_title">权限管理</string>
+    <string name="permission_management_subtitle">在系统应用信息页查看 / 调整 Vaultix 的权限</string>
     <string name="group_about">关于</string>
     <string name="setting_auto_lock">自动锁定</string>
     <string name="setting_clipboard_clear">复制后清除剪贴板</string>
@@ -113,14 +115,42 @@
 
     <!-- 设置首页「自动填充」入口 → 二级页（对齐 Bastion 设置 → 自动填充的嵌套结构） -->
     <string name="autofill_settings_entry">自动填充设置</string>
-    <string name="autofill_settings_entry_desc">系统服务 / 凭据提供商 / 验证器 / 保存行为</string>
+    <string name="autofill_settings_entry_desc">系统服务 / 通行密钥 / 填充行为 / 验证器 / 保存行为</string>
 
     <!-- 验证器（对齐 Bastion「验证器」分组 autofill_otp_settings_title） -->
     <string name="group_otp">验证器</string>
 
     <!-- 二级页分组 -->
     <string name="group_autofill_system">系统设置</string>
+    <string name="group_others">其他</string>
+    <string name="autofill_status_refresh">刷新状态</string>
+    <string name="group_autofill_behavior">填充行为</string>
+    <string name="group_passkey">通行密钥</string>
     <string name="group_autofill_save">保存行为</string>
+
+    <!-- 顶部状态卡（三态，移植自 Bastion autofill_status_* / AutofillSettingsV2Screen） -->
+    <string name="autofill_status_enabled">自动填充已启用</string>
+    <string name="autofill_status_disabled">自动填充未启用</string>
+    <string name="autofill_status_enabled_desc">Vaultix 已是系统自动填充服务，可在 App / 网页的登录框中填充密码</string>
+    <string name="autofill_status_disabled_desc">还没把 Vaultix 设为系统自动填充服务，浏览器和 App 里都不会弹出填充选项</string>
+    <string name="autofill_status_attention_desc">密码填充已就绪，但通行密钥尚未启用 —— Chrome / Edge 的通行密钥需要它</string>
+    <string name="autofill_status_go_to_settings">前往系统设置</string>
+
+    <!-- 填充行为（对齐 Bastion strictMode / subdomainMatch；接 MatchConfig 真开关） -->
+    <string name="setting_autofill_exact_domain">严格匹配</string>
+    <string name="setting_autofill_exact_domain_desc">只填充域名完全一致的条目。最安全，但跨子域登录可能填不出来</string>
+    <string name="setting_autofill_base_domain">允许子域名匹配</string>
+    <string name="setting_autofill_base_domain_desc">条目存的是 example.com 时，login.example.com 也能填充</string>
+
+    <!-- 通行密钥分组 -->
+    <string name="setting_credential_provider_subtitle">在系统设置中启用 Vaultix 作为通行密钥提供方</string>
+    <string name="setting_passkey_saved">已保存的通行密钥</string>
+    <string name="setting_passkey_saved_fmt">已解锁库中：%1$d 个</string>
+    <string name="setting_passkey_saved_locked">解锁库后可查看数量</string>
+    <string name="setting_passkey_saved_none">暂无通行密钥 —— 在网站开启通行密钥时选择 Vaultix 即可创建</string>
+    <string name="passkey_android_version_unsupported">需要 Android 14 及以上（当前 %1$s）</string>
+    <string name="passkey_features_title">通行密钥能做什么</string>
+    <string name="passkey_features_body">• 在支持的网站 / App 免密登录（指纹 / 人脸即可确认）\n• 密钥只存在你的设备与库中，服务器拿不到私钥\n• 与密码共存：填充密码仍走自动填充服务</string>
     <string name="autofill_save_title">保存登录</string>
     <string name="autofill_save_title_update">更新密码</string>
     <string name="autofill_save_target">网址「%1$s」</string>

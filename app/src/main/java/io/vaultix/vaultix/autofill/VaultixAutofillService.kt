@@ -174,6 +174,11 @@ class VaultixAutofillService : AutofillService() {
             packageName = parsed.packageName,
             webDomain = webDomain,
             config = MatchConfig(
+                // 域匹配宽严由用户在「设置 → 自动填充 → 填充行为」控制，默认与
+                // Bitwarden 一致（允许基域匹配、不强制精确域）。浏览器里填不出来时
+                // 先关掉「严格匹配」再试，是成本最低的排查第一步。
+                allowBaseDomainMatch = prefs.autofillBaseDomainMatch.first(),
+                exactDomainOnly = prefs.autofillExactDomainOnly.first(),
                 allowPackageMatch = AutofillRequestContextPolicy.allowPackageMatching(
                     packageName = parsed.packageName,
                     webDomain = webDomain,

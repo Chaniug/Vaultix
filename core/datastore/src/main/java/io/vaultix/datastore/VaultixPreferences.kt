@@ -56,6 +56,8 @@ class VaultixPreferences @Inject constructor(
         val OLED_PURE_BLACK = booleanPreferencesKey("oled_pure_black")
         val AUTOFILL_SAVE_PROMPT = booleanPreferencesKey("autofill_save_prompt")
         val AUTO_COPY_TOTP = booleanPreferencesKey("auto_copy_totp")
+        val AUTOFILL_BASE_DOMAIN_MATCH = booleanPreferencesKey("autofill_base_domain_match")
+        val AUTOFILL_EXACT_DOMAIN_ONLY = booleanPreferencesKey("autofill_exact_domain_only")
 
         /**
          * 自动锁定档位（分钟，语义对齐 Bastion autoLockMinutes）：
@@ -119,6 +121,24 @@ class VaultixPreferences @Inject constructor(
      */
     val autoCopyTotp: Flow<Boolean> =
         safeData.map { it[AUTO_COPY_TOTP] ?: true }
+
+    /**
+     * 允许「基域 / 子域名」匹配（对齐 Bastion `allowBaseDomainMatch`，Bitwarden 默认开）。
+     *
+     * 例：条目存的是 `example.com`，页面在 `login.example.com` 时也能命中。关掉后只有
+     * 域名完全一致才填充——更严格、更省心，但跨子域登录会填不出来。
+     */
+    val autofillBaseDomainMatch: Flow<Boolean> =
+        safeData.map { it[AUTOFILL_BASE_DOMAIN_MATCH] ?: true }
+
+    /**
+     * 仅精确域匹配（对齐 Bastion `exactDomainOnly`，Bitwarden 默认关）。
+     *
+     * 开启后忽略条目上配的「起始匹配 / 正则匹配」等宽松规则，只认域名完全相等。
+     * 与 [autofillBaseDomainMatch] 独立生效：两者都开 = 只认精确域名。
+     */
+    val autofillExactDomainOnly: Flow<Boolean> =
+        safeData.map { it[AUTOFILL_EXACT_DOMAIN_ONLY] ?: false }
 
     val defaultVaultId: Flow<String?> = safeData.map { it[DEFAULT_VAULT_ID] }
 
@@ -195,6 +215,14 @@ class VaultixPreferences @Inject constructor(
     /** 自动填充后自动复制验证码开关。 */
     suspend fun setAutoCopyTotp(enabled: Boolean) {
         dataStore.edit { it[AUTO_COPY_TOTP] = enabled }
+    }
+
+    suspend fun setAutofillBaseDomainMatch(enabled: Boolean) {
+        dataStore.edit { it[AUTOFILL_BASE_DOMAIN_MATCH] = enabled }
+    }
+
+    suspend fun setAutofillExactDomainOnly(enabled: Boolean) {
+        dataStore.edit { it[AUTOFILL_EXACT_DOMAIN_ONLY] = enabled }
     }
 
     suspend fun setDefaultVaultId(id: String?) {

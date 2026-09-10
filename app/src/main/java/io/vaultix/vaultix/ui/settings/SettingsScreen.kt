@@ -1,12 +1,5 @@
 package io.vaultix.vaultix.ui.settings
 
-import android.app.StatusBarManager
-import android.content.ComponentName
-import android.graphics.drawable.Icon
-import android.os.Build
-import androidx.core.content.ContextCompat
-
-import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -36,6 +29,7 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Password
+import androidx.compose.material.icons.filled.Policy
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Shield
@@ -79,7 +73,6 @@ import io.vaultix.vaultix.ui.common.TrashAutoDeleteDialog
 import io.vaultix.vaultix.ui.common.deviceCanAuthenticate
 import io.vaultix.vaultix.ui.common.rememberFragmentActivity
 import io.vaultix.vaultix.ui.common.trashAutoDeleteLabel
-import io.vaultix.vaultix.autofill.shortcut.AutofillTileService
 import io.vaultix.vaultix.ui.theme.ThemeMode
 
 /**
@@ -170,6 +163,15 @@ fun SettingsScreen(
 
             // ---- 自动填充（M2-a：系统 AutofillService 入口 → 二级设置页） ----
             AutofillSection(onOpenAutofillSettings = onOpenAutofillSettings)
+
+            // ---- 其他（对齐 Bastion SettingsScreen：权限管理放在设置首页） ----
+            SettingsGroupTitle(stringResource(R.string.group_others))
+            SettingsRow(
+                icon = { Icon(Icons.Filled.Policy, contentDescription = null) },
+                title = stringResource(R.string.permission_management_title),
+                subtitle = stringResource(R.string.permission_management_subtitle),
+                onClick = { openAppPermissionSettings(context) },
+            )
 
             // ---- 关于 ----
             SettingsGroupTitle(stringResource(R.string.group_about))
@@ -346,6 +348,18 @@ private fun AutofillSection(onOpenAutofillSettings: () -> Unit) {
         },
         onClick = onOpenAutofillSettings,
     )
+}
+
+/** 系统应用信息页（权限管理）：唯一能改运行时权限的入口，系统不提供应用内开关。 */
+private fun openAppPermissionSettings(context: Context) {
+    runCatching {
+        context.startActivity(
+            Intent(
+                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.parse("package:${context.packageName}"),
+            ),
+        )
+    }
 }
 
 
