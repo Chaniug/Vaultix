@@ -182,16 +182,28 @@ UnifiedCategoryFilterSelection.KeePassGroupFilter(databaseId, groupPath)
       MainShellRoute 内：Tab 切换（不新增路由）
       ```
       ⚠️ 与现状差异：解锁成功后**进 `MainShellRoute` 而非 `ItemsRoute`**
-- [ ] **各 Tab 复用现有 Screen**，改造点：
+- [ ] **各 Tab 复用现有 Screen**，改造点（Tab 集合已定稿：密码/验证码/卡包/设置）：
       | Tab | 复用 | 改造点 |
       |---|---|---|
-      | Passwords | `ItemsScreen` | 去 `onBack`；`vaultId` 改从 `ActiveVaultStore` 取；顶栏回收站入口移入 Tab 内菜单 |
-      | Authenticator | `TotpCodesScreen` | 去 `onBack`；`vaultId` 同上 |
-      | Passkey | `PasskeysScreen` | 去 `onBack`；`vaultId` 同上 |
-      | Generator | **新建**（搬 Bastion `GeneratorScreen`） | 全新建，无库依赖（纯计算） |
+      | Passwords | `ItemsScreen` | 去 `onBack`；`vaultId` 改从 `ActiveVaultStore` 取；回收站入口移入 Tab 内菜单 |
+      | Authenticator | `TotpCodesScreen` | 去 `onBack`；`vaultId` 同上；**通行密钥入口改造**（见 §6.1.2：进度条右侧 + 空态兜底） |
+      | CardWallet | **新建**（搬卡面视觉组件，见 §6.1.3） | 内容源 = `Cipher type=3`；`vaultId` 同上 |
       | Settings | `SettingsScreen` | 去 `onBack`；**新增「库管理」入口**（切换活跃库） |
-- [ ] **二级页仍走路由**：`ItemRoute` / `TrashRoute` / `AutofillSettingsRoute`
-      照旧 push（Tab 容器不拦截）；`ItemRoute` 仍需 `vaultId`（条目属于具体库）
+- [ ] **二级页仍走路由**：`ItemRoute` / `TrashRoute` / `AutofillSettingsRoute` /
+      `PasskeysRoute` 照旧 push（Tab 容器不拦截）；`ItemRoute` 仍需 `vaultId`
+- [ ] **★ 全局活跃库真源（用户提问引出的关键扩展）**
+      `ActiveVaultStore` 不能只做导航态，必须覆盖 **autofill 层**：
+      | 消费方 | 现状 | 应改为 |
+      |---|---|---|
+      | 主界面 Tab | 路由参数 `vaultId` | `ActiveVaultStore` |
+      | **`VaultixAutofillService.collectCandidates`** | **`for (vaultId in unlocked)` 遍历所有已解锁库** | **只取活跃库** |
+      | **`VaultixCredentialProviderService.buildGetResponse`** | `observeUnlockedVaultIds()` | 只取活跃库（需复核） |
+      | **`PasskeyCreateActivity`** | `unlockedVaultIds` 列表 | 只取活跃库（需复核） |
+      | 保存回写目标 | 遍历/推断 | 活跃库 |
+      > 📌 依据：用户指出「条目不会错乱和保存重复」——该问题**真实存在于自动填充层**
+      > （云端库与 KDBX 库同时解锁时，同网站出现两条来源不同的候选）。
+- [ ] **「+」按钮分发**：按 `VaultixNavItem.addTarget` 分发；**密码 Tab 的「+」弹类型选择器**
+      （避免在密码页建出 SecureNote 等不该出现的类型），验证码/卡包直接进对应编辑器
 - [ ] **锁定处理**：`lockEpoch` 触发时从 `MainShellRoute` 清栈回 `VaultListRoute`（现状保持）
 
 ### 阶段 3：观感对齐（Bastion 视觉细节）

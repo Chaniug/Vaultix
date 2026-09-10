@@ -466,4 +466,11 @@
     <string name="passkey_auth_message">Vaultix 即将使用 %1$s 的通行密钥完成登录</string>
     <string name="passkey_auth_confirm">使用通行密钥</string>
     <string name="passkey_create_confirm">创建</string>
+
+    <!-- 主界面底部导航（迁移自 Bastion BottomNavModel；Vaultix 裁剪为 4 项 + 中央「+」） -->
+    <string name="nav_passwords">密码</string>
+    <string name="nav_authenticator">验证码</string>
+    <string name="nav_card_wallet">卡包</string>
+    <string name="nav_settings">设置</string>
+    <string name="nav_add">添加</string>
 </resources>
