@@ -30,7 +30,6 @@
 package io.vaultix.vaultix.passkey
 
 import android.app.PendingIntent
-import android.content.Intent
 import android.graphics.drawable.Icon
 import android.os.Build
 import android.os.CancellationSignal
@@ -64,6 +63,7 @@ import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.autofill.AutofillIntents
+import io.vaultix.vaultix.autofill.AutofillLogger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -97,8 +97,15 @@ class VaultixCredentialProviderService : CredentialProviderService() {
     ) {
         serviceScope.launch {
             runCatching { buildGetResponse(request) }
-                .onSuccess { callback.onResult(it) }
-                .onFailure { callback.onError(GetCredentialUnknownException(it.message)) }
+                .onSuccess {
+                    log("GET ok entries=${it.credentialEntries.size}")
+                    callback.onResult(it)
+                }
+                .onFailure {
+                    // 现场排障关键：任何异常都会让整张凭据列表为空（浏览器表现为「毫无反应」）。
+                    log("GET failed: ${it.javaClass.simpleName}: ${it.message}")
+                    callback.onError(GetCredentialUnknownException(it.message))
+                }
         }
     }
 
@@ -128,9 +135,11 @@ class VaultixCredentialProviderService : CredentialProviderService() {
     private suspend fun buildGetResponse(request: BeginGetCredentialRequest): BeginGetCredentialResponse {
         val pkOptions = request.beginGetCredentialOptions.filterIsInstance<BeginGetPublicKeyCredentialOption>()
         val pwOptions = request.beginGetCredentialOptions.filterIsInstance<BeginGetPasswordOption>()
+        log("GET options pk=${pkOptions.size} pw=${pwOptions.size} total=${request.beginGetCredentialOptions.size}")
         if (pkOptions.isEmpty() && pwOptions.isEmpty()) return BeginGetCredentialResponse.Builder().build()
 
         val unlocked = vaultRepository.observeUnlockedVaultIds().first()
+        log("GET unlocked=${unlocked.size}")
         val entries = mutableListOf<CredentialEntry>()
 
         if (unlocked.isEmpty()) {
@@ -147,6 +156,7 @@ class VaultixCredentialProviderService : CredentialProviderService() {
         }
         for (option in pkOptions) {
             val matched = resolvePasskeys(option, unlocked)
+            log("GET rpId matched pk=${matched.size}")
             for (m in matched) {
                 entries += publicKeyEntry(option, m)
             }
@@ -270,11 +280,18 @@ class VaultixCredentialProviderService : CredentialProviderService() {
             mode = AutofillIntents.MODE_UNLOCK,
             title = getString(R.string.credential_unlock_title),
             subtitle = getString(R.string.credential_unlock_subtitle),
-        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        val pendingIntent = AutofillIntents.pending(
-            context = this,
-            intent = intent,
-            requestCode = REQUEST_UNLOCK_CP,
+        )
+        // ⚠️ Credential Provider 的 entry PendingIntent **必须**是 FLAG_MUTABLE：系统要把最终
+        // 请求追加进 intent extra（官方明文要求）。此前误用 AutofillIntents.pending()（那是
+        // autofill 认证通道，固定 FLAG_IMMUTABLE）→ 系统无法附加请求 → 该条目不可用，
+        // 锁定时整张凭据列表恒空（Edge 表现为「点密码框毫无反应」）。
+        // ⚠️ 且**不得**加 FLAG_ACTIVITY_NEW_TASK（Bastion buildPendingIntent 同款警告）：
+        // 会把宿主 Activity 推进独立任务栈，Credential Manager 收不到回灌结果。
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            REQUEST_UNLOCK_CP,
+            intent,
+            PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         val title = getString(R.string.credential_unlock_title)
         val subtitle = getString(R.string.credential_unlock_subtitle)
@@ -338,7 +355,11 @@ class VaultixCredentialProviderService : CredentialProviderService() {
         val loginTitle: String,
     )
 
+    /** 现场排障日志（仅 debug 构建；只记选项类型/数量等非敏感元数据，禁记条目内容）。 */
+    private fun log(message: String) = AutofillLogger.d(TAG, "CP $message")
+
     private companion object {
+        const val TAG = "VaultixCredentialProvider"
         const val REQUEST_UNLOCK_CP = 2101
         const val REQUEST_CREATE_CP = 2102
         const val REQUEST_PASSWORD_CP_BASE = 2200

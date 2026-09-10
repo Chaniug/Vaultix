@@ -27,4 +27,14 @@ internal object AutofillLogger {
     fun d(message: String) {
         if (BuildConfig.DEBUG) Log.d(TAG, message)
     }
+
+    /**
+     * 指定 tag 的 debug 日志。
+     *
+     * 供 Credential Provider 等其它子系统复用同一策略（仅 debug 输出 + 仅非敏感元数据），
+     * 避免每个子系统各写一份 BuildConfig.DEBUG 门禁。
+     */
+    fun d(tag: String, message: String) {
+        if (BuildConfig.DEBUG) Log.d(tag, message)
+    }
 }
