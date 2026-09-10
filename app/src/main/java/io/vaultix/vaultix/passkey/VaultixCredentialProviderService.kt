@@ -35,8 +35,6 @@ import android.os.Build
 import android.os.CancellationSignal
 import android.os.OutcomeReceiver
 import androidx.annotation.RequiresApi
-import androidx.biometric.BiometricManager
-import androidx.biometric.BiometricPrompt
 import androidx.credentials.exceptions.ClearCredentialException
 import androidx.credentials.exceptions.CreateCredentialCancellationException
 import androidx.credentials.exceptions.CreateCredentialException
@@ -52,7 +50,6 @@ import androidx.credentials.provider.BeginGetCredentialRequest
 import androidx.credentials.provider.BeginGetCredentialResponse
 import androidx.credentials.provider.BeginGetPasswordOption
 import androidx.credentials.provider.BeginGetPublicKeyCredentialOption
-import androidx.credentials.provider.BiometricPromptData
 import androidx.credentials.provider.CreateEntry
 import androidx.credentials.provider.CredentialEntry
 import androidx.credentials.provider.CredentialProviderService
@@ -79,7 +76,6 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
 import org.json.JSONObject
-import javax.crypto.Cipher
 import javax.inject.Inject
 
 @RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
@@ -336,7 +332,6 @@ class VaultixCredentialProviderService : CredentialProviderService() {
             // 对齐 Bitwarden：仅当只有一条候选时允许系统自动选中，避免多条时误填。
             .setAutoSelectAllowed(siblingCount == 1)
             .setIcon(Icon.createWithResource(this, R.drawable.ic_passkey))
-        applyBiometricPromptDataIfSupported(builder)
         return builder.build()
     }
 
@@ -424,50 +419,22 @@ class VaultixCredentialProviderService : CredentialProviderService() {
         val builder = PublicKeyCredentialEntry.Builder(this, username, pendingIntent, option)
             .setDisplayName(m.credential.rpName.ifBlank { m.credential.rpId })
             .setIcon(Icon.createWithResource(this, R.drawable.ic_passkey))
-        applyBiometricPromptDataIfSupported(builder)
         return builder.build()
     }
 
-    // ===================== entry 能力增强 =====================
-
-    /**
-     * 按需给凭据条目附加 `BiometricPromptData`（Android 15+ 系统层生物识别流程）。
-     *
-     * 对齐 Bitwarden `setBiometricPromptDataIfSupported`：**仅当 ROM 支持时才挂**——
-     * 小米 HyperOS / 荣耀 MagicOS 等魔改 ROM 挂上后可能导致系统在渲染阶段丢弃整个 entry
-     * （表现仍是「浏览器里什么都不弹」，比不挂更糟）。判定见 [RomCompat]。
-     *
-     * 另：Vaultix 的库密钥只在内存，没有可绑定到条目的 Keystore cipher（见
-     * [credentialEntryCipher] 返回 null），因此这里实际落到「不挂」分支，设备验证仍由
-     * 点击后的 Activity 完成 —— 与 Vaultix 既有行为一致，只是补齐了扩展点。
-     */
-    private fun applyBiometricPromptDataIfSupported(builder: PasswordCredentialEntry.Builder): PasswordCredentialEntry.Builder {
-        val cipher = credentialEntryCipher()
-        return if (RomCompat.biometricPromptDataSupported && cipher != null) {
-            builder.setBiometricPromptData(buildPromptDataWithCipher(cipher))
-        } else {
-            log("GET entry: biometricPromptData skipped (rom=${Build.MANUFACTURER} sdk=${Build.VERSION.SDK_INT})")
-            builder
-        }
-    }
-
-    private fun applyBiometricPromptDataIfSupported(
-        builder: PublicKeyCredentialEntry.Builder,
-    ): PublicKeyCredentialEntry.Builder {
-        val cipher = credentialEntryCipher()
-        return if (RomCompat.biometricPromptDataSupported && cipher != null) {
-            builder.setBiometricPromptData(buildPromptDataWithCipher(cipher))
-        } else {
-            builder
-        }
-    }
-
-    @RequiresApi(Build.VERSION_CODES.VANILLA_ICE_CREAM)
-    private fun buildPromptDataWithCipher(cipher: Cipher): BiometricPromptData =
-        BiometricPromptData.Builder()
-            .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
-            .setCryptoObject(BiometricPrompt.CryptoObject(cipher))
-            .build()
+    // ===================== 关于 entry 的 BiometricPromptData =====================
+    //
+    // Android 15+（API 35）的 CredentialEntry 支持 setBiometricPromptData：官方 Bitwarden
+    // 会在 entry 上挂（用 Keystore cipher 作 CryptoObject，让系统在候选列表内直接完成
+    // 生物识别）。Vaultix **不挂**，两条理由：
+    //  1. **魔改 ROM 风险**：Bitwarden 源码原文标注「Xiaomi HyperOS is known to be
+    //     incompatible」；荣耀 MagicOS 同族。挂上可能导致系统在渲染阶段丢弃整个 entry，
+    //     表现仍是「浏览器里什么都不弹」——比不挂更糟。（曾短暂引入 RomCompat 判定对象，
+    //     因逻辑最终无需启用而删除；若日后要挂，务必先恢复该 ROM 判定，勿直接挂。）
+    //  2. **无可用 cipher**：Vaultix 的库密钥只在内存（VaultSessionManager），没有绑定到
+    //     单个条目、且经 setUserAuthenticationRequired 的 Keystore 密钥可作 CryptoObject。
+    // 因此设备验证统一由条目点击后的 Activity（PasskeyGetActivity / PasswordGetActivity）
+    // 承担 —— 与 Vaultix 既有行为一致，且不受 ROM 差异影响。
 
     // ===================== CREATE =====================
 
