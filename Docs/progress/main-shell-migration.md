@@ -8,6 +8,55 @@
 > 📌 **修订记录**：初稿把「多库」误判为导航障碍（A1/A2/A3 三方案）；
 > 用户指出「bastion 多库在设置页面里面，基本上解锁就能进单库」→ 复核源码证实
 > Bastion 主界面**零 `vaultId`**，多库是**筛选状态**而非导航层 → 方案改为 **A4**。
+> 再经用户澄清项目本质（见 §0）→ A4 的「库筛选」进一步明确为**单活跃库**语义。
+
+---
+
+## 0. ★★ 项目本质（2026-09-10 用户澄清，最高共识）
+
+**用户原话**：
+> 「我这个项目相当于只是从 bastion 里面把它本地的一个本地库 bastion 拔掉，
+> 保留 bitwarden 能力和 kdbx 能力，但是这个能力在**登录的时候只能进一样**。
+> 类似 keyguard 的做法，因为这样的条目就不会错乱和保存重复之类的了」
+
+### 0.1 项目定义（一句话）
+
+> **Vaultix = Bastion 去掉「私有本地库」，保留「Bitwarden 能力 + KDBX 能力」，
+> 且二者在登录时二选一（单一活跃库）。**
+
+### 0.2 为什么是「二选一」——不是限制，是设计
+
+**「登录时只能进一样」是一个刻意的架构决策，理由（用户给出）**：
+> **「这样的条目就不会错乱和保存重复之类的了」**
+
+即：**避免跨后端条目混乱与重复保存**。若 Bitwarden 库与 KDBX 库同时活跃，
+同一个网站会有两条来源不同的条目 → 自动填充时无法裁决用哪条、
+保存新密码时无法确定写回哪个库 → 条目错乱 / 重复条目。
+
+**这与 Keyguard 的做法一致**（Vaultix 本就对标 Keyguard 路线，
+见 MEMORY「产品定位」）。
+
+### 0.3 与 Bastion 的关键差异
+
+| | Bastion | Vaultix |
+|---|---|---|
+| 库类型 | **私有本地库** + Bitwarden + KeePass/KDBX | **Bitwarden + KDBX**（无私有本地库） |
+| 库数量 | 可同时挂多个（`BitwardenRepository` 有 vault 表 + `KEY_ACTIVE_VAULT_ID`） | **单一活跃库**（登录即定） |
+| 条目来源 | 多后端聚合 + 跨库去重（`DedupEngine`） | **单来源**，无需去重 |
+| UI 统一模型 | `UnifiedCategoryFilterSelection`（**需要**统一多后端） | **不需要**——单库无「统一」问题 |
+
+⚠️ **重要推论**：Bastion 的 `UnifiedCategoryFilterSelection` 是为了**抹平多后端差异**
+而存在的。Vaultix **不需要这个抽象**——因为按定义只有一条数据线。
+→ 所以 A4 对「筛选状态」的实现应当**大幅简化**为「当前活跃库」单个值，
+而非 Bastion 那套 filter union。
+
+### 0.4 对迁移方案的直接影响
+
+1. **`MainShellRoute` 不需要「库筛选器 UI」**——只需持「当前活跃库 id」（单值）
+2. **多库切换 = 切换活跃库**（不是筛选叠加）；切换入口放设置页
+3. **不搬** `UnifiedCategoryFilterSelection`（多后端产物）
+4. **不搬** `DedupEngine`（单库无需去重）
+5. Tab 内容（密码/验证器/通行密钥）**天然共用同一活跃库**，无歧义
 
 ---
 
@@ -108,8 +157,12 @@ UnifiedCategoryFilterSelection.KeePassGroupFilter(databaseId, groupPath)
 
 ### 阶段 2：Tab 容器接线（核心）
 - [ ] 新增 `MainShellRoute`（**无 `vaultId` 参数**，对齐 Bastion）
-- [ ] **库筛选状态载体**：新建 `CurrentVaultFilter`（Compose 状态 / ViewModel 持有），
-      默认值 = 唯一已解锁库；多库时供各 Tab 共用
+- [ ] **★ 活跃库状态载体**：新建 `ActiveVaultStore`（单例 / ViewModel 持有
+      `StateFlow<String?>`，**单值，非集合**）
+      - 语义：**当前活跃库 only**（见 §0「登录时只能进一样」）
+      - 初始值：登录/解锁成功时那一个库
+      - 切换：设置页「库管理」→ 切换活跃库（**互斥**，不同时活跃）
+      - ⚠️ **不搬** Bastion `UnifiedCategoryFilterSelection`（多后端产物，见 §0.3）
 - [ ] `VaultixApp` 导航图调整：
       ```
       VaultListRoute ──点已解锁库 / 解锁成功──▶ MainShellRoute（不进 Unlock）
@@ -120,33 +173,50 @@ UnifiedCategoryFilterSelection.KeePassGroupFilter(databaseId, groupPath)
 - [ ] **各 Tab 复用现有 Screen**，改造点：
       | Tab | 复用 | 改造点 |
       |---|---|---|
-      | Passwords | `ItemsScreen` | 去 `onBack`；`vaultId` 改从筛选状态取（非路由参数）；顶栏回收站入口移入 Tab 内菜单 |
+      | Passwords | `ItemsScreen` | 去 `onBack`；`vaultId` 改从 `ActiveVaultStore` 取；顶栏回收站入口移入 Tab 内菜单 |
       | Authenticator | `TotpCodesScreen` | 去 `onBack`；`vaultId` 同上 |
       | Passkey | `PasskeysScreen` | 去 `onBack`；`vaultId` 同上 |
-      | Generator | **新建**（搬 Bastion `GeneratorScreen`） | 全新建，无库依赖 |
-      | Settings | `SettingsScreen` | 去 `onBack`；**新增「库管理」入口**（多库场景） |
+      | Generator | **新建**（搬 Bastion `GeneratorScreen`） | 全新建，无库依赖（纯计算） |
+      | Settings | `SettingsScreen` | 去 `onBack`；**新增「库管理」入口**（切换活跃库） |
 - [ ] **二级页仍走路由**：`ItemRoute` / `TrashRoute` / `AutofillSettingsRoute`
       照旧 push（Tab 容器不拦截）；`ItemRoute` 仍需 `vaultId`（条目属于具体库）
 - [ ] **锁定处理**：`lockEpoch` 触发时从 `MainShellRoute` 清栈回 `VaultListRoute`（现状保持）
 
 ### 阶段 3：观感对齐（Bastion 视觉细节）
+- [ ] **页面滑动效果**（用户明确要求）：搬 Bastion Tab 切换的转场动画
+      → 参考 `AuthenticatorPasskeyAnimatedContent.kt`（43 行）、`LocalSharedTransition.kt`（18 行）
+      → 以及 `CompactDraggableTabContent.kt`（411 行，**可拖拽 Tab 内容**，重点参考）
 - [ ] 主界面卡片样式（参考 `PasswordTabPane.kt` / `NoteListCardComponents.kt`）
 - [ ] FAB 行为（参考 `MainScreenFab.kt` 的 1044 行——按需取用，不整体搬）
 - [ ] 设置页分组结构（参考 `SettingsScreen.kt` + `SettingsComponents.kt`）
+- [ ] Tab 保留滚动状态（参考 `VaultV2RetainedSnapshotStore.kt`——切 Tab 回来不丢位置）
 
 ---
 
 ## 4. ⛔ 明确不搬
 
+**4.1 架构差异产物（见 §0 项目本质）**
+
 | Bastion 文件 | 不搬理由 |
 |---|---|
-| `LocalKeePass*.kt`（4 个） | Vaultix 无 KeePass 本地库抽象层的 UI 对应物 |
-| `WebDavBackupScreen.kt` / `OneDriveBackupScreen.kt` | 单后端架构，Bitwarden API 已覆盖同步 |
-| `DedupEngineScreen.kt` | 多后端合并产生，Vaultix 单后端不存在 |
-| `SendScreen.kt` / `SendPane.kt` | Vaultix 无 Send（安全分享）能力，暂不引入 |
-| `SimpleMainScreen.kt`（3274 行） | **不是一个可搬单元**——它是 Bastion 所有 Tab 内容的巨型聚合，
-  应按 Tab 拆解后**按需参考**，不整体移植 |
+| `UnifiedCategoryFilterSelection`（`VaultV2Pane.kt` 内） | **多后端聚合抽象**——Bastion 需要抹平「私有库+Bitwarden+KDBX」差异；Vaultix 单活跃库无此需求 |
+| `DedupEngineScreen.kt` | 多后端合并才需要去重；**单库来源不可能重复**（用户点明的设计目的） |
+| `LocalKeePass*.kt`（4 个） | Vaultix 无「私有本地库」；KDBX 能力走 M2 的 `data:kdbx` 引擎，非 UI 层对应物 |
+| `WebDavBackupScreen.kt` / `OneDriveBackupScreen.kt` | Bitwarden API 已覆盖同步；KDBX 走本地文件 |
+| `VaultV2Pane*.kt`（5 个） | 库筛选/管理页——被 `ActiveVaultStore` + 设置页「库管理」取代 |
+
+**4.2 非可搬单元（体量/耦合原因）**
+
+| Bastion 文件 | 说明 |
+|---|---|
+| `SimpleMainScreen.kt`（3274 行） | **不是可搬单元**——Bastion 所有 Tab 内容的巨型聚合，按 Tab 拆解后**按需参考** |
 | `MainScreenFab.kt`（1044 行） | 同上，按需取 FAB 逻辑片段 |
+
+**4.3 暂不引入（能力缺口）**
+
+| Bastion 文件 | 说明 |
+|---|---|
+| `SendScreen.kt` / `SendPane.kt` | Vaultix 无 Send（安全分享）能力，暂不引入 |
 
 ---
 
@@ -157,25 +227,60 @@ UnifiedCategoryFilterSelection.KeePassGroupFilter(databaseId, groupPath)
 **主要风险**：
 1. **`vaultId` 传递链重构（最大风险）**——`ItemsViewModel` / `TotpCodesViewModel` /
    `PasskeysViewModel` / `TrashViewModel` 等目前通过 `SavedStateHandle` 取 `vaultId`；
-   A4 要求改为从**筛选状态**注入。这是阶段 2 最易出错处，需逐 ViewModel 核对
+   A4 要求改为从 **`ActiveVaultStore`** 注入。这是阶段 2 最易出错处，需逐 ViewModel 核对
 2. **各 Screen 的 `onBack` 语义**——现有 Screen 都假设自己是栈顶，
    改为 Tab 内容后要清理返回逻辑与顶栏（建议逐个过一遍）
 3. **`ItemRoute` 仍带 `vaultId`**——条目详情属于具体库，需保留参数；
-   注意「筛选状态切换库」与「已 push 的 ItemRoute」的一致性（避免显示错库条目）
-4. **多库入口**——`VaultListRoute` 保留为入口/解锁页；设置页新增「库管理」，
-   确保多库用户能找到切换入口
+   注意「切换活跃库」与「已 push 的 ItemRoute」的一致性（避免显示错库条目）
+4. **活跃库切换的用户可见性**——`VaultListRoute` 保留为入口/解锁页；设置页新增
+   「库管理」，确保切换活跃库的入口可发现
 5. **自动锁定**——`lockEpoch` 清栈逻辑要覆盖新的 `MainShellRoute`
+6. **单活跃库的持久化**——活跃库 id 需落盘（参考 Bastion `KEY_ACTIVE_VAULT_ID`，
+   存 SecurePrefs），否则重启后无从恢复
 
 **门禁**：每阶段完成后跑 `compileFullDebugKotlin` + `detekt` +
 `testFullDebugUnitTest`，全绿再进下一步。
 
 ---
 
-## 6. 待用户确认
+## 6. 用户已明确的要求（2026-09-10 原话）
 
-1. **导航范式**：**A4**（vaultId 参数 → 筛选状态降级）—— 用户已认可 Bastion 范式，
-   此项基本定调，仅需确认「解锁后直接进主界面」是否符合预期
-2. **Tab 集合**：先做 5 项（密码/验证器/通行密钥/生成器/设置），
-   还是要包含 Notes / CardWallet？
-3. **是否要「自定义 Tab 排序与可见性」**（Bastion 的完整能力），
-   还是固定顺序即可？（建议先固定，骨架稳后再加）
+> 「我要搬到就是 bastion 里面的底部导航，底部导航条里面有**密码页面、验证码页面、
+> +号按钮（添加条目的）、卡包页面、设置页面**，然后就是**页面的滑动效果**，
+> **界面风格**之类的」
+
+### 6.1 Tab 集合（✅ 已定，5 项）
+
+| # | Tab | 图标（Material） | 复用/新建 |
+|---|---|---|---|
+| 1 | 密码 | `Icons.Default.Lock` | 复用 `ItemsScreen` |
+| 2 | 验证码 | `Icons.Default.Security` | 复用 `TotpCodesScreen` |
+| 3 | **+ 号按钮**（添加条目） | `Icons.Default.Add` | **非 Tab**——是 FAB/中央按钮，触发新建条目流程 |
+| 4 | 卡包 | `Icons.Default.Wallet` | 复用卡片条目视图（Vaultix 已有 CardBrandDetector） |
+| 5 | 设置 | `Icons.Default.Settings` | 复用 `SettingsScreen` |
+
+⚠️ **注意「+ 号按钮」的定位**：用户原话把它列在导航条里 → 对齐 Bastion 的
+`MainScreenFab.kt`（1044 行），即**底部导航中央的突出 FAB**，不是普通 Tab。
+→ 需确认：是 NavigationBar 中央的 docked FAB，还是独立悬浮 FAB？
+
+⚠️ **通行密钥 Tab 的去留**：用户此次未提通行密钥页（此前讨论有）。
+→ 需确认：并入「密码」Tab 内入口，还是保留独立 Tab？
+
+### 6.2 明确要求的观感项（阶段 3 必做）
+
+- **页面滑动效果**——Tab 切换转场动画，参考：
+  - `AuthenticatorPasskeyAnimatedContent.kt`（43 行，AnimatedContent 转场）
+  - `LocalSharedTransition.kt`（18 行，共享元素过渡）
+  - `CompactDraggableTabContent.kt`（411 行，**可拖拽 Tab 内容**，重点参考）
+- **界面风格**——卡片样式 / 配色 / 间距 / 圆角，参考 `PasswordTabPane.kt` +
+  `NoteListCardComponents.kt` + `theme/` 目录
+
+### 6.3 待确认（剩余）
+
+1. **「+ 号按钮」形态**：NavigationBar 中央 docked FAB，还是独立悬浮 FAB？
+2. **通行密钥页**：并入密码 Tab 内入口，还是保留独立 Tab？
+3. **是否要「自定义 Tab 排序与可见性」**（Bastion 完整能力）？
+   建议先固定顺序，骨架稳后再加（代价仅偏好层加一个字段）
+4. **卡包 Tab 的数据来源**：Vaultix 的卡片是 Bitwarden `Cipher type=3` 条目，
+   与 Bastion 的 `CardWalletPane`（有独立卡面可视化）差异较大——
+   是仅复用筛选视图，还是要搬 Bastion 的卡面 UI？
