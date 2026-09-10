@@ -15,6 +15,7 @@ import io.vaultix.vaultix.ui.detail.ItemDetailScreen
 import io.vaultix.vaultix.ui.items.ItemsScreen
 import io.vaultix.vaultix.ui.items.ItemsViewModel
 import io.vaultix.vaultix.ui.passkeys.PasskeysScreen
+import io.vaultix.vaultix.ui.settings.AutofillSettingsScreen
 import io.vaultix.vaultix.ui.settings.SettingsScreen
 import io.vaultix.vaultix.ui.totp.TotpCodesScreen
 import io.vaultix.vaultix.ui.trash.TrashScreen
@@ -66,7 +67,13 @@ fun VaultixApp() {
             )
         }
         composable<SettingsRoute> {
-            SettingsScreen(onBack = { navController.popBackStack() })
+            SettingsScreen(
+                onBack = { navController.popBackStack() },
+                onOpenAutofillSettings = { navController.navigate(AutofillSettingsRoute) },
+            )
+        }
+        composable<AutofillSettingsRoute> {
+            AutofillSettingsScreen(onBack = { navController.popBackStack() })
         }
         composable<AddVaultRoute> {
             AddVaultScreen(

@@ -32,12 +32,6 @@ object VaultixPreferencesDefaults {
 
     /** 主题模式（对齐 Bastion themeMode：system / light / dark）。 */
     const val THEME_MODE = "system"
-
-    /**
-     * 验证码通知在通知栏保留的总秒数（对齐 Bastion `otpNotificationDuration` 默认 30s）。
-     * 到期自动收起并停止前台服务。
-     */
-    const val OTP_NOTIFICATION_DURATION_SECONDS = 30
 }
 
 /**
@@ -62,8 +56,6 @@ class VaultixPreferences @Inject constructor(
         val OLED_PURE_BLACK = booleanPreferencesKey("oled_pure_black")
         val AUTOFILL_SAVE_PROMPT = booleanPreferencesKey("autofill_save_prompt")
         val AUTO_COPY_TOTP = booleanPreferencesKey("auto_copy_totp")
-        val OTP_NOTIFICATION_ENABLED = booleanPreferencesKey("otp_notification_enabled")
-        val OTP_NOTIFICATION_DURATION = intPreferencesKey("otp_notification_duration")
 
         /**
          * 自动锁定档位（分钟，语义对齐 Bastion autoLockMinutes）：
@@ -127,22 +119,6 @@ class VaultixPreferences @Inject constructor(
      */
     val autoCopyTotp: Flow<Boolean> =
         safeData.map { it[AUTO_COPY_TOTP] ?: true }
-
-    /**
-     * 填充后在通知栏实时展示验证码（对齐 Bastion `otpNotificationEnabled`，默认关闭）。
-     *
-     * 这是「自动复制到剪贴板」之外的另一种验证码交付方式：通知每秒刷新当前码并带倒计时，
-     * 用户需要时点一下才复制——避免在第一步登录时就把验证码塞进剪贴板（多此一举）。
-     * 与 [autoCopyTotp] **相互独立**，两者都开则既弹通知也复制。
-     */
-    val otpNotificationEnabled: Flow<Boolean> =
-        safeData.map { it[OTP_NOTIFICATION_ENABLED] ?: false }
-
-    /** 验证码通知在通知栏保留的总秒数（对齐 Bastion `otpNotificationDuration`）。 */
-    val otpNotificationDuration: Flow<Int> =
-        safeData.map {
-            it[OTP_NOTIFICATION_DURATION] ?: VaultixPreferencesDefaults.OTP_NOTIFICATION_DURATION_SECONDS
-        }
 
     val defaultVaultId: Flow<String?> = safeData.map { it[DEFAULT_VAULT_ID] }
 
@@ -219,16 +195,6 @@ class VaultixPreferences @Inject constructor(
     /** 自动填充后自动复制验证码开关。 */
     suspend fun setAutoCopyTotp(enabled: Boolean) {
         dataStore.edit { it[AUTO_COPY_TOTP] = enabled }
-    }
-
-    /** 填充后在通知栏实时展示验证码开关。 */
-    suspend fun setOtpNotificationEnabled(enabled: Boolean) {
-        dataStore.edit { it[OTP_NOTIFICATION_ENABLED] = enabled }
-    }
-
-    /** 验证码通知展示时长（秒）。 */
-    suspend fun setOtpNotificationDuration(seconds: Int) {
-        dataStore.edit { it[OTP_NOTIFICATION_DURATION] = seconds }
     }
 
     suspend fun setDefaultVaultId(id: String?) {

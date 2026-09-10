@@ -48,12 +48,10 @@ import dagger.hilt.android.AndroidEntryPoint
 import io.vaultix.common.OtpUriParser
 import io.vaultix.common.TotpGenerator
 import io.vaultix.datastore.VaultixPreferences
-import io.vaultix.datastore.VaultixPreferencesDefaults
 import io.vaultix.domain.VaultRepository
 import io.vaultix.vaultix.MainActivity
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.autofill.engine.AutofillDatasets
-import io.vaultix.vaultix.autofill.otp.OtpNotificationService
 import io.vaultix.vaultix.ui.common.BiometricPrompter
 import io.vaultix.vaultix.ui.theme.VaultixTheme
 import io.vaultix.vaultix.util.VaultixClipboard
@@ -248,10 +246,11 @@ class AutofillActivity : FragmentActivity() {
     }
 
     /**
-     * 回填 Dataset 后交付验证码：按用户偏好交付，两者独立可并行——
-     * - [VaultixPreferences.otpNotificationEnabled]：通知栏实时展示（每秒刷新 + 倒计时，
-     *   点一下才复制），**不抢剪贴板**；
-     * - [VaultixPreferences.autoCopyTotp]：直接把当前验证码放进剪贴板。
+     * 回填 Dataset 后把验证码复制到剪贴板（页面没有验证码框时的 2FA 第二步）。
+     *
+     * 保持**最简链路**：识别到条目 → 填密码 → 验证码进剪贴板，不做额外的通知/常驻服务。
+     * 复制动作仍受 [VaultixPreferences.autoCopyTotp] 门控（此前该开关只影响是否挂认证意图、
+     * 没门控复制本身，是个既有 bug）。
      *
      * 复制走 [VaultixClipboard]（安全剪贴板：IS_SENSITIVE + 按偏好自动清除），
      * 并用 **ProcessLifecycleOwner** 作用域——本 Activity 会立刻 finish()，
@@ -260,18 +259,7 @@ class AutofillActivity : FragmentActivity() {
     private fun deliverDatasetAndDeliverTotp(title: String, subtitle: String) {
         deliverDataset(title, subtitle)
         val secret = AutofillIntents.totpSecretOf(intent) ?: return
-        val label = title.ifBlank { subtitle }
         ProcessLifecycleOwner.get().lifecycleScope.launch(Dispatchers.IO) {
-            if (runCatching { prefs.otpNotificationEnabled.first() }.getOrDefault(false)) {
-                val duration = runCatching { prefs.otpNotificationDuration.first() }
-                    .getOrDefault(VaultixPreferencesDefaults.OTP_NOTIFICATION_DURATION_SECONDS)
-                OtpNotificationService.start(
-                    context = applicationContext,
-                    otpUri = secret,
-                    label = label,
-                    durationSeconds = duration,
-                )
-            }
             if (!runCatching { prefs.autoCopyTotp.first() }.getOrDefault(false)) return@launch
             val code = runCatching {
                 OtpUriParser.parse(secret)?.let { TotpGenerator.generate(it) }

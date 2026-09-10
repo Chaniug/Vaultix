@@ -16,6 +16,10 @@ data object AddVaultRoute
 @Serializable
 data object SettingsRoute
 
+/** 自动填充二级设置页（设置首页「自动填充」入口进入；对齐 Bastion 的嵌套结构）。 */
+@Serializable
+data object AutofillSettingsRoute
+
 @Serializable
 data class UnlockRoute(val vaultId: String)
 

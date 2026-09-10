@@ -24,6 +24,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Contrast
 import androidx.compose.material.icons.filled.DarkMode
@@ -86,6 +87,7 @@ import io.vaultix.vaultix.util.CredentialProviderStatus
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit,
+    onOpenAutofillSettings: () -> Unit,
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -161,11 +163,8 @@ fun SettingsScreen(
             AppearanceSection(viewModel, dynamicColor = state.dynamicColor)
             DataSection(viewModel)
 
-            // ---- 自动填充（M2-a：系统 AutofillService 入口） ----
-            AutofillSection(viewModel)
-
-            // ---- 验证器（对齐 Bastion「验证器」分组：通知 / 时长 / 自动复制） ----
-            OtpSection(viewModel)
+            // ---- 自动填充（M2-a：系统 AutofillService 入口 → 二级设置页） ----
+            AutofillSection(onOpenAutofillSettings = onOpenAutofillSettings)
 
             // ---- 关于 ----
             SettingsGroupTitle(stringResource(R.string.group_about))
@@ -317,251 +316,31 @@ private fun DataSection(viewModel: SettingsViewModel) {
 }
 
 /**
- * 验证器分组（对齐 Bastion「验证器」`autofill_otp_settings_title`）：填充后验证码的三条
- * 交付选项——通知栏实时显示 / 通知展示时长 / 自动复制到剪贴板。
+ * 自动填充分组（M2-a）：设置首页只放一个入口，点进去是二级页
+ * [AutofillSettingsScreen]——对齐 Bastion「设置 → 自动填充」的嵌套结构
+ * （系统设置 / 验证器 / 保存行为）。
  *
- * 拆成两个独立开关的取舍（Bastion 同款）：第一步登录时页面通常**没有**验证码框，此时
- * 「盲复制」纯属多此一举（剪贴板被占，还会被自动清除机制清掉）；通知承载既不抢剪贴板、
- * 又能随时点取。两者互不排斥，可同时开启。
+ * 首页不再平铺具体开关的理由：自动填充相关项已有 5+ 条，平铺会把安全 / 外观 / 数据组
+ * 挤到很下面，而这些项通常只在首次配置时改一次（对齐 Bastion 的信息架构）。
  */
 @Composable
-private fun OtpSection(viewModel: SettingsViewModel) {
-    val context = LocalContext.current
-    val notificationEnabled by viewModel.otpNotificationEnabled.collectAsStateWithLifecycle()
-    val durationSeconds by viewModel.otpNotificationDuration.collectAsStateWithLifecycle()
-    val autoCopyTotp by viewModel.autoCopyTotp.collectAsStateWithLifecycle()
-    var showDurationDialog by rememberSaveable { mutableStateOf(false) }
-
-    SettingsGroupTitle(stringResource(R.string.group_otp))
-    SettingsRow(
-        icon = { Icon(Icons.Filled.Notifications, contentDescription = null) },
-        title = stringResource(R.string.setting_otp_notification),
-        subtitle = stringResource(R.string.setting_otp_notification_desc),
-        trailing = {
-            Switch(
-                checked = notificationEnabled,
-                onCheckedChange = { enabled ->
-                    viewModel.setOtpNotificationEnabled(enabled)
-                    // 开启时顺带送到系统通知设置：Android 13+ 未授权则通知不可见，
-                    // 前台服务会照跑但用户什么都看不到（对齐 Bastion 同款引导）。
-                    if (enabled) openAppNotificationSettings(context)
-                },
-            )
-        },
-    )
-    SettingsRow(
-        icon = { Icon(Icons.Filled.Timer, contentDescription = null) },
-        title = stringResource(R.string.setting_otp_notification_duration),
-        subtitle = stringResource(R.string.setting_otp_notification_duration_value, durationSeconds),
-        onClick = { showDurationDialog = true },
-    )
-    SettingsRow(
-        icon = { Icon(Icons.Filled.ContentCopy, contentDescription = null) },
-        title = stringResource(R.string.setting_auto_copy_totp),
-        subtitle = stringResource(R.string.setting_auto_copy_totp_desc),
-        trailing = {
-            Switch(
-                checked = autoCopyTotp,
-                onCheckedChange = viewModel::setAutoCopyTotp,
-            )
-        },
-    )
-
-    if (showDurationDialog) {
-        OtpDurationDialog(
-            currentSeconds = durationSeconds,
-            onSelect = viewModel::setOtpNotificationDuration,
-            onDismiss = { showDurationDialog = false },
-        )
-    }
-}
-
-/** 验证码通知展示时长档位（秒）。 */
-private val OTP_DURATION_OPTIONS = intArrayOf(10, 30, 60, 120)
-
-/** 单选对话框：验证码通知在通知栏保留多久。 */
-@Composable
-private fun OtpDurationDialog(
-    currentSeconds: Int,
-    onSelect: (Int) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.otp_duration_dialog_title)) },
-        text = {
-            Column {
-                OTP_DURATION_OPTIONS.forEach { seconds ->
-                    SingleChoiceRow(
-                        label = stringResource(R.string.setting_otp_notification_duration_value, seconds),
-                        selected = seconds == currentSeconds,
-                        onClick = {
-                            onSelect(seconds)
-                            onDismiss()
-                        },
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.action_cancel))
-            }
-        },
-    )
-}
-
-/** 打开本应用的系统通知设置页（引导用户授权通知，否则验证码通知不可见）。 */
-private fun openAppNotificationSettings(context: Context) {
-    val direct = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
-        .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
-    try {
-        context.startActivity(direct)
-    } catch (_: ActivityNotFoundException) {
-        context.startActivity(
-            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
-                .setData(Uri.fromParts("package", context.packageName, null)),
-        )
-    }
-}
-
-/**
- * 自动填充分组（M2-a）：入口仅做一件事——跳到系统「自动填充」设置，
- * 让用户把 Vaultix 选为默认自动填充服务（OS 级开关，App 内无法自行启用）。
- * 具体的填充行为（解析/匹配/回填）由 [io.vaultix.vaultix.autofill.VaultixAutofillService] 承担。
- */
-@Composable
-private fun AutofillSection(viewModel: SettingsViewModel) {
-    val context = LocalContext.current
-    val savePrompt by viewModel.autofillSavePrompt.collectAsStateWithLifecycle()
-    var tileUnsupported by rememberSaveable { mutableStateOf(false) }
-    // 凭据提供商启用状态：只读检测 + 每次回前台刷新（跳系统设置开启后返回要能看到变化）
-    var credentialProviderEnabled by remember { mutableStateOf(CredentialProviderStatus.isEnabled(context)) }
-    val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                credentialProviderEnabled = CredentialProviderStatus.isEnabled(context)
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
-    }
+private fun AutofillSection(onOpenAutofillSettings: () -> Unit) {
     SettingsGroupTitle(stringResource(R.string.group_autofill))
     SettingsRow(
         icon = { Icon(Icons.Filled.Password, contentDescription = null) },
-        title = stringResource(R.string.setting_autofill),
-        subtitle = stringResource(R.string.setting_autofill_desc),
-        onClick = { openSystemAutofillSettings(context) },
-    )
-    // Credential Provider（Android 14+）：Chromium（Chrome/Edge）取密码/通行密钥只问
-    // 系统已启用的 Provider——与「系统自动填充」同页管理，App 无法自行启用（安全设置）。
-    SettingsRow(
-        icon = { Icon(Icons.Filled.Key, contentDescription = null) },
-        title = stringResource(R.string.setting_credential_provider),
-        subtitle = stringResource(
-            if (credentialProviderEnabled) {
-                R.string.setting_credential_provider_enabled_desc
-            } else {
-                R.string.setting_credential_provider_disabled_desc
-            }
-        ),
-        // 直达「启用本 Provider」的系统界面（Android 14+ createSettingsPendingIntent）；
-        // 低版本退化到自动填充设置页（老路径服务选择）
-        onClick = { openCredentialProviderSettings(context) },
-    )
-    SettingsRow(
-        icon = { Icon(Icons.Filled.Save, contentDescription = null) },
-        title = stringResource(R.string.setting_autofill_save_prompt),
-        subtitle = stringResource(R.string.setting_autofill_save_prompt_desc),
+        title = stringResource(R.string.autofill_settings_entry),
+        subtitle = stringResource(R.string.autofill_settings_entry_desc),
         trailing = {
-            Switch(
-                checked = savePrompt,
-                onCheckedChange = viewModel::setAutofillSavePrompt,
+            Icon(
+                Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         },
+        onClick = onOpenAutofillSettings,
     )
-    // 快捷磁贴：国产输入法大多不支持键盘内联建议、部分国产 ROM 会吞掉系统填充弹窗，
-    // 这条「复制 + 粘贴」路径不依赖输入法和无障碍，是最稳的兜底入口（仅说明如何添加）。
-    SettingsRow(
-        icon = { Icon(Icons.Filled.Lock, contentDescription = null) },
-        title = stringResource(R.string.setting_manual_fill_tile),
-        subtitle = stringResource(R.string.setting_manual_fill_tile_desc),
-        onClick = { requestAddTile(context) { tileUnsupported = true } },
-    )
-    if (tileUnsupported) {
-        AlertDialog(
-            onDismissRequest = { tileUnsupported = false },
-            title = { Text(stringResource(R.string.setting_manual_fill_tile)) },
-            text = { Text(stringResource(R.string.setting_manual_fill_tile_hint)) },
-            confirmButton = {
-                TextButton(onClick = { tileUnsupported = false }) {
-                    Text(stringResource(R.string.action_done))
-                }
-            },
-        )
-    }
 }
 
-/**
- * 把「快速填充」磁贴加到快捷设置。
- *
- * Android 13+ 用系统 API 弹确认框（`StatusBarManager.requestAddTileService`）；
- * 更低版本没有公开 API，只能引导用户手动拖动（系统不允许应用替用户改快捷设置布局，
- * 所以这里**没有也不该有**「开关」——磁贴的增删权限在系统手里）。
- */
-private fun requestAddTile(context: Context, onUnsupported: () -> Unit) {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
-        onUnsupported()
-        return
-    }
-    val manager = context.getSystemService(StatusBarManager::class.java)
-    val added = runCatching {
-        manager.requestAddTileService(
-            ComponentName(context, AutofillTileService::class.java),
-            context.getString(R.string.tile_manual_fill),
-            Icon.createWithResource(context, R.drawable.ic_stat_lock),
-            ContextCompat.getMainExecutor(context),
-        ) { }
-    }.isSuccess
-    if (!added) onUnsupported()
-}
-
-/** 打开系统自动填充设置：优先请求直接把 Vaultix 设为服务，失败回退到服务列表。 */
-private fun openSystemAutofillSettings(context: Context) {
-    // 直接请求把 Vaultix 设为自动填充服务（Settings.ACTION_REQUEST_SET_AUTOFILL_SERVICE, API 26）。
-    val direct = Intent("android.settings.REQUEST_SET_AUTOFILL_SERVICE").apply {
-        data = Uri.parse("package:${context.packageName}")
-    }
-    try {
-        context.startActivity(direct)
-    } catch (_: ActivityNotFoundException) {
-        // 部分 OEM 不支持直接请求，退到自动填充服务选择列表
-        //（Settings.ACTION_AUTOFILL_SERVICE_SETTINGS, API 28）。
-        context.startActivity(Intent("android.settings.AUTOFILL_SERVICE_SETTINGS"))
-    }
-}
-
-/**
- * 打开「启用本应用为 Credential Provider」的系统界面。
- *
- * Android 14+ 用 [androidx.credentials.CredentialManager.createSettingsPendingIntent]
- * ——系统据此展示自家 provider 的启用开关（此前的 REQUEST_SET_AUTOFILL_SERVICE 在
- * 部分设备上无反应，且老自动填充与凭据提供商是两个独立设置项，互不替代）。
- * 低版本没有 Credential Provider，退化到老自动填充设置页。
- */
-private fun openCredentialProviderSettings(context: Context) {
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-        val pendingIntent = runCatching {
-            androidx.credentials.CredentialManager.create(context).createSettingsPendingIntent()
-        }.getOrNull()
-        if (pendingIntent != null) {
-            val sent = runCatching { pendingIntent.send(context, 0, null) }.isSuccess
-            if (sent) return
-        }
-    }
-    openSystemAutofillSettings(context)
-}
 
 /** 单选对话框：主题模式三态（跟随系统 / 浅色 / 深色）。 */
 @Composable
@@ -774,38 +553,6 @@ private fun SingleChoiceRow(label: String, selected: Boolean, onClick: () -> Uni
     }
 }
 
-@Composable
-private fun SettingsGroupTitle(title: String) {
-    Text(
-        text = title,
-        style = MaterialTheme.typography.labelLarge,
-        color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(start = 16.dp, top = 20.dp, bottom = 4.dp),
-    )
-}
-
-@Composable
-private fun SettingsRow(
-    icon: @Composable () -> Unit,
-    title: String,
-    subtitle: String? = null,
-    trailing: (@Composable () -> Unit)? = null,
-    titleColor: androidx.compose.ui.graphics.Color? = null,
-    onClick: (() -> Unit)? = null,
-) {
-    ListItem(
-        headlineContent = {
-            Text(
-                text = title,
-                color = titleColor ?: MaterialTheme.colorScheme.onSurface,
-            )
-        },
-        supportingContent = subtitle?.let { { Text(it) } },
-        leadingContent = icon,
-        trailingContent = trailing,
-        modifier = if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier,
-    )
-}
 
 // ---- 档位文案（Bastion getAutoLockDisplayName 的 Vaultix 版，无 -2 档）----
 
