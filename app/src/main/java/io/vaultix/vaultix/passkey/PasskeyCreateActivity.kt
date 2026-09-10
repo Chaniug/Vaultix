@@ -129,10 +129,11 @@ class PasskeyCreateActivity : FragmentActivity() {
             .orEmpty()
             .ifBlank { userName }
 
+        // ⚠️ 不直接读已收紧的 `callingAppInfo.origin`（1.6.0 起为 internal），走兼容层。
         val providerReq = runCatching {
             PendingIntentHandler.retrieveProviderCreateCredentialRequest(intent)
         }.getOrNull()
-        origin = providerReq?.callingAppInfo?.origin?.takeIf { it.isNotBlank() }
+        origin = CallingAppOrigin.originOrNull(providerReq?.callingAppInfo)
             ?: runCatching { JSONObject(requestJson).optString("origin").takeIf { it.isNotBlank() } }.getOrNull()
             ?: "https://$rpId"
         // clientDataHash 只挂在 CreatePublicKeyCredentialRequest 上（基类没有）→ 需下转型。

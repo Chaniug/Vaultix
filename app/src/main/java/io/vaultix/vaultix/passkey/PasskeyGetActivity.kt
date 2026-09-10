@@ -109,8 +109,9 @@ class PasskeyGetActivity : FragmentActivity() {
 
         // 系统把原始请求（含 callingAppInfo）附在 Intent 上；用其补全 origin。
         // clientDataHash 由 Service 经 extra 透传（option.clientDataHash 在 BEGIN 选项中可用）。
+        // ⚠️ 不直接读已收紧的 `callingAppInfo.origin`（1.6.0 起为 internal），走 CallingAppOrigin 兼容层。
         val providerReq = runCatching { PendingIntentHandler.retrieveProviderGetCredentialRequest(intent) }.getOrNull()
-        val callingOrigin = providerReq?.callingAppInfo?.origin?.takeIf { it.isNotBlank() }
+        val callingOrigin = CallingAppOrigin.originOrNull(providerReq?.callingAppInfo)
         origin = callingOrigin
             ?: runCatching { JSONObject(requestJson).optString("origin").takeIf { it.isNotBlank() } }.getOrNull()
             ?: "https://$rpId"

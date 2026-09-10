@@ -81,7 +81,6 @@ import io.vaultix.vaultix.ui.common.rememberFragmentActivity
 import io.vaultix.vaultix.ui.common.trashAutoDeleteLabel
 import io.vaultix.vaultix.autofill.shortcut.AutofillTileService
 import io.vaultix.vaultix.ui.theme.ThemeMode
-import io.vaultix.vaultix.util.CredentialProviderStatus
 
 /**
  * 设置页（最小版）：安全（自动锁定 / 剪贴板清除 / 防截屏 / 立即锁定）、

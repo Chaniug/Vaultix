@@ -543,6 +543,18 @@ Vaultix 原把 linkedId 当顺序编号（1/2/3/4），**官方是分段编码**
 > 双能力已声明（TYPE_PUBLIC_KEY_CREDENTIAL + TYPE_PASSWORD_CREDENTIAL，8ba40d9）。
 > 设置页「凭据提供商」行已改用 `CredentialManager.createSettingsPendingIntent()`
 > 直达启用界面（REQUEST_SET_AUTOFILL_SERVICE 与凭据提供商是两个独立设置项）。
+>
+> 🟢 **总根因之二（2026-09-10 第二十五轮）**：用户确认**已启用**后 Edge 仍什么都不弹
+> → 逐行对齐 Bitwarden 发现 **`androidx.credentials` 停在 1.3.0 太旧**：
+> 1.5.0 才引入「凭据选择二级 UI 体验」（聚焦输入框时系统才向 Credential Manager
+> 下发请求 + 下拉/键盘建议聚合），**Chromium 在 Android 14+ 呈现凭据条目正依赖它**。
+> 已升 1.6.0（对齐 Bitwarden）。同时补齐：`CallingAppOrigin`（1.6.0 起
+> `callingAppInfo.origin` 为 internal，改用官方 `isOriginPopulated()`+`getOrigin()`）、
+> entry 的 `setAutoSelectAllowed` / `setBiometricPromptData`（**HyperOS/MagicOS 不挂**，
+> 见 `RomCompat`）、`cancellationSignal` 取消监听、密码条目按来源过滤
+> （复用 `BitwardenLikeAutofillMatcher`）、多库部分锁定的解锁引导并存。
+> 另修 provider.xml `settingsActivity`（MainActivity → 新建
+> `CredentialProviderSettingsActivity`）。详见 `.ai/ISSUES.md` 26–28。
 
 现象：Bitwarden / Bastion 能在 Edge 填充，Vaultix 连「密码条目按钮」都不出现。
 **结论：Vaultix 缺 Credential Provider**——不是无障碍、也不是 Chromium 白名单。

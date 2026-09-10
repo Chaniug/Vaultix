@@ -1,9 +1,42 @@
 # 下一步任务清单
 
-> 更新于 2026-09-10（第二十四轮）。Credential Provider 集成闭环（总根因 f474654）。
+> 更新于 2026-09-10（第二十五轮）。**CP「已启用但不弹」总根因之二 = androidx.credentials 版本停太旧。**
 > 审计报告 `Docs/progress/audit/bitwarden-alignment.md`；对齐评估
 > `Docs/progress/bastion-parity-assessment.md`（**注意已过时**——autofill 三批修复未计入）。
 > 状态：`TODO` / `DOING` / `DONE` / `BLOCKED`
+
+## 已完成（第二十五轮 2026-09-10 · CP「已启用但不弹」根因修复 + Bitwarden 逐行对齐）
+
+> 用户真机状态：**系统里凭据提供商已启用，但 Edge 里密码与通行密钥都不弹**。
+> 不抓日志、直接按 Bitwarden 官方实现逐行比对 → 找到多条代码级缺陷，全部修复。
+
+- [x] **★ 总根因之二：`androidx.credentials` 1.3.0 → 1.6.0**（对齐 Bitwarden 1.6.0）
+      —— 1.5.0 才引入「凭据选择二级 UI 体验」（聚焦输入框时向 Credential Manager 下发请求
+      + 下拉/键盘建议聚合），Chromium（Chrome/Edge）在 Android 14+ 呈现凭据条目**正依赖该机制**；
+      停在 1.3.0 → 系统不在聚焦时派发请求 → 「已启用但毫无反应」。
+      原先锁 1.3.0 的理由（「1.6.0 把 callingAppInfo.origin 收紧」）已由 1.6.0 的官方替代
+      `isOriginPopulated()` + `getOrigin()` 消解。
+- [x] **调用来源读取兼容层**：新增 `CallingAppOrigin`（`isOriginPopulated()` + `getOrigin()`
+      安全包装，全 runCatching），替换 `PasskeyGetActivity` / `PasskeyCreateActivity` 里
+      对 `callingAppInfo.origin` 的直读（1.6.0 起该属性为 internal）。
+- [x] **entry 能力补全**：`PasswordCredentialEntry` / `PublicKeyCredentialEntry` 构造补
+      `setAutoSelectAllowed`（仅单候选时允许自动选中）+ 按需 `setBiometricPromptData`；
+      新增 `RomCompat`（HyperOS/MagicOS 判定）—— **魔改 ROM 上不挂**，否则系统可能
+      渲染阶段丢弃整个 entry（仍是「什么都不弹」，比不挂更糟）。
+- [x] **取消监听**：`onBeginGetCredentialRequest` / `onBeginCreateCredentialRequest` 补
+      `cancellationSignal.setOnCancelListener`（对齐 Bitwarden `processGetCredentialRequest`）。
+- [x] **密码条目按来源过滤**：复用 `BitwardenLikeAutofillMatcher`（与老 autofill 同规则），
+      浏览器场景只用 origin 不用包名；来源不可得时不过滤（宁可多列不可漏列）。
+- [x] **部分库锁定的解锁引导**：多库场景下若有库未解锁，凭据通道与认证动作通道**并存**
+      （用户可就地解锁其余库，无需先清空候选）。
+- [x] **⑥ provider settingsActivity**：新建 `CredentialProviderSettingsActivity`
+      （承载 `AutofillSettingsScreen`），`credential_provider.xml` settingsActivity
+      由 `MainActivity` 改指此处（系统凭据管理器的「管理」入口语义）。
+
+⏳ **真机待验证（装含本轮修复的包）**：
+① Edge 聚焦登录框 → 应弹密码条目（**核心闭环**）；② 同一站点有 passkey 时应一并出现；
+③ 点候选完成填充 / 通行密钥断言；④ 系统设置 → 密码和账号 → Vaultix → 齿轮 → 应落在
+自动填充/凭据设置页（非库列表）；⑤ 多库且部分锁定时应同时看到候选与「解锁 Vaultix」。
 
 ## 已完成（第二十四轮 2026-09-10 · Credential Provider 集成闭环 + autofill 打磨）
 

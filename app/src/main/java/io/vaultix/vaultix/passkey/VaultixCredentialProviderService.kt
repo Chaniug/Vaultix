@@ -35,9 +35,13 @@ import android.os.Build
 import android.os.CancellationSignal
 import android.os.OutcomeReceiver
 import androidx.annotation.RequiresApi
+import androidx.biometric.BiometricManager
+import androidx.biometric.BiometricPrompt
 import androidx.credentials.exceptions.ClearCredentialException
+import androidx.credentials.exceptions.CreateCredentialCancellationException
 import androidx.credentials.exceptions.CreateCredentialException
 import androidx.credentials.exceptions.CreateCredentialUnknownException
+import androidx.credentials.exceptions.GetCredentialCancellationException
 import androidx.credentials.exceptions.GetCredentialException
 import androidx.credentials.exceptions.GetCredentialUnknownException
 import androidx.credentials.provider.AuthenticationAction
@@ -48,6 +52,7 @@ import androidx.credentials.provider.BeginGetCredentialRequest
 import androidx.credentials.provider.BeginGetCredentialResponse
 import androidx.credentials.provider.BeginGetPasswordOption
 import androidx.credentials.provider.BeginGetPublicKeyCredentialOption
+import androidx.credentials.provider.BiometricPromptData
 import androidx.credentials.provider.CreateEntry
 import androidx.credentials.provider.CredentialEntry
 import androidx.credentials.provider.CredentialProviderService
@@ -64,6 +69,9 @@ import io.vaultix.model.VaultItemType
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.autofill.AutofillIntents
 import io.vaultix.vaultix.autofill.AutofillLogger
+import io.vaultix.vaultix.autofill.engine.AutofillCredentialMapper
+import io.vaultix.vaultix.autofill.match.BitwardenLikeAutofillMatcher
+import io.vaultix.vaultix.autofill.match.UriMatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -71,6 +79,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
 import org.json.JSONObject
+import javax.crypto.Cipher
 import javax.inject.Inject
 
 @RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
@@ -95,10 +104,12 @@ class VaultixCredentialProviderService : CredentialProviderService() {
         cancellationSignal: CancellationSignal,
         callback: OutcomeReceiver<BeginGetCredentialResponse, GetCredentialException>,
     ) {
-        serviceScope.launch {
+        // 对齐 Bitwarden `processGetCredentialRequest`：必须接收取消信号，否则系统
+        // 在用户切走 / 请求超时后仍等待回调，表现为「列表长时间空白后消失」。
+        val job = serviceScope.launch {
             runCatching { buildGetResponse(request) }
                 .onSuccess {
-                    log("GET ok entries=${it.credentialEntries.size}")
+                    log("GET ok entries=${it.credentialEntries.size} actions=${it.authenticationActions.size}")
                     callback.onResult(it)
                 }
                 .onFailure {
@@ -107,6 +118,11 @@ class VaultixCredentialProviderService : CredentialProviderService() {
                     callback.onError(GetCredentialUnknownException(it.message))
                 }
         }
+        cancellationSignal.setOnCancelListener {
+            log("GET cancelled by system")
+            job.cancel()
+            callback.onError(GetCredentialCancellationException("Cancelled"))
+        }
     }
 
     override fun onBeginCreateCredentialRequest(
@@ -114,10 +130,15 @@ class VaultixCredentialProviderService : CredentialProviderService() {
         cancellationSignal: CancellationSignal,
         callback: OutcomeReceiver<BeginCreateCredentialResponse, CreateCredentialException>,
     ) {
-        serviceScope.launch {
+        val job = serviceScope.launch {
             runCatching { buildCreateResponse(request) }
                 .onSuccess { callback.onResult(it) }
                 .onFailure { callback.onError(CreateCredentialUnknownException(it.message)) }
+        }
+        cancellationSignal.setOnCancelListener {
+            log("CREATE cancelled by system")
+            job.cancel()
+            callback.onError(CreateCredentialCancellationException("Cancelled"))
         }
     }
 
@@ -135,14 +156,27 @@ class VaultixCredentialProviderService : CredentialProviderService() {
     private suspend fun buildGetResponse(request: BeginGetCredentialRequest): BeginGetCredentialResponse {
         val pkOptions = request.beginGetCredentialOptions.filterIsInstance<BeginGetPublicKeyCredentialOption>()
         val pwOptions = request.beginGetCredentialOptions.filterIsInstance<BeginGetPasswordOption>()
-        log("GET options pk=${pkOptions.size} pw=${pwOptions.size} total=${request.beginGetCredentialOptions.size}")
+        // 调用来源：Chromium 系浏览器会带 origin（如 https://github.com），普通 App 只有包名。
+        // ⚠️ 该值用于**密码条目的域名过滤**（对齐 Bitwarden filterCiphersForMatches 的
+        // `callingAppInfo.packageName` / origin 口径）。取不到时不做过滤（宁可多列，不可漏列）。
+        val callingAppInfo = request.callingAppInfo
+        val callingOrigin = CallingAppOrigin.originOrNull(callingAppInfo)
+        val callingPackage = callingAppInfo?.packageName
+        log(
+            "GET options pk=${pkOptions.size} pw=${pwOptions.size} " +
+                "total=${request.beginGetCredentialOptions.size} " +
+                "caller=$callingPackage origin=${callingOrigin ?: "-"}",
+        )
         if (pkOptions.isEmpty() && pwOptions.isEmpty()) return BeginGetCredentialResponse.Builder().build()
 
         val unlocked = vaultRepository.observeUnlockedVaultIds().first()
-        log("GET unlocked=${unlocked.size}")
+        // 全库快照用于判断「是否有库仍锁定」（VaultSummary.unlocked 由仓储维护，比自查 unlocked 集合更权威）。
+        val lockedCount = runCatching { vaultRepository.observeVaults().first().count { !it.unlocked } }
+            .getOrDefault(0)
+        log("GET unlocked=${unlocked.size} locked=$lockedCount")
 
         if (unlocked.isEmpty()) {
-            // ⚠️ **库锁定：必须走 `authenticationActions`，而不是往 `credentialEntries` 里塞
+            // ⚠️ **全部库锁定：必须走 `authenticationActions`，而不是往 `credentialEntries` 里塞
             // 一条"解锁"条目。**（此前实现即错在此，导致锁定时点解锁毫无反应。）
             //
             // 对齐 Bitwarden `CredentialProviderProcessorImpl.processGetCredentialRequest`：
@@ -169,7 +203,7 @@ class VaultixCredentialProviderService : CredentialProviderService() {
 
         val entries = mutableListOf<CredentialEntry>()
         for (option in pwOptions) {
-            entries += passwordEntries(option, unlocked)
+            entries += passwordEntries(option, unlocked, callingOrigin, callingPackage)
         }
         for (option in pkOptions) {
             val matched = resolvePasskeys(option, unlocked)
@@ -178,7 +212,15 @@ class VaultixCredentialProviderService : CredentialProviderService() {
                 entries += publicKeyEntry(option, m)
             }
         }
-        return BeginGetCredentialResponse.Builder().setCredentialEntries(entries).build()
+        // 部分库仍锁定时，把「解锁 Vaultix」作为认证动作一起返回（凭据通道与认证动作通道
+        // 可并存）：用户可以就地解锁其余库，无需先清空候选。对齐 Bitwarden 的
+        // 「未解锁账号也纳入解锁引导」语义（Bitwarden 单账号场景下即整库锁定分支）。
+        val actions = if (lockedCount > 0) listOf(unlockAction()) else emptyList()
+        log("GET entries=${entries.size} actions=${actions.size}")
+        return BeginGetCredentialResponse.Builder()
+            .setCredentialEntries(entries)
+            .setAuthenticationActions(actions)
+            .build()
     }
 
     /**
@@ -210,20 +252,64 @@ class VaultixCredentialProviderService : CredentialProviderService() {
         ).build()
     }
 
-    /** 已解锁库的 Login 条目 → PasswordCredentialEntry（不预填明文，点击经 PasswordGetActivity 取密回灌）。 */
+    /**
+     * 已解锁库的 Login 条目 → PasswordCredentialEntry（不预填明文，点击经 PasswordGetActivity 取密回灌）。
+     *
+     * 与通行密钥分支对齐：**按调用来源过滤**（对齐 Bitwarden
+     * `filterCiphersForMatches(matchUri = ...)`）。此前不过滤 → 一打开密码框就列出
+     * 全库几十条无关站点，且浏览器的「只显示相关凭据」预期被打破。
+     *
+     * 过滤器选用 Vaultix 既有的 [BitwardenLikeAutofillMatcher]（同一套 eTLD+1 / 等价域 /
+     * androidapp:// 规则），保证 CP 通道与老 autofill 通道的匹配语义**完全一致**。
+     * origin / 包名都取不到时**不过滤**（宁可多列，不可漏列 —— 用户至少能看到条目）。
+     */
     private suspend fun passwordEntries(
         option: BeginGetPasswordOption,
         unlocked: Set<String>,
+        callingOrigin: String?,
+        callingPackage: String?,
     ): List<CredentialEntry> {
         val result = mutableListOf<CredentialEntry>()
         for (vaultId in unlocked) {
             val items = runCatching { itemRepository.observeItems(vaultId).first() }.getOrDefault(emptyList())
-            for (item in items) {
-                if (!isUsablePasswordItem(item)) continue
-                result += passwordEntry(option, vaultId, item)
+            val logins = items.filter { isUsablePasswordItem(it) }
+            if (logins.isEmpty()) continue
+            val filtered = filterByCaller(logins, callingOrigin, callingPackage)
+            log("GET pw vault=$vaultId usable=${logins.size} matched=${filtered.size}")
+            for (item in filtered) {
+                result += passwordEntry(option, vaultId, item, filtered.size)
             }
         }
         return result
+    }
+
+    /**
+     * 按调用来源过滤登录条目。
+     *
+     * [callingOrigin] 形如 `https://github.com`（浏览器）；[callingPackage] 形如
+     * `com.microsoft.emmx`（浏览器自身包名，或普通 App 包名）。两者都为空白时返回原列表。
+     *
+     * ⚠️ 浏览器场景**只用 origin 不用包名**：包名是浏览器自己（Edge/Chrome），拿它去匹配
+     * 条目 URI 会全部落空（条目存的是网站 URI，不是浏览器包名）。
+     */
+    private fun filterByCaller(
+        logins: List<VaultItem>,
+        callingOrigin: String?,
+        callingPackage: String?,
+    ): List<VaultItem> {
+        val webDomain = callingOrigin?.let { UriMatcher.hostOf(it) }
+        val packageForMatch = if (webDomain.isNullOrBlank()) callingPackage else null
+        if (webDomain.isNullOrBlank() && packageForMatch.isNullOrBlank()) return logins
+
+        val byId = logins.associateBy { it.id }
+        val credentials = logins.map { AutofillCredentialMapper.toCredential(it.id, it) }
+        val matched = BitwardenLikeAutofillMatcher.match(
+            credentials = credentials,
+            packageName = packageForMatch,
+            webDomain = webDomain,
+        )
+        // 匹配器返回按相关度排序的结果，按其 itemId 还原为 VaultItem。
+        return matched.mapNotNull { byId[it.itemId] }
     }
 
     private fun isUsablePasswordItem(item: VaultItem): Boolean {
@@ -235,6 +321,7 @@ class VaultixCredentialProviderService : CredentialProviderService() {
         option: BeginGetPasswordOption,
         vaultId: String,
         item: VaultItem,
+        siblingCount: Int,
     ): CredentialEntry {
         val intent = PasskeyProviderIntents.passwordGetIntent(this, vaultId, item.id)
         val pendingIntent = PendingIntent.getActivity(
@@ -244,10 +331,13 @@ class VaultixCredentialProviderService : CredentialProviderService() {
             PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         val username = item.username.ifBlank { item.title }
-        return PasswordCredentialEntry.Builder(this, username, pendingIntent, option)
+        val builder = PasswordCredentialEntry.Builder(this, username, pendingIntent, option)
             .setDisplayName(item.title.ifBlank { item.username })
+            // 对齐 Bitwarden：仅当只有一条候选时允许系统自动选中，避免多条时误填。
+            .setAutoSelectAllowed(siblingCount == 1)
             .setIcon(Icon.createWithResource(this, R.drawable.ic_passkey))
-            .build()
+        applyBiometricPromptDataIfSupported(builder)
+        return builder.build()
     }
 
     /** 跨已解锁库扁平化所有登录条目的 fido2，按 rpId（+ allowCredentials）匹配。 */
@@ -331,11 +421,53 @@ class VaultixCredentialProviderService : CredentialProviderService() {
             PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         val username = m.credential.userName.ifBlank { m.loginTitle.ifBlank { m.credential.rpName } }
-        return PublicKeyCredentialEntry.Builder(this, username, pendingIntent, option)
+        val builder = PublicKeyCredentialEntry.Builder(this, username, pendingIntent, option)
             .setDisplayName(m.credential.rpName.ifBlank { m.credential.rpId })
             .setIcon(Icon.createWithResource(this, R.drawable.ic_passkey))
-            .build()
+        applyBiometricPromptDataIfSupported(builder)
+        return builder.build()
     }
+
+    // ===================== entry 能力增强 =====================
+
+    /**
+     * 按需给凭据条目附加 `BiometricPromptData`（Android 15+ 系统层生物识别流程）。
+     *
+     * 对齐 Bitwarden `setBiometricPromptDataIfSupported`：**仅当 ROM 支持时才挂**——
+     * 小米 HyperOS / 荣耀 MagicOS 等魔改 ROM 挂上后可能导致系统在渲染阶段丢弃整个 entry
+     * （表现仍是「浏览器里什么都不弹」，比不挂更糟）。判定见 [RomCompat]。
+     *
+     * 另：Vaultix 的库密钥只在内存，没有可绑定到条目的 Keystore cipher（见
+     * [credentialEntryCipher] 返回 null），因此这里实际落到「不挂」分支，设备验证仍由
+     * 点击后的 Activity 完成 —— 与 Vaultix 既有行为一致，只是补齐了扩展点。
+     */
+    private fun applyBiometricPromptDataIfSupported(builder: PasswordCredentialEntry.Builder): PasswordCredentialEntry.Builder {
+        val cipher = credentialEntryCipher()
+        return if (RomCompat.biometricPromptDataSupported && cipher != null) {
+            builder.setBiometricPromptData(buildPromptDataWithCipher(cipher))
+        } else {
+            log("GET entry: biometricPromptData skipped (rom=${Build.MANUFACTURER} sdk=${Build.VERSION.SDK_INT})")
+            builder
+        }
+    }
+
+    private fun applyBiometricPromptDataIfSupported(
+        builder: PublicKeyCredentialEntry.Builder,
+    ): PublicKeyCredentialEntry.Builder {
+        val cipher = credentialEntryCipher()
+        return if (RomCompat.biometricPromptDataSupported && cipher != null) {
+            builder.setBiometricPromptData(buildPromptDataWithCipher(cipher))
+        } else {
+            builder
+        }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.VANILLA_ICE_CREAM)
+    private fun buildPromptDataWithCipher(cipher: Cipher): BiometricPromptData =
+        BiometricPromptData.Builder()
+            .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
+            .setCryptoObject(BiometricPrompt.CryptoObject(cipher))
+            .build()
 
     // ===================== CREATE =====================
 

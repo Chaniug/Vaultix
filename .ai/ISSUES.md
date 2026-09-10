@@ -211,3 +211,57 @@ debug(preview) 与 release 可互相覆盖安装的**硬性前提**：
 - **解法**：投递推迟到 **onResume**（一次性 guard）；launchMode 改 standard、
   认证意图不带 NEW_TASK（引导型解锁/搜索意图才在调用点补 NEW_TASK）
 - **判据**：认证 Activity 必须走完生命周期再返回结果（对齐 Bitwarden/Bastion 认证宿主）
+
+## 26. CP 已启用但 Edge/Chrome 仍「什么都不弹」——androidx.credentials 版本停太旧（2026-09-10，总根因之二 P0）
+
+- **现象**：用户确认系统里 Vaultix 凭据提供商**已启用**（设置 → 密码和账号可见且打勾），
+  但 Edge/Chrome 聚焦登录框时**密码条目与通行密钥都不出现**；老路径（Via 等 WebView）
+  正常。系统侧无任何报错，应用侧 `onBeginGetCredentialRequest` 从不被调用。
+- **根因**：`androidx.credentials` 被锁在 **1.3.0**，而**1.5.0 才引入「凭据选择二级 UI 体验」**
+  —— 应用可在登录时刻把 `GetCredentialRequest` 与具体输入框关联，用户聚焦该框时系统才
+  向 Credential Manager 下发请求，候选以键盘上方/下拉建议形式聚合展示。Chromium
+  （Chrome/Edge）在 Android 14+ 呈现凭据条目**正依赖该机制**。停在 1.3.0 → 系统不会
+  在聚焦时派发请求 → 表现为「已启用但毫无反应」。
+  - 附带缺失：`CredentialEntry.setBiometricPromptData`（1.5.0 引入，`@RequiresApi(35)`），
+    Android 15+ 系统渲染条目所需（Bitwarden 1.6.0 必挂）。
+  - **锁 1.3.0 的原始理由是错的**：当时记「1.6.0 把 `CallingAppInfo.origin` 收紧为
+    internal，读它会编译失败」。1.6.0 实际提供了官方替代读法
+    `CallingAppInfo.isOriginPopulated()` + `getOrigin()` —— 不该为绕一个 API 变更而退到
+    有功能缺陷的版本。
+- **解法**：
+  1. `libs.versions.toml` `credential` 1.3.0 → **1.6.0**（对齐 Bitwarden）；
+  2. 新增 `CallingAppOrigin`（`isOriginPopulated()` + `getOrigin()` 安全包装），
+     替换 `PasskeyGetActivity` / `PasskeyCreateActivity` 里对 `callingAppInfo.origin` 的直读；
+  3. entry 构造补 `setAutoSelectAllowed` + 按需 `setBiometricPromptData`；
+  4. 两个 process 方法补 `cancellationSignal.setOnCancelListener`（对齐 Bitwarden）。
+- **厂商 ROM 陷阱**：`setBiometricPromptData` **小米 HyperOS 已知不兼容**（Bitwarden 原文），
+  荣耀 MagicOS 同族魔改风险相同 —— 挂上可能导致系统在渲染阶段丢弃整个 entry，
+  表现**仍是「什么都不弹」**（比不挂更糟）。故新增 `RomCompat` 判定，非
+  HyperOS/MagicOS 且 API ≥ 35 才挂。
+- **判据**：升级后聚焦 Edge 登录框应能看到条目；`logcat -s VaultixAutofill` 应出现
+  `GET options pk=.. pw=.. caller=com.microsoft.emmx origin=https://...`。
+  **教训：系统集成能力依赖的 androidx 版本不能凭「能编译」就锁死，要对照官方 release notes 确认功能引入版本。**
+
+## 27. CP 密码条目不做来源过滤 → 列全库无关站点（2026-09-10）
+
+- **现象**：Edge 密码框可能列出几十条与当前网站无关的登录条目；且浏览器的
+  「只展示相关凭据」预期被打破（部分版本会因此判定无有效候选）。
+- **根因**：`passwordEntries` 只遍历已解锁库的**全部** Login 条目，零过滤；
+  而通行密钥分支有 rpId 匹配 —— 两条分支语义不对称。Bitwarden 侧为
+  `filterCiphersForMatches(matchUri = ...)`（按调用来源过滤）。
+- **解法**：复用 Vaultix 既有 `BitwardenLikeAutofillMatcher`（eTLD+1 / 等价域 /
+  androidapp:// 同一套规则），保证 CP 通道与老 autofill 通道语义一致；
+  浏览器场景**只用 origin 不用包名**（包名是浏览器自己，拿去匹配条目 URI 必落空）。
+  origin/包名都取不到时**不过滤**（宁可多列，不可漏列）。
+- **判据**：CP 通道与 autofill 通道对同一条目应给出相同的匹配结论。
+
+## 28. provider.xml settingsActivity 指向 MainActivity（2026-09-10）
+
+- **现象**：系统凭据管理器「密码和账号 → Vaultix → 齿轮」点进来落在 app 主壳（库列表页），
+  看不到任何凭据管理入口。
+- **根因**：`android:settingsActivity` 指向 `MainActivity`（带底部导航的主界面）。
+  系统语义要求它是**能管理本 Provider 凭据的界面**。
+- **解法**：新建 `CredentialProviderSettingsActivity`（承载 `AutofillSettingsScreen`，
+  含自动填充开关 + 凭据提供商状态 + 快速填充磁贴），manifest 注册为 `exported=true`
+  （系统设置应用需跨进程启动），`settingsActivity` 改指此处。
+  对齐 Keyguard / Bastion / Bitwarden 的「独立凭据管理页」做法。

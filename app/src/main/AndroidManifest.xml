@@ -116,6 +116,14 @@
             android:excludeFromRecents="true"
             android:exported="false"
             android:theme="@style/Theme.Vaultix.Transparent" />
+        <!-- Credential Provider 的「设置」入口宿主（provider.xml settingsActivity 指向此处）。
+             系统凭据管理器「密码和账号 → Vaultix → 齿轮」会拉起它。必须是 exported
+             （系统设置应用要能跨进程启动），且用普通主题（是真正的设置页，非透明中转）。 -->
+        <activity
+            android:name=".passkey.CredentialProviderSettingsActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:launchMode="singleTop" />
 
         <!-- Quick Settings「快速填充」磁贴：不依赖输入法内联建议、不依赖无障碍服务，
              点一下进条目搜索 → 复制密码（通知栏可接力复制用户名）→ 回到原 App 粘贴。
