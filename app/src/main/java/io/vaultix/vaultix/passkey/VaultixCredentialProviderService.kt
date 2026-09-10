@@ -377,13 +377,28 @@ class VaultixCredentialProviderService : CredentialProviderService() {
     }
 
     /**
-     * 通行密钥可用性判定（对齐 Bastion `PasskeyCredentialDiscoveryPolicy.isUsable`）。
+     * 通行密钥可用性判定（候选展示阶段）。
      *
-     * 只有 `keyValue`（私钥材料）非空才有签名能力。缺失 keyValue 的记录来自
-     * Bitwarden 官方端的「未完成注册」残留，本身不可修复，**只能不展示**。
+     * **只检查元数据完整性**，不检查 `keyValue`（私钥材料）——对齐 Keyguard
+     * 的做法（检查 `keyAlgorithm` / `keyType` 等元数据字段，签名时才取密钥）。
+     *
+     * 为什么不检查 keyValue：
+     * Bitwarden 官方端创建的 passkey，私钥存在 Android Keystore，**服务端不存
+     * keyValue**。从 Bitwarden 同步过来的 passkey 的 `keyValue` 字段解密后为空
+     * （CipherMapper 第 443 行 `.takeIf { it.isNotBlank() }` 返回 null）。
+     * 如果在候选阶段就要求 keyValue 非空，会把这些 passkey **全部过滤掉**
+     * → Edge 看不到任何通行密钥候选。
+     *
+     * 签名能力的检查推迟到 [PasskeyGetActivity] 真正签名时
+     * （`WebAuthn.parseEcPrivateKey(cred.keyValue)` 已有 null 检查和失败处理）。
+     * 如果用户点了一条没有 keyValue 的候选，会走到 Activity 的失败分支并回
+     * `GetCredentialUnknownException`——虽然点不通，但至少用户**能看到候选**，
+     * 而不是什么都不弹。
      */
     private fun isUsablePasskey(cred: VaultFido2Credential): Boolean =
-        !cred.keyValue.isNullOrBlank() && cred.credentialId.isNotBlank()
+        cred.credentialId.isNotBlank() &&
+            cred.rpId.isNotBlank() &&
+            (cred.keyType.isNullOrBlank() || cred.keyType == "public-key")
 
     /** allowCredentials：[{type,id,transports}] 中的 id（base64url）。 */
     private fun parseAllowedCredentialIds(json: JSONObject): List<String> {
