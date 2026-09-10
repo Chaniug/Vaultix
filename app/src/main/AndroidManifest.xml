@@ -6,6 +6,10 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <!-- 通知：快速填充的「复制用户名」接力通知（Android 13+ 需运行时授权） -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- 验证码通知：填充后在通知栏实时显示 2FA 码，需前台服务承载（每秒刷新 + 倒计时）。
+         API 34+ 起 specialUse 类型必须同时声明 FOREGROUND_SERVICE_SPECIAL_USE。 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <!-- CameraX 需要设备有后置摄像头（自动对焦可选） -->
     <uses-feature
         android:name="android.hardware.camera"
@@ -150,6 +154,19 @@
             android:excludeFromRecents="true"
             android:exported="false"
             android:theme="@style/Theme.Vaultix.Transparent" />
+
+        <!-- 验证码通知（对齐 Bastion AutofillOtpNotificationService）：填充后若页面没有
+             验证码框，用通知栏实时承载验证码（每秒刷新 + 倒计时 + 点按复制最新码），
+             避免「第一步登录就盲复制验证码」的多余动作。仅本应用启动，不导出。
+             ⚠️ specialUse 前台服务必须附带 PROFILE 用途说明，否则 Play 审核与部分 ROM 会拒。 -->
+        <service
+            android:name=".autofill.otp.OtpNotificationService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Shows the current two-factor code during autofill" />
+        </service>
 
         <!-- 快速填充界面：由磁贴拉起（同应用内部，无需 exported） -->
         <activity

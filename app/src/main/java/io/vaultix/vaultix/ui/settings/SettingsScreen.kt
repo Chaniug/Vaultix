@@ -10,6 +10,7 @@ import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.provider.Settings
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -31,6 +32,7 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Password
 import androidx.compose.material.icons.filled.Save
@@ -161,6 +163,9 @@ fun SettingsScreen(
 
             // ---- 自动填充（M2-a：系统 AutofillService 入口） ----
             AutofillSection(viewModel)
+
+            // ---- 验证器（对齐 Bastion「验证器」分组：通知 / 时长 / 自动复制） ----
+            OtpSection(viewModel)
 
             // ---- 关于 ----
             SettingsGroupTitle(stringResource(R.string.group_about))
@@ -312,6 +317,115 @@ private fun DataSection(viewModel: SettingsViewModel) {
 }
 
 /**
+ * 验证器分组（对齐 Bastion「验证器」`autofill_otp_settings_title`）：填充后验证码的三条
+ * 交付选项——通知栏实时显示 / 通知展示时长 / 自动复制到剪贴板。
+ *
+ * 拆成两个独立开关的取舍（Bastion 同款）：第一步登录时页面通常**没有**验证码框，此时
+ * 「盲复制」纯属多此一举（剪贴板被占，还会被自动清除机制清掉）；通知承载既不抢剪贴板、
+ * 又能随时点取。两者互不排斥，可同时开启。
+ */
+@Composable
+private fun OtpSection(viewModel: SettingsViewModel) {
+    val context = LocalContext.current
+    val notificationEnabled by viewModel.otpNotificationEnabled.collectAsStateWithLifecycle()
+    val durationSeconds by viewModel.otpNotificationDuration.collectAsStateWithLifecycle()
+    val autoCopyTotp by viewModel.autoCopyTotp.collectAsStateWithLifecycle()
+    var showDurationDialog by rememberSaveable { mutableStateOf(false) }
+
+    SettingsGroupTitle(stringResource(R.string.group_otp))
+    SettingsRow(
+        icon = { Icon(Icons.Filled.Notifications, contentDescription = null) },
+        title = stringResource(R.string.setting_otp_notification),
+        subtitle = stringResource(R.string.setting_otp_notification_desc),
+        trailing = {
+            Switch(
+                checked = notificationEnabled,
+                onCheckedChange = { enabled ->
+                    viewModel.setOtpNotificationEnabled(enabled)
+                    // 开启时顺带送到系统通知设置：Android 13+ 未授权则通知不可见，
+                    // 前台服务会照跑但用户什么都看不到（对齐 Bastion 同款引导）。
+                    if (enabled) openAppNotificationSettings(context)
+                },
+            )
+        },
+    )
+    SettingsRow(
+        icon = { Icon(Icons.Filled.Timer, contentDescription = null) },
+        title = stringResource(R.string.setting_otp_notification_duration),
+        subtitle = stringResource(R.string.setting_otp_notification_duration_value, durationSeconds),
+        onClick = { showDurationDialog = true },
+    )
+    SettingsRow(
+        icon = { Icon(Icons.Filled.ContentCopy, contentDescription = null) },
+        title = stringResource(R.string.setting_auto_copy_totp),
+        subtitle = stringResource(R.string.setting_auto_copy_totp_desc),
+        trailing = {
+            Switch(
+                checked = autoCopyTotp,
+                onCheckedChange = viewModel::setAutoCopyTotp,
+            )
+        },
+    )
+
+    if (showDurationDialog) {
+        OtpDurationDialog(
+            currentSeconds = durationSeconds,
+            onSelect = viewModel::setOtpNotificationDuration,
+            onDismiss = { showDurationDialog = false },
+        )
+    }
+}
+
+/** 验证码通知展示时长档位（秒）。 */
+private val OTP_DURATION_OPTIONS = intArrayOf(10, 30, 60, 120)
+
+/** 单选对话框：验证码通知在通知栏保留多久。 */
+@Composable
+private fun OtpDurationDialog(
+    currentSeconds: Int,
+    onSelect: (Int) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.otp_duration_dialog_title)) },
+        text = {
+            Column {
+                OTP_DURATION_OPTIONS.forEach { seconds ->
+                    SingleChoiceRow(
+                        label = stringResource(R.string.setting_otp_notification_duration_value, seconds),
+                        selected = seconds == currentSeconds,
+                        onClick = {
+                            onSelect(seconds)
+                            onDismiss()
+                        },
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.action_cancel))
+            }
+        },
+    )
+}
+
+/** 打开本应用的系统通知设置页（引导用户授权通知，否则验证码通知不可见）。 */
+private fun openAppNotificationSettings(context: Context) {
+    val direct = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+        .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+    try {
+        context.startActivity(direct)
+    } catch (_: ActivityNotFoundException) {
+        context.startActivity(
+            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                .setData(Uri.fromParts("package", context.packageName, null)),
+        )
+    }
+}
+
+/**
  * 自动填充分组（M2-a）：入口仅做一件事——跳到系统「自动填充」设置，
  * 让用户把 Vaultix 选为默认自动填充服务（OS 级开关，App 内无法自行启用）。
  * 具体的填充行为（解析/匹配/回填）由 [io.vaultix.vaultix.autofill.VaultixAutofillService] 承担。
@@ -320,7 +434,6 @@ private fun DataSection(viewModel: SettingsViewModel) {
 private fun AutofillSection(viewModel: SettingsViewModel) {
     val context = LocalContext.current
     val savePrompt by viewModel.autofillSavePrompt.collectAsStateWithLifecycle()
-    val autoCopyTotp by viewModel.autoCopyTotp.collectAsStateWithLifecycle()
     var tileUnsupported by rememberSaveable { mutableStateOf(false) }
     // 凭据提供商启用状态：只读检测 + 每次回前台刷新（跳系统设置开启后返回要能看到变化）
     var credentialProviderEnabled by remember { mutableStateOf(CredentialProviderStatus.isEnabled(context)) }
@@ -365,17 +478,6 @@ private fun AutofillSection(viewModel: SettingsViewModel) {
             Switch(
                 checked = savePrompt,
                 onCheckedChange = viewModel::setAutofillSavePrompt,
-            )
-        },
-    )
-    SettingsRow(
-        icon = { Icon(Icons.Filled.Timer, contentDescription = null) },
-        title = stringResource(R.string.setting_auto_copy_totp),
-        subtitle = stringResource(R.string.setting_auto_copy_totp_desc),
-        trailing = {
-            Switch(
-                checked = autoCopyTotp,
-                onCheckedChange = viewModel::setAutoCopyTotp,
             )
         },
     )

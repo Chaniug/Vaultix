@@ -48,10 +48,12 @@ import dagger.hilt.android.AndroidEntryPoint
 import io.vaultix.common.OtpUriParser
 import io.vaultix.common.TotpGenerator
 import io.vaultix.datastore.VaultixPreferences
+import io.vaultix.datastore.VaultixPreferencesDefaults
 import io.vaultix.domain.VaultRepository
 import io.vaultix.vaultix.MainActivity
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.autofill.engine.AutofillDatasets
+import io.vaultix.vaultix.autofill.otp.OtpNotificationService
 import io.vaultix.vaultix.ui.common.BiometricPrompter
 import io.vaultix.vaultix.ui.theme.VaultixTheme
 import io.vaultix.vaultix.util.VaultixClipboard
@@ -132,7 +134,7 @@ class AutofillActivity : FragmentActivity() {
         // 一次性 guard：onResume 可能被对话框等打断重入，不得重复投递。
         if (!copyTotpDelivered && AutofillIntents.modeOf(intent) == AutofillIntents.MODE_COPY_TOTP) {
             copyTotpDelivered = true
-            deliverDatasetAndCopyTotp(
+            deliverDatasetAndDeliverTotp(
                 AutofillIntents.titleOf(intent),
                 AutofillIntents.subtitleOf(intent),
             )
@@ -246,16 +248,31 @@ class AutofillActivity : FragmentActivity() {
     }
 
     /**
-     * 回填 Dataset 后自动复制验证码（页面没有验证码框时的 2FA 第二步）。
+     * 回填 Dataset 后交付验证码：按用户偏好交付，两者独立可并行——
+     * - [VaultixPreferences.otpNotificationEnabled]：通知栏实时展示（每秒刷新 + 倒计时，
+     *   点一下才复制），**不抢剪贴板**；
+     * - [VaultixPreferences.autoCopyTotp]：直接把当前验证码放进剪贴板。
      *
      * 复制走 [VaultixClipboard]（安全剪贴板：IS_SENSITIVE + 按偏好自动清除），
      * 并用 **ProcessLifecycleOwner** 作用域——本 Activity 会立刻 finish()，
      * 用 lifecycleScope 会来不及跑完（Bastion 踩过的坑）。
      */
-    private fun deliverDatasetAndCopyTotp(title: String, subtitle: String) {
+    private fun deliverDatasetAndDeliverTotp(title: String, subtitle: String) {
         deliverDataset(title, subtitle)
         val secret = AutofillIntents.totpSecretOf(intent) ?: return
-        ProcessLifecycleOwner.get().lifecycleScope.launch(Dispatchers.Default) {
+        val label = title.ifBlank { subtitle }
+        ProcessLifecycleOwner.get().lifecycleScope.launch(Dispatchers.IO) {
+            if (runCatching { prefs.otpNotificationEnabled.first() }.getOrDefault(false)) {
+                val duration = runCatching { prefs.otpNotificationDuration.first() }
+                    .getOrDefault(VaultixPreferencesDefaults.OTP_NOTIFICATION_DURATION_SECONDS)
+                OtpNotificationService.start(
+                    context = applicationContext,
+                    otpUri = secret,
+                    label = label,
+                    durationSeconds = duration,
+                )
+            }
+            if (!runCatching { prefs.autoCopyTotp.first() }.getOrDefault(false)) return@launch
             val code = runCatching {
                 OtpUriParser.parse(secret)?.let { TotpGenerator.generate(it) }
             }.getOrNull() ?: return@launch

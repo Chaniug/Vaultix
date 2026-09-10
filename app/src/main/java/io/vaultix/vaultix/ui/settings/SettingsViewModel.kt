@@ -128,6 +128,30 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { preferences.setAutoCopyTotp(enabled) }
     }
 
+    /** 填充后在通知栏实时展示验证码（默认关；对齐 Bastion otpNotificationEnabled）。 */
+    val otpNotificationEnabled: StateFlow<Boolean> = preferences.otpNotificationEnabled
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = false,
+        )
+
+    fun setOtpNotificationEnabled(enabled: Boolean) {
+        viewModelScope.launch { preferences.setOtpNotificationEnabled(enabled) }
+    }
+
+    /** 验证码通知展示时长（秒）。 */
+    val otpNotificationDuration: StateFlow<Int> = preferences.otpNotificationDuration
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = VaultixPreferencesDefaults.OTP_NOTIFICATION_DURATION_SECONDS,
+        )
+
+    fun setOtpNotificationDuration(seconds: Int) {
+        viewModelScope.launch { preferences.setOtpNotificationDuration(seconds) }
+    }
+
     fun setAutoLockMinutes(minutes: Int) {
         viewModelScope.launch { preferences.setAutoLockMinutes(minutes) }
     }
