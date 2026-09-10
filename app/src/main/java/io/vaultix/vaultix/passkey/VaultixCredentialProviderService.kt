@@ -40,10 +40,10 @@ import androidx.credentials.exceptions.CreateCredentialException
 import androidx.credentials.exceptions.CreateCredentialUnknownException
 import androidx.credentials.exceptions.GetCredentialException
 import androidx.credentials.exceptions.GetCredentialUnknownException
+import androidx.credentials.provider.AuthenticationAction
 import androidx.credentials.provider.BeginCreateCredentialRequest
 import androidx.credentials.provider.BeginCreateCredentialResponse
 import androidx.credentials.provider.BeginCreatePublicKeyCredentialRequest
-import androidx.credentials.provider.BeginGetCredentialOption
 import androidx.credentials.provider.BeginGetCredentialRequest
 import androidx.credentials.provider.BeginGetCredentialResponse
 import androidx.credentials.provider.BeginGetPasswordOption
@@ -140,17 +140,34 @@ class VaultixCredentialProviderService : CredentialProviderService() {
 
         val unlocked = vaultRepository.observeUnlockedVaultIds().first()
         log("GET unlocked=${unlocked.size}")
-        val entries = mutableListOf<CredentialEntry>()
 
         if (unlocked.isEmpty()) {
-            // 库锁定 → 复用 AutofillActivity 解锁链（引导用户在 Vaultix 解锁，回来重新触发）。
-            // 取首个可用选项生成对应类型的「解锁」入口。
-            val opt = (pkOptions.firstOrNull() ?: pwOptions.firstOrNull())
-                ?: return BeginGetCredentialResponse.Builder().build()
-            entries += unlockEntry(opt)
-            return BeginGetCredentialResponse.Builder().setCredentialEntries(entries).build()
+            // ⚠️ **库锁定：必须走 `authenticationActions`，而不是往 `credentialEntries` 里塞
+            // 一条"解锁"条目。**（此前实现即错在此，导致锁定时点解锁毫无反应。）
+            //
+            // 对齐 Bitwarden `CredentialProviderProcessorImpl.processGetCredentialRequest`：
+            // ```
+            // if (!userState.activeAccount.isVaultUnlocked) {
+            //     val authenticationAction = AuthenticationAction(
+            //         title = context.getString(BitwardenString.unlock),
+            //         pendingIntent = pendingIntentManager.createFido2UnlockPendingIntent(...),
+            //     )
+            //     callback.onResult(BeginGetCredentialResponse(
+            //         authenticationActions = listOf(authenticationAction)))
+            //     return
+            // }
+            // ```
+            // `credentialEntries` 是**凭据**通道（系统会当作"可以填的东西"处理，要求回灌
+            // `setGetCredentialResponse`）；`authenticationActions` 是**认证动作**通道
+            // （系统渲染为独立的"解锁"操作，不期待凭据回灌）。把解锁项塞进凭据通道
+            // → 系统按凭据语义处理 → 点击后既拿不到凭据、也不是认证动作 → 表现为"点不开"。
+            log("GET locked → authenticationActions")
+            return BeginGetCredentialResponse.Builder()
+                .setAuthenticationActions(listOf(unlockAction()))
+                .build()
         }
 
+        val entries = mutableListOf<CredentialEntry>()
         for (option in pwOptions) {
             entries += passwordEntries(option, unlocked)
         }
@@ -162,6 +179,35 @@ class VaultixCredentialProviderService : CredentialProviderService() {
             }
         }
         return BeginGetCredentialResponse.Builder().setCredentialEntries(entries).build()
+    }
+
+    /**
+     * 库锁定时的解锁动作（`authenticationActions` 通道）。
+     *
+     * 与"把解锁项塞进 credentialEntries"的做法关键区别：本方式**不绑定具体的凭据选项**，
+     * 因为认证动作是"先解锁、再重新发起请求"的两段式流程 —— 系统在用户完成动作后会
+     * 重新调用 `onBeginGetCredentialRequest`，届时库已解锁，正常返回凭据。
+     *
+     * 对齐 Bitwarden `createFido2UnlockPendingIntent`：显式 action + 显式 Activity class，
+     * `FLAG_MUTABLE`，**不加 NEW_TASK**（见其 KDoc 警告）。
+     */
+    private fun unlockAction(): AuthenticationAction {
+        val intent = AutofillIntents.create(
+            context = this,
+            mode = AutofillIntents.MODE_UNLOCK,
+            title = getString(R.string.credential_unlock_title),
+            subtitle = getString(R.string.credential_unlock_subtitle),
+        )
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            REQUEST_UNLOCK_CP,
+            intent,
+            PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        return AuthenticationAction.Builder(
+            getString(R.string.credential_unlock_title),
+            pendingIntent,
+        ).build()
     }
 
     /** 已解锁库的 Login 条目 → PasswordCredentialEntry（不预填明文，点击经 PasswordGetActivity 取密回灌）。 */
@@ -220,6 +266,15 @@ class VaultixCredentialProviderService : CredentialProviderService() {
             for (item in items) {
                 if (item.type != VaultItemType.Login) continue
                 for (cred in item.fido2Credentials) {
+                    // ⚠️ **必须过滤不可用记录**（对齐 Bastion PasskeyCredentialDiscoveryPolicy
+                    // .isUsable：privateKeyAlias 非空才算可用；Vaultix 的等价条件即 keyValue 非空）。
+                    // 真机实证（2026-09-10）：库中存在「只有公钥登记、keyValue 缺失」的残缺 passkey
+                    // （Bitwarden 官方端同步下来的未完成注册残留）。此前不过滤 → 它被当成正常候选
+                    // 列进凭据列表，用户点它必然走不通签名，浏览器的报错文案是
+                    // 「Cannot parse passkey key」——与真正的解析失败**表象相同**，极易误诊为
+                    // 解析器 bug（此前即误判在此）。列出不可用记录本身也是 UX 缺陷：
+                    // 用户会看到一条永远点不通的通行密钥。
+                    if (!isUsablePasskey(cred)) continue
                     if (cred.rpId.equals(rpId, ignoreCase = true) &&
                         (allowed.isEmpty() || allowed.any { idMatches(cred.credentialId, it) })
                     ) {
@@ -230,6 +285,15 @@ class VaultixCredentialProviderService : CredentialProviderService() {
         }
         return result
     }
+
+    /**
+     * 通行密钥可用性判定（对齐 Bastion `PasskeyCredentialDiscoveryPolicy.isUsable`）。
+     *
+     * 只有 `keyValue`（私钥材料）非空才有签名能力。缺失 keyValue 的记录来自
+     * Bitwarden 官方端的「未完成注册」残留，本身不可修复，**只能不展示**。
+     */
+    private fun isUsablePasskey(cred: VaultFido2Credential): Boolean =
+        !cred.keyValue.isNullOrBlank() && cred.credentialId.isNotBlank()
 
     /** allowCredentials：[{type,id,transports}] 中的 id（base64url）。 */
     private fun parseAllowedCredentialIds(json: JSONObject): List<String> {
@@ -271,42 +335,6 @@ class VaultixCredentialProviderService : CredentialProviderService() {
             .setDisplayName(m.credential.rpName.ifBlank { m.credential.rpId })
             .setIcon(Icon.createWithResource(this, R.drawable.ic_passkey))
             .build()
-    }
-
-    /** 库锁定时的「解锁 Vaultix」入口：复用 AutofillActivity 解锁链；按选项类型生成对应 Entry。 */
-    private fun unlockEntry(option: BeginGetCredentialOption): CredentialEntry {
-        val intent = AutofillIntents.create(
-            context = this,
-            mode = AutofillIntents.MODE_UNLOCK,
-            title = getString(R.string.credential_unlock_title),
-            subtitle = getString(R.string.credential_unlock_subtitle),
-        )
-        // ⚠️ Credential Provider 的 entry PendingIntent **必须**是 FLAG_MUTABLE：系统要把最终
-        // 请求追加进 intent extra（官方明文要求）。此前误用 AutofillIntents.pending()（那是
-        // autofill 认证通道，固定 FLAG_IMMUTABLE）→ 系统无法附加请求 → 该条目不可用，
-        // 锁定时整张凭据列表恒空（Edge 表现为「点密码框毫无反应」）。
-        // ⚠️ 且**不得**加 FLAG_ACTIVITY_NEW_TASK（Bastion buildPendingIntent 同款警告）：
-        // 会把宿主 Activity 推进独立任务栈，Credential Manager 收不到回灌结果。
-        val pendingIntent = PendingIntent.getActivity(
-            this,
-            REQUEST_UNLOCK_CP,
-            intent,
-            PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-        )
-        val title = getString(R.string.credential_unlock_title)
-        val subtitle = getString(R.string.credential_unlock_subtitle)
-        val icon = Icon.createWithResource(this, R.drawable.ic_passkey)
-        return when (option) {
-            is BeginGetPasswordOption -> {
-                val entryBuilder = PasswordCredentialEntry.Builder(this, title, pendingIntent, option)
-                entryBuilder.setDisplayName(subtitle).setIcon(icon).build()
-            }
-            is BeginGetPublicKeyCredentialOption -> {
-                val entryBuilder = PublicKeyCredentialEntry.Builder(this, title, pendingIntent, option)
-                entryBuilder.setDisplayName(subtitle).setIcon(icon).build()
-            }
-            else -> throw IllegalArgumentException("Unsupported credential option type")
-        }
     }
 
     // ===================== CREATE =====================
