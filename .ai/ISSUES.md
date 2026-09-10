@@ -301,3 +301,37 @@ debug(preview) 与 release 可互相覆盖安装的**硬性前提**：
 - run `34495532104` 因 #29 的编译错误失败；本轮 `d082e63` 修复后 run `34496366032` **全绿**
   （detekt ✓ / 编码门禁 ✓ / 签名解码 ✓ / Build Debug APK ✓ / 单测非阻塞 ✓），
   预览包已发布：`app-full-debug.apk`（dev-d082e63，31.0 MB）。
+
+## 31. 设置页与 Bastion 的信息架构差距（本轮修复，2026-09-10，be8a5bf）
+
+对 Bastion `AutofillSettingsV2Screen`(1149 行) / `PasskeySettingsScreen`(666 行) /
+`SettingsScreen`(1925 行) 逐项比对后补齐：
+
+- **没有状态卡**：用户分不清「没启用」和「启用了但填不出来」→ 新增三态卡
+  （未启用 errorContainer / 需注意 tertiaryContainer / 正常 primaryContainer）。
+  「需注意」= 密码能填但通行密钥没开（Chromium 半残状态，最常见）。
+- **`AutofillStatusChecker` 的两步判定**：`AutofillManager.hasEnabledAutofillServices()`
+  只回答「系统有没有启用任何服务」，选的是谁分不出来 → 必须再读
+  `Settings.Secure:autofill_service` 按自身类名子串匹配。
+  **读不到值（部分 ROM 对第三方 App 隐藏）时按「已启用」处理**——第一步已确认有服务，
+  把「读不到」报成「未启用」会误导用户反复去系统设置确认。
+- **没有通行密钥入口**：设置页看不到「我到底存了几个通行密钥」，排查 Edge 通行密钥
+  问题全靠猜 → 新增分组显示「已解锁库中：N 个」。显示 0 即定位到同步/解析问题。
+  口径必须写清「已解锁库中」：锁定库密文读不出来，硬统计得 0 会误导成「没存过」。
+- **填充行为无开关**：`MatchConfig` 的两个域匹配参数此前是硬编码默认值 → 提升为用户
+  开关（严格匹配 / 允许子域名匹配），在 `VaultixAutofillService.buildResponse` 生效。
+  **必须是真开关**：装饰性开关比没有开关更糟。
+- **`credential_provider.xml` 的 `settingsSubtitle` 误用标题文案**
+  （`@string/setting_credential_provider` = 「凭据提供商（通行密钥）」），
+  新增 `setting_credential_provider_subtitle` 专用副标题。
+
+### 明确**不**对齐 Bastion 的三项（有意为之）
+
+1. Bastion CP 文案写「通行密钥**和密码**设置」——与其 `credential_provider_config.xml`
+   里「CP 不处理密码」的注释自相矛盾。Vaultix 保持「凭据提供商（通行密钥）」。
+2. Bastion 用 `Intent("android.settings.CREDENTIAL_PROVIDER_SETTINGS")` 跳系统设置，
+   Vaultix 用 `CredentialManager.createSettingsPendingIntent()`（能直达自家 provider
+   的启用开关），不下沉为通用 `ACTION_SETTINGS`。
+3. 不搬 Bastion 的「黑名单 / 屏蔽字段 / 智能标题 / 通知时长 / 密码建议 / 影子校验 /
+   校验诊断」——Vaultix 无对应能力，搬过来只会是点不动的假开关。
+   同理不搬 `PasskeySettingsScreen` 的影子校验/严格校验开关。

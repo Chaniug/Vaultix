@@ -682,3 +682,24 @@ Vaultix 原把 linkedId 当顺序编号（1/2/3/4），**官方是分段编码**
   磁贴 / 通知 / 智能复制才是真正的保底，且**都不需要无障碍权限**。
 - 待办顺序：C 保存流程 `onSaveRequest`（现为空实现）→ B 无障碍注入兜底（最后）→ P0 真机回归。
 
+
+## 设置页对齐 Bastion（2026-09-10，第二十七轮，`be8a5bf`）
+- **核心认知：对齐 ≠ 抄 UI。** Vaultix 的自动填充设置项其实都有，真正缺的是**可读的状态**
+  ——用户分不清「没启用」和「启用了但填不出来」。Bastion 用顶部三态状态卡解决，Vaultix
+  原本完全空白。补状态比再堆十个开关有价值。
+- **三态**：未启用 `errorContainer` / 需注意 `tertiaryContainer` / 正常 `primaryContainer`。
+  「需注意」= 密码能填但通行密钥没开（Chromium 最常见的半残状态，必须显式暴露）。
+- **`AutofillStatusChecker` 两步判定**：`AutofillManager.hasEnabledAutofillServices()`
+  只回答「系统有没有启用任何服务」（选的是谁分不出来）→ 必须再读
+  `Settings.Secure:autofill_service` 按类名子串匹配判「是不是我」。
+  **读不到值（ROM 对第三方 App 隐藏）时按「已启用」**：① 已确认有服务，把「读不到」
+  报成「未启用」会误导用户反复去系统设置确认。
+- **设置页给排查读数**：「通行密钥 → 已解锁库中：N 个」。**显示 0 = 根因在同步/解析
+  （库里压根没 fido2），不在 CP 通道**。统计口径必须写清「已解锁库中」——锁定库读不出
+  密文，硬统计得 0 会误导成「没存过」。
+- **开关必须是真开关**：`严格匹配 → MatchConfig.exactDomainOnly`、
+  `允许子域名匹配 → allowBaseDomainMatch`，都接进 `VaultixAutofillService.buildResponse`。
+  **装饰性开关比没有开关更糟**（用户以为改了生效了）。同理不搬 Bastion 的黑名单/屏蔽字段/
+  智能标题/通知时长/密码建议/影子校验/诊断——Vaultix 无对应能力。
+- **不采纳 Bastion 的「通行密钥和密码」文案**：与其 `credential_provider_config.xml`
+  里「CP 不处理密码、声明了会绕过 Autofill 框架」的注释自相矛盾。

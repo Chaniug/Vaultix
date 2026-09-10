@@ -1,9 +1,58 @@
 # 下一步任务清单
 
-> 更新于 2026-09-10（第二十六轮）。**CI 编译门禁已闭环：`CallingAppInfo.getOrigin()` 需签名命中的 allowList。**
+> 更新于 2026-09-10（第二十七轮）。**设置页已对齐 Bastion：三态状态卡 / 通行密钥分组 /
+> 填充行为真开关。**
 > 审计报告 `Docs/progress/audit/bitwarden-alignment.md`；对齐评估
 > `Docs/progress/bastion-parity-assessment.md`（**注意已过时**——autofill 三批修复未计入）。
 > 状态：`TODO` / `DOING` / `DONE` / `BLOCKED`
+
+## 已完成（第二十七轮 2026-09-10 · 设置页对齐 Bastion）
+
+> 上一轮 `fec4032`（`isUsablePasskey` 放宽为元数据检查）后，用户要求「设置页面对齐 bastion」。
+> 逐项比对 Bastion `AutofillSettingsV2Screen`(1149) / `PasskeySettingsScreen`(666) /
+> `SettingsScreen`(1925) 后补齐，提交 `be8a5bf`。
+
+- [x] **三态状态卡**（移植 Bastion `AutofillSettingsV2Screen` 状态卡）：
+      未启用 `errorContainer` / 需注意 `tertiaryContainer` / 正常 `primaryContainer`。
+      「需注意」= 密码能填但通行密钥没开（Chromium 最常见的半残状态）。
+      顶栏手动刷新 + `ON_RESUME` 自动刷新（系统设置开启后返回立即可见）。
+- [x] **`AutofillStatusChecker`**（新增）：两步判定——
+      ① `AutofillManager.hasEnabledAutofillServices()` 判「系统有没有启用任何服务」
+      （单独用不够：选的是谁分不出来）；② 读 `Settings.Secure:autofill_service`
+      按 `VaultixAutofillService` 类名子串匹配判「是不是我」。
+      **读不到值时按「已启用」处理**：① 已确认有服务，把「ROM 隐藏设置项」误报成
+      「未启用」会误导用户反复去系统设置确认。
+- [x] **通行密钥分组**（设置 → 自动填充 → 通行密钥）：凭据提供商状态行 +
+      「已解锁库中：N 个」+ 特性说明；Android 14 以下整组退化为版本说明。
+      数量是排查「Edge 看不到通行密钥」的关键读数：**显示 0 即定位到同步/解析问题**。
+- [x] **填充行为组（真开关，非装饰）**：`严格匹配 → MatchConfig.exactDomainOnly`、
+      `允许子域名匹配 → MatchConfig.allowBaseDomainMatch`，在
+      `VaultixAutofillService.buildResponse` 生效。浏览器填不出来时关掉严格匹配
+      是成本最低的排查第一步。新增 `VaultixPreferences` 两个键（默认 true / false，
+      与 Bitwarden 一致）。
+- [x] **设置首页**：「数据」→「数据管理」；新增「其他 · 权限管理」
+      （`Settings.ACTION_APPLICATION_DETAILS_SETTINGS`）。
+- [x] **`credential_provider.xml` 副标题修正**：此前误用标题文案
+      `setting_credential_provider`，新增专用 `setting_credential_provider_subtitle`。
+- [x] 清理 `SettingsScreen.kt` 遗留未用 import（`StatusBarManager`/`ComponentName`/
+      `graphics.drawable.Icon`/`Build`/`ContextCompat`/`AutofillTileService`，
+      磁贴逻辑早年已迁到二级页）。
+
+### 明确不对齐 Bastion 的三项（有意为之）
+1. CP 文案：Bastion 写「通行密钥**和密码**设置」，与其 `credential_provider_config.xml`
+   「CP 不处理密码」的注释自相矛盾 → Vaultix 保持「凭据提供商（通行密钥）」。
+2. 跳系统设置：Vaultix 用 `CredentialManager.createSettingsPendingIntent()`（直达自家
+   provider 开关），不下沉为 Bastion 的 `ACTION_SETTINGS`。
+3. 不搬「黑名单 / 屏蔽字段 / 智能标题 / 通知时长 / 密码建议 / 影子校验 / 校验诊断」
+   ——Vaultix 无对应能力，搬过来是点不动的假开关。
+
+⏳ **真机待验证（装 `dev-be8a5bf` 的包）**：
+① 设置 → 自动填充 → 顶部状态卡颜色是否与实际启用状态一致（**这是本次的核心读数**）；
+② 「通行密钥 → 已保存的通行密钥」显示的数量 —— **若为 0，则 Edge 看不到通行密钥
+是因为库里根本没解析出 fido2，而不是 CP 通道问题**；
+③ 通行密钥仍不弹时，把「严格匹配」关掉再试密码填充；
+④ 权限管理能否跳到系统应用信息页。
+
 
 ## 已完成（第二十六轮 2026-09-10 · getOrigin 语义纠正 → CI 全绿）
 
