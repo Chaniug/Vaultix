@@ -57,6 +57,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.credentials.CreatePublicKeyCredentialRequest
 import androidx.credentials.CreatePublicKeyCredentialResponse
 import androidx.credentials.exceptions.CreateCredentialCancellationException
 import androidx.credentials.exceptions.CreateCredentialException
@@ -100,6 +101,13 @@ class PasskeyCreateActivity : FragmentActivity() {
     private lateinit var userDisplayName: String
     private var origin: String = ""
 
+    /**
+     * 是否浏览器发起的创建请求（系统给了 `clientDataHash`）。
+     * 为真时 clientDataJSON 必须逐字节复刻浏览器版（只 {type, challenge, origin}），
+     * 否则 RP 再哈希对不上 → 站点报「验证失败」（见 [io.vaultix.common.WebAuthn.buildClientDataJson]）。
+     */
+    private var browserFlow: Boolean = false
+
     private val unlockedVaultIds = mutableStateOf<List<String>>(emptyList())
     private val vaultNameMap = mutableStateOf<Map<String, String>>(emptyMap())
     private val loginCandidates = mutableStateOf<List<VaultItem>>(emptyList())
@@ -127,6 +135,9 @@ class PasskeyCreateActivity : FragmentActivity() {
         origin = providerReq?.callingAppInfo?.origin?.takeIf { it.isNotBlank() }
             ?: runCatching { JSONObject(requestJson).optString("origin").takeIf { it.isNotBlank() } }.getOrNull()
             ?: "https://$rpId"
+        // clientDataHash 只挂在 CreatePublicKeyCredentialRequest 上（基类没有）→ 需下转型。
+        browserFlow = (providerReq?.callingRequest as? CreatePublicKeyCredentialRequest)
+            ?.clientDataHash != null
 
         if (requestJson.isBlank() || rpId.isBlank()) {
             fail(CreateCredentialUnknownException("Missing create parameters"))
@@ -245,7 +256,13 @@ class PasskeyCreateActivity : FragmentActivity() {
                 val attObj = WebAuthn.buildNoneAttestationObject(authData)
                 val json = JSONObject(requestJson)
                 val challenge = decodeChallenge(json.getString("challenge"))
-                val clientDataBytes = WebAuthn.buildClientDataJson("webauthn.create", challenge, origin)
+                // 浏览器流程同样必须逐字节复刻浏览器版 JSON（不额外带 crossOrigin）
+                val clientDataBytes = WebAuthn.buildClientDataJson(
+                    type = "webauthn.create",
+                    challenge = challenge,
+                    origin = origin,
+                    includeCrossOrigin = !browserFlow,
+                )
                 val userId = json.optJSONObject("user")?.optString("id")?.takeIf { it.isNotBlank() }
                 val cred = VaultFido2Credential(
                     credentialId = WebAuthn.base64Url(key.credentialId),

@@ -108,12 +108,36 @@ object WebAuthn {
             return ecPrivateFromDer(der)
         }
         val raw = runCatching { decodeBase64UrlOrStandard(trimmed) }.getOrNull() ?: return null
-        // 2) 32 字节裸私钥标量
-        if (raw.size == P256_FIELD_BYTES) return ecPrivateFromScalar(raw)
+        // 2) 裸私钥标量：**必须先归一化长度**。BigInteger.toByteArray() 在高位为 1 时多一个
+        //    前导 0x00（33 字节）、值较小时又会丢掉前导 0x00（<32 字节），两种形态在真实
+        //    数据里都存在。若只认「恰好 32 字节」，同一份密钥会随机解析失败（此前
+        //    WebAuthnTest 的随机键用例约半数概率失败，即此因）。
+        normalizeScalar(raw)?.let { return ecPrivateFromScalar(it) }
         // 3) 疑似 PKCS8 DER（SEQUENCE 开头）
         if (raw.size > 2 && raw[0] == 0x30.toByte()) return ecPrivateFromDer(raw)
-        // 4) 裸标量但长度不符：放弃
+        // 4) 既非标量也非 DER：放弃
         return null
+    }
+
+    /**
+     * 把裸私钥标量归一到 P-256 的 32 字节。
+     *
+     * - 33 字节且首字节为 `0x00` → 去掉该前导零（BigInteger 正数补位形态）
+     * - 不足 32 字节 → 左侧补 `0x00`
+     * - 仍超过 32 字节（首字节非零）→ 不是合法 P-256 标量，返回 null 交给 DER 分支
+     */
+    private fun normalizeScalar(raw: ByteArray): ByteArray? {
+        val stripped = if (raw.size > P256_FIELD_BYTES && raw[0] == 0x00.toByte()) {
+            raw.copyOfRange(1, raw.size)
+        } else {
+            raw
+        }
+        return when {
+            stripped.isEmpty() -> null
+            stripped.size > P256_FIELD_BYTES -> null
+            stripped.size == P256_FIELD_BYTES -> stripped
+            else -> ByteArray(P256_FIELD_BYTES - stripped.size) + stripped
+        }
     }
 
     private fun pemToDer(pem: String): ByteArray? {
@@ -170,7 +194,26 @@ object WebAuthn {
     }
 
     /** WebAuthn `clientDataJSON`：依赖方校验 origin 的关键字段。 */
-    fun buildClientDataJson(type: String, challenge: ByteArray, origin: String): ByteArray {
+    /**
+     * 构造 clientDataJSON。
+     *
+     * ⚠️ **浏览器流程（[includeCrossOrigin] = false）必须逐字节等于浏览器自己拼的那串**：
+     * 系统把 `clientDataHash`（= SHA-256(浏览器版 clientDataJSON)）交给 provider 去签名，
+     * 同时**把 provider 返回的 clientDataJSON 原样交给网页**；RP 服务端再对收到的
+     * clientDataJSON 做一次 SHA-256 与已签名的哈希比对。多一个字段就哈希不一致 →
+     * 站点直接报「密钥登录失败 / 验证失败」。浏览器版只有 `{type, challenge, origin}`，
+     * **不含 `crossOrigin`、也不含 `androidPackageName`**（后者的典型受害者是 Microsoft 登录）。
+     * 参考 Bastion `PasskeyAuthActivity.createClientDataJson`（GPL-3.0，同源思路）：
+     * `includeCrossOrigin = !isBrowserFlow`、浏览器分支不传 androidPackageName。
+     *
+     * 原生 App 流程没有外部哈希，自己造的 JSON 自己签，字段随意（保留 crossOrigin 以贴近规格）。
+     */
+    fun buildClientDataJson(
+        type: String,
+        challenge: ByteArray,
+        origin: String,
+        includeCrossOrigin: Boolean = true,
+    ): ByteArray {
         val challengeB64 = base64Url(challenge)
         val json = buildString {
             append("{\"type\":")
@@ -179,7 +222,8 @@ object WebAuthn {
             append(quote(challengeB64))
             append(",\"origin\":")
             append(quote(origin))
-            append(",\"crossOrigin\":false}")
+            if (includeCrossOrigin) append(",\"crossOrigin\":false")
+            append("}")
         }
         return json.toByteArray(Charsets.UTF_8)
     }

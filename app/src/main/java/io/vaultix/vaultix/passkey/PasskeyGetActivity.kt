@@ -189,7 +189,15 @@ class PasskeyGetActivity : FragmentActivity() {
         runCatching {
             val json = JSONObject(requestJson)
             val challenge = decodeChallenge(json.getString("challenge"))
-            val clientDataBytes = WebAuthn.buildClientDataJson("webauthn.get", challenge, origin)
+            // ⚠️ 浏览器流程（系统给了 clientDataHash）必须逐字节复刻浏览器版 JSON：
+            // 只 {type, challenge, origin}，**不能**多带 crossOrigin ——否则 RP 对返回的
+            // clientDataJSON 再哈希后与已签名哈希对不上，站点报「验证失败」。
+            val clientDataBytes = WebAuthn.buildClientDataJson(
+                type = "webauthn.get",
+                challenge = challenge,
+                origin = origin,
+                includeCrossOrigin = clientDataHash == null,
+            )
             val authData = WebAuthn.buildAuthenticatorData(
                 rpId = rpId,
                 userPresent = true,
