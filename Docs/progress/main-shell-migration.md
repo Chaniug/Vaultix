@@ -148,12 +148,24 @@ UnifiedCategoryFilterSelection.KeePassGroupFilter(databaseId, groupPath)
 ### 阶段 1：可独立搬运件（零架构风险，先做）
 - [ ] **搬 `AdaptiveMainScaffold.kt`**（103 行，纯 UI）
       → `app/.../ui/shell/AdaptiveMainScaffold.kt`；`BottomNavItem` 引用改本地枚举
+      - ⚠️ **需扩展**：原版无「+」按钮。宽屏 `NavigationRail` 亦需插入「+」
+- [ ] **搬悬浮胶囊底栏**（`SimpleMainScreen.kt` 内联实现，~110 行）
+      → `app/.../ui/shell/VaultixBottomDock.kt`（**新建文件，抽取内联实现**）
+      - 精确规格见 §6.1.1（胶囊 60dp / 圆角 50 / 留白 12·6·20 /「+」52×48dp 圆角 16）
+      - 行为参数化：`onAdd: (currentTab) -> Unit`，由容器按当前 Tab 分发
 - [ ] **建本地导航模型** `app/.../ui/shell/VaultixNavModel.kt`
-      - 枚举 Vaultix 需要的 Tab：`Passwords` / `Authenticator` / `Passkey` /
-        `Generator` / `Settings`（**先不做 Send/CardWallet/Notes/VaultV2**）
+      - 枚举 Vaultix 需要的 Tab（**按用户答复定稿**）：
+        `Passwords` / `Authenticator` / `CardWallet` / `Settings`
+        （**共 4 个 Tab + 中央「+」**；通行密钥并入验证码页入口，见 §6.1.2）
       - 暂不搬「自定义排序」（后续可选；Vaultix 偏好层加 `bottomNavOrder`）
-- [ ] **图标与文案**：复用 Material Icons（`Lock` / `Security` / `Key` /
-      `AutoAwesome` / `Settings`），字符串入 `strings.xml`
+- [ ] **图标与文案**：`Lock` / `Security` / `Wallet` / `Settings` / `Add` / `Fingerprint`，
+      字符串入 `strings.xml`
+- [ ] **搬卡面视觉组件**（988 行中的可搬部分，见 §6.1.3）
+      - `CardBrandIcon.kt`（242 行）+ `CardBrandLibraryLogo.kt`（212 行）
+        → `app/.../ui/cardwallet/`；`com.bastion.app.data.model.CardBrand` →
+        `io.vaultix.common.CardBrand`；GPL 溯源声明保留
+      - 校验：Vaultix `core/common/CardBrand.kt` 的枚举值是否覆盖 Bastion 全部品牌
+        （VISA/MASTERCARD/AMEX/DINERS/DISCOVER/JCB/...）
 
 ### 阶段 2：Tab 容器接线（核心）
 - [ ] 新增 `MainShellRoute`（**无 `vaultId` 参数**，对齐 Bastion）
@@ -249,22 +261,115 @@ UnifiedCategoryFilterSelection.KeePassGroupFilter(databaseId, groupPath)
 > +号按钮（添加条目的）、卡包页面、设置页面**，然后就是**页面的滑动效果**，
 > **界面风格**之类的」
 
-### 6.1 Tab 集合（✅ 已定，5 项）
+### 6.1 Tab 集合（✅ 已定，用户 2026-09-10 答复）
 
 | # | Tab | 图标（Material） | 复用/新建 |
 |---|---|---|---|
 | 1 | 密码 | `Icons.Default.Lock` | 复用 `ItemsScreen` |
 | 2 | 验证码 | `Icons.Default.Security` | 复用 `TotpCodesScreen` |
-| 3 | **+ 号按钮**（添加条目） | `Icons.Default.Add` | **非 Tab**——是 FAB/中央按钮，触发新建条目流程 |
-| 4 | 卡包 | `Icons.Default.Wallet` | 复用卡片条目视图（Vaultix 已有 CardBrandDetector） |
+| 3 | **「+」按钮** | `Icons.Default.Add` | **导航条内**（非 Tab，见 §6.1.1） |
+| 4 | 卡包 | `Icons.Default.Wallet` | 复用条目视图 + **搬卡面 UI**（见 §6.1.3） |
 | 5 | 设置 | `Icons.Default.Settings` | 复用 `SettingsScreen` |
 
-⚠️ **注意「+ 号按钮」的定位**：用户原话把它列在导航条里 → 对齐 Bastion 的
-`MainScreenFab.kt`（1044 行），即**底部导航中央的突出 FAB**，不是普通 Tab。
-→ 需确认：是 NavigationBar 中央的 docked FAB，还是独立悬浮 FAB？
+#### 6.1.1 ★「+」按钮：导航条内的圆角方块（非 FAB）
 
-⚠️ **通行密钥 Tab 的去留**：用户此次未提通行密钥页（此前讨论有）。
-→ 需确认：并入「密码」Tab 内入口，还是保留独立 Tab？
+**用户答复**：「1、在底部和导航条一起的。」
+
+**Bastion 实现规格**（`SimpleMainScreen.kt:2075-2145`，精确参数）：
+```kotlin
+// 底栏 = 悬浮胶囊（Surface）
+Surface(
+    shape = RoundedCornerShape(50),                    // 全圆角胶囊
+    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+    tonalElevation = 3.dp,
+    shadowElevation = 6.dp,
+)
+// 胶囊内 Row：height(60.dp)，左右留白 start/end=12dp, top=6dp, bottom=20dp（总高 82dp）
+// 布局：左侧 2 个 Tab + 中间「+」 + 右侧 2 个 Tab（各 weight(1f) 均分）
+
+// 中间「+」= 圆角方块（非 FAB！）
+Surface(
+    onClick = { /* 行为随当前 Tab 变化 */ },
+    shape = RoundedCornerShape(16.dp),
+    color = MaterialTheme.colorScheme.primary,
+    contentColor = MaterialTheme.colorScheme.onPrimary,
+    modifier = Modifier.width(52.dp).height(48.dp),
+) { Icon(Icons.Default.Add, modifier = Modifier.size(26.dp)) }
+```
+
+**关键行为**：「+」的动作**随当前 Tab 变化**：
+| 当前 Tab | 「+」行为 |
+|---|---|
+| 密码 | 新建密码条目 |
+| 验证码 | 新建 TOTP |
+| 卡包 | 新建卡片 |
+| 设置 | 回退为新建密码（Bastion `else ->` 分支） |
+
+⚠️ **与标准 `AdaptiveMainScaffold` 的差异**：Bastion 的 `AdaptiveMainScaffold.kt`
+用的是标准 `NavigationBar`（无「+」），而**实际主界面用的是自定义悬浮胶囊**
+（`SimpleMainScreen.kt` 内联实现）。→ **两者都要搬**：宽屏走 `AdaptiveMainScaffold`
+的 `NavigationRail`，窄屏走自定义悬浮胶囊。
+
+#### 6.1.2 ★ 通行密钥入口：验证码界面内的小按钮
+
+**用户答复**：「2、bastion 的做法是放在验证码界面，然后在验证码界面放一个小按钮，点击进入的。」
+
+**Bastion 实现规格**（`TotpListContent.kt:942-987`）：
+```kotlin
+// 验证器 → 通行密钥快捷入口
+val passkeyEntryButton = @Composable {
+    IconButton(onClick = onNavigateToPasskeys, modifier = Modifier.size(32.dp)) {
+        Icon(
+            imageVector = Icons.Default.Fingerprint,   // ⚠️ 指纹图标，非钥匙
+            contentDescription = stringResource(R.string.nav_passkey),
+            modifier = Modifier.size(20.dp),
+            tint = MaterialTheme.colorScheme.primary,
+        )
+    }
+}
+```
+**两处挂载位置（含兜底，重要）**：
+1. **首选**：挂在**统一倒计时进度条右侧**（`UnifiedProgressBar(trailingContent=...)`）
+2. **兜底**：进度条关闭 **或当前无 TOTP 条目**时 → **独立成行靠右显示**
+
+> 📌 Bastion 注释原文：「进度条被关闭或当前无 TOTP 条目时改为独立成行兜底显示，
+> **否则用户会在空列表等场景下彻底失去进入通行秘钥页的路径**」
+> → **这是踩过坑的设计，搬迁时不可简化掉兜底分支。**
+
+**→ Vaultix 对应改动**：`TotpCodesScreen` 顶栏的通行密钥按钮**改为进度条右侧 + 空态兜底**
+（Vaultix 现有实现是顶栏按钮，不受进度条开关影响，但仍应加空态兜底以保证一致体验）。
+
+#### 6.1.3 ★ 卡面 UI：搬视觉组件，不搬 pane
+
+**用户答复**：「3、卡面 UI 也搬过来吧。」
+
+**Bastion 卡包 UI 总量 988 行**，但**存在一条清晰的迁移分界线**：
+
+| 文件 | 行数 | 可否搬 | 依据 |
+|---|---|---|---|
+| `CardBrandIcon.kt` | 242 | ✅ **可搬** | 仅依赖 `CardBrand`（Vaultix 已有 `core/common/CardBrand.kt`）+ 日志工具 |
+| `CardBrandLibraryLogo.kt` | 212 | ✅ **可搬** | 品牌 logo 矢量库，纯资源 |
+| `WalletListItem.kt` | 129 | ✅ 可搬 | 列表项视觉 |
+| `WalletMaterialIcons.kt` | 41 | ✅ 可搬 | 图标定义 |
+| `CardWalletDetailPaneContent.kt` | 178 | ⚠️ **改造后搬** | 视觉可复用，但需去掉 Bastion 私有条目类型引用 |
+| `CardWalletPane.kt` | 118 | ❌ **不搬** | 依赖 `BankCardViewModel`/`DocumentViewModel`/`BillingAddressViewModel`（Bastion **私有条目类型**，Vaultix 无 Document/BillingAddress） |
+| `CardWalletContent.kt` | 53 | ⚠️ 参考 | 容器结构，按 Vaultix 条目模型重写 |
+| `CardWalletSyncScope.kt` | 15 | ❌ 不搬 | Bitwarden 同步作用域，Vaultix 架构不同 |
+
+**★ 分界线判据**：
+> **只搬「纯视觉组件」（依赖 `CardBrand` 等 Vaultix 已有模型），
+> 不搬「以 Bastion 私有条目类型为参数的容器」。**
+
+**Vaultix 侧的衔接点**：
+- 已具备 `core/common/CardBrand.kt`（批次⑥ 搬运的检测器）+ `CardBrandTest`（7 例）
+- **缺的就是 UI 图标层** → 搬 `CardBrandIcon.kt` 正好补齐「检测器 → 可视化」这一环
+- 卡包 Tab 的内容源 = Bitwarden `Cipher type=3`（Card）条目
+
+✅ **枚举覆盖度已核对（2026-09-10）**：Bastion 与 Vaultix 的 `CardBrand` **完全一致**
+（同为 18 项：VISA / MASTERCARD / AMERICAN_EXPRESS / DINERS_CLUB / DISCOVER / JCB /
+UNIONPAY / MAESTRO / MIR / RUPAY / ELO / DANKORT / MADA / MEEZA / TROY / UATP /
+FORBRUGSFORENINGEN / UNKNOWN，`displayName` 亦逐项相同）
+→ **`CardBrandIcon.kt` 的 `when(this)` 分支可零改动搬运，仅需改 import 路径。**
 
 ### 6.2 明确要求的观感项（阶段 3 必做）
 
@@ -275,12 +380,21 @@ UnifiedCategoryFilterSelection.KeePassGroupFilter(databaseId, groupPath)
 - **界面风格**——卡片样式 / 配色 / 间距 / 圆角，参考 `PasswordTabPane.kt` +
   `NoteListCardComponents.kt` + `theme/` 目录
 
-### 6.3 待确认（剩余）
+### 6.3 已答复（原待确认项，2026-09-10 全部关闭）
 
-1. **「+ 号按钮」形态**：NavigationBar 中央 docked FAB，还是独立悬浮 FAB？
-2. **通行密钥页**：并入密码 Tab 内入口，还是保留独立 Tab？
-3. **是否要「自定义 Tab 排序与可见性」**（Bastion 完整能力）？
+| # | 问题 | 用户答复 | 落地 |
+|---|---|---|---|
+| 1 | 「+ 号」形态 | **「在底部和导航条一起的」** | 悬浮胶囊内的圆角方块（非 FAB）→ §6.1.1 |
+| 2 | 通行密钥页位置 | **「放在验证码界面，放一个小按钮点击进入」** | 并入验证码 Tab → §6.1.2 |
+| 3 | 卡面 UI | **「卡面 UI 也搬过来吧」** | 搬视觉组件（§6.1.3 有分界线） |
+
+### 6.4 待确认（本轮新发现）
+
+1. **「+」在「设置」Tab 时的行为**——Bastion `else -> handlePasswordAddOpen()`
+   即回退为「新建密码」。Vaultix 是否照此？（或设置 Tab 时隐藏「+」？）
+2. **是否要「自定义 Tab 排序与可见性」**（Bastion 完整能力）？
    建议先固定顺序，骨架稳后再加（代价仅偏好层加一个字段）
-4. **卡包 Tab 的数据来源**：Vaultix 的卡片是 Bitwarden `Cipher type=3` 条目，
-   与 Bastion 的 `CardWalletPane`（有独立卡面可视化）差异较大——
-   是仅复用筛选视图，还是要搬 Bastion 的卡面 UI？
+3. **卡包 Tab 是否包含「文档卡 / 账单地址」**——Bastion 有，Vaultix 无对应条目类型
+   → 建议**只做银行卡**（Bitwarden `Cipher type=3`），不引入私有类型
+4. **`CardBrand` 枚举覆盖度核对**——搬 `CardBrandIcon.kt` 前需确认 Vaultix
+   `core/common/CardBrand.kt` 是否含 Bastion 全部品牌分支（发现缺项需补齐）
