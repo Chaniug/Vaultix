@@ -1,6 +1,6 @@
 # 当前进度快照
 
-> 最后更新：2026-09-08（第十一轮 · M1 代码侧收官 + 真机回归两轮基本通过）
+> 最后更新：2026-09-10（第二十四轮 · Credential Provider 集成闭环 + autofill 服务 M2-a 落地）
 
 ## 里程碑进度
 
@@ -9,7 +9,8 @@
 | M0 | 基础骨架 + `core:crypto` | ✅ DONE |
 | M1 | **Bitwarden 同步** | ✅ 功能与回归基本收官（d689a37 登录失效修复包与 824c432 同步策略包均已真机实测基本正常；等用户对 824c432 三项最终确认后正式收口） |
 | M2 | KDBX 引擎 | ⬜ TODO（启动前通读 Docs/18 §4.3 + reference/bastion 快照 KDBX 资产） |
-| M3 | 平台集成（Autofill / 安全中心） | ⬜ TODO |
+| M2-a | **自动填充服务**（提前于 KDBX 启动） | 🔄 骨架/解析/匹配/保存/CP 集成已落地（a06f037→f474654） |
+| M3 | 平台集成（Autofill / 安全中心） | ⬜ autofill 主体已并入 M2-a；安全中心待做 |
 | M4 / M5 | 发布准备 / 1.0 | ⬜ TODO |
 
 ## M1 收官内容（2026-09-08 全部推送）
@@ -93,3 +94,25 @@
   叠加解锁链改造（点候选不跳 MainActivity）+ inline + 字段角色推断。
   明细见 next-steps.md「★最高优先」段；诊断全程见 .ai/SESSION-2026-09-09.md 第十八轮
 - 单元测试基线：全模块绿；detekt 0 违规（本轮诊断无代码改动，基线未动）
+
+## 当前状态（2026-09-10）
+
+- **★ Credential Provider 集成闭环（总根因 f474654）**：manifest `<service>` intent-filter
+  action 误写 `android.credentials.CredentialProviderService`（漏 `service.` 段）→ 系统从未
+  发现 Vaultix 是 Provider → 无启用项 / `credential_service` 恒空 / Edge 永不弹 / passkey
+  查不到。已修为 `android.service.credentials.CredentialProviderService`。链上修复：
+  CP 注册 + passkey 查询/创建 + 双能力（PUBLIC_KEY + PASSWORD）+ inline（98edb37 / 8ba40d9）；
+  设置页「凭据提供商」状态行 + 直达启用界面（e92d215）；老路认证回灌 onCreate→onResume
+  （f474654）；认证宿主独立 `taskAffinity`（dba5ae1）+ 去 NEW_TASK（e52779e）；
+  MODE_UNLOCK 原地生物解锁（3c7c0b8）；搜索框乱弹抑制（b9a1d6e）
+- **autofill 服务 M2-a 已落地**：骨架与清单注册（a06f037）、解析层 ParsedStructure +
+  HintClassifier + AssistStructureParser（f0a7cb4）、Bitwarden 风格匹配器（ea78ee6）、
+  Mozilla PSL ~10325 条（dffc490）、保存流程 onSaveRequest（a90e2d5）、快捷入口三件套
+  （磁贴 / 手动填充 / 智能复制，00f4235）
+- **CI**：只构建与发布 full 分发，offline flavor 暂停参与构建（b64ccb6）
+- ⏳ **真机待验证（第一优先）**：① 设置页「凭据提供商」应弹启用界面；② 启用后 Edge/Chrome
+  弹密码 + passkey（核心闭环）；③ Via 填充密码应能填进；④ 搜索框不应乱弹。
+  完整清单见 `.ai/SESSION-2026-09-10.md`
+- **遗留（next-steps ⑥⑦）**：provider.xml 补 `settingsActivity`（通行密钥专属管理页）；
+  privileged allowlist（`CallingAppInfo.getOrigin()`）
+- 质量基线：编译 + detekt + 单测全绿（本轮无回归）

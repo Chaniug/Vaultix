@@ -1,8 +1,42 @@
 # 下一步任务清单
 
-> 更新于 2026-09-08（第十轮）。Bitwarden 对齐审计 + 批 1（数据安全/类型保真）
-> 落地；审计报告 `Docs/progress/audit/bitwarden-alignment.md`。
+> 更新于 2026-09-10（第二十四轮）。Credential Provider 集成闭环（总根因 f474654）。
+> 审计报告 `Docs/progress/audit/bitwarden-alignment.md`；对齐评估
+> `Docs/progress/bastion-parity-assessment.md`（**注意已过时**——autofill 三批修复未计入）。
 > 状态：`TODO` / `DOING` / `DONE` / `BLOCKED`
+
+## 已完成（第二十四轮 2026-09-10 · Credential Provider 集成闭环 + autofill 打磨）
+
+> 跨度 dba5ae1→f474654，均编译 + detekt + 单测全绿，已推 main 并出 CI preview 包。
+
+- [x] **★ 总根因修复（f474654）**：manifest `<service>` intent-filter action 误写
+      `android.credentials.CredentialProviderService`（漏 `service.` 段）→ 系统从未发现
+      Vaultix 是 Provider → 无启用项 / `credential_service` 恒空 / Edge 永不弹 / passkey
+      查不到。修为 `android.service.credentials.CredentialProviderService`。
+      **教训：CP 注册逐字符对照官方模板，勿凭记忆**
+- [x] **设置页「凭据提供商」状态行（e92d215）**：读 Secure `credential_service`，ON_RESUME
+      刷新；跳转改用 `CredentialManager.createSettingsPendingIntent()` 直达启用界面
+      （老 `REQUEST_SET_AUTOFILL_SERVICE` 与凭据提供商是两个独立设置项，部分设备无反应）
+- [x] **CP 集成 ①–④（98edb37 + 8ba40d9）**：系统注册 + 通行密钥查询/创建 + inline 候选；
+      双能力声明（`TYPE_PUBLIC_KEY_CREDENTIAL` + `TYPE_PASSWORD_CREDENTIAL`）；
+      `buildGetResponse` / `PasswordGetActivity` 回灌密码凭据；锁定态按选项类型生成 Entry
+- [x] **老路认证回灌时序（f474654 + 64ade7a）**：`MODE_COPY_TOTP` 认证宿主 `setResult`
+      从 onCreate 推迟到 onResume（onCreate 同步会丢认证结果 → 「验证码复制成功但密码没填」）；
+      解锁桥解锁后自动 finish 回原 App，不再停在 Vaultix 主界面
+- [x] **认证宿主闪回修复（dba5ae1 + e52779e）**：宿主 Activity 独立 `taskAffinity`，
+      NEW_TASK 不再复用后台 MainActivity 栈（修「Via 点密码条目闪回 Vaultix」，用户已确认
+      不闪）；认证回灌去 NEW_TASK/singleTask，引导型意图由调用点显式加 NEW_TASK
+- [x] **MODE_UNLOCK 原地生物解锁（3c7c0b8）**：库锁定且已启用本地快速解锁 → 弹
+      BiometricPrompt 免开主界面，认证通过即解封全部库并 finish 回原 App；无本地解锁
+      回退引导卡片走主密码
+- [x] **搜索框乱弹抑制（b9a1d6e）**：字段分类引入 `SignalStrength`（HIGH/MEDIUM/LOW），
+      无密码框时弱信号 USERNAME 不再触发登录候选（对齐 Bastion `AutofillDetectionPolicy`）
+- [x] **文档收口（20680df）**：.ai 接力记忆同步（CP 总根因 + 真机验证清单 + 新坑索引）
+
+⏳ **真机待验证（用户装含 f474654 的包，第一优先）**：
+① 设置页点「凭据提供商」→ 弹系统启用 Vaultix 界面；② 启用后 Edge/Chrome 登录弹
+密码条目 + passkey（**核心闭环验证点**）；③ 开 autoCopyTotp 在 Via 填充 → 密码应能填进
+（onResume 时序修复）；④ 搜索框不应再乱弹密码条目。
 
 ## 已完成（第二十三轮 2026-09-09 · 磁贴/应用列表修复 + TOTP 链路 + 通行密钥保真）
 
@@ -285,14 +319,16 @@
 - [ ] 依赖：`androidx.credentials:credentials`（catalog 已有，确认 app 引用）+ Play services 依赖评估
 - [ ] 参考：Bitwarden 设备上 dumpsys 的 service 结构；Bastion autofill_ng 相关实现
 
-**状态（2026-09-09 续）**：①②③④ 已实现（8ba40d9，编译 + detekt + 单测全绿，已推 main，
-CI debug-preview 出包中）。⏳ 待真机回归：Edge/Via 密码弹框恢复且能填充 + passkey 登录 +
-锁定→解锁→回填链。
-⑤ 字段角色推断未启动：`AutofillFieldRolePolicy`/`AutofillFieldPromotionPolicy` 仅在 `reference/bastion/`（只读快照），待迁。
-轻量解锁链：`AutofillActivity` 已含 `MODE_COPY_TOTP` / `MODE_REPROMPT` 回灌路径；但真机
-「Via 点填充 → 弹回 Vaultix 主界面不回填」已复现 = MODE_UNLOCK 解锁后不回填缺陷，待修。
-永不加锁仍会锁（进程被杀清内存密钥）→ 参照 Bastion 生物解密管理：登录后自动 enroll 本地解锁
-+ 回前台自动弹生物验证（B，待做）。
+**状态（2026-09-10 收口）**：①②③④ 已实现并推送（98edb37 / 8ba40d9）；**总根因已修
+（f474654）**——此前一切「系统未启用 / 被清」诊断均被 action 误写掩盖。⑤ 部分落地
+（b9a1d6e 信号强度分级抑制误弹），完整迁 `AutofillFieldRolePolicy` /
+`AutofillFieldPromotionPolicy` 仍待做。⑥⑦ 见上（provider settingsActivity /
+privileged allowlist）。
+轻量解锁链：`AutofillActivity` 含 `MODE_COPY_TOTP` / `MODE_REPROMPT` / `MODE_UNLOCK`
+回灌路径；「Via 点填充闪回 Vaultix 不回填」已由 dba5ae1 + e52779e + 3c7c0b8 修复
+（用户已确认不闪）。永不加锁仍会锁（进程被杀清内存密钥）→ 参照 Bastion 生物解密管理：
+登录后自动 enroll 本地解锁 + 回前台自动弹生物验证（B，待做）。
+⏳ 待真机验证启用与填充闭环，清单见第二十四轮区块。
 
 诊断全过程与三层根因详见 `.ai/MEMORY.md`「★ Edge/Chrome 填充失效根因」。
 

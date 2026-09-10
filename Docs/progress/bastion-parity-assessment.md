@@ -1,5 +1,10 @@
 # Vaultix ↔ Bastion 功能对齐评估
 
+> ⚠️ **部分过时（2026-09-10 补注）**：本报告生成于 2026-09-09，**未计入此后落地的自动填充
+> 服务（M2-a：骨架 / 解析层 / 匹配器 / PSL / 保存流程 / 磁贴三件套）与 Credential Provider
+> 集成（a06f037→f474654）**。§3 缺口矩阵中「自动填充 ❌ 完全缺失」与 §5 的 P0 工作量估算
+> 因此偏高。最新进度以 `next-steps.md` 与 `current-status.md` 为准。
+
 > 生成日期：2026-09-09 · 基于批次②–⑥ 落地后的代码现状
 > 参照项目：Bastion（GPL-3.0，Copyright 2025 JoyinJoester），位于 `reference/bastion/`
 > 评估口径：可比能力点（非 LOC / 非 Screen 数）
@@ -40,8 +45,8 @@
 
 | 分组 | 能力 | Bastion | Vaultix 状态 | 工作量 |
 |---|---|---|---|---|
-| **自动填充** | 系统凭据提供方（AutofillService / credential provider） | ✅ 完整（含 `EnhancedAutofillStructureParserV2`、浏览器表单填充） | ❌ **完全缺失**（无 AutofillService 声明） | **大** |
-| | 浏览器表单自动填充 | ✅（AutofillService 内实现） | ❌ 随上项缺失 | （含上） |
+| **自动填充** | 系统凭据提供方（AutofillService / credential provider） | ✅ 完整（含 `EnhancedAutofillStructureParserV2`、浏览器表单填充） | 🔄 **主体已落地**（M2-a + CP 集成，a06f037→f474654）；缺字段角色策略完整版 | 中 |
+| | 浏览器表单自动填充 | ✅（AutofillService 内实现） | 🔄 基础可用（保存流程 + 填充链路）；字段角色策略待迁 | 中 |
 | **数据迁移** | JSON / 加密导出 | ✅ | ❌ 缺失 | **大** |
 | | Bitwarden / 各类导入（含 otpauth 已部分做） | ✅ | ⚠️ 仅验证码导入；条目级导入缺失 | **大** |
 | | 本地备份 / 恢复 | ✅ | ❌ 缺失 | 中 |
@@ -76,7 +81,7 @@
 按「可用操作面」补齐，建议分三档：
 
 **P0（架构级，先做，决定「能不能用」）**
-- 自动填充服务（AutofillService + 凭据提供方 + 浏览器表单解析）：**大，约 5–8 天**。这是与 Bastion「完整操作」差距最大的一项，也是密码管理器的基本盘。
+- 自动填充服务（AutofillService + 凭据提供方 + 浏览器表单解析）：~~大，约 5–8 天~~ → **主体已于 2026-09-09~10 落地**（M2-a + CP 集成），剩余字段角色策略 ≈1–2 天。这是密码管理器的基本盘。
 - 数据导入导出（Bitwarden JSON 双向 + 本地备份）：**大，约 4–6 天**。
 
 **P1（中等工作，体验补齐）**
