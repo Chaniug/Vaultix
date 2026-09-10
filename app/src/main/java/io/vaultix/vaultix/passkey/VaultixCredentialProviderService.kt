@@ -355,11 +355,16 @@ class VaultixCredentialProviderService : CredentialProviderService() {
         val loginTitle: String,
     )
 
-    /** 现场排障日志（仅 debug 构建；只记选项类型/数量等非敏感元数据，禁记条目内容）。 */
-    private fun log(message: String) = AutofillLogger.d(TAG, "CP $message")
+    /**
+     * 现场排障日志（仅 debug 构建；只记选项类型/数量等非敏感元数据，禁记条目内容）。
+     *
+     * ⚠️ 统一走 [AutofillLogger] 的 `VaultixAutofill` tag（15 字符）：Android 的 log tag
+     * 上限为 23 字符，而本类名派生的 tag 长达 27 字符——真机实测该 tag 的日志**一条都进不了
+     * logcat**（疑似 ROM 按长度丢弃），导致 CP 全链路"零日志"、排障只能靠猜。
+     */
+    private fun log(message: String) = AutofillLogger.d("CP $message")
 
     private companion object {
-        const val TAG = "VaultixCredentialProvider"
         const val REQUEST_UNLOCK_CP = 2101
         const val REQUEST_CREATE_CP = 2102
         const val REQUEST_PASSWORD_CP_BASE = 2200

@@ -70,9 +70,13 @@ import org.json.JSONObject
 import java.nio.charset.StandardCharsets
 import javax.inject.Inject
 
-/** 通行密钥现场诊断日志 tag（仅 debug 构建输出，只记非敏感元数据）。 */
-private const val PK_TAG = "VaultixPasskey"
-
+/**
+ * 现场诊断日志统一走 [AutofillLogger] 的 `VaultixAutofill` tag。
+ *
+ * ⚠️ 不用本类名派生的独立 tag：Android log tag 上限 23 字符，而过长的 tag 在本 ROM 上
+ * **一条日志都进不了 logcat**（真机实测 `VaultixCredentialProvider`/`VaultixPasskey` 均无输出），
+ * 会让「现场零日志 → 排障只能靠猜」重演。
+ */
 @RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
 @AndroidEntryPoint
 class PasskeyGetActivity : FragmentActivity() {
@@ -115,10 +119,16 @@ class PasskeyGetActivity : FragmentActivity() {
             fail(GetCredentialUnknownException("Missing passkey parameters"))
             return
         }
+        // 现场诊断：参数是否齐、origin 来源、是否浏览器流程（有 clientDataHash）
+        AutofillLogger.d(
+            "PK start origin=$origin originFromCaller=${callingOrigin != null} " +
+                "browserFlow=${clientDataHash != null}",
+        )
 
         lifecycleScope.launch(Dispatchers.IO) {
             val item = runCatching { itemRepository.observeItem(vaultId, itemId).first() }.getOrNull()
             val cred = item?.fido2Credentials?.firstOrNull { it.credentialId == credentialId }
+            AutofillLogger.d("PK lookup itemFound=${item != null} credFound=${cred != null}")
             withContext(Dispatchers.Main) {
                 if (cred == null) {
                     fail(GetCredentialUnknownException("Passkey not found"))
@@ -126,6 +136,7 @@ class PasskeyGetActivity : FragmentActivity() {
                 }
                 credential = cred
                 rpName = cred.rpName.ifBlank { cred.rpId }
+                AutofillLogger.d("PK confirm shown, waiting for user")
                 showConfirm()
             }
         }
@@ -154,6 +165,7 @@ class PasskeyGetActivity : FragmentActivity() {
     }
 
     private fun verifyUser() {
+        AutofillLogger.d("PK biometric requested")
         val executor = ContextCompat.getMainExecutor(this)
         val callback = object : BiometricPrompt.AuthenticationCallback() {
             override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) = sign()
@@ -189,8 +201,7 @@ class PasskeyGetActivity : FragmentActivity() {
         if (key == null) {
             // 现场实测 Edge 侧报的就是这条：CredMan ... (Cannot parse passkey key)
             AutofillLogger.d(
-                PK_TAG,
-                "assertion aborted: cannot parse keyValue (${WebAuthn.describeEcPrivateKeyFailure(cred.keyValue)})",
+                "PK aborted: cannot parse keyValue (${WebAuthn.describeEcPrivateKeyFailure(cred.keyValue)})",
             )
             fail(GetCredentialUnknownException("Cannot parse passkey key"))
             return
@@ -209,7 +220,6 @@ class PasskeyGetActivity : FragmentActivity() {
                 expectedHash = clientDataHash,
             )
             AutofillLogger.d(
-                PK_TAG,
                 "assertion origin=$origin browserFlow=${clientDataHash != null} " +
                     "jsonMatchesBrowserHash=" +
                     "${WebAuthn.clientDataJsonMatchesHash(clientDataBytes, clientDataHash)}",
@@ -244,6 +254,7 @@ class PasskeyGetActivity : FragmentActivity() {
                 resultIntent,
                 GetCredentialResponse(PublicKeyCredential(responseJson)),
             )
+            AutofillLogger.d("PK assertion ready sigLen=${signature.size} authDataLen=${authData.size}")
             setResult(Activity.RESULT_OK, resultIntent)
             finish()
         }.onFailure { fail(GetCredentialUnknownException(it.message)) }
@@ -254,6 +265,7 @@ class PasskeyGetActivity : FragmentActivity() {
             ?: Base64.decode(b64, Base64.DEFAULT)
 
     private fun fail(e: GetCredentialException) {
+        AutofillLogger.d("PK fail: ${e.javaClass.simpleName}: ${e.message}")
         val resultIntent = Intent()
         PendingIntentHandler.setGetCredentialException(resultIntent, e)
         setResult(Activity.RESULT_OK, resultIntent)
@@ -261,6 +273,7 @@ class PasskeyGetActivity : FragmentActivity() {
     }
 
     private fun cancel() {
+        AutofillLogger.d("PK cancelled by user / biometric error")
         val resultIntent = Intent()
         PendingIntentHandler.setGetCredentialException(resultIntent, GetCredentialCancellationException("Cancelled"))
         setResult(Activity.RESULT_OK, resultIntent)
