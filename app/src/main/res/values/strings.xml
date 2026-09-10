@@ -101,9 +101,11 @@
     <string name="group_autofill">自动填充</string>
     <string name="setting_autofill">系统自动填充</string>
     <string name="setting_autofill_desc">在任意 App / 网页的登录框提供密码；需在系统设置中先启用 Vaultix</string>
-    <string name="setting_credential_provider">凭据提供商（密码与通行密钥）</string>
-    <string name="setting_credential_provider_enabled_desc">已启用 · Chrome/Edge 等可弹密码与通行密钥</string>
-    <string name="setting_credential_provider_disabled_desc">未启用 · 点此到系统设置开启（Android 14+ Chrome/Edge 填充必需）</string>
+    <string name="setting_credential_provider">凭据提供商（通行密钥）</string>
+    <string name="setting_credential_provider_enabled_desc">已启用 · Chrome/Edge 等可弹通行密钥（密码填充走自动填充服务）</string>
+    <string name="setting_credential_provider_disabled_desc">未启用 · 点此到系统设置开启（Android 14+ Chrome/Edge 通行密钥填充必需）</string>
+    <!-- compatibility-package 用的版本上限（对齐 Bastion）：大到不限制即可 -->
+    <string name="version_code_max" translatable="false">999999999999</string>
     <string name="setting_auto_copy_totp">填充后复制验证码</string>
     <string name="setting_auto_copy_totp_desc">条目带验证码、但页面没有验证码框时，填充完成即把验证码放进剪贴板（沿用剪贴板清除时长）</string>
     <string name="setting_autofill_save_prompt">保存提示</string>

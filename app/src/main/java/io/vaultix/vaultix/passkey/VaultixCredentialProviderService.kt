@@ -148,10 +148,14 @@ class VaultixCredentialProviderService : CredentialProviderService() {
     }
 
     // ===================== GET =====================
+    // ⚠️ **密码填充不走 CP 通道**（credential_provider.xml 已移除 TYPE_PASSWORD_CREDENTIAL
+    // 能力声明，对齐 Bastion）。Chromium 系浏览器的密码请求由系统路由到 Autofill 框架
+    // （VaultixAutofillService.onFillRequest），本服务只负责通行密钥（passkey）。
+    // pwOptions 分支保留供将来重新启用，但当前系统不会下发 password 请求。
 
     private suspend fun buildGetResponse(request: BeginGetCredentialRequest): BeginGetCredentialResponse {
         val pkOptions = request.beginGetCredentialOptions.filterIsInstance<BeginGetPublicKeyCredentialOption>()
-        val pwOptions = request.beginGetCredentialOptions.filterIsInstance<BeginGetPasswordOption>()
+        @Suppress("unused") val pwOptions = request.beginGetCredentialOptions.filterIsInstance<BeginGetPasswordOption>()
         // 调用来源：Chromium 系浏览器会带 origin（如 https://github.com），普通 App 只有包名。
         // ⚠️ 该值用于**密码条目的域名过滤**（对齐 Bitwarden filterCiphersForMatches 的
         // `callingAppInfo.packageName` / origin 口径）。取不到时不做过滤（宁可多列，不可漏列）。
@@ -198,6 +202,7 @@ class VaultixCredentialProviderService : CredentialProviderService() {
         }
 
         val entries = mutableListOf<CredentialEntry>()
+        // pwOptions 循环保留但当前不会执行（credential_provider.xml 不声明 PASSWORD 能力）。
         for (option in pwOptions) {
             entries += passwordEntries(option, unlocked, callingOrigin, callingPackage)
         }
