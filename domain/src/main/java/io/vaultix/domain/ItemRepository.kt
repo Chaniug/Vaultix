@@ -96,7 +96,8 @@ interface ItemRepository {
      * 「删除通行密钥」（过滤掉指定 credentialId 后整体写回）。
      *
      * 实现：取出该条目当前明文 → 替换其 [VaultItem.fido2Credentials] → 走 [updateItem]
-     * 的合并写回（toUpdateRequest 会逐字段加密 fido2，保留其他段）。
+     * 的合并写回（toUpdateRequest 按 credentialId **保留未改动条目的服务端原密文**，
+     * 仅对新增条目加密 —— 防止私钥材料被覆写成 null，见 P0 审计）。
      */
     suspend fun updateFido2Credentials(
         vaultId: String,

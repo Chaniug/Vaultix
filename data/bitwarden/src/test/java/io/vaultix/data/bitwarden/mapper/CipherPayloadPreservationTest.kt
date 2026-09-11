@@ -76,7 +76,17 @@ class CipherPayloadPreservationTest {
                 password = crypto.encryptString("old-pass", accountKey),
                 uris = listOf(UriDto(uri = "enc:uri://site", match = 1)),
                 totp = "enc:totp-secret",
-                fido2Credentials = listOf(Fido2CredentialDto(credentialId = "enc:fido")),
+                // ⚠️ 夹具必须是**真实形态**（真密文）：此前这里写的是假的占位明文
+                // `credentialId = "enc:fido"`，旧代码「整表重加密」恰好把它加密成合法密文，
+                // 于是断言能解开 —— 等于在无意中为那个破坏性行为背书。见下方 fido2 断言。
+                fido2Credentials = listOf(
+                    Fido2CredentialDto(
+                        credentialId = crypto.encryptString("fido-cid", accountKey),
+                        rpId = crypto.encryptString("site.example", accountKey),
+                        keyType = crypto.encryptString("public-key", accountKey),
+                        keyValue = crypto.encryptString("FIDO-KEY-MATERIAL", accountKey),
+                    ),
+                ),
             ),
             fields = listOf(
                 CustomFieldDto(
@@ -96,7 +106,7 @@ class CipherPayloadPreservationTest {
                 uris = listOf(VaultUri("https://site.example", UriMatch.Host)),
                 totp = "otpauth-secret",
                 // 更新流程的 item 携带已加载的完整通行密钥列表（保存流程即通过替换此列表增删）
-                fido2Credentials = listOf(VaultFido2Credential(credentialId = "enc:fido")),
+                fido2Credentials = listOf(VaultFido2Credential(credentialId = "fido-cid")),
                 // 自定义字段同样是「UI 加载后原样带回」，因此明文往返应保持不变
                 customFields = listOf(VaultCustomField(name = "字段名", value = "字段值")),
             ),
@@ -115,11 +125,12 @@ class CipherPayloadPreservationTest {
         )
         assertEquals(1, request.login!!.uris!!.single().match) // Host = 1
         assertEquals("otpauth-secret", crypto.decryptToString(request.login!!.totp!!, accountKey))
-        // fido2：按 item 携带的列表完整重加密（保留既有凭证，不丢）
-        assertEquals(
-            "enc:fido",
-            crypto.decryptToString(request.login!!.fido2Credentials!!.single().credentialId!!, accountKey),
-        )
+        // fido2：命中 stored 的条目**原样沿用服务端密文**（不重加密），密钥材料一字不改。
+        // ★ P0 回归：此前是整表按模型重加密，模型里 keyValue 为空即把服务端私钥材料
+        // 覆写成 null（官方客户端与其它设备此后同样无法签名，不可逆）。
+        val fido = request.login!!.fido2Credentials!!.single()
+        assertEquals("fido-cid", crypto.decryptToString(fido.credentialId!!, accountKey))
+        assertEquals("FIDO-KEY-MATERIAL", crypto.decryptToString(fido.keyValue!!, accountKey))
         // 自定义字段按**表单意图**写回并重新加密（UI 原样带回 → 明文往返不变）
         val field = request.fields.single()
         assertEquals("字段名", crypto.decryptToString(field.name!!, accountKey))

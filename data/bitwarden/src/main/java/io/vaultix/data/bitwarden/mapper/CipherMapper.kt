@@ -222,9 +222,10 @@ class CipherMapper @Inject constructor(
     }
 
     /**
-     * 登录段：服务端有 login 时按表单明文重新加密可编辑字段
-     * （username / password / uri / totp / fido2Credentials），
-     * 其余字段（如 passwordRevisionDate）沿用服务端原值。
+     * 登录段：服务端有 login 时按表单明文重新加密**可编辑**字段
+     * （username / password / uri / totp），其余字段（如 passwordRevisionDate）
+     * 沿用服务端原值。`fido2Credentials` 由 [mergeFido2Credentials] 单独处理 ——
+     * 默认原样沿用服务端密文，不重加密。
      */
     private fun overlayLogin(
         item: VaultItem,
@@ -243,10 +244,74 @@ class CipherMapper @Inject constructor(
                 )
             },
             totp = item.totp?.takeIf { it.isNotBlank() }?.let { crypto.encryptString(it, key) },
-            // fido2Credentials：领域模型已加载全部凭证（含服务端原值），按表单意图完整重加密。
-            // 保存流程（新增/删除通行密钥）正是通过替换此处列表实现「绑定到登录条目」。
-            fido2Credentials = item.fido2Credentials.map { mapFido2Request(it, key) },
+            // fido2Credentials：**默认原样沿用服务端密文**，仅在用户确实改动集合时按
+            // credentialId 合并（见 [mergeFido2Credentials] 的 P0 说明）。
+            fido2Credentials = mergeFido2Credentials(
+                modelList = item.fido2Credentials,
+                storedList = storedLogin.fido2Credentials.orEmpty(),
+                storedDto = stored,
+                key = key,
+            ),
         )
+    }
+
+    /**
+     * 通行密钥集合的合并写回（**默认原样沿用服务端密文**）。
+     *
+     * ⚠️ **P0 数据破坏事故**（2026-09-11 真机定位；完整审计见
+     * `Docs/progress/audit/passkey-keyvalue-destruction.md`）：
+     * 此处原为 `item.fido2Credentials.map { mapFido2Request(it, key) }` —— **整表按领域模型
+     * 重新加密**。而 [mapFido2Request] 里 `keyValue = encryptOpt(c.keyValue.orEmpty(), key)`
+     * 会把空值写成 `null`。两者相乘的后果：**只要模型里某条凭据的 `keyValue` 为空，
+     * 一次登录条目更新就把服务端已存的私钥材料覆写成 `null`** —— 官方客户端与其它设备
+     * 此后同样无法签名，且**不可恢复**。
+     *
+     * 本文件其余段（card / identity / sshKey / secureNote）一律 `?: stored.X` 沿用原密文，
+     * 只有 login 的 fido2 破例；`decisions.md` 第 38 条、[ItemDetailViewModel] 与
+     * [ItemRepository] 的 KDoc、以及 [Fido2CredentialDto] 自身注释都明写「未编辑段沿用
+     * 服务端原密文」—— 本函数即把代码拉回该承诺。
+     *
+     * 合并规则（对齐 Bastion `Fido2CredentialCodec.mergeByCredentialId` 的
+     * 「其余既有条目全部保留，避免覆盖丢失」原则）：
+     * - model 命中 stored（按 credentialId）→ **沿用 stored 原文，密文一字不改**
+     * - stored 中未被命中 → 用户删除，剔除
+     * - model 中未命中 stored → 新增，按明文加密
+     *
+     * **失败一律保守**：任一条 stored 的 credentialId 解不开，或 model 里出现空
+     * credentialId ⇒ 直接返回 stored —— 宁可不改，也绝不冒险抹除用户数据。
+     */
+    private fun mergeFido2Credentials(
+        modelList: List<VaultFido2Credential>,
+        storedList: List<Fido2CredentialDto>,
+        storedDto: CipherDto,
+        key: SymmetricCryptoKey,
+    ): List<Fido2CredentialDto> {
+        if (storedList.isEmpty()) return modelList.map { mapFido2Request(it, key) }
+        if (modelList.isEmpty()) return emptyList()
+
+        val itemKey = resolveItemKey(storedDto, key)
+        // stored 侧的明文 credentialId；任一条解不开 → 放弃合并（保守）
+        val storedIds = try {
+            storedList.map { d ->
+                decryptToString(d.credentialId, key, itemKey)
+                    .trim()
+                    .takeIf { it.isNotBlank() }
+            }
+        } finally {
+            itemKey?.clear()
+        }
+        if (storedIds.any { it == null }) return storedList
+
+        val modelIds = modelList.map { it.credentialId.trim() }
+        if (modelIds.any { it.isBlank() }) return storedList
+
+        val keep = modelIds.toSet()
+        val storedSet = storedIds.filterNotNull().toSet()
+        val merged = storedList.filterIndexed { i, _ -> storedIds[i] in keep }.toMutableList()
+        modelList
+            .filter { it.credentialId.trim() !in storedSet }
+            .forEach { merged += mapFido2Request(it, key) }
+        return merged
     }
 
     /** 银行卡段：Card 类型按表单明文重加密；其余类型沿用服务端原密文（防丢载荷）。 */

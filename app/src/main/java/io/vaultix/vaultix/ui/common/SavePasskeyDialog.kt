@@ -49,7 +49,7 @@ fun SavePasskeyDialog(
     var credentialId by remember { mutableStateOf("") }
     var keyValue by remember { mutableStateOf("") }
     var loginExpanded by remember { mutableStateOf(false) }
-    var showError by remember { mutableStateOf(false) }
+    var errorRes by remember { mutableStateOf<Int?>(null) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -129,9 +129,9 @@ fun SavePasskeyDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                if (showError) {
+                errorRes?.let {
                     Text(
-                        stringResource(R.string.totp_invalid_secret),
+                        stringResource(it),
                         color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -142,7 +142,17 @@ fun SavePasskeyDialog(
             TextButton(onClick = {
                 val login = selectedLogin
                 if (login == null || rpId.isBlank() || credentialId.isBlank()) {
-                    showError = true
+                    errorRes = R.string.totp_invalid_secret
+                    return@TextButton
+                }
+                // ⚠️ **私钥材料必填**（P0，2026-09-11）：没有 keyValue 的通行密钥「看得到、
+                // 点不动」—— 候选能列出来，签名时 parseEcPrivateKey 返回 null，浏览器侧报
+                // `Cannot parse passkey key`。真机上那条唯一缺 keyValue 的凭据正是这样来的。
+                // 参考实现里 keyValue 一律来自真实密钥对（Keyguard：
+                // `PasskeyBase64.encodeToString(keyMaterial.privateKeyPkcs8)`），
+                // **没有任何实现允许手工留空**。
+                if (keyValue.isBlank()) {
+                    errorRes = R.string.passkey_error_key_value_required
                     return@TextButton
                 }
                 onSave(
@@ -153,7 +163,7 @@ fun SavePasskeyDialog(
                         rpName = rpName.takeIf { it.isNotBlank() } ?: rpId.trim(),
                         userName = userName.trim(),
                         userDisplayName = userDisplayName.takeIf { it.isNotBlank() } ?: userName.trim(),
-                        keyValue = keyValue.takeIf { it.isNotBlank() },
+                        keyValue = keyValue.trim(),
                     ),
                 )
             }) { Text(stringResource(R.string.action_save)) }

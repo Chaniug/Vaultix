@@ -471,7 +471,8 @@
     <string name="passkey_field_credential_id">凭证 ID</string>
     <string name="passkey_field_user_handle">用户句柄</string>
     <string name="passkey_field_key_algorithm">密钥算法</string>
-    <string name="passkey_field_key_value">私钥材料（可选）</string>
+    <string name="passkey_field_key_value">私钥材料（必填）</string>
+    <string name="passkey_error_key_value_required">私钥材料不能为空 —— 没有私钥的通行密钥「看得到、点不动」，且在库同步时可能覆盖掉服务端已存的密钥材料</string>
     <string name="passkey_field_counter">签名计数器</string>
     <string name="passkey_field_discoverable">可发现凭证</string>
     <string name="passkey_field_created">创建时间</string>

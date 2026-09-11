@@ -180,6 +180,167 @@ class CipherMapperTotpUriFido2Test {
     }
 
     /**
+     * ★★★ P0 回归（2026-09-11 真机事故）：模型里 `keyValue` 为空时，更新请求**必须原样
+     * 沿用服务端的密文**，绝不能写成 `null`。
+     *
+     * 修复前：`overlayLogin` 对整张 fido2 表 `mapFido2Request` 重加密，而
+     * `encryptOpt(c.keyValue.orEmpty())` 会把空值产出 `null` ⇒ **服务端已存的私钥材料被
+     * 覆写抹除**，官方客户端与其它设备此后同样无法签名，且不可恢复。
+     */
+    @Test
+    fun updateKeepsServerKeyValueWhenModelKeyValueIsBlank() {
+        val serverKeyValue = crypto.encryptString("PRIVATE-KEY-MATERIAL", accountKey)
+        val stored = CipherDto(
+            id = "c11",
+            type = 1,
+            name = crypto.encryptString("站点", accountKey),
+            login = LoginDto(
+                fido2Credentials = listOf(
+                    Fido2CredentialDto(
+                        credentialId = crypto.encryptString("cid-p0", accountKey),
+                        rpId = crypto.encryptString("github.com", accountKey),
+                        keyType = crypto.encryptString("public-key", accountKey),
+                        keyValue = serverKeyValue,
+                    ),
+                ),
+            ),
+        )
+
+        val loaded = mapper.toDomain(stored, accountKey)
+        // 模拟「模型里这条凭据的私钥材料取不到」——解密失败或字段缺失的等价形态
+        val item = loaded.copy(
+            fido2Credentials = loaded.fido2Credentials.map { it.copy(keyValue = null) },
+        )
+
+        val written = mapper.toUpdateRequest(item, stored, accountKey)
+            .login!!.fido2Credentials.single()
+
+        // 密文必须逐字节一致（CBC 随机 IV ⇒ 只要重加密就必然不等）
+        assertEquals(serverKeyValue, written.keyValue)
+        assertEquals(
+            "PRIVATE-KEY-MATERIAL",
+            crypto.decryptToString(written.keyValue!!, accountKey),
+        )
+    }
+
+    /**
+     * 未改动通行密钥集合时，写回应与服务端密文**逐字节一致**（不重加密）。
+     * 重加密虽不丢明文，但会让「这次到底动没动过」无从判断，也会掩盖真正的破坏性问题。
+     */
+    @Test
+    fun updateDoesNotReEncryptUntouchedFido2Credentials() {
+        val storedCredential = Fido2CredentialDto(
+            credentialId = crypto.encryptString("cid-a", accountKey),
+            rpId = crypto.encryptString("x.com", accountKey),
+            keyValue = crypto.encryptString("KEY-A", accountKey),
+            counter = crypto.encryptString("3", accountKey),
+            discoverable = crypto.encryptString("true", accountKey),
+        )
+        val stored = CipherDto(
+            id = "c12",
+            type = 1,
+            name = crypto.encryptString("站点", accountKey),
+            login = LoginDto(fido2Credentials = listOf(storedCredential)),
+        )
+
+        val request = mapper.toUpdateRequest(mapper.toDomain(stored, accountKey), stored, accountKey)
+
+        assertEquals(listOf(storedCredential), request.login!!.fido2Credentials)
+    }
+
+    /**
+     * 追加新凭据时，**既有条目的密文一字不改**（对齐 Bastion
+     * `Fido2CredentialCodec.mergeByCredentialId`：其余既有条目全部保留，避免覆盖丢失）。
+     */
+    @Test
+    fun updateAppendsNewCredentialAndKeepsExistingCipherText() {
+        val storedCredential = Fido2CredentialDto(
+            credentialId = crypto.encryptString("cid-a", accountKey),
+            rpId = crypto.encryptString("x.com", accountKey),
+            keyValue = crypto.encryptString("KEY-A", accountKey),
+        )
+        val stored = CipherDto(
+            id = "c13",
+            type = 1,
+            name = crypto.encryptString("站点", accountKey),
+            login = LoginDto(fido2Credentials = listOf(storedCredential)),
+        )
+
+        val loaded = mapper.toDomain(stored, accountKey)
+        val item = loaded.copy(
+            fido2Credentials = loaded.fido2Credentials + VaultFido2Credential(
+                credentialId = "cid-new",
+                rpId = "y.com",
+                keyValue = "KEY-NEW",
+            ),
+        )
+
+        val output = mapper.toUpdateRequest(item, stored, accountKey).login!!.fido2Credentials
+
+        assertEquals(2, output.size)
+        assertEquals(storedCredential, output[0]) // 既有条目原样保留
+        assertEquals("cid-new", crypto.decryptToString(output[1].credentialId!!, accountKey))
+        assertEquals("KEY-NEW", crypto.decryptToString(output[1].keyValue!!, accountKey))
+    }
+
+    /** 模型里移除某条 → 该条从请求中剔除（其余条目仍原样保留）。 */
+    @Test
+    fun updateDropsCredentialRemovedFromModel() {
+        val keepMe = Fido2CredentialDto(
+            credentialId = crypto.encryptString("cid-keep", accountKey),
+            rpId = crypto.encryptString("keep.com", accountKey),
+            keyValue = crypto.encryptString("KEY-KEEP", accountKey),
+        )
+        val dropMe = Fido2CredentialDto(
+            credentialId = crypto.encryptString("cid-drop", accountKey),
+            rpId = crypto.encryptString("drop.com", accountKey),
+            keyValue = crypto.encryptString("KEY-DROP", accountKey),
+        )
+        val stored = CipherDto(
+            id = "c14",
+            type = 1,
+            name = crypto.encryptString("站点", accountKey),
+            login = LoginDto(fido2Credentials = listOf(dropMe, keepMe)),
+        )
+
+        val loaded = mapper.toDomain(stored, accountKey)
+        val item = loaded.copy(
+            fido2Credentials = loaded.fido2Credentials.filter { it.credentialId == "cid-keep" },
+        )
+
+        val output = mapper.toUpdateRequest(item, stored, accountKey).login!!.fido2Credentials
+
+        assertEquals(listOf(keepMe), output)
+    }
+
+    /**
+     * 保守回退：服务端某条凭据的 `credentialId` 解不开时，**一律沿用原密文整表返回**，
+     * 绝不冒险做增删判断（宁可这次不生效，也不能误删用户的密钥材料）。
+     */
+    @Test
+    fun updateFallsBackToStoredWhenStoredCredentialIdIsUndecryptable() {
+        val damaged = Fido2CredentialDto(
+            credentialId = "2.AAAA|BBBB", // 非法密文：解不开
+            rpId = crypto.encryptString("x.com", accountKey),
+            keyValue = crypto.encryptString("KEY-X", accountKey),
+        )
+        val stored = CipherDto(
+            id = "c15",
+            type = 1,
+            name = crypto.encryptString("站点", accountKey),
+            login = LoginDto(fido2Credentials = listOf(damaged)),
+        )
+
+        val request = mapper.toUpdateRequest(mapper.toDomain(stored, accountKey), stored, accountKey)
+
+        assertEquals(listOf(damaged), request.login!!.fido2Credentials)
+        assertEquals(
+            "KEY-X",
+            crypto.decryptToString(request.login!!.fido2Credentials.single().keyValue!!, accountKey),
+        )
+    }
+
+    /**
      * `creationDate` 是 Bitwarden 的**明文** DateTime（不加密）。
      * 修复前读侧一律按密文解密，解析失败降级空串 → 通行密钥创建时间永远显示「—」。
      */

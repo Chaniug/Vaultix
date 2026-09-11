@@ -266,7 +266,9 @@ class ItemRepositoryImpl @Inject constructor(
             "通行密钥只能绑定到登录（密码）条目，无法保存到类型 ${existing.type} 的条目"
         }
         val item = loadItem(vaultId, itemId) ?: error("条目解析失败：$itemId")
-        // 整体替换该登录条目的通行密钥集合，走既有合并写回（fido2 逐字段重加密）
+        // 整体替换该登录条目的通行密钥集合。写回时 CipherMapper 按 credentialId
+        // **保留未改动条目的服务端原密文**（绝不重加密），只有新增条目才加密 ——
+        // 否则会把服务端已存的私钥材料（keyValue）覆写成 null（P0，不可逆）。
         updateItem(vaultId, item.copy(fido2Credentials = credentials)).getOrThrow()
     }
 
