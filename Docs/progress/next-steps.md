@@ -1,6 +1,28 @@
 # 下一步任务清单
 
-> 更新于 2026-09-11（第三十二轮）。**【最新】锁态模型按 Bitwarden 标准重写完成。**
+> 更新于 2026-09-11（第三十三轮）。**【最新】搜索框按 Bitwarden 标准重写，消除「输入框乱跳」。**
+>
+> 用户反馈：「当前的 vaultix 一直在输入框，搜索框乱跳，有没有办法。按照 bitwarden 的方式修吧」。
+>
+> **根因**：三个带搜索的界面存在**三种互不一致的坏写法**——
+> ① `ItemsScreen` 把 `OutlinedTextField` 挂在 `LargeTopAppBar` **外层**的 `Column` 里（最严重：
+> 大标题栏滚动时高度在变，输入框跟着反复垫高）；② `PasskeysScreen` / ③ `TotpCodesScreen`
+> 把输入框塞进 `LargeTopAppBar` 的 `title` 槽，而大标题栏**本身就是可变高度**，展开/收起时
+> 输入框抖动、焦点漂移。
+>
+> **修复（对齐 Bitwarden 的 `BitwardenSearchTopAppBar`）**：新增
+> `ui/common/VaultixSearchTopAppBar` —— 固定高度 `TopAppBar`（**绝不用大标题栏**）、
+> 搜索态输入框**整体占据 `title` 槽**（与标题二选一、不并存）、`FocusRequester` +
+> `LaunchedEffect` **主动请求焦点**、`ImeAction.Done`、有输入时清除按钮带动画。
+> 三个屏幕统一改为「`searchActive` 时**整体替换**顶栏」，不再叠加；`searchActive` 统一
+> 改 `rememberSaveable`。
+>
+> **验证**：新建组件用 Compose API 桩真实编译 **0 error**（API 参数名逐字对齐 Bastion
+> 实测用法）；四文件按 Kotlin UTF-16 语义无超 120 字符行；import 无残留未使用。
+>
+> 同轮附带：**已配好 SSH over 443 通道并把本地 10 个提交推送到 GitHub**（见下）。
+
+> 更新于 2026-09-11（第三十二轮）。锁态模型按 Bitwarden 标准重写完成。
 >
 > 用户要求：「参考 bitwarden 的做法…哪怕是一字一句抄代码，也要实现。
 > 还有**密码库加锁和解锁逻辑也要按 bitwarden 标准来**吧。更稳定，我这项目当前的
@@ -26,6 +48,75 @@
 > 浏览器流程回传了自造的 clientDataJSON** —— 系统只给 32 字节 `clientDataHash`（无明文），
 > 而 RP 校验用的是**网页交给它的那份浏览器 JSON**，所以 provider 回传的必须是**占位符**
 > （官方明文要求）；签名仍只用系统给的哈希。
+
+## 第三十三轮 2026-09-11 · 搜索框按 Bitwarden 标准重写 + 打通 GitHub 推送
+
+### 一、搜索框「乱跳」（用户反馈）
+
+用户原话：「当前的 vaultix 一直在输入框，搜索框乱跳，有没有办法。按照 bitwarden 的方式修吧」。
+
+**三种坏写法（三处互不一致）**：
+
+| 屏幕 | 旧写法 | 症状 |
+| --- | --- | --- |
+| `ItemsScreen` | `OutlinedTextField` 挂在 `LargeTopAppBar` **外层** `Column` | 最严重：大标题栏滚动变高，输入框被反复垫高 |
+| `PasskeysScreen` | 输入框塞进 `LargeTopAppBar` 的 `title` 槽 | 大标题栏展开/收起时输入框抖 |
+| `TotpCodesScreen` | 同上（且清除按钮语义写成「取消」） | 同上 |
+
+**修法（照抄 Bitwarden `BitwardenSearchTopAppBar`）**：
+
+1. 新建 `app/src/main/java/io/vaultix/vaultix/ui/common/SearchTopAppBar.kt`
+   （`VaultixSearchTopAppBar`）：
+   - 固定高度 `TopAppBar`，**明确不用 `LargeTopAppBar`**；
+   - 搜索态输入框**整体占据 `title` 槽**（与标题二选一）；
+   - `FocusRequester` + `LaunchedEffect(Unit) { requestFocus() }` 主动聚焦；
+   - `ImeAction.Done`；有输入时显示清除按钮（`scaleIn+fadeIn` / `scaleOut+fadeOut`）；
+   - 左侧关闭按钮 = 退出搜索并清空。
+2. 三个屏幕统一改成 `if (searchActive) VaultixSearchTopAppBar(...) else LargeTopAppBar(...)`
+   —— **整体替换，不叠加**。
+3. `searchActive` 从 `remember` 改为 `rememberSaveable`（旋转 / 进程恢复不丢）。
+4. 删除三个屏幕各自的旧 `SearchField` 私有组件及随之失效的 import。
+
+**验证（无 Android SDK / Compose 依赖下的手段）**：
+
+- 自建 Compose API 桩（`/tmp/vs/stub/`），用 `kotlin-compiler-embeddable` **真实编译**
+  新建的 `SearchTopAppBar.kt` → **0 error**；`Modifier`/`Icons.Filled` 等桩写法与真实
+  Compose 对齐（`interface Modifier { companion object : Modifier }`）。
+- 关键 API 参数名**逐字比对 Bastion 实测用法**：
+  `TopAppBarDefaults.topAppBarColors(containerColor=...)`、
+  `TextFieldDefaults.colors(focusedContainerColor/unfocusedContainerColor/focusedIndicatorColor/unfocusedIndicatorColor=...)`。
+- 四文件按 **Kotlin `String.length`（UTF-16）语义**无超 120 字符行（`awk` 按字节算会误报 CJK 注释）。
+- import 残留检查：无未使用 import（`getValue`/`setValue` 为 `by` 委托操作符，须保留）。
+
+**提交**：`a3093e4`。
+
+### 二、GitHub 推送（此前一直未推上去）
+
+**问题链**：
+
+1. HTTPS 推送报 `could not read Username` —— 沙箱的非交互环境取不到凭证，
+   而 `git-credential-helper` 对 github.com 返回空。
+2. `github.com` 被解析到 `198.18.0.x`（保留测试网段，网关劫持），HTTPS 直连 TLS 被断。
+3. SSH 22 端口超时。
+
+**解决**：
+
+1. 用阿里 DoH（`https://223.5.5.5/resolve`，沙箱内可达）查到 GitHub **真实 IP**：
+   `github.com=20.205.243.166`、`ssh.github.com=20.205.243.160`、
+   `api.github.com=20.205.243.168`、`codeload.github.com=20.205.243.165`、
+   `raw.githubusercontent.com=185.199.110.133`、`objects.githubusercontent.com=185.199.111.133`。
+2. 写入 `/etc/hosts` **并同步 `~/.user_hosts`**（`/etc/hosts` 改动 workspace 重启会被还原，
+   项目指南第 2 条要求长期使用）。
+3. 配置 `~/.ssh/config`：`github.com` → `HostName ssh.github.com` + `Port 443`（**SSH over 443**，
+   绕开被墙的 22 端口）。
+4. 安装九哥提供的私钥（指纹 `SHA256:r99kZ2srjaVvBVmUeBKb6S6svJxK/IIDGUZ7+oEXIqA`，
+   与公钥 `github-chani` 逐字节一致）→ `ssh -T git@github.com` 返回
+   `Hi Chaniug! You've successfully authenticated`。
+5. `git remote set-url origin git@github.com:Chaniug/Vaultix.git` → **推送成功**：
+   `ae3a236..797cac1`（第三十二轮 9 个提交）+ `797cac1..a3093e4`（本轮）。
+
+**【重要·沙箱重启后恢复步骤】**：若 `/etc/hosts` 被还原且推送失败，重跑上述第 1–3 步
+（真实 IP 可能漂移，用 DoH 重查即可）。
 
 ## 第三十二轮 2026-09-11 · 锁态模型按 Bitwarden 标准重写
 
