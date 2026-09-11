@@ -30,6 +30,7 @@ import io.vaultix.vaultix.R
 import io.vaultix.vaultix.autofill.engine.AutofillCredentialMapper
 import io.vaultix.vaultix.autofill.engine.AutofillDatasets
 import io.vaultix.vaultix.autofill.engine.FillPlanner
+import io.vaultix.vaultix.autofill.match.AutofillFillTargetPolicy
 import io.vaultix.vaultix.autofill.match.AutofillRequestContextPolicy
 import io.vaultix.vaultix.autofill.match.BitwardenLikeAutofillMatcher
 import io.vaultix.vaultix.autofill.match.MatchConfig
@@ -84,11 +85,13 @@ class VaultixAutofillService : AutofillService() {
             return
         }
         val parsed = AssistStructureParser.parse(structure)
-        // 诊断（仅元数据）：浏览器填充静默失效时靠它定位「是没解析到字段，还是没匹配到条目」
+        // 诊断（仅元数据）：浏览器填充静默失效时靠它定位「是没解析到字段，还是没匹配到条目」；
+        // `targets=0` 表示页面上没有值得填充的字段（搜索框 / 昵称框 …）→ 本次有意不响应。
         AutofillLogger.d(
             "fillRequest pkg=${parsed.packageName} webDomain=${parsed.webDomain} " +
                 "fallback=${parsed.fallbackWebDomain} webView=${parsed.webView} " +
                 "fields=${parsed.fields.size} hints=${parsed.fields.groupingBy { it.hint }.eachCount()} " +
+                "targets=${AutofillFillTargetPolicy.fillTargets(parsed).size} " +
                 "user=${parsed.usernameId != null} pass=${parsed.passwordId != null}",
         )
         // 对齐 Bitwarden blocked URIs：系统界面 / 设置 / 本应用自身不提供填充。
@@ -143,7 +146,17 @@ class VaultixAutofillService : AutofillService() {
     /** 解析 → 匹配 → 规划 → Dataset；任何异常都退化为「无响应」，不阻塞被填充的 App。 */
     private suspend fun buildResponse(parsed: ParsedStructure): FillResponse? {
         val ids = AutofillDatasets.allFillableIds(parsed)
-        if (ids.isEmpty()) return null
+        if (ids.isEmpty()) {
+            // 页面上没有值得填充的字段（搜索框 / 昵称框 / 订阅框 …）→ **直接不响应**。
+            //
+            // 对齐 Bitwarden：`AutofillRequest.Unfillable` 时 `fillCallback.onSuccess(null)`
+            // ——「This effectively disables autofill for this view set and allows the
+            // AutofillService to be unbound」；其 FillResponseBuilder 在无可填 id 时同样返回 null。
+            // 此前这里用的是「全部可见字段」，于是任何页面都能凑出 ids，再挂一个认证响应
+            // ⇒ 搜索框也会把填充 UI 勾出来（用户反馈的误弹）。
+            AutofillLogger.d("noFillTarget → 不响应（非凭据字段，避免误弹）")
+            return null
+        }
 
         val unlocked = vaultRepository.observeUnlockedVaultIds().first()
         if (unlocked.isEmpty()) {

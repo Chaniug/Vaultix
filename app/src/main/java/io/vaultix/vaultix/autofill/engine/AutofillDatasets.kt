@@ -26,6 +26,7 @@ import io.vaultix.vaultix.autofill.model.FieldHint
 import io.vaultix.vaultix.autofill.model.FillPlan
 import io.vaultix.vaultix.autofill.model.FillSuggestion
 import io.vaultix.vaultix.autofill.model.ParsedStructure
+import io.vaultix.vaultix.autofill.match.AutofillFillTargetPolicy
 
 /** 自动填充面板条目的构造与展示（RemoteViews，由系统渲染）。 */
 object AutofillDatasets {
@@ -84,9 +85,15 @@ object AutofillDatasets {
     fun targetIdsFor(parsed: ParsedStructure, hint: FieldHint): List<AutofillId> =
         parsed.fields.filter { it.isVisible && it.hint == hint }.map { it.id }
 
-    /** 页面上全部可填充字段 id（用于 FillResponse 的整体认证回灌）。 */
+    /**
+     * 页面上**值得填充**的字段 id（用于 FillResponse 的整体认证回灌）。
+     *
+     * ⚠️ 必须走 [AutofillFillTargetPolicy]，**不能**退回「全部可见字段」——
+     * 后者会让搜索框这类非凭据字段也拿到认证入口，正是「填充 UI 到处误弹」的根因；
+     * 且返回空数组会让上层直接不响应（对齐 Bitwarden 的 `Unfillable → null`）。
+     */
     fun allFillableIds(parsed: ParsedStructure): Array<AutofillId> =
-        parsed.fields.filter { it.isVisible }.map { it.id }.toTypedArray()
+        AutofillFillTargetPolicy.fillTargets(parsed).map { it.id }.toTypedArray()
 
     /**
      * 无建议时的占位：整表认证，点击后交给 Activity 引导解锁 / 搜索。
