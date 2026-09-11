@@ -1,6 +1,12 @@
 # 下一步任务清单
 
-> 更新于 2026-09-11（第二十九轮）。**通行密钥「找不到候选 / 列表为空」根因已定位并修复：
+> 更新于 2026-09-11（第三十轮）。**【最新】通行密钥「Authentication failed」根因已定位并修复：
+> 浏览器流程回传了自造的 clientDataJSON —— 系统只给 32 字节 `clientDataHash`（无明文），
+> 而 RP 校验用的是**网页交给它的那份浏览器 JSON**，所以 provider 回传的必须是**占位符**
+> （官方明文要求）；签名仍只用系统给的哈希。
+> ⚠️ Bastion / Keyguard 两家在这点上都是**反例**，不可照抄；Bitwarden 交给 SDK 的做法才对。**
+>
+> 上一轮（第二十九轮）**通行密钥「找不到候选 / 列表为空」根因已定位并修复：
 > 未 trim + rpId 未归一化 + allowCredentials 无回退（全在 discovery 链）。
 > 「解密残留填充」经真实 JCE 实测后被降级为纵深防御，非根因。**
 > 同时**撤回**第二十八轮的两个错误结论（见下方「⚠️ 结论更正」）。
@@ -108,6 +114,65 @@ Bitwarden / 1Password / iCloud Keychain 这类**同步型 passkey 全部走这�
 若仍为空，`logcat` 抓 `VaultixAutofill` tag 的
 `GET resolve rpId=... total=... unusable=... rpIdMiss=... allowedMiss=... matched=...`
 逐级计数（本轮已埋点），四个计数一出来即可判定卡在哪一级。
+
+## 第三十轮 2026-09-11 · 通行密钥「Authentication failed」根因
+
+> 用户报：候选列表已能出现（第二十九轮的 discovery 修复生效），但站点仍报
+> **Authentication failed** —— 这是断言（登录）阶段的**验签失败**。
+
+### 根因：provider 与 RP 看到的 `clientDataJSON` 不是同一份
+
+- 系统只把 **32 字节 `clientDataHash`**（浏览器那份 clientDataJSON 的 SHA-256）交给 provider，
+  **不给明文**；
+- 网页交给 RP 的是**浏览器自己拼的那份** JSON，RP 用它重新哈希后与签名里的哈希比对。
+
+旧实现（`WebAuthn.buildClientDataJsonForBrowser`）试图「逐字节复刻浏览器的 clientDataJSON」
+再回传，还按哈希在 `[无 crossOrigin, 有 crossOrigin]` 两个候选里**反选** —— 这条路不可能
+稳定成功：字段集与字段顺序由浏览器版本决定（Chromium 可能带 `tokenBinding` 等），
+provider 无从保证命中；一旦不命中就 `?: candidates.first()` 回退到自造变体 ⇒ RP 哈希必然
+对不上 ⇒ 验签失败。
+
+**官方逐字口径**（`developer.android.com/identity/sign-in/credential-provider`）：
+> use the `clientDataHash` that's provided directly in `CreatePublicKeyCredentialRequest()`
+> or `GetPublicKeyCredentialOption()` instead of assembling and hashing clientDataJSON during
+> the signature request. **To avoid JSON parsing issues, set a placeholder value for
+> `clientDataJSON` in the attestation and assertion response.**
+
+### 修复（`90d5e6d`）
+
+- [x] `WebAuthn.BROWSER_FLOW_CLIENT_DATA_PLACEHOLDER`（空字节数组）作为浏览器流程的
+      clientDataJSON；**删除** `buildClientDataJsonForBrowser`（错路产物）；
+      `clientDataJsonMatchesHash` 保留作诊断并注明浏览器流程下 `false` 是**预期**。
+- [x] `PasskeyGetActivity.sign()`：有 `clientDataHash` → 签名覆盖 `authData ‖ clientDataHash`、
+      回传占位符；无 → 自己拼 JSON、自己哈希、自己签、回传同一份 JSON。
+- [x] `PasskeyCreateActivity.createPasskey()`：浏览器流程同样回传占位符。
+- [x] 纠正三处已证伪的 KDoc（`buildClientDataJson` / `buildClientDataJsonForBrowser` /
+      两个 Activity 的 `browserFlow`）。
+
+### 三家对照（关键：两家是反例）
+
+| 实现 | 浏览器流程如何处理 clientDataJSON |
+|---|---|
+| **Bitwarden ✅** | 从不在 Android 侧重建，交给 SDK（`ClientData.DefaultWithCustomHash(hash)` / `DefaultWithExtraData(androidPackageName)`）；`Fido2PublicKeyCredential.clientDataJson` 可空 |
+| Keyguard ❌ | 重建（`PasskeyProviderGetRequest.kt:119-159`） |
+| Bastion ❌ | 重建（`PasskeyAuthActivity.createClientDataJson`） |
+
+> **Bastion 是本项目主要参考对象，但这一处不能跟。参考项目的"多数"不等于正确。**
+
+### 测试（沙箱无 Android SDK，用 Gradle 自带 kotlin-compiler-embeddable 2.2.21 在真实源码上跑）
+
+- [x] 真实 `WebAuthnTest`：**10/10 通过**，其中新增 3 条回归锁：
+      `browser flow signs provided hash and returns placeholder clientDataJSON` /
+      `native flow returns the very clientDataJSON it signed over` /
+      `create response carries placeholder in browser flow and real json otherwise`。
+- [x] 独立验证程序 20 项断言全绿，含**反证旧路**：浏览器多带一个字段（`tokenBinding`）⇒
+      两个自造候选 `match=false`，证明旧逻辑只会回退到错的那份。
+- [x] detekt 阈值自检：4 个改动文件超 120 字符行长 = 0；`sign()` 111 行 < 150；
+      `WebAuthn` fun 数 29 < 60。
+
+⏳ **真机待验证**：装新包 → Edge 触发通行密钥登录 → **应当登录成功**。
+若仍失败，`logcat` 抓 `VaultixAutofill`：
+`PK assertion ready sigLen=... authDataLen=... cdjLen=0 browserFlow=true`（`cdjLen=0` 即占位符生效）。
 
 ## 已完成（第二十八轮 2026-09-11 · `8afac3d`）
 
