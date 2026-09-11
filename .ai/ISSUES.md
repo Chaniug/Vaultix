@@ -572,3 +572,74 @@ create 路径同理：浏览器流程回传占位符（attestation 为 `none`，
    用系统给的哈希去签，不要自造。补偿代码越多，说明方向越偏。
 3. **参考项目要挑着抄，不能整段搬。** 本轮 Bastion / Keyguard 两家都是反例，
    唯一正确的 Bitwarden 因为把逻辑藏在 SDK 里反而最不起眼。
+
+## 36. 通行密钥「Authentication failed」第二根因：锁态竞态（Activity 把「库锁定」当成「找不到」）（2026-09-11，P0，`38c5130`）
+
+> 用户报：35 号（clientDataJSON 占位符）修复后**仍然** Authentication failed，
+> 并追问「是密码库的问题吗，密码库加锁解锁的逻辑问题？」——**用户的判断是正确的**。
+> 随后指示：「参考 bitwarden 的做法，它能够调用出通行密钥，没道理我们调用不出、
+> 校验不了的，哪怕是一字一句抄代码，也要实现」。
+
+### 先定性：这是两个独立缺陷叠加，缺一个都修不好
+
+| | 缺陷 | 性质 |
+|---|---|---|
+| **A** | `PasskeyGetActivity` 把「库锁定」与「凭证不存在」混为一谈 | **假错误信息**（误导排查方向） |
+| **B** | `AutoLockController` 把「我自己拉起的 Activity」误判成「用户切走又回来」 | **真锁定**（会话真的被清） |
+
+只修 A：用户会看到「请解锁」但根本没人锁他，仍失败。
+只修 B：锁态竞态消失，但一旦真锁定仍报「Passkey not found」，同样的假错误会复现。
+
+### 完整链路
+
+1. 浏览器请求 → `VaultixCredentialProviderService` 列候选（**能列出 ⇒ 当时库是解锁的**）；
+2. 点候选 → 系统拉起 `PasskeyGetActivity`；
+3. 同进程 Activity 切换在 `ProcessLifecycleOwner` 语义下 = 一次前后台切换（`onStop`→`onStart`）；
+4. `AutoLockController.onStart` 判定回前台是否该锁。`AutoLockPolicy.screenLockRequiresRelock(screenLocked) = screenLocked` —— **只要 keyguard 锁着就锁，与分钟档位无关** ⇒ `lockAll()`；
+5. 会话清空 → `ItemRepositoryImpl.observeState` 发空列表（`if (!isUnlocked) emptyList()`）→ `cred == null`；
+6. `fail("Passkey not found")` → 浏览器「认证失败」。
+
+### 关键代码依据
+
+- `ItemRepositoryImpl.kt:296-303` `observeState`：库未解锁恒发空列表（**这个设计本身是对的**，
+  错在调用方把「空」解释成「不存在」）。
+- `AutoLockPolicy.screenLockRequiresRelock(screenLocked) = screenLocked`：无差别 relock。
+- `AppLifecycleObserver` 的注册（`VaultixApplication.onCreate`）：`ProcessLifecycleOwner`
+  对「同进程 Activity 互切」也会发 `onStop/onStart`，这是 Android 的既定行为。
+
+### 解法：逐处对齐 Bitwarden（用户要求「一字一句抄」）
+
+1. **锁态单独成一路**（对齐 `CredentialProviderProcessorImpl.isVaultUnlocked` +
+   `RootNavViewModel` 的 `VaultLocked → VaultUnlockRoute.Standard`）：
+   `VaultSessionManager.isAnyUnlocked()`；`cred == null` 时先探锁态分流。
+2. **凭据流程豁免窗口**（对齐 `VaultLockManagerImpl` 的 `FOREGROUNDED → handleOnForeground()`
+   取消超时任务、`OnAppRestart` 的 autofill 豁免）：新增 `CredentialFlowGuard`，
+   两个凭据 Activity 在 `onCreate` 最早时机打点。
+3. **验证簿记**（对齐 `BitwardenCredentialManagerImpl`）：`isUserVerified` 全路径复位、
+   `authenticationAttempts` 上限 5。
+4. **origin 取值顺序**（对齐 `getOriginUrlFromAssertionOptionsOrNull`）：host 取
+   **请求 JSON 的 rpId**，缺失时明确失败（`Error.MissingHostUrl`），不再构造 `"https://"` 伪 origin。
+
+### 教训（**本轮最贵的一条**）
+
+**真实运行抓出了本次改动自身引入的严重缺陷**：`CredentialFlowGuard` 初值若取
+`Long.MIN_VALUE`，判定式 `now - lastFlowStartedAtMs` 会**整数溢出为负数**，
+负数恒 `< 8000` ⇒ 判定「在豁免窗口内」**恒为真** ⇒ **自动锁定被永久抑制**。
+
+这个缺陷在纸面推演里 100% 看不出来（逻辑"对称"且看起来更严谨）。改成初值 `0L` 后
+（`elapsedRealtime` 恒为正且远大于窗口）才正确，并把该溢出场景固化为回归断言。
+
+⇒ **凡是能用真实运行时验证的，绝不靠读代码下结论**。这条在第 29 轮已被总结过一次
+（加密填充假设被 JCE 实测否掉），本轮再次应验 —— 而且这次否掉的是**我自己刚写的代码**。
+
+### 复现断言清单（`VerifyCredentialFlowGuard.kt`，9/9 PASS）
+
+1. 凭据流程刚启动 + 屏幕锁定 → **不锁**（豁免生效）
+2. 凭据流程已过窗口 + 屏幕锁定 → **锁**
+3. 从未启动流程 + 屏幕锁定 → **锁**（初值不得造成意外豁免）
+4. 恰好到达窗口边界 → 视为过期（`<` 而非 `<=`）
+5. 窗口内 + 后台超时 → 仍豁免
+6. 「从不自动锁定」档位 → 不锁（与本机制无关）
+7. `Long.MIN_VALUE` 作初值会溢出（**证明为什么不能用它**）
+8. 初值下、无流程时即便 `elapsedRealtime` 很大也不豁免
+9. 初值确为 `0`

@@ -819,3 +819,54 @@ provider 无从复刻 ⇒ 「按哈希枚举候选反选」（旧 `buildClientDa
 3. **验证脚本本身的假设也要先跑一遍**：本轮我的首个验证脚本有 2 处假设错（`crossOrigin`
    字段顺序恰好一致 → 侥幸命中；`"webauthn.create"` 明文不会出现在 base64 响应里）。
    先跑、看真实输出、再改断言 —— 不要"写完就信"。
+
+---
+
+## 2026-09-11 · 第三十一轮：通行密钥「Authentication failed」第二根因 —— **锁态竞态**
+
+> 用户：「还是不行。**是密码库的问题吗，密码库加锁解锁的逻辑问题？**」
+> → **判断正确**。然后：「参考 bitwarden 的做法…**哪怕是一字一句抄代码，也要实现**」。
+
+### 根因（两个独立缺陷叠加）
+
+- **A（假错误）**：`PasskeyGetActivity` 把「库锁定」当「凭证不存在」。`ItemRepositoryImpl
+  .observeState` 在库未解锁时恒发空列表（**该设计正确**），但调用方把「空」读成「不存在」
+  ⇒ `fail("Passkey not found")` **把人引向错误方向**。
+- **B（真锁定）**：`AutoLockController.onStart` 把「系统拉起我方 Activity」造成的
+  ProcessLifecycle 前后台切换，误判为「用户切走又回来」。而
+  `AutoLockPolicy.screenLockRequiresRelock(locked) = locked` **无差别 relock** ⇒ `lockAll()`。
+
+链条：CP 列候选（说明库解锁）→ 点选 → 拉起我方 Activity → `onStart` 误判 → `lockAll()`
+→ 会话清空 → `observeState` 发空 → `cred == null` → 浏览器「认证失败」。
+
+### 修法（逐处对齐 Bitwarden）
+
+| 缺陷 | Bitwarden 对应 | 落地 |
+|---|---|---|
+| A | `CredentialProviderProcessorImpl.isVaultUnlocked` + `RootNavViewModel` 的 `VaultLocked → 解锁界面`（**绝不是错误页**） | `VaultSessionManager.isAnyUnlocked()`；`cred == null` 时先探锁态：锁定 → `unlockAndFinish()`；已解锁但凭证不在 → 才是真「找不到」 |
+| B | `VaultLockManagerImpl`：`FOREGROUNDED → handleOnForeground()` 取消超时；`OnAppRestart` 的 autofill 豁免 | 新增 `CredentialFlowGuard`；两个凭据 Activity `onCreate` **最早时机**打点；`onStart` 窗口内跳过判定 |
+| C | `isUserVerified` + `authenticationAttempts`（上限 5） | 同名同语义；签名前断言；全终结路径复位 |
+| D | `getOriginUrlFromAssertionOptionsOrNull`（host 取**请求 JSON 的 rpId**）；缺失 → `Error.MissingHostUrl` | 重排 origin 取值顺序；原生流程缺 host 时明确失败，不再造 `"https://"` 伪 origin |
+
+### ⚠️ 本轮最贵教训（务必记住）
+
+**`CredentialFlowGuard` 初值取 `Long.MIN_VALUE` 会导致整数溢出 → 自动锁定被永久抑制。**
+判定式 `now - lastFlowStartedAtMs < WINDOW`：`now - Long.MIN_VALUE` 溢出为**负数**，
+负恒 `< WINDOW` ⇒ 恒判「在窗口内」。**纸面推演 100% 看不出**（写法看起来更"严谨"）。
+初值改 `0L` 才正确，并固化为回归断言。
+
+⇒ 这是第 29 轮教训（"能用真实运行时实验否掉的假设，绝不要写进根因"）的**第二次应验**，
+而且这次否掉的是**我自己刚写的代码**。**验证脚本先跑、看真实输出、再改断言。**
+
+### 环境事实（可复用）
+
+- 沙箱无 Android SDK，但 **Gradle 自带 `kotlin-compiler-embeddable-2.2.21.jar`**：
+  `java -cp "$GRADLE_HOME/lib/*" org.jetbrains.kotlin.cli.jvm.K2JVMCompiler -no-stdlib
+  -no-reflect -cp "$GRADLE_HOME/lib/kotlin-stdlib-2.2.21.jar" -d out X.kt`
+  即可编译纯 JVM 逻辑；`-kotlin-home` 方式反而会报「cannot access built-in declaration」。
+  运行：`java -cp "out:$GRADLE_HOME/lib/kotlin-stdlib-2.2.21.jar" <FQCN>`。
+- `git push` 在本沙箱不可用 → 交付形态是 **patch 文件**，需验证能 `git am` 干净落到
+  `origin/main`（验证方法：`git clone` 本地 → `git reset --hard <base>` → `git apply --check`
+  → `git am`；若 clone 继承本地 HEAD 会误报失败，必须先 reset）。
+- detekt 行长上限 **120**（Kotlin `String.length` UTF-16 语义，CJK 按**字符**算，
+  别用 `awk` 的数字节）；函数 ≤150 行、单文件 ≤60 函数。

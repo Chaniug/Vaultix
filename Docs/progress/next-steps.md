@@ -1,18 +1,96 @@
 # 下一步任务清单
 
-> 更新于 2026-09-11（第三十轮）。**【最新】通行密钥「Authentication failed」根因已定位并修复：
-> 浏览器流程回传了自造的 clientDataJSON —— 系统只给 32 字节 `clientDataHash`（无明文），
+> 更新于 2026-09-11（第三十一轮）。**【最新】通行密钥「Authentication failed」的第二个根因
+> （**锁态竞态**）已定位并修复 —— 用户的判断是对的，问题确实在密码库的加锁/解锁逻辑上。**
+>
+> `PasskeyGetActivity` 把「库锁定」与「凭证不存在」混为一谈：它经 `ItemRepository` 取凭证，
+> 而 `ItemRepositoryImpl.observeState` 在**库未解锁时恒发空列表**（安全设计，正确），
+> 于是「库在候选展示后重新上锁」被误报成 `Passkey not found`。而库确实会被锁掉 ——
+> `AutoLockController.onStart` 把「系统拉起我方 Activity」造成的 ProcessLifecycle 前后台切换，
+> 误判成「用户切走 App 又回来」→ `lockAll()`。两者叠加即竞态窗口。
+>
+> 已照抄 Bitwarden 的三处对应设计：①锁态单独成一路（`isVaultUnlocked` → 解锁引导，
+> 绝不报「找不到」）；②凭据流程豁免窗口（对齐 `FOREGROUNDED` 取消超时任务 +
+> `OnAppRestart` 的 autofill 豁免）；③`isUserVerified` / `authenticationAttempts`(≤5) 簿记。
+> 附带修正 origin 取值顺序，并在原生流程缺 host 时明确失败（对齐 `Error.MissingHostUrl`）。
+>
+> 第三十轮（上一轮）**通行密钥「Authentication failed」的第一个根因已修复：
+> 浏览器流程回传了自造的 clientDataJSON** —— 系统只给 32 字节 `clientDataHash`（无明文），
 > 而 RP 校验用的是**网页交给它的那份浏览器 JSON**，所以 provider 回传的必须是**占位符**
 > （官方明文要求）；签名仍只用系统给的哈希。
 > ⚠️ Bastion / Keyguard 两家在这点上都是**反例**，不可照抄；Bitwarden 交给 SDK 的做法才对。**
 >
-> 上一轮（第二十九轮）**通行密钥「找不到候选 / 列表为空」根因已定位并修复：
+> 再上一轮（第二十九轮）**通行密钥「找不到候选 / 列表为空」根因已定位并修复：
 > 未 trim + rpId 未归一化 + allowCredentials 无回退（全在 discovery 链）。
 > 「解密残留填充」经真实 JCE 实测后被降级为纵深防御，非根因。**
 > 同时**撤回**第二十八轮的两个错误结论（见下方「⚠️ 结论更正」）。
 > 审计报告 `Docs/progress/audit/bitwarden-alignment.md`；对齐评估
 > `Docs/progress/bastion-parity-assessment.md`（**注意已过时**）。
 > 状态：`TODO` / `DOING` / `DONE` / `BLOCKED`
+
+## 第三十一轮 2026-09-11 · 通行密钥「Authentication failed」第二根因（锁态竞态）
+
+> 用户报：clientDataJSON 占位符修复后**仍然** Authentication failed，并追问
+> 「是密码库的问题吗，密码库加锁解锁的逻辑问题？」——**判断正确**。
+> 随后指示「参考 bitwarden 的做法…哪怕是一字一句抄代码，也要实现」。
+
+### 根因（**锁态竞态**：两处判定不一致）
+
+现场链路（逐步）：
+
+1. 浏览器发起 passkey 请求 → `VaultixCredentialProviderService` 列出候选
+   —— **能列出说明当时库是解锁的**；
+2. 用户点候选 → 系统拉起 `PasskeyGetActivity`；
+3. 该 Activity 属于本 App。`ProcessLifecycleOwner` 因此走 `onStop` → `onStart`
+   （同进程内 Activity 切换在 ProcessLifecycle 语义下等同于一次前后台切换）；
+4. `AutoLockController.onStart` 判定「回前台是否该锁」。`AutoLockPolicy
+   .screenLockRequiresRelock(screenLocked) = screenLocked` —— **只要屏幕处于
+   keyguard 就锁，与分钟档位无关** → `lockAll()`；
+5. 会话被清 → `ItemRepositoryImpl.observeState` 发空列表（`if (!isUnlocked)
+   emptyList()`）→ Activity 读到 `cred == null` →
+   `fail(GetCredentialUnknownException("Passkey not found"))`；
+6. 浏览器收到**认证失败**，且错误信息把人误导到「库里没有这条密钥」。
+
+**两个独立缺陷叠加**：
+- **缺陷 A**：Activity 把「库锁定」与「凭证不存在」混为一谈（假错误信息）；
+- **缺陷 B**：自动锁定把「我自己拉起的 Activity」误判成「用户切走又回来」（真锁定）。
+
+### 修复（逐处对齐 Bitwarden）
+
+| Vaultix 缺陷 | Bitwarden 对应设计 | 本次落地 |
+|---|---|---|
+| A. 锁定误报「找不到」 | `CredentialProviderProcessorImpl` 的 `isVaultUnlocked` 门 + `RootNavViewModel` 把 `VaultLocked` 映射到**解锁界面**（绝不是错误页） | `VaultSessionManager.isAnyUnlocked()`；`PasskeyGetActivity` 在 `cred == null` 时**先探锁态**：锁定 → `unlockAndFinish()` 走解锁引导；已解锁但凭证不在 → 才是真的「找不到」 |
+| B. 自己拉起的 Activity 触发误锁 | `VaultLockManagerImpl`：`FOREGROUNDED → handleOnForeground()` **取消**超时任务；另有 `OnAppRestart` 的 autofill 豁免 | 新增 `CredentialFlowGuard`（记最近一次凭据流程启动时刻）；两个凭据 Activity 在 `onCreate` **最早时机**打点；`AutoLockController.onStart` 在豁免窗口（8s）内跳过锁定判定 |
+| C. 无验证簿记 | `isUserVerified` + `authenticationAttempts`（`MAX_AUTHENTICATION_ATTEMPTS = 5`） | 同名同语义落地；签名前断言 `isUserVerified`；所有终结路径复位为 false；用尽尝试即失败，不再弹窗 |
+| D. origin 取值顺序错、且构造伪 origin | `getOriginUrlFromAssertionOptionsOrNull`（**host 来自请求 JSON 的 rpId**）；缺失 → `Error.MissingHostUrl` | 改为「调用方 origin → 请求 rpId」顺序；原生流程（无 `clientDataHash`）拿不到 host 时**明确失败**，不发出注定被拒的断言 |
+
+### 验证（**真实运行**，非纸面推演）
+
+用沙箱内 `kotlin-compiler-embeddable-2.2.21.jar` 编译并执行
+`VerifyCredentialFlowGuard.kt`（内联 `CredentialFlowGuard` 与 `AutoLockPolicy`
+的逐字逻辑副本 + `AutoLockController.onStart` 的判定整合）—— **9/9 PASS**。
+
+> **该验证抓出了一个本次改动自身引入的严重缺陷**：`CredentialFlowGuard` 初值若取
+> `Long.MIN_VALUE`，判定式 `now - lastFlowStartedAtMs` 会**整数溢出为负数**，
+> 负数恒 `< 8000` ⇒ 判定「在豁免窗口内」**恒为真** ⇒ **自动锁定被永久抑制**。
+> 已改为初值 `0L`（`elapsedRealtime` 恒为正且远大于窗口，不溢出），
+> 并把该溢出场景固化为回归断言。
+>
+> 教训：**能真实跑起来的验证，一定要先跑再看输出** —— 这条推论在纸面上完全看不出问题。
+
+### 未决 / 待真机确认
+
+- [ ] 真机回归（用户装 Edge 侧 CI 产物）：候选列出 → 点选 → 应出现确认卡片与生物识别 →
+      Edge 正常登录。**重点观察日志中 `vaultUnlocked` / `anyUnlocked` 两项**：
+      - `credFound=false vaultUnlocked=false` → 锁态竞态（本次修复目标，应已消失）；
+      - `credFound=false vaultUnlocked=true` → 才是库里真的没这条凭证；
+      - `credFound=true` 但仍失败 → 回到签名链路（第三十轮已处理的 clientDataJSON）。
+- [ ] 锁定引导连通性：`unlockAndFinish()` 走 `AutofillIntents.MODE_UNLOCK`。
+      该路径在 autofill 场景已被验证；凭据提供商场景下的 PendingIntent 可启动性
+      需真机确认（理论上 `FLAG_ACTIVITY_NEW_TASK` 已补）。
+- [ ] 豁免窗口 8s 的体感：若用户反馈「切走再立刻回来没被锁」，把
+      `CredentialFlowGuard.EXEMPTION_WINDOW_MS` 调小即可（该常量已集中）。
+
 
 ## ⚠️ 结论更正（2026-09-11，第二十九轮）
 
