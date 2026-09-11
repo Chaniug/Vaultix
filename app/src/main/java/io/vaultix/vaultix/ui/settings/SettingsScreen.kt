@@ -66,6 +66,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.vaultix.datastore.VaultTimeout
 import io.vaultix.vaultix.BuildConfig
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.BiometricPrompter
@@ -123,7 +124,7 @@ fun SettingsScreen(
             SettingsRow(
                 icon = { Icon(Icons.Filled.Timer, contentDescription = null) },
                 title = stringResource(R.string.setting_auto_lock),
-                subtitle = autoLockMinutesLabel(state.autoLockMinutes),
+                subtitle = vaultTimeoutLabel(state.vaultTimeout),
                 onClick = { showAutoLockDialog = true },
             )
             SettingsRow(
@@ -201,9 +202,9 @@ fun SettingsScreen(
 
     if (showAutoLockDialog) {
         AutoLockDialog(
-            current = state.autoLockMinutes,
+            current = state.vaultTimeout,
             onSelect = {
-                viewModel.setAutoLockMinutes(it)
+                viewModel.setVaultTimeout(it)
                 showAutoLockDialog = false
             },
             onDismiss = { showAutoLockDialog = false },
@@ -498,11 +499,16 @@ private fun QuickUnlockManageDialog(
     )
 }
 
-/** 单选列表对话框：自动锁定档位（0/1/5/10/15/30/60/300/1440/-1 + 自定义）。 */
+/**
+ * 单选列表对话框：自动锁定档位。
+ *
+ * 档位集合对齐 Bitwarden `VaultTimeout`（立即 / 1 / 5 / 15 / 30 / 60 / 240 分钟 /
+ * 重启时 / 从不 / 自定义），取代旧的裸 Int 档位表。
+ */
 @Composable
 private fun AutoLockDialog(
-    current: Int,
-    onSelect: (Int) -> Unit,
+    current: VaultTimeout,
+    onSelect: (VaultTimeout) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var customOpen by rememberSaveable { mutableStateOf(false) }
@@ -537,7 +543,7 @@ private fun AutoLockDialog(
                     if (value == null || value < 1 || value > AutoLockPresets.MAX_CUSTOM_MINUTES) {
                         customInvalid = true
                     } else {
-                        onSelect(value)
+                        onSelect(VaultTimeout.Custom(value))
                     }
                 }) {
                     Text(stringResource(R.string.action_save))
@@ -557,16 +563,16 @@ private fun AutoLockDialog(
         title = { Text(stringResource(R.string.setting_auto_lock)) },
         text = {
             Column {
-                AutoLockPresets.VALUES.forEach { minutes ->
+                AutoLockPresets.VALUES.forEach { timeout ->
                     SingleChoiceRow(
-                        label = autoLockMinutesLabel(minutes),
-                        selected = minutes == current,
-                        onClick = { onSelect(minutes) },
+                        label = vaultTimeoutLabel(timeout),
+                        selected = timeout == current,
+                        onClick = { onSelect(timeout) },
                     )
                 }
                 SingleChoiceRow(
                     label = stringResource(R.string.auto_lock_custom),
-                    selected = current !in AutoLockPresets.VALUES,
+                    selected = current is VaultTimeout.Custom,
                     onClick = { customOpen = true },
                 )
             }
@@ -627,20 +633,38 @@ private fun SingleChoiceRow(label: String, selected: Boolean, onClick: () -> Uni
 }
 
 
-// ---- 档位文案（Bastion getAutoLockDisplayName 的 Vaultix 版，无 -2 档）----
+// ---- 档位文案（对齐 Bitwarden VaultTimeout 的档位命名）----
 
-/** 自动锁定分钟数 → 文案资源 id。 */
+/**
+ * 自动锁定档位 → 文案。
+ *
+ * `when` 作用于 sealed class（穷尽分支，漏档编译器会报错），取代旧的裸 Int `when`
+ * （后者漏一个档位只会在运行时静默落到 else）。
+ */
 @Composable
-private fun autoLockMinutesLabel(minutes: Int): String = when (minutes) {
-    -1 -> stringResource(R.string.auto_lock_never)
-    0 -> stringResource(R.string.auto_lock_immediately)
-    AutoLockPresets.HOUR_MINUTES -> stringResource(R.string.auto_lock_hour_fmt, 1)
-    AutoLockPresets.FIVE_HOURS -> stringResource(
-        R.string.auto_lock_hour_fmt,
-        AutoLockPresets.FIVE_HOURS_COUNT,
-    )
-    AutoLockPresets.DAY_MINUTES -> stringResource(R.string.auto_lock_day_fmt, 1)
-    else -> stringResource(R.string.auto_lock_minutes_fmt, minutes)
+private fun vaultTimeoutLabel(timeout: VaultTimeout): String = when (timeout) {
+    VaultTimeout.Never -> stringResource(R.string.auto_lock_never)
+    VaultTimeout.Immediately -> stringResource(R.string.auto_lock_immediately)
+    VaultTimeout.OnAppRestart -> stringResource(R.string.auto_lock_on_restart)
+    VaultTimeout.OneMinute -> stringResource(R.string.auto_lock_minutes_fmt, 1)
+    VaultTimeout.FiveMinutes -> stringResource(R.string.auto_lock_minutes_fmt, 5)
+    VaultTimeout.FifteenMinutes -> stringResource(R.string.auto_lock_minutes_fmt, 15)
+    VaultTimeout.ThirtyMinutes -> stringResource(R.string.auto_lock_minutes_fmt, 30)
+    VaultTimeout.OneHour -> stringResource(R.string.auto_lock_hour_fmt, 1)
+    VaultTimeout.FourHours -> stringResource(R.string.auto_lock_hour_fmt, 4)
+    is VaultTimeout.Custom -> when {
+        timeout.vaultTimeoutInMinutes % AutoLockPresets.MINUTES_PER_HOUR == 0 ->
+            stringResource(
+                R.string.auto_lock_hour_fmt,
+                timeout.vaultTimeoutInMinutes / AutoLockPresets.MINUTES_PER_HOUR,
+            )
+        timeout.vaultTimeoutInMinutes % AutoLockPresets.MINUTES_PER_DAY == 0 ->
+            stringResource(
+                R.string.auto_lock_day_fmt,
+                timeout.vaultTimeoutInMinutes / AutoLockPresets.MINUTES_PER_DAY,
+            )
+        else -> stringResource(R.string.auto_lock_minutes_fmt, timeout.vaultTimeoutInMinutes)
+    }
 }
 
 /** 剪贴板清除毫秒 → 文案。 */
@@ -653,16 +677,31 @@ private fun clipboardClearLabel(ms: Long): String = when (ms) {
     )
 }
 
-/** 自动锁定档位与文案换算常量（0=立即 / N=空闲分钟 / -1=从不）。 */
+/**
+ * 自动锁定档位表与文案换算常量。
+ *
+ * 档位对齐 Bitwarden `VaultTimeout`：立即 / 1 / 5 / 15 / 30 / 60 / 240 分钟 /
+ * 重启时 / 从不（+ 自定义）。旧的 10 / 300 / 1440 三个非标准档位已从候选中移除——
+ * 存量用户设置若落在这些值上，迁移时保留为 [VaultTimeout.Custom]，**不会丢失**
+ * （见 `VaultTimeout.fromLegacyMinutes`）。
+ */
 @Suppress("MagicNumber")
 private object AutoLockPresets {
-    /** 单选候选：从不 / 立即 / 常用分钟档 / 1 天。 */
-    val VALUES = listOf(-1, 0, 1, 5, 10, 15, 30, 60, 300, 1440)
+    /** 单选候选（顺序即 UI 顺序）。 */
+    val VALUES: List<VaultTimeout> = listOf(
+        VaultTimeout.Immediately,
+        VaultTimeout.OneMinute,
+        VaultTimeout.FiveMinutes,
+        VaultTimeout.FifteenMinutes,
+        VaultTimeout.ThirtyMinutes,
+        VaultTimeout.OneHour,
+        VaultTimeout.FourHours,
+        VaultTimeout.OnAppRestart,
+        VaultTimeout.Never,
+    )
 
-    const val HOUR_MINUTES = 60
-    const val FIVE_HOURS = 300
-    const val FIVE_HOURS_COUNT = 5
-    const val DAY_MINUTES = 1440
+    const val MINUTES_PER_HOUR = 60
+    const val MINUTES_PER_DAY = 1440
     const val MS_PER_SECOND = 1000
 
     /** 自定义分钟数输入上限。 */

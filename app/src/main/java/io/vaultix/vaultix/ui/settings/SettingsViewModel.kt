@@ -3,6 +3,7 @@ package io.vaultix.vaultix.ui.settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import io.vaultix.datastore.VaultTimeout
 import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.datastore.VaultixPreferencesDefaults
 import io.vaultix.domain.ItemRepository
@@ -37,7 +38,7 @@ class SettingsViewModel @Inject constructor(
     private val autoLockController: AutoLockController,
 ) : ViewModel() {
     data class UiState(
-        val autoLockMinutes: Int = 5,
+        val vaultTimeout: VaultTimeout = VaultTimeout.DEFAULT,
         val clipboardClearMs: Long = 30_000L,
         val dynamicColor: Boolean = true,
         val screenSecurity: Boolean = true,
@@ -51,13 +52,13 @@ class SettingsViewModel @Inject constructor(
     )
 
     val state: StateFlow<UiState> = combine(
-        preferences.autoLockMinutes,
+        preferences.vaultTimeout,
         preferences.clipboardClearMs,
         preferences.dynamicColor,
         preferences.screenSecurity,
-    ) { minutes, clearMs, dynamic, secure ->
+    ) { timeout, clearMs, dynamic, secure ->
         UiState(
-            autoLockMinutes = minutes,
+            vaultTimeout = timeout,
             clipboardClearMs = clearMs,
             dynamicColor = dynamic,
             screenSecurity = secure,
@@ -180,8 +181,8 @@ class SettingsViewModel @Inject constructor(
             initialValue = 0,
         )
 
-    fun setAutoLockMinutes(minutes: Int) {
-        viewModelScope.launch { preferences.setAutoLockMinutes(minutes) }
+    fun setVaultTimeout(timeout: VaultTimeout) {
+        viewModelScope.launch { preferences.setVaultTimeout(timeout) }
     }
 
     fun setClipboardClearMs(ms: Long) {

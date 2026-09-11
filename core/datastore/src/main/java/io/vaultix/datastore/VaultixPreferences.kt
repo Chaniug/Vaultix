@@ -45,7 +45,19 @@ class VaultixPreferences @Inject constructor(
 ) {
 
     private companion object {
+        /**
+         * 旧版自动锁定档位键（裸 Int：0=立即 / N=分钟 / 负=从不）。
+         *
+         * 2026-09-11 起**只用于一次性迁移**，不再作为读取来源。保留键名以免用户数据丢失。
+         */
         val AUTO_LOCK_MINUTES = intPreferencesKey("auto_lock_minutes")
+
+        /** 新版自动锁定档位键（`VaultTimeout.toStorageValue()` 的编码）。 */
+        val VAULT_TIMEOUT = intPreferencesKey("vault_timeout")
+
+        /** 迁移完成标记（避免每次读取都做一次转换）。 */
+        val AUTO_LOCK_MIGRATED_V2 = booleanPreferencesKey("auto_lock_migrated_v2")
+
         val CLIPBOARD_CLEAR_MS = longPreferencesKey("clipboard_clear_ms")
         val DYNAMIC_COLOR = booleanPreferencesKey("dynamic_color")
         val SCREEN_SECURITY = booleanPreferencesKey("screen_security")
@@ -59,11 +71,6 @@ class VaultixPreferences @Inject constructor(
         val AUTOFILL_BASE_DOMAIN_MATCH = booleanPreferencesKey("autofill_base_domain_match")
         val AUTOFILL_EXACT_DOMAIN_ONLY = booleanPreferencesKey("autofill_exact_domain_only")
 
-        /**
-         * 自动锁定档位（分钟，语义对齐 Bastion autoLockMinutes）：
-         * 0 = 切后台立即锁定；>0 = 离开超过 N 分钟锁定；<0 = 从不自动锁定。
-         */
-        const val DEFAULT_AUTO_LOCK_MINUTES = 5
         const val DEFAULT_CLIPBOARD_CLEAR_MS = 30 * 1000L
     }
 
@@ -73,9 +80,40 @@ class VaultixPreferences @Inject constructor(
             if (error is IOException) emit(emptyPreferences()) else throw error
         }
 
-    /** 自动锁定档位（分钟；0=立即 / N=空闲分钟 / 负=从不），语义见 companion 注释。 */
-    val autoLockMinutes: Flow<Int> =
-        safeData.map { it[AUTO_LOCK_MINUTES] ?: DEFAULT_AUTO_LOCK_MINUTES }
+    /**
+     * 自动锁定档位（[VaultTimeout] 模型，对齐 Bitwarden）。
+     *
+     * **含一次性迁移**（2026-09-11 起）：旧键 `auto_lock_minutes` 用裸 Int 表达档位，
+     * 其中 `-1` 表示「从不」；而新模型里 `-1`（`OnAppRestart`）表示「重启时锁定」——
+     * **语义正好相反**。因此首次读取时把旧值按
+     * [VaultTimeout.fromLegacyMinutes] 转换后写入新键，并置迁移标记；此后一律读新键。
+     */
+    val vaultTimeout: Flow<VaultTimeout> = safeData.map { prefs ->
+        if (prefs[AUTO_LOCK_MIGRATED_V2] == true) {
+            prefs[VAULT_TIMEOUT]
+                ?.let { VaultTimeout.fromStorageValue(it) }
+                ?: VaultTimeout.DEFAULT
+        } else {
+            // 未迁移：旧键有值则按其语义转换；没有则用默认档位。
+            prefs[AUTO_LOCK_MINUTES]
+                ?.let { VaultTimeout.fromLegacyMinutes(it) }
+                ?: VaultTimeout.DEFAULT
+        }
+    }
+
+    /**
+     * 写入新档位。
+     *
+     * **同时清除旧键并置迁移标记**：否则下次读取时（标记为假）会被旧值覆盖，
+     * 用户的修改看起来"没生效"。
+     */
+    suspend fun setVaultTimeout(value: VaultTimeout) {
+        dataStore.edit { prefs ->
+            prefs[VAULT_TIMEOUT] = VaultTimeout.toStorageValue(value)
+            prefs[AUTO_LOCK_MIGRATED_V2] = true
+            prefs.remove(AUTO_LOCK_MINUTES)
+        }
+    }
 
     /** 敏感内容复制后自动清空剪贴板的延迟（0 = 不清除）。 */
     val clipboardClearMs: Flow<Long> =
@@ -174,10 +212,6 @@ class VaultixPreferences @Inject constructor(
                 prefs.remove(QUICK_UNLOCK_PROMPT_DISMISSED)
             }
         }
-    }
-
-    suspend fun setAutoLockMinutes(minutes: Int) {
-        dataStore.edit { it[AUTO_LOCK_MINUTES] = minutes }
     }
 
     suspend fun setClipboardClearMs(value: Long) {

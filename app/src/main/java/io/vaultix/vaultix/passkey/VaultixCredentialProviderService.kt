@@ -213,14 +213,33 @@ class VaultixCredentialProviderService : CredentialProviderService() {
                 entries += publicKeyEntry(option, m)
             }
         }
-        // 部分库仍锁定时，把「解锁 Vaultix」作为认证动作一起返回（凭据通道与认证动作通道
-        // 可并存）：用户可以就地解锁其余库，无需先清空候选。对齐 Bitwarden 的
-        // 「未解锁账号也纳入解锁引导」语义（Bitwarden 单账号场景下即整库锁定分支）。
-        val actions = if (lockedCount > 0) listOf(unlockAction()) else emptyList()
-        log("GET entries=${entries.size} actions=${actions.size}")
+        // ⚠️ **有任一库锁定时，只返回认证动作、不返回任何凭据条目**（2026-09-11 收紧）。
+        //
+        // 旧实现让「部分库锁定」时 entries 与 unlockAction 并存，理由听起来合理
+        // （"让用户不必先解锁就能看到别的库"）；但它与 Bitwarden 的模型冲突：
+        // Bitwarden 的 `CredentialProviderProcessorImpl` 是这样写的 ——
+        // ```
+        // if (!userState.activeAccount.isVaultUnlocked) {
+        //     callback.onResult(BeginGetCredentialResponse(
+        //         authenticationActions = listOf(unlockAction)))   // ← 注意：没有 credentialEntries
+        //     return
+        // }
+        // ```
+        // 即：**锁定态与"可填充候选"是互斥的两条路**。
+        //
+        // 混着给的危害是实测过的：候选列出来后用户点它，系统拉起我方 Activity，
+        // 而那时库可能已被自动锁定 → Activity 读不到凭据 → 浏览器报"认证失败"。
+        // 只给认证动作则系统走"先解锁再重发请求"的两段式流程，不会出现这种半途失败。
+        if (lockedCount > 0) {
+            log("GET partially locked → authenticationActions only (entries dropped)")
+            return BeginGetCredentialResponse.Builder()
+                .setAuthenticationActions(listOf(unlockAction()))
+                .build()
+        }
+        log("GET entries=${entries.size} actions=0")
         return BeginGetCredentialResponse.Builder()
             .setCredentialEntries(entries)
-            .setAuthenticationActions(actions)
+            .setAuthenticationActions(emptyList())
             .build()
     }
 
@@ -229,10 +248,13 @@ class VaultixCredentialProviderService : CredentialProviderService() {
      *
      * 与"把解锁项塞进 credentialEntries"的做法关键区别：本方式**不绑定具体的凭据选项**，
      * 因为认证动作是"先解锁、再重新发起请求"的两段式流程 —— 系统在用户完成动作后会
-     * 重新调用 `onBeginGetCredentialRequest`，届时库已解锁，正常返回凭据。
+     * **重新调用** `onBeginGetCredentialRequest`，届时库已解锁，正常返回凭据。
      *
      * 对齐 Bitwarden `createFido2UnlockPendingIntent`：显式 action + 显式 Activity class，
      * `FLAG_MUTABLE`，**不加 NEW_TASK**（见其 KDoc 警告）。
+     *
+     * ⚠️ 解锁走的是 `AutofillActivity`（MODE_UNLOCK）：它已实现"原地生物识别解锁，
+     * 无本地快速解锁则亮卡片引导打开 Vaultix"，是 Vaultix 既有的成熟解锁链。
      */
     private fun unlockAction(): AuthenticationAction {
         val intent = AutofillIntents.create(
@@ -240,7 +262,7 @@ class VaultixCredentialProviderService : CredentialProviderService() {
             mode = AutofillIntents.MODE_UNLOCK,
             title = getString(R.string.credential_unlock_title),
             subtitle = getString(R.string.credential_unlock_subtitle),
-        )
+        ).putExtra(CredentialProviderActivity.EXTRA_CREDENTIAL_FLOW, true)
         val pendingIntent = PendingIntent.getActivity(
             this,
             REQUEST_UNLOCK_CP,

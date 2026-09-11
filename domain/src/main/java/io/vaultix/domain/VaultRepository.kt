@@ -44,11 +44,17 @@ interface VaultRepository {
         code: String,
     ): UnlockResult
 
-    /** 锁定单个库：清零内存中的对称密钥（幂等）。 */
-    fun lockVault(vaultId: String)
+    /**
+     * 锁定单个库：清零内存中的对称密钥（幂等）。
+     *
+     * ⚠️ 挂起函数（2026-09-11 起）：密钥清零需要在协程中完成，调用方在自己的
+     * 作用域里挂起等待。**挂起点之后**密钥必然已不可用。
+     * （此前为 `fun` + 内部 `runBlocking`，会阻塞调用线程。）
+     */
+    suspend fun lockVault(vaultId: String)
 
-    /** 锁定全部库（应用退到后台 / 手动锁定时调用）。 */
-    fun lockAll()
+    /** 锁定全部库（应用退到后台 / 手动锁定时调用）。同上，挂起式。 */
+    suspend fun lockAll()
 
     /**
      * 移除库（本地删除，云端数据不受影响）：

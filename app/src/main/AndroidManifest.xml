@@ -97,6 +97,17 @@
                 android:resource="@xml/credential_provider" />
         </service>
 
+        <!-- Credential Provider 的**透明中转 Activity**（trampoline）。
+             候选点击的 PendingIntent 指向这里；它不渲染任何界面，只把请求交接给主界面
+             并把结果原样透传回 Credential Manager。
+             必须 exported=false：只允许本 App / 系统经 PendingIntent 授权拉起，
+             外部 App 无法借此注入请求（对齐 Bitwarden 的 CredentialProviderActivity）。 -->
+        <activity
+            android:name=".passkey.CredentialProviderActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:noHistory="true"
+            android:theme="@style/Theme.Vaultix.Transparent" />
         <!-- 通行密钥「查询 / 创建」宿主：由 Credential Provider 的候选 PendingIntent 拉起，
              透明卡片确认 + 设备验证后回灌 assertion / attestation（见 VaultixCredentialProviderService）。 -->
         <activity

@@ -14,6 +14,9 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -53,7 +56,19 @@ class UnlockViewModel @Inject constructor(
         data class PromptForUnlock(val cipher: javax.crypto.Cipher) : Event
     }
 
-    val vaultId: String = checkNotNull(savedStateHandle[ARG_VAULT_ID])
+    /**
+     * 要解锁的库 id。
+     *
+     * 两种来源（2026-09-11 起）：
+     *  1. [UnlockRoute] 带参数进入（从库列表点某个锁定的库）→ 直接用该 id；
+     *  2. [UnlockEntryRoute] 无参数进入（**根导航在锁定态直达**，对齐 Bitwarden
+     *     `VaultUnlockRoute.Standard`）→ 自动选中第一个已锁定的库。
+     *
+     * 用 `var` 是因为第 2 种情况下库列表是异步到达的；在解析出之前保持空串，
+     * 各入口方法会先判空。
+     */
+    var vaultId: String = savedStateHandle.get<String>(ARG_VAULT_ID).orEmpty()
+        private set
 
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
@@ -64,13 +79,24 @@ class UnlockViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             vaultRepository.observeVaults().collect { vaults ->
+                // 无参数进入时（根导航直达）自动选中第一个已锁定的库。
+                if (vaultId.isBlank()) {
+                    vaults.firstOrNull { !it.unlocked }?.let { vaultId = it.id }
+                }
                 _state.update { it.copy(vault = vaults.firstOrNull { v -> v.id == vaultId }) }
             }
         }
         viewModelScope.launch {
-            vaultRepository.localUnlockAvailable(vaultId).collect { available ->
-                _state.update { it.copy(localUnlockAvailable = available) }
-            }
+            // vaultId 可能由上面那条流异步补上，故这里也随库列表变化重新订阅。
+            vaultRepository.observeVaults()
+                .map { vaults -> vaults.firstOrNull { it.id == vaultId }?.id.orEmpty() }
+                .distinctUntilChanged()
+                .collectLatest { id ->
+                    if (id.isBlank()) return@collectLatest
+                    vaultRepository.localUnlockAvailable(id).collect { available ->
+                        _state.update { it.copy(localUnlockAvailable = available) }
+                    }
+                }
         }
     }
 

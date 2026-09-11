@@ -62,10 +62,8 @@ import io.vaultix.data.repository.VaultSessionManager
 import io.vaultix.domain.ItemRepository
 import io.vaultix.model.VaultFido2Credential
 import io.vaultix.vaultix.R
-import io.vaultix.vaultix.autofill.AutofillIntents
 import io.vaultix.vaultix.autofill.AutofillLogger
 import io.vaultix.vaultix.autofill.match.UriMatcher
-import io.vaultix.vaultix.security.CredentialFlowGuard
 import io.vaultix.vaultix.ui.theme.VaultixTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -142,11 +140,11 @@ class PasskeyGetActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // ⚠️ **本 Activity 的启动本身会触发一次 ProcessLifecycle 前后台切换**，必须在
-        // 最早的时机打点（见 CredentialFlowGuard KDoc）：否则 AutoLockController.onStart
-        // 会把「系统拉起我们自己的 Activity」误判成「用户切走 App 又回来」→ lockAll()
-        // → 会话被清 → 本 Activity 读不到凭证 → 浏览器报 Authentication failed。
-        CredentialFlowGuard.markFlowStarted()
+        // 注：旧版在这里调用 CredentialFlowGuard.markFlowStarted() 来"豁免"自动锁定。
+        // 该启发式已被**结构性豁免**取代（对齐 Bitwarden）：拉起本 Activity 的
+        // CredentialProviderActivity 会以 createdForAutofill = true 通知
+        // VaultLockManager.onAppCreated()，由 VaultTimeout.OnAppRestart 的豁免分支处理，
+        // 不再需要时间戳窗口。
 
         vaultId = intent.getStringExtra(PasskeyProviderIntents.EXTRA_VAULT_ID).orEmpty()
         itemId = intent.getStringExtra(PasskeyProviderIntents.EXTRA_ITEM_ID).orEmpty()
@@ -252,34 +250,23 @@ class PasskeyGetActivity : FragmentActivity() {
     }
 
     /**
-     * 库锁定时的出路：把「解锁 Vaultix」作为**认证动作**回灌给 Credential Manager。
+     * 库锁定时的出路。
      *
-     * 对齐 Bitwarden 的两段式语义：认证动作是「先解锁、再重新发起请求」——系统在用户
-     * 完成动作后会**重新调用** `onBeginGetCredentialRequest`，届时库已解锁，正常列出候选。
+     * 2026-09-11 修正：**不再由本 Activity 自己 `startActivity` 拉起解锁界面**。
      *
-     * 实现沿用 Vaultix 既有的解锁链（[AutofillIntents.MODE_UNLOCK]）：
-     *  - 已启用本地快速解锁 → 原地生物识别，解锁后直接 `finish()` 回到浏览器；
-     *  - 否则 → 亮卡片走「打开 Vaultix」主密码。
-     * 两条路都不需要 provider 侧额外干预，因此这里直接复用该 Activity。
+     * 原因（对齐 Bitwarden 的两段式语义）：Credential Manager 的认证动作是
+     * 「**先解锁、再重新发起请求**」——系统在用户完成动作后会重新调用
+     * `onBeginGetCredentialRequest`，届时库已解锁，正常返回候选。
+     * 而本 Activity 是被**候选点击**拉起的（说明列候选时库是解锁的），
+     * 此时若发现库已锁，正确处置是**结束本次断言并回灌取消**，让系统回到
+     * 「重新列候选 → 发现锁定 → 给出解锁动作」这条正路；
+     * 自己另起一个解锁 Activity 会打断系统对本次 Credential Manager 请求的追踪，
+     * 表现为「解锁了但浏览器没反应」。
      *
-     * 为什么不返回 `GetCredentialUnknownException("Vault locked")` 了事：失败回灌会让浏览器
-     * 直接报错并**结束本次凭据流程**，用户没有「就地解锁后重试」的机会；而认证动作是
-     * 系统原生支持的正常路径（Bitwarden 全库锁定分支即如此）。
+     * 所以这里只做两件事：打日志 + 回灌取消（不是错误，是「本次改走解锁引导」）。
      */
     private fun unlockAndFinish() {
-        AutofillLogger.d("PK locked → route to unlock flow")
-        runCatching {
-            startActivity(
-                AutofillIntents.create(
-                    context = this,
-                    mode = AutofillIntents.MODE_UNLOCK,
-                    title = getString(R.string.credential_unlock_title),
-                    subtitle = getString(R.string.credential_unlock_subtitle),
-                ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-            )
-        }.onFailure { AutofillLogger.d("PK unlock route failed: ${it.message}") }
-        // 本 Activity 的职责是回灌凭据；解锁引导已另行拉起，直接收摊。
-        // ⚠️ 用 cancel 语义结束（而非 fail）：这不是错误，是「本次请求改走解锁引导」。
+        AutofillLogger.d("PK locked → cancel assertion (system will re-list & offer unlock action)")
         cancel()
     }
 

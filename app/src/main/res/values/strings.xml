@@ -207,6 +207,7 @@
     <!-- 自动锁定档位 -->
     <string name="auto_lock_never">从不</string>
     <string name="auto_lock_immediately">立即（切后台即锁）</string>
+    <string name="auto_lock_on_restart">重启 App 时</string>
     <string name="auto_lock_minutes_fmt">%1$d 分钟</string>
     <string name="auto_lock_hour_fmt">%1$d 小时</string>
     <string name="auto_lock_day_fmt">%1$d 天</string>

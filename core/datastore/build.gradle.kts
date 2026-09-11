@@ -26,4 +26,8 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
+
+    // VaultTimeout 档位模型的纯 JVM 单测（含旧档位迁移映射断言）
+    testImplementation(libs.junit)
+    testImplementation(libs.truth)
 }

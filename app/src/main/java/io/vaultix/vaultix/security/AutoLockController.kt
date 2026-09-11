@@ -1,152 +1,86 @@
+/*
+ * Vaultix — app:security
+ * Copyright (C) 2026 Vaultix contributors
+ *
+ * Vaultix is free software: you can redistribute it and/or modify it under the terms of the
+ * GNU General Public License as published by the Free Software Foundation, either version 3
+ * of the License, or (at your option) any later version.
+ *
+ * 应用生命周期 → 锁定管理器的**唯一接线点**（进程前后台事件）。
+ *
+ * 2026-09-11 重写：本类原先自己承担「回前台算时间差」的判定逻辑，现降级为**极薄的适配器**——
+ * 所有锁定时机决策已下沉到 [VaultLockManager]（对齐 Bitwarden 的做法：
+ * `AppStateManager.appForegroundStateFlow` → `VaultLockManagerImpl.handleOnBackground/OnForeground`）。
+ *
+ * 保留 [lockEvents] 是为了向后兼容既有的导航回根机制
+ * （`VaultShellViewModel.lockEpoch` ← 本流；UI 收到新值即把导航栈弹回根）。
+ * 该计数器改由锁定事件驱动，语义与重写前一致。
+ */
+
 package io.vaultix.vaultix.security
 
-import android.app.KeyguardManager
-import android.content.Context
-import android.os.SystemClock
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
-import dagger.hilt.android.qualifiers.ApplicationContext
-import io.vaultix.datastore.VaultixPreferences
-import io.vaultix.domain.VaultRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.launch
 import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * 自动锁定（Docs/10 §4「AppLifecycleObserver + InactivityTimer」）。
+ * 进程级生命周期观察者。
  *
- * 判定语义对齐 Bastion（GPL-3.0，Copyright 2025 JoyinJoester）的
- * `SessionManager.canSkipVerification` 与 `autoLockMinutes` 档位模型，
- * 决策逻辑抽在 [AutoLockPolicy]（纯函数、可单测），本类只做事件接线：
- * - 档位 0（立即）：切后台即 lockAll；>0：切后台记 [SystemClock.elapsedRealtime]，
- *   回前台超时即 lockAll；<0（从不）：只手动锁；
- * - 「从不」档位优先级最高（[AutoLockPolicy.shouldLockOnResume]）：息屏 / 锁屏
- *   不再触发锁定，否则「选了永不锁定却一会儿就锁」与档位语义自相矛盾；
- * - 其余档位：回前台时若设备屏幕仍处于 keyguard 锁定 → 立即 lockAll（Bastion：
- *   「屏幕锁定时必须重新验证」，本类对 UI 场景落成锁定而非免验证判定）；
- * - 档位每次判定现取偏好（[VaultixPreferences.autoLockMinutes]），不缓存字段：
- *   避免冷启动首帧仍是默认 5 分钟导致的误锁竞态；
- * - 锁定后自增 [lockEvents] 代次，供 UI 强制回到库列表根路由；
- * - 进程死亡密钥天然清零（Bastion 的「重启后锁定」无需建模）。
- *
- * 注册：VaultixApplication.onCreate 里
+ * 注册：`VaultixApplication.onCreate` 里
  * `ProcessLifecycleOwner.get().lifecycle.addObserver(autoLockController)`。
  *
- * 2026-09-08（用户反馈）：**不再在回前台时自动同步**——自动同步只随「本地修改」
- * （保存/删除等 → flush 推送）触发；拉取统一走条目页手动同步（下拉 / 顶栏按钮）。
- * 本类回前台只做锁定判定。
+ * 与 Bitwarden 的对应关系：
+ * - `onStop`  → `VaultLockManager.onAppBackgrounded()`（→ 启动超时定时器）
+ * - `onStart` → `VaultLockManager.onAppForegrounded()`（→ **仅取消**定时器）
+ *
+ * ⚠️ 不再有 `backgroundedAtMs` / `anyUnlocked` / `credentialFlowActive()` 这些字段：
+ * 前者是「回前台算差值」模型的残留，后两者分别被 [VaultLockManager] 的
+ * `CheckTimeoutReason` 与 `createdForAutofill` 结构性豁免取代。
  */
 @Singleton
 class AutoLockController @Inject constructor(
-    @ApplicationContext context: Context,
-    private val vaultRepository: VaultRepository,
-    private val prefs: VaultixPreferences,
+    private val lockManager: VaultLockManager,
 ) : DefaultLifecycleObserver {
 
-    // 进程级生命周期观察者，scope 只跑极短的锁定判定。项目当前唯一的调度器限定符
-    // 是 @CryptoDispatcher（语义 = KDF/加解密 CPU 密集），复用到这里会混淆语义；
-    // 待引入通用 @DefaultDispatcher 后改为注入。
     @Suppress("InjectDispatcher")
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private val keyguardManager =
-        context.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
 
     private val _lockEvents = MutableStateFlow(0)
-    /** 锁定代次：UI 收集到新值即强制回到库列表根（防状态穿透）。 */
+
+    /** 锁定代次：UI 收集到新值即强制回到根路由（防状态穿透）。 */
     val lockEvents: StateFlow<Int> = _lockEvents.asStateFlow()
 
-    @Volatile
-    private var backgroundedAtMs: Long? = null
-
-    @Volatile
-    private var anyUnlocked = false
-
     init {
-        scope.launch {
-            vaultRepository.observeUnlockedVaultIds().collect { ids ->
-                anyUnlocked = ids.isNotEmpty()
+        // 锁定事件 → 代次自增（驱动导航回根）。
+        lockManager.vaultStateEventFlow
+            .onEach { event ->
+                if (event is VaultStateEvent.Locked) {
+                    _lockEvents.update { it + 1 }
+                }
             }
-        }
+            .launchIn(scope)
     }
 
     override fun onStop(owner: LifecycleOwner) {
-        if (!anyUnlocked) return
-        scope.launch {
-            // 每次判定都现取偏好：不在字段里缓存，避免「冷启动首帧仍是默认 5 分钟」
-            // 的竞态（用户选了「从不」却在进程刚起来时被按默认档位锁掉）。
-            val minutes = prefs.autoLockMinutes.first()
-            when {
-                AutoLockPolicy.neverAutoLock(minutes) -> Unit
-                // 档位 0：切后台立即锁（不等回前台再判断）
-                AutoLockPolicy.lockImmediatelyOnBackground(minutes) -> lockAllNow()
-                else -> backgroundedAtMs = SystemClock.elapsedRealtime()
-            }
-        }
+        lockManager.onAppBackgrounded()
     }
 
     override fun onStart(owner: LifecycleOwner) {
-        if (!anyUnlocked) return
-        val stoppedAt = backgroundedAtMs
-        backgroundedAtMs = null
-
-        // ⚠️ **正在为凭据提供商（Credential Provider）服务时不得锁定**（2026-09-11）。
-        //
-        // 现场症状：CP 列出候选（此时库已解锁）→ 用户点击 → 系统拉起
-        // PasskeyGetActivity → 该 Activity 使 ProcessLifecycle 走 onStart → 本方法
-        // `lockAll()` → `ItemRepositoryImpl.observeState` 因会话被清而发空列表 →
-        // Activity 读到 cred == null → 浏览器收到「认证失败」。
-        //
-        // 这是**跨进程/跨 Activity 的锁态竞态**：用户从未离开 Vaultix 的语义前台，
-        // 只是系统在我们自己发起的凭据流程里切了个 Activity。为此设置短期豁免窗口：
-        // 只有「刚发生过凭据流程启动」时跳过本次回前台锁定判定，窗口极短（数秒），
-        // 不影响用户真正切走 App 后回来应被锁定的行为。
-        if (credentialFlowActive()) {
-            backgroundedAtMs = stoppedAt
-            return
-        }
-
-        scope.launch {
-            val minutes = prefs.autoLockMinutes.first()
-            val screenLocked = keyguardManager?.isKeyguardLocked == true
-            val timedOut = AutoLockPolicy.backgroundTimeoutElapsed(
-                nowMs = SystemClock.elapsedRealtime(),
-                backgroundedAtMs = stoppedAt,
-                minutes = minutes,
-            )
-            if (AutoLockPolicy.shouldLockOnResume(minutes, screenLocked, timedOut)) {
-                lockAllNow()
-            }
-        }
-        // 不做自动同步（用户反馈：自动同步太频繁；拉取只在手动 / 本地修改后）
+        lockManager.onAppForegrounded()
     }
-
-    /**
-     * 是否有**正在进行中**的凭据提供商流程（通行密钥 / 密码填充）。
-     *
-     * 对齐 Bitwarden `VaultLockManagerImpl` 的两条对应设计：
-     *  1. `FOREGROUNDED → handleOnForeground()` **取消**超时任务（切回前台不锁）；
-     *  2. 存在 `OnAppRestart` 的自动填充豁免（autofill 触发的重启不清会话）。
-     *
-     * Vaultix 的等价机制由 [CredentialFlowGuard] 提供：凭据流程启动时记一次时间戳，
-     * 落在 [CredentialFlowGuard.EXEMPTION_WINDOW_MS] 窗口内即视为「同一段前台会话」。
-     */
-    private fun credentialFlowActive(): Boolean =
-        SystemClock.elapsedRealtime() - CredentialFlowGuard.lastFlowStartedAtMs <
-            CredentialFlowGuard.EXEMPTION_WINDOW_MS
 
     /** 供「立即锁定」等入口直接调用（幂等）。 */
     fun lockAllNow() {
-        scope.launch {
-            vaultRepository.lockAll()
-            _lockEvents.update { it + 1 }
-        }
+        lockManager.lockVaultForCurrentUser(isUserInitiated = true)
     }
 }

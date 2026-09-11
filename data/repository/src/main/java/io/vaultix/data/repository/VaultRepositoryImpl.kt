@@ -22,7 +22,7 @@ import io.vaultix.model.VaultSummary
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.flow.map
 import retrofit2.HttpException
 import java.io.IOException
 import java.util.UUID
@@ -130,14 +130,16 @@ class VaultRepositoryImpl @Inject constructor(
         return outcome
     }
 
-    override fun lockVault(vaultId: String) {
-        // 锁定入口来自 UI 线程，key 清零需要挂起；这里包一层同步桥接，
-        // 保证锁定的语义是「调用返回后密钥已不可用」。
-        runBlocking { sessions.lock(vaultId) }
+    override suspend fun lockVault(vaultId: String) {
+        // 2026-09-11 改造：由 `fun` + `runBlocking` 改为 `suspend fun`（对齐 Bitwarden
+        // 的挂起式锁定）。原实现用 runBlocking 阻塞调用线程来保证「返回即已锁」，
+        // 但那会阻塞 UI 线程做密钥清零；现在由调用方在自己的协程里挂起等待，
+        // 语义更清晰（挂起点之后密钥必然已不可用），也不再有阻塞。
+        sessions.lock(vaultId)
     }
 
-    override fun lockAll() {
-        runBlocking { sessions.lockAll() }
+    override suspend fun lockAll() {
+        sessions.lockAll()
     }
 
     override suspend fun removeVault(vaultId: String) {
