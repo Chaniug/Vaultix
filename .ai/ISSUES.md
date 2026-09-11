@@ -752,3 +752,86 @@ SSH 22 端口被墙；`git-credential-helper` 对 github.com 返回空、非交�
 **解决**：阿里 DoH 查真实 IP → 写 `/etc/hosts` **并同步 `~/.user_hosts`** →
 `~/.ssh/config` 令 `github.com` 走 `ssh.github.com:443` → `git remote` 改 SSH URL。
 推送成功。**恢复步骤见 `.ai/MEMORY.md` 第三十三轮「可复用配方 1」。**
+
+---
+
+## 40. detekt 圈复杂度「越拆越高」——同文件 helper 被累加进调用方（2026-09-11，P0）
+
+**现象**：`VaultixCredentialProviderService.resolvePasskeys` 报 `CyclomaticComplexMethod`
+complexity **41**（阈值 14）。把它拆成若干**同文件** private helper 后，复杂度不降反升
+（原内联版 19 → 拆后 41）。
+
+**根因**：detekt **2.0.0-alpha.6** 的 `CyclomaticComplexMethod` 会把**同一文件内**被调用的
+私有函数的复杂度**累加**进调用方（非标准 McCabe 行为）。同时该版本
+`ignoreNestingFunctions` 默认 **false**（1.x 为 true）→ 作用域函数
+（`let`/`run`/`with`/`apply`/`also`/`forEach`/`use`）每个 +1。
+
+**实证方法（可复用）**：把可疑函数的**函数体临时 stub** 成 `return emptyList()` 再跑 detekt。
+- 违规**消失** ⇒ 复杂度来自「调用」（本情况）；
+- 违规**仍在** ⇒ 复杂度在自身函数体。
+> 不要凭"标准 McCabe 是 per-function"的常识推断 —— 本版本就是不走标准。
+
+**解法**：把 helper 拆到**独立文件**（detekt 逐文件分析、**不跨文件累加**）。
+本轮新建 `app/src/main/java/io/vaultix/vaultix/passkey/PasskeyResolution.kt`：
+- `PasskeyMatch` / `PasskeyCounts` 改 `internal` 顶层；
+- `collectPasskeyMatches(itemRepository, unlocked, rpId)` / `applyAllowedFilter(rpMatched, allowed, log)`
+  / `collectStoredRpIds(itemRepository, unlocked)` 顶层函数（inject 依赖以参数传入）；
+- `resolvePasskeys` 主函数仅编排（自身 ~5），各 helper 独立 < 14。
+
+**副作用**：`PasskeyMatch` 从 service 内 private 嵌套类移到同包顶层 `internal`（`publicKeyEntry`
+同包引用，无需 import）；`WebAuthn` / `VaultFido2Credential` import 随之从 service 移除。
+
+---
+
+## 41. CI 1 分钟就红 → 其实是 detekt 先于 compile 失败，掩盖了编译错误（2026-09-11，P0）
+
+**现象**：`main` 推送后 CI ~1 分钟即失败（正常约 3 分钟）。表面只见 detekt 报错，
+容易误以为"修完 detekt 就好"。
+
+**根因**：workflow 步骤顺序 = **detekt → (lint) → compile → assemble**。detekt 一失败即中断，
+**编译步骤永不被执行** ⇒ 上一提交引入的 3 处 `Int?` 空安全**编译错误**被完全掩盖
+（`d6f3409` 引入，但它同时把 detekt 弄红，编译错误一直没暴露）。
+
+3 处编译错误与修法：
+| 文件 | 错误 | 修法 |
+|---|---|---|
+| `core/datastore/.../VaultTimeout.kt` | `associateBy { it.vaultTimeoutInMinutes }` 键实为 `Int?` | `mapNotNull { t -> t.vaultTimeoutInMinutes?.let { it to t } }.toMap()` |
+| `app/.../ui/settings/SettingsScreen.kt` | 组合 `when` 分支不做智能转换，`timeout.vaultTimeoutInMinutes` 仍 `Int?` | `requireNotNull(timeout.vaultTimeoutInMinutes)` |
+| `app/.../passkey/CredentialProviderIntentUtils.kt` | 返回类型写成 `BeginCreateCredentialRequest?`，实际是 `CreateCredentialRequest?` | 改返回类型为 `CreateCredentialRequest?`（见下） |
+
+**类型陷阱细节**：`BeginCreateCredentialRequest`(`androidx.credentials.provider`) 与
+`CreateCredentialRequest`(`androidx.credentials`) 是**两个互不相关**的类（无继承关系）。
+`PendingIntentHandler.retrieveProviderCreateCredentialRequest(intent)` 返回
+`ProviderCreateCredentialRequest`，其 `callingRequest` = **客户端侧** `CreateCredentialRequest`
+（credentials 1.6.0 `javap` 实证）。⇒ 由 Intent **无法**还原服务端侧的 `BeginCreateCredentialRequest`。
+连带把 `CredentialProviderRequestManager.createCredentialRequest` / `setCreateCredentialRequest`
+也改为 `CreateCredentialRequest`（该字段 **write-only**、无读取方，改动安全）。
+
+**教训**：
+1. **detekt 只做静态检查、不做类型检查** ⇒ 用"去魔法数字"等手段改代码后，
+   **必须真跑一次 compile**（本地 `:app:compileFullDebugKotlin`）。
+2. CI 步骤顺序会让**前置步骤失败掩盖后续步骤的问题** —— 排障先看"哪一步真的跑了"，
+   别被"最后一条报错"误导（本次真正待修的还有编译错误）。
+
+---
+
+## 42. 本机（Windows/WorkBuddy）与早前沙箱的环境差异（2026-09-11）
+
+早前多轮记录的"沙箱无 Android SDK / JDK17、`gradlew` 跑不起来、`ghu_` token 对
+`api.github.com` 401" **仅适用于沙箱**。本机（用户 Windows + WorkBuddy）**全部可用**：
+- JDK 17 + Android SDK（`C:\AndroidSDK`）齐全 → 可本地 gradle 构建/跑测试；
+- `gh` CLI 可正常 `gh run list/view/watch`（查 CI 状态无需再读网页端 job 页）；
+- `git push` 经 SSH（`git@github.com:Chaniug/Vaultix.git`）正常。
+
+**唯一坑**：Git Bash 下 `./gradlew` 报「找不到或无法加载主类 GradleWrapperMain」。绕过：
+```bash
+java -classpath "D:/Vaultix/gradle/wrapper/gradle-wrapper.jar" \
+     org.gradle.wrapper.GradleWrapperMain <task> [--no-configuration-cache]
+# 长时间任务/daemon 配额耗尽：先 ... GradleWrapperMain --stop
+```
+
+**参考源码本地副本（不纳入 git，位于仓库外 `D:\Vaultix-refs\`）**：
+| 项目 | 路径 | HEAD |
+|---|---|---|
+| Bitwarden Android | `D:\Vaultix-refs\bitwarden-android` | `74c0e04` |
+| Keyguard | `D:\Vaultix-refs\keyguard-app` | `f95c865` |

@@ -194,6 +194,18 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
   ItemRepositoryImpl 解密 flowOn 注入 @CryptoDispatcher（InjectDispatcher 规则）、
   RepositoryModule abstract class→interface、网络超时 30s 常量、`delay(2_000)` 常量
 
+### ⚠️ detekt 2.0.0-alpha.6 两个必须知道的坑（2026-09-11 实测，接力必读）
+1. **`CyclomaticComplexMethod` 会把「同文件」被调私有函数的复杂度累加进调用方**（非标准行为）。
+   实测：把同一方法的循环拆成**同文件** helper，圈复杂度反而 **19 → 41**（阈值 14）。
+   本版本 `ignoreNestingFunctions` 默认 **false**（1.x 是 true）→ 作用域函数
+   （`let`/`run`/`with`/`apply`/`also`/`forEach`/`use`）**每个 +1**。
+   **规避 = 把 helper 拆到「独立文件」**（detekt 逐文件分析、不跨文件累加）。
+   实证方法：把可疑函数体 stub 成 `return emptyList()` 再跑，若违规消失即证明复杂度来自「调用」。
+2. **detekt 只做静态检查、不做类型检查** → 去魔法数字时极易引入 `Int?` 空安全**编译错误**；
+   且 CI 步骤顺序是 **detekt 在 compile 之前**，detekt 一失败就跳过编译 ⇒ **编译错误被掩盖**
+   （现象：CI 1 分钟就红）。**改完 detekt 必须再真跑一次 compile**（`:app:compileFullDebugKotlin`，
+   或 `:app:assembleFullDebug`）。
+
 ## 自动锁定升级（2026-09-08 第四轮，参考 Bastion）
 - **档位（分钟）**：`VaultixPreferences.autoLockMinutes`（int key auto_lock_minutes，
   默认 5）：0=切后台立即锁 / >0=离开 N 分钟锁 / <0=从不；**-2 重启后锁定不需要**
@@ -973,3 +985,54 @@ java -cp "$GRADLE_HOME/lib/*" org.jetbrains.kotlin.cli.jvm.K2JVMCompiler \
 第 31 轮我自造的 `CredentialFlowGuard` 因 `Long.MIN_VALUE` 溢出导致自动锁定被永久抑制。
 本轮把那个启发式整个删掉、换成 Bitwarden 的结构化模型，**自创逻辑的风险面直接归零**。
 ⇒ **上游有成熟实现时，自造"看起来更严谨"的变体是负收益。**
+
+---
+
+## 2026-09-11 · 第三十四轮：CI 转绿（detekt 门禁 + 被掩盖的编译错误）
+
+> 起因：`main` 最近两次推送 CI 均红（`34577372641` / `34579673382`，均 ~1min ⇒ 早失败）。
+> 定位失败步骤 = `Run detekt (quality gate)`；其后 `Build Debug APK` 因跳过而**从未执行**。
+
+### 本轮修复（commit `24af692`，CI run `34590428399` = **success**）
+
+| 层 | 问题 | 修法 |
+|---|---|---|
+| detekt MagicNumber | `VaultTimeout` / `VaultixCrypto`(`and 0xff`) / `SettingsScreen` 写死数字 | 用各档位自身 minutes / 提 `BYTE_MASK` 常量 |
+| detekt CyclomaticComplexMethod | `resolvePasskeys` 41（阈值 14） | helper 拆到**独立文件** `passkey/PasskeyResolution.kt` |
+| 编译（"编译错误"） | 3 处 `Int?` 空安全 | `mapNotNull` / `requireNotNull` / 改用客户端侧 `CreateCredentialRequest` |
+
+### ★ 两个新知识点（已并入上方「Detekt 门禁」节 + `ISSUES.md` #40/#41）
+1. detekt 2.0.0-alpha.6 的 `CyclomaticComplexMethod` **累加同文件被调私有函数的复杂度**
+   （同一方法拆同文件 helper：19 → 41），唯一规避 = **拆独立文件**。
+   （实证：把可疑函数体 stub 成 `return emptyList()`，违规即消失 ⇒ 复杂度来自「调用」。）
+2. detekt **不做类型检查**，且 **CI 里 detekt 先于 compile** ⇒ 编译错误被掩盖。改完 detekt 必须真跑 compile。
+
+### 类型陷阱（`CredentialProviderIntentUtils.kt`，易被"照抄 Bitwarden"带偏）
+`retrieveProviderCreateCredentialRequest(intent).callingRequest` 的类型是**客户端侧**
+`androidx.credentials.CreateCredentialRequest`，与**服务端侧**
+`androidx.credentials.provider.BeginCreateCredentialRequest` 是**互不相关**的两个类（无继承关系）。
+credentials 1.6.0 `javap` 实证：`ProviderCreateCredentialRequest.getCallingRequest()
+→ androidx.credentials.CreateCredentialRequest`。⇒ 由 Intent 只能还原前者、拿不到后者。
+`CredentialProviderRequestManager.createCredentialRequest` 为 **write-only**（无读取方），
+故改类型无副作用；CREATE 流程实际由 Service 回调直接处理，**不经过** trampoline Activity。
+
+### ★ 本机（Windows / WorkBuddy）环境事实（区别于早前沙箱）
+- **JDK 17 + Android SDK（`C:\AndroidSDK`）+ `gh` CLI 全部可用** ⇒ 可本地 gradle 构建、可直接
+  `git push`、可 `gh run view` 查 CI。**早前"沙箱无 SDK / `ghu_` token 401"的描述仅针对沙箱，本机不适用。**
+- Git Bash 下 `./gradlew` 报「找不到主类 GradleWrapperMain」⇒ 用：
+  ```
+  java -classpath "D:/Vaultix/gradle/wrapper/gradle-wrapper.jar" \
+       org.gradle.wrapper.GradleWrapperMain <task> [--no-configuration-cache]
+  ```
+  daemon 配额耗尽先 `... GradleWrapperMain --stop`。
+- 本地验证链（≈ CI push 门禁）：`detekt`（全模块）→ `:app:compileFullDebugKotlin` →
+  `:app:assembleFullDebug` → `:core:datastore:testDebugUnitTest`。
+
+### 参考源码本地副本（本轮新增；**不纳入 git、不同步 GitHub**）
+| 项目 | 本地路径 | HEAD | 用途 |
+|---|---|---|---|
+| Bitwarden Android | `D:\Vaultix-refs\bitwarden-android` | `74c0e04` | **功能层真源** |
+| Keyguard | `D:\Vaultix-refs\keyguard-app` | `f95c865` | UI 交互参考（含 `androidLibAutofill/`） |
+> `--depth 1` 浅克隆，位于**仓库外**（`D:\Vaultix-refs\`），确保不会被 commit/push。
+> 早前沙箱路径（`/tmp/bw-ref/android-main/`、`/tmp/keyguard-ref/`）仅沙箱内有效，本机以本表为准。
+> Bastion 仍在仓内 `reference/bastion/`（已 vendored，只读参考、不参与构建/detekt）。

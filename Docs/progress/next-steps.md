@@ -1,6 +1,22 @@
 # 下一步任务清单
 
-> 更新于 2026-09-11（第三十三轮）。**【最新】搜索框按 Bitwarden 标准重写，消除「输入框乱跳」。**
+> 更新于 2026-09-11（第三十四轮）。**【最新】修复 CI（detekt 门禁 + 被掩盖的编译错误），CI 转绿。**
+>
+> 用户：「拉取 github 最新的改动到本地。有 github 上的报错需要修复」。
+>
+> **根因两条**：① detekt 门禁违规（`MagicNumber` 命中 3 文件 + `resolvePasskeys` 圈复杂度 41）；
+> ② 上一提交 `d6f3409` 引入的 3 处 `Int?` **编译错误**被「detekt 先于 compile 失败」**掩盖**。
+>
+> **修法**：①去魔法数字（用档位自身 minutes / 提 `BYTE_MASK` 常量）；②圈复杂度问题——
+> detekt **2.0.0-alpha.6** 会把**同文件**被调私有函数的复杂度**累加**进调用方，故把 helper 拆到
+> **独立文件** `passkey/PasskeyResolution.kt`；③3 处空安全（`mapNotNull` / `requireNotNull` /
+> 客户端侧 `CreateCredentialRequest`）。
+>
+> **结果**：commit `24af692` → CI run `34590428399` **success**（含 detekt + Build Debug APK）。
+>
+> 另：拉取 Bitwarden / Keyguard 源码到**仓库外** `D:\Vaultix-refs\`（不纳入 git）。
+>
+> 更新于 2026-09-11（第三十三轮）。搜索框按 Bitwarden 标准重写，消除「输入框乱跳」。
 >
 > 用户反馈：「当前的 vaultix 一直在输入框，搜索框乱跳，有没有办法。按照 bitwarden 的方式修吧」。
 >
@@ -48,6 +64,42 @@
 > 浏览器流程回传了自造的 clientDataJSON** —— 系统只给 32 字节 `clientDataHash`（无明文），
 > 而 RP 校验用的是**网页交给它的那份浏览器 JSON**，所以 provider 回传的必须是**占位符**
 > （官方明文要求）；签名仍只用系统给的哈希。
+
+## 第三十四轮 2026-09-11 · 修复 CI：detekt 门禁 + 被掩盖的编译错误
+
+**commit `24af692`；CI run `34590428399` = success。**
+
+### 根因 1：detekt 门禁
+
+- `MagicNumber`：`VaultTimeout`（5 处档位）+ `VaultixCrypto`（`and 0xff`）+ `SettingsScreen`（4 处档位）。
+- `CyclomaticComplexMethod`：`resolvePasskeys` complexity **41**（阈值 14）。
+
+### ★ detekt 2.0.0-alpha.6 非标准行为（务必记住）
+
+`CyclomaticComplexMethod` 会把**同文件**被调私有函数的复杂度**累加**进调用方
+（同一方法拆同文件 helper：19 → 41）；`ignoreNestingFunctions` 默认 **false**。
+**实证方法**：把函数体 stub 成 `return emptyList()` → 违规消失 ⇒ 复杂度来自「调用」。
+**规避**：helper 拆到**独立文件**（detekt 逐文件分析、不跨文件累加）——
+新建 `app/.../passkey/PasskeyResolution.kt`。
+
+### 根因 2：编译错误被 CI 步骤顺序掩盖
+
+workflow 顺序 = **detekt → compile**；detekt 一红即中断 ⇒ 编译步骤从不执行。
+
+| 文件 | 修法 |
+|---|---|
+| `core/datastore/.../VaultTimeout.kt` | `mapNotNull { t -> t.vaultTimeoutInMinutes?.let { it to t } }.toMap()` |
+| `app/.../ui/settings/SettingsScreen.kt` | `requireNotNull(timeout.vaultTimeoutInMinutes)` |
+| `app/.../passkey/CredentialProviderIntentUtils.kt` | 返回类型改客户端侧 `CreateCredentialRequest`（与 `BeginCreateCredentialRequest` 互不相关，javap credentials 1.6.0 实证） |
+
+### 验证
+
+本地全绿：`detekt`（10 模块）/ `:app:compileFullDebugKotlin` / `:app:assembleFullDebug` /
+`:core:datastore:testDebugUnitTest`。
+
+### 另：参考源码本地副本（不纳入 git / 不同步 GitHub）
+
+`D:\Vaultix-refs\bitwarden-android` @`74c0e04`、`D:\Vaultix-refs\keyguard-app` @`f95c865`（`--depth 1`）。
 
 ## 第三十三轮 2026-09-11 · 搜索框按 Bitwarden 标准重写 + 打通 GitHub 推送
 
