@@ -335,3 +335,59 @@ debug(preview) 与 release 可互相覆盖安装的**硬性前提**：
 3. 不搬 Bastion 的「黑名单 / 屏蔽字段 / 智能标题 / 通知时长 / 密码建议 / 影子校验 /
    校验诊断」——Vaultix 无对应能力，搬过来只会是点不动的假开关。
    同理不搬 `PasskeySettingsScreen` 的影子校验/严格校验开关。
+
+## 32. 通行密钥「验签失败」根因：authenticatorData 缺 BE/BS 标志位（2026-09-11，`8afac3d`）
+
+**真机症状（用户原话）**：Edge 里用通行密钥登录，**指纹验证通过了**，但**所有网站**都报
+「验证失败 / 无法验证」。三个特征合起来指向一件事——**签名数据的密码学校验不通过**，
+而不是候选展示、生物识别或 credentialId 匹配的问题。
+
+### 根因
+`WebAuthn.buildAuthenticatorData` 只设了 UP(0x01) + UV(0x04)，**缺 BE(0x08) / BS(0x10)**。
+
+Vaultix 的 passkey 私钥存在库中并随 Bitwarden 服务端同步 —— 语义上是
+**可备份凭证（backup eligible）**，必须声明：
+- `BE`（Backup Eligibility, 0x08）= 本凭证**可**被备份
+- `BS`（Backup State, 0x10）= 本凭证**当前处于**备份状态
+
+这是 Bitwarden / 1Password / iCloud Keychain 这类可同步通行密钥的标准声明。缺失时
+RP 的校验库会因 BE/BS 语义不符而拒绝整条断言。
+
+**关键判据：注册与断言的 BE/BS 基线必须一致。** 对齐 Bastion
+（`PasskeyAuthActivity` / `PasskeyCreateActivity` 两边基线都是 `0x1D`，注册额外加 AT）：
+
+| 流程 | 修复前 | 修复后 |
+|---|---|---|
+| 断言 | `0x05`（UP+UV） | `0x1D`（UP+UV+BE+BS） |
+| 注册 | `0x45`（UP+UV+AT） | `0x5D`（UP+UV+BE+BS+AT） |
+
+### 连带修掉的两处偏差
+1. **signCount 硬编码 0 → 读库**（对齐 Keyguard `PasskeyProviderGetRequest`）：
+   库里非零值**原样发送但不递增**。递增必然跨设备分叉（A 签 6、B 设备恢复后仍签 5，
+   RP 看到计数回退直接拒签 → 表现为「用了若干次后突然失效」）；0 表示「不实现计数器」，
+   规范允许 RP 跳过单调性校验。Bastion 选择强行写 0，Keyguard 选择保留非零值 ——
+   取 Keyguard 口径（两者对 RP 都合规，保留原值更尊重既有数据）。
+2. **响应 JSON 补齐两家共有字段**：
+   - `clientExtensionResults:{}` —— 部分 RP 解析器**直接读该键**，缺失即解析失败；
+   - `authenticatorAttachment:"platform"` —— 软件密钥 + 系统生物识别，属平台内置
+     （Bitwarden 填 `cross-platform`、Bastion 填 `platform`，取 Bastion 口径）。
+
+### 已排除的疑似项（实测无问题，未改动）
+- **密钥编解码往返**：200 组随机 P-256 密钥走
+  `base64Url(PKCS8)` → `decodeBase64UrlOrStandard` → `parseEcPrivateKey` 重建后签名，
+  **100% 被原公钥验签通过**（DER 分支命中 200/200）；
+- **PKCS8 分支顺序**：PKCS8 长 67 字节，`normalizeScalar` 正确返回 null 交给 DER 分支，
+  不会被误当 32 字节裸标量；
+- **clientDataHash 反选逻辑**：能正确命中 Chromium 含 `crossOrigin` 的原文
+  （已验证：无 crossOrigin 候选不命中、含 crossOrigin 候选命中）。
+
+### ⚠️ 升级注意
+**修复前注册的 passkey 需要重新注册**。旧凭证在 RP 侧是按「无 BE/BS」语义登记的，
+改了 flags 后旧凭证的断言仍会因基线不符而失败（RP 记的是注册时的语义）。
+用户需在被拒的网站上删除旧通行密钥后重新创建。
+
+### 教训
+**「指纹过了但网站说验证失败」= 数据问题，不是交互问题。** 拿到这个组合（指纹通过 +
+全站失败 + 验签失败）时应立刻停止排查候选展示 / CP 通道 / 生物识别，直接查
+`authenticatorData` / `clientDataJSON` / `signature` 三者。此前的多轮修复都在改
+「能不能弹出来」，而这一步早就通了 —— 错在把「功能不通」笼统当成一个问题。

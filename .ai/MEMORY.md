@@ -703,3 +703,24 @@ Vaultix 原把 linkedId 当顺序编号（1/2/3/4），**官方是分段编码**
   智能标题/通知时长/密码建议/影子校验/诊断——Vaultix 无对应能力。
 - **不采纳 Bastion 的「通行密钥和密码」文案**：与其 `credential_provider_config.xml`
   里「CP 不处理密码、声明了会绕过 Autofill 框架」的注释自相矛盾。
+
+## 通行密钥「验签失败」根因：BE/BS 标志位（2026-09-11，`8afac3d`）
+- **症状三特征 = 诊断公式**：指纹验证通过 + 所有网站都失败 + 报「验签失败」。
+  这三条合起来只指向一件事：**签名数据的密码学校验不通过**。
+  → 立刻停止排查候选展示 / CP 通道 / 生物识别，直接查
+  `authenticatorData` / `clientDataJSON` / `signature`。
+- **根因**：`buildAuthenticatorData` 只设 UP(0x01)+UV(0x04)，**缺 BE(0x08)/BS(0x10)**。
+  Vaultix 私钥存库 + 随服务端同步 ⇒ 语义上是**可备份凭证**，必须声明 BE（可备份）+
+  BS（当前在备份状态）。这是 Bitwarden/1Password/iCloud Keychain 的标准声明。
+  修复后：断言 `0x05→0x1D`、注册 `0x45→0x5D`（对齐 Bastion 两边基线都是 0x1D + 注册加 AT）。
+- **铁律：注册与断言的 BE/BS 基线必须一致。** RP 记的是**注册时**的语义，断言不符即拒签。
+  ⇒ **修复前注册的 passkey 必须重新注册**，改代码救不了旧凭证。
+- **signCount**：硬编码 0 → 读库非零值原样发送**不递增**（Keyguard 口径）。
+  递增必然跨设备分叉（A 签 6、B 恢复后仍签 5 → RP 判计数回退拒签，表现为「用几次后失效」）。
+  0 = 「不实现计数器」，规范允许 RP 跳过单调性校验。
+- **响应 JSON 必带**：`clientExtensionResults:{}`（部分 RP 解析器直接读该键，缺失即解析失败）
+  + `authenticatorAttachment`（Bitwarden 填 cross-platform / Bastion 填 platform，取后者）。
+- **用实测排除法而非猜测**：本轮写 JVM 压测脚本验证了 200 组随机 P-256 密钥的
+  `base64Url(PKCS8)→decode→parseEcPrivateKey` 重建签名 100% 验签通过，从而**排除了**
+  密钥编解码、PKCS8 分支顺序、clientDataHash 反选三个疑似项。
+  **能在本地跑的实验就不要靠推理排除**——一轮脚本胜过三轮 CI 试错。
