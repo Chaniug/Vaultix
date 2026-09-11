@@ -41,6 +41,10 @@ enum class FieldHint {
  * @param value 当前已填文本（可能为空，仅用于启发式与回填校验）。
  * @param isFocused 是否为当前聚焦字段。
  * @param isVisible 是否可见（不可见字段不参与填充）。
+ * @param webDomain 该字段**自身**所属的网页域名（取自 `ViewNode.getWebDomain()`；
+ *   原生 App 字段为 null）。用于「逐字段站点校验」：页面里嵌了别的域名的 iframe 时，
+ *   那些字段与本次填充的站点不同源，不应被填 —— 对齐 Bitwarden `fillLoginPartition`
+ *   的 `autofillView.data.website == autofillCipher.website` 判断。
  */
 data class ParsedField(
     val id: AutofillId,
@@ -50,6 +54,7 @@ data class ParsedField(
     val value: String?,
     val isFocused: Boolean = true,
     val isVisible: Boolean = true,
+    val webDomain: String? = null,
 )
 
 /**

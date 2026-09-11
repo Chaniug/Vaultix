@@ -79,4 +79,29 @@ class UriMatcherTest {
     fun `matchByRule Never never matches`() {
         assertThat(UriMatcher.matchByRule("https://a.com", "https://a.com", UriMatch.Never)).isFalse()
     }
+
+    // ---- 逐字段站点校验（sameSite）----
+
+    @Test
+    fun `sameSite true for same host and for subdomain of same base domain`() {
+        assertThat(UriMatcher.sameSite("github.com", "github.com")).isTrue()
+        assertThat(UriMatcher.sameSite("www.github.com", "github.com")).isTrue()
+        assertThat(UriMatcher.sameSite("https://github.com/login", "github.com")).isTrue()
+    }
+
+    @Test
+    fun `sameSite false for a third-party frame domain`() {
+        // 页面嵌了别的域名的 iframe（外挂登录 / 支付组件）→ 不应被填
+        assertThat(UriMatcher.sameSite("evil.com", "github.com")).isFalse()
+        assertThat(UriMatcher.sameSite("cdn.jsdelivr.net", "github.com")).isFalse()
+    }
+
+    @Test
+    fun `sameSite is permissive when either side is unknown`() {
+        // 原生 App 字段没有 webDomain；无法判定时放行，宁可多填也不误伤
+        assertThat(UriMatcher.sameSite(null, "github.com")).isTrue()
+        assertThat(UriMatcher.sameSite("github.com", null)).isTrue()
+        assertThat(UriMatcher.sameSite("  ", "github.com")).isTrue()
+        assertThat(UriMatcher.sameSite(null, null)).isTrue()
+    }
 }

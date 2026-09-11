@@ -58,6 +58,29 @@ object UriMatcher {
         }
 
     /**
+     * 两侧是否属于「同一站点」（精确主机相等或基域相等）。
+     *
+     * 用于**逐字段站点校验**：页面里嵌了别的域名的 iframe 时，那些字段与本次填充的
+     * 站点不同源，不应被填 —— 对齐 Bitwarden `fillLoginPartition` 的
+     * `autofillView.data.website == autofillCipher.website` 判断。
+     *
+     * 任一侧为 null / 空（原生 App 字段、无法判定）→ 返回 true（**不**据此过滤），
+     * 宁可多填也不误伤。
+     */
+    fun sameSite(a: String?, b: String?): Boolean {
+        val x = hostOrRaw(a) ?: return true
+        val y = hostOrRaw(b) ?: return true
+        return hostMatch(x, y) || baseDomainMatch(x, y)
+    }
+
+    /** 取主机名；非网址串（如 androidapp:// 包名）回退为小写原文。 */
+    private fun hostOrRaw(value: String?): String? {
+        val trimmed = value?.trim().orEmpty()
+        if (trimmed.isEmpty()) return null
+        return hostOf(trimmed) ?: trimmed.lowercase().ifEmpty { null }
+    }
+
+    /**
      * 按 [UriMatch] 规则判断 [credUri] 是否匹配 [targetUri]。
      * 域名类规则先提取主机再比对；非域名类规则直接比对整串。
      */

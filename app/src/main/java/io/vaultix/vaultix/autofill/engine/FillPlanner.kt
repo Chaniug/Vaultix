@@ -102,9 +102,23 @@ object FillPlanner {
     private fun hasCardContext(present: Set<FieldHint>): Boolean =
         FieldHint.CARD_NUMBER in present || FieldHint.CARD_CVC in present || FieldHint.CARD_EXPIRY in present
 
+    /**
+     * 是否出身份候选。
+     *
+     * **刻意不含 [FieldHint.EMAIL_ADDRESS]**：邮箱框遍地都是（订阅 / 评论 / 搜索建议），
+     * 而它同时也是登录账号框，单独一个邮箱框无法区分「登录注册」与「填身份」。
+     * 不加这道限制时，页面只要有一个邮箱框就会把**整库的身份条目**全列出来
+     * （用户反馈的「条目乱弹」就包含这一类）。身份类只认地址表单的强信号：
+     * 姓名 / 电话 / 邮编 —— 真实的地址表单几乎不会只有邮箱框。
+     *
+     * 对齐 Bitwarden：其 `AutofillPartition.Identity` 至今**不构造**
+     * （见 FilledDataBuilderImpl 注释 "an identity partition is never constructed yet"），
+     * 即官方客户端当前完全不提供身份填充。我们不做到那么绝对，但同样不该让孤立的
+     * 邮箱框触发身份条目。
+     */
     private fun hasIdentityContext(present: Set<FieldHint>): Boolean =
-        FieldHint.NAME in present || FieldHint.EMAIL_ADDRESS in present ||
-            FieldHint.PHONE_NUMBER in present || FieldHint.POSTAL_CODE in present
+        FieldHint.NAME in present || FieldHint.PHONE_NUMBER in present ||
+            FieldHint.POSTAL_CODE in present
 
     private fun buildLoginSuggestions(
         context: FillContext,

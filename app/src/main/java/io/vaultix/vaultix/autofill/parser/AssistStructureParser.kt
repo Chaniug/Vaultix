@@ -45,8 +45,11 @@ object AssistStructureParser {
         val effectiveDomain = webDomain ?: fallbackWebDomain
         val webUri = effectiveDomain?.let { "https://$it" }
         val resolved = promoteUsernameField(fields)
-        val usernameId = resolved.firstOrNull { it.hint == FieldHint.USERNAME }?.id
-        val passwordId = resolved.firstOrNull { it.hint == FieldHint.PASSWORD }?.id
+        // 只认**可见**的账号 / 密码框：隐藏框（自动填充辅助框、隐藏的登录弹层）既不该被填，
+        // 也不该凭它触发保存提示 —— 否则「只填了个搜索词」也会弹保存；`SaveInfo` 的
+        // requiredIds 正是取自这两个 id。
+        val usernameId = resolved.firstOrNull { it.hint == FieldHint.USERNAME && it.isVisible }?.id
+        val passwordId = resolved.firstOrNull { it.hint == FieldHint.PASSWORD && it.isVisible }?.id
         return ParsedStructure(
             packageName = packageName,
             webScheme = null,
@@ -70,7 +73,9 @@ object AssistStructureParser {
      */
     private fun promoteUsernameField(fields: List<ParsedField>): List<ParsedField> {
         if (fields.any { it.hint == FieldHint.USERNAME }) return fields
-        val passwordIndex = fields.indexOfFirst { it.hint == FieldHint.PASSWORD }
+        // 升格锚点必须是**可见**的密码框：页面里常带隐藏密码框（自动填充辅助 / 隐藏弹层），
+        // 若以它为锚，会把它前面的搜索框误升格成账号框（进而乱弹密码条目）。
+        val passwordIndex = fields.indexOfFirst { it.hint == FieldHint.PASSWORD && it.isVisible }
         if (passwordIndex <= 0) return fields
         val before = fields.subList(0, passwordIndex)
         val index = before.indexOfLast { it.isVisible && it.hint == FieldHint.EMAIL_ADDRESS }
@@ -111,6 +116,10 @@ object AssistStructureParser {
                 value = node.text?.toString(),
                 isFocused = node.isFocused,
                 isVisible = node.visibility == View.VISIBLE,
+                // 字段**自身**所属域名：页面里嵌了别的域名的 iframe 时，这些字段的
+                // webDomain 与主页面不同 → 填充阶段据此跳过（逐字段站点校验，
+                // 对齐 Bitwarden fillLoginPartition 的 website 比对）。
+                webDomain = node.webDomain,
             )
         }
         repeat(node.childCount) { index ->

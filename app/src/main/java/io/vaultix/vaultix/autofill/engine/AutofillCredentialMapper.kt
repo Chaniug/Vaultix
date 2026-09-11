@@ -55,22 +55,31 @@ object AutofillCredentialMapper {
     /**
      * 解析结果 → 填充上下文（是否在场账号/密码框 + 出现的字段语义集合）。
      * 供 [FillPlanner] 判定登录 / 卡片 / 身份上下文。
+     *
+     * ⚠️ **只统计可见字段**：填充侧（[AutofillDatasets.targetIdsFor] /
+     * [AutofillDatasets.allFillableIds]）本就要求 `isVisible`，若这里把隐藏字段也算作
+     * 「在场」，两边口径就不一致 —— 很多站点带隐藏的密码 / 账号框（自动填充辅助、
+     * 隐藏的登录弹层），会凭它判定为「登录页」却找不到任何可见目标，最终落回搜索兜底，
+     * 表现为在本不该弹的页面上弹出一条入库入口。
      */
     fun toFillContext(
         parsed: ParsedStructure,
         webDomain: String? = parsed.webDomain,
-    ): FillContext = FillContext(
-        packageName = parsed.packageName,
-        webDomain = webDomain,
-        webUri = parsed.webUri,
-        hasUsernameField = parsed.usernameId != null,
-        hasPasswordField = parsed.passwordId != null,
-        presentHints = parsed.fields.map { it.hint }.toSet(),
-        // 弱信号（纯文本启发式命中）的「用户名」不算可独立触发登录的凭据：
-        // 页面没有密码框时靠它弹密码候选，正是搜索栏/孤立输入框乱弹的来源。
-        hasCredibleUsernameField = parsed.fields.any {
-            it.hint == FieldHint.USERNAME && it.strength !=
-                io.vaultix.vaultix.autofill.parser.HintClassifier.SignalStrength.LOW
-        },
-    )
+    ): FillContext {
+        val visible = parsed.fields.filter { it.isVisible }
+        return FillContext(
+            packageName = parsed.packageName,
+            webDomain = webDomain,
+            webUri = parsed.webUri,
+            hasUsernameField = parsed.usernameId != null,
+            hasPasswordField = parsed.passwordId != null,
+            presentHints = visible.map { it.hint }.toSet(),
+            // 弱信号（纯文本启发式命中）的「用户名」不算可独立触发登录的凭据：
+            // 页面没有密码框时靠它弹密码候选，正是搜索栏/孤立输入框乱弹的来源。
+            hasCredibleUsernameField = visible.any {
+                it.hint == FieldHint.USERNAME && it.strength !=
+                    io.vaultix.vaultix.autofill.parser.HintClassifier.SignalStrength.LOW
+            },
+        )
+    }
 }

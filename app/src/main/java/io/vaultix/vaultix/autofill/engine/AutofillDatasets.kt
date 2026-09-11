@@ -25,8 +25,9 @@ import io.vaultix.vaultix.R
 import io.vaultix.vaultix.autofill.model.FieldHint
 import io.vaultix.vaultix.autofill.model.FillPlan
 import io.vaultix.vaultix.autofill.model.FillSuggestion
-import io.vaultix.vaultix.autofill.model.ParsedStructure
 import io.vaultix.vaultix.autofill.match.AutofillFillTargetPolicy
+import io.vaultix.vaultix.autofill.match.UriMatcher
+import io.vaultix.vaultix.autofill.model.ParsedStructure
 
 /** 自动填充面板条目的构造与展示（RemoteViews，由系统渲染）。 */
 object AutofillDatasets {
@@ -71,19 +72,50 @@ object AutofillDatasets {
             Dataset.Builder(presentation)
         }
 
-    /** 把建议映射到页面真实存在的字段上（无对应字段的语义直接丢弃）。 */
-    fun entriesFor(parsed: ParsedStructure, suggestion: FillSuggestion): List<Pair<AutofillId, String>> {
-        val result = mutableListOf<Pair<AutofillId, String>>()
-        for ((hint, value) in suggestion.fields) {
-            if (value.isEmpty()) continue
-            targetIdsFor(parsed, hint).forEach { result += it to value }
-        }
-        return result
+    /**
+     * 把建议映射到页面真实存在的字段上（无对应字段的语义直接丢弃）。
+     *
+     * 邮箱框额外要求值**本身像邮箱** —— 对齐 Bitwarden `fillLoginPartition` 的
+     * `if (!autofillCipher.username.trim().isValidEmail()) return null`：
+     * 用手机号 / 昵称当账号的条目，不该把那个值塞进邮箱框。
+     */
+    fun entriesFor(parsed: ParsedStructure, suggestion: FillSuggestion): List<Pair<AutofillId, String>> =
+        suggestion.fields
+            .filter { (hint, value) -> value.isNotEmpty() && isFillableValue(hint, value) }
+            .flatMap { (hint, value) -> targetIdsFor(parsed, hint).map { it to value } }
+
+    /** 值的形态是否适合填进该语义的字段（见 [entriesFor] 关于邮箱的说明）。 */
+    private fun isFillableValue(hint: FieldHint, value: String): Boolean =
+        hint != FieldHint.EMAIL_ADDRESS || isEmailLike(value)
+
+    /**
+     * 该语义在当前页面可回填的目标字段。
+     *
+     * 三条过滤（对齐 Bitwarden 填充侧的精确性要求）：
+     * - 不可见字段不填；
+     * - **逐字段站点校验**：字段自身所属域名与本次填充站点不同源时不填 ——
+     *   页面里嵌入第三方 iframe（外挂登录 / 支付组件）时，避免把本站账号填进别家的框
+     *   （对齐 Bitwarden `autofillView.data.website == autofillCipher.website`）；
+     * - 原生 App 字段没有 webDomain，[UriMatcher.sameSite] 会放行，不影响 App 内填充。
+     */
+    fun targetIdsFor(parsed: ParsedStructure, hint: FieldHint): List<AutofillId> {
+        val pageDomain = parsed.webDomain ?: parsed.fallbackWebDomain
+        return parsed.fields
+            .filter { it.isVisible && it.hint == hint && UriMatcher.sameSite(it.webDomain, pageDomain) }
+            .map { it.id }
     }
 
-    /** 该语义在当前页面可回填的目标字段（不可见字段不填）。 */
-    fun targetIdsFor(parsed: ParsedStructure, hint: FieldHint): List<AutofillId> =
-        parsed.fields.filter { it.isVisible && it.hint == hint }.map { it.id }
+    /**
+     * 值是否像邮箱（对齐 Bitwarden 用 `isValidEmail()` 守住 Email 字段的意图）。
+     *
+     * 刻意保持宽松：只挡住明显不是邮箱的值（无 `@`、`@` 在首尾、有空白、多个 `@`），
+     * 不做完整 RFC 校验 —— 宁可放过个别畸形地址，也不要漏填合法的罕见形态。
+     */
+    internal fun isEmailLike(value: String): Boolean {
+        val v = value.trim()
+        val at = v.indexOf('@')
+        return at > 0 && at < v.length - 1 && v.lastIndexOf('@') == at && v.none { it.isWhitespace() }
+    }
 
     /**
      * 页面上**值得填充**的字段 id（用于 FillResponse 的整体认证回灌）。
