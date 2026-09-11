@@ -1,23 +1,95 @@
 # 下一步任务清单
 
-> 更新于 2026-09-11（第三十一轮）。**【最新】通行密钥「Authentication failed」的第二个根因
-> （**锁态竞态**）已定位并修复 —— 用户的判断是对的，问题确实在密码库的加锁/解锁逻辑上。**
+> 更新于 2026-09-11（第三十二轮）。**【最新】锁态模型按 Bitwarden 标准重写完成。**
 >
-> `PasskeyGetActivity` 把「库锁定」与「凭证不存在」混为一谈：它经 `ItemRepository` 取凭证，
-> 而 `ItemRepositoryImpl.observeState` 在**库未解锁时恒发空列表**（安全设计，正确），
-> 于是「库在候选展示后重新上锁」被误报成 `Passkey not found`。而库确实会被锁掉 ——
-> `AutoLockController.onStart` 把「系统拉起我方 Activity」造成的 ProcessLifecycle 前后台切换，
-> 误判成「用户切走 App 又回来」→ `lockAll()`。两者叠加即竞态窗口。
+> 用户要求：「参考 bitwarden 的做法…哪怕是一字一句抄代码，也要实现。
+> 还有**密码库加锁和解锁逻辑也要按 bitwarden 标准来**吧。更稳定，我这项目当前的
+> 密码库加锁解锁逻辑太烂了，不标准」。已确认三个方向并全部落地：
+> ①完整抄定时器模型；②统一透明 trampoline + 集中路由；③根导航驱动的解锁路由。
 >
-> 已照抄 Bitwarden 的三处对应设计：①锁态单独成一路（`isVaultUnlocked` → 解锁引导，
-> 绝不报「找不到」）；②凭据流程豁免窗口（对齐 `FOREGROUNDED` 取消超时任务 +
-> `OnAppRestart` 的 autofill 豁免）；③`isUserVerified` / `authenticationAttempts`(≤5) 簿记。
-> 附带修正 origin 取值顺序，并在原生流程缺 host 时明确失败（对齐 `Error.MissingHostUrl`）。
+> **核心变化**：锁态从「回前台算时间差」换成 Bitwarden 的「后台启动 `delay()` 定时器 job、
+> 前台 `cancel` 它」。新的 `VaultLockManager` + `VaultTimeout` sealed class 取代旧的
+> `AutoLockController` 自判 + 裸 `Int` 档位 + `CredentialFlowGuard` 时间戳窗口。
+> 仓储层的 `runBlocking` 也一并去掉（改挂起式）。
 >
-> 第三十轮（上一轮）**通行密钥「Authentication failed」的第一个根因已修复：
+> ⚠️ **存量迁移**：旧 `auto_lock_minutes` 的 `-1` 是「从不」，新模型 `-1`（OnAppRestart）
+> 是「重启即锁」——**语义正好相反**，已在 `VaultixPreferences` 做一次性迁移。
+>
+> 第三十一轮**通行密钥「Authentication failed」的第二个根因（锁态竞态）已修复 ——
+> 用户的判断是对的，问题确实在密码库的加锁/解锁逻辑上。**
+> `PasskeyGetActivity` 把「库锁定」与「凭证不存在」混为一谈（`ItemRepositoryImpl.observeState`
+> 在库未解锁时恒发空列表），而 `AutoLockController.onStart` 又把「系统拉起我方 Activity」
+> 造成的 ProcessLifecycle 前后台切换误判成「用户切走又回来」→ `lockAll()`。本轮的三处
+> 对齐（锁态单独成一路 / 凭据流程豁免 / 验证簿记）已在第三十二轮被更彻底的模型替换。
+>
+> 第三十轮（再上一轮）**通行密钥「Authentication failed」的第一个根因已修复：
 > 浏览器流程回传了自造的 clientDataJSON** —— 系统只给 32 字节 `clientDataHash`（无明文），
 > 而 RP 校验用的是**网页交给它的那份浏览器 JSON**，所以 provider 回传的必须是**占位符**
 > （官方明文要求）；签名仍只用系统给的哈希。
+
+## 第三十二轮 2026-09-11 · 锁态模型按 Bitwarden 标准重写
+
+### 为什么旧的「不标准」（可实证，非主观）
+
+| 维度 | Bitwarden 标准 | 旧 Vaultix | 后果 |
+|---|---|---|---|
+| 超时触发 | 后台 `launch { delay(timeout); lock() }`，前台 **cancel 该 job** | 后台记 `backgroundedAtMs`，前台回头算差值 | 计时基准是"前台时刻"，keyguard/进程事件都会干扰 |
+| 超时模型 | `VaultTimeout` sealed class（10 个档位） | 裸 `Int`（负数=从不、0=立即） | 语义靠口头约定；`OnAppRestart` 档位压根不存在 |
+| 超时原因 | `AppBackgrounded` / `AppCreated(firstTimeCreation, createdForAutofill)` / `UserChanged` | 无 | 无法表达"这次前台切换是 autofill 造成的" |
+| autofill 豁免 | `createdForAutofill=true` **结构性豁免** | `CredentialFlowGuard` 8 秒时间戳窗口（启发式） | 窗口过短/过长都会误判 |
+| 锁定执行 | LockManager 挂起调度 | `VaultRepositoryImpl` 用 **`runBlocking`** 阻塞调用线程 | UI 线程被阻塞做密钥清零 |
+| CP 锁定出路 | 返回 `authenticationAction`，系统重新发起请求 | Activity 内自己 `startActivity` 再 `cancel()` | 两段式流程被打断成一段 |
+| CP 路由 | `RootNavViewModel` 集中决定 | 判定散在 Service 的 `lockedCount` + Activity 的 `sessions.isUnlocked` | 多处判定，任一处不一致就出竞态 |
+
+### 落地清单
+
+**锁态**
+- 新增 `core/datastore/.../VaultTimeout.kt`（纯 JVM 模型，对齐 Bitwarden `VaultTimeout`）：
+  `Immediately` / 1 / 5 / 15 / 30 / 60 / 240 分钟 / `OnAppRestart` / `Never` / `Custom`，
+  含 `toStorageValue` / `fromStorageValue` / **`fromLegacyMinutes`（迁移）**。
+- 新增 `app/.../security/VaultLockManager.kt` + `VaultLockManagerImpl.kt`（逐句对齐
+  `VaultLockManagerImpl.kt`）：`handleOnBackground` / `handleOnForeground`（**只 cancel job**）/
+  `checkForVaultTimeout` / `handleTimeoutActionWithDelay` / `CheckTimeoutReason` 三类。
+- `AutoLockController` 降级为薄适配器；**删除** `AutoLockPolicy.kt`、`CredentialFlowGuard.kt`。
+- `VaultixApplication` 新增 `onAppCreated` + `markCreatedForAutofill` 接线。
+- `VaultRepository.lockVault/lockAll` 改 `suspend`，**去掉 `runBlocking`**。
+
+**凭据提供商**
+- 新增 `CredentialProviderActivity`（透明 trampoline，`exported=false`）、
+  `CredentialProviderRequestManager`（凭据不经 Intent）、`CredentialProviderIntentUtils`。
+- `VaultixCredentialProviderService`：**有任一库锁定时只返回 `authenticationActions`**，
+  不再与 `credentialEntries` 并存（对齐 Bitwarden「锁定态与可填充候选互斥」）。
+- `PasskeyGetActivity`：锁定时不再自起解锁页，改为回灌取消交由系统走两段式。
+
+**解锁路由**
+- 新增 `RootNavViewModel` + `RootNavState`；`VaultixApp` 起始路由按锁态决定；
+  新增 `UnlockEntryRoute`（无参，自动选首个锁定库）。保留主密码 + 2FA + 本地快速解锁。
+
+**设置**
+- 档位改 `VaultTimeout`（新增「重启 App 时」）；`SettingsScreen` 的 `when` 变穷尽分支。
+
+### 验证（**真实运行**，非纸面推演）
+
+1. **真实编译生产类**：用沙箱内 `kotlin-compiler-embeddable-2.2.21` 编译
+   `core/datastore/.../VaultTimeout.kt`，再用**编译出的真实类**跑 28 条行为断言 → **全 PASS**。
+   固化了最危险的两点：`fromLegacyMinutes(-1) == Never` 且 `!= OnAppRestart`；`Custom(0)` 抛异常。
+2. **超时决策逻辑** 17 条断言 → **全 PASS**。重点：
+   - `OnAppRestart` + `AppCreated(false, createdForAutofill=true)` → **不锁**（豁免生效）
+   - `OnAppRestart` + `AppBackgrounded` → **不锁**（本档位不响应后台）
+   - 前台 `cancel` 定时器后到点**不锁**
+3. 新增 `core/datastore` 单测 `VaultTimeoutTest`（10 用例），并补该模块的 junit/truth 依赖。
+4. 全仓 `.kt` 无超 120 字符行（detekt 门禁）。
+
+### 待真机回归
+
+- [ ] 解锁 → 切后台 5 分钟 → 回前台应锁
+- [ ] 解锁 → 息屏即回（5 分钟档）→ **不应立刻锁**（旧实现在此会锁）
+- [ ] 设置「重启 App 时」→ 杀进程重开应锁；**从浏览器点通行密钥拉起则不应锁**（豁免）
+- [ ] 网页点通行密钥 → 候选正常 → 确认卡片 + 生物识别 → 登录成功
+- [ ] 锁定时点候选 → 应出现「解锁 Vaultix」动作 → 点它解锁后自动重列候选
+- [ ] 首次安装（无库）启动 → 应进库列表引导添加，**不能卡在解锁页**
+- [ ] 存量用户升级：原先选「从不」的**必须仍是「从不」**（迁移正确性）
+
 > ⚠️ Bastion / Keyguard 两家在这点上都是**反例**，不可照抄；Bitwarden 交给 SDK 的做法才对。**
 >
 > 再上一轮（第二十九轮）**通行密钥「找不到候选 / 列表为空」根因已定位并修复：

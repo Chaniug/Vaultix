@@ -870,3 +870,50 @@ provider 无从复刻 ⇒ 「按哈希枚举候选反选」（旧 `buildClientDa
   → `git am`；若 clone 继承本地 HEAD 会误报失败，必须先 reset）。
 - detekt 行长上限 **120**（Kotlin `String.length` UTF-16 语义，CJK 按**字符**算，
   别用 `awk` 的数字节）；函数 ≤150 行、单文件 ≤60 函数。
+
+
+---
+
+## 2026-09-11 · 第三十二轮：锁态模型按 Bitwarden 标准重写（第 31 轮的根治版）
+
+> 用户：「参考 bitwarden 的做法…**哪怕是一字一句抄代码**，也要实现。
+> 还有**密码库加锁和解锁逻辑也要按 bitwarden 标准来**吧。更稳定，我这项目当前的
+> 密码库加锁解锁逻辑太烂了，不标准」。
+> 提问答复确认三个方向：①完整抄定时器模型；②统一 trampoline + 集中路由；③根导航驱动解锁路由。
+
+### 核心替换
+
+| 旧（第 31 轮及以前）| 新（对齐 Bitwarden）|
+|---|---|
+| `backgroundedAtMs` + 前台算差值 | 后台 `launch { delay(t); lock() }`，前台 **`cancel` job** |
+| 裸 `Int` 档位（负=从不）| `VaultTimeout` sealed class（10 档位，含 `OnAppRestart`）|
+| `CredentialFlowGuard` 8s 时间戳窗口 | `CheckTimeoutReason.AppCreated(..., createdForAutofill)` 结构性豁免 |
+| `AutoLockPolicy` 纯函数判差值 | `VaultLockManager.checkForVaultTimeout` 四路分支 |
+| `runBlocking` 锁定 | `suspend fun`（去阻塞）|
+| CP 三处各自判锁态 | `RootNavViewModel` 集中 + 锁定只给 `authenticationActions` |
+| 无 trampoline | `CredentialProviderActivity`（`exported=false`，结果原样透传）|
+
+### ★ 迁移陷阱（最危险）
+
+旧 `auto_lock_minutes = -1` = 「**从不**」；新 `VaultTimeout` `-1` = `OnAppRestart`「**重启即锁**」。
+**语义正好相反**。必须迁移，否则用户选择被静默反转。
+已在 `VaultixPreferences` 做一次性迁移 + 迁移标记；两套测试都固化了该断言。
+
+### 验证方法（可复用）
+
+**最强形式：真实编译生产类 + 对编译产物跑断言。**
+```bash
+# 1) 编译真实生产文件（纯 JVM 模块可直接编）
+java -cp "$GRADLE_HOME/lib/*" org.jetbrains.kotlin.cli.jvm.K2JVMCompiler \
+  -no-stdlib -no-reflect -cp "$GRADLE_HOME/lib/kotlin-stdlib-2.2.21.jar" \
+  -d /tmp/out <真实生产文件>.kt
+# 2) 写测试脚本 import 该包，编译时把 /tmp/out 加进 -cp
+# 3) 运行：java -cp "testout:/tmp/out:$GRADLE_HOME/lib/kotlin-stdlib-2.2.21.jar" MainKt
+```
+比"内联逻辑副本"强得多——它验证的是**真正会编译进 App 的那份代码**。
+
+### 教训
+
+第 31 轮我自造的 `CredentialFlowGuard` 因 `Long.MIN_VALUE` 溢出导致自动锁定被永久抑制。
+本轮把那个启发式整个删掉、换成 Bitwarden 的结构化模型，**自创逻辑的风险面直接归零**。
+⇒ **上游有成熟实现时，自造"看起来更严谨"的变体是负收益。**

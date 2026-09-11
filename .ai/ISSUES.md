@@ -643,3 +643,67 @@ create 路径同理：浏览器流程回传占位符（attestation 为 `none`，
 7. `Long.MIN_VALUE` 作初值会溢出（**证明为什么不能用它**）
 8. 初值下、无流程时即便 `elapsedRealtime` 很大也不豁免
 9. 初值确为 `0`
+
+## 37. 锁态模型与凭据提供商链路按 Bitwarden 标准重写（2026-09-11，P0，`d6f3409`）
+
+> 用户要求：「参考 bitwarden 的做法…哪怕是一字一句抄代码，也要实现。
+> 还有**密码库加锁和解锁逻辑也要按 bitwarden 标准来**吧。更稳定，我这项目当前的
+> 密码库加锁解锁逻辑太烂了，不标准」。
+>
+> 这是第 31 轮「锁态竞态」的**根治版**：第 31 轮是在旧模型上打补丁（`CredentialFlowGuard`
+> 时间戳窗口），本轮把模型本身换成 Bitwarden 的。
+
+### 旧模型的三处根本性缺陷（可实证）
+
+1. **计时基准错**：后台只记 `backgroundedAtMs`，前台回头算差值。
+   ⇒ 任何影响"前台时刻"的事件（keyguard、进程事件、Activity 互切）都会污染判定。
+   Bitwarden 是「后台启动 `delay(timeout)` 的 job；前台 `cancel` 它」——锁不锁完全由
+   那个 job 自己决定，前台不做任何判定。
+2. **档位模型是裸 `Int` 的口头约定**（负数=从不 / 0=立即 / N=分钟）。
+   ⇒ 无法表达 `OnAppRestart`（重启时锁定）；`when` 漏档只会在运行时静默走 else。
+3. **autofill 豁免是启发式**：`CredentialFlowGuard` 用 8 秒时间戳窗口近似判断
+   「这次前台切换是不是我们自己造成的」。窗口过短 → 通行密钥被误锁；
+   过长 → 用户真的切走又回来却不锁。Bitwarden 用 `CheckTimeoutReason.AppCreated(
+   firstTimeCreation, createdForAutofill)` 做**结构化**表达。
+
+另有：`VaultRepositoryImpl.lockVault/lockAll` 用 `runBlocking` 阻塞调用线程；
+CP Service 在「部分库锁定」时把 `credentialEntries` 与 `authenticationActions` 并存。
+
+### 落地（逐句对齐 Bitwarden 三处）
+
+| 旧 | 新 |
+|---|---|
+| `AutoLockPolicy`（纯函数判差值）| `VaultTimeout` sealed class（10 档位，core:datastore） |
+| `AutoLockController` 自判 + `backgroundedAtMs` | `VaultLockManager.onAppBackgrounded/onAppForegrounded` |
+| `CredentialFlowGuard` 时间戳窗口 | `CheckTimeoutReason.AppCreated(..., createdForAutofill)` 结构性豁免 |
+| 裸 `Int` 档位偏好 | `VaultTimeout` + 一次性迁移（`fromLegacyMinutes`） |
+| `runBlocking` 锁定 | `suspend fun` |
+| CP 三处各自判定锁态 | `RootNavViewModel` 集中 + CP 锁定只给 `authenticationActions` |
+| 无 trampoline | `CredentialProviderActivity`（`exported=false`，结果原样透传） |
+
+### ★ 最危险的迁移点（务必保留断言）
+
+旧 `auto_lock_minutes = -1` 语义是「**从不**锁定」；
+新 `VaultTimeout` 的 `-1`（`OnAppRestart`）语义是「**重启时**锁定」——**正好相反**。
+
+若不迁移，用户明确选择的「永不锁定」会被静默改成「重启即锁」。
+已在 `VaultixPreferences.vaultTimeout` 首次读取时按 `fromLegacyMinutes` 转换 + 置迁移标记；
+`VaultTimeoutTest` 与独立验证脚本都固化了 `fromLegacyMinutes(-1) == Never` 且
+`!= OnAppRestart` 两条断言。
+
+### 验证
+
+1. **真实编译生产类 + 真实类行为断言**：用沙箱内 `kotlin-compiler-embeddable-2.2.21`
+   编译 `VaultTimeout.kt`，再对**编译产物**跑 28 条断言 → 全 PASS。
+2. 超时决策逻辑 17 条断言 → 全 PASS（含 autofill 豁免、OnAppRestart 不响应后台、
+   前台 cancel 后到点不锁）。
+3. `core:datastore` 新增 `VaultTimeoutTest`（10 用例）；该模块此前无测试源集配置，
+   本轮补上 junit/truth 依赖。
+4. 全仓 `.kt` 无超 120 字符行。
+
+### 教训（第 31 轮教训的延续）
+
+第 31 轮我写出的 `CredentialFlowGuard` 用 `Long.MIN_VALUE` 作初值导致整数溢出、
+自动锁定被永久抑制 —— 那次是**自造启发式**引入的缺陷。
+本轮把启发式整个换成 Bitwarden 的结构化模型，**从根上消除了这类"自创逻辑"的风险面**。
+结论：**当上游有成熟实现时，自造"看起来更严谨"的变体是负收益**。
