@@ -22,7 +22,7 @@ package io.vaultix.vaultix.passkey
 import android.content.Intent
 import android.os.Build
 import androidx.annotation.RequiresApi
-import androidx.credentials.provider.BeginCreateCredentialRequest
+import androidx.credentials.CreateCredentialRequest
 import androidx.credentials.provider.BeginGetCredentialRequest
 import androidx.credentials.provider.PendingIntentHandler
 import androidx.credentials.provider.ProviderGetCredentialRequest
@@ -34,8 +34,16 @@ object CredentialProviderIntentUtils {
     const val EXTRA_KEY_UV_PERFORMED_DURING_UNLOCK =
         "androidx.credentials.provider.extra.UV_PERFORMED_DURING_UNLOCK"
 
-    /** 拿「注册通行密钥」请求；不是该类型时返回 null。 */
-    fun Intent.getCreateCredentialRequestOrNull(): BeginCreateCredentialRequest? = runCatching {
+    /**
+     * 拿「注册通行密钥」请求；不是该类型时返回 null。
+     *
+     * ⚠️ 返回的是**客户端侧** [CreateCredentialRequest]（`retrieveProviderCreateCredentialRequest`
+     * 的 `callingRequest` 即此类型），**不是**服务端侧 `BeginCreateCredentialRequest`
+     * ——二者是互不相关的两个类，无法互转。注册流程实际由
+     * [VaultixCredentialProviderService.onBeginCreateCredentialRequest] 直接处理，
+     * 本解析仅用于中转 Activity 的请求分类。
+     */
+    fun Intent.getCreateCredentialRequestOrNull(): CreateCredentialRequest? = runCatching {
         PendingIntentHandler.retrieveProviderCreateCredentialRequest(this)
     }.getOrNull()?.callingRequest
 

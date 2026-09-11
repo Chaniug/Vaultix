@@ -161,17 +161,23 @@ sealed class VaultTimeout {
          * `==` 比较与来回映射都是稳定双射（避免 `Custom(5) != FiveMinutes` 这类"看起来一样
          * 但不相等"的坑）。
          */
-        fun fromStorageValue(value: Int): VaultTimeout = when (value) {
-            STORAGE_NEVER -> Never
-            STORAGE_ON_APP_RESTART -> OnAppRestart
-            0 -> Immediately
-            1 -> OneMinute
-            5 -> FiveMinutes
-            15 -> FifteenMinutes
-            30 -> ThirtyMinutes
-            60 -> OneHour
-            240 -> FourHours
-            else -> if (value > 0) Custom(value) else DEFAULT
+        /**
+         * 已知预设档位的「分钟数 → 档位」查找表。
+         *
+         * 用各 data object 自身的 [vaultTimeoutInMinutes] 作键，避免在 [fromStorageValue]
+         * 里重复写死魔法数字（detekt [MagicNumber] 门禁会拦截）；新增预设档位时只要把它加进
+         * 这个列表就会被自动识别，无需再改 [fromStorageValue] 的分支。
+         */
+        private val KNOWN_BY_MINUTES: Map<Int, VaultTimeout> = listOf(
+            Immediately, OneMinute, FiveMinutes, FifteenMinutes,
+            ThirtyMinutes, OneHour, FourHours,
+        ).mapNotNull { timeout -> timeout.vaultTimeoutInMinutes?.let { it to timeout } }.toMap()
+
+        fun fromStorageValue(value: Int): VaultTimeout {
+            if (value == STORAGE_NEVER) return Never
+            if (value == STORAGE_ON_APP_RESTART) return OnAppRestart
+            KNOWN_BY_MINUTES[value]?.let { return it }
+            return if (value > 0) Custom(value) else DEFAULT
         }
 
         /**

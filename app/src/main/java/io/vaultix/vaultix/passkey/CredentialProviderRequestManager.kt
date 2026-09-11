@@ -28,7 +28,7 @@ package io.vaultix.vaultix.passkey
 
 import androidx.annotation.RequiresApi
 import android.os.Build
-import androidx.credentials.provider.BeginCreateCredentialRequest
+import androidx.credentials.CreateCredentialRequest
 import androidx.credentials.provider.BeginGetCredentialRequest
 import androidx.credentials.provider.ProviderGetCredentialRequest
 
@@ -42,9 +42,9 @@ import androidx.credentials.provider.ProviderGetCredentialRequest
 @RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
 object CredentialProviderRequestManager {
 
-    /** 注册（通行密钥创建）请求。 */
+    /** 注册（通行密钥创建）请求（客户端侧 [CreateCredentialRequest]）。 */
     @Volatile
-    var createCredentialRequest: BeginCreateCredentialRequest? = null
+    var createCredentialRequest: CreateCredentialRequest? = null
         private set
 
     /** 断言（通行密钥使用）请求。 */
@@ -71,7 +71,7 @@ object CredentialProviderRequestManager {
     var isUserPreVerified: Boolean = false
         private set
 
-    fun setCreateCredentialRequest(request: BeginCreateCredentialRequest, preVerified: Boolean) {
+    fun setCreateCredentialRequest(request: CreateCredentialRequest, preVerified: Boolean) {
         clear()
         createCredentialRequest = request
         isUserPreVerified = preVerified

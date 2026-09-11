@@ -57,10 +57,8 @@ import androidx.credentials.provider.PasswordCredentialEntry
 import androidx.credentials.provider.PublicKeyCredentialEntry
 import androidx.credentials.provider.ProviderClearCredentialStateRequest
 import dagger.hilt.android.AndroidEntryPoint
-import io.vaultix.common.WebAuthn
 import io.vaultix.domain.ItemRepository
 import io.vaultix.domain.VaultRepository
-import io.vaultix.model.VaultFido2Credential
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
 import io.vaultix.vaultix.R
@@ -362,7 +360,14 @@ class VaultixCredentialProviderService : CredentialProviderService() {
         return builder.build()
     }
 
-    /** 跨已解锁库扁平化所有登录条目的 fido2，按 rpId（+ allowCredentials）匹配。 */
+    /**
+     * 跨已解锁库扁平化所有登录条目的 fido2，按 rpId（+ allowCredentials）匹配。
+     *
+     * 解析细节拆分到同包 `PasskeyResolution.kt`：detekt 2.0.0-alpha.6 的
+     * CyclomaticComplexMethod 会把**同文件**被调用私有函数的复杂度累加进调用方
+     * （实测：同文件拆 helper 反而把本函数从 19 推高到 41）。拆到独立文件后
+     * detekt 逐文件分析、无法跨文件累加，本函数与其 helper 各自 < 14。
+     */
     private suspend fun resolvePasskeys(
         option: BeginGetPublicKeyCredentialOption,
         unlocked: Set<String>,
@@ -374,153 +379,20 @@ class VaultixCredentialProviderService : CredentialProviderService() {
             return emptyList()
         }
         val allowed = parseAllowedCredentialIds(json)
-
-        // ⚠️ 逐级计数（现场「候选为空」时唯一的定位手段）：
-        // total=库内全部 fido2 条数；unusable=元数据不完整被丢；rpIdMiss=rpId 不匹配被丢；
-        // allowedMiss=allowCredentials 不含被丢；matched=最终候选。
-        // 这四个数一出来，「为什么没有候选」当场可判，不必再靠猜。
-        var total = 0
-        var unusable = 0
-        var rpIdMiss = 0
-        var allowedMiss = 0
-        val rpMatched = mutableListOf<PasskeyMatch>()
-        for (vaultId in unlocked) {
-            val items = runCatching { itemRepository.observeItems(vaultId).first() }.getOrDefault(emptyList())
-            for (item in items) {
-                if (item.type != VaultItemType.Login) continue
-                for (cred in item.fido2Credentials) {
-                    total++
-                    // ⚠️ **必须过滤不可用记录**（对齐 Bastion `PasskeyCredentialDiscoveryPolicy
-                    // .isUsable`）。判断口径见 [isUsablePasskey]：只查元数据完整性。
-                    // 列出不可用记录本身也是 UX 缺陷：用户会看到一条永远点不通的通行密钥。
-                    if (!isUsablePasskey(cred)) {
-                        unusable++
-                        continue
-                    }
-                    // rpId 归一化比较：**两侧都要归一化**。库里存的值可能带末尾点 / 大小写
-                    // 不一 / 是 Unicode 域名，而请求侧是 punycode ASCII——朴素 `equals` 会漏配。
-                    // 对齐 Bastion `PasskeyRpIdNormalizer.isEquivalent`。
-                    if (!isSameRpId(cred.rpId, rpId)) {
-                        rpIdMiss++
-                        continue
-                    }
-                    rpMatched += PasskeyMatch(vaultId, item.id, cred, item.title)
-                }
-            }
-        }
-
-        // allowCredentials 过滤。**关键：严格过滤后为空要回退到「不过滤」**。
-        //
-        // 对齐 Bastion `BastionCredentialProviderService.resolvePasskeys`：
-        // ```
-        // if (filteredPasskeys.isEmpty() && allowedCredentialIds.isNotEmpty()) {
-        //     resolvePasskeys(..., strictAllowCredentials = false)   // ← 回退重查
-        // }
-        // ```
-        // 理由：`allowCredentials` 是 RP 的**提示**而非授权门（规范允许空）。用户若已在
-        // 「另一台设备 / 另一个客户端」注册过该 RP 的 passkey，本地这份 credentialId 与
-        // RP 下发的列表对不上——严格过滤会把**唯一可用的候选也删掉**，表现为候选列表为空。
-        // 回退到不严格过滤，至少让用户看到并尝试；真用不了的条目会在签名阶段失败，
-        // 但那比「什么都不弹」可诊断得多。
-        val result = if (allowed.isEmpty()) {
-            rpMatched
-        } else {
-            val strict = rpMatched.filter { m -> allowed.any { idMatches(m.credential.credentialId, it) } }
-            if (strict.isNotEmpty()) {
-                strict
-            } else {
-                allowedMiss = rpMatched.size
-                log("GET resolve allowCredentials mismatch (allowed=${allowed.size}) → fallback to rpId-only")
-                rpMatched
-            }
-        }
+        val (rpMatched, counts) = collectPasskeyMatches(itemRepository, unlocked, rpId)
+        val result = applyAllowedFilter(rpMatched, allowed) { log(it) }
         log(
             "GET resolve rpId=$rpId allowed=${allowed.size} " +
-                "total=$total unusable=$unusable rpIdMiss=$rpIdMiss allowedMiss=$allowedMiss " +
-                "matched=${result.size}",
+                "total=${counts.total} unusable=${counts.unusable} " +
+                "rpIdMiss=${counts.rpIdMiss} matched=${result.size}",
         )
-        if (result.isEmpty() && total > 0) {
+        if (result.isEmpty() && counts.total > 0) {
             // 有记录却筛不出候选：把库里实际存的 rpId 打出来（只打域名，非敏感），
             // 常见于「库里存了 www.github.com 而请求是 github.com」这类子域口径差。
-            val storedRpIds = mutableSetOf<String>()
-            for (vaultId in unlocked) {
-                val items = runCatching { itemRepository.observeItems(vaultId).first() }.getOrDefault(emptyList())
-                items.forEach { it.fido2Credentials.forEach { c -> storedRpIds += c.rpId } }
-            }
-            log("GET resolve EMPTY: storedRpIds=${storedRpIds.joinToString(",")}")
+            val stored = collectStoredRpIds(itemRepository, unlocked)
+            log("GET resolve EMPTY: storedRpIds=${stored.joinToString(",")}")
         }
         return result
-    }
-
-    /**
-     * RP ID 归一化（对齐 Bastion `PasskeyRpIdNormalizer.normalize`）。
-     *
-     * 步骤：`trim` → 去尾部根点 `.` → 小写 → Unicode 域名转 punycode（`IDN.toASCII`）。
-     *
-     * 为什么必须做：RP 请求里的 `rpId` 是 **punycode ASCII**（如 `xn--fiq228c.cn`），
-     * 而库里可能存着注册时的 Unicode 形态（如 `中文.cn`）或带大小写差异的形态。
-     * 不归一化 ⇒ 字符串不等 ⇒ 候选为空。
-     *
-     * `IDN.toASCII` 失败（非法域名）时回退到小写形态，宁可多比不可漏比。
-     */
-    private fun normalizeRpId(raw: String): String {
-        val trimmed = raw.trim().trimEnd('.')
-        if (trimmed.isEmpty()) return ""
-        val lower = trimmed.lowercase(java.util.Locale.ROOT)
-        return runCatching { java.net.IDN.toASCII(lower, java.net.IDN.USE_STD3_ASCII_RULES) }
-            .getOrDefault(lower)
-    }
-
-    /** 归一化后比较两个 rpId 是否等价。 */
-    private fun isSameRpId(a: String, b: String): Boolean =
-        normalizeRpId(a) == normalizeRpId(b)
-
-    /**
-     * 通行密钥可用性判定（候选展示阶段）。
-     *
-     * **只检查元数据完整性**，不检查 `keyValue`（私钥材料）——对齐 Keyguard
-     * 的做法（检查 `keyAlgorithm` / `keyType` 等元数据字段，签名时才取密钥）。
-     *
-     * 为什么不检查 keyValue：
-     * Bitwarden 官方端创建的 passkey，私钥存在 Android Keystore，**服务端不存
-     * keyValue**。从 Bitwarden 同步过来的 passkey 的 `keyValue` 字段解密后为空
-     * （CipherMapper 第 443 行 `.takeIf { it.isNotBlank() }` 返回 null）。
-     * 如果在候选阶段就要求 keyValue 非空，会把这些 passkey **全部过滤掉**
-     * → Edge 看不到任何通行密钥候选。
-     *
-     * 签名能力的检查推迟到 [PasskeyGetActivity] 真正签名时
-     * （`WebAuthn.parseEcPrivateKey(cred.keyValue)` 已有 null 检查和失败处理）。
-     * 如果用户点了一条没有 keyValue 的候选，会走到 Activity 的失败分支并回
-     * `GetCredentialUnknownException`——虽然点不通，但至少用户**能看到候选**，
-     * 而不是什么都不弹。
-     *
-     * ⚠️ 与 Bastion 的**已知差异**：Bastion `PasskeyCredentialDiscoveryPolicy.isUsable`
-     * 要求 `privateKeyAlias.isNotBlank()`（其私钥存 AndroidKeyStore，别名即签名能力）。
-     * Vaultix 的私钥存库内 `keyValue`，而上游 Bitwarden 服务端**不存 keyValue**，
-     * 故不能照抄该条件——否则同步来的 passkey 会被整体过滤掉（真机实证）。
-     */
-    private fun isUsablePasskey(cred: VaultFido2Credential): Boolean =
-        cred.credentialId.isNotBlank() &&
-            cred.rpId.isNotBlank() &&
-            (cred.keyType.isNullOrBlank() || cred.keyType == "public-key")
-
-    /** allowCredentials：[{type,id,transports}] 中的 id（base64url）。 */
-    private fun parseAllowedCredentialIds(json: JSONObject): List<String> {
-        val arr = json.optJSONArray("allowCredentials") ?: return emptyList()
-        val ids = mutableListOf<String>()
-        for (i in 0 until arr.length()) {
-            arr.optJSONObject(i)?.optString("id")?.takeIf { it.isNotBlank() }?.let { ids += it }
-        }
-        return ids
-    }
-
-    /** 容错比较 storedId 与允许列表 id（两种 base64 形态都试，转原始字节比较）。 */
-    private fun idMatches(storedId: String, allowed: String): Boolean {
-        val a = runCatching { WebAuthn.decodeBase64UrlOrStandard(storedId) }
-            .getOrNull() ?: return false
-        val b = runCatching { WebAuthn.decodeBase64UrlOrStandard(allowed) }
-            .getOrNull() ?: return false
-        return a.contentEquals(b)
     }
 
     private fun publicKeyEntry(option: BeginGetPublicKeyCredentialOption, m: PasskeyMatch): CredentialEntry {
@@ -597,14 +469,6 @@ class VaultixCredentialProviderService : CredentialProviderService() {
             .build()
         return BeginCreateCredentialResponse.Builder().addCreateEntry(entry).build()
     }
-
-    /** 一次 GET 解析出的可匹配凭证（含定位信息，供 Activity 回取私钥）。 */
-    private data class PasskeyMatch(
-        val vaultId: String,
-        val itemId: String,
-        val credential: VaultFido2Credential,
-        val loginTitle: String,
-    )
 
     /**
      * 现场排障日志（仅 debug 构建；只记选项类型/数量等非敏感元数据，禁记条目内容）。

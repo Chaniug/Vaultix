@@ -51,6 +51,9 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.coroutines.cancellation.CancellationException as KotlinxCancellationException
 
+/** 字节转无符号 int 的掩码（`0xff`）。提成常量避免 MagicNumber 门禁与语义重复。 */
+private const val BYTE_MASK = 0xff
+
 /**
  * Vaultix 加密核心。
  *
@@ -404,12 +407,12 @@ class VaultixCrypto @Inject constructor(
      */
     fun removePkcs7PaddingIfStrict(data: ByteArray): ByteArray {
         if (data.isEmpty()) return data
-        val pad = data[data.size - 1].toInt() and 0xff
+        val pad = data[data.size - 1].toInt() and BYTE_MASK
         if (pad !in 1..AES_BLOCK_SIZE) return data
         // 短数据守护：填充长度不得超过数据长度，否则切片会越界。
         if (pad > data.size) return data
         for (i in data.size - pad until data.size) {
-            if ((data[i].toInt() and 0xff) != pad) return data
+            if ((data[i].toInt() and BYTE_MASK) != pad) return data
         }
         return data.copyOfRange(0, data.size - pad)
     }

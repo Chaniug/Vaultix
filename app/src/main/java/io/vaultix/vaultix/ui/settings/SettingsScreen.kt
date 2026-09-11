@@ -646,12 +646,22 @@ private fun vaultTimeoutLabel(timeout: VaultTimeout): String = when (timeout) {
     VaultTimeout.Never -> stringResource(R.string.auto_lock_never)
     VaultTimeout.Immediately -> stringResource(R.string.auto_lock_immediately)
     VaultTimeout.OnAppRestart -> stringResource(R.string.auto_lock_on_restart)
-    VaultTimeout.OneMinute -> stringResource(R.string.auto_lock_minutes_fmt, 1)
-    VaultTimeout.FiveMinutes -> stringResource(R.string.auto_lock_minutes_fmt, 5)
-    VaultTimeout.FifteenMinutes -> stringResource(R.string.auto_lock_minutes_fmt, 15)
-    VaultTimeout.ThirtyMinutes -> stringResource(R.string.auto_lock_minutes_fmt, 30)
-    VaultTimeout.OneHour -> stringResource(R.string.auto_lock_hour_fmt, 1)
-    VaultTimeout.FourHours -> stringResource(R.string.auto_lock_hour_fmt, 4)
+    VaultTimeout.OneMinute,
+    VaultTimeout.FiveMinutes,
+    VaultTimeout.FifteenMinutes,
+    VaultTimeout.ThirtyMinutes ->
+        // 这几个预设档位的 minutes 恒非空（各自 override 为非空 Int）；
+        // 组合分支不做智能转换，故显式 requireNotNull 断言该不变量。
+        stringResource(
+            R.string.auto_lock_minutes_fmt,
+            requireNotNull(timeout.vaultTimeoutInMinutes),
+        )
+    VaultTimeout.OneHour,
+    VaultTimeout.FourHours ->
+        stringResource(
+            R.string.auto_lock_hour_fmt,
+            requireNotNull(timeout.vaultTimeoutInMinutes) / AutoLockPresets.MINUTES_PER_HOUR,
+        )
     is VaultTimeout.Custom -> when {
         timeout.vaultTimeoutInMinutes % AutoLockPresets.MINUTES_PER_HOUR == 0 ->
             stringResource(
