@@ -162,7 +162,8 @@ class WebAuthnTest {
      *
      * ⚠️ 这**不是**某个登录 bug 的修复：BE/BS 是注册期存档字段，RP 在断言（登录）
      * 阶段不做 BE/BS 校验（login 校验项只有 rpIdHash / UP / UV / 签名 / signCount）。
-     * 断言侧与登录成败相关的是 **signCount 恒 0**，见 [PasskeyGetActivity]。
+     * 断言侧与登录成败相关的是 **signCount 恒 0** 与 **clientDataJSON 用占位符**
+     * （后者见 `browser flow signs provided hash and returns placeholder clientDataJSON`）。
      */
     @Test
     fun `authenticatorData always sets backup eligible and backup state flags`() {
@@ -197,6 +198,119 @@ class WebAuthnTest {
         assertThat(get).contains("\"type\":\"public-key\"")
         // userHandle 为 null 时省略该字段（对齐 Bitwarden / Keyguard）
         assertThat(get).doesNotContain("userHandle")
+    }
+
+    /**
+     * **浏览器流程占位符回归锁（2026-09-11）** —— 修复「Authentication failed」的那条改动。
+     *
+     * 背景：provider 只拿到系统给的 `clientDataHash`（浏览器那份 clientDataJSON 的 SHA-256），
+     * 拿不到明文；RP 校验用的是**网页交给它的**那份 JSON。所以 provider 自造 JSON 回传
+     * 永远对不上——旧实现（按哈希反选自造变体）就是在赌这个不可能事件。
+     *
+     * 官方口径（Android 凭据提供方文档）：
+     * > use the `clientDataHash` ... instead of assembling and hashing clientDataJSON during the
+     * > signature request. To avoid JSON parsing issues, set a placeholder value for
+     * > `clientDataJSON` in the attestation and assertion response.
+     *
+     * 两条流程的判据（本测试同时锁住）：
+     * - 浏览器流程：签名覆盖 `authData ‖ clientDataHash`，回传的 clientDataJSON 是占位符；
+     * - 原生流程：自己拼 JSON、自己哈希、自己签，回传的必须是**同一份** JSON。
+     */
+    @Test
+    fun `browser flow signs provided hash and returns placeholder clientDataJSON`() {
+        val key = WebAuthn.generateKeyPair()
+        val priv = WebAuthn.parseEcPrivateKey(WebAuthn.base64Url(key.privateKeyPkcs8))!!
+        val authData = WebAuthn.buildAuthenticatorData(
+            rpId = "example.com", userPresent = true, userVerified = true,
+            counter = 0, withAttested = false,
+        )
+        // 模拟浏览器：它自己拼了一份 JSON，只把 SHA-256 交给系统
+        val browserJson = (
+            "{\"type\":\"webauthn.get\",\"challenge\":\"Zm9v\",\"origin\":\"https://example.com\"}"
+            ).toByteArray(Charsets.UTF_8)
+        val clientDataHash = MessageDigest.getInstance("SHA-256").digest(browserJson)
+
+        // 1) 占位符不参与任何密码学校验，且必然与浏览器哈希不一致（这正是"不该自造 JSON"的原因）
+        val placeholder = WebAuthn.BROWSER_FLOW_CLIENT_DATA_PLACEHOLDER
+        assertThat(placeholder).isEmpty()
+        assertThat(WebAuthn.clientDataJsonMatchesHash(placeholder, clientDataHash)).isFalse()
+
+        // 2) 签名必须能被 RP 用 (浏览器 JSON + 系统哈希) 验通 —— 也就是验签的真实场景
+        val sig = WebAuthn.signAssertionHash(authData, clientDataHash, priv)
+        val message = authData + MessageDigest.getInstance("SHA-256").digest(browserJson)
+        val pub = KeyFactory.getInstance("EC").generatePublic(
+            ECPublicKeySpec(ECPoint(toBigInt(key.publicX), toBigInt(key.publicY)), ecParams()),
+        )
+        assertThat(
+            Signature.getInstance("SHA256withECDSA").also { it.initVerify(pub); it.update(message) }.verify(sig),
+        ).isTrue()
+
+        // 3) 回传的响应里 clientDataJSON 是空占位符（base64url("") = ""），其余字段照常
+        val json = WebAuthn.buildGetResponseJson(
+            credentialId = key.credentialId,
+            clientDataJson = placeholder,
+            authData = authData,
+            signature = sig,
+            userHandle = null,
+        )
+        assertThat(json).contains("\"clientDataJSON\":\"\"")
+        assertThat(json).contains("\"type\":\"public-key\"")
+        assertThat(json).contains("\"clientExtensionResults\":{}")
+    }
+
+    /**
+     * 原生 App 流程的对照锁：自己拼 JSON 时，**回传的 JSON 必须与签名的 JSON 是同一份字节**。
+     *
+     * 与上面那条浏览器流程的差异，正是 2026-09-11 那次修复的核心：两种流程的 clientDataJSON
+     * 不是同一种东西，不能一套逻辑走到底。
+     */
+    @Test
+    fun `native flow returns the very clientDataJSON it signed over`() {
+        val key = WebAuthn.generateKeyPair()
+        val priv = WebAuthn.parseEcPrivateKey(WebAuthn.base64Url(key.privateKeyPkcs8))!!
+        val challenge = ByteArray(32).also { SecureRandom().nextBytes(it) }
+        val authData = WebAuthn.buildAuthenticatorData("example.com", true, true, 0, false)
+
+        val clientData = WebAuthn.buildClientDataJson("webauthn.get", challenge, "https://example.com")
+        val sig = WebAuthn.signAssertion(authData, clientData, priv)
+        val json = WebAuthn.buildGetResponseJson(key.credentialId, clientData, authData, sig, null)
+
+        // 回传的 JSON 反解回字节后必须能验签通过（RP 侧同样用它计算哈希）
+        val b64 = json.substringAfter("\"clientDataJSON\":\"").substringBefore("\"")
+        val roundTrip = java.util.Base64.getUrlDecoder().decode(b64)
+        assertThat(roundTrip).isEqualTo(clientData)
+        val message = authData + MessageDigest.getInstance("SHA-256").digest(roundTrip)
+        val pub = KeyFactory.getInstance("EC").generatePublic(
+            ECPublicKeySpec(ECPoint(toBigInt(key.publicX), toBigInt(key.publicY)), ecParams()),
+        )
+        assertThat(
+            Signature.getInstance("SHA256withECDSA").also { it.initVerify(pub); it.update(message) }.verify(sig),
+        ).isTrue()
+    }
+
+    /** create 路径同样是"占位符 vs 自产 JSON"二选一。 */
+    @Test
+    fun `create response carries placeholder in browser flow and real json otherwise`() {
+        val key = WebAuthn.generateKeyPair()
+        val cose = WebAuthn.encodeCoseP256(key.publicX, key.publicY)
+        val authData = WebAuthn.buildAuthenticatorData(
+            "example.com", true, true, 0, true, key.credentialId, cose,
+        )
+        val attObj = WebAuthn.buildNoneAttestationObject(authData)
+
+        val browser = WebAuthn.buildCreateResponseJson(
+            key.credentialId, WebAuthn.BROWSER_FLOW_CLIENT_DATA_PLACEHOLDER, attObj,
+        )
+        assertThat(browser).contains("\"clientDataJSON\":\"\"")
+
+        val nativeJson = WebAuthn.buildClientDataJson(
+            "webauthn.create", ByteArray(32), "https://example.com",
+        )
+        val native = WebAuthn.buildCreateResponseJson(key.credentialId, nativeJson, attObj)
+        // 回传的是 base64url，需反解比对（明文不会出现在 JSON 里）
+        val nativeB64 = native.substringAfter("\"clientDataJSON\":\"").substringBefore("\"")
+        assertThat(nativeB64).isNotEmpty()
+        assertThat(java.util.Base64.getUrlDecoder().decode(nativeB64)).isEqualTo(nativeJson)
     }
 
     private fun toBigInt(b: ByteArray): BigInteger = BigInteger(1, b)

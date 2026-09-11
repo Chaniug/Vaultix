@@ -10,9 +10,10 @@
  *
  * 流程：
  *  1. 按 (vaultId, itemId, credentialId) 从已解锁内存仓储取出凭证（私钥材料绝不走 Intent）；
- *  2. 用户确认 + 设备验证（生物识别 / 设备凭据）后构造 clientDataJSON + authenticatorData；
+ *  2. 用户确认 + 设备验证（生物识别 / 设备凭据）后构造 authenticatorData；
  *  3. 对 `authData ‖ clientDataHash` 做 P-256 签名（浏览器流程用系统给的 hash；
- *     原生流程自己对 clientDataJSON 取哈希）；
+ *     原生流程自己对 clientDataJSON 取哈希）。浏览器流程回传的 clientDataJSON 只放
+ *     占位符（官方要求），详见 `sign()` 内注释；
  *  4. 经 `PendingIntentHandler.setGetCredentialResponse` 回灌给 Credential Manager。
  *
  * 参考：Bastion PasskeyAuthActivity（GPL-3.0 同源思路，按 Vaultix 架构重写；
@@ -93,6 +94,7 @@ class PasskeyGetActivity : FragmentActivity() {
     private lateinit var requestJson: String
     private var clientDataHash: ByteArray? = null
     private var origin: String = ""
+    private var callerPackageName: String = ""
 
     private var credential: VaultFido2Credential? = null
     private var rpName: String = ""
@@ -112,6 +114,7 @@ class PasskeyGetActivity : FragmentActivity() {
         // ⚠️ 不直接读已收紧的 `callingAppInfo.origin`（1.6.0 起为 internal），走 CallingAppOrigin 兼容层。
         val providerReq = runCatching { PendingIntentHandler.retrieveProviderGetCredentialRequest(intent) }.getOrNull()
         val callingOrigin = CallingAppOrigin.originOrNull(providerReq?.callingAppInfo)
+        callerPackageName = providerReq?.callingAppInfo?.packageName.orEmpty()
         origin = callingOrigin
             ?: runCatching { JSONObject(requestJson).optString("origin").takeIf { it.isNotBlank() } }.getOrNull()
             ?: "https://$rpId"
@@ -210,21 +213,50 @@ class PasskeyGetActivity : FragmentActivity() {
         runCatching {
             val json = JSONObject(requestJson)
             val challenge = decodeChallenge(json.getString("challenge"))
-            // ⚠️ 浏览器流程（系统给了 clientDataHash）必须逐字节复刻浏览器版 JSON：
-            // 只 {type, challenge, origin}，**不能**多带 crossOrigin ——否则 RP 对返回的
-            // clientDataJSON 再哈希后与已签名哈希对不上，站点报「验证失败」。
-            // 这里进一步按哈希**反选**变体（Chromium 各版本字段集不一致），并记录命中结果。
-            val clientDataBytes = WebAuthn.buildClientDataJsonForBrowser(
-                type = "webauthn.get",
-                challenge = challenge,
-                origin = origin,
-                expectedHash = clientDataHash,
-            )
-            AutofillLogger.d(
-                "assertion origin=$origin browserFlow=${clientDataHash != null} " +
-                    "jsonMatchesBrowserHash=" +
-                    "${WebAuthn.clientDataJsonMatchesHash(clientDataBytes, clientDataHash)}",
-            )
+            // ⚠️ **两条流程的 clientDataJSON 是两种东西，不能混用（2026-09-11 修正）**
+            //
+            // 之前的写法（已证伪）：浏览器流程里"逐字节复刻浏览器的 clientDataJSON"再回传。
+            // 之所以错，是因为 RP 校验时用的 clientDataJSON 是**网页交给它的那一份**，
+            // 不是 authenticator 回传的那一份；而 provider 根本拿不到浏览器那份 JSON 的
+            // 明文（浏览器只给 32 字节 SHA-256 哈希）。自造的 JSON 永远不可能与浏览器
+            // 逐字节相同 → RP 拿自己的 JSON 重新哈希后与签名里的哈希对不上 → 验签失败
+            // → 站点报 "Authentication failed"。
+            //
+            // 官方口径（Android 凭据提供方文档，developer.android.com/identity/sign-in/credential-provider）：
+            // "use the clientDataHash that's provided directly in ... GetPublicKeyCredentialOption()
+            //  instead of assembling and hashing clientDataJSON during the signature request.
+            //  To avoid JSON parsing issues, **set a placeholder value for clientDataJSON
+            //  in the attestation and assertion response**."
+            //
+            // 所以分两条路：
+            // - 浏览器流程（有 clientDataHash）：签名只覆盖 `authData ‖ clientDataHash`（系统给的哈希，
+            //   即浏览器那份真实 JSON 的哈希）；回传的 clientDataJSON 只放占位符 —— 它不参与
+            //   任何密码学校验，只为了填满协议字段。
+            // - 原生 App 流程（没有 clientDataHash）：本模块自己拼 JSON、自己哈希、自己签，
+            //   回传的必须是**同一份** JSON（这种场合 RP 用的就是 provider 给的那份）。
+            //
+            // 参考实现对照：Bitwarden 把这件事整体交给 SDK（`ClientData.DefaultWithCustomHash(hash)`
+            // 与 `DefaultWithExtraData(androidPackageName)` 二选一，Android 侧从不重建 JSON）；
+            // Bastion / Keyguard 与旧版 Vaultix 一样仍在重建 JSON，属于同一类缺陷。
+            val clientDataBytes = if (clientDataHash != null) {
+                WebAuthn.BROWSER_FLOW_CLIENT_DATA_PLACEHOLDER
+            } else {
+                WebAuthn.buildClientDataJson(
+                    type = "webauthn.get",
+                    challenge = challenge,
+                    origin = origin,
+                    includeCrossOrigin = true,
+                )
+            }
+            if (clientDataHash != null) {
+                // 现场诊断：占位符方案下这里恒为 false，属**预期行为**，不再是故障信号。
+                AutofillLogger.d(
+                    "assertion origin=$origin browserFlow=true " +
+                        "jsonMatchesBrowserHash=" +
+                        "${WebAuthn.clientDataJsonMatchesHash(clientDataBytes, clientDataHash)} " +
+                        "pkg=$callerPackageName",
+                )
+            }
             val authData = WebAuthn.buildAuthenticatorData(
                 rpId = rpId,
                 userPresent = true,
@@ -244,10 +276,11 @@ class PasskeyGetActivity : FragmentActivity() {
                 withAttested = false,
             )
             val signature = if (clientDataHash != null) {
-                // 浏览器流程：系统已给 hash，直接拼接签名（不可再自行哈希）。
+                // 浏览器流程：**只能**用系统给的哈希（浏览器那份真实 JSON 的 SHA-256）。
+                // 自己重算 clientDataJSON 再哈希必然对不上（见上）。
                 WebAuthn.signAssertionHash(authData, clientDataHash!!, key)
             } else {
-                // 原生 App 流程：自己对 clientDataJSON 取哈希后拼接签名。
+                // 原生 App 流程：本模块自己拼 JSON、自己哈希、自己签，三处用的是同一份字节。
                 WebAuthn.signAssertion(authData, clientDataBytes, key)
             }
             val userHandle = cred.userHandle
@@ -266,7 +299,10 @@ class PasskeyGetActivity : FragmentActivity() {
                 resultIntent,
                 GetCredentialResponse(PublicKeyCredential(responseJson)),
             )
-            AutofillLogger.d("PK assertion ready sigLen=${signature.size} authDataLen=${authData.size}")
+            AutofillLogger.d(
+                "PK assertion ready sigLen=${signature.size} authDataLen=${authData.size} " +
+                    "cdjLen=${clientDataBytes.size} browserFlow=${clientDataHash != null}",
+            )
             setResult(Activity.RESULT_OK, resultIntent)
             finish()
         }.onFailure { fail(GetCredentialUnknownException(it.message)) }

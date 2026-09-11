@@ -16,6 +16,8 @@
  *
  * 注：attestation 用 `none`（软件密钥，密钥材料存于库内，与 Bitwarden 一致）；signCount 恒 0
  * （同步型 passkey 不推进计数器，避免多设备分叉，WebAuthn §6.1.1 允许）。
+ * 浏览器流程（系统给了 `clientDataHash`）回传的 `clientDataJSON` 只放占位符 ——
+ * 官方明确要求，且 provider 无法逐字节复刻浏览器那份 JSON，详见 `browserFlow` 字段注释。
  */
 package io.vaultix.vaultix.passkey
 
@@ -103,8 +105,14 @@ class PasskeyCreateActivity : FragmentActivity() {
 
     /**
      * 是否浏览器发起的创建请求（系统给了 `clientDataHash`）。
-     * 为真时 clientDataJSON 必须逐字节复刻浏览器版（只 {type, challenge, origin}），
-     * 否则 RP 再哈希对不上 → 站点报「验证失败」（见 [io.vaultix.common.WebAuthn.buildClientDataJson]）。
+     *
+     * ⚠️ 为真时回传的 `clientDataJSON` **只放占位符**（2026-09-11 修正）：
+     * 浏览器手里那份 JSON 的哈希由系统给了我们（就是 `clientDataHash`），RP 校验用的是
+     * **网页交给它的** JSON，provider 自造 JSON 永远对不上，只会造成误导。
+     * 官方要求见 [io.vaultix.common.WebAuthn.BROWSER_FLOW_CLIENT_DATA_PLACEHOLDER]。
+     *
+     * 与断言流程的区别：本流程 attestation 为 `none`，**没有任何签名**，
+     * 所以 `clientDataHash` 只用于"让系统/网页完成它们的校验"，provider 侧不需要拿它做密码学运算。
      */
     private var browserFlow: Boolean = false
 
@@ -257,13 +265,19 @@ class PasskeyCreateActivity : FragmentActivity() {
                 val attObj = WebAuthn.buildNoneAttestationObject(authData)
                 val json = JSONObject(requestJson)
                 val challenge = decodeChallenge(json.getString("challenge"))
-                // 浏览器流程同样必须逐字节复刻浏览器版 JSON（不额外带 crossOrigin）
-                val clientDataBytes = WebAuthn.buildClientDataJson(
-                    type = "webauthn.create",
-                    challenge = challenge,
-                    origin = origin,
-                    includeCrossOrigin = !browserFlow,
-                )
+                // 浏览器流程：系统已给 clientDataHash（浏览器那份 JSON 的哈希），
+                // 而 provider 造不出逐字节相同的 JSON → 按官方要求回传占位符。
+                // 原生流程没有外部哈希，自己拼、自己签、自己回传，三者同一份字节。
+                val clientDataBytes = if (browserFlow) {
+                    WebAuthn.BROWSER_FLOW_CLIENT_DATA_PLACEHOLDER
+                } else {
+                    WebAuthn.buildClientDataJson(
+                        type = "webauthn.create",
+                        challenge = challenge,
+                        origin = origin,
+                        includeCrossOrigin = true,
+                    )
+                }
                 val userId = json.optJSONObject("user")?.optString("id")?.takeIf { it.isNotBlank() }
                 val cred = VaultFido2Credential(
                     credentialId = WebAuthn.base64Url(key.credentialId),

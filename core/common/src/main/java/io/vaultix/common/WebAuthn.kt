@@ -143,30 +143,13 @@ object WebAuthn {
     }
 
     /**
-     * 浏览器流程专用：`clientDataHash` 是不可协商的比对基准，而 Chromium 各版本拼的
-     * clientDataJSON 字段集不完全一致（是否带 `crossOrigin`）。这里按哈希**反选**命中的变体，
-     * 把「字段差一个就登录失败」这类隐性坑一次性消掉。
+     * 现场诊断：某个 clientDataJSON 是否与系统给的哈希一致。
      *
-     * @return 选中的 clientDataJSON 字节（都不命中时返回无 crossOrigin 变体，与浏览器口径一致）
-     */
-    fun buildClientDataJsonForBrowser(
-        type: String,
-        challenge: ByteArray,
-        origin: String,
-        expectedHash: ByteArray?,
-    ): ByteArray {
-        if (expectedHash == null) {
-            return buildClientDataJson(type, challenge, origin, includeCrossOrigin = true)
-        }
-        val candidates = listOf(false, true).map {
-            buildClientDataJson(type, challenge, origin, includeCrossOrigin = it)
-        }
-        return candidates.firstOrNull { sha256(it).contentEquals(expectedHash) } ?: candidates.first()
-    }
-
-    /**
-     * 供现场日志：选中的 clientDataJSON 是否与系统给的哈希一致。
-     * `null` 表示非浏览器流程（没有外部哈希可比）；`false` 说明两侧拼装口径仍不同。
+     * `null` 表示非浏览器流程（没有外部哈希可比）。
+     *
+     * ⚠️ 浏览器流程下这个值**恒为 false 属预期**：系统给的是浏览器那份 JSON 的哈希，
+     * 而 provider 只能回传占位符（[BROWSER_FLOW_CLIENT_DATA_PLACEHOLDER]），两者本就不该相等。
+     * 不要再据此"反选"自造 JSON 的变体——那是 2026-09-11 修掉的那条错路（见 [buildClientDataJson]）。
      */
     fun clientDataJsonMatchesHash(json: ByteArray, expectedHash: ByteArray?): Boolean? =
         expectedHash?.let { sha256(json).contentEquals(it) }
@@ -332,20 +315,43 @@ object WebAuthn {
         return out
     }
 
+    /**
+     * 浏览器流程回传的 `clientDataJSON` 占位符。
+     *
+     * 官方要求（Android 凭据提供方文档 `developer.android.com/identity/sign-in/credential-provider`）：
+     * > use the `clientDataHash` that's provided directly in `CreatePublicKeyCredentialRequest()`
+     * > or `GetPublicKeyCredentialOption()` instead of assembling and hashing clientDataJSON
+     * > during the signature request. To avoid JSON parsing issues, **set a placeholder value
+     * > for `clientDataJSON` in the attestation and assertion response.**
+     *
+     * 原因是 provider 与 RP 看到的 `clientDataJSON` 不是同一份：
+     * - provider 只拿到 32 字节 `clientDataHash`（浏览器那份 JSON 的 SHA-256），拿不到明文；
+     * - 网页交给 RP 的是**浏览器自己那份** JSON，RP 用它重新哈希后与签名里的哈希比对。
+     *
+     * 因此 provider 自造 JSON 回传没有任何意义（永远逐字节不同），只会让"复刻浏览器 JSON"
+     * 这种反推尝试变成误导。占位符是空字节数组：它不参与任何密码学校验，只为填满协议字段。
+     * 参照 Bitwarden：Android 侧从不重建 JSON，整体交给 SDK 的
+     * `ClientData.DefaultWithCustomHash(hash)` / `DefaultWithExtraData(androidPackageName)`。
+     */
+    val BROWSER_FLOW_CLIENT_DATA_PLACEHOLDER: ByteArray = ByteArray(0)
+
     /** WebAuthn `clientDataJSON`：依赖方校验 origin 的关键字段。 */
     /**
-     * 构造 clientDataJSON。
+     * 构造 clientDataJSON（**仅限原生 App 流程**使用）。
      *
-     * ⚠️ **浏览器流程（[includeCrossOrigin] = false）必须逐字节等于浏览器自己拼的那串**：
-     * 系统把 `clientDataHash`（= SHA-256(浏览器版 clientDataJSON)）交给 provider 去签名，
-     * 同时**把 provider 返回的 clientDataJSON 原样交给网页**；RP 服务端再对收到的
-     * clientDataJSON 做一次 SHA-256 与已签名的哈希比对。多一个字段就哈希不一致 →
-     * 站点直接报「密钥登录失败 / 验证失败」。浏览器版只有 `{type, challenge, origin}`，
-     * **不含 `crossOrigin`、也不含 `androidPackageName`**（后者的典型受害者是 Microsoft 登录）。
-     * 参考 Bastion `PasskeyAuthActivity.createClientDataJson`（GPL-3.0，同源思路）：
-     * `includeCrossOrigin = !isBrowserFlow`、浏览器分支不传 androidPackageName。
+     * 调用方拼的 JSON、签的哈希、回传的 JSON 必须是**同一份字节**，RP 才会验签通过。
+     * 原生流程里系统没有给 `clientDataHash`，三者都由本模块产出，所以成立。
      *
-     * 原生 App 流程没有外部哈希，自己造的 JSON 自己签，字段随意（保留 crossOrigin 以贴近规格）。
+     * ⚠️ **浏览器流程不要调这个函数**（2026-09-11 修正）。旧注释声称"浏览器流程必须逐字节
+     * 复刻浏览器版 JSON，否则 RP 再哈希对不上"——这个因果是错的：provider 从一开始就拿不到
+     * 浏览器那份 JSON 的明文（系统只给 32 字节哈希），RP 校验用的是**网页交给它的**那份
+     * JSON。因此浏览器流程应当直接放 [BROWSER_FLOW_CLIENT_DATA_PLACEHOLDER]，
+     * 签名只覆盖 `authData ‖ clientDataHash`（见 [signAssertionHash]）。
+     *
+     * 反面教材：Bastion `PasskeyAuthActivity.createClientDataJson` 与 Keyguard
+     * `PasskeyProviderGetRequest` 都还在重建 JSON，属同一类缺陷，不可作为依据。
+     *
+     * @param includeCrossOrigin 原生流程保留 `crossOrigin` 以贴近规格。
      */
     fun buildClientDataJson(
         type: String,
