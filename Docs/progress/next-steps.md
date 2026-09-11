@@ -1,10 +1,77 @@
 # 下一步任务清单
 
-> 更新于 2026-09-10（第二十七轮）。**设置页已对齐 Bastion：三态状态卡 / 通行密钥分组 /
-> 填充行为真开关。**
+> 更新于 2026-09-11（第二十八轮）。**通行密钥「验签失败」根因已定位并修复：authenticatorData
+> 缺 BE/BS 备份语义标志位。**
 > 审计报告 `Docs/progress/audit/bitwarden-alignment.md`；对齐评估
-> `Docs/progress/bastion-parity-assessment.md`（**注意已过时**——autofill 三批修复未计入）。
+> `Docs/progress/bastion-parity-assessment.md`（**注意已过时**）。
 > 状态：`TODO` / `DOING` / `DONE` / `BLOCKED`
+
+## ⚠️ 必读：已注册的通行密钥需要重新注册
+
+本轮改了 `authenticatorData` 的 BE/BS 标志位（`0x05→0x1D` / `0x45→0x5D`）。
+**RP 记录的是「注册时」的 BE/BS 语义，改代码救不了旧凭证。**
+用户需在报「验证失败」的网站上**删除旧通行密钥后重新创建**，新凭证才会生效。
+
+## 已完成（第二十八轮 2026-09-11 · 通行密钥验签失败根因，`8afac3d`）
+
+> 用户报「Edge 用通行密钥登录报验证失败」。定位后确认症状为
+> **指纹验证通过 + 所有网站失败 + 报「验签失败」**，三者合起来只指向签名数据本身。
+
+- [x] **根因**：`WebAuthn.buildAuthenticatorData` 只设 UP(0x01)+UV(0x04)，
+      **缺 BE(0x08)/BS(0x10)**。Vaultix 私钥存库并随服务端同步 ⇒ 语义上是
+      **可备份凭证**，必须声明 BE（可备份）+ BS（当前处于备份状态）——
+      这是 Bitwarden / 1Password / iCloud Keychain 的标准声明。缺失时 RP 校验库
+      会因语义不符拒绝整条断言。
+- [x] **修复**（对齐 Bastion：两边基线都是 `0x1D`，注册额外加 AT）：
+      断言 `0x05` → `0x1D`；注册 `0x45` → `0x5D`。
+      **注册与断言的 BE/BS 基线一致是关键**。
+- [x] **signCount** 硬编码 0 → 读库非零值原样发送**不递增**（Keyguard 口径）。
+      递增必然跨设备分叉（A 签 6、B 恢复后仍签 5 → RP 判计数回退拒签）。
+- [x] **响应 JSON** 补 `clientExtensionResults:{}`（部分 RP 解析器直接读该键）+
+      `authenticatorAttachment:"platform"`。
+- [x] **实测排除三个疑似项**（写 JVM 压测脚本，不靠推理）：
+      ① 200 组随机 P-256 密钥 `base64Url(PKCS8)→decode→parseEcPrivateKey` 重建签名
+      **100% 被原公钥验签通过**；② PKCS8 分支顺序正确（67 字节不会被误当标量）；
+      ③ clientDataHash 反选能命中 Chromium 含 crossOrigin 的原文。
+- [x] 测试：更新 flags 断言（`0x01`→`0x19`），新增 BE/BS 回归测试
+      （断言 `0x1D` / 注册 `0x5D` / 两侧基线一致）与响应 JSON 字段测试。
+
+⏳ **真机待验证（装 `dev-8afac3d` 的包）**：
+① **先删除网站上的旧通行密钥**，然后在 Edge 里重新创建一个；
+② 用新凭证登录 → 应通过验签（**核心闭环**）；
+③ 确认修复前注册的旧凭证仍失败属预期（见上方「必读」）；
+④ 顺带确认设置页「已保存的通行密钥」数量与实际一致。
+
+**CI 与产物（已验证）**：run `34549342318`（commit `8afac3d`）**23/23 步全绿**
+（checkout / JDK17 / Gradle / detekt / 编码门禁 / keystore 解码 / Build Debug APK /
+单测 / 发布 preview Release；`lint` 按配置 skipped）。产物 `app-full-debug.apk`
+**31,118,791 字节**，`sha256=f2d134e9ca7a09c9a935a76ab8e39562728346733019259cd4eeb3e405feac76`，
+已确认 dex 中含 `clientExtensionResults` / `authenticatorAttachment` / `FLAG_BACKUP`
+常量 —— 即修复确实打进了这个包。
+
+> **沙箱环境备注（长期）**：Release 资产现已走 `release-assets.githubusercontent.com`，
+> 沙箱对该域名的 fake-IP 解析（`198.18.0.22`）会返回 404/401。已在 `/etc/hosts` 固定
+> `185.199.108.133`（实测可用；`198.18.x.x` 是 fake-IP 不可用），
+> `github.com → 140.82.112.3`、`api.github.com → 140.82.113.6`、
+> `raw.githubusercontent.com → 140.82.113.3`。
+> 另注意：`api.github.com` 对本环境拿到的 `ghu_` 型 OAuth token 一律返回 **401**
+> （token 只能用于 git 传输层，不能调 REST API）。因此查 CI 状态改为读网页端
+> `/Chaniug/Vaultix/actions/runs/<id>/job_groups_batch` 与 job 详情页的
+> `<check-step data-name/data-conclusion>` 属性。
+
+## 已完成（第二十七轮 2026-09-10 · 设置页对齐 Bastion，`be8a5bf`）
+
+> 逐项比对 Bastion `AutofillSettingsV2Screen`(1149) / `PasskeySettingsScreen`(666) /
+> `SettingsScreen`(1925) 后补齐。
+
+- [x] **三态状态卡**：未启用 `errorContainer` / 需注意 `tertiaryContainer` /
+      正常 `primaryContainer`。「需注意」= 密码能填但通行密钥没开。
+- [x] **`AutofillStatusChecker`**：`hasEnabledAutofillServices()` 判「有没有」+
+      读 `Settings.Secure:autofill_service` 判「是不是我」；读不到时按「已启用」。
+- [x] **通行密钥分组**：「已解锁库中：N 个」+ 凭据提供商状态 + 特性说明。
+- [x] **填充行为组（真开关）**：严格匹配 / 允许子域名匹配 → `MatchConfig` 真参数。
+- [x] 首页「数据」→「数据管理」+「其他 · 权限管理」；CP 副标题文案修正。
+
 
 ## 已完成（第二十七轮 2026-09-10 · 设置页对齐 Bastion）
 
