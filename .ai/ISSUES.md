@@ -500,3 +500,75 @@ GET resolve EMPTY: storedRpIds=<库内实际存的域名>
 2. **能用真实运行时实验否掉的假设，绝不要写进根因。** 本轮「ISO10126 残留」的推断
    听上去很合理（Bitwarden 服务端确实用过 ISO10126），但一次 20 行 JCE 程序就否掉了它
    （标准 `PKCS5Padding` 会直接抛异常）。**先做实验，再下结论。**
+
+---
+
+## 35. 通行密钥「Authentication failed」根因：浏览器流程回传了自造的 clientDataJSON（2026-09-11，P0，`90d5e6d`）
+
+**真机症状（用户原话）**：「能检测出来通行密钥，但是 Authentication failed，这个问题还是有。」
+→ 候选列表已正常（§34 的 discovery 修复生效），但**站点侧验签失败**。
+
+### 先定性：这是断言阶段的验签失败，与 discovery / BE·BS / signCount 都无关
+
+RP 的 login 校验清单只有：`type==="webauthn.get"` / challenge / origin / 按 credentialId
+取公钥 / `SHA-256(rpId)` 匹配 rpIdHash / UP（按策略 UV）/ **对 `authData ‖ SHA-256(clientDataJSON)` 验签** /
+`new signCount > stored`。列表能出来 ⇒ discovery 已通；本问题在「验签」这一格。
+
+### 根因：provider 与 RP 看到的 `clientDataJSON` 不是同一份
+
+- 系统只把 **32 字节 `clientDataHash`**（浏览器那份 clientDataJSON 的 SHA-256）交给 provider，
+  **不给明文**；
+- 网页交给 RP 的是**浏览器自己拼的那份** JSON，RP 用它重新哈希后与签名里的哈希比对。
+
+旧实现（`buildClientDataJsonForBrowser`）试图「逐字节复刻浏览器的 clientDataJSON」再回传，
+还按哈希在 `[无 crossOrigin, 有 crossOrigin]` 两个候选里**反选** —— 这条路不可能稳定成功：
+字段集与字段顺序由浏览器版本决定（Chromium 可能带 `tokenBinding` 等），provider 无从保证命中；
+一旦不命中就 `?: candidates.first()` 回退到自造变体 ⇒ RP 哈希必然对不上 ⇒ **验签失败**。
+
+**官方口径**（`developer.android.com/identity/sign-in/credential-provider`，逐字）：
+> use the `clientDataHash` that's provided directly in `CreatePublicKeyCredentialRequest()`
+> or `GetPublicKeyCredentialOption()` instead of assembling and hashing clientDataJSON during
+> the signature request. **To avoid JSON parsing issues, set a placeholder value for
+> `clientDataJSON` in the attestation and assertion response.**
+
+### 解法：两条流程彻底分开
+
+| | 浏览器流程（有 `clientDataHash`） | 原生 App 流程（无 `clientDataHash`） |
+|---|---|---|
+| 签名材料 | `authData ‖ clientDataHash`（系统给的） | `authData ‖ SHA-256(自产 JSON)` |
+| 回传 clientDataJSON | **空占位符** | **同一份自产 JSON**（拼/签/回传三者同字节） |
+| 依据 | 官方要求；RP 用的是网页那份 | RP 用的就是 provider 这份 |
+
+`WebAuthn.BROWSER_FLOW_CLIENT_DATA_PLACEHOLDER = ByteArray(0)`；`buildClientDataJsonForBrowser`
+**删除**（错路产物）；`clientDataJsonMatchesHash` 保留作诊断，并注明浏览器流程下
+`false` 属**预期**（不再是指标故障）。
+
+create 路径同理：浏览器流程回传占位符（attestation 为 `none`，本无签名，`clientDataHash`
+仅供系统/网页侧校验）。
+
+### 三家对照（重要：别照抄，两家是反例）
+
+| 实现 | 浏览器流程如何处理 clientDataJSON |
+|---|---|
+| **Bitwarden** | ✅ **从不在 Android 侧重建**：交给 SDK，`request.clientDataHash?.let { ClientData.DefaultWithCustomHash(it) } ?: ClientData.DefaultWithExtraData(callingAppInfo.getAppOrigin())`；`Fido2PublicKeyCredential.clientDataJson` 可空 |
+| Keyguard | ❌ 重建（`PasskeyProviderGetRequest.kt:119-128` 拼 JSON，`:129` 签系统哈希，`:159` 回传自造 JSON） |
+| Bastion | ❌ 重建（`PasskeyAuthActivity.createClientDataJson` + 回传 `clientDataJsonB64`） |
+| Vaultix（修复前） | ❌ 重建 + 按哈希反选（比另两家更"努力"，但方向本身就错） |
+
+**结论**：Bastion 是本项目主要参考对象，但**这一处不能跟**。参考项目的"多数"不等于正确。
+
+### 验证（沙箱无 Android SDK，用 Gradle 内置 kotlin-compiler-embeddable 2.2.21 直接在真实源码上跑）
+- 真实 `WebAuthnTest.kt`：**10/10 通过**（含新增 3 条回归锁）；
+- 独立验证程序 20 项断言全绿，关键三条：
+  1. 浏览器流程签名可被 RP 用「浏览器 JSON 的哈希」验通（真实登录场景）；
+  2. **反证旧路**：浏览器多带一个字段（`tokenBinding`）→ 两个自造候选 `match=false`，
+     旧逻辑只会回退到错的那份；
+  3. 原生流程回传 JSON 反解 == 签名所用 JSON。
+
+### 教训
+1. **凡"provider 要把某个值回传回去"的设计，先问一句：RP 校验用的是谁手里的那份副本？**
+   如果是对方（网页/浏览器）手里的，那我们造什么都不重要，重要的是签名覆盖的哈希一致。
+2. **"按哈希枚举候选反选"这种补偿逻辑，本身就是设计错的信号**。真方案只有一条：
+   用系统给的哈希去签，不要自造。补偿代码越多，说明方向越偏。
+3. **参考项目要挑着抄，不能整段搬。** 本轮 Bastion / Keyguard 两家都是反例，
+   唯一正确的 Bitwarden 因为把逻辑藏在 SDK 里反而最不起眼。

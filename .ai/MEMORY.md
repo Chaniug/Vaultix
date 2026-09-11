@@ -767,3 +767,55 @@ Vaultix 原把 linkedId 当顺序编号（1/2/3/4），**官方是分段编码**
 - **铁律：「列表为空」必须在「候选怎么被筛出来」这条链上逐级量化。**
   本轮埋点 `total/unusable/rpIdMiss/allowedMiss/matched` + `storedRpIds`，
   现场一眼看出卡在哪级 —— 比任何推理都可靠。
+
+---
+
+## 2026-09-11 · 第三十轮：通行密钥「Authentication failed」= 浏览器流程回传自造 clientDataJSON（`90d5e6d`）
+
+### 结论一句话
+**浏览器流程（系统给了 `clientDataHash`）回传的 `clientDataJSON` 必须放占位符**，
+签名只用系统给的哈希；只有**原生 App 流程**（无 `clientDataHash`）才自己拼 JSON
+并回传同一份。旧实现"逐字节复刻浏览器 JSON"是错的方向。
+
+### 机制（把这个想通，这类 bug 不会再犯）
+provider 与 RP 看到的 `clientDataJSON` **不是同一份**：
+- 系统只给 provider **32 字节 `clientDataHash`**（浏览器那份 JSON 的 SHA-256），**无明文**；
+- 网页把**浏览器自己那份** JSON 交给 RP，RP 重新哈希后与签名里的哈希比对。
+
+⇒ provider 造什么 JSON 都不影响 RP 的校验，**唯一要紧的是签名覆盖的哈希 == 浏览器那份的哈希**。
+浏览器那份 JSON 的字段集/字段顺序**由浏览器版本决定**（可能带 `tokenBinding` 等），
+provider 无从复刻 ⇒ 「按哈希枚举候选反选」（旧 `buildClientDataJsonForBrowser`）必然不可靠。
+
+**官方逐字口径**（`developer.android.com/identity/sign-in/credential-provider`）：
+> use the `clientDataHash` ... instead of assembling and hashing clientDataJSON during the
+> signature request. To avoid JSON parsing issues, **set a placeholder value for
+> `clientDataJSON` in the attestation and assertion response.**
+
+### 判据速查表（两条流程不能混）
+
+| | 有 `clientDataHash`（浏览器） | 无（原生 App） |
+|---|---|---|
+| 签名材料 | `authData ‖ clientDataHash` | `authData ‖ SHA-256(自造 JSON)` |
+| 回传 clientDataJSON | 空占位符 | 同一份自造 JSON |
+
+### 三家对照（**别照抄**：两家是反例）
+- **Bitwarden ✅**：Android 侧**从不重建**，交给 SDK —
+  `request.clientDataHash?.let { ClientData.DefaultWithCustomHash(it) } ?: ClientData.DefaultWithExtraData(callingAppInfo.getAppOrigin())`；
+  `Fido2PublicKeyCredential.clientDataJson` 可空。
+- **Keyguard ❌** / **Bastion ❌**：都重建 JSON 再回传（`PasskeyProviderGetRequest.kt:119-159` /
+  `PasskeyAuthActivity.createClientDataJson`）。Vaultix 修复前不仅重建还"反选"，方向本就错。
+- ⚠️ **Bastion 是主要参考对象，但这一处不能跟。参考项目的"多数"不等于正确。**
+
+### 工程方法（本轮最有价值的沉淀）
+1. **沙箱没有 Android SDK，但仍能在真实源码上验证 Kotlin 逻辑**：
+   Gradle 自带 `kotlin-compiler-embeddable-2.2.21.jar` + `kotlin-stdlib`，
+   用 `java -cp <gradle>/lib/*.jar org.jetbrains.kotlin.cli.jvm.K2JVMCompiler`
+   即可编译真实 `.kt`（纯 JVM 模块如 `core:common` 直接可跑）。
+   单测里的 Truth/JUnit 用几行 `assertThat` shim + 反射调 `test_*` 方法即可本地执行。
+   **路径**：`<GRADLE_HOME>/lib/kotlin-compiler-embeddable-*.jar`，需 `-no-stdlib`+自建
+   `kotlin-home/lib`（放 stdlib/reflect/script-runtime）规避 IDE 依赖缺失。
+2. **写"反证型"测试**：不只验新逻辑对，还要**证明旧逻辑必然错**（本轮构造浏览器多带
+   `tokenBinding` 的 JSON，演示两个自造候选 `match=false`）。反证比正面断言更有说服力。
+3. **验证脚本本身的假设也要先跑一遍**：本轮我的首个验证脚本有 2 处假设错（`crossOrigin`
+   字段顺序恰好一致 → 侥幸命中；`"webauthn.create"` 明文不会出现在 base64 响应里）。
+   先跑、看真实输出、再改断言 —— 不要"写完就信"。
