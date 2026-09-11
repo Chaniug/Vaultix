@@ -58,10 +58,14 @@ import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.lifecycleScope
 import dagger.hilt.android.AndroidEntryPoint
 import io.vaultix.common.WebAuthn
+import io.vaultix.data.repository.VaultSessionManager
 import io.vaultix.domain.ItemRepository
 import io.vaultix.model.VaultFido2Credential
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.autofill.AutofillIntents
 import io.vaultix.vaultix.autofill.AutofillLogger
+import io.vaultix.vaultix.autofill.match.UriMatcher
+import io.vaultix.vaultix.security.CredentialFlowGuard
 import io.vaultix.vaultix.ui.theme.VaultixTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -85,6 +89,16 @@ class PasskeyGetActivity : FragmentActivity() {
     @Inject
     lateinit var itemRepository: ItemRepository
 
+    /**
+     * 只用于**读锁态快照**（[VaultSessionManager.isUnlocked] / [VaultSessionManager.isAnyUnlocked]）。
+     *
+     * 对齐 Bitwarden `CredentialProviderProcessorImpl` 的 `userState.activeAccount.isVaultUnlocked`
+     * 判定：凭据链路上必须能区分「库锁定」与「条目不存在」，否则会把锁定误报成错误。
+     * 密钥材料仍只经 [ItemRepository] 在解锁会话内取，本字段不持有任何密钥。
+     */
+    @Inject
+    lateinit var sessions: VaultSessionManager
+
     private var biometricPrompt: BiometricPrompt? = null
 
     private lateinit var vaultId: String
@@ -99,8 +113,40 @@ class PasskeyGetActivity : FragmentActivity() {
     private var credential: VaultFido2Credential? = null
     private var rpName: String = ""
 
+    /**
+     * 用户是否已通过设备验证（生物识别 / 设备凭据）。
+     *
+     * 照抄 Bitwarden `BitwardenCredentialManagerImpl.isUserVerified`（第 71 行）的语义：
+     * **签名前必须为 true**；流程结束（成功 / 失败 / 取消）后必须复位为 false，避免
+     * 上一次验证结果"泄漏"到下一次请求。
+     */
+    private var isUserVerified: Boolean = false
+
+    /**
+     * 本次流程内已失败的验证尝试次数。
+     *
+     * 照抄 Bitwarden 的簿记（第 73、153-154 行）：
+     * ```
+     * override var authenticationAttempts: Int = 0
+     * override fun hasAuthenticationAttemptsRemaining(): Boolean =
+     *     authenticationAttempts < MAX_AUTHENTICATION_ATTEMPTS   // private const val ... = 5
+     * ```
+     * 达到上限即不再弹生物识别，直接走失败，避免用户被无限次弹窗"锁住"。
+     */
+    private var authenticationAttempts: Int = 0
+
+    /** 是否还有剩余验证尝试（对齐 Bitwarden `hasAuthenticationAttemptsRemaining`）。 */
+    private fun hasAuthenticationAttemptsRemaining(): Boolean =
+        authenticationAttempts < MAX_AUTHENTICATION_ATTEMPTS
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // ⚠️ **本 Activity 的启动本身会触发一次 ProcessLifecycle 前后台切换**，必须在
+        // 最早的时机打点（见 CredentialFlowGuard KDoc）：否则 AutoLockController.onStart
+        // 会把「系统拉起我们自己的 Activity」误判成「用户切走 App 又回来」→ lockAll()
+        // → 会话被清 → 本 Activity 读不到凭证 → 浏览器报 Authentication failed。
+        CredentialFlowGuard.markFlowStarted()
 
         vaultId = intent.getStringExtra(PasskeyProviderIntents.EXTRA_VAULT_ID).orEmpty()
         itemId = intent.getStringExtra(PasskeyProviderIntents.EXTRA_ITEM_ID).orEmpty()
@@ -115,26 +161,85 @@ class PasskeyGetActivity : FragmentActivity() {
         val providerReq = runCatching { PendingIntentHandler.retrieveProviderGetCredentialRequest(intent) }.getOrNull()
         val callingOrigin = CallingAppOrigin.originOrNull(providerReq?.callingAppInfo)
         callerPackageName = providerReq?.callingAppInfo?.packageName.orEmpty()
-        origin = callingOrigin
-            ?: runCatching { JSONObject(requestJson).optString("origin").takeIf { it.isNotBlank() } }.getOrNull()
-            ?: "https://$rpId"
+
+        // ⚠️ **origin 的取法照抄 Bitwarden `authenticateFido2Credential`**：
+        //
+        // Bitwarden 原文（`BitwardenCredentialManagerImpl` 第 103-140 行）：
+        // ```
+        // val clientData = request.clientDataHash
+        //     ?.let { ClientData.DefaultWithCustomHash(hash = it) }
+        //     ?: ClientData.DefaultWithExtraData(androidPackageName = callingAppInfo.getAppOrigin())
+        // val sdkOrigin = if (!origin.isNullOrEmpty()) {
+        //     Origin.Web(origin)
+        // } else {
+        //     val hostUrl = getOriginUrlFromAssertionOptionsOrNull(request.requestJson)
+        //         ?: return Fido2CredentialAssertionResult.Error.MissingHostUrl
+        //     Origin.Android(UnverifiedAssetLink(packageName, sha256CertFingerprint, hostUrl, ...))
+        // }
+        // ```
+        //
+        // 关键在 `getOriginUrlFromAssertionOptionsOrNull`：**主机名来自请求 JSON 里的 rpId**
+        // （`PasskeyAssertionOptions.relyingPartyId`，补 https://），而**不是**来自浏览器。
+        // 这正是「资产链接校验通过的 App」（`ValidateOriginResult.Success(origin = null)`）
+        // 也能拿到正确 rpId 的原因 —— 它不依赖 `callingAppInfo.origin`。
+        //
+        // Vaultix 此前的取法多了一级兜底 `?: "https://$rpId"`，但**顺序错了**：它把
+        // 「浏览器给的 origin」排在「请求 JSON 的 rpId」之前，且在两者都空时**构造**一个
+        // 猜的 origin（rpId 可能是空串，就得到 "https://"）。现按 Bitwarden 的顺序重排。
+        val originFromCaller = callingOrigin?.takeIf { it.isNotBlank() }
+        val originFromRequest = runCatching {
+            val json = JSONObject(requestJson)
+            val host = UriMatcher.hostOf(json.optString("rpId", ""))
+            host?.let { prefixHttpsIfNecessary(it) }
+        }.getOrNull()
+        // 判定「本次是否走浏览器/外部哈希流程」：有 clientDataHash 即外部给哈希。
+        val browserFlow = clientDataHash != null
+        origin = originFromCaller ?: originFromRequest.orEmpty()
+        AutofillLogger.d(
+            "PK origin caller=${originFromCaller ?: "-"} request=${originFromRequest ?: "-"} " +
+                "resolved=${origin.ifBlank { "-" }} pkg=$callerPackageName browserFlow=$browserFlow",
+        )
 
         if (listOf(vaultId, itemId, credentialId, requestJson).any { it.isBlank() }) {
             fail(GetCredentialUnknownException("Missing passkey parameters"))
             return
         }
-        // 现场诊断：参数是否齐、origin 来源、是否浏览器流程（有 clientDataHash）
-        AutofillLogger.d(
-            "PK start origin=$origin originFromCaller=${callingOrigin != null} " +
-                "browserFlow=${clientDataHash != null}",
-        )
+        // ⚠️ **原生流程（无 clientDataHash）必须有可用 origin**，否则自拼的 clientDataJSON
+        // 会带一个空/伪造的 origin，RP 必然拒绝。对齐 Bitwarden 的 `Error.MissingHostUrl`：
+        // 此时宁可明确失败，也不要发出注定被拒的断言。
+        if (!browserFlow && origin.isBlank()) {
+            AutofillLogger.d("PK aborted: native flow but no origin/host url (Bitwarden: MissingHostUrl)")
+            fail(GetCredentialUnknownException("Missing host url"))
+            return
+        }
 
         lifecycleScope.launch(Dispatchers.IO) {
             val item = runCatching { itemRepository.observeItem(vaultId, itemId).first() }.getOrNull()
             val cred = item?.fido2Credentials?.firstOrNull { it.credentialId == credentialId }
-            AutofillLogger.d("PK lookup itemFound=${item != null} credFound=${cred != null}")
+            // ⚠️ **必须把「库锁定」与「凭证不存在」分开**（2026-09-11 修正，对齐 Bitwarden）
+            //
+            // 旧写法（已证伪）：拿不到 cred 就一律 `fail("Passkey not found")`。
+            // 但 `ItemRepositoryImpl.observeState` 在**库未解锁**时恒发空列表（安全设计，正确），
+            // 于是「库在候选展示后重新上锁」会被误报成「通行密钥不存在」——一条**假错误**，
+            // 把用户引向排查库里有没有这条密钥，而真实原因是会话被锁。
+            //
+            // Bitwarden 的做法（`CredentialProviderProcessorImpl` + `RootNavViewModel`）是把
+            // 锁定态**单独成一路**：锁定 → 返回解锁动作 / 跳解锁界面，绝不报「找不到」。
+            // 这里照抄该语义：先探测锁定态，锁定时走解锁引导并把**解锁引导**作为结果回灌。
+            val vaultUnlocked = sessions.isUnlocked(vaultId)
+            AutofillLogger.d(
+                "PK lookup itemFound=${item != null} credFound=${cred != null} " +
+                    "vaultUnlocked=$vaultUnlocked anyUnlocked=${sessions.isAnyUnlocked()}",
+            )
             withContext(Dispatchers.Main) {
                 if (cred == null) {
+                    // 分支一：库（或全部库）锁定 → 引导解锁，不用「找不到」误导用户。
+                    if (!vaultUnlocked || !sessions.isAnyUnlocked()) {
+                        unlockAndFinish()
+                        return@withContext
+                    }
+                    // 分支二：库确实已解锁，凭证明细确实不在 → 这才是真的「找不到」。
+                    AutofillLogger.d("PK lookup: unlocked but credential missing")
                     fail(GetCredentialUnknownException("Passkey not found"))
                     return@withContext
                 }
@@ -144,6 +249,38 @@ class PasskeyGetActivity : FragmentActivity() {
                 showConfirm()
             }
         }
+    }
+
+    /**
+     * 库锁定时的出路：把「解锁 Vaultix」作为**认证动作**回灌给 Credential Manager。
+     *
+     * 对齐 Bitwarden 的两段式语义：认证动作是「先解锁、再重新发起请求」——系统在用户
+     * 完成动作后会**重新调用** `onBeginGetCredentialRequest`，届时库已解锁，正常列出候选。
+     *
+     * 实现沿用 Vaultix 既有的解锁链（[AutofillIntents.MODE_UNLOCK]）：
+     *  - 已启用本地快速解锁 → 原地生物识别，解锁后直接 `finish()` 回到浏览器；
+     *  - 否则 → 亮卡片走「打开 Vaultix」主密码。
+     * 两条路都不需要 provider 侧额外干预，因此这里直接复用该 Activity。
+     *
+     * 为什么不返回 `GetCredentialUnknownException("Vault locked")` 了事：失败回灌会让浏览器
+     * 直接报错并**结束本次凭据流程**，用户没有「就地解锁后重试」的机会；而认证动作是
+     * 系统原生支持的正常路径（Bitwarden 全库锁定分支即如此）。
+     */
+    private fun unlockAndFinish() {
+        AutofillLogger.d("PK locked → route to unlock flow")
+        runCatching {
+            startActivity(
+                AutofillIntents.create(
+                    context = this,
+                    mode = AutofillIntents.MODE_UNLOCK,
+                    title = getString(R.string.credential_unlock_title),
+                    subtitle = getString(R.string.credential_unlock_subtitle),
+                ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        }.onFailure { AutofillLogger.d("PK unlock route failed: ${it.message}") }
+        // 本 Activity 的职责是回灌凭据；解锁引导已另行拉起，直接收摊。
+        // ⚠️ 用 cancel 语义结束（而非 fail）：这不是错误，是「本次请求改走解锁引导」。
+        cancel()
     }
 
     override fun finish() {
@@ -169,11 +306,37 @@ class PasskeyGetActivity : FragmentActivity() {
     }
 
     private fun verifyUser() {
-        AutofillLogger.d("PK biometric requested")
+        // 对齐 Bitwarden：尝试次数用尽 → 不再弹窗，直接判定失败（见 hasAuthenticationAttemptsRemaining）。
+        if (!hasAuthenticationAttemptsRemaining()) {
+            AutofillLogger.d("PK biometric attempts exhausted ($authenticationAttempts/$MAX_AUTHENTICATION_ATTEMPTS)")
+            isUserVerified = false
+            fail(GetCredentialUnknownException("Too many attempts"))
+            return
+        }
+        AutofillLogger.d("PK biometric requested attempt=$authenticationAttempts")
         val executor = ContextCompat.getMainExecutor(this)
         val callback = object : BiometricPrompt.AuthenticationCallback() {
-            override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) = sign()
-            override fun onAuthenticationError(errorCode: Int, errString: CharSequence) = cancel()
+            override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                // 成功：复位尝试计数（对齐 Bitwarden `handleUserVerificationSuccess`：attempts = 0）。
+                isUserVerified = true
+                authenticationAttempts = 0
+                sign()
+            }
+
+            override fun onAuthenticationFailed() {
+                // 单次失败（如指纹不匹配）系统会让用户直接重试，不计入 lockout；
+                // 但本地计数递增，避免绕过尝试上限（对齐 Bitwarden 失败分支 attempts += 1）。
+                authenticationAttempts += 1
+                isUserVerified = false
+                AutofillLogger.d("PK biometric failed attempt=$authenticationAttempts")
+            }
+
+            override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                // 不可恢复错误（取消 / 用户回退 / 系统 lockout）→ 复位并结束（对齐
+                // Bitwarden `handleUserVerificationCancelled`：isUserVerified = false）。
+                isUserVerified = false
+                cancel()
+            }
         }
         val prompt = BiometricPrompt(this, executor, callback)
         biometricPrompt = prompt
@@ -199,6 +362,14 @@ class PasskeyGetActivity : FragmentActivity() {
     private fun sign() {
         val cred = credential ?: run {
             fail(GetCredentialUnknownException("Passkey not available"))
+            return
+        }
+        // 照抄 Bitwarden 的调用契约：签名只在「设备验证已完成」之后发生
+        // （其 `authenticateFido2Credential` 仅在 `isUserVerified == true` 或
+        //  RP 要求 DISCOURAGED 时才被调到）。这里做一次防御性断言。
+        if (!isUserVerified) {
+            AutofillLogger.d("PK aborted: sign() called while not user-verified")
+            fail(GetCredentialUnknownException("User not verified"))
             return
         }
         val key = WebAuthn.parseEcPrivateKey(cred.keyValue)
@@ -312,7 +483,20 @@ class PasskeyGetActivity : FragmentActivity() {
         runCatching { Base64.decode(b64, Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP) }.getOrNull()
             ?: Base64.decode(b64, Base64.DEFAULT)
 
+    /**
+     * 给裸主机名补 `https://`（照抄 Bitwarden `String.prefixHttpsIfNecessary`）。
+     *
+     * Bitwarden 的判定是「已是合法 URI 且含 http(s) scheme → 原样；否则前缀 https://」。
+     * 本处输入已由 [UriMatcher.hostOf] 归一化为裸主机名（无 scheme / 无端口 / 小写），
+     * 故直接前缀即可；保留函数以便与上游语义一一对应。
+     */
+    private fun prefixHttpsIfNecessary(host: String): String =
+        if (host.contains("://")) host else "https://$host"
+
     private fun fail(e: GetCredentialException) {
+        // 关键：任何终结路径都必须复位验证态（对齐 Bitwarden `handleFido2AssertionResultReceive`
+        // 首行 `isUserVerified = false`），否则同一实例复用时会带着上次的"已验证"结论。
+        isUserVerified = false
         AutofillLogger.d("PK fail: ${e.javaClass.simpleName}: ${e.message}")
         val resultIntent = Intent()
         PendingIntentHandler.setGetCredentialException(resultIntent, e)
@@ -321,11 +505,17 @@ class PasskeyGetActivity : FragmentActivity() {
     }
 
     private fun cancel() {
+        isUserVerified = false
         AutofillLogger.d("PK cancelled by user / biometric error")
         val resultIntent = Intent()
         PendingIntentHandler.setGetCredentialException(resultIntent, GetCredentialCancellationException("Cancelled"))
         setResult(Activity.RESULT_OK, resultIntent)
         finish()
+    }
+
+    private companion object {
+        /** 验证尝试上限，照抄 Bitwarden `private const val MAX_AUTHENTICATION_ATTEMPTS = 5`。 */
+        const val MAX_AUTHENTICATION_ATTEMPTS = 5
     }
 }
 

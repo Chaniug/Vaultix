@@ -97,6 +97,22 @@ class AutoLockController @Inject constructor(
         val stoppedAt = backgroundedAtMs
         backgroundedAtMs = null
 
+        // ⚠️ **正在为凭据提供商（Credential Provider）服务时不得锁定**（2026-09-11）。
+        //
+        // 现场症状：CP 列出候选（此时库已解锁）→ 用户点击 → 系统拉起
+        // PasskeyGetActivity → 该 Activity 使 ProcessLifecycle 走 onStart → 本方法
+        // `lockAll()` → `ItemRepositoryImpl.observeState` 因会话被清而发空列表 →
+        // Activity 读到 cred == null → 浏览器收到「认证失败」。
+        //
+        // 这是**跨进程/跨 Activity 的锁态竞态**：用户从未离开 Vaultix 的语义前台，
+        // 只是系统在我们自己发起的凭据流程里切了个 Activity。为此设置短期豁免窗口：
+        // 只有「刚发生过凭据流程启动」时跳过本次回前台锁定判定，窗口极短（数秒），
+        // 不影响用户真正切走 App 后回来应被锁定的行为。
+        if (credentialFlowActive()) {
+            backgroundedAtMs = stoppedAt
+            return
+        }
+
         scope.launch {
             val minutes = prefs.autoLockMinutes.first()
             val screenLocked = keyguardManager?.isKeyguardLocked == true
@@ -111,6 +127,20 @@ class AutoLockController @Inject constructor(
         }
         // 不做自动同步（用户反馈：自动同步太频繁；拉取只在手动 / 本地修改后）
     }
+
+    /**
+     * 是否有**正在进行中**的凭据提供商流程（通行密钥 / 密码填充）。
+     *
+     * 对齐 Bitwarden `VaultLockManagerImpl` 的两条对应设计：
+     *  1. `FOREGROUNDED → handleOnForeground()` **取消**超时任务（切回前台不锁）；
+     *  2. 存在 `OnAppRestart` 的自动填充豁免（autofill 触发的重启不清会话）。
+     *
+     * Vaultix 的等价机制由 [CredentialFlowGuard] 提供：凭据流程启动时记一次时间戳，
+     * 落在 [CredentialFlowGuard.EXEMPTION_WINDOW_MS] 窗口内即视为「同一段前台会话」。
+     */
+    private fun credentialFlowActive(): Boolean =
+        SystemClock.elapsedRealtime() - CredentialFlowGuard.lastFlowStartedAtMs <
+            CredentialFlowGuard.EXEMPTION_WINDOW_MS
 
     /** 供「立即锁定」等入口直接调用（幂等）。 */
     fun lockAllNow() {

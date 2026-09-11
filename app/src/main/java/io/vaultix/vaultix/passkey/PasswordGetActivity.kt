@@ -53,6 +53,7 @@ import io.vaultix.domain.ItemRepository
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.security.CredentialFlowGuard
 import io.vaultix.vaultix.ui.theme.VaultixTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -73,6 +74,10 @@ class PasswordGetActivity : FragmentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // 同 PasskeyGetActivity：本 Activity 的启动会触发一次 ProcessLifecycle 前后台切换，
+        // 必须打点让 AutoLockController 知道是我方造成的切换，别把库锁掉（见 CredentialFlowGuard）。
+        CredentialFlowGuard.markFlowStarted()
 
         vaultId = intent.getStringExtra(PasskeyProviderIntents.EXTRA_VAULT_ID).orEmpty()
         itemId = intent.getStringExtra(PasskeyProviderIntents.EXTRA_ITEM_ID).orEmpty()

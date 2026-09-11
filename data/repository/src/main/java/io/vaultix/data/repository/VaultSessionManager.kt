@@ -63,6 +63,19 @@ class VaultSessionManager @Inject constructor() {
     fun isUnlocked(vaultId: String): Boolean = vaultId in unlockedIdsState.value
 
     /**
+     * 是否**任一**库处于已解锁状态。
+     *
+     * 用途（对齐 Bitwarden `CredentialProviderProcessorImpl` 的 `isVaultUnlocked` 判定）：
+     * 通行密钥链路上必须能**区分**三种情形，否则会把「库锁着」误报成「条目不存在」：
+     *  1. 库锁定 → 走解锁引导（`authenticationActions` / 解锁界面）；
+     *  2. 库已解锁但条目/凭证不在 → 才是真正的「找不到」；
+     *  3. 库已解锁且凭证可取 → 正常签名。
+     *
+     * 只读快照，不涉及密钥材料。
+     */
+    fun isAnyUnlocked(): Boolean = unlockedIdsState.value.isNotEmpty()
+
+    /**
      * 短时借用会话密钥（解密条目 / 加密新建条目）。
      *
      * @return 未解锁返回 null——由调用方决定降级（空列表）还是报错（保存需解锁）。
