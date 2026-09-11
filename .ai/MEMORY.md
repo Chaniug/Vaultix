@@ -552,7 +552,16 @@ Vaultix 原把 linkedId 当顺序编号（1/2/3/4），**官方是分段编码**
 > Edge/Chrome 永不弹、passkey 查不到。此前所有「未启用/被清」诊断均被此掩盖。
 > ⚠️ **教训：Credential Provider 注册必须逐字符对照官方模板**（action / 权限 /
 > meta-data 名 / provider.xml 根标签）。
-> 双能力已声明（TYPE_PUBLIC_KEY_CREDENTIAL + TYPE_PASSWORD_CREDENTIAL，8ba40d9）。
+> ~~双能力已声明（TYPE_PUBLIC_KEY_CREDENTIAL + TYPE_PASSWORD_CREDENTIAL，8ba40d9）。~~
+> 🔴🔴 **本行已被 `f815ab2`（2026-09-11 00:03）反转：现只声明
+> `TYPE_PUBLIC_KEY_CREDENTIAL`。** 声明 `TYPE_PASSWORD_CREDENTIAL` 会让 Chromium 系
+> （Edge/Chrome/Brave）把密码请求全部路由到 CP 通道、绕过 Autofill 框架，而 Vaultix 的
+> CP 密码分支任一环节失败即返回空 → Edge 密码框什么都不弹、老 AutofillService 同时被绕过
+> （**两条路全废**）。密码填充回归 `VaultixAutofillService.onFillRequest`，两路各司其职；
+> `pwOptions` 保留但标 `@Suppress("unused")`。
+> ⚠️ **未决分歧，勿单方面改回**：Bitwarden 官方 `res/xml/provider.xml` **是声明双能力的**，
+> 故「删能力」更像绕过 CP 密码分支自身的缺陷而非根治 → **待真机 A/B 复现后再定**。
+> 完整记录见 `Docs/progress/decisions.md` 末行 + `next-steps.md` 顶部第三十五轮。
 > 设置页「凭据提供商」行已改用 `CredentialManager.createSettingsPendingIntent()`
 > 直达启用界面（REQUEST_SET_AUTOFILL_SERVICE 与凭据提供商是两个独立设置项）。
 >

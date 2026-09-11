@@ -1,5 +1,54 @@
 # 下一步任务清单
 
+> 更新于 2026-09-11（第三十五轮）。**【最新】真机 adb 联调打通 + 抓出「文档地雷」：**
+> **CP 密码能力的方向已被 `f815ab2` 反转，但四份文档仍写着「双能力供应」。**
+>
+> ⚠️⚠️ **先读本条再读下面的历史区块**：`credential_provider.xml` **故意不声明**
+> `TYPE_PASSWORD_CREDENTIAL`（`f815ab2`，2026-09-11 00:03；理由见 `decisions.md` 末行）。
+> 但以下三处**仍按反转之前的口径写着「双能力」**，属**已过时表述**，勿据此改回：
+> ① 本文件第二十四轮 ③「密码凭据供应（8ba40d9）」整段；
+> ② 本文件「★ 最高优先」区 ① 的 capability 行与 ③ 的叙述；
+> ③ `.ai/MEMORY.md` 第 555 行。
+> ⇒ **接力者若照这些段落「修」回 `TYPE_PASSWORD_CREDENTIAL`，会再次弄坏 Edge 密码填充。**
+>
+> **未决分歧（勿单方面拍板）**：Bitwarden 官方 `res/xml/provider.xml` **是声明双能力的**
+> （`TYPE_PASSWORD_CREDENTIAL` + `TYPE_PUBLIC_KEY_CREDENTIAL`）。故 `f815ab2` 所依据的
+> 「CP 密码分支任一环节失败即返回空」更像是**该分支自身的缺陷**——删能力是**绕过**而非根治，
+> 与本项目「功能正确性一律以 Bitwarden 为准」的裁决规则存在张力。
+> **待真机 A/B 复现后（Edge 密码填充一次 + 通行密钥一次）再定方向。**
+>
+> ### 本轮真机状态快照（HONOR BKQ-AN00 / Android 17 / `0.1.0-dev-24af692`）
+>
+> | 项 | 实测值 | 含义 |
+> |---|---|---|
+> | `autofill_service` / `credential_service` | 均指向 Vaultix | 两轨注册与启用**都正确** |
+> | CP manifest action | `android.service.credentials.CredentialProviderService` | 旧「漏 `service.` 段」坑**未复发** |
+> | 库 | 1 个 `https://pwd.vv1234.cn`（BITWARDEN） | 账号 valkjin@outlook.com |
+> | 条目 | 218（217 Login + 1 Card）；`pending_ops=0` | 同步干净 |
+> | 快速解锁 | `local_unlock_enabled_<vaultId>`=**true** + payload 已落盘 | **内因已解除**（不再是「开关默认关」） |
+> | 自动锁定 | 旧键 `auto_lock_minutes`=**-1**，新键 `vault_timeout` 与迁移标记**均不存在** | 迁移**未触发** → 按 legacy 读 = **`Never`（从不）**。⚠️ 同一 -1 在新键语义下是 `OnAppRestart`「重启即锁」，**结论相反——必须看键名而非数值** |
+> | `VaultixAutofill` 日志 | 缓冲区**零条** | 修复后**从未跑过一次**填充/通行密钥流程 |
+>
+> ### 本轮新增工具与方法
+>
+> - **`scripts/adb-log.sh`**（新增）：`connect` / `dump` / `live` 三子命令；自动探测 adb
+>   （PATH → `local.properties` 的 `sdk.dir` → 常见路径）、**mDNS 自愈定位设备**、强制 `-s`。
+>   解决三个固定摩擦：① adb 不在 PATH；② 无线调试 IP/端口会漂（实测手抄的 `192.168.1.144`
+>   连不上，mDNS 里的真实地址是 `192.168.1.114`，**只有端口一致**）；③ 显式 connect 与 mDNS
+>   会把同一设备注册成两条 → 报 `more than one device/emulator`。
+>   **无线调试的权威地址 = `adb mdns services` 里 `_adb-tls-connect._tcp` 那行的末列。**
+> - **日志事实**：全 App **只有一个 tag `VaultixAutofill`**（`AutofillLogger`，`BuildConfig.DEBUG`
+>   门禁，dev 包有效），消息体带 `CP ` / `PK ` 前缀区分两条链路。**`dumpsys credential` 无实现**
+>   （只回服务列表头）→ **CP 侧只能靠 logcat**。
+> - **读应用私有状态的三个可靠手法**（无需 root，靠 `run-as`）：
+>   ① `shared_prefs/vaultix_secure.xml` = 快速解锁 payload / device_id / `bw_*` 凭据；
+>   ② DataStore 偏好 = `files/datastore/vaultix_settings.preferences_pb`（**不是** `vaultix.preferences_pb`），
+>      protobuf，`od` 手解即可读开关与 `auto_lock_minutes`；
+>   ③ Room 库 = `databases/vaultix.db` **+ `-wal` + `-shm` 三个一起拉**，本地打开前**删掉 `-shm`**
+>      让 SQLite 重建（否则 WAL 不重放、只看到 `android_metadata`）。
+>      ⚠️ **`fido2` 在 `encryptedPayload` 密文内 → 通行密钥条数无法从库直读**。
+> - 本机注记：`git -C /d/...` 在 Git Bash 下报 No such file，MSYS 路径要写 `D:/...`。
+
 > 更新于 2026-09-11（第三十四轮）。**【最新】修复 CI（detekt 门禁 + 被掩盖的编译错误），CI 转绿。**
 >
 > 用户：「拉取 github 最新的改动到本地。有 github 上的报错需要修复」。
@@ -632,7 +681,8 @@ provider 无从保证命中；一旦不命中就 `?: candidates.first()` 回退�
       刷新；跳转改用 `CredentialManager.createSettingsPendingIntent()` 直达启用界面
       （老 `REQUEST_SET_AUTOFILL_SERVICE` 与凭据提供商是两个独立设置项，部分设备无反应）
 - [x] **CP 集成 ①–④（98edb37 + 8ba40d9）**：系统注册 + 通行密钥查询/创建 + inline 候选；
-      双能力声明（`TYPE_PUBLIC_KEY_CREDENTIAL` + `TYPE_PASSWORD_CREDENTIAL`）；
+      ~~双能力声明（`TYPE_PUBLIC_KEY_CREDENTIAL` + `TYPE_PASSWORD_CREDENTIAL`）~~ 🔴 **已被
+      `f815ab2` 反转：现只声明通行密钥，见文件顶部第三十五轮**；
       `buildGetResponse` / `PasswordGetActivity` 回灌密码凭据；锁定态按选项类型生成 Entry
 - [x] **老路认证回灌时序（f474654 + 64ade7a）**：`MODE_COPY_TOTP` 认证宿主 `setResult`
       从 onCreate 推迟到 onResume（onCreate 同步会丢认证结果 → 「验证码复制成功但密码没填」）；
@@ -914,7 +964,8 @@ provider 无从保证命中；一旦不命中就 `?: candidates.first()` 回退�
 
 - [x] **① CredentialProviderService 注册**（DSP 主入口）：manifest `<service>`
       `android.service.credentials.CredentialProviderService` + `@xml/credential_provider`
-      capability（`TYPE_PUBLIC_KEY_CREDENTIAL` / `TYPE_PASSWORD_CREDENTIAL`）
+      ~~capability（`TYPE_PUBLIC_KEY_CREDENTIAL` / `TYPE_PASSWORD_CREDENTIAL`）~~
+      🔴 **能力声明已于 `f815ab2` 反转：现仅 `TYPE_PUBLIC_KEY_CREDENTIAL`**（见文件顶部第三十五轮）
 - [x] **② 通行密钥查询/创建**：BeginCreateCredential / BeginGetCredential 回调 →
       校验 origin（与条目 URI 匹配）→ 无锁提示解锁（PendingIntent 复用
       AutofillActivity 解锁链）→ 列出匹配 passkey（PasskeysViewModel 数据源）
@@ -926,6 +977,14 @@ provider 无从保证命中；一旦不命中就 `?: candidates.first()` 回退�
       已解锁库 Login 条目列 `PasswordCredentialEntry`；新增 `PasswordGetActivity` 透明确认后
       回灌 `PasswordCredential`（与 Bitwarden Android 14+ 行为一致）；锁定态「解锁 Vaultix」
       入口按选项具体类型生成对应 Entry
+
+      > 🔴🔴 **本段叙述已被 `f815ab2`（2026-09-11）反转 —— 别再照它改回去。**
+      > 现实是：声明 `TYPE_PASSWORD_CREDENTIAL` 会让 Chromium 系把密码请求
+      > **全部路由到 CP 通道**并绕过 Autofill 框架；而 Vaultix 的 CP 密码分支
+      > 任一环节失败即返回空 → Edge 密码框什么都不弹，**两条路全废**。
+      > 故已删除该能力、只留通行密钥；密码填充回归 `VaultixAutofillService.onFillRequest`；
+      > `pwOptions` 保留但标 `@Suppress("unused")`。
+      > 完整理由与**未决分歧**（Bitwarden 官方其实声明了双能力）见 `decisions.md` 末行。
 - [x] **④ inline suggestions**（API 30+）+ `AutofillInlinePlaceholderActivity`
       （Bastion 15 行 no-op）→ Via 等老路径把候选显示在键盘上方
 - [ ] **⑤ 字段角色推断**：迁 Bastion `AutofillFieldRolePolicy`/`AutofillFieldPromotionPolicy`
