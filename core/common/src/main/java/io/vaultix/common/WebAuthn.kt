@@ -54,6 +54,8 @@ object WebAuthn {
     // authenticatorData 标志位（WebAuthn §6.1）
     private const val FLAG_USER_PRESENT = 0x01
     private const val FLAG_USER_VERIFIED = 0x04
+    private const val FLAG_BACKUP_ELIGIBLE = 0x08  // BE
+    private const val FLAG_BACKUP_STATE = 0x10     // BS
     private const val FLAG_ATTESTED = 0x40
 
     // COSE_Key 顶层结构（CBOR 头字节）
@@ -367,6 +369,20 @@ object WebAuthn {
 
     /**
      * 构造 authenticatorData。
+     *
+     * ⚠️ **BE / BS 两个标志位必须置位，且注册与断言必须一致**（根因修复 2026-09-11）。
+     *
+     * `BE`（Backup Eligibility, 0x08）声明「本凭证是否**可**被备份」；
+     * `BS`（Backup State, 0x10）声明「本凭证**当前**是否处于备份状态」。
+     * Vaultix 的通行密钥私钥存在库中并随 Bitwarden 服务端同步，语义上**必须**两者置位
+     * ——这正是 Bitwarden / 1Password / iCloud Keychain 这类「可同步通行密钥」的标准声明。
+     *
+     * **不置位的后果**（真机实证：Edge 里指纹验证通过、所有网站均报「验证失败」）：
+     * RP 在**注册**阶段按「不可备份的硬件凭证」记录该 credential，断言阶段收到一份
+     * 声明「可备份」语义缺失的数据，部分 RP 的校验库会因 BE/BS 与注册时不符而拒绝
+     * 整条断言。更稳妥的做法是注册与断言用同一套基线（对齐 Bastion
+     * `PasskeyCreateActivity` / `PasskeyAuthActivity`：两边都是 `0x1D`，注册额外加 AT）。
+     *
      * @param withAttested 创建流程（AT 标志）为 true，需追加 aagid + credentialId + COSE 公钥。
      */
     fun buildAuthenticatorData(
@@ -382,6 +398,9 @@ object WebAuthn {
         var flags = 0
         if (userPresent) flags = flags or FLAG_USER_PRESENT
         if (userVerified) flags = flags or FLAG_USER_VERIFIED
+        // BE/BS 恒置位：私钥随库同步，属「可备份凭证」。注册与断言必须同口径。
+        flags = flags or FLAG_BACKUP_ELIGIBLE
+        flags = flags or FLAG_BACKUP_STATE
         if (withAttested) flags = flags or FLAG_ATTESTED
         val counterBytes = ByteArray(4) { i -> ((counter ushr (24 - 8 * i)) and BYTE_MASK).toByte() }
         val out = ByteArrayOutputStream()
@@ -458,7 +477,13 @@ object WebAuthn {
         return sig.sign()
     }
 
-    /** 组装 get 响应 JSON（PublicKeyCredential 的 `response` 形态）。 */
+    /**
+     * 组装 get 响应 JSON（PublicKeyCredential 的 `response` 形态）。
+     *
+     * 字段集对齐 Bitwarden / Keyguard / Bastion 三家：
+     * - `authenticatorAttachment`：本 provider 是平台内置（软件密钥 + 系统生物识别），取 `platform`；
+     * - `clientExtensionResults`：**必须存在**（哪怕空对象），部分 RP 的解析器直接读该键。
+     */
     fun buildGetResponseJson(
         credentialId: ByteArray,
         clientDataJson: ByteArray,
@@ -472,6 +497,7 @@ object WebAuthn {
         sb.append("\"id\":").append(quote(id))
         sb.append(",\"rawId\":").append(quote(id))
         sb.append(",\"type\":\"public-key\"")
+        sb.append(",\"authenticatorAttachment\":\"platform\"")
         sb.append(",\"response\":{")
         sb.append("\"clientDataJSON\":").append(quote(base64Url(clientDataJson)))
         sb.append(",\"authenticatorData\":").append(quote(base64Url(authData)))
@@ -480,11 +506,12 @@ object WebAuthn {
             sb.append(",\"userHandle\":").append(quote(base64Url(userHandle)))
         }
         sb.append("}")
+        sb.append(",\"clientExtensionResults\":{}")
         sb.append("}")
         return sb.toString()
     }
 
-    /** 组装 create 响应 JSON。 */
+    /** 组装 create 响应 JSON（字段集与 [buildGetResponseJson] 同口径）。 */
     fun buildCreateResponseJson(
         credentialId: ByteArray,
         clientDataJson: ByteArray,
@@ -496,10 +523,12 @@ object WebAuthn {
         sb.append("\"id\":").append(quote(id))
         sb.append(",\"rawId\":").append(quote(id))
         sb.append(",\"type\":\"public-key\"")
+        sb.append(",\"authenticatorAttachment\":\"platform\"")
         sb.append(",\"response\":{")
         sb.append("\"clientDataJSON\":").append(quote(base64Url(clientDataJson)))
         sb.append(",\"attestationObject\":").append(quote(base64Url(attestationObject)))
         sb.append("}")
+        sb.append(",\"clientExtensionResults\":{}")
         sb.append("}")
         return sb.toString()
     }

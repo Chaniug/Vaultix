@@ -122,9 +122,51 @@ class WebAuthnTest {
         assertThat(ad.size).isEqualTo(37) // 32 + 1 + 4
         val expectedHash = MessageDigest.getInstance("SHA-256").digest("example.com".toByteArray())
         assertThat(ad.copyOfRange(0, 32)).isEqualTo(expectedHash)
-        // flags: UP=0x01, counter=5 → 末 4 字节大端
-        assertThat(ad[32].toInt() and 0xff).isEqualTo(0x01)
+        // flags: UP=0x01 | BE=0x08 | BS=0x10 = 0x19（UV 未设）；counter=5 → 末 4 字节大端
+        assertThat(ad[32].toInt() and 0xff).isEqualTo(0x19)
         assertThat(ad.copyOfRange(33, 37)).isEqualTo(byteArrayOf(0, 0, 0, 5))
+    }
+
+    /**
+     * BE/BS 回归（2026-09-11）：BE(0x08) + BS(0x10) 必须**始终**置位。
+     *
+     * 根因背景：Vaultix 私钥存库并随服务端同步，语义上是「可备份凭证」。此前只在
+     * 注册/断言设 UP+UV，缺 BE/BS —— 真机表现为 Edge 里指纹验证通过、所有网站报
+     * 「验证失败」（RP 侧 BE/BS 语义与注册时不符）。
+     */
+    @Test
+    fun `authenticatorData always sets backup eligible and backup state flags`() {
+        // 断言流程（withAttested=false）：UP+UV+BE+BS = 0x1D
+        val assertion = WebAuthn.buildAuthenticatorData("example.com", true, true, 0, false)
+        assertThat(assertion[32].toInt() and 0xff).isEqualTo(0x1D)
+
+        // 注册流程（withAttested=true）：UP+UV+BE+BS+AT = 0x5D
+        val key = WebAuthn.generateKeyPair()
+        val cose = WebAuthn.encodeCoseP256(key.publicX, key.publicY)
+        val attestation = WebAuthn.buildAuthenticatorData(
+            "example.com", true, true, 0, true, key.credentialId, cose,
+        )
+        assertThat(attestation[32].toInt() and 0xff).isEqualTo(0x5D)
+
+        // 注册与断言的 BE/BS 基线必须一致——这是本次根因的核心
+        for (adm in listOf(assertion, attestation)) {
+            assertThat(adm[32].toInt() and 0x08).isEqualTo(0x08)
+            assertThat(adm[32].toInt() and 0x10).isEqualTo(0x10)
+        }
+    }
+
+    /** 响应 JSON 必须带 `clientExtensionResults`（部分 RP 解析器直接读该键）。 */
+    @Test
+    fun `get and create responses carry clientExtensionResults`() {
+        val key = WebAuthn.generateKeyPair()
+        val get = WebAuthn.buildGetResponseJson(
+            key.credentialId, ByteArray(8), ByteArray(37), ByteArray(64), null,
+        )
+        assertThat(get).contains("\"clientExtensionResults\":{}")
+        assertThat(get).contains("\"authenticatorAttachment\":\"platform\"")
+        assertThat(get).contains("\"type\":\"public-key\"")
+        // userHandle 为 null 时省略该字段（对齐 Bitwarden / Keyguard）
+        assertThat(get).doesNotContain("userHandle")
     }
 
     private fun toBigInt(b: ByteArray): BigInteger = BigInteger(1, b)

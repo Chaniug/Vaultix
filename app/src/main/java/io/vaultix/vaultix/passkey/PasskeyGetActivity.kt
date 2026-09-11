@@ -229,7 +229,11 @@ class PasskeyGetActivity : FragmentActivity() {
                 rpId = rpId,
                 userPresent = true,
                 userVerified = true,
-                counter = 0,
+                // signCount 口径（对齐 Keyguard `PasskeyProviderGetRequest`）：
+                // 库里的非零值**原样发送但不递增**——保持跨设备单调即可，递增必然分叉
+                // （A 设备签 6、B 设备恢复后仍签 5，RP 看到计数回退会拒签）。
+                // 0 表示「本 authenticator 不实现计数器」，规范允许 RP 跳过单调性校验。
+                counter = (cred.counter.takeIf { it > 0 } ?: 0L).toInt(),
                 withAttested = false,
             )
             val signature = if (clientDataHash != null) {
