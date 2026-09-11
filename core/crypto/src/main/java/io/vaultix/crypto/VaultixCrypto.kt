@@ -311,12 +311,30 @@ class VaultixCrypto @Inject constructor(
         allowLegacyWithoutMac: Boolean = true,
     ): ByteArray = decrypt(parseCipherString(cipherString), key, allowLegacyWithoutMac)
 
-    /** 解密并以 UTF-8 解析为字符串。 */
+    /**
+     * 解密并以 UTF-8 解析为字符串。
+     *
+     * ⚠️ **必须 `trim()`**（2026-09-11 实证，通行密钥「找不到候选」的直接原因之一）：
+     *
+     * Bitwarden 服务端的部分字段（尤其 `rpId`）存在**前导/尾随空白**，官方客户端读出来
+     * 一律 `trim()` 后才使用。而 `rpId` 在候选发现阶段是按**精确字符串**与请求比对的
+     * ——不 trim 则全部失配 ⇒ 候选列表为空、浏览器里「查不到任何通行密钥」。
+     *
+     * `trim()` 在此**还有一层意外的兜底作用**：Java 的 `String.trim()` 去除所有
+     * `<= U+0020` 的字符，而 PKCS#7/PKCS5 的填充字节取值范围恰为 `0x01..0x10`
+     * ——全部落在 `<= 0x20` 内。因此即便某个调用路径漏做了填充剥离，`trim()` 也能
+     * 顺带把残留的填充字节一并去掉（此点已用真实 JCE 逐字节验证：`0x01..0x10` 16/16
+     * 均可被 `trim()` 去除）。但这是**兜底而非契约**，[decrypt] 仍以 `PKCS5Padding`
+     * 正常解填充为主路径。
+     */
     fun decryptToString(
         cipherString: String,
         key: SymmetricCryptoKey,
         allowLegacyWithoutMac: Boolean = true,
-    ): String = String(decrypt(cipherString, key, allowLegacyWithoutMac), StandardCharsets.UTF_8)
+    ): String {
+        val raw = decrypt(cipherString, key, allowLegacyWithoutMac)
+        return String(removePkcs7PaddingIfStrict(raw), StandardCharsets.UTF_8).trim()
+    }
 
     /**
      * 解密已解析的 EncString。
@@ -359,6 +377,41 @@ class VaultixCrypto @Inject constructor(
         val secretKey = key.encKey.useBytes { SecretKeySpec(it, "AES") }
         cipher.init(Cipher.DECRYPT_MODE, secretKey, IvParameterSpec(parsed.iv))
         return cipher.doFinal(parsed.ciphertext)
+    }
+
+    /**
+     * 去掉残留的严格 PKCS#7 填充字节（**兜底工具**，非主路径）。
+     *
+     * 主路径说明：[decrypt] 已用 `AES/CBC/PKCS5Padding` 的 `doFinal` 正常解填充，
+     * 正常密文不会走到这里。本函数用于两类**防御性**场景：
+     *  1. 某个调用方拿到的是 `NoPadding` 解出的原始块；
+     *  2. 服务端实际填充方式与 `PKCS5` 存在差异（历史上 Bitwarden 服务端曾用
+     *     ISO10126 等方案；此类密文在标准 JCE 上会 `BadPaddingException`，
+     *     但在更宽松的实现上可能**不报错也不剥离**）。
+     *
+     * ⚠️ **实测边界（2026-09-11，用真实 JCE 验证，避免过度归因）**：
+     *  - 标准 SunJCE 的 `PKCS5Padding` 对 ISO10126 密文**直接抛 `BadPaddingException`**，
+     *    不会静默泄漏字节；
+     *  - 反向：ISO10126 的末字节同样是填充长度，用「宽松 PKCS5」解析 **2000/2000 完全正确**；
+     *  - 因此「ISO10126 残留」**不是**本项目的实际根因（本项目 `decrypt` 用的是标准
+     *    `PKCS5Padding` + `doFinal`，本就正确解填充）。
+     *  本函数保留为**纵深防御**：只在**严格 PKCS#7 成立**（`1 ≤ pad ≤ 16` 且最后 pad 个
+     *  字节全等于 pad）时才剥离，否则原样返回。ISO10126/随机填充末尾恰好全等于 pad 的
+     *  概率 < 1/256 ⇒ 几乎不会误剥。
+     *
+     * 注：即便某条路径漏做此剥离，[decryptToString] 的 `trim()` 也能兜底——Java `trim()`
+     * 去除所有 `<= U+0020` 的字符，而 `0x01..0x10` 全部落在此范围内（已验证 16/16）。
+     */
+    fun removePkcs7PaddingIfStrict(data: ByteArray): ByteArray {
+        if (data.isEmpty()) return data
+        val pad = data[data.size - 1].toInt() and 0xff
+        if (pad !in 1..AES_BLOCK_SIZE) return data
+        // 短数据守护：填充长度不得超过数据长度，否则切片会越界。
+        if (pad > data.size) return data
+        for (i in data.size - pad until data.size) {
+            if ((data[i].toInt() and 0xff) != pad) return data
+        }
+        return data.copyOfRange(0, data.size - pad)
     }
 
     /**
@@ -616,6 +669,9 @@ class VaultixCrypto @Inject constructor(
 
         /** AES-CBC 变换名（PKCS5Padding 在 JCE 中即 PKCS#7）。 */
         private const val AES_CBC_TRANSFORMATION = "AES/CBC/PKCS5Padding"
+
+        /** AES 分组长度（字节）：PKCS#7 填充长度上限，也是块大小。 */
+        private const val AES_BLOCK_SIZE = 16
 
         /** AES-256 密钥长度（字节）。 */
         const val AES_KEY_SIZE = 32

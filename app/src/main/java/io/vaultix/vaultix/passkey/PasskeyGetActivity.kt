@@ -229,11 +229,18 @@ class PasskeyGetActivity : FragmentActivity() {
                 rpId = rpId,
                 userPresent = true,
                 userVerified = true,
-                // signCount 口径（对齐 Keyguard `PasskeyProviderGetRequest`）：
-                // 库里的非零值**原样发送但不递增**——保持跨设备单调即可，递增必然分叉
-                // （A 设备签 6、B 设备恢复后仍签 5，RP 看到计数回退会拒签）。
-                // 0 表示「本 authenticator 不实现计数器」，规范允许 RP 跳过单调性校验。
-                counter = (cred.counter.takeIf { it > 0 } ?: 0L).toInt(),
+                // ⚠️ **signCount 必须恒为 0**（对齐 Bastion `PasskeyAuthActivity`：`newSignCount = 0L`）。
+                //
+                // WebAuthn §6.1.1 明确允许 authenticator 始终返回 0，表示「本 authenticator 不实现
+                // 计数器」——RP 据此跳过单调性校验。Bitwarden / 1Password / iCloud Keychain 这类
+                // 「同步型 passkey」全部走这条路。
+                //
+                // **不能改读库里的值。** 规范对计数器的校验是 `new > stored`（严格大于）：
+                // 若库中存着非零 counter（Bitwarden 官方客户端每签一次会递增并写回服务端，
+                // 同步下来就是非零），「原样发送但不递增」会导致第二次登录发出与上次**相同**的值，
+                // `new > stored` 不成立 → RP 判定重放并拒绝整条断言。
+                // 这是 2026-09-11 一次错误改动的回退（那次把 0 改成了读库）。
+                counter = 0,
                 withAttested = false,
             )
             val signature = if (clientDataHash != null) {

@@ -391,3 +391,112 @@ RP 的校验库会因 BE/BS 语义不符而拒绝整条断言。
 全站失败 + 验签失败）时应立刻停止排查候选展示 / CP 通道 / 生物识别，直接查
 `authenticatorData` / `clientDataJSON` / `signature` 三者。此前的多轮修复都在改
 「能不能弹出来」，而这一步早就通了 —— 错在把「功能不通」笼统当成一个问题。
+
+---
+
+## 33. **【更正 32】BE/BS 与「验签失败」无因果，且「必须重新注册」是错的**（2026-09-11，第二十九轮）
+
+上一节（#32）的**结论有两处错误，本节正式更正**。用户质疑「通行密钥为什么要新建呢，
+这个不是存好的就不动的吗」——**用户是对的**。
+
+### 更正一：BE/BS 不是登录失败的原因
+查证 WebAuthn 规范 / 多家 RP 文档后确认：
+
+> **BE（Backup Eligible）、BS（Backup State）是「注册期存档字段」。**
+> RP 在**断言（登录）阶段不做 BE/BS 校验**。login 校验清单只有：
+> `type==="webauthn.get"` / challenge / origin / 按 credentialId 取公钥 /
+> `SHA-256(rpId)` 匹配 rpIdHash / UP（按策略 UV）/ 验签 / **`new signCount > stored`**。
+
+⇒ 「登录验签失败」**不可能**由 BE/BS 缺失引起；同理，也**不存在「旧凭证必须重注册」**。
+（BE/BS 置位仍然保留，但理由改为**语义正确性**：私钥随库同步，确实是可备份凭证。）
+
+### 更正二：signCount 必须恒 0，不能「读库原样发送」
+#32 把断言 `counter` 从硬编码 0 改成读库。**这引入了新 bug。**
+规范校验是**严格大于**（`new > stored`）；Bitwarden 官方端每签一次会**递增写回服务端**，
+同步下来的 `counter` 就是非零（`CipherMapper:444` 实证）。原样发送且不递增 ⇒
+第二次登录值与上次相同 ⇒ `new > stored` 不成立 ⇒ RP 判**重放**拒签。
+**已回退为恒 0**（对齐 Bastion `newSignCount = 0L`，规范 §6.1.1 允许，同步型 passkey 标准做法）。
+
+### 教训
+**验签失败时不要在「注册期字段」上找原因。** 断言阶段的数据只有
+`authenticatorData`（rpIdHash/flags/signCount）/ `clientDataJSON` / `signature`，
+以及 RP 侧存的**公钥**与**上一次的 signCount**。BE/BS 只影响「RP 将来怎么展示这条凭证」。
+
+---
+
+## 34. 通行密钥「候选列表为空」根因：解密残留填充 + 未 trim + rpId 未归一化（2026-09-11，P0）
+
+**真机症状（用户原话）**：「这样改动后又找不到通行密钥了」→ **列表为空、没有任何候选**。
+
+### 先排除：不是 `8afac3d`（BE/BS）引入的
+`git show 8afac3d --name-only` 只有 3 个文件（`PasskeyGetActivity` / `WebAuthn` /
+`WebAuthnTest`），**完全没碰 discovery 逻辑**。`VaultixCredentialProviderService`
+最后一次变更是更早的 `fec4032`。二者无因果关系（时间上的先后 ≠ 因果）。
+
+### 根因（四项叠加，全部对照 Keyguard / Bastion / Bitwarden 确认）
+
+**① 解密残留填充 —— ⚠️ 经实测后降级为「纵深防御」，**不是**根因**
+
+曾推断 Bitwarden 服务端用 ISO10126 填充、Vaultix 用 `PKCS5Padding` 解密会「不报错也不剥离」。
+**用真实 JCE 实测后该推断不成立**：
+- 标准 SunJCE 的 `PKCS5Padding` 对 ISO10126 密文**直接抛 `BadPaddingException`**，不会静默泄漏；
+- 反向：ISO10126 末字节同样是填充长度，用宽松 PKCS5 解析 **2000/2000 完全正确**；
+- 且 `decrypt` 本就以 `PKCS5Padding` + `doFinal` 正确解填充 ⇒ 压根不会有残留。
+
+⇒ **不是根因**。但保留 `VaultixCrypto.removePkcs7PaddingIfStrict` 作为**纵深防御**
+（仅严格 PKCS#7 成立时才剥离，避免误伤）；并验证了 `trim()` 对填充字节
+`0x01..0x10` 的兜底作用（Java `trim()` 去所有 `<= U+0020` 的字符，16/16 可去除）。
+
+**教训：一次 JCE 实验就能否掉的假设，不要写进根因。**
+
+**② 没有 trim（实际根因，数据映射层）**
+
+服务端多处字段带前导/尾随空白，官方客户端读出来一律 `trim()`；Vaultix 的
+`CipherMapper.mapFido2` **一个字段都没 trim**。
+
+**解法**：`mapFido2` 全字段 `.trim()`；`decryptToString` 也加 `trim()`。
+⚠️ 特别注意：`counter` / `discoverable` 走 `toLongOrNull` / `toBooleanStrictOrNull`，
+不 trim 会**静默回落默认值**（counter=0 / discoverable=true）——默认值本身安全，
+但会把真实数据悄悄改写。
+
+**③ rpId 未归一化（匹配层）**
+
+此前是 `cred.rpId.equals(rpId, ignoreCase = true)`，只能处理大小写。
+**末尾根点 `.` / Unicode 域名（punycode）** 一律失配。
+
+**解法**：`VaultixCredentialProviderService.normalizeRpId` / `isSameRpId`，
+逐条对齐 Bastion `PasskeyRpIdNormalizer`：
+`trim` → `trimEnd('.')` → `lowercase(Locale.ROOT)` → `IDN.toASCII(lower, USE_STD3_ASCII_RULES)`，
+**两侧都归一化**。
+
+**④ allowCredentials 严格过滤无回退（策略层）**
+
+RP 下发的 `allowCredentials` 是**提示**而非授权门（规范允许空）。用户若在**其它设备 /
+其它客户端**注册过该 RP 的 passkey，本地 credentialId 与列表对不上 —— 严格过滤会把
+**唯一可用的候选也删掉**。
+
+**解法**：照抄 Bastion `resolvePasskeys` 的回退 ——
+严格匹配**为空时回退到「只按 rpId」**并打日志（`allowedMiss` 记录被回退的数量）。
+
+### 三家对照：锁定态处理（已核实，Vaultix 已对齐，不是根因）
+
+| 维度 | Bitwarden | Keyguard | Vaultix |
+|---|---|---|---|
+| 全库锁定 | 只返回 `authenticationActions`(unlock)，不带 credentialEntries，直接 return | `MasterSession.Empty` → 只返回 unlock 的 `AuthenticationAction` | ✅ 同（`unlocked.isEmpty()` 分支） |
+| 通道互斥 | if/return 互斥 | 同 | ✅ 同 |
+| 补偿重试 | **无** | **无**（仅 UI 侧 800ms 最小处理时长） | 无（对照后确认**不需要**） |
+
+### 埋点（现场排障唯一手段）
+CP 服务每次 resolve 都打：
+```
+GET resolve rpId=<x> allowed=<n> total=<n> unusable=<n> rpIdMiss=<n> allowedMiss=<n> matched=<n>
+GET resolve EMPTY: storedRpIds=<库内实际存的域名>
+```
+四个计数一出来即可判定卡在哪一级（标签 `VaultixAutofill`，限 debug 构建）。
+
+### 教训
+1. **「列表为空」是 discovery 问题**，要在「候选是怎么被筛出来的」这条链上找，
+   且必须用逐级计数把「哪一级筛没了」量化出来 —— 而不是靠猜或改无关的注册期字段。
+2. **能用真实运行时实验否掉的假设，绝不要写进根因。** 本轮「ISO10126 残留」的推断
+   听上去很合理（Bitwarden 服务端确实用过 ISO10126），但一次 20 行 JCE 程序就否掉了它
+   （标准 `PKCS5Padding` 会直接抛异常）。**先做实验，再下结论。**

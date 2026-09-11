@@ -185,6 +185,72 @@ class VaultixCryptoTest {
         }
     }
 
+    // ========== 填充剥离 / 空白归一（纵深防御，2026-09-11）==========
+
+    /**
+     * **尾部残留填充必须被剥离**（纵深防御）。
+     *
+     * 注：主路径 `decrypt` 用标准 `PKCS5Padding` + `doFinal`，本就正确解填充；
+     * 已用真实 JCE 验证「标准 SunJCE 对 ISO10126 密文直接抛 `BadPaddingException`」，
+     * 故**不是**本项目根因。本工具用于「NoPadding 解出原始块」等防御场景。
+     * 这里直接喂「明文 + 伪造的随机填充」验证末字节标记的长度被正确去掉。
+     */
+    @Test
+    fun removePkcs7PaddingStripsTrailingRandomPadding() {
+        // 明文 "github.com"（10 字节）+ 6 字节填充：前 5 字节随机、末字节 = 0x06
+        val plain = "github.com".toByteArray(Charsets.UTF_8)
+        val noisy = plain + byteArrayOf(0x7A, 0x11, 0x44, (0x80).toByte(), 0x23, 0x06)
+        val stripped = crypto.removePkcs7PaddingIfStrict(noisy)
+        assertEquals("github.com", String(stripped, Charsets.UTF_8))
+    }
+
+    /** 严格的 PKCS#7 填充（末 pad 字节全等于 pad）同样被剥离。 */
+    @Test
+    fun removePkcs7PaddingStripsStrictPkcs7() {
+        val plain = "ab".toByteArray(Charsets.UTF_8)
+        val padded = plain + ByteArray(14) { 0x0E } // 14 字节填充，值均为 0x0E
+        assertEquals("ab", String(crypto.removePkcs7PaddingIfStrict(padded), Charsets.UTF_8))
+    }
+
+    /** 末尾不构成合法填充时**必须原样返回**（不能误伤随机数据的最后一个字节）。 */
+    @Test
+    fun removePkcs7PaddingKeepsDataWhenPaddingIsNotStrict() {
+        // 末字节 0x03，但倒数第 2 字节是 0x99 ≠ 0x03 → 非严格填充，原样返回
+        val data = "github.com".toByteArray(Charsets.UTF_8) + byteArrayOf(0x99.toByte(), 0x03)
+        assertEquals(data.toHex(), crypto.removePkcs7PaddingIfStrict(data).toHex())
+        // 末字节为 0 → 非合法填充长度，原样返回
+        val zeroTail = byteArrayOf(0x01, 0x02, 0x00)
+        assertEquals(zeroTail.toHex(), crypto.removePkcs7PaddingIfStrict(zeroTail).toHex())
+        // 末字节 0x11 = 17 > 块大小 16 → 非合法填充长度，原样返回
+        val tooBig = byteArrayOf(0x01, 0x11)
+        assertEquals(tooBig.toHex(), crypto.removePkcs7PaddingIfStrict(tooBig).toHex())
+        // 短数据守护：单字节 0x05 声称填充 5 字节但数据只有 1 字节 → 原样返回（不得越界）
+        val tooShort = byteArrayOf(0x05)
+        assertEquals(tooShort.toHex(), crypto.removePkcs7PaddingIfStrict(tooShort).toHex())
+        // 空数组 → 原样返回
+        assertEquals(0, crypto.removePkcs7PaddingIfStrict(ByteArray(0)).size)
+    }
+
+    /**
+     * `decryptToString` 必须 `trim()`。
+     *
+     * 服务端 `rpId` 等字段带前导/尾随空白，而 `rpId` 是按**精确字符串**与请求比对的
+     * ——不 trim 则候选列表为空。这里加密一个两侧带空白的字符串，验证读回来已被裁掉。
+     *
+     * 附带说明：`trim()` 还会顺手去掉 `<= U+0020` 的所有字符，而 PKCS#7 填充字节
+     * `0x01..0x10` 恰在此范围内，故它同时是填充残留的兜底（已验证 16/16 可去除）。
+     */
+    @Test
+    fun decryptToStringTrimsSurroundingWhitespace() {
+        val key = SymmetricCryptoKey.random()
+        try {
+            val encoded = crypto.encryptString("  github.com  ", key)
+            assertEquals("github.com", crypto.decryptToString(encoded, key))
+        } finally {
+            key.clear()
+        }
+    }
+
     @Test
     fun repeatedEncryptionOfSamePlaintextDiffersByIv() {
         val key = SymmetricCryptoKey.random()

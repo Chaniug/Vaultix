@@ -346,35 +346,112 @@ class VaultixCredentialProviderService : CredentialProviderService() {
         unlocked: Set<String>,
     ): List<PasskeyMatch> {
         val json = runCatching { JSONObject(option.requestJson) }.getOrNull() ?: return emptyList()
-        val rpId = json.optString("rpId", "").lowercase()
-        if (rpId.isBlank()) return emptyList()
+        val rpId = normalizeRpId(json.optString("rpId", ""))
+        if (rpId.isBlank()) {
+            log("GET resolve aborted: requestJson has no rpId")
+            return emptyList()
+        }
         val allowed = parseAllowedCredentialIds(json)
 
-        val result = mutableListOf<PasskeyMatch>()
+        // ⚠️ 逐级计数（现场「候选为空」时唯一的定位手段）：
+        // total=库内全部 fido2 条数；unusable=元数据不完整被丢；rpIdMiss=rpId 不匹配被丢；
+        // allowedMiss=allowCredentials 不含被丢；matched=最终候选。
+        // 这四个数一出来，「为什么没有候选」当场可判，不必再靠猜。
+        var total = 0
+        var unusable = 0
+        var rpIdMiss = 0
+        var allowedMiss = 0
+        val rpMatched = mutableListOf<PasskeyMatch>()
         for (vaultId in unlocked) {
             val items = runCatching { itemRepository.observeItems(vaultId).first() }.getOrDefault(emptyList())
             for (item in items) {
                 if (item.type != VaultItemType.Login) continue
                 for (cred in item.fido2Credentials) {
-                    // ⚠️ **必须过滤不可用记录**（对齐 Bastion PasskeyCredentialDiscoveryPolicy
-                    // .isUsable：privateKeyAlias 非空才算可用；Vaultix 的等价条件即 keyValue 非空）。
-                    // 真机实证（2026-09-10）：库中存在「只有公钥登记、keyValue 缺失」的残缺 passkey
-                    // （Bitwarden 官方端同步下来的未完成注册残留）。此前不过滤 → 它被当成正常候选
-                    // 列进凭据列表，用户点它必然走不通签名，浏览器的报错文案是
-                    // 「Cannot parse passkey key」——与真正的解析失败**表象相同**，极易误诊为
-                    // 解析器 bug（此前即误判在此）。列出不可用记录本身也是 UX 缺陷：
-                    // 用户会看到一条永远点不通的通行密钥。
-                    if (!isUsablePasskey(cred)) continue
-                    if (cred.rpId.equals(rpId, ignoreCase = true) &&
-                        (allowed.isEmpty() || allowed.any { idMatches(cred.credentialId, it) })
-                    ) {
-                        result += PasskeyMatch(vaultId, item.id, cred, item.title)
+                    total++
+                    // ⚠️ **必须过滤不可用记录**（对齐 Bastion `PasskeyCredentialDiscoveryPolicy
+                    // .isUsable`）。判断口径见 [isUsablePasskey]：只查元数据完整性。
+                    // 列出不可用记录本身也是 UX 缺陷：用户会看到一条永远点不通的通行密钥。
+                    if (!isUsablePasskey(cred)) {
+                        unusable++
+                        continue
                     }
+                    // rpId 归一化比较：**两侧都要归一化**。库里存的值可能带末尾点 / 大小写
+                    // 不一 / 是 Unicode 域名，而请求侧是 punycode ASCII——朴素 `equals` 会漏配。
+                    // 对齐 Bastion `PasskeyRpIdNormalizer.isEquivalent`。
+                    if (!isSameRpId(cred.rpId, rpId)) {
+                        rpIdMiss++
+                        continue
+                    }
+                    rpMatched += PasskeyMatch(vaultId, item.id, cred, item.title)
                 }
             }
         }
+
+        // allowCredentials 过滤。**关键：严格过滤后为空要回退到「不过滤」**。
+        //
+        // 对齐 Bastion `BastionCredentialProviderService.resolvePasskeys`：
+        // ```
+        // if (filteredPasskeys.isEmpty() && allowedCredentialIds.isNotEmpty()) {
+        //     resolvePasskeys(..., strictAllowCredentials = false)   // ← 回退重查
+        // }
+        // ```
+        // 理由：`allowCredentials` 是 RP 的**提示**而非授权门（规范允许空）。用户若已在
+        // 「另一台设备 / 另一个客户端」注册过该 RP 的 passkey，本地这份 credentialId 与
+        // RP 下发的列表对不上——严格过滤会把**唯一可用的候选也删掉**，表现为候选列表为空。
+        // 回退到不严格过滤，至少让用户看到并尝试；真用不了的条目会在签名阶段失败，
+        // 但那比「什么都不弹」可诊断得多。
+        val result = if (allowed.isEmpty()) {
+            rpMatched
+        } else {
+            val strict = rpMatched.filter { m -> allowed.any { idMatches(m.credential.credentialId, it) } }
+            if (strict.isNotEmpty()) {
+                strict
+            } else {
+                allowedMiss = rpMatched.size
+                log("GET resolve allowCredentials mismatch (allowed=${allowed.size}) → fallback to rpId-only")
+                rpMatched
+            }
+        }
+        log(
+            "GET resolve rpId=$rpId allowed=${allowed.size} " +
+                "total=$total unusable=$unusable rpIdMiss=$rpIdMiss allowedMiss=$allowedMiss " +
+                "matched=${result.size}",
+        )
+        if (result.isEmpty() && total > 0) {
+            // 有记录却筛不出候选：把库里实际存的 rpId 打出来（只打域名，非敏感），
+            // 常见于「库里存了 www.github.com 而请求是 github.com」这类子域口径差。
+            val storedRpIds = mutableSetOf<String>()
+            for (vaultId in unlocked) {
+                val items = runCatching { itemRepository.observeItems(vaultId).first() }.getOrDefault(emptyList())
+                items.forEach { it.fido2Credentials.forEach { c -> storedRpIds += c.rpId } }
+            }
+            log("GET resolve EMPTY: storedRpIds=${storedRpIds.joinToString(",")}")
+        }
         return result
     }
+
+    /**
+     * RP ID 归一化（对齐 Bastion `PasskeyRpIdNormalizer.normalize`）。
+     *
+     * 步骤：`trim` → 去尾部根点 `.` → 小写 → Unicode 域名转 punycode（`IDN.toASCII`）。
+     *
+     * 为什么必须做：RP 请求里的 `rpId` 是 **punycode ASCII**（如 `xn--fiq228c.cn`），
+     * 而库里可能存着注册时的 Unicode 形态（如 `中文.cn`）或带大小写差异的形态。
+     * 不归一化 ⇒ 字符串不等 ⇒ 候选为空。
+     *
+     * `IDN.toASCII` 失败（非法域名）时回退到小写形态，宁可多比不可漏比。
+     */
+    private fun normalizeRpId(raw: String): String {
+        val trimmed = raw.trim().trimEnd('.')
+        if (trimmed.isEmpty()) return ""
+        val lower = trimmed.lowercase(java.util.Locale.ROOT)
+        return runCatching { java.net.IDN.toASCII(lower, java.net.IDN.USE_STD3_ASCII_RULES) }
+            .getOrDefault(lower)
+    }
+
+    /** 归一化后比较两个 rpId 是否等价。 */
+    private fun isSameRpId(a: String, b: String): Boolean =
+        normalizeRpId(a) == normalizeRpId(b)
 
     /**
      * 通行密钥可用性判定（候选展示阶段）。
@@ -394,6 +471,11 @@ class VaultixCredentialProviderService : CredentialProviderService() {
      * 如果用户点了一条没有 keyValue 的候选，会走到 Activity 的失败分支并回
      * `GetCredentialUnknownException`——虽然点不通，但至少用户**能看到候选**，
      * 而不是什么都不弹。
+     *
+     * ⚠️ 与 Bastion 的**已知差异**：Bastion `PasskeyCredentialDiscoveryPolicy.isUsable`
+     * 要求 `privateKeyAlias.isNotBlank()`（其私钥存 AndroidKeyStore，别名即签名能力）。
+     * Vaultix 的私钥存库内 `keyValue`，而上游 Bitwarden 服务端**不存 keyValue**，
+     * 故不能照抄该条件——否则同步来的 passkey 会被整体过滤掉（真机实证）。
      */
     private fun isUsablePasskey(cred: VaultFido2Credential): Boolean =
         cred.credentialId.isNotBlank() &&

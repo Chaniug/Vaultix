@@ -1,53 +1,128 @@
 # 下一步任务清单
 
-> 更新于 2026-09-11（第二十八轮）。**通行密钥「验签失败」根因已定位并修复：authenticatorData
-> 缺 BE/BS 备份语义标志位。**
+> 更新于 2026-09-11（第二十九轮）。**通行密钥「找不到候选 / 列表为空」根因已定位并修复：
+> 未 trim + rpId 未归一化 + allowCredentials 无回退（全在 discovery 链）。
+> 「解密残留填充」经真实 JCE 实测后被降级为纵深防御，非根因。**
+> 同时**撤回**第二十八轮的两个错误结论（见下方「⚠️ 结论更正」）。
 > 审计报告 `Docs/progress/audit/bitwarden-alignment.md`；对齐评估
 > `Docs/progress/bastion-parity-assessment.md`（**注意已过时**）。
 > 状态：`TODO` / `DOING` / `DONE` / `BLOCKED`
 
-## ⚠️ 必读：已注册的通行密钥需要重新注册
+## ⚠️ 结论更正（2026-09-11，第二十九轮）
 
-本轮改了 `authenticatorData` 的 BE/BS 标志位（`0x05→0x1D` / `0x45→0x5D`）。
-**RP 记录的是「注册时」的 BE/BS 语义，改代码救不了旧凭证。**
-用户需在报「验证失败」的网站上**删除旧通行密钥后重新创建**，新凭证才会生效。
+### 更正一：「已注册的通行密钥需要重新注册」——**错误，已撤回**
 
-## 已完成（第二十八轮 2026-09-11 · 通行密钥验签失败根因，`8afac3d`）
+第二十八轮曾断言「RP 记录的是注册时的 BE/BS 语义，改代码救不了旧凭证，必须重新注册」。
+**这个结论是错的。** 查证 WebAuthn 规范与多家 RP 文档后确认：
 
-> 用户报「Edge 用通行密钥登录报验证失败」。定位后确认症状为
-> **指纹验证通过 + 所有网站失败 + 报「验签失败」**，三者合起来只指向签名数据本身。
+> **BE（Backup Eligible）与 BS（Backup State）是「注册期存档字段」。**
+> RP 在**断言（登录）阶段不做 BE/BS 校验**。RP 的 login 校验清单只有：
+> 解码 clientDataJSON → 校验 `type==="webauthn.get"` / challenge / origin →
+> 按 credentialId 取公钥 → `SHA-256(rpId)` 匹配 rpIdHash → UP 已置（按策略再查 UV）→
+> 验签（`authData ‖ SHA-256(clientDataJSON)`）→ `new signCount > stored signCount`。
 
-- [x] **根因**：`WebAuthn.buildAuthenticatorData` 只设 UP(0x01)+UV(0x04)，
-      **缺 BE(0x08)/BS(0x10)**。Vaultix 私钥存库并随服务端同步 ⇒ 语义上是
-      **可备份凭证**，必须声明 BE（可备份）+ BS（当前处于备份状态）——
-      这是 Bitwarden / 1Password / iCloud Keychain 的标准声明。缺失时 RP 校验库
-      会因语义不符拒绝整条断言。
-- [x] **修复**（对齐 Bastion：两边基线都是 `0x1D`，注册额外加 AT）：
-      断言 `0x05` → `0x1D`；注册 `0x45` → `0x5D`。
-      **注册与断言的 BE/BS 基线一致是关键**。
-- [x] **signCount** 硬编码 0 → 读库非零值原样发送**不递增**（Keyguard 口径）。
-      递增必然跨设备分叉（A 签 6、B 恢复后仍签 5 → RP 判计数回退拒签）。
-- [x] **响应 JSON** 补 `clientExtensionResults:{}`（部分 RP 解析器直接读该键）+
-      `authenticatorAttachment:"platform"`。
-- [x] **实测排除三个疑似项**（写 JVM 压测脚本，不靠推理）：
-      ① 200 组随机 P-256 密钥 `base64Url(PKCS8)→decode→parseEcPrivateKey` 重建签名
-      **100% 被原公钥验签通过**；② PKCS8 分支顺序正确（67 字节不会被误当标量）；
-      ③ clientDataHash 反选能命中 Chromium 含 crossOrigin 的原文。
-- [x] 测试：更新 flags 断言（`0x01`→`0x19`），新增 BE/BS 回归测试
-      （断言 `0x1D` / 注册 `0x5D` / 两侧基线一致）与响应 JSON 字段测试。
+因此 **BE/BS 缺失根本不可能导致「登录验签失败」**，也**不存在「旧凭证必须重注册」**。
+用户的质疑是对的：「通行密钥为什么要新建呢，这个不是存好的就不动的吗」。
 
-⏳ **真机待验证（装 `dev-8afac3d` 的包）**：
-① **先删除网站上的旧通行密钥**，然后在 Edge 里重新创建一个；
-② 用新凭证登录 → 应通过验签（**核心闭环**）；
-③ 确认修复前注册的旧凭证仍失败属预期（见上方「必读」）；
-④ 顺带确认设置页「已保存的通行密钥」数量与实际一致。
+**保留 BE/BS 置位的理由变更为：语义正确性**（Vaultix 私钥随库同步，确实是可备份凭证），
+**不是**为了修某个登录 bug。相关 KDoc / 注释 / 测试说明均已改写。
 
-**CI 与产物（已验证）**：run `34549342318`（commit `8afac3d`）**23/23 步全绿**
+### 更正二：「signCount 改读库」——**错误，已回退**
+
+第二十八轮把断言侧的 `counter` 从硬编码 0 改成「读库里的值原样发送」。**这是引入新 bug。**
+
+规范对计数器的校验是**严格大于**（`new > stored`）。Bitwarden 官方客户端每签一次会**递增并
+写回服务端**，同步下来的 `counter` 就是**非零**（`CipherMapper` 第 444 行实证）。原样发送且
+不递增 ⇒ **第二次登录发出的值与上次相同** ⇒ `new > stored` 不成立 ⇒ RP 判为**重放**并拒绝。
+
+**已回退为恒 0**（对齐 Bastion `PasskeyAuthActivity` 的 `newSignCount = 0L`）：0 表示
+「本 authenticator 不实现计数器」，规范 §6.1.1 明确允许，RP 据此跳过单调性校验。
+Bitwarden / 1Password / iCloud Keychain 这类**同步型 passkey 全部走这条路**。
+
+## 第二十九轮 2026-09-11 · 通行密钥「列表为空」根因
+
+> 用户报：BE/BS 那次改动之后，**通行密钥又找不到了，候选列表为空、没有任何候选**。
+> 要求对照 Keyguard / Bastion / Bitwarden 三份实现仔细排查后修复。
+
+### 已确认（实测排除法）
+
+- [x] **不是 `8afac3d` 引入的**：`git show 8afac3d --name-only` 只有 3 个文件
+      （`PasskeyGetActivity` / `WebAuthn` / `WebAuthnTest`），**完全没碰发现（discovery）逻辑**。
+      `VaultixCredentialProviderService` 最后一次变更是更早的 `fec4032`。
+      「候选为空」与那次改动**无因果关系**。
+
+### 根因（对照三家实现确认；①为纵深防御，②③④是实际根因）
+
+- [x] **① 解密残留填充（⚠️ 经实测后降级为「纵深防御」，非根因）**：
+      曾推断 Bitwarden 服务端用 ISO10126 填充、Vaultix 用 `PKCS5Padding` 解密导致残留。
+      **用真实 JCE 实测后该推断不成立**：
+      - 标准 SunJCE 的 `PKCS5Padding` 对 ISO10126 密文**直接抛 `BadPaddingException`**，
+        不会静默泄漏字节；
+      - 反向验证：ISO10126 末字节同样是填充长度，用宽松 PKCS5 解析 **2000/2000 完全正确**；
+      - 且 `decrypt` 本就以 `PKCS5Padding` + `doFinal` 正确解填充。
+      ⇒ **不是根因**。但保留 `VaultixCrypto.removePkcs7PaddingIfStrict` 作为**纵深防御**
+      （仅在严格 PKCS#7 成立时剥离，避免误伤），并记录 `trim()` 对 `0x01..0x10`
+      的兜底作用（已验证 16/16 可去除）。
+      **教训：一次 JCE 实验就能否掉的假设，不要写进根因。**
+- [x] **② 未 trim（实际根因）**：服务端多处字段带前导/尾随空白，官方客户端读出来一律
+      `trim()`；Vaultix 的 `CipherMapper.mapFido2` **一个字段都没 trim**。
+      而 `rpId` 是按**精确字符串**比对的 —— 不 trim 直接导致全量失配。
+      修复：`mapFido2` 全字段 `.trim()`（对齐官方语义；`counter`/`discoverable` 走
+      `toLongOrNull`/`toBooleanStrictOrNull`，不 trim 会**静默回落默认值**）。
+      同时 `decryptToString` 也加 `trim()` 作为全局兜底。
+- [x] **③ rpId 未归一化（实际根因）**：此前是 `cred.rpId.equals(rpId, ignoreCase = true)`，
+      只能处理大小写；**末尾根点 `.` / Unicode 域名（punycode）** 一律失配。
+      对照 Bastion `PasskeyRpIdNormalizer`：`trim` → `trimEnd('.')` → `lowercase(Locale.ROOT)`
+      → `IDN.toASCII(..., USE_STD3_ASCII_RULES)`，且 **`isEquivalent` 两侧都归一化**。
+      修复：Vaultix 新增 `normalizeRpId` / `isSameRpId`，语义与 Bastion 逐条对齐。
+- [x] **④ allowCredentials 严格过滤无回退（实际根因）**：RP 下发的 `allowCredentials` 是
+      **提示**而非授权门。用户若在**其它设备/客户端**注册过该 RP 的 passkey，本地
+      credentialId 与列表对不上 —— 严格过滤会把**唯一可用候选也删掉**。
+      对照 Bastion `BastionCredentialProviderService.resolvePasskeys`：
+      `if (filtered.isEmpty() && allowed.isNotEmpty()) resolve(..., strictAllowCredentials = false)`。
+      修复：Vaultix 照抄该回退 —— 严格匹配为空时回退到「只按 rpId」并打日志。
+
+### 对照结论（Keyguard / Bitwarden 的共识）
+
+三家在**锁定态**的处理完全一致，Vaultix **已对齐**，不是本次根因（已核实）：
+
+| 维度 | Bitwarden | Keyguard | Vaultix |
+|---|---|---|---|
+| 全库锁定 | 只返回 `authenticationActions`（unlock），**不带** credentialEntries，直接 return | `MasterSession.Empty` → 只返回 unlock 的 `AuthenticationAction` | ✅ 同（`unlocked.isEmpty()` 分支） |
+| 通道互斥 | if/return 互斥 | 同 | ✅ 同（锁定即 return） |
+| 部分锁定 | —（单账号） | — | ✅ 凭据 + unlock 动作并存 |
+| 补偿重试 | **无** | **无**（仅 UI 侧 800ms 最小处理时长） | 无（对照后确认**不需要**） |
+
+> Keyguard `PasskeyTargetCheck` 同样是**严格匹配无回退**；Bitwarden 的
+> `filterAllowedCredentialsIfNecessary` 在列表为空时不过滤。Vaultix 采用
+> 「Bastion 式回退」，比两家都更宽容，但方向是「宁可多列，不可漏列」，正确。
+
+### 测试
+
+- [x] `WebAuthnTest`：新增 **signCount 恒 0 回归锁**（断言流程末 4 字节必须 `{0,0,0,0}`，
+      大端解析同 0）。
+- [x] `VaultixCryptoTest`：新增 4 条回归测试 —— ISO10126 残留填充剥离 / 严格 PKCS#7 剥离 /
+      **非严格填充必须原样返回**（防误伤）/ `decryptToString` 必须 trim。
+
+⏳ **真机待验证**：装新包 → 在 Edge 触发通行密钥登录 → **候选列表应出现条目**；
+若仍为空，`logcat` 抓 `VaultixAutofill` tag 的
+`GET resolve rpId=... total=... unusable=... rpIdMiss=... allowedMiss=... matched=...`
+逐级计数（本轮已埋点），四个计数一出来即可判定卡在哪一级。
+
+## 已完成（第二十八轮 2026-09-11 · `8afac3d`）
+
+> ⚠️ 本轮的两个结论已被上方「结论更正」修正，此处保留作历史记录。
+
+- [x] 断言/注册的 BE/BS 置位（`0x05→0x1D` / `0x45→0x5D`）——**保留**（语义正确性）。
+- [x] 响应 JSON 补 `clientExtensionResults:{}` + `authenticatorAttachment:"platform"` ——**保留**。
+- [x] 实测排除三个疑似项（200 组随机 P-256 密钥重建签名 100% 验签通过等）——**结论有效**。
+- [x] ~~signCount 改读库~~ → **已回退为恒 0**（见「更正二」）。
+- [x] ~~「旧凭证必须重新注册」~~ → **已撤回**（见「更正一」）。
+
+**CI 与产物（第二十八轮已验证）**：run `34549342318`（commit `8afac3d`）**23/23 步全绿**
 （checkout / JDK17 / Gradle / detekt / 编码门禁 / keystore 解码 / Build Debug APK /
 单测 / 发布 preview Release；`lint` 按配置 skipped）。产物 `app-full-debug.apk`
-**31,118,791 字节**，`sha256=f2d134e9ca7a09c9a935a76ab8e39562728346733019259cd4eeb3e405feac76`，
-已确认 dex 中含 `clientExtensionResults` / `authenticatorAttachment` / `FLAG_BACKUP`
-常量 —— 即修复确实打进了这个包。
+**31,118,791 字节**，`sha256=f2d134e9ca7a09c9a935a76ab8e39562728346733019259cd4eeb3e405feac76`。
 
 > **沙箱环境备注（长期）**：Release 资产现已走 `release-assets.githubusercontent.com`，
 > 沙箱对该域名的 fake-IP 解析（`198.18.0.22`）会返回 404/401。已在 `/etc/hosts` 固定

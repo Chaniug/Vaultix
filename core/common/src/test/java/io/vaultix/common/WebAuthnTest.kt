@@ -128,11 +128,41 @@ class WebAuthnTest {
     }
 
     /**
-     * BE/BS 回归（2026-09-11）：BE(0x08) + BS(0x10) 必须**始终**置位。
+     * **signCount 恒 0 回归锁（2026-09-11）**：断言（登录）流程必须发出 counter=0。
      *
-     * 根因背景：Vaultix 私钥存库并随服务端同步，语义上是「可备份凭证」。此前只在
-     * 注册/断言设 UP+UV，缺 BE/BS —— 真机表现为 Edge 里指纹验证通过、所有网站报
-     * 「验证失败」（RP 侧 BE/BS 语义与注册时不符）。
+     * 为什么这条锁是必要的：WebAuthn 规范对计数器的校验是**严格大于**（`new > stored`）。
+     * 「同步型 passkey」（Bitwarden / 1Password / iCloud Keychain）一律返回 0，表示
+     * 「本 authenticator 不实现计数器」，RP 据此跳过单调性校验（§6.1.1）。
+     *
+     * 反例（已回退的错误改动）：读库里的 counter 原样发出。Bitwarden 官方客户端每签一次
+     * 会递增并写回服务端，同步下来就是非零值；原样发送且不递增 ⇒ 第二次登录发出的值与
+     * 上次**相同** ⇒ `new > stored` 不成立 ⇒ RP 判重放并拒绝整条断言。
+     * 见 `CipherMapper` 中 `counter = decryptToString(d.counter, ...).toLongOrNull() ?: 0`。
+     */
+    @Test
+    fun `assertion authenticatorData always carries zero signCount`() {
+        // 即使库中同步来一个非零 counter，调用方也必须传 0（此处用 0 模拟正确调用）
+        val ad = WebAuthn.buildAuthenticatorData("example.com", true, true, 0, false)
+        assertThat(ad.size).isEqualTo(37)
+        // 末 4 字节（字节 33..36）必须全 0，大端
+        assertThat(ad.copyOfRange(33, 37)).isEqualTo(byteArrayOf(0, 0, 0, 0))
+        // 大端解析同样为 0
+        val count = ((ad[33].toInt() and 0xff) shl 24) or
+            ((ad[34].toInt() and 0xff) shl 16) or
+            ((ad[35].toInt() and 0xff) shl 8) or
+            (ad[36].toInt() and 0xff)
+        assertThat(count).isEqualTo(0)
+    }
+
+    /**
+     * BE/BS 置位（语义正确性，2026-09-11）：BE(0x08) + BS(0x10) 应**始终**置位。
+     *
+     * 背景：Vaultix 私钥存库并随服务端同步，语义上是「可备份凭证」，故 BE/BS 均应置位
+     * （对齐 Bastion / Bitwarden / 1Password / iCloud Keychain）。
+     *
+     * ⚠️ 这**不是**某个登录 bug 的修复：BE/BS 是注册期存档字段，RP 在断言（登录）
+     * 阶段不做 BE/BS 校验（login 校验项只有 rpIdHash / UP / UV / 签名 / signCount）。
+     * 断言侧与登录成败相关的是 **signCount 恒 0**，见 [PasskeyGetActivity]。
      */
     @Test
     fun `authenticatorData always sets backup eligible and backup state flags`() {
@@ -148,7 +178,7 @@ class WebAuthnTest {
         )
         assertThat(attestation[32].toInt() and 0xff).isEqualTo(0x5D)
 
-        // 注册与断言的 BE/BS 基线必须一致——这是本次根因的核心
+        // 注册与断言的 BE/BS 基线一致（BE 终身不变，BS 本实现恒真）
         for (adm in listOf(assertion, attestation)) {
             assertThat(adm[32].toInt() and 0x08).isEqualTo(0x08)
             assertThat(adm[32].toInt() and 0x10).isEqualTo(0x10)

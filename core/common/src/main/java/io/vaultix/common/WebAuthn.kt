@@ -370,18 +370,22 @@ object WebAuthn {
     /**
      * 构造 authenticatorData。
      *
-     * ⚠️ **BE / BS 两个标志位必须置位，且注册与断言必须一致**（根因修复 2026-09-11）。
+     * **BE / BS 置位**（对齐 Bastion / Bitwarden / 1Password / iCloud Keychain）：
      *
      * `BE`（Backup Eligibility, 0x08）声明「本凭证是否**可**被备份」；
      * `BS`（Backup State, 0x10）声明「本凭证**当前**是否处于备份状态」。
-     * Vaultix 的通行密钥私钥存在库中并随 Bitwarden 服务端同步，语义上**必须**两者置位
-     * ——这正是 Bitwarden / 1Password / iCloud Keychain 这类「可同步通行密钥」的标准声明。
+     * Vaultix 的通行密钥私钥存于库中并随 Bitwarden 服务端同步，语义上属于
+     * 「可同步通行密钥」，两者都应置位。二者在凭证生命周期内**保持一致**：
+     * BE 终身不变，BS 可变（本实现恒真）。
      *
-     * **不置位的后果**（真机实证：Edge 里指纹验证通过、所有网站均报「验证失败」）：
-     * RP 在**注册**阶段按「不可备份的硬件凭证」记录该 credential，断言阶段收到一份
-     * 声明「可备份」语义缺失的数据，部分 RP 的校验库会因 BE/BS 与注册时不符而拒绝
-     * 整条断言。更稳妥的做法是注册与断言用同一套基线（对齐 Bastion
-     * `PasskeyCreateActivity` / `PasskeyAuthActivity`：两边都是 `0x1D`，注册额外加 AT）。
+     * ⚠️ **注意因果边界（2026-09-11 修正）**：BE/BS 是**注册期存档字段**，
+     * 服务端在断言（登录）阶段**不做** BE/BS 校验——RPs 的 login 校验清单里
+     * 只有 `rpIdHash` / `UP` / （按策略的）`UV` / 签名 / `signCount > stored`。
+     * 因此**不能**把「登录时验签失败」归因于 BE/BS 缺失。本处置位的原因是
+     * **语义正确**（Vaultix 的凭证确实可备份），不是为了修某个登录 bug。
+     *
+     * 与登录成败真正相关的是 [counter]：RP 对计数器做 `new > stored` 的**严格大于**
+     * 校验，详见 [io.vaultix.vaultix.passkey.PasskeyGetActivity] 的调用点注释。
      *
      * @param withAttested 创建流程（AT 标志）为 true，需追加 aagid + credentialId + COSE 公钥。
      */
@@ -398,7 +402,8 @@ object WebAuthn {
         var flags = 0
         if (userPresent) flags = flags or FLAG_USER_PRESENT
         if (userVerified) flags = flags or FLAG_USER_VERIFIED
-        // BE/BS 恒置位：私钥随库同步，属「可备份凭证」。注册与断言必须同口径。
+        // BE/BS 置位：私钥随库同步，属「可备份凭证」（语义正确性，非登录 bug 的修复）。
+        // BE 终身不变、BS 可变；本实现两者恒置位。
         flags = flags or FLAG_BACKUP_ELIGIBLE
         flags = flags or FLAG_BACKUP_STATE
         if (withAttested) flags = flags or FLAG_ATTESTED

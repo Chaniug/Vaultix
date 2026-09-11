@@ -430,19 +430,27 @@ class CipherMapper @Inject constructor(
         accountKey: SymmetricCryptoKey,
         itemKey: SymmetricCryptoKey?,
     ): List<VaultFido2Credential> = list.map { d ->
+        // ⚠️ **每个字段都必须 `.trim()`**（2026-09-11 实证，通行密钥「找不到候选」的直接根因）：
+        //  - `rpId` 按**精确字符串**与请求比对，多一个前导空格 / 尾随空白即全部失配；
+        //  - `credentialId` 用于与 `allowCredentials` 逐字节比对，同理；
+        //  - `counter` / `discoverable` 走 `toLongOrNull` / `toBooleanStrictOrNull`，
+        //    空白会让解析**静默回落到默认值**（counter=0 / discoverable=true），
+        //    默认值本身安全，但会把真实数据悄悄改写。
+        // 官方 Bitwarden 客户端读取这些字段时一律 `.trim()`，此处对齐。
         VaultFido2Credential(
-            credentialId = decryptToString(d.credentialId, accountKey, itemKey),
-            rpId = decryptToString(d.rpId, accountKey, itemKey),
-            rpName = decryptToString(d.rpName, accountKey, itemKey),
-            userName = decryptToString(d.userName, accountKey, itemKey),
-            userDisplayName = decryptToString(d.userDisplayName, accountKey, itemKey),
-            userHandle = decryptToString(d.userHandle, accountKey, itemKey).takeIf { it.isNotBlank() },
-            keyAlgorithm = decryptToString(d.keyAlgorithm, accountKey, itemKey).takeIf { it.isNotBlank() },
-            keyType = decryptToString(d.keyType, accountKey, itemKey).takeIf { it.isNotBlank() },
-            keyCurve = decryptToString(d.keyCurve, accountKey, itemKey).takeIf { it.isNotBlank() },
-            keyValue = decryptToString(d.keyValue, accountKey, itemKey).takeIf { it.isNotBlank() },
-            counter = decryptToString(d.counter, accountKey, itemKey).toLongOrNull() ?: 0,
+            credentialId = decryptToString(d.credentialId, accountKey, itemKey).trim(),
+            rpId = decryptToString(d.rpId, accountKey, itemKey).trim(),
+            rpName = decryptToString(d.rpName, accountKey, itemKey).trim(),
+            userName = decryptToString(d.userName, accountKey, itemKey).trim(),
+            userDisplayName = decryptToString(d.userDisplayName, accountKey, itemKey).trim(),
+            userHandle = decryptToString(d.userHandle, accountKey, itemKey).trim().takeIf { it.isNotBlank() },
+            keyAlgorithm = decryptToString(d.keyAlgorithm, accountKey, itemKey).trim().takeIf { it.isNotBlank() },
+            keyType = decryptToString(d.keyType, accountKey, itemKey).trim().takeIf { it.isNotBlank() },
+            keyCurve = decryptToString(d.keyCurve, accountKey, itemKey).trim().takeIf { it.isNotBlank() },
+            keyValue = decryptToString(d.keyValue, accountKey, itemKey).trim().takeIf { it.isNotBlank() },
+            counter = decryptToString(d.counter, accountKey, itemKey).trim().toLongOrNull() ?: 0,
             discoverable = decryptToString(d.discoverable, accountKey, itemKey)
+                .trim()
                 .takeIf { it.isNotBlank() }
                 ?.toBooleanStrictOrNull()
                 ?: true,

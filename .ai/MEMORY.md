@@ -704,7 +704,12 @@ Vaultix 原把 linkedId 当顺序编号（1/2/3/4），**官方是分段编码**
 - **不采纳 Bastion 的「通行密钥和密码」文案**：与其 `credential_provider_config.xml`
   里「CP 不处理密码、声明了会绕过 Autofill 框架」的注释自相矛盾。
 
-## 通行密钥「验签失败」根因：BE/BS 标志位（2026-09-11，`8afac3d`）
+## ~~通行密钥「验签失败」根因：BE/BS 标志位（2026-09-11，`8afac3d`）~~
+> ⚠️ **本节两条结论已被更正，见文末「第二十九轮」章节。**
+> ① BE/BS 是**注册期存档字段**，RP 在**断言/登录阶段不做校验** ⇒
+>    BE/BS 缺失**不可能**导致验签失败；
+> ② 因此也**不存在「旧 passkey 必须重新注册」**——该说法是错的，已撤回。
+> ③ `signCount` 必须**恒 0**，「读库原样发送」会触发 RP 的重放拒绝，已回退。
 - **症状三特征 = 诊断公式**：指纹验证通过 + 所有网站都失败 + 报「验签失败」。
   这三条合起来只指向一件事：**签名数据的密码学校验不通过**。
   → 立刻停止排查候选展示 / CP 通道 / 生物识别，直接查
@@ -724,3 +729,41 @@ Vaultix 原把 linkedId 当顺序编号（1/2/3/4），**官方是分段编码**
   `base64Url(PKCS8)→decode→parseEcPrivateKey` 重建签名 100% 验签通过，从而**排除了**
   密钥编解码、PKCS8 分支顺序、clientDataHash 反选三个疑似项。
   **能在本地跑的实验就不要靠推理排除**——一轮脚本胜过三轮 CI 试错。
+
+
+## 通行密钥「候选列表为空」根因（2026-09-11，第二十九轮，P0）
+- **先做时间/因果切割**：`git show 8afac3d --name-only` 只有 3 个文件，
+  **完全没碰 discovery** ⇒ 「候选为空」与那次改动**无因果关系**。
+  **改动先后 ≠ 因果**；用户报「你改了 X 之后 Y 坏了」时，第一步永远是查 diff 范围。
+- **真根因在 discovery 链上（②③④；①经实测降级为纵深防御）**（对照 Keyguard / Bastion / Bitwarden）：
+  1. ~~解密残留填充~~ **（经真实 JCE 实测否掉 → 降级为纵深防御，非根因）**：曾推断服务端
+     用 ISO10126 而客户端用 PKCS5「不报错也不剥离」。实测：标准 SunJCE 的 `PKCS5Padding`
+     对 ISO10126 密文**直接抛 `BadPaddingException`**；反向用宽松 PKCS5 解析 ISO10126
+     **2000/2000 完全正确**；且 `decrypt` 本就以 `doFinal` 正确解填充。保留
+     `removePkcs7PaddingIfStrict` 仅作纵深防御。
+     **教训：一次 JCE 实验就能否掉的假设，不要写进根因。**
+  2. **未 trim（实际根因，映射层）**：官方客户端读字段一律 `trim()`，Vaultix `mapFido2`
+     一个都没做；而 `rpId` 按精确字符串比对 ⇒ 直接全量失配。修复：全字段 `.trim()` +
+     `decryptToString` 也 `trim()`。
+     ⚠️ `counter`/`discoverable` 走 `toLongOrNull`/`toBooleanStrictOrNull`，
+     不 trim 会**静默回落默认值**。
+     💡 副产品：Java `trim()` 去所有 `<= U+0020` 字符，而 PKCS#7 填充字节 `0x01..0x10`
+     全在此范围 ⇒ `trim()` 本身就是填充残留的兜底（已验证 16/16）。
+  3. **rpId 未归一化（匹配层）**：`equals(ignoreCase=true)` 只能处理大小写；
+     **末尾根点 / Unicode 域名（punycode）**会失配。对齐 Bastion `PasskeyRpIdNormalizer`：
+     `trim→trimEnd('.')→lowercase(Locale.ROOT)→IDN.toASCII(lower, USE_STD3_ASCII_RULES)`，
+     **两侧都归一化**。
+  4. **allowCredentials 严格过滤无回退（策略层）**：`allowCredentials` 是**提示**不是授权门。
+     用户在**其它设备**注册过该 RP 时，本地 credentialId 对不上 ⇒ 唯一候选被删 ⇒ 列表空。
+     照抄 Bastion：**严格匹配为空 → 回退到「只按 rpId」**并打日志。
+- **三家共识（已核实）**：全库锁定时 **都只返回 `authenticationActions`(unlock)、
+  不带 credentialEntries、直接 return**（Bitwarden `CredentialProviderProcessorImpl` /
+  Keyguard `MasterSession.Empty`）。Vaultix **已对齐**，不是根因。
+  三家**都没有**「数据库更新后延迟重试」的补偿逻辑 ⇒ Vaultix 也不需要加。
+- **Keyguard 与 Bitwarden 都是严格匹配、无 fallback**；Vaultix 采用 **Bastion 式回退**，
+  更宽容。方向正确：**宁可多列，不可漏列**。
+- **铁律：验签失败不要在注册期字段上找原因。** 断言阶段数据只有
+  `authenticatorData` / `clientDataJSON` / `signature` + RP 侧的公钥与上次 `signCount`。
+- **铁律：「列表为空」必须在「候选怎么被筛出来」这条链上逐级量化。**
+  本轮埋点 `total/unusable/rpIdMiss/allowedMiss/matched` + `storedRpIds`，
+  现场一眼看出卡在哪级 —— 比任何推理都可靠。
