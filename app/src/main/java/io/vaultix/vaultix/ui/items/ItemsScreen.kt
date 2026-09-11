@@ -19,7 +19,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.QrCode2
@@ -33,7 +32,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeTopAppBar
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -62,6 +60,7 @@ import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.ItemFormDialog
+import io.vaultix.vaultix.ui.common.VaultixSearchTopAppBar
 import io.vaultix.vaultix.ui.common.itemTypeLabelRes
 
 /**
@@ -110,44 +109,52 @@ fun ItemsScreen(
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
-            Column {
-                LargeTopAppBar(
-                    title = {
-                        VaultTitle(
-                            name = state.vault?.name.orEmpty(),
-                            account = state.vault?.account,
-                        )
+            if (searchActive) {
+                VaultixSearchTopAppBar(
+                    searchTerm = state.query,
+                    placeholder = stringResource(R.string.items_search_hint),
+                    onSearchTermChange = viewModel::setQuery,
+                    onClose = {
+                        searchActive = false
+                        viewModel.setQuery("")
                     },
-                    navigationIcon = {
-                        IconButton(onClick = onBack) {
-                            Icon(
-                                Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = stringResource(R.string.action_back),
+                    clearIconContentDescription = stringResource(R.string.items_search_clear),
+                    scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior(),
+                )
+            } else {
+                Column {
+                    LargeTopAppBar(
+                        title = {
+                            VaultTitle(
+                                name = state.vault?.name.orEmpty(),
+                                account = state.vault?.account,
                             )
-                        }
-                    },
-                    actions = {
-                        ItemsActions(
-                            onToggleSearch = {
-                                searchActive = !searchActive
-                                if (!searchActive) viewModel.setQuery("")
-                            },
-                            onOpenTotp = onOpenTotp,
-                            onOpenTrash = onOpenTrash,
-                            onRetrySync = viewModel::retrySync,
-                            onLock = { viewModel.lockNow(onLocked) },
-                        )
-                    },
-                    scrollBehavior = scrollBehavior,
-                )
-                if (searchActive) {
-                    SearchField(query = state.query, onQueryChange = viewModel::setQuery)
+                        },
+                        navigationIcon = {
+                            IconButton(onClick = onBack) {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.ArrowBack,
+                                    contentDescription = stringResource(R.string.action_back),
+                                )
+                            }
+                        },
+                        actions = {
+                            ItemsActions(
+                                onToggleSearch = { searchActive = true },
+                                onOpenTotp = onOpenTotp,
+                                onOpenTrash = onOpenTrash,
+                                onRetrySync = viewModel::retrySync,
+                                onLock = { viewModel.lockNow(onLocked) },
+                            )
+                        },
+                        scrollBehavior = scrollBehavior,
+                    )
+                    SyncNoteBanner(
+                        note = state.syncNote,
+                        onDismiss = viewModel::dismissSyncNote,
+                        onRetry = viewModel::retrySync,
+                    )
                 }
-                SyncNoteBanner(
-                    note = state.syncNote,
-                    onDismiss = viewModel::dismissSyncNote,
-                    onRetry = viewModel::retrySync,
-                )
             }
         },
         floatingActionButton = {
@@ -258,31 +265,6 @@ private fun ItemsActions(
             contentDescription = stringResource(R.string.items_lock),
         )
     }
-}
-
-/** 搜索框（顶栏展开态）：有输入时右侧出现清除按钮。 */
-@Composable
-private fun SearchField(query: String, onQueryChange: (String) -> Unit) {
-    OutlinedTextField(
-        value = query,
-        onValueChange = onQueryChange,
-        placeholder = { Text(stringResource(R.string.items_search_hint)) },
-        singleLine = true,
-        leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
-        trailingIcon = {
-            if (query.isNotEmpty()) {
-                IconButton(onClick = { onQueryChange("") }) {
-                    Icon(
-                        Icons.Filled.Close,
-                        contentDescription = stringResource(R.string.items_search_clear),
-                    )
-                }
-            }
-        },
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-    )
 }
 
 /** 同步状态提示条：进行中 = 细进度条；成功/跳过 = 短暂提示后自动消失；警告 = 常驻到下次同步。 */

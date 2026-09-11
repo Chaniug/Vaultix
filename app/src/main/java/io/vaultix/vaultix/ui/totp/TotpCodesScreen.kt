@@ -20,8 +20,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Search
@@ -50,6 +48,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -69,6 +68,7 @@ import io.vaultix.common.TotpConfig
 import io.vaultix.common.TotpGenerator
 import io.vaultix.model.VaultItem
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.common.VaultixSearchTopAppBar
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -90,7 +90,7 @@ fun TotpCodesScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
-    var searchActive by remember { mutableStateOf(false) }
+    var searchActive by rememberSaveable { mutableStateOf(false) }
     var editing by remember { mutableStateOf<TotpEntry?>(null) }
     var binding by remember { mutableStateOf<TotpEntry?>(null) }
     var importOpen by remember { mutableStateOf(false) }
@@ -107,42 +107,52 @@ fun TotpCodesScreen(
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
-            LargeTopAppBar(
-                title = {
-                    if (searchActive) {
-                        SearchField(
-                            value = state.query,
-                            onValueChange = viewModel::setQuery,
-                            onClose = { searchActive = false; viewModel.setQuery("") },
-                        )
-                    } else {
-                        Text(text = stringResource(R.string.totp_screen_title))
-                    }
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = stringResource(R.string.action_back),
-                        )
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { searchActive = true }) {
-                        Icon(Icons.Filled.Search, contentDescription = stringResource(R.string.totp_search_hint))
-                    }
-                    IconButton(onClick = { importOpen = true }) {
-                        Icon(
-                            Icons.Filled.FileDownload,
-                            contentDescription = stringResource(R.string.totp_import_button),
-                        )
-                    }
-                    IconButton(onClick = onOpenPasskeys) {
-                        Icon(Icons.Filled.Key, contentDescription = stringResource(R.string.totp_passkey_button))
-                    }
-                },
-                scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior(),
-            )
+            if (searchActive) {
+                VaultixSearchTopAppBar(
+                    searchTerm = state.query,
+                    placeholder = stringResource(R.string.totp_search_hint),
+                    onSearchTermChange = viewModel::setQuery,
+                    onClose = {
+                        searchActive = false
+                        viewModel.setQuery("")
+                    },
+                    clearIconContentDescription = stringResource(R.string.items_search_clear),
+                    scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior(),
+                )
+            } else {
+                LargeTopAppBar(
+                    title = { Text(text = stringResource(R.string.totp_screen_title)) },
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = stringResource(R.string.action_back),
+                            )
+                        }
+                    },
+                    actions = {
+                        IconButton(onClick = { searchActive = true }) {
+                            Icon(
+                                Icons.Filled.Search,
+                                contentDescription = stringResource(R.string.totp_search_hint),
+                            )
+                        }
+                        IconButton(onClick = { importOpen = true }) {
+                            Icon(
+                                Icons.Filled.FileDownload,
+                                contentDescription = stringResource(R.string.totp_import_button),
+                            )
+                        }
+                        IconButton(onClick = onOpenPasskeys) {
+                            Icon(
+                                Icons.Filled.Key,
+                                contentDescription = stringResource(R.string.totp_passkey_button),
+                            )
+                        }
+                    },
+                    scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior(),
+                )
+            }
         },
         floatingActionButton = {
             FloatingActionButton(onClick = { editing = TotpEntry.empty() }) {
@@ -223,27 +233,6 @@ fun TotpCodesScreen(
             onDismiss = { importOpen = false },
         )
     }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun SearchField(
-    value: String,
-    onValueChange: (String) -> Unit,
-    onClose: () -> Unit,
-) {
-        OutlinedTextField(
-            value = value,
-            onValueChange = onValueChange,
-            placeholder = { Text(stringResource(R.string.totp_search_hint)) },
-            singleLine = true,
-            trailingIcon = {
-                IconButton(onClick = onClose) {
-                    Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.action_cancel))
-                }
-            },
-            modifier = Modifier.fillMaxWidth().padding(end = 8.dp),
-        )
 }
 
 @Composable

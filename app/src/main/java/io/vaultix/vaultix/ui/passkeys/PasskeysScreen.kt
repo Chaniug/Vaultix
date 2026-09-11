@@ -18,7 +18,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -28,7 +27,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeTopAppBar
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -40,6 +38,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -51,9 +50,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import io.vaultix.model.VaultFido2Credential
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.SavePasskeyDialog
+import io.vaultix.vaultix.ui.common.VaultixSearchTopAppBar
 
 /**
  * 通行密钥列表（从验证码界面「通行密钥」按钮进入）。
@@ -67,42 +66,47 @@ fun PasskeysScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
-    var searchActive by remember { mutableStateOf(false) }
+    var searchActive by rememberSaveable { mutableStateOf(false) }
     var detail by remember { mutableStateOf<PasskeyRow?>(null) }
     var saving by remember { mutableStateOf(false) }
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
-            LargeTopAppBar(
-                title = {
-                    if (searchActive) {
-                        OutlinedTextField(
-                            value = state.query,
-                            onValueChange = viewModel::setQuery,
-                            placeholder = { Text(stringResource(R.string.passkeys_search_hint)) },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth().padding(end = 8.dp),
-                        )
-                    } else {
-                        Text(text = stringResource(R.string.passkeys_screen_title))
-                    }
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = stringResource(R.string.action_back),
-                        )
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { searchActive = true }) {
-                        Icon(Icons.Filled.Search, contentDescription = stringResource(R.string.passkeys_search_hint))
-                    }
-                },
-                scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior(),
-            )
+            if (searchActive) {
+                VaultixSearchTopAppBar(
+                    searchTerm = state.query,
+                    placeholder = stringResource(R.string.passkeys_search_hint),
+                    onSearchTermChange = viewModel::setQuery,
+                    onClose = {
+                        searchActive = false
+                        viewModel.setQuery("")
+                    },
+                    clearIconContentDescription = stringResource(R.string.items_search_clear),
+                    scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior(),
+                )
+            } else {
+                LargeTopAppBar(
+                    title = { Text(text = stringResource(R.string.passkeys_screen_title)) },
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = stringResource(R.string.action_back),
+                            )
+                        }
+                    },
+                    actions = {
+                        IconButton(onClick = { searchActive = true }) {
+                            Icon(
+                                Icons.Filled.Search,
+                                contentDescription = stringResource(R.string.passkeys_search_hint),
+                            )
+                        }
+                    },
+                    scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior(),
+                )
+            }
         },
         floatingActionButton = {
             FloatingActionButton(onClick = { saving = true }) {
