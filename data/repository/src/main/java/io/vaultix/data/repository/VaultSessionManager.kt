@@ -81,4 +81,48 @@ class VaultSessionManager @Inject constructor() {
      * @return 未解锁返回 null——由调用方决定降级（空列表）还是报错（保存需解锁）。
      */
     suspend fun keyOf(vaultId: String): SymmetricCryptoKey? = mutex.withLock { sessions[vaultId] }
+
+    // ---- 查看层锁定（ViewLocked，2026-09-12 新增）----
+    //
+    // 与 [lock] 的区别：`lock` 会**清零并移除密钥**（真锁，必须重新提供主密码或解封 KEK）；
+    // 这里的「查看锁」只加一个**内存标记**，密钥原样留在会话里 —— 用户按主页锁按钮后
+    // 只是把界面挡回解锁页，重新认证（指纹/设备凭据）即可立刻回到已解锁视图，
+    // **不联网、不重登、不重新派生密钥**（用户明确要求的语义，对齐"锁定=挡住屏幕而非销毁会话"）。
+    //
+    // ⚠️ 安全边界（有意为之，勿"顺手修掉"）：
+    //  - 这是**界面门禁**，不是加密门禁：进程存活期间密钥在内存里；
+    //  - 进程被杀 / 超时锁定 / 退出数据库 / 锁屏超时到期 时会走 [lock]，标记随之失效；
+    //  - 因此 [viewLock] 必须在未解锁时是**幂等 no-op**（没密钥可保护，标记无意义）。
+    private val viewLockedIdsState = MutableStateFlow<Set<String>>(emptySet())
+
+    /** 已「锁查看层」的库 id（UI 据此停回解锁页；不影响 autofill/CP 的可用性判定）。 */
+    val viewLockedIds: Flow<Set<String>> = viewLockedIdsState.asStateFlow()
+
+    /** 该库当前是否只是「查看层被锁」（密钥仍在内存）。 */
+    fun isViewLocked(vaultId: String): Boolean = vaultId in viewLockedIdsState.value
+
+    /**
+     * 锁「查看层」：**不动密钥**，仅置标记。
+     *
+     * 未解锁时是 no-op（没有会话可保护，也不需要挡界面）。
+     */
+    suspend fun viewLock(vaultId: String) {
+        mutex.withLock {
+            if (sessions.containsKey(vaultId)) {
+                viewLockedIdsState.value = viewLockedIdsState.value + vaultId
+            }
+        }
+    }
+
+    /** 认证通过后清除查看锁（幂等）。 */
+    suspend fun clearViewLock(vaultId: String) {
+        mutex.withLock {
+            viewLockedIdsState.value = viewLockedIdsState.value - vaultId
+        }
+    }
+
+    /** 清空全部查看锁（解锁/退出数据库时一并调用）。 */
+    suspend fun clearAllViewLocks() {
+        mutex.withLock { viewLockedIdsState.value = emptySet() }
+    }
 }
