@@ -103,6 +103,8 @@ class ItemsViewModel @Inject constructor(
         val vault: VaultSummary? = null,
         val items: List<VaultItem> = emptyList(),
         val query: String = "",
+        /** 顶栏点库名展开的那一排快捷筛选中，当前选中的维度。 */
+        val quickFilter: ItemsQuickFilter = ItemsQuickFilter.All,
         val syncNote: SyncNote? = null,
         val saving: Boolean = false,
     )
@@ -155,6 +157,25 @@ class ItemsViewModel @Inject constructor(
 
     /** 设置搜索词（匹配标题 / 用户名 / 网址，空词 = 不过滤）。 */
     fun setQuery(q: String) = _state.update { it.copy(query = q) }
+
+    /**
+     * 设置快捷筛选（顶栏点库名展开的那一排 chip）。
+     *
+     * **刻意不持久化**：筛选是「我这一会儿想看什么」的临时状态。落盘会让用户
+     * 下次打开 App 对着一个空列表发呆（条目都在，只是被上次的筛选挡着），
+     * 而顶部那排 chip 收起时看不见 —— 这就是「条目莫名其妙不见了」类投诉的来源。
+     */
+    fun setQuickFilter(filter: ItemsQuickFilter) =
+        _state.update { it.copy(quickFilter = filter) }
+
+    /** 当前筛选维度（UI 收集；[ItemsQuickFilter.All] = 不筛选）。 */
+    val quickFilter: StateFlow<ItemsQuickFilter> = _state
+        .map { it.quickFilter }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.Eagerly,
+            initialValue = ItemsQuickFilter.All,
+        )
 
     /**
      * 条目分组方式（偏好持久化；默认不分组，保持历史观感）。
@@ -216,9 +237,16 @@ class ItemsViewModel @Inject constructor(
         }
     }
 
-    /** 按当前搜索词过滤后的可见条目（空词 = 全部）。 */
+    /**
+     * 按当前搜索词 + 快捷筛选过滤后的可见条目（空词 + All = 全部）。
+     *
+     * 顺序固定为「先筛选再搜索」：两者都是 `filter`，交换顺序结果相同，
+     * 但筛选在前可以让搜索只在子集上跑（快捷筛选之后通常只剩几条）。
+     */
     val visibleItems: StateFlow<List<VaultItem>> = _state
-        .map { state -> ItemFilter.filter(state.items, state.query) }
+        .map { state ->
+            ItemFilter.filter(state.items.applyQuickFilter(state.quickFilter), state.query)
+        }
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.Eagerly,

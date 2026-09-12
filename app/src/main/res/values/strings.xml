@@ -250,7 +250,16 @@
     <string name="items_sync_skipped">已是最新</string>
     <string name="items_sync_blocked">同步被安全机制暂停：%1$s</string>
     <string name="items_sync_fatal">同步失败：%1$s</string>
-    <string name="items_lock">立即锁定</string>
+    <string name="items_lock">锁定（仅挡界面，密钥不清）</string>
+    <string name="items_more_actions">更多操作</string>
+    <!-- 快捷筛选（点顶栏库名展开的那一排 chip；单选，与「分组方式」正交） -->
+    <string name="items_quick_filter_hint">点按展开或收起分类筛选</string>
+    <string name="items_filter_all">全部</string>
+    <string name="items_filter_totp">验证码</string>
+    <string name="items_filter_passkey">通行密钥</string>
+    <string name="items_filter_ssh">SSH</string>
+    <string name="items_filter_note">笔记</string>
+    <string name="items_filter_favorite">收藏</string>
     <string name="items_new_item">新建条目</string>
     <string name="items_item_unnamed">（未命名）</string>
     <string name="items_search">搜索</string>

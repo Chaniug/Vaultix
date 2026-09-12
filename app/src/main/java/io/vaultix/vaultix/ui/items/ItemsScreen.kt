@@ -1,9 +1,16 @@
 package io.vaultix.vaultix.ui.items
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -21,6 +28,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -30,6 +38,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
@@ -38,7 +47,9 @@ import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -63,11 +74,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.annotation.StringRes
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.vaultix.model.VaultFolder
@@ -131,6 +145,10 @@ fun ItemsScreen(
     var showCreateDialog by rememberSaveable { mutableStateOf(false) }
     var searchActive by rememberSaveable { mutableStateOf(false) }
     var displayOptionsOpen by rememberSaveable { mutableStateOf(false) }
+    // 顶栏点库名 → 展开快捷筛选条（对齐 Bastion `titleExpanded`）。
+    // **默认收起**（用户要求就是「点库名展开」这个动作本身；一直摊开会让列表少一行）。
+    // 走 rememberSaveable：切 Tab 回来仍保持展开（用户刚点开就切走再回来，不该又收起来）。
+    var quickFiltersExpanded by rememberSaveable { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val collapse = rememberScrollCollapseFraction(listState)
     val barPadding = rememberImmersiveBarPadding(collapse)
@@ -221,10 +239,23 @@ fun ItemsScreen(
                 }
             }
             if (!searchActive) {
+                QuickFilterPanel(
+                    visible = quickFiltersExpanded,
+                    selected = state.quickFilter,
+                    topPadding = barPadding,
+                    onSelect = viewModel::setQuickFilter,
+                    onDismiss = { quickFiltersExpanded = false },
+                )
                 ItemsTopBar(
-                    title = state.vault?.name.orEmpty(),
+                    title = itemsTitle(
+                        vaultName = state.vault?.name.orEmpty(),
+                        filter = state.quickFilter,
+                        filterLabel = stringResource(quickFilterLabelRes(state.quickFilter)),
+                    ),
                     collapseFraction = collapse,
                     embedded = embedded,
+                    titleExpanded = quickFiltersExpanded,
+                    onTitleClick = { quickFiltersExpanded = !quickFiltersExpanded },
                     onBack = onBack,
                     onDisplayOptions = { displayOptionsOpen = true },
                     onToggleSearch = { searchActive = true },
@@ -348,7 +379,14 @@ private fun ItemsSearchBar(
 }
 
 /**
- * 沉浸式顶栏 + 动作组（分组方式 / 搜索 / 验证码 / 回收站 / 同步 / 锁定）。
+ * 沉浸式顶栏 + **胶囊动作组**（🔍 搜索 + ⋮ 更多）。
+ *
+ * 用户要求（`.ai/ISSUES.md` #60 后续批次第 2 批）：「顶栏胶囊化（🔍 搜索 + ⋮ 更多＝
+ * 同步 / 锁定 / 回收站）+ 点左上角库名展开/收起分类筛选」。
+ *
+ * 为什么把 6 个图标收成 2 个：一排 6 个 IconButton 在小屏上把标题挤成省略号，
+ * 且「验证码 / 回收站 / 同步 / 锁定」都不是高频动作（低频动作进 overflow 是 M3 的
+ * 既定做法，Bastion 的 `PasswordListTopSection` 同样只留搜索 + ⋮）。
  *
  * 抽成独立 composable 是为了把主函数的行数与圈复杂度压回门禁线内
  * （detekt `LongMethod` ≤150 / `CyclomaticComplexMethod` ≤14）。
@@ -358,6 +396,8 @@ private fun BoxScope.ItemsTopBar(
     title: String,
     collapseFraction: Float,
     embedded: Boolean,
+    titleExpanded: Boolean,
+    onTitleClick: () -> Unit,
     onBack: () -> Unit,
     onDisplayOptions: () -> Unit,
     onToggleSearch: () -> Unit,
@@ -382,15 +422,18 @@ private fun BoxScope.ItemsTopBar(
                 }
             }
         },
+        onTitleClick = onTitleClick,
+        titleExpanded = titleExpanded,
+        titleClickHint = stringResource(R.string.items_quick_filter_hint),
         actions = {
-            IconButton(onClick = onDisplayOptions) {
+            IconButton(onClick = onToggleSearch) {
                 Icon(
-                    Icons.Filled.ViewAgenda,
-                    contentDescription = stringResource(R.string.items_display_options),
+                    Icons.Filled.Search,
+                    contentDescription = stringResource(R.string.items_search),
                 )
             }
-            ItemsActions(
-                onToggleSearch = onToggleSearch,
+            ItemsMoreMenu(
+                onDisplayOptions = onDisplayOptions,
                 onOpenTotp = onOpenTotp,
                 onOpenTrash = onOpenTrash,
                 onRetrySync = onRetrySync,
@@ -400,6 +443,191 @@ private fun BoxScope.ItemsTopBar(
     )
 }
 
+/**
+ * 顶栏「更多」菜单（⋮）：验证码 / 通行密钥回收站 / 显示选项 / 同步 / 锁定查看层。
+ *
+ * ⚠️ 菜单项顺序 = 使用频率：查看类（验证码 / 回收站 / 显示选项）在上，
+ * 维护类（同步）居中，破坏性动作（锁定）在下并用 error 色分隔
+ * （对齐 M3「破坏性动作不挨着常用动作」的建议）。
+ */
+@Composable
+private fun ItemsMoreMenu(
+    onDisplayOptions: () -> Unit,
+    onOpenTotp: () -> Unit,
+    onOpenTrash: () -> Unit,
+    onRetrySync: () -> Unit,
+    onLock: () -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { expanded = true }) {
+            Icon(
+                Icons.Filled.MoreVert,
+                contentDescription = stringResource(R.string.items_more_actions),
+            )
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            MenuAction(Icons.Filled.QrCode2, R.string.totp_screen_title) {
+                expanded = false
+                onOpenTotp()
+            }
+            MenuAction(Icons.Filled.Delete, R.string.trash_title) {
+                expanded = false
+                onOpenTrash()
+            }
+            MenuAction(Icons.Filled.ViewAgenda, R.string.items_display_options) {
+                expanded = false
+                onDisplayOptions()
+            }
+            MenuAction(Icons.Filled.Refresh, R.string.items_sync) {
+                expanded = false
+                onRetrySync()
+            }
+            HorizontalDivider()
+            // 「锁定」= 锁查看层（不清密钥，一次生物识别即回来），见 ISSUES #60 1b
+            MenuAction(Icons.Filled.Lock, R.string.items_lock, destructive = true) {
+                expanded = false
+                onLock()
+            }
+        }
+    }
+}
+
+/** 菜单项（图标 + 文案；[destructive] 用 error 色标出不可逆 / 中断性动作）。 */
+@Composable
+private fun MenuAction(
+    icon: ImageVector,
+    @StringRes labelRes: Int,
+    destructive: Boolean = false,
+    onClick: () -> Unit,
+) {
+    DropdownMenuItem(
+        text = {
+            Text(
+                text = stringResource(labelRes),
+                color = if (destructive) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.onSurface
+                },
+            )
+        },
+        leadingIcon = {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = if (destructive) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+            )
+        },
+        onClick = onClick,
+    )
+}
+
+/**
+ * 快捷筛选面板：顶栏下方的一排 chip（验证码 / 通行密钥 / SSH / 笔记 / 收藏 …）。
+ *
+ * **浮在内容之上**（与顶栏同层，`topPadding = rememberImmersiveBarPadding(...)`）：
+ * 若把它塞进可滚动的 `Column`，列表一滚它就跟着滚走，而顶栏的箭头还指着「已展开」——
+ * 用户会以为筛选条坏了（`.ai/ISSUES.md` #57 的同一类问题）。
+ *
+ * [visible] 为 true 时同时铺一层全屏透明遮罩：点面板以外任何地方即收起，免去找关闭按钮。
+ */
+@Composable
+private fun BoxScope.QuickFilterPanel(
+    visible: Boolean,
+    selected: ItemsQuickFilter,
+    topPadding: Dp,
+    onSelect: (ItemsQuickFilter) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn() + expandVertically(expandFrom = Alignment.Top),
+        exit = fadeOut() + shrinkVertically(shrinkTowards = Alignment.Top),
+        modifier = Modifier.align(Alignment.TopCenter),
+    ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            // 透明遮罩：点面板以外任何地方即收起，免去找关闭按钮。
+            // 用 `matchParentSize` 而不是 `fillMaxSize`：它不参与父 Box 的尺寸测量，
+            // 因此不会把「只剩 chip 行高度」的父布局撑成满屏。
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = onDismiss,
+                    ),
+            )
+            QuickFilterChips(
+                selected = selected,
+                topPadding = topPadding,
+                onSelect = onSelect,
+            )
+        }
+    }
+}
+
+/** 横向可滚的 chip 行（chip 数会随维度增加，小屏必须能横滑）。 */
+@Composable
+private fun QuickFilterChips(
+    selected: ItemsQuickFilter,
+    topPadding: Dp,
+    onSelect: (ItemsQuickFilter) -> Unit,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 2.dp,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = topPadding)
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            ItemsQuickFilter.entries.forEach { filter ->
+                FilterChip(
+                    selected = filter == selected,
+                    onClick = { onSelect(filter) },
+                    label = { Text(stringResource(quickFilterLabelRes(filter))) },
+                    leadingIcon = if (filter == selected) {
+                        { Icon(Icons.Filled.Check, contentDescription = null) }
+                    } else {
+                        null
+                    },
+                )
+            }
+        }
+    }
+}
+
+/** 筛选维度 → 文案（[ItemsQuickFilter.All] 为「全部」）。 */
+@StringRes
+private fun quickFilterLabelRes(filter: ItemsQuickFilter): Int = when (filter) {
+    ItemsQuickFilter.All -> R.string.items_filter_all
+    ItemsQuickFilter.Totp -> R.string.items_filter_totp
+    ItemsQuickFilter.Passkey -> R.string.items_filter_passkey
+    ItemsQuickFilter.Ssh -> R.string.items_filter_ssh
+    ItemsQuickFilter.Note -> R.string.items_filter_note
+    ItemsQuickFilter.Favorite -> R.string.items_filter_favorite
+}
+
+/**
+ * 顶栏标题：无筛选时就是库名；有筛选时拼成「库名 · 筛选名」。
+ *
+ * 为什么必须拼：筛选生效后列表条数会明显变少，标题不写清「现在在看什么」，
+ * 用户第一反应是「我的条目丢了」（`.ai/ISSUES.md` 里同类误报的常见来源）。
+ */
+private fun itemsTitle(vaultName: String, filter: ItemsQuickFilter, filterLabel: String): String =
+    if (filter == ItemsQuickFilter.All) vaultName else "$vaultName · $filterLabel"
 /**
  * 条目列表（分组 + 「按住后滑动删除」）。
  *
@@ -476,46 +704,7 @@ private fun CreateItemDialog(
     )
 }
 
-/** 顶栏动作（搜索在最前，其后为验证码 / 回收站 / 同步 / 锁定）。 */
-@Composable
-private fun ItemsActions(
-    onToggleSearch: () -> Unit,
-    onOpenTotp: () -> Unit,
-    onOpenTrash: () -> Unit,
-    onRetrySync: () -> Unit,
-    onLock: () -> Unit,
-) {
-    IconButton(onClick = onToggleSearch) {
-        Icon(
-            Icons.Filled.Search,
-            contentDescription = stringResource(R.string.items_search),
-        )
-    }
-    IconButton(onClick = onOpenTotp) {
-        Icon(
-            Icons.Filled.QrCode2,
-            contentDescription = stringResource(R.string.totp_screen_title),
-        )
-    }
-    IconButton(onClick = onOpenTrash) {
-        Icon(
-            Icons.Filled.Delete,
-            contentDescription = stringResource(R.string.trash_title),
-        )
-    }
-    IconButton(onClick = onRetrySync) {
-        Icon(
-            Icons.Filled.Refresh,
-            contentDescription = stringResource(R.string.items_sync),
-        )
-    }
-    IconButton(onClick = onLock) {
-        Icon(
-            Icons.Filled.Lock,
-            contentDescription = stringResource(R.string.items_lock),
-        )
-    }
-}
+/** 顶栏动作已收敛为「胶囊里的 🔍 + ⋮」（见 [ItemsMoreMenu]）。 */
 
 /** 同步状态提示条：进行中 = 细进度条；成功/跳过 = 短暂提示后自动消失；警告 = 常驻到下次同步。 */
 @Composable

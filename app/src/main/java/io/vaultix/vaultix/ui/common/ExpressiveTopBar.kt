@@ -33,6 +33,7 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -44,11 +45,16 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -62,8 +68,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -160,6 +170,10 @@ fun rememberImmersiveBarPadding(collapseFraction: Float): Dp {
  * @param collapseFraction 0 = 展开（大标题、栏不透明），1 = 收起（小标题、栏透明）。
  * @param navigationIcon 左侧返回等（tab 内页不传）。
  * @param actions 右侧动作按钮（自动装进胶囊并跟随时机缩放）。
+ * @param onTitleClick 非空时标题可点（Vaultix 用于「点库名展开快捷筛选」，对齐 Bastion
+ *   `ExpressiveTopBar(onTitleClick, titleExpanded)`）；此时标题后追加一个展开/收起箭头。
+ * @param titleExpanded 箭头方向（true = 已展开显示收起箭头）。仅当 [onTitleClick] 非空时渲染。
+ * @param titleClickHint 标题可点的无障碍提示（拼在标题后，供读屏用户知道「点它有东西」）。
  */
 @Composable
 fun VaultixExpressiveTopBar(
@@ -168,6 +182,9 @@ fun VaultixExpressiveTopBar(
     modifier: Modifier = Modifier,
     navigationIcon: (@Composable () -> Unit)? = null,
     actions: @Composable RowScope.() -> Unit = {},
+    onTitleClick: (() -> Unit)? = null,
+    titleExpanded: Boolean = false,
+    titleClickHint: String = "",
 ) {
     // 所有过渡量走同一条 200ms 补间，保证「标题、栏高、按钮组」同步到位（上游同款取舍）。
     val progress by animateFloatAsState(
@@ -232,22 +249,52 @@ fun VaultixExpressiveTopBar(
             horizontalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             navigationIcon?.invoke()
-            Text(
-                text = title,
-                style = MaterialTheme.typography.headlineSmall,
-                fontSize = (titleFontSize * titleScale).sp,
-                lineHeight = (titleFontSize * titleScale * LINE_HEIGHT_RATIO).sp,
-                fontWeight = FontWeight.SemiBold,
-                color = contentColor,
-                maxLines = 1,
-                overflow = TextOverflow.Clip,
-                softWrap = false,
-                onTextLayout = { result ->
-                    if (result.hasVisualOverflow && titleScale > TITLE_MIN_SCALE) {
-                        titleScale = (titleScale - TITLE_SCALE_STEP).coerceAtLeast(TITLE_MIN_SCALE)
-                    }
-                },
-            )
+            // 标题溢出时逐步缩小字号（下限 0.72），避免末尾字符被裁。
+            val titleText: @Composable () -> Unit = {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontSize = (titleFontSize * titleScale).sp,
+                    lineHeight = (titleFontSize * titleScale * LINE_HEIGHT_RATIO).sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = contentColor,
+                    maxLines = 1,
+                    overflow = TextOverflow.Clip,
+                    softWrap = false,
+                    onTextLayout = { result ->
+                        if (result.hasVisualOverflow && titleScale > TITLE_MIN_SCALE) {
+                            titleScale = (titleScale - TITLE_SCALE_STEP).coerceAtLeast(TITLE_MIN_SCALE)
+                        }
+                    },
+                )
+            }
+            if (onTitleClick == null) {
+                titleText()
+            } else {
+                // 可点标题：整块（标题 + 箭头）是一个按钮，箭头方向反映展开态。
+                // 对齐 Bastion —— 标题就是「展开快捷筛选」的开关，不必再多一个图标按钮。
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(TITLE_CLICK_CORNER_DP.dp))
+                        .clickable(role = Role.Button, onClick = onTitleClick)
+                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                        .semantics { contentDescription = "$title, $titleClickHint" },
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    titleText()
+                    Icon(
+                        imageVector = if (titleExpanded) {
+                            Icons.Filled.ExpandLess
+                        } else {
+                            Icons.Filled.ExpandMore
+                        },
+                        contentDescription = null,
+                        modifier = Modifier.size(TITLE_CHEVRON_SIZE),
+                        tint = contentColor,
+                    )
+                }
+            }
         }
 
         // 右侧动作胶囊：与栏背景同色同透明度 → 收起后按钮直接浮在内容上。
@@ -284,3 +331,7 @@ fun VaultixExpressiveTopBar(
 
 /** 顶栏右侧为动作胶囊预留的宽度（避免长标题压到按钮上）。 */
 private val ACTIONS_RESERVE = 144.dp
+
+/** 可点标题的圆角（dp）与箭头尺寸 —— 与 Bastion 的 8dp / 18-22dp 对齐。 */
+private const val TITLE_CLICK_CORNER_DP = 8
+private val TITLE_CHEVRON_SIZE = 20.dp
