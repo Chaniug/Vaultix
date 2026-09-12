@@ -73,4 +73,22 @@ object AutofillFillTargetPolicy {
 
     /** 页面上是否存在值得填充的字段（上层据此决定「响应 / 不响应」）。 */
     fun hasFillTarget(parsed: ParsedStructure): Boolean = parsed.fields.any(::isFillTarget)
+
+    /**
+     * 页面是否**只有验证码框**（登录第二步 / 2FA 页）。
+     *
+     * 这类页面必须**完全不响应**：不列条目，也**不弹「没有匹配的密码」**。
+     * 理由（对齐 Bitwarden）：上游的 `AutofillView` 根本没有 TOTP 字段类型，
+     * 它从不把验证码填进输入框 —— 验证码是在**上一步填账号密码时**就已经复制进剪贴板
+     * （`AutofillCompletionManagerImpl` 无条件 `tryCopyTotpToClipboard`）。
+     * 因此 2FA 页在上游是 `Unfillable → onSuccess(null)`，什么都不该出现。
+     *
+     * 我们此前把「没有候选」一律兜底成「没有匹配的密码 → 点此搜索」，于是在 2FA 页
+     * 冒出一条**毫无意义且有点吓人**的警告（用户反馈：既然验证码已在剪贴板，
+     * 这里既不用弹也不用警告）。
+     */
+    fun isOtpOnly(parsed: ParsedStructure): Boolean {
+        val targets = fillTargets(parsed)
+        return targets.isNotEmpty() && targets.all { it.hint == FieldHint.OTP }
+    }
 }

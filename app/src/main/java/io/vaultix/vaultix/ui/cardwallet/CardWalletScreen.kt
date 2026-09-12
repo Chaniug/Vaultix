@@ -14,18 +14,19 @@
  */
 package io.vaultix.vaultix.ui.cardwallet
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -43,6 +44,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -52,7 +54,14 @@ import io.vaultix.common.formatCardNumberGrouped
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.common.EntryCard
+import io.vaultix.vaultix.ui.common.EntryCardIconSpacing
+import io.vaultix.vaultix.ui.common.EntryCardTextSpacing
 import io.vaultix.vaultix.ui.common.ItemFormDialog
+import io.vaultix.vaultix.ui.common.PressAndSwipeToDelete
+import io.vaultix.vaultix.ui.common.VaultixExpressiveTopBar
+import io.vaultix.vaultix.ui.common.rememberImmersiveBarPadding
+import io.vaultix.vaultix.ui.common.rememberScrollCollapseFraction
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 
@@ -75,8 +84,10 @@ fun CardWalletScreen(
 ) {
     val cards by viewModel.cards.collectAsStateWithLifecycle()
     val saving by viewModel.saving.collectAsStateWithLifecycle()
-    val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
     var creating by remember { mutableStateOf<VaultItem?>(null) }
+    val listState = rememberLazyListState()
+    val collapse = rememberScrollCollapseFraction(listState)
+    val barPadding = rememberImmersiveBarPadding(collapse)
 
     LaunchedEffect(addRequest) {
         if (addRequest > 0) {
@@ -86,12 +97,8 @@ fun CardWalletScreen(
     }
 
     Scaffold(
-        topBar = {
-            LargeTopAppBar(
-                title = { Text(text = stringResource(R.string.nav_card_wallet)) },
-                scrollBehavior = scrollBehavior,
-            )
-        },
+        // 沉浸式：顶栏浮在内容之上（状态栏内边距由顶栏自己处理，见 [VaultixExpressiveTopBar]）。
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         floatingActionButton = {
             if (!embedded) {
                 FloatingActionButton(onClick = {
@@ -102,31 +109,41 @@ fun CardWalletScreen(
             }
         },
     ) { padding ->
-        if (cards.isEmpty()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = stringResource(R.string.card_wallet_empty),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        } else {
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding),
-                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                items(cards, key = { it.id }) { item ->
-                    CardWalletRow(item = item, onClick = { onOpenItem(item) })
+        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
+            Column(modifier = Modifier.fillMaxSize().padding(top = barPadding)) {
+                if (cards.isEmpty()) {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = stringResource(R.string.card_wallet_empty),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                } else {
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.fillMaxSize(),
+                        // 与密码 / 验证码列表同一套留白结构（卡片不再自带外边距）。
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(CARD_GAP),
+                    ) {
+                        items(cards, key = { it.id }) { item ->
+                            // 与密码列表一致的「按住后滑动删除」（软删除进回收站）。
+                            PressAndSwipeToDelete(onDelete = { viewModel.deleteCard(item) }) {
+                                CardWalletRow(item = item, onClick = { onOpenItem(item) })
+                            }
+                        }
+                    }
                 }
             }
+            VaultixExpressiveTopBar(
+                title = stringResource(R.string.nav_card_wallet),
+                collapseFraction = collapse,
+                modifier = Modifier.align(Alignment.TopCenter),
+            )
         }
     }
 
@@ -146,10 +163,14 @@ fun CardWalletScreen(
     }
 }
 
+private val CARD_GAP = 8.dp
+
 /**
  * 单张卡：品牌图标 + 名称 + 分组卡号（末四位外打码）。
  *
  * ⚠️ 必须**可点击**：此前漏了 `clickable`，导致卡包里的条目点不进详情（用户反馈）。
+ * 外框改用 [EntryCard]（与密码 / 验证码列表同一套卡片规格）——此前这里是一个**裸 Row**，
+ * 连外框都没有，是三个列表里观感最不一致的一处。
  */
 @Composable
 private fun CardWalletRow(item: VaultItem, onClick: () -> Unit) {
@@ -157,52 +178,55 @@ private fun CardWalletRow(item: VaultItem, onClick: () -> Unit) {
     val brand = remember(card?.number, card?.brand) {
         CardBrandDetector.detect(card?.number.orEmpty(), card?.brand.orEmpty())
     }
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(modifier = Modifier.size(width = 44.dp, height = 30.dp)) {
-            CardBrandIcon(brand = brand, modifier = Modifier.fillMaxSize())
-        }
-        Column(modifier = Modifier.weight(1f).padding(start = 12.dp)) {
-            Text(
-                text = item.title,
-                style = MaterialTheme.typography.titleSmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            val number = card?.number.orEmpty()
-            if (number.isNotBlank()) {
+    EntryCard(onClick = onClick) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(modifier = Modifier.size(width = 44.dp, height = 30.dp)) {
+                CardBrandIcon(brand = brand, modifier = Modifier.fillMaxSize())
+            }
+            Column(
+                modifier = Modifier.weight(1f).padding(start = EntryCardIconSpacing),
+                verticalArrangement = Arrangement.spacedBy(EntryCardTextSpacing),
+            ) {
                 Text(
-                    text = maskCardNumber(formatCardNumberGrouped(number)),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    text = item.title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
-            } else {
-                card?.cardholderName?.takeIf { it.isNotBlank() }?.let { holder ->
+                val number = card?.number.orEmpty()
+                if (number.isNotBlank()) {
                     Text(
-                        text = holder,
+                        text = maskCardNumber(formatCardNumberGrouped(number)),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
                     )
+                } else {
+                    card?.cardholderName?.takeIf { it.isNotBlank() }?.let { holder ->
+                        Text(
+                            text = holder,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
             }
-        }
-        val expiry = listOf(card?.expMonth, card?.expYear)
-            .map { it.orEmpty() }
-            .filter { it.isNotBlank() }
-        if (expiry.size == 2) {
-            Text(
-                text = expiry.joinToString("/"),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            val expiry = listOf(card?.expMonth, card?.expYear)
+                .map { it.orEmpty() }
+                .filter { it.isNotBlank() }
+            if (expiry.size == 2) {
+                Text(
+                    text = expiry.joinToString("/"),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }

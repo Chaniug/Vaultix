@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import io.vaultix.data.repository.BitwardenSyncOrchestrator
+import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.domain.FolderRepository
 import io.vaultix.domain.ItemRepository
 import io.vaultix.domain.SyncTrigger
@@ -51,6 +52,7 @@ class ItemsViewModel @Inject constructor(
     private val syncOrchestrator: BitwardenSyncOrchestrator,
     private val folderRepository: FolderRepository,
     private val activeVaultStore: ActiveVaultStore,
+    private val preferences: VaultixPreferences,
 ) : ViewModel() {
 
     /**
@@ -90,6 +92,9 @@ class ItemsViewModel @Inject constructor(
         data object SavedSynced : SaveEvent
         data object SavedQueued : SaveEvent
         data class Failed(val message: String) : SaveEvent
+
+        /** 「按住后滑动删除」成功：提示已移入回收站（可恢复）。 */
+        data class Deleted(val title: String) : SaveEvent
     }
 
     data class UiState(
@@ -148,6 +153,41 @@ class ItemsViewModel @Inject constructor(
 
     /** 设置搜索词（匹配标题 / 用户名 / 网址，空词 = 不过滤）。 */
     fun setQuery(q: String) = _state.update { it.copy(query = q) }
+
+    /**
+     * 条目分组方式（偏好持久化；默认不分组，保持历史观感）。
+     *
+     * 分组维度取模型里真实存在的三种（类型 / 文件夹 / 首字母），详见 [ItemsGroupMode]。
+     */
+    val groupMode: StateFlow<ItemsGroupMode> = preferences.itemsGroupMode
+        .map(ItemsGroupMode::from)
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.Eagerly,
+            initialValue = ItemsGroupMode.None,
+        )
+
+    fun setGroupMode(mode: ItemsGroupMode) {
+        viewModelScope.launch { preferences.setItemsGroupMode(mode.storageKey) }
+    }
+
+    /**
+     * 列表内「按住后滑动删除」：走**软删除**（进回收站，可恢复 / 也可在回收站永久删除）。
+     *
+     * 与详情页的删除同一路径（`ItemRepository.softDeleteItem`），不新增数据语义；
+     * 列表侧只在成功后提示一句，避免用户以为条目凭空消失。
+     */
+    fun deleteItem(item: VaultItem) {
+        viewModelScope.launch {
+            val result = itemRepository.softDeleteItem(vaultId, item.id)
+            val message = if (result.isSuccess) {
+                SaveEvent.Deleted(item.title)
+            } else {
+                SaveEvent.Failed(result.exceptionOrNull()?.message ?: "未知错误")
+            }
+            _saveEvents.send(message)
+        }
+    }
 
     /** 按当前搜索词过滤后的可见条目（空词 = 全部）。 */
     val visibleItems: StateFlow<List<VaultItem>> = _state

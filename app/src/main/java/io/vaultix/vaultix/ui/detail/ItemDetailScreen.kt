@@ -16,6 +16,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Fingerprint
+import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
@@ -208,7 +210,8 @@ private fun DetailSections(
         }
         if (item.totp != null) {
             Spacer(Modifier.height(12.dp))
-            TotpSection(item = item, onCopyTotp = actions.onCopyTotp)
+            // 只提示「含验证码」——动态验证码改到「验证码」页看（降功耗，见 TotpSection KDoc）。
+            TotpSection()
         }
         if (item.fido2Credentials.isNotEmpty()) {
             Spacer(Modifier.height(12.dp))
@@ -583,26 +586,27 @@ private fun UriRow(kind: UriKind, canOpen: Boolean, onCopy: () -> Unit, onOpen: 
     }
 }
 
+/**
+ * 验证码分区（**只提示，不显示动态验证码**）。
+ *
+ * 2026-09-12 按用户要求改造（降功耗）：详情页此前每秒重算一次验证码 + 重绘倒计时进度条，
+ * 只要详情页开着就一直在跑（对电池不友好），而它展示的信息与「验证码」页完全重复。
+ * 现在这里只提示「该条目含验证码」，真正看码去「验证码」页（那里是整页统一的倒计时进度条，
+ * 也只在那一页开销）。
+ */
 @Composable
-private fun TotpSection(item: VaultItem, onCopyTotp: (String) -> Unit) {
-    val totp = item.totp ?: return
-    val config = remember(totp) { OtpUriParser.parse(totp) }
+private fun TotpSection() {
     Column {
         SectionTitle(text = stringResource(R.string.section_totp))
         Card(
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
             modifier = Modifier.fillMaxWidth(),
         ) {
-            if (config == null) {
-                Text(
-                    text = stringResource(R.string.totp_invalid),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(16.dp),
-                )
-            } else {
-                TotpCodeContent(config = config, onCopy = onCopyTotp)
-            }
+            HintRow(
+                icon = Icons.Filled.Timer,
+                title = stringResource(R.string.detail_totp_present),
+                body = stringResource(R.string.detail_totp_where),
+            )
         }
     }
 }
@@ -610,49 +614,12 @@ private fun TotpSection(item: VaultItem, onCopyTotp: (String) -> Unit) {
 /** TOTP 验证码按 3 位分组显示（便于肉眼读取），与 Bitwarden 客户端一致。 */
 private const val TOTP_CODE_GROUP_SIZE = 3
 
-/** 毫秒 → 秒级时间戳的换算常数。 */
-private const val MILLIS_PER_SECOND = 1000L
-
-@Composable
-private fun TotpCodeContent(config: TotpConfig, onCopy: (String) -> Unit) {
-    var timeSeconds by remember { mutableStateOf(System.currentTimeMillis() / MILLIS_PER_SECOND) }
-    LaunchedEffect(Unit) {
-        while (true) {
-            delay(MILLIS_PER_SECOND)
-            timeSeconds = System.currentTimeMillis() / MILLIS_PER_SECOND
-        }
-    }
-    val code = remember(config, timeSeconds) {
-        // 五类型统一入口（Steam/HOTP/Yandex/mOTP 与 TotpCodesScreen 一致）
-        TotpGenerator.generate(config, timeSeconds)
-    }
-    val remaining = TotpGenerator.remainingSeconds(config.period, timeSeconds)
-    val progress = 1f - TotpGenerator.progress(config.period, timeSeconds)
-    Column(modifier = Modifier.padding(16.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = code.chunked(TOTP_CODE_GROUP_SIZE).joinToString(" "),
-                style = MaterialTheme.typography.headlineSmall,
-                fontFamily = FontFamily.Monospace,
-            )
-            Spacer(Modifier.weight(1f))
-            Text(
-                text = "${remaining}s",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            IconButton(onClick = { onCopy(code) }) {
-                Icon(Icons.Filled.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp))
-            }
-        }
-        Spacer(Modifier.height(8.dp))
-        LinearProgressIndicator(
-            progress = { progress },
-            modifier = Modifier.fillMaxWidth(),
-        )
-    }
-}
-
+/**
+ * 通行密钥分区（**只提示已绑定**）。
+ *
+ * 同上（降功耗 + 去重复）：完整凭证列表在「验证码」页右上角的指纹按钮里查看
+ * （`PasskeysRoute`），详情页只留一句「已绑定 N 个」。
+ */
 @Composable
 private fun PasskeysSection(creds: List<VaultFido2Credential>) {
     Column {
@@ -661,46 +628,44 @@ private fun PasskeysSection(creds: List<VaultFido2Credential>) {
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text(
-                    text = stringResource(R.string.passkey_count, creds.size),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-                Text(
-                    text = stringResource(R.string.passkey_readonly_hint),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp),
-                )
-                creds.forEach { c ->
-                    Spacer(Modifier.height(12.dp))
-                    val name = c.userDisplayName.ifBlank {
-                        c.userName.ifBlank { stringResource(R.string.passkey_unnamed) }
-                    }
-                    Text(text = name, style = MaterialTheme.typography.titleMedium)
-                    if (c.rpId.isNotBlank()) {
-                        Text(
-                            text = "${stringResource(R.string.passkey_rp)}：${c.rpId}",
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                    }
-                    if (c.userName.isNotBlank()) {
-                        Text(
-                            text = "${stringResource(R.string.passkey_user)}：${c.userName}",
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                    }
-                    val creationDate = c.creationDate
-                    if (creationDate != null) {
-                        Text(
-                            text = stringResource(R.string.passkey_created, creationDate),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-            }
+            HintRow(
+                icon = Icons.Filled.Fingerprint,
+                title = stringResource(R.string.passkey_count, creds.size),
+                body = stringResource(R.string.detail_passkey_where),
+            )
+        }
+    }
+}
+
+/**
+ * 「图标 + 标题 + 说明」的静态提示行（验证码 / 通行密钥两个分区共用）。
+ *
+ * 抽出来是为了让两处提示观感一致，也避免各写一遍内边距/字号。
+ */
+@Composable
+private fun HintRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    body: String,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(20.dp),
+        )
+        Column(modifier = Modifier.padding(start = 12.dp)) {
+            Text(text = title, style = MaterialTheme.typography.titleSmall)
+            Text(
+                text = body,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 2.dp),
+            )
         }
     }
 }

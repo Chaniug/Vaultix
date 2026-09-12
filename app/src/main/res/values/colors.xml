@@ -1,4 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="ic_launcher_background">#3B5BDB</color>
+    <!--
+      自动填充下拉行的外框描边色（浅色面板）。
+      Material3 基线 onSurfaceVariant(#49454F) 的 12% 透明度：足够看见一圈边界，
+      又不会在系统填充面板里显脏。深色面板对应值见 values-night/colors.xml。
+    -->
+    <color name="autofill_item_stroke">#1F49454F</color>
 </resources>

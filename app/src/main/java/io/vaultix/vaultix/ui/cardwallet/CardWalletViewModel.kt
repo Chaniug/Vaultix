@@ -72,4 +72,13 @@ class CardWalletViewModel @Inject constructor(
             _saving.value = false
         }
     }
+
+    /**
+     * 「按住后滑动删除」（与密码列表同一手势语义）：走**软删除**进回收站，可恢复。
+     * 卡包 Tab 因此不必切到详情页也能删卡，同时保留误删的安全网。
+     */
+    fun deleteCard(item: VaultItem) {
+        val vaultId = activeVaultStore.current() ?: return
+        viewModelScope.launch { itemRepository.softDeleteItem(vaultId = vaultId, itemId = item.id) }
+    }
 }

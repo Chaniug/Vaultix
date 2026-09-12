@@ -1,10 +1,12 @@
 package io.vaultix.vaultix.ui.totp
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -13,6 +15,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -21,7 +24,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.FileDownload
-import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenuItem
@@ -30,11 +33,10 @@ import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LargeTopAppBar
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.ScaffoldDefaults
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
@@ -46,14 +48,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.snap
-import androidx.compose.animation.core.tween
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.SideEffect
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -74,7 +70,13 @@ import io.vaultix.common.TotpConfig
 import io.vaultix.common.TotpGenerator
 import io.vaultix.model.VaultItem
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.common.EntryCard
+import io.vaultix.vaultix.ui.common.EntryCardTextSpacing
+import io.vaultix.vaultix.ui.common.PressAndSwipeToDelete
+import io.vaultix.vaultix.ui.common.VaultixExpressiveTopBar
 import io.vaultix.vaultix.ui.common.VaultixSearchTopAppBar
+import io.vaultix.vaultix.ui.common.rememberImmersiveBarPadding
+import io.vaultix.vaultix.ui.common.rememberScrollCollapseFraction
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -125,7 +127,15 @@ fun TotpCodesScreen(
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
+        // 顶栏改为**浮在内容之上**的画法（沉浸式，见 [VaultixExpressiveTopBar]）：
+        // Scaffold 不再为顶栏预留空间，状态栏内边距由顶栏自己处理。
+        contentWindowInsets = if (searchActive) {
+            ScaffoldDefaults.contentWindowInsets
+        } else {
+            WindowInsets(0, 0, 0, 0)
+        },
         topBar = {
+            // 搜索态仍需固定高度顶栏（输入框不能塞进会折叠的大标题里）。
             if (searchActive) {
                 VaultixSearchTopAppBar(
                     searchTerm = state.query,
@@ -138,11 +148,85 @@ fun TotpCodesScreen(
                     clearIconContentDescription = stringResource(R.string.items_search_clear),
                     scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior(),
                 )
-            } else {
-                LargeTopAppBar(
-                    title = { Text(text = stringResource(R.string.totp_screen_title)) },
-                    navigationIcon = {
-                        if (!embedded) {
+            }
+        },
+        floatingActionButton = {
+            if (!embedded) {
+                FloatingActionButton(onClick = { editing = TotpEntry.empty() }) {
+                    Icon(Icons.Filled.Add, contentDescription = stringResource(R.string.totp_add_title))
+                }
+            }
+        },
+    ) { padding ->
+        val entries = viewModel.filteredEntries()
+        val listState = rememberLazyListState()
+        val collapse = rememberScrollCollapseFraction(listState)
+        val barPadding = rememberImmersiveBarPadding(collapse)
+        // 「通行密钥」入口（对齐 Bastion：挂在统一进度条右侧；无条目时独立成行兜底，
+        // 否则用户在空列表下会彻底失去进入通行密钥页的路径）。
+        val passkeyEntry: @Composable () -> Unit = {
+            IconButton(onClick = onOpenPasskeys) {
+                Icon(
+                    imageVector = Icons.Filled.Fingerprint,
+                    contentDescription = stringResource(R.string.totp_passkey_button),
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            }
+        }
+        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
+            // 顶部让出「状态栏 + 顶栏」的高度（随收起动画变短），顶栏浮在它之上。
+            Column(modifier = Modifier.fillMaxSize().padding(top = barPadding)) {
+                // ---- 统一倒计时进度条（整页一条，不再每行一条）----
+                val soonest = entries.minByOrNull { TotpGenerator.remainingSeconds(it.period, nowSeconds) }
+                if (soonest == null) {
+                    UnifiedTotpProgressPlaceholder(trailingContent = passkeyEntry)
+                } else {
+                    UnifiedTotpProgressBar(
+                        periodSeconds = soonest.period,
+                        nowSeconds = nowSeconds,
+                        trailingContent = passkeyEntry,
+                    )
+                }
+                when {
+                    state.items.isEmpty() -> EmptyTotpState(
+                        title = stringResource(R.string.totp_empty_title),
+                        message = stringResource(R.string.totp_empty_body),
+                    )
+
+                    entries.isEmpty() -> EmptyTotpState(
+                        message = stringResource(R.string.totp_empty_body),
+                    )
+
+                    else -> LazyColumn(
+                        state = listState,
+                        modifier = Modifier.fillMaxSize(),
+                        // 与密码列表同一套留白结构（卡片不再自带外边距，见 [EntryCard]）。
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(TOTP_CARD_GAP),
+                    ) {
+                        items(entries, key = { it.itemId }) { entry ->
+                            TotpRow(
+                                entry = entry,
+                                nowSeconds = nowSeconds,
+                                snackbarHostState = snackbarHostState,
+                                onEdit = { editing = entry },
+                                onDelete = { viewModel.deleteTotp(entry) },
+                                onBind = { if (!entry.bound) binding = entry },
+                                onCopy = viewModel::copyCode,
+                            )
+                        }
+                    }
+                }
+            }
+            if (!searchActive) {
+                VaultixExpressiveTopBar(
+                    title = stringResource(R.string.totp_screen_title),
+                    collapseFraction = collapse,
+                    modifier = Modifier.align(Alignment.TopCenter),
+                    navigationIcon = if (embedded) {
+                        null
+                    } else {
+                        {
                             IconButton(onClick = onBack) {
                                 Icon(
                                     Icons.AutoMirrored.Filled.ArrowBack,
@@ -164,51 +248,8 @@ fun TotpCodesScreen(
                                 contentDescription = stringResource(R.string.totp_import_button),
                             )
                         }
-                        IconButton(onClick = onOpenPasskeys) {
-                            Icon(
-                                Icons.Filled.Key,
-                                contentDescription = stringResource(R.string.totp_passkey_button),
-                            )
-                        }
                     },
-                    scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior(),
                 )
-            }
-        },
-        floatingActionButton = {
-            if (!embedded) {
-                FloatingActionButton(onClick = { editing = TotpEntry.empty() }) {
-                    Icon(Icons.Filled.Add, contentDescription = stringResource(R.string.totp_add_title))
-                }
-            }
-        },
-    ) { padding ->
-        val entries = viewModel.filteredEntries()
-        when {
-            state.items.isEmpty() -> EmptyTotpState(
-                title = stringResource(R.string.totp_empty_title),
-                message = stringResource(R.string.totp_empty_body),
-            )
-            entries.isEmpty() -> EmptyTotpState(
-                message = stringResource(R.string.totp_empty_body),
-            )
-            else -> {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize().padding(padding),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
-                ) {
-                    items(entries, key = { it.itemId }) { entry ->
-                        TotpRow(
-                            entry = entry,
-                            nowSeconds = nowSeconds,
-                            snackbarHostState = snackbarHostState,
-                            onClick = { editing = entry },
-                            onDelete = { viewModel.deleteTotp(entry) },
-                            onBind = { if (!entry.bound) binding = entry },
-                            onCopy = viewModel::copyCode,
-                        )
-                    }
-                }
             }
         }
     }
@@ -313,31 +354,32 @@ private fun TotpRow(
     entry: TotpEntry,
     nowSeconds: Long,
     snackbarHostState: SnackbarHostState,
-    onClick: () -> Unit,
     onDelete: () -> Unit,
+    onEdit: () -> Unit,
     onBind: () -> Unit,
     onCopy: (String) -> Unit,
 ) {
     val code = TotpGenerator.generate(entry.toConfig(), nowSeconds)
     val isHotp = entry.type == OtpType.HOTP
-    val remaining = TotpGenerator.remainingSeconds(entry.period, nowSeconds)
-    // 数据层是**秒级**（每秒一次重组），进度条若直接用阶梯值会一秒一跳；
-    // 平滑视觉在绘制层补齐（对齐 Bastion `rememberTotpSmoothProgress`）。
-    val progress = rememberTotpSmoothProgress(1f - (remaining.toFloat() / entry.period))
     val copiedMessage = stringResource(R.string.copy_totp)
     val scope = rememberCoroutineScope()
+    // 点一下即复制（对齐 Bastion 验证器页：整行可点 → 复制 + 提示）。
+    // ⚠️ 显式标注返回类型：`scope.launch` 的返回值是 Job，推断成 `() -> Job` 会与
+    // EntryCard 的 `onClick: () -> Unit` 不匹配（编译期报 "actual type is () -> Job"）。
+    val copyNow: () -> Unit = {
+        onCopy(code)
+        scope.launch { snackbarHostState.showSnackbar(copiedMessage) }
+    }
 
-    Surface(
-        onClick = onClick,
-        color = MaterialTheme.colorScheme.surface,
-        shape = MaterialTheme.shapes.large,
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
+    // 卡片外框与密码 / 卡包列表完全一致（见 [EntryCard]）；内边距由卡片统一给 16dp。
+    // 「按住后滑动删除」包在外层（见 [PressAndSwipeToDelete]）。
+    PressAndSwipeToDelete(onDelete = onDelete) {
+        EntryCard(onClick = copyNow) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = entry.title.ifBlank { stringResource(R.string.totp_screen_title) },
                     style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.weight(1f),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -349,6 +391,7 @@ private fun TotpRow(
                     text = entry.account,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = EntryCardTextSpacing),
                 )
             }
             Spacer(Modifier.height(8.dp))
@@ -368,19 +411,8 @@ private fun TotpRow(
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                } else {
-                    Text(
-                        text = "${remaining}s",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
                 }
-                IconButton(onClick = {
-                    onCopy(code)
-                    scope.launch {
-                        snackbarHostState.showSnackbar(copiedMessage)
-                    }
-                }) {
+                IconButton(onClick = copyNow) {
                     Icon(
                         Icons.Filled.ContentCopy,
                         contentDescription = stringResource(R.string.totp_action_copy),
@@ -388,18 +420,15 @@ private fun TotpRow(
                     )
                 }
             }
-            if (!isHotp) {
-                LinearProgressIndicator(
-                    progress = { progress },
-                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
-                    trackColor = MaterialTheme.colorScheme.surfaceVariant,
-                )
-            }
+            // 倒计时不再逐行画进度条：整页共用顶部的统一进度条（见 [UnifiedTotpProgressBar]），
+            // 既统一观感，也省掉每行每秒一次的绘制/动画开销（用户要求「降低功耗」）。
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (!entry.bound) {
                     TextButton(onClick = onBind) { Text(stringResource(R.string.totp_action_bind)) }
                 }
                 Spacer(Modifier.weight(1f))
+                // 整行点击已改为「复制」，编辑入口因此必须显式留一个（否则改不了条目）。
+                TextButton(onClick = onEdit) { Text(stringResource(R.string.totp_action_edit)) }
                 TextButton(onClick = onDelete) { Text(stringResource(R.string.totp_remove_action)) }
             }
         }
@@ -851,33 +880,5 @@ private fun LoginPickerDialog(
 
 private val ALGORITHMS = listOf("SHA1", "SHA256", "SHA512")
 
-/**
- * 验证码倒计时的**平滑进度**（移植自 Bastion `rememberTotpSmoothProgress`，GPL-3.0，
- * Copyright 2025 JoyinJoester）。
- *
- * 背景：Vaultix 的 TOTP 数据源是**秒级**的（每秒一次重组），进度条直接用阶梯值会一秒一跳；
- * Bastion 为此专门做过性能修订 —— 数据层从 50ms 高频发射改回秒级（50ms 会让整个列表
- * 每秒 20×N 次重组，是长列表掉帧主因），**平滑视觉改由绘制层动画补齐**：
- * - 常规推进：对秒级阶梯值施加 1s 线性动画，视觉上等价于匀速推进；
- * - 周期翻转：目标值从 ~1 回落到 ~0 时直接 `snap()`，避免动画倒着卷回去。
- */
-@Composable
-private fun rememberTotpSmoothProgress(target: Float): Float {
-    val clamped = target.coerceIn(0f, 1f)
-    var lastTarget by remember { mutableFloatStateOf(clamped) }
-    val wrapDetected = clamped < lastTarget - 0.5f
-    val animated by animateFloatAsState(
-        targetValue = clamped,
-        animationSpec = if (wrapDetected) {
-            snap()
-        } else {
-            tween(durationMillis = TOTP_PROGRESS_ANIM_MS, easing = LinearEasing)
-        },
-        label = "totp_smooth_progress",
-    )
-    SideEffect { lastTarget = clamped }
-    return animated
-}
-
-/** 平滑动画时长：与秒级数据源同周期（1s），视觉上恰好匀速。 */
-private const val TOTP_PROGRESS_ANIM_MS = 1_000
+/** 卡片之间的纵向间距（与密码列表一致）。 */
+private val TOTP_CARD_GAP = 8.dp

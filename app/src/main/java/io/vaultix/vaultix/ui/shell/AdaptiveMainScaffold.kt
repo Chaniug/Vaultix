@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -70,7 +71,14 @@ fun AdaptiveMainScaffold(
     if (isCompactWidth) {
         // 窄屏：由调用方提供悬浮胶囊底栏（VaultixBottomDock），此处不再自绘
         // NavigationBar —— 对齐 Bastion 真实主界面路径（见溯源声明）。
-        androidx.compose.material3.Scaffold(bottomBar = bottomBar) { padding ->
+        //
+        // ⚠️ `contentWindowInsets = 0`：Tab 内容要能画到状态栏下方（沉浸式顶栏，
+        // 见 VaultixExpressiveTopBar —— 状态栏内边距由顶栏自己加）。若这里保留默认的
+        // systemBars 内边距，内容会被整体压到状态栏下面，顶栏再加一次就是双份留白。
+        androidx.compose.material3.Scaffold(
+            bottomBar = bottomBar,
+            contentWindowInsets = WindowInsets(0, 0, 0, 0),
+        ) { padding ->
             content(padding)
         }
         return

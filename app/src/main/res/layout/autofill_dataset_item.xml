@@ -9,21 +9,25 @@
   `autofill_remote_view.xml` 的实际规格：
   - 图标 **20dp 上限**（`maxWidth`/`maxHeight`）+ 右侧 10dp 间距，且**是单色矢量**，
     由 `AutofillDatasets.presentation` 用 `setColorFilter` 上系统前景色；
-  - 行内边距收到 12/6dp、最小高度 48dp —— 面板条目本来就该紧凑，
+  - 行内边距收到 12/8dp、最小高度 48dp —— 面板条目本来就该紧凑，
     56dp 的「大卡片」在系统下拉里会显得格外笨重；
+  - 外框：根布局挂 `@drawable/autofill_item_frame`（12dp 圆角**描边**，不填底色）——
+    给出明确的行边界，同时避免用猜出来的底色与各家 ROM 的面板底色打架；
   - 文本沿用系统主题前景色（`?android:attr/textColorPrimary/Secondary`），
-    明暗模式由系统面板自己决定。
+    明暗模式由系统面板自己决定（比硬编码自家色板更稳）。
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/autofill_item_root"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:minHeight="48dp"
+    android:background="@drawable/autofill_item_frame"
     android:gravity="center_vertical"
     android:orientation="horizontal"
     android:paddingStart="12dp"
-    android:paddingTop="6dp"
+    android:paddingTop="8dp"
     android:paddingEnd="12dp"
-    android:paddingBottom="6dp">
+    android:paddingBottom="8dp">
 
     <ImageView
         android:id="@+id/autofill_item_icon"

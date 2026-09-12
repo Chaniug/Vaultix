@@ -6,6 +6,8 @@ import android.net.Uri
 import android.provider.Settings
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -48,7 +50,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -72,6 +73,9 @@ import io.vaultix.model.VaultSummary
 import io.vaultix.vaultix.BuildConfig
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.BiometricPrompter
+import io.vaultix.vaultix.ui.common.VaultixExpressiveTopBar
+import io.vaultix.vaultix.ui.common.rememberImmersiveBarPadding
+import io.vaultix.vaultix.ui.common.rememberScrollCollapseFraction
 import io.vaultix.vaultix.ui.common.TrashAutoDeleteDialog
 import io.vaultix.vaultix.ui.common.deviceCanAuthenticate
 import io.vaultix.vaultix.ui.common.rememberFragmentActivity
@@ -102,28 +106,21 @@ fun SettingsScreen(
 
     QuickUnlockEnrollEffect(viewModel)
 
+    // 沉浸式顶栏：大标题随滚动缩小、状态栏区域由顶栏背景覆盖（对齐 Bastion）。
+    val scrollState = rememberScrollState()
+    val collapse = rememberScrollCollapseFraction(scrollState)
+    val barPadding = rememberImmersiveBarPadding(collapse)
+
     Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.settings_title)) },
-                navigationIcon = {
-                    if (!embedded) {
-                        IconButton(onClick = onBack) {
-                            Icon(
-                                Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = stringResource(R.string.action_back),
-                            )
-                        }
-                    }
-                },
-            )
-        },
+        // 顶栏浮在内容之上：Scaffold 不再为它预留高度。
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
     ) { padding ->
+        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding)
-                .verticalScroll(rememberScrollState()),
+                .padding(top = barPadding)
+                .verticalScroll(scrollState),
         ) {
             // ---- 库（活跃库 = 全局单一真源；Bastion 里它是筛选维度，Vaultix 收成一个） ----
             VaultSection(viewModel)
@@ -151,6 +148,24 @@ fun SettingsScreen(
                 onShowLicense = { showAboutDialog = true },
             )
             Spacer(Modifier.height(32.dp))
+        }
+            VaultixExpressiveTopBar(
+                title = stringResource(R.string.settings_title),
+                collapseFraction = collapse,
+                modifier = Modifier.align(Alignment.TopCenter),
+                navigationIcon = if (embedded) {
+                    null
+                } else {
+                    {
+                        IconButton(onClick = onBack) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = stringResource(R.string.action_back),
+                            )
+                        }
+                    }
+                },
+            )
         }
     }
 

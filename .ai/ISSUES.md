@@ -1232,3 +1232,68 @@ $env:JAVA_HOME="C:\Program Files\Microsoft\jdk-17.0.20.8-hotspot\"
 ⚠️ **`onFillRequest` 不是挂起函数**：在里面直接 `prefs.xxx.first()` 会编译失败
 （`Suspend function 'first' can only be called from a coroutine`）——读取偏好必须放进
 `scope.launch { }` 内（本轮踩过，已在 `VaultixAutofillService` 内注明）。
+
+---
+
+## 56. 「整行点击 = 复制」与「按住后滑动删除」的手势冲突（2026-09-12，第四十四轮）
+
+**需求（用户原话）**：「验证码界面的点击复制验证码到剪切板的，按住验证码条目，滑动删除」；
+密码条目同样要「按住后滑动删除」。
+
+**冲突点**：卡片内层已有 `EntryCard` 的 `clickable`（点击 = 打开详情 / 复制验证码），
+删除手势若也用普通拖动，会在松手时**同时**触发点击（变成「删掉又打开详情」）。
+
+**解法**（`ui/common/PressAndSwipeToDelete.kt`）：
+1. 用 `detectDragGesturesAfterLongPress` —— **只有长按之后**的拖动才算删除手势，
+   与点击互不干扰（点击仍在长按超时前完成）；
+2. 拖动事件 `change.consume()` —— 内层 clickable 见到已消费的 move 会放弃这次点击；
+3. 只允许向左拖（`minOf(amount.x, 0f)`），红色删除底随位移渐显，未过阈值回弹、过阈值滑出后回调；
+4. 删除一律走**软删除**（`ItemRepository.softDeleteItem`，进回收站可恢复），并在列表给一句提示。
+
+**为什么不做普通左滑删除**：密码条目一滑就没，误触代价太高（列表滚动/单手/口袋误碰）。
+上游 Bastion 的删除也是「先长按/选择、再动手」的两步语义。
+
+⚠️ 副作用：验证码行点击改成「复制」后**编辑入口必须显式补一个**（否则条目改不了）——
+已在行内加「编辑」按钮；密码列表则仍由点击进详情编辑。
+
+---
+
+## 57. 沉浸式顶栏：必须「浮在内容之上」才成立（2026-09-12，第四十四轮）
+
+**用户要求**：「滑动就左上角的字放大缩小的效果、状态栏沉浸、右上角按钮沉浸」。
+
+**规格**（`ui/common/ExpressiveTopBar.kt`，移植 Bastion `ExpressiveTopBar`）：
+标题 32sp→16sp、栏高 72dp→48dp、上下内边距 8dp→4dp、内容下移 8dp→0dp、
+**收起后栏背景 alpha→0**、动作胶囊 48dp→40dp + 整组缩放 0.85、内容色向 `onSurfaceVariant` 过渡。
+收起判定是**快照式**（首个可见项偏移 > 8dp → 1，否则 0），内部 200ms 补间，
+判定值用 `derivedStateOf`（避免每帧重组）。
+
+**三个必须同时满足的条件（缺一个就退化成「顶栏变短了但内容还是被压着」）**：
+1. 顶栏必须画在**内容之上**（`Box { 列表; 顶栏 }`），**不能**放 `Scaffold(topBar = …)`
+   —— Scaffold 会把内容整体压到顶栏下方，「内容从半透明栏下穿过」就不存在了；
+2. 列表顶部留白取 `rememberImmersiveBarPadding(collapse)` = 状态栏内边距 + 当当前栏高
+   （随收起动画变短），这样展开时首条不被挡、收起后内容滑到栏下；
+3. 外层壳（`AdaptiveMainScaffold` 的 `Scaffold`）必须 `contentWindowInsets = 0`
+   —— 否则外层已把内容压到状态栏下方，顶栏再加一次 `statusBarsPadding` 就是双份留白。
+
+搜索态例外：搜索输入框不能塞进会折叠的大标题里，故搜索态仍走固定高度的
+`VaultixSearchTopAppBar`（并恢复默认 `contentWindowInsets`）。
+
+---
+
+## 58. 验证码页「统一进度条」与详情页「去动态验证码」（2026-09-12，第四十四轮）
+
+**① 统一进度条**（`ui/totp/UnifiedProgressBar.kt`，移植 Bastion `UnifiedProgressBar`）：
+整页**一条**倒计时（取最快翻转那条条目的周期），进度 = 本周期已过/周期，
+剩余 ≤5s 切 `error` 色，右侧固定「Ns」，其后是可选的**尾部插槽**——
+「通行密钥」入口就挂在这里（对齐 Bastion，空列表时独立成行兜底，
+否则用户在空态下失去进入通行密钥页的路径）。
+**行内进度条全部删除**：每行每秒重绘一条进度条是纯浪费，统一到顶部一条即可（用户要求降功耗）。
+
+**② 详情页去动态验证码**：`ItemDetailScreen` 此前每秒重算验证码 + 重绘进度条（页面开着就一直跑），
+现改为**只提示**「该条目含有验证码 / 已绑定 N 个通行密钥」，并注明去「验证码」页查看。
+⚠️ 点击行 = 复制之后，验证码页的编辑入口必须显式保留（见 #56）。
+
+**③ 2FA 第二步页面完全不响应**：`AutofillFillTargetPolicy.isOtpOnly` →
+`VaultixAutofillService.buildResponse` 直接 `return null`。验证码在上一步填账号密码时就已进剪贴板，
+这一页既不该列条目、也不该弹「没有匹配的密码」（对齐上游 `Unfillable → onSuccess(null)`）。

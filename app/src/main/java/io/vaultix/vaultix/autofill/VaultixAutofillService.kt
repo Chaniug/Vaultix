@@ -190,6 +190,14 @@ class VaultixAutofillService : AutofillService() {
             return null
         }
 
+        // 2FA 第二步页面（只有验证码框）→ **完全不响应**：既不列条目，也不弹
+        // 「没有匹配的密码 / 点此搜索」。验证码在上一步填账号密码时就已复制进剪贴板
+        // （对齐上游 `Unfillable → onSuccess(null)`，详见 AutofillFillTargetPolicy.isOtpOnly）。
+        if (AutofillFillTargetPolicy.isOtpOnly(parsed)) {
+            AutofillLogger.d("otpOnly → 不响应（验证码已在剪贴板，无需弹任何东西）")
+            return null
+        }
+
         val unlocked = vaultRepository.observeUnlockedVaultIds().first()
         if (unlocked.isEmpty()) {
             AutofillLogger.d("locked: no unlocked vault → unlock fallback")

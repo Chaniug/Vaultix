@@ -71,6 +71,7 @@ class VaultixPreferences @Inject constructor(
         val AUTOFILL_BASE_DOMAIN_MATCH = booleanPreferencesKey("autofill_base_domain_match")
         val AUTOFILL_EXACT_DOMAIN_ONLY = booleanPreferencesKey("autofill_exact_domain_only")
         val FILL_ASSIST_ENABLED = booleanPreferencesKey("fill_assist_enabled")
+        val ITEMS_GROUP_MODE = stringPreferencesKey("items_group_mode")
 
         const val DEFAULT_CLIPBOARD_CLEAR_MS = 30 * 1000L
     }
@@ -193,6 +194,15 @@ class VaultixPreferences @Inject constructor(
     val fillAssistEnabled: Flow<Boolean> =
         safeData.map { it[FILL_ASSIST_ENABLED] ?: true }
 
+    /**
+     * 条目列表的分组方式（`none` / `type` / `folder` / `initial`）。
+     *
+     * 默认 `none` = 不分组，与历史观感一致；分组是**列表展示**偏好，不影响任何数据。
+     * 取值到枚举的映射在 UI 层（`ItemsGroupMode.from`），偏好层只存字符串。
+     */
+    val itemsGroupMode: Flow<String> =
+        safeData.map { it[ITEMS_GROUP_MODE] ?: "none" }
+
     val defaultVaultId: Flow<String?> = safeData.map { it[DEFAULT_VAULT_ID] }
 
     /**
@@ -277,6 +287,11 @@ class VaultixPreferences @Inject constructor(
     /** 「填充辅助」开关（对齐 Bitwarden `isFillAssistEnabled = value`）。 */
     suspend fun setFillAssistEnabled(enabled: Boolean) {
         dataStore.edit { it[FILL_ASSIST_ENABLED] = enabled }
+    }
+
+    /** 条目列表分组方式（`none` / `type` / `folder` / `initial`）。 */
+    suspend fun setItemsGroupMode(mode: String) {
+        dataStore.edit { it[ITEMS_GROUP_MODE] = mode }
     }
 
     suspend fun setDefaultVaultId(id: String?) {
