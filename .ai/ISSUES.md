@@ -1634,3 +1634,128 @@ Kotlin 块注释**支持嵌套**，那个序列被解析成**注释结束符**�
 **判据**：**新增入口时先画一遍「从冷启动到该入口」的可达路径。**
 功能挂在一个不可达的路由后面，等于没做。
 
+
+---
+
+## 70. Tab 切换闪一下 —— 进出动画不同步造成的「双向半透明」漏光（2026-09-13）
+
+**现象**：密码条目页 → 验证码页（以及反向）切换时屏幕闪一下；**深色模式尤其晃眼**。
+
+**根因**：`TabTransitions` 原为 `fadeIn(220ms)` + `fadeOut(120ms)`，另叠加 `slideInVertically`。
+`AnimatedContent` 过渡的**中间帧两页同时在屏幕上**：新页 alpha = a、旧页 alpha = b 时，
+与背景 `Bg` 的合成结果是 `新*a + 旧*b*(1-a) + Bg*(1-a)*(1-b)`。
+两条**时长不同**的曲线必然在中间某处同时处于「半透明」（a≈b≈0.5），
+此时背景占比 `(1-a)(1-b) = 25%` ⇒ 黑底透出四分之一 = **一帧明显的闪光**。
+位移动画把这块漏光「抹开」，观感更糟。
+
+**解法**：进出**同时长**（140ms）且 alpha **互为补数**（enter 0.95→1、exit 1→0.05，
+`CubicBezierEasing(0.6,0,0.4,1)`），`(1-a)(1-b)` 峰值降到约 1.2%；去掉位移。
+
+**判据**：**任何 cross-fade，进出必须同时长 + alpha 互补。**
+「让退出更快一点」这类看着更利落的配置，在深色底上就是一次闪光。
+
+---
+
+## 71. 长按多选缺失 / 卡片按钮冗余 —— 对齐 Bastion 的「选择模式」规格（2026-09-13）
+
+**现象**：①验证码卡片上「复制 / 编辑 / 移除」三个图标按钮太占地方；
+②「按住条目出现选择框 → 从右往左滑删除」没做好。
+
+**根因**：①把「复制」这种**主操作**（Bastion 里点卡片本身即复制）又做成一个图标，
+另有编辑 / 移除两个低频动作**常驻**在行内；②列表只有 `onClick` + 左滑删除，
+没有「长按进入选择态」这条路径，用户勾不了多条。
+
+**解法**（对齐 Bastion `TotpCodeCard.cardInteractionModifier`）：
+- **选择态**：`clickable { onToggleSelect }`，行尾 `Checkbox` 顶掉菜单按钮；
+  **非选择态**：`combinedClickable(onClick = 主操作, onLongClick = 进选择)`，
+  行尾 `MoreVert` + `DropdownMenu` 收纳「绑定 / 编辑 / 移除」。
+- 底部批量操作条（`ui/common/SelectionActionBar`）：已选 N / 全选 / 清空 / 删除所选；
+  密码页与验证码页共用，`BackHandler` 优先吃掉返回手势以免白勾一场。
+- 左滑删除保留，且**不与长按抢事件**：`PressAndSwipeToDelete` 由
+  `detectDragGesturesAfterLongPress` 改为手写 `awaitEachGesture + 
+  withTimeoutOrNull(longPressTimeout) + drag`，长按进选择、继续拖才滑删。
+
+**判据**：**列表行的「主操作 / 低频操作 / 批量操作」要分层** ——
+主操作 = 点卡片；低频 = 收进菜单；批量 = 长按进选择态。
+三者挤在一行里，结果是既不好点也不好看。
+
+---
+
+## 72. 填充下拉由系统用 RemoteViews 渲染 —— 能力边界与网络禁令（2026-09-13）
+
+**现象**：填充时弹出的条目框偏大、不精致，且**没有站点 logo**（全是统一图标）。
+
+**根因**：这个下拉**不是 Compose 画的**，是系统按 `RemoteViews` 渲染的 ——
+MaterialCardView 的完整阴影、水波纹、非系统字体、动态取色**一概不支持**；
+此前行高 56dp + 外层圆角底框 + 20dp 小图标，视觉上又松又钝。
+图标缺失则是因为 presentation 只肯接受本地 `Bitmap`，而站点图标是网络资源。
+
+**解法**：
+- 行高 56 → **48dp**、去掉外层圆角底框、图标 20 → **24dp**（`centerCrop`）、
+  标题 15 → 14sp、副标题 13 → 12sp（对齐 Bitwarden 填充下拉的紧凑观感）。
+- 新增 `AutofillItemIcon`：**先查 Coil 磁盘缓存**（`imageLoader.diskCache?.openSnapshot(url)`）
+  取站点图标并圆形裁切；未命中则按标题哈希在 8 色里取一色**本地绘制字母头像**。
+  **全程不发网络** —— 填充响应有系统超时，等一次下载就会超时丢候选。
+  ⚠️ `DiskCache.Snapshot.data` 是 **okio.Path**，不是 File，需 `.toFile().absolutePath`。
+
+**判据**：**写 RemoteViews 之前先确认「这个效果系统能不能画」**；
+拿不准的一律降级为「App 侧合成好 Bitmap 再交给系统」。
+
+---
+
+## 73. 覆盖安装后首次解锁慢、指纹弹得晚 —— 密钥运算跑在主线程（2026-09-13）
+
+**现象**：覆盖安装后有时指纹框不能第一时间弹出，「像每次都要重新验证登录密钥链」；
+Bitwarden 库同步后本应已缓存在本地，打开却慢。
+
+**根因**：`viewModelScope.launch` **默认跑主线程**，而里面做的是 Keystore 往返、
+`prepareLocalUnlock` / `completeLocalUnlock`、PBKDF2 / Argon2 派生 ——
+全是毫秒到百毫秒级的阻塞调用；`localUnlockAvailable` 也在主线程做 Keystore 查询。
+主线程一卡，BiometricPrompt 的弹出与动画就被推迟。此外 cipher 是**点按钮才创建**的，
+用户看到指纹框时密钥还没备好。
+
+**解法**：上述全部 `withContext(Dispatchers.IO)`；`localUnlockAvailable` 加
+`flowOn(Dispatchers.IO)`；`localUnlockAvailable` 一到位就后台 `prewarmCipher(id)`
+把 BiometricPrompt 需要的 cipher 备好。
+
+**判据**：**`viewModelScope.launch` 的默认调度器是主线程。**
+任何 Keystore / 密钥派生 / 数据库 / 文件 IO 都必须显式切走。
+
+---
+
+## 74. detekt 不会对 @Composable 网开一面 —— 抽块时参数必须 ≤8（2026-09-13）
+
+**现象**：本轮加完多选与美化后 detekt 报 5 项越线（`LongMethod` 151/171/182、
+`CyclomaticComplexMethod` 15/16）。
+
+**根因**：项目只给 `FunctionNaming` 配了 `ignoreAnnotated: ['Composable']`
+（放行 PascalCase 命名）。**`LongMethod` / `CyclomaticComplexMethod` /
+`LongParameterList` 不豁免**，`ignoreDefaultParameters` 也是 `false` ⇒
+「把大块 UI 抽成一个 13 参数的 composable」这种常见做法**会踩 `LongParameterList`**。
+
+**解法**：按「参数 ≤8」拆，行数不够就把**多行 lambda 收敛成文件级 helper**：
+- 抽出 `TotpSelectionBar` / `BoxScope.TotpOverlayTopBar` / `ItemRowSubtitle` /
+  `ItemRowTrailing` / `ItemFormTail` / `AddRequestEffect` / `ItemsEmptyState`；
+- 把「选中集合翻转」收敛成 `ui.common.toggleSelection(set, key)`（两页共用，
+  一处 6 行三元 → 一行）；`contentWindowInsets` 的三元压成一行。
+
+**判据**：**Compose 页面天然长，抽块是常态，但抽取物本身也要过门禁。**
+先想「这块的参数有几个」，超过 8 就继续拆或传 ViewModel 而不是一堆 lambda。
+
+---
+
+## 75. 给函数加「带默认值的尾部参数」会吃掉调用点的尾随 lambda（2026-09-13）
+
+**现象**：`FillPlanner.plan()` 新增 `serverOrigin: String? = null` 之后，
+单测 `FillPlannerTest` 编译失败：`No value passed for parameter 'totpProvider'` +
+`actual type is '() -> String', but 'String?' was expected`。
+
+**根因**：原调用写成 `plan(a, b, c, d) { "123456" }` —— 尾随 lambda 绑定的是
+**最后一个参数**。新增的 `serverOrigin` 插在了 `totpProvider` **后面**，
+于是 `{ "123456" }` 被当成 `serverOrigin`（类型 `String?`），`totpProvider` 反而没传。
+**默认值让它在调用点静默地改变了语义**，编译器只在类型不匹配时才报出来。
+
+**解法**：调用点改用具名参数 `totpProvider = { "123456" }`。
+
+**判据**：**新参数加在末尾时，务必全局搜一遍该函数的尾随 lambda 调用点。**
+「有默认值所以不会破坏兼容性」只对具名调用成立。

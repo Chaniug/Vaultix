@@ -338,6 +338,12 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 - 沙箱内 GitHub 推送（**仅供沙箱参考**）：GitHub 被解析到 `198.18.0.x` ⇒ 用阿里 DoH
   （`https://223.5.5.5/resolve?name=github.com&type=A`）写 hosts + `~/.user_hosts`；
   SSH over 443（`HostName ssh.github.com` / `Port 443`）；HTTPS 推送不可行
+- ⚠️ 沙箱查 CI：`api.github.com` 直连会 EOF 或被 301 到 `github.com` ⇒
+  **hosts 写 `140.82.121.6 api.github.com`**（`140.82.112.4 github.com`），
+  之后 `GH_TOKEN=... gh run list/watch/view --repo Chaniug/Vaultix` 即可
+  （remote 是 ghfast 镜像，`gh` 认不出 host，必须带 `--repo`）
+- ⚠️ 沙箱 `assembleFullDebug` 的 **dex 阶段会偶发「Gradle daemon disappeared」**
+  （并发越高越易触发，与代码无关）⇒ 用 `--max-workers=1` 稳定跑通
 - 沙箱无 Android SDK 时，可用 Gradle 自带的 `kotlin-compiler-embeddable-2.2.21.jar`
   真实编译纯 JVM 模块的 `.kt` 并跑断言 —— **验证真正会编译进 App 的那份代码**，
   胜过「内联逻辑副本」；Compose 文件可用 API 桩（`Modifier` 桩必须写成
@@ -346,7 +352,23 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 
 ---
 
-## 9. 当前状态与下一批（第四十九轮接力起手式）
+## 9. 当前状态与下一批（第五十轮接力起手式）
+
+**第五十轮（已提交 `23c3629`，CI run `34713640553` success 3m24s）**：用户睡前留 5 个 bug +
+1 个美化 —— ①Tab 切换闪一下（深色晃眼）②验证码进度条不随滚动收起 ③验证码卡片按钮冗余 +
+长按多选 / 左滑删除没弄好 ④填充条目框偏大且无站点 logo ⑤覆盖安装后指纹弹得晚、开库慢
+⑥新增条目表单与条目展示观感。根因见 `ISSUES.md` **#70~#75**。
+门禁（本地真跑全绿）：全模块 `detekt` → `:app:compileFullDebugKotlin` →
+`:app:assembleFullDebug` → `testFullDebugUnitTest`。
+
+**★ 第一优先：真机验收 6 条**（清单见 `.ai/SESSION-2026-09-13.md` 第五十轮末节）
+1. **切页不闪**：深色模式下密码 ↔ 验证码来回切，应无闪白 / 闪黑。
+2. **倒计时条**：验证码页下滑收起、上滑展开（`tween(200)`）。
+3. **多选 + 滑删**：长按条目 → 勾选框 + 底部批量条（全选 / 清空 / 删除所选）；
+   左滑仍能删单条，且与长按不冲突。
+4. **填充下拉**：更紧凑（48dp 行高）且**有站点图标**（缓存未命中时是彩色字母头像）。
+5. **解锁**：覆盖安装后冷启动，指纹框应**立即**弹出，进库无肉眼可见停顿。
+6. **回归**：Bitwarden 同步 / KDBX 读写 / 通行密钥登录不受影响。
 
 **第四十九轮（已提交 `bc09995` + `678be0d`）**：用户一次报 8 件事 —— P0 解锁逻辑 + 布局三症 +
 滑动删除反馈 + KDBX 入口 + 填充下拉 + 条目页观感。根因见 `ISSUES.md` **#66~#69**。
@@ -448,6 +470,16 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 | 观感 | 全局输入框圆角 / 类型彩色徽标 / 详情图标头部 / 验证码字体 / 填充下拉实底 | `bc09995` |
 | 记忆归档 | ISSUES #66~#69 + 四份接力文件同步 | `678be0d` |
 
-> **踩坑全表**（现象 → 根因 → 解法，编号 #1~#69）：`.ai/ISSUES.md`。
+### 2026-09-13（第五十轮 · 睡前 5 bug + 1 美化）
+| 轮次 | 结论 | commit |
+|---|---|---|
+| 切页闪 | cross-fade **进出不同步** ⇒ 中间帧双向半透明，背景漏光 25%（深色 = 闪光） | `23c3629` |
+| 倒计时条 | 进度条未随滚动折叠；对齐 Bastion `lerp(44.dp, 0.dp, frac)` + `tween(200)` | `23c3629` |
+| 卡片按钮 / 多选 | 主操作 = 点卡片，低频 = MoreVert 菜单，批量 = 长按选择（Bastion 规格） | `23c3629` |
+| 填充下拉 | RemoteViews 有硬边界（阴影/水波纹/网络全不支持）⇒ 图标 App 侧合成 Bitmap | `23c3629` |
+| 解锁慢 | `viewModelScope.launch` **默认主线程**，Keystore / 密钥派生必须显式切 IO + 预热 cipher | `23c3629` |
+| 美化 | 表单分区图标化 + 条目行尾收藏星标 | `23c3629` |
+
+> **踩坑全表**（现象 → 根因 → 解法，编号 #1~#75）：`.ai/ISSUES.md`。
 > ⚠️ 其中 **#35 ↔ #43 ↔ #39 是一条「推翻链」**（passkey clientDataJSON 的错判与更正），
 > 接力时必须先看懂，不要只看旧条目就动手。
