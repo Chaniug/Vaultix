@@ -44,8 +44,22 @@ enum class LocalUnlockKekStatus {
     /** 别名不存在（从未启用过，或已被删除）。 */
     MISSING,
 
-    /** 存在但被平台永久失效（凭据变更）→ 只能删除重建，无法解密旧 payload。 */
+    /**
+     * 存在但被平台永久失效（凭据变更）→ 只能删除重建，无法解密旧 payload。
+     */
     INVALIDATED,
+
+    /**
+     * **暂时读不到**（设备刚启动尚未首次解锁 / Keystore 瞬时异常 / 调用时未认证）。
+     *
+     * ⚠️ 这一态是 2026-09-12 补的，修的是一个真实回归：此前把所有异常都归为
+     * [INVALIDATED]，于是设备重启后（Keystore 用户认证密钥在首次凭据解锁前不可读）
+     * 会把「稍后可用」误判成「已废弃」→ `localUnlockAvailable=false` →
+     * **解锁页的指纹按钮直接消失，用户被迫走一次联网重新登录**。
+     * 现在的取向与项目其它状态检测一致：**读不到 ≠ 不可用**，入口照常给出，
+     * 真失败时在解锁那一刻报错（那时才有准确原因）。
+     */
+    UNKNOWN,
 }
 
 /**
@@ -78,14 +92,20 @@ class LocalUnlockKeyStore @Inject constructor() {
             keyStore.getKey(KEY_ALIAS, null) != null
         }.fold(
             onSuccess = { exists -> if (exists) LocalUnlockKekStatus.LOADABLE else LocalUnlockKekStatus.MISSING },
-            // 任何异常（UnrecoverableKeyException / ProviderException…）都归为「已失效」：
-            // 它比对上层更安全的语义是「这把钥匙不能用了，需要重建」，而不是「从未启用」。
-            onFailure = { LocalUnlockKekStatus.INVALIDATED },
+            onFailure = { error ->
+                // **只有「永久失效」才算废弃**；其余（未认证 / Keystore 瞬时不可用 / 设备刚启动）
+                // 归为 UNKNOWN —— 否则会把「稍后可用」误判成「已废弃」，把指纹入口整条藏掉。
+                if (error.hasPermanentInvalidation()) {
+                    LocalUnlockKekStatus.INVALIDATED
+                } else {
+                    LocalUnlockKekStatus.UNKNOWN
+                }
+            },
         )
 
-    /** 是否已有一把**可用**的 KEK（设备支持判定：无锁屏/无生物识别时创建会失败）。 */
+    /** 是否**可以尝试**本地快速解锁：除「永久失效」外都给出入口（含 [LocalUnlockKekStatus.UNKNOWN]）。 */
     val keyAvailable: Boolean
-        get() = kekStatus == LocalUnlockKekStatus.LOADABLE
+        get() = kekStatus != LocalUnlockKekStatus.INVALIDATED
 
     /**
      * 初始化「包装」Cipher（启用快速解锁时用）：随机 IV，需用户认证后 doFinal。
@@ -193,6 +213,28 @@ class LocalUnlockKeyStore @Inject constructor() {
         keyStore.getKey(KEY_ALIAS, null) as? SecretKey
     }.getOrNull()
 
+    /**
+     * 异常链里是否出现「永久失效」标记。
+     *
+     * 平台把它裹在不同层级抛出（`ProviderException` → `UnrecoverableKeyException` →
+     * `KeyPermanentlyInvalidatedException`），只比顶层类型会漏判，故沿 cause 链找。
+     * ⚠️ `UserNotAuthenticatedException` **不算**永久失效（语义是「本次没认证」）。
+     */
+    private fun Throwable.hasPermanentInvalidation(): Boolean {
+        var cursor: Throwable? = this
+        var depth = 0
+        while (cursor != null && depth < MAX_CAUSE_DEPTH) {
+            when (cursor) {
+                is android.security.keystore.KeyPermanentlyInvalidatedException,
+                is java.security.UnrecoverableKeyException,
+                -> return true
+            }
+            cursor = cursor.cause
+            depth++
+        }
+        return false
+    }
+
     private companion object {
         const val ANDROID_KEYSTORE = "AndroidKeyStore"
         const val KEY_ALIAS = "vaultix_local_unlock_kek"
@@ -200,5 +242,6 @@ class LocalUnlockKeyStore @Inject constructor() {
         const val KEY_SIZE_BITS = 256
         const val TAG_BITS = 128
         const val SEPARATOR = "."
+        const val MAX_CAUSE_DEPTH = 8
     }
 }

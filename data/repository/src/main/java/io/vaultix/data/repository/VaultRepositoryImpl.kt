@@ -158,12 +158,23 @@ class VaultRepositoryImpl @Inject constructor(
 
     // ---- 本地快速解锁（Keystore 用户认证 KEK 包裹，见类 KDoc）----
 
+    /**
+     * 快速解锁入口是否可见。
+     *
+     * ⚠️ **只以「用户开关 + KEK 非永久失效」为准，不再在每次订阅时同步读 payload**
+     * （2026-09-12 修回归）：payload 读的是 `SecureCredentialStore`（Keystore AES-GCM），
+     * 任何**瞬时** Keystore 异常都会被 `getString` 吞成 null，而这里是 `flow { emit(...) }`
+     * 的**一次性**读取 —— 于是「设备重启后 Keystore 尚未就绪」这一瞬间会把指纹入口整条藏掉，
+     * 用户被迫重新联网登录（用户实测反馈）。
+     *
+     * 现在的取向与项目其它状态检测一致（见 `CredentialProviderStatus` 的「读不到=已启用」）：
+     * **入口照常给出**，真失败时在 `prepareLocalUnlock` 那一刻如实报错（那时原因才准确）。
+     * 上游 Bitwarden 同款取向：生物解锁按钮由 `isUnlockWithBiometricsEnabled` 这个
+     * **持久化开关**决定，而不是每次现探密钥可用性。
+     */
     override fun localUnlockAvailable(vaultId: String): Flow<Boolean> =
-        combine(
-            preferences.isLocalUnlockEnabled(vaultId),
-            flow { emit(wrappedPayload(vaultId) != null) },
-        ) { enabled, hasPayload ->
-            enabled && hasPayload && localUnlockKeyStore.keyAvailable
+        preferences.isLocalUnlockEnabled(vaultId).map { enabled ->
+            enabled && localUnlockKeyStore.keyAvailable
         }
 
     override suspend fun enrollLocalUnlock(vaultId: String, cipher: Cipher): Boolean {

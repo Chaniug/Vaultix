@@ -112,7 +112,13 @@ object FillPlanner {
         totpProvider: (String) -> String?,
     ): List<FillSuggestion> {
         val result = mutableListOf<FillSuggestion>()
-        for (login in logins) {
+        // ⚠️ **需要主密码二次验证的条目不进自动填充候选**（2026-09-12 对齐 Bitwarden）。
+        // 上游 `AutofillCipherProviderImpl` 在登录/卡/身份三处都写着
+        // 「Must not require a reprompt」—— 二次验证只保护**应用内查看**，填充侧直接不列出。
+        // 我们此前的做法是给它挂一个 dataset 级认证 Intent，于是用户
+        // 「解锁 → 回填 → 又被要求验证一次」，流程又长又莫名其妙（用户实测反馈）。
+        // 过滤放在循环外：循环内多一个 `continue` 会触发 detekt `LoopWithTooManyJumpStatements`。
+        for (login in logins.filterNot { it.requiresReprompt }) {
             val fields = mutableMapOf<FieldHint, String>()
             if (context.hasUsernameField && login.username.isNotBlank()) {
                 fields[FieldHint.USERNAME] = login.username
