@@ -81,6 +81,14 @@ fun ItemsScreen(
     onOpenTrash: () -> Unit,
     onOpenItem: (VaultItem) -> Unit,
     onOpenTotp: () -> Unit,
+    /**
+     * 主界面 Tab 内嵌模式（main-shell-migration 阶段 2）：
+     * 隐藏返回键（无上层可返回）与 FAB（「+」由底部导航条统一承载）。
+     */
+    embedded: Boolean = false,
+    /** 外部「+」请求计数：非零即打开新建表单（宿主在消费后清零，避免重复弹出）。 */
+    addRequest: Int = 0,
+    onAddConsumed: () -> Unit = {},
     viewModel: ItemsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -91,6 +99,14 @@ fun ItemsScreen(
     var showCreateDialog by rememberSaveable { mutableStateOf(false) }
     var searchActive by rememberSaveable { mutableStateOf(false) }
     val context = LocalContext.current
+
+    // 底部导航条「+」→ 打开新建表单（Tab 内嵌时不展示自己的 FAB）
+    LaunchedEffect(addRequest) {
+        if (addRequest > 0) {
+            showCreateDialog = true
+            onAddConsumed()
+        }
+    }
 
     LaunchedEffect(Unit) {
         viewModel.saveEvents.collect { event ->
@@ -131,11 +147,13 @@ fun ItemsScreen(
                             )
                         },
                         navigationIcon = {
-                            IconButton(onClick = onBack) {
-                                Icon(
-                                    Icons.AutoMirrored.Filled.ArrowBack,
-                                    contentDescription = stringResource(R.string.action_back),
-                                )
+                            if (!embedded) {
+                                IconButton(onClick = onBack) {
+                                    Icon(
+                                        Icons.AutoMirrored.Filled.ArrowBack,
+                                        contentDescription = stringResource(R.string.action_back),
+                                    )
+                                }
                             }
                         },
                         actions = {
@@ -158,8 +176,10 @@ fun ItemsScreen(
             }
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = { showCreateDialog = true }) {
-                Icon(Icons.Filled.Add, contentDescription = stringResource(R.string.items_new_item))
+            if (!embedded) {
+                FloatingActionButton(onClick = { showCreateDialog = true }) {
+                    Icon(Icons.Filled.Add, contentDescription = stringResource(R.string.items_new_item))
+                }
             }
         },
     ) { padding ->

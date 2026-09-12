@@ -1,5 +1,115 @@
 # 下一步任务清单
 
+> ## 【最新】第三十七轮（2026-09-12）：阶段 2 收尾 —— **活跃库真源收敛 + 门禁治理**
+>
+> 承接上一轮「修复，然后把 bastion 的 ui 都准备开始搬过来」，本轮把迁移文档里
+> 「★ 全局活跃库真源」那一格**整格做掉**，并顺手清掉三处 detekt 超标。
+>
+> **① 活跃库收敛（7 处消费点，全部只读 `ActiveVaultStore`）**
+> | 文件 | 改动 |
+> |---|---|
+> | `session/ActiveVaultStore.kt` | 新增 **`resolve()`**：挂起、每次真实重算（不依赖异步首帧），取值规则抽成 `pick()` 供流与重算共用 |
+> | `autofill/VaultixAutofillService.kt` | `collectCandidates` 入参从「全部 unlocked」改为 `singleActiveVault(unlocked)`；日志补 `active=` |
+> | `passkey/VaultixCredentialProviderService.kt` | 同上（`sources` 传 `passwordEntries` / `resolvePasskeys` / `collectStoredRpIds`） |
+> | `passkey/PasskeyCreateActivity.kt` | 回写目标只剩活跃库（下拉仍显示库名，**不可选到别的库**） |
+> | `autofill/save/AutofillSaveViewModel.kt` | `resolveTarget` 从「任取一个已解锁库」改为活跃库 |
+> | `autofill/shortcut/ManualFillViewModel.kt` | 从「combine 聚合所有库」改为只订阅 `activeVaultId` |
+> | `settings/SettingsViewModel.kt` | `passkeyCount` 改为只数活跃库（与填充侧口径一致） |
+>
+> **② Tab 数据改为流驱动（切库后自动跟随）**
+> `ItemsViewModel` / `TotpCodesViewModel` 的 `vaultId` 原先是**构造期一次性取值**：
+> 设置页切库后主界面内容不会变，等于「切换」只改了填充目标、UI 却撒谎。
+> 改为 `vaultIdState: StateFlow<String>`（路由参数固定 / 否则跟随活跃库），
+> 条目、文件夹、同步状态、库名全部 `flatMapLatest` / `combine` 跟随。
+>
+> **③ 设置页「库管理」入口**：`VaultSection` + `ActiveVaultDialog`，只列已解锁库；
+> 新增 `group_vaults` / `settings_active_vault` / `settings_active_vault_none` /
+> `settings_active_vault_locked_hint` 四条字符串。
+>
+> **④ detekt 门禁治理（不豁免、改结构）**
+> - `CardBrandLibraryLogo.kt`：`libraryLogo()` 538 行超 `LongMethod ≤150`
+>   → 10 个品牌各提为 `private val *_LOGO`，`when` 缩到 13 行（`else -> null`）；
+> - `VaultixApp.kt`：主函数 168 行 → 导航图拆成 `vaultEntryGraph` / `settingsGraph` / `itemsGraph`；
+> - `SettingsScreen.kt`：主函数 169 行 → 拆出 `SecuritySection` / `OthersSection`。
+> 全量复扫：27 个改动文件 **0 处超 150 行 / 0 处文件超 1200 行 / 0 行超 120 宽**。
+>
+> **⑤ 新增 `ActiveVaultStoreTest`（5 例）**：沿用存档库 / 存档库已锁退化 / 多库无存档取
+> 字典序最小 id（结论稳定）/ 全锁返回 null / `select` 同步可见 + 异步落盘。
+>
+> ⚠️ **沙箱限制（仍未跑构建）**：GitHub / Maven Central / Google Maven 不可达
+> （fake-ip `198.18.0.x`）+ 无 Android SDK → 本轮同样**未经 `compileFullDebugKotlin`
+> + `detekt` + 单测门禁验证**，改以人工核对 + 脚本快检（括号平衡 / 行宽 / 函数长度）替代。
+> **请在本地先跑一次三件套再进阶段 3。**
+>
+> ---
+
+> 更新于 2026-09-12（第三十六轮）。**① 修复 preview「全新安装永久转圈」；② 开工 Bastion UI 搬迁（阶段 1 收尾 + 阶段 2 骨架）。**
+>
+> 用户：「最新的 github 预览版有问题，我卸载老版本后，新版本进不去，一直转圈加载」→
+> 「修复，然后把 bastion 的 ui 都准备开始搬过来」。
+>
+> ## ① 启动死锁（P0，preview 版阻塞性）
+>
+> **根因链（4 跳，缺一不可）**：
+> 1. `RootNavViewModel` 把「**没有任何库**」判成 `VaultLocked`（旧判定只有两态）；
+> 2. `VaultixApp` 用 `remember { resolveStartDestination(state) }` **固化首帧结论**，
+>    而首帧 Flow 初始值恒为 `VaultLocked` → `startDestination = UnlockEntryRoute`；
+> 3. `UnlockViewModel` 无库可解析 → `vaultId` 恒空 → `state.vault == null`；
+> 4. `UnlockScreen` 在 `vault == null` 时 `CircularProgressIndicator()` + `return@Column`
+>    → **全屏只有一个转圈，且没有任何出口**。
+>
+> 卸载旧版 = 库数据清空 = 全新安装 → 必然命中。用户看到的「一直转圈」就是第 4 跳。
+>
+> **修法（4 处，逐跳掐断）**：
+> - `RootNavState` 补两态：`Splash`（首帧未到，**初始值为它**）与 `Onboarding`（一个库都没有）；
+>   「无库 ≠ 锁定」从此在类型层面成立。
+> - `VaultixApp`：`startDestination` 固定为 `SplashRoute`（只承担「未知」语义），落点改由
+>   `LaunchedEffect(rootNavState)` 状态驱动 + `navigateToRoot()` 换栈；`routedOnce` 保证
+>   「已解锁」只落一次（否则解锁后会被换栈踹回列表）。⚠️ 已去掉 `lockEpoch` 分支——
+>   全锁时状态必回 `VaultLocked`，由状态分支统一收敛，比「代次计数」更可靠。
+> - `UnlockViewModel.UiState` 增 `noVaultToUnlock`：`vault == null` 分不清「首帧未到」与
+>   「确认没库」，现在后者必为真，`UnlockScreen` 立刻走 `onNoVault` 逃生（**不再有转圈死角**）。
+> - 新增 `RootNavViewModelTest`（4 例）锁住「无库 → Onboarding / 有库全锁 → 解锁 /
+>   已解锁 → 主图 / 会话真值优先」；顺带补 `testImplementation(kotlinx-coroutines-test)`。
+>
+> ## ② Bastion UI 搬迁（依据 `Docs/progress/main-shell-migration.md` 方案 A4）
+>
+> **阶段 1 收尾**：搬 `CardBrandIcon.kt`（242 行）+ `CardBrandLibraryLogo.kt`（212 行）
+> → `ui/cardwallet/`。枚举覆盖度已复核（两端 `CardBrand` 均 18 项、逐项同名），
+> `when(this)` 分支零改动；`runCatchingObserved` → 标准 `runCatching`（不引 Bastion 日志体系）。
+> ⚠️ **Detekt 行宽**：素材 `pathData` 最长 4720 字符 → 按「数字↔命令字母 / 负号」边界折行
+> （规避 `1e-3` 指数负号），**不豁免门禁**，最长行降到 112。
+>
+> **阶段 2 骨架（已接线，待真机验收）**：
+> - 新增 `session/ActiveVaultStore`（Hilt 单例 + `StateFlow<String?>`）：**单一活跃库**真源，
+>   持久化复用既有的 `VaultixPreferences.defaultVaultId`（对齐 Bastion `KEY_ACTIVE_VAULT_ID`）；
+>   不搬 `UnifiedCategoryFilterSelection`（多后端产物，见迁移文档 §0.3）。
+> - 新增 `MainShellRoute`（**不带 vaultId**）+ `ui/shell/MainShellScreen`：4 Tab
+>   （密码 / 验证码 / 卡包 / 设置）+ 中央「+」，复用上一轮已搬好的
+>   `AdaptiveMainScaffold` / `VaultixBottomDock`；宽窄屏按 600dp 分界。
+> - 「+」按 `VaultixNavItem.addTarget` 分发（`addRequest` 计数触发，设置 Tab 回退新建密码，
+>   对齐 Bastion `else -> handlePasswordAddOpen()`）。
+> - `ItemsViewModel` / `TotpCodesViewModel`：`vaultId` 改为「路由参数 ?: 活跃库」，
+>   并在带参数进入时**反向登记**活跃库（保证 autofill 后续读到同一个库）。
+> - 三个既有页加 `embedded` 模式（隐藏返回键与 FAB）+ `addRequest`；新建卡包 Tab
+>   （内容源 = 活跃库内 `Cipher type=3`，列表打码保留末四位）。
+> - 解锁 / 点已解锁库 → 直接进 `MainShellRoute`（对齐 Bastion「解锁即进主界面」）。
+>
+> ### 本轮待办（下一轮接着做）
+> - [ ] **真机验收**：全新安装 → 应直达库列表（不再转圈）；解锁 → 直接进主界面 Tab。
+> - [ ] 阶段 2 剩余：autofill / CP / `PasskeyCreateActivity` 的候选来源改为**只取活跃库**
+>       （见迁移文档 §阶段 2「★ 全局活跃库真源」，这是「条目不重复」目标的关键一刀）。
+> - [ ] 设置页补「库管理」入口（切换活跃库）。
+> - [ ] 阶段 3 观感：Tab 切换转场动画、卡面样式细调。
+>
+> ### ⚠️ 沙箱限制（本轮未跑构建）
+> 沙箱内 GitHub / Maven Central / Google Maven 均不可达（域名被解析到 fake-ip `198.18.0.x`），
+> 且无 Android SDK（SDK 下载源不通）→ **本轮改动未经 `compileFullDebugKotlin` +
+> `detekt` + 单测门禁验证**。已改为：人工逐处核对符号/导入 + 括号平衡快检 + 行宽扫描
+> （全部 ≤120）。**请在本地先跑一次三件套再进阶段 3。**
+>
+> 参考：仓库经 `https://gh-proxy.com/https://github.com/...` 镜像克隆成功（main @ `526a6f6`）。
+
 > 更新于 2026-09-11（第三十五轮）。**【最新】真机 adb 联调打通 + 抓出「文档地雷」：**
 > **CP 密码能力的方向已被 `f815ab2` 反转，但四份文档仍写着「双能力供应」。**
 >

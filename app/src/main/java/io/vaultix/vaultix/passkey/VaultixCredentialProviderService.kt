@@ -67,6 +67,7 @@ import io.vaultix.vaultix.autofill.AutofillLogger
 import io.vaultix.vaultix.autofill.engine.AutofillCredentialMapper
 import io.vaultix.vaultix.autofill.match.BitwardenLikeAutofillMatcher
 import io.vaultix.vaultix.autofill.match.UriMatcher
+import io.vaultix.vaultix.session.ActiveVaultStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -85,6 +86,9 @@ class VaultixCredentialProviderService : CredentialProviderService() {
 
     @Inject
     lateinit var itemRepository: ItemRepository
+
+    @Inject
+    lateinit var activeVaultStore: ActiveVaultStore
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -199,13 +203,19 @@ class VaultixCredentialProviderService : CredentialProviderService() {
                 .build()
         }
 
+        // ★ 候选来源收敛到**单个活跃库**（与 `VaultixAutofillService` 同款，见迁移文档
+        // 阶段 2「★ 全局活跃库真源」）。历史行为是遍历全部已解锁库：两个库同时解锁时，
+        // 同一站点会出现两条来源不同的候选，用户无法分辨该点哪一条。
+        val sources = singleActiveVault(unlocked)
+        log("GET active=${sources.firstOrNull() ?: "-"}")
+
         val entries = mutableListOf<CredentialEntry>()
         // pwOptions 循环保留但当前不会执行（credential_provider.xml 不声明 PASSWORD 能力）。
         for (option in pwOptions) {
-            entries += passwordEntries(option, unlocked, callingOrigin, callingPackage)
+            entries += passwordEntries(option, sources, callingOrigin, callingPackage)
         }
         for (option in pkOptions) {
-            val matched = resolvePasskeys(option, unlocked)
+            val matched = resolvePasskeys(option, sources)
             log("GET rpId matched pk=${matched.size}")
             for (m in matched) {
                 entries += publicKeyEntry(option, m)
@@ -239,6 +249,18 @@ class VaultixCredentialProviderService : CredentialProviderService() {
             .setCredentialEntries(entries)
             .setAuthenticationActions(emptyList())
             .build()
+    }
+
+    /**
+     * 候选来源 = **唯一活跃库**（语义与 `VaultixAutofillService.singleActiveVault` 一致）。
+     *
+     * [unlocked] 非空已由调用方保证；解析结果不在其中时退化成「字典序最小的已解锁库」，
+     * **仍然只取一个**，绝不回退成遍历全部。
+     */
+    private suspend fun singleActiveVault(unlocked: Set<String>): Set<String> {
+        val active = activeVaultStore.resolve()
+        if (active != null && active in unlocked) return setOf(active)
+        return setOfNotNull(unlocked.minOrNull())
     }
 
     /**

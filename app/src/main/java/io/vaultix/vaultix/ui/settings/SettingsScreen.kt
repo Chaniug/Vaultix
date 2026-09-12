@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.Policy
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
@@ -67,6 +68,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.vaultix.datastore.VaultTimeout
+import io.vaultix.model.VaultSummary
 import io.vaultix.vaultix.BuildConfig
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.BiometricPrompter
@@ -85,6 +87,8 @@ import io.vaultix.vaultix.ui.theme.ThemeMode
 fun SettingsScreen(
     onBack: () -> Unit,
     onOpenAutofillSettings: () -> Unit,
+    /** 主界面 Tab 内嵌模式：隐藏返回键（无上层可返回）。 */
+    embedded: Boolean = false,
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -103,11 +107,13 @@ fun SettingsScreen(
             TopAppBar(
                 title = { Text(stringResource(R.string.settings_title)) },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = stringResource(R.string.action_back),
-                        )
+                    if (!embedded) {
+                        IconButton(onClick = onBack) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = stringResource(R.string.action_back),
+                            )
+                        }
                     }
                 },
             )
@@ -119,43 +125,16 @@ fun SettingsScreen(
                 .padding(padding)
                 .verticalScroll(rememberScrollState()),
         ) {
-            // ---- 安全 ----
-            SettingsGroupTitle(stringResource(R.string.group_security))
-            SettingsRow(
-                icon = { Icon(Icons.Filled.Timer, contentDescription = null) },
-                title = stringResource(R.string.setting_auto_lock),
-                subtitle = vaultTimeoutLabel(state.vaultTimeout),
-                onClick = { showAutoLockDialog = true },
-            )
-            SettingsRow(
-                icon = { Icon(Icons.Filled.VisibilityOff, contentDescription = null) },
-                title = stringResource(R.string.setting_clipboard_clear),
-                subtitle = clipboardClearLabel(state.clipboardClearMs),
-                onClick = { showClipboardDialog = true },
-            )
-            SettingsRow(
-                icon = { Icon(Icons.Filled.Shield, contentDescription = null) },
-                title = stringResource(R.string.setting_screen_security),
-                subtitle = stringResource(R.string.setting_screen_security_desc),
-                trailing = {
-                    Switch(
-                        checked = state.screenSecurity,
-                        onCheckedChange = viewModel::setScreenSecurity,
-                    )
-                },
-            )
-            SettingsRow(
-                icon = { Icon(Icons.Filled.Lock, contentDescription = null) },
-                title = stringResource(R.string.setting_lock_now),
-                subtitle = stringResource(R.string.setting_lock_now_desc),
-                titleColor = MaterialTheme.colorScheme.error,
-                onClick = viewModel::lockAllNow,
-            )
-            SettingsRow(
-                icon = { Icon(Icons.Filled.Fingerprint, contentDescription = null) },
-                title = stringResource(R.string.settings_quick_unlock),
-                subtitle = stringResource(R.string.settings_quick_unlock_desc),
-                onClick = { showQuickUnlockDialog = true },
+            // ---- 库（活跃库 = 全局单一真源；Bastion 里它是筛选维度，Vaultix 收成一个） ----
+            VaultSection(viewModel)
+
+            // ---- 安全（拆分为独立 composable：主函数要守住 detekt LongMethod ≤150） ----
+            SecuritySection(
+                viewModel = viewModel,
+                state = state,
+                onAutoLock = { showAutoLockDialog = true },
+                onClipboardClear = { showClipboardDialog = true },
+                onQuickUnlock = { showQuickUnlockDialog = true },
             )
 
             // ---- 外观 / 数据（批次④：Bastion SettingsScreen 对照补缺） ----
@@ -165,36 +144,11 @@ fun SettingsScreen(
             // ---- 自动填充（M2-a：系统 AutofillService 入口 → 二级设置页） ----
             AutofillSection(onOpenAutofillSettings = onOpenAutofillSettings)
 
-            // ---- 其他（对齐 Bastion SettingsScreen：权限管理放在设置首页） ----
-            SettingsGroupTitle(stringResource(R.string.group_others))
-            SettingsRow(
-                icon = { Icon(Icons.Filled.Policy, contentDescription = null) },
-                title = stringResource(R.string.permission_management_title),
-                subtitle = stringResource(R.string.permission_management_subtitle),
-                onClick = { openAppPermissionSettings(context) },
-            )
-
-            // ---- 关于 ----
-            SettingsGroupTitle(stringResource(R.string.group_about))
-            SettingsRow(
-                icon = { Icon(Icons.Filled.Info, contentDescription = null) },
-                title = stringResource(R.string.about_version),
-                subtitle = "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
-            )
-            SettingsRow(
-                icon = { Icon(Icons.Filled.Security, contentDescription = null) },
-                title = stringResource(R.string.about_source),
-                subtitle = stringResource(R.string.about_github_url),
-                onClick = {
-                    context.startActivity(
-                        Intent(Intent.ACTION_VIEW, Uri.parse(context.getString(R.string.about_github_url))),
-                    )
-                },
-            )
-            SettingsRow(
-                icon = { Icon(Icons.Filled.Info, contentDescription = null) },
-                title = stringResource(R.string.about_license),
-                onClick = { showAboutDialog = true },
+            // ---- 其他 / 关于（同上：拆出去守住函数长度门禁） ----
+            OthersSection(
+                context = context,
+                versionName = "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+                onShowLicense = { showAboutDialog = true },
             )
             Spacer(Modifier.height(32.dp))
         }
@@ -241,6 +195,174 @@ fun SettingsScreen(
             onDismiss = { showQuickUnlockDialog = false },
         )
     }
+}
+
+/**
+ * 安全组：自动锁定 / 剪贴板清除 / 防截屏 / 立即锁定 / 快速解锁。
+ *
+ * 拆成独立 composable 纯粹是为了让 [SettingsScreen] 主函数守住 detekt `LongMethod`
+ * （≤150 行）——三个对话框的显示状态仍留在宿主里，本函数只收回调。
+ */
+@Composable
+private fun SecuritySection(
+    viewModel: SettingsViewModel,
+    state: SettingsViewModel.UiState,
+    onAutoLock: () -> Unit,
+    onClipboardClear: () -> Unit,
+    onQuickUnlock: () -> Unit,
+) {
+    SettingsGroupTitle(stringResource(R.string.group_security))
+    SettingsRow(
+        icon = { Icon(Icons.Filled.Timer, contentDescription = null) },
+        title = stringResource(R.string.setting_auto_lock),
+        subtitle = vaultTimeoutLabel(state.vaultTimeout),
+        onClick = onAutoLock,
+    )
+    SettingsRow(
+        icon = { Icon(Icons.Filled.VisibilityOff, contentDescription = null) },
+        title = stringResource(R.string.setting_clipboard_clear),
+        subtitle = clipboardClearLabel(state.clipboardClearMs),
+        onClick = onClipboardClear,
+    )
+    SettingsRow(
+        icon = { Icon(Icons.Filled.Shield, contentDescription = null) },
+        title = stringResource(R.string.setting_screen_security),
+        subtitle = stringResource(R.string.setting_screen_security_desc),
+        trailing = {
+            Switch(
+                checked = state.screenSecurity,
+                onCheckedChange = viewModel::setScreenSecurity,
+            )
+        },
+    )
+    SettingsRow(
+        icon = { Icon(Icons.Filled.Lock, contentDescription = null) },
+        title = stringResource(R.string.setting_lock_now),
+        subtitle = stringResource(R.string.setting_lock_now_desc),
+        titleColor = MaterialTheme.colorScheme.error,
+        onClick = viewModel::lockAllNow,
+    )
+    SettingsRow(
+        icon = { Icon(Icons.Filled.Fingerprint, contentDescription = null) },
+        title = stringResource(R.string.settings_quick_unlock),
+        subtitle = stringResource(R.string.settings_quick_unlock_desc),
+        onClick = onQuickUnlock,
+    )
+}
+
+/** 其他组 + 关于组（同上：拆出去是为了满足函数长度门禁）。 */
+@Composable
+private fun OthersSection(
+    context: Context,
+    versionName: String,
+    onShowLicense: () -> Unit,
+) {
+    // ---- 其他（对齐 Bastion SettingsScreen：权限管理放在设置首页） ----
+    SettingsGroupTitle(stringResource(R.string.group_others))
+    SettingsRow(
+        icon = { Icon(Icons.Filled.Policy, contentDescription = null) },
+        title = stringResource(R.string.permission_management_title),
+        subtitle = stringResource(R.string.permission_management_subtitle),
+        onClick = { openAppPermissionSettings(context) },
+    )
+
+    // ---- 关于 ----
+    SettingsGroupTitle(stringResource(R.string.group_about))
+    SettingsRow(
+        icon = { Icon(Icons.Filled.Info, contentDescription = null) },
+        title = stringResource(R.string.about_version),
+        subtitle = versionName,
+    )
+    SettingsRow(
+        icon = { Icon(Icons.Filled.Security, contentDescription = null) },
+        title = stringResource(R.string.about_source),
+        subtitle = stringResource(R.string.about_github_url),
+        onClick = {
+            context.startActivity(
+                Intent(Intent.ACTION_VIEW, Uri.parse(context.getString(R.string.about_github_url))),
+            )
+        },
+    )
+    SettingsRow(
+        icon = { Icon(Icons.Filled.Info, contentDescription = null) },
+        title = stringResource(R.string.about_license),
+        onClick = onShowLicense,
+    )
+}
+
+/**
+ * 「库」分组：显示并切换**活跃库**。
+ *
+ * 为什么入口在设置页：Bastion 的多库是主界面里的一个**筛选维度**（`UnifiedCategoryFilterSelection`
+ * 把库与文件夹 / 分类平级），而 Vaultix 是「登录时二选一」的**单活跃库**语义 —— 主界面
+ * 不该出现库的概念，于是把多库入口整体下沉到设置页
+ * （Docs/progress/main-shell-migration.md §0 与 A4）。
+ *
+ * 切换的影响面：主界面各 Tab、autofill 候选、Credential Provider 候选、保存回写目标
+ * **同时**切到新库 —— 它们都只读 `ActiveVaultStore`，没有第二份状态。
+ */
+@Composable
+private fun VaultSection(viewModel: SettingsViewModel) {
+    val active by viewModel.activeVault.collectAsStateWithLifecycle()
+    val switchable by viewModel.switchableVaults.collectAsStateWithLifecycle()
+    var showDialog by rememberSaveable { mutableStateOf(false) }
+
+    SettingsGroupTitle(stringResource(R.string.group_vaults))
+    SettingsRow(
+        icon = { Icon(Icons.Filled.Storage, contentDescription = null) },
+        title = stringResource(R.string.settings_active_vault),
+        subtitle = active?.name ?: stringResource(R.string.settings_active_vault_none),
+        onClick = { showDialog = true },
+    )
+
+    if (showDialog) {
+        ActiveVaultDialog(
+            vaults = switchable,
+            activeId = active?.id,
+            onSelect = { vaultId ->
+                viewModel.selectVault(vaultId)
+                showDialog = false
+            },
+            onDismiss = { showDialog = false },
+        )
+    }
+}
+
+/**
+ * 活跃库选择器。**只列已解锁的库**：锁定库没有内存密钥，切过去也读不出任何条目
+ * （先解锁再切，与「多库并存时只能进一样」的产品定义一致）。
+ */
+@Composable
+private fun ActiveVaultDialog(
+    vaults: List<VaultSummary>,
+    activeId: String?,
+    onSelect: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.settings_active_vault)) },
+        text = {
+            if (vaults.isEmpty()) {
+                Text(stringResource(R.string.settings_active_vault_locked_hint))
+            } else {
+                Column {
+                    vaults.forEach { vault ->
+                        SingleChoiceRow(
+                            label = vault.name,
+                            selected = vault.id == activeId,
+                            onClick = { onSelect(vault.id) },
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.action_cancel))
+            }
+        },
+    )
 }
 
 /**

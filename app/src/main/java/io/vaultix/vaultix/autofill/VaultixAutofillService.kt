@@ -42,6 +42,7 @@ import io.vaultix.vaultix.autofill.model.ParsedStructure
 import io.vaultix.vaultix.autofill.parser.AssistStructureParser
 import io.vaultix.vaultix.autofill.save.AutofillSaveInfo
 import io.vaultix.vaultix.autofill.save.AutofillSaveIntents
+import io.vaultix.vaultix.session.ActiveVaultStore
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -70,6 +71,9 @@ class VaultixAutofillService : AutofillService() {
 
     @Inject
     lateinit var prefs: VaultixPreferences
+
+    @Inject
+    lateinit var activeVaultStore: ActiveVaultStore
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var activeJob: Job? = null
@@ -179,7 +183,12 @@ class VaultixAutofillService : AutofillService() {
             )
         }
 
-        val vault = collectCandidates(unlocked)
+        // ★ 候选来源收敛到**单个活跃库**（Docs/progress/main-shell-migration.md 阶段 2
+        // 「★ 全局活跃库真源」）。历史行为是 `for (vaultId in unlocked)` 遍历全部已解锁库聚合：
+        // 云端库与 KDBX 库同时解锁时，同一站点会冒出两条来源不同的候选（用户不知点哪条），
+        // 保存时也不知写回哪个库 —— 即用户最初反馈的「条目错乱 / 保存重复」。
+        val sources = singleActiveVault(unlocked)
+        val vault = collectCandidates(sources)
         // Edge 等浏览器不上报 webDomain → 用地址栏 / 结构文本兜底域名参与匹配。
         val webDomain = parsed.webDomain ?: parsed.fallbackWebDomain
         val matched = BitwardenLikeAutofillMatcher.match(
@@ -221,7 +230,8 @@ class VaultixAutofillService : AutofillService() {
             added++
         }
         AutofillLogger.d(
-            "fillResponse domain=${webDomain} candidates=${vault.credentials.size} " +
+            "fillResponse domain=$webDomain active=${sources.firstOrNull() ?: "-"} " +
+                "unlocked=${unlocked.size} candidates=${vault.credentials.size} " +
                 "matched=${matched.size} datasets=$added",
         )
         if (added > 0) return builder.build()
@@ -246,7 +256,19 @@ class VaultixAutofillService : AutofillService() {
         )
     }
 
-    /** 汇总所有已解锁库的候选（登录 / 卡片 / 身份）。 */
+    /**
+     * 候选来源 = **唯一活跃库**。
+     *
+     * [unlocked] 非空已由调用方保证；这里只在活跃库解析结果不在其中时退化成
+     * 「字典序最小的已解锁库」——**仍然只取一个**，绝不回退成遍历全部。
+     */
+    private suspend fun singleActiveVault(unlocked: Set<String>): Set<String> {
+        val active = activeVaultStore.resolve()
+        if (active != null && active in unlocked) return setOf(active)
+        return setOfNotNull(unlocked.minOrNull())
+    }
+
+    /** 汇总**活跃库**的候选（登录 / 卡片 / 身份）。 */
     private suspend fun collectCandidates(unlocked: Set<String>): VaultCandidates {
         val credentials = mutableListOf<AutofillCredential>()
         val cards = mutableListOf<VaultItem>()

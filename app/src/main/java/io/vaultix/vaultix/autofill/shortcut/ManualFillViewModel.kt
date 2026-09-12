@@ -17,6 +17,7 @@ import io.vaultix.domain.ItemRepository
 import io.vaultix.domain.VaultRepository
 import io.vaultix.model.VaultItem
 import io.vaultix.vaultix.autofill.engine.AutofillCredentialMapper
+import io.vaultix.vaultix.session.ActiveVaultStore
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -43,6 +44,7 @@ class ManualFillViewModel @Inject constructor(
     vaultRepository: VaultRepository,
     private val itemRepository: ItemRepository,
     private val notifier: SmartCopyNotifier,
+    private val activeVaultStore: ActiveVaultStore,
 ) : ViewModel() {
 
     /** 一行候选（跨库聚合后的扁平结构，UI 只关心这几个字段）。 */
@@ -62,8 +64,9 @@ class ManualFillViewModel @Inject constructor(
         .map { it.isEmpty() }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), false)
 
-    private val credentials: StateFlow<List<Row>> = vaultRepository.observeUnlockedVaultIds()
-        .flatMapLatest { ids -> credentialFlow(ids) }
+    /** ★ 候选只取**活跃库**（与 autofill / CP 同口径，见迁移文档阶段 2）。 */
+    private val credentials: StateFlow<List<Row>> = activeVaultStore.activeVaultId
+        .flatMapLatest { id -> credentialFlow(id) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
 
     val rows: StateFlow<List<Row>> = combine(credentials, query) { list, text -> filterRows(list, text) }
@@ -95,14 +98,17 @@ class ManualFillViewModel @Inject constructor(
         }.getOrNull()
     }
 
-    private fun credentialFlow(ids: Set<String>): Flow<List<Row>> {
-        if (ids.isEmpty()) return flowOf(emptyList())
-        val perVault = ids.map { vaultId ->
-            itemRepository.observeItems(vaultId).map { items ->
-                items.filter { AutofillCredentialMapper.isLoginCandidate(it) }.map { toRow(vaultId, it) }
-            }
+    /**
+     * 单库候选流（跨库聚合已废弃 —— 会重现「同一站点两条候选」）。
+     *
+     * [vaultId] 为 null 表示活跃库首帧未到（冷启动）：返回空而不是退化成遍历所有已解锁库；
+     * `activeVaultId` 是 `StateFlow`，首帧到达后会立即重新发射并填充列表。
+     */
+    private fun credentialFlow(vaultId: String?): Flow<List<Row>> {
+        if (vaultId.isNullOrBlank()) return flowOf(emptyList())
+        return itemRepository.observeItems(vaultId).map { items ->
+            items.filter { AutofillCredentialMapper.isLoginCandidate(it) }.map { toRow(vaultId, it) }
         }
-        return combine(perVault) { arrays -> arrays.flatMap { it.toList() } }
     }
 
     private fun toRow(vaultId: String, item: VaultItem) = Row(

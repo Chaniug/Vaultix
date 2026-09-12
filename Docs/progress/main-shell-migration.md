@@ -3,7 +3,8 @@
 > 决策依据 2026-09-10：需求定调「**Bitwarden 的功能 + Bastion 的页面**」，
 > 用户拍板选项 **A**（照搬 Bastion 的底部导航结构）。
 > 本文档是**执行前的勘察报告 + 分步计划**，不是最终实现。
-> **状态：勘察完成 → 方案已按用户纠正修订为 A4，待确认后开工。**
+> **状态：阶段 1 + 阶段 2 已完成（2026-09-12 第三十七轮），待真机验收。**
+> 剩余：阶段 3 观感（Tab 转场动画、卡片样式）。
 >
 > 📌 **修订记录**：初稿把「多库」误判为导航障碍（A1/A2/A3 三方案）；
 > 用户指出「bastion 多库在设置页面里面，基本上解锁就能进单库」→ 复核源码证实
@@ -146,21 +147,21 @@ UnifiedCategoryFilterSelection.KeePassGroupFilter(databaseId, groupPath)
 ## 3. 分步计划（A4）
 
 ### 阶段 1：可独立搬运件（零架构风险，先做）
-- [ ] **搬 `AdaptiveMainScaffold.kt`**（103 行，纯 UI）
+- [x] **搬 `AdaptiveMainScaffold.kt`**（103 行，纯 UI）
       → `app/.../ui/shell/AdaptiveMainScaffold.kt`；`BottomNavItem` 引用改本地枚举
       - ⚠️ **需扩展**：原版无「+」按钮。宽屏 `NavigationRail` 亦需插入「+」
-- [ ] **搬悬浮胶囊底栏**（`SimpleMainScreen.kt` 内联实现，~110 行）
+- [x] **搬悬浮胶囊底栏**（`SimpleMainScreen.kt` 内联实现，~110 行）
       → `app/.../ui/shell/VaultixBottomDock.kt`（**新建文件，抽取内联实现**）
       - 精确规格见 §6.1.1（胶囊 60dp / 圆角 50 / 留白 12·6·20 /「+」52×48dp 圆角 16）
       - 行为参数化：`onAdd: (currentTab) -> Unit`，由容器按当前 Tab 分发
-- [ ] **建本地导航模型** `app/.../ui/shell/VaultixNavModel.kt`
+- [x] **建本地导航模型** `app/.../ui/shell/VaultixNavModel.kt`
       - 枚举 Vaultix 需要的 Tab（**按用户答复定稿**）：
         `Passwords` / `Authenticator` / `CardWallet` / `Settings`
         （**共 4 个 Tab + 中央「+」**；通行密钥并入验证码页入口，见 §6.1.2）
       - 暂不搬「自定义排序」（后续可选；Vaultix 偏好层加 `bottomNavOrder`）
-- [ ] **图标与文案**：`Lock` / `Security` / `Wallet` / `Settings` / `Add` / `Fingerprint`，
+- [x] **图标与文案**：`Lock` / `Security` / `Wallet` / `Settings` / `Add` / `Fingerprint`，
       字符串入 `strings.xml`
-- [ ] **搬卡面视觉组件**（988 行中的可搬部分，见 §6.1.3）
+- [x] **搬卡面视觉组件**（988 行中的可搬部分，见 §6.1.3）
       - `CardBrandIcon.kt`（242 行）+ `CardBrandLibraryLogo.kt`（212 行）
         → `app/.../ui/cardwallet/`；`com.bastion.app.data.model.CardBrand` →
         `io.vaultix.common.CardBrand`；GPL 溯源声明保留
@@ -168,43 +169,52 @@ UnifiedCategoryFilterSelection.KeePassGroupFilter(databaseId, groupPath)
         （VISA/MASTERCARD/AMEX/DINERS/DISCOVER/JCB/...）
 
 ### 阶段 2：Tab 容器接线（核心）
-- [ ] 新增 `MainShellRoute`（**无 `vaultId` 参数**，对齐 Bastion）
-- [ ] **★ 活跃库状态载体**：新建 `ActiveVaultStore`（单例 / ViewModel 持有
+- [x] 新增 `MainShellRoute`（**无 `vaultId` 参数**，对齐 Bastion）
+- [x] **★ 活跃库状态载体**：新建 `ActiveVaultStore`（单例 / ViewModel 持有
       `StateFlow<String?>`，**单值，非集合**）
       - 语义：**当前活跃库 only**（见 §0「登录时只能进一样」）
       - 初始值：登录/解锁成功时那一个库
       - 切换：设置页「库管理」→ 切换活跃库（**互斥**，不同时活跃）
       - ⚠️ **不搬** Bastion `UnifiedCategoryFilterSelection`（多后端产物，见 §0.3）
-- [ ] `VaultixApp` 导航图调整：
+- [x] `VaultixApp` 导航图调整：
       ```
       VaultListRoute ──点已解锁库 / 解锁成功──▶ MainShellRoute（不进 Unlock）
       VaultListRoute ──点已锁定库──▶ UnlockRoute ──成功──▶ MainShellRoute
       MainShellRoute 内：Tab 切换（不新增路由）
       ```
       ⚠️ 与现状差异：解锁成功后**进 `MainShellRoute` 而非 `ItemsRoute`**
-- [ ] **各 Tab 复用现有 Screen**，改造点（Tab 集合已定稿：密码/验证码/卡包/设置）：
+- [x] **各 Tab 复用现有 Screen**，改造点（Tab 集合已定稿：密码/验证码/卡包/设置）：
       | Tab | 复用 | 改造点 |
       |---|---|---|
       | Passwords | `ItemsScreen` | 去 `onBack`；`vaultId` 改从 `ActiveVaultStore` 取；回收站入口移入 Tab 内菜单 |
       | Authenticator | `TotpCodesScreen` | 去 `onBack`；`vaultId` 同上；**通行密钥入口改造**（见 §6.1.2：进度条右侧 + 空态兜底） |
       | CardWallet | **新建**（搬卡面视觉组件，见 §6.1.3） | 内容源 = `Cipher type=3`；`vaultId` 同上 |
       | Settings | `SettingsScreen` | 去 `onBack`；**新增「库管理」入口**（切换活跃库） |
-- [ ] **二级页仍走路由**：`ItemRoute` / `TrashRoute` / `AutofillSettingsRoute` /
+- [x] **二级页仍走路由**：`ItemRoute` / `TrashRoute` / `AutofillSettingsRoute` /
       `PasskeysRoute` 照旧 push（Tab 容器不拦截）；`ItemRoute` 仍需 `vaultId`
-- [ ] **★ 全局活跃库真源（用户提问引出的关键扩展）**
-      `ActiveVaultStore` 不能只做导航态，必须覆盖 **autofill 层**：
-      | 消费方 | 现状 | 应改为 |
+- [x] **★ 全局活跃库真源（用户提问引出的关键扩展）** —— 2026-09-12 第三十七轮**全部收敛完毕**
+      `ActiveVaultStore` 不只是导航态，已覆盖 **autofill / CP / 保存**三层：
+      | 消费方 | 原状 | 现在 |
       |---|---|---|
-      | 主界面 Tab | 路由参数 `vaultId` | `ActiveVaultStore` |
-      | **`VaultixAutofillService.collectCandidates`** | **`for (vaultId in unlocked)` 遍历所有已解锁库** | **只取活跃库** |
-      | **`VaultixCredentialProviderService.buildGetResponse`** | `observeUnlockedVaultIds()` | 只取活跃库（需复核） |
-      | **`PasskeyCreateActivity`** | `unlockedVaultIds` 列表 | 只取活跃库（需复核） |
-      | 保存回写目标 | 遍历/推断 | 活跃库 |
+      | 主界面 Tab | 路由参数 `vaultId`（**构造期一次性取值，切库不跟随**） | `ActiveVaultStore`（流驱动，切库后内容自动跟随） |
+      | `VaultixAutofillService.collectCandidates` | `for (vaultId in unlocked)` 遍历所有已解锁库 | `singleActiveVault(unlocked)` **只取活跃库** |
+      | `VaultixCredentialProviderService.buildGetResponse` | `observeUnlockedVaultIds()` | 同上（`sources`） |
+      | `PasskeyCreateActivity` | `unlockedVaultIds` 全量列表 | 只有活跃库（下拉仍显示库名，但不可选到别的库） |
+      | `AutofillSaveViewModel.resolveTarget` | `unlocked.firstOrNull()` 任取一个 | 活跃库 |
+      | `ManualFillViewModel` | `combine` 聚合所有已解锁库 | 只订阅 `activeVaultId` |
+      | `SettingsViewModel.passkeyCount` | 跨库累加 | 只数活跃库（口径与填充侧一致） |
       > 📌 依据：用户指出「条目不会错乱和保存重复」——该问题**真实存在于自动填充层**
       > （云端库与 KDBX 库同时解锁时，同网站出现两条来源不同的候选）。
-- [ ] **「+」按钮分发**：按 `VaultixNavItem.addTarget` 分发；**密码 Tab 的「+」弹类型选择器**
+      >
+      > ⚠️ 关键实现点：新增 `ActiveVaultStore.resolve()`（挂起、**每次真实重算**）。
+      > 原因：`activeVaultId` 由 `init` 协程异步填充，系统冷启动可能只拉起 autofill / CP 服务
+      > （主界面从未打开）→ 首帧未到时读到 `null`。**不能**「读到 null 就退化成遍历全部」，
+      > 那会重新引入要消灭的问题；必须等一次真实计算。
+- [x] **设置页「库管理」入口**：`VaultSection` + `ActiveVaultDialog`，只列**已解锁**库
+      （锁定库没有内存密钥，切过去也是空列表）；切换后 Tab / autofill / CP 三处同时生效
+- [x] **「+」按钮分发**：按 `VaultixNavItem.addTarget` 分发；**密码 Tab 的「+」弹类型选择器**
       （避免在密码页建出 SecureNote 等不该出现的类型），验证码/卡包直接进对应编辑器
-- [ ] **锁定处理**：`lockEpoch` 触发时从 `MainShellRoute` 清栈回 `VaultListRoute`（现状保持）
+- [x] **锁定处理**：`lockEpoch` 触发时从 `MainShellRoute` 清栈回 `VaultListRoute`（现状保持）
 
 ### 阶段 3：观感对齐（Bastion 视觉细节）
 - [ ] **页面滑动效果**（用户明确要求）：搬 Bastion Tab 切换的转场动画

@@ -75,6 +75,7 @@ import io.vaultix.model.VaultFido2Credential
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.session.ActiveVaultStore
 import io.vaultix.vaultix.ui.theme.VaultixTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -93,6 +94,9 @@ class PasskeyCreateActivity : FragmentActivity() {
 
     @Inject
     lateinit var itemRepository: ItemRepository
+
+    @Inject
+    lateinit var activeVaultStore: ActiveVaultStore
 
     private var biometricPrompt: BiometricPrompt? = null
 
@@ -116,6 +120,10 @@ class PasskeyCreateActivity : FragmentActivity() {
      */
     private var browserFlow: Boolean = false
 
+    /**
+     * 可选的保存目标库。**最多一个**（= 活跃库，见 `onCreate` 注释）；
+     * 下拉仍保留，是为了让用户看见「存到哪个库」，而不是让它可选成别的库。
+     */
     private val unlockedVaultIds = mutableStateOf<List<String>>(emptyList())
     private val vaultNameMap = mutableStateOf<Map<String, String>>(emptyMap())
     private val loginCandidates = mutableStateOf<List<VaultItem>>(emptyList())
@@ -156,14 +164,18 @@ class PasskeyCreateActivity : FragmentActivity() {
         lifecycleScope.launch(Dispatchers.IO) {
             val ids = vaultRepository.observeUnlockedVaultIds().first()
             val vaults = vaultRepository.observeVaults().first()
+            // ★ 回写目标 = **唯一活跃库**（迁移文档阶段 2「★ 全局活跃库真源」）。
+            // 历史行为是把所有已解锁库都塞进下拉，用户可能把 passkey 存进非预期库；
+            // 而 GET 侧已收敛为只查活跃库 → 存到别的库 = 「注册成功但下次找不到」。
+            val active = activeVaultStore.resolve()?.takeIf { it in ids } ?: ids.minOrNull()
             withContext(Dispatchers.Main) {
-                unlockedVaultIds.value = ids.toList()
+                unlockedVaultIds.value = listOfNotNull(active)
                 vaultNameMap.value = vaults.associate { it.id to it.name }
-                if (ids.isEmpty()) {
+                if (active == null) {
                     fail(CreateCredentialUnknownException("Vault is locked"))
                     return@withContext
                 }
-                selectedVaultId = ids.first()
+                selectedVaultId = active
                 loadLogins(selectedVaultId)
                 showUi()
             }

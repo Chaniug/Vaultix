@@ -86,6 +86,11 @@ import kotlinx.coroutines.launch
 fun TotpCodesScreen(
     onBack: () -> Unit,
     onOpenPasskeys: () -> Unit,
+    /** 主界面 Tab 内嵌模式：隐藏返回键与 FAB（「+」由底部导航条统一承载）。 */
+    embedded: Boolean = false,
+    /** 外部「+」请求计数：非零即打开新建 TOTP 表单。 */
+    addRequest: Int = 0,
+    onAddConsumed: () -> Unit = {},
     viewModel: TotpCodesViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -101,6 +106,14 @@ fun TotpCodesScreen(
         while (true) {
             delay(TOTP_TICK_MS)
             nowSeconds = System.currentTimeMillis() / MILLIS_PER_SECOND
+        }
+    }
+
+    // 底部导航条「+」→ 打开新建 TOTP 表单（Tab 内嵌时不展示自己的 FAB）
+    LaunchedEffect(addRequest) {
+        if (addRequest > 0) {
+            editing = TotpEntry.empty()
+            onAddConsumed()
         }
     }
 
@@ -123,11 +136,13 @@ fun TotpCodesScreen(
                 LargeTopAppBar(
                     title = { Text(text = stringResource(R.string.totp_screen_title)) },
                     navigationIcon = {
-                        IconButton(onClick = onBack) {
-                            Icon(
-                                Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = stringResource(R.string.action_back),
-                            )
+                        if (!embedded) {
+                            IconButton(onClick = onBack) {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.ArrowBack,
+                                    contentDescription = stringResource(R.string.action_back),
+                                )
+                            }
                         }
                     },
                     actions = {
@@ -155,8 +170,10 @@ fun TotpCodesScreen(
             }
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = { editing = TotpEntry.empty() }) {
-                Icon(Icons.Filled.Add, contentDescription = stringResource(R.string.totp_add_title))
+            if (!embedded) {
+                FloatingActionButton(onClick = { editing = TotpEntry.empty() }) {
+                    Icon(Icons.Filled.Add, contentDescription = stringResource(R.string.totp_add_title))
+                }
             }
         },
     ) { padding ->

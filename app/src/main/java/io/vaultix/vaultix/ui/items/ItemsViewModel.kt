@@ -15,11 +15,17 @@ import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultFolder
 import io.vaultix.model.VaultSummary
 import io.vaultix.vaultix.ui.common.ItemFilter
+import io.vaultix.vaultix.session.ActiveVaultStore
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
@@ -36,6 +42,7 @@ import javax.inject.Inject
  *   运行/错误展示；静默自动同步成功不打扰（Bastion 语义）；
  * - 新建走 [ItemRepository.createItem]：本地密文行 + dirty 队列 + 轻量推送。
  */
+@OptIn(ExperimentalCoroutinesApi::class)
 @HiltViewModel
 class ItemsViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
@@ -43,9 +50,33 @@ class ItemsViewModel @Inject constructor(
     private val itemRepository: ItemRepository,
     private val syncOrchestrator: BitwardenSyncOrchestrator,
     private val folderRepository: FolderRepository,
+    private val activeVaultStore: ActiveVaultStore,
 ) : ViewModel() {
 
-    val vaultId: String = checkNotNull(savedStateHandle[ARG_VAULT_ID])
+    /**
+     * 路由显式携带的库 id（二级直达场景，如搜索 / 快捷方式）。
+     *
+     * 有值 → 本页固定在该库；为 null（主界面 Tab 内嵌）→ 跟随 [ActiveVaultStore]
+     * （main-shell-migration 阶段 2，A4「vaultId 参数 → 筛选状态」降级）。
+     */
+    private val routedVaultId: String? = savedStateHandle[ARG_VAULT_ID]
+
+    /**
+     * 库 id 源：路由参数优先且**固定**（二级直达场景）；无参数时跟随 [ActiveVaultStore]
+     * ——**切换活跃库后本页内容会自动跟着变**（设置页「库管理」切换后无需重建页面）。
+     */
+    private val vaultIdSource: Flow<String> = routedVaultId
+        ?.let { id -> flowOf(id) }
+        ?: activeVaultStore.activeVaultId.map { it.orEmpty() }
+
+    private val vaultIdState: StateFlow<String> = vaultIdSource.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.Eagerly,
+        initialValue = routedVaultId ?: activeVaultStore.current() ?: "",
+    )
+
+    /** 当前库（供一次性动作读取：同步 / 锁定 / 新建）。 */
+    val vaultId: String get() = vaultIdState.value
 
     /** 同步提示条内容（一次性展示语义，由 UI 消费后调用 [consumeSyncNote] 清除）。 */
     sealed interface SyncNote {
@@ -76,21 +107,24 @@ class ItemsViewModel @Inject constructor(
     val saveEvents = _saveEvents.receiveAsFlow()
 
     init {
+        // 由路由参数进入时把该库登记为活跃库：保证主界面 Tab、autofill、
+        // Credential Provider 后续读到的是同一个「当前库」（单一活跃库语义）。
+        routedVaultId?.let(activeVaultStore::select)
         viewModelScope.launch {
-            vaultRepository.observeVaults().collect { vaults ->
-                _state.update { it.copy(vault = vaults.firstOrNull { v -> v.id == vaultId }) }
-            }
+            combine(vaultIdState, vaultRepository.observeVaults()) { id, vaults ->
+                vaults.firstOrNull { v -> v.id == id }
+            }.collect { vault -> _state.update { it.copy(vault = vault) } }
         }
         viewModelScope.launch {
-            itemRepository.observeItems(vaultId).collect { items ->
-                _state.update { it.copy(items = items) }
-            }
+            vaultIdState
+                .flatMapLatest { id -> itemRepository.observeItems(id) }
+                .collect { items -> _state.update { it.copy(items = items) } }
         }
         // 同步状态 → 页内提示条（Bastion 语义：静默结果不打扰）
         viewModelScope.launch {
-            syncOrchestrator.statusByVault.collect { statuses ->
-                _state.update { it.copy(syncNote = toSyncNote(statuses[vaultId])) }
-            }
+            combine(vaultIdState, syncOrchestrator.statusByVault) { id, statuses ->
+                toSyncNote(statuses[id])
+            }.collect { note -> _state.update { it.copy(syncNote = note) } }
         }
         // 2026-09-08（用户反馈）：进入页面**不再自动同步**——自动同步只随本地
         // 修改（保存/删除 → flush 推送）触发；拉取统一走 retrySync()（顶栏按钮 /
@@ -98,14 +132,14 @@ class ItemsViewModel @Inject constructor(
     }
 
     /** 该库的文件夹列表（未解锁 / 尚无文件夹时为空，UI 据此隐藏下拉）。 */
-    val folders: StateFlow<List<VaultFolder>> = folderRepository
-        .observeFolders(vaultId)
+    val folders: StateFlow<List<VaultFolder>> = vaultIdState
+        .flatMapLatest { id -> folderRepository.observeFolders(id) }
         .stateIn(scope = viewModelScope, started = SharingStarted.Eagerly, initialValue = emptyList())
 
     /** 同步进行中（下拉刷新指示器用；手动触发后 Orchestrator 状态流转驱动）。 */
     val isSyncing: StateFlow<Boolean> =
-        syncOrchestrator.statusByVault.map { statuses ->
-            statuses[vaultId]?.isRunning == true
+        combine(vaultIdState, syncOrchestrator.statusByVault) { id, statuses ->
+            statuses[id]?.isRunning == true
         }.stateIn(
             scope = viewModelScope,
             started = SharingStarted.Eagerly,

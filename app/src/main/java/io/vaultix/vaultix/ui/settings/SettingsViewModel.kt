@@ -8,7 +8,9 @@ import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.datastore.VaultixPreferencesDefaults
 import io.vaultix.domain.ItemRepository
 import io.vaultix.domain.VaultRepository
+import io.vaultix.model.VaultSummary
 import io.vaultix.vaultix.security.AutoLockController
+import io.vaultix.vaultix.session.ActiveVaultStore
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
@@ -36,6 +38,7 @@ class SettingsViewModel @Inject constructor(
     private val vaultRepository: VaultRepository,
     private val itemRepository: ItemRepository,
     private val autoLockController: AutoLockController,
+    private val activeVaultStore: ActiveVaultStore,
 ) : ViewModel() {
     data class UiState(
         val vaultTimeout: VaultTimeout = VaultTimeout.DEFAULT,
@@ -162,18 +165,52 @@ class SettingsViewModel @Inject constructor(
     }
 
     /**
-     * 已解锁库中的通行密钥总数（设置页「通行密钥」分组展示）。
+     * **当前活跃库**（null = 全锁）。
      *
-     * 统计口径是**当前已解锁库**：锁定库的密文读不出来，硬统计只会得到 0 并误导用户
-     * 「我没存过通行密钥」。副标题因此必须写清「已解锁库中」，与真实口径一致。
+     * Vaultix 是「单活跃库」语义（Docs/progress/main-shell-migration.md §0）：主界面 Tab、
+     * autofill 候选、Credential Provider 候选、保存回写目标**全部**只认这一项。
+     * 设置页是它唯一的对外切换入口。
      */
-    val passkeyCount: StateFlow<Int> = vaultRepository.observeUnlockedVaultIds()
-        .flatMapLatest { ids ->
-            val flows = ids.map { vaultId -> itemRepository.observeItems(vaultId) }
-            if (flows.isEmpty()) {
+    val activeVault: StateFlow<VaultSummary?> = combine(
+        activeVaultStore.activeVaultId,
+        vaultRepository.observeVaults(),
+    ) { id, vaults -> vaults.firstOrNull { it.id == id } }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = null,
+        )
+
+    /**
+     * 可切换目标 = **已解锁**的库。
+     *
+     * 锁定库没有内存密钥（切过去也只是空列表），不列为可选项 —— 想切就先解锁，
+     * 与「多库并存时只能进一样」的产品定义一致。
+     */
+    val switchableVaults: StateFlow<List<VaultSummary>> = vaultRepository.observeVaults()
+        .map { vaults -> vaults.filter { it.unlocked } }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = emptyList(),
+        )
+
+    /** 切换活跃库：主界面 Tab / autofill / CP 三处**同时**生效（单一活跃库语义）。 */
+    fun selectVault(vaultId: String) = activeVaultStore.select(vaultId)
+
+    /**
+     * **活跃库**中的通行密钥总数（设置页「通行密钥」分组展示）。
+     *
+     * ⚠️ 口径必须与填充侧一致：autofill / CP 只查活跃库，这里若跨库累加就会出现
+     * 「设置页显示 5 个，填充时一个都不弹」。统计也只认解锁库 —— 锁定库的密文读不出来，
+     * 硬统计只会得到 0 并误导用户「我没存过通行密钥」，故副标题写明口径。
+     */
+    val passkeyCount: StateFlow<Int> = activeVaultStore.activeVaultId
+        .flatMapLatest { id ->
+            if (id.isNullOrBlank()) {
                 flowOf(0)
             } else {
-                combine(flows) { lists -> lists.sumOf { items -> items.sumOf { it.fido2Credentials.size } } }
+                itemRepository.observeItems(id).map { items -> items.sumOf { it.fido2Credentials.size } }
             }
         }.stateIn(
             scope = viewModelScope,

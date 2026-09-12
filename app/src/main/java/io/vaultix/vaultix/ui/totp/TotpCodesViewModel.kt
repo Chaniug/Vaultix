@@ -15,11 +15,19 @@ import io.vaultix.domain.ItemRepository
 import io.vaultix.domain.VaultRepository
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
+import io.vaultix.vaultix.session.ActiveVaultStore
 import io.vaultix.vaultix.util.VaultixClipboard
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -40,6 +48,7 @@ import javax.inject.Inject
  * - 导入：支持 otpauth / motp / 裸密钥（单条，预填编辑确认）与
  *   otpauth-migration:// 批量导出（多条，直接创建）。
  */
+@OptIn(ExperimentalCoroutinesApi::class)
 @HiltViewModel
 class TotpCodesViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
@@ -47,9 +56,33 @@ class TotpCodesViewModel @Inject constructor(
     private val itemRepository: ItemRepository,
     private val clipboard: VaultixClipboard,
     private val preferences: VaultixPreferences,
+    private val activeVaultStore: ActiveVaultStore,
 ) : ViewModel() {
 
-    val vaultId: String = checkNotNull(savedStateHandle[ARG_VAULT_ID])
+    /**
+     * 路由显式携带的库 id（二级直达场景）。
+     *
+     * 有值 → 本页固定在该库；为 null（主界面 Tab 内嵌）→ 跟随 [ActiveVaultStore]
+     * （main-shell-migration 阶段 2，A4「vaultId 参数 → 筛选状态」降级）。
+     */
+    private val routedVaultId: String? = savedStateHandle[ARG_VAULT_ID]
+
+    /**
+     * 库 id 源：路由参数优先且固定；无参数时跟随 [ActiveVaultStore]
+     * ——**切换活跃库后本页内容自动跟着变**（与 `ItemsViewModel` 同口径）。
+     */
+    private val vaultIdSource: Flow<String> = routedVaultId
+        ?.let { id -> flowOf(id) }
+        ?: activeVaultStore.activeVaultId.map { it.orEmpty() }
+
+    private val vaultIdState: StateFlow<String> = vaultIdSource.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.Eagerly,
+        initialValue = routedVaultId ?: activeVaultStore.current() ?: "",
+    )
+
+    /** 当前库（供一次性动作读取：保存 / 删除 / 绑定 / 导入）。 */
+    val vaultId: String get() = vaultIdState.value
 
     data class UiState(
         val vaultName: String = "",
@@ -62,16 +95,17 @@ class TotpCodesViewModel @Inject constructor(
     val state: StateFlow<UiState> = _state.asStateFlow()
 
     init {
+        // 与 ItemsViewModel 一致：由路由参数进入时把该库登记为活跃库
+        routedVaultId?.let(activeVaultStore::select)
         viewModelScope.launch {
-            vaultRepository.observeVaults().collect { vaults ->
-                val name = vaults.firstOrNull { v -> v.id == vaultId }?.name.orEmpty()
-                _state.update { it.copy(vaultName = name) }
-            }
+            combine(vaultIdState, vaultRepository.observeVaults()) { id, vaults ->
+                vaults.firstOrNull { v -> v.id == id }?.name.orEmpty()
+            }.collect { name -> _state.update { it.copy(vaultName = name) } }
         }
         viewModelScope.launch {
-            itemRepository.observeItems(vaultId).collect { items ->
-                _state.update { it.copy(items = items) }
-            }
+            vaultIdState
+                .flatMapLatest { id -> itemRepository.observeItems(id) }
+                .collect { items -> _state.update { it.copy(items = items) } }
         }
     }
 

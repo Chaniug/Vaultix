@@ -19,6 +19,7 @@ import io.vaultix.domain.VaultRepository
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
 import io.vaultix.model.VaultUri
+import io.vaultix.vaultix.session.ActiveVaultStore
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -40,6 +41,7 @@ class AutofillSaveViewModel @Inject constructor(
     @ApplicationContext context: Context,
     private val vaultRepository: VaultRepository,
     private val itemRepository: ItemRepository,
+    private val activeVaultStore: ActiveVaultStore,
 ) : ViewModel() {
 
     private val username: String = savedStateHandle[AutofillSaveIntents.EXTRA_USERNAME] ?: ""
@@ -115,7 +117,11 @@ class AutofillSaveViewModel @Inject constructor(
 
     /** 库未解锁时引导解锁：密钥只在内存，锁定状态下无法写密文。 */
     private suspend fun resolveTarget() {
-        val vaultId = vaultRepository.observeUnlockedVaultIds().first().firstOrNull()
+        // ★ 保存目标 = **唯一活跃库**（迁移文档阶段 2）。历史行为是「任取一个已解锁库」
+        // （`firstOrNull()`），多库并存时写进哪个全凭 Set 迭代顺序 → 用户感知为
+        // 「保存重复 / 存了找不到」。活跃库解析为空时仍退化为单个已解锁库，不遍历全部。
+        val vaultId = activeVaultStore.resolve()
+            ?: vaultRepository.observeUnlockedVaultIds().first().minOrNull()
         if (vaultId == null) {
             _state.update { it.copy(locked = true, loading = false) }
             return
