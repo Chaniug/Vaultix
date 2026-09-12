@@ -207,10 +207,40 @@ fun TotpCodesScreen(
         }
     }
 
+    TotpDialogs(
+        editing = editing,
+        binding = binding,
+        importOpen = importOpen,
+        viewModel = viewModel,
+        snackbarHostState = snackbarHostState,
+        onEditingChange = { editing = it },
+        onBindingChange = { binding = it },
+        onImportOpenChange = { importOpen = it },
+    )
+}
+
+/**
+ * 三个对话框（编辑 / 绑定密码条目 / 导入）。
+ *
+ * 抽出来是为让 [TotpCodesScreen] 守住 detekt 门禁（2026-09-12：主函数曾达 151 行 /
+ * 圈复杂度 15，均超阈值 —— 上一轮加 `embedded` / `addRequest` 参数时被推过线）。
+ * 对话框本身是独立交互单元，与页面骨架无耦合，拆出后主函数只剩「骨架 + 状态分发」。
+ */
+@Composable
+private fun TotpDialogs(
+    editing: TotpEntry?,
+    binding: TotpEntry?,
+    importOpen: Boolean,
+    viewModel: TotpCodesViewModel,
+    snackbarHostState: SnackbarHostState,
+    onEditingChange: (TotpEntry?) -> Unit,
+    onBindingChange: (TotpEntry?) -> Unit,
+    onImportOpenChange: (Boolean) -> Unit,
+) {
     editing?.let { entry ->
         TotpEditDialog(
             entry = entry,
-            onDismiss = { editing = null },
+            onDismiss = { onEditingChange(null) },
             onSave = { issuer, account, config ->
                 viewModel.saveTotp(
                     entryId = entry.itemId.takeIf { it.isNotEmpty() && entry.totpRaw.isNotEmpty() },
@@ -218,12 +248,12 @@ fun TotpCodesScreen(
                     account = account,
                     config = config,
                 )
-                editing = null
+                onEditingChange(null)
             },
             onDelete = if (entry.totpRaw.isNotEmpty()) {
                 {
                     viewModel.deleteTotp(entry)
-                    editing = null
+                    onEditingChange(null)
                 }
             } else {
                 null
@@ -234,10 +264,10 @@ fun TotpCodesScreen(
     binding?.let { entry ->
         LoginPickerDialog(
             candidates = viewModel.loginCandidates(entry.itemId),
-            onDismiss = { binding = null },
+            onDismiss = { onBindingChange(null) },
             onPick = { login ->
                 viewModel.bindStandaloneToLogin(entry, login.id)
-                binding = null
+                onBindingChange(null)
             },
         )
     }
@@ -246,8 +276,8 @@ fun TotpCodesScreen(
         ImportDialogWithOutcome(
             viewModel = viewModel,
             snackbarHostState = snackbarHostState,
-            onSingle = { editing = it },
-            onDismiss = { importOpen = false },
+            onSingle = { onEditingChange(it) },
+            onDismiss = { onImportOpenChange(false) },
         )
     }
 }

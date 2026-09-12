@@ -47,27 +47,36 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.vaultix.common.CardBrand
 
-fun CardBrand.iconLabel(): String =
-    when (this) {
-        CardBrand.VISA -> "VISA"
-        CardBrand.MASTERCARD -> "MC"
-        CardBrand.AMERICAN_EXPRESS -> "AMEX"
-        CardBrand.DINERS_CLUB -> "DINERS"
-        CardBrand.DISCOVER -> "DISC"
-        CardBrand.JCB -> "JCB"
-        CardBrand.UNIONPAY -> "UP"
-        CardBrand.MAESTRO -> "MAE"
-        CardBrand.MIR -> "MIR"
-        CardBrand.RUPAY -> "RUPAY"
-        CardBrand.ELO -> "ELO"
-        CardBrand.DANKORT -> "DK"
-        CardBrand.MADA -> "MADA"
-        CardBrand.MEEZA -> "MEEZA"
-        CardBrand.TROY -> "TROY"
-        CardBrand.UATP -> "UATP"
-        CardBrand.FORBRUGSFORENINGEN -> "FF"
-        CardBrand.UNKNOWN -> ""
-    }
+/**
+ * 无矢量 logo 品牌在图标框里显示的短标签。
+ *
+ * ⚠️ 2026-09-12 detekt 治理：原实现是一个 20 分支的 `when`，`iconLabel` 圈复杂度
+ * 19 > 门禁 14（Bastion 上游未跑本项目门禁，故搬运时才暴露）。改为**枚举名查表**：
+ * 18 个品牌的标签集中在一张 Map 里，复杂度降到 1，且新增品牌时只需加一行、漏加会
+ * 落到 `UNKNOWN` 的空白标签而不崩。
+ */
+private val CARD_BRAND_ICON_LABELS: Map<CardBrand, String> = mapOf(
+    CardBrand.VISA to "VISA",
+    CardBrand.MASTERCARD to "MC",
+    CardBrand.AMERICAN_EXPRESS to "AMEX",
+    CardBrand.DINERS_CLUB to "DINERS",
+    CardBrand.DISCOVER to "DISC",
+    CardBrand.JCB to "JCB",
+    CardBrand.UNIONPAY to "UP",
+    CardBrand.MAESTRO to "MAE",
+    CardBrand.MIR to "MIR",
+    CardBrand.RUPAY to "RUPAY",
+    CardBrand.ELO to "ELO",
+    CardBrand.DANKORT to "DK",
+    CardBrand.MADA to "MADA",
+    CardBrand.MEEZA to "MEEZA",
+    CardBrand.TROY to "TROY",
+    CardBrand.UATP to "UATP",
+    CardBrand.FORBRUGSFORENINGEN to "FF",
+    CardBrand.UNKNOWN to "",
+)
+
+fun CardBrand.iconLabel(): String = CARD_BRAND_ICON_LABELS[this].orEmpty()
 
 private fun CardBrand.shouldDrawInterlockingMark(): Boolean =
     this == CardBrand.MASTERCARD || this == CardBrand.MAESTRO
