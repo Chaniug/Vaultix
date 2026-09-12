@@ -21,6 +21,7 @@ package io.vaultix.common
 
 import java.io.ByteArrayOutputStream
 import java.math.BigInteger
+import java.nio.ByteBuffer
 import java.security.KeyFactory
 import java.security.KeyPair
 import java.security.KeyPairGenerator
@@ -37,6 +38,7 @@ import java.security.interfaces.ECPrivateKey
 import java.security.interfaces.ECPublicKey
 import java.security.spec.ECParameterSpec
 import java.util.Base64
+import java.util.UUID
 
 /** WebAuthn / FIDO 常量与纯函数。全部抛 [IllegalArgumentException] / [WebAuthnException] 指明失败原因。 */
 object WebAuthn {
@@ -50,6 +52,8 @@ object WebAuthn {
     private const val P256_FIELD_BYTES = 32
     /** 自建提供方无 AAGUID，固定 16 字节全 0。 */
     private const val AAGUID_BYTES = 16
+    /** UUID 文本承载的 credentialId 固定 16 字节（Bitwarden / Keyguard 的存储形态）。 */
+    private const val UUID_BYTE_SIZE = 16
 
     // authenticatorData 标志位（WebAuthn §6.1）
     private const val FLAG_USER_PRESENT = 0x01
@@ -112,16 +116,58 @@ object WebAuthn {
      *  - 更糟的是**解码失败分支**：`decode` 抛异常后被 `?:` 兜底成 `text.toByteArray(UTF_8)`，
      *    把整串 Base64 文本当成 ID 字节发出去，RP 必然拒绝。
      *
-     * 正确做法：**直接用存储的文本**（规范里 `id` / `rawId` 本就是 Base64 文本，且注册侧
-     * 写库时用的就是 [base64Url]，两侧同源）。仅当文本不是合法 Base64（历史脏数据）时，
-     * 才退化为按 UTF-8 字节重新编码，保证「不崩、可诊断」。
+     * 正确做法：**按存储形态归一**（对齐 Keyguard `PasskeyCredentialId.encode` /
+     * Bastion `PasskeyCredentialIdCodec.toWebAuthnId`）：
+     *  - **UUID 文本**（Bitwarden 同步来的 16 字节 credentialId，如 `xxxx-xxxx-…`）
+     *    → 先转 16 字节再 [base64Url]（22 字符）。**UUID 文本恰好能通过 base64url 解码，
+     *    是「误判为可解码」的经典陷阱**，必须优先识别；
+     *  - 合法 Base64 文本 → 原样返回（注册侧写库用的就是 [base64Url]，两侧同源）；
+     *  - 非法 Base64 的历史脏数据 → 退化为按 UTF-8 字节重新编码，保证「不崩、可诊断」。
      */
     fun rawIdFromStored(storedId: String): String {
         val trimmed = storedId.trim()
         if (trimmed.isEmpty()) return trimmed
-        val decodable = runCatching { decodeBase64UrlOrStandard(trimmed) }.isSuccess
-        return if (decodable) trimmed else base64Url(trimmed.toByteArray(Charsets.UTF_8))
+        // ★ UUID 文本分支（2026-09-12 定位的「登录末步校验失败」根因）：
+        //   Bitwarden / Keyguard 库里 16 字节 credentialId 存成 **UUID 文本**形态
+        //   （如 `5698f18a-41e0-e865-0104-c989aee7dc18`）。UUID 文本的字符集 `0-9a-f-`
+        //   **恰好全落在 base64url 字母表内**、长度 36 又是 4 的倍数 ⇒ 会被下面的
+        //   「可 base64 解码」判别**误判**为 b64url 并原样发出（现场日志的
+        //   `storedIsBase64=true` 即是此误判）。而 RP 期望的是 `base64url(UUID 的 16 字节)`
+        //   （22 字符）—— 两者解码后分别是 27 字节与 16 字节，必然逐字节失配。
+        //   对齐 Keyguard `PasskeyCredentialId.encode` / Bastion
+        //   `PasskeyCredentialIdCodec.toWebAuthnId`：**先试 UUID，再 fallback base64**。
+        return uuidTextToBase64Url(trimmed)
+            ?: trimmed.takeIf { runCatching { decodeBase64UrlOrStandard(it) }.isSuccess }
+            ?: base64Url(trimmed.toByteArray(Charsets.UTF_8))
     }
+
+    /**
+     * 诊断用：判定库里 [storedId] 的存储形态（`blank` / `uuid` / `base64` / `text`）。
+     *
+     * 与 [rawIdFromStored] 的分支一一对应，供现场日志区分「形态不对」与「解码失败」——
+     * 二者在真机上都表现为「登录最后一步报错」，但排查方向完全不同。
+     */
+    fun describeStoredIdForm(storedId: String): String {
+        val trimmed = storedId.trim()
+        return when {
+            trimmed.isEmpty() -> "blank"
+            isUuidText(trimmed) -> "uuid"
+            runCatching { decodeBase64UrlOrStandard(trimmed) }.isSuccess -> "base64"
+            else -> "text"
+        }
+    }
+
+    /** UUID 文本 → `base64Url(16 字节)`（22 字符）；非 UUID 文本返回 null。 */
+    private fun uuidTextToBase64Url(text: String): String? = runCatching {
+        val uuid = UUID.fromString(text)
+        val buffer = ByteBuffer.allocate(UUID_BYTE_SIZE)
+        buffer.putLong(uuid.mostSignificantBits)
+        buffer.putLong(uuid.leastSignificantBits)
+        base64Url(buffer.array())
+    }.getOrNull()
+
+    private fun isUuidText(text: String): Boolean =
+        runCatching { UUID.fromString(text) }.isSuccess
 
     /**
      * 解析 Bitwarden 存储的 [keyValue] 为 P-256 私钥。

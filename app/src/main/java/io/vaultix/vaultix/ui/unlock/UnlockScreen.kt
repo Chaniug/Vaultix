@@ -28,6 +28,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalFocusManager
@@ -96,6 +98,22 @@ fun UnlockScreen(
                     )
                 }
             }
+        }
+    }
+
+    // 进入解锁页后**自动弹一次**本地快速解锁（生物识别 / 指纹）：只要该库已启用快速解锁，
+    // 就不必再让用户找按钮点一下（对齐 Bitwarden 「解锁界面直接弹生物识别」的体验）。
+    // 只自动触发一次——用户取消后不再反复弹（尊重「改用主密码」的意图），仍可手动点按钮再触发。
+    // autoPrompted 走 rememberSaveable：配置变更 / 重组都不会重弹。
+    val autoPrompted = rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(state.localUnlockAvailable, state.twoFactor, state.submitting) {
+        if (!autoPrompted.value &&
+            state.localUnlockAvailable &&
+            state.twoFactor == null &&
+            !state.submitting
+        ) {
+            autoPrompted.value = true
+            viewModel.startLocalUnlock()
         }
     }
 

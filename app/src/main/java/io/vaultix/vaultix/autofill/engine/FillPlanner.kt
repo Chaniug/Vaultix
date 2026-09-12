@@ -52,11 +52,15 @@ object FillPlanner {
         val suggestions = mutableListOf<FillSuggestion>()
         if (hasLoginContext(present, context.hasCredibleUsernameField)) {
             suggestions += buildLoginSuggestions(context, matchedLogins, present, totpProvider)
-        } else if (hasOtpOnlyContext(present)) {
-            // 纯 2FA 第二步页面（只有验证码框、没有账号密码框）：单独出「只填验证码」的建议，
-            // 否则这类页面一条建议都没有，用户只能切出去手动复制。
-            suggestions += buildOtpOnlySuggestions(matchedLogins, totpProvider)
         }
+        // ⚠️ 纯 2FA 第二步页面（只有验证码框、没有账号密码框）**刻意不出任何建议**
+        // —— 与 Bitwarden 对齐（2026-09-12 按用户要求移除此前多出的「只填验证码」条目）。
+        //
+        // 上游依据：Bitwarden 的 `AutofillView` **根本没有 TOTP 字段类型**（grep 无 Totp/OneTime），
+        // 它从不把验证码填进输入框，而是在填完登录条目后把验证码**复制进剪贴板**
+        // （`AutofillCompletionManagerImpl` 无条件调 `tryCopyTotpToClipboard`，
+        // 仅受「自动复制 TOTP」开关门控）。因此这类页面在上游不会列出任何条目。
+        // Vaultix 的用户上一步填账号密码时验证码已进剪贴板，此处再弹条目只是多余的一次选择。
         if (hasCardContext(present)) {
             suggestions += buildCardSuggestions(cards, present)
         }
@@ -79,25 +83,6 @@ object FillPlanner {
     private fun hasLoginContext(present: Set<FieldHint>, credibleUsername: Boolean): Boolean =
         FieldHint.PASSWORD in present ||
             (FieldHint.USERNAME in present && credibleUsername)
-
-    /** 只有验证码框（2FA 第二步页面）。 */
-    private fun hasOtpOnlyContext(present: Set<FieldHint>): Boolean = FieldHint.OTP in present
-
-    /** 纯验证码页面：每个带 TOTP 的条目出一条「只填验证码」的建议。 */
-    private fun buildOtpOnlySuggestions(
-        logins: List<AutofillCredential>,
-        totpProvider: (String) -> String?,
-    ): List<FillSuggestion> = logins.mapNotNull { login ->
-        if (login.totp.isBlank()) return@mapNotNull null
-        val code = totpProvider(login.totp) ?: return@mapNotNull null
-        FillSuggestion(
-            id = "otp:${login.vaultId}:${login.itemId}",
-            title = login.name.ifBlank { login.username },
-            subtitle = login.username,
-            fields = mapOf(FieldHint.OTP to code),
-            category = FillCategory.LOGIN,
-        )
-    }
 
     private fun hasCardContext(present: Set<FieldHint>): Boolean =
         FieldHint.CARD_NUMBER in present || FieldHint.CARD_CVC in present || FieldHint.CARD_EXPIRY in present

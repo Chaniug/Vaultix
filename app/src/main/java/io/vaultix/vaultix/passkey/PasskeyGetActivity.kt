@@ -451,12 +451,11 @@ class PasskeyGetActivity : FragmentActivity() {
                 signature = signature,
                 userHandleText = cred.userHandle?.takeIf { it.isNotBlank() },
             )
-            val storedIsBase64 =
-                runCatching { WebAuthn.decodeBase64UrlOrStandard(cred.credentialId) }.isSuccess
+            val storedIdForm = WebAuthn.describeStoredIdForm(cred.credentialId)
             AutofillLogger.d(
                 "PK assertion ready sigLen=${signature.size} authDataLen=${authData.size} " +
                     "cdjLen=${clientDataBytes.size} browserFlow=${clientDataHash != null} " +
-                    "rawId=${WebAuthn.rawIdFromStored(cred.credentialId)} storedIsBase64=$storedIsBase64",
+                    "rawId=${WebAuthn.rawIdFromStored(cred.credentialId)} storedIdForm=$storedIdForm",
             )
             val resultIntent = Intent()
             PendingIntentHandler.setGetCredentialResponse(

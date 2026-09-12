@@ -360,6 +360,10 @@ class WebAuthnTest {
      *
      * 本测试同时锁住「正常 b64url」与「标准 Base64」两种形态都必须**原样回传**，
      * 并验证标准 Base64 那条会与 RP 的 ID 比对失配（旧行为，不得回归）。
+     *
+     * 追加（同日补丁）：**UUID 文本**形态（Bitwarden 同步来的 16 字节 credentialId）
+     * 必须归一为 `base64url(16 字节)`（22 字符）。UUID 文本恰好能通过 base64url 解码，
+     * 是「误判为可解码 → 原样发出 → 与 RP 存的 16 字节失配」的根源（见用例 ④）。
      */
     @Test
     fun `stored credential id is echoed verbatim as rawId`() {
@@ -391,6 +395,26 @@ class WebAuthnTest {
         assertThat(WebAuthn.rawIdFromStored(junk)).isNotEmpty()
         assertThat(WebAuthn.decodeBase64UrlOrStandard(WebAuthn.rawIdFromStored(junk)))
             .isEqualTo(junk.toByteArray(Charsets.UTF_8))
+
+        // ④ **UUID 文本形态**（Bitwarden 同步来的 16 字节 credentialId）：
+        //    必须归一为 `base64url(16 字节)`（22 字符），**不得**把 UUID 文本原样当 rawId 发出。
+        //    UUID 文本（`0-9a-f-`，长 36）恰好能通过 base64url 解码且长度为 4 的倍数，
+        //    是「被误判为可解码 → 原样发出 → RP 解出 27 字节 ≠ 其存的 16 字节」的陷阱源头。
+        val uuidText = "5698f18a-41e0-e865-0104-c989aee7dc18"
+        val uuid = java.util.UUID.fromString(uuidText)
+        val uuidBytes = java.nio.ByteBuffer.allocate(16)
+            .putLong(uuid.mostSignificantBits)
+            .putLong(uuid.leastSignificantBits)
+            .array()
+        val uuidRawId = WebAuthn.rawIdFromStored(uuidText)
+        assertThat(uuidRawId).isNotEqualTo(uuidText) // 旧行为（原样发出 GUID 文本）不得回归
+        assertThat(uuidRawId).isEqualTo(WebAuthn.base64Url(uuidBytes))
+        assertThat(uuidRawId).hasLength(22) // 16 字节 → base64url 无填充 22 字符
+        assertThat(java.util.Base64.getUrlDecoder().decode(uuidRawId)).isEqualTo(uuidBytes)
+
+        // 形态诊断须把 uuid 与 base64 分开（现场日志据此定位，不再把 UUID 误报成 base64）
+        assertThat(WebAuthn.describeStoredIdForm(uuidText)).isEqualTo("uuid")
+        assertThat(WebAuthn.describeStoredIdForm(storedB64Url)).isEqualTo("base64")
     }
 
     /** 空 credentialId 不得抛异常（防御：调用方可能拿到脏数据）。 */

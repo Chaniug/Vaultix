@@ -31,6 +31,22 @@
 #   adb shell cmd autofill set log_level verbose
 #   （默认是 off；`cmd credential` 无 shell 实现，CP 侧只能靠 logcat）
 #
+# ⚠️ 无线调试「配对」与「连接」是**两个不同端口**（2026-09-12 实测踩坑）：
+#   1) 首次 / 重新配对：手机「无线调试 → 使用配对码配对设备」对话框给出
+#      **IP:配对端口 + 6 位配对码**，必须在对话框**保持打开**时执行
+#      `adb pair <IP>:<配对端口> <码>`（关掉即失效，报
+#      `protocol fault (couldn't read status message)`）；
+#   2) 配对成功后，还要用「无线调试」主界面那个 **IP:连接端口** 执行 `adb connect`，
+#      它是**另一个端口**。本脚本 `--dev` 传的应是这个**连接端口**。
+#
+# ⚠️ 两套 adb 会抢 server：`C:\adb` 与 `C:\AndroidSDK\platform-tools` 若混用，
+#   会互相 kill 掉 5037 上的 server，表现为「connect 报成功、紧接着 devices 为空、
+#   daemon 反复重启」。统一只用一个二进制（推荐 `ADB=/c/adb/adb.exe`）：
+#     taskkill //F //IM adb.exe     # 先清干净，再全程用同一个 adb
+#   并尽量把「connect + 操作」压进**同一条命令**（server 在命令之间可能被回收）。
+#   另：ICMP 常被手机/路由禁 —— `ping` 不可达**不代表**主机不在线；改用 `adb connect` 区分：
+#   10061「积极拒绝」= 主机在、但该端口无服务；10060「超时」= 主机/端口不可达。
+#
 # 可选环境变量：
 #   ADB=/path/to/adb      显式指定 adb（默认自动探测）
 #   VAULTIX_TAG=TagName   覆盖日志 tag（默认 VaultixAutofill）
