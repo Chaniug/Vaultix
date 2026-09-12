@@ -12,6 +12,7 @@ import io.vaultix.model.VaultSummary
 import io.vaultix.vaultix.ui.common.TwoFactorProvider
 import io.vaultix.vaultix.ui.error.UnlockUiError
 import io.vaultix.vaultix.ui.error.toUnlockUiError
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -22,6 +23,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
 /**
@@ -116,6 +118,13 @@ class UnlockViewModel @Inject constructor(
     private val _events = Channel<Event>(Channel.BUFFERED)
     val events = _events.receiveAsFlow()
 
+    /**
+     * **提前备好的** BiometricPrompt cipher（见 [prewarmCipher]）。
+     *
+     * 只在主线程读写，故无需额外同步。
+     */
+    private var preparedCipher: javax.crypto.Cipher? = null
+
     init {
         viewModelScope.launch {
             vaultRepository.observeVaults().collect { vaults ->
@@ -157,6 +166,7 @@ class UnlockViewModel @Inject constructor(
                     _state.update { it.copy(viewLocked = sessionRepository.isViewLocked(id)) }
                     vaultRepository.localUnlockAvailable(id).collect { available ->
                         _state.update { it.copy(localUnlockAvailable = available) }
+                        if (available) prewarmCipher(id)
                     }
                 }
         }
@@ -173,6 +183,23 @@ class UnlockViewModel @Inject constructor(
      */
     fun startViewUnlock() = startBiometricUnlock(viewLock = true)
 
+    /**
+     * 后台把 BiometricPrompt 要用的 cipher 先备好。
+     *
+     * 为什么值得多此一举：自动弹认证（见 `UnlockScreen.AutoPromptQuickUnlock`）要等
+     * `localUnlockAvailable` 首帧 → 再 `prepareLocalUnlock` → 再等 Activity RESUMED，
+     * 三次握手串起来就是用户感知的「指纹不能第一时间弹出来」。可用状态一到位就
+     * 提前把最后一步做掉，等真正要弹时只剩「把 cipher 交给系统」这一件事。
+     */
+    private fun prewarmCipher(id: String) {
+        if (preparedCipher != null) return
+        viewModelScope.launch {
+            preparedCipher = withContext(Dispatchers.IO) {
+                runCatching { vaultRepository.prepareLocalUnlock(id) }.getOrNull()
+            }
+        }
+    }
+
     private fun startBiometricUnlock(viewLock: Boolean) {
         val current = _state.value
         if (current.submitting) return
@@ -180,7 +207,13 @@ class UnlockViewModel @Inject constructor(
         if (!viewLock && current.localUnlockAvailable.not()) return
         _state.update { it.copy(submitting = true, viewUnlockStarted = viewLock, error = null) }
         viewModelScope.launch {
-            val cipher = vaultRepository.prepareLocalUnlock(vaultId)
+            // ⚠️ Keystore / 解密都在**后台**做：`viewModelScope` 默认跑在主线程，
+            // 而 `prepareLocalUnlock` 要初始化一个 AES Cipher（首次还会触发 keystore
+            // 解密），冷启动或覆盖安装后首次进入时足以让首帧渲染卡住 —— 表现就是
+            // 用户看到的「指纹弹窗不能第一时间出来」。
+            val cipher = preparedCipher ?: withContext(Dispatchers.IO) {
+                vaultRepository.prepareLocalUnlock(vaultId)
+            }
             if (cipher == null) {
                 // 密钥包不可用（KEK 被指纹变更失效 / 从未启用）。
                 // ⚠️ 查看锁分支要**摘掉查看锁**再落回主密码表单：否则页面会停在
@@ -194,6 +227,8 @@ class UnlockViewModel @Inject constructor(
                     )
                 }
             } else {
+                // cipher 一次性：交出去就作废缓存，下次重新准备。
+                preparedCipher = null
                 _events.send(Event.PromptForUnlock(cipher))
             }
         }
@@ -215,7 +250,10 @@ class UnlockViewModel @Inject constructor(
                 _events.send(Event.Unlocked)
                 return@launch
             }
-            val result = vaultRepository.completeLocalUnlock(vaultId, cipher)
+            // 同上：unwrap（Keystore 解密 + 密钥重建）不占主线程。
+            val result = withContext(Dispatchers.IO) {
+                vaultRepository.completeLocalUnlock(vaultId, cipher)
+            }
             if (result == UnlockResult.Success) {
                 _state.update {
                     it.copy(
@@ -291,10 +329,14 @@ class UnlockViewModel @Inject constructor(
             // KDBX 认的是文件（离线、无账号、无 2FA），Bitwarden 认的是账号（联网 + 可能 2FA）。
             // 走错一条的后果不是「报错」而是「报错信息完全对不上」（如 KDBX 库被拿去联网 prelogin）。
             val target = _state.value.vault
-            val result = if (target?.kind == VaultKind.KDBX) {
-                vaultRepository.unlockKdbxVault(vaultId, current.password)
-            } else {
-                vaultRepository.unlockVault(vaultId, current.password)
+            // PBKDF2 / Argon2 派生是秒级 CPU 活（Bitwarden 默认 600k 次迭代），
+            // 必须离开主线程，否则「登录」按钮按下到转圈之间会整页卡住。
+            val result = withContext(Dispatchers.IO) {
+                if (target?.kind == VaultKind.KDBX) {
+                    vaultRepository.unlockKdbxVault(vaultId, current.password)
+                } else {
+                    vaultRepository.unlockVault(vaultId, current.password)
+                }
             }
             handleSubmitResult(result, submitTwoFactor = false)
         }
@@ -307,12 +349,14 @@ class UnlockViewModel @Inject constructor(
         if (current.submitting || code.isBlank()) return
         _state.update { it.copy(submitting = true, error = null) }
         viewModelScope.launch {
-            val result = vaultRepository.unlockVaultWithTwoFactor(
-                vaultId = vaultId,
-                masterPassword = current.password,
-                provider = tf.provider,
-                code = code.trim(),
-            )
+            val result = withContext(Dispatchers.IO) {
+                vaultRepository.unlockVaultWithTwoFactor(
+                    vaultId = vaultId,
+                    masterPassword = current.password,
+                    provider = tf.provider,
+                    code = code.trim(),
+                )
+            }
             handleSubmitResult(result, submitTwoFactor = true)
         }
     }

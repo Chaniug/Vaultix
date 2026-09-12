@@ -22,7 +22,9 @@
  */
 package io.vaultix.vaultix.ui.common
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -30,6 +32,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -57,19 +60,36 @@ private val CARD_PADDING = 16.dp
  * ⚠️ 这与「搬 Bastion 的壳」无关：壳（底部导航 / Tab 容器 / 转场）已迁移完毕，
  * 本条属于**组件级视觉规格**。
  *
+ * ## 长按多选（2026-09-13，对齐 Bastion `TotpCodeCard` 的 `cardInteractionModifier`）
+ * 上游把条目交互分成两态，本项目照此接线：
+ * - **非选择态**：`combinedClickable(onClick = 打开/复制, onLongClick = 进入选择模式)`；
+ * - **选择态**：`onLongClick = null` + `onClick = 勾选/取消`（长按不再有语义，避免与
+ *   外层 [PressAndSwipeToDelete] 的「长按后左滑」抢手势）；
+ * - 选中时卡片换成 `secondaryContainer` 底色 —— 不给视觉反馈的话，用户看不出哪几条被选中。
+ *
  * @param onClick 点击条目（水波纹被裁进圆角内）。
+ * @param onLongClick 长按条目；为 `null` 时不挂长按（选择态）。
+ * @param selected 是否处于选中态（改底色，不画 Checkbox —— 勾选项由调用方决定放哪）。
  * @param content 卡片内容（纵向排列；需要横排时在里面再放一个 `Row` 即可）。
  */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun EntryCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    onLongClick: (() -> Unit)? = null,
+    selected: Boolean = false,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val shape = RoundedCornerShape(CARD_CORNER)
+    val baseColors = CardDefaults.cardColors()
     Card(
         modifier = modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(),
+        colors = if (selected) {
+            baseColors.copy(containerColor = MaterialTheme.colorScheme.secondaryContainer)
+        } else {
+            baseColors
+        },
         elevation = CardDefaults.cardElevation(),
         shape = shape,
     ) {
@@ -77,7 +97,13 @@ fun EntryCard(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(shape)
-                .clickable(onClick = onClick)
+                .then(
+                    if (onLongClick == null) {
+                        Modifier.clickable(onClick = onClick)
+                    } else {
+                        Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)
+                    },
+                )
                 .padding(CARD_PADDING),
             content = content,
         )

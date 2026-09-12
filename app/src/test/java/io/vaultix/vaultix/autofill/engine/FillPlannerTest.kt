@@ -78,7 +78,9 @@ class FillPlannerTest {
             listOf(loginCred("1", totp = "JBSWY3DPEHPK3PXP")),
             emptyList(),
             emptyList(),
-        ) { "123456" }
+            // 具名传参：`serverOrigin` 在 `totpProvider` 之后，尾随 lambda 会被它吃掉。
+            totpProvider = { "123456" },
+        )
         val s = plan.suggestions[0]
         assertThat(s.fields[FieldHint.OTP]).isEqualTo("123456")
     }

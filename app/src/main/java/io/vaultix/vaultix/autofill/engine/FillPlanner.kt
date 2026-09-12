@@ -12,6 +12,7 @@
  */
 package io.vaultix.vaultix.autofill.engine
 
+import io.vaultix.common.SiteIconUrl
 import io.vaultix.model.VaultItem
 import io.vaultix.vaultix.autofill.model.AutofillCredential
 import io.vaultix.vaultix.autofill.model.FieldHint
@@ -47,11 +48,19 @@ object FillPlanner {
         cards: List<VaultItem>,
         identities: List<VaultItem>,
         totpProvider: (String) -> String?,
+        /** 活跃库 origin（拼站点图标地址；null 时全部走字母头像）。 */
+        serverOrigin: String? = null,
     ): FillPlan {
         val present = context.presentHints
         val suggestions = mutableListOf<FillSuggestion>()
         if (hasLoginContext(present, context.hasCredibleUsernameField)) {
-            suggestions += buildLoginSuggestions(context, matchedLogins, present, totpProvider)
+            suggestions += buildLoginSuggestions(
+                context = context,
+                logins = matchedLogins,
+                present = present,
+                totpProvider = totpProvider,
+                serverOrigin = serverOrigin,
+            )
         }
         // ⚠️ 纯 2FA 第二步页面（只有验证码框、没有账号密码框）**刻意不出任何建议**
         // —— 与 Bitwarden 对齐（2026-09-12 按用户要求移除此前多出的「只填验证码」条目）。
@@ -110,6 +119,7 @@ object FillPlanner {
         logins: List<AutofillCredential>,
         present: Set<FieldHint>,
         totpProvider: (String) -> String?,
+        serverOrigin: String?,
     ): List<FillSuggestion> {
         val result = mutableListOf<FillSuggestion>()
         // ⚠️ **需要主密码二次验证的条目不进自动填充候选**（2026-09-12 对齐 Bitwarden）。
@@ -138,6 +148,10 @@ object FillPlanner {
                 requiresReprompt = login.requiresReprompt,
                 totpSecret = login.totp.takeIf { it.isNotBlank() },
                 category = FillCategory.LOGIN,
+                iconUrl = SiteIconUrl.forHost(
+                    serverOrigin,
+                    SiteIconUrl.hostOfItemUris(login.uris.map { it.uri }),
+                ),
             )
         }
         return result

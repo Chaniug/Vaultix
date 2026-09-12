@@ -19,10 +19,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Android
 import androidx.compose.material.icons.filled.Casino
+import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
@@ -51,6 +54,7 @@ import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -178,21 +182,13 @@ fun ItemFormDialog(
                     // 安全笔记只有名称 + 备注；SSH 密钥段保持只读（上方已提示）
                     VaultItemType.SecureNote, VaultItemType.SshKey -> Unit
                 }
-                FormDivider()
-                SectionLabel(text = stringResource(R.string.section_custom_fields))
-                Spacer(Modifier.height(8.dp))
-                CustomFieldsEditor(fields = customFields)
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = notes,
-                    onValueChange = { notes = it },
-                    label = { Text(stringResource(R.string.item_field_notes)) },
-                    minLines = 2,
-                    modifier = Modifier.fillMaxWidth(),
+                ItemFormTail(
+                    customFields = customFields,
+                    notes = notes,
+                    onNotesChange = { notes = it },
+                    reprompt = reprompt,
+                    onRepromptChange = { reprompt = it },
                 )
-                // 主密码二次验证（对齐 Bitwarden「附加选项」里的开关）
-                FormDivider()
-                RepromptToggle(reprompt = reprompt, onRepromptChange = { reprompt = it })
             }
         },
         confirmButton = {
@@ -253,6 +249,40 @@ fun ItemFormDialog(
 }
 
 /**
+ * 表单尾段：自定义字段 → 备注 → 附加选项（主密码二次验证）。
+ *
+ * 抽成独立 composable 是为了不让 [ItemFormDialog] 越过 detekt `LongMethod ≤150` 门禁；
+ * 这三段在新建与编辑两种场景下完全一致，本来就该是一个可复用单元。
+ */
+@Composable
+private fun ItemFormTail(
+    customFields: SnapshotStateList<VaultCustomField>,
+    notes: String,
+    onNotesChange: (String) -> Unit,
+    reprompt: VaultReprompt,
+    onRepromptChange: (VaultReprompt) -> Unit,
+) {
+    FormDivider()
+    SectionLabel(
+        text = stringResource(R.string.section_custom_fields),
+        icon = Icons.Filled.Tune,
+    )
+    Spacer(Modifier.height(8.dp))
+    CustomFieldsEditor(fields = customFields)
+    Spacer(Modifier.height(8.dp))
+    OutlinedTextField(
+        value = notes,
+        onValueChange = onNotesChange,
+        label = { Text(stringResource(R.string.item_field_notes)) },
+        minLines = 2,
+        modifier = Modifier.fillMaxWidth(),
+    )
+    // 主密码二次验证（对齐 Bitwarden「附加选项」里的开关）
+    FormDivider()
+    RepromptToggle(reprompt = reprompt, onRepromptChange = onRepromptChange)
+}
+
+/**
  * 扫码用**全屏 Dialog 内嵌相机**，而不是跳转到独立页面：
  * 这样结果可以直接回填 totp 字段，不会因为导航离开而丢失已填的其他内容。
  */
@@ -287,13 +317,33 @@ private fun AppPickerHost(show: Boolean, uris: SnapshotStateList<String>, onDism
     )
 }
 
+/**
+ * 分区小标题。
+ *
+ * 2026-09-13 观感：给每个分区配一枚 **16dp 主色图标**，标题字色也从
+ * `onSurfaceVariant` 提到 `primary`。此前所有分区都是同一句灰字，二十来个输入框
+ * 连成一片，眼睛没有落点；有了图标后「文件夹 / 类型 / 登录信息 / 自定义字段 / 备注」
+ * 各自成块，扫视即可定位（对齐 Bastion「编辑页分区带头图」的做法，但只在
+ * 分区标题一级加，不把每个输入框都包进卡片 —— 那样会把表单撑得更长）。
+ */
 @Composable
-private fun SectionLabel(text: String) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.labelLarge,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
+private fun SectionLabel(text: String, icon: ImageVector) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+            tint = MaterialTheme.colorScheme.primary,
+        )
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary,
+        )
+    }
 }
 
 /**
@@ -307,7 +357,7 @@ private fun SectionLabel(text: String) {
 @Composable
 private fun FormDivider() {
     HorizontalDivider(
-        modifier = Modifier.padding(vertical = 12.dp),
+        modifier = Modifier.padding(top = 18.dp, bottom = 14.dp),
         color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f),
     )
 }
@@ -327,13 +377,13 @@ private fun FormHeader(
     onTypeSelect: (VaultItemType) -> Unit,
 ) {
     if (folders.isNotEmpty()) {
-        SectionLabel(text = stringResource(R.string.item_folder))
+        SectionLabel(text = stringResource(R.string.item_folder), icon = Icons.Filled.Folder)
         Spacer(Modifier.height(8.dp))
         FolderPicker(folders = folders, selectedId = folderId, onSelect = onFolderSelect)
         Spacer(Modifier.height(8.dp))
     }
     if (typeEditable) {
-        SectionLabel(text = stringResource(R.string.item_field_type))
+        SectionLabel(text = stringResource(R.string.item_field_type), icon = Icons.Filled.Category)
         Spacer(Modifier.height(8.dp))
         TypePicker(selected = type, onSelect = onTypeSelect)
         Spacer(Modifier.height(8.dp))

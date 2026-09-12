@@ -6,42 +6,41 @@
 
   ⚠️ RemoteViews 的能力边界（想「更 Material」之前先读这段）：
   - 能做：shape 圆角背景、内边距 / 最小高度、`setTextViewText`、`setTextColor`、
-    `setFloat("setTextSize")`、`setInt("setColorFilter")`、`setContentDescription`；
+    `setFloat("setTextSize")`、`setInt("setColorFilter")`、
+    `setImageViewBitmap`（位图，见 AutofillItemIcon）、`setContentDescription`；
   - 不能做：MaterialCardView 的完整阴影形态、`android:foreground` 水波纹、
     非系统字体族、Material You 动态色。
 
-  2026-09-13 规格（对齐 M3 两行 list item 的观感，在 RemoteViews 允许的范围内）：
-  - 行高 **56dp**（此前 48dp 偏扁；面板里两行文字挤在一起，长标题换行的观感更差）；
-  - 内边距 **16/10dp**（此前 12/8，文字离边缘太近）；
-  - 图标 20dp + 右侧 **12dp** 间距，单色矢量，由 `AutofillDatasets.presentation`
-    用 `setColorFilter` 上系统前景色；
-  - 外框改为 **12dp 圆角 + 极低透明度实底**（`autofill_item_frame`）：描边太"硬"，
-    而 M3 list item 本来就是「比背景略亮一档的面」。底色用低 alpha 而不是固定色值，
-    这样在浅色 / 深色 / 各家 ROM 的面板上都只是"淡一档"，不会与面板底色打架；
-  - 标题 15sp + `sans-serif-medium`、副标题 13sp，颜色沿用系统面板前景色。
+  2026-09-13 规格（对齐 Bitwarden `autofill_remote_view` 的克制观感）：
+  - **去掉圆角底框**（原 `autofill_item_frame`）：面板本身就是一条列表，再给每行套一层
+    「卡片」是框中框，既笨重也不细腻 —— 这正是用户反馈的「填充条目框偏大」；
+  - 行高 **48dp**（M3 紧凑两行 list item 的高度；此前 56dp 是为「两行不挤」加出来的，
+    实际在面板里显得又厚又钝）；
+  - 内边距 **16/6dp**：水平留白保证不与面板边缘打架，垂直收紧把两行文字聚拢；
+  - 图标 **24dp**（此前 20dp 单色矢量）：位图由 `AutofillItemIcon` 生成 —— 命中 Coil
+    磁盘缓存时是**站点图标**，否则是按标题哈希配色的**字母头像**，每条都有自己的
+    「logo」，不再十条共用一个地球；
+  - 标题 14sp / 副标题 12sp：`sans-serif-medium` + 系统前景色，字号差拉开层次。
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/autofill_item_root"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:minHeight="56dp"
-    android:background="@drawable/autofill_item_frame"
+    android:minHeight="48dp"
     android:gravity="center_vertical"
     android:orientation="horizontal"
     android:paddingStart="16dp"
-    android:paddingTop="10dp"
+    android:paddingTop="6dp"
     android:paddingEnd="16dp"
-    android:paddingBottom="10dp">
+    android:paddingBottom="6dp">
 
     <ImageView
         android:id="@+id/autofill_item_icon"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
+        android:layout_width="24dp"
+        android:layout_height="24dp"
         android:layout_marginEnd="12dp"
-        android:adjustViewBounds="true"
         android:contentDescription="@null"
-        android:maxWidth="20dp"
-        android:maxHeight="20dp" />
+        android:scaleType="centerCrop" />
 
     <LinearLayout
         android:layout_width="0dp"
@@ -57,15 +56,16 @@
             android:fontFamily="sans-serif-medium"
             android:maxLines="1"
             android:textColor="?android:attr/textColorPrimary"
-            android:textSize="15sp" />
+            android:textSize="14sp" />
 
         <TextView
             android:id="@+id/autofill_item_subtitle"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:ellipsize="end"
+            android:includeFontPadding="false"
             android:maxLines="1"
             android:textColor="?android:attr/textColorSecondary"
-            android:textSize="13sp" />
+            android:textSize="12sp" />
     </LinearLayout>
 </LinearLayout>

@@ -34,6 +34,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
@@ -368,9 +369,13 @@ class VaultRepositoryImpl @Inject constructor(
      * **持久化开关**决定，而不是每次现探密钥可用性。
      */
     override fun localUnlockAvailable(vaultId: String): Flow<Boolean> =
-        preferences.isLocalUnlockEnabled(vaultId).map { enabled ->
-            enabled && localUnlockKeyStore.keyAvailable
-        }
+        preferences.isLocalUnlockEnabled(vaultId)
+            .map { enabled -> enabled && localUnlockKeyStore.keyAvailable }
+            // ⚠️ `keyAvailable` 要做一次 Keystore 往返（`KeyStore.load` + `getKey`），
+            // 冷启动 / 覆盖安装后可达数百毫秒。留在默认（Main）调度器上会直接推迟
+            // 「本地解锁可用」这一帧 —— 而自动弹指纹正是在等这一帧（用户反馈
+            // 「指纹不能第一时间弹出」）。搬到 IO，首帧与探测并行发生。
+            .flowOn(Dispatchers.IO)
 
     override suspend fun enrollLocalUnlock(vaultId: String, cipher: Cipher): Boolean {
         val key = sessions.keyOf(vaultId) ?: return false

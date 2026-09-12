@@ -383,6 +383,7 @@ class AutofillActivity : FragmentActivity() {
             cards = vault.cards,
             identities = vault.identities,
             totpProvider = AutofillDatasetFactory::totpCode,
+            serverOrigin = vault.serverOrigin,
         )
         val copyTotp = runCatching { prefs.autoCopyTotp.first() }.getOrDefault(true)
         return plan.suggestions
@@ -467,10 +468,9 @@ class AutofillActivity : FragmentActivity() {
             subtitle = subtitle,
             datasetId = AutofillIntents.datasetIdOf(intent),
             // 回灌的 Dataset 是同一个条目，图标必须与原条目一致（否则二次验证后
-            // 换了个图标，看起来像换了条目）。类别由 Intent 带入，缺失则回退登录。
-            iconRes = AutofillIntents.categoryOf(intent)
-                ?.let(AutofillDatasets::iconFor)
-                ?: R.drawable.ic_autofill_login,
+            // 换了个图标，看起来像换了条目）。图标按「标题 → 字母头像」确定性生成，
+            // 同一标题必然得到同一个颜色与字母；类别由 Intent 带入，缺失则回退登录。
+            category = AutofillIntents.categoryOf(intent) ?: io.vaultix.vaultix.autofill.model.FillCategory.LOGIN,
         )
         if (dataset == null) {
             setResult(Activity.RESULT_CANCELED)

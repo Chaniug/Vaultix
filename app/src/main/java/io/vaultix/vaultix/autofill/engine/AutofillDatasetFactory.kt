@@ -71,9 +71,10 @@ object AutofillDatasetFactory {
             subtitle = suggestion.subtitle,
             datasetId = suggestion.id,
             authIntent = authIntent,
-            // 图标随条目类别（登录 = 地球 / 银行卡 = 卡片 / 身份 = 人像），
-            // 对齐 Bitwarden `AutofillCipher.iconRes` —— 面板里一行一图标才分得清类型。
-            iconRes = AutofillDatasets.iconFor(suggestion.category),
+            // 图标优先用**站点图标**，取不到才画字母头像（见 [AutofillItemIcon]）：
+            // 面板里一屏可能全是同一类条目，靠类别矢量图标分不出谁是谁。
+            iconUrl = suggestion.iconUrl,
+            category = suggestion.category,
         )
     }
 

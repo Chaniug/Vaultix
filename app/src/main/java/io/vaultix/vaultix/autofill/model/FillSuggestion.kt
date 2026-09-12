@@ -49,6 +49,11 @@ data class FillSuggestion(
     val totpSecret: String? = null,
     /** 类别（影响展示与回填字段集）。 */
     val category: FillCategory,
+    /**
+     * 站点图标 URL（`<服务器>/icons/<域名>/icon.png`）；null = 无站点图标，
+     * 填充面板改画字母头像（见 `AutofillItemIcon`）。
+     */
+    val iconUrl: String? = null,
 )
 
 /** 一次 [android.service.autofill.FillRequest] 规划结果（纯数据，无 Android 依赖）。 */

@@ -72,7 +72,13 @@ class AutofillCandidateSource @Inject constructor(
                 }
             }
         }
-        return VaultCandidates(credentials, cards, identities)
+        // 库 origin：填充面板要按它拼站点图标地址（Bitwarden 库 = 服务器地址；
+        // KDBX 的 `content://` 会被 SiteIconUrl 判为不可用 → 自动走字母头像）。
+        val serverOrigin = runCatching { vaultRepository.observeVaults().first() }
+            .getOrNull()
+            ?.firstOrNull { it.id in vaultIds }
+            ?.origin
+        return VaultCandidates(credentials, cards, identities, serverOrigin)
     }
 
     /**
@@ -110,4 +116,6 @@ data class VaultCandidates(
     val credentials: List<AutofillCredential>,
     val cards: List<VaultItem>,
     val identities: List<VaultItem>,
+    /** 活跃库的 origin（拼站点图标地址用；取不到为 null）。 */
+    val serverOrigin: String? = null,
 )

@@ -44,8 +44,10 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.ViewAgenda
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -97,6 +99,7 @@ import io.vaultix.vaultix.ui.common.EntryCardIconSpacing
 import io.vaultix.vaultix.ui.common.EntryCardTextSpacing
 import io.vaultix.vaultix.ui.common.ItemFormDialog
 import io.vaultix.vaultix.ui.common.PressAndSwipeToDelete
+import io.vaultix.vaultix.ui.common.SelectionActionBar
 import io.vaultix.vaultix.ui.common.SiteIcon
 import io.vaultix.vaultix.ui.common.TypeBadge
 import io.vaultix.vaultix.ui.common.VaultixExpressiveTopBar
@@ -104,6 +107,7 @@ import io.vaultix.vaultix.ui.common.VaultixSearchTopAppBar
 import io.vaultix.vaultix.ui.common.itemTypeLabelRes
 import io.vaultix.vaultix.ui.common.rememberImmersiveBarPadding
 import io.vaultix.vaultix.ui.common.rememberScrollCollapseFraction
+import io.vaultix.vaultix.ui.common.toggleSelection
 
 /**
  * 条目列表（Docs/08 S7 最小版）+ 新建条目对话框（S10 最小版）。
@@ -212,17 +216,17 @@ fun ItemsScreen(
     SearchBackHandler(enabled = searchActive, onClose = closeSearch)
     // 折叠起来的分组 key（默认全部展开；存 saveable，切 Tab 回来不丢）。
     var collapsedGroups by rememberSaveable { mutableStateOf(emptySet<String>()) }
+    // 长按多选（对齐 Bastion：长按条目 → 选择框 + 底部批量操作条）。
+    // 用「集合非空」当开关，省掉一个必须与它同步的布尔量。
+    var selectedIds by remember { mutableStateOf(emptySet<String>()) }
+    // 多选态优先吃掉返回手势：否则一按返回就整页退出，前面勾的全白勾了。
+    BackHandler(enabled = selectedIds.isNotEmpty()) { selectedIds = emptySet() }
 
     // 分组（纯逻辑在 ItemsGrouping.kt；不分组时只有一项、标题为空 → UI 不画分组头）。
     val groups = rememberGroupedItems(visibleItems, folders, groupMode)
 
     // 底部导航条「+」→ 打开新建表单（Tab 内嵌时不展示自己的 FAB）
-    LaunchedEffect(addRequest) {
-        if (addRequest > 0) {
-            showCreateDialog = true
-            onAddConsumed()
-        }
-    }
+    AddRequestEffect(addRequest, onAddConsumed) { showCreateDialog = true }
 
     SaveEventSnackbar(viewModel = viewModel, hostState = snackbarHostState)
 
@@ -230,11 +234,8 @@ fun ItemsScreen(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         // 顶栏改为**浮在内容之上**（沉浸式，见 [VaultixExpressiveTopBar]）：
         // Scaffold 不再为顶栏预留高度，状态栏内边距由顶栏自己处理。
-        contentWindowInsets = if (searchActive) {
-            ScaffoldDefaults.contentWindowInsets
-        } else {
-            WindowInsets(0, 0, 0, 0)
-        },
+        contentWindowInsets =
+            if (searchActive) ScaffoldDefaults.contentWindowInsets else WindowInsets(0, 0, 0, 0),
         topBar = {
             // 搜索态保留固定高度顶栏（输入框不能塞进会折叠的大标题里）。
             if (searchActive) {
@@ -250,6 +251,17 @@ fun ItemsScreen(
                 FloatingActionButton(onClick = { showCreateDialog = true }) {
                     Icon(Icons.Filled.Add, contentDescription = stringResource(R.string.items_new_item))
                 }
+            }
+        },
+        // 多选态才出现，平时不占一寸屏幕（对齐 Bastion 底部批量操作条的出现时机）。
+        bottomBar = {
+            if (selectedIds.isNotEmpty()) {
+                ItemsSelectionBar(
+                    visibleItems = visibleItems,
+                    selectedIds = selectedIds,
+                    onSelectionChange = { selectedIds = it },
+                    onDelete = { victims -> victims.forEach(viewModel::deleteItem) },
+                )
             }
         },
     ) { padding ->
@@ -269,14 +281,8 @@ fun ItemsScreen(
                     modifier = Modifier.fillMaxSize(),
                 ) {
                     if (visibleItems.isEmpty()) {
-                        // 空态同样要让位，否则文案与插画被半透明顶栏压住。
-                        Box(modifier = Modifier.fillMaxSize().padding(top = listTopInset)) {
-                            if (state.query.isBlank()) {
-                                EmptyItemsState()
-                            } else {
-                                NoSearchResultState()
-                            }
-                        }
+                        // 空态 / 搜不到：同样要让位，否则文案与插画被半透明顶栏压住。
+                        ItemsEmptyState(query = state.query, topInset = listTopInset)
                     } else {
                         ItemsList(
                             groups = groups,
@@ -288,15 +294,15 @@ fun ItemsScreen(
                             serverOrigin = state.vault?.origin,
                             topInset = listTopInset,
                             bottomInset = bottomInset,
-                            onToggleGroup = { key ->
-                                collapsedGroups = if (key in collapsedGroups) {
-                                    collapsedGroups - key
-                                } else {
-                                    collapsedGroups + key
-                                }
-                            },
+                            onToggleGroup = { key -> collapsedGroups = toggleSelection(collapsedGroups, key) },
+                            selectedIds = selectedIds,
+                            onToggleSelect = { item -> selectedIds = toggleSelection(selectedIds, item.id) },
                             onOpenItem = onOpenItem,
-                            onDelete = viewModel::deleteItem,
+                            onDelete = { item ->
+                                // 删完必须把 id 摘掉，否则底栏还会统计一条已不存在的条目。
+                                selectedIds = selectedIds - item.id
+                                viewModel.deleteItem(item)
+                            },
                         )
                     }
                 }
@@ -352,6 +358,29 @@ fun ItemsScreen(
                 showCreateDialog = false
             },
         )
+    }
+}
+
+/** 宿主「+」请求 → 打开新建表单；消费后由 [onConsumed] 清零，避免重复弹出。 */
+@Composable
+private fun AddRequestEffect(
+    addRequest: Int,
+    onConsumed: () -> Unit,
+    onShow: () -> Unit,
+) {
+    LaunchedEffect(addRequest) {
+        if (addRequest > 0) {
+            onShow()
+            onConsumed()
+        }
+    }
+}
+
+/** 空列表的两个面孔：整库为空 → 引导插画；搜索无果 → 「换个词试试」。 */
+@Composable
+private fun ItemsEmptyState(query: String, topInset: Dp) {
+    Box(modifier = Modifier.fillMaxSize().padding(top = topInset)) {
+        if (query.isBlank()) EmptyItemsState() else NoSearchResultState()
     }
 }
 
@@ -709,6 +738,10 @@ private fun ItemsList(
     topInset: Dp,
     bottomInset: Dp,
     onToggleGroup: (String) -> Unit,
+    /** 多选：当前勾选的条目 id 集合（非空即处于多选态）。 */
+    selectedIds: Set<String>,
+    /** 多选：切换某条的勾选（长按卡片也走它，见 [PressAndSwipeToDelete]）。 */
+    onToggleSelect: (VaultItem) -> Unit,
     onOpenItem: (VaultItem) -> Unit,
     onDelete: (VaultItem) -> Unit,
 ) {
@@ -743,12 +776,20 @@ private fun ItemsList(
             if (group.key !in collapsedGroups) {
                 items(group.items, key = { it.id }) { item ->
                     // 「按住 → 向左滑 → 松手」删除（软删除进回收站，见 ItemsViewModel.deleteItem）。
-                    PressAndSwipeToDelete(onDelete = { onDelete(item) }) {
+                    // 长按回调 = 勾选本行，与卡片自身的长按是同一个动作（手势只走一个
+                    // pointerInput，不会互相抢事件，见 [PressAndSwipeToDelete]）。
+                    PressAndSwipeToDelete(
+                        onDelete = { onDelete(item) },
+                        onLongPress = { onToggleSelect(item) },
+                    ) {
                         ItemRow(
                             item = item,
                             serverOrigin = serverOrigin,
                             displayMode = displayMode,
                             showIcon = showIcon,
+                            isSelectionMode = selectedIds.isNotEmpty(),
+                            isSelected = item.id in selectedIds,
+                            onToggleSelect = { onToggleSelect(item) },
                             onClick = { onOpenItem(item) },
                         )
                     }
@@ -968,11 +1009,19 @@ private fun ItemRow(
     serverOrigin: String?,
     displayMode: ItemsCardDisplayMode,
     showIcon: Boolean,
+    isSelectionMode: Boolean,
+    isSelected: Boolean,
+    onToggleSelect: () -> Unit,
     onClick: () -> Unit,
 ) {
     // 卡片外框规格见 [EntryCard]（对齐 Bastion PasswordEntryCard：M3 默认 Card 底色/高度 +
     // 12dp 圆角 + 16dp 内边距 + 标题 SemiBold + 6dp 行距）。
-    EntryCard(onClick = onClick) {
+    // 多选态：整行点击 = 勾选（上游 `cardInteractionModifier` 同款分支）。
+    EntryCard(
+        onClick = if (isSelectionMode) onToggleSelect else onClick,
+        onLongClick = if (isSelectionMode) null else onToggleSelect,
+        selected = isSelected,
+    ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth(),
@@ -992,45 +1041,118 @@ private fun ItemRow(
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                 )
-                // 信息密度（对齐 Bastion PasswordCardDisplayMode）：
-                // TitleOnly 只留标题；TitleUsername 只显示用户名；All 显示用户名或类型徽标。
-                if (displayMode == ItemsCardDisplayMode.All && item.username.isNotBlank()) {
-                    Text(
-                        text = item.username,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                } else if (displayMode == ItemsCardDisplayMode.All && item.type != VaultItemType.Login) {
-                    Text(
-                        text = stringResource(itemTypeLabelRes(item.type)),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                } else if (displayMode == ItemsCardDisplayMode.TitleUsername &&
-                    item.type == VaultItemType.Login &&
-                    item.username.isNotBlank()
-                ) {
-                    Text(
-                        text = item.username,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+                // 副标题（信息密度见 [ItemRowSubtitle]）。
+                ItemRowSubtitle(item = item, displayMode = displayMode)
             }
-            // 能力徽标：一眼看出这条有没有 2FA 验证码、有没有绑通行密钥。
-            // 两者可**同时**存在（一条登录条目既带 TOTP 又绑了 passkey），故不是 if/else。
-            // 文案复用筛选维度的短词，避免另造一串近义词。
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                if (!item.totp.isNullOrBlank()) {
-                    TypeBadge(stringResource(R.string.items_filter_totp), BadgeTone.PRIMARY)
-                }
-                if (item.fido2Credentials.isNotEmpty()) {
-                    TypeBadge(stringResource(R.string.items_filter_passkey), BadgeTone.TERTIARY)
-                }
-            }
+            ItemRowTrailing(
+                item = item,
+                isSelectionMode = isSelectionMode,
+                isSelected = isSelected,
+                onToggleSelect = onToggleSelect,
+            )
         }
     }
+}
+
+/**
+ * 条目卡片第二行（对齐 Bastion `PasswordCardDisplayMode`）：
+ * TitleOnly 不显示；All 显示用户名、没用户名则显示类型徽标；TitleUsername 只显示用户名。
+ */
+@Composable
+private fun ItemRowSubtitle(item: VaultItem, displayMode: ItemsCardDisplayMode) {
+    if (displayMode == ItemsCardDisplayMode.All && item.username.isNotBlank()) {
+        Text(
+            text = item.username,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    } else if (displayMode == ItemsCardDisplayMode.All && item.type != VaultItemType.Login) {
+        Text(
+            text = stringResource(itemTypeLabelRes(item.type)),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.primary,
+        )
+    } else if (
+        displayMode == ItemsCardDisplayMode.TitleUsername &&
+        item.type == VaultItemType.Login &&
+        item.username.isNotBlank()
+    ) {
+        Text(
+            text = item.username,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/**
+ * 条目卡片行尾：多选态是勾选框，常态是能力徽标。
+ *
+ * 对齐 Bastion：选择态 `Checkbox` 顶掉菜单/徽标位；非选择态才展示条目自身的标签。
+ */
+@Composable
+private fun ItemRowTrailing(
+    item: VaultItem,
+    isSelectionMode: Boolean,
+    isSelected: Boolean,
+    onToggleSelect: () -> Unit,
+) {
+    if (isSelectionMode) {
+        Checkbox(checked = isSelected, onCheckedChange = { onToggleSelect() })
+        return
+    }
+    // 能力徽标：一眼看出这条有没有 2FA 验证码、有没有绑通行密钥。
+    // 两者可**同时**存在（一条登录条目既带 TOTP 又绑了 passkey），故不是 if/else。
+    // 文案复用筛选维度的短词，避免另造一串近义词。
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // 收藏星标（对齐 Bitwarden：收藏条目在行尾点一颗星，
+        // 不必进详情也能一眼把常用项从整库里挑出来）。
+        if (item.favorite) {
+            Icon(
+                imageVector = Icons.Filled.Star,
+                contentDescription = stringResource(R.string.item_favorite),
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(16.dp),
+            )
+        }
+        if (!item.totp.isNullOrBlank()) {
+            TypeBadge(stringResource(R.string.items_filter_totp), BadgeTone.PRIMARY)
+        }
+        if (item.fido2Credentials.isNotEmpty()) {
+            TypeBadge(stringResource(R.string.items_filter_passkey), BadgeTone.TERTIARY)
+        }
+    }
+}
+
+/**
+ * 密码条目页的底部批量操作条（仅多选态出现）。
+ *
+ * 抽成独立函数是为了不让主 composable 越过 detekt `LongMethod ≤150` 门禁 ——
+ * 「全选 / 清空 / 删除」三组动作在这里闭环，主函数只留一个状态流转的出口。
+ */
+@Composable
+private fun ItemsSelectionBar(
+    visibleItems: List<VaultItem>,
+    selectedIds: Set<String>,
+    onSelectionChange: (Set<String>) -> Unit,
+    onDelete: (List<VaultItem>) -> Unit,
+) {
+    val allSelected = selectedIds.size >= visibleItems.size
+    SelectionActionBar(
+        selectedCount = selectedIds.size,
+        allSelected = allSelected,
+        onToggleSelectAll = {
+            onSelectionChange(
+                if (allSelected) emptySet() else visibleItems.map { it.id }.toSet(),
+            )
+        },
+        onClear = { onSelectionChange(emptySet()) },
+        onDelete = {
+            onDelete(visibleItems.filter { it.id in selectedIds })
+            onSelectionChange(emptySet())
+        },
+    )
 }

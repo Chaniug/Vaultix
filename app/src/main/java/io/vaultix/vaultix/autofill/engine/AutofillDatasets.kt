@@ -13,6 +13,7 @@ package io.vaultix.vaultix.autofill.engine
 
 import android.app.PendingIntent
 import android.content.Context
+import android.graphics.Bitmap
 import android.content.res.Configuration
 import android.os.Build
 import android.service.autofill.Dataset
@@ -77,6 +78,29 @@ object AutofillDatasets {
         )
     }
 
+    /**
+     * 同上，但图标是**位图**（站点图标 / 字母头像，见 [createAutofillItemIcon]）。
+     *
+     * 条目建议一律走这条：十条 GitHub 条目若都显示同一个「地球」图标，
+     * 用户扫一眼根本分不出谁是谁（用户反馈「没有独立的 logo 个性展示」）。
+     */
+    fun presentation(
+        context: Context,
+        title: String,
+        subtitle: String,
+        icon: Bitmap,
+    ): RemoteViews = RemoteViews(context.packageName, R.layout.autofill_dataset_item).apply {
+        setImageViewBitmap(R.id.autofill_item_icon, icon)
+        setTextViewText(R.id.autofill_item_title, title)
+        setTextViewText(R.id.autofill_item_subtitle, subtitle)
+        // 无障碍：整行是一块可点区域，读屏需要一句完整描述（对齐上游
+        // `BitwardenRemoteViews` 给 container 设 contentDescription 的做法）。
+        setContentDescription(
+            R.id.autofill_item_root,
+            listOf(title, subtitle).filter { it.isNotBlank() }.joinToString("，"),
+        )
+    }
+
     /** 建议类别 → 条目标图标（对齐 Bitwarden `AutofillCipher.iconRes`）。 */
     @DrawableRes
     fun iconFor(category: FillCategory): Int = when (category) {
@@ -106,10 +130,13 @@ object AutofillDatasets {
         subtitle: String,
         datasetId: String? = null,
         authIntent: PendingIntent? = null,
-        @DrawableRes iconRes: Int = R.drawable.ic_autofill_login,
+        /** 站点图标 URL；为 null 时按标题画字母头像（见 [createAutofillItemIcon]）。 */
+        iconUrl: String? = null,
+        category: FillCategory = FillCategory.LOGIN,
     ): Dataset? {
         if (entries.isEmpty()) return null
-        val builder = datasetBuilder(presentation(context, title, subtitle, iconRes))
+        val icon = createAutofillItemIcon(context, iconUrl, title, category)
+        val builder = datasetBuilder(presentation(context, title, subtitle, icon))
         entries.forEach { (id, value) -> builder.setValue(id, AutofillValue.forText(value)) }
         datasetId?.let { builder.setId(it) }
         // 框架要求 IntentSender（Dataset 级认证）

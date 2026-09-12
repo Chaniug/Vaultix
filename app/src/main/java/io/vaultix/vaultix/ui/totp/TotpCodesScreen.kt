@@ -1,8 +1,11 @@
 package io.vaultix.vaultix.ui.totp
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -24,11 +27,16 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.FloatingActionButton
@@ -55,6 +63,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
@@ -64,6 +74,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.lerp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -76,11 +87,13 @@ import io.vaultix.vaultix.ui.common.EntryCard
 import io.vaultix.vaultix.ui.common.EntryCardIconSpacing
 import io.vaultix.vaultix.ui.common.EntryCardTextSpacing
 import io.vaultix.vaultix.ui.common.PressAndSwipeToDelete
+import io.vaultix.vaultix.ui.common.SelectionActionBar
 import io.vaultix.vaultix.ui.common.SiteIconByHost
 import io.vaultix.vaultix.ui.common.VaultixExpressiveTopBar
 import io.vaultix.vaultix.ui.common.VaultixSearchTopAppBar
 import io.vaultix.vaultix.ui.common.rememberImmersiveBarPadding
 import io.vaultix.vaultix.ui.common.rememberScrollCollapseFraction
+import io.vaultix.vaultix.ui.common.toggleSelection
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -108,6 +121,9 @@ fun TotpCodesScreen(
     viewModel: TotpCodesViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    // 提到 Scaffold 外：底部批量操作条（全选 / 已选数）也要用它，
+    // 与列表同源才不会出现「底栏说全选了、列表没勾上」。
+    val entries = viewModel.filteredEntries()
     val snackbarHostState = remember { SnackbarHostState() }
     var searchActive by rememberSaveable { mutableStateOf(false) }
     // 搜索态自己消费返回手势：主界面是根路由（栈里没有上一层），不拦就会直接退回桌面。
@@ -118,6 +134,12 @@ fun TotpCodesScreen(
     var editing by remember { mutableStateOf<TotpEntry?>(null) }
     var binding by remember { mutableStateOf<TotpEntry?>(null) }
     var importOpen by remember { mutableStateOf(false) }
+    // 长按多选（对齐 Bastion：长按条目 → 选择框 + 底部批量条）。
+    // 用「集合非空」当开关，省掉一个必须与它同步的布尔量（两者不一致是最容易出的错）。
+    var selectedIds by remember { mutableStateOf(emptySet<String>()) }
+    val selectionMode = selectedIds.isNotEmpty()
+    // 多选态优先吃掉返回手势：否则一按返回就整页退出，前面勾的条目全白勾了。
+    BackHandler(enabled = selectionMode) { selectedIds = emptySet() }
 
     // 实时时钟：每秒推进，驱动所有验证码滚动刷新
     var nowSeconds by remember { mutableLongStateOf(System.currentTimeMillis() / 1000) }
@@ -168,8 +190,21 @@ fun TotpCodesScreen(
                 }
             }
         },
+        // 多选态才出现：平时不占一寸屏幕（对齐 Bastion 底部批量操作条的出现时机）。
+        bottomBar = {
+            if (selectionMode) {
+                TotpSelectionBar(
+                    entries = entries,
+                    selectedIds = selectedIds,
+                    onSelectionChange = { selectedIds = it },
+                    onDelete = { victims ->
+                        victims.forEach(viewModel::deleteTotp)
+                        selectedIds = emptySet()
+                    },
+                )
+            }
+        },
     ) { padding ->
-        val entries = viewModel.filteredEntries()
         val listState = rememberLazyListState()
         val collapse = rememberScrollCollapseFraction(listState)
         val barPadding = rememberImmersiveBarPadding(collapse)
@@ -180,9 +215,11 @@ fun TotpCodesScreen(
             val barTopInset = if (searchActive) 0.dp else barPadding
             Column(modifier = Modifier.fillMaxSize().padding(top = barTopInset)) {
                 // 整页一条倒计时进度条，「通行密钥」入口挂在它右侧。
+                // 随列表滚动收起（collapse 与顶栏同源，见 [TotpPageProgress]）。
                 TotpPageProgress(
                     entries = entries,
                     nowSeconds = nowSeconds,
+                    collapseFraction = collapse,
                     onOpenPasskeys = onOpenPasskeys,
                 )
                 when {
@@ -214,8 +251,18 @@ fun TotpCodesScreen(
                                 nowSeconds = nowSeconds,
                                 serverOrigin = state.serverOrigin,
                                 snackbarHostState = snackbarHostState,
+                                isSelectionMode = selectionMode,
+                                isSelected = entry.itemId in selectedIds,
+                                onToggleSelect = {
+                                    selectedIds = toggleSelection(selectedIds, entry.itemId)
+                                },
                                 onEdit = { editing = entry },
-                                onDelete = { viewModel.deleteTotp(entry) },
+                                onDelete = {
+                                    // 删完必须把 id 从选中集合里摘掉，否则底栏还会
+                                    // 统计一条已经不存在的条目。
+                                    selectedIds = selectedIds - entry.itemId
+                                    viewModel.deleteTotp(entry)
+                                },
                                 onBind = { if (!entry.bound) binding = entry },
                                 onCopy = viewModel::copyCode,
                             )
@@ -224,36 +271,12 @@ fun TotpCodesScreen(
                 }
             }
             if (!searchActive) {
-                VaultixExpressiveTopBar(
-                    title = stringResource(R.string.totp_screen_title),
+                TotpOverlayTopBar(
                     collapseFraction = collapse,
-                    modifier = Modifier.align(Alignment.TopCenter),
-                    navigationIcon = if (embedded) {
-                        null
-                    } else {
-                        {
-                            IconButton(onClick = onBack) {
-                                Icon(
-                                    Icons.AutoMirrored.Filled.ArrowBack,
-                                    contentDescription = stringResource(R.string.action_back),
-                                )
-                            }
-                        }
-                    },
-                    actions = {
-                        IconButton(onClick = { searchActive = true }) {
-                            Icon(
-                                Icons.Filled.Search,
-                                contentDescription = stringResource(R.string.totp_search_hint),
-                            )
-                        }
-                        IconButton(onClick = { importOpen = true }) {
-                            Icon(
-                                Icons.Filled.FileDownload,
-                                contentDescription = stringResource(R.string.totp_import_button),
-                            )
-                        }
-                    },
+                    embedded = embedded,
+                    onBack = onBack,
+                    onSearch = { searchActive = true },
+                    onImport = { importOpen = true },
                 )
             }
         }
@@ -268,6 +291,78 @@ fun TotpCodesScreen(
         onEditingChange = { editing = it },
         onBindingChange = { binding = it },
         onImportOpenChange = { importOpen = it },
+    )
+}
+
+/**
+ * 多选态的底部批量操作条（仅此时出现）。
+ *
+ * 抽出来是为了把 [TotpCodesScreen] 压回 detekt `LongMethod ≤150` 门禁内 ——
+ * 「全选 / 清空 / 删除」三组动作在这里闭环，主函数只留一个状态出口。
+ */
+@Composable
+private fun TotpSelectionBar(
+    entries: List<TotpEntry>,
+    selectedIds: Set<String>,
+    onSelectionChange: (Set<String>) -> Unit,
+    onDelete: (List<TotpEntry>) -> Unit,
+) {
+    val allSelected = selectedIds.size >= entries.size
+    SelectionActionBar(
+        selectedCount = selectedIds.size,
+        allSelected = allSelected,
+        onToggleSelectAll = {
+            onSelectionChange(if (allSelected) emptySet() else entries.map { it.itemId }.toSet())
+        },
+        onClear = { onSelectionChange(emptySet()) },
+        onDelete = { onDelete(entries.filter { it.itemId in selectedIds }) },
+    )
+}
+
+/**
+ * 浮在内容之上的大标题顶栏（沉浸式，见 [VaultixExpressiveTopBar]）。
+ *
+ * 与 [TotpSelectionBar] 同理：主 composable 的行数与圈复杂度都要留给门禁，
+ * 顶栏这种自成一体的区块抽出去最省事，也不损失可读性。
+ */
+@Composable
+private fun BoxScope.TotpOverlayTopBar(
+    collapseFraction: Float,
+    embedded: Boolean,
+    onBack: () -> Unit,
+    onSearch: () -> Unit,
+    onImport: () -> Unit,
+) {
+    VaultixExpressiveTopBar(
+        title = stringResource(R.string.totp_screen_title),
+        collapseFraction = collapseFraction,
+        modifier = Modifier.align(Alignment.TopCenter),
+        navigationIcon = if (embedded) {
+            null
+        } else {
+            {
+                IconButton(onClick = onBack) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = stringResource(R.string.action_back),
+                    )
+                }
+            }
+        },
+        actions = {
+            IconButton(onClick = onSearch) {
+                Icon(
+                    Icons.Filled.Search,
+                    contentDescription = stringResource(R.string.totp_search_hint),
+                )
+            }
+            IconButton(onClick = onImport) {
+                Icon(
+                    Icons.Filled.FileDownload,
+                    contentDescription = stringResource(R.string.totp_import_button),
+                )
+            }
+        },
     )
 }
 
@@ -353,13 +448,29 @@ private fun EmptyTotpState(title: String? = null, message: String) {
     }
 }
 
-/** 单个验证码行：实时码 + 进度条 + 复制；点击进入编辑。 */
+/**
+ * 单个验证码行：实时码 + 整页进度条 + 长按多选。
+ *
+ * ## 按钮精简（2026-09-13，对齐 Bastion `TotpCodeCard`）
+ * 此前卡片底部挂着「复制 / 编辑 / 移除 / 绑定」四个按钮，其中：
+ * - **复制图标**多余 —— 整行点击就是复制（上游同款），再画一个图标是同一个动作的第二个入口；
+ * - **编辑 / 移除 / 绑定**属于低频动作，直接铺在卡片上会把「一眼要读的验证码」挤下去。
+ * 上游把它们收进右上角 `MoreVert` 下拉菜单，本行照此办理；选择态下同一个位置换成
+ * `Checkbox`（点击整行即勾选）。
+ *
+ * @param isSelectionMode 是否处于多选态（决定点击语义与右上角控件）。
+ * @param isSelected 本行是否被勾选。
+ * @param onToggleSelect 切换本行勾选（长按 = 勾选本行并进入多选态）。
+ */
 @Composable
 private fun TotpRow(
     entry: TotpEntry,
     nowSeconds: Long,
     serverOrigin: String?,
     snackbarHostState: SnackbarHostState,
+    isSelectionMode: Boolean,
+    isSelected: Boolean,
+    onToggleSelect: () -> Unit,
     onDelete: () -> Unit,
     onEdit: () -> Unit,
     onBind: () -> Unit,
@@ -380,9 +491,15 @@ private fun TotpRow(
     }
 
     // 卡片外框与密码 / 卡包列表完全一致（见 [EntryCard]）；内边距由卡片统一给 16dp。
-    // 「按住后滑动删除」包在外层（见 [PressAndSwipeToDelete]）。
-    PressAndSwipeToDelete(onDelete = onDelete) {
-        EntryCard(onClick = copyNow) {
+    // 「按住后滑动删除」包在外层：长按回调即「勾选本行」，与卡片长按同一个动作（见
+    // [PressAndSwipeToDelete]）。
+    PressAndSwipeToDelete(onDelete = onDelete, onLongPress = onToggleSelect) {
+        EntryCard(
+            // 多选态下点击 = 勾选（上游 `cardInteractionModifier` 同款分支）。
+            onClick = if (isSelectionMode) onToggleSelect else copyNow,
+            onLongClick = if (isSelectionMode) null else onToggleSelect,
+            selected = isSelected,
+        ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 // 站点图标（库内服务器地址 + 条目域名），取不到回退首字母 ——
                 // 与密码列表同一套观感（见 [SiteIconByHost]）。
@@ -401,6 +518,15 @@ private fun TotpRow(
                     overflow = TextOverflow.Ellipsis,
                 )
                 Badge(entry.bound)
+                if (isSelectionMode) {
+                    Checkbox(checked = isSelected, onCheckedChange = { onToggleSelect() })
+                } else {
+                    TotpRowMenu(
+                        onEdit = onEdit,
+                        onDelete = onDelete,
+                        onBind = if (entry.bound) null else onBind,
+                    )
+                }
             }
             if (entry.account.isNotBlank()) {
                 Text(
@@ -438,25 +564,64 @@ private fun TotpRow(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                IconButton(onClick = copyNow) {
-                    Icon(
-                        Icons.Filled.ContentCopy,
-                        contentDescription = stringResource(R.string.totp_action_copy),
-                        modifier = Modifier.size(20.dp),
-                    )
-                }
             }
             // 倒计时不再逐行画进度条：整页共用顶部的统一进度条（见 [UnifiedTotpProgressBar]），
             // 既统一观感，也省掉每行每秒一次的绘制/动画开销（用户要求「降低功耗」）。
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (!entry.bound) {
-                    TextButton(onClick = onBind) { Text(stringResource(R.string.totp_action_bind)) }
-                }
-                Spacer(Modifier.weight(1f))
-                // 整行点击已改为「复制」，编辑入口因此必须显式留一个（否则改不了条目）。
-                TextButton(onClick = onEdit) { Text(stringResource(R.string.totp_action_edit)) }
-                TextButton(onClick = onDelete) { Text(stringResource(R.string.totp_remove_action)) }
+        }
+    }
+}
+
+/**
+ * 验证码行右上角菜单（对齐 Bastion：低频操作收进 `MoreVert`，不铺在卡片上）。
+ *
+ * @param onBind 「绑定到密码条目」；已绑定时传 `null`（菜单里不出现该行）。
+ */
+@Composable
+private fun TotpRowMenu(
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+    onBind: (() -> Unit)?,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { expanded = true }) {
+            Icon(
+                imageVector = Icons.Filled.MoreVert,
+                contentDescription = stringResource(R.string.content_desc_more_options),
+            )
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            if (onBind != null) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.totp_action_bind)) },
+                    onClick = {
+                        expanded = false
+                        onBind()
+                    },
+                )
             }
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.totp_action_edit)) },
+                onClick = {
+                    expanded = false
+                    onEdit()
+                },
+                leadingIcon = { Icon(Icons.Filled.Edit, contentDescription = null) },
+            )
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.totp_remove_action)) },
+                onClick = {
+                    expanded = false
+                    onDelete()
+                },
+                leadingIcon = {
+                    Icon(
+                        Icons.Filled.Delete,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.error,
+                    )
+                },
+            )
         }
     }
 }
@@ -476,7 +641,7 @@ private fun Badge(bound: Boolean) {
 }
 
 /**
- * 整页统一倒计时进度条 + 「通行密钥」入口。
+ * 整页统一倒计时进度条 + 「通行密钥」入口，**随列表滚动收起**。
  *
  * 抽成独立 composable 的原因：主函数已贴着 detekt `LongMethod ≤150` 的门禁线，
  * 而这段逻辑（挑「最近过期」的条目决定周期、空列表时用占位条）与主流程无耦合。
@@ -484,11 +649,23 @@ private fun Badge(bound: Boolean) {
  * 「通行密钥」入口挂在进度条右侧，**空列表时也必须渲染**
  * （[UnifiedTotpProgressPlaceholder]）—— 否则用户在一条验证码都没有时，
  * 会彻底失去进入通行密钥页的路径（对齐 Bastion）。
+ *
+ * ## 滚动收起（2026-09-13）
+ *
+ * 对齐 Bastion `TotpListContent.kt`：列表一往下滚，整条进度条**高度 44dp → 0 + 淡出**。
+ * 用户反馈「从上往下滑动的时候，倒计时条不变小」—— 此前本行是**静态**占位的，
+ * 不随滚动变化，既挡视物也和顶栏的收起动作对不齐。
+ *
+ * ⚠️ 收起判据复用顶栏那个 [rememberScrollCollapseFraction]（同一条 [listState]），
+ * **不要另起一套阈值** —— 否则进度条与顶栏会在不同时刻收起，看起来像两个动画打架。
+ *
+ * @param collapseFraction 0 = 完全展开，1 = 完全收起（与顶栏同源）。
  */
 @Composable
 private fun TotpPageProgress(
     entries: List<TotpEntry>,
     nowSeconds: Long,
+    collapseFraction: Float,
     onOpenPasskeys: () -> Unit,
 ) {
     val passkeyEntry: @Composable () -> Unit = {
@@ -501,14 +678,27 @@ private fun TotpPageProgress(
         }
     }
     val soonest = entries.minByOrNull { TotpGenerator.remainingSeconds(it.period, nowSeconds) }
-    if (soonest == null) {
-        UnifiedTotpProgressPlaceholder(trailingContent = passkeyEntry)
-    } else {
-        UnifiedTotpProgressBar(
-            periodSeconds = soonest.period,
-            nowSeconds = nowSeconds,
-            trailingContent = passkeyEntry,
-        )
+    // 高度随收起动画收缩到 0；clipToBounds 防止内容在压扁过程中溢出到下一行。
+    val barHeight by animateDpAsState(
+        targetValue = lerp(TOTP_PROGRESS_BAR_HEIGHT, 0.dp, collapseFraction),
+        animationSpec = tween(durationMillis = TOTP_PROGRESS_COLLAPSE_MS),
+        label = "totp_progress_bar_height",
+    )
+    Box(
+        modifier = Modifier
+            .height(barHeight)
+            .clipToBounds()
+            .graphicsLayer { alpha = 1f - collapseFraction },
+    ) {
+        if (soonest == null) {
+            UnifiedTotpProgressPlaceholder(trailingContent = passkeyEntry)
+        } else {
+            UnifiedTotpProgressBar(
+                periodSeconds = soonest.period,
+                nowSeconds = nowSeconds,
+                trailingContent = passkeyEntry,
+            )
+        }
     }
 }
 
@@ -528,6 +718,15 @@ private fun groupCode(code: String): String {
 private const val TOTP_TICK_MS = 1000L
 private const val TOTP_CODE_GROUP = 3
 private const val MILLIS_PER_SECOND = 1000
+
+/**
+ * 统一倒计时进度条**展开**时的高度（对齐 Bastion `lerp(44.dp, 0.dp, ...)` 的起点）。
+ * 收起时压到 0，与顶栏大标题的收起同步，滚动时不再有「一条横杠赖在屏幕上」的割裂感。
+ */
+private val TOTP_PROGRESS_BAR_HEIGHT = 44.dp
+
+/** 进度条随滚动收起 / 展开的动画时长（对齐 Bastion `tween(200)`）。 */
+private const val TOTP_PROGRESS_COLLAPSE_MS = 200
 
 /**
  * 验证码字号（对齐 Bastion `TotpCodeCard`：统一进度条模式 40sp / 普通 32–36sp）。

@@ -232,6 +232,7 @@ class VaultixAutofillService : AutofillService() {
             cards = vault.cards,
             identities = vault.identities,
             totpProvider = AutofillDatasetFactory::totpCode,
+            serverOrigin = vault.serverOrigin,
         )
 
         val saveInfo = AutofillSaveInfo.build(parsed)
