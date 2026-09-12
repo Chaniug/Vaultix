@@ -1,6 +1,9 @@
 package io.vaultix.data.repository
 
+import android.content.Context
+import android.net.Uri
 import android.os.Build
+import dagger.hilt.android.qualifiers.ApplicationContext
 import io.vaultix.crypto.SecureBytes
 import io.vaultix.crypto.SymmetricCryptoKey
 import io.vaultix.data.bitwarden.auth.BitwardenAuthRepository
@@ -8,6 +11,10 @@ import io.vaultix.data.bitwarden.auth.TwoFactorInvalidException
 import io.vaultix.data.bitwarden.auth.TwoFactorRequiredException
 import io.vaultix.data.bitwarden.sync.BitwardenSyncService
 import io.vaultix.data.bitwarden.sync.SyncOutcome
+import io.vaultix.data.kdbx.Kdbx
+import io.vaultix.data.kdbx.KdbxFailure
+import io.vaultix.data.kdbx.KdbxOpenError
+import io.vaultix.data.kdbx.KdbxSource
 import io.vaultix.database.dao.CipherDao
 import io.vaultix.database.dao.FolderDao
 import io.vaultix.database.dao.PendingOpDao
@@ -21,10 +28,15 @@ import io.vaultix.domain.VaultRepository
 import io.vaultix.domain.VaultSyncReport
 import io.vaultix.model.VaultKind
 import io.vaultix.model.VaultSummary
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.withContext
 import retrofit2.HttpException
 import java.io.IOException
 import java.util.UUID
@@ -55,23 +67,43 @@ class VaultRepositoryImpl @Inject constructor(
     private val credentials: SecureCredentialStore,
     private val localUnlockKeyStore: LocalUnlockKeyStore,
     private val preferences: VaultixPreferences,
+    /** KDBX 会话变化的可观察桥（见 [KdbxSessionFlow] 的说明）。 */
+    private val kdbxSessions: KdbxSessionFlow,
+    @ApplicationContext context: Context,
 ) : VaultRepository {
 
+    /**
+     * KDBX 文件读取器（SAF `content://` URI → 字节）。
+     *
+     * 放在 Android 侧实现的原因：`data:kdbx` 是纯逻辑模块（只依赖 core:*、不碰 Android），
+     * 它只认 [KdbxSource] 这个函数式接口。附带好处是引擎的单测可以直接喂 ByteArray。
+     */
+    private val kdbxSource = KdbxSource { uri ->
+        runCatching {
+            context.contentResolver.openInputStream(Uri.parse(uri))?.use { it.readBytes() }
+        }.getOrNull()
+    }
+
     override fun observeVaults(): Flow<List<VaultSummary>> =
-        combine(vaultDao.observeAll(), sessions.unlockedIds) { rows, unlocked ->
+        combine(vaultDao.observeAll(), sessions.unlockedIds, kdbxSessions.revisionFlow) { rows, unlocked, _ ->
             rows.map { row ->
+                // 解锁口径必须与 [isVaultUnlocked] 一致：KDBX 的会话不在
+                // [VaultSessionManager] 里（它持有的是整库明文，不是一把密钥），
+                // 只看 `unlocked` 会让 KDBX 库永远显示成锁定状态。
+                val isUnlocked = row.id in unlocked || Kdbx.isUnlocked(row.id)
                 VaultSummary(
                     id = row.id,
                     kind = VaultKind.fromName(row.kind) ?: VaultKind.KDBX,
                     name = row.displayName,
                     account = row.account,
                     origin = row.origin,
-                    unlocked = row.id in unlocked,
+                    unlocked = isUnlocked,
                 )
             }
         }
 
-    override fun observeUnlockedVaultIds(): Flow<Set<String>> = sessions.unlockedIds
+    override fun observeUnlockedVaultIds(): Flow<Set<String>> =
+        combine(sessions.unlockedIds, kdbxSessions.revisionFlow) { unlocked, _ -> unlocked + Kdbx.unlockedIds() }
 
     override suspend fun addBitwardenVault(
         server: String,
@@ -93,6 +125,121 @@ class VaultRepositoryImpl @Inject constructor(
         }
         val email = row.account ?: return UnlockResult.Unknown("该库缺少账号信息，请移除后重新添加")
         return doUnlock(email = email, server = row.origin, password = masterPassword)
+    }
+
+    // ---- KDBX 本地库（M2 阶段 A：只读）----
+    //
+    // KDBX 与 Bitwarden 在**会话模型**上完全不同：Bitwarden 的内存会话是一把对称密钥
+    // （`VaultSessionManager`），KDBX 的会话是**整库明文**（`data:kdbx` 的会话持有者）。
+    // 因此 KDBX 不写 `ciphers` 表、不进 `VaultSessionManager` —— 条目直接从会话里取
+    // （见 [io.vaultix.data.repository.ItemRepositoryImpl] 的读路径分流）。
+
+    override suspend fun addKdbxVault(
+        sourceUri: String,
+        displayName: String,
+        masterPassword: String,
+        keyFileUri: String?,
+    ): UnlockResult {
+        if (sourceUri.isBlank()) return UnlockResult.Unknown("未选择数据库文件")
+        val result = unlockKdbxInternal(
+            vaultId = sourceUri,
+            sourceUri = sourceUri,
+            password = masterPassword,
+            keyFileUri = keyFileUri,
+        )
+        if (result != UnlockResult.Success) return result
+
+        val now = System.currentTimeMillis()
+        val existing = vaultDao.get(sourceUri)
+        vaultDao.upsert(
+            VaultEntity(
+                id = sourceUri,
+                kind = VaultKind.KDBX.name,
+                displayName = displayName.ifBlank { DEFAULT_DISPLAY_NAME_KDBX },
+                origin = sourceUri,
+                account = null,
+                revisionDate = existing?.revisionDate,
+                createdAt = existing?.createdAt ?: now,
+            ),
+        )
+        if (!keyFileUri.isNullOrBlank()) {
+            preferences.setKdbxKeyFileUri(sourceUri, keyFileUri)
+        }
+        return UnlockResult.Success
+    }
+
+    override suspend fun unlockKdbxVault(vaultId: String, masterPassword: String): UnlockResult {
+        val row = vaultDao.get(vaultId) ?: return UnlockResult.VaultMissing
+        if (VaultKind.fromName(row.kind) != VaultKind.KDBX) {
+            return UnlockResult.Unknown("仅支持 KDBX 库解锁（当前类型：${row.kind}）")
+        }
+        val keyFileUri = runCatching { preferences.kdbxKeyFileUri(vaultId).first() }.getOrNull()
+        return unlockKdbxInternal(
+            vaultId = vaultId,
+            sourceUri = row.origin,
+            password = masterPassword,
+            keyFileUri = keyFileUri,
+        )
+    }
+
+    override suspend fun lockOtherKdbxVaults(keepVaultId: String) {
+        val toLock = Kdbx.unlockedIds().filter { it != keepVaultId }
+        if (toLock.isEmpty()) return
+        toLock.forEach { Kdbx.lock(it) }
+        kdbxSessions.bump()
+        // 与 VaultSessionManager.lock 同款收尾：密钥没了，查看锁标记也就失去意义。
+        sessions.clearAllViewLocks()
+    }
+
+    override fun isVaultUnlocked(vaultId: String): Boolean =
+        sessions.isUnlocked(vaultId) || Kdbx.isUnlocked(vaultId)
+
+    /** KDBX 解锁的公共尾部：读文件 → 尝试凭据 → 登记内存会话；失败分类成用户可执行提示。 */
+    private suspend fun unlockKdbxInternal(
+        vaultId: String,
+        sourceUri: String,
+        password: String,
+        keyFileUri: String?,
+    ): UnlockResult = withContext(Dispatchers.IO) {
+        val opened = Kdbx.unlock(
+            vaultId = vaultId,
+            sourceUri = sourceUri,
+            password = password,
+            keyFileUri = keyFileUri,
+            source = kdbxSource,
+        )
+        opened.fold(
+            onSuccess = {
+                // 会话建立成功即清查看锁（与 doUnlock 同一判据：有密钥了，标记失去意义），
+                // 并自增代次让 `observeUnlockedVaultIds` / `observeVaults` 重发。
+                sessions.clearViewLock(vaultId)
+                kdbxSessions.bump()
+                UnlockResult.Success
+            },
+            onFailure = { error -> classifyKdbxError(error) },
+        )
+    }
+
+    /**
+     * KDBX 失败 → [UnlockResult] 分类。
+     *
+     * ⚠️ 必须**分类**而不是一律「未知错误」：用户看到「密码错误」与
+     * 「文件读不到了（请重新选择）」时要做的事完全不同（前者重输、后者重选文件并重新授权）。
+     */
+    private fun classifyKdbxError(error: Throwable): UnlockResult {
+        val kind = (error as? KdbxFailure)?.error
+            ?: return UnlockResult.Unknown(error.message)
+        return when (kind) {
+            // 密码 / keyfile 不对 → 与 Bitwarden 的「凭据错误」同一语义（UI 文案通用）
+            is KdbxOpenError.InvalidCredentials -> UnlockResult.InvalidCredentials
+            // 文件读不到：不是凭据问题，提示重新选择文件
+            is KdbxOpenError.SourceUnavailable -> UnlockResult.Unknown(kind.detail)
+            is KdbxOpenError.NotKdbxFile -> UnlockResult.Unknown("该文件不是 KDBX 数据库")
+            is KdbxOpenError.UnsupportedVersion ->
+                UnlockResult.Unknown("不支持的 KDBX 版本 ${kind.version}（请用 KeePass 另存为 3.1 / 4.x）")
+
+            is KdbxOpenError.Unknown -> UnlockResult.Unknown(kind.detail)
+        }
     }
 
     override suspend fun unlockVaultWithTwoFactor(
@@ -140,10 +287,15 @@ class VaultRepositoryImpl @Inject constructor(
         // 但那会阻塞 UI 线程做密钥清零；现在由调用方在自己的协程里挂起等待，
         // 语义更清晰（挂起点之后密钥必然已不可用），也不再有阻塞。
         sessions.lock(vaultId)
+        // KDBX 库的「密钥」是内存里的整库明文，锁库即丢弃（两条会话模型必须同时收）。
+        Kdbx.lock(vaultId)
+        kdbxSessions.bump()
     }
 
     override suspend fun lockAll() {
         sessions.lockAll()
+        Kdbx.lockAll()
+        kdbxSessions.bump()
     }
 
     /**
@@ -161,6 +313,10 @@ class VaultRepositoryImpl @Inject constructor(
     override suspend fun signOut(vaultId: String) {
         // 1) 内存会话清零（此后 keyOf 为 null，条目列表立刻变空）
         sessions.lock(vaultId)
+        Kdbx.lock(vaultId)
+        kdbxSessions.bump()
+        // 1b) KDBX 的 keyfile 授权记录：属本地凭据，一并清（下次重新选文件）
+        runCatching { preferences.setKdbxKeyFileUri(vaultId, null) }
         // 2) 本地快速解锁痕迹（包裹密钥 + 开关）——不清就会留着用旧 KEK 解封的路径
         runCatching { disableLocalUnlock(vaultId) }
         // 3) 认证凭据与 host→server 登记清除（远端会话不受影响；重登即重新换 token）
@@ -179,6 +335,8 @@ class VaultRepositoryImpl @Inject constructor(
     override suspend fun removeVault(vaultId: String) {
         // 1) 内存会话清零（幂等；随后 keyOf 即 null，UI 观察的 unlocked 状态随之消失）
         sessions.lock(vaultId)
+        Kdbx.lock(vaultId)
+        kdbxSessions.bump()
         // 2) 本地快速解锁痕迹（包裹密钥 + 开关）——尽力而为，失败不阻断移除
         runCatching { disableLocalUnlock(vaultId) }
         // 3) 认证凭据与 host→server 登记清除（服务端会话保留，属正常）
@@ -401,6 +559,7 @@ class VaultRepositoryImpl @Inject constructor(
 
     private companion object {
         const val DISPLAY_NAME_BITWARDEN = "Bitwarden"
+        const val DEFAULT_DISPLAY_NAME_KDBX = "KeePass 数据库"
         const val HTTP_UNAUTHORIZED = 401
         const val HTTP_NOT_FOUND = 404
         const val KEY_DEVICE_ID = "device_id"

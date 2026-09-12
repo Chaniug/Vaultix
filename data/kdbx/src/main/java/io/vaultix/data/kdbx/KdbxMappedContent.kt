@@ -12,8 +12,13 @@ import io.vaultix.model.VaultFolder
 import io.vaultix.model.VaultItem
 import java.util.UUID
 
-/** 一次映射的产物（条目 + 分组 + 诊断计数）。 */
-internal data class KdbxMappedContent(
+/**
+ * 一次映射的产物（条目 + 分组 + 诊断计数）。
+ *
+ * 公开可见：它是 [KdbxUnlockedContent]（对外快照）的**内部形态**，携带阶段 B 写回
+ * 需要的 `groupPaths`（uuid → 分组路径），因此不能只留在模块内。
+ */
+data class KdbxMappedContent(
     val items: List<VaultItem>,
     val folders: List<VaultFolder>,
     /** 回收站里的条目数（本阶段不映射，明确告知用户而不是静默吞掉）。 */

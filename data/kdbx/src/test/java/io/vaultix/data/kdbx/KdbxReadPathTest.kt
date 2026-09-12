@@ -19,6 +19,7 @@ import app.keemobile.kotpass.models.EntryValue
 import app.keemobile.kotpass.models.Group
 import app.keemobile.kotpass.models.Meta
 import com.google.common.truth.Truth.assertThat
+import io.vaultix.common.OtpUriParser
 import io.vaultix.model.CustomFieldType
 import io.vaultix.model.VaultItemType
 import java.io.ByteArrayOutputStream
@@ -74,7 +75,10 @@ class KdbxReadPathTest {
         assertThat(item.totp).isNotNull()
         assertThat(item.totp).contains("otpauth://totp/")
         assertThat(item.totp).contains("secret=$TOTP_SECRET")
-        assertThat(item.totp).contains("period=30")
+        // 默认值（period=30 / digits=6 / SHA1）不在 URI 里出现：OtpUriParser.buildUri
+        // 只写非默认段，读回来仍是 30 —— 断言读回值而不是字面串，更贴近"能不能算出码"。
+        assertThat(OtpUriParser.parse(item.totp!!)?.period).isEqualTo(30)
+        assertThat(OtpUriParser.parse(item.totp!!)?.digits).isEqualTo(6)
     }
 
     @Test
@@ -113,7 +117,7 @@ class KdbxReadPathTest {
         val result = KdbxOpener.open(buildDatabase(), "wrong-password", null)
 
         assertThat(result.isFailure).isTrue()
-        val error = (result.exceptionOrNull() as KdbxOpenException).error
+        val error = (result.exceptionOrNull() as KdbxFailure).error
         assertThat(error).isInstanceOf(KdbxOpenError.InvalidCredentials::class.java)
         assertThat((error as KdbxOpenError.InvalidCredentials).attempted).isNotEmpty()
     }
@@ -122,7 +126,7 @@ class KdbxReadPathTest {
     fun `non kdbx bytes are rejected as not a kdbx file`() {
         val result = KdbxOpener.open("this is not a keepass database".toByteArray(), PASSWORD, null)
 
-        val error = (result.exceptionOrNull() as KdbxOpenException).error
+        val error = (result.exceptionOrNull() as KdbxFailure).error
         assertThat(error).isEqualTo(KdbxOpenError.NotKdbxFile)
     }
 

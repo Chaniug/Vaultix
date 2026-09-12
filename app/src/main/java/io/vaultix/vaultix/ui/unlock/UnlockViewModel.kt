@@ -7,6 +7,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import io.vaultix.domain.UnlockResult
 import io.vaultix.domain.VaultRepository
 import io.vaultix.domain.VaultSessionRepository
+import io.vaultix.model.VaultKind
 import io.vaultix.model.VaultSummary
 import io.vaultix.vaultix.ui.common.TwoFactorProvider
 import io.vaultix.vaultix.ui.error.UnlockUiError
@@ -286,7 +287,15 @@ class UnlockViewModel @Inject constructor(
 
         _state.update { it.copy(submitting = true, error = null) }
         viewModelScope.launch {
-            val result = vaultRepository.unlockVault(vaultId, current.password)
+            // ★ KDBX 与 Bitwarden 的解锁是**两条完全不同的路**（M2 阶段 A）：
+            // KDBX 认的是文件（离线、无账号、无 2FA），Bitwarden 认的是账号（联网 + 可能 2FA）。
+            // 走错一条的后果不是「报错」而是「报错信息完全对不上」（如 KDBX 库被拿去联网 prelogin）。
+            val target = _state.value.vault
+            val result = if (target?.kind == VaultKind.KDBX) {
+                vaultRepository.unlockKdbxVault(vaultId, current.password)
+            } else {
+                vaultRepository.unlockVault(vaultId, current.password)
+            }
             handleSubmitResult(result, submitTwoFactor = false)
         }
     }

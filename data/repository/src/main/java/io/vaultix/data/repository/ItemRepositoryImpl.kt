@@ -6,6 +6,7 @@ import io.vaultix.data.bitwarden.mapper.CipherMapper
 import io.vaultix.data.bitwarden.model.CipherDto
 import io.vaultix.data.bitwarden.model.toStoredCipherDto
 import io.vaultix.data.bitwarden.sync.BitwardenSyncService
+import io.vaultix.data.kdbx.Kdbx
 import io.vaultix.database.dao.CipherDao
 import io.vaultix.database.dao.PendingOpDao
 import io.vaultix.database.dao.VaultDao
@@ -21,6 +22,9 @@ import io.vaultix.model.VaultKind
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.json.Json
@@ -52,26 +56,79 @@ class ItemRepositoryImpl @Inject constructor(
     private val mapper: CipherMapper,
     private val json: Json,
     private val syncService: BitwardenSyncService,
+    /** KDBX 会话变化的可观察桥（读路径分流后靠它重新取内容；见 [KdbxSessionFlow]）。 */
+    private val kdbxSessions: KdbxSessionFlow,
     @CryptoDispatcher private val cryptoDispatcher: CoroutineDispatcher,
 ) : ItemRepository {
 
     override fun observeItems(vaultId: String): Flow<List<VaultItem>> =
-        observeState(vaultId, cipherDao.observeByVault(vaultId))
+        // ★ KDBX 读路径分流（M2 阶段 A）：KDBX 的条目**不在 Room 里**，而在 data:kdbx 的
+        // 内存会话里（明文整库，锁库即丢）。两条读路径在此分流，**UI / 自动填充侧零改动**
+        // —— 它们只认 `ItemRepository.observeItems`。
+        //
+        // ⚠️ 库种类是**挂起**查询（`vaultDao.get`），不能在方法体里直接判：那样
+        // `observeItems` 就不再是纯函数（每次订阅都要先挂起一次）。因此把它放进流里
+        // `flatMapLatest`，每次订阅时解析一次种类。
+        vaultDao.observeAll()
+            .map { vaults -> VaultKind.fromName(vaults.firstOrNull { it.id == vaultId }?.kind) }
+            .distinctUntilChanged()
+            .flatMapLatest { kind ->
+                if (kind == VaultKind.KDBX) {
+                    kdbxItems(vaultId)
+                } else {
+                    observeState(vaultId, cipherDao.observeByVault(vaultId))
+                }
+            }
 
-    override fun observeTrash(vaultId: String): Flow<List<TrashEntry>> =
-        combine(cipherDao.observeTrashByVault(vaultId), sessions.unlockedIds) { rows, unlocked ->
-            rows to (vaultId in unlocked)
-        }
-            .map { (rows, isUnlocked) -> if (!isUnlocked) emptyList() else decodeTrashRows(vaultId, rows) }
+    /**
+     * KDBX 库的条目流。
+     *
+     * KDBX 会话是纯内存结构（没有可订阅的 Flow），所以用 [KdbxSessionFlow] 当触发器：
+     * 解锁 / 锁定 / 移除库都会 bump 一次，届时重读会话即可。代价是**库内容在两次触发
+     * 之间不变**（KDBX 阶段 A 是只读的，本来就不会变）。
+     */
+    private fun kdbxItems(vaultId: String): Flow<List<VaultItem>> =
+        kdbxSessions.asSignal()
+            .map { Kdbx.contentOf(vaultId)?.items.orEmpty() }
             .flowOn(cryptoDispatcher)
 
-    override fun observeItem(vaultId: String, itemId: String): Flow<VaultItem?> {
-        val single = cipherDao.observe(itemId).map { row ->
-            // 已删除（含回收站状态）在详情语义里视同不存在 → 返回 null 触发「条目不存在」
-            if (row == null || row.deletedDate != null) emptyList() else listOf(row)
-        }
-        return observeState(vaultId, single).map { list -> list.firstOrNull() }
-    }
+    override fun observeTrash(vaultId: String): Flow<List<TrashEntry>> =
+        vaultDao.observeAll()
+            .map { vaults -> VaultKind.fromName(vaults.firstOrNull { it.id == vaultId }?.kind) }
+            .distinctUntilChanged()
+            .flatMapLatest { kind ->
+                // KDBX 阶段 A 不映射回收站（条目数由解锁内容里的 recycleBinCount 告知 UI），
+                // 因此回收站页对 KDBX 库恒为空 —— 明确返回空，而不是让 Room 查询碰巧返回别的。
+                if (kind == VaultKind.KDBX) {
+                    flowOf(emptyList())
+                } else {
+                    combine(
+                        cipherDao.observeTrashByVault(vaultId),
+                        sessions.unlockedIds,
+                    ) { rows, unlocked -> rows to (vaultId in unlocked) }
+                        .map { (rows, isUnlocked) ->
+                            if (!isUnlocked) emptyList() else decodeTrashRows(vaultId, rows)
+                        }
+                        .flowOn(cryptoDispatcher)
+                }
+            }
+
+    override fun observeItem(vaultId: String, itemId: String): Flow<VaultItem?> =
+        vaultDao.observeAll()
+            .map { vaults -> VaultKind.fromName(vaults.firstOrNull { it.id == vaultId }?.kind) }
+            .distinctUntilChanged()
+            .flatMapLatest { kind ->
+                if (kind == VaultKind.KDBX) {
+                    return@flatMapLatest kdbxItems(vaultId).map { items ->
+                        items.firstOrNull { it.id == itemId }
+                    }
+                }
+                val single = cipherDao.observe(itemId).map { row ->
+                    // 已删除（含回收站状态）在详情语义里视同不存在 → 返回 null 触发「条目不存在」
+                    if (row == null || row.deletedDate != null) emptyList() else listOf(row)
+                }
+                observeState(vaultId, single).map { list -> list.firstOrNull() }
+            }
 
     override suspend fun createItem(vaultId: String, item: VaultItem): Result<VaultSaveOutcome> =
         runCatching {

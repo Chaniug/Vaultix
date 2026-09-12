@@ -40,6 +40,10 @@ data object SplashRoute
 @Serializable
 data object AddVaultRoute
 
+/** 添加本地 KDBX（KeePass）库：SAF 选文件 → 主密码（+ 可选 keyfile）→ 解锁入库。 */
+@Serializable
+data object AddKdbxRoute
+
 @Serializable
 data object SettingsRoute
 

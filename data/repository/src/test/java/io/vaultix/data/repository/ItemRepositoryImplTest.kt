@@ -78,8 +78,13 @@ class ItemRepositoryImplTest {
             mapper = mapper,
             json = BitwardenJson,
             syncService = syncService,
+            // KDBX 读路径分流用的会话桥：本测试全是 Bitwarden 库，桥永不被真正触发
+            kdbxSessions = KdbxSessionFlow(),
             cryptoDispatcher = Dispatchers.Default,
         )
+        // 读路径分流要先问「这个库是什么类型」（见 observeItems）：
+        // 默认 mock 返回空列表 → 种类解析成 null → 走 Bitwarden 分支，与历史行为一致。
+        every { vaultDao.observeAll() } returns flowOf(listOf(bitwardenVaultRow()))
     }
 
     private fun bitwardenVaultRow() = VaultEntity(

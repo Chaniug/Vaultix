@@ -35,6 +35,7 @@ class VaultRepositoryRemoveTest {
     private val credentials = mockk<SecureCredentialStore>()
     private val localUnlockKeyStore = mockk<LocalUnlockKeyStore>()
     private val preferences = mockk<VaultixPreferences>()
+    private val context = mockk<android.content.Context>(relaxed = true)
     private val sessions = VaultSessionManager()
     private lateinit var repo: VaultRepositoryImpl
 
@@ -53,6 +54,8 @@ class VaultRepositoryRemoveTest {
             credentials = credentials,
             localUnlockKeyStore = localUnlockKeyStore,
             preferences = preferences,
+            kdbxSessions = KdbxSessionFlow(),
+            context = context,
         )
         coEvery { credentials.remove(any()) } returns Unit
         coEvery { preferences.setLocalUnlockEnabled(any(), any()) } returns Unit

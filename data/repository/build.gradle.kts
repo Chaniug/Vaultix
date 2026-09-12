@@ -29,6 +29,8 @@ dependencies {
     implementation(projects.core.datastore)
     implementation(projects.domain)
     implementation(projects.data.bitwarden)
+    // KDBX 本地库引擎（M2）：门面 `io.vaultix.data.kdbx.Kdbx`
+    implementation(projects.data.kdbx)
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
     implementation(libs.kotlinx.coroutines.android)

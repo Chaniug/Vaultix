@@ -244,6 +244,28 @@ class VaultixPreferences @Inject constructor(
     private fun localUnlockKey(vaultId: String) =
         booleanPreferencesKey("local_unlock_enabled_$vaultId")
 
+    /**
+     * KDBX 库的 keyfile URI（按库；null / 无记录 = 该库不用 keyfile）。
+     *
+     * 只存 **URI 字符串**，不存文件内容 —— 内容由 SAF 授权在需要时现读
+     * （授权经 `takePersistableUriPermission` 跨进程重启有效）。
+     */
+    fun kdbxKeyFileUri(vaultId: String): Flow<String?> =
+        safeData.map { it[kdbxKeyFileKey(vaultId)] }
+
+    suspend fun setKdbxKeyFileUri(vaultId: String, uri: String?) {
+        dataStore.edit { prefs ->
+            if (uri.isNullOrBlank()) {
+                prefs.remove(kdbxKeyFileKey(vaultId))
+            } else {
+                prefs[kdbxKeyFileKey(vaultId)] = uri
+            }
+        }
+    }
+
+    private fun kdbxKeyFileKey(vaultId: String) =
+        stringPreferencesKey("kdbx_keyfile_uri_$vaultId")
+
     /** 登录后「启用快速解锁」引导横幅是否已被用户拒绝（不再打扰，设置页仍可启用）。 */
     fun isQuickUnlockPromptDismissed(): Flow<Boolean> =
         safeData.map { it[QUICK_UNLOCK_PROMPT_DISMISSED] ?: false }

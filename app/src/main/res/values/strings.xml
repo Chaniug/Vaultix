@@ -15,7 +15,23 @@
     <string name="vault_list_empty_body">连接 Bitwarden 账号，把密码带到手机里</string>
     <string name="vault_connect_bitwarden">连接 Bitwarden</string>
     <string name="vault_open_kdbx">打开 KDBX 文件</string>
+    <string name="vault_add_type_hint">选择库类型：云端同步（Bitwarden）或本地文件（KeePass KDBX）</string>
+    <string name="vault_add_bitwarden_desc">登录账号，跨设备同步（需网络）</string>
+    <string name="vault_add_kdbx_desc">选本机的 .kdbx 文件，全程离线、不经服务器</string>
     <string name="vault_kdbx_coming_soon">KDBX 本地库将在 M2 里程碑支持</string>
+
+    <!-- 添加本地 KDBX 库（M2 阶段 A：只读） -->
+    <string name="add_kdbx_title">打开 KDBX 文件</string>
+    <string name="add_kdbx_subtitle">选择 KeePass 数据库文件（KDBX 3.1 / 4.x）。文件留在本机，Vaultix 只读取内容、不上传。</string>
+    <string name="add_kdbx_file">数据库文件</string>
+    <string name="add_kdbx_pick_file">尚未选择文件</string>
+    <string name="add_kdbx_browse">选择</string>
+    <string name="add_kdbx_add_keyfile">此库还需要密钥文件（keyfile）</string>
+    <string name="add_kdbx_keyfile">密钥文件</string>
+    <string name="add_kdbx_clear_keyfile">移除密钥文件</string>
+    <string name="add_kdbx_password">数据库主密码</string>
+    <string name="add_kdbx_submit">打开数据库</string>
+    <string name="add_kdbx_working">正在解密数据库…</string>
     <string name="vault_badge_unlocked">已解锁</string>
     <string name="vault_badge_locked">已锁定</string>
     <string name="vault_item_count">%1$d 项</string>

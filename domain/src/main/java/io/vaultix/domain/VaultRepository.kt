@@ -27,6 +27,42 @@ interface VaultRepository {
     /** 解锁已注册的库：需要再次输入主密码（Bitwarden 云端解锁需联网做 prelogin）。 */
     suspend fun unlockVault(vaultId: String, masterPassword: String): UnlockResult
 
+    // ---- KDBX 本地库（M2 阶段 A：只读）----
+
+    /**
+     * 添加并解锁一个 **KDBX 本地库**（`.kdbx` 文件）。
+     *
+     * 与 [addBitwardenVault] 的架构差异（有意为之，见 `.ai/ISSUES.md` #60 第 4 批）：
+     * - 认证发生在**文件**上（主密码 + 可选 keyfile），不联网、无账号、无 2FA；
+     * - 解密后的内容**只活在内存**（KDBX 引擎的会话），条目**不落 ciphers 表** ——
+     *   KDBX 的保真度靠「原文件」保证，抄一份密文到 Room 只会引入两处真源
+     *   （写回阶段再谈缓存）。
+     *
+     * @param sourceUri SAF 选中的文件 URI（作为 vault 行的 `origin`；KDBX 库的 id 即它）。
+     * @param displayName 列表里显示的名字（默认取文件名）。
+     * @param keyFileUri 可选的 keyfile URI（需已取得持久读权限）。
+     */
+    suspend fun addKdbxVault(
+        sourceUri: String,
+        displayName: String,
+        masterPassword: String,
+        keyFileUri: String?,
+    ): UnlockResult
+
+    /** 解锁已注册的 KDBX 库（主密码 + 可选 keyfile；keyfile URI 由仓储从偏好里读）。 */
+    suspend fun unlockKdbxVault(vaultId: String, masterPassword: String): UnlockResult
+
+    /**
+     * 切换活跃库时**锁定所有非 [keepVaultId] 的 KDBX 库**（内存只留一把密钥）。
+     *
+     * 为什么要主动锁：KDBX 的会话持有的是**整库明文**（比 Bitwarden 的一把对称密钥重得多），
+     * 多库同时解锁会让「同时只能进一个库」的产品约束在内存层面失效。
+     */
+    suspend fun lockOtherKdbxVaults(keepVaultId: String)
+
+    /** 该库当前是否已（在内存中）解锁 —— 含 KDBX 会话，供 UI 的解锁徽标使用。 */
+    fun isVaultUnlocked(vaultId: String): Boolean
+
     /** 两步验证：主密码已通过，提交验证码完成解锁（[UnlockResult.TwoFactorRequired] 之后调用）。 */
     suspend fun unlockVaultWithTwoFactor(
         vaultId: String,

@@ -101,6 +101,9 @@ private fun Entry.toVaultItem(folderId: String?): VaultItem {
     val url = fields.url?.content.orEmpty()
     val custom = customFieldsOf(fields)
     val isNote = username.isBlank() && password.isBlank() && notes.isNotBlank()
+    // 通行密钥（KeePassDX 的 KPEX_PASSKEY_* 约定，见 KdbxPasskeyCodec）：映射为领域凭证后
+    // 与 Bitwarden 侧同构 —— 「通行密钥」页 / 设置页统计 / 凭据提供商三条链路对 KDBX 库天然可用。
+    val passkey = KdbxPasskeyCodec.toCredential(fields.toPasskeyFields(), title = title)
     return VaultItem(
         id = itemIdOf(uuid),
         title = title.ifBlank { DEFAULT_TITLE },
@@ -109,23 +112,76 @@ private fun Entry.toVaultItem(folderId: String?): VaultItem {
         notes = notes,
         type = if (isNote) VaultItemType.SecureNote else VaultItemType.Login,
         uris = url.takeIf { it.isNotBlank() }?.let { listOf(VaultUri(uri = it)) }.orEmpty(),
-        totp = buildOtpAuthUri(fields),
+        totp = KdbxTotpCodec.toOtpAuthUri(fields.toOtpFields(), title = title, account = username),
+        fido2Credentials = listOfNotNull(passkey),
         customFields = custom,
         folderId = folderId,
     )
 }
 
+/** KeePass 字段 → OTP 字段集（键名大小写不敏感；同时判定密钥的编码形态）。 */
+private fun EntryFields.toOtpFields(): KdbxOtpFields {
+    fun value(vararg keys: String): String =
+        keys.firstNotNullOfOrNull { key -> this[key]?.content?.takeIf { it.isNotBlank() } }.orEmpty()
+
+    // KeePass 2.47+ 用三个不同字段名表达密钥编码；先判编码再取密钥，
+    // 否则「Hex 密钥」会被当成 base32 直接算错码（详见 KdbxTotpCodec 的说明）。
+    val secretEncoding = when {
+        value(KdbxTotpCodec.FIELD_TIMEOTP_HEX).isNotEmpty() -> KdbxOtpFields.SecretEncoding.Hex
+        value(KdbxTotpCodec.FIELD_TIMEOTP_BASE64).isNotEmpty() -> KdbxOtpFields.SecretEncoding.Base64
+        else -> KdbxOtpFields.SecretEncoding.Base32
+    }
+    val seed = when (secretEncoding) {
+        KdbxOtpFields.SecretEncoding.Base32 ->
+            value(KdbxTotpCodec.FIELD_TOTP_SEED, KdbxTotpCodec.FIELD_TIMEOTP_BASE32)
+
+        KdbxOtpFields.SecretEncoding.Hex -> value(KdbxTotpCodec.FIELD_TIMEOTP_HEX)
+        KdbxOtpFields.SecretEncoding.Base64 -> value(KdbxTotpCodec.FIELD_TIMEOTP_BASE64)
+    }
+    return KdbxOtpFields(
+        otp = value(KdbxTotpCodec.FIELD_OTP),
+        seed = seed,
+        settings = value(KdbxTotpCodec.FIELD_TOTP_SETTINGS),
+        period = value(KdbxTotpCodec.FIELD_TOTP_PERIOD, KdbxTotpCodec.FIELD_TIMEOTP_PERIOD),
+        digits = value(KdbxTotpCodec.FIELD_TOTP_DIGITS, KdbxTotpCodec.FIELD_TIMEOTP_LENGTH),
+        algorithm = value(KdbxTotpCodec.FIELD_TOTP_ALGORITHM, KdbxTotpCodec.FIELD_TIMEOTP_ALGORITHM),
+        counter = value(KdbxTotpCodec.FIELD_HOTP_COUNTER),
+        type = value(KdbxTotpCodec.FIELD_OTP_TYPE),
+        secretEncoding = secretEncoding,
+    )
+}
+
+/** KeePass 字段 → 通行密钥字段集。 */
+private fun EntryFields.toPasskeyFields(): KdbxPasskeyFields = KdbxPasskeyFields(
+    username = this[KdbxPasskeyCodec.FIELD_USERNAME]?.content.orEmpty(),
+    privateKeyPem = this[KdbxPasskeyCodec.FIELD_PRIVATE_KEY]?.content.orEmpty(),
+    credentialId = this[KdbxPasskeyCodec.FIELD_CREDENTIAL_ID]?.content.orEmpty(),
+    userHandle = this[KdbxPasskeyCodec.FIELD_USER_HANDLE]?.content.orEmpty(),
+    relyingParty = this[KdbxPasskeyCodec.FIELD_RELYING_PARTY]?.content.orEmpty(),
+    flagBe = this[KdbxPasskeyCodec.FIELD_FLAG_BE]?.content.orEmpty(),
+    flagBs = this[KdbxPasskeyCodec.FIELD_FLAG_BS]?.content.orEmpty(),
+)
+
 private const val DEFAULT_TITLE = "（未命名）"
 
 /**
- * 自定义字段：除 5 个标准字段与 TOTP 相关字段外的全部字段。
+ * 自定义字段：除 5 个标准字段、OTP 相关字段、通行密钥字段外的全部字段。
  *
  * 受保护（`Protected="True"`）的字段映射为 [CustomFieldType.Hidden]，其余为 Text
  * ——与 Bitwarden 的 `fields[].type` 语义对齐（Hidden 在 UI 上默认掩码）。
+ *
+ * ⚠️ OTP 与通行密钥字段**必须排除**：它们在领域模型里已有专属载体
+ * （`VaultItem.totp` / `fido2Credentials`），再以自定义字段出现一次就会出现
+ * 「详情页明文展示私钥 PEM / TOTP 密钥」这种既重复又泄密的展示。
+ * 排除判定统一走两个码本的 `isXxxFieldName`，不在本文件再抄一份字段名清单（抄一份就会漂移）。
  */
 private fun customFieldsOf(fields: EntryFields): List<VaultCustomField> =
     fields.entries
-        .filter { (key, _) -> key !in STANDARD_FIELD_KEYS && !isOtpFieldKey(key) }
+        .filter { (key, _) ->
+            key !in STANDARD_FIELD_KEYS &&
+                !KdbxTotpCodec.isOtpFieldName(key) &&
+                !KdbxPasskeyCodec.isPasskeyFieldName(key)
+        }
         .mapNotNull { (key, value) ->
             if (key.isBlank()) {
                 null
@@ -140,74 +196,3 @@ private fun customFieldsOf(fields: EntryFields): List<VaultCustomField> =
 
 private val STANDARD_FIELD_KEYS = setOf("Title", "UserName", "Password", "URL", "Notes")
 
-// ---- TOTP：把 KeePass 的多种约定统一成 otpauth:// URI ----
-
-/**
- * TOTP 字段的候选键（按优先级）。
- *
- * 来源：KeePass 2.47+ 官方 `TimeOtp-*`、KeePassXC 的 `otp`、
- * 以及 KeePass 1.x/KeePass2Android 时代流传的 `TOTP Seed` / `TOTP Settings`。
- */
-private val OTP_SECRET_KEYS = listOf(
-    "TimeOtp-Secret-Base32",
-    "TimeOtp-Secret-Hex",
-    "TimeOtp-Secret-Base64",
-    "otp",
-    "TOTP Seed",
-)
-
-private val OTP_PERIOD_KEYS = listOf("TimeOtp-Period", "TOTP Settings", "period")
-private val OTP_DIGITS_KEYS = listOf("TimeOtp-Length", "digits")
-private val OTP_ALGORITHM_KEYS = listOf("TimeOtp-Algorithm", "algorithm")
-
-private fun isOtpFieldKey(key: String): Boolean =
-    OTP_SECRET_KEYS.any { it.equals(key, ignoreCase = true) } ||
-        OTP_PERIOD_KEYS.any { it.equals(key, ignoreCase = true) } ||
-        OTP_DIGITS_KEYS.any { it.equals(key, ignoreCase = true) } ||
-        OTP_ALGORITHM_KEYS.any { it.equals(key, ignoreCase = true) }
-
-/**
- * 组出 `otpauth://totp/...`（无密钥返回 null）。
- *
- * 复用既有 `OtpUriParser` 的好处：HOTP/TOTP、period/digits/algorithm 的解析、以及
- * 「裸 base32 密钥」的兜底都已实现并测过，KDBX 侧不必再造一套。
- */
-private fun buildOtpAuthUri(fields: EntryFields): String? {
-    val secret = OTP_SECRET_KEYS.firstNotNullOfOrNull { key ->
-        fields[key]?.content?.takeIf { it.isNotBlank() }
-    } ?: return null
-    val label = fields.title?.content.orEmpty()
-    val account = fields.userName?.content.orEmpty()
-    val labelText = when {
-        label.isBlank() -> account
-        account.isBlank() -> label
-        else -> "$label:$account"
-    }
-    val params = buildList {
-        add("secret=${encodeQuery(secret)}")
-        OTP_PERIOD_KEYS.firstNotNullOfOrNull { fields[it]?.content?.toIntOrNull() }
-            ?.let { add("period=$it") }
-        OTP_DIGITS_KEYS.firstNotNullOfOrNull { fields[it]?.content?.toIntOrNull() }
-            ?.let { add("digits=$it") }
-        OTP_ALGORITHM_KEYS.firstNotNullOfOrNull { fields[it]?.content?.takeIf { text -> text.isNotBlank() } }
-            ?.let { add("algorithm=${encodeQuery(it)}") }
-    }
-    return "otpauth://totp/${encodeQuery(labelText)}?${params.joinToString("&")}"
-}
-
-/** 最小百分号编码（只处理 URI 里必须转义的字符，够 otpauth 用）。 */
-/** 十六进制百分号编码的位宽（detekt MagicNumber）。 */
-private const val HEX_PAD_WIDTH = 2
-
-/** 百分号编码使用的十六进制基数（detekt MagicNumber）。 */
-private const val HEX_RADIX = 16
-
-private fun encodeQuery(value: String): String = buildString {
-    value.forEach { c ->
-        when {
-            c.isLetterOrDigit() || c in "-._~" -> append(c)
-            c == ' ' -> append("%20")
-            else -> append('%').append(c.code.toString(HEX_RADIX).uppercase().padStart(HEX_PAD_WIDTH, '0'))
-        }
-    }
-}

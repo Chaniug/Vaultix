@@ -31,6 +31,7 @@ import org.junit.Test
  */
 class VaultRepositorySignOutTest {
 
+    private val context = mockk<android.content.Context>(relaxed = true)
     private val vaultDao = mockk<VaultDao>(relaxed = true)
     private val cipherDao = mockk<CipherDao>(relaxed = true)
     private val folderDao = mockk<FolderDao>(relaxed = true)
@@ -58,10 +59,13 @@ class VaultRepositorySignOutTest {
             credentials = credentials,
             localUnlockKeyStore = localUnlockKeyStore,
             preferences = preferences,
+            kdbxSessions = KdbxSessionFlow(),
+            context = context,
         )
         coEvery { credentials.remove(any()) } returns Unit
         coEvery { credentials.getString(any()) } returns null
         coEvery { preferences.setLocalUnlockEnabled(any(), any()) } returns Unit
+        coEvery { preferences.setKdbxKeyFileUri(any(), any()) } returns Unit
         // `logout` 是非挂起函数（只清内存/加密存储），故用 every 而非 coEvery（见 ISSUES #11）
         io.mockk.every { authRepository.logout(any()) } returns Unit
     }

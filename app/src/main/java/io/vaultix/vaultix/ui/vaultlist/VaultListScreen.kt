@@ -1,5 +1,6 @@
 package io.vaultix.vaultix.ui.vaultlist
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -8,6 +9,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -15,6 +17,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Settings
@@ -29,7 +33,9 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeTopAppBar
+import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -69,6 +75,7 @@ import io.vaultix.vaultix.ui.common.rememberFragmentActivity
 @Composable
 fun VaultListScreen(
     onAddVault: () -> Unit,
+    onAddKdbx: () -> Unit,
     onOpenVault: (VaultSummary) -> Unit,
     onOpenSettings: () -> Unit,
     viewModel: VaultListViewModel = hiltViewModel(),
@@ -81,6 +88,7 @@ fun VaultListScreen(
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
     var vaultToRemove by remember { mutableStateOf<VaultSummary?>(null) }
+    var showAddDialog by remember { mutableStateOf(false) }
     // 认证对话框文案
     val enrollTitle = stringResource(R.string.quick_unlock_enroll_title)
     val cancelText = stringResource(R.string.action_cancel)
@@ -126,11 +134,10 @@ fun VaultListScreen(
             )
         },
         floatingActionButton = {
-            // 仅 full 分发可添加 Bitwarden 库；offline 分发等 M2 的 KDBX 入口
-            if (AppFlavor.supportsBitwarden && vaults.isNotEmpty()) {
-                FloatingActionButton(onClick = onAddVault) {
-                    Icon(Icons.Filled.Add, contentDescription = stringResource(R.string.vault_add_fab))
-                }
+            // 「+」= 添加库：Bitwarden 云端 或 本地 KDBX 文件（两种库类型二选一，
+            // 与产品定义「登录时二选一」一致）。offline 分发只保留 KDBX。
+            FloatingActionButton(onClick = { showAddDialog = true }) {
+                Icon(Icons.Filled.Add, contentDescription = stringResource(R.string.vault_add_fab))
             }
         },
     ) { padding ->
@@ -140,7 +147,7 @@ fun VaultListScreen(
                 .padding(padding),
         ) {
             if (vaults.isEmpty()) {
-                EmptyVaultState(onConnectBitwarden = onAddVault)
+                EmptyVaultState(onConnectBitwarden = onAddVault, onOpenKdbx = onAddKdbx)
             } else {
                 Column(modifier = Modifier.fillMaxSize()) {
                     // 快速解锁启用引导（设备支持时显示；enroll 后自动消失）
@@ -198,6 +205,63 @@ fun VaultListScreen(
             },
         )
     }
+
+    // 添加库：两种类型二选一（Bitwarden 云端 / 本地 KDBX 文件）。
+    if (showAddDialog) {
+        AddVaultTypeDialog(
+            onConnectBitwarden = {
+                showAddDialog = false
+                onAddVault()
+            },
+            onOpenKdbx = {
+                showAddDialog = false
+                onAddKdbx()
+            },
+            onDismiss = { showAddDialog = false },
+        )
+    }
+}
+
+/** 添加库的类型选择（Bitwarden 云端 / 本地 KDBX 文件）。 */
+@Composable
+private fun AddVaultTypeDialog(
+    onConnectBitwarden: () -> Unit,
+    onOpenKdbx: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.vault_add_fab)) },
+        text = {
+            Column {
+                Text(
+                    text = stringResource(R.string.vault_add_type_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 12.dp),
+                )
+                if (AppFlavor.supportsBitwarden) {
+                    ListItem(
+                        headlineContent = { Text(stringResource(R.string.vault_connect_bitwarden)) },
+                        supportingContent = { Text(stringResource(R.string.vault_add_bitwarden_desc)) },
+                        leadingContent = { Icon(Icons.Filled.Cloud, contentDescription = null) },
+                        modifier = Modifier.clickable(onClick = onConnectBitwarden),
+                    )
+                }
+                ListItem(
+                    headlineContent = { Text(stringResource(R.string.vault_open_kdbx)) },
+                    supportingContent = { Text(stringResource(R.string.vault_add_kdbx_desc)) },
+                    leadingContent = { Icon(Icons.Filled.Description, contentDescription = null) },
+                    modifier = Modifier.clickable(onClick = onOpenKdbx),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.action_cancel))
+            }
+        },
+    )
 }
 
 @Composable
@@ -239,7 +303,7 @@ private fun QuickUnlockBanner(
 }
 
 @Composable
-private fun EmptyVaultState(onConnectBitwarden: () -> Unit) {
+private fun EmptyVaultState(onConnectBitwarden: () -> Unit, onOpenKdbx: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -261,12 +325,12 @@ private fun EmptyVaultState(onConnectBitwarden: () -> Unit) {
             Button(onClick = onConnectBitwarden) {
                 Text(stringResource(R.string.vault_connect_bitwarden))
             }
-        } else {
-            Text(
-                text = stringResource(R.string.vault_kdbx_coming_soon),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Spacer(Modifier.height(12.dp))
+        }
+        // KDBX 入口对 full / offline **两种分发都开放**（本地库不需要网络，
+        // offline 分发反而只有它可用 —— 此前这里写的是「即将支持」占位）。
+        OutlinedButton(onClick = onOpenKdbx) {
+            Text(stringResource(R.string.vault_open_kdbx))
         }
     }
 }
