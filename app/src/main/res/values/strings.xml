@@ -250,7 +250,15 @@
     <string name="items_search_hint">搜索名称、用户名或网址</string>
     <string name="items_search_empty">没有匹配的条目</string>
     <!-- 条目分组（密码 Tab 顶栏图标弹出；分组维度取模型里真实存在的三种 + 不分组） -->
-    <string name="items_group_mode">分组方式</string>    <string name="items_group_none">不分组</string>
+    <string name="items_group_mode">分组方式</string>    <!-- 显示选项（对齐 Bastion PasswordDisplayOptionsSheet 的语义，维度按 Vaultix 模型裁剪） -->
+    <string name="items_display_options">显示选项</string>
+    <string name="setting_display_options_desc">分组方式、卡片显示多少信息、是否显示图标</string>
+    <string name="items_card_display">卡片显示</string>
+    <string name="items_display_all">标题 + 用户名</string>
+    <string name="items_display_title_username">仅标题 + 用户名</string>
+    <string name="items_display_title_only">仅标题</string>
+    <string name="items_show_icon">显示图标</string>
+    <string name="items_show_icon_desc">在条目左侧显示图标（首字母头像 / 品牌图标）</string>    <string name="items_group_none">不分组</string>
     <string name="items_group_type">按类型</string>
     <string name="items_group_folder">按文件夹</string>
     <string name="items_group_initial">按首字母</string>

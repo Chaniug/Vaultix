@@ -23,6 +23,7 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Contrast
 import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.ViewAgenda
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Fingerprint
@@ -73,6 +74,7 @@ import io.vaultix.model.VaultSummary
 import io.vaultix.vaultix.BuildConfig
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.BiometricPrompter
+import io.vaultix.vaultix.ui.items.DisplayOptionsSheet
 import io.vaultix.vaultix.ui.common.VaultixExpressiveTopBar
 import io.vaultix.vaultix.ui.common.rememberImmersiveBarPadding
 import io.vaultix.vaultix.ui.common.rememberScrollCollapseFraction
@@ -393,6 +395,7 @@ private fun AppearanceSection(
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
     val oledPureBlack by viewModel.oledPureBlack.collectAsStateWithLifecycle()
     var showThemeDialog by rememberSaveable { mutableStateOf(false) }
+    var showDisplayOptions by rememberSaveable { mutableStateOf(false) }
 
     SettingsGroupTitle(stringResource(R.string.group_appearance))
     SettingsRow(
@@ -423,6 +426,21 @@ private fun AppearanceSection(
             )
         },
     )
+    // 条目列表的显示选项（分组方式 / 卡片信息密度 / 是否显示图标）——
+    // 与密码 Tab 顶栏那个按钮共用同一个弹层与同一份偏好，改哪边都实时生效。
+    SettingsRow(
+        icon = { Icon(Icons.Filled.ViewAgenda, contentDescription = null) },
+        title = stringResource(R.string.items_display_options),
+        subtitle = stringResource(R.string.setting_display_options_desc),
+        onClick = { showDisplayOptions = true },
+    )
+
+    if (showDisplayOptions) {
+        SettingsDisplayOptionsHost(
+            viewModel = viewModel,
+            onDismiss = { showDisplayOptions = false },
+        )
+    }
 
     if (showThemeDialog) {
         ThemeModeDialog(
@@ -434,6 +452,29 @@ private fun AppearanceSection(
             onDismiss = { showThemeDialog = false },
         )
     }
+}
+
+/**
+ * 设置页里的「显示选项」宿主：把 `SettingsViewModel` 的偏好接进
+ * [DisplayOptionsSheet]（与密码 Tab 顶栏按钮同一个弹层，改哪边都一致）。
+ */
+@Composable
+private fun SettingsDisplayOptionsHost(
+    viewModel: SettingsViewModel,
+    onDismiss: () -> Unit,
+) {
+    val groupMode by viewModel.itemsGroupMode.collectAsStateWithLifecycle()
+    val cardDisplayMode by viewModel.itemsCardDisplayMode.collectAsStateWithLifecycle()
+    val showIcon by viewModel.itemsShowIcon.collectAsStateWithLifecycle()
+    DisplayOptionsSheet(
+        groupMode = groupMode,
+        cardDisplayMode = cardDisplayMode,
+        showIcon = showIcon,
+        onDismiss = onDismiss,
+        onGroupMode = viewModel::setItemsGroupMode,
+        onCardDisplayMode = viewModel::setItemsCardDisplayMode,
+        onShowIcon = viewModel::setItemsShowIcon,
+    )
 }
 
 /**

@@ -125,10 +125,12 @@ fun ItemsScreen(
     val visibleItems by viewModel.visibleItems.collectAsStateWithLifecycle()
     val folders by viewModel.folders.collectAsStateWithLifecycle()
     val groupMode by viewModel.groupMode.collectAsStateWithLifecycle()
+    val cardDisplayMode by viewModel.cardDisplayMode.collectAsStateWithLifecycle()
+    val showIcon by viewModel.showIcon.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     var showCreateDialog by rememberSaveable { mutableStateOf(false) }
     var searchActive by rememberSaveable { mutableStateOf(false) }
-    val context = LocalContext.current
+    var displayOptionsOpen by rememberSaveable { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val collapse = rememberScrollCollapseFraction(listState)
     val barPadding = rememberImmersiveBarPadding(collapse)
@@ -136,16 +138,7 @@ fun ItemsScreen(
     var collapsedGroups by rememberSaveable { mutableStateOf(emptySet<String>()) }
 
     // 分组（纯逻辑在 ItemsGrouping.kt；不分组时只有一项、标题为空 → UI 不画分组头）。
-    val groups = remember(visibleItems, folders, groupMode) {
-        groupItems(
-            items = visibleItems,
-            folders = folders,
-            mode = groupMode,
-            typeLabel = { context.getString(itemTypeLabelRes(it.type)) },
-            unnamedLabel = context.getString(R.string.items_item_unnamed),
-            noFolderLabel = context.getString(R.string.items_group_no_folder),
-        )
-    }
+    val groups = rememberGroupedItems(visibleItems, folders, groupMode)
 
     // 底部导航条「+」→ 打开新建表单（Tab 内嵌时不展示自己的 FAB）
     LaunchedEffect(addRequest) {
@@ -155,21 +148,7 @@ fun ItemsScreen(
         }
     }
 
-    LaunchedEffect(Unit) {
-        viewModel.saveEvents.collect { event ->
-            val message = when (event) {
-                ItemsViewModel.SaveEvent.SavedSynced ->
-                    context.getString(R.string.item_saved_synced)
-                ItemsViewModel.SaveEvent.SavedQueued ->
-                    context.getString(R.string.item_saved_queued)
-                is ItemsViewModel.SaveEvent.Failed ->
-                    context.getString(R.string.item_save_failed, event.message)
-                is ItemsViewModel.SaveEvent.Deleted ->
-                    context.getString(R.string.items_deleted_to_trash, event.title)
-            }
-            snackbarHostState.showSnackbar(message)
-        }
-    }
+    SaveEventSnackbar(viewModel = viewModel, hostState = snackbarHostState)
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -226,6 +205,8 @@ fun ItemsScreen(
                             listState = listState,
                             grouped = groupMode != ItemsGroupMode.None,
                             collapsedGroups = collapsedGroups,
+                            displayMode = cardDisplayMode,
+                            showIcon = showIcon,
                             onToggleGroup = { key ->
                                 collapsedGroups = if (key in collapsedGroups) {
                                     collapsedGroups - key
@@ -244,9 +225,8 @@ fun ItemsScreen(
                     title = state.vault?.name.orEmpty(),
                     collapseFraction = collapse,
                     embedded = embedded,
-                    groupMode = groupMode,
                     onBack = onBack,
-                    onGroupMode = viewModel::setGroupMode,
+                    onDisplayOptions = { displayOptionsOpen = true },
                     onToggleSearch = { searchActive = true },
                     onOpenTotp = onOpenTotp,
                     onOpenTrash = onOpenTrash,
@@ -256,6 +236,17 @@ fun ItemsScreen(
             }
         }
     }
+
+    DisplayOptionsHost(
+        visible = displayOptionsOpen,
+        groupMode = groupMode,
+        cardDisplayMode = cardDisplayMode,
+        showIcon = showIcon,
+        onDismiss = { displayOptionsOpen = false },
+        onGroupMode = viewModel::setGroupMode,
+        onCardDisplayMode = viewModel::setCardDisplayMode,
+        onShowIcon = viewModel::setShowIcon,
+    )
 
     if (showCreateDialog) {
         CreateItemDialog(
@@ -268,6 +259,74 @@ fun ItemsScreen(
             },
         )
     }
+}
+
+/** 分组（纯逻辑在 [groupItems]；不分组时只有一项、标题为空 → UI 不画分组头）。 */
+@Composable
+private fun rememberGroupedItems(
+    visibleItems: List<VaultItem>,
+    folders: List<VaultFolder>,
+    groupMode: ItemsGroupMode,
+): List<ItemsGroup> {
+    val context = LocalContext.current
+    return remember(visibleItems, folders, groupMode) {
+        groupItems(
+            items = visibleItems,
+            folders = folders,
+            mode = groupMode,
+            typeLabel = { context.getString(itemTypeLabelRes(it.type)) },
+            unnamedLabel = context.getString(R.string.items_item_unnamed),
+            noFolderLabel = context.getString(R.string.items_group_no_folder),
+        )
+    }
+}
+
+/** 保存 / 删除事件的 Snackbar 提示（抽出来压主函数的行数）。 */
+@Composable
+private fun SaveEventSnackbar(
+    viewModel: ItemsViewModel,
+    hostState: SnackbarHostState,
+) {
+    val context = LocalContext.current
+    LaunchedEffect(Unit) {
+        viewModel.saveEvents.collect { event ->
+            val message = when (event) {
+                ItemsViewModel.SaveEvent.SavedSynced ->
+                    context.getString(R.string.item_saved_synced)
+                ItemsViewModel.SaveEvent.SavedQueued ->
+                    context.getString(R.string.item_saved_queued)
+                is ItemsViewModel.SaveEvent.Failed ->
+                    context.getString(R.string.item_save_failed, event.message)
+                is ItemsViewModel.SaveEvent.Deleted ->
+                    context.getString(R.string.items_deleted_to_trash, event.title)
+            }
+            hostState.showSnackbar(message)
+        }
+    }
+}
+
+/** 显示选项弹层的宿主（`visible=false` 时什么都不渲染）。 */
+@Composable
+private fun DisplayOptionsHost(
+    visible: Boolean,
+    groupMode: ItemsGroupMode,
+    cardDisplayMode: ItemsCardDisplayMode,
+    showIcon: Boolean,
+    onDismiss: () -> Unit,
+    onGroupMode: (ItemsGroupMode) -> Unit,
+    onCardDisplayMode: (ItemsCardDisplayMode) -> Unit,
+    onShowIcon: (Boolean) -> Unit,
+) {
+    if (!visible) return
+    DisplayOptionsSheet(
+        groupMode = groupMode,
+        cardDisplayMode = cardDisplayMode,
+        showIcon = showIcon,
+        onDismiss = onDismiss,
+        onGroupMode = onGroupMode,
+        onCardDisplayMode = onCardDisplayMode,
+        onShowIcon = onShowIcon,
+    )
 }
 
 /** 搜索态顶栏（固定高度，见 [VaultixSearchTopAppBar]）。 */
@@ -299,9 +358,8 @@ private fun BoxScope.ItemsTopBar(
     title: String,
     collapseFraction: Float,
     embedded: Boolean,
-    groupMode: ItemsGroupMode,
     onBack: () -> Unit,
-    onGroupMode: (ItemsGroupMode) -> Unit,
+    onDisplayOptions: () -> Unit,
     onToggleSearch: () -> Unit,
     onOpenTotp: () -> Unit,
     onOpenTrash: () -> Unit,
@@ -325,7 +383,12 @@ private fun BoxScope.ItemsTopBar(
             }
         },
         actions = {
-            GroupModeButton(current = groupMode, onSelect = onGroupMode)
+            IconButton(onClick = onDisplayOptions) {
+                Icon(
+                    Icons.Filled.ViewAgenda,
+                    contentDescription = stringResource(R.string.items_display_options),
+                )
+            }
             ItemsActions(
                 onToggleSearch = onToggleSearch,
                 onOpenTotp = onOpenTotp,
@@ -335,41 +398,6 @@ private fun BoxScope.ItemsTopBar(
             )
         },
     )
-}
-
-/** 分组方式按钮（自带菜单展开态，调用方不必再持有一个 `expanded` 状态）。 */
-@Composable
-private fun GroupModeButton(
-    current: ItemsGroupMode,
-    onSelect: (ItemsGroupMode) -> Unit,
-) {
-    var expanded by remember { mutableStateOf(false) }
-    IconButton(onClick = { expanded = true }) {
-        Icon(
-            Icons.Filled.ViewAgenda,
-            contentDescription = stringResource(R.string.items_group_mode),
-        )
-    }
-    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-        ItemsGroupMode.entries.forEach { mode ->
-            DropdownMenuItem(
-                text = { Text(stringResource(groupModeLabelRes(mode))) },
-                onClick = {
-                    onSelect(mode)
-                    expanded = false
-                },
-                trailingIcon = {
-                    if (mode == current) {
-                        Icon(
-                            Icons.Filled.Check,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                        )
-                    }
-                },
-            )
-        }
-    }
 }
 
 /**
@@ -384,6 +412,8 @@ private fun ItemsList(
     listState: LazyListState,
     grouped: Boolean,
     collapsedGroups: Set<String>,
+    displayMode: ItemsCardDisplayMode,
+    showIcon: Boolean,
     onToggleGroup: (String) -> Unit,
     onOpenItem: (VaultItem) -> Unit,
     onDelete: (VaultItem) -> Unit,
@@ -411,7 +441,12 @@ private fun ItemsList(
                 items(group.items, key = { it.id }) { item ->
                     // 「按住 → 向左滑 → 松手」删除（软删除进回收站，见 ItemsViewModel.deleteItem）。
                     PressAndSwipeToDelete(onDelete = { onDelete(item) }) {
-                        ItemRow(item = item, onClick = { onOpenItem(item) })
+                        ItemRow(
+                            item = item,
+                            displayMode = displayMode,
+                            showIcon = showIcon,
+                            onClick = { onOpenItem(item) },
+                        )
                     }
                 }
             }
@@ -656,16 +691,15 @@ private fun GroupHeader(
     }
 }
 
-private fun groupModeLabelRes(mode: ItemsGroupMode): Int = when (mode) {
-    ItemsGroupMode.None -> R.string.items_group_none
-    ItemsGroupMode.Type -> R.string.items_group_type
-    ItemsGroupMode.Folder -> R.string.items_group_folder
-    ItemsGroupMode.Initial -> R.string.items_group_initial
-}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ItemRow(item: VaultItem, onClick: () -> Unit) {
+private fun ItemRow(
+    item: VaultItem,
+    displayMode: ItemsCardDisplayMode,
+    showIcon: Boolean,
+    onClick: () -> Unit,
+) {
     // 卡片外框规格见 [EntryCard]（对齐 Bastion PasswordEntryCard：M3 默认 Card 底色/高度 +
     // 12dp 圆角 + 16dp 内边距 + 标题 SemiBold + 6dp 行距）。
     EntryCard(onClick = onClick) {
@@ -673,20 +707,22 @@ private fun ItemRow(item: VaultItem, onClick: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Box(
-                contentAlignment = Alignment.Center,
-                modifier = Modifier
-                    .size(EntryCardIconSize)
-                    .background(MaterialTheme.colorScheme.surfaceContainerHigh, CircleShape),
-            ) {
-                Text(
-                    text = item.title.take(1).uppercase(),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            if (showIcon) {
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .size(EntryCardIconSize)
+                        .background(MaterialTheme.colorScheme.surfaceContainerHigh, CircleShape),
+                ) {
+                    Text(
+                        text = item.title.take(1).uppercase(),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Spacer(Modifier.width(EntryCardIconSpacing))
             }
-            Spacer(Modifier.width(EntryCardIconSpacing))
             Column(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(EntryCardTextSpacing),
@@ -696,17 +732,28 @@ private fun ItemRow(item: VaultItem, onClick: () -> Unit) {
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                 )
-                if (item.username.isNotBlank()) {
+                // 信息密度（对齐 Bastion PasswordCardDisplayMode）：
+                // TitleOnly 只留标题；TitleUsername 只显示用户名；All 显示用户名或类型徽标。
+                if (displayMode == ItemsCardDisplayMode.All && item.username.isNotBlank()) {
                     Text(
                         text = item.username,
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                } else if (item.type != VaultItemType.Login) {
+                } else if (displayMode == ItemsCardDisplayMode.All && item.type != VaultItemType.Login) {
                     Text(
                         text = stringResource(itemTypeLabelRes(item.type)),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.primary,
+                    )
+                } else if (displayMode == ItemsCardDisplayMode.TitleUsername &&
+                    item.type == VaultItemType.Login &&
+                    item.username.isNotBlank()
+                ) {
+                    Text(
+                        text = item.username,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }

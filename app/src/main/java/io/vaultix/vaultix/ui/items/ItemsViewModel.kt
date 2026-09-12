@@ -171,6 +171,31 @@ class ItemsViewModel @Inject constructor(
         viewModelScope.launch { preferences.setItemsGroupMode(mode.storageKey) }
     }
 
+    /** 卡片信息密度（全部 / 标题+用户名 / 仅标题），对齐 Bastion `PasswordCardDisplayMode`。 */
+    val cardDisplayMode: StateFlow<ItemsCardDisplayMode> = preferences.itemsCardDisplayMode
+        .map(ItemsCardDisplayMode::from)
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.Eagerly,
+            initialValue = ItemsCardDisplayMode.All,
+        )
+
+    fun setCardDisplayMode(mode: ItemsCardDisplayMode) {
+        viewModelScope.launch { preferences.setItemsCardDisplayMode(mode.storageKey) }
+    }
+
+    /** 卡片是否显示左侧图标（对齐 Bastion `iconCardsEnabled`）。 */
+    val showIcon: StateFlow<Boolean> = preferences.itemsShowIcon
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.Eagerly,
+            initialValue = true,
+        )
+
+    fun setShowIcon(enabled: Boolean) {
+        viewModelScope.launch { preferences.setItemsShowIcon(enabled) }
+    }
+
     /**
      * 列表内「按住后滑动删除」：走**软删除**（进回收站，可恢复 / 也可在回收站永久删除）。
      *

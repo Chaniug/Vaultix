@@ -123,3 +123,17 @@ private fun initialOf(title: String): String {
     val upper = first.uppercaseChar()
     return if (upper in 'A'..'Z') upper.toString() else OTHER_INITIAL
 }
+
+/**
+ * 分组方式的中文名（显示选项弹层与设置页共用）。
+ *
+ * 放在本文件而不是 `ItemsScreen.kt`：后者是 private-in-file，弹层与设置页都要用，
+ * 放这里定义一次即可（两个界面文案不会漂移）。
+ */
+@androidx.annotation.StringRes
+internal fun groupModeLabelRes(mode: ItemsGroupMode): Int = when (mode) {
+    ItemsGroupMode.None -> io.vaultix.vaultix.R.string.items_group_none
+    ItemsGroupMode.Type -> io.vaultix.vaultix.R.string.items_group_type
+    ItemsGroupMode.Folder -> io.vaultix.vaultix.R.string.items_group_folder
+    ItemsGroupMode.Initial -> io.vaultix.vaultix.R.string.items_group_initial
+}

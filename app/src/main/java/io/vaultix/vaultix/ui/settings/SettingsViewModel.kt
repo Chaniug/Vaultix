@@ -19,6 +19,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import io.vaultix.vaultix.ui.items.ItemsCardDisplayMode
+import io.vaultix.vaultix.ui.items.ItemsGroupMode
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
@@ -179,6 +181,46 @@ class SettingsViewModel @Inject constructor(
 
     fun setFillAssistEnabled(enabled: Boolean) {
         viewModelScope.launch { preferences.setFillAssistEnabled(enabled) }
+    }
+
+    // ---- 条目列表显示选项（与密码 Tab 的「显示选项」弹层共用同一份偏好）----
+
+    /** 分组方式（不分组 / 类型 / 文件夹 / 首字母）。 */
+    val itemsGroupMode: StateFlow<ItemsGroupMode> = preferences.itemsGroupMode
+        .map(ItemsGroupMode::from)
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = ItemsGroupMode.None,
+        )
+
+    fun setItemsGroupMode(mode: ItemsGroupMode) {
+        viewModelScope.launch { preferences.setItemsGroupMode(mode.storageKey) }
+    }
+
+    /** 卡片信息密度（全部 / 标题+用户名 / 仅标题）。 */
+    val itemsCardDisplayMode: StateFlow<ItemsCardDisplayMode> = preferences.itemsCardDisplayMode
+        .map(ItemsCardDisplayMode::from)
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = ItemsCardDisplayMode.All,
+        )
+
+    fun setItemsCardDisplayMode(mode: ItemsCardDisplayMode) {
+        viewModelScope.launch { preferences.setItemsCardDisplayMode(mode.storageKey) }
+    }
+
+    /** 卡片是否显示左侧图标。 */
+    val itemsShowIcon: StateFlow<Boolean> = preferences.itemsShowIcon
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = true,
+        )
+
+    fun setItemsShowIcon(enabled: Boolean) {
+        viewModelScope.launch { preferences.setItemsShowIcon(enabled) }
     }
 
     /**

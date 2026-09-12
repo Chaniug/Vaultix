@@ -72,6 +72,8 @@ class VaultixPreferences @Inject constructor(
         val AUTOFILL_EXACT_DOMAIN_ONLY = booleanPreferencesKey("autofill_exact_domain_only")
         val FILL_ASSIST_ENABLED = booleanPreferencesKey("fill_assist_enabled")
         val ITEMS_GROUP_MODE = stringPreferencesKey("items_group_mode")
+        val ITEMS_CARD_DISPLAY_MODE = stringPreferencesKey("items_card_display_mode")
+        val ITEMS_SHOW_ICON = booleanPreferencesKey("items_show_icon")
 
         const val DEFAULT_CLIPBOARD_CLEAR_MS = 30 * 1000L
     }
@@ -203,6 +205,23 @@ class VaultixPreferences @Inject constructor(
     val itemsGroupMode: Flow<String> =
         safeData.map { it[ITEMS_GROUP_MODE] ?: "none" }
 
+    /**
+     * 条目卡片的**信息密度**（`all` / `title_username` / `title_only`）。
+     *
+     * 语义对齐 Bastion `PasswordCardDisplayMode`（SHOW_ALL / TITLE_USERNAME / TITLE_ONLY）：
+     * 卡片上到底显示多少字段。默认 `all`（标题 + 用户名/类型徽标，与历史观感一致）。
+     */
+    val itemsCardDisplayMode: Flow<String> =
+        safeData.map { it[ITEMS_CARD_DISPLAY_MODE] ?: "all" }
+
+    /**
+     * 条目卡片是否显示**左侧图标**（字母头像 / 品牌图标）。
+     *
+     * 对齐 Bastion `iconCardsEnabled`。关掉后卡片只剩文字，密度更高、也少一层绘制。
+     */
+    val itemsShowIcon: Flow<Boolean> =
+        safeData.map { it[ITEMS_SHOW_ICON] ?: true }
+
     val defaultVaultId: Flow<String?> = safeData.map { it[DEFAULT_VAULT_ID] }
 
     /**
@@ -292,6 +311,16 @@ class VaultixPreferences @Inject constructor(
     /** 条目列表分组方式（`none` / `type` / `folder` / `initial`）。 */
     suspend fun setItemsGroupMode(mode: String) {
         dataStore.edit { it[ITEMS_GROUP_MODE] = mode }
+    }
+
+    /** 条目卡片信息密度（`all` / `title_username` / `title_only`）。 */
+    suspend fun setItemsCardDisplayMode(mode: String) {
+        dataStore.edit { it[ITEMS_CARD_DISPLAY_MODE] = mode }
+    }
+
+    /** 条目卡片是否显示左侧图标。 */
+    suspend fun setItemsShowIcon(enabled: Boolean) {
+        dataStore.edit { it[ITEMS_SHOW_ICON] = enabled }
     }
 
     suspend fun setDefaultVaultId(id: String?) {
