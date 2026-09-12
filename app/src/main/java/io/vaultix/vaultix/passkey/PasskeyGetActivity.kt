@@ -370,50 +370,38 @@ class PasskeyGetActivity : FragmentActivity() {
         runCatching {
             val json = JSONObject(requestJson)
             val challenge = decodeChallenge(json.getString("challenge"))
-            // ⚠️ **两条流程的 clientDataJSON 是两种东西，不能混用（2026-09-11 修正）**
+            // ⚠️ **两条流程的 clientDataJSON 是两种东西，不能混用（2026-09-12 二次修正）**
             //
-            // 之前的写法（已证伪）：浏览器流程里"逐字节复刻浏览器的 clientDataJSON"再回传。
-            // 之所以错，是因为 RP 校验时用的 clientDataJSON 是**网页交给它的那一份**，
-            // 不是 authenticator 回传的那一份；而 provider 根本拿不到浏览器那份 JSON 的
-            // 明文（浏览器只给 32 字节 SHA-256 哈希）。自造的 JSON 永远不可能与浏览器
-            // 逐字节相同 → RP 拿自己的 JSON 重新哈希后与签名里的哈希对不上 → 验签失败
-            // → 站点报 "Authentication failed"。
+            // 上一版（2026-09-11）在此回传 `ByteArray(0)` 占位符，依据是官方文档那句
+            // "set a placeholder value for clientDataJSON"。该句有**前置条件**
+            // `If you retrieve an origin` —— 特指经 `CallingAppInfo.getOrigin(privilegedAllowlist)`
+            // + 特权应用名单拿到 origin 的场景（Google Password Manager 走那条路）。
+            // Vaultix 的 `CallingAppOrigin` 走「自证式读取」、**不用特权名单**，故不适用。
             //
-            // 官方口径（Android 凭据提供方文档，developer.android.com/identity/sign-in/credential-provider）：
-            // "use the clientDataHash that's provided directly in ... GetPublicKeyCredentialOption()
-            //  instead of assembling and hashing clientDataJSON during the signature request.
-            //  To avoid JSON parsing issues, **set a placeholder value for clientDataJSON
-            //  in the attestation and assertion response**."
+            // 规范层面 RP 一定会解析 clientDataJSON **明文**逐项校验（W3C WebAuthn L2 §7.2）：
+            //   - `C.type` 必须为 "webauthn.get"；
+            //   - `C.challenge` 必须等于 base64url(options.challenge)；
+            //   - `C.origin` 必须与 RP origin 匹配。
+            // 空字节数组连 JSON 解析都过不了 → 站点报 "Security key authentication failed"。
             //
-            // 所以分两条路：
-            // - 浏览器流程（有 clientDataHash）：签名只覆盖 `authData ‖ clientDataHash`（系统给的哈希，
-            //   即浏览器那份真实 JSON 的哈希）；回传的 clientDataJSON 只放占位符 —— 它不参与
-            //   任何密码学校验，只为了填满协议字段。
-            // - 原生 App 流程（没有 clientDataHash）：本模块自己拼 JSON、自己哈希、自己签，
-            //   回传的必须是**同一份** JSON（这种场合 RP 用的就是 provider 给的那份）。
-            //
-            // 参考实现对照：Bitwarden 把这件事整体交给 SDK（`ClientData.DefaultWithCustomHash(hash)`
-            // 与 `DefaultWithExtraData(androidPackageName)` 二选一，Android 侧从不重建 JSON）；
-            // Bastion / Keyguard 与旧版 Vaultix 一样仍在重建 JSON，属于同一类缺陷。
-            val clientDataBytes = if (clientDataHash != null) {
-                WebAuthn.BROWSER_FLOW_CLIENT_DATA_PLACEHOLDER
-            } else {
-                WebAuthn.buildClientDataJson(
-                    type = "webauthn.get",
-                    challenge = challenge,
-                    origin = origin,
-                    includeCrossOrigin = true,
-                )
-            }
-            if (clientDataHash != null) {
-                // 现场诊断：占位符方案下这里恒为 false，属**预期行为**，不再是故障信号。
-                AutofillLogger.d(
-                    "assertion origin=$origin browserFlow=true " +
-                        "jsonMatchesBrowserHash=" +
-                        "${WebAuthn.clientDataJsonMatchesHash(clientDataBytes, clientDataHash)} " +
-                        "pkg=$callerPackageName",
-                )
-            }
+            // 两条流程的**唯一差别**是签名覆盖哪份哈希（见下方 signature 分支）；
+            // 回传的 clientDataJSON 一律是这份自建的真实 JSON —— 它供 RP 读明文校验，
+            // 与签名用的哈希互不冲突。androidPackageName 一律传 null：浏览器那份 JSON
+            // 没有该字段，写进去会让 RP 重算哈希时与浏览器签名值不符（Bastion 实测：
+            // Microsoft 登录失败）。
+            val clientDataBytes = WebAuthn.buildGetClientDataJson(
+                challenge = challenge,
+                origin = origin,
+                includeCrossOrigin = true,
+                androidPackageName = null,
+            )
+            // 仅日志诊断：浏览器流程下通常为 false 属预期（系统那份哈希来自浏览器）。
+            AutofillLogger.d(
+                "assertion origin=$origin browserFlow=${clientDataHash != null} " +
+                    "cdjLen=${clientDataBytes.size} jsonMatchesBrowserHash=" +
+                    "${WebAuthn.clientDataJsonMatchesHash(clientDataBytes, clientDataHash)} " +
+                    "pkg=$callerPackageName",
+            )
             val authData = WebAuthn.buildAuthenticatorData(
                 rpId = rpId,
                 userPresent = true,

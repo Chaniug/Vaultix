@@ -175,9 +175,11 @@ object WebAuthn {
      *
      * `null` 表示非浏览器流程（没有外部哈希可比）。
      *
-     * ⚠️ 浏览器流程下这个值**恒为 false 属预期**：系统给的是浏览器那份 JSON 的哈希，
-     * 而 provider 只能回传占位符（[BROWSER_FLOW_CLIENT_DATA_PLACEHOLDER]），两者本就不该相等。
-     * 不要再据此"反选"自造 JSON 的变体——那是 2026-09-11 修掉的那条错路（见 [buildClientDataJson]）。
+     * ⚠️ **浏览器流程下这个值通常为 false，且不影响功能**：系统给的哈希来自**浏览器**那份
+     * JSON，而 provider 只能自建一份语义等价的 JSON（字段齐全，但字节不一定逐字节相同）。
+     * 规范不要求两者逐字节相等 —— RP 校验的是 `C.challenge` / `C.type` / `C.origin`
+     * 三项语义，签名则覆盖系统给的哈希。故本函数**只用于日志诊断**，
+     * 不得据此"反选"JSON 变体（那是 2026-09-11 修掉的那条错路）。
      */
     fun clientDataJsonMatchesHash(json: ByteArray, expectedHash: ByteArray?): Boolean? =
         expectedHash?.let { sha256(json).contentEquals(it) }
@@ -344,48 +346,61 @@ object WebAuthn {
     }
 
     /**
-     * 浏览器流程回传的 `clientDataJSON` 占位符。
+     * 构造 `clientDataJSON`（**注册与断言两条流程都必须调用**）。
      *
-     * 官方要求（Android 凭据提供方文档 `developer.android.com/identity/sign-in/credential-provider`）：
-     * > use the `clientDataHash` that's provided directly in `CreatePublicKeyCredentialRequest()`
-     * > or `GetPublicKeyCredentialOption()` instead of assembling and hashing clientDataJSON
-     * > during the signature request. To avoid JSON parsing issues, **set a placeholder value
-     * > for `clientDataJSON` in the attestation and assertion response.**
+     * ## 为什么必须始终自建真实 JSON，而不能回传占位符（2026-09-12 二次修正）
      *
-     * 原因是 provider 与 RP 看到的 `clientDataJSON` 不是同一份：
-     * - provider 只拿到 32 字节 `clientDataHash`（浏览器那份 JSON 的 SHA-256），拿不到明文；
-     * - 网页交给 RP 的是**浏览器自己那份** JSON，RP 用它重新哈希后与签名里的哈希比对。
+     * 依 **W3C WebAuthn Level 2** 规范，RP 在两条流程里都会解析 `clientDataJSON` **明文**
+     * 并逐项校验（§7.1 Registering a New Credential / §7.2 Verifying an Authentication Assertion）：
      *
-     * 因此 provider 自造 JSON 回传没有任何意义（永远逐字节不同），只会让"复刻浏览器 JSON"
-     * 这种反推尝试变成误导。占位符是空字节数组：它不参与任何密码学校验，只为填满协议字段。
-     * 参照 Bitwarden：Android 侧从不重建 JSON，整体交给 SDK 的
-     * `ClientData.DefaultWithCustomHash(hash)` / `DefaultWithExtraData(androidPackageName)`。
-     */
-    val BROWSER_FLOW_CLIENT_DATA_PLACEHOLDER: ByteArray = ByteArray(0)
-
-    /** WebAuthn `clientDataJSON`：依赖方校验 origin 的关键字段。 */
-    /**
-     * 构造 clientDataJSON（**仅限原生 App 流程**使用）。
+     * > Let JSONtext be the result of running UTF-8 decode on the value of response.clientDataJSON.
+     * > Let C ... be the result of running an implementation-specific JSON parser on JSONtext.
+     * > - Verify that the value of `C.type` is the string `webauthn.create`（断言为 `webauthn.get`）.
+     * > - Verify that the value of `C.challenge` equals **the base64url encoding of options.challenge**.
+     * > - Verify that the value of `C.origin` matches the Relying Party's origin.
      *
-     * 调用方拼的 JSON、签的哈希、回传的 JSON 必须是**同一份字节**，RP 才会验签通过。
-     * 原生流程里系统没有给 `clientDataHash`，三者都由本模块产出，所以成立。
+     * 而 §5.8.1.1 `CollectedClientData` 对字段的定义同样是明文：
+     * `type` = `"webauthn.create"`、`challenge` = **the base64url encoding of options.challenge**、
+     * `origin` = the serialization of callerOrigin、`crossOrigin` = the inverse of sameOriginWithAncestors。
      *
-     * ⚠️ **浏览器流程不要调这个函数**（2026-09-11 修正）。旧注释声称"浏览器流程必须逐字节
-     * 复刻浏览器版 JSON，否则 RP 再哈希对不上"——这个因果是错的：provider 从一开始就拿不到
-     * 浏览器那份 JSON 的明文（系统只给 32 字节哈希），RP 校验用的是**网页交给它的**那份
-     * JSON。因此浏览器流程应当直接放 [BROWSER_FLOW_CLIENT_DATA_PLACEHOLDER]，
-     * 签名只覆盖 `authData ‖ clientDataHash`（见 [signAssertionHash]）。
+     * ⇒ **回传空字节 / 占位符必然让 `C.challenge` 校验失败**（JSON 解析都过不了），
+     *   站点会报 "Security key authentication failed" 之类错误。
      *
-     * 反面教材：Bastion `PasskeyAuthActivity.createClientDataJson` 与 Keyguard
-     * `PasskeyProviderGetRequest` 都还在重建 JSON，属同一类缺陷，不可作为依据。
+     * ## 与 Android 官方文档的关系（旧注释的误读已订正）
      *
-     * @param includeCrossOrigin 原生流程保留 `crossOrigin` 以贴近规格。
+     * 官方文档（`developer.android.com/identity/sign-in/credential-provider`）确有一句：
+     * > **If you retrieve an origin**, use the `clientDataHash` ... instead of assembling and hashing
+     * > clientDataJSON during the signature request. To avoid JSON parsing issues, set a placeholder
+     * > value for clientDataJSON in the attestation and assertion response.
+     *
+     * 但该句有**前置条件**：`If you retrieve an origin` —— 特指通过
+     * `CallingAppInfo.getOrigin(privilegedAllowlist)` + 特权应用名单拿到 origin 的场景
+     * （Google Password Manager 走那条路，并由系统侧完成 challenge 校验）。
+     * Vaultix 的 [io.vaultix.vaultix.passkey.CallingAppOrigin] 明确采用「自证式读取」、
+     * **不走特权名单**，故不适用占位符。**且规范层面 RP 仍要读明文做 `C.challenge` 校验** ——
+     * 两者冲突时以规范为准。参照 Bastion `PasskeyCreateActivity`：
+     * > 无论调用方是否提供 clientDataHash，始终回传真实 clientDataJSON，
+     * > 避免部分调用方因 placeholder 拒绝注册响应。
+     *
+     * ## 签名用哪个哈希（浏览器流程的关键约束）
+     *
+     * - **浏览器流程**（系统给了 `clientDataHash`）：签名**必须**覆盖
+     *   `authData ‖ clientDataHash`（浏览器那份真实 JSON 的 SHA-256），见 [signAssertionHash]；
+     *   但**回传**的 `clientDataJSON` 仍要是自建的真实 JSON —— 回传字段供 RP 读明文校验，
+     *   签名哈希保证与浏览器一致，二者互不冲突。
+     * - **原生流程**：签名覆盖 `authData ‖ sha256(自建 JSON)`，见 [signAssertion]。
+     *
+     * @param includeCrossOrigin 是否写入 `crossOrigin`（规范字段，RP 会读）。
+     * @param androidPackageName 原生 App 流程可带（Google GMS 既定做法）；
+     *   **浏览器流程必须传 null** —— 浏览器那份 JSON 里没有该字段，塞进去会让
+     *   RP 对回传 JSON 重算哈希时与浏览器签名值不符（Bastion 实测：Microsoft 登录失败）。
      */
     fun buildClientDataJson(
         type: String,
         challenge: ByteArray,
         origin: String,
         includeCrossOrigin: Boolean = true,
+        androidPackageName: String? = null,
     ): ByteArray {
         val challengeB64 = base64Url(challenge)
         val json = buildString {
@@ -395,11 +410,48 @@ object WebAuthn {
             append(quote(challengeB64))
             append(",\"origin\":")
             append(quote(origin))
+            if (!androidPackageName.isNullOrBlank()) {
+                append(",\"androidPackageName\":")
+                append(quote(androidPackageName))
+            }
             if (includeCrossOrigin) append(",\"crossOrigin\":false")
             append("}")
         }
         return json.toByteArray(Charsets.UTF_8)
     }
+
+    /**
+     * 构造**注册**（`webauthn.create`）用的 clientDataJSON。
+     * 语义与字段顺序对齐 Bastion `PasskeyCreateActivity.buildCreateClientDataJsonBytes`。
+     */
+    fun buildCreateClientDataJson(
+        challenge: ByteArray,
+        origin: String,
+        androidPackageName: String? = null,
+    ): ByteArray = buildClientDataJson(
+        type = "webauthn.create",
+        challenge = challenge,
+        origin = origin,
+        includeCrossOrigin = true,
+        androidPackageName = androidPackageName,
+    )
+
+    /**
+     * 构造**断言**（`webauthn.get`）用的 clientDataJSON。
+     * 语义与字段顺序对齐 Bastion `PasskeyAuthActivity`。
+     */
+    fun buildGetClientDataJson(
+        challenge: ByteArray,
+        origin: String,
+        includeCrossOrigin: Boolean = true,
+        androidPackageName: String? = null,
+    ): ByteArray = buildClientDataJson(
+        type = "webauthn.get",
+        challenge = challenge,
+        origin = origin,
+        includeCrossOrigin = includeCrossOrigin,
+        androidPackageName = androidPackageName,
+    )
 
     /**
      * 构造 authenticatorData。

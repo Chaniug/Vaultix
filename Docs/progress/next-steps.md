@@ -1,6 +1,61 @@
 # 下一步任务清单
 
-> ## 【最新】第三十八轮（2026-09-12）：通行密钥「登录最后一步校验失败」根因修复
+> ## 【最新】第三十九轮（2026-09-12）：通行密钥 `clientDataJSON` 占位符错误回退（标准合规）
+>
+> 用户实测 **GitHub 注册通行密钥**报 `Security key authentication failed`，并要求
+> 「**按照标准改对，不要失误，不要自己乱加。应该是有标准的才对。**」
+> —— 本轮**逐字拉 W3C 规范原文核对**后，确认第三十轮引入的「占位符」方案本身是错的，予以回退。
+>
+> **① 根因：浏览器流程回传空 `clientDataJSON`，违反规范 §5.8.1.1 / §7.1 / §7.2**
+>
+> 第三十轮（`90d5e6d`）依据 Android 官方文档那句
+> `To avoid JSON parsing issues, set a placeholder value for clientDataJSON`
+> 把浏览器流程的 `clientDataJSON` 改成 `ByteArray(0)`。**该句有前置条件**：
+> > **If you retrieve an origin**, use the `clientDataHash` ...
+>
+> 指经 `CallingAppInfo.getOrigin(privilegedAllowlist)` + **特权应用名单**拿到 origin 的场景
+> （Google Password Manager 走那条路，challenge 校验由系统侧完成）。
+> Vaultix 的 `CallingAppOrigin` 明确走「**自证式读取**」、**不用特权名单** ⇒ 不适用占位符。
+>
+> 而规范层面 RP **一定**解析 `clientDataJSON` 明文逐项校验：
+> > **§7.1** Let JSONtext be the result of running UTF-8 decode on `response.clientDataJSON`.
+> > Let C be the result of running a JSON parser on JSONtext.
+> > - Verify that `C.type` is `webauthn.create`.
+> > - Verify that `C.challenge` equals **the base64url encoding of `options.challenge`**.
+> > - Verify that `C.origin` matches the Relying Party's origin.
+>
+> **§5.8.1.1 `CollectedClientData`** 对字段的定义同样是明文：
+> `challenge` = **the base64url encoding of options.challenge**、`origin` = the serialization of callerOrigin。
+> ⇒ **空字节数组连 JSON 解析都过不了**，`C.challenge` 校验必然失败。
+>
+> **② 修法：回传自建真实 JSON，两条流程唯一差别是「签名覆盖哪份哈希」**
+> | 文件 | 改动 |
+> |---|---|
+> | `core/common/WebAuthn.kt` | **删除** `BROWSER_FLOW_CLIENT_DATA_PLACEHOLDER`；`buildClientDataJson` 增 `androidPackageName` 参数；新增语义化封装 **`buildCreateClientDataJson`** / **`buildGetClientDataJson`**；重写 KDoc 引规范 §5.8.1.1/§7.1/§7.2 原文 + 官方文档条件句 + Bastion 依据 |
+> | `passkey/PasskeyProviderIntents.kt` | `createIntent` 补 **`clientDataHash: ByteArray? = null`**（对齐 GET 侧的 `getIntent`）+ `putExtra(EXTRA_CLIENT_DATA_HASH)` |
+> | `passkey/VaultixCredentialProviderService.kt` | `buildCreateResponse` 透传 `(request.callingRequest as? CreatePublicKeyCredentialRequest)?.clientDataHash` |
+> | `passkey/PasskeyCreateActivity.kt` | 删占位符分支，始终 `buildCreateClientDataJson(..., androidPackageName = null)`；接收 `clientDataHash` 只做自检日志；**origin 推导顺序改为 `requestJson.origin` → `CallingAppOrigin` → `https://$rpId`**（对齐 Bastion `PasskeyOriginResolver`） |
+> | `passkey/PasskeyGetActivity.kt` | **回退**占位符改动，改 `buildGetClientDataJson(..., androidPackageName = null)`；签名仍用 `clientDataHash ?: sha256(自建 JSON)` |
+> | `core/common/.../WebAuthnTest.kt` | 改写 2 个已失效的占位符用例为 **`browser flow signs provided hash and returns real clientDataJSON`** / **`create response always carries real clientDataJSON`**，新增断言「非空 + challenge 为 base64url 形态 + type/origin 正确 + 浏览器流程不含 `androidPackageName`」 |
+>
+> **③ 关键区分（本轮核心结论，勿再混淆）**
+> | 事项 | 浏览器流程 | 原生 App 流程 |
+> |---|---|---|
+> | **签名**覆盖 | `authData ‖ clientDataHash`（系统给的） | `authData ‖ sha256(自建 JSON)` |
+> | **回传** `clientDataJSON` | **自建真实 JSON** | **自建真实 JSON**（同一份） |
+> | `androidPackageName` | **不写**（浏览器那份没有该字段，写了会让 RP 重算哈希与浏览器不符 —— Bastion 实测 Microsoft 登录失败） | 可写 |
+>
+> **④ 验证（沙箱真跑）**
+> - `:core:common:testDebugUnitTest` → **95 用例 0 失败**（含改写后的 3 条 clientDataJSON 回归锁）
+> - `:app:compileFullDebugKotlin` → **BUILD SUCCESSFUL**
+> - 改动文件超 120 字符行长 = 0（detekt `MaxLineLength`）
+>
+> **待真机验收**：GitHub 注册通行密钥（此前报 `Security key authentication failed`）+ 登录，
+> 两条都应通过；`logcat` 抓 `PK create clientDataJson ... jsonMatchesBrowserHash=` ，
+> 该值为 `false` 属**预期**（系统那份哈希来自浏览器），不再是故障信号。
+>
+
+> ## 【已归档】第三十八轮（2026-09-12）：通行密钥「登录最后一步校验失败」根因修复
 >
 > 用户反馈：「通行密钥能够读取到，能够进入登录，在**最终校验**的时候提示错误。」
 > 定位到一条**一字节都不对**的硬伤，已修复并加回归锁。
@@ -58,7 +113,7 @@
 > **待真机验收**：用 Google/Edge 打开某站点 passkey 登录，确认最终校验不再报错。
 >
 
-> ## 【最新】第三十七轮（2026-09-12）：阶段 2 收尾 —— **活跃库真源收敛 + 门禁治理**
+> ## 【已归档】第三十七轮（2026-09-12）：阶段 2 收尾 —— **活跃库真源收敛 + 门禁治理**
 >
 > 承接上一轮「修复，然后把 bastion 的 ui 都准备开始搬过来」，本轮把迁移文档里
 > 「★ 全局活跃库真源」那一格**整格做掉**，并顺手清掉三处 detekt 超标。

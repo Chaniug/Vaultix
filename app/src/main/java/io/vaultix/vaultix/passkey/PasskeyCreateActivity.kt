@@ -59,7 +59,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
-import androidx.credentials.CreatePublicKeyCredentialRequest
 import androidx.credentials.CreatePublicKeyCredentialResponse
 import androidx.credentials.exceptions.CreateCredentialCancellationException
 import androidx.credentials.exceptions.CreateCredentialException
@@ -75,6 +74,7 @@ import io.vaultix.model.VaultFido2Credential
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.autofill.AutofillLogger
 import io.vaultix.vaultix.session.ActiveVaultStore
 import io.vaultix.vaultix.ui.theme.VaultixTheme
 import kotlinx.coroutines.Dispatchers
@@ -108,15 +108,27 @@ class PasskeyCreateActivity : FragmentActivity() {
     private var origin: String = ""
 
     /**
+     * 浏览器流程下系统给出的 `clientDataHash`（原生流程为 null）。
+     *
+     * ⚠️ **注册流程（attestation = `none`）没有任何签名**，所以它不参与密码学运算，
+     * 只用于**自检对比**：把自建的 `clientDataJSON` 哈希一遍，与系统给的这份比对并打日志。
+     * 二者通常不相等（系统那份来自浏览器），属**预期**，不是故障信号——
+     * RP 校验的是 `clientDataJSON` 明文的 `type` / `challenge` / `origin` 三项语义
+     * （W3C WebAuthn L2 §7.1），不是逐字节相等。
+     */
+    private var clientDataHash: ByteArray? = null
+
+    /**
      * 是否浏览器发起的创建请求（系统给了 `clientDataHash`）。
      *
-     * ⚠️ 为真时回传的 `clientDataJSON` **只放占位符**（2026-09-11 修正）：
-     * 浏览器手里那份 JSON 的哈希由系统给了我们（就是 `clientDataHash`），RP 校验用的是
-     * **网页交给它的** JSON，provider 自造 JSON 永远对不上，只会造成误导。
-     * 官方要求见 [io.vaultix.common.WebAuthn.BROWSER_FLOW_CLIENT_DATA_PLACEHOLDER]。
+     * 唯一作用是决定 `clientDataJSON` 里**是否写 `androidPackageName`**：
+     * 浏览器流程必须不写（浏览器那份 JSON 里没有该字段）；原生 App 流程可写。
      *
-     * 与断言流程的区别：本流程 attestation 为 `none`，**没有任何签名**，
-     * 所以 `clientDataHash` 只用于"让系统/网页完成它们的校验"，provider 侧不需要拿它做密码学运算。
+     * ⚠️ 无论哪条流程，回传的 `clientDataJSON` **都必须是自建的真实 JSON**，
+     * 不能回传空占位符（2026-09-12 修正）——见
+     * [io.vaultix.common.WebAuthn.buildCreateClientDataJson] 的 KDoc（规范 §5.8.1.1 / §7.1）。
+     * 旧实现（2026-09-11）在浏览器流程回传空字节数组，被 GitHub 等站点以
+     * "Security key authentication failed" 拒收。
      */
     private var browserFlow: Boolean = false
 
@@ -146,15 +158,23 @@ class PasskeyCreateActivity : FragmentActivity() {
             .ifBlank { userName }
 
         // ⚠️ 不直接读已收紧的 `callingAppInfo.origin`（1.6.0 起为 internal），走兼容层。
+        //
+        // origin 的三级推导顺序**对齐 Bastion `PasskeyOriginResolver`**：
+        //   1) 请求 JSON 里调用方自带（无特权名单时唯一可信来源，最权威）；
+        //   2) CallingAppOrigin 兼容层；
+        //   3) rpId 兜底。
+        // 次序很重要：把 CallingAppOrigin 放第一会在部分 ROM 上拿到与请求方不一致的值，
+        // 使 RP 的 `C.origin` 校验失败（§7.1 第三项）。
         val providerReq = runCatching {
             PendingIntentHandler.retrieveProviderCreateCredentialRequest(intent)
         }.getOrNull()
-        origin = CallingAppOrigin.originOrNull(providerReq?.callingAppInfo)
-            ?: runCatching { JSONObject(requestJson).optString("origin").takeIf { it.isNotBlank() } }.getOrNull()
+        origin = runCatching { JSONObject(requestJson).optString("origin").takeIf { it.isNotBlank() } }.getOrNull()
+            ?: CallingAppOrigin.originOrNull(providerReq?.callingAppInfo)
             ?: "https://$rpId"
         // clientDataHash 只挂在 CreatePublicKeyCredentialRequest 上（基类没有）→ 需下转型。
-        browserFlow = (providerReq?.callingRequest as? CreatePublicKeyCredentialRequest)
-            ?.clientDataHash != null
+        // 由 Service 经 Intent 透传（对齐 GET 侧的 `option.clientDataHash`）。
+        clientDataHash = intent.getByteArrayExtra(PasskeyProviderIntents.EXTRA_CLIENT_DATA_HASH)
+        browserFlow = clientDataHash != null
 
         if (requestJson.isBlank() || rpId.isBlank()) {
             fail(CreateCredentialUnknownException("Missing create parameters"))
@@ -277,19 +297,36 @@ class PasskeyCreateActivity : FragmentActivity() {
                 val attObj = WebAuthn.buildNoneAttestationObject(authData)
                 val json = JSONObject(requestJson)
                 val challenge = decodeChallenge(json.getString("challenge"))
-                // 浏览器流程：系统已给 clientDataHash（浏览器那份 JSON 的哈希），
-                // 而 provider 造不出逐字节相同的 JSON → 按官方要求回传占位符。
-                // 原生流程没有外部哈希，自己拼、自己签、自己回传，三者同一份字节。
-                val clientDataBytes = if (browserFlow) {
-                    WebAuthn.BROWSER_FLOW_CLIENT_DATA_PLACEHOLDER
-                } else {
-                    WebAuthn.buildClientDataJson(
-                        type = "webauthn.create",
-                        challenge = challenge,
-                        origin = origin,
-                        includeCrossOrigin = true,
-                    )
-                }
+                // ⚠️ **注册侧必须始终自建真实 clientDataJSON（2026-09-12 根因修复）**
+                //
+                // 旧实现（2026-09-11）在浏览器流程回传 `ByteArray(0)` 占位符，依据是 Android
+                // 官方文档那句 "set a placeholder value for clientDataJSON"。该句有**前置条件**
+                // `If you retrieve an origin`——特指经 `CallingAppInfo.getOrigin(privilegedAllowlist)`
+                // + 特权应用名单拿到 origin 的场景（Google Password Manager 走那条路）。
+                // Vaultix 的 `CallingAppOrigin` 走「自证式读取」、**不用特权名单**，故不适用。
+                //
+                // 规范层面 RP 一定会解析 clientDataJSON **明文**逐项校验（W3C WebAuthn L2 §7.1）：
+                //   - `C.type` 必须为 "webauthn.create"；
+                //   - `C.challenge` 必须等于 base64url(options.challenge)；
+                //   - `C.origin` 必须与 RP origin 匹配。
+                // 空字节数组连 JSON 解析都过不了 → GitHub 报 "Security key authentication failed"。
+                //
+                // 浏览器流程与原生流程的**唯一差别**是 androidPackageName：
+                // 浏览器那份 JSON 里没有该字段，写进去会让 RP 重算哈希时与浏览器签名不符
+                // （Bastion 实测：Microsoft 登录失败）。注册流程 attestation = none，无签名，
+                // 但字段仍需保持一致，避免调用方自行重算比对时失配。
+                val clientDataBytes = WebAuthn.buildCreateClientDataJson(
+                    challenge = challenge,
+                    origin = origin,
+                    androidPackageName = null,
+                )
+                // 自检：仅日志诊断。浏览器流程下通常不相等，属预期（见 clientDataHash KDoc）。
+                AutofillLogger.d(
+                    "PK create clientDataJson type=webauthn.create origin=$origin " +
+                        "cdjLen=${clientDataBytes.size} browserFlow=$browserFlow " +
+                        "jsonMatchesBrowserHash=" +
+                        "${WebAuthn.clientDataJsonMatchesHash(clientDataBytes, clientDataHash)}",
+                )
                 val userId = json.optJSONObject("user")?.optString("id")?.takeIf { it.isNotBlank() }
                 val cred = VaultFido2Credential(
                     credentialId = WebAuthn.base64Url(key.credentialId),

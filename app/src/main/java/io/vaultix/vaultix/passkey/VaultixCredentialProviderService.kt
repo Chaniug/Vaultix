@@ -467,6 +467,12 @@ class VaultixCredentialProviderService : CredentialProviderService() {
         val user = json.optJSONObject("user")
         val userName = user?.optString("name") ?: ""
         val userDisplayName = user?.optString("displayName") ?: userName
+        // 浏览器流程下系统给了这份哈希（浏览器那份 clientDataJSON 的 SHA-256）；
+        // 原生流程为 null。注册侧只拿它做自检对比（attestation = none，无签名）。
+        // 注：`BeginCreatePublicKeyCredentialRequest` 自带 `clientDataHash`（与 GET 侧的
+        // `BeginGetPublicKeyCredentialOption.clientDataHash` 对称），无需下转型到
+        // `CreatePublicKeyCredentialRequest`——后者是调用方侧的类，provider 侧拿不到。
+        val clientDataHash = request.clientDataHash
 
         val intent = PasskeyProviderIntents.createIntent(
             context = this,
@@ -475,6 +481,7 @@ class VaultixCredentialProviderService : CredentialProviderService() {
             rpName = rpName,
             userName = userName,
             userDisplayName = userDisplayName,
+            clientDataHash = clientDataHash,
         )
         val pendingIntent = PendingIntent.getActivity(
             this,

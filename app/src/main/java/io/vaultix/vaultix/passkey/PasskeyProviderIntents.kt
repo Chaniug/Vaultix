@@ -25,7 +25,7 @@ object PasskeyProviderIntents {
 
     /** get：依赖方原始请求 JSON（含 challenge）。 */
     const val EXTRA_REQUEST_JSON = "vaultix.passkey.request_json"
-    /** get：浏览器流程下系统算好的 clientDataHash（原生流程为 null）。 */
+    /** get / create：浏览器流程下系统算好的 clientDataHash（原生流程为 null）。 */
     const val EXTRA_CLIENT_DATA_HASH = "vaultix.passkey.client_data_hash"
     const val EXTRA_RP_ID = "vaultix.passkey.rp_id"
     /** get：定位具体凭证（经已解锁仓储取私钥，不传 keyValue）。 */
@@ -55,6 +55,15 @@ object PasskeyProviderIntents {
         .putExtra(EXTRA_CREDENTIAL_ID, credentialId)
         .putExtra(EXTRA_RP_ID, rpId)
 
+    /**
+     * create：`clientDataHash` 与 GET 侧的 [getIntent] 同名同义（浏览器流程非 null）。
+     *
+     * ⚠️ **它只用于注册侧的自检对比与日志**，不参与任何密码学运算：
+     * 注册响应（attestation）为 `none`，没有签名；回传的 `clientDataJSON` 必须始终是
+     * 自建的真实 JSON（见 [io.vaultix.common.WebAuthn.buildCreateClientDataJson]）。
+     * 之所以仍要透传，是为了能在日志里比出「自建 JSON 与浏览器那份哈希是否一致」，
+     * 排查调用方拒收时能一眼看出是哪一侧的问题。
+     */
     fun createIntent(
         context: Context,
         requestJson: String,
@@ -62,9 +71,11 @@ object PasskeyProviderIntents {
         rpName: String,
         userName: String,
         userDisplayName: String,
+        clientDataHash: ByteArray? = null,
     ): Intent = Intent(context, PasskeyCreateActivity::class.java)
         .putExtra(EXTRA_ACTION, ACTION_CREATE)
         .putExtra(EXTRA_REQUEST_JSON, requestJson)
+        .putExtra(EXTRA_CLIENT_DATA_HASH, clientDataHash)
         .putExtra(EXTRA_RP_ID, rpId)
         .putExtra(EXTRA_RP_NAME, rpName)
         .putExtra(EXTRA_USER_NAME, userName)

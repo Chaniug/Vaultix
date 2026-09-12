@@ -201,23 +201,25 @@ class WebAuthnTest {
     }
 
     /**
-     * **浏览器流程占位符回归锁（2026-09-11）** —— 修复「Authentication failed」的那条改动。
+     * **浏览器流程必须回传真实 clientDataJSON 的回归锁（2026-09-12）**。
      *
-     * 背景：provider 只拿到系统给的 `clientDataHash`（浏览器那份 clientDataJSON 的 SHA-256），
-     * 拿不到明文；RP 校验用的是**网页交给它的**那份 JSON。所以 provider 自造 JSON 回传
-     * 永远对不上——旧实现（按哈希反选自造变体）就是在赌这个不可能事件。
+     * 这是"Security key authentication failed"的根因修复。上一版（2026-09-11）在浏览器流程
+     * 回传 `ByteArray(0)` 占位符，依据是 Android 官方文档那句 "set a placeholder value for
+     * clientDataJSON"。该句有**前置条件** `If you retrieve an origin`——特指经
+     * `CallingAppInfo.getOrigin(privilegedAllowlist)` + 特权应用名单拿到 origin 的场景
+     * （Google Password Manager）。Vaultix 的 `CallingAppOrigin` 走「自证式读取」、
+     * **不用特权名单**，故不适用。
      *
-     * 官方口径（Android 凭据提供方文档）：
-     * > use the `clientDataHash` ... instead of assembling and hashing clientDataJSON during the
-     * > signature request. To avoid JSON parsing issues, set a placeholder value for
-     * > `clientDataJSON` in the attestation and assertion response.
+     * W3C WebAuthn Level 2 §7.2 规定 RP **解析 clientDataJSON 明文**并逐项校验：
+     * `C.type` = `webauthn.get`、`C.challenge` = base64url(options.challenge)、
+     * `C.origin` 匹配 RP origin。空字节数组连 JSON 解析都过不了 ⇒ 必然失败。
      *
-     * 两条流程的判据（本测试同时锁住）：
-     * - 浏览器流程：签名覆盖 `authData ‖ clientDataHash`，回传的 clientDataJSON 是占位符；
-     * - 原生流程：自己拼 JSON、自己哈希、自己签，回传的必须是**同一份** JSON。
+     * 本测试同时锁住浏览器流程的两个契约：
+     * 1. **签名**覆盖 `authData ‖ clientDataHash`（系统给的哈希，即浏览器那份 JSON 的 SHA-256）；
+     * 2. **回传**的 clientDataJSON 是自建的真实 JSON，且含有正确的 challenge / type / origin。
      */
     @Test
-    fun `browser flow signs provided hash and returns placeholder clientDataJSON`() {
+    fun `browser flow signs provided hash and returns real clientDataJSON`() {
         val key = WebAuthn.generateKeyPair()
         val priv = WebAuthn.parseEcPrivateKey(WebAuthn.base64Url(key.privateKeyPkcs8))!!
         val authData = WebAuthn.buildAuthenticatorData(
@@ -230,12 +232,7 @@ class WebAuthnTest {
             ).toByteArray(Charsets.UTF_8)
         val clientDataHash = MessageDigest.getInstance("SHA-256").digest(browserJson)
 
-        // 1) 占位符不参与任何密码学校验，且必然与浏览器哈希不一致（这正是"不该自造 JSON"的原因）
-        val placeholder = WebAuthn.BROWSER_FLOW_CLIENT_DATA_PLACEHOLDER
-        assertThat(placeholder).isEmpty()
-        assertThat(WebAuthn.clientDataJsonMatchesHash(placeholder, clientDataHash)).isFalse()
-
-        // 2) 签名必须能被 RP 用 (浏览器 JSON + 系统哈希) 验通 —— 也就是验签的真实场景
+        // 1) 签名必须能被 RP 用 (浏览器 JSON + 系统哈希) 验通 —— 即验签的真实场景
         val sig = WebAuthn.signAssertionHash(authData, clientDataHash, priv)
         val message = authData + MessageDigest.getInstance("SHA-256").digest(browserJson)
         val pub = KeyFactory.getInstance("EC").generatePublic(
@@ -245,24 +242,45 @@ class WebAuthnTest {
             Signature.getInstance("SHA256withECDSA").also { it.initVerify(pub); it.update(message) }.verify(sig),
         ).isTrue()
 
-        // 3) 回传的响应里 clientDataJSON 是空占位符（base64url("") = ""），其余字段照常
+        // 2) **回传的 clientDataJSON 必须是真实 JSON**，不得为空占位符。
+        //    浏览器流程下 androidPackageName 必须为 null（浏览器那份 JSON 里没有该字段）。
+        val challenge = ByteArray(32).also { SecureRandom().nextBytes(it) }
+        val clientData = WebAuthn.buildGetClientDataJson(
+            challenge = challenge,
+            origin = "https://example.com",
+            androidPackageName = null,
+        )
+        assertThat(clientData).isNotEmpty()
+        assertThat(WebAuthn.clientDataJsonMatchesHash(clientData, clientDataHash)).isFalse()
+
+        // 3) 解回明文逐项核对 §7.2 三项校验会读到的字段
+        val text = String(clientData, Charsets.UTF_8)
+        assertThat(text).contains("\"type\":\"webauthn.get\"")
+        assertThat(text).contains("\"challenge\":\"${WebAuthn.base64Url(challenge)}\"")
+        assertThat(text).contains("\"origin\":\"https://example.com\"")
+        assertThat(text).doesNotContain("androidPackageName")
+
+        // 4) 响应里的 clientDataJSON 就是这份真实 JSON（base64url 反解后逐字节相等）
         val json = WebAuthn.buildGetResponseJson(
             credentialId = key.credentialId,
-            clientDataJson = placeholder,
+            clientDataJson = clientData,
             authData = authData,
             signature = sig,
             userHandle = null,
         )
-        assertThat(json).contains("\"clientDataJSON\":\"\"")
+        assertThat(json).doesNotContain("\"clientDataJSON\":\"\"")
+        val b64 = json.substringAfter("\"clientDataJSON\":\"").substringBefore("\"")
+        assertThat(java.util.Base64.getUrlDecoder().decode(b64)).isEqualTo(clientData)
         assertThat(json).contains("\"type\":\"public-key\"")
         assertThat(json).contains("\"clientExtensionResults\":{}")
     }
 
     /**
-     * 原生 App 流程的对照锁：自己拼 JSON 时，**回传的 JSON 必须与签名的 JSON 是同一份字节**。
+     * 原生 App 流程的对照锁：**回传的 JSON 必须与签名的 JSON 是同一份字节**。
      *
-     * 与上面那条浏览器流程的差异，正是 2026-09-11 那次修复的核心：两种流程的 clientDataJSON
-     * 不是同一种东西，不能一套逻辑走到底。
+     * 与上面那条浏览器流程的差异只在于**签名覆盖哪份哈希**：
+     * 浏览器流程用系统给的 `clientDataHash`，原生流程用 `sha256(自建 JSON)`。
+     * 两条流程回传的 clientDataJSON 都是真实 JSON。
      */
     @Test
     fun `native flow returns the very clientDataJSON it signed over`() {
@@ -271,7 +289,7 @@ class WebAuthnTest {
         val challenge = ByteArray(32).also { SecureRandom().nextBytes(it) }
         val authData = WebAuthn.buildAuthenticatorData("example.com", true, true, 0, false)
 
-        val clientData = WebAuthn.buildClientDataJson("webauthn.get", challenge, "https://example.com")
+        val clientData = WebAuthn.buildGetClientDataJson(challenge, "https://example.com")
         val sig = WebAuthn.signAssertion(authData, clientData, priv)
         val json = WebAuthn.buildGetResponseJson(key.credentialId, clientData, authData, sig, null)
 
@@ -288,29 +306,46 @@ class WebAuthnTest {
         ).isTrue()
     }
 
-    /** create 路径同样是"占位符 vs 自产 JSON"二选一。 */
+    /**
+     * create 路径同样**不区分流程**：两条路都回传真实 clientDataJSON，
+     * 只有 `androidPackageName` 的有无会随流程变化（浏览器流程必须为 null）。
+     */
     @Test
-    fun `create response carries placeholder in browser flow and real json otherwise`() {
+    fun `create response always carries real clientDataJSON`() {
         val key = WebAuthn.generateKeyPair()
         val cose = WebAuthn.encodeCoseP256(key.publicX, key.publicY)
         val authData = WebAuthn.buildAuthenticatorData(
             "example.com", true, true, 0, true, key.credentialId, cose,
         )
         val attObj = WebAuthn.buildNoneAttestationObject(authData)
+        val challenge = ByteArray(32).also { SecureRandom().nextBytes(it) }
 
-        val browser = WebAuthn.buildCreateResponseJson(
-            key.credentialId, WebAuthn.BROWSER_FLOW_CLIENT_DATA_PLACEHOLDER, attObj,
+        // 浏览器流程：androidPackageName = null
+        val browserJson = WebAuthn.buildCreateClientDataJson(
+            challenge = challenge, origin = "https://example.com", androidPackageName = null,
         )
-        assertThat(browser).contains("\"clientDataJSON\":\"\"")
+        val browser = WebAuthn.buildCreateResponseJson(key.credentialId, browserJson, attObj)
+        assertThat(browser).doesNotContain("\"clientDataJSON\":\"\"")
 
-        val nativeJson = WebAuthn.buildClientDataJson(
-            "webauthn.create", ByteArray(32), "https://example.com",
+        // 原生流程：可带 androidPackageName
+        val nativeJson = WebAuthn.buildCreateClientDataJson(
+            challenge = challenge, origin = "https://example.com", androidPackageName = "com.example.app",
         )
         val native = WebAuthn.buildCreateResponseJson(key.credentialId, nativeJson, attObj)
         // 回传的是 base64url，需反解比对（明文不会出现在 JSON 里）
         val nativeB64 = native.substringAfter("\"clientDataJSON\":\"").substringBefore("\"")
         assertThat(nativeB64).isNotEmpty()
         assertThat(java.util.Base64.getUrlDecoder().decode(nativeB64)).isEqualTo(nativeJson)
+
+        // 两条流程回传的 JSON 都含真实 challenge（§7.1 第一/二项校验会读的字段）
+        listOf(browserJson, nativeJson).forEach { bytes ->
+            val text = String(bytes, Charsets.UTF_8)
+            assertThat(text).contains("\"type\":\"webauthn.create\"")
+            assertThat(text).contains("\"challenge\":\"${WebAuthn.base64Url(challenge)}\"")
+            assertThat(text).contains("\"origin\":\"https://example.com\"")
+        }
+        assertThat(String(browserJson, Charsets.UTF_8)).doesNotContain("androidPackageName")
+        assertThat(String(nativeJson, Charsets.UTF_8)).contains("\"androidPackageName\":\"com.example.app\"")
     }
 
     /**
