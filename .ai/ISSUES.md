@@ -505,6 +505,15 @@ GET resolve EMPTY: storedRpIds=<库内实际存的域名>
 
 ## 35. 通行密钥「Authentication failed」根因：浏览器流程回传了自造的 clientDataJSON（2026-09-11，P0，`90d5e6d`）
 
+> ### 🔴🔴 本条结论已于 2026-09-12 **被推翻** —— 见 **#43**。
+>
+> **本条判定的"正确做法"（浏览器流程回传空占位符）是错的**，真机 **GitHub 注册通行密钥
+> 报 `Security key authentication failed`**。错因：官方 `set a placeholder value for
+> clientDataJSON` 那句**带前置条件 `If you retrieve an origin`**（仅适用于特权应用名单场景），
+> 而 W3C 规范 §7.1/§7.2 要求 RP 解析**明文**校验 `C.challenge` ⇒ 空数组必然失败。
+> **正确做法：两条流程都回传自建真实 JSON**，唯一差别是签名覆盖哪份哈希。
+> 下面原文保留，仅作记录当时的（错误）推理过程 —— **不要照此实现**。
+
 **真机症状（用户原话）**：「能检测出来通行密钥，但是 Authentication failed，这个问题还是有。」
 → 候选列表已正常（§34 的 discovery 修复生效），但**站点侧验签失败**。
 
@@ -533,10 +542,13 @@ RP 的 login 校验清单只有：`type==="webauthn.get"` / challenge / origin /
 
 ### 解法：两条流程彻底分开
 
+> ⚠️ **下表「回传 clientDataJSON」一行是错的（2026-09-12 推翻）**：浏览器流程**不应**
+> 回传空占位符，应回传**自建真实 JSON**。详见 #43。
+
 | | 浏览器流程（有 `clientDataHash`） | 原生 App 流程（无 `clientDataHash`） |
 |---|---|---|
 | 签名材料 | `authData ‖ clientDataHash`（系统给的） | `authData ‖ SHA-256(自产 JSON)` |
-| 回传 clientDataJSON | **空占位符** | **同一份自产 JSON**（拼/签/回传三者同字节） |
+| 回传 clientDataJSON | ~~**空占位符**~~ **（错！应为自建真实 JSON）** | **同一份自产 JSON**（拼/签/回传三者同字节） |
 | 依据 | 官方要求；RP 用的是网页那份 | RP 用的就是 provider 这份 |
 
 `WebAuthn.BROWSER_FLOW_CLIENT_DATA_PLACEHOLDER = ByteArray(0)`；`buildClientDataJsonForBrowser`
@@ -548,14 +560,20 @@ create 路径同理：浏览器流程回传占位符（attestation 为 `none`，
 
 ### 三家对照（重要：别照抄，两家是反例）
 
+> ⚠️ **本节判定有误（2026-09-12 更正）**：被标为 ❌ 的 **Bastion** 其实是**对的**，
+> 被标为 ✅ 的 Bitwarden 也不算错（它由 SDK 内部构造并回传真实 JSON，并非回传空值）。
+> **真正错的是 Vaultix 自己**（回传空占位符）。详见 #43。
+
 | 实现 | 浏览器流程如何处理 clientDataJSON |
 |---|---|
-| **Bitwarden** | ✅ **从不在 Android 侧重建**：交给 SDK，`request.clientDataHash?.let { ClientData.DefaultWithCustomHash(it) } ?: ClientData.DefaultWithExtraData(callingAppInfo.getAppOrigin())`；`Fido2PublicKeyCredential.clientDataJson` 可空 |
-| Keyguard | ❌ 重建（`PasskeyProviderGetRequest.kt:119-128` 拼 JSON，`:129` 签系统哈希，`:159` 回传自造 JSON） |
-| Bastion | ❌ 重建（`PasskeyAuthActivity.createClientDataJson` + 回传 `clientDataJsonB64`） |
-| Vaultix（修复前） | ❌ 重建 + 按哈希反选（比另两家更"努力"，但方向本身就错） |
+| **Bitwarden** | ✅ **从不在 Android 侧重建**：交给 SDK，`request.clientDataHash?.let { ClientData.DefaultWithCustomHash(it) } ?: ClientData.DefaultWithExtraData(callingAppInfo.getAppOrigin())`；`Fido2PublicKeyCredential.clientDataJson` 可空（**SDK 内部仍是真实 JSON**） |
+| Keyguard | ✅ 重建（`PasskeyProviderGetRequest.kt:119-128` 拼 JSON，`:129` 签系统哈希，`:159` 回传自造 JSON）——**符合规范** |
+| Bastion | ✅ 重建（`PasskeyAuthActivity.createClientDataJson` + 回传 `clientDataJsonB64`）——**符合规范** |
+| Vaultix（修复前） | ❌ 重建 + 按哈希反选（方向错在"反选"） |
+| Vaultix（第三十轮"修复"） | ❌❌ **回传空占位符** —— 比修复前更糟，直接导致 GitHub 注册失败 |
 
-**结论**：Bastion 是本项目主要参考对象，但**这一处不能跟**。参考项目的"多数"不等于正确。
+**结论（更正）**：三家**都回传真实 JSON**，只有 Vaultix 走了占位符这条歪路。
+**教训不是"参考项目都错"，而是"我把官方文档的条件句读漏了，反而推翻了正确的参考实现"。**
 
 ### 验证（沙箱无 Android SDK，用 Gradle 内置 kotlin-compiler-embeddable 2.2.21 直接在真实源码上跑）
 - 真实 `WebAuthnTest.kt`：**10/10 通过**（含新增 3 条回归锁）；
@@ -565,13 +583,22 @@ create 路径同理：浏览器流程回传占位符（attestation 为 `none`，
      旧逻辑只会回退到错的那份；
   3. 原生流程回传 JSON 反解 == 签名所用 JSON。
 
-### 教训
-1. **凡"provider 要把某个值回传回去"的设计，先问一句：RP 校验用的是谁手里的那份副本？**
-   如果是对方（网页/浏览器）手里的，那我们造什么都不重要，重要的是签名覆盖的哈希一致。
-2. **"按哈希枚举候选反选"这种补偿逻辑，本身就是设计错的信号**。真方案只有一条：
-   用系统给的哈希去签，不要自造。补偿代码越多，说明方向越偏。
-3. **参考项目要挑着抄，不能整段搬。** 本轮 Bastion / Keyguard 两家都是反例，
-   唯一正确的 Bitwarden 因为把逻辑藏在 SDK 里反而最不起眼。
+### 教训（含 2026-09-12 更正）
+
+1. **【2026-09-12 更正】别只读官方文档的后半句。** 本条栽在漏读条件句
+   `If you retrieve an origin` —— 跳过前置条件把「特定场景的建议」当成「普适要求」，
+   写出了与规范冲突的代码。**读官方建议时，先确认它的适用前提。**
+2. **【2026-09-12 更正】与规范冲突时，以规范为准。** 规范是 RP 的实现依据；
+   任何平台实现建议都不能推翻「RP 必须解析 clientDataJSON 明文校验 `C.challenge`」
+   这一硬要求。**"官方文档 vs 规范"打架时，规范赢。**
+3. 【保留】凡"provider 要把某个值回传回去"的设计，先问一句：
+   **RP 校验用的是谁手里的那份副本？** 若是对方手里的，那关键在签名覆盖的哈希一致
+   —— 但**这不等于可以不回传真实 JSON**（RP 仍要读明文）。
+4. 【保留】"按哈希枚举候选反选"这种补偿逻辑，本身就是设计错的信号。真方案只有一条：
+   **用系统给的哈希去签，不要自造变体。** 补偿代码越多，说明方向越偏。
+5. **【2026-09-12 新增】参考实现出现分歧时，先怀疑自己的理解，而不是先判定"他们都错"。**
+   本条当时把两家正确实现标为反例，理由仅是"与我的理解不符" —— 这是危险信号。
+   **当所有参考实现都跟你不一样，大概率是你错了，而不是全世界错了。**
 
 ## 36. 通行密钥「Authentication failed」第二根因：锁态竞态（Activity 把「库锁定」当成「找不到」）（2026-09-11，P0，`38c5130`）
 
@@ -835,3 +862,120 @@ java -classpath "D:/Vaultix/gradle/wrapper/gradle-wrapper.jar" \
 |---|---|---|
 | Bitwarden Android | `D:\Vaultix-refs\bitwarden-android` | `74c0e04` |
 | Keyguard | `D:\Vaultix-refs\keyguard-app` | `f95c865` |
+
+---
+
+## 43. 🔴🔴 通行密钥 `clientDataJSON` 回传空占位符 → GitHub 注册失败（2026-09-12，P0，`aa5fa27`）
+
+> **本条推翻 #35。** #35 判定「浏览器流程应回传空占位符」是**错的**，
+> 直接导致真机 **GitHub 注册通行密钥报 `Security key authentication failed`**。
+
+### 症状（用户原话）
+「通行密钥这部分还有问题，能够读取到，能够进入登录，在**最终校验**的时候提示错误。」
+用户实测 GitHub 注册 → `Two-factor authentication ... Security key authentication failed.`
+
+### 先排除用户猜测
+用户猜：「会不会是密码条目和通行密钥没绑在一起？」→ **不是**。
+凭据注册与条目绑定路径正常（`fido2Credentials` 落库、`credentialId` / `rpId` 匹配均正常）。
+真因是 `clientDataJSON` 占位符。
+
+### 根因：把官方文档的**条件句**读漏了
+
+#35 依据的是官方这句（**逐字，注意加粗部分**）：
+> **If you retrieve an origin**, use the `clientDataHash` that's provided directly in
+> `CreatePublicKeyCredentialRequest()` or `GetPublicKeyCredentialOption()` instead of
+> assembling and hashing clientDataJSON during the signature request. To avoid JSON parsing
+> issues, set a placeholder value for `clientDataJSON` in the attestation and assertion response.
+
+- `If you retrieve an origin` = 经 `CallingAppInfo.getOrigin(privilegedAllowlist)` +
+  **特权应用名单**拿到 origin 的场景（Google Password Manager 走那条路，
+  challenge 校验由**系统侧**完成）。
+- Vaultix 的 `CallingAppOrigin` 明确采用「**自证式读取**」、**不走特权名单** ⇒ **不适用占位符**。
+
+**而规范层面 RP 一定会解析明文**（W3C WebAuthn Level 2，逐字）：
+> **§7.1** Let JSONtext be the result of running UTF-8 decode on the value of
+> `response.clientDataJSON`. Let C ... be the result of running a JSON parser on JSONtext.
+> - Verify that the value of `C.type` is the string `webauthn.create`（断言为 `webauthn.get`）
+> - Verify that the value of `C.challenge` equals **the base64url encoding of `options.challenge`**
+> - Verify that the value of `C.origin` matches the Relying Party's origin.
+
+**§5.8.1.1 `CollectedClientData`** 对字段的定义同样是明文：
+`challenge` = **the base64url encoding of options.challenge**、`origin` = the serialization of callerOrigin。
+
+⇒ **回传空字节数组连 JSON 解析都过不了**，`C.challenge` 校验必然失败。
+
+### ✅ 正确解法（两条流程的**唯一**差别 = 签名覆盖哪份哈希）
+
+| 事项 | 浏览器流程 | 原生 App 流程 |
+|---|---|---|
+| **签名**覆盖 | `authData ‖ clientDataHash`（系统给的） | `authData ‖ sha256(自建 JSON)` |
+| **回传** `clientDataJSON` | **自建真实 JSON** | **自建真实 JSON**（同一份） |
+| `androidPackageName` | **不写**（浏览器那份没有该字段） | 可写 |
+
+> 回传字段供 RP **读明文校验**；签名哈希保证与浏览器一致 —— **二者互不冲突**。
+> #35 误以为"自造 JSON 永远对不上所以只能放占位符"，错在把「逐字节相等」当成了要求。
+
+`androidPackageName` 为什么浏览器流程不能写：浏览器那份 JSON 里没有该字段，
+写进去会让 RP 对回传 JSON 重算哈希时与浏览器签名值不符（Bastion 实测：Microsoft 登录失败）。
+
+### 改动（`aa5fa27`，8 个文件）
+| 文件 | 改动 |
+|---|---|
+| `core/common/WebAuthn.kt` | **删除** `BROWSER_FLOW_CLIENT_DATA_PLACEHOLDER`；`buildClientDataJson` 增 `androidPackageName` 参数；新增 `buildCreateClientDataJson` / `buildGetClientDataJson`；KDoc 引规范原文 + 文档条件句 + Bastion 依据 |
+| `passkey/PasskeyProviderIntents.kt` | `createIntent` 补 `clientDataHash: ByteArray? = null`（对齐 GET 侧 `getIntent`）+ `putExtra` |
+| `passkey/VaultixCredentialProviderService.kt` | `buildCreateResponse` 透传 `request.clientDataHash` |
+| `passkey/PasskeyCreateActivity.kt` | 删占位符分支，始终 `buildCreateClientDataJson(..., androidPackageName = null)`；接收 `clientDataHash` 仅作自检日志；**origin 推导顺序改为 `requestJson.origin` → `CallingAppOrigin` → `https://$rpId`**（对齐 Bastion `PasskeyOriginResolver`） |
+| `passkey/PasskeyGetActivity.kt` | **回退**占位符，改 `buildGetClientDataJson(..., androidPackageName = null)` |
+| `core/common/WebAuthnTest.kt` | 改写 2 个已失效的占位符用例为 `browser flow signs provided hash and returns real clientDataJSON` / `create response always carries real clientDataJSON` |
+
+### 途中两个编译陷阱（易再犯）
+1. **`callingRequest` 在 provider 侧不存在。** `PasskeyProviderIntents` / `BeginCreateCredentialRequest`
+   **没有** `callingRequest`；`BeginCreatePublicKeyCredentialRequest` **自带** `clientDataHash`。
+   （`CreatePublicKeyCredentialRequest` 是**调用方侧**的类，provider 侧拿不到 —— 同 #41 的类型陷阱。）
+2. **`AutofillLogger` 需 import** `io.vaultix.vaultix.autofill.AutofillLogger`。
+
+### 验证（`aa5fa27`）
+- `:core:common:testDebugUnitTest` → **95 用例 0 失败**（`WebAuthnTest` 12 例，含 3 条回归锁）
+- `testFullDebugUnitTest` → **129 用例 0 失败**
+- `detekt` 通过；`:app:compileFullDebugKotlin` BUILD SUCCESSFUL
+- **CI run `34686274203` = success**（19 步骤全绿，APK 已发布 preview Release）
+
+### 教训（本轮最贵）
+1. **官方文档的限定条件不能只读后半句。** `If you retrieve an origin` 决定了整条建议
+   是否适用 —— 跳过它会把「特定场景的推荐做法」当成「普适要求」。
+2. **与规范冲突时以规范为准。** 规范是 RP 的实现依据，任何平台建议都不能推翻
+   「RP 必须解析明文校验 `C.challenge`」这一硬要求。
+3. **「所有参考实现都跟我不同」时，先怀疑自己。** 本轮把两家**正确**实现标成反例，
+   唯一理由只是"跟我的理解不符" —— 这是危险信号，事实证明是我错了。
+4. 用户那句「**应该是有标准的才对**」是对的：**遇到协议层争议，先拉规范原文逐字比对**，
+   不要在实现之间靠印象猜测。
+
+---
+
+## 44. 沙箱构建环境三处修复（2026-09-12，长期收益，非项目代码问题）
+
+> 本轮把沙箱从「**完全跑不了 Gradle**」恢复到「**可真实编译 / 跑单测 / 跑 detekt**」，
+> 长期收益显著（此后无需仅靠 CI 试错）。
+
+| # | 问题 | 修法 |
+|---|---|---|
+| 1 | `/root/.gradle/init.gradle` **语法错误**（`mavelCentral()` 拼写错 + url 未加引号）→ **所有** Gradle 调用初始化即失败 | 重写为 `beforeSettings { settings -> ... }` 注入 Aliyun/腾讯镜像。**必须同时注入 `pluginManagement` 与 `dependencyResolutionManagement` 两处** —— 项目设了 `RepositoriesMode.FAIL_ON_PROJECT_REPOS`，往 `allprojects.repositories` 塞仓库会被直接拒绝 |
+| 2 | AGP 插件解析失败（`com.android.application:9.3.2` not found） | 镜像**必须在 `pluginManagement` 层**注入（`settingsEvaluated` 太晚） |
+| 3 | `SDK location not found` → `sdkmanager` 报 `Failed to find package 'platforms;android-37'` | **platform 37 的目录名带扩展版本号（`android-37.0`），在线 `repository2-3.xml` 里根本没有 `platforms;android-37` 这个包**（最高只到 android-36）⇒ `sdkmanager` 必然失败。只能按已知包名直取 `platform-37.0_r01.zip` + `build-tools_r37_linux.zip` 解压安装 |
+
+### 附带
+- **hosts 补 `dl.google.com → 113.108.239.161`**（此前被污染到 fake-ip `198.18.0.13`，
+  导致 manifest 拉取静默失败）。`sed` 写 hosts 报 `Device or resource busy` → 改用 python 重写。
+- **Gradle wrapper 分发包**：`services.gradle.org` 302 → GitHub，TLS 抖动报
+  `SSLHandshakeException` → 经 `ghfast.top` 镜像下载 `gradle-9.5.1-bin.zip`（140MB），
+  装入 `~/.gradle/wrapper/dists/gradle-9.5.1-bin/<hash>/` 并 `touch gradle-9.5.1-bin.zip.ok`。
+- **Gradle daemon OOM 被杀**（cgroup `memory.max` = 8GB）→
+  加 `-Dorg.gradle.jvmargs="-Xmx3g" -Dkotlin.daemon.jvmargs="-Xmx2g"`。
+- `api.github.com` 真实 IP `20.205.243.168`（`gh` CLI 有 TLS 抖动 → 改用
+  `curl --resolve api.github.com:443:20.205.243.168` 直连；响应含控制字符需
+  `json.loads(..., strict=False)`）。
+
+### ⚠️ 唯一未能完成的步骤
+`assembleFullDebug` 的 **native 符号剥离**（`stripFullDebugDebugSymbols` 报
+`Cannot access output property 'outputDir'` / `Failed to create MD5 hash`）—— 沙箱**缺 NDK**，
+**与代码改动无关**；该步在 CI 上正常。替代验证用 `:app:compileFullDebugKotlin`。

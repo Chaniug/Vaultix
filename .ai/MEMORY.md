@@ -793,6 +793,23 @@ Vaultix 原把 linkedId 当顺序编号（1/2/3/4），**官方是分段编码**
 
 ## 2026-09-11 · 第三十轮：通行密钥「Authentication failed」= 浏览器流程回传自造 clientDataJSON（`90d5e6d`）
 
+> ### 🔴🔴 本节结论已于 2026-09-12 **被推翻**，勿再照此实现！
+>
+> **错误结论**：浏览器流程回传「空占位符」`ByteArray(0)` 作为 `clientDataJSON`。
+> **后果**：真机 **GitHub 注册通行密钥报 `Security key authentication failed`**（用户实测）。
+> **错在哪**：官方那句 `set a placeholder value for clientDataJSON` **带前置条件** ——
+> 原文是 **`If you retrieve an origin`, use the clientDataHash ...`**，只适用于经
+> `CallingAppInfo.getOrigin(privilegedAllowlist)` + **特权应用名单**拿到 origin 的场景
+> （Google Password Manager 走那条路，challenge 校验由系统侧完成）。
+> Vaultix 的 `CallingAppOrigin` 走「**自证式读取**」、**不用特权名单** ⇒ **不适用**。
+> **规范层面**：W3C WebAuthn L2 §7.1/§7.2 要求 RP **解析 `clientDataJSON` 明文**并校验
+> `C.type` / `C.challenge`（必须等于 `base64url(options.challenge)`）/ `C.origin`；
+> §5.8.1.1 对字段的定义同样是明文。**空数组连 JSON 解析都过不了** ⇒ 必然失败。
+> **✅ 正确做法见文末「第三十九轮」。一句话：两条流程都回传自建真实 JSON，
+> 唯一差别是「签名覆盖哪份哈希」。**
+>
+> 下面保留原文仅为记录当时的（错误）推理过程。
+
 ### 结论一句话
 **浏览器流程（系统给了 `clientDataHash`）回传的 `clientDataJSON` 必须放占位符**，
 签名只用系统给的哈希；只有**原生 App 流程**（无 `clientDataHash`）才自己拼 JSON
@@ -814,12 +831,20 @@ provider 无从复刻 ⇒ 「按哈希枚举候选反选」（旧 `buildClientDa
 
 ### 判据速查表（两条流程不能混）
 
+> ⚠️ **下表「回传 clientDataJSON」一行是错误的（2026-09-12 推翻）。**
+> 正确判据见「第三十九轮」：两条流程**都**回传自建真实 JSON，只有签名覆盖的哈希不同。
+
 | | 有 `clientDataHash`（浏览器） | 无（原生 App） |
 |---|---|---|
 | 签名材料 | `authData ‖ clientDataHash` | `authData ‖ SHA-256(自造 JSON)` |
-| 回传 clientDataJSON | 空占位符 | 同一份自造 JSON |
+| 回传 clientDataJSON | ~~空占位符~~ **（错！应为自建真实 JSON）** | 同一份自造 JSON |
 
 ### 三家对照（**别照抄**：两家是反例）
+
+> ⚠️ **本节的结论标签是错的（2026-09-12 推翻）**：正确的一方恰恰是 **Bastion**——
+> 它「重建 JSON 再回传」的做法**符合规范**；反倒是本节推崇的「回传占位符」会失败。
+> 详见「第三十九轮」。下表保留仅为记录当时的误判。
+
 - **Bitwarden ✅**：Android 侧**从不重建**，交给 SDK —
   `request.clientDataHash?.let { ClientData.DefaultWithCustomHash(it) } ?: ClientData.DefaultWithExtraData(callingAppInfo.getAppOrigin())`；
   `Fido2PublicKeyCredential.clientDataJson` 可空。
@@ -1045,3 +1070,100 @@ credentials 1.6.0 `javap` 实证：`ProviderCreateCredentialRequest.getCallingRe
 > `--depth 1` 浅克隆，位于**仓库外**（`D:\Vaultix-refs\`），确保不会被 commit/push。
 > 早前沙箱路径（`/tmp/bw-ref/android-main/`、`/tmp/keyguard-ref/`）仅沙箱内有效，本机以本表为准。
 > Bastion 仍在仓内 `reference/bastion/`（已 vendored，只读参考、不参与构建/detekt）。
+
+---
+
+## 2026-09-12 · 第三十九轮：**推翻第三十轮** —— `clientDataJSON` 必须始终是自建真实 JSON
+
+> 用户实测 **GitHub 注册通行密钥**报 `Security key authentication failed`，
+> 并给出原则：**「按照标准改对，不要失误，不要自己乱加。应该是有标准的才对。」**
+> —— 逐字拉 W3C 规范原文核对后，确认第三十轮引入的「占位符」方案本身是错的，予以回退。
+
+### 结论一句话
+**注册与断言两条流程都必须回传自建的 `clientDataJSON` 真实 JSON**，
+唯一差别是**签名覆盖哪份哈希**。绝不可回传空占位符。
+
+### ✅ 判据速查表（**取代**第三十轮那张表）
+
+| 事项 | 浏览器流程（有 `clientDataHash`） | 原生 App 流程（无） |
+|---|---|---|
+| **签名**覆盖 | `authData ‖ clientDataHash`（系统给的） | `authData ‖ sha256(自建 JSON)` |
+| **回传** `clientDataJSON` | **自建真实 JSON** | **自建真实 JSON**（同一份） |
+| `androidPackageName` | **不写**（浏览器那份没有该字段） | 可写 |
+
+> 回传字段供 RP **读明文校验**；签名哈希保证与浏览器一致 —— **二者互不冲突**。
+> 第三十轮的错在于：把「逐字节相等」当成了 RP 的要求。
+
+`androidPackageName` 为什么浏览器流程不能写：浏览器那份 JSON 里没有该字段，
+写进去会让 RP 对回传 JSON 重算哈希时与浏览器签名值不符（Bastion 实测：Microsoft 登录失败）。
+
+### 为什么占位符必然失败（**规范原文，唯一裁决依据**）
+
+**W3C WebAuthn Level 2 §7.1 / §7.2** —— RP 一定会解析明文逐项校验：
+> Let JSONtext be the result of running UTF-8 decode on the value of `response.clientDataJSON`.
+> Let C ... be the result of running a JSON parser on JSONtext.
+> - Verify that the value of `C.type` is the string `webauthn.create`（断言为 `webauthn.get`）
+> - Verify that the value of `C.challenge` equals **the base64url encoding of `options.challenge`**
+> - Verify that the value of `C.origin` matches the Relying Party's origin.
+
+**§5.8.1.1 `CollectedClientData`** 对字段的定义同样是明文：
+`type` = `"webauthn.create"`、`challenge` = **the base64url encoding of options.challenge**、
+`origin` = the serialization of callerOrigin、`crossOrigin` = the inverse of sameOriginWithAncestors。
+
+⇒ **空字节数组连 JSON 解析都过不了**，`C.challenge` 校验必然失败。
+
+### 官方文档那句错在哪（**关键：条件句**）
+
+`developer.android.com/identity/sign-in/credential-provider` 确有：
+> **If you retrieve an origin**, use the `clientDataHash` ... instead of assembling and hashing
+> clientDataJSON during the signature request. To avoid JSON parsing issues, set a placeholder
+> value for clientDataJSON in the attestation and assertion response.
+
+**但该句有前置条件** `If you retrieve an origin` —— 特指通过
+`CallingAppInfo.getOrigin(privilegedAllowlist)` + **特权应用名单**拿到 origin 的场景
+（Google Password Manager 走那条路，challenge 校验由系统侧完成）。
+Vaultix 的 `CallingAppOrigin` 明确采用「**自证式读取**」、**不走特权名单** ⇒ 不适用。
+**且规范层面 RP 仍要读明文做 `C.challenge` 校验 —— 两者冲突时以规范为准。**
+
+### 三家对照（**更正第三十轮的误判**）
+
+| 实现 | 浏览器流程 clientDataJSON |
+|---|---|
+| Bitwarden | ✅ 交给 SDK（`ClientData`），**SDK 内部仍是真实 JSON**，并非回传空值 |
+| Keyguard | ✅ 重建 JSON 再回传（`PasskeyProviderGetRequest.kt:119-159`）——**符合规范** |
+| Bastion | ✅ 重建 JSON 再回传（`PasskeyAuthActivity.createClientDataJson`）——**符合规范** |
+| Vaultix（第三十轮"修复"） | ❌❌ **回传空占位符** —— 唯一走歪路的一家，直接导致 GitHub 注册失败 |
+
+> **三家都回传真实 JSON。** 第三十轮把两家正确的实现标成「反例」，
+> 唯一理由只是"跟我的理解不符" —— **当所有参考实现都跟你不同，大概率是你错了。**
+
+### 改动（`aa5fa27`，8 个文件）
+`WebAuthn.kt`（删 `BROWSER_FLOW_CLIENT_DATA_PLACEHOLDER`，`buildClientDataJson` 增
+`androidPackageName` 参数，新增 `buildCreateClientDataJson` / `buildGetClientDataJson`）/
+`PasskeyProviderIntents.kt`（`createIntent` 补 `clientDataHash`）/
+`VaultixCredentialProviderService.kt`（透传 `request.clientDataHash`）/
+`PasskeyCreateActivity.kt`（删占位符分支 + **origin 顺序改为 `requestJson.origin` →
+`CallingAppOrigin` → `https://$rpId`**，对齐 Bastion `PasskeyOriginResolver`）/
+`PasskeyGetActivity.kt`（回退占位符）/ `WebAuthnTest.kt`（改写 2 个失效用例）。
+
+> **origin 顺序为何重要**：把 `CallingAppOrigin` 放第一会在部分 ROM 上拿到与请求方
+> 不一致的值，使 RP 的 `C.origin` 校验失败（§7.1 第三项）。
+
+### 途中两个编译陷阱（同 #41 的类型陷阱，易再犯）
+1. **`callingRequest` 在 provider 侧不存在。** `BeginCreatePublicKeyCredentialRequest`
+   **自带** `clientDataHash`；`CreatePublicKeyCredentialRequest` 是**调用方侧**的类。
+2. `AutofillLogger` 需 `import io.vaultix.vaultix.autofill.AutofillLogger`。
+
+### ★ 四条教训（本轮最贵沉淀）
+1. **官方文档的限定条件不能只读后半句。** 跳过前置条件把「特定场景的推荐做法」
+   当成「普适要求」，会写出与规范冲突的代码。
+2. **与规范冲突时以规范为准。** 规范是 RP 的实现依据，任何平台建议都不能推翻
+   「RP 必须解析明文校验 `C.challenge`」这一硬要求。
+3. **「所有参考实现都跟我不同」时，先怀疑自己。**
+4. **遇协议层争议，先拉规范原文逐字比对**，不要在实现之间靠印象猜测
+   —— 这是用户那句「应该是有标准的才对」的正确打开方式。
+
+### 验证
+`:core:common:testDebugUnitTest` **95 用例 0 失败**（`WebAuthnTest` 12 例含 3 条回归锁）/
+`testFullDebugUnitTest` **129 用例 0 失败** / `detekt` 通过 /
+`:app:compileFullDebugKotlin` **BUILD SUCCESSFUL** / **CI `34686274203` = success**。

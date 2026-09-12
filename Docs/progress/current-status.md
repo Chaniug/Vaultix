@@ -116,3 +116,36 @@
 - **遗留（next-steps ⑥⑦）**：provider.xml 补 `settingsActivity`（通行密钥专属管理页）；
   privileged allowlist（`CallingAppInfo.getOrigin()`）
 - 质量基线：编译 + detekt + 单测全绿（本轮无回归）
+
+## 当前状态（2026-09-12）
+
+### ★ 通行密钥两轮 P0 修复（均已 CI 全绿）
+
+| commit | 根因 | CI |
+|---|---|---|
+| `1d2d242` | **`rawId` / `userHandle` 被二次 Base64 解码** —— 注册侧写 b64url 文本落库，登录侧又 decode→re-encode ⇒ 标准 Base64（`+`/`/`）被规范化成 b64url（`-`/`_`）⇒ RP 逐字节比对失配 ⇒ 「能列出候选、能进登录、最后一步校验报错」 | ✅ `34679687783` |
+| `aa5fa27` | **`clientDataJSON` 回传空占位符**（**推翻第三十轮的错判**）—— 官方 `set a placeholder value` 那句带前置条件 `If you retrieve an origin`（仅特权应用名单场景适用），而 W3C 规范 §7.1/§7.2 要求 RP 解析**明文**校验 `C.challenge` ⇒ 空数组连 JSON 解析都过不了 ⇒ GitHub 报 `Security key authentication failed` | ✅ `34686274203` |
+
+**正确判据（勿再混淆）**：两条流程**都**回传自建真实 JSON；
+唯一差别是**签名覆盖哪份哈希**（浏览器用系统给的 `clientDataHash`，原生流程用 `sha256(自建 JSON)`）；
+浏览器流程**不写** `androidPackageName`。
+
+### 其他本轮完成
+- `22d7273` 修复**全新安装启动死锁**（`remember { startDestination }` 固化首帧错误结论 +
+  loading 分支无出口 ⇒ 永久转圈）。
+- `7a99635` **Bastion 主界面骨架 + 活跃库真源收敛**（迁移阶段 1/2）：
+  新增 `MainShellScreen` / `ActiveVaultStore.resolve()`，7 处消费点只读活跃库；
+  多库从「路由参数」降级为「Tab 内筛选维度」。
+- **沙箱构建环境打通**：可真实跑 `detekt` / 单测 / `:app:compileFullDebugKotlin`
+  （此前完全跑不了 Gradle）。细则见 `ISSUES.md` #44。
+
+### 质量基线
+`:core:common:testDebugUnitTest` 95 用例 0 失败 / `testFullDebugUnitTest` 129 用例 0 失败 /
+`detekt` 全模块通过 / `:app:compileFullDebugKotlin` BUILD SUCCESSFUL。
+
+### ⏳ 真机待验证（下一优先）
+1. **GitHub 注册通行密钥**（此前报 `Security key authentication failed`）→ 应通过；
+   再验证**登录**（`rawId` 修复的目标场景）。
+2. `logcat` 断言：`jsonMatchesBrowserHash=false` 属**预期**（系统那份哈希来自浏览器），
+   **不再是故障信号**。
+3. 回归确认：密码自动填充 / 启动（全新安装不应再转圈）/ 设置页切换活跃库后填充目标跟随。
