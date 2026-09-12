@@ -8,6 +8,8 @@ import io.vaultix.data.bitwarden.auth.TwoFactorInvalidException
 import io.vaultix.data.bitwarden.auth.TwoFactorRequiredException
 import io.vaultix.data.bitwarden.sync.BitwardenSyncService
 import io.vaultix.data.bitwarden.sync.SyncOutcome
+import io.vaultix.database.dao.CipherDao
+import io.vaultix.database.dao.FolderDao
 import io.vaultix.database.dao.PendingOpDao
 import io.vaultix.database.dao.VaultDao
 import io.vaultix.database.entity.VaultEntity
@@ -44,6 +46,8 @@ import javax.inject.Singleton
 @Singleton
 class VaultRepositoryImpl @Inject constructor(
     private val vaultDao: VaultDao,
+    private val cipherDao: CipherDao,
+    private val folderDao: FolderDao,
     private val pendingOpDao: PendingOpDao,
     private val authRepository: BitwardenAuthRepository,
     private val sessions: VaultSessionManager,
@@ -140,6 +144,36 @@ class VaultRepositoryImpl @Inject constructor(
 
     override suspend fun lockAll() {
         sessions.lockAll()
+    }
+
+    /**
+     * 退出数据库（用户语义，见 `.ai/ISSUES.md` #60 第 3 步）。
+     *
+     * 用户原话：「设置里的『立即锁定』应该改成**退出数据库**（清本地缓存，不动远程）」。
+     * 与 [removeVault] 的唯一差别是**保留 vault 行**（保留库与账号信息，
+     * 下次点一下重新登录即可）；与 [lockVault] 的差别是**连本地缓存一起清**
+     * （密文条目 / 文件夹 / 待推送队列 / 快速解锁凭据 / token）。
+     *
+     * ⚠️ 只清本地，**不碰远程**：不调用任何服务端删除接口，条目在服务端原样保留。
+     * 排除待推送队列是「丢弃本地未上传的改动」，这是「清缓存」语义的必然含义，
+     * UI 必须就此给出明确确认文案（设置页对话框已写明）。
+     */
+    override suspend fun signOut(vaultId: String) {
+        // 1) 内存会话清零（此后 keyOf 为 null，条目列表立刻变空）
+        sessions.lock(vaultId)
+        // 2) 本地快速解锁痕迹（包裹密钥 + 开关）——不清就会留着用旧 KEK 解封的路径
+        runCatching { disableLocalUnlock(vaultId) }
+        // 3) 认证凭据与 host→server 登记清除（远端会话不受影响；重登即重新换 token）
+        authRepository.logout(vaultId)
+        // 4) 待推送队列：属「本地缓存」的一部分，必须清 —— 否则下次登录同一服务器时
+        //    旧账号的离线改动会被推到新会话（与 removeVault 第 4 步同因）
+        pendingOpDao.clearVault(vaultId)
+        // 5) 缓存条目与文件夹（vault 行保留）
+        cipherDao.clearVault(vaultId)
+        folderDao.clearVault(vaultId)
+        // 6) 同步基线归零：revisionDate 留着会让下次同步误判「服务端无变化」而跳过全量，
+        //    结果是一个「退出了数据库却什么都没拉回来」的空库
+        vaultDao.updateRevision(vaultId, null)
     }
 
     override suspend fun removeVault(vaultId: String) {

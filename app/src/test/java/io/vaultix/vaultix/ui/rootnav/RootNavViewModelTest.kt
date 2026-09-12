@@ -5,6 +5,7 @@ import com.google.common.truth.Truth.assertThat
 import io.mockk.every
 import io.mockk.mockk
 import io.vaultix.domain.VaultRepository
+import io.vaultix.domain.VaultSessionRepository
 import io.vaultix.model.VaultKind
 import io.vaultix.model.VaultSummary
 import kotlinx.coroutines.Dispatchers
@@ -83,14 +84,71 @@ class RootNavViewModelTest {
         }
     }
 
+    @Test
+    fun viewLockedVaultGoesToUnlockCarryingItsId() = runTest {
+        // 主页锁按钮 = 查看层锁：密钥仍在内存（unlocked=true），但界面必须回到解锁页，
+        // 且**携带库 id** —— 否则解锁页会在多库场景里选错库（ISSUES #60 第 1c 步）。
+        val unlocked = vaultSummary(id = "vault-1", unlocked = true)
+        val viewModel = rootNavViewModel(
+            vaults = listOf(unlocked),
+            unlockedIds = setOf("vault-1"),
+            viewLockedIds = setOf("vault-1"),
+        )
+
+        viewModel.rootNavState.test {
+            val state = awaitItem()
+            assertThat(state).isInstanceOf(RootNavState.VaultLocked::class.java)
+            assertThat((state as RootNavState.VaultLocked).vaultId).isEqualTo("vault-1")
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun viewLockTakesPrecedenceOverUnlockedGraph() = runTest {
+        // 查看锁必须排在「已解锁」判定**之前**：两者的会话状态相同（都有密钥），
+        // 顺序错了用户按锁按钮就会「什么都没发生」。
+        val a = vaultSummary(id = "vault-1", unlocked = true)
+        val b = vaultSummary(id = "vault-2", unlocked = true)
+        val viewModel = rootNavViewModel(
+            vaults = listOf(a, b),
+            unlockedIds = setOf("vault-1", "vault-2"),
+            viewLockedIds = setOf("vault-2"),
+        )
+
+        viewModel.rootNavState.test {
+            assertThat(awaitItem()).isEqualTo(RootNavState.VaultLocked("vault-2"))
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun staleViewLockedIdForRemovedVaultIsIgnored() = runTest {
+        // 库已被移除但标记残留 → 不能把用户钉在解锁页（那页没有可解锁的库 → 永久转圈，
+        // 正是 2026-09-12 修掉的启动死锁同款症状）。
+        val unlocked = vaultSummary(id = "vault-1", unlocked = true)
+        val viewModel = rootNavViewModel(
+            vaults = listOf(unlocked),
+            unlockedIds = setOf("vault-1"),
+            viewLockedIds = setOf("vault-gone"),
+        )
+
+        viewModel.rootNavState.test {
+            assertThat(awaitItem()).isInstanceOf(RootNavState.VaultUnlockedGraph::class.java)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
     private fun rootNavViewModel(
         vaults: List<VaultSummary>,
         unlockedIds: Set<String>,
+        viewLockedIds: Set<String> = emptySet(),
     ): RootNavViewModel {
         val repository = mockk<VaultRepository>()
         every { repository.observeVaults() } returns flowOf(vaults)
         every { repository.observeUnlockedVaultIds() } returns flowOf(unlockedIds)
-        return RootNavViewModel(repository)
+        val sessions = mockk<VaultSessionRepository>()
+        every { sessions.observeViewLockedVaultIds() } returns flowOf(viewLockedIds)
+        return RootNavViewModel(repository, sessions)
     }
 
     private fun vaultSummary(id: String, unlocked: Boolean) = VaultSummary(

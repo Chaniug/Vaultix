@@ -7,6 +7,8 @@ import io.mockk.mockk
 import io.vaultix.crypto.SymmetricCryptoKey
 import io.vaultix.data.bitwarden.auth.BitwardenAuthRepository
 import io.vaultix.data.bitwarden.sync.BitwardenSyncService
+import io.vaultix.database.dao.CipherDao
+import io.vaultix.database.dao.FolderDao
 import io.vaultix.database.dao.PendingOpDao
 import io.vaultix.database.dao.VaultDao
 import io.vaultix.datastore.LocalUnlockKeyStore
@@ -25,6 +27,8 @@ import org.junit.Test
 class VaultRepositoryRemoveTest {
 
     private val vaultDao = mockk<VaultDao>()
+    private val cipherDao = mockk<CipherDao>(relaxed = true)
+    private val folderDao = mockk<FolderDao>(relaxed = true)
     private val pendingOpDao = mockk<PendingOpDao>()
     private val authRepository = mockk<BitwardenAuthRepository>()
     private val syncService = mockk<BitwardenSyncService>()
@@ -40,6 +44,8 @@ class VaultRepositoryRemoveTest {
     fun setUp() {
         repo = VaultRepositoryImpl(
             vaultDao = vaultDao,
+            cipherDao = cipherDao,
+            folderDao = folderDao,
             pendingOpDao = pendingOpDao,
             authRepository = authRepository,
             sessions = sessions,

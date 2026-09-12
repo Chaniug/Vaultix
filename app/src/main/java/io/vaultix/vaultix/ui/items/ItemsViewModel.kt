@@ -11,6 +11,7 @@ import io.vaultix.domain.ItemRepository
 import io.vaultix.domain.SyncTrigger
 import io.vaultix.domain.VaultRepository
 import io.vaultix.domain.VaultSaveOutcome
+import io.vaultix.domain.VaultSessionRepository
 import io.vaultix.domain.VaultSyncStatus
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultFolder
@@ -48,6 +49,7 @@ import javax.inject.Inject
 class ItemsViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val vaultRepository: VaultRepository,
+    private val sessionRepository: VaultSessionRepository,
     private val itemRepository: ItemRepository,
     private val syncOrchestrator: BitwardenSyncOrchestrator,
     private val folderRepository: FolderRepository,
@@ -233,10 +235,24 @@ class ItemsViewModel @Inject constructor(
         _state.update { it.copy(syncNote = null) }
     }
 
-    /** 锁定当前库（清零内存密钥）并回调导航。 */
+    /**
+     * 主页锁按钮：锁**查看层**（不清内存密钥）。
+     *
+     * 用户明确要求（`.ai/ISSUES.md` #60）：
+     * 「主页密码条目上方的锁按钮应该**只锁生物验证那一层，解锁密钥不应该被清除**」。
+     *
+     * 因此这里**不再**调 [VaultRepository.lockVault]（那会清零密钥，恢复时必须联网
+     * 重登 + 可能的 2FA —— 用户反馈的「频繁解锁」正是这条链路）。改为只置内存标记：
+     * 根导航立刻把界面收回解锁页，一次生物识别即回到原界面。
+     *
+     * 「从不自动锁定」档位不受影响：本动作由用户显式触发，与超时策略无关
+     * （超时策略只管「不请自来」的锁定）——但用户主动按锁就该锁。
+     *
+     * @param onLocked 无副作用保留位（真锁路径已由根导航接管）。
+     */
     fun lockNow(onLocked: () -> Unit) {
         viewModelScope.launch {
-            vaultRepository.lockVault(vaultId)
+            sessionRepository.viewLock(vaultId)
             onLocked()
         }
     }

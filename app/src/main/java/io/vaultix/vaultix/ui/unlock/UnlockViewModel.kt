@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import io.vaultix.domain.UnlockResult
 import io.vaultix.domain.VaultRepository
+import io.vaultix.domain.VaultSessionRepository
 import io.vaultix.model.VaultSummary
 import io.vaultix.vaultix.ui.common.TwoFactorProvider
 import io.vaultix.vaultix.ui.error.UnlockUiError
@@ -27,11 +28,21 @@ import javax.inject.Inject
  *
  * 2FA 期间主密码保留在内存（完成/放弃即清）；库信息从
  * [VaultRepository.observeVaults] 按 vaultId 取。
+ *
+ * 两条**语义完全不同**的路径（`.ai/ISSUES.md` #60）：
+ * | 来源 | 状态 | 页面内容 | 恢复成本 |
+ * |---|---|---|---|
+ * | 真锁（超时 / 冷启动 / 退出数据库）| [UiState.viewLocked] = false | 主密码（+2FA）+ 生物识别 | 联网重登 |
+ * | 查看层锁（主页锁按钮）| [UiState.viewLocked] = true | **只有生物识别** | 一次认证 |
+ *
+ * ⚠️ 查看层锁分支**绝不能**渲染主密码 / 2FA 区块：那会让用户以为密钥被清了，
+ * 而实际上密钥就在内存里 —— 用户原话「填充时解锁完还要再验证一次，逻辑太稀烂」。
  */
 @HiltViewModel
 class UnlockViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val vaultRepository: VaultRepository,
+    private val sessionRepository: VaultSessionRepository,
 ) : ViewModel() {
 
     data class TwoFactorUi(
@@ -55,6 +66,15 @@ class UnlockViewModel @Inject constructor(
         val error: UnlockUiError? = null,
         val twoFactor: TwoFactorUi? = null,
         val localUnlockAvailable: Boolean = false,
+        /**
+         * 目标库处于**查看层锁**（密钥仍在内存）。
+         *
+         * true 时页面走「仅认证」分支：只弹生物识别，不渲染主密码 / 2FA，
+         * 认证通过即 `clearViewLock` 回主界面。
+         */
+        val viewLocked: Boolean = false,
+        /** 本次生物识别是为查看层锁发起的（成功分支据此只清标记、不重建会话）。 */
+        val viewUnlockStarted: Boolean = false,
     )
 
     sealed interface Event {
@@ -78,7 +98,18 @@ class UnlockViewModel @Inject constructor(
     var vaultId: String = savedStateHandle.get<String>(ARG_VAULT_ID).orEmpty()
         private set
 
-    private val _state = MutableStateFlow(UiState())
+    /**
+     * 构造期就定下查看锁：路由带 vaultId 时（查看层锁场景）必须**同步**读标记。
+     *
+     * 为什么不能只靠下面的流订阅：自动弹认证的判定（[UnlockScreen]）在首帧就生效，
+     * 若 `viewLocked` 要等一帧才到，首帧会按「真锁」分支去弹本地快速解锁 ——
+     * 没启用快速解锁的用户在那一步什么都点不出来。
+     */
+    private val _state = MutableStateFlow(
+        UiState(
+            viewLocked = vaultId.isNotBlank() && sessionRepository.isViewLocked(vaultId),
+        ),
+    )
     val state: StateFlow<UiState> = _state.asStateFlow()
 
     private val _events = Channel<Event>(Channel.BUFFERED)
@@ -87,18 +118,31 @@ class UnlockViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             vaultRepository.observeVaults().collect { vaults ->
-                // 无参数进入时（根导航直达）自动选中第一个已锁定的库。
+                // 无参数进入时（根导航直达）自动选中目标库。
+                //
+                // ⚠️ 顺序有意义：**先看查看层锁**。查看锁的库在会话层面是「已解锁」
+                // （密钥在内存），`!it.unlocked` 在它身上为 false —— 若先按「第一个未解锁」
+                // 选，用户按了主页锁按钮却会被要求解锁**另一个**库。
                 if (vaultId.isBlank()) {
-                    vaults.firstOrNull { !it.unlocked }?.let { vaultId = it.id }
+                    vaultId = vaults.firstOrNull { sessionRepository.isViewLocked(it.id) }?.id
+                        ?: vaults.firstOrNull { !it.unlocked }?.id
+                        .orEmpty()
                 }
                 val target = vaults.firstOrNull { v -> v.id == vaultId }
                 _state.update {
                     it.copy(
                         vault = target,
+                        viewLocked = target != null && sessionRepository.isViewLocked(target.id),
                         // 首帧未到（vaults 尚未发射）时不会走到这里，故此处可判定为"确认无库"
                         noVaultToUnlock = target == null,
                     )
                 }
+            }
+        }
+        // 查看层锁标记变化：**只更新、不新建** viewLocked（用户认证成功清掉标记时这里会归位）。
+        viewModelScope.launch {
+            sessionRepository.observeViewLockedVaultIds().collect { locked ->
+                _state.update { it.copy(viewLocked = vaultId.isNotBlank() && vaultId in locked) }
             }
         }
         viewModelScope.launch {
@@ -108,6 +152,8 @@ class UnlockViewModel @Inject constructor(
                 .distinctUntilChanged()
                 .collectLatest { id ->
                     if (id.isBlank()) return@collectLatest
+                    // 目标库确定后再校正一次查看锁（标记流可能先于选库到达）。
+                    _state.update { it.copy(viewLocked = sessionRepository.isViewLocked(id)) }
                     vaultRepository.localUnlockAvailable(id).collect { available ->
                         _state.update { it.copy(localUnlockAvailable = available) }
                     }
@@ -116,15 +162,33 @@ class UnlockViewModel @Inject constructor(
     }
 
     /** 用户点了「生物识别 / 设备 PIN 解锁」：准备解密 Cipher 并交给 UI 弹认证。 */
-    fun startLocalUnlock() {
-        if (_state.value.submitting || _state.value.localUnlockAvailable.not()) return
-        _state.update { it.copy(submitting = true, error = null) }
+    fun startLocalUnlock() = startBiometricUnlock(viewLock = false)
+
+    /**
+     * 查看层锁的认证入口：**同一套生物识别，语义只是"证明是本人"**。
+     *
+     * 与 [startLocalUnlock] 的唯一区别是成功分支不同（见 [completeLocalUnlock]）：
+     * 这里不清会话、不重建密钥，只把查看锁标记抹掉。
+     */
+    fun startViewUnlock() = startBiometricUnlock(viewLock = true)
+
+    private fun startBiometricUnlock(viewLock: Boolean) {
+        val current = _state.value
+        if (current.submitting) return
+        if (viewLock && !current.viewLocked) return
+        if (!viewLock && current.localUnlockAvailable.not()) return
+        _state.update { it.copy(submitting = true, viewUnlockStarted = viewLock, error = null) }
         viewModelScope.launch {
             val cipher = vaultRepository.prepareLocalUnlock(vaultId)
             if (cipher == null) {
+                // 密钥包不可用（KEK 被指纹变更失效 / 从未启用）。
+                // ⚠️ 查看锁分支要**摘掉查看锁**再落回主密码表单：否则页面会停在
+                // 「只有生物识别按钮、但按钮必然失败」的死角（用户点不出任何出路）。
                 _state.update {
                     it.copy(
                         submitting = false,
+                        viewUnlockStarted = false,
+                        viewLocked = if (viewLock) false else it.viewLocked,
                         error = UnlockUiError.Unknown("本地解锁不可用，请用主密码登录"),
                     )
                 }
@@ -134,13 +198,32 @@ class UnlockViewModel @Inject constructor(
         }
     }
 
-    /** BiometricPrompt 认证成功（携带本次 cipher）：解封本地密钥建立会话。 */
-    fun completeLocalUnlock(cipher: javax.crypto.Cipher) {
+    /**
+     * BiometricPrompt 认证成功（携带本次 cipher）：解封本地密钥建立会话。
+     *
+     * @param forViewLock 本次认证是为查看层锁发起的 → 只清标记，**不重新解封密钥**
+     *   （密钥本来就在会话里；再解封一次等于把同一把密钥写第二遍，白做一轮 KDF 派生）。
+     */
+    fun completeLocalUnlock(cipher: javax.crypto.Cipher, forViewLock: Boolean) {
         viewModelScope.launch {
+            if (forViewLock) {
+                sessionRepository.clearViewLock(vaultId)
+                _state.update {
+                    it.copy(submitting = false, viewUnlockStarted = false, error = null)
+                }
+                _events.send(Event.Unlocked)
+                return@launch
+            }
             val result = vaultRepository.completeLocalUnlock(vaultId, cipher)
             if (result == UnlockResult.Success) {
                 _state.update {
-                    it.copy(submitting = false, password = "", twoFactor = null, error = null)
+                    it.copy(
+                        submitting = false,
+                        viewUnlockStarted = false,
+                        password = "",
+                        twoFactor = null,
+                        error = null,
+                    )
                 }
                 _events.send(Event.Unlocked)
             } else {
@@ -148,6 +231,7 @@ class UnlockViewModel @Inject constructor(
                 _state.update {
                     it.copy(
                         submitting = false,
+                        viewUnlockStarted = false,
                         error = UnlockUiError.Unknown(detail ?: "本地解锁失败，请用主密码登录"),
                     )
                 }
@@ -157,7 +241,7 @@ class UnlockViewModel @Inject constructor(
 
     /** 认证对话框被系统错误终止（非用户取消）时收起 busy 态。 */
     fun onBiometricPromptDismissed() {
-        _state.update { it.copy(submitting = false) }
+        _state.update { it.copy(submitting = false, viewUnlockStarted = false) }
     }
 
     /**
@@ -174,6 +258,7 @@ class UnlockViewModel @Inject constructor(
         _state.update {
             it.copy(
                 submitting = false,
+                viewUnlockStarted = false,
                 error = if (cancelled) it.error else UnlockUiError.Unknown(message),
             )
         }
@@ -226,8 +311,18 @@ class UnlockViewModel @Inject constructor(
     private suspend fun handleSubmitResult(result: UnlockResult, submitTwoFactor: Boolean) {
         when (result) {
             UnlockResult.Success -> {
+                // 成功解锁 = 密钥已在内存 → 查看锁标记失去意义（真锁 / 退出数据库后
+                // 残留的标记若不清，根导航会立刻把用户弹回解锁页）。
+                sessionRepository.clearViewLock(vaultId)
                 _state.update {
-                    it.copy(submitting = false, password = "", twoFactor = null, error = null)
+                    it.copy(
+                        submitting = false,
+                        viewLocked = false,
+                        viewUnlockStarted = false,
+                        password = "",
+                        twoFactor = null,
+                        error = null,
+                    )
                 }
                 _events.send(Event.Unlocked)
             }

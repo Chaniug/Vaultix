@@ -46,6 +46,11 @@ class VaultSessionManager @Inject constructor() {
     suspend fun lock(vaultId: String) {
         mutex.withLock {
             sessions.remove(vaultId)?.clear()
+            // 真锁即「密钥已不在内存」→ 查看锁标记失去意义（没有会话可保护）。
+            // 必须在这里一并清掉：否则超时真锁之后 `isViewLocked` 仍为 true，
+            // 根导航会把界面收在「已解锁但查看锁定」的分支上，用户输入主密码解锁后
+            // 又被弹回解锁页（2026-09-12 规范化时的判据，见 .ai/ISSUES.md #60 第 2 步）。
+            viewLockedIdsState.value = viewLockedIdsState.value - vaultId
             unlockedIdsState.value = sessions.keys.toSet()
         }
     }
@@ -55,6 +60,7 @@ class VaultSessionManager @Inject constructor() {
         mutex.withLock {
             sessions.values.forEach { it.clear() }
             sessions.clear()
+            viewLockedIdsState.value = emptySet()
             unlockedIdsState.value = emptySet()
         }
     }
@@ -100,6 +106,9 @@ class VaultSessionManager @Inject constructor() {
 
     /** 该库当前是否只是「查看层被锁」（密钥仍在内存）。 */
     fun isViewLocked(vaultId: String): Boolean = vaultId in viewLockedIdsState.value
+
+    /** 任一库处于查看锁（根导航 / 解锁页自动选库用；只读快照）。 */
+    fun anyViewLocked(): Boolean = viewLockedIdsState.value.isNotEmpty()
 
     /**
      * 锁「查看层」：**不动密钥**，仅置标记。

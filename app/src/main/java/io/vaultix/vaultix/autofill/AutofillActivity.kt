@@ -49,9 +49,14 @@ import io.vaultix.common.OtpUriParser
 import io.vaultix.common.TotpGenerator
 import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.domain.VaultRepository
+import io.vaultix.domain.VaultSessionRepository
 import io.vaultix.vaultix.MainActivity
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.autofill.engine.AutofillCandidateSource
+import io.vaultix.vaultix.autofill.engine.AutofillDatasetFactory
 import io.vaultix.vaultix.autofill.engine.AutofillDatasets
+import io.vaultix.vaultix.autofill.engine.FillPlanner
+import io.vaultix.vaultix.autofill.engine.AutofillCredentialMapper
 import io.vaultix.vaultix.ui.common.BiometricPrompter
 import io.vaultix.vaultix.ui.theme.VaultixTheme
 import io.vaultix.vaultix.util.VaultixClipboard
@@ -65,12 +70,25 @@ import javax.inject.Inject
 /**
  * 透明宿 Activity：由系统经 PendingIntent 拉起（见 [AutofillIntents]）。
  *
- * 三条路径：
+ * 四条路径：
  * - [AutofillIntents.MODE_UNLOCK]：库锁定时**优先原地生物识别解锁**（已启用本地快速解锁时），
- *   认证通过即 finish 返回原 App——用户回浏览器再点一次即秒填；未启用 / KEK 失效时
- *   回退到引导卡片 → 打开 Vaultix 用主密码解锁；
+ *   认证通过即把本次请求的候选回灌并 finish 返回原 App（★ 解锁即回填，见下）；
+ *   未启用 / KEK 失效时回退到引导卡片 → 打开 Vaultix 用主密码解锁，
+ *   **用户解锁完回来时本 Activity 仍在栈上**，由 [onResume] 完成回灌；
  * - [AutofillIntents.MODE_SEARCH]：跳转到主界面解锁 / 搜索；
- * - [AutofillIntents.MODE_REPROMPT]：设备认证（生物识别 / 设备凭据）通过后回灌 Dataset。
+ * - [AutofillIntents.MODE_REPROMPT]：设备认证（生物识别 / 设备凭据）通过后回灌 Dataset；
+ * - [AutofillIntents.MODE_COPY_TOTP]：回灌 Dataset 后把验证码复制到剪贴板（全程无界面）。
+ *
+ * ## ★ 解锁即回填（`.ai/ISSUES.md` #60 第 4 步）
+ * 系统只在库锁定时给我们**一次** `onFillRequest`，解锁后**不会**重发。
+ * 因此填充服务在锁定时把该次请求的解析结果暂存进 [PendingFillStore]，
+ * 解锁完成后由本 Activity 用同一批 `AutofillId` 构造 Dataset，经
+ * `AutofillManager.EXTRA_AUTHENTICATION_RESULT` 回灌
+ * （对齐 Bitwarden `AutofillIntentUtils:109-119` 的 `createAutofillSelectionResultIntent`）。
+ *
+ * 关键设计：走「打开 Vaultix 解锁」那条路时本 Activity **不 finish** ——
+ * 它必须留在栈上，否则解锁完成后没有任何人能投递认证结果
+ * （`.ai/ISSUES.md` #25：认证结果只在 Activity 走完生命周期后返回才有效）。
  */
 @AndroidEntryPoint
 class AutofillActivity : FragmentActivity() {
@@ -84,10 +102,32 @@ class AutofillActivity : FragmentActivity() {
     @Inject
     lateinit var vaultRepository: VaultRepository
 
+    @Inject
+    lateinit var sessionRepository: VaultSessionRepository
+
+    /** 「解锁即回填」的暂存（候选要解锁后才读得到，字段 id 只有请求那一刻拿得到）。 */
+    @Inject
+    lateinit var pendingFillStore: PendingFillStore
+
+    /** 候选来源：与填充服务共用同一实现，保证两条路径结论一致。 */
+    @Inject
+    lateinit var candidates: AutofillCandidateSource
+
     private var biometricPrompt: BiometricPrompt? = null
 
     /** MODE_UNLOCK 下先隐藏卡片、等本地解锁判定；无可判定回退时再亮卡片。 */
     private val showPrompt = mutableStateOf(true)
+
+    /**
+     * 已把用户送去主界面解锁，正等他回来。
+     *
+     * 只有它为 true 时 [onResume] 才会尝试回灌 —— 否则本 Activity 首次启动时的
+     * `onCreate → onResume` 就会误判（那一刻库当然还锁着）。
+     */
+    private var awaitingExternalUnlock = false
+
+    /** 回灌一次性 guard（[onResume] 可能被对话框等打断重入）。 */
+    private var delivered = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -136,7 +176,30 @@ class AutofillActivity : FragmentActivity() {
                 AutofillIntents.titleOf(intent),
                 AutofillIntents.subtitleOf(intent),
             )
+            return
         }
+        // ★ 解锁即回填：用户从 Vaultix 主界面解锁完回到本页 → 立刻把候选回灌。
+        if (!delivered && awaitingExternalUnlock) {
+            lifecycleScope.launch(Dispatchers.Default) { deliverPendingFill() }
+            return
+        }
+        // 用户在主界面点的是「主页锁按钮」（查看层锁）：密钥仍在内存，回来时库里
+        // **仍是已解锁**，我们要做的是把界面门禁的认证走一遍 —— 亮卡片让他「打开 Vaultix」
+        // 认证一次，回来时上面那条分支会完成回灌。不这么做的话本页会停在透明状态，
+        // 用户看到的就是「点了填充什么都没发生」。
+        if (!delivered && !showPrompt.value) {
+            lifecycleScope.launch(Dispatchers.Default) {
+                if (hasViewLockedVault()) withContext(Dispatchers.Main) { showPrompt.value = true }
+            }
+        }
+    }
+
+    /** 是否有库正处「查看层锁」（界面被挡但密钥仍在 → 填充本可读，只差一次认证）。 */
+    private suspend fun hasViewLockedVault(): Boolean {
+        if (!sessionRepository.anyViewLocked()) return false
+        val unlocked = runCatching { vaultRepository.observeUnlockedVaultIds().first() }
+            .getOrDefault(emptySet())
+        return unlocked.any { sessionRepository.isViewLocked(it) }
     }
 
     override fun finish() {
@@ -148,57 +211,86 @@ class AutofillActivity : FragmentActivity() {
         overridePendingTransition(0, 0)
     }
 
+    /**
+     * 打开 Vaultix 主界面解锁。
+     *
+     * ⚠️ **不 finish**：本 Activity 是系统认定的「认证 Activity」，解锁结果只能由它回灌
+     * （见类 KDoc）。它留在栈上，用户在 Vaultix 里解锁完按返回 / 解锁页自动返回时，
+     * [onResume] 会完成回灌 —— 用户体感就是「解锁一次，密码已经填好了」。
+     *
+     * 若本次没有可回灌的暂存（例如系统没给 AssistStructure），则保持旧行为直接 finish，
+     * 不把用户无意义地扣在一个空白 Activity 上。
+     */
     private fun openVaultAndFinish() {
+        val hasPending = pendingFillStore.hasPending()
         startActivity(
             Intent(this, MainActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                 .putExtra(AutofillIntents.EXTRA_MAIN_UNLOCK_EXIT, true),
         )
-        finish()
+        if (hasPending) {
+            awaitingExternalUnlock = true
+        } else {
+            finish()
+        }
     }
 
     /**
      * MODE_UNLOCK 原地生物解锁：库锁定且任一生效库启用本地快速解锁 → 直接弹
      * BiometricPrompt（KEK 共享，一次认证解封所有已启用库的本地密钥），认证通过即
-     * finish 返回原 App；无本地快速解锁 / KEK 失效 → 亮卡片走「打开 Vaultix」主密码。
+     * **回灌本次填充**并 finish；无本地快速解锁 / KEK 失效 → 亮卡片走「打开 Vaultix」主密码。
      */
     private fun maybeBiometricUnlock(title: String, subtitle: String) {
         lifecycleScope.launch(Dispatchers.IO) {
-            val pending = prepareBiometricUnlock()
-            if (pending == null) {
-                withContext(Dispatchers.Main) { showPrompt.value = true }
-                return@launch
-            }
-            withContext(Dispatchers.Main) {
-                BiometricPrompter(this@AutofillActivity).authenticate(
-                    cipher = pending.cipher,
-                    title = title,
-                    subtitle = subtitle.ifBlank { null },
-                    cancelText = getString(R.string.action_cancel),
-                    onSuccess = { cipher -> unlockAllAndFinish(pending, cipher) },
-                    onError = { _, _ -> finish() },
-                )
+            when (val outcome = prepareBiometricUnlock()) {
+                is BiometricUnlockOutcome.Fallback ->
+                    withContext(Dispatchers.Main) { showPrompt.value = true }
+
+                // 竞态：别的入口已解锁（含「查看层锁」——密钥仍可读，填充本不需要再认证）
+                // → 直接回灌，不必让用户再验证一次。
+                BiometricUnlockOutcome.Ready ->
+                    withContext(Dispatchers.Main) { deliverPendingFill() }
+
+                is BiometricUnlockOutcome.Prompt -> withContext(Dispatchers.Main) {
+                    BiometricPrompter(this@AutofillActivity).authenticate(
+                        cipher = outcome.pending.cipher,
+                        title = title,
+                        subtitle = subtitle.ifBlank { null },
+                        cancelText = getString(R.string.action_cancel),
+                        onSuccess = { cipher -> unlockAllAndFinish(outcome.pending, cipher) },
+                        onError = { _, _ ->
+                            // 用户取消认证 → 亮卡片给「打开 Vaultix 解锁」这条主密码退路
+                            // （而不是直接消失，让用户以为填充坏掉了）。
+                            showPrompt.value = true
+                        },
+                    )
+                }
             }
         }
     }
 
-    /** 找第一个「已锁定且启用本地快速解锁」的库并准备解密 Cipher；无可解锁 → null。 */
-    private suspend fun prepareBiometricUnlock(): PendingBiometricUnlock? {
+    /** 找第一个「已锁定且启用本地快速解锁」的库并准备解密 Cipher。 */
+    private suspend fun prepareBiometricUnlock(): BiometricUnlockOutcome {
         if (vaultRepository.observeUnlockedVaultIds().first().isNotEmpty()) {
-            // 竞态：别的入口已解锁 → 直接收工，用户回浏览器重点即可
-            withContext(Dispatchers.Main) { finish() }
-            return null
+            return BiometricUnlockOutcome.Ready
         }
         val vaults = runCatching { vaultRepository.observeVaults().first() }.getOrDefault(emptyList())
         val lockedIds = vaults.filterNot { it.unlocked }.map { it.id }
         val first = lockedIds.firstOrNull { id ->
             runCatching { vaultRepository.localUnlockAvailable(id).first() }.getOrDefault(false)
-        } ?: return null
-        val cipher = runCatching { vaultRepository.prepareLocalUnlock(first) }.getOrNull() ?: return null
-        return PendingBiometricUnlock(first = first, rest = lockedIds.filter { it != first }, cipher = cipher)
+        } ?: return BiometricUnlockOutcome.Fallback
+        val cipher = runCatching { vaultRepository.prepareLocalUnlock(first) }.getOrNull()
+            ?: return BiometricUnlockOutcome.Fallback
+        return BiometricUnlockOutcome.Prompt(
+            PendingBiometricUnlock(
+                first = first,
+                rest = lockedIds.filter { it != first },
+                cipher = cipher,
+            ),
+        )
     }
 
-    /** 认证通过：解封首个库，随后趁 KEK 授权窗口解封其余已启用库，然后 finish。 */
+    /** 认证通过：解封首个库，随后趁 KEK 授权窗口解封其余已启用库，然后回灌并 finish。 */
     private fun unlockAllAndFinish(pending: PendingBiometricUnlock, cipher: Cipher) {
         lifecycleScope.launch(Dispatchers.IO) {
             runCatching { vaultRepository.completeLocalUnlock(pending.first, cipher) }
@@ -206,8 +298,66 @@ class AutofillActivity : FragmentActivity() {
                 val c = runCatching { vaultRepository.prepareLocalUnlock(id) }.getOrNull() ?: continue
                 runCatching { vaultRepository.completeLocalUnlock(id, c) }
             }
-            withContext(Dispatchers.Main) { finish() }
+            withContext(Dispatchers.Main) { deliverPendingFill() }
         }
+    }
+
+    /**
+     * ★ 解锁即回填：用暂存的解析结果重建 Dataset 并回灌给系统。
+     *
+     * 三种收尾（都必须 finish，否则用户被扣在一个透明 Activity 上）：
+     * - 暂存已过期 / 读不到条目 → 不回灌（`RESULT_CANCELED`），退回浏览器；
+     * - 匹配到登录条目 → 回灌**第一条**候选（用户点的是「Vaultix」那一行，
+     *   不是某条具体条目，所以取匹配度最高的那条最贴近意图）；
+     * - 未匹配 → 回灌第一条候选；一条候选都没有 → 不回灌。
+     */
+    private suspend fun deliverPendingFill() {
+        if (delivered) return
+        delivered = true
+        val pending = pendingFillStore.takeValid()
+        if (pending == null) {
+            finish()
+            return
+        }
+        val parsed = pending.parsed
+        val dataset = runCatching { buildPendingDataset(parsed) }.getOrNull()
+        // 一次性语义：无论成功与否都清掉（同一批 AutofillId 不得二次回灌）。
+        pendingFillStore.clear()
+        withContext(Dispatchers.Main) {
+            if (dataset == null) {
+                setResult(Activity.RESULT_CANCELED)
+            } else {
+                setResult(
+                    Activity.RESULT_OK,
+                    Intent().putExtra(AutofillManager.EXTRA_AUTHENTICATION_RESULT, dataset),
+                )
+            }
+            finish()
+        }
+    }
+
+    /** 暂存的解析结果 → 最优候选的 Dataset（读盘 / 解密都在 IO 上）。 */
+    private suspend fun buildPendingDataset(
+        parsed: io.vaultix.vaultix.autofill.model.ParsedStructure,
+    ): android.service.autofill.Dataset? {
+        val unlocked = vaultRepository.observeUnlockedVaultIds().first()
+        if (unlocked.isEmpty()) return null
+        val sources = candidates.singleActiveVault(unlocked)
+        val vault = candidates.collectCandidates(sources)
+        val webDomain = candidates.webDomainOf(parsed)
+        val matched = candidates.matchLogins(vault.credentials, parsed, webDomain)
+        val plan = FillPlanner.plan(
+            context = AutofillCredentialMapper.toFillContext(parsed, webDomain),
+            matchedLogins = matched,
+            cards = vault.cards,
+            identities = vault.identities,
+            totpProvider = AutofillDatasetFactory::totpCode,
+        )
+        val copyTotp = runCatching { prefs.autoCopyTotp.first() }.getOrDefault(true)
+        return plan.suggestions
+            .asSequence()
+            .mapNotNull { AutofillDatasetFactory.datasetFor(this, parsed, it, copyTotp) }
+            .firstOrNull()
     }
 
     /** 二次验证：设备认证通过后把 Dataset 回灌给系统。 */
@@ -309,6 +459,25 @@ private data class PendingBiometricUnlock(
     val rest: List<String>,
     val cipher: Cipher,
 )
+
+/**
+ * [AutofillActivity.prepareBiometricUnlock] 的三种结论。
+ *
+ * 为什么不用可空返回值：`null` 同时要表达「库已解锁（直接回灌）」与
+ * 「没有可用的本地解锁（亮卡片）」两件**相反**的事 —— 前者应当立刻把密码填进去，
+ * 后者要把用户送去主界面。合并成一个值必然有一边行为错（`.ai/ISSUES.md`
+ * 里「锁态与不存在混为一谈」的同类教训）。
+ */
+private sealed interface BiometricUnlockOutcome {
+    /** 可原地认证：弹 BiometricPrompt。 */
+    data class Prompt(val pending: PendingBiometricUnlock) : BiometricUnlockOutcome
+
+    /** 库已解锁（或密钥仍在查看锁下可用）→ 直接回灌，无需认证。 */
+    data object Ready : BiometricUnlockOutcome
+
+    /** 无处可认证（未启用快速解锁 / KEK 不可用）→ 亮卡片走主密码。 */
+    data object Fallback : BiometricUnlockOutcome
+}
 
 /** 认证 / 引导卡片（透明遮罩 + 居中卡片，点遮罩即收起）。 */
 @Composable

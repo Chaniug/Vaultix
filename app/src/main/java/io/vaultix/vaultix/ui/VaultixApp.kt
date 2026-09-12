@@ -75,12 +75,15 @@ fun VaultixApp() {
     // 库可解锁 → 一直转圈；且固化之后后续状态变化也不会再改起始路由。
     // 现在 startDestination 只承担"未知"语义，真正的落点由下面的 LaunchedEffect 驱动。
     LaunchedEffect(rootNavState) {
-        when (rootNavState) {
+        when (val state = rootNavState) {
             // 首帧未到：停在启动占位，什么都不做
             RootNavState.Splash -> return@LaunchedEffect
-            // 有库且全锁（含自动锁定）→ 解锁入口，清掉所有已失效的明文界面。
+            // 有库但锁着（含自动锁定 / 主页查看锁）→ 解锁入口，清掉所有已失效的明文界面。
             // ⚠️ 这里**每次**都收敛：自动锁定必须能把手上的条目页关掉。
-            RootNavState.VaultLocked -> navController.navigateToRoot(UnlockEntryRoute)
+            // 查看层锁（state.vaultId 非空）同样收敛，但解锁页只做一次认证就回来 ——
+            // 会话密钥没被清，所以不必重登。
+            is RootNavState.VaultLocked ->
+                navController.navigateToRoot(UnlockEntryRoute(vaultId = state.vaultId.orEmpty()))
             // 首次使用（一个库都没有）→ 库列表引导添加
             RootNavState.Onboarding -> navController.navigateToRoot(VaultListRoute)
             // 已解锁：仅在首帧落一次（对齐 Bastion「解锁即进主界面」）；

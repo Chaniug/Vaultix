@@ -27,8 +27,7 @@ import androidx.compose.material.icons.filled.ViewAgenda
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Fingerprint
-import androidx.compose.material.icons.filled.Key
-import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Password
@@ -104,6 +103,7 @@ fun SettingsScreen(
     var showClipboardDialog by rememberSaveable { mutableStateOf(false) }
     var showAboutDialog by rememberSaveable { mutableStateOf(false) }
     var showQuickUnlockDialog by rememberSaveable { mutableStateOf(false) }
+    var showExitDatabaseDialog by rememberSaveable { mutableStateOf(false) }
     val quickUnlockVaults by viewModel.quickUnlockVaults.collectAsStateWithLifecycle()
 
     QuickUnlockEnrollEffect(viewModel)
@@ -134,6 +134,7 @@ fun SettingsScreen(
                 onAutoLock = { showAutoLockDialog = true },
                 onClipboardClear = { showClipboardDialog = true },
                 onQuickUnlock = { showQuickUnlockDialog = true },
+                onExitDatabase = { showExitDatabaseDialog = true },
             )
 
             // ---- 外观 / 数据（批次④：Bastion SettingsScreen 对照补缺） ----
@@ -212,10 +213,49 @@ fun SettingsScreen(
             onDismiss = { showQuickUnlockDialog = false },
         )
     }
+    if (showExitDatabaseDialog) {
+        ExitDatabaseDialog(
+            onConfirm = {
+                showExitDatabaseDialog = false
+                viewModel.exitDatabase()
+            },
+            onDismiss = { showExitDatabaseDialog = false },
+        )
+    }
 }
 
 /**
- * 安全组：自动锁定 / 剪贴板清除 / 防截屏 / 立即锁定 / 快速解锁。
+ * 「退出数据库」确认对话框。
+ *
+ * ⚠️ **必须有**：这一步会丢掉本地未上传的改动（待推送队列属本地缓存），
+ * 一个没有确认的破坏性动作是不可接受的（用户可能刚离线编辑了十条条目）。
+ * 文案把三件事说清：清什么（本地缓存）、不碰什么（远程 / 库本身）、丢什么（未上传改动）。
+ */
+@Composable
+private fun ExitDatabaseDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Filled.Logout, contentDescription = null) },
+        title = { Text(stringResource(R.string.setting_exit_database)) },
+        text = { Text(stringResource(R.string.setting_exit_database_confirm)) },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text(
+                    text = stringResource(R.string.setting_exit_database_action),
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.action_cancel))
+            }
+        },
+    )
+}
+
+/**
+ * 安全组：自动锁定 / 剪贴板清除 / 防截屏 / 退出数据库 / 快速解锁。
  *
  * 拆成独立 composable 纯粹是为了让 [SettingsScreen] 主函数守住 detekt `LongMethod`
  * （≤150 行）——三个对话框的显示状态仍留在宿主里，本函数只收回调。
@@ -227,6 +267,7 @@ private fun SecuritySection(
     onAutoLock: () -> Unit,
     onClipboardClear: () -> Unit,
     onQuickUnlock: () -> Unit,
+    onExitDatabase: () -> Unit,
 ) {
     SettingsGroupTitle(stringResource(R.string.group_security))
     SettingsRow(
@@ -253,11 +294,11 @@ private fun SecuritySection(
         },
     )
     SettingsRow(
-        icon = { Icon(Icons.Filled.Lock, contentDescription = null) },
-        title = stringResource(R.string.setting_lock_now),
-        subtitle = stringResource(R.string.setting_lock_now_desc),
+        icon = { Icon(Icons.Filled.Logout, contentDescription = null) },
+        title = stringResource(R.string.setting_exit_database),
+        subtitle = stringResource(R.string.setting_exit_database_desc),
         titleColor = MaterialTheme.colorScheme.error,
-        onClick = viewModel::lockAllNow,
+        onClick = onExitDatabase,
     )
     SettingsRow(
         icon = { Icon(Icons.Filled.Fingerprint, contentDescription = null) },

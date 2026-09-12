@@ -36,6 +36,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import io.vaultix.domain.VaultRepository
+import io.vaultix.domain.VaultSessionRepository
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -71,8 +72,12 @@ sealed class RootNavState {
      *
      * ⚠️ 注意这不是"错误状态"：Bitwarden 的 `RootNavScreen` 把它映射到
      * `VaultUnlockRoute.Standard`，用户看到的是主密码输入页。
+     *
+     * [vaultId] 非空时表示这是**查看层锁**（ViewLocked，密钥仍在内存）：
+     * 解锁页只需一次生物识别即可回来，[io.vaultix.vaultix.ui.unlock.UnlockScreen]
+     * 据此走「仅认证」分支。
      */
-    data object VaultLocked : RootNavState()
+    data class VaultLocked(val vaultId: String? = null) : RootNavState()
 
     /** 库已解锁 → 进入主功能图（库列表 / 条目 / 设置…）。 */
     data object VaultUnlockedGraph : RootNavState()
@@ -81,13 +86,19 @@ sealed class RootNavState {
 @HiltViewModel
 class RootNavViewModel @Inject constructor(
     vaultRepository: VaultRepository,
+    sessionRepository: VaultSessionRepository,
 ) : ViewModel() {
 
     /**
      * 根导航状态。
      *
-     * 判定顺序（照抄 Bitwarden，并按 Vaultix 的「有没有库」语义补一层）：
-     * **首帧未到 → Splash；有库且任一已解锁 → 解锁图；无库 → 首次使用；其余（有库但全锁）→ 锁定。**
+     * 判定顺序（照抄 Bitwarden，并按 Vaultix 的「有没有库」语义补两层）：
+     * **首帧未到 → Splash；有库但查看层被锁 → 锁定态（携带库 id）；任一已解锁 → 解锁图；
+     * 无库 → 首次使用；其余（有库但全锁）→ 锁定态。**
+     *
+     * ⚠️ 查看层锁必须排在「已解锁」**之前**：查看锁的库在会话层面仍是解锁的
+     * （密钥在内存、autofill 与凭据提供商照常可用），若按解锁图处理，
+     * 用户按了主页锁按钮却什么都没发生 —— 那正是这一步要修的行为。
      *
      * 与 Bitwarden 的差异：Bitwarden 多一层 `isLoggedIn`（账号是否已登录）与
      * `SpecialCircumstance.Fido2Assertion` 专项路由；Vaultix 目前是单账号模型，
@@ -96,15 +107,19 @@ class RootNavViewModel @Inject constructor(
     val rootNavState: StateFlow<RootNavState> = combine(
         vaultRepository.observeVaults(),
         vaultRepository.observeUnlockedVaultIds(),
-    ) { vaults, unlockedIds ->
+        sessionRepository.observeViewLockedVaultIds(),
+    ) { vaults, unlockedIds, viewLockedIds ->
+        val viewLocked = viewLockedIds.firstOrNull { id -> vaults.any { it.id == id } }
         when {
+            // 查看层锁：界面收回解锁页，但密钥仍在 → 解锁页只做一次认证。
+            viewLocked != null -> RootNavState.VaultLocked(viewLocked)
             // 双源交叉校验：`VaultSummary.unlocked` 与 `unlockedIds` 任一为真即视为已解锁。
             // 二者同源（都来自会话表），差异只可能是极短的时间窗；取"或"可避免
             // 把内存中确有密钥的会话误判成锁定（从而误弹解锁页）。
             unlockedIds.isNotEmpty() || vaults.any { it.unlocked } -> RootNavState.VaultUnlockedGraph
             // 一个库都没有：首次使用，不是"锁定"（锁定态必须有可解锁的库）
             vaults.isEmpty() -> RootNavState.Onboarding
-            else -> RootNavState.VaultLocked
+            else -> RootNavState.VaultLocked()
         }
     }.stateIn(
         scope = viewModelScope,

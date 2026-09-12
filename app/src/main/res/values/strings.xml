@@ -47,6 +47,8 @@
     <string name="unlock_submit">解锁</string>
     <string name="unlock_password">主密码</string>
     <string name="unlock_password_label_fallback">或使用主密码</string>
+    <!-- 查看层锁（主页锁按钮）：密钥仍在内存，只需一次认证 -->
+    <string name="unlock_view_locked_hint">已锁屏保 · 密钥仍在内存，验证一次身份即可回到原界面（无需重输主密码）</string>
 
     <!-- 错误文案 -->
     <string name="error_fields_missing">请填写邮箱和主密码</string>
@@ -102,6 +104,11 @@
     <string name="setting_trash_auto_delete">回收站自动清理</string>
     <string name="setting_lock_now">立即锁定</string>
     <string name="setting_lock_now_desc">清零全部库的解锁密钥并返回列表</string>
+    <!-- 「立即锁定」→「退出数据库」（用户语义：清本地缓存，不动远程） -->
+    <string name="setting_exit_database">退出数据库</string>
+    <string name="setting_exit_database_desc">清除本地缓存（条目 / 登录凭据 / 待上传改动）并锁定；库保留在列表中，远程数据不受影响</string>
+    <string name="setting_exit_database_confirm">将清除本机上的条目缓存、登录凭据与快速解锁设置，并锁定全部库。\n\n· 远程（服务器）数据不受影响，下次登录会重新拉取；\n· 本机尚未上传的改动会丢失（离线编辑的内容）。\n\n确定退出吗？</string>
+    <string name="setting_exit_database_action">退出</string>
 
     <!-- 自动填充（M2-a：系统 AutofillService） -->
     <string name="group_autofill">自动填充</string>

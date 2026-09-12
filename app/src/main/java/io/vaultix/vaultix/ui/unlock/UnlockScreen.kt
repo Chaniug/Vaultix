@@ -38,6 +38,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -47,6 +48,7 @@ import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.BiometricPrompter
 import io.vaultix.vaultix.ui.common.TwoFactorStep
 import io.vaultix.vaultix.ui.common.rememberFragmentActivity
+import io.vaultix.vaultix.ui.error.UnlockUiError
 import io.vaultix.vaultix.ui.error.unlockErrorText
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.foundation.layout.width
@@ -78,12 +80,15 @@ fun UnlockScreen(
     val biometricSubtitle = stringResource(R.string.quick_unlock_biometric_subtitle)
     val cancelText = stringResource(R.string.action_cancel)
 
-    // BiometricPrompt 事件：收到 cipher 即弹认证，成功回调回传 VM 完成解封
+    // BiometricPrompt 事件：收到 cipher 即弹认证，成功回调回传 VM 完成解封。
+    // `forViewLock` 由**本次事件发起时的状态**决定（不是回调时的状态）：
+    // 认证对话框弹出期间状态可能被其它流改写，用它去判分支会走错成功路径。
     LaunchedEffect(Unit) {
         viewModel.events.collect { event ->
             when (event) {
                 UnlockViewModel.Event.Unlocked -> onUnlocked()
                 is UnlockViewModel.Event.PromptForUnlock -> {
+                    val forViewLock = viewModel.state.value.viewUnlockStarted
                     val host = activity ?: run {
                         viewModel.onBiometricPromptDismissed()
                         return@collect
@@ -93,7 +98,9 @@ fun UnlockScreen(
                         title = biometricTitle,
                         subtitle = biometricSubtitle,
                         cancelText = cancelText,
-                        onSuccess = viewModel::completeLocalUnlock,
+                        onSuccess = { cipher ->
+                            viewModel.completeLocalUnlock(cipher, forViewLock)
+                        },
                         // ⚠️ **任何**错误都要复位 submitting，不能只处理「用户取消」：
                         // ERROR_TIMEOUT / ERROR_CANCELED / ERROR_HW_UNAVAILABLE / ERROR_LOCKOUT
                         // 都不在取消白名单里，一旦落进来而无人复位，submitting 永远为真 ⇒
@@ -109,14 +116,16 @@ fun UnlockScreen(
         }
     }
 
-    // 进入解锁页自动弹一次本地快速解锁（生物识别 / 指纹）。
+    // 进入解锁页自动弹一次认证：查看层锁 → 仅证明「是本人」；真锁 → 本地快速解锁。
     // 抽成独立 composable：守卫条件与相关状态一并移出本函数，避免 UnlockScreen 的
     // CyclomaticComplexMethod / ComplexCondition 越界（CI detekt 质量门会拦，2026-09-12 实测）。
     AutoPromptQuickUnlock(
         localUnlockAvailable = state.localUnlockAvailable,
+        viewLocked = state.viewLocked,
         hasTwoFactor = state.twoFactor != null,
         submitting = state.submitting,
         onPrompt = viewModel::startLocalUnlock,
+        onViewPrompt = viewModel::startViewUnlock,
     )
 
     Scaffold { padding ->
@@ -155,6 +164,19 @@ fun UnlockScreen(
                 )
                 return@Column
             }
+            // ---- 查看层锁（主页锁按钮）：只认证，不重登 ----
+            // 密钥仍在内存，所以**不渲染主密码 / 2FA 区块** —— 渲染了就是在骗用户
+            // 「你的密钥被清了」（用户原话：解锁完还要再验证一次，逻辑太稀烂）。
+            if (state.viewLocked) {
+                ViewLockedContent(
+                    vaultName = vault.name,
+                    account = vault.account,
+                    submitting = state.submitting,
+                    error = state.error,
+                    onAuthenticate = viewModel::startViewUnlock,
+                )
+                return@Column
+            }
             Text(
                 text = vault.name.take(1).uppercase(),
                 style = MaterialTheme.typography.headlineLarge,
@@ -185,10 +207,87 @@ fun UnlockScreen(
     }
 }
 
+/**
+ * 查看层锁的页面内容：**只有一次身份认证**，没有主密码、没有 2FA、没有联网。
+ *
+ * 为什么值得单独一个 composable：这段是「锁按钮只锁生物验证那一层」这个需求的
+ * 用户可见形态（`.ai/ISSUES.md` #60 第 1d 步）。混在 [UnlockScreen] 里会让主函数
+ * 的行数与分支数双双越界（detekt `LongMethod` / `CyclomaticComplexMethod`）。
+ *
+ * 手动「再次认证」按钮必须保留：自动弹一次被用户取消后（去拿眼镜 / 手湿），
+ * 没有它用户就只能杀进程。
+ */
+@Composable
+private fun ViewLockedContent(
+    vaultName: String,
+    account: String?,
+    submitting: Boolean,
+    error: UnlockUiError?,
+    onAuthenticate: () -> Unit,
+) {
+    Text(
+        text = vaultName.take(1).uppercase(),
+        style = MaterialTheme.typography.headlineLarge,
+        color = MaterialTheme.colorScheme.onPrimaryContainer,
+        modifier = Modifier
+            .size(64.dp)
+            .padding(top = 8.dp),
+    )
+    Spacer(Modifier.height(16.dp))
+    Text(text = vaultName, style = MaterialTheme.typography.titleLarge)
+    account?.let {
+        Text(
+            text = it,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+    Spacer(Modifier.height(8.dp))
+    Text(
+        text = stringResource(R.string.unlock_view_locked_hint),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.fillMaxWidth(),
+        textAlign = TextAlign.Center,
+    )
+    Spacer(Modifier.height(24.dp))
+    FilledTonalButton(
+        onClick = onAuthenticate,
+        enabled = !submitting,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(48.dp),
+    ) {
+        Icon(Icons.Filled.Fingerprint, contentDescription = null)
+        Spacer(Modifier.width(8.dp))
+        Text(stringResource(R.string.quick_unlock_biometric_button))
+    }
+    if (submitting) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(top = 16.dp),
+        ) {
+            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+            Text(
+                text = stringResource(R.string.add_vault_working),
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(start = 8.dp),
+            )
+        }
+    }
+    unlockErrorText(error)?.let { message ->
+        Text(
+            text = message,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+            modifier = Modifier.padding(top = 8.dp),
+        )
+    }
+}
+
 /** 本地快速解锁入口（生物识别 / 设备 PIN）+ 主密码 fallback 提示。 */
 @Composable
-private fun QuickUnlockEntry(
-    visible: Boolean,
+private fun QuickUnlockEntry(    visible: Boolean,
     enabled: Boolean,
     onStart: () -> Unit,
 ) {
@@ -325,14 +424,17 @@ private fun PasswordForm(
 @Composable
 private fun AutoPromptQuickUnlock(
     localUnlockAvailable: Boolean,
+    viewLocked: Boolean,
     hasTwoFactor: Boolean,
     submitting: Boolean,
     onPrompt: () -> Unit,
+    onViewPrompt: () -> Unit,
 ) {
     val prompted = rememberSaveable { mutableStateOf(false) }
     val lifecycleOwner = LocalLifecycleOwner.current
     // 条件刻意控制在 3 项以内（detekt ComplexCondition 上限为 3）。
-    val eligible = localUnlockAvailable && !hasTwoFactor && !submitting
+    // 查看层锁：只要标记在就该弹（密钥已在内存，认证一次即可回来，不依赖快速解锁是否启用）。
+    val eligible = (viewLocked || localUnlockAvailable) && !hasTwoFactor && !submitting
     LaunchedEffect(eligible) {
         if (prompted.value || !eligible) return@LaunchedEffect
         // ⚠️ 必须等宿主 RESUMED 之后再发起认证：进程冷启动（尤其设备重启后首次进入）时
@@ -342,7 +444,7 @@ private fun AutoPromptQuickUnlock(
         lifecycleOwner.withResumed {
             if (prompted.value) return@withResumed
             prompted.value = true
-            onPrompt()
+            if (viewLocked) onViewPrompt() else onPrompt()
         }
     }
 }

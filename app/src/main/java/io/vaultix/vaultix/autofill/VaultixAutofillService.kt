@@ -14,32 +14,25 @@ package io.vaultix.vaultix.autofill
 import android.content.Intent
 import android.os.CancellationSignal
 import android.service.autofill.AutofillService
-import android.service.autofill.Dataset
 import android.service.autofill.FillCallback
 import android.service.autofill.FillRequest
 import android.service.autofill.FillResponse
 import android.service.autofill.SaveCallback
 import android.service.autofill.SaveRequest
 import dagger.hilt.android.AndroidEntryPoint
-import io.vaultix.common.OtpUriParser
-import io.vaultix.common.TotpGenerator
-import io.vaultix.domain.ItemRepository
+import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.domain.VaultRepository
-import io.vaultix.model.VaultItem
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.autofill.engine.AutofillCandidateSource
 import io.vaultix.vaultix.autofill.engine.AutofillCredentialMapper
+import io.vaultix.vaultix.autofill.engine.AutofillDatasetFactory
 import io.vaultix.vaultix.autofill.engine.AutofillDatasets
 import io.vaultix.vaultix.autofill.engine.FillPlanner
 import io.vaultix.vaultix.autofill.fillassist.FillAssistRepository
 import io.vaultix.vaultix.autofill.fillassist.FillAssistRules
 import io.vaultix.vaultix.autofill.match.AutofillFillTargetPolicy
 import io.vaultix.vaultix.autofill.match.AutofillRequestContextPolicy
-import io.vaultix.vaultix.autofill.match.BitwardenLikeAutofillMatcher
-import io.vaultix.vaultix.autofill.match.MatchConfig
-import io.vaultix.datastore.VaultixPreferences
-import io.vaultix.vaultix.autofill.model.AutofillCredential
 import io.vaultix.vaultix.autofill.model.FieldHint
-import io.vaultix.vaultix.autofill.model.FillSuggestion
 import io.vaultix.vaultix.autofill.model.ParsedStructure
 import io.vaultix.vaultix.autofill.parser.AssistStructureParser
 import io.vaultix.vaultix.autofill.save.AutofillSaveInfo
@@ -69,13 +62,15 @@ class VaultixAutofillService : AutofillService() {
     lateinit var vaultRepository: VaultRepository
 
     @Inject
-    lateinit var itemRepository: ItemRepository
-
-    @Inject
     lateinit var prefs: VaultixPreferences
 
+    /** 候选来源（活跃库解析 / 条目映射 / 域匹配宽严）——与解锁后回灌共用同一实现。 */
     @Inject
-    lateinit var activeVaultStore: ActiveVaultStore
+    lateinit var candidates: AutofillCandidateSource
+
+    /** 「解锁即回填」的暂存（库锁定时把本次请求的字段 id 存下来）。 */
+    @Inject
+    lateinit var pendingFillStore: PendingFillStore
 
     /** 填充辅助规则（站点级选择器）；拉不到时行为等同没有它。 */
     @Inject
@@ -175,7 +170,9 @@ class VaultixAutofillService : AutofillService() {
         super.onDestroy()
     }
 
-    /** 解析 → 匹配 → 规划 → Dataset；任何异常都退化为「无响应」，不阻塞被填充的 App。 */
+    /**
+     * 解析 → 匹配 → 规划 → Dataset；任何异常都退化为「无响应」，不阻塞被填充的 App。
+     */
     private suspend fun buildResponse(parsed: ParsedStructure): FillResponse? {
         val ids = AutofillDatasets.allFillableIds(parsed)
         if (ids.isEmpty()) {
@@ -201,6 +198,11 @@ class VaultixAutofillService : AutofillService() {
         val unlocked = vaultRepository.observeUnlockedVaultIds().first()
         if (unlocked.isEmpty()) {
             AutofillLogger.d("locked: no unlocked vault → unlock fallback")
+            // ★ 解锁即回填（`.ai/ISSUES.md` #60 第 4 步）：
+            // 这次请求的字段 id 只能在此刻拿到，而用户解锁后系统**不会**重发请求 ——
+            // 暂存下来，解锁完成后由 AutofillActivity 用同一批 id 构造 Dataset 回灌。
+            // 不暂存的后果就是用户回到浏览器还得再点一次（「解锁完还要再验证一次」）。
+            pendingFillStore.stage(parsed)
             return AutofillDatasets.buildFallback(
                 context = this,
                 ids = ids,
@@ -219,37 +221,17 @@ class VaultixAutofillService : AutofillService() {
             )
         }
 
-        // ★ 候选来源收敛到**单个活跃库**（Docs/progress/main-shell-migration.md 阶段 2
-        // 「★ 全局活跃库真源」）。历史行为是 `for (vaultId in unlocked)` 遍历全部已解锁库聚合：
-        // 云端库与 KDBX 库同时解锁时，同一站点会冒出两条来源不同的候选（用户不知点哪条），
-        // 保存时也不知写回哪个库 —— 即用户最初反馈的「条目错乱 / 保存重复」。
-        val sources = singleActiveVault(unlocked)
-        val vault = collectCandidates(sources)
+        val sources = candidates.singleActiveVault(unlocked)
+        val vault = candidates.collectCandidates(sources)
         // Edge 等浏览器不上报 webDomain → 用地址栏 / 结构文本兜底域名参与匹配。
-        val webDomain = parsed.webDomain ?: parsed.fallbackWebDomain
-        val matched = BitwardenLikeAutofillMatcher.match(
-            credentials = vault.credentials,
-            packageName = parsed.packageName,
-            webDomain = webDomain,
-            config = MatchConfig(
-                // 域匹配宽严由用户在「设置 → 自动填充 → 填充行为」控制，默认与
-                // Bitwarden 一致（允许基域匹配、不强制精确域）。浏览器里填不出来时
-                // 先关掉「严格匹配」再试，是成本最低的排查第一步。
-                allowBaseDomainMatch = prefs.autofillBaseDomainMatch.first(),
-                exactDomainOnly = prefs.autofillExactDomainOnly.first(),
-                allowPackageMatch = AutofillRequestContextPolicy.allowPackageMatching(
-                    packageName = parsed.packageName,
-                    webDomain = webDomain,
-                    isWebView = parsed.webView,
-                ),
-            ),
-        )
+        val webDomain = candidates.webDomainOf(parsed)
+        val matched = candidates.matchLogins(vault.credentials, parsed, webDomain)
         val plan = FillPlanner.plan(
             context = AutofillCredentialMapper.toFillContext(parsed, webDomain),
             matchedLogins = matched,
             cards = vault.cards,
             identities = vault.identities,
-            totpProvider = ::totpCode,
+            totpProvider = AutofillDatasetFactory::totpCode,
         )
 
         val saveInfo = AutofillSaveInfo.build(parsed)
@@ -261,7 +243,8 @@ class VaultixAutofillService : AutofillService() {
         // 上限保护：FillResponse 经 Binder 传输有大小限制，条目多时不截断会导致
         // 整个响应失败（表现为「浏览器里一点反应都没有」）。
         for (suggestion in plan.suggestions.take(MAX_DATASETS)) {
-            val dataset = datasetFor(parsed, suggestion, copyTotp) ?: continue
+            val dataset = AutofillDatasetFactory
+                .datasetFor(this, parsed, suggestion, copyTotp) ?: continue
             builder.addDataset(dataset)
             added++
         }
@@ -293,117 +276,6 @@ class VaultixAutofillService : AutofillService() {
     }
 
     /**
-     * 候选来源 = **唯一活跃库**。
-     *
-     * [unlocked] 非空已由调用方保证；这里只在活跃库解析结果不在其中时退化成
-     * 「字典序最小的已解锁库」——**仍然只取一个**，绝不回退成遍历全部。
-     */
-    private suspend fun singleActiveVault(unlocked: Set<String>): Set<String> {
-        val active = activeVaultStore.resolve()
-        if (active != null && active in unlocked) return setOf(active)
-        return setOfNotNull(unlocked.minOrNull())
-    }
-
-    /** 汇总**活跃库**的候选（登录 / 卡片 / 身份）。 */
-    private suspend fun collectCandidates(unlocked: Set<String>): VaultCandidates {
-        val credentials = mutableListOf<AutofillCredential>()
-        val cards = mutableListOf<VaultItem>()
-        val identities = mutableListOf<VaultItem>()
-        for (vaultId in unlocked) {
-            val items = runCatching { itemRepository.observeItems(vaultId).first() }.getOrElse { emptyList() }
-            for (item in items) {
-                when {
-                    AutofillCredentialMapper.isLoginCandidate(item) ->
-                        credentials += AutofillCredentialMapper.toCredential(vaultId, item)
-                    AutofillCredentialMapper.isCardCandidate(item) -> cards += item
-                    AutofillCredentialMapper.isIdentityCandidate(item) -> identities += item
-                    else -> Unit
-                }
-            }
-        }
-        return VaultCandidates(credentials, cards, identities)
-    }
-
-    /**
-     * 单条建议 → Dataset。
-     *
-     * 需要「先认证再回填」的两种情况：
-     * - 主密码二次验证（[FillSuggestion.requiresReprompt]）；
-     * - 条目带验证码 → 走回调路径，回填后把验证码复制到剪贴板
-     *   （[AutofillIntents.MODE_COPY_TOTP]）。
-     *
-     * ⚠️ 复制是**无条件**的（只要有 totp 且开关开启），对齐 Bitwarden
-     * `AutofillCompletionManagerImpl` —— 它在每次填充成功后都调
-     * `tryCopyTotpToClipboard`（仅由 `isAutoCopyTotpDisabled` 门控）。
-     * 此前 Vaultix 只在「页面没有验证码框」时才复制，与上游不一致（2026-09-12 对齐）。
-     */
-    private fun datasetFor(
-        parsed: ParsedStructure,
-        suggestion: FillSuggestion,
-        copyTotpEnabled: Boolean,
-    ): Dataset? {
-        val entries = AutofillDatasets.entriesFor(parsed, suggestion)
-        if (entries.isEmpty()) return null
-        val authIntent = when {
-            suggestion.requiresReprompt -> repromptIntent(suggestion, entries)
-            copyTotpEnabled && !suggestion.totpSecret.isNullOrBlank() -> copyTotpIntent(suggestion, entries)
-            else -> null
-        }
-        return AutofillDatasets.build(
-            context = this,
-            entries = entries,
-            title = suggestion.title,
-            subtitle = suggestion.subtitle,
-            datasetId = suggestion.id,
-            authIntent = authIntent,
-            // 图标随条目类别（登录 = 地球 / 银行卡 = 卡片 / 身份 = 人像），
-            // 对齐 Bitwarden `AutofillCipher.iconRes` —— 面板里一行一图标才分得清类型。
-            iconRes = AutofillDatasets.iconFor(suggestion.category),
-        )
-    }
-
-    private fun repromptIntent(
-        suggestion: FillSuggestion,
-        entries: List<Pair<android.view.autofill.AutofillId, String>>,
-    ) = AutofillIntents.pending(
-        context = this,
-        intent = AutofillIntents.create(
-            context = this,
-            mode = AutofillIntents.MODE_REPROMPT,
-            title = suggestion.title,
-            subtitle = suggestion.subtitle,
-            datasetId = suggestion.id,
-            entries = entries,
-            category = suggestion.category,
-        ),
-        requestCode = suggestion.id.hashCode(),
-    )
-
-    private fun copyTotpIntent(
-        suggestion: FillSuggestion,
-        entries: List<Pair<android.view.autofill.AutofillId, String>>,
-    ) = AutofillIntents.pending(
-        context = this,
-        intent = AutofillIntents.create(
-            context = this,
-            mode = AutofillIntents.MODE_COPY_TOTP,
-            title = suggestion.title,
-            subtitle = suggestion.subtitle,
-            datasetId = suggestion.id,
-            entries = entries,
-            totpSecret = suggestion.totpSecret,
-            category = suggestion.category,
-        ),
-        requestCode = suggestion.id.hashCode(),
-    )
-
-    /** TOTP 密钥 → 当前验证码；解析或计算失败返回 null（不阻塞账号密码填充）。 */
-    private fun totpCode(raw: String): String? = runCatching {
-        val config = OtpUriParser.parse(raw) ?: return null
-        TotpGenerator.generate(config)
-    }.getOrNull()
-
-    /**
      * 字段序列诊断串：`USERNAME,UNKNOWN(hid),PASSWORD,…`（最多 [LOG_FIELD_SEQ_LIMIT] 项）。
      *
      * 为什么值得单独打一行：账号框填不进去时，有两种完全不同的病因 ——
@@ -414,12 +286,7 @@ class VaultixAutofillService : AutofillService() {
         .take(LOG_FIELD_SEQ_LIMIT)
         .joinToString(",") { field -> field.hint.name + if (field.isVisible) "" else "(hid)" }
 
-    /** 一次填充请求内汇总的候选集合。 */
-    private data class VaultCandidates(
-        val credentials: List<AutofillCredential>,
-        val cards: List<VaultItem>,
-        val identities: List<VaultItem>,
-    )
+    /** 一次填充请求内汇总的候选集合见 [io.vaultix.vaultix.autofill.engine.VaultCandidates]。 */
 
     private companion object {
         const val REQUEST_UNLOCK = 1001

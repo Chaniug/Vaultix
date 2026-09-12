@@ -51,15 +51,18 @@ data object AutofillSettingsRoute
 data class UnlockRoute(val vaultId: String)
 
 /**
- * 解锁**入口**路由（无参数）。
+ * 解锁**入口**路由。
  *
  * 由根导航 [io.vaultix.vaultix.ui.rootnav.RootNavState.VaultLocked] 直达：
  * 对齐 Bitwarden `RootNavState.VaultLocked -> VaultUnlockRoute.Standard`。
  * 与 [UnlockRoute] 的区别是它不预先绑定某个库，由 [UnlockViewModel] 自动选中
  * 第一个已锁定的库（无库时自动退回库列表）。
+ *
+ * [vaultId] 非空时表示**指定目标库**：根导航在「查看层锁」场景下携带该库 id，
+ * 避免解锁页在「密钥仍在内存」的多库场景里选错库。空串 = 自动选。
  */
 @Serializable
-data object UnlockEntryRoute
+data class UnlockEntryRoute(val vaultId: String = "")
 
 @Serializable
 data class ItemsRoute(val vaultId: String)
