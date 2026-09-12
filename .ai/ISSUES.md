@@ -979,3 +979,115 @@ java -classpath "D:/Vaultix/gradle/wrapper/gradle-wrapper.jar" \
 `assembleFullDebug` 的 **native 符号剥离**（`stripFullDebugDebugSymbols` 报
 `Cannot access output property 'outputDir'` / `Failed to create MD5 hash`）—— 沙箱**缺 NDK**，
 **与代码改动无关**；该步在 CI 上正常。替代验证用 `:app:compileFullDebugKotlin`。
+
+---
+
+## 45. CI「Run unit tests (non-blocking)」长期报红 2 处（2026-09-12，`59b57e8`）
+
+**现象**：GitHub 每次构建都挂一个 annotation —— `Annotations: 1 error and 7 notices`，
+但 run 结论仍是 **success**（用户反馈"出包成功但有报错"）。
+
+**根因**：该步骤是 **`continue-on-error`（non-blocking）**，所以**从不阻塞出包**、长期无人发现。
+里面有两个失败：
+
+| 测试 | 性质 | 根因 |
+|---|---|---|
+| `VaultixCryptoTest.removePkcs7PaddingStripsTrailingRandomPadding` | **陈旧用例（必挂）** | 实现 2026-09-11 已收紧为**严格 PKCS#7**（末 pad 个字节须**全等于** pad），用例却仍断言旧的**宽松**行为（喂 6 字节随机填充、末字节 0x06，期望剥 6 字节） |
+| `ActiveVaultStoreTest.selectTakesEffectImmediatelyAndPersists` | **真竞态（偶发）** | `init` 的收集协程跑在**进程级 `Dispatchers.Default`** 上，若首帧**晚于** `select()` 到达，就会把刚选的库**覆盖回** `pick()` 的结果 |
+
+**修法**：
+- crypto：用例改为断言「随机填充**原样返回**」并重命名 `removePkcs7PaddingKeepsTrailingRandomPadding`。
+- ActiveVaultStore：测试先 `store.activeVaultId.first { it != null }` **等首帧落地**再 `select`。
+
+**★ 教训**：
+1. **non-blocking 步骤的失败不会让 CI 变红，但会一直污染信号** —— 应作为常规清理项定期巡检
+   （`gh run view <id> --log | grep "tests completed, .* failed"`）。
+2. 「测试挂了」先分清**陈旧用例**（实现已变、用例没跟上）与**真缺陷/竞态**（实现有问题）——
+   前者改用例，后者改代码或让测试确定化，**不要一律改断言迁就实现**。
+
+---
+
+## 46. Android 16+ `Settings.Secure` 对第三方 App 受限 → 状态检测恒报"未启用"（2026-09-12，`9fca5ab`）
+
+**现象**：荣耀（Android 17）上设置页「凭据提供商（通行密钥）」**恒显示"未启用"**，但功能其实是通的。
+
+**根因**：`CredentialProviderStatus.isEnabled` 读 `Settings.Secure:credential_service`，
+判据是 `!raw.isNullOrBlank() && raw.contains(类名)`。
+而 **Android 16（API 36）起 `Settings.Secure` 对第三方 App 受限**
+（Bitwarden `data/autofill/accessibility/util/ContextExtensions.kt` 注释点名：
+"required for Android 16+ where Settings.Secure is restricted for third-party apps"）
+⇒ App 内读到 `null` ⇒ 恒判"未启用"。
+（**adb shell 权限更高**，所以 `adb shell settings get secure credential_service` 仍能看到值 ——
+用 adb 验证过 ≠ App 内读得到，两者权限不同。）
+
+**修法**：取向改为与 `AutofillStatusChecker.isSystemEnabled` **完全一致：读不到 → 按"已启用"处理**。
+
+**★ 教训**：**"读不到" ≠ "未启用"**。凡读系统设置判状态，都要先想"这个 App 读得到吗"；
+项目里 `autofill_service` 早就采用了"读不到按已启用"的取向，新加检测项**要沿用同一取向**，别各写一套。
+
+---
+
+## 47. 用户名字段升格的两条硬约束（2026-09-12，`9fca5ab`）
+
+**现象**：QQ 登录页 QQ 号框**既不弹候选、也填不进去**（只有密码框正常）。
+
+**根因**：`AssistStructureParser.promoteUsernameField` 旧判据是「**没有任何** USERNAME 字段就跳过升格」。
+QQ 登录页是**标签页**结构（QQ号/手机号/邮箱），非当前标签的输入框仍在 View 树里但**不可见**，
+很容易已被文本启发式判成 USERNAME ⇒ 升格被这些**看不见**的框挡掉 ⇒ 当前可见的账号框永远是 `UNKNOWN`
+⇒ 既不是填充目标（`fillTargets` 要 ≥MEDIUM）、也取不到（`targetIdsFor` 按语义取）。
+
+**修法（两条缺一不可）**：
+1. 判据改为「**没有可见的** USERNAME 才升格」（与项目一贯的"只认可见字段"口径一致）；
+2. 升格时把 `strength → MEDIUM` —— 否则 `AutofillFillTargetPolicy` 仍不认它是填充目标，
+   表现依然是"账号框点了不弹、只能填密码"。
+
+**上游依据**：Bitwarden `AutofillParserImpl.updateForMissingUsernameFields`（把密码框**之上紧邻**的
+`Unused` 视图提升为 `Login.Username`）。
+
+---
+
+## 48. 误弹检测对齐 Bitwarden：**必须先有否定词，才能撤强度门槛**（2026-09-12，`59b57e8`）
+
+**背景**：Bitwarden 的"该不该弹填充 UI"只有一层 —— **分类结果即证据**（`Unused` 视图直接剔除，
+不存在"信号强度"闸）。Vaultix 曾多一层 `strength != LOW`。
+
+**★ 顺序不能反**：
+1. **先**在分类层加**否定词**（对齐上游 `IGNORED_RAW_HINTS = [search, find, recipient, edit]`，
+   另加中文「搜索/查找/收件人/编辑」）；同时把用户名关键词**收窄**（上游 `SUPPORTED_RAW_USERNAME_HINTS`
+   只有 `email/phone/username`，**没有 `login`**），并做文本归一化（去 ASCII 分隔符、保留 CJK）。
+2. **再**撤掉策略层的强度门槛（判定收敛为「可见 + 凭据语义」）。
+   否则 `id="login-search"` 这类搜索框会重新被勾出来 —— 那正是当初加这层门槛的原因。
+
+**验收重点**：**搜索框不再乱弹**（撤门槛后唯一需要盯的回归点）。
+
+---
+
+## 49. `rawId` 形态判别的 **UUID 陷阱**（2026-09-12，P0，`8fd64f5`）
+
+**一句话**：库里 `credentialId` 有两种形态 —— Vaultix 自建 = `base64Url(32字节)`（43 字符）；
+**Bitwarden 同步 = UUID 文本**（36 字符）。而 **UUID 文本的字符集 `0-9a-f-` 恰好全落在 base64url
+字母表内、长度 36 又是 4 的倍数** ⇒ 「能不能 base64 解码」这个判据会**把它误判成 base64**，
+于是**原样发出 GUID 文本** ⇒ RP 解出 27 字节 ≠ 其持有的 16 字节 ⇒ 断言被判未知凭证
+（症状：候选能列出、能选、生物识别通过，**最后一步报错**）。
+
+**正确顺序**（对齐 Keyguard `PasskeyCredentialId.encode` / Bastion `toWebAuthnId`）：
+`UUID.fromString → 16 字节 → base64Url`（22 字符）**优先**，再 fallback「合法 base64 原样 / 否则 UTF-8 重编码」。
+
+**★ 教训**：凡"启发式判形态"，都要显式考虑**输入恰好满足另一种判据**的情况；
+并给形态判别留**可诊断的日志**（本项目新增 `describeStoredIdForm`：`blank/uuid/base64/text`）。
+详见 `SESSION-2026-09-12.md` 第四十轮。
+
+---
+
+## 50. 「精准填充」不需要表单容器建模 —— 一次误读的更正（2026-09-12，`59b57e8`）
+
+**曾经的错误判断**：「上游只填**焦点所在表单**的字段，Vaultix 按整页填，所以需要给 `ParsedField`
+引入"所属表单容器"建模」。**这是误读，勿据此改造。**
+
+**复核事实**：`AutofillParserImpl.traverse` 返回的是**每个 window 一份** `ViewNodeTraversalData`
+（`(0 until windowNodeCount).map { ... }`），`selectCandidateAutofillViews` 只是
+「保留**含焦点视图的那个 window**、剔除 `Unused`（含 Identity）」，随后 `fillLoginPartition`
+填该 window 内**全部** Login 视图 ⇒ **上游同样是"整页按语义填"**，与我们的 `targetIdsFor(hint)` 一致。
+
+**真实剩余差异（产品取舍，非精度缺陷）**：①上游把 `Identity` 从候选中整体排除（我们仍给身份建议）；
+②上游按「焦点视图**类型**」决定兑现哪种分区，我们**同时**给登录/卡片/身份建议。

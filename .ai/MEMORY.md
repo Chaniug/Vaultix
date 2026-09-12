@@ -1167,3 +1167,64 @@ Vaultix 的 `CallingAppOrigin` 明确采用「**自证式读取**」、**不走�
 `:core:common:testDebugUnitTest` **95 用例 0 失败**（`WebAuthnTest` 12 例含 3 条回归锁）/
 `testFullDebugUnitTest` **129 用例 0 失败** / `detekt` 通过 /
 `:app:compileFullDebugKotlin` **BUILD SUCCESSFUL** / **CI `34686274203` = success**。
+
+---
+
+## 2026-09-12 · 第四十轮：通行密钥 `rawId` 的 **UUID 分支**（`8fd64f5`，P0）
+
+- 库里 `credentialId` 有**两种形态**：Vaultix 自建 = `base64Url(32字节)`（43 字符）；
+  **Bitwarden 同步 = UUID 文本**（36 字符）。
+- ⚠️ **UUID 文本的字符集 `0-9a-f-` 恰好全落在 base64url 字母表内、长度 36 = 4×9**
+  ⇒ 「能不能 base64 解码」这个判据会把它**误判成 base64** 而**原样发出 GUID 文本**
+  ⇒ RP 解出 **27 字节** ≠ 它持有的 **16 字节** ⇒ 断言被判未知凭证
+  （症状：候选能列出 / 能选 / 生物识别通过，**最后一步校验报错**）。
+- **正解**（对齐 Keyguard `PasskeyCredentialId.encode` / Bastion `toWebAuthnId`）：
+  **先 `UUID.fromString → 16 字节 → base64Url`（22 字符）**，再 fallback
+  「合法 base64 原样 / 否则 UTF-8 重编码」。
+- 诊断日志用 `WebAuthn.describeStoredIdForm`（`blank/uuid/base64/text`），
+  旧的 `storedIsBase64` 会把 UUID 误报成 `true`。
+- ✅ **真机重登 GitHub 通过** —— 长期开放的「github 通行密钥不可用」**正式结案**。
+
+## 2026-09-12 · 第四十一轮：Bitwarden「填充辅助（Fill Assist）」已完整搬运（`9fca5ab`）
+
+- 规则来自**服务端**：`/api/config` 的 `environment.fillAssistRules`
+  （bitwarden.com 当前值 = `https://github.com/bitwarden/map-the-web/releases/latest/download`）。
+  `manifest.json` → `forms.v1.json`（**schema 主版本必须 `1`**）；客户端缓存 6h、按 `cid` 判重；
+  上游受 feature flag `fill-assist-targeting-rules` 门控（**官方当前 `false`，尚未 GA**）。
+- 我方实现：`app/src/main/java/io/vaultix/vaultix/autofill/fillassist/`
+  （`FillAssistRules` 模型 / `FillAssistSelectorParser` CSS 子集解析 / `FillAssistJsonParser` /
+  `FillAssistRepository` OkHttp+磁盘缓存+6h 节流 / `FillAssistMatcher` HtmlInfo 匹配）。
+- 接入：`AssistStructureParser.parse(structure, fillAssistRules)` —— 按**页面主机**取规则；
+  **有规则时以规则为准**（命中即 HIGH 强信号；未命中**丢弃该节点、不退回启发式**）；
+  无规则时行为完全不变。
+- 规则表事实：**GPL-3.0（与本项目同许可）**、25KB、**仅 27 个站点、无中国大陆站点**；
+  只对浏览器 / WebView 生效（依赖 `HtmlInfo`），原生 App 无关。
+
+## 2026-09-12 · 第四十二轮：误弹检测**完全**对齐 Bitwarden（`59b57e8`）
+
+- 上游模型：**「分类结果即证据」** —— 节点要么归为 Login / Card，要么是 `Unused` **直接剔除**；
+  **不存在"信号强度"这一层**。否定词见 `IGNORED_RAW_HINTS = [search, find, recipient, edit]`；
+  用户名关键词只有 `SUPPORTED_RAW_USERNAME_HINTS = [email, phone, username]`（★**没有 `login`**）。
+- 我方现状：`HintClassifier` **否定词优先**（EN + 中文「搜索/查找/收件人/编辑」）+ 关键词收窄 +
+  归一化（转小写去 ASCII 分隔符、**保留 CJK**）；`AutofillFillTargetPolicy` **已撤销 `strength` 门槛**
+  ⇒ 判定收敛为「**可见 + 凭据语义**」一条。
+- ⚠️ **纪律（顺序不能反）**：撤强度门槛的**前提**是分类层已有否定词。
+  以后若要**放宽/新增**关键词，必须同步评估这层闸还挡不挡得住 ——
+  否则 `id="login-search"` 那类搜索框会重新误弹。
+- **精准填充**：经逐行复核与上游一致（逐字段站点校验 / 邮箱形态闸 / 各字段取值 / Username 不设形态闸 /
+  无候选不响应）。**不需要**表单容器建模（详见 `ISSUES.md` #50 的更正）。
+
+## 2026-09-12 · 其他长期约定（新增/强化）
+
+- **Android 16+ `Settings.Secure` 对第三方 App 受限** ⇒ 任何读系统设置判状态的检测，
+  取向一律「**读不到 = 已启用**」（对齐 `AutofillStatusChecker`，见 `ISSUES.md` #46）。
+  ⚠️ **adb shell 权限更高**：`adb shell settings get ...` 有值 ≠ App 内读得到。
+- **用户名升格两条硬约束**：判据用「没有**可见**的 USERNAME」；升格后 `strength → MEDIUM`
+  （详见 `ISSUES.md` #47）。
+- **detekt**：`ComplexCondition` 阈值 **3**（比默认 4 严）；Composable 内联多条件守卫会
+  **同时**踩 `ComplexCondition` + `CyclomaticComplexMethod` ⇒ 抽成独立 composable。
+- **构建环境**：本机 `./gradlew` 报 `ClassNotFoundException: GradleWrapperMain` ⇒ 直接用
+  `~/.gradle/wrapper/dists/gradle-9.5.1-bin/*/gradle-9.5.1/bin/gradle`；app 有 `full` / `offline`
+  两种 flavor，任务名要写全（`:app:compileFullDebugKotlin` / `:app:testFullDebugUnitTest`）。
+- **CI 的 non-blocking 步骤**（`Run unit tests (non-blocking)`）失败**不会**让 run 变红，
+  但会留 annotation ⇒ 是"沉默的债"，应定期巡检（见 `ISSUES.md` #45）。
