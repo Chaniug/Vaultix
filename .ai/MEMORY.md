@@ -1256,3 +1256,87 @@ Vaultix 的 `CallingAppOrigin` 明确采用「**自证式读取**」、**不走�
   验证码倒计时用 `rememberTotpSmoothProgress`（秒级数据 + 绘制层 1s 线性动画，翻转时 `snap()`）。
 - **`onFillRequest` 不是挂起函数**：读偏好流（`prefs.xxx.first()`）必须在 `scope.launch { }` 内，
   否则编译期直接报 suspend 错误（本轮踩过）。
+
+## 2026-09-12 · 第四十八轮长期约定（**KDBX 已落地** / 锁的两层语义 / 站点图标 / 顶栏筛选）
+
+> 本轮交付 `5682bc6` + `e88bda2` + `93c814c` + `fcaf918`，坑见 `ISSUES.md` **#61~#65**。
+> 这一节是**接力起手式**：下面每条都是「不知道就会写错、且错了不报错」的东西。
+
+### ★ 锁有**两层**语义，代码里是两条独立路径（勿合并）
+
+| | 真锁（加密门禁） | 查看锁（界面门禁） |
+|---|---|---|
+| 入口 | 超时到期 / 冷启动 / 退出数据库 / `lockVault` | 主页锁按钮 → `viewLock` |
+| 密钥 | **清零** | **原样留着** |
+| 恢复 | 主密码（+2FA）+ 联网 | **一次生物识别**，离线 |
+| 载体 | `VaultSessionManager` | `VaultSessionManager.viewLockedIds`（同文件、不同标记） |
+| 根导航 | `RootNavState.VaultLocked(null)` | `RootNavState.VaultLocked(vaultId)` |
+
+三条不变量（破坏了必然出「点了没反应」或「解锁完又要验证」）：
+1. `viewLocked` 在 `RootNavViewModel` 的判定里**必须排在「已解锁」之前**
+   （查看锁的库 `unlockedIds` 里**有**它）；
+2. 解锁页自动选库**先看 `isViewLocked`**，再看 `!unlocked`（否则多库时选错库）；
+3. 真锁路径（`VaultSessionManager.lock / lockAll`）要**一并清查看锁标记** ——
+   否则标记残留会把用户死锁在「只需认证、但密钥已不在内存」的页面上。
+
+成功分支靠**显式参数**区分（`completeLocalUnlock(cipher, forViewLock)`），
+**不要**读调用时刻的状态（认证对话框期间状态可能被别的流改写）。
+
+### ★ KDBX 与 Bitwarden 是**两套会话模型**（第 4 批的全部复杂度来源）
+
+| | Bitwarden | KDBX |
+|---|---|---|
+| 内存会话 | 一把对称密钥（`VaultSessionManager`） | **整库明文**（`data:kdbx` 会话） |
+| 条目存储 | Room `ciphers`（密文） | **只在内存**（不写 ciphers 表） |
+| 解锁 | 联网 + 可能 2FA | 离线（文件 + 主密码 + 可选 keyfile） |
+
+- **门面**：`io.vaultix.data.kdbx.Kdbx`（`unlock / contentOf / isUnlocked / unlockedIds / lock / lockAll`）
+  + `KdbxSource`（`(uri) -> ByteArray?`，由 `data:repository` 用 `ContentResolver` 实现）。
+  `KdbxSession / KdbxOpener / KdbxSessionStore` 永远保持 `internal` ——
+  它们握着 kotpass 的 `KeePassDatabase`（明文整库），**绝不能进跨模块签名**
+  （一次 `println` 就可能把明文写进日志 / UI 状态）。
+- **读路径分流**在 `ItemRepositoryImpl.observeItems / observeTrash / observeItem`，
+  UI 与自动填充侧零改动。⚠️ 库种类是**挂起**查询（`vaultDao.get`）⇒ 必须放
+  `flatMapLatest`，不能写在方法体里（那会让 `observeItems` 不再是纯函数）。
+- **会话变化通知**：`KdbxSessionFlow`（**只带一个代次计数**）。
+  任何改变会话集合的动作（解锁 / 锁定 / 移除 / 退出数据库 / 切库）都要 `bump()`，漏一处就
+  「解锁了但列表还是空的」。给明文会话挂 `MutableStateFlow` 是**反模式**（明文与状态耦合）。
+- **切库即锁旧库**在 `ItemsViewModel.init`（`lockOtherKdbxVaults`）：KDBX 那把"密钥"是整库明文，
+  多库同时解锁会让「同时只能进一个库」的内存约束失效。
+- **keyfile**：只存 URI（`VaultixPreferences.kdbxKeyFileUri`），内容现读；
+  UI 必须 `takePersistableUriPermission`（否则「今天能解锁、明天说读不到文件」）。
+- **失败必须分类**：`SourceUnavailable`（读不到文件）≠ `InvalidCredentials`（密码错）——
+  用户要做的事完全不同。一律报「密码错误」会让人反复重输正确的密码。
+- **两个 codec**（`KdbxTotpCodec` / `KdbxPasskeyCodec`）都提供 `isXxxFieldName`，
+  `customFieldsOf` 用它排除专属字段 —— 否则详情页会把**私钥 PEM / TOTP 密钥**
+  当「隐藏自定义字段」展示（掩码仍可复制）。
+  最易错两点：位置式 `TOTP Settings` 按**出现顺序**填（不能按「是否等于默认值」）；
+  `TimeOtp-Secret-Hex|Base64` 必须**真解码再转 base32**（直接当 base32 解析会**静默算错码**）。
+- **阶段 B（写回）未做**。铁律预告：**插件字段（`KPEX_*`）一律原样保留**，
+  写回走原子替换 + `.kdbx.bak` 备份。
+
+### ★ 站点图标（第 3 批）
+端点 `<服务器>/icons/<域名>/icon.png`（对照 Bitwarden `EnvironmentExtensions.kt:113-126`，
+Vaultwarden 同端点）。三条取舍：**剥掉服务器路径**（反代部署下端点仍在站点根）、
+**只收 https**（cleartext 会被静默拦）、**保留 `www.`**（图标服务按条目里的写法查）。
+**域名必须过白名单**（仅字母/数字/`.`/`-`）—— 它会被拼进 URL 路径，不设防就能改写请求目标。
+纯字符串实现放 `core:common/SiteIconUrl`（零 Android / 零网络，便于 JVM 单测）。
+
+### ★ 顶栏与筛选（第 2 批）
+- 顶栏动作**收敛为 🔍 + ⋮**（对齐 Bastion `PasswordListTopSection`）；低频动作进 overflow。
+- **筛选条必须浮在内容之上**（与顶栏同层 + `matchParentSize()` 透明遮罩）——
+  塞进可滚动 `Column` 会随列表滚走而箭头还指着「已展开」（`ISSUES.md` #57 同类问题第二次出现）。
+- **筛选状态刻意不持久化**：落盘会让用户下次对着空列表发呆（条目都在，被上次筛选挡着），
+  而收起状态下 chip 行是看不见的。`rememberSaveable` 只保证切 Tab 回来仍在。
+- 有筛选时标题必须拼「库名 · 筛选名」（只显示库名，用户会以为数据丢了）。
+
+### ★ 注释里的「斜杠 + 星号」（`ISSUES.md` #65，本项目第二次踩）
+Kotlin 块注释**支持嵌套**：注释文案里出现「星号紧跟斜杠」会**提前结束注释**，
+后面整段代码变成语法错误（报的是一堆 `Expecting a top level declaration`，
+位置全在同一行 —— 看到这个形态先去看注释）。
+写注释后 5 秒自检：`grep -n '\*/\|\/\*' <新写的注释>`（两个方向都算）。
+
+### 本轮门禁基线（可作回归标尺）
+`333 tests, 0 failures`：`:core:common` + `:data:kdbx`（23 条 codec/读路径）+
+`:data:repository` + `:app:testFullDebugUnitTest`；全模块 `detekt` 全绿；
+`full` 与 `offline` **两个 flavor 都编译通过**（第 4 批把 KDBX 入口对两种分发都开放了）。
