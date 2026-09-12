@@ -101,21 +101,15 @@ fun UnlockScreen(
         }
     }
 
-    // 进入解锁页后**自动弹一次**本地快速解锁（生物识别 / 指纹）：只要该库已启用快速解锁，
-    // 就不必再让用户找按钮点一下（对齐 Bitwarden 「解锁界面直接弹生物识别」的体验）。
-    // 只自动触发一次——用户取消后不再反复弹（尊重「改用主密码」的意图），仍可手动点按钮再触发。
-    // autoPrompted 走 rememberSaveable：配置变更 / 重组都不会重弹。
-    val autoPrompted = rememberSaveable { mutableStateOf(false) }
-    LaunchedEffect(state.localUnlockAvailable, state.twoFactor, state.submitting) {
-        if (!autoPrompted.value &&
-            state.localUnlockAvailable &&
-            state.twoFactor == null &&
-            !state.submitting
-        ) {
-            autoPrompted.value = true
-            viewModel.startLocalUnlock()
-        }
-    }
+    // 进入解锁页自动弹一次本地快速解锁（生物识别 / 指纹）。
+    // 抽成独立 composable：守卫条件与相关状态一并移出本函数，避免 UnlockScreen 的
+    // CyclomaticComplexMethod / ComplexCondition 越界（CI detekt 质量门会拦，2026-09-12 实测）。
+    AutoPromptQuickUnlock(
+        localUnlockAvailable = state.localUnlockAvailable,
+        hasTwoFactor = state.twoFactor != null,
+        submitting = state.submitting,
+        onPrompt = viewModel::startLocalUnlock,
+    )
 
     Scaffold { padding ->
         val vault = state.vault
@@ -307,5 +301,33 @@ private fun PasswordForm(
             .height(48.dp),
     ) {
         Text(stringResource(R.string.unlock_submit))
+    }
+}
+
+/**
+ * 进入解锁页后**自动弹一次**本地快速解锁（生物识别 / 指纹）。
+ *
+ * 只要该库已启用快速解锁，就不必再让用户找按钮点一下（对齐 Bitwarden 的解锁体验）。
+ * 只自动触发一次：用户取消后不再反复弹（尊重「改用主密码」的意图），仍可手动点按钮再触发；
+ * [prompted] 走 rememberSaveable，配置变更 / 重组都不会重弹。
+ *
+ * 单独成函数而非内联在 [UnlockScreen]：把守卫条件与相关状态隔离在此，避免主函数的
+ * CyclomaticComplexMethod / ComplexCondition 越界（CI detekt 质量门会拦）。
+ */
+@Composable
+private fun AutoPromptQuickUnlock(
+    localUnlockAvailable: Boolean,
+    hasTwoFactor: Boolean,
+    submitting: Boolean,
+    onPrompt: () -> Unit,
+) {
+    val prompted = rememberSaveable { mutableStateOf(false) }
+    // 条件刻意控制在 3 项以内（detekt ComplexCondition 上限为 3）。
+    val eligible = localUnlockAvailable && !hasTwoFactor && !submitting
+    LaunchedEffect(eligible) {
+        if (!prompted.value && eligible) {
+            prompted.value = true
+            onPrompt()
+        }
     }
 }
