@@ -96,6 +96,34 @@ object WebAuthn {
     }.getOrElse { Base64.getDecoder().decode(text) }
 
     /**
+     * 把库中存储的 [storedId]（Base64 文本形态）归一为 WebAuthn 响应用的 `rawId` / `id` 字符串。
+     *
+     * ⚠️ **这是「登录验签失败」的根因修复（2026-09-12）**，务必理解为什么不能写成
+     * `base64Url(decode(storedId))`：
+     *
+     * 库里的 `credentialId` 是注册时由 [base64Url] 写下的 **b64url 文本**。而 WebAuthn 规范要求
+     * 断言响应里的 `rawId` **逐字节等于** RP 在 `allowCredentials` 中持有的凭据 ID。
+     * RP 的第一道校验就是对 `rawId` 做**字节比对**——它不认识被重新编码过的形态。
+     *
+     * 反例（旧实现，已证伪）：`base64Url(decode(storedId))`。
+     * 它在「合法 b64url」上看似是恒等变换，但有两个致命分支：
+     *  - 标准 Base64（含 `+` `/`）存储的 ID 会被改写成 b64url 形态（`-` `_`），字节虽同、
+     *    文本不同，部分 RP 的字符串级比对直接失配；
+     *  - 更糟的是**解码失败分支**：`decode` 抛异常后被 `?:` 兜底成 `text.toByteArray(UTF_8)`，
+     *    把整串 Base64 文本当成 ID 字节发出去，RP 必然拒绝。
+     *
+     * 正确做法：**直接用存储的文本**（规范里 `id` / `rawId` 本就是 Base64 文本，且注册侧
+     * 写库时用的就是 [base64Url]，两侧同源）。仅当文本不是合法 Base64（历史脏数据）时，
+     * 才退化为按 UTF-8 字节重新编码，保证「不崩、可诊断」。
+     */
+    fun rawIdFromStored(storedId: String): String {
+        val trimmed = storedId.trim()
+        if (trimmed.isEmpty()) return trimmed
+        val decodable = runCatching { decodeBase64UrlOrStandard(trimmed) }.isSuccess
+        return if (decodable) trimmed else base64Url(trimmed.toByteArray(Charsets.UTF_8))
+    }
+
+    /**
      * 解析 Bitwarden 存储的 [keyValue] 为 P-256 私钥。
      *
      * Bitwarden 在不同来源下 keyValue 形态不一：PEM(PKCS8) / 标准 Base64 的 PKCS8 DER /
@@ -494,6 +522,13 @@ object WebAuthn {
      * 字段集对齐 Bitwarden / Keyguard / Bastion 三家：
      * - `authenticatorAttachment`：本 provider 是平台内置（软件密钥 + 系统生物识别），取 `platform`；
      * - `clientExtensionResults`：**必须存在**（哪怕空对象），部分 RP 的解析器直接读该键。
+     *
+     * ⚠️ **调用方须知：优先用 [buildGetResponseJsonFromStoredId]。** 本函数接收**原始字节**，
+     * 仅在调用方确实持有 ID 的原始字节（而非库里的 Base64 文本）时才适用；把「存储态 Base64
+     * 文本先解码再传进来」会在标准 Base64 场景下改变文本形态，导致与 RP 的 `rawId` 比对失配
+     * （2026-09-12 真机证伪的那条路，详见 [rawIdFromStored]）。
+     *
+     * @param credentialId 凭据 ID 的**原始字节**（不是 Base64 文本）。
      */
     fun buildGetResponseJson(
         credentialId: ByteArray,
@@ -515,6 +550,41 @@ object WebAuthn {
         sb.append(",\"signature\":").append(quote(base64Url(signature)))
         if (userHandle != null) {
             sb.append(",\"userHandle\":").append(quote(base64Url(userHandle)))
+        }
+        sb.append("}")
+        sb.append(",\"clientExtensionResults\":{}")
+        sb.append("}")
+        return sb.toString()
+    }
+
+    /**
+     * 组装 get 响应 JSON（**以存储态 credentialId / userHandle 文本为准**，见 [rawIdFromStored]）。
+     *
+     * 为什么单独存在：`rawId` 必须是 RP 持有的那个 ID 的**原样文本**，而非「解密后再编码」。
+     * 旧的字节重编码路径已在真机上被证伪（原始 ID 逐字节不符 → 登录时报校验错误）。
+     *
+     * @param userHandleText 库里存的原样 Base64 文本（**不要**先解码再传），null 表示省略该字段。
+     */
+    fun buildGetResponseJsonFromStoredId(
+        storedCredentialId: String,
+        clientDataJson: ByteArray,
+        authData: ByteArray,
+        signature: ByteArray,
+        userHandleText: String?,
+    ): String {
+        val id = rawIdFromStored(storedCredentialId)
+        val sb = StringBuilder()
+        sb.append("{")
+        sb.append("\"id\":").append(quote(id))
+        sb.append(",\"rawId\":").append(quote(id))
+        sb.append(",\"type\":\"public-key\"")
+        sb.append(",\"authenticatorAttachment\":\"platform\"")
+        sb.append(",\"response\":{")
+        sb.append("\"clientDataJSON\":").append(quote(base64Url(clientDataJson)))
+        sb.append(",\"authenticatorData\":").append(quote(base64Url(authData)))
+        sb.append(",\"signature\":").append(quote(base64Url(signature)))
+        if (userHandleText != null) {
+            sb.append(",\"userHandle\":").append(quote(userHandleText))
         }
         sb.append("}")
         sb.append(",\"clientExtensionResults\":{}")

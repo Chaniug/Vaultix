@@ -1,5 +1,63 @@
 # 下一步任务清单
 
+> ## 【最新】第三十八轮（2026-09-12）：通行密钥「登录最后一步校验失败」根因修复
+>
+> 用户反馈：「通行密钥能够读取到，能够进入登录，在**最终校验**的时候提示错误。」
+> 定位到一条**一字节都不对**的硬伤，已修复并加回归锁。
+>
+> **① 根因：`rawId` 被二次 Base64 解码（`PasskeyGetActivity.kt:446`）**
+>
+> 注册侧（`PasskeyCreateActivity`）三处口径一致、正确：
+> `credentialId = WebAuthn.base64Url(key.credentialId)` 落库；`authData` 里放**原始 32 字节**；
+> `rawId = base64Url(原始 32 字节)`。
+>
+> 但登录侧把**已经是 b64url 文本**的 `cred.credentialId` **又解码了一次**，再编码回去：
+> ```kotlin
+> // 旧实现（已证伪）
+> val idBytes = decodeBase64UrlOrStandard(cred.credentialId) ?: cred.credentialId.toByteArray(UTF_8)
+> buildGetResponseJson(credentialId = idBytes, ...)     // 内部又 base64Url()
+> ```
+> 规范要求 `rawId` **逐字节等于** RP 在 `allowCredentials` 里持有的 ID，而该路径有两处失配：
+> - **标准 Base64（含 `+` `/`）存储的 ID 被规范化成 b64url（`-` `_`）** → 文本不同。
+>   实测：`2z85N/AMiSf…qf/i5FU=` 被回传成 `2z85N_AMiSf…qf_i5FU`，任何做字符串比对的 RP 直接拒。
+> - 解码抛异常时被 `?:` 兜底成 `text.toByteArray(UTF_8)` → 把 Base64 文本本身当 ID 发出去。
+>
+> 这解释了全部三个现象：候选能列出（`idMatches` **两边都解码**，自洽 → 麻痹了测试）、
+> 能进登录页（只用 rpId/元数据）、**最后一步校验报错**（签名/authData 全对，唯独 rawId 错）。
+>
+> **② `userHandle` 是同一陷阱的第二实例**
+> 注册侧 `userHandle = json.optJSONObject("user")?.optString("id")` **原样落库**（未解码），
+> 登录侧却又 `decode` → `base64Url` 编码回去。同样改为原样回传。
+>
+> **③ 修法：以「存储态文本」为准**
+> | 文件 | 改动 |
+> |---|---|
+> | `core/common/WebAuthn.kt` | 新增 **`rawIdFromStored()`**（合法 Base64 则**原样返回**；脏数据退化为 UTF-8 重编码，不崩）+ **`buildGetResponseJsonFromStoredId()`**（`id`/`rawId`/`userHandle` 全走原样文本）；给旧 `buildGetResponseJson` 加「优先用新函数」的 KDoc 警示 |
+> | `passkey/PasskeyGetActivity.kt` | 改用 `buildGetResponseJsonFromStoredId`；删掉 `idBytes` 与 `userHandle` 的两次多余 decode；补 `rawId=` / `storedIsBase64=` 现场诊断日志 |
+> | `core/common/.../WebAuthnTest.kt` | 新增 2 例回归锁（`stored credential id is echoed verbatim as rawId`、`rawIdFromStored tolerates blank input`） |
+>
+> **④ 验证方式（沙箱内真跑，非推测）**
+> 本轮把 `core/common/WebAuthn.kt` 连同验证器用 `kotlinc` 单独编译成 jar（绕过 Gradle/Android），
+> **14/14 项检查通过**；并跑通真实 Gradle：
+> - `:core:common:testDebugUnitTest` → **12/12 通过**（含新增 2 例）
+> - `testFullDebugUnitTest` 全量 → **141 用例 0 失败**
+> - `detekt` → 通过（修掉 1 处 `MaxLineLength`）
+> - `:app:compileFullDebugKotlin` → **BUILD SUCCESSFUL**
+>
+> ⚠️ 唯一未能在沙箱完成的是 `assembleFullDebug` 的 **native 符号剥离**（缺 NDK，`stripFullDebugDebugSymbols`
+> 报 MD5 读取失败）——属沙箱工具链缺口，与本次改动无关；该步在 CI 上正常。
+>
+> **⑤ 顺手修复沙箱构建环境（长期收益）**
+> - `/root/.gradle/init.gradle` 原本**语法错误**（`mavelCentral()` 拼写错 + url 未加引号），
+>   导致所有 Gradle 调用初始化即失败 → 重写为 `beforeSettings` 注入 Aliyun/腾讯镜像
+>   （pluginManagement + dependencyResolutionManagement 两处都要，项目设了 `FAIL_ON_PROJECT_REPOS`）。
+> - 安装 Android SDK：`platforms/android-37.0` + `build-tools/37.0.0`（**注意 37 的目录名带扩展版本号，
+>   在线 manifest 里根本没有 `platforms;android-37`**，只能按 `platform-37.0_r01.zip` 直取）。
+> - hosts 补 `dl.google.com → 113.108.239.161`（此前被污染到 fake-ip `198.18.0.13`）。
+>
+> **待真机验收**：用 Google/Edge 打开某站点 passkey 登录，确认最终校验不再报错。
+>
+
 > ## 【最新】第三十七轮（2026-09-12）：阶段 2 收尾 —— **活跃库真源收敛 + 门禁治理**
 >
 > 承接上一轮「修复，然后把 bastion 的 ui 都准备开始搬过来」，本轮把迁移文档里

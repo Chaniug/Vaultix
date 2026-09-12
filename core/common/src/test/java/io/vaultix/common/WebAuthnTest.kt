@@ -313,5 +313,57 @@ class WebAuthnTest {
         assertThat(java.util.Base64.getUrlDecoder().decode(nativeB64)).isEqualTo(nativeJson)
     }
 
+    /**
+     * **rawId / userHandle 存储态回归锁（2026-09-12）** —— 修复真机「候选能列出、能选、
+     * 最后一步校验报错」的那条改动。
+     *
+     * 缺陷形态：注册时把 32 字节随机 ID 经 [WebAuthn.base64Url] 写成 b64url 文本落库；
+     * 登录时却把这份文本**又解码一次**、再让 [WebAuthn.buildGetResponseJson] 编码回去。
+     * 该路径在两处会与 RP 持有的 ID **逐字节失配**：
+     *  - 标准 Base64（`+` `/`）存的 ID 被规范化成 b64url（`-` `_`）→ 文本不同；
+     *  - 解码失败时被兜底成 `text.toByteArray(UTF_8)` → 把 Base64 文本本身当成 ID 发出。
+     *
+     * 本测试同时锁住「正常 b64url」与「标准 Base64」两种形态都必须**原样回传**，
+     * 并验证标准 Base64 那条会与 RP 的 ID 比对失配（旧行为，不得回归）。
+     */
+    @Test
+    fun `stored credential id is echoed verbatim as rawId`() {
+        // ① 常规 b64url：库里就是注册侧写的文本，必须一字不改地出现在 id / rawId 里
+        val raw = ByteArray(32).also { SecureRandom().nextBytes(it) }
+        val storedB64Url = WebAuthn.base64Url(raw)
+        val json = WebAuthn.buildGetResponseJsonFromStoredId(
+            storedCredentialId = storedB64Url,
+            clientDataJson = ByteArray(8),
+            authData = ByteArray(37),
+            signature = ByteArray(64),
+            userHandleText = "dXNlci1oYW5kbGU",
+        )
+        assertThat(WebAuthn.rawIdFromStored(storedB64Url)).isEqualTo(storedB64Url)
+        assertThat(json).contains("\"id\":\"$storedB64Url\"")
+        assertThat(json).contains("\"rawId\":\"$storedB64Url\"")
+        assertThat(json).contains("\"userHandle\":\"dXNlci1oYW5kbGU\"")
+
+        // ② 标准 Base64（含 `+` `/`）形态：必须原样保留，不得被规范化成 b64url 文本。
+        //    这正是旧实现 `base64Url(decode(stored))` 会踩的坑——文本级比对失配。
+        val storedStandard = java.util.Base64.getEncoder().encodeToString(raw)
+        assertThat(WebAuthn.rawIdFromStored(storedStandard)).isEqualTo(storedStandard)
+        // RP 手里的 ID 与回传 rawId 解码后的字节相同，但若 RP 做字符串比对，标准形态必须原样
+        assertThat(WebAuthn.decodeBase64UrlOrStandard(WebAuthn.rawIdFromStored(storedStandard)))
+            .isEqualTo(raw)
+
+        // ③ 非 Base64 的历史脏数据：不崩，退化为按 UTF-8 编码（可诊断地失败，而非抛异常）
+        val junk = "not a base64 string!!!"
+        assertThat(WebAuthn.rawIdFromStored(junk)).isNotEmpty()
+        assertThat(WebAuthn.decodeBase64UrlOrStandard(WebAuthn.rawIdFromStored(junk)))
+            .isEqualTo(junk.toByteArray(Charsets.UTF_8))
+    }
+
+    /** 空 credentialId 不得抛异常（防御：调用方可能拿到脏数据）。 */
+    @Test
+    fun `rawIdFromStored tolerates blank input`() {
+        assertThat(WebAuthn.rawIdFromStored("")).isEmpty()
+        assertThat(WebAuthn.rawIdFromStored("   ")).isEmpty()
+    }
+
     private fun toBigInt(b: ByteArray): BigInteger = BigInteger(1, b)
 }

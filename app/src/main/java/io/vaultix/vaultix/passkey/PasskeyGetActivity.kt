@@ -70,7 +70,6 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
-import java.nio.charset.StandardCharsets
 import javax.inject.Inject
 
 /**
@@ -441,25 +440,40 @@ class PasskeyGetActivity : FragmentActivity() {
                 // 原生 App 流程：本模块自己拼 JSON、自己哈希、自己签，三处用的是同一份字节。
                 WebAuthn.signAssertion(authData, clientDataBytes, key)
             }
-            val userHandle = cred.userHandle
-                ?.let { runCatching { WebAuthn.decodeBase64UrlOrStandard(it) }.getOrNull() }
-            val idBytes = runCatching { WebAuthn.decodeBase64UrlOrStandard(cred.credentialId) }.getOrNull()
-                ?: cred.credentialId.toByteArray(StandardCharsets.UTF_8)
-            val responseJson = WebAuthn.buildGetResponseJson(
-                credentialId = idBytes,
+            // ⚠️ **rawId 必须用库里那份文本原样回传（2026-09-12 根因修复）**
+            //
+            // 旧实现是 `decodeBase64UrlOrStandard(cred.credentialId)?.let { buildGetResponseJson(it, ...) }`，
+            // 即「把 b64url 文本解码成字节，再在 buildGetResponseJson 里 base64Url() 编码回去」。
+            // 这在合法 b64url 上表现为恒等变换，看似无害，实际有两处会**逐字节失配**：
+            //  a) 标准 Base64（`+`/`/`）写的 ID 被规范化成 b64url（`-`/`_`）→ 文本不同；
+            //  b) 解码抛异常时被 `?:` 兜底成 `text.toByteArray(UTF_8)` → 直接把 Base64 文本当 ID 发出去。
+            // RP 对 `rawId` 做的是与 `allowCredentials[].id` 的**字节比对**，任何一处失配都会
+            // 让整条断言被判为「未知凭证」——这正是真机「候选能列出、能选、最后一步校验报错」的原因。
+            //
+            // 注册侧（PasskeyCreateActivity:279/329）写库与回传都用 `WebAuthn.base64Url(key.credentialId)`，
+            // 两侧同源，故此处直接用存储文本即可闭环。详见 [WebAuthn.rawIdFromStored]。
+            //
+            // userHandle 同陷阱：库里的 `userHandle` 是**注册时原样存下的 Base64 文本**
+            // （PasskeyCreateActivity:293 取自请求 JSON 的 `user.id`，line 300 直接落库，未解码）。
+            // 因此这里也不能 decode→re-encode，直接原样回传。
+            val responseJson = WebAuthn.buildGetResponseJsonFromStoredId(
+                storedCredentialId = cred.credentialId,
                 clientDataJson = clientDataBytes,
                 authData = authData,
                 signature = signature,
-                userHandle = userHandle,
+                userHandleText = cred.userHandle?.takeIf { it.isNotBlank() },
+            )
+            val storedIsBase64 =
+                runCatching { WebAuthn.decodeBase64UrlOrStandard(cred.credentialId) }.isSuccess
+            AutofillLogger.d(
+                "PK assertion ready sigLen=${signature.size} authDataLen=${authData.size} " +
+                    "cdjLen=${clientDataBytes.size} browserFlow=${clientDataHash != null} " +
+                    "rawId=${WebAuthn.rawIdFromStored(cred.credentialId)} storedIsBase64=$storedIsBase64",
             )
             val resultIntent = Intent()
             PendingIntentHandler.setGetCredentialResponse(
                 resultIntent,
                 GetCredentialResponse(PublicKeyCredential(responseJson)),
-            )
-            AutofillLogger.d(
-                "PK assertion ready sigLen=${signature.size} authDataLen=${authData.size} " +
-                    "cdjLen=${clientDataBytes.size} browserFlow=${clientDataHash != null}",
             )
             setResult(Activity.RESULT_OK, resultIntent)
             finish()
