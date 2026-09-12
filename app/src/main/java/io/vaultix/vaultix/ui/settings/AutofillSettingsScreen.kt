@@ -49,7 +49,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Lock
@@ -108,7 +107,6 @@ fun AutofillSettingsScreen(
     val autoCopyTotp by viewModel.autoCopyTotp.collectAsStateWithLifecycle()
     val baseDomainMatch by viewModel.autofillBaseDomainMatch.collectAsStateWithLifecycle()
     val exactDomainOnly by viewModel.autofillExactDomainOnly.collectAsStateWithLifecycle()
-    val passkeyCount by viewModel.passkeyCount.collectAsStateWithLifecycle()
     var tileUnsupported by rememberSaveable { mutableStateOf(false) }
 
     var status by remember { mutableStateOf(AutofillStatusChecker.check(context)) }
@@ -170,7 +168,6 @@ fun AutofillSettingsScreen(
             // ---- 通行密钥（Android 14+ 才有 Credential Provider）----
             PasskeySection(
                 enabled = status.credentialProviderEnabled,
-                passkeyCount = passkeyCount,
                 onOpenProviderSettings = { openCredentialProviderSettings(context) },
             )
 
@@ -334,11 +331,14 @@ private fun statusDescription(status: AutofillStatus): Int = when {
  *
  * Android 14 以下没有 Credential Provider，整组换成一行版本说明（对齐 Bastion
  * `PasskeySettingsScreen` 的 `isPasskeySupported` 分支）。
+ *
+ * **刻意只留「凭据提供商」一个入口**（对齐 Bastion `SystemSettingsCard` 的思路）：
+ * 已保存数量与「通行密钥能做什么」的说明属冗余信息（App 内已有独立的通行密钥列表页），
+ * 2026-09-12 按用户要求移除。
  */
 @Composable
 private fun PasskeySection(
     enabled: Boolean,
-    passkeyCount: Int,
     onOpenProviderSettings: () -> Unit,
 ) {
     SettingsGroupTitle(stringResource(R.string.group_passkey))
@@ -367,22 +367,6 @@ private fun PasskeySection(
         ),
         // 直达「启用本 Provider」的系统界面（Android 14+ createSettingsPendingIntent）。
         onClick = onOpenProviderSettings,
-    )
-    // 数量按「已解锁库」统计：锁定库的密文读不出来，副标题必须写清口径，
-    // 否则用户会误读成「我一个通行密钥都没存」。
-    SettingsRow(
-        icon = { Icon(Icons.Filled.Fingerprint, contentDescription = null) },
-        title = stringResource(R.string.setting_passkey_saved),
-        subtitle = if (passkeyCount > 0) {
-            stringResource(R.string.setting_passkey_saved_fmt, passkeyCount)
-        } else {
-            stringResource(R.string.setting_passkey_saved_locked)
-        },
-    )
-    SettingsRow(
-        icon = { Icon(Icons.Filled.Shield, contentDescription = null) },
-        title = stringResource(R.string.passkey_features_title),
-        subtitle = stringResource(R.string.passkey_features_body),
     )
 }
 

@@ -109,6 +109,8 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.collections.immutable)
     implementation(libs.kotlinx.serialization.json)
+    // 填充辅助规则表的拉取（公开 GitHub 资产，与 Bitwarden 同源）。
+    implementation(libs.okhttp)
     implementation(libs.kotlinx.datetime)
 
     // 平台能力

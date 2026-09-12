@@ -30,6 +30,7 @@ import io.vaultix.vaultix.R
 import io.vaultix.vaultix.autofill.engine.AutofillCredentialMapper
 import io.vaultix.vaultix.autofill.engine.AutofillDatasets
 import io.vaultix.vaultix.autofill.engine.FillPlanner
+import io.vaultix.vaultix.autofill.fillassist.FillAssistRepository
 import io.vaultix.vaultix.autofill.match.AutofillFillTargetPolicy
 import io.vaultix.vaultix.autofill.match.AutofillRequestContextPolicy
 import io.vaultix.vaultix.autofill.match.BitwardenLikeAutofillMatcher
@@ -75,6 +76,10 @@ class VaultixAutofillService : AutofillService() {
     @Inject
     lateinit var activeVaultStore: ActiveVaultStore
 
+    /** 填充辅助规则（站点级选择器）；拉不到时行为等同没有它。 */
+    @Inject
+    lateinit var fillAssistRepository: FillAssistRepository
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var activeJob: Job? = null
 
@@ -88,7 +93,8 @@ class VaultixAutofillService : AutofillService() {
             callback.onSuccess(null)
             return
         }
-        val parsed = AssistStructureParser.parse(structure)
+        // 填充辅助：按站点选择器精确识别字段（读内存/磁盘缓存，廉价）；联网刷新在下面异步做。
+        val parsed = AssistStructureParser.parse(structure, fillAssistRepository.currentRules())
         // 诊断（仅元数据）：浏览器填充静默失效时靠它定位「是没解析到字段，还是没匹配到条目」；
         // `targets=0` 表示页面上没有值得填充的字段（搜索框 / 昵称框 …）→ 本次有意不响应。
         AutofillLogger.d(
@@ -104,6 +110,8 @@ class VaultixAutofillService : AutofillService() {
             return
         }
         val job = scope.launch {
+            // 规则表刷新（6 小时节流、失败静默）：只影响**后续**填充，绝不阻塞本次。
+            runCatching { fillAssistRepository.refreshIfStale() }
             val response = runCatching { buildResponse(parsed) }.getOrNull()
             withContext(Dispatchers.Main) {
                 if (!cancellationSignal.isCanceled) callback.onSuccess(response)
@@ -217,7 +225,7 @@ class VaultixAutofillService : AutofillService() {
         )
 
         val saveInfo = AutofillSaveInfo.build(parsed)
-        // 填充后自动复制验证码（条目标了 TOTP 但页面没有验证码框时）
+        // 填充后自动复制验证码（对齐 Bitwarden：**无条件**复制，受 autoCopyTotp 开关门控）
         val copyTotp = prefs.autoCopyTotp.first()
         val builder = FillResponse.Builder()
         saveInfo?.let { builder.setSaveInfo(it) }
@@ -293,8 +301,13 @@ class VaultixAutofillService : AutofillService() {
      *
      * 需要「先认证再回填」的两种情况：
      * - 主密码二次验证（[FillSuggestion.requiresReprompt]）；
-     * - 条目有验证码但**页面没有验证码框** → 走回调路径，回填后自动复制验证码
-     *   （[AutofillIntents.MODE_COPY_TOTP]，对齐 Bitwarden 的填充后自动复制 TOTP）。
+     * - 条目带验证码 → 走回调路径，回填后把验证码复制到剪贴板
+     *   （[AutofillIntents.MODE_COPY_TOTP]）。
+     *
+     * ⚠️ 复制是**无条件**的（只要有 totp 且开关开启），对齐 Bitwarden
+     * `AutofillCompletionManagerImpl` —— 它在每次填充成功后都调
+     * `tryCopyTotpToClipboard`（仅由 `isAutoCopyTotpDisabled` 门控）。
+     * 此前 Vaultix 只在「页面没有验证码框」时才复制，与上游不一致（2026-09-12 对齐）。
      */
     private fun datasetFor(
         parsed: ParsedStructure,
@@ -305,7 +318,7 @@ class VaultixAutofillService : AutofillService() {
         if (entries.isEmpty()) return null
         val authIntent = when {
             suggestion.requiresReprompt -> repromptIntent(suggestion, entries)
-            copyTotpEnabled && needsTotpCopy(suggestion) -> copyTotpIntent(suggestion, entries)
+            copyTotpEnabled && !suggestion.totpSecret.isNullOrBlank() -> copyTotpIntent(suggestion, entries)
             else -> null
         }
         return AutofillDatasets.build(
@@ -333,10 +346,6 @@ class VaultixAutofillService : AutofillService() {
         ),
         requestCode = suggestion.id.hashCode(),
     )
-
-    /** 条目带验证码、但本次填充不会写验证码框 → 需要回调后再复制一个。 */
-    private fun needsTotpCopy(suggestion: FillSuggestion): Boolean =
-        !suggestion.totpSecret.isNullOrBlank() && FieldHint.OTP !in suggestion.fields
 
     private fun copyTotpIntent(
         suggestion: FillSuggestion,

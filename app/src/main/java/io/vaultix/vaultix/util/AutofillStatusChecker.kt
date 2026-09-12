@@ -26,7 +26,9 @@ import android.view.autofill.AutofillManager
  * 自动填充服务状态（设置页顶部状态卡的数据源）。
  *
  * @param systemEnabled 系统「自动填充服务」里选中的是 Vaultix（密码填充的开关）
- * @param credentialProviderEnabled Android 14+ 凭据提供商已启用（Chromium 通行密钥必需）
+ * @param credentialProviderEnabled Android 14+ 凭据提供商已启用（Chromium 通行密钥必需）。
+ *   ⚠️ Android 16+ 起 `Settings.Secure` 对第三方 App 受限、**无法可靠读出**，此时
+ *   [CredentialProviderStatus] 按「已启用」处理，避免误报「未启用」（见该对象 KDoc）。
  */
 data class AutofillStatus(
     val systemEnabled: Boolean,

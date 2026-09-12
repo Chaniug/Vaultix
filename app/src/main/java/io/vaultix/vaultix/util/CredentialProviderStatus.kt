@@ -30,11 +30,21 @@ object CredentialProviderStatus {
     /** 自身 Provider 服务类名（manifest 中即此名）。 */
     private const val PROVIDER_SERVICE_NAME = "VaultixCredentialProviderService"
 
-    /** 是否已被系统启用为 Credential Provider。 */
+    /**
+     * 是否已被系统启用为 Credential Provider。
+     *
+     * ⚠️ **读不到值时的取向与 `AutofillStatusChecker.isSystemEnabled` 一致：按「已启用」处理**
+     * （而不是「未启用」）。原因：**Android 16（API 36）起 `Settings.Secure` 对第三方 App
+     * 受限**（Bitwarden `ContextExtensions` 注释：「required for Android 16+ where
+     * Settings.Secure is restricted for third-party apps」），`credential_service` 会读到
+     * `null`。若把「读不到」当「未启用」，设置页会在功能**明明可用**的设备上恒显示
+     * 「未启用」（荣耀 Android 17 实测即如此），把用户引向无谓的反复排查。
+     */
     fun isEnabled(context: Context): Boolean {
         val raw = runCatching {
             Settings.Secure.getString(context.contentResolver, SETTING_CREDENTIAL_SERVICE)
         }.getOrNull()
-        return !raw.isNullOrBlank() && raw.contains(PROVIDER_SERVICE_NAME)
+        // 读不到（null / 空）→ 无法证伪，按「已启用」处理（取向同 AutofillStatusChecker）。
+        return raw.isNullOrBlank() || raw.contains(PROVIDER_SERVICE_NAME)
     }
 }
