@@ -21,6 +21,7 @@ import android.service.autofill.SaveInfo
 import android.view.autofill.AutofillId
 import android.view.autofill.AutofillValue
 import android.widget.RemoteViews
+import androidx.annotation.DrawableRes
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.autofill.model.FieldHint
 import io.vaultix.vaultix.autofill.model.FillPlan
@@ -32,12 +33,23 @@ import io.vaultix.vaultix.autofill.model.ParsedStructure
 /** 自动填充面板条目的构造与展示（RemoteViews，由系统渲染）。 */
 object AutofillDatasets {
 
-    /** 下拉 / 内联面板里的单条建议视图。 */
-    fun presentation(context: Context, title: String, subtitle: String): RemoteViews =
-        RemoteViews(context.packageName, R.layout.autofill_dataset_item).apply {
-            setTextViewText(R.id.autofill_item_title, title)
-            setTextViewText(R.id.autofill_item_subtitle, subtitle)
-        }
+    /**
+     * 下拉 / 内联面板里的单条建议视图。
+     *
+     * 2026-09-12 观感改进（对齐 Bitwarden 的 presentation）：左侧补应用图标，
+     * 布局同时把最小高度 / 内边距调到 56dp / 16dp —— 此前只有两行文字，在系统面板里
+     * 显得又窄又空。
+     */
+    fun presentation(
+        context: Context,
+        title: String,
+        subtitle: String,
+        @DrawableRes iconRes: Int = R.mipmap.ic_launcher,
+    ): RemoteViews = RemoteViews(context.packageName, R.layout.autofill_dataset_item).apply {
+        setImageViewResource(R.id.autofill_item_icon, iconRes)
+        setTextViewText(R.id.autofill_item_title, title)
+        setTextViewText(R.id.autofill_item_subtitle, subtitle)
+    }
 
     /**
      * 组装一个 Dataset：[entries] 为「目标字段 → 待填值」，为空表示无可填字段（返回 null）。

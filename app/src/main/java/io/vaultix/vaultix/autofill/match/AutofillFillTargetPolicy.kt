@@ -11,7 +11,6 @@ package io.vaultix.vaultix.autofill.match
 import io.vaultix.vaultix.autofill.model.FieldHint
 import io.vaultix.vaultix.autofill.model.ParsedField
 import io.vaultix.vaultix.autofill.model.ParsedStructure
-import io.vaultix.vaultix.autofill.parser.HintClassifier
 
 /**
  * 「这个字段是否值得为它弹出填充 UI」的判定。
@@ -29,12 +28,14 @@ import io.vaultix.vaultix.autofill.parser.HintClassifier
  * - **Bastion**：按信号强度 ≥ MEDIUM 过滤（其「京东搜索栏误弹」的 P1 修复），
  *   本文件的 KDoc 承诺见 [HintClassifier] 顶部（弱信号不得单独触发密码候选）。
  *
- * 两条规则合并为：
- * 1. 语义上不属于「凭据类」（[FieldHint.SEARCH] / [FieldHint.UNKNOWN]）→ 永不算数；
- * 2. 密码 / 新密码 / 验证码本身就是强证据，直接算数；
- * 3. 账号 / 邮箱 / 身份 / 卡片类，必须由标准 hint 或 inputType 判出（≥ MEDIUM）——
- *    仅凭文本启发式命中的**孤立**文本框中，`id` / `placeholder` 含 "login / 账号 / 用户名"
- *    的搜索框会被误判成 [FieldHint.USERNAME]，从而把填充 UI 勾出来。
+ * 规则（2026-09-12 对齐 Bitwarden 后收敛为一条）：
+ * - 字段**可见**、且语义属于「凭据类」（[FieldHint.SEARCH] / [FieldHint.UNKNOWN] 不算数）
+ *   → 算填充目标；否则不算。
+ *
+ * ⚠️ 曾经的第三层「弱信号不算数」**已撤销**（见 [isFillTarget]）：上游 Bitwarden 没有强度闸，
+ * 而当初要靠它拦的「搜索框误判」已改由
+ * [io.vaultix.vaultix.autofill.parser.HintClassifier] 的**否定词**在**分类阶段**拦掉
+ * （对齐上游 `IGNORED_RAW_HINTS`）——在更靠前、更准的位置解决同一个问题。
  */
 object AutofillFillTargetPolicy {
 
@@ -44,31 +45,28 @@ object AutofillFillTargetPolicy {
         else -> true
     }
 
-    /** 密码 / 新密码 / 验证码：字段类型本身就是证据，未经启发式也不影响判定。 */
-    private fun FieldHint.isSelfEvident(): Boolean = when (this) {
-        FieldHint.PASSWORD, FieldHint.NEW_PASSWORD, FieldHint.OTP -> true
-        else -> false
-    }
-
     /**
      * 单个字段是否值得为它弹出填充 UI。
      *
+     * ⚠️ **2026-09-12 对齐 Bitwarden：撤销「信号强度 ≥ MEDIUM」这道门槛。**
+     * 上游的判定是「**分类结果即证据**」——节点要么被归为 Login / Card（可填），
+     * 要么是 `Unused` 被直接剔除（`AutofillParserImpl.selectCandidateAutofillViews`），
+     * **不存在第二层强度闸**。
+     *
+     * 我们此前多这一层，是为了在**关键词过宽**时兜底（旧词表含 `login`，
+     * `id="login-search"` 这类搜索框会被误判成账号框）。该场景如今已在
+     * [io.vaultix.vaultix.autofill.parser.HintClassifier] 用「否定词优先」兜住
+     * （search / find / recipient / edit + 中文），强度闸因此变成**冗余且降召回**的一层：
+     * `id="username"` 且没有密码框的页面，上游会出候选，我们却因 LOW 不出。
+     *
      * **纯函数重载**（不依赖 [ParsedField] / `AutofillId`）：便于 JVM 单测直接覆盖判定矩阵。
      */
-    fun isFillTarget(
-        hint: FieldHint,
-        strength: HintClassifier.SignalStrength,
-        isVisible: Boolean = true,
-    ): Boolean = when {
-        !isVisible -> false
-        !hint.isCredentialBearing() -> false
-        hint.isSelfEvident() -> true
-        else -> strength != HintClassifier.SignalStrength.LOW
-    }
+    fun isFillTarget(hint: FieldHint, isVisible: Boolean = true): Boolean =
+        isVisible && hint.isCredentialBearing()
 
     /** 单个字段是否值得为它弹出填充 UI。 */
     fun isFillTarget(field: ParsedField): Boolean =
-        isFillTarget(hint = field.hint, strength = field.strength, isVisible = field.isVisible)
+        isFillTarget(hint = field.hint, isVisible = field.isVisible)
 
     /** 页面上全部「值得填充」的字段（保持原顺序）。 */
     fun fillTargets(parsed: ParsedStructure): List<ParsedField> = parsed.fields.filter(::isFillTarget)

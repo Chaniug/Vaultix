@@ -134,6 +134,7 @@ fun MainShellScreen(
                     embedded = true,
                     addRequest = cardAddRequest,
                     onAddConsumed = { cardAddRequest = 0 },
+                    onOpenItem = onOpenItem,
                 )
 
                 VaultixNavItem.Settings -> SettingsScreen(

@@ -179,4 +179,30 @@ class HintClassifierTest {
         assertThat(c.hint).isEqualTo(FieldHint.UNKNOWN)
         assertThat(c.strength).isEqualTo(HintClassifier.SignalStrength.LOW)
     }
+
+    // ---- 对齐 Bitwarden 的「不误弹 / 精准」三处（2026-09-12）----
+
+    @Test
+    fun `ignored terms veto the text heuristic`() {
+        // 对齐上游 IGNORED_RAW_HINTS：搜索 / 查找 / 收件人 / 编辑 一律不认
+        assertThat(hintOf(null, 0, "login-search")).isEqualTo(FieldHint.UNKNOWN)
+        assertThat(hintOf(null, 0, "search username")).isEqualTo(FieldHint.UNKNOWN)
+        assertThat(hintOf(null, 0, "搜索账号")).isEqualTo(FieldHint.UNKNOWN)
+    }
+
+    @Test
+    fun `english login keyword no longer triggers username`() {
+        // 上游 SUPPORTED_RAW_USERNAME_HINTS 里**没有** login（这正是搜索框误弹的根源）；
+        // 中文「用户名 / 账号」保留，用于覆盖中文站点。
+        assertThat(hintOf(null, 0, "login")).isEqualTo(FieldHint.UNKNOWN)
+        assertThat(hintOf(null, 0, "账号")).isEqualTo(FieldHint.USERNAME)
+    }
+
+    @Test
+    fun `text heuristic normalizes ascii separators`() {
+        // user_name / user-name 都应命中 username（上游会把非字母去掉后再比对）；中文不受影响
+        assertThat(hintOf(null, 0, "user_name")).isEqualTo(FieldHint.USERNAME)
+        assertThat(hintOf(null, 0, "user-name")).isEqualTo(FieldHint.USERNAME)
+        assertThat(hintOf(null, 0, "e-mail")).isEqualTo(FieldHint.EMAIL_ADDRESS)
+    }
 }

@@ -2,32 +2,53 @@
 <!--
   自动填充下拉建议的条目视图（RemoteViews：由系统渲染在填充面板里，
   只能使用 RemoteViews 支持的控件与属性）。
+
+  2026-09-12 观感改进（对齐 Bitwarden 的 presentation 形态）：
+  - 左侧补 40dp 图标位（应用图标），条目不再是一行孤零零的文字；
+  - 统一最小高度 56dp 与内边距，避免在面板里显得又窄又挤；
+  - 文本区改为 weight=1 的纵向容器，长条目名 / 账号能正确省略。
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
+    android:minHeight="56dp"
     android:gravity="center_vertical"
-    android:orientation="vertical"
+    android:orientation="horizontal"
     android:paddingStart="16dp"
-    android:paddingTop="12dp"
+    android:paddingTop="10dp"
     android:paddingEnd="16dp"
-    android:paddingBottom="12dp">
+    android:paddingBottom="10dp">
 
-    <TextView
-        android:id="@+id/autofill_item_title"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:ellipsize="end"
-        android:maxLines="1"
-        android:textAppearance="?android:attr/textAppearanceMedium"
-        android:textColor="?android:attr/textColorPrimary" />
+    <ImageView
+        android:id="@+id/autofill_item_icon"
+        android:layout_width="40dp"
+        android:layout_height="40dp"
+        android:contentDescription="@null"
+        android:scaleType="centerInside" />
 
-    <TextView
-        android:id="@+id/autofill_item_subtitle"
-        android:layout_width="match_parent"
+    <LinearLayout
+        android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:ellipsize="end"
-        android:maxLines="1"
-        android:textAppearance="?android:attr/textAppearanceSmall"
-        android:textColor="?android:attr/textColorSecondary" />
+        android:layout_marginStart="14dp"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/autofill_item_title"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:textAppearance="?android:attr/textAppearanceMedium"
+            android:textColor="?android:attr/textColorPrimary" />
+
+        <TextView
+            android:id="@+id/autofill_item_subtitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:textAppearance="?android:attr/textAppearanceSmall"
+            android:textColor="?android:attr/textColorSecondary" />
+    </LinearLayout>
 </LinearLayout>

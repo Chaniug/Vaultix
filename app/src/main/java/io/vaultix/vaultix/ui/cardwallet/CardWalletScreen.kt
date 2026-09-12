@@ -14,6 +14,7 @@
  */
 package io.vaultix.vaultix.ui.cardwallet
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -61,6 +62,7 @@ import androidx.compose.material.icons.filled.Add
  * @param embedded 主界面 Tab 内嵌模式：隐藏返回键与 FAB（「+」由底部导航条统一承载）。
  * @param addRequest 「+」请求计数（非零即触发新建表单，避免重复弹窗）。
  * @param onAddConsumed 表单已弹出，通知宿主清零请求。
+ * @param onOpenItem 点击某张卡 → 打开条目详情（与密码 Tab 同一条二级路由）。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -68,6 +70,7 @@ fun CardWalletScreen(
     embedded: Boolean = false,
     addRequest: Int = 0,
     onAddConsumed: () -> Unit = {},
+    onOpenItem: (VaultItem) -> Unit = {},
     viewModel: CardWalletViewModel = hiltViewModel(),
 ) {
     val cards by viewModel.cards.collectAsStateWithLifecycle()
@@ -121,7 +124,7 @@ fun CardWalletScreen(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 items(cards, key = { it.id }) { item ->
-                    CardWalletRow(item = item)
+                    CardWalletRow(item = item, onClick = { onOpenItem(item) })
                 }
             }
         }
@@ -143,9 +146,13 @@ fun CardWalletScreen(
     }
 }
 
-/** 单张卡：品牌图标 + 名称 + 分组卡号（末四位外打码）。 */
+/**
+ * 单张卡：品牌图标 + 名称 + 分组卡号（末四位外打码）。
+ *
+ * ⚠️ 必须**可点击**：此前漏了 `clickable`，导致卡包里的条目点不进详情（用户反馈）。
+ */
 @Composable
-private fun CardWalletRow(item: VaultItem) {
+private fun CardWalletRow(item: VaultItem, onClick: () -> Unit) {
     val card = item.card
     val brand = remember(card?.number, card?.brand) {
         CardBrandDetector.detect(card?.number.orEmpty(), card?.brand.orEmpty())
@@ -153,6 +160,7 @@ private fun CardWalletRow(item: VaultItem) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .clickable(onClick = onClick)
             .padding(horizontal = 8.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

@@ -110,25 +110,51 @@ object HintClassifier {
         }
     }
 
-    /** 文本/标签启发式（兜底）：命中关键词才返回，避免误判。 */
+    /**
+     * 文本/标签启发式（兜底）：命中关键词才返回，避免误判。
+     *
+     * ⚠️ **2026-09-12 对齐 Bitwarden（`ViewStructureUtils` / `ViewNodeExtensions`）三处**，
+     * 这是「不误弹 + 精准填充」的关键：
+     * 1. **否定词优先**：命中 `search` / `find` / `recipient` / `edit`（及中文「搜索 / 查找 /
+     *    收件人 / 编辑」）时**直接放弃**——对齐上游 `IGNORED_RAW_HINTS`。没有这道闸时，
+     *    `id="login-search"` 这类搜索框会被 `login` 命中而误判成账号框。
+     * 2. **关键词收窄**：用户名只用 `username` 这类**明确**词，对齐上游的
+     *    `SUPPORTED_RAW_USERNAME_HINTS`（`email`/`phone`/`username`）——上游**没有 `login`**。
+     *    我们保留中文「用户名 / 账号」以覆盖中文站点（英文站点靠「紧邻密码框升格」兜底）。
+     * 3. **归一化**：先转小写、去掉 ASCII 分隔符（`_` `-` `.` 空格），让 `user_name` /
+     *    `user-name` 都能命中 `username`；**中文原样保留**。
+     */
     private fun mapTextHeuristic(text: String): FieldHint? {
-        val t = text.lowercase()
-        if (PASSWORD_KEYWORDS.any { t.contains(it) }) return FieldHint.PASSWORD
-        if (USERNAME_KEYWORDS.any { t.contains(it) }) return FieldHint.USERNAME
+        val t = normalize(text)
+        if (IGNORED_TERMS.any { t.contains(it) }) return null
+        if (PASSWORD_TERMS.any { t.contains(it) }) return FieldHint.PASSWORD
+        if (USERNAME_TERMS.any { t.contains(it) }) return FieldHint.USERNAME
         // 验证码框常常既没有 autofillHints 也没有特殊 inputType，只靠 id/placeholder 文本识别
-        if (OTP_KEYWORDS.any { t.contains(it) }) return FieldHint.OTP
-        if (EMAIL_KEYWORDS.any { t.contains(it) }) return FieldHint.EMAIL_ADDRESS
+        if (OTP_TERMS.any { t.contains(it) }) return FieldHint.OTP
+        if (EMAIL_TERMS.any { t.contains(it) }) return FieldHint.EMAIL_ADDRESS
         return null
     }
 
-    private val PASSWORD_KEYWORDS = listOf("password", "passwort", "密码", "口令")
-    private val USERNAME_KEYWORDS = listOf("username", "user name", "login", "用户名", "账号", "登录")
-    private val EMAIL_KEYWORDS = listOf("email", "e-mail", "邮箱")
+    /** 转小写并去掉 ASCII 分隔符（保留字母 / 数字与非 ASCII 字符，中文不受影响）。 */
+    private fun normalize(text: String): String =
+        text.lowercase().filter { it.isLetterOrDigit() || it.code > ASCII_MAX }
+
+    /** ASCII 上界；大于它的字符（中文等）在归一化时原样保留。 */
+    private const val ASCII_MAX = 0x7F
+
+    /** 否定词（对齐 Bitwarden `IGNORED_RAW_HINTS`，另加中文对照）。 */
+    private val IGNORED_TERMS = listOf(
+        "search", "find", "recipient", "edit",
+        "搜索", "查找", "收件人", "编辑",
+    )
+
+    private val PASSWORD_TERMS = listOf("password", "pswd", "密码", "口令")
+    private val USERNAME_TERMS = listOf("username", "用户名", "账号")
+    private val EMAIL_TERMS = listOf("email", "邮箱")
 
     /** 验证码关键词（移植 Bastion `OtpAutofillSideEffects.isOtpHint`，GPL-3.0，Copyright 2025 JoyinJoester）。 */
-    private val OTP_KEYWORDS = listOf(
-        "otp", "one-time", "one time", "onetimecode", "totp",
-        "2fa", "twofactor", "two-factor", "two factor", "mfa",
+    private val OTP_TERMS = listOf(
+        "otp", "onetime", "totp", "2fa", "twofactor", "mfa",
         "verification", "verify", "验证码", "驗證碼", "一次性", "动态码",
     )
 }

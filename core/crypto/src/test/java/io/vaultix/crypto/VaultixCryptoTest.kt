@@ -188,20 +188,23 @@ class VaultixCryptoTest {
     // ========== 填充剥离 / 空白归一（纵深防御，2026-09-11）==========
 
     /**
-     * **尾部残留填充必须被剥离**（纵深防御）。
+     * **非严格（ISO10126 式随机）填充不得被剥离**——只有严格 PKCS#7 才剥。
      *
-     * 注：主路径 `decrypt` 用标准 `PKCS5Padding` + `doFinal`，本就正确解填充；
-     * 已用真实 JCE 验证「标准 SunJCE 对 ISO10126 密文直接抛 `BadPaddingException`」，
-     * 故**不是**本项目根因。本工具用于「NoPadding 解出原始块」等防御场景。
-     * 这里直接喂「明文 + 伪造的随机填充」验证末字节标记的长度被正确去掉。
+     * 历史（2026-09-12 更正）：本用例原先断言「末字节 0x06 ⇒ 剥 6 字节」，那是**宽松**版本
+     * 的行为；实现此后收紧为**严格判定**（末 pad 个字节必须全等于 pad，见
+     * [VaultixCrypto.removePkcs7PaddingIfStrict] 的 KDoc 实测边界），用例未同步更新，
+     * 于是在 CI 的 **non-blocking** 单测步骤里长期报红（不阻塞出包，所以一直没被暴露）。
+     * 现按契约改为：随机填充**原样返回**，保护随机数据不被误剥。
      */
     @Test
-    fun removePkcs7PaddingStripsTrailingRandomPadding() {
+    fun removePkcs7PaddingKeepsTrailingRandomPadding() {
         // 明文 "github.com"（10 字节）+ 6 字节填充：前 5 字节随机、末字节 = 0x06
         val plain = "github.com".toByteArray(Charsets.UTF_8)
         val noisy = plain + byteArrayOf(0x7A, 0x11, 0x44, (0x80).toByte(), 0x23, 0x06)
-        val stripped = crypto.removePkcs7PaddingIfStrict(noisy)
-        assertEquals("github.com", String(stripped, Charsets.UTF_8))
+        val result = crypto.removePkcs7PaddingIfStrict(noisy)
+        // 前 5 字节并非全 0x06 ⇒ 非严格 PKCS#7 ⇒ 原样返回
+        assertEquals(noisy.size, result.size)
+        assertEquals(noisy.toList(), result.toList())
     }
 
     /** 严格的 PKCS#7 填充（末 pad 字节全等于 pad）同样被剥离。 */

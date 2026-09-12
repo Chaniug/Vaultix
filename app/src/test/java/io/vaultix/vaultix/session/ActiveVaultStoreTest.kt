@@ -8,6 +8,7 @@ import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.domain.VaultRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
@@ -76,6 +77,11 @@ class ActiveVaultStoreTest {
         val repository = mockk<VaultRepository>()
         every { repository.observeUnlockedVaultIds() } returns flowOf(setOf("vault-a", "vault-b"))
         val store = ActiveVaultStore(preferences, repository)
+
+        // ⚠️ 必须先等 `init` 的收集协程**首帧落地**再 select：它跑在进程级
+        // Dispatchers.Default 上（见 ActiveVaultStore.scope），若首帧晚于 select() 到达，
+        // 就会把刚选的库覆盖回 pick() 的结果 —— 本地偶发、CI 长红（2026-09-12 定位）。
+        store.activeVaultId.first { it != null }
 
         store.select("vault-b")
 
