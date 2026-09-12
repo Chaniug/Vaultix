@@ -1,6 +1,5 @@
 package io.vaultix.vaultix.ui.vaultlist
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,8 +16,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Cloud
-import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Settings
@@ -33,7 +30,6 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeTopAppBar
-import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
@@ -61,6 +57,7 @@ import io.vaultix.domain.VaultSyncStatus
 import io.vaultix.model.VaultSummary
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.AppFlavor
+import io.vaultix.vaultix.ui.common.AddVaultTypeDialog
 import io.vaultix.vaultix.ui.common.BiometricPrompter
 import io.vaultix.vaultix.ui.common.deviceCanAuthenticate
 import io.vaultix.vaultix.ui.common.rememberFragmentActivity
@@ -222,47 +219,11 @@ fun VaultListScreen(
     }
 }
 
-/** 添加库的类型选择（Bitwarden 云端 / 本地 KDBX 文件）。 */
-@Composable
-private fun AddVaultTypeDialog(
-    onConnectBitwarden: () -> Unit,
-    onOpenKdbx: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.vault_add_fab)) },
-        text = {
-            Column {
-                Text(
-                    text = stringResource(R.string.vault_add_type_hint),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(bottom = 12.dp),
-                )
-                if (AppFlavor.supportsBitwarden) {
-                    ListItem(
-                        headlineContent = { Text(stringResource(R.string.vault_connect_bitwarden)) },
-                        supportingContent = { Text(stringResource(R.string.vault_add_bitwarden_desc)) },
-                        leadingContent = { Icon(Icons.Filled.Cloud, contentDescription = null) },
-                        modifier = Modifier.clickable(onClick = onConnectBitwarden),
-                    )
-                }
-                ListItem(
-                    headlineContent = { Text(stringResource(R.string.vault_open_kdbx)) },
-                    supportingContent = { Text(stringResource(R.string.vault_add_kdbx_desc)) },
-                    leadingContent = { Icon(Icons.Filled.Description, contentDescription = null) },
-                    modifier = Modifier.clickable(onClick = onOpenKdbx),
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.action_cancel))
-            }
-        },
-    )
-}
+/**
+ * 添加库的类型选择对话框已提到 [io.vaultix.vaultix.ui.common.AddVaultTypeDialog]：
+ * 设置页「密码库」也要同一个入口（库列表路由在已有库时不可达，
+ * 否则用户永远加不了本地 KDBX 库）。
+ */
 
 @Composable
 private fun QuickUnlockBanner(

@@ -188,7 +188,10 @@ class VaultRepositoryImpl @Inject constructor(
         toLock.forEach { Kdbx.lock(it) }
         kdbxSessions.bump()
         // 与 VaultSessionManager.lock 同款收尾：密钥没了，查看锁标记也就失去意义。
-        sessions.clearAllViewLocks()
+        // ⚠️ 只清**本次真正锁掉的那几个库**。原先是 `sessions.clearAllViewLocks()`，
+        // 会顺手抹掉其它库（例如 Bitwarden）的查看锁标记 —— 越权清理的表现是
+        // 「我明明刚把某个库锁上，切个库回来它自己变成未锁了」。
+        toLock.forEach { sessions.clearViewLock(it) }
     }
 
     override fun isVaultUnlocked(vaultId: String): Boolean =

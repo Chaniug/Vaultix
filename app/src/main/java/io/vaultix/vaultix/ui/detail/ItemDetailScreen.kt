@@ -2,6 +2,7 @@ package io.vaultix.vaultix.ui.detail
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -55,6 +56,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import android.content.Intent
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import io.vaultix.common.OtpUriParser
 import io.vaultix.common.TotpConfig
@@ -76,8 +78,11 @@ import io.vaultix.model.VaultSshKey
 import io.vaultix.model.VaultUri
 import kotlinx.coroutines.delay
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.common.BadgeTone
 import io.vaultix.vaultix.ui.common.ItemFormDialog
 import io.vaultix.vaultix.ui.common.LINKED_FIELD_LABELS
+import io.vaultix.vaultix.ui.common.SiteIcon
+import io.vaultix.vaultix.ui.common.TypeBadge
 import io.vaultix.vaultix.ui.common.itemTypeLabelRes
 import android.content.Context
 
@@ -125,6 +130,9 @@ private fun detailEventMessage(context: Context, event: ItemDetailViewModel.UiEv
 /** 掩码星号数量上限（密码过长时截断显示，复制不受影响）。 */
 private const val MAX_MASK_LENGTH = 24
 
+/** 详情页头部站点图标尺寸（对齐 Bastion `HeaderSection` 的 48–52dp 量级）。 */
+private val DETAIL_HEADER_ICON = 48.dp
+
 /** 隐藏型自定义字段未展开时的掩码长度上下限。 */
 private const val HIDDEN_MASK_MIN = 6
 private const val HIDDEN_MASK_MAX = 24
@@ -147,6 +155,7 @@ private fun DetailBodyContent(
     modifier: Modifier,
     busy: Boolean,
     item: VaultItem?,
+    serverOrigin: String?,
     showPassword: Boolean,
     onTogglePassword: () -> Unit,
     actions: DetailActions,
@@ -165,6 +174,7 @@ private fun DetailBodyContent(
             )
             else -> DetailSections(
                 item = item,
+                serverOrigin = serverOrigin,
                 showPassword = showPassword,
                 onTogglePassword = onTogglePassword,
                 actions = actions,
@@ -177,6 +187,7 @@ private fun DetailBodyContent(
 @Composable
 private fun DetailSections(
     item: VaultItem,
+    serverOrigin: String?,
     showPassword: Boolean,
     onTogglePassword: () -> Unit,
     actions: DetailActions,
@@ -187,14 +198,10 @@ private fun DetailSections(
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 16.dp, vertical = 8.dp),
     ) {
-        if (item.type != VaultItemType.Login) {
-            Text(
-                text = stringResource(itemTypeLabelRes(item.type)),
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.primary,
-            )
-            Spacer(Modifier.height(8.dp))
-        }
+        // 顶部头部：站点图标 + 标题 + 「类型 / 用户名」副标题 + 能力徽标。
+        // 此前详情页**完全没有头部**，进来就是一串字段行（用户：「密码条目页面详情也太简陋了」）。
+        DetailHeader(item = item, serverOrigin = serverOrigin)
+        Spacer(Modifier.height(20.dp))
         if (item.username.isNotBlank() || item.password.isNotBlank()) {
             LoginSection(
                 item = item,
@@ -238,6 +245,52 @@ private fun DetailSections(
             NotesSection(notes = item.notes)
         }
         Spacer(Modifier.height(24.dp))
+    }
+}
+
+/**
+ * 详情页头部：站点图标 + 标题 + 用户名 + 能力徽标。
+ *
+ * 对齐 Bastion `PasswordDetailScreen.HeaderSection`（站点图标 + `headlineSmall` + 副标题）。
+ * 徽标里**始终**带一个类型徽标：这样「类型」只出现一次（副标题让给用户名，不再与类型重复），
+ * 而卡片 / 身份 / SSH 这类没有用户名的条目也不至于看不出自己是什么。
+ */
+@Composable
+private fun DetailHeader(item: VaultItem, serverOrigin: String?) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        SiteIcon(item = item, serverOrigin = serverOrigin, size = DETAIL_HEADER_ICON)
+        Spacer(Modifier.width(16.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = item.title.ifBlank { stringResource(R.string.items_item_unnamed) },
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (item.username.isNotBlank()) {
+                Text(
+                    text = item.username,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = Modifier.padding(top = 8.dp),
+            ) {
+                TypeBadge(stringResource(itemTypeLabelRes(item.type)), BadgeTone.NEUTRAL)
+                if (!item.totp.isNullOrBlank()) {
+                    TypeBadge(stringResource(R.string.items_filter_totp), BadgeTone.PRIMARY)
+                }
+                if (item.fido2Credentials.isNotEmpty()) {
+                    TypeBadge(stringResource(R.string.items_filter_passkey), BadgeTone.TERTIARY)
+                }
+            }
+        }
     }
 }
 
@@ -319,6 +372,7 @@ fun ItemDetailScreen(
                 .padding(padding),
             busy = state.saving || state.deleting,
             item = item,
+            serverOrigin = state.serverOrigin,
             showPassword = showPassword,
             onTogglePassword = { showPassword = !showPassword },
             actions = actions,
@@ -390,7 +444,7 @@ private fun LoginSection(
         SectionTitle(text = stringResource(R.string.section_login))
         Card(
             colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
             ),
             modifier = Modifier.fillMaxWidth(),
         ) {
@@ -437,7 +491,7 @@ private fun NotesSection(notes: String) {
         SectionTitle(text = stringResource(R.string.section_notes))
         Card(
             colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
             ),
             modifier = Modifier.fillMaxWidth(),
         ) {

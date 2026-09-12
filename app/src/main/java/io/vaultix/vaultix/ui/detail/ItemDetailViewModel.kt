@@ -63,6 +63,14 @@ class ItemDetailViewModel @Inject constructor(
     data class UiState(
         val item: VaultItem? = null,
         val vaultName: String = "",
+        /**
+         * 所属库的服务器地址。
+         *
+         * 供详情页头部的**站点图标**用：图标端点形如 `<服务器>/icons/<域名>/icon.png`，
+         * 缺了它就只能退化成首字母头像（列表页一直有，详情页此前没有 ⇒ 同一个条目
+         * 在列表里有真图标、点进去变成字母，观感割裂）。
+         */
+        val serverOrigin: String? = null,
         val saving: Boolean = false,
         val deleting: Boolean = false,
     )
@@ -89,8 +97,10 @@ class ItemDetailViewModel @Inject constructor(
         }
         viewModelScope.launch {
             vaultRepository.observeVaults().collect { vaults ->
-                val name = vaults.firstOrNull { it.id == vaultId }?.name.orEmpty()
-                _state.update { it.copy(vaultName = name) }
+                val vault = vaults.firstOrNull { it.id == vaultId }
+                _state.update {
+                    it.copy(vaultName = vault?.name.orEmpty(), serverOrigin = vault?.origin)
+                }
             }
         }
         viewModelScope.launch {

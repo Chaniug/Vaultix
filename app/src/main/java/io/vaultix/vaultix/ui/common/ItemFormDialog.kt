@@ -36,6 +36,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -159,7 +160,7 @@ fun ItemFormDialog(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                Spacer(Modifier.height(8.dp))
+                FormDivider()
                 when (type) {
                     VaultItemType.Login -> LoginFields(
                         username = username,
@@ -177,6 +178,7 @@ fun ItemFormDialog(
                     // 安全笔记只有名称 + 备注；SSH 密钥段保持只读（上方已提示）
                     VaultItemType.SecureNote, VaultItemType.SshKey -> Unit
                 }
+                FormDivider()
                 SectionLabel(text = stringResource(R.string.section_custom_fields))
                 Spacer(Modifier.height(8.dp))
                 CustomFieldsEditor(fields = customFields)
@@ -189,7 +191,7 @@ fun ItemFormDialog(
                     modifier = Modifier.fillMaxWidth(),
                 )
                 // 主密码二次验证（对齐 Bitwarden「附加选项」里的开关）
-                Spacer(Modifier.height(8.dp))
+                FormDivider()
                 RepromptToggle(reprompt = reprompt, onRepromptChange = { reprompt = it })
             }
         },
@@ -291,6 +293,22 @@ private fun SectionLabel(text: String) {
         text = text,
         style = MaterialTheme.typography.labelLarge,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+/**
+ * 表单分组之间的分隔线。
+ *
+ * 为什么加它：此前整张表单只有 `Spacer(8.dp)` 的**等距堆叠** —— 名称、凭据、自定义字段、
+ * 备注、二次验证全是一样大的间距，读起来像"一长串输入框"，分不出结构（用户反馈
+ * 「新建密码条目的页面也丑」）。一条极淡的分隔线就能把分组"读"出来，
+ * 且不像卡片那样需要猜底色。
+ */
+@Composable
+private fun FormDivider() {
+    HorizontalDivider(
+        modifier = Modifier.padding(vertical = 12.dp),
+        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f),
     )
 }
 

@@ -187,6 +187,10 @@ private fun NavGraphBuilder.vaultEntryGraph(
                 activeVaultId?.let { navController.navigate(PasskeysRoute(vaultId = it)) }
             },
             onOpenAutofillSettings = { navController.navigate(AutofillSettingsRoute) },
+            // 设置 Tab 内也要能添加库（否则「已有一个库」时库列表路由不可达，
+            // 用户永远加不了本地 KDBX 库）。
+            onAddBitwardenVault = { navController.navigate(AddVaultRoute) },
+            onAddKdbxVault = { navController.navigate(AddKdbxRoute) },
             // 页内主动锁定：交回根入口（若已全锁，RootNavState 会自己弹解锁页）
             onLocked = { navController.navigateToRoot(VaultListRoute) },
         )
@@ -218,6 +222,8 @@ private fun NavGraphBuilder.settingsGraph(navController: NavHostController) {
         SettingsScreen(
             onBack = { navController.popBackStack() },
             onOpenAutofillSettings = { navController.navigate(AutofillSettingsRoute) },
+            onAddBitwardenVault = { navController.navigate(AddVaultRoute) },
+            onAddKdbxVault = { navController.navigate(AddKdbxRoute) },
         )
     }
     composable<AutofillSettingsRoute> {

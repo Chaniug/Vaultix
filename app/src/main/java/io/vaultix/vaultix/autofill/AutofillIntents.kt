@@ -62,6 +62,22 @@ object AutofillIntents {
     const val EXTRA_MAIN_UNLOCK_EXIT = "vaultix.autofill.main_unlock_exit"
 
     /**
+     * 标记「本次启动属于**凭据提供商（CP）**流程」。
+     *
+     * ⚠️ 这个标记**长期只写不读**（直到 2026-09-13）：CP 服务与
+     * `CredentialProviderActivity` 都往里塞，却没人读 ⇒ 解锁 Activity 无从区分
+     * 「autofill 的解锁」（有暂存可回灌）与「CP 的解锁」（无暂存、只需 finish）。
+     * 后者会掉进**无限解锁环**（详见 [AutofillActivity.credentialFlow]）。
+     * 定义收在此处（而非 passkey 包）是为了让只读方 [AutofillActivity] 不必依赖
+     * `@RequiresApi(34)` 的 CP 类。
+     */
+    const val EXTRA_CREDENTIAL_FLOW = "io.vaultix.credential.flow"
+
+    /** 本次启动是否来自凭据提供商（CP）流程。 */
+    fun isCredentialFlow(intent: Intent): Boolean =
+        intent.getBooleanExtra(EXTRA_CREDENTIAL_FLOW, false)
+
+    /**
      * 构造认证回灌用的显式 Intent。
      *
      * ⚠️ 统一**不再**附加 `NEW_TASK|CLEAR_TOP`：dataset 级认证（[MODE_REPROMPT] /

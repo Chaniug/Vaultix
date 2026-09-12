@@ -2,9 +2,12 @@
 <resources>
     <color name="ic_launcher_background">#3B5BDB</color>
     <!--
-      自动填充下拉行的外框描边色（浅色面板）。
-      Material3 基线 onSurfaceVariant(#49454F) 的 12% 透明度：足够看见一圈边界，
-      又不会在系统填充面板里显脏。深色面板对应值见 values-night/colors.xml。
+      自动填充下拉行的**底色**（浅色面板）。
+
+      为什么用「低透明度黑」而不是固定色值：底色本质是在猜系统填充面板长什么样，
+      各家 ROM 的面板底色都不同。低 alpha 的黑只是把面板底色「压暗一档」，
+      纯白与浅灰面板上都成立；换成固定灰就可能比面板还深，比不加底色更难看。
+      深色面板对应值见 values-night/colors.xml（那一侧要用低 alpha 的**白**）。
     -->
-    <color name="autofill_item_stroke">#1F49454F</color>
+    <color name="autofill_item_surface">#0F000000</color>
 </resources>

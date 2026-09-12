@@ -1,21 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  自动填充下拉里**单行的外框**（描边型，不填底色）。
+  自动填充下拉里**单行的外框**（12dp 圆角 + 极低透明度实底，无描边）。
 
-  为什么只描边、不填底色：
-  - 上游 Bitwarden 的做法是给行容器**设一个底色**（`setBackgroundColor` + 自家色板）；
-    但底色是「我们猜系统面板长什么样」—— 各家 ROM 的填充面板底色不同（荣耀/小米/原生各异），
-    猜错就会出现一条与面板底色不一致的色带，比没有外框更难看；
-  - 描边用的是**低透明度**前景色（见 values / values-night 的 autofill_item_stroke），
-    在浅色和深色面板上都只是「轻轻一圈边界」，既给出了外框，又不会与面板打架。
+  为什么从「描边」改成「实底」（2026-09-13）：描边在系统面板里看起来像一张生硬的表格，
+  而 Material3 的 list item 本来就是「比背景略亮/略暗一档的面」，没有边框。
+  实底用**低 alpha**（见 values / values-night 的 autofill_item_surface）实现 ——
+  它不是「猜一个面板底色」，而是把面板底色压暗/提亮一档，任何 ROM 面板上都成立。
 
-  形状取自 Bastion 自动填充下拉的 card 布局（`autofill_dataset_card`）的圆角量级，
-  与 App 内条目卡片（`EntryCard`，12dp）保持一致。
+  圆角量级对齐 App 内条目卡片（`EntryCard`，12dp）。
 -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="rectangle">
     <corners android:radius="12dp" />
-    <stroke
-        android:width="1dp"
-        android:color="@color/autofill_item_stroke" />
+    <solid android:color="@color/autofill_item_surface" />
 </shape>
+

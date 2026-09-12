@@ -46,6 +46,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -80,6 +81,8 @@ fun CardWalletScreen(
     addRequest: Int = 0,
     onAddConsumed: () -> Unit = {},
     onOpenItem: (VaultItem) -> Unit = {},
+    /** 底部叠层悬浮栏占用的高度（宿主给；非内嵌时为 0）——列表要留出它，否则末条被压住。 */
+    bottomInset: Dp = 0.dp,
     viewModel: CardWalletViewModel = hiltViewModel(),
 ) {
     val cards by viewModel.cards.collectAsStateWithLifecycle()
@@ -110,10 +113,10 @@ fun CardWalletScreen(
         },
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
-            Column(modifier = Modifier.fillMaxSize().padding(top = barPadding)) {
+            Column(modifier = Modifier.fillMaxSize()) {
                 if (cards.isEmpty()) {
                     Box(
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = Modifier.fillMaxSize().padding(top = barPadding),
                         contentAlignment = Alignment.Center,
                     ) {
                         Text(
@@ -126,8 +129,16 @@ fun CardWalletScreen(
                     LazyColumn(
                         state = listState,
                         modifier = Modifier.fillMaxSize(),
+                        // 顶部留白走 contentPadding（**不是**外层容器 padding）：
+                        // 外层 padding 会把视口整体下压，内容永远画不到顶栏区域，
+                        // 「收起后顶栏透明、内容从下方穿过」就不成立（顶栏下留一条死区）。
                         // 与密码 / 验证码列表同一套留白结构（卡片不再自带外边距）。
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                        contentPadding = PaddingValues(
+                            start = 16.dp,
+                            top = barPadding,
+                            end = 16.dp,
+                            bottom = 8.dp + bottomInset,
+                        ),
                         verticalArrangement = Arrangement.spacedBy(CARD_GAP),
                     ) {
                         items(cards, key = { it.id }) { item ->

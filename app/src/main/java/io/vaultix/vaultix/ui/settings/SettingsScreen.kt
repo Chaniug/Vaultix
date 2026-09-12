@@ -20,6 +20,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Contrast
 import androidx.compose.material.icons.filled.DarkMode
@@ -62,6 +63,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
@@ -75,6 +77,7 @@ import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.BiometricPrompter
 import io.vaultix.vaultix.ui.items.DisplayOptionsSheet
 import io.vaultix.vaultix.ui.common.VaultixExpressiveTopBar
+import io.vaultix.vaultix.ui.common.AddVaultTypeDialog
 import io.vaultix.vaultix.ui.common.rememberImmersiveBarPadding
 import io.vaultix.vaultix.ui.common.rememberScrollCollapseFraction
 import io.vaultix.vaultix.ui.common.TrashAutoDeleteDialog
@@ -94,6 +97,11 @@ fun SettingsScreen(
     onOpenAutofillSettings: () -> Unit,
     /** 主界面 Tab 内嵌模式：隐藏返回键（无上层可返回）。 */
     embedded: Boolean = false,
+    /** 底部叠层悬浮栏占用的高度（宿主给；非内嵌时为 0）——内容要留出它，否则末项被压住。 */
+    bottomInset: Dp = 0.dp,
+    /** 「密码库」分区：添加 Bitwarden 云端库 / 打开本地 KDBX 文件（导航到对应流程）。 */
+    onAddBitwardenVault: () -> Unit = {},
+    onAddKdbxVault: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -121,11 +129,18 @@ fun SettingsScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(top = barPadding)
                 .verticalScroll(scrollState),
         ) {
+            // 顶部让位用**可滚动的 Spacer**，不用外层 `padding(top = barPadding)`：
+            // 后者会把滚动视口整体下压 ⇒ 内容永远画不到顶栏区域，收起顶栏后
+            // 顶栏下方留一条死区（「不沉浸」）；Spacer 会随内容一起滚走。
+            Spacer(modifier = Modifier.height(barPadding))
             // ---- 库（活跃库 = 全局单一真源；Bastion 里它是筛选维度，Vaultix 收成一个） ----
-            VaultSection(viewModel)
+            VaultSection(
+                viewModel = viewModel,
+                onAddBitwardenVault = onAddBitwardenVault,
+                onAddKdbxVault = onAddKdbxVault,
+            )
 
             // ---- 安全（拆分为独立 composable：主函数要守住 detekt LongMethod ≤150） ----
             SecuritySection(
@@ -151,6 +166,9 @@ fun SettingsScreen(
                 onShowLicense = { showAboutDialog = true },
             )
             Spacer(Modifier.height(32.dp))
+            // 底部留出叠层悬浮底栏的高度（顶部的让位见上方 Spacer(barPadding)）：
+            // 底栏改成叠层后内容铺到屏幕底，最后一项不再被胶囊压住。
+            Spacer(Modifier.height(bottomInset))
         }
             VaultixExpressiveTopBar(
                 title = stringResource(R.string.settings_title),
@@ -360,10 +378,15 @@ private fun OthersSection(
  * **同时**切到新库 —— 它们都只读 `ActiveVaultStore`，没有第二份状态。
  */
 @Composable
-private fun VaultSection(viewModel: SettingsViewModel) {
+private fun VaultSection(
+    viewModel: SettingsViewModel,
+    onAddBitwardenVault: () -> Unit,
+    onAddKdbxVault: () -> Unit,
+) {
     val active by viewModel.activeVault.collectAsStateWithLifecycle()
     val switchable by viewModel.switchableVaults.collectAsStateWithLifecycle()
     var showDialog by rememberSaveable { mutableStateOf(false) }
+    var showAddDialog by rememberSaveable { mutableStateOf(false) }
 
     SettingsGroupTitle(stringResource(R.string.group_vaults))
     SettingsRow(
@@ -371,6 +394,15 @@ private fun VaultSection(viewModel: SettingsViewModel) {
         title = stringResource(R.string.settings_active_vault),
         subtitle = active?.name ?: stringResource(R.string.settings_active_vault_none),
         onClick = { showDialog = true },
+    )
+    // ⚠️ 这一行是**必需**的：添加库的入口原本只在库列表页的「+」，而库列表路由在
+    // 「已经有一个库」时不可达（根导航落在解锁页 / 主界面）⇒ 用户永远加不了本地
+    // KDBX 库，表现为「KDBX 集成已交付但设置里只有 Bitwarden」。
+    SettingsRow(
+        icon = { Icon(Icons.Filled.Add, contentDescription = null) },
+        title = stringResource(R.string.vault_add_fab),
+        subtitle = stringResource(R.string.settings_add_vault_desc),
+        onClick = { showAddDialog = true },
     )
 
     if (showDialog) {
@@ -382,6 +414,20 @@ private fun VaultSection(viewModel: SettingsViewModel) {
                 showDialog = false
             },
             onDismiss = { showDialog = false },
+        )
+    }
+
+    if (showAddDialog) {
+        AddVaultTypeDialog(
+            onConnectBitwarden = {
+                showAddDialog = false
+                onAddBitwardenVault()
+            },
+            onOpenKdbx = {
+                showAddDialog = false
+                onAddKdbxVault()
+            },
+            onDismiss = { showAddDialog = false },
         )
     }
 }

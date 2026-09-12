@@ -1,5 +1,6 @@
 package io.vaultix.vaultix.ui.totp
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -61,6 +62,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -101,11 +103,18 @@ fun TotpCodesScreen(
     /** 外部「+」请求计数：非零即打开新建 TOTP 表单。 */
     addRequest: Int = 0,
     onAddConsumed: () -> Unit = {},
+    /** 底部叠层悬浮栏占用的高度（宿主给；非内嵌时为 0）——列表要留出它，否则末条被压住。 */
+    bottomInset: Dp = 0.dp,
     viewModel: TotpCodesViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     var searchActive by rememberSaveable { mutableStateOf(false) }
+    // 搜索态自己消费返回手势：主界面是根路由（栈里没有上一层），不拦就会直接退回桌面。
+    BackHandler(enabled = searchActive) {
+        searchActive = false
+        viewModel.setQuery("")
+    }
     var editing by remember { mutableStateOf<TotpEntry?>(null) }
     var binding by remember { mutableStateOf<TotpEntry?>(null) }
     var importOpen by remember { mutableStateOf(false) }
@@ -164,31 +173,18 @@ fun TotpCodesScreen(
         val listState = rememberLazyListState()
         val collapse = rememberScrollCollapseFraction(listState)
         val barPadding = rememberImmersiveBarPadding(collapse)
-        // 「通行密钥」入口（对齐 Bastion：挂在统一进度条右侧；无条目时独立成行兜底，
-        // 否则用户在空列表下会彻底失去进入通行密钥页的路径）。
-        val passkeyEntry: @Composable () -> Unit = {
-            IconButton(onClick = onOpenPasskeys) {
-                Icon(
-                    imageVector = Icons.Filled.Fingerprint,
-                    contentDescription = stringResource(R.string.totp_passkey_button),
-                    tint = MaterialTheme.colorScheme.primary,
-                )
-            }
-        }
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             // 顶部让出「状态栏 + 顶栏」的高度（随收起动画变短），顶栏浮在它之上。
-            Column(modifier = Modifier.fillMaxSize().padding(top = barPadding)) {
-                // ---- 统一倒计时进度条（整页一条，不再每行一条）----
-                val soonest = entries.minByOrNull { TotpGenerator.remainingSeconds(it.period, nowSeconds) }
-                if (soonest == null) {
-                    UnifiedTotpProgressPlaceholder(trailingContent = passkeyEntry)
-                } else {
-                    UnifiedTotpProgressBar(
-                        periodSeconds = soonest.period,
-                        nowSeconds = nowSeconds,
-                        trailingContent = passkeyEntry,
-                    )
-                }
+            // ⚠️ 搜索态必须归零：此时 Scaffold 已按 `ScaffoldDefaults.contentWindowInsets`
+            // 为搜索顶栏预留了高度，这里再叠一次就是「双重留白」= 纯黑大横幅。
+            val barTopInset = if (searchActive) 0.dp else barPadding
+            Column(modifier = Modifier.fillMaxSize().padding(top = barTopInset)) {
+                // 整页一条倒计时进度条，「通行密钥」入口挂在它右侧。
+                TotpPageProgress(
+                    entries = entries,
+                    nowSeconds = nowSeconds,
+                    onOpenPasskeys = onOpenPasskeys,
+                )
                 when {
                     state.items.isEmpty() -> EmptyTotpState(
                         title = stringResource(R.string.totp_empty_title),
@@ -203,7 +199,13 @@ fun TotpCodesScreen(
                         state = listState,
                         modifier = Modifier.fillMaxSize(),
                         // 与密码列表同一套留白结构（卡片不再自带外边距，见 [EntryCard]）。
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                        // 底部留出叠层悬浮底栏的高度，否则最后一条被胶囊压住。
+                        contentPadding = PaddingValues(
+                            start = 16.dp,
+                            top = 8.dp,
+                            end = 16.dp,
+                            bottom = 8.dp + bottomInset,
+                        ),
                         verticalArrangement = Arrangement.spacedBy(TOTP_CARD_GAP),
                     ) {
                         items(entries, key = { it.itemId }) { entry ->
@@ -365,6 +367,8 @@ private fun TotpRow(
 ) {
     val code = TotpGenerator.generate(entry.toConfig(), nowSeconds)
     val isHotp = entry.type == OtpType.HOTP
+    // HOTP 没有时间衰减，不做过期警示。
+    val remaining = TotpGenerator.remainingSeconds(entry.period, nowSeconds)
     val copiedMessage = stringResource(R.string.copy_totp)
     val scope = rememberCoroutineScope()
     // 点一下即复制（对齐 Bastion 验证器页：整行可点 → 复制 + 提示）。
@@ -411,9 +415,19 @@ private fun TotpRow(
                 SelectionContainer(modifier = Modifier.weight(1f)) {
                     Text(
                         text = groupCode(code),
-                        style = MaterialTheme.typography.headlineSmall.copy(fontFamily = FontFamily.Monospace),
-                        fontWeight = FontWeight.SemiBold,
-                        letterSpacing = 2.sp,
+                        // 对齐 Bastion `TotpCodeCard`（40sp / 普通模式 32–36sp）：
+                        // 验证码是「一眼读出来照着敲」的数字，24sp 的 `headlineSmall` 在小屏上
+                        // 得凑近看；**等宽**保证每秒刷新时数字宽度不抖，分组空格（[groupCode]）
+                        // 比 letterSpacing 更利于口头念读。
+                        fontSize = TOTP_CODE_FONT_SP,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.ExtraBold,
+                        // 剩余 ≤5 秒转警示色：不必盯着顶部进度条也知道「快过期了，先别念」。
+                        color = if (isHotp || remaining > TOTP_HOT_WARNING_SECONDS) {
+                            MaterialTheme.colorScheme.onSurface
+                        } else {
+                            MaterialTheme.colorScheme.error
+                        },
                     )
                 }
                 if (isHotp) {
@@ -461,6 +475,43 @@ private fun Badge(bound: Boolean) {
     }
 }
 
+/**
+ * 整页统一倒计时进度条 + 「通行密钥」入口。
+ *
+ * 抽成独立 composable 的原因：主函数已贴着 detekt `LongMethod ≤150` 的门禁线，
+ * 而这段逻辑（挑「最近过期」的条目决定周期、空列表时用占位条）与主流程无耦合。
+ *
+ * 「通行密钥」入口挂在进度条右侧，**空列表时也必须渲染**
+ * （[UnifiedTotpProgressPlaceholder]）—— 否则用户在一条验证码都没有时，
+ * 会彻底失去进入通行密钥页的路径（对齐 Bastion）。
+ */
+@Composable
+private fun TotpPageProgress(
+    entries: List<TotpEntry>,
+    nowSeconds: Long,
+    onOpenPasskeys: () -> Unit,
+) {
+    val passkeyEntry: @Composable () -> Unit = {
+        IconButton(onClick = onOpenPasskeys) {
+            Icon(
+                imageVector = Icons.Filled.Fingerprint,
+                contentDescription = stringResource(R.string.totp_passkey_button),
+                tint = MaterialTheme.colorScheme.primary,
+            )
+        }
+    }
+    val soonest = entries.minByOrNull { TotpGenerator.remainingSeconds(it.period, nowSeconds) }
+    if (soonest == null) {
+        UnifiedTotpProgressPlaceholder(trailingContent = passkeyEntry)
+    } else {
+        UnifiedTotpProgressBar(
+            periodSeconds = soonest.period,
+            nowSeconds = nowSeconds,
+            trailingContent = passkeyEntry,
+        )
+    }
+}
+
 /** 每 3 位分组显示，便于人工录入（123456 → 123 456）。 */
 private fun groupCode(code: String): String {
     if (code.length <= TOTP_CODE_GROUP) {
@@ -477,6 +528,15 @@ private fun groupCode(code: String): String {
 private const val TOTP_TICK_MS = 1000L
 private const val TOTP_CODE_GROUP = 3
 private const val MILLIS_PER_SECOND = 1000
+
+/**
+ * 验证码字号（对齐 Bastion `TotpCodeCard`：统一进度条模式 40sp / 普通 32–36sp）。
+ * 取 36sp：小屏一行放得下 6 位分组码 + 复制按钮，又明显大于正文。
+ */
+private val TOTP_CODE_FONT_SP = 36.sp
+
+/** 剩余秒数 ≤ 它时验证码转 `error` 警示色（对齐 Bastion 的 5 秒阈值）。 */
+private const val TOTP_HOT_WARNING_SECONDS = 5
 
 // 类型固定参数（对齐 Bastion TotpData 的固定口径）
 private const val MOTP_FIXED_PERIOD = 10

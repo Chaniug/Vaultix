@@ -69,6 +69,12 @@ object AutofillDatasets {
         if (tintIcon) {
             setInt(R.id.autofill_item_icon, "setColorFilter", iconTint(context))
         }
+        // 无障碍：整行是一块可点区域，读屏需要一句完整描述（对齐上游
+        // `BitwardenRemoteViews` 给 container 设 contentDescription 的做法）。
+        setContentDescription(
+            R.id.autofill_item_root,
+            listOf(title, subtitle).filter { it.isNotBlank() }.joinToString("，"),
+        )
     }
 
     /** 建议类别 → 条目标图标（对齐 Bitwarden `AutofillCipher.iconRes`）。 */

@@ -32,10 +32,13 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -56,11 +59,31 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import io.vaultix.vaultix.R
 
 /** 悬浮胶囊底栏固定高度（对齐 Bastion：胶囊 60dp + 留白 6/20 = 86dp 视觉占位）。 */
 private val DockBarHeight = 60.dp
+
+/**
+ * 悬浮胶囊底栏的**总视觉占位高度**（胶囊 60 + 上留白 6 + 下留白 20 = 86dp）。
+ *
+ * 底栏改成**叠层悬浮**后（见 [AdaptiveMainScaffold]），内容会一直铺到屏幕底 ——
+ * 好处是胶囊周围那圈留白能透出内容（酷安观感），代价是最后一条会被胶囊压住，
+ * 所以各页列表必须把它算进 `contentPadding` 的底部。
+ */
+val BottomDockOccupiedHeight: Dp = DockBarHeight + 6.dp + 20.dp
+
+/**
+ * 列表底部应留出的高度 = 胶囊底栏占位 + 系统手势条高度。
+ *
+ * 手势条高度随机型 / 横竖屏变化，故不做成常量。
+ */
+@Composable
+fun rememberBottomDockInset(): Dp =
+    BottomDockOccupiedHeight +
+        WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
 
 /**
  * 胶囊圆角百分比（50 = 50%，即两端完全半圆的「药丸」形）。

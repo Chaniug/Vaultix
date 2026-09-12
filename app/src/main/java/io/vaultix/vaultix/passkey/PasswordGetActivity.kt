@@ -50,6 +50,7 @@ import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.lifecycleScope
 import dagger.hilt.android.AndroidEntryPoint
 import io.vaultix.domain.ItemRepository
+import io.vaultix.domain.VaultRepository
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
 import io.vaultix.vaultix.R
@@ -66,6 +67,10 @@ class PasswordGetActivity : FragmentActivity() {
 
     @Inject
     lateinit var itemRepository: ItemRepository
+
+    /** 只用于读**锁态快照**（与 CP 列候选同一真源，含 KDBX 会话）；不持有任何密钥。 */
+    @Inject
+    lateinit var vaultRepository: VaultRepository
 
     private lateinit var vaultId: String
     private lateinit var itemId: String
@@ -93,8 +98,12 @@ class PasswordGetActivity : FragmentActivity() {
                     fail(GetCredentialUnknownException("Login item not found"))
                     return@withContext
                 }
-                // 库可能在候选展示后重新上锁：解密字段为空则视作锁定，拒绝明文回灌，交由解锁入口处理。
-                if (it.password.isBlank() && it.username.isBlank()) {
+                // ⚠️ 「用户名与密码都为空」**不等于**「库锁定」。条目本来就允许空密码
+                // （只有用户名、或密码由别处生成）。旧写法把两者划等号 ⇒ 一条合法条目
+                // 被报成 "Vault locked"，用户完全无从理解（且不知道要去解锁什么）。
+                // 真正的锁态**问仓储**（含 KDBX 会话），与 CP 列候选保持同一判据。
+                val locked = runCatching { !vaultRepository.isVaultUnlocked(vaultId) }.getOrDefault(false)
+                if (locked) {
                     fail(GetCredentialUnknownException("Vault locked"))
                     return@withContext
                 }

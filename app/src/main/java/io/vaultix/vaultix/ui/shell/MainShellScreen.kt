@@ -59,6 +59,9 @@ fun MainShellScreen(
     onOpenTrash: () -> Unit,
     onOpenPasskeys: () -> Unit,
     onOpenAutofillSettings: () -> Unit,
+    /** 设置 Tab 内添加库（库列表路由在已有库时不可达，否则用户永远加不了 KDBX）。 */
+    onAddBitwardenVault: () -> Unit,
+    onAddKdbxVault: () -> Unit,
     onLocked: () -> Unit,
 ) {
     val configuration = LocalConfiguration.current
@@ -73,6 +76,10 @@ fun MainShellScreen(
     val tabStateHolder = rememberSaveableStateHolder()
 
     val tabs = VaultixNavItem.entries.toList()
+
+    // 底栏是**叠层悬浮**的（见 AdaptiveMainScaffold），内容一直铺到屏幕底 ——
+    // 所以各页的滚动内容必须自己留出胶囊的高度，否则最后一条永远被压住。
+    val bottomInset = rememberBottomDockInset()
 
     // 「+」分发：按当前 Tab 决定新建什么（Bastion `when(currentTab)` 语义）。
     // 设置 Tab 回退为「新建密码」（Bastion `else -> handlePasswordAddOpen()`）。
@@ -148,6 +155,7 @@ fun MainShellScreen(
                             onOpenTrash = onOpenTrash,
                             onOpenItem = onOpenItem,
                             onOpenTotp = { currentTab = VaultixNavItem.Authenticator },
+                            bottomInset = bottomInset,
                         )
 
                         VaultixNavItem.Authenticator -> TotpCodesScreen(
@@ -156,6 +164,7 @@ fun MainShellScreen(
                             onAddConsumed = { totpAddRequest = 0 },
                             onBack = {},
                             onOpenPasskeys = onOpenPasskeys,
+                            bottomInset = bottomInset,
                         )
 
                         VaultixNavItem.CardWallet -> CardWalletScreen(
@@ -163,12 +172,16 @@ fun MainShellScreen(
                             addRequest = cardAddRequest,
                             onAddConsumed = { cardAddRequest = 0 },
                             onOpenItem = onOpenItem,
+                            bottomInset = bottomInset,
                         )
 
                         VaultixNavItem.Settings -> SettingsScreen(
                             embedded = true,
                             onBack = {},
                             onOpenAutofillSettings = onOpenAutofillSettings,
+                            bottomInset = bottomInset,
+                            onAddBitwardenVault = onAddBitwardenVault,
+                            onAddKdbxVault = onAddKdbxVault,
                         )
                     }
                 }

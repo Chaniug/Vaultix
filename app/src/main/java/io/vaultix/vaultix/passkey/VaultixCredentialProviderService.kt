@@ -24,8 +24,10 @@
  *
  * 重要：注册 CredentialProviderService 后，Android 14+ 的 Credential Manager 会接管「登录字段」的
  * 自动填充（次要 autofill = com.android.credentialmanager），并同时向所有启用方询问 密码 + 通行密钥。
- * 因此本服务必须同时声明 password 能力（见 credential_provider.xml）：若只声明 public-key，系统只见
- * passkey、密码框为空、传统 VaultixAutofillService 在凭据字段上被绕过（即「启用 provider 后密码弹框消失」）。
+ * ⚠️ 但**本服务只声明 public-key 能力**（见 credential_provider.xml）。原因（2026-09-11 `f815ab2`）：
+ * 一旦声明 password 能力，Chromium 系会把**密码请求**也路由到 CP 通道、绕过传统 Autofill 框架，
+ * 而 CP 密码分支任一环节失败就返回空 ⇒ 密码框什么都不弹、老 AutofillService 同时被绕过（两条路全废）。
+ * 因此密码填充回归 [io.vaultix.vaultix.autofill.VaultixAutofillService.onFillRequest]，两路各司其职。
  */
 package io.vaultix.vaultix.passkey
 
@@ -171,11 +173,18 @@ class VaultixCredentialProviderService : CredentialProviderService() {
         )
         if (pkOptions.isEmpty() && pwOptions.isEmpty()) return BeginGetCredentialResponse.Builder().build()
 
+        // ⚠️ 锁态判据**只看「已解锁的库集合」**，不看「全库快照里有没有锁着的库」。
+        //
+        // 旧实现（2026-09-11 收紧）额外算了 `observeVaults().count { !it.unlocked }`，
+        // 并在它 >0 时丢弃全部候选、只回解锁动作。那把「全库快照」当成了「当前库」：
+        // 只要用户存在**第二个库**（Bitwarden + KDBX 并存，或 KDBX 因「切库即锁旧库」
+        // 被策略性锁掉），该计数恒 >0 ⇒ 候选被永久清空 ⇒ 浏览器里永远只剩
+        // 「解锁 Vaultix」一行，且**解锁完还是这一行**（判据没变），形成无限解锁环。
+        //
+        // 对齐 Bitwarden `CredentialProviderProcessorImpl`：`!activeAccount.isVaultUnlocked`
+        // —— 只看**活跃账号/活跃库**，不存在「lockedCount」这个概念。
         val unlocked = vaultRepository.observeUnlockedVaultIds().first()
-        // 全库快照用于判断「是否有库仍锁定」（VaultSummary.unlocked 由仓储维护，比自查 unlocked 集合更权威）。
-        val lockedCount = runCatching { vaultRepository.observeVaults().first().count { !it.unlocked } }
-            .getOrDefault(0)
-        log("GET unlocked=${unlocked.size} locked=$lockedCount")
+        log("GET unlocked=${unlocked.size}")
 
         if (unlocked.isEmpty()) {
             // ⚠️ **全部库锁定：必须走 `authenticationActions`，而不是往 `credentialEntries` 里塞
@@ -221,29 +230,12 @@ class VaultixCredentialProviderService : CredentialProviderService() {
                 entries += publicKeyEntry(option, m)
             }
         }
-        // ⚠️ **有任一库锁定时，只返回认证动作、不返回任何凭据条目**（2026-09-11 收紧）。
-        //
-        // 旧实现让「部分库锁定」时 entries 与 unlockAction 并存，理由听起来合理
-        // （"让用户不必先解锁就能看到别的库"）；但它与 Bitwarden 的模型冲突：
-        // Bitwarden 的 `CredentialProviderProcessorImpl` 是这样写的 ——
-        // ```
-        // if (!userState.activeAccount.isVaultUnlocked) {
-        //     callback.onResult(BeginGetCredentialResponse(
-        //         authenticationActions = listOf(unlockAction)))   // ← 注意：没有 credentialEntries
-        //     return
-        // }
-        // ```
-        // 即：**锁定态与"可填充候选"是互斥的两条路**。
-        //
-        // 混着给的危害是实测过的：候选列出来后用户点它，系统拉起我方 Activity，
-        // 而那时库可能已被自动锁定 → Activity 读不到凭据 → 浏览器报"认证失败"。
-        // 只给认证动作则系统走"先解锁再重发请求"的两段式流程，不会出现这种半途失败。
-        if (lockedCount > 0) {
-            log("GET partially locked → authenticationActions only (entries dropped)")
-            return BeginGetCredentialResponse.Builder()
-                .setAuthenticationActions(listOf(unlockAction()))
-                .build()
-        }
+        // ⚠️ 候选一律返回（除非「活跃库锁定」已在上方提前返回）：
+        // 对齐 Bitwarden `CredentialProviderProcessorImpl` —— 官方只在
+        // `!activeAccount.isVaultUnlocked` 时给认证动作，**没有**「任一库锁定」这一层。
+        // 曾有一版实现在「存在锁定的库」时丢弃全部候选（2026-09-11，已于 09-13 撤销）：
+        // 它把「当前库」偷换成「存在锁定的库」⇒ 多库用户候选全灭，且解锁后判据不变
+        // ⇒ 浏览器里永远只剩「解锁 Vaultix」一行，形成**无限解锁环**。
         log("GET entries=${entries.size} actions=0")
         return BeginGetCredentialResponse.Builder()
             .setCredentialEntries(entries)
@@ -282,7 +274,7 @@ class VaultixCredentialProviderService : CredentialProviderService() {
             mode = AutofillIntents.MODE_UNLOCK,
             title = getString(R.string.credential_unlock_title),
             subtitle = getString(R.string.credential_unlock_subtitle),
-        ).putExtra(CredentialProviderActivity.EXTRA_CREDENTIAL_FLOW, true)
+        ).putExtra(AutofillIntents.EXTRA_CREDENTIAL_FLOW, true)
         val pendingIntent = PendingIntent.getActivity(
             this,
             REQUEST_UNLOCK_CP,

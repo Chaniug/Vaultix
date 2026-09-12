@@ -129,6 +129,20 @@ class AutofillActivity : FragmentActivity() {
     /** 回灌一次性 guard（[onResume] 可能被对话框等打断重入）。 */
     private var delivered = false
 
+    /**
+     * 本次启动属于**凭据提供商（CP）**流程（标记见 [AutofillIntents.EXTRA_CREDENTIAL_FLOW]）。
+     *
+     * CP 的认证动作是**两段式**：用户完成认证后，系统会**重新调用**
+     * `onBeginGetCredentialRequest`。因此这条流程里**没有、也不可能有**
+     * [PendingFillStore] 暂存 —— 暂存只由 autofill 的 `onFillRequest` 写入。
+     * 解锁完只需 `finish()`，让系统重新取一次候选。
+     *
+     * ⚠️ 不区分这条流程会形成**无限解锁环**：`prepareBiometricUnlock()` 返回 `Ready` 时
+     * 会去 `deliverPendingFill()`，而 `takeValid()` 恒为 null ⇒ finish 不带任何结果 ⇒
+     * 系统重列候选时若判据未变 ⇒ 再次弹解锁。真机表现即用户说的「**反复让人解锁**」。
+     */
+    private val credentialFlow: Boolean by lazy { AutofillIntents.isCredentialFlow(intent) }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -220,6 +234,10 @@ class AutofillActivity : FragmentActivity() {
      *
      * 若本次没有可回灌的暂存（例如系统没给 AssistStructure），则保持旧行为直接 finish，
      * 不把用户无意义地扣在一个空白 Activity 上。
+     *
+     * ⚠️ **唯独 CP 流程例外**：它同样没有暂存，但**仍要留在栈上**等用户从主界面回来。
+     * 否则本 Activity 立刻 finish，而系统在「库仍锁定」时会立即重新弹解锁动作 ——
+     * 用户体感是「被卡在解锁页反复弹」。留在栈上等返回，回来时 [onResume] 会收尾。
      */
     private fun openVaultAndFinish() {
         val hasPending = pendingFillStore.hasPending()
@@ -228,7 +246,7 @@ class AutofillActivity : FragmentActivity() {
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                 .putExtra(AutofillIntents.EXTRA_MAIN_UNLOCK_EXIT, true),
         )
-        if (hasPending) {
+        if (hasPending || credentialFlow) {
             awaitingExternalUnlock = true
         } else {
             finish()
@@ -248,8 +266,13 @@ class AutofillActivity : FragmentActivity() {
 
                 // 竞态：别的入口已解锁（含「查看层锁」——密钥仍可读，填充本不需要再认证）
                 // → 直接回灌，不必让用户再验证一次。
+                // ⚠️ CP 流程**没有暂存可回灌**（暂存只由 onFillRequest 写入）：直接收工，
+                // 系统会重新取一次候选；这里若去 deliverPendingFill() 拿到 null 后 finish，
+                // 行为上与直接 finish 等价，但会把「无暂存」伪装成「回灌失败」，日志难读。
                 BiometricUnlockOutcome.Ready ->
-                    withContext(Dispatchers.Main) { deliverPendingFill() }
+                    withContext(Dispatchers.Main) {
+                        if (credentialFlow) finish() else deliverPendingFill()
+                    }
 
                 is BiometricUnlockOutcome.Prompt -> withContext(Dispatchers.Main) {
                     BiometricPrompter(this@AutofillActivity).authenticate(
@@ -293,12 +316,20 @@ class AutofillActivity : FragmentActivity() {
     /** 认证通过：解封首个库，随后趁 KEK 授权窗口解封其余已启用库，然后回灌并 finish。 */
     private fun unlockAllAndFinish(pending: PendingBiometricUnlock, cipher: Cipher) {
         lifecycleScope.launch(Dispatchers.IO) {
-            runCatching { vaultRepository.completeLocalUnlock(pending.first, cipher) }
-            for (id in pending.rest) {
-                val c = runCatching { vaultRepository.prepareLocalUnlock(id) }.getOrNull() ?: continue
-                runCatching { vaultRepository.completeLocalUnlock(id, c) }
+            unlockAll(pending, cipher)
+            withContext(Dispatchers.Main) {
+                // CP 流程无暂存可回灌：解锁即收工，让系统重新取候选。
+                if (credentialFlow) finish() else deliverPendingFill()
             }
-            withContext(Dispatchers.Main) { deliverPendingFill() }
+        }
+    }
+
+    /** 解封首个库，随后趁 KEK 授权窗口解封其余已启用库（两处解锁路径共用）。 */
+    private suspend fun unlockAll(pending: PendingBiometricUnlock, cipher: Cipher) {
+        runCatching { vaultRepository.completeLocalUnlock(pending.first, cipher) }
+        for (id in pending.rest) {
+            val c = runCatching { vaultRepository.prepareLocalUnlock(id) }.getOrNull() ?: continue
+            runCatching { vaultRepository.completeLocalUnlock(id, c) }
         }
     }
 

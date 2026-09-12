@@ -2,11 +2,11 @@
 <!--
   深色模式下的资源覆盖（values-night）。
 
-  目前只有一项：自动填充下拉行的外框描边色。
-  深色面板上的边界要用**浅色**低透明度才看得见（浅色描边在深色底上会消失）；
+  目前只有一项：自动填充下拉行的底色。
+  深色面板上要用**低 alpha 的白**把面板底色「提亮一档」（浅色描边/低 alpha 黑在深色底上会消失）；
   对应浅色值见 values/colors.xml。系统填充面板的明暗由系统配置决定，
   故这里用 night 限定符而不是 App 主题判断。
 -->
 <resources>
-    <color name="autofill_item_stroke">#33CAC4D0</color>
+    <color name="autofill_item_surface">#1FFFFFFF</color>
 </resources>

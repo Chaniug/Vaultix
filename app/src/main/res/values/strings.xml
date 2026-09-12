@@ -97,6 +97,7 @@
     <string name="settings_title">设置</string>
     <string name="group_vaults">密码库</string>
     <string name="settings_active_vault">当前密码库</string>
+    <string name="settings_add_vault_desc">连接 Bitwarden 云端，或打开本机 .kdbx 文件</string>
     <string name="settings_active_vault_none">未解锁任何库</string>
     <string name="settings_active_vault_locked_hint">当前没有已解锁的库，请先回库列表解锁</string>
     <string name="group_security">安全</string>

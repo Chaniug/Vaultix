@@ -57,6 +57,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.RequiresApi
 import androidx.fragment.app.FragmentActivity
 import io.vaultix.vaultix.VaultixApplication
+import io.vaultix.vaultix.autofill.AutofillIntents
 import io.vaultix.vaultix.autofill.AutofillLogger
 import io.vaultix.vaultix.passkey.CredentialProviderIntentUtils.EXTRA_KEY_UV_PERFORMED_DURING_UNLOCK
 import io.vaultix.vaultix.passkey.CredentialProviderIntentUtils.getBeginGetCredentialRequestOrNull
@@ -132,7 +133,7 @@ class CredentialProviderActivity : FragmentActivity() {
         val intent = Intent(this, io.vaultix.vaultix.MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
             .putExtra(EXTRA_KEY_UV_PERFORMED_DURING_UNLOCK, CredentialProviderRequestManager.isUserPreVerified)
-            .putExtra(EXTRA_CREDENTIAL_FLOW, true)
+            .putExtra(AutofillIntents.EXTRA_CREDENTIAL_FLOW, true)
         mainActivityLauncher.launch(intent)
     }
 
@@ -143,10 +144,5 @@ class CredentialProviderActivity : FragmentActivity() {
         super.finish()
         @Suppress("DEPRECATION")
         overridePendingTransition(0, 0)
-    }
-
-    companion object {
-        /** 标记「本次主界面启动来自凭据流程」（主界面据此决定是否走解锁路由）。 */
-        const val EXTRA_CREDENTIAL_FLOW = "io.vaultix.credential.flow"
     }
 }

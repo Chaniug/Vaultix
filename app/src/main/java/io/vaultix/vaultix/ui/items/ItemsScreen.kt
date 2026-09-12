@@ -1,6 +1,8 @@
 package io.vaultix.vaultix.ui.items
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
@@ -88,6 +90,7 @@ import io.vaultix.model.VaultFolder
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.common.BadgeTone
 import io.vaultix.vaultix.ui.common.EntryCard
 import io.vaultix.vaultix.ui.common.EntryCardIconSize
 import io.vaultix.vaultix.ui.common.EntryCardIconSpacing
@@ -95,6 +98,7 @@ import io.vaultix.vaultix.ui.common.EntryCardTextSpacing
 import io.vaultix.vaultix.ui.common.ItemFormDialog
 import io.vaultix.vaultix.ui.common.PressAndSwipeToDelete
 import io.vaultix.vaultix.ui.common.SiteIcon
+import io.vaultix.vaultix.ui.common.TypeBadge
 import io.vaultix.vaultix.ui.common.VaultixExpressiveTopBar
 import io.vaultix.vaultix.ui.common.VaultixSearchTopAppBar
 import io.vaultix.vaultix.ui.common.itemTypeLabelRes
@@ -118,6 +122,53 @@ private val ITEM_CARD_GAP = 8.dp
 /** 分组折叠/展开的箭头动画时长（对齐 Bastion 的 200ms 补间）。 */
 private const val GROUP_ANIM_MS = 200
 
+/**
+ * 展开后的快捷筛选 chip 行高度（8dp 上下内边距 ×2 + 32dp 高的 FilterChip）。
+ *
+ * 列表要按这个值**加高顶部留白**，否则 chip 行会直接压在第一条条目上
+ * （`.ai/ISSUES.md` #62 记着「筛选条必须浮在内容之上」——浮着是对的，
+ * 但**清单必须同步让位**，两件事不矛盾）。
+ */
+private val QUICK_FILTER_ROW_HEIGHT = 48.dp
+
+/**
+ * 搜索态的返回手势：主界面是**根路由**（导航栈里没有上一层），不拦系统返回就会
+ * 直接结束 Activity 退回桌面 —— 用户期望的是「退出搜索、回到列表」。
+ */
+@Composable
+private fun SearchBackHandler(enabled: Boolean, onClose: () -> Unit) {
+    BackHandler(enabled = enabled) { onClose() }
+}
+
+/**
+ * 列表顶部让位 = 状态栏 + 顶栏高（随收起动画变化）+ 展开中的筛选行高。
+ *
+ * ⚠️ **必须交给列表的滚动留白（`contentPadding`），不能做外层容器 padding。**
+ * 外层 padding 会把列表视口整体下压 ⇒ 内容永远画不到顶栏区域 ⇒
+ * 「顶栏收起后变透明、内容从下方穿过」不成立，顶栏下方留一条死区
+ * （用户观感就是「不沉浸」）。同一个写法还曾造成另外两个症状：
+ * 筛选行展开时 chip 压在第一条条目上、搜索态「Scaffold 让位 + 外层 padding」双重留白
+ * 变成一块纯黑大横幅。
+ *
+ * ⚠️ 搜索态是例外：`Scaffold` 已按 `ScaffoldDefaults.contentWindowInsets` 为搜索顶栏
+ * 预留了高度（见调用点的 `contentWindowInsets`），这里必须归零。
+ *
+ * 抽成独立函数的另一个原因：主 composable 贴着 detekt `LongMethod ≤150` 的门禁线。
+ */
+@Composable
+private fun rememberItemsTopInset(
+    searchActive: Boolean,
+    barPadding: Dp,
+    quickFiltersExpanded: Boolean,
+): Dp {
+    val filterRowInset by animateDpAsState(
+        targetValue = if (quickFiltersExpanded) QUICK_FILTER_ROW_HEIGHT else 0.dp,
+        animationSpec = tween(GROUP_ANIM_MS),
+        label = "items_filter_row_inset",
+    )
+    return if (searchActive) 0.dp else barPadding + filterRowInset
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ItemsScreen(
@@ -134,6 +185,8 @@ fun ItemsScreen(
     /** 外部「+」请求计数：非零即打开新建表单（宿主在消费后清零，避免重复弹出）。 */
     addRequest: Int = 0,
     onAddConsumed: () -> Unit = {},
+    /** 底部叠层悬浮栏占用的高度（宿主给；非内嵌时为 0）——列表要留出它，否则末条被压住。 */
+    bottomInset: Dp = 0.dp,
     viewModel: ItemsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -153,6 +206,10 @@ fun ItemsScreen(
     val listState = rememberLazyListState()
     val collapse = rememberScrollCollapseFraction(listState)
     val barPadding = rememberImmersiveBarPadding(collapse)
+    val listTopInset = rememberItemsTopInset(searchActive, barPadding, quickFiltersExpanded)
+    // 搜索关闭动作（点 × 与系统返回共用）：退出搜索态 + 清空输入。
+    val closeSearch: () -> Unit = { searchActive = false; viewModel.setQuery("") }
+    SearchBackHandler(enabled = searchActive, onClose = closeSearch)
     // 折叠起来的分组 key（默认全部展开；存 saveable，切 Tab 回来不丢）。
     var collapsedGroups by rememberSaveable { mutableStateOf(emptySet<String>()) }
 
@@ -184,10 +241,7 @@ fun ItemsScreen(
                 ItemsSearchBar(
                     query = state.query,
                     onQueryChange = viewModel::setQuery,
-                    onClose = {
-                        searchActive = false
-                        viewModel.setQuery("")
-                    },
+                    onClose = closeSearch,
                 )
             }
         },
@@ -201,9 +255,11 @@ fun ItemsScreen(
     ) { padding ->
         val syncing by viewModel.isSyncing.collectAsStateWithLifecycle()
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
-            Column(modifier = Modifier.fillMaxSize().padding(top = barPadding)) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                // 同步横幅自己让开顶栏（见 SyncNoteBanner 的 topPadding 参数）。
                 SyncNoteBanner(
                     note = state.syncNote,
+                    topPadding = barPadding,
                     onDismiss = viewModel::dismissSyncNote,
                     onRetry = viewModel::retrySync,
                 )
@@ -213,10 +269,13 @@ fun ItemsScreen(
                     modifier = Modifier.fillMaxSize(),
                 ) {
                     if (visibleItems.isEmpty()) {
-                        if (state.query.isBlank()) {
-                            EmptyItemsState()
-                        } else {
-                            NoSearchResultState()
+                        // 空态同样要让位，否则文案与插画被半透明顶栏压住。
+                        Box(modifier = Modifier.fillMaxSize().padding(top = listTopInset)) {
+                            if (state.query.isBlank()) {
+                                EmptyItemsState()
+                            } else {
+                                NoSearchResultState()
+                            }
                         }
                     } else {
                         ItemsList(
@@ -227,6 +286,8 @@ fun ItemsScreen(
                             displayMode = cardDisplayMode,
                             showIcon = showIcon,
                             serverOrigin = state.vault?.origin,
+                            topInset = listTopInset,
+                            bottomInset = bottomInset,
                             onToggleGroup = { key ->
                                 collapsedGroups = if (key in collapsedGroups) {
                                     collapsedGroups - key
@@ -645,6 +706,8 @@ private fun ItemsList(
     displayMode: ItemsCardDisplayMode,
     showIcon: Boolean,
     serverOrigin: String?,
+    topInset: Dp,
+    bottomInset: Dp,
     onToggleGroup: (String) -> Unit,
     onOpenItem: (VaultItem) -> Unit,
     onDelete: (VaultItem) -> Unit,
@@ -652,9 +715,18 @@ private fun ItemsList(
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize(),
-        // 水平 16dp 由列表统一留白（卡片自身不再带外边距）——
+        // 顶部留白 = 状态栏 + 顶栏高 + 展开中的筛选行，全部走 contentPadding
+        // （**不是**外层容器 padding）。这样收起顶栏后内容能滑到半透明顶栏之下 ——
+        // 沉浸感的来源；同时筛选行展开时首条条目会自动被推下去，不再被 chip 压住。
+        // 底部同理：悬浮胶囊底栏是叠层浮在内容之上的，末条要留出它的高度。
+        // 水平 16dp 也由列表统一留白（卡片自身不再带外边距）——
         // 对齐 Bastion `PasswordListScrollableContent` 的 contentPadding 结构。
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+        contentPadding = PaddingValues(
+            start = 16.dp,
+            top = topInset,
+            end = 16.dp,
+            bottom = 8.dp + bottomInset,
+        ),
         verticalArrangement = Arrangement.spacedBy(ITEM_CARD_GAP),
     ) {
         groups.forEach { group ->
@@ -714,6 +786,7 @@ private fun CreateItemDialog(
 @Composable
 private fun SyncNoteBanner(
     note: ItemsViewModel.SyncNote?,
+    topPadding: Dp,
     onDismiss: () -> Unit,
     onRetry: () -> Unit,
 ) {
@@ -723,6 +796,8 @@ private fun SyncNoteBanner(
             onDismiss()
         }
     }
+    // ⚠️ note 为空时必须**直接 return**（一个节点都不渲染）：调用方不再用 `if` 包着它，
+    // 若这里返回一个只剩 padding 的空容器，就会凭空留出一条空气。
     if (note == null) return
 
     Surface(
@@ -730,7 +805,8 @@ private fun SyncNoteBanner(
             is ItemsViewModel.SyncNote.Warning -> MaterialTheme.colorScheme.errorContainer
             else -> MaterialTheme.colorScheme.surfaceContainerHigh
         },
-        modifier = Modifier.fillMaxWidth(),
+        // padding 放在 Surface **外面**：让横幅整体落在顶栏之下，而不是色块被顶栏压住。
+        modifier = Modifier.fillMaxWidth().padding(top = topPadding),
     ) {
         when (note) {
             ItemsViewModel.SyncNote.InProgress -> {
@@ -939,6 +1015,20 @@ private fun ItemRow(
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                }
+            }
+            // 能力徽标：一眼看出这条有没有 2FA 验证码、有没有绑通行密钥。
+            // 两者可**同时**存在（一条登录条目既带 TOTP 又绑了 passkey），故不是 if/else。
+            // 文案复用筛选维度的短词，避免另造一串近义词。
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (!item.totp.isNullOrBlank()) {
+                    TypeBadge(stringResource(R.string.items_filter_totp), BadgeTone.PRIMARY)
+                }
+                if (item.fido2Credentials.isNotEmpty()) {
+                    TypeBadge(stringResource(R.string.items_filter_passkey), BadgeTone.TERTIARY)
                 }
             }
         }

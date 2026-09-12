@@ -1,39 +1,43 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   自动填充下拉建议的条目视图（RemoteViews：由系统渲染在填充面板里，
-  只能使用 RemoteViews 支持的控件与属性）。
+  只能使用 RemoteViews 支持的控件与属性 —— 没有 Compose、没有 Material 组件、
+  没有 ripple、没有自定义字体，动态取色也拿不到，面板明暗只能按 uiMode 自己判）。
 
-  2026-09-12（第二轮）观感修正 —— **图标回到「小而克制」**：
-  上一版把 40dp 的**彩色启动图标**塞进每一行，在系统填充面板里又大又抢眼（用户反馈
-  「图标太丑、别人家的都是精心设计过的小图标」）。现对齐 Bitwarden
-  `autofill_remote_view.xml` 的实际规格：
-  - 图标 **20dp 上限**（`maxWidth`/`maxHeight`）+ 右侧 10dp 间距，且**是单色矢量**，
-    由 `AutofillDatasets.presentation` 用 `setColorFilter` 上系统前景色；
-  - 行内边距收到 12/8dp、最小高度 48dp —— 面板条目本来就该紧凑，
-    56dp 的「大卡片」在系统下拉里会显得格外笨重；
-  - 外框：根布局挂 `@drawable/autofill_item_frame`（12dp 圆角**描边**，不填底色）——
-    给出明确的行边界，同时避免用猜出来的底色与各家 ROM 的面板底色打架；
-  - 文本沿用系统主题前景色（`?android:attr/textColorPrimary/Secondary`），
-    明暗模式由系统面板自己决定（比硬编码自家色板更稳）。
+  ⚠️ RemoteViews 的能力边界（想「更 Material」之前先读这段）：
+  - 能做：shape 圆角背景、内边距 / 最小高度、`setTextViewText`、`setTextColor`、
+    `setFloat("setTextSize")`、`setInt("setColorFilter")`、`setContentDescription`；
+  - 不能做：MaterialCardView 的完整阴影形态、`android:foreground` 水波纹、
+    非系统字体族、Material You 动态色。
+
+  2026-09-13 规格（对齐 M3 两行 list item 的观感，在 RemoteViews 允许的范围内）：
+  - 行高 **56dp**（此前 48dp 偏扁；面板里两行文字挤在一起，长标题换行的观感更差）；
+  - 内边距 **16/10dp**（此前 12/8，文字离边缘太近）；
+  - 图标 20dp + 右侧 **12dp** 间距，单色矢量，由 `AutofillDatasets.presentation`
+    用 `setColorFilter` 上系统前景色；
+  - 外框改为 **12dp 圆角 + 极低透明度实底**（`autofill_item_frame`）：描边太"硬"，
+    而 M3 list item 本来就是「比背景略亮一档的面」。底色用低 alpha 而不是固定色值，
+    这样在浅色 / 深色 / 各家 ROM 的面板上都只是"淡一档"，不会与面板底色打架；
+  - 标题 15sp + `sans-serif-medium`、副标题 13sp，颜色沿用系统面板前景色。
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/autofill_item_root"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:minHeight="48dp"
+    android:minHeight="56dp"
     android:background="@drawable/autofill_item_frame"
     android:gravity="center_vertical"
     android:orientation="horizontal"
-    android:paddingStart="12dp"
-    android:paddingTop="8dp"
-    android:paddingEnd="12dp"
-    android:paddingBottom="8dp">
+    android:paddingStart="16dp"
+    android:paddingTop="10dp"
+    android:paddingEnd="16dp"
+    android:paddingBottom="10dp">
 
     <ImageView
         android:id="@+id/autofill_item_icon"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginEnd="10dp"
+        android:layout_marginEnd="12dp"
         android:adjustViewBounds="true"
         android:contentDescription="@null"
         android:maxWidth="20dp"
@@ -50,9 +54,10 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:ellipsize="end"
+            android:fontFamily="sans-serif-medium"
             android:maxLines="1"
-            android:textAppearance="?android:attr/textAppearanceMedium"
-            android:textColor="?android:attr/textColorPrimary" />
+            android:textColor="?android:attr/textColorPrimary"
+            android:textSize="15sp" />
 
         <TextView
             android:id="@+id/autofill_item_subtitle"
@@ -60,7 +65,7 @@
             android:layout_height="wrap_content"
             android:ellipsize="end"
             android:maxLines="1"
-            android:textAppearance="?android:attr/textAppearanceSmall"
-            android:textColor="?android:attr/textColorSecondary" />
+            android:textColor="?android:attr/textColorSecondary"
+            android:textSize="13sp" />
     </LinearLayout>
 </LinearLayout>

@@ -24,6 +24,7 @@
 package io.vaultix.vaultix.ui.common
 
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
@@ -72,6 +73,22 @@ private const val DELETE_BG_CORNER = 12
 private const val ARMED_SCALE = 0.02f
 
 /**
+ * 长按「上膛」时静态露出的红色删除底透明度（对齐 Bastion `SwipeArmState` 的 `hintAlpha`）。
+ *
+ * ⚠️ 没有这一档，这个手势就**等于不存在**：只靠滑动进度显影的话，用户按住之后画面只有
+ * 2% 抬起（肉眼不可见），完全不知道自己已经解锁了手势 —— 功能在、但没人会发现。
+ */
+private const val ARMED_HINT_ALPHA = 0.32f
+
+/**
+ * 长按上膛时内容**向左让出的距离**，用来在右缘露出一条红色删除底。
+ *
+ * 为什么必须让出而不是只调透明度：删除底被不透明的卡片完全盖住，只改 alpha 是看不见的；
+ * 卡片左移一条缝才能把「可以滑走」这件事画出来。
+ */
+private val ARMED_HINT_REVEAL = 16.dp
+
+/**
  * 「按住后滑动删除」容器：把任意条目卡片包进去即可获得该手势。
  *
  * @param onDelete 滑过阈值并松手后的回调（真正删除由调用方执行）。
@@ -86,13 +103,19 @@ fun PressAndSwipeToDelete(
     val density = LocalDensity.current
     val maxDragPx = with(density) { MAX_DRAG.toPx() }
     val thresholdPx = with(density) { DELETE_THRESHOLD.toPx() }
+    val hintRevealPx = with(density) { ARMED_HINT_REVEAL.toPx() }
     val scope = rememberCoroutineScope()
     val currentDelete by rememberUpdatedState(onDelete)
 
     // 实时位移：拖动期间只改这一个 Float 状态（**不启动协程**，避免每个拖动事件都起一个）。
     var offsetX by remember { mutableFloatStateOf(0f) }
-    // 是否已长按「上膛」：控制红色底与轻微抬起。
+    // 是否已长按「上膛」（0/1）；经 animateFloatAsState 平滑成 0→1 进度驱动提示动画。
     var armed by remember { mutableFloatStateOf(0f) }
+    val armedProgress by animateFloatAsState(
+        targetValue = armed,
+        animationSpec = tween(SETTLE_MS),
+        label = "swipe_armed_progress",
+    )
 
     fun settleTo(target: Float, then: () -> Unit = {}) {
         scope.launch {
@@ -103,8 +126,10 @@ fun PressAndSwipeToDelete(
     }
 
     Box(modifier = modifier.fillMaxWidth()) {
-        // 删除底：随滑动距离渐显（未滑动的常态下完全看不见）。
-        val reveal = (-offsetX / thresholdPx).coerceIn(0f, 1f)
+        // 删除底显隐 = max(滑动进度, 长按提示)。长按提示随真实拖动淡出，避免与拖拽重复叠加。
+        val dragReveal = (-offsetX / thresholdPx).coerceIn(0f, 1f)
+        val armedHint = ARMED_HINT_ALPHA * armedProgress * (1f - dragReveal)
+        val reveal = maxOf(dragReveal, armedHint)
         if (reveal > 0f) {
             Row(
                 modifier = Modifier
@@ -136,8 +161,10 @@ fun PressAndSwipeToDelete(
             modifier = Modifier
                 .fillMaxWidth()
                 .graphicsLayer {
-                    translationX = offsetX
-                    val scale = 1f + ARMED_SCALE * armed
+                    // 长按上膛时额外交出一小段位移，把红底从右缘「挤」出来当提示；
+                    // 真实拖动期间按 dragReveal 淡出，两段位移不叠加。
+                    translationX = offsetX - hintRevealPx * armedProgress * (1f - dragReveal)
+                    val scale = 1f + ARMED_SCALE * armedProgress
                     scaleX = scale
                     scaleY = scale
                 }

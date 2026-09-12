@@ -58,8 +58,8 @@ import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.lifecycleScope
 import dagger.hilt.android.AndroidEntryPoint
 import io.vaultix.common.WebAuthn
-import io.vaultix.data.repository.VaultSessionManager
 import io.vaultix.domain.ItemRepository
+import io.vaultix.domain.VaultRepository
 import io.vaultix.model.VaultFido2Credential
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.autofill.AutofillLogger
@@ -87,14 +87,19 @@ class PasskeyGetActivity : FragmentActivity() {
     lateinit var itemRepository: ItemRepository
 
     /**
-     * 只用于**读锁态快照**（[VaultSessionManager.isUnlocked] / [VaultSessionManager.isAnyUnlocked]）。
+     * 只用于**读锁态快照**（[VaultRepository.isVaultUnlocked] /
+     * [VaultRepository.observeUnlockedVaultIds]）。
      *
      * 对齐 Bitwarden `CredentialProviderProcessorImpl` 的 `userState.activeAccount.isVaultUnlocked`
      * 判定：凭据链路上必须能区分「库锁定」与「条目不存在」，否则会把锁定误报成错误。
      * 密钥材料仍只经 [ItemRepository] 在解锁会话内取，本字段不持有任何密钥。
+     *
+     * ⚠️ **必须用仓储口径**：它把 KDBX 的会话也算进「已解锁」（KDBX 的内存会话是整库明文、
+     * 不进 [io.vaultix.data.repository.VaultSessionManager]）。用 `VaultSessionManager.isUnlocked`
+     * 会漏掉 KDBX ⇒ KDBX 库的通行密钥「候选列得出来（CP 侧走仓储）、点进去却被判锁定」。
      */
     @Inject
-    lateinit var sessions: VaultSessionManager
+    lateinit var vaultRepository: VaultRepository
 
     private var biometricPrompt: BiometricPrompt? = null
 
@@ -223,15 +228,20 @@ class PasskeyGetActivity : FragmentActivity() {
             // Bitwarden 的做法（`CredentialProviderProcessorImpl` + `RootNavViewModel`）是把
             // 锁定态**单独成一路**：锁定 → 返回解锁动作 / 跳解锁界面，绝不报「找不到」。
             // 这里照抄该语义：先探测锁定态，锁定时走解锁引导并把**解锁引导**作为结果回灌。
-            val vaultUnlocked = sessions.isUnlocked(vaultId)
+            // ⚠️ 锁态用**仓储口径**（含 KDBX 会话），与 CP 列候选时同一真源 ——
+            // 判据不一致就会出现「列得出来、点进去说锁定」这种自相矛盾的状态。
+            val vaultUnlocked = runCatching { vaultRepository.isVaultUnlocked(vaultId) }.getOrDefault(false)
+            val anyUnlocked = runCatching {
+                vaultRepository.observeUnlockedVaultIds().first().isNotEmpty()
+            }.getOrDefault(false)
             AutofillLogger.d(
                 "PK lookup itemFound=${item != null} credFound=${cred != null} " +
-                    "vaultUnlocked=$vaultUnlocked anyUnlocked=${sessions.isAnyUnlocked()}",
+                    "vaultUnlocked=$vaultUnlocked anyUnlocked=$anyUnlocked",
             )
             withContext(Dispatchers.Main) {
                 if (cred == null) {
                     // 分支一：库（或全部库）锁定 → 引导解锁，不用「找不到」误导用户。
-                    if (!vaultUnlocked || !sessions.isAnyUnlocked()) {
+                    if (!vaultUnlocked || !anyUnlocked) {
                         unlockAndFinish()
                         return@withContext
                     }
