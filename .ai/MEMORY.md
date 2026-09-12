@@ -1228,3 +1228,31 @@ Vaultix 的 `CallingAppOrigin` 明确采用「**自证式读取**」、**不走�
   两种 flavor，任务名要写全（`:app:compileFullDebugKotlin` / `:app:testFullDebugUnitTest`）。
 - **CI 的 non-blocking 步骤**（`Run unit tests (non-blocking)`）失败**不会**让 run 变红，
   但会留 annotation ⇒ 是"沉默的债"，应定期巡检（见 `ISSUES.md` #45）。
+
+## 2026-09-12 · 第四十三轮长期约定（Edge 填充 / 填充图标 / 快速解锁 / 填充辅助开关 / Tab 动效）
+
+- **自动填充的节点准入（铁律，勿回退）**：只有**可编辑控件**才进字段表 ——
+  有 `htmlInfo` 时 `tag == "input"`；无 htmlInfo 时看 className 的 EditText 家族；
+  两者都判不出才放行（保原生 App）；带标准 autofillHints 一律放行。
+  ⚠️ **语义信号不得包含 `node.text`**（它是内容/标签文字；浏览器整棵 DOM 都是可填节点，
+  拿 text 判定会让 `<label>Password</label>` 挤掉真账号框）。`text` 只作为字段**值**。
+  依据：上游 `ViewNodeExtensions.toAutofillView`（`hint == null && !isInput` → 丢弃）
+  + `SUPPORTED_HTML_ATTRIBUTE_HINTS`（含 `autocomplete`）。详见 `ISSUES.md` #51。
+- **填充下拉图标规格**：20dp 单色语义矢量 + `setColorFilter` 上色（亮 #44474E / 暗 #C4C6CF），
+  行内边距 12/6、最小高度 48dp；品牌行不上色。**禁止**再用彩色启动图标（`ISSUES.md` #52）。
+- **快速解锁三铁律**（`ISSUES.md` #53）：
+  ① `submitting` 只能由「成功 / 失败 / **任何**弹窗错误」三路复位 —— 只处理「用户取消」会整页死锁；
+  ② `UserNotAuthenticatedException` **不是**「密钥已废」，不得据此清用户注册；
+  ③ **解密路径绝不新建 KEK**（`loadKey()` 只读；只有启用路径可以 `obtainOrCreateKey()`）；
+  ④ 判 KEK 健康用 `getKey`（三态 `kekStatus`），**不要用 `containsAlias`**（失效时它静默返回 false）。
+- **CI 签名**：`ci-debug.yml` 的固定密钥解码不再按事件名 gating（`event_name != 'pull_request'`），
+  构建按磁盘上是否有 `release.jks` 注入签名 —— 否则手动触发的包签的是一次性 debug key，
+  **盖不上 preview 包**（用户只能卸载重装，数据 + Keystore 全丢，伪装成「指纹解锁被清除」）。
+- **Fill Assist 开关**：默认开，但必须有 UI 开关（设置 → 自动填充 → 填充行为 → 启用填充辅助）；
+  关闭即完全不读规则表。**不要**照搬上游 feature flag 双重门控（自建 Vaultwarden 不返回该 flag）。
+- **Tab 动效规格（Bastion 移植）**：进入 `fadeIn + slideInVertically(1/16 屏高)` 220ms，
+  退出 `fadeOut` 120ms，缓动 `CubicBezierEasing(0.6f, 0f, 0.4f, 1f)`；
+  配 `AnimatedContent(contentKey = tab)` + `SaveableStateHolder`（**切 Tab 不丢滚动位置/搜索词**）；
+  验证码倒计时用 `rememberTotpSmoothProgress`（秒级数据 + 绘制层 1s 线性动画，翻转时 `snap()`）。
+- **`onFillRequest` 不是挂起函数**：读偏好流（`prefs.xxx.first()`）必须在 `scope.launch { }` 内，
+  否则编译期直接报 suspend 错误（本轮踩过）。

@@ -70,6 +70,7 @@ class VaultixPreferences @Inject constructor(
         val AUTO_COPY_TOTP = booleanPreferencesKey("auto_copy_totp")
         val AUTOFILL_BASE_DOMAIN_MATCH = booleanPreferencesKey("autofill_base_domain_match")
         val AUTOFILL_EXACT_DOMAIN_ONLY = booleanPreferencesKey("autofill_exact_domain_only")
+        val FILL_ASSIST_ENABLED = booleanPreferencesKey("fill_assist_enabled")
 
         const val DEFAULT_CLIPBOARD_CLEAR_MS = 30 * 1000L
     }
@@ -178,6 +179,20 @@ class VaultixPreferences @Inject constructor(
     val autofillExactDomainOnly: Flow<Boolean> =
         safeData.map { it[AUTOFILL_EXACT_DOMAIN_ONLY] ?: false }
 
+    /**
+     * 「填充辅助」（Fill Assist，对齐 Bitwarden `isFillAssistEnabled`）。
+     *
+     * 开启后按**站点级选择器规则**精确识别账号 / 密码 / 卡号字段（规则表来自服务端下发的
+     * Bitwarden map-the-web 清单），而不是靠文本启发式猜。默认开启：规则只覆盖白名单站点，
+     * 未命中的主机完全走原启发式，行为不变。
+     *
+     * ⚠️ 上游对**特性**有双重门控（feature flag `fill-assist-targeting-rules` +
+     * 设置项 `isFillAssistEnabled`），我们只有后者 —— 因为服务端 flag 在自建
+     * Vaultwarden 上通常不返回，照搬会让功能永远关着（用户要求「有个独立按钮能开关」）。
+     */
+    val fillAssistEnabled: Flow<Boolean> =
+        safeData.map { it[FILL_ASSIST_ENABLED] ?: true }
+
     val defaultVaultId: Flow<String?> = safeData.map { it[DEFAULT_VAULT_ID] }
 
     /**
@@ -257,6 +272,11 @@ class VaultixPreferences @Inject constructor(
 
     suspend fun setAutofillExactDomainOnly(enabled: Boolean) {
         dataStore.edit { it[AUTOFILL_EXACT_DOMAIN_ONLY] = enabled }
+    }
+
+    /** 「填充辅助」开关（对齐 Bitwarden `isFillAssistEnabled = value`）。 */
+    suspend fun setFillAssistEnabled(enabled: Boolean) {
+        dataStore.edit { it[FILL_ASSIST_ENABLED] = enabled }
     }
 
     suspend fun setDefaultVaultId(id: String?) {

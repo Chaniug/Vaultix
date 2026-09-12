@@ -36,8 +36,13 @@ class BiometricPrompter(
             }
 
             override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                // 「用户/系统取消」一律安静收起：都是正常的放弃路径，弹错误反而打扰。
+                // ⚠️ ERROR_CANCELED 必须算进来：它是**系统**取消（宿主被切走、弹窗被
+                // 提前撤下），在进程刚冷启动/重启后的首帧发起认证时很常见；
+                // 不算取消就会把调用方留在 submitting 卡死态（按钮全灰、转圈不停）。
                 val cancelled = errorCode == BiometricPrompt.ERROR_USER_CANCELED ||
-                    errorCode == BiometricPrompt.ERROR_NEGATIVE_BUTTON
+                    errorCode == BiometricPrompt.ERROR_NEGATIVE_BUTTON ||
+                    errorCode == BiometricPrompt.ERROR_CANCELED
                 onError(errString.toString(), cancelled)
             }
             // onAuthenticationFailed（指纹不匹配）：保持对话框可重试，不回调

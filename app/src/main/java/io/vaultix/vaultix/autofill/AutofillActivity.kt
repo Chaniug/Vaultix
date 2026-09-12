@@ -285,6 +285,11 @@ class AutofillActivity : FragmentActivity() {
             title = title,
             subtitle = subtitle,
             datasetId = AutofillIntents.datasetIdOf(intent),
+            // 回灌的 Dataset 是同一个条目，图标必须与原条目一致（否则二次验证后
+            // 换了个图标，看起来像换了条目）。类别由 Intent 带入，缺失则回退登录。
+            iconRes = AutofillIntents.categoryOf(intent)
+                ?.let(AutofillDatasets::iconFor)
+                ?: R.drawable.ic_autofill_login,
         )
         if (dataset == null) {
             setResult(Activity.RESULT_CANCELED)

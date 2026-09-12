@@ -18,6 +18,9 @@
  */
 package io.vaultix.vaultix.ui.shell
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -26,6 +29,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
@@ -65,6 +69,8 @@ fun MainShellScreen(
     var passwordsAddRequest by rememberSaveable { mutableIntStateOf(0) }
     var totpAddRequest by rememberSaveable { mutableIntStateOf(0) }
     var cardAddRequest by rememberSaveable { mutableIntStateOf(0) }
+    // Tab 离开组合时保存其 rememberSaveable 状态（滚动位置 / 搜索词…），切回来原样恢复。
+    val tabStateHolder = rememberSaveableStateHolder()
 
     val tabs = VaultixNavItem.entries.toList()
 
@@ -110,38 +116,62 @@ fun MainShellScreen(
             modifier = Modifier.fillMaxSize().padding(padding),
             propagateMinConstraints = true,
         ) {
-            when (currentTab) {
-                VaultixNavItem.Passwords -> ItemsScreen(
-                    embedded = true,
-                    addRequest = passwordsAddRequest,
-                    onAddConsumed = { passwordsAddRequest = 0 },
-                    onBack = {},
-                    onLocked = onLocked,
-                    onOpenTrash = onOpenTrash,
-                    onOpenItem = onOpenItem,
-                    onOpenTotp = { currentTab = VaultixNavItem.Authenticator },
-                )
+            // ★ 阶段 3 观感：Tab 切换过渡 + **Tab 状态保留**
+            //
+            // - `AnimatedContent` + [tabSwitchEnter]/[tabSwitchExit]：对齐 Bastion
+            //   `AuthenticatorPasskeyAnimatedContent`（淡入 + 轻微上移 / 纯淡出）。
+            //   `contentKey` 用 Tab 名，保证「A→B→A」不会因为 targetState 相等而跳过动画。
+            // - `SaveableStateHolder`：每个 Tab 的 `rememberSaveable` 状态（滚动位置、
+            //   搜索框内容、展开态）在离开组合时存入 holder，切回来原样恢复 ——
+            //   否则「翻到卡包看个卡号，再切回密码页就回到列表顶部」。
+            //   对齐 Bastion 的 `cardWalletSaveableStateHolder` 用法。
+            // - `SizeTransform(clip = false)`：Tab 内容高度不同（空态 / 列表）时不做裁剪，
+            //   避免过渡期间出现内容被切掉一条的错觉（同 Bastion）。
+            AnimatedContent(
+                targetState = currentTab,
+                modifier = Modifier.fillMaxSize(),
+                transitionSpec = {
+                    (tabSwitchEnter() togetherWith tabSwitchExit())
+                        .using(SizeTransform(clip = false))
+                },
+                contentKey = { it.name },
+                label = "vaultix_tab_switch",
+            ) { tab ->
+                tabStateHolder.SaveableStateProvider(tab.name) {
+                    when (tab) {
+                        VaultixNavItem.Passwords -> ItemsScreen(
+                            embedded = true,
+                            addRequest = passwordsAddRequest,
+                            onAddConsumed = { passwordsAddRequest = 0 },
+                            onBack = {},
+                            onLocked = onLocked,
+                            onOpenTrash = onOpenTrash,
+                            onOpenItem = onOpenItem,
+                            onOpenTotp = { currentTab = VaultixNavItem.Authenticator },
+                        )
 
-                VaultixNavItem.Authenticator -> TotpCodesScreen(
-                    embedded = true,
-                    addRequest = totpAddRequest,
-                    onAddConsumed = { totpAddRequest = 0 },
-                    onBack = {},
-                    onOpenPasskeys = onOpenPasskeys,
-                )
+                        VaultixNavItem.Authenticator -> TotpCodesScreen(
+                            embedded = true,
+                            addRequest = totpAddRequest,
+                            onAddConsumed = { totpAddRequest = 0 },
+                            onBack = {},
+                            onOpenPasskeys = onOpenPasskeys,
+                        )
 
-                VaultixNavItem.CardWallet -> CardWalletScreen(
-                    embedded = true,
-                    addRequest = cardAddRequest,
-                    onAddConsumed = { cardAddRequest = 0 },
-                    onOpenItem = onOpenItem,
-                )
+                        VaultixNavItem.CardWallet -> CardWalletScreen(
+                            embedded = true,
+                            addRequest = cardAddRequest,
+                            onAddConsumed = { cardAddRequest = 0 },
+                            onOpenItem = onOpenItem,
+                        )
 
-                VaultixNavItem.Settings -> SettingsScreen(
-                    embedded = true,
-                    onBack = {},
-                    onOpenAutofillSettings = onOpenAutofillSettings,
-                )
+                        VaultixNavItem.Settings -> SettingsScreen(
+                            embedded = true,
+                            onBack = {},
+                            onOpenAutofillSettings = onOpenAutofillSettings,
+                        )
+                    }
+                }
             }
         }
     }

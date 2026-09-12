@@ -1,6 +1,98 @@
 # 下一步任务清单
 
-> ## 【最新】第三十九轮（2026-09-12）：通行密钥 `clientDataJSON` 占位符错误回退（标准合规）
+> ## 【最新】第四十三轮（2026-09-12）：Edge 账号框 / 填充图标 / 指纹解锁 / 填充辅助开关 + 阶段 3 动效
+>
+> 用户一次报四件事并要求「搬运 bastion 的外观和动效的改动连通这些修复一起做，一个提交推送」。
+> 全部落地于同一提交。逐条见下（**待真机验收**）。
+>
+> **① Edge 浏览器「账号框不出候选也填不进去」（P0，根因有真机实证）**
+> - 直接证据来自上一轮留存的真机日志 `build/adb-capture/device-log.txt`：
+>   ```
+>   fillRequest pkg=com.microsoft.emmx webDomain=github.com fields=221
+>     hints={UNKNOWN=215, PASSWORD=5, USERNAME=2} user=true pass=true
+>   ```
+>   —— 一个页面解析出 **221 个「字段」**，其中 5 个被判 PASSWORD（GitHub 登录页只有 1 个密码框）。
+> - 根因：浏览器 WebView 会把**整棵 DOM** 建成带 `autofillId` 的节点，`<label>Password</label>`、
+>   「Username or email address」这类**展示节点**被文本启发式判成 PASSWORD / USERNAME →
+>   占掉真账号框的语义位 → `promoteUsernameField` 的「没有可见 USERNAME 才升格」被假 USERNAME 挡住
+>   → 真账号框永远 UNKNOWN → `hasUsernameField=false` → Dataset 里只有密码值
+>   ⇒ **点密码框能弹（只填密码），点账号框什么都不弹也填不进**（与 QQ 修复前同型）。
+> - 修复（两处，均对齐上游 Bitwarden `ViewNodeExtensions.toAutofillView`）：
+>   1. **节点准入闸** `isEditableNode()`（新文件 `EditableNodePolicy.kt`）：有 `htmlInfo` 时
+>      只认 `tag == "input"`；无 htmlInfo 时认 className 的 EditText 家族；两者都判不出才放行；
+>      带标准 autofillHints 一律放行。非输入控件**直接丢弃**（上游同款闸门）。
+>   2. **语义信号不再包含 `node.text`**（新函数 `BrowserUrlBars.formSignalOf`）：上游启发式从不读
+>      `node.text`，只看 `idEntry` / `hint` / `htmlInfo` —— `text` 是内容/标签文字，正是误判之源。
+>      `text` 仍作为字段**值**解析（保存流程用），两件事分开。
+>      HTML 属性键同时补齐上游的 `autocomplete` / `label` / `hint` / `autofill`
+>      （站点用 `<input autocomplete="username">` 声明语义时直接判成账号框，不再依赖邻近升格）。
+> - **新增诊断**：`fillRequest` 日志追加 `seq=USERNAME,UNKNOWN(hid),PASSWORD,…`（字段序列 + 可见性）。
+>   账号框填不进去时，「真账号框是 UNKNOWN」与「被假 USERNAME 占位」只看计数分不清，看序列一眼可定。
+> - 单测：`EditableNodePolicyTest`（7 例，锁「web 展示节点不得进字段表」）。
+>
+> **② 填充下拉的图标（用户：太丑、别人家都是小而精致的）**
+> - 上一版是 **40dp 彩色启动图标**（`R.mipmap.ic_launcher`）；现对齐 Bitwarden
+>   `autofill_remote_view.xml` 的真实规格：**20dp 单色语义图标** + 12/6dp 内边距 + 48dp 最小高度。
+> - 新增 4 个矢量：`ic_autofill_login`（地球）/ `ic_autofill_card`（卡片）/
+>   `ic_autofill_identity`（人像）/ `ic_autofill_vaultix`（盾牌+钥匙孔，整表认证行专用，不上色）。
+> - 上色方式对齐上游 `Context.iconTint`：RemoteViews `setColorFilter`，亮色 `#44474E` / 暗色 `#C4C6CF`。
+> - 类别经 `AutofillIntents.EXTRA_CATEGORY` 一路带到认证回灌，保证二次验证后图标不跳变。
+>
+> **③ 指纹解锁「覆盖安装 + 重启后不生效」（三个独立缺陷叠加）**
+> - **A. 解锁页会卡死在 `submitting`**（最能解释「按钮在、点了没反应」）：
+>   `onError` 只处理「用户取消」，而 `ERROR_TIMEOUT` / `ERROR_CANCELED` / `ERROR_HW_UNAVAILABLE` /
+>   `ERROR_LOCKOUT` 都不在白名单里 → `submitting` 永远为真 → 指纹按钮与主密码按钮双双置灰、
+>   转圈不散、后续点击被守卫直接 return ⇒ **整页死锁只能杀进程**。
+>   修复：任何错误都复位；仅「用户/系统取消」保持安静，其余显示原因；
+>   `ERROR_CANCELED` 归入「取消」。
+> - **B. 自动弹窗时机**：新增的「进解锁页自动弹一次」若在 Activity 尚未 RESUMED 时发起，
+>   重启后（生物识别 HAL 未就绪）很容易被系统以非取消错误结束 → 正好踩中 A。
+>   修复：改为 `lifecycle.withResumed { … }` 之后再发起。
+> - **C. 一次瞬时失败会「自毁」注册**：`isLocalUnlockUnrecoverable` 把
+>   `UserNotAuthenticatedException`（语义 = **本次未认证**）当成「密钥已废」，
+>   触发 `clearBrokenLocalUnlock` **真删用户的快速解锁注册**；
+>   且 `LocalUnlockKeyStore.obtainKey()` 在别名缺失时会**静默新建 KEK**，
+>   把「钥匙丢了」掩盖成「认证成功 + 解密失败」→ 照样走到自毁分支。
+>   修复：①`UserNotAuthenticatedException` 移出「不可恢复」（对齐 `Docs/03` 的
+>   「应拉起 BiometricPrompt 重认证」）；②`LocalUnlockKeyStore` 拆
+>   `loadKey()`（只读，绝不新建）与 `obtainOrCreateKey()`（仅启用路径可新建，
+>   且先删失效别名再建）；③新增三态 `kekStatus`（LOADABLE / MISSING / INVALIDATED）——
+>   `containsAlias` **不能**当健康检查（平台在密钥永久失效时让它静默返回 false）。
+> - **D. CI 层「假覆盖安装」**：`ci-debug.yml` 原先只在 **push** 时注入固定密钥 ⇒
+>   手动 `workflow_dispatch` 出的包是 runner 现生成的一次性 debug key 签的，
+>   **盖不上 preview 包**（只能卸载重装 ⇒ 数据 + Keystore 一起没，表现恰是「指纹解锁被清除」）。
+>   已改为 `event_name != 'pull_request'` 即解码，构建步骤按磁盘上是否存在 `release.jks` 决定是否签名。
+>
+> **④ 填充辅助（Fill Assist）独立开关（用户：上游有独立按钮，我这个 APP 上没有）**
+> - 新增偏好 `fill_assist_enabled`（默认开）+ `VaultixPreferences.fillAssistEnabled` /
+>   `setFillAssistEnabled`；设置 → 自动填充 → 填充行为新增一行开关（图标 `AutoFixHigh`）。
+> - 文案直接取上游官方中文 `values-zh-rCN`：**启用填充辅助** /
+>   「填充辅助通过使用站点特定的规则，提高在受支持站点上的自动填充的准确性」。
+> - 关闭后**完全不读规则表**（识别退回纯启发式，行为等于搬运 Fill Assist 之前），
+>   且不再做 6 小时节流的规则刷新（省掉无意义联网与磁盘写）。
+> - 说明：上游是 **feature flag + 设置项**双重门控（且 bitwarden.com 上 flag 为 false），
+>   Vaultix 只用设置项 —— 自建 Vaultwarden 通常不返回该 flag，照搬会让功能永远关着。
+>
+> **⑤ 阶段 3 观感（Bastion 外观与动效）**
+> - **Tab 切换转场**：新增 `ui/shell/TabTransitions.kt`（移植 Bastion `NavTransitions` 的 tab 部分：
+>   进入 = fadeIn + 从 1/16 屏高上移，220ms；退出 = 纯 fadeOut，120ms；缓动
+>   `CubicBezierEasing(0.6, 0, 0.4, 1)`），并在 `MainShellScreen` 用
+>   `AnimatedContent + SizeTransform(clip = false)` 接线（对齐 Bastion
+>   `AuthenticatorPasskeyAnimatedContent` 的 `contentKey` 用法）。
+> - **Tab 状态保留**：`rememberSaveableStateHolder()` + `SaveableStateProvider(tab.name)` ——
+>   切走再切回不再回到列表顶部、搜索词不丢（对齐 Bastion 的 `cardWalletSaveableStateHolder`）。
+> - **验证码倒计时平滑进度**：移植 Bastion `rememberTotpSmoothProgress`
+>   （秒级数据源 + 绘制层 1s 线性动画，周期翻转时 `snap()` 防倒卷）。
+> - 未做（阶段 3 剩余）：主界面卡片样式细化、FAB 行为按需取用、设置页分组结构复核。
+>
+> **门禁**：`:app:compileFullDebugKotlin` + `:app:testFullDebugUnitTest` +
+> `:data:repository:testDebugUnitTest` + `detekt` **全绿**（本地真跑，非推测）。
+> **待真机验收**：①Edge 账号框能弹能填；②搜索框仍不乱弹（回归重点）；
+> ③填充下拉图标小而克制；④覆盖安装 + 重启后指纹解锁可用；
+> ⑤设置页出现「启用填充辅助」开关；⑥Tab 切换有淡入上移过渡且切回不丢滚动位置。
+>
+
+> ## 【已归档】第三十九轮（2026-09-12）：通行密钥 `clientDataJSON` 占位符错误回退（标准合规）
 >
 > 用户实测 **GitHub 注册通行密钥**报 `Security key authentication failed`，并要求
 > 「**按照标准改对，不要失误，不要自己乱加。应该是有标准的才对。**」

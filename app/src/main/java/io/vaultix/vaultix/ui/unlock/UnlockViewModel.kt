@@ -160,6 +160,25 @@ class UnlockViewModel @Inject constructor(
         _state.update { it.copy(submitting = false) }
     }
 
+    /**
+     * BiometricPrompt 报错（用户取消 / 超时 / 硬件不可用 / 被系统撤销…）。
+     *
+     * **无论哪种错误都必须把 submitting 复位**——它是「认证中」的唯一标志，
+     * 与指纹按钮、主密码按钮的 enabled 状态、转圈指示器都直接挂钩；
+     * 漏复位就会把整页锁死（用户体感：指纹解锁按钮点了没反应）。
+     *
+     * 用户/系统取消保持安静（那是「改用主密码」的正常路径），其余错误给出原因，
+     * 否则用户只会看到按钮毫无反应。
+     */
+    fun onBiometricPromptError(message: String, cancelled: Boolean) {
+        _state.update {
+            it.copy(
+                submitting = false,
+                error = if (cancelled) it.error else UnlockUiError.Unknown(message),
+            )
+        }
+    }
+
     fun onPasswordChange(value: String) = _state.update { it.copy(password = value, error = null) }
     fun onPasswordVisibleChange(visible: Boolean) =
         _state.update { it.copy(passwordVisible = visible) }

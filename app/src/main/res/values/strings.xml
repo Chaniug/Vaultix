@@ -145,6 +145,10 @@
     <string name="setting_autofill_exact_domain_desc">只填充域名完全一致的条目。最安全，但跨子域登录可能填不出来</string>
     <string name="setting_autofill_base_domain">允许子域名匹配</string>
     <string name="setting_autofill_base_domain_desc">条目存的是 example.com 时，login.example.com 也能填充</string>
+    <!-- 填充辅助（Fill Assist）：文案对齐 Bitwarden 官方中文 values-zh-rCN 的
+         turn_on_fill_assist / fill_assist_improves_autofill_accuracy_on_supported_sites -->
+    <string name="setting_fill_assist">启用填充辅助</string>
+    <string name="setting_fill_assist_desc">填充辅助通过使用站点特定的规则，提高在受支持站点上的自动填充的准确性</string>
 
     <!-- 通行密钥分组 -->
     <string name="setting_credential_provider_subtitle">在系统设置中启用 Vaultix 作为通行密钥提供方</string>

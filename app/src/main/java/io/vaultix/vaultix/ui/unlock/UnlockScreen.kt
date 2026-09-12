@@ -40,7 +40,9 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.withResumed
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.BiometricPrompter
 import io.vaultix.vaultix.ui.common.TwoFactorStep
@@ -92,9 +94,15 @@ fun UnlockScreen(
                         subtitle = biometricSubtitle,
                         cancelText = cancelText,
                         onSuccess = viewModel::completeLocalUnlock,
-                        onError = { _, cancelled ->
-                            if (cancelled) viewModel.onBiometricPromptDismissed()
-                        },
+                        // ⚠️ **任何**错误都要复位 submitting，不能只处理「用户取消」：
+                        // ERROR_TIMEOUT / ERROR_CANCELED / ERROR_HW_UNAVAILABLE / ERROR_LOCKOUT
+                        // 都不在取消白名单里，一旦落进来而无人复位，submitting 永远为真 ⇒
+                        // 指纹按钮与主密码按钮双双置灰、转圈不散、后续点击被守卫直接 return
+                        // ⇒ **整页死锁只能杀进程**。这正是用户反馈的「重启后打开 APP，
+                        // 指纹解锁按钮不生效」：新构建会在进入解锁页时自动弹一次认证，
+                        // 而重启后首次发起（生物识别 HAL 尚未就绪 / 宿主还没 RESUMED）
+                        // 很容易被系统以非「用户取消」的错误码结束。
+                        onError = viewModel::onBiometricPromptError,
                     )
                 }
             }
@@ -322,10 +330,17 @@ private fun AutoPromptQuickUnlock(
     onPrompt: () -> Unit,
 ) {
     val prompted = rememberSaveable { mutableStateOf(false) }
+    val lifecycleOwner = LocalLifecycleOwner.current
     // 条件刻意控制在 3 项以内（detekt ComplexCondition 上限为 3）。
     val eligible = localUnlockAvailable && !hasTwoFactor && !submitting
     LaunchedEffect(eligible) {
-        if (!prompted.value && eligible) {
+        if (prompted.value || !eligible) return@LaunchedEffect
+        // ⚠️ 必须等宿主 RESUMED 之后再发起认证：进程冷启动（尤其设备重启后首次进入）时
+        // BiometricPrompt 若在 Activity 尚未 RESUMED 时发起，会被系统立刻以
+        // ERROR_CANCELED / ERROR_HW_UNAVAILABLE 结束 —— 这既是「重启后指纹解锁
+        // 不生效」的触发点，也放大了 submitting 卡死的概率。
+        lifecycleOwner.withResumed {
+            if (prompted.value) return@withResumed
             prompted.value = true
             onPrompt()
         }

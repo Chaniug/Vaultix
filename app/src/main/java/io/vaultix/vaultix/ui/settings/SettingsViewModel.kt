@@ -165,6 +165,23 @@ class SettingsViewModel @Inject constructor(
     }
 
     /**
+     * 「填充辅助」（对齐 Bitwarden 自动填充设置页的 `FillAssistSwitch`，默认开）。
+     *
+     * 关掉后不再按站点规则覆盖启发式识别；规则表缓存仍保留（下次打开立即生效，
+     * 不必等 6 小时节流）。
+     */
+    val fillAssistEnabled: StateFlow<Boolean> = preferences.fillAssistEnabled
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = true,
+        )
+
+    fun setFillAssistEnabled(enabled: Boolean) {
+        viewModelScope.launch { preferences.setFillAssistEnabled(enabled) }
+    }
+
+    /**
      * **当前活跃库**（null = 全锁）。
      *
      * Vaultix 是「单活跃库」语义（Docs/progress/main-shell-migration.md §0）：主界面 Tab、

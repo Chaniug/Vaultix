@@ -48,6 +48,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Language
@@ -107,6 +108,7 @@ fun AutofillSettingsScreen(
     val autoCopyTotp by viewModel.autoCopyTotp.collectAsStateWithLifecycle()
     val baseDomainMatch by viewModel.autofillBaseDomainMatch.collectAsStateWithLifecycle()
     val exactDomainOnly by viewModel.autofillExactDomainOnly.collectAsStateWithLifecycle()
+    val fillAssistEnabled by viewModel.fillAssistEnabled.collectAsStateWithLifecycle()
     var tileUnsupported by rememberSaveable { mutableStateOf(false) }
 
     var status by remember { mutableStateOf(AutofillStatusChecker.check(context)) }
@@ -192,6 +194,21 @@ fun AutofillSettingsScreen(
                     Switch(
                         checked = baseDomainMatch,
                         onCheckedChange = viewModel::setAutofillBaseDomainMatch,
+                    )
+                },
+            )
+            // 填充辅助（对齐 Bitwarden 自动填充页的 FillAssistSwitch）：站点级选择器规则，
+            // 命中白名单站点时**以规则为准**（不再靠文本启发式猜账号 / 密码框）。
+            // 上游默认关（受 feature flag 双重门控），这里默认开 —— 规则只覆盖白名单，
+            // 未命中的主机行为与关闭时完全一致。
+            SettingsRow(
+                icon = { Icon(Icons.Filled.AutoFixHigh, contentDescription = null) },
+                title = stringResource(R.string.setting_fill_assist),
+                subtitle = stringResource(R.string.setting_fill_assist_desc),
+                trailing = {
+                    Switch(
+                        checked = fillAssistEnabled,
+                        onCheckedChange = viewModel::setFillAssistEnabled,
                     )
                 },
             )

@@ -67,6 +67,9 @@ object HintClassifier {
         return Classified(FieldHint.UNKNOWN, SignalStrength.LOW)
     }
 
+    /** 该 hint 字符串是否是本分类器认识的标准 autofill hint（供节点准入判定复用）。 */
+    fun supportsHint(hint: String): Boolean = mapAutofillHint(hint) != null
+
     /**
      * 标准 autofill hint 字符串 → [FieldHint]（null 表示未识别）。
      *

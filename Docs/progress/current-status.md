@@ -1,6 +1,9 @@
 # 当前进度快照
 
-> 最后更新：2026-09-10（第二十四轮 · Credential Provider 集成闭环 + autofill 服务 M2-a 落地）
+> 最后更新：2026-09-12（第四十三轮 · Edge 账号框根因修复 + 填充图标重做 + 快速解锁三缺陷 +
+> 填充辅助开关 + 主界面 Tab 转场/状态保留）
+>
+> 逐轮流水见 `next-steps.md`（最新在文件顶部）与 `.ai/SESSION-2026-09-12.md`。
 
 ## 里程碑进度
 
@@ -149,3 +152,27 @@
 2. `logcat` 断言：`jsonMatchesBrowserHash=false` 属**预期**（系统那份哈希来自浏览器），
    **不再是故障信号**。
 3. 回归确认：密码自动填充 / 启动（全新安装不应再转圈）/ 设置页切换活跃库后填充目标跟随。
+
+## 当前状态（2026-09-12 第四十三轮）
+
+用户一次报四件事 + 要求搬 Bastion 阶段 3 观感，全部落在**同一提交**。详见 `next-steps.md` 顶部。
+
+| # | 事项 | 根因（一句话） | 落地 |
+|---|---|---|---|
+| ① | **Edge 账号框不出候选也填不进去**（P0） | 浏览器 WebView 把整棵 DOM 建成可填节点（真机日志实测一页 221 个），且分类信号含 `node.text` ⇒ `<label>Password</label>` 等展示节点被判成 USERNAME 占住语义位 ⇒ 真账号框永远 UNKNOWN ⇒ Dataset 只有密码值 | 节点准入闸 `EditableNodePolicy` + 信号改 `formSignalOf`（去 `text`、补 `autocomplete`）；日志加 `seq=` 诊断 |
+| ② | **填充下拉图标又大又花** | 上一轮把 40dp **彩色启动图标**塞进每一行 | 20dp 单色语义矢量（地球/卡片/人像/盾牌）+ `setColorFilter`，对齐上游 `autofill_remote_view.xml` |
+| ③ | **覆盖安装 + 重启后指纹解锁不生效** | 三个独立缺陷：弹窗错误未复位 `submitting`（整页死锁）/ `UserNotAuthenticatedException` 误判为永久失效（自毁注册）/ 解密路径静默新建 KEK | 见 `ISSUES.md` #53；另修 CI 手动触发的包用一次性密钥签（盖不上 preview） |
+| ④ | **填充辅助没有独立开关** | 搬运时只落机制没落设置项 | `fill_assist_enabled` 偏好 + 设置页开关（文案取上游官方中文） |
+| ⑤ | **Bastion 阶段 3 观感** | — | Tab 转场（fadeIn+1/16 屏高上移）+ `SaveableStateHolder` 状态保留 + 验证码倒计时平滑动画 |
+
+### 质量基线（本轮）
+`:app:compileFullDebugKotlin` / `:app:testFullDebugUnitTest` / `:data:repository:testDebugUnitTest` /
+全模块 `detekt` —— 本地真跑**全绿**（`BUILD SUCCESSFUL`）。
+
+### ⏳ 真机待验证（本轮，按优先级）
+1. **搜索框仍不乱弹**（本轮同时改了信号来源与节点准入闸 ⇒ 最大回归风险点）；
+2. Edge 登录页点账号框 → 出候选、一键填账号 + 密码；
+3. 填充下拉图标小而克制、类型图标正确；
+4. 覆盖安装 + 重启后指纹解锁可用（且失败不再卡死整页）；
+5. 设置 → 自动填充 → 填充行为出现「启用填充辅助」并即时生效；
+6. Tab 切换有淡入上移过渡，切回不丢滚动位置与搜索词。

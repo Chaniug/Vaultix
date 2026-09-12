@@ -1091,3 +1091,144 @@ QQ 登录页是**标签页**结构（QQ号/手机号/邮箱），非当前标签
 
 **真实剩余差异（产品取舍，非精度缺陷）**：①上游把 `Identity` 从候选中整体排除（我们仍给身份建议）；
 ②上游按「焦点视图**类型**」决定兑现哪种分区，我们**同时**给登录/卡片/身份建议。
+
+---
+
+## 51. 浏览器 WebView 把**整棵 DOM** 建成可填节点 → 账号框被假 USERNAME 占位（2026-09-12，P0，第四十三轮）
+
+**症状**：Edge 上点密码框能弹候选、能填密码；点**账号框什么都不弹、也填不进去**（与 QQ 修复前同型）。
+
+**真机实证**（上一轮留存的 `build/adb-capture/device-log.txt`，21:31 前后 github.com）：
+```
+fillRequest pkg=com.microsoft.emmx webDomain=github.com fields=221
+  hints={UNKNOWN=215, PASSWORD=5, USERNAME=2} user=true pass=true
+```
+GitHub 登录页只有 1 个密码框，却被判出 **5 个 PASSWORD、221 个字段**。
+
+**根因（两个缺陷叠加）**：
+1. `traverse` 把**任何有 `autofillId` 的节点**都收进字段表。浏览器 WebView 会给整棵 DOM
+   建虚拟节点并分配 `autofillId` ⇒ `<label>Password</label>`、「Username or email address」
+   这类**展示节点**也进来了。
+2. 分类信号里含 **`node.text`**（控件内容/标签文字）⇒ 这些展示节点被判成 PASSWORD / USERNAME。
+   后果：`promoteUsernameField` 的判据是「**没有可见 USERNAME** 才升格」→ 被假 USERNAME 挡住
+   → 真账号框永远 UNKNOWN → `hasUsernameField=false` → Dataset 里只有密码值
+   ⇒ 点账号框没有对应字段值，浏览器/框架就不显示那条候选。
+
+**解法（⚠️ 顺序很重要，两个都要做）**：
+| 改动 | 位置 | 依据 |
+|---|---|---|
+| **节点准入闸**：`htmlInfo.tag != "input"` 一律丢弃（无 htmlInfo 时看 className 的 EditText 家族；两者都判不出才放行；带标准 autofillHints 放行） | 新文件 `app/.../autofill/parser/EditableNodePolicy.kt` | 上游 `ViewNodeExtensions.toAutofillView`：`if (hint == null && !isInput) return null` |
+| **语义信号去掉 `node.text`**（改 `formSignalOf`：`hint` + `idEntry` + `htmlInfo` 属性），并补齐上游的 `autocomplete`/`label`/`hint`/`autofill` 属性键 | `parser/BrowserUrlBars.kt` | 上游启发式**从不读** `node.text`；`SUPPORTED_HTML_ATTRIBUTE_HINTS = name/label/type/hint/autofill/autocomplete` |
+
+⚠️ **只做第 2 条不够**：`<label for="password">` 紧挨密码框，去掉 text 后它变成 `UNKNOWN`，
+照样会被「升格最近 UNKNOWN」选中 ⇒ 必须同时用准入闸把它剔出字段表。
+
+**诊断增强**：`fillRequest` 日志加 `seq=`（字段序列 + `(hid)` 标记）——「真账号框是 UNKNOWN」
+与「被假 USERNAME 占位」只看 `hints={}` 计数分不清，看序列一眼可定。上限 12 项防刷屏。
+
+**回归锁**：`EditableNodePolicyTest` 7 例（web `input` 收、`label/div/a/button/span/form` 拒、
+html tag 优先于 className、原生 EditText 家族收、TextView/Button/FrameLayout 拒、
+两者皆无时放行、标准 hint 放行而不认识的 hint 不放行）。
+
+---
+
+## 52. 填充下拉图标：**40dp 彩色启动图标**在系统面板里又大又花（2026-09-12，第四十三轮）
+
+**症状（用户原话）**：「密码条目在填充时候出现的图标太丑了，别人的密码条目图标肯定是精心设计过的，
+而且很小，不影响视觉」。
+
+**根因**：上一轮「观感改进」把 `R.mipmap.ic_launcher`（**彩色启动图标**）按 **40dp** 放进每一行。
+系统填充面板本就紧凑，彩色大图标非常抢眼。
+
+**解法（对齐上游 `autofill_remote_view.xml` 的真实规格）**：
+- 图标 **20dp 上限**（`maxWidth`/`maxHeight`）+ 右侧 10dp 间距；行内边距 12/6dp；最小高度 48dp；
+- 图标改为**单色矢量**：`ic_autofill_login`（地球）/ `ic_autofill_card`（卡片）/
+  `ic_autofill_identity`（人像）/ `ic_autofill_vaultix`（盾牌+钥匙孔，整表认证行专用）；
+- 上色对齐上游 `Context.iconTint`：`RemoteViews.setInt(R.id.icon, "setColorFilter", …)`，
+  亮 `#44474E` / 暗 `#C4C6CF`（与系统面板正文同族）；品牌标识那行 `tintIcon = false`（同上游 `shouldTintIcon`）。
+
+⚠️ **类别必须一路带到认证回灌**：二次验证（reprompt / 复制 TOTP）后的 Dataset 是同一个条目，
+图标不一致会让人以为「换了条目」。故 `AutofillIntents.create(..., category)` 新增
+`EXTRA_CATEGORY`，回灌侧 `deliveryDataset` 据此还原图标。
+
+---
+
+## 53. 快速解锁「覆盖安装 + 重启后不生效」= 三个独立缺陷叠加（2026-09-12，P0，第四十三轮）
+
+用户原话：「新的构建包覆盖安装后会发现，指纹解锁的按钮在重启打开 APP 的时候不生效。
+按照逻辑说，这个覆盖安装，应该指纹解锁不会被清除的啊」。
+**用户直觉是对的：应用从不因升级/重启清注册**（无 `MY_PACKAGE_REPLACED` / `BOOT_COMPLETED` /
+版本号迁移逻辑）。问题在读侧「撒谎」+ 自毁 + 死锁。
+
+### A（最致命）解锁页卡死在 `submitting` → 按钮在、点了完全没反应
+`UnlockScreen` 的 `onError` 只处理「用户取消」，`ERROR_TIMEOUT`/`ERROR_CANCELED`/
+`ERROR_HW_UNAVAILABLE`/`ERROR_LOCKOUT` 落进来**无人复位** `submitting` ⇒
+指纹按钮 + 主密码按钮双双置灰、转圈不散、后续点击被 `startLocalUnlock` 的守卫直接 return
+⇒ **整页死锁，只能杀进程**。
+**触发放大**：上一轮新增的「进解锁页自动弹一次」若在 Activity 尚未 RESUMED 时发起，
+重启后（生物识别 HAL 未就绪）很容易被系统以非取消错误结束。
+**修**：任何错误都复位 `submitting`；仅「用户/系统取消」安静（`ERROR_CANCELED` 也算取消）；
+其余显示原因；自动弹窗改到 `lifecycle.withResumed { … }` 之后。
+
+### B 一次瞬时失败会**自毁注册**
+`isLocalUnlockUnrecoverable` 把 `UserNotAuthenticatedException`（语义 = **本次未认证**）
+当成「密钥已废」→ `clearBrokenLocalUnlock` **真删用户的快速解锁注册**。
+`Docs/03-密码学与密钥管理.md` 要求相反：「`UserNotAuthenticatedException` → 拉起 BiometricPrompt」。
+**修**：移出「不可恢复」集合（回归锁 `userNotAuthenticated_isRecoverable`）。
+
+### C 「钥匙丢了」被设计成「顺手把锁砸了」
+`LocalUnlockKeyStore.obtainKey()` 在别名缺失时**静默新建 KEK** ⇒
+payload 还在（旧 KEK 密文）→ 新 KEK 下 `Cipher.init`（per-use 认证）不报错 →
+BiometricPrompt 认证**成功** → `unwrap` 抛 `AEADBadTagException` → 走自毁分支删注册。
+另：`keyAvailable` 用 `containsAlias` 当健康检查 —— 平台在密钥**永久失效**时让
+`getKeyMetadata()` 静默返回 null（AOSP `AndroidKeyStoreSpi`），于是「开关在、钥匙废」被当成
+「从未启用」→ 按钮消失；且设置页「启用」是 `?: return@launch` 的**静默 no-op** ⇒ 用户无法自愈。
+**修**：①`loadKey()`（只读，绝不新建）与 `obtainOrCreateKey()`（仅启用路径，且先删失效别名再建）
+拆开；②新增三态 `kekStatus`（LOADABLE / MISSING / INVALIDATED，靠 `getKey` 而非 `containsAlias` 判定）。
+
+### D CI「假覆盖安装」：手动触发的包签不上
+`ci-debug.yml` 原先 `if: github.event_name == 'push'` 才解码固定密钥 ⇒
+**`workflow_dispatch` 出的包是 runner 现生成的一次性 debug key 签的**（每台 runner 全新），
+盖不上 preview 包 ⇒ 只能卸载重装 ⇒ **数据 + AndroidKeyStore 一起没**，
+表现恰是「指纹解锁被清除」。**修**：改 `event_name != 'pull_request'`；
+构建步骤按磁盘上是否存在 `release.jks` 决定是否注入签名参数（`release.yml` 本来就无此闸门，无需改）。
+
+**真机排障要点（下一步若仍复现）**：应用在快速解锁链路上**没有任何日志**，
+但平台会打 `AndroidKeyStoreSpi: Could not get key metadata from Keystore.`
+⇒ `adb logcat -s AndroidKeyStoreSpi keystore2 BiometricPrompt Fingerprint` 边点指纹边看；
+再用 `run-as` 读 `files/datastore/vaultix_settings.preferences_pb`（开关）与
+`shared_prefs/vaultix_secure.xml`（payload）区分「开关丢」/「payload 丢」/「KEK 废」。
+
+---
+
+## 54. 填充辅助（Fill Assist）缺独立开关（2026-09-12，第四十三轮）
+
+**症状（用户原话）**：「它在 bitwarden 上有独立的按钮，然而我这个 APP 上好像没有独立的按钮打开或者关闭」。
+
+**根因**：搬运时只落了机制（规则表拉取 + 匹配），**没有落设置项** —— 恒定启用、无 UI 开关。
+
+**解法**：`VaultixPreferences.fillAssistEnabled`（键 `fill_assist_enabled`，默认开）+ 设置页
+「填充行为」新增一行开关；文案取上游官方中文（`values-zh-rCN`）：
+`turn_on_fill_assist` → **启用填充辅助**、
+`fill_assist_improves_autofill_accuracy_on_supported_sites` → 「填充辅助通过使用站点特定的规则，提高在受支持站点上的自动填充的准确性」。
+
+⚠️ **不要照搬上游的 feature flag 双重门控**：bitwarden.com 上 `fill-assist-targeting-rules` 为 `false`，
+自建 Vaultwarden 通常也不返回该字段 —— 照搬会让功能**永远关着**（那正是「上游有按钮、我们没有」的另一面）。
+关闭后**完全不读规则表**、也不再做 6 小时节流刷新。
+
+---
+
+## 55. `./gradlew` 在本机失效 + 本机 Gradle 发行版直调（2026-09-12 复核）
+
+`./gradlew` 报 `ClassNotFoundException: org.gradle.wrapper.GradleWrapperMain`（jar 完好）。
+本机直接调用磁盘发行版即可（PowerShell）：
+```powershell
+$env:JAVA_HOME="C:\Program Files\Microsoft\jdk-17.0.20.8-hotspot\"
+& "C:\Users\chani\.gradle\wrapper\dists\gradle-9.5.1-bin\iq79hdu3mqx29lgffhp8bfmx\gradle-9.5.1\bin\gradle.bat" `
+  --offline :app:compileFullDebugKotlin :app:testFullDebugUnitTest :data:repository:testDebugUnitTest detekt
+```
+⚠️ app 模块有 `full` / `offline` 两个 flavor，`compileDebugKotlin` 有歧义，必须写
+`:app:compileFullDebugKotlin`。
+⚠️ **`onFillRequest` 不是挂起函数**：在里面直接 `prefs.xxx.first()` 会编译失败
+（`Suspend function 'first' can only be called from a coroutine`）——读取偏好必须放进
+`scope.launch { }` 内（本轮踩过，已在 `VaultixAutofillService` 内注明）。

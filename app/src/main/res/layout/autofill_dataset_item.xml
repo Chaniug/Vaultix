@@ -3,33 +3,41 @@
   自动填充下拉建议的条目视图（RemoteViews：由系统渲染在填充面板里，
   只能使用 RemoteViews 支持的控件与属性）。
 
-  2026-09-12 观感改进（对齐 Bitwarden 的 presentation 形态）：
-  - 左侧补 40dp 图标位（应用图标），条目不再是一行孤零零的文字；
-  - 统一最小高度 56dp 与内边距，避免在面板里显得又窄又挤；
-  - 文本区改为 weight=1 的纵向容器，长条目名 / 账号能正确省略。
+  2026-09-12（第二轮）观感修正 —— **图标回到「小而克制」**：
+  上一版把 40dp 的**彩色启动图标**塞进每一行，在系统填充面板里又大又抢眼（用户反馈
+  「图标太丑、别人家的都是精心设计过的小图标」）。现对齐 Bitwarden
+  `autofill_remote_view.xml` 的实际规格：
+  - 图标 **20dp 上限**（`maxWidth`/`maxHeight`）+ 右侧 10dp 间距，且**是单色矢量**，
+    由 `AutofillDatasets.presentation` 用 `setColorFilter` 上系统前景色；
+  - 行内边距收到 12/6dp、最小高度 48dp —— 面板条目本来就该紧凑，
+    56dp 的「大卡片」在系统下拉里会显得格外笨重；
+  - 文本沿用系统主题前景色（`?android:attr/textColorPrimary/Secondary`），
+    明暗模式由系统面板自己决定。
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:minHeight="56dp"
+    android:minHeight="48dp"
     android:gravity="center_vertical"
     android:orientation="horizontal"
-    android:paddingStart="16dp"
-    android:paddingTop="10dp"
-    android:paddingEnd="16dp"
-    android:paddingBottom="10dp">
+    android:paddingStart="12dp"
+    android:paddingTop="6dp"
+    android:paddingEnd="12dp"
+    android:paddingBottom="6dp">
 
     <ImageView
         android:id="@+id/autofill_item_icon"
-        android:layout_width="40dp"
-        android:layout_height="40dp"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginEnd="10dp"
+        android:adjustViewBounds="true"
         android:contentDescription="@null"
-        android:scaleType="centerInside" />
+        android:maxWidth="20dp"
+        android:maxHeight="20dp" />
 
     <LinearLayout
         android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:layout_marginStart="14dp"
         android:layout_weight="1"
         android:orientation="vertical">
 

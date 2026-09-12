@@ -17,7 +17,7 @@ import javax.crypto.AEADBadTagException
  * 指纹都失败，且无法自愈。
  *
  * 覆盖三层：
- * 1. 四类失效异常**直接**抛出 → 必须识别；
+ * 1. 三类失效异常**直接**抛出 → 必须识别；
  * 2. 被 `ProviderException` / `UnrecoverableKeyException` **包装**后抛出
  *    → 必须穿透异常链识别（这是最容易漏判的一层）；
  * 3. 无关异常（网络、NPE 等）→ **不得**误判，否则会把可用状态错误清掉。
@@ -37,9 +37,21 @@ class LocalUnlockFailureTest {
         assertTrue(UnrecoverableKeyException("stale handle").isLocalUnlockUnrecoverable())
     }
 
+    /**
+     * ⚠️ **回归锁（2026-09-12 行为反转）**：`UserNotAuthenticatedException`
+     * 的语义是「**本次**没有拿到认证」，**不是**「密钥已废」——
+     * `Docs/03-密码学与密钥管理.md` 对它的要求是「拉起 BiometricPrompt 重新认证」。
+     *
+     * 旧实现把它列入「不可恢复」，于是一次瞬时失败（重启后生物识别 HAL 未就绪、
+     * 认证会话尚未建立…）就会触发调用方 `clearBrokenLocalUnlock`，
+     * **把用户的快速解锁注册真删掉**——正是「覆盖安装/重启后指纹解锁被清除」的成因之一。
+     */
     @Test
-    fun userNotAuthenticated_isUnrecoverable() {
-        assertTrue(UserNotAuthenticatedException().isLocalUnlockUnrecoverable())
+    fun userNotAuthenticated_isRecoverable() {
+        assertFalse(
+            "UserNotAuthenticatedException 只是本次未认证，重试即可，不得据此清掉用户注册",
+            UserNotAuthenticatedException().isLocalUnlockUnrecoverable(),
+        )
     }
 
     @Test

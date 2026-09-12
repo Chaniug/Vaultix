@@ -39,10 +39,18 @@ package io.vaultix.data.repository
  *   —— 用户新增/删除指纹后 KEK 被永久失效（`setInvalidatedByBiometricEnrollment(true)` 的默认后果）
  * - [java.security.UnrecoverableKeyException]
  *   —— 密钥不可恢复（陈旧句柄 / Keystore 被重置 / 设备锁屏被清除）
- * - [android.security.keystore.UserNotAuthenticatedException]
- *   —— 认证会话失效（超时或认证被撤销）
  * - [javax.crypto.AEADBadTagException]
  *   —— 密文校验失败（payload 与当前 KEK 不匹配，通常意味着 KEK 已被替换）
+ *
+ * ## ⚠️ 刻意**不**列入的异常：`UserNotAuthenticatedException`
+ *
+ * 该异常的语义是「**这次操作没有拿到认证**」（认证会话超时 / 认证被撤销），
+ * **不是**「密钥已废」—— 设计文档 `Docs/03-密码学与密钥管理.md` 对它的要求是
+ * 「**拉起 BiometricPrompt**」重新认证。
+ * 旧实现把它与「永久失效」并列，后果是：一次瞬时失败（例如重启后生物识别 HAL
+ * 尚未就绪、认证会话还没来得及建立）就会走进调用方的清理分支，
+ * **把用户的快速解锁注册真删掉** —— 正好是用户反馈的「覆盖安装/重启后指纹解锁被清除」。
+ * 现在这类失败只报错、不清理，重试即可恢复。
  *
  * @return true 表示该失败**不会因重试而好转**，调用方应清理快速解锁状态并回退主密码。
  */
@@ -53,7 +61,6 @@ internal fun Throwable.isLocalUnlockUnrecoverable(): Boolean {
         when (cursor) {
             is android.security.keystore.KeyPermanentlyInvalidatedException,
             is java.security.UnrecoverableKeyException,
-            is android.security.keystore.UserNotAuthenticatedException,
             is javax.crypto.AEADBadTagException,
             -> return true
         }

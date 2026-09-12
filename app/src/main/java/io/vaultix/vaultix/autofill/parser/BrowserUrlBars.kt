@@ -41,8 +41,49 @@ object BrowserUrlBars {
     /** 末段（TLD）必须是 ≥2 位字母：`v2.0`、`127.0.0.1` 之类直接排除。 */
     private val TLD_PATTERN = Regex("^[a-z]{2,}$")
 
-    /** 参与拼文本信号的 HTML 属性键（WebView 表单往往只在这里暴露语义）。 */
-    private val HTML_SIGNAL_KEYS = setOf("type", "name", "id", "placeholder", "aria-label")
+    /**
+     * 参与拼「表单信号」的 HTML 属性键（对齐 Bitwarden `SUPPORTED_HTML_ATTRIBUTE_HINTS`
+     * = name / label / type / hint / autofill / autocomplete，按**子串**匹配属性名，
+     * 故 `aria-label`、`*-autofill-hints` 一类也能吃到）。
+     *
+     * ⚠️ `autocomplete` 是浏览器场景最关键的一路信号：站点用
+     * `<input autocomplete="username">` / `"email"` / `"current-password"` 明确声明字段语义，
+     * 上游正是靠它把账号框直接判成 Username（不依赖「紧邻密码框」的兜底升格）。
+     */
+    private val HTML_SIGNAL_KEY_TERMS = listOf(
+        "name",
+        "label",
+        "type",
+        "hint",
+        "autofill",
+        "autocomplete",
+        "placeholder",
+    )
+
+    /**
+     * 拼出该节点的**表单信号**（对齐 Bitwarden 的信号来源：`hint` → `idEntry` → `htmlInfo`）。
+     *
+     * ⚠️ **刻意不含 `node.text`**（2026-09-12 真机实证后收紧）：`text` 是控件里的
+     * **内容 / 标签文字**，浏览器 WebView 会把整棵 DOM 建成可填节点，`<label>Password</label>`、
+     * 「Forgot password?」这类展示文字全在 `text` 里 —— 拿它做语义判定会让这些节点被判成
+     * PASSWORD / USERNAME，进而挡住真正的账号框（详见 [isEditableNode] 的 KDoc）。
+     * 上游 Bitwarden 的启发式**从不读** `node.text`，只看 `idEntry` / `hint` / `htmlInfo`。
+     *
+     * `text` 仍然作为**字段当前值**被解析（`ParsedField.value`，保存流程要用），
+     * 只是不参与「这是什么字段」的判定 —— 两件事必须分开。
+     */
+    fun formSignalOf(node: ViewNode): String? {
+        // htmlInfo.attributes 是 android.util.Pair（Java 类型，不可解构）
+        val html = node.htmlInfo?.attributes
+            ?.filter { attribute ->
+                HTML_SIGNAL_KEY_TERMS.any { it in attribute.first.lowercase(Locale.ROOT) }
+            }
+            ?.joinToString(" ") { it.second }
+        return listOfNotNull(node.hint, node.idEntry, html)
+            .joinToString(" ")
+            .trim()
+            .ifEmpty { null }
+    }
 
     /**
      * 浏览器包名 → 地址栏控件资源 id（`ViewNode.idEntry`）。
@@ -126,22 +167,6 @@ object BrowserUrlBars {
         if (labels.size < 2) return null
         if (!TLD_PATTERN.matches(labels.last())) return null
         return host
-    }
-
-    /**
-     * 拼出该节点的文本信号（对齐 Bitwarden 的四级信号：text → hint → idEntry → htmlInfo）：
-     * 浏览器表单里 `type=password` / `name=username` 常常只存在于 htmlInfo 或资源 id，
-     * 少了这两路就识别不出账号密码框。
-     */
-    fun textSignalOf(node: ViewNode): String? {
-        // htmlInfo.attributes 是 android.util.Pair（Java 类型，不可解构）
-        val html = node.htmlInfo?.attributes
-            ?.filter { it.first.lowercase(Locale.ROOT) in HTML_SIGNAL_KEYS }
-            ?.joinToString(" ") { it.second }
-        return listOfNotNull(node.text?.toString(), node.hint, node.idEntry, html)
-            .joinToString(" ")
-            .trim()
-            .ifEmpty { null }
     }
 
     /** Last-resort：广度优先扫描结构文本，取第一个形似 URL 的域名（深度 ≤ [MAX_SCAN_DEPTH]）。 */

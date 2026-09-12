@@ -130,10 +130,11 @@ object AssistStructureParser {
         if (id != null && !isUrlBar) {
             val hints = node.autofillHints?.map { it.toString() }
             val inputType = node.inputType
-            // 文本信号含 WebView 的 htmlInfo 属性：浏览器表单常只在这里暴露
-            // type=password / name=username，漏了就识别不出账号密码框。
-            val text = BrowserUrlBars.textSignalOf(node)
-            val classified = classifyNode(node, hints, inputType, text, hostRules)
+            // 语义信号来自**表单属性**（hint / idEntry / htmlInfo），刻意不含 `text`：
+            // 浏览器把整棵 DOM 建成可填节点，`<label>Password</label>` 这类展示文字会让
+            // 假字段挤掉真字段（详见 [isEditableNode]）。`text` 只作为字段值。
+            val signal = BrowserUrlBars.formSignalOf(node)
+            val classified = classifyNode(node, hints, inputType, signal, hostRules)
             // 规则覆盖本主机时 classified 为 null 表示「该节点不被规则承认」→ **不收进字段表**
             // （对齐上游：被规则覆盖的分区以规则为准，不做启发式兜底）。
             if (classified != null) {
@@ -164,19 +165,27 @@ object AssistStructureParser {
      * - 主机**有**规则（[hostRules] 非空）：以规则为准，命中即视为**强信号**
      *   （[HintClassifier.SignalStrength.HIGH]）——规则是人工核对过的选择器，
      *   比任何启发式都可信；未命中返回 null（调用方丢弃该节点）。
-     * - 主机无规则：沿用 [HintClassifier] 启发式，行为与引入填充辅助之前完全一致。
+     * - 主机无规则：先过 [isEditableNode] 准入闸（对齐 Bitwarden `toAutofillView`：
+     *   不是输入控件、又没有任何标准 hint 的节点**直接丢弃**），再走 [HintClassifier]。
+     *
+     * ⚠️ 准入闸是 2026-09-12 Edge 真机问题的根因修复：浏览器 WebView 会把整棵 DOM
+     * 建成带 `autofillId` 的节点（实测一个页面 221 个），`<label>Password</label>` 这类
+     * 展示节点被启发式判成 PASSWORD / USERNAME 后，会**占掉**真正的账号框语义位，
+     * 使 `promoteUsernameField` 不再升格 → 账号框既不出候选也填不进去。
      */
     private fun classifyNode(
         node: ViewNode,
         hints: List<String>?,
         inputType: Int,
-        text: String?,
+        signal: String?,
         hostRules: List<HostRule>,
-    ): HintClassifier.Classified? = if (hostRules.isEmpty()) {
-        HintClassifier.classify(hints, inputType, text)
-    } else {
-        FillAssistMatcher.matchHint(node.htmlInfo, hostRules)
-            ?.let { hint -> HintClassifier.Classified(hint, HintClassifier.SignalStrength.HIGH) }
+    ): HintClassifier.Classified? {
+        if (hostRules.isNotEmpty()) {
+            return FillAssistMatcher.matchHint(node.htmlInfo, hostRules)
+                ?.let { hint -> HintClassifier.Classified(hint, HintClassifier.SignalStrength.HIGH) }
+        }
+        if (!isEditableNode(node.htmlInfo?.tag, node.className, hints)) return null
+        return HintClassifier.classify(hints, inputType, signal)
     }
 
     /** 结构里第一个非空 webDomain（即页面主机）；没有则 null。 */

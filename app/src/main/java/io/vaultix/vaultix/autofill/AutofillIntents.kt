@@ -15,6 +15,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.view.autofill.AutofillId
+import io.vaultix.vaultix.autofill.model.FillCategory
 
 /** Service ↔ AutofillActivity 的 Intent 约定。 */
 object AutofillIntents {
@@ -46,6 +47,15 @@ object AutofillIntents {
     private const val EXTRA_VALUES = "vaultix.autofill.values"
 
     /**
+     * 建议类别（[FillCategory] 的 `name`，可空）。
+     *
+     * 用途仅一个：认证回灌时（[MODE_REPROMPT] / [MODE_COPY_TOTP]）重建 Dataset 要还原
+     * **条目图标**（登录 / 银行卡 / 身份各不相同）。不回传类别就只能一律给登录图标，
+     * 卡片条目的二次验证行会顶着地球图标，观感不一致。
+     */
+    private const val EXTRA_CATEGORY = "vaultix.autofill.category"
+
+    /**
      * MainActivity 由此开启时：解锁完成即自动 finish 返回原 App（AutofillActivity 的
      * MODE_UNLOCK 解锁桥在用）。用户回到浏览器再点一次即秒填，不再被晾在 Vaultix 主界面。
      */
@@ -69,6 +79,7 @@ object AutofillIntents {
         datasetId: String? = null,
         entries: List<Pair<AutofillId, String>> = emptyList(),
         totpSecret: String? = null,
+        category: FillCategory? = null,
     ): Intent = Intent(context, AutofillActivity::class.java)
         .setAction(Intent.ACTION_MAIN)
         .putExtra(EXTRA_MODE, mode)
@@ -76,6 +87,7 @@ object AutofillIntents {
         .putExtra(EXTRA_TITLE, title)
         .putExtra(EXTRA_SUBTITLE, subtitle)
         .putExtra(EXTRA_DATASET_ID, datasetId)
+        .putExtra(EXTRA_CATEGORY, category?.name)
         .putParcelableArrayListExtra(EXTRA_IDS, ArrayList(entries.map { it.first }))
         .putStringArrayListExtra(EXTRA_VALUES, ArrayList(entries.map { it.second }))
 
@@ -92,6 +104,12 @@ object AutofillIntents {
     fun titleOf(intent: Intent): String = intent.getStringExtra(EXTRA_TITLE).orEmpty()
     fun subtitleOf(intent: Intent): String = intent.getStringExtra(EXTRA_SUBTITLE).orEmpty()
     fun datasetIdOf(intent: Intent): String? = intent.getStringExtra(EXTRA_DATASET_ID)
+
+    /** 建议类别（未知 / 未携带 → null，由调用方决定默认图标）。 */
+    fun categoryOf(intent: Intent): FillCategory? {
+        val raw = intent.getStringExtra(EXTRA_CATEGORY) ?: return null
+        return FillCategory.entries.firstOrNull { it.name == raw }
+    }
 
     /** 待自动复制的 TOTP 密钥（仅 [MODE_COPY_TOTP] 携带）。 */
     fun totpSecretOf(intent: Intent): String? = intent.getStringExtra(EXTRA_TOTP)

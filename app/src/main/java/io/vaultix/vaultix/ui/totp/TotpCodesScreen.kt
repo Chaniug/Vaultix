@@ -46,8 +46,14 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -315,7 +321,9 @@ private fun TotpRow(
     val code = TotpGenerator.generate(entry.toConfig(), nowSeconds)
     val isHotp = entry.type == OtpType.HOTP
     val remaining = TotpGenerator.remainingSeconds(entry.period, nowSeconds)
-    val progress = 1f - (remaining.toFloat() / entry.period)
+    // 数据层是**秒级**（每秒一次重组），进度条若直接用阶梯值会一秒一跳；
+    // 平滑视觉在绘制层补齐（对齐 Bastion `rememberTotpSmoothProgress`）。
+    val progress = rememberTotpSmoothProgress(1f - (remaining.toFloat() / entry.period))
     val copiedMessage = stringResource(R.string.copy_totp)
     val scope = rememberCoroutineScope()
 
@@ -842,3 +850,34 @@ private fun LoginPickerDialog(
 }
 
 private val ALGORITHMS = listOf("SHA1", "SHA256", "SHA512")
+
+/**
+ * 验证码倒计时的**平滑进度**（移植自 Bastion `rememberTotpSmoothProgress`，GPL-3.0，
+ * Copyright 2025 JoyinJoester）。
+ *
+ * 背景：Vaultix 的 TOTP 数据源是**秒级**的（每秒一次重组），进度条直接用阶梯值会一秒一跳；
+ * Bastion 为此专门做过性能修订 —— 数据层从 50ms 高频发射改回秒级（50ms 会让整个列表
+ * 每秒 20×N 次重组，是长列表掉帧主因），**平滑视觉改由绘制层动画补齐**：
+ * - 常规推进：对秒级阶梯值施加 1s 线性动画，视觉上等价于匀速推进；
+ * - 周期翻转：目标值从 ~1 回落到 ~0 时直接 `snap()`，避免动画倒着卷回去。
+ */
+@Composable
+private fun rememberTotpSmoothProgress(target: Float): Float {
+    val clamped = target.coerceIn(0f, 1f)
+    var lastTarget by remember { mutableFloatStateOf(clamped) }
+    val wrapDetected = clamped < lastTarget - 0.5f
+    val animated by animateFloatAsState(
+        targetValue = clamped,
+        animationSpec = if (wrapDetected) {
+            snap()
+        } else {
+            tween(durationMillis = TOTP_PROGRESS_ANIM_MS, easing = LinearEasing)
+        },
+        label = "totp_smooth_progress",
+    )
+    SideEffect { lastTarget = clamped }
+    return animated
+}
+
+/** 平滑动画时长：与秒级数据源同周期（1s），视觉上恰好匀速。 */
+private const val TOTP_PROGRESS_ANIM_MS = 1_000

@@ -13,6 +13,7 @@ package io.vaultix.vaultix.autofill.engine
 
 import android.app.PendingIntent
 import android.content.Context
+import android.content.res.Configuration
 import android.os.Build
 import android.service.autofill.Dataset
 import android.service.autofill.FillResponse
@@ -24,11 +25,21 @@ import android.widget.RemoteViews
 import androidx.annotation.DrawableRes
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.autofill.model.FieldHint
+import io.vaultix.vaultix.autofill.model.FillCategory
 import io.vaultix.vaultix.autofill.model.FillPlan
 import io.vaultix.vaultix.autofill.model.FillSuggestion
 import io.vaultix.vaultix.autofill.match.AutofillFillTargetPolicy
 import io.vaultix.vaultix.autofill.match.UriMatcher
 import io.vaultix.vaultix.autofill.model.ParsedStructure
+
+/**
+ * 图标前景色（亮 / 暗），对齐 Bitwarden `Context.iconTint` ——
+ * 上游给自己的图标**显式上色**（取自身色板的 icon.primary），而不是把颜色留给系统面板。
+ * 这里取 Material3 基线色板的 `onSurfaceVariant`：亮色 #44474E / 暗色 #C4C6CF，
+ * 与系统面板正文同族，既不会在浅色面板里糊掉，也不会在深色面板里刺眼。
+ */
+private const val LIGHT_ICON_TINT: Long = 0xFF44474EL
+private const val DARK_ICON_TINT: Long = 0xFFC4C6CFL
 
 /** 自动填充面板条目的构造与展示（RemoteViews，由系统渲染）。 */
 object AutofillDatasets {
@@ -36,19 +47,46 @@ object AutofillDatasets {
     /**
      * 下拉 / 内联面板里的单条建议视图。
      *
-     * 2026-09-12 观感改进（对齐 Bitwarden 的 presentation）：左侧补应用图标，
-     * 布局同时把最小高度 / 内边距调到 56dp / 16dp —— 此前只有两行文字，在系统面板里
-     * 显得又窄又空。
+     * 观感规格对齐 Bitwarden `autofill_remote_view.xml`（2026-09-12 第二轮修正）：
+     * **左侧 20dp 单色小图标** + 标题 / 副标题两行。此前的 40dp 彩色启动图标在系统
+     * 填充面板里又大又花（用户反馈「图标太丑」），现已换成语义化单色矢量：
+     * 登录 = 地球、银行卡 = 卡片、身份 = 人像、整表认证行 = [R.drawable.ic_autofill_vaultix]。
+     *
+     * @param iconRes 条目标图标；默认登录（见 [iconFor]）。
+     * @param tintIcon 是否用前景色上色。品牌标识（[R.drawable.ic_autofill_vaultix]）传 false，
+     *   否则会被系统面板前景色冲成一块纯色，失去识别度（对齐上游 `shouldTintIcon`）。
      */
     fun presentation(
         context: Context,
         title: String,
         subtitle: String,
-        @DrawableRes iconRes: Int = R.mipmap.ic_launcher,
+        @DrawableRes iconRes: Int = R.drawable.ic_autofill_login,
+        tintIcon: Boolean = true,
     ): RemoteViews = RemoteViews(context.packageName, R.layout.autofill_dataset_item).apply {
         setImageViewResource(R.id.autofill_item_icon, iconRes)
         setTextViewText(R.id.autofill_item_title, title)
         setTextViewText(R.id.autofill_item_subtitle, subtitle)
+        if (tintIcon) {
+            setInt(R.id.autofill_item_icon, "setColorFilter", iconTint(context))
+        }
+    }
+
+    /** 建议类别 → 条目标图标（对齐 Bitwarden `AutofillCipher.iconRes`）。 */
+    @DrawableRes
+    fun iconFor(category: FillCategory): Int = when (category) {
+        FillCategory.LOGIN -> R.drawable.ic_autofill_login
+        FillCategory.CARD -> R.drawable.ic_autofill_card
+        FillCategory.IDENTITY -> R.drawable.ic_autofill_identity
+    }
+
+    /** 亮 / 暗模式下的图标前景色（系统面板的明暗由系统配置决定，不是 App 主题）。 */
+    private fun iconTint(context: Context): Int {
+        val night = context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
+        return if (night == Configuration.UI_MODE_NIGHT_YES) {
+            DARK_ICON_TINT.toInt()
+        } else {
+            LIGHT_ICON_TINT.toInt()
+        }
     }
 
     /**
@@ -62,9 +100,10 @@ object AutofillDatasets {
         subtitle: String,
         datasetId: String? = null,
         authIntent: PendingIntent? = null,
+        @DrawableRes iconRes: Int = R.drawable.ic_autofill_login,
     ): Dataset? {
         if (entries.isEmpty()) return null
-        val builder = datasetBuilder(presentation(context, title, subtitle))
+        val builder = datasetBuilder(presentation(context, title, subtitle, iconRes))
         entries.forEach { (id, value) -> builder.setValue(id, AutofillValue.forText(value)) }
         datasetId?.let { builder.setId(it) }
         // 框架要求 IntentSender（Dataset 级认证）
@@ -155,7 +194,15 @@ object AutofillDatasets {
         saveInfo: SaveInfo? = null,
     ): FillResponse? {
         if (ids.isEmpty()) return null
-        val presentation = presentation(context, title, subtitle)
+        // 整表认证行 = Vaultix 自身入口（解锁 / 搜索）→ 用品牌盾牌，且**不上色**
+        //（对齐 Bitwarden 该处用 logo_bitwarden_icon + shouldTintIcon = false）。
+        val presentation = presentation(
+            context = context,
+            title = title,
+            subtitle = subtitle,
+            iconRes = R.drawable.ic_autofill_vaultix,
+            tintIcon = false,
+        )
         val builder = FillResponse.Builder()
         saveInfo?.let { builder.setSaveInfo(it) }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {

@@ -31,6 +31,7 @@ import io.vaultix.vaultix.autofill.engine.AutofillCredentialMapper
 import io.vaultix.vaultix.autofill.engine.AutofillDatasets
 import io.vaultix.vaultix.autofill.engine.FillPlanner
 import io.vaultix.vaultix.autofill.fillassist.FillAssistRepository
+import io.vaultix.vaultix.autofill.fillassist.FillAssistRules
 import io.vaultix.vaultix.autofill.match.AutofillFillTargetPolicy
 import io.vaultix.vaultix.autofill.match.AutofillRequestContextPolicy
 import io.vaultix.vaultix.autofill.match.BitwardenLikeAutofillMatcher
@@ -93,25 +94,44 @@ class VaultixAutofillService : AutofillService() {
             callback.onSuccess(null)
             return
         }
-        // 填充辅助：按站点选择器精确识别字段（读内存/磁盘缓存，廉价）；联网刷新在下面异步做。
-        val parsed = AssistStructureParser.parse(structure, fillAssistRepository.currentRules())
-        // 诊断（仅元数据）：浏览器填充静默失效时靠它定位「是没解析到字段，还是没匹配到条目」；
-        // `targets=0` 表示页面上没有值得填充的字段（搜索框 / 昵称框 …）→ 本次有意不响应。
-        AutofillLogger.d(
-            "fillRequest pkg=${parsed.packageName} webDomain=${parsed.webDomain} " +
-                "fallback=${parsed.fallbackWebDomain} webView=${parsed.webView} " +
-                "fields=${parsed.fields.size} hints=${parsed.fields.groupingBy { it.hint }.eachCount()} " +
-                "targets=${AutofillFillTargetPolicy.fillTargets(parsed).size} " +
-                "user=${parsed.usernameId != null} pass=${parsed.passwordId != null}",
-        )
-        // 对齐 Bitwarden blocked URIs：系统界面 / 设置 / 本应用自身不提供填充。
-        if (AutofillRequestContextPolicy.isBlockedPackage(parsed.packageName, packageName)) {
-            callback.onSuccess(null)
-            return
-        }
         val job = scope.launch {
+            // 填充辅助开关（设置 → 自动填充 → 填充行为）。关掉后**完全不读规则表**：
+            // 识别退回纯启发式，行为与搬运 Fill Assist 之前一致。
+            // 上游同样以 `settingsRepository.isFillAssistEnabled` 门控
+            // （`AutofillParserImpl` 里 `isFillAssistEnabled` 为假就直接走启发式分支）。
+            //
+            // ⚠️ 开关是偏好流，只能挂起读取 —— 故整段解析都放在协程里（`onFillRequest`
+            // 本身不是挂起函数，同文件曾因此在编译期报「suspend 只能在协程里调用」）。
+            val fillAssistEnabled = runCatching { prefs.fillAssistEnabled.first() }.getOrDefault(true)
+            // 填充辅助：按站点选择器精确识别字段（读内存/磁盘缓存，廉价）。
+            val parsed = AssistStructureParser.parse(
+                structure = structure,
+                fillAssistRules = if (fillAssistEnabled) {
+                    fillAssistRepository.currentRules()
+                } else {
+                    FillAssistRules.EMPTY
+                },
+            )
+            // 诊断（仅元数据）：浏览器填充静默失效时靠它定位「是没解析到字段，还是没匹配到条目」；
+            // `targets=0` 表示页面上没有值得填充的字段（搜索框 / 昵称框 …）→ 本次有意不响应。
+            // `seq=` 是**字段序列**（语义+可见性），用于定位「账号框为什么没被认成 USERNAME」
+            // —— 只看计数分不清「真账号框是 UNKNOWN」还是「被假 USERNAME 占了位」。
+            AutofillLogger.d(
+                "fillRequest pkg=${parsed.packageName} webDomain=${parsed.webDomain} " +
+                    "fallback=${parsed.fallbackWebDomain} webView=${parsed.webView} " +
+                    "fields=${parsed.fields.size} hints=${parsed.fields.groupingBy { it.hint }.eachCount()} " +
+                    "targets=${AutofillFillTargetPolicy.fillTargets(parsed).size} " +
+                    "user=${parsed.usernameId != null} pass=${parsed.passwordId != null} " +
+                    "seq=${fieldSequence(parsed)}",
+            )
+            // 对齐 Bitwarden blocked URIs：系统界面 / 设置 / 本应用自身不提供填充。
+            if (AutofillRequestContextPolicy.isBlockedPackage(parsed.packageName, packageName)) {
+                withContext(Dispatchers.Main) { callback.onSuccess(null) }
+                return@launch
+            }
             // 规则表刷新（6 小时节流、失败静默）：只影响**后续**填充，绝不阻塞本次。
-            runCatching { fillAssistRepository.refreshIfStale() }
+            // 开关关闭时不刷新 —— 省掉无意义的联网与磁盘写。
+            if (fillAssistEnabled) runCatching { fillAssistRepository.refreshIfStale() }
             val response = runCatching { buildResponse(parsed) }.getOrNull()
             withContext(Dispatchers.Main) {
                 if (!cancellationSignal.isCanceled) callback.onSuccess(response)
@@ -328,6 +348,9 @@ class VaultixAutofillService : AutofillService() {
             subtitle = suggestion.subtitle,
             datasetId = suggestion.id,
             authIntent = authIntent,
+            // 图标随条目类别（登录 = 地球 / 银行卡 = 卡片 / 身份 = 人像），
+            // 对齐 Bitwarden `AutofillCipher.iconRes` —— 面板里一行一图标才分得清类型。
+            iconRes = AutofillDatasets.iconFor(suggestion.category),
         )
     }
 
@@ -343,6 +366,7 @@ class VaultixAutofillService : AutofillService() {
             subtitle = suggestion.subtitle,
             datasetId = suggestion.id,
             entries = entries,
+            category = suggestion.category,
         ),
         requestCode = suggestion.id.hashCode(),
     )
@@ -360,6 +384,7 @@ class VaultixAutofillService : AutofillService() {
             datasetId = suggestion.id,
             entries = entries,
             totpSecret = suggestion.totpSecret,
+            category = suggestion.category,
         ),
         requestCode = suggestion.id.hashCode(),
     )
@@ -369,6 +394,17 @@ class VaultixAutofillService : AutofillService() {
         val config = OtpUriParser.parse(raw) ?: return null
         TotpGenerator.generate(config)
     }.getOrNull()
+
+    /**
+     * 字段序列诊断串：`USERNAME,UNKNOWN(hid),PASSWORD,…`（最多 [LOG_FIELD_SEQ_LIMIT] 项）。
+     *
+     * 为什么值得单独打一行：账号框填不进去时，有两种完全不同的病因 ——
+     * ①真账号框在序列里是 `UNKNOWN`（升格没生效）；②它前面/后面有个假 `USERNAME`
+     * （展示节点被误判）把语义位占了。只看 `hints={}` 计数无法区分，看序列一眼就能定。
+     */
+    private fun fieldSequence(parsed: ParsedStructure): String = parsed.fields
+        .take(LOG_FIELD_SEQ_LIMIT)
+        .joinToString(",") { field -> field.hint.name + if (field.isVisible) "" else "(hid)" }
 
     /** 一次填充请求内汇总的候选集合。 */
     private data class VaultCandidates(
@@ -383,5 +419,8 @@ class VaultixAutofillService : AutofillService() {
 
         /** 下拉面板最多给几条建议（超出转「在 Vaultix 中搜索」，防响应过大被系统丢弃）。 */
         const val MAX_DATASETS = 10
+
+        /** 字段序列诊断串最多打几项（避免长页面把日志刷爆）。 */
+        const val LOG_FIELD_SEQ_LIMIT = 12
     }
 }

@@ -128,7 +128,12 @@ jobs:
       #    恒为空 → 回落 android → keytool 校验必失败 → 每次构建都用一次性密钥（无法覆盖安装）。
       #    现在通过 step env 显式注入，decode 校验与 build 签名使用同一份密码。
       - name: Decode signing keystore
-        if: github.event_name == 'push'
+        # ⚠️ 2026-09-12：原先只在 push 时解码固定密钥 ⇒ **手动 workflow_dispatch 产出的包
+        #    是用 runner 上现生成的一次性 debug key 签的**（每台 runner 全新 ⇒ 每次密钥都不同），
+        #    既盖不上 preview 包、彼此也盖不上 ⇒ 用户只能卸载重装 ⇒ **数据与 AndroidKeyStore
+        #    条目一起消失**（表现就是「覆盖安装后指纹解锁被清除、且重开也开不回来」）。
+        #    PR（含 fork）拿不到 Secret，仍走下面的兜底分支，行为不变。
+        if: github.event_name != 'pull_request'
         shell: bash
         run: |
           set -o pipefail
@@ -178,7 +183,11 @@ jobs:
           # versionName 形如 0.1.0-dev-78db0ed：版本号 + dev 标识 + 短 commit SHA（可直接 git show 定位代码）。
           # 用 GITHUB_SHA 而非 git rev-parse：本 job 是 fetch-depth=1 浅克隆，本地 git 无历史，
           # 而 GITHUB_SHA 由 Actions 注入，不受克隆深度影响。
-          KS_FILE="${{ github.event_name == 'push' && format('{0}/release.jks', github.workspace) || '' }}"
+          # 固定密钥是否可用由**磁盘上是否存在 release.jks** 决定（解码步骤已保证它来自
+          # 仓库 Secret），不再按事件名判断 —— 否则 workflow_dispatch 包会退回一次性密钥、
+          # 无法覆盖安装（数据 + Keystore 全丢）。
+          KS_FILE="$GITHUB_WORKSPACE/release.jks"
+          if [ ! -s "$KS_FILE" ]; then KS_FILE=""; fi
           KS_OPTS=""
           if [ -n "$KS_FILE" ]; then
             # 与 release.yml 完全一致的签名参数：store.password / key.alias / key.password 均复用 Secret
