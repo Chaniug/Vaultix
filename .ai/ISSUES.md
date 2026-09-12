@@ -1338,3 +1338,57 @@ keyfile 形态）。⚠️ 加密路径的测试宁可多断言——读错一�
 `origin`=文件 URI，**无需迁移**）→ 主密码/keyfile 解锁 → `ItemRepositoryImpl` 读路径分流到会话
 （UI/自动填充零改动）→ 可选的 local-unlock KEK 包裹 KDBX 凭据。之后才是阶段 B（写回：
 原子替换 + `.kdbx.bak` 备份 + 保真度登记 + 往返测试）。
+
+---
+
+## 60. 锁/解锁模型规范化（2026-09-12 起，进行中）——**接力必读**
+
+用户实测反馈与要求：
+> 「解锁和锁定一定要简洁高效、稳定安全，不要频繁解锁不要频繁提示解锁；自动锁定设为『从不』后
+> 就不要无端锁库」「主页密码条目上方的锁按钮应该**只锁生物验证那一层，解锁密钥不应该被清除**」
+> 「设置里的『立即锁定』应该改成**退出数据库**（清本地缓存，不动远程）」
+> 「填充时解锁完还要再验证一次，逻辑太稀烂，对齐 Bitwarden」
+
+### ✅ 已查证的事实（别再重复排查）
+1. **`Never` 档位在代码里是被尊重的**：`VaultLockManagerImpl.kt:194` 直接 `return@launch`，
+   定时器路径根本不进；全项目只有三处调 `lockVault`（超时管理器 / 主页锁按钮 / 其内部封装），
+   **没有任何** onStop / 回前台 / 切页偷偷锁库的代码；旧数据 `-1`→`Never` 的迁移也已处理。
+   ⇒ 用户感受到的「无端锁库」= **进程被杀**（荣耀激进清理）+ 此前指纹按钮会消失的回归（已修）。
+   ⇒ 与 Bitwarden 语义一致：**「从不」= 不因超时锁定，≠ 重启不用解锁**（密钥只在内存）。
+2. **「解锁后又要验证一次」的上游做法**：Bitwarden `AutofillCipherProviderImpl` 在登录/卡/身份
+   三处都写着 `Must not require a reprompt` —— **需要二次验证的条目不进填充候选**。
+   我们已按此过滤（FillPlanner），删掉了 dataset 级 MODE_REPROMPT 那条多余路径。
+
+### ✅ 已完成
+- `297b12d`：①`kekStatus` 补 `UNKNOWN` 态（只有真·永久失效才隐藏指纹入口）
+  ②`localUnlockAvailable` 不再一次性读 payload（瞬时 Keystore 异常不再藏按钮）
+  ③FillPlanner 过滤 `requiresReprompt` 条目。
+- `24b5b4f`：`VaultSessionManager` 增**查看层锁**载体
+  （`viewLockedIds / isViewLocked / viewLock / clearViewLock / clearAllViewLocks`，
+  只置内存标记、**不清密钥**；`viewLock` 未解锁时 no-op；KDoc 已写明「界面门禁≠加密门禁」）。
+  ⚠️ 此提交**行为零变化**，判据尚未接线。
+
+### ⬜ 待做（按此顺序，每步独立可验证）
+| 步 | 文件 | 改动 |
+|---|---|---|
+| 1b | `ItemsViewModel.lockNow()` | 改调 `sessions.viewLock(vaultId)`，**不再** `vaultRepository.lockVault` |
+| 1c | `RootNavViewModel` | 判据由「`unlockedIds` 为空」改为「**未解锁 或 viewLocked**」→ 锁查看层停在解锁页且不清栈 |
+| 1d | `UnlockViewModel` / `UnlockScreen` | viewLocked 态走**仅认证**分支：只弹生物认证 → `clearViewLock` → 回主界面；**不碰 KEK、不联网、不显示 2FA/主密码区块** |
+| 2 | `VaultLockManagerImpl` / `AutoLockController` | 超时真锁时一并清 viewLocked 标记；Never 档位保持"绝不因超时锁" |
+| 3 | `SettingsScreen` + `VaultRepository` | 「立即锁定」→ **「退出数据库」**：清会话 + 本地凭据（`authRepository.logout`）+ 缓存条目，**保留库行、不动远程** |
+| 4 | `VaultixAutofillService` + `AutofillActivity` | **解锁即回填**：暂存本次 FillRequest 的字段 id（内存+超时），解锁成功后构造 dataset 经 `EXTRA_AUTHENTICATION_RESULT` 回灌（对齐上游 `AutofillIntentUtils:118`） |
+
+### 后续批次（用户已确认，勿丢）
+- **第 2 批**：顶栏胶囊化（🔍 搜索 + ⋮ 更多＝同步/锁定/回收站）+ **点左上角库名展开/收起分类筛选**
+  （验证码 / 通行密钥 / SSH / 笔记）—— Bastion 的 `ExpressiveTopBar(onTitleClick, titleExpanded)`
+  + `PasswordListTopSection` 是现成参考，我们已移植的 `VaultixExpressiveTopBar` 预留了该槽位。
+- **第 3 批**：**站点图标**（现在整库都是首字母头像 = bug）。上游做法：请求
+  `<服务器>/icons/<域名>/icon.png`（Bitwarden 夹具见 `GlideCookieInterceptorTest`
+  的 `https://vault.bitwarden.com/icons/icon.png`、`SearchUtil` 的 `/icons/www.mockuri.com/icon.png`；
+  Vaultwarden 同端点且有服务端缓存）→ OkHttp + Coil 磁盘缓存 + 失败回退首字母。
+- **第 4 批**：**KDBX 集成**（引擎已完成 `879e7c1`，10/10 测试）：SAF 选文件 → 库行
+  （`vaults.kind=KDBX`、`origin`=文件 URI，**无需迁移**）→ 主密码/keyfile 解锁 →
+  `ItemRepositoryImpl` 读路径分流 → 懒打开（切过去才读盘）+ **切库即锁旧库**（内存只留一把密钥）。
+  另外：**KDBX 4.1 为写入目标**（kotpass 支持），并移植 Bastion
+  `KeePassPasskeyCodec.kt`（484 行）与 `KeePassTotpCodec.kt`（988 行）把**通行密钥与验证码**
+  的多种历史约定解析补全（GPL-3.0 同许可，仓内 `reference/bastion/` 有快照）。
