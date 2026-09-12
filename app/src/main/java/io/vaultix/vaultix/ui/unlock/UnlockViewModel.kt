@@ -41,6 +41,14 @@ class UnlockViewModel @Inject constructor(
 
     data class UiState(
         val vault: VaultSummary? = null,
+        /**
+         * 库列表**已经到达**但解析不出可解锁的库（一个库都没有 / 该库已被移除）。
+         *
+         * 与 `vault == null` 的区别：`vault == null` 也可能是"首帧还没到"（此时要继续
+         * loading）；本值为 true 表示"确认没有可解锁的库"，UI 必须立刻离开解锁页，
+         * 否则就是永久转圈（2026-09-12 修复的启动死锁）。
+         */
+        val noVaultToUnlock: Boolean = false,
         val password: String = "",
         val passwordVisible: Boolean = false,
         val submitting: Boolean = false,
@@ -83,7 +91,14 @@ class UnlockViewModel @Inject constructor(
                 if (vaultId.isBlank()) {
                     vaults.firstOrNull { !it.unlocked }?.let { vaultId = it.id }
                 }
-                _state.update { it.copy(vault = vaults.firstOrNull { v -> v.id == vaultId }) }
+                val target = vaults.firstOrNull { v -> v.id == vaultId }
+                _state.update {
+                    it.copy(
+                        vault = target,
+                        // 首帧未到（vaults 尚未发射）时不会走到这里，故此处可判定为"确认无库"
+                        noVaultToUnlock = target == null,
+                    )
+                }
             }
         }
         viewModelScope.launch {

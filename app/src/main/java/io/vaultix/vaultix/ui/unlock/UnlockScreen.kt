@@ -57,6 +57,13 @@ import androidx.compose.foundation.layout.width
 @Composable
 fun UnlockScreen(
     onUnlocked: () -> Unit,
+    /**
+     * 确认没有可解锁的库时的逃生通道（回库列表 / 回上一层）。
+     *
+     * 没有它，解锁页在"库列表已到达但没有目标库"时只能永远转圈
+     * （[UnlockViewModel.UiState.vault] 永远为 null，且没有任何出口）。
+     */
+    onNoVault: () -> Unit = {},
     viewModel: UnlockViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -105,7 +112,13 @@ fun UnlockScreen(
             verticalArrangement = Arrangement.Center,
         ) {
             if (vault == null) {
-                CircularProgressIndicator()
+                if (state.noVaultToUnlock) {
+                    // 已确认无库可解锁：立刻离开（不要再转圈）
+                    LaunchedEffect(Unit) { onNoVault() }
+                } else {
+                    // 首帧未到：短暂 loading（库列表一到就有结论）
+                    CircularProgressIndicator()
+                }
                 return@Column
             }
             val twoFactor = state.twoFactor

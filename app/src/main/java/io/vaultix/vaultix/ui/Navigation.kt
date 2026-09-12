@@ -10,6 +10,33 @@ import kotlinx.serialization.Serializable
 @Serializable
 data object VaultListRoute
 
+/**
+ * **主界面**（解锁后的落点，Tab 容器：密码 / 验证码 / 卡包 / 设置 + 中央「+」）。
+ *
+ * ⚠️ **不带 `vaultId`**：对齐 Bastion「解锁即进主界面」——库是**筛选状态**
+ * （[io.vaultix.vaultix.session.ActiveVaultStore]），不是导航参数
+ * （依据 Docs/progress/main-shell-migration.md 方案 A4；Bastion `ui/main/`
+ * 目录 grep `vaultId` 零命中已实证）。
+ *
+ * 二级页（[ItemRoute] / [TrashRoute] / [PasskeysRoute] / [AutofillSettingsRoute]）
+ * 仍按原样 push，其中条目类页面继续携带 `vaultId`（条目属于具体库）。
+ */
+@Serializable
+data object MainShellRoute
+
+/**
+ * 启动占位路由（无内容，仅居中 loading）。
+ *
+ * 作为 [io.vaultix.vaultix.ui.VaultixApp] 的 `startDestination`：库列表首帧到达前
+ * 不定论，由 [io.vaultix.vaultix.ui.rootnav.RootNavState] 决定真正的落点
+ * （首次使用 / 解锁 / 主功能图）。
+ *
+ * ⚠️ 不要删：它替 `NavHost` 承担了"首帧状态未知"的语义。若把 `startDestination`
+ * 直接写成某个业务路由，首帧就必须猜状态，猜错会被固化到整个进程生命周期。
+ */
+@Serializable
+data object SplashRoute
+
 @Serializable
 data object AddVaultRoute
 
