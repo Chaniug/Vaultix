@@ -94,6 +94,7 @@ import io.vaultix.vaultix.ui.common.EntryCardIconSpacing
 import io.vaultix.vaultix.ui.common.EntryCardTextSpacing
 import io.vaultix.vaultix.ui.common.ItemFormDialog
 import io.vaultix.vaultix.ui.common.PressAndSwipeToDelete
+import io.vaultix.vaultix.ui.common.SiteIcon
 import io.vaultix.vaultix.ui.common.VaultixExpressiveTopBar
 import io.vaultix.vaultix.ui.common.VaultixSearchTopAppBar
 import io.vaultix.vaultix.ui.common.itemTypeLabelRes
@@ -225,6 +226,7 @@ fun ItemsScreen(
                             collapsedGroups = collapsedGroups,
                             displayMode = cardDisplayMode,
                             showIcon = showIcon,
+                            serverOrigin = state.vault?.origin,
                             onToggleGroup = { key ->
                                 collapsedGroups = if (key in collapsedGroups) {
                                     collapsedGroups - key
@@ -642,6 +644,7 @@ private fun ItemsList(
     collapsedGroups: Set<String>,
     displayMode: ItemsCardDisplayMode,
     showIcon: Boolean,
+    serverOrigin: String?,
     onToggleGroup: (String) -> Unit,
     onOpenItem: (VaultItem) -> Unit,
     onDelete: (VaultItem) -> Unit,
@@ -671,6 +674,7 @@ private fun ItemsList(
                     PressAndSwipeToDelete(onDelete = { onDelete(item) }) {
                         ItemRow(
                             item = item,
+                            serverOrigin = serverOrigin,
                             displayMode = displayMode,
                             showIcon = showIcon,
                             onClick = { onOpenItem(item) },
@@ -885,6 +889,7 @@ private fun GroupHeader(
 @Composable
 private fun ItemRow(
     item: VaultItem,
+    serverOrigin: String?,
     displayMode: ItemsCardDisplayMode,
     showIcon: Boolean,
     onClick: () -> Unit,
@@ -897,19 +902,9 @@ private fun ItemRow(
             modifier = Modifier.fillMaxWidth(),
         ) {
             if (showIcon) {
-                Box(
-                    contentAlignment = Alignment.Center,
-                    modifier = Modifier
-                        .size(EntryCardIconSize)
-                        .background(MaterialTheme.colorScheme.surfaceContainerHigh, CircleShape),
-                ) {
-                    Text(
-                        text = item.title.take(1).uppercase(),
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+                // 站点图标（`<服务器>/icons/<域名>/icon.png`），取不到回退首字母头像。
+                // 此前这里恒为首字母 —— 整库都是字母块，正是用户反馈的「图标是 bug」。
+                SiteIcon(item = item, serverOrigin = serverOrigin)
                 Spacer(Modifier.width(EntryCardIconSpacing))
             }
             Column(

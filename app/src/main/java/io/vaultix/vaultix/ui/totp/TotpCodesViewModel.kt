@@ -90,6 +90,8 @@ class TotpCodesViewModel @Inject constructor(
         val items: List<VaultItem> = emptyList(),
         val query: String = "",
         val saving: Boolean = false,
+        /** 库的服务器地址（图标端点基址；见 [io.vaultix.common.SiteIconUrl]）。 */
+        val serverOrigin: String? = null,
     )
 
     private val _state = MutableStateFlow(UiState())
@@ -100,8 +102,15 @@ class TotpCodesViewModel @Inject constructor(
         routedVaultId?.let(activeVaultStore::select)
         viewModelScope.launch {
             combine(vaultIdState, vaultRepository.observeVaults()) { id, vaults ->
-                vaults.firstOrNull { v -> v.id == id }?.name.orEmpty()
-            }.collect { name -> _state.update { it.copy(vaultName = name) } }
+                vaults.firstOrNull { v -> v.id == id }
+            }.collect { vault ->
+                _state.update {
+                    it.copy(
+                        vaultName = vault?.name.orEmpty(),
+                        serverOrigin = vault?.origin,
+                    )
+                }
+            }
         }
         viewModelScope.launch {
             vaultIdState
@@ -272,6 +281,8 @@ fun VaultItem.toTotpEntry(): TotpEntry? {
         pin = parsed.pin,
         bound = bound,
         boundLoginTitle = if (bound) displayTitle else null,
+        // 站点图标用：条目挂的网站域名（`androidapp://` 之类会被 hostOfItemUri 过滤掉）
+        domain = io.vaultix.common.SiteIconUrl.hostOfItemUris(uris.map { it.uri }),
     )
 }
 
@@ -327,6 +338,13 @@ data class TotpEntry(
     val pin: String = "",
     val bound: Boolean,
     val boundLoginTitle: String?,
+    /**
+     * 站点域名（来自所属条目的网址），供站点图标使用；无网址 / 非网站绑定为 null。
+     *
+     * 与 [TotpCodesViewModel.UiState.serverOrigin]（库的服务器地址）一起拼出
+     * `<服务器>/icons/<域名>/icon.png`，见 [io.vaultix.common.SiteIconUrl]。
+     */
+    val domain: String? = null,
 ) {
     /** 是否为 Steam Guard（type 为 STEAM；保留旧字段便于调用方逐步迁移）。 */
     val steam: Boolean get() = type == OtpType.STEAM

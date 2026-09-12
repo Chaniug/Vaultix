@@ -71,8 +71,10 @@ import io.vaultix.common.TotpGenerator
 import io.vaultix.model.VaultItem
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.EntryCard
+import io.vaultix.vaultix.ui.common.EntryCardIconSpacing
 import io.vaultix.vaultix.ui.common.EntryCardTextSpacing
 import io.vaultix.vaultix.ui.common.PressAndSwipeToDelete
+import io.vaultix.vaultix.ui.common.SiteIconByHost
 import io.vaultix.vaultix.ui.common.VaultixExpressiveTopBar
 import io.vaultix.vaultix.ui.common.VaultixSearchTopAppBar
 import io.vaultix.vaultix.ui.common.rememberImmersiveBarPadding
@@ -208,6 +210,7 @@ fun TotpCodesScreen(
                             TotpRow(
                                 entry = entry,
                                 nowSeconds = nowSeconds,
+                                serverOrigin = state.serverOrigin,
                                 snackbarHostState = snackbarHostState,
                                 onEdit = { editing = entry },
                                 onDelete = { viewModel.deleteTotp(entry) },
@@ -353,6 +356,7 @@ private fun EmptyTotpState(title: String? = null, message: String) {
 private fun TotpRow(
     entry: TotpEntry,
     nowSeconds: Long,
+    serverOrigin: String?,
     snackbarHostState: SnackbarHostState,
     onDelete: () -> Unit,
     onEdit: () -> Unit,
@@ -376,6 +380,14 @@ private fun TotpRow(
     PressAndSwipeToDelete(onDelete = onDelete) {
         EntryCard(onClick = copyNow) {
             Row(verticalAlignment = Alignment.CenterVertically) {
+                // 站点图标（库内服务器地址 + 条目域名），取不到回退首字母 ——
+                // 与密码列表同一套观感（见 [SiteIconByHost]）。
+                SiteIconByHost(
+                    domain = entry.domain,
+                    fallbackText = entry.title,
+                    serverOrigin = serverOrigin,
+                )
+                Spacer(Modifier.width(EntryCardIconSpacing))
                 Text(
                     text = entry.title.ifBlank { stringResource(R.string.totp_screen_title) },
                     style = MaterialTheme.typography.titleMedium,
