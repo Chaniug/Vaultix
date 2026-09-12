@@ -1530,3 +1530,107 @@ Kotlin 块注释**支持嵌套**，那个序列被解析成**注释结束符**�
 
 **判据**：注释里不要出现任何「斜杠 + 星号」的相邻组合（两个方向都算）。
 `grep -n '\*/\|\/\*' <新写的注释>` 是个 5 秒就能做的自检。
+
+---
+
+## 66. 「**存在**锁定的库」被当成「**当前**库锁定」⇒ 浏览器里永远只剩「解锁 Vaultix」，且解不停（2026-09-13，第四十九轮）
+
+**现象**：Edge 打开 github.com，凭据面板只有一行「解锁 Vaultix / 点按即可解锁」；
+点它一闪，再点**还是这一行**（用户原话：「通行秘钥部分反复让人解锁，这个锁也太多了吧」），
+而用户明确「**我本地已经是解锁状态了**」。
+
+**根因（两条独立缺陷叠加，缺一不可）**
+
+1. `VaultixCredentialProviderService.buildGetResponse` 里用
+   `observeVaults().count { !it.unlocked } > 0` 判「要不要给认证动作」，为真时
+   **丢弃全部候选**。这把「**当前**库锁定」偷换成了「**存在**锁定的库」——
+   只要用户有两个库（Bitwarden + KDBX 并存；或 KDBX 被「切库即锁旧库」策略性锁掉），
+   该计数**恒 > 0** ⇒ 候选永远为空。
+2. `EXTRA_CREDENTIAL_FLOW` 这个标记**只写不读**（CP 服务与 trampoline 都往里塞，
+   全仓没有读取方）⇒ 解锁 Activity 分不清「autofill 的解锁」（有 `PendingFillStore`
+   暂存可回灌）与「CP 的解锁」（**没有**暂存）。
+   前者走 `deliverPendingFill()` → `takeValid()` 恒 `null` → `finish()` 不带任何结果；
+   系统重列候选时**判据没变** ⇒ 再次弹解锁 ⇒ **无限解锁环**。
+
+**判据（对齐上游）**：Bitwarden `CredentialProviderProcessorImpl` 只看
+`!userState.activeAccount.isVaultUnlocked`，**根本没有「lockedCount」这个概念**。
+非活跃库锁不锁，与本次请求的候选无关。
+
+**解法**
+1. 删掉 `lockedCount` 分支；锁态只由 `observeUnlockedVaultIds().isEmpty()` 决定。
+2. `AutofillActivity` 读 `EXTRA_CREDENTIAL_FLOW`：CP 流程解锁完 `finish()` 即收工，
+   **不尝试回灌**（那条路注定拿不到暂存）。
+3. `PasskeyGetActivity` / `PasswordGetActivity` 的锁态一律改问**仓储**
+   （`VaultRepository.isVaultUnlocked`，含 KDBX 会话），不再用只认 Bitwarden 的
+   `VaultSessionManager`；也不再把「用户名 + 密码都为空」当成「库锁定」。
+
+**判据**：同一状态被多处判断、且判据还不一致时，症状就是
+「候选列得出来、点进去说锁定」「解锁完还是弹解锁」。
+**锁态只有一个口径：活跃库是否解锁。**
+
+---
+
+## 67. 顶部 / 底部「让位」写在外层容器 padding 上 ⇒ 三个症状同一个根因（2026-09-13）
+
+**现象**（用户一次报三个）：① 筛选 chip 行压在第一条条目上；② 顶栏与底栏「不沉浸」
+（滚动时两片区域都不是透明的）；③ 搜索态出现巨大黑色横幅，且返回手势**直接退回桌面**。
+
+**根因**
+- ①③ 与 ②的顶栏部分：内容顶部让位一律写成
+  `Column(modifier = Modifier.padding(top = barPadding))`（密码 / 验证码 / 卡包 / 设置
+  **四个 Tab 全是这个写法**）。后果三条：列表视口被整体下压 ⇒ 内容永远画不到顶栏区域，
+  「收起后顶栏透明、内容从下方穿过」不成立；不感知筛选行高度 ⇒ chip 压住首条；
+  搜索态 `Scaffold` 已按 `contentWindowInsets` 让过位，外层再叠一次 ⇒ **双重留白** = 黑横幅。
+- ②的底栏部分：底栏走 `Scaffold(bottomBar = ...)`，内容被让出底栏高度 ⇒
+  胶囊周围那圈留白只能露出纯背景，与内容割裂。
+- ③的返回：搜索态**没有 `BackHandler`**，而主界面是**根路由**
+  （`popUpTo(0) { inclusive = true }`，栈里没有上一层）⇒ 系统返回直接结束 Activity。
+
+**解法**：顶部让位一律改到 **`LazyColumn.contentPadding`**（列表）或
+**可滚动的 `Spacer`**（`verticalScroll` 页面），可随动画变化、可叠加，搜索态归零；
+底栏改**叠层悬浮**（`Box { content(); Box(align = BottomCenter) { bottomBar() } }`），
+各页用 `bottomInset`（`rememberBottomDockInset` = 胶囊 86dp + 系统手势条）自己留位；
+搜索态加 `BackHandler`。
+
+**判据**：**「让位」必须做在滚动内容里，不能做在滚动容器外。**
+做在外面，内容就永远到不了那片区域 —— 无论顶栏的 alpha 是 0 还是 1。
+
+---
+
+## 68. 手势有实现但**无可感知反馈** ⇒ 功能等于不存在（2026-09-13）
+
+**现象**：用户要求「按住密码条目 / 验证码条目，然后从右往左滑删除，**分组密码也要**」——
+而该手势**三个列表早就接了**（含分组路径：分组只多插一个分组头，行 composable 是同一个）。
+
+**根因**：长按「上膛」后唯一的反馈是 `ARMED_SCALE = 0.02f`（2% 缩放），
+红色删除底只在 `offsetX < 0` 之后才显影 ⇒ 用户按住时画面几乎没有变化，
+**根本不知道自己已经解锁了这个手势**。参考实现 Bastion 有显式的 armed 态：
+`SwipeArmState.arm()` + 静态露出 `hintAlpha = 0.32f` 的红底。
+
+**解法**：armed 用 `animateFloatAsState` 平滑成 0→1；红底显隐取
+`max(滑动进度, 0.32 × armedProgress)`；并让内容在 armed 时**额外左移 16dp** ——
+删除底被不透明的卡片完全盖住，只调 alpha 是看不见的，必须挤出一条缝。
+
+**判据**：**「功能存在」与「用户知道功能存在」是两件事。**
+手势、快捷键这类隐藏交互，没有可见反馈就等于没做。
+
+---
+
+## 69. KDBX 添加入口挂在**不可达路由**后面 ⇒ 集成交付了却用不到（2026-09-13）
+
+**现象**：用户「设置页面密码库，没有 kdbx 的入口，比如添加按钮之类的。
+目前只有 bitwarden 一个密码库」。
+
+**根因**：KDBX 的选文件入口只在 `VaultListScreen` 的「+」
+（→ `AddVaultTypeDialog` → `AddKdbxRoute`），而 `VaultListRoute` 在整个导航图里只有 4 个入口，
+且**全在「一个库都没有」或异常兜底的路径上**（`Onboarding` / `onNoVault` / 主界面 `onLocked`）。
+只要已有 ≥1 个库，根导航就落在解锁页或主界面 ⇒ 库列表**不可达** ⇒
+用户**永远加不了第二个库**（KDBX 集成等于没交付）。
+
+**解法**：把 `AddVaultTypeDialog` 从 `VaultListScreen` 的私有函数提到 `ui/common`，
+在设置页「密码库」分区补一行「添加密码库」，两个回调从 `VaultixApp`
+经 `MainShellScreen` 一路透传到 Tab 内的 `SettingsScreen`。
+
+**判据**：**新增入口时先画一遍「从冷启动到该入口」的可达路径。**
+功能挂在一个不可达的路由后面，等于没做。
+
