@@ -58,6 +58,11 @@ biometric = "1.2.0-alpha05"
 #  - 1.5.0 另引入 CredentialEntry.setBiometricPromptData（@RequiresApi(35)），
 #    Android 15+ 系统渲染条目所需（Bitwarden 必挂）。
 credential = "1.6.0"
+# KDBX 引擎（M2）：MIT 许可证（Copyright (c) 2021 Denis T.），纯 Kotlin/JVM + okio，支持 KDBX 4.1。
+# 选它而不是搬 Keyguard 的 KDBX 实现：①Keyguard 本体是 All Rights Reserved；
+# ②它的 KDBX 能力本来就来自 kotpass，且那份 vendored 副本被改成了依赖 Keyguard 自己的
+# util:foundation/util:crypto；③MIT 与项目 GPL-3.0 兼容，只需保留署名。
+kotpass = "0.13.0"
 workManager = "2.11.2"
 
 # ---- 网络层（data:bitwarden）----
@@ -191,3 +196,6 @@ bcprov-jdk18on = { group = "org.bouncycastle", name = "bcprov-jdk18on", version.
 # 依赖 -android 会把 Android 平台分发器带进纯 JVM 单元测试环境。
 # （-android 本身也传递依赖 -core，二者共存不会产生类冲突。）
 kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "coroutines" }
+
+# ---- M2 KDBX 引擎（data:kdbx）----
+kotpass = { group = "app.keemobile", name = "kotpass", version.ref = "kotpass" }

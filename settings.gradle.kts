@@ -43,3 +43,6 @@ include(":data:bitwarden")
 // 后续 core:crypto / core:database / data:kdbx / data:bitwarden / feature:* 亦然。
 include(":core:database")
 include(":core:datastore")
+
+// M2：KDBX 本地库引擎（kotpass，MIT）
+include(":data:kdbx")
