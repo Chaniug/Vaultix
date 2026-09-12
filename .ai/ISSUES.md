@@ -1378,17 +1378,155 @@ keyfile 形态）。⚠️ 加密路径的测试宁可多断言——读错一�
 | 3 | `SettingsScreen` + `VaultRepository` | 「立即锁定」→ **「退出数据库」**：清会话 + 本地凭据（`authRepository.logout`）+ 缓存条目，**保留库行、不动远程** |
 | 4 | `VaultixAutofillService` + `AutofillActivity` | **解锁即回填**：暂存本次 FillRequest 的字段 id（内存+超时），解锁成功后构造 dataset 经 `EXTRA_AUTHENTICATION_RESULT` 回灌（对齐上游 `AutofillIntentUtils:118`） |
 
-### 后续批次（用户已确认，勿丢）
-- **第 2 批**：顶栏胶囊化（🔍 搜索 + ⋮ 更多＝同步/锁定/回收站）+ **点左上角库名展开/收起分类筛选**
-  （验证码 / 通行密钥 / SSH / 笔记）—— Bastion 的 `ExpressiveTopBar(onTitleClick, titleExpanded)`
-  + `PasswordListTopSection` 是现成参考，我们已移植的 `VaultixExpressiveTopBar` 预留了该槽位。
-- **第 3 批**：**站点图标**（现在整库都是首字母头像 = bug）。上游做法：请求
-  `<服务器>/icons/<域名>/icon.png`（Bitwarden 夹具见 `GlideCookieInterceptorTest`
-  的 `https://vault.bitwarden.com/icons/icon.png`、`SearchUtil` 的 `/icons/www.mockuri.com/icon.png`；
-  Vaultwarden 同端点且有服务端缓存）→ OkHttp + Coil 磁盘缓存 + 失败回退首字母。
-- **第 4 批**：**KDBX 集成**（引擎已完成 `879e7c1`，10/10 测试）：SAF 选文件 → 库行
-  （`vaults.kind=KDBX`、`origin`=文件 URI，**无需迁移**）→ 主密码/keyfile 解锁 →
-  `ItemRepositoryImpl` 读路径分流 → 懒打开（切过去才读盘）+ **切库即锁旧库**（内存只留一把密钥）。
-  另外：**KDBX 4.1 为写入目标**（kotpass 支持），并移植 Bastion
-  `KeePassPasskeyCodec.kt`（484 行）与 `KeePassTotpCodec.kt`（988 行）把**通行密钥与验证码**
-  的多种历史约定解析补全（GPL-3.0 同许可，仓内 `reference/bastion/` 有快照）。
+### ✅ 后续批次已全部交付（2026-09-12，第四十八轮）
+
+| 提交 | 批次 | 要点 |
+|---|---|---|
+| `5682bc6` | 1b / 1c / 1d / 2 / 3 / 4 | 查看层锁 + 退出数据库 + 解锁即回填（见下 #61） |
+| `e88bda2` | 第 2 批 | 顶栏胶囊化 + 点库名展开筛选（见下 #62） |
+| `93c814c` | 第 3 批 | 站点图标（见下 #63） |
+| `fcaf918` | 第 4 批 | KDBX 集成 + 两个 codec（见下 #64） |
+
+⚠️ 第 4 批的「KDBX 4.1 为**写入**目标」**未做**：本批只落地**阶段 A（只读）**。
+阶段 B（写回：原子替换 + `.kdbx.bak` 备份 + 保真度登记 + 往返测试）仍是待办。
+
+---
+
+## 61. 查看锁 vs 真锁：两条成功分支必须分开写（2026-09-12，第四十八轮）
+
+**用户要求**：「主页密码条目上方的锁按钮应该**只锁生物验证那一层，解锁密钥不应该被清除**」。
+
+**落地**：`VaultSessionManager.viewLock`（只置内存标记）+
+`RootNavState.VaultLocked(vaultId)`（携带目标库 id）+ `UnlockScreen` 的
+`ViewLockedContent`（**只有**生物识别按钮，不渲染主密码 / 2FA）。
+
+### 三个真实会踩的坑（都已有断言/注释钉住）
+
+**① 根导航判定顺序**：查看锁的库在会话层面**仍是已解锁**（`unlockedIds` 含它），
+所以 `viewLocked` 必须排在「已解锁 → 主界面」**之前**。顺序错了的表现不是报错，
+而是「按了锁按钮什么都没发生」——最难查的一类。
+
+**② 自动选库顺序**：查看锁的库 `!it.unlocked` 为 false，若解锁页先按「第一个未锁定的库」
+选目标，用户在多库场景下会被要求解锁**另一个**库。必须先看 `isViewLocked`。
+
+**③ 标记的清理**：真锁（超时 / 冷启动 / 退出数据库）必须**同时清掉查看锁标记**，
+否则密钥都没了、标记还在 → 根导航把界面收在「已解锁但查看锁定」的分支上，
+用户输完主密码又被弹回解锁页（死循环的观感）。
+清理点放在 `VaultSessionManager.lock / lockAll` 里（一处收口，不散在调用方）。
+
+### 另一个必须分开的点：成功分支不同
+- 查看锁认证成功 → **只 `clearViewLock`**，不动密钥（密钥本来就在）；
+- 真锁生物解锁成功 → `completeLocalUnlock`（解封 KEK 重建会话）。
+合并成一条就会「认证完还得解封一次」——那正是用户抱怨的「解锁完还要再验证一次」。
+
+判据写进了 `UnlockViewModel.completeLocalUnlock(cipher, forViewLock)` 的**显式参数**，
+而不是读调用时刻的状态：认证对话框弹出期间状态可能被其它流改写（读状态会走错分支）。
+
+---
+
+## 62. 点库名展开的筛选条必须「浮在内容之上」（2026-09-12，第四十八轮）
+
+**用户要求**：「点左上角库名展开/收起分类筛选」。
+
+**坑**：把筛选条塞进可滚动的 `Column`（列表上方）会让它**随列表滚走**，
+而顶栏的箭头还指着「已展开」——用户会以为筛选条坏了。
+这与 #57（沉浸式顶栏必须浮在内容之上）是**同一类问题的第二次出现**。
+
+**解法**：筛选条与顶栏同层（`Box` 的另一个子节点），
+`topPadding = rememberImmersiveBarPadding(collapse)` 让它正好压在顶栏下方；
+另铺一层 `matchParentSize()` 的透明遮罩（点面板外即收起，免去找关闭按钮）。
+
+**另一个刻意的决定：筛选状态不持久化。** 落盘会让用户下次打开 App 对着一个空列表发呆
+（条目都在，只是被上次的筛选挡着），而收起状态下那排 chip 是看不见的 ——
+这就是「条目莫名其妙不见了」类投诉的来源。`rememberSaveable` 只保证切 Tab 回来仍在。
+
+**还有一处**：有筛选时标题必须拼成「库名 · 筛选名」。
+只显示库名的话，用户看到条数明显变少会以为数据丢了。
+
+---
+
+## 63. 站点图标 URL 会把域名拼进路径 → 必须白名单过滤（2026-09-12，第四十八轮）
+
+**用户反馈**：「现在整库都是首字母头像 = bug」。
+
+**端点**（对照 Bitwarden Android）：`<base>/icons/<host>/icon.png`，
+自建服务器的 base 是「服务器地址 + `/icons`」（`EnvironmentExtensions.kt:113-126`），
+Vaultwarden 同端点且带服务端缓存。
+
+**三条取舍**（每条都对应真机里「图标永远加载不出来且**没有任何报错**」的场景）：
+1. **剥掉服务器路径**：反代部署 `https://example.com/vault` 下图标端点在**站点根**，
+   多拼一段必然 404；
+2. **只接受 https**：明文 http 会被 cleartext 策略静默拦掉，不如直接返回 null 走兜底；
+3. **保留 `www.` 前缀**：图标服务按「条目里怎么写就怎么查」，擅自去掉会让一部分站点取不到。
+
+**安全点（本条的判据）**：域名会被**直接拼进 URL 路径**，出现 `/` `..` `?` `#` 就能
+改写请求目标。故域名过白名单（仅字母/数字/`.`/`-`），不合格一律返回 null。
+`SiteIconUrlTest` 里有专门的反向用例（`evil.com/../../admin` 等 7 种）。
+
+**教训**：任何「把外部字符串拼进 URL」的地方都要问一句「这个字符会不会改变 URL 的结构」。
+
+---
+
+## 64. KDBX 集成：与 Bitwarden **不是同一套会话模型**（2026-09-12，第四十八轮）
+
+### 三处必须记住的架构差异
+
+| | Bitwarden | KDBX |
+|---|---|---|
+| 内存会话 | 一把对称密钥（`VaultSessionManager`） | **整库明文**（`data:kdbx` 的会话持有者） |
+| 条目存储 | Room `ciphers` 表（密文） | 只在内存（**不落 ciphers 表**） |
+| 解锁 | 联网 + 可能 2FA | 离线（文件 + 主密码 + 可选 keyfile） |
+
+⇒ KDBX **不能**塞进 `VaultSessionManager`，也不能抄一份密文到 Room（保真度靠原文件保证，
+抄一份只会引入两处真源）。于是：
+
+1. **读路径分流**放在 `ItemRepositoryImpl.observeItems / observeTrash / observeItem`，
+   UI / 自动填充侧**零改动**。
+   ⚠️ 库种类是**挂起**查询（`vaultDao.get`）→ 不能写在方法体里（那会让 `observeItems`
+   不再是纯函数），要放进 `flatMapLatest`。
+2. **会话变化通知**单独抽成 `KdbxSessionFlow`（**只带一个代次计数、不带任何库内容**）：
+   给明文会话挂 `MutableStateFlow` 会把「明文」与「可观察状态」耦合在一起
+   （一次 `println(state)` 就可能把明文写进日志）。
+3. **切库即锁旧库**放在 `ItemsViewModel.init`：KDBX 的「密钥」是整库明文，
+   多库同时解锁会让「同时只能进一个库」的产品约束在**内存层面**失效。
+   放这里而不是 ActiveVaultStore：切库由路由 / 设置页两处触发，而**真正进入某个库**
+   必然经过本页初始化，懒打开语义自然一致。
+
+### 引擎门面：内部类型绝不外泄
+`KdbxSession` / `KdbxOpener` / `KdbxSessionStore` 保持 `internal`，对外只给
+`Kdbx.unlock / contentOf / ...` 与 `KdbxSource`（URI → 字节的函数式接口，由
+`data:repository` 用 `ContentResolver` 实现）。
+**理由**：内部类型握着 kotpass 的 `KeePassDatabase`（明文整库），
+一旦出现在跨模块签名里，就迟早有人把它传进日志或 UI 状态。
+
+### 失败必须分类
+`SourceUnavailable`（文件读不到）与 `InvalidCredentials`（密码/keyfile 不对）是
+**用户要做的事完全不同**的两件事（重选文件 vs 重输密码）。
+一律报「密码错误」会让用户反复重输一个正确的密码。
+
+### 两个 codec 的易错点（都有单测）
+- `KdbxTotpCodec`：位置式 `TOTP Settings = "30;6;SHA1"` 必须按**出现顺序**填
+  （不能按「是否等于默认值」判——用户真写 30 就会串位）；
+  `TimeOtp-Secret-Hex|Base64` 必须**真解码再转 base32**，
+  直接当 base32 解析会**静默算错码**（字符集部分重叠，没有任何报错）。
+- `KdbxPasskeyCodec`：`credentialId` 的 base64url → 标准 base64 归一，
+  **解不出来必须原样保留**（硬转会把非 base64 的旧数据变成空串 = 弄丢用户的通行密钥）。
+- 两个码本都提供 `isXxxFieldName`，`customFieldsOf` 用它排除专属字段 ——
+  否则详情页会把**私钥 PEM / TOTP 密钥**当成「隐藏自定义字段」展示（掩码仍可复制）。
+
+---
+
+## 65. KDoc 里写「星号 + 斜杠」→ 整个文件变语法错误（2026-09-12，第四十八轮）
+
+**现象**：`AddKdbxScreen.kt` 编译报一连串 `Syntax error: Expecting a top level declaration`
+（都在同一行），文件后半段全部失效。
+
+**根因**：KDoc 里写了 MIME 通配符的字面序列（星号紧跟斜杠）——
+Kotlin 块注释**支持嵌套**，那个序列被解析成**注释结束符**，于是后半段代码跑到了注释外面。
+
+**这是 #9 的同一个坑的第二次出现**（当年是 KDoc 里写 `/**`）。
+
+**解法**：改述为「通配 MIME（星号斜杠星号）」，并在注释里明文警告后来者。
+
+**判据**：注释里不要出现任何「斜杠 + 星号」的相邻组合（两个方向都算）。
+`grep -n '\*/\|\/\*' <新写的注释>` 是个 5 秒就能做的自检。
