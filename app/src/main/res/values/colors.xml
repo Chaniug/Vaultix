@@ -10,9 +10,13 @@
       配色改动只影响这里。
     -->
     <color name="ic_launcher_background">#3B5BDB</color>
-    <!-- 自适应图标背景层渐变：上浅下深的同色系，任何遮罩下都只裁到背景、不裁到图形 -->
-    <color name="ic_launcher_bg_top">#4C6BE8</color>
-    <color name="ic_launcher_bg_bottom">#2438A0</color>
+    <!-- 自适应图标背景层渐变：**三档对角**（左上亮 → 中 → 右下深），做出纵深。
+         angle=315 在 shape 渐变里表示"左上 → 右下"（0=左→右，90=下→上） -->
+    <color name="ic_launcher_bg_top">#5B7BF0</color>
+    <color name="ic_launcher_bg_mid">#3B5BDB</color>
+    <color name="ic_launcher_bg_bottom">#1E2C8C</color>
+    <!-- 盾内 V 带的颜色（蓝金 = 保险库/黄铜的经典搭配；也是全图标唯一的第二色相） -->
+    <color name="ic_launcher_accent">#E0A33A</color>
     <!--
       自动填充下拉行的**底色**（浅色面板）。
 

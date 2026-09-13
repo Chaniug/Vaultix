@@ -8,14 +8,15 @@
   所以背景一律画满 108×108、不做任何内缩 —— 缩了就可能在某些遮罩下露出白边。
 
   ── 颜色 ────────────────────────────────────────────────────────────────
-  取品牌基色 `ic_launcher_background`（#3B5BDB）派生的一对同色系：
-  上浅（#4C6BE8）→ 下深（#2438A0），给纯色底一点纵深，小尺寸下也不显脏。
-  `angle=270` = 从上往下（shape 渐变角度制：0 向右、90 向上、270 向下）。
+  三档**对角**渐变（左上亮 → 中 → 右下深），给纯色底以纵深；小尺寸下也不会显脏。
+  `angle=315` = 左上 → 右下（shape 渐变角度制：0 向右、90 向上、270 向下）。
+  ⚠️ 三档要用 `centerColor`，只给 start/end 会退化成两档、丢掉中间过渡。
 -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="rectangle">
     <gradient
-        android:angle="270"
+        android:angle="315"
+        android:centerColor="@color/ic_launcher_bg_mid"
         android:endColor="@color/ic_launcher_bg_bottom"
         android:startColor="@color/ic_launcher_bg_top"
         android:type="linear" />
