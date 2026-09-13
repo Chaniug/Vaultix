@@ -1,5 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Vaultix 应用图标 · 自适应图标声明（API 26+）
+
+  ⚠️ **这个文件必须被 manifest 的 `android:icon` 指到，否则等于不存在。**
+  项目此前正是在这里出错：自适应图标早就写好了，但 manifest 一直指向
+  `@drawable/ic_launcher`（另一个手写的占位矢量）⇒ 系统把它当 **legacy 图标**
+  缩放使用（真机表现：盾牌偏小、四周一圈留白），而本文件从未被读取过。
+  现已在 AndroidManifest.xml 改为 `android:icon="@mipmap/ic_launcher"`。
+
+  ── 三层各管什么 ────────────────────────────────────────────────────────
+  background  : 满幅 108×108 的底板（渐变）。任何 OEM 遮罩只裁它，它必须"裁到哪儿都有色"。
+  foreground  : 图形本体（盾 + 钥匙孔）。**内容收在中心 66dp 圆内**，故任何遮罩都不切图形。
+  monochrome  : Android 13+「主题图标」的单色剪影；系统丢掉配色、按壁纸重新着色。
+                API 26~32 的平台上该元素会被忽略（平台只认它认识的标签），因此可以同文件声明。
+
+  ── 为什么不需要 roundIcon ──────────────────────────────────────────────
+  自适应图标自身就响应任意遮罩（含圆形），`android:roundIcon` 是 API 25 及以前的遗留机制；
+  本项目 minSdk 26，声明它没有意义（且容易与 `android:icon` 不一致，反而引入第三种图标）。
+-->
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
     <background android:drawable="@drawable/ic_launcher_background" />
     <foreground android:drawable="@drawable/ic_launcher_foreground" />
+    <monochrome android:drawable="@drawable/ic_launcher_monochrome" />
 </adaptive-icon>

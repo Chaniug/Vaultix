@@ -1,6 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!--
+      应用图标的品牌基色。**这是全项目唯一的品牌色定义处** ——
+      此前只有这一个值、且只被旧的占位背景层引用；图标改造后它是渐变的中段色，
+      同时作为「取不到渐变的兜底」保留（旧值未变，避免任何外部引用失配）。
+
+      ⚠️ 注意：应用 UI 本身**不走固定品牌色** —— `Theme.kt` 优先用 Material You
+      动态取色（跟随壁纸），回退是 M3 默认色板。所以图标是全项目唯一"品牌露出"的地方，
+      配色改动只影响这里。
+    -->
     <color name="ic_launcher_background">#3B5BDB</color>
+    <!-- 自适应图标背景层渐变：上浅下深的同色系，任何遮罩下都只裁到背景、不裁到图形 -->
+    <color name="ic_launcher_bg_top">#4C6BE8</color>
+    <color name="ic_launcher_bg_bottom">#2438A0</color>
     <!--
       自动填充下拉行的**底色**（浅色面板）。
 

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Vaultix 应用图标 · 单色层（自适应图标的 `monochrome`，Android 13+ 主题图标）
+
+  ── 它是什么 ────────────────────────────────────────────────────────────
+  开启「主题图标」后，系统**丢掉背景与配色**，只取这一层的**形状（alpha）**，
+  再用从壁纸派生的单色重新着色。所以这里只该有一个纯色剪影 —— 任何渐变、
+  描边、多色都会在各家 ROM 上被压成一块、效果不可控。
+
+  ── 为什么原样复用前景的路径 ────────────────────────────────────────────
+  前景那条路径本身就是"盾 - 钥匙孔"的单一剪影（见 ic_launcher_foreground.xml
+  关于 evenOdd 与单条轮廓的说明），正好满足单色层要求；共用还保证两套图标**形状永远一致**，
+  不会出现"普通图标是 A、主题图标是 B"的错位。
+
+  ⚠️ 填充色用白色只是"给个纯色"，实际渲染由系统着色覆盖；换黑也一样。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M40,31 L68,31 Q74,31 74,38 L74,56 C74,69 66,78 54,84 C42,78 34,69 34,56 L34,38 Q34,31 40,31 Z M58.45,53.02 A6,6 0 1 1 49.55,53.02 L51.7,68 Q54,70.5 56.3,68 Z" />
+</vector>

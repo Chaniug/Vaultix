@@ -1,4 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
-<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
-    <solid android:color="@color/ic_launcher_background" />
+<!--
+  Vaultix 应用图标 · 背景层（自适应图标的 `background`）
+
+  ── 为什么是"满幅矩形 + 渐变" ──────────────────────────────────────────────
+  自适应图标的背景层会被系统当作**无限延伸的底板**：不同 OEM 的遮罩（圆 / 方 /
+  圆角方 / squircle / 水滴…）只决定**裁哪儿**，而背景必须保证"裁到哪儿都有颜色"。
+  所以背景一律画满 108×108、不做任何内缩 —— 缩了就可能在某些遮罩下露出白边。
+
+  ── 颜色 ────────────────────────────────────────────────────────────────
+  取品牌基色 `ic_launcher_background`（#3B5BDB）派生的一对同色系：
+  上浅（#4C6BE8）→ 下深（#2438A0），给纯色底一点纵深，小尺寸下也不显脏。
+  `angle=270` = 从上往下（shape 渐变角度制：0 向右、90 向上、270 向下）。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <gradient
+        android:angle="270"
+        android:endColor="@color/ic_launcher_bg_bottom"
+        android:startColor="@color/ic_launcher_bg_top"
+        android:type="linear" />
 </shape>
