@@ -1898,3 +1898,99 @@ PullToRefreshBox(
 **判据**：**凡是「给滚动容器加顶栏让位」的地方，都要同步检查下拉指示器 / 空的加载态 /
 吸顶头这些「不在滚动内容里的元素」有没有跟着让位。**
 
+---
+
+## 81. 「手势返回时画面缩小 1~2 帧」= Android **预测式返回的预览**，与转场无关（2026-09-13，第五十二轮）
+
+- **现象**：**手势**返回时能看到"当前页缩到约 80%、居中、四周露出下层页面"的 1~2 帧；
+  条目详情 / 卡包 / 设置子页**处处都有**。而**返回键**（含 `adb input keyevent 4`）**完全没有**。
+- **根因**：那是 **Android 预测式返回（predictive back）的预览**——手势期间系统把当前页缩小、
+  露出下层页面。`android:enableOnBackInvokedCallback` 对 **targetSdk 36+ 默认值为 `true`**：
+  不声明 ⇒ 预览已开启；**显式写 `true` ⇒ 等于把预览钉死开启**；只有显式 `false` 才关掉。
+- **解法**：`AndroidManifest` 的 `<application>` 显式
+  `android:enableOnBackInvokedCallback="false"`，把返回交回 App 播自己的转场。
+  要保留预测式手感则写 `true` + `PredictiveBackHandler` **自绘**预览。
+- ⚠️ **排查教训（最贵的一条）**：这个现象我改了**三次转场**（fade → `sizeTransform` → 位移幅度），
+  全都没打中，因为**复现方式本身是错的**——我用"按键返回"去复现"手势返回"的问题。
+  ⇒ **先对齐复现路径（哪个手势/哪个入口），再动代码**；
+  `input keyevent 4` ≠ 手势返回，复现动效类问题必须用 `input swipe`（从左缘起）。
+- ⚠️ 同时**根因不止一个**：另有 `NavHost` 的容器尺寸补间（见 #82 附近的转场铁律）
+  与 MainShell 重放 Tab 过渡，都会造成"看着像缩小"的错觉，已一并修掉。
+
+## 82. 认证结果被系统丢弃：`NEW_TASK` 与 `taskAffinity` 是同一条死路的两个入口（2026-09-13，第五十二轮）
+
+- **现象**：库锁定时在第三方 App（QQ/浏览器）点填充 → 指纹解锁**成功** → 却**什么都没发生**，
+  仍是"解锁 Vaultix"那一项 → 反复解锁、**永远看不到密码条目**；返回宿主 App 重进登录页才能填。
+- **根因**：`AutofillActivity` 被**推进独立 task** 了，于是
+  `setResult(RESULT_OK, EXTRA_AUTHENTICATION_RESULT)` **送不回系统**。
+  两个入口**任一成立即可致命**：
+  ① 认证意图带 `FLAG_ACTIVITY_NEW_TASK`；② Activity 声明了与包名不同的 `taskAffinity`。
+- **系统日志实证**（必须连框架侧一起抓才看得到）：
+  ```
+  AutofillSession: authenticate() ... intentSender=PendingIntent ... startActivity
+  AutofillManager: onAuthenticationResult(): data=null
+  AutofillManager: onAuthenticationResult(): empty intent     ← 系统在启动后 ~16ms 就判定"没有返回"
+  ```
+- **解法**：① dataset 级认证意图**绝不加 NEW_TASK**（只有"引导型"意图才补）；
+  ② `AutofillActivity` **不声明 `taskAffinity`**。
+  对照 `D:\Vaultix-refs\bitwarden-android` 的 `AutofillCallbackActivity`：`exported` +
+  `launchMode=singleTop` + `noHistory` + 透明主题，**无 taskAffinity、无 excludeFromRecents**。
+- ⚠️ **但不要照抄它的 `launchMode="singleTop"`**：本项目没重写 `onNewIntent`，
+  单实例复用会**丢掉新的认证意图**（本项目要求 standard）。
+- ⚠️ **排 autofill 问题必须连系统框架侧日志一起抓**（`AutofillManager` / `RemoteFillService` /
+  `AutofillSession`）：只抓自己的 tag 时，"系统把我们的结果丢了"**完全不可见**。
+
+## 83. `EXTRA_AUTHENTICATION_RESULT` 放 `Dataset` 还是 `FillResponse`，行为完全不同（2026-09-13，第五十二轮）
+
+- **语义分岔**：放 **`FillResponse`** = 系统把里面的 datasets **列成候选让用户挑**；
+  放 **`Dataset`** = 系统**直接把它填进去**（用户看不到任何候选列表）。
+- **用法**：「解锁后要让用户**选**条目」→ `FillResponse`；「用户**已经选定**某条目后的
+  二次验证 / 主密码复核回灌」→ `Dataset`。
+- ⚠️ 这是"同一个 extra 放不同类型、行为完全不同"的平台 API，**必须查文档、不能靠类比**。
+
+## 84. 「空」有三种状态，塌进一个 `isEmpty()` 分支就出**假空态**（2026-09-13，第五十二轮）
+
+- **现象**：冷启动瞬间点验证码页，有 **1~2 秒**的"还没有验证码"——**假的**，其实是还没加载完。
+- **根因**：界面把"加载中 / 真的没有 / 查询无结果"三种状态**塌进了同一个
+  `state.items.isEmpty() -> EmptyBody()` 分支**；而 `vaultIdState` 初始为 `""`，
+  `observeItems("")` 会**立刻发一个空列表**，正好落进假空态。
+- **解法**：`UiState` 单独加 `loading`；数据管线在 id 为空时**发 `null`**（而不是去查空 id），
+  下游翻译成 `loading = true`；界面把 `loading` 分支**排在空态之前**，显示居中转圈。
+- **判据**：**任何 `isEmpty() -> 空态` 的地方都要问一句"这个空，是真的空，还是还没来？"**
+  （同类形状尚存于密码列表 `ItemsScreen` 与卡包页；密码页因活跃库 id 同步解析暂未复现）。
+
+## 85. KEK 健康判据：**探测要宽、失败判定要严**（2026-09-13，第五十二轮）
+
+- **现象**：**覆盖安装后**指纹入口整条消失（"生物验证不出现"）。
+- **根因**：判据写成了"**不是永久失效就算可用**"，两个方向都过宽：
+  ① 把 `UnrecoverableKeyException` 也算"永久失效"——而 OEM（实测华为/荣耀 KeyMint）在
+  「覆盖安装后 Keystore 瞬时不可用」「密钥在但本次未认证」这类**可恢复**场景下同样抛它；
+  ② `MISSING`（别名根本不存在）也被当成"可用"（`kekStatus != INVALIDATED`）。
+- **解法**：**探测**（要不要给用户显示指纹入口）只认 `KeyPermanentlyInvalidatedException`
+  （沿 cause 链找），且 `MISSING` **必须算不可用**；
+  **失败判定**（失败后要不要清状态，`LocalUnlockFailure`）继续把
+  `UnrecoverableKeyException` / `AEADBadTagException` 算不可恢复 —— **这是刻意的**。
+  **改任一侧前先想清是哪一侧。**
+
+## 86. 同形状的两层圆角矩形叠放，边缘**必漏一条缝**（2026-09-13，第五十二轮）
+
+- **现象**：深色模式下条目卡片周围有一圈**极细的红边**（像删除按钮溢出）。
+- **根因**：`PressAndSwipeToDelete` 的卡片与删除底层是**两个各自栅格化的 12dp 圆角矩形**，
+  边缘一像素的抗锯齿差异就足以透出底下的 `errorContainer`。
+- **解法**：删除底层按位移给 alpha（`graphicsLayer { alpha = reveal }`），
+  静息态 `alpha = 0` ⇒ 缝不存在；滑动时才随位移显影（顺带保留跟手感）。
+- **判据**：**`Box` 里两层"同形状"的矩形永远会有缝**；下层要么 alpha=0，要么别用同形状叠。
+
+## 87. 转场动效的边界：**只允许 `translationX`**，且用户已明确"不要花哨动效"（2026-09-13，第五十二轮）
+
+- 三个坑都踩过，症状都不是"位移不好看"：
+  ① **整屏 fade** ⇒ 离屏渲染（`saveLayer`），两页同时在场时每帧多一次全屏合成 ⇒ **掉帧**；
+  ② **容器尺寸补间** ⇒ 页面被裁成"小一号"（`NavHost(sizeTransform = null)`；
+     Tab 容器那处 `SizeTransform(clip = false) { _, _ -> tween(0) }`，传 `null` 该版本编译不过）；
+  ③ **MainShell 重新进入组合会重放 Tab 过渡** ⇒ 与 NavHost 转场叠成**双影**
+     （已加「跳过首次过渡」旗标，见 `MainShellScreen`）。
+- ⚠️ **用户拍板**：「我不要这些花里花哨的动画，验证码页面返回的那种就可以了，几乎没有动效的。」
+  ⇒ 二级路由转场统一为**与 Tab 切换同一套**（`tabSwitchEnter/Exit` = `fadeIn + 上移 1/16`）。
+  此前试过的 1/12 轻推+fade、整屏 Shared Axis X、覆盖/揭开**三种都被否过**。**别再往上加动效。**
+
+
