@@ -1,0 +1,17 @@
+# Vaultix 性能复测  2026-09-13 23:27:30
+设备: adb-AKJEVB5920007199-YKvK5m._adb-tls-connect._tcp   包: io.vaultix.vaultix
+
+## 启动 TotalTime(ms)【进程冷/系统热 —— 非真冷启动】: 首次=-  后续=[]  中位=-
+## 内存 PSS(kB): TOTAL= Java= Native= Graphics= PrivateOther=
+## 帧百分位:
+  Total frames rendered: 706
+  Janky frames: 28 (3.97%)
+  Janky frames (legacy): 30 (4.25%)
+  50th percentile: 5ms
+  90th percentile: 8ms
+  95th percentile: 13ms
+  99th percentile: 21ms
+  50th gpu percentile: 3ms
+  90th gpu percentile: 6ms
+  95th gpu percentile: 7ms
+  99th gpu percentile: 11ms

@@ -1,0 +1,4 @@
+# Vaultix 性能复测  2026-09-13 23:26:18
+设备: adb-AKJEVB5920007199-YKvK5m._adb-tls-connect._tcp   包: io.vaultix.vaultix
+
+## 启动 TotalTime(ms)【进程冷/系统热 —— 非真冷启动】: 首次=-  后续=[]  中位=-

@@ -1,0 +1,5 @@
+# Vaultix 性能复测  2026-09-13 22:02:58
+设备: adb-AKJEVB5920007199-YKvK5m._adb-tls-connect._tcp   包: io.vaultix.vaultix
+
+## 冷启动 TotalTime(ms): 首次(冷 page cache)=163  后续=[147 168 152]  中位=152
+## 内存 PSS(kB): TOTAL=78397 Java=4292 Native=19140 Graphics=28636 PrivateOther=4096

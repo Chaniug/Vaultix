@@ -1,0 +1,5 @@
+# Vaultix 性能复测  2026-09-13 21:59:34
+设备: 192.168.1.114:37875   包: io.vaultix.vaultix
+
+## 冷启动 TotalTime(ms): 196 172 182   中位=182
+## 内存 PSS(kB): TOTAL=PSS: Java=3524 Native=15972 Graphics=452 PrivateOther=Other:
