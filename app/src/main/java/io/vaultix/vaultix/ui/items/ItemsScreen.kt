@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -148,14 +149,19 @@ private fun SearchBackHandler(enabled: Boolean, onClose: () -> Unit) {
 }
 
 /**
- * 列表顶部让位 = 状态栏 + 顶栏高（随收起动画变化）+ 展开中的筛选行高。
+ * 列表顶部让位 = 展开中的筛选行高（随收起动画变化）。
  *
- * ⚠️ **必须交给列表的滚动留白（`contentPadding`），不能做外层容器 padding。**
- * 外层 padding 会把列表视口整体下压 ⇒ 内容永远画不到顶栏区域 ⇒
- * 「顶栏收起后变透明、内容从下方穿过」不成立，顶栏下方留一条死区
- * （用户观感就是「不沉浸」）。同一个写法还曾造成另外两个症状：
- * 筛选行展开时 chip 压在第一条条目上、搜索态「Scaffold 让位 + 外层 padding」双重留白
- * 变成一块纯黑大横幅。
+ * ⚠️ **状态栏高度不再算进这里**：沉浸式顶栏让位改由主 composable 内
+ * `SyncNoteBanner` 之上的固定 `Spacer(Modifier.height(barPadding))` 统一出一次。
+ * 此前状态栏高度被算了两次——`contentPadding(top = barPadding + filterRowInset)` 一份、
+ * `SyncNoteBanner` 自己的 `topPadding = barPadding` 又一份——同步横幅一出现就把
+ * `PullToRefreshBox` 推下去，与列表 `contentPadding` 里的 `barPadding` 叠成双倍空白
+ * （用户反馈「下拉刷新区域有很大一块空白」）。现在 `barPadding` 只由 Spacer 出一次，
+ * 横幅贴着 Spacer 之下，不再叠加。
+ *
+ * ⚠️ ⚠️ 列表本身的滚动留白（`contentPadding`）仍喂给这里的值，不能改外层容器 padding——
+ * 外层 padding 会把列表视口整体下压 ⇒ 顶栏收起后内容无法从下方穿过、下方留死区
+ * （用户观感就是「不沉浸」）。
  *
  * ⚠️ 搜索态是例外：`Scaffold` 已按 `ScaffoldDefaults.contentWindowInsets` 为搜索顶栏
  * 预留了高度（见调用点的 `contentWindowInsets`），这里必须归零。
@@ -165,7 +171,6 @@ private fun SearchBackHandler(enabled: Boolean, onClose: () -> Unit) {
 @Composable
 private fun rememberItemsTopInset(
     searchActive: Boolean,
-    barPadding: Dp,
     quickFiltersExpanded: Boolean,
 ): Dp {
     val filterRowInset by animateDpAsState(
@@ -173,7 +178,7 @@ private fun rememberItemsTopInset(
         animationSpec = tween(GROUP_ANIM_MS),
         label = "items_filter_row_inset",
     )
-    return if (searchActive) 0.dp else barPadding + filterRowInset
+    return if (searchActive) 0.dp else filterRowInset
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -213,7 +218,7 @@ fun ItemsScreen(
     val listState = rememberLazyListState()
     val collapse = rememberScrollCollapseFraction(listState)
     val barPadding = rememberImmersiveBarPadding(collapse)
-    val listTopInset = rememberItemsTopInset(searchActive, barPadding, quickFiltersExpanded)
+    val listTopInset = rememberItemsTopInset(searchActive, quickFiltersExpanded)
     // 搜索关闭动作（点 × 与系统返回共用）：退出搜索态 + 清空输入。
     val closeSearch: () -> Unit = { searchActive = false; viewModel.setQuery("") }
     SearchBackHandler(enabled = searchActive, onClose = closeSearch)
@@ -271,10 +276,14 @@ fun ItemsScreen(
         val syncing by viewModel.isSyncing.collectAsStateWithLifecycle()
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             Column(modifier = Modifier.fillMaxSize()) {
-                // 同步横幅自己让开顶栏（见 SyncNoteBanner 的 topPadding 参数）。
+                // 沉浸式状态栏让位：固定 Spacer 出一次（非搜索态才需要，搜索态由
+                // Scaffold 的 contentWindowInsets 统一预留，见上面的 contentWindowInsets）。
+                // 同步横幅（SyncNoteBanner）不再自己加 topPadding，直接贴在本 Spacer 之下，
+                // 避免与列表 contentPadding 里的状态栏高度叠加成双倍空白（见 #80 之外的回归）。
+                if (!searchActive) Spacer(Modifier.height(barPadding))
                 SyncNoteBanner(
                     note = state.syncNote,
-                    topPadding = barPadding,
+                    topPadding = 0.dp,
                     onDismiss = viewModel::dismissSyncNote,
                     onRetry = viewModel::retrySync,
                 )
@@ -819,11 +828,11 @@ private fun ItemsList(
             if (group.key !in collapsedGroups) {
                 items(group.items, key = { it.id }) { item ->
                     // 「按住 → 向左滑 → 松手」删除（软删除进回收站，见 ItemsViewModel.deleteItem）。
-                    // 长按回调 = 勾选本行，与卡片自身的长按是同一个动作（手势只走一个
-                    // pointerInput，不会互相抢事件，见 [PressAndSwipeToDelete]）。
+                    // 长按**选中**由内部 [ItemRow]/[EntryCard] 的 `onLongClick` 独占；本容器
+                    // 只负责「长按成立后进入拖拽删除」的信号（见 [PressAndSwipeToDelete]），
+                    // 不再回调选中，避免一次长按触发两次 toggle（进不了多选）。
                     PressAndSwipeToDelete(
                         onDelete = { onDelete(item) },
-                        onLongPress = { onToggleSelect(item) },
                     ) {
                         ItemRow(
                             item = item,
@@ -1064,6 +1073,9 @@ private fun ItemRow(
     // 卡片外框规格见 [EntryCard]（对齐 Bastion PasswordEntryCard：M3 默认 Card 底色/高度 +
     // 12dp 圆角 + 16dp 内边距 + 标题 SemiBold + 6dp 行距）。
     // 多选态：整行点击 = 勾选（上游 `cardInteractionModifier` 同款分支）。
+    // ⚠️ 长按选中由本卡片自己的 `onLongClick` **独占**（见 [EntryCard] 文档）。外层
+    // [PressAndSwipeToDelete] 只负责「长按成立后进入拖拽删除」的信号，不再回调选中，
+    // 否则一次长按会同时触发两次 toggle（净无操作）—— 正是用户反馈「长按进不了多选」的根因。
     EntryCard(
         onClick = if (isSelectionMode) onToggleSelect else onClick,
         onLongClick = if (isSelectionMode) null else onToggleSelect,

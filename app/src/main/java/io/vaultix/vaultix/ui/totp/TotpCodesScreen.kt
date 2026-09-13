@@ -124,7 +124,10 @@ fun TotpCodesScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     // 提到 Scaffold 外：底部批量操作条（全选 / 已选数）也要用它，
     // 与列表同源才不会出现「底栏说全选了、列表没勾上」。
-    val entries = viewModel.filteredEntries()
+    // ⚠️ 基于已收集的 `state`（Compose State）派生，而非 `viewModel.filteredEntries()`
+    // 直读 `_state.value`——后者不感知快照，Tab 切换时偶发不刷新
+    // （用户反馈「密码页新建的含验证码条目，在验证码页搜不到」）。
+    val entries = rememberTotpEntries(state)
     val snackbarHostState = remember { SnackbarHostState() }
     var searchActive by rememberSaveable { mutableStateOf(false) }
     // 搜索态自己消费返回手势：主界面是根路由（栈里没有上一层），不拦就会直接退回桌面。
@@ -153,6 +156,9 @@ fun TotpCodesScreen(
             onAddConsumed()
         }
     }
+    // 每次进入组合都刷新一次活跃库：锁屏恢复 / 同步完成后 `activeVaultId` 可能
+    // 仍是 null，导致 vaultIdState 为 ""、验证码列表空白（见 ViewModel.refresh 注释）。
+    LaunchedEffect(Unit) { viewModel.refresh() }
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -301,6 +307,21 @@ fun TotpCodesScreen(
         onImportOpenChange = { importOpen = it },
     )
 }
+
+/**
+ * 由已收集的 [TotpCodesViewModel.UiState] 派生「当前要展示的验证码条目」。
+ *
+ * 必须吃 `state.items` / `state.query` 两个 Compose State（而非 `viewModel.filteredEntries()`
+ * 直读 `_state.value`）——后者不感知快照，Tab 切换 / `SaveableStateProvider` 恢复时偶发不刷新
+ * （用户反馈「密码页新建的含验证码条目，在验证码页搜不到」）。`remember` 把派生结果绑定到这两个
+ * 输入：任一变化即重算，且不会因选区等无关状态变化而白算。抽成 helper 也是为了给主 composable
+ * 瘦身、守 detekt `LongMethod ≤150`。
+ */
+@Composable
+private fun rememberTotpEntries(state: TotpCodesViewModel.UiState): List<TotpEntry> =
+    remember(state.items, state.query) {
+        state.items.toTotpEntries().filter { it.matches(state.query) }
+    }
 
 /**
  * 每秒推进一次的时钟（驱动所有验证码滚动刷新）。
@@ -558,11 +579,14 @@ private fun TotpRow(
     }
 
     // 卡片外框与密码 / 卡包列表完全一致（见 [EntryCard]）；内边距由卡片统一给 16dp。
-    // 「按住后滑动删除」包在外层：长按回调即「勾选本行」，与卡片长按同一个动作（见
-    // [PressAndSwipeToDelete]）。
-    PressAndSwipeToDelete(onDelete = onDelete, onLongPress = onToggleSelect) {
+    // 「按住后滑动删除」包在外层：长按**选中**由 [EntryCard] 的 `onLongClick` 独占，
+    // 本容器只负责「长按成立后进入拖拽删除」的信号（见 [PressAndSwipeToDelete]）。
+    PressAndSwipeToDelete(onDelete = onDelete) {
         EntryCard(
             // 多选态下点击 = 勾选（上游 `cardInteractionModifier` 同款分支）。
+            // ⚠️ 长按选中由 [EntryCard] 自己的 `onLongClick` 独占；外层
+            // [PressAndSwipeToDelete] 只负责「长按成立后进入拖拽删除」的信号，
+            // 不再回调选中，避免一次长按触发两次 toggle（净无操作）导致无法进入多选。
             onClick = if (isSelectionMode) onToggleSelect else copyNow,
             onLongClick = if (isSelectionMode) null else onToggleSelect,
             selected = isSelected,

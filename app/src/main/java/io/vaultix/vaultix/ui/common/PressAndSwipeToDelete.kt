@@ -20,8 +20,9 @@
  *
  * 实现要点：
  * - 手势**自己手写**（[deleteGesture]）而不是用 `detectDragGesturesAfterLongPress`：
- *   因为「长按」有两个阶段语义 —— 先回调 [onLongPress]（勾选），再进入拖动。
- *   手写后**只有一个** pointerInput，不与卡片 [EntryCard] 的 `combinedClickable` 抢事件；
+ *   因为「长按」与「拖动删除」是两段式 —— 先由卡片 [EntryCard] 的 `onLongClick` 完成勾选，
+ *   本手势在长按**成立**后才接管位移（左滑显红、过阈值松手删除）。手写后**只有一个**
+ *   pointerInput，不与卡片 `combinedClickable` 抢事件；
  * - 拖动过程 `change.consume()`：卡片自带的 clickable 不会在松手时补一个点击，
  *   列表也**不会**跟着滚（长按已表明是删除意图，不是翻页意图）；
  * - 未达阈值松手 → 回弹（不删除）；达阈值 → 滑出并触发 [onDelete]；
@@ -84,16 +85,23 @@ private const val DELETE_BG_CORNER = 12
 /**
  * 「按住后滑动删除」容器：把任意条目卡片包进去即可获得该手势。
  *
+ * ## 长按语义的归属（修复「长按进不了多选」）
+ * 长按**选中**由内部卡片 [EntryCard] 的 `onLongClick` 独占（见其文档，对齐 Bastion
+ * `cardInteractionModifier`）。本容器**不再**回调选中——它只负责「长按**成立**后进入
+ * 拖拽删除」这一手势阶段。若两边都回调选中，一次长按会触发两次 toggle（净无操作），
+ * 表现就是「长按条目没反应 / 进不了多选」。
+ *
+ * 因此本容器的手势只做两件事：
+ * 1. 检测长按成立（手指按住不动超过阈值）；
+ * 2. 长按成立后接管后续位移，左滑显红底、过阈值松手即删除。
+ *
  * @param onDelete 滑过阈值并松手后的回调（真正删除由调用方执行）。
- * @param onLongPress 长按**成立**的回调（此时手指还没动）。调用方据此进入选择模式
- *   （对齐 Bastion：`onLongClick` → 选择模式）。拖动期间不会重复触发。
- * @param content 条目卡片（内部通常自带 [EntryCard] 的点击）。
+ * @param content 条目卡片（内部自带 [EntryCard] 的点击 / 长按选中）。
  */
 @Composable
 fun PressAndSwipeToDelete(
     onDelete: () -> Unit,
     modifier: Modifier = Modifier,
-    onLongPress: () -> Unit = {},
     content: @Composable () -> Unit,
 ) {
     val density = LocalDensity.current
@@ -101,7 +109,6 @@ fun PressAndSwipeToDelete(
     val thresholdPx = with(density) { DELETE_THRESHOLD.toPx() }
     val scope = rememberCoroutineScope()
     val currentDelete by rememberUpdatedState(onDelete)
-    val currentLongPress by rememberUpdatedState(onLongPress)
 
     // 实时位移：拖动期间只改这一个 Float 状态（**不启动协程**，避免每个拖动事件都起一个）。
     var offsetX by remember { mutableFloatStateOf(0f) }
@@ -121,30 +128,41 @@ fun PressAndSwipeToDelete(
         // 才被组合进来，那一帧的布局/合成抖动正是用户描述的「不显示、不跟手」；
         // 而且删除底被不透明的卡片完全盖住时，alpha=0 与不存在在视觉上等价 ——
         // 常驻没有任何代价，却换来了跟手的显影。
+        // ⚠️ 删除底**常驻**在卡片之下（只调 alpha，不条件式增删节点，见上方注释）。
+        //
+        // 删除底色 + 图标必须放在**右侧**（`Alignment.CenterEnd`）：卡片向左滑
+        // （offsetX 为负）时，露出的是卡片**右侧**的空白条，红底图标若放在左侧
+        // （默认 TopStart）会被卡片盖住、露出的右侧却空着 —— 正是用户反馈的
+        // 「从最右边往左滑，删除按钮看不到」。这里对齐 Bastion `SwipeActions.kt`
+        // （`Surface(Alignment.CenterEnd)` + `Row(padding(end = 24.dp))`）。
         val reveal = (-offsetX / thresholdPx).coerceIn(0f, 1f)
-        Row(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .graphicsLayer { alpha = reveal }
                 .background(
                     color = MaterialTheme.colorScheme.errorContainer,
                     shape = RoundedCornerShape(DELETE_BG_CORNER),
-                )
-                .padding(horizontal = 20.dp),
-            verticalAlignment = Alignment.CenterVertically,
+                ),
+            contentAlignment = Alignment.CenterEnd,
         ) {
-            Icon(
-                imageVector = Icons.Filled.Delete,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onErrorContainer,
-                modifier = Modifier.size(20.dp),
-            )
-            Text(
-                text = stringResource(R.string.action_delete),
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onErrorContainer,
-                modifier = Modifier.padding(start = 8.dp),
-            )
+            Row(
+                modifier = Modifier.padding(end = 20.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Delete,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onErrorContainer,
+                    modifier = Modifier.size(20.dp),
+                )
+                Text(
+                    text = stringResource(R.string.action_delete),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    modifier = Modifier.padding(start = 8.dp),
+                )
+            }
         }
 
         Box(
@@ -152,7 +170,6 @@ fun PressAndSwipeToDelete(
                 .fillMaxWidth()
                 .graphicsLayer { translationX = offsetX }
                 .deleteGesture(
-                    onLongPress = currentLongPress,
                     onDrag = { delta -> offsetX = (offsetX + delta).coerceIn(-maxDragPx, 0f) },
                     onDragEnd = {
                         if (-offsetX >= thresholdPx) {
@@ -175,11 +192,15 @@ fun PressAndSwipeToDelete(
  *
  * 只允许**向左**滑：向右拖会被 `minOf(x, 0f)` 归零（删除方向唯一，语义更清楚）。
  *
- * 手写而非 `detectDragGesturesAfterLongPress`：需要在「长按成立」的那一刻回调
- * [onLongPress]（卡片据此进入选择模式），上游封装没有这个时机。
+ * 手写而非 `detectDragGesturesAfterLongPress`：需要在「长按成立」之后才接管位移——
+ * 这样长按（由内部卡片 [EntryCard] 的 `onLongClick` 处理选中）与拖拽删除不会在同一
+ * 根指针事件上互抢：长按成立前若手指抬起/移动，本手势直接作废且**不消费**任何事件，
+ * 列表滚动与卡片点击照常；长按成立后接管位移并 `consume()`，列表不跟着滚。
+ *
+ * ⚠️ 本手势**不**回调选中：选中由卡片自己负责（见 [PressAndSwipeToDelete] 文档），
+ * 否则一次长按会触发两次 toggle。
  */
 private fun Modifier.deleteGesture(
-    onLongPress: () -> Unit,
     onDrag: (Float) -> Unit,
     onDragEnd: () -> Unit,
     onDragCancel: () -> Unit,
@@ -192,9 +213,10 @@ private fun Modifier.deleteGesture(
         val longPressed = withTimeoutOrNull(longPressTimeout) { awaitBreak(down, touchSlop) } == null
         if (!longPressed) return@awaitEachGesture
 
-        onLongPress()
-        // 长按已成立：接管后续事件。这里 consume 掉位移，列表便不会跟着滚 ——
-        // 用户已经用长按表明「我要动这张卡」，不是「我要翻页」。
+        // 长按已成立：接管后续事件。选中由卡片 [EntryCard] 的 `onLongClick` 在长按成立时
+        // 自行处理，本手势只负责接管位移（见 [deleteGesture] / [PressAndSwipeToDelete] 文档）。
+        // 这里 consume 掉位移，列表便不会跟着滚 —— 用户已经用长按表明「我要动这张卡」，
+        // 不是「我要翻页」。
         val released = drag(down.id) { change ->
             // ⚠️ 用 `position - previousPosition` 而不是 `change.positionChange()`：
             // 后者在 ui 1.11 起是**顶层扩展函数**（不是成员），漏 import 会解析成

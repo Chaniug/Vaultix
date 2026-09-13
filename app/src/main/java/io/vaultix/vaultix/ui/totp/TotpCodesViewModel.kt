@@ -102,6 +102,13 @@ class TotpCodesViewModel @Inject constructor(
     init {
         // 与 ItemsViewModel 一致：由路由参数进入时把该库登记为活跃库
         routedVaultId?.let(activeVaultStore::select)
+        if (routedVaultId == null) {
+            // Tab 内嵌模式：冷启动 / 锁屏恢复后 `activeVaultId` 可能仍是 null（其 init
+            // 协程异步填充），导致 `vaultIdState` 初始为 ""、`observeItems("")` 返回空，
+            // 验证码页呈现「有密码条目但验证码列表空白」。这里同步权威解析一次，把
+            // 真实 vaultId 写回 activeVaultId，从而触发后续数据加载。
+            viewModelScope.launch { activeVaultStore.resolve() }
+        }
         viewModelScope.launch {
             combine(vaultIdState, vaultRepository.observeVaults()) { id, vaults ->
                 vaults.firstOrNull { v -> v.id == id }
@@ -130,6 +137,18 @@ class TotpCodesViewModel @Inject constructor(
     fun setQuery(q: String) = _state.update { it.copy(query = q) }
 
     /**
+     * 手动刷新：重新权威解析活跃库 id 并触发数据流重新订阅。
+     *
+     * 用于 Tab 内嵌模式在「锁屏恢复 / 同步完成 / 从后台切回」后 `activeVaultId` 可能
+     * 仍是 null 导致验证码页空白的场景。
+     */
+    fun refresh() {
+        viewModelScope.launch {
+            if (routedVaultId == null) activeVaultStore.resolve()
+        }
+    }
+
+    /**
      * 复制验证码：走 [VaultixClipboard]（安全剪贴板）。
      *
      * 此前界面直接 `LocalClipboardManager.setText`——既没有 API 33+ 的 `IS_SENSITIVE`
@@ -146,19 +165,14 @@ class TotpCodesViewModel @Inject constructor(
         }
     }
 
-    /** 当前所有含 TOTP 的条目，按搜索过滤（issuer/account/标题）。 */
-    fun filteredEntries(): List<TotpEntry> {
-        val q = _state.value.query.trim().lowercase()
-        return _state.value.items
-            .mapNotNull { it.toTotpEntry() }
-            .filter { e ->
-                q.isEmpty() ||
-                    e.title.lowercase().contains(q) ||
-                    e.issuer.lowercase().contains(q) ||
-                    e.account.lowercase().contains(q) ||
-                    e.label.lowercase().contains(q)
-            }
-    }
+    /**
+     * 当前所有含 TOTP 的条目，按搜索过滤（issuer/account/标题）。
+     *
+     * ⚠️ 仅供需要直接读 StateFlow 的少数场景使用；界面应改用基于已收集 `state` 快照的
+     * 派生（见 [TotpCodesScreen]），否则不感知 Compose 快照，Tab 切换时偶发不刷新。
+     */
+    fun filteredEntries(): List<TotpEntry> =
+        _state.value.items.toTotpEntries().filter { it.matches(_state.value.query) }
 
     /** 供「绑定到密码条目」选择器使用的登录条目（排除自身）。 */
     fun loginCandidates(excludeItemId: String): List<VaultItem> =
@@ -292,6 +306,28 @@ fun VaultItem.toTotpEntry(): TotpEntry? {
         // 站点图标用：条目挂的网站域名（`androidapp://` 之类会被 hostOfItemUri 过滤掉）
         domain = io.vaultix.common.SiteIconUrl.hostOfItemUris(uris.map { it.uri }),
     )
+}
+
+/** 一批 VaultItem → 仅含 TOTP 的验证码条目（投影后丢弃无 TOTP 的）。 */
+fun List<VaultItem>.toTotpEntries(): List<TotpEntry> = mapNotNull { it.toTotpEntry() }
+
+/**
+ * 验证码条目是否匹配搜索词（title/issuer/account/label，大小写不敏感、忽略首尾空白）。
+ *
+ * 抽成纯函数有两个目的：
+ * 1. 让 [TotpCodesScreen] 直接基于已 `collectAsStateWithLifecycle` 的 [TotpCodesViewModel.UiState]
+ *    派生条目列表（读 `state.items` / `state.query` 两个 Compose State），而不是调
+ *    `filteredEntries()` 去直接读 `_state.value`——后者不感知快照，Tab 切换 /
+ *    `SaveableStateProvider` 恢复时偶发不刷新（用户反馈「新建含验证码的条目，验证码界面搜不到」）；
+ * 2. 与界面解耦，便于单测。
+ */
+fun TotpEntry.matches(rawQuery: String): Boolean {
+    val q = rawQuery.trim().lowercase()
+    if (q.isEmpty()) return true
+    return title.lowercase().contains(q) ||
+        issuer.lowercase().contains(q) ||
+        account.lowercase().contains(q) ||
+        label.lowercase().contains(q)
 }
 
 /** 导入解析结果 → 预填编辑条目（未落库）。 */
