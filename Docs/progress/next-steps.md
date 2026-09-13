@@ -1,8 +1,40 @@
 # 下一步任务清单
 
-> ## 【最新】第五十轮（2026-09-13）：**睡前 5 bug + 1 美化已交付**（提交 `23c3629`，CI `34713640553` success）
+> ## 【最新】第五十一轮（2026-09-13）：**用户复盘后 6 条反馈已交付**（提交 `d062792`）
 >
-> 根因见 `.ai/ISSUES.md` **#70~#75**；逐条对照见 `current-status.md` 末节。**已推送**，等真机验收。
+> 根因见 `.ai/ISSUES.md` **#76~#80**；逐条对照见 `current-status.md` 末节。**已推送**，等真机验收。
+>
+> 用户三个歧义点经 `AskUserQuestion` 拍板：③**「长按只勾选，滑动才显红」** /
+> ⑤**「密码框 → 图标 → 解锁按钮」** / ⑥**「按在线 / 离线状态」**。
+>
+> - **①切页闪**：用户确认已修好，本轮**无需改动**。
+> - **②验证码页不沉浸**：让位又写回了**滚动容器外的 `Column.padding(top)`**
+>   ⇒ 内容永远画不到顶栏区域。改成 `LazyColumn.contentPadding(top = barPadding + 8.dp)`，
+>   进度条改**列表首项**随滚动滑走（= `#67 同根因残留`，修一类 bug 时要全仓搜该模式）。
+> - **③长按与删除冲突**：长按**只**回调 `onLongPress`（进多选、只勾选），不显红不位移；
+>   **红底 alpha 与位移只由手指位移驱动**（`reveal = -offsetX / thresholdPx`）；
+>   删除底改**常驻** + `graphicsLayer { alpha = reveal }`（去条件式增删节点）；整套 `armed` 机制删除。
+>   「一个手势事件只承担一种语义」。
+> - **④填充下拉 M3**：56dp 行高 / 40dp 圆形 tonal 底板 / 16dp 间距 / 标题 16sp · 副标题 14sp /
+>   水平 16dp；位图 24→34dp 避免上采样发虚；`drawable/` + `drawable-night/` 两套底板
+>   （**RemoteViews 拿不到 Compose 动态取色**）。
+> - **⑤指纹图标**：去掉 `FilledTonalButton` + 长文案，改 **64dp 指纹图标**（primary 色）
+>   置于密码框与解锁按钮之间；解锁按钮仍灰色 `FilledTonalButton`，置灰规则与自动弹出逻辑不变。
+> - **⑥云图标 + 下拉空隙**：新增 `PendingOpDao.observeItemLevelIds`
+>   （**只取 `op IN ('CREATE','UPDATE')`** —— 判定集合必须 = 展示集合）→
+>   `ItemRepository.observeSyncStates` → 两页 `syncStates` → 共用 `CloudSyncIcon`；
+>   已同步 = `CloudDone`（弱化色），待推送 = `CloudOff`（error 色），**KDBX 恒空不画云**；
+>   下拉指示器加 `padding(top = topInset)` 与列表首条对齐。
+>
+> **门禁（本地真跑全绿）**：全模块 `detekt` ✓ / `:app:compileFullDebugKotlin` ✓ /
+> `:app:assembleFullDebug` ✓ / `testFullDebugUnitTest` ✓（`BUILD SUCCESSFUL in 33s`，258 tasks）。
+>
+> **⏳ 真机待验收（7 条）**：验证码页沉浸 / 长按只勾选且滑动跟手 / 填充下拉 M3 /
+> 指纹图标与优先弹出 / 云图标（KDBX 不画）/ 下拉无空隙 / 回归无破坏。
+
+> ## 【已归档】第五十轮（2026-09-13）：**睡前 5 bug + 1 美化已交付**（提交 `23c3629`，CI `34713640553` success）
+>
+> 根因见 `.ai/ISSUES.md` **#70~#75**。
 >
 > - **①切页闪**：cross-fade 进出**同时长 + alpha 互补**（不同步 ⇒ 中间帧双向半透明、
 >   背景漏光 25%，深色底就是一次闪光）。

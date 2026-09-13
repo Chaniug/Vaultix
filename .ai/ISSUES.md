@@ -1759,3 +1759,142 @@ Bitwarden 库同步后本应已缓存在本地，打开却慢。
 
 **判据**：**新参数加在末尾时，务必全局搜一遍该函数的尾随 lambda 调用点。**
 「有默认值所以不会破坏兼容性」只对具名调用成立。
+
+---
+
+## 76. 沉浸式让位**必须写在滚动内容里**，写在滚动容器外的 padding 上就永远不沉浸（2026-09-13，第五十一轮）
+
+**现象**：验证码页下滑时**不沉浸、没有透明**，与密码页处理不一致（密码页正常）。
+
+**根因**：验证码页沿用旧写法 —— `Column(modifier = Modifier.padding(top = barTopInset))`
+包住 `LazyColumn`。让位被加在**滚动容器之外** ⇒ 整页被永久下压 `barTopInset`，
+列表的可见区域从顶栏下沿才开始，内容**永远画不到顶栏区域**，于是顶栏底下永远是一段纯色，
+没有「内容从顶栏之下滑过去」的透明感。密码页早已改成把让位并入列表首项。
+
+**对照**：同一个病在 `ISSUES.md` **#67** 已经写过一次（当时修的是「筛选条压首条 /
+上下不沉浸 / 搜索黑横幅」三症）。本轮是**同一根因在另一个页面残留**。
+
+**解法**：删除外层 `Column(padding(top = ...))`，把让位并入
+`LazyColumn(contentPadding = PaddingValues(top = barPadding + 8.dp, ...))`；
+同时把页面顶部的「统一进度条」从「列表外的固定头」改成**列表首项**（`item(key = "page_progress")`），
+让它在滚动时与条目一起滑走 —— 这正是上一轮 #2 想要的「进度条随滚动收起」在沉浸式下的正确形态。
+
+**判据**：**顶栏 / 底栏让位一律做在滚动内容里**（`contentPadding` 或列表首/末项），
+**永远不要**加在滚动容器的外层 padding 上。出现「不沉浸」先去看外层有没有 `padding(top)`。
+
+---
+
+## 77. 手势要**分层**：长按只负责「进选择」，红底与位移只由手指产生（2026-09-13，第五十一轮）
+
+**现象**：长按条目后「删除按钮不显示、不跟手」，但删除**确实生效**；
+用户明确只想要「长按出现勾选框」。
+
+**根因**：上一版为了让手势「看得见」（`ISSUES.md` #68 的补救）做了 **armed 态**：
+长按瞬间把 `armed` 置 1 ⇒ 立刻画 32% 红底 + 把内容左移 16dp。
+但这条手势**同时**还要承载「长按进多选」——「长按」这一个事件被赋予了两种语义：
+①进多选（用户要的）②预露删除（上一版加的）。两条在一起就是「一按就红、内容跳一下」，
+而且这层静态红底和手指位移**不是同一个驱动源**，滑动起来自然「不跟手」；
+更糟的是红底和卡片在同一坐标系里抢视觉，观感就是「和 UI 冲突」。
+
+**解法**（按用户选定口径「长按只勾选，滑动才显红」）：
+- **长按只回调 `onLongPress`**（进多选、只勾选），不再改任何视觉状态；
+- **位移只由手指产生**：`onDrag` 里 `offsetX = (offsetX + delta).coerceIn(-maxDragPx, 0f)`；
+- **红底 alpha 只由位移驱动**：`reveal = (-offsetX / thresholdPx).coerceIn(0f, 1f)`；
+- 删除掉 `armed` / `ARMED_SCALE` / `ARMED_HINT_ALPHA` / `hintRevealPx` 整套；
+- 阈值判定只发生在 `onDragEnd`：过阈值就 settle 到 `-maxDragPx * 2` 再触发删除。
+
+**顺带**：删除底由「`if (reveal > 0f)` 条件式组合」改为**常驻**节点，只调
+`graphicsLayer { alpha = reveal }`。条件式增删 Compose 节点会让「第一个像素的位移」
+触发一次重新组合，观感就是起手抖一下。
+
+**判据**：**一个手势事件只承担一种语义。** 「长按 = 进选择」与「滑动 = 危险操作」
+必须分在不同手势通道里；危险操作的红底 / 位移**只能由位移一个驱动源**推。
+
+---
+
+## 78. 系统填充下拉是 RemoteViews 渲染 —— 「Material」只能靠 App 侧模拟到哪一层算哪一层（2026-09-13，第五十一轮）
+
+**现象**：填充候选框尺寸已经紧凑了，但「风格和最新的 material 有点差距」。
+
+**根因**：`autofill_dataset_item.xml` 是交给**系统的 Autofill 界面（RemoteViews）**渲染的，
+不在我们的 Compose 树里，因此 **M3 的 `ListItem` 只在「尺寸与配色规格」这一层可比**，
+「形状 / 高度 / 动效」这一层是 RemoteViews 能力的硬边界（详见 `ISSUES.md` #72）：
+- ✅ 能做：行高 `minHeight`、内边距、shape 背景、`setTextViewText` / `setTextColor` /
+  `setImageViewBitmap` / `setContentDescription`；
+- ❌ 不能做：`MaterialCardView` 的完整阴影与 elevation、水波纹（ripple）、
+  非系统字体、动态取色（需按 `uiMode` 自判，用 `drawable-night/` 给深色变体）。
+
+**解法**：把「能对齐的那一层」照 M3 `ListItem` 规格一项项对：
+- 行高 **56dp**（M3 两行列表项标准值；旧值 48dp 是紧凑值，观感偏「工具栏」）；
+- 图标包进 **40dp 圆形 tonal 底板**（M3 的 icon container 规格）+ 位图 24dp→**34dp**
+  （避免在 40dp 容器里上采样发虚）；
+- 图标与文字间距 **16dp**（M3 leading→label 间距）；
+- 标题 **16sp**（`bodyLarge`）/ 副标题 **14sp**（`bodyMedium`）；
+- 水平内边距 **16dp**；
+- 圆形底板用 `drawable/` + **`drawable-night/`** 两套（浅 `#E6E0E9` / 深 `#49454F`，
+  即 `surfaceContainerHighest` 等效值），因为 RemoteViews 拿不到 Compose 动态取色。
+
+**判据**：**改填充下拉前先问「这一层 RemoteViews 支不支持」**，不支持就别试
+（阴影、ripple、动态色都属此类），只对齐尺寸与静态配色。
+
+---
+
+## 79. `PendingOp` 表可以当「未同步」判据，但**只能取条目级操作**（2026-09-13，第五十一轮）
+
+**需求**：条目行尾要显示「已同步 / 待推送」的小云图标（参考 Bastion）。
+
+**做法**：新增 `PendingOpDao.observeItemLevelIds(vaultId)` ——
+`SELECT DISTINCT cipherId FROM pending_ops WHERE vaultId = :vaultId AND op IN ('CREATE', 'UPDATE')`，
+一路经 `ItemRepository.observeSyncStates` 到两个 ViewModel 的 `syncStates: Map<String, Boolean>`，
+UI 侧 `synced = syncStates[item.id] ?: true`（键存在 = 已同步；待推送的 id 不入 map）。
+
+**为什么必须过滤 `op`**：`pending_ops` 里还有删除类（`SOFT_DELETE` / `DELETE` / `RESTORE`），
+它们对应的条目**在列表里本就不可见**；让它们参与判定，只会把「已经删掉的条目」
+标成「待推送」，而用户根本看不到这些行 —— 属于**判定集合与展示集合不一致**。
+KDBX 库没有「云端」这一层（文件即存储）⇒ 恒返回空 map ⇒ UI 因而不画云图标。
+
+**为什么用 Flow 不用挂起函数**：推送成功后队列行被删除，图标要**自动**
+从「云 + 斜杠」变成「云」，不能要求用户手动刷新。
+
+**接法**：**不要 combine 进主 UiState 的流**（高频小变化会重组整张表），
+独立 `viewModelScope.launch { ... .collect { states -> _state.update { it.copy(syncStates = states) } } }`。
+
+**判据**：**队列表当判据时，先问「这张表的哪些行对应用户正在看的东西」。**
+判定集合 ≠ 展示集合，就会得到一批用户看不懂的标记。
+
+---
+
+## 80. `PullToRefreshBox` 指示器默认贴容器顶 ⇒ 与「让位后的列表首条」之间露出空隙（2026-09-13，第五十一轮）
+
+**现象**：下拉同步时，下拉处有一块很大的空隙没处理好。
+
+**根因**：`PullToRefreshBox` 的指示器默认贴在**滚动容器顶部**（= 整页最上面），
+而列表首条在 `topInset`（状态栏 + 72dp 顶栏）之下。下拉时指示器从上往下走、
+列表从上往下走，两者之间就是一段**没有被内容覆盖的纯背景** —— 看起来就是「一大块空隙」。
+
+**解法**：自定义 `indicator`，给 `PullToRefreshDefaults.IndicatorBox` 加
+`Modifier.padding(top = topInset)`，让指示器与列表首条**同一个基准线**：
+
+```kotlin
+PullToRefreshBox(
+    isRefreshing = syncing, onRefresh = onRefresh, state = pullState,
+    indicator = {
+        PullToRefreshDefaults.IndicatorBox(
+            state = pullState, isRefreshing = syncing,
+            modifier = Modifier.padding(top = topInset),
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            content = {},
+        )
+    },
+    content = content,
+)
+```
+
+**签名坑（javap 实证）**：这个重载**没有** `indicatorAlignment` 参数；
+`IndicatorBox` 的 `content: @Composable BoxScope.() -> Unit` 是**必传**的（传 `{}`）。
+把这段抽成 `ItemsPullToRefresh` 时，`content` 参数类型必须写
+`@Composable BoxScope.() -> Unit`，写成 `@Composable () -> Unit` 会报类型不匹配。
+
+**判据**：**凡是「给滚动容器加顶栏让位」的地方，都要同步检查下拉指示器 / 空的加载态 /
+吸顶头这些「不在滚动内容里的元素」有没有跟着让位。**
+
