@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
@@ -139,16 +140,7 @@ class UnlockViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             vaultRepository.observeVaults().collect { vaults ->
-                // 无参数进入时（根导航直达）自动选中目标库。
-                //
-                // ⚠️ 顺序有意义：**先看查看层锁**。查看锁的库在会话层面是「已解锁」
-                // （密钥在内存），`!it.unlocked` 在它身上为 false —— 若先按「第一个未解锁」
-                // 选，用户按了主页锁按钮却会被要求解锁**另一个**库。
-                if (vaultId.isBlank()) {
-                    vaultId = vaults.firstOrNull { sessionRepository.isViewLocked(it.id) }?.id
-                        ?: vaults.firstOrNull { !it.unlocked }?.id
-                        .orEmpty()
-                }
+                if (vaultId.isBlank()) vaultId = resolveTargetVaultId(vaults)
                 val target = vaults.firstOrNull { v -> v.id == vaultId }
                 _state.update {
                     it.copy(
@@ -167,12 +159,19 @@ class UnlockViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
-            // vaultId 可能由上面那条流异步补上，故这里也随库列表变化重新订阅。
+            // ⚠️ 这里**绝不能**读 `var vaultId`：负责补它的那条流与本条**并发**收集同一个
+            // `observeVaults()`，谁先处理同一次发射是不确定的。若本条先到，读到的还是空串
+            // ⇒ 提前跳过；而 `localUnlockAvailable` 的**唯一写入点**正在下面
+            // ⇒ 状态永久停在初值 `false` ⇒ **指纹入口不渲染、生物识别也不自动弹**。
+            // 用户实测症状（2026-09-13）：「必须清掉后台重开才看得到指纹解锁」——
+            // 因为重建 ViewModel 才会有一次重掷的机会（#88）。
+            // 现改为**从本次发射自己解析**目标库（[resolveTargetVaultId]），
+            // 不再依赖任何跨协程写入 ⇒ 竞态从根上消失。
             vaultRepository.observeVaults()
-                .map { vaults -> vaults.firstOrNull { it.id == vaultId }?.id.orEmpty() }
+                .map { vaults -> resolveTargetVaultId(vaults) }
+                .filter { it.isNotBlank() }
                 .distinctUntilChanged()
                 .collectLatest { id ->
-                    if (id.isBlank()) return@collectLatest
                     // 目标库确定后再校正一次查看锁（标记流可能先于选库到达）。
                     _state.update { it.copy(viewLocked = sessionRepository.isViewLocked(id)) }
                     vaultRepository.localUnlockAvailable(id).collect { available ->
@@ -181,6 +180,30 @@ class UnlockViewModel @Inject constructor(
                     }
                 }
         }
+    }
+
+    /**
+     * 从**一次**库列表发射里解析出「本次要解锁哪个库」。
+     *
+     * 规则（顺序有意义）：**先看查看层锁** —— 查看锁的库在会话层面是「已解锁」
+     * （密钥仍在内存），`!it.unlocked` 在它身上为 false；若先按「第一个未解锁」选，
+     * 用户按了主页锁按钮却会被要求解锁**另一个**库（ISSUES #60 第 1c 步）。
+     *
+     * ⚠️ 本函数只把 [vaultId] 当**「路由带参」**用（来自 `savedStateHandle`，构造期即定，
+     * 且必须仍在该次发射的列表里）。**绝不依赖它被异步补写后的值** ——
+     * 那正是 #88 竞态的根源：两个协程并发收集同一条流，读 `var` 的时机不确定。
+     */
+    private fun resolveTargetVaultId(vaults: List<VaultSummary>): String {
+        val routed = vaultId
+        if (routed.isNotBlank()) {
+            // 路由带参进入（从库列表点某个锁定的库 / 查看层锁）：**只认这个库**。
+            // 它已不在列表里 ⇒ 视为「没有可解锁的目标」（保持既有语义：不另选一个库顶上）。
+            return if (vaults.any { it.id == routed }) routed else ""
+        }
+        // 无参数进入（根导航直达）：自动选中目标库 —— 先查看层锁，再第一个未锁定的库。
+        val viewLocked = vaults.firstOrNull { sessionRepository.isViewLocked(it.id) }
+        val firstLocked = vaults.firstOrNull { !it.unlocked }
+        return (viewLocked ?: firstLocked)?.id.orEmpty()
     }
 
     /** 用户点了「生物识别 / 设备 PIN 解锁」：准备解密 Cipher 并交给 UI 弹认证。 */
