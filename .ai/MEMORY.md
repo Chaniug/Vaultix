@@ -96,329 +96,76 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
   但会留 annotation ⇒ **沉默的债**，需定期巡检
 
 ## 7. 协作文件夹（均已入库，便于 AI 接力）
-- `Docs/progress/`：`environment` / `current-status` / `next-steps` / `decisions` /
-  `main-shell-migration` / `audit/`
-- `.ai/`：`MEMORY.md`（本文件副本）/ `ISSUES.md`（踩坑，**含推翻链，接力必读**）/
-  `SESSION-*.md`（会话日志）/ `README.md`（索引）
+
+> ⚠️ **2026-09-13 起「大文件」统一改为「索引 + 分篇」**：入口保持稳定路径，正文按主题分篇、
+> **按需只开一篇**（别全读 —— 全读会把真正需要的上下文挤掉）。仓库里 115 处
+> 「见 `.ai/ISSUES.md` #NN」的引用仍然有效：先看索引的「编号 → 分篇」表，再跳分篇。
+
+- `Docs/progress/`：`environment` / `current-status` / `next-steps`（**待办唯一真源**）/
+  `decisions` / `main-shell-migration` / **`perf-plan.md`（性能专项）** / `audit/`
+- `.ai/`：
+  - `MEMORY.md` —— 本文件（接力起手式：定位/架构/约会速查索引入口）
+  - **`conventions/`** —— §8「长期约定速查」的正文分篇（`8.1-自动填充` … `8.7-环境`）
+  - `ISSUES.md` —— **索引**（编号 → 分篇）
+  - **`issues/`** —— 坑的正文分篇（`01-构建与环境` … `07-数据与同步`，**含推翻链，接力必读**）
+  - `SESSION-*.md` —— 会话日志（逐轮流水，append-only）
+  - `README.md` —— 索引
 
 ---
 
 ## 8. 长期约定速查（写代码前必读）
 
-### 8.1 自动填充（autofill / CP）
-- **节点准入闸（铁律）**：只有**可编辑控件**才进字段表 —— 有 `htmlInfo` 时 `tag == "input"`；
-  无 htmlInfo 时看 className 的 EditText 家族；两者都判不出才放行（保原生 App）；
-  带标准 autofillHints 一律放行。依据上游 `ViewNodeExtensions.toAutofillView`
-- **语义信号绝不含 `node.text`** —— 浏览器整棵 DOM 都是可填节点，`<label>Password</label>`
-  会挤掉真账号框。`text` 只作为字段**值**
-- **误弹检测**：上游模型是「**分类结果即证据**」（节点要么归 Login/Card、要么 `Unused` 剔除，
-  **没有"信号强度"这一层**）。`IGNORED_RAW_HINTS = [search, find, recipient, edit]`（+ 中文）；
-  用户名关键词 = `[email, phone, username]`（★**没有 `login`**）
-- ⚠️ **纪律（顺序不能反）**：撤 `strength` 门槛的**前提**是分类层已有否定词。
-  以后放宽/新增关键词，必须同步评估这层闸还挡不挡得住
-- **用户名升格两条硬约束**：判据用「没有**可见**的 USERNAME」；升格后 `strength → MEDIUM`
-- **浏览器三条腿**（缺一条就部分浏览器静默失效）：① 域名三级兜底
-  （`webDomain` → `BrowserUrlBars` → 结构文本 BFS）；② 字段四路信号
-  （autofillHints 含 Chromium `webUsername`/`webPassword` → htmlInfo → inputType → idEntry）；
-  ③ 包名闸门（浏览器无域名时**禁止**退化包名匹配）
-- **锁态只有一个口径：活跃库是否解锁**（对齐 Bitwarden `CredentialProviderProcessorImpl`
-  的 `activeAccount.isVaultUnlocked`）。⚠️ **禁止**拿「全库快照里存在锁定的库」当判据 ——
-  多库并存（Bitwarden + KDBX，或 KDBX 被「切库即锁旧库」锁掉）时它**恒为真** ⇒
-  候选被永久清空，且**解锁后判据不变** ⇒ 无限解锁环（`ISSUES.md` #66）。
-  四类消费点（CP 列候选 / passkey 断言 / 密码回灌 / 自动填充）必须读**同一个真源**。
-- **CP 只声明 `TYPE_PUBLIC_KEY_CREDENTIAL`**（`f815ab2` 反转了「双能力」）。
-  ⚠️ 声明 `TYPE_PASSWORD_CREDENTIAL` 会让 Chromium 系把密码请求全路由到 CP、绕过 Autofill，
-  而 CP 密码分支一失败就**两条路全废**。密码填充回归 `VaultixAutofillService.onFillRequest`。
-  ⚠️ **未决分歧（勿单方面改回）**：Bitwarden 官方 `provider.xml` **是双能力**的，
-  故「删能力」更像绕过 CP 密码分支自身缺陷 ⇒ 待真机 A/B 复现后再定
-- **保存流程三段缺一不可**：FillResponse 挂 `SaveInfo`（账号+密码框为 requiredIds，
-  **无匹配 fallback 分支也要挂**）→ 框架回调 `onSaveRequest` → 拉起 `AutofillSaveActivity` 落库；
-  保存必须在**解锁会话**内完成，锁定态不落盘不排队
-- **TOTP 无条件复制**（对齐 `AutofillCompletionManagerImpl`）：填充成功后**每次都复制**，
-  仅受开关门控；挂 dataset 级 `setAuthentication`（API 26+），一律走 `VaultixClipboard`
-- **FillResponse 最多 10 条 dataset**（Binder 大小限制，超了整包被丢弃）
-- **Fill Assist**：规则来自服务端 `/api/config` 的 `environment.fillAssistRules`，
-  `manifest.json` → `forms.v1.json`（schema 主版本必须 `1`），本地缓存 6h；
-  **默认开但有独立 UI 开关**（设置 → 自动填充 → 填充行为）。**不**照搬上游 feature flag
-  （自建 Vaultwarden 不返回，会永远关着）
-- **填充下拉图标规格**：**20dp 单色语义矢量** + `setColorFilter`（亮 `#44474E` / 暗 `#C4C6CF`），
-  行内边距 12/6、最小高度 48dp；品牌行不上色。**禁止**再用彩色启动图标
-- **`onFillRequest` 不是挂起函数** ⇒ 读偏好流（`prefs.xxx.first()`）必须在 `scope.launch {}` 内
-- **键盘内联建议（`InlinePresentation`）不做**：国产输入法基本未接入该 API（仅 Gboard/SwiftKey）
-- 保底三件套（不依赖输入法与无障碍）：磁贴 / 手动填充 / 智能复制通知
+> ⚠️ 2026-09-13 起本节的正文**按主题拆到 `conventions/` 分篇** —— **只读你这次要动的那一篇**，
+> 不要全读（原本节约 250 行，全读会挤掉真正需要的上下文）。
 
-### 8.2 锁与解锁 —— **两层语义，代码里是两条独立路径（勿合并）**
-
-| | 真锁（加密门禁） | 查看锁（界面门禁） |
+| 分篇 | 主题 | 条目 |
 |---|---|---|
-| 入口 | 超时到期 / 冷启动 / 退出数据库 / `lockVault` | 主页锁按钮 → `viewLock` |
-| 密钥 | **清零** | **原样留着** |
-| 恢复 | 主密码（+2FA）+ 联网 | **一次生物识别**，离线 |
-| 载体 | `VaultSessionManager` | `VaultSessionManager.viewLockedIds` |
-| 根导航 | `RootNavState.VaultLocked(null)` | `RootNavState.VaultLocked(vaultId)` |
+| [8.1 自动填充](./conventions/8.1-自动填充.md) | 自动填充 | 16 |
+| [8.2 锁与解锁](./conventions/8.2-锁与解锁.md) | 锁与解锁 | 6 |
+| [8.3 M2KDBX](./conventions/8.3-M2KDBX.md) | M2KDBX | 12 |
+| [8.4 UI·观感](./conventions/8.4-UI·观感.md) | UI·观感 | 12 |
+| [8.5 通行密钥](./conventions/8.5-通行密钥.md) | 通行密钥 | 12 |
+| [8.6 工程质量](./conventions/8.6-工程质量.md) | 工程质量 | 12 |
+| [8.7 环境](./conventions/8.7-环境.md) | 环境 | 9 |
 
-三条不变量（破坏必然出「点了没反应」或「解锁完又要验证」）：
-1. `viewLocked` 在 `RootNavViewModel` 判定里**必须排在「已解锁」之前**（查看锁的库在 `unlockedIds` 里）
-2. 解锁页自动选库**先看 `isViewLocked`**，再看 `!unlocked`
-3. 真锁路径（`lock / lockAll`）要**一并清查看锁标记**，否则标记残留把用户死锁在
-   「只需认证、但密钥已不在内存」的页面
+## 9. 当前状态与下一批（**第五十二轮**接力起手式）
 
-成功分支靠**显式参数**区分（`completeLocalUnlock(cipher, forViewLock)`），
-**不要**读调用时刻的状态（认证对话框期间可能被别的流改写）。
+> ⚠️ **逐轮历史不在这里维护** —— 与本文件早期做法不同：历史只保留一处，避免两处不同步。
+> 最新待办 → [`Docs/progress/next-steps.md`](../Docs/progress/next-steps.md)（最新在顶部）·
+> 逐轮流水 → `.ai/SESSION-YYYY-MM-DD.md` · 坑 → `.ai/ISSUES.md`（索引，正文在 `issues/`）·
+> 性能专项 → [`Docs/progress/perf-plan.md`](../Docs/progress/perf-plan.md)。
 
-其他：
-- **锁态模型按 Bitwarden 重写**：`VaultTimeout` sealed class（10 档位）+ 后台
-  `launch { delay(t); lock() }` / 前台 `cancel` job；CP 侧由 `RootNavViewModel` 集中判据，
-  锁定只给 `authenticationActions`；`CredentialProviderActivity` 作 trampoline（`exported=false`）
-- ⚠️ **迁移陷阱**：旧 `auto_lock_minutes = -1` = 「**从不**」；新 `VaultTimeout` `-1` =
-  `OnAppRestart`「**重启即锁**」—— 语义正好相反，已做一次性迁移 + 标记
-- **Android 16+ `Settings.Secure` 对第三方 App 受限** ⇒ 凡读系统设置判状态的检测，
-  取向一律「**读不到 = 已启用**」（⚠️ `adb shell settings get` 有值 ≠ App 内读得到）
-- **快速解锁四铁律**：① `submitting` 必须由「成功 / 失败 / **任何**弹窗错误」三路复位
-  （只处理「用户取消」会整页死锁）；② `UserNotAuthenticatedException` **不是**「密钥已废」，
-  不得据此清用户注册；③ **解密路径绝不新建 KEK**（`loadKey()` 只读，只有启用路径
-  `obtainOrCreateKey()`）；④ 判 KEK 健康用 `getKey`（三态 `kekStatus`），
-  **不要用 `containsAlias`**（失效时静默返回 false）
-- 快速解锁模型：账号对称密钥 64B 用 Keystore user-auth KEK（AES-GCM）包裹落盘
-  （`local_unlock_key::<vaultId>`），锁库只清内存；指纹增删自动 invalidate KEK → 回退主密码
-- **敏感存储未用** `androidx.security.crypto`（1.1.0 已整体废弃），改用
-  **Android Keystore + AES-256-GCM**（密钥不可导出、每值随机 IV）
+**第五十二轮（已提交 `e903c4b` + `a8b09c1` + `2206329`，已推送 `main`）**
 
-### 8.3 M2 KDBX
-- **引擎选型定案**：直接用 **`app.keemobile:kotpass:0.13.0`**（Maven Central，**MIT**，
-  纯 Kotlin/JVM，唯一传递依赖 okio）。**不搬 Keyguard**：其本体 `All Rights Reserved`；
-  其 `util/kdbx/` 只是 vendored kotpass 且被改过（换成 Keyguard 自己的 crypto）；GPL 兼容性有问题
-- **KDBX 与 Bitwarden 是两套会话模型**（第 4 批全部复杂度来源）：
+用户一次性报了 **13 项**体验问题，逐条修复并真机验收通过；本轮另完成两项结构改造：
+**记忆分层**（`MEMORY.md` 18.3KB → 2.3KB 索引 + `chapters/` 分篇）与
+**文档分篇**（`ISSUES.md` 139KB → 9KB 索引 + `issues/` 7 篇；本文件 §8 → `conventions/` 7 篇）。
 
-  | | Bitwarden | KDBX |
-  |---|---|---|
-  | 内存会话 | 一把对称密钥（`VaultSessionManager`） | **整库明文**（`data:kdbx` 会话） |
-  | 条目存储 | Room `ciphers`（密文） | **只在内存**（不写 ciphers 表） |
-  | 解锁 | 联网 + 可能 2FA | 离线（文件 + 主密码 + 可选 keyfile） |
+- 交付清单与逐条验收状态：见 `Docs/progress/next-steps.md` 顶部的第五十二轮块。
+- 新坑 **#81~#87**：预测式返回预览 / 认证结果被系统丢弃 / `Dataset` vs `FillResponse` /
+  「空」有三态 / KEK 判据探测宽失败严 / 同形状叠放的接缝 / 转场只允许 `translationX`。
+- **本轮最贵的两条教训**（已写进 §1 的纪律）：
+  ①「手势返回时画面缩小」我**改了三次转场**都没中，因为**复现方式本身是错的**——
+  用 `input keyevent 4`（按键返回）去复现**手势**返回的问题；
+  ②「填充反复解锁、看不到条目」**白改一轮**，因为只抓了自己的日志 tag，
+  看不到系统框架侧说「认证结果被丢弃」。
+  ⇒ **先对齐复现路径、先连系统侧取实证，再动代码。**
 
-- **门面** `io.vaultix.data.kdbx.Kdbx`（`unlock / contentOf / isUnlocked / unlockedIds /
-  lock / lockAll`）+ `KdbxSource`（`(uri) -> ByteArray?`，由 `data:repository` 用 `ContentResolver` 实现）。
-  `KdbxSession / KdbxOpener / KdbxSessionStore` **永远保持 `internal`** —— 它们握着 kotpass 的
-  `KeePassDatabase`（明文整库），绝不能进跨模块签名（一次 `println` 就可能把明文写进日志）
-- **读路径分流**在 `ItemRepositoryImpl.observeItems / observeTrash / observeItem`，UI 与
-  自动填充侧零改动。⚠️ 库种类是**挂起**查询（`vaultDao.get`）⇒ 必须放 `flatMapLatest`，
-  不能写在方法体里
-- **会话变化通知** = `KdbxSessionFlow`（**只带一个代次计数**）。任何改变会话集合的动作
-  （解锁 / 锁定 / 移除 / 退出数据库 / 切库）都要 `bump()`，**漏一处就「解锁了但列表还是空」**。
-  给明文会话挂 `MutableStateFlow` 是**反模式**
-- **切库即锁旧库**在 `ItemsViewModel.init`（`lockOtherKdbxVaults`）：KDBX 那把「密钥」是整库明文，
-  多库同时解锁会让「同时只能进一个库」的内存约束失效
-- **keyfile 只存 URI**（`VaultixPreferences.kdbxKeyFileUri`），内容现读；
-  UI 必须 `takePersistableUriPermission`（否则「今天能解锁、明天说读不到文件」）
-- **失败必须分类**：`SourceUnavailable`（读不到文件）≠ `InvalidCredentials`（密码错）——
-  一律报「密码错误」会让人反复重输正确的密码
-- **两个 codec**（`KdbxTotpCodec` / `KdbxPasskeyCodec`）都提供 `isXxxFieldName`，
-  `customFieldsOf` 用它排除专属字段 —— 否则详情页会把**私钥 PEM / TOTP 密钥**当
-  「隐藏自定义字段」展示。最易错两点：位置式 `TOTP Settings` 按**出现顺序**填；
-  `TimeOtp-Secret-Hex|Base64` 必须**真解码再转 base32**（当 base32 解析会**静默算错码**）
-- **阶段 B（写回）未做，铁律预告**：**插件字段（`KPEX_*`）与不认识的自定义字段一律原样保留**
-  （丢一个 = 用户通行密钥失效）；写回走**整体重建 + 原子替换**（先写临时文件再 rename）+
-  `.kdbx.bak` 备份；往返测试**逐字段相等**。目标格式 **KDBX 4.1**
-- 写回预留钩子：`Kdbx` 门面补 `save(vaultId, ...)`；`KdbxSessionStore` 已持 `KeePassDatabase`
-  （`encode` 可用）；`KdbxMappedContent.groupPaths`（uuid → 路径）就是为写回预留的
-- 未做：KDBX 快速解锁（KEK 包裹，免每次输主密码）；KDBX 回收站映射
-  （现在只 `recycleBinCount` 计数，`ItemRepositoryImpl.observeTrash` 对 KDBX 明确返回空）
+**★ 下一批（按优先级）**
 
-### 8.4 UI / 观感
-- **站点图标**：端点 `<服务器>/icons/<域名>/icon.png`（同 Vaultwarden）。三条取舍：
-  **剥掉服务器路径**（反代下端点在站点根）、**只收 https**（cleartext 会被静默拦）、
-  **保留 `www.`**。⚠️ **域名必须过白名单**（仅字母/数字/`.`/`-`）—— 它会被拼进 URL 路径，
-  不设防就能改写请求目标。纯字符串实现放 `core:common/SiteIconUrl`（零 Android/零网络）
-- **顶栏**：动作收敛为 **🔍 + ⋮**（低频动作进 overflow）；
-  **筛选条必须浮在内容之上**（与顶栏同层 + `matchParentSize()` 透明遮罩）——
-  塞进可滚动 `Column` 会随列表滚走而箭头还指着「已展开」；
-  **筛选状态刻意不持久化**（落盘会让用户下次对着空列表发呆）；有筛选时标题必须拼
-  「**库名 · 筛选名**」（只显示库名，用户会以为数据丢了）
-- **让位必须做在滚动内容里**（`LazyColumn.contentPadding` / 可滚动的 `Spacer`），
-  **绝不**做外层容器 `padding`：做在外面，内容就永远到不了那片区域 ⇒ 顶栏透明了也不沉浸、
-  筛选条压住首条、搜索态「Scaffold 让位 + 外层 padding」双重留白成黑横幅（`ISSUES.md` #67）。
-  搜索态还必须自己 `BackHandler` —— 主界面是**根路由**（栈里没有上一层），不拦就退桌面。
-- **底栏是叠层悬浮**（不是 `Scaffold(bottomBar)`）：内容铺到屏幕底，各页用 `bottomInset`
-  （`rememberBottomDockInset` = 胶囊 86dp + 系统手势条）自己留位。
-- **隐藏手势必须有可见反馈**：长按滑删的 armed 态要给 32% 红底 **+ 让出 16dp 缝**
-  （只调 alpha 看不见 —— 删除底被不透明卡片完全盖住）。功能存在 ≠ 用户知道它存在（#68）。
-- **沉浸式顶栏三个前置条件缺一不可**：Box 叠加 + 列表顶部让位 + 外层 insets 归零
-  （少一个就退化成「顶栏变短但内容仍被压着」）
-- **Tab 动效规格**（Bastion 移植）：进入 `fadeIn + slideInVertically(1/16 屏高)` 220ms，
-  退出 `fadeOut` 120ms，缓动 `CubicBezierEasing(0.6f, 0f, 0.4f, 1f)`；
-  配 `AnimatedContent(contentKey = tab)` + `SaveableStateHolder`（**切 Tab 不丢滚动/搜索词**）；
-  验证码倒计时用 `rememberTotpSmoothProgress`（秒级数据 + 绘制层 1s 线性动画，翻转 `snap()`）
-- **条目卡片**（`ui/common/EntryCard.kt`，照 Bastion `PasswordEntryCard`）：M3 默认 Card +
-  **12dp 圆角** + **16dp 内边距** + 标题 SemiBold + 6dp 行距；三个列表（密码/验证码/卡包）统一。
-  ⚠️ 「外框」是**组件级卡片样式**，与「壳」（导航/容器/转场）无关
-- **搜索输入框绝不能放进 `LargeTopAppBar`**（高度随滚动变化 ⇒ 输入框被反复垫高、焦点漂移）；
-  Bitwarden 做法 = 固定高度 `TopAppBar` + 搜索态**整体占据 `title` 槽**（与标题二选一，
-  调用方写 `if (searchActive) 搜索顶栏 else 普通顶栏`，**整体替换不叠加**）；
-  `searchActive` 用 `rememberSaveable`
-- **改点击语义必须补回被挤掉的入口**：整行点击从「编辑」改成「复制」后，编辑入口若不显式补
-  一个，条目就再也改不了
-- 详情页**不做动态验证码**（降功耗），只提示「含验证码 / 已绑定 N 个通行密钥」
-- 同一功能在项目里出现 3 种不同写法 = 高危信号，先统一再修
+1. ⭐ **应用内 PIN 解锁**（用户连续三轮要求，一直欠着）。
+   定位 = **「解锁便利」而非找回手段**：PIN 只用于解开 Keystore 里已包好的那份密钥
+   （与指纹**同一条链**），**不参与派生库密钥**；需要设置页开启/修改/关闭 +
+   解锁页数字键盘入口 + 主密码兜底。
+2. ⭐ **性能专项**：`Docs/progress/perf-plan.md`。**P0 必须先换 CI 的 release 包建立基线** ——
+   现有数字（PSS 200MB / Janky 9.2% / 冷启动 763ms）来自 **debug 包**，不能作为优化依据。
+3. 待用户复测：验证码页冷启动的「假空态」是否已变成转圈（#84）。
+4. 同类「假空态」尚存于 `ItemsScreen:310` 与卡包页；密码页因活跃库 id **同步**解析暂未复现。
+5. `deliverPendingFill()` 拿不到有效暂存时是**静默** `finish()`，值得补一条"填充已失效"提示。
+6. **密保问题：结论是不做** —— 它不是找回手段，只会给同一个库再加一把更弱的钥匙。
 
-### 8.5 通行密钥（WebAuthn / CP）关键判据
-- **注册与断言两条流程都回传自建的 `clientDataJSON` 真实 JSON**，唯一差别是
-  **签名覆盖哪份哈希**（浏览器用系统给的 `clientDataHash`，原生流程用 `sha256(自建 JSON)`）；
-  **浏览器流程不写** `androidPackageName`（浏览器那份 JSON 没有该字段）。
-  ⚠️ **绝不回传空占位符** —— 官方文档 `set a placeholder value` 那句带前置条件
-  `If you retrieve an origin`（仅特权应用名单场景适用），而 W3C L2 §7.1/§7.2 要求 RP
-  **解析明文**校验 `C.type` / `C.challenge` / `C.origin` ⇒ 空数组连 JSON 解析都过不了
-- **`rawId` / `userHandle` 是不透明字节串**：库里 `credentialId` 有两种形态 ——
-  Vaultix 自建 = `base64Url(32字节)`（43 字符），**Bitwarden 同步 = UUID 文本**（36 字符）。
-  ⚠️ UUID 文本字符集 `0-9a-f-` 全落在 base64url 字母表内、长度 36 = 4×9 ⇒「能不能 base64 解码」
-  会**误判成 base64**。正解：**先 `UUID.fromString → 16 字节 → base64Url`**，再 fallback
-- **`allowCredentials` 是提示不是授权门** ⇒ 严格匹配为空要**回退到「只按 rpId」**（宁可多列不可漏列）
-- **rpId 两侧都归一化**：`trim → trimEnd('.') → lowercase(ROOT) → IDN.toASCII(USE_STD3_ASCII_RULES)`
-- 官方客户端读字段一律 `trim()`；`counter`/`discoverable` 不 trim 会**静默回落默认值**
-- **`signCount` 恒 0**（0 = 不实现计数器，规范允许）；递增必然跨设备分叉
-- 响应 JSON 必带 `clientExtensionResults:{}` + `authenticatorAttachment: platform`
-- **origin 取值顺序**：`requestJson.origin` → `CallingAppOrigin` → `https://$rpId`
-- 全库锁定时**只返回 `authenticationActions`(unlock)**、不带 credentialEntries
-- **铁律：验签失败不要在注册期字段（BE/BS）上找原因**；**「列表为空」必须逐级量化埋点**
-  （`total/unusable/rpIdMiss/allowedMiss/matched`）
-- **先证伪「自己失败了」**：用系统侧日志证明"我们没失败"，再压到字段级
-- `CallingAppInfo.getOrigin(allowList)` 的 allowList 是**签名背书名单**（非可选占位）⇒
-  正解 = **自证式读取**（拿调用方自己 `signingInfo` 算 SHA-256 指纹，拼只含它自己的名单）。
-  ⚠️ **读第三方 API 不能只看方法签名猜语义，要反编译看实现**
-
-### 8.6 工程质量
-- **detekt 两个必须知道的坑**：① `CyclomaticComplexMethod` 会把**同文件**被调私有函数的
-  复杂度**累加**进调用方（实测拆同文件 helper：19 → 41，阈值 14）；本版本
-  `ignoreNestingFunctions` 默认 **false** ⇒ 作用域函数（`let`/`run`/`apply`/`also`/`forEach`）
-  每个 +1。**唯一规避 = 把 helper 拆到「独立文件」**（detekt 逐文件分析）。
-  实证法：把可疑函数体 stub 成 `return emptyList()` 再跑。
-  ② detekt **只做静态检查、不做类型检查**，且 **CI 里 detekt 先于 compile** ⇒
-  **编译错误被掩盖**（现象：CI 1 分钟就红）。**改完 detekt 必须真跑一次 compile。**
-- **重构后必重跑 detekt**：编译/测试全绿也不会报新违例
-- **注释里的「斜杠 + 星号」**：Kotlin 块注释**支持嵌套**，注释文案里出现「星号紧跟斜杠」会
-  **提前结束注释**（报一堆 `Expecting a top level declaration`，位置全在同一行 —— 看到这个
-  形态先去看注释）。写完注释 5 秒自检 `grep -n '\*/\|\/\*'`。
-  **KDoc 里禁止字面 `/**`**（如 `/api/**`），块注释嵌套到 EOF 不闭合，KSP 报误导性连锁错
-- **源码编码门禁** `.github/scripts/check-encoding.py`（CI push/PR）：
-  判据必须是「**GBK 编码 → UTF-8 解码后全部落在 CJK 区**」；
-  朴素的「encode gbk + decode utf-8 成功即乱码」会**大量误报**（「为」「状态」「值」「只」等）
-- ⚠️ `git add -A` 会把工作区任何损坏一并提交（曾造成 139 处 U+FFFD 的注释损坏静默入库）；
-  用 `git cat-file blob <rev>:<path>` 取**原始字节**比对（**不要**用 `git show > file`，会转码）
-- **类型陷阱**：`retrieveProviderCreateCredentialRequest(intent).callingRequest` 是**客户端侧**
-  `androidx.credentials.CreateCredentialRequest`，与**服务端侧**
-  `androidx.credentials.provider.BeginCreateCredentialRequest` **互不相关**（无继承）；
-  `BeginCreatePublicKeyCredentialRequest` **自带** `clientDataHash`
-- **Hilt 断环**：`OkHttpClient ↔ Retrofit.Builder` 构造期环 → 注入 `Provider<TokenRefresher>`，
-  401 回调时才 `get()`（**懒断环；eager 会死锁**）
-- `@Inject` 构造只能含可绑定参数；测试注入口走 `internal` 次构造
-- **单测是回归标尺**：本轮基线 `333 tests, 0 failures`（`:core:common` + `:data:kdbx` +
-  `:data:repository` + `:app:testFullDebugUnitTest`）+ 全模块 detekt 全绿 +
-  full/offline 两个 flavor 都编译通过
-- **新增入口先画一遍「从冷启动到该入口」的可达路径**：KDBX 添加入口曾挂在
-  `VaultListRoute` 后面，而该路由在「已有 ≥1 个库」时**不可达**（根导航落在解锁页 / 主界面）
-  ⇒ 集成交付了却用不到（`ISSUES.md` #69）。功能挂在不可达路由后面，测试通过也没意义。
-- **全局形状杠杆**：`MaterialTheme.shapes.extraSmall` 是 M3 `OutlinedTextField` 的默认圆角
-  （基线只有 4dp）⇒ 改这一处 = 全 App 输入框一次性变圆，比逐个字段加 `shape` 稳妥
-- **detekt 行数门禁会随改动"涨"到临界**：主 composable 贴着 `LongMethod ≤150` 时，
-  加几行就红。拆法：把「与主流程无耦合的一段」抽成独立 composable / 私有函数
-  （本轮抽了 `rememberItemsTopInset` / `SearchBackHandler` / `TotpPageProgress`）；
-  文件里**唯一的类形声明**必须与文件名同名（`MatchingDeclarationName`）——
-  枚举与 composable 同文件时会被判违规，需拆文件（`BadgeTone.kt`）
-
-### 8.7 环境
-- **本机（Windows / WorkBuddy）**：JDK 17 + Android SDK（`C:\AndroidSDK`）+ `gh` CLI **全部可用**
-  ⇒ 可本地 gradle 构建、可直接 `git push`、可 `gh run view` 查 CI
-- Git Bash 下 `./gradlew` 报「找不到主类 GradleWrapperMain」⇒ 用
-  `java -classpath "D:/Vaultix/gradle/wrapper/gradle-wrapper.jar" org.gradle.wrapper.GradleWrapperMain <task>`
-  或直接 `~/.gradle/wrapper/dists/gradle-9.5.1-bin/*/gradle-9.5.1/bin/gradle`；
-  daemon 配额耗尽先 `--stop`
-- **本地验证链（≈ CI push 门禁）**：`detekt`（全模块）→ `:app:compileFullDebugKotlin` →
-  `:app:assembleFullDebug` → 相关模块单测
-- ⚠️ 沙箱**缺 NDK** ⇒ `assembleFullDebug` 的 native 符号剥离会失败（与代码无关，CI 正常）
-  ⇒ 替代验证用 `:app:compileFullDebugKotlin`
-- 沙箱内 GitHub 推送（**仅供沙箱参考**）：GitHub 被解析到 `198.18.0.x` ⇒ 用阿里 DoH
-  （`https://223.5.5.5/resolve?name=github.com&type=A`）写 hosts + `~/.user_hosts`；
-  SSH over 443（`HostName ssh.github.com` / `Port 443`）；HTTPS 推送不可行
-- ⚠️ 沙箱查 CI：`api.github.com` 直连会 EOF 或被 301 到 `github.com` ⇒
-  **hosts 写 `140.82.121.6 api.github.com`**（`140.82.112.4 github.com`），
-  之后 `GH_TOKEN=... gh run list/watch/view --repo Chaniug/Vaultix` 即可
-  （remote 是 ghfast 镜像，`gh` 认不出 host，必须带 `--repo`）
-- ⚠️ 沙箱 `assembleFullDebug` 的 **dex 阶段会偶发「Gradle daemon disappeared」**
-  （并发越高越易触发，与代码无关）⇒ 用 `--max-workers=1` 稳定跑通
-- 沙箱无 Android SDK 时，可用 Gradle 自带的 `kotlin-compiler-embeddable-2.2.21.jar`
-  真实编译纯 JVM 模块的 `.kt` 并跑断言 —— **验证真正会编译进 App 的那份代码**，
-  胜过「内联逻辑副本」；Compose 文件可用 API 桩（`Modifier` 桩必须写成
-  `interface Modifier { companion object : Modifier }`）
-- **能在本地跑的实验就不要靠推理排除** —— 一轮脚本胜过三轮 CI 试错
-
----
-
-## 9. 当前状态与下一批（第五十一轮接力起手式）
-
-**第五十一轮（已提交 `d062792`）**：承接第五十轮的 5 bug + 1 美化，用户复盘后给出
-**6 条反馈**（其中第 1 条确认已修好，实际新改 5 条 + 1 条收尾）——
-①切页闪烁**已确认修复** ②验证码页下滑不沉浸（未对齐密码页）③长按与删除冲突
-（「删除按钮不显示、不跟手，但删除生效」）④填充条目框风格离最新 Material 有差距
-⑤指纹解锁文案换成**大号指纹图标**（置于密码框与解锁按钮之间）⑥条目加**小云图标**（参考 Bastion）
-+ 下拉同步处一大块空隙。三个歧义点经 `AskUserQuestion` 拍板：
-
-| 歧义点 | 用户选定口径 |
-|---|---|
-| ③ 长按与删除的关系 | **「长按只勾选，滑动才显红」** |
-| ⑤ 指纹图标的位置 | **「密码框 → 图标 → 解锁按钮」** |
-| ⑥ 云图标判据 | **「按在线 / 离线状态」**（不是按库种类） |
-
-根因见 `ISSUES.md` **#76~#80**。门禁（本地真跑全绿）：全模块 `detekt` →
-`:app:compileFullDebugKotlin` → `:app:assembleFullDebug` → `testFullDebugUnitTest`
-（`BUILD SUCCESSFUL in 33s`，258 tasks）。
-
-**★ 第一优先：真机验收 6 条**（清单见 `.ai/SESSION-2026-09-13.md` 第五十一轮末节）
-1. **验证码页沉浸**：下滑时内容应滑到顶栏之下、顶栏透出内容；进度条随滚动滑走。
-2. **长按 = 只勾选**：长按条目只出现勾选框、**不显红不位移**；手指左滑才出现红底且**跟手**；
-   过阈值松手才删除；点卡片仍是主操作（打开详情）。
-3. **填充下拉 M3**：56dp 行高、40dp 圆形图标底板、16/14sp 字号；深浅色两种底板。
-4. **指纹图标**：解锁页密码框下方是一个**大号指纹图标**（primary 色），再下面是灰色解锁按钮；
-   有指纹时优先自动弹出，解锁按钮逻辑不变。
-5. **云图标**：条目行尾出现小云；已同步 = 弱化色实心云，有未推送改动 = error 色云加斜杠；
-   KDBX 库**不画**云。
-6. **下拉空隙**：下拉同步时指示器与列表首条对齐，不再露出大块纯背景。
-7. **回归**：Bitwarden 同步 / KDBX 读写 / 通行密钥 / 自动填充均不受影响。
-
-**第五十轮（已提交 `23c3629`，CI run `34713640553` success 3m24s）**：用户睡前留 5 个 bug +
-1 个美化。根因见 `ISSUES.md` **#70~#75**。
-
-**第四十九轮（已提交 `bc09995` + `678be0d`）**：用户一次报 8 件事 —— P0 解锁逻辑 + 布局三症 +
-滑动删除反馈 + KDBX 入口 + 填充下拉 + 条目页观感。根因见 `ISSUES.md` **#66~#69**。
-门禁（本地真跑）：`:app:compileFullDebugKotlin` + 全模块 `detekt` +
-**333 tests, 0 failures**。
-
-**★ 第一优先：真机验收（本轮 8 条对应的验收点）**
-1. **Edge/GitHub 凭据面板**：不再只剩「解锁 Vaultix」；已解锁时应**直接出现候选**；
-   即便弹过一次解锁，**解锁完不应再弹**（无限解锁环已修）。若仍异常，
-   抓 `VaultixAutofill` tag 的 `CP GET unlocked=N` 看现场口径。
-2. **上下沉浸**：滚动时条目能滑到顶栏之下；底栏胶囊周围透出内容。
-3. **筛选条**：展开后第一条条目不再被 chip 压住。
-4. **搜索**：不再有黑横幅；返回手势只退出搜索（不再退回桌面）。
-5. **长按滑删**：长按后能**看见**红底与位移，再左滑删除（密码 / 验证码 / 分组态都要）。
-6. **设置 → 密码库**：出现「添加密码库」→ 能选「打开 KDBX 文件」。
-7. **观感**：输入框变圆（全局 12dp）；详情页有图标头部；列表与详情出现「验证码 / 通行密钥」
-   彩色徽标；验证码数字更大、≤5s 变红；填充下拉 56dp 圆角实底。
-8. **回归**：Bitwarden 登录/同步/填充、KDBX 读写、主页锁按钮（查看锁）均不受影响。
-
-**之后的新功能候选（按建议顺序）**：
-1. **KDBX 阶段 B（写回）** —— 最大的未完成块；起点 `ISSUES.md` #59 / #64，铁律见 §8.3
-2. KDBX 快速解锁（KEK 包裹，免每次输主密码）—— ⚠️ 先想清「换 keyfile 后怎么办」
-3. KDBX 回收站映射（`ItemRepositoryImpl.observeTrash` 里分支）
-4. `main-shell-migration.md` **阶段 3 剩余**：卡片样式细化 / FAB 行为 / 设置页分组复核
-5. 设置页「本轮可补」三项：SectionCard 观感统一、条目分组模式入口、显示选项、列表密度
-   （**不搬**需后端能力的假开关：密码建议/智能标题/屏蔽字段/通知时长/诊断导出/HIBP/附件历史/Send；
-   **架构决策不搬**：私有本地库 / WebDAV / OneDrive / Bastion 自有分类）
-6. 遗留：`item.new` 无类型选择器的历史缺口已补（af41c9e）；`provider.xml` 可否补
-   `settingsActivity` 已做（`CredentialProviderSettingsActivity`）；privileged allowlist 待 M3
-
-**未决分歧（勿单方面改）**：CP 是否恢复声明 `TYPE_PASSWORD_CREDENTIAL`
-（Bitwarden 官方声明双能力；我方因「CP 密码分支会绕过 Autofill」而删）⇒ **待真机 A/B 复现后再定**。
-
----
+**门禁（本地真跑全绿才提交）**：全模块 `detekt` → `:app:compileFullDebugKotlin` →
+`:app:assembleFullDebug` → 用发布密钥重签 → `adb install -r` → 真机验收。
 
 ## 10. 历史轮次索引（细节见 `.ai/SESSION-*.md` 与 `.ai/ISSUES.md`）
 
