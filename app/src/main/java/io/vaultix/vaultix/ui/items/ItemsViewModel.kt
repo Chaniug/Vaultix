@@ -107,6 +107,13 @@ class ItemsViewModel @Inject constructor(
         val quickFilter: ItemsQuickFilter = ItemsQuickFilter.All,
         val syncNote: SyncNote? = null,
         val saving: Boolean = false,
+        /**
+         * 条目 id → 是否已同步上云（列表行尾小云图标的数据源）。
+         *
+         * 缺省空 map ⇒ 读侧 `map[id] ?: true`：新建后立即可见、还没入队的那一瞬间，
+         * 不该闪一下「未同步」。
+         */
+        val syncStates: Map<String, Boolean> = emptyMap(),
     )
 
     private val _state = MutableStateFlow(UiState())
@@ -136,6 +143,14 @@ class ItemsViewModel @Inject constructor(
             vaultIdState
                 .flatMapLatest { id -> itemRepository.observeItems(id) }
                 .collect { items -> _state.update { it.copy(items = items) } }
+        }
+        // 云同步状态 → 行尾小云图标（待推送的条目显示云加斜杠）。
+        // 与条目流并行收集而不是 combine 到一起：两者的发射频率无关，合并会让
+        // 「队列里少了一条」这种高频小变化带着整张列表重新组装。
+        viewModelScope.launch {
+            vaultIdState
+                .flatMapLatest { id -> itemRepository.observeSyncStates(id) }
+                .collect { states -> _state.update { it.copy(syncStates = states) } }
         }
         // 同步状态 → 页内提示条（Bastion 语义：静默结果不打扰）
         viewModelScope.launch {

@@ -64,6 +64,8 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
@@ -93,6 +95,7 @@ import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.BadgeTone
+import io.vaultix.vaultix.ui.common.CloudSyncIcon
 import io.vaultix.vaultix.ui.common.EntryCard
 import io.vaultix.vaultix.ui.common.EntryCardIconSize
 import io.vaultix.vaultix.ui.common.EntryCardIconSpacing
@@ -275,10 +278,11 @@ fun ItemsScreen(
                     onDismiss = viewModel::dismissSyncNote,
                     onRetry = viewModel::retrySync,
                 )
-                PullToRefreshBox(
-                    isRefreshing = syncing,
+                // 下拉伸手区（指示器让位与状态都在这里闭环，见 [ItemsPullToRefresh]）。
+                ItemsPullToRefresh(
+                    syncing = syncing,
+                    topInset = listTopInset,
                     onRefresh = viewModel::retrySync,
-                    modifier = Modifier.fillMaxSize(),
                 ) {
                     if (visibleItems.isEmpty()) {
                         // 空态 / 搜不到：同样要让位，否则文案与插画被半透明顶栏压住。
@@ -298,6 +302,7 @@ fun ItemsScreen(
                             selectedIds = selectedIds,
                             onToggleSelect = { item -> selectedIds = toggleSelection(selectedIds, item.id) },
                             onOpenItem = onOpenItem,
+                            syncStates = state.syncStates,
                             onDelete = { item ->
                                 // 删完必须把 id 摘掉，否则底栏还会统计一条已不存在的条目。
                                 selectedIds = selectedIds - item.id
@@ -382,6 +387,42 @@ private fun ItemsEmptyState(query: String, topInset: Dp) {
     Box(modifier = Modifier.fillMaxSize().padding(top = topInset)) {
         if (query.isBlank()) EmptyItemsState() else NoSearchResultState()
     }
+}
+
+/**
+ * 下拉刷新的伸手区（含指示器让位）。
+ *
+ * ⚠️ 指示器默认贴在**容器顶部**（= 整页最上面），而列表首条要到 [topInset]
+ * （状态栏 + 72dp 顶栏）之下才开始横向铺开。于是下拉时「指示器上方 + 指示器到首条之间」
+ * 会露出两段纯背景 —— 正是用户反馈的「下拉处有一块很大的空隙」。
+ * 把指示器整体下移到顶栏之下：空隙消失，它正好出现在「内容开始的地方」，
+ * 与首条视觉上连成一体。
+ */
+@Composable
+private fun ItemsPullToRefresh(
+    syncing: Boolean,
+    topInset: Dp,
+    onRefresh: () -> Unit,
+    content: @Composable BoxScope.() -> Unit,
+) {
+    val pullState = rememberPullToRefreshState()
+    PullToRefreshBox(
+        isRefreshing = syncing,
+        onRefresh = onRefresh,
+        modifier = Modifier.fillMaxSize(),
+        state = pullState,
+        indicator = {
+            PullToRefreshDefaults.IndicatorBox(
+                state = pullState,
+                isRefreshing = syncing,
+                modifier = Modifier.padding(top = topInset),
+                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                // content 留空：默认的箭头 / 转圈由 IndicatorBox 自己按 isRefreshing 画。
+                content = {},
+            )
+        },
+        content = content,
+    )
 }
 
 /** 分组（纯逻辑在 [groupItems]；不分组时只有一项、标题为空 → UI 不画分组头）。 */
@@ -744,6 +785,8 @@ private fun ItemsList(
     onToggleSelect: (VaultItem) -> Unit,
     onOpenItem: (VaultItem) -> Unit,
     onDelete: (VaultItem) -> Unit,
+    /** 条目 id → 是否已同步上云（行尾云图标，缺省视为已同步）。 */
+    syncStates: Map<String, Boolean> = emptyMap(),
 ) {
     LazyColumn(
         state = listState,
@@ -789,6 +832,8 @@ private fun ItemsList(
                             showIcon = showIcon,
                             isSelectionMode = selectedIds.isNotEmpty(),
                             isSelected = item.id in selectedIds,
+                            // 缺省 true：新建刚可见、还没入队的那一瞬间不该闪一下「未同步」。
+                            synced = syncStates[item.id] ?: true,
                             onToggleSelect = { onToggleSelect(item) },
                             onClick = { onOpenItem(item) },
                         )
@@ -1011,6 +1056,8 @@ private fun ItemRow(
     showIcon: Boolean,
     isSelectionMode: Boolean,
     isSelected: Boolean,
+    /** 该条目是否已同步上云（true = 云端最新，false = 本地待推送）。 */
+    synced: Boolean,
     onToggleSelect: () -> Unit,
     onClick: () -> Unit,
 ) {
@@ -1048,6 +1095,7 @@ private fun ItemRow(
                 item = item,
                 isSelectionMode = isSelectionMode,
                 isSelected = isSelected,
+                synced = synced,
                 onToggleSelect = onToggleSelect,
             )
         }
@@ -1095,6 +1143,7 @@ private fun ItemRowTrailing(
     item: VaultItem,
     isSelectionMode: Boolean,
     isSelected: Boolean,
+    synced: Boolean,
     onToggleSelect: () -> Unit,
 ) {
     if (isSelectionMode) {
@@ -1108,6 +1157,8 @@ private fun ItemRowTrailing(
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        // 云端同步状态（待推送 = 云加斜杠，error 色跳出来）。
+        CloudSyncIcon(synced = synced)
         // 收藏星标（对齐 Bitwarden：收藏条目在行尾点一颗星，
         // 不必进详情也能一眼把常用项从整库里挑出来）。
         if (item.favorite) {

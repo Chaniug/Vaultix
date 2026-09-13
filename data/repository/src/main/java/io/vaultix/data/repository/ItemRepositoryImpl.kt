@@ -130,6 +130,23 @@ class ItemRepositoryImpl @Inject constructor(
                 observeState(vaultId, single).map { list -> list.firstOrNull() }
             }
 
+    override fun observeSyncStates(vaultId: String): Flow<Map<String, Boolean>> =
+        vaultDao.observeAll()
+            .map { vaults -> VaultKind.fromName(vaults.firstOrNull { it.id == vaultId }?.kind) }
+            .distinctUntilChanged()
+            .flatMapLatest { kind ->
+                if (kind == VaultKind.KDBX) {
+                    // KDBX 没有「云端」这一层（文件即存储）⇒ 恒空 map，UI 因而不画云图标。
+                    flowOf(emptyMap())
+                } else {
+                    pendingOpDao.observeItemLevelIds(vaultId).map { pending ->
+                        // 键存在 = 已同步；待推送的 id **不入 map**，读侧 default 到 true，
+                        // 于是这里只需列出「未同步」的那批。
+                        pending.associateWith { false }
+                    }
+                }
+            }
+
     override suspend fun createItem(vaultId: String, item: VaultItem): Result<VaultSaveOutcome> =
         runCatching {
             val key = sessions.keyOf(vaultId) ?: error("库未解锁，无法保存：$vaultId")

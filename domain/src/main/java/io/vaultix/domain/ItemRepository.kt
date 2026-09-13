@@ -38,6 +38,22 @@ interface ItemRepository {
     fun observeItem(vaultId: String, itemId: String): Flow<VaultItem?>
 
     /**
+     * 观察各条目的**云端同步状态**（列表行尾小云图标的数据源，见 `.ai/ISSUES.md` #76）。
+     *
+     * 返回 `Map<条目 id, 是否已同步上云>`：
+     * - `true`  → 该条在服务端已是最新（图标：实心云）；
+     * - `false` → 本地有未推送的改动（CREATE / UPDATE 还在 pending_ops 里，图标：云加斜杠）；
+     * - 不在 map 里的 id → 按 `true` 处理（新建后立即可见、尚未入队的瞬间）。
+     *
+     * ⚠️ 判据只取**条目级**操作（CREATE / UPDATE）：删除类操作对应的条目在列表里本就不可见，
+     * 让它们参与判定只会把已删条目标成「待推送」。
+     *
+     * ⚠️ KDBX 库恒返回空 map：KDBX 没有「云端」这一层（文件即存储），
+     * 给它画云图标是在编造一个不存在的状态。
+     */
+    fun observeSyncStates(vaultId: String): Flow<Map<String, Boolean>>
+
+    /**
      * 新建条目：
      * 1. 分配本地 uuid，密文化后落 Room（列表立即可见，离线安全）；
      * 2. 写入 pending_ops 队列；

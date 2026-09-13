@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  填充面板图标圆底（深色模式）。取 M3 dark 主题下 `surfaceContainerHighest` 的等效值：
+  在深色面板（近黑）上能托住图标，又不至于亮成一块白斑。
+  与 `drawable/autofill_item_icon_bg.xml` 成对，按 uiMode 自动切换。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="oval">
+    <solid android:color="#49454F" />
+</shape>

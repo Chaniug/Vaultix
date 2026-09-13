@@ -63,6 +63,8 @@
     <string name="unlock_submit">解锁</string>
     <string name="unlock_password">主密码</string>
     <string name="unlock_password_label_fallback">或使用主密码</string>
+    <!-- 指纹入口（大号图标下方的短提示；原长文案见 quick_unlock_banner_text） -->
+    <string name="unlock_fingerprint_hint">轻触指纹快速解锁</string>
     <!-- 查看层锁（主页锁按钮）：密钥仍在内存，只需一次认证 -->
     <string name="unlock_view_locked_hint">已锁屏保 · 密钥仍在内存，验证一次身份即可回到原界面（无需重输主密码）</string>
 
@@ -333,6 +335,9 @@
     <string name="action_clear_selection">取消选择</string>
     <string name="action_delete_selected">删除所选</string>
     <string name="content_desc_more_options">更多操作</string>
+    <!-- 条目云同步状态（行尾小云图标，见 .ai/ISSUES.md #76） -->
+    <string name="sync_state_synced">已同步到云端</string>
+    <string name="sync_state_pending">本地有改动待同步</string>
     <string name="edit_item_title">编辑条目</string>
     <string name="section_login">登录信息</string>
     <string name="section_notes">备注</string>

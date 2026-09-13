@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  填充面板条目图标的**圆形底板**（M3 观感）。
+
+  为什么要它：`AutofillItemIcon` 生成的位图有两条来源 —— 命中缓存的站点图标（多为
+  透明 PNG，形状不规则）与本地绘制的圆形字母头像。把两种都放进同一个**固定圆底**上，
+  面板里每一行的图标在**尺寸、形状、视觉重量**上才完全一致；
+  这也正是 M3 list item 的 shape 语义（图标落在一个 tonal 容器里，而不是裸贴在行上）。
+
+  颜色取 `surfaceContainerHighest` 的等效值：面板由系统渲染、拿不到动态取色，
+  按 uiMode 各给一档固定色（见 drawable-night 的同名资源）。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="oval">
+    <solid android:color="#E6E0E9" />
+</shape>

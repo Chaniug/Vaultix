@@ -89,6 +89,21 @@ interface PendingOpDao {
     @Query("SELECT * FROM pending_ops WHERE vaultId = :vaultId ORDER BY localId")
     suspend fun listByVault(vaultId: String): List<PendingOpEntity>
 
+    /**
+     * 观察「尚未推上云」的条目 id 集合（列表云图标的判据，见 `.ai/ISSUES.md` #76）。
+     *
+     * 只取**条目级**操作（CREATE / UPDATE），因为它们对应「某条内容还没同步」；
+     * 删除类（SOFT_DELETE / DELETE / RESTORE）的条目在列表里本就不可见，
+     * 让它们参与判定只会把已删条目标成「待推送」。
+     *
+     * 用 Flow 而非挂起函数：推送成功后队列行被删掉，图标要**自动**从云加斜杠变成云。
+     */
+    @Query(
+        "SELECT DISTINCT cipherId FROM pending_ops " +
+            "WHERE vaultId = :vaultId AND op IN ('CREATE', 'UPDATE')",
+    )
+    fun observeItemLevelIds(vaultId: String): Flow<List<String>>
+
     @Upsert suspend fun enqueue(op: PendingOpEntity)
 
     @Query("DELETE FROM pending_ops WHERE localId = :localId")

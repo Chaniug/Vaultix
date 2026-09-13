@@ -11,42 +11,53 @@
   - 不能做：MaterialCardView 的完整阴影形态、`android:foreground` 水波纹、
     非系统字体族、Material You 动态色。
 
-  2026-09-13 规格（对齐 Bitwarden `autofill_remote_view` 的克制观感）：
-  - **去掉圆角底框**（原 `autofill_item_frame`）：面板本身就是一条列表，再给每行套一层
-    「卡片」是框中框，既笨重也不细腻 —— 这正是用户反馈的「填充条目框偏大」；
-  - 行高 **48dp**（M3 紧凑两行 list item 的高度；此前 56dp 是为「两行不挤」加出来的，
-    实际在面板里显得又厚又钝）；
-  - 内边距 **16/6dp**：水平留白保证不与面板边缘打架，垂直收紧把两行文字聚拢；
-  - 图标 **24dp**（此前 20dp 单色矢量）：位图由 `AutofillItemIcon` 生成 —— 命中 Coil
-    磁盘缓存时是**站点图标**，否则是按标题哈希配色的**字母头像**，每条都有自己的
-    「logo」，不再十条共用一个地球；
-  - 标题 14sp / 副标题 12sp：`sans-serif-medium` + 系统前景色，字号差拉开层次。
+  ── 2026-09-13 第二轮（用户：「确实紧凑了，但是风格和最新的 material 有点差距」）──
+  在 RemoteViews 边界内把规格对齐 **M3 list item**：
+  - 行高 **56dp** 且**不设 minHeight 之外的额外垂直内边距**：M3 两行 list item 的
+    标准高度就是 56dp（上一版压到 48dp 是「为了紧凑而紧凑」，反而偏离了 M3 的节奏）；
+    两行文字用 4dp 内边距自己撑开，行高交给容器保证 —— 得到的是一致的心跳感。
+  - 图标 **24dp 位图落在 40dp 圆形 tonal 容器**上（M3 list item 的 icon container 规格）：
+    站点图标与字母头像于是拥有完全相同的尺寸与形状，整列的视觉重量整齐；
+    容器色按 uiMode 取 `surfaceContainerHighest` 等效值（见 drawable(-night)/autofill_item_icon_bg）。
+  - 图标容器与文字间距 **16dp**（M3 list item 的 `leading → label` 间距）。
+  - 水平内边距 **16dp**（与 Vaultix 列表卡片、M3 list item 一致）。
+  - 标题 16sp / 副标题 14sp（M3 `bodyLarge` / `bodyMedium`），层次由**字号 + 色阶**给出，
+    不靠加粗；标题用 `sans-serif-medium` 仅作轻微强调。
+  - 副标题单行省略 + 标题单行省略：面板宽度有限，宁可截断也不要换行把行撑高。
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/autofill_item_root"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:minHeight="48dp"
+    android:minHeight="56dp"
     android:gravity="center_vertical"
     android:orientation="horizontal"
     android:paddingStart="16dp"
-    android:paddingTop="6dp"
-    android:paddingEnd="16dp"
-    android:paddingBottom="6dp">
+    android:paddingEnd="16dp">
 
-    <ImageView
-        android:id="@+id/autofill_item_icon"
-        android:layout_width="24dp"
-        android:layout_height="24dp"
-        android:layout_marginEnd="12dp"
-        android:contentDescription="@null"
-        android:scaleType="centerCrop" />
+    <!-- 图标：40dp 圆形容器 + 24dp 居中位图（M3 list item 的 icon container 规格）。 -->
+    <FrameLayout
+        android:layout_width="40dp"
+        android:layout_height="40dp"
+        android:layout_marginEnd="16dp"
+        android:background="@drawable/autofill_item_icon_bg">
+
+        <ImageView
+            android:id="@+id/autofill_item_icon"
+            android:layout_width="34dp"
+            android:layout_height="34dp"
+            android:layout_gravity="center"
+            android:contentDescription="@null"
+            android:scaleType="centerCrop" />
+    </FrameLayout>
 
     <LinearLayout
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:layout_weight="1"
-        android:orientation="vertical">
+        android:orientation="vertical"
+        android:paddingTop="4dp"
+        android:paddingBottom="4dp">
 
         <TextView
             android:id="@+id/autofill_item_title"
@@ -56,7 +67,7 @@
             android:fontFamily="sans-serif-medium"
             android:maxLines="1"
             android:textColor="?android:attr/textColorPrimary"
-            android:textSize="14sp" />
+            android:textSize="16sp" />
 
         <TextView
             android:id="@+id/autofill_item_subtitle"
@@ -66,6 +77,6 @@
             android:includeFontPadding="false"
             android:maxLines="1"
             android:textColor="?android:attr/textColorSecondary"
-            android:textSize="12sp" />
+            android:textSize="14sp" />
     </LinearLayout>
 </LinearLayout>

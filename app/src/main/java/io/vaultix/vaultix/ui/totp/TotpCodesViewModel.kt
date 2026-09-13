@@ -92,6 +92,8 @@ class TotpCodesViewModel @Inject constructor(
         val saving: Boolean = false,
         /** 库的服务器地址（图标端点基址；见 [io.vaultix.common.SiteIconUrl]）。 */
         val serverOrigin: String? = null,
+        /** 条目 id → 是否已同步上云（行尾云图标；缺省视为已同步，见 `.ai/ISSUES.md` #76）。 */
+        val syncStates: Map<String, Boolean> = emptyMap(),
     )
 
     private val _state = MutableStateFlow(UiState())
@@ -116,6 +118,12 @@ class TotpCodesViewModel @Inject constructor(
             vaultIdState
                 .flatMapLatest { id -> itemRepository.observeItems(id) }
                 .collect { items -> _state.update { it.copy(items = items) } }
+        }
+        // 云同步状态 → 行尾小云图标（与 ItemsViewModel 同口径）。
+        viewModelScope.launch {
+            vaultIdState
+                .flatMapLatest { id -> itemRepository.observeSyncStates(id) }
+                .collect { states -> _state.update { it.copy(syncStates = states) } }
         }
     }
 

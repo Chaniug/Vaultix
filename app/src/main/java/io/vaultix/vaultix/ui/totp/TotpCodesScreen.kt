@@ -83,6 +83,7 @@ import io.vaultix.common.TotpConfig
 import io.vaultix.common.TotpGenerator
 import io.vaultix.model.VaultItem
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.common.CloudSyncIcon
 import io.vaultix.vaultix.ui.common.EntryCard
 import io.vaultix.vaultix.ui.common.EntryCardIconSpacing
 import io.vaultix.vaultix.ui.common.EntryCardTextSpacing
@@ -141,14 +142,9 @@ fun TotpCodesScreen(
     // 多选态优先吃掉返回手势：否则一按返回就整页退出，前面勾的条目全白勾了。
     BackHandler(enabled = selectionMode) { selectedIds = emptySet() }
 
-    // 实时时钟：每秒推进，驱动所有验证码滚动刷新
+    // 实时时钟：每秒推进，驱动所有验证码滚动刷新（见 [TotpTickerEffect]）。
     var nowSeconds by remember { mutableLongStateOf(System.currentTimeMillis() / 1000) }
-    LaunchedEffect(Unit) {
-        while (true) {
-            delay(TOTP_TICK_MS)
-            nowSeconds = System.currentTimeMillis() / MILLIS_PER_SECOND
-        }
-    }
+    TotpTickerEffect { nowSeconds = it }
 
     // 底部导航条「+」→ 打开新建 TOTP 表单（Tab 内嵌时不展示自己的 FAB）
     LaunchedEffect(addRequest) {
@@ -209,50 +205,62 @@ fun TotpCodesScreen(
         val collapse = rememberScrollCollapseFraction(listState)
         val barPadding = rememberImmersiveBarPadding(collapse)
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
-            // 顶部让出「状态栏 + 顶栏」的高度（随收起动画变短），顶栏浮在它之上。
             // ⚠️ 搜索态必须归零：此时 Scaffold 已按 `ScaffoldDefaults.contentWindowInsets`
             // 为搜索顶栏预留了高度，这里再叠一次就是「双重留白」= 纯黑大横幅。
-            val barTopInset = if (searchActive) 0.dp else barPadding
-            Column(modifier = Modifier.fillMaxSize().padding(top = barTopInset)) {
-                // 整页一条倒计时进度条，「通行密钥」入口挂在它右侧。
-                // 随列表滚动收起（collapse 与顶栏同源，见 [TotpPageProgress]）。
-                TotpPageProgress(
-                    entries = entries,
-                    nowSeconds = nowSeconds,
-                    collapseFraction = collapse,
-                    onOpenPasskeys = onOpenPasskeys,
+            //
+            // ⚠️ 让位**必须做在滚动内容里**（`contentPadding` / 列表首项），不能做在滚动容器外
+            // 的 `Column.padding(top)`：做在外面，整页（含进度条）被永久下压，内容永远画不到
+            // 顶栏区域 ⇒「收起后顶栏透明、内容从下方穿过」不成立 = 用户反馈的「验证码页不沉浸」。
+            // 这与密码页 [ItemsList] 的写法是同一条约束（`.ai/ISSUES.md` #67）。
+            val topInset = if (searchActive) 0.dp else barPadding + 8.dp
+            when {
+                state.items.isEmpty() -> TotpEmptyBody(
+                    topInset = topInset,
+                    title = stringResource(R.string.totp_empty_title),
+                    message = stringResource(R.string.totp_empty_body),
                 )
-                when {
-                    state.items.isEmpty() -> EmptyTotpState(
-                        title = stringResource(R.string.totp_empty_title),
-                        message = stringResource(R.string.totp_empty_body),
-                    )
 
-                    entries.isEmpty() -> EmptyTotpState(
-                        message = stringResource(R.string.totp_empty_body),
-                    )
+                entries.isEmpty() -> TotpEmptyBody(
+                    topInset = topInset,
+                    message = stringResource(R.string.totp_empty_body),
+                )
 
-                    else -> LazyColumn(
-                        state = listState,
-                        modifier = Modifier.fillMaxSize(),
-                        // 与密码列表同一套留白结构（卡片不再自带外边距，见 [EntryCard]）。
-                        // 底部留出叠层悬浮底栏的高度，否则最后一条被胶囊压住。
-                        contentPadding = PaddingValues(
-                            start = 16.dp,
-                            top = 8.dp,
-                            end = 16.dp,
-                            bottom = 8.dp + bottomInset,
-                        ),
-                        verticalArrangement = Arrangement.spacedBy(TOTP_CARD_GAP),
-                    ) {
-                        items(entries, key = { it.itemId }) { entry ->
-                            TotpRow(
-                                entry = entry,
-                                nowSeconds = nowSeconds,
-                                serverOrigin = state.serverOrigin,
-                                snackbarHostState = snackbarHostState,
+                else -> LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
+                    // 与密码列表同一套留白结构（卡片不再自带外边距，见 [EntryCard]）。
+                    // 顶部 = 状态栏 + 顶栏高（随收起动画变短）；
+                    // 底部留出叠层悬浮底栏的高度，否则最后一条被胶囊压住。
+                    contentPadding = PaddingValues(
+                        start = 16.dp,
+                        top = topInset,
+                        end = 16.dp,
+                        bottom = 8.dp + bottomInset,
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(TOTP_CARD_GAP),
+                ) {
+                    // 整页一条倒计时进度条，「通行密钥」入口挂在它右侧。
+                    // 作为**列表首项**：随滚动一起滑走，于是收起后内容能穿过透明顶栏 ——
+                    // 沉浸感与进度条收起是同一个动作（见 [TotpPageProgress] 的折叠包装）。
+                    item(key = "page_progress") {
+                        TotpPageProgress(
+                            entries = entries,
+                            nowSeconds = nowSeconds,
+                            collapseFraction = collapse,
+                            onOpenPasskeys = onOpenPasskeys,
+                        )
+                    }
+                    items(entries, key = { it.itemId }) { entry ->
+                        TotpRow(
+                            entry = entry,
+                            nowSeconds = nowSeconds,
+                            serverOrigin = state.serverOrigin,
+                            snackbarHostState = snackbarHostState,
+                            actions = TotpRowActions(
                                 isSelectionMode = selectionMode,
                                 isSelected = entry.itemId in selectedIds,
+                                // 缺省 true：新建刚可见、还没入队的那一瞬间不该闪一下「未同步」。
+                                synced = state.syncStates[entry.itemId] ?: true,
                                 onToggleSelect = {
                                     selectedIds = toggleSelection(selectedIds, entry.itemId)
                                 },
@@ -265,8 +273,8 @@ fun TotpCodesScreen(
                                 },
                                 onBind = { if (!entry.bound) binding = entry },
                                 onCopy = viewModel::copyCode,
-                            )
-                        }
+                            ),
+                        )
                     }
                 }
             }
@@ -292,6 +300,40 @@ fun TotpCodesScreen(
         onBindingChange = { binding = it },
         onImportOpenChange = { importOpen = it },
     )
+}
+
+/**
+ * 每秒推进一次的时钟（驱动所有验证码滚动刷新）。
+ *
+ * 抽出来是为了把「重读一次时间」这件事从主 composable 里挪走 —— 主函数要守
+ * detekt `LongMethod ≤150`。
+ */
+@Composable
+private fun TotpTickerEffect(onTick: (Long) -> Unit) {
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(TOTP_TICK_MS)
+            onTick(System.currentTimeMillis() / MILLIS_PER_SECOND)
+        }
+    }
+}
+
+/**
+ * 空态正文（整页为空 / 筛选后为空两个面孔）。
+ *
+ * 两个分支的差别只在 [title] 传不传，但重复两遍 `Column + padding(topInset)` 会
+ * 让主 composable 越 detekt `LongMethod` 门禁；且「空态要让开顶栏高度」这条约束
+ * 本就该只写一次。
+ */
+@Composable
+private fun TotpEmptyBody(topInset: Dp, message: String, title: String? = null) {
+    Column(modifier = Modifier.fillMaxSize().padding(top = topInset)) {
+        if (title == null) {
+            EmptyTotpState(message = message)
+        } else {
+            EmptyTotpState(title = title, message = message)
+        }
+    }
 }
 
 /**
@@ -462,20 +504,45 @@ private fun EmptyTotpState(title: String? = null, message: String) {
  * @param isSelected 本行是否被勾选。
  * @param onToggleSelect 切换本行勾选（长按 = 勾选本行并进入多选态）。
  */
+/**
+ * 单条验证码行的交互与状态打包（见 [TotpRow] 的参数说明）。
+ *
+ * 只是参数聚合，不含行为 —— 定义为 `private data class` 而非 interface，
+ * 是为了让它能继续留在同一个文件里、不改动任何可见性。
+ */
+private data class TotpRowActions(
+    val isSelectionMode: Boolean,
+    val isSelected: Boolean,
+    val synced: Boolean,
+    val onToggleSelect: () -> Unit,
+    val onDelete: () -> Unit,
+    val onEdit: () -> Unit,
+    val onBind: () -> Unit,
+    val onCopy: (String) -> Unit,
+)
+
 @Composable
 private fun TotpRow(
     entry: TotpEntry,
     nowSeconds: Long,
     serverOrigin: String?,
     snackbarHostState: SnackbarHostState,
-    isSelectionMode: Boolean,
-    isSelected: Boolean,
-    onToggleSelect: () -> Unit,
-    onDelete: () -> Unit,
-    onEdit: () -> Unit,
-    onBind: () -> Unit,
-    onCopy: (String) -> Unit,
+    /**
+     * 本行的交互与状态（勾选态 / 云同步 / 四个回调）。
+     *
+     * 打成一个包传入是为了守住 detekt `LongParameterList ≤8` —— 逐项摊开是 12 个参数。
+     * 这些量本就是「这一行怎么表现、被点了做什么」的一个整体，收拢语义上也更顺。
+     */
+    actions: TotpRowActions,
 ) {
+    val isSelectionMode = actions.isSelectionMode
+    val isSelected = actions.isSelected
+    val synced = actions.synced
+    val onToggleSelect = actions.onToggleSelect
+    val onDelete = actions.onDelete
+    val onEdit = actions.onEdit
+    val onBind = actions.onBind
+    val onCopy = actions.onCopy
     val code = TotpGenerator.generate(entry.toConfig(), nowSeconds)
     val isHotp = entry.type == OtpType.HOTP
     // HOTP 没有时间衰减，不做过期警示。
@@ -518,6 +585,8 @@ private fun TotpRow(
                     overflow = TextOverflow.Ellipsis,
                 )
                 Badge(entry.bound)
+                // 云端同步状态（待推送 = 云加斜杠，error 色跳出来）。见 `.ai/ISSUES.md` #76。
+                if (!synced) CloudSyncIcon(synced = false)
                 if (isSelectionMode) {
                     Checkbox(checked = isSelected, onCheckedChange = { onToggleSelect() })
                 } else {

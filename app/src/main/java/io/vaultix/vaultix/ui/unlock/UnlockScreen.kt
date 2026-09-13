@@ -285,9 +285,26 @@ private fun ViewLockedContent(
     }
 }
 
-/** 本地快速解锁入口（生物识别 / 设备 PIN）+ 主密码 fallback 提示。 */
+/** 指纹入口图标的尺寸（用户要求「稍微大一点」—— 它现在是这一页的主入口之一）。 */
+private val FINGERPRINT_ICON_SIZE = 64.dp
+
+/**
+ * 本地快速解锁入口：**一个大号指纹图标**，压在「主密码框」与「解锁按钮」之间。
+ *
+ * 为什么不是按钮（2026-09-13 用户反馈「指纹解锁的文案能否直接换成一个指纹的图标」）：
+ * 这里原本是「灰色文字按钮 + 指纹小图标 + 一句长文案」，在那个位置既抢了主按钮的视觉焦点，
+ * 又因为文案很长把页面撑得零碎。现在改成一个**无文字的图标入口**：
+ * - 位置不变（仍在密码框与解锁按钮之间），因此「密码 → 指纹 → 解锁」的阅读顺序不变；
+ * - 解锁按钮仍是页面唯一的实心主按钮、逻辑与置灰规则完全不变 ——
+ *   主操作不能被一个同等体量的次操作稀释；
+ * - 指纹可用时依旧**自动弹出**（见 [AutoPromptQuickUnlock]），图标是「取消后手动再来一次」
+ *   的出口，所以它必须始终可见、可点。
+ *
+ * 不可用时保留 [Spacer] 占位：否则「有没有指纹」会让下方按钮的位置跳动。
+ */
 @Composable
-private fun QuickUnlockEntry(    visible: Boolean,
+private fun QuickUnlockEntry(
+    visible: Boolean,
     enabled: Boolean,
     onStart: () -> Unit,
 ) {
@@ -295,25 +312,33 @@ private fun QuickUnlockEntry(    visible: Boolean,
         Spacer(Modifier.height(24.dp))
         return
     }
-    FilledTonalButton(
+    IconButton(
         onClick = onStart,
         enabled = enabled,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .padding(vertical = 8.dp)
+            .size(FINGERPRINT_ICON_SIZE + 16.dp),
     ) {
-        Icon(Icons.Filled.Fingerprint, contentDescription = null)
-        Spacer(Modifier.width(8.dp))
-        Text(stringResource(R.string.quick_unlock_biometric_button))
+        Icon(
+            imageVector = Icons.Filled.Fingerprint,
+            contentDescription = stringResource(R.string.quick_unlock_biometric_button),
+            tint = if (enabled) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+            },
+            modifier = Modifier.size(FINGERPRINT_ICON_SIZE),
+        )
     }
     Text(
-        text = stringResource(R.string.unlock_password_label_fallback),
+        text = stringResource(R.string.unlock_fingerprint_hint),
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(top = 12.dp),
-        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            .padding(top = 2.dp),
+        textAlign = TextAlign.Center,
     )
-    Spacer(Modifier.height(12.dp))
 }
 
 /** 主密码输入 + 错误提示 + 提交；生物识别快捷入口内嵌于登录区域（密码框与解锁按钮之间）。 */
@@ -385,7 +410,7 @@ private fun PasswordForm(
     if (state.submitting) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(top = 16.dp),
+            modifier = Modifier.padding(top = 8.dp),
         ) {
             CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
             Text(
@@ -396,7 +421,9 @@ private fun PasswordForm(
         }
     }
 
-    Spacer(Modifier.height(24.dp))
+    // ⚠️ 间距取 12dp 而不是原来的 24dp：指纹图标自己带 8dp 垂直留白，
+    // 再叠 24dp 会让「密码框 → 指纹 → 解锁按钮」这一段松散成三截。
+    Spacer(Modifier.height(12.dp))
     FilledTonalButton(
         onClick = {
             focusManager.clearFocus()

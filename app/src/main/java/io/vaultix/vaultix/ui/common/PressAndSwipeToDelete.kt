@@ -7,30 +7,30 @@
  * the License, or (at your option) any later version.
  *
  * ---------------------------------------------------------------------------
- * 交互设计说明（两步手势，防误删）
- * 「**按住**条目 → 卡片抬起并露出红色删除底 → **向左滑动** → 松手删除」。
+ * 交互设计说明（长按勾选 → 继续拖动才滑删）
  *
- * 为什么不是普通左滑删除：密码条目一旦滑掉就是一条真实凭据的消失，单纯左滑太容易误触
- * （列表滚动、单手操作、口袋误碰）。上游 Bastion 对删除同样是「先长按/选择再动手」的两步
- * 语义（`combinedClickable(onLongClick)` 进入选择模式 + 底部批量操作条）。
+ * 「**长按**条目 → 进入多选（勾选框出现）→ 若手指**继续向左拖** → 红底跟手显影 → 松手删除」。
+ *
+ * 为什么长按不再立刻显红（2026-09-13 用户反馈「长按和删除有问题，红底不跟手」）：
+ * 上一版在长按成立的那一刻就 `armed=1`，静态露出 32% 红底 + 卡片左移 16dp。
+ * 但长按的语义**同时**是「进入多选」—— 两者撞在一起时，用户看到的是
+ * 「我刚长按，红底就冒出来了，可我只想勾一条」，而且那 16dp 是被动画「推」出来的、
+ * 不是跟手的，手感上就表现为「不显示、不跟手」。现在把两件事分开：
+ * 长按只负责勾选（不显红、不位移），**位移只由手指产生**，红底只由位移驱动。
  *
  * 实现要点：
- * - 手势**自己手写**（[deleteGesture]）而不是直接用 `detectDragGesturesAfterLongPress`：
- *   因为「长按」现在有两个消费者 —— 本容器的「上膛待滑」与卡片 [EntryCard] 的
- *   「进入选择模式」。若再叠一层 `detectTapGestures(onLongPress)`，两者会抢同一个 down
- *   （`detectTapGestures` 会 `down.consume()`，另一个就等不到了）。
- *   手写后**只有一个** pointerInput：长按成立 → 先回调 [onLongPress]（卡片据此进入选择
- *   模式），随即接管拖动，事件链唯一，不存在竞争；
+ * - 手势**自己手写**（[deleteGesture]）而不是用 `detectDragGesturesAfterLongPress`：
+ *   因为「长按」有两个阶段语义 —— 先回调 [onLongPress]（勾选），再进入拖动。
+ *   手写后**只有一个** pointerInput，不与卡片 [EntryCard] 的 `combinedClickable` 抢事件；
  * - 拖动过程 `change.consume()`：卡片自带的 clickable 不会在松手时补一个点击，
  *   列表也**不会**跟着滚（长按已表明是删除意图，不是翻页意图）；
- * - 未达阈值松手 → 动画回弹（不删除）；达阈值 → 滑出并触发 [onDelete]；
+ * - 未达阈值松手 → 回弹（不删除）；达阈值 → 滑出并触发 [onDelete]；
  * - 长按未成立（抬手 / 移动过大）时**不消费**任何事件：列表滚动与条目点击照常。
  * ---------------------------------------------------------------------------
  */
 package io.vaultix.vaultix.ui.common
 
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -81,25 +81,6 @@ private const val SETTLE_MS = 180
 /** 删除底与卡片同圆角（与 [EntryCard] 的 12dp 对齐）。 */
 private const val DELETE_BG_CORNER = 12
 
-/** 按住时的抬起幅度（提示「现在可以拖动」）。 */
-private const val ARMED_SCALE = 0.02f
-
-/**
- * 长按「上膛」时静态露出的红色删除底透明度（对齐 Bastion `SwipeArmState` 的 `hintAlpha`）。
- *
- * ⚠️ 没有这一档，这个手势就**等于不存在**：只靠滑动进度显影的话，用户按住之后画面只有
- * 2% 抬起（肉眼不可见），完全不知道自己已经解锁了手势 —— 功能在、但没人会发现。
- */
-private const val ARMED_HINT_ALPHA = 0.32f
-
-/**
- * 长按上膛时内容**向左让出的距离**，用来在右缘露出一条红色删除底。
- *
- * 为什么必须让出而不是只调透明度：删除底被不透明的卡片完全盖住，只改 alpha 是看不见的；
- * 卡片左移一条缝才能把「可以滑走」这件事画出来。
- */
-private val ARMED_HINT_REVEAL = 16.dp
-
 /**
  * 「按住后滑动删除」容器：把任意条目卡片包进去即可获得该手势。
  *
@@ -118,20 +99,12 @@ fun PressAndSwipeToDelete(
     val density = LocalDensity.current
     val maxDragPx = with(density) { MAX_DRAG.toPx() }
     val thresholdPx = with(density) { DELETE_THRESHOLD.toPx() }
-    val hintRevealPx = with(density) { ARMED_HINT_REVEAL.toPx() }
     val scope = rememberCoroutineScope()
     val currentDelete by rememberUpdatedState(onDelete)
     val currentLongPress by rememberUpdatedState(onLongPress)
 
     // 实时位移：拖动期间只改这一个 Float 状态（**不启动协程**，避免每个拖动事件都起一个）。
     var offsetX by remember { mutableFloatStateOf(0f) }
-    // 是否已长按「上膛」（0/1）；经 animateFloatAsState 平滑成 0→1 进度驱动提示动画。
-    var armed by remember { mutableFloatStateOf(0f) }
-    val armedProgress by animateFloatAsState(
-        targetValue = armed,
-        animationSpec = tween(SETTLE_MS),
-        label = "swipe_armed_progress",
-    )
 
     fun settleTo(target: Float, then: () -> Unit = {}) {
         scope.launch {
@@ -142,56 +115,46 @@ fun PressAndSwipeToDelete(
     }
 
     Box(modifier = modifier.fillMaxWidth()) {
-        // 删除底显隐 = max(滑动进度, 长按提示)。长按提示随真实拖动淡出，避免与拖拽重复叠加。
-        val dragReveal = (-offsetX / thresholdPx).coerceIn(0f, 1f)
-        val armedHint = ARMED_HINT_ALPHA * armedProgress * (1f - dragReveal)
-        val reveal = maxOf(dragReveal, armedHint)
-        if (reveal > 0f) {
-            Row(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .graphicsLayer { alpha = reveal }
-                    .background(
-                        color = MaterialTheme.colorScheme.errorContainer,
-                        shape = RoundedCornerShape(DELETE_BG_CORNER),
-                    )
-                    .padding(horizontal = 20.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Delete,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onErrorContainer,
-                    modifier = Modifier.size(20.dp),
+        // 删除底**常驻**在卡片之下（只调 alpha，不条件式增删节点）。
+        //
+        // 为什么不做成 `if (reveal > 0)`：条件式增删会让这一层在「第一像素位移」的瞬间
+        // 才被组合进来，那一帧的布局/合成抖动正是用户描述的「不显示、不跟手」；
+        // 而且删除底被不透明的卡片完全盖住时，alpha=0 与不存在在视觉上等价 ——
+        // 常驻没有任何代价，却换来了跟手的显影。
+        val reveal = (-offsetX / thresholdPx).coerceIn(0f, 1f)
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer { alpha = reveal }
+                .background(
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    shape = RoundedCornerShape(DELETE_BG_CORNER),
                 )
-                Text(
-                    text = stringResource(R.string.action_delete),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onErrorContainer,
-                    modifier = Modifier.padding(start = 8.dp),
-                )
-            }
+                .padding(horizontal = 20.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Delete,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onErrorContainer,
+                modifier = Modifier.size(20.dp),
+            )
+            Text(
+                text = stringResource(R.string.action_delete),
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+                modifier = Modifier.padding(start = 8.dp),
+            )
         }
 
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .graphicsLayer {
-                    // 长按上膛时额外交出一小段位移，把红底从右缘「挤」出来当提示；
-                    // 真实拖动期间按 dragReveal 淡出，两段位移不叠加。
-                    translationX = offsetX - hintRevealPx * armedProgress * (1f - dragReveal)
-                    val scale = 1f + ARMED_SCALE * armedProgress
-                    scaleX = scale
-                    scaleY = scale
-                }
+                .graphicsLayer { translationX = offsetX }
                 .deleteGesture(
-                    onLongPress = {
-                        armed = 1f
-                        currentLongPress()
-                    },
+                    onLongPress = currentLongPress,
                     onDrag = { delta -> offsetX = (offsetX + delta).coerceIn(-maxDragPx, 0f) },
                     onDragEnd = {
-                        armed = 0f
                         if (-offsetX >= thresholdPx) {
                             // 滑出屏幕后再删除：先给一个「卡片被扔掉」的视觉收尾。
                             settleTo(-maxDragPx * 2) { currentDelete() }
@@ -199,10 +162,7 @@ fun PressAndSwipeToDelete(
                             settleTo(0f)
                         }
                     },
-                    onDragCancel = {
-                        armed = 0f
-                        settleTo(0f)
-                    },
+                    onDragCancel = { settleTo(0f) },
                 ),
         ) {
             content()
