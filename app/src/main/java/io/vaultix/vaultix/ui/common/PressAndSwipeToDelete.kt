@@ -7,26 +7,25 @@
  * the License, or (at your option) any later version.
  *
  * ---------------------------------------------------------------------------
- * 交互设计说明（长按勾选 → 继续拖动才滑删）
+ * 交互设计说明（直接左滑 → 露出删除按钮 → 点击后二次确认）
  *
- * 「**长按**条目 → 进入多选（勾选框出现）→ 若手指**继续向左拖** → 红底跟手显影 → 松手删除」。
+ * 2026-09-13 用户反馈：「从条目的右边往左边滑动的删除还没做」「删除的时候二次确认还没有做」。
  *
- * 为什么长按不再立刻显红（2026-09-13 用户反馈「长按和删除有问题，红底不跟手」）：
- * 上一版在长按成立的那一刻就 `armed=1`，静态露出 32% 红底 + 卡片左移 16dp。
- * 但长按的语义**同时**是「进入多选」—— 两者撞在一起时，用户看到的是
- * 「我刚长按，红底就冒出来了，可我只想勾一条」，而且那 16dp 是被动画「推」出来的、
- * 不是跟手的，手感上就表现为「不显示、不跟手」。现在把两件事分开：
- * 长按只负责勾选（不显红、不位移），**位移只由手指产生**，红底只由位移驱动。
+ * 上一版是「**长按成立之后**才接管位移」的两段式手势（长按先勾选、继续拖才删除）。
+ * 它的问题不是没实现，而是**用户根本滑不动**：长按的语义已经被多选占用，
+ * 「长按 → 继续拖」这条路径在真实手指下几乎不可达，用户感知就是「滑动删除没做」。
  *
- * 实现要点：
- * - 手势**自己手写**（[deleteGesture]）而不是用 `detectDragGesturesAfterLongPress`：
- *   因为「长按」与「拖动删除」是两段式 —— 先由卡片 [EntryCard] 的 `onLongClick` 完成勾选，
- *   本手势在长按**成立**后才接管位移（左滑显红、过阈值松手删除）。手写后**只有一个**
- *   pointerInput，不与卡片 `combinedClickable` 抢事件；
- * - 拖动过程 `change.consume()`：卡片自带的 clickable 不会在松手时补一个点击，
- *   列表也**不会**跟着滚（长按已表明是删除意图，不是翻页意图）；
- * - 未达阈值松手 → 回弹（不删除）；达阈值 → 滑出并触发 [onDelete]；
- * - 长按未成立（抬手 / 移动过大）时**不消费**任何事件：列表滚动与条目点击照常。
+ * 现在改成「**一条手势只承担一种语义**」：
+ * - **长按** = 进入多选 —— 由卡片 [EntryCard] 的 `onLongClick` 独占，本组件不参与；
+ * - **水平左滑** = 露出右侧删除动作区（跟手，**不需要任何前置长按**）；
+ * - **点击删除** = 弹二次确认 —— 对话框内聚在本组件里，调用方不必自己管状态。
+ *
+ * 为什么是「点按」而不是「滑过阈值即刻删除」：用户明确要求二次确认。
+ * 滑动只负责**露出**动作，删除还要再经一次显式点击 + 一次对话框确认，误触几乎不可能。
+ *
+ * 为什么不用 `detectDragGesturesAfterLongPress`：那条路要求长按，与多选直接冲突（见上）。
+ * 改用 `detectHorizontalDragGestures`：它只在**水平**方向越过 touch slop 后才接管，
+ * 竖直方向的上下滑动照旧交给 `LazyColumn`，两者按方向自然分流、互不抢事件。
  * ---------------------------------------------------------------------------
  */
 package io.vaultix.vaultix.ui.common
@@ -34,122 +33,173 @@ package io.vaultix.vaultix.ui.common
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.drag
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.pointer.AwaitPointerEventScope
-import androidx.compose.ui.input.pointer.PointerEventPass
-import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import io.vaultix.vaultix.R
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeoutOrNull
 
-/** 触发删除的滑动距离（向左拖过它才算删除）。 */
-private val DELETE_THRESHOLD = 96.dp
+/** 左侧滑开后露出的删除动作区宽度（也是滑开后的停靠位）。 */
+private val ACTION_WIDTH = 96.dp
 
-/** 拖动的最大位移（再多也不移动，避免卡片飞出可视区造成困惑）。 */
-private val MAX_DRAG = 180.dp
-
-/** 回弹 / 滑出动画时长。 */
+/** 回弹 / 停靠的动画时长。 */
 private const val SETTLE_MS = 180
 
-/** 删除底与卡片同圆角（与 [EntryCard] 的 12dp 对齐）。 */
-private const val DELETE_BG_CORNER = 12
+/** 删除底色与卡片同圆角（与 [EntryCard] 的 12dp 对齐）。 */
+private const val REVEAL_CORNER = 12
 
 /**
- * 「按住后滑动删除」容器：把任意条目卡片包进去即可获得该手势。
+ * 「左滑露出删除 → 点删除 → 二次确认」容器：把任意条目卡片包进去即可获得该交互。
  *
- * ## 长按语义的归属（修复「长按进不了多选」）
- * 长按**选中**由内部卡片 [EntryCard] 的 `onLongClick` 独占（见其文档，对齐 Bastion
- * `cardInteractionModifier`）。本容器**不再**回调选中——它只负责「长按**成立**后进入
- * 拖拽删除」这一手势阶段。若两边都回调选中，一次长按会触发两次 toggle（净无操作），
- * 表现就是「长按条目没反应 / 进不了多选」。
+ * 三个列表（密码 / 验证码 / 卡包）共用同一个组件，因此三处的手感与确认文案天然一致。
  *
- * 因此本容器的手势只做两件事：
- * 1. 检测长按成立（手指按住不动超过阈值）；
- * 2. 长按成立后接管后续位移，左滑显红底、过阈值松手即删除。
+ * 手势分层（**务必保持**，否则会退化成上一版「滑不动」）：
+ * - 长按选中 → 卡片自己负责（[EntryCard] 的 `onLongClick`），本容器**不**参与；
+ * - 水平左滑 → 本容器接管（`detectHorizontalDragGestures`，无需长按前置）；
+ * - 竖直滑动 → 不消费，交给 `LazyColumn` 滚动。
  *
- * @param onDelete 滑过阈值并松手后的回调（真正删除由调用方执行）。
+ * 只允许**向左**滑（向右会被 `coerceIn(.., 0f)` 归零）：删除方向唯一，语义更清楚，
+ * 也避免与「从屏幕左缘右滑返回」的系统手势打架。
+ *
+ * ## 门槛（2026-09-13 第二轮用户反馈）
+ * 「直接右边往左滑也能删除，这样的逻辑不对吧。需要按住进入选择才能删。」
+ * ⇒ 加 [enabled]：**只有按住进入多选之后，左滑才生效**。裸滑（没先长按）什么都不做——
+ * 列表里横向滑动是个太容易误触的手势，不该让它直接通向删除。
+ *
+ * 三个列表的开关来源：
+ * - 密码页 / 验证码页：`selectedIds.isNotEmpty()`（长按进多选即打开）；
+ * - 卡包页：暂**无**多选态，因此保持常开 —— 待卡包补多选后再统一（已在 MEMORY 登记）。
+ *
+ * @param onDelete 二次确认点「删除」后的回调（真正删除由调用方执行）。
+ * @param enabled 是否允许左滑进入删除（`false` 时手势完全让位给列表滚动与卡片点击）。
  * @param content 条目卡片（内部自带 [EntryCard] 的点击 / 长按选中）。
  */
 @Composable
 fun PressAndSwipeToDelete(
     onDelete: () -> Unit,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
     content: @Composable () -> Unit,
 ) {
     val density = LocalDensity.current
-    val maxDragPx = with(density) { MAX_DRAG.toPx() }
-    val thresholdPx = with(density) { DELETE_THRESHOLD.toPx() }
+    val actionWidthPx = with(density) { ACTION_WIDTH.toPx() }
     val scope = rememberCoroutineScope()
     val currentDelete by rememberUpdatedState(onDelete)
 
-    // 实时位移：拖动期间只改这一个 Float 状态（**不启动协程**，避免每个拖动事件都起一个）。
+    // 实时位移：滑动期间只改这一个 Float 状态（**不启动协程**，避免每个事件起一个）。
     var offsetX by remember { mutableFloatStateOf(0f) }
+    var confirmOpen by remember { mutableStateOf(false) }
 
-    fun settleTo(target: Float, then: () -> Unit = {}) {
+    fun settleTo(target: Float) {
         scope.launch {
             val anim = Animatable(offsetX)
             anim.animateTo(target, tween(SETTLE_MS)) { offsetX = value }
-            then()
         }
     }
 
-    Box(modifier = modifier.fillMaxWidth()) {
-        // 删除底**常驻**在卡片之下（只调 alpha，不条件式增删节点）。
-        //
-        // 为什么不做成 `if (reveal > 0)`：条件式增删会让这一层在「第一像素位移」的瞬间
-        // 才被组合进来，那一帧的布局/合成抖动正是用户描述的「不显示、不跟手」；
-        // 而且删除底被不透明的卡片完全盖住时，alpha=0 与不存在在视觉上等价 ——
-        // 常驻没有任何代价，却换来了跟手的显影。
-        // ⚠️ 删除底**常驻**在卡片之下（只调 alpha，不条件式增删节点，见上方注释）。
-        //
-        // 删除底色 + 图标必须放在**右侧**（`Alignment.CenterEnd`）：卡片向左滑
-        // （offsetX 为负）时，露出的是卡片**右侧**的空白条，红底图标若放在左侧
-        // （默认 TopStart）会被卡片盖住、露出的右侧却空着 —— 正是用户反馈的
-        // 「从最右边往左滑，删除按钮看不到」。这里对齐 Bastion `SwipeActions.kt`
-        // （`Surface(Alignment.CenterEnd)` + `Row(padding(end = 24.dp))`）。
-        val reveal = (-offsetX / thresholdPx).coerceIn(0f, 1f)
+    // ⚠️ 删除动作区**必须**按位移给 alpha，否则会漏出一条极细的红边：
+    // 卡片与动作区是**两个各自栅格化的 12dp 圆角矩形**，边缘一像素的抗锯齿差异足以
+    // 在静息态（两者完全重合）也透出底下的 `errorContainer` —— 深色主题下尤其显眼
+    // （2026-09-13 用户报告「密码条目和卡包条目周围有很细小的红色，像删除按钮溢出」）。
+    // 静息态 alpha = 0 ⇒ 那条缝根本不存在；滑动时才随位移显影（顺带保留跟手感）。
+    val reveal = (-offsetX / actionWidthPx).coerceIn(0f, 1f)
+
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(REVEAL_CORNER)),
+    ) {
+        // 删除动作区：**常驻**在卡片之下、靠右对齐（不条件式增删节点，避免首帧抖动）。
+        DeleteActionArea(reveal = reveal, onClick = { confirmOpen = true })
+
         Box(
             modifier = Modifier
-                .fillMaxSize()
-                .graphicsLayer { alpha = reveal }
-                .background(
-                    color = MaterialTheme.colorScheme.errorContainer,
-                    shape = RoundedCornerShape(DELETE_BG_CORNER),
+                .fillMaxWidth()
+                .graphicsLayer { translationX = if (enabled) offsetX else 0f }
+                .swipeToReveal(
+                    enabled = enabled,
+                    onDrag = { delta -> offsetX = (offsetX + delta).coerceIn(-actionWidthPx, 0f) },
+                    onDragEnd = {
+                        // 过半即停靠到「全开」，否则回弹 —— 不需要精确拖到位。
+                        settleTo(if (-offsetX > actionWidthPx / 2f) -actionWidthPx else 0f)
+                    },
+                    onDragCancel = { settleTo(0f) },
                 ),
-            contentAlignment = Alignment.CenterEnd,
         ) {
-            Row(
-                modifier = Modifier.padding(end = 20.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
+            content()
+        }
+    }
+
+    if (confirmOpen) {
+        DeleteConfirmDialog(
+            onConfirm = {
+                confirmOpen = false
+                settleTo(0f)
+                currentDelete()
+            },
+            onDismiss = {
+                confirmOpen = false
+                settleTo(0f)
+            },
+        )
+    }
+}
+
+/**
+ * 删除动作区（红色底 + 图标 + 文字）。
+ *
+ * 用 `matchParentSize()` 而不是 `fillMaxSize()`：后者会按**传入约束**撑满
+ * （在 `LazyColumn` 条目里 maxHeight 是无穷大，直接崩），前者按**父 Box 实测尺寸**对齐，
+ * 且不参与父尺寸计算 —— 高度完全由卡片决定。
+ */
+@Composable
+private fun BoxScope.DeleteActionArea(reveal: Float, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .matchParentSize()
+            .graphicsLayer { alpha = reveal }
+            .background(MaterialTheme.colorScheme.errorContainer),
+        contentAlignment = Alignment.CenterEnd,
+    ) {
+        TextButton(
+            onClick = onClick,
+            modifier = Modifier
+                .width(ACTION_WIDTH)
+                .fillMaxHeight(),
+            contentPadding = PaddingValues(0.dp),
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Icon(
                     imageVector = Icons.Filled.Delete,
                     contentDescription = null,
@@ -158,96 +208,64 @@ fun PressAndSwipeToDelete(
                 )
                 Text(
                     text = stringResource(R.string.action_delete),
-                    style = MaterialTheme.typography.labelLarge,
+                    style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onErrorContainer,
-                    modifier = Modifier.padding(start = 8.dp),
+                    modifier = Modifier.padding(top = 2.dp),
                 )
             }
         }
-
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .graphicsLayer { translationX = offsetX }
-                .deleteGesture(
-                    onDrag = { delta -> offsetX = (offsetX + delta).coerceIn(-maxDragPx, 0f) },
-                    onDragEnd = {
-                        if (-offsetX >= thresholdPx) {
-                            // 滑出屏幕后再删除：先给一个「卡片被扔掉」的视觉收尾。
-                            settleTo(-maxDragPx * 2) { currentDelete() }
-                        } else {
-                            settleTo(0f)
-                        }
-                    },
-                    onDragCancel = { settleTo(0f) },
-                ),
-        ) {
-            content()
-        }
     }
 }
 
+/** 删除前的二次确认（文案刻意与详情页的删除对话框区分：这里滑开的是列表行）。 */
+@Composable
+private fun DeleteConfirmDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.delete_swipe_title)) },
+        text = { Text(stringResource(R.string.delete_swipe_message)) },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text(
+                    text = stringResource(R.string.action_delete),
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
+        },
+    )
+}
+
 /**
- * 长按 → 拖动的手势接线（独立函数，避免主 composable 的圈复杂度/条件数越界）。
+ * 水平拖动手势接线（独立函数，避免主 composable 的圈复杂度/条件数越界）。
  *
- * 只允许**向左**滑：向右拖会被 `minOf(x, 0f)` 归零（删除方向唯一，语义更清楚）。
+ * [enabled] 为 `false` 时**完全不挂手势**（而不是挂上再忽略）：列表滚动、卡片点击/长按
+ * 全部照原样工作，不会因为多了一层 `pointerInput` 而产生任何延迟或抢事件。
  *
- * 手写而非 `detectDragGesturesAfterLongPress`：需要在「长按成立」之后才接管位移——
- * 这样长按（由内部卡片 [EntryCard] 的 `onLongClick` 处理选中）与拖拽删除不会在同一
- * 根指针事件上互抢：长按成立前若手指抬起/移动，本手势直接作废且**不消费**任何事件，
- * 列表滚动与卡片点击照常；长按成立后接管位移并 `consume()`，列表不跟着滚。
- *
- * ⚠️ 本手势**不**回调选中：选中由卡片自己负责（见 [PressAndSwipeToDelete] 文档），
- * 否则一次长按会触发两次 toggle。
+ * 开启时 `detectHorizontalDragGestures` 只在水平方向越过 touch slop 后才接管并 `consume()`，
+ * 因此：竖直滑动仍归 `LazyColumn`，卡片自带的 `clickable` / `combinedClickable` 也照常
+ * 收到点击与长按（它们不会因为水平拖动而误触发 —— 拖动本身会取消 press）。
  */
-private fun Modifier.deleteGesture(
+private fun Modifier.swipeToReveal(
+    enabled: Boolean,
     onDrag: (Float) -> Unit,
     onDragEnd: () -> Unit,
     onDragCancel: () -> Unit,
-): Modifier = pointerInput(Unit) {
-    val longPressTimeout = viewConfiguration.longPressTimeoutMillis
-    val touchSlop = viewConfiguration.touchSlop
-    awaitEachGesture {
-        val down = awaitFirstDown(requireUnconsumed = false)
-        // 长按不成立 → 本次手势作废，**不消费**任何事件（见 [deleteGesture] 文档）。
-        val longPressed = withTimeoutOrNull(longPressTimeout) { awaitBreak(down, touchSlop) } == null
-        if (!longPressed) return@awaitEachGesture
-
-        // 长按已成立：接管后续事件。选中由卡片 [EntryCard] 的 `onLongClick` 在长按成立时
-        // 自行处理，本手势只负责接管位移（见 [deleteGesture] / [PressAndSwipeToDelete] 文档）。
-        // 这里 consume 掉位移，列表便不会跟着滚 —— 用户已经用长按表明「我要动这张卡」，
-        // 不是「我要翻页」。
-        val released = drag(down.id) { change ->
-            // ⚠️ 用 `position - previousPosition` 而不是 `change.positionChange()`：
-            // 后者在 ui 1.11 起是**顶层扩展函数**（不是成员），漏 import 会解析成
-            // 内部的 `positionChange: Boolean` 字段，报「Boolean 不能当函数调用」。
-            val delta = (change.position - change.previousPosition).x
-            if (delta != 0f) {
-                onDrag(minOf(delta, 0f))
-            }
-            change.consume()
-        }
-        if (released) {
-            onDragEnd()
-        } else {
-            onDragCancel()
-        }
-    }
-}
-
-/**
- * 阻塞式等待「长按被打断」：手指抬起、或移动超过 [touchSlop] 即返回。
- *
- * 返回时外层 `withTimeoutOrNull` 拿到非 null ⇒ 长按失败；超时（返回 null）⇒ 长按成立。
- */
-private suspend fun AwaitPointerEventScope.awaitBreak(down: PointerInputChange, touchSlop: Float) {
-    while (true) {
-        val event = awaitPointerEvent(PointerEventPass.Main)
-        val moved = event.changes
-            .firstOrNull { it.id == down.id }
-            ?.let { (it.position - down.position).getDistance() > touchSlop }
-            ?: false
-        val lifted = event.changes.all { !it.pressed }
-        if (moved || lifted) return
+): Modifier = if (!enabled) {
+    this
+} else {
+    pointerInput(Unit) {
+        detectHorizontalDragGestures(
+            onHorizontalDrag = { change, dragAmount ->
+                if (dragAmount != 0f) {
+                    change.consume()
+                    onDrag(dragAmount)
+                }
+            },
+            onDragEnd = onDragEnd,
+            onDragCancel = onDragCancel,
+        )
     }
 }

@@ -43,6 +43,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.activity.compose.BackHandler
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.ScaffoldDefaults
+import androidx.compose.runtime.saveable.rememberSaveable
+import io.vaultix.vaultix.ui.common.VaultixSearchTopAppBar
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -99,9 +105,39 @@ fun CardWalletScreen(
         }
     }
 
+    // 搜索（2026-09-13 用户反馈「卡包里面没有搜索按钮」）。
+    // 卡片条目通常只有个位数，**在页面内过滤**就够，不必给 ViewModel 加 query 状态
+    // （密码 / 验证码页的 query 还要参与「切库后重查」，那两页才必须放在 ViewModel）。
+    var searchActive by rememberSaveable { mutableStateOf(false) }
+    var query by rememberSaveable { mutableStateOf("") }
+    val closeSearch: () -> Unit = { searchActive = false; query = "" }
+    val visibleCards = remember(cards, query) { filterCards(cards, query) }
+    // 搜索态自己消费返回：主界面是根路由（栈里没有上一层），不拦就会直接退回桌面。
+    BackHandler(enabled = searchActive) { closeSearch() }
+
+    val searchScrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
+
     Scaffold(
         // 沉浸式：顶栏浮在内容之上（状态栏内边距由顶栏自己处理，见 [VaultixExpressiveTopBar]）。
-        contentWindowInsets = WindowInsets(0, 0, 0, 0),
+        // ⚠️ 搜索态是例外：那时换成一条**固定高度**的真实 `topBar`，必须让 Scaffold 帮它
+        // 预留状态栏高度，否则搜索输入框会被状态栏压住。
+        contentWindowInsets = if (searchActive) {
+            ScaffoldDefaults.contentWindowInsets
+        } else {
+            WindowInsets(0, 0, 0, 0)
+        },
+        topBar = {
+            if (searchActive) {
+                VaultixSearchTopAppBar(
+                    searchTerm = query,
+                    placeholder = stringResource(R.string.card_wallet_search_hint),
+                    onSearchTermChange = { query = it },
+                    onClose = closeSearch,
+                    clearIconContentDescription = stringResource(R.string.card_wallet_search_close),
+                    scrollBehavior = searchScrollBehavior,
+                )
+            }
+        },
         floatingActionButton = {
             if (!embedded) {
                 FloatingActionButton(onClick = {
@@ -114,13 +150,21 @@ fun CardWalletScreen(
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             Column(modifier = Modifier.fillMaxSize()) {
-                if (cards.isEmpty()) {
+                // 搜索态归零：Scaffold 已按 `contentWindowInsets` 为搜索栏预留了高度。
+                val topInset = if (searchActive) 0.dp else barPadding
+                if (visibleCards.isEmpty()) {
                     Box(
-                        modifier = Modifier.fillMaxSize().padding(top = barPadding),
+                        modifier = Modifier.fillMaxSize().padding(top = topInset),
                         contentAlignment = Alignment.Center,
                     ) {
                         Text(
-                            text = stringResource(R.string.card_wallet_empty),
+                            text = stringResource(
+                                if (cards.isEmpty()) {
+                                    R.string.card_wallet_empty
+                                } else {
+                                    R.string.card_wallet_no_match
+                                },
+                            ),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -135,14 +179,14 @@ fun CardWalletScreen(
                         // 与密码 / 验证码列表同一套留白结构（卡片不再自带外边距）。
                         contentPadding = PaddingValues(
                             start = 16.dp,
-                            top = barPadding,
+                            top = topInset,
                             end = 16.dp,
                             bottom = 8.dp + bottomInset,
                         ),
                         verticalArrangement = Arrangement.spacedBy(CARD_GAP),
                     ) {
-                        items(cards, key = { it.id }) { item ->
-                            // 与密码列表一致的「按住后滑动删除」（软删除进回收站）。
+                        items(visibleCards, key = { it.id }) { item ->
+                            // 与密码列表一致的「左滑露出删除 → 二次确认」（软删除进回收站）。
                             PressAndSwipeToDelete(onDelete = { viewModel.deleteCard(item) }) {
                                 CardWalletRow(item = item, onClick = { onOpenItem(item) })
                             }
@@ -150,11 +194,21 @@ fun CardWalletScreen(
                     }
                 }
             }
-            VaultixExpressiveTopBar(
-                title = stringResource(R.string.nav_card_wallet),
-                collapseFraction = collapse,
-                modifier = Modifier.align(Alignment.TopCenter),
-            )
+            if (!searchActive) {
+                VaultixExpressiveTopBar(
+                    title = stringResource(R.string.nav_card_wallet),
+                    collapseFraction = collapse,
+                    modifier = Modifier.align(Alignment.TopCenter),
+                    actions = {
+                        IconButton(onClick = { searchActive = true }) {
+                            Icon(
+                                imageVector = Icons.Filled.Search,
+                                contentDescription = stringResource(R.string.card_wallet_search_hint),
+                            )
+                        }
+                    },
+                )
+            }
         }
     }
 
@@ -175,6 +229,22 @@ fun CardWalletScreen(
 }
 
 private val CARD_GAP = 8.dp
+
+/**
+ * 卡包搜索过滤：标题 / 备注 / 用户名任一命中即可（不区分大小写）。
+ *
+ * 抽成**顶层私有函数**（而不是页面内的 lambda）有两个原因：纯函数好单测；
+ * 且 detekt `CyclomaticComplexMethod` 会把它算进调用方的复杂度，独立后互不影响。
+ */
+private fun filterCards(cards: List<VaultItem>, query: String): List<VaultItem> {
+    val keyword = query.trim()
+    if (keyword.isEmpty()) return cards
+    return cards.filter { item ->
+        item.title.contains(keyword, ignoreCase = true) ||
+            item.username.contains(keyword, ignoreCase = true) ||
+            item.notes.contains(keyword, ignoreCase = true)
+    }
+}
 
 /**
  * 单张卡：品牌图标 + 名称 + 分组卡号（末四位外打码）。

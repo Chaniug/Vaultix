@@ -40,12 +40,14 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.ViewAgenda
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Checkbox
@@ -95,7 +97,7 @@ import io.vaultix.model.VaultFolder
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
 import io.vaultix.vaultix.R
-import io.vaultix.vaultix.ui.common.BadgeTone
+import io.vaultix.vaultix.ui.common.CapabilityIcon
 import io.vaultix.vaultix.ui.common.CloudSyncIcon
 import io.vaultix.vaultix.ui.common.EntryCard
 import io.vaultix.vaultix.ui.common.EntryCardIconSize
@@ -105,7 +107,6 @@ import io.vaultix.vaultix.ui.common.ItemFormDialog
 import io.vaultix.vaultix.ui.common.PressAndSwipeToDelete
 import io.vaultix.vaultix.ui.common.SelectionActionBar
 import io.vaultix.vaultix.ui.common.SiteIcon
-import io.vaultix.vaultix.ui.common.TypeBadge
 import io.vaultix.vaultix.ui.common.VaultixExpressiveTopBar
 import io.vaultix.vaultix.ui.common.VaultixSearchTopAppBar
 import io.vaultix.vaultix.ui.common.itemTypeLabelRes
@@ -149,36 +150,47 @@ private fun SearchBackHandler(enabled: Boolean, onClose: () -> Unit) {
 }
 
 /**
- * 列表顶部让位 = 展开中的筛选行高（随收起动画变化）。
+ * 展开后的快捷筛选 chip 行让位高（随展开/收起动画变化）。
  *
- * ⚠️ **状态栏高度不再算进这里**：沉浸式顶栏让位改由主 composable 内
- * `SyncNoteBanner` 之上的固定 `Spacer(Modifier.height(barPadding))` 统一出一次。
- * 此前状态栏高度被算了两次——`contentPadding(top = barPadding + filterRowInset)` 一份、
- * `SyncNoteBanner` 自己的 `topPadding = barPadding` 又一份——同步横幅一出现就把
- * `PullToRefreshBox` 推下去，与列表 `contentPadding` 里的 `barPadding` 叠成双倍空白
- * （用户反馈「下拉刷新区域有很大一块空白」）。现在 `barPadding` 只由 Spacer 出一次，
- * 横幅贴着 Spacer 之下，不再叠加。
+ * 抽成独立函数的原因有两个：`animateDpAsState` 的 label 得在这里写；主 composable
+ * 已贴着 detekt `LongMethod ≤150` 的门禁线。
+ */
+@Composable
+private fun rememberQuickFilterRowInset(expanded: Boolean): Dp =
+    animateDpAsState(
+        targetValue = if (expanded) QUICK_FILTER_ROW_HEIGHT else 0.dp,
+        animationSpec = tween(GROUP_ANIM_MS),
+        label = "items_filter_row_inset",
+    ).value
+
+/**
+ * 列表顶部让位 = 沉浸式顶栏高 + 展开中的筛选行高。**这两个量都只能喂给
+ * `LazyColumn.contentPadding`，绝不能做成外层容器的 padding。**
  *
- * ⚠️ ⚠️ 列表本身的滚动留白（`contentPadding`）仍喂给这里的值，不能改外层容器 padding——
- * 外层 padding 会把列表视口整体下压 ⇒ 顶栏收起后内容无法从下方穿过、下方留死区
- * （用户观感就是「不沉浸」）。
+ * ⚠️ 2026-09-13 用户反馈「密码条目往下滑动时上方还是不能透明，不够沉浸」。根因是
+ * 状态栏让位被写成了 `Column` 里的**固定 `Spacer(Modifier.height(barPadding))`** ——
+ * 列表视口被整体下压，内容永远画不到顶栏那一条带子里 ⇒ 顶栏再半透明也没有东西透出来。
+ * 这与 `.ai/ISSUES.md` #67 是**同一个根因**，只是当时只修了验证码页 / 卡包页，密码页漏了。
+ * 现在改成与 `TotpCodesScreen` / `CardWalletScreen` 完全一致的写法：让位只走
+ * `contentPadding`，列表从 y=0 开始铺。
+ *
+ * ⚠️ 同步横幅（`SyncNoteBanner`）是列表的**兄弟节点**、不随列表滚动：它出现时会自己
+ * 占掉「状态栏 + 横幅高」那一段。此时 `contentPadding` 若再加一份 `barPadding`，
+ * 横幅与首条之间就会凭空多出一条 `barPadding` 的空白（旧 bug：下拉刷新区大块空白）。
+ * 因此横幅可见时**只留筛选行高**。
  *
  * ⚠️ 搜索态是例外：`Scaffold` 已按 `ScaffoldDefaults.contentWindowInsets` 为搜索顶栏
  * 预留了高度（见调用点的 `contentWindowInsets`），这里必须归零。
- *
- * 抽成独立函数的另一个原因：主 composable 贴着 detekt `LongMethod ≤150` 的门禁线。
  */
-@Composable
-private fun rememberItemsTopInset(
+private fun itemsTopInset(
     searchActive: Boolean,
-    quickFiltersExpanded: Boolean,
-): Dp {
-    val filterRowInset by animateDpAsState(
-        targetValue = if (quickFiltersExpanded) QUICK_FILTER_ROW_HEIGHT else 0.dp,
-        animationSpec = tween(GROUP_ANIM_MS),
-        label = "items_filter_row_inset",
-    )
-    return if (searchActive) 0.dp else filterRowInset
+    barPadding: Dp,
+    filterRowInset: Dp,
+    bannerVisible: Boolean,
+): Dp = when {
+    searchActive -> 0.dp
+    bannerVisible -> filterRowInset
+    else -> barPadding + filterRowInset
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -218,7 +230,10 @@ fun ItemsScreen(
     val listState = rememberLazyListState()
     val collapse = rememberScrollCollapseFraction(listState)
     val barPadding = rememberImmersiveBarPadding(collapse)
-    val listTopInset = rememberItemsTopInset(searchActive, quickFiltersExpanded)
+    // ⚠️ 挤在一行是有意的：主 composable 贴着 detekt `LongMethod ≤150` 的门禁线
+    // （2026-09-13 这一批加了「让位走 contentPadding」后曾到 152 行，靠压这行回到 147）。
+    val filterRowInset = rememberQuickFilterRowInset(quickFiltersExpanded)
+    val listTopInset = itemsTopInset(searchActive, barPadding, filterRowInset, state.syncNote != null)
     // 搜索关闭动作（点 × 与系统返回共用）：退出搜索态 + 清空输入。
     val closeSearch: () -> Unit = { searchActive = false; viewModel.setQuery("") }
     SearchBackHandler(enabled = searchActive, onClose = closeSearch)
@@ -276,21 +291,20 @@ fun ItemsScreen(
         val syncing by viewModel.isSyncing.collectAsStateWithLifecycle()
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             Column(modifier = Modifier.fillMaxSize()) {
-                // 沉浸式状态栏让位：固定 Spacer 出一次（非搜索态才需要，搜索态由
-                // Scaffold 的 contentWindowInsets 统一预留，见上面的 contentWindowInsets）。
-                // 同步横幅（SyncNoteBanner）不再自己加 topPadding，直接贴在本 Spacer 之下，
-                // 避免与列表 contentPadding 里的状态栏高度叠加成双倍空白（见 #80 之外的回归）。
-                if (!searchActive) Spacer(Modifier.height(barPadding))
+                // 沉浸式状态栏让位**只走列表的 contentPadding**（见 [itemsTopInset]），
+                // 这里**不再**放固定 Spacer —— 放了列表就永远滑不到顶栏之下，顶栏再半透明
+                // 也透不出内容（用户反馈的「上方不能透明、不够沉浸」）。
+                // 同步横幅是列表的**兄弟节点**（不随列表滚动），必须自己让开状态栏高度，
+                // 否则会被顶栏半透明地压住；对应地，它可见时列表只留筛选行高，免得叠出空白。
                 SyncNoteBanner(
                     note = state.syncNote,
-                    topPadding = 0.dp,
+                    topPadding = if (searchActive) 0.dp else barPadding,
                     onDismiss = viewModel::dismissSyncNote,
                     onRetry = viewModel::retrySync,
                 )
                 // 下拉伸手区（指示器让位与状态都在这里闭环，见 [ItemsPullToRefresh]）。
                 ItemsPullToRefresh(
                     syncing = syncing,
-                    topInset = listTopInset,
                     onRefresh = viewModel::retrySync,
                 ) {
                     if (visibleItems.isEmpty()) {
@@ -410,7 +424,6 @@ private fun ItemsEmptyState(query: String, topInset: Dp) {
 @Composable
 private fun ItemsPullToRefresh(
     syncing: Boolean,
-    topInset: Dp,
     onRefresh: () -> Unit,
     content: @Composable BoxScope.() -> Unit,
 ) {
@@ -420,16 +433,13 @@ private fun ItemsPullToRefresh(
         onRefresh = onRefresh,
         modifier = Modifier.fillMaxSize(),
         state = pullState,
-        indicator = {
-            PullToRefreshDefaults.IndicatorBox(
-                state = pullState,
-                isRefreshing = syncing,
-                modifier = Modifier.padding(top = topInset),
-                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                // content 留空：默认的箭头 / 转圈由 IndicatorBox 自己按 isRefreshing 画。
-                content = {},
-            )
-        },
+        // ⚠️ 2026-09-13 第二轮用户反馈：「下拉刷新的时候，密码条目左边有一个刷新按钮但是
+        // 没显示出来是白色的，可以移除了吧，不好看。」
+        // 那枚指示器的底色是 `surfaceContainerHigh`，浅色主题下几乎与页面同色 —— 看起来
+        // 就是"一块白"；而且它落在首条卡片左侧，正压着站点图标。
+        // 这里**不再画指示器**：下拉手势与同步逻辑原样保留（静默触发），手动同步入口仍在
+        // 顶栏 ⋮ 菜单里 —— 不靠一枚看不清的圆点来提示。因此 `topInset` 参数也随之取消。
+        indicator = {},
         content = content,
     )
 }
@@ -833,6 +843,9 @@ private fun ItemsList(
                     // 不再回调选中，避免一次长按触发两次 toggle（进不了多选）。
                     PressAndSwipeToDelete(
                         onDelete = { onDelete(item) },
+                        // ⚠️ 必须先按住进入多选，左滑才允许删除（2026-09-13 第二轮用户反馈：
+                        // 「直接右边往左滑也能删除，这样的逻辑不对吧。需要按住进入选择才能删。」）。
+                        enabled = selectedIds.isNotEmpty(),
                     ) {
                         ItemRow(
                             item = item,
@@ -1182,10 +1195,18 @@ private fun ItemRowTrailing(
             )
         }
         if (!item.totp.isNullOrBlank()) {
-            TypeBadge(stringResource(R.string.items_filter_totp), BadgeTone.PRIMARY)
+            CapabilityIcon(
+                icon = Icons.Filled.Timer,
+                tint = MaterialTheme.colorScheme.primary,
+                contentDescription = stringResource(R.string.items_filter_totp),
+            )
         }
         if (item.fido2Credentials.isNotEmpty()) {
-            TypeBadge(stringResource(R.string.items_filter_passkey), BadgeTone.TERTIARY)
+            CapabilityIcon(
+                icon = Icons.Filled.Key,
+                tint = MaterialTheme.colorScheme.tertiary,
+                contentDescription = stringResource(R.string.items_filter_passkey),
+            )
         }
     }
 }

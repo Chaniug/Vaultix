@@ -85,6 +85,15 @@ import io.vaultix.vaultix.ui.common.SiteIcon
 import io.vaultix.vaultix.ui.common.TypeBadge
 import io.vaultix.vaultix.ui.common.itemTypeLabelRes
 import android.content.Context
+import androidx.compose.material.icons.filled.Key
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import io.vaultix.vaultix.ui.common.CapabilityIcon
+import androidx.compose.foundation.ScrollState
+import androidx.compose.foundation.layout.WindowInsets
+import io.vaultix.vaultix.ui.common.VaultixExpressiveTopBar
+import io.vaultix.vaultix.ui.common.rememberImmersiveBarPadding
+import io.vaultix.vaultix.ui.common.rememberScrollCollapseFraction
 
 /**
  * 详情页一次性事件 → 用户文案（Deleted 由调用方导航，返回 null）。
@@ -158,6 +167,7 @@ private fun DetailBodyContent(
     serverOrigin: String?,
     showPassword: Boolean,
     onTogglePassword: () -> Unit,
+    scrollState: ScrollState,
     actions: DetailActions,
 ) {
     Box(modifier = modifier) {
@@ -177,6 +187,7 @@ private fun DetailBodyContent(
                 serverOrigin = serverOrigin,
                 showPassword = showPassword,
                 onTogglePassword = onTogglePassword,
+                scrollState = scrollState,
                 actions = actions,
             )
         }
@@ -190,16 +201,21 @@ private fun DetailSections(
     serverOrigin: String?,
     showPassword: Boolean,
     onTogglePassword: () -> Unit,
+    scrollState: ScrollState,
     actions: DetailActions,
 ) {
+    // 让位必须做在**滚动内容里**（可滚动的 `Spacer`），不能做成外层容器 padding ——
+    // 做在外面，内容就永远到不了顶栏那一条带子里（`.ai/ISSUES.md` #67）。
+    val barPadding = rememberImmersiveBarPadding(rememberScrollCollapseFraction(scrollState))
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
+            .verticalScroll(scrollState)
             .padding(horizontal = 16.dp, vertical = 8.dp),
     ) {
-        // 顶部头部：站点图标 + 标题 + 「类型 / 用户名」副标题 + 能力徽标。
-        // 此前详情页**完全没有头部**，进来就是一串字段行（用户：「密码条目页面详情也太简陋了」）。
+        Spacer(Modifier.height(barPadding))
+        // 顶部头部：站点图标 + 一行摘要（网址数 / 2FA / 通行密钥）+ 用户名 + 类型徽标。
+        // 标题**只在顶栏出现一次**，头部不再重复（见 [DetailHeader] 的 KDoc）。
         DetailHeader(item = item, serverOrigin = serverOrigin)
         Spacer(Modifier.height(20.dp))
         if (item.username.isNotBlank() || item.password.isNotBlank()) {
@@ -217,8 +233,8 @@ private fun DetailSections(
         }
         if (item.totp != null) {
             Spacer(Modifier.height(12.dp))
-            // 只提示「含验证码」——动态验证码改到「验证码」页看（降功耗，见 TotpSection KDoc）。
-            TotpSection()
+            // 默认**不显示**验证码：点分区里的眼睛才显示（详情页不跑定时器，见 [TotpSection]）。
+            TotpSection(totp = item.totp)
         }
         if (item.fido2Credentials.isNotEmpty()) {
             Spacer(Modifier.height(12.dp))
@@ -249,11 +265,15 @@ private fun DetailSections(
 }
 
 /**
- * 详情页头部：站点图标 + 标题 + 用户名 + 能力徽标。
+ * 详情页头部：站点图标 + **一行摘要** + 用户名 + 类型徽标。
  *
- * 对齐 Bastion `PasswordDetailScreen.HeaderSection`（站点图标 + `headlineSmall` + 副标题）。
- * 徽标里**始终**带一个类型徽标：这样「类型」只出现一次（副标题让给用户名，不再与类型重复），
- * 而卡片 / 身份 / SSH 这类没有用户名的条目也不至于看不出自己是什么。
+ * ⚠️ 2026-09-13 用户反馈两件事，本函数一并解决：
+ * 1. 「密码标题好像有两个、显示重复了，而且位置太低」—— 此前 `LargeTopAppBar` 与这里
+ *    **各画了一遍 `item.title`**。现在标题**只由顶栏承担**：它天然在最上方，收起时自动
+ *    变小，且与滚动联动；头部不再重复画标题。
+ * 2. 「留白的那半部分可以显示有几条网址、含 2FA、通行密钥之类的内容」—— 省下的标题位
+ *    换成 [detailSummary] 的一行摘要。这几项是"核对条目"时要一眼看到的信息，
+ *    此前必须滚下去逐个分区看。
  */
 @Composable
 private fun DetailHeader(item: VaultItem, serverOrigin: String?) {
@@ -261,37 +281,71 @@ private fun DetailHeader(item: VaultItem, serverOrigin: String?) {
         SiteIcon(item = item, serverOrigin = serverOrigin, size = DETAIL_HEADER_ICON)
         Spacer(Modifier.width(16.dp))
         Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = item.title.ifBlank { stringResource(R.string.items_item_unnamed) },
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
+            val summary = detailSummary(item)
+            if (summary.isNotEmpty()) {
+                Text(
+                    text = summary,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
             if (item.username.isNotBlank()) {
                 Text(
                     text = item.username,
                     style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(top = 2.dp),
                 )
             }
             Row(
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.padding(top = 8.dp),
             ) {
                 TypeBadge(stringResource(itemTypeLabelRes(item.type)), BadgeTone.NEUTRAL)
+                // 能力用「小图标」而不是文字胶囊（对齐列表行尾，见 [CapabilityIcon]）。
                 if (!item.totp.isNullOrBlank()) {
-                    TypeBadge(stringResource(R.string.items_filter_totp), BadgeTone.PRIMARY)
+                    CapabilityIcon(
+                        icon = Icons.Filled.Timer,
+                        tint = MaterialTheme.colorScheme.primary,
+                        contentDescription = stringResource(R.string.items_filter_totp),
+                    )
                 }
                 if (item.fido2Credentials.isNotEmpty()) {
-                    TypeBadge(stringResource(R.string.items_filter_passkey), BadgeTone.TERTIARY)
+                    CapabilityIcon(
+                        icon = Icons.Filled.Key,
+                        tint = MaterialTheme.colorScheme.tertiary,
+                        contentDescription = stringResource(R.string.items_filter_passkey),
+                    )
                 }
             }
         }
     }
+}
+
+/**
+ * 头部摘要：`N 个网址 · 2FA · N 个通行密钥`（没有的项直接不出现，都没有则返回空串）。
+ *
+ * 用一句话而不是三枚徽标：这里是**概览**（可数信息），徽标区回答的是**分类**
+ * （这条是什么类型 / 有什么能力），两者分工不同，不该挤在同一种视觉语言里。
+ */
+@Composable
+private fun detailSummary(item: VaultItem): String {
+    val parts = buildList {
+        if (item.uris.isNotEmpty()) {
+            add(stringResource(R.string.detail_summary_uris, item.uris.size))
+        }
+        // "2FA" 是三字母行业缩写，不随语言变化，直接写在代码里。
+        if (!item.totp.isNullOrBlank()) add("2FA")
+        if (item.fido2Credentials.isNotEmpty()) {
+            add(stringResource(R.string.detail_summary_passkeys, item.fido2Credentials.size))
+        }
+    }
+    return parts.joinToString(" · ")
 }
 
 /**
@@ -304,14 +358,15 @@ private fun DetailHeader(item: VaultItem, serverOrigin: String?) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ItemDetailScreen(
-    onBack: () -> Unit,
     onDeleted: () -> Unit,
     viewModel: ItemDetailViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
-    val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
+    // 沉浸式浮动顶栏用：内容滚动状态 → 顶栏收起比例（与密码 / 验证码 / 卡包页同一套）。
+    val scrollState = rememberScrollState()
+    val listCollapse = rememberScrollCollapseFraction(scrollState)
 
     var showPassword by rememberSaveable { mutableStateOf(false) }
     var editOpen by rememberSaveable { mutableStateOf(false) }
@@ -335,27 +390,8 @@ fun ItemDetailScreen(
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
-        topBar = {
-            LargeTopAppBar(
-                title = { Text(text = item?.title.orEmpty()) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null)
-                    }
-                },
-                actions = {
-                    if (item != null) {
-                        IconButton(onClick = { editOpen = true }) {
-                            Icon(Icons.Filled.Edit, contentDescription = null)
-                        }
-                        IconButton(onClick = { deleteConfirmOpen = true }) {
-                            Icon(Icons.Filled.Delete, contentDescription = null)
-                        }
-                    }
-                },
-                scrollBehavior = scrollBehavior,
-            )
-        },
+        // 顶栏不再由 Scaffold 预留高度（沉浸式），状态栏内边距由顶栏自己处理。
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
     ) { padding ->
         val actions = remember(viewModel) {
             DetailActions(
@@ -366,17 +402,45 @@ fun ItemDetailScreen(
                 onCopyField = viewModel::copyField,
             )
         }
-        DetailBodyContent(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding),
-            busy = state.saving || state.deleting,
-            item = item,
-            serverOrigin = state.serverOrigin,
-            showPassword = showPassword,
-            onTogglePassword = { showPassword = !showPassword },
-            actions = actions,
-        )
+        // ⚠️ 2026-09-13 第二轮用户反馈：「密码详情页，标题距离上边还存在一些间隙不好看，
+        // 排版和布局不好看，滑动的时候效果不好看。」
+        // 根因：这里原本用 `LargeTopAppBar` —— 它在「动作行」和「大标题」之间自带一段
+        // 固定留白（Material 的 large 规格），而且大标题的收起动画幅度大、和内容不同步。
+        // 现在换成这个项目自己的**沉浸式浮动顶栏**（[VaultixExpressiveTopBar]，密码 /
+        // 验证码 / 卡包三个列表都在用）：栏高 72dp→48dp 平滑收起、内容从 y=0 起铺、
+        // 没有任何"多出来的一段空白"。四个页面从此是同一套顶栏语言。
+        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
+            DetailBodyContent(
+                modifier = Modifier.fillMaxSize(),
+                busy = state.saving || state.deleting,
+                item = item,
+                serverOrigin = state.serverOrigin,
+                showPassword = showPassword,
+                onTogglePassword = { showPassword = !showPassword },
+                scrollState = scrollState,
+                actions = actions,
+            )
+            if (item != null) {
+                VaultixExpressiveTopBar(
+                    title = item.title.ifBlank { stringResource(R.string.items_item_unnamed) },
+                    collapseFraction = listCollapse,
+                    modifier = Modifier.align(Alignment.TopCenter),
+                    // ⚠️ 2026-09-13 第三轮用户要求：「左上角返回按钮可以取消了，现在都是手势返回，
+                    // 给密码标题腾出显示位置。」
+                    // ⇒ 这里**不传** `navigationIcon`。返回仍有两条路：系统返回手势 / 返回键
+                    // （详情页是二级路由，栈里有上一层，`BackHandler` 由导航库自己接管）。
+                    // 去掉后标题左移到 16dp 起始位，长标题能多显示约一个字符位。
+                    actions = {
+                        IconButton(onClick = { editOpen = true }) {
+                            Icon(Icons.Filled.Edit, contentDescription = null)
+                        }
+                        IconButton(onClick = { deleteConfirmOpen = true }) {
+                            Icon(Icons.Filled.Delete, contentDescription = null)
+                        }
+                    },
+                )
+            }
+        }
     }
 
     if (editOpen && item != null) {
@@ -422,13 +486,21 @@ fun ItemDetailScreen(
     }
 }
 
+/**
+ * 分区小标题（登录信息 / 网址 / 2FA / 通行密钥 …）。
+ *
+ * ⚠️ 2026-09-13 用户反馈「登录信息、网址这些小标题是否要稍微大一点，优化一下排版」：
+ * `labelLarge` → **`titleMedium`(16sp)**，并用 `primary` 主色 —— 分区之间的分界
+ * 一眼可见，整页读起来有层次（此前 14sp + `onSurfaceVariant` 灰字，和正文几乎同级）。
+ * 下内边距 6dp → 8dp：标题与它自己的卡片贴紧，与上一张卡片拉开。
+ */
 @Composable
 private fun SectionTitle(text: String) {
     Text(
         text = text,
-        style = MaterialTheme.typography.labelLarge,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(start = 4.dp, bottom = 6.dp),
+        style = MaterialTheme.typography.titleMedium,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(start = 4.dp, bottom = 8.dp),
     )
 }
 
@@ -641,26 +713,88 @@ private fun UriRow(kind: UriKind, canOpen: Boolean, onCopy: () -> Unit, onOpen: 
 }
 
 /**
- * 验证码分区（**只提示，不显示动态验证码**）。
+ * 2FA 分区：**默认不显示验证码，点右侧眼睛才显示**。
  *
- * 2026-09-12 按用户要求改造（降功耗）：详情页此前每秒重算一次验证码 + 重绘倒计时进度条，
- * 只要详情页开着就一直在跑（对电池不友好），而它展示的信息与「验证码」页完全重复。
- * 现在这里只提示「该条目含验证码」，真正看码去「验证码」页（那里是整页统一的倒计时进度条，
- * 也只在那一页开销）。
+ * 2026-09-13 用户反馈：「动态验证码是不显示的，提示此页不刷新验证码 —— 我的想法是这里
+ * 做一个眼睛一样的按钮，点击就能显示验证码，默认是看不到的。动态验证码的文案用 2FA 即可。」
+ *
+ * 于是这里同时满足两件事：
+ * - **默认零开销**：不打开眼睛就不跑定时器，沿用 2026-09-12「详情页别每秒重算」的降功耗
+ *   约束（当时的做法是"干脆不给看"，现在改成"按需给看"）；
+ * - **打开即实时**：眼睛打开期间每秒重算（`LaunchedEffect(revealed)` 里的 `while`），
+ *   关掉随协程取消立刻停 —— 不会留一个后台每秒唤醒的定时器。
+ *
+ * 解析失败（`totp` 不是合法 otpauth / base32）时 `config` 为 null，此时眼睛点了也不给码
+ * （只保留提示行）—— **绝不显示一个会算错的码**。
  */
 @Composable
-private fun TotpSection() {
+private fun TotpSection(totp: String?) {
+    val config = remember(totp) { totp?.let(OtpUriParser::parse) }
+    var revealed by rememberSaveable { mutableStateOf(false) }
+    var nowSeconds by remember { mutableLongStateOf(System.currentTimeMillis() / MILLIS_PER_SECOND) }
+    LaunchedEffect(revealed) {
+        while (revealed) {
+            nowSeconds = System.currentTimeMillis() / MILLIS_PER_SECOND
+            delay(TOTP_TICK_MS)
+        }
+    }
+    val code = if (revealed) config?.let { TotpGenerator.generate(it, nowSeconds) } else null
+
     Column {
         SectionTitle(text = stringResource(R.string.section_totp))
         Card(
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
             modifier = Modifier.fillMaxWidth(),
         ) {
-            HintRow(
-                icon = Icons.Filled.Timer,
-                title = stringResource(R.string.detail_totp_present),
-                body = stringResource(R.string.detail_totp_where),
-            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, end = 4.dp, top = 10.dp, bottom = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Timer,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(20.dp),
+                )
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(start = 12.dp),
+                ) {
+                    Text(
+                        text = stringResource(R.string.detail_totp_present),
+                        style = MaterialTheme.typography.titleSmall,
+                    )
+                    if (code != null) {
+                        Text(
+                            text = code,
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(top = 2.dp),
+                        )
+                    } else {
+                        Text(
+                            text = stringResource(R.string.detail_totp_hidden),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 2.dp),
+                        )
+                    }
+                }
+                IconButton(onClick = { revealed = !revealed }) {
+                    Icon(
+                        imageVector = if (revealed) {
+                            Icons.Filled.VisibilityOff
+                        } else {
+                            Icons.Filled.Visibility
+                        },
+                        contentDescription = stringResource(R.string.detail_totp_toggle),
+                    )
+                }
+            }
         }
     }
 }
@@ -668,11 +802,18 @@ private fun TotpSection() {
 /** TOTP 验证码按 3 位分组显示（便于肉眼读取），与 Bitwarden 客户端一致。 */
 private const val TOTP_CODE_GROUP_SIZE = 3
 
+/** 毫秒 → 秒。TOTP 的时间步长以秒计，而 `System.currentTimeMillis()` 是毫秒。 */
+private const val MILLIS_PER_SECOND = 1_000L
+
+/** 详情页「眼睛打开」后的验证码刷新间隔（ms）。关掉眼睛即停。 */
+private const val TOTP_TICK_MS = 1_000L
+
 /**
- * 通行密钥分区（**只提示已绑定**）。
+ * 通行密钥分区：**只显示条数**。
  *
- * 同上（降功耗 + 去重复）：完整凭证列表在「验证码」页右上角的指纹按钮里查看
- * （`PasskeysRoute`），详情页只留一句「已绑定 N 个」。
+ * ⚠️ 2026-09-13 用户反馈：「通行密钥只是显示条目，不要提示在验证码页面的指纹按钮里打开，
+ * 这些提示有点多余了，简洁一点。」⇒ 去掉 `detail_passkey_where` 那句指路文案。
+ * 条数（`passkey_count`）保留 —— 它是"这条能不能免密登录"的唯一线索，不能只剩分区标题。
  */
 @Composable
 private fun PasskeysSection(creds: List<VaultFido2Credential>) {
@@ -685,22 +826,23 @@ private fun PasskeysSection(creds: List<VaultFido2Credential>) {
             HintRow(
                 icon = Icons.Filled.Fingerprint,
                 title = stringResource(R.string.passkey_count, creds.size),
-                body = stringResource(R.string.detail_passkey_where),
+                body = null,
             )
         }
     }
 }
 
 /**
- * 「图标 + 标题 + 说明」的静态提示行（验证码 / 通行密钥两个分区共用）。
+ * 「图标 + 标题 (+ 说明)」的静态提示行。
  *
- * 抽出来是为了让两处提示观感一致，也避免各写一遍内边距/字号。
+ * `body` 可为 `null`：用户明确说过「不要那些多余的指路提示，简洁一点」——
+ * 这时只画标题，不留一行空说明（留空行会让卡片显得没画完）。
  */
 @Composable
 private fun HintRow(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     title: String,
-    body: String,
+    body: String?,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(16.dp),
@@ -714,12 +856,14 @@ private fun HintRow(
         )
         Column(modifier = Modifier.padding(start = 12.dp)) {
             Text(text = title, style = MaterialTheme.typography.titleSmall)
-            Text(
-                text = body,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 2.dp),
-            )
+            if (body != null) {
+                Text(
+                    text = body,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
         }
     }
 }

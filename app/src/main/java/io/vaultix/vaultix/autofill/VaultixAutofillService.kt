@@ -213,7 +213,16 @@ class VaultixAutofillService : AutofillService() {
                         mode = AutofillIntents.MODE_UNLOCK,
                         title = getString(R.string.autofill_unlock_title),
                         subtitle = getString(R.string.autofill_unlock_subtitle),
-                    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                    ),
+                    // ⚠️⚠️ **绝不加 `FLAG_ACTIVITY_NEW_TASK`**（2026-09-13 定案，系统日志实证）。
+                    // 这是 **dataset 级认证意图**：系统会以「能收回 EXTRA_AUTHENTICATION_RESULT」
+                    // 的方式启动它，`AutofillActivity` 解锁完靠 `setResult` 把候选回灌回去。
+                    // 一旦带 NEW_TASK，Activity 被推进**独立 task** ⇒ 系统在启动后 ~16ms 就
+                    // 判定「本次认证没有返回」（系统日志原文：`onAuthenticationResult(): empty intent`）
+                    // ⇒ 我们随后构造的 FillResponse **被整个丢弃** ⇒ 用户看到的现象就是
+                    // 「指纹明明解锁成功了，却什么都没发生，只能反复解锁」。
+                    // 同一条规则也写在 `AutofillIntents` 与 `AndroidManifest` 的 `AutofillActivity`
+                    // 注释里（"不设 NEW_TASK（认证型意图）"）—— 这里曾经与服务端脱节。
                     requestCode = REQUEST_UNLOCK,
                 ),
                 title = getString(R.string.autofill_unlock_title),
@@ -267,7 +276,9 @@ class VaultixAutofillService : AutofillService() {
                     mode = AutofillIntents.MODE_SEARCH,
                     title = getString(R.string.autofill_no_match_title),
                     subtitle = getString(R.string.autofill_no_match_subtitle),
-                ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                ),
+                // ⚠️ 同上（`MODE_UNLOCK` 那处的长注释）：**dataset 级认证意图不能带 NEW_TASK**，
+                // 否则 `setResult` 的认证回灌会被系统丢掉（"empty intent"）。
                 requestCode = REQUEST_SEARCH,
             ),
             title = getString(R.string.autofill_no_match_title),

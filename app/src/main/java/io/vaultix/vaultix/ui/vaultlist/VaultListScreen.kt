@@ -101,7 +101,7 @@ fun VaultListScreen(
                         title = enrollTitle,
                         cancelText = cancelText,
                         onSuccess = { cipher -> viewModel.enrollWithCipher(event.vaultId, cipher) },
-                        onError = { _, _ -> /* 取消/失败：横幅保留，可再试 */ },
+                        onError = { _, _, _ -> /* 取消/失败：横幅保留，可再试 */ },
                     )
                 }
                 VaultListViewModel.Event.Removed ->

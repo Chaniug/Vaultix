@@ -70,6 +70,17 @@ class UnlockViewModel @Inject constructor(
         val twoFactor: TwoFactorUi? = null,
         val localUnlockAvailable: Boolean = false,
         /**
+         * **自动弹出被系统侧终止**的累计次数。
+         *
+         * 为什么值得进 state：`AutoPromptQuickUnlock` 用一次性守卫 `prompted` 保证「自动弹一次」，
+         * 但那个守卫是在**弹窗真正出现之前**置位的。系统侧终止（冷启动首帧窗口还没可见 /
+         * 生物硬件尚未就绪）会把这一次机会白白吃掉 ⇒ 用户什么都没做却再也不弹
+         * （2026-09-13 用户报告「生物验证不是 100% 能在覆盖安装后弹出」）。
+         * 这个计数就是让 UI 把机会还回来的信号。
+         * ⚠️ **用户主动放弃不计入** —— 那种情况必须继续保持「不再打扰」。
+         */
+        val autoPromptAborts: Int = 0,
+        /**
          * 目标库处于**查看层锁**（密钥仍在内存）。
          *
          * true 时页面走「仅认证」分支：只弹生物识别，不渲染主密码 / 2FA，
@@ -292,13 +303,18 @@ class UnlockViewModel @Inject constructor(
      *
      * 用户/系统取消保持安静（那是「改用主密码」的正常路径），其余错误给出原因，
      * 否则用户只会看到按钮毫无反应。
+     *
+     * ⚠️ `systemAbort` 与 `cancelled` **必须分开**：前者表示「这次压根没弹成」，
+     * 要把自动弹出的机会还回来（[UiState.autoPromptAborts]）；后者只表示「安静收起」。
+     * 将两者混为一谈，就会得到「覆盖安装后有时候不弹、且再也不弹」。
      */
-    fun onBiometricPromptError(message: String, cancelled: Boolean) {
+    fun onBiometricPromptError(message: String, cancelled: Boolean, systemAbort: Boolean) {
         _state.update {
             it.copy(
                 submitting = false,
                 viewUnlockStarted = false,
                 error = if (cancelled) it.error else UnlockUiError.Unknown(message),
+                autoPromptAborts = if (systemAbort) it.autoPromptAborts + 1 else it.autoPromptAborts,
             )
         }
     }

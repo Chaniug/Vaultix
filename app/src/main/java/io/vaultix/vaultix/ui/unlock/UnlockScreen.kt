@@ -29,6 +29,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -124,6 +127,7 @@ fun UnlockScreen(
         viewLocked = state.viewLocked,
         hasTwoFactor = state.twoFactor != null,
         submitting = state.submitting,
+        autoPromptAborts = state.autoPromptAborts,
         onPrompt = viewModel::startLocalUnlock,
         onViewPrompt = viewModel::startViewUnlock,
     )
@@ -285,8 +289,13 @@ private fun ViewLockedContent(
     }
 }
 
-/** 指纹入口图标的尺寸（用户要求「稍微大一点」—— 它现在是这一页的主入口之一）。 */
-private val FINGERPRINT_ICON_SIZE = 64.dp
+/** 指纹入口图标的尺寸。
+ *
+ * 2026-09-13 用户反馈「指纹的图标太大了，有点不合适」⇒ 从 64dp 收到 **44dp**。
+ * 它仍是这一页唯一的主入口，但不必跟下方的实心主按钮抢体量 —— 44dp 与按钮的 48dp
+ * 高度接近，视觉上落在同一层级，页面也不再头重脚轻。
+ */
+private val FINGERPRINT_ICON_SIZE = 44.dp
 
 /**
  * 本地快速解锁入口：**一个大号指纹图标**，压在「主密码框」与「解锁按钮」之间。
@@ -408,17 +417,16 @@ private fun PasswordForm(
     }
 
     if (state.submitting) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(top = 8.dp),
-        ) {
-            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-            Text(
-                text = stringResource(R.string.add_vault_working),
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(start = 8.dp),
-            )
-        }
+        // ⚠️ 2026-09-13 用户反馈：冷启动自动走指纹时，这一页还挂着
+        // 「正在派生密钥并解锁…（约需 1–3 秒）」那串小字，很影响观感。
+        // 现在只留一个转圈：主密码派生确实要等，但**不需要一句解释**；而走本地
+        // 快速解锁（指纹）时压根没有"派生密钥"这回事，那句文案更是误导。
+        CircularProgressIndicator(
+            modifier = Modifier
+                .padding(top = 8.dp)
+                .size(20.dp),
+            strokeWidth = 2.dp,
+        )
     }
 
     // ⚠️ 间距取 12dp 而不是原来的 24dp：指纹图标自己带 8dp 垂直留白，
@@ -443,7 +451,16 @@ private fun PasswordForm(
  *
  * 只要该库已启用快速解锁，就不必再让用户找按钮点一下（对齐 Bitwarden 的解锁体验）。
  * 只自动触发一次：用户取消后不再反复弹（尊重「改用主密码」的意图），仍可手动点按钮再触发；
- * [prompted] 走 rememberSaveable，配置变更 / 重组都不会重弹。
+ * ⚠️ 2026-09-13 用户报告「生物验证不是 100% 能在覆盖安装后弹出」。根因就在这一段状态机：
+ * `prompted` 是**一次性守卫**，却是在**弹窗真正出现之前**置位的 ⇒ 任何"没弹成功"都被
+ * 永久记成"弹过了"。而 `BiometricPrompt` 在**冷启动首帧**（窗口尚未可见）会立刻以
+ * `ERROR_CANCELED` 结束 —— 覆盖安装 / 重启后正是这个场景。
+ * 现在把「用户放弃」与「系统终止」拆开：[autoPromptAborts] 一变就把机会**还回来**、允许再试
+ * （有次数上限，避免硬件持续不可用时无限重试）；用户放弃则继续不再打扰。
+ *
+ * ⚠️ 守卫从 `rememberSaveable` 改成 `remember`：进程被杀后恢复时，saved state 会把
+ * "已弹过"带回来，而那次可能压根没展示过 ⇒ 恢复后彻底不弹。改用 `remember` 后，
+ * 进程内只弹一次、重建/恢复后允许再来一次（用户放弃过的除外）。
  *
  * 单独成函数而非内联在 [UnlockScreen]：把守卫条件与相关状态隔离在此，避免主函数的
  * CyclomaticComplexMethod / ComplexCondition 越界（CI detekt 质量门会拦）。
@@ -454,15 +471,24 @@ private fun AutoPromptQuickUnlock(
     viewLocked: Boolean,
     hasTwoFactor: Boolean,
     submitting: Boolean,
+    /** 系统侧终止的累计次数（见 [UnlockViewModel.UiState.autoPromptAborts]）。 */
+    autoPromptAborts: Int,
     onPrompt: () -> Unit,
     onViewPrompt: () -> Unit,
 ) {
-    val prompted = rememberSaveable { mutableStateOf(false) }
+    val prompted = remember { mutableStateOf(false) }
+    var attempts by remember { mutableIntStateOf(0) }
+    var handledAborts by remember { mutableIntStateOf(0) }
     val lifecycleOwner = LocalLifecycleOwner.current
     // 条件刻意控制在 3 项以内（detekt ComplexCondition 上限为 3）。
     // 查看层锁：只要标记在就该弹（密钥已在内存，认证一次即可回来，不依赖快速解锁是否启用）。
     val eligible = (viewLocked || localUnlockAvailable) && !hasTwoFactor && !submitting
-    LaunchedEffect(eligible) {
+    LaunchedEffect(eligible, autoPromptAborts) {
+        // 系统侧终止 ⇒ 归还这一次机会（次数封顶，硬件持续不可用时不至于无限重试）。
+        if (autoPromptAborts > handledAborts) {
+            handledAborts = autoPromptAborts
+            if (attempts < MAX_AUTO_PROMPT_ATTEMPTS) prompted.value = false
+        }
         if (prompted.value || !eligible) return@LaunchedEffect
         // ⚠️ 必须等宿主 RESUMED 之后再发起认证：进程冷启动（尤其设备重启后首次进入）时
         // BiometricPrompt 若在 Activity 尚未 RESUMED 时发起，会被系统立刻以
@@ -471,7 +497,11 @@ private fun AutoPromptQuickUnlock(
         lifecycleOwner.withResumed {
             if (prompted.value) return@withResumed
             prompted.value = true
+            attempts++
             if (viewLocked) onViewPrompt() else onPrompt()
         }
     }
 }
+
+/** 自动弹出最多尝试几次（含系统侧终止后的重试）。超过就交给用户手动点指纹图标。 */
+private const val MAX_AUTO_PROMPT_ATTEMPTS = 2

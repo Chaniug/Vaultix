@@ -103,9 +103,20 @@ class LocalUnlockKeyStore @Inject constructor() {
             },
         )
 
-    /** 是否**可以尝试**本地快速解锁：除「永久失效」外都给出入口（含 [LocalUnlockKekStatus.UNKNOWN]）。 */
+    /**
+     * 是否**可以尝试**本地快速解锁。
+     *
+     * = `LOADABLE`（钥匙在）或 `UNKNOWN`（可能稍后可用 —— 未认证 / 设备刚启动 / Keystore 瞬时不可用）。
+     *
+     * ⚠️ `MISSING` 必须算**不可用**：别名根本不存在时任何解封都注定失败，给出入口只会让用户
+     * 白认证一次、再看到「本地解锁不可用」。此前写成 `kekStatus != INVALIDATED`，
+     * 会把 MISSING 也算成"可用"—— 与上面同一类"过宽"错误。
+     */
     val keyAvailable: Boolean
-        get() = kekStatus != LocalUnlockKekStatus.INVALIDATED
+        get() = when (kekStatus) {
+            LocalUnlockKekStatus.LOADABLE, LocalUnlockKekStatus.UNKNOWN -> true
+            LocalUnlockKekStatus.MISSING, LocalUnlockKekStatus.INVALIDATED -> false
+        }
 
     /**
      * 初始化「包装」Cipher（启用快速解锁时用）：随机 IV，需用户认证后 doFinal。
@@ -217,18 +228,23 @@ class LocalUnlockKeyStore @Inject constructor() {
      * 异常链里是否出现「永久失效」标记。
      *
      * 平台把它裹在不同层级抛出（`ProviderException` → `UnrecoverableKeyException` →
-     * `KeyPermanentlyInvalidatedException`），只比顶层类型会漏判，故沿 cause 链找。
-     * ⚠️ `UserNotAuthenticatedException` **不算**永久失效（语义是「本次没认证」）。
+     * `KeyPermanentlyInvalidatedException`），故**沿 cause 链**找 —— 只比顶层类型会漏判。
+     *
+     * ⚠️ **只认 `KeyPermanentlyInvalidatedException`**。曾经的实现把
+     * `UnrecoverableKeyException` 也当"永久失效"，那是**过宽**的匹配：平台与 OEM
+     * （实测华为 / 荣耀的 KeyMint）在「密钥存在但本次未认证」「覆盖安装后 Keystore 瞬时不可用」
+     * 这类**可恢复**场景下同样抛它 ⇒ 我们据此判定 INVALIDATED ⇒ 把指纹入口整条藏掉
+     * ⇒ 用户观感正是「覆盖安装后生物验证不出现了」。多一层包装的永久失效依然会被
+     * 链式扫描命中，所以去掉这个分支**不会漏判**真失效（单测 `LocalUnlockFailureTest`
+     * 的多层包装用例仍然通过）。
+     *
+     * ⚠️ `UserNotAuthenticatedException` 同样**不算**永久失效（语义是「本次没认证」）。
      */
     private fun Throwable.hasPermanentInvalidation(): Boolean {
         var cursor: Throwable? = this
         var depth = 0
         while (cursor != null && depth < MAX_CAUSE_DEPTH) {
-            when (cursor) {
-                is android.security.keystore.KeyPermanentlyInvalidatedException,
-                is java.security.UnrecoverableKeyException,
-                -> return true
-            }
+            if (cursor is android.security.keystore.KeyPermanentlyInvalidatedException) return true
             cursor = cursor.cause
             depth++
         }

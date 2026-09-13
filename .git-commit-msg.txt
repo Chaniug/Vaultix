@@ -1,0 +1,37 @@
+fix(ui+autofill+unlock): 用户 12 条体验反馈 —— 返回动效 / 填充解锁回灌 / 全屏编辑 / 假空态
+
+用户实测确认的关键修复：
+
+1. 手势返回时"画面缩小 1~2 帧"（详情页/卡包/设置子页处处都有）
+   真因不是转场，而是 Android 预测式返回的预览动画。
+   AndroidManifest 显式声明 enableOnBackInvokedCallback="false"（该属性对 targetSdk 36+ 默认 true）。
+2. 二级路由转场改为与 Tab 切换同一套（fadeIn + slideInVertically 1/16 屏高），
+   进入与返回双向对称，不再有"整屏滑走"这类被读作多余的动效。
+3. 自动填充：指纹解锁后仍反复要求解锁、看不到密码条目
+   根因是"认证结果被系统丢弃"——认证意图加了 FLAG_ACTIVITY_NEW_TASK，
+   且 AutofillActivity 声明了与包名不同的 taskAffinity，两者都把认证 Activity
+   推进独立 task，setResult(RESULT_OK, EXTRA_AUTHENTICATION_RESULT) 无法送达
+   （系统日志：onAuthenticationResult(): empty intent）。
+   同时把回灌类型从 Dataset（系统直接填）改为 FillResponse（系统列候选让用户挑）。
+4. 覆盖安装后生物验证不出现 —— KEK 判据过宽：只有 KeyPermanentlyInvalidatedException
+   才算废弃（UnrecoverableKeyException 在 OEM 上也会因可恢复原因抛出）；MISSING 也算不可用。
+5. 生物验证自动弹出不是 100% —— 一次性守卫在弹窗真正出现前就置位。
+   现区分"用户放弃"与"系统侧终止"，后者归还机会并允许重试（上限 2 次）。
+6. 冷启动瞬间点验证码页有 1~2 秒假空态 —— 把"加载中"从"真的没有"里拆出来
+   （UiState.loading 与空态分支分离，加载中显示转圈）。
+   同类形状尚存于密码列表与卡包页，密码页因活跃库 id 同步解析暂未复现。
+
+其余体验修复：
+- 左滑删除加门槛：必须先长按进入多选才能左滑删除（裸滑不再触发）
+- 深色模式下条目周围极细红边：删除底层恢复 alpha 随位移显影
+- 移除下拉刷新左侧看不清的白色指示器
+- 条目详情改用沉浸式浮动顶栏（对齐三个列表），去掉左上角返回箭头并清理死参
+- 编辑条目 / 验证码编辑改为整页全屏（新增 FullScreenDialogShell）
+- 修复从详情/设置子页返回时的双影：MainShell 重新进入组合会重放 Tab 过渡，
+  加"跳过首次过渡"旗标挡掉
+- NavHost 转场显式 sizeTransform = null（避免容器尺寸补间裁页面）
+- 顺手为自动填充链路补齐常驻埋点（tag=VaultixAutofill），此前这条路径无任何日志
+
+新增文件：
+- app/src/main/java/io/vaultix/vaultix/ui/common/CapabilityIcon.kt
+- app/src/main/java/io/vaultix/vaultix/ui/common/FullScreenDialogShell.kt

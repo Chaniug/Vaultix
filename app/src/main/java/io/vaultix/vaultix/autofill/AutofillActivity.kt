@@ -241,6 +241,12 @@ class AutofillActivity : FragmentActivity() {
      */
     private fun openVaultAndFinish() {
         val hasPending = pendingFillStore.hasPending()
+        // ⚠️ 诊断埋点（常驻）：这是「打开 Vaultix 解锁」**卡片**路径 ——
+        // 与生物弹窗路径并列的另一条路，收尾方式完全不同（靠 onResume 回灌）。
+        AutofillLogger.d(
+            "openVaultAndFinish: hasPending=$hasPending credentialFlow=$credentialFlow " +
+                "→ awaitingExternalUnlock=${hasPending || credentialFlow}",
+        )
         startActivity(
             Intent(this, MainActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
@@ -260,7 +266,15 @@ class AutofillActivity : FragmentActivity() {
      */
     private fun maybeBiometricUnlock(title: String, subtitle: String) {
         lifecycleScope.launch(Dispatchers.IO) {
-            when (val outcome = prepareBiometricUnlock()) {
+            val outcome = prepareBiometricUnlock()
+            // ⚠️ 诊断埋点（常驻）：这三条分支决定用户看到的是「指纹弹窗」还是
+            // 「打开 Vaultix 解锁」卡片 —— 两者是完全不同的收尾路径，
+            // 出了问题必须能从日志一眼分辨（tag=VaultixAutofill）。
+            AutofillLogger.d(
+                "maybeBiometricUnlock: outcome=${outcome::class.simpleName} " +
+                    "credentialFlow=$credentialFlow hasPending=${pendingFillStore.hasPending()}",
+            )
+            when (outcome) {
                 is BiometricUnlockOutcome.Fallback ->
                     withContext(Dispatchers.Main) { showPrompt.value = true }
 
@@ -281,7 +295,7 @@ class AutofillActivity : FragmentActivity() {
                         subtitle = subtitle.ifBlank { null },
                         cancelText = getString(R.string.action_cancel),
                         onSuccess = { cipher -> unlockAllAndFinish(outcome.pending, cipher) },
-                        onError = { _, _ ->
+                        onError = { _, _, _ ->
                             // 用户取消认证 → 亮卡片给「打开 Vaultix 解锁」这条主密码退路
                             // （而不是直接消失，让用户以为填充坏掉了）。
                             showPrompt.value = true
@@ -315,6 +329,11 @@ class AutofillActivity : FragmentActivity() {
 
     /** 认证通过：解封首个库，随后趁 KEK 授权窗口解封其余已启用库，然后回灌并 finish。 */
     private fun unlockAllAndFinish(pending: PendingBiometricUnlock, cipher: Cipher) {
+        // ⚠️ 诊断埋点（常驻）：看到这行 = 生物认证**已成功**，接下来就是解封 + 回灌。
+        AutofillLogger.d(
+            "unlockAllAndFinish: 认证成功 first=${pending.first} rest=${pending.rest.size} " +
+                "credentialFlow=$credentialFlow",
+        )
         lifecycleScope.launch(Dispatchers.IO) {
             unlockAll(pending, cipher)
             withContext(Dispatchers.Main) {
@@ -347,31 +366,52 @@ class AutofillActivity : FragmentActivity() {
         delivered = true
         val pending = pendingFillStore.takeValid()
         if (pending == null) {
+            // ⚠️ 诊断埋点（2026-09-13）：用户报「指纹解锁完还要再解锁、且看不到条目」，
+            // 而这条路径此前**完全没有日志** ⇒ 无法判断卡在哪一步。这些 d() 是常驻的，
+            // 以后同类问题可直接靠 logcat（tag=VaultixAutofill）定位。
+            AutofillLogger.d("deliverPendingFill: 无有效暂存 → 不回灌直接收工")
             finish()
             return
         }
         val parsed = pending.parsed
-        val dataset = runCatching { buildPendingDataset(parsed) }.getOrNull()
+        val response = runCatching { buildPendingResponse(parsed) }.getOrNull()
         // 一次性语义：无论成功与否都清掉（同一批 AutofillId 不得二次回灌）。
         pendingFillStore.clear()
+        AutofillLogger.d("deliverPendingFill: response=${response != null}")
         withContext(Dispatchers.Main) {
-            if (dataset == null) {
+            if (response == null) {
                 setResult(Activity.RESULT_CANCELED)
             } else {
                 setResult(
                     Activity.RESULT_OK,
-                    Intent().putExtra(AutofillManager.EXTRA_AUTHENTICATION_RESULT, dataset),
+                    // ⚠️ 必须回 FillResponse（列候选），不是 Dataset（直接填）—— 见函数 KDoc。
+                    Intent().putExtra(AutofillManager.EXTRA_AUTHENTICATION_RESULT, response),
                 )
             }
             finish()
         }
     }
 
-    /** 暂存的解析结果 → 最优候选的 Dataset（读盘 / 解密都在 IO 上）。 */
-    private suspend fun buildPendingDataset(
+    /**
+     * 暂存的解析结果 → **FillResponse（含全部匹配条目）**。
+     *
+     * ⚠️ 2026-09-13 定案（用户报「指纹解锁后看不到密码条目、只反复让我解锁」，logcat 实证）：
+     * `AutofillManager.EXTRA_AUTHENTICATION_RESULT` 的语义**按类型分岔** ——
+     *  - 回 **`Dataset`**：系统把**这一个**直接填进去，用户**看不到任何候选列表**；
+     *  - 回 **`FillResponse`**：系统把里面的 datasets **列成候选让用户挑**。
+     * 用户要的"解锁后出现密码条目"= 后者（也是 Bitwarden 的行为）。
+     * 旧的实现回的是单个 Dataset ⇒ 填是填了，但下拉里仍然是那条旧的「解锁 Vaultix」，
+     * 用户以为没生效、再点一次 ⇒ 此时库已解锁 ⇒ `Ready` 分支 ⇒ 无暂存 ⇒ 什么都不做
+     * ⇒ 观感就是「一直让我继续解锁」。
+     *
+     * ⚠️ 对照组：[deliverDataset] 那条路径回的是 `Dataset`，那是**用户已经选定了某个条目**
+     * （二次验证 / 主密码复核）之后的回灌 —— 那里"直接填"才是对的，别一起改。
+     */
+    private suspend fun buildPendingResponse(
         parsed: io.vaultix.vaultix.autofill.model.ParsedStructure,
-    ): android.service.autofill.Dataset? {
+    ): android.service.autofill.FillResponse? {
         val unlocked = vaultRepository.observeUnlockedVaultIds().first()
+        AutofillLogger.d("buildPendingResponse: unlocked=${unlocked.size}")
         if (unlocked.isEmpty()) return null
         val sources = candidates.singleActiveVault(unlocked)
         val vault = candidates.collectCandidates(sources)
@@ -386,11 +426,21 @@ class AutofillActivity : FragmentActivity() {
             serverOrigin = vault.serverOrigin,
         )
         val copyTotp = runCatching { prefs.autoCopyTotp.first() }.getOrDefault(true)
-        return plan.suggestions
-            .asSequence()
-            .mapNotNull { AutofillDatasetFactory.datasetFor(this, parsed, it, copyTotp) }
-            .firstOrNull()
+        val builder = android.service.autofill.FillResponse.Builder()
+        var added = 0
+        // 上限保护同服务端：FillResponse 经 Binder 传输有大小限制。
+        for (suggestion in plan.suggestions.take(maxUnlockDatasets)) {
+            val dataset = AutofillDatasetFactory
+                .datasetFor(this, parsed, suggestion, copyTotp) ?: continue
+            builder.addDataset(dataset)
+            added++
+        }
+        AutofillLogger.d("buildPendingResponse: datasets=$added")
+        return if (added > 0) builder.build() else null
     }
+
+    /** 「解锁即回填」一次最多列出的条目数（Binder 传输上限保护，同服务端）。 */
+    private val maxUnlockDatasets = 10
 
     /** 二次验证：设备认证通过后把 Dataset 回灌给系统。 */
     private fun startReprompt(title: String, subtitle: String) {

@@ -127,111 +127,96 @@ fun ItemFormDialog(
     var scanning by rememberSaveable { mutableStateOf(false) }
     var showAppPicker by rememberSaveable { mutableStateOf(false) }
 
-    AlertDialog(
-        onDismissRequest = { if (!saving) onDismiss() },
-        title = { Text(text = title, style = MaterialTheme.typography.titleLarge) },
-        text = {
-            Column(
-                modifier = Modifier
-                    .imePadding()
-                    // ⚠️ AlertDialog 内容默认不滚动：加入身份 17 字段/自定义字段编辑器后
-                    // 内容超高被静默裁剪（用户报告「验证码下方区域不可见」），必须滚动。
-                    .verticalScroll(rememberScrollState()),
-            ) {
-                FormHeader(
-                    folders = folders,
-                    folderId = folderId,
-                    onFolderSelect = { folderId = it },
-                    typeEditable = typeEditable,
-                    type = type,
-                    onTypeSelect = { type = it },
-                )
-                NameField(
-                    name = name,
-                    onNameChange = { name = it; showNameError = false },
-                    favorite = favorite,
-                    onFavoriteChange = { favorite = it },
-                    showError = showNameError,
-                )
-                if (type == VaultItemType.SshKey) {
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = stringResource(
-                            R.string.item_edit_type_fields_readonly,
-                            stringResource(itemTypeLabelRes(type)),
+    // ⚠️ 2026-09-13 第二轮用户反馈：「编辑条目不是全屏显示，看起来不舒服。」
+    // ⇒ 由 `AlertDialog`（居中卡片、宽度被平台限制在 ~280dp）改成**整页编辑**
+    // （[FullScreenDialogShell]：顶部标题行 + 可滚动正文 + 底部固定操作条）。
+    // 原 `text` 槽里的那段滚动 Column 也一并收进壳里，正文因此少了一层缩进。
+    FullScreenDialogShell(
+        title = title,
+        onDismiss = { if (!saving) onDismiss() },
+        confirmEnabled = !saving,
+        confirmLabel = stringResource(R.string.action_save),
+        onConfirm = {
+            if (name.isBlank()) {
+                showNameError = true
+            } else {
+                onSave(
+                    buildSnapshot(
+                        initial = initial,
+                        type = type,
+                        values = FormValues(
+                            name = name,
+                            username = username,
+                            password = password,
+                            notes = notes,
+                            totp = totp,
+                            uris = uris.toList(),
+                            cardValues = cardValues.toList(),
+                            identityValues = identityValues.toList(),
                         ),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                FormDivider()
-                when (type) {
-                    VaultItemType.Login -> LoginFields(
-                        username = username,
-                        onUsernameChange = { username = it },
-                        password = password,
-                        onPasswordChange = { password = it },
-                        uris = uris,
-                        totp = totp,
-                        onTotpChange = { totp = it },
-                        onScanTotp = { scanning = true },
-                        onPickApp = { showAppPicker = true },
-                    )
-                    VaultItemType.Card -> LabeledFields(CARD_LABELS, cardValues)
-                    VaultItemType.Identity -> LabeledFields(IDENTITY_LABELS, identityValues)
-                    // 安全笔记只有名称 + 备注；SSH 密钥段保持只读（上方已提示）
-                    VaultItemType.SecureNote, VaultItemType.SshKey -> Unit
-                }
-                ItemFormTail(
-                    customFields = customFields,
-                    notes = notes,
-                    onNotesChange = { notes = it },
-                    reprompt = reprompt,
-                    onRepromptChange = { reprompt = it },
+                        meta = ItemMeta(
+                            folderId = folderId,
+                            favorite = favorite,
+                            reprompt = reprompt,
+                            customFields = customFields.toList(),
+                        ),
+                    ),
                 )
             }
         },
-        confirmButton = {
-            TextButton(
-                enabled = !saving,
-                onClick = {
-                    if (name.isBlank()) {
-                        showNameError = true
-                    } else {
-                        onSave(
-                            buildSnapshot(
-                                initial = initial,
-                                type = type,
-                                values = FormValues(
-                                    name = name,
-                                    username = username,
-                                    password = password,
-                                    notes = notes,
-                                    totp = totp,
-                                    uris = uris.toList(),
-                                    cardValues = cardValues.toList(),
-                                    identityValues = identityValues.toList(),
-                                ),
-                                meta = ItemMeta(
-                                    folderId = folderId,
-                                    favorite = favorite,
-                                    reprompt = reprompt,
-                                    customFields = customFields.toList(),
-                                ),
-                            ),
-                        )
-                    }
-                },
-            ) {
-                Text(stringResource(R.string.action_save))
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !saving) {
-                Text(stringResource(R.string.action_cancel))
-            }
-        },
-    )
+    ) {
+        FormHeader(
+            folders = folders,
+            folderId = folderId,
+            onFolderSelect = { folderId = it },
+            typeEditable = typeEditable,
+            type = type,
+            onTypeSelect = { type = it },
+        )
+        NameField(
+            name = name,
+            onNameChange = { name = it; showNameError = false },
+            favorite = favorite,
+            onFavoriteChange = { favorite = it },
+            showError = showNameError,
+        )
+        if (type == VaultItemType.SshKey) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = stringResource(
+                    R.string.item_edit_type_fields_readonly,
+                    stringResource(itemTypeLabelRes(type)),
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        FormDivider()
+        when (type) {
+            VaultItemType.Login -> LoginFields(
+                username = username,
+                onUsernameChange = { username = it },
+                password = password,
+                onPasswordChange = { password = it },
+                uris = uris,
+                totp = totp,
+                onTotpChange = { totp = it },
+                onScanTotp = { scanning = true },
+                onPickApp = { showAppPicker = true },
+            )
+            VaultItemType.Card -> LabeledFields(CARD_LABELS, cardValues)
+            VaultItemType.Identity -> LabeledFields(IDENTITY_LABELS, identityValues)
+            // 安全笔记只有名称 + 备注；SSH 密钥段保持只读（上方已提示）
+            VaultItemType.SecureNote, VaultItemType.SshKey -> Unit
+        }
+        ItemFormTail(
+            customFields = customFields,
+            notes = notes,
+            onNotesChange = { notes = it },
+            reprompt = reprompt,
+            onRepromptChange = { reprompt = it },
+        )
+    }
 
     QrScannerHost(
         scanning = scanning,

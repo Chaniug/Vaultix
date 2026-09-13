@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -91,6 +92,7 @@ import io.vaultix.vaultix.ui.common.PressAndSwipeToDelete
 import io.vaultix.vaultix.ui.common.SelectionActionBar
 import io.vaultix.vaultix.ui.common.SiteIconByHost
 import io.vaultix.vaultix.ui.common.VaultixExpressiveTopBar
+import io.vaultix.vaultix.ui.common.FullScreenDialogShell
 import io.vaultix.vaultix.ui.common.VaultixSearchTopAppBar
 import io.vaultix.vaultix.ui.common.rememberImmersiveBarPadding
 import io.vaultix.vaultix.ui.common.rememberScrollCollapseFraction
@@ -220,6 +222,12 @@ fun TotpCodesScreen(
             // 这与密码页 [ItemsList] 的写法是同一条约束（`.ai/ISSUES.md` #67）。
             val topInset = if (searchActive) 0.dp else barPadding + 8.dp
             when {
+                // ⚠️ **必须排在空态前面**：冷启动 / 解锁后条目流还没发首帧时，
+                // `state.items` 同样是空的 —— 若直接落进 `TotpEmptyBody`，用户看到的就是
+                // 「还没有验证码」这个**假状态**（实测 1~2 秒才变真）。
+                // 这就是用户报的「冷启动瞬间点验证码页有 1~2 秒空白」。
+                state.loading -> TotpLoadingBody()
+
                 state.items.isEmpty() -> TotpEmptyBody(
                     topInset = topInset,
                     title = stringResource(R.string.totp_empty_title),
@@ -261,7 +269,6 @@ fun TotpCodesScreen(
                             entry = entry,
                             nowSeconds = nowSeconds,
                             serverOrigin = state.serverOrigin,
-                            snackbarHostState = snackbarHostState,
                             actions = TotpRowActions(
                                 isSelectionMode = selectionMode,
                                 isSelected = entry.itemId in selectedIds,
@@ -346,6 +353,19 @@ private fun TotpTickerEffect(onTick: (Long) -> Unit) {
  * 让主 composable 越 detekt `LongMethod` 门禁；且「空态要让开顶栏高度」这条约束
  * 本就该只写一次。
  */
+/**
+ * 加载中占位（冷启动 / 解锁后条目流尚未发首帧）。
+ *
+ * ⚠️ 它存在的**唯一**理由：不要把"还没加载完"显示成"还没有验证码"（见 `UiState.loading`）。
+ * 刻意只放一个转圈、不做骨架屏 —— 这一屏通常只有几百毫秒，骨架屏反而容易被读成"内容错位"。
+ */
+@Composable
+private fun TotpLoadingBody() {
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        CircularProgressIndicator()
+    }
+}
+
 @Composable
 private fun TotpEmptyBody(topInset: Dp, message: String, title: String? = null) {
     Column(modifier = Modifier.fillMaxSize().padding(top = topInset)) {
@@ -547,7 +567,6 @@ private fun TotpRow(
     entry: TotpEntry,
     nowSeconds: Long,
     serverOrigin: String?,
-    snackbarHostState: SnackbarHostState,
     /**
      * 本行的交互与状态（勾选态 / 云同步 / 四个回调）。
      *
@@ -568,20 +587,21 @@ private fun TotpRow(
     val isHotp = entry.type == OtpType.HOTP
     // HOTP 没有时间衰减，不做过期警示。
     val remaining = TotpGenerator.remainingSeconds(entry.period, nowSeconds)
-    val copiedMessage = stringResource(R.string.copy_totp)
-    val scope = rememberCoroutineScope()
-    // 点一下即复制（对齐 Bastion 验证器页：整行可点 → 复制 + 提示）。
-    // ⚠️ 显式标注返回类型：`scope.launch` 的返回值是 Job，推断成 `() -> Job` 会与
-    // EntryCard 的 `onClick: () -> Unit` 不匹配（编译期报 "actual type is () -> Job"）。
-    val copyNow: () -> Unit = {
-        onCopy(code)
-        scope.launch { snackbarHostState.showSnackbar(copiedMessage) }
-    }
+    // 点一下即复制（对齐 Bastion 验证器页：整行可点 → 复制）。
+    // ⚠️ 2026-09-13 用户反馈「点击复制大家都知道的操作，不需要提示」—— 复制后的
+    // `SnackbarHost` 提示已删除。它除了啰嗦，还会在悬浮胶囊底栏上方压出一块自带
+    // surface 底板的深色方块（用户看到的「底栏外一圈黑色」），观感很脏。
+    // 页面级 SnackbarHost **保留**：批量导入的结果提示仍然要用它。
+    val copyNow: () -> Unit = { onCopy(code) }
 
     // 卡片外框与密码 / 卡包列表完全一致（见 [EntryCard]）；内边距由卡片统一给 16dp。
     // 「按住后滑动删除」包在外层：长按**选中**由 [EntryCard] 的 `onLongClick` 独占，
     // 本容器只负责「长按成立后进入拖拽删除」的信号（见 [PressAndSwipeToDelete]）。
-    PressAndSwipeToDelete(onDelete = onDelete) {
+    PressAndSwipeToDelete(
+        onDelete = onDelete,
+        // 与密码页同一门槛：先按住进多选，左滑才可删（裸滑不触发删除，避免误触）。
+        enabled = isSelectionMode,
+    ) {
         EntryCard(
             // 多选态下点击 = 勾选（上游 `cardInteractionModifier` 同款分支）。
             // ⚠️ 长按选中由 [EntryCard] 自己的 `onLongClick` 独占；外层
@@ -591,7 +611,10 @@ private fun TotpRow(
             onLongClick = if (isSelectionMode) null else onToggleSelect,
             selected = isSelected,
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
                 // 站点图标（库内服务器地址 + 条目域名），取不到回退首字母 ——
                 // 与密码列表同一套观感（见 [SiteIconByHost]）。
                 SiteIconByHost(
@@ -675,12 +698,20 @@ private fun TotpRowMenu(
     onDelete: () -> Unit,
     onBind: (() -> Unit)?,
 ) {
+    // 图标**贴右**：用户反馈「三个点太靠中间，需要往右边移一点」。
+    // `IconButton` 默认 48dp 触控区、图标居中 ⇒ 图标右缘到卡片内缘还留着 12dp，
+    // 叠上卡片 16dp 内边距 ≈ 28dp 的视觉空隙，读起来就像「缩在中间」。
+    // 触控区压到 36dp、图标缩到 20dp ⇒ 视觉空隙收到 ~16dp；行内 36dp 仍够点。
     var expanded by remember { mutableStateOf(false) }
     Box {
-        IconButton(onClick = { expanded = true }) {
+        IconButton(
+            onClick = { expanded = true },
+            modifier = Modifier.size(TOTP_MENU_BUTTON_SIZE),
+        ) {
             Icon(
                 imageVector = Icons.Filled.MoreVert,
                 contentDescription = stringResource(R.string.content_desc_more_options),
+                modifier = Modifier.size(TOTP_MENU_ICON_SIZE),
             )
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
@@ -830,6 +861,12 @@ private val TOTP_CODE_FONT_SP = 36.sp
 /** 剩余秒数 ≤ 它时验证码转 `error` 警示色（对齐 Bastion 的 5 秒阈值）。 */
 private const val TOTP_HOT_WARNING_SECONDS = 5
 
+/** 行尾 `MoreVert` 的触控区尺寸（默认 48dp 会把图标推得离右缘太远）。 */
+private val TOTP_MENU_BUTTON_SIZE = 36.dp
+
+/** 行尾 `MoreVert` 的图标尺寸（随之收紧，视觉重心贴右）。 */
+private val TOTP_MENU_ICON_SIZE = 20.dp
+
 // 类型固定参数（对齐 Bastion TotpData 的固定口径）
 private const val MOTP_FIXED_PERIOD = 10
 private const val MOTP_FIXED_DIGITS = 6
@@ -857,102 +894,95 @@ private fun TotpEditDialog(
     var pin by remember { mutableStateOf(entry.pin) }
     var showError by remember { mutableStateOf(false) }
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = {
-            Text(
-                stringResource(
-                    if (entry.totpRaw.isEmpty()) R.string.totp_add_title else R.string.totp_edit_title,
-                ),
-            )
-        },
-        text = {
-            Column {
-                TypeDropdown(type) { type = it }
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = issuer,
-                    onValueChange = { issuer = it },
-                    label = { Text(stringResource(R.string.totp_field_issuer)) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = account,
-                    onValueChange = { account = it },
-                    label = { Text(stringResource(R.string.totp_field_account)) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = secret,
-                    onValueChange = { secret = it },
-                    label = { Text(secretLabel(type)) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                when (type) {
-                    OtpType.MOTP -> TotpMotpFields(pin, onPinChange = { pin = it })
-                    OtpType.STEAM -> {
-                        // Steam 固定 5 位 / 30s / SHA1，无可调参数
-                    }
-                    OtpType.HOTP -> TotpHotpFields(
-                        counter = counter,
-                        onCounterChange = { counter = it },
-                        digits = digits,
-                        onDigitsChange = { digits = it },
-                        algorithm = algorithm,
-                        onAlgorithmChange = { algorithm = it },
-                    )
-                    OtpType.TOTP, OtpType.YANDEX -> TotpTimedFields(
-                        period = period,
-                        onPeriodChange = { period = it },
-                        digits = digits,
-                        onDigitsChange = { digits = it },
-                        algorithm = algorithm,
-                        onAlgorithmChange = { algorithm = it },
-                    )
-                }
-                if (showError) {
+    // ⚠️ 2026-09-13 第二轮用户反馈：「编辑条目，验证码条目不是全屏显示，看起来不舒服。」
+    // ⇒ 与条目编辑一致，改成整页（见 [FullScreenDialogShell]）：
+    // 顶部「添加/编辑验证码」标题行 + 可滚动字段区 + 底部固定的「移除 / 取消 / 保存」。
+    FullScreenDialogShell(
+        title = stringResource(
+            if (entry.totpRaw.isEmpty()) R.string.totp_add_title else R.string.totp_edit_title,
+        ),
+        onDismiss = onDismiss,
+        confirmEnabled = true,
+        confirmLabel = stringResource(R.string.action_save),
+        destructive = if (onDelete == null) {
+            null
+        } else {
+            {
+                TextButton(onClick = onDelete) {
                     Text(
-                        stringResource(R.string.totp_invalid_secret),
+                        stringResource(R.string.totp_remove_action),
                         color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall,
                     )
                 }
             }
         },
-        confirmButton = {
-            TextButton(onClick = {
-                if (secret.isBlank()) {
-                    showError = true
-                    return@TextButton
-                }
-                onSave(issuer, account, buildTotpConfig(type, secret, period, digits, algorithm, counter, pin))
-            }) { Text(stringResource(R.string.action_save)) }
-        },
-        dismissButton = {
-            // ⚠️ 2026-09-08 修复数据丢失 bug：此前 onDelete != null 时这里只有一个
-            // 按钮，文案是「取消」，onClick 却绑定 onDelete（删除验证码/软删独立
-            // 条目）——用户取消编辑等于直接删除。现在「移除」与「取消」并排，
-            // 且破坏性的移除用 error 色区分。
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (onDelete != null) {
-                    TextButton(onClick = onDelete) {
-                        Text(
-                            stringResource(R.string.totp_remove_action),
-                            color = MaterialTheme.colorScheme.error,
-                        )
-                    }
-                }
-                TextButton(onClick = onDismiss) {
-                    Text(stringResource(R.string.action_cancel))
-                }
+        onConfirm = {
+            if (secret.isBlank()) {
+                showError = true
+            } else {
+                onSave(
+                    issuer,
+                    account,
+                    buildTotpConfig(type, secret, period, digits, algorithm, counter, pin),
+                )
             }
         },
-    )
+    ) {
+        TypeDropdown(type) { type = it }
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            value = issuer,
+            onValueChange = { issuer = it },
+            label = { Text(stringResource(R.string.totp_field_issuer)) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            value = account,
+            onValueChange = { account = it },
+            label = { Text(stringResource(R.string.totp_field_account)) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            value = secret,
+            onValueChange = { secret = it },
+            label = { Text(secretLabel(type)) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        when (type) {
+            OtpType.MOTP -> TotpMotpFields(pin, onPinChange = { pin = it })
+            OtpType.STEAM -> {
+                // Steam 固定 5 位 / 30s / SHA1，无可调参数
+            }
+            OtpType.HOTP -> TotpHotpFields(
+                counter = counter,
+                onCounterChange = { counter = it },
+                digits = digits,
+                onDigitsChange = { digits = it },
+                algorithm = algorithm,
+                onAlgorithmChange = { algorithm = it },
+            )
+            OtpType.TOTP, OtpType.YANDEX -> TotpTimedFields(
+                period = period,
+                onPeriodChange = { period = it },
+                digits = digits,
+                onDigitsChange = { digits = it },
+                algorithm = algorithm,
+                onAlgorithmChange = { algorithm = it },
+            )
+        }
+        if (showError) {
+            Text(
+                stringResource(R.string.totp_invalid_secret),
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+    }
 }
 
 /** mOTP 专属字段:PIN 码(密钥为原始字符串,固定 10s / 6 位)。 */

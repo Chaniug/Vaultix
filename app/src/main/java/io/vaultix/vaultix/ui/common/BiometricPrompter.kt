@@ -27,7 +27,15 @@ class BiometricPrompter(
         subtitle: String? = null,
         cancelText: String? = null,
         onSuccess: (Cipher) -> Unit,
-        onError: (message: String, isCancelled: Boolean) -> Unit,
+        /**
+         * @param cancelled 是否安静收起（用户放弃 **或** 系统终止 —— 两者都不该弹错误打扰用户）。
+         * @param systemAbort 该次认证是否为**系统侧终止**（宿主被切走 / 弹窗被提前撤下 /
+         *   硬件还没就绪）。⚠️ 与 `cancelled` 分开报，是因为它们**语义完全不同**：
+         *   用户放弃 = 「我不想用指纹了」（调用方该记住、别再弹）；
+         *   系统终止 = 「这次没弹成」（**什么都没发生过**，调用方该把机会还回来、允许再试）。
+         *   见 `AutoPromptQuickUnlock` 的 `autoPromptAborts`。
+         */
+        onError: (message: String, cancelled: Boolean, systemAbort: Boolean) -> Unit,
     ) {
         val executor = ContextCompat.getMainExecutor(activity)
         val callback = object : BiometricPrompt.AuthenticationCallback() {
@@ -40,10 +48,14 @@ class BiometricPrompter(
                 // ⚠️ ERROR_CANCELED 必须算进来：它是**系统**取消（宿主被切走、弹窗被
                 // 提前撤下），在进程刚冷启动/重启后的首帧发起认证时很常见；
                 // 不算取消就会把调用方留在 submitting 卡死态（按钮全灰、转圈不停）。
-                val cancelled = errorCode == BiometricPrompt.ERROR_USER_CANCELED ||
-                    errorCode == BiometricPrompt.ERROR_NEGATIVE_BUTTON ||
-                    errorCode == BiometricPrompt.ERROR_CANCELED
-                onError(errString.toString(), cancelled)
+                val userCancelled = errorCode == BiometricPrompt.ERROR_USER_CANCELED ||
+                    errorCode == BiometricPrompt.ERROR_NEGATIVE_BUTTON
+                // ⚠️ 这三类是「这一次没弹成」，**不是**用户放弃 —— 必须让调用方能把
+                // 「自动弹出用掉的那一次机会」还回来，否则就会表现为「有时候不弹」。
+                val systemAbort = errorCode == BiometricPrompt.ERROR_CANCELED ||
+                    errorCode == BiometricPrompt.ERROR_HW_UNAVAILABLE ||
+                    errorCode == BiometricPrompt.ERROR_UNABLE_TO_PROCESS
+                onError(errString.toString(), userCancelled || systemAbort, systemAbort)
             }
             // onAuthenticationFailed（指纹不匹配）：保持对话框可重试，不回调
         }

@@ -24,6 +24,8 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
@@ -94,6 +96,16 @@ class TotpCodesViewModel @Inject constructor(
         val serverOrigin: String? = null,
         /** 条目 id → 是否已同步上云（行尾云图标；缺省视为已同步，见 `.ai/ISSUES.md` #76）。 */
         val syncStates: Map<String, Boolean> = emptyMap(),
+        /**
+         * 条目流**还没发首帧**（活跃库 id 尚未解析出 / 首次读盘未回）。
+         *
+         * ⚠️ 必须与「真的没有验证码」分开（2026-09-13 用户报「冷启动瞬间点验证码页，
+         * 有 1~2 秒空白，像是数据没加载好」）：
+         * `vaultIdState` 初始是 `""`，而 `observeItems("")` 会**立刻发一个空列表** ——
+         * 界面把那个空列表当成真实空态，于是显示「还没有验证码」达 1~2 秒。这既不是加载提示，
+         * 也不是真实状态，用户只能读成"坏了/空白"。
+         */
+        val loading: Boolean = true,
     )
 
     private val _state = MutableStateFlow(UiState())
@@ -123,8 +135,21 @@ class TotpCodesViewModel @Inject constructor(
         }
         viewModelScope.launch {
             vaultIdState
-                .flatMapLatest { id -> itemRepository.observeItems(id) }
-                .collect { items -> _state.update { it.copy(items = items) } }
+                .flatMapLatest { id ->
+                    // ⚠️ 活跃库 id 还没解析出来时**不要**去 observeItems("")：那会立刻发一个
+                    // 空列表，被界面当成"真的没有验证码"（冷启动切过来就是 1~2 秒假空态）。
+                    // 这里改发 `null`，由下游把它翻译成 `loading = true`。
+                    if (id.isBlank()) {
+                        flowOf<List<VaultItem>?>(null)
+                    } else {
+                        itemRepository.observeItems(id).map<List<VaultItem>, List<VaultItem>?> { it }
+                    }
+                }
+                .collect { items ->
+                    _state.update {
+                        it.copy(items = items.orEmpty(), loading = items == null)
+                    }
+                }
         }
         // 云同步状态 → 行尾小云图标（与 ItemsViewModel 同口径）。
         viewModelScope.launch {

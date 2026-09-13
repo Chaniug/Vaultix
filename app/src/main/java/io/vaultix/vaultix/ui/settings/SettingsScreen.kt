@@ -691,7 +691,7 @@ private fun QuickUnlockEnrollEffect(viewModel: SettingsViewModel) {
                         title = enrollTitle,
                         cancelText = cancelText,
                         onSuccess = { cipher -> viewModel.enrollWithCipher(event.vaultId, cipher) },
-                        onError = { _, _ -> /* 取消/失败：维持「未启用」，可再试 */ },
+                        onError = { _, _, _ -> /* 取消/失败：维持「未启用」，可再试 */ },
                     )
                 }
             }

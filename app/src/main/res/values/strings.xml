@@ -348,6 +348,9 @@
     <string name="delete_item_title">删除条目</string>
     <string name="delete_item_message">将「%1$s」移入回收站？云端回收站会在 30 天后自动清除。</string>
     <string name="delete_item_confirm">移入回收站</string>
+    <!-- 列表左滑露出删除后的二次确认（滑出手势专用，与详情页的删除对话框区分） -->
+    <string name="delete_swipe_title">删除这一条？</string>
+    <string name="delete_swipe_message">会先移入回收站，30 天后自动清除。</string>
     <string name="detail_missing">条目不存在或已被删除</string>
     <string name="detail_item_deleted">已移入回收站</string>
     <string name="detail_copy_failed">复制失败，请重试</string>
@@ -368,7 +371,13 @@
     <string name="item_open_uri">打开网址</string>
     <string name="copy_uri">已复制网址</string>
     <string name="copy_uri_clears">已复制网址（%1$d 秒后自动清除）</string>
-    <string name="section_totp">动态验证码</string>
+    <string name="section_totp">2FA</string>
+    <!-- 详情页头部摘要（一行概览：几条网址 / 有没有 2FA / 几个通行密钥） -->
+    <string name="detail_summary_uris">%1$d 个网址</string>
+    <string name="detail_summary_passkeys">%1$d 个通行密钥</string>
+    <!-- 2FA 分区：默认不显示验证码，点眼睛才显示（详情页不跑定时器，省电） -->
+    <string name="detail_totp_hidden">点右侧眼睛显示验证码</string>
+    <string name="detail_totp_toggle">显示或隐藏验证码</string>
     <string name="item_field_totp">TOTP 密钥</string>
     <string name="copy_totp">已复制验证码</string>
     <string name="copy_totp_clears">已复制验证码（%1$d 秒后自动清除）</string>
@@ -392,7 +401,7 @@
     <string name="qr_grant_permission">授予权限</string>
     <string name="section_passkeys">通行密钥</string>
     <!-- 详情页只做「存在性提示」：动态验证码与通行密钥明细都移到「验证码」页（降功耗） -->
-    <string name="detail_totp_present">该条目含有验证码</string>
+    <string name="detail_totp_present">该条目含 2FA</string>
     <string name="detail_totp_where">在底部「验证码」页查看动态码（此页不再每秒刷新，省电）</string>
     <string name="detail_passkey_where">在「验证码」页右上角的指纹按钮中查看与管理</string>    <string name="passkey_count">%1$d 个通行密钥</string>
     <string name="passkey_readonly_hint">通行密钥由服务器管理，不可在此编辑</string>
@@ -584,5 +593,9 @@
 
     <!-- 卡包 Tab（main-shell-migration §6.1.3） -->
     <string name="card_wallet_empty">还没有银行卡。按「+」添加一张。</string>
+    <!-- 卡包搜索（2026-09-13 用户反馈「卡包里面没有搜索按钮」） -->
+    <string name="card_wallet_search_hint">搜索卡片</string>
+    <string name="card_wallet_search_close">关闭搜索</string>
+    <string name="card_wallet_no_match">没有匹配的卡片</string>
     <string name="card_wallet_new">新建银行卡</string>
 </resources>

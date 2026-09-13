@@ -31,11 +31,21 @@ import io.vaultix.vaultix.ui.settings.AutofillSettingsScreen
 import io.vaultix.vaultix.ui.settings.SettingsScreen
 import io.vaultix.vaultix.ui.shell.MainShellScreen
 import io.vaultix.vaultix.ui.shell.MainShellViewModel
+import io.vaultix.vaultix.ui.shell.tabSwitchEnter
+import io.vaultix.vaultix.ui.shell.tabSwitchExit
 import io.vaultix.vaultix.ui.totp.TotpCodesScreen
 import io.vaultix.vaultix.ui.trash.TrashScreen
 import io.vaultix.vaultix.ui.unlock.UnlockScreen
 import io.vaultix.vaultix.ui.unlock.UnlockViewModel
 import io.vaultix.vaultix.ui.vaultlist.VaultListScreen
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 
 /**
  * 应用导航（Docs/08 §1，M1 闭环）。
@@ -99,6 +109,33 @@ fun VaultixApp() {
     NavHost(
         navController = navController,
         startDestination = SplashRoute,
+        // ⚠️ 2026-09-13 第二轮用户反馈「从密码条目 / 验证码条目页面返回时动画有点卡顿」。
+        // 根因：**全屏淡入淡出**。`fadeIn`/`fadeOut` 要给整屏（1256×2760）做一次 alpha 合成，
+        // 而 alpha 层的实现是离屏渲染（`saveLayer`）—— 列表页 + 详情页同时在场时，每帧都要
+        // 多分配/合成一整屏的离屏缓冲，正是掉帧的来源。滑动本身只是 `translationX`，几乎免费。
+        //
+        // 因此这里**去掉 fade，只保留位移**：两页都不透明，新页滑入时就自然盖住让位页 ——
+        // 观感与 Shared Axis X 一致（方向连续），但少了整屏合成那一笔开销。
+        // ⚠️ 2026-09-13 第六轮（用户拍板）：**不要再做花哨的转场**。
+        // 用户原话：「我不要这些花里花哨的动画。验证码页面返回的那种就可以了，几乎没有动效的。」
+        // ⇒ 直接把二级路由的过渡换成**和 Tab 切换同一套**（`tabSwitchEnter/tabSwitchExit`
+        // = `fadeIn + slideInVertically(1/16 屏高)`）：
+        //   · 观感上"几乎没有动效"，且全 App 手感统一（切 Tab 与进出二级页一致）；
+        //   · 双向对称（进入与返回同一套），没有方向感上的刻意设计；
+        //   · 位移只有 1/16 屏高 —— 不违背"别让容器尺寸补间"（那是尺寸，不是位移），
+        //     也不会再出现"整屏滑走"那种被用户读作"多余"的动效。
+        // ⚠️ 历史上这里试过：1/12 轻推 + fade（被读成"缩小"）、整屏 Shared Axis X
+        // （被读成"快速右滑、多余"）。**别再往上加动效**，用户明确不要。
+        enterTransition = { tabSwitchEnter() },
+        exitTransition = { tabSwitchExit() },
+        popEnterTransition = { tabSwitchEnter() },
+        popExitTransition = { tabSwitchExit() },
+        // ⚠️ 2026-09-13 第三轮用户反馈：「返回时会看到详情页缩小的 1~2 帧画面，很多地方都有」。
+        // 根因：导航库给目的地的转场套了一层 **`SizeTransform`** —— 它会在过渡期间**动画容器的
+        // 尺寸**。两个页面的测量尺寸只要差一点点（例如详情页的内容还没填满、或键盘/insets 差一档），
+        // 容器就被"补间"成中间尺寸，居中的内容看起来就是**整页缩小了一帧半帧**。
+        // 我们的转场只要位移，容器尺寸**必须**恒定 ⇒ 显式关掉它（`null` = 不做尺寸补间）。
+        sizeTransform = null,
     ) {
         // 导航图按链路拆分（detekt LongMethod ≤150 行）
         vaultEntryGraph(navController, shellBridge)
@@ -119,6 +156,34 @@ private fun SplashScreen() {
         CircularProgressIndicator()
     }
 }
+
+/**
+ * 二级路由转场：**Shared Axis X**（Material motion 的标准「前进 / 返回」动效）。
+ *
+ * ⚠️ 2026-09-13 第二轮用户反馈：「返回的时候画面是一个缩小的，感觉不太舒服，
+ * 找一个当前最流行最舒服的切换效果」。上一版是「140ms + 只推 1/12 屏宽 + 淡入淡出」——
+ * 位移太小、时长太短，两页几乎在原地交叉淡化，观感就像**整页缩了一下**。
+ *
+ * 现在换成 Material 官方的 Shared Axis X：
+ * - **进入**（push）：新页从**右侧整屏**滑入，旧页向左**轻微**让位（1/4 屏）；
+ * - **返回**（pop）：正好相反 —— 旧页整屏右滑出去，被返回的页从左侧 1/4 屏处滑回原位。
+ *
+ * ⚠️ **不要加 fade**：整屏 alpha 合成要离屏渲染，两页同时在场时每帧多一次全屏合成 ⇒ 掉帧
+ * （用户反馈"返回的时候动画有点卡顿"）。位移本身只是 `translationX`，几乎零成本。
+ *
+ * 为什么它"舒服"：方向与空间关系是**连续**的（前进 = 向右展开，返回 = 收回原处），
+ * 用户不需要在脑中重建层级；这也是 Android 14 预测式返回的默认语言。
+ * 全 App 的二级路由（详情 / 编辑 / 通行密钥 / 回收站 / 设置子页）共用这一套，
+ * 不再有「某几页有动画、某几页硬切」的不一致。
+ */
+private const val NAV_ANIM_MS = 300
+
+// 注：这里曾有一个 `NAV_OUTGOING_DIVISOR`（让位页位移 = 屏宽 / 它，取 4）—— **已删除**。
+// 它就是"返回时画面缩一下"的元凶：让位页只挪 1/4 屏 ⇒ 过渡期间存在"两页各占一部分屏幕"的
+// 中间帧。现在的转场是「覆盖 / 揭开」，**没有让位页**。详见下方 NavHost 的注释。
+
+/** Material motion 的标准缓动（emphasized decelerate 的常用近似）。 */
+private val NAV_EASING = CubicBezierEasing(0.2f, 0f, 0f, 1f)
 
 /** 把导航栈整体替换为 [route]（清掉其上层所有界面，含启动占位）。 */
 private fun NavHostController.navigateToRoot(route: Any) {
@@ -284,8 +349,9 @@ private fun NavGraphBuilder.itemsGraph(navController: NavHostController) {
         TrashScreen(onBack = { navController.popBackStack() })
     }
     composable<ItemRoute> { entry ->
+        // 详情页不再传 `onBack`：左上角返回箭头已按要求去掉（手势返回 / 返回键由导航库接管），
+        // 该参数随之成为死参 —— 项目开了 detekt `UnusedParameter`，必须一并清掉。
         ItemDetailScreen(
-            onBack = { navController.popBackStack() },
             onDeleted = {
                 navController.popBackStack()
             },

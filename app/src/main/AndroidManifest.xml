@@ -21,9 +21,25 @@
         </intent>
     </queries>
 
+    <!-- ⚠️⚠️ android:enableOnBackInvokedCallback="false" —— 2026-09-13 第五轮才定案，别改回 true。
+         【现象】用户报告：**手势返回**时能看到"当前页缩小约 80% 并居中、下层页面露出来"的 1~2 帧；
+         条目详情 / 卡包 / 设置子页**处处都有**，而返回键 / `adb input keyevent 4` **完全没有**。
+         【机制】那就是 **Android 的预测式返回（predictive back）预览**：手势期间系统把当前
+         页面缩小、把下层页面露出来，松手后再播完动画。
+         【为什么之前一直是开着的】该属性对 **targetSdk 36+ 的应用默认值为 true**：
+         ① 不声明 ⇒ 预测式返回**已启用** ⇒ 有预览（用户最初看到的就是它）；
+         ② 显式写 true ⇒ **等于把预览钉死开启**（我第 4 轮就是这么改的，所以"依然存在"）；
+         ③ 显式写 false ⇒ **关掉预览**，手势返回交回 App，只播我们自己的转场
+         （`VaultixApp` 的 NavHost：纯横向位移、无缩放）。
+         【与其它改动的关系】`NavHost(sizeTransform = null)`、Tab 容器尺寸补间零时长、
+         「跳过重放 Tab 过渡」都是**顺手修掉的真问题**，但它们都不是这个现象的主因 ——
+         主因就是这里的预览。别把它们回退。
+         【若要保留预测式手感】改成 true 并配合 `PredictiveBackHandler` **自绘**预览
+         （我们的转场是纯位移，自绘后就不会有缩放）。 -->
     <application
         android:name=".VaultixApplication"
         android:allowBackup="true"
+        android:enableOnBackInvokedCallback="false"
         android:icon="@drawable/ic_launcher"
         android:label="@string/app_name"
         android:supportsRtl="true"
@@ -46,15 +62,21 @@
              二次验证 / 填充后复制验证码）必须由系统以「可收回 EXTRA_AUTHENTICATION_RESULT」
              的方式启动——singleTask 复用实例走 onNewIntent、NEW_TASK 推进独立 task 都会丢
              认证结果（表现为「验证码复制成功但密码没填进」）。
-             ⚠️ taskAffinity 必须独立于默认（包名）：否则引导型（NEW_TASK）PendingIntent 会把
-             后台含 MainActivity 的 task 拉到前台——认证 Activity 无感 finish 后露出主界面，
-             表现为「Via 点密码条目闪回 Vaultix」（autoCopyTotp 开启时必现）。 -->
+             ⚠️⚠️ **`taskAffinity` 也必须与包名一致（即：不要声明它）** —— 2026-09-13 定案。
+             这里曾经声明 `taskAffinity="io.vaultix.vaultix.autofill"`，理由是「引导型 NEW_TASK
+             PendingIntent 会把含 MainActivity 的 task 拉到前台、认证 Activity 无感 finish 后
+             露出主界面」。但**那个问题的真正来源就是认证意图上的 NEW_TASK**（已删），
+             而独立 taskAffinity 造成的是**同一个致命后果**：Activity 永远活在另一个 task ⇒
+             `setResult(RESULT_OK, EXTRA_AUTHENTICATION_RESULT)` 送不回系统 ⇒
+             系统日志报 `onAuthenticationResult(): empty intent` ⇒ 回灌的候选被整个丢弃 ⇒
+             用户现象「在登录界面反复解锁、永远看不到密码条目」。
+             对照 Bitwarden（同形态项目）的认证 Activity 声明：`exported` + `launchMode=singleTop`
+             + `noHistory` + 透明主题，**没有 taskAffinity、没有 excludeFromRecents**。 -->
         <activity
             android:name=".autofill.AutofillActivity"
             android:excludeFromRecents="true"
             android:exported="true"
             android:noHistory="true"
-            android:taskAffinity="io.vaultix.vaultix.autofill"
             android:theme="@style/Theme.Vaultix.Transparent" />
 
         <!-- 系统自动填充服务（M2-a）：密码填充走 AutofillService（API 26+）。

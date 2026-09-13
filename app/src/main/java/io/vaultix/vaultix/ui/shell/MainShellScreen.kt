@@ -19,15 +19,20 @@
 package io.vaultix.vaultix.ui.shell
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
@@ -123,6 +128,13 @@ fun MainShellScreen(
             modifier = Modifier.fillMaxSize().padding(padding),
             propagateMinConstraints = true,
         ) {
+            // ⚠️ 「跳过首次过渡」旗标 —— 详见下面 `transitionSpec` 里的说明。
+            // MainShell 每次**重新进入组合**（例如从详情页 / 设置子页返回）都会重建这个
+            // AnimatedContent，而 `currentTab` 是 `rememberSaveable` 恢复的、会在首帧之后
+            // 再"变化"一次 ⇒ 触发一次**本不该出现**的 Tab 过渡（与 NavHost 的返回转场叠加成双影）。
+            var skipFirstTransition by remember { mutableStateOf(true) }
+            LaunchedEffect(Unit) { skipFirstTransition = false }
+
             // ★ 阶段 3 观感：Tab 切换过渡 + **Tab 状态保留**
             //
             // - `AnimatedContent` + [tabSwitchEnter]/[tabSwitchExit]：对齐 Bastion
@@ -132,14 +144,32 @@ fun MainShellScreen(
             //   搜索框内容、展开态）在离开组合时存入 holder，切回来原样恢复 ——
             //   否则「翻到卡包看个卡号，再切回密码页就回到列表顶部」。
             //   对齐 Bastion 的 `cardWalletSaveableStateHolder` 用法。
-            // - `SizeTransform(clip = false)`：Tab 内容高度不同（空态 / 列表）时不做裁剪，
-            //   避免过渡期间出现内容被切掉一条的错觉（同 Bastion）。
+            // - ⚠️ `SizeTransform(clip = false) { _, _ -> null }` —— **尺寸补间被关成"瞬时"**。
+            //   这是 2026-09-13 第 N 轮靠**录屏逐帧**才钉死的根因：
+            //   返回（pop）时 MainShell 会**重新进入组合**，它的 Tab `AnimatedContent` 会把自己的
+            //   容器尺寸补间一遍 ⇒ 外层容器随之变矮 ⇒ **满屏的旧页面（详情页）被裁成"小一号"、
+            //   还往上偏**，用户看到的就是"返回时详情页缩小 1~2 帧"，且**每次返回都有**。
+            //   传 `sizeAnimationSpec = { _, _ -> null }` = 尺寸变化**不做动画**（直接取目标值），
+            //   同时保留 `clip = false`（不裁剪内容）。
+            //   ⚠️ 别改成 `AnimatedContent(sizeTransform = null)` —— 本版本 Compose 里那个写法
+            //   匹配不到重载（只会匹到 `Transition<S>.AnimatedContent` 扩展，报 receiver 不匹配）。
             AnimatedContent(
                 targetState = currentTab,
                 modifier = Modifier.fillMaxSize(),
                 transitionSpec = {
-                    (tabSwitchEnter() togetherWith tabSwitchExit())
-                        .using(SizeTransform(clip = false))
+                    // ⚠️ 2026-09-13 第五轮（**录屏逐帧**得到的证据）：返回时 MainShell 会
+                    // **重新进入组合**，这套 Tab 过渡就被**重放了一遍** —— 表现是
+                    // 「详情页横向滑走的同时，列表带着纵向偏移淡入」，两页叠影，
+                    // 用户读到的就是"返回时页面缩小 1~2 帧"，而且**每次返回都有**。
+                    // Tab 过渡的语义只属于"切换 Tab"；重新进入组合时**不该播**
+                    // （此时 NavHost 自己的转场正在放，两者叠加才是双影）。
+                    // 用「跳过首次」把重放挡掉：切 Tab 的动画完全不受影响。
+                    if (skipFirstTransition) {
+                        EnterTransition.None togetherWith ExitTransition.None
+                    } else {
+                        (tabSwitchEnter() togetherWith tabSwitchExit())
+                            .using(SizeTransform(clip = false) { _, _ -> tween(durationMillis = 0) })
+                    }
                 },
                 contentKey = { it.name },
                 label = "vaultix_tab_switch",
