@@ -180,7 +180,12 @@ jobs:
           # 让 CI 时间/缓存空间翻倍。flavor 定义与 AppFlavor 分支代码保留在仓库中，
           # 待 Bitwarden 收尾、决定是否做纯本地版时再恢复（届时加回
           # :app:compileOfflineDebugKotlin / lintOfflineDebug / assembleOfflineRelease）。
-          # versionName 形如 0.1.0-dev-78db0ed：版本号 + dev 标识 + 短 commit SHA（可直接 git show 定位代码）。
+          # versionName 形如 0.3.0-dev-78db0ed：**VERSION 文件的基号** + dev 标识 + 短 commit SHA
+          # （可直接 git show 定位代码）。
+          # ⚠️ 基号必须读 VERSION，不能硬编码。此前写死 `0.1.0-dev-<sha>`，于是 debug 包在
+          # 设置页显示 0.1.0、而代码其实是 0.3.0 —— 与 build.gradle.kts「本地构建 / 设置页
+          # 显示 / VERSION 文件三处同源」的承诺冲突，排查时极易误判手上装的是哪一版
+          # （2026-09-14 用户报告「版本号看着不对」时发现）。
           # 用 GITHUB_SHA 而非 git rev-parse：本 job 是 fetch-depth=1 浅克隆，本地 git 无历史，
           # 而 GITHUB_SHA 由 Actions 注入，不受克隆深度影响。
           # 固定密钥是否可用由**磁盘上是否存在 release.jks** 决定（解码步骤已保证它来自
@@ -197,8 +202,12 @@ jobs:
             KS_OPTS="$KS_OPTS -Pandroid.injected.signing.key.alias=${SIGNING_KEY_ALIAS:-vaultix}"
             KS_OPTS="$KS_OPTS -Pandroid.injected.signing.key.password=${SIGNING_KEY_PASSWORD:-android}"
           fi
+          # 基号取 VERSION（真源）；读不到就退 0.0.0 保证构建不中断。
+          BASE_VERSION="$(tr -d '[:space:]' < "$GITHUB_WORKSPACE/VERSION" 2>/dev/null)"
+          if [ -z "$BASE_VERSION" ]; then BASE_VERSION="0.0.0"; fi
+          echo "Debug versionName base: $BASE_VERSION"
           ./gradlew :app:assembleFullDebug --stacktrace \
-            -PversionName="0.1.0-dev-$(echo ${GITHUB_SHA} | cut -c1-7)" $KS_OPTS 2>&1 | tee /tmp/build_log.txt
+            -PversionName="${BASE_VERSION}-dev-$(echo ${GITHUB_SHA} | cut -c1-7)" $KS_OPTS 2>&1 | tee /tmp/build_log.txt
           BUILD_EXIT=${PIPESTATUS[0]}
           if [ "$BUILD_EXIT" -ne 0 ]; then
             echo "::notice title=Build gate diagnostics::build_failed=true"

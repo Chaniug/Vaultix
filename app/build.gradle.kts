@@ -10,6 +10,36 @@ plugins {
     alias(libs.plugins.ksp)
 }
 
+/**
+ * 版本名的**单一来源**（versionName 与 versionCode 都由它派生，杜绝两处各写一遍）：
+ * ① CI 注入的 `-PversionName`（如 `0.3.0-dev-abc1234`）；② 否则读仓库根 `VERSION` 文件。
+ */
+val vaultixVersionName: String = providers.gradleProperty("versionName").getOrElse(
+    rootProject.file("VERSION").takeIf { it.exists() }?.readText()?.trim()?.ifEmpty { null }
+        ?: "0.1.0",
+)
+
+/**
+ * 由版本名推导 `versionCode`：`X.Y.Z[-任意后缀]` → `X*1_000_000 + Y*1_000 + Z`。
+ *
+ * ⚠️ 此前是硬编码 `1`，带来两个问题（2026-09-14 用户报告「版本显示里有个 (1)」）：
+ *   ① 设置页在版本号后拼 `($versionCode)`，于是**永远显示「(1)」** —— 它长得像浏览器
+ *      给重复下载加的后缀，用户很自然地以为两者有关，其实毫无关系（那个后缀是下载器加的）；
+ *   ② `versionCode` 是 Android 判断新旧、决定能否覆盖安装的**硬性依据**（同码可覆盖、
+ *      低码被拒），恒为 1 等于这层信息完全失效，也是将来上架的前提条件。
+ *
+ * `X*1_000_000` 给 minor / patch 各留三位，<1000 都不会串位。
+ * 解析不出 `X.Y` 时**回退 1 而不抛异常**：版本号写法出错不该让整个构建起不来。
+ */
+fun versionCodeOf(name: String): Int {
+    val parts = name.substringBefore('-').trim().split('.')
+    val major = parts.getOrNull(0)?.toIntOrNull() ?: return 1
+    val minor = parts.getOrNull(1)?.toIntOrNull() ?: return 1
+    val patch = parts.getOrNull(2)?.toIntOrNull() ?: 0
+    if (major < 0 || minor < 0 || patch < 0) return 1
+    return major * 1_000_000 + minor * 1_000 + patch
+}
+
 android {
     namespace = "io.vaultix.vaultix"
     // 本机 SDK 已安装 android-37（无 android-36），且与 Bastion 对齐
@@ -19,16 +49,15 @@ android {
         applicationId = "io.vaultix.vaultix"
         minSdk = 26
         targetSdk = 37
-        versionCode = 1
+        versionCode = versionCodeOf(vaultixVersionName)
         // 版本号来源优先级：
-        //   ① CI 注入的 -PversionName（如 0.1.0-dev-abc1234），用于发布产物；
+        //   ① CI 注入的 -PversionName（如 0.3.0-dev-abc1234），用于发布产物；
         //   ② 否则读仓库根的 VERSION 文件（真源），保证「本地构建 / 设置页显示 / VERSION
         //      文件」三处同源——此前本地默认硬编码 0.1.0，与 VERSION 的 0.3.0 长期不一致，
         //      本地装机后设置页会显示过期版本号，排查问题时极易误判手上装的是哪一版。
-        versionName = providers.gradleProperty("versionName").getOrElse(
-            rootProject.file("VERSION").takeIf { it.exists() }?.readText()?.trim()?.ifEmpty { null }
-                ?: "0.1.0",
-        )
+        //      ⚠️ 2026-09-14：CI 的 debug 包也曾硬编码 0.1.0-dev-<sha>，等于在这条路上
+        //      又破了一次同源（见 ci-debug.yml，已改为读 VERSION）。
+        versionName = vaultixVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
 

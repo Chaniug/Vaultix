@@ -179,11 +179,15 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
-      # build.gradle 用 `git describe --tags --exact-match HEAD` 取 release 版本名：
-      # 命中则 versionName = tag 去掉 v（与 Release 标题一致）；否则 fallback 成 "1.0.<commit 数>"。
-      # 手动 dispatch / rele push 时 HEAD 只是普通 commit、tag 尚未创建，会走 fallback 导致版本号错乱。
-      # 这里先在本地打上目标 tag，让上面那条分支命中。仅本地生效，不 push；
-      # push tag 触发时 tag 本就存在，-f 覆盖亦幂等。
+      # ⚠️ 2026-09-14 更正：本步的**原注释已失效**。它描述 build.gradle 用
+      # `git describe --tags --exact-match HEAD` 取 release 版本名，但 build.gradle.kts
+      # 早已改成「`-PversionName` → `VERSION` 文件」两条来源（见其注释），
+      # **全文再无 git describe 引用**（已核对）⇒ 下面的 describe 现在只是诊断打印。
+      #
+      # 保留 `git tag -f` 的理由（有意保留，非遗漏）：手动 dispatch / rele push 时 HEAD
+      # 只是普通 commit、tag 尚未创建，先本地挂上目标 tag 能让本步与「push tag」路径
+      # 的行为完全一致（幂等；changelog 步骤用 `git tag -l` 枚举历史 tag）。
+      # 仅本地生效、不 push。
       - name: Create local tag so versionName matches the release tag
         shell: bash
         run: |

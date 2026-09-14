@@ -179,7 +179,14 @@ fun SettingsScreen(
             // ---- 其他 / 关于（同上：拆出去守住函数长度门禁） ----
             OthersSection(
                 context = context,
-                versionName = "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+                // ⚠️ **只显示 versionName，不拼 versionCode**（2026-09-14 用户报告）。
+                // 原先拼成 `0.3.0 (3000)` / 旧版本是 `… (1)`，那个括号长得很像浏览器给
+                // 重复下载加的后缀，用户会以为「下载的文件名带了 (1)，装完版本号里也有 (1)」
+                // —— 两者其实毫无关系（前者是下载器加的，后者是 versionCode）。
+                // 而且 versionName 对 debug 包已带短 sha（`0.3.0-dev-abc1234`），
+                // 定位到具体代码绰绰有余；versionCode 是给系统判断新旧的，不是构建计数器，
+                // 摆在界面上只会再次引起同样的误读。
+                versionName = BuildConfig.VERSION_NAME,
                 onShowLicense = { showAboutDialog = true },
             )
             Spacer(Modifier.height(32.dp))
