@@ -157,7 +157,7 @@ interface VaultRepository {
     // ---- 本地快速解锁：KDBX 侧（`.ai/decisions/库选择与快速解锁-逻辑定稿.md` §4）----
 
     /**
-     * **KDBX 库**启用本地快速解锁（`.ai/ISSUES.md` #93）。
+     * **KDBX 库**启用本地快速解锁 —— 第一步：**校验并暂存**（`.ai/ISSUES.md` #93）。
      *
      * 与 Bitwarden 侧的 [enrollLocalUnlock] 是**两个方法**而非一个重载，因为包裹物
      * 本质不同：Bitwarden 包的是「会话里的对称密钥」，KDBX 会话**不含密钥**
@@ -168,16 +168,48 @@ interface VaultRepository {
      * 不管字节对不对。若用户输错密码照样 wrap 成功，下次指纹就会解出错密码
      * ⇒ 开库失败且无法自愈。校验必须复用真实开库路径（不能只比对长度）。
      *
+     * ### ★ 为什么必须拆成「准备 / 提交」两步（2026-09-14 修闪退）
+     *
+     * 快解的保护器 KEK 是 **auth-per-use**（`setUserAuthenticationParameters(0, …)`）：
+     * 只有**被 BiometricPrompt 授权过的那一个 Cipher 实例**才能完成 `doFinal`。
+     * 而 KDBX 的主密码只能在弹指纹**之前**拿到（包裹物必须提前组装好），于是：
+     *
+     * | 顺序 | 结果 |
+     * |---|---|
+     * | ❌ 先 wrap 再弹指纹 | `doFinal` 抛 `UserNotAuthenticatedException` ⇒ 协程未捕获 ⇒ **闪退** |
+     * | ✅ 先弹指纹再 wrap | 认证通过后用授权过的 cipher 包裹 |
+     *
+     * ⇒ 校验与组装密文留在本方法（此处的产物是**待包裹的明文**），
+     * 真正的 `wrap` 移到指纹成功之后由 [commitKdbxEnroll] 完成。
+     * 调用方在指纹**被取消/失败**时必须调 [discardKdbxEnroll] 把暂存明文擦掉。
+     *
      * @param masterPassword 用户当场输入的主密码（**不落盘**，只进包裹物）。
      * @param keyFileUri 该库登记的 keyfile URI（可空；由上层从 preferences 读）。
      * @return 见 [KdbxEnrollOutcome]；`InvalidCredentials` 时 UI 应就地让用户重输。
+     *   `Enrolled` 的语义是「校验通过且凭据已暂存，等待指纹」，**不代表已落盘**。
      */
-    suspend fun enrollLocalUnlockKdbx(
+    suspend fun prepareKdbxEnroll(
         vaultId: String,
         masterPassword: String,
         keyFileUri: String?,
-        cipher: javax.crypto.Cipher,
     ): KdbxEnrollOutcome
+
+    /**
+     * KDBX 快速解锁第二步：用**已认证**的 [cipher] 包裹暂存的凭据并落盘、置位开关。
+     *
+     * @return true = 包裹成功（此后指纹可用）；false = 没有暂存凭据（流程被中断/重复提交）。
+     * @throws Exception `wrap` 自身的异常（Keystore 状态错等）**不吞** —— 那是环境/编程错误，
+     *   吞成 false 会掩盖它（与 [enrollLocalUnlock] 同款取向）。包装失败时暂存明文仍会被擦除。
+     */
+    suspend fun commitKdbxEnroll(vaultId: String, cipher: javax.crypto.Cipher): Boolean
+
+    /**
+     * 放弃本次 KDBX 快速解锁登记：把暂存的凭据明文**擦掉**（幂等，无暂存时是空操作）。
+     *
+     * 调用时机 = 指纹被用户取消 / 被系统终止。没有它，主密码副本会在单例里留到
+     * 下一次登记或进程结束 —— 与项目「明文用完即擦」的一贯取向冲突。
+     */
+    suspend fun discardKdbxEnroll()
 
     /**
      * 认证通过后：解封 KDBX 包裹物（主密码 + keyfile）并**真的开库**。
@@ -208,7 +240,7 @@ interface VaultRepository {
      * 启用 / 重设 PIN（**Bitwarden 库**）。
      *
      * ⚠️ 与 [enrollPinKdbx] 分成**两个方法**而非一个重载，理由同
-     * [enrollLocalUnlockKdbx]：Bitwarden 的会话里**有**要包裹的密钥（库正解锁），
+     * [prepareKdbxEnroll]：Bitwarden 的会话里**有**要包裹的密钥（库正解锁），
      * 所以无需再输一次主密码；KDBX 的会话里**没有**主密码，必须当场输入并先校验。
      * 合并成一个方法就得让「主密码」这个参数在 Bitwarden 侧无意义地可选，
      * 那条隐式约定迟早被用错。
@@ -296,10 +328,16 @@ sealed interface PinUnlockOutcome {
     data class Unavailable(val detail: String) : PinUnlockOutcome
 }
 
-/** [VaultRepository.enrollLocalUnlockKdbx] 的结果（UI 据此决定文案与是否重输）。 */
+/** [VaultRepository.prepareKdbxEnroll] 的结果（UI 据此决定文案与是否重输）。 */
 sealed interface KdbxEnrollOutcome {
-    /** 校验通过、包裹物已落盘、开关已置位。 */
-    data object Enrolled : KdbxEnrollOutcome
+    /**
+     * 校验通过、凭据已**暂存**，等待指纹认证后由
+     * [VaultRepository.commitKdbxEnroll] 包裹落盘。
+     *
+     * ⚠️ 刻意**不叫 Enrolled + 不写「已落盘」**：这个名字若撒谎，调用方就会
+     * 以为可以跳过 [VaultRepository.commitKdbxEnroll]，于是「指纹按了却没生效」。
+     */
+    data object Prepared : KdbxEnrollOutcome
 
     /**
      * 主密码（或 keyfile）不对 —— **校验阶段**就失败了，未写任何东西。
@@ -321,7 +359,8 @@ sealed interface KdbxUnlockOutcome {
 
     /**
      * **指纹通过了，但包裹物打不开库** ⇒ 主密码很可能已被用户在别处改过。
-     * UI 应提示并引导重输 → 成功后 [VaultRepository.enrollLocalUnlockKdbx] 自动重包。
+     * UI 应提示并引导重输 → 成功后 [VaultRepository.prepareKdbxEnroll] 重新组装、
+     * [VaultRepository.commitKdbxEnroll] 重包。
      */
     data object StaleCredentials : KdbxUnlockOutcome
 

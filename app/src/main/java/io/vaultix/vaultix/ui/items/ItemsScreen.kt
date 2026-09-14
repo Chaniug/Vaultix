@@ -194,6 +194,33 @@ private fun itemsTopInset(
     else -> barPadding + filterRowInset
 }
 
+/**
+ * 顶栏收起度 —— 把两条**与"筛选"耦合**的规则收在这里（主函数才能守住 detekt `LongMethod`）。
+ *
+ * **规则一：切换快筛 = 换了一份数据视图 ⇒ 列表回到顶部。**
+ * 不重置的话，旧滚动位会被新数据集继承（而顶部内边距会把它"藏"起来，肉眼看不出已位移）：
+ * 既让顶栏误判收起，也让每次切筛选白多一次重新布局。
+ *
+ * **规则二：筛选面板展开期间，收起度冻结为「展开」。**
+ * 2026-09-15 用户实测：点开面板后连续切筛选（全部→验证码→通行密钥→SSH→**再点回全部**），
+ * 标题会从 26sp 缩成 16sp、像"被滑下去了"，而且**那个状态下再点 chip 更卡**。
+ * 根因是一圈**互相喂的状态**：收起度 ← 列表滚动位；而 `contentPadding.top` 里含着
+ * `filterRowInset`（面板展开多出约 56dp）与 `barPadding`（又由收起度驱动）
+ * ⇒ 面板一展开，顶部内边距变大，LazyColumn 把这份位移记进
+ * `firstVisibleItemScrollOffset`：**视觉上列表还在顶部，判据 `offset > 8dp` 却已经成立**。
+ * 面板展开时顶栏本来就该是展开的（标题刚被点过）⇒ 直接冻结，把回路切断。
+ */
+@Composable
+private fun rememberFilterBarCollapse(
+    listState: LazyListState,
+    panelExpanded: Boolean,
+    filter: ItemsQuickFilter,
+): Float {
+    LaunchedEffect(filter) { listState.scrollToItem(0) }
+    val scrollCollapse = rememberScrollCollapseFraction(listState)
+    return if (panelExpanded) 0f else scrollCollapse
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ItemsScreen(
@@ -201,7 +228,14 @@ fun ItemsScreen(
     onLocked: () -> Unit,
     onOpenTrash: () -> Unit,
     onOpenItem: (VaultItem) -> Unit,
-    onOpenTotp: () -> Unit,
+    /**
+     * 验证码页出口；**null = 宿主不需要该入口**。
+     *
+     * 主界面（[io.vaultix.vaultix.ui.shell.MainShellScreen]）底部已有「验证码」页签，
+     * 传 null 就不会在 ⋮ 菜单里重复出现；autofill 的条目路由（`ItemsRoute`）没有底部
+     * 导航，必须传真值，否则那一侧将**没有任何**通往验证码页的路。
+     */
+    onOpenTotp: (() -> Unit)? = null,
     /**
      * 主界面 Tab 内嵌模式（main-shell-migration 阶段 2）：
      * 隐藏返回键（无上层可返回）与 FAB（「+」由底部导航条统一承载）。
@@ -236,7 +270,7 @@ fun ItemsScreen(
     // 走 rememberSaveable：切 Tab 回来仍保持展开（用户刚点开就切走再回来，不该又收起来）。
     var quickFiltersExpanded by rememberSaveable { mutableStateOf(false) }
     val listState = rememberLazyListState()
-    val collapse = rememberScrollCollapseFraction(listState)
+    val collapse = rememberFilterBarCollapse(listState, quickFiltersExpanded, state.quickFilter)
     val barPadding = rememberImmersiveBarPadding(collapse)
     // ⚠️ 挤在一行是有意的：主 composable 贴着 detekt `LongMethod ≤150` 的门禁线
     // （2026-09-13 这一批加了「让位走 contentPadding」后曾到 152 行，靠压这行回到 147）。
@@ -562,7 +596,8 @@ private fun BoxScope.ItemsTopBar(
     onBack: () -> Unit,
     onDisplayOptions: () -> Unit,
     onToggleSearch: () -> Unit,
-    onOpenTotp: () -> Unit,
+    /** null = 宿主没有验证码页可去（主界面底部已有该页签）⇒ 菜单里不出现这一项。 */
+    onOpenTotp: (() -> Unit)?,
     onOpenTrash: () -> Unit,
     onRetrySync: () -> Unit,
     onLock: () -> Unit,
@@ -594,9 +629,18 @@ private fun BoxScope.ItemsTopBar(
                     contentDescription = stringResource(R.string.items_search),
                 )
             }
+            // 「显示选项」= **看的方式**（分组 / 密度 / 图标），不是对数据的动作。
+            // 2026-09-14 用户要求把它从 ⋮ 里挪到胶囊上：⋮ 菜单留给「对库做的动作」
+            // （回收站 / 同步 / 锁定），而显示方式是随时会调的视图状态，多一次展开
+            // 实在没必要。代价是胶囊从 2 个图标变 3 个 —— 用户明确要的取舍。
+            IconButton(onClick = onDisplayOptions) {
+                Icon(
+                    Icons.Filled.ViewAgenda,
+                    contentDescription = stringResource(R.string.items_display_options),
+                )
+            }
             ItemsMoreMenu(
                 onSwitchVault = onSwitchVault,
-                onDisplayOptions = onDisplayOptions,
                 onOpenTotp = onOpenTotp,
                 onOpenTrash = onOpenTrash,
                 onRetrySync = onRetrySync,
@@ -607,21 +651,25 @@ private fun BoxScope.ItemsTopBar(
 }
 
 /**
- * 顶栏「更多」菜单（⋮）：**切换密码库** / 验证码 / 回收站 / 显示选项 / 同步 / 锁定查看层。
+ * 顶栏「更多」菜单（⋮）：**切换密码库** / （验证码） / 回收站 / 同步 / 锁定查看层。
  *
- * ⚠️ 菜单项顺序 = 使用频率：查看类（验证码 / 回收站 / 显示选项）在上，
- * 维护类（同步）居中，破坏性动作（锁定）在下并用 error 色分隔
+ * ⚠️ 菜单项顺序 = 使用频率（2026-09-14 用户指定的重排）：
+ * 回收站 → 同步 → 锁定；「锁定」是破坏性动作，用 error 色并单独用分隔线隔开
  * （对齐 M3「破坏性动作不挨着常用动作」的建议）。
  *
  * ⚠️ 「切换密码库」放在**最上面**（2026-09-14，issue #96）：多库并存时这是
  * 「我要换个库看」的**唯一正确语义入口**。此前用户能碰到的只有「锁定」
  * （语义恰好相反），导致 KDBX 库「添加了却找不到」，只能靠摸到设置页。
+ *
+ * ⚠️ 「验证码」只在**调用方给了入口且底部导航没有该页签**时显示（`onOpenTotp == null`
+ * 即整项隐藏）：主界面底部已经有「验证码」页签，菜单里再来一个是重复入口；
+ * 而 autofill 的条目路由（`ItemsRoute`）**没有**底部导航，那里必须留着它。
+ * 「显示选项」已于同日移出本菜单（见 [ItemsTopBar] 的胶囊）。
  */
 @Composable
 private fun ItemsMoreMenu(
     onSwitchVault: (() -> Unit)?,
-    onDisplayOptions: () -> Unit,
-    onOpenTotp: () -> Unit,
+    onOpenTotp: (() -> Unit)?,
     onOpenTrash: () -> Unit,
     onRetrySync: () -> Unit,
     onLock: () -> Unit,
@@ -643,17 +691,15 @@ private fun ItemsMoreMenu(
                 }
                 HorizontalDivider()
             }
-            MenuAction(Icons.Filled.QrCode2, R.string.totp_screen_title) {
-                expanded = false
-                onOpenTotp()
+            if (onOpenTotp != null) {
+                MenuAction(Icons.Filled.QrCode2, R.string.totp_screen_title) {
+                    expanded = false
+                    onOpenTotp()
+                }
             }
             MenuAction(Icons.Filled.Delete, R.string.trash_title) {
                 expanded = false
                 onOpenTrash()
-            }
-            MenuAction(Icons.Filled.ViewAgenda, R.string.items_display_options) {
-                expanded = false
-                onDisplayOptions()
             }
             MenuAction(Icons.Filled.Refresh, R.string.items_sync) {
                 expanded = false

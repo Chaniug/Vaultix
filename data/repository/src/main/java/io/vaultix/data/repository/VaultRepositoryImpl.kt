@@ -94,6 +94,20 @@ class VaultRepositoryImpl @Inject constructor(
         }.getOrNull()
     }
 
+    /**
+     * KDBX 快速解锁登记的**暂存凭据**（主密码 + keyfile 的编码，见 [KdbxUnlockPayload]）。
+     *
+     * 为什么需要一个暂存位（2026-09-14 修闪退的核心）：KEK 是 **auth-per-use**，
+     * 只有被 BiometricPrompt 授权的那一个 Cipher 能完成 `doFinal`。而 KDBX 的主密码
+     * 只能在弹指纹之前拿到 ⇒ 校验完先把明文放这里，等指纹成功再 `wrap`。
+     *
+     * 生命周期（**每一个出口都要收尾，否则明文留在内存**）：
+     * - 写入：[prepareKdbxEnroll]（写入前先擦掉上一份）；
+     * - 消费：[commitKdbxEnroll]（包裹成功与否都擦）；
+     * - 丢弃：[discardKdbxEnroll]（用户在指纹框上点了取消）。
+     */
+    private var stagedKdbxPayload: ByteArray? = null
+
     override fun observeVaults(): Flow<List<VaultSummary>> =
         combine(vaultDao.observeAll(), sessions.unlockedIds, kdbxSessions.revisionFlow) { rows, unlocked, _ ->
             rows.map { row ->
@@ -246,27 +260,8 @@ class VaultRepositoryImpl @Inject constructor(
         )
     }
 
-    /**
-     * KDBX 失败 → [UnlockResult] 分类。
-     *
-     * ⚠️ 必须**分类**而不是一律「未知错误」：用户看到「密码错误」与
-     * 「文件读不到了（请重新选择）」时要做的事完全不同（前者重输、后者重选文件并重新授权）。
-     */
-    private fun classifyKdbxError(error: Throwable): UnlockResult {
-        val kind = (error as? KdbxFailure)?.error
-            ?: return UnlockResult.Unknown(error.message)
-        return when (kind) {
-            // 密码 / keyfile 不对 → 与 Bitwarden 的「凭据错误」同一语义（UI 文案通用）
-            is KdbxOpenError.InvalidCredentials -> UnlockResult.InvalidCredentials
-            // 文件读不到：不是凭据问题，提示重新选择文件
-            is KdbxOpenError.SourceUnavailable -> UnlockResult.Unknown(kind.detail)
-            is KdbxOpenError.NotKdbxFile -> UnlockResult.Unknown("该文件不是 KDBX 数据库")
-            is KdbxOpenError.UnsupportedVersion ->
-                UnlockResult.Unknown("不支持的 KDBX 版本 ${kind.version}（请用 KeePass 另存为 3.1 / 4.x）")
-
-            is KdbxOpenError.Unknown -> UnlockResult.Unknown(kind.detail)
-        }
-    }
+    // 注：`classifyKdbxError` 与 `buildFullKey` 是两个纯函数，已移到文件末尾
+    //（见文件级函数说明：类函数数受 detekt `TooManyFunctions` 40 上限约束）。
 
     override suspend fun unlockVaultWithTwoFactor(
         vaultId: String,
@@ -448,6 +443,10 @@ class VaultRepositoryImpl @Inject constructor(
     }
 
     override suspend fun disableLocalUnlock(vaultId: String) {
+        // 顺手丢弃暂存：用户可能刚输完主密码、指纹还没弹就关掉了开关，
+        // 那份明文没有理由再留在内存里等下一次。
+        stagedKdbxPayload?.fill(0)
+        stagedKdbxPayload = null
         credentials.remove(LOCAL_UNLOCK_PREFIX + vaultId)
         preferences.setLocalUnlockEnabled(vaultId, false)
     }
@@ -478,13 +477,6 @@ class VaultRepositoryImpl @Inject constructor(
         }
     }
 
-    /** 会话密钥 → 64B full key（enc ‖ mac）。 */
-    private fun buildFullKey(key: SymmetricCryptoKey): ByteArray {
-        val enc = key.encKey.useBytes { it.copyOf() }
-        val mac = key.macKey.useBytes { it.copyOf() }
-        return enc + mac
-    }
-
     private fun wrappedPayload(vaultId: String): String? =
         credentials.getString(LOCAL_UNLOCK_PREFIX + vaultId)
 
@@ -504,11 +496,10 @@ class VaultRepositoryImpl @Inject constructor(
      * 他刚刚证明了自己能开这个库，把会话留着让他直接用，符合直觉；
      * 也不改变任何安全边界（能开到就能开）。
      */
-    override suspend fun enrollLocalUnlockKdbx(
+    override suspend fun prepareKdbxEnroll(
         vaultId: String,
         masterPassword: String,
         keyFileUri: String?,
-        cipher: Cipher,
     ): KdbxEnrollOutcome = withContext(Dispatchers.IO) {
         val row = vaultDao.get(vaultId)
             ?: return@withContext KdbxEnrollOutcome.Failed("本地不存在该库")
@@ -532,26 +523,41 @@ class VaultRepositoryImpl @Inject constructor(
             }
         }
 
-        // ② 包裹。keyfile 字节**当场从 URI 读出**：只包 URI 不行（URI 授权可能失效，
+        // ② 组装待包裹明文，**暂存**起来等指纹（此刻还不能 wrap，见 [commitKdbxEnroll]）。
+        //    keyfile 字节**当场从 URI 读出**：只包 URI 不行（URI 授权可能失效，
         //    且用户可能在设置里换过 keyfile），必须包内容本身。
         val keyFileBytes = keyFileUri
             ?.takeIf { it.isNotBlank() }
             ?.let { uri -> runCatching { kdbxSource.read(uri) }.getOrNull() }
-        val plaintext = KdbxUnlockPayload.encode(masterPassword, keyFileBytes)
-        // 与 Bitwarden 侧 [enrollLocalUnlock] 同款取向：**不吞异常**。
-        // `wrap` 抛错意味着这个 cipher 根本用不了（认证已过但 Cipher 状态错），
-        // 那是编程/环境错误、不是用户输入问题 —— 吞成「包裹失败」只会掩盖它。
-        // 唯一必须做的收尾是擦掉明文，故用 finally。
-        val wrapped = try {
-            localUnlockKeyStore.wrap(cipher, plaintext)
-        } finally {
-            // 明文凭据用完即擦（含主密码字节）：这是本项目对明文的一贯取向。
-            plaintext.fill(0)
+        // 覆盖上一份前先擦：任何时刻内存里最多只有一份暂存明文。
+        stagedKdbxPayload?.fill(0)
+        stagedKdbxPayload = KdbxUnlockPayload.encode(masterPassword, keyFileBytes)
+        KdbxEnrollOutcome.Prepared
+    }
+
+    override suspend fun commitKdbxEnroll(vaultId: String, cipher: Cipher): Boolean =
+        withContext(Dispatchers.IO) {
+            val plaintext = stagedKdbxPayload ?: return@withContext false
+            // 先取走再处理：无论 wrap 成败，暂存位都不能再指向这份明文。
+            stagedKdbxPayload = null
+            // 与 Bitwarden 侧 [enrollLocalUnlock] 同款取向：**不吞异常**。
+            // `wrap` 抛错意味着这个 cipher 根本用不了（认证已过但 Cipher 状态错），
+            // 那是编程/环境错误、不是用户输入问题 —— 吞成「包裹失败」只会掩盖它。
+            // 唯一必须做的收尾是擦掉明文，故用 finally。
+            val wrapped = try {
+                localUnlockKeyStore.wrap(cipher, plaintext)
+            } finally {
+                // 明文凭据用完即擦（含主密码字节）：这是本项目对明文的一贯取向。
+                plaintext.fill(0)
+            }
+            credentials.putString(LOCAL_UNLOCK_PREFIX + vaultId, wrapped)
+            preferences.setLocalUnlockEnabled(vaultId, true)
+            true
         }
 
-        credentials.putString(LOCAL_UNLOCK_PREFIX + vaultId, wrapped)
-        preferences.setLocalUnlockEnabled(vaultId, true)
-        KdbxEnrollOutcome.Enrolled
+    override suspend fun discardKdbxEnroll() {
+        stagedKdbxPayload?.fill(0)
+        stagedKdbxPayload = null
     }
 
     /**
@@ -658,10 +664,15 @@ class VaultRepositoryImpl @Inject constructor(
             return@withContext PinEnrollOutcome.Failed("该库不是 KDBX 类型")
         }
 
-        // ★ 先校验、后包裹（与 enrollLocalUnlockKdbx 同一条铁律）：
+        // ★ 先校验、后包裹（与 prepareKdbxEnroll 同一条铁律）：
         //   `PinKeyWrapper.wrap` 只负责封字节、不管字节对不对。先包后校会得到
         //   「启用成功、但躺的是错密码」—— 用户要到下次解锁才看到
         //   「PIN 对了却打不开库」，那时已经无从判断是 PIN 错还是密码错。
+        //
+        //   ⚠️ 这里**可以**当场 wrap（与生物识别路径不同）：PIN 的保护器是
+        //   `PinKeyWrapper` + `SecureCredentialStore` 的硬件外层密钥，**不需要系统认证**
+        //   ⇒ 不存在「cipher 还没被授权」的问题。生物识别那侧的 KEK 是 auth-per-use，
+        //   所以必须等 BiometricPrompt 之后再 wrap（2026-09-14 的闪退根因）。
         val verification = unlockKdbxInternal(
             vaultId = vaultId,
             sourceUri = row.origin,
@@ -877,3 +888,42 @@ class VaultRepositoryImpl @Inject constructor(
 
 /** 2FA 提交参数（provider + 验证码）。 */
 private data class TwoFactorAttempt(val provider: Int, val code: String)
+
+/*
+ * ── 下面两个是**文件级**纯函数 ─────────────────────────────────────────────
+ *
+ * 放在类外不是为了省事，而是因为 [VaultRepositoryImpl] 的函数数已卡在 detekt
+ * `TooManyFunctions` 的 40 上限（同类问题见 `.ai/ISSUES.md` #93 时代提取
+ * `PinUnlockStore` 的先例）。这两个函数**不依赖任何实例状态**，本来就是静态工具，
+ * 移到文件作用域语义上更诚实；后续要再加 KDBX 相关方法时，也请优先考虑提取类，
+ * 而不是继续往这个类里堆。
+ */
+
+/** 会话密钥 → 64B full key（enc ‖ mac）。 */
+private fun buildFullKey(key: SymmetricCryptoKey): ByteArray {
+    val enc = key.encKey.useBytes { it.copyOf() }
+    val mac = key.macKey.useBytes { it.copyOf() }
+    return enc + mac
+}
+
+/**
+ * KDBX 失败 → [UnlockResult] 分类。
+ *
+ * ⚠️ 必须**分类**而不是一律「未知错误」：用户看到「密码错误」与
+ * 「文件读不到了（请重新选择）」时要做的事完全不同（前者重输、后者重选文件并重新授权）。
+ */
+private fun classifyKdbxError(error: Throwable): UnlockResult {
+    val kind = (error as? KdbxFailure)?.error
+        ?: return UnlockResult.Unknown(error.message)
+    return when (kind) {
+        // 密码 / keyfile 不对 → 与 Bitwarden 的「凭据错误」同一语义（UI 文案通用）
+        is KdbxOpenError.InvalidCredentials -> UnlockResult.InvalidCredentials
+        // 文件读不到：不是凭据问题，提示重新选择文件
+        is KdbxOpenError.SourceUnavailable -> UnlockResult.Unknown(kind.detail)
+        is KdbxOpenError.NotKdbxFile -> UnlockResult.Unknown("该文件不是 KDBX 数据库")
+        is KdbxOpenError.UnsupportedVersion ->
+            UnlockResult.Unknown("不支持的 KDBX 版本 ${kind.version}（请用 KeePass 另存为 3.1 / 4.x）")
+
+        is KdbxOpenError.Unknown -> UnlockResult.Unknown(kind.detail)
+    }
+}

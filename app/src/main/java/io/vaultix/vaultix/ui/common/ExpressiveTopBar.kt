@@ -87,8 +87,16 @@ private val COLLAPSE_THRESHOLD = 8.dp
 /** 动画时长：与上游一致（200ms；按钮胶囊走 spring）。 */
 private const val ANIM_MS = 200
 
-/** 展开态标题字号（sp）。 */
-private const val TITLE_EXPANDED_SP = 32f
+/**
+ * 展开态标题字号（sp）。
+ *
+ * ⚠️ 2026-09-14 从 **32sp 收到 26sp**（用户反馈「Bitwarden 这个文字和右边 3 个按钮隔太近了」）。
+ * 成因是**同一天的另一处改动**：顶栏动作胶囊从 2 个图标变成 3 个（加了「显示选项」），
+ * 胶囊变宽 ⇒ 标题可用宽度变小 ⇒ 32sp 的库名一路顶到胶囊边上。
+ * 收字号而不是裁字数：库名对用户是「我在看哪个库」的唯一线索（KDBX 侧更是文件名），
+ * 不能靠省略号牺牲它。
+ */
+private const val TITLE_EXPANDED_SP = 26f
 
 /** 收起态标题字号（sp）。 */
 private const val TITLE_COLLAPSED_SP = 16f
@@ -329,8 +337,14 @@ fun VaultixExpressiveTopBar(
     }
 }
 
-/** 顶栏右侧为动作胶囊预留的宽度（避免长标题压到按钮上）。 */
-private val ACTIONS_RESERVE = 144.dp
+/**
+ * 顶栏右侧为动作胶囊预留的宽度（避免长标题压到按钮上）。
+ *
+ * ⚠️ 2026-09-14：`144.dp` → **`156.dp`**。144dp 正好等于「3 个 48dp 触控目标」的宽度
+ * （实测胶囊跨度 504px @3.5x = 144dp），也就是说标题**紧贴**胶囊边缘、两者之间没有任何余量 ——
+ * 用户看到的「隔太近」正是这 0 余量。多出的 12dp 是留给标题与胶囊之间的呼吸位。
+ */
+private val ACTIONS_RESERVE = 156.dp
 
 /** 可点标题的圆角（dp）与箭头尺寸 —— 与 Bastion 的 8dp / 18-22dp 对齐。 */
 private const val TITLE_CLICK_CORNER_DP = 8

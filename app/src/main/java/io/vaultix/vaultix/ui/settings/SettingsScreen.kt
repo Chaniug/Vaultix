@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -45,7 +46,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
@@ -354,9 +354,14 @@ private fun SecuritySection(
         title = stringResource(R.string.setting_screen_security),
         subtitle = stringResource(R.string.setting_screen_security_desc),
         trailing = {
+            // ⚠️ 值未到达（null）时**禁用**开关：布尔开关没有「不确定」的视觉，
+            // 与其拿默认值 true 冒充用户设置（那会先显示「开」再跳到「关」，
+            // 2026-09-14 真机报告），不如短暂禁用 —— 禁用的灰开关传达的是
+            // 「还没准备好」，而不是一个假答案。绝大多数情况下一帧内就到位。
             Switch(
-                checked = state.screenSecurity,
+                checked = state.screenSecurity ?: false,
                 onCheckedChange = viewModel::setScreenSecurity,
+                enabled = state.screenSecurity != null,
             )
         },
     )
@@ -602,7 +607,8 @@ private fun VaultChoiceRow(
 @Composable
 private fun AppearanceSection(
     viewModel: SettingsViewModel,
-    dynamicColor: Boolean,
+    /** null = 偏好尚未读出（见 [SettingsViewModel.UiState.dynamicColor]）。 */
+    dynamicColor: Boolean?,
 ) {
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
     val oledPureBlack by viewModel.oledPureBlack.collectAsStateWithLifecycle()
@@ -632,9 +638,11 @@ private fun AppearanceSection(
         title = stringResource(R.string.setting_dynamic_color),
         subtitle = stringResource(R.string.setting_dynamic_color_desc),
         trailing = {
+            // 同「防截屏」：值未到达时禁用，不用默认值冒充用户设置
             Switch(
-                checked = dynamicColor,
+                checked = dynamicColor ?: false,
                 onCheckedChange = viewModel::setDynamicColor,
+                enabled = dynamicColor != null,
             )
         },
     )
@@ -838,7 +846,10 @@ private fun QuickUnlockEnrollEffect(
                         title = enrollTitle,
                         cancelText = cancelText,
                         onSuccess = { cipher -> viewModel.enrollWithCipher(event.vaultId, cipher) },
-                        onError = { _, _, _ -> /* 取消/失败：维持「未启用」，可再试 */ },
+                        // 取消/失败：维持「未启用」，可再试。
+                        // ⚠️ 顺手丢弃 KDBX 的暂存凭据 —— 指纹没弹成，那份主密码明文
+                        // 就没有理由继续留在内存里（Bitwarden 侧无暂存，是空操作）。
+                        onError = { _, _, _ -> viewModel.discardPendingKdbxEnroll() },
                     )
                 }
                 is SettingsViewModel.Event.PromptForKdbxPassword -> {
@@ -881,7 +892,9 @@ private fun QuickUnlockManageDialog(
             if (vaults.isEmpty()) {
                 Text(stringResource(R.string.quick_unlock_manage_none))
             } else {
-                Column {
+                // ⚠️ 必须可滚动：本对话框纵向内容随库数增长（每库 2 行 + 两段说明），
+                // 不可滚动时底部会被屏幕截断，用户既看不到也点不到最后一项。
+                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                     Text(
                         text = stringResource(R.string.quick_unlock_scope_hint),
                         style = MaterialTheme.typography.bodySmall,
@@ -927,10 +940,41 @@ private fun QuickUnlockManageDialog(
 }
 
 /**
- * 单个库的「快速解锁」行（从 [QuickUnlockManageDialog] 抽出）。
+ * 单个库的一行解锁手段（[QuickUnlockRow] / [PinRow] 共用的骨架）。
  *
- * 抽出来的直接原因是不让对话框越过 detekt `LongMethod`；但更重要的理由是
- * 一个库的两种解锁手段本来就该各占一行、各自可读。
+ * ⚠️ **不要退回 `ListItem` + `trailingContent`**：对话框的可用宽度本来就窄，
+ * 而这里每行最多有两个动作按钮（如「关闭 PIN 解锁」+「修改 PIN」）。
+ * 两者挤在同一行时，正文会被压成多行并与按钮**叠在一起**（2026-09-14 真机报告
+ * 「文字叠加、UI 错乱」）。改成「正文在上、动作右对齐换行在下」后，
+ * 无论按钮多宽都不可能压到文字 —— 纵向增长是**可见且可读**的失败方式。
+ */
+@Composable
+private fun UnlockOptionRow(
+    title: String,
+    summary: String,
+    actions: @Composable RowScope.() -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+        Text(text = title, style = MaterialTheme.typography.bodyLarge)
+        Text(
+            text = summary,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically,
+            content = actions,
+        )
+    }
+}
+
+/**
+ * 单个库的「快速解锁」行。
+ *
+ * 一个库的两种解锁手段本来就该各占一行、各自可读（指纹 / 应用内 PIN 是**两条独立**
+ * 的路径，挤在同一行会让人以为是一个开关的两个档位）。
  */
 @Composable
 private fun QuickUnlockRow(
@@ -939,41 +983,36 @@ private fun QuickUnlockRow(
     onEnable: (String) -> Unit,
     onDisable: (String) -> Unit,
 ) {
-    ListItem(
-        headlineContent = { Text(vault.name) },
-        supportingContent = {
-            Text(
-                if (vault.enabled) {
-                    stringResource(R.string.quick_unlock_enabled)
-                } else {
-                    // 仅当设备确实支持认证时才提示「可启用」，
-                    // 否则维持原「未启用」说明，避免给出无法完成的指引
-                    if (canAuthenticate) {
-                        stringResource(
-                            if (vault.kind == VaultKind.KDBX) {
-                                R.string.quick_unlock_disabled_kdbx
-                            } else {
-                                R.string.quick_unlock_disabled
-                            },
-                        )
+    UnlockOptionRow(
+        title = vault.name,
+        summary = if (vault.enabled) {
+            stringResource(R.string.quick_unlock_enabled)
+        } else {
+            // 仅当设备确实支持认证时才提示「可启用」，
+            // 否则维持原「未启用」说明，避免给出无法完成的指引
+            if (canAuthenticate) {
+                stringResource(
+                    if (vault.kind == VaultKind.KDBX) {
+                        R.string.quick_unlock_disabled_kdbx
                     } else {
-                        stringResource(R.string.quick_unlock_device_unsupported)
-                    }
-                },
-            )
-        },
-        trailingContent = {
-            if (vault.enabled) {
-                TextButton(onClick = { onDisable(vault.vaultId) }) {
-                    Text(stringResource(R.string.quick_unlock_disable))
-                }
-            } else if (canAuthenticate) {
-                TextButton(onClick = { onEnable(vault.vaultId) }) {
-                    Text(stringResource(R.string.quick_unlock_enable))
-                }
+                        R.string.quick_unlock_disabled
+                    },
+                )
+            } else {
+                stringResource(R.string.quick_unlock_device_unsupported)
             }
         },
-    )
+    ) {
+        if (vault.enabled) {
+            TextButton(onClick = { onDisable(vault.vaultId) }) {
+                Text(stringResource(R.string.quick_unlock_disable))
+            }
+        } else if (canAuthenticate) {
+            TextButton(onClick = { onEnable(vault.vaultId) }) {
+                Text(stringResource(R.string.quick_unlock_enable))
+            }
+        }
+    }
 }
 
 /**
@@ -989,32 +1028,27 @@ private fun PinRow(
     onSet: (SettingsViewModel.QuickUnlockVaultUi) -> Unit,
     onPinDisable: (String) -> Unit,
 ) {
-    ListItem(
-        headlineContent = { Text(vault.name) },
-        supportingContent = {
+    UnlockOptionRow(
+        title = vault.name,
+        summary = if (vault.pinEnabled) {
+            stringResource(R.string.pin_enabled_summary, PIN_MIN_LENGTH)
+        } else {
+            stringResource(R.string.pin_disabled_summary)
+        },
+    ) {
+        if (vault.pinEnabled) {
+            TextButton(onClick = { onPinDisable(vault.vaultId) }) {
+                Text(stringResource(R.string.pin_disable))
+            }
+        }
+        TextButton(onClick = { onSet(vault) }) {
             Text(
-                if (vault.pinEnabled) {
-                    stringResource(R.string.pin_enabled_summary, PIN_MIN_LENGTH)
-                } else {
-                    stringResource(R.string.pin_disabled_summary)
-                },
+                stringResource(
+                    if (vault.pinEnabled) R.string.pin_change else R.string.pin_enable,
+                ),
             )
-        },
-        trailingContent = {
-            if (vault.pinEnabled) {
-                TextButton(onClick = { onPinDisable(vault.vaultId) }) {
-                    Text(stringResource(R.string.pin_disable))
-                }
-            }
-            TextButton(onClick = { onSet(vault) }) {
-                Text(
-                    stringResource(
-                        if (vault.pinEnabled) R.string.pin_change else R.string.pin_enable,
-                    ),
-                )
-            }
-        },
-    )
+        }
+    }
 }
 
 /**

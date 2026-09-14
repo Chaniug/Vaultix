@@ -2,6 +2,7 @@ package io.vaultix.vaultix.ui.addvault
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -9,23 +10,28 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -143,8 +149,11 @@ private fun VaultConnectForm(
             .verticalScroll(rememberScrollState())
             .imePadding()
             .padding(horizontal = 24.dp),
-        verticalArrangement = Arrangement.Center,
+        // ⚠️ **顶部对齐**（原为 `Arrangement.Center`）：居中会把整块表单顶到屏幕中间，
+        // 上下各留一大片空白 —— 用户 2026-09-14 反馈「上下的空白区域太多了」。
+        verticalArrangement = Arrangement.Top,
     ) {
+        Spacer(Modifier.height(8.dp))
         Text(
             text = stringResource(R.string.add_vault_subtitle),
             style = MaterialTheme.typography.bodyMedium,
@@ -152,19 +161,9 @@ private fun VaultConnectForm(
         )
         Spacer(Modifier.height(20.dp))
 
-        OutlinedTextField(
-            value = state.server,
-            onValueChange = viewModel::onServerChange,
-            label = { Text(stringResource(R.string.add_vault_server)) },
-            placeholder = { Text(stringResource(R.string.add_vault_server_hint)) },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(
-                keyboardType = KeyboardType.Uri,
-                imeAction = ImeAction.Next,
-            ),
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Spacer(Modifier.height(8.dp))
+        ServerRegionPicker(state = state, viewModel = viewModel)
+        Spacer(Modifier.height(20.dp))
+
         OutlinedTextField(
             value = state.email,
             onValueChange = viewModel::onEmailChange,
@@ -257,4 +256,104 @@ private fun VaultConnectForm(
         }
         Spacer(Modifier.height(32.dp))
     }
+}
+
+/**
+ * 服务器区域选择 + 地址展示。
+ *
+ * 为什么不是「一个预填好的地址输入框」（2026-09-14 用户反馈）：
+ * 官方地址很长，预填之后用户想改就得**一个字符一个字符地删**；而官方区域其实只有
+ * 两个（美国 / 欧盟），完全可以给成选项。现在：
+ * - 选官方区域 ⇒ 地址由程序给出，**只读展示**（用户不需要碰它）；
+ * - 选自托管 ⇒ 输入框**清空**（见 `AddVaultViewModel.selectRegion`），提示 `https://你的域名`。
+ *
+ * ⚠️ 美国区与欧盟区是**彼此独立的两套环境**，账号不通用 —— 文案里点明地区，
+ * 避免用户在欧盟区地址上输美国区账号后得到一个「账号不存在」的困惑。
+ */
+@Composable
+private fun ServerRegionPicker(
+    state: AddVaultViewModel.UiState,
+    viewModel: AddVaultViewModel,
+) {
+    Text(
+        text = stringResource(R.string.add_vault_region),
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Spacer(Modifier.height(8.dp))
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        AddVaultViewModel.ServerRegion.entries.forEach { region ->
+            FilterChip(
+                selected = state.region == region,
+                onClick = { viewModel.selectRegion(region) },
+                label = { Text(stringResource(region.labelRes())) },
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+    Spacer(Modifier.height(12.dp))
+    val officialUrl = state.region.url
+    if (officialUrl == null) {
+        OutlinedTextField(
+            value = state.server,
+            onValueChange = viewModel::onServerChange,
+            label = { Text(stringResource(R.string.add_vault_server)) },
+            placeholder = { Text(stringResource(R.string.add_vault_self_hint)) },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Uri,
+                imeAction = ImeAction.Next,
+            ),
+            modifier = Modifier.fillMaxWidth(),
+        )
+    } else {
+        OfficialServerRow(url = officialUrl)
+    }
+}
+
+/** 官方地址的**只读**展示（刻意不是输入框：它没有可编辑的语义）。 */
+@Composable
+private fun OfficialServerRow(url: String) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Cloud,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp),
+            )
+            Spacer(Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(R.string.add_vault_server),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(text = url, style = MaterialTheme.typography.bodyMedium)
+            }
+            Text(
+                text = stringResource(R.string.add_vault_official_badge),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+    }
+}
+
+/** 区域 → 显示名（`when` 写在这里而不是枚举里：枚举不持有 Android 资源）。 */
+@Composable
+private fun AddVaultViewModel.ServerRegion.labelRes(): Int = when (this) {
+    AddVaultViewModel.ServerRegion.US -> R.string.add_vault_region_us
+    AddVaultViewModel.ServerRegion.EU -> R.string.add_vault_region_eu
+    AddVaultViewModel.ServerRegion.SELF_HOSTED -> R.string.add_vault_region_self
 }

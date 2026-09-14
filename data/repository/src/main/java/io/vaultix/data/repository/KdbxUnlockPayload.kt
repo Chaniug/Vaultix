@@ -43,7 +43,7 @@ import java.nio.charset.StandardCharsets
  *
  * ⚠️ 本类只负责「字节 ↔ 结构」，**不负责加密**（包裹/解包由
  * `LocalUnlockKeyStore.wrap/unwrap` 完成），也不负责校验凭据是否正确
- * （那必须真的解一次库，见 [VaultRepositoryImpl.enrollLocalUnlockKdbx]）。
+ * （那必须真的解一次库，见 [VaultRepositoryImpl.prepareKdbxEnroll]）。
  */
 internal object KdbxUnlockPayload {
 

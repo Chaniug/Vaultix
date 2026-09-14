@@ -11,8 +11,13 @@
 
     <!-- 库列表 S3 -->
     <string name="vault_list_title">我的密码库</string>
-    <string name="vault_list_empty_title">还没有密码库</string>
-    <string name="vault_list_empty_body">连接 Bitwarden 账号，把密码带到手机里</string>
+    <!--
+      空态页（首次启动）：标题用**应用名**而不是「还没有密码库」——
+      用户 2026-09-14 反馈「能不能换成软件的名字」：首次打开应该先亮明「这是谁」，
+      而不是一句问题陈述。
+    -->
+    <string name="vault_list_empty_tagline">一个 App，管好云端与本地两个密码库</string>
+    <string name="vault_list_empty_hint">两个入口不分主次，接入成功后可在设置页随时添加另一个。</string>
     <string name="vault_connect_bitwarden">连接 Bitwarden</string>
     <string name="vault_open_kdbx">打开 KDBX 文件</string>
     <string name="vault_add_type_hint">选择库类型：云端同步（Bitwarden）或本地文件（KeePass KDBX）</string>
@@ -56,6 +61,17 @@
     <string name="add_vault_subtitle">输入你的 Bitwarden 账号（自托管可选）</string>
     <string name="add_vault_server">服务器地址</string>
     <string name="add_vault_server_hint">https://vault.bitwarden.com</string>
+    <!--
+      服务器区域选择（2026-09-14）：官方区域直接给选项，用户不必删改预填的 URL。
+      美国区 / 欧盟区是**彼此独立的两套环境**（账号不通用），故文案里点明地区。
+    -->
+    <string name="add_vault_region">服务器区域</string>
+    <string name="add_vault_region_us">美国 · 官方</string>
+    <string name="add_vault_region_eu">欧盟 · 官方</string>
+    <string name="add_vault_region_self">自托管</string>
+    <string name="add_vault_official_badge">官方</string>
+    <string name="add_vault_official_hint">官方云端地址固定，无需修改</string>
+    <string name="add_vault_self_hint">https://你的域名</string>
     <string name="add_vault_email">邮箱</string>
     <string name="add_vault_password">主密码</string>
     <string name="add_vault_password_visible">显示密码</string>

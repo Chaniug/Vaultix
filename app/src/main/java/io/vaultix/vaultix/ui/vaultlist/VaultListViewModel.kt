@@ -139,22 +139,26 @@ class VaultListViewModel @Inject constructor(
     }
 
     /**
-     * KDBX 横幅启用：收到主密码 → **先校验后包裹** → 再请 UI 弹指纹。
+     * KDBX 横幅启用：收到主密码 → **先校验暂存 → 弹指纹 → 认证过了才包裹**。
      *
-     * 与设置页同一条路径（[SettingsViewModel.confirmKdbxPassword]），
-     * 保证「宽松重试」语义一致：输错只报错、不关框。
+     * 与设置页同一条路径（[SettingsViewModel.confirmKdbxPassword]），保证两侧语义一致：
+     * 「宽松重试」（输错只报错、不关框）与「认证顺序」（KEK 是 auth-per-use，
+     * wrap 必须在 BiometricPrompt 之后）都不是可选细节。
      */
     fun confirmKdbxPassword(vaultId: String, password: String) {
         viewModelScope.launch {
             val keyFileUri = runCatching { preferences.kdbxKeyFileUri(vaultId).first() }.getOrNull()
-            val cipher = vaultRepository.prepareLocalEnroll()
-            if (cipher == null) {
-                _events.emit(Event.KdbxPasswordRejected(null))
-                return@launch
-            }
-            val outcome = vaultRepository.enrollLocalUnlockKdbx(vaultId, password, keyFileUri, cipher)
+            val outcome = vaultRepository.prepareKdbxEnroll(vaultId, password, keyFileUri)
             when (outcome) {
-                is KdbxEnrollOutcome.Enrolled -> _events.emit(Event.PromptForEnroll(vaultId, cipher))
+                is KdbxEnrollOutcome.Prepared -> {
+                    val cipher = vaultRepository.prepareLocalEnroll()
+                    if (cipher == null) {
+                        vaultRepository.discardKdbxEnroll()
+                        _events.emit(Event.KdbxPasswordRejected(null))
+                        return@launch
+                    }
+                    _events.emit(Event.PromptForEnroll(vaultId, cipher))
+                }
                 is KdbxEnrollOutcome.InvalidCredentials ->
                     _events.emit(Event.KdbxPasswordRejected(null))
                 is KdbxEnrollOutcome.SourceUnavailable ->
@@ -165,12 +169,32 @@ class VaultListViewModel @Inject constructor(
         }
     }
 
-    /** BiometricPrompt 认证通过：包裹当前会话密钥并落盘。 */
+    /**
+     * BiometricPrompt 认证通过：包裹并落盘。
+     *
+     * ⚠️ 必须按库类型分流（旧实现一律走 `enrollLocalUnlock` ⇒ KDBX 的
+     * `sessions.keyOf()` 恒为 null ⇒ 指纹按了、也过了，**却什么都没包上**）。
+     */
     fun enrollWithCipher(vaultId: String, cipher: Cipher) {
         viewModelScope.launch {
-            vaultRepository.enrollLocalUnlock(vaultId, cipher)
+            if (isKdbxVault(vaultId)) {
+                vaultRepository.commitKdbxEnroll(vaultId, cipher)
+            } else {
+                vaultRepository.enrollLocalUnlock(vaultId, cipher)
+            }
         }
     }
+
+    /** 认证被取消 / 被系统终止：丢弃 KDBX 暂存的凭据明文（Bitwarden 侧为空操作）。 */
+    fun discardPendingKdbxEnroll() {
+        viewModelScope.launch { vaultRepository.discardKdbxEnroll() }
+    }
+
+    /** 该库是否为 KDBX（以库表为准；UI 侧快照可能尚未到达）。 */
+    private suspend fun isKdbxVault(vaultId: String): Boolean =
+        vaultRepository.observeVaults().first()
+            .firstOrNull { it.id == vaultId }
+            ?.kind == VaultKind.KDBX
 
     private companion object {
         const val STOP_TIMEOUT_MS = 5_000L

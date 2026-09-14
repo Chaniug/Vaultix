@@ -56,8 +56,17 @@ class SettingsViewModel @Inject constructor(
     data class UiState(
         val vaultTimeout: VaultTimeout = VaultTimeout.DEFAULT,
         val clipboardClearMs: Long = 30_000L,
-        val dynamicColor: Boolean = true,
-        val screenSecurity: Boolean = true,
+        /**
+         * 动态取色 / 防截屏。
+         *
+         * ⚠️ **可空，null = 偏好还没从磁盘读出来**（`.ai/ISSUES.md` #84「三种空」）。
+         * 为什么不能给个默认布尔值顶上：这两个值驱动的是**开关**，而默认值
+         * （true）只是「键不存在时的兜底」，不是用户的设置 —— 拿它渲染第一帧，
+         * 用户会看到开关**先开后关**（2026-09-14 真机报告：进 App 后立刻点设置，
+         * 防截屏从开启突然变成关闭）。「不确定」必须与「是/否」区分开。
+         */
+        val dynamicColor: Boolean? = null,
+        val screenSecurity: Boolean? = null,
     )
 
     /**
@@ -395,10 +404,45 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    /** BiometricPrompt 认证通过：用本次 cipher 包裹当前会话密钥并落盘。 */
+    /**
+     * BiometricPrompt 认证通过：用本次 cipher 包裹并落盘。
+     *
+     * ⚠️ **必须按库类型分流**（与 `AutofillActivity.completeLocalUnlockByKind` 同一条纪律）：
+     * Bitwarden 包的是「会话里的对称密钥」，KDBX 包的是校验阶段暂存的「主密码 + keyfile」。
+     * 混走的后果不是报错而是**静默失效** —— KDBX 走 Bitwarden 那条路时
+     * `sessions.keyOf()` 恒为 null，于是「指纹按了、也过了，但什么都没包上」。
+     * （这正是 2026-09-14 之前横幅路径埋着的隐患：它永远把成功回调接到 Bitwarden 收尾上。）
+     */
     fun enrollWithCipher(vaultId: String, cipher: Cipher) {
-        viewModelScope.launch { vaultRepository.enrollLocalUnlock(vaultId, cipher) }
+        viewModelScope.launch {
+            if (isKdbxVault(vaultId)) {
+                vaultRepository.commitKdbxEnroll(vaultId, cipher)
+            } else {
+                vaultRepository.enrollLocalUnlock(vaultId, cipher)
+            }
+        }
     }
+
+    /**
+     * 认证被用户取消 / 被系统终止：丢弃 KDBX 的暂存凭据。
+     *
+     * 从**库类型**上判断即可，不必知道这次弹的是哪条流程 —— Bitwarden 侧没有暂存，
+     * 这个调用对它是空操作。反过来（该丢不丢）的代价是主密码明文在单例里多留一会儿。
+     *
+     * ⚠️ 同时把 [KdbxEnrollState] 归零：`Ready` 会经 `busy` 把**下一次**的「启用」
+     * 按钮按死（密码框的确认键被禁用），而用户根本不知道自己在等什么。
+     * 「这次没成」就该整条流程回到起点。
+     */
+    fun discardPendingKdbxEnroll() {
+        _kdbxEnrollState.value = KdbxEnrollState.Idle
+        viewModelScope.launch { vaultRepository.discardKdbxEnroll() }
+    }
+
+    /** 该库是否为 KDBX（认证后的收尾要按类型分流；以库表为准，不信 UI 侧的快照）。 */
+    private suspend fun isKdbxVault(vaultId: String): Boolean =
+        vaultRepository.observeVaults().first()
+            .firstOrNull { it.id == vaultId }
+            ?.kind == VaultKind.KDBX
 
     // ---- KDBX 快速解锁（`.ai/ISSUES.md` #93 / 定稿 §4）----
 
@@ -417,26 +461,40 @@ class SettingsViewModel @Inject constructor(
     }
 
     /**
-     * 用户提交 KDBX 主密码：**先校验、后包裹**。
+     * 用户提交 KDBX 主密码：**先校验 → 再弹指纹 → 指纹过了才包裹**。
+     *
+     * ⚠️ 这个顺序是**硬约束**，2026-09-14 修闪退时定下来的（KDBX 启用生物快解会直接崩溃）：
+     * 快解的保护器 KEK 是 **auth-per-use**（`setUserAuthenticationParameters(0, …)`），
+     * 只有**被 BiometricPrompt 授权过的那一个 Cipher 实例**才能 `doFinal`。
+     * 旧实现把 `wrap` 放在了弹指纹**之前** ⇒ `doFinal` 抛
+     * `UserNotAuthenticatedException` ⇒ `viewModelScope` 协程无人捕获 ⇒ **进程闪退**。
+     *
+     * 拆成 [VaultRepository.prepareKdbxEnroll]（校验 + 组装明文暂存）与
+     * [VaultRepository.commitKdbxEnroll]（认证后包裹）两步之后，顺序天然正确；
+     * PIN 之所以一直没崩，是因为它走 `PinKeyWrapper`（保护器是不需要系统认证的
+     * `SecureCredentialStore` 硬件密钥），**不碰这把 KEK**。
      *
      * 「宽松」取向（定稿 §4.4）的落地：输错时**不发关闭事件**，只回一条错误状态，
      * 输入框留在原地让用户直接重输 —— 不掉出流程、不用重新点一遍勾选。
-     *
-     * 校验成功后才创建 ENCRYPT cipher 并请 UI 弹 BiometricPrompt（与 Bitwarden
-     * 侧同一条收尾路径）；用户取消指纹时不会留下半成品（cipher 未用即弃）。
      */
     fun confirmKdbxPassword(vaultId: String, password: String) {
         viewModelScope.launch {
             val keyFileUri = runCatching { preferences.kdbxKeyFileUri(vaultId).first() }.getOrNull()
-            val cipher = vaultRepository.prepareLocalEnroll()
-                ?: return@launch _kdbxEnrollState.emit(KdbxEnrollState.Unavailable)
-            when (val outcome = vaultRepository.enrollLocalUnlockKdbx(vaultId, password, keyFileUri, cipher)) {
-                is KdbxEnrollOutcome.Enrolled -> {
+            when (val outcome = vaultRepository.prepareKdbxEnroll(vaultId, password, keyFileUri)) {
+                is KdbxEnrollOutcome.Prepared -> {
+                    // 校验通过才创建 cipher（反过来会在密码错时也造一把用不上的 cipher）。
+                    val cipher = vaultRepository.prepareLocalEnroll()
+                    if (cipher == null) {
+                        // 设备无可用认证方式 ⇒ 暂存凭据失去意义，立刻丢弃
+                        vaultRepository.discardKdbxEnroll()
+                        _kdbxEnrollState.emit(KdbxEnrollState.Unavailable)
+                        return@launch
+                    }
                     _kdbxEnrollState.emit(KdbxEnrollState.Ready)
                     _events.send(Event.PromptForEnroll(vaultId, cipher))
                 }
                 is KdbxEnrollOutcome.InvalidCredentials ->
-                    // ★ 宽松：只报错，不关框
+                    // ★ 宽松：只报错，不关框（也没有任何东西被暂存）
                     _kdbxEnrollState.emit(KdbxEnrollState.WrongPassword)
                 is KdbxEnrollOutcome.SourceUnavailable ->
                     _kdbxEnrollState.emit(KdbxEnrollState.Failed(outcome.detail))

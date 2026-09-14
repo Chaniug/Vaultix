@@ -543,10 +543,20 @@ private fun UnlockInputSection(
 }
 
 /** PIN 圆点直径。 */
-private val PIN_DOT_SIZE = 14.dp
+private val PIN_DOT_SIZE = 16.dp
 
-/** 单个按键直径。64dp 远大于 Material 的 48dp 最小可点区域，戴手套/湿手也按得准。 */
-private val PIN_KEY_SIZE = 64.dp
+/**
+ * 单个按键直径。
+ *
+ * 2026-09-14 用户反馈「数字键盘好小好集中」⇒ 从 64dp 放大到 **76dp**，
+ * 并把每行从 `Arrangement.Center` 改成 `SpaceEvenly`：
+ * 三键 192dp 居中摆在 360dp 宽的屏幕上，两侧各留下 84dp 死白，
+ * 读起来就是「挤在中间的一小坨」。空间均分后键盘撑满可用宽度、按起来也更容易。
+ */
+private val PIN_KEY_SIZE = 76.dp
+
+/** 相邻两排按键的垂直间距（同理：不留缝会读成"一坨"）。 */
+private val PIN_KEY_GAP = 8.dp
 
 /** 数字键布局（3 行 9 键）；第 4 行「空 + 0 + 退格」在 [PinPad] 里单独拼。 */
 private val PIN_DIGIT_ROWS = listOf(
@@ -586,8 +596,13 @@ private fun PinPad(state: UnlockViewModel.UiState, viewModel: UnlockViewModel) {
             )
         }
         Spacer(Modifier.height(20.dp))
+        // ⚠️ `SpaceEvenly` + `fillMaxWidth`：让键盘**撑满**可用宽度。
+        // 用 `Center` 会把三键挤在正中间（用户实机反馈「太小、太集中」）。
         PIN_DIGIT_ROWS.forEach { row ->
-            Row(horizontalArrangement = Arrangement.Center, modifier = Modifier.fillMaxWidth()) {
+            Row(
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                modifier = Modifier.fillMaxWidth().padding(vertical = PIN_KEY_GAP / 2),
+            ) {
                 row.forEach { digit ->
                     PinKey(
                         label = digit,
@@ -597,7 +612,10 @@ private fun PinPad(state: UnlockViewModel.UiState, viewModel: UnlockViewModel) {
                 }
             }
         }
-        Row(horizontalArrangement = Arrangement.Center, modifier = Modifier.fillMaxWidth()) {
+        Row(
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            modifier = Modifier.fillMaxWidth().padding(vertical = PIN_KEY_GAP / 2),
+        ) {
             // 左下留空：让 0 居中、退格落右，与系统拨号盘同款布局
             Spacer(Modifier.size(PIN_KEY_SIZE))
             PinKey(

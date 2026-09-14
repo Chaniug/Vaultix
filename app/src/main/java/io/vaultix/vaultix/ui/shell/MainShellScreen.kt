@@ -189,7 +189,8 @@ fun MainShellScreen(
                             onLocked = onLocked,
                             onOpenTrash = onOpenTrash,
                             onOpenItem = onOpenItem,
-                            onOpenTotp = { currentTab = VaultixNavItem.Authenticator },
+                            // 不传 onOpenTotp：底部导航已有「验证码」页签，
+                            // 再在 ⋮ 里放一个重复入口只会让菜单多一项（用户 2026-09-14 要求）。
                             bottomInset = bottomInset,
                             onSwitchVault = onSwitchVault,
                         )

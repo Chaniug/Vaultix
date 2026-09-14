@@ -35,8 +35,38 @@ class AddVaultViewModel @Inject constructor(
         val provider: Int,
     )
 
+    /**
+     * Bitwarden 服务器区域。
+     *
+     * 引入它的原因（2026-09-14 用户反馈）：「服务器地址居然是预先填好的，我还要一步一步
+     * 删除，而且没有官方地址的内容，比如美国服务器、欧洲服务器的地址」。
+     *
+     * ⇒ 直接把官方**区域**摆成选项，选官方区域时地址由我们给出（且只读展示），
+     * 用户不必删也不必改；只有自托管才需要自己输入。
+     *
+     * @param url 官方地址；null = 自托管（地址由用户输入）。
+     */
+    enum class ServerRegion(val url: String?) {
+        /** Bitwarden 官方美国区（官方文档：官方 web app 地址之一）。 */
+        US("https://vault.bitwarden.com"),
+
+        /** Bitwarden 官方欧盟区（2023 年起与美国区**是彼此独立的两套环境**，账号不通用）。 */
+        EU("https://vault.bitwarden.eu"),
+
+        /** 自托管（Vaultwarden / 官方自建）。 */
+        SELF_HOSTED(null),
+    }
+
     data class UiState(
-        val server: String = DEFAULT_SERVER,
+        /**
+         * 服务器地址。
+         *
+         * ⚠️ 由 [region] 驱动，**不是**一个让用户去删的预填值：
+         * 选 US / EU 时它就是官方地址（界面只读展示），选 [ServerRegion.SELF_HOSTED]
+         * 时被**清空**（否则上一个区域的地址会留在框里，用户又得先删掉它）。
+         */
+        val server: String = ServerRegion.US.url.orEmpty(),
+        val region: ServerRegion = ServerRegion.US,
         val email: String = "",
         val password: String = "",
         val passwordVisible: Boolean = false,
@@ -55,7 +85,17 @@ class AddVaultViewModel @Inject constructor(
     private val _events = Channel<Event>(Channel.BUFFERED)
     val events = _events.receiveAsFlow()
 
-    fun onServerChange(value: String) = _state.update { it.copy(server = value) }
+    /**
+     * 切换服务器区域。
+     *
+     * ⚠️ 切到自托管时**必须清空**地址：留着上一个区域的官方 URL 会让用户以为
+     * 「自托管也是填好的」，接着他会去删它 —— 那正是用户抱怨的那个多余动作。
+     */
+    fun selectRegion(region: ServerRegion) = _state.update {
+        it.copy(region = region, server = region.url.orEmpty(), error = null)
+    }
+
+    fun onServerChange(value: String) = _state.update { it.copy(server = value, error = null) }
     fun onEmailChange(value: String) = _state.update { it.copy(email = value, error = null) }
     fun onPasswordChange(value: String) = _state.update { it.copy(password = value, error = null) }
     fun onPasswordVisibleChange(visible: Boolean) =
@@ -161,7 +201,7 @@ class AddVaultViewModel @Inject constructor(
         }
     }
 
-    companion object {
-        const val DEFAULT_SERVER = "https://vault.bitwarden.com"
-    }
+    // 注：原 `DEFAULT_SERVER` 常量已删除 —— 官方地址现在**只**存在于
+    // [ServerRegion.US].url / [ServerRegion.EU].url，避免「两个地方各有一份地址」
+    // 然后在某次改动里漂移（用户看到的区域名与真正连的服务器不一致）。
 }

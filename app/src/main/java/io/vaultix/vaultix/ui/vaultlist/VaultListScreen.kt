@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -19,9 +20,11 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
@@ -32,7 +35,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeTopAppBar
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -50,11 +52,14 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -112,7 +117,8 @@ fun VaultListScreen(
                         title = enrollTitle,
                         cancelText = cancelText,
                         onSuccess = { cipher -> viewModel.enrollWithCipher(event.vaultId, cipher) },
-                        onError = { _, _, _ -> /* 取消/失败：横幅保留，可再试 */ },
+                        // 取消/失败：横幅保留，可再试；同时丢弃 KDBX 的暂存凭据明文。
+                        onError = { _, _, _ -> viewModel.discardPendingKdbxEnroll() },
                     )
                 }
                 is VaultListViewModel.Event.PromptForKdbxPassword ->
@@ -149,8 +155,14 @@ fun VaultListScreen(
         floatingActionButton = {
             // 「+」= 添加库：Bitwarden 云端 或 本地 KDBX 文件（两种库类型二选一，
             // 与产品定义「登录时二选一」一致）。offline 分发只保留 KDBX。
-            FloatingActionButton(onClick = { showAddDialog = true }) {
-                Icon(Icons.Filled.Add, contentDescription = stringResource(R.string.vault_add_fab))
+            //
+            // ⚠️ **空态时不显示**（2026-09-14 用户反馈「加号按钮有点多余吧」）：
+            // 空库时页面上正中央就是两个接入按钮，右下角再来一个「+」既重复又把
+            // 首启页面的仪式感打散（底部浮着一个圆钮，像没做完的页面）。
+            if (vaults.isNotEmpty()) {
+                FloatingActionButton(onClick = { showAddDialog = true }) {
+                    Icon(Icons.Filled.Add, contentDescription = stringResource(R.string.vault_add_fab))
+                }
             }
         },
     ) { padding ->
@@ -324,35 +336,128 @@ private fun QuickUnlockBanner(
     }
 }
 
+/**
+ * 空态（首次启动 / 已移除全部库）：**品牌页**，不是一句「还没有密码库」。
+ *
+ * 2026-09-14 用户逐条提出的四点，这里是它们的落地：
+ * 1. 「空白区域太多了，第一次启动的仪式感太差」⇒ 顶部补品牌块（图标 + 应用名 + 定位），
+ *    底部补一句说明，中间是两个大按钮，纵向自然铺开而不是中段一小坨；
+ * 2. 「能不能换成软件的名字」⇒ 主标题取 `app_name`（Vaultix），
+ *    不再用「还没有密码库」这种**状态陈述**当标题 —— 首启页该先告诉用户「这是谁」；
+ * 3. 「做成两个方形的按钮，颜色不同：Bitwarden 亮蓝色，KDBX 金色」⇒ 两个**等宽等高的
+ *    品牌色按钮**，各自带一行说明（云端同步 / 本地离线）；
+ * 4. 加号按钮（FAB）在空态隐藏，理由见 `VaultListScreen` 的 `floatingActionButton`。
+ *
+ * ⚠️ 两个按钮**等权重**是有意的：定稿 §1① 明确「Bitwarden 与 KDBX 地位完全平等」，
+ * 所以不能像以前那样「一个实心 Button + 一个 OutlinedButton」（那在视觉上把 KDBX
+ * 降级成了次要选项）。区分靠**颜色语义**（蓝 = 云端 / 金 = 本地实体文件）。
+ *
+ * ⚠️ 这是全项目**少数几处刻意不用动态取色**的地方：品牌按钮若跟着壁纸变色，
+ * 「蓝 = Bitwarden / 金 = KDBX」这套识别就废了。其余 UI 一律走 Material You。
+ */
 @Composable
 private fun EmptyVaultState(onConnectBitwarden: () -> Unit, onOpenKdbx: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 32.dp),
+            .padding(horizontal = 28.dp),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text(
-            text = stringResource(R.string.vault_list_empty_title),
-            style = MaterialTheme.typography.titleLarge,
+        Icon(
+            painter = painterResource(R.drawable.ic_autofill_vaultix),
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(72.dp),
         )
+        Spacer(Modifier.height(16.dp))
         Text(
-            text = stringResource(R.string.vault_list_empty_body),
+            text = stringResource(R.string.app_name),
+            style = MaterialTheme.typography.headlineMedium,
+        )
+        Spacer(Modifier.height(6.dp))
+        Text(
+            text = stringResource(R.string.vault_list_empty_tagline),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 8.dp, bottom = 24.dp),
+            textAlign = TextAlign.Center,
         )
+        Spacer(Modifier.height(36.dp))
         if (AppFlavor.supportsBitwarden) {
-            Button(onClick = onConnectBitwarden) {
-                Text(stringResource(R.string.vault_connect_bitwarden))
-            }
+            BrandVaultButton(
+                label = stringResource(R.string.vault_connect_bitwarden),
+                description = stringResource(R.string.vault_add_bitwarden_desc),
+                container = BITWARDEN_BRAND_BLUE,
+                content = Color.White,
+                onClick = onConnectBitwarden,
+            )
             Spacer(Modifier.height(12.dp))
         }
         // KDBX 入口对 full / offline **两种分发都开放**（本地库不需要网络，
         // offline 分发反而只有它可用 —— 此前这里写的是「即将支持」占位）。
-        OutlinedButton(onClick = onOpenKdbx) {
-            Text(stringResource(R.string.vault_open_kdbx))
+        BrandVaultButton(
+            label = stringResource(R.string.vault_open_kdbx),
+            description = stringResource(R.string.vault_add_kdbx_desc),
+            container = KDBX_BRAND_GOLD,
+            content = KDBX_BRAND_GOLD_TEXT,
+            onClick = onOpenKdbx,
+        )
+        Spacer(Modifier.height(24.dp))
+        Text(
+            text = stringResource(R.string.vault_list_empty_hint),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
+    }
+}
+
+/**
+ * Bitwarden 官方品牌蓝（亮蓝）—— 只用于「接云端库」这个按钮，不是 Vaultix 主题色。
+ *
+ * 白色文字对比度约 5.9:1（WCAG AA 达标）。
+ */
+private val BITWARDEN_BRAND_BLUE = Color(0xFF175DDC)
+
+/** KDBX / KeePass 侧的「黄铜金」——与「本地实体文件」语义绑定（金 = 实物 = 保险库）。 */
+private val KDBX_BRAND_GOLD = Color(0xFFC8892A)
+
+/** 金底上的文字色（深棕）：白字压在金上只有约 2.6:1，读不清，故用深色字（约 5.5:1）。 */
+private val KDBX_BRAND_GOLD_TEXT = Color(0xFF2A1D07)
+
+/**
+ * 品牌色入口按钮：**主标题 + 一行说明**，两枚等宽等高。
+ *
+ * 说明文字压在按钮内部而不是另起一行，是为了让「点它会得到什么」与按钮**不可分离** ——
+ * 否则用户要先把说明与按钮配对，而空库页正是最需要零歧义的地方。
+ */
+@Composable
+private fun BrandVaultButton(
+    label: String,
+    description: String,
+    container: Color,
+    content: Color,
+    onClick: () -> Unit,
+) {
+    Button(
+        onClick = onClick,
+        colors = ButtonDefaults.buttonColors(
+            containerColor = container,
+            contentColor = content,
+        ),
+        shape = RoundedCornerShape(16.dp),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 64.dp),
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(text = label, style = MaterialTheme.typography.titleMedium)
+            Text(
+                text = description,
+                style = MaterialTheme.typography.labelSmall,
+                color = content.copy(alpha = 0.85f),
+            )
         }
     }
 }
