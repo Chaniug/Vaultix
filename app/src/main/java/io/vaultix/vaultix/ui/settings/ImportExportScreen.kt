@@ -15,6 +15,7 @@
  */
 package io.vaultix.vaultix.ui.settings
 
+import android.net.Uri
 import androidx.activity.compose.ManagedActivityResultLauncher
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -161,7 +162,7 @@ fun ImportExportScreen(
                 },
                 onPasswordChange = viewModel::onImportPasswordChange,
                 onToggleVisible = viewModel::onImportPasswordVisibleChange,
-                onDecrypt = { importFileContent?.let { viewModel.decryptForPreview(context, it) } },
+                onDecrypt = { importFileContent?.let { viewModel.decryptForPreview(it) } },
                 onApply = viewModel::applyImport,
                 onClearPreview = viewModel::clearPreview,
             )

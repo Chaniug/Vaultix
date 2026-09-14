@@ -198,8 +198,13 @@ class ImportExportViewModel @Inject constructor(
     fun onImportPasswordVisibleChange(visible: Boolean) =
         _state.update { it.copy(importPasswordVisible = visible) }
 
-    /** 解密文件并解密出预览（不落库）。 */
-    fun decryptForPreview(context: Context, content: String) {
+    /**
+     * 解密文件并解析出预览（不落库）。
+     *
+     * ⚠️ 只收 [content] 不收 `Context`：预览阶段不做任何读取（文件内容已由 UI 侧读好），
+     * 传 Context 进来只会是个用不上的参数（detekt UnusedParameter）。
+     */
+    fun decryptForPreview(content: String) {
         val current = _state.value
         if (!current.canDecrypt) return
 

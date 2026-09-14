@@ -18,26 +18,11 @@ package io.vaultix.data.bitwarden.export
 
 import io.vaultix.model.CustomFieldType
 import io.vaultix.model.UriMatch
+import io.vaultix.model.VaultCustomField
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
 import io.vaultix.model.VaultReprompt
 import io.vaultix.model.VaultUri
-
-/**
- * Bitwarden 条目类型编号（对齐官方 `CipherType` 的导出取值）。
- *
- * ⚠️ 官方导出器会**过滤掉** BankAccount / Passport / DriversLicense——
- * Vaultix 领域模型目前也不含这三类，因此映射是全量覆盖、无遗漏分支。
- *
- * 导出侧与导入侧共用本对象，避免两处编号定义漂移。
- */
-internal object BitwardenCipherTypeCode {
-    const val LOGIN = 1
-    const val SECURE_NOTE = 2
-    const val CARD = 3
-    const val IDENTITY = 4
-    const val SSH_KEY = 5
-}
 
 /**
  * 把 Vaultix 领域条目映射为 Bitwarden 导出条目。
@@ -52,45 +37,28 @@ internal object BitwardenCipherTypeCode {
  * @param item 已解密的领域条目（明文仅在内存，函数不做任何持久化）。
  */
 internal fun VaultItem.toExportCipher(): BitwardenExportCipher {
-    val typeCode = when (type) {
-        VaultItemType.Login -> BitwardenCipherTypeCode.LOGIN
-        VaultItemType.SecureNote -> BitwardenCipherTypeCode.SECURE_NOTE
-        VaultItemType.Card -> BitwardenCipherTypeCode.CARD
-        VaultItemType.Identity -> BitwardenCipherTypeCode.IDENTITY
-        VaultItemType.SshKey -> BitwardenCipherTypeCode.SSH_KEY
-    }
+    // 各类型载荷的「非本类型则 null」判定集中在一处，避免主流程被 5 个三元分支撑爆复杂度
+    val loginPayload = takeIf { type == VaultItemType.Login }?.toExportLogin()
+    val identityPayload = takeIf { type == VaultItemType.Identity }?.toExportIdentity()
+    val cardPayload = takeIf { type == VaultItemType.Card }?.toExportCard()
+    val secureNotePayload = takeIf { type == VaultItemType.SecureNote }?.toExportSecureNote()
+    val sshKeyPayload = takeIf { type == VaultItemType.SshKey }?.toExportSshKey()
 
     return BitwardenExportCipher(
         id = id,
         folderId = folderId,
         name = title,
         notes = notes.ifEmpty { null },
-        type = typeCode,
-        login = if (type == VaultItemType.Login) toExportLogin() else null,
-        identity = if (type == VaultItemType.Identity) toExportIdentity() else null,
-        card = if (type == VaultItemType.Card) toExportCard() else null,
-        secureNote = if (type == VaultItemType.SecureNote) {
-            BitwardenExportSecureNote(type = secureNote?.type ?: 0)
-        } else {
-            null
-        },
-        sshKey = if (type == VaultItemType.SshKey) toExportSshKey() else null,
+        type = type.toExportTypeCode(),
+        login = loginPayload,
+        identity = identityPayload,
+        card = cardPayload,
+        secureNote = secureNotePayload,
+        sshKey = sshKeyPayload,
         favorite = favorite,
-        reprompt = if (reprompt == VaultReprompt.Password) 1 else 0,
+        reprompt = reprompt.toExportCode(),
         // 空集合传 null ⇒ 该字段整体省略（官方 skip_serializing_if = Vec::is_empty）
-        fields = customFields.takeIf { it.isNotEmpty() }?.map { field ->
-            BitwardenExportField(
-                name = field.name,
-                value = field.value,
-                type = when (field.type) {
-                    CustomFieldType.Text -> 0
-                    CustomFieldType.Hidden -> 1
-                    CustomFieldType.Boolean -> 2
-                    CustomFieldType.Linked -> 3
-                },
-                linkedId = field.linkedId,
-            )
-        },
+        fields = customFields.takeIf { it.isNotEmpty() }?.map { it.toExportField() },
         // 领域模型暂不承载时间戳与密码历史；字段留空即省略，官方导入器按可选处理。
         passwordHistory = null,
         revisionDate = null,
@@ -98,6 +66,39 @@ internal fun VaultItem.toExportCipher(): BitwardenExportCipher {
         deletedDate = null,
     )
 }
+
+/** 领域条目类型 → Bitwarden `CipherType` 编号。 */
+private fun VaultItemType.toExportTypeCode(): Int = when (this) {
+    VaultItemType.Login -> BitwardenCipherTypeCode.LOGIN
+    VaultItemType.SecureNote -> BitwardenCipherTypeCode.SECURE_NOTE
+    VaultItemType.Card -> BitwardenCipherTypeCode.CARD
+    VaultItemType.Identity -> BitwardenCipherTypeCode.IDENTITY
+    VaultItemType.SshKey -> BitwardenCipherTypeCode.SSH_KEY
+}
+
+/** 重申密码策略 → Bitwarden `RepromptType` 编号（仅需区分「需要」）。 */
+private fun VaultReprompt.toExportCode(): Int =
+    if (this == VaultReprompt.Password) BitwardenRepromptCode.PASSWORD else BitwardenRepromptCode.NONE
+
+/** 自定义字段 → Bitwarden 导出字段。 */
+private fun VaultCustomField.toExportField(): BitwardenExportField = BitwardenExportField(
+    name = name,
+    value = value,
+    type = type.toExportCode(),
+    linkedId = linkedId,
+)
+
+/** 自定义字段类型 → Bitwarden `FieldType` 编号。 */
+private fun CustomFieldType.toExportCode(): Int = when (this) {
+    CustomFieldType.Text -> BitwardenFieldTypeCode.TEXT
+    CustomFieldType.Hidden -> BitwardenFieldTypeCode.HIDDEN
+    CustomFieldType.Boolean -> BitwardenFieldTypeCode.BOOLEAN
+    CustomFieldType.Linked -> BitwardenFieldTypeCode.LINKED
+}
+
+/** 安全笔记载荷（官方仅一个 `type` 字段，缺省 0 = 普通笔记）。 */
+private fun VaultItem.toExportSecureNote(): BitwardenExportSecureNote =
+    BitwardenExportSecureNote(type = secureNote?.type ?: BitwardenSecureNoteTypeCode.GENERIC)
 
 /**
  * 登录载荷。
@@ -143,12 +144,12 @@ private fun VaultUri.toExportUri(): BitwardenExportUri = BitwardenExportUri(
 
 /** 网址匹配规则 → Bitwarden 编号（对齐 `UriMatchType`）。 */
 private fun UriMatch.toBitwardenCode(): Int = when (this) {
-    UriMatch.Domain -> 0
-    UriMatch.Host -> 1
-    UriMatch.StartsWith -> 2
-    UriMatch.Exact -> 3
-    UriMatch.RegularExpression -> 4
-    UriMatch.Never -> 5
+    UriMatch.Domain -> BitwardenUriMatchCode.DOMAIN
+    UriMatch.Host -> BitwardenUriMatchCode.HOST
+    UriMatch.StartsWith -> BitwardenUriMatchCode.STARTS_WITH
+    UriMatch.Exact -> BitwardenUriMatchCode.EXACT
+    UriMatch.RegularExpression -> BitwardenUriMatchCode.REGULAR_EXPRESSION
+    UriMatch.Never -> BitwardenUriMatchCode.NEVER
 }
 
 /** 卡片载荷（全 6 字段直译，空串转 null）。 */

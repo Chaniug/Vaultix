@@ -20,6 +20,7 @@ import io.vaultix.crypto.MacVerificationException
 import io.vaultix.crypto.SecureBytes
 import io.vaultix.crypto.SymmetricCryptoKey
 import io.vaultix.crypto.VaultixCrypto
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import java.util.UUID
 import javax.inject.Inject
@@ -45,8 +46,8 @@ sealed class BitwardenImportException(message: String, cause: Throwable? = null)
         BitwardenImportException("File is not a valid Bitwarden encrypted export", cause)
 
     /** 导出密码错误（`encKeyValidation` 解密失败或结果不是 UUID）。 */
-    class WrongPassword :
-        BitwardenImportException("Incorrect export password")
+    class WrongPassword(cause: Throwable? = null) :
+        BitwardenImportException("Incorrect export password", cause)
 
     /** 文件内声明的 KDF 参数不受支持（如未来新增的 KDF 类型）。 */
     class UnsupportedKdf(typeCode: Int) :
@@ -111,7 +112,10 @@ class BitwardenEncryptedImporter @Inject constructor(
             }
         } catch (error: BitwardenImportException) {
             throw error
-        } catch (error: Exception) {
+        } catch (error: SerializationException) {
+            throw BitwardenImportException.MalformedFile(error)
+        } catch (error: IllegalArgumentException) {
+            // Json 在解析出结构性非法内容时也会抛 IAE（如非法数字字面量）
             throw BitwardenImportException.MalformedFile(error)
         }
 
@@ -121,21 +125,19 @@ class BitwardenEncryptedImporter @Inject constructor(
      * 官方做法（见 `encrypted_json.rs` 测试）：解密 `encKeyValidation`，
      * **能解析为合法 UUID** 即说明密钥正确。这里照做——比直接尝试解密 `data`
      * 更早失败、且错误分类更准确（不必等 JSON 解析报错才反推密码错）。
+     *
+     * 实现上把「解密失败」「结构非法」「解出来不是 UUID」三种失败统一归到
+     * [WrongPassword]——它们对用户是同一个可行动结论（密码不对），且原异常一律
+     * 作为 cause 带上，便于排障时区分「密码错」与「文件被改坏」。
      */
     private fun verifyExportKey(encKeyValidation: String, exportKey: SymmetricCryptoKey) {
-        val decrypted = try {
-            crypto.decryptToString(encKeyValidation, exportKey)
-        } catch (error: MacVerificationException) {
-            throw BitwardenImportException.WrongPassword()
-        } catch (error: IllegalArgumentException) {
-            // EncString 结构非法（字段被改坏）——按密码错误处理更贴近用户可行动作
-            throw BitwardenImportException.WrongPassword()
-        }
-        try {
-            UUID.fromString(decrypted)
-        } catch (error: IllegalArgumentException) {
-            // 解密成功但不是 UUID：官方不会出现这种情况，说明密码派生出的密钥不对
-            throw BitwardenImportException.WrongPassword()
+        val failure: Throwable? = runCatching {
+            UUID.fromString(crypto.decryptToString(encKeyValidation, exportKey))
+        }.exceptionOrNull()
+
+        // 单一出口：任何失败都映射为 WrongPassword（原异常链保留在 cause 里）
+        if (failure != null) {
+            throw BitwardenImportException.WrongPassword(failure)
         }
     }
 
@@ -144,14 +146,16 @@ class BitwardenEncryptedImporter @Inject constructor(
         try {
             crypto.decryptToString(data, exportKey)
         } catch (error: MacVerificationException) {
-            throw BitwardenImportException.WrongPassword()
+            throw BitwardenImportException.WrongPassword(error)
         }
 
     /** 解析明文 JSON；结构不符归类为 [BitwardenImportException.MalformedFile]。 */
     private fun parsePlain(plainJson: String): BitwardenPlainExport =
         try {
             json.decodeFromString(BitwardenPlainExport.serializer(), plainJson)
-        } catch (error: Exception) {
+        } catch (error: SerializationException) {
+            throw BitwardenImportException.MalformedFile(error)
+        } catch (error: IllegalArgumentException) {
             throw BitwardenImportException.MalformedFile(error)
         }
 
