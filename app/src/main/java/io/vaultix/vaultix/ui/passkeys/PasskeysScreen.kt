@@ -53,6 +53,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.SavePasskeyDialog
 import io.vaultix.vaultix.ui.common.VaultixSearchTopAppBar
+import io.vaultix.vaultix.ui.theme.Spacing
 
 /**
  * 通行密钥列表（从验证码界面「通行密钥」按钮进入）。
@@ -123,7 +124,7 @@ fun PasskeysScreen(
         } else {
             LazyColumn(
                 modifier = Modifier.fillMaxSize().padding(padding),
-                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+                contentPadding = PaddingValues(horizontal = Spacing.sm, vertical = Spacing.sm),
             ) {
                 items(rows, key = { "${it.itemId}:${it.credential.credentialId}" }) { row ->
                     PasskeyRowItem(row = row, onClick = { detail = row })
@@ -168,7 +169,7 @@ private fun EmptyPasskeysState(totalItems: Int, withFido2: Int) {
             text = stringResource(R.string.passkeys_empty_body, totalItems, withFido2),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 8.dp, start = 24.dp, end = 24.dp),
+            modifier = Modifier.padding(top = Spacing.sm, start = Spacing.xl, end = Spacing.xl),
         )
     }
 }
@@ -179,11 +180,11 @@ private fun PasskeyRowItem(row: PasskeyRow, onClick: () -> Unit) {
         onClick = onClick,
         color = MaterialTheme.colorScheme.surface,
         shape = MaterialTheme.shapes.large,
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.sm, vertical = Spacing.xs),
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(16.dp),
+            modifier = Modifier.padding(Spacing.lg),
         ) {
             Surface(
                 color = MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -194,10 +195,10 @@ private fun PasskeyRowItem(row: PasskeyRow, onClick: () -> Unit) {
                     Icons.Filled.Key,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(8.dp).size(24.dp),
+                    modifier = Modifier.padding(Spacing.sm).size(Spacing.xl),
                 )
             }
-            Spacer(Modifier.width(16.dp))
+            Spacer(Modifier.width(Spacing.lg))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = row.credential.rpName.ifBlank { row.credential.rpId },
@@ -251,7 +252,7 @@ private fun PasskeyDetailDialog(row: PasskeyRow, onDismiss: () -> Unit, onDelete
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(Spacing.sm))
                 DetailLine(
                     stringResource(R.string.passkey_field_rp_name),
                     c.rpName.ifBlank { "—" },
@@ -264,7 +265,7 @@ private fun PasskeyDetailDialog(row: PasskeyRow, onDismiss: () -> Unit, onDelete
                 DetailLine(stringResource(R.string.passkey_field_counter), c.counter.toString())
                 DetailLine(stringResource(R.string.passkey_field_discoverable), if (c.discoverable) "true" else "false")
                 DetailLine(stringResource(R.string.passkey_field_created), c.creationDate ?: "—")
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(Spacing.xs))
                 Text(
                     text = stringResource(R.string.passkey_bound_to_login, row.loginTitle),
                     style = MaterialTheme.typography.bodySmall,

@@ -37,12 +37,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
+import io.vaultix.vaultix.ui.theme.Spacing
 
 /** 卡片圆角（Bastion 列表态 = 12dp）。 */
-private val CARD_CORNER = 12.dp
+private val CARD_CORNER = Spacing.md
 
 /** 卡片内边距（Bastion 列表态 = 16dp 四边等宽）。 */
-private val CARD_PADDING = 16.dp
+private val CARD_PADDING = Spacing.lg
 
 /**
  * 条目卡片外框 —— 密码 / 验证码 / 卡包三个列表共用（保证三处观感完全一致）。
@@ -114,7 +115,7 @@ fun EntryCard(
 val EntryCardTextSpacing = 6.dp
 
 /** 卡片内左侧图标与文本区的间距（Bastion = 16dp）。 */
-val EntryCardIconSpacing = 16.dp
+val EntryCardIconSpacing = Spacing.lg
 
 /** 卡片内左侧图标尺寸（Bastion = 40dp）。 */
 val EntryCardIconSize = 40.dp

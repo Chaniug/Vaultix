@@ -64,6 +64,7 @@ import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.TextButton
 import androidx.compose.foundation.layout.width
 import io.vaultix.domain.PIN_MIN_LENGTH
+import io.vaultix.vaultix.ui.theme.Spacing
 
 /**
  * 解锁页（Docs/08 S6）。
@@ -157,7 +158,7 @@ fun UnlockScreen(
                 .padding(padding)
                 .verticalScroll(rememberScrollState())
                 .imePadding()
-                .padding(horizontal = 32.dp),
+                .padding(horizontal = Spacing.xxl),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
@@ -204,9 +205,9 @@ fun UnlockScreen(
                 color = MaterialTheme.colorScheme.onPrimaryContainer,
                 modifier = Modifier
                     .size(64.dp)
-                    .padding(top = 8.dp),
+                    .padding(top = Spacing.sm),
             )
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(Spacing.lg))
             Text(text = vault.name, style = MaterialTheme.typography.titleLarge)
             vault.account?.let {
                 Text(
@@ -215,7 +216,7 @@ fun UnlockScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(Spacing.lg))
             UnlockInputSection(
                 state = state,
                 viewModel = viewModel,
@@ -224,14 +225,14 @@ fun UnlockScreen(
             // 「换一个库」：多库时才有意义。放在最底下、用轻量文字按钮 ——
             // 它是**次要出口**，不能与主解锁按钮抢视觉焦点（同 2026-09-13 指纹图标的取舍）。
             if (onSwitchVault != null && state.twoFactor == null && !state.viewLocked) {
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(Spacing.sm))
                 TextButton(onClick = onSwitchVault, enabled = !state.submitting) {
                     Icon(
                         Icons.Filled.SwapHoriz,
                         contentDescription = null,
                         modifier = Modifier.size(18.dp),
                     )
-                    Spacer(Modifier.width(8.dp))
+                    Spacer(Modifier.width(Spacing.sm))
                     Text(stringResource(R.string.unlock_switch_vault))
                 }
             }
@@ -263,9 +264,9 @@ private fun ViewLockedContent(
         color = MaterialTheme.colorScheme.onPrimaryContainer,
         modifier = Modifier
             .size(64.dp)
-            .padding(top = 8.dp),
+            .padding(top = Spacing.sm),
     )
-    Spacer(Modifier.height(16.dp))
+    Spacer(Modifier.height(Spacing.lg))
     Text(text = vaultName, style = MaterialTheme.typography.titleLarge)
     account?.let {
         Text(
@@ -274,7 +275,7 @@ private fun ViewLockedContent(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
-    Spacer(Modifier.height(8.dp))
+    Spacer(Modifier.height(Spacing.sm))
     Text(
         text = stringResource(R.string.unlock_view_locked_hint),
         style = MaterialTheme.typography.bodySmall,
@@ -282,7 +283,7 @@ private fun ViewLockedContent(
         modifier = Modifier.fillMaxWidth(),
         textAlign = TextAlign.Center,
     )
-    Spacer(Modifier.height(24.dp))
+    Spacer(Modifier.height(Spacing.xl))
     FilledTonalButton(
         onClick = onAuthenticate,
         enabled = !submitting,
@@ -291,19 +292,19 @@ private fun ViewLockedContent(
             .height(48.dp),
     ) {
         Icon(Icons.Filled.Fingerprint, contentDescription = null)
-        Spacer(Modifier.width(8.dp))
+        Spacer(Modifier.width(Spacing.sm))
         Text(stringResource(R.string.quick_unlock_biometric_button))
     }
     if (submitting) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(top = 16.dp),
+            modifier = Modifier.padding(top = Spacing.lg),
         ) {
             CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
             Text(
                 text = stringResource(R.string.add_vault_working),
                 style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(start = 8.dp),
+                modifier = Modifier.padding(start = Spacing.sm),
             )
         }
     }
@@ -312,7 +313,7 @@ private fun ViewLockedContent(
             text = message,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.error,
-            modifier = Modifier.padding(top = 8.dp),
+            modifier = Modifier.padding(top = Spacing.sm),
         )
     }
 }
@@ -346,15 +347,15 @@ private fun QuickUnlockEntry(
     onStart: () -> Unit,
 ) {
     if (!visible) {
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(Spacing.xl))
         return
     }
     IconButton(
         onClick = onStart,
         enabled = enabled,
         modifier = Modifier
-            .padding(vertical = 8.dp)
-            .size(FINGERPRINT_ICON_SIZE + 16.dp),
+            .padding(vertical = Spacing.sm)
+            .size(FINGERPRINT_ICON_SIZE + Spacing.lg),
     ) {
         Icon(
             imageVector = Icons.Filled.Fingerprint,
@@ -447,7 +448,7 @@ private fun PasswordForm(
                 contentDescription = null,
                 modifier = Modifier.size(18.dp),
             )
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width(Spacing.sm))
             Text(stringResource(R.string.pin_unlock_enter))
         }
     }
@@ -457,7 +458,7 @@ private fun PasswordForm(
             text = message,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.error,
-            modifier = Modifier.padding(top = 8.dp),
+            modifier = Modifier.padding(top = Spacing.sm),
         )
     }
 
@@ -468,7 +469,7 @@ private fun PasswordForm(
         // 快速解锁（指纹）时压根没有"派生密钥"这回事，那句文案更是误导。
         CircularProgressIndicator(
             modifier = Modifier
-                .padding(top = 8.dp)
+                .padding(top = Spacing.sm)
                 .size(20.dp),
             strokeWidth = 2.dp,
         )
@@ -476,7 +477,7 @@ private fun PasswordForm(
 
     // ⚠️ 间距取 12dp 而不是原来的 24dp：指纹图标自己带 8dp 垂直留白，
     // 再叠 24dp 会让「密码框 → 指纹 → 解锁按钮」这一段松散成三截。
-    Spacer(Modifier.height(12.dp))
+    Spacer(Modifier.height(Spacing.md))
     FilledTonalButton(
         onClick = {
             focusManager.clearFocus()
@@ -543,7 +544,7 @@ private fun UnlockInputSection(
 }
 
 /** PIN 圆点直径。 */
-private val PIN_DOT_SIZE = 16.dp
+private val PIN_DOT_SIZE = Spacing.lg
 
 /**
  * 单个按键直径。
@@ -556,7 +557,7 @@ private val PIN_DOT_SIZE = 16.dp
 private val PIN_KEY_SIZE = 76.dp
 
 /** 相邻两排按键的垂直间距（同理：不留缝会读成"一坨"）。 */
-private val PIN_KEY_GAP = 8.dp
+private val PIN_KEY_GAP = Spacing.sm
 
 /** 数字键布局（3 行 9 键）；第 4 行「空 + 0 + 退格」在 [PinPad] 里单独拼。 */
 private val PIN_DIGIT_ROWS = listOf(
@@ -592,7 +593,7 @@ private fun PinPad(state: UnlockViewModel.UiState, viewModel: UnlockViewModel) {
                 textAlign = TextAlign.Center,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 12.dp),
+                    .padding(top = Spacing.md),
             )
         }
         Spacer(Modifier.height(20.dp))
@@ -643,7 +644,7 @@ private fun PinPad(state: UnlockViewModel.UiState, viewModel: UnlockViewModel) {
 /** 已输入位数指示：实心 = 已输，浅色 = 待输。⚠️ 只画点数，**不回显数字**。 */
 @Composable
 private fun PinDots(filled: Int, total: Int) {
-    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+    Row(horizontalArrangement = Arrangement.spacedBy(Spacing.lg)) {
         repeat(total) { index ->
             Box(
                 modifier = Modifier

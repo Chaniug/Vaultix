@@ -51,6 +51,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.TwoFactorStep
 import io.vaultix.vaultix.ui.error.unlockErrorText
+import io.vaultix.vaultix.ui.theme.Spacing
 
 /**
  * 连接 Bitwarden 表单（Docs/08 S4 / 流程 5.1）+ 2FA 步骤。
@@ -112,14 +113,14 @@ private fun AddVaultScreenContent(
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
                 .imePadding()
-                .padding(horizontal = 24.dp),
+                .padding(horizontal = Spacing.xl),
             verticalArrangement = Arrangement.Center,
         ) {
             Text(
                 text = stringResource(R.string.two_factor_title),
                 style = MaterialTheme.typography.titleLarge,
             )
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(Spacing.md))
             TwoFactorStep(
                 providers = twoFactor.providers,
                 selectedProvider = twoFactor.provider,
@@ -148,12 +149,12 @@ private fun VaultConnectForm(
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .imePadding()
-            .padding(horizontal = 24.dp),
+            .padding(horizontal = Spacing.xl),
         // ⚠️ **顶部对齐**（原为 `Arrangement.Center`）：居中会把整块表单顶到屏幕中间，
         // 上下各留一大片空白 —— 用户 2026-09-14 反馈「上下的空白区域太多了」。
         verticalArrangement = Arrangement.Top,
     ) {
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(Spacing.sm))
         Text(
             text = stringResource(R.string.add_vault_subtitle),
             style = MaterialTheme.typography.bodyMedium,
@@ -175,7 +176,7 @@ private fun VaultConnectForm(
             ),
             modifier = Modifier.fillMaxWidth(),
         )
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(Spacing.sm))
         OutlinedTextField(
             value = state.password,
             onValueChange = viewModel::onPasswordChange,
@@ -222,14 +223,14 @@ private fun VaultConnectForm(
                 text = message,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.padding(top = 8.dp),
+                modifier = Modifier.padding(top = Spacing.sm),
             )
         }
 
         if (state.submitting) {
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(Spacing.md))
             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(Spacing.sm))
             Text(
                 text = stringResource(R.string.add_vault_working),
                 style = MaterialTheme.typography.bodySmall,
@@ -237,7 +238,7 @@ private fun VaultConnectForm(
             )
         }
 
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(Spacing.xl))
         FilledTonalButton(
             onClick = {
                 focusManager.clearFocus()
@@ -254,7 +255,7 @@ private fun VaultConnectForm(
                 Text(stringResource(R.string.add_vault_submit))
             }
         }
-        Spacer(Modifier.height(32.dp))
+        Spacer(Modifier.height(Spacing.xxl))
     }
 }
 
@@ -280,10 +281,10 @@ private fun ServerRegionPicker(
         style = MaterialTheme.typography.labelLarge,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
-    Spacer(Modifier.height(8.dp))
+    Spacer(Modifier.height(Spacing.sm))
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
     ) {
         AddVaultViewModel.ServerRegion.entries.forEach { region ->
             FilterChip(
@@ -294,7 +295,7 @@ private fun ServerRegionPicker(
             )
         }
     }
-    Spacer(Modifier.height(12.dp))
+    Spacer(Modifier.height(Spacing.md))
     val officialUrl = state.region.url
     if (officialUrl == null) {
         OutlinedTextField(
@@ -319,12 +320,12 @@ private fun ServerRegionPicker(
 private fun OfficialServerRow(url: String) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(Spacing.md),
         modifier = Modifier.fillMaxWidth(),
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.md),
         ) {
             Icon(
                 imageVector = Icons.Filled.Cloud,
@@ -332,7 +333,7 @@ private fun OfficialServerRow(url: String) {
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(20.dp),
             )
-            Spacer(Modifier.width(12.dp))
+            Spacer(Modifier.width(Spacing.md))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = stringResource(R.string.add_vault_server),

@@ -80,6 +80,7 @@ import io.vaultix.vaultix.R
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import io.vaultix.vaultix.ui.theme.Spacing
 
 /** 导出文件 MIME：JSON（SAF 保存对话框据此给默认扩展名）。 */
 private const val JSON_MIME = "application/json"
@@ -142,7 +143,7 @@ fun ImportExportScreen(
                 .padding(padding)
                 .verticalScroll(rememberScrollState())
                 .imePadding()
-                .padding(bottom = 32.dp),
+                .padding(bottom = Spacing.xxl),
         ) {
             ExportSection(
                 state = state,
@@ -152,7 +153,7 @@ fun ImportExportScreen(
                 onExportClick = { showExportConfirm = true },
             )
 
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(Spacing.sm))
 
             ImportSection(
                 state = state,
@@ -297,7 +298,7 @@ private fun ExportSection(
         text = stringResource(R.string.export_subtitle),
         style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+        modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.xs),
     )
     PasswordField(
         value = state.exportPassword,
@@ -352,7 +353,7 @@ private fun ImportSection(
         text = stringResource(R.string.import_subtitle),
         style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+        modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.xs),
     )
 
     val preview = state.importPreview
@@ -400,7 +401,7 @@ private fun ImportSection(
             onClick = onClearPreview,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 4.dp),
+                .padding(horizontal = Spacing.lg, vertical = Spacing.xs),
         ) {
             Text(stringResource(R.string.action_cancel))
         }
@@ -413,13 +414,13 @@ private fun PreviewCard(itemCount: Int, folderCount: Int) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+            .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
     ) {
         Row(
-            modifier = Modifier.padding(16.dp),
+            modifier = Modifier.padding(Spacing.lg),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.md),
         ) {
             Icon(Icons.Filled.Description, contentDescription = null)
             Text(
@@ -464,7 +465,7 @@ private fun PasswordField(
         },
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 6.dp),
+            .padding(horizontal = Spacing.lg, vertical = 6.dp),
     )
 }
 
@@ -483,17 +484,17 @@ private fun ActionButton(
         enabled = enabled && !busy,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+            .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
     ) {
         if (busy) {
             CircularProgressIndicator(
                 modifier = Modifier.size(18.dp),
                 strokeWidth = 2.dp,
             )
-            Text(busyText, modifier = Modifier.padding(start = 8.dp))
+            Text(busyText, modifier = Modifier.padding(start = Spacing.sm))
         } else {
             Icon(icon, contentDescription = null)
-            Text(text, modifier = Modifier.padding(start = 8.dp))
+            Text(text, modifier = Modifier.padding(start = Spacing.sm))
         }
     }
 }
@@ -505,7 +506,7 @@ private fun FieldHint(text: String) {
         text = text,
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.error,
-        modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+        modifier = Modifier.padding(horizontal = Spacing.lg, vertical = 2.dp),
     )
 }
 
@@ -522,14 +523,14 @@ private fun ErrorCard(kind: ImportExportViewModel.ErrorKind, detail: String?) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+            .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
     ) {
         Text(
             text = text,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onErrorContainer,
-            modifier = Modifier.padding(16.dp),
+            modifier = Modifier.padding(Spacing.lg),
         )
     }
 }

@@ -14,10 +14,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.unit.dp
+import io.vaultix.vaultix.ui.theme.Spacing
 
 /** 行尾能力图标的尺寸（刻意克制：它只负责「一眼看出有没有」，不负责解释）。 */
-val CapabilityIconSize = 16.dp
+val CapabilityIconSize = Spacing.lg
 
 /**
  * 条目「能力标志」小图标 —— 2FA 验证码 / 通行密钥。

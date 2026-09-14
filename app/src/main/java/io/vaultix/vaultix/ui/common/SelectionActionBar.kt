@@ -42,9 +42,10 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.theme.Spacing
 
 /** 操作条的水平内边距（与列表卡片的 16dp 对齐）。 */
-private val BAR_PADDING = 16.dp
+private val BAR_PADDING = Spacing.lg
 
 /**
  * 选中集合的翻转开关：已选就摘掉、没选就加进来。
@@ -82,7 +83,7 @@ fun SelectionActionBar(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = BAR_PADDING, vertical = 4.dp),
+                .padding(horizontal = BAR_PADDING, vertical = Spacing.xs),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconButton(onClick = onClear) {
@@ -104,7 +105,7 @@ fun SelectionActionBar(
                     ),
                 )
             }
-            Spacer(Modifier.width(4.dp))
+            Spacer(Modifier.width(Spacing.xs))
             TextButton(
                 onClick = onDelete,
                 colors = ButtonDefaults.textButtonColors(

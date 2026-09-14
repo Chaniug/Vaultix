@@ -46,8 +46,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.theme.Spacing
 
 /**
  * 宽屏主脚手架：左侧 NavigationRail（可滚动）+ 右侧内容区。
@@ -97,8 +97,8 @@ fun AdaptiveMainScaffold(
             Column(
                 modifier = Modifier
                     .verticalScroll(rememberScrollState())
-                    .padding(vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
+                    .padding(vertical = Spacing.sm),
+                verticalArrangement = Arrangement.spacedBy(Spacing.xs),
             ) {
                 // tabs 前半 → 「+」→ tabs 后半，使「+」视觉居中。
                 val splitAt = (tabs.size + 1) / 2
@@ -114,7 +114,7 @@ fun AdaptiveMainScaffold(
                         Icon(
                             imageVector = Icons.Default.Add,
                             contentDescription = addLabel,
-                            modifier = Modifier.size(24.dp),
+                            modifier = Modifier.size(Spacing.xl),
                             tint = MaterialTheme.colorScheme.primary,
                         )
                     },

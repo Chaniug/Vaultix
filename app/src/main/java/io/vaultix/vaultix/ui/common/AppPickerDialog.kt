@@ -60,6 +60,7 @@ import io.vaultix.vaultix.R
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.Locale
+import io.vaultix.vaultix.ui.theme.Spacing
 
 /** 图标位图边长（px）。 */
 private const val ICON_SIZE_PX = 48
@@ -102,7 +103,7 @@ fun AppPickerDialog(
             shape = RoundedCornerShape(28.dp),
             tonalElevation = 6.dp,
         ) {
-            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+            Column(modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.md)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         text = stringResource(R.string.app_picker_title),
@@ -120,7 +121,7 @@ fun AppPickerDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(Spacing.sm))
                 when {
                     loading -> LoadingHint()
                     manualOpen -> ManualInput(
@@ -166,7 +167,7 @@ private fun AppList(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 24.dp),
+                .padding(vertical = Spacing.xl),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text(
@@ -194,10 +195,10 @@ private fun AppRow(app: AppInfo, onPick: (String) -> Unit) {
         modifier = Modifier
             .fillMaxWidth()
             .clickable { onPick(app.packageName) }
-            .padding(vertical = 10.dp, horizontal = 4.dp),
+            .padding(vertical = 10.dp, horizontal = Spacing.xs),
     ) {
         AppIcon(packageName = app.packageName)
-        Spacer(Modifier.width(12.dp))
+        Spacer(Modifier.width(Spacing.md))
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = app.appName,
@@ -252,7 +253,7 @@ private fun ManualInput(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(Spacing.sm))
         OutlinedTextField(
             value = text,
             onValueChange = onTextChange,

@@ -42,6 +42,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import io.vaultix.common.PasswordGenerator
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.theme.Spacing
 
 /**
  * 随机密码生成对话框（添加/编辑密码条目时使用，Bastion 同款能力）。
@@ -86,7 +87,7 @@ fun PasswordGeneratorDialog(
                 Text(
                     text = stringResource(R.string.gen_length, length),
                     style = MaterialTheme.typography.labelLarge,
-                    modifier = Modifier.padding(top = 12.dp),
+                    modifier = Modifier.padding(top = Spacing.md),
                 )
                 Slider(
                     value = length.toFloat(),

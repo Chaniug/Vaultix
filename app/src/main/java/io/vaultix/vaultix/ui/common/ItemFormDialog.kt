@@ -76,6 +76,7 @@ import io.vaultix.model.VaultLinkedId
 import io.vaultix.model.VaultReprompt
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.qr.QrScannerContent
+import io.vaultix.vaultix.ui.theme.Spacing
 
 /**
  * 条目表单对话框（新建 / 编辑共用，Docs/08 S10）。
@@ -257,9 +258,9 @@ private fun ItemFormTail(
         text = stringResource(R.string.section_custom_fields),
         icon = Icons.Filled.Tune,
     )
-    Spacer(Modifier.height(8.dp))
+    Spacer(Modifier.height(Spacing.sm))
     CustomFieldsEditor(fields = customFields)
-    Spacer(Modifier.height(8.dp))
+    Spacer(Modifier.height(Spacing.sm))
     OutlinedTextField(
         value = notes,
         onValueChange = onNotesChange,
@@ -325,7 +326,7 @@ private fun SectionLabel(text: String, icon: ImageVector) {
         Icon(
             imageVector = icon,
             contentDescription = null,
-            modifier = Modifier.size(16.dp),
+            modifier = Modifier.size(Spacing.lg),
             tint = MaterialTheme.colorScheme.primary,
         )
         Text(
@@ -368,15 +369,15 @@ private fun FormHeader(
 ) {
     if (folders.isNotEmpty()) {
         SectionLabel(text = stringResource(R.string.item_folder), icon = Icons.Filled.Folder)
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(Spacing.sm))
         FolderPicker(folders = folders, selectedId = folderId, onSelect = onFolderSelect)
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(Spacing.sm))
     }
     if (typeEditable) {
         SectionLabel(text = stringResource(R.string.item_field_type), icon = Icons.Filled.Category)
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(Spacing.sm))
         TypePicker(selected = type, onSelect = onTypeSelect)
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(Spacing.sm))
     }
 }
 
@@ -495,8 +496,8 @@ private fun TypePicker(
     onSelect: (VaultItemType) -> Unit,
 ) {
     FlowRow(
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+        verticalArrangement = Arrangement.spacedBy(Spacing.xs),
         modifier = Modifier.fillMaxWidth(),
     ) {
         VaultItemType.entries.forEach { type ->
@@ -529,7 +530,7 @@ private fun LoginFields(
         singleLine = true,
         modifier = Modifier.fillMaxWidth(),
     )
-    Spacer(Modifier.height(8.dp))
+    Spacer(Modifier.height(Spacing.sm))
     var showGenerator by remember { mutableStateOf(false) }
     // 明文查看开关：编辑已有条目时必须能确认原密码（否则只见掩码圆点，
     // 唯一能明文看到的反而是骰子生成的随机密码——Bitwarden 编辑页同款眼睛按钮）
@@ -578,14 +579,14 @@ private fun LoginFields(
         )
     }
     PasswordStrengthHint(password = password)
-    Spacer(Modifier.height(8.dp))
+    Spacer(Modifier.height(Spacing.sm))
     UriListEditor(
         uris = uris,
         onAdd = { uris.add("") },
         onRemove = { uris.removeAt(it) },
         onPickApp = onPickApp,
     )
-    Spacer(Modifier.height(8.dp))
+    Spacer(Modifier.height(Spacing.sm))
     Row(verticalAlignment = Alignment.CenterVertically) {
         OutlinedTextField(
             value = totp,
@@ -618,7 +619,7 @@ private fun LabeledFields(labels: List<Int>, values: SnapshotStateList<String>) 
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(Spacing.sm))
     }
 }
 
@@ -647,7 +648,7 @@ private fun SshKeyFields(values: SnapshotStateList<String>) {
         textStyle = monospace,
         modifier = Modifier.fillMaxWidth(),
     )
-    Spacer(Modifier.height(8.dp))
+    Spacer(Modifier.height(Spacing.sm))
     OutlinedTextField(
         value = values[SSH_PUBLIC_KEY_INDEX],
         onValueChange = { applyPublicKeyChange(values, it) },
@@ -657,7 +658,7 @@ private fun SshKeyFields(values: SnapshotStateList<String>) {
         textStyle = monospace,
         modifier = Modifier.fillMaxWidth(),
     )
-    Spacer(Modifier.height(8.dp))
+    Spacer(Modifier.height(Spacing.sm))
     OutlinedTextField(
         value = values[SSH_FINGERPRINT_INDEX],
         onValueChange = { values[SSH_FINGERPRINT_INDEX] = it },
@@ -667,7 +668,7 @@ private fun SshKeyFields(values: SnapshotStateList<String>) {
         textStyle = monospace,
         modifier = Modifier.fillMaxWidth(),
     )
-    Spacer(Modifier.height(8.dp))
+    Spacer(Modifier.height(Spacing.sm))
 }
 
 /** SSH 密钥输入框的行数区间：私钥可能很长，给足可视空间又不至于撑爆整页。 */
@@ -702,7 +703,7 @@ private fun PasswordStrengthHint(password: String) {
                 .height(6.dp)
                 .clip(RoundedCornerShape(3.dp)),
         )
-        Spacer(Modifier.width(8.dp))
+        Spacer(Modifier.width(Spacing.sm))
         Text(
             text = stringResource(strengthLabelRes(level)),
             style = MaterialTheme.typography.labelMedium,
@@ -753,7 +754,7 @@ private fun UriListEditor(
                     singleLine = true,
                     modifier = Modifier
                         .weight(1f)
-                        .padding(end = 4.dp),
+                        .padding(end = Spacing.xs),
                 )
                 IconButton(onClick = { onRemove(index) }) {
                     Icon(
@@ -763,19 +764,19 @@ private fun UriListEditor(
                     )
                 }
             }
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(Spacing.sm))
         }
         Row(modifier = Modifier.fillMaxWidth()) {
             TextButton(onClick = onAdd, modifier = Modifier.weight(1f)) {
                 Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
+                Spacer(Modifier.width(Spacing.sm))
                 Text(stringResource(R.string.item_add_uri))
             }
             // 关联手机 App：等价于 Bitwarden 在网址里填 androidapp://包名，
             // 但用户不该手敲包名——这里给一个应用列表直接选。
             TextButton(onClick = onPickApp, modifier = Modifier.weight(1f)) {
                 Icon(Icons.Filled.Android, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
+                Spacer(Modifier.width(Spacing.sm))
                 Text(stringResource(R.string.item_add_app))
             }
         }
@@ -800,11 +801,11 @@ private fun CustomFieldsEditor(fields: SnapshotStateList<VaultCustomField>) {
                 onFieldChange = { fields[index] = it },
                 onRemove = { fields.removeAt(index) },
             )
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(Spacing.sm))
         }
         TextButton(onClick = { fields.add(VaultCustomField()) }, modifier = Modifier.fillMaxWidth()) {
             Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width(Spacing.sm))
             Text(stringResource(R.string.item_add_field))
         }
     }
@@ -836,14 +837,14 @@ private fun CustomFieldRow(
                 )
             }
         }
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(Spacing.xs))
         FieldValueInput(
             field = field,
             revealHidden = revealHidden,
             onRevealChange = { revealHidden = it },
             onFieldChange = onFieldChange,
         )
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(Spacing.xs))
         ExposedDropdownMenuBox(expanded = typeExpanded, onExpandedChange = { typeExpanded = it }) {
             OutlinedTextField(
                 value = stringResource(CUSTOM_FIELD_TYPE_LABELS.getValue(field.type)),

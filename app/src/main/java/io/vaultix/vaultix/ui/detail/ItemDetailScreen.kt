@@ -94,6 +94,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import io.vaultix.vaultix.ui.common.VaultixExpressiveTopBar
 import io.vaultix.vaultix.ui.common.rememberImmersiveBarPadding
 import io.vaultix.vaultix.ui.common.rememberScrollCollapseFraction
+import io.vaultix.vaultix.ui.theme.Spacing
 
 /**
  * 详情页一次性事件 → 用户文案（Deleted 由调用方导航，返回 null）。
@@ -180,7 +181,7 @@ private fun DetailBodyContent(
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                 modifier = Modifier
                     .align(Alignment.Center)
-                    .padding(32.dp),
+                    .padding(Spacing.xxl),
             )
             else -> DetailSections(
                 item = item,
@@ -211,7 +212,7 @@ private fun DetailSections(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(scrollState)
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+            .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
     ) {
         Spacer(Modifier.height(barPadding))
         // 顶部头部：站点图标 + 一行摘要（网址数 / 2FA / 通行密钥）+ 用户名 + 类型徽标。
@@ -228,39 +229,39 @@ private fun DetailSections(
             )
         }
         if (item.uris.isNotEmpty()) {
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(Spacing.md))
             UrisSection(item = item, onCopyUri = actions.onCopyUri)
         }
         if (item.totp != null) {
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(Spacing.md))
             // 默认**不显示**验证码：点分区里的眼睛才显示（详情页不跑定时器，见 [TotpSection]）。
             TotpSection(totp = item.totp)
         }
         if (item.fido2Credentials.isNotEmpty()) {
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(Spacing.md))
             PasskeysSection(creds = item.fido2Credentials)
         }
         if (item.card != null) {
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(Spacing.md))
             CardSection(item = item, onCopyField = actions.onCopyField)
         }
         if (item.sshKey != null) {
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(Spacing.md))
             SshKeySection(item = item, onCopyField = actions.onCopyField)
         }
         if (item.identity != null) {
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(Spacing.md))
             IdentitySection(item = item, onCopyField = actions.onCopyField)
         }
         if (item.customFields.isNotEmpty()) {
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(Spacing.md))
             CustomFieldsSection(item = item, onCopyField = actions.onCopyField)
         }
         if (item.notes.isNotBlank()) {
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(Spacing.md))
             NotesSection(notes = item.notes)
         }
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(Spacing.xl))
     }
 }
 
@@ -279,7 +280,7 @@ private fun DetailSections(
 private fun DetailHeader(item: VaultItem, serverOrigin: String?) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         SiteIcon(item = item, serverOrigin = serverOrigin, size = DETAIL_HEADER_ICON)
-        Spacer(Modifier.width(16.dp))
+        Spacer(Modifier.width(Spacing.lg))
         Column(modifier = Modifier.weight(1f)) {
             val summary = detailSummary(item)
             if (summary.isNotEmpty()) {
@@ -302,9 +303,9 @@ private fun DetailHeader(item: VaultItem, serverOrigin: String?) {
                 )
             }
             Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(top = 8.dp),
+                modifier = Modifier.padding(top = Spacing.sm),
             ) {
                 TypeBadge(stringResource(itemTypeLabelRes(item.type)), BadgeTone.NEUTRAL)
                 // 能力用「小图标」而不是文字胶囊（对齐列表行尾，见 [CapabilityIcon]）。
@@ -500,7 +501,7 @@ private fun SectionTitle(text: String) {
         text = text,
         style = MaterialTheme.typography.titleMedium,
         color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(start = 4.dp, bottom = 8.dp),
+        modifier = Modifier.padding(start = Spacing.xs, bottom = Spacing.sm),
     )
 }
 
@@ -570,7 +571,7 @@ private fun NotesSection(notes: String) {
             Text(
                 text = notes,
                 style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(16.dp),
+                modifier = Modifier.padding(Spacing.lg),
             )
         }
     }
@@ -588,7 +589,7 @@ private fun DetailFieldRow(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
+            .padding(start = Spacing.lg, end = Spacing.sm, top = Spacing.xs, bottom = Spacing.xs),
     ) {
         Text(
             text = label,
@@ -603,7 +604,7 @@ private fun DetailFieldRow(
             maxLines = 1,
             modifier = Modifier
                 .weight(1f)
-                .padding(end = 4.dp),
+                .padding(end = Spacing.xs),
         )
         extraAction?.invoke()
         IconButton(onClick = onCopy) {
@@ -629,7 +630,7 @@ private fun UrisSection(item: VaultItem, onCopyUri: (String) -> Unit) {
                 item.uris.forEachIndexed { index, v ->
                     if (index > 0) {
                         HorizontalDivider(
-                            modifier = Modifier.padding(start = 16.dp),
+                            modifier = Modifier.padding(start = Spacing.lg),
                             color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
                         )
                     }
@@ -669,9 +670,9 @@ private fun UriRow(kind: UriKind, canOpen: Boolean, onCopy: () -> Unit, onOpen: 
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
+            .padding(start = Spacing.lg, end = Spacing.sm, top = Spacing.xs, bottom = Spacing.xs),
     ) {
-        Column(modifier = Modifier.weight(1f).padding(end = 4.dp)) {
+        Column(modifier = Modifier.weight(1f).padding(end = Spacing.xs)) {
             if (kind is UriKind.AndroidApp) {
                 Text(
                     text = stringResource(R.string.uri_type_android_app),
@@ -749,7 +750,7 @@ private fun TotpSection(totp: String?) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = 16.dp, end = 4.dp, top = 10.dp, bottom = 10.dp),
+                    .padding(start = Spacing.lg, end = Spacing.xs, top = 10.dp, bottom = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(
@@ -761,7 +762,7 @@ private fun TotpSection(totp: String?) {
                 Column(
                     modifier = Modifier
                         .weight(1f)
-                        .padding(start = 12.dp),
+                        .padding(start = Spacing.md),
                 ) {
                     Text(
                         text = stringResource(R.string.detail_totp_present),
@@ -845,7 +846,7 @@ private fun HintRow(
     body: String?,
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(16.dp),
+        modifier = Modifier.fillMaxWidth().padding(Spacing.lg),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
@@ -854,7 +855,7 @@ private fun HintRow(
             tint = MaterialTheme.colorScheme.primary,
             modifier = Modifier.size(20.dp),
         )
-        Column(modifier = Modifier.padding(start = 12.dp)) {
+        Column(modifier = Modifier.padding(start = Spacing.md)) {
             Text(text = title, style = MaterialTheme.typography.titleSmall)
             if (body != null) {
                 Text(
@@ -883,11 +884,11 @@ private fun CustomFieldsSection(item: VaultItem, onCopyField: (String) -> Unit) 
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Column(modifier = Modifier.padding(vertical = 8.dp)) {
+            Column(modifier = Modifier.padding(vertical = Spacing.sm)) {
                 item.customFields.forEachIndexed { index, field ->
                     if (index > 0) {
                         HorizontalDivider(
-                            modifier = Modifier.padding(start = 16.dp),
+                            modifier = Modifier.padding(start = Spacing.lg),
                             color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
                         )
                     }
@@ -926,9 +927,9 @@ private fun CustomFieldRow(field: VaultCustomField, onCopy: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = 16.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
+            .padding(start = Spacing.lg, end = Spacing.sm, top = 6.dp, bottom = 6.dp),
     ) {
-        Column(modifier = Modifier.weight(1f).padding(end = 4.dp)) {
+        Column(modifier = Modifier.weight(1f).padding(end = Spacing.xs)) {
             Text(
                 text = field.name.ifBlank { stringResource(R.string.custom_field_unnamed) },
                 style = MaterialTheme.typography.labelMedium,
@@ -984,9 +985,9 @@ private fun FieldRow(label: String, value: String, onCopy: (String) -> Unit, mon
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp),
+            .padding(vertical = Spacing.xs),
     ) {
-        Column(modifier = Modifier.weight(1f).padding(end = 4.dp)) {
+        Column(modifier = Modifier.weight(1f).padding(end = Spacing.xs)) {
             Text(
                 text = label,
                 style = MaterialTheme.typography.labelMedium,
@@ -1021,7 +1022,7 @@ private fun CardSection(item: VaultItem, onCopyField: (String) -> Unit) {
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Column(modifier = Modifier.padding(16.dp)) {
+            Column(modifier = Modifier.padding(Spacing.lg)) {
                 if (card.cardholderName.isNotBlank()) {
                     FieldRow(stringResource(R.string.card_cardholder), card.cardholderName, onCopyField)
                 }
@@ -1057,7 +1058,7 @@ private fun SshKeySection(item: VaultItem, onCopyField: (String) -> Unit) {
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Column(modifier = Modifier.padding(16.dp)) {
+            Column(modifier = Modifier.padding(Spacing.lg)) {
                 if (ssh.privateKey.isNotBlank()) {
                     FieldRow(
                         stringResource(R.string.ssh_private_key),
@@ -1133,7 +1134,7 @@ private fun IdentitySection(item: VaultItem, onCopyField: (String) -> Unit) {
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Column(modifier = Modifier.padding(16.dp)) {
+            Column(modifier = Modifier.padding(Spacing.lg)) {
                 rows.forEach { (label, value) ->
                     FieldRow(label, value, onCopyField)
                 }

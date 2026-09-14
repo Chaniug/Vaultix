@@ -54,6 +54,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import io.vaultix.vaultix.R
 import kotlinx.coroutines.launch
+import io.vaultix.vaultix.ui.theme.Spacing
 
 /**
  * 显示选项弹层（密码列表顶栏「显示选项」按钮打开）。
@@ -95,13 +96,13 @@ fun DisplayOptionsSheet(
             modifier = Modifier
                 .fillMaxWidth()
                 .verticalScroll(rememberScrollState())
-                .padding(bottom = 24.dp)
+                .padding(bottom = Spacing.xl)
                 .navigationBarsPadding(),
         ) {
             Text(
                 text = stringResource(R.string.items_display_options),
                 style = MaterialTheme.typography.titleLarge,
-                modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp),
+                modifier = Modifier.padding(horizontal = Spacing.xl, vertical = Spacing.lg),
             )
 
             OptionGroupTitle(stringResource(R.string.items_group_mode))
@@ -130,7 +131,7 @@ fun DisplayOptionsSheet(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 24.dp, vertical = 8.dp),
+                    .padding(horizontal = Spacing.xl, vertical = Spacing.sm),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(
@@ -143,7 +144,7 @@ fun DisplayOptionsSheet(
                     text = stringResource(R.string.items_show_icon_desc),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.weight(1f).padding(start = 16.dp),
+                    modifier = Modifier.weight(1f).padding(start = Spacing.lg),
                 )
                 Switch(checked = showIcon, onCheckedChange = onShowIcon)
             }
@@ -158,7 +159,7 @@ private fun OptionGroupTitle(title: String) {
         text = title,
         style = MaterialTheme.typography.labelLarge,
         color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+        modifier = Modifier.padding(horizontal = Spacing.xl, vertical = Spacing.sm),
     )
 }
 
@@ -166,7 +167,7 @@ private fun OptionGroupTitle(title: String) {
 @Composable
 private fun OptionDivider() {
     HorizontalDivider(
-        modifier = Modifier.padding(vertical = 12.dp, horizontal = 24.dp),
+        modifier = Modifier.padding(vertical = Spacing.md, horizontal = Spacing.xl),
         color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
     )
 }
@@ -183,7 +184,7 @@ private fun OptionRow(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(horizontal = 24.dp, vertical = 14.dp),
+            .padding(horizontal = Spacing.xl, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
@@ -196,7 +197,7 @@ private fun OptionRow(
             text = title,
             style = MaterialTheme.typography.bodyLarge,
             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-            modifier = Modifier.weight(1f).padding(start = 16.dp),
+            modifier = Modifier.weight(1f).padding(start = Spacing.lg),
         )
         if (selected) {
             Icon(

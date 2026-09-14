@@ -62,6 +62,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.theme.Spacing
 
 /** 悬浮胶囊底栏固定高度（对齐 Bastion：胶囊 60dp + 留白 6/20 = 86dp 视觉占位）。 */
 private val DockBarHeight = 60.dp
@@ -120,7 +121,7 @@ fun VaultixBottomDock(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 20.dp)
+            .padding(start = Spacing.md, end = Spacing.md, top = 6.dp, bottom = 20.dp)
     ) {
         Surface(
             modifier = Modifier.fillMaxWidth(),
@@ -186,7 +187,7 @@ private fun AddButton(
     val addLabel = stringResource(R.string.nav_add)
     Surface(
         onClick = { onAdd(currentTab) },
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(Spacing.lg),
         color = MaterialTheme.colorScheme.primary,
         contentColor = MaterialTheme.colorScheme.onPrimary,
         modifier = Modifier
@@ -240,7 +241,7 @@ private fun DockTabItem(
     Box(
         modifier = modifier
             .fillMaxHeight()
-            .clip(RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(Spacing.lg))
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
@@ -251,7 +252,7 @@ private fun DockTabItem(
             modifier = Modifier
                 .widthIn(min = 56.dp)
                 .height(48.dp)
-                .clip(RoundedCornerShape(16.dp))
+                .clip(RoundedCornerShape(Spacing.lg))
                 .background(pillColor),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,

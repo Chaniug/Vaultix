@@ -46,6 +46,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.vaultix.common.CardBrand
+import io.vaultix.vaultix.ui.theme.Spacing
 
 /**
  * 无矢量 logo 品牌在图标框里显示的短标签。
@@ -102,7 +103,7 @@ fun CardBrandIcon(
                 logo = logo,
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(horizontal = 4.dp, vertical = 2.dp)
+                    .padding(horizontal = Spacing.xs, vertical = 2.dp)
             )
         }
         return
@@ -119,7 +120,7 @@ fun CardBrandIcon(
                 contentDescription = brand.displayName,
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(horizontal = 7.dp, vertical = 4.dp),
+                    .padding(horizontal = 7.dp, vertical = Spacing.xs),
                 tint = frameContentColor
             )
         }
@@ -165,7 +166,7 @@ private fun CardBrandIconFrame(
 ) {
     Surface(
         modifier = modifier,
-        shape = RoundedCornerShape(8.dp),
+        shape = RoundedCornerShape(Spacing.sm),
         color = if (isDarkTheme) CardBrandIconDarkContainer else CardBrandIconLightContainer,
         border = BorderStroke(
             width = 0.5.dp,

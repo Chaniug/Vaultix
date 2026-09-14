@@ -23,10 +23,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
 import io.vaultix.model.VaultFido2Credential
 import io.vaultix.model.VaultItem
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.theme.Spacing
 
 /**
  * 保存（绑定）一个通行密钥到所选密码条目。
@@ -80,7 +80,7 @@ fun SavePasskeyDialog(
                             }
                         }
                     }
-                    Spacer(Modifier.height(8.dp))
+                    Spacer(Modifier.height(Spacing.sm))
                 }
                 OutlinedTextField(
                     value = rpId,
@@ -89,7 +89,7 @@ fun SavePasskeyDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(Spacing.sm))
                 OutlinedTextField(
                     value = rpName,
                     onValueChange = { rpName = it },
@@ -97,7 +97,7 @@ fun SavePasskeyDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(Spacing.sm))
                 OutlinedTextField(
                     value = userName,
                     onValueChange = { userName = it },
@@ -105,7 +105,7 @@ fun SavePasskeyDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(Spacing.sm))
                 OutlinedTextField(
                     value = userDisplayName,
                     onValueChange = { userDisplayName = it },
@@ -113,7 +113,7 @@ fun SavePasskeyDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(Spacing.sm))
                 OutlinedTextField(
                     value = credentialId,
                     onValueChange = { credentialId = it },
@@ -121,7 +121,7 @@ fun SavePasskeyDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(Spacing.sm))
                 OutlinedTextField(
                     value = keyValue,
                     onValueChange = { keyValue = it },

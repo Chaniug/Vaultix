@@ -114,6 +114,7 @@ import io.vaultix.vaultix.ui.common.itemTypeLabelRes
 import io.vaultix.vaultix.ui.common.rememberImmersiveBarPadding
 import io.vaultix.vaultix.ui.common.rememberScrollCollapseFraction
 import io.vaultix.vaultix.ui.common.toggleSelection
+import io.vaultix.vaultix.ui.theme.Spacing
 
 /**
  * 条目列表（Docs/08 S7 最小版）+ 新建条目对话框（S10 最小版）。
@@ -127,7 +128,7 @@ import io.vaultix.vaultix.ui.common.toggleSelection
 private const val NOTE_DISMISS_DELAY_MS = 2_000L
 
 /** 卡片之间的纵向间距（8dp；水平留白由 LazyColumn 的 contentPadding 统一给）。 */
-private val ITEM_CARD_GAP = 8.dp
+private val ITEM_CARD_GAP = Spacing.sm
 
 /** 分组折叠/展开的箭头动画时长（对齐 Bastion 的 200ms 补间）。 */
 private const val GROUP_ANIM_MS = 200
@@ -811,8 +812,8 @@ private fun QuickFilterChips(
                 .fillMaxWidth()
                 .padding(top = topPadding)
                 .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                .padding(horizontal = Spacing.md, vertical = Spacing.sm),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             ItemsQuickFilter.entries.forEach { filter ->
@@ -887,10 +888,10 @@ private fun ItemsList(
         // 水平 16dp 也由列表统一留白（卡片自身不再带外边距）——
         // 对齐 Bastion `PasswordListScrollableContent` 的 contentPadding 结构。
         contentPadding = PaddingValues(
-            start = 16.dp,
+            start = Spacing.lg,
             top = topInset,
-            end = 16.dp,
-            bottom = 8.dp + bottomInset,
+            end = Spacing.lg,
+            bottom = Spacing.sm + bottomInset,
         ),
         verticalArrangement = Arrangement.spacedBy(ITEM_CARD_GAP),
     ) {
@@ -992,13 +993,13 @@ private fun SyncNoteBanner(
             is ItemsViewModel.SyncNote.Warning -> {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                    modifier = Modifier.padding(horizontal = Spacing.lg, vertical = 6.dp),
                 ) {
                     Icon(
                         Icons.Filled.Warning,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.onErrorContainer,
-                        modifier = Modifier.size(16.dp),
+                        modifier = Modifier.size(Spacing.lg),
                     )
                     Text(
                         text = note.message,
@@ -1006,7 +1007,7 @@ private fun SyncNoteBanner(
                         color = MaterialTheme.colorScheme.onErrorContainer,
                         modifier = Modifier
                             .weight(1f)
-                            .padding(horizontal = 8.dp),
+                            .padding(horizontal = Spacing.sm),
                     )
                     TextButton(onClick = onRetry) {
                         Text(stringResource(R.string.action_retry))
@@ -1016,36 +1017,36 @@ private fun SyncNoteBanner(
             is ItemsViewModel.SyncNote.Success -> {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                    modifier = Modifier.padding(horizontal = Spacing.lg, vertical = 6.dp),
                 ) {
                     Icon(
                         Icons.Filled.Check,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(16.dp),
+                        modifier = Modifier.size(Spacing.lg),
                     )
                     Text(
                         text = stringResource(R.string.items_sync_done, note.cipherCount),
                         style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(start = 8.dp),
+                        modifier = Modifier.padding(start = Spacing.sm),
                     )
                 }
             }
             ItemsViewModel.SyncNote.Skipped -> {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                    modifier = Modifier.padding(horizontal = Spacing.lg, vertical = 6.dp),
                 ) {
                     Icon(
                         Icons.Filled.Check,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(16.dp),
+                        modifier = Modifier.size(Spacing.lg),
                     )
                     Text(
                         text = stringResource(R.string.items_sync_skipped),
                         style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(start = 8.dp),
+                        modifier = Modifier.padding(start = Spacing.sm),
                     )
                 }
             }
@@ -1068,7 +1069,7 @@ private fun EmptyItemsState() {
             text = stringResource(R.string.items_empty_body),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 8.dp),
+            modifier = Modifier.padding(top = Spacing.sm),
         )
     }
 }
@@ -1111,9 +1112,9 @@ private fun GroupHeader(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
+            .clip(RoundedCornerShape(Spacing.sm))
             .clickable(onClick = onToggle)
-            .padding(horizontal = 8.dp, vertical = 8.dp),
+            .padding(horizontal = Spacing.sm, vertical = Spacing.sm),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
@@ -1248,7 +1249,7 @@ private fun ItemRowTrailing(
     // 两者可**同时**存在（一条登录条目既带 TOTP 又绑了 passkey），故不是 if/else。
     // 文案复用筛选维度的短词，避免另造一串近义词。
     Row(
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         // 云端同步状态（待推送 = 云加斜杠，error 色跳出来）。
@@ -1260,7 +1261,7 @@ private fun ItemRowTrailing(
                 imageVector = Icons.Filled.Star,
                 contentDescription = stringResource(R.string.item_favorite),
                 tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(16.dp),
+                modifier = Modifier.size(Spacing.lg),
             )
         }
         if (!item.totp.isNullOrBlank()) {

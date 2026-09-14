@@ -72,6 +72,7 @@ import io.vaultix.vaultix.ui.common.AddVaultTypeDialog
 import io.vaultix.vaultix.ui.common.BiometricPrompter
 import io.vaultix.vaultix.ui.common.deviceCanAuthenticate
 import io.vaultix.vaultix.ui.common.rememberFragmentActivity
+import io.vaultix.vaultix.ui.theme.Spacing
 
 /**
  * 库列表（Docs/08 S3 最小版）。
@@ -187,8 +188,13 @@ fun VaultListScreen(
                         modifier = Modifier
                             .fillMaxSize()
                         .nestedScroll(scrollBehavior.nestedScrollConnection),
-                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 96.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    contentPadding = PaddingValues(
+                        start = Spacing.lg,
+                        end = Spacing.lg,
+                        top = Spacing.sm,
+                        bottom = 96.dp,
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.md),
                 ) {
                     items(vaults, key = { it.id }) { vault ->
                         VaultCard(
@@ -307,9 +313,9 @@ private fun QuickUnlockBanner(
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+            .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
+        Column(modifier = Modifier.padding(Spacing.lg)) {
             Text(
                 text = stringResource(R.string.quick_unlock_enroll_title),
                 style = MaterialTheme.typography.titleSmall,
@@ -318,16 +324,16 @@ private fun QuickUnlockBanner(
                 text = stringResource(R.string.quick_unlock_banner_text),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 4.dp),
+                modifier = Modifier.padding(top = Spacing.xs),
             )
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(top = 8.dp),
+                modifier = Modifier.padding(top = Spacing.sm),
             ) {
                 TextButton(onClick = onEnable) {
                     Text(stringResource(R.string.action_enable))
                 }
-                Spacer(Modifier.width(8.dp))
+                Spacer(Modifier.width(Spacing.sm))
                 TextButton(onClick = onDismiss) {
                     Text(stringResource(R.string.action_later))
                 }
@@ -370,7 +376,7 @@ private fun EmptyVaultState(onConnectBitwarden: () -> Unit, onOpenKdbx: () -> Un
             tint = MaterialTheme.colorScheme.primary,
             modifier = Modifier.size(72.dp),
         )
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(Spacing.lg))
         Text(
             text = stringResource(R.string.app_name),
             style = MaterialTheme.typography.headlineMedium,
@@ -391,7 +397,7 @@ private fun EmptyVaultState(onConnectBitwarden: () -> Unit, onOpenKdbx: () -> Un
                 content = Color.White,
                 onClick = onConnectBitwarden,
             )
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(Spacing.md))
         }
         // KDBX 入口对 full / offline **两种分发都开放**（本地库不需要网络，
         // offline 分发反而只有它可用 —— 此前这里写的是「即将支持」占位）。
@@ -402,7 +408,7 @@ private fun EmptyVaultState(onConnectBitwarden: () -> Unit, onOpenKdbx: () -> Un
             content = KDBX_BRAND_GOLD_TEXT,
             onClick = onOpenKdbx,
         )
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(Spacing.xl))
         Text(
             text = stringResource(R.string.vault_list_empty_hint),
             style = MaterialTheme.typography.labelSmall,
@@ -445,8 +451,8 @@ private fun BrandVaultButton(
             containerColor = container,
             contentColor = content,
         ),
-        shape = RoundedCornerShape(16.dp),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
+        shape = RoundedCornerShape(Spacing.lg),
+        contentPadding = PaddingValues(horizontal = Spacing.lg, vertical = 10.dp),
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 64.dp),
@@ -477,7 +483,7 @@ private fun VaultCard(
         ),
     ) {
         Row(
-            modifier = Modifier.padding(start = 16.dp, top = 16.dp, bottom = 16.dp, end = 4.dp),
+            modifier = Modifier.padding(start = Spacing.lg, top = Spacing.lg, bottom = Spacing.lg, end = Spacing.xs),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(modifier = Modifier.weight(1f)) {
@@ -602,7 +608,7 @@ private fun KdbxBannerPasswordDialog(
                     text = stringResource(R.string.kdbx_quick_unlock_message, vaultName),
                     style = MaterialTheme.typography.bodyMedium,
                 )
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(Spacing.md))
                 OutlinedTextField(
                     value = password,
                     onValueChange = { password = it },
@@ -614,7 +620,7 @@ private fun KdbxBannerPasswordDialog(
                     modifier = Modifier.fillMaxWidth(),
                 )
                 if (errorText != null) {
-                    Spacer(Modifier.height(4.dp))
+                    Spacer(Modifier.height(Spacing.xs))
                     Text(
                         text = errorText,
                         style = MaterialTheme.typography.bodySmall,

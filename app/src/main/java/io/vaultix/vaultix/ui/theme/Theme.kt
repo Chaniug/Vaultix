@@ -28,7 +28,7 @@ private val LightColorScheme = lightColorScheme()
  * 一次性变圆**，比逐个字段加 `shape = RoundedCornerShape(12.dp)` 稳妥：不会漏、也不会漂移。
  * 其余档位保持 M3 基线，避免顺手改到 Card / Dialog 等无关组件的圆角。
  */
-private val VaultixShapes = Shapes(extraSmall = RoundedCornerShape(12.dp))
+private val VaultixShapes = Shapes(extraSmall = RoundedCornerShape(Spacing.md))
 
 /**
  * 主题模式（对齐 Bastion themeMode 三态）；持久化值为小写名，未知值回退跟随系统。

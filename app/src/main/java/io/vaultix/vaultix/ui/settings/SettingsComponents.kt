@@ -50,6 +50,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import io.vaultix.vaultix.ui.theme.Spacing
 
 /** 设置项卡片圆角（上游 20dp）。 */
 private val SETTINGS_CARD_CORNER = 20.dp
@@ -90,7 +91,7 @@ internal fun SettingsGroupTitle(title: String, onClick: (() -> Unit)? = null) {
                         Modifier
                     },
                 )
-                .padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 8.dp),
+                .padding(start = Spacing.lg, top = Spacing.lg, end = Spacing.lg, bottom = Spacing.sm),
         )
     }
 }
@@ -120,7 +121,7 @@ internal fun SettingsRow(
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 6.dp)
+            .padding(horizontal = Spacing.lg, vertical = 6.dp)
             .then(
                 if (onClick != null && enabled) {
                     Modifier.clickable(onClick = onClick, role = Role.Button)
@@ -135,7 +136,7 @@ internal fun SettingsRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(min = SETTINGS_ROW_MIN_HEIGHT)
-                .padding(horizontal = 20.dp, vertical = 16.dp),
+                .padding(horizontal = 20.dp, vertical = Spacing.lg),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             // 图标直出（不套圆形底衬）：主色由 LocalContentColor 供给，
@@ -178,7 +179,7 @@ internal fun SettingsRow(
             if (trailing != null) {
                 trailing()
             } else if (onClick != null) {
-                Spacer(Modifier.width(8.dp))
+                Spacer(Modifier.width(Spacing.sm))
                 Icon(
                     imageVector = Icons.Filled.ChevronRight,
                     contentDescription = null,
@@ -192,5 +193,5 @@ internal fun SettingsRow(
 /** 分组之间的分隔留白（上游 `SettingsSection` 尾部 8dp）。 */
 @Composable
 internal fun SettingsGroupSpacing() {
-    Spacer(Modifier.height(8.dp))
+    Spacer(Modifier.height(Spacing.sm))
 }

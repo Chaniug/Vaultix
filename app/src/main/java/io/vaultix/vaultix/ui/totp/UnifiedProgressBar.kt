@@ -44,11 +44,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
 import io.vaultix.common.TotpGenerator
+import io.vaultix.vaultix.ui.theme.Spacing
 
 /** 进度条高度（上游 12dp）。 */
-private val BAR_HEIGHT = 12.dp
+private val BAR_HEIGHT = Spacing.md
 
 /** 「即将过期」阈值：剩余 ≤ 该秒数时进度改警示色（上游同值）。 */
 private const val EXPIRING_SECONDS = 5
@@ -83,9 +83,9 @@ fun UnifiedTotpProgressBar(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 4.dp),
+            .padding(horizontal = Spacing.lg, vertical = Spacing.xs),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.md),
     ) {
         LinearProgressIndicator(
             progress = { progress },
@@ -112,7 +112,7 @@ fun UnifiedTotpProgressPlaceholder(trailingContent: @Composable () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 4.dp),
+            .padding(horizontal = Spacing.lg, vertical = Spacing.xs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Spacer(Modifier.weight(1f))

@@ -91,6 +91,7 @@ import io.vaultix.vaultix.R
 import io.vaultix.vaultix.autofill.shortcut.AutofillTileService
 import io.vaultix.vaultix.util.AutofillStatus
 import io.vaultix.vaultix.util.AutofillStatusChecker
+import io.vaultix.vaultix.ui.theme.Spacing
 
 /**
  * 自动填充二级设置页（设置首页「自动填充」入口进入，也是系统凭据设置的落地页）。
@@ -151,7 +152,7 @@ fun AutofillSettingsScreen(
                 .fillMaxSize()
                 .padding(padding)
                 .verticalScroll(rememberScrollState())
-                .padding(bottom = 32.dp),
+                .padding(bottom = Spacing.xxl),
         ) {
             AutofillStatusCard(
                 status = status,
@@ -294,13 +295,13 @@ private fun AutofillStatusCard(
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .padding(horizontal = Spacing.lg, vertical = Spacing.md),
         shape = RoundedCornerShape(28.dp),
         colors = CardDefaults.cardColors(containerColor = container),
     ) {
         Column(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.lg),
+            verticalArrangement = Arrangement.spacedBy(Spacing.sm),
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,

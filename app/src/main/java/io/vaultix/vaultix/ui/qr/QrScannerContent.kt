@@ -37,7 +37,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import com.google.zxing.BinaryBitmap
@@ -49,6 +48,7 @@ import io.vaultix.vaultix.R
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import io.vaultix.vaultix.ui.theme.Spacing
 
 /**
  * 二维码扫描内容（用于录入 TOTP 的 `otpauth://` 二维码）。
@@ -97,7 +97,7 @@ fun QrScannerContent(
 @Composable
 private fun ScannerTopBar(onBack: () -> Unit) {
     Surface(color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)) {
-        Box(modifier = Modifier.fillMaxWidth().padding(8.dp)) {
+        Box(modifier = Modifier.fillMaxWidth().padding(Spacing.sm)) {
             IconButton(onClick = onBack) {
                 Icon(
                     Icons.AutoMirrored.Filled.ArrowBack,
@@ -118,7 +118,7 @@ private fun PermissionRationale(onRequest: () -> Unit, onBack: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(32.dp),
+            .padding(Spacing.xxl),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
@@ -130,9 +130,9 @@ private fun PermissionRationale(onRequest: () -> Unit, onBack: () -> Unit) {
             text = stringResource(R.string.qr_camera_permission_body),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 16.dp),
+            modifier = Modifier.padding(top = Spacing.lg),
         )
-        Button(onClick = onRequest, modifier = Modifier.padding(top = 24.dp)) {
+        Button(onClick = onRequest, modifier = Modifier.padding(top = Spacing.xl)) {
             Text(stringResource(R.string.qr_grant_permission))
         }
         TextButton(onClick = onBack) {

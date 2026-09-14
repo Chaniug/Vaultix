@@ -40,12 +40,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.TrashAutoDeleteDialog
 import io.vaultix.vaultix.ui.common.itemTypeLabelRes
+import io.vaultix.vaultix.ui.theme.Spacing
 
 /**
  * 回收站（Docs/08 S19）：行 = 标题 + 类型徽标 + 自动清理倒计时；
@@ -116,8 +116,8 @@ fun TrashScreen(
                 EmptyTrashState()
             } else {
                 LazyColumn(
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    contentPadding = PaddingValues(horizontal = Spacing.lg, vertical = Spacing.sm),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.sm),
                     modifier = Modifier.fillMaxSize(),
                 ) {
                     items(trashRows, key = { it.item.id }) { row ->
@@ -177,7 +177,7 @@ private fun EmptyTrashState() {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 32.dp),
+            .padding(horizontal = Spacing.xxl),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
@@ -189,7 +189,7 @@ private fun EmptyTrashState() {
             text = stringResource(R.string.trash_empty_body),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 8.dp),
+            modifier = Modifier.padding(top = Spacing.sm),
         )
     }
 }
@@ -210,7 +210,12 @@ private fun TrashRow(
         Column {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 4.dp),
+                modifier = Modifier.padding(
+                    start = Spacing.lg,
+                    top = Spacing.md,
+                    bottom = Spacing.md,
+                    end = Spacing.xs,
+                ),
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(

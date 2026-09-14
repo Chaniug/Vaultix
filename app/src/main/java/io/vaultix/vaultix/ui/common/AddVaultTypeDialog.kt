@@ -30,9 +30,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.AppFlavor
+import io.vaultix.vaultix.ui.theme.Spacing
 
 /**
  * 添加库的类型选择（Bitwarden 云端 / 本地 KDBX 文件）。
@@ -56,7 +56,7 @@ fun AddVaultTypeDialog(
                     text = stringResource(R.string.vault_add_type_hint),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(bottom = 12.dp),
+                    modifier = Modifier.padding(bottom = Spacing.md),
                 )
                 if (AppFlavor.supportsBitwarden) {
                     ListItem(

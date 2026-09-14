@@ -99,6 +99,7 @@ import io.vaultix.vaultix.ui.common.rememberScrollCollapseFraction
 import io.vaultix.vaultix.ui.common.toggleSelection
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import io.vaultix.vaultix.ui.theme.Spacing
 
 /**
  * 验证码统一界面（对齐 Bitwarden 的 TOTP 总览 + Bastion 独立验证器视图）。
@@ -220,7 +221,7 @@ fun TotpCodesScreen(
             // 的 `Column.padding(top)`：做在外面，整页（含进度条）被永久下压，内容永远画不到
             // 顶栏区域 ⇒「收起后顶栏透明、内容从下方穿过」不成立 = 用户反馈的「验证码页不沉浸」。
             // 这与密码页 [ItemsList] 的写法是同一条约束（`.ai/ISSUES.md` #67）。
-            val topInset = if (searchActive) 0.dp else barPadding + 8.dp
+            val topInset = if (searchActive) 0.dp else barPadding + Spacing.sm
             when {
                 // ⚠️ **必须排在空态前面**：冷启动 / 解锁后条目流还没发首帧时，
                 // `state.items` 同样是空的 —— 若直接落进 `TotpEmptyBody`，用户看到的就是
@@ -246,10 +247,10 @@ fun TotpCodesScreen(
                     // 顶部 = 状态栏 + 顶栏高（随收起动画变短）；
                     // 底部留出叠层悬浮底栏的高度，否则最后一条被胶囊压住。
                     contentPadding = PaddingValues(
-                        start = 16.dp,
+                        start = Spacing.lg,
                         top = topInset,
-                        end = 16.dp,
-                        bottom = 8.dp + bottomInset,
+                        end = Spacing.lg,
+                        bottom = Spacing.sm + bottomInset,
                     ),
                     verticalArrangement = Arrangement.spacedBy(TOTP_CARD_GAP),
                 ) {
@@ -526,7 +527,7 @@ private fun EmptyTotpState(title: String? = null, message: String) {
             text = message,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 8.dp, start = 24.dp, end = 24.dp),
+            modifier = Modifier.padding(top = Spacing.sm, start = Spacing.xl, end = Spacing.xl),
         )
     }
 }
@@ -652,7 +653,7 @@ private fun TotpRow(
                     modifier = Modifier.padding(top = EntryCardTextSpacing),
                 )
             }
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(Spacing.sm))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 SelectionContainer(modifier = Modifier.weight(1f)) {
                     Text(
@@ -759,7 +760,7 @@ private fun Badge(bound: Boolean) {
             text = stringResource(text),
             style = MaterialTheme.typography.labelSmall,
             color = color,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+            modifier = Modifier.padding(horizontal = Spacing.sm, vertical = 2.dp),
         )
     }
 }
@@ -929,7 +930,7 @@ private fun TotpEditDialog(
         },
     ) {
         TypeDropdown(type) { type = it }
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(Spacing.sm))
         OutlinedTextField(
             value = issuer,
             onValueChange = { issuer = it },
@@ -937,7 +938,7 @@ private fun TotpEditDialog(
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(Spacing.sm))
         OutlinedTextField(
             value = account,
             onValueChange = { account = it },
@@ -945,7 +946,7 @@ private fun TotpEditDialog(
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(Spacing.sm))
         OutlinedTextField(
             value = secret,
             onValueChange = { secret = it },
@@ -988,7 +989,7 @@ private fun TotpEditDialog(
 /** mOTP 专属字段:PIN 码(密钥为原始字符串,固定 10s / 6 位)。 */
 @Composable
 private fun TotpMotpFields(pin: String, onPinChange: (String) -> Unit) {
-    Spacer(Modifier.height(8.dp))
+    Spacer(Modifier.height(Spacing.sm))
     OutlinedTextField(
         value = pin,
         onValueChange = onPinChange,
@@ -1000,7 +1001,7 @@ private fun TotpMotpFields(pin: String, onPinChange: (String) -> Unit) {
         text = stringResource(R.string.totp_motp_hint),
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(top = 4.dp),
+        modifier = Modifier.padding(top = Spacing.xs),
     )
 }
 
@@ -1014,7 +1015,7 @@ private fun TotpHotpFields(
     algorithm: String,
     onAlgorithmChange: (String) -> Unit,
 ) {
-    Spacer(Modifier.height(8.dp))
+    Spacer(Modifier.height(Spacing.sm))
     Row {
         OutlinedTextField(
             value = counter,
@@ -1024,7 +1025,7 @@ private fun TotpHotpFields(
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
             modifier = Modifier.weight(1f),
         )
-        Spacer(Modifier.width(8.dp))
+        Spacer(Modifier.width(Spacing.sm))
         OutlinedTextField(
             value = digits,
             onValueChange = onDigitsChange,
@@ -1034,7 +1035,7 @@ private fun TotpHotpFields(
             modifier = Modifier.weight(1f),
         )
     }
-    Spacer(Modifier.height(8.dp))
+    Spacer(Modifier.height(Spacing.sm))
     AlgorithmDropdown(algorithm, onSelected = onAlgorithmChange)
 }
 
@@ -1048,7 +1049,7 @@ private fun TotpTimedFields(
     algorithm: String,
     onAlgorithmChange: (String) -> Unit,
 ) {
-    Spacer(Modifier.height(8.dp))
+    Spacer(Modifier.height(Spacing.sm))
     Row {
         OutlinedTextField(
             value = period,
@@ -1058,7 +1059,7 @@ private fun TotpTimedFields(
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
             modifier = Modifier.weight(1f),
         )
-        Spacer(Modifier.width(8.dp))
+        Spacer(Modifier.width(Spacing.sm))
         OutlinedTextField(
             value = digits,
             onValueChange = onDigitsChange,
@@ -1068,7 +1069,7 @@ private fun TotpTimedFields(
             modifier = Modifier.weight(1f),
         )
     }
-    Spacer(Modifier.height(8.dp))
+    Spacer(Modifier.height(Spacing.sm))
     AlgorithmDropdown(algorithm, onSelected = onAlgorithmChange)
 }
 
@@ -1155,7 +1156,7 @@ private fun ImportDialog(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(Spacing.sm))
                 OutlinedTextField(
                     value = text,
                     onValueChange = { text = it },
@@ -1247,7 +1248,7 @@ private fun LoginPickerDialog(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(Spacing.sm))
                 if (candidates.isEmpty()) {
                     Text(stringResource(R.string.passkey_select_login), style = MaterialTheme.typography.bodyMedium)
                 } else {
@@ -1275,4 +1276,4 @@ private fun LoginPickerDialog(
 private val ALGORITHMS = listOf("SHA1", "SHA256", "SHA512")
 
 /** 卡片之间的纵向间距（与密码列表一致）。 */
-private val TOTP_CARD_GAP = 8.dp
+private val TOTP_CARD_GAP = Spacing.sm

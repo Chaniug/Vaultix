@@ -66,6 +66,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.error.unlockErrorText
+import io.vaultix.vaultix.ui.theme.Spacing
 
 /**
  * MIME 过滤：KDBX 没有注册 MIME 类型，故按通配 MIME（星号斜杠星号）打开并靠引擎判格式
@@ -148,7 +149,7 @@ fun AddKdbxScreen(
                 .padding(padding)
                 .verticalScroll(rememberScrollState())
                 .imePadding()
-                .padding(horizontal = 24.dp),
+                .padding(horizontal = Spacing.xl),
             verticalArrangement = Arrangement.Center,
         ) {
             Text(
@@ -165,14 +166,14 @@ fun AddKdbxScreen(
                 pickLabel = stringResource(R.string.add_kdbx_pick_file),
                 onPick = { databasePicker.launch(arrayOf(ANY_MIME)) },
             )
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(Spacing.lg))
 
             // 密钥文件是**可选**的：默认收起为一行「添加密钥文件」，避免让无 keyfile 的
             // 用户以为必须提供（KeePass 的 keyfile 是少数派用法）。
             if (state.keyFileUri == null) {
                 TextButton(onClick = { keyFilePicker.launch(arrayOf(ANY_MIME)) }) {
                     Icon(Icons.Filled.Key, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.size(8.dp))
+                    Spacer(Modifier.size(Spacing.sm))
                     Text(stringResource(R.string.add_kdbx_add_keyfile))
                 }
             } else {
@@ -185,7 +186,7 @@ fun AddKdbxScreen(
                     onClear = viewModel::clearKeyFile,
                 )
             }
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(Spacing.sm))
 
             PasswordField(state = state, viewModel = viewModel)
 
@@ -194,14 +195,14 @@ fun AddKdbxScreen(
                     text = message,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(top = 8.dp),
+                    modifier = Modifier.padding(top = Spacing.sm),
                 )
             }
 
             if (state.submitting) {
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(Spacing.md))
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(Spacing.sm))
                 Text(
                     text = stringResource(R.string.add_kdbx_working),
                     style = MaterialTheme.typography.bodySmall,
@@ -209,9 +210,9 @@ fun AddKdbxScreen(
                 )
             }
 
-            Spacer(Modifier.height(24.dp))
+            Spacer(Modifier.height(Spacing.xl))
             SubmitButton(state = state, onSubmit = viewModel::submit)
-            Spacer(Modifier.height(32.dp))
+            Spacer(Modifier.height(Spacing.xxl))
         }
     }
 }
@@ -302,7 +303,7 @@ private fun PickedFileRow(
             tint = MaterialTheme.colorScheme.primary,
             modifier = Modifier.size(22.dp),
         )
-        Column(modifier = Modifier.weight(1f).padding(start = 12.dp)) {
+        Column(modifier = Modifier.weight(1f).padding(start = Spacing.md)) {
             Text(text = label, style = MaterialTheme.typography.labelMedium)
             Text(
                 text = value.ifBlank { pickLabel },

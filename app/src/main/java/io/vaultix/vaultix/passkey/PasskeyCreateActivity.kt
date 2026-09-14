@@ -57,7 +57,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.credentials.CreatePublicKeyCredentialResponse
 import androidx.credentials.exceptions.CreateCredentialCancellationException
@@ -84,6 +83,7 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.time.Instant
 import javax.inject.Inject
+import io.vaultix.vaultix.ui.theme.Spacing
 
 @RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
 @AndroidEntryPoint
@@ -435,13 +435,13 @@ private fun PasskeyCreateSheet(
         Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 24.dp),
+                .padding(horizontal = Spacing.xl),
         ) {
             Column(
                 modifier = Modifier
-                    .padding(24.dp)
+                    .padding(Spacing.xl)
                     .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(Spacing.md),
             ) {
                 Text(
                     text = stringResource(R.string.passkey_create_for, rpName.ifBlank { rpId }),

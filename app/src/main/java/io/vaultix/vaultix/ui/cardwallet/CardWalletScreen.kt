@@ -71,6 +71,7 @@ import io.vaultix.vaultix.ui.common.rememberImmersiveBarPadding
 import io.vaultix.vaultix.ui.common.rememberScrollCollapseFraction
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import io.vaultix.vaultix.ui.theme.Spacing
 
 /**
  * 卡包 Tab（Docs/08 S20 最小版 / main-shell-migration §6.1.3）。
@@ -178,10 +179,10 @@ fun CardWalletScreen(
                         // 「收起后顶栏透明、内容从下方穿过」就不成立（顶栏下留一条死区）。
                         // 与密码 / 验证码列表同一套留白结构（卡片不再自带外边距）。
                         contentPadding = PaddingValues(
-                            start = 16.dp,
+                            start = Spacing.lg,
                             top = topInset,
-                            end = 16.dp,
-                            bottom = 8.dp + bottomInset,
+                            end = Spacing.lg,
+                            bottom = Spacing.sm + bottomInset,
                         ),
                         verticalArrangement = Arrangement.spacedBy(CARD_GAP),
                     ) {
@@ -228,7 +229,7 @@ fun CardWalletScreen(
     }
 }
 
-private val CARD_GAP = 8.dp
+private val CARD_GAP = Spacing.sm
 
 /**
  * 卡包搜索过滤：标题 / 备注 / 用户名任一命中即可（不区分大小写）。

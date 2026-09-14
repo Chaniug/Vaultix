@@ -80,9 +80,10 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.lerp
 import androidx.compose.ui.unit.sp
+import io.vaultix.vaultix.ui.theme.Spacing
 
 /** 收起/展开的判定阈值（首个可见项偏移超过它即视为「已收起」）。 */
-private val COLLAPSE_THRESHOLD = 8.dp
+private val COLLAPSE_THRESHOLD = Spacing.sm
 
 /** 动画时长：与上游一致（200ms；按钮胶囊走 spring）。 */
 private const val ANIM_MS = 200
@@ -206,12 +207,12 @@ fun VaultixExpressiveTopBar(
         label = "topbar_title_size",
     )
     val verticalPadding by animateDpAsState(
-        targetValue = lerp(8.dp, 4.dp, collapseFraction),
+        targetValue = lerp(Spacing.sm, Spacing.xs, collapseFraction),
         animationSpec = tween(ANIM_MS),
         label = "topbar_vpadding",
     )
     val contentOffset by animateDpAsState(
-        targetValue = lerp(8.dp, 0.dp, collapseFraction),
+        targetValue = lerp(Spacing.sm, 0.dp, collapseFraction),
         animationSpec = tween(ANIM_MS),
         label = "topbar_content_offset",
     )
@@ -245,7 +246,7 @@ fun VaultixExpressiveTopBar(
             // ⚠️ 背景必须在 statusBarsPadding 之前 → 覆盖到状态栏区域（状态栏沉浸）。
             .background(MaterialTheme.colorScheme.surface.copy(alpha = barBackgroundAlpha))
             .statusBarsPadding()
-            .padding(horizontal = 16.dp, vertical = verticalPadding),
+            .padding(horizontal = Spacing.lg, vertical = verticalPadding),
         contentAlignment = Alignment.Center,
     ) {
         Row(
@@ -254,7 +255,7 @@ fun VaultixExpressiveTopBar(
                 .offset(y = contentOffset)
                 .padding(end = ACTIONS_RESERVE),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.lg),
         ) {
             navigationIcon?.invoke()
             // 标题溢出时逐步缩小字号（下限 0.72），避免末尾字符被裁。
@@ -285,7 +286,7 @@ fun VaultixExpressiveTopBar(
                     modifier = Modifier
                         .clip(RoundedCornerShape(TITLE_CLICK_CORNER_DP.dp))
                         .clickable(role = Role.Button, onClick = onTitleClick)
-                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                        .padding(horizontal = Spacing.xs, vertical = 2.dp)
                         .semantics { contentDescription = "$title, $titleClickHint" },
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(2.dp),
@@ -327,7 +328,7 @@ fun VaultixExpressiveTopBar(
                                 scaleX = scale
                                 scaleY = scale
                             }
-                            .padding(horizontal = 4.dp),
+                            .padding(horizontal = Spacing.xs),
                         verticalAlignment = Alignment.CenterVertically,
                         content = actions,
                     )

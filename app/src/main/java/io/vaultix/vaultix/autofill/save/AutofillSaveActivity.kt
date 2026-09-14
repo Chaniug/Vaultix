@@ -50,7 +50,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
-import androidx.compose.ui.unit.dp
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -58,6 +57,7 @@ import dagger.hilt.android.AndroidEntryPoint
 import io.vaultix.vaultix.MainActivity
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.theme.VaultixTheme
+import io.vaultix.vaultix.ui.theme.Spacing
 
 /** 保存确认界面（新建 / 更新二合一）。 */
 @AndroidEntryPoint
@@ -132,7 +132,7 @@ private fun SaveScreen(
         Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 24.dp)
+                .padding(horizontal = Spacing.xl)
                 .clickable(onClick = { }),
         ) {
             when {
@@ -155,7 +155,7 @@ private fun SavingBody() {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(24.dp),
+            .padding(Spacing.xl),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         CircularProgressIndicator()
@@ -164,12 +164,12 @@ private fun SavingBody() {
 
 @Composable
 private fun LockedBody(onOpenVault: () -> Unit, onDismiss: () -> Unit) {
-    Column(modifier = Modifier.padding(24.dp)) {
+    Column(modifier = Modifier.padding(Spacing.xl)) {
         Text(
             text = stringResource(R.string.autofill_save_locked),
             style = MaterialTheme.typography.titleMedium,
         )
-        Button(onClick = onOpenVault, modifier = Modifier.fillMaxWidth().padding(top = 16.dp)) {
+        Button(onClick = onOpenVault, modifier = Modifier.fillMaxWidth().padding(top = Spacing.lg)) {
             Text(text = stringResource(R.string.autofill_unlock_action))
         }
         TextButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) {
@@ -188,8 +188,8 @@ private fun SaveBody(
 ) {
     var revealPassword by rememberSaveable { mutableStateOf(false) }
     Column(
-        modifier = Modifier.padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        modifier = Modifier.padding(Spacing.xl),
+        verticalArrangement = Arrangement.spacedBy(Spacing.md),
     ) {
         Text(
             text = stringResource(

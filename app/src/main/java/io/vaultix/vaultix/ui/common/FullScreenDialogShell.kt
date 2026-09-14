@@ -39,10 +39,10 @@ import androidx.core.view.WindowCompat
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.theme.Spacing
 
 /**
  * **全屏编辑壳**：顶部标题行（含关闭）+ 可滚动正文 + 底部固定操作条。
@@ -121,7 +121,7 @@ fun FullScreenDialogShell(
                     modifier = Modifier
                         .fillMaxWidth()
                         .statusBarsPadding()
-                        .padding(start = 8.dp, end = 8.dp, top = 8.dp),
+                        .padding(start = Spacing.sm, end = Spacing.sm, top = Spacing.sm),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     IconButton(onClick = onDismiss) {
@@ -133,32 +133,32 @@ fun FullScreenDialogShell(
                     Text(
                         text = title,
                         style = MaterialTheme.typography.titleLarge,
-                        modifier = Modifier.padding(start = 8.dp),
+                        modifier = Modifier.padding(start = Spacing.sm),
                     )
                 }
                 Column(
                     modifier = Modifier
                         .weight(1f)
                         .verticalScroll(rememberScrollState())
-                        .padding(horizontal = 24.dp),
+                        .padding(horizontal = Spacing.xl),
                     content = content,
                 )
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .navigationBarsPadding()
-                        .padding(horizontal = 24.dp, vertical = 16.dp),
+                        .padding(horizontal = Spacing.xl, vertical = Spacing.lg),
                     horizontalArrangement = Arrangement.End,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     if (destructive != null) {
                         destructive()
-                        Spacer(Modifier.width(8.dp))
+                        Spacer(Modifier.width(Spacing.sm))
                     }
                     TextButton(onClick = onDismiss) {
                         Text(stringResource(R.string.action_cancel))
                     }
-                    Spacer(Modifier.width(8.dp))
+                    Spacer(Modifier.width(Spacing.sm))
                     TextButton(onClick = onConfirm, enabled = confirmEnabled) {
                         Text(confirmLabel)
                     }

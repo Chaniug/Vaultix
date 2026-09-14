@@ -35,7 +35,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.biometric.BiometricManager
@@ -67,6 +66,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import javax.crypto.Cipher
 import javax.inject.Inject
+import io.vaultix.vaultix.ui.theme.Spacing
 
 /**
  * 透明宿 Activity：由系统经 PendingIntent 拉起（见 [AutofillIntents]）。
@@ -601,12 +601,12 @@ private fun AutofillPromptScreen(
         Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 24.dp)
+                .padding(horizontal = Spacing.xl)
                 .clickable(onClick = onDismiss),
         ) {
             Column(
-                modifier = Modifier.padding(24.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.padding(Spacing.xl),
+                verticalArrangement = Arrangement.spacedBy(Spacing.md),
             ) {
                 Text(text = title, style = MaterialTheme.typography.titleMedium)
                 if (subtitle.isNotBlank()) {

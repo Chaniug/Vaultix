@@ -25,11 +25,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.theme.Spacing
 
 /** 云同步图标的尺寸（与收藏星标、能力徽标同一视觉重量）。 */
-private val CLOUD_ICON_SIZE = 16.dp
+private val CLOUD_ICON_SIZE = Spacing.lg
 
 /**
  * 条目行尾的云端同步状态图标（见 `.ai/ISSUES.md` #76）。

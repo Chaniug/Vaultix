@@ -14,8 +14,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.theme.Spacing
 
 /**
  * 回收站自动清理档位（对齐 Bastion TrashSettingsSheet）：0 = 从不，其余 = 保留 N 天。
@@ -46,7 +46,7 @@ fun TrashAutoDeleteDialog(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable { onSelect(days) }
-                            .padding(vertical = 4.dp),
+                            .padding(vertical = Spacing.xs),
                     ) {
                         RadioButton(selected = days == currentDays, onClick = { onSelect(days) })
                         Text(text = trashAutoDeleteLabel(days), style = MaterialTheme.typography.bodyMedium)

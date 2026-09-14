@@ -24,10 +24,10 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.unit.dp
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.error.UnlockUiError
 import io.vaultix.vaultix.ui.error.unlockErrorText
+import io.vaultix.vaultix.ui.theme.Spacing
 
 /**
  * 两步验证步骤（Docs/08 S4 流程中的 2FA 一步；添加库与解锁共用）。
@@ -59,34 +59,34 @@ fun TwoFactorStep(
         // 所有「可输入码」的验证方式都展示 chips（身份验证器/邮箱/Duo/YubiKey…）
         val selectable = providers.distinct().filter(TwoFactorProvider::codeInputSupported)
         if (selectable.size > 1) {
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(Spacing.md))
             Row {
                 selectable.forEach { provider ->
                     FilterChip(
                         selected = provider == selectedProvider,
                         onClick = { onProviderSelected(provider) },
                         label = { Text(stringResource(TwoFactorProvider.labelOf(provider))) },
-                        modifier = Modifier.padding(end = 8.dp),
+                        modifier = Modifier.padding(end = Spacing.sm),
                     )
                 }
             }
         }
 
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(Spacing.lg))
 
         if (selectedProvider == TwoFactorProvider.EMAIL) {
             Text(
                 text = stringResource(R.string.two_factor_email_hint),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(bottom = 8.dp),
+                modifier = Modifier.padding(bottom = Spacing.sm),
             )
         } else if (selectedProvider == TwoFactorProvider.YUBIKEY) {
             Text(
                 text = stringResource(R.string.two_factor_yubikey_hint),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(bottom = 8.dp),
+                modifier = Modifier.padding(bottom = Spacing.sm),
             )
         }
 
@@ -132,11 +132,11 @@ fun TwoFactorStep(
                 text = message,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.padding(top = 8.dp),
+                modifier = Modifier.padding(top = Spacing.sm),
             )
         }
 
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(Spacing.lg))
         FilledTonalButton(
             onClick = {
                 focusManager.clearFocus()

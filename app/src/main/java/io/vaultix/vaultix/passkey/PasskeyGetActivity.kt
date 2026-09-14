@@ -46,7 +46,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.credentials.GetCredentialResponse
 import androidx.credentials.PublicKeyCredential
@@ -71,6 +70,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import javax.inject.Inject
+import io.vaultix.vaultix.ui.theme.Spacing
 
 /**
  * 现场诊断日志统一走 [AutofillLogger] 的 `VaultixAutofill` tag。
@@ -534,11 +534,11 @@ private fun PasskeyAuthSheet(
         Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 24.dp),
+                .padding(horizontal = Spacing.xl),
         ) {
             Column(
-                modifier = Modifier.padding(24.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.padding(Spacing.xl),
+                verticalArrangement = Arrangement.spacedBy(Spacing.md),
             ) {
                 Text(text = stringResource(R.string.passkey_auth_title), style = MaterialTheme.typography.titleMedium)
                 Text(

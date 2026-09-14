@@ -48,7 +48,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -56,6 +55,7 @@ import dagger.hilt.android.AndroidEntryPoint
 import io.vaultix.vaultix.MainActivity
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.theme.VaultixTheme
+import io.vaultix.vaultix.ui.theme.Spacing
 
 /** 快速填充：搜索已解锁的登录条目并复制（磁贴 / 手动入口共用）。 */
 @AndroidEntryPoint
@@ -140,7 +140,7 @@ private fun ManualFillScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(horizontal = 16.dp),
+                .padding(horizontal = Spacing.lg),
         ) {
             if (locked) {
                 LockedHint(onOpenVault = onOpenVault)
@@ -172,7 +172,7 @@ private fun CredentialRow(row: ManualFillViewModel.Row, onPick: (ManualFillViewM
         modifier = Modifier
             .fillMaxWidth()
             .clickable { onPick(row) }
-            .padding(vertical = 12.dp),
+            .padding(vertical = Spacing.md),
     ) {
         Text(
             text = row.title,
@@ -197,7 +197,7 @@ private fun LockedHint(onOpenVault: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(24.dp),
+            .padding(Spacing.xl),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
@@ -205,7 +205,7 @@ private fun LockedHint(onOpenVault: () -> Unit) {
             text = stringResource(R.string.manual_fill_locked),
             style = MaterialTheme.typography.bodyLarge,
         )
-        Button(onClick = onOpenVault, modifier = Modifier.padding(top = 16.dp)) {
+        Button(onClick = onOpenVault, modifier = Modifier.padding(top = Spacing.lg)) {
             Text(text = stringResource(R.string.manual_fill_open_vault))
         }
     }
@@ -216,7 +216,7 @@ private fun EmptyHint() {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 24.dp),
+            .padding(vertical = Spacing.xl),
         horizontalArrangement = Arrangement.Center,
     ) {
         Text(
