@@ -30,7 +30,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -60,6 +59,7 @@ import io.vaultix.vaultix.R
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.Locale
+import io.vaultix.vaultix.ui.common.VaultixWavyProgress
 import io.vaultix.vaultix.ui.theme.Spacing
 
 /** 图标位图边长（px）。 */
@@ -152,7 +152,7 @@ private fun LoadingHint() {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
     ) {
-        CircularProgressIndicator()
+        VaultixWavyProgress()
     }
 }
 

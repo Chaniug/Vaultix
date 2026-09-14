@@ -26,7 +26,6 @@ import androidx.compose.material.icons.filled.Public
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -55,7 +54,6 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import android.content.Intent
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import io.vaultix.common.OtpUriParser
@@ -94,6 +92,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import io.vaultix.vaultix.ui.common.VaultixExpressiveTopBar
 import io.vaultix.vaultix.ui.common.rememberImmersiveBarPadding
 import io.vaultix.vaultix.ui.common.rememberScrollCollapseFraction
+import io.vaultix.vaultix.ui.common.VaultixWavyProgress
 import io.vaultix.vaultix.ui.theme.Spacing
 
 /**
@@ -173,7 +172,7 @@ private fun DetailBodyContent(
 ) {
     Box(modifier = modifier) {
         when {
-            busy -> CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+            busy -> VaultixWavyProgress(modifier = Modifier.align(Alignment.Center))
             item == null -> Text(
                 text = stringResource(R.string.detail_missing),
                 style = MaterialTheme.typography.bodyMedium,

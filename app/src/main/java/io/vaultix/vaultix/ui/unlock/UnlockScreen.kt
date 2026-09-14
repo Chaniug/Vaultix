@@ -54,6 +54,7 @@ import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.BiometricPrompter
 import io.vaultix.vaultix.ui.common.TwoFactorStep
 import io.vaultix.vaultix.ui.common.rememberFragmentActivity
+import io.vaultix.vaultix.ui.common.VaultixWavyProgress
 import io.vaultix.vaultix.ui.error.UnlockUiError
 import io.vaultix.vaultix.ui.error.unlockErrorText
 import androidx.compose.foundation.shape.CircleShape
@@ -168,7 +169,7 @@ fun UnlockScreen(
                     LaunchedEffect(Unit) { onNoVault() }
                 } else {
                     // 首帧未到：短暂 loading（库列表一到就有结论）
-                    CircularProgressIndicator()
+                    VaultixWavyProgress()
                 }
                 return@Column
             }

@@ -60,7 +60,6 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.ScaffoldDefaults
@@ -114,6 +113,7 @@ import io.vaultix.vaultix.ui.common.itemTypeLabelRes
 import io.vaultix.vaultix.ui.common.rememberImmersiveBarPadding
 import io.vaultix.vaultix.ui.common.rememberScrollCollapseFraction
 import io.vaultix.vaultix.ui.common.toggleSelection
+import io.vaultix.vaultix.ui.common.VaultixWavyProgressBar
 import io.vaultix.vaultix.ui.theme.Spacing
 
 /**
@@ -988,7 +988,7 @@ private fun SyncNoteBanner(
     ) {
         when (note) {
             ItemsViewModel.SyncNote.InProgress -> {
-                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                VaultixWavyProgressBar(modifier = Modifier.fillMaxWidth())
             }
             is ItemsViewModel.SyncNote.Warning -> {
                 Row(

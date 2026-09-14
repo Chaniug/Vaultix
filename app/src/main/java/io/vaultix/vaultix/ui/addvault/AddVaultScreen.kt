@@ -27,7 +27,6 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -50,6 +49,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.TwoFactorStep
+import io.vaultix.vaultix.ui.common.VaultixWavyProgressBar
 import io.vaultix.vaultix.ui.error.unlockErrorText
 import io.vaultix.vaultix.ui.theme.Spacing
 
@@ -229,7 +229,7 @@ private fun VaultConnectForm(
 
         if (state.submitting) {
             Spacer(Modifier.height(Spacing.md))
-            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            VaultixWavyProgressBar(modifier = Modifier.fillMaxWidth())
             Spacer(Modifier.height(Spacing.sm))
             Text(
                 text = stringResource(R.string.add_vault_working),

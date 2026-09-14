@@ -35,7 +35,6 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -97,6 +96,7 @@ import io.vaultix.vaultix.ui.common.VaultixSearchTopAppBar
 import io.vaultix.vaultix.ui.common.rememberImmersiveBarPadding
 import io.vaultix.vaultix.ui.common.rememberScrollCollapseFraction
 import io.vaultix.vaultix.ui.common.toggleSelection
+import io.vaultix.vaultix.ui.common.VaultixWavyProgress
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import io.vaultix.vaultix.ui.theme.Spacing
@@ -363,7 +363,7 @@ private fun TotpTickerEffect(onTick: (Long) -> Unit) {
 @Composable
 private fun TotpLoadingBody() {
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        CircularProgressIndicator()
+        VaultixWavyProgress()
     }
 }
 

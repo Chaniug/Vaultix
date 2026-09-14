@@ -2,7 +2,6 @@ package io.vaultix.vaultix.ui
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -39,6 +38,7 @@ import io.vaultix.vaultix.ui.trash.TrashScreen
 import io.vaultix.vaultix.ui.unlock.UnlockScreen
 import io.vaultix.vaultix.ui.unlock.UnlockViewModel
 import io.vaultix.vaultix.ui.vaultlist.VaultListScreen
+import io.vaultix.vaultix.ui.common.VaultixWavyProgress
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.CubicBezierEasing
@@ -154,7 +154,7 @@ fun VaultixApp() {
 @Composable
 private fun SplashScreen() {
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        CircularProgressIndicator()
+        VaultixWavyProgress()
     }
 }
 

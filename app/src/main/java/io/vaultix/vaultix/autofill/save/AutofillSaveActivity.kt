@@ -31,7 +31,6 @@ import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -56,6 +55,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import dagger.hilt.android.AndroidEntryPoint
 import io.vaultix.vaultix.MainActivity
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.common.VaultixWavyProgress
 import io.vaultix.vaultix.ui.theme.VaultixTheme
 import io.vaultix.vaultix.ui.theme.Spacing
 
@@ -158,7 +158,7 @@ private fun SavingBody() {
             .padding(Spacing.xl),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        CircularProgressIndicator()
+        VaultixWavyProgress()
     }
 }
 
