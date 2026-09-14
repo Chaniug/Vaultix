@@ -184,15 +184,58 @@ class ItemRepositoryImplTest {
 
         assertEquals(VaultSaveOutcome.Synced, outcome.getOrThrow())
         val row = rowSlot.captured.single()
-        // 沿用原 id / revisionDate / folderId / favorite
+        // 服务端身份字段必须沿用原值：id / revisionDate 由服务端掌管，不得被表单改写
         assertEquals("cipher-1", row.id)
         assertEquals(existing.revisionDate, row.revisionDate)
-        assertEquals("folder-9", row.folderId)
-        assertTrue(row.favorite)
         val op = opSlot.captured
         assertEquals("UPDATE", op.op)
         assertEquals("cipher-1", op.cipherId)
         assertNotNull(op.payload)
+    }
+
+    /**
+     * folder / favorite 必须**按传入快照写入**，不能用 DB 旧值覆盖。
+     *
+     * ⚠️ 这条测试替换了此前 `assertEquals("folder-9", row.folderId)` 的断言。
+     * 旧断言固化的是一个 bug：调用方（编辑页 `buildSnapshot`）传入的是**完整条目快照**，
+     * 而 repository 又在写库前用 `existing.folderId/favorite` 覆盖一次
+     * ⇒ 用户在编辑页选了文件夹、勾了收藏，保存后被**静默回退**。
+     *
+     * 旧断言的**担忧本身是对的**（编辑不该丢 folder/favorite），但防丢的正确位置在
+     * 「调用方传完整快照」，而不是「在 repository 里无条件沿用旧值」——后者会让
+     * 这两个字段**永远无法修改**（mapper.toUpdateRequest 2026-09-08 已专门按表单意图
+     * 修复过，见 CipherMapper 注释）。
+     */
+    @Test
+    fun updateItem_writesFolderAndFavoriteFromIncomingSnapshot() = runTest {
+        sessions.unlock(vaultId, key)
+        val existing = CipherEntity(
+            id = "cipher-2",
+            vaultId = vaultId,
+            type = 1,
+            encryptedPayload = BitwardenJson.encodeToString(
+                mapper.toRequest(plainItem(id = "cipher-2"), key)
+                    .toStoredCipherDto(id = "cipher-2", revisionDate = "rev-2"),
+            ),
+            revisionDate = "rev-2",
+            favorite = false,
+            folderId = "folder-old",
+        )
+        coEvery { cipherDao.get("cipher-2") } returns existing
+        coEvery { vaultDao.get(vaultId) } returns bitwardenVaultRow()
+        val rowSlot = slot<List<CipherEntity>>()
+        coEvery { cipherDao.upsertAll(capture(rowSlot)) } returns Unit
+        coEvery { pendingOpDao.enqueue(any()) } returns Unit
+        coEvery { syncService.flushPending(vaultId, vaultId) } returns Result.success(Unit)
+
+        // 用户在编辑页把条目挪到 folder-new 并勾上收藏
+        val edited = plainItem(id = "cipher-2").copy(folderId = "folder-new", favorite = true)
+
+        repo.updateItem(vaultId, edited)
+
+        val row = rowSlot.captured.single()
+        assertEquals("folder-new", row.folderId)
+        assertTrue(row.favorite)
     }
 
     @Test

@@ -52,7 +52,9 @@ object EmptyVaultProtection {
         else -> CheckResult.Blocked(
             localCount = localCipherCount,
             serverCount = serverCipherCount,
-            reason = "服务器返回空数据，但本地有  条记录。" +
+            // ⚠️ 必须真的插值：此前写成 "本地有  条记录"（占位处为空），
+            // 用户看到的是没有数字的残句，无法判断到底有多少条面临风险。
+            reason = "服务器返回空数据，但本地有 $localCipherCount 条记录。" +
                 "这可能是服务器故障或账号异常，为保护你的数据已暂停同步。",
         )
     }

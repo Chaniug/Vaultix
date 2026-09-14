@@ -117,7 +117,19 @@ class BitwardenSyncService @Inject constructor(
                 .onFailure { error ->
                     if (error.isDefinitiveHttpFailure()) {
                         // 4xx（408/429 除外）：目标在服务端已不存在或不可执行。
-                        // 永久弃单防毒丸卡死队列；本地行由下次成功全量同步收敛。
+                        // 永久弃单防毒丸卡死队列。
+                        //
+                        // ⚠️ 弃单后必须**立刻**处理本地行，否则会静默丢数据：
+                        // 队列一旦移除这条 op，紧接着的全量同步里它既不在服务端集合、
+                        // 也不在 pendingIds 中 ⇒ pruneRemovedRows 判定为「服务端已删除」
+                        // ⇒ 直接删掉本地行，用户看到的是「新建的条目凭空消失且无任何提示」。
+                        //   - OP_CREATE：服务端从未接受它（4xx 即拒绝），本地这行注定无法同步，
+                        //     立即删除并记日志，行为由「静默消失」变为「即刻、可追溯」；
+                        //   - 其余 op（UPDATE/DELETE 等）：本地行本身是用户数据，**不能删**，
+                        //     保留它会由正常全量同步按服务端版本覆盖收敛（此时服务端版本更权威）。
+                        if (op.op == OP_CREATE) {
+                            cipherDao.deleteByIds(listOf(op.cipherId))
+                        }
                         pendingOpDao.remove(op.localId)
                     } else {
                         pendingOpDao.incrementRetry(op.localId)
@@ -186,16 +198,35 @@ class BitwardenSyncService @Inject constructor(
 
         if (!isFirstSync && EmptyVaultProtection.hasSignificantDataLoss(localCount, response.ciphers.size)) {
             return SyncOutcome.Blocked(
-                "服务端条目数（）远少于本地（），" +
+                "服务端条目数（${response.ciphers.size}）远少于本地（$localCount），" +
                     "为保护数据已暂停同步，请确认后重试。",
             )
         }
         return null
     }
 
+    /**
+     * 落库服务端条目。
+     *
+     * ⚠️ **必须跳过仍在推送队列里的条目**（`.ai/ISSUES.md` #91）：
+     * 队列里意味着这条有**尚未成功推送的本地改动**（上一轮 `flushPending` 失败留在队列）。
+     * 若无条件 `upsertAll`，服务端版本会**覆盖掉本地改动** ⇒ 用户改了密码/备注，
+     * 一次同步后变回旧值，且无任何提示。
+     *
+     * 与 [pruneRemovedRows] 的 `pendingIds` 是同一保护思路的两面：
+     * 那里防「被误删」，这里防「被覆盖」。
+     *
+     * 代价：队列条目在推送成功前拿到的是本地版本（正确——本地才是用户最新意图）；
+     * 推送成功后队列清空，下一次同步即取服务端版本收敛。
+     */
     private suspend fun persistCiphers(vaultId: String, ciphers: List<CipherDto>) {
         if (ciphers.isEmpty()) return
-        cipherDao.upsertAll(ciphers.map { dto -> dto.toEntity(vaultId) })
+        val pendingIds = pendingOpDao.listByVault(vaultId).map { op -> op.cipherId }.toSet()
+        val incoming = ciphers
+            .filter { dto -> dto.id !in pendingIds }
+            .map { dto -> dto.toEntity(vaultId) }
+        if (incoming.isEmpty()) return
+        cipherDao.upsertAll(incoming)
     }
 
     private suspend fun persistFolders(vaultId: String, folders: List<FolderDto>) {
