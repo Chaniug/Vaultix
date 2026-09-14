@@ -35,6 +35,7 @@ package io.vaultix.vaultix.ui.rootnav
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.domain.VaultRepository
 import io.vaultix.domain.VaultSessionRepository
 import kotlinx.coroutines.flow.SharingStarted
@@ -87,6 +88,7 @@ sealed class RootNavState {
 class RootNavViewModel @Inject constructor(
     vaultRepository: VaultRepository,
     sessionRepository: VaultSessionRepository,
+    private val preferences: VaultixPreferences,
 ) : ViewModel() {
 
     /**
@@ -100,6 +102,13 @@ class RootNavViewModel @Inject constructor(
      * （密钥在内存、autofill 与凭据提供商照常可用），若按解锁图处理，
      * 用户按了主页锁按钮却什么都没发生 —— 那正是这一步要修的行为。
      *
+     * ⚠️ 全锁分支必须**带上默认库的 id**（2026-09-14，`.ai/decisions/库选择与快速解锁-逻辑定稿.md`
+     * §1⑤ / §7 任务 5）：此前 `else -> VaultLocked()` **不带 vaultId**，解锁页只能自己
+     * 挑「第一个锁定的库」= `ORDER BY createdAt` 最早的那个（老用户就是 Bitwarden）
+     * ⇒ 用户设的默认库指向 KDBX 时**设置不生效**，冷启动仍落 Bitwarden。
+     *
+     * 默认库为空时**行为与以前完全一致**（退回「createdAt 最早」）—— 老用户零变化。
+     *
      * 与 Bitwarden 的差异：Bitwarden 多一层 `isLoggedIn`（账号是否已登录）与
      * `SpecialCircumstance.Fido2Assertion` 专项路由；Vaultix 目前是单账号模型，
      * 「有没有库」即等价于「是否已登录」，故收敛为一条判定。
@@ -108,7 +117,8 @@ class RootNavViewModel @Inject constructor(
         vaultRepository.observeVaults(),
         vaultRepository.observeUnlockedVaultIds(),
         sessionRepository.observeViewLockedVaultIds(),
-    ) { vaults, unlockedIds, viewLockedIds ->
+        preferences.defaultVaultId,
+    ) { vaults, unlockedIds, viewLockedIds, defaultVaultId ->
         val viewLocked = viewLockedIds.firstOrNull { id -> vaults.any { it.id == id } }
         when {
             // 查看层锁：界面收回解锁页，但密钥仍在 → 解锁页只做一次认证。
@@ -119,7 +129,12 @@ class RootNavViewModel @Inject constructor(
             unlockedIds.isNotEmpty() || vaults.any { it.unlocked } -> RootNavState.VaultUnlockedGraph
             // 一个库都没有：首次使用，不是"锁定"（锁定态必须有可解锁的库）
             vaults.isEmpty() -> RootNavState.Onboarding
-            else -> RootNavState.VaultLocked()
+            // 全锁：优先把**用户设的默认库**交给解锁页；为空 / 已被删则退回
+            // 「列表第一个」（DAO 的 ORDER BY createdAt ⇒ 与既有行为一致）。
+            else -> RootNavState.VaultLocked(
+                vaultId = defaultVaultId?.takeIf { id -> vaults.any { it.id == id } }
+                    ?: vaults.firstOrNull()?.id,
+            )
         }
     }.stateIn(
         scope = viewModelScope,

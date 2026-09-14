@@ -86,6 +86,11 @@ object Kdbx {
      * 用主密码（可选 keyfile）打开 [sourceUri] 指向的库，并登记为 [vaultId] 的会话。
      *
      * 成功即覆盖同 id 的旧会话（换文件 / 换密码重开时不会残留旧明文）。
+     *
+     * @param keyFileBytes keyfile **内容**（优先于 [keyFileUri]）。快速解锁场景下
+     *   keyfile 是从包裹物里解出来的字节，**没有 URI 可读**；若为了走 URI 参数而把
+     *   它落成临时文件，等于把明文写盘 —— 与「明文绝不落盘」的约定直接冲突。
+     *   因此这里直接支持字节输入：**有字节就用字节，没有才去读 URI**。
      */
     fun unlock(
         vaultId: String,
@@ -93,16 +98,18 @@ object Kdbx {
         password: String,
         keyFileUri: String?,
         source: KdbxSource,
+        keyFileBytes: ByteArray? = null,
     ): Result<KdbxUnlockedContent> {
         val bytes = source.read(sourceUri)
             ?: return Result.failure(
                 KdbxFailure(KdbxOpenError.SourceUnavailable("无法读取该库文件，请重新选择")),
             )
-        val keyFileBytes = keyFileUri
-            ?.let { uri -> source.read(uri) }
+        // 字节优先：包裹物解出的 keyfile 没有可读的 URI。
+        val resolvedKeyFileBytes = keyFileBytes
+            ?: keyFileUri?.let { uri -> source.read(uri) }
             ?: null
 
-        val opened = KdbxOpener.open(bytes = bytes, password = password, keyFileBytes = keyFileBytes)
+        val opened = KdbxOpener.open(bytes = bytes, password = password, keyFileBytes = resolvedKeyFileBytes)
         val session = opened.getOrElse { error ->
             return Result.failure(
                 error as? KdbxFailure ?: KdbxFailure(KdbxOpenError.Unknown(error.message.orEmpty())),

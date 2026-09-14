@@ -23,6 +23,9 @@ import io.vaultix.database.entity.VaultEntity
 import io.vaultix.datastore.LocalUnlockKeyStore
 import io.vaultix.datastore.SecureCredentialStore
 import io.vaultix.datastore.VaultixPreferences
+import io.vaultix.domain.KdbxAddOutcome
+import io.vaultix.domain.KdbxEnrollOutcome
+import io.vaultix.domain.KdbxUnlockOutcome
 import io.vaultix.domain.UnlockResult
 import io.vaultix.domain.VaultRepository
 import io.vaultix.domain.VaultSyncReport
@@ -140,18 +143,25 @@ class VaultRepositoryImpl @Inject constructor(
         displayName: String,
         masterPassword: String,
         keyFileUri: String?,
-    ): UnlockResult {
-        if (sourceUri.isBlank()) return UnlockResult.Unknown("未选择数据库文件")
+    ): KdbxAddOutcome {
+        if (sourceUri.isBlank()) {
+            return KdbxAddOutcome.Failed(UnlockResult.Unknown("未选择数据库文件"))
+        }
         val result = unlockKdbxInternal(
             vaultId = sourceUri,
             sourceUri = sourceUri,
             password = masterPassword,
             keyFileUri = keyFileUri,
         )
-        if (result != UnlockResult.Success) return result
+        if (result != UnlockResult.Success) return KdbxAddOutcome.Failed(result)
 
         val now = System.currentTimeMillis()
+        // ⚠️ KDBX 库的 id **就是** sourceUri（文件路径即主键）⇒ 重复添加同一文件会
+        // 覆盖同一行。用「添加前是否已有该 id」区分「新增 / 已存在」，让 UI 能给出
+        // 不同的成功文案 —— 否则用户重复添加时列表零变化、又无任何提示，
+        // 读起来就是「点了一点反应都没有」（`.ai/ISSUES.md` #94）。
         val existing = vaultDao.get(sourceUri)
+        val outcome = if (existing == null) KdbxAddOutcome.Added else KdbxAddOutcome.Updated
         vaultDao.upsert(
             VaultEntity(
                 id = sourceUri,
@@ -166,7 +176,13 @@ class VaultRepositoryImpl @Inject constructor(
         if (!keyFileUri.isNullOrBlank()) {
             preferences.setKdbxKeyFileUri(sourceUri, keyFileUri)
         }
-        return UnlockResult.Success
+        // 首次接入顺手设为默认库（**仅当默认库为空**，用户 2026-09-14 拍板）。
+        // ⚠️ 只在 Added 时做：Updated 是「重复添加同一文件」，不是接入新库，
+        //   不该有设默认的副作用。
+        if (outcome is KdbxAddOutcome.Added) {
+            preferences.trySetDefaultVaultIfAbsent(sourceUri)
+        }
+        return outcome
     }
 
     override suspend fun unlockKdbxVault(vaultId: String, masterPassword: String): UnlockResult {
@@ -466,6 +482,136 @@ class VaultRepositoryImpl @Inject constructor(
     private fun wrappedPayload(vaultId: String): String? =
         credentials.getString(LOCAL_UNLOCK_PREFIX + vaultId)
 
+    // ---- 本地快速解锁：KDBX 侧（#93 / 定稿 §4）----
+
+    /**
+     * KDBX 启用快速解锁：**先真解一次库校验凭据**，通过才包裹「主密码 + keyfile」。
+     *
+     * 顺序**不可颠倒**（定稿 §4.4 的硬约束）：`wrap` 只负责把字节封进 Keystore，
+     * 对内容一无所知。若先 wrap 后校验，用户输错密码时会得到一个「启用成功」
+     * 的假象，而保险箱里躺的是错密码 —— 下次指纹解出来的必然是打不开的凭据。
+     *
+     * 校验**复用 [unlockKdbxInternal]（真实开库路径）**而非比对长度或指纹：
+     * KDBX 的凭据校验只有「能不能解开加密头」这一个可信判据。
+     *
+     * ⚠️ 副作用：校验会**顺带把库打开**（登记会话）。这对用户是好事 ——
+     * 他刚刚证明了自己能开这个库，把会话留着让他直接用，符合直觉；
+     * 也不改变任何安全边界（能开到就能开）。
+     */
+    override suspend fun enrollLocalUnlockKdbx(
+        vaultId: String,
+        masterPassword: String,
+        keyFileUri: String?,
+        cipher: Cipher,
+    ): KdbxEnrollOutcome = withContext(Dispatchers.IO) {
+        val row = vaultDao.get(vaultId)
+            ?: return@withContext KdbxEnrollOutcome.Failed("本地不存在该库")
+        if (VaultKind.fromName(row.kind) != VaultKind.KDBX) {
+            return@withContext KdbxEnrollOutcome.Failed("该库不是 KDBX 类型")
+        }
+
+        // ① 校验：用这组凭据真的解一次库。
+        val verification = unlockKdbxInternal(
+            vaultId = vaultId,
+            sourceUri = row.origin,
+            password = masterPassword,
+            keyFileUri = keyFileUri,
+        )
+        if (verification != UnlockResult.Success) {
+            return@withContext when (verification) {
+                UnlockResult.InvalidCredentials -> KdbxEnrollOutcome.InvalidCredentials
+                else -> KdbxEnrollOutcome.SourceUnavailable(
+                    (verification as? UnlockResult.Unknown)?.detail ?: "无法打开该库",
+                )
+            }
+        }
+
+        // ② 包裹。keyfile 字节**当场从 URI 读出**：只包 URI 不行（URI 授权可能失效，
+        //    且用户可能在设置里换过 keyfile），必须包内容本身。
+        val keyFileBytes = keyFileUri
+            ?.takeIf { it.isNotBlank() }
+            ?.let { uri -> runCatching { kdbxSource.read(uri) }.getOrNull() }
+        val plaintext = KdbxUnlockPayload.encode(masterPassword, keyFileBytes)
+        // 与 Bitwarden 侧 [enrollLocalUnlock] 同款取向：**不吞异常**。
+        // `wrap` 抛错意味着这个 cipher 根本用不了（认证已过但 Cipher 状态错），
+        // 那是编程/环境错误、不是用户输入问题 —— 吞成「包裹失败」只会掩盖它。
+        // 唯一必须做的收尾是擦掉明文，故用 finally。
+        val wrapped = try {
+            localUnlockKeyStore.wrap(cipher, plaintext)
+        } finally {
+            // 明文凭据用完即擦（含主密码字节）：这是本项目对明文的一贯取向。
+            plaintext.fill(0)
+        }
+
+        credentials.putString(LOCAL_UNLOCK_PREFIX + vaultId, wrapped)
+        preferences.setLocalUnlockEnabled(vaultId, true)
+        KdbxEnrollOutcome.Enrolled
+    }
+
+    /**
+     * 认证通过后解封 KDBX 包裹物并**真的开库**。
+     *
+     * 「指纹通过」与「库打开」是两件事：前者只证明戴指纹的是机主，
+     * 后者才证明包裹物里的主密码还对。这两件事必须**分开报告** ——
+     * 否则用户改了主密码后会看到「指纹错误」这种完全误导的提示（定稿 §4.4 D3）。
+     */
+    override suspend fun completeLocalUnlockKdbx(
+        vaultId: String,
+        cipher: Cipher,
+    ): KdbxUnlockOutcome = withContext(Dispatchers.IO) {
+        val payload = wrappedPayload(vaultId)
+            ?: return@withContext KdbxUnlockOutcome.Unavailable("未启用本地快速解锁")
+
+        val plaintext = runCatching { localUnlockKeyStore.unwrap(cipher, payload) }
+            .getOrElse { error ->
+                // payload 都解不开 ⇒ KEK 已换（指纹变更）/ 数据损坏 ⇒ 回退主密码，勿删登记
+                return@withContext KdbxUnlockOutcome.Unavailable(
+                    error.message ?: "本地解锁凭据不可用",
+                )
+            }
+
+        val decoded = KdbxUnlockPayload.decode(plaintext)
+        plaintext.fill(0)
+        val credential = when (decoded) {
+            is KdbxUnlockPayload.DecodeResult.Ok -> decoded
+            is KdbxUnlockPayload.DecodeResult.Malformed ->
+                return@withContext KdbxUnlockOutcome.Unavailable(decoded.detail)
+        }
+
+        val row = vaultDao.get(vaultId)
+            ?: return@withContext KdbxUnlockOutcome.Unavailable("本地不存在该库")
+        val result = try {
+            Kdbx.unlock(
+                vaultId = vaultId,
+                sourceUri = row.origin,
+                password = credential.masterPassword,
+                // keyfile 字节直接喂进去，**不落临时文件**（见 `Kdbx.unlock` 的 KDoc）。
+                keyFileUri = null,
+                source = kdbxSource,
+                keyFileBytes = credential.keyFileBytes,
+            )
+        } finally {
+            // 解出的 keyfile 字节用完即擦：与 `buildFullKey` 的取向一致
+            // （不留下额外的明文副本，减少可被内存转储捞到的窗口）。
+            credential.keyFileBytes?.fill(0)
+        }
+        result.fold(
+            onSuccess = {
+                sessions.clearViewLock(vaultId)
+                kdbxSessions.bump()
+                KdbxUnlockOutcome.Opened
+            },
+            onFailure = { error ->
+                // 凭据类失败 = 包裹的主密码已过时（用户改过密码）⇒ 可自愈，别删登记。
+                // 其余（文件丢了等）与快速解锁无关，按 Unavailable 让 UI 回退主密码提示。
+                when ((error as? KdbxFailure)?.error) {
+                    is KdbxOpenError.InvalidCredentials -> KdbxUnlockOutcome.StaleCredentials
+                    else -> KdbxUnlockOutcome.Unavailable(error.message ?: "无法打开该库")
+                }
+            },
+        )
+    }
+
     override suspend fun syncVault(vaultId: String): VaultSyncReport {
         val row = vaultDao.get(vaultId)
             ?: return VaultSyncReport.Fatal("本地不存在该库")
@@ -530,6 +676,11 @@ class VaultRepositoryImpl @Inject constructor(
                 createdAt = existing?.createdAt ?: now,
             ),
         )
+        // 首次接入顺手设为默认库（**仅当默认库为空**）。
+        // 放在这里而不是 UI 层：库 id 是 `normalizeServer(server)` 的结果，
+        // 只有仓储知道它 —— 让 ViewModel 自己再算一遍会引入「两处口径漂移」
+        // （一处改了、另一处没改 ⇒ 默认库写成了一个不存在的 id）。
+        if (existing == null) preferences.trySetDefaultVaultIfAbsent(server)
     }
 
     private fun classifyLoginError(error: Throwable): UnlockResult = when (error) {

@@ -4,6 +4,7 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import io.vaultix.domain.KdbxUnlockOutcome
 import io.vaultix.domain.UnlockResult
 import io.vaultix.domain.VaultRepository
 import io.vaultix.domain.VaultSessionRepository
@@ -285,8 +286,24 @@ class UnlockViewModel @Inject constructor(
                 return@launch
             }
             // 同上：unwrap（Keystore 解密 + 密钥重建）不占主线程。
+            // ⚠️ 按库类型分流（定稿 §4）：Bitwarden 的包裹物是「对称密钥」，
+            // KDBX 的是「主密码 + keyfile」—— 后者还要真的开一次库，
+            // 因此**不能**共用同一条路径（混用会解出完全错误的语义）。
+            val isKdbx = _state.value.vault?.kind == VaultKind.KDBX
             val result = withContext(Dispatchers.IO) {
-                vaultRepository.completeLocalUnlock(vaultId, cipher)
+                if (isKdbx) {
+                    val kdbxOutcome = vaultRepository.completeLocalUnlockKdbx(vaultId, cipher)
+                    when (kdbxOutcome) {
+                        KdbxUnlockOutcome.Opened -> UnlockResult.Success
+                        // ★ D3（定稿 §4.4）：指纹过了但包裹物打不开 ⇒ 主密码很可能已改。
+                        //   归类为凭据错误，让 UI 提示「主密码可能已变更」并引导重输；
+                        //   用户输对后本页正常开库，接着可再启用快速解锁自愈。
+                        KdbxUnlockOutcome.StaleCredentials -> UnlockResult.InvalidCredentials
+                        is KdbxUnlockOutcome.Unavailable -> UnlockResult.Unknown(kdbxOutcome.detail)
+                    }
+                } else {
+                    vaultRepository.completeLocalUnlock(vaultId, cipher)
+                }
             }
             if (result == UnlockResult.Success) {
                 _state.update {
@@ -300,16 +317,34 @@ class UnlockViewModel @Inject constructor(
                 }
                 _events.send(Event.Unlocked)
             } else {
+                // 仓储给的**具体原因**优先（例如「文件读不到了，请重新选择」），
+                // 没有具体原因时才用按库类型区分的兜底文案。
                 val detail = (result as? UnlockResult.Unknown)?.detail
                 _state.update {
                     it.copy(
                         submitting = false,
                         viewUnlockStarted = false,
-                        error = UnlockUiError.Unknown(detail ?: "本地解锁失败，请用主密码登录"),
+                        error = UnlockUiError.Unknown(detail ?: localUnlockFailureText(isKdbx)),
                     )
                 }
             }
         }
+    }
+
+    /**
+     * 本地解锁失败时的兜底文案。
+     *
+     * ⚠️ KDBX 必须**单独一句**：它的包裹物是主密码，「指纹过了但打不开」
+     * 的唯一合理解释是主密码被改过（定稿 §4.4 D3）。若沿用 Bitwarden 那句
+     * 「请用主密码登录」，用户会以为指纹坏了 —— 而他真正需要做的是**输新主密码**。
+     *
+     * 说明：ViewModel 层没有 `stringResource`，故此处返回字面量；
+     * `detail` 非空时（仓储给了具体原因）优先用 detail。
+     */
+    private fun localUnlockFailureText(isKdbx: Boolean): String = if (isKdbx) {
+        "主密码可能已在别处变更，请输入当前主密码"
+    } else {
+        "本地解锁失败，请用主密码登录"
     }
 
     /** 认证对话框被系统错误终止（非用户取消）时收起 busy 态。 */

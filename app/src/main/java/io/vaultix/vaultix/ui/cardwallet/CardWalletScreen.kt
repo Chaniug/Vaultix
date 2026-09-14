@@ -186,7 +186,7 @@ fun CardWalletScreen(
                         verticalArrangement = Arrangement.spacedBy(CARD_GAP),
                     ) {
                         items(visibleCards, key = { it.id }) { item ->
-                            // 与密码列表一致的「左滑露出删除 → 二次确认」（软删除进回收站）。
+                            // 与密码列表一致的「左滑 → 松手过半 → 二次确认」（软删除进回收站）。
                             PressAndSwipeToDelete(onDelete = { viewModel.deleteCard(item) }) {
                                 CardWalletRow(item = item, onClick = { onOpenItem(item) })
                             }

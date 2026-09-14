@@ -13,11 +13,33 @@
 package io.vaultix.vaultix.ui.shell
 
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import io.vaultix.domain.VaultRepository
 import io.vaultix.vaultix.session.ActiveVaultStore
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import javax.inject.Inject
 
 @HiltViewModel
 class MainShellViewModel @Inject constructor(
     val activeVaultStore: ActiveVaultStore,
-) : ViewModel()
+    vaultRepository: VaultRepository,
+) : ViewModel() {
+
+    /**
+     * 库总数 —— 决定「切换密码库」入口是否出现（>1 才显示）。
+     *
+     * issue #96 的教训：入口挂在不可达路由后面等于没做；反过来，给单库用户
+     * 显示一个「切换密码库」也是噪音。数量是这里唯一需要的信号，不暴露库内容。
+     */
+    val vaultCount: StateFlow<Int> = vaultRepository.observeVaults()
+        .map { it.size }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = 0,
+        )
+}

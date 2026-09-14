@@ -71,7 +71,11 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import io.vaultix.datastore.VaultTimeout
+import io.vaultix.model.VaultKind
 import io.vaultix.model.VaultSummary
 import io.vaultix.vaultix.BuildConfig
 import io.vaultix.vaultix.R
@@ -116,8 +120,16 @@ fun SettingsScreen(
     var showQuickUnlockDialog by rememberSaveable { mutableStateOf(false) }
     var showExitDatabaseDialog by rememberSaveable { mutableStateOf(false) }
     val quickUnlockVaults by viewModel.quickUnlockVaults.collectAsStateWithLifecycle()
+    val kdbxEnrollState by viewModel.kdbxEnrollState.collectAsStateWithLifecycle()
+    // 正在等待主密码的 KDBX 库（null = 不显示输入框）。由事件驱动，不 saveable：
+    // 进程重建后事件已消费，重新弹一个空输入框反而困惑。
+    var pendingKdbxVaultId by remember { mutableStateOf<String?>(null) }
 
-    QuickUnlockEnrollEffect(viewModel)
+    QuickUnlockEnrollEffect(
+        viewModel = viewModel,
+        onPromptKdbxPassword = { vaultId -> pendingKdbxVaultId = vaultId },
+        onEnrollReady = { pendingKdbxVaultId = null },
+    )
 
     // 沉浸式顶栏：大标题随滚动缩小、状态栏区域由顶栏背景覆盖（对齐 Bastion）。
     val scrollState = rememberScrollState()
@@ -229,9 +241,31 @@ fun SettingsScreen(
         QuickUnlockManageDialog(
             vaults = quickUnlockVaults,
             canAuthenticate = deviceCanAuthenticate(context),
-            onEnable = viewModel::startQuickUnlockEnroll,
+            // ★ 按库类型分流：KDBX 没有可包裹的会话密钥，**必须先要主密码**
+            //   （定稿 §4.5）；Bitwarden 直接弹指纹。
+            onEnable = { vaultId ->
+                val target = quickUnlockVaults.firstOrNull { it.vaultId == vaultId }
+                if (target?.kind == VaultKind.KDBX) {
+                    viewModel.startKdbxQuickUnlock(vaultId)
+                } else {
+                    viewModel.startQuickUnlockEnroll(vaultId)
+                }
+            },
             onDisable = viewModel::disableQuickUnlock,
             onDismiss = { showQuickUnlockDialog = false },
+        )
+    }
+    // KDBX 主密码输入框：仅当用户勾选了 KDBX 库、且尚未校验通过时出现。
+    val kdbxTarget = pendingKdbxVaultId
+    if (kdbxTarget != null) {
+        KdbxQuickUnlockPasswordDialog(
+            vaultName = quickUnlockVaults.firstOrNull { it.vaultId == kdbxTarget }?.name.orEmpty(),
+            state = kdbxEnrollState,
+            onSubmit = { password -> viewModel.confirmKdbxPassword(kdbxTarget, password) },
+            onDismiss = {
+                pendingKdbxVaultId = null
+                viewModel.dismissKdbxPassword()
+            },
         )
     }
     if (showExitDatabaseDialog) {
@@ -387,6 +421,7 @@ private fun VaultSection(
     onAddKdbxVault: () -> Unit,
 ) {
     val active by viewModel.activeVault.collectAsStateWithLifecycle()
+    val default by viewModel.defaultVault.collectAsStateWithLifecycle()
     val switchable by viewModel.switchableVaults.collectAsStateWithLifecycle()
     var showDialog by rememberSaveable { mutableStateOf(false) }
     var showAddDialog by rememberSaveable { mutableStateOf(false) }
@@ -412,8 +447,13 @@ private fun VaultSection(
         ActiveVaultDialog(
             vaults = switchable,
             activeId = active?.id,
+            defaultId = default?.id,
             onSelect = { vaultId ->
                 viewModel.selectVault(vaultId)
+                showDialog = false
+            },
+            onSetDefault = { vaultId ->
+                viewModel.setDefaultVault(vaultId)
                 showDialog = false
             },
             onDismiss = { showDialog = false },
@@ -436,14 +476,24 @@ private fun VaultSection(
 }
 
 /**
- * 活跃库选择器。**只列已解锁的库**：锁定库没有内存密钥，切过去也读不出任何条目
- * （先解锁再切，与「多库并存时只能进一样」的产品定义一致）。
+ * 活跃库选择器。**列出全部库**（含未解锁）。
+ *
+ * ⚠️ 2026-09-14（issue #96）：原先只列已解锁库 ⇒ 未解锁的 KDBX 不在列表里，
+ * 用户「找不到我的库」而以为库丢了。现在全部列出、未解锁项如实标注
+ * 「未解锁 · 需先输入主密码」——**「找得到」优先于「点得动」**：
+ * 点一个未解锁库时 [onSelect] 会把用户带去解锁页（由宿主接线）。
+ *
+ * 两项动作分开（这是「活跃库 / 默认库」两键拆分的 UI 形态）：
+ * - 点行 = 切换**本次会话**看哪个；
+ * - 「设为默认」= 改**冷启动先开哪个**（唯一写入点）。
  */
 @Composable
 private fun ActiveVaultDialog(
     vaults: List<VaultSummary>,
     activeId: String?,
+    defaultId: String?,
     onSelect: (String) -> Unit,
+    onSetDefault: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
     AlertDialog(
@@ -455,12 +505,21 @@ private fun ActiveVaultDialog(
             } else {
                 Column {
                     vaults.forEach { vault ->
-                        SingleChoiceRow(
-                            label = vault.name,
+                        VaultChoiceRow(
+                            name = vault.name,
+                            locked = !vault.unlocked,
                             selected = vault.id == activeId,
+                            isDefault = vault.id == defaultId,
                             onClick = { onSelect(vault.id) },
+                            onSetDefault = { onSetDefault(vault.id) },
                         )
                     }
+                    Text(
+                        text = stringResource(R.string.settings_default_vault_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 12.dp),
+                    )
                 }
             }
         },
@@ -470,6 +529,57 @@ private fun ActiveVaultDialog(
             }
         },
     )
+}
+
+/**
+ * 库选择器里的一行：名称（未解锁时带后缀）+ 选中态 + 「设为默认」动作 + 默认标记。
+ *
+ * 拆成独立 composable 是为了让 [ActiveVaultDialog] 不越 detekt 的复杂度门禁，
+ * 也让「未解锁标注」「默认标记」两件事各自可读。
+ */
+@Composable
+private fun VaultChoiceRow(
+    name: String,
+    locked: Boolean,
+    selected: Boolean,
+    isDefault: Boolean,
+    onClick: () -> Unit,
+    onSetDefault: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        RadioButton(selected = selected, onClick = onClick)
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = name,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            if (locked) {
+                Text(
+                    text = stringResource(R.string.settings_vault_locked_suffix),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        if (isDefault) {
+            Text(
+                text = stringResource(R.string.settings_vault_default_badge),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        } else {
+            TextButton(onClick = onSetDefault) {
+                Text(stringResource(R.string.settings_vault_set_default))
+            }
+        }
+    }
 }
 
 /**
@@ -685,14 +795,21 @@ private fun themeModeLabel(mode: ThemeMode): String = when (mode) {
  * 快速解锁「启用」的认证副作用收集器。
  *
  * 收到 [SettingsViewModel.Event.PromptForEnroll]（已 init 的 ENCRYPT cipher）即弹
- * BiometricPrompt；认证通过后用本次 cipher 包裹当前会话密钥并落盘，对话框内状态随之
- * 翻为「已启用」。取消/失败什么都不做 —— 维持「未启用」，用户可再试。
+ * BiometricPrompt；认证通过后用本次 cipher 包裹密钥并落盘，对话框内状态随之翻为
+ * 「已启用」。取消/失败什么都不做 —— 维持「未启用」，用户可再试。
+ *
+ * 另一条事件 [SettingsViewModel.Event.PromptForKdbxPassword] 只把「哪个库在等密码」
+ * 交给调用方（KDBX 必须先要主密码，定稿 §4.5）。
  *
  * 独立成 composable 而非内联在 [SettingsScreen]，一是避免后者超长（detekt LongMethod），
  * 二是把「认证副作用」与「页面布局」解耦。
  */
 @Composable
-private fun QuickUnlockEnrollEffect(viewModel: SettingsViewModel) {
+private fun QuickUnlockEnrollEffect(
+    viewModel: SettingsViewModel,
+    onPromptKdbxPassword: (String) -> Unit,
+    onEnrollReady: () -> Unit,
+) {
     val activity = rememberFragmentActivity()
     val enrollTitle = stringResource(R.string.quick_unlock_enroll_title)
     val cancelText = stringResource(R.string.action_cancel)
@@ -701,6 +818,8 @@ private fun QuickUnlockEnrollEffect(viewModel: SettingsViewModel) {
         viewModel.events.collect { event ->
             when (event) {
                 is SettingsViewModel.Event.PromptForEnroll -> {
+                    // 指纹框已弹出 ⇒ KDBX 密码框使命完成，收起（避免叠两层对话框）。
+                    onEnrollReady()
                     val host = activity ?: return@collect
                     BiometricPrompter(host).authenticate(
                         cipher = event.cipher,
@@ -710,13 +829,24 @@ private fun QuickUnlockEnrollEffect(viewModel: SettingsViewModel) {
                         onError = { _, _, _ -> /* 取消/失败：维持「未启用」，可再试 */ },
                     )
                 }
+                is SettingsViewModel.Event.PromptForKdbxPassword -> {
+                    onPromptKdbxPassword(event.vaultId)
+                }
             }
         }
     }
 }
 
 /**
- * 快速解锁管理：列出各库启用状态，可逐个**启用 / 关闭**。
+ * 快速解锁「**生效范围**」：列出全部库，逐个决定这把指纹钥匙管不管它们。
+ *
+ * 心智模型（用户提出、定稿 §4.7 采纳）：**用户只有一把 Keystore 密钥**，
+ * 所以「快速解锁是一个能力，作用于哪些库由用户勾选」——勾选即决定
+ * 「这把钥匙串上挂几把钥匙」。
+ *
+ * ⚠️ 两条登记流程**不同**，故 UI 也要区分（[QuickUnlockVaultUi.kind]）：
+ * - Bitwarden：勾选 → 直接弹指纹（密钥在会话里）；
+ * - KDBX：勾选 → **先弹主密码输入框** → 校验通过 → 再弹指纹（§4.5）。
  *
  * ⚠️ 历史坑：此前本对话框**只能关不能开**（启用入口仅库列表页横幅），
  * 而横幅「以后再说」会永久置位 `isQuickUnlockPromptDismissed` → 用户彻底
@@ -738,6 +868,12 @@ private fun QuickUnlockManageDialog(
                 Text(stringResource(R.string.quick_unlock_manage_none))
             } else {
                 Column {
+                    Text(
+                        text = stringResource(R.string.quick_unlock_scope_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(8.dp))
                     vaults.forEach { vault ->
                         ListItem(
                             headlineContent = { Text(vault.name) },
@@ -749,7 +885,13 @@ private fun QuickUnlockManageDialog(
                                         // 仅当设备确实支持认证时才提示「可启用」，
                                         // 否则维持原「未启用」说明，避免给出无法完成的指引
                                         if (canAuthenticate) {
-                                            stringResource(R.string.quick_unlock_disabled)
+                                            stringResource(
+                                                if (vault.kind == VaultKind.KDBX) {
+                                                    R.string.quick_unlock_disabled_kdbx
+                                                } else {
+                                                    R.string.quick_unlock_disabled
+                                                },
+                                            )
                                         } else {
                                             stringResource(R.string.quick_unlock_device_unsupported)
                                         }
@@ -775,6 +917,75 @@ private fun QuickUnlockManageDialog(
         confirmButton = {
             TextButton(onClick = onDismiss) {
                 Text(stringResource(R.string.action_back))
+            }
+        },
+    )
+}
+
+/**
+ * KDBX 启用快速解锁前的主密码输入框（定稿 §4.5 —— 这一步**无法省略**）。
+ *
+ * 「宽松」取向（§4.4）的 UI 落地：
+ * - 输错 ⇒ 只显示错误、**输入框保留**、按钮可再点（不清空、不关框）；
+ * - 校验期间按钮禁用，避免连点产生多个 cipher。
+ */
+@Composable
+private fun KdbxQuickUnlockPasswordDialog(
+    vaultName: String,
+    state: SettingsViewModel.KdbxEnrollState,
+    onSubmit: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var password by rememberSaveable { mutableStateOf("") }
+    val busy = state is SettingsViewModel.KdbxEnrollState.Ready
+    val errorText = when (state) {
+        is SettingsViewModel.KdbxEnrollState.WrongPassword -> stringResource(R.string.kdbx_quick_unlock_wrong_password)
+        is SettingsViewModel.KdbxEnrollState.Failed -> state.detail
+        is SettingsViewModel.KdbxEnrollState.Unavailable -> stringResource(R.string.quick_unlock_device_unsupported)
+        else -> null
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.kdbx_quick_unlock_title)) },
+        text = {
+            Column {
+                Text(
+                    text = stringResource(R.string.kdbx_quick_unlock_message, vaultName),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    label = { Text(stringResource(R.string.kdbx_master_password_label)) },
+                    singleLine = true,
+                    isError = errorText != null,
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (errorText != null) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = errorText,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onSubmit(password) },
+                enabled = password.isNotEmpty() && !busy,
+            ) {
+                Text(stringResource(R.string.action_enable))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.action_cancel))
             }
         },
     )

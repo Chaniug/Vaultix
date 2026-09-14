@@ -54,6 +54,8 @@ import io.vaultix.vaultix.ui.common.rememberFragmentActivity
 import io.vaultix.vaultix.ui.error.UnlockUiError
 import io.vaultix.vaultix.ui.error.unlockErrorText
 import androidx.compose.material.icons.filled.Fingerprint
+import androidx.compose.material.icons.filled.SwapHoriz
+import androidx.compose.material3.TextButton
 import androidx.compose.foundation.layout.width
 
 /**
@@ -73,6 +75,14 @@ fun UnlockScreen(
      * （[UnlockViewModel.UiState.vault] 永远为 null，且没有任何出口）。
      */
     onNoVault: () -> Unit = {},
+    /**
+     * 「换一个库」出口（null = 只有一个库，无需显示）。
+     *
+     * issue #96：多库并存时，用户冷启动落在解锁页后**没有任何办法**切到另一个库 ——
+     * 只能先解锁当前这个、进主界面、再摸到设置页。「默认库」决定第一屏显示谁，
+     * 这个出口保证「显示的不是我想开的那个」时有路可走。
+     */
+    onSwitchVault: (() -> Unit)? = null,
     viewModel: UnlockViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -207,6 +217,20 @@ fun UnlockScreen(
                 quickUnlockEnabled = !state.submitting,
                 onQuickUnlock = viewModel::startLocalUnlock,
             )
+            // 「换一个库」：多库时才有意义。放在最底下、用轻量文字按钮 ——
+            // 它是**次要出口**，不能与主解锁按钮抢视觉焦点（同 2026-09-13 指纹图标的取舍）。
+            if (onSwitchVault != null && state.twoFactor == null && !state.viewLocked) {
+                Spacer(Modifier.height(8.dp))
+                TextButton(onClick = onSwitchVault, enabled = !state.submitting) {
+                    Icon(
+                        Icons.Filled.SwapHoriz,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(stringResource(R.string.unlock_switch_vault))
+                }
+            }
         }
     }
 }

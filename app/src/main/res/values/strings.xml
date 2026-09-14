@@ -32,8 +32,13 @@
     <string name="add_kdbx_password">数据库主密码</string>
     <string name="add_kdbx_submit">打开数据库</string>
     <string name="add_kdbx_working">正在解密数据库…</string>
+    <!-- 成功反馈（issue #94）：重复添加同一文件会覆盖同一行、列表零变化，必须说明。 -->
+    <string name="add_kdbx_added">已添加密码库</string>
+    <string name="add_kdbx_updated">该文件已在列表中，已更新</string>
     <string name="vault_badge_unlocked">已解锁</string>
     <string name="vault_badge_locked">已锁定</string>
+    <!-- 库卡片副标题（KDBX）：显示文件名 + 「本地文件」标注，绝不显示 SAF 的 content:// URI。 -->
+    <string name="vault_card_kdbx_subtitle">本地文件 · %1$s</string>
     <string name="vault_item_count">%1$d 项</string>
     <string name="vault_add_fab">添加密码库</string>
     <string name="vault_cloud_label">Bitwarden 同步库</string>
@@ -61,6 +66,8 @@
     <!-- 解锁 S6 -->
     <string name="unlock_title">解锁</string>
     <string name="unlock_submit">解锁</string>
+    <!-- 解锁页「换一个库」出口（issue #96）：默认库不是我想开的那个时的出路。 -->
+    <string name="unlock_switch_vault">换一个密码库</string>
     <string name="unlock_password">主密码</string>
     <string name="unlock_password_label_fallback">或使用主密码</string>
     <!-- 指纹入口（大号图标下方的短提示；原长文案见 quick_unlock_banner_text） -->
@@ -101,7 +108,11 @@
     <string name="settings_active_vault">当前密码库</string>
     <string name="settings_add_vault_desc">连接 Bitwarden 云端，或打开本机 .kdbx 文件</string>
     <string name="settings_active_vault_none">未解锁任何库</string>
-    <string name="settings_active_vault_locked_hint">当前没有已解锁的库，请先回库列表解锁</string>
+    <string name="settings_active_vault_locked_hint">还没有任何密码库，请先添加一个</string>
+    <string name="settings_default_vault_hint">勾选表示本次使用该库；「设为默认」决定下次打开应用先进入哪个库。</string>
+    <string name="settings_vault_locked_suffix">未解锁 · 需先输入主密码</string>
+    <string name="settings_vault_default_badge">默认</string>
+    <string name="settings_vault_set_default">设为默认</string>
     <string name="group_security">安全</string>
     <string name="group_appearance">外观</string>
     <string name="group_data">数据管理</string>
@@ -237,6 +248,14 @@
     <string name="quick_unlock_enabled">已启用</string>
     <string name="quick_unlock_disabled">未启用（点右侧「启用」即可）</string>
     <string name="quick_unlock_device_unsupported">未启用（本设备未设置锁屏或生物识别，无法启用）</string>
+    <!-- 快速解锁「生效范围」（定稿 §4.7：一把指纹钥匙管哪些库由用户勾选） -->
+    <string name="quick_unlock_scope_hint">选择这把指纹钥匙能打开哪些库。</string>
+    <string name="quick_unlock_disabled_kdbx">未启用（启用时需再输一次该库的主密码）</string>
+    <!-- KDBX 启用快速解锁前的主密码确认（定稿 §4.5，无法省略） -->
+    <string name="kdbx_quick_unlock_title">启用快速解锁</string>
+    <string name="kdbx_quick_unlock_message">请输入「%1$s」的主密码。它会被加密保存，用于以后用指纹打开该库。</string>
+    <string name="kdbx_quick_unlock_wrong_password">主密码不正确，请重新输入</string>
+    <string name="kdbx_master_password_label">主密码</string>
     <string name="quick_unlock_local_failed">本地解锁不可用（密钥可能已失效），请用主密码登录</string>
     <!-- 自动锁定档位 -->
     <string name="auto_lock_never">从不</string>
@@ -258,7 +277,6 @@
     <string name="item_type_card">银行卡</string>
     <string name="item_type_identity">身份信息</string>
     <string name="item_type_ssh_key">SSH 密钥</string>
-    <string name="item_edit_type_fields_readonly">「%1$s」的专属字段暂为只读，本次仅保存名称与备注的修改</string>
 
     <!-- 条目列表 S7 -->
     <string name="items_empty_title">还没有保存的密码</string>
@@ -271,6 +289,10 @@
     <string name="items_sync_fatal">同步失败：%1$s</string>
     <string name="items_lock">锁定（仅挡界面，密钥不清）</string>
     <string name="items_more_actions">更多操作</string>
+    <!-- 切换密码库（issue #96）：多库并存时唯一语义正确的换库入口。 -->
+    <string name="items_switch_vault">切换密码库</string>
+    <string name="vault_switch_dialog_title">切换密码库</string>
+    <string name="vault_switch_dialog_locked_suffix">未解锁 · 点击输入主密码</string>
     <!-- 快捷筛选（点顶栏库名展开的那一排 chip；单选，与「分组方式」正交） -->
     <string name="items_quick_filter_hint">点按展开或收起分类筛选</string>
     <string name="items_filter_all">全部</string>
@@ -421,11 +443,12 @@
     <string name="card_exp_year">有效期（年）</string>
     <string name="card_cvv">安全码</string>
 
-    <!-- SSH 密钥 S22 详情分区 -->
+    <!-- SSH 密钥 S22（详情分区与编辑表单共用） -->
     <string name="section_ssh_key">SSH 密钥</string>
     <string name="ssh_private_key">私钥</string>
     <string name="ssh_public_key">公钥</string>
     <string name="ssh_fingerprint">指纹</string>
+    <string name="ssh_fingerprint_hint">由公钥自动推导，可自行修改</string>
 
     <!-- 身份信息 详情分区（对齐 Bitwarden identity 17 字段） -->
     <string name="section_identity">身份信息</string>

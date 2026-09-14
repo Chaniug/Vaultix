@@ -4,6 +4,7 @@ import app.cash.turbine.test
 import com.google.common.truth.Truth.assertThat
 import io.mockk.every
 import io.mockk.mockk
+import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.domain.VaultRepository
 import io.vaultix.domain.VaultSessionRepository
 import io.vaultix.model.VaultKind
@@ -138,17 +139,77 @@ class RootNavViewModelTest {
         }
     }
 
+    /**
+     * 全锁时优先把**用户设的默认库**交给解锁页（`.ai/decisions/库选择与快速解锁-逻辑定稿.md`
+     * §1⑤ / §7 任务 5）。
+     *
+     * 此前 `else -> VaultLocked()` 不带 vaultId，解锁页只能自己挑「`ORDER BY createdAt`
+     * 最早的库」⇒ 默认库设成 KDBX 也不生效，冷启动仍落 Bitwarden。
+     */
+    @Test
+    fun lockedStateCarriesDefaultVaultIdWhenSet() = runTest {
+        val bitwarden = vaultSummary(id = "bitwarden-1", unlocked = false)
+        val kdbx = vaultSummary(id = "content://kdbx", unlocked = false)
+        val viewModel = rootNavViewModel(
+            // createdAt 顺序：Bitwarden 在前（老用户就是这种情形）
+            vaults = listOf(bitwarden, kdbx),
+            unlockedIds = emptySet(),
+            defaultVaultId = "content://kdbx",
+        )
+
+        viewModel.rootNavState.test {
+            assertThat(awaitItem()).isEqualTo(RootNavState.VaultLocked("content://kdbx"))
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun lockedStateFallsBackToFirstVaultWhenDefaultUnset() = runTest {
+        // 默认库为空 ⇒ 行为与以前完全一致（列表第一个 = createdAt 最早）——老用户零变化
+        val bitwarden = vaultSummary(id = "bitwarden-1", unlocked = false)
+        val kdbx = vaultSummary(id = "content://kdbx", unlocked = false)
+        val viewModel = rootNavViewModel(
+            vaults = listOf(bitwarden, kdbx),
+            unlockedIds = emptySet(),
+            defaultVaultId = null,
+        )
+
+        viewModel.rootNavState.test {
+            assertThat(awaitItem()).isEqualTo(RootNavState.VaultLocked("bitwarden-1"))
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun staleDefaultVaultIdForRemovedVaultFallsBackToFirst() = runTest {
+        // 默认库已被移除：不能把用户钉在一个不存在的库上（否则解锁页解析不出目标 → 转圈）
+        val bitwarden = vaultSummary(id = "bitwarden-1", unlocked = false)
+        val viewModel = rootNavViewModel(
+            vaults = listOf(bitwarden),
+            unlockedIds = emptySet(),
+            defaultVaultId = "vault-gone",
+        )
+
+        viewModel.rootNavState.test {
+            assertThat(awaitItem()).isEqualTo(RootNavState.VaultLocked("bitwarden-1"))
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
     private fun rootNavViewModel(
         vaults: List<VaultSummary>,
         unlockedIds: Set<String>,
         viewLockedIds: Set<String> = emptySet(),
+        defaultVaultId: String? = null,
     ): RootNavViewModel {
         val repository = mockk<VaultRepository>()
         every { repository.observeVaults() } returns flowOf(vaults)
         every { repository.observeUnlockedVaultIds() } returns flowOf(unlockedIds)
         val sessions = mockk<VaultSessionRepository>()
         every { sessions.observeViewLockedVaultIds() } returns flowOf(viewLockedIds)
-        return RootNavViewModel(repository, sessions)
+        val preferences = mockk<VaultixPreferences>(relaxed = true)
+        every { preferences.defaultVaultId } returns flowOf(defaultVaultId)
+        return RootNavViewModel(repository, sessions, preferences)
     }
 
     private fun vaultSummary(id: String, unlocked: Boolean) = VaultSummary(

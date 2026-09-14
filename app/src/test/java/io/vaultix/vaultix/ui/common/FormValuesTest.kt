@@ -1,6 +1,7 @@
 package io.vaultix.vaultix.ui.common
 
 import com.google.common.truth.Truth.assertThat
+import io.vaultix.common.SshFingerprint
 import io.vaultix.model.CustomFieldType
 import io.vaultix.model.VaultCard
 import io.vaultix.model.VaultCustomField
@@ -8,6 +9,7 @@ import io.vaultix.model.VaultIdentity
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
 import io.vaultix.model.VaultReprompt
+import io.vaultix.model.VaultSshKey
 import org.junit.Test
 
 /**
@@ -156,4 +158,139 @@ class FormValuesTest {
         assertThat(card.number).isEmpty()
         assertThat(card.code).isEmpty()
     }
+
+    // ------------------------------------------------------------------
+    // SSH 段（S22）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun sshValuesRoundTrip() {
+        val raw = sshValuesOf(
+            VaultSshKey(privateKey = "priv", publicKey = "pub", keyFingerprint = "fp"),
+        )
+        assertThat(raw).hasSize(3)
+        val ssh = buildSshKey(raw)
+        assertThat(ssh.privateKey).isEqualTo("priv")
+        assertThat(ssh.publicKey).isEqualTo("pub")
+        assertThat(ssh.keyFingerprint).isEqualTo("fp")
+    }
+
+    @Test
+    fun sshValuesOfNullGivesEmptyStrings() {
+        assertThat(sshValuesOf(null)).containsExactly("", "", "").inOrder()
+    }
+
+    @Test
+    fun buildSshKeyTrimsWhitespace() {
+        // 从终端复制的密钥常带首尾空白/换行，留着会污染详情页与复制结果
+        val ssh = buildSshKey(listOf(" \n priv \n ", "pub\n", "\tfp "))
+        assertThat(ssh.privateKey).isEqualTo("priv")
+        assertThat(ssh.publicKey).isEqualTo("pub")
+        assertThat(ssh.keyFingerprint).isEqualTo("fp")
+    }
+
+    @Test
+    fun buildSnapshotWritesSshKeyForSshType() {
+        // 回归点：此前 SshKey 走的是 `-> Unit`，新建 SSH 条目只能存成空壳
+        val snapshot = buildSnapshot(
+            initial = VaultItem(id = "", title = "我的密钥", type = VaultItemType.SshKey),
+            type = VaultItemType.SshKey,
+            values = values(),
+            ssh = listOf("priv", "pub", "fp"),
+        )
+        assertThat(snapshot.sshKey?.privateKey).isEqualTo("priv")
+        assertThat(snapshot.sshKey?.publicKey).isEqualTo("pub")
+        assertThat(snapshot.sshKey?.keyFingerprint).isEqualTo("fp")
+    }
+
+    @Test
+    fun buildSnapshotKeepsSshKeyWhenEditingOtherType() {
+        // 类型守恒：编辑登录/银行卡等条目时绝不能把原有 SSH 段冲掉
+        val snapshot = buildSnapshot(
+            initial = VaultItem(
+                id = "1",
+                title = "t",
+                sshKey = VaultSshKey(privateKey = "keep", publicKey = "keep-pub"),
+            ),
+            type = VaultItemType.Login,
+            values = values(),
+            ssh = emptyList(),
+        )
+        assertThat(snapshot.sshKey?.privateKey).isEqualTo("keep")
+        assertThat(snapshot.sshKey?.publicKey).isEqualTo("keep-pub")
+    }
+
+    @Test
+    fun sshFingerprintIsDerivedFromPastedPublicKey() {
+        // 模拟用户把公钥粘进空表单：指纹应自动出现
+        val fields = mutableListOf("priv", "", "")
+        applyPublicKeyChange(fields, sshPublicKey)
+        assertThat(fields[SSH_FINGERPRINT_INDEX]).isEqualTo(ed25519Fingerprint)
+    }
+
+    @Test
+    fun sshFingerprintFollowsPublicKeyChange() {
+        val fields = mutableListOf("priv", sshPublicKey, ed25519Fingerprint)
+        applyPublicKeyChange(fields, otherPublicKey)
+        assertThat(fields[SSH_PUBLIC_KEY_INDEX]).isEqualTo(otherPublicKey)
+        assertThat(fields[SSH_FINGERPRINT_INDEX]).isNotEqualTo(ed25519Fingerprint)
+        assertThat(fields[SSH_FINGERPRINT_INDEX]).startsWith("SHA256:")
+    }
+
+    @Test
+    fun manualFingerprintSurvivesPublicKeyChange() {
+        // 用户手填的值必须保住：那是他的显式意图
+        val manual = "SHA256:someoneElsesValue"
+        val fields = mutableListOf("priv", sshPublicKey, manual)
+        applyPublicKeyChange(fields, otherPublicKey)
+        assertThat(fields[SSH_FINGERPRINT_INDEX]).isEqualTo(manual)
+    }
+
+    @Test
+    fun followStateSelfHealsWhenManualValueIsRestored() {
+        // 手改后不再跟随；但改回推导值时，应重新跟随（否则会永久卡在「手动」）
+        val fields = mutableListOf("priv", sshPublicKey, "手改的值")
+        applyPublicKeyChange(fields, sshPublicKey)
+        assertThat(fields[SSH_FINGERPRINT_INDEX]).isEqualTo("手改的值")
+        fields[SSH_FINGERPRINT_INDEX] = ed25519Fingerprint
+        applyPublicKeyChange(fields, otherPublicKey)
+        assertThat(fields[SSH_FINGERPRINT_INDEX]).isNotEqualTo("手改的值")
+        assertThat(fields[SSH_FINGERPRINT_INDEX]).startsWith("SHA256:")
+    }
+
+    @Test
+    fun fingerprintIsClearedWhenPublicKeyBecomesUnparsable() {
+        // 宁可空着，也不能留一个与当前公钥不符的指纹 —— 那是会骗人的错信息
+        val fields = mutableListOf("priv", sshPublicKey, ed25519Fingerprint)
+        applyPublicKeyChange(fields, "ssh-ed25519 这不是合法公钥")
+        assertThat(fields[SSH_PUBLIC_KEY_INDEX]).isEqualTo("ssh-ed25519 这不是合法公钥")
+        assertThat(fields[SSH_FINGERPRINT_INDEX]).isEmpty()
+    }
+
+    @Test
+    fun applyPublicKeyChangeToleratesShortList() {
+        // 防御：列表短于预期时不应越界崩溃
+        val fields = mutableListOf("仅一项")
+        applyPublicKeyChange(fields, sshPublicKey)
+        assertThat(fields).hasSize(1)
+    }
+
+    /**
+     * 一把格式合法的 ed25519 公钥（一次性生成的测试密钥）。
+     *
+     * [ed25519Fingerprint] 是 `ssh-keygen -lf` 给出的**权威指纹**，
+     * 不是用本实现算出来再回填的 —— 否则测不出算法错误。
+     */
+    private val sshPublicKey =
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINjWdAG2egXV4ToTYHJa0mZQdLMehOxakRzm" +
+            "694r4Fyn"
+
+    /**
+     * 另一把**合法**公钥：由 [sshPublicKey] 改写末位字符得来。
+     * 长度与算法名字段不变 ⇒ 仍能通过解析；密钥材料变了 ⇒ 指纹必然不同。
+     * 这样就不必再抄一长串字面量（抄写本身才是出错来源）。
+     */
+    private val otherPublicKey = sshPublicKey.dropLast(1) + "Z"
+
+    private val ed25519Fingerprint = "SHA256:8gQgmsoPYszLtQT8qR165HjWs5prluGD9UzZXNNAjco"
 }

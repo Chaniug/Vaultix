@@ -5,8 +5,10 @@ import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import io.vaultix.data.repository.BitwardenSyncOrchestrator
 import io.vaultix.datastore.VaultixPreferences
+import io.vaultix.domain.KdbxEnrollOutcome
 import io.vaultix.domain.VaultRepository
 import io.vaultix.domain.VaultSyncStatus
+import io.vaultix.model.VaultKind
 import io.vaultix.model.VaultSummary
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -15,6 +17,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -44,6 +47,12 @@ class VaultListViewModel @Inject constructor(
         data class PromptForEnroll(val vaultId: String, val cipher: Cipher) : Event
         data object Removed : Event
         data class RemoveFailed(val message: String) : Event
+
+        /** KDBX 横幅启用：请 UI 弹主密码输入框（定稿 §4.5，无法省略）。 */
+        data class PromptForKdbxPassword(val vaultId: String) : Event
+
+        /** KDBX 主密码校验未通过：UI 就地提示、**保留输入框**（宽松取向）。 */
+        data class KdbxPasswordRejected(val detail: String?) : Event
     }
 
     private val _events = MutableSharedFlow<Event>(extraBufferCapacity = 4)
@@ -111,12 +120,47 @@ class VaultListViewModel @Inject constructor(
     /** 用户点「启用」：准备包装 Cipher 并交给 UI 弹认证。 */
     fun startQuickUnlockEnroll(vaultId: String) {
         viewModelScope.launch {
+            // ⚠️ 按库类型分流（定稿 §4.5）：KDBX 会话里没有可包裹的密钥，
+            // 必须先向用户再要一次主密码 —— 走 Bitwarden 那条路会得到
+            // 「认证成功但什么都没包上」的假成功（#93 的原始形态）。
+            val kind = vaults.value.firstOrNull { it.id == vaultId }?.kind
+            if (kind == VaultKind.KDBX) {
+                _events.emit(Event.PromptForKdbxPassword(vaultId))
+                return@launch
+            }
             val cipher = vaultRepository.prepareLocalEnroll()
             if (cipher == null) {
                 // 设备无可用认证方式：视同已提示，避免循环打扰
                 preferences.setQuickUnlockPromptDismissed(true)
             } else {
                 _events.emit(Event.PromptForEnroll(vaultId, cipher))
+            }
+        }
+    }
+
+    /**
+     * KDBX 横幅启用：收到主密码 → **先校验后包裹** → 再请 UI 弹指纹。
+     *
+     * 与设置页同一条路径（[SettingsViewModel.confirmKdbxPassword]），
+     * 保证「宽松重试」语义一致：输错只报错、不关框。
+     */
+    fun confirmKdbxPassword(vaultId: String, password: String) {
+        viewModelScope.launch {
+            val keyFileUri = runCatching { preferences.kdbxKeyFileUri(vaultId).first() }.getOrNull()
+            val cipher = vaultRepository.prepareLocalEnroll()
+            if (cipher == null) {
+                _events.emit(Event.KdbxPasswordRejected(null))
+                return@launch
+            }
+            val outcome = vaultRepository.enrollLocalUnlockKdbx(vaultId, password, keyFileUri, cipher)
+            when (outcome) {
+                is KdbxEnrollOutcome.Enrolled -> _events.emit(Event.PromptForEnroll(vaultId, cipher))
+                is KdbxEnrollOutcome.InvalidCredentials ->
+                    _events.emit(Event.KdbxPasswordRejected(null))
+                is KdbxEnrollOutcome.SourceUnavailable ->
+                    _events.emit(Event.KdbxPasswordRejected(outcome.detail))
+                is KdbxEnrollOutcome.Failed ->
+                    _events.emit(Event.KdbxPasswordRejected(outcome.detail))
             }
         }
     }

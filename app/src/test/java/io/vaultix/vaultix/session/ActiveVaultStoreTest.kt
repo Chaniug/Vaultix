@@ -1,6 +1,7 @@
 package io.vaultix.vaultix.session
 
 import com.google.common.truth.Truth.assertThat
+import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
@@ -42,7 +43,7 @@ class ActiveVaultStoreTest {
 
     @Test
     fun resolveKeepsSavedVaultWhileItStaysUnlocked() = runTest {
-        val store = store(saved = "vault-a", unlocked = setOf("vault-a", "vault-b"))
+        val store = store(selected = null, saved = "vault-a", unlocked = setOf("vault-a", "vault-b"))
 
         assertThat(store.resolve()).isEqualTo("vault-a")
     }
@@ -50,7 +51,16 @@ class ActiveVaultStoreTest {
     @Test
     fun resolveFallsBackWhenSavedVaultIsLocked() = runTest {
         // 存档库被锁：不能返回它（读不出明文），退化到仍解锁的那个
-        val store = store(saved = "vault-a", unlocked = setOf("vault-b"))
+        val store = store(selected = null, saved = "vault-a", unlocked = setOf("vault-b"))
+
+        assertThat(store.resolve()).isEqualTo("vault-b")
+    }
+
+    @Test
+    fun resolvePrefersSessionSelectionOverSavedDefault() = runTest {
+        // 用户本次会话显式切到了 vault-b：会话内就听用户的，
+        // 默认库（vault-a）留到下次冷启动再生效 —— 这正是两键拆分的意义。
+        val store = store(selected = "vault-b", saved = "vault-a", unlocked = setOf("vault-a", "vault-b"))
 
         assertThat(store.resolve()).isEqualTo("vault-b")
     }
@@ -58,22 +68,23 @@ class ActiveVaultStoreTest {
     @Test
     fun resolvePicksSmallestIdWhenSeveralUnlockedAndNothingSaved() = runTest {
         // Set 无序：结论必须稳定可复现，否则「同一份数据两次启动进不同库」
-        val store = store(saved = null, unlocked = setOf("vault-b", "vault-a"))
+        val store = store(selected = null, saved = null, unlocked = setOf("vault-b", "vault-a"))
 
         assertThat(store.resolve()).isEqualTo("vault-a")
     }
 
     @Test
     fun resolveReturnsNullWhenEverythingIsLocked() = runTest {
-        val store = store(saved = "vault-a", unlocked = emptySet())
+        val store = store(selected = null, saved = "vault-a", unlocked = emptySet())
 
         assertThat(store.resolve()).isNull()
     }
 
     @Test
-    fun selectTakesEffectImmediatelyAndPersists() = runTest {
+    fun selectTakesEffectImmediatelyAndDoesNotTouchDefaultVault() = runTest {
         val preferences = mockk<VaultixPreferences>(relaxed = true)
-        every { preferences.defaultVaultId } returns flowOf(null)
+        every { preferences.activeVaultId } returns flowOf(null)
+        every { preferences.defaultVaultId } returns flowOf("vault-a")
         val repository = mockk<VaultRepository>()
         every { repository.observeUnlockedVaultIds() } returns flowOf(setOf("vault-a", "vault-b"))
         val store = ActiveVaultStore(preferences, repository)
@@ -88,11 +99,65 @@ class ActiveVaultStoreTest {
         // 同步读必须立刻可见：主界面 Tab / autofill 都在同一次交互里依赖它
         assertThat(store.current()).isEqualTo("vault-b")
         // 落盘在进程级 scope（Dispatchers.Default）上异步执行，故带超时等待
-        coVerify(timeout = 2_000) { preferences.setDefaultVaultId("vault-b") }
+        coVerify(timeout = 2_000) { preferences.setActiveVaultId("vault-b") }
+        // ★ 核心断言（2026-09-14 拆分）：切库**绝不能**写默认库，
+        // 否则「临时切去看一眼另一个库」会静默改掉冷启动默认库。
+        coVerify(exactly = 0) { preferences.setDefaultVaultId(any()) }
     }
 
-    private fun store(saved: String?, unlocked: Set<String>): ActiveVaultStore {
+    @Test
+    fun setDefaultPersistsWithoutTouchingActiveVault() = runTest {
         val preferences = mockk<VaultixPreferences>(relaxed = true)
+        every { preferences.activeVaultId } returns flowOf(null)
+        every { preferences.defaultVaultId } returns flowOf(null)
+        val repository = mockk<VaultRepository>()
+        every { repository.observeUnlockedVaultIds() } returns flowOf(setOf("vault-a"))
+        val store = ActiveVaultStore(preferences, repository)
+
+        store.setDefault("vault-a")
+
+        coVerify(timeout = 2_000) { preferences.setDefaultVaultId("vault-a") }
+    }
+
+    @Test
+    fun setDefaultIfAbsentDelegatesToAtomicPreferenceWrite() = runTest {
+        // 首次接入新库：委托给偏好层的**事务性**读改写（同一 edit 内判空 + 写），
+        // 避免「两个库并发接入都读到空」的竞态。
+        val preferences = mockk<VaultixPreferences>(relaxed = true)
+        every { preferences.activeVaultId } returns flowOf(null)
+        every { preferences.defaultVaultId } returns flowOf(null)
+        // ⚠️ `trySetDefaultVaultIfAbsent` 是 `suspend fun` ⇒ 必须 `coEvery`
+        //（`every` 只适用于普通函数，编译器会报「Suspension functions can only be
+        // called within coroutine body」）。
+        coEvery { preferences.trySetDefaultVaultIfAbsent("vault-new") } returns true
+        val repository = mockk<VaultRepository>()
+        every { repository.observeUnlockedVaultIds() } returns flowOf(emptySet())
+        val store = ActiveVaultStore(preferences, repository)
+
+        assertThat(store.setDefaultIfAbsent("vault-new")).isTrue()
+
+        // ★ 不得走「无条件覆盖」那条路 —— 那会改掉用户设过的默认库。
+        coVerify(exactly = 1) { preferences.trySetDefaultVaultIfAbsent("vault-new") }
+        coVerify(exactly = 0) { preferences.setDefaultVaultId(any()) }
+    }
+
+    @Test
+    fun setDefaultIfAbsentIgnoresBlankVaultId() = runTest {
+        val preferences = mockk<VaultixPreferences>(relaxed = true)
+        every { preferences.activeVaultId } returns flowOf(null)
+        every { preferences.defaultVaultId } returns flowOf(null)
+        val repository = mockk<VaultRepository>()
+        every { repository.observeUnlockedVaultIds() } returns flowOf(emptySet())
+        val store = ActiveVaultStore(preferences, repository)
+
+        assertThat(store.setDefaultIfAbsent("")).isFalse()
+
+        coVerify(exactly = 0) { preferences.trySetDefaultVaultIfAbsent(any()) }
+    }
+
+    private fun store(selected: String?, saved: String?, unlocked: Set<String>): ActiveVaultStore {
+        val preferences = mockk<VaultixPreferences>(relaxed = true)
+        every { preferences.activeVaultId } returns flowOf(selected)
         every { preferences.defaultVaultId } returns flowOf(saved)
         val repository = mockk<VaultRepository>()
         every { repository.observeUnlockedVaultIds() } returns flowOf(unlocked)

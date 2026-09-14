@@ -49,6 +49,13 @@ import javax.inject.Singleton
  *
  * ⚠️ 本类是**真源**：主界面各 Tab、以及后续 autofill / Credential Provider 的
  * 候选来源与保存回写目标，都应从这里取，而不是各自遍历「所有已解锁库」。
+ *
+ * ⚠️ **两个键的分工**（2026-09-14 拆分，见 `.ai/decisions/库选择与快速解锁-逻辑定稿.md` §3）：
+ * - `active_vault_id` —— **本次会话看谁**，[select] 写；
+ * - `default_vault_id` —— **冷启动先开谁**，**只在设置页**写。
+ *
+ * 此前 [select] 直接写 `default_vault_id`，导致用户「临时切去看一眼另一个库」会
+ * **静默永久改掉默认库**（新老用户都会踩）。
  */
 @Singleton
 class ActiveVaultStore @Inject constructor(
@@ -69,9 +76,10 @@ class ActiveVaultStore @Inject constructor(
     init {
         scope.launch {
             combine(
+                preferences.activeVaultId,
                 preferences.defaultVaultId,
                 vaultRepository.observeUnlockedVaultIds(),
-            ) { saved, unlocked -> pick(saved, unlocked) }
+            ) { selected, saved, unlocked -> pick(selected, saved, unlocked) }
                 .distinctUntilChanged()
                 .collect { _activeVaultId.value = it }
         }
@@ -88,24 +96,77 @@ class ActiveVaultStore @Inject constructor(
      * 所以这些场景必须**等一次真实计算**。
      */
     suspend fun resolve(): String? {
-        val resolved = pick(preferences.defaultVaultId.first(), vaultRepository.observeUnlockedVaultIds().first())
+        val resolved = pick(
+            selected = preferences.activeVaultId.first(),
+            saved = preferences.defaultVaultId.first(),
+            unlocked = vaultRepository.observeUnlockedVaultIds().first(),
+        )
         _activeVaultId.value = resolved
         return resolved
     }
 
-    /** 取值规则单一实现（`init` 的流与 [resolve] 共用，避免两处口径漂移）。 */
-    private fun pick(saved: String?, unlocked: Set<String>): String? = when {
+    /**
+     * 取值规则单一实现（`init` 的流与 [resolve] 共用，避免两处口径漂移）。
+     *
+     * 优先级：
+     * 1. **本次会话选过且仍解锁** → 用它（用户刚点的，最高优先级）；
+     * 2. **默认库且仍解锁** → 用它（冷启动先开用户明确设过的那个）；
+     * 3. 否则退化为「当前唯一已解锁的库」（按 id 字典序取最小，保证结论稳定可复现）。
+     *
+     * ⚠️ 第 1 步为什么不直接覆盖成默认库：`active` 与 `default` 相同时结论不变；
+     * 不同时说明用户本次显式切过库 —— 会话内就该听用户的。
+     */
+    private fun pick(selected: String?, saved: String?, unlocked: Set<String>): String? = when {
+        selected != null && selected in unlocked -> selected
         saved != null && saved in unlocked -> saved
         unlocked.isEmpty() -> null
         // Set 无序：按字典序取最小 id 保证「唯一已解锁库」结论稳定可复现
         else -> unlocked.minOrNull()
     }
 
-    /** 切换 / 设定活跃库（互斥语义：直接覆盖，不同时存在第二个）。 */
+    /**
+     * 切换**当前活跃库**（互斥语义：直接覆盖，不同时存在第二个）。
+     *
+     * ⚠️ **不写 `default_vault_id`**：默认库的唯一写入点是设置页
+     * （[io.vaultix.vaultix.ui.settings.SettingsViewModel.setDefaultVault]）。
+     * 切库只表达「这次会话我要看它」，不该改掉用户设的冷启动默认库。
+     */
     fun select(vaultId: String) {
         if (vaultId.isBlank()) return
         _activeVaultId.value = vaultId
+        scope.launch { preferences.setActiveVaultId(vaultId) }
+    }
+
+    /**
+     * 设置**默认库**（冷启动先开哪个）—— 透传到偏好层。
+     *
+     * 与 [select] 分开：设置页改默认库时应**同时**把当前活跃库切过去（用户的意图
+     * 就是"以后开这个"），故由调用方先 [select] 再调本方法。
+     */
+    fun setDefault(vaultId: String?) {
         scope.launch { preferences.setDefaultVaultId(vaultId) }
+    }
+
+    /**
+     * 新库**首次接入成功**时顺手设为默认库 —— **仅当默认库当前为空**。
+     *
+     * 语义边界（用户 2026-09-14 拍板）：
+     * - ✅ 默认库为空（首个库 / 用户从没设过）⇒ 写入，省掉用户「还得去设置页点一下」；
+     * - ❌ 默认库非空 ⇒ **绝不覆盖**。用户设过的选择不该被「又加了一个库」这件事
+     *   悄悄改掉 —— 那正是第一批修掉的 bug（`select()` 每次切库都覆盖默认库）的
+     *   **同一种病**，只是换了个触发点。
+     *
+     * ⚠️ 与 [select] 的分工：本方法的落点是「新库接入」这条业务路径，
+     * **不是**通用的切库动作。放在 [select] 里就会退化成原来的 bug。
+     *
+     * 「检查 + 写入」在**同一个 `dataStore.edit` 事务**内完成（[VaultixPreferences.trySetDefaultVaultIfAbsent]），
+     * 避免「两个库并发接入时都读到空、都写入」的竞态。
+     *
+     * @return true = 本次真的写入了（调用方可据此提示「已设为默认库」）。
+     */
+    suspend fun setDefaultIfAbsent(vaultId: String): Boolean {
+        if (vaultId.isBlank()) return false
+        return preferences.trySetDefaultVaultIfAbsent(vaultId)
     }
 
     /** 当前活跃库（同步读取，供 ViewModel 构造期解析 vaultId 用）。 */

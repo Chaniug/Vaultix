@@ -43,12 +43,15 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -90,11 +93,22 @@ fun AddKdbxScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val snackbarHostState = remember { SnackbarHostState() }
+    // 文案先取好：LaunchedEffect 里不能直接 stringResource
+    val addedText = stringResource(R.string.add_kdbx_added)
+    val updatedText = stringResource(R.string.add_kdbx_updated)
 
     LaunchedEffect(Unit) {
         viewModel.events.collect { event ->
             when (event) {
-                AddKdbxViewModel.Event.VaultAdded -> onAdded()
+                is AddKdbxViewModel.Event.VaultAdded -> {
+                    // ⚠️ 成功路径**必须有反馈**（`.ai/ISSUES.md` #94）：重复添加同一文件时
+                    // 列表零变化（upsert 覆盖同一行），不给提示用户只会读成「毫无反应」。
+                    snackbarHostState.showSnackbar(
+                        if (event.isUpdate) updatedText else addedText,
+                    )
+                    onAdded()
+                }
             }
         }
     }
@@ -113,6 +127,7 @@ fun AddKdbxScreen(
     }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.add_kdbx_title)) },

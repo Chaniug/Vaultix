@@ -41,13 +41,15 @@ interface VaultRepository {
      * @param sourceUri SAF 选中的文件 URI（作为 vault 行的 `origin`；KDBX 库的 id 即它）。
      * @param displayName 列表里显示的名字（默认取文件名）。
      * @param keyFileUri 可选的 keyfile URI（需已取得持久读权限）。
+     * @return 成功时返回 [KdbxAddResult]（区分「新增」与「已存在并覆盖」，
+     *   供 UI 给出**非静默**的成功反馈 —— 见 `.ai/ISSUES.md` #94）。
      */
     suspend fun addKdbxVault(
         sourceUri: String,
         displayName: String,
         masterPassword: String,
         keyFileUri: String?,
-    ): UnlockResult
+    ): KdbxAddOutcome
 
     /** 解锁已注册的 KDBX 库（主密码 + 可选 keyfile；keyfile URI 由仓储从偏好里读）。 */
     suspend fun unlockKdbxVault(vaultId: String, masterPassword: String): UnlockResult
@@ -151,11 +153,82 @@ interface VaultRepository {
 
     /** 关闭本地快速解锁：删除包裹密钥与开关（不动主密码登录）。 */
     suspend fun disableLocalUnlock(vaultId: String)
+
+    // ---- 本地快速解锁：KDBX 侧（`.ai/decisions/库选择与快速解锁-逻辑定稿.md` §4）----
+
+    /**
+     * **KDBX 库**启用本地快速解锁（`.ai/ISSUES.md` #93）。
+     *
+     * 与 Bitwarden 侧的 [enrollLocalUnlock] 是**两个方法**而非一个重载，因为包裹物
+     * 本质不同：Bitwarden 包的是「会话里的对称密钥」，KDBX 会话**不含密钥**
+     * （`KdbxSession` 只有整库明文，`Kdbx.unlock()` 用完即弃）⇒ 只能包「主密码 +
+     * keyfile」这组**能重新开库的凭据**。
+     *
+     * ⚠️ **必须在 wrap 之前先用这组凭据真的解一次库**：`wrap` 只管包裹字节、
+     * 不管字节对不对。若用户输错密码照样 wrap 成功，下次指纹就会解出错密码
+     * ⇒ 开库失败且无法自愈。校验必须复用真实开库路径（不能只比对长度）。
+     *
+     * @param masterPassword 用户当场输入的主密码（**不落盘**，只进包裹物）。
+     * @param keyFileUri 该库登记的 keyfile URI（可空；由上层从 preferences 读）。
+     * @return 见 [KdbxEnrollOutcome]；`InvalidCredentials` 时 UI 应就地让用户重输。
+     */
+    suspend fun enrollLocalUnlockKdbx(
+        vaultId: String,
+        masterPassword: String,
+        keyFileUri: String?,
+        cipher: javax.crypto.Cipher,
+    ): KdbxEnrollOutcome
+
+    /**
+     * 认证通过后：解封 KDBX 包裹物（主密码 + keyfile）并**真的开库**。
+     *
+     * 返回 [KdbxUnlockOutcome.StaleCredentials] 表示「指纹本身通过了，但包裹物已失效」
+     * —— 典型成因是用户改了主密码。这是定稿 §4.4 的 **D3 = 明确提示 + 自动重包**：
+     * UI 提示「主密码可能已变更」，用户输新密码成功后自动重新包裹，
+     * 下次指纹即可用（**不删除用户的快速解锁登记**，与 [completeLocalUnlock]
+     * 对 Bitwarden 的「不可恢复」处理取向不同 —— 那侧包裹物是密钥、密码变了也还能开）。
+     */
+    suspend fun completeLocalUnlockKdbx(
+        vaultId: String,
+        cipher: javax.crypto.Cipher,
+    ): KdbxUnlockOutcome
+}
+
+/** [VaultRepository.enrollLocalUnlockKdbx] 的结果（UI 据此决定文案与是否重输）。 */
+sealed interface KdbxEnrollOutcome {
+    /** 校验通过、包裹物已落盘、开关已置位。 */
+    data object Enrolled : KdbxEnrollOutcome
+
+    /**
+     * 主密码（或 keyfile）不对 —— **校验阶段**就失败了，未写任何东西。
+     * UI 按「宽松」取向处理：提示后**保留输入框、就地重输**，不掉出流程。
+     */
+    data object InvalidCredentials : KdbxEnrollOutcome
+
+    /** 库文件读不到（URI 授权失效 / 文件被删）。 */
+    data class SourceUnavailable(val detail: String) : KdbxEnrollOutcome
+
+    /** KEK 不可用 / 其它异常。 */
+    data class Failed(val detail: String) : KdbxEnrollOutcome
+}
+
+/** [VaultRepository.completeLocalUnlockKdbx] 的结果。 */
+sealed interface KdbxUnlockOutcome {
+    /** 解封成功且**库真的打开了**（会话已登记）。 */
+    data object Opened : KdbxUnlockOutcome
+
+    /**
+     * **指纹通过了，但包裹物打不开库** ⇒ 主密码很可能已被用户在别处改过。
+     * UI 应提示并引导重输 → 成功后 [VaultRepository.enrollLocalUnlockKdbx] 自动重包。
+     */
+    data object StaleCredentials : KdbxUnlockOutcome
+
+    /** 未启用快速解锁 / 包裹物缺失 / KEK 已失效（指纹变更等）⇒ 回退主密码解锁。 */
+    data class Unavailable(val detail: String) : KdbxUnlockOutcome
 }
 
 /** 解锁 / 添加库的结果分类，便于 UI 给出可执行的提示（Docs/10 §5）。 */
-sealed interface UnlockResult {
-    data object Success : UnlockResult
+sealed interface UnlockResult {    data object Success : UnlockResult
 
     /** 邮箱或主密码错误（401，或 OAuth invalid_grant） */
     data object InvalidCredentials : UnlockResult
@@ -249,3 +322,29 @@ data class VaultSyncStatus(
     val retryAttempt: Int = 0,
     val nextRetryAt: Long? = null,
 )
+
+/**
+ * KDBX 添加结果（`addKdbxVault` 的返回类型）。
+ *
+ * 为什么不能复用 [UnlockResult]（`.ai/ISSUES.md` #94）：KDBX 库的 `id` **就是文件 URI**，
+ * 重复添加同一文件会 `upsert` 覆盖同一行 ⇒ 列表零变化，而旧实现的成功分支只有
+ * `popBackStack()`、**一句提示都没有** ⇒ 用户的读法是「点了一点反应都没有」
+ * （既非失败也无成功）。
+ *
+ * ⇒ 成功必须**分二态**，让 UI 能说清发生了什么：
+ * - [Added]：新库进列表；
+ * - [Updated]：同文件重新添加（用户改过密码 / 想刷新）—— D5 定稿选「允许覆盖 + 成功反馈」。
+ *
+ * 失败路径继续用 [UnlockResult]（凭据错 / 文件读不到 / 非 KDBX…），
+ * UI 侧用 `when` 分支处理两件不同的事。
+ */
+sealed interface KdbxAddOutcome {
+    /** 新增了一个此前不在列表里的库。 */
+    data object Added : KdbxAddOutcome
+
+    /** 该文件此前已添加过：本次**覆盖**了同一行（允许覆盖 + 成功反馈，D5 定稿）。 */
+    data object Updated : KdbxAddOutcome
+
+    /** 添加失败（凭据 / 文件 / 格式等原因，见 [UnlockResult]）。 */
+    data class Failed(val result: UnlockResult) : KdbxAddOutcome
+}

@@ -16,7 +16,7 @@ import android.provider.OpenableColumns
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
-import io.vaultix.domain.UnlockResult
+import io.vaultix.domain.KdbxAddOutcome
 import io.vaultix.domain.VaultRepository
 import io.vaultix.vaultix.ui.error.UnlockUiError
 import io.vaultix.vaultix.ui.error.toUnlockUiError
@@ -60,7 +60,14 @@ class AddKdbxViewModel @Inject constructor(
     }
 
     sealed interface Event {
-        data object VaultAdded : Event
+        /**
+         * 添加成功 —— **分「新增 / 已存在并覆盖」两态**（`.ai/ISSUES.md` #94）。
+         *
+         * ⚠️ 必须分开：KDBX 库 id 就是文件 URI，重复添加同一文件会覆盖同一行、
+         * 列表零变化。若只发一个「成功」，UI 无法向用户解释「为什么列表没变」，
+         * 用户读到的就是「点了一点反应都没有」。
+         */
+        data class VaultAdded(val isUpdate: Boolean) : Event
     }
 
     private val _state = MutableStateFlow(UiState())
@@ -110,21 +117,24 @@ class AddKdbxViewModel @Inject constructor(
 
         _state.update { it.copy(submitting = true, error = null) }
         viewModelScope.launch {
-            val result = vaultRepository.addKdbxVault(
+            val outcome = vaultRepository.addKdbxVault(
                 sourceUri = current.fileUri,
                 displayName = current.fileName,
                 masterPassword = current.password,
                 keyFileUri = current.keyFileUri,
             )
-            if (result == UnlockResult.Success) {
-                // 密码用完即弃（不留在 UiState 快照里）
-                _state.update {
-                    it.copy(submitting = false, password = "", error = null)
+            when (outcome) {
+                // 允许覆盖 + 成功反馈（D5 定稿，见 .ai/decisions/库选择与快速解锁-逻辑定稿.md §7）
+                KdbxAddOutcome.Added, KdbxAddOutcome.Updated -> {
+                    // 密码用完即弃（不留在 UiState 快照里）
+                    _state.update { it.copy(submitting = false, password = "", error = null) }
+                    _events.send(Event.VaultAdded(isUpdate = outcome is KdbxAddOutcome.Updated))
                 }
-                _events.send(Event.VaultAdded)
-            } else {
-                _state.update {
-                    it.copy(submitting = false, error = result.toUnlockUiError())
+
+                is KdbxAddOutcome.Failed -> {
+                    _state.update {
+                        it.copy(submitting = false, error = outcome.result.toUnlockUiError())
+                    }
                 }
             }
         }

@@ -36,6 +36,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
@@ -56,6 +57,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -63,6 +65,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import io.vaultix.common.PasswordStrength
+import io.vaultix.common.SshFingerprint
 import io.vaultix.common.UriFormat
 import io.vaultix.model.CustomFieldType
 import io.vaultix.model.VaultCustomField
@@ -77,11 +80,12 @@ import io.vaultix.vaultix.ui.qr.QrScannerContent
 /**
  * 条目表单对话框（新建 / 编辑共用，Docs/08 S10）。
  *
- * 按条目类型决定可编辑字段，**身份与银行卡已可编辑**：
+ * 按条目类型决定可编辑字段，**除安全笔记外都可编辑**：
  * - Login：用户名 / 密码（含实时强度条）/ 网址（多值）/ TOTP 密钥；
  * - Card：持卡人 / 发卡行 / 卡号 / 有效期月·年 / 安全码（对齐 Bitwarden card 载荷）；
  * - Identity：全量 17 字段（对齐 Bitwarden identity 载荷，覆盖 Bastion 兼容缺陷）；
- * - SecureNote / SshKey：仅名称 + 备注（类型专属段保留服务端原值）。
+ * - SshKey：私钥 / 公钥 / 指纹（指纹由公钥自动推导、可手改，见 [applyPublicKeyChange]）；
+ * - SecureNote：仅名称 + 备注（该类型本就没有专属字段）。
  *
  * [typeEditable]：仅**新建**时开放类型选择。编辑态不允许改类型——改类型会让
  * 原类型载荷失去意义，且写路径有类型守恒守卫。
@@ -116,6 +120,16 @@ fun ItemFormDialog(
     }
     val identityValues = rememberSaveable(initial, saver = STRING_LIST_SAVER) {
         mutableStateListOf<String>().apply { addAll(identityValuesOf(initial.identity)) }
+    }
+    // SSH 三项（私钥 / 公钥 / 指纹）。指纹原本为空而公钥可解析时，**初始化即补上**：
+    // 导入来的条目常缺指纹，补它是纯收益。而已存有指纹时绝不覆盖，避免静默重写数据。
+    val sshValues = rememberSaveable(initial, saver = STRING_LIST_SAVER) {
+        mutableStateListOf<String>().apply {
+            addAll(sshValuesOf(initial.sshKey))
+            if (get(SSH_FINGERPRINT_INDEX).isBlank()) {
+                this[SSH_FINGERPRINT_INDEX] = SshFingerprint.of(get(SSH_PUBLIC_KEY_INDEX)).orEmpty()
+            }
+        }
     }
     val customFields = rememberSaveable(initial, saver = CUSTOM_FIELD_LIST_SAVER) {
         mutableStateListOf<VaultCustomField>().apply { addAll(initial.customFields) }
@@ -160,6 +174,7 @@ fun ItemFormDialog(
                             reprompt = reprompt,
                             customFields = customFields.toList(),
                         ),
+                        ssh = sshValues.toList(),
                     ),
                 )
             }
@@ -180,17 +195,6 @@ fun ItemFormDialog(
             onFavoriteChange = { favorite = it },
             showError = showNameError,
         )
-        if (type == VaultItemType.SshKey) {
-            Spacer(Modifier.height(4.dp))
-            Text(
-                text = stringResource(
-                    R.string.item_edit_type_fields_readonly,
-                    stringResource(itemTypeLabelRes(type)),
-                ),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
         FormDivider()
         when (type) {
             VaultItemType.Login -> LoginFields(
@@ -206,8 +210,9 @@ fun ItemFormDialog(
             )
             VaultItemType.Card -> LabeledFields(CARD_LABELS, cardValues)
             VaultItemType.Identity -> LabeledFields(IDENTITY_LABELS, identityValues)
-            // 安全笔记只有名称 + 备注；SSH 密钥段保持只读（上方已提示）
-            VaultItemType.SecureNote, VaultItemType.SshKey -> Unit
+            VaultItemType.SshKey -> SshKeyFields(sshValues)
+            // 安全笔记只有名称 + 备注（该类型本就没有专属字段可填）
+            VaultItemType.SecureNote -> Unit
         }
         ItemFormTail(
             customFields = customFields,
@@ -616,6 +621,58 @@ private fun LabeledFields(labels: List<Int>, values: SnapshotStateList<String>) 
         Spacer(Modifier.height(8.dp))
     }
 }
+
+/**
+ * SSH 密钥输入（S22）：私钥 / 公钥多行，指纹单行。
+ *
+ * 三项都用**等宽**：密钥是机器文本，等宽便于逐字符核对（与详情页一致）。
+ * 用 `LocalTextStyle.current.copy(...)` 而非自建 `TextStyle` —— 前者恰好等于
+ * 输入框的默认样式只换字体，因此不可能把主题文字色弄丢。
+ *
+ * 私钥**不遮蔽**，与详情页 `SshKeySection`（明文 + 复制）保持一致；表单里遮蔽
+ * 反而让用户没法确认自己粘对了没有 —— 而「确认贴对了」正是本表单要解决的问题。
+ *
+ * 指纹由公钥驱动：公钥的 onValueChange 走 [applyPublicKeyChange]，
+ * 「自动 / 手动」的判定逻辑都在那边（纯函数，已单测）。
+ */
+@Composable
+private fun SshKeyFields(values: SnapshotStateList<String>) {
+    val monospace = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace)
+    OutlinedTextField(
+        value = values[SSH_PRIVATE_KEY_INDEX],
+        onValueChange = { values[SSH_PRIVATE_KEY_INDEX] = it },
+        label = { Text(stringResource(R.string.ssh_private_key)) },
+        minLines = SSH_KEY_MIN_LINES,
+        maxLines = SSH_KEY_MAX_LINES,
+        textStyle = monospace,
+        modifier = Modifier.fillMaxWidth(),
+    )
+    Spacer(Modifier.height(8.dp))
+    OutlinedTextField(
+        value = values[SSH_PUBLIC_KEY_INDEX],
+        onValueChange = { applyPublicKeyChange(values, it) },
+        label = { Text(stringResource(R.string.ssh_public_key)) },
+        minLines = SSH_KEY_MIN_LINES,
+        maxLines = SSH_KEY_MAX_LINES,
+        textStyle = monospace,
+        modifier = Modifier.fillMaxWidth(),
+    )
+    Spacer(Modifier.height(8.dp))
+    OutlinedTextField(
+        value = values[SSH_FINGERPRINT_INDEX],
+        onValueChange = { values[SSH_FINGERPRINT_INDEX] = it },
+        label = { Text(stringResource(R.string.ssh_fingerprint)) },
+        supportingText = { Text(stringResource(R.string.ssh_fingerprint_hint)) },
+        singleLine = true,
+        textStyle = monospace,
+        modifier = Modifier.fillMaxWidth(),
+    )
+    Spacer(Modifier.height(8.dp))
+}
+
+/** SSH 密钥输入框的行数区间：私钥可能很长，给足可视空间又不至于撑爆整页。 */
+private const val SSH_KEY_MIN_LINES = 3
+private const val SSH_KEY_MAX_LINES = 8
 
 /**
  * 密码强度条（Docs/08 S10）：分值 0–100 → 五档（弱/一般/良好/强/非常强），

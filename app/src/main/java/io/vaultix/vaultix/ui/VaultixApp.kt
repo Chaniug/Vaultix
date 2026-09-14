@@ -218,6 +218,8 @@ private fun NavGraphBuilder.vaultEntryGraph(
             // 兜底：确实没有可解锁的库（例如列表异步变化）时退回库列表，
             // 不把用户留在"永远转圈"的解锁页上。
             onNoVault = { navController.navigateToRoot(VaultListRoute) },
+            // 换一个库：回「我的密码库」页（列出全部库，含未解锁项）。
+            onSwitchVault = { navController.navigate(VaultListRoute) },
         )
     }
     composable<VaultListRoute> {
@@ -240,6 +242,10 @@ private fun NavGraphBuilder.vaultEntryGraph(
     composable<MainShellRoute> {
         val activeVaultId by shellBridge.activeVaultStore.activeVaultId
             .collectAsStateWithLifecycle()
+        // 「切换密码库」出口只在**多库并存**时有意义（issue #96）：单库时传 null，
+        // 菜单项整项隐藏 —— 与「遍历所有库渲染能力开关」的坑（#93）同款纪律：
+        // 能力不存在时隐藏，而不是给一个点了没意义的入口。
+        val vaultCount by shellBridge.vaultCount.collectAsStateWithLifecycle()
         MainShellScreen(
             onOpenItem = { item ->
                 activeVaultId?.let { vaultId ->
@@ -260,6 +266,12 @@ private fun NavGraphBuilder.vaultEntryGraph(
             onAddKdbxVault = { navController.navigate(AddKdbxRoute) },
             // 页内主动锁定：交回根入口（若已全锁，RootNavState 会自己弹解锁页）
             onLocked = { navController.navigateToRoot(VaultListRoute) },
+            // 切换密码库 → 「我的密码库」页（列出全部库，未解锁项可点进去输密码）。
+            onSwitchVault = if (vaultCount > 1) {
+                { navController.navigate(VaultListRoute) }
+            } else {
+                null
+            },
         )
     }
     composable<UnlockRoute> { entry ->
@@ -277,6 +289,8 @@ private fun NavGraphBuilder.vaultEntryGraph(
                     navController.navigateToRoot(VaultListRoute)
                 }
             },
+            // 换一个库：直达「我的密码库」页（清栈，避免解锁页在返回栈里反复出现）。
+            onSwitchVault = { navController.navigateToRoot(VaultListRoute) },
         )
     }
 }

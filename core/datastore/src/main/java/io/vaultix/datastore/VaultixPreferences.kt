@@ -62,6 +62,18 @@ class VaultixPreferences @Inject constructor(
         val DYNAMIC_COLOR = booleanPreferencesKey("dynamic_color")
         val SCREEN_SECURITY = booleanPreferencesKey("screen_security")
         val DEFAULT_VAULT_ID = stringPreferencesKey("default_vault_id")
+
+        /**
+         * **当前活跃库**（本次会话正在看哪一个）—— 与 [DEFAULT_VAULT_ID] 是**两个语义**。
+         *
+         * 拆分背景（`.ai/decisions/库选择与快速解锁-逻辑定稿.md` §3）：原先切库
+         * （`ActiveVaultStore.select`）直接写 `default_vault_id`，于是用户「临时切去看一眼
+         * 另一个库」会**静默永久改掉默认库**，下次冷启动进的就是那个临时看的库。
+         *
+         * - `active_vault_id`：用户切库时写（会随后被清理，仅表达"这次会话看谁"）；
+         * - `default_vault_id`：**只在设置里明确修改时**写 —— 冷启动先开哪个。
+         */
+        val ACTIVE_VAULT_ID = stringPreferencesKey("active_vault_id")
         val QUICK_UNLOCK_PROMPT_DISMISSED = booleanPreferencesKey("quick_unlock_prompt_dismissed")
         val TRASH_AUTO_DELETE_DAYS = intPreferencesKey("trash_auto_delete_days")
         val THEME_MODE = stringPreferencesKey("theme_mode")
@@ -225,6 +237,14 @@ class VaultixPreferences @Inject constructor(
     val defaultVaultId: Flow<String?> = safeData.map { it[DEFAULT_VAULT_ID] }
 
     /**
+     * **当前活跃库 id**（本次会话看的是哪个）。
+     *
+     * ⚠️ 与 [defaultVaultId] 的区别是本键存在的原因：切库只动这个键，
+     * **不动** [defaultVaultId] —— 否则「临时切库」会静默改掉冷启动默认库。
+     */
+    val activeVaultId: Flow<String?> = safeData.map { it[ACTIVE_VAULT_ID] }
+
+    /**
      * 本地快速解锁开关（按库）。仅为元数据：真正的包裹密钥密文在
      * [SecureCredentialStore]（key：local_unlock_key::<vaultId>）。
      */
@@ -345,9 +365,51 @@ class VaultixPreferences @Inject constructor(
         dataStore.edit { it[ITEMS_SHOW_ICON] = enabled }
     }
 
+    /**
+     * 设置**默认库**（冷启动先开哪个；null = 未设置，冷启动退回既有逻辑）。
+     *
+     * ⚠️ **唯一写入点是设置页**（`SettingsViewModel.setDefaultVault`）。切库
+     * （`ActiveVaultStore.select`）**必须**走 [setActiveVaultId]，否则会静默改掉
+     * 用户明确设过的默认库。
+     */
     suspend fun setDefaultVaultId(id: String?) {
         dataStore.edit { prefs ->
             if (id == null) prefs.remove(DEFAULT_VAULT_ID) else prefs[DEFAULT_VAULT_ID] = id
         }
+    }
+
+    /**
+     * 写**当前活跃库**（切库时调；不清 [defaultVaultId]）。
+     *
+     * ⚠️ 刻意**不做**「切库顺带写默认库」：那正是「临时切库覆盖默认库」这个 bug。
+     */
+    suspend fun setActiveVaultId(id: String?) {
+        dataStore.edit { prefs ->
+            if (id == null) prefs.remove(ACTIVE_VAULT_ID) else prefs[ACTIVE_VAULT_ID] = id
+        }
+    }
+
+    /**
+     * **仅当默认库为空时**写入 [id]（新库首次接入用）。
+     *
+     * 与 [setDefaultVaultId] 的分工：
+     * - [setDefaultVaultId] = 用户**显式**改默认库（设置页），无条件覆盖；
+     * - 本方法 = 系统在「新库接入」时**补一个缺省**，绝不覆盖用户已有的选择。
+     *
+     * 「读 + 写」在**同一次 `dataStore.edit`** 内完成：`edit` 是事务性的，
+     * 块内读到的就是本次写入前的值 ⇒ 两个库并发接入时只有一个能写成功，
+     * 不会出现「都读到空、都写入」导致默认库被后者覆盖。
+     *
+     * @return true = 本次写入了（调用方可提示「已设为默认库」）；false = 已有默认库，未动。
+     */
+    suspend fun trySetDefaultVaultIfAbsent(id: String): Boolean {
+        var written = false
+        dataStore.edit { prefs ->
+            if (prefs[DEFAULT_VAULT_ID] == null) {
+                prefs[DEFAULT_VAULT_ID] = id
+                written = true
+            }
+        }
+        return written
     }
 }

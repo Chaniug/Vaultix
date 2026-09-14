@@ -50,6 +50,7 @@ import io.vaultix.common.TotpGenerator
 import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.domain.VaultRepository
 import io.vaultix.domain.VaultSessionRepository
+import io.vaultix.model.VaultKind
 import io.vaultix.vaultix.MainActivity
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.autofill.engine.AutofillCandidateSource
@@ -345,10 +346,32 @@ class AutofillActivity : FragmentActivity() {
 
     /** 解封首个库，随后趁 KEK 授权窗口解封其余已启用库（两处解锁路径共用）。 */
     private suspend fun unlockAll(pending: PendingBiometricUnlock, cipher: Cipher) {
-        runCatching { vaultRepository.completeLocalUnlock(pending.first, cipher) }
+        completeLocalUnlockByKind(pending.first, cipher)
         for (id in pending.rest) {
             val c = runCatching { vaultRepository.prepareLocalUnlock(id) }.getOrNull() ?: continue
-            runCatching { vaultRepository.completeLocalUnlock(id, c) }
+            completeLocalUnlockByKind(id, c)
+        }
+    }
+
+    /**
+     * 按库类型走正确的本地解锁路径。
+     *
+     * ⚠️ 不能一律调 `completeLocalUnlock`（定稿 §4）：那条路把包裹物当作
+     * **Bitwarden 对称密钥**（`enc ‖ mac`）解析；KDBX 的包裹物是
+     * 「主密码 + keyfile」，走过去会解出错误语义 —— `SymmetricCryptoKey.fromFullKey`
+     * 拿一段带魔数的字节当密钥，轻则解锁失败，重则把会话建立成一把错密钥。
+     * ⇒ 必须先查 kind 再分流。
+     */
+    private suspend fun completeLocalUnlockByKind(vaultId: String, cipher: Cipher) {
+        val kind = runCatching {
+            vaultRepository.observeVaults().first()
+                .firstOrNull { it.id == vaultId }
+                ?.kind
+        }.getOrNull()
+        if (kind == VaultKind.KDBX) {
+            runCatching { vaultRepository.completeLocalUnlockKdbx(vaultId, cipher) }
+        } else {
+            runCatching { vaultRepository.completeLocalUnlock(vaultId, cipher) }
         }
     }
 

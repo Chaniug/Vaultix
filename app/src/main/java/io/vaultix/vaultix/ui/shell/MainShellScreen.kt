@@ -58,6 +58,8 @@ private const val WIDE_SCREEN_MIN_WIDTH_DP = 600
  * @param onOpenAutofillSettings 打开自动填充设置（设置 Tab 二级页）。
  * @param onOpenImportExport 打开导入 / 导出二级页（设置 Tab 二级页）。
  * @param onLocked 该库被锁定：交由根导航收回到解锁页（本容器不再自持锁态判定）。
+ * @param onSwitchVault 「切换密码库」出口（issue #96）：**只在存在多个库时**由宿主传入，
+ *   单库时传 null 即整项隐藏（没有可切换的对象）。
  */
 @Composable
 fun MainShellScreen(
@@ -70,6 +72,7 @@ fun MainShellScreen(
     onAddBitwardenVault: () -> Unit,
     onAddKdbxVault: () -> Unit,
     onLocked: () -> Unit,
+    onSwitchVault: (() -> Unit)? = null,
 ) {
     val configuration = LocalConfiguration.current
     val isCompactWidth = configuration.screenWidthDp < WIDE_SCREEN_MIN_WIDTH_DP
@@ -188,6 +191,7 @@ fun MainShellScreen(
                             onOpenItem = onOpenItem,
                             onOpenTotp = { currentTab = VaultixNavItem.Authenticator },
                             bottomInset = bottomInset,
+                            onSwitchVault = onSwitchVault,
                         )
 
                         VaultixNavItem.Authenticator -> TotpCodesScreen(

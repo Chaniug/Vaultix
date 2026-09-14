@@ -47,6 +47,7 @@ import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.ViewAgenda
 import androidx.compose.material.icons.filled.Warning
@@ -206,6 +207,13 @@ fun ItemsScreen(
      * 隐藏返回键（无上层可返回）与 FAB（「+」由底部导航条统一承载）。
      */
     embedded: Boolean = false,
+    /**
+     * 「切换密码库」出口（null = 只有一个库，菜单项隐藏）。
+     *
+     * issue #96：多库并存时此前**没有**任何语义正确的切库入口 —— 用户能碰到的
+     * 只有「锁定」（语义相反），于是「添加了 KDBX 却找不到怎么进去」。
+     */
+    onSwitchVault: (() -> Unit)? = null,
     /** 外部「+」请求计数：非零即打开新建表单（宿主在消费后清零，避免重复弹出）。 */
     addRequest: Int = 0,
     onAddConsumed: () -> Unit = {},
@@ -360,6 +368,7 @@ fun ItemsScreen(
                     onOpenTrash = onOpenTrash,
                     onRetrySync = viewModel::retrySync,
                     onLock = { viewModel.lockNow(onLocked) },
+                    onSwitchVault = onSwitchVault,
                 )
             }
         }
@@ -557,6 +566,7 @@ private fun BoxScope.ItemsTopBar(
     onOpenTrash: () -> Unit,
     onRetrySync: () -> Unit,
     onLock: () -> Unit,
+    onSwitchVault: (() -> Unit)?,
 ) {
     VaultixExpressiveTopBar(
         title = title,
@@ -585,6 +595,7 @@ private fun BoxScope.ItemsTopBar(
                 )
             }
             ItemsMoreMenu(
+                onSwitchVault = onSwitchVault,
                 onDisplayOptions = onDisplayOptions,
                 onOpenTotp = onOpenTotp,
                 onOpenTrash = onOpenTrash,
@@ -596,14 +607,19 @@ private fun BoxScope.ItemsTopBar(
 }
 
 /**
- * 顶栏「更多」菜单（⋮）：验证码 / 通行密钥回收站 / 显示选项 / 同步 / 锁定查看层。
+ * 顶栏「更多」菜单（⋮）：**切换密码库** / 验证码 / 回收站 / 显示选项 / 同步 / 锁定查看层。
  *
  * ⚠️ 菜单项顺序 = 使用频率：查看类（验证码 / 回收站 / 显示选项）在上，
  * 维护类（同步）居中，破坏性动作（锁定）在下并用 error 色分隔
  * （对齐 M3「破坏性动作不挨着常用动作」的建议）。
+ *
+ * ⚠️ 「切换密码库」放在**最上面**（2026-09-14，issue #96）：多库并存时这是
+ * 「我要换个库看」的**唯一正确语义入口**。此前用户能碰到的只有「锁定」
+ * （语义恰好相反），导致 KDBX 库「添加了却找不到」，只能靠摸到设置页。
  */
 @Composable
 private fun ItemsMoreMenu(
+    onSwitchVault: (() -> Unit)?,
     onDisplayOptions: () -> Unit,
     onOpenTotp: () -> Unit,
     onOpenTrash: () -> Unit,
@@ -619,6 +635,14 @@ private fun ItemsMoreMenu(
             )
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            // 只有一个库时不必显示（没有可切换的对象），故回调为 null 即整项隐藏。
+            if (onSwitchVault != null) {
+                MenuAction(Icons.Filled.SwapHoriz, R.string.items_switch_vault) {
+                    expanded = false
+                    onSwitchVault()
+                }
+                HorizontalDivider()
+            }
             MenuAction(Icons.Filled.QrCode2, R.string.totp_screen_title) {
                 expanded = false
                 onOpenTotp()
@@ -837,15 +861,14 @@ private fun ItemsList(
             }
             if (group.key !in collapsedGroups) {
                 items(group.items, key = { it.id }) { item ->
-                    // 「按住 → 向左滑 → 松手」删除（软删除进回收站，见 ItemsViewModel.deleteItem）。
+                    // 「左滑 → 松手过半 → 二次确认」删除（软删除进回收站，见 ItemsViewModel.deleteItem）。
                     // 长按**选中**由内部 [ItemRow]/[EntryCard] 的 `onLongClick` 独占；本容器
-                    // 只负责「长按成立后进入拖拽删除」的信号（见 [PressAndSwipeToDelete]），
-                    // 不再回调选中，避免一次长按触发两次 toggle（进不了多选）。
+                    // 只负责滑动删除信号（见 [PressAndSwipeToDelete]），不再回调选中，
+                    // 避免一次长按触发两次 toggle（进不了多选）。
+                    // ⚠️ 2026-09-14：**不再要求先长按进多选**，任意条目直接左滑即可
+                    // （原 `enabled = selectedIds.isNotEmpty()` 已去掉，详见组件头注释）。
                     PressAndSwipeToDelete(
                         onDelete = { onDelete(item) },
-                        // ⚠️ 必须先按住进入多选，左滑才允许删除（2026-09-13 第二轮用户反馈：
-                        // 「直接右边往左滑也能删除，这样的逻辑不对吧。需要按住进入选择才能删。」）。
-                        enabled = selectedIds.isNotEmpty(),
                     ) {
                         ItemRow(
                             item = item,

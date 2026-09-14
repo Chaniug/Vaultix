@@ -595,12 +595,12 @@ private fun TotpRow(
     val copyNow: () -> Unit = { onCopy(code) }
 
     // 卡片外框与密码 / 卡包列表完全一致（见 [EntryCard]）；内边距由卡片统一给 16dp。
-    // 「按住后滑动删除」包在外层：长按**选中**由 [EntryCard] 的 `onLongClick` 独占，
-    // 本容器只负责「长按成立后进入拖拽删除」的信号（见 [PressAndSwipeToDelete]）。
+    // 「左滑 → 松手过半 → 二次确认」包在外层：长按**选中**由 [EntryCard] 的 `onLongClick`
+    // 独占，本容器只负责滑动删除信号（见 [PressAndSwipeToDelete]）。
+    // ⚠️ 2026-09-14：**不再要求先长按进多选**，任意条目直接左滑即可
+    // （原 `enabled = isSelectionMode` 已去掉，与密码页保持一致）。
     PressAndSwipeToDelete(
         onDelete = onDelete,
-        // 与密码页同一门槛：先按住进多选，左滑才可删（裸滑不触发删除，避免误触）。
-        enabled = isSelectionMode,
     ) {
         EntryCard(
             // 多选态下点击 = 勾选（上游 `cardInteractionModifier` 同款分支）。

@@ -7,16 +7,20 @@ import io.vaultix.datastore.VaultTimeout
 import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.datastore.VaultixPreferencesDefaults
 import io.vaultix.domain.ItemRepository
+import io.vaultix.domain.KdbxEnrollOutcome
 import io.vaultix.domain.VaultRepository
 import io.vaultix.domain.VaultSessionRepository
+import io.vaultix.model.VaultKind
 import io.vaultix.model.VaultSummary
 import io.vaultix.vaultix.security.AutoLockController
 import io.vaultix.vaultix.session.ActiveVaultStore
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
@@ -52,11 +56,19 @@ class SettingsViewModel @Inject constructor(
         val screenSecurity: Boolean = true,
     )
 
-    /** 本地快速解锁管理列表（每库：是否已启用）。 */
+    /**
+     * 本地快速解锁「生效范围」列表项（每库一行）。
+     *
+     * `kind` 用于区分两条**截然不同**的登记流程（定稿 §4）：
+     * Bitwarden 包裹会话密钥（当场无需再输密码）；KDBX 只能包裹
+     * 「主密码 + keyfile」⇒ **必须先向用户再要一次主密码**（§4.5）。
+     * 这个差异必须在 UI 上可见，否则用户不明白为什么点 KDBX 会弹密码框。
+     */
     data class QuickUnlockVaultUi(
         val vaultId: String,
         val name: String,
         val enabled: Boolean,
+        val kind: VaultKind,
     )
 
     val state: StateFlow<UiState> = combine(
@@ -87,6 +99,7 @@ class SettingsViewModel @Inject constructor(
                                 vaultId = vault.id,
                                 name = vault.name,
                                 enabled = enabled,
+                                kind = vault.kind,
                             )
                         }
                     },
@@ -244,21 +257,54 @@ class SettingsViewModel @Inject constructor(
         )
 
     /**
-     * 可切换目标 = **已解锁**的库。
+     * 可**切换**目标 = 已解锁的库 ∪ 当前默认库。
      *
-     * 锁定库没有内存密钥（切过去也只是空列表），不列为可选项 —— 想切就先解锁，
-     * 与「多库并存时只能进一样」的产品定义一致。
+     * ⚠️ 2026-09-14（`.ai/decisions/库选择与快速解锁-逻辑定稿.md` §7 任务 2 / issue #96）：
+     * 原先**只列已解锁库** ⇒ 未解锁的 KDBX 根本不在列表里，用户「看不到我的库」，
+     * 以为库丢了。现在把全部库都列出来（见 [allVaults]），由 UI 对未解锁项标注
+     * 「未解锁，点击输入密码」并跳解锁页 —— 「找得到」优先于「点得动」。
      */
     val switchableVaults: StateFlow<List<VaultSummary>> = vaultRepository.observeVaults()
-        .map { vaults -> vaults.filter { it.unlocked } }
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5_000),
             initialValue = emptyList(),
         )
 
-    /** 切换活跃库：主界面 Tab / autofill / CP 三处**同时**生效（单一活跃库语义）。 */
+    /**
+     * **默认库**（冷启动先开哪个；null = 未设置 → 退回「`createdAt` 最早」的既有逻辑）。
+     *
+     * ⚠️ 与 [activeVault] 是两个概念：活跃库是「本次会话在看谁」（切库即变），
+     * 默认库是「下次冷启动先开谁」（**只在本页明确修改时才变**）。
+     * 二者写入点分离见 `ActiveVaultStore` 的类注释。
+     */
+    val defaultVault: StateFlow<VaultSummary?> = combine(
+        preferences.defaultVaultId,
+        vaultRepository.observeVaults(),
+    ) { id, vaults -> vaults.firstOrNull { it.id == id } }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = null,
+        )
+
+    /**
+     * 切换活跃库：主界面 Tab / autofill / CP 三处**同时**生效（单一活跃库语义）。
+     *
+     * ⚠️ **不写默认库** —— 临时切库不该改掉冷启动默认库（见 `ActiveVaultStore.select`）。
+     */
     fun selectVault(vaultId: String) = activeVaultStore.select(vaultId)
+
+    /**
+     * 设某库为**默认库**（「冷启动先开这个」）。
+     *
+     * 同时把活跃库切过去：用户点这一项时意图就是「以后开这个」，若只改默认库而不切，
+     * 界面上会立刻出现「活跃库 A、默认库 B」的不一致观感，用户无法判断哪句话算数。
+     */
+    fun setDefaultVault(vaultId: String) {
+        activeVaultStore.select(vaultId)
+        activeVaultStore.setDefault(vaultId)
+    }
 
     /**
      * **活跃库**中的通行密钥总数（设置页「通行密钥」分组展示）。
@@ -339,9 +385,83 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { vaultRepository.enrollLocalUnlock(vaultId, cipher) }
     }
 
+    // ---- KDBX 快速解锁（`.ai/ISSUES.md` #93 / 定稿 §4）----
+
+    /**
+     * 用户勾选了一个 **KDBX** 库的快速解锁：先要主密码。
+     *
+     * 为什么不能像 Bitwarden 那样「勾了就去弹指纹」（定稿 §4.5）：
+     * KDBX 会话里**没有可包裹的密钥** —— `KdbxSession` 不持主密码，
+     * `Kdbx.unlock()` 用完即弃。所以唯一的包裹物是「主密码 + keyfile」，
+     * 而这个主密码只存在于用户脑子里 ⇒ **必须当场再问一次**。
+     *
+     * 这里只负责「打开输入框」；真正的校验与包裹在 [confirmKdbxPassword]。
+     */
+    fun startKdbxQuickUnlock(vaultId: String) {
+        _events.trySend(Event.PromptForKdbxPassword(vaultId))
+    }
+
+    /**
+     * 用户提交 KDBX 主密码：**先校验、后包裹**。
+     *
+     * 「宽松」取向（定稿 §4.4）的落地：输错时**不发关闭事件**，只回一条错误状态，
+     * 输入框留在原地让用户直接重输 —— 不掉出流程、不用重新点一遍勾选。
+     *
+     * 校验成功后才创建 ENCRYPT cipher 并请 UI 弹 BiometricPrompt（与 Bitwarden
+     * 侧同一条收尾路径）；用户取消指纹时不会留下半成品（cipher 未用即弃）。
+     */
+    fun confirmKdbxPassword(vaultId: String, password: String) {
+        viewModelScope.launch {
+            val keyFileUri = runCatching { preferences.kdbxKeyFileUri(vaultId).first() }.getOrNull()
+            val cipher = vaultRepository.prepareLocalEnroll()
+                ?: return@launch _kdbxEnrollState.emit(KdbxEnrollState.Unavailable)
+            when (val outcome = vaultRepository.enrollLocalUnlockKdbx(vaultId, password, keyFileUri, cipher)) {
+                is KdbxEnrollOutcome.Enrolled -> {
+                    _kdbxEnrollState.emit(KdbxEnrollState.Ready)
+                    _events.send(Event.PromptForEnroll(vaultId, cipher))
+                }
+                is KdbxEnrollOutcome.InvalidCredentials ->
+                    // ★ 宽松：只报错，不关框
+                    _kdbxEnrollState.emit(KdbxEnrollState.WrongPassword)
+                is KdbxEnrollOutcome.SourceUnavailable ->
+                    _kdbxEnrollState.emit(KdbxEnrollState.Failed(outcome.detail))
+                is KdbxEnrollOutcome.Failed ->
+                    _kdbxEnrollState.emit(KdbxEnrollState.Failed(outcome.detail))
+            }
+        }
+    }
+
+    /** 用户取消 KDBX 主密码输入框。 */
+    fun dismissKdbxPassword() {
+        _kdbxEnrollState.value = KdbxEnrollState.Idle
+    }
+
+    /** KDBX 主密码输入对话框的状态（UI 据此显示错误 / 收起）。 */
+    sealed interface KdbxEnrollState {
+        data object Idle : KdbxEnrollState
+
+        /** 校验通过、已请 UI 弹指纹。 */
+        data object Ready : KdbxEnrollState
+
+        /** 主密码不对 —— 输入框保留，就地重输。 */
+        data object WrongPassword : KdbxEnrollState
+
+        /** 无可用认证方式。 */
+        data object Unavailable : KdbxEnrollState
+
+        /** 其它失败（文件读不到等）。 */
+        data class Failed(val detail: String) : KdbxEnrollState
+    }
+
+    private val _kdbxEnrollState = MutableStateFlow<KdbxEnrollState>(KdbxEnrollState.Idle)
+    val kdbxEnrollState: StateFlow<KdbxEnrollState> = _kdbxEnrollState.asStateFlow()
+
     sealed interface Event {
         /** UI 收到后弹 BiometricPrompt（cipher 已 init，等待用户认证）。 */
         data class PromptForEnroll(val vaultId: String, val cipher: Cipher) : Event
+
+        /** UI 收到后弹 KDBX 主密码输入框（KDBX 必须当场要密码，定稿 §4.5）。 */
+        data class PromptForKdbxPassword(val vaultId: String) : Event
     }
 
     private val _events = Channel<Event>(Channel.BUFFERED)

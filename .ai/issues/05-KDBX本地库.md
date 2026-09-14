@@ -112,6 +112,232 @@ keyfile 形态）。⚠️ 加密路径的测试宁可多断言——读错一�
 **判据**：**新增入口时先画一遍「从冷启动到该入口」的可达路径。**
 功能挂在一个不可达的路由后面，等于没做。
 
+---
+
+## 93. KDBX 快速解锁（生物识别）**结构上不可实现** ⇒ 开关永远打不开（2026-09-14）
+
+**现象**：用户「生物验证这一块在 kdbx 上好像不起效果」。
+
+**根因**：`enrollLocalUnlock` 的第一行就是
+
+```kotlin
+val key = sessions.keyOf(vaultId) ?: return false
+```
+
+`sessions` = `VaultSessionManager`，它是 **Bitwarden 的对称密钥仓库**（持一把 KEK/主密钥，
+可被 BiometricPrompt 的 `Cipher` 包裹后落盘）。而 **KDBX 会话在 `KdbxSessionStore` 里
+持的是「整库明文」，根本没有「一把可以包裹的密钥」**（见 #64 的会话模型差异）。
+
+⇒ KDBX 库调用 `enrollLocalUnlock` **必然在第一行返回 false**；
+⇒ `localUnlockAvailable` 恒为 false；
+⇒ 解锁页 `quickUnlockVisible = state.localUnlockAvailable && ...` 恒为 false，
+   指纹按钮**永远不显示**；
+⇒ 但设置页 `quickUnlockVaults` 是**遍历所有库**生成的 ⇒ 会给 KDBX 也渲染一个
+   「生物识别快速解锁」开关，用户打开它**必然无效且无任何错误提示**。
+
+**解法（2026-09-14 用户已拍板 ✅，完整逻辑见 `.ai/decisions/库选择与快速解锁-逻辑定稿.md`）**：
+
+⚠️ **本条的定性已精确化**（用户追问「为什么是无效的，照理说是生效的吧」）：
+
+> **它不是一个「没生效的开关」，它是一个「谎报状态的开关」。**
+> 开关值**真写入了** `preferences`（所以设置页看起来是勾上的、重启也还在），
+> 但**保险箱（Keystore 包裹物）里是空的** —— 状态与现实不一致。
+
+1. ~~最小正确：设置页对 `VaultKind.KDBX` 不渲染开关~~ ⇒ **用户否决**：
+   用户要的是**真支持**，不是隐藏。
+2. **采纳方案**：用 Keystore **包裹主密码 + keyfile 字节**（而非包裹会话密钥）。
+   - 技术可行（已验证）：`LocalUnlockKeyStore.wrap(cipher, bytes: ByteArray)` 对字节数组
+     **一视同仁**（`LocalUnlockKeyStore.kt:158-174`）；
+     `KdbxOpener.open(bytes, password, keyFileBytes)` 三输入齐全即可开库。
+   - ⚠️ **不能包裹「整库明文」**：与 `Kdbx.kt:18`「明文绝不落盘」直接冲突，需重构会话模型 ⇒ 不可取。
+   - ⚠️ **必须新增一步「校验」**：`wrap` 只管包裹字节、**不管字节对不对**；
+     用户输错密码也会 wrap 成功 ⇒ 下次指纹解出错密码 ⇒ 打开失败。
+     ⇒ **wrap 之前必须用这组凭据实际解一次库**。
+     （校验失败的 UI 取向：用户选 **「宽松」** —— 提示「主密码不正确」，
+     **输入框保留、就地重输**，不掉出流程。）
+   - ⚠️ **必然要「当场再输一次主密码」**：`KdbxSession` 不持主密码、
+     `Kdbx.unlock()` 用完即弃 ⇒ 拿不到可包裹的东西 ⇒ 必须在启用时问用户要。
+     （原设想「勾选只登记意愿、下次解锁时顺手包裹」已被用户方案取代 ——
+     当场输密码是**即时闭环**，用户每个动作都有立刻可见的结果。）
+3. **UI 方案（用户提出，优于原「分两个入口」）**：
+   在**快速解锁设置里加一个「生效范围」**，勾选哪些库生效
+   ⇒ 心智模型 =「**一把指纹，管理多个密码库**」（一个用户只有一把 KEK）。
+   勾选 = 决定「这把钥匙串上挂几把钥匙」。
+4. **失效处理（D3，用户选 B）**：指纹过了但打不开
+   ⇒ 提示「主密码可能已变更」⇒ 输新密码成功后**自动重新包裹** ⇒ 下次指纹又能用。
+
+⚠️ **安全等级提醒**（KDBX ≠ Bitwarden，将来写用户提示时措辞须审慎）：
+Bitwarden 包的是**对称密钥**（泄露只够到本地缓存，可改密码止损）；
+KDBX 包的是**主密码**（**全权限**，拿到即整个库失守，且**本地文件无远程撤销**）。
+Android 上「指纹 + Keystore 用户认证 KEK、密文绑设备」是**标准且足够强**的做法
+（KeePassDX / KeePass2Android 同款）⇒ **支持做**。
+
+**判据**：**凡是「遍历所有库渲染能力开关」的 UI，都要先回答「这个能力对每种库类型
+是否成立」。** 能力不存在时应隐藏或禁用，而不是给一个点了必然失败的开关（见 #84 同款思路：
+假空态与假开关都是「让 UI 撒谎」）。
+
+### 93.1 ✅ 已实现（2026-09-14，第五十五轮）
+
+**新增**
+- `data/repository/.../KdbxUnlockPayload.kt`：包裹物编解码（**长度前缀**，
+  避免「密码尾部字节 == keyfile 首字节」的歧义）。
+- `domain`：`enrollLocalUnlockKdbx` / `completeLocalUnlockKdbx` + 两个结果类型
+  （`KdbxEnrollOutcome` / `KdbxUnlockOutcome`）。与 Bitwarden 侧**两个方法**而非重载。
+
+**三条硬约束（都已在代码注释里钉住）**
+1. ★ **先校验后包裹**：`enrollLocalUnlockKdbx` 先复用 `unlockKdbxInternal` 真解一次库，
+   失败即返回且**不写任何东西**。
+2. ★ **keyfile 不落盘**：`Kdbx.unlock` 新增可选 `keyFileBytes`（默认 null）。
+   原方案要把 keyfile 写临时文件，与「明文绝不落盘」冲突 ⇒ 改签名更干净。
+3. **启用必须当场输主密码**（`KdbxSession` 不持主密码）⇒ 设置页与库列表横幅
+   都新增主密码输入框，**宽松重试**（输错只报错、不关框）。
+
+**「谎报状态」根治**：设置页对话框改为「**生效范围**」语义，逐库标注
+（KDBX 行写明「启用时需再输一次该库的主密码」）；`QuickUnlockVaultUi` 增 `kind`
+让两条登记流程的差异在 UI 可见。
+
+**D3 落地**：`KdbxUnlockOutcome.StaleCredentials`（指纹过了但打不开）
+⇒ 文案「主密码可能已在别处变更，请输入当前主密码」⇒ 走主密码自愈；
+**不删快速解锁登记**（Bitwarden 侧「不可恢复即清」的取向不适用于此）。
+
+**解锁路径三处分流**（缺一处就是错语义）：`UnlockViewModel` / `AutofillActivity` /
+启用路径。⚠️ 判据：「包裹物是什么」决定走哪条路，**不能按「库 id 长得像什么」猜**。
+
+**测试**：`KdbxUnlockPayloadTest` 9/9 绿；`ActiveVaultStoreTest` 9/9 绿。
+
+---
+
+## 94. 重复添加同一 KDBX 文件 = **完全静默**（成功路径零反馈）（2026-09-14）
+
+**现象**：用户「输入 kdbx 的密码，但是 kdbx 好像就没反应一样，打不开也没有提示」。
+真机实测（`io.vaultix.vaultix`，HEAD `1b2d2ca`）日志：
+
+```
+18:35:50.443 ContentResolver.openInputStream → FileInputStream.read
+18:35:50.467 Inflater.inflate → MessageDigest.digest → Mac.doFinal
+18:35:50.5xx DocumentBuilder.parse（内层 XML 解出）
+18:35:51.047 AutofillManager: commit() called by app
+18:35:51.071 VRI: skip draw ... dirty Rect(0, 0 - 0, 0)   ← 界面一帧未重绘
+```
+
+**根因**：`addKdbxVault` 用 `vaultDao.upsert(VaultEntity(id = sourceUri, ...))`，
+**文件路径即主键**。用户第二次添加**同一个文件**时：
+① 文件读到、密码正确、解锁成功（日志三件套齐全）；
+② `upsert` 覆盖同 id 行，**内容与原来完全一致** ⇒ 列表零变化；
+③ 成功分支只发 `Event.VaultAdded` → `onAdded()` = `popBackStack()`
+   ⇒ **无 Snackbar / Toast / 高亮**。
+
+⇒ 用户的读法：**「点了一点反应都没有」**（既非失败也无成功）。
+
+**解法（✅ 已实施，2026-09-14 第五十四轮）**：
+1. ✅ 新增 `KdbxAddOutcome`（`Added` / `Updated` / `Failed`），`VaultRepository.addKdbxVault`
+   返回类型由 `UnlockResult` 换成它 —— 失败路径包在 `Failed(result)` 里，UI 用 `when` 分流；
+2. ✅ **D5 定稿 = 允许覆盖 + 成功反馈**（用户拍板）：`AddKdbxViewModel.Event.VaultAdded(isUpdate)`
+   区分两态，`AddKdbxScreen` 补 `Scaffold(snackbarHost)`，
+   文案「已添加密码库」/「该文件已在列表中，已更新」；
+3. ⏳ 提交中途的 `submitting` 可见性未单独改（`LinearProgressIndicator` 已在，
+   但快路径下仍可能一闪而过）—— 留待真机观察。
+
+**判据**：**同步操作的成功路径必须有反馈。** 「什么都没发生」在密码管理器里是
+最坏的一种歧义——用户无法区分「成功」「我没点中」「点了但崩了」。
+
+---
+
+## 95. 库列表卡片把 SAF 原始 `content://` URI 裸露给用户（2026-09-14）
+
+**现象**：库列表页 KDBX 卡片第二行显示
+
+```
+content://com.android.externalstorage.documents/document/primary%3A%20我的文件%2Fvalkjin.kdbx
+```
+
+真机 `uiautomator` dump 实证（`bounds` 落在卡片副标题位置）。
+
+**根因**：KDBX 的 `vault.id` **就是** `sourceUri`（`addKdbxVault` 第一行
+`vaultId = sourceUri`），而卡片副标题直接渲染 `origin`/`id` 字段，没有做
+「KDBX 显示文件名而非 URI」的分支（Bitwarden 的 `origin` 是 `https://...`，
+恰好可读，所以问题只在 KDBX 上暴露）。
+
+**解法（✅ 已实施，2026-09-14 第五十四轮）**：卡片副标题按库里取文案 ——
+`VaultListScreen` 新增 `vaultSubtitle(vault)`：
+- **KDBX** → `字符串资源 vault_card_kdbx_subtitle`（「本地文件 · %1$s」），取 `vault.name`
+  （它本身就是添加时从 SAF 取的 `DISPLAY_NAME`），**绝不渲染 `origin`/`id`**；
+- **Bitwarden** → 保留 `account ?: origin`（其 `origin` 是 `https://...`，本身可读）。
+  另加 `maxLines = 1` 防止长值撑高卡片。
+
+**判据**：**给用户看的字段必须是用户语义的。** URL 编码的 SAF URI
+（`primary%3A%20...`）是给系统看的，裸露出来既不可读也不美观（见 #90 同源思路：
+内部标识不该直接进 UI）。
+
+---
+
+## 96. 【结构】多库并存时**没有「切换密码库」的正面入口** ⇒ KDBX 库「找不到、打不开」（2026-09-14）
+
+**用户原话（关键前提）**：「默认打开是 bitwarden 的界面，登录也是 bitwarden 优先，
+**必须先进 bitwarden 的界面，打开设置，才能看到我添加的 kdbx 库的选项**」+
+「就是不能指引我正确打开库的意思，然后我自己在密码库里找到了 kdbx 库，能够顺利打开了。」
+
+**现象**：用户以为 KDBX「打不开」，实际是**找不到打开的入口**；最后靠自己摸到
+「我的密码库」页才成功打开。库本身完全正常。
+
+**根因（与 #69 同源）**：`VaultListRoute`（标题「我的密码库」）在整个导航图里
+**仍然只有 4 个入口**，且没有一个是「切换/选择库」的语义：
+
+| 位置 | 触发条件 | 语义 |
+|---|---|---|
+| `VaultixApp.kt:100` | `RootNavState.Onboarding` | 一个库都没有（已有库 => 永不触发） |
+| `VaultixApp.kt:220` | `onNoVault` | 解锁时发现库被删（异常兜底） |
+| `VaultixApp.kt:262` | `onLocked` | **主动锁定当前库** |
+| `VaultixApp.kt:277` | `onNoVault` 兜底 | 异常兜底 |
+
+⇒ 已有 ≥1 个库时，用户能碰到的唯一入口是 **`onLocked`（锁定）**，
+而它的产品语义是「我不想看这个库了」——**没有任何一处是「我要换一个库看」**。
+主界面 `MainShellScreen` 也没有库切换入口；
+右侧溢出菜单实测只有「验证码 / 回收站 / 显示选项 / 同步 / 锁定」，
+**没有「切换密码库」**。
+
+**为什么在 KDBX 场景才暴露**：Bitwarden 是「登录即进主界面」的单库心智，
+用户从不觉得需要切库；而 KDBX 是**手动添加的第二个库**，
+「添加了却找不到」的落差立刻把人卡住。
+
+**解法（✅ 已实施，2026-09-14 第五十四轮；取向 = A + B 合用）**：
+- **A 类正面入口**：`ItemsMoreMenu`（⋮）**最上方**新增「切换密码库」（`SwapHoriz`），
+  经 `ItemsScreen → MainShellScreen → VaultixApp` 透传，落到 `VaultListRoute`。
+  ⚠️ **仅 >1 库时显示**：`MainShellViewModel.vaultCount` 传下来的回调为 null 即整项隐藏
+  —— 单库用户显示「切换密码库」是噪音（同 #93「能力不存在时隐藏」的纪律）。
+- **B 类修正**：`SettingsViewModel.switchableVaults` 由「只列已解锁」改为
+  **列全部库**；`ActiveVaultDialog` 的 `VaultChoiceRow` 对未解锁项标
+  「未解锁 · 需先输入主密码」。⇒ 「找得到我的库」不再依赖解锁状态。
+- **解锁页出口**：`UnlockScreen` 新增 `onSwitchVault`（轻量 `TextButton`，
+  仅多库 + 非 2FA + 非查看锁时显示）——「默认库不是我想开的那个」时有路可走。
+- **C 类**（Snackbar 动作按钮「立即打开」）**未做**：依赖 #94，两件事分开更稳。
+
+**判据**：**新增一类库之前，先画一遍「用户从冷启动到打开这个库」的完整路径。**
+若路径上只有「异常兜底」和「语义相反的入口」（如用「锁定」当「切换」），
+那就是 #69 的翻版——功能在，入口不在。
+
+### 96.1 为什么「每次冷启动都要重走一遍」是**必然**（安全设计，非缺陷）
+
+用户补充：「我退出 APP，再打开，又要重复一遍，先进 Bitwarden 的界面，
+打开设置，才能打开 KDBX。」
+
+**结论：重走一遍解锁流程是设计使然且必须保留**。证据在 `Kdbx.kt:18`：
+
+```
+安全约定（与 Bitwarden 侧一致）：解出来的明文只活在内存，锁库即丢弃，绝不落盘。
+```
+
+`KdbxSessionStore` 是 `ConcurrentHashMap`（纯内存）⇒ **进程退出即会话消失**，
+KDBX 库在下次冷启动后必然是「未解锁」状态，必然要重新输主密码。
+
+⚠️ **不要把「重走解锁」当成 bug 去修**：让 KDBX 会话跨进程存活 = 必须把明文或
+等价的解密凭据落盘，这与「明文绝不落盘」的安全约定直接冲突。
+（若真要免密，正确做法是 #93 提到的「Keystore 包裹主密码」，且需用户明确拍板。）
+
+**真正要修的是「入口不可达」（#96 本体）**：解锁是正当成本，
+**找不到解锁入口**才是缺陷。⇒ 修复目标是让「重走」变成
+「打开 App → 一眼看到 KDBX 库卡片 → 点它 → 输密码」，
+而不是「先进 Bitwarden → 设置 → 摸到库列表」。
 
 ---
 
