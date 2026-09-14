@@ -105,7 +105,9 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
   `decisions` / `main-shell-migration` / **`perf-plan.md`（性能专项）** / `audit/`
 - `.ai/`：
   - `MEMORY.md` —— 本文件（接力起手式：定位/架构/约会速查索引入口）
-  - **`conventions/`** —— §8「长期约定速查」的正文分篇（`8.1-自动填充` … `8.7-环境`）
+  - **`conventions/`** —— §8「长期约定速查」的正文分篇（`8.1-自动填充` … `8.8-M3Expressive-采纳范围与顺序`）
+  - **`decisions/`** —— **逻辑定稿**（用户已拍板的方向，**别重新论证**）：
+    `库选择与快速解锁-逻辑定稿.md`、`设置页信息架构-定稿.md`
   - `ISSUES.md` —— **索引**（编号 → 分篇）
   - **`issues/`** —— 坑的正文分篇（`01-构建与环境` … `07-数据与同步`，**含推翻链，接力必读**）
   - `SESSION-*.md` —— 会话日志（逐轮流水，append-only）
@@ -127,6 +129,7 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 | [8.5 通行密钥](./conventions/8.5-通行密钥.md) | 通行密钥 | 12 |
 | [8.6 工程质量](./conventions/8.6-工程质量.md) | 工程质量 | 12 |
 | [8.7 环境](./conventions/8.7-环境.md) | 环境 | 9 |
+| [8.8 M3Expressive](./conventions/8.8-M3Expressive-采纳范围与顺序.md) | M3E（2026）采纳范围与顺序 | — |
 
 ## 9. 当前状态与下一批（**第五十五轮**接力起手式）
 

@@ -341,3 +341,58 @@ KDBX 库在下次冷启动后必然是「未解锁」状态，必然要重新输
 
 ---
 
+
+---
+
+## 98. KDBX 启用**生物识别**快速解锁 = **必闪退**（2026-09-14，第五十九轮）
+
+**现象**：设置页 / 库列表横幅给 KDBX 库点「启用」→ 输主密码 → **进程直接崩**。
+PIN 那条路（`enrollPinKdbx`）完全正常 —— 用户因此怀疑是竞态。
+
+**它不是竞态，是「顺序错了」**，而且是**确定性**的（同一条路径 100% 崩）：
+
+| 环节 | 事实 |
+|---|---|
+| 保护器 | `LocalUnlockKeyStore` 的 KEK 用 `setUserAuthenticationParameters(0, …)` ⇒ **auth-per-use**：只有被 `BiometricPrompt` 授权过的**那一个 Cipher 实例**能 `doFinal`（`LocalUnlockKeyStore.kt:204-208`） |
+| 旧实现 | `enrollLocalUnlockKdbx` **在弹指纹之前**就 `localUnlockKeyStore.wrap(cipher, plaintext)` |
+| ⇒ 结果 | `cipher.doFinal()` 抛 `UserNotAuthenticatedException` |
+| ⇒ 放大成闪退 | 调用点 `viewModelScope.launch { … }` **没有 try/catch**，工程里也没有全局 `CoroutineExceptionHandler` ⇒ 未捕获异常 = 进程退出 |
+
+**为什么 PIN 不崩**：PIN 的保护器是 `PinKeyWrapper` + `SecureCredentialStore` 的硬件外层密钥，
+**不需要系统认证** ⇒ 不存在「cipher 还没被授权」这回事（`VaultRepositoryImpl` 的 `enrollPinKdbx`
+注释里已点明这条差别）。
+
+**为什么 Bitwarden 侧不崩**：它的 `wrap` 发生在 `BiometricPrompter.onSuccess` 回调里
+（`enrollWithCipher`），天然在认证之后。
+
+### 修法：把「准备」与「提交」拆开（两阶段）
+
+| 方法 | 时机 | 做什么 |
+|---|---|---|
+| `prepareKdbxEnroll(vaultId, masterPassword, keyFileUri)` | 弹指纹**之前** | 用凭据**真解一次库**校验 → 组装 `KdbxUnlockPayload` 明文 → **暂存在仓储**（`stagedKdbxPayload`） |
+| `commitKdbxEnroll(vaultId, cipher)` | 指纹**通过之后** | `wrap` + 落盘 + 置位开关；无论成败都擦掉暂存明文 |
+| `discardKdbxEnroll()` | 指纹**被取消/终止** | 擦掉暂存明文（幂等） |
+
+原 `enrollLocalUnlockKdbx` 已删除；`KdbxEnrollOutcome.Enrolled` 改名 **`Prepared`**
+（名字要如实：它只代表「校验通过、已暂存」，**不代表已落盘** —— 一个撒谎的名字
+会让调用方以为可以跳过 commit）。
+
+### ★ 顺手修掉的第二个 bug（更隐蔽）
+
+两处 `PromptForEnroll` 的 `onSuccess` **都**接到 `enrollLocalUnlock`（Bitwarden 收尾）上。
+KDBX 走那条路时 `sessions.keyOf(vaultId)` **恒为 null** ⇒ 返回 false ⇒
+**指纹按了、也过了，什么都没包上**，而且不报错。旧代码因为先崩，从没走到这一步。
+现在两处都按库类型分流（`isKdbxVault()`，与 `AutofillActivity.completeLocalUnlockByKind`
+同一条纪律）。
+
+### 顺带修掉的第三个：`KdbxEnrollState.Ready` 会卡死下一次
+
+`Ready` 经 `busy` 把密码框的确认键置灰。用户在指纹框点「取消」时旧代码不重置它
+⇒ 下次再点「启用」，确认键**点不动**，且没人告诉他为什么。现在
+`discardPendingKdbxEnroll()` 同时把状态归零。
+
+### 门禁
+
+detekt ✅ / `:app:compileFullDebugKotlin` ✅ / 单测 ✅（40 个类函数上限仍为 40：
+删 `enrollLocalUnlockKdbx`、新增三个方法、把 `buildFullKey` 与 `classifyKdbxError`
+两个纯函数提到**文件作用域**腾出余量）。
