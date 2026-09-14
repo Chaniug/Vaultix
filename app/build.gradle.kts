@@ -20,8 +20,15 @@ android {
         minSdk = 26
         targetSdk = 37
         versionCode = 1
-        // CI 通过 -PversionName 注入版本号（如 0.1.0-dev-abc1234），本地默认 0.1.0
-        versionName = providers.gradleProperty("versionName").getOrElse("0.1.0")
+        // 版本号来源优先级：
+        //   ① CI 注入的 -PversionName（如 0.1.0-dev-abc1234），用于发布产物；
+        //   ② 否则读仓库根的 VERSION 文件（真源），保证「本地构建 / 设置页显示 / VERSION
+        //      文件」三处同源——此前本地默认硬编码 0.1.0，与 VERSION 的 0.3.0 长期不一致，
+        //      本地装机后设置页会显示过期版本号，排查问题时极易误判手上装的是哪一版。
+        versionName = providers.gradleProperty("versionName").getOrElse(
+            rootProject.file("VERSION").takeIf { it.exists() }?.readText()?.trim()?.ifEmpty { null }
+                ?: "0.1.0",
+        )
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
 

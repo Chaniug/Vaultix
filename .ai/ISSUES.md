@@ -10,7 +10,7 @@
 | 分篇 | 主题 | 条数 |
 |---|---|---|
 | [01-构建与环境](./issues/01-构建与环境.md) | 工程 / 构建 / CI / 工具链 / 环境 | 25 |
-| [02-自动填充](./issues/02-自动填充.md) | 自动填充（AutofillService 链路） | 16 |
+| [02-自动填充](./issues/02-自动填充.md) | 自动填充（AutofillService 链路） | 17 |
 | [03-通行密钥与凭据提供商](./issues/03-通行密钥与凭据提供商.md) | 通行密钥 / Credential Provider / 凭据回灌 | 14 |
 | [04-锁与解锁](./issues/04-锁与解锁.md) | 锁态模型 / 解锁 / 生物识别 / 密钥 | 8 |
 | [05-KDBX本地库](./issues/05-KDBX本地库.md) | KDBX 本地库 | 3 |
@@ -69,6 +69,7 @@
 | 78 | 系统填充下拉是 RemoteViews 渲染 —— 「Material」只能靠 App 侧模拟到哪一层算哪一层 |
 | 82 | 认证结果被系统丢弃：`NEW_TASK` 与 `taskAffinity` 是同一条死路的两个入口 |
 | 83 | `EXTRA_AUTHENTICATION_RESULT` 放 `Dataset` 还是 `FillResponse`，行为完全不同 |
+| 90 | `noHistory="true"` 打断「解锁即回填」—— #82 的**第三个**入口（照抄 Bitwarden 配置的陷阱） |
 
 ### [03-通行密钥与凭据提供商](./issues/03-通行密钥与凭据提供商.md) — 通行密钥 / Credential Provider / 凭据回灌
 

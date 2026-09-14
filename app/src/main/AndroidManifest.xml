@@ -70,13 +70,23 @@
              `setResult(RESULT_OK, EXTRA_AUTHENTICATION_RESULT)` 送不回系统 ⇒
              系统日志报 `onAuthenticationResult(): empty intent` ⇒ 回灌的候选被整个丢弃 ⇒
              用户现象「在登录界面反复解锁、永远看不到密码条目」。
+
+             ⚠️⚠️ **`noHistory` 同样不能声明** —— 2026-09-14 定案（`.ai/ISSUES.md` #90）。
+             这里曾经写 `android:noHistory="true"`，理由是「对照 Bitwarden 的认证 Activity
+             声明（exported + noHistory + 透明主题）」。但那是**照抄配置、却承袭了不同的
+             架构**：Bitwarden 走 NEW_TASK + 独立进程回灌，而本项目的回灌依赖
+             「本 Activity **留在栈上**，用户解锁返回后由 `onResume` 投递
+             `EXTRA_AUTHENTICATION_RESULT`」（见 AutofillActivity 类注释「解锁即回填」，
+             以及 `openVaultAndFinish()` 里**故意不 finish** 的那段）。
+             `noHistory` 的语义正是「一旦不可见即销毁并 finish」，与「留在栈上」物理互斥
+             ⇒ 用户解锁返回时 `onResume` 永不触发 ⇒ **没有任何人能投递认证结果** ⇒
+             用户现象「指纹解锁成功了，但密码条目永远填不进去」。
              对照 Bitwarden（同形态项目）的认证 Activity 声明：`exported` + `launchMode=singleTop`
-             + `noHistory` + 透明主题，**没有 taskAffinity、没有 excludeFromRecents**。 -->
+             + 透明主题，**没有 taskAffinity、没有 excludeFromRecents**。 -->
         <activity
             android:name=".autofill.AutofillActivity"
             android:excludeFromRecents="true"
             android:exported="true"
-            android:noHistory="true"
             android:theme="@style/Theme.Vaultix.Transparent" />
 
         <!-- 系统自动填充服务（M2-a）：密码填充走 AutofillService（API 26+）。

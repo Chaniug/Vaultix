@@ -73,7 +73,13 @@ fun buildSnapshot(
         VaultItemType.Login -> base.copy(
             username = values.username.trim(),
             password = values.password,
-            uris = values.uris.filter { it.isNotBlank() }.map { VaultUri(it) },
+            // ⚠️ 必须保留每个位置的 match 规则：表单只编辑 URL 文本，不编辑匹配规则。
+            // 若这里直接 `VaultUri(it)`（match 恒 null），则用户只要编辑保存过一次，
+            // 导入来的 Exact / RegularExpression / Never 规则就被**静默清成默认基域匹配**
+            // ——对自动填充是实打实的行为改变（例如 Never 的站点反而会被填充）。
+            uris = values.uris.filter { it.isNotBlank() }.mapIndexed { index, url ->
+                VaultUri(url, initial.uris.getOrNull(index)?.match)
+            },
             totp = values.totp.trim().takeIf { it.isNotBlank() },
         )
         VaultItemType.Card -> base.copy(card = buildCard(values.cardValues))

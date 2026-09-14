@@ -197,19 +197,24 @@ class ItemRepositoryImpl @Inject constructor(
                 "该类型条目的编辑暂不支持（服务端 type=${existing.type}），已停止保存以防数据丢失"
             }
 
-            // 合并更新：只覆盖可编辑明文段，uri/totp/card/identity 等未编辑段沿用原密文
+            // 合并更新：只覆盖可编辑明文段，uri/totp/card/identity 等未编辑段沿用原密文。
+            // ⚠️ 这里**不要**用 `existing.folderId/favorite` 覆盖 —— mapper.toUpdateRequest
+            // 已按「表单意图」写入这两个字段（2026-09-08 专门修过），在调用方再 copy 一次
+            // 等于把该修复抵消掉：用户在编辑页改了文件夹/收藏，保存后被静默回退（表现为
+            // 「勾了收藏、选了文件夹，退出再进又变回去了」）。
             val stored = runCatching { json.decodeFromString<CipherDto>(existing.encryptedPayload) }
                 .getOrElse { error("本地密文损坏，无法编辑：${item.id}") }
             val request = mapper.toUpdateRequest(item, stored, key)
-                .copy(folderId = existing.folderId, favorite = existing.favorite)
             val dto = request.toStoredCipherDto(id = existing.id, revisionDate = existing.revisionDate)
 
+            // 本地行同样按表单意图落库（此前 favorite 写的是 existing.favorite，同样是回退）
             cipherDao.upsertAll(
                 listOf(
                     existing.copy(
                         type = request.type,
                         encryptedPayload = json.encodeToString(dto),
-                        favorite = existing.favorite,
+                        favorite = item.favorite,
+                        folderId = item.folderId,
                     ),
                 ),
             )
