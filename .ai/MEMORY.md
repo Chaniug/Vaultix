@@ -151,14 +151,23 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
      ✅ **等价性用反演法证明**（41 文件逐字符一致）⇒ 版式零变化。
    - **P0-2 表达式搜索栏**：`SearchTopAppBar` 改 contained search（胶囊填充容器 + 搜索图标），
      **inset 一行没动**；没用 alpha 的 `SearchBar`（8.8 §6① 要求等 beta）。
-   - **P1/P2 未做**：都要引 alpha 新 API，而**本轮无编译环境** ⇒ 不凭记忆写不确定 API。
+   - ~~P1/P2 未做~~ → **P1-1 同日追加完成**（见下）。
 3. ⚠️ 本轮在沙箱内完成（无编译环境），但**已推送 `main`，CI 全绿**（run `34874282413`：
    detekt ✓ / 编码 ✓ / **Build Debug APK ✓** / 单测 ✓，签名 APK 已发 preview Release）
    ⇒ **编译已验证，只剩真机目视**。清单见 `decisions/设置页信息架构-定稿.md` §8.1。
+4. **M3E P1-1 波浪进度指示器（追加提交 `036b9c5`）**：原先把 P1 推迟的理由是
+   「无编译环境」，**复核后不成立**（CI 能编译 + API 可查证）⇒ 接着做完了。
+   - 新建 `ui/common/ExpressiveProgress.kt` 作 **alpha API 唯一封装点**（`VaultixWavyProgress` /
+     `VaultixWavyProgressBar`）；真机不认可 ⇒ **改这两个函数体即可全量回退**，9 个调用点不动。
+   - ⚠️ **关键实测**：波浪组件**尺寸写死**（Linear `240×10dp` / Circular `48dp`），
+     `fillMaxWidth()` 与 `size(18.dp)` **都改不了**（老 Linear 同样写死 240dp ⇒ 宽度等价）。
+     ⇒ 18/20dp 内联小转圈会被撑到 48dp，**不能换**；最终只换 **9 处**。
 
 **本轮沉淀**（已写进 `conventions/`）：① detekt `LongMethod` **不计注释与空行**（探针实测）
 ⇒ 精简注释救不了超长函数；② `Spacing.x` 比 `16.dp` 长 ⇒ 批量替换会撞 `MaxLineLength`；
-③ 沙箱内**独立跑 detekt 的完整方法**（`8.7` 新增小节，无 SDK 也能跑门禁）。
+③ 沙箱内**独立跑 detekt 的完整方法**（`8.7` 新增小节，无 SDK 也能跑门禁）；
+④ **javap 会骗人**（无参数名/默认值，旧笔记因此臆造出 alpha16 并不存在的 `wavePhase`）
+⇒ 查 API 直接下 **sources jar**（`maven.aliyun.com` 可用，ghfast / 腾讯 maven 下不了）。
 
 **第五十三~五十五轮（2026-09-13 夜 → 09-14 凌晨，均已推送 `main`）**
 
