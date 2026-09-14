@@ -14,8 +14,11 @@
 | 级别 | 数量 | 已修 | 说明 |
 |---|---|---|---|
 | **P0** | 1 | ✅ 已修 | 自动填充解锁回灌失效（`noHistory`） |
-| **P1** | 5 | ✅ 2 已修 | 编辑回退 / URI 规则丢失已修；同步冲突 / SSH 只读 / 空库保护待定 |
-| **P2** | 8+ | — | 文案、退避、性能、清理类 |
+| **P1** | 6 | ✅ 4 已修 | 编辑回退 / URI 规则丢失 / 同步覆盖 / 4xx 静默丢行已修；空库确认出口、SSH 只读待定 |
+| **P2** | 14 | 部分 | 文案（P2-10 已修）、退避、性能、清理类 |
+
+**修复提交**：`1a4a959`（P0 + P1-1/P1-2）、`4de48f6`（P1-3/P1-4/P2-10）
+**门禁状态**：detekt 0 issue · 编译 0 error · 全模块 **418 tests / 0 failure**
 
 **回答你的核心问题：**
 - **同步 / 拉取 / 上传**：功能存在且完整（官方 API + 本地文件双通道），但**有数据丢失风险**（见 P0-2/P0-3 同步项）。
@@ -92,7 +95,7 @@ uris = values.uris.filter { it.isNotBlank() }.mapIndexed { index, url ->
 
 **文件**：`app/.../ui/common/FormValues.kt:76`
 
-### P1-3 拉取覆盖本地未推送修改（同步冲突） ⏳ 待定
+### P1-3 拉取覆盖本地未推送修改（同步冲突） ✅ 已修（`4de48f6`）
 
 **根因**：`BitwardenSyncService.kt:196-199` 的 `persistCiphers` 无条件 `upsertAll`，**不比较 revisionDate**。本地已改但还没推送成功的条目，若远端也被改过，会被服务端版本**直接覆盖**。
 
@@ -100,17 +103,29 @@ uris = values.uris.filter { it.isNotBlank() }.mapIndexed { index, url ->
 
 **影响**：多设备场景下可能丢改动。属 last-write-wins 且偏向服务端。
 
-### P1-4 4xx 弃单后本地新建条目被静默删除 ⏳ 待定
+**修复**：`persistCiphers` 落库前先取 `pendingOpDao.listByVault` 的 id 集合，跳过仍在队列的 id。
+与 `pruneRemovedRows` 是同一 `pendingIds` 保护的两面：**那里防「被误删」，这里防「被覆盖」**。
+代价（有意）：队列条目在推送成功前保持本地版本（本地才是用户最新意图），推送成功后队列清空、下次同步自然收敛。记入 `#91`。
+
+### P1-4 4xx 弃单后本地新建条目被静默删除 ✅ 已修（`4de48f6`）
 
 **根因**：`BitwardenSyncService.kt:118-121` 对 4xx（400/403/404/405）永久弃单并移除队列；紧接着全量 sync 的 `pruneRemovedRows`（`:213-220`）发现该临时 UUID 不在服务端列表里，**直接删掉本地行**。
 
 **影响**：用户新建的条目凭空消失，且无任何提示。属本地数据丢失。
 
-### P1-5 空库保护无"确认继续"出口 ⏳ 待定
+**修复**：弃单时按 op 类型分流 —— `OP_CREATE` 立即 `cipherDao.deleteByIds`（服务端从未接受，本地这行注定同步不了；行为由「静默消失」变「即刻可追溯」）；其余 op **不删本地行**（那是用户数据），交给正常全量同步按服务端版本收敛。记入 `#92`。
+
+**★ 一般化判据**：**删掉一个「保护性集合」的成员前，先问「谁在依赖这个集合的存在」。**
+`pendingIds` 同时被 `pruneRemovedRows`（防误删）与 `persistCiphers`（防覆盖）依赖，弃单时只想着「清队列」，就把下游两道保护一起撤掉了。
+
+### P1-5 空库保护无"确认继续"出口 ⏳ 仍待定（文案已修）
 
 **根因**：`EmptyVaultProtection` 在"非首同步 + 本地>0 + 服务端==0"时 `Blocked`，但**没有让用户确认后强制继续的路径**。
 
 **影响**：用户若真在其它设备清空了全部条目，本机同步会**永久卡死**在 Blocked 状态。
+
+**本轮已做**：修掉 `Blocked` 文案缺插值的问题（原为 `"本地有  条记录"`，占位处为空，用户无法判断有多少条面临风险；`4de48f6`）。
+**仍未做**：确认后强制继续的入口。
 
 ### P1-6 SSH 密钥字段全部只读 ⏳ 待定（可能是有意设计）
 
@@ -199,13 +214,60 @@ uris = values.uris.filter { it.isNotBlank() }.mapIndexed { index, url ->
 
 ---
 
-## 八、本次改动清单
+## 八、真机实测核查（2026-09-14 下午）
 
-| 文件 | 改动 |
+**结论：本机当前安装的版本 `1a4a959` 之前，本轮全部修复都不在设备上。真机实测未能开始。**
+
+### 设备与构建状态
+
+| 项 | 值 |
 |---|---|
-| `app/src/main/AndroidManifest.xml` | 移除 `noHistory="true"`，补因果注释（#90） |
-| `data/repository/.../ItemRepositoryImpl.kt` | 移除覆盖表单值的 `.copy`，本地行按表单意图落库 |
-| `app/.../ui/common/FormValues.kt` | URI 重建时按索引保留 `match` |
-| `app/build.gradle.kts` | `versionName` 回退来源改为读 `VERSION` 文件 |
+| 设备 | 荣耀 BKQ-AN00（`adb-AKJEVB5920007199-YKvK5m`，mDNS 自动发现） |
+| 用户给的地址 | `192.168.1.114:36813` → **已失效**（10061 积极拒绝，端口轮换） |
+| 设备上版本 | `versionName=0.1.0` · `versionCode=1` · 安装于 **17:08:26** |
+| 设备 APK 签名 | V3 `7e6c8c07…`（CI release 密钥）· 体积 4.99 MB · **无 DEBUGGABLE** |
+| 本轮最新提交 | `1a4a959` 提交于 **17:14:14** —— **比设备安装晚 6 分钟** |
+| 最新 CI run | `34826547516` = `0a9d88f`（也**早于** `1a4a959`） |
 
-**验证状态**：`BUILD SUCCESSFUL`（`:app:compileFullDebugKotlin` + `:data:repository:compileDebugKotlin`）
+### ★ 关键发现：设备包是 CI release，本地无法覆盖安装
+
+1. **版本严重滞后**：设备停在 `0.1.0`，而 `VERSION` 文件已是 `0.3.0`，设备 APK 还比
+   它自己的安装时间更新——说明**设备上的包一直是从 CI 下载安装的 release**，
+   而非本地构建。三次修复（`1a4a959`、`8dc6faa`、`4de48f6`）**一次都没上设备**。
+2. **签名不兼容**：设备包用 CI 的 release 密钥（`7e6c8c…`，仅存于 GitHub Secrets）；
+   本地 `assembleFullDebug` 用 Android debug 密钥（`56f892…`）。
+   **两者签名不同 ⇒ 无法覆盖安装**：强行装要么失败，要么必须卸载重装
+   ⇒ **连同 AndroidKeyStore 里的生物识别密钥一起丢**（老问题，见 `ci-debug.yml:131-135` 的注释）。
+
+3. **本地构建本身是对的**（顺带验证了 `versionName` 修复）：
+   本地产出的 `app-full-debug.apk`（32 MB）`aapt2` 读出 `versionName='0.3.0'`，
+   正确来自根目录 `VERSION` 文件，说明 `app/build.gradle.kts` 的回退逻辑生效。
+
+### 要做真机实测，得先解决"包从哪来"
+
+| 方案 | 做法 | 代价 |
+|---|---|---|
+| **A（推荐）** | 推 `1a4a959` + `4de48f6` 到 GitHub → 让 CI 出包 → 从 CI 产物下载安装 | 需用户点头推送；CI 排队+构建 |
+| **B** | 用户把 `SIGNING_KEYSTORE_BASE64` 等 Secrets 配到本地 `gradle.properties`，本地签 release（签名一致即可覆盖安装） | 需把密钥落到本机，安全性需用户确认 |
+
+**注意**：`VERSION` 仍是 `0.3.0` 未升版，方案 A 产出的包与设备上 `0.1.0` 同 `applicationId` +
+同 CI 密钥 ⇒ **可覆盖安装且不丢数据**（`versionCode` 恒为 1，不构成降级阻碍）。
+
+---
+
+## 九、本次改动清单
+
+| 文件 | 改动 | 提交 |
+|---|---|---|
+| `app/src/main/AndroidManifest.xml` | 移除 `noHistory="true"`，补因果注释（#90） | `1a4a959` |
+| `data/repository/.../ItemRepositoryImpl.kt` | 移除覆盖表单值的 `.copy`，本地行按表单意图落库 | `1a4a959` |
+| `app/.../ui/common/FormValues.kt` | URI 重建时按索引保留 `match` | `1a4a959` |
+| `app/build.gradle.kts` | `versionName` 回退来源改为读 `VERSION` 文件 | `1a4a959` |
+| `data/bitwarden/.../BitwardenSyncService.kt` | `persistCiphers` 跳过 pending id（#91）+ 4xx 弃单删 CREATE 本地行（#92）+ 空库文案插值 | `4de48f6` |
+| `data/bitwarden/.../EmptyVaultProtection.kt` | 补 `$localCipherCount` 插值 | `4de48f6` |
+| `data/repository/.../ItemRepositoryImplTest.kt` | 删除固化旧 bug 的断言 + 新增快照写入测试 | `4de48f6` |
+| `.ai/issues/07-数据与同步.md` | 新增 #91 / #92（含一般化判据） | 待提交 |
+| `.ai/ISSUES.md` | 索引：07 篇 3 → 5 条 | 待提交 |
+| `Docs/progress/bitwarden-audit-2026-09-14.md` | 本报告更新 P1 状态 + 真机核查节 | 待提交 |
+
+**验证状态**：detekt **0 issue** · 编译 **0 error** · 全模块 **418 tests / 0 failure / 0 skipped**（8 个模块）
