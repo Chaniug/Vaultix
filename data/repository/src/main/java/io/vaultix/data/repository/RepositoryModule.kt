@@ -6,6 +6,7 @@ import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
 import io.vaultix.domain.FolderRepository
 import io.vaultix.domain.ItemRepository
+import io.vaultix.domain.VaultExportRepository
 import io.vaultix.domain.VaultRepository
 import io.vaultix.domain.VaultSessionRepository
 import javax.inject.Singleton
@@ -36,4 +37,8 @@ interface RepositoryModule {
     @Binds
     @Singleton
     fun bindVaultSessionRepository(impl: VaultSessionRepositoryImpl): VaultSessionRepository
+
+    @Binds
+    @Singleton
+    fun bindVaultExportRepository(impl: VaultExportRepositoryImpl): VaultExportRepository
 }

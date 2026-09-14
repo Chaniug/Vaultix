@@ -37,6 +37,7 @@ import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
@@ -95,6 +96,8 @@ import io.vaultix.vaultix.ui.theme.ThemeMode
 fun SettingsScreen(
     onBack: () -> Unit,
     onOpenAutofillSettings: () -> Unit,
+    /** 「数据管理」分区：导入 / 导出加密备份（导航到二级页）。 */
+    onOpenImportExport: () -> Unit = {},
     /** 主界面 Tab 内嵌模式：隐藏返回键（无上层可返回）。 */
     embedded: Boolean = false,
     /** 底部叠层悬浮栏占用的高度（宿主给；非内嵌时为 0）——内容要留出它，否则末项被压住。 */
@@ -154,7 +157,7 @@ fun SettingsScreen(
 
             // ---- 外观 / 数据（批次④：Bastion SettingsScreen 对照补缺） ----
             AppearanceSection(viewModel, dynamicColor = state.dynamicColor)
-            DataSection(viewModel)
+            DataSection(viewModel, onOpenImportExport = onOpenImportExport)
 
             // ---- 自动填充（M2-a：系统 AutofillService 入口 → 二级设置页） ----
             AutofillSection(onOpenAutofillSettings = onOpenAutofillSettings)
@@ -567,9 +570,16 @@ private fun SettingsDisplayOptionsHost(
 /**
  * 数据组（批次④）：回收站自动清理档位——与回收站页顶栏入口共用
  * [TrashAutoDeleteDialog] 与同一偏好键，改哪边都实时生效。
+ *
+ * 另含「导入 / 导出」入口（对齐 Bitwarden 官方「设置 → 导出密码库 / 导入数据」）：
+ * 导出 = 加密 JSON 备份，导入 = 从备份增量恢复。放在数据组而非单独分组，
+ * 因为三者都属「库数据的迁移 / 维护」。
  */
 @Composable
-private fun DataSection(viewModel: SettingsViewModel) {
+private fun DataSection(
+    viewModel: SettingsViewModel,
+    onOpenImportExport: () -> Unit,
+) {
     val trashDays by viewModel.trashAutoDeleteDays.collectAsStateWithLifecycle()
     var showTrashDialog by rememberSaveable { mutableStateOf(false) }
 
@@ -579,6 +589,12 @@ private fun DataSection(viewModel: SettingsViewModel) {
         title = stringResource(R.string.setting_trash_auto_delete),
         subtitle = trashAutoDeleteLabel(trashDays),
         onClick = { showTrashDialog = true },
+    )
+    SettingsRow(
+        icon = { Icon(Icons.Filled.SwapVert, contentDescription = null) },
+        title = stringResource(R.string.import_export_entry),
+        subtitle = stringResource(R.string.import_export_entry_desc),
+        onClick = onOpenImportExport,
     )
 
     if (showTrashDialog) {

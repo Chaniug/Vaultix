@@ -1743,3 +1743,50 @@ privileged allowlist）。
       回根导航）
 - [x] data:repository 新增 6 个写路径/解密流单测（共 11 个）；双 flavor 编译通过
 
+
+## ✅ 已完成（2026-09-14 · Bitwarden 对齐加密导出 / 导入）
+
+> **需求原文**：「加密 bitwarden 数据库导出可以对齐 bitwarden 上的功能吗，**防止服务器坏了拿不到 json 文件**」
+> →「**对齐 bitwarden 的吧**。另外代码去参考 bitwarden 的导出和导入可能更规范」→「**导入导出放在设置里面**」
+> **目的**：服务器/官方客户端不可用时，用户仍能拿到**自包含、可被官方客户端直接读**的加密备份（自救路径）。
+
+### 格式与密码学（真源 = 官方 Rust 实现，非自造）
+
+| 项 | 落地值 | 真源 |
+|---|---|---|
+| 格式规范 | `bitwarden/sdk-internal` `crates/bitwarden-exporters/src/encrypted_json.rs` | 逐字段比对（非印象） |
+| 信封字段 | `encrypted` / `passwordProtected` / `salt` / `kdfType` / `kdfIterations` / `kdfMemory` / `kdfParallelism` / `encKeyValidation_DO_NOT_EDIT` / `data` | 全量对齐，含唯一非 camelCase 字段名 |
+| KDF | `PBKDF2-SHA256` / `600000`（导出侧固定，**离线可用**） | 见 `decisions.md` 2026-09-14 条目（含偏差理由） |
+| 密钥派生 | `PBKDF2` → 32B kdfKey → `HKDF-Expand("enc"/"mac")` → encKey / macKey | 同左 |
+| 加密 | `AES-256-CBC` + `HMAC-SHA256(iv‖ct)`，线格式 `2.{b64(iv)}\|{b64(ct)}\|{b64(mac)}` | 复用既有 `VaultixCrypto`，**零新库** |
+| 验密凭证 | 加密一个**随机 `UUID v4`** | ⚠️ 官方 `Uuid::new_v4()`；**Bastion 此处有 bug（错用固定字符串），未照抄** |
+| 条目类型码 | 1=Login / 2=SecureNote / 3=Card / 4=Identity / 5=SshKey | 全类型覆盖 |
+| 字段省略 | 空集合 → `null`（`skip_serializing_if` 语义） | 避免产出官方 schema 之外的空数组 |
+
+### 新增文件（`data:bitwarden` · 1117 行）
+
+- [x] `export/BitwardenExportModels.kt`（286）— 全字段显式 `@SerialName`，不依赖命名策略
+- [x] `export/BitwardenExportMapper.kt`（200）— 领域模型 → 导出模型（`counter` / `discoverable` **序列化为字符串**）
+- [x] `export/BitwardenEncryptedExporter.kt`（181）— 16B 随机盐、随机 UUID 凭证、Hilt `@Singleton`
+- [x] `export/BitwardenEncryptedImporter.kt`（208）— `sealed class BitwardenImportException`（Malformed / WrongPassword / UnsupportedKdf / IncompleteEnvelope）
+- [x] `export/BitwardenImportMapper.kt`（153）— 未知 type 返回 `null` 跳过，不伪造条目
+- [x] `export/BitwardenExportFacade.kt`（89）— **public 窄缝**（`internal` mapper 跨模块不可见，见 `decisions.md`）
+
+### 接线与 UI
+
+- [x] `domain/VaultExportRepository.kt` — 新领域窄接口 + `ImportedVault` + `VaultImportException`
+- [x] `data/repository/VaultExportRepositoryImpl.kt` — 解锁校验 → `cryptoDispatcher` 内导出；导入**按文件夹名合并**、条目 `id=""` 重建 ⇒ **只增不改**
+- [x] `RepositoryModule.kt` — `@Binds` 绑定
+- [x] `ImportExportViewModel.kt`（~290）— `ErrorKind` 枚举分类错误，`canExport`（≥8 位 + 两次一致）/ `canDecrypt` / `canApply` 门禁
+- [x] `ImportExportScreen.kt`（~535）— 导出（密码+确认+确认框）/ 导入（选文件→解密→预览→确认）；SAF `CreateDocument` / `OpenDocument` 全在 `rememberSafHandlers` 内，主 composable **84 行**（detekt `LongMethod ≤150`）
+- [x] `Navigation.kt` / `VaultixApp.kt` / `MainShellScreen.kt` / `SettingsScreen.kt` — 入口 = 设置页「数据管理」分组 `SwapVert` 行
+- [x] `strings.xml` +39 条（已用脚本校验：无缺失 / 无未引用 / 无重复）
+
+### 沙箱内静态验证（无 Android SDK，故用 Kotlin 编译器逐模块单编）
+
+- [x] `core:crypto` + `domain`：**零错误**
+- [x] `data:bitwarden` 全部 6 个 export 文件（含 facade）：**零错误**
+- [x] `ImportExportViewModel`（stub Android/Hilt/ActiveVaultStore）：**零错误**
+- [x] `ImportExportScreen`：10 个图标（`Upload`/`Download`/`FileOpen`/`Description`/`SwapVert`/`Visibility`/`VisibilityOff` 等）逐个确认在 `material-icons-extended` 存在；imports 无未用；strings 全被引用
+- ⏳ **仍需在本地跑一次**：`./gradlew compileDebugKotlin detekt`
+- ⏳ **真机待验收**：①导出后用**官方 Bitwarden 客户端**导入该文件（互操作性硬证据）；②本机导入该文件；③错误文件密码应报「密码错误」而非「文件损坏」

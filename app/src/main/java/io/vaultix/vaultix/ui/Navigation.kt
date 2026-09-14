@@ -51,6 +51,15 @@ data object SettingsRoute
 @Serializable
 data object AutofillSettingsRoute
 
+/**
+ * 导入 / 导出二级页（设置首页「数据管理 → 导入 / 导出」进入）。
+ *
+ * 无参数：导出 / 导入都作用于**当前活跃库**（[io.vaultix.vaultix.session.ActiveVaultStore]），
+ * 与主界面各 Tab 同源，避免多传一个可能过期的 vaultId。
+ */
+@Serializable
+data object ImportExportRoute
+
 @Serializable
 data class UnlockRoute(val vaultId: String)
 

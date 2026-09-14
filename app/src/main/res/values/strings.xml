@@ -598,4 +598,43 @@
     <string name="card_wallet_search_close">关闭搜索</string>
     <string name="card_wallet_no_match">没有匹配的卡片</string>
     <string name="card_wallet_new">新建银行卡</string>
+
+    <!-- 导入与导出（对齐 Bitwarden 官方加密导出/导入；入口在设置首页「数据管理」） -->
+    <string name="import_export_entry">导入 / 导出</string>
+    <string name="import_export_entry_desc">把全部条目备份为加密文件，或从备份恢复</string>
+    <string name="import_export_title">导入与导出</string>
+
+    <!-- 导出 -->
+    <string name="export_title">导出密码库</string>
+    <string name="export_subtitle">导出为 Bitwarden 加密 JSON（.json）。文件用你设置的密码加锁，只有知道该密码的人能打开。</string>
+    <string name="export_button">导出</string>
+    <string name="export_password_label">文件密码</string>
+    <string name="export_password_confirm_label">确认文件密码</string>
+    <string name="export_password_mismatch">两次输入的密码不一致</string>
+    <string name="export_password_too_weak">密码至少需要 8 个字符</string>
+    <string name="export_confirm_title">确认导出</string>
+    <string name="export_confirm_body">将把当前库的全部条目导出为一个加密文件。\n\n· 文件用你设置的密码保护，请妥善保管该密码 —— 遗失后文件无法恢复；\n· 导出不影响服务器上的数据；\n· 导出完成后请把文件保存到安全的位置。</string>
+    <string name="export_in_progress">正在导出…</string>
+    <string name="export_success">导出成功</string>
+    <string name="export_failed">导出失败：%1$s</string>
+
+    <!-- 导入 -->
+    <string name="import_title">导入密码库</string>
+    <string name="import_subtitle">从 Bitwarden 加密 JSON（.json）恢复条目。条目会追加到当前库，不会覆盖已有条目。</string>
+    <string name="import_pick_file">选择文件</string>
+    <string name="import_file_picked">已选择：%1$s</string>
+    <string name="import_password_label">文件密码</string>
+    <string name="import_decrypt">解密并预览</string>
+    <string name="import_preview_summary">共 %1$d 个条目，%2$d 个文件夹</string>
+    <string name="import_confirm">确认导入</string>
+    <string name="import_in_progress">正在导入…</string>
+    <string name="import_success">已导入 %1$d 个条目</string>
+    <string name="import_failed">导入失败：%1$s</string>
+
+    <!-- 导入错误分类 -->
+    <string name="import_error_malformed">文件格式不正确，不是有效的 Bitwarden 加密导出文件</string>
+    <string name="import_error_wrong_password">文件密码不正确</string>
+    <string name="import_error_unsupported_kdf">文件使用了当前版本不支持的加密参数（KDF）</string>
+
+    <string name="vault_export_unavailable">当前库未解锁，请先解锁后再导出</string>
 </resources>

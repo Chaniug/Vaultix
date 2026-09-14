@@ -28,6 +28,7 @@ import io.vaultix.vaultix.ui.passkeys.PasskeysScreen
 import io.vaultix.vaultix.ui.rootnav.RootNavState
 import io.vaultix.vaultix.ui.rootnav.RootNavViewModel
 import io.vaultix.vaultix.ui.settings.AutofillSettingsScreen
+import io.vaultix.vaultix.ui.settings.ImportExportScreen
 import io.vaultix.vaultix.ui.settings.SettingsScreen
 import io.vaultix.vaultix.ui.shell.MainShellScreen
 import io.vaultix.vaultix.ui.shell.MainShellViewModel
@@ -252,6 +253,7 @@ private fun NavGraphBuilder.vaultEntryGraph(
                 activeVaultId?.let { navController.navigate(PasskeysRoute(vaultId = it)) }
             },
             onOpenAutofillSettings = { navController.navigate(AutofillSettingsRoute) },
+            onOpenImportExport = { navController.navigate(ImportExportRoute) },
             // 设置 Tab 内也要能添加库（否则「已有一个库」时库列表路由不可达，
             // 用户永远加不了本地 KDBX 库）。
             onAddBitwardenVault = { navController.navigate(AddVaultRoute) },
@@ -287,12 +289,16 @@ private fun NavGraphBuilder.settingsGraph(navController: NavHostController) {
         SettingsScreen(
             onBack = { navController.popBackStack() },
             onOpenAutofillSettings = { navController.navigate(AutofillSettingsRoute) },
+            onOpenImportExport = { navController.navigate(ImportExportRoute) },
             onAddBitwardenVault = { navController.navigate(AddVaultRoute) },
             onAddKdbxVault = { navController.navigate(AddKdbxRoute) },
         )
     }
     composable<AutofillSettingsRoute> {
         AutofillSettingsScreen(onBack = { navController.popBackStack() })
+    }
+    composable<ImportExportRoute> {
+        ImportExportScreen(onBack = { navController.popBackStack() })
     }
     composable<AddVaultRoute> {
         AddVaultScreen(

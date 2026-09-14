@@ -56,6 +56,7 @@ private const val WIDE_SCREEN_MIN_WIDTH_DP = 600
  * @param onOpenTrash 打开回收站。
  * @param onOpenPasskeys 打开通行密钥列表（验证码 Tab 内的入口，对齐 Bastion）。
  * @param onOpenAutofillSettings 打开自动填充设置（设置 Tab 二级页）。
+ * @param onOpenImportExport 打开导入 / 导出二级页（设置 Tab 二级页）。
  * @param onLocked 该库被锁定：交由根导航收回到解锁页（本容器不再自持锁态判定）。
  */
 @Composable
@@ -64,6 +65,7 @@ fun MainShellScreen(
     onOpenTrash: () -> Unit,
     onOpenPasskeys: () -> Unit,
     onOpenAutofillSettings: () -> Unit,
+    onOpenImportExport: () -> Unit,
     /** 设置 Tab 内添加库（库列表路由在已有库时不可达，否则用户永远加不了 KDBX）。 */
     onAddBitwardenVault: () -> Unit,
     onAddKdbxVault: () -> Unit,
@@ -209,6 +211,7 @@ fun MainShellScreen(
                             embedded = true,
                             onBack = {},
                             onOpenAutofillSettings = onOpenAutofillSettings,
+                            onOpenImportExport = onOpenImportExport,
                             bottomInset = bottomInset,
                             onAddBitwardenVault = onAddBitwardenVault,
                             onAddKdbxVault = onAddKdbxVault,
