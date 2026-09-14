@@ -42,6 +42,7 @@ import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
@@ -75,6 +76,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import io.vaultix.datastore.VaultTimeout
+import io.vaultix.domain.PIN_MIN_LENGTH
 import io.vaultix.model.VaultKind
 import io.vaultix.model.VaultSummary
 import io.vaultix.vaultix.BuildConfig
@@ -252,9 +254,12 @@ fun SettingsScreen(
                 }
             },
             onDisable = viewModel::disableQuickUnlock,
+            onPinSet = viewModel::openPinDialog,
+            onPinDisable = viewModel::disablePin,
             onDismiss = { showQuickUnlockDialog = false },
         )
     }
+    PinDialogHost(viewModel = viewModel)
     // KDBX 主密码输入框：仅当用户勾选了 KDBX 库、且尚未校验通过时出现。
     val kdbxTarget = pendingKdbxVaultId
     if (kdbxTarget != null) {
@@ -858,6 +863,8 @@ private fun QuickUnlockManageDialog(
     canAuthenticate: Boolean,
     onEnable: (String) -> Unit,
     onDisable: (String) -> Unit,
+    onPinSet: (SettingsViewModel.QuickUnlockVaultUi) -> Unit,
+    onPinDisable: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
     AlertDialog(
@@ -875,41 +882,31 @@ private fun QuickUnlockManageDialog(
                     )
                     Spacer(Modifier.height(8.dp))
                     vaults.forEach { vault ->
-                        ListItem(
-                            headlineContent = { Text(vault.name) },
-                            supportingContent = {
-                                Text(
-                                    if (vault.enabled) {
-                                        stringResource(R.string.quick_unlock_enabled)
-                                    } else {
-                                        // 仅当设备确实支持认证时才提示「可启用」，
-                                        // 否则维持原「未启用」说明，避免给出无法完成的指引
-                                        if (canAuthenticate) {
-                                            stringResource(
-                                                if (vault.kind == VaultKind.KDBX) {
-                                                    R.string.quick_unlock_disabled_kdbx
-                                                } else {
-                                                    R.string.quick_unlock_disabled
-                                                },
-                                            )
-                                        } else {
-                                            stringResource(R.string.quick_unlock_device_unsupported)
-                                        }
-                                    },
-                                )
-                            },
-                            trailingContent = {
-                                if (vault.enabled) {
-                                    TextButton(onClick = { onDisable(vault.vaultId) }) {
-                                        Text(stringResource(R.string.quick_unlock_disable))
-                                    }
-                                } else if (canAuthenticate) {
-                                    TextButton(onClick = { onEnable(vault.vaultId) }) {
-                                        Text(stringResource(R.string.quick_unlock_enable))
-                                    }
-                                }
-                            },
+                        QuickUnlockRow(
+                            vault = vault,
+                            canAuthenticate = canAuthenticate,
+                            onEnable = onEnable,
+                            onDisable = onDisable,
                         )
+                    }
+                    // 「应用内 PIN」单列一段：与指纹是**两条独立**的解锁路径，
+                    // 挤在同一行里会让人以为它们是一个开关的两个档位。
+                    Spacer(Modifier.height(12.dp))
+                    HorizontalDivider()
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        text = stringResource(R.string.pin_section_title),
+                        style = MaterialTheme.typography.titleSmall,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = stringResource(R.string.pin_section_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    vaults.forEach { vault ->
+                        PinRow(vault = vault, onSet = onPinSet, onPinDisable = onPinDisable)
                     }
                 }
             }
@@ -919,6 +916,234 @@ private fun QuickUnlockManageDialog(
                 Text(stringResource(R.string.action_back))
             }
         },
+    )
+}
+
+/**
+ * 单个库的「快速解锁」行（从 [QuickUnlockManageDialog] 抽出）。
+ *
+ * 抽出来的直接原因是不让对话框越过 detekt `LongMethod`；但更重要的理由是
+ * 一个库的两种解锁手段本来就该各占一行、各自可读。
+ */
+@Composable
+private fun QuickUnlockRow(
+    vault: SettingsViewModel.QuickUnlockVaultUi,
+    canAuthenticate: Boolean,
+    onEnable: (String) -> Unit,
+    onDisable: (String) -> Unit,
+) {
+    ListItem(
+        headlineContent = { Text(vault.name) },
+        supportingContent = {
+            Text(
+                if (vault.enabled) {
+                    stringResource(R.string.quick_unlock_enabled)
+                } else {
+                    // 仅当设备确实支持认证时才提示「可启用」，
+                    // 否则维持原「未启用」说明，避免给出无法完成的指引
+                    if (canAuthenticate) {
+                        stringResource(
+                            if (vault.kind == VaultKind.KDBX) {
+                                R.string.quick_unlock_disabled_kdbx
+                            } else {
+                                R.string.quick_unlock_disabled
+                            },
+                        )
+                    } else {
+                        stringResource(R.string.quick_unlock_device_unsupported)
+                    }
+                },
+            )
+        },
+        trailingContent = {
+            if (vault.enabled) {
+                TextButton(onClick = { onDisable(vault.vaultId) }) {
+                    Text(stringResource(R.string.quick_unlock_disable))
+                }
+            } else if (canAuthenticate) {
+                TextButton(onClick = { onEnable(vault.vaultId) }) {
+                    Text(stringResource(R.string.quick_unlock_enable))
+                }
+            }
+        },
+    )
+}
+
+/**
+ * 单个库的「应用内 PIN」行。
+ *
+ * ⚠️ PIN **不需要**设备支持生物识别 ⇒ 这里**没有** [QuickUnlockRow] 那种
+ * `canAuthenticate` 门槛：一台没有锁屏的设备也能用 PIN（安全性来自
+ * `SecureCredentialStore` 那层硬件密钥，不来自系统认证）。
+ */
+@Composable
+private fun PinRow(
+    vault: SettingsViewModel.QuickUnlockVaultUi,
+    onSet: (SettingsViewModel.QuickUnlockVaultUi) -> Unit,
+    onPinDisable: (String) -> Unit,
+) {
+    ListItem(
+        headlineContent = { Text(vault.name) },
+        supportingContent = {
+            Text(
+                if (vault.pinEnabled) {
+                    stringResource(R.string.pin_enabled_summary, PIN_MIN_LENGTH)
+                } else {
+                    stringResource(R.string.pin_disabled_summary)
+                },
+            )
+        },
+        trailingContent = {
+            if (vault.pinEnabled) {
+                TextButton(onClick = { onPinDisable(vault.vaultId) }) {
+                    Text(stringResource(R.string.pin_disable))
+                }
+            }
+            TextButton(onClick = { onSet(vault) }) {
+                Text(
+                    stringResource(
+                        if (vault.pinEnabled) R.string.pin_change else R.string.pin_enable,
+                    ),
+                )
+            }
+        },
+    )
+}
+
+/**
+ * PIN 设置对话框的宿主：按 [SettingsViewModel.PinDialogState] 选一帧渲染。
+ *
+ * 单独成宿主的原因：PIN 的两步（输 PIN → KDBX 输主密码）是**同一个流程的两个阶段**，
+ * 让它们在同一个宿主里切换，才能保证「上一步收下的 PIN」不会因为 UI 重组而丢失。
+ */
+@Composable
+private fun PinDialogHost(viewModel: SettingsViewModel) {
+    // ⚠️ 必须先用局部 `val` 接住：委托属性（`by`）**无法智能转换**，
+    // 直接在 `when` 里用 `state is ...` 会编译不过。
+    val state = viewModel.pinDialog.collectAsStateWithLifecycle().value
+    when (state) {
+        SettingsViewModel.PinDialogState.Idle -> Unit
+        is SettingsViewModel.PinDialogState.Entering ->
+            PinSetDialog(state = state, viewModel = viewModel)
+        is SettingsViewModel.PinDialogState.AskingKdbxPassword ->
+            PinKdbxPasswordDialog(state = state, viewModel = viewModel)
+    }
+}
+
+/**
+ * 设置 PIN（第一步）：输入两次。
+ *
+ * 用 `NumberPassword` 键盘：PIN 是纯数字，弹全键盘只会让用户多找一次数字行。
+ * 两次输入一致性与位数校验都在 ViewModel（见 `confirmPinEntry`），这里只负责画错误。
+ */
+@Composable
+private fun PinSetDialog(
+    state: SettingsViewModel.PinDialogState.Entering,
+    viewModel: SettingsViewModel,
+) {
+    AlertDialog(
+        onDismissRequest = viewModel::dismissPinDialog,
+        title = { Text(stringResource(R.string.pin_set_title)) },
+        text = {
+            Column {
+                Text(
+                    text = stringResource(R.string.pin_set_message),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(12.dp))
+                PinField(
+                    value = state.pin,
+                    labelRes = R.string.pin_label,
+                    onValueChange = viewModel::onPinChange,
+                )
+                Spacer(Modifier.height(8.dp))
+                PinField(
+                    value = state.confirm,
+                    labelRes = R.string.pin_confirm_label,
+                    onValueChange = viewModel::onPinConfirmChange,
+                )
+                DialogErrorText(state.error)
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = viewModel::confirmPinEntry) {
+                Text(stringResource(R.string.action_save))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = viewModel::dismissPinDialog) {
+                Text(stringResource(R.string.action_cancel))
+            }
+        },
+    )
+}
+
+/** KDBX 第二步：再输一次主密码（会话里没有它，PIN 无从包裹）。 */
+@Composable
+private fun PinKdbxPasswordDialog(
+    state: SettingsViewModel.PinDialogState.AskingKdbxPassword,
+    viewModel: SettingsViewModel,
+) {
+    AlertDialog(
+        onDismissRequest = viewModel::dismissPinDialog,
+        title = { Text(stringResource(R.string.pin_kdbx_title)) },
+        text = {
+            Column {
+                Text(
+                    text = stringResource(R.string.pin_kdbx_message, state.vaultName),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = state.password,
+                    onValueChange = viewModel::onPinKdbxPasswordChange,
+                    label = { Text(stringResource(R.string.kdbx_master_password_label)) },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                DialogErrorText(state.error)
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = viewModel::confirmKdbxPasswordForPin) {
+                Text(stringResource(R.string.action_save))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = viewModel::dismissPinDialog) {
+                Text(stringResource(R.string.action_cancel))
+            }
+        },
+    )
+}
+
+/** 纯数字、遮蔽输入的字段（PIN 两格共用：样式只有一处，改就一起改）。 */
+@Composable
+private fun PinField(value: String, labelRes: Int, onValueChange: (String) -> Unit) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        label = { Text(stringResource(labelRes)) },
+        singleLine = true,
+        visualTransformation = PasswordVisualTransformation(),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+        modifier = Modifier.fillMaxWidth(),
+    )
+}
+
+/** 对话框内的错误行；无错误时不占位（不要留一行空高，会让对话框忽高忽低）。 */
+@Composable
+private fun DialogErrorText(message: String?) {
+    if (message == null) return
+    Spacer(Modifier.height(8.dp))
+    Text(
+        text = message,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.error,
     )
 }
 

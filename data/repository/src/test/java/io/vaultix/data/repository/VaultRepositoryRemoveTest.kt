@@ -34,6 +34,8 @@ class VaultRepositoryRemoveTest {
     private val syncService = mockk<BitwardenSyncService>()
     private val credentials = mockk<SecureCredentialStore>()
     private val localUnlockKeyStore = mockk<LocalUnlockKeyStore>()
+    /** relaxed：本测试不碰 PIN 路径，但构造函数需要它；未打桩的调用不该让测试失败。 */
+    private val pinUnlockStore = mockk<PinUnlockStore>(relaxed = true)
     private val preferences = mockk<VaultixPreferences>()
     private val context = mockk<android.content.Context>(relaxed = true)
     private val sessions = VaultSessionManager()
@@ -53,6 +55,7 @@ class VaultRepositoryRemoveTest {
             syncService = syncService,
             credentials = credentials,
             localUnlockKeyStore = localUnlockKeyStore,
+            pinUnlockStore = pinUnlockStore,
             preferences = preferences,
             kdbxSessions = KdbxSessionFlow(),
             context = context,

@@ -40,6 +40,7 @@ class VaultRepositorySignOutTest {
     private val syncService = mockk<BitwardenSyncService>()
     private val credentials = mockk<SecureCredentialStore>(relaxed = true)
     private val localUnlockKeyStore = mockk<LocalUnlockKeyStore>(relaxed = true)
+    private val pinUnlockStore = mockk<PinUnlockStore>(relaxed = true)
     private val preferences = mockk<VaultixPreferences>(relaxed = true)
     private val sessions = VaultSessionManager()
     private lateinit var repo: VaultRepositoryImpl
@@ -58,6 +59,7 @@ class VaultRepositorySignOutTest {
             syncService = syncService,
             credentials = credentials,
             localUnlockKeyStore = localUnlockKeyStore,
+            pinUnlockStore = pinUnlockStore,
             preferences = preferences,
             kdbxSessions = KdbxSessionFlow(),
             context = context,

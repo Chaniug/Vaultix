@@ -265,6 +265,30 @@ class VaultixPreferences @Inject constructor(
         booleanPreferencesKey("local_unlock_enabled_$vaultId")
 
     /**
+     * 应用内 PIN 解锁开关（按库）。同样只是元数据：PIN 信封在
+     * [SecureCredentialStore]（key：local_pin_key::<vaultId>）。
+     *
+     * ⚠️ 与快速解锁**分成两个键**而不是共用一个：两者是彼此独立的解锁手段
+     * （PIN 不需要系统认证，指纹需要），用户可以只要其中之一。
+     * 共用一个键会让「关掉指纹」顺手把 PIN 也关掉，那是静默的功能丢失。
+     */
+    fun isPinUnlockEnabled(vaultId: String): Flow<Boolean> =
+        safeData.map { it[pinUnlockKey(vaultId)] ?: false }
+
+    suspend fun setPinUnlockEnabled(vaultId: String, enabled: Boolean) {
+        dataStore.edit { prefs ->
+            if (enabled) {
+                prefs[pinUnlockKey(vaultId)] = true
+            } else {
+                prefs.remove(pinUnlockKey(vaultId))
+            }
+        }
+    }
+
+    private fun pinUnlockKey(vaultId: String) =
+        booleanPreferencesKey("pin_unlock_enabled_$vaultId")
+
+    /**
      * KDBX 库的 keyfile URI（按库；null / 无记录 = 该库不用 keyfile）。
      *
      * 只存 **URI 字符串**，不存文件内容 —— 内容由 SAF 授权在需要时现读

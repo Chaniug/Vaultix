@@ -5,6 +5,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import io.vaultix.domain.KdbxUnlockOutcome
+import io.vaultix.domain.PIN_MIN_LENGTH
+import io.vaultix.domain.PinUnlockOutcome
 import io.vaultix.domain.UnlockResult
 import io.vaultix.domain.VaultRepository
 import io.vaultix.domain.VaultSessionRepository
@@ -91,6 +93,20 @@ class UnlockViewModel @Inject constructor(
         val viewLocked: Boolean = false,
         /** 本次生物识别是为查看层锁发起的（成功分支据此只清标记、不重建会话）。 */
         val viewUnlockStarted: Boolean = false,
+        /** 应用内 PIN 入口是否可见（按库）。取向同 [localUnlockAvailable]：只看持久化开关。 */
+        val pinUnlockAvailable: Boolean = false,
+        /** 是否已切到 PIN 输入模式。 */
+        val pinMode: Boolean = false,
+        /**
+         * 已输入的 PIN **位数**（界面只画圆点）。
+         *
+         * ⚠️ 刻意**不把 PIN 本身放进 state**：state 会被反复读取/比较（重组、日志、
+         * 状态转储），让一个明文口令在里面流动没有意义 —— 它只在下一次提交时需要，
+         * 存在 [pinBuffer] 里、提交后立即抹掉就够了。
+         */
+        val pinLength: Int = 0,
+        val pinError: String? = null,
+        val pinSubmitting: Boolean = false,
     )
 
     sealed interface Event {
@@ -138,6 +154,12 @@ class UnlockViewModel @Inject constructor(
      */
     private var preparedCipher: javax.crypto.Cipher? = null
 
+    /**
+     * PIN 输入的**明文缓冲**。刻意不放进 [UiState]（见 `pinLength` 的说明）；
+     * 每次提交后立刻抹掉，不让它比这次提交活得更久。
+     */
+    private var pinBuffer: String = ""
+
     init {
         viewModelScope.launch {
             vaultRepository.observeVaults().collect { vaults ->
@@ -181,6 +203,122 @@ class UnlockViewModel @Inject constructor(
                     }
                 }
         }
+        // PIN 可用性：**单独起一条协程**而不接在上面那条里 ——
+        // 上面那个 `localUnlockAvailable(id).collect {}` 永不结束，
+        // 在它后面顺序再写一个 `collect` 的话**永远不会被执行**（这是极易踩的坑）。
+        // 同样遵守 #88 的纪律：从**一次发射**自己解析目标库，不读跨协程写入的 `var vaultId`。
+        viewModelScope.launch {
+            vaultRepository.observeVaults()
+                .map { vaults -> resolveTargetVaultId(vaults) }
+                .filter { it.isNotBlank() }
+                .distinctUntilChanged()
+                .collectLatest { id ->
+                    vaultRepository.pinUnlockAvailable(id).collect { available ->
+                        _state.update { it.copy(pinUnlockAvailable = available) }
+                    }
+                }
+        }
+    }
+
+    // ---- 应用内 PIN 解锁（解锁便利，非找回手段）----
+
+    /** 切到 PIN 输入模式。仅在 [UiState.pinUnlockAvailable] 为真时有意义。 */
+    fun enterPinMode() {
+        if (!_state.value.pinUnlockAvailable) return
+        pinBuffer = ""
+        _state.update {
+            it.copy(pinMode = true, pinLength = 0, pinError = null, error = null)
+        }
+    }
+
+    fun exitPinMode() {
+        pinBuffer = ""
+        _state.update { it.copy(pinMode = false, pinLength = 0, pinError = null) }
+    }
+
+    /**
+     * 输入一位数字。
+     *
+     * ★ **满 [PIN_MIN_LENGTH] 位即自动提交**：6 位数字之后再要按一次「确认」是多余动作
+     * （系统锁屏同款）。因此设置页建 PIN 时也要求**恰好** 6 位 —— 否则自动提交会
+     * 把长于 6 位的 PIN 提前截断提交，用户永远解不开。
+     */
+    fun onPinDigit(digit: Char) {
+        val current = _state.value
+        if (!current.pinMode || current.pinSubmitting) return
+        if (digit !in '0'..'9') return
+        if (pinBuffer.length >= PIN_MIN_LENGTH) return
+        pinBuffer += digit
+        _state.update { it.copy(pinLength = pinBuffer.length, pinError = null) }
+        if (pinBuffer.length == PIN_MIN_LENGTH) {
+            viewModelScope.launch { submitPin() }
+        }
+    }
+
+    fun onPinBackspace() {
+        val current = _state.value
+        if (!current.pinMode || current.pinSubmitting) return
+        if (pinBuffer.isEmpty()) return
+        pinBuffer = pinBuffer.dropLast(1)
+        _state.update { it.copy(pinLength = pinBuffer.length, pinError = null) }
+    }
+
+    /**
+     * 提交 PIN。
+     *
+     * 按**库类型分流**（与 #93 的解锁路径分流同一条纪律）：Bitwarden 侧解出的是
+     * 会话密钥、KDBX 侧解出的是凭据，两者后续动作不同 —— 混走是错语义。
+     */
+    private suspend fun submitPin() {
+        val id = vaultId
+        val vault = _state.value.vault
+        if (id.isBlank() || vault == null) {
+            // 库都定位不到，PIN 无从谈起 ⇒ 退回主密码界面，别把用户卡在一个空面板上
+            pinBuffer = ""
+            _state.update { it.copy(pinMode = false, pinLength = 0, pinSubmitting = false) }
+            return
+        }
+        val pin = pinBuffer
+        _state.update { it.copy(pinSubmitting = true, pinError = null) }
+        val outcome = withContext(Dispatchers.IO) {
+            if (vault.kind == VaultKind.KDBX) {
+                vaultRepository.completePinUnlockKdbx(id, pin)
+            } else {
+                vaultRepository.completePinUnlock(id, pin)
+            }
+        }
+        // 无论成败都把 PIN 从内存抹掉：它不该活过这次提交。
+        pinBuffer = ""
+        if (outcome == PinUnlockOutcome.Opened) {
+            _state.update { it.copy(pinSubmitting = false, pinMode = false, pinLength = 0) }
+            _events.send(Event.Unlocked)
+            return
+        }
+        _state.update {
+            it.copy(
+                pinSubmitting = false,
+                // 清空圆点：用户下一次输入从头开始（保留已输入的位会让人以为多输了）
+                pinLength = 0,
+                pinError = pinFailureText(outcome),
+            )
+        }
+    }
+
+    /**
+     * PIN 失败的文案。
+     *
+     * ⚠️ **四态必须给出四句不同的话**：它们的用户动作互不相同 —— 重试 / 等主密码 /
+     * 重设 / 报告数据损坏。合成一句「解锁失败」等于把用户丢在原地，这也是项目
+     * 反复强调的「假状态」在文案层的表现。
+     */
+    private fun pinFailureText(outcome: PinUnlockOutcome): String = when (outcome) {
+        is PinUnlockOutcome.WrongPin ->
+            "PIN 不正确，还可尝试 ${outcome.remainingAttempts} 次"
+        PinUnlockOutcome.LockedOut -> "PIN 尝试次数过多，请改用主密码解锁后在设置里重设"
+        PinUnlockOutcome.StaleCredentials ->
+            "PIN 正确，但该库的主密码已在别处变更，请用主密码解锁后重设"
+        is PinUnlockOutcome.Unavailable -> outcome.detail
+        PinUnlockOutcome.Opened -> ""
     }
 
     /**

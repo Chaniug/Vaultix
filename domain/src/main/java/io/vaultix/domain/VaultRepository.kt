@@ -192,6 +192,108 @@ interface VaultRepository {
         vaultId: String,
         cipher: javax.crypto.Cipher,
     ): KdbxUnlockOutcome
+
+    // ===== 应用内 PIN 解锁（定位：解锁便利，**不是**找回手段）=====
+
+    /**
+     * PIN 解锁入口是否可见（按库）。
+     *
+     * 取向与 [localUnlockAvailable] 一致：**只看持久化开关**，不在订阅时现探
+     * 密钥可用性 —— 否则一次瞬时异常就会把入口整条藏掉，用户以为功能没了。
+     * 真失败留到输入那一刻如实报错（那时原因才准确）。
+     */
+    fun pinUnlockAvailable(vaultId: String): Flow<Boolean>
+
+    /**
+     * 启用 / 重设 PIN（**Bitwarden 库**）。
+     *
+     * ⚠️ 与 [enrollPinKdbx] 分成**两个方法**而非一个重载，理由同
+     * [enrollLocalUnlockKdbx]：Bitwarden 的会话里**有**要包裹的密钥（库正解锁），
+     * 所以无需再输一次主密码；KDBX 的会话里**没有**主密码，必须当场输入并先校验。
+     * 合并成一个方法就得让「主密码」这个参数在 Bitwarden 侧无意义地可选，
+     * 那条隐式约定迟早被用错。
+     *
+     * 重设语义 = 重新包裹。旧信封会被覆盖 ⇒ **旧 PIN 立即失效**。
+     */
+    suspend fun enrollPin(vaultId: String, pin: String): PinEnrollOutcome
+
+    /** 启用 / 重设 PIN（**KDBX 库**）：先校验凭据、后包裹。 */
+    suspend fun enrollPinKdbx(
+        vaultId: String,
+        pin: String,
+        masterPassword: String,
+        keyFileUri: String?,
+    ): PinEnrollOutcome
+
+    /** 用 PIN 解锁 **Bitwarden 库**（解出的密钥直接登记会话）。 */
+    suspend fun completePinUnlock(vaultId: String, pin: String): PinUnlockOutcome
+
+    /** 用 PIN 解锁 **KDBX 库**（解出凭据后**真的开库**，与 [completeLocalUnlockKdbx] 同理）。 */
+    suspend fun completePinUnlockKdbx(vaultId: String, pin: String): PinUnlockOutcome
+
+    /**
+     * 关闭 PIN 解锁：删除信封与开关，**并清零失败计数**。幂等。
+     *
+     * ⚠️ 只删 PIN 那一份，**不动**快速解锁的登记（两者是独立手段）。
+     */
+    suspend fun disablePin(vaultId: String)
+}
+
+/**
+ * PIN 长度下限。
+ *
+ * 6 位是「好记」与「难猜」的平衡点。⚠️ 真正的安全**不来自**这个位数，而是
+ * `SecureCredentialStore` 那层「不需用户认证但不可导出」的硬件 Keystore 密钥：
+ * 破译者必须持有**这台设备**，光有落盘文件没用（详见 `PinKeyWrapper` 的 KDoc）。
+ */
+const val PIN_MIN_LENGTH: Int = 6
+
+/** 连续输错上限；达到即锁定，须用主密码解锁后重设。 */
+const val PIN_MAX_ATTEMPTS: Int = 5
+
+/** [VaultRepository.enrollPin] / [VaultRepository.enrollPinKdbx] 的结果。 */
+sealed interface PinEnrollOutcome {
+    /** 已包裹落盘、开关已置位。 */
+    data object Enrolled : PinEnrollOutcome
+
+    /** PIN 低于 [PIN_MIN_LENGTH]。本地即可判定，故单独成一态（UI 要指着输入框说）。 */
+    data class PinTooShort(val minimum: Int) : PinEnrollOutcome
+
+    /** KDBX：主密码 / keyfile 不对 —— **校验阶段**就失败，未写任何东西。 */
+    data object InvalidCredentials : PinEnrollOutcome
+
+    /**
+     * 当前没有可包裹的会话（库未解锁 / 会话已失效）。
+     * ⇒ 引导用户先用主密码登录一次，而不是报「失败」让用户猜。
+     */
+    data object SessionUnavailable : PinEnrollOutcome
+
+    /** 库文件读不到（URI 授权失效 / 文件被删）或其它异常。 */
+    data class Failed(val detail: String) : PinEnrollOutcome
+}
+
+/** [VaultRepository.completePinUnlock] / [VaultRepository.completePinUnlockKdbx] 的结果。 */
+sealed interface PinUnlockOutcome {
+    /** 解包成功且库可用（Bitwarden 会话已登记 / KDBX 已开库）。 */
+    data object Opened : PinUnlockOutcome
+
+    /**
+     * PIN 不对。[remainingAttempts] 是**还剩几次**（UI 直接展示，不要把减法留给 UI，
+     * 否则两处各算一遍必然漂移）。
+     */
+    data class WrongPin(val remainingAttempts: Int) : PinUnlockOutcome
+
+    /** 连续输错达 [PIN_MAX_ATTEMPTS] ⇒ 锁定。UI 应引导走主密码并重设 PIN。 */
+    data object LockedOut : PinUnlockOutcome
+
+    /**
+     * PIN 对了，但包裹的凭据打不开库（主密码已在别处改过）⇒ 引导重设。
+     * **不是** PIN 错，故不计入失败次数。
+     */
+    data object StaleCredentials : PinUnlockOutcome
+
+    /** 未启用 / 信封缺失或损坏 ⇒ 回退主密码解锁（**不删登记**，用户可重设自愈）。 */
+    data class Unavailable(val detail: String) : PinUnlockOutcome
 }
 
 /** [VaultRepository.enrollLocalUnlockKdbx] 的结果（UI 据此决定文案与是否重输）。 */

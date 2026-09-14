@@ -8,12 +8,15 @@ import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.datastore.VaultixPreferencesDefaults
 import io.vaultix.domain.ItemRepository
 import io.vaultix.domain.KdbxEnrollOutcome
+import io.vaultix.domain.PIN_MIN_LENGTH
+import io.vaultix.domain.PinEnrollOutcome
 import io.vaultix.domain.VaultRepository
 import io.vaultix.domain.VaultSessionRepository
 import io.vaultix.model.VaultKind
 import io.vaultix.model.VaultSummary
 import io.vaultix.vaultix.security.AutoLockController
 import io.vaultix.vaultix.session.ActiveVaultStore
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
@@ -31,6 +34,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import javax.crypto.Cipher
 import javax.inject.Inject
 
@@ -69,6 +73,13 @@ class SettingsViewModel @Inject constructor(
         val name: String,
         val enabled: Boolean,
         val kind: VaultKind,
+        /**
+         * 应用内 PIN 是否已启用。
+         *
+         * 与 [enabled] **并列而非替代**：两者是彼此独立的解锁路径（快速解锁要系统认证，
+         * PIN 不要），用户可以只要其中之一。所以两个状态都要显示，不能合成一个「已启用」。
+         */
+        val pinEnabled: Boolean,
     )
 
     val state: StateFlow<UiState> = combine(
@@ -94,12 +105,16 @@ class SettingsViewModel @Inject constructor(
             .flatMapLatest { vaults ->
                 combine(
                     vaults.map { vault ->
-                        vaultRepository.localUnlockAvailable(vault.id).map { enabled ->
+                        combine(
+                            vaultRepository.localUnlockAvailable(vault.id),
+                            vaultRepository.pinUnlockAvailable(vault.id),
+                        ) { enabled, pinEnabled ->
                             QuickUnlockVaultUi(
                                 vaultId = vault.id,
                                 name = vault.name,
                                 enabled = enabled,
                                 kind = vault.kind,
+                                pinEnabled = pinEnabled,
                             )
                         }
                     },
@@ -455,6 +470,166 @@ class SettingsViewModel @Inject constructor(
 
     private val _kdbxEnrollState = MutableStateFlow<KdbxEnrollState>(KdbxEnrollState.Idle)
     val kdbxEnrollState: StateFlow<KdbxEnrollState> = _kdbxEnrollState.asStateFlow()
+
+    // ---- 应用内 PIN（定位：解锁便利，非找回手段）----
+
+    /**
+     * PIN 设置对话框状态。
+     *
+     * ⚠️ 分成「输 PIN」与「KDBX 输主密码」**两步**，而不是一个表单塞两件事：
+     * 它们的目的不同（设 PIN vs 证明能开这个库），分开后每一步只有一个问题要回答。
+     */
+    sealed interface PinDialogState {
+        data object Idle : PinDialogState
+
+        /** 第一步：输入 PIN 两次。 */
+        data class Entering(
+            val vaultId: String,
+            val vaultName: String,
+            val kind: VaultKind,
+            val pin: String = "",
+            val confirm: String = "",
+            val error: String? = null,
+        ) : PinDialogState
+
+        /** 第二步（仅 KDBX）：再输一次主密码 —— KDBX 会话里没有它，无法包裹。 */
+        data class AskingKdbxPassword(
+            val vaultId: String,
+            val vaultName: String,
+            val password: String = "",
+            val error: String? = null,
+        ) : PinDialogState
+    }
+
+    private val _pinDialog = MutableStateFlow<PinDialogState>(PinDialogState.Idle)
+    val pinDialog: StateFlow<PinDialogState> = _pinDialog.asStateFlow()
+
+    /**
+     * 第一步收下的 PIN，等 KDBX 那步输完主密码再一起提交。
+     *
+     * 刻意**不放进 UI state**（同解锁页的取向）：对话框 state 会被反复比较与展示，
+     * 明文 PIN 在里面流动没有意义。⚠️ **失败时不抹** —— 抹了用户重试就得从第一步重来。
+     */
+    private var pendingPin: String = ""
+
+    fun openPinDialog(vault: QuickUnlockVaultUi) {
+        pendingPin = ""
+        _pinDialog.value = PinDialogState.Entering(
+            vaultId = vault.vaultId,
+            vaultName = vault.name,
+            kind = vault.kind,
+        )
+    }
+
+    fun dismissPinDialog() {
+        pendingPin = ""
+        _pinDialog.value = PinDialogState.Idle
+    }
+
+    fun onPinChange(value: String) {
+        updatePinEntering { it.copy(pin = value.onlyDigits(), error = null) }
+    }
+
+    fun onPinConfirmChange(value: String) {
+        updatePinEntering { it.copy(confirm = value.onlyDigits(), error = null) }
+    }
+
+    fun onPinKdbxPasswordChange(value: String) {
+        val current = _pinDialog.value as? PinDialogState.AskingKdbxPassword ?: return
+        _pinDialog.value = current.copy(password = value, error = null)
+    }
+
+    private fun String.onlyDigits(): String = filter(Char::isDigit).take(PIN_MIN_LENGTH)
+
+    private fun updatePinEntering(transform: (PinDialogState.Entering) -> PinDialogState.Entering) {
+        val current = _pinDialog.value as? PinDialogState.Entering ?: return
+        _pinDialog.value = transform(current)
+    }
+
+    /**
+     * 第一步提交：校验 PIN 本身（位数 + 两次一致）。
+     *
+     * 规则放在 ViewModel 而不是只在 UI：UI 只负责把 [PinDialogState.Entering.error] 画出来，
+     * 判定只有一处，避免两个入口各写一遍阈值。
+     */
+    fun confirmPinEntry() {
+        val current = _pinDialog.value as? PinDialogState.Entering ?: return
+        if (current.pin.length != PIN_MIN_LENGTH) {
+            _pinDialog.value = current.copy(error = "PIN 需要 $PIN_MIN_LENGTH 位数字")
+            return
+        }
+        if (current.pin != current.confirm) {
+            _pinDialog.value = current.copy(error = "两次输入不一致，请重新输入")
+            return
+        }
+        pendingPin = current.pin
+        if (current.kind == VaultKind.KDBX) {
+            // KDBX 会话里没有主密码 ⇒ 必须再要一次（与快速解锁的 §4.5 同一条约束）。
+            // Bitwarden 侧不需要：会话里就有要包裹的那把密钥。
+            _pinDialog.value = PinDialogState.AskingKdbxPassword(
+                vaultId = current.vaultId,
+                vaultName = current.vaultName,
+            )
+        } else {
+            enrollPin(current.vaultId, masterPassword = null)
+        }
+    }
+
+    fun confirmKdbxPasswordForPin() {
+        val current = _pinDialog.value as? PinDialogState.AskingKdbxPassword ?: return
+        enrollPin(current.vaultId, masterPassword = current.password)
+    }
+
+    /** [masterPassword] 为 null ⇒ Bitwarden 侧（无需主密码）。 */
+    private fun enrollPin(vaultId: String, masterPassword: String?) {
+        viewModelScope.launch {
+            val pin = pendingPin
+            if (pin.isEmpty()) {
+                _pinDialog.value = PinDialogState.Idle
+                return@launch
+            }
+            val outcome = withContext(Dispatchers.IO) {
+                if (masterPassword == null) {
+                    vaultRepository.enrollPin(vaultId, pin)
+                } else {
+                    // keyfile URI 与快速解锁登记同源，不在这里再问一次
+                    val keyFileUri = preferences.kdbxKeyFileUri(vaultId).first()
+                    vaultRepository.enrollPinKdbx(vaultId, pin, masterPassword, keyFileUri)
+                }
+            }
+            when (outcome) {
+                PinEnrollOutcome.Enrolled -> {
+                    pendingPin = ""
+                    _pinDialog.value = PinDialogState.Idle
+                }
+                is PinEnrollOutcome.PinTooShort ->
+                    failPin("PIN 需要 ${outcome.minimum} 位数字")
+                PinEnrollOutcome.InvalidCredentials ->
+                    failPin("主密码不正确，请重新输入")
+                PinEnrollOutcome.SessionUnavailable ->
+                    failPin("请先用主密码解锁该库，再设置 PIN")
+                is PinEnrollOutcome.Failed -> failPin(outcome.detail)
+            }
+        }
+    }
+
+    /**
+     * 把错误回填到**当前那一步**。
+     *
+     * 不无脑退回第一步：KDBX 侧用户已经把 PIN 输过一遍了，退回等于白输。
+     */
+    private fun failPin(message: String) {
+        when (val current = _pinDialog.value) {
+            is PinDialogState.Entering -> _pinDialog.value = current.copy(error = message)
+            is PinDialogState.AskingKdbxPassword ->
+                _pinDialog.value = current.copy(error = message)
+            PinDialogState.Idle -> Unit
+        }
+    }
+
+    fun disablePin(vaultId: String) {
+        viewModelScope.launch { vaultRepository.disablePin(vaultId) }
+    }
 
     sealed interface Event {
         /** UI 收到后弹 BiometricPrompt（cipher 已 init，等待用户认证）。 */

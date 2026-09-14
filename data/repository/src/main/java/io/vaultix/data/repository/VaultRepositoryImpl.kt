@@ -26,6 +26,10 @@ import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.domain.KdbxAddOutcome
 import io.vaultix.domain.KdbxEnrollOutcome
 import io.vaultix.domain.KdbxUnlockOutcome
+import io.vaultix.domain.PIN_MAX_ATTEMPTS
+import io.vaultix.domain.PIN_MIN_LENGTH
+import io.vaultix.domain.PinEnrollOutcome
+import io.vaultix.domain.PinUnlockOutcome
 import io.vaultix.domain.UnlockResult
 import io.vaultix.domain.VaultRepository
 import io.vaultix.domain.VaultSyncReport
@@ -70,6 +74,8 @@ class VaultRepositoryImpl @Inject constructor(
     private val syncService: BitwardenSyncService,
     private val credentials: SecureCredentialStore,
     private val localUnlockKeyStore: LocalUnlockKeyStore,
+    /** 应用内 PIN 的落盘状态与信封开关（与 Keystore KEK 是**两条独立**的解锁路径）。 */
+    private val pinUnlockStore: PinUnlockStore,
     private val preferences: VaultixPreferences,
     /** KDBX 会话变化的可观察桥（见 [KdbxSessionFlow] 的说明）。 */
     private val kdbxSessions: KdbxSessionFlow,
@@ -610,6 +616,148 @@ class VaultRepositoryImpl @Inject constructor(
                 }
             },
         )
+    }
+
+    // ---- 应用内 PIN 解锁（定位：解锁便利，**不是**找回手段）----
+    //
+    // 与快速解锁的关系：**两条独立的解锁路径，包裹同一份明文**。
+    // 快速解锁的保护器是 Keystore KEK（每次需系统认证）；PIN 的保护器是
+    // PIN 派生密钥 + SecureCredentialStore 的硬件外层密钥（不需要系统认证）。
+    // 所以两者各有自己的开关与信封，互不影响（关掉一个不该顺手关掉另一个）。
+
+    // 落盘状态与「打开信封」都在 [PinUnlockStore]（那边**不认识库类型**）；
+    // 这里只负责**跟库对话**：取要包裹的明文、以及解开之后怎么开库。
+
+    override fun pinUnlockAvailable(vaultId: String): Flow<Boolean> =
+        pinUnlockStore.available(vaultId)
+
+    override suspend fun enrollPin(vaultId: String, pin: String): PinEnrollOutcome =
+        withContext(Dispatchers.IO) {
+            pinUnlockStore.validate(pin)?.let { return@withContext it }
+
+            // Bitwarden：要包裹的就是内存会话里那把对称密钥。
+            // 库正解锁 ⇒ 会话在 ⇒ **无需再输主密码**（这是与 KDBX 侧的真正差别）。
+            val key = sessions.keyOf(vaultId)
+                ?: return@withContext PinEnrollOutcome.SessionUnavailable
+            // ⚠️ persist 会接管并清零这份 full key（所有权转移），这里不再持有它。
+            pinUnlockStore.persist(vaultId, pin, buildFullKey(key))
+            PinEnrollOutcome.Enrolled
+        }
+
+    override suspend fun enrollPinKdbx(
+        vaultId: String,
+        pin: String,
+        masterPassword: String,
+        keyFileUri: String?,
+    ): PinEnrollOutcome = withContext(Dispatchers.IO) {
+        pinUnlockStore.validate(pin)?.let { return@withContext it }
+
+        val row = vaultDao.get(vaultId)
+            ?: return@withContext PinEnrollOutcome.Failed("本地不存在该库")
+        if (VaultKind.fromName(row.kind) != VaultKind.KDBX) {
+            return@withContext PinEnrollOutcome.Failed("该库不是 KDBX 类型")
+        }
+
+        // ★ 先校验、后包裹（与 enrollLocalUnlockKdbx 同一条铁律）：
+        //   `PinKeyWrapper.wrap` 只负责封字节、不管字节对不对。先包后校会得到
+        //   「启用成功、但躺的是错密码」—— 用户要到下次解锁才看到
+        //   「PIN 对了却打不开库」，那时已经无从判断是 PIN 错还是密码错。
+        val verification = unlockKdbxInternal(
+            vaultId = vaultId,
+            sourceUri = row.origin,
+            password = masterPassword,
+            keyFileUri = keyFileUri,
+        )
+        if (verification != UnlockResult.Success) {
+            return@withContext when (verification) {
+                UnlockResult.InvalidCredentials -> PinEnrollOutcome.InvalidCredentials
+                else -> PinEnrollOutcome.Failed(
+                    (verification as? UnlockResult.Unknown)?.detail ?: "无法打开该库",
+                )
+            }
+        }
+
+        // keyfile 字节当场从 URI 读出：只包 URI 不行（授权可能失效、用户可能换过文件）。
+        val keyFileBytes = keyFileUri
+            ?.takeIf { it.isNotBlank() }
+            ?.let { uri -> runCatching { kdbxSource.read(uri) }.getOrNull() }
+        // ⚠️ persist 会接管并清零这份明文（所有权转移）
+        pinUnlockStore.persist(vaultId, pin, KdbxUnlockPayload.encode(masterPassword, keyFileBytes))
+        PinEnrollOutcome.Enrolled
+    }
+
+    override suspend fun completePinUnlock(vaultId: String, pin: String): PinUnlockOutcome =
+        withContext(Dispatchers.IO) {
+            val open = pinUnlockStore.open(vaultId, pin)
+            if (open !is PinOpen.Opened) {
+                return@withContext open.toFailureOutcome()
+            }
+            val opened = runCatching {
+                sessions.unlock(vaultId, SymmetricCryptoKey.fromFullKey(open.payload))
+            }
+            // 明文用完即擦：无论成功与否都要走这一步
+            open.payload.fill(0)
+            if (opened.isFailure) {
+                return@withContext PinUnlockOutcome.Unavailable(
+                    opened.exceptionOrNull()?.message ?: "PIN 解锁失败",
+                )
+            }
+            // 与 completeLocalUnlock 同款：进程重启后走本地解锁也要能预挂 Bearer
+            authRepository.registerServer(vaultId)
+            // 成功了才清失败计数（失败计数由 PinUnlockStore 自己维护）
+            pinUnlockStore.clearFailures(vaultId)
+            PinUnlockOutcome.Opened
+        }
+
+    override suspend fun completePinUnlockKdbx(vaultId: String, pin: String): PinUnlockOutcome =
+        withContext(Dispatchers.IO) {
+            val open = pinUnlockStore.open(vaultId, pin)
+            if (open !is PinOpen.Opened) {
+                return@withContext open.toFailureOutcome()
+            }
+            val decoded = KdbxUnlockPayload.decode(open.payload)
+            open.payload.fill(0)
+            val credential = when (decoded) {
+                is KdbxUnlockPayload.DecodeResult.Ok -> decoded
+                is KdbxUnlockPayload.DecodeResult.Malformed ->
+                    return@withContext PinUnlockOutcome.Unavailable(decoded.detail)
+            }
+
+            val row = vaultDao.get(vaultId)
+                ?: return@withContext PinUnlockOutcome.Unavailable("本地不存在该库")
+            val result = try {
+                Kdbx.unlock(
+                    vaultId = vaultId,
+                    sourceUri = row.origin,
+                    password = credential.masterPassword,
+                    // keyfile 字节直接喂进去，**不落临时文件**（见 `Kdbx.unlock` 的 KDoc）。
+                    keyFileUri = null,
+                    source = kdbxSource,
+                    keyFileBytes = credential.keyFileBytes,
+                )
+            } finally {
+                credential.keyFileBytes?.fill(0)
+            }
+            result.fold(
+                onSuccess = {
+                    sessions.clearViewLock(vaultId)
+                    kdbxSessions.bump()
+                    pinUnlockStore.clearFailures(vaultId)
+                    PinUnlockOutcome.Opened
+                },
+                onFailure = { error ->
+                    when ((error as? KdbxFailure)?.error) {
+                        // PIN **没错**，是包裹的凭据开不了库（主密码在别处被改过）
+                        // ⇒ 不计失败次数：用户不该为「我没输错」被锁在门外。
+                        is KdbxOpenError.InvalidCredentials -> PinUnlockOutcome.StaleCredentials
+                        else -> PinUnlockOutcome.Unavailable(error.message ?: "无法打开该库")
+                    }
+                },
+            )
+        }
+
+    override suspend fun disablePin(vaultId: String) {
+        pinUnlockStore.disable(vaultId)
     }
 
     override suspend fun syncVault(vaultId: String): VaultSyncReport {

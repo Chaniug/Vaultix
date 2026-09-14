@@ -114,6 +114,9 @@ class UnlockViewModelTest {
         val repository = mockk<VaultRepository>()
         every { repository.observeVaults() } answers { vaultFlow() }
         every { repository.localUnlockAvailable(any()) } returns flowOf(available)
+        // PIN 入口是**另一条独立**的可用性流：本文件测的是指纹入口，
+        // 所以这里恒为 false（PIN 入口不渲染，不干扰断言）。要测 PIN 请另开用例。
+        every { repository.pinUnlockAvailable(any()) } returns flowOf(false)
         coEvery { repository.prepareLocalUnlock(any()) } returns null
 
         val sessions = mockk<VaultSessionRepository>()

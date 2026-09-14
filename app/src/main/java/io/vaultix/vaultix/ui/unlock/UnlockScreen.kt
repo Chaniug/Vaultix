@@ -1,6 +1,8 @@
 package io.vaultix.vaultix.ui.unlock
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -35,6 +37,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
@@ -53,10 +56,14 @@ import io.vaultix.vaultix.ui.common.TwoFactorStep
 import io.vaultix.vaultix.ui.common.rememberFragmentActivity
 import io.vaultix.vaultix.ui.error.UnlockUiError
 import io.vaultix.vaultix.ui.error.unlockErrorText
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.filled.Backspace
 import androidx.compose.material.icons.filled.Fingerprint
+import androidx.compose.material.icons.filled.Pin
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.TextButton
 import androidx.compose.foundation.layout.width
+import io.vaultix.domain.PIN_MIN_LENGTH
 
 /**
  * 解锁页（Docs/08 S6）。
@@ -209,13 +216,10 @@ fun UnlockScreen(
                 )
             }
             Spacer(Modifier.height(16.dp))
-            PasswordForm(
+            UnlockInputSection(
                 state = state,
                 viewModel = viewModel,
                 focusManager = focusManager,
-                quickUnlockVisible = state.localUnlockAvailable && state.twoFactor == null,
-                quickUnlockEnabled = !state.submitting,
-                onQuickUnlock = viewModel::startLocalUnlock,
             )
             // 「换一个库」：多库时才有意义。放在最底下、用轻量文字按钮 ——
             // 它是**次要出口**，不能与主解锁按钮抢视觉焦点（同 2026-09-13 指纹图标的取舍）。
@@ -383,6 +387,7 @@ private fun PasswordForm(
     quickUnlockVisible: Boolean,
     quickUnlockEnabled: Boolean,
     onQuickUnlock: () -> Unit,
+    onPinUnlock: () -> Unit,
 ) {
     OutlinedTextField(
         value = state.password,
@@ -430,6 +435,22 @@ private fun PasswordForm(
         enabled = quickUnlockEnabled,
         onStart = onQuickUnlock,
     )
+
+    // 应用内 PIN 入口：与指纹**并列**的另一种本地解锁手段。
+    // - 只在**已启用**时出现（没启用却给入口 = 点了必然失败，那是骗人）；
+    // - 2FA 步骤中不给：那一步的语义是「验验证码」，多一个出口只会让用户分神；
+    // - 与指纹入口并列而非替换：两者可以同时启用，用户按当下条件挑。
+    if (state.pinUnlockAvailable && state.twoFactor == null) {
+        TextButton(onClick = onPinUnlock, enabled = !state.submitting) {
+            Icon(
+                imageVector = Icons.Filled.Pin,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(stringResource(R.string.pin_unlock_enter))
+        }
+    }
 
     unlockErrorText(state.error)?.let { message ->
         Text(
@@ -489,6 +510,151 @@ private fun PasswordForm(
  * 单独成函数而非内联在 [UnlockScreen]：把守卫条件与相关状态隔离在此，避免主函数的
  * CyclomaticComplexMethod / ComplexCondition 越界（CI detekt 质量门会拦）。
  */
+
+/**
+ * 解锁输入区：**PIN 模式与主密码模式二选一**。
+ *
+ * PIN 模式**整体替换**主密码表单，而不是叠在它下面：两种输入方式的键盘与提交时机
+ * 都不同（PIN 满 6 位自动提交，主密码要按按钮），并存只会让用户不知道该按哪里。
+ *
+ * 抽成独立 composable 的直接原因是不让 [UnlockScreen] 越过 detekt
+ * `CyclomaticComplexMethod`（加这一个分支就把它顶到 15，上限 14）——
+ * 但这个二选一本来就是一个独立概念，抽出来两边都更清楚。
+ */
+@Composable
+private fun UnlockInputSection(
+    state: UnlockViewModel.UiState,
+    viewModel: UnlockViewModel,
+    focusManager: androidx.compose.ui.focus.FocusManager,
+) {
+    if (state.pinMode) {
+        PinPad(state = state, viewModel = viewModel)
+    } else {
+        PasswordForm(
+            state = state,
+            viewModel = viewModel,
+            focusManager = focusManager,
+            quickUnlockVisible = state.localUnlockAvailable && state.twoFactor == null,
+            quickUnlockEnabled = !state.submitting,
+            onQuickUnlock = viewModel::startLocalUnlock,
+            onPinUnlock = viewModel::enterPinMode,
+        )
+    }
+}
+
+/** PIN 圆点直径。 */
+private val PIN_DOT_SIZE = 14.dp
+
+/** 单个按键直径。64dp 远大于 Material 的 48dp 最小可点区域，戴手套/湿手也按得准。 */
+private val PIN_KEY_SIZE = 64.dp
+
+/** 数字键布局（3 行 9 键）；第 4 行「空 + 0 + 退格」在 [PinPad] 里单独拼。 */
+private val PIN_DIGIT_ROWS = listOf(
+    listOf("1", "2", "3"),
+    listOf("4", "5", "6"),
+    listOf("7", "8", "9"),
+)
+
+/**
+ * 应用内 PIN 输入面板（**自绘** 3×4 数字键盘）。
+ *
+ * **为什么自绘而不是用系统数字键盘**：PIN 的使用场景就是「想快点进去」——
+ * 自绘键盘无需弹出 IME，省掉一次系统动画与焦点切换，也不会被输入法候选栏把页面顶起来。
+ *
+ * 满 [PIN_MIN_LENGTH] 位**自动提交**（见 `UnlockViewModel.onPinDigit`），因此这里
+ * **没有「确认」键**：右下角是退格。少一个键 = 少一个要想「现在该按哪个」的时刻。
+ *
+ * 失败提示紧跟圆点，并且**保留「改用主密码」出口** —— 锁定或忘了 PIN 时，
+ * 那条路是用户唯一的出路，不能藏在别处。
+ */
+@Composable
+private fun PinPad(state: UnlockViewModel.UiState, viewModel: UnlockViewModel) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        PinDots(filled = state.pinLength, total = PIN_MIN_LENGTH)
+        state.pinError?.let { message ->
+            Text(
+                text = message,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 12.dp),
+            )
+        }
+        Spacer(Modifier.height(20.dp))
+        PIN_DIGIT_ROWS.forEach { row ->
+            Row(horizontalArrangement = Arrangement.Center, modifier = Modifier.fillMaxWidth()) {
+                row.forEach { digit ->
+                    PinKey(
+                        label = digit,
+                        enabled = !state.pinSubmitting,
+                        onClick = { viewModel.onPinDigit(digit.first()) },
+                    )
+                }
+            }
+        }
+        Row(horizontalArrangement = Arrangement.Center, modifier = Modifier.fillMaxWidth()) {
+            // 左下留空：让 0 居中、退格落右，与系统拨号盘同款布局
+            Spacer(Modifier.size(PIN_KEY_SIZE))
+            PinKey(
+                label = "0",
+                enabled = !state.pinSubmitting,
+                onClick = { viewModel.onPinDigit('0') },
+            )
+            IconButton(
+                onClick = viewModel::onPinBackspace,
+                enabled = !state.pinSubmitting,
+                modifier = Modifier.size(PIN_KEY_SIZE),
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Backspace,
+                    contentDescription = stringResource(R.string.pin_unlock_backspace),
+                )
+            }
+        }
+        TextButton(onClick = viewModel::exitPinMode, enabled = !state.pinSubmitting) {
+            Text(stringResource(R.string.pin_unlock_use_master))
+        }
+    }
+}
+
+/** 已输入位数指示：实心 = 已输，浅色 = 待输。⚠️ 只画点数，**不回显数字**。 */
+@Composable
+private fun PinDots(filled: Int, total: Int) {
+    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+        repeat(total) { index ->
+            Box(
+                modifier = Modifier
+                    .size(PIN_DOT_SIZE)
+                    .clip(CircleShape)
+                    .background(
+                        if (index < filled) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.surfaceVariant
+                        },
+                    ),
+            )
+        }
+    }
+}
+
+@Composable
+private fun PinKey(label: String, enabled: Boolean, onClick: () -> Unit) {
+    TextButton(
+        onClick = onClick,
+        enabled = enabled,
+        shape = CircleShape,
+        modifier = Modifier.size(PIN_KEY_SIZE),
+    ) {
+        Text(text = label, style = MaterialTheme.typography.headlineSmall)
+    }
+}
+
 @Composable
 private fun AutoPromptQuickUnlock(
     localUnlockAvailable: Boolean,
