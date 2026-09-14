@@ -485,6 +485,66 @@ class KdfTest {
             .isEqualTo("hE1uCS3vlWo9J3PkHXIb8tlaHY9STZcMp2zSBSigNnk=")
     }
 
+    @Test
+    fun deriveKeyArgon2_isDeterministicForSameInputs() {
+        val salt = hexToBytes("000102030405060708090a0b0c0d0e0f")
+        val first = crypto.deriveKeyArgon2("123456", salt, 1, 8, 1)
+        val second = crypto.deriveKeyArgon2("123456", salt, 1, 8, 1)
+        try {
+            assertThat(first.useBytes { it.toHex() }).isEqualTo(second.useBytes { it.toHex() })
+        } finally {
+            first.zero()
+            second.zero()
+        }
+    }
+
+    @Test
+    fun deriveKeyArgon2_variesWithPassphraseAndSalt() {
+        val salt = hexToBytes("000102030405060708090a0b0c0d0e0f")
+        val otherSalt = hexToBytes("0f0e0d0c0b0a09080706050403020100")
+        val baseline = crypto.deriveKeyArgon2("123456", salt, 1, 8, 1)
+        val otherPassphrase = crypto.deriveKeyArgon2("123457", salt, 1, 8, 1)
+        val otherSaltKey = crypto.deriveKeyArgon2("123456", otherSalt, 1, 8, 1)
+        try {
+            val base = baseline.useBytes { it.toHex() }
+            assertThat(otherPassphrase.useBytes { it.toHex() }).isNotEqualTo(base)
+            assertThat(otherSaltKey.useBytes { it.toHex() }).isNotEqualTo(base)
+        } finally {
+            baseline.zero()
+            otherPassphrase.zero()
+            otherSaltKey.zero()
+        }
+    }
+
+    @Test
+    fun deriveKeyArgon2_doesNotMutateCallerSalt() {
+        // KDoc 承诺「不改写调用方的数组」—— 承诺要有测试守着，否则是空话
+        val salt = hexToBytes("000102030405060708090a0b0c0d0e0f")
+        val before = salt.toHex()
+        crypto.deriveKeyArgon2("123456", salt, 1, 8, 1).zero()
+        assertThat(salt.toHex()).isEqualTo(before)
+    }
+
+    @Test
+    fun deriveKeyArgon2_equalsMasterKeyArgon2WhenFedTheSha256OfTheSaltString() {
+        // ★ 一条抵两条：
+        //   ① 证明重构后两个公开入口确实**共用同一实现主体**（否则不可能逐字节相等）；
+        //   ② 坐实 KDoc 承诺 —— 两条入口的唯一差异就是「盐是否先做 SHA-256」：
+        //      把 sha256(盐字符串) 直接喂给通用入口，结果必须与主密钥入口完全一致。
+        val saltText = "nuser@example.com"
+        val argonSalt = sha256(utf8(saltText))
+        val viaRawSalt = crypto.deriveKeyArgon2("asdfasdf", argonSalt, 1, 8, 1)
+        val viaMasterKey = crypto.deriveMasterKeyArgon2("asdfasdf", saltText, 1, 8, 1)
+        try {
+            assertThat(viaRawSalt.useBytes { it.toHex() })
+                .isEqualTo(viaMasterKey.useBytes { it.toHex() })
+        } finally {
+            viaRawSalt.zero()
+            viaMasterKey.zero()
+            argonSalt.fill(0)
+        }
+    }
+
     private companion object {
         const val MB = 1024L * 1024L
 

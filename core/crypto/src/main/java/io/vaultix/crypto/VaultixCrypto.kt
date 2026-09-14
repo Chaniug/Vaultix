@@ -112,13 +112,7 @@ class VaultixCrypto @Inject constructor(
     /**
      * Argon2id 派生 Master Key（Bitwarden KdfType=1，首选）。
      *
-     * 健壮性设计（搬运自 Bastion，勿删）：
-     * - 优先走 [Argon2Kt] native 实现（快 10x 以上，且不受 Android 堆限制）；
-     * - native 失败时：
-     *   - [CancellationException] / [ThreadDeath] 原样透传（协程取消与线程终止不得被吞）；
-     *   - 请求内存 > [ARGON2_JVM_FALLBACK_MAX_MEMORY_MB] 时直接报错——JVM 回退会在
-     *     Android 堆上分配同等大小的块，极易 OOM，不做这个闸门就是线上崩溃点；
-     *   - 否则先过 [Argon2MemoryGuard] 内存护栏，再回退 BouncyCastle。
+     * 健壮性设计（搬运自 Bastion，勿删）见 [deriveArgon2WithFallback]。
      *
      * @param password 用户主密码
      * @param salt 盐值（内部先做 SHA-256，对齐 Bitwarden/Keyguard 实现）
@@ -127,11 +121,6 @@ class VaultixCrypto @Inject constructor(
      * @param parallelism 并行度 p
      * @return 32 字节 Master Key
      */
-    /**
-     * @suppress TooGenericExceptionCaught：native Argon2 失败原因不可预知（so 缺失、
-     * 链接错误、内存不足等），统一走 BC 回退；取消/线程死亡在 catch 内显式透传。
-     */
-    @Suppress("TooGenericExceptionCaught")
     fun deriveMasterKeyArgon2(
         password: String,
         salt: String,
@@ -139,14 +128,68 @@ class VaultixCrypto @Inject constructor(
         memoryMb: Int = DEFAULT_ARGON2_MEMORY_MB,
         parallelism: Int = DEFAULT_ARGON2_PARALLELISM,
     ): SecureBytes {
-        val passwordBytes = password.toByteArray(StandardCharsets.UTF_8)
         val saltBytes = salt.toByteArray(StandardCharsets.UTF_8)
-        val saltHash = sha256(saltBytes)
+        val argonSalt = try {
+            sha256(saltBytes)
+        } finally {
+            saltBytes.fill(0)
+        }
+        return deriveArgon2WithFallback(password, argonSalt, iterations, memoryMb, parallelism)
+            .also { argonSalt.fill(0) }
+    }
+
+    /**
+     * 用 Argon2id 从**任意口令**派生 32 字节密钥，**盐原样使用**。
+     *
+     * 与 [deriveMasterKeyArgon2] 共用同一实现主体（native 优先 → BC 回退 → 内存护栏），
+     * 唯一区别是盐：那次 SHA-256 是 Bitwarden 的**协议约定**，与通用 KDF 无关；
+     * 自有格式（如应用内 PIN）照抄只会平添一层费解，故这里直接吃原始盐。
+     *
+     * 用途：PIN 包裹层 —— PIN 熵极低，必须靠 Argon2id 的**内存硬**特性抬高
+     * 离线爆破成本（见 `PinKeyWrapper` 的安全模型说明）。
+     *
+     * @param passphrase 用户 PIN / 口令
+     * @param salt 随机盐（建议 ≥16 字节；本方法**不改写**调用方的数组）
+     * @return 32 字节密钥（[SecureBytes]，用完请 `zero()`）
+     */
+    fun deriveKeyArgon2(
+        passphrase: String,
+        salt: ByteArray,
+        iterations: Int = DEFAULT_ARGON2_ITERATIONS,
+        memoryMb: Int = DEFAULT_ARGON2_MEMORY_MB,
+        parallelism: Int = DEFAULT_ARGON2_PARALLELISM,
+    ): SecureBytes {
+        val argonSalt = salt.copyOf()
+        return deriveArgon2WithFallback(passphrase, argonSalt, iterations, memoryMb, parallelism)
+            .also { argonSalt.fill(0) }
+    }
+
+    /**
+     * Argon2id 派生主体：native 优先，失败按护栏回退 BouncyCastle。
+     *
+     * ⚠️ 这段健壮性设计**搬运自 Bastion，勿删**（原注释见 [deriveMasterKeyArgon2]）：
+     * 取消/线程终止必须原样透传；请求内存超过 JVM 回退上限时**宁可报错也不回退**
+     * （回退会在 Android 堆上一次性分配同等大小的块，是实打实的线上崩溃点）。
+     *
+     * 两个公开入口（Bitwarden 主密钥 / 通用口令）共用本主体 —— 复制一份等于把
+     * 上述健壮性约束变成两处，迟早漂移。
+     *
+     * @param argonSalt 已就绪的盐（调用方负责清零传入的数组）
+     */
+    @Suppress("TooGenericExceptionCaught")
+    private fun deriveArgon2WithFallback(
+        password: String,
+        argonSalt: ByteArray,
+        iterations: Int,
+        memoryMb: Int,
+        parallelism: Int,
+    ): SecureBytes {
+        val passwordBytes = password.toByteArray(StandardCharsets.UTF_8)
 
         val hash = try {
             deriveArgon2Native(
                 passwordBytes = passwordBytes,
-                saltHash = saltHash,
+                saltHash = argonSalt,
                 iterations = iterations,
                 memoryMb = memoryMb,
                 parallelism = parallelism,
@@ -167,15 +210,13 @@ class VaultixCrypto @Inject constructor(
             Argon2MemoryGuard.requireCanRun(memoryMb)
             deriveArgon2BouncyCastle(
                 passwordBytes = passwordBytes,
-                saltHash = saltHash,
+                saltHash = argonSalt,
                 iterations = iterations,
                 memoryMb = memoryMb,
                 parallelism = parallelism,
             )
         } finally {
             passwordBytes.fill(0)
-            saltBytes.fill(0)
-            saltHash.fill(0)
         }
 
         return SecureBytes.of(hash, wipeSource = true)
