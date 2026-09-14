@@ -123,36 +123,39 @@
     <string name="group_vaults">密码库</string>
     <string name="settings_active_vault">当前密码库</string>
     <string name="settings_add_vault_desc">连接 Bitwarden 云端，或打开本机 .kdbx 文件</string>
+    <!-- 已有一个库时的措辞：避免「连接 Bitwarden」暗示要改当前库（见 .ai/decisions/设置页信息架构-定稿.md §5.2） -->
+    <string name="settings_add_vault_desc_another">添加另一个密码库：Bitwarden 云端或本机 .kdbx 文件</string>
     <string name="settings_active_vault_none">未解锁任何库</string>
     <string name="settings_active_vault_locked_hint">还没有任何密码库，请先添加一个</string>
     <string name="settings_default_vault_hint">勾选表示本次使用该库；「设为默认」决定下次打开应用先进入哪个库。</string>
     <string name="settings_vault_locked_suffix">未解锁 · 需先输入主密码</string>
     <string name="settings_vault_default_badge">默认</string>
     <string name="settings_vault_set_default">设为默认</string>
-    <string name="group_security">安全</string>
-    <string name="group_appearance">外观</string>
-    <string name="group_data">数据管理</string>
+    <!-- 组名按「设置页信息架构-定稿」§5.3：安全→解锁与隐私 / 外观→显示与填充 / 数据管理→数据 -->
+    <string name="group_security">解锁与隐私</string>
+    <string name="group_appearance">显示与填充</string>
+    <string name="group_data">数据</string>
     <string name="permission_management_title">权限管理</string>
-    <string name="permission_management_subtitle">在系统应用信息页查看 / 调整 Vaultix 的权限</string>
+    <string name="permission_management_subtitle">在系统设置页查看与调整应用权限</string>
     <string name="group_about">关于</string>
     <string name="setting_auto_lock">自动锁定</string>
-    <string name="setting_clipboard_clear">复制后清除剪贴板</string>
+    <string name="setting_clipboard_clear">剪贴板清除</string>
     <string name="setting_screen_security">防截屏</string>
-    <string name="setting_screen_security_desc">阻止截屏与最近任务缩略图显示内容</string>
+    <string name="setting_screen_security_desc">阻止截屏与最近任务缩略图</string>
     <string name="setting_dynamic_color">动态取色</string>
     <string name="setting_dynamic_color_desc">跟随系统主题色（Android 12+）</string>
     <string name="setting_theme_mode">主题模式</string>
     <string name="theme_mode_system">跟随系统</string>
     <string name="theme_mode_light">浅色</string>
     <string name="theme_mode_dark">深色</string>
-    <string name="setting_oled_pure_black">OLED 纯黑</string>
+    <string name="setting_oled_pure_black">纯黑背景</string>
     <string name="setting_oled_pure_black_desc">深色模式使用纯黑背景（省电 / 减少烙印）</string>
-    <string name="setting_trash_auto_delete">回收站自动清理</string>
+    <string name="setting_trash_auto_delete">回收站清理</string>
     <string name="setting_lock_now">立即锁定</string>
     <string name="setting_lock_now_desc">清零全部库的解锁密钥并返回列表</string>
     <!-- 「立即锁定」→「退出数据库」（用户语义：清本地缓存，不动远程） -->
     <string name="setting_exit_database">退出数据库</string>
-    <string name="setting_exit_database_desc">清除本地缓存（条目 / 登录凭据 / 待上传改动）并锁定；库保留在列表中，远程数据不受影响</string>
+    <string name="setting_exit_database_desc">清空本地缓存并锁定；库与远程数据保留</string>
     <string name="setting_exit_database_confirm">将清除本机上的条目缓存、登录凭据与快速解锁设置，并锁定全部库。\n\n· 远程（服务器）数据不受影响，下次登录会重新拉取；\n· 本机尚未上传的改动会丢失（离线编辑的内容）。\n\n确定退出吗？</string>
     <string name="setting_exit_database_action">退出</string>
 
@@ -172,14 +175,14 @@
 
     <!-- 设置首页「自动填充」入口 → 二级页（对齐 Bastion 设置 → 自动填充的嵌套结构） -->
     <string name="autofill_settings_entry">自动填充设置</string>
-    <string name="autofill_settings_entry_desc">系统服务 / 通行密钥 / 填充行为 / 验证器 / 保存行为</string>
+    <string name="autofill_settings_entry_desc">系统服务、通行密钥与填充行为</string>
 
     <!-- 验证器（对齐 Bastion「验证器」分组 autofill_otp_settings_title） -->
     <string name="group_otp">验证器</string>
 
     <!-- 二级页分组 -->
     <string name="group_autofill_system">系统设置</string>
-    <string name="group_others">其他</string>
+    <!-- group_others 已移除：权限管理并入「关于」后该组只剩空标题（定稿 §5.3） -->
     <string name="autofill_status_refresh">刷新状态</string>
     <string name="group_autofill_behavior">填充行为</string>
     <string name="group_passkey">通行密钥</string>
@@ -256,13 +259,13 @@
     <string name="quick_unlock_banner_text">锁定后可免主密码快速打开（生物识别或设备 PIN，不会再次要求两步验证）</string>
     <string name="action_enable">启用</string>
     <string name="action_later">以后再说</string>
-    <string name="settings_quick_unlock">生物识别快速解锁</string>
-    <string name="settings_quick_unlock_desc">锁定后免主密码/免 2FA 重新打开；关闭入口见下方列表</string>
+    <string name="settings_quick_unlock">快速解锁</string>
+    <string name="settings_quick_unlock_desc">锁定后用生物识别重新打开，免主密码与两步验证</string>
     <string name="quick_unlock_manage_none">尚未启用任何库</string>
     <string name="quick_unlock_enable">启用</string>
     <string name="quick_unlock_disable">关闭</string>
     <string name="quick_unlock_enabled">已启用</string>
-    <string name="quick_unlock_disabled">未启用（点右侧「启用」即可）</string>
+    <string name="quick_unlock_disabled">未启用</string>
     <string name="quick_unlock_device_unsupported">未启用（本设备未设置锁屏或生物识别，无法启用）</string>
     <!-- 快速解锁「生效范围」（定稿 §4.7：一把指纹钥匙管哪些库由用户勾选） -->
     <string name="quick_unlock_scope_hint">选择这把指纹钥匙能打开哪些库。</string>
@@ -344,7 +347,7 @@
     <string name="items_search_empty">没有匹配的条目</string>
     <!-- 条目分组（密码 Tab 顶栏图标弹出；分组维度取模型里真实存在的三种 + 不分组） -->
     <string name="items_group_mode">分组方式</string>    <!-- 显示选项（对齐 Bastion PasswordDisplayOptionsSheet 的语义，维度按 Vaultix 模型裁剪） -->
-    <string name="items_display_options">显示选项</string>
+    <string name="items_display_options">条目显示</string>
     <string name="setting_display_options_desc">分组方式、卡片显示多少信息、是否显示图标</string>
     <string name="items_card_display">卡片显示</string>
     <string name="items_display_all">标题 + 用户名</string>
@@ -658,8 +661,8 @@
     <string name="card_wallet_no_match">没有匹配的卡片</string>
     <string name="card_wallet_new">新建银行卡</string>
 
-    <!-- 导入与导出（对齐 Bitwarden 官方加密导出/导入；入口在设置首页「数据管理」） -->
-    <string name="import_export_entry">导入 / 导出</string>
+    <!-- 导入与导出（对齐 Bitwarden 官方加密导出/导入；入口在设置首页「数据」组） -->
+    <string name="import_export_entry">导入与导出</string>
     <string name="import_export_entry_desc">把全部条目备份为加密文件，或从备份恢复</string>
     <string name="import_export_title">导入与导出</string>
 

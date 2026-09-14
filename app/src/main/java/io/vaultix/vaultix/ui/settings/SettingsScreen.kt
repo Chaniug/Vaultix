@@ -7,6 +7,7 @@ import android.provider.Settings
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -20,7 +21,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Contrast
@@ -92,17 +92,30 @@ import io.vaultix.vaultix.ui.common.deviceCanAuthenticate
 import io.vaultix.vaultix.ui.common.rememberFragmentActivity
 import io.vaultix.vaultix.ui.common.trashAutoDeleteLabel
 import io.vaultix.vaultix.ui.theme.ThemeMode
+import io.vaultix.vaultix.ui.theme.Spacing
 
 /**
- * 设置页（最小版）：安全（自动锁定 / 剪贴板清除 / 防截屏 / 立即锁定）、
- * 外观（动态取色）、关于。行与选择器交互范式参考 Bastion 设置页。
+ * 设置页。**5 组**（原 7 组），自上而下：
+ *
+ * | 组 | 内容 |
+ * |---|---|
+ * | 密码库 | 当前密码库 · 添加密码库 |
+ * | 解锁与隐私 | 快速解锁 · 自动锁定 · 防截屏 · 剪贴板清除 |
+ * | 显示与填充 | 主题模式 · 动态取色 · 纯黑背景 · 条目显示 · 自动填充设置 |
+ * | 数据 | 导入与导出 · 回收站清理 · **退出数据库**（error 色，置底） |
+ * | 关于 | 权限管理 · 版本 · 源码与反馈 · 开源许可 |
+ *
+ * 组内顺序原则：入口类在前、开关类居中、**破坏性动作置底**。
+ * 结构与文案的来龙去脉见 `.ai/decisions/设置页信息架构-定稿.md`（**别重新设计分组**）。
+ *
+ * 行与选择器交互范式参考 Bastion 设置页。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit,
     onOpenAutofillSettings: () -> Unit,
-    /** 「数据管理」分区：导入 / 导出加密备份（导航到二级页）。 */
+    /** 「数据」分区：导入 / 导出加密备份（导航到二级页）。 */
     onOpenImportExport: () -> Unit = {},
     /** 主界面 Tab 内嵌模式：隐藏返回键（无上层可返回）。 */
     embedded: Boolean = false,
@@ -152,32 +165,39 @@ fun SettingsScreen(
             // 后者会把滚动视口整体下压 ⇒ 内容永远画不到顶栏区域，收起顶栏后
             // 顶栏下方留一条死区（「不沉浸」）；Spacer 会随内容一起滚走。
             Spacer(modifier = Modifier.height(barPadding))
-            // ---- 库（活跃库 = 全局单一真源；Bastion 里它是筛选维度，Vaultix 收成一个） ----
+            // ---- 密码库（活跃库 = 全局单一真源，详见 VaultSection 的 KDoc）----
             VaultSection(
                 viewModel = viewModel,
                 onAddBitwardenVault = onAddBitwardenVault,
                 onAddKdbxVault = onAddKdbxVault,
             )
 
-            // ---- 安全（拆分为独立 composable：主函数要守住 detekt LongMethod ≤150） ----
-            SecuritySection(
+            // ---- 解锁与隐私（拆出去守住 detekt LongMethod ≤150）----
+            // ⚠️ 「退出数据库」是数据动作，已移到「数据」组置底（定稿 §2①）
+            UnlockPrivacySection(
                 viewModel = viewModel,
                 state = state,
                 onAutoLock = { showAutoLockDialog = true },
                 onClipboardClear = { showClipboardDialog = true },
                 onQuickUnlock = { showQuickUnlockDialog = true },
+            )
+
+            // ---- 显示与填充（自动填充入口已并入，原单行组）----
+            DisplaySection(
+                viewModel = viewModel,
+                dynamicColor = state.dynamicColor,
+                onOpenAutofillSettings = onOpenAutofillSettings,
+            )
+
+            // ---- 数据（导入导出 / 回收站清理 / 退出数据库）----
+            DataSection(
+                viewModel = viewModel,
+                onOpenImportExport = onOpenImportExport,
                 onExitDatabase = { showExitDatabaseDialog = true },
             )
 
-            // ---- 外观 / 数据（批次④：Bastion SettingsScreen 对照补缺） ----
-            AppearanceSection(viewModel, dynamicColor = state.dynamicColor)
-            DataSection(viewModel, onOpenImportExport = onOpenImportExport)
-
-            // ---- 自动填充（M2-a：系统 AutofillService 入口 → 二级设置页） ----
-            AutofillSection(onOpenAutofillSettings = onOpenAutofillSettings)
-
-            // ---- 其他 / 关于（同上：拆出去守住函数长度门禁） ----
-            OthersSection(
+            // ---- 关于（权限管理已并入，原「其他」组仅此一行）----
+            AboutSection(
                 context = context,
                 // ⚠️ **只显示 versionName，不拼 versionCode**（2026-09-14 用户报告）。
                 // 原先拼成 `0.3.0 (3000)` / 旧版本是 `… (1)`，那个括号长得很像浏览器给
@@ -189,27 +209,15 @@ fun SettingsScreen(
                 versionName = BuildConfig.VERSION_NAME,
                 onShowLicense = { showAboutDialog = true },
             )
-            Spacer(Modifier.height(32.dp))
+            Spacer(Modifier.height(Spacing.xxl))
             // 底部留出叠层悬浮底栏的高度（顶部的让位见上方 Spacer(barPadding)）：
             // 底栏改成叠层后内容铺到屏幕底，最后一项不再被胶囊压住。
             Spacer(Modifier.height(bottomInset))
         }
-            VaultixExpressiveTopBar(
-                title = stringResource(R.string.settings_title),
+            SettingsTopBar(
                 collapseFraction = collapse,
-                modifier = Modifier.align(Alignment.TopCenter),
-                navigationIcon = if (embedded) {
-                    null
-                } else {
-                    {
-                        IconButton(onClick = onBack) {
-                            Icon(
-                                Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = stringResource(R.string.action_back),
-                            )
-                        }
-                    }
-                },
+                embedded = embedded,
+                onBack = onBack,
             )
         }
     }
@@ -292,6 +300,42 @@ fun SettingsScreen(
 }
 
 /**
+ * 设置页顶栏（沉浸式：大标题随滚动缩小，状态栏区域由顶栏背景覆盖）。
+ *
+ * 抽成独立 composable 是为了让 [SettingsScreen] 主函数守住 detekt `LongMethod`（≤150 行）：
+ * 返回键分支内联在宿主里要占十几行，而它与「分组内容」完全无关。
+ *
+ * ⚠️ 必须声明为 [BoxScope] 扩展：`Modifier.align(TopCenter)` 只在 Box 作用域内可用 ——
+ * 顶栏是**叠在内容之上**的，Scaffold 不为它预留高度（见宿主的 `contentWindowInsets`）。
+ *
+ * @param embedded 主界面 Tab 内嵌模式：无上层可返回 ⇒ 不画返回键。
+ */
+@Composable
+private fun BoxScope.SettingsTopBar(
+    collapseFraction: Float,
+    embedded: Boolean,
+    onBack: () -> Unit,
+) {
+    VaultixExpressiveTopBar(
+        title = stringResource(R.string.settings_title),
+        collapseFraction = collapseFraction,
+        modifier = Modifier.align(Alignment.TopCenter),
+        navigationIcon = if (embedded) {
+            null
+        } else {
+            {
+                IconButton(onClick = onBack) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = stringResource(R.string.action_back),
+                    )
+                }
+            }
+        },
+    )
+}
+
+/**
  * 「退出数据库」确认对话框。
  *
  * ⚠️ **必须有**：这一步会丢掉本地未上传的改动（待推送队列属本地缓存），
@@ -322,32 +366,38 @@ private fun ExitDatabaseDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
 }
 
 /**
- * 安全组：自动锁定 / 剪贴板清除 / 防截屏 / 退出数据库 / 快速解锁。
+ * 解锁与隐私组（原「安全」）：快速解锁 / 自动锁定 / 防截屏 / 剪贴板清除。
+ *
+ * 组内顺序按「入口在前、开关在中」：快速解锁是**入口**（点开是对话框），
+ * 自动锁定与剪贴板清除是**档位选择**，防截屏是**开关**。
+ *
+ * ⚠️ 「退出数据库」**已从本组移出** —— 它是清空本地缓存的**数据动作**，
+ * 夹在「防截屏」与「快速解锁」之间既错位（不是解锁策略）、又把唯一的不可逆动作
+ * 放在了常用动作旁边。现落在「数据」组末尾（定稿 §2① / §3）。
  *
  * 拆成独立 composable 纯粹是为了让 [SettingsScreen] 主函数守住 detekt `LongMethod`
  * （≤150 行）——三个对话框的显示状态仍留在宿主里，本函数只收回调。
  */
 @Composable
-private fun SecuritySection(
+private fun UnlockPrivacySection(
     viewModel: SettingsViewModel,
     state: SettingsViewModel.UiState,
     onAutoLock: () -> Unit,
     onClipboardClear: () -> Unit,
     onQuickUnlock: () -> Unit,
-    onExitDatabase: () -> Unit,
 ) {
     SettingsGroupTitle(stringResource(R.string.group_security))
+    SettingsRow(
+        icon = { Icon(Icons.Filled.Fingerprint, contentDescription = null) },
+        title = stringResource(R.string.settings_quick_unlock),
+        subtitle = stringResource(R.string.settings_quick_unlock_desc),
+        onClick = onQuickUnlock,
+    )
     SettingsRow(
         icon = { Icon(Icons.Filled.Timer, contentDescription = null) },
         title = stringResource(R.string.setting_auto_lock),
         subtitle = vaultTimeoutLabel(state.vaultTimeout),
         onClick = onAutoLock,
-    )
-    SettingsRow(
-        icon = { Icon(Icons.Filled.VisibilityOff, contentDescription = null) },
-        title = stringResource(R.string.setting_clipboard_clear),
-        subtitle = clipboardClearLabel(state.clipboardClearMs),
-        onClick = onClipboardClear,
     )
     SettingsRow(
         icon = { Icon(Icons.Filled.Shield, contentDescription = null) },
@@ -366,38 +416,29 @@ private fun SecuritySection(
         },
     )
     SettingsRow(
-        icon = { Icon(Icons.Filled.Logout, contentDescription = null) },
-        title = stringResource(R.string.setting_exit_database),
-        subtitle = stringResource(R.string.setting_exit_database_desc),
-        titleColor = MaterialTheme.colorScheme.error,
-        onClick = onExitDatabase,
-    )
-    SettingsRow(
-        icon = { Icon(Icons.Filled.Fingerprint, contentDescription = null) },
-        title = stringResource(R.string.settings_quick_unlock),
-        subtitle = stringResource(R.string.settings_quick_unlock_desc),
-        onClick = onQuickUnlock,
+        icon = { Icon(Icons.Filled.VisibilityOff, contentDescription = null) },
+        title = stringResource(R.string.setting_clipboard_clear),
+        subtitle = clipboardClearLabel(state.clipboardClearMs),
+        onClick = onClipboardClear,
     )
 }
 
-/** 其他组 + 关于组（同上：拆出去是为了满足函数长度门禁）。 */
+/** 关于组（含权限管理；同上：拆出去是为了满足函数长度门禁）。 */
 @Composable
-private fun OthersSection(
+private fun AboutSection(
     context: Context,
     versionName: String,
     onShowLicense: () -> Unit,
 ) {
-    // ---- 其他（对齐 Bastion SettingsScreen：权限管理放在设置首页） ----
-    SettingsGroupTitle(stringResource(R.string.group_others))
+    SettingsGroupTitle(stringResource(R.string.group_about))
+    // 权限管理原属「其他」组（该组仅此一行，独占一个组标题）
+    // ⇒ 并入「关于」：它本来就是"关于这个 App"的元信息（定稿 §2②）。
     SettingsRow(
         icon = { Icon(Icons.Filled.Policy, contentDescription = null) },
         title = stringResource(R.string.permission_management_title),
         subtitle = stringResource(R.string.permission_management_subtitle),
         onClick = { openAppPermissionSettings(context) },
     )
-
-    // ---- 关于 ----
-    SettingsGroupTitle(stringResource(R.string.group_about))
     SettingsRow(
         icon = { Icon(Icons.Filled.Info, contentDescription = null) },
         title = stringResource(R.string.about_version),
@@ -453,10 +494,19 @@ private fun VaultSection(
     // ⚠️ 这一行是**必需**的：添加库的入口原本只在库列表页的「+」，而库列表路由在
     // 「已经有一个库」时不可达（根导航落在解锁页 / 主界面）⇒ 用户永远加不了本地
     // KDBX 库，表现为「KDBX 集成已交付但设置里只有 Bitwarden」。
+    //
+    // 副标题按「是否已有库」分流（定稿 §5.2）：已有库时若还写「连接 Bitwarden 云端」，
+    // 会被读成「要改当前这个库的服务器」，而实际动作是**再加一个库**。
     SettingsRow(
         icon = { Icon(Icons.Filled.Add, contentDescription = null) },
         title = stringResource(R.string.vault_add_fab),
-        subtitle = stringResource(R.string.settings_add_vault_desc),
+        subtitle = stringResource(
+            if (switchable.isEmpty()) {
+                R.string.settings_add_vault_desc
+            } else {
+                R.string.settings_add_vault_desc_another
+            },
+        ),
         onClick = { showAddDialog = true },
     )
 
@@ -535,7 +585,7 @@ private fun ActiveVaultDialog(
                         text = stringResource(R.string.settings_default_vault_hint),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 12.dp),
+                        modifier = Modifier.padding(top = Spacing.md),
                     )
                 }
             }
@@ -567,7 +617,7 @@ private fun VaultChoiceRow(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(vertical = 4.dp),
+            .padding(vertical = Spacing.xs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         RadioButton(selected = selected, onClick = onClick)
@@ -600,15 +650,22 @@ private fun VaultChoiceRow(
 }
 
 /**
- * 外观组（批次④，对齐 Bastion 主题能力）：主题模式三态 + OLED 纯黑 + 动态取色。
+ * 显示与填充组（原「外观」+ 原「自动填充」入口，批次④对齐 Bastion 主题能力）：
+ * 主题模式三态 + 动态取色 + 纯黑背景 + 条目显示 + 自动填充设置入口。
+ *
+ * 合并理由：这两类都是「**界面怎么呈现 / 怎么替你填**」，而「自动填充」原先只有
+ * 一个二级页入口却独占一个组标题 —— 合并后每组 ≥2 行，消灭了两个语义重叠的小组
+ * （定稿 §2③ / §3）。
+ *
  * 状态在 ViewModel 单独流上（不进 [SettingsViewModel.UiState]，避免六流 combine 的
  * Array 转型噪音）；切换主题立即生效（MainActivity 收集）。
  */
 @Composable
-private fun AppearanceSection(
+private fun DisplaySection(
     viewModel: SettingsViewModel,
     /** null = 偏好尚未读出（见 [SettingsViewModel.UiState.dynamicColor]）。 */
     dynamicColor: Boolean?,
+    onOpenAutofillSettings: () -> Unit,
 ) {
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
     val oledPureBlack by viewModel.oledPureBlack.collectAsStateWithLifecycle()
@@ -623,17 +680,6 @@ private fun AppearanceSection(
         onClick = { showThemeDialog = true },
     )
     SettingsRow(
-        icon = { Icon(Icons.Filled.Contrast, contentDescription = null) },
-        title = stringResource(R.string.setting_oled_pure_black),
-        subtitle = stringResource(R.string.setting_oled_pure_black_desc),
-        trailing = {
-            Switch(
-                checked = oledPureBlack,
-                onCheckedChange = viewModel::setOledPureBlack,
-            )
-        },
-    )
-    SettingsRow(
         icon = { Icon(Icons.Filled.Palette, contentDescription = null) },
         title = stringResource(R.string.setting_dynamic_color),
         subtitle = stringResource(R.string.setting_dynamic_color_desc),
@@ -646,6 +692,17 @@ private fun AppearanceSection(
             )
         },
     )
+    SettingsRow(
+        icon = { Icon(Icons.Filled.Contrast, contentDescription = null) },
+        title = stringResource(R.string.setting_oled_pure_black),
+        subtitle = stringResource(R.string.setting_oled_pure_black_desc),
+        trailing = {
+            Switch(
+                checked = oledPureBlack,
+                onCheckedChange = viewModel::setOledPureBlack,
+            )
+        },
+    )
     // 条目列表的显示选项（分组方式 / 卡片信息密度 / 是否显示图标）——
     // 与密码 Tab 顶栏那个按钮共用同一个弹层与同一份偏好，改哪边都实时生效。
     SettingsRow(
@@ -653,6 +710,13 @@ private fun AppearanceSection(
         title = stringResource(R.string.items_display_options),
         subtitle = stringResource(R.string.setting_display_options_desc),
         onClick = { showDisplayOptions = true },
+    )
+    // 自动填充入口（二级页）—— 原先是只有一行的独立分组，现并入本组末尾。
+    SettingsRow(
+        icon = { Icon(Icons.Filled.Password, contentDescription = null) },
+        title = stringResource(R.string.autofill_settings_entry),
+        subtitle = stringResource(R.string.autofill_settings_entry_desc),
+        onClick = onOpenAutofillSettings,
     )
 
     if (showDisplayOptions) {
@@ -698,22 +762,32 @@ private fun SettingsDisplayOptionsHost(
 }
 
 /**
- * 数据组（批次④）：回收站自动清理档位——与回收站页顶栏入口共用
- * [TrashAutoDeleteDialog] 与同一偏好键，改哪边都实时生效。
+ * 数据组（批次④）：导入与导出 / 回收站清理 / **退出数据库**。
  *
- * 另含「导入 / 导出」入口（对齐 Bitwarden 官方「设置 → 导出密码库 / 导入数据」）：
- * 导出 = 加密 JSON 备份，导入 = 从备份增量恢复。放在数据组而非单独分组，
- * 因为三者都属「库数据的迁移 / 维护」。
+ * 顺序原则（定稿 §3）：入口类在前、档位选择居中、**破坏性动作置底**。
+ * 「退出数据库」是本页**唯一不可逆**的动作，置底 + `error` 色，避免误触
+ * ——它原先夹在「解锁与隐私」的常用开关之间（定稿 §2①）。
+ *
+ * 「导入与导出」入口对齐 Bitwarden 官方「设置 → 导出密码库 / 导入数据」：
+ * 导出 = 加密 JSON 备份，导入 = 从备份增量恢复。回收站清理档位与回收站页顶栏入口
+ * 共用 [TrashAutoDeleteDialog] 与同一偏好键，改哪边都实时生效。
  */
 @Composable
 private fun DataSection(
     viewModel: SettingsViewModel,
     onOpenImportExport: () -> Unit,
+    onExitDatabase: () -> Unit,
 ) {
     val trashDays by viewModel.trashAutoDeleteDays.collectAsStateWithLifecycle()
     var showTrashDialog by rememberSaveable { mutableStateOf(false) }
 
     SettingsGroupTitle(stringResource(R.string.group_data))
+    SettingsRow(
+        icon = { Icon(Icons.Filled.SwapVert, contentDescription = null) },
+        title = stringResource(R.string.import_export_entry),
+        subtitle = stringResource(R.string.import_export_entry_desc),
+        onClick = onOpenImportExport,
+    )
     SettingsRow(
         icon = { Icon(Icons.Filled.DeleteSweep, contentDescription = null) },
         title = stringResource(R.string.setting_trash_auto_delete),
@@ -721,10 +795,11 @@ private fun DataSection(
         onClick = { showTrashDialog = true },
     )
     SettingsRow(
-        icon = { Icon(Icons.Filled.SwapVert, contentDescription = null) },
-        title = stringResource(R.string.import_export_entry),
-        subtitle = stringResource(R.string.import_export_entry_desc),
-        onClick = onOpenImportExport,
+        icon = { Icon(Icons.Filled.Logout, contentDescription = null) },
+        title = stringResource(R.string.setting_exit_database),
+        subtitle = stringResource(R.string.setting_exit_database_desc),
+        titleColor = MaterialTheme.colorScheme.error,
+        onClick = onExitDatabase,
     )
 
     if (showTrashDialog) {
@@ -734,32 +809,6 @@ private fun DataSection(
             onDismiss = { showTrashDialog = false },
         )
     }
-}
-
-/**
- * 自动填充分组（M2-a）：设置首页只放一个入口，点进去是二级页
- * [AutofillSettingsScreen]——对齐 Bastion「设置 → 自动填充」的嵌套结构
- * （系统设置 / 验证器 / 保存行为）。
- *
- * 首页不再平铺具体开关的理由：自动填充相关项已有 5+ 条，平铺会把安全 / 外观 / 数据组
- * 挤到很下面，而这些项通常只在首次配置时改一次（对齐 Bastion 的信息架构）。
- */
-@Composable
-private fun AutofillSection(onOpenAutofillSettings: () -> Unit) {
-    SettingsGroupTitle(stringResource(R.string.group_autofill))
-    SettingsRow(
-        icon = { Icon(Icons.Filled.Password, contentDescription = null) },
-        title = stringResource(R.string.autofill_settings_entry),
-        subtitle = stringResource(R.string.autofill_settings_entry_desc),
-        trailing = {
-            Icon(
-                Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        },
-        onClick = onOpenAutofillSettings,
-    )
 }
 
 /** 系统应用信息页（权限管理）：唯一能改运行时权限的入口，系统不提供应用内开关。 */
@@ -900,7 +949,7 @@ private fun QuickUnlockManageDialog(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    Spacer(Modifier.height(8.dp))
+                    Spacer(Modifier.height(Spacing.sm))
                     vaults.forEach { vault ->
                         QuickUnlockRow(
                             vault = vault,
@@ -911,20 +960,20 @@ private fun QuickUnlockManageDialog(
                     }
                     // 「应用内 PIN」单列一段：与指纹是**两条独立**的解锁路径，
                     // 挤在同一行里会让人以为它们是一个开关的两个档位。
-                    Spacer(Modifier.height(12.dp))
+                    Spacer(Modifier.height(Spacing.md))
                     HorizontalDivider()
-                    Spacer(Modifier.height(12.dp))
+                    Spacer(Modifier.height(Spacing.md))
                     Text(
                         text = stringResource(R.string.pin_section_title),
                         style = MaterialTheme.typography.titleSmall,
                     )
-                    Spacer(Modifier.height(4.dp))
+                    Spacer(Modifier.height(Spacing.xs))
                     Text(
                         text = stringResource(R.string.pin_section_hint),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    Spacer(Modifier.height(8.dp))
+                    Spacer(Modifier.height(Spacing.sm))
                     vaults.forEach { vault ->
                         PinRow(vault = vault, onSet = onPinSet, onPinDisable = onPinDisable)
                     }
@@ -1092,13 +1141,13 @@ private fun PinSetDialog(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(Spacing.md))
                 PinField(
                     value = state.pin,
                     labelRes = R.string.pin_label,
                     onValueChange = viewModel::onPinChange,
                 )
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(Spacing.sm))
                 PinField(
                     value = state.confirm,
                     labelRes = R.string.pin_confirm_label,
@@ -1136,7 +1185,7 @@ private fun PinKdbxPasswordDialog(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(Spacing.md))
                 OutlinedTextField(
                     value = state.password,
                     onValueChange = viewModel::onPinKdbxPasswordChange,
@@ -1180,7 +1229,7 @@ private fun PinField(value: String, labelRes: Int, onValueChange: (String) -> Un
 @Composable
 private fun DialogErrorText(message: String?) {
     if (message == null) return
-    Spacer(Modifier.height(8.dp))
+    Spacer(Modifier.height(Spacing.sm))
     Text(
         text = message,
         style = MaterialTheme.typography.bodySmall,
@@ -1220,7 +1269,7 @@ private fun KdbxQuickUnlockPasswordDialog(
                     text = stringResource(R.string.kdbx_quick_unlock_message, vaultName),
                     style = MaterialTheme.typography.bodyMedium,
                 )
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(Spacing.md))
                 OutlinedTextField(
                     value = password,
                     onValueChange = { password = it },
@@ -1232,7 +1281,7 @@ private fun KdbxQuickUnlockPasswordDialog(
                     modifier = Modifier.fillMaxWidth(),
                 )
                 if (errorText != null) {
-                    Spacer(Modifier.height(4.dp))
+                    Spacer(Modifier.height(Spacing.xs))
                     Text(
                         text = errorText,
                         style = MaterialTheme.typography.bodySmall,
@@ -1385,7 +1434,7 @@ private fun SingleChoiceRow(label: String, selected: Boolean, onClick: () -> Uni
         Text(
             text = label,
             style = MaterialTheme.typography.bodyLarge,
-            modifier = Modifier.padding(start = 4.dp),
+            modifier = Modifier.padding(start = Spacing.xs),
         )
     }
 }
