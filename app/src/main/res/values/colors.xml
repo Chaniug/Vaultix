@@ -15,8 +15,11 @@
     <color name="ic_launcher_bg_top">#5B7BF0</color>
     <color name="ic_launcher_bg_mid">#3B5BDB</color>
     <color name="ic_launcher_bg_bottom">#1E2C8C</color>
-    <!-- 盾内 V 带的颜色（蓝金 = 保险库/黄铜的经典搭配；也是全图标唯一的第二色相） -->
-    <color name="ic_launcher_accent">#E0A33A</color>
+    <!-- 盾内 V 带的颜色（蓝金 = 保险库/黄铜的经典搭配；也是全图标唯一的第二色相）。
+         V 带用**双色线性渐变**（左下深金 → 右上亮金）模拟金属反光；
+         `ic_launcher_accent` 是渐变亮端，同时也是「取不到渐变时的兜底色」。 -->
+    <color name="ic_launcher_accent">#F5C563</color>
+    <color name="ic_launcher_accent_dark">#C8892A</color>
     <!--
       自动填充下拉行的**底色**（浅色面板）。
 
