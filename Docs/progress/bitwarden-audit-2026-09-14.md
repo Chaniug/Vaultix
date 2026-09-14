@@ -222,26 +222,34 @@ uris = values.uris.filter { it.isNotBlank() }.mapIndexed { index, url ->
 
 | 项 | 值 |
 |---|---|
-| 设备 | 荣耀 BKQ-AN00（`adb-AKJEVB5920007199-YKvK5m`，mDNS 自动发现） |
-| 用户给的地址 | `192.168.1.114:36813` → **已失效**（10061 积极拒绝，端口轮换） |
+| 设备 | 荣耀 BKQ-AN00（`arm64-v8a`） |
+| 用户给的地址（第一次） | `192.168.1.114:36813` → **已失效**（10061 积极拒绝，ADB 无线端口会轮换） |
+| 用户给的地址（第二次） | `192.168.1.114:35173` → ✅ 连接成功（与 mDNS `adb-AKJEVB5920007199-YKvK5m` 为同一台） |
 | 设备上版本 | `versionName=0.1.0` · `versionCode=1` · 安装于 **17:08:26** |
 | 设备 APK 签名 | V3 `7e6c8c07…`（CI release 密钥）· 体积 4.99 MB · **无 DEBUGGABLE** |
 | 本轮最新提交 | `1a4a959` 提交于 **17:14:14** —— **比设备安装晚 6 分钟** |
 | 最新 CI run | `34826547516` = `0a9d88f`（也**早于** `1a4a959`） |
 
-### ★ 关键发现：设备包是 CI release，本地无法覆盖安装
+### ★ 关键发现：设备包是 CI release，本地无法覆盖安装（已实测确认）
 
-1. **版本严重滞后**：设备停在 `0.1.0`，而 `VERSION` 文件已是 `0.3.0`，设备 APK 还比
-   它自己的安装时间更新——说明**设备上的包一直是从 CI 下载安装的 release**，
-   而非本地构建。三次修复（`1a4a959`、`8dc6faa`、`4de48f6`）**一次都没上设备**。
-2. **签名不兼容**：设备包用 CI 的 release 密钥（`7e6c8c…`，仅存于 GitHub Secrets）；
-   本地 `assembleFullDebug` 用 Android debug 密钥（`56f892…`）。
-   **两者签名不同 ⇒ 无法覆盖安装**：强行装要么失败，要么必须卸载重装
-   ⇒ **连同 AndroidKeyStore 里的生物识别密钥一起丢**（老问题，见 `ci-debug.yml:131-135` 的注释）。
-
-3. **本地构建本身是对的**（顺带验证了 `versionName` 修复）：
-   本地产出的 `app-full-debug.apk`（32 MB）`aapt2` 读出 `versionName='0.3.0'`，
-   正确来自根目录 `VERSION` 文件，说明 `app/build.gradle.kts` 的回退逻辑生效。
+1. **版本严重滞后**：设备停在 `0.1.0`，而 `VERSION` 文件已是 `0.3.0`。设备 APK 的安装时间
+   比它自己的版本号所对应的构建还新——说明**设备上的包一直是从 CI 下载安装的 release**，
+   而非本地构建。三轮修复（`1a4a959`、`8dc6faa`、`4de48f6` / `9c06dc6`）**一次都没上设备**。
+2. **签名不兼容（实测报错）**：本地 `assembleFullDebug` 用 Android debug 密钥（`56f892…`），
+   设备包用 CI 的 release 密钥（`7e6c8c…`，仅存于 GitHub Secrets）。实装报：
+   ```
+   Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE:
+     Existing package io.vaultix.vaultix signatures do not match newer version; ignoring!]
+   ```
+   **无法覆盖安装**：强行装必须卸载重装 ⇒ **连同 AndroidKeyStore 里的生物识别密钥一起丢**
+   （老问题，见 `ci-debug.yml:131-135` 注释）。
+3. **连应用数据也读不到**：`run-as io.vaultix.vaultix` 返回
+   `package not debuggable` —— 设备装的是 **release** 包，ADB 无法窥探其内部数据。
+   ⇒ 靠抓设备端数据库来「验证修复是否在包里」这条路也走不通。
+4. **本地构建本身是对的**（顺带验证了 `versionName` 修复）：
+   本地产出的 `app-full-debug.apk`（32 MB）经 `aapt2 dump badging` 读出
+   `versionName='0.3.0'`、`versionCode='1'`，正确来自根目录 `VERSION` 文件。
+   ABI 为 `arm64-v8a`，与设备一致（**不是**兼容性问题）。
 
 ### 要做真机实测，得先解决"包从哪来"
 
@@ -252,6 +260,21 @@ uris = values.uris.filter { it.isNotBlank() }.mapIndexed { index, url ->
 
 **注意**：`VERSION` 仍是 `0.3.0` 未升版，方案 A 产出的包与设备上 `0.1.0` 同 `applicationId` +
 同 CI 密钥 ⇒ **可覆盖安装且不丢数据**（`versionCode` 恒为 1，不构成降级阻碍）。
+
+### 顺带暴露的一个真问题：设备包版本号长期不跟随 `VERSION`
+
+设备停在 `0.1.0` 而仓库 `VERSION` 已是 `0.3.0`，说明**从 CI 下载安装的流程没有刷新过**，
+或者下载的是历史产物。这点值得单独确认（见下节待办）。
+
+### 真机实测待办（需先解决出包）
+
+| # | 待验证项 | 需要的动作 |
+|---|---|---|
+| 1 | 自动填充解锁回灌（P0 · `1a4a959`） | 装含修复的包 → 触发站点填充 → 解锁 → 看是否回填 |
+| 2 | 编辑条目文件夹/收藏不再回退（P1-1） | 装包 → 编辑勾收藏 → 保存 → 复看 |
+| 3 | URI `Never` 规则编辑后仍生效（P1-2） | 装包 → 编辑带 `match=5` 的条目 → 保存 → 查库 |
+| 4 | 队列条目不被同步覆盖（P1-3 · `4de48f6`） | 需断网改造，或用 adb 停网模拟 |
+| 5 | 4xx 弃单后条目可见（P1-4） | 需构造服务端拒绝场景 |
 
 ---
 
