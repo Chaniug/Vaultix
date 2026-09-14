@@ -152,8 +152,9 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
    - **P0-2 表达式搜索栏**：`SearchTopAppBar` 改 contained search（胶囊填充容器 + 搜索图标），
      **inset 一行没动**；没用 alpha 的 `SearchBar`（8.8 §6① 要求等 beta）。
    - **P1/P2 未做**：都要引 alpha 新 API，而**本轮无编译环境** ⇒ 不凭记忆写不确定 API。
-3. ⚠️ **本轮在沙箱内完成：无编译、无真机**。门禁只真跑了 detekt（`app` 模块全绿）。
-   **装机验收清单见 `decisions/设置页信息架构-定稿.md` §8.1。**
+3. ⚠️ 本轮在沙箱内完成（无编译环境），但**已推送 `main`，CI 全绿**（run `34874282413`：
+   detekt ✓ / 编码 ✓ / **Build Debug APK ✓** / 单测 ✓，签名 APK 已发 preview Release）
+   ⇒ **编译已验证，只剩真机目视**。清单见 `decisions/设置页信息架构-定稿.md` §8.1。
 
 **本轮沉淀**（已写进 `conventions/`）：① detekt `LongMethod` **不计注释与空行**（探针实测）
 ⇒ 精简注释救不了超长函数；② `Spacing.x` 比 `16.dp` 长 ⇒ 批量替换会撞 `MaxLineLength`；

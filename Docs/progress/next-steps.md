@@ -11,12 +11,11 @@
 > | M3E **P0-2 表达式搜索栏** | ✅ `SearchTopAppBar` 改 contained search；**inset 未动** |
 > | M3E **P1 / P2** | ❌ 未做：要引 alpha 新 API，而本轮**无编译环境**（不凭记忆写不确定 API） |
 >
-> ⚠️ **本轮在沙箱内完成 —— 没有编译、没有真机**。detekt 已真跑全绿（无 SDK 也能跑，
-> 方法见 `conventions/8.7-环境.md`），但它**不做类型检查**。
->
-> **→ 装机前必做**：`detekt` → `:app:compileFullDebugKotlin` → `:app:testFullDebugUnitTest`
-> → `:app:assembleFullDebug` → 真机逐页目视。
-> **完整验收清单：`decisions/设置页信息架构-定稿.md` §8.1。**
+> ✅ **已推送 `main`，CI 全绿**（run `34874282413`，2m31s）：detekt ✓ / 编码检查 ✓ /
+> **Build Debug APK ✓** / 单测 ✓。**签名 debug APK 已发布到 preview Release**
+> （证书与本机一致 ⇒ 覆盖安装不丢数据，可直接下载装机）。
+> ⇒ 沙箱"无编译环境"的缺口已由 CI 覆盖，**只剩真机目视**。
+> **验收清单：`decisions/设置页信息架构-定稿.md` §8.1。**
 >
 > **下一轮可接着做的**（按性价比）：
 > 1. `detail_totp_hidden`「点右侧眼睛显示验证码」—— 同类指路语，在详情页，本轮没动；
