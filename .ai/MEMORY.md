@@ -138,6 +138,27 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 > 逐轮流水 → `.ai/SESSION-YYYY-MM-DD.md` · 坑 → `.ai/ISSUES.md`（索引，正文在 `issues/`）·
 > 性能专项 → [`Docs/progress/perf-plan.md`](../Docs/progress/perf-plan.md)。
 
+**第六十六轮（2026-09-15 凌晨 · 睡前交接的两件事，见 `.ai/SESSION-2026-09-15.md`）**
+
+用户睡前交待「**设置页优化** + **Material3 优化**」，两项均已完成并提交（**未推送**）：
+
+1. **设置页 IA：7 组 → 5 组 + 文案统一** —— 依据 `decisions/设置页信息架构-定稿.md`
+   （结构用户已拍板，勿重新论证）。实测 5 组与定稿**逐行一致**。
+   两处刻意偏离已写明理由：① `group_autofill` **不能删**（它是二级页顶栏标题）；
+   ② 「添加密码库」条件文案比定稿多带了类型说明。
+2. **M3E P0 两项**：
+   - **P0-1 间距标尺**：新建 `ui/theme/Spacing.kt`，**369 处**手写 `.dp`（占 69%）换成标尺 token。
+     ✅ **等价性用反演法证明**（41 文件逐字符一致）⇒ 版式零变化。
+   - **P0-2 表达式搜索栏**：`SearchTopAppBar` 改 contained search（胶囊填充容器 + 搜索图标），
+     **inset 一行没动**；没用 alpha 的 `SearchBar`（8.8 §6① 要求等 beta）。
+   - **P1/P2 未做**：都要引 alpha 新 API，而**本轮无编译环境** ⇒ 不凭记忆写不确定 API。
+3. ⚠️ **本轮在沙箱内完成：无编译、无真机**。门禁只真跑了 detekt（`app` 模块全绿）。
+   **装机验收清单见 `decisions/设置页信息架构-定稿.md` §8.1。**
+
+**本轮沉淀**（已写进 `conventions/`）：① detekt `LongMethod` **不计注释与空行**（探针实测）
+⇒ 精简注释救不了超长函数；② `Spacing.x` 比 `16.dp` 长 ⇒ 批量替换会撞 `MaxLineLength`；
+③ 沙箱内**独立跑 detekt 的完整方法**（`8.7` 新增小节，无 SDK 也能跑门禁）。
+
 **第五十三~五十五轮（2026-09-13 夜 → 09-14 凌晨，均已推送 `main`）**
 
 三件事全部闭环，细节见 `.ai/SESSION-2026-09-13.md` 对应小节：
