@@ -43,7 +43,7 @@
 | 42 | 本机（Windows/WorkBuddy）与早前沙箱的环境差异 |
 | 44 | 沙箱构建环境三处修复 |
 | 45 | CI「Run unit tests (non-blocking)」长期报红 2 处 |
-| 100 | 🔴 **CI 的 `Run lint` 从未真正跑过** —— 带 `if: event != 'push'`，push 全绿不代表它通过；首次手动触发即失败并 skip 掉真门禁 |
+| 100 | ⚠️ **带 `if: event != 'push'` 的 CI 步骤，push 绿 ≠ 它通过**（`Run lint` 在 push 链路恒为 `skipped`）；手动触发曾失败并 skip 掉真门禁 —— **100.1 更正：lint 本身可用，问题在 `Collect debug APK metadata` 的非 push 路径** |
 | 46 | Android 16+ `Settings.Secure` 对第三方 App 受限 → 状态检测恒报"未启用" |
 | 55 | `./gradlew` 在本机失效 + 本机 Gradle 发行版直调 |
 | 65 | KDoc 里写「星号 + 斜杠」→ 整个文件变语法错误 |

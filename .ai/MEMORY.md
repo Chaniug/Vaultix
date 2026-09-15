@@ -157,12 +157,17 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 
 **第六十六轮再续（2026-09-15 上午 · 见 `SESSION-2026-09-15.md` §8）**
 
-3. ⚠️ **CI 有一个从未跑过的门禁**（`.ai/ISSUES.md` **#100**）：
-   `Run lint` 带 `if: github.event_name != 'push'`，而本仓库 50 次运行**全是 push**
-   ⇒ 它**第一次真正执行**（我手动触发）就失败，且把 detekt / 编码 / Build APK
-   全 skip 掉。已加 `continue-on-error: true` **止血**（只报告不阻断）。
-   **纪律**：**「CI 全绿」必须问「哪条链路的绿」** —— 带 `if: event != 'push'` 的
-   步骤，push 绿**不代表**它通过（`skipped` ≠ 通过）。
+3. ⚠️ **带 `if:` 的 CI 步骤，push 绿 ≠ 它通过**（`.ai/ISSUES.md` **#100**）：
+   `Run lint` 带 `if: github.event_name != 'push'` ⇒ 在 push 链路**恒为 `skipped`**
+   （已核实：run `34921886414` 的步骤列表明写着 skipped）。
+   **100.1 更正**：lint 本身**是好用的** —— 我手动触发（第一次非 push）时它失败，
+   但**真正的原因不是 lint**，而是同一次非 push 路径触发了
+   `Collect debug APK metadata`（`if: push`，步骤体 `apk_count==0` 时 `exit 1`）
+   一类的结构问题，且失败会 skip 掉 detekt / 编码 / Build APK。
+   ⇒ 已加 `continue-on-error: true` 止血；**待下一轮修非 push 链路的步骤守卫**。
+   **纪律（这条永久有效）**：**「CI 全绿」必须问「哪条链路的绿」**。
+   **教训**：看到"第一次执行就失败"，先分清「这步坏了」与「这步的背景条件变了」，
+   别顺着叙事去动被执行的步骤（我差点就去改 lint 配置 = **改错东西**）。
    ⚠️ 沙箱**看不了 CI 原始日志**（302 到 blob 存储，不可达）⇒ 用
    **check-run annotations**（`gh api repos/<o>/<r>/check-runs/<id>/annotations`）。
 4. ⭐ **新增本地自检工具 `.ai/tools/check_signature_types.py`**：
