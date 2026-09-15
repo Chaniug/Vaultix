@@ -20,6 +20,7 @@ internal object CredentialKeys {
     private const val PREFIX_REFRESH = "bw_refresh::"
     private const val PREFIX_ACCESS_EXPIRY = "bw_access_expiry_ms::"
     private const val PREFIX_PROTECTED_KEY = "bw_protected_key::"
+    private const val PREFIX_KDF_PROFILE = "bw_kdf_profile::"
 
     fun access(server: String): String = PREFIX_ACCESS + server
     fun refresh(server: String): String = PREFIX_REFRESH + server
@@ -29,4 +30,10 @@ internal object CredentialKeys {
 
     /** 受保护的账号对称密钥（EncString），需用 StretchedMasterKey 解包。 */
     fun protectedKey(server: String): String = PREFIX_PROTECTED_KEY + server
+
+    /**
+     * KDF 参数快照（[KdfProfile.serialize]），登录成功时落盘。
+     * 用途：主密码**本地解锁**不必再联网 prelogin ⇒ 断网也能开库。
+     */
+    fun kdfProfile(server: String): String = PREFIX_KDF_PROFILE + server
 }

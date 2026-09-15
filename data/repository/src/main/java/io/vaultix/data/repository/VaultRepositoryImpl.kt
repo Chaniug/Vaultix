@@ -148,7 +148,13 @@ class VaultRepositoryImpl @Inject constructor(
             return UnlockResult.Unknown("仅支持 Bitwarden 库解锁（当前类型：${row.kind}）")
         }
         val email = row.account ?: return UnlockResult.Unknown("该库缺少账号信息，请移除后重新添加")
-        return doUnlock(email = email, server = row.origin, password = masterPassword)
+        return doUnlock(
+            email = email,
+            server = row.origin,
+            password = masterPassword,
+            // ★ 已添加过的库：主密码默认走**本地解锁**（见 doUnlock 的长注释）
+            preferLocalUnlock = true,
+        )
     }
 
     // ---- KDBX 本地库（M2 阶段 A：只读）----
@@ -788,13 +794,44 @@ class VaultRepositoryImpl @Inject constructor(
 
     // ---- 内部 ----
 
-    /** 登录（可选 2FA 提交）→ 解包账号对称密钥 → 注册内存会话。 */
+    /**
+     * 解锁 / 添加库的编排：优先本地解锁 → 失败才完整登录 → 解包账号对称密钥 → 注册内存会话。
+     *
+     * ## 为什么主密码解锁不能再走一次「登录」（2026-09-16 修正）
+     *
+     * 旧实现无论什么场景都调用 `authRepository.login(...)`，即一次全新的
+     * `connect/token`（grant_type=password）。服务端只要开了两步验证，密码校验通过后
+     * 必然回 `two_factor_required` ⇒ UI 弹出验证码框。表现是：**用户明明已经登录过，
+     * 只是杀掉后台重开、输主密码解开密码库，却被要求再向服务器要一次验证码**。
+     *
+     * 正确的语义（对齐 Bitwarden 官方客户端）：主密码的作用是**解开密码库**，
+     * 不是**重新登录**。登录只发生在两种场合 —— 添加新库、会话被服务端吊销。
+     *
+     * @param preferLocalUnlock 已有库的主密码解锁置 true：先用主密码解开本地持久化的
+     *        账号对称密钥，**全程不触网、不要 2FA**（断网也能开库）。
+     *        本地解不开（主密码在别处改过 / 本地无密钥）才退回完整登录自愈。
+     */
     private suspend fun doUnlock(
         email: String,
         server: String,
         password: String,
         twoFactor: TwoFactorAttempt? = null,
+        preferLocalUnlock: Boolean = false,
     ): UnlockResult {
+        if (twoFactor == null && preferLocalUnlock) {
+            val key = authRepository.unlockWithMasterKey(server, email, password)
+            if (key != null) {
+                // 本地解锁不经过登录 ⇒ 必须自己登记 host⇄server：进程重启后
+                // `serverByHost` 是空的，401 刷新拦截器查不到 server 会让后续同步裸奔
+                // （不带 Authorization），表现为「解锁成功但永远同步不了」。
+                authRepository.registerServer(server)
+                sessions.unlock(server, key)
+                return UnlockResult.Success
+            }
+            // 落到这里 = 本地解不开，退回下面的完整登录（会刷新本地账号密钥，自愈）。
+            // 密码输错时服务端只会回 invalid_grant（2FA 是在**密码校验通过之后**才拦的），
+            // 因此打字错误不会被误判成「需要验证码」。
+        }
         val deviceId = obtainDeviceId()
         val deviceName = deviceName()
         val login = if (twoFactor == null) {

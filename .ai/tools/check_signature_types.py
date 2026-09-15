@@ -62,10 +62,26 @@ PACKAGE_RE = re.compile(r"^\s*package\s+([\w.]+)", re.MULTILINE)
 IMPORT_RE = re.compile(r"^\s*import\s+([\w.]+)(?:\s+as\s+(\w+))?", re.MULTILINE)
 
 
+def iter_repo_sources() -> list[Path]:
+    """全仓库 .kt（**排除** reference/ 参照工程与 build/ 产物）。
+
+    2026-09-16 修正：原先只扫 `app/src`，于是 **data / core / domain 模块里的类型
+    全部不在表里** —— 同包引用（如 data:bitwarden 的 `KdfProfile`）被误报成
+    「找不到定义」，噪音大到没人愿意看输出。参照工程必须排除：它与主工程有大量同名
+    类型，混进来会让「仓库里唯一一个」这类判据彻底失效。
+    """
+    skip_dirs = {"reference", "build", ".git", ".gradle", ".ai"}
+    return [
+        kt
+        for kt in ROOT.rglob("*.kt")
+        if not any(part in skip_dirs for part in kt.relative_to(ROOT).parts)
+    ]
+
+
 def collect_type_defs() -> tuple[dict[str, set[str]], set[str]]:
     """返回 ({类型名 -> {所在包...}}, 全部 top-level fun 名)。"""
     defs: dict[str, set[str]] = {}
-    for kt in SRC_ROOT.rglob("*.kt"):
+    for kt in iter_repo_sources():
         try:
             text = kt.read_text(encoding="utf-8", errors="replace")
         except OSError:
