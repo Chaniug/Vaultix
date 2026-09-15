@@ -167,17 +167,23 @@ fun SettingsScreen(
     var updateChecking by rememberSaveable { mutableStateOf(false) }
     var updateError by rememberSaveable { mutableStateOf<String?>(null) }
     // ⚠️ 结果对象不用 rememberSaveable：`UpdateCheckResult` 不是可序列化类型，
-    //    旋转屏幕后重查一次即可（比为了保存它引入 Parcelable 包装划算）。
+    //    为了保存它去引入 Parcelable 包装不划算 ⇒ 旋转屏幕后**结论会丢**。
     var updateResult by remember { mutableStateOf<UpdateCheckResult?>(null) }
-    LaunchedEffect(showUpdateDialog) {
+    // ⚠️ 因此 key 里带上 `updateResult` / `updateError`：旋转后结论丢了 ⇒ 自动重查一次，
+    //    而不是让用户对着一个"暂时无法确定"的空对话框发呆。
+    //    已经有结论时（key 未变）直接跳过 —— 这也要求点击入口先清结论（见调用处）。
+    LaunchedEffect(showUpdateDialog, updateResult, updateError) {
         if (!showUpdateDialog) return@LaunchedEffect
+        if (updateResult != null || updateError != null) return@LaunchedEffect
         updateChecking = true
-        updateResult = null
-        updateError = null
-        UpdateChecker.checkForUpdate(BuildConfig.VERSION_NAME)
+        val outcome = UpdateChecker.checkForUpdate(BuildConfig.VERSION_NAME)
+        // ⚠️ **先把 checking 落回 false，再写结论**：写结论会改变本 LaunchedEffect 的
+        //    key ⇒ 协程随即被取消。若把 `updateChecking = false` 放在下面，
+        //    它永远执行不到，对话框会一直停在「正在检查…」。
+        updateChecking = false
+        outcome
             .onSuccess { updateResult = it }
             .onFailure { updateError = it.message.orEmpty() }
-        updateChecking = false
     }
 
     // 沉浸式顶栏：大标题随滚动缩小、状态栏区域由顶栏背景覆盖（对齐 Bastion）。
@@ -237,7 +243,14 @@ fun SettingsScreen(
                 // 摆在界面上只会再次引起同样的误读。
                 versionName = BuildConfig.VERSION_NAME,
                 onShowLicense = { showAboutDialog = true },
-                onCheckUpdate = { showUpdateDialog = true },
+                // ⚠️ 每次点击都**先清掉上一次的结论**：结论是"一次性"的，
+                // 留着旧结果会让下面那次 LaunchedEffect 直接跳过（见那里的注释），
+                // 用户就会看到上一次的答案。
+                onCheckUpdate = {
+                    updateResult = null
+                    updateError = null
+                    showUpdateDialog = true
+                },
             )
             Spacer(Modifier.height(Spacing.xxl))
             // 底部留出叠层悬浮底栏的高度（顶部的让位见上方 Spacer(barPadding)）：
