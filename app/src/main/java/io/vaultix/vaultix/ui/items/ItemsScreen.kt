@@ -249,6 +249,13 @@ fun ItemsScreen(
      * 只有「锁定」（语义相反），于是「添加了 KDBX 却找不到怎么进去」。
      */
     onSwitchVault: (() -> Unit)? = null,
+    /**
+     * 当前活跃库**未解锁**时，空态里「去解锁」的出口（2026-09-15 加的兜底）。
+     *
+     * 正常不该走到：设置页点未解锁的库会直接去解锁页。此出口是防「活跃库落在锁定库上」
+     * 这一类静默状态（冷启动恢复 / 未来新入口）——兜底也要能自救，而不只是显示一句话。
+     */
+    onUnlockVault: () -> Unit = {},
     /** 外部「+」请求计数：非零即打开新建表单（宿主在消费后清零，避免重复弹出）。 */
     addRequest: Int = 0,
     onAddConsumed: () -> Unit = {},
@@ -350,32 +357,30 @@ fun ItemsScreen(
                     syncing = syncing,
                     onRefresh = viewModel::retrySync,
                 ) {
-                    if (visibleItems.isEmpty()) {
-                        // 空态 / 搜不到：同样要让位，否则文案与插画被半透明顶栏压住。
-                        ItemsEmptyState(query = state.query, topInset = listTopInset)
-                    } else {
-                        ItemsList(
-                            groups = groups,
-                            listState = listState,
-                            grouped = groupMode != ItemsGroupMode.None,
-                            collapsedGroups = collapsedGroups,
-                            displayMode = cardDisplayMode,
-                            showIcon = showIcon,
-                            serverOrigin = state.vault?.origin,
-                            topInset = listTopInset,
-                            bottomInset = bottomInset,
-                            onToggleGroup = { key -> collapsedGroups = toggleSelection(collapsedGroups, key) },
-                            selectedIds = selectedIds,
-                            onToggleSelect = { item -> selectedIds = toggleSelection(selectedIds, item.id) },
-                            onOpenItem = onOpenItem,
-                            syncStates = state.syncStates,
-                            onDelete = { item ->
-                                // 删完必须把 id 摘掉，否则底栏还会统计一条已不存在的条目。
-                                selectedIds = selectedIds - item.id
-                                viewModel.deleteItem(item)
-                            },
-                        )
-                    }
+                    // 空态与列表的分流抽到 [ItemsBody]：本函数已贴着 detekt 的
+                    // LongMethod ≤150（内联分支会直接顶破），且这里的参数传递本就很长。
+                    ItemsBody(
+                        visibleItems = visibleItems,
+                        state = state,
+                        groups = groups,
+                        listState = listState,
+                        groupMode = groupMode,
+                        collapsedGroups = collapsedGroups,
+                        displayMode = cardDisplayMode,
+                        showIcon = showIcon,
+                        selectedIds = selectedIds,
+                        listTopInset = listTopInset,
+                        bottomInset = bottomInset,
+                        onUnlockVault = onUnlockVault,
+                        onOpenItem = onOpenItem,
+                        onToggleGroup = { key -> collapsedGroups = toggleSelection(collapsedGroups, key) },
+                        onToggleSelect = { item -> selectedIds = toggleSelection(selectedIds, item.id) },
+                        onDelete = { item ->
+                            // 删完必须把 id 摘掉，否则底栏还会统计一条已不存在的条目。
+                            selectedIds = selectedIds - item.id
+                            viewModel.deleteItem(item)
+                        },
+                    )
                 }
             }
             if (!searchActive) {
@@ -448,11 +453,110 @@ private fun AddRequestEffect(
     }
 }
 
-/** 空列表的两个面孔：整库为空 → 引导插画；搜索无果 → 「换个词试试」。 */
+/**
+ * 列表主体：空态与条目的分流（从 [ItemsScreen] 抽出，见调用处注释）。
+ *
+ * 三个空态各有前提，**不能混用**：库锁定 → 「输入主密码后即可查看」；
+ * 整库为空 → 引导插画；搜索无果 → 「换个词试试」。
+ */
 @Composable
-private fun ItemsEmptyState(query: String, topInset: Dp) {
+private fun ItemsBody(
+    visibleItems: List<VaultItem>,
+    state: ItemsViewModel.UiState,
+    groups: List<ItemGroup>,
+    listState: LazyListState,
+    groupMode: ItemsGroupMode,
+    collapsedGroups: Set<String>,
+    displayMode: ItemsDisplayMode,
+    showIcon: Boolean,
+    selectedIds: Set<String>,
+    listTopInset: Dp,
+    bottomInset: Dp,
+    onUnlockVault: () -> Unit,
+    onOpenItem: (VaultItem) -> Unit,
+    onToggleGroup: (String) -> Unit,
+    onToggleSelect: (VaultItem) -> Unit,
+    onDelete: (VaultItem) -> Unit,
+) {
+    if (visibleItems.isEmpty()) {
+        // 空态 / 搜不到：同样要让位，否则文案与插画被半透明顶栏压住。
+        // ⚠️ 库锁定时**不能**显示「还没有保存的密码」——那是本页最误导人的一句话
+        // （2026-09-15 用户报的空白页 bug）：条目都在，只是密文读不出来。
+        ItemsEmptyState(
+            query = state.query,
+            topInset = listTopInset,
+            locked = state.vault?.unlocked == false,
+            onUnlock = onUnlockVault,
+        )
+        return
+    }
+    ItemsList(
+        groups = groups,
+        listState = listState,
+        grouped = groupMode != ItemsGroupMode.None,
+        collapsedGroups = collapsedGroups,
+        displayMode = displayMode,
+        showIcon = showIcon,
+        serverOrigin = state.vault?.origin,
+        topInset = listTopInset,
+        bottomInset = bottomInset,
+        onToggleGroup = onToggleGroup,
+        selectedIds = selectedIds,
+        onToggleSelect = onToggleSelect,
+        onOpenItem = onOpenItem,
+        syncStates = state.syncStates,
+        onDelete = onDelete,
+    )
+}
+
+@Composable
+private fun ItemsEmptyState(
+    query: String,
+    topInset: Dp,
+    /** 当前库**未解锁**：空列表是「读不到」而非「没有」，文案必须区分开。 */
+    locked: Boolean = false,
+    onUnlock: () -> Unit = {},
+) {
     Box(modifier = Modifier.fillMaxSize().padding(top = topInset)) {
-        if (query.isBlank()) EmptyItemsState() else NoSearchResultState()
+        when {
+            locked -> LockedItemsState(onUnlock = onUnlock)
+            query.isBlank() -> EmptyItemsState()
+            else -> NoSearchResultState()
+        }
+    }
+}
+
+/**
+ * 库未解锁时的空态（2026-09-15 用户反馈的空白页 bug 的**兜底**）。
+ *
+ * 正常路径不会走到这里 —— 设置页点未解锁的库会直接去解锁页。但只要有任何一条路径
+ * 让活跃库落在锁定库上（冷启动恢复、外部切库、未来新入口），本页就会是空的；
+ * 那时**必须说清楚是"锁着"**，而不是说"你没有条目"。所以这个兜底是必要的，
+ * 它把一类"静默错误"降级成"可理解的状态"。
+ */
+@Composable
+private fun LockedItemsState(onUnlock: () -> Unit) {
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            text = stringResource(R.string.items_locked_title),
+            style = MaterialTheme.typography.titleLarge,
+        )
+        Text(
+            text = stringResource(R.string.items_locked_body),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = Spacing.sm),
+        )
+        TextButton(
+            onClick = onUnlock,
+            modifier = Modifier.padding(top = Spacing.md),
+        ) {
+            Text(stringResource(R.string.items_locked_action))
+        }
     }
 }
 

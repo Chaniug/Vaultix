@@ -127,8 +127,11 @@
     <string name="settings_add_vault_desc_another">添加另一个密码库：Bitwarden 云端或本机 .kdbx 文件</string>
     <string name="settings_active_vault_none">未解锁任何库</string>
     <string name="settings_active_vault_locked_hint">还没有任何密码库，请先添加一个</string>
-    <string name="settings_default_vault_hint">勾选表示本次使用该库；「设为默认」决定下次打开应用先进入哪个库。</string>
+    <string name="settings_default_vault_hint">勾选表示本次使用该库；「设为默认」决定下次打开应用先进入哪个库。未解锁的库需先输入主密码才能使用。</string>
     <string name="settings_vault_locked_suffix">未解锁 · 需先输入主密码</string>
+    <!-- 2026-09-15：未解锁项的副标题改成动作语义。原标题只说「要输密码」，
+         用户仍以为可以「先切过去看看」——切过去就是空白页（见 VaultChoiceRow 注释）。 -->
+    <string name="settings_vault_locked_tap_to_unlock">未解锁 · 点这里输入主密码</string>
     <string name="settings_vault_default_badge">默认</string>
     <string name="settings_vault_set_default">设为默认</string>
     <!-- 组名按「设置页信息架构-定稿」§5.3：安全→解锁与隐私 / 外观→显示与填充 / 数据管理→数据 -->
@@ -318,6 +321,11 @@
     <string name="item_type_ssh_key">SSH 密钥</string>
 
     <!-- 条目列表 S7 -->
+    <!-- 2026-09-15：库未解锁时的空态。**不能说「还没有保存的密码」**——条目都在，
+         只是密文读不出来（用户报的「切到 KDBX 后条目页/验证码页全白」就是这个）。 -->
+    <string name="items_locked_title">这个库还没解锁</string>
+    <string name="items_locked_body">条目都在，输入主密码后即可查看</string>
+    <string name="items_locked_action">立即解锁</string>
     <string name="items_empty_title">还没有保存的密码</string>
     <string name="items_empty_body">点右下角 ＋ 新建条目</string>
     <string name="items_sync">同步</string>

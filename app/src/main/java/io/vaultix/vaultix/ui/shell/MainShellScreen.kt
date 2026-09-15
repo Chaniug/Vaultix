@@ -71,6 +71,15 @@ fun MainShellScreen(
     /** 设置 Tab 内添加库（库列表路由在已有库时不可达，否则用户永远加不了 KDBX）。 */
     onAddBitwardenVault: () -> Unit,
     onAddKdbxVault: () -> Unit,
+    /** 设置 Tab 内点了**未解锁**的库 → 去它的解锁页（见 `SettingsScreen.onOpenLockedVault`）。 */
+    onOpenLockedVault: (String) -> Unit = {},
+    /**
+     * 去解锁**当前活跃库**（条目页空态里的兜底出口）。
+     *
+     * 与 [onSwitchVault] 分开：那个是「从多个库里挑一个」，单库时为 null（按纪律隐藏）；
+     * 这个是「把这个锁着的库解开」，**与库数量无关**，单库用户同样需要。
+     */
+    onUnlockActiveVault: () -> Unit = {},
     onLocked: () -> Unit,
     onSwitchVault: (() -> Unit)? = null,
 ) {
@@ -193,6 +202,11 @@ fun MainShellScreen(
                             // 再在 ⋮ 里放一个重复入口只会让菜单多一项（用户 2026-09-14 要求）。
                             bottomInset = bottomInset,
                             onSwitchVault = onSwitchVault,
+                            // 兜底：活跃库若是锁定的，空态给一条自救路径。
+                            // 不能只显示「还没有保存的密码」——那是假话（2026-09-15）。
+                            // 用无参的 `onUnlockActiveVault` 而不是 `onSwitchVault`：
+                            // 后者单库时为 null（该项按纪律隐藏），会让这个按钮变成死键。
+                            onUnlockVault = onUnlockActiveVault,
                         )
 
                         VaultixNavItem.Authenticator -> TotpCodesScreen(
@@ -220,6 +234,7 @@ fun MainShellScreen(
                             bottomInset = bottomInset,
                             onAddBitwardenVault = onAddBitwardenVault,
                             onAddKdbxVault = onAddKdbxVault,
+                            onOpenLockedVault = onOpenLockedVault,
                         )
                     }
                 }

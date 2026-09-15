@@ -264,6 +264,14 @@ private fun NavGraphBuilder.vaultEntryGraph(
             // 用户永远加不了本地 KDBX 库）。
             onAddBitwardenVault = { navController.navigate(AddVaultRoute) },
             onAddKdbxVault = { navController.navigate(AddKdbxRoute) },
+            // 设置页点了**未解锁**的库 → 直奔它的解锁页（2026-09-15 修的空白页 bug）。
+            // ⚠️ 用 navigate 而非 navigate(Root)：解锁页压在当前栈上，解锁后
+            // onUnlocked 会把活跃库切过去并回主界面，返回栈天然正确。
+            onOpenLockedVault = { vaultId -> navController.navigate(UnlockRoute(vaultId)) },
+            // 条目页空态里的兜底：活跃库锁着时去解它（与库数量无关，单库也需要）。
+            onUnlockActiveVault = {
+                activeVaultId?.let { navController.navigate(UnlockRoute(it)) }
+            },
             // 页内主动锁定：交回根入口（若已全锁，RootNavState 会自己弹解锁页）
             onLocked = { navController.navigateToRoot(VaultListRoute) },
             // 切换密码库 → 「我的密码库」页（列出全部库，未解锁项可点进去输密码）。
@@ -306,6 +314,8 @@ private fun NavGraphBuilder.settingsGraph(navController: NavHostController) {
             onOpenImportExport = { navController.navigate(ImportExportRoute) },
             onAddBitwardenVault = { navController.navigate(AddVaultRoute) },
             onAddKdbxVault = { navController.navigate(AddKdbxRoute) },
+            // 与主界面 Tab 内嵌的设置页同款接线：点未解锁的库 → 去解锁页。
+            onOpenLockedVault = { vaultId -> navController.navigate(UnlockRoute(vaultId)) },
         )
     }
     composable<AutofillSettingsRoute> {
@@ -349,6 +359,8 @@ private fun NavGraphBuilder.itemsGraph(navController: NavHostController) {
             onOpenTotp = {
                 navController.navigate(TotpCodesRoute(vaultId = route.vaultId))
             },
+            // 库锁定的兜底出口（路由带 vaultId，直接去解锁页）。
+            onUnlockVault = { navController.navigate(UnlockRoute(route.vaultId)) },
         )
     }
     composable<TotpCodesRoute> { entry ->

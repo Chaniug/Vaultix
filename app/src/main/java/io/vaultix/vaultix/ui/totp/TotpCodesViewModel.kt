@@ -106,6 +106,16 @@ class TotpCodesViewModel @Inject constructor(
          * 也不是真实状态，用户只能读成"坏了/空白"。
          */
         val loading: Boolean = true,
+        /**
+         * 活跃库**是否已解锁**（`null` = 库信息还没到）。
+         *
+         * ⚠️ 2026-09-15 加：库里条目全在、只是密文读不出来时，`items` 同样是空的。
+         * 若不区分，界面会显示「还没有验证码」——与密码页的「还没有保存的密码」是
+         * **同一个假状态**（用户报的「切到未解锁的 KDBX 后两页都空白」）。
+         * 注意 [loading] 管不了这件事：它只表示"流还没发首帧"，而锁定库的流**已经发了**
+         * 一个（真实的）空列表。
+         */
+        val unlocked: Boolean? = null,
     )
 
     private val _state = MutableStateFlow(UiState())
@@ -129,6 +139,7 @@ class TotpCodesViewModel @Inject constructor(
                     it.copy(
                         vaultName = vault?.name.orEmpty(),
                         serverOrigin = vault?.origin,
+                        unlocked = vault?.unlocked,
                     )
                 }
             }

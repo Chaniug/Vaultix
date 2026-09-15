@@ -21,6 +21,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Contrast
@@ -124,6 +125,15 @@ fun SettingsScreen(
     /** 「密码库」分区：添加 Bitwarden 云端库 / 打开本地 KDBX 文件（导航到对应流程）。 */
     onAddBitwardenVault: () -> Unit = {},
     onAddKdbxVault: () -> Unit = {},
+    /**
+     * 「密码库」分区：点一个**未解锁**的库时，去它的解锁页输主密码。
+     *
+     * ⚠️ 必须有这个出口（2026-09-15 用户报的 bug）：KDBX 明文只在内存，
+     * 冷启动后必然是未解锁状态；早先对话框对未解锁项也**无条件切库**，
+     * 切过去后条目流因会话为空而返回空列表 ⇒ 条目页与验证码页全白，
+     * 且「切库即锁旧库」把原来能看的库也锁了 ⇒ 两个库都进不去。
+     */
+    onOpenLockedVault: (String) -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -170,6 +180,7 @@ fun SettingsScreen(
                 viewModel = viewModel,
                 onAddBitwardenVault = onAddBitwardenVault,
                 onAddKdbxVault = onAddKdbxVault,
+                onOpenLockedVault = onOpenLockedVault,
             )
 
             // ---- 解锁与隐私（拆出去守住 detekt LongMethod ≤150）----
@@ -477,6 +488,7 @@ private fun VaultSection(
     viewModel: SettingsViewModel,
     onAddBitwardenVault: () -> Unit,
     onAddKdbxVault: () -> Unit,
+    onOpenLockedVault: (String) -> Unit,
 ) {
     val active by viewModel.activeVault.collectAsStateWithLifecycle()
     val default by viewModel.defaultVault.collectAsStateWithLifecycle()
@@ -515,12 +527,24 @@ private fun VaultSection(
             vaults = switchable,
             activeId = active?.id,
             defaultId = default?.id,
-            onSelect = { vaultId ->
-                viewModel.selectVault(vaultId)
+            // ⚠️ 只有**已解锁**的库才能成为活跃库（2026-09-15 修的 bug）：
+            // 未解锁的库切过去后条目流是空的（KDBX 会话不在内存 / Bitwarden 无密钥），
+            // 且「切库即锁旧库」会顺带把原来能看的库也锁掉 ⇒ 条目页与验证码页**全白**。
+            // 所以未解锁项的点击语义是「去解锁」，不是「切过去」。
+            onSelect = { vault ->
+                if (vault.unlocked) {
+                    viewModel.selectVault(vault.id)
+                } else {
+                    onOpenLockedVault(vault.id)
+                }
                 showDialog = false
             },
-            onSetDefault = { vaultId ->
-                viewModel.setDefaultVault(vaultId)
+            // 「设为默认」= 改冷启动先开哪个，**不要求当下解锁**（这是它的正当用途：
+            // 用户明知道某库要输密码，仍希望下次开 App 直奔它）。故这里也先切活跃库，
+            // 但只对已解锁库切 —— 未解锁库交给解锁页去打开。
+            onSetDefault = { vault ->
+                if (vault.unlocked) viewModel.selectVault(vault.id)
+                viewModel.setDefaultVault(vault.id)
                 showDialog = false
             },
             onDismiss = { showDialog = false },
@@ -547,20 +571,25 @@ private fun VaultSection(
  *
  * ⚠️ 2026-09-14（issue #96）：原先只列已解锁库 ⇒ 未解锁的 KDBX 不在列表里，
  * 用户「找不到我的库」而以为库丢了。现在全部列出、未解锁项如实标注
- * 「未解锁 · 需先输入主密码」——**「找得到」优先于「点得动」**：
- * 点一个未解锁库时 [onSelect] 会把用户带去解锁页（由宿主接线）。
+ * 「未解锁 · 需先输入主密码」——**「找得到」优先于「点得动」**。
+ *
+ * ⚠️ 2026-09-15（用户报的空白页 bug）：**未解锁项不能「切过去」**。
+ * 切过去后条目流为空（Bitwarden 无密钥 / KDBX 会话不在内存），条目页与验证码页
+ * 会显示成「还没有保存的密码」——用户看到的就是**全白**；更糟的是「切库即锁旧库」
+ * 会把原来能看的库一并锁掉，两个库都进不去。故未解锁项的点击语义 = **去解锁页**
+ * （由 [onSelect] 的分支与宿主的 `onOpenLockedVault` 接线共同保证）。
  *
  * 两项动作分开（这是「活跃库 / 默认库」两键拆分的 UI 形态）：
- * - 点行 = 切换**本次会话**看哪个；
- * - 「设为默认」= 改**冷启动先开哪个**（唯一写入点）。
+ * - 点行 = 已解锁 → 切换**本次会话**看哪个；未解锁 → 去解锁页；
+ * - 「设为默认」= 改**冷启动先开哪个**（唯一写入点，**不要求当下解锁**）。
  */
 @Composable
 private fun ActiveVaultDialog(
     vaults: List<VaultSummary>,
     activeId: String?,
     defaultId: String?,
-    onSelect: (String) -> Unit,
-    onSetDefault: (String) -> Unit,
+    onSelect: (VaultSummary) -> Unit,
+    onSetDefault: (VaultSummary) -> Unit,
     onDismiss: () -> Unit,
 ) {
     AlertDialog(
@@ -577,8 +606,8 @@ private fun ActiveVaultDialog(
                             locked = !vault.unlocked,
                             selected = vault.id == activeId,
                             isDefault = vault.id == defaultId,
-                            onClick = { onSelect(vault.id) },
-                            onSetDefault = { onSetDefault(vault.id) },
+                            onClick = { onSelect(vault) },
+                            onSetDefault = { onSetDefault(vault) },
                         )
                     }
                     Text(
@@ -620,7 +649,17 @@ private fun VaultChoiceRow(
             .padding(vertical = Spacing.xs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        RadioButton(selected = selected, onClick = onClick)
+        // 单选的意义是「现在看哪个」⇒ 未解锁项**不参与单选**，改成一个「去解锁」的
+        // 方向箭头：否则会显示成"已选中但内容空白"，与本次修的 bug 观感一致。
+        if (locked) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            RadioButton(selected = selected, onClick = onClick)
+        }
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = name,
@@ -629,7 +668,7 @@ private fun VaultChoiceRow(
             )
             if (locked) {
                 Text(
-                    text = stringResource(R.string.settings_vault_locked_suffix),
+                    text = stringResource(R.string.settings_vault_locked_tap_to_unlock),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

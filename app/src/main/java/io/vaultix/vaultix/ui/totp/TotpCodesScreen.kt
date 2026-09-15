@@ -222,76 +222,27 @@ fun TotpCodesScreen(
             // 顶栏区域 ⇒「收起后顶栏透明、内容从下方穿过」不成立 = 用户反馈的「验证码页不沉浸」。
             // 这与密码页 [ItemsList] 的写法是同一条约束（`.ai/ISSUES.md` #67）。
             val topInset = if (searchActive) 0.dp else barPadding + Spacing.sm
-            when {
-                // ⚠️ **必须排在空态前面**：冷启动 / 解锁后条目流还没发首帧时，
-                // `state.items` 同样是空的 —— 若直接落进 `TotpEmptyBody`，用户看到的就是
-                // 「还没有验证码」这个**假状态**（实测 1~2 秒才变真）。
-                // 这就是用户报的「冷启动瞬间点验证码页有 1~2 秒空白」。
-                state.loading -> TotpLoadingBody()
-
-                state.items.isEmpty() -> TotpEmptyBody(
-                    topInset = topInset,
-                    title = stringResource(R.string.totp_empty_title),
-                    message = stringResource(R.string.totp_empty_body),
-                )
-
-                entries.isEmpty() -> TotpEmptyBody(
-                    topInset = topInset,
-                    message = stringResource(R.string.totp_empty_body),
-                )
-
-                else -> LazyColumn(
-                    state = listState,
-                    modifier = Modifier.fillMaxSize(),
-                    // 与密码列表同一套留白结构（卡片不再自带外边距，见 [EntryCard]）。
-                    // 顶部 = 状态栏 + 顶栏高（随收起动画变短）；
-                    // 底部留出叠层悬浮底栏的高度，否则最后一条被胶囊压住。
-                    contentPadding = PaddingValues(
-                        start = Spacing.lg,
-                        top = topInset,
-                        end = Spacing.lg,
-                        bottom = Spacing.sm + bottomInset,
-                    ),
-                    verticalArrangement = Arrangement.spacedBy(TOTP_CARD_GAP),
-                ) {
-                    // 整页一条倒计时进度条，「通行密钥」入口挂在它右侧。
-                    // 作为**列表首项**：随滚动一起滑走，于是收起后内容能穿过透明顶栏 ——
-                    // 沉浸感与进度条收起是同一个动作（见 [TotpPageProgress] 的折叠包装）。
-                    item(key = "page_progress") {
-                        TotpPageProgress(
-                            entries = entries,
-                            nowSeconds = nowSeconds,
-                            collapseFraction = collapse,
-                            onOpenPasskeys = onOpenPasskeys,
-                        )
-                    }
-                    items(entries, key = { it.itemId }) { entry ->
-                        TotpRow(
-                            entry = entry,
-                            nowSeconds = nowSeconds,
-                            serverOrigin = state.serverOrigin,
-                            actions = TotpRowActions(
-                                isSelectionMode = selectionMode,
-                                isSelected = entry.itemId in selectedIds,
-                                // 缺省 true：新建刚可见、还没入队的那一瞬间不该闪一下「未同步」。
-                                synced = state.syncStates[entry.itemId] ?: true,
-                                onToggleSelect = {
-                                    selectedIds = toggleSelection(selectedIds, entry.itemId)
-                                },
-                                onEdit = { editing = entry },
-                                onDelete = {
-                                    // 删完必须把 id 从选中集合里摘掉，否则底栏还会
-                                    // 统计一条已经不存在的条目。
-                                    selectedIds = selectedIds - entry.itemId
-                                    viewModel.deleteTotp(entry)
-                                },
-                                onBind = { if (!entry.bound) binding = entry },
-                                onCopy = viewModel::copyCode,
-                            ),
-                        )
-                    }
-                }
-            }
+            TotpBody(
+                state = state,
+                entries = entries,
+                listState = listState,
+                nowSeconds = nowSeconds,
+                collapse = collapse,
+                selectionMode = selectionMode,
+                selectedIds = selectedIds,
+                topInset = topInset,
+                bottomInset = bottomInset,
+                onOpenPasskeys = onOpenPasskeys,
+                onToggleSelect = { id -> selectedIds = toggleSelection(selectedIds, id) },
+                onEdit = { entry -> editing = entry },
+                onDeleteEntry = { entry ->
+                    // 删完必须把 id 从选中集合里摘掉，否则底栏还会统计一条已不存在的条目。
+                    selectedIds = selectedIds - entry.itemId
+                    viewModel.deleteTotp(entry)
+                },
+                onBind = { entry -> if (!entry.bound) binding = entry },
+                onCopy = viewModel::copyCode,
+            )
             if (!searchActive) {
                 TotpOverlayTopBar(
                     collapseFraction = collapse,
@@ -360,6 +311,110 @@ private fun TotpTickerEffect(onTick: (Long) -> Unit) {
  * ⚠️ 它存在的**唯一**理由：不要把"还没加载完"显示成"还没有验证码"（见 `UiState.loading`）。
  * 刻意只放一个转圈、不做骨架屏 —— 这一屏通常只有几百毫秒，骨架屏反而容易被读成"内容错位"。
  */
+/**
+ * 验证码页主体：**四个空态 + 列表**的完整分流（从 [TotpCodesScreen] 抽出）。
+ *
+ * 四个 `when` 分支的顺序**有语义**，不能重排：
+ * 1. `loading` —— 流还没发首帧（冷启动 1~2 秒的假空态）；
+ * 2. `unlocked == false` —— 库锁着（条目都在，只是读不出来）；
+ * 3. `items.isEmpty()` —— 真的没有验证码；
+ * 4. `entries.isEmpty()` —— 有验证码但被搜索词筛没了。
+ *
+ * 抽出来的直接原因：内联这几处会把 [TotpCodesScreen] 顶破 detekt 的
+ * LongMethod（实测 153 > 150）与 CyclomaticComplexMethod（15 > 14）。
+ */
+@Composable
+private fun TotpBody(
+    state: TotpCodesViewModel.UiState,
+    entries: List<TotpEntry>,
+    listState: LazyListState,
+    nowSeconds: Long,
+    collapse: Float,
+    selectionMode: Boolean,
+    selectedIds: Set<String>,
+    topInset: Dp,
+    bottomInset: Dp,
+    onOpenPasskeys: () -> Unit,
+    onToggleSelect: (String) -> Unit,
+    onEdit: (TotpEntry) -> Unit,
+    onDeleteEntry: (TotpEntry) -> Unit,
+    onBind: (TotpEntry) -> Unit,
+    onCopy: (String) -> Unit,
+) {
+    when {
+        // ⚠️ **必须排在空态前面**：冷启动 / 解锁后条目流还没发首帧时，
+        // `state.items` 同样是空的 —— 若直接落进 `TotpEmptyBody`，用户看到的就是
+        // 「还没有验证码」这个**假状态**（实测 1~2 秒才变真）。
+        // 这就是用户报的「冷启动瞬间点验证码页有 1~2 秒空白」。
+        state.loading -> TotpLoadingBody()
+
+        // ⚠️ 与密码页同一类坑（2026-09-15 用户报的「切到 KDBX 后验证码页也全白」）：
+        // 活跃库锁定时条目流必然是空的，但**不能说「还没有验证码」**——
+        // 那同样是假状态。锁定时要如实说"锁着"。
+        state.unlocked == false -> TotpEmptyBody(
+            topInset = topInset,
+            title = stringResource(R.string.items_locked_title),
+            message = stringResource(R.string.items_locked_body),
+        )
+
+        state.items.isEmpty() -> TotpEmptyBody(
+            topInset = topInset,
+            title = stringResource(R.string.totp_empty_title),
+            message = stringResource(R.string.totp_empty_body),
+        )
+
+        entries.isEmpty() -> TotpEmptyBody(
+            topInset = topInset,
+            message = stringResource(R.string.totp_empty_body),
+        )
+
+        else -> LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
+            // 与密码列表同一套留白结构（卡片不再自带外边距，见 [EntryCard]）。
+            // 顶部 = 状态栏 + 顶栏高（随收起动画变短）；
+            // 底部留出叠层悬浮底栏的高度，否则最后一条被胶囊压住。
+            contentPadding = PaddingValues(
+                start = Spacing.lg,
+                top = topInset,
+                end = Spacing.lg,
+                bottom = Spacing.sm + bottomInset,
+            ),
+            verticalArrangement = Arrangement.spacedBy(TOTP_CARD_GAP),
+        ) {
+            // 整页一条倒计时进度条，「通行密钥」入口挂在它右侧。
+            // 作为**列表首项**：随滚动一起滑走，于是收起后内容能穿过透明顶栏 ——
+            // 沉浸感与进度条收起是同一个动作（见 [TotpPageProgress] 的折叠包装）。
+            item(key = "page_progress") {
+                TotpPageProgress(
+                    entries = entries,
+                    nowSeconds = nowSeconds,
+                    collapseFraction = collapse,
+                    onOpenPasskeys = onOpenPasskeys,
+                )
+            }
+            items(entries, key = { it.itemId }) { entry ->
+                TotpRow(
+                    entry = entry,
+                    nowSeconds = nowSeconds,
+                    serverOrigin = state.serverOrigin,
+                    actions = TotpRowActions(
+                        isSelectionMode = selectionMode,
+                        isSelected = entry.itemId in selectedIds,
+                        // 缺省 true：新建刚可见、还没入队的那一瞬间不该闪一下「未同步」。
+                        synced = state.syncStates[entry.itemId] ?: true,
+                        onToggleSelect = { onToggleSelect(entry.itemId) },
+                        onEdit = { onEdit(entry) },
+                        onDelete = { onDeleteEntry(entry) },
+                        onBind = { onBind(entry) },
+                        onCopy = onCopy,
+                    ),
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun TotpLoadingBody() {
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
