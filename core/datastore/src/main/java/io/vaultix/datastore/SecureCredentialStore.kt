@@ -25,7 +25,7 @@ import javax.inject.Singleton
  * 敏感凭据存储。
  *
  * 实现选择：直接使用 **Android Keystore + AES-256-GCM**，而非
- * ndroidx.security.crypto 的 EncryptedSharedPreferences——后者（含 MasterKey）
+ * Androidx.security.crypto 的 EncryptedSharedPreferences——后者（含 MasterKey）
  * 在 1.1.0 中已整体废弃。
  *
  * 安全性：密钥由 Keystore 生成且**不可导出**，加解密都在 Keystore 内完成，
