@@ -49,6 +49,7 @@
 | 65 | KDoc 里写「星号 + 斜杠」→ 整个文件变语法错误 |
 | 74 | detekt 不会对 @Composable 网开一面 —— 抽块时参数必须 ≤8 |
 | 75 | 给函数加「带默认值的尾部参数」会吃掉调用点的尾随 lambda |
+| 101 | 🔴 `import` 的**包路径**写错（符号名对、包名错）：detekt 与 `check_signature_types.py` **双双查不出**，只有 CI 编译能炸 —— 已修，并新增 `.ai/tools/check_import_packages.py` 守护 |
 
 ### [02-自动填充](./issues/02-自动填充.md) — 自动填充（AutofillService 链路）
 

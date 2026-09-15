@@ -1,5 +1,39 @@
 # 下一步任务清单
 
+> ## ✅ 【2026-09-15 第六十六轮·四续】CI 编译失败已修 + 补上 `import` 盲区守护工具
+>
+> **⚠️ 这一条是上一条（三续）的前置**：三续的代码首次推送后 **CI 编译没过**，
+> 现已修复并**全绿**，APK 可下载装机。详见 `.ai/ISSUES.md` **#101**。
+>
+> | 项 | 结果 |
+> |---|---|
+> | **CI 编译失败修复** | ✅ `PasskeysScreen.kt` 的 `WindowInsets` 导入包写错（`material3` → `foundation.layout`），修 `e3f6f05` |
+> | **CI 复验** | ✅ run `34930096397` → **success**（`Build Debug APK` ✓ / `Publish … preview Release` ✓ / detekt ✓） |
+> | **新增守护工具** | ✅ `.ai/tools/check_import_packages.py` —— 校验 `import` 包路径 |
+>
+> **可下载 APK**：`preview` Release 资产的 `app-full-debug.apk`（30.7MB），
+> tag 为 `dev-e3f6f056…`（与该 commit 对应）；证书与本机一致 ⇒ **覆盖安装不丢数据**。
+>
+> ---
+>
+> ### ⚠️ 本轮暴露的工具盲区（接力必读）
+>
+> **detekt + `check_signature_types.py` 都查不出"符号名写对、包名写错"**：
+> - detekt **不做符号解析**，只跑静态规则；
+> - `check_signature_types.py` **只读函数签名里的类型名，从不读 `import` 语句**。
+>
+> ⇒ **`import` 行此前是一条无人看守的缝。** 新增的
+> `check_import_packages.py` 用「**独占包一致性**」判据堵上它：
+> 某符号若全仓库只从一个包导入过（样本 ≥2），偏离即报错。
+> **改完 import 后跑一下**（`--changed` 只扫本次改动）：
+>
+> ```bash
+> python3 .ai/tools/check_import_packages.py --changed
+> ```
+>
+> **回归验证**：注入原错误会报 `L47: WindowInsets 导入自 material3，约定为 foundation.layout`，
+> **行号与 CI 报的 `47:35` 吻合** ⇒ 当时若有它，可省掉一整轮 CI。
+>
 > ## ✅ 【2026-09-15 第六十六轮·三续】通行密钥对齐 + PIN 键盘下移 + 密码库管理合并 —— **已完成，待本机验收**
 >
 > 用户报的两件 UI 事 + 一条架构诉求（问句，按推荐方案已做）。

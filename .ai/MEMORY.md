@@ -138,6 +138,31 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 > 逐轮流水 → `.ai/SESSION-YYYY-MM-DD.md` · 坑 → `.ai/ISSUES.md`（索引，正文在 `issues/`）·
 > 性能专项 → [`Docs/progress/perf-plan.md`](../Docs/progress/perf-plan.md)。
 
+**第六十六轮四续（2026-09-15 · CI 编译失败修复 + 补上一处工具盲区）**
+
+1. **CI `34929618286` 在 `Build Debug APK` 失败**，`PasskeysScreen.kt` 两处
+   `Unresolved reference 'WindowInsets'`。根因：导入写成了
+   `androidx.compose.material3.WindowInsets`，而它属于
+   `androidx.compose.foundation.layout`。修 `e3f6f05` ⇒ CI `34930096397` **success**，
+   APK 已发布到 `preview` Release。
+
+2. 🔴 **工具盲区（本轮最重要的发现）**：detekt **不做符号解析**、
+   `check_signature_types.py` **只读函数签名不读 import** ——
+   两者都**看不见"符号名写对、包名写错"**这一类错误。
+   ⇒ **`import` 行此前无人看守**。见 `.ai/ISSUES.md` #101。
+
+3. **新增 `.ai/tools/check_import_packages.py`**。判据不维护 Compose 符号表，
+   而是**拿仓库自己当基准**：「独占包一致性」—— 某名字若全仓库只从一个包导入过
+   （样本 ≥2），即为约定，偏离即报错。**回归验证**：注入原错误后报
+   `L47: WindowInsets 导入自 material3，约定为 foundation.layout`，
+   **行号与 CI 的 `47:35` 吻合**。
+
+4. **工具设计上的一次自我纠正**：首版用「**多数包**」判据，误报 2 处 ——
+   `lerp`（`ui.graphics` 颜色插值 与 `ui.unit` 的 Dp 插值**是两个真函数**）、
+   `LocalLifecycleOwner`（`compose.ui.platform` 旧 与 `lifecycle.compose` 新**并存**）。
+   改为「独占包」判据：**同一名字只要在 ≥2 个包出现过就整类跳过**。
+   ⇒ 复用教训：**校验工具的误报比漏报更致命**，误报会让人不再信任它。
+
 **第六十六轮续（2026-09-15 上午 · 用户报的两件事，见 `.ai/SESSION-2026-09-15.md` §6）**
 
 1. **M3E P1-1 波浪进度指示器**（`036b9c5`）：9 处「不确定态等待」换波浪版，
