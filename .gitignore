@@ -51,3 +51,7 @@ compose-reports/
 
 # OS
 Thumbs.db
+
+# Python 缓存（.ai/tools 下的自检脚本会产生）
+__pycache__/
+*.pyc

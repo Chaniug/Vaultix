@@ -155,6 +155,21 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
    **纪律**：凡"空列表"都要能回答"为什么空"——`orEmpty()` 抹平 `null` 时，
    必须在状态层留下可区分的信号（同 #76 的"冷启动假空态"，同一个病）。
 
+**第六十六轮再续（2026-09-15 上午 · 见 `SESSION-2026-09-15.md` §8）**
+
+3. ⚠️ **CI 有一个从未跑过的门禁**（`.ai/ISSUES.md` **#100**）：
+   `Run lint` 带 `if: github.event_name != 'push'`，而本仓库 50 次运行**全是 push**
+   ⇒ 它**第一次真正执行**（我手动触发）就失败，且把 detekt / 编码 / Build APK
+   全 skip 掉。已加 `continue-on-error: true` **止血**（只报告不阻断）。
+   **纪律**：**「CI 全绿」必须问「哪条链路的绿」** —— 带 `if: event != 'push'` 的
+   步骤，push 绿**不代表**它通过（`skipped` ≠ 通过）。
+   ⚠️ 沙箱**看不了 CI 原始日志**（302 到 blob 存储，不可达）⇒ 用
+   **check-run annotations**（`gh api repos/<o>/<r>/check-runs/<id>/annotations`）。
+4. ⭐ **新增本地自检工具 `.ai/tools/check_signature_types.py`**：
+   校验「函数签名里的类型名在本仓库是否存在」，专治我上一轮那个
+   「凭记忆写错类型名、detekt 查不出、只在 CI 编译时才炸」的错。
+   **抽/改函数签名后跑一遍**。已用**注入历史错误**的方式验证过它真能抓到（不是空转）。
+
 **第六十六轮（2026-09-15 凌晨 · 睡前交接的两件事，见 `.ai/SESSION-2026-09-15.md`）**
 
 用户睡前交待「**设置页优化** + **Material3 优化**」，两项均已完成并提交（**未推送**）：

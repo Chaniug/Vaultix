@@ -21,6 +21,7 @@
 | `issues/` | 坑的正文 7 篇：`01-构建与环境` … `07-数据与同步` | 各 4~43KB |
 | `decisions/` | **逻辑定稿**（用户拍板的方向，非根因、非实现）：`库选择与快速解锁-逻辑定稿.md`、`设置页信息架构-定稿.md` | — |
 | `SESSION-YYYY-MM-DD.md` | 逐轮工作日志（append-only） | — |
+| `tools/` | **本地自检脚本**（不需 Android SDK，`python3` 直接跑）：`check_signature_types.py` = 校验函数签名里的类型名在本仓库是否存在 | — |
 
 > **为什么这么拆**：原先 `.ai/ISSUES.md` 139KB、`.ai/MEMORY.md` 43KB ——
 > 全读会把真正需要的上下文挤掉，定位只能靠 grep。现在入口稳定、**正文按需读一篇**。
