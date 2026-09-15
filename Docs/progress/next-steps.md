@@ -1,5 +1,82 @@
 # 下一步任务清单
 
+> ## ✅ 【2026-09-15 第六十六轮·五续】通行密钥漏订阅已真修 + 三个弹窗按 M3 重做 + 堵上 `@OptIn` 的缝
+>
+> **⚠️ 这一条覆盖上一条（四续）**：四续说「三续的代码没问题」，但**用户真机验收驳回了** ——
+> 通行密钥页仍然「必须点一下搜索才出现」。**是我错了**，本轮才找到真病根。
+> 详见 `.ai/SESSION-2026-09-15.md` **§11** 与坑 #103。
+>
+> | 项 | 结果 |
+> |---|---|
+> | **通行密钥「必须点搜索才显示」** | ✅ 真根因 = **漏订阅**（详见下方），修后冷启动首帧即渲染 |
+> | **三个弹窗按 M3 重做** | ✅ 当前密码库 / 快速解锁 PIN / 添加密码库，共用新 `ui/common/DialogShell.kt` |
+> | **`@OptIn` 缺注解导致 CI 挂** | ✅ 修 `fc1fa6c` ⇒ CI run `34938509113` = **`conclusion: success`** |
+> | **新增守护工具** | ✅ `.ai/tools/check_experimental_optin.py`（含 `--selftest`，5/5 通过） |
+> | **APK** | ✅ `preview` Release 的 `app-full-debug.apk`（**32.2 MB**，对应 commit `fc1fa6c`） |
+>
+> ---
+>
+> ### 🔴 通行密钥那条 bug 的真根因（接力必读，别再修错方向）
+>
+> **症状**：打开通行密钥页看不到条目；点一下搜索就全出来了。
+> **上一轮我误判成** #84「分支塌陷」，只调了空态分支顺序 —— **没碰病根，被用户驳回**。
+>
+> **真根因**：`PasskeysScreen` 调的是 `viewModel.passkeyRows()`，函数内部读 `_state.value`。
+> **普通函数调用不会订阅 Flow、也不参与 Compose 重组** ⇒ 首帧算出空列表后
+> **再无任何机制触发重算**，页面钉死在空态。点搜索翻转 `searchActive` ⇒ 逼出一次重组 ⇒ 条目才出现。
+>
+> **正确写法**（对齐验证码页 `rememberTotpEntries`，那边早修过同一个坑）：
+>
+> ```kotlin
+> @Composable
+> private fun rememberPasskeyRows(state: PasskeysViewModel.UiState): List<PasskeyRow> =
+>     remember(state.items, state.query) {
+>         state.items.toPasskeyRows().filter { it.matches(state.query) }
+>     }
+> ```
+>
+> 纯逻辑抽成 `List<VaultItem>.toPasskeyRows()` + `PasskeyRow.matches(query)`（**不读 `_state`**）。
+>
+> > **可复用判据**：界面要用的任何派生数据，都必须从**「已收集的 state 快照」**算出来。
+> > **排查启发式**：用户描述里出现「**要点一下某个无关按钮才出现**」⇒ 八成就是漏订阅。
+> > **症状的形状本身就是诊断** —— 别用症状的相似性去套旧结论。
+>
+> ---
+>
+> ### 🔴 第二处盲区：实验性 API 的 `@OptIn`（与 #101 同类）
+>
+> `BasicAlertDialog` / `ModalBottomSheet` / `TopAppBar` / `ExposedDropdownMenuBox` 等
+> 都是 `@Experimental*`，**每个调用点都要手写 `@OptIn`**。
+> **本工程没有任何工程级 opt-in 编译参数**（`app/build.gradle.kts` 的
+> `kotlin { compilerOptions }` 里只有 `jvmTarget`）⇒ **没有兜底，只能靠编译器**。
+>
+> **三个本地工具全看不见它**：detekt 不做符号解析、不看注解；
+> `check_signature_types.py` 只看签名里的类型名；`check_import_packages.py`
+> 看的包路径**完全正确**（`BasicAlertDialog` 确实在 `material3`）。
+>
+> 新增 `check_experimental_optin.py` 堵上。**改完 UI 后跑一下**（`--changed` 只扫本次改动）：
+>
+> ```bash
+> python3 .ai/tools/check_experimental_optin.py --selftest   # 先验工具自己
+> python3 .ai/tools/check_experimental_optin.py --changed    # 再扫改动
+> ```
+>
+> ⚠️ 它的判据是**注解作用域**（自己的注解 / 调用链上有一层带了 `@OptIn`，迭代到不动点），
+> **不是文本搜索** —— 头一版用文本搜索在干净仓库上误报了 17 处，已废弃。
+> **已声明的漏报边界**：跨文件的「调用了某个已 opt-in 的 composable」判不了。
+>
+> ---
+>
+> ### ⏭️ 本轮之后的待办
+>
+> 1. **装机验收**（用户）：通行密钥冷启动即显示（**不许再需要点搜索**）+
+>    三个弹窗（当前密码库 / 添加密码库 / 快速解锁）的新观感。
+> 2. **把 `check_experimental_optin.py` 接进 CI**（目前只在本地跑，可省一轮 CI）。
+> 3. 其余旧待办顺延：`detail_totp_hidden` 指路语、M3E P1-2/P1-3、
+>    P2 expressive AppBar、应用内 PIN 解锁 debt、Gradle 8.11.1 vs wrapper 9.5.1 版本错配排查。
+>
+> ---
+
 > ## ✅ 【2026-09-15 第六十六轮·四续】CI 编译失败已修 + 补上 `import` 盲区守护工具
 >
 > **⚠️ 这一条是上一条（三续）的前置**：三续的代码首次推送后 **CI 编译没过**，

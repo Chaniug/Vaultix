@@ -138,6 +138,60 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 > 逐轮流水 → `.ai/SESSION-YYYY-MM-DD.md` · 坑 → `.ai/ISSUES.md`（索引，正文在 `issues/`）·
 > 性能专项 → [`Docs/progress/perf-plan.md`](../Docs/progress/perf-plan.md)。
 
+**第六十六轮五续（2026-09-15 · 通行密钥漏订阅、三个弹窗重做、`@OptIn` 的缝）**
+
+1. 🔴 **用户明确驳回了上一轮的修法**：「通行密钥界面打开还是没有显示，必须要点一下搜索，
+   才能出现。这样不对吧」。上一轮我把它当成 #84「分支塌陷」只调了空态顺序 ——
+   **方向错了**。真根因：`PasskeysScreen` 调 `viewModel.passkeyRows()`，函数内部读
+   `_state.value`，**普通函数调用不订阅 Flow、不参与重组**；首帧算出空列表后
+   **再无机制触发重算**。修法对齐验证码页 `rememberTotpEntries`：
+   `remember(state.items, state.query) { ... }`，并把纯逻辑抽成
+   `List<VaultItem>.toPasskeyRows()` + `PasskeyRow.matches(query)`（不读 `_state`）。
+   见 `SESSION-2026-09-15.md` §11.1、坑 #103。
+
+   > **可复用判据**：界面要用的任何派生数据，都必须从**「已收集的 state 快照」**算出来。
+   > **排查启发式**：用户说「要点一下某个无关按钮才出现」⇒ 八成是漏订阅。
+
+2. **三个弹窗按 M3 重做**（用户：设置页「当前密码库 / 快速解锁 PIN / 添加密码库」
+   「都好简陋」，要求「设置精简，ui做好看一点」）。新增 **public**
+   `ui/common/DialogShell.kt`（9 个构件，放 `ui/common` 以避开
+   `ui/common → ui/settings` 反向依赖），三个弹窗**共用同一外壳**。
+   `VaultChoiceRow` 改 20dp `Card` + `Check` + `Star` 图标按钮；
+   `AddVaultTypeDialog` 的 `ListItem` 改 `VaultTypeCard`；
+   `UnlockOptionRow` 加 `enabled` 参数与状态徽标。
+   **硬约束全部保留**：锁定项绝不给选中标记；`UnlockOptionRow` 不退回
+   `ListItem` + `trailingContent`；`QuickUnlockManageDialog` 两段式 + `verticalScroll` 不动。
+
+   > **拒绝了一次「更 M3」的诱惑**：没改成 `ModalBottomSheet`。
+   > 仓库 **25 个 `AlertDialog` vs 1 个 `ModalBottomSheet`** ⇒ **一致性优先**。
+
+3. 🔴 **`@OptIn` 是第二条无人看守的缝**。引入 `BasicAlertDialog` 时三处调用点全漏
+   `@OptIn(ExperimentalMaterial3Api::class)` ⇒ CI `34937992794` 挂。
+   修 `fc1fa6c` ⇒ CI **`34938509113` = success**，APK 已发布（32.2 MB / `fc1fa6c`）。
+   **为什么本地查不出**：detekt 不看注解；`check_signature_types.py` 只看签名类型名；
+   `check_import_packages.py` 看的包路径**完全正确**。且本工程**无任何工程级 opt-in**
+   （`kotlin { compilerOptions }` 里只有 `jvmTarget`）⇒ 每个调用点必须手写。
+
+4. **新增 `.ai/tools/check_experimental_optin.py`**（含 `--selftest`）。
+   判据模拟**注解作用域**，迭代到不动点：① 函数自己的注解覆盖了它用到的实验性符号；
+   ② 有另一个**已合法**的函数**调用了它**（`@Composable` 内联向下传递）。
+   ⚠️ ②是**反向边** —— 我**第一次把方向写反了**，自测抓出来的。
+   **回归验证**：删掉三处 `@OptIn` 后精确报出、**零噪声**，与 CI 三处一一对应。
+
+   > **⚠️ 头一版在干净仓库上误报了 17 处**（用「`fun` 前 4000 字符内有 `@OptIn` 就算过」
+   > 这种懒判据，把内联继承的合法用法全判死）。**宁可漏报，不可误报** —— 见 #101。
+   > **已声明的漏报边界**：跨文件的「调用了某个已 opt-in 的 composable」判不了。
+
+5. **贯穿本轮的总结论**：detekt + 三个自检脚本覆盖的都是**语法层**；
+   **符号解析层**（包是否存在 / 注解是否齐 / API 是否实验性）**只有真实编译器在看**。
+   每被炸一次就问「这条缝能不能用 20 行 Python 补上？」—— 能补就补；
+   补不了就**明确写下漏报边界**，别假装覆盖了。
+
+6. **本轮门禁全绿**：detekt ✅ / `check_signature_types --all` ✅（160 文件）/
+   `check_import_packages` ✅（160 文件 / 350 符号）/
+   `check_experimental_optin --selftest` ✅（5/5）/ 全量 ✅。
+   **CI `34938509113` ✅ / APK ✅ `preview` Release / `app-full-debug.apk`（32.2 MB）。**
+
 **第六十六轮四续（2026-09-15 · CI 编译失败修复 + 补上一处工具盲区）**
 
 1. **CI `34929618286` 在 `Build Debug APK` 失败**，`PasskeysScreen.kt` 两处
