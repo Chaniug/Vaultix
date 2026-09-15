@@ -117,7 +117,7 @@ fun PasskeysScreen(
     // 长按多选：用「集合非空」当开关，省掉一个必须与它同步的布尔量（同 ItemsScreen）。
     var selectedKeys by remember { mutableStateOf(emptySet<String>()) }
 
-    val rows = viewModel.passkeyRows()
+    val rows = rememberPasskeyRows(state)
 
     // 搜索态自己消费返回手势：本页是二级页，不拦会直接退回上一页而丢掉输入。
     BackHandler(enabled = searchActive) {
@@ -223,6 +223,26 @@ fun PasskeysScreen(
 }
 
 /**
+ * 由已收集的 [PasskeysViewModel.UiState] 派生「当前要展示的通行密钥行」。
+ *
+ * ⚠️ **必须**吃 `state.items` / `state.query` 两个 Compose State，**不能**回 ViewModel 读
+ * `_state.value`。函数式调用不订阅 Flow ⇒ **不感知快照**：首帧数据未到时算出空列表，
+ * 而且不等下一次重组，界面就停在空态「还没有通行密钥」，**必须点一下搜索**
+ * （改变 `searchActive` 强制重组）条目才出现。
+ *
+ * 2026-09-15 用户真机报的正是这一条：「点进通行密钥页面看不到条目，点击搜索后却又看得到」。
+ * 这与验证码页 `rememberTotpEntries`（`TotpCodesScreen.kt`）是**同一个坑**，那边早已修过。
+ *
+ * `remember` 把派生结果绑定到这两个输入：任一变化即重算，也不会因多选等无关状态变化而白算。
+ * 抽成 helper 同时也是给主 composable 瘦身、守 detekt `LongMethod ≤150`。
+ */
+@Composable
+private fun rememberPasskeyRows(state: PasskeysViewModel.UiState): List<PasskeyRow> =
+    remember(state.items, state.query) {
+        state.items.toPasskeyRows().filter { it.matches(state.query) }
+    }
+
+/**
  * 通行密钥列表的正文（列表 / 空态 / 锁定态）。
  *
  * 抽成独立 composable 有两个原因：
@@ -244,13 +264,18 @@ private fun PasskeysBody(
     onDelete: (PasskeyRow) -> Unit,
 ) {
     val selectionMode = selectedKeys.isNotEmpty()
+    // 库里「确实没有通行密钥」——用它而不是 `rows.isEmpty()` 来判定空态，
+    // 否则搜索筛空时会错报「还没有通行密钥」（验证码页是同样拆开的，见其 `items.isEmpty()`
+    // 与 `entries.isEmpty()` 两级）。
+    val noPasskeysAtAll = state.items.none { it.fido2Credentials.isNotEmpty() }
     when {
         // ⚠️ **必须排在空态前面**：冷启动 / 解锁后条目流还没发首帧时 `state.items`
         // 同样是空的 —— 若直接落进空态，用户看到的就是「还没有通行密钥」这个**假状态**。
+        // 标题也**不能**沿用 `passkeys_empty_title`：那等于一边说"还没有"一边说"正在读"。
         state.loading -> PasskeysEmptyState(
             topInset = topInset,
-            title = stringResource(R.string.passkeys_empty_title),
-            message = stringResource(R.string.passkeys_empty_body, state.items.size, 0),
+            title = null,
+            message = stringResource(R.string.passkeys_loading_body),
         )
 
         // 与密码页 / 验证码页同一类坑（2026-09-15 用户报的「切到未解锁的库后两页全白」）：
@@ -261,7 +286,8 @@ private fun PasskeysBody(
             message = stringResource(R.string.items_locked_body),
         )
 
-        state.items.isEmpty() || rows.isEmpty() -> PasskeysEmptyState(
+        // 库里确实一条通行密钥都没有（与"搜索筛没了"区分）。
+        noPasskeysAtAll -> PasskeysEmptyState(
             topInset = topInset,
             title = stringResource(R.string.passkeys_empty_title),
             message = stringResource(
@@ -269,6 +295,14 @@ private fun PasskeysBody(
                 state.items.size,
                 state.items.count { it.fido2Credentials.isNotEmpty() },
             ),
+        )
+
+        // 有通行密钥、但被搜索词筛没了 ⇒ 用「没有匹配的条目」，不能说「还没有通行密钥」。
+        // 复用密码列表的同名字符串，避免为同一件事造第三份文案。
+        rows.isEmpty() -> PasskeysEmptyState(
+            topInset = topInset,
+            title = stringResource(R.string.items_search_empty),
+            message = stringResource(R.string.passkeys_search_hint),
         )
 
         else -> LazyColumn(

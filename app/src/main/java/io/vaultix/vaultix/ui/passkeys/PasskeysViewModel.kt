@@ -101,21 +101,6 @@ class PasskeysViewModel @Inject constructor(
 
     fun setQuery(q: String) = _state.update { it.copy(query = q) }
 
-    /** 拉平所有登录条目的 fido2Credentials，按搜索过滤（rpId/rpName/userName）。 */
-    fun passkeyRows(): List<PasskeyRow> {
-        val q = _state.value.query.trim().lowercase()
-        return _state.value.items.flatMap { item ->
-            item.fido2Credentials.map { cred ->
-                PasskeyRow(itemId = item.id, loginTitle = item.title, credential = cred)
-            }
-        }.filter { row ->
-            q.isEmpty() ||
-                row.credential.rpId.lowercase().contains(q) ||
-                row.credential.rpName.lowercase().contains(q) ||
-                row.credential.userName.lowercase().contains(q)
-        }
-    }
-
     /** 供「保存到哪个密码条目」选择器使用的登录条目。 */
     fun loginCandidates(): List<VaultItem> =
         _state.value.items.filter { it.type == VaultItemType.Login }
@@ -157,6 +142,34 @@ data class PasskeyRow(
      * （验证码页是就地拼的，本页因为多了多选状态，值得收成一个属性）。
      */
     val key: String get() = "$itemId:${credential.credentialId}"
+
+    /** 是否命中搜索词（rpId / rpName / userName 任一，忽略大小写）。 */
+    fun matches(query: String): Boolean {
+        if (query.isBlank()) return true
+        val q = query.trim().lowercase()
+        return credential.rpId.lowercase().contains(q) ||
+            credential.rpName.lowercase().contains(q) ||
+            credential.userName.lowercase().contains(q)
+    }
+}
+
+/**
+ * 拉平所有登录条目的 [VaultItem.fido2Credentials]，每个凭证成为一行。
+ *
+ * ⚠️ 做成**纯函数**（不读 `_state.value`）是必须的：界面侧要用 `remember(state.items, ...)`
+ * 绑定到**已收集的 Compose State 快照**。此前这里是一份读裸 StateFlow 的
+ * `PasskeysViewModel.passkeyRows()`，**不感知快照** ⇒ 首帧数据未到时算出空列表，
+ * 且不等下一次重组，界面就停在空态「还没有通行密钥」，**必须点一下搜索**
+ * （改变 `searchActive` 强制重组）条目才出现 —— 2026-09-15 用户真机报的正是这一条。
+ *
+ * 与验证码页 `rememberTotpEntries` 是**同一个坑**，那边早已修过并留了注释
+ * （`TotpCodesScreen.kt`「不感知快照」）。函数式调用不会订阅 Flow：
+ * **凡「界面要用的派生数据」，一律从已收集的 state 快照算，不要回 ViewModel 读 `_state.value`。**
+ */
+fun List<VaultItem>.toPasskeyRows(): List<PasskeyRow> = flatMap { item ->
+    item.fido2Credentials.map { cred ->
+        PasskeyRow(itemId = item.id, loginTitle = item.title, credential = cred)
+    }
 }
 
 /** 构造一个待保存的通行密钥（默认值对齐 Bitwarden；时间戳不加密）。 */

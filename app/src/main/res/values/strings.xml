@@ -632,6 +632,8 @@
     <string name="passkeys_empty_title">还没有通行密钥</string>
     <string name="passkeys_empty_body">通行密钥由网站 / App 创建后同步到对应的密码条目里（本库共 %1$d 个条目，其中 %2$d 个含通行密钥）。在系统设置里把 Vaultix 设为凭证提供方后，网站 / App 的登录页即可从 Vaultix 选择通行密钥登录。</string>
     <string name="passkeys_add_title">保存通行密钥</string>
+    <!-- 首帧加载中：条目流还没发首帧，此时不能显示「还没有通行密钥」（那是假状态） -->
+    <string name="passkeys_loading_body">正在读取通行密钥…</string>
     <string name="passkeys_detail_title">通行密钥详情</string>
     <string name="passkeys_readonly_hint">通行密钥只读，仅可查看与删除（由服务器 / 平台管理）</string>
     <string name="passkey_field_rp_id">依赖方 ID</string>
