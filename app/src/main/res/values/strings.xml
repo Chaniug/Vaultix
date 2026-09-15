@@ -296,7 +296,13 @@
     <string name="quick_unlock_disabled">未启用</string>
     <string name="quick_unlock_device_unsupported">未启用（本设备未设置锁屏或生物识别，无法启用）</string>
     <!-- 快速解锁「生效范围」（定稿 §4.7：一把指纹钥匙管哪些库由用户勾选） -->
-    <string name="quick_unlock_scope_hint">选择这把指纹钥匙能打开哪些库。</string>
+    <string name="quick_unlock_scope_hint">每个库可分别开启指纹或应用内 PIN。两种方式彼此独立。</string>
+    <!-- 对话框唯一的段落标题（2026-09-15 三改：原来「指纹解锁 / 应用内 PIN」两个段落
+         合并成"一库一卡、卡内两行"，段落标题降级为**卡的引导语**；
+         「指纹解锁」「应用内 PIN」变为卡内**行标题**，见下面两条。 -->
+    <string name="quick_unlock_section_scope">选择要快速解锁的库</string>
+    <!-- 卡内行标题：指纹手段。（原为段落标题，三改后降级为行标题，文案不变） -->
+    <string name="quick_unlock_section_biometric">指纹解锁</string>
     <string name="quick_unlock_disabled_kdbx">未启用（启用时需再输一次该库的主密码）</string>
     <!-- KDBX 启用快速解锁前的主密码确认（定稿 §4.5，无法省略） -->
     <string name="kdbx_quick_unlock_title">启用快速解锁</string>
@@ -310,9 +316,19 @@
     <string name="pin_unlock_backspace">退格</string>
     <string name="pin_unlock_use_master">改用主密码</string>
     <string name="pin_section_title">应用内 PIN</string>
+    <!-- ⚠️ 自 2026-09-15 三改起**暂无代码引用**（一库一卡后，卡内不再放长说明；
+         引导语统一由 quick_unlock_section_scope 的那句承担）。
+         **刻意保留**：PIN 与主密码的关系这句写得很准，若日后 PIN 需要有独立说明页
+         （例如做「忘记 PIN 怎么办」的帮助入口），这句就是现成的文案。别当僵尸串删掉。 -->
     <string name="pin_section_hint">PIN 用于平时快速解锁。忘记它不影响数据——用主密码解锁后在设置里重设即可。</string>
+    <!-- ⚠️ 自 2026-09-15 二次重做起**暂无代码引用**（副标题改说 pin_enabled_digits）。
+         **刻意保留**：它把"这是 PIN 的状态"写全了，若日后 PIN 行脱离「应用内 PIN」段落
+         单独出现（例如合并成一个总开关），这句完整口径仍然可用。别当僵尸串删掉。 -->
     <string name="pin_enabled_summary">应用内 PIN：已启用（%1$d 位）</string>
-    <string name="pin_disabled_summary">应用内 PIN：未启用</string>
+    <!-- PIN 已启用时的副标题：段落标题已说明"这是 PIN"、徽标已说明"已启用"，
+         故这里**只留位数**这一条真信息（2026-09-15「毛坯房」归因第 2 条）。 -->
+    <string name="pin_enabled_digits">%1$d 位数字</string>
+    <string name="pin_disabled_summary">尚未设置</string>
     <string name="pin_enable">设置 PIN</string>
     <string name="pin_set_title">设置 PIN</string>
     <string name="pin_set_message">请输入 6 位数字。PIN 只用于解开本机已保存的密钥，不会上传。</string>

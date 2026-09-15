@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>快速解锁对话框 · 三段迭代对照</title>
+<style>
+  :root{
+    --primary:#4a5c92; --on-surface:#1b1b21; --on-surface-var:#46464f;
+    --outline:#777680; --outline-var:#c7c5d0;
+    --panel-high:#e5e2ec;   /* DialogSurface 面板底 */
+    --card-lowest:#ffffff;  /* 改后卡片底 */
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;padding:26px 16px 60px;background:#dfe0e6;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    color:var(--on-surface);
+  }
+  h1{font-size:19px;text-align:center;margin:0 0 6px;color:#2a2a30}
+  .sub{text-align:center;font-size:12.5px;color:#5b5b66;margin-bottom:24px;line-height:1.7}
+  .wrap{display:flex;gap:20px;justify-content:center;flex-wrap:wrap;align-items:flex-start}
+  .col{width:322px}
+  .tag{display:inline-block;font-size:11.5px;font-weight:700;padding:3px 10px;border-radius:99px;margin-bottom:8px}
+  .t1{background:#ffdad6;color:#93000a}
+  .t2{background:#ffe9c4;color:#7a4a00}
+  .t3{background:#c9f0d4;color:#0a5228}
+  .phone{background:#cfd0d6;border-radius:22px;padding:9px;box-shadow:0 8px 26px rgba(0,0,0,.2)}
+  .screen{background:#ded9e6;border-radius:15px;overflow:hidden;position:relative;height:640px;display:flex;flex-direction:column}
+  .sb{height:26px;display:flex;align-items:center;justify-content:space-between;padding:0 14px;font-size:10.5px;color:#3a3a44;font-weight:600;flex:none}
+  .bd{position:absolute;inset:26px 0 0 0;background:rgba(0,0,0,.32);display:flex;align-items:center;justify-content:center;padding:12px 9px}
+  .dlg{width:100%;max-width:290px;max-height:100%;border-radius:22px;background:var(--panel-high);overflow:hidden;display:flex;flex-direction:column}
+  .dt{font-size:16.5px;font-weight:600;padding:15px 17px 9px}
+  .db{overflow:auto;flex:1;padding-bottom:6px}
+  .sechead{padding:2px 17px 6px}
+  .l1{font-size:11.5px;font-weight:800;color:var(--primary);display:flex;align-items:center;gap:5px;letter-spacing:.4px}
+  .l2{font-size:10.5px;color:var(--on-surface-var);margin-top:3px;line-height:1.5}
+  .st-before{font-size:11.5px;font-weight:800;color:var(--primary);padding:2px 17px 5px}
+  .st-before.plain{font-size:10.5px;font-weight:400;color:var(--on-surface-var);padding:0 17px 6px}
+  .card{margin:3px 13px;border-radius:16px;padding:9px 12px}
+  .card.gone{background:rgba(229,226,236,.55)}
+  .card.ok{background:var(--card-lowest);box-shadow:0 1px 3px rgba(0,0,0,.1)}
+  .vh{display:flex;align-items:center;gap:8px}
+  .vn{font-size:13.5px;font-weight:600;flex:1}
+  .vn.sm{font-size:13px;font-weight:700}
+  .badge{display:flex;align-items:center;gap:4px;font-size:10.5px;font-weight:600;color:var(--primary);white-space:nowrap}
+  .dot{width:6px;height:6px;border-radius:50%;background:var(--primary);flex:none}
+  .sub2{font-size:10.5px;color:var(--on-surface-var);margin-top:3px;line-height:1.5}
+  .acts{display:flex;align-items:center;margin-top:5px}
+  .acts.end{justify-content:flex-end}
+  .btn{font-size:11.5px;font-weight:700;color:var(--primary);padding:3px 7px;border-radius:99px;white-space:nowrap}
+  .btn.ghost{color:var(--on-surface-var)}
+  .sp{flex:1}
+  .div{height:1px;background:var(--outline-var);margin:8px 17px;opacity:.8}
+  .div.in{margin:4px 12px}
+  .gap{height:13px}
+  .dact{display:flex;justify-content:flex-end;padding:8px 17px 13px;flex:none}
+  .rowline{display:flex;align-items:center;gap:8px}
+  .ic{width:14px;height:14px;color:var(--primary);flex:none}
+  .ic path,.ic circle,.ic line,.ic rect{stroke:currentColor;stroke-width:2;fill:none;stroke-linecap:round;stroke-linejoin:round}
+  .hintbox{margin-top:9px;font-size:11.5px;line-height:1.7;background:rgba(255,255,255,.74);border-radius:10px;padding:9px 12px;color:#33333c}
+  .note{max-width:800px;margin:28px auto 0;background:#fff;border-radius:14px;padding:18px 22px;font-size:13px;line-height:1.85;box-shadow:0 3px 14px rgba(0,0,0,.09)}
+  .note h2{font-size:14.5px;margin:0 0 10px}
+  table{width:100%;border-collapse:collapse;margin:10px 0;font-size:12.5px}
+  th,td{border:1px solid #e2e2ea;padding:7px 9px;text-align:left;vertical-align:top}
+  th{background:#f4f4f9;font-weight:700}
+  code{background:#f0f0f6;padding:1px 5px;border-radius:4px;font-family:ui-monospace,Menlo,monospace;font-size:11.5px}
+</style>
+</head>
+<body>
+
+<h1>「快速解锁」对话框 · 三段迭代</h1>
+<p class="sub">左：原状（毛坯房）· 中：修色阶与文案 · 右：<b>按你的要求合并成一库一卡</b></p>
+
+<div class="wrap">
+
+  <div class="col">
+    <span class="tag t1">① 原状 · 毛坯房</span>
+    <div class="phone"><div class="screen">
+      <div class="sb"><span>16:46</span><span>5G &nbsp;79</span></div>
+      <div class="bd"><div class="dlg">
+        <div class="dt">快速解锁</div>
+        <div class="db">
+          <div class="st-before">选择这把指纹钥匙能打开哪些库。</div>
+          <div class="card gone">
+            <div class="vh"><span class="vn">Bitwarden</span><span class="badge"><span class="dot"></span>已启用</span></div>
+            <div class="sub2">已启用</div>
+            <div class="acts end"><span class="btn ghost">关闭</span></div>
+          </div>
+          <div class="card gone">
+            <div class="vh"><span class="vn">valkjin.kdbx</span><span class="badge"><span class="dot"></span>已启用</span></div>
+            <div class="sub2">已启用</div>
+            <div class="acts end"><span class="btn ghost">关闭</span></div>
+          </div>
+          <div class="div"></div>
+          <div class="st-before">应用内 PIN</div>
+          <div class="st-before plain">PIN 用于平时快速解锁。忘记它不影响数据——用主密码解锁后在设置里重设即可。</div>
+          <div class="card gone">
+            <div class="vh"><span class="vn">Bitwarden</span><span class="badge"><span class="dot"></span>已启用</span></div>
+            <div class="sub2">应用内 PIN：已启用（6 位）</div>
+            <div class="acts end"><span class="btn ghost">返回</span></div>
+          </div>
+        </div>
+        <div class="dact"><span class="btn ghost">返回</span></div>
+      </div></div>
+    </div></div>
+    <div class="hintbox">
+      卡片与面板<b style="color:#93000a">同色</b>（都 <code>surfaceContainerHigh</code>）⇒ 边界消失<br>
+      「已启用」写两遍<br>
+      <b style="color:#93000a">同一个库名出现两次</b>，还要跨段滚动找
+    </div>
+  </div>
+
+  <div class="col">
+    <span class="tag t2">② 修色阶与文案</span>
+    <div class="phone"><div class="screen">
+      <div class="sb"><span>16:46</span><span>5G &nbsp;79</span></div>
+      <div class="bd"><div class="dlg">
+        <div class="dt">快速解锁</div>
+        <div class="db">
+          <div class="sechead">
+            <div class="l1">
+              <svg class="ic" viewBox="0 0 24 24"><circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6"/><path d="m15.5 7.5 3 3L22 7l-3-3"/></svg>
+              指纹解锁
+            </div>
+            <div class="l2">选择这把指纹钥匙能打开哪些库。</div>
+          </div>
+          <div class="card ok">
+            <div class="vh"><span class="vn">Bitwarden</span><span class="badge"><span class="dot"></span>已启用</span></div>
+            <div class="acts"><span class="sp"></span><span class="btn">关闭</span></div>
+          </div>
+          <div class="card ok">
+            <div class="vh"><span class="vn">valkjin.kdbx</span><span class="badge"><span class="dot"></span>已启用</span></div>
+            <div class="acts"><span class="sp"></span><span class="btn">关闭</span></div>
+          </div>
+          <div class="gap"></div>
+          <div class="sechead">
+            <div class="l1">
+              <svg class="ic" viewBox="0 0 24 24"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>
+              应用内 PIN
+            </div>
+            <div class="l2">PIN 用于平时快速解锁。忘记它不影响数据——用主密码解锁后在设置里重设即可。</div>
+          </div>
+          <div class="card ok">
+            <div class="vh"><span class="vn">Bitwarden</span><span class="badge"><span class="dot"></span>已启用</span></div>
+            <div class="sub2">6 位数字</div>
+            <div class="acts"><span class="btn ghost">关闭 PIN 解锁</span><span class="sp"></span><span class="btn">修改 PIN</span></div>
+          </div>
+        </div>
+        <div class="dact"><span class="btn ghost">返回</span></div>
+      </div></div>
+    </div></div>
+    <div class="hintbox">
+      卡片 <code>surfaceContainerLowest</code> vs 面板 <code>High</code> ⇒ <b>边界清晰</b><br>
+      状态只说一次、段落带图标<br>
+      ⚠️ 但<b style="color:#7a4a00">仍是「按手段分组」</b>——库名依旧出现两次
+    </div>
+  </div>
+
+  <div class="col">
+    <span class="tag t3">③ 合并 · 一库一卡（本次）</span>
+    <div class="phone"><div class="screen">
+      <div class="sb"><span>16:46</span><span>5G &nbsp;79</span></div>
+      <div class="bd"><div class="dlg">
+        <div class="dt">快速解锁</div>
+        <div class="db">
+          <div class="sechead">
+            <div class="l1">
+              <svg class="ic" viewBox="0 0 24 24"><circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6"/><path d="m15.5 7.5 3 3L22 7l-3-3"/></svg>
+              选择要快速解锁的库
+            </div>
+            <div class="l2">每个库可分别开启指纹或应用内 PIN。两种方式彼此独立。</div>
+          </div>
+
+          <div class="card ok" style="padding:8px 0 10px">
+            <div style="padding:2px 12px" class="vn sm">Bitwarden</div>
+            <div style="padding:4px 12px 0">
+              <div class="rowline">
+                <svg class="ic" viewBox="0 0 24 24"><path d="M12 10a2 2 0 0 0-2 2c0 1.02-.1 2.51-.26 4"/><path d="M14 13.12c0 2.38 0 6.38-1 8.88"/><path d="M17.29 21.02c.12-.6.43-2.3.5-3.02"/><path d="M2 12a10 10 0 0 1 18-6"/><path d="M2 16h.01"/><path d="M21.8 16c.2-2 .131-5.354-1.262-7.5"/><path d="M5 19.5C5.5 18 6 15 6 12a6 6 0 0 1 .34-2"/><path d="M8.65 22c.21-.66.45-1.32.57-2"/><path d="M9 6.8a6 6 0 0 1 9 5.2v2"/></svg>
+                <span class="vn">指纹解锁</span>
+                <span class="badge"><span class="dot"></span>已启用</span>
+              </div>
+              <div class="acts"><span class="sp"></span><span class="btn">关闭</span></div>
+            </div>
+            <div class="div in"></div>
+            <div style="padding:4px 12px 0">
+              <div class="rowline">
+                <svg class="ic" viewBox="0 0 24 24"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>
+                <span class="vn">应用内 PIN</span>
+                <span class="badge"><span class="dot"></span>已启用</span>
+              </div>
+              <div class="sub2" style="padding-left:22px">6 位数字</div>
+              <div class="acts"><span class="btn ghost">关闭 PIN 解锁</span><span class="sp"></span><span class="btn">修改 PIN</span></div>
+            </div>
+          </div>
+
+          <div class="card ok" style="padding:8px 0 10px">
+            <div style="padding:2px 12px" class="vn sm">valkjin.kdbx</div>
+            <div style="padding:4px 12px 0">
+              <div class="rowline">
+                <svg class="ic" viewBox="0 0 24 24"><path d="M12 10a2 2 0 0 0-2 2c0 1.02-.1 2.51-.26 4"/><path d="M14 13.12c0 2.38 0 6.38-1 8.88"/><path d="M17.29 21.02c.12-.6.43-2.3.5-3.02"/><path d="M2 12a10 10 0 0 1 18-6"/><path d="M2 16h.01"/><path d="M21.8 16c.2-2 .131-5.354-1.262-7.5"/><path d="M5 19.5C5.5 18 6 15 6 12a6 6 0 0 1 .34-2"/><path d="M8.65 22c.21-.66.45-1.32.57-2"/><path d="M9 6.8a6 6 0 0 1 9 5.2v2"/></svg>
+                <span class="vn">指纹解锁</span>
+                <span class="badge" style="color:var(--on-surface-var)"><span class="dot" style="background:var(--outline)"></span>未启用</span>
+              </div>
+              <div class="sub2" style="padding-left:22px">未启用（启用时需再输一次该库的主密码）</div>
+              <div class="acts"><span class="sp"></span><span class="btn">启用</span></div>
+            </div>
+            <div class="div in"></div>
+            <div style="padding:4px 12px 0">
+              <div class="rowline">
+                <svg class="ic" viewBox="0 0 24 24"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>
+                <span class="vn">应用内 PIN</span>
+                <span class="badge" style="color:var(--on-surface-var)"><span class="dot" style="background:var(--outline)"></span>未启用</span>
+              </div>
+              <div class="sub2" style="padding-left:22px">尚未设置</div>
+              <div class="acts"><span class="sp"></span><span class="btn">设置 PIN</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="dact"><span class="btn ghost">返回</span></div>
+      </div></div>
+    </div></div>
+    <div class="hintbox">
+      ① 每个库<b>只出现一次</b>，所有解锁方式在同一张卡里<br>
+      ② 库名升为<b>卡头</b>，行标题变成手段名<br>
+      ③ 卡内两条并列项用 list divider 分隔<br>
+      ④ <b>两行各自独立的状态徽标</b>保留（指纹与 PIN 互不依赖）
+    </div>
+  </div>
+
+</div>
+
+<div class="note">
+  <h2>这轮（③）合并了什么、没合并什么</h2>
+  <table>
+    <tr><th></th><th>改前（②）</th><th>改后（③）</th></tr>
+    <tr><td><b>分组维度</b></td><td>按<b>手段</b>：指纹段列全部库 → 分隔线 → PIN 段再列全部库</td><td>按<b>库</b>：一库一卡，卡内两行</td></tr>
+    <tr><td><b>段落标题</b></td><td>两个（指纹解锁 / 应用内 PIN）</td><td>一个（选择要快速解锁的库）</td></tr>
+    <tr><td><b>行标题</b></td><td>库名</td><td>手段名（库名升为卡头）</td></tr>
+    <tr><td><b>代码结构</b></td><td><code>QuickUnlockRow</code> / <code>PinRow</code> 各自持一张 Card</td><td>新增 <code>VaultUnlockCard</code> 持卡；<code>UnlockOptionRow</code> 降级为卡内行</td></tr>
+  </table>
+
+  <p style="margin:12px 0 0">
+    <b>没有合并的</b>：两种手段本身。既有约定「指纹与应用内 PIN 是两条独立路径、
+    <b>不可合成一个『已启用』</b>」依然有效 —— 卡内两行各自带独立状态徽标，
+    正是为了保住这一点。PIN 也不需要系统认证，所以它仍然没有 <code>canAuthenticate</code> 门槛。
+  </p>
+  <p style="margin:10px 0 0">
+    <b>门禁</b>：detekt ✅（含有效性探针 135 处）· 三个自检脚本 ✅ ·
+    旧函数残留引用 0 ✅ · 新串解析 6/6 ✅ ·
+    <b>编译与真机验收需在你本机 / CI 补</b>（沙箱无 Android SDK）。
+  </p>
+</div>
+
+</body>
+</html>

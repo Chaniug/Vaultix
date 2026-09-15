@@ -31,6 +31,9 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Contrast
 import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.Fingerprint
+import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.Pin
 import androidx.compose.material.icons.filled.ViewAgenda
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Info
@@ -94,7 +97,6 @@ import io.vaultix.vaultix.ui.common.DialogDismissButton
 import io.vaultix.vaultix.ui.common.DialogEmptyBody
 import io.vaultix.vaultix.ui.common.DialogFootnote
 import io.vaultix.vaultix.ui.common.DialogHeader
-import io.vaultix.vaultix.ui.common.DialogSectionHint
 import io.vaultix.vaultix.ui.common.DialogSectionTitle
 import io.vaultix.vaultix.ui.common.DialogSurface
 import io.vaultix.vaultix.ui.items.DisplayOptionsSheet
@@ -596,12 +598,14 @@ internal fun VaultChoiceRow(
 ) {
     val container = when {
         selected -> MaterialTheme.colorScheme.secondaryContainer
-        else -> MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.55f)
+        // ⚠️ 未选中态必须比 DialogSurface 的面板底（surfaceContainerHigh）**低**一档，
+        // 否则同色相叠、卡片边界消失（与 [UnlockOptionRow] 同一个病，2026-09-15）。
+        else -> MaterialTheme.colorScheme.surfaceContainerLowest
     }
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp)
+            .padding(vertical = Spacing.xs)
             .clickable(onClick = onClick, role = Role.Button),
         shape = RoundedCornerShape(VAULT_ROW_CORNER),
         colors = CardDefaults.cardColors(containerColor = container),
@@ -610,7 +614,7 @@ internal fun VaultChoiceRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(min = VAULT_ROW_MIN_HEIGHT)
-                .padding(start = Spacing.lg, end = Spacing.sm, top = Spacing.sm, bottom = Spacing.sm),
+                .padding(start = Spacing.lg, end = Spacing.sm, top = Spacing.md, bottom = Spacing.md),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             // 图标槽（28dp）：未解锁给箭头（去解锁），已解锁给「库」图标。
@@ -985,35 +989,34 @@ internal fun QuickUnlockManageDialog(
             if (vaults.isEmpty()) {
                 DialogEmptyBody(stringResource(R.string.quick_unlock_manage_none))
             } else {
-                // ⚠️ 必须可滚动：本对话框纵向内容随库数增长（每库 2 行 + 两段说明），
-                // 不可滚动时底部会被屏幕截断，用户既看不到也点不到最后一项。
+                // ⚠️ 必须可滚动：本对话框纵向内容随库数增长，不可滚动时底部会被截断，
+                // 用户既看不到也点不到最后一项。
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f, fill = false)
                         .verticalScroll(rememberScrollState()),
                 ) {
-                    // ---- 指纹段 ----
-                    DialogSectionTitle(stringResource(R.string.quick_unlock_scope_hint))
+                    DialogSectionTitle(
+                        title = stringResource(R.string.quick_unlock_section_scope),
+                        hint = stringResource(R.string.quick_unlock_scope_hint),
+                        icon = { Icon(Icons.Filled.Key, contentDescription = null) },
+                    )
+
+                    // 2026-09-15 三改（用户：「可以合并设置的」）：
+                    // 改前是**两个大段**（指纹段列出所有库 → 应用内 PIN 段再列出所有库），
+                    // 同一个库名在屏幕上出现两次、滚动还要来回找。
+                    // 现在改为**一个库一张卡、卡内两行**（指纹 / 应用内 PIN），
+                    // 心智模型从"两把钥匙分别管哪些库"变成"这个库有哪几把钥匙"。
                     vaults.forEach { vault ->
-                        QuickUnlockRow(
+                        VaultUnlockCard(
                             vault = vault,
                             canAuthenticate = canAuthenticate,
                             onEnable = onEnable,
                             onDisable = onDisable,
+                            onPinSet = onPinSet,
+                            onPinDisable = onPinDisable,
                         )
-                    }
-
-                    // 「应用内 PIN」单列一段：与指纹是**两条独立**的解锁路径，
-                    // 挤在同一行里会让人以为它们是一个开关的两个档位。
-                    HorizontalDivider(
-                        modifier = Modifier.padding(vertical = Spacing.md, horizontal = Spacing.lg),
-                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f),
-                    )
-                    DialogSectionTitle(stringResource(R.string.pin_section_title))
-                    DialogSectionHint(stringResource(R.string.pin_section_hint))
-                    vaults.forEach { vault ->
-                        PinRow(vault = vault, onSet = onPinSet, onPinDisable = onPinDisable)
                     }
                     Spacer(Modifier.height(Spacing.sm))
                 }
@@ -1027,7 +1030,134 @@ internal fun QuickUnlockManageDialog(
 }
 
 /**
- * 单个库的一行解锁手段（[QuickUnlockRow] / [PinRow] 共用的骨架）。
+ * 单个密码库的解锁设置卡片：**卡片头（库名）+ 卡内两行（指纹 / 应用内 PIN）**。
+ *
+ * ## 为什么合并（2026-09-15 三改）
+ *
+ * 改前结构是「指纹段（列出全部库）→ 分隔线 → 应用内 PIN 段（再列出全部库）」，
+ * 两个问题：
+ * 1. **同一个库名在屏幕上出现两次**，用户读到第二个时必须回头确认"这是同一个库吗"；
+ * 2. 想给某个库同时配指纹和 PIN，要在两段之间**滚动来回找**。
+ *
+ * ⚠️ 合并的**不是两种手段**（那必须并列，见 [SettingsViewModel.QuickUnlockVaultUi.pinEnabled]
+ * 的注释：两者是彼此独立的路径，不能合成一个「已启用」），
+ * 而是**分组维度** —— 从"按手段分组"改成"按库分组"。
+ *
+ * ## 保住的既有告诫
+ *
+ * - 卡内两行仍是「正文在上、动作在下」的纵向骨架（[UnlockOptionRow] 的告诫继续有效：
+ *   不得退回 `ListItem` + `trailingContent`，窄宽度下按钮会与文字相叠）；
+ * - 两行之间用 [HorizontalDivider] 分隔而非留白：同一个库的两条**独立**路径，
+ *   需要一条明确的边界说明"这是两件事"（此处与"段落之间不该用分隔线"不矛盾 —— 那里
+ *   是两个**段落**，这里是同一段内的两条**并列项**，M3 的 list divider 正用于此）。
+ */
+@Composable
+internal fun VaultUnlockCard(
+    vault: SettingsViewModel.QuickUnlockVaultUi,
+    canAuthenticate: Boolean,
+    onEnable: (String) -> Unit,
+    onDisable: (String) -> Unit,
+    onPinSet: (SettingsViewModel.QuickUnlockVaultUi) -> Unit,
+    onPinDisable: (String) -> Unit,
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.lg, vertical = Spacing.xs),
+        shape = RoundedCornerShape(VAULT_ROW_CORNER),
+        colors = CardDefaults.cardColors(
+            // ⚠️ 必须比 DialogSurface 的面板（surfaceContainerHigh）**低**一档，
+            // 否则同色相叠、卡片边界消失（见 [UnlockOptionRow] 的 KDoc）。
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+        ),
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            // ---- 卡片头：库名 + 类型徽标 ----
+            Text(
+                text = vault.name,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(
+                    start = Spacing.lg,
+                    end = Spacing.lg,
+                    top = Spacing.md,
+                    bottom = Spacing.xs,
+                ),
+            )
+
+            // ---- 行 1：指纹 ----
+            UnlockOptionRow(
+                icon = { Icon(Icons.Filled.Fingerprint, contentDescription = null) },
+                title = stringResource(R.string.quick_unlock_section_biometric),
+                summary = when {
+                    // 已启用：徽标已说明状态，副标题无可补充 ⇒ 留空。
+                    vault.enabled -> ""
+                    // 仅当设备确实支持认证时才提示「可启用」，
+                    // 否则维持原「未启用」说明，避免给出无法完成的指引。
+                    canAuthenticate -> stringResource(
+                        if (vault.kind == VaultKind.KDBX) {
+                            R.string.quick_unlock_disabled_kdbx
+                        } else {
+                            R.string.quick_unlock_disabled
+                        },
+                    )
+                    else -> stringResource(R.string.quick_unlock_device_unsupported)
+                },
+                enabled = vault.enabled,
+            ) {
+                if (vault.enabled) {
+                    ActionSpacer()
+                    TextButton(onClick = { onDisable(vault.vaultId) }) {
+                        Text(stringResource(R.string.quick_unlock_disable))
+                    }
+                } else if (canAuthenticate) {
+                    ActionSpacer()
+                    TextButton(onClick = { onEnable(vault.vaultId) }) {
+                        Text(stringResource(R.string.quick_unlock_enable))
+                    }
+                }
+            }
+
+            // ---- 行 2：应用内 PIN ----
+            // 分隔线说明"这是另一件独立的事"（PIN 不需要系统认证，与指纹无依赖）。
+            HorizontalDivider(
+                modifier = Modifier.padding(horizontal = Spacing.lg),
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+            )
+            UnlockOptionRow(
+                icon = { Icon(Icons.Filled.Pin, contentDescription = null) },
+                title = stringResource(R.string.pin_section_title),
+                summary = if (vault.pinEnabled) {
+                    stringResource(R.string.pin_enabled_digits, PIN_MIN_LENGTH)
+                } else {
+                    stringResource(R.string.pin_disabled_summary)
+                },
+                enabled = vault.pinEnabled,
+            ) {
+                if (vault.pinEnabled) {
+                    TextButton(onClick = { onPinDisable(vault.vaultId) }) {
+                        Text(stringResource(R.string.pin_disable))
+                    }
+                }
+                // 「修改 / 设置 PIN」是主操作 ⇒ 始终靠右。
+                ActionSpacer()
+                TextButton(onClick = { onPinSet(vault) }) {
+                    Text(
+                        stringResource(
+                            if (vault.pinEnabled) R.string.pin_change else R.string.pin_enable,
+                        ),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 卡内的**一行**解锁手段（由 [VaultUnlockCard] 调用两次：指纹 / 应用内 PIN）。
  *
  * ⚠️ **不要退回 `ListItem` + `trailingContent`**：对话框的可用宽度本来就窄，
  * 而这里每行最多有两个动作按钮（如「关闭 PIN 解锁」+「修改 PIN」）。
@@ -1035,56 +1165,85 @@ internal fun QuickUnlockManageDialog(
  * 「文字叠加、UI 错乱」）。改成「正文在上、动作右对齐换行在下」后，
  * 无论按钮多宽都不可能压到文字 —— 纵向增长是**可见且可读**的失败方式。
  *
- * 2026-09-15 重做：把整行包进 20dp 圆角 Card（与 [SettingsRow] / [VaultChoiceRow] 同族），
- * 行与行之间有了卡片边界，不再是一堆浮在对话框上的裸文字。
- * **布局骨架保持"正文在上、动作在下"不变** —— 上面那条告诫仍然成立。
+ * ## 2026-09-15 二次重做：修「毛坯房」
+ *
+ * 用户真机反馈这页「看起来很廉价、像毛坯房」。归因是**三个可量化的结构问题**：
+ *
+ * 1. 🔴 **卡片与面板同色，层级归零**（最致命）。`DialogSurface` 的面板底就是
+ *    `surfaceContainerHigh`，而本行之前也用 `surfaceContainerHigh @ 55%`。
+ *    同色叠同色 ⇒ 卡片边界**根本看不见**，整屏糊成一片灰 ——
+ *    「毛坯房」三个字的来源。改：卡片底用 `surfaceContainerLowest`
+ *    （比面板**低**一档 ⇒ 深色主题下更深、浅色下更白），与面板拉开明确层级。
+ *    ⚠️ 这是 M3 的标准层级用法：容器色**阶梯**本就是 `Lowest < Low < Base < High`，
+ *    嵌套内容该往**低**走，不是往同色叠 alpha。
+ * 2. **状态徽标与副标题重复叙事**：启用时副标题也写「已启用」，一行字说两遍。
+ *    改：徽标负责状态，副标题只负责**信息**（怎么启用 / 为何不可用 / 位数）。
+ * 3. **动作按钮无主次**：启用与关闭等权重并排、还都贴着右边留一片空。
+ *    改用 `ActionSpacer()`（`weight(1f)` 占位）把主操作推到行尾，形成两端对齐的动作栏。
+ *
+ * ## 2026-09-15 三改：不再是 Card，改为卡内的行
+ *
+ * 用户要求「可以合并设置的」后，**卡片**的职责上移到 [VaultUnlockCard]（一库一卡），
+ * 本组件降级为卡内的一行 ⇒ **去掉自己的 Card 外壳与水平外边距**，
+ * 改由 `icon` 槽位提供手段图标（指纹 / PIN），与行标题一起构成扫读锚点。
+ *
+ * @param icon 手段图标（28dp 槽位）。两行共处一张卡时，图标是区分二者最快的锚点。
  */
 @Composable
 internal fun UnlockOptionRow(
+    icon: @Composable () -> Unit,
     title: String,
     summary: String,
     enabled: Boolean,
     actions: @Composable RowScope.() -> Unit,
 ) {
-    Card(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = Spacing.lg, vertical = 4.dp),
-        shape = RoundedCornerShape(VAULT_ROW_CORNER),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.55f),
-        ),
+            .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = Spacing.lg, vertical = Spacing.md),
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = FontWeight.Medium,
-                    modifier = Modifier.weight(1f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                // 状态徽标：一眼看出这条手段开没开，不用读整句副标题。
-                UnlockStateBadge(enabled = enabled)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            // 图标锚点（主色）。与 [SettingsRow] 的图标槽同为 28dp，保持一族。
+            CompositionLocalProvider(
+                LocalContentColor provides MaterialTheme.colorScheme.primary,
+            ) {
+                Box(
+                    modifier = Modifier.size(VAULT_ICON_BOX),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    icon()
+                }
             }
+            Spacer(Modifier.width(Spacing.md))
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            // 状态徽标：一眼看出这条手段开没开，不用读整句副标题。
+            UnlockStateBadge(enabled = enabled)
+        }
+        // 副标题只在**有信息**时出现（徽标已表达的状态不再复述，见 KDoc 第 2 条）。
+        if (summary.isNotEmpty()) {
             Text(
                 text = summary,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 2.dp),
-            )
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(top = Spacing.xs),
-                horizontalArrangement = Arrangement.End,
-                verticalAlignment = Alignment.CenterVertically,
-                content = actions,
+                // 左缩进 = 图标槽 + 间距，让说明与标题左对齐（而不是顶到图标下面）。
+                modifier = Modifier.padding(
+                    start = VAULT_ICON_BOX + Spacing.md,
+                    top = Spacing.xs,
+                ),
             )
         }
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = Spacing.xs),
+            verticalAlignment = Alignment.CenterVertically,
+            content = actions,
+        )
     }
 }
 
@@ -1128,86 +1287,13 @@ private fun UnlockStateBadge(enabled: Boolean) {
 private val BADGE_DOT_SIZE = 8.dp
 
 /**
- * 单个库的「快速解锁」行。
+ * 动作栏占位：把后面的按钮推到行尾，与左侧正文的两端对齐。
  *
- * 一个库的两种解锁手段本来就该各占一行、各自可读（指纹 / 应用内 PIN 是**两条独立**
- * 的路径，挤在同一行会让人以为是一个开关的两个档位）。
+ * 用在"只有一个右侧按钮"的行（如「关闭」），避免整行只有一个按钮孤零零贴在左边。
  */
 @Composable
-internal fun QuickUnlockRow(
-    vault: SettingsViewModel.QuickUnlockVaultUi,
-    canAuthenticate: Boolean,
-    onEnable: (String) -> Unit,
-    onDisable: (String) -> Unit,
-) {
-    UnlockOptionRow(
-        title = vault.name,
-        enabled = vault.enabled,
-        summary = if (vault.enabled) {
-            stringResource(R.string.quick_unlock_enabled)
-        } else {
-            // 仅当设备确实支持认证时才提示「可启用」，
-            // 否则维持原「未启用」说明，避免给出无法完成的指引
-            if (canAuthenticate) {
-                stringResource(
-                    if (vault.kind == VaultKind.KDBX) {
-                        R.string.quick_unlock_disabled_kdbx
-                    } else {
-                        R.string.quick_unlock_disabled
-                    },
-                )
-            } else {
-                stringResource(R.string.quick_unlock_device_unsupported)
-            }
-        },
-    ) {
-        if (vault.enabled) {
-            TextButton(onClick = { onDisable(vault.vaultId) }) {
-                Text(stringResource(R.string.quick_unlock_disable))
-            }
-        } else if (canAuthenticate) {
-            TextButton(onClick = { onEnable(vault.vaultId) }) {
-                Text(stringResource(R.string.quick_unlock_enable))
-            }
-        }
-    }
-}
-
-/**
- * 单个库的「应用内 PIN」行。
- *
- * ⚠️ PIN **不需要**设备支持生物识别 ⇒ 这里**没有** [QuickUnlockRow] 那种
- * `canAuthenticate` 门槛：一台没有锁屏的设备也能用 PIN（安全性来自
- * `SecureCredentialStore` 那层硬件密钥，不来自系统认证）。
- */
-@Composable
-internal fun PinRow(
-    vault: SettingsViewModel.QuickUnlockVaultUi,
-    onSet: (SettingsViewModel.QuickUnlockVaultUi) -> Unit,
-    onPinDisable: (String) -> Unit,
-) {
-    UnlockOptionRow(
-        title = vault.name,
-        enabled = vault.pinEnabled,
-        summary = if (vault.pinEnabled) {
-            stringResource(R.string.pin_enabled_summary, PIN_MIN_LENGTH)
-        } else {
-            stringResource(R.string.pin_disabled_summary)
-        },
-    ) {
-        if (vault.pinEnabled) {
-            TextButton(onClick = { onPinDisable(vault.vaultId) }) {
-                Text(stringResource(R.string.pin_disable))
-            }
-        }
-        TextButton(onClick = { onSet(vault) }) {
-            Text(
-                stringResource(
-                    if (vault.pinEnabled) R.string.pin_change else R.string.pin_enable,
-                ),
-            )
-        }
-    }
+private fun RowScope.ActionSpacer() {
+    Spacer(Modifier.weight(1f))
 }
 
 /**

@@ -37,16 +37,20 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -160,23 +164,58 @@ fun DialogBackButton(onClick: () -> Unit) {
     }
 }
 
-/** 对话框内的分组小标题（`labelLarge` + primary，对齐 `DisplayOptionsSheet`）。 */
+/**
+ * 对话框内的分组小标题（`labelLarge` + primary，对齐 `DisplayOptionsSheet`）。
+ *
+ * @param icon 可选的**图标锚点**。两段并列时（如「指纹 / 应用内 PIN」），
+ *   各带一个图标比只靠分隔线更容易建立"这是两件独立的事"的心智。
+ *   传 `null` 则退化为纯文字标题（既有调用点行为不变）。
+ * @param hint 可选的**紧随其后的说明**。合并进本函数是为了让"标题 + 说明"
+ *   作为一个整体参与间距计算 —— 分成两次调用时，调用方要对两处分别写 padding，
+ *   极易出现标题与说明间距不等的情况（2026-09-15「毛坯房」的一个次要成因）。
+ */
 @Composable
-fun DialogSectionTitle(title: String) {
-    Text(
-        text = title,
-        style = MaterialTheme.typography.labelLarge,
-        color = MaterialTheme.colorScheme.primary,
+fun DialogSectionTitle(
+    title: String,
+    icon: (@Composable () -> Unit)? = null,
+    hint: String? = null,
+) {
+    Column(
         modifier = Modifier.padding(
             start = Spacing.xl,
             end = Spacing.xl,
             top = Spacing.sm,
-            bottom = Spacing.xs,
+            bottom = Spacing.sm,
         ),
-    )
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (icon != null) {
+                CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.primary) {
+                    icon()
+                }
+                Spacer(Modifier.width(Spacing.sm))
+            }
+            Text(
+                text = title,
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+        if (hint != null) {
+            Text(
+                text = hint,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = Spacing.xs),
+            )
+        }
+    }
 }
 
-/** 对话框内的分组说明（`bodySmall` + 次要色），紧跟 [DialogSectionTitle]。 */
+/** 对话框内的分组说明（`bodySmall` + 次要色）。
+ *
+ * ⚠️ 新代码优先用 [DialogSectionTitle] 的 `hint` 参数 —— 标题与说明一起排版，
+ * 间距才一致。本函数保留给"说明与任何标题都不相邻"的场景。 */
 @Composable
 fun DialogSectionHint(text: String) {
     Text(
