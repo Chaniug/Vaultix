@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -16,12 +17,18 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Contrast
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.ViewAgenda
@@ -33,11 +40,16 @@ import androidx.compose.material.icons.filled.Password
 import androidx.compose.material.icons.filled.Policy
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.BasicAlertDialog
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -59,6 +71,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -73,6 +88,15 @@ import io.vaultix.model.VaultSummary
 import io.vaultix.vaultix.BuildConfig
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.BiometricPrompter
+import io.vaultix.vaultix.ui.common.DialogActions
+import io.vaultix.vaultix.ui.common.DialogBackButton
+import io.vaultix.vaultix.ui.common.DialogDismissButton
+import io.vaultix.vaultix.ui.common.DialogEmptyBody
+import io.vaultix.vaultix.ui.common.DialogFootnote
+import io.vaultix.vaultix.ui.common.DialogHeader
+import io.vaultix.vaultix.ui.common.DialogSectionHint
+import io.vaultix.vaultix.ui.common.DialogSectionTitle
+import io.vaultix.vaultix.ui.common.DialogSurface
 import io.vaultix.vaultix.ui.items.DisplayOptionsSheet
 import io.vaultix.vaultix.ui.common.VaultixExpressiveTopBar
 import io.vaultix.vaultix.ui.common.rememberImmersiveBarPadding
@@ -461,6 +485,26 @@ private fun VaultSection(
  * - 点行 = 已解锁 → 切换**本次会话**看哪个；未解锁 → 去解锁页；
  * - 「设为默认」= 改**冷启动先开哪个**（唯一写入点，**不要求当下解锁**）。
  */
+/**
+ * 当前库选择（2026-09-15 重做）。
+ *
+ * ## 为什么换掉 `AlertDialog`
+ *
+ * 用户真机反馈「这个页面好简陋」。原来的 `AlertDialog` 有两个硬伤：
+ * 1. **宽度被压到约屏宽 7 成**，而每行要放「库名 + 状态 + 设为默认」三件事 ⇒ 全挤在一起；
+ * 2. `AlertDialog` 的 `text` 槽**不滚动**，库一多（>4 个）底部直接被截断、点不到。
+ *
+ * 改用 [BasicAlertDialog]（M3 里 `AlertDialog` 的自定义容器版本）：外壳仍由我们控制，
+ * 但可以把 `surface` 撑到 0.92×0.8 屏，并给内部一个**可滚动的列表区**。
+ * **注意**：不是换成底部弹层 —— 全项目 25 处弹窗都用弹窗形态，只为这两处改成
+ * 弹层会立刻显得"这不是同一个 App"（见 `.ai` 的形态一致性约定）。
+ *
+ * ## 文案精简
+ *
+ * 底部那段 `settings_default_vault_hint`（「勾选表示本次使用该库；「设为默认」决定…」）
+ * 是一段 60 余字的说明，且含"勾选"这种**指路语**（定稿 §4 明令禁止）。
+ * 现改为一句话副标题，把交互含义收进各行副标题里（见 [VaultChoiceRow]）。
+ */
 @Composable
 internal fun ActiveVaultDialog(
     vaults: List<VaultSummary>,
@@ -470,14 +514,20 @@ internal fun ActiveVaultDialog(
     onSetDefault: (VaultSummary) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.settings_active_vault)) },
-        text = {
+    BasicAlertDialog(onDismissRequest = onDismiss) {
+        DialogSurface {
+            DialogHeader(title = stringResource(R.string.settings_active_vault))
+
             if (vaults.isEmpty()) {
-                Text(stringResource(R.string.settings_active_vault_locked_hint))
+                DialogEmptyBody(stringResource(R.string.settings_active_vault_locked_hint))
             } else {
-                Column {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f, fill = false)
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = Spacing.lg),
+                ) {
                     vaults.forEach { vault ->
                         VaultChoiceRow(
                             name = vault.name,
@@ -488,29 +538,52 @@ internal fun ActiveVaultDialog(
                             onSetDefault = { onSetDefault(vault) },
                         )
                     }
-                    Text(
-                        text = stringResource(R.string.settings_default_vault_hint),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = Spacing.md),
-                    )
                 }
+                DialogFootnote(stringResource(R.string.settings_default_vault_hint))
             }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.action_cancel))
+
+            DialogActions {
+                DialogDismissButton(onDismiss)
             }
-        },
-    )
+        }
+    }
 }
 
 /**
- * 库选择器里的一行：名称（未解锁时带后缀）+ 选中态 + 「设为默认」动作 + 默认标记。
+ * 库选择器里的一行（2026-09-15 按 M3 卡片规格重做，与 [SettingsRow] 同族）。
  *
- * 拆成独立 composable 是为了让 [ActiveVaultDialog] 不越 detekt 的复杂度门禁，
- * 也让「未解锁标注」「默认标记」两件事各自可读。
+ * ## 为什么改
+ *
+ * 用户真机反馈「当前密码库这个页面好简陋」。旧实现是**裸 `Row` + 裸 `TextButton`**：
+ * 没有卡片承载、没有选中底色、行高不等、右侧「设为默认」是长文案按钮把整行撑歪。
+ * 而同一页的设置项卡片（[SettingsRow]）却是 20dp 圆角 + 72dp 最小高 + primary 图标 ——
+ * 落差就是「简陋」的来源。
+ *
+ * ## 改法（对齐项目既有规格，不发明新视觉）
+ *
+ * - 整行包进 **20dp 圆角 Card**，选中态用 `secondaryContainer` 底色（同 [EntryCard] 选中语义）；
+ * - 左侧**图标槽**（28dp）+ 库名 + 状态副标题（两行结构，同 [SettingsRow]）；
+ * - 选中标记从 `RadioButton` 改为 **`Check`**（同 `DisplayOptionsSheet.OptionRow`）——
+ *   对话框里 `RadioButton` 自带一圈很大，会把两行文字挤窄；
+ * - 「设为默认」从长文案 `TextButton` 改为 **星形 `IconButton`**：
+ *   已是默认 → `Star` 实心 primary；否则 → `StarBorder` 轮廓可点。
+ *   这样右侧列宽固定，不再因文案长短抖动（原来「设为默认」四个字要占近半行宽）。
+ *
+ * ## ⚠️ 保留的既有告诫
+ *
+ * **未解锁项不得用选中标记**：旧实现给它一个方向箭头（`KeyboardArrowRight`）表示
+ * 「点了是去解锁，不是切过去」。这个语义是对的 —— 若给未解锁项画上 `Check`/单选圈，
+ * 用户会看到"已选中但内容空白"，正是 2026-09-15 修掉的那个 bug 的观感。
  */
+/** 库选择行圆角（与 [SettingsRow] 同族，略小以体现"行内行"）。 */
+private val VAULT_ROW_CORNER = 20.dp
+
+/** 库选择行最小高度（两行文本 + 图标，比 [SettingsRow] 的 72dp 略矮，对话框空间紧）。 */
+private val VAULT_ROW_MIN_HEIGHT = 64.dp
+
+/** 库选择行图标槽（28dp，与 [SettingsRow] 一致）。 */
+private val VAULT_ICON_BOX = 28.dp
+
 @Composable
 internal fun VaultChoiceRow(
     name: String,
@@ -520,47 +593,99 @@ internal fun VaultChoiceRow(
     onClick: () -> Unit,
     onSetDefault: () -> Unit,
 ) {
-    Row(
+    val container = when {
+        selected -> MaterialTheme.colorScheme.secondaryContainer
+        else -> MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.55f)
+    }
+    Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(vertical = Spacing.xs),
-        verticalAlignment = Alignment.CenterVertically,
+            .padding(vertical = 4.dp)
+            .clickable(onClick = onClick, role = Role.Button),
+        shape = RoundedCornerShape(VAULT_ROW_CORNER),
+        colors = CardDefaults.cardColors(containerColor = container),
     ) {
-        // 单选的意义是「现在看哪个」⇒ 未解锁项**不参与单选**，改成一个「去解锁」的
-        // 方向箭头：否则会显示成"已选中但内容空白"，与本次修的 bug 观感一致。
-        if (locked) {
-            Icon(
-                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        } else {
-            RadioButton(selected = selected, onClick = onClick)
-        }
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = name,
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            if (locked) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = VAULT_ROW_MIN_HEIGHT)
+                .padding(start = Spacing.lg, end = Spacing.sm, top = Spacing.sm, bottom = Spacing.sm),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // 图标槽（28dp）：未解锁给箭头（去解锁），已解锁给「库」图标。
+            Box(
+                modifier = Modifier.size(VAULT_ICON_BOX),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (locked) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Filled.Storage,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
+
+            Spacer(Modifier.width(Spacing.md))
+
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = stringResource(R.string.settings_vault_locked_tap_to_unlock),
-                    style = MaterialTheme.typography.bodySmall,
+                    text = name,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = if (locked) {
+                        stringResource(R.string.settings_vault_locked_tap_to_unlock)
+                    } else {
+                        stringResource(R.string.settings_vault_unlocked_hint)
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
-        }
-        if (isDefault) {
-            Text(
-                text = stringResource(R.string.settings_vault_default_badge),
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.primary,
-            )
-        } else {
-            TextButton(onClick = onSetDefault) {
-                Text(stringResource(R.string.settings_vault_set_default))
+
+            // 选中标记（未解锁项不画 —— 见 KDoc 里的告诫）。
+            if (selected && !locked) {
+                Icon(
+                    imageVector = Icons.Filled.Check,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(horizontal = Spacing.sm),
+                )
+            }
+
+            // 「设为默认」：星形开关。已是默认时不可点（再点无意义）。
+            IconButton(
+                onClick = onSetDefault,
+                enabled = !isDefault,
+            ) {
+                Icon(
+                    imageVector = if (isDefault) Icons.Filled.Star else Icons.Filled.StarBorder,
+                    contentDescription = stringResource(
+                        if (isDefault) {
+                            R.string.settings_vault_default_badge
+                        } else {
+                            R.string.settings_vault_set_default
+                        },
+                    ),
+                    tint = if (isDefault) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
             }
         }
     }
@@ -851,22 +976,23 @@ internal fun QuickUnlockManageDialog(
     onPinDisable: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.settings_quick_unlock)) },
-        text = {
+    BasicAlertDialog(onDismissRequest = onDismiss) {
+        DialogSurface {
+            DialogHeader(title = stringResource(R.string.settings_quick_unlock))
+
             if (vaults.isEmpty()) {
-                Text(stringResource(R.string.quick_unlock_manage_none))
+                DialogEmptyBody(stringResource(R.string.quick_unlock_manage_none))
             } else {
                 // ⚠️ 必须可滚动：本对话框纵向内容随库数增长（每库 2 行 + 两段说明），
                 // 不可滚动时底部会被屏幕截断，用户既看不到也点不到最后一项。
-                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                    Text(
-                        text = stringResource(R.string.quick_unlock_scope_hint),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(Spacing.sm))
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f, fill = false)
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    // ---- 指纹段 ----
+                    DialogSectionTitle(stringResource(R.string.quick_unlock_scope_hint))
                     vaults.forEach { vault ->
                         QuickUnlockRow(
                             vault = vault,
@@ -875,34 +1001,27 @@ internal fun QuickUnlockManageDialog(
                             onDisable = onDisable,
                         )
                     }
+
                     // 「应用内 PIN」单列一段：与指纹是**两条独立**的解锁路径，
                     // 挤在同一行里会让人以为它们是一个开关的两个档位。
-                    Spacer(Modifier.height(Spacing.md))
-                    HorizontalDivider()
-                    Spacer(Modifier.height(Spacing.md))
-                    Text(
-                        text = stringResource(R.string.pin_section_title),
-                        style = MaterialTheme.typography.titleSmall,
+                    HorizontalDivider(
+                        modifier = Modifier.padding(vertical = Spacing.md, horizontal = Spacing.lg),
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f),
                     )
-                    Spacer(Modifier.height(Spacing.xs))
-                    Text(
-                        text = stringResource(R.string.pin_section_hint),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(Spacing.sm))
+                    DialogSectionTitle(stringResource(R.string.pin_section_title))
+                    DialogSectionHint(stringResource(R.string.pin_section_hint))
                     vaults.forEach { vault ->
                         PinRow(vault = vault, onSet = onPinSet, onPinDisable = onPinDisable)
                     }
+                    Spacer(Modifier.height(Spacing.sm))
                 }
             }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.action_back))
+
+            DialogActions {
+                DialogBackButton(onDismiss)
             }
-        },
-    )
+        }
+    }
 }
 
 /**
@@ -913,28 +1032,98 @@ internal fun QuickUnlockManageDialog(
  * 两者挤在同一行时，正文会被压成多行并与按钮**叠在一起**（2026-09-14 真机报告
  * 「文字叠加、UI 错乱」）。改成「正文在上、动作右对齐换行在下」后，
  * 无论按钮多宽都不可能压到文字 —— 纵向增长是**可见且可读**的失败方式。
+ *
+ * 2026-09-15 重做：把整行包进 20dp 圆角 Card（与 [SettingsRow] / [VaultChoiceRow] 同族），
+ * 行与行之间有了卡片边界，不再是一堆浮在对话框上的裸文字。
+ * **布局骨架保持"正文在上、动作在下"不变** —— 上面那条告诫仍然成立。
  */
 @Composable
 internal fun UnlockOptionRow(
     title: String,
     summary: String,
+    enabled: Boolean,
     actions: @Composable RowScope.() -> Unit,
 ) {
-    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
-        Text(text = title, style = MaterialTheme.typography.bodyLarge)
-        Text(
-            text = summary,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.lg, vertical = 4.dp),
+        shape = RoundedCornerShape(VAULT_ROW_CORNER),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.55f),
+        ),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.lg, vertical = Spacing.md),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                // 状态徽标：一眼看出这条手段开没开，不用读整句副标题。
+                UnlockStateBadge(enabled = enabled)
+            }
+            Text(
+                text = summary,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = Spacing.xs),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
+                content = actions,
+            )
+        }
+    }
+}
+
+/**
+ * 解锁手段的状态徽标（已启用 / 未启用）。
+ *
+ * 用「小圆点 + 文字」而不是只靠副标题措辞区分：两行文字（"已启用" / "点此处启用"）
+ * 在字号相同时扫读很慢，加一个色点让状态**先于**文字被看见。
+ */
+@Composable
+private fun UnlockStateBadge(enabled: Boolean) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            modifier = Modifier
+                .size(BADGE_DOT_SIZE)
+                .background(
+                    color = if (enabled) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.outline
+                    },
+                    shape = CircleShape,
+                ),
         )
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
-            horizontalArrangement = Arrangement.End,
-            verticalAlignment = Alignment.CenterVertically,
-            content = actions,
+        Spacer(Modifier.width(Spacing.xs))
+        Text(
+            text = stringResource(
+                if (enabled) R.string.settings_unlock_state_on else R.string.settings_unlock_state_off,
+            ),
+            style = MaterialTheme.typography.labelMedium,
+            color = if (enabled) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
         )
     }
 }
+
+/** 状态徽标圆点直径。 */
+private val BADGE_DOT_SIZE = 8.dp
 
 /**
  * 单个库的「快速解锁」行。
@@ -951,6 +1140,7 @@ internal fun QuickUnlockRow(
 ) {
     UnlockOptionRow(
         title = vault.name,
+        enabled = vault.enabled,
         summary = if (vault.enabled) {
             stringResource(R.string.quick_unlock_enabled)
         } else {
@@ -996,6 +1186,7 @@ internal fun PinRow(
 ) {
     UnlockOptionRow(
         title = vault.name,
+        enabled = vault.pinEnabled,
         summary = if (vault.pinEnabled) {
             stringResource(R.string.pin_enabled_summary, PIN_MIN_LENGTH)
         } else {

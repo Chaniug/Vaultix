@@ -139,13 +139,21 @@
     <string name="settings_add_vault_desc_another">添加另一个密码库：Bitwarden 云端或本机 .kdbx 文件</string>
     <string name="settings_active_vault_none">未解锁任何库</string>
     <string name="settings_active_vault_locked_hint">还没有任何密码库，请先添加一个</string>
-    <string name="settings_default_vault_hint">勾选表示本次使用该库；「设为默认」决定下次打开应用先进入哪个库。未解锁的库需先输入主密码才能使用。</string>
+    <!-- 2026-09-15 精简：原为「勾选表示本次使用该库；「设为默认」决定下次打开应用先进入
+         哪个库。未解锁的库需先输入主密码才能使用。」—— 60 余字且含"勾选"这类**指路语**
+         （定稿 §4 明令禁止）。交互含义已收进各行副标题，这里只留一句结论。 -->
+    <string name="settings_default_vault_hint">带星标的是下次启动先打开的库。</string>
     <string name="settings_vault_locked_suffix">未解锁 · 需先输入主密码</string>
     <!-- 2026-09-15：未解锁项的副标题改成动作语义。原标题只说「要输密码」，
          用户仍以为可以「先切过去看看」——切过去就是空白页（见 VaultChoiceRow 注释）。 -->
     <string name="settings_vault_locked_tap_to_unlock">未解锁 · 点这里输入主密码</string>
-    <string name="settings_vault_default_badge">默认</string>
-    <string name="settings_vault_set_default">设为默认</string>
+    <!-- 已解锁行的副标题：两行结构与未解锁行对齐（否则一行高一行矮，列表参差）。 -->
+    <string name="settings_vault_unlocked_hint">已解锁</string>
+    <string name="settings_vault_default_badge">默认库</string>
+    <string name="settings_vault_set_default">设为默认库</string>
+    <!-- 解锁手段的状态徽标（快速解锁对话框里每行右侧的小圆点 + 文字） -->
+    <string name="settings_unlock_state_on">已启用</string>
+    <string name="settings_unlock_state_off">未启用</string>
     <!-- 组名按「设置页信息架构-定稿」§5.3：安全→解锁与隐私 / 外观→显示与填充 / 数据管理→数据 -->
     <string name="group_security">解锁与隐私</string>
     <string name="group_appearance">显示与填充</string>

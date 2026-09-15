@@ -16,30 +16,65 @@
 package io.vaultix.vaultix.ui.common
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Description
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.BasicAlertDialog
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.AppFlavor
 import io.vaultix.vaultix.ui.theme.Spacing
 
+/** 类型选择卡片的圆角（与设置页 `SettingsRow` 同族）。 */
+private val VAULT_TYPE_CARD_CORNER = 20.dp
+
+/** 类型选择卡片最小高度。 */
+private val VAULT_TYPE_CARD_MIN_HEIGHT = 76.dp
+
+/** 图标槽（28dp，与设置页 `SettingsRow` 一致）。 */
+private val VAULT_TYPE_ICON_BOX = 28.dp
+
 /**
  * 添加库的类型选择（Bitwarden 云端 / 本地 KDBX 文件）。
  *
- * @param onConnectBitwarden 选择云端同步 → 进登录流程。
- * @param onOpenKdbx 选择打开本地 `.kdbx` 文件 → 进选文件流程。
- * @param onDismiss 取消。
+ * ## 2026-09-15 重做
+ *
+ * 用户真机反馈「添加密码库这个页面好简陋」。旧实现是裸 `AlertDialog` +
+ * 两个 `ListItem`：`ListItem` 默认**无卡片底**，两个选项糊成一片白底文字，
+ * 且没有"这是一个可点的选项"的视觉暗示（只能靠文字猜）。
+ *
+ * 现改为**两张可选卡片**（与设置页 `SettingsRow` 同一套规格：20dp 圆角 +
+ * `surfaceContainerHigh` 底 + 28dp 图标槽 + primary 图标 + 右侧箭头），
+ * 并套用 `ui/common/DialogShell.kt` 的统一面板。
+ *
+ * ⚠️ **行为零变化**：两个选项的接线、`AppFlavor.supportsBitwarden` 条件判断
+ * 完全保留。本对话框被设置页与库列表页**两处共用**（见文件头说明），
+ * 改这边两处一起变，这是刻意的（避免两处观感漂移）。
  */
 @Composable
 fun AddVaultTypeDialog(
@@ -47,37 +82,99 @@ fun AddVaultTypeDialog(
     onOpenKdbx: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.vault_add_fab)) },
-        text = {
-            Column {
-                Text(
-                    text = stringResource(R.string.vault_add_type_hint),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(bottom = Spacing.md),
-                )
+    BasicAlertDialog(onDismissRequest = onDismiss) {
+        DialogSurface {
+            DialogHeader(title = stringResource(R.string.vault_add_fab))
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f, fill = false)
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = Spacing.lg),
+            ) {
+                DialogSectionHint(stringResource(R.string.vault_add_type_hint))
                 if (AppFlavor.supportsBitwarden) {
-                    ListItem(
-                        headlineContent = { Text(stringResource(R.string.vault_connect_bitwarden)) },
-                        supportingContent = { Text(stringResource(R.string.vault_add_bitwarden_desc)) },
-                        leadingContent = { Icon(Icons.Filled.Cloud, contentDescription = null) },
-                        modifier = Modifier.clickable(onClick = onConnectBitwarden),
+                    VaultTypeCard(
+                        icon = Icons.Filled.Cloud,
+                        title = stringResource(R.string.vault_connect_bitwarden),
+                        subtitle = stringResource(R.string.vault_add_bitwarden_desc),
+                        onClick = onConnectBitwarden,
                     )
                 }
-                ListItem(
-                    headlineContent = { Text(stringResource(R.string.vault_open_kdbx)) },
-                    supportingContent = { Text(stringResource(R.string.vault_add_kdbx_desc)) },
-                    leadingContent = { Icon(Icons.Filled.Description, contentDescription = null) },
-                    modifier = Modifier.clickable(onClick = onOpenKdbx),
+                VaultTypeCard(
+                    icon = Icons.Filled.Description,
+                    title = stringResource(R.string.vault_open_kdbx),
+                    subtitle = stringResource(R.string.vault_add_kdbx_desc),
+                    onClick = onOpenKdbx,
                 )
             }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.action_cancel))
+
+            DialogActions {
+                DialogDismissButton(onDismiss)
             }
-        },
-    )
+        }
+    }
+}
+
+/**
+ * 一个库类型的可选卡片（图标 + 标题 + 副标题 + 右侧箭头）。
+ *
+ * 抽出来是因为两个选项的规格必须**逐字一致** —— 内联两遍很容易在一处调了间距、
+ * 另一处忘了，正是「两个选项看起来不一样高」这类问题的来源。
+ */
+@Composable
+private fun VaultTypeCard(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit,
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+            .clickable(onClick = onClick, role = Role.Button),
+        shape = RoundedCornerShape(VAULT_TYPE_CARD_CORNER),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.55f),
+        ),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = VAULT_TYPE_CARD_MIN_HEIGHT)
+                .padding(horizontal = Spacing.lg, vertical = Spacing.md),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier.size(VAULT_TYPE_ICON_BOX),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            }
+            Spacer(Modifier.width(Spacing.lg))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Medium,
+                )
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
 }
