@@ -161,12 +161,14 @@ fun AutofillSettingsScreen(
 
             // ---- 系统设置 ----
             SettingsGroupTitle(stringResource(R.string.group_autofill_system))
-            SettingsRow(
-                icon = { Icon(Icons.Filled.Password, contentDescription = null) },
-                title = stringResource(R.string.setting_autofill),
-                subtitle = stringResource(R.string.setting_autofill_desc),
-                onClick = { openSystemAutofillSettings(context) },
-            )
+            SettingsGroupCard {
+                SettingsRow(
+                    icon = { Icon(Icons.Filled.Password, contentDescription = null) },
+                    title = stringResource(R.string.setting_autofill),
+                    subtitle = stringResource(R.string.setting_autofill_desc),
+                    onClick = { openSystemAutofillSettings(context) },
+                )
+            }
 
             // ---- 通行密钥（Android 14+ 才有 Credential Provider）----
             PasskeySection(
@@ -174,82 +176,47 @@ fun AutofillSettingsScreen(
                 onOpenProviderSettings = { openCredentialProviderSettings(context) },
             )
 
-            // ---- 填充行为 ----
-            SettingsGroupTitle(stringResource(R.string.group_autofill_behavior))
-            SettingsRow(
-                icon = { Icon(Icons.Filled.Shield, contentDescription = null) },
-                title = stringResource(R.string.setting_autofill_exact_domain),
-                subtitle = stringResource(R.string.setting_autofill_exact_domain_desc),
-                trailing = {
-                    Switch(
-                        checked = exactDomainOnly,
-                        onCheckedChange = viewModel::setAutofillExactDomainOnly,
-                    )
-                },
-            )
-            SettingsRow(
-                icon = { Icon(Icons.Filled.Language, contentDescription = null) },
-                title = stringResource(R.string.setting_autofill_base_domain),
-                subtitle = stringResource(R.string.setting_autofill_base_domain_desc),
-                trailing = {
-                    Switch(
-                        checked = baseDomainMatch,
-                        onCheckedChange = viewModel::setAutofillBaseDomainMatch,
-                    )
-                },
-            )
-            // 填充辅助（对齐 Bitwarden 自动填充页的 FillAssistSwitch）：站点级选择器规则，
-            // 命中白名单站点时**以规则为准**（不再靠文本启发式猜账号 / 密码框）。
-            // 上游默认关（受 feature flag 双重门控），这里默认开 —— 规则只覆盖白名单，
-            // 未命中的主机行为与关闭时完全一致。
-            SettingsRow(
-                icon = { Icon(Icons.Filled.AutoFixHigh, contentDescription = null) },
-                title = stringResource(R.string.setting_fill_assist),
-                subtitle = stringResource(R.string.setting_fill_assist_desc),
-                trailing = {
-                    Switch(
-                        checked = fillAssistEnabled,
-                        onCheckedChange = viewModel::setFillAssistEnabled,
-                    )
-                },
-            )
-            // 快捷磁贴：国产输入法大多不支持键盘内联建议、部分国产 ROM 会吞掉系统填充弹窗，
-            // 这条「复制 + 粘贴」路径不依赖输入法和无障碍，是最稳的兜底入口（仅说明如何添加）。
-            SettingsRow(
-                icon = { Icon(Icons.Filled.Lock, contentDescription = null) },
-                title = stringResource(R.string.setting_manual_fill_tile),
-                subtitle = stringResource(R.string.setting_manual_fill_tile_desc),
-                onClick = { requestAddTile(context) { tileUnsupported = true } },
+            // ---- 填充行为（拆出去守住 detekt LongMethod ≤150）----
+            FillBehaviorSection(
+                exactDomainOnly = exactDomainOnly,
+                baseDomainMatch = baseDomainMatch,
+                fillAssistEnabled = fillAssistEnabled,
+                viewModel = viewModel,
+                onAddTile = { requestAddTile(context) { tileUnsupported = true } },
             )
 
             // ---- 验证器 ----
             // 链路保持最简：识别到条目 → 填密码 → 验证码进剪贴板。
             SettingsGroupTitle(stringResource(R.string.group_otp))
-            SettingsRow(
-                icon = { Icon(Icons.Filled.ContentCopy, contentDescription = null) },
-                title = stringResource(R.string.setting_auto_copy_totp),
-                subtitle = stringResource(R.string.setting_auto_copy_totp_desc),
-                trailing = {
-                    Switch(
-                        checked = autoCopyTotp,
-                        onCheckedChange = viewModel::setAutoCopyTotp,
-                    )
-                },
-            )
+            SettingsGroupCard {
+                SettingsRow(
+                    icon = { Icon(Icons.Filled.ContentCopy, contentDescription = null) },
+                    title = stringResource(R.string.setting_auto_copy_totp),
+                    subtitle = stringResource(R.string.setting_auto_copy_totp_desc),
+                    trailing = {
+                        Switch(
+                            checked = autoCopyTotp,
+                            onCheckedChange = viewModel::setAutoCopyTotp,
+                        )
+                    },
+                )
+            }
 
             // ---- 保存行为 ----
             SettingsGroupTitle(stringResource(R.string.group_autofill_save))
-            SettingsRow(
-                icon = { Icon(Icons.Filled.Save, contentDescription = null) },
-                title = stringResource(R.string.setting_autofill_save_prompt),
-                subtitle = stringResource(R.string.setting_autofill_save_prompt_desc),
-                trailing = {
-                    Switch(
-                        checked = savePrompt,
-                        onCheckedChange = viewModel::setAutofillSavePrompt,
-                    )
-                },
-            )
+            SettingsGroupCard {
+                SettingsRow(
+                    icon = { Icon(Icons.Filled.Save, contentDescription = null) },
+                    title = stringResource(R.string.setting_autofill_save_prompt),
+                    subtitle = stringResource(R.string.setting_autofill_save_prompt_desc),
+                    trailing = {
+                        Switch(
+                            checked = savePrompt,
+                            onCheckedChange = viewModel::setAutofillSavePrompt,
+                        )
+                    },
+                )
+            }
         }
     }
 
@@ -345,6 +312,73 @@ private fun statusDescription(status: AutofillStatus): Int = when {
 }
 
 /**
+ * 填充行为组：精确域名 / 基域匹配 / 填充辅助 / 快捷磁贴。
+ *
+ * 拆成独立 composable 纯粹是为了让 [AutofillSettingsScreen] 守住 detekt `LongMethod`
+ * （≤150 行）——四行里三行是自带 Switch 的开关，行数刚性很大。
+ */
+@Composable
+private fun FillBehaviorSection(
+    exactDomainOnly: Boolean,
+    baseDomainMatch: Boolean,
+    fillAssistEnabled: Boolean,
+    viewModel: SettingsViewModel,
+    onAddTile: () -> Unit,
+) {
+    SettingsGroupTitle(stringResource(R.string.group_autofill_behavior))
+    SettingsGroupCard {
+        SettingsRow(
+            icon = { Icon(Icons.Filled.Shield, contentDescription = null) },
+            title = stringResource(R.string.setting_autofill_exact_domain),
+            subtitle = stringResource(R.string.setting_autofill_exact_domain_desc),
+            trailing = {
+                Switch(
+                    checked = exactDomainOnly,
+                    onCheckedChange = viewModel::setAutofillExactDomainOnly,
+                )
+            },
+        )
+        SettingsDivider()
+        SettingsRow(
+            icon = { Icon(Icons.Filled.Language, contentDescription = null) },
+            title = stringResource(R.string.setting_autofill_base_domain),
+            subtitle = stringResource(R.string.setting_autofill_base_domain_desc),
+            trailing = {
+                Switch(
+                    checked = baseDomainMatch,
+                    onCheckedChange = viewModel::setAutofillBaseDomainMatch,
+                )
+            },
+        )
+        SettingsDivider()
+        // 填充辅助（对齐 Bitwarden 自动填充页的 FillAssistSwitch）：站点级选择器规则，
+        // 命中白名单站点时**以规则为准**（不再靠文本启发式猜账号 / 密码框）。
+        // 上游默认关（受 feature flag 双重门控），这里默认开 —— 规则只覆盖白名单，
+        // 未命中的主机行为与关闭时完全一致。
+        SettingsRow(
+            icon = { Icon(Icons.Filled.AutoFixHigh, contentDescription = null) },
+            title = stringResource(R.string.setting_fill_assist),
+            subtitle = stringResource(R.string.setting_fill_assist_desc),
+            trailing = {
+                Switch(
+                    checked = fillAssistEnabled,
+                    onCheckedChange = viewModel::setFillAssistEnabled,
+                )
+            },
+        )
+        SettingsDivider()
+        // 快捷磁贴：国产输入法大多不支持键盘内联建议、部分国产 ROM 会吞掉系统填充弹窗，
+        // 这条「复制 + 粘贴」路径不依赖输入法和无障碍，是最稳的兜底入口（仅说明如何添加）。
+        SettingsRow(
+            icon = { Icon(Icons.Filled.Lock, contentDescription = null) },
+            title = stringResource(R.string.setting_manual_fill_tile),
+            subtitle = stringResource(R.string.setting_manual_fill_tile_desc),
+            onClick = onAddTile,
+        )
+    }
+}
+
+/**
  * 通行密钥分组。
  *
  * Android 14 以下没有 Credential Provider，整组换成一行版本说明（对齐 Bastion
@@ -360,32 +394,34 @@ private fun PasskeySection(
     onOpenProviderSettings: () -> Unit,
 ) {
     SettingsGroupTitle(stringResource(R.string.group_passkey))
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+    SettingsGroupCard {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            SettingsRow(
+                icon = { Icon(Icons.Filled.Key, contentDescription = null) },
+                title = stringResource(R.string.setting_credential_provider),
+                subtitle = stringResource(
+                    R.string.passkey_android_version_unsupported,
+                    Build.VERSION.RELEASE,
+                ),
+            )
+            return@SettingsGroupCard
+        }
+        // Credential Provider（Android 14+）：Chromium（Chrome/Edge）取通行密钥只问系统已
+        // 启用的 Provider——App 无法自行启用（安全设置，需用户手动开）。
         SettingsRow(
             icon = { Icon(Icons.Filled.Key, contentDescription = null) },
             title = stringResource(R.string.setting_credential_provider),
             subtitle = stringResource(
-                R.string.passkey_android_version_unsupported,
-                Build.VERSION.RELEASE,
+                if (enabled) {
+                    R.string.setting_credential_provider_enabled_desc
+                } else {
+                    R.string.setting_credential_provider_disabled_desc
+                }
             ),
+            // 直达「启用本 Provider」的系统界面（Android 14+ createSettingsPendingIntent）。
+            onClick = onOpenProviderSettings,
         )
-        return
     }
-    // Credential Provider（Android 14+）：Chromium（Chrome/Edge）取通行密钥只问系统已
-    // 启用的 Provider——App 无法自行启用（安全设置，需用户手动开）。
-    SettingsRow(
-        icon = { Icon(Icons.Filled.Key, contentDescription = null) },
-        title = stringResource(R.string.setting_credential_provider),
-        subtitle = stringResource(
-            if (enabled) {
-                R.string.setting_credential_provider_enabled_desc
-            } else {
-                R.string.setting_credential_provider_disabled_desc
-            }
-        ),
-        // 直达「启用本 Provider」的系统界面（Android 14+ createSettingsPendingIntent）。
-        onClick = onOpenProviderSettings,
-    )
 }
 
 /**

@@ -359,16 +359,18 @@ private fun ImportSection(
     val preview = state.importPreview
     if (preview == null) {
         // 第一步：选文件
-        SettingsRow(
-            icon = { Icon(Icons.Filled.FileOpen, contentDescription = null) },
-            title = stringResource(R.string.import_pick_file),
-            subtitle = if (state.importFileName.isNotEmpty()) {
-                stringResource(R.string.import_file_picked, state.importFileName)
-            } else {
-                null
-            },
-            onClick = if (state.decoding) null else onPickFile,
-        )
+        SettingsGroupCard {
+            SettingsRow(
+                icon = { Icon(Icons.Filled.FileOpen, contentDescription = null) },
+                title = stringResource(R.string.import_pick_file),
+                subtitle = if (state.importFileName.isNotEmpty()) {
+                    stringResource(R.string.import_file_picked, state.importFileName)
+                } else {
+                    null
+                },
+                onClick = if (state.decoding) null else onPickFile,
+            )
+        }
         // 第二步：文件密码 + 解密预览
         PasswordField(
             value = state.importPassword,

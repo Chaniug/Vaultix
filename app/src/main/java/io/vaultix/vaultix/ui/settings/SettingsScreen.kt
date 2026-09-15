@@ -41,6 +41,7 @@ import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Password
 import androidx.compose.material.icons.filled.Policy
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Star
@@ -70,6 +71,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -110,20 +112,25 @@ import io.vaultix.vaultix.ui.common.rememberFragmentActivity
 import io.vaultix.vaultix.ui.common.trashAutoDeleteLabel
 import io.vaultix.vaultix.ui.theme.ThemeMode
 import io.vaultix.vaultix.ui.theme.Spacing
+import io.vaultix.vaultix.util.UpdateCheckResult
+import io.vaultix.vaultix.util.UpdateChecker
 
 /**
- * 设置页。**5 组**（原 7 组），自上而下：
+ * 设置页。**4 组**（原 7 组，2026-09-16 再并为 4 组），自上而下：
  *
  * | 组 | 内容 |
  * |---|---|
- * | 密码库 | 当前密码库 · 添加密码库 |
- * | 解锁与隐私 | 快速解锁 · 自动锁定 · 防截屏 · 剪贴板清除 |
+ * | 密码库与解锁 | 密码库管理 · 自动锁定 · 防截屏 · 剪贴板清除 |
  * | 显示与填充 | 主题模式 · 动态取色 · 纯黑背景 · 条目显示 · 自动填充设置 |
  * | 数据 | 导入与导出 · 回收站清理 · **退出数据库**（error 色，置底） |
- * | 关于 | 权限管理 · 版本 · 源码与反馈 · 开源许可 |
+ * | 关于 | 权限管理 · 版本 · **检查更新** · 源码与反馈 · 开源许可 |
  *
  * 组内顺序原则：入口类在前、开关类居中、**破坏性动作置底**。
  * 结构与文案的来龙去脉见 `.ai/decisions/设置页信息架构-定稿.md`（**别重新设计分组**）。
+ *
+ * 2026-09-16 的两处改动（详见各组的 KDoc）：
+ * 1. 原「密码库」只剩一个入口行却独占组标题 ⇒ 并入「解锁与隐私」成「**密码库与解锁**」；
+ * 2. 从 Bastion 搬来「**检查更新**」（[UpdateChecker]）：查 GitHub Releases 并给发布页链接。
  *
  * 行与选择器交互范式参考 Bastion 设置页。
  */
@@ -155,6 +162,24 @@ fun SettingsScreen(
     var showAboutDialog by rememberSaveable { mutableStateOf(false) }
     var showExitDatabaseDialog by rememberSaveable { mutableStateOf(false) }
 
+    // 「检查更新」：一次手动检查，结论只活在这一次打开对话框期间。
+    var showUpdateDialog by rememberSaveable { mutableStateOf(false) }
+    var updateChecking by rememberSaveable { mutableStateOf(false) }
+    var updateError by rememberSaveable { mutableStateOf<String?>(null) }
+    // ⚠️ 结果对象不用 rememberSaveable：`UpdateCheckResult` 不是可序列化类型，
+    //    旋转屏幕后重查一次即可（比为了保存它引入 Parcelable 包装划算）。
+    var updateResult by remember { mutableStateOf<UpdateCheckResult?>(null) }
+    LaunchedEffect(showUpdateDialog) {
+        if (!showUpdateDialog) return@LaunchedEffect
+        updateChecking = true
+        updateResult = null
+        updateError = null
+        UpdateChecker.checkForUpdate(BuildConfig.VERSION_NAME)
+            .onSuccess { updateResult = it }
+            .onFailure { updateError = it.message.orEmpty() }
+        updateChecking = false
+    }
+
     // 沉浸式顶栏：大标题随滚动缩小、状态栏区域由顶栏背景覆盖（对齐 Bastion）。
     val scrollState = rememberScrollState()
     val collapse = rememberScrollCollapseFraction(scrollState)
@@ -174,19 +199,14 @@ fun SettingsScreen(
             // 后者会把滚动视口整体下压 ⇒ 内容永远画不到顶栏区域，收起顶栏后
             // 顶栏下方留一条死区（「不沉浸」）；Spacer 会随内容一起滚走。
             Spacer(modifier = Modifier.height(barPadding))
-            // ---- 密码库（活跃库 = 全局单一真源，详见 VaultSection 的 KDoc）----
+            // ---- 密码库与解锁（活跃库 = 全局单一真源，详见 VaultUnlockSection 的 KDoc）----
             // 只剩一个入口：选库 / 加库 / 配解锁方式都在 VaultManagementScreen（二级页）。
-            VaultSection(
-                viewModel = viewModel,
-                onOpenVaultManagement = onOpenVaultManagement,
-            )
-
-            // ---- 解锁与隐私（拆出去守住 detekt LongMethod ≤150）----
-            // ⚠️ 「快速解锁」已移到「密码库管理」二级页（它按库登记，属于库而不属于隐私）；
-            //    「退出数据库」是数据动作，已移到「数据」组置底（定稿 §2①）。
-            UnlockPrivacySection(
+            // ⚠️ 2026-09-16 合并：原先「密码库」只有这一个入口行却独占一个组标题，
+            //    而它和自动锁定 / 防截屏 / 剪贴板清除讲的是同一件事（库怎么开、开了怎么锁）。
+            VaultUnlockSection(
                 viewModel = viewModel,
                 state = state,
+                onOpenVaultManagement = onOpenVaultManagement,
                 onAutoLock = { showAutoLockDialog = true },
                 onClipboardClear = { showClipboardDialog = true },
             )
@@ -217,6 +237,7 @@ fun SettingsScreen(
                 // 摆在界面上只会再次引起同样的误读。
                 versionName = BuildConfig.VERSION_NAME,
                 onShowLicense = { showAboutDialog = true },
+                onCheckUpdate = { showUpdateDialog = true },
             )
             Spacer(Modifier.height(Spacing.xxl))
             // 底部留出叠层悬浮底栏的高度（顶部的让位见上方 Spacer(barPadding)）：
@@ -272,6 +293,130 @@ fun SettingsScreen(
             onDismiss = { showExitDatabaseDialog = false },
         )
     }
+    if (showUpdateDialog) {
+        UpdateCheckDialog(
+            checking = updateChecking,
+            result = updateResult,
+            error = updateError,
+            onOpenRelease = { url -> openUrl(context, url) },
+            onDismiss = { showUpdateDialog = false },
+        )
+    }
+}
+
+/**
+ * 「检查更新」结论对话框。
+ *
+ * 只做三件事：告诉用户**当前是哪个版本**、**远端是哪个版本**、**去哪下载**。
+ * 不在 App 内下载 / 安装 APK —— 对一个密码管理器来说，自动装上来路不明的安装包
+ * 是比"多两步"严重得多的风险（理由见 [UpdateChecker] 的文件头）。
+ */
+@Composable
+private fun UpdateCheckDialog(
+    checking: Boolean,
+    result: UpdateCheckResult?,
+    error: String?,
+    onOpenRelease: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Filled.Refresh, contentDescription = null) },
+        title = { Text(stringResource(R.string.update_check_title)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+                when {
+                    checking -> Text(
+                        text = stringResource(R.string.update_check_checking),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    error != null -> Text(
+                        text = if (error.isBlank()) {
+                            stringResource(R.string.update_check_failed)
+                        } else {
+                            stringResource(R.string.update_check_failed_fmt, error)
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    result == null -> Text(
+                        text = stringResource(R.string.update_check_unknown),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    result.isUpdateAvailable -> {
+                        Text(
+                            text = stringResource(
+                                R.string.update_check_available_fmt,
+                                result.latestVersion,
+                            ),
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium,
+                        )
+                        Text(
+                            text = stringResource(
+                                R.string.update_check_current_fmt,
+                                result.currentVersion,
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        UpdatePublishedLine(result.publishedAtEpochSeconds)
+                    }
+                    else -> {
+                        Text(
+                            text = stringResource(R.string.update_check_latest),
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium,
+                        )
+                        Text(
+                            text = stringResource(
+                                R.string.update_check_current_fmt,
+                                result.currentVersion,
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            // 检查中不给按钮（点了也只是等待）；有结论时「前往下载」直达发布页。
+            if (!checking) {
+                TextButton(
+                    onClick = {
+                        onOpenRelease(result?.releaseUrl ?: UpdateChecker.RELEASES_PAGE_URL)
+                    },
+                ) {
+                    Text(stringResource(R.string.update_check_go))
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.action_cancel))
+            }
+        },
+    )
+}
+
+/**
+ * 检查更新对话框里的「发布于 …」一行。
+ *
+ * 预览渠道的版本标识只是 `dev-<短 sha>`，光看它无法判断新旧 —— **发布日期才是用户
+ * 真正能对照的信息**（"我上周下的，这周又有一版"）。拿不到就整行不画。
+ */
+@Composable
+private fun UpdatePublishedLine(publishedAtEpochSeconds: Long?) {
+    if (publishedAtEpochSeconds == null) return
+    Text(
+        text = stringResource(
+            R.string.update_check_published_fmt,
+            UpdateChecker.formatPublishedDate(publishedAtEpochSeconds),
+        ),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 }
 
 /**
@@ -341,135 +486,136 @@ private fun ExitDatabaseDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
 }
 
 /**
- * 解锁与隐私组（原「安全」）：自动锁定 / 防截屏 / 剪贴板清除。
+ * 密码库与解锁组（2026-09-16 由原「密码库」+ 原「解锁与隐私」合并）。
  *
- * ⚠️ **「快速解锁」已从本组移出**（2026-09-15 用户要求把库管理三件事放一起）：
- * 它为**每个库**单独登记一条解锁凭据（`quickUnlockVaults` 就是"每库一行"的形态），
- * 语义上属于"库怎么打开"，属于库管理；夹在自动锁定与防截屏之间，用户要改
- * "某个库怎么解锁"得先想到来隐私组找。现落在 [VaultManagementScreen]（定稿 §10）。
+ * ## 为什么合并
  *
- * ⚠️ 「退出数据库」**也曾从本组移出** —— 它是清空本地缓存的**数据动作**，
- * 现落在「数据」组末尾（定稿 §2① / §3）。
+ * 改前「密码库」组**只有一行**（密码库管理入口），却独占一个组标题；它旁边就是
+ * 「解锁与隐私」的四行（自动锁定 / 防截屏 / 剪贴板清除）。而这两组讲的是同一件事：
+ * **库怎么打开、打开后怎么锁**。拆成两组唯一的后果是屏幕顶上多了一条标题和一段留白，
+ * 用户扫读时反而要判断「我现在看的到底是库还是隐私」。
  *
- * 组内顺序按「档位选择在前、开关在后」：自动锁定与剪贴板清除是档位，防截屏是开关。
+ * 组内顺序：**入口在前、档位居中、开关在后** ——
+ * 密码库管理（去二级页）→ 自动锁定（档位）→ 防截屏（开关）→ 剪贴板清除（档位）。
+ *
+ * ## 保住的既有告诫（2026-09-15 的三次调整，别退回去）
+ *
+ * - **「快速解锁」在 [VaultManagementScreen] 二级页**，不在这里。它按**每个库**单独
+ *   登记一条解锁凭据（`quickUnlockVaults` 就是"每库一行"的形态），语义上属于库管理；
+ * - **「退出数据库」在「数据」组置底**：它是清空本地缓存的**数据动作**，不是解锁设置。
  *
  * 拆成独立 composable 纯粹是为了让 [SettingsScreen] 主函数守住 detekt `LongMethod`
  * （≤150 行）——各对话框的显示状态仍留在宿主里，本函数只收回调。
  */
 @Composable
-private fun UnlockPrivacySection(
+private fun VaultUnlockSection(
     viewModel: SettingsViewModel,
     state: SettingsViewModel.UiState,
+    onOpenVaultManagement: () -> Unit,
     onAutoLock: () -> Unit,
     onClipboardClear: () -> Unit,
 ) {
-    SettingsGroupTitle(stringResource(R.string.group_security))
-    SettingsRow(
-        icon = { Icon(Icons.Filled.Timer, contentDescription = null) },
-        title = stringResource(R.string.setting_auto_lock),
-        subtitle = vaultTimeoutLabel(state.vaultTimeout),
-        onClick = onAutoLock,
-    )
-    SettingsRow(
-        icon = { Icon(Icons.Filled.Shield, contentDescription = null) },
-        title = stringResource(R.string.setting_screen_security),
-        subtitle = stringResource(R.string.setting_screen_security_desc),
-        trailing = {
-            // ⚠️ 值未到达（null）时**禁用**开关：布尔开关没有「不确定」的视觉，
-            // 与其拿默认值 true 冒充用户设置（那会先显示「开」再跳到「关」，
-            // 2026-09-14 真机报告），不如短暂禁用 —— 禁用的灰开关传达的是
-            // 「还没准备好」，而不是一个假答案。绝大多数情况下一帧内就到位。
-            Switch(
-                checked = state.screenSecurity ?: false,
-                onCheckedChange = viewModel::setScreenSecurity,
-                enabled = state.screenSecurity != null,
-            )
-        },
-    )
-    SettingsRow(
-        icon = { Icon(Icons.Filled.VisibilityOff, contentDescription = null) },
-        title = stringResource(R.string.setting_clipboard_clear),
-        subtitle = clipboardClearLabel(state.clipboardClearMs),
-        onClick = onClipboardClear,
-    )
-}
-
-/** 关于组（含权限管理；同上：拆出去是为了满足函数长度门禁）。 */
-@Composable
-private fun AboutSection(
-    context: Context,
-    versionName: String,
-    onShowLicense: () -> Unit,
-) {
-    SettingsGroupTitle(stringResource(R.string.group_about))
-    // 权限管理原属「其他」组（该组仅此一行，独占一个组标题）
-    // ⇒ 并入「关于」：它本来就是"关于这个 App"的元信息（定稿 §2②）。
-    SettingsRow(
-        icon = { Icon(Icons.Filled.Policy, contentDescription = null) },
-        title = stringResource(R.string.permission_management_title),
-        subtitle = stringResource(R.string.permission_management_subtitle),
-        onClick = { openAppPermissionSettings(context) },
-    )
-    SettingsRow(
-        icon = { Icon(Icons.Filled.Info, contentDescription = null) },
-        title = stringResource(R.string.about_version),
-        subtitle = versionName,
-    )
-    SettingsRow(
-        icon = { Icon(Icons.Filled.Security, contentDescription = null) },
-        title = stringResource(R.string.about_source),
-        subtitle = stringResource(R.string.about_github_url),
-        onClick = {
-            context.startActivity(
-                Intent(Intent.ACTION_VIEW, Uri.parse(context.getString(R.string.about_github_url))),
-            )
-        },
-    )
-    SettingsRow(
-        icon = { Icon(Icons.Filled.Info, contentDescription = null) },
-        title = stringResource(R.string.about_license),
-        onClick = onShowLicense,
-    )
+    val active by viewModel.activeVault.collectAsStateWithLifecycle()
+    SettingsGroupTitle(stringResource(R.string.group_vault_unlock))
+    SettingsGroupCard {
+        SettingsRow(
+            icon = { Icon(Icons.Filled.Storage, contentDescription = null) },
+            title = stringResource(R.string.vault_management_entry),
+            // 副标题直接给**当前库名**：用户最常问的就是"我现在看的是哪个库"，
+            // 放在这里就不必为了确认这件事再点进二级页。
+            subtitle = active?.name ?: stringResource(R.string.settings_active_vault_none),
+            onClick = onOpenVaultManagement,
+        )
+        SettingsDivider()
+        SettingsRow(
+            icon = { Icon(Icons.Filled.Timer, contentDescription = null) },
+            title = stringResource(R.string.setting_auto_lock),
+            subtitle = vaultTimeoutLabel(state.vaultTimeout),
+            onClick = onAutoLock,
+        )
+        SettingsDivider()
+        SettingsRow(
+            icon = { Icon(Icons.Filled.Shield, contentDescription = null) },
+            title = stringResource(R.string.setting_screen_security),
+            subtitle = stringResource(R.string.setting_screen_security_desc),
+            trailing = {
+                // ⚠️ 值未到达（null）时**禁用**开关：布尔开关没有「不确定」的视觉，
+                // 与其拿默认值 true 冒充用户设置（那会先显示「开」再跳到「关」，
+                // 2026-09-14 真机报告），不如短暂禁用 —— 禁用的灰开关传达的是
+                // 「还没准备好」，而不是一个假答案。绝大多数情况下一帧内就到位。
+                Switch(
+                    checked = state.screenSecurity ?: false,
+                    onCheckedChange = viewModel::setScreenSecurity,
+                    enabled = state.screenSecurity != null,
+                )
+            },
+        )
+        SettingsDivider()
+        SettingsRow(
+            icon = { Icon(Icons.Filled.VisibilityOff, contentDescription = null) },
+            title = stringResource(R.string.setting_clipboard_clear),
+            subtitle = clipboardClearLabel(state.clipboardClearMs),
+            onClick = onClipboardClear,
+        )
+    }
 }
 
 /**
- * 「密码库」分组：**一个入口**，通向 [VaultManagementScreen]。
- *
- * 为什么把入口留在设置首页而不是把库管理内容摊在这里：首页的职责是"分流"，
- * 不是"干活"。改之前这一组有「当前密码库」与「添加密码库」两行，而「快速解锁」
- * 却挂在「解锁与隐私」组 —— 三件同属库管理的事散在两处，用户要改"某个库怎么解锁"
- * 得先想到去隐私组找（2026-09-15 用户反馈）。
- *
- * 现在首页只回答"去哪管库"，具体动作（选库 / 加库 / 配解锁方式）都在二级页里，
- * 与「自动填充设置」「导入与导出」的层级保持一致。
- *
- * ⚠️ **不要**把二级页的对话框再搬回这里：`ActiveVaultDialog` /
- * `QuickUnlockManageDialog` 会各自拉起一串状态（KDBX 待验证 id、PIN 对话框步骤…），
- * 正好是当初为守 detekt `LongMethod` 才拆出去的东西，搬回来必然顶线。
+ * 关于组（含权限管理 / 检查更新）。
  *
  * 为什么入口在设置页：Bastion 的多库是主界面里的一个**筛选维度**（`UnifiedCategoryFilterSelection`
  * 把库与文件夹 / 分类平级），而 Vaultix 是「登录时二选一」的**单活跃库**语义 —— 主界面
  * 不该出现库的概念，于是把多库入口整体下沉到设置页
  * （Docs/progress/main-shell-migration.md §0 与 A4）。
  *
- * 切换的影响面：主界面各 Tab、autofill 候选、Credential Provider 候选、保存回写目标
- * **同时**切到新库 —— 它们都只读 [io.vaultix.vaultix.data.ActiveVaultStore]，没有第二份状态。
+ * 「检查更新」是 2026-09-16 从 Bastion 搬来的最后一块拼图：Vaultix 的分发渠道就是
+ * GitHub Release，用户本来就得去那下载；这里只回答「有没有比本机新的构建」并给出
+ * 发布页链接，**不在 App 内下载安装**（理由见 [UpdateChecker] 的文件头）。
  */
 @Composable
-private fun VaultSection(
-    viewModel: SettingsViewModel,
-    onOpenVaultManagement: () -> Unit,
+private fun AboutSection(
+    context: Context,
+    versionName: String,
+    onShowLicense: () -> Unit,
+    onCheckUpdate: () -> Unit,
 ) {
-    val active by viewModel.activeVault.collectAsStateWithLifecycle()
-    SettingsGroupTitle(stringResource(R.string.group_vaults))
-    SettingsRow(
-        icon = { Icon(Icons.Filled.Storage, contentDescription = null) },
-        title = stringResource(R.string.vault_management_entry),
-        // 副标题直接给**当前库名**：用户最常问的就是"我现在看的是哪个库"，
-        // 放在这里就不必为了确认这件事再点进二级页。
-        subtitle = active?.name ?: stringResource(R.string.settings_active_vault_none),
-        onClick = onOpenVaultManagement,
-    )
+    SettingsGroupTitle(stringResource(R.string.group_about))
+    SettingsGroupCard {
+        // 权限管理原属「其他」组（该组仅此一行，独占一个组标题）
+        // ⇒ 并入「关于」：它本来就是"关于这个 App"的元信息（定稿 §2②）。
+        SettingsRow(
+            icon = { Icon(Icons.Filled.Policy, contentDescription = null) },
+            title = stringResource(R.string.permission_management_title),
+            subtitle = stringResource(R.string.permission_management_subtitle),
+            onClick = { openAppPermissionSettings(context) },
+        )
+        SettingsDivider()
+        SettingsRow(
+            icon = { Icon(Icons.Filled.Info, contentDescription = null) },
+            title = stringResource(R.string.about_version),
+            subtitle = versionName,
+        )
+        SettingsDivider()
+        SettingsRow(
+            icon = { Icon(Icons.Filled.Refresh, contentDescription = null) },
+            title = stringResource(R.string.about_check_update),
+            subtitle = stringResource(R.string.about_check_update_desc),
+            onClick = onCheckUpdate,
+        )
+        SettingsDivider()
+        SettingsRow(
+            icon = { Icon(Icons.Filled.Security, contentDescription = null) },
+            title = stringResource(R.string.about_source),
+            subtitle = stringResource(R.string.about_github_url),
+            onClick = { openUrl(context, context.getString(R.string.about_github_url)) },
+        )
+        SettingsDivider()
+        SettingsRow(
+            icon = { Icon(Icons.Filled.Info, contentDescription = null) },
+            title = stringResource(R.string.about_license),
+            onClick = onShowLicense,
+        )
+    }
 }
 
 /**
@@ -722,51 +868,57 @@ private fun DisplaySection(
     var showDisplayOptions by rememberSaveable { mutableStateOf(false) }
 
     SettingsGroupTitle(stringResource(R.string.group_appearance))
-    SettingsRow(
-        icon = { Icon(Icons.Filled.DarkMode, contentDescription = null) },
-        title = stringResource(R.string.setting_theme_mode),
-        subtitle = themeModeLabel(ThemeMode.from(themeMode)),
-        onClick = { showThemeDialog = true },
-    )
-    SettingsRow(
-        icon = { Icon(Icons.Filled.Palette, contentDescription = null) },
-        title = stringResource(R.string.setting_dynamic_color),
-        subtitle = stringResource(R.string.setting_dynamic_color_desc),
-        trailing = {
-            // 同「防截屏」：值未到达时禁用，不用默认值冒充用户设置
-            Switch(
-                checked = dynamicColor ?: false,
-                onCheckedChange = viewModel::setDynamicColor,
-                enabled = dynamicColor != null,
-            )
-        },
-    )
-    SettingsRow(
-        icon = { Icon(Icons.Filled.Contrast, contentDescription = null) },
-        title = stringResource(R.string.setting_oled_pure_black),
-        subtitle = stringResource(R.string.setting_oled_pure_black_desc),
-        trailing = {
-            Switch(
-                checked = oledPureBlack,
-                onCheckedChange = viewModel::setOledPureBlack,
-            )
-        },
-    )
-    // 条目列表的显示选项（分组方式 / 卡片信息密度 / 是否显示图标）——
-    // 与密码 Tab 顶栏那个按钮共用同一个弹层与同一份偏好，改哪边都实时生效。
-    SettingsRow(
-        icon = { Icon(Icons.Filled.ViewAgenda, contentDescription = null) },
-        title = stringResource(R.string.items_display_options),
-        subtitle = stringResource(R.string.setting_display_options_desc),
-        onClick = { showDisplayOptions = true },
-    )
-    // 自动填充入口（二级页）—— 原先是只有一行的独立分组，现并入本组末尾。
-    SettingsRow(
-        icon = { Icon(Icons.Filled.Password, contentDescription = null) },
-        title = stringResource(R.string.autofill_settings_entry),
-        subtitle = stringResource(R.string.autofill_settings_entry_desc),
-        onClick = onOpenAutofillSettings,
-    )
+    SettingsGroupCard {
+        SettingsRow(
+            icon = { Icon(Icons.Filled.DarkMode, contentDescription = null) },
+            title = stringResource(R.string.setting_theme_mode),
+            subtitle = themeModeLabel(ThemeMode.from(themeMode)),
+            onClick = { showThemeDialog = true },
+        )
+        SettingsDivider()
+        SettingsRow(
+            icon = { Icon(Icons.Filled.Palette, contentDescription = null) },
+            title = stringResource(R.string.setting_dynamic_color),
+            subtitle = stringResource(R.string.setting_dynamic_color_desc),
+            trailing = {
+                // 同「防截屏」：值未到达时禁用，不用默认值冒充用户设置
+                Switch(
+                    checked = dynamicColor ?: false,
+                    onCheckedChange = viewModel::setDynamicColor,
+                    enabled = dynamicColor != null,
+                )
+            },
+        )
+        SettingsDivider()
+        SettingsRow(
+            icon = { Icon(Icons.Filled.Contrast, contentDescription = null) },
+            title = stringResource(R.string.setting_oled_pure_black),
+            subtitle = stringResource(R.string.setting_oled_pure_black_desc),
+            trailing = {
+                Switch(
+                    checked = oledPureBlack,
+                    onCheckedChange = viewModel::setOledPureBlack,
+                )
+            },
+        )
+        SettingsDivider()
+        // 条目列表的显示选项（分组方式 / 卡片信息密度 / 是否显示图标）——
+        // 与密码 Tab 顶栏那个按钮共用同一个弹层与同一份偏好，改哪边都实时生效。
+        SettingsRow(
+            icon = { Icon(Icons.Filled.ViewAgenda, contentDescription = null) },
+            title = stringResource(R.string.items_display_options),
+            subtitle = stringResource(R.string.setting_display_options_desc),
+            onClick = { showDisplayOptions = true },
+        )
+        SettingsDivider()
+        // 自动填充入口（二级页）—— 原先是只有一行的独立分组，现并入本组末尾。
+        SettingsRow(
+            icon = { Icon(Icons.Filled.Password, contentDescription = null) },
+            title = stringResource(R.string.autofill_settings_entry),
+            subtitle = stringResource(R.string.autofill_settings_entry_desc),
+            onClick = onOpenAutofillSettings,
+        )
+    }
 
     if (showDisplayOptions) {
         SettingsDisplayOptionsHost(
@@ -831,25 +983,29 @@ private fun DataSection(
     var showTrashDialog by rememberSaveable { mutableStateOf(false) }
 
     SettingsGroupTitle(stringResource(R.string.group_data))
-    SettingsRow(
-        icon = { Icon(Icons.Filled.SwapVert, contentDescription = null) },
-        title = stringResource(R.string.import_export_entry),
-        subtitle = stringResource(R.string.import_export_entry_desc),
-        onClick = onOpenImportExport,
-    )
-    SettingsRow(
-        icon = { Icon(Icons.Filled.DeleteSweep, contentDescription = null) },
-        title = stringResource(R.string.setting_trash_auto_delete),
-        subtitle = trashAutoDeleteLabel(trashDays),
-        onClick = { showTrashDialog = true },
-    )
-    SettingsRow(
-        icon = { Icon(Icons.Filled.Logout, contentDescription = null) },
-        title = stringResource(R.string.setting_exit_database),
-        subtitle = stringResource(R.string.setting_exit_database_desc),
-        titleColor = MaterialTheme.colorScheme.error,
-        onClick = onExitDatabase,
-    )
+    SettingsGroupCard {
+        SettingsRow(
+            icon = { Icon(Icons.Filled.SwapVert, contentDescription = null) },
+            title = stringResource(R.string.import_export_entry),
+            subtitle = stringResource(R.string.import_export_entry_desc),
+            onClick = onOpenImportExport,
+        )
+        SettingsDivider()
+        SettingsRow(
+            icon = { Icon(Icons.Filled.DeleteSweep, contentDescription = null) },
+            title = stringResource(R.string.setting_trash_auto_delete),
+            subtitle = trashAutoDeleteLabel(trashDays),
+            onClick = { showTrashDialog = true },
+        )
+        SettingsDivider()
+        SettingsRow(
+            icon = { Icon(Icons.Filled.Logout, contentDescription = null) },
+            title = stringResource(R.string.setting_exit_database),
+            subtitle = stringResource(R.string.setting_exit_database_desc),
+            titleColor = MaterialTheme.colorScheme.error,
+            onClick = onExitDatabase,
+        )
+    }
 
     if (showTrashDialog) {
         TrashAutoDeleteDialog(
@@ -857,6 +1013,19 @@ private fun DataSection(
             onSelect = viewModel::setTrashAutoDeleteDays,
             onDismiss = { showTrashDialog = false },
         )
+    }
+}
+
+/**
+ * 用浏览器打开一个链接。
+ *
+ * ⚠️ 必须 `runCatching`：系统里可能**没有任何**能处理 `ACTION_VIEW` 的组件
+ * （受限资料 profile / 精简 ROM），此时 `startActivity` 抛 `ActivityNotFoundException`
+ * —— 点一下「源码与反馈」就把 App 崩掉是不可接受的。
+ */
+private fun openUrl(context: Context, url: String) {
+    runCatching {
+        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
     }
 }
 

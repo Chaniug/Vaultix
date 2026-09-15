@@ -125,34 +125,40 @@ fun VaultManagementScreen(
         ) {
             // ---- 当前库 ----
             SettingsGroupTitle(stringResource(R.string.vault_management_group_current))
-            SettingsRow(
-                icon = { Icon(Icons.Filled.Storage, contentDescription = null) },
-                title = stringResource(R.string.settings_active_vault),
-                subtitle = active?.name ?: stringResource(R.string.settings_active_vault_none),
-                onClick = { showVaultPicker = true },
-            )
-            SettingsRow(
-                icon = { Icon(Icons.Filled.Add, contentDescription = null) },
-                title = stringResource(R.string.vault_add_fab),
-                subtitle = stringResource(
-                    if (switchable.isEmpty()) {
-                        R.string.settings_add_vault_desc
-                    } else {
-                        R.string.settings_add_vault_desc_another
-                    },
-                ),
-                onClick = { showAddDialog = true },
-            )
+            SettingsGroupCard {
+                SettingsRow(
+                    icon = { Icon(Icons.Filled.Storage, contentDescription = null) },
+                    title = stringResource(R.string.settings_active_vault),
+                    subtitle = active?.name
+                        ?: stringResource(R.string.settings_active_vault_none),
+                    onClick = { showVaultPicker = true },
+                )
+                SettingsDivider()
+                SettingsRow(
+                    icon = { Icon(Icons.Filled.Add, contentDescription = null) },
+                    title = stringResource(R.string.vault_add_fab),
+                    subtitle = stringResource(
+                        if (switchable.isEmpty()) {
+                            R.string.settings_add_vault_desc
+                        } else {
+                            R.string.settings_add_vault_desc_another
+                        },
+                    ),
+                    onClick = { showAddDialog = true },
+                )
+            }
 
             // ---- 解锁方式 ----
             // 「快速解锁」从原「解锁与隐私」组搬来：它按库登记，属于库而不是隐私。
             SettingsGroupTitle(stringResource(R.string.vault_management_group_unlock))
-            SettingsRow(
-                icon = { Icon(Icons.Filled.Fingerprint, contentDescription = null) },
-                title = stringResource(R.string.settings_quick_unlock),
-                subtitle = stringResource(R.string.settings_quick_unlock_manage_desc),
-                onClick = { showQuickUnlockDialog = true },
-            )
+            SettingsGroupCard {
+                SettingsRow(
+                    icon = { Icon(Icons.Filled.Fingerprint, contentDescription = null) },
+                    title = stringResource(R.string.settings_quick_unlock),
+                    subtitle = stringResource(R.string.settings_quick_unlock_manage_desc),
+                    onClick = { showQuickUnlockDialog = true },
+                )
+            }
         }
     }
 

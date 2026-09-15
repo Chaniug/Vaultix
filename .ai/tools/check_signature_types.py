@@ -58,6 +58,17 @@ TYPE_DEF_RE = re.compile(
     re.MULTILINE,
 )
 
+# 顶层常量（`const val` / `val`，SCREAMING_CASE 命名）：它们常出现在**参数默认值**里
+# （`maxLines: Int = MONOSPACE_MAX_LINES`），不是类型。
+# 2026-09-16 补：此前表内只有 class/interface/object/typealias，于是这类常量
+# 全部被报成「找不到定义的类型名」（实测 `MONOSPACE_MAX_LINES` / `PLAIN_MAX_LINES`
+# 两处假报）——噪音会让人不再看输出，而本工具唯一的价值就是「报了就该改」。
+CONST_DEF_RE = re.compile(
+    r"^\s*(?:public|internal|private|protected)?\s*(?:const\s+)?val\s+"
+    r"([A-Z][A-Z0-9_]*)\s*[=:]",
+    re.MULTILINE,
+)
+
 PACKAGE_RE = re.compile(r"^\s*package\s+([\w.]+)", re.MULTILINE)
 IMPORT_RE = re.compile(r"^\s*import\s+([\w.]+)(?:\s+as\s+(\w+))?", re.MULTILINE)
 
@@ -89,6 +100,8 @@ def collect_type_defs() -> tuple[dict[str, set[str]], set[str]]:
         pkg_m = PACKAGE_RE.search(text)
         pkg = pkg_m.group(1) if pkg_m else ""
         for m in TYPE_DEF_RE.finditer(text):
+            defs.setdefault(m.group(1), set()).add(pkg)
+        for m in CONST_DEF_RE.finditer(text):
             defs.setdefault(m.group(1), set()).add(pkg)
     return defs, set()
 
@@ -429,28 +442,38 @@ def check_file(path: Path, defs: dict[str, set[str]]) -> list[tuple[int, str, st
     return problems
 
 
-def changed_files() -> list[Path]:
+def _git_names(*args: str) -> list[str]:
     try:
         out = subprocess.run(
-            ["git", "diff", "--name-only", "HEAD~1", "HEAD"],
+            ["git", "diff", "--name-only", *args],
             cwd=ROOT, capture_output=True, text=True, check=True,
         ).stdout
     except (subprocess.CalledProcessError, FileNotFoundError):
-        out = ""
-    files = [ROOT / line.strip() for line in out.splitlines() if line.strip()]
-    files = [f for f in files if f.suffix == ".kt" and f.exists()]
-    if not files:
-        # 回退：未提交的改动
-        try:
-            out = subprocess.run(
-                ["git", "diff", "--name-only", "HEAD"],
-                cwd=ROOT, capture_output=True, text=True, check=True,
-            ).stdout
-            files = [ROOT / l.strip() for l in out.splitlines() if l.strip()]
-            files = [f for f in files if f.suffix == ".kt" and f.exists()]
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            pass
-    return files
+        return []
+    return [line.strip() for line in out.splitlines() if line.strip()]
+
+
+def changed_files() -> list[Path]:
+    """最近一次提交 **+ 工作区未提交** 的改动（并集）。
+
+    ⚠️ 2026-09-16 修正：此前只有 `HEAD~1..HEAD`，且仅当它为空时才回退到工作区。
+    于是**只要上一条提交改过文件（几乎总是）**，工作区里未提交的改动就**永远不被检查**
+    —— 恰好是本轮的情形：新增 `SettingsGroupCard(content: @Composable ColumnScope.() -> Unit)`
+    漏了 `ColumnScope` 的 import，脚本却只查了上一条提交改的 2 个文件，报了 OK。
+    这类错误 detekt 查不出，只能靠本脚本，而"默认不查当前在改的东西"等于白装。
+    """
+    names = set(_git_names("HEAD~1", "HEAD"))
+    names |= set(_git_names("HEAD"))
+    try:
+        out = subprocess.run(
+            ["git", "ls-files", "--others", "--exclude-standard"],
+            cwd=ROOT, capture_output=True, text=True, check=True,
+        ).stdout
+        names |= {line.strip() for line in out.splitlines() if line.strip()}
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+    files = [ROOT / n for n in names]
+    return [f for f in files if f.suffix == ".kt" and f.exists()]
 
 
 def main() -> int:

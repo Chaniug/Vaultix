@@ -154,8 +154,11 @@
     <!-- 解锁手段的状态徽标（快速解锁对话框里每行右侧的小圆点 + 文字） -->
     <string name="settings_unlock_state_on">已启用</string>
     <string name="settings_unlock_state_off">未启用</string>
-    <!-- 组名按「设置页信息架构-定稿」§5.3：安全→解锁与隐私 / 外观→显示与填充 / 数据管理→数据 -->
-    <string name="group_security">解锁与隐私</string>
+    <!-- 2026-09-16：设置首页「密码库」组只剩一个入口行（密码库管理），独占一个组标题太浪费，
+         且与「解锁与隐私」的自动锁定 / 防截屏 / 剪贴板清除同属「库怎么开、开了怎么锁」一件事
+         ⇒ 合并为一组「密码库与解锁」（原 group_vaults / group_security 两个组名合并）。
+         ⚠️ group_vaults 仍被密码库管理二级页用作顶栏标题，故保留。 -->
+    <string name="group_vault_unlock">密码库与解锁</string>
     <string name="group_appearance">显示与填充</string>
     <string name="group_data">数据</string>
     <string name="permission_management_title">权限管理</string>
@@ -272,6 +275,20 @@
     <string name="about_license">开源许可</string>
     <string name="about_license_body">Vaultix 以 GPL-3.0 发布。部分设计与代码参考 Bastion（GPL-3.0，Copyright 2025 JoyinJoester），搬运处均带溯源声明。\n\n本项目为密码管理客户端，自行承担使用风险。</string>
     <string name="about_github_url">https://github.com/Chaniug/Vaultix</string>
+    <string name="about_releases_url">https://github.com/Chaniug/Vaultix/releases</string>
+    <!-- 检查更新（2026-09-16 从 Bastion 搬运；只给发布页链接，不在 App 内下载安装） -->
+    <string name="about_check_update">检查更新</string>
+    <string name="about_check_update_desc">对比 GitHub 上的最新构建</string>
+    <string name="update_check_title">检查更新</string>
+    <string name="update_check_checking">正在检查…</string>
+    <string name="update_check_latest">已是最新版本</string>
+    <string name="update_check_available_fmt">发现新版本 %1$s</string>
+    <string name="update_check_current_fmt">当前版本：%1$s</string>
+    <string name="update_check_published_fmt">发布于 %1$s</string>
+    <string name="update_check_unknown">暂时无法确定是否有新版本</string>
+    <string name="update_check_failed">检查更新失败，请稍后再试</string>
+    <string name="update_check_failed_fmt">检查更新失败：%1$s</string>
+    <string name="update_check_go">前往下载</string>
     <string name="action_open">打开</string>
 
     <!-- 本地快速解锁（Keystore 包裹 + 生物识别/设备 PIN） -->
