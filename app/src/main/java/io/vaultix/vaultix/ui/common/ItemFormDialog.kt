@@ -19,12 +19,19 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Android
 import androidx.compose.material.icons.filled.Casino
+import androidx.compose.material.icons.filled.Badge
 import androidx.compose.material.icons.filled.Category
+import androidx.compose.material.icons.filled.CreditCard
+import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.Notes
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.StarBorder
+import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
@@ -209,8 +216,16 @@ fun ItemFormDialog(
                 onScanTotp = { scanning = true },
                 onPickApp = { showAppPicker = true },
             )
-            VaultItemType.Card -> LabeledFields(CARD_LABELS, cardValues)
-            VaultItemType.Identity -> LabeledFields(IDENTITY_LABELS, identityValues)
+            VaultItemType.Card -> {
+                SectionLabel(text = stringResource(R.string.section_card), icon = Icons.Filled.CreditCard)
+                Spacer(Modifier.height(Spacing.sm))
+                LabeledFields(CARD_LABELS, cardValues)
+            }
+            VaultItemType.Identity -> {
+                SectionLabel(text = stringResource(R.string.section_identity), icon = Icons.Filled.Badge)
+                Spacer(Modifier.height(Spacing.sm))
+                LabeledFields(IDENTITY_LABELS, identityValues)
+            }
             VaultItemType.SshKey -> SshKeyFields(sshValues)
             // 安全笔记只有名称 + 备注（该类型本就没有专属字段可填）
             VaultItemType.SecureNote -> Unit
@@ -260,6 +275,8 @@ private fun ItemFormTail(
     )
     Spacer(Modifier.height(Spacing.sm))
     CustomFieldsEditor(fields = customFields)
+    Spacer(Modifier.height(Spacing.md))
+    SectionLabel(text = stringResource(R.string.section_notes), icon = Icons.Filled.Notes)
     Spacer(Modifier.height(Spacing.sm))
     OutlinedTextField(
         value = notes,
@@ -523,6 +540,8 @@ private fun LoginFields(
     onScanTotp: () -> Unit,
     onPickApp: () -> Unit,
 ) {
+    SectionLabel(text = stringResource(R.string.section_login), icon = Icons.Filled.Person)
+    Spacer(Modifier.height(Spacing.sm))
     OutlinedTextField(
         value = username,
         onValueChange = onUsernameChange,
@@ -579,6 +598,8 @@ private fun LoginFields(
         )
     }
     PasswordStrengthHint(password = password)
+    Spacer(Modifier.height(Spacing.md))
+    SectionLabel(text = stringResource(R.string.section_uris), icon = Icons.Filled.Language)
     Spacer(Modifier.height(Spacing.sm))
     UriListEditor(
         uris = uris,
@@ -586,6 +607,8 @@ private fun LoginFields(
         onRemove = { uris.removeAt(it) },
         onPickApp = onPickApp,
     )
+    Spacer(Modifier.height(Spacing.md))
+    SectionLabel(text = stringResource(R.string.section_totp), icon = Icons.Filled.Timer)
     Spacer(Modifier.height(Spacing.sm))
     Row(verticalAlignment = Alignment.CenterVertically) {
         OutlinedTextField(
@@ -611,15 +634,17 @@ private fun LoginFields(
  */
 @Composable
 private fun LabeledFields(labels: List<Int>, values: SnapshotStateList<String>) {
-    labels.forEachIndexed { index, labelRes ->
-        OutlinedTextField(
-            value = values[index],
-            onValueChange = { values[index] = it },
-            label = { Text(stringResource(labelRes)) },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Spacer(Modifier.height(Spacing.sm))
+    // 身份有 17 个字段：8dp 的间距会把它们挤成"一堵输入框墙"，12dp 才有分组感。
+    Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
+        labels.forEachIndexed { index, labelRes ->
+            OutlinedTextField(
+                value = values[index],
+                onValueChange = { values[index] = it },
+                label = { Text(stringResource(labelRes)) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
     }
 }
 
@@ -638,6 +663,8 @@ private fun LabeledFields(labels: List<Int>, values: SnapshotStateList<String>) 
  */
 @Composable
 private fun SshKeyFields(values: SnapshotStateList<String>) {
+    SectionLabel(text = stringResource(R.string.section_ssh_key), icon = Icons.Filled.Key)
+    Spacer(Modifier.height(Spacing.sm))
     val monospace = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace)
     OutlinedTextField(
         value = values[SSH_PRIVATE_KEY_INDEX],

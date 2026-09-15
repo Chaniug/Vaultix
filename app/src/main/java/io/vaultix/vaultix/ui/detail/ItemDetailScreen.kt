@@ -46,7 +46,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
@@ -83,7 +85,12 @@ import io.vaultix.vaultix.ui.common.SiteIcon
 import io.vaultix.vaultix.ui.common.TypeBadge
 import io.vaultix.vaultix.ui.common.itemTypeLabelRes
 import android.content.Context
+import androidx.compose.material.icons.filled.Badge
+import androidx.compose.material.icons.filled.CreditCard
 import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.Notes
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import io.vaultix.vaultix.ui.common.CapabilityIcon
@@ -139,8 +146,14 @@ private fun detailEventMessage(context: Context, event: ItemDetailViewModel.UiEv
 /** 掩码星号数量上限（密码过长时截断显示，复制不受影响）。 */
 private const val MAX_MASK_LENGTH = 24
 
-/** 详情页头部站点图标尺寸（对齐 Bastion `HeaderSection` 的 48–52dp 量级）。 */
-private val DETAIL_HEADER_ICON = 48.dp
+/**
+ * 详情页头部站点图标尺寸。
+ *
+ * 2026-09-16：48dp → **56dp**。头部是整页唯一的"视觉锚点"，而详情页下方全是
+ * 12–16sp 的字段行；图标太小会让整页缺少落点，扫视时第一眼不知道落在哪
+ * （M3 Expressive 的「hero 元素要足够大」同样适用于详情页头部）。
+ */
+private val DETAIL_HEADER_ICON = 56.dp
 
 /** 隐藏型自定义字段未展开时的掩码长度上下限。 */
 private const val HIDDEN_MASK_MIN = 6
@@ -285,7 +298,7 @@ private fun DetailHeader(item: VaultItem, serverOrigin: String?) {
             if (summary.isNotEmpty()) {
                 Text(
                     text = summary,
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
@@ -294,11 +307,11 @@ private fun DetailHeader(item: VaultItem, serverOrigin: String?) {
             if (item.username.isNotBlank()) {
                 Text(
                     text = item.username,
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = 2.dp),
+                    modifier = Modifier.padding(top = Spacing.xs),
                 )
             }
             Row(
@@ -487,6 +500,33 @@ fun ItemDetailScreen(
 }
 
 /**
+ * 分区卡片的**统一外框**（底色 / 圆角一处定义）。
+ *
+ * ⚠️ 2026-09-16：此前各分区**各自拍一个容器色**——登录信息、备注用
+ * `surfaceContainerHigh`，网址 / 2FA / 卡片 / SSH / 身份用 `surfaceContainerLow`。
+ * 同一层级的九张卡片两种底色，扫一眼就是"深浅不一的花斑"，这是详情页
+ * 「观感不统一」的根因（`.ai/conventions/8.4-UI·观感.md`：同级容器必须同色）。
+ * 现在全部收口到本函数的 `surfaceContainerLow`，任何分区都不再自己指定颜色。
+ *
+ * 圆角取 16dp（M3 Expressive 分组容器量级）：比 M3 默认 filled-card 的 12dp
+ * 更"有形状"，又不至于像 28dp 那样在窄屏上吃掉内容宽度。
+ */
+@Composable
+private fun DetailCard(content: @Composable ColumnScope.() -> Unit) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+        ),
+        shape = DETAIL_CARD_SHAPE,
+        modifier = Modifier.fillMaxWidth(),
+        content = content,
+    )
+}
+
+/** 分区卡片圆角（见 [DetailCard] 的取舍说明）。 */
+private val DETAIL_CARD_SHAPE = RoundedCornerShape(16.dp)
+
+/**
  * 分区小标题（登录信息 / 网址 / 2FA / 通行密钥 …）。
  *
  * ⚠️ 2026-09-13 用户反馈「登录信息、网址这些小标题是否要稍微大一点，优化一下排版」：
@@ -495,13 +535,24 @@ fun ItemDetailScreen(
  * 下内边距 6dp → 8dp：标题与它自己的卡片贴紧，与上一张卡片拉开。
  */
 @Composable
-private fun SectionTitle(text: String) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.titleMedium,
-        color = MaterialTheme.colorScheme.primary,
+private fun SectionTitle(text: String, icon: ImageVector) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
         modifier = Modifier.padding(start = Spacing.xs, bottom = Spacing.sm),
-    )
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(18.dp),
+        )
+        Text(
+            text = text,
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.primary,
+        )
+    }
 }
 
 @Composable
@@ -513,13 +564,8 @@ private fun LoginSection(
     onCopyPassword: () -> Unit,
 ) {
     Column {
-        SectionTitle(text = stringResource(R.string.section_login))
-        Card(
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-            ),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
+        SectionTitle(text = stringResource(R.string.section_login), icon = Icons.Filled.Person)
+        DetailCard {
             if (item.username.isNotBlank()) {
                 DetailFieldRow(
                     label = stringResource(R.string.item_field_username),
@@ -527,7 +573,7 @@ private fun LoginSection(
                     onCopy = onCopyUsername,
                 )
                 HorizontalDivider(
-                    modifier = Modifier.padding(start = 80.dp),
+                    modifier = Modifier.padding(start = Spacing.lg),
                     color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
                 )
             }
@@ -536,7 +582,7 @@ private fun LoginSection(
                 DetailFieldRow(
                     label = stringResource(R.string.item_field_password),
                     value = if (showPassword) item.password else masked,
-                    valueFontFamily = FontFamily.Monospace,
+                    monospace = true,
                     extraAction = {
                         IconButton(onClick = onTogglePassword) {
                             Icon(
@@ -560,13 +606,8 @@ private fun LoginSection(
 @Composable
 private fun NotesSection(notes: String) {
     Column {
-        SectionTitle(text = stringResource(R.string.section_notes))
-        Card(
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-            ),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
+        SectionTitle(text = stringResource(R.string.section_notes), icon = Icons.Filled.Notes)
+        DetailCard {
             Text(
                 text = notes,
                 style = MaterialTheme.typography.bodyMedium,
@@ -576,35 +617,49 @@ private fun NotesSection(notes: String) {
     }
 }
 
+/** 等宽值（密钥 / 卡号）的最大行数：私钥可能很长，给足可视空间又不至于撑爆整页。 */
+private const val MONOSPACE_MAX_LINES = 4
+
+/** 普通值的最大行数：紧凑单行，长值截断（复制取到的仍是完整值）。 */
+private const val PLAIN_MAX_LINES = 1
+
+/**
+ * 详情页**唯一**的字段行形态：小标签在上、值在下，右侧复制（+ 可选附加动作）。
+ *
+ * ⚠️ 2026-09-16：此前页面里同时存在两种字段行 —— 登录区是「标签左 64dp 定宽 +
+ * 值居右」的横排，卡片 / SSH / 身份是竖排。同一页两种排版，读起来像两个页面拼的。
+ * 统一成竖排两行式（M3 list item 的 headline + supporting text 形态）：
+ * 长值（网址 / 私钥 / 备注）有自己的一整行，不会被 64dp 的标签列挤成省略号。
+ */
 @Composable
 private fun DetailFieldRow(
     label: String,
     value: String,
     onCopy: () -> Unit,
     extraAction: (@Composable () -> Unit)? = null,
-    valueFontFamily: FontFamily? = null,
+    monospace: Boolean = false,
+    maxLines: Int = if (monospace) MONOSPACE_MAX_LINES else PLAIN_MAX_LINES,
 ) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = Spacing.lg, end = Spacing.sm, top = Spacing.xs, bottom = Spacing.xs),
+            .padding(start = Spacing.lg, end = Spacing.sm, top = Spacing.sm, bottom = Spacing.sm),
     ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.width(64.dp),
-        )
-        Text(
-            text = value,
-            style = MaterialTheme.typography.bodyLarge,
-            fontFamily = valueFontFamily,
-            maxLines = 1,
-            modifier = Modifier
-                .weight(1f)
-                .padding(end = Spacing.xs),
-        )
+        Column(modifier = Modifier.weight(1f).padding(end = Spacing.xs)) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = value,
+                style = MaterialTheme.typography.bodyLarge,
+                fontFamily = if (monospace) FontFamily.Monospace else null,
+                maxLines = maxLines,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
         extraAction?.invoke()
         IconButton(onClick = onCopy) {
             Icon(
@@ -620,11 +675,8 @@ private fun DetailFieldRow(
 private fun UrisSection(item: VaultItem, onCopyUri: (String) -> Unit) {
     val context = LocalContext.current
     Column {
-        SectionTitle(text = stringResource(R.string.section_uris))
-        Card(
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
+        SectionTitle(text = stringResource(R.string.section_uris), icon = Icons.Filled.Language)
+        DetailCard {
             Column {
                 item.uris.forEachIndexed { index, v ->
                     if (index > 0) {
@@ -741,11 +793,8 @@ private fun TotpSection(totp: String?) {
     val code = if (revealed) config?.let { TotpGenerator.generate(it, nowSeconds) } else null
 
     Column {
-        SectionTitle(text = stringResource(R.string.section_totp))
-        Card(
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
+        SectionTitle(text = stringResource(R.string.section_totp), icon = Icons.Filled.Timer)
+        DetailCard {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -818,11 +867,8 @@ private const val TOTP_TICK_MS = 1_000L
 @Composable
 private fun PasskeysSection(creds: List<VaultFido2Credential>) {
     Column {
-        SectionTitle(text = stringResource(R.string.section_passkeys))
-        Card(
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
+        SectionTitle(text = stringResource(R.string.section_passkeys), icon = Icons.Filled.Fingerprint)
+        DetailCard {
             HintRow(
                 icon = Icons.Filled.Fingerprint,
                 title = stringResource(R.string.passkey_count, creds.size),
@@ -878,11 +924,8 @@ private fun openUri(context: Context, uri: String) {
 @Composable
 private fun CustomFieldsSection(item: VaultItem, onCopyField: (String) -> Unit) {
     Column {
-        SectionTitle(text = stringResource(R.string.section_custom_fields))
-        Card(
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
+        SectionTitle(text = stringResource(R.string.section_custom_fields), icon = Icons.Filled.Tune)
+        DetailCard {
             Column(modifier = Modifier.padding(vertical = Spacing.sm)) {
                 item.customFields.forEachIndexed { index, field ->
                     if (index > 0) {
@@ -979,69 +1022,53 @@ private fun launchAndroidApp(context: Context, packageName: String) {
 
 /** 银行卡/SSH 等普通字段的「标签 + 值 + 复制」一行。monospace 用于密钥/卡号。 */
 @Composable
-private fun FieldRow(label: String, value: String, onCopy: (String) -> Unit, monospace: Boolean = false) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = Spacing.xs),
-    ) {
-        Column(modifier = Modifier.weight(1f).padding(end = Spacing.xs)) {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
-                text = value,
-                style = if (monospace) {
-                    MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace)
-                } else {
-                    MaterialTheme.typography.bodyMedium
-                },
-                maxLines = if (monospace) 4 else 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        IconButton(onClick = { onCopy(value) }) {
-            Icon(Icons.Filled.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp))
-        }
-    }
-}
-
-@Composable
 private fun CardSection(item: VaultItem, onCopyField: (String) -> Unit) {
     val card = item.card ?: return
     // 品牌识别：优先采用已存品牌名，否则从卡号推导（对齐 Bastion CardBrandDetector）。
     val detected = CardBrandDetector.detect(card.number, card.brand)
     val brandLabel = if (detected != CardBrand.UNKNOWN) detected.displayName else card.brand
     Column {
-        SectionTitle(text = stringResource(R.string.section_card))
-        Card(
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Column(modifier = Modifier.padding(Spacing.lg)) {
+        SectionTitle(text = stringResource(R.string.section_card), icon = Icons.Filled.CreditCard)
+        DetailCard {
+            Column(modifier = Modifier.padding(vertical = Spacing.sm)) {
                 if (card.cardholderName.isNotBlank()) {
-                    FieldRow(stringResource(R.string.card_cardholder), card.cardholderName, onCopyField)
+                    DetailFieldRow(
+                        label = stringResource(R.string.card_cardholder),
+                        value = card.cardholderName,
+                        onCopy = { onCopyField(card.cardholderName) },
+                    )
                 }
                 if (brandLabel.isNotBlank()) {
-                    FieldRow(stringResource(R.string.card_brand), brandLabel, onCopyField)
+                    DetailFieldRow(
+                        label = stringResource(R.string.card_brand),
+                        value = brandLabel,
+                        onCopy = { onCopyField(brandLabel) },
+                    )
                 }
                 if (card.number.isNotBlank()) {
-                    FieldRow(
-                        stringResource(R.string.card_number),
-                        formatCardNumberGrouped(card.number),
-                        onCopyField,
+                    val number = formatCardNumberGrouped(card.number)
+                    DetailFieldRow(
+                        label = stringResource(R.string.card_number),
+                        value = number,
                         monospace = true,
+                        onCopy = { onCopyField(number) },
                     )
                 }
                 val expiry = cardExpiryText(card.expMonth, card.expYear)
                 if (expiry.isNotBlank()) {
-                    FieldRow(stringResource(R.string.card_expiry), expiry, onCopyField)
+                    DetailFieldRow(
+                        label = stringResource(R.string.card_expiry),
+                        value = expiry,
+                        onCopy = { onCopyField(expiry) },
+                    )
                 }
                 if (card.code.isNotBlank()) {
-                    FieldRow(stringResource(R.string.card_cvv), card.code, onCopyField, monospace = true)
+                    DetailFieldRow(
+                        label = stringResource(R.string.card_cvv),
+                        value = card.code,
+                        monospace = true,
+                        onCopy = { onCopyField(card.code) },
+                    )
                 }
             }
         }
@@ -1052,34 +1079,31 @@ private fun CardSection(item: VaultItem, onCopyField: (String) -> Unit) {
 private fun SshKeySection(item: VaultItem, onCopyField: (String) -> Unit) {
     val ssh = item.sshKey ?: return
     Column {
-        SectionTitle(text = stringResource(R.string.section_ssh_key))
-        Card(
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Column(modifier = Modifier.padding(Spacing.lg)) {
+        SectionTitle(text = stringResource(R.string.section_ssh_key), icon = Icons.Filled.Key)
+        DetailCard {
+            Column(modifier = Modifier.padding(vertical = Spacing.sm)) {
                 if (ssh.privateKey.isNotBlank()) {
-                    FieldRow(
-                        stringResource(R.string.ssh_private_key),
-                        ssh.privateKey,
-                        onCopyField,
+                    DetailFieldRow(
+                        label = stringResource(R.string.ssh_private_key),
+                        value = ssh.privateKey,
                         monospace = true,
+                        onCopy = { onCopyField(ssh.privateKey) },
                     )
                 }
                 if (ssh.publicKey.isNotBlank()) {
-                    FieldRow(
-                        stringResource(R.string.ssh_public_key),
-                        ssh.publicKey,
-                        onCopyField,
+                    DetailFieldRow(
+                        label = stringResource(R.string.ssh_public_key),
+                        value = ssh.publicKey,
                         monospace = true,
+                        onCopy = { onCopyField(ssh.publicKey) },
                     )
                 }
                 if (ssh.keyFingerprint.isNotBlank()) {
-                    FieldRow(
-                        stringResource(R.string.ssh_fingerprint),
-                        ssh.keyFingerprint,
-                        onCopyField,
+                    DetailFieldRow(
+                        label = stringResource(R.string.ssh_fingerprint),
+                        value = ssh.keyFingerprint,
                         monospace = true,
+                        onCopy = { onCopyField(ssh.keyFingerprint) },
                     )
                 }
             }
@@ -1128,14 +1152,11 @@ private fun IdentitySection(item: VaultItem, onCopyField: (String) -> Unit) {
     ).filter { it.second.isNotBlank() }
     if (rows.isEmpty()) return
     Column {
-        SectionTitle(text = stringResource(R.string.section_identity))
-        Card(
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Column(modifier = Modifier.padding(Spacing.lg)) {
+        SectionTitle(text = stringResource(R.string.section_identity), icon = Icons.Filled.Badge)
+        DetailCard {
+            Column(modifier = Modifier.padding(vertical = Spacing.sm)) {
                 rows.forEach { (label, value) ->
-                    FieldRow(label, value, onCopyField)
+                    DetailFieldRow(label = label, value = value, onCopy = { onCopyField(value) })
                 }
             }
         }
