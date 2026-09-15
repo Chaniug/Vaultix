@@ -52,6 +52,19 @@ data object SettingsRoute
 data object AutofillSettingsRoute
 
 /**
+ * 密码库管理二级页（设置首页「密码库管理」入口进入）。
+ *
+ * 合并了原先散在两处的三件事：当前密码库 / 添加密码库（原「密码库」组）与
+ * 快速解锁（原「解锁与隐私」组）—— 它们都是"库怎么管"，2026-09-15 用户要求放到一起。
+ *
+ * 无参数：选库 / 加库 / 配解锁方式都作用于库列表本身
+ * （[io.vaultix.vaultix.session.ActiveVaultStore] / `VaultRepository`），
+ * 不需要预先绑定某个 vaultId。
+ */
+@Serializable
+data object VaultManagementRoute
+
+/**
  * 导入 / 导出二级页（设置首页「数据管理 → 导入 / 导出」进入）。
  *
  * 无参数：导出 / 导入都作用于**当前活跃库**（[io.vaultix.vaultix.session.ActiveVaultStore]），

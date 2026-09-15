@@ -68,11 +68,13 @@ fun MainShellScreen(
     onOpenPasskeys: () -> Unit,
     onOpenAutofillSettings: () -> Unit,
     onOpenImportExport: () -> Unit,
-    /** 设置 Tab 内添加库（库列表路由在已有库时不可达，否则用户永远加不了 KDBX）。 */
-    onAddBitwardenVault: () -> Unit,
-    onAddKdbxVault: () -> Unit,
-    /** 设置 Tab 内点了**未解锁**的库 → 去它的解锁页（见 `SettingsScreen.onOpenLockedVault`）。 */
-    onOpenLockedVault: (String) -> Unit = {},
+    /**
+     * 设置 Tab 内的「密码库管理」二级页。
+     *
+     * 合并了原先三个回调（添加 Bitwarden 库 / 打开本地 KDBX 文件 / 点未解锁库去解锁）——
+     * 它们现在都是那一页内部的**页内动作**，主壳只需要知道"怎么进那一页"。
+     */
+    onOpenVaultManagement: () -> Unit,
     /**
      * 去解锁**当前活跃库**（条目页空态里的兜底出口）。
      *
@@ -232,9 +234,7 @@ fun MainShellScreen(
                             onOpenAutofillSettings = onOpenAutofillSettings,
                             onOpenImportExport = onOpenImportExport,
                             bottomInset = bottomInset,
-                            onAddBitwardenVault = onAddBitwardenVault,
-                            onAddKdbxVault = onAddKdbxVault,
-                            onOpenLockedVault = onOpenLockedVault,
+                            onOpenVaultManagement = onOpenVaultManagement,
                         )
                     }
                 }

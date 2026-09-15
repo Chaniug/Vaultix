@@ -38,6 +38,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
@@ -45,6 +46,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -97,6 +99,10 @@ fun UnlockScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val focusManager = LocalFocusManager.current
     val activity = rememberFragmentActivity()
+    // PIN 模式把键盘压到拇指区所需的顶部让位（主密码模式恒为 0dp）。
+    // 条件与下方「换一个库」的显示条件保持一致，否则会漏算 / 多算它的高度。
+    val switchVisible = onSwitchVault != null && state.twoFactor == null && !state.viewLocked
+    val layout = unlockColumnLayout(pinMode = state.pinMode, switchVisible = switchVisible)
     // 认证对话框文案（LaunchedEffect 内不可直接 stringResource，先取好）
     val biometricTitle = stringResource(R.string.quick_unlock_biometric_title)
     val biometricSubtitle = stringResource(R.string.quick_unlock_biometric_subtitle)
@@ -161,7 +167,9 @@ fun UnlockScreen(
                 .imePadding()
                 .padding(horizontal = Spacing.xxl),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
+            // 纵骨架（排列方式 + PIN 让位）由 [unlockColumnLayout] 一次决定：
+            // PIN 模式顶对齐 + 让位把键盘压到拇指区，主密码模式维持居中（见其 KDoc）。
+            verticalArrangement = layout.arrangement,
         ) {
             if (vault == null) {
                 if (state.noVaultToUnlock) {
@@ -218,6 +226,10 @@ fun UnlockScreen(
                 )
             }
             Spacer(Modifier.height(Spacing.lg))
+            // PIN 模式专用让位：把键盘连同圆点一起压到**下半屏**（拇指区）。
+            // 主密码模式这里恒为 0dp —— 它的表单一屏放得下，居中观感保持不变
+            // （见 [rememberPinTopSpacer] 的取值说明）。
+            Spacer(Modifier.height(layout.topSpacer))
             UnlockInputSection(
                 state = state,
                 viewModel = viewModel,
@@ -225,16 +237,22 @@ fun UnlockScreen(
             )
             // 「换一个库」：多库时才有意义。放在最底下、用轻量文字按钮 ——
             // 它是**次要出口**，不能与主解锁按钮抢视觉焦点（同 2026-09-13 指纹图标的取舍）。
-            if (onSwitchVault != null && state.twoFactor == null && !state.viewLocked) {
+            // ⚠️ 条件与 `switchVisible` 同源（不重复写一遍）：它的高度已经算进上方的
+            // PIN 让位，两处漂移就会出现「算进去了却没显示」或反之。
+            // `switchVisible` 只用来决定"要不要画"，取回调仍走 `onSwitchVault?.let` ——
+            // 函数参数是 `val` 但不做智能转换，`if (switchVisible)` 里直接当非空用编译不过。
+            if (switchVisible) {
                 Spacer(Modifier.height(Spacing.sm))
-                TextButton(onClick = onSwitchVault, enabled = !state.submitting) {
-                    Icon(
-                        Icons.Filled.SwapHoriz,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp),
-                    )
-                    Spacer(Modifier.width(Spacing.sm))
-                    Text(stringResource(R.string.unlock_switch_vault))
+                onSwitchVault?.let { switch ->
+                    TextButton(onClick = switch, enabled = !state.submitting) {
+                        Icon(
+                            Icons.Filled.SwapHoriz,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Spacer(Modifier.width(Spacing.sm))
+                        Text(stringResource(R.string.unlock_switch_vault))
+                    }
                 }
             }
         }
@@ -546,6 +564,122 @@ private fun UnlockInputSection(
 
 /** PIN 圆点直径。 */
 private val PIN_DOT_SIZE = Spacing.lg
+
+/**
+ * 解锁页主列的**纵向骨架**：垂直排列方式 + PIN 让位高度。
+ *
+ * ## 为什么要打包成一个返回值
+ *
+ * 这两件事**必须同时决定**，而且都要看 `state.pinMode`：PIN 模式要顶对齐 + 让位，
+ * 主密码模式要居中 + 零让位。写成两个各自判断 `pinMode` 的表达式，就是往
+ * [UnlockScreen] 里塞两个分支 —— 实测这会把它顶到 detekt
+ * `CyclomaticComplexMethod` 15（上限 14），CI 会拦（2026-09-15 实测）。
+ * 收成一个 helper 后主函数里只剩**一次解构赋值**，零新增分支。
+ *
+ * ## 为什么不能简单改成 `weight(1f)` / `Arrangement.Bottom`
+ *
+ * 根 Column 带 `verticalScroll`（小屏 / 横屏必须能滚），它给子项的是**无界高度**：
+ * - `weight(1f)` 要求父级有界 ⇒ 直接抛 `IllegalStateException`；
+ * - `Arrangement.Bottom` 只在内容**低于**容器时才把内容推到底，内容一超高就退化成
+ *   `Top`，小屏上键盘仍会被推到屏幕外（要滚动才够得着，比居中更糟）。
+ *
+ * ⇒ 改成「顶对齐 + 按容器高度反推让位量」，让位量公式见 [rememberPinTopSpacer]。
+ *
+ * ⚠️ 主密码模式维持 `Center` + 零让位不变：它的表单一屏放得下，居中观感是刻意保留的
+ * （2026-09-14 已定），本轮诉求只针对 PIN。
+ *
+ * @param switchVisible 是否有「换一个库」出口（只有多库时才有）——它的高度要算进让位。
+ */
+@Composable
+private fun unlockColumnLayout(
+    pinMode: Boolean,
+    switchVisible: Boolean,
+): UnlockColumnLayout = UnlockColumnLayout(
+    arrangement = if (pinMode) Arrangement.Top else Arrangement.Center,
+    topSpacer = rememberPinTopSpacer(pinMode, switchVisible),
+)
+
+/**
+ * [unlockColumnLayout] 的返回值：排列方式 + 顶部让位。
+ *
+ * 不是一个有行为的概念，纯粹是"一次决定两件事"的载体（见其 KDoc 的复杂度说明）。
+ */
+private data class UnlockColumnLayout(
+    val arrangement: Arrangement.Vertical,
+    val topSpacer: Dp,
+)
+
+/**
+ * PIN 模式顶部让位高度：把键盘压到屏幕底部的拇指区。
+ *
+ * ## 要解决的问题
+ *
+ * 用户反馈「解锁界面 PIN 输入的时候，数字键盘太靠上了，手指点击有点远」。
+ * 根因是整列在可用高度里 [Arrangement.Center] 居中 —— 一屏内容约 520dp，
+ * 键盘（4 × 76dp + 间距）落在屏幕中部偏上。
+ *
+ * ## 为什么用「反推让位」而不是 `weight(1f)` / `Arrangement.Bottom`
+ *
+ * 根 Column 带 `verticalScroll`（小屏 / 横屏必须能滚），它给子项的是**无界高度**：
+ * - `weight(1f)` 要求父级有界 ⇒ 直接抛 `IllegalStateException`；
+ * - `Arrangement.Bottom` 只在内容**低于**容器时才把内容推到底，内容一超高就退化成
+ *   `Top`，小屏上键盘仍会被推到屏幕外（要滚动才够得着，比居中更糟）。
+ *
+ * ⇒ 改成「按容器高度反推让位量」。公式（**实机尺寸量纲，已按 600/640/720/800/891/915
+ * 六档屏高验算**）：
+ *
+ * ```
+ * 让位 = 屏高 − 顶部信息区高 − 键盘高 − 换库按钮高 − 底距
+ * ```
+ *
+ * 也就是让**内容底边贴着屏幕底部**（留一档底距），键盘底部落在 **88%~92%** 处，
+ * 恰好是拇指自然落点上沿 —— 而不是寄希望于一个"比例"。用比例（如 `屏高 × 0.35`）
+ * 是**错的** —— 键盘自身就有 400dp，任何 `< 0.5` 的比例都会算出负数，让位恒为 0，
+ * 等于没改（这一点是写完第一版后验算发现的）。
+ *
+ * ⚠️ **「换一个库」按钮的高度必须算进去**：它挂在键盘下方，漏算就会把整列顶出屏幕，
+ * 用户得滚动才看得见那个出口（多库用户冷启动卡在解锁页时，那是唯一的换库路径）。
+ * 同理底距也要留，否则最后一排按键被系统手势条吃掉一块触摸面积。
+ *
+ * 小屏（如 600dp 高）让位会缩到 28dp 但仍为正 ⇒ 依然贴底，只是键盘更靠上一点。
+ * 真到放不下时 `coerceAtLeast(0.dp)` 兜底，退化为顶对齐 + 可滚动。
+ *
+ * ⚠️ 主密码模式恒返回 `0.dp`：它的表单一屏放得下，居中观感是刻意保留的
+ * （2026-09-14 已定），本轮的诉求只针对 PIN。
+ *
+ * @param switchVisible 是否有「换一个库」出口（只有多库时才有）。
+ */
+@Composable
+private fun rememberPinTopSpacer(pinMode: Boolean, switchVisible: Boolean): Dp {
+    if (!pinMode) return 0.dp
+    // 容器高度取窗口高度（解锁页是全屏单页面，没有顶栏 / 底栏压着）。
+    val screenHeight = LocalConfiguration.current.screenHeightDp.dp
+    // 顶部信息区高：头像 64dp + Spacing.lg + 库名（titleLarge ≈ 28dp）+ Spacing.lg。
+    // 账号行是可选行（KDBX 库为 null），忽略它只会让让位略小、键盘略高一点点，
+    // 不会把键盘推出屏幕 —— 而把它算进去会在有账号时把键盘顶得太低。
+    val headerHeight = 64.dp + Spacing.lg + 28.dp + Spacing.lg
+    // 键盘固有高度：圆点行 + 错误提示位 + 20dp 间隔 + 4 排按键（含排间距）+ 出口按钮。
+    val keypadHeight = PIN_DOT_SIZE + Spacing.md + 20.dp +
+        (PIN_KEY_SIZE + PIN_KEY_GAP) * PIN_DIGIT_ROWS.size +
+        PIN_KEY_SIZE + PIN_KEY_GAP + Spacing.lg
+    // 「换一个库」：Spacing.sm 间距 + 一个 TextButton 的最小高度（40dp）。
+    val switchHeight = if (switchVisible) Spacing.sm + SWITCH_BUTTON_HEIGHT else 0.dp
+    return (
+        screenHeight - headerHeight - keypadHeight - switchHeight - PIN_BOTTOM_MARGIN
+        ).coerceAtLeast(0.dp)
+}
+
+/** 「换一个库」文字按钮的高度（M3 `TextButton` 默认最小高 40dp）。 */
+private val SWITCH_BUTTON_HEIGHT = 40.dp
+
+/**
+ * PIN 键盘底部保留的余地。
+ *
+ * 不让键盘**严丝合缝**贴到屏幕最下沿：那里是系统手势条 / 虚拟导航栏的地盘
+ * （`imePadding()` 管的是 IME，管不到手势条），零余量时最下面一排按键与出口按钮
+ * 会被手势区吃掉一部分触摸面积。24dp 是"够到但不压住"的平衡点。
+ */
+private val PIN_BOTTOM_MARGIN = Spacing.xl
 
 /**
  * 单个按键直径。

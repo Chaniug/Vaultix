@@ -29,6 +29,7 @@ import io.vaultix.vaultix.ui.rootnav.RootNavViewModel
 import io.vaultix.vaultix.ui.settings.AutofillSettingsScreen
 import io.vaultix.vaultix.ui.settings.ImportExportScreen
 import io.vaultix.vaultix.ui.settings.SettingsScreen
+import io.vaultix.vaultix.ui.settings.VaultManagementScreen
 import io.vaultix.vaultix.ui.shell.MainShellScreen
 import io.vaultix.vaultix.ui.shell.MainShellViewModel
 import io.vaultix.vaultix.ui.shell.tabSwitchEnter
@@ -260,14 +261,9 @@ private fun NavGraphBuilder.vaultEntryGraph(
             },
             onOpenAutofillSettings = { navController.navigate(AutofillSettingsRoute) },
             onOpenImportExport = { navController.navigate(ImportExportRoute) },
-            // 设置 Tab 内也要能添加库（否则「已有一个库」时库列表路由不可达，
-            // 用户永远加不了本地 KDBX 库）。
-            onAddBitwardenVault = { navController.navigate(AddVaultRoute) },
-            onAddKdbxVault = { navController.navigate(AddKdbxRoute) },
-            // 设置页点了**未解锁**的库 → 直奔它的解锁页（2026-09-15 修的空白页 bug）。
-            // ⚠️ 用 navigate 而非 navigate(Root)：解锁页压在当前栈上，解锁后
-            // onUnlocked 会把活跃库切过去并回主界面，返回栈天然正确。
-            onOpenLockedVault = { vaultId -> navController.navigate(UnlockRoute(vaultId)) },
+            // 设置 Tab 内的「密码库管理」二级页：添加库（Bitwarden / 本地 KDBX）与
+            // 「点未解锁的库去解锁」现在都是那一页内部的页内动作，主壳只负责导航过去。
+            onOpenVaultManagement = { navController.navigate(VaultManagementRoute) },
             // 条目页空态里的兜底：活跃库锁着时去解它（与库数量无关，单库也需要）。
             onUnlockActiveVault = {
                 activeVaultId?.let { navController.navigate(UnlockRoute(it)) }
@@ -304,7 +300,7 @@ private fun NavGraphBuilder.vaultEntryGraph(
 }
 
 /**
- * 设置链路：设置首页 → 自动填充二级设置 → 添加库。
+ * 设置链路：设置首页 → 自动填充二级设置 / 密码库管理二级页 → 添加库。
  */
 private fun NavGraphBuilder.settingsGraph(navController: NavHostController) {
     composable<SettingsRoute> {
@@ -312,9 +308,16 @@ private fun NavGraphBuilder.settingsGraph(navController: NavHostController) {
             onBack = { navController.popBackStack() },
             onOpenAutofillSettings = { navController.navigate(AutofillSettingsRoute) },
             onOpenImportExport = { navController.navigate(ImportExportRoute) },
+            // 「密码库」组现在只有一个入口：选库 / 加库 / 配解锁方式全在二级页。
+            onOpenVaultManagement = { navController.navigate(VaultManagementRoute) },
+        )
+    }
+    composable<VaultManagementRoute> {
+        VaultManagementScreen(
+            onBack = { navController.popBackStack() },
             onAddBitwardenVault = { navController.navigate(AddVaultRoute) },
             onAddKdbxVault = { navController.navigate(AddKdbxRoute) },
-            // 与主界面 Tab 内嵌的设置页同款接线：点未解锁的库 → 去解锁页。
+            // 点未解锁的库 → 去解锁页（2026-09-15 修的空白页 bug，语义不能退化）。
             onOpenLockedVault = { vaultId -> navController.navigate(UnlockRoute(vaultId)) },
         )
     }
@@ -373,6 +376,10 @@ private fun NavGraphBuilder.itemsGraph(navController: NavHostController) {
         )
     }
     composable<PasskeysRoute> {
+        // ⚠️ 这里**不传** `vaultId`：`PasskeysViewModel` 用 `hiltViewModel()` 构造，
+        // 它的 `SavedStateHandle` 直接来自本导航条目 —— 也就是 `PasskeysRoute` 携带的
+        // `vaultId`，`checkNotNull(savedStateHandle[ARG_VAULT_ID])` 因此拿得到值。
+        // 显式再传一遍反而会多出一个无人使用的参数（detekt `UnusedParameter` 会拦）。
         PasskeysScreen(
             onBack = { navController.popBackStack() },
         )

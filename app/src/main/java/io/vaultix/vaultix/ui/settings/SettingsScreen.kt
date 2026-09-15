@@ -22,20 +22,15 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Contrast
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.ViewAgenda
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Logout
-import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Password
 import androidx.compose.material.icons.filled.Policy
-import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Storage
@@ -55,11 +50,9 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -69,9 +62,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
@@ -85,11 +75,9 @@ import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.BiometricPrompter
 import io.vaultix.vaultix.ui.items.DisplayOptionsSheet
 import io.vaultix.vaultix.ui.common.VaultixExpressiveTopBar
-import io.vaultix.vaultix.ui.common.AddVaultTypeDialog
 import io.vaultix.vaultix.ui.common.rememberImmersiveBarPadding
 import io.vaultix.vaultix.ui.common.rememberScrollCollapseFraction
 import io.vaultix.vaultix.ui.common.TrashAutoDeleteDialog
-import io.vaultix.vaultix.ui.common.deviceCanAuthenticate
 import io.vaultix.vaultix.ui.common.rememberFragmentActivity
 import io.vaultix.vaultix.ui.common.trashAutoDeleteLabel
 import io.vaultix.vaultix.ui.theme.ThemeMode
@@ -122,18 +110,13 @@ fun SettingsScreen(
     embedded: Boolean = false,
     /** 底部叠层悬浮栏占用的高度（宿主给；非内嵌时为 0）——内容要留出它，否则末项被压住。 */
     bottomInset: Dp = 0.dp,
-    /** 「密码库」分区：添加 Bitwarden 云端库 / 打开本地 KDBX 文件（导航到对应流程）。 */
-    onAddBitwardenVault: () -> Unit = {},
-    onAddKdbxVault: () -> Unit = {},
     /**
-     * 「密码库」分区：点一个**未解锁**的库时，去它的解锁页输主密码。
+     * 「密码库」分区：进入**密码库管理**二级页。
      *
-     * ⚠️ 必须有这个出口（2026-09-15 用户报的 bug）：KDBX 明文只在内存，
-     * 冷启动后必然是未解锁状态；早先对话框对未解锁项也**无条件切库**，
-     * 切过去后条目流因会话为空而返回空列表 ⇒ 条目页与验证码页全白，
-     * 且「切库即锁旧库」把原来能看的库也锁了 ⇒ 两个库都进不去。
+     * ⚠️ 选库 / 加库 / 配解锁方式现在都在那一页（2026-09-15 用户要求把同属库管理的
+     * 三件事放到一起）。这里只留一个入口 —— 首页的职责是分流，不是干活。
      */
-    onOpenLockedVault: (String) -> Unit = {},
+    onOpenVaultManagement: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -142,19 +125,7 @@ fun SettingsScreen(
     var showAutoLockDialog by rememberSaveable { mutableStateOf(false) }
     var showClipboardDialog by rememberSaveable { mutableStateOf(false) }
     var showAboutDialog by rememberSaveable { mutableStateOf(false) }
-    var showQuickUnlockDialog by rememberSaveable { mutableStateOf(false) }
     var showExitDatabaseDialog by rememberSaveable { mutableStateOf(false) }
-    val quickUnlockVaults by viewModel.quickUnlockVaults.collectAsStateWithLifecycle()
-    val kdbxEnrollState by viewModel.kdbxEnrollState.collectAsStateWithLifecycle()
-    // 正在等待主密码的 KDBX 库（null = 不显示输入框）。由事件驱动，不 saveable：
-    // 进程重建后事件已消费，重新弹一个空输入框反而困惑。
-    var pendingKdbxVaultId by remember { mutableStateOf<String?>(null) }
-
-    QuickUnlockEnrollEffect(
-        viewModel = viewModel,
-        onPromptKdbxPassword = { vaultId -> pendingKdbxVaultId = vaultId },
-        onEnrollReady = { pendingKdbxVaultId = null },
-    )
 
     // 沉浸式顶栏：大标题随滚动缩小、状态栏区域由顶栏背景覆盖（对齐 Bastion）。
     val scrollState = rememberScrollState()
@@ -176,21 +147,20 @@ fun SettingsScreen(
             // 顶栏下方留一条死区（「不沉浸」）；Spacer 会随内容一起滚走。
             Spacer(modifier = Modifier.height(barPadding))
             // ---- 密码库（活跃库 = 全局单一真源，详见 VaultSection 的 KDoc）----
+            // 只剩一个入口：选库 / 加库 / 配解锁方式都在 VaultManagementScreen（二级页）。
             VaultSection(
                 viewModel = viewModel,
-                onAddBitwardenVault = onAddBitwardenVault,
-                onAddKdbxVault = onAddKdbxVault,
-                onOpenLockedVault = onOpenLockedVault,
+                onOpenVaultManagement = onOpenVaultManagement,
             )
 
             // ---- 解锁与隐私（拆出去守住 detekt LongMethod ≤150）----
-            // ⚠️ 「退出数据库」是数据动作，已移到「数据」组置底（定稿 §2①）
+            // ⚠️ 「快速解锁」已移到「密码库管理」二级页（它按库登记，属于库而不属于隐私）；
+            //    「退出数据库」是数据动作，已移到「数据」组置底（定稿 §2①）。
             UnlockPrivacySection(
                 viewModel = viewModel,
                 state = state,
                 onAutoLock = { showAutoLockDialog = true },
                 onClipboardClear = { showClipboardDialog = true },
-                onQuickUnlock = { showQuickUnlockDialog = true },
             )
 
             // ---- 显示与填充（自动填充入口已并入，原单行组）----
@@ -262,40 +232,6 @@ fun SettingsScreen(
                 TextButton(onClick = { showAboutDialog = false }) {
                     Text(stringResource(R.string.action_back))
                 }
-            },
-        )
-    }
-    if (showQuickUnlockDialog) {
-        QuickUnlockManageDialog(
-            vaults = quickUnlockVaults,
-            canAuthenticate = deviceCanAuthenticate(context),
-            // ★ 按库类型分流：KDBX 没有可包裹的会话密钥，**必须先要主密码**
-            //   （定稿 §4.5）；Bitwarden 直接弹指纹。
-            onEnable = { vaultId ->
-                val target = quickUnlockVaults.firstOrNull { it.vaultId == vaultId }
-                if (target?.kind == VaultKind.KDBX) {
-                    viewModel.startKdbxQuickUnlock(vaultId)
-                } else {
-                    viewModel.startQuickUnlockEnroll(vaultId)
-                }
-            },
-            onDisable = viewModel::disableQuickUnlock,
-            onPinSet = viewModel::openPinDialog,
-            onPinDisable = viewModel::disablePin,
-            onDismiss = { showQuickUnlockDialog = false },
-        )
-    }
-    PinDialogHost(viewModel = viewModel)
-    // KDBX 主密码输入框：仅当用户勾选了 KDBX 库、且尚未校验通过时出现。
-    val kdbxTarget = pendingKdbxVaultId
-    if (kdbxTarget != null) {
-        KdbxQuickUnlockPasswordDialog(
-            vaultName = quickUnlockVaults.firstOrNull { it.vaultId == kdbxTarget }?.name.orEmpty(),
-            state = kdbxEnrollState,
-            onSubmit = { password -> viewModel.confirmKdbxPassword(kdbxTarget, password) },
-            onDismiss = {
-                pendingKdbxVaultId = null
-                viewModel.dismissKdbxPassword()
             },
         )
     }
@@ -377,17 +313,20 @@ private fun ExitDatabaseDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
 }
 
 /**
- * 解锁与隐私组（原「安全」）：快速解锁 / 自动锁定 / 防截屏 / 剪贴板清除。
+ * 解锁与隐私组（原「安全」）：自动锁定 / 防截屏 / 剪贴板清除。
  *
- * 组内顺序按「入口在前、开关在中」：快速解锁是**入口**（点开是对话框），
- * 自动锁定与剪贴板清除是**档位选择**，防截屏是**开关**。
+ * ⚠️ **「快速解锁」已从本组移出**（2026-09-15 用户要求把库管理三件事放一起）：
+ * 它为**每个库**单独登记一条解锁凭据（`quickUnlockVaults` 就是"每库一行"的形态），
+ * 语义上属于"库怎么打开"，属于库管理；夹在自动锁定与防截屏之间，用户要改
+ * "某个库怎么解锁"得先想到来隐私组找。现落在 [VaultManagementScreen]（定稿 §10）。
  *
- * ⚠️ 「退出数据库」**已从本组移出** —— 它是清空本地缓存的**数据动作**，
- * 夹在「防截屏」与「快速解锁」之间既错位（不是解锁策略）、又把唯一的不可逆动作
- * 放在了常用动作旁边。现落在「数据」组末尾（定稿 §2① / §3）。
+ * ⚠️ 「退出数据库」**也曾从本组移出** —— 它是清空本地缓存的**数据动作**，
+ * 现落在「数据」组末尾（定稿 §2① / §3）。
+ *
+ * 组内顺序按「档位选择在前、开关在后」：自动锁定与剪贴板清除是档位，防截屏是开关。
  *
  * 拆成独立 composable 纯粹是为了让 [SettingsScreen] 主函数守住 detekt `LongMethod`
- * （≤150 行）——三个对话框的显示状态仍留在宿主里，本函数只收回调。
+ * （≤150 行）——各对话框的显示状态仍留在宿主里，本函数只收回调。
  */
 @Composable
 private fun UnlockPrivacySection(
@@ -395,15 +334,8 @@ private fun UnlockPrivacySection(
     state: SettingsViewModel.UiState,
     onAutoLock: () -> Unit,
     onClipboardClear: () -> Unit,
-    onQuickUnlock: () -> Unit,
 ) {
     SettingsGroupTitle(stringResource(R.string.group_security))
-    SettingsRow(
-        icon = { Icon(Icons.Filled.Fingerprint, contentDescription = null) },
-        title = stringResource(R.string.settings_quick_unlock),
-        subtitle = stringResource(R.string.settings_quick_unlock_desc),
-        onClick = onQuickUnlock,
-    )
     SettingsRow(
         icon = { Icon(Icons.Filled.Timer, contentDescription = null) },
         title = stringResource(R.string.setting_auto_lock),
@@ -473,7 +405,19 @@ private fun AboutSection(
 }
 
 /**
- * 「库」分组：显示并切换**活跃库**。
+ * 「密码库」分组：**一个入口**，通向 [VaultManagementScreen]。
+ *
+ * 为什么把入口留在设置首页而不是把库管理内容摊在这里：首页的职责是"分流"，
+ * 不是"干活"。改之前这一组有「当前密码库」与「添加密码库」两行，而「快速解锁」
+ * 却挂在「解锁与隐私」组 —— 三件同属库管理的事散在两处，用户要改"某个库怎么解锁"
+ * 得先想到去隐私组找（2026-09-15 用户反馈）。
+ *
+ * 现在首页只回答"去哪管库"，具体动作（选库 / 加库 / 配解锁方式）都在二级页里，
+ * 与「自动填充设置」「导入与导出」的层级保持一致。
+ *
+ * ⚠️ **不要**把二级页的对话框再搬回这里：`ActiveVaultDialog` /
+ * `QuickUnlockManageDialog` 会各自拉起一串状态（KDBX 待验证 id、PIN 对话框步骤…），
+ * 正好是当初为守 detekt `LongMethod` 才拆出去的东西，搬回来必然顶线。
  *
  * 为什么入口在设置页：Bastion 的多库是主界面里的一个**筛选维度**（`UnifiedCategoryFilterSelection`
  * 把库与文件夹 / 分类平级），而 Vaultix 是「登录时二选一」的**单活跃库**语义 —— 主界面
@@ -481,89 +425,23 @@ private fun AboutSection(
  * （Docs/progress/main-shell-migration.md §0 与 A4）。
  *
  * 切换的影响面：主界面各 Tab、autofill 候选、Credential Provider 候选、保存回写目标
- * **同时**切到新库 —— 它们都只读 `ActiveVaultStore`，没有第二份状态。
+ * **同时**切到新库 —— 它们都只读 [io.vaultix.vaultix.data.ActiveVaultStore]，没有第二份状态。
  */
 @Composable
 private fun VaultSection(
     viewModel: SettingsViewModel,
-    onAddBitwardenVault: () -> Unit,
-    onAddKdbxVault: () -> Unit,
-    onOpenLockedVault: (String) -> Unit,
+    onOpenVaultManagement: () -> Unit,
 ) {
     val active by viewModel.activeVault.collectAsStateWithLifecycle()
-    val default by viewModel.defaultVault.collectAsStateWithLifecycle()
-    val switchable by viewModel.switchableVaults.collectAsStateWithLifecycle()
-    var showDialog by rememberSaveable { mutableStateOf(false) }
-    var showAddDialog by rememberSaveable { mutableStateOf(false) }
-
     SettingsGroupTitle(stringResource(R.string.group_vaults))
     SettingsRow(
         icon = { Icon(Icons.Filled.Storage, contentDescription = null) },
-        title = stringResource(R.string.settings_active_vault),
+        title = stringResource(R.string.vault_management_entry),
+        // 副标题直接给**当前库名**：用户最常问的就是"我现在看的是哪个库"，
+        // 放在这里就不必为了确认这件事再点进二级页。
         subtitle = active?.name ?: stringResource(R.string.settings_active_vault_none),
-        onClick = { showDialog = true },
+        onClick = onOpenVaultManagement,
     )
-    // ⚠️ 这一行是**必需**的：添加库的入口原本只在库列表页的「+」，而库列表路由在
-    // 「已经有一个库」时不可达（根导航落在解锁页 / 主界面）⇒ 用户永远加不了本地
-    // KDBX 库，表现为「KDBX 集成已交付但设置里只有 Bitwarden」。
-    //
-    // 副标题按「是否已有库」分流（定稿 §5.2）：已有库时若还写「连接 Bitwarden 云端」，
-    // 会被读成「要改当前这个库的服务器」，而实际动作是**再加一个库**。
-    SettingsRow(
-        icon = { Icon(Icons.Filled.Add, contentDescription = null) },
-        title = stringResource(R.string.vault_add_fab),
-        subtitle = stringResource(
-            if (switchable.isEmpty()) {
-                R.string.settings_add_vault_desc
-            } else {
-                R.string.settings_add_vault_desc_another
-            },
-        ),
-        onClick = { showAddDialog = true },
-    )
-
-    if (showDialog) {
-        ActiveVaultDialog(
-            vaults = switchable,
-            activeId = active?.id,
-            defaultId = default?.id,
-            // ⚠️ 只有**已解锁**的库才能成为活跃库（2026-09-15 修的 bug）：
-            // 未解锁的库切过去后条目流是空的（KDBX 会话不在内存 / Bitwarden 无密钥），
-            // 且「切库即锁旧库」会顺带把原来能看的库也锁掉 ⇒ 条目页与验证码页**全白**。
-            // 所以未解锁项的点击语义是「去解锁」，不是「切过去」。
-            onSelect = { vault ->
-                if (vault.unlocked) {
-                    viewModel.selectVault(vault.id)
-                } else {
-                    onOpenLockedVault(vault.id)
-                }
-                showDialog = false
-            },
-            // 「设为默认」= 改冷启动先开哪个，**不要求当下解锁**（这是它的正当用途：
-            // 用户明知道某库要输密码，仍希望下次开 App 直奔它）。故这里也先切活跃库，
-            // 但只对已解锁库切 —— 未解锁库交给解锁页去打开。
-            onSetDefault = { vault ->
-                if (vault.unlocked) viewModel.selectVault(vault.id)
-                viewModel.setDefaultVault(vault.id)
-                showDialog = false
-            },
-            onDismiss = { showDialog = false },
-        )
-    }
-
-    if (showAddDialog) {
-        AddVaultTypeDialog(
-            onConnectBitwarden = {
-                showAddDialog = false
-                onAddBitwardenVault()
-            },
-            onOpenKdbx = {
-                showAddDialog = false
-                onAddKdbxVault()
-            },
-            onDismiss = { showAddDialog = false },
-        )
-    }
 }
 
 /**
@@ -584,7 +462,7 @@ private fun VaultSection(
  * - 「设为默认」= 改**冷启动先开哪个**（唯一写入点，**不要求当下解锁**）。
  */
 @Composable
-private fun ActiveVaultDialog(
+internal fun ActiveVaultDialog(
     vaults: List<VaultSummary>,
     activeId: String?,
     defaultId: String?,
@@ -634,7 +512,7 @@ private fun ActiveVaultDialog(
  * 也让「未解锁标注」「默认标记」两件事各自可读。
  */
 @Composable
-private fun VaultChoiceRow(
+internal fun VaultChoiceRow(
     name: String,
     locked: Boolean,
     selected: Boolean,
@@ -913,7 +791,7 @@ private fun themeModeLabel(mode: ThemeMode): String = when (mode) {
  * 二是把「认证副作用」与「页面布局」解耦。
  */
 @Composable
-private fun QuickUnlockEnrollEffect(
+internal fun QuickUnlockEnrollEffect(
     viewModel: SettingsViewModel,
     onPromptKdbxPassword: (String) -> Unit,
     onEnrollReady: () -> Unit,
@@ -964,7 +842,7 @@ private fun QuickUnlockEnrollEffect(
  * 失去启用路径。现已补上对称的「启用」动作，消除该入口死角。
  */
 @Composable
-private fun QuickUnlockManageDialog(
+internal fun QuickUnlockManageDialog(
     vaults: List<SettingsViewModel.QuickUnlockVaultUi>,
     canAuthenticate: Boolean,
     onEnable: (String) -> Unit,
@@ -1037,7 +915,7 @@ private fun QuickUnlockManageDialog(
  * 无论按钮多宽都不可能压到文字 —— 纵向增长是**可见且可读**的失败方式。
  */
 @Composable
-private fun UnlockOptionRow(
+internal fun UnlockOptionRow(
     title: String,
     summary: String,
     actions: @Composable RowScope.() -> Unit,
@@ -1065,7 +943,7 @@ private fun UnlockOptionRow(
  * 的路径，挤在同一行会让人以为是一个开关的两个档位）。
  */
 @Composable
-private fun QuickUnlockRow(
+internal fun QuickUnlockRow(
     vault: SettingsViewModel.QuickUnlockVaultUi,
     canAuthenticate: Boolean,
     onEnable: (String) -> Unit,
@@ -1111,7 +989,7 @@ private fun QuickUnlockRow(
  * `SecureCredentialStore` 那层硬件密钥，不来自系统认证）。
  */
 @Composable
-private fun PinRow(
+internal fun PinRow(
     vault: SettingsViewModel.QuickUnlockVaultUi,
     onSet: (SettingsViewModel.QuickUnlockVaultUi) -> Unit,
     onPinDisable: (String) -> Unit,
@@ -1146,7 +1024,7 @@ private fun PinRow(
  * 让它们在同一个宿主里切换，才能保证「上一步收下的 PIN」不会因为 UI 重组而丢失。
  */
 @Composable
-private fun PinDialogHost(viewModel: SettingsViewModel) {
+internal fun PinDialogHost(viewModel: SettingsViewModel) {
     // ⚠️ 必须先用局部 `val` 接住：委托属性（`by`）**无法智能转换**，
     // 直接在 `when` 里用 `state is ...` 会编译不过。
     val state = viewModel.pinDialog.collectAsStateWithLifecycle().value
@@ -1284,7 +1162,7 @@ private fun DialogErrorText(message: String?) {
  * - 校验期间按钮禁用，避免连点产生多个 cipher。
  */
 @Composable
-private fun KdbxQuickUnlockPasswordDialog(
+internal fun KdbxQuickUnlockPasswordDialog(
     vaultName: String,
     state: SettingsViewModel.KdbxEnrollState,
     onSubmit: (String) -> Unit,

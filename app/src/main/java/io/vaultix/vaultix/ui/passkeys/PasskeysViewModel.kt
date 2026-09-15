@@ -46,6 +46,29 @@ class PasskeysViewModel @Inject constructor(
         val items: List<VaultItem> = emptyList(),
         val query: String = "",
         val saving: Boolean = false,
+        /**
+         * 库的服务器地址（站点图标的取值前缀；KDBX 本地库为 null）。
+         *
+         * 2026-09-15 加：列表行改用 [io.vaultix.vaultix.ui.common.SiteIconByHost] 后，
+         * 需要它才能拼出 `<服务器>/icons/<域名>/icon.png` —— 与验证码页同口径
+         * （`TotpCodesViewModel.UiState.serverOrigin`）。
+         */
+        val serverOrigin: String? = null,
+        /**
+         * 活跃库**是否已解锁**（`null` = 库信息还没到）。
+         *
+         * 与密码 / 验证码页同一类坑：库里凭证全在、只是密文读不出来时 `items` 同样是空的。
+         * 若不区分，界面会显示「还没有通行密钥」——**假状态**。
+         */
+        val unlocked: Boolean? = null,
+        /**
+         * 条目流是否还没发首帧。
+         *
+         * ⚠️ 与 [unlocked] 管的是两件事：本页的库 id 来自路由参数（固定），
+         * 所以不存在验证码页那种"id 还没解析出来"的中间态，但**首帧**仍然存在 ——
+         * 首帧期间 `items` 也是空的，同样不能说「还没有通行密钥」。
+         */
+        val loading: Boolean = true,
     )
 
     private val _state = MutableStateFlow(UiState())
@@ -54,8 +77,14 @@ class PasskeysViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             vaultRepository.observeVaults().collect { vaults ->
-                val name = vaults.firstOrNull { v -> v.id == vaultId }?.name.orEmpty()
-                _state.update { it.copy(vaultName = name) }
+                val vault = vaults.firstOrNull { v -> v.id == vaultId }
+                _state.update {
+                    it.copy(
+                        vaultName = vault?.name.orEmpty(),
+                        serverOrigin = vault?.origin,
+                        unlocked = vault?.unlocked,
+                    )
+                }
             }
         }
         viewModelScope.launch {
@@ -65,7 +94,7 @@ class PasskeysViewModel @Inject constructor(
                     "passkeys loaded items=${items.size} " +
                         "withFido2=${items.count { it.fido2Credentials.isNotEmpty() }}",
                 )
-                _state.update { it.copy(items = items) }
+                _state.update { it.copy(items = items, loading = false) }
             }
         }
     }
@@ -119,7 +148,16 @@ data class PasskeyRow(
     val itemId: String,
     val loginTitle: String,
     val credential: VaultFido2Credential,
-)
+) {
+    /**
+     * 稳定唯一键（`条目 id : 凭证 id`）。
+     *
+     * 抽出来给 `LazyColumn(key = ...)` 与多选集合共用：同一凭证的字符串只在一处拼，
+     * 不会出现「列表用 A 拼、多选集合用 B 拼」导致勾选对不上的漂移
+     * （验证码页是就地拼的，本页因为多了多选状态，值得收成一个属性）。
+     */
+    val key: String get() = "$itemId:${credential.credentialId}"
+}
 
 /** 构造一个待保存的通行密钥（默认值对齐 Bitwarden；时间戳不加密）。 */
 fun newPasskeyCredential(
