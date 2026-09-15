@@ -75,12 +75,12 @@ private val SETTINGS_ICON_GAP = 18.dp
 /** 行内的水平内边距（上游 20dp）。 */
 private val SETTINGS_ROW_PADDING_H = 20.dp
 
+/** 图标槽位尺寸：图标本身多为 24dp，这里给 28dp 的容器（视觉重量对齐上游）。 */
+private val SETTINGS_ICON_BOX = 28.dp
+
 /** 组内分隔线的起始缩进：对齐到文字左边缘（行内边距 + 图标槽 + 图标间距）。 */
 private val SETTINGS_DIVIDER_INSET =
     SETTINGS_ROW_PADDING_H + SETTINGS_ICON_BOX + SETTINGS_ICON_GAP
-
-/** 图标槽位尺寸：图标本身多为 24dp，这里给 28dp 的容器（视觉重量对齐上游）。 */
-private val SETTINGS_ICON_BOX = 28.dp
 
 /** 关态内容透明度（上游 0.38）。 */
 private const val DISABLED_CONTENT_ALPHA = 0.38f
