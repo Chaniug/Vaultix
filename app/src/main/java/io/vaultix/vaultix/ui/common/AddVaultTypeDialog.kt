@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.Description
 import androidx.compose.material3.BasicAlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -76,6 +77,7 @@ private val VAULT_TYPE_ICON_BOX = 28.dp
  * 完全保留。本对话框被设置页与库列表页**两处共用**（见文件头说明），
  * 改这边两处一起变，这是刻意的（避免两处观感漂移）。
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AddVaultTypeDialog(
     onConnectBitwarden: () -> Unit,

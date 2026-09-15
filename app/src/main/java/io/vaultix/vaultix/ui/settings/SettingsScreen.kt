@@ -505,6 +505,7 @@ private fun VaultSection(
  * 是一段 60 余字的说明，且含"勾选"这种**指路语**（定稿 §4 明令禁止）。
  * 现改为一句话副标题，把交互含义收进各行副标题里（见 [VaultChoiceRow]）。
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun ActiveVaultDialog(
     vaults: List<VaultSummary>,
@@ -966,6 +967,7 @@ internal fun QuickUnlockEnrollEffect(
  * 而横幅「以后再说」会永久置位 `isQuickUnlockPromptDismissed` → 用户彻底
  * 失去启用路径。现已补上对称的「启用」动作，消除该入口死角。
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun QuickUnlockManageDialog(
     vaults: List<SettingsViewModel.QuickUnlockVaultUi>,
