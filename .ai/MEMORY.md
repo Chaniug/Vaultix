@@ -138,6 +138,23 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 > 逐轮流水 → `.ai/SESSION-YYYY-MM-DD.md` · 坑 → `.ai/ISSUES.md`（索引，正文在 `issues/`）·
 > 性能专项 → [`Docs/progress/perf-plan.md`](../Docs/progress/perf-plan.md)。
 
+**第六十六轮续（2026-09-15 上午 · 用户报的两件事，见 `.ai/SESSION-2026-09-15.md` §6）**
+
+1. **M3E P1-1 波浪进度指示器**（`036b9c5`）：9 处「不确定态等待」换波浪版，
+   封装在 `ui/common/ExpressiveProgress.kt`（alpha API 唯一入口，可单点回退）。
+   ⚠️ 波浪组件**尺寸写死**（Linear 240×10dp / Circular 48dp），
+   `fillMaxWidth()` / `size(18.dp)` 都改不了 ⇒ 18/20dp 内联小转圈**不能换**。
+   ⚠️ 查 alpha API **别只用 javap**（无参数名/默认值，旧笔记因此臆造出不存在的
+   `wavePhase`）⇒ 直接下 **sources jar**（`maven.aliyun.com` 可用）。
+2. **空白页 bug**（`c1ff14a`，`.ai/issues/05-KDBX本地库.md` **#99**）：
+   设置里点未解锁的库 ⇒ 条目页/验证码页**全白**。
+   根因是三个各自合理的行为叠加：无条件切库 + `orEmpty()` 抹掉"锁着" + 空态说假话；
+   再被「切库即锁旧库」放大成**两个库都进不去**。
+   修法（用户拍板）：未解锁项点击 = **直接去解锁页**（不再切库），
+   两页新增「库未解锁」空态 + 「立即解锁」出口。
+   **纪律**：凡"空列表"都要能回答"为什么空"——`orEmpty()` 抹平 `null` 时，
+   必须在状态层留下可区分的信号（同 #76 的"冷启动假空态"，同一个病）。
+
 **第六十六轮（2026-09-15 凌晨 · 睡前交接的两件事，见 `.ai/SESSION-2026-09-15.md`）**
 
 用户睡前交待「**设置页优化** + **Material3 优化**」，两项均已完成并提交（**未推送**）：

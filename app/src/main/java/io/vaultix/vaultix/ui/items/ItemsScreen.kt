@@ -463,11 +463,11 @@ private fun AddRequestEffect(
 private fun ItemsBody(
     visibleItems: List<VaultItem>,
     state: ItemsViewModel.UiState,
-    groups: List<ItemGroup>,
+    groups: List<ItemsGroup>,
     listState: LazyListState,
     groupMode: ItemsGroupMode,
     collapsedGroups: Set<String>,
-    displayMode: ItemsDisplayMode,
+    displayMode: ItemsCardDisplayMode,
     showIcon: Boolean,
     selectedIds: Set<String>,
     listTopInset: Dp,
