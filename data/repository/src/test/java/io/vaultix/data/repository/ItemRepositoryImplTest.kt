@@ -13,12 +13,14 @@ import io.vaultix.data.bitwarden.model.CipherRequest
 import io.vaultix.data.bitwarden.model.toStoredCipherDto
 import io.vaultix.data.bitwarden.network.BitwardenJson
 import io.vaultix.data.bitwarden.sync.BitwardenSyncService
+import io.vaultix.database.dao.AtomicWriteDao
 import io.vaultix.database.dao.CipherDao
 import io.vaultix.database.dao.PendingOpDao
 import io.vaultix.database.dao.VaultDao
 import io.vaultix.database.entity.CipherEntity
 import io.vaultix.database.entity.PendingOpEntity
 import io.vaultix.database.entity.VaultEntity
+import io.vaultix.domain.ReadOnlyVaultException
 import io.vaultix.domain.VaultSaveOutcome
 import io.vaultix.model.VaultFido2Credential
 import io.vaultix.model.VaultItem
@@ -52,6 +54,7 @@ class ItemRepositoryImplTest {
     private lateinit var vaultDao: VaultDao
     private lateinit var cipherDao: CipherDao
     private lateinit var pendingOpDao: PendingOpDao
+    private lateinit var atomicWriteDao: AtomicWriteDao
     private lateinit var syncService: BitwardenSyncService
     private lateinit var sessions: VaultSessionManager
     private lateinit var crypto: VaultixCrypto
@@ -66,6 +69,17 @@ class ItemRepositoryImplTest {
         vaultDao = mockk()
         cipherDao = mockk()
         pendingOpDao = mockk()
+        // ★ 「行 + 队列」的原子写在生产里由 Room 的 @Transaction 生成实现；
+        //   单测里没有 Room，所以手工接一个**只做转发**的子类：
+        //   `upsertCipherAndEnqueue(row, op)` 的实体编排照旧执行，两个 `protected`
+        //   落点转发到上面两个 mock ⇒ 既走通了原子写这条路径，
+        //   又让本类原有的 `coVerify { cipherDao.upsertAll(...) }` 断言**依然成立**。
+        //   （若改用 mockk 直接 mock 掉 `upsertCipherAndEnqueue`，行就不会真的落库，
+        //    后续所有「写完再读回来」的断言会一起失效。）
+        atomicWriteDao = object : AtomicWriteDao() {
+            override suspend fun upsertCipher(row: CipherEntity) = cipherDao.upsertAll(listOf(row))
+            override suspend fun upsertPendingOp(op: PendingOpEntity) = pendingOpDao.enqueue(op)
+        }
         syncService = mockk()
         sessions = VaultSessionManager()
         crypto = VaultixCrypto(Dispatchers.Default)
@@ -74,6 +88,7 @@ class ItemRepositoryImplTest {
             vaultDao = vaultDao,
             cipherDao = cipherDao,
             pendingOpDao = pendingOpDao,
+            atomicWriteDao = atomicWriteDao,
             sessions = sessions,
             mapper = mapper,
             json = BitwardenJson,
@@ -85,6 +100,11 @@ class ItemRepositoryImplTest {
         // 读路径分流要先问「这个库是什么类型」（见 observeItems）：
         // 默认 mock 返回空列表 → 种类解析成 null → 走 Bitwarden 分支，与历史行为一致。
         every { vaultDao.observeAll() } returns flowOf(listOf(bitwardenVaultRow()))
+        // ⚠️ 写路径也要问库类型了（`requireWritable`，见 `.ai/ISSUES.md` #106）：
+        //   它走的是**挂起**的 `vaultDao.get`。严格 mock 不打桩会抛 MockKException，
+        //   于是所有写路径测试都变成"因 mock 未打桩而失败"，
+        //   把真正的断言（如类型守恒的「编辑暂不支持」）整条盖掉。
+        coEvery { vaultDao.get(vaultId) } returns bitwardenVaultRow()
     }
 
     private fun bitwardenVaultRow() = VaultEntity(
@@ -261,6 +281,44 @@ class ItemRepositoryImplTest {
         coVerify(exactly = 0) { cipherDao.upsertAll(any()) }
         coVerify(exactly = 0) { pendingOpDao.enqueue(any()) }
     }
+
+    /**
+     * ★ 只读库闸（`.ai/ISSUES.md` #106）。
+     *
+     * 修之前，KDBX 库的写路径**没有分流**，两个方向都在骗人：
+     * - `createItem` 会把一条 **Room 孤儿行**写进去 —— 而读侧走 `Kdbx.contentOf`，
+     *   永远看不到它 ⇒ 用户看到「保存成功、条目却没出现」（**静默丢失**）；
+     * - `updateItem` 先查 `cipherDao.get(id)`，KDBX 条目的 id 来自 `itemIdOf(uuid)`、
+     *   不在 Room ⇒ 报「条目不存在」（与真实原因毫不相干）。
+     *
+     * 本用例锁死两条：**都返回 [ReadOnlyVaultException]** + **一个字节都没落**
+     * （行、队列都不许动）—— 后者才是"没有幽灵数据"的真正判据。
+     */
+    @Test
+    fun writeToKdbxVault_rejectedAndNothingWritten() = runTest {
+        sessions.unlock(vaultId, key)
+        coEvery { vaultDao.get(vaultId) } returns kdbxVaultRow()
+
+        val created = repo.createItem(vaultId, plainItem(id = ""))
+        val updated = repo.updateItem(vaultId, plainItem(id = "cipher-1"))
+        val deleted = repo.softDeleteItem(vaultId, "cipher-1")
+
+        assertTrue(created.exceptionOrNull() is ReadOnlyVaultException)
+        assertTrue(updated.exceptionOrNull() is ReadOnlyVaultException)
+        assertTrue(deleted.exceptionOrNull() is ReadOnlyVaultException)
+        coVerify(exactly = 0) { cipherDao.upsertAll(any()) }
+        coVerify(exactly = 0) { cipherDao.deleteByIds(any()) }
+        coVerify(exactly = 0) { pendingOpDao.enqueue(any()) }
+    }
+
+    private fun kdbxVaultRow() = VaultEntity(
+        id = vaultId,
+        kind = VaultKind.KDBX.name,
+        displayName = "KDBX",
+        origin = "content://com.android.externalstorage.documents/document/primary%3Avault.kdbx",
+        account = null,
+        createdAt = 0L,
+    )
 
     @Test
     fun softDeleteItem_marksDeletedAndEnqueuesWithoutPayload() = runTest {

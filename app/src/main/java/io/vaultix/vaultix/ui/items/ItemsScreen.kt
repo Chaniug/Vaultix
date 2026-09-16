@@ -77,6 +77,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -96,6 +97,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.vaultix.model.VaultFolder
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
+import io.vaultix.model.VaultKind
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.CapabilityIcon
 import io.vaultix.vaultix.ui.common.CloudSyncIcon
@@ -116,6 +118,7 @@ import io.vaultix.vaultix.ui.common.toggleSelection
 import io.vaultix.vaultix.ui.common.VaultixWavyProgressBar
 import io.vaultix.vaultix.ui.shell.BottomDockOccupiedHeight
 import io.vaultix.vaultix.ui.theme.Spacing
+import kotlinx.coroutines.launch
 
 /**
  * 条目列表（Docs/08 S7 最小版）+ 新建条目对话框（S10 最小版）。
@@ -185,6 +188,20 @@ private fun rememberQuickFilterRowInset(expanded: Boolean): Dp =
  * ⚠️ 搜索态是例外：`Scaffold` 已按 `ScaffoldDefaults.contentWindowInsets` 为搜索顶栏
  * 预留了高度（见调用点的 `contentWindowInsets`），这里必须归零。
  */
+/**
+ * 该库当前是否**不可写** —— `null` = 库信息还没到（`.ai/ISSUES.md` #106）。
+ *
+ * KDBX 是 M2 阶段 A（只读）⇒ 新建 / 编辑 / 删除都会被数据层拒绝，
+ * UI 应当收起这些入口、而不是把用户领进死路。
+ *
+ * ⚠️ **三态而不是布尔**，这是本条的关键：`UiState.vault` 初值是 `null`，
+ * 若写成 `vault?.kind == KDBX` 就会得到 `false` ⇒ FAB **先渲染出来、再消失** ——
+ * 一次闪烁（与用户报过的「动态取色开关从关变开、有闪烁感」属同一类毛病）。
+ * 所以未知时返回 `null`，调用方对它**不渲染**：宁可晚一点出现，也不要先画后撤。
+ * 与 `SettingsSwitch(value: Boolean?)` 同一手法。
+ */
+private fun readOnlyVaultOf(kind: VaultKind?): Boolean? = kind?.let { it == VaultKind.KDBX }
+
 private fun itemsTopInset(
     searchActive: Boolean,
     barPadding: Dp,
@@ -285,6 +302,7 @@ fun ItemsScreen(
     // （2026-09-13 这一批加了「让位走 contentPadding」后曾到 152 行，靠压这行回到 147）。
     val filterRowInset = rememberQuickFilterRowInset(quickFiltersExpanded)
     val listTopInset = itemsTopInset(searchActive, barPadding, filterRowInset, state.syncNote != null)
+    val readOnlyVault = readOnlyVaultOf(state.vault?.kind)
     // 搜索关闭动作（点 × 与系统返回共用）：退出搜索态 + 清空输入。
     val closeSearch: () -> Unit = { searchActive = false; viewModel.setQuery("") }
     SearchBackHandler(enabled = searchActive, onClose = closeSearch)
@@ -300,7 +318,9 @@ fun ItemsScreen(
     val groups = rememberGroupedItems(visibleItems, folders, groupMode)
 
     // 底部导航条「+」→ 打开新建表单（Tab 内嵌时不展示自己的 FAB）
-    AddRequestEffect(addRequest, onAddConsumed) { showCreateDialog = true }
+    AddRequestEffect(addRequest, onAddConsumed, readOnly = readOnlyVault == true, host = snackbarHostState) {
+        showCreateDialog = true
+    }
 
     SaveEventSnackbar(viewModel = viewModel, hostState = snackbarHostState)
 
@@ -321,7 +341,8 @@ fun ItemsScreen(
             }
         },
         floatingActionButton = {
-            if (!embedded) {
+            // 只读库（KDBX 阶段 A）不画「+」：新建必然被拒（#106）；`== false` 的用意见 [readOnlyVaultOf]。
+            if (!embedded && readOnlyVault == false) {
                 FloatingActionButton(onClick = { showCreateDialog = true }) {
                     Icon(Icons.Filled.Add, contentDescription = stringResource(R.string.items_new_item))
                 }
@@ -439,16 +460,37 @@ fun ItemsScreen(
     }
 }
 
-/** 宿主「+」请求 → 打开新建表单；消费后由 [onConsumed] 清零，避免重复弹出。 */
+/**
+ * 宿主「+」请求 → 打开新建表单；消费后由 [onConsumed] 清零，避免重复弹出。
+ *
+ * ## 只读库要拦在这里（2026-09-17，`.ai/ISSUES.md` #106）
+ *
+ * KDBX 库是 **M2 阶段 A（只读）**：没有写回，数据层会拒绝保存
+ * （`ItemRepositoryImpl.requireWritable`）。所以对它**不能开表单** ——
+ * 开了等于请用户白填一场，最后在保存那一步吃一句拒绝。
+ * 改为直接说明原因（snackbar），**并把请求消费掉**（否则会反复触发）。
+ *
+ * ⚠️ 逻辑收在本函数内而不是 [ItemsScreen] 里：主 composable 贴着 detekt
+ * `LongMethod ≤150` 的门禁线（曾到 152 行），往里加分支会直接顶破。
+ *
+ * ⚠️ 用 [rememberCoroutineScope] 而不是 `LaunchedEffect` 的 scope 弹 snackbar：
+ * [onConsumed] 会把 `addRequest` 归零 ⇒ `LaunchedEffect` 的 key 变化 ⇒ 其子协程
+ * **会连同 snackbar 一起被取消**（提示一闪即没）。`rememberCoroutineScope` 的生命周期
+ * 跟组合走，不受 key 变化影响。
+ */
 @Composable
 private fun AddRequestEffect(
     addRequest: Int,
     onConsumed: () -> Unit,
+    readOnly: Boolean,
+    host: SnackbarHostState,
     onShow: () -> Unit,
 ) {
-    LaunchedEffect(addRequest) {
+    val scope = rememberCoroutineScope()
+    val message = stringResource(R.string.kdbx_vault_read_only)
+    LaunchedEffect(addRequest, readOnly) {
         if (addRequest > 0) {
-            onShow()
+            if (readOnly) scope.launch { host.showSnackbar(message) } else onShow()
             onConsumed()
         }
     }

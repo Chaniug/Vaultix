@@ -14,6 +14,7 @@ import io.vaultix.database.dao.VaultDao
 import io.vaultix.database.entity.CipherEntity
 import io.vaultix.database.entity.PendingOpEntity
 import io.vaultix.domain.ItemRepository
+import io.vaultix.domain.ReadOnlyVaultException
 import io.vaultix.domain.TrashEntry
 import io.vaultix.domain.VaultSaveOutcome
 import io.vaultix.model.VaultFido2Credential
@@ -158,6 +159,7 @@ class ItemRepositoryImpl @Inject constructor(
 
     override suspend fun createItem(vaultId: String, item: VaultItem): Result<VaultSaveOutcome> =
         runCatching {
+            requireWritable(vaultId)
             val key = sessions.keyOf(vaultId) ?: error("库未解锁，无法保存：$vaultId")
 
             val localId = UUID.randomUUID().toString()
@@ -194,6 +196,7 @@ class ItemRepositoryImpl @Inject constructor(
 
     override suspend fun updateItem(vaultId: String, item: VaultItem): Result<VaultSaveOutcome> =
         runCatching {
+            requireWritable(vaultId)
             val key = sessions.keyOf(vaultId) ?: error("库未解锁，无法保存：$vaultId")
             val existing = cipherDao.get(item.id) ?: error("条目不存在：${item.id}")
             require(existing.vaultId == vaultId) { "条目不属于该库：${item.id}" }
@@ -239,6 +242,7 @@ class ItemRepositoryImpl @Inject constructor(
 
     override suspend fun softDeleteItem(vaultId: String, itemId: String): Result<VaultSaveOutcome> =
         runCatching {
+            requireWritable(vaultId)
             val existing = cipherDao.get(itemId) ?: error("条目不存在：$itemId")
             require(existing.vaultId == vaultId) { "条目不属于该库：$itemId" }
 
@@ -261,6 +265,7 @@ class ItemRepositoryImpl @Inject constructor(
 
     override suspend fun restoreItem(vaultId: String, itemId: String): Result<VaultSaveOutcome> =
         runCatching {
+            requireWritable(vaultId)
             val existing = cipherDao.get(itemId) ?: error("条目不存在：$itemId")
             require(existing.vaultId == vaultId) { "条目不属于该库：$itemId" }
             requireNotNull(existing.deletedDate) { "条目不在回收站中：$itemId" }
@@ -282,6 +287,7 @@ class ItemRepositoryImpl @Inject constructor(
 
     override suspend fun permanentDeleteItem(vaultId: String, itemId: String): Result<VaultSaveOutcome> =
         runCatching {
+            requireWritable(vaultId)
             val existing = cipherDao.get(itemId) ?: error("条目不存在：$itemId")
             require(existing.vaultId == vaultId) { "条目不属于该库：$itemId" }
             requireNotNull(existing.deletedDate) { "条目不在回收站中，无法永久删除：$itemId" }
@@ -305,6 +311,12 @@ class ItemRepositoryImpl @Inject constructor(
     override suspend fun cleanupExpiredTrash(vaultId: String, autoDeleteDays: Int): Int {
         if (!TrashCleanupPolicy.shouldAutoCleanup(autoDeleteDays)) return 0
         return runCatching {
+            // ⚠️ KDBX 库必须在这里就拦住，不能"反正也查不到东西"就算了：
+            //   若历史上已经留下过孤儿行（#106 修之前产生的），本方法会**查到它们**
+            //   并给一个 KDBX 库入队 DELETE ⇒ 队列里躺下永不推送的毒丸
+            //   （`flushAfterLocalWrite` 对非 Bitwarden 库恒返回 Queued，没人会消费它）。
+            //   拒绝后由 `getOrDefault(0)` 兜成 0 —— 与「清理失败静默」的既有约定一致。
+            requireWritable(vaultId)
             val now = System.currentTimeMillis()
             val expired = cipherDao.getTrashByVault(vaultId)
                 .filter { row ->
@@ -338,6 +350,7 @@ class ItemRepositoryImpl @Inject constructor(
         itemId: String,
         credentials: List<VaultFido2Credential>,
     ): Result<VaultSaveOutcome> = runCatching {
+        requireWritable(vaultId)
         // 「库已解锁」前置校验：未解锁直接失败，避免走到 updateItem 才报错
         requireNotNull(sessions.keyOf(vaultId)) { "库未解锁，无法保存：$vaultId" }
         val existing = cipherDao.get(itemId) ?: error("条目不存在：$itemId")
@@ -358,6 +371,9 @@ class ItemRepositoryImpl @Inject constructor(
         itemId: String,
         credentialId: String,
     ): Result<VaultSaveOutcome> = runCatching {
+        // ⚠️ 必须在自己这一层就拦：否则会先走到 `loadItem` —— 它查的是 Room，
+        //   KDBX 条目不在 Room ⇒ 返回 null ⇒ 报出**「条目不存在」这个与真实原因无关**的错误。
+        requireWritable(vaultId)
         val item = loadItem(vaultId, itemId) ?: error("条目不存在：$itemId")
         val remaining = item.fido2Credentials.filter { it.credentialId != credentialId }
         updateFido2Credentials(vaultId, itemId, remaining).getOrThrow()
@@ -408,6 +424,34 @@ class ItemRepositoryImpl @Inject constructor(
                 ?.let { dto -> mapper.toDomain(dto, key) }
                 ?.let { item -> TrashEntry(item = item, deletedDate = deleted) }
         }
+    }
+
+    /**
+     * 写入前置闸：**KDBX 库当前不可写**，一律拒绝，且**不改任何状态**。
+     *
+     * ## 为什么必须有这道闸（2026-09-17，`.ai/ISSUES.md` #106）
+     *
+     * 本类的**读**路径按库类型分流（[observeItems] → KDBX 走 `Kdbx.contentOf`，
+     * 其余走 `cipherDao`），但**写**路径原先没有分流 —— 于是「读这个存储、写那个存储」，
+     * 必然产出幽灵数据，且**两个方向都在骗人**：
+     * - `createItem` 无任何 kind 判断 ⇒ 在 KDBX 库新建会写出一条 **Room 孤儿行**；
+     *   读侧永远看不到它 ⇒ 用户看到「保存成功、条目却没出现」（**静默丢失**）。
+     * - `updateItem` 先查 `cipherDao.get(id)`，而 KDBX 条目 id 来自 `itemIdOf(uuid)`、
+     *   不在 Room ⇒ 报「条目不存在」（**大声失败**，这是运气好的那一半）。
+     *
+     * 现在两半统一成**诚实的拒绝**：明确说"暂为只读"，而不是静默丢、
+     * 也不是抛一句与真实原因无关的错误。
+     *
+     * ⚠️ 闸放在各写方法 `runCatching` **内部的第一行**：这样 `Result` 语义与其它业务拒绝
+     * （「条目不存在」「库未解锁」）完全一致，调用方的 `onFailure` 分支一行都不用改。
+     * ⚠️ 每次**现查** `vaultDao.get` 而不是缓存 kind：与读路径「每次订阅重新解析种类」
+     * 同一取向 —— 不引入第二份真相源（缓存一旦过期，闸就会漏）。
+     *
+     * @throws ReadOnlyVaultException 当 [vaultId] 是 KDBX 库。
+     */
+    private suspend fun requireWritable(vaultId: String) {
+        val kind = VaultKind.fromName(vaultDao.get(vaultId)?.kind)
+        if (kind == VaultKind.KDBX) throw ReadOnlyVaultException(vaultId)
     }
 
     /** 写库完成后的轻量推送；非 Bitwarden 库（未来 KDBX）不入队推送逻辑。 */

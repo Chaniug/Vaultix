@@ -144,6 +144,31 @@ enum class VaultSaveOutcome {
 }
 
 /**
+ * **该库当前不可写**（拒绝保存，且**未做任何改动**）。
+ *
+ * ## 为什么需要它（2026-09-17，`.ai/ISSUES.md` #106）
+ *
+ * KDBX 库目前是 **M2 阶段 A（只读）**：条目活在 `data:kdbx` 的内存会话里，
+ * **没有写回**（阶段 B 未做）。而写路径原先**没有按库类型分流** —— 读走
+ * `Kdbx.contentOf`、写无条件进 Room ⇒ 在 KDBX 库里新建条目会写出一条
+ * **Room 孤儿行**（读侧永远看不到），用户看到的是"保存成功、条目却没出现"。
+ *
+ * 本异常把那种**静默丢失**换成**诚实的拒绝**：不改任何状态、明确告诉用户为什么。
+ *
+ * ⚠️ 它是**业务层拒绝**，不是故障：`Result.failure` 携带它，调用方照常按失败处理
+ * （`SaveEvent.Failed` / `UiEvent.SaveFailed`），用户看到 [message]。
+ * 之所以用异常而不是给 `VaultSaveOutcome` 加一个 `ReadOnly` 常量：本文件所在的
+ * 数据层已有同一惯例（`error("条目不存在：…")` / `require(existing.vaultId == vaultId)`），
+ * 且能**零改动**复用现有的 `onFailure { error.message }` 链路。
+ *
+ * @param vaultId 被拒绝的库 id —— **只作诊断字段**，刻意**不拼进** [message]
+ *   （`message` 会直接显示给用户，UUID 对她没有意义）。
+ */
+class ReadOnlyVaultException(val vaultId: String) : Exception(
+    "本地 KDBX 密码库暂为只读，无法保存改动",
+)
+
+/**
  * 回收站行：明文条目 + 删除时间。
  *
  * [deletedDate] 为 ISO-8601 字符串（与数据库行一致；本地写入 `Instant.now().toString()`，

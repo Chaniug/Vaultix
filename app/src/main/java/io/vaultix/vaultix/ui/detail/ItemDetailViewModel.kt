@@ -11,6 +11,7 @@ import io.vaultix.domain.VaultRepository
 import io.vaultix.domain.VaultSaveOutcome
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultFolder
+import io.vaultix.model.VaultKind
 import io.vaultix.vaultix.util.VaultixClipboard
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -73,6 +74,14 @@ class ItemDetailViewModel @Inject constructor(
         val serverOrigin: String? = null,
         val saving: Boolean = false,
         val deleting: Boolean = false,
+        /**
+         * 该库当前**不可写**（KDBX 阶段 A 只读，见 `.ai/ISSUES.md` #106）。
+         *
+         * UI 据此**收起编辑 / 删除入口** —— 让用户点不到，比让他改完再被拒绝诚实得多。
+         * ⚠️ 数据层还有一道同样的闸（`ItemRepositoryImpl.requireWritable`）；
+         * 这里只是"别把用户领进死路"，**不是**安全边界。
+         */
+        val readOnly: Boolean = false,
     )
 
     private val _state = MutableStateFlow(UiState())
@@ -99,7 +108,12 @@ class ItemDetailViewModel @Inject constructor(
             vaultRepository.observeVaults().collect { vaults ->
                 val vault = vaults.firstOrNull { it.id == vaultId }
                 _state.update {
-                    it.copy(vaultName = vault?.name.orEmpty(), serverOrigin = vault?.origin)
+                    it.copy(
+                        vaultName = vault?.name.orEmpty(),
+                        serverOrigin = vault?.origin,
+                        // KDBX = 阶段 A 只读 ⇒ 详情页收起编辑/删除（见 UiState.readOnly）。
+                        readOnly = vault?.kind == VaultKind.KDBX,
+                    )
                 }
             }
         }

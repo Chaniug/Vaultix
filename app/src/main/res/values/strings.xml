@@ -46,6 +46,13 @@
     <string name="add_kdbx_updated">该文件已在列表中，已更新</string>
     <string name="vault_badge_unlocked">已解锁</string>
     <string name="vault_badge_locked">已锁定</string>
+    <!-- ⚠️ 本地 KDBX 库当前只读（M2 阶段 A 无写回，见 .ai/ISSUES.md #106）。
+         文案必须与 `io.vaultix.domain.ReadOnlyVaultException` 的 message **逐字一致** ——
+         那条是数据层拒绝时经 `onFailure { error.message }` 直接显示给用户的；
+         这条是 UI 主动拦在入口处的。
+         ⚠️ 两处都在说同一件事，改一处必须改另一处（domain 是纯 Kotlin 模块，
+         读不到 Android 资源，无法共用一份常量）。 -->
+    <string name="kdbx_vault_read_only">本地 KDBX 密码库暂为只读，无法保存改动</string>
     <!-- 库卡片副标题（KDBX）：显示文件名 + 「本地文件」标注，绝不显示 SAF 的 content:// URI。 -->
     <string name="vault_card_kdbx_subtitle">本地文件 · %1$s</string>
     <string name="vault_item_count">%1$d 项</string>

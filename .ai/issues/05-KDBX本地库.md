@@ -438,3 +438,51 @@ detekt ✅ / `:app:compileFullDebugKotlin` ✅ / 单测 ✅（40 个类函数上
 （本处是 `VaultSummary.unlocked`），否则 UI 只能撒谎。
 另参见 `.ai/ISSUES.md` #76（验证码页"冷启动 1~2 秒假空态"）—— **同一个病，
 不同的触发条件**；`TotpCodesScreen` 的 `loading` 分支是本条纪律的最早一次实践。
+
+---
+
+## 106. ⚠️ 读路径分流了 KDBX、**写路径没分流** ⇒ 新建静默丢失 / 编辑报错（2026-09-17，**未修**）
+
+**怎么发现的**：不是用户报的 —— 是排查「OneDrive / WebDAV 网盘同步」的前置条件时，
+顺着「KDBX 到底能不能写」这条线查出来的（见 `.workbuddy/memory/2026-09-16.md`）。
+
+**现象**：
+- 在 KDBX 库**新建**条目 ⇒ 保存看似成功，条目**永远不出现**（无任何报错）。
+- 在 KDBX 库**编辑**已有条目 ⇒ 报错「条目不存在：…」。
+
+**根因：一读一写走了两套存储。**
+
+| 环节 | 位置 | 现状 |
+|---|---|---|
+| 读 | `ItemRepositoryImpl.observeItems`（:84） | `kind == KDBX ⇒ Kdbx.contentOf(vaultId)?.items.orEmpty()` —— **在内存里，不在 Room** |
+| 写 | `ItemRepositoryImpl.createItem`（:159） | **无任何 kind 判断**，无条件 `atomicWriteDao.upsertCipherAndEnqueue(...)` ⇒ 写出一条 **Room 孤儿行** |
+| 写 | `ItemRepositoryImpl.updateItem`（:195） | 先 `cipherDao.get(item.id) ?: error("条目不存在")`；而 KDBX 条目 id 来自 `KdbxItemMapper.itemIdOf(uuid)`（:108），**不在 Room** ⇒ 直接抛错 |
+
+⇒ **一隐一显**：**新建 = 静默**（写进 Room，读侧永远看不到，用户以为存上了）；
+**编辑 = 大声报错**（因为那条根本不在 Room 里）。二者同一个病根：
+**阶段 A 是只读的，但写入口没有关门。**
+
+**危害边界（已查）**：`flushAfterLocalWrite`（:414）对非 Bitwarden 库不入队推送
+（`server = null`）⇒ **不会误推到服务端**。所以损害限于"本地多出一条幽灵行"，
+**没有外泄**；但用户视角的"我存的东西没了"依然成立。
+
+**可佐证 UI 也没拦**：`app` 层对 `VaultKind` 只用于**徽标 / 解锁路由**
+（`UnlockScreen.VaultKindBadge`、`UnlockViewModel` 分流），
+全局 grep `canEdit` / `isEditable` / `readOnly` **无任何 KDBX 相关命中**。
+
+**为什么现在必须处理**：网盘同步（OneDrive / WebDAV）要求 KDBX **可写**，
+而「KDBX 阶段 B（写回）」是三处文档共同的**最大未完成块**
+（`.ai/MEMORY.md:33`、`Docs/progress/next-steps.md` 未做第 1 条、`.ai/SESSION-2026-09-12.md:29`）。
+本条是它的**前置**：先把写入口的语义定死，再谈写回往哪写。
+
+**解法（待定，随阶段 B 一并拍板；三选一）**：
+1. 写入口对 KDBX **闸掉并明确提示**「本地 KDBX 库暂为只读」—— 最小改动，且诚实；
+2. 把 KDBX 写请求转成**会话内的内存改动** —— 但阶段 A 无写回，关闭即丢，
+   **只是把"静默丢失"换成"延迟静默丢失"，不算解决**；
+3. 做**阶段 B（写回）**，让读/写共用同一存储 —— 正解，工作量大。
+
+**判据（写进纪律）**：
+> **读路径按 `kind` 分流了，写路径就必须同时分流。**
+> 否则「读 A 存储、写 B 存储」必然产生幽灵数据 —— 且**两个方向都骗人**：
+> 新建静默、编辑报错，用户无法从任何一条错误信息推出真实原因。
+> **新增任何 `kind ==` 分支时，读/写两侧成对检查。**
