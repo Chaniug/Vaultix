@@ -7,6 +7,10 @@
     <string name="action_copy">复制</string>
     <string name="action_done">完成</string>
     <string name="action_save">保存</string>
+    <!-- 通用「下一步」：多步流程（如勾选目标 → 输主密码 → 认证）的中间态按钮。
+         与 action_save / action_done 区分开 —— 那时流程还没结束，写「保存 / 完成」
+         会误导用户以为点完就到头了。 -->
+    <string name="action_next">下一步</string>
     <string name="action_retry">重试</string>
 
     <!-- 库列表 S3 -->
@@ -421,6 +425,25 @@
          故措辞从"该库"改为"KDBX 库"，并说明各库密码不同时的处理方式
          （失败的库会在结果页列出，用户之后可单独设置）—— 这是必须提前说的预期管理。 -->
     <string name="pin_kdbx_message">请输入「%1$s」的主密码。KDBX 库必须由主密码解开，PIN 才能代为保管。若其它 KDBX 库密码不同，它们会在结果里列出。</string>
+    <!-- ===== 2026-09-16 生物识别「一次指纹开多个库」 =====
+         用户原话：「默认一个生物验证的指纹，管理解锁所有的库也可以吗」。
+         与 PIN 侧（pin_set_scope_label 等）刻意**不复用同一条字符串**：两者的
+         交互虽然都是"勾选目标"，但指纹多一个"只弹一次认证、先静默校验"的承诺，
+         这是用户最关心的点（此前每库要按一次指纹），必须说出来。 -->
+    <string name="bio_enroll_title">启用指纹解锁</string>
+    <string name="bio_enroll_scope_label">用这个指纹解锁哪些库</string>
+    <string name="bio_enroll_scope_hint">只需验证一次指纹，选中的库会一并启用</string>
+    <string name="bio_enroll_scope_kdbx_hint">KDBX 库需再输一次它的主密码（输一次即可，各库密码不同时会在结果里列出）</string>
+    <string name="bio_target_already">%1$s · 已启用</string>
+    <string name="bio_enroll_kdbx_title">确认主密码</string>
+    <string name="bio_enroll_kdbx_message">请输入 KDBX 库的主密码。它会被加密保存，用于以后用指纹打开这些库。若其它 KDBX 库密码不同，它们会在结果里列出。</string>
+    <!-- 认证中：备料已就绪、正等用户按指纹。此时**不允许**改勾选（见控制器的
+         Authenticating 状态说明），故用一句不可操作的文案，而不是禁用态控件。 -->
+    <string name="bio_enroll_authenticating">请验证指纹…</string>
+    <string name="bio_enroll_report_title">启用完成</string>
+    <string name="bio_enroll_report_ok">已为 %1$d 个库启用指纹解锁</string>
+    <string name="bio_enroll_report_failed_title">以下库未启用成功</string>
+    <string name="bio_enroll_report_none">没有任何库启用成功</string>
     <!-- 自动锁定档位 -->
     <string name="auto_lock_never">从不</string>
     <string name="auto_lock_immediately">立即（切后台即锁）</string>

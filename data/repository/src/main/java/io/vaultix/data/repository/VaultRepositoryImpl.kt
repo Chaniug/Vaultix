@@ -26,6 +26,8 @@ import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.domain.KdbxAddOutcome
 import io.vaultix.domain.KdbxEnrollOutcome
 import io.vaultix.domain.KdbxUnlockOutcome
+import io.vaultix.domain.LocalUnlockEnrollOutcome
+import io.vaultix.domain.LocalUnlockPreparedEnrollment
 import io.vaultix.domain.PIN_MAX_ATTEMPTS
 import io.vaultix.domain.PIN_MIN_LENGTH
 import io.vaultix.domain.PinEnrollOutcome
@@ -90,6 +92,13 @@ class VaultRepositoryImpl @Inject constructor(
      * 本类管「这一个库到底包什么字节」。见 [PinEnrollment] 的 KDoc。
      */
     private val enrollment: PinEnrollment,
+    /**
+     * 「本地快速解锁（生物识别）」的**多库备料与落盘**。
+     *
+     * ⚠️ 注入而不是把逻辑写在本类里：本类函数数已**正好卡在 40**（detekt
+     * `TooManyFunctions` 上限），任何新增都会爆。见 [LocalUnlockEnrollment] 的 KDoc。
+     */
+    private val localUnlockEnrollment: LocalUnlockEnrollment,
     private val preferences: VaultixPreferences,
     /** KDBX 会话变化的可观察桥（见 [KdbxSessionFlow] 的说明）。 */
     private val kdbxSessions: KdbxSessionFlow,
@@ -107,20 +116,6 @@ class VaultRepositoryImpl @Inject constructor(
             context.contentResolver.openInputStream(Uri.parse(uri))?.use { it.readBytes() }
         }.getOrNull()
     }
-
-    /**
-     * KDBX 快速解锁登记的**暂存凭据**（主密码 + keyfile 的编码，见 [KdbxUnlockPayload]）。
-     *
-     * 为什么需要一个暂存位（2026-09-14 修闪退的核心）：KEK 是 **auth-per-use**，
-     * 只有被 BiometricPrompt 授权的那一个 Cipher 能完成 `doFinal`。而 KDBX 的主密码
-     * 只能在弹指纹之前拿到 ⇒ 校验完先把明文放这里，等指纹成功再 `wrap`。
-     *
-     * 生命周期（**每一个出口都要收尾，否则明文留在内存**）：
-     * - 写入：[prepareKdbxEnroll]（写入前先擦掉上一份）；
-     * - 消费：[commitKdbxEnroll]（包裹成功与否都擦）；
-     * - 丢弃：[discardKdbxEnroll]（用户在指纹框上点了取消）。
-     */
-    private var stagedKdbxPayload: ByteArray? = null
 
     override fun observeVaults(): Flow<List<VaultSummary>> =
         combine(vaultDao.observeAll(), sessions.unlockedIds, kdbxSessions.revisionFlow) { rows, unlocked, _ ->
@@ -422,13 +417,13 @@ class VaultRepositoryImpl @Inject constructor(
         } finally {
             fullKey.fill(0)
         }
-        credentials.putString(LOCAL_UNLOCK_PREFIX + vaultId, wrapped)
+        credentials.putString(localUnlockStorageKey(vaultId), wrapped)
         preferences.setLocalUnlockEnabled(vaultId, true)
         return true
     }
 
     override suspend fun prepareLocalUnlock(vaultId: String): Cipher? {
-        val payload = wrappedPayload(vaultId) ?: return null
+        val payload = credentials.getString(localUnlockStorageKey(vaultId)) ?: return null
         return localUnlockKeyStore.newDecryptCipher(payload)
     }
 
@@ -436,7 +431,8 @@ class VaultRepositoryImpl @Inject constructor(
         localUnlockKeyStore.newEncryptCipher()
 
     override suspend fun completeLocalUnlock(vaultId: String, cipher: Cipher): UnlockResult {
-        val payload = wrappedPayload(vaultId) ?: return UnlockResult.Unknown("未启用本地快速解锁")
+        val payload = credentials.getString(localUnlockStorageKey(vaultId))
+            ?: return UnlockResult.Unknown("未启用本地快速解锁")
         return runCatching {
             val fullKey = localUnlockKeyStore.unwrap(cipher, payload)
             try {
@@ -463,11 +459,10 @@ class VaultRepositoryImpl @Inject constructor(
     }
 
     override suspend fun disableLocalUnlock(vaultId: String) {
-        // 顺手丢弃暂存：用户可能刚输完主密码、指纹还没弹就关掉了开关，
+        // 顺手丢弃单库暂存：用户可能刚输完主密码、指纹还没弹就关掉了开关，
         // 那份明文没有理由再留在内存里等下一次。
-        stagedKdbxPayload?.fill(0)
-        stagedKdbxPayload = null
-        credentials.remove(LOCAL_UNLOCK_PREFIX + vaultId)
+        localUnlockEnrollment.discardStagedPayload()
+        credentials.remove(localUnlockStorageKey(vaultId))
         preferences.setLocalUnlockEnabled(vaultId, false)
     }
 
@@ -492,106 +487,66 @@ class VaultRepositoryImpl @Inject constructor(
      */
     private suspend fun clearBrokenLocalUnlock(vaultId: String) {
         runCatching {
-            credentials.remove(LOCAL_UNLOCK_PREFIX + vaultId)
+            credentials.remove(localUnlockStorageKey(vaultId))
             preferences.setLocalUnlockEnabled(vaultId, false)
         }
     }
 
-    private fun wrappedPayload(vaultId: String): String? =
-        credentials.getString(LOCAL_UNLOCK_PREFIX + vaultId)
-
     // ---- 本地快速解锁：KDBX 侧（#93 / 定稿 §4）----
 
     /**
-     * KDBX 启用快速解锁：**先真解一次库校验凭据**，通过才包裹「主密码 + keyfile」。
+     * 单库 KDBX 启用快速解锁：**先真解一次库校验凭据**，通过才暂存「主密码 + keyfile」。
      *
-     * 顺序**不可颠倒**（定稿 §4.4 的硬约束）：`wrap` 只负责把字节封进 Keystore，
-     * 对内容一无所知。若先 wrap 后校验，用户输错密码时会得到一个「启用成功」
-     * 的假象，而保险箱里躺的是错密码 —— 下次指纹解出来的必然是打不开的凭据。
+     * 2026-09-16 实现迁到 [LocalUnlockEnrollment]（本类函数数顶格 40，必须腾位置），
+     * 这里只保留转发。⚠️ 唯一的注入点是 `verifyCredentials`：单库路径刻意沿用
+     * [unlockKdbxInternal]（**真实开库、登记会话**）—— 用户刚证明自己能开这个库，
+     * 把会话留着让他直接用，符合直觉；也不改变任何安全边界（能开到就能开）。
      *
-     * 校验**复用 [unlockKdbxInternal]（真实开库路径）**而非比对长度或指纹：
-     * KDBX 的凭据校验只有「能不能解开加密头」这一个可信判据。
-     *
-     * ⚠️ 副作用：校验会**顺带把库打开**（登记会话）。这对用户是好事 ——
-     * 他刚刚证明了自己能开这个库，把会话留着让他直接用，符合直觉；
-     * 也不改变任何安全边界（能开到就能开）。
+     * 多库路径**不用**这条：一次勾多个库时"顺带开库"会互相覆盖会话，
+     * 且用户并没要求打开它们（那边走 `Kdbx.verify`，只验不开库）。
      */
     override suspend fun prepareKdbxEnroll(
         vaultId: String,
         masterPassword: String,
         keyFileUri: String?,
-    ): KdbxEnrollOutcome = withContext(Dispatchers.IO) {
-        val row = vaultDao.get(vaultId)
-            ?: return@withContext KdbxEnrollOutcome.Failed("本地不存在该库")
-        if (VaultKind.fromName(row.kind) != VaultKind.KDBX) {
-            return@withContext KdbxEnrollOutcome.Failed("该库不是 KDBX 类型")
-        }
-
-        // ① 校验：用这组凭据真的解一次库。
-        val verification = unlockKdbxInternal(
-            vaultId = vaultId,
-            sourceUri = row.origin,
-            password = masterPassword,
-            keyFileUri = keyFileUri,
-        )
-        if (verification != UnlockResult.Success) {
-            return@withContext when (verification) {
-                UnlockResult.InvalidCredentials -> KdbxEnrollOutcome.InvalidCredentials
-                else -> KdbxEnrollOutcome.SourceUnavailable(
-                    (verification as? UnlockResult.Unknown)?.detail ?: "无法打开该库",
-                )
-            }
-        }
-
-        // ② 组装待包裹明文，**暂存**起来等指纹（此刻还不能 wrap，见 [commitKdbxEnroll]）。
-        //    keyfile 字节**当场从 URI 读出**：只包 URI 不行（URI 授权可能失效，
-        //    且用户可能在设置里换过 keyfile），必须包内容本身。
-        val keyFileBytes = keyFileUri
-            ?.takeIf { it.isNotBlank() }
-            ?.let { uri -> runCatching { kdbxSource.read(uri) }.getOrNull() }
-        // 覆盖上一份前先擦：任何时刻内存里最多只有一份暂存明文。
-        stagedKdbxPayload?.fill(0)
-        stagedKdbxPayload = KdbxUnlockPayload.encode(masterPassword, keyFileBytes)
-        KdbxEnrollOutcome.Prepared
-    }
+    ): KdbxEnrollOutcome = localUnlockEnrollment.prepareKdbxEnroll(
+        vaultId = vaultId,
+        masterPassword = masterPassword,
+        keyFileUri = keyFileUri,
+        // 单库路径刻意沿用真实开库做校验（见本方法 KDoc）。
+        verifyCredentials = { id, origin, password, keyFile ->
+            unlockKdbxInternal(id, origin, password, keyFile) == UnlockResult.Success
+        },
+    )
 
     override suspend fun commitKdbxEnroll(vaultId: String, cipher: Cipher): Boolean =
-        withContext(Dispatchers.IO) {
-            val plaintext = stagedKdbxPayload ?: return@withContext false
-            // 先取走再处理：无论 wrap 成败，暂存位都不能再指向这份明文。
-            stagedKdbxPayload = null
-            // 与 Bitwarden 侧 [enrollLocalUnlock] 同款取向：**不吞异常**。
-            // `wrap` 抛错意味着这个 cipher 根本用不了（认证已过但 Cipher 状态错），
-            // 那是编程/环境错误、不是用户输入问题 —— 吞成「包裹失败」只会掩盖它。
-            // 唯一必须做的收尾是擦掉明文，故用 finally。
-            val wrapped = try {
-                localUnlockKeyStore.wrap(cipher, plaintext)
-            } finally {
-                // 明文凭据用完即擦（含主密码字节）：这是本项目对明文的一贯取向。
-                plaintext.fill(0)
-            }
-            credentials.putString(LOCAL_UNLOCK_PREFIX + vaultId, wrapped)
-            preferences.setLocalUnlockEnabled(vaultId, true)
-            true
-        }
+        localUnlockEnrollment.commitKdbxEnroll(vaultId, cipher)
 
     override suspend fun discardKdbxEnroll() {
-        stagedKdbxPayload?.fill(0)
-        stagedKdbxPayload = null
+        localUnlockEnrollment.discardKdbxEnroll()
     }
 
     /**
-     * 认证通过后解封 KDBX 包裹物并**真的开库**。
+     * 一次勾选多个库启用快速解锁：**认证之后**用同一个 cipher 逐库落盘。
      *
-     * 「指纹通过」与「库打开」是两件事：前者只证明戴指纹的是机主，
-     * 后者才证明包裹物里的主密码还对。这两件事必须**分开报告** ——
-     * 否则用户改了主密码后会看到「指纹错误」这种完全误导的提示（定稿 §4.4 D3）。
+     * ⚠️ 只转发到 [LocalUnlockEnrollment]，实现见那里 —— 本类函数数已顶格 40，
+     * 不能在此展开任何逻辑。
+     *
+     * ⚠️ 认证**之前**的校验与备料（`prepareForVaults`）**不经本类**：它由
+     * `BiometricEnrollController` 直接注入 [LocalUnlockEnrollment] 调用。
+     * 这样接口只多这一个方法，`VaultRepositoryImpl` 的函数数才能守住 40。
      */
+    override suspend fun commitLocalUnlockEnrollForVaults(
+        prepared: List<LocalUnlockPreparedEnrollment>,
+        cipher: Cipher,
+    ): Map<String, LocalUnlockEnrollOutcome> =
+        localUnlockEnrollment.commitForVaults(prepared, cipher)
+
     override suspend fun completeLocalUnlockKdbx(
         vaultId: String,
         cipher: Cipher,
     ): KdbxUnlockOutcome = withContext(Dispatchers.IO) {
-        val payload = wrappedPayload(vaultId)
+        val payload = credentials.getString(localUnlockStorageKey(vaultId))
             ?: return@withContext KdbxUnlockOutcome.Unavailable("未启用本地快速解锁")
 
         val plaintext = runCatching { localUnlockKeyStore.unwrap(cipher, payload) }
@@ -900,7 +855,6 @@ class VaultRepositoryImpl @Inject constructor(
         const val HTTP_NOT_FOUND = 404
         const val KEY_DEVICE_ID = "device_id"
         const val DEFAULT_DEVICE_NAME = "Vaultix Device"
-        const val LOCAL_UNLOCK_PREFIX = "local_unlock_key::"
     }
 }
 

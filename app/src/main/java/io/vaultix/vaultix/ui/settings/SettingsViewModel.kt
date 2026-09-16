@@ -3,6 +3,7 @@ package io.vaultix.vaultix.ui.settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import io.vaultix.data.repository.LocalUnlockEnrollment
 import io.vaultix.datastore.VaultTimeout
 import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.datastore.VaultixPreferencesDefaults
@@ -50,6 +51,14 @@ class SettingsViewModel @Inject constructor(
     private val autoLockController: AutoLockController,
     private val activeVaultStore: ActiveVaultStore,
     private val sessionRepository: VaultSessionRepository,
+    /**
+     * 快速解锁（生物识别）登记备料器。
+     *
+     * ⚠️ 注入具体实现而非 `VaultRepository` 的接口方法：多库备料入口故意**不在**
+     * [VaultRepository] 上，否则 `VaultRepositoryImpl` 会突破 detekt `TooManyFunctions`
+     * 的 40 上限（它本就顶格）。详见 [BiometricEnrollController] 的 KDoc。
+     */
+    private val localUnlockEnrollment: LocalUnlockEnrollment,
 ) : ViewModel() {
     data class UiState(
         val vaultTimeout: VaultTimeout = VaultTimeout.DEFAULT,
@@ -546,6 +555,24 @@ class SettingsViewModel @Inject constructor(
             vaultRepository = vaultRepository,
             scope = viewModelScope,
             onDisableQuickUnlock = ::disableQuickUnlock,
+        )
+    }
+
+    /**
+     * 「生物识别快速解锁」设置交互（**一次勾选多个库、一次指纹全部启用**）。
+     *
+     * 2026-09-16 新增，对应用户诉求：「默认一个生物验证的指纹，管理解锁所有的库也可以吗」。
+     * 抽成独立类而非堆回本类，理由同 [pin]（函数数上限 + 内聚）。
+     *
+     * 旧的单库入口（[startQuickUnlockEnroll] / [confirmKdbxPassword] / [enrollWithCipher]）
+     * **刻意保留不动**：库列表页横幅（`QuickUnlockBanner`）与 `VaultManagementScreen`
+     * 仍按"单库"心智工作，改动它们属于另一件事，不在本次范围内。
+     */
+    val biometric: BiometricEnrollController by lazy {
+        BiometricEnrollController(
+            vaultRepository = vaultRepository,
+            scope = viewModelScope,
+            enrollment = localUnlockEnrollment,
         )
     }
 

@@ -225,6 +225,42 @@ interface VaultRepository {
         cipher: javax.crypto.Cipher,
     ): KdbxUnlockOutcome
 
+    /**
+     * 一次勾选多个库启用快速解锁：**认证之后**用同一个 cipher 逐库落盘。
+     *
+     * ## 为什么要有这个批量入口
+     *
+     * 用户原话：「默认一个生物验证的指纹，管理解锁所有的库也可以吗」——
+     * 原来每个库都要单独点一遍指纹、单独走一遍流程，库多了很烦。
+     * 这个入口让「一次勾选 → 一次认证」覆盖全部选中的库。
+     *
+     * ## ⚠️ cipher 必须来自**本次**认证，且只能连续用完
+     *
+     * 快解的保护器 KEK 是 auth-per-use（`setUserAuthenticationParameters(0, …)`），
+     * **一个 cipher 只对一次认证有效**。所以这里必须是**连续** wrap 完所有库，
+     * 绝不能"提前给每个库各准备一个 cipher"—— 那些没被授权，第二个库就抛
+     * `UserNotAuthenticatedException`（2026-09-14 闪退同源）。
+     *
+     * ## 认证前的校验与备料不走本方法
+     *
+     * 「勾了哪些库、KDBX 主密码对不对、要包什么明文」是**认证前**的事，由
+     * `BiometricEnrollController` 直接调 `LocalUnlockEnrollment.prepareForVaults`
+     * 完成。这样接口只多这一个方法 —— `VaultRepositoryImpl` 的函数数才能守住
+     * detekt `TooManyFunctions` 的 40 上限（它本来就在顶格）。
+     *
+     * ## 部分成功是真实状态
+     *
+     * 返回值是**逐库**结论（`associate`），一个库失败不影响其它库。调用方必须
+     * 逐条展示，**不能因为有失败就整体报错**，也不能只显示成功。
+     *
+     * @return vaultId → 该库的结论。**不含**备料阶段就已失败的库（那些在
+     *   `prepareForVaults` 的结果里）。调用方应把两段结论合并后再展示。
+     */
+    suspend fun commitLocalUnlockEnrollForVaults(
+        prepared: List<LocalUnlockPreparedEnrollment>,
+        cipher: javax.crypto.Cipher,
+    ): Map<String, LocalUnlockEnrollOutcome>
+
     // ===== 应用内 PIN 解锁（定位：解锁便利，**不是**找回手段）=====
 
     /**
@@ -600,4 +636,61 @@ sealed interface KdbxAddOutcome {
 
     /** 添加失败（凭据 / 文件 / 格式等原因，见 [UnlockResult]）。 */
     data class Failed(val result: UnlockResult) : KdbxAddOutcome
+}
+
+/**
+ * 一次为多个库启用快速解锁时，单个库的**认证前备料**结果。
+ *
+ * 「备料」= 校验凭据 + 把要包进信封的明文准备好。之所以要**分成认证前/后两段**，
+ * 是因为快解的保护器 KEK 是 auth-per-use：认证之前做不了 `wrap`，只能先把料备好。
+ * （与 PIN 侧的「先校验、后包裹」是同一条纪律，区别只是 PIN 不需要系统认证。）
+ */
+sealed interface LocalUnlockPrepareOutcome {
+    /** 备料完成，等认证通过后落盘。 */
+    class Ready(val prepared: LocalUnlockPreparedEnrollment) : LocalUnlockPrepareOutcome
+
+    /** KDBX 主密码不对。UI 按「宽松」取向就地让用户重输。 */
+    data object InvalidCredentials : LocalUnlockPrepareOutcome
+
+    /** 库文件读不到（URI 授权失效 / 文件被移走）—— 与「密码错」必须分开报。 */
+    data class SourceUnavailable(val detail: String) : LocalUnlockPrepareOutcome
+
+    /** 其它失败（库不存在 / 类型不识别 / Bitwarden 库未解锁）。 */
+    data class Failed(val detail: String) : LocalUnlockPrepareOutcome
+}
+
+/**
+ * 一次为多个库启用快速解锁时，单个库的**认证后落盘**结果。
+ *
+ * ⚠️ 调用方必须**逐库**展示：部分成功是真实状态，不能因为有失败就整体报错，
+ * 也不能只显示成功（否则用户下次解锁时才发现某个库打不开）。
+ */
+sealed interface LocalUnlockEnrollOutcome {
+    /** 信封已落盘、开关已置位，此后指纹可开这个库。 */
+    data object Enrolled : LocalUnlockEnrollOutcome
+
+    /** 该库失败（Keystore 失效 / 会话已丢）。**只影响这一个库**。 */
+    data class Failed(val detail: String) : LocalUnlockEnrollOutcome
+}
+
+/**
+ * 「认证通过后要包进信封」的一份备料（域层只描述**是什么**，实现细节留给数据层）。
+ *
+ * 放在 domain 而不是 data：`domain` 模块**不依赖** `data`（只依赖 `core:model`），
+ * 接口签名里出现 `data` 的类型会直接编译失败。这也正是它必须实现 [AutoCloseable]
+ * 的原因 —— 明文用完即擦是**契约**，不能靠调用方自觉。
+ */
+interface LocalUnlockPreparedEnrollment : AutoCloseable {
+    val vaultId: String
+
+    /** 用于结果展示的库名。 */
+    val displayName: String
+
+    /**
+     * 是否需要在认证之后补取明文（Bitwarden 侧 = true）。
+     *
+     * KDBX 的明文（主密码 + keyfile）在备料阶段就必须备好，因为它只存在于用户脑子里；
+     * Bitwarden 的对称密钥则在内存会话里，认证后取更省事。
+     */
+    val requiresPostAuthPlaintext: Boolean
 }

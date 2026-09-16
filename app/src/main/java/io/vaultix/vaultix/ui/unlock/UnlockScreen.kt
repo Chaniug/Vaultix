@@ -129,7 +129,10 @@ fun UnlockScreen(
                         subtitle = biometricSubtitle,
                         cancelText = cancelText,
                         onSuccess = { cipher ->
-                            viewModel.completeLocalUnlock(cipher, forViewLock)
+                            // ★ `event.rest` 原样带上：本次认证要顺带解封的库在**发起时**
+                            //   就定好了（见 Event.PromptForUnlock 的 KDoc），认证期间库列表
+                            //   若变化不应改变这次的解封范围。
+                            viewModel.completeLocalUnlock(cipher, forViewLock, event.rest)
                         },
                         // ⚠️ **任何**错误都要复位 submitting，不能只处理「用户取消」：
                         // ERROR_TIMEOUT / ERROR_CANCELED / ERROR_HW_UNAVAILABLE / ERROR_LOCKOUT

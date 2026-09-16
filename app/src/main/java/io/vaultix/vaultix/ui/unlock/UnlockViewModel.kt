@@ -112,8 +112,18 @@ class UnlockViewModel @Inject constructor(
     sealed interface Event {
         data object Unlocked : Event
 
-        /** UI 收到后立即弹 BiometricPrompt（cipher 已 init，等待用户认证）。 */
-        data class PromptForUnlock(val cipher: javax.crypto.Cipher) : Event
+        /**
+         * UI 收到后立即弹 BiometricPrompt（cipher 已 init，等待用户认证）。
+         *
+         * @param rest 除目标库之外、本次认证成功后可**顺带解封**的库（只含已启用快速
+         *   解锁的锁定库）。空 = 只开目标库（查看锁场景恒为空）。
+         *   ⚠️ 必须随事件携带而不是让 `completeLocalUnlock` 自己去查：认证期间
+         *   库列表可能变化，届时再查会解封用户**发起认证时并不存在**的库。
+         */
+        data class PromptForUnlock(
+            val cipher: javax.crypto.Cipher,
+            val rest: List<String> = emptyList(),
+        ) : Event
     }
 
     /**
@@ -402,18 +412,56 @@ class UnlockViewModel @Inject constructor(
             } else {
                 // cipher 一次性：交出去就作废缓存，下次重新准备。
                 preparedCipher = null
-                _events.send(Event.PromptForUnlock(cipher))
+                // ★ 一并带上"其余待解锁的库"：用户诉求是**一次指纹开所有库**，
+                //   而不是只开被点的那一个（2026-09-16）。
+                // ⚠️ 查看锁场景没有"其余库"可言 —— 它的语义只是"证明是本人"，
+                //   不涉及任何库的解封，多带列表只会白跑一轮。
+                val rest = if (viewLock) emptyList() else candidateVaultIds(vaultId)
+                _events.send(Event.PromptForUnlock(cipher, rest))
             }
         }
     }
+
+    /**
+     * 除 [target] 之外，本次还应当顺带解封的库（**只挑已启用快速解锁的锁定库**）。
+     *
+     * ## 为什么必须过滤成"已启用"的
+     *
+     * 库列表里通常既有启用了指纹的库，也有只走主密码的库。对后者调
+     * `prepareLocalUnlock` 必然返回 null（没有信封），白跑一趟还多算一次"失败"，
+     * 结果页会报一堆莫名其妙的"未打开" —— 而用户根本没打算开它们。
+     *
+     * ## 为什么不包含已解锁的库
+     *
+     * 已经解锁的库密钥就在内存里，再解封一次等于把同一把密钥写第二遍，白做一轮
+     * KDF 派生（同 [completeLocalUnlock] 对查看锁分支的告诫）。
+     */
+    private suspend fun candidateVaultIds(target: String): List<String> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                vaultRepository.observeVaults().first()
+                    .filter { it.id != target && !it.unlocked }
+                    .map { it.id }
+                    .filter { id ->
+                        runCatching { vaultRepository.localUnlockAvailable(id).first() }
+                            .getOrDefault(false)
+                    }
+            }.getOrDefault(emptyList())
+        }
 
     /**
      * BiometricPrompt 认证成功（携带本次 cipher）：解封本地密钥建立会话。
      *
      * @param forViewLock 本次认证是为查看层锁发起的 → 只清标记，**不重新解封密钥**
      *   （密钥本来就在会话里；再解封一次等于把同一把密钥写第二遍，白做一轮 KDF 派生）。
+     * @param rest 除目标库之外可顺带解封的库（见 [Event.PromptForUnlock.rest]）；
+     *   查看锁场景传空。
      */
-    fun completeLocalUnlock(cipher: javax.crypto.Cipher, forViewLock: Boolean) {
+    fun completeLocalUnlock(
+        cipher: javax.crypto.Cipher,
+        forViewLock: Boolean,
+        rest: List<String> = emptyList(),
+    ) {
         viewModelScope.launch {
             if (forViewLock) {
                 sessionRepository.clearViewLock(vaultId)
@@ -427,22 +475,18 @@ class UnlockViewModel @Inject constructor(
             // ⚠️ 按库类型分流（定稿 §4）：Bitwarden 的包裹物是「对称密钥」，
             // KDBX 的是「主密码 + keyfile」—— 后者还要真的开一次库，
             // 因此**不能**共用同一条路径（混用会解出完全错误的语义）。
-            val isKdbx = _state.value.vault?.kind == VaultKind.KDBX
-            val result = withContext(Dispatchers.IO) {
-                if (isKdbx) {
-                    val kdbxOutcome = vaultRepository.completeLocalUnlockKdbx(vaultId, cipher)
-                    when (kdbxOutcome) {
-                        KdbxUnlockOutcome.Opened -> UnlockResult.Success
-                        // ★ D3（定稿 §4.4）：指纹过了但包裹物打不开 ⇒ 主密码很可能已改。
-                        //   归类为凭据错误，让 UI 提示「主密码可能已变更」并引导重输；
-                        //   用户输对后本页正常开库，接着可再启用快速解锁自愈。
-                        KdbxUnlockOutcome.StaleCredentials -> UnlockResult.InvalidCredentials
-                        is KdbxUnlockOutcome.Unavailable -> UnlockResult.Unknown(kdbxOutcome.detail)
-                    }
-                } else {
-                    vaultRepository.completeLocalUnlock(vaultId, cipher)
-                }
+            // ★ 2026-09-16：分流逻辑与"顺带解封其余库"一并抽到 LocalUnlockFanout，
+            //   与 AutofillActivity 共用同一份实现（此前两处各写一遍，只可能修好一处）。
+            val fanout = withContext(Dispatchers.IO) {
+                LocalUnlockFanout.unlockAll(
+                    repository = vaultRepository,
+                    first = vaultId,
+                    rest = rest,
+                    cipher = cipher,
+                )
             }
+            val result = fanout.first
+            val isKdbx = _state.value.vault?.kind == VaultKind.KDBX
             if (result == UnlockResult.Success) {
                 _state.update {
                     it.copy(

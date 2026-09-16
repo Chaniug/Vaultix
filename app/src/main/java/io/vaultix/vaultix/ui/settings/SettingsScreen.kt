@@ -4,6 +4,8 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
+import androidx.activity.ComponentActivity
+import androidx.annotation.StringRes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -1191,7 +1193,19 @@ internal fun QuickUnlockEnrollEffect(
 internal fun QuickUnlockManageDialog(
     vaults: List<SettingsViewModel.QuickUnlockVaultUi>,
     canAuthenticate: Boolean,
-    onEnable: (String) -> Unit,
+    /**
+     * 「选指纹」入口（2026-09-16 起走**多库**流程）。
+     *
+     * ⚠️ 参数从 `(String) -> Unit` 改成 `(QuickUnlockVaultUi) -> Unit` 是必要的：
+     * 多库流程要**预勾选**用户点的那一个库，只给 id 的话这一层还得自己再查一遍
+     * 库类型（KDBX 与 Bitwarden 的提示文案不同）。把整个卡片项传出去，调用方
+     * 手里就有全部信息，不必回头查表。
+     *
+     * ⚠️ **不是**"直接启用这一个库"：它会打开勾选对话框（已预勾该库），
+     * 用户可增可减。语义从"开这一个"放宽为"以这个为起点开一批"，
+     * 这正是用户诉求「一个指纹管理解锁所有的库」—— 旧行为让他必须逐库点。
+     */
+    onEnableBiometric: (SettingsViewModel.QuickUnlockVaultUi) -> Unit,
     onDisable: (String) -> Unit,
     onPinSet: (SettingsViewModel.QuickUnlockVaultUi) -> Unit,
     /**
@@ -1220,7 +1234,7 @@ internal fun QuickUnlockManageDialog(
             }
             UnlockChoice.BIOMETRIC -> {
                 // 已经是指纹 ⇒ 空操作：重复点选不该把已登记的钥匙拆了重建。
-                if (!vault.enabled) onEnable(vault.vaultId)
+                if (!vault.enabled) onEnableBiometric(vault)
                 if (vault.pinEnabled) onPinDisable(vault.vaultId)
             }
             UnlockChoice.PIN -> {
@@ -1564,6 +1578,231 @@ internal fun PinDialogHost(viewModel: SettingsViewModel) {
 }
 
 /**
+ * 指纹启用对话框的宿主：按 [BiometricEnrollController.EnrollState] 选一帧渲染。
+ *
+ * ## 与 [PinDialogHost] 的关键差别：这里要自己弹 BiometricPrompt
+ *
+ * PIN 全程不需要系统认证，控制器说"配好了"就是配好了。指纹不行 ——
+ * 控制器只能把「认证前的备料」做完，真正的落盘要等 `BiometricPrompt` 回调。
+ * 故这里额外订阅 [BiometricEnrollController.pendingCipher]：有值即弹认证，
+ * 成功回传 cipher、失败则让控制器擦掉备料明文。
+ *
+ * ⚠️ **不订阅 `SettingsViewModel.events`（旧的单库 `PromptForEnroll`）**：
+ * 那是库列表页横幅与旧单库入口用的通道，本对话框有自己的 cipher 流。
+ * 两条流若混用，会出现"单库流程的 cipher 弹在了多库对话框上"这种错配。
+ */
+@Composable
+internal fun BiometricEnrollHost(viewModel: SettingsViewModel, activity: ComponentActivity?) {
+    val controller = viewModel.biometric
+    val state = controller.state.collectAsStateWithLifecycle().value
+    val pendingCipher = controller.pendingCipher.collectAsStateWithLifecycle().value
+    val title = stringResource(R.string.quick_unlock_biometric_title)
+    val subtitle = stringResource(R.string.quick_unlock_biometric_subtitle)
+    val cancelText = stringResource(R.string.action_cancel)
+
+    // cipher 一到位就弹认证。`LaunchedEffect(pendingCipher)` 保证同一把 cipher
+    // 只弹一次；控制器侧在消费后会把流清空，避免对话框重组时重复弹。
+    LaunchedEffect(pendingCipher) {
+        val cipher = pendingCipher ?: return@LaunchedEffect
+        val host = activity ?: run {
+            controller.onAuthenticationFailed()
+            return@LaunchedEffect
+        }
+        controller.onPromptHandled()
+        BiometricPrompter(host).authenticate(
+            cipher = cipher,
+            title = title,
+            subtitle = subtitle,
+            cancelText = cancelText,
+            onSuccess = controller::onAuthenticated,
+            // ⚠️ 任何错误（取消 / 超时 / 硬件不可用）都必须让控制器**擦掉备料明文**：
+            // KDBX 那份里躺着主密码，流程结束了还留着它没有任何理由。
+            onError = { _, _, _ -> controller.onAuthenticationFailed() },
+        )
+    }
+
+    when (state) {
+        BiometricEnrollController.EnrollState.Idle -> Unit
+        is BiometricEnrollController.EnrollState.Picking ->
+            BiometricTargetDialog(state = state, controller = controller)
+        is BiometricEnrollController.EnrollState.AskingKdbxPassword ->
+            BiometricKdbxPasswordDialog(state = state, controller = controller)
+        BiometricEnrollController.EnrollState.Authenticating -> BiometricAuthenticatingDialog()
+        is BiometricEnrollController.EnrollState.Report ->
+            BiometricEnrollReportDialog(state = state, controller = controller)
+    }
+}
+
+/**
+ * 第一步：勾选目标库（复用 [VaultTargetPicker]）。
+ *
+ * 与 PIN 侧共用同一套勾选交互，但**不共用字符串**：指纹多一个"只需验证一次"的
+ * 承诺，那是用户最关心的点（此前每库要按一次指纹），必须说出来。
+ */
+@Composable
+private fun BiometricTargetDialog(
+    state: BiometricEnrollController.EnrollState.Picking,
+    controller: BiometricEnrollController,
+) {
+    AlertDialog(
+        onDismissRequest = controller::dismiss,
+        title = { Text(stringResource(R.string.bio_enroll_title)) },
+        text = {
+            Column {
+                Text(
+                    text = stringResource(R.string.bio_enroll_scope_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                VaultTargetPicker(
+                    candidates = state.candidates.map {
+                        TargetCandidate(it.id, it.name, it.kind, it.enabled)
+                    },
+                    selected = state.selected,
+                    labelRes = R.string.bio_enroll_scope_label,
+                    kdbxHintRes = R.string.bio_enroll_scope_kdbx_hint.takeIf { state.hasKdbx },
+                    alreadyLabelRes = R.string.bio_target_already,
+                    onToggle = controller::toggleTarget,
+                )
+                DialogErrorText(state.error)
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = controller::confirm) {
+                Text(stringResource(R.string.action_next))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = controller::dismiss) {
+                Text(stringResource(R.string.action_cancel))
+            }
+        },
+    )
+}
+
+/**
+ * 第二步（仅勾选含 KDBX 时）：收**一次**共用主密码。
+ *
+ * ⚠️ 这里说的是"KDBX 库"而不是某个具体库名 —— 一次勾选可能含多个 KDBX 库，
+ * 用户输的是一个候选值，逐库校验后各自的成败会在结果页列出。措辞若写成
+ * "某某库的主密码"，用户会以为只影响那一个库。
+ */
+@Composable
+private fun BiometricKdbxPasswordDialog(
+    state: BiometricEnrollController.EnrollState.AskingKdbxPassword,
+    controller: BiometricEnrollController,
+) {
+    AlertDialog(
+        onDismissRequest = controller::dismiss,
+        title = { Text(stringResource(R.string.bio_enroll_kdbx_title)) },
+        text = {
+            Column {
+                Text(
+                    text = stringResource(R.string.bio_enroll_kdbx_message),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(Spacing.md))
+                OutlinedTextField(
+                    value = state.password,
+                    onValueChange = controller::onKdbxPasswordChange,
+                    label = { Text(stringResource(R.string.kdbx_master_password_label)) },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                DialogErrorText(state.error)
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = controller::confirmKdbxPassword) {
+                Text(stringResource(R.string.action_next))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = controller::dismiss) {
+                Text(stringResource(R.string.action_cancel))
+            }
+        },
+    )
+}
+
+/**
+ * 认证中：备料已就绪、正等用户按指纹。
+ *
+ * ⚠️ 这一帧**只说明状态、不放任何可操作控件**：认证窗口里改变勾选不会影响
+ * 本次已定型的备料，给出可点的控件等于承诺一个不存在的效果（假状态）。
+ */
+@Composable
+private fun BiometricAuthenticatingDialog() {
+    AlertDialog(
+        // 认证进行中不允许点外部关闭（关掉会让 UI 与系统认证窗口的状态不一致）。
+        onDismissRequest = {},
+        title = { Text(stringResource(R.string.bio_enroll_title)) },
+        text = {
+            Text(
+                text = stringResource(R.string.bio_enroll_authenticating),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        },
+        confirmButton = {},
+    )
+}
+
+/**
+ * 第三步：**逐库如实汇报**（结构同 `PinEnrollReportDialog`，但两条流程的
+ * 结果集不同，故各自独立而不是硬塞成一个带"类型"参数的通用组件）。
+ */
+@Composable
+private fun BiometricEnrollReportDialog(
+    state: BiometricEnrollController.EnrollState.Report,
+    controller: BiometricEnrollController,
+) {
+    AlertDialog(
+        onDismissRequest = controller::dismiss,
+        title = { Text(stringResource(R.string.bio_enroll_report_title)) },
+        text = {
+            Column {
+                Text(
+                    text = if (state.succeeded.isEmpty()) {
+                        stringResource(R.string.bio_enroll_report_none)
+                    } else {
+                        stringResource(R.string.bio_enroll_report_ok, state.succeeded.size)
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                if (state.failed.isNotEmpty()) {
+                    Spacer(Modifier.height(Spacing.md))
+                    Text(
+                        text = stringResource(R.string.bio_enroll_report_failed_title),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    state.failed.forEach { item ->
+                        Text(
+                            text = stringResource(
+                                R.string.pin_enroll_report_failed_item,
+                                item.vaultName,
+                                item.reason,
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = Spacing.xs),
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = controller::dismiss) {
+                Text(stringResource(R.string.action_done))
+            }
+        },
+    )
+}
+
+/**
  * 设置 PIN（第一步）：输入两次。
  *
  * 用 `NumberPassword` 键盘：PIN 是纯数字，弹全键盘只会让用户多找一次数字行。
@@ -1629,41 +1868,87 @@ private fun PinSetDialog(
 /**
  * PIN 的**目标库勾选列表**：这一个 PIN 要配到哪几个库上。
  *
- * ## 为什么是"可勾选"而不是"一行说明"
- *
- * 库表里有几个库 ≠ 用户想设几个。PIN 会影响解锁入口，属于用户可感知的安全设置，
- * 不能替他决定（见 `PinSettingsController.PinDialogState.Entering` 的 KDoc）。
- * 默认**全选**（多数人的诉求就是"一个 PIN 全开"），但用户能取消。
- *
- * ⚠️ 候选列表是异步取回来的：为空说明还没到，**不能**先显示"已选 0 个库"，
- * 那会在第一帧给人错误印象。宁可这一帧什么都不显示。
- *
- * ⚠️ 整行可点（`toggleable`）而非只有小方框可点：勾选框本身的触达面积太小，
- * 而这里每行也就是一个库名，把整行做成热区更符合手感。
+ * 实现已提取为共享的 [VaultTargetPicker] —— 指纹侧（`BiometricEnrollHost`）用的是
+ * 同一套勾选交互。合并不是为了少写代码，而是因为**两处的语义完全一致**
+ * （都是"这个解锁手段应用到哪些库"），分开写迟早会漂移成两种手感。
  */
 @Composable
 private fun PinTargetPicker(
     state: PinSettingsController.PinDialogState.Entering,
     pin: PinSettingsController,
 ) {
-    if (state.candidates.isEmpty()) return
+    VaultTargetPicker(
+        candidates = state.candidates.map { TargetCandidate(it.id, it.name, it.kind, it.pinEnabled) },
+        selected = state.selected,
+        labelRes = R.string.pin_set_scope_label,
+        // KDBX 必须输主密码才能设 PIN —— 提前说明，避免下一步弹密码框时突兀。
+        kdbxHintRes = R.string.pin_set_scope_kdbx_hint.takeIf { state.hasKdbx },
+        alreadyLabelRes = R.string.pin_target_already,
+        onToggle = pin::toggleTarget,
+    )
+}
+
+/**
+ * 勾选列表里的一项（**PIN 与指纹共用**）。
+ *
+ * 用一个 UI 局部模型而不是直接吃两个控制器的 `Candidate` 类型：那两个类型
+ * 名字不同、字段一样，直接二选一当参数会让另一个模块反向依赖它的控制器。
+ * 这里只带渲染需要的四个字段。
+ */
+internal data class TargetCandidate(
+    val id: String,
+    val name: String,
+    val kind: VaultKind,
+    /** 该库**已经**启用了这种解锁方式（列表上多一个"已有"小标注）。 */
+    val alreadyEnabled: Boolean,
+)
+
+/**
+ * **共享的目标库勾选列表**（PIN / 指纹两处入口共用）。
+ *
+ * ## 为什么是"可勾选"而不是"一行说明"
+ *
+ * 库表里有几个库 ≠ 用户想设几个。解锁方式会影响解锁入口，属于用户可感知的安全设置，
+ * 不能替他决定（见 `PinSettingsController.PinDialogState.Entering` 的 KDoc）。
+ * 两个流程都默认**全选**（多数人的诉求就是"一次全开"），但用户能取消。
+ *
+ * ⚠️ 候选列表是异步取回来的：为空说明还没到，**不能**先显示"已选 0 个库"，
+ * 那会在第一帧给人错误印象。宁可这一帧什么都不显示。
+ *
+ * ⚠️ 整行可点（`toggleable`）而非只有小方框可点：勾选框本身的触达面积太小，
+ * 而这里每行也就是一个库名，把整行做成热区更符合手感。
+ *
+ * ⚠️ [kdbxHintRes] 为 null 表示**不显示**提示（勾选里没有 KDBX 库）；
+ * 用可空资源 id 而不是布尔 + 资源两个参数，是为了让"提示与它的触发条件"
+ * 在调用点就是一件事，不会出现"传了 hint 但忘了传开关"。
+ */
+@Composable
+private fun VaultTargetPicker(
+    candidates: List<TargetCandidate>,
+    selected: Set<String>,
+    @StringRes labelRes: Int,
+    @StringRes kdbxHintRes: Int?,
+    @StringRes alreadyLabelRes: Int,
+    onToggle: (String) -> Unit,
+) {
+    if (candidates.isEmpty()) return
     Spacer(Modifier.height(Spacing.md))
     Text(
-        text = stringResource(R.string.pin_set_scope_label),
+        text = stringResource(labelRes),
         style = MaterialTheme.typography.labelLarge,
         color = MaterialTheme.colorScheme.primary,
     )
-    state.candidates.forEach { candidate ->
-        PinTargetRow(
+    candidates.forEach { candidate ->
+        VaultTargetRow(
             candidate = candidate,
-            checked = candidate.id in state.selected,
-            onToggle = { pin.toggleTarget(candidate.id) },
+            checked = candidate.id in selected,
+            alreadyLabelRes = alreadyLabelRes,
+            onToggle = { onToggle(candidate.id) },
         )
     }
-    // KDBX 必须输主密码才能设 PIN —— 提前说明，避免下一步弹密码框时突兀。
-    if (state.hasKdbx) {
+    kdbxHintRes?.let { hintRes ->
         Text(
-            text = stringResource(R.string.pin_set_scope_kdbx_hint),
+            text = stringResource(hintRes),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = Spacing.xs),
@@ -1674,13 +1959,14 @@ private fun PinTargetPicker(
 /**
  * 勾选列表里的一行（库名 + 类型标注 + 勾选框）。
  *
- * `pinEnabled` 的库会多一个「已有 PIN」小标注：用户可能只想给**新库**补一个 PIN，
- * 看到既有状态才好判断要不要动它。
+ * `alreadyEnabled` 的库会多一个「已有 PIN / 已启用」小标注：用户可能只想给**新库**
+ * 补一个，看到既有状态才好判断要不要动它。
  */
 @Composable
-private fun PinTargetRow(
-    candidate: PinSettingsController.PinCandidate,
+private fun VaultTargetRow(
+    candidate: TargetCandidate,
     checked: Boolean,
+    @StringRes alreadyLabelRes: Int,
     onToggle: () -> Unit,
 ) {
     Row(
@@ -1705,7 +1991,7 @@ private fun PinTargetRow(
             )
             // 类型 + 既有状态合成一行副标题：两者都是"判断要不要动它"的依据。
             Text(
-                text = pinTargetSubtitle(candidate),
+                text = vaultTargetSubtitle(candidate, alreadyLabelRes),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -1714,21 +2000,21 @@ private fun PinTargetRow(
 }
 
 /**
- * 勾选行的副标题：库类型 + 是否已有 PIN。
+ * 勾选行的副标题：库类型 + 是否已启用。
  *
- * 抽成函数是为了把分支从 [PinTargetRow] 里挪出去 —— Compose 函数的分支直接叠圈复杂度
+ * 抽成函数是为了把分支从 [VaultTargetRow] 里挪出去 —— Compose 函数的分支直接叠圈复杂度
  * （本仓库 detekt 上限 14，见 8.6）。
  */
 @Composable
-private fun pinTargetSubtitle(candidate: PinSettingsController.PinCandidate): String {
+private fun vaultTargetSubtitle(candidate: TargetCandidate, @StringRes alreadyLabelRes: Int): String {
     val kindLabel = stringResource(
         when (candidate.kind) {
             VaultKind.BITWARDEN -> R.string.vault_kind_bitwarden
             VaultKind.KDBX -> R.string.vault_kind_kdbx
         },
     )
-    return if (candidate.pinEnabled) {
-        stringResource(R.string.pin_target_already, kindLabel)
+    return if (candidate.alreadyEnabled) {
+        stringResource(alreadyLabelRes, kindLabel)
     } else {
         kindLabel
     }

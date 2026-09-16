@@ -8,6 +8,7 @@
  */
 package io.vaultix.vaultix.ui.settings
 
+import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -35,7 +36,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import io.vaultix.model.VaultKind
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.AddVaultTypeDialog
 import io.vaultix.vaultix.ui.common.deviceCanAuthenticate
@@ -82,6 +82,9 @@ fun VaultManagementScreen(
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val context = LocalContext.current
+    // BiometricPrompt 需要 Activity 宿主（`LocalContext` 在 Compose 里常是
+    // ContextWrapper 而非 Activity，直接传会抛 IllformedContextWrapper）。
+    val activity = context as? ComponentActivity
     val active by viewModel.activeVault.collectAsStateWithLifecycle()
     val default by viewModel.defaultVault.collectAsStateWithLifecycle()
     val switchable by viewModel.switchableVaults.collectAsStateWithLifecycle()
@@ -210,16 +213,10 @@ fun VaultManagementScreen(
         QuickUnlockManageDialog(
             vaults = quickUnlockVaults,
             canAuthenticate = deviceCanAuthenticate(context),
-            // ★ 按库类型分流：KDBX 没有可包裹的会话密钥，**必须先要主密码**
-            //   （定稿 §4.5）；Bitwarden 直接弹指纹。
-            onEnable = { vaultId ->
-                val target = quickUnlockVaults.firstOrNull { it.vaultId == vaultId }
-                if (target?.kind == VaultKind.KDBX) {
-                    viewModel.startKdbxQuickUnlock(vaultId)
-                } else {
-                    viewModel.startQuickUnlockEnroll(vaultId)
-                }
-            },
+            // ★ 2026-09-16：指纹入口改为**多库流程**（用户：「默认一个生物验证的指纹，
+            //   管理解锁所有的库也可以吗」）。此前是按库逐次开 —— 库多了要点 N 遍指纹。
+            //   现在打开勾选对话框并**预勾**用户点的这一个库，可增可减，最后一次性启用。
+            onEnableBiometric = { vault -> viewModel.biometric.open(setOf(vault.vaultId)) },
             onDisable = viewModel::disableQuickUnlock,
             onPinSet = viewModel.pin::open,
             // 「改用 PIN」= 设置成功后顺带关掉该库的指纹（见 QuickUnlockManageDialog 的告诫）。
@@ -228,6 +225,8 @@ fun VaultManagementScreen(
         )
     }
     PinDialogHost(viewModel = viewModel)
+    // 指纹多库启用对话框（自己弹 BiometricPrompt，故需要 Activity 宿主）。
+    BiometricEnrollHost(viewModel = viewModel, activity = activity)
     // KDBX 主密码输入框：仅当用户勾选了 KDBX 库、且尚未校验通过时出现。
     val kdbxTarget = pendingKdbxVaultId
     if (kdbxTarget != null) {

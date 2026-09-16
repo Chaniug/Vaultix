@@ -49,7 +49,6 @@ import io.vaultix.common.TotpGenerator
 import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.domain.VaultRepository
 import io.vaultix.domain.VaultSessionRepository
-import io.vaultix.model.VaultKind
 import io.vaultix.vaultix.MainActivity
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.autofill.engine.AutofillCandidateSource
@@ -58,6 +57,7 @@ import io.vaultix.vaultix.autofill.engine.AutofillDatasets
 import io.vaultix.vaultix.autofill.engine.FillPlanner
 import io.vaultix.vaultix.autofill.engine.AutofillCredentialMapper
 import io.vaultix.vaultix.ui.common.BiometricPrompter
+import io.vaultix.vaultix.ui.unlock.LocalUnlockFanout
 import io.vaultix.vaultix.ui.theme.VaultixTheme
 import io.vaultix.vaultix.util.VaultixClipboard
 import kotlinx.coroutines.Dispatchers
@@ -313,16 +313,20 @@ class AutofillActivity : FragmentActivity() {
             return BiometricUnlockOutcome.Ready
         }
         val vaults = runCatching { vaultRepository.observeVaults().first() }.getOrDefault(emptyList())
+        // ⚠️ 只挑**已启用快速解锁**的锁定库，与解锁页的 `candidateVaultIds` 同一口径：
+        //    对只走主密码的库调 `prepareLocalUnlock` 必然返回 null（没有信封），
+        //    白跑一趟还多算一次失败，日志里会冒出一堆莫名其妙的"未打开"。
         val lockedIds = vaults.filterNot { it.unlocked }.map { it.id }
-        val first = lockedIds.firstOrNull { id ->
+        val unlockable = lockedIds.filter { id ->
             runCatching { vaultRepository.localUnlockAvailable(id).first() }.getOrDefault(false)
-        } ?: return BiometricUnlockOutcome.Fallback
+        }
+        val first = unlockable.firstOrNull() ?: return BiometricUnlockOutcome.Fallback
         val cipher = runCatching { vaultRepository.prepareLocalUnlock(first) }.getOrNull()
             ?: return BiometricUnlockOutcome.Fallback
         return BiometricUnlockOutcome.Prompt(
             PendingBiometricUnlock(
                 first = first,
-                rest = lockedIds.filter { it != first },
+                rest = unlockable.filter { it != first },
                 cipher = cipher,
             ),
         )
@@ -346,33 +350,16 @@ class AutofillActivity : FragmentActivity() {
 
     /** 解封首个库，随后趁 KEK 授权窗口解封其余已启用库（两处解锁路径共用）。 */
     private suspend fun unlockAll(pending: PendingBiometricUnlock, cipher: Cipher) {
-        completeLocalUnlockByKind(pending.first, cipher)
-        for (id in pending.rest) {
-            val c = runCatching { vaultRepository.prepareLocalUnlock(id) }.getOrNull() ?: continue
-            completeLocalUnlockByKind(id, c)
-        }
-    }
-
-    /**
-     * 按库类型走正确的本地解锁路径。
-     *
-     * ⚠️ 不能一律调 `completeLocalUnlock`（定稿 §4）：那条路把包裹物当作
-     * **Bitwarden 对称密钥**（`enc ‖ mac`）解析；KDBX 的包裹物是
-     * 「主密码 + keyfile」，走过去会解出错误语义 —— `SymmetricCryptoKey.fromFullKey`
-     * 拿一段带魔数的字节当密钥，轻则解锁失败，重则把会话建立成一把错密钥。
-     * ⇒ 必须先查 kind 再分流。
-     */
-    private suspend fun completeLocalUnlockByKind(vaultId: String, cipher: Cipher) {
-        val kind = runCatching {
-            vaultRepository.observeVaults().first()
-                .firstOrNull { it.id == vaultId }
-                ?.kind
-        }.getOrNull()
-        if (kind == VaultKind.KDBX) {
-            runCatching { vaultRepository.completeLocalUnlockKdbx(vaultId, cipher) }
-        } else {
-            runCatching { vaultRepository.completeLocalUnlock(vaultId, cipher) }
-        }
+        // ★ 2026-09-16：与解锁页共用同一份实现（`LocalUnlockFanout`）。
+        //   此前这里与 `UnlockViewModel` 各写一份"按库类型分流"，而那条分流一旦
+        //   写错只会**静默失效**（KDBX 走 Bitwarden 那条路会解出错误语义）——
+        //   两份实现意味着同一个坑埋两次，且很可能只修好一处。
+        LocalUnlockFanout.unlockAll(
+            repository = vaultRepository,
+            first = pending.first,
+            rest = pending.rest,
+            cipher = cipher,
+        )
     }
 
     /**
