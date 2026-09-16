@@ -17,6 +17,10 @@
   **`SESSION-2026-09-17.md`（5 组 UI + KDBX 写入口止血 #106 + OneDrive 鉴权骨架）**。
 - **下一个卡口**：设置页还没有「连接 OneDrive」入口 —— 交互式登录需要 Activity 才能拉起，
   必须先有真实按钮，才能真机跑通「登录 → 拿 token → 列出网盘 `.kdbx` 文件」。
+- ★ **网盘同步（OneDrive / WebDAV）的完整方案与任务清单** →
+  **[`Docs/progress/cloud-sync-plan.md`](../Docs/progress/cloud-sync-plan.md)**
+  （含前置阶段 B 的可行性核实、文件源接缝、三方合并冲突策略、5 个批次的任务拆解、9 条验收标准、
+  以及 **7 个待拍板问题**）。**今晚要动网盘，先读这一篇。**
 - ⚠️ **不要被「UP-TO-DATE」骗了**：本轮跑 `test` 才炸出 `data:repository` 的单测**编译**断链
   （见 `SESSION-2026-09-17.md` §6.1）—— **门禁必须包含 `test`，不能只跑 `compile`。**
 
@@ -52,6 +56,11 @@
    （7 组 → 5 组的目标结构 + 全量文案改动表，**别重新设计分组**；§6 是开工步骤）
 2c. **要动「Material 3 / 观感 / 动效」→ 先读 `conventions/8.8-M3Expressive-采纳范围与顺序.md`**
    （哪些该借、哪些明令不借、按什么顺序做；含 2026 的设计口径与本项目实测）
+2d. **要动「KDBX 网盘同步（OneDrive / WebDAV）」→ 先读
+   [`Docs/progress/cloud-sync-plan.md`](../Docs/progress/cloud-sync-plan.md)**
+   （★ 前置是 KDBX 阶段 B 写回，勿跳过；冲突策略有三个方案待拍板，**别自行决定**）
+2e. **要动「性能」→ 读 [`Docs/progress/perf-plan.md`](../Docs/progress/perf-plan.md)**
+
 3. **按本次要动的模块**，只开 `conventions/` 里对应的一篇（例：动填充 → `8.1-自动填充`）
 4. **按本次要碰的模块**，只开 `issues/` 里对应的一篇（例：动填充 → `02-自动填充`）
 5. 读 `Docs/progress/next-steps.md`（**待办唯一真源**，最新在顶部）与 `current-status.md`
