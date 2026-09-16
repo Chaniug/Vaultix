@@ -209,6 +209,76 @@ def check_strings(path: Path, defined: set[str]) -> list[str]:
     ]
 
 
+# 抓「同类内同名同参数」的重复 **fun** 声明签名。
+#
+# ⚠️ 刻意**只查 fun、不查 val/var**：属性重复在文本上无法与"局部变量 / 命名参数 /
+#    构造函数实参"区分（试过，264 处全误报）。而本轮真实事故是**函数整块被复制**
+#    （`enrollPinForVaults` 出现两次），查 fun 就够，且判据干净。
+#
+# ⚠️ 只认**类成员级**缩进（恰好 4 空格）的声明，跳过 local fun / 顶层 fun。
+_KOTLIN_MEMBER_FUN_RE = re.compile(
+    r"^ {4}(?:public |internal |protected |private |override |suspend |inline |operator |open |"
+    r"actual |external |@\w+\s+)*fun\s+"
+    # 🔴 可选接收者：`fun Intent.getX()` / `fun JsonElement?.asObject()` 里紧跟 fun 的
+    #    是**接收者类型**而不是函数名。只写 `fun\s+(\w+)` 会把同一接收者上的所有扩展
+    #    函数归一成同一个名字（实证：`Intent` 5 处、`JsonElement` 2 处误报）。
+    r"(?:<[^>]*>\s*)?"  # 泛型参数 `fun <T> f()`
+    r"(?:\([^()]*\)\s*\.\s*)?"  # 接收者可带形参：`fun (A).f()`
+    r"(?:([A-Za-z_][\w.]*(?:<[^<>]*>)?\??)\s*\.\s*)?"  # 普通接收者类型 `Intent.` / `JsonElement?.`
+    r"(\w+)\s*(?:\(\s*([^)]*)\))?",
+    re.M,
+)
+
+# 这些"重载"是合法的（重写标准方法 / 不同参数），不报。
+_DUPLICATE_ALLOWLIST = {"equals", "hashCode", "toString", "compareTo", "invoke", "get", "set"}
+
+
+def _param_type_fingerprint(params: str | None) -> str:
+    """把参数列表归一成"只含类型、忽略参数名"的指纹。
+
+    `fun f(a: String)` 与 `fun f(b: String)` 被视为同一签名 ——
+    那正是 Kotlin 报 `Conflicting overloads` 的判据（**重载只看类型**）。
+    """
+    if not params:
+        return ""
+    types = re.findall(r":\s*([A-Za-z_][\w.<>?, ]*)", params)
+    return "|".join(t.strip() for t in sorted(types))
+
+
+def check_duplicate_declarations(path: Path) -> list[str]:
+    """同一个类里有没有**重复的成员函数声明**（同名同参数类型）。
+
+    ## 为什么需要这个
+
+    2026-09-16 实录：手改 `VaultRepository.kt` 时**整块 KDoc + 函数声明被复制了一份**
+    （`enrollPinForVaults` 出现两次）。本地七道门禁全绿 —— 因为 detekt 不做类型检查、
+    `check_signature_types` 只看类型名是否存在、编码检查只看字节。
+    CI 编译才报 `Conflicting overloads`，代价一次完整 CI 往返。
+
+    ⇒ 这是与 `check_signature_types` 同一类"本地无编译器"的盲区，用文本启发式补上。
+    """
+    src = path.read_text(encoding="utf-8")
+    seen: dict[tuple[str, str, str], int] = {}
+    problems: list[str] = []
+    for match in _KOTLIN_MEMBER_FUN_RE.finditer(src):
+        receiver, name, params = match.group(1) or "", match.group(2), match.group(3)
+        if name in _DUPLICATE_ALLOWLIST:
+            continue
+        # 🔴 接收者必须进 key：`fun Intent.foo(x)` 与 `fun Bundle.foo(x)` 在 Kotlin 里是
+        #    两个不同签名，不进 key 就会误报（构造用例 diff_receiver.kt 实证）。
+        key = (receiver, name, _param_type_fingerprint(params))
+        line = src.count("\n", 0, match.start()) + 1
+        if key in seen:
+            shown = f"{receiver}.{name}" if receiver else name
+            problems.append(
+                f"`{shown}` 疑似重复声明（首次在第 {seen[key]} 行，本次在第 {line} 行）"
+                f" —— Kotlin 会报 Conflicting overloads"
+            )
+        else:
+            seen[key] = line
+    return problems
+
+
 def display(path: Path) -> str:
     try:
         return path.relative_to(ROOT).as_posix()
@@ -380,7 +450,8 @@ def main() -> int:
     for path in targets:
         if not path.exists() or path.suffix != ".kt":
             continue
-        problems = check_icons(path) + check_init_order(path) + check_strings(path, defined)
+        problems = (check_icons(path) + check_init_order(path) + check_strings(path, defined)
+                    + check_duplicate_declarations(path))
         if problems:
             print(f"\n{display(path)}")
             for p in problems:
@@ -389,11 +460,11 @@ def main() -> int:
 
     print()
     if total:
-        print(f"[FAIL] 共 {total} 处。这三类 detekt 都查不出、本地也编译不了，"
+        print(f"[FAIL] 共 {total} 处。这四类 detekt 都查不出、本地也编译不了，"
               f"只在 CI 的 compile 步骤炸 —— 现在改掉。")
         return 1
     print(f"[OK] 检查了 {len(targets)} 个文件：图标导入 / 顶层常量初始化顺序 / "
-          f"R.string 引用 均未见异常。")
+          f"R.string 引用 / 重复声明 均未见异常。")
     return 0
 
 
