@@ -22,6 +22,7 @@
  */
 package io.vaultix.vaultix.ui.common
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -39,11 +40,20 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import io.vaultix.vaultix.ui.theme.Spacing
 
-/** 卡片圆角（Bastion 列表态 = 12dp）。 */
-private val CARD_CORNER = Spacing.md
+/**
+ * 卡片圆角。
+ *
+ * ⚠️ 2026-09-16 **从 12dp 提到 16dp**（用户要求「好看一点，不用那么理性克制」）。
+ * 这是**有意偏离**上游 Bastion 的「稀疏列表卡片 = 12dp」规格：
+ * 12dp 在列表里偏方正、显得"平"，16dp 与设置页卡片（20dp）更接近，观感更柔和成套。
+ */
+private val CARD_CORNER = 16.dp
 
-/** 卡片内边距（Bastion 列表态 = 16dp 四边等宽）。 */
+/** 卡片内边距（保持 Bastion 列表态 = 16dp 四边等宽）。 */
 private val CARD_PADDING = Spacing.lg
+
+/** 卡片描边宽度。 */
+private val CARD_BORDER_WIDTH = 0.5.dp
 
 /**
  * 条目卡片外框 —— 密码 / 验证码 / 卡包三个列表共用（保证三处观感完全一致）。
@@ -98,6 +108,11 @@ fun EntryCard(
         },
         elevation = CardDefaults.cardElevation(),
         shape = shape,
+        // 2026-09-16 新增极细描边。
+        // 原因：M3 filled card 的默认底色与页面背景的明度差本就小，在**动态取色**下
+        // 更不可靠（底色由壁纸派生）⇒ 卡片的边界得靠"猜"。
+        // 描边把边界**说死**，且它不吃底色、不与动态取色打架 —— 比反复调底色稳。
+        border = BorderStroke(CARD_BORDER_WIDTH, MaterialTheme.colorScheme.outlineVariant),
     ) {
         Column(
             modifier = Modifier

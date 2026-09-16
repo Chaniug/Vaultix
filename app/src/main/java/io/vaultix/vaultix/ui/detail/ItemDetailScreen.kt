@@ -1,5 +1,6 @@
 package io.vaultix.vaultix.ui.detail
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -521,9 +522,16 @@ private fun DetailCard(content: @Composable ColumnScope.() -> Unit) {
         ),
         shape = DETAIL_CARD_SHAPE,
         modifier = Modifier.fillMaxWidth(),
+        // 2026-09-16：与列表的 [EntryCard] 用**同一道细描边**。
+        // 两者本就是"同一种东西"（一个承载条目、一个承载分区），规格不一致时
+        // 从列表点进详情会有明显的"换了一套"的割裂感。
+        border = BorderStroke(DETAIL_CARD_BORDER_WIDTH, MaterialTheme.colorScheme.outlineVariant),
         content = content,
     )
 }
+
+/** 分区卡片描边宽度（与 [EntryCard] 一致）。 */
+private val DETAIL_CARD_BORDER_WIDTH = 0.5.dp
 
 /** 分区卡片圆角（见 [DetailCard] 的取舍说明）。 */
 private val DETAIL_CARD_SHAPE = RoundedCornerShape(16.dp)
