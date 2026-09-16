@@ -45,6 +45,9 @@
     python3 .ai/tools/check_compile_smells.py            # 扫全部 .kt（app/src）
     python3 .ai/tools/check_compile_smells.py <文件>...  # 只扫指定文件
     python3 .ai/tools/check_compile_smells.py --changed  # 只扫工作区/最近提交改动的
+    python3 .ai/tools/check_compile_smells.py --detekt-probe
+        # 本地复现 CI 的圈复杂度判定（detekt CLI 默认**不报** CyclomaticComplexMethod，
+        # 见 .ai/conventions/8.6；这里用一份只开该规则的探针配置跑一遍）
 
 退出码：0 = 没发现问题；1 = 有问题。
 """
@@ -55,6 +58,7 @@ import argparse
 import re
 import subprocess
 import sys
+import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -212,11 +216,91 @@ def display(path: Path) -> str:
         return str(path)
 
 
+# ---------------------------------------------------------------------------
+# --detekt-probe：在本地复现 CI 的圈复杂度判定
+# ---------------------------------------------------------------------------
+# ⚠️ 背景：`detekt-cli --config config/detekt/detekt.yml` **永远不报**
+#    `CyclomaticComplexMethod` —— 该规则要 `buildUponDefaultConfig`（gradle 侧参数），
+#    CLI 传不进去。于是本地 detekt 全绿、CI 才红（2026-09-16 实测，代价一次 CI 往返）。
+#    本函数用一份**只显式打开该规则**的临时配置跑一遍，把这条盲区补上。
+DETEKT_PROBE_CONFIG = """\
+# 由 .ai/tools/check_compile_smells.py --detekt-probe 生成：
+# 只显式打开圈复杂度规则（CLI 默认读不到 config/detekt/detekt.yml 里的该规则）。
+complexity:
+  CyclomaticComplexMethod:
+    active: true
+    allowedComplexity: 14
+    ignoreNestingFunctions: false
+"""
+
+# 本仓库的 detekt CLI（沙箱预置，不在仓库里，故找不到时优雅跳过）。
+DETEKT_CANDIDATES = [
+    Path("/workspace/detekt-cli-2.0.0-alpha.6/bin/detekt-cli"),
+    ROOT.parent / "detekt-cli-2.0.0-alpha.6" / "bin" / "detekt-cli",
+]
+
+
+def find_detekt() -> Path | None:
+    for candidate in DETEKT_CANDIDATES:
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def run_detekt_probe(scopes: list[str] | None = None) -> int:
+    """跑圈复杂度探针；返回发现数（-1 表示环境缺 detekt，跳过）。"""
+    detekt = find_detekt()
+    if detekt is None:
+        print("[skip] 未找到 detekt CLI，跳过探针"
+              "（CI 仍会判定；本地可用 ./gradlew detekt 代替）。")
+        return -1
+
+    with tempfile.NamedTemporaryFile("w", suffix=".yml", delete=False, encoding="utf-8") as fh:
+        fh.write(DETEKT_PROBE_CONFIG)
+        probe_config = Path(fh.name)
+
+    targets = scopes or ["app/src/main/java"]
+    findings = 0
+    try:
+        for target in targets:
+            full = ROOT / target
+            if not full.exists():
+                continue
+            out = subprocess.run(
+                [str(detekt), "--config", str(probe_config), "--input", str(full)],
+                cwd=ROOT, capture_output=True, text=True,
+            ).stdout
+            for line in out.splitlines():
+                if "CyclomaticComplexMethod]" in line and line.strip().startswith("e:"):
+                    print(f"  {line.strip()}")
+                    findings += 1
+    finally:
+        probe_config.unlink(missing_ok=True)
+    return findings
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("files", nargs="*", help="只扫指定的 .kt 文件")
     parser.add_argument("--changed", action="store_true", help="只扫工作区/最近提交改动的文件")
+    parser.add_argument(
+        "--detekt-probe", action="store_true",
+        help="只跑圈复杂度探针（复现 CI 的 CyclomaticComplexMethod 判定）",
+    )
     args = parser.parse_args()
+
+    if args.detekt_probe:
+        print("[info] 圈复杂度探针（detekt CLI 默认不报这条规则，见 8.6）")
+        findings = run_detekt_probe()
+        print()
+        if findings < 0:
+            return 0
+        if findings:
+            print(f"[FAIL] {findings} 处圈复杂度超限（>14）。"
+                  f"修法：把新增分支收进 holder / 抽成独立 composable（删注释无用）。")
+            return 1
+        print("[OK] 圈复杂度均在 14 以内。")
+        return 0
 
     if args.files:
         targets = [Path(f) for f in args.files]

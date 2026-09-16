@@ -65,8 +65,13 @@ private val CARD_PADDING = Spacing.lg
  * 上游把条目交互分成两态，本项目照此接线：
  * - **非选择态**：`combinedClickable(onClick = 打开/复制, onLongClick = 进入选择模式)`；
  * - **选择态**：`onLongClick = null` + `onClick = 勾选/取消`（长按不再有语义，避免与
- *   外层 [PressAndSwipeToDelete] 的「长按后左滑」抢手势）；
+ *   外层 [PressAndSwipeToDelete] 的手势抢事件）；
  * - 选中时卡片换成 `secondaryContainer` 底色 —— 不给视觉反馈的话，用户看不出哪几条被选中。
+ *
+ * ⚠️ 2026-09-16：**选择态现在还是「可左滑删除」的前置门槛**
+ * （[PressAndSwipeToDelete] 的 `selectable`）。所以上面这条"选中给视觉反馈"不再只是
+ * 多选的美观问题 —— 用户要**先看到哪条被选中**，才敢去滑它。
+ * 底色高亮因此是功能性的，不能省。
  *
  * @param onClick 点击条目（水波纹被裁进圆角内）。
  * @param onLongClick 长按条目；为 `null` 时不挂长按（选择态）。

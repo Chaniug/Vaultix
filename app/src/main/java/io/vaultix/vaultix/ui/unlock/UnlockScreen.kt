@@ -211,16 +211,7 @@ fun UnlockScreen(
                 )
                 return@Column
             }
-            VaultKindBadge(kind = vault.kind)
-            Spacer(Modifier.height(Spacing.md))
-            Text(text = vault.name, style = MaterialTheme.typography.titleLarge)
-            vault.account?.let {
-                Text(
-                    text = it,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+            VaultHeader(kind = vault.kind, name = vault.name, account = vault.account)
             // 让位量：PIN 模式把键盘压到下半屏（拇指区），主密码模式恒为 0dp
             // —— 它的表单一屏放得下，居中观感保持不变（见 [rememberPinTopSpacer]）。
             if (layout.topSpacer > 0.dp) {
@@ -274,16 +265,7 @@ private fun ViewLockedContent(
     error: UnlockUiError?,
     onAuthenticate: () -> Unit,
 ) {
-    VaultKindBadge(kind = kind)
-    Spacer(Modifier.height(Spacing.md))
-    Text(text = vaultName, style = MaterialTheme.typography.titleLarge)
-    account?.let {
-        Text(
-            text = it,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
+    VaultHeader(kind = kind, name = vaultName, account = account)
     Spacer(Modifier.height(Spacing.sm))
     Text(
         text = stringResource(R.string.unlock_view_locked_hint),
@@ -554,6 +536,31 @@ private fun UnlockInputSection(
 
 /** PIN 圆点直径。 */
 private val PIN_DOT_SIZE = Spacing.lg
+
+/**
+ * 解锁页头部：**库类型徽标 + 库名 + 账号**。
+ *
+ * 抽成独立 composable 有两个理由：
+ * 1. 主密码 / PIN / 查看层锁三条路径都要这一块，且**顺序与间距必须一致**；
+ * 2. `account?.let { … }` 会往 [UnlockScreen] 里加一个条件分支，而那个函数
+ *    已经贴着 detekt `CyclomaticComplexMethod` 上限（≤14，2026-09-16 实测超限）。
+ *
+ * @param kind 库类型（决定徽标图标，见 [VaultKindBadge]）。
+ * @param account 账号标签（Bitwarden = 邮箱；KDBX 为 null ⇒ 整行不画）。
+ */
+@Composable
+private fun VaultHeader(kind: VaultKind, name: String, account: String?) {
+    VaultKindBadge(kind = kind)
+    Spacer(Modifier.height(Spacing.md))
+    Text(text = name, style = MaterialTheme.typography.titleLarge)
+    if (account != null) {
+        Text(
+            text = account,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
 
 /**
  * 库类型徽标：**按库类型渲染官方图标**，取代此前的「取名称首字母」。

@@ -121,17 +121,12 @@ fun CardWalletScreen(
     // 轻量选中态（2026-09-16）：卡包页没有像密码页那样的批量操作，所以不需要一整套
     // 多选（复选框、批量工具条）。删除防误触只需要「先选中」这一个语义 ⇒ 用**单值**
     // 记录当前选中的那张卡，长按进入、删除或点击取消。
-    // ⚠️ 用 `rememberSaveable`：旋转屏幕后选中态不该丢（否则用户会以为"我明明选中了"）。
-    var selectedCardId by rememberSaveable { mutableStateOf<String?>(null) }
-    // 切库 / 搜索词变化后旧 id 可能已不在列表里 ⇒ 用 key 重置，避免"幽灵选中"。
-    LaunchedEffect(cards, query) {
-        if (selectedCardId != null && visibleCards.none { it.id == selectedCardId }) {
-            selectedCardId = null
-        }
-    }
+    // 抽成 holder 是为了让主函数的圈复杂度守住 detekt `CyclomaticComplexMethod`（≤14）。
+    val selection = rememberCardSelection(visibleCards)
+    val selectedCardId = selection.selectedId
     // 返回键优先取消选中（与搜索态同一优先级思路：先退一层"模式"，再退路由）。
-    // ⚠️ 必须在搜索态之后声明：搜索态自己的 BackHandler 要先消费（`enabled` 互斥）。
-    BackHandler(enabled = selectedCardId != null && !searchActive) { selectedCardId = null }
+    // ⚠️ `enabled` 与搜索态互斥：搜索态自己的 BackHandler 要先消费。
+    BackHandler(enabled = selectedCardId != null && !searchActive) { selection.clear() }
 
     Scaffold(
         // 沉浸式：顶栏浮在内容之上（状态栏内边距由顶栏自己处理，见 [VaultixExpressiveTopBar]）。
@@ -216,19 +211,10 @@ fun CardWalletScreen(
                                 CardWalletRow(
                                     item = item,
                                     isSelected = selectedCardId == item.id,
-                                    onClick = {
-                                        // 已选中时点击 = 取消选中（给用户一个不退出的"取消"路径）；
-                                        // 否则照旧打开详情。
-                                        if (selectedCardId != null) {
-                                            selectedCardId = null
-                                        } else {
-                                            onOpenItem(item)
-                                        }
-                                    },
-                                    onLongClick = {
-                                        selectedCardId =
-                                            if (selectedCardId == item.id) null else item.id
-                                    },
+                                    // 已选中时点击 = 取消选中（给用户一个不退出的"取消"路径）；
+                                    // 否则照旧打开详情。两个分支都收进 holder，主函数不新增条件。
+                                    onClick = { if (!selection.handleTap(item, onOpenItem)) Unit },
+                                    onLongClick = { selection.toggle(item.id) },
                                 )
                             }
                         }
@@ -284,6 +270,73 @@ private fun filterCards(cards: List<VaultItem>, query: String): List<VaultItem> 
         item.title.contains(keyword, ignoreCase = true) ||
             item.username.contains(keyword, ignoreCase = true) ||
             item.notes.contains(keyword, ignoreCase = true)
+    }
+}
+
+/**
+ * 卡包页的**轻量选中态**：记住"当前被选中的那一张卡"，作为左滑删除的前置门槛
+ * （2026-09-16 用户反馈「直接滑动就删除」误触太多）。
+ *
+ * ## 为什么是"单值"而不是一整套多选
+ *
+ * 密码 / 验证码页的多选是为了**批量操作**（底栏统计 + 批量删）。卡包页没有批量需求，
+ * 防误触只需要「先选中」这一个语义 ⇒ 用一个 `String?` 就够，不必引入复选框、
+ * 批量工具条、底栏统计那一整套（那会把 CardWalletScreen 的分支数推过
+ * detekt `CyclomaticComplexMethod`）。
+ *
+ * ## 三条规则
+ *
+ * 1. **长按切换**（点同一张 = 取消）；
+ * 2. **点其他卡 = 打开详情；已有选中时点任何卡 = 先取消选中**（给用户一个明确的
+ *    "退出选中态"路径，不必去按返回键）；
+ * 3. **选中项从列表里消失（切库 / 搜索过滤 / 已删除）自动清空** —— 否则会出现
+ *    "幽灵选中"：屏上没有任何卡片高亮，但状态里还记着一个 id。
+ *
+ * ⚠️ 用 `rememberSaveable`：旋转屏幕后选中态不该丢（否则用户会以为"我明明选中了"）。
+ */
+@Composable
+private fun rememberCardSelection(visibleCards: List<VaultItem>): CardSelectionState {
+    var selectedId by rememberSaveable { mutableStateOf<String?>(null) }
+    // 选中项不在当前可见列表里 ⇒ 清空（切库 / 搜索词变化 / 该条已被删除）。
+    LaunchedEffect(visibleCards, selectedId) {
+        if (selectedId != null && visibleCards.none { it.id == selectedId }) {
+            selectedId = null
+        }
+    }
+    return remember(selectedId) { CardSelectionState(selectedId) { selectedId = it } }
+}
+
+/**
+ * [rememberCardSelection] 的返回值：选中 id + 两个动作。
+ *
+ * ⚠️ 动作不是直接暴露 `setter`：调用点（[CardWalletRow] 的 onClick/onLongClick）
+ * 里写 `if (selected != null) … else …` 会把分支数堆进主 composable。
+ * 收成方法后，调用点各只剩**一次函数调用**。
+ */
+private class CardSelectionState(
+    val selectedId: String?,
+    private val update: (String?) -> Unit,
+) {
+    /** 长按：选中 / 取消选中。 */
+    fun toggle(id: String) {
+        update(if (selectedId == id) null else id)
+    }
+
+    /** 清除选中（返回键 / 点到别处）。 */
+    fun clear() = update(null)
+
+    /**
+     * 单击：已有选中 ⇒ 只取消选中（不打开详情）；无选中 ⇒ 打开详情。
+     *
+     * @return 是否已把这次点击消费掉（`true` = 用于取消选中）。
+     */
+    fun handleTap(item: VaultItem, onOpen: (VaultItem) -> Unit): Boolean {
+        if (selectedId == null) {
+            onOpen(item)
+            return false
+        }
+        clear()
+        return true
     }
 }
 
