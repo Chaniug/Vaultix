@@ -469,6 +469,121 @@ def run_detekt_probe(scopes: list[str] | None = None) -> int:
     return total
 
 
+def check_cross_file_private(files: list[Path]) -> dict[Path, list[str]]:
+    """文件级 `private` 顶层函数被**别的文件**调用 ⇒ 回来报（按被调方文件归组）。
+
+    ## 为什么需要这个
+
+    2026-09-16 CI 实录：
+
+        e: PinEnrollment.kt:91:32  Cannot access 'fun buildFullKey(...)': it is private in file.
+
+    Kotlin 顶层 `private` 的含义是**文件内可见**，不是"类内可见"。
+    于是 `VaultRepositoryImpl.kt` 里的 `private fun buildFullKey` 只有同文件能用，
+    `PinEnrollment.kt` / `LocalUnlockEnrollment.kt` 都调不动。
+
+    ⚠️ 这类错误**"本来就存在"**：它在 `HEAD~1` 上就编译不过，
+    只是被更早的报错盖住 —— CI 停在第一条错误上，看不到后面还有多少。
+    ⇒ 早发现的价值很大：它是纯文本可判的。
+
+    ## 判据（保守，宁可漏报）
+
+    只查**模块内**（同一 `src/main/java/.../<module>` 顶层目录）的文件之间的调用。
+    跨模块调用会因 `private` 而更早失败，且通常本来就要 `internal`/`public`，
+    本探针不掺和。调用判定用"名字 + 左括号"，并跳过 import / 注释行与声明行本身。
+    """
+    # 1) 收集 文件级 private 顶层 fun（排除 @Composable，那是 UI 惯用法）
+    owners: dict[str, tuple[Path, int]] = {}
+    for path in files:
+        # ⚠️ 跳过测试源码：测试常写 `Entry(...)` 这类**构造函数**调用，
+        #    与被测文件里的 `fun Entry.toXxx()` 扩展函数同名，判据会误伤。
+        if "/src/test/" in path.as_posix() or "/src/androidTest/" in path.as_posix():
+            continue
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        for i, line in enumerate(lines):
+            # 🔴 必须跳过**可选接收者**：`private fun Entry.toVaultItem()` 里的
+            #    `Entry` 是接收者类型、不是函数名。只写 `fun\s+(\w+)` 会把它当成
+            #    函数名 `Entry`，进而把别处的 `Entry(...)` 构造调用误判成"跨文件调用"
+            #    （2026-09-16 实测：一处扩展函数造成 103 处误报）。
+            m = re.match(
+                r"^private\s+(?:suspend\s+|inline\s+|operator\s+)*fun\s+"
+                r"(?:<[^>]*>\s*)?"
+                r"(?:[A-Za-z_][\w.]*(?:<[^<>]*>)?\??\s*\.\s*)?"
+                r"(\w+)",
+                line,
+            )
+            if not m:
+                continue
+            prev = lines[i - 1].strip() if i else ""
+            if prev.startswith("@Composable"):
+                continue
+            owners.setdefault(m.group(1), (path, i + 1))
+
+    if not owners:
+        return {}
+
+    # ⚠️ 只在名字**全仓库唯一**时才判：若多个文件各自定义了自己的同名私有函数
+    #    （实测：`sha256` 在 3 处、`maskCardNumber` / `decodeHex` 各 2 处，
+    #     每处都是各自独立的实现），那"某文件调用了这个名字"多半是在调
+    #     **它自己那一份**，纯文本无从分辨 ⇒ 一律跳过，宁可漏报。
+    #    这与 `check_import_packages` 的克制是同一种取向：
+    #    **启发式探针不许为了多抓而制造误报。**
+    ambiguous: set[str] = set()
+    for name in owners:
+        pattern = re.compile(
+            r"^\s*private\s+(?:suspend\s+|inline\s+|operator\s+)*fun\s+"
+            rf"(?:[A-Za-z_][\w.]*(?:<[^<>]*>)?\??\s*\.\s*)?{re.escape(name)}\b",
+            re.M,
+        )
+        hits = 0
+        for path in files:
+            if "/src/test/" in path.as_posix() or "/src/androidTest/" in path.as_posix():
+                continue
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            if pattern.search(text):
+                hits += 1
+        if hits > 1:
+            ambiguous.add(name)
+
+    # 2) 找跨文件调用
+    problems: dict[Path, list[str]] = {}
+    for name, (owner, owner_line) in owners.items():
+        if name in ambiguous:
+            continue
+        call = re.compile(rf"(?<![\w.]){re.escape(name)}\s*\(")
+        # 声明行本身要跳过（含接收者形态与各类修饰符）
+        decl = re.compile(
+            rf"^(?:private|internal|public|protected)?\s*(?:suspend\s+|inline\s+|"
+            rf"operator\s+)*fun\s+(?:[A-Za-z_][\w.]*(?:<[^<>]*>)?\??\s*\.\s*)?{re.escape(name)}\b"
+        )
+        for path in files:
+            if path == owner:
+                continue
+            if "/src/test/" in path.as_posix() or "/src/androidTest/" in path.as_posix():
+                continue
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            for i, line in enumerate(text.splitlines(), 1):
+                s = line.strip()
+                if s.startswith(("import ", "//", "*", "/*")) or decl.match(s):
+                    continue
+                if call.search(line):
+                    problems.setdefault(owner, []).append(
+                        f"文件级 `private fun {name}`（本文件第 {owner_line} 行）"
+                        f"被 {display(path)}:{i} 调用 —— 顶层 private 只在本文件可见，"
+                        f"别的文件调不动。要跨文件就改成 `internal`"
+                    )
+    return problems
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("files", nargs="*", help="只扫指定的 .kt 文件")
@@ -514,13 +629,22 @@ def main() -> int:
                 print(f"  {p}")
                 total += 1
 
+    # 跨文件 private 是**模块级**判据（要看别的文件怎么用），单独跑一遍。
+    # 只在全量扫描时跑：--changed 只看几个文件时语料不全，容易漏判。
+    if not targets or targets == iter_kt_files():
+        for owner, msgs in check_cross_file_private(targets).items():
+            print(f"\n{display(owner)}")
+            for p in msgs:
+                print(f"  {p}")
+                total += 1
+
     print()
     if total:
-        print(f"[FAIL] 共 {total} 处。这四类 detekt 都查不出、本地也编译不了，"
+        print(f"[FAIL] 共 {total} 处。这几类 detekt 都查不出、本地也编译不了，"
               f"只在 CI 的 compile 步骤炸 —— 现在改掉。")
         return 1
     print(f"[OK] 检查了 {len(targets)} 个文件：图标导入 / 顶层常量初始化顺序 / "
-          f"R.string 引用 / 重复声明 均未见异常。")
+          f"R.string 引用 / 重复声明 / 跨文件 private 均未见异常。")
     return 0
 
 

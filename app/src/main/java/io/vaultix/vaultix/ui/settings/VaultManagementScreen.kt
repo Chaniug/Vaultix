@@ -8,7 +8,6 @@
  */
 package io.vaultix.vaultix.ui.settings
 
-import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -82,9 +81,6 @@ fun VaultManagementScreen(
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val context = LocalContext.current
-    // BiometricPrompt 需要 Activity 宿主（`LocalContext` 在 Compose 里常是
-    // ContextWrapper 而非 Activity，直接传会抛 IllformedContextWrapper）。
-    val activity = context as? ComponentActivity
     val active by viewModel.activeVault.collectAsStateWithLifecycle()
     val default by viewModel.defaultVault.collectAsStateWithLifecycle()
     val switchable by viewModel.switchableVaults.collectAsStateWithLifecycle()
@@ -221,12 +217,18 @@ fun VaultManagementScreen(
             onPinSet = viewModel.pin::open,
             // 「改用 PIN」= 设置成功后顺带关掉该库的指纹（见 QuickUnlockManageDialog 的告诫）。
             onPinSetSwitchingFromBiometric = viewModel.pin::openSwitchingFromBiometric,
+            // PIN 的「关闭」与指纹的 onDisable 是两条独立链路（信封不同、清理逻辑不同），
+            // 所以必须各自传入口，不能复用 `viewModel::disableQuickUnlock`。
+            onPinDisable = viewModel.pin::disableVaultPin,
             onDismiss = { showQuickUnlockDialog = false },
         )
     }
     PinDialogHost(viewModel = viewModel)
-    // 指纹多库启用对话框（自己弹 BiometricPrompt，故需要 Activity 宿主）。
-    BiometricEnrollHost(viewModel = viewModel, activity = activity)
+    // 指纹多库启用对话框。⚠️ 不传 Activity：它自己在内部用
+    // `rememberFragmentActivity()` 解析 —— BiometricPrompt 要的是 `FragmentActivity`，
+    // 而 `ComponentActivity` 与 `FragmentActivity` 是**兄弟**（不是父子），
+    // 从这里传 ComponentActivity 会编译失败（2026-09-16 CI 实录）。
+    BiometricEnrollHost(viewModel = viewModel)
     // KDBX 主密码输入框：仅当用户勾选了 KDBX 库、且尚未校验通过时出现。
     val kdbxTarget = pendingKdbxVaultId
     if (kdbxTarget != null) {

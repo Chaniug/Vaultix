@@ -4,7 +4,6 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
-import androidx.activity.ComponentActivity
 import androidx.annotation.StringRes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -1592,8 +1591,18 @@ internal fun PinDialogHost(viewModel: SettingsViewModel) {
  * 两条流若混用，会出现"单库流程的 cipher 弹在了多库对话框上"这种错配。
  */
 @Composable
-internal fun BiometricEnrollHost(viewModel: SettingsViewModel, activity: ComponentActivity?) {
+internal fun BiometricEnrollHost(viewModel: SettingsViewModel) {
     val controller = viewModel.biometric
+    // ⚠️ **必须自己解析成 `FragmentActivity`**，不能从调用方传 `ComponentActivity` 进来：
+    //    `BiometricPrompter` 的构造参数是 `FragmentActivity`（它内部要用
+    //    androidx.biometric 的 `BiometricPrompt(activity, ...)`）。
+    //    而 `ComponentActivity` **不是** `FragmentActivity` 的父类 —— 二者是兄弟，
+    //    传 ComponentActivity 会直接编译失败：
+    //      e: SettingsScreen.kt:1612:27 Argument type mismatch:
+    //         actual type is 'ComponentActivity', but 'FragmentActivity' was expected.
+    //    本仓库既有的 `QuickUnlockEnrollEffect` 也是这么解析的（用 `rememberFragmentActivity()`），
+    //    保持一致。
+    val activity = rememberFragmentActivity()
     val state = controller.state.collectAsStateWithLifecycle().value
     val pendingCipher = controller.pendingCipher.collectAsStateWithLifecycle().value
     val title = stringResource(R.string.quick_unlock_biometric_title)
@@ -1605,6 +1614,8 @@ internal fun BiometricEnrollHost(viewModel: SettingsViewModel, activity: Compone
     LaunchedEffect(pendingCipher) {
         val cipher = pendingCipher ?: return@LaunchedEffect
         val host = activity ?: run {
+            // 宿主不是 FragmentActivity ⇒ 弹不了指纹，当作认证失败处理：
+            // 控制器会擦掉备料明文并如实报"无法完成认证"，不留半启用状态。
             controller.onAuthenticationFailed()
             return@LaunchedEffect
         }
