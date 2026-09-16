@@ -15,6 +15,8 @@
  */
 package io.vaultix.data.bitwarden.auth
 
+import io.vaultix.common.logging.VaultixLog
+import io.vaultix.common.logging.redact
 import io.vaultix.crypto.SecureBytes
 import io.vaultix.crypto.SymmetricCryptoKey
 import io.vaultix.crypto.VaultixCrypto
@@ -37,6 +39,14 @@ import java.net.URL
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
+
+/**
+ * 认证链路的日志 tag。
+ *
+ * 单独一个 tag 是**刻意**的：排查「登录已失效」（`.ai/issues/07` #8）时要能
+ * `adb logcat -s VaultixAuth` 只看这一条链路，不被其它日志淹没。
+ */
+private const val TAG = "VaultixAuth"
 
 /**
  * Bitwarden 认证编排。
@@ -88,7 +98,7 @@ class BitwardenAuthRepository @Inject constructor(
             deviceName = deviceName,
             twoFactor = null,
         )
-    }
+    }.observed("login", server)
 
     /**
      * 两步验证登录：密码授权收到 400 `two_factor_required` 后，以相同 grant 追加
@@ -115,7 +125,7 @@ class BitwardenAuthRepository @Inject constructor(
             deviceName = deviceName,
             twoFactor = TwoFactorSubmit(provider = provider, code = code),
         )
-    }
+    }.observed("login2fa", server)
 
     /**
      * 是否已登录过这一台服务器（有受保护的账号对称密钥；没密钥就谈不上本地解锁）。
@@ -286,20 +296,29 @@ class BitwardenAuthRepository @Inject constructor(
             )
             persist(server, token.accessToken, token.refreshToken, token.expiresIn)
             lastRefreshFailure.remove(server)
+            VaultixLog.d(TAG) { "refresh ok  server=${redact(server)}" }
             RefreshOutcome.Success(token.accessToken)
         } catch (error: HttpException) {
             val failure = refreshFailureKind(error.code())
             if (failure == RefreshFailure.Invalid) {
                 // 服务端明确拒绝 refresh token（invalid_grant / 已吊销）→ 必须重新登录
                 lastRefreshFailure[server] = RefreshFailure.Invalid
+                // ★ 这条日志就是 #8 第三根因的分界线：只有服务端**明确拒绝** refresh token
+                //  才算真失效（该引导重登）；其余一律 Transient（保留登录态）。
+                //   以前没有日志时，"全网抖动被当成凭据失效"完全看不出来。
+                VaultixLog.w(TAG) { "refresh invalid  server=${redact(server)}  http=${error.code()}" }
                 RefreshOutcome.Invalid
             } else {
                 // 403（WAF/反代拦截）/429/5xx：瞬时故障，保留登录态与凭据
                 lastRefreshFailure[server] = RefreshFailure.Transient
+                // 403(WAF/反代) / 429 / 5xx —— **不是**凭据问题，记下 http 码才分得清。
+                VaultixLog.w(TAG) { "refresh transient  server=${redact(server)}  http=${error.code()}" }
                 RefreshOutcome.Transient("刷新令牌时服务器返回 ${error.code()}")
             }
         } catch (error: Exception) {
             lastRefreshFailure[server] = RefreshFailure.Transient
+            // 只记异常**类型**：message 可能带响应体（见 observed 的 KDoc）。
+            VaultixLog.w(TAG) { "refresh error  server=${redact(server)}  kind=${error::class.simpleName}" }
             RefreshOutcome.Transient(error.message ?: "刷新令牌时网络异常")
         }
     }
@@ -500,3 +519,26 @@ internal fun parseTwoFactorProviders(errorBody: String?): List<Int>? {
         ?: providersFrom(root["twoFactorProviders"])
     return providers
 }
+
+/**
+ * 认证结果的统一打点（2026-09-16 新增）。
+ *
+ * 排查「登录已失效」（`.ai/issues/07` #8）时要回答的**第一个问题**是：
+ * 这次失败属于哪一类 —— 凭据真的坏了（该重登），还是网络/服务端抖动（该保留登录态）？
+ * 没有日志时这个问题只能靠反复复现去猜（#8 当时就是这么定位的）。
+ *
+ * ## ⚠️ 只记**异常类型**，绝不记 message 或异常栈
+ *
+ * `retrofit2.HttpException.message` 形如 `HTTP 400 Bad Request`，**看似无害**；
+ * 但其它异常的 message 完全可能携带服务端响应体，而响应体可能有 token 或账号信息。
+ * ⇒ 这里**只取 `error::class.simpleName`**，并且**不把 throwable 传给日志**
+ *   （传了就会打印 message + 栈）。想要栈，必须先逐类审计 message 是否安全 —— 那是另一件事。
+ *
+ * 同理**不记 email**（PII），server 经 [redact] 脱敏（只保留首尾各 2 字符）。
+ */
+private fun <T> Result<T>.observed(action: String, server: String): Result<T> =
+    onSuccess {
+        VaultixLog.d(TAG) { "$action ok  server=${redact(server)}" }
+    }.onFailure { error ->
+        VaultixLog.w(TAG) { "$action failed  server=${redact(server)}  kind=${error::class.simpleName}" }
+    }

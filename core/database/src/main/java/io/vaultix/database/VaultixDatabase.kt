@@ -12,6 +12,7 @@ import androidx.room.Database
 import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import io.vaultix.database.dao.AtomicWriteDao
 import io.vaultix.database.dao.CipherDao
 import io.vaultix.database.dao.FolderDao
 import io.vaultix.database.dao.PendingOpDao
@@ -44,6 +45,13 @@ abstract class VaultixDatabase : RoomDatabase() {
     abstract fun cipherDao(): CipherDao
     abstract fun folderDao(): FolderDao
     abstract fun pendingOpDao(): PendingOpDao
+
+    /**
+     * 「本地行 + 入队」的**原子写**（2026-09-16 新增）。
+     * 见 [io.vaultix.database.dao.AtomicWriteDao] 的 KDoc：它防的是
+     * 「行落库了但队列没记上」这个中间态，那会导致条目被误删或被旧版覆盖。
+     */
+    abstract fun atomicWriteDao(): AtomicWriteDao
 
     companion object {
         /** v1→v2：vaults 增加 account 列（Bitwarden 账号邮箱，用于库列表展示）。 */

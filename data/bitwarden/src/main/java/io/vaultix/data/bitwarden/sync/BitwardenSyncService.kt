@@ -15,6 +15,7 @@
  */
 package io.vaultix.data.bitwarden.sync
 
+import io.vaultix.common.logging.VaultixLog
 import io.vaultix.data.bitwarden.api.BitwardenVaultApi
 import io.vaultix.data.bitwarden.auth.BitwardenAuthRepository
 import io.vaultix.data.bitwarden.di.BitwardenApiFactory
@@ -24,6 +25,7 @@ import io.vaultix.data.bitwarden.model.CipherResponse
 import io.vaultix.data.bitwarden.model.FolderDto
 import io.vaultix.data.bitwarden.model.SyncResponse
 import io.vaultix.data.bitwarden.model.toStoredCipherDto
+import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.database.dao.CipherDao
 import io.vaultix.database.dao.FolderDao
 import io.vaultix.database.dao.PendingOpDao
@@ -31,11 +33,26 @@ import io.vaultix.database.dao.VaultDao
 import io.vaultix.database.entity.CipherEntity
 import io.vaultix.database.entity.FolderEntity
 import io.vaultix.database.entity.PendingOpEntity
+import kotlinx.coroutines.flow.first
 import kotlinx.serialization.json.Json
 import retrofit2.HttpException
 import java.io.IOException
 import javax.inject.Inject
 import javax.inject.Singleton
+
+/**
+ * 同步链路的日志 tag：`adb logcat -s VaultixSync` 可单独看一次同步的全过程。
+ *
+ * ⚠️ 本链路只记**数量与结果类别**，不记条目 id / 明文 / 密文（见 `VaultixLog` 的铁律）。
+ */
+private const val TAG = "VaultixSync"
+
+/**
+ * 推送连续失败多少次后开始报警（2026-09-16 新增加）。
+ *
+ * ⚠️ 只用于**报警**，不用来自动淘汰 —— 见 [BitwardenSyncService.flushPending] 末尾的说明。
+ */
+private const val STUCK_RETRY_THRESHOLD = 10
 
 /**
  * Bitwarden 同步执行（M1）。
@@ -57,6 +74,8 @@ class BitwardenSyncService @Inject constructor(
     private val pendingOpDao: PendingOpDao,
     private val authRepository: BitwardenAuthRepository,
     private val json: Json,
+    /** 存「待确认删除」的指纹（见 [VaultixPreferences.pendingPruneFingerprint]）。 */
+    private val preferences: VaultixPreferences,
 ) {
 
     suspend fun sync(vaultId: String, server: String, force: Boolean = false): SyncOutcome =
@@ -65,7 +84,20 @@ class BitwardenSyncService @Inject constructor(
 
     private suspend fun executeSync(vaultId: String, server: String, force: Boolean): SyncOutcome {
         // 1) 先推送本地改动：新建/修改不应被整库下载挡住（Bastion 事故结论之一）
-        flushPending(vaultId, server)
+        //
+        // ⚠️ 失败**不能忽略、也不能拦路**（2026-09-16 隐患排查 ①，第一次改就踩了半边）：
+        //    - 不能忽略：若推送失败而结果仍报成功/Skipped，UI 会说「刚刚同步成功」、
+        //      清零 retryAttempt、不安排重试，而用户的改动还躺在队列里（漏 + 误报）；
+        //    - 也不能"失败就不拉取"：那会让**一条**持久失败的条目阻塞**整个库**的同步
+        //      （而队列没有重试上限，那条毒丸永远修不掉 ⇒ 库永久卡死）。
+        //    ⇒ 正确做法：拉取照常进行（本地未推送的改动由 `pendingIds` 保护），
+        //      但**最终结论不算成功**，如实报成可重试。
+        val flushFailure = flushPending(vaultId, server).exceptionOrNull()
+        if (flushFailure != null) {
+            VaultixLog.w(TAG) {
+                "flushPending 部分失败：${flushFailure::class.simpleName}（拉取继续，本地改动受 pendingIds 保护）"
+            }
+        }
 
         val localRevision = vaultDao.get(vaultId)?.revisionDate
         val remoteRevision = fetchRevision(server)
@@ -74,14 +106,29 @@ class BitwardenSyncService @Inject constructor(
 
         // 2) 预检：Vaultwarden 会忽略 sinceRevisionDate 增量游标，必须显式比对
         if (!force && localRevision != null && remoteMatchesLocal) {
+            // ⚠️ 推送有失败时**不能**报 `Skipped`：上层把 Skipped 当成功处理
+            //    （`BitwardenSyncOrchestrator` 的 Skipped 分支会记 `lastSuccessAt`、
+            //    清零 `retryAttempt`、不排重试），于是"改动没上云"被显示成"刚刚同步成功"。
+            if (flushFailure != null) {
+                return SyncOutcome.RetryableError(
+                    "本地改动未能推送（${flushFailure::class.simpleName}），稍后将重试",
+                )
+            }
+            VaultixLog.d(TAG) { "sync skipped: revision 未变（$localRevision）" }
             return SyncOutcome.Skipped
         }
 
         val response = apiFactory.vault(server).sync()
+        VaultixLog.d(TAG) { "sync pulled: cipher ${response.ciphers.size} / folder ${response.folders.size}" }
 
         // 3) 安全校验：防止服务端故障返回空数据而清空本地
         val protection = checkProtection(vaultId, localRevision, response)
-        if (protection != null) return protection
+        if (protection != null) {
+            // ★ 阻断是**保护性事件**，必须留痕：用户报"同步没动静"时，
+            //   这条能立刻分辨「被空库保护挡了」还是「网络问题」。
+            VaultixLog.w(TAG) { "sync BLOCKED: $protection" }
+            return protection
+        }
 
         // 4) 落库 + 清理服务端已移除的本地行
         persistCiphers(vaultId, response.ciphers)
@@ -89,6 +136,14 @@ class BitwardenSyncService @Inject constructor(
         pruneRemovedRows(vaultId, response)
         vaultDao.updateRevision(vaultId, remoteRevision?.toString() ?: localRevision)
 
+        // 拉取本身成功；但若推送仍有失败，**不能报 Success** —— 那等于告诉用户「已同步」，
+        // 而他的改动还没上云（这正是隐患排查 ① 要消灭的那句谎话）。
+        if (flushFailure != null) {
+            return SyncOutcome.RetryableError(
+                "已拉取服务端变更，但有改动未能推送（${flushFailure::class.simpleName}），稍后将重试",
+            )
+        }
+        VaultixLog.d(TAG) { "sync ok: cipher ${response.ciphers.size} / folder ${response.folders.size}" }
         return SyncOutcome.Success(response.ciphers.size, response.folders.size)
     }
 
@@ -136,6 +191,20 @@ class BitwardenSyncService @Inject constructor(
                         firstError = firstError ?: error
                     }
                 }
+        }
+        // ⚠️ 隐患 ③（2026-09-16 排查）：`retryCount` 此前**只写不读** —— 一条持续失败的
+        //    条目会永远留在队列里，让 `flushPending` 永远返回 failure，用户只看到
+        //    「永远有待推送」却不知卡在哪条、卡了多久。
+        //
+        // ⚠️ 这里**只报警、不改行为**，是刻意的：自动淘汰该 op 会连带影响本地行
+        //    （op 一旦离开队列，该行就不在 `pendingIds` 里 ⇒ 会被 `pruneRemovedRows`
+        //    删掉、或被服务端旧版覆盖），那比"卡住"更坏。
+        //    真要淘汰，得先加 `failed` 标记位（需数据库迁移）并明确 UI 怎么呈现，另行评估。
+        val stuck = pendingOpDao.listByVault(vaultId).count { it.retryCount >= STUCK_RETRY_THRESHOLD }
+        if (stuck > 0) {
+            VaultixLog.w(TAG) {
+                "有 $stuck 条改动连续失败 $STUCK_RETRY_THRESHOLD 次以上仍未推送成功（保留在队列，未丢弃）"
+            }
         }
         return firstError?.let { Result.failure(it) } ?: Result.success(Unit)
     }
@@ -202,7 +271,78 @@ class BitwardenSyncService @Inject constructor(
                     "为保护数据已暂停同步，请确认后重试。",
             )
         }
-        return null
+
+        return checkDeleteConfirmation(vaultId, localCount, response)
+    }
+
+    /**
+     * 删除前确认（2026-09-16 新增）：补上 [EmptyVaultProtection.hasSignificantDataLoss]
+     * 与 [pruneRemovedRows] 之间那条缝。
+     *
+     * ## 缝在哪
+     *
+     * 骤减检查比的是「服务端总数 vs 本地总数」，阈值 50%。**服务端若只返回 60%，
+     * 检查放行，而那 40% 的本地行会被 prune 直接删掉**；`pendingIds` 在这里帮不上忙
+     * —— 它只保护「有本地未推送改动」的条目，保护不了「已同步过、用户从未删过」的。
+     *
+     * ## 做法：两次一致才删
+     *
+     * 先算「本次要删多少」，可疑就**不删**，只把这一批的指纹存下来并阻断；
+     * 下次同步若仍是**同一批**，才认为服务端确实如此、放行。
+     *
+     * 这能把服务端侧**表现完全相同**的两种情况分开：
+     * - 用户在官方网页端真的删了 ⇒ 下次同步仍是同一批 ⇒ 放行；
+     * - 服务端瞬时故障返回不完整数据 ⇒ 下次就恢复了 ⇒ 不会两次相同。
+     *
+     * ⚠️ 指纹**必须持久化**：只放内存的话，进程重启后会重新判为"首次发现"，
+     * 用户怎么同步都删不掉那批行（卡死）。
+     */
+    private suspend fun checkDeleteConfirmation(
+        vaultId: String,
+        localCount: Int,
+        response: SyncResponse,
+    ): SyncOutcome? {
+        val removable = computeRemovableCipherIds(vaultId, response)
+        if (!EmptyVaultProtection.requiresDeleteConfirmation(removable.size, localCount)) {
+            // 没有可疑删除 ⇒ 清掉可能残留的旧指纹，否则下次会被误判成"已确认过"。
+            if (preferences.pendingPruneFingerprint(vaultId).first() != null) {
+                preferences.setPendingPruneFingerprint(vaultId, null)
+            }
+            return null
+        }
+        val fingerprint = removable.sorted().hashCode()
+        if (preferences.pendingPruneFingerprint(vaultId).first() == fingerprint) {
+            VaultixLog.w(TAG) {
+                "delete-confirm 通过：${removable.size} 条（连续两次一致，判定为真实删除）"
+            }
+            return null
+        }
+        preferences.setPendingPruneFingerprint(vaultId, fingerprint)
+        VaultixLog.w(TAG) {
+            "sync BLOCKED(delete-confirm): 将删除 ${removable.size} / 本地 $localCount 条，需再同步一次确认"
+        }
+        return SyncOutcome.Blocked(
+            "本次同步将删除 ${removable.size} 条本地记录（本地共 $localCount 条）。" +
+                "为排除服务器故障，已暂停删除；请再同步一次以确认。",
+        )
+    }
+
+    /**
+     * 本次同步**将要删除**的本地 cipher id（已排除有待推送改动的）。
+     *
+     * ⚠️ 抽出来是为了让 [checkDeleteConfirmation]（删除**前**判定）与
+     * [pruneRemovedRows]（真正执行）用**同一份**计算 —— 两处各算一遍迟早漂移，
+     * 而漂移的后果是「判定放行了一批、实际删的却是另一批」，正是要防的事。
+     */
+    private suspend fun computeRemovableCipherIds(
+        vaultId: String,
+        response: SyncResponse,
+    ): List<String> {
+        val pendingIds = pendingOpDao.listByVault(vaultId).map { op -> op.cipherId }.toSet()
+        val serverIds = response.ciphers.map { it.id }.toSet()
+        return cipherDao.listByVault(vaultId)
+            .map { row -> row.id }
+            .filter { id -> id !in serverIds && id !in pendingIds }
     }
 
     /**
@@ -227,6 +367,12 @@ class BitwardenSyncService @Inject constructor(
             .map { dto -> dto.toEntity(vaultId) }
         if (incoming.isEmpty()) return
         cipherDao.upsertAll(incoming)
+        // 「跳过几条」比「落库几条」更能说明问题：跳过 > 0 意味着本地有未推送改动
+        // 被 #91 的保护挡住了覆盖 —— 这正是用户改了东西又"变回去"的反面证据。
+        VaultixLog.d(TAG) {
+            "persist cipher: 落库 ${incoming.size} 条，" +
+                "跳过 ${ciphers.size - incoming.size} 条（本地待推送，受 #91 保护）"
+        }
     }
 
     private suspend fun persistFolders(vaultId: String, folders: List<FolderDto>) {
@@ -242,19 +388,25 @@ class BitwardenSyncService @Inject constructor(
      *   （Bastion deleteNotIn 同款语义）。
      */
     private suspend fun pruneRemovedRows(vaultId: String, response: SyncResponse) {
-        val pendingIds = pendingOpDao.listByVault(vaultId).map { op -> op.cipherId }.toSet()
-
-        val serverCipherIds = response.ciphers.map { it.id }.toSet()
-        val removedCiphers = cipherDao.listByVault(vaultId)
-            .map { row -> row.id }
-            .filter { id -> id !in serverCipherIds && id !in pendingIds }
-        if (removedCiphers.isNotEmpty()) cipherDao.deleteByIds(removedCiphers)
+        val removedCiphers = computeRemovableCipherIds(vaultId, response)
+        if (removedCiphers.isNotEmpty()) {
+            // ★ 删除本地行是**不可逆**动作，必须留痕（在此之前这里一条日志都没有）。
+            //   排查「条目凭空消失」（#92）时，第一个要回答的问题就是
+            //   **「到底删了几条」** —— 只记数量，不记 id。
+            VaultixLog.w(TAG) {
+                "prune cipher: 删除本地 ${removedCiphers.size} 条（服务端 ${response.ciphers.size} 条）"
+            }
+            cipherDao.deleteByIds(removedCiphers)
+        }
 
         val serverFolderIds = response.folders.map { it.id }.toSet()
         val removedFolders = folderDao.listByVault(vaultId)
             .map { row -> row.id }
             .filter { id -> id !in serverFolderIds }
-        if (removedFolders.isNotEmpty()) folderDao.deleteByIds(removedFolders)
+        if (removedFolders.isNotEmpty()) {
+            VaultixLog.w(TAG) { "prune folder: 删除本地 ${removedFolders.size} 条（服务端 ${serverFolderIds.size} 条）" }
+            folderDao.deleteByIds(removedFolders)
+        }
     }
 
     /** 服务端确定性失败（目标不存在/不可执行）；408/429 属可重试不在此列。 */

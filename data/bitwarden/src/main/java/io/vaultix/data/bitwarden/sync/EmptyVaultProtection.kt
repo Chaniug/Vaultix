@@ -74,5 +74,44 @@ object EmptyVaultProtection {
         return (localCount - serverCount).toFloat() / localCount > threshold
     }
 
+    /**
+     * 删除本地行之前，是否**需要用户再确认一次**（2026-09-16 新增）。
+     *
+     * ## 它补的是哪条缝
+     *
+     * [hasSignificantDataLoss] 比的是「服务端总数 vs 本地总数」，阈值 50%。
+     * 于是存在一个空档：**服务端因故障只返回 60%，不触发阻断（0.4 不 > 0.5），
+     * 而那 40% 的本地行会被 `pruneRemovedRows` 直接删掉**。
+     * `pendingIds` 在这里帮不上忙 —— 它只保护「有本地未推送改动」的条目，
+     * 保护不了「已经同步过、用户从未删过」的。
+     *
+     * 现实触发场景：共享库/组织权限被改（条目从 `/sync` 消失）、代理截断响应、
+     * 服务端部分故障。
+     *
+     * ## 判据为什么用「数量/比例」而不是「和上次比」
+     *
+     * 用户**确实**会在官方网页端删条目 —— 那种删除本地没有 pending op，
+     * 表现与「服务端故障」**完全相同**，服务端侧无法区分。
+     * ⇒ 这里不去猜「哪种」，而是只回答一个更弱、但可从数据判断的问题：
+     *   **「这批删除的量，像不像顺手删几条？」** 不像就要求确认。
+     *
+     * ⚠️ 门槛刻意设得**偏高**：日常删几条不该被打扰（否则每次网页端操作都要多同步一次，
+     * 用户会烦），只在「批量且占比大」时才拦。
+     *
+     * @param toDeleteCount 本次将要删除的本地行数（已排除有待推送改动的）
+     * @param localCount 删除前本地总行数
+     */
+    fun requiresDeleteConfirmation(toDeleteCount: Int, localCount: Int): Boolean {
+        if (toDeleteCount <= 0) return false
+        // ① 绝对量：一次删 20 条以上，不太像"顺手删几条"
+        if (toDeleteCount >= DELETE_CONFIRM_ABSOLUTE) return true
+        // ② 比例：删掉本地一半以上 —— 这一条同时保护小库
+        //    （本地只剩 4 条而删 3 条，绝对量达不到 20，但显然可疑）
+        return localCount > 0 && toDeleteCount * 2 >= localCount
+    }
+
+    /** 触发"需要确认"的绝对删除条数。 */
+    private const val DELETE_CONFIRM_ABSOLUTE = 20
+
     private const val DEFAULT_LOSS_THRESHOLD = 0.5f
 }

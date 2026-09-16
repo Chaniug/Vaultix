@@ -7,6 +7,7 @@ import io.vaultix.data.bitwarden.model.CipherDto
 import io.vaultix.data.bitwarden.model.toStoredCipherDto
 import io.vaultix.data.bitwarden.sync.BitwardenSyncService
 import io.vaultix.data.kdbx.Kdbx
+import io.vaultix.database.dao.AtomicWriteDao
 import io.vaultix.database.dao.CipherDao
 import io.vaultix.database.dao.PendingOpDao
 import io.vaultix.database.dao.VaultDao
@@ -52,6 +53,14 @@ class ItemRepositoryImpl @Inject constructor(
     private val vaultDao: VaultDao,
     private val cipherDao: CipherDao,
     private val pendingOpDao: PendingOpDao,
+    /**
+     * 「本地行 + 入队」的**原子写**（2026-09-16 新增）。
+     *
+     * ⚠️ 凡是要同时改这两处的写路径，**必须**走它 —— 分开写一旦第二次失败，
+     * 会留下「行在、队列不在」的中间态：该行不在 `pendingIds` 里，
+     * 随后会被 `pruneRemovedRows` 当成"服务端已删"删掉（或按旧版覆盖）。
+     */
+    private val atomicWriteDao: AtomicWriteDao,
     private val sessions: VaultSessionManager,
     private val mapper: CipherMapper,
     private val json: Json,
@@ -156,24 +165,22 @@ class ItemRepositoryImpl @Inject constructor(
             val request = mapper.toRequest(item.copy(id = localId), key)
             val dto = request.toStoredCipherDto(id = localId, revisionDate = "")
 
-            // 1) 密文行落库：列表立即可见（离线也安全）
-            cipherDao.upsertAll(
-                listOf(
-                    CipherEntity(
-                        id = localId,
-                        vaultId = vaultId,
-                        type = request.type,
-                        encryptedPayload = json.encodeToString(dto),
-                        revisionDate = "",
-                        deletedDate = null,
-                        folderId = null,
-                        favorite = request.favorite,
-                    ),
+            // ★ 落库 + 入队必须**原子**（见 AtomicWriteDao 的 KDoc）：
+            //   分开写时若第二次失败，会留下「行在、队列不在」的中间态，
+            //   该行随后会被 pruneRemovedRows 当成"服务端已删"而删掉。
+            //   行落库让列表立即可见（离线也安全）；队列是推送凭据。
+            atomicWriteDao.upsertCipherAndEnqueue(
+                row = CipherEntity(
+                    id = localId,
+                    vaultId = vaultId,
+                    type = request.type,
+                    encryptedPayload = json.encodeToString(dto),
+                    revisionDate = "",
+                    deletedDate = null,
+                    folderId = null,
+                    favorite = request.favorite,
                 ),
-            )
-            // 2) 入 dirty 队列：sync / flush 时推送
-            pendingOpDao.enqueue(
-                PendingOpEntity(
+                op = PendingOpEntity(
                     vaultId = vaultId,
                     cipherId = localId,
                     op = OP_CREATE,
@@ -207,19 +214,18 @@ class ItemRepositoryImpl @Inject constructor(
             val request = mapper.toUpdateRequest(item, stored, key)
             val dto = request.toStoredCipherDto(id = existing.id, revisionDate = existing.revisionDate)
 
-            // 本地行同样按表单意图落库（此前 favorite 写的是 existing.favorite，同样是回退）
-            cipherDao.upsertAll(
-                listOf(
-                    existing.copy(
-                        type = request.type,
-                        encryptedPayload = json.encodeToString(dto),
-                        favorite = item.favorite,
-                        folderId = item.folderId,
-                    ),
+            // ★ 原子写（同 CREATE）。UPDATE 尤其要紧：若只写了行却漏了队列，
+            //   该行不在 `pendingIds` 里，下次同步会拿服务端旧版本**覆盖**这次编辑
+            //   —— 用户会看到"改完又变回去了"。
+            //   本地行同样按表单意图落库（此前 favorite 写的是 existing.favorite，同样是回退）。
+            atomicWriteDao.upsertCipherAndEnqueue(
+                row = existing.copy(
+                    type = request.type,
+                    encryptedPayload = json.encodeToString(dto),
+                    favorite = item.favorite,
+                    folderId = item.folderId,
                 ),
-            )
-            pendingOpDao.enqueue(
-                PendingOpEntity(
+                op = PendingOpEntity(
                     vaultId = vaultId,
                     cipherId = existing.id,
                     op = OP_UPDATE,
@@ -236,16 +242,12 @@ class ItemRepositoryImpl @Inject constructor(
             val existing = cipherDao.get(itemId) ?: error("条目不存在：$itemId")
             require(existing.vaultId == vaultId) { "条目不属于该库：$itemId" }
 
-            // 本地立即标记删除：列表查询（deletedDate IS NULL）随之隐藏
-            cipherDao.upsertAll(
-                listOf(
-                    existing.copy(
-                        deletedDate = Instant.now().toString(),
-                    ),
-                ),
-            )
-            pendingOpDao.enqueue(
-                PendingOpEntity(
+            // ★ 原子写（同 CREATE/UPDATE）。软删除若只标了本地行却没入队，
+            //   该行会被服务端版本**复活**（删除静默失效）。
+            //   本地立即标记删除：列表查询（deletedDate IS NULL）随之隐藏。
+            atomicWriteDao.upsertCipherAndEnqueue(
+                row = existing.copy(deletedDate = Instant.now().toString()),
+                op = PendingOpEntity(
                     vaultId = vaultId,
                     cipherId = itemId,
                     op = OP_SOFT_DELETE,

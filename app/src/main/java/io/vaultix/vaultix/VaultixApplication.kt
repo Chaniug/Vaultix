@@ -1,8 +1,11 @@
 package io.vaultix.vaultix
 
 import android.app.Application
+import android.util.Log
 import androidx.lifecycle.ProcessLifecycleOwner
 import dagger.hilt.android.HiltAndroidApp
+import io.vaultix.common.logging.LogLevel
+import io.vaultix.common.logging.VaultixLog
 import io.vaultix.vaultix.security.AutoLockController
 import io.vaultix.vaultix.security.VaultLockManager
 import javax.inject.Inject
@@ -49,6 +52,16 @@ class VaultixApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // 诊断日志装配（2026-09-16）：**只有 DEBUG 构建才开**。
+        // release 下 enabled=false ⇒ 门面在拼字符串之前就返回，零开销、也绝不外泄异常栈。
+        // ⚠️ 日志内容有铁律（禁记密码/密钥/token/明文），见 VaultixLog 的 KDoc。
+        VaultixLog.install(enabled = BuildConfig.DEBUG) { tag, level, message, throwable ->
+            when (level) {
+                LogLevel.DEBUG -> Log.d(tag, message, throwable)
+                LogLevel.WARN -> Log.w(tag, message, throwable)
+                LogLevel.ERROR -> Log.e(tag, message, throwable)
+            }
+        }
         // 自动锁定：进程前台/后台事件（Docs/10 §4）
         ProcessLifecycleOwner.get().lifecycle.addObserver(autoLockController)
         // 进程创建：按档位决定是否立即上锁（含 autofill 豁免）。

@@ -15,6 +15,7 @@ import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import io.vaultix.database.VaultixDatabase
+import io.vaultix.database.dao.AtomicWriteDao
 import io.vaultix.database.dao.CipherDao
 import io.vaultix.database.dao.FolderDao
 import io.vaultix.database.dao.PendingOpDao
@@ -36,4 +37,7 @@ object DatabaseModule {
     @Provides fun provideCipherDao(db: VaultixDatabase): CipherDao = db.cipherDao()
     @Provides fun provideFolderDao(db: VaultixDatabase): FolderDao = db.folderDao()
     @Provides fun providePendingOpDao(db: VaultixDatabase): PendingOpDao = db.pendingOpDao()
+
+    /** 「本地行 + 入队」的**原子写** DAO（2026-09-16 新增，见 [AtomicWriteDao] 的 KDoc）。 */
+    @Provides fun provideAtomicWriteDao(db: VaultixDatabase): AtomicWriteDao = db.atomicWriteDao()
 }
