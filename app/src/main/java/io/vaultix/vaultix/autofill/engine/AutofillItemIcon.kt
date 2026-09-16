@@ -40,11 +40,14 @@ import kotlin.math.roundToInt
 /**
  * 面板里的图标直径（dp）——与 `autofill_dataset_item.xml` 的 ImageView 尺寸对齐。
  *
- * 2026-09-13：ImageView 由 24dp 提到 **34dp**（外层还有 40dp 的圆形 tonal 容器，
- * 位图留出一圈内边距才是 M3 的 icon container 观感），因此这里同步上调 ——
- * 位图小于显示尺寸会上采样发虚，站点图标尤其明显。
+ * ⚠️ **两处必须同步改**：位图小于显示尺寸会上采样发虚（站点图标尤其明显）。
+ *
+ * 2026-09-13：随布局由 24dp 提到 34dp（当时为对齐 M3 list item）。
+ * 2026-09-16：随布局回落至 **26dp** —— 系统填充面板只有约 240dp 宽，
+ *   40dp 的 icon container 是为 360dp+ 全宽列表设计的，在窄面板里占掉近四成宽度，
+ *   用户反馈"密码条目偏大"。容器 → 32dp，位图同步回到 26dp。
  */
-private const val ICON_DP = 34f
+private const val ICON_DP = 26f
 
 /** 字母头像的字号占比（相对直径）。 */
 private const val LETTER_SCALE = 0.46f

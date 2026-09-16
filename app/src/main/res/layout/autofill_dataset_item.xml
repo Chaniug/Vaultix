@@ -24,28 +24,42 @@
   - 标题 16sp / 副标题 14sp（M3 `bodyLarge` / `bodyMedium`），层次由**字号 + 色阶**给出，
     不靠加粗；标题用 `sans-serif-medium` 仅作轻微强调。
   - 副标题单行省略 + 标题单行省略：面板宽度有限，宁可截断也不要换行把行撑高。
+  ── 2026-09-16 第五改（用户：「密码条目显示效果不太好，偏大了」）──────────────
+  上一轮（2026-09-13）是**往大改**的：为了对齐 M3 list item，把行高 48→56、图标 24→34。
+  但那个规格的前提不成立 —— **M3 的 40dp icon container 是为 360dp 以上的全宽列表设计的**，
+  而系统填充面板只有 **约 240dp 宽**。在那个宽度里 `40(图标)+16(间距)+32(两侧内边距)` = 88dp
+  被占掉近四成，文字只剩一半 ⇒ 视觉上"图标很大、整条很挤"。
+
+  ⇒ 本轮按**窄面板**重定比例（整体缩小约 15%，各部件等比，不破坏内部协调）：
+  图标容器 40 → **32dp**；图标位图 34 → **26dp**；图标到文字间距 16 → **12dp**；
+  水平内边距 16 → **12dp**；标题/副标题 16/14 → **15/13sp**；行高 56 → **52dp**。
+
+  ⚠️ 位图尺寸必须与 `AutofillItemIcon.ICON_DP` **同步改**（两处不同步会出现缩放模糊）。
+  ⚠️ 这仍是**有意偏离** M3 list item 规格 —— 理由就是上面那条"窄面板"。
+  ⚠️ 本注释**不得出现连续两个短横线**（markdown 表格分隔行会让 aapt2 报
+     "Failed to parse XML file"，且报错完全不提注释，极难定位）。
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/autofill_item_root"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:minHeight="56dp"
+    android:minHeight="52dp"
     android:gravity="center_vertical"
     android:orientation="horizontal"
-    android:paddingStart="16dp"
-    android:paddingEnd="16dp">
+    android:paddingStart="12dp"
+    android:paddingEnd="12dp">
 
-    <!-- 图标：40dp 圆形容器 + 24dp 居中位图（M3 list item 的 icon container 规格）。 -->
+    <!-- 图标：32dp 圆形容器 + 26dp 居中位图（窄面板下的比例，见文件头）。 -->
     <FrameLayout
-        android:layout_width="40dp"
-        android:layout_height="40dp"
-        android:layout_marginEnd="16dp"
+        android:layout_width="32dp"
+        android:layout_height="32dp"
+        android:layout_marginEnd="12dp"
         android:background="@drawable/autofill_item_icon_bg">
 
         <ImageView
             android:id="@+id/autofill_item_icon"
-            android:layout_width="34dp"
-            android:layout_height="34dp"
+            android:layout_width="26dp"
+            android:layout_height="26dp"
             android:layout_gravity="center"
             android:contentDescription="@null"
             android:scaleType="centerCrop" />
@@ -67,7 +81,7 @@
             android:fontFamily="sans-serif-medium"
             android:maxLines="1"
             android:textColor="?android:attr/textColorPrimary"
-            android:textSize="16sp" />
+            android:textSize="15sp" />
 
         <TextView
             android:id="@+id/autofill_item_subtitle"
@@ -77,6 +91,6 @@
             android:includeFontPadding="false"
             android:maxLines="1"
             android:textColor="?android:attr/textColorSecondary"
-            android:textSize="14sp" />
+            android:textSize="13sp" />
     </LinearLayout>
 </LinearLayout>
