@@ -9,7 +9,7 @@
 
 | 分篇 | 主题 | 条数 |
 |---|---|---|
-| [01-构建与环境](./issues/01-构建与环境.md) | 工程 / 构建 / CI / 工具链 / 环境 | 28 |
+| [01-构建与环境](./issues/01-构建与环境.md) | 工程 / 构建 / CI / 工具链 / 环境 | 29 |
 | [02-自动填充](./issues/02-自动填充.md) | 自动填充（AutofillService 链路） | 17 |
 | [03-通行密钥与凭据提供商](./issues/03-通行密钥与凭据提供商.md) | 通行密钥 / Credential Provider / 凭据回灌 | 14 |
 | [04-锁与解锁](./issues/04-锁与解锁.md) | 锁态模型 / 解锁 / 生物识别 / 密钥 | 8 |
@@ -52,6 +52,7 @@
 | 101 | 🔴 `import` 的**包路径**写错（符号名对、包名错）：detekt 与 `check_signature_types.py` **双双查不出**，只有 CI 编译能炸 —— 已修，并新增 `.ai/tools/check_import_packages.py` 守护 |
 | 103 | 🔴 手改大文件时**整块复制**函数声明 → CI 报 `Conflicting overloads`（`VaultRepositoryImpl` 函数数顶格逼出"块级搬运"），**七道本地门禁全绿** —— 已修，并新增第 4 类门禁 `check_duplicate_declarations` |
 | 104 | 🔴 **写启发式探针必须配正反用例**：#103 的补救探针连坏两版（264 处 → 5 处误报，全在**扩展函数接收者**上）；且「探针报了我不可能引入的问题」= 探针坏了，不是源码坏了。永久回归集 `.ai/tools/tests/selftest_duplicate_declarations.py` |
+| 105 | 🔴 **沙箱「下不动 APK」是两层问题**：hosts 丢失（`198.18.0.x`）只是第一层；第二层是「整文件连续传输不可靠」。判别靠 **range 请求 `curl -r 0-0`（得 206）vs 整体下载（得 000）** 的对比实验。解法：**1MB 分块 + 5 重试 + `truncate` 回滚**。另：**别用 `file` 判断 APK 完整**（截断文件照样报 "Android package"），要用 `zipfile` |
 
 ### [02-自动填充](./issues/02-自动填充.md) — 自动填充（AutofillService 链路）
 
