@@ -327,15 +327,21 @@ interface VaultRepository {
      *
      * @param vaultIds 要设置 PIN 的库（调用方已按用户选择过滤）。
      * @param pin 对所有目标库生效的同一个 PIN。
-     * @param masterPassword KDBX 库的主密码（用户当场输入的那一次）。
-     *   ⚠️ 本方法接收它即视为**一次性使用**，实现方须确保用后清零、不落盘。
-     *   没有 KDBX 目标库时应传空串。
+     * @param passwordOf **逐库**取该库的主密码（只对 KDBX 库调用）。
+     *   - 返回非空 ⇒ 用它校验并包裹；
+     *   - 返回 null / 空白 ⇒ 视为**用户跳过该库**（`PinEnrollOutcome.Skipped`），
+     *     不报错、也不影响其它库。
+     *
+     *   ⚠️ 2026-09-16 从「一个共用的 masterPassword」改为回调：多个 KDBX 库的主密码
+     *   可以**各不相同**。共用一个输入框时，密码不一致的库会凭空失败，而用户只会看到
+     *   「PIN 设置失败」—— 无从得知真因是自己两个库的密码本来就不一样。
+     *   ⚠️ 回调返回的明文视为**一次性**：实现方须确保用后清零、不落盘。
      * @return 每库的结果（含失败原因），键为 vaultId。
      */
     suspend fun enrollPinForVaults(
         vaultIds: List<String>,
         pin: String,
-        masterPassword: String,
+        passwordOf: suspend (vaultId: String) -> String?,
     ): Map<String, PinEnrollOutcome>
 
     /**
@@ -386,6 +392,14 @@ sealed interface PinEnrollOutcome {
 
     /** KDBX：主密码 / keyfile 不对 —— **校验阶段**就失败，未写任何东西。 */
     data object InvalidCredentials : PinEnrollOutcome
+
+    /**
+     * 用户**主动跳过**该库（没输主密码，或在对话框里点了「跳过」）。
+     *
+     * ⚠️ 与 [InvalidCredentials] 分成两态：那不是失败，是用户的选择 ——
+     * 结果页要写「已跳过」而不是「密码不对」，否则用户会以为是自己打错了。
+     */
+    data object Skipped : PinEnrollOutcome
 
     /**
      * 当前没有可包裹的会话（库未解锁 / 会话已失效）。
@@ -596,6 +610,14 @@ sealed interface LocalUnlockPrepareOutcome {
 
     /** KDBX 主密码不对。UI 按「宽松」取向就地让用户重输。 */
     data object InvalidCredentials : LocalUnlockPrepareOutcome
+
+    /**
+     * 用户**主动跳过**该库（没给它输主密码）。
+     *
+     * ⚠️ 与 [InvalidCredentials] 分开：那不是失败，是用户的选择 —— 结果页要写
+     * 「已跳过」，用户才知道是"我没配这个库"，而不是"我配错了"。
+     */
+    data object Skipped : LocalUnlockPrepareOutcome
 
     /** 库文件读不到（URI 授权失效 / 文件被移走）—— 与「密码错」必须分开报。 */
     data class SourceUnavailable(val detail: String) : LocalUnlockPrepareOutcome

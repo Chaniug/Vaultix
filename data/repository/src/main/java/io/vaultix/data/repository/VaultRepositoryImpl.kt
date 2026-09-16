@@ -709,9 +709,9 @@ class VaultRepositoryImpl @Inject constructor(
     override suspend fun enrollPinForVaults(
         vaultIds: List<String>,
         pin: String,
-        masterPassword: String,
+        passwordOf: suspend (vaultId: String) -> String?,
     ): Map<String, PinEnrollOutcome> =
-        pinEnrollment.enrollForVaults(vaultIds, pin, masterPassword)
+        pinEnrollment.enrollForVaults(vaultIds, pin, passwordOf)
 
     override suspend fun syncVault(vaultId: String): VaultSyncReport {
         val row = vaultDao.get(vaultId)

@@ -162,22 +162,25 @@ class LocalUnlockEnrollment @Inject constructor(
      * KDBX 校验走 [Kdbx.verify]（**只验不开库**、不碰 `KdbxSessionStore`）：
      * 用 `unlock()` 验会把明文拉进内存并**覆盖该库已有会话**，多库时更会互相打架。
      *
-     * @param masterPassword 用户为**全部**勾选的 KDBX 库输入的那一个主密码
-     *   （与 PIN 侧「输一次、共用」的交互一致）。勾选里没有 KDBX 时不会被用到。
+     * @param passwordOf 为每个 KDBX 库**单独**取一次它的主密码。
+     *   返回 null / 空白 ⇒ 视为**用户跳过该库**（[LocalUnlockPrepareOutcome.Skipped]）。
+     *   Bitwarden 库**不会**调用它（包裹物是会话里的密钥，不需要密码）。
+     *
+     *   ⚠️ 2026-09-16 从「一个共用的 masterPassword」改为回调（用户拍板）：多个 KDBX 库的
+     *   主密码**可以各不相同**，共用一个输入框会让密码不同的那些库凭空失败，
+     *   而用户只会看到「主密码不正确」—— 无从得知真因是自己的库本来就不同密码。
      */
     suspend fun prepareForVaults(
         vaultIds: List<String>,
-        masterPassword: String,
+        passwordOf: suspend (vaultId: String) -> String?,
     ): Map<String, LocalUnlockPrepareOutcome> = withContext(Dispatchers.IO) {
-        val hasMasterPassword = masterPassword.isNotBlank()
-        vaultIds.associateWith { vaultId -> prepareOne(vaultId, masterPassword, hasMasterPassword) }
+        vaultIds.associateWith { vaultId -> prepareOne(vaultId, passwordOf) }
     }
 
     /** 单个库的认证前备料（把 [prepareForVaults] 的 `when` 摊平成一行调用）。 */
     private suspend fun prepareOne(
         vaultId: String,
-        masterPassword: String,
-        hasMasterPassword: Boolean,
+        passwordOf: suspend (vaultId: String) -> String?,
     ): LocalUnlockPrepareOutcome {
         val row = vaultDao.get(vaultId)
             ?: return LocalUnlockPrepareOutcome.Failed("本地不存在该库")
@@ -193,10 +196,13 @@ class LocalUnlockEnrollment @Inject constructor(
                 }
             }
             VaultKind.KDBX -> {
-                if (!hasMasterPassword) {
-                    return LocalUnlockPrepareOutcome.Failed("需要该库的主密码才能启用")
+                val masterPassword = passwordOf(vaultId)
+                if (masterPassword.isNullOrBlank()) {
+                    // 用户跳过（没输密码）⇒ 如实报，不当成功（假状态）。
+                    LocalUnlockPrepareOutcome.Skipped
+                } else {
+                    prepareKdbx(row.id, row.displayName, row.origin, masterPassword)
                 }
-                prepareKdbx(row.id, row.displayName, row.origin, masterPassword)
             }
             null -> LocalUnlockPrepareOutcome.Failed("无法识别该库类型")
         }

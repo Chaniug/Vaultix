@@ -16,6 +16,7 @@ import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
@@ -75,6 +76,19 @@ class VaultixPreferences @Inject constructor(
          */
         val ACTIVE_VAULT_ID = stringPreferencesKey("active_vault_id")
         val QUICK_UNLOCK_PROMPT_DISMISSED = booleanPreferencesKey("quick_unlock_prompt_dismissed")
+
+        /**
+         * **快速解锁的生效范围**：哪些库纳入快速解锁（指纹与 PIN 共用同一份范围）。
+         *
+         * 2026-09-16 新增。此前「快速解锁」被做成**每库独占的三选一**，与用户原本的意图
+         * （`库选择与快速解锁-逻辑定稿.md` §4.7：「增加一个生效范围，选取哪些库生效」）
+         * 相反 —— 用户要的是**能力级**：一个开关覆盖多个库。
+         *
+         * ⚠️ 这里**只存范围**，不存「总开关」。开关的 ON/OFF 由「范围 + 每库信封是否存在」
+         * 推导（见 `QuickUnlockController`）：若另存一个开关字段，就会出现"开关说开着、
+         * 信封却是空的"这种双源漂移 —— 那正是 #93「谎报状态的开关」的成因，别再造一个。
+         */
+        val QUICK_UNLOCK_SCOPE = stringSetPreferencesKey("quick_unlock_scope")
         val TRASH_AUTO_DELETE_DAYS = intPreferencesKey("trash_auto_delete_days")
         val THEME_MODE = stringPreferencesKey("theme_mode")
         val OLED_PURE_BLACK = booleanPreferencesKey("oled_pure_black")
@@ -287,6 +301,59 @@ class VaultixPreferences @Inject constructor(
 
     private fun pinUnlockKey(vaultId: String) =
         booleanPreferencesKey("pin_unlock_enabled_$vaultId")
+
+    /**
+     * 快速解锁的**生效范围**（哪些库纳入）。
+     *
+     * 空集 = 快速解锁整体未启用（等价于「每次输主密码」）。
+     *
+     * ⚠️ 读出来是 `Set<String>`，**顺序不保证稳定** —— 需要有序展示时由调用方按库表顺序
+     * 自行排列，不要依赖这个集合的迭代顺序（DataStore 的 stringSet 不保证保序）。
+     */
+    fun quickUnlockScope(): Flow<Set<String>> =
+        safeData.map { it[QUICK_UNLOCK_SCOPE] ?: emptySet() }
+
+    suspend fun setQuickUnlockScope(vaultIds: Set<String>) {
+        dataStore.edit { prefs ->
+            // 空集就删键，不留一个"空集合"的残留（与 setLocalUnlockEnabled 同款取向）。
+            if (vaultIds.isEmpty()) {
+                prefs.remove(QUICK_UNLOCK_SCOPE)
+            } else {
+                prefs[QUICK_UNLOCK_SCOPE] = vaultIds
+            }
+        }
+    }
+
+    /**
+     * 「待确认删除」的指纹（2026-09-16 新增）。
+     *
+     * 用途：同步时若发现「要删的本地行」数量可疑，**先不删**，把这批行的指纹存下来并阻断；
+     * 下次同步若**仍是同一批**，才认为服务端确实如此、放行删除。
+     *
+     * 这样能把两种在服务端侧**表现完全相同**的情况分开：
+     * - 用户在官方网页端真的删了（下次同步仍是同一批）→ 放行；
+     * - 服务端瞬时故障返回不完整数据（下次同步就恢复了）→ 不会两次相同。
+     *
+     * ⚠️ **必须持久化**（不能只放内存）：进程重启后若丢失，用户会永远停在
+     * 「首次发现大量删除」的阻断里，怎么同步都删不掉那批行。
+     *
+     * 值 = 待删 id 集合排序后的 `hashCode()`；**null = 当前没有待确认的删除**。
+     */
+    fun pendingPruneFingerprint(vaultId: String): Flow<Int?> =
+        safeData.map { it[pendingPruneKey(vaultId)] }
+
+    suspend fun setPendingPruneFingerprint(vaultId: String, fingerprint: Int?) {
+        dataStore.edit { prefs ->
+            if (fingerprint == null) {
+                prefs.remove(pendingPruneKey(vaultId))
+            } else {
+                prefs[pendingPruneKey(vaultId)] = fingerprint
+            }
+        }
+    }
+
+    private fun pendingPruneKey(vaultId: String) =
+        intPreferencesKey("pending_prune_fp_$vaultId")
 
     /**
      * KDBX 库的 keyfile URI（按库；null / 无记录 = 该库不用 keyfile）。

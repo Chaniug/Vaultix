@@ -69,9 +69,8 @@ import io.vaultix.model.VaultSummary
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.AppFlavor
 import io.vaultix.vaultix.ui.common.AddVaultTypeDialog
-import io.vaultix.vaultix.ui.common.BiometricPrompter
 import io.vaultix.vaultix.ui.common.deviceCanAuthenticate
-import io.vaultix.vaultix.ui.common.rememberFragmentActivity
+import io.vaultix.vaultix.ui.settings.QuickUnlockHost
 import io.vaultix.vaultix.ui.theme.Spacing
 
 /**
@@ -93,40 +92,17 @@ fun VaultListScreen(
     val syncStatuses by viewModel.syncStatuses.collectAsStateWithLifecycle()
     val quickUnlockSuggest by viewModel.quickUnlockSuggest.collectAsStateWithLifecycle()
     val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
-    val activity = rememberFragmentActivity()
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
     var vaultToRemove by remember { mutableStateOf<VaultSummary?>(null) }
     var showAddDialog by remember { mutableStateOf(false) }
-    // 横幅启用 KDBX 时等待主密码的库 id（null = 不显示输入框）
-    var pendingKdbxVault by remember { mutableStateOf<VaultSummary?>(null) }
-    var kdbxPasswordError by remember { mutableStateOf<String?>(null) }
-    // 认证对话框文案
-    val enrollTitle = stringResource(R.string.quick_unlock_enroll_title)
-    val cancelText = stringResource(R.string.action_cancel)
 
     // 启用引导：收到 cipher 即弹认证，成功后完成密钥包裹（横幅自动消失）
+    // 启用引导：横幅的「启用」走共用控制器（`viewModel.quickUnlock.enableForVault`）；
+    // 认证弹窗与「逐库问主密码」都由文件末尾的 QuickUnlockHost 承担。
     LaunchedEffect(Unit) {
         viewModel.events.collect { event ->
             when (event) {
-                is VaultListViewModel.Event.PromptForEnroll -> {
-                    // 指纹框已弹 ⇒ KDBX 密码框使命完成，收起。
-                    pendingKdbxVault = null
-                    val host = activity ?: return@collect
-                    BiometricPrompter(host).authenticate(
-                        cipher = event.cipher,
-                        title = enrollTitle,
-                        cancelText = cancelText,
-                        onSuccess = { cipher -> viewModel.enrollWithCipher(event.vaultId, cipher) },
-                        // 取消/失败：横幅保留，可再试；同时丢弃 KDBX 的暂存凭据明文。
-                        onError = { _, _, _ -> viewModel.discardPendingKdbxEnroll() },
-                    )
-                }
-                is VaultListViewModel.Event.PromptForKdbxPassword ->
-                    pendingKdbxVault = vaults.firstOrNull { it.id == event.vaultId }
-                is VaultListViewModel.Event.KdbxPasswordRejected ->
-                    kdbxPasswordError = event.detail
-                        ?: context.getString(R.string.kdbx_quick_unlock_wrong_password)
                 VaultListViewModel.Event.Removed ->
                     snackbarHostState.showSnackbar(context.getString(R.string.vault_removed))
                 is VaultListViewModel.Event.RemoveFailed ->
@@ -180,7 +156,8 @@ fun VaultListScreen(
                     val suggest = quickUnlockSuggest
                     if (suggest != null && deviceCanAuthenticate(LocalContext.current)) {
                         QuickUnlockBanner(
-                            onEnable = { viewModel.startQuickUnlockEnroll(suggest.id) },
+                            // 横幅「启用」= 把这个库纳入生效范围 + 立刻配指纹（与设置页同一控制器）。
+                            onEnable = { viewModel.quickUnlock.enableForVault(suggest.id) },
                             onDismiss = viewModel::dismissQuickUnlockPrompt,
                         )
                     }
@@ -214,38 +191,30 @@ fun VaultListScreen(
         vaultToRemove = vaultToRemove,
         onDismissRemove = { vaultToRemove = null },
         onConfirmRemove = { vaultToRemove = null; viewModel.removeVault(it) },
-        kdbxTarget = pendingKdbxVault,
-        kdbxPasswordError = kdbxPasswordError,
-        onSubmitKdbxPassword = { id, password ->
-            kdbxPasswordError = null
-            viewModel.confirmKdbxPassword(id, password)
-        },
-        onDismissKdbx = {
-            pendingKdbxVault = null
-            kdbxPasswordError = null
-        },
         showAddDialog = showAddDialog,
         onDismissAdd = { showAddDialog = false },
         onAddVault = onAddVault,
         onAddKdbx = onAddKdbx,
     )
+    // 快速解锁的认证与流程对话框（与设置页**共用同一个控制器**）。
+    QuickUnlockHost(viewModel.quickUnlock)
 }
 
 /**
- * 库列表页的对话框集合（移除确认 / KDBX 启用主密码 / 添加库类型）。
+ * 库列表页的对话框集合（移除确认 / 添加库类型）。
  *
  * 抽出来是为了 [VaultListScreen] 不超 detekt `LongMethod`(150) 上限，
  * 同时让「页面布局」与「对话框编排」各自可读。
+ *
+ * ⚠️ 2026-09-16：KDBX 启用主密码框已从这里**移除** —— 快速解锁收敛到
+ * `QuickUnlockController` 之后，逐库问密码由 `QuickUnlockHost` 统一承担，
+ * 不再需要页面自己再养一份单库流程（那份曾与设置页互为复制品）。
  */
 @Composable
 private fun VaultListDialogs(
     vaultToRemove: VaultSummary?,
     onDismissRemove: () -> Unit,
     onConfirmRemove: (String) -> Unit,
-    kdbxTarget: VaultSummary?,
-    kdbxPasswordError: String?,
-    onSubmitKdbxPassword: (String, String) -> Unit,
-    onDismissKdbx: () -> Unit,
     showAddDialog: Boolean,
     onDismissAdd: () -> Unit,
     onAddVault: () -> Unit,
@@ -269,16 +238,6 @@ private fun VaultListDialogs(
                     Text(stringResource(R.string.action_cancel))
                 }
             },
-        )
-    }
-
-    // KDBX 横幅启用前的主密码确认（定稿 §4.5：KDBX 没有可包裹的会话密钥）。
-    if (kdbxTarget != null) {
-        KdbxBannerPasswordDialog(
-            vaultName = kdbxTarget.name,
-            errorText = kdbxPasswordError,
-            onSubmit = { password -> onSubmitKdbxPassword(kdbxTarget.id, password) },
-            onDismiss = onDismissKdbx,
         )
     }
 
@@ -581,66 +540,3 @@ private fun SyncStatusLine(syncStatus: VaultSyncStatus?) {
     )
 }
 
-/**
- * 横幅启用 KDBX 快速解锁前的主密码确认框。
- *
- * KDBX 与 Bitwarden 的**根本差异**（定稿 §4.5）：Bitwarden 会话里握着对称密钥，
- * 勾选即可直接包裹；KDBX 会话里**没有可包裹的东西**，唯一能重新开库的凭据就是
- * 「主密码 + keyfile」，而主密码只在用户脑子里 ⇒ 必须当场再问一次。
- *
- * 「宽松」取向（§4.4）：输错只显示错误、**输入框保留**，用户就地重输即可。
- */
-@Composable
-private fun KdbxBannerPasswordDialog(
-    vaultName: String,
-    errorText: String?,
-    onSubmit: (String) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    var password by rememberSaveable { mutableStateOf("") }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.kdbx_quick_unlock_title)) },
-        text = {
-            Column {
-                Text(
-                    text = stringResource(R.string.kdbx_quick_unlock_message, vaultName),
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Spacer(Modifier.height(Spacing.md))
-                OutlinedTextField(
-                    value = password,
-                    onValueChange = { password = it },
-                    label = { Text(stringResource(R.string.kdbx_master_password_label)) },
-                    singleLine = true,
-                    isError = errorText != null,
-                    visualTransformation = PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                if (errorText != null) {
-                    Spacer(Modifier.height(Spacing.xs))
-                    Text(
-                        text = errorText,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = { onSubmit(password) },
-                enabled = password.isNotEmpty(),
-            ) {
-                Text(stringResource(R.string.action_enable))
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.action_cancel))
-            }
-        },
-    )
-}

@@ -78,28 +78,33 @@ class PinEnrollmentCoordinator @Inject constructor(
      * ## 为什么 KDBX 校验也在这里（2026-09-16 移到本类）
      *
      * KDBX 的登记不是"把字节包起来"就完了 —— 必须先**真的拿这组凭据解一次库**，
-     * 通过才落盘（`VaultixKdbxEngine.verify*`）。否则会得到「启用成功、但躺的是错密码」，
-     * 用户要到下次解锁才发现，那时已经分不清是 PIN 错还是密码错。
+     * 通过才落盘。否则会得到「启用成功、但躺的是错密码」，用户要到下次解锁才发现，
+     * 那时已经分不清是 PIN 错还是密码错。
      *
-     * 校验动作走 [VaultixKdbxEngine] 的**校验专用入口**（只验不开库），
+     * 校验动作由 [PinEnrollment.enrollKdbx] 内部走 `Kdbx.verify`（**只验不开库**），
      * 因此本类不必持有会话、也不必回调 [VaultRepositoryImpl] —— 那正是抽本类时
      * 想避免的反向依赖（会成环）。
+     *
+     * ## 逐库取主密码（2026-09-16 用户拍板）
+     *
+     * 参数从「一个共用的 masterPassword」改为 [passwordOf] 回调。理由：勾选多个 KDBX 库时，
+     * 它们的主密码**可以各不相同** —— 共用一个输入框会让密码不同的那些库凭空失败，
+     * 而用户只会看到「PIN 设置失败」，无从得知真因是自己的库本来就不同密码。
      */
     suspend fun enrollForVaults(
         vaultIds: List<String>,
         pin: String,
-        masterPassword: String,
+        passwordOf: suspend (vaultId: String) -> String?,
     ): Map<String, PinEnrollOutcome> {
         if (vaultIds.isEmpty()) return emptyMap()
         // 位数不对直接全部拒绝：没必要为每个库各跑一遍昂贵校验（KDBX 侧是 Argon2id）。
         pinUnlockStore.validate(pin)?.let { rejected ->
             return vaultIds.associateWith { rejected }
         }
-        // ⚠️ 空密码且存在 KDBX 库时，逐个报"缺少主密码"而**不是静默跳过** ——
-        //    跳过会让用户以为"配好了"，实际那个库根本没配上（假状态）。
-        val hasMaster = masterPassword.isNotBlank()
+        // ⚠️ 逐库独立取密码；KDBX 侧没给 ⇒ `Skipped`（用户的选择），
+        //    如实报而不是当成功 —— 当成功就是本项目反复强调的**假状态**。
         return vaultIds.associateWith { vaultId ->
-            enrollOne(vaultId, pin, masterPassword, hasMaster)
+            enrollOne(vaultId, pin, passwordOf)
         }
     }
 
@@ -112,17 +117,19 @@ class PinEnrollmentCoordinator @Inject constructor(
     private suspend fun enrollOne(
         vaultId: String,
         pin: String,
-        masterPassword: String,
-        hasMasterPassword: Boolean,
+        passwordOf: suspend (vaultId: String) -> String?,
     ): PinEnrollOutcome {
         val row = vaultDao.get(vaultId) ?: return PinEnrollOutcome.Failed("本地不存在该库")
         return when (VaultKind.fromName(row.kind)) {
             VaultKind.BITWARDEN -> enrollment.enrollBitwarden(vaultId, pin)
             VaultKind.KDBX -> {
-                if (!hasMasterPassword) {
-                    // 没收到主密码就无法为 KDBX 组信封（会话里没有它）。
-                    // 如实报错让 UI 提示补输，而不是假装成功。
-                    PinEnrollOutcome.Failed("需要该库的主密码才能设置 PIN")
+                // ⚠️ 只对 KDBX 询问密码：Bitwarden 包的是会话里的密钥，不需要任何密码
+                //    （问它反而会给用户一个"为什么又要输密码"的困惑）。
+                val masterPassword = passwordOf(vaultId)
+                if (masterPassword.isNullOrBlank()) {
+                    // 用户没给（或点了「跳过」）⇒ 如实报 Skipped。
+                    // ⚠️ 绝不能当成功：那会让用户以为"配好了"，实际那个库根本没配上。
+                    PinEnrollOutcome.Skipped
                 } else {
                     // keyfile URI 与快速解锁登记**同源**，不在这里再问一次。
                     // ⚠️ 取值失败要降级成 null 而不是抛：没配 keyfile 的库是常态。

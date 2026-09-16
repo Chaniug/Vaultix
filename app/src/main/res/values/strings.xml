@@ -331,13 +331,33 @@
          仅用于指纹行且设备支持的场景。**刻意保留**，理由同上。 -->
     <string name="quick_unlock_device_unsupported">未启用（本设备未设置锁屏或生物识别，无法启用）</string>
     <!-- 快速解锁「生效范围」（定稿 §4.7：一把指纹钥匙管哪些库由用户勾选） -->
-    <!-- ⚠️ 2026-09-16 四改后**暂无代码引用**：卡片从「两行并列开关」改成「三选一单选组」
-         （指纹 / 应用内 PIN / 每次输主密码），"两种方式彼此独立"这句与新的单选心智
-         直接矛盾（用户看到的就是三选一），故替换为 quick_unlock_scope_hint_pick。
-         **刻意保留**：若日后恢复"两个独立开关"的呈现，这句"彼此独立"的口径仍然准确。 -->
-    <string name="quick_unlock_scope_hint">每个库可分别开启指纹或应用内 PIN。两种方式彼此独立。</string>
-    <!-- 四改新引导语：把"每个库选一种"的心智模型直接讲出来。 -->
+    <!-- 2026-09-16「能力级重构」后**重新启用**：开关回到"两个并列"、范围回到"一份统一清单"，
+         故"两种方式彼此独立"的口径重新成立，且它正是本次重构的核心卖点。 -->
+    <string name="quick_unlock_scope_hint">指纹与应用内 PIN 彼此独立、可同时开启；下面勾选的就是它们作用的库。</string>
+    <!-- ⚠️ 这是四改引入的"每库选一种"引导语，在**同日晚些的能力级重构中作废**。
+         （教训：四改把"一个能力"误做成了"每库独占的选择题"，与 §4.7 的原始意图相反。）
+         **刻意保留**：它准确记录了"每库独占"那一版的心智模型，便于日后对照。 -->
     <string name="quick_unlock_scope_hint_pick">为每个库选择一种免主密码的打开方式</string>
+
+    <!-- ===== 能力级重构新增（2026-09-16）===== -->
+    <string name="quick_unlock_scope_title">生效范围</string>
+    <string name="quick_unlock_partial_hint">有 %1$d 个库未完成，点此继续</string>
+    <string name="quick_unlock_cap_biometric">指纹</string>
+    <string name="quick_unlock_cap_pin">PIN</string>
+    <string name="quick_unlock_option_pin_on">已用 %1$d 位 PIN 保护</string>
+    <string name="quick_unlock_kdbx_password_title">输入该库的主密码</string>
+    <string name="quick_unlock_kdbx_password_hint">KDBX 的密码不会留在会话里，需要你提供一次。后面还有 %1$d 个库待输入。</string>
+    <string name="quick_unlock_kdbx_password_label">主密码</string>
+    <string name="quick_unlock_kdbx_skip">跳过</string>
+    <string name="quick_unlock_authenticating">等待身份验证</string>
+    <string name="quick_unlock_authenticating_hint">请在系统弹窗中验证指纹或设备 PIN</string>
+    <string name="quick_unlock_report_title">配置结果</string>
+    <string name="quick_unlock_report_succeeded">已启用</string>
+    <string name="quick_unlock_report_skipped">已跳过（未配置）</string>
+    <string name="quick_unlock_report_failed">未成功</string>
+    <string name="pin_field_new">输入 PIN</string>
+    <string name="pin_field_confirm">再次输入 PIN</string>
+    <string name="action_continue">继续</string>
     <!-- 对话框唯一的段落标题（2026-09-15 三改：原来「指纹解锁 / 应用内 PIN」两个段落
          合并成"一库一卡、卡内两行"，段落标题降级为**卡的引导语**；
          「指纹解锁」「应用内 PIN」变为卡内**行标题**，见下面两条。 -->
@@ -369,6 +389,41 @@
     <string name="kdbx_quick_unlock_wrong_password">主密码不正确，请重新输入</string>
     <string name="kdbx_master_password_label">主密码</string>
     <string name="quick_unlock_local_failed">本地解锁不可用（密钥可能已失效），请用主密码登录</string>
+
+    <!-- ===== ⚠️ 2026-09-16「能力级重构」后暂无引用的文案（**刻意保留，别当僵尸串删掉**）=====
+
+         这一版把「快速解锁」从"每库独占的三选一"改回了"两个并列开关 + 一份统一生效范围"，
+         于是下面这批文案失去了宿主。逐条理由：
+
+         · quick_unlock_section_scope（旧的「选择要快速解锁的库」）
+           已被 quick_unlock_scope_title（「生效范围」）取代。新模型下"选库"只是手段，
+           用户真正要建立的概念是"这套能力作用于哪些库"。
+
+         · quick_unlock_scope_hint_pick（"为每个库选择一种免主密码的打开方式"）
+           它讲的正是**被废弃的那个心智模型**（每库选一种），故本轮彻底弃用。
+
+         · quick_unlock_master_only 与 quick_unlock_option_master_summary
+           旧三选一的第 3 项及其副标题。新模型里"每次输主密码"＝把库移出范围，
+           不再是一个并列选项，故两者同时失去宿主。
+           保留理由：若日后做「快速解锁总览」这类只读展示，"最安全，每次打开都要输入"
+           仍是一句准确的口径。
+
+         · quick_unlock_option_biometric_kdbx_summary
+           旧指纹行的 KDBX 专属副标题。新模型下 KDBX 的差异由「逐库问主密码」的弹窗
+           当场说明，不必提前挂在开关上。
+
+         · quick_unlock_action_change_pin（旧的「修改 PIN」辅助按钮）
+           ⚠️ 新 UI **没有这个入口**：改 PIN 的方式变成"关掉开关再打开"
+           （关闭会删掉旧信封，重开时重新输入）。这是有意的简化，
+           但确实**少了一步直达**。若用户反馈"改 PIN 太绕"，这条文案与那个入口都该恢复。
+
+         · kdbx_quick_unlock_title / kdbx_quick_unlock_message /
+           kdbx_quick_unlock_wrong_password / kdbx_master_password_label
+           库列表页横幅自带的主密码框（KdbxBannerPasswordDialog）已删除，
+           改由共用的 QuickUnlockHost 承担（文案换成 quick_unlock_kdbx_password_ 一组）。
+           保留理由：这几句是"KDBX 为什么必须再输一次密码"最完整的解释口径，
+           若日后做帮助页或首次使用引导，可直接复用。
+    -->
 
     <!-- 应用内 PIN 解锁（定位：解锁便利，**不是**找回手段） -->
     <string name="pin_unlock_enter">使用 PIN 解锁</string>

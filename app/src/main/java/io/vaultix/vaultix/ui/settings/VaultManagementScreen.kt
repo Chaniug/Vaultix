@@ -84,21 +84,11 @@ fun VaultManagementScreen(
     val active by viewModel.activeVault.collectAsStateWithLifecycle()
     val default by viewModel.defaultVault.collectAsStateWithLifecycle()
     val switchable by viewModel.switchableVaults.collectAsStateWithLifecycle()
-    val quickUnlockVaults by viewModel.quickUnlockVaults.collectAsStateWithLifecycle()
-    val kdbxEnrollState by viewModel.kdbxEnrollState.collectAsStateWithLifecycle()
+    val quickUnlockState by viewModel.quickUnlock.state.collectAsStateWithLifecycle()
 
     var showVaultPicker by rememberSaveable { mutableStateOf(false) }
     var showAddDialog by rememberSaveable { mutableStateOf(false) }
     var showQuickUnlockDialog by rememberSaveable { mutableStateOf(false) }
-    // 正在等待主密码的 KDBX 库（null = 不显示输入框）。由事件驱动，不 saveable：
-    // 进程重建后事件已消费，重新弹一个空输入框反而困惑。
-    var pendingKdbxVaultId by remember { mutableStateOf<String?>(null) }
-
-    QuickUnlockEnrollEffect(
-        viewModel = viewModel,
-        onPromptKdbxPassword = { vaultId -> pendingKdbxVaultId = vaultId },
-        onEnrollReady = { pendingKdbxVaultId = null },
-    )
 
     Scaffold(
         topBar = {
@@ -206,40 +196,18 @@ fun VaultManagementScreen(
     }
 
     if (showQuickUnlockDialog) {
-        QuickUnlockManageDialog(
-            vaults = quickUnlockVaults,
+        QuickUnlockSettingsDialog(
+            state = quickUnlockState,
             canAuthenticate = deviceCanAuthenticate(context),
-            // ★ 2026-09-16：指纹入口改为**多库流程**（用户：「默认一个生物验证的指纹，
-            //   管理解锁所有的库也可以吗」）。此前是按库逐次开 —— 库多了要点 N 遍指纹。
-            //   现在打开勾选对话框并**预勾**用户点的这一个库，可增可减，最后一次性启用。
-            onEnableBiometric = { vault -> viewModel.biometric.open(setOf(vault.vaultId)) },
-            onDisable = viewModel::disableQuickUnlock,
-            onPinSet = viewModel.pin::open,
-            // 「改用 PIN」= 设置成功后顺带关掉该库的指纹（见 QuickUnlockManageDialog 的告诫）。
-            onPinSetSwitchingFromBiometric = viewModel.pin::openSwitchingFromBiometric,
-            // PIN 的「关闭」与指纹的 onDisable 是两条独立链路（信封不同、清理逻辑不同），
-            // 所以必须各自传入口，不能复用 `viewModel::disableQuickUnlock`。
-            onPinDisable = viewModel.pin::disableVaultPin,
+            onToggleBiometric = viewModel.quickUnlock::toggleBiometric,
+            onTogglePin = viewModel.quickUnlock::togglePin,
+            onToggleScope = viewModel.quickUnlock::toggleScope,
             onDismiss = { showQuickUnlockDialog = false },
         )
     }
-    PinDialogHost(viewModel = viewModel)
-    // 指纹多库启用对话框。⚠️ 不传 Activity：它自己在内部用
-    // `rememberFragmentActivity()` 解析 —— BiometricPrompt 要的是 `FragmentActivity`，
-    // 而 `ComponentActivity` 与 `FragmentActivity` 是**兄弟**（不是父子），
-    // 从这里传 ComponentActivity 会编译失败（2026-09-16 CI 实录）。
-    BiometricEnrollHost(viewModel = viewModel)
-    // KDBX 主密码输入框：仅当用户勾选了 KDBX 库、且尚未校验通过时出现。
-    val kdbxTarget = pendingKdbxVaultId
-    if (kdbxTarget != null) {
-        KdbxQuickUnlockPasswordDialog(
-            vaultName = quickUnlockVaults.firstOrNull { it.vaultId == kdbxTarget }?.name.orEmpty(),
-            state = kdbxEnrollState,
-            onSubmit = { password -> viewModel.confirmKdbxPassword(kdbxTarget, password) },
-            onDismiss = {
-                pendingKdbxVaultId = null
-                viewModel.dismissKdbxPassword()
-            },
-        )
-    }
+    // 指纹认证 + 流程对话框（输 PIN → 逐库问主密码 → 认证 → 结果）。
+    // ⚠️ 不传 Activity：它自己在内部用 `rememberFragmentActivity()` 解析 ——
+    // BiometricPrompt 要的是 `FragmentActivity`，而 `ComponentActivity` 与
+    // `FragmentActivity` 是**兄弟**（不是父子），从这里传会编译失败（2026-09-16 CI 实录）。
+    QuickUnlockHost(viewModel.quickUnlock)
 }

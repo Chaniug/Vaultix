@@ -8,17 +8,13 @@ import io.vaultix.datastore.VaultTimeout
 import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.datastore.VaultixPreferencesDefaults
 import io.vaultix.domain.ItemRepository
-import io.vaultix.domain.KdbxEnrollOutcome
 import io.vaultix.domain.VaultRepository
 import io.vaultix.domain.VaultSessionRepository
-import io.vaultix.model.VaultKind
 import io.vaultix.model.VaultSummary
 import io.vaultix.vaultix.security.AutoLockController
 import io.vaultix.vaultix.session.ActiveVaultStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -30,11 +26,9 @@ import kotlinx.coroutines.flow.flowOf
 import io.vaultix.vaultix.ui.items.ItemsCardDisplayMode
 import io.vaultix.vaultix.ui.items.ItemsGroupMode
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import javax.crypto.Cipher
 import javax.inject.Inject
 
 /**
@@ -56,7 +50,7 @@ class SettingsViewModel @Inject constructor(
      *
      * ⚠️ 注入具体实现而非 `VaultRepository` 的接口方法：多库备料入口故意**不在**
      * [VaultRepository] 上，否则 `VaultRepositoryImpl` 会突破 detekt `TooManyFunctions`
-     * 的 40 上限（它本就顶格）。详见 [BiometricEnrollController] 的 KDoc。
+     * 的 40 上限（它本就顶格）。详见 [QuickUnlockController] 的 KDoc。
      */
     private val localUnlockEnrollment: LocalUnlockEnrollment,
 ) : ViewModel() {
@@ -76,28 +70,6 @@ class SettingsViewModel @Inject constructor(
         val screenSecurity: Boolean? = null,
     )
 
-    /**
-     * 本地快速解锁「生效范围」列表项（每库一行）。
-     *
-     * `kind` 用于区分两条**截然不同**的登记流程（定稿 §4）：
-     * Bitwarden 包裹会话密钥（当场无需再输密码）；KDBX 只能包裹
-     * 「主密码 + keyfile」⇒ **必须先向用户再要一次主密码**（§4.5）。
-     * 这个差异必须在 UI 上可见，否则用户不明白为什么点 KDBX 会弹密码框。
-     */
-    data class QuickUnlockVaultUi(
-        val vaultId: String,
-        val name: String,
-        val enabled: Boolean,
-        val kind: VaultKind,
-        /**
-         * 应用内 PIN 是否已启用。
-         *
-         * 与 [enabled] **并列而非替代**：两者是彼此独立的解锁路径（快速解锁要系统认证，
-         * PIN 不要），用户可以只要其中之一。所以两个状态都要显示，不能合成一个「已启用」。
-         */
-        val pinEnabled: Boolean,
-    )
-
     val state: StateFlow<UiState> = combine(
         preferences.vaultTimeout,
         preferences.clipboardClearMs,
@@ -115,31 +87,6 @@ class SettingsViewModel @Inject constructor(
         started = SharingStarted.WhileSubscribed(5_000),
         initialValue = UiState(),
     )
-
-    val quickUnlockVaults: StateFlow<List<QuickUnlockVaultUi>> =
-        vaultRepository.observeVaults()
-            .flatMapLatest { vaults ->
-                combine(
-                    vaults.map { vault ->
-                        combine(
-                            vaultRepository.localUnlockAvailable(vault.id),
-                            vaultRepository.pinUnlockAvailable(vault.id),
-                        ) { enabled, pinEnabled ->
-                            QuickUnlockVaultUi(
-                                vaultId = vault.id,
-                                name = vault.name,
-                                enabled = enabled,
-                                kind = vault.kind,
-                                pinEnabled = pinEnabled,
-                            )
-                        }
-                    },
-                ) { items -> items.toList() }
-            }.stateIn(
-                scope = viewModelScope,
-                started = SharingStarted.WhileSubscribed(5_000),
-                initialValue = emptyList(),
-            )
 
     /** 主题模式原始值（system / light / dark；UI 侧用 ThemeMode.from 解析显示与回传）。 */
     val themeMode: StateFlow<String> = preferences.themeMode
@@ -393,199 +340,26 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { vaultRepository.disableLocalUnlock(vaultId) }
     }
 
-    /**
-     * 设置页**启用**某库的快速解锁（消除入口死角）。
-     *
-     * 背景：此前启用入口**只有**库列表页横幅（`QuickUnlockBanner`），而横幅点
-     * 「以后再说」会置位 `isQuickUnlockPromptDismissed` → 横幅永不再现，
-     * 用户就此**彻底失去启用路径**（设置页对话框只能关不能开）。
-     * 此处补上对称入口，复用与横幅完全相同的 enroll 流程。
-     *
-     * 设备无可用认证方式时静默返回（不弹无意义的认证框）；
-     * 否则准备 ENCRYPT cipher 并通知 UI 弹 BiometricPrompt。
-     */
-    fun startQuickUnlockEnroll(vaultId: String) {
-        viewModelScope.launch {
-            val cipher = vaultRepository.prepareLocalEnroll() ?: return@launch
-            _events.send(Event.PromptForEnroll(vaultId, cipher))
-        }
-    }
+    // ---- 快速解锁（能力级：两个开关 + 统一生效范围）----
 
     /**
-     * BiometricPrompt 认证通过：用本次 cipher 包裹并落盘。
+     * 「快速解锁」设置交互（2026-09-16 从「每库三选一」重构为**能力级**）。
      *
-     * ⚠️ **必须按库类型分流**（与 `AutofillActivity.completeLocalUnlockByKind` 同一条纪律）：
-     * Bitwarden 包的是「会话里的对称密钥」，KDBX 包的是校验阶段暂存的「主密码 + keyfile」。
-     * 混走的后果不是报错而是**静默失效** —— KDBX 走 Bitwarden 那条路时
-     * `sessions.keyOf()` 恒为 null，于是「指纹按了、也过了，但什么都没包上」。
-     * （这正是 2026-09-14 之前横幅路径埋着的隐患：它永远把成功回调接到 Bitwarden 收尾上。）
+     * 本类是**唯一**的快速解锁设置入口：指纹与 PIN 两个**并列**开关 + 一份统一生效范围。
+     *
+     * ⚠️ 旧的单库入口（`startQuickUnlockEnroll` / `confirmKdbxPassword` / `enrollWithCipher`）
+     * 与那两个控制器（`BiometricEnrollController` / `PinSettingsController`）**已删除**：
+     * 它们各自演化出了重复实现（`VaultListViewModel` 里甚至复制了一份），
+     * 收敛到一处才能避免"只修好一边"。
      */
-    fun enrollWithCipher(vaultId: String, cipher: Cipher) {
-        viewModelScope.launch {
-            if (isKdbxVault(vaultId)) {
-                vaultRepository.commitKdbxEnroll(vaultId, cipher)
-            } else {
-                vaultRepository.enrollLocalUnlock(vaultId, cipher)
-            }
-        }
-    }
-
-    /**
-     * 认证被用户取消 / 被系统终止：丢弃 KDBX 的暂存凭据。
-     *
-     * 从**库类型**上判断即可，不必知道这次弹的是哪条流程 —— Bitwarden 侧没有暂存，
-     * 这个调用对它是空操作。反过来（该丢不丢）的代价是主密码明文在单例里多留一会儿。
-     *
-     * ⚠️ 同时把 [KdbxEnrollState] 归零：`Ready` 会经 `busy` 把**下一次**的「启用」
-     * 按钮按死（密码框的确认键被禁用），而用户根本不知道自己在等什么。
-     * 「这次没成」就该整条流程回到起点。
-     */
-    fun discardPendingKdbxEnroll() {
-        _kdbxEnrollState.value = KdbxEnrollState.Idle
-        viewModelScope.launch { vaultRepository.discardKdbxEnroll() }
-    }
-
-    /** 该库是否为 KDBX（认证后的收尾要按类型分流；以库表为准，不信 UI 侧的快照）。 */
-    private suspend fun isKdbxVault(vaultId: String): Boolean =
-        vaultRepository.observeVaults().first()
-            .firstOrNull { it.id == vaultId }
-            ?.kind == VaultKind.KDBX
-
-    // ---- KDBX 快速解锁（`.ai/ISSUES.md` #93 / 定稿 §4）----
-
-    /**
-     * 用户勾选了一个 **KDBX** 库的快速解锁：先要主密码。
-     *
-     * 为什么不能像 Bitwarden 那样「勾了就去弹指纹」（定稿 §4.5）：
-     * KDBX 会话里**没有可包裹的密钥** —— `KdbxSession` 不持主密码，
-     * `Kdbx.unlock()` 用完即弃。所以唯一的包裹物是「主密码 + keyfile」，
-     * 而这个主密码只存在于用户脑子里 ⇒ **必须当场再问一次**。
-     *
-     * 这里只负责「打开输入框」；真正的校验与包裹在 [confirmKdbxPassword]。
-     */
-    fun startKdbxQuickUnlock(vaultId: String) {
-        _events.trySend(Event.PromptForKdbxPassword(vaultId))
-    }
-
-    /**
-     * 用户提交 KDBX 主密码：**先校验 → 再弹指纹 → 指纹过了才包裹**。
-     *
-     * ⚠️ 这个顺序是**硬约束**，2026-09-14 修闪退时定下来的（KDBX 启用生物快解会直接崩溃）：
-     * 快解的保护器 KEK 是 **auth-per-use**（`setUserAuthenticationParameters(0, …)`），
-     * 只有**被 BiometricPrompt 授权过的那一个 Cipher 实例**才能 `doFinal`。
-     * 旧实现把 `wrap` 放在了弹指纹**之前** ⇒ `doFinal` 抛
-     * `UserNotAuthenticatedException` ⇒ `viewModelScope` 协程无人捕获 ⇒ **进程闪退**。
-     *
-     * 拆成 [VaultRepository.prepareKdbxEnroll]（校验 + 组装明文暂存）与
-     * [VaultRepository.commitKdbxEnroll]（认证后包裹）两步之后，顺序天然正确；
-     * PIN 之所以一直没崩，是因为它走 `PinKeyWrapper`（保护器是不需要系统认证的
-     * `SecureCredentialStore` 硬件密钥），**不碰这把 KEK**。
-     *
-     * 「宽松」取向（定稿 §4.4）的落地：输错时**不发关闭事件**，只回一条错误状态，
-     * 输入框留在原地让用户直接重输 —— 不掉出流程、不用重新点一遍勾选。
-     */
-    fun confirmKdbxPassword(vaultId: String, password: String) {
-        viewModelScope.launch {
-            val keyFileUri = runCatching { preferences.kdbxKeyFileUri(vaultId).first() }.getOrNull()
-            when (val outcome = vaultRepository.prepareKdbxEnroll(vaultId, password, keyFileUri)) {
-                is KdbxEnrollOutcome.Prepared -> {
-                    // 校验通过才创建 cipher（反过来会在密码错时也造一把用不上的 cipher）。
-                    val cipher = vaultRepository.prepareLocalEnroll()
-                    if (cipher == null) {
-                        // 设备无可用认证方式 ⇒ 暂存凭据失去意义，立刻丢弃
-                        vaultRepository.discardKdbxEnroll()
-                        _kdbxEnrollState.emit(KdbxEnrollState.Unavailable)
-                        return@launch
-                    }
-                    _kdbxEnrollState.emit(KdbxEnrollState.Ready)
-                    _events.send(Event.PromptForEnroll(vaultId, cipher))
-                }
-                is KdbxEnrollOutcome.InvalidCredentials ->
-                    // ★ 宽松：只报错，不关框（也没有任何东西被暂存）
-                    _kdbxEnrollState.emit(KdbxEnrollState.WrongPassword)
-                is KdbxEnrollOutcome.SourceUnavailable ->
-                    _kdbxEnrollState.emit(KdbxEnrollState.Failed(outcome.detail))
-                is KdbxEnrollOutcome.Failed ->
-                    _kdbxEnrollState.emit(KdbxEnrollState.Failed(outcome.detail))
-            }
-        }
-    }
-
-    /** 用户取消 KDBX 主密码输入框。 */
-    fun dismissKdbxPassword() {
-        _kdbxEnrollState.value = KdbxEnrollState.Idle
-    }
-
-    /** KDBX 主密码输入对话框的状态（UI 据此显示错误 / 收起）。 */
-    sealed interface KdbxEnrollState {
-        data object Idle : KdbxEnrollState
-
-        /** 校验通过、已请 UI 弹指纹。 */
-        data object Ready : KdbxEnrollState
-
-        /** 主密码不对 —— 输入框保留，就地重输。 */
-        data object WrongPassword : KdbxEnrollState
-
-        /** 无可用认证方式。 */
-        data object Unavailable : KdbxEnrollState
-
-        /** 其它失败（文件读不到等）。 */
-        data class Failed(val detail: String) : KdbxEnrollState
-    }
-
-    private val _kdbxEnrollState = MutableStateFlow<KdbxEnrollState>(KdbxEnrollState.Idle)
-    val kdbxEnrollState: StateFlow<KdbxEnrollState> = _kdbxEnrollState.asStateFlow()
-
-    // ---- 应用内 PIN（定位：解锁便利，非找回手段）----
-
-    /**
-     * 「应用内 PIN」设置交互。
-     *
-     * 2026-09-16 从本 ViewModel 抽出为 [PinSettingsController]：加完「一个 PIN 打开多个库」
-     * 后本类函数数到了 43（detekt `TooManyFunctions` 上限 40），但更实际的理由是内聚 ——
-     * PIN 设置是自成一体的多步流程，与设置页各种偏好开关不是一回事。
-     *
-     * ⚠️ **下一个再往里加解锁手段时，同样要提取，而不是继续堆回本类。**
-     *
-     * 回调 [::disableQuickUnlock] 用于「改用 PIN ⇒ 关掉该库指纹」，只在 PIN 真正
-     * 登记成功后才触发（详见 `PinSettingsController.dismissBiometricAfterEnroll`）。
-     */
-    val pin: PinSettingsController by lazy {
-        PinSettingsController(
+    val quickUnlock: QuickUnlockController by lazy {
+        QuickUnlockController(
             vaultRepository = vaultRepository,
-            scope = viewModelScope,
-            onDisableQuickUnlock = ::disableQuickUnlock,
-        )
-    }
-
-    /**
-     * 「生物识别快速解锁」设置交互（**一次勾选多个库、一次指纹全部启用**）。
-     *
-     * 2026-09-16 新增，对应用户诉求：「默认一个生物验证的指纹，管理解锁所有的库也可以吗」。
-     * 抽成独立类而非堆回本类，理由同 [pin]（函数数上限 + 内聚）。
-     *
-     * 旧的单库入口（[startQuickUnlockEnroll] / [confirmKdbxPassword] / [enrollWithCipher]）
-     * **刻意保留不动**：库列表页横幅（`QuickUnlockBanner`）与 `VaultManagementScreen`
-     * 仍按"单库"心智工作，改动它们属于另一件事，不在本次范围内。
-     */
-    val biometric: BiometricEnrollController by lazy {
-        BiometricEnrollController(
-            vaultRepository = vaultRepository,
-            scope = viewModelScope,
             enrollment = localUnlockEnrollment,
+            preferences = preferences,
+            scope = viewModelScope,
         )
     }
-
-    sealed interface Event {
-        /** UI 收到后弹 BiometricPrompt（cipher 已 init，等待用户认证）。 */
-        data class PromptForEnroll(val vaultId: String, val cipher: Cipher) : Event
-
-        /** UI 收到后弹 KDBX 主密码输入框（KDBX 必须当场要密码，定稿 §4.5）。 */
-        data class PromptForKdbxPassword(val vaultId: String) : Event
-    }
-
-    private val _events = Channel<Event>(Channel.BUFFERED)
-    val events: Flow<Event> = _events.receiveAsFlow()
 
     /** 立即锁定全部库：AutoLockController 会自增锁定代次，导航壳自动回库列表。 */
     fun lockAllNow() = autoLockController.lockAllNow()
