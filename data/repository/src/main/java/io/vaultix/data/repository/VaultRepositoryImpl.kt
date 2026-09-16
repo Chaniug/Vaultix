@@ -871,8 +871,22 @@ private data class TwoFactorAttempt(val provider: Int, val code: String)
  * 而不是继续往这个类里堆。
  */
 
-/** 会话密钥 → 64B full key（enc ‖ mac）。 */
-private fun buildFullKey(key: SymmetricCryptoKey): ByteArray {
+/**
+ * 会话密钥 → 64B full key（enc ‖ mac）。
+ *
+ * ⚠️ `internal` 而**不是** `private`：本文件的 `VaultRepositoryImpl` 与
+ * `PinEnrollment`、`LocalUnlockEnrollment`（各自独立文件）都要用它。
+ * 文件级 `private` 只在**本文件内**可见，跨文件调用会编译失败：
+ *
+ *     e: PinEnrollment.kt:91:32 Cannot access 'fun buildFullKey(...)': it is private in file.
+ *     e: LocalUnlockEnrollment.kt:339:40 同上
+ *
+ * 同类"文件级私有被跨文件调用"的隐患：本仓库另有 `classifyKdbxError`（同一取向）。
+ * **新增跨文件的工具函数时，用 `internal`，不要用 `private`。**
+ * （`classifyKdbxError` 目前只被本文件调用，`private` 尚可；一旦有第二个文件要用，
+ *  必须同样改成 `internal` —— 否则就是本条踩过的坑。）
+ */
+internal fun buildFullKey(key: SymmetricCryptoKey): ByteArray {
     val enc = key.encKey.useBytes { it.copyOf() }
     val mac = key.macKey.useBytes { it.copyOf() }
     return enc + mac

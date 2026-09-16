@@ -17,11 +17,16 @@
 | `MEMORY.md` | 项目长期笔记（定位 / 架构 / 里程碑 / 技术栈硬约束 / 协议与来源 / 发布签名） | 20KB |
 | `MEMORY.md §8` | **索引**：写代码前的长期约定 → 正文在 ↓ | — |
 | `conventions/` | 约定正文 8 篇：`8.1-自动填充` `8.2-锁与解锁` `8.3-M2KDBX` `8.4-UI·观感` `8.5-通行密钥` `8.6-工程质量` `8.7-环境` `8.8-M3Expressive-采纳范围与顺序` | 各 2~4KB |
-| `ISSUES.md` | **索引**：87 条坑的「编号 → 分篇」总表 | 9KB |
+| `ISSUES.md` | **索引**：103 条坑的「编号 → 分篇」总表 | 9KB |
 | `issues/` | 坑的正文 7 篇：`01-构建与环境` … `07-数据与同步` | 各 4~43KB |
 | `decisions/` | **逻辑定稿**（用户拍板的方向，非根因、非实现）：`库选择与快速解锁-逻辑定稿.md`、`设置页信息架构-定稿.md` | — |
 | `SESSION-YYYY-MM-DD.md` | 逐轮工作日志（append-only） | — |
-| `tools/` | **本地自检脚本**（不需 Android SDK，`python3` 直接跑）。三个脚本覆盖「编译器才能发现、detekt 查不到」的缝：<br>`check_signature_types.py` = 签名里的类型名是否存在；<br>`check_import_packages.py` = `import` 的包路径对不对（#101）；<br>`check_experimental_optin.py` = 实验性 API 有没有 `@OptIn`（#101.2，带 `--selftest`） | — |
+| `tools/` | **本地自检脚本**（不需 Android SDK，`python3` 直接跑）。覆盖「编译器才能发现、detekt 查不到」的缝：<br>`check_compile_smells.py` = 图标导入 / 顶层常量顺序 / `R.string` 悬空引用 / **重复声明**（第四个检查，见 #103；带 `--detekt-probe` 两级探针）；<br>`check_signature_types.py` = 签名里的类型名是否存在；<br>`check_import_packages.py` = `import` 的包路径对不对（#101 / #104）；<br>`check_experimental_optin.py` = 实验性 API 有没有 `@OptIn`（#101.2，带 `--selftest`） |
+| `tools/tests/` | **门禁自己的自测**（改探针前必跑）：<br>`selftest_duplicate_declarations.py` = 7 个正反用例；<br>`selftest_import_packages.py` = **端到端**（真把 import 改错、跑脚本、看退出码、还原） |
+
+> ⚠️ **四道脚本的扫描范围都是 `app/ core/ data/ domain/`**（排除 `reference/` 对照源码与 `build/`）。
+> 2026-09-16 之前只扫 `app/src`，**同一个盲区造成两次 CI 红**
+> （domain 的重复声明、data 的错 import 都扫不到）。**改门禁时先确认它扫的是不是全部 —— 看报的数字。** — |
 
 > **为什么这么拆**：原先 `.ai/ISSUES.md` 139KB、`.ai/MEMORY.md` 43KB ——
 > 全读会把真正需要的上下文挤掉，定位只能靠 grep。现在入口稳定、**正文按需读一篇**。

@@ -334,8 +334,15 @@ class LocalUnlockEnrollment @Inject constructor(
             }
         }
 
-    /** Bitwarden 侧的待包明文：会话里的对称密钥 → 64B full key。 */
-    private fun bitwardenPlaintext(vaultId: String): ByteArray? =
+    /**
+     * Bitwarden 侧的待包明文：会话里的对称密钥 → 64B full key。
+     *
+     * ⚠️ 必须 `suspend`：[VaultSessionManager.keyOf] 是 `suspend`（内部走 mutex），
+     * 它在这里不加 `suspend` 会编译失败：
+     *   `Suspend function 'keyOf' can only be called from a coroutine or another suspend function.`
+     * 唯一的调用点 [commitOne] 本就是 `suspend`，改成挂起函数无额外代价。
+     */
+    private suspend fun bitwardenPlaintext(vaultId: String): ByteArray? =
         sessions.keyOf(vaultId)?.let { buildFullKey(it) }
 
     /** 把单个库清回「未启用」（payload 与开关一起清，避免"显示已启用但永远失败"）。 */
