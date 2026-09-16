@@ -126,6 +126,46 @@ object Kdbx {
         )
     }
 
+    /**
+     * **只校验凭据、不开库**：这组主密码 / keyfile 能不能打开 [sourceUri]？
+     *
+     * ## 为什么需要一个"只验不开"的入口（2026-09-16）
+     *
+     * 「一个 PIN 打开多个库」要求在设置 PIN 时就为 KDBX 组好信封，而信封里躺的是
+     * 「主密码 + keyfile」。**必须先确认这组凭据真的能开库，再包进去** ——
+     * 否则会得到「设置成功、但躺的是错密码」，用户要到下次解锁才发现
+     * 「PIN 明明对了却打不开库」，那时已经分不清是 PIN 错还是密码错。
+     *
+     * 但校验又**不能**真的去开库：设置 PIN 时用户只是在配解锁方式，
+     * 并未要求「把这个库也打开并读进内存」——真开了会：
+     * 1. 把明文内容拉进内存（用户没要求，且页面根本没准备展示它）；
+     * 2. 覆盖该库可能已存在的会话（用户可能正开着，却在为**另一个**库设 PIN）；
+     * 3. 在「多库配齐」里对每个 KDBX 库各开一次，成本与副作用都白付。
+     *
+     * ⇒ 本方法只做「读文件 → 尝试凭据」两步，**不碰 [KdbxSessionStore]**。
+     *   副作用仅限读完即弃的字节，与调用方在读文件这件事上完全一致。
+     *
+     * ⚠️ **不要把它实现成 `unlock()` 包一层 try**：那正是上面第 2 条要避免的
+     * 「副作用泄漏到校验路径」。校验必须是**无副作用**的。
+     *
+     * @return 凭据对不对。文件读不到 / 不是 KDBX 文件等也一律算"不通过"——
+     *   调用方关心的是「能不能用这组凭据开库」，具体原因不影响它要不要包裹。
+     */
+    fun verify(
+        sourceUri: String,
+        password: String,
+        keyFileUri: String?,
+        source: KdbxSource,
+    ): Boolean {
+        val bytes = source.read(sourceUri) ?: return false
+        val keyFileBytes = keyFileUri?.takeIf { it.isNotBlank() }?.let { uri -> source.read(uri) }
+        return KdbxOpener.open(
+            bytes = bytes,
+            password = password,
+            keyFileBytes = keyFileBytes,
+        ).isSuccess
+    }
+
     /** 已登记的会话内容（未解锁 / 已锁返回 null）。 */
     fun contentOf(vaultId: String): KdbxUnlockedContent? = KdbxSessionStore.get(vaultId)?.let { session ->
         KdbxUnlockedContent(

@@ -237,25 +237,137 @@ interface VaultRepository {
     fun pinUnlockAvailable(vaultId: String): Flow<Boolean>
 
     /**
-     * 启用 / 重设 PIN（**Bitwarden 库**）。
+     * 「**一个 PIN 打开多个库**」的配齐流程（2026-09-16 用户诉求）。
      *
-     * ⚠️ 与 [enrollPinKdbx] 分成**两个方法**而非一个重载，理由同
-     * [prepareKdbxEnroll]：Bitwarden 的会话里**有**要包裹的密钥（库正解锁），
-     * 所以无需再输一次主密码；KDBX 的会话里**没有**主密码，必须当场输入并先校验。
-     * 合并成一个方法就得让「主密码」这个参数在 Bitwarden 侧无意义地可选，
-     * 那条隐式约定迟早被用错。
+     * ## 用户要的效果
      *
-     * 重设语义 = 重新包裹。旧信封会被覆盖 ⇒ **旧 PIN 立即失效**。
+     * 用户原话：「**我想要的是 app 一个 PIN 能够打开 bitwarden 和 kdbx。**」
+     * 在设置里**一次性**把同一个 PIN 登记到多个库，之后解锁页只需输入这一个 PIN，
+     * Bitwarden 与 KDBX 都能被打开 —— 而不是"每个库各设一次"。
+     *
+     * ⚠️ **PIN 值相同并不能让 KDBX 免掉主密码**：这是最容易误解的一点。
+     * 差别不在 PIN，而在**包进信封的东西**（下节）。
+     *
+     * ## 为什么必须"一次配齐"，而不能只设一次就自动通用
+     *
+     * 两种库**包进信封的东西本质不同**，这是本设计的硬约束：
+     * - Bitwarden 包的是**会话里的对称密钥**（库正解锁 ⇒ 直接可取，无需任何密码）；
+     * - KDBX 包的是**「主密码 + keyfile 字节」** —— KDBX 会话里**根本没有主密码**
+     *   （只有解密后的数据），所以必须由用户当场输入一次。
+     *
+     * ⇒ 想让同一个 PIN 覆盖多个库，KDBX 那部分的主密码**早晚要在某个时刻被收集**。
+     *   最省事的收法就是"在设置 PIN 时一次问清"，而不是留到解锁时才逐个补。
+     *   配齐之后，解锁链路**一行都不用改**：每个库本来就有自己的信封，
+     *   输入同一个 PIN 即可各开各的。
+     *
+     * ## 每库独立信封 + 独立失败计数（安全边界不变）
+     *
+     * 本方法只是把**同一 PIN 值**分别包裹进各库自己的信封（各库密钥不同 ⇒ 密文亦不同）。
+     * 因此：
+     * - 某个库在别处重设了 PIN ⇒ **只影响那个库**，其余库不受牵连；
+     * - 失败计数仍按库独立 ⇒ 一个库输错锁住，不会连带锁死其它库。
+     *
+     * ## 部分成功是真实状态
+     *
+     * 不做"全成功才算成功 / 整体回滚"：某个 KDBX 库的主密码可能输错，
+     * 而 Bitwarden 侧的登记是好的。如实逐库反馈比整体失败更有用
+     * （否则用户为了一个库的笔误就得把全部库重设一遍）。
+     *
+     * ## ⚠️ 必须由调用方指定目标，不得隐式覆盖全部库
+     *
+     * [vaultIds] 是**用户勾选**要设 PIN 的库。库表里有多少库 ≠ 用户想设几个 ——
+     * 有些库用户可能根本不想启用 PIN（例如只读的共享库）。
+     * 若本方法自己遍历全部库，就会**静默改掉用户没同意改的配置**，
+     * 而 PIN 覆盖会影响解锁入口，属于用户可感知的安全设置，不能替用户决定。
+     * UI 的默认勾选可以是全选（多数人的诉求就是"一个 PIN 全开"），
+     * 但**选择权必须在用户手上**，且要能取消。
+     *
+     * ## 分派规则（两种库各走各的）
+     *
+     * | 库类型 | 包什么 | 当场要不要密码 |
+     * | --- | --- | --- |
+     * | Bitwarden | 会话里的对称密钥 | ❌ 不需要 |
+     * | KDBX | 主密码 + keyfile 字节 | ✅ **必须**（先校验后包裹） |
+     *
+     * @param vaultIds 要设置 PIN 的库（调用方已按用户选择过滤）。
+     * @param pin 对所有目标库生效的同一个 PIN。
+     * @param masterPassword KDBX 库的主密码（用户当场输入的那一次）。
+     *   ⚠️ 本方法接收它即视为**一次性使用**，实现方须确保用后清零、不落盘。
+     *   没有 KDBX 目标库时应传空串。
+     * @return 每库的结果（含失败原因），键为 vaultId。
      */
-    suspend fun enrollPin(vaultId: String, pin: String): PinEnrollOutcome
-
-    /** 启用 / 重设 PIN（**KDBX 库**）：先校验凭据、后包裹。 */
-    suspend fun enrollPinKdbx(
-        vaultId: String,
+    suspend fun enrollPinForVaults(
+        vaultIds: List<String>,
         pin: String,
         masterPassword: String,
-        keyFileUri: String?,
-    ): PinEnrollOutcome
+    ): Map<String, PinEnrollOutcome>
+
+    /**
+     * 「**一个 PIN 打开多个库**」的配齐流程（2026-09-16 用户诉求）。
+     *
+     * ## 用户要的效果
+     *
+     * 在设置里**一次性**把同一个 PIN 登记到多个库，之后解锁页只需输入这一个 PIN，
+     * Bitwarden 与 KDBX 都能被打开 —— 而不是现在这样"每个库各设一次，
+     * 解锁时还得先把每个库都配一遍"。
+     *
+     * ## 为什么必须"一次配齐"，而不能只设一次就自动通用
+     *
+     * 两种库**包进信封的东西本质不同**，这是本设计的硬约束：
+     * - Bitwarden 包的是**会话里的对称密钥**（库正解锁 ⇒ 直接可取，无需任何密码）；
+     * - KDBX 包的是**「主密码 + keyfile 字节」** —— KDBX 会话里**根本没有主密码**
+     *   （只有解密后的数据），所以必须由用户当场输入一次。
+     *
+     * ⇒ 想让同一个 PIN 覆盖多个库，KDBX 那部分的主密码**早晚要在某个时刻被收集**。
+     *   最省事的收法就是"在设置 PIN 时一次问清"，而不是留到解锁时才逐个补。
+     *   配齐之后，解锁链路**一行都不用改**：每个库本来就有自己的信封，
+     *   输入同一个 PIN 即可各开各的。
+     *
+     * ## 每库独立信封 + 独立失败计数（安全边界不变）
+     *
+     * 本方法只是把**同一 PIN 值**分别包裹进各库自己的信封（各库密钥不同 ⇒ 密文亦不同）。
+     * 因此：
+     * - 某个库在别处重设了 PIN ⇒ **只影响那个库**，其余库不受牵连；
+     * - 失败计数仍按库独立 ⇒ 一个库输错锁住，不会连带锁死其它库。
+     *
+     * ## 部分成功是真实状态
+     *
+     * 不做"全成功才算成功 / 整体回滚"：某个 KDBX 库的主密码可能输错，
+     * 而 Bitwarden 侧的登记是好的。如实逐库反馈比整体失败更有用
+     * （否则用户为了一个库的笔误就得把全部库重设一遍）。
+     *
+     * ## ⚠️ 必须由调用方指定目标，不得隐式覆盖全部库
+     *
+     * [vaultIds] 是**用户勾选**要设 PIN 的库。库表里有多少库 ≠ 用户想设几个 ——
+     * 有些库用户可能根本不想启用 PIN（例如只读的共享库）。
+     * 若本方法自己遍历全部库，就会**静默改掉用户没同意改的配置**，
+     * 而 PIN 覆盖会影响解锁入口，属于用户可感知的安全设置，不能替用户决定。
+     * UI 的默认勾选可以是全选（多数人的诉求就是"一个 PIN 全开"），
+     * 但**选择权必须在用户手上**，且要能取消。
+     *
+     * @param vaultIds 要设置 PIN 的库（调用方已按用户选择过滤）。
+     * @param pin 对所有目标库生效的同一个 PIN。
+     * @param masterPassword KDBX 库的主密码（用户当场输入的那一次）。
+     *   ⚠️ 本方法接收它即视为**一次性使用**，实现方须确保用后清零、不落盘。
+     * @return 每库的结果（含失败原因），键为 vaultId。
+     */
+    suspend fun enrollPinForVaults(
+        vaultIds: List<String>,
+        pin: String,
+        masterPassword: String,
+    ): Map<String, PinEnrollOutcome>
+
+    /**
+     * 全部库的「PIN 覆盖候选」（供设置对话框列出勾选项）。
+     *
+     * 返回**全部**库（含 KDBX），由 UI 决定默认勾选谁：
+     * - Bitwarden 库：可直接设置（无需额外输入）；
+     * - KDBX 库：也能设，但用户要**另外提供主密码**，UI 应把这点标出来。
+     *
+     * ⚠️ 返回全部而不是"可设的"：KDBX 库并非不可设（只是要多输一次密码），
+     * 若在这里过滤掉，用户会以为 KDBX 不支持 PIN —— 那是**假状态**。
+     */
+    suspend fun pinCandidateVaultIds(): List<String>
 
     /** 用 PIN 解锁 **Bitwarden 库**（解出的密钥直接登记会话）。 */
     suspend fun completePinUnlock(vaultId: String, pin: String): PinUnlockOutcome
@@ -283,7 +395,7 @@ const val PIN_MIN_LENGTH: Int = 6
 /** 连续输错上限；达到即锁定，须用主密码解锁后重设。 */
 const val PIN_MAX_ATTEMPTS: Int = 5
 
-/** [VaultRepository.enrollPin] / [VaultRepository.enrollPinKdbx] 的结果。 */
+/** [VaultRepository.enrollPinForVaults] 的逐库结果。 */
 sealed interface PinEnrollOutcome {
     /** 已包裹落盘、开关已置位。 */
     data object Enrolled : PinEnrollOutcome

@@ -395,6 +395,18 @@
     <string name="pin_enable">设置 PIN</string>
     <string name="pin_set_title">设置 PIN</string>
     <string name="pin_set_message">请输入 6 位数字。PIN 只用于解开本机已保存的密钥，不会上传。</string>
+    <!-- 2026-09-16「一个 PIN 打开多个库」：目标库是**可勾选**的，默认全选但可取消。
+         ⚠️ 必须让用户看见并能否决影响范围 —— PIN 影响解锁入口，是安全设置，
+         程序不能替他决定（库表里有几个库 ≠ 用户想设几个）。 -->
+    <string name="pin_set_scope_label">这个 PIN 应用到哪些库</string>
+    <string name="pin_set_scope_kdbx_hint">KDBX 库需再输一次它的主密码</string>
+    <string name="pin_target_already">%1$s · 已有 PIN</string>
+    <!-- 配齐结果页（逐库如实汇报，部分成功是真实状态） -->
+    <string name="pin_enroll_report_title">设置完成</string>
+    <string name="pin_enroll_report_ok">已为 %1$d 个库设置 PIN</string>
+    <string name="pin_enroll_report_failed_title">以下库未设置成功</string>
+    <string name="pin_enroll_report_failed_item">%1$s：%2$s</string>
+    <string name="pin_enroll_report_none">没有任何库设置成功</string>
     <string name="pin_label">PIN</string>
     <string name="pin_confirm_label">再输一次</string>
     <string name="pin_mismatch">两次输入不一致，请重新输入</string>
@@ -405,7 +417,10 @@
          **刻意保留**：它点明了"改的是 PIN"且措辞更完整。 -->
     <string name="pin_change">修改 PIN</string>
     <string name="pin_kdbx_title">确认主密码</string>
-    <string name="pin_kdbx_message">请输入「%1$s」的主密码。它会被加密保存，用于以后用 PIN 打开该库。</string>
+    <!-- 2026-09-16「一个 PIN 打开全部库」后，这一次输入会被拿去逐个校验**所有** KDBX 库，
+         故措辞从"该库"改为"KDBX 库"，并说明各库密码不同时的处理方式
+         （失败的库会在结果页列出，用户之后可单独设置）—— 这是必须提前说的预期管理。 -->
+    <string name="pin_kdbx_message">请输入「%1$s」的主密码。KDBX 库必须由主密码解开，PIN 才能代为保管。若其它 KDBX 库密码不同，它们会在结果里列出。</string>
     <!-- 自动锁定档位 -->
     <string name="auto_lock_never">从不</string>
     <string name="auto_lock_immediately">立即（切后台即锁）</string>

@@ -221,10 +221,9 @@ fun VaultManagementScreen(
                 }
             },
             onDisable = viewModel::disableQuickUnlock,
-            onPinSet = viewModel::openPinDialog,
+            onPinSet = viewModel.pin::open,
             // 「改用 PIN」= 设置成功后顺带关掉该库的指纹（见 QuickUnlockManageDialog 的告诫）。
-            onPinSetSwitchingFromBiometric = viewModel::openPinDialogSwitchingFromBiometric,
-            onPinDisable = viewModel::disablePin,
+            onPinSetSwitchingFromBiometric = viewModel.pin::openSwitchingFromBiometric,
             onDismiss = { showQuickUnlockDialog = false },
         )
     }

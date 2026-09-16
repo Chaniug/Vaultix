@@ -8,6 +8,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -54,6 +55,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.BasicAlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -1225,7 +1227,7 @@ internal fun QuickUnlockManageDialog(
                 // ⚠️ 两件事的顺序与时机都是刻意的：
                 // 1. **不在这里关指纹** —— PIN 设置是独立流程，用户可能中途取消；
                 //    先关指纹再设 PIN，取消后就成了"指纹没了、PIN 也没设成"的静默数据丢失。
-                //    改为走 openPinDialogSwitchingFromBiometric，由 ViewModel 在
+                //    改为走 openSwitchingFromBiometric，由控制器在
                 //    PIN **真正落盘后**才关指纹（见该方法的 KDoc）。
                 // 2. 已设过 PIN 时不重复弹框 —— 换 PIN 走「修改 PIN」辅助动作。
                 if (!vault.pinEnabled) onPinSetSwitchingFromBiometric(vault)
@@ -1539,22 +1541,25 @@ private val CHOICE_DOT_SIZE = 10.dp
 private const val DISABLED_ALPHA = 0.38f
 
 /**
- * PIN 设置对话框的宿主：按 [SettingsViewModel.PinDialogState] 选一帧渲染。
+ * PIN 设置对话框的宿主：按 [PinSettingsController.PinDialogState] 选一帧渲染。
  *
  * 单独成宿主的原因：PIN 的两步（输 PIN → KDBX 输主密码）是**同一个流程的两个阶段**，
  * 让它们在同一个宿主里切换，才能保证「上一步收下的 PIN」不会因为 UI 重组而丢失。
  */
 @Composable
 internal fun PinDialogHost(viewModel: SettingsViewModel) {
+    val pin = viewModel.pin
     // ⚠️ 必须先用局部 `val` 接住：委托属性（`by`）**无法智能转换**，
     // 直接在 `when` 里用 `state is ...` 会编译不过。
-    val state = viewModel.pinDialog.collectAsStateWithLifecycle().value
+    val state = pin.pinDialog.collectAsStateWithLifecycle().value
     when (state) {
-        SettingsViewModel.PinDialogState.Idle -> Unit
-        is SettingsViewModel.PinDialogState.Entering ->
-            PinSetDialog(state = state, viewModel = viewModel)
-        is SettingsViewModel.PinDialogState.AskingKdbxPassword ->
-            PinKdbxPasswordDialog(state = state, viewModel = viewModel)
+        PinSettingsController.PinDialogState.Idle -> Unit
+        is PinSettingsController.PinDialogState.Entering ->
+            PinSetDialog(state = state, pin = pin)
+        is PinSettingsController.PinDialogState.AskingKdbxPassword ->
+            PinKdbxPasswordDialog(state = state, pin = pin)
+        is PinSettingsController.PinDialogState.EnrollReport ->
+            PinEnrollReportDialog(state = state, pin = pin)
     }
 }
 
@@ -1562,15 +1567,28 @@ internal fun PinDialogHost(viewModel: SettingsViewModel) {
  * 设置 PIN（第一步）：输入两次。
  *
  * 用 `NumberPassword` 键盘：PIN 是纯数字，弹全键盘只会让用户多找一次数字行。
- * 两次输入一致性与位数校验都在 ViewModel（见 `confirmPinEntry`），这里只负责画错误。
+ * 两次输入一致性与位数校验都在控制器（见 `PinSettingsController.confirmEntry`），
+ * 这里只负责画错误。
+ *
+ * ## 2026-09-16「一个 PIN 打开多个库」
+ *
+ * 除了两格 PIN 输入，这里还有**目标库勾选列表**（[PinTargetPicker]）：用户输的这
+ * 一个 PIN 会一次性配到**勾选的库**上；之后解锁页输入同一个 PIN 即可打开它们
+ * （每个库仍各有自己的信封，见 domain 里 `enrollPinForVaults` 的 KDoc）。
+ *
+ * ⚠️ **勾选必须是用户能看见、能取消的**：默认全选只是省事，不是替用户决定 ——
+ * PIN 影响解锁入口，属于用户可感知的安全设置（见 `PinDialogState.Entering` 的 KDoc）。
+ *
+ * ⚠️ 若勾选里含 KDBX 库，额外提示"需再输一次主密码" —— 那个密码是**必然**要问的
+ * （KDBX 会话里没有主密码），提前说明可避免用户以为程序在反复索要。
  */
 @Composable
 private fun PinSetDialog(
-    state: SettingsViewModel.PinDialogState.Entering,
-    viewModel: SettingsViewModel,
+    state: PinSettingsController.PinDialogState.Entering,
+    pin: PinSettingsController,
 ) {
     AlertDialog(
-        onDismissRequest = viewModel::dismissPinDialog,
+        onDismissRequest = pin::dismiss,
         title = { Text(stringResource(R.string.pin_set_title)) },
         text = {
             Column {
@@ -1579,29 +1597,199 @@ private fun PinSetDialog(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                PinTargetPicker(state = state, pin = pin)
                 Spacer(Modifier.height(Spacing.md))
                 PinField(
                     value = state.pin,
                     labelRes = R.string.pin_label,
-                    onValueChange = viewModel::onPinChange,
+                    onValueChange = pin::onPinChange,
                 )
                 Spacer(Modifier.height(Spacing.sm))
                 PinField(
                     value = state.confirm,
                     labelRes = R.string.pin_confirm_label,
-                    onValueChange = viewModel::onPinConfirmChange,
+                    onValueChange = pin::onConfirmChange,
                 )
                 DialogErrorText(state.error)
             }
         },
         confirmButton = {
-            TextButton(onClick = viewModel::confirmPinEntry) {
+            TextButton(onClick = pin::confirmEntry) {
                 Text(stringResource(R.string.action_save))
             }
         },
         dismissButton = {
-            TextButton(onClick = viewModel::dismissPinDialog) {
+            TextButton(onClick = pin::dismiss) {
                 Text(stringResource(R.string.action_cancel))
+            }
+        },
+    )
+}
+
+/**
+ * PIN 的**目标库勾选列表**：这一个 PIN 要配到哪几个库上。
+ *
+ * ## 为什么是"可勾选"而不是"一行说明"
+ *
+ * 库表里有几个库 ≠ 用户想设几个。PIN 会影响解锁入口，属于用户可感知的安全设置，
+ * 不能替他决定（见 `PinSettingsController.PinDialogState.Entering` 的 KDoc）。
+ * 默认**全选**（多数人的诉求就是"一个 PIN 全开"），但用户能取消。
+ *
+ * ⚠️ 候选列表是异步取回来的：为空说明还没到，**不能**先显示"已选 0 个库"，
+ * 那会在第一帧给人错误印象。宁可这一帧什么都不显示。
+ *
+ * ⚠️ 整行可点（`toggleable`）而非只有小方框可点：勾选框本身的触达面积太小，
+ * 而这里每行也就是一个库名，把整行做成热区更符合手感。
+ */
+@Composable
+private fun PinTargetPicker(
+    state: PinSettingsController.PinDialogState.Entering,
+    pin: PinSettingsController,
+) {
+    if (state.candidates.isEmpty()) return
+    Spacer(Modifier.height(Spacing.md))
+    Text(
+        text = stringResource(R.string.pin_set_scope_label),
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.primary,
+    )
+    state.candidates.forEach { candidate ->
+        PinTargetRow(
+            candidate = candidate,
+            checked = candidate.id in state.selected,
+            onToggle = { pin.toggleTarget(candidate.id) },
+        )
+    }
+    // KDBX 必须输主密码才能设 PIN —— 提前说明，避免下一步弹密码框时突兀。
+    if (state.hasKdbx) {
+        Text(
+            text = stringResource(R.string.pin_set_scope_kdbx_hint),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = Spacing.xs),
+        )
+    }
+}
+
+/**
+ * 勾选列表里的一行（库名 + 类型标注 + 勾选框）。
+ *
+ * `pinEnabled` 的库会多一个「已有 PIN」小标注：用户可能只想给**新库**补一个 PIN，
+ * 看到既有状态才好判断要不要动它。
+ */
+@Composable
+private fun PinTargetRow(
+    candidate: PinSettingsController.PinCandidate,
+    checked: Boolean,
+    onToggle: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .toggleable(
+                value = checked,
+                role = Role.Checkbox,
+                onValueChange = { onToggle() },
+            )
+            .padding(vertical = Spacing.xs),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Checkbox(checked = checked, onCheckedChange = null)
+        Spacer(Modifier.width(Spacing.sm))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = candidate.name,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            // 类型 + 既有状态合成一行副标题：两者都是"判断要不要动它"的依据。
+            Text(
+                text = pinTargetSubtitle(candidate),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/**
+ * 勾选行的副标题：库类型 + 是否已有 PIN。
+ *
+ * 抽成函数是为了把分支从 [PinTargetRow] 里挪出去 —— Compose 函数的分支直接叠圈复杂度
+ * （本仓库 detekt 上限 14，见 8.6）。
+ */
+@Composable
+private fun pinTargetSubtitle(candidate: PinSettingsController.PinCandidate): String {
+    val kindLabel = stringResource(
+        when (candidate.kind) {
+            VaultKind.BITWARDEN -> R.string.vault_kind_bitwarden
+            VaultKind.KDBX -> R.string.vault_kind_kdbx
+        },
+    )
+    return if (candidate.pinEnabled) {
+        stringResource(R.string.pin_target_already, kindLabel)
+    } else {
+        kindLabel
+    }
+}
+
+/**
+ * 配齐结果页（第三步）：**逐库如实汇报**。
+ *
+ * ## 为什么必须有这一步
+ *
+ * 配齐是逐库进行的，**部分成功是真实状态**：某个 KDBX 库的主密码打错，
+ * 而 Bitwarden 侧的登记完全正常。若配完直接关掉对话框，用户会以为
+ * "全都配好了"，直到某次解锁失败才发现 —— 那正是本项目反复强调的**假状态**。
+ *
+ * ⚠️ 这里**不提供"重试失败的库"按钮**：失败原因差异很大（密码错 / 库未解锁 /
+ * 类型识别不出），重试要收集的信息也不同。如实列出原因，让用户用别的入口
+ * 逐个处理，比塞一个必然踩坑的通用重试更负责。
+ */
+@Composable
+private fun PinEnrollReportDialog(
+    state: PinSettingsController.PinDialogState.EnrollReport,
+    pin: PinSettingsController,
+) {
+    AlertDialog(
+        onDismissRequest = pin::dismiss,
+        title = { Text(stringResource(R.string.pin_enroll_report_title)) },
+        text = {
+            Column {
+                Text(
+                    text = if (state.succeeded.isEmpty()) {
+                        stringResource(R.string.pin_enroll_report_none)
+                    } else {
+                        stringResource(R.string.pin_enroll_report_ok, state.succeeded.size)
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                if (state.failed.isNotEmpty()) {
+                    Spacer(Modifier.height(Spacing.md))
+                    Text(
+                        text = stringResource(R.string.pin_enroll_report_failed_title),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    state.failed.forEach { item ->
+                        Text(
+                            text = stringResource(
+                                R.string.pin_enroll_report_failed_item,
+                                item.vaultName,
+                                item.reason,
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = Spacing.xs),
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = pin::dismiss) {
+                Text(stringResource(R.string.action_done))
             }
         },
     )
@@ -1610,11 +1798,11 @@ private fun PinSetDialog(
 /** KDBX 第二步：再输一次主密码（会话里没有它，PIN 无从包裹）。 */
 @Composable
 private fun PinKdbxPasswordDialog(
-    state: SettingsViewModel.PinDialogState.AskingKdbxPassword,
-    viewModel: SettingsViewModel,
+    state: PinSettingsController.PinDialogState.AskingKdbxPassword,
+    pin: PinSettingsController,
 ) {
     AlertDialog(
-        onDismissRequest = viewModel::dismissPinDialog,
+        onDismissRequest = pin::dismiss,
         title = { Text(stringResource(R.string.pin_kdbx_title)) },
         text = {
             Column {
@@ -1626,7 +1814,7 @@ private fun PinKdbxPasswordDialog(
                 Spacer(Modifier.height(Spacing.md))
                 OutlinedTextField(
                     value = state.password,
-                    onValueChange = viewModel::onPinKdbxPasswordChange,
+                    onValueChange = pin::onKdbxPasswordChange,
                     label = { Text(stringResource(R.string.kdbx_master_password_label)) },
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
@@ -1637,12 +1825,12 @@ private fun PinKdbxPasswordDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = viewModel::confirmKdbxPasswordForPin) {
+            TextButton(onClick = pin::confirmKdbxPassword) {
                 Text(stringResource(R.string.action_save))
             }
         },
         dismissButton = {
-            TextButton(onClick = viewModel::dismissPinDialog) {
+            TextButton(onClick = pin::dismiss) {
                 Text(stringResource(R.string.action_cancel))
             }
         },

@@ -76,6 +76,20 @@ class VaultRepositoryImpl @Inject constructor(
     private val localUnlockKeyStore: LocalUnlockKeyStore,
     /** 应用内 PIN 的落盘状态与信封开关（与 Keystore KEK 是**两条独立**的解锁路径）。 */
     private val pinUnlockStore: PinUnlockStore,
+    /**
+     * 「一个 PIN 打开多个库」的配齐编排。
+     *
+     * ⚠️ 注入而不是把逻辑写在本类里：本类加完那批逻辑后会到 43 个函数（detekt 上限 40），
+     * 而"库生命周期"与"多库编排"本就是两件事。见 [PinEnrollmentCoordinator] 的 KDoc。
+     */
+    private val pinEnrollment: PinEnrollmentCoordinator,
+    /**
+     * PIN 信封的**组装动作**（按库类型包什么明文）。
+     *
+     * ⚠️ 与 [pinEnrollment] 分开的两个类：协调器管「给哪些库、按什么顺序」，
+     * 本类管「这一个库到底包什么字节」。见 [PinEnrollment] 的 KDoc。
+     */
+    private val enrollment: PinEnrollment,
     private val preferences: VaultixPreferences,
     /** KDBX 会话变化的可观察桥（见 [KdbxSessionFlow] 的说明）。 */
     private val kdbxSessions: KdbxSessionFlow,
@@ -643,66 +657,6 @@ class VaultRepositoryImpl @Inject constructor(
     override fun pinUnlockAvailable(vaultId: String): Flow<Boolean> =
         pinUnlockStore.available(vaultId)
 
-    override suspend fun enrollPin(vaultId: String, pin: String): PinEnrollOutcome =
-        withContext(Dispatchers.IO) {
-            pinUnlockStore.validate(pin)?.let { return@withContext it }
-
-            // Bitwarden：要包裹的就是内存会话里那把对称密钥。
-            // 库正解锁 ⇒ 会话在 ⇒ **无需再输主密码**（这是与 KDBX 侧的真正差别）。
-            val key = sessions.keyOf(vaultId)
-                ?: return@withContext PinEnrollOutcome.SessionUnavailable
-            // ⚠️ persist 会接管并清零这份 full key（所有权转移），这里不再持有它。
-            pinUnlockStore.persist(vaultId, pin, buildFullKey(key))
-            PinEnrollOutcome.Enrolled
-        }
-
-    override suspend fun enrollPinKdbx(
-        vaultId: String,
-        pin: String,
-        masterPassword: String,
-        keyFileUri: String?,
-    ): PinEnrollOutcome = withContext(Dispatchers.IO) {
-        pinUnlockStore.validate(pin)?.let { return@withContext it }
-
-        val row = vaultDao.get(vaultId)
-            ?: return@withContext PinEnrollOutcome.Failed("本地不存在该库")
-        if (VaultKind.fromName(row.kind) != VaultKind.KDBX) {
-            return@withContext PinEnrollOutcome.Failed("该库不是 KDBX 类型")
-        }
-
-        // ★ 先校验、后包裹（与 prepareKdbxEnroll 同一条铁律）：
-        //   `PinKeyWrapper.wrap` 只负责封字节、不管字节对不对。先包后校会得到
-        //   「启用成功、但躺的是错密码」—— 用户要到下次解锁才看到
-        //   「PIN 对了却打不开库」，那时已经无从判断是 PIN 错还是密码错。
-        //
-        //   ⚠️ 这里**可以**当场 wrap（与生物识别路径不同）：PIN 的保护器是
-        //   `PinKeyWrapper` + `SecureCredentialStore` 的硬件外层密钥，**不需要系统认证**
-        //   ⇒ 不存在「cipher 还没被授权」的问题。生物识别那侧的 KEK 是 auth-per-use，
-        //   所以必须等 BiometricPrompt 之后再 wrap（2026-09-14 的闪退根因）。
-        val verification = unlockKdbxInternal(
-            vaultId = vaultId,
-            sourceUri = row.origin,
-            password = masterPassword,
-            keyFileUri = keyFileUri,
-        )
-        if (verification != UnlockResult.Success) {
-            return@withContext when (verification) {
-                UnlockResult.InvalidCredentials -> PinEnrollOutcome.InvalidCredentials
-                else -> PinEnrollOutcome.Failed(
-                    (verification as? UnlockResult.Unknown)?.detail ?: "无法打开该库",
-                )
-            }
-        }
-
-        // keyfile 字节当场从 URI 读出：只包 URI 不行（授权可能失效、用户可能换过文件）。
-        val keyFileBytes = keyFileUri
-            ?.takeIf { it.isNotBlank() }
-            ?.let { uri -> runCatching { kdbxSource.read(uri) }.getOrNull() }
-        // ⚠️ persist 会接管并清零这份明文（所有权转移）
-        pinUnlockStore.persist(vaultId, pin, KdbxUnlockPayload.encode(masterPassword, keyFileBytes))
-        PinEnrollOutcome.Enrolled
-    }
-
     override suspend fun completePinUnlock(vaultId: String, pin: String): PinUnlockOutcome =
         withContext(Dispatchers.IO) {
             val open = pinUnlockStore.open(vaultId, pin)
@@ -776,6 +730,33 @@ class VaultRepositoryImpl @Inject constructor(
     override suspend fun disablePin(vaultId: String) {
         pinUnlockStore.disable(vaultId)
     }
+
+    // ---- 「一个 PIN 打开多个库」的配齐流程（2026-09-16）----
+    //
+    // 为什么只能"一次配齐"、不能"设一次就自动通用"：两种库包进信封的东西不同
+    // ——Bitwarden 包会话密钥（在内存里），KDBX 包「主密码 + keyfile」（**不在**会话里）。
+    // 所以 KDBX 的主密码早晚要被收集一次，最省事的时机就是设置 PIN 时。
+    // 详见 domain 里 [VaultRepository.enrollPinForVaults] 的 KDoc。
+
+    override suspend fun pinCandidateVaultIds(): List<String> = pinEnrollment.candidateVaultIds()
+
+    /**
+     * 把同一个 PIN 配到**用户勾选的**那些库上。
+     *
+     * 本方法是**纯委托**：编排（逐库分流 + KDBX 先校验后包裹）都在
+     * [PinEnrollmentCoordinator]，实际的落盘动作在 [PinEnrollment]。
+     * 直接原因是 detekt `TooManyFunctions`（本类曾到 43，上限 40），
+     * 但更实际的理由是职责：「库生命周期」与「PIN 组信封」本就是两件事。
+     *
+     * ⚠️ **只处理 [vaultIds]**，绝不自己遍历全表：静默给用户没选的库设 PIN 属于越权改配置。
+     * ⚠️ **逐库独立成败，不整体回滚**（部分成功是真实状态）。
+     */
+    override suspend fun enrollPinForVaults(
+        vaultIds: List<String>,
+        pin: String,
+        masterPassword: String,
+    ): Map<String, PinEnrollOutcome> =
+        pinEnrollment.enrollForVaults(vaultIds, pin, masterPassword)
 
     override suspend fun syncVault(vaultId: String): VaultSyncReport {
         val row = vaultDao.get(vaultId)
