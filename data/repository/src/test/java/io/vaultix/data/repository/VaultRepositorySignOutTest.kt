@@ -41,6 +41,11 @@ class VaultRepositorySignOutTest {
     private val credentials = mockk<SecureCredentialStore>(relaxed = true)
     private val localUnlockKeyStore = mockk<LocalUnlockKeyStore>(relaxed = true)
     private val pinUnlockStore = mockk<PinUnlockStore>(relaxed = true)
+    /** 同上：退出数据库会顺手丢弃单库暂存明文（与 disableLocalUnlock 同路径）。 */
+    private val localUnlockEnrollment = mockk<LocalUnlockEnrollment>(relaxed = true)
+    /** 同上：本测试不走「多库配齐 PIN」路径，仅需满足构造。 */
+    private val pinEnrollment = mockk<PinEnrollmentCoordinator>(relaxed = true)
+    private val enrollment = mockk<PinEnrollment>(relaxed = true)
     private val preferences = mockk<VaultixPreferences>(relaxed = true)
     private val sessions = VaultSessionManager()
     private lateinit var repo: VaultRepositoryImpl
@@ -60,6 +65,9 @@ class VaultRepositorySignOutTest {
             credentials = credentials,
             localUnlockKeyStore = localUnlockKeyStore,
             pinUnlockStore = pinUnlockStore,
+            pinEnrollment = pinEnrollment,
+            enrollment = enrollment,
+            localUnlockEnrollment = localUnlockEnrollment,
             preferences = preferences,
             kdbxSessions = KdbxSessionFlow(),
             context = context,

@@ -36,6 +36,11 @@ class VaultRepositoryRemoveTest {
     private val localUnlockKeyStore = mockk<LocalUnlockKeyStore>()
     /** relaxed：本测试不碰 PIN 路径，但构造函数需要它；未打桩的调用不该让测试失败。 */
     private val pinUnlockStore = mockk<PinUnlockStore>(relaxed = true)
+    /** 同上：移除库会在 `runCatching { disableLocalUnlock(...) }` 里顺手丢弃单库暂存明文。 */
+    private val localUnlockEnrollment = mockk<LocalUnlockEnrollment>(relaxed = true)
+    /** 同上：本测试不走「多库配齐 PIN」路径，仅需满足构造。 */
+    private val pinEnrollment = mockk<PinEnrollmentCoordinator>(relaxed = true)
+    private val enrollment = mockk<PinEnrollment>(relaxed = true)
     private val preferences = mockk<VaultixPreferences>()
     private val context = mockk<android.content.Context>(relaxed = true)
     private val sessions = VaultSessionManager()
@@ -56,6 +61,9 @@ class VaultRepositoryRemoveTest {
             credentials = credentials,
             localUnlockKeyStore = localUnlockKeyStore,
             pinUnlockStore = pinUnlockStore,
+            pinEnrollment = pinEnrollment,
+            enrollment = enrollment,
+            localUnlockEnrollment = localUnlockEnrollment,
             preferences = preferences,
             kdbxSessions = KdbxSessionFlow(),
             context = context,
