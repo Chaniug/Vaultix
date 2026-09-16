@@ -24,7 +24,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
@@ -40,6 +39,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.theme.Spacing
@@ -57,19 +57,32 @@ fun toggleSelection(set: Set<String>, key: String): Set<String> =
     if (key in set) set - key else set + key
 
 /**
- * 选择模式下的底部批量操作条（密码条目页 / 验证码页共用）。
+ * 选择模式下的底部批量操作条（密码条目页 / 验证码页 / 通行密钥页共用）。
  *
- * @param selectedCount 当前已选条目数。
- * @param allSelected 是否已全选（决定「全选」按钮的文案与行为交给 [onToggleSelectAll]）。
- * @param onToggleSelectAll 全选 / 取消全选。
- * @param onClear 退出选择模式。
- * @param onDelete 删除已选条目（真正删除由调用方执行，通常还要二次确认或生物验证）。
+ * ## ⚠️ 为什么需要 [dockInset]（2026-09-16 修的一个真 bug）
+ *
+ * 悬浮胶囊底栏（`VaultixBottomDock`）是**叠层**画的 —— `AdaptiveMainScaffold` 刻意
+ * 不走 Scaffold 的 `bottomBar`，内容一直铺到屏幕底。所以**页面自己的 `bottomBar`
+ * 会落在 Dock 底下**：主 Tab 页（密码条目 / 验证码）里这条操作栏**看不见也点不到**，
+ * 而二级页（通行密钥，没有 Dock）却正常 —— 用户反馈的正是这个差异。
+ *
+ * 本组件原先的注释写着「直接在页面 `Scaffold.bottomBar` 内渲染，省掉跨层回调」——
+ * **省掉的那层跨层正是这个 bug 的来源**（上游 Bastion 是上抛给宿主统一渲染的）。
+ * 这里用更小的改动达成同样的可用性：由调用方告知"我下面有多少是被 Dock 占掉的"，
+ * 操作栏据此抬到 Dock 之上。⚠️ 主 Tab 页传 `BottomDockOccupiedHeight`，二级页传 0。
+ *
+ * ## 「全选」为什么去掉了（2026-09-16）
+ *
+ * 用户反馈「按住条目的时候，出现全选的设置，我感觉全选的没必要吧」。
+ * 密码管理器里批量全选后能做的事只有「删除」，而全选再删是**最危险**的操作组合
+ * （误触一次就是整库清空）；真要全选，逐条点的成本远低于误删的代价。
+ * ⇒ 摘掉按钮，`selectedCount` 的展示保留（用户仍需知道选了几条）。
  */
 @Composable
 fun SelectionActionBar(
     selectedCount: Int,
-    allSelected: Boolean,
-    onToggleSelectAll: () -> Unit,
+    /** 底部需要让出的高度（见上）。主 Tab 页传 `BottomDockOccupiedHeight`，二级页传 0。 */
+    dockInset: Dp = 0.dp,
     onClear: () -> Unit,
     onDelete: () -> Unit,
     modifier: Modifier = Modifier,
@@ -83,7 +96,15 @@ fun SelectionActionBar(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = BAR_PADDING, vertical = Spacing.xs),
+                // 让位写在内容 padding 里（而不是外挂 Spacer）：操作栏的底色/浮起要
+                // 一路铺到屏幕底，只是**内容**抬上去 —— 否则下方会露出画面，
+                // 那正是本项目 #76「让位必须写在 contentPadding 里」记过的坑。
+                .padding(
+                    start = BAR_PADDING,
+                    end = BAR_PADDING,
+                    top = Spacing.xs,
+                    bottom = Spacing.xs + dockInset,
+                ),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconButton(onClick = onClear) {
@@ -98,14 +119,6 @@ fun SelectionActionBar(
                 fontWeight = FontWeight.SemiBold,
             )
             Spacer(Modifier.weight(1f))
-            TextButton(onClick = onToggleSelectAll) {
-                Text(
-                    text = stringResource(
-                        if (allSelected) R.string.action_clear_selection else R.string.action_select_all,
-                    ),
-                )
-            }
-            Spacer(Modifier.width(Spacing.xs))
             TextButton(
                 onClick = onDelete,
                 colors = ButtonDefaults.textButtonColors(

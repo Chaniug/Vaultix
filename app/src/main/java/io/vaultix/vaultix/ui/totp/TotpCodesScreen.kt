@@ -92,6 +92,7 @@ import io.vaultix.vaultix.ui.common.PressAndSwipeToDelete
 import io.vaultix.vaultix.ui.common.SelectionActionBar
 import io.vaultix.vaultix.ui.common.SiteIconByHost
 import io.vaultix.vaultix.ui.common.VaultixExpressiveTopBar
+import io.vaultix.vaultix.ui.shell.BottomDockOccupiedHeight
 import io.vaultix.vaultix.ui.common.FullScreenDialogShell
 import io.vaultix.vaultix.ui.common.VaultixSearchTopAppBar
 import io.vaultix.vaultix.ui.common.rememberImmersiveBarPadding
@@ -447,13 +448,11 @@ private fun TotpSelectionBar(
     onSelectionChange: (Set<String>) -> Unit,
     onDelete: (List<TotpEntry>) -> Unit,
 ) {
-    val allSelected = selectedIds.size >= entries.size
     SelectionActionBar(
         selectedCount = selectedIds.size,
-        allSelected = allSelected,
-        onToggleSelectAll = {
-            onSelectionChange(if (allSelected) emptySet() else entries.map { it.itemId }.toSet())
-        },
+        // ⚠️ 主 Tab 页底部有悬浮 Dock（叠层不让位）⇒ 必须让出这块高度，
+        //    否则操作栏被压在 Dock 底下（用户反馈「看不到也点不到」）。
+        dockInset = BottomDockOccupiedHeight,
         onClear = { onSelectionChange(emptySet()) },
         onDelete = { onDelete(entries.filter { it.itemId in selectedIds }) },
     )

@@ -114,6 +114,7 @@ import io.vaultix.vaultix.ui.common.rememberImmersiveBarPadding
 import io.vaultix.vaultix.ui.common.rememberScrollCollapseFraction
 import io.vaultix.vaultix.ui.common.toggleSelection
 import io.vaultix.vaultix.ui.common.VaultixWavyProgressBar
+import io.vaultix.vaultix.ui.shell.BottomDockOccupiedHeight
 import io.vaultix.vaultix.ui.theme.Spacing
 
 /**
@@ -1400,15 +1401,11 @@ private fun ItemsSelectionBar(
     onSelectionChange: (Set<String>) -> Unit,
     onDelete: (List<VaultItem>) -> Unit,
 ) {
-    val allSelected = selectedIds.size >= visibleItems.size
     SelectionActionBar(
         selectedCount = selectedIds.size,
-        allSelected = allSelected,
-        onToggleSelectAll = {
-            onSelectionChange(
-                if (allSelected) emptySet() else visibleItems.map { it.id }.toSet(),
-            )
-        },
+        // ⚠️ 主 Tab 页底部有**悬浮 Dock**（叠层、不让位），必须把这块高度让出去，
+        //    否则操作栏落在 Dock 底下 —— 用户反馈的「看不到也点不到」就是这个。
+        dockInset = BottomDockOccupiedHeight,
         onClear = { onSelectionChange(emptySet()) },
         onDelete = {
             onDelete(visibleItems.filter { it.id in selectedIds })

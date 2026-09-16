@@ -600,6 +600,12 @@
 
     <!-- 长按多选（对齐 Bastion：长按条目 → 选择框 + 底部批量操作条） -->
     <string name="selection_count">已选 %1$d 项</string>
+    <!-- ⚠️ 自 2026-09-16 起**暂无代码引用**：多选操作栏的「全选」按钮已摘除
+         （用户反馈「按住条目的时候，出现全选的设置，我感觉全选的没必要吧」）。
+         理由：密码管理器里批量全选后能做的只有「删除」，而"全选 + 删除"恰是最危险的
+         组合（误触一次即整库清空）；真要全选，逐条点的成本远低于误删的代价。
+         **刻意保留**：它是通用动作词，若日后别处需要"全选"（如导入时选中全部条目）
+         可直接复用，别当僵尸串删掉。 -->
     <string name="action_select_all">全选</string>
     <string name="action_clear_selection">取消选择</string>
     <string name="action_delete_selected">删除所选</string>

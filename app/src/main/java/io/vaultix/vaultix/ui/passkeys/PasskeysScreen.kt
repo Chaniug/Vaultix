@@ -445,13 +445,10 @@ private fun PasskeySelectionBar(
     onSelectionChange: (Set<String>) -> Unit,
     onDelete: (List<PasskeyRow>) -> Unit,
 ) {
-    val allSelected = selectedKeys.size >= rows.size
     SelectionActionBar(
         selectedCount = selectedKeys.size,
-        allSelected = allSelected,
-        onToggleSelectAll = {
-            onSelectionChange(if (allSelected) emptySet() else rows.map { it.key }.toSet())
-        },
+        // 本页是二级页（从设置进入），底部**没有**悬浮 Dock ⇒ 不需要让位。
+        // 主 Tab 页（密码条目 / 验证码）则必须传 `BottomDockOccupiedHeight`。
         onClear = { onSelectionChange(emptySet()) },
         onDelete = { onDelete(rows.filter { it.key in selectedKeys }) },
     )
