@@ -266,7 +266,7 @@ class LocalUnlockEnrollment @Inject constructor(
                 // 用 `when` 而不是 `as`：万一将来有第二个实现，这里会**编译期**提醒
                 // 需要处理，而不是在运行时抛 ClassCastException。
                 when (unit) {
-                    is Prepared -> commitOne(unit, cipher)
+                    is Prepared -> commitOneSafely(unit, cipher)
                 }
             } finally {
                 // 明文凭据用完即擦（KDBX 这份含主密码字节）。
@@ -289,7 +289,32 @@ class LocalUnlockEnrollment @Inject constructor(
             credentials.putString(localUnlockStorageKey(unit.vaultId), wrapped)
             preferences.setLocalUnlockEnabled(unit.vaultId, true)
             LocalUnlockEnrollOutcome.Enrolled
-        } catch (error: Exception) {
+        } finally {
+            // KDBX 的明文本就在 `unit.plaintext` 里、由 `close()` 统一擦；
+            // 这里只管 Bitwarden 那条临时取出来的会话密钥副本。
+            if (unit.plaintext == null) plaintext.fill(0)
+        }
+    }
+
+    /**
+     * [commitOne] 的失败归类：**只有**真正属于「该库登记失败」的异常才吞，
+     * 其余一律重新抛出。
+     *
+     * ## 为什么不是直接 `catch (error: Exception)`
+     *
+     * 两难：`Keystore` 失效抛的是 `KeyPermanentlyInvalidatedException` /
+     * `UnrecoverableKeyException`（都是 **`GeneralSecurityException` 的子类**），
+     * 但 `wrap` 还可能抛别的 `GeneralSecurityException`（例如算法不可用），
+     * 那些不该被当成"用户配置坏了"。而写 `catch (error: Exception)` 会被
+     * detekt `TooGenericExceptionCaught` 拦下（CI 门禁，见 `config/detekt/detekt.yml`）。
+     *
+     * ⇒ 用项目既有的 `runCatching { }.getOrElse { }` 形态（detekt 该规则只看 `catch`
+     *   子句，不看 `getOrElse`），与 [VaultRepositoryImpl.completeLocalUnlock] 完全一致。
+     *   这不是绕过规则：归类逻辑确实需要看**任意**异常（`isLocalUnlockUnrecoverable`
+     *   本身就是沿 cause 链找特定类型），先接住再判定是对的。
+     */
+    private suspend fun commitOneSafely(unit: Prepared, cipher: Cipher): LocalUnlockEnrollOutcome =
+        runCatching { commitOne(unit, cipher) }.getOrElse { error ->
             // KEK 永久失效（用户新增/删除指纹）时会走到这里。若只吞掉异常而不清状态，
             // 开关仍是 enabled、payload 仍在 ⇒ 设置页显示"已启用"但每次点都失败，
             // 且无法自愈（见 `VaultRepositoryImpl.clearBrokenLocalUnlock` 的 KDoc）。
@@ -300,12 +325,7 @@ class LocalUnlockEnrollment @Inject constructor(
             } else {
                 LocalUnlockEnrollOutcome.Failed(error.message ?: "启用失败")
             }
-        } finally {
-            // KDBX 的明文本就在 `unit.plaintext` 里、由 `close()` 统一擦；
-            // 这里只管 Bitwarden 那条临时取出来的会话密钥副本。
-            if (unit.plaintext == null) plaintext.fill(0)
         }
-    }
 
     /** Bitwarden 侧的待包明文：会话里的对称密钥 → 64B full key。 */
     private fun bitwardenPlaintext(vaultId: String): ByteArray? =

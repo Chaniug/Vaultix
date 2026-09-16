@@ -217,15 +217,25 @@ def display(path: Path) -> str:
 
 
 # ---------------------------------------------------------------------------
-# --detekt-probe：在本地复现 CI 的圈复杂度判定
+# --detekt-probe：在本地复现 CI 的 detekt 判定
 # ---------------------------------------------------------------------------
-# ⚠️ 背景：`detekt-cli --config config/detekt/detekt.yml` **永远不报**
-#    `CyclomaticComplexMethod` —— 该规则要 `buildUponDefaultConfig`（gradle 侧参数），
-#    CLI 传不进去。于是本地 detekt 全绿、CI 才红（2026-09-16 实测，代价一次 CI 往返）。
-#    本函数用一份**只显式打开该规则**的临时配置跑一遍，把这条盲区补上。
+# ⚠️ 背景（2026-09-16 两次踩坑，代价两次 CI 往返）：
+#
+# ① `detekt-cli --config config/detekt/detekt.yml`（**不带** `--build-upon-default-config`）
+#    只检查 config 里**显式提到**的规则 —— 而 `config/detekt/detekt.yml` 只校准了阈值，
+#    其余规则靠 `buildUponDefaultConfig.set(true)`（在 build.gradle.kts 里）补上。
+#    ⇒ 这种跑法**漏掉了绝大多数规则**（`CyclomaticComplexMethod` 甚至不在 config 里）。
+#
+# ② 即便加了 `--build-upon-default-config`，**仍会漏** `CyclomaticComplexMethod`：
+#    该规则在 detekt 2.0 需要编译期类型解析才生效，纯源码 CLI 跑不出来。
+#
+# ⇒ 本函数**两级**探针：
+#   - 第 1 级：`--build-upon-default-config` 跑全量规则（能抓 `TooGenericExceptionCaught`
+#     等一堆 CI 会拦的规则）；
+#   - 第 2 级：单独用只开 `CyclomaticComplexMethod` 的临时配置补第 1 级的漏网之鱼。
 DETEKT_PROBE_CONFIG = """\
 # 由 .ai/tools/check_compile_smells.py --detekt-probe 生成：
-# 只显式打开圈复杂度规则（CLI 默认读不到 config/detekt/detekt.yml 里的该规则）。
+# 只显式打开圈复杂度规则（CLI 纯源码分析跑不出这条，需单独喂给它）。
 complexity:
   CyclomaticComplexMethod:
     active: true
@@ -239,6 +249,23 @@ DETEKT_CANDIDATES = [
     ROOT.parent / "detekt-cli-2.0.0-alpha.6" / "bin" / "detekt-cli",
 ]
 
+# 全量探针要扫的源码根（与 CI `./gradlew detekt` 的分析范围对齐：
+# 主源码集；测试源码集 CI 侧另有豁免，此处不扫）。
+PROBE_SCOPES = [
+    "app/src/main/java",
+    "core",
+    "data",
+    "domain",
+]
+
+# `--build-upon-default-config` 下**必然**出现、但与我们的改动无关的噪音：
+# 这些是 CLI 与 Gradle 的**分析范围差异**造成的（CLI 会扫到测试/示例代码，
+# 而 CI 各模块的 source set 会排除）。按"只看自己改的文件"过滤最稳妥。
+PROBE_IGNORE_MARKERS = (
+    "/src/test/",
+    "/src/androidTest/",
+)
+
 
 def find_detekt() -> Path | None:
     for candidate in DETEKT_CANDIDATES:
@@ -247,23 +274,43 @@ def find_detekt() -> Path | None:
     return None
 
 
-def run_detekt_probe(scopes: list[str] | None = None) -> int:
-    """跑圈复杂度探针；返回发现数（-1 表示环境缺 detekt，跳过）。"""
-    detekt = find_detekt()
-    if detekt is None:
-        print("[skip] 未找到 detekt CLI，跳过探针"
-              "（CI 仍会判定；本地可用 ./gradlew detekt 代替）。")
-        return -1
+def run_full_detekt_probe(detekt: Path) -> int:
+    """第 1 级：`--build-upon-default-config` 跑全量规则（复现 CI 的绝大多数判定）。"""
+    findings = 0
+    for scope in PROBE_SCOPES:
+        full = ROOT / scope
+        if not full.exists():
+            continue
+        out = subprocess.run(
+            [
+                str(detekt),
+                "--config", str(ROOT / "config/detekt/detekt.yml"),
+                "--build-upon-default-config",
+                "--input", str(full),
+                "--jvm-target", "17",
+            ],
+            cwd=ROOT, capture_output=True, text=True,
+        ).stdout
+        for line in out.splitlines():
+            if not line.strip().startswith("e:"):
+                continue
+            if any(marker in line for marker in PROBE_IGNORE_MARKERS):
+                continue
+            print(f"  {line.strip()}")
+            findings += 1
+    return findings
 
+
+def run_cyclomatic_probe(detekt: Path) -> int:
+    """第 2 级：单独补 `CyclomaticComplexMethod`（第 1 级跑不出这条）。"""
     with tempfile.NamedTemporaryFile("w", suffix=".yml", delete=False, encoding="utf-8") as fh:
         fh.write(DETEKT_PROBE_CONFIG)
         probe_config = Path(fh.name)
 
-    targets = scopes or ["app/src/main/java"]
     findings = 0
     try:
-        for target in targets:
-            full = ROOT / target
+        for scope in PROBE_SCOPES:
+            full = ROOT / scope
             if not full.exists():
                 continue
             out = subprocess.run(
@@ -272,11 +319,28 @@ def run_detekt_probe(scopes: list[str] | None = None) -> int:
             ).stdout
             for line in out.splitlines():
                 if "CyclomaticComplexMethod]" in line and line.strip().startswith("e:"):
+                    if any(marker in line for marker in PROBE_IGNORE_MARKERS):
+                        continue
                     print(f"  {line.strip()}")
                     findings += 1
     finally:
         probe_config.unlink(missing_ok=True)
     return findings
+
+
+def run_detekt_probe(scopes: list[str] | None = None) -> int:
+    """跑 detekt 探针；返回发现数（-1 表示环境缺 detekt，跳过）。"""
+    detekt = find_detekt()
+    if detekt is None:
+        print("[skip] 未找到 detekt CLI，跳过探针"
+              "（CI 仍会判定；本地可用 ./gradlew detekt 代替）。")
+        return -1
+
+    print("[info] 第 1 级：全量规则（--build-upon-default-config，对齐 CI）")
+    total = run_full_detekt_probe(detekt)
+    print("[info] 第 2 级：CyclomaticComplexMethod 补充探针（第 1 级跑不出这条）")
+    total += run_cyclomatic_probe(detekt)
+    return total
 
 
 def main() -> int:
@@ -290,16 +354,16 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.detekt_probe:
-        print("[info] 圈复杂度探针（detekt CLI 默认不报这条规则，见 8.6）")
+        print("[info] detekt 探针（两级：全量规则 + 圈复杂度补充，见 8.6）")
         findings = run_detekt_probe()
         print()
         if findings < 0:
             return 0
         if findings:
-            print(f"[FAIL] {findings} 处圈复杂度超限（>14）。"
-                  f"修法：把新增分支收进 holder / 抽成独立 composable（删注释无用）。")
+            print(f"[FAIL] detekt 探针发现 {findings} 处问题。"
+                  f"圈复杂度超限的修法：把新增分支收进 holder / 抽成独立 composable（删注释无用）。")
             return 1
-        print("[OK] 圈复杂度均在 14 以内。")
+        print("[OK] detekt 探针（全量规则 + 圈复杂度）均通过。")
         return 0
 
     if args.files:
