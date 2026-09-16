@@ -8,13 +8,16 @@
  */
 package io.vaultix.vaultix.ui.common
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -39,6 +42,7 @@ import androidx.core.view.WindowCompat
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import io.vaultix.vaultix.R
@@ -116,12 +120,40 @@ fun FullScreenDialogShell(
             }
         }
         Surface(modifier = Modifier.fillMaxSize()) {
-            Column(modifier = Modifier.fillMaxSize().imePadding()) {
+            // ── 2026-09-16：从 `Column`（标题栏 / 正文 / 底部条三者平铺、互不重叠）
+            // 改为 `Box` **叠加**，让正文从标题栏与底部条**下面穿过**。
+            //
+            // 用户的观察：「新建条目的内容里面，上边和下边不是透明的」，滚动时顶部的卡片
+            // 被标题栏**硬裁断**、底部同理 —— 那次改「整页全屏」其实只做了一半：
+            // **窗口**变全屏了，但内容层没做穿越效果，所以"全屏"根本体现不出来。
+            //
+            // ⚠️ 为什么要让位（而不是让内容真的一路顶到屏幕边）：标题栏与底部条是
+            // **不透明**的（否则内容与按钮会叠在一起看不清）⇒ 内容必须预留它们的高度，
+            // 否则首帧就会钻到按钮底下。
+            // ⚠️ 高度用常量而不是 `onGloballyPositioned` 实测：后者的首次组合拿不到值，
+            // 会先按 0 让位、再跳一次 —— 那种一跳比"数值不精确"更难看。
+            Box(modifier = Modifier.fillMaxSize().imePadding()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = Spacing.xl)
+                        .padding(
+                            top = TITLE_BAR_HEIGHT,
+                            bottom = ACTION_BAR_HEIGHT,
+                        ),
+                    content = content,
+                )
+
+                // 顶部标题栏：叠加在最上层，内容从其下方滑过（被它遮住）。
                 Row(
                     modifier = Modifier
+                        .align(Alignment.TopCenter)
                         .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surface)
                         .statusBarsPadding()
-                        .padding(start = Spacing.sm, end = Spacing.sm, top = Spacing.sm),
+                        .padding(start = Spacing.sm, end = Spacing.sm, top = Spacing.sm)
+                        .height(TITLE_BAR_HEIGHT - Spacing.sm),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     IconButton(onClick = onDismiss) {
@@ -136,16 +168,13 @@ fun FullScreenDialogShell(
                         modifier = Modifier.padding(start = Spacing.sm),
                     )
                 }
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .verticalScroll(rememberScrollState())
-                        .padding(horizontal = Spacing.xl),
-                    content = content,
-                )
+
+                // 底部操作条：同上，叠加在内容之上。
                 Row(
                     modifier = Modifier
+                        .align(Alignment.BottomCenter)
                         .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surface)
                         .navigationBarsPadding()
                         .padding(horizontal = Spacing.xl, vertical = Spacing.lg),
                     horizontalArrangement = Arrangement.End,
@@ -167,3 +196,12 @@ fun FullScreenDialogShell(
         }
     }
 }
+
+/**
+ * 标题栏高度（`statusBarsPadding` 之外的部分）：IconButton 48dp + 顶部内边距 8dp。
+ * 用于给正文让位，见 [FullScreenDialogShell] 的说明。
+ */
+private val TITLE_BAR_HEIGHT = 56.dp
+
+/** 底部操作条高度（`navigationBarsPadding` 之外）：按钮 48dp + 上下内边距 16dp×2。 */
+private val ACTION_BAR_HEIGHT = 80.dp
