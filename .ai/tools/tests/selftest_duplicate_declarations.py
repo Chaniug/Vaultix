@@ -93,6 +93,35 @@ class E {
         0,
         "接收者不同（含无接收者）在 Kotlin 里是不同签名 ⇒ 不能报（接收者须进 key）",
     ),
+    (
+        "same_name_different_types",
+        """
+@Dao
+interface VaultDao {
+    fun listByVault(vaultId: String): List<VaultEntity>
+    fun clearVault(vaultId: String)
+}
+
+@Dao
+interface FolderDao {
+    fun listByVault(vaultId: String): List<FolderEntity>
+    fun clearVault(vaultId: String)
+}
+""",
+        0,
+        "名字在不同 interface 里重复是合法的 ⇒ 不能报（须按顶层类型分桶）",
+    ),
+    (
+        "same_name_same_type",
+        """
+interface F {
+    fun listByVault(vaultId: String): List<X>
+    fun listByVault(vaultId: String): List<X>
+}
+""",
+        1,
+        "同一个 interface 里真重复 ⇒ 必须报",
+    ),
 ]
 
 

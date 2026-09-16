@@ -66,6 +66,11 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+
+# 🔴 2026-09-16 修正：原先只扫 `app/src` ⇒ 改为全模块（app / core / data / domain）。
+#    app/ 之外的代码同样会用实验性 API，同样会被 CI 的编译期 opt-in 检查拦下。
+#    ⚠️ 排除 `reference/`（Bastion 对照源码，不参与构建）与 build/。
+SRC_ROOTS = [ROOT / m for m in ("app", "core", "data", "domain")]
 SRC_ROOT = ROOT / "app" / "src"
 
 # ---------------------------------------------------------------------------
@@ -377,7 +382,12 @@ def check_text(text: str, label: str) -> list[tuple[int, str, str, str]]:
 
 
 def iter_kt_files() -> list[Path]:
-    return sorted(SRC_ROOT.rglob("*.kt"))
+    files: list[Path] = []
+    for root in SRC_ROOTS:
+        if not root.is_dir():
+            continue
+        files.extend(p for p in root.rglob("*.kt") if "/build/" not in p.as_posix())
+    return sorted(set(files))
 
 
 def changed_files() -> list[Path]:

@@ -9,7 +9,7 @@
 
 | 分篇 | 主题 | 条数 |
 |---|---|---|
-| [01-构建与环境](./issues/01-构建与环境.md) | 工程 / 构建 / CI / 工具链 / 环境 | 26 |
+| [01-构建与环境](./issues/01-构建与环境.md) | 工程 / 构建 / CI / 工具链 / 环境 | 28 |
 | [02-自动填充](./issues/02-自动填充.md) | 自动填充（AutofillService 链路） | 17 |
 | [03-通行密钥与凭据提供商](./issues/03-通行密钥与凭据提供商.md) | 通行密钥 / Credential Provider / 凭据回灌 | 14 |
 | [04-锁与解锁](./issues/04-锁与解锁.md) | 锁态模型 / 解锁 / 生物识别 / 密钥 | 8 |
@@ -50,6 +50,8 @@
 | 74 | detekt 不会对 @Composable 网开一面 —— 抽块时参数必须 ≤8 |
 | 75 | 给函数加「带默认值的尾部参数」会吃掉调用点的尾随 lambda |
 | 101 | 🔴 `import` 的**包路径**写错（符号名对、包名错）：detekt 与 `check_signature_types.py` **双双查不出**，只有 CI 编译能炸 —— 已修，并新增 `.ai/tools/check_import_packages.py` 守护 |
+| 103 | 🔴 手改大文件时**整块复制**函数声明 → CI 报 `Conflicting overloads`（`VaultRepositoryImpl` 函数数顶格逼出"块级搬运"），**七道本地门禁全绿** —— 已修，并新增第 4 类门禁 `check_duplicate_declarations` |
+| 104 | 🔴 **写启发式探针必须配正反用例**：#103 的补救探针连坏两版（264 处 → 5 处误报，全在**扩展函数接收者**上）；且「探针报了我不可能引入的问题」= 探针坏了，不是源码坏了。永久回归集 `.ai/tools/tests/selftest_duplicate_declarations.py` |
 
 ### [02-自动填充](./issues/02-自动填充.md) — 自动填充（AutofillService 链路）
 

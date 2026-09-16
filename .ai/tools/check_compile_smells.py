@@ -63,6 +63,19 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+
+# 🔴 2026-09-16 修正：原先只扫 `app/src`，而本工具是「本地门禁」的一部分 ⇒
+#    两次 CI 红都从这个缝里过去：
+#      ① `domain/.../VaultRepository.kt` 的重复声明（Conflicting overloads）
+#      ② `data/repository/.../LocalUnlockEnrollment.kt` 的 import 包路径写错
+#    两个文件都在 app/ 之外，**从来不在扫描范围** ⇒ 本地"全绿"是假绿。
+#
+# ⇒ 扫**全部真实源码模块**（app / core / data / domain）。
+#   ⚠️ 排除 `reference/`：那是 Bastion 的对照源码（非本项目模块、不参与构建），
+#      纳入只会引入纯误报。
+#   ⚠️ 排除 `build/` 产物。
+SRC_ROOTS = [ROOT / m for m in ("app", "core", "data", "domain")]
+# `app/src` 仍是 R.string 资源扫描的锚点（资源只在 app 模块）。
 SRC_ROOT = ROOT / "app" / "src"
 
 # ---------------------------------------------------------------------------
@@ -94,7 +107,13 @@ R_STRING_RE = re.compile(r"R\.string\.(\w+)")
 
 
 def iter_kt_files() -> list[Path]:
-    return sorted(SRC_ROOT.rglob("*.kt"))
+    """全仓库真实模块里的 .kt（见 SRC_ROOTS 的说明：排除 build/ 与 reference/）。"""
+    files: list[Path] = []
+    for root in SRC_ROOTS:
+        if not root.is_dir():
+            continue
+        files.extend(p for p in root.rglob("*.kt") if "/build/" not in p.as_posix())
+    return sorted(set(files))
 
 
 def changed_files() -> list[Path]:
@@ -232,6 +251,35 @@ _KOTLIN_MEMBER_FUN_RE = re.compile(
 # 这些"重载"是合法的（重写标准方法 / 不同参数），不报。
 _DUPLICATE_ALLOWLIST = {"equals", "hashCode", "toString", "compareTo", "invoke", "get", "set"}
 
+# 顶格（无缩进）的类 / 接口 / 对象声明 —— 用来划分"重复"的作用域。
+#
+# 🔴 2026-09-16 修正：本探针原先**按整个文件**记 key。这在一个文件里只放一个类时没问题，
+#    但对 `core/database/.../VaultixDaos.kt` 这种**一个文件放 4 个 @Dao 接口**的文件
+#    就会误报 6 处 —— `listByVault` / `clearVault` / `deleteByIds` 在**不同接口**里
+#    合法地各有一份。
+#    ⇒ 必须按"所在的顶层类型声明"分桶，否则同一个名字只要在文件里出现两次就报。
+#    （典型反例：`interface A { fun f() } interface B { fun f() }` 完全合法。）
+_TOP_LEVEL_TYPE_RE = re.compile(
+    r"^(?:public |internal |private |abstract |open |sealed |data |value |annotation |"
+    r"@\w+\s+)*"
+    r"(?:class|interface|object|enum\s+class)\s+(\w+)",
+    re.M,
+)
+
+
+def _enclosing_scope(src: str, offset: int) -> str:
+    """`offset` 处属于哪个**顶格类型声明**；不属于任何类型时返回 ""（顶层）。
+
+    取 offset 之前**最后一个**顶格类型声明的名字 —— 对本项目"一个文件里若干个
+    类/接口顺序排列、不互相嵌套"的常规布局，这就足够准。
+    """
+    scope = ""
+    for m in _TOP_LEVEL_TYPE_RE.finditer(src):
+        if m.start() > offset:
+            break
+        scope = m.group(1)
+    return scope
+
 
 def _param_type_fingerprint(params: str | None) -> str:
     """把参数列表归一成"只含类型、忽略参数名"的指纹。
@@ -246,7 +294,7 @@ def _param_type_fingerprint(params: str | None) -> str:
 
 
 def check_duplicate_declarations(path: Path) -> list[str]:
-    """同一个类里有没有**重复的成员函数声明**（同名同参数类型）。
+    """同一个**类型声明内**有没有重复的成员函数（同名 + 同接收者 + 同参数类型）。
 
     ## 为什么需要这个
 
@@ -256,9 +304,15 @@ def check_duplicate_declarations(path: Path) -> list[str]:
     CI 编译才报 `Conflicting overloads`，代价一次完整 CI 往返。
 
     ⇒ 这是与 `check_signature_types` 同一类"本地无编译器"的盲区，用文本启发式补上。
+
+    ## 判据的两个维度（都靠误报才补全，别删）
+
+    1. **接收者进 key**：`fun Intent.foo(x)` 与 `fun Bundle.foo(x)` 是不同签名；
+    2. **按顶层类型声明分桶**：名字在**不同** `interface`/`class` 里重复是合法的，
+       只有**同一个**类型里重复才是 `Conflicting overloads`。
     """
     src = path.read_text(encoding="utf-8")
-    seen: dict[tuple[str, str, str], int] = {}
+    seen: dict[tuple[str, str, str, str], int] = {}
     problems: list[str] = []
     for match in _KOTLIN_MEMBER_FUN_RE.finditer(src):
         receiver, name, params = match.group(1) or "", match.group(2), match.group(3)
@@ -266,7 +320,9 @@ def check_duplicate_declarations(path: Path) -> list[str]:
             continue
         # 🔴 接收者必须进 key：`fun Intent.foo(x)` 与 `fun Bundle.foo(x)` 在 Kotlin 里是
         #    两个不同签名，不进 key 就会误报（构造用例 diff_receiver.kt 实证）。
-        key = (receiver, name, _param_type_fingerprint(params))
+        # 🔴 所在类型声明也必须进 key：见上面 KDoc 第 2 点（VaultixDaos.kt 实证）。
+        key = (_enclosing_scope(src, match.start()), receiver, name,
+               _param_type_fingerprint(params))
         line = src.count("\n", 0, match.start()) + 1
         if key in seen:
             shown = f"{receiver}.{name}" if receiver else name

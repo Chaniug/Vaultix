@@ -42,7 +42,21 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+
+# 🔴 2026-09-16 修正：原先只扫 `app/src`，而 app/ 之外（core/ data/ domain/）
+#    同样是本项目源码、同样会被本工具该管的错误波及 ⇒ 改为全模块。
+#    ⚠️ 排除 `reference/`（Bastion 对照源码，非本项目模块、不参与构建）与 build/。
+SRC_ROOTS = [ROOT / m for m in ("app", "core", "data", "domain")]
 SRC_ROOT = ROOT / "app" / "src"
+
+
+def iter_kt_files() -> list[Path]:
+    files: list[Path] = []
+    for root in SRC_ROOTS:
+        if not root.is_dir():
+            continue
+        files.extend(p for p in root.rglob("*.kt") if "/build/" not in p.as_posix())
+    return sorted(set(files))
 
 # ---------------------------------------------------------------------------
 # 1. 建「全仓库顶层类型定义」集合
@@ -479,14 +493,14 @@ def changed_files() -> list[Path]:
 def main() -> int:
     ap = argparse.ArgumentParser(description="校验新签名里的类型名在本仓库是否存在")
     ap.add_argument("files", nargs="*", help="要检查的 .kt 文件；缺省=最近一次提交改动的")
-    ap.add_argument("--all", action="store_true", help="检查 app/src 下全部 .kt")
+    ap.add_argument("--all", action="store_true", help="检查全部源码模块下的 .kt")
     args = ap.parse_args()
 
     defs, _ = collect_type_defs()
     print(f"[info] 全仓库顶层类型定义 {len(defs)} 个")
 
     if args.all:
-        targets = sorted(SRC_ROOT.rglob("*.kt"))
+        targets = iter_kt_files()
     elif args.files:
         targets = [Path(f).resolve() for f in args.files]
     else:

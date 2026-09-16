@@ -21,7 +21,7 @@ import io.vaultix.domain.KdbxEnrollOutcome
 import io.vaultix.domain.LocalUnlockEnrollOutcome
 import io.vaultix.domain.LocalUnlockPrepareOutcome
 import io.vaultix.domain.LocalUnlockPreparedEnrollment
-import io.vaultix.domain.VaultKind
+import io.vaultix.model.VaultKind
 import javax.crypto.Cipher
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -261,13 +261,20 @@ class LocalUnlockEnrollment @Inject constructor(
     ): Map<String, LocalUnlockEnrollOutcome> = withContext(Dispatchers.IO) {
         prepared.associate { unit ->
             val outcome = try {
-                // 签名用域层接口（控制器只见 domain），但实现只可能是本类的 Prepared
-                // —— 参数量与类型都由 `prepareForVaults` 决定，中间没有别的构造入口。
-                // 用 `when` 而不是 `as`：万一将来有第二个实现，这里会**编译期**提醒
-                // 需要处理，而不是在运行时抛 ClassCastException。
-                when (unit) {
-                    is Prepared -> commitOneSafely(unit, cipher)
-                }
+                // 🔴 这里曾经写成 `when (unit) { is Prepared -> ... }`，注释还说
+                //    "将来有第二个实现会在编译期提醒" —— **那是错的**：
+                //    `LocalUnlockPreparedEnrollment` 是**普通 interface**（不是 sealed，
+                //    因为实现 `Prepared` 在 data 模块、接口在 domain 模块，
+                //    跨模块无法构成 sealed 层级）。Kotlin 对非 sealed 类型的 `when`
+                //    不认为单分支是穷尽的 ⇒ CI 直接报
+                //      `'when' expression must be exhaustive. Add an 'else' branch.`
+                //    加 `else` 只会把"类型不对"从编译期推到运行期，反而不如强转诚实。
+                //
+                //    ⇒ 用强转：**唯一的构造入口是 `prepareForVaults`**（见类 KDoc），
+                //      它只会返回本类的 `Prepared`。真出现第二个实现，
+                //      这里会**立刻** ClassCastException（响亮地失败），而不是静默走 else。
+                val target = unit as Prepared
+                commitOneSafely(target, cipher)
             } finally {
                 // 明文凭据用完即擦（KDBX 这份含主密码字节）。
                 unit.close()

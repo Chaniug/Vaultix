@@ -41,6 +41,17 @@ detekt 同样查不出：它只跑静态规则集，**不做符号解析、不�
    仓库里可能长期只用到其中一个，规则 A 的样本量不足。
    对这些名字查一张硬编码表。
 
+## ⚠️ 覆盖面（2026-09-16 修正过一次，别缩回去）
+
+扫 **`app/` `core/` `data/` `domain/`** 四个真实源码模块 —— 即**全仓库**。
+排除 `reference/`（Bastion 对照源码，非本项目模块、不参与构建）。
+
+**修的原因**：首版只扫 `app/src`，于是
+`data/repository/.../LocalUnlockEnrollment.kt` 里
+`import io.vaultix.domain.VaultKind`（应为 `io.vaultix.model.VaultKind`）**不在扫描范围内**，
+本地报"未见异常"却是**假绿**，CI 编译才炸。
+⇒ **判据对、覆盖面错，等于没查。** 改工具时**先确认它扫的是不是全部。**
+
 退出码：0 = 没发现问题；1 = 有可疑 import。
 
 ## 用法
@@ -60,7 +71,22 @@ from collections import defaultdict
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-SRC_ROOT = ROOT / "app" / "src"
+
+# 🔴 2026-09-16 修正：原先只扫 `app/src`，而工具自称是仓库级门禁 ⇒
+#    报出一个真实漏网：新文件 `data/repository/.../LocalUnlockEnrollment.kt`
+#    写了 `import io.vaultix.domain.VaultKind`（正确是 `io.vaultix.model.VaultKind`，
+#    全仓库另外 17 处都对）。该文件**根本不在扫描范围内**，
+#    于是本地 "import 包路径未见异常" 是**假绿**，CI 编译才炸：
+#      e: LocalUnlockEnrollment.kt:24:26 Unresolved reference 'VaultKind'
+#    这正是 #101 那类错误的第二次发作 —— 判据本身是对的，是**覆盖面**漏了。
+#
+# ⇒ 改为扫**全部真实源码模块**（app / core / data / domain）。
+#   ⚠️ 刻意**排除 `reference/`**：那是 Bastion 的对照源码（非本项目模块、
+#      不参与构建），它的图标合法地取自不同 icon group（filled / outlined），
+#      纳入扫描会引入一片纯误报。
+SRC_ROOTS = [ROOT / m for m in ("app", "core", "data", "domain")]
+# 仍然保留 SRC_ROOT 别名，供旧调用点/测试引用。
+SRC_ROOT = SRC_ROOTS[0]
 
 IMPORT_RE = re.compile(r"^\s*import\s+([\w.]+)(?:\s+as\s+(\w+))?", re.MULTILINE)
 
@@ -82,6 +108,25 @@ KNOWN_PACKAGE_TRAPS: dict[str, str] = {
     "LazyRow": "androidx.compose.foundation.lazy",
 }
 
+# ---------------------------------------------------------------------------
+# 合法跨包同名：**豁免**规则 A 的"多数派"判定
+# ---------------------------------------------------------------------------
+# ⚠️ 为什么需要单独一张表：规则 A 靠"多数派"推断约定，但有些名字
+#    **确实在多个包里都存在**，两个都是正确 API —— 此时"哪个文件多"纯属偶然，
+#    不构成"另一个是写错了"的证据。2026-09-16 把规则 A 从"唯一包"改成
+#    "多数派"后，这两个名字立刻被误报，正说明它们必须显式豁免。
+#
+# 判定口诀：**"另一个包是不是根本不导出这个符号？"**
+#   是 → 写错了（如 `io.vaultix.domain.VaultKind`，domain 里根本没有它）；
+#   否 → 合法，进本表。
+_LEGIT_CROSS_PACKAGE: frozenset[str] = frozenset({
+    # ui.graphics 的颜色插值 与 ui.unit 的 Dp 插值，两个 lerp 都是公开 API。
+    "lerp",
+    # compose.ui.platform（旧）与 lifecycle.compose（新）两包都真实存在，
+    # 后者是迁移目标，并存期间同时用不算错。
+    "LocalLifecycleOwner",
+})
+
 
 def simple_name(path: str, alias: str | None) -> str:
     return alias or path.rsplit(".", 1)[-1]
@@ -92,7 +137,13 @@ def package_of(path: str) -> str:
 
 
 def iter_kt_files() -> list[Path]:
-    return sorted(SRC_ROOT.rglob("*.kt"))
+    """全仓库真实模块里的 .kt（排除 build 产物与 reference/ 对照源码）。"""
+    files: list[Path] = []
+    for root in SRC_ROOTS:
+        if not root.is_dir():
+            continue
+        files.extend(p for p in root.rglob("*.kt") if "/build/" not in p.as_posix())
+    return sorted(set(files))
 
 
 def changed_files() -> list[Path]:
@@ -112,11 +163,28 @@ def changed_files() -> list[Path]:
 
 
 def build_exclusive_map(files: list[Path]) -> dict[str, str]:
-    """扫全仓库，得出「简单名 → 唯一包」，只保留**全仓库仅从一个包导入过**的符号。
+    """扫全仓库，得出「简单名 → 应当来自的包」。
 
-    这类符号是"独占包"，一旦某处从别的包导入，几乎必然是写错了。
-    反之，只要该名字在 ≥2 个不同包里出现过，就认定为合法的跨包同名
-    （重载或 API 迁移），整体跳过 —— 宁可漏报，不可误报。
+    ## 🔴 判据（2026-09-16 第二次修正，别改回去）
+
+    原先的判据是「**全仓库只从一个包导入过**」才算约定。它有**自证伪**的致命缺陷：
+
+        写错一处 import —— 把 18 处 `io.vaultix.model.VaultKind` 之一写成
+        `io.vaultix.domain.VaultKind` ⇒ 该名字变成"两个包都用过"
+        ⇒ 从约定表里消失 ⇒ 检查**跳过它** ⇒ 本地依旧"未见异常"。
+
+    **犯下这个错的动作本身，把这个错变成了查不出来。**
+    这就是 2026-09-16 CI 第三次红的真实原因 —— 而且它在"只扫 app/src"的
+    覆盖面 bug 修好之后**依然**拦不住。
+
+    ## 现在的判据：多数派，而不是唯一性
+
+    - 取**出现次数最多**的包作为"应当来自的包"；
+    - 少数派即便只出现 **1 次**也算可疑 —— 这是关键，单个错误改不动多数派；
+    - 若最高票与次高票**接近**（无明显多数派），整体跳过，
+      因为那可能是合法的跨包同名（如 `lerp`、`LocalLifecycleOwner`）。
+
+    ⇒ 这样**单个错误 import 不会再抹掉自己的参照系**。
     """
     tally: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     for path in files:
@@ -131,10 +199,17 @@ def build_exclusive_map(files: list[Path]) -> dict[str, str]:
 
     exclusive: dict[str, str] = {}
     for name, pkgs in tally.items():
-        if len(pkgs) == 1:                      # 全仓库只有一个包 ⇒ 独占
+        if len(pkgs) == 1:                      # 只有一个包 ⇒ 毫无疑问
             only_pkg, n = next(iter(pkgs.items()))
-            if n >= 2:                          # 至少要有 2 个样本才算"约定"
+            if n >= 2:                          # 至少 2 个样本才算"约定"
                 exclusive[name] = only_pkg
+            continue
+        # 多包：取多数派，但要求"多数派优势明显"，否则视为合法跨包同名
+        ranked = sorted(pkgs.items(), key=lambda kv: -kv[1])
+        top_pkg, top_n = ranked[0]
+        _, runner_n = ranked[1]
+        if top_n >= 2 and top_n > runner_n:
+            exclusive[name] = top_pkg
     return exclusive
 
 
@@ -161,9 +236,11 @@ def check_file(
                 problems.append((line_no, name, actual_pkg, expected))
             continue
 
-        # 规则 A：独占包一致性
+        # 规则 A：独占/多数包一致性
         # 仅对 androidx.* / io.vaultix.* 生效，避免误伤第三方库的合法同名。
         if not (fp.startswith("androidx.") or fp.startswith("io.vaultix.")):
+            continue
+        if name in _LEGIT_CROSS_PACKAGE:        # 两个包都真实存在，不算错
             continue
         want = exclusive.get(name)
         if want is not None and actual_pkg != want:
@@ -188,7 +265,7 @@ def main() -> int:
     all_files = iter_kt_files()
     exclusive = build_exclusive_map(all_files)
     print(f"[info] 扫描 {len(all_files)} 个 .kt，"
-          f"识别出 {len(exclusive)} 个「全仓库独占单一包」的符号")
+          f"识别出 {len(exclusive)} 个「有明确约定包」的符号")
 
     if args.changed:
         targets = changed_files()
