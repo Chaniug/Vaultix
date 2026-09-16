@@ -275,6 +275,9 @@
     <string name="about_license">开源许可</string>
     <string name="about_license_body">Vaultix 以 GPL-3.0 发布。部分设计与代码参考 Bastion（GPL-3.0，Copyright 2025 JoyinJoester），搬运处均带溯源声明。\n\n本项目为密码管理客户端，自行承担使用风险。</string>
     <string name="about_github_url">https://github.com/Chaniug/Vaultix</string>
+    <!-- 库类型徽标（解锁页的图标无障碍描述；2026-09-16 由字母头像改为官方图标） -->
+    <string name="vault_kind_bitwarden">Bitwarden 密码库</string>
+    <string name="vault_kind_kdbx">KDBX 本地密码库</string>
     <!-- 检查更新（2026-09-16 从 Bastion 搬运；只给发布页链接，不在 App 内下载安装） -->
     <string name="about_check_update">检查更新</string>
     <string name="about_check_update_desc">对比 GitHub 上的最新构建</string>

@@ -118,6 +118,21 @@ fun CardWalletScreen(
 
     val searchScrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
 
+    // 轻量选中态（2026-09-16）：卡包页没有像密码页那样的批量操作，所以不需要一整套
+    // 多选（复选框、批量工具条）。删除防误触只需要「先选中」这一个语义 ⇒ 用**单值**
+    // 记录当前选中的那张卡，长按进入、删除或点击取消。
+    // ⚠️ 用 `rememberSaveable`：旋转屏幕后选中态不该丢（否则用户会以为"我明明选中了"）。
+    var selectedCardId by rememberSaveable { mutableStateOf<String?>(null) }
+    // 切库 / 搜索词变化后旧 id 可能已不在列表里 ⇒ 用 key 重置，避免"幽灵选中"。
+    LaunchedEffect(cards, query) {
+        if (selectedCardId != null && visibleCards.none { it.id == selectedCardId }) {
+            selectedCardId = null
+        }
+    }
+    // 返回键优先取消选中（与搜索态同一优先级思路：先退一层"模式"，再退路由）。
+    // ⚠️ 必须在搜索态之后声明：搜索态自己的 BackHandler 要先消费（`enabled` 互斥）。
+    BackHandler(enabled = selectedCardId != null && !searchActive) { selectedCardId = null }
+
     Scaffold(
         // 沉浸式：顶栏浮在内容之上（状态栏内边距由顶栏自己处理，见 [VaultixExpressiveTopBar]）。
         // ⚠️ 搜索态是例外：那时换成一条**固定高度**的真实 `topBar`，必须让 Scaffold 帮它
@@ -140,7 +155,9 @@ fun CardWalletScreen(
             }
         },
         floatingActionButton = {
-            if (!embedded) {
+            // ⚠️ 选中态下隐藏 FAB：此时用户的意图是"对这张卡做点什么"（左滑删除），
+            // 一个"新建"按钮悬在那里与当前语义冲突，也容易误点。
+            if (!embedded && selectedCardId == null) {
                 FloatingActionButton(onClick = {
                     creating = VaultItem(id = "", title = "", type = VaultItemType.Card)
                 }) {
@@ -187,9 +204,32 @@ fun CardWalletScreen(
                         verticalArrangement = Arrangement.spacedBy(CARD_GAP),
                     ) {
                         items(visibleCards, key = { it.id }) { item ->
-                            // 与密码列表一致的「左滑 → 松手过半 → 二次确认」（软删除进回收站）。
-                            PressAndSwipeToDelete(onDelete = { viewModel.deleteCard(item) }) {
-                                CardWalletRow(item = item, onClick = { onOpenItem(item) })
+                            // 「长按选中 → 左滑 → 松手过半 → 二次确认」（软删除进回收站），
+                            // 与密码 / 验证码 / 通行密钥列表**同一套纪律**。
+                            // ⚠️ 2026-09-16：卡包页此前没有多选机制，删除是"直接左滑"。
+                            // 用户反馈误触太多 ⇒ 补一个**轻量选中态**（见 [selectedCardId]）：
+                            // 长按卡片选中它，选中后左滑才可删；点其他卡片或返回键取消。
+                            PressAndSwipeToDelete(
+                                onDelete = { viewModel.deleteCard(item) },
+                                selectable = selectedCardId == item.id,
+                            ) {
+                                CardWalletRow(
+                                    item = item,
+                                    isSelected = selectedCardId == item.id,
+                                    onClick = {
+                                        // 已选中时点击 = 取消选中（给用户一个不退出的"取消"路径）；
+                                        // 否则照旧打开详情。
+                                        if (selectedCardId != null) {
+                                            selectedCardId = null
+                                        } else {
+                                            onOpenItem(item)
+                                        }
+                                    },
+                                    onLongClick = {
+                                        selectedCardId =
+                                            if (selectedCardId == item.id) null else item.id
+                                    },
+                                )
                             }
                         }
                     }
@@ -253,14 +293,23 @@ private fun filterCards(cards: List<VaultItem>, query: String): List<VaultItem> 
  * ⚠️ 必须**可点击**：此前漏了 `clickable`，导致卡包里的条目点不进详情（用户反馈）。
  * 外框改用 [EntryCard]（与密码 / 验证码列表同一套卡片规格）——此前这里是一个**裸 Row**，
  * 连外框都没有，是三个列表里观感最不一致的一处。
+ *
+ * @param isSelected 是否处于「已选中」态（选中后才允许左滑删除，见 [PressAndSwipeToDelete]）。
+ *   选中态由 [EntryCard] 的 `selected` 参数高亮（与密码列表同一套选中视觉）。
+ * @param onLongClick 长按 = 选中 / 取消选中（卡包页的删除前置门槛）。
  */
 @Composable
-private fun CardWalletRow(item: VaultItem, onClick: () -> Unit) {
+private fun CardWalletRow(
+    item: VaultItem,
+    isSelected: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+) {
     val card = item.card
     val brand = remember(card?.number, card?.brand) {
         CardBrandDetector.detect(card?.number.orEmpty(), card?.brand.orEmpty())
     }
-    EntryCard(onClick = onClick) {
+    EntryCard(onClick = onClick, onLongClick = onLongClick, selected = isSelected) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,

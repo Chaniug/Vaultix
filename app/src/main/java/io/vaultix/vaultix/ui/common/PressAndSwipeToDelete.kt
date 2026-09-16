@@ -7,9 +7,9 @@
  * the License, or (at your option) any later version.
  *
  * ---------------------------------------------------------------------------
- * 交互设计说明（直接左滑 → 松手过半即弹二次确认）
+ * 交互设计说明（**先长按选中，再左滑删除**）
  *
- * ## 演进史（三次迭代，每次都是用户反馈驱动的）
+ * ## 演进史（四次迭代，每次都是用户反馈驱动的）
  *
  * **① 2026-09-13 初版**：「长按成立之后才接管位移」的两段式手势。问题是**用户根本滑不动**——
  * 长按的语义已被多选占用，「长按 → 继续拖」在真实手指下几乎不可达。
@@ -18,26 +18,33 @@
  * （必须先长按进多选，左滑才生效）。用户反馈是「从右往左的删除按钮好像与 UI 冲突了，
  * 不显示不跟手，但删除是生效的」——于是补了跟手位移与常驻红底。
  *
- * **③ 2026-09-14 第三轮（当前）**：用户反馈「删除按钮滑动出来后需要点击才可以」。
- * 拍板两件事：
- *   1. **取消「必须先长按进多选」的门槛** —— 任意条目直接左滑即可（免长按）；
- *   2. **松手即裁决** —— 滑过阈值直接弹二次确认，**不再需要点击按钮**。
- * 同时确认**保留**滑动露出的跟手动画（红底随手指显影），只是按钮不再承担点击职责。
- * ⇒ 手势从「滑动 + 点击 + 确认」三步压成「滑动 + 确认」两步。
+ * **③ 2026-09-14 第三轮**：用户反馈「删除按钮滑动出来后需要点击才可以」。
+ * 拍板两件事：取消「必须先长按进多选」的门槛（任意条目直接左滑即可）、松手即裁决。
+ * 手势从三步压成两步（滑动 + 确认）。
+ *
+ * **④ 2026-09-16 第四轮（当前）**：用户真机用了一阵后反馈
+ * 「删除方式有问题，我要的是先选中再滑动，避免误触，你这直接滑动就可以删除」。
+ * ⇒ **把②的门槛拿回来**：必须先长按进选中态，**选中之后**左滑才生效。
+ * 第三轮的「免长按」被判定为**误触成本高于便利收益** —— 列表里横向滑动的不可
+ * 避免误触（尤其单手拇指区、滚动起手时带出的斜向位移）会直接弹出删除确认。
  *
  * ## 当前手势分层（务必保持）
- * - **长按** = 进入多选 —— 由卡片 [EntryCard] 的 `onLongClick` 独占，本组件不参与；
- * - **水平左滑** = 跟手露出红色动作区（**不需要任何前置长按**）；
+ * - **长按** = 进入选中态 —— 由卡片 [EntryCard] 的 `onLongClick` 独占，本组件不参与；
+ * - **水平左滑** = 跟手露出红色动作区（⚠️ **仅在 [selectable] 为 `true` 时挂载手势**）；
  * - **松手过半** = 弹二次确认；**未过半** = 回弹归零。
  * - **竖直滑动** = 不消费，交给 `LazyColumn` 滚动。
  *
- * 为什么保留二次确认：用户明确要求过「删除的时候二次确认还没有做」，且软删除虽可恢复、
- * 但误删仍会打断心流。手势压到两步（滑动 + 确认）已经足够轻快。
+ * ⚠️ **[selectable] 为 `false` 时 `pointerInput` 完全不挂**（不是"挂上再忽略"）：
+ * 这样未选中时横向滑动**根本不存在**，不会与列表滚动/卡片点击争夺事件，
+ * 也就没有任何"滑了但没反应"的诡异手感。
  *
- * 为什么不干脆「滑过阈值即刻删除（无对话框）」：那就成了「滑动即达删除」，
- * 横向滑动在列表里太容易误触 —— 保留对话框作为最后一道闸。
+ * 为什么仍保留二次确认：软删除虽可恢复，但误删仍会打断心流。现在是「长按 + 滑动 + 确认」
+ * 三重闸门，误触概率已经很低 —— 但确认框作为**最后一道**不撤（它同时是唯一能看到
+ * "删除哪个"的地方）。
  *
- * 为什么不用 `detectDragGesturesAfterLongPress`：那条路要求长按前置，正是本轮要取消的东西。
+ * 为什么不用 `detectDragGesturesAfterLongPress`：长按的语义已经被**多选**占了
+ * （[EntryCard] 的 `onLongClick`），同一个手势不能既"进多选"又"接管拖拽"——
+ * 那正是①版失败的原因。现在拆得干净：长按只选中，**选中之后**再用普通左滑删除。
  * 用 `detectHorizontalDragGestures`：只在**水平**方向越过 touch slop 后才接管，
  * 竖直方向照旧交给 `LazyColumn`，两者按方向自然分流、互不抢事件。
  * ---------------------------------------------------------------------------
@@ -66,6 +73,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -94,38 +102,40 @@ private const val SETTLE_MS = 180
 private const val REVEAL_CORNER = 12
 
 /**
- * 「左滑 → 松手过半 → 二次确认」容器：把任意条目卡片包进去即可获得该交互。
+ * 「长按选中 → 左滑 → 松手过半 → 二次确认」容器：把任意条目卡片包进去即可获得该交互。
  *
- * 三个列表（密码 / 验证码 / 卡包）共用同一个组件，因此三处的手感与确认文案天然一致。
+ * 四个列表（密码 / 验证码 / 卡包 / 通行密钥）共用同一个组件，因此四处的手感与确认文案
+ * 天然一致。
  *
  * 手势分层（**务必保持**）：
  * - 长按选中 → 卡片自己负责（[EntryCard] 的 `onLongClick`），本容器**不**参与；
- * - 水平左滑 → 本容器接管（`detectHorizontalDragGestures`，**无需长按前置**）；
+ * - 水平左滑 → 本容器接管（`detectHorizontalDragGestures`），**仅当 [selectable] 为 `true`**；
  * - 松手过半 → 弹二次确认；未过半 → 回弹；
  * - 竖直滑动 → 不消费，交给 `LazyColumn` 滚动。
  *
  * 只允许**向左**滑（向右会被 `coerceIn(.., 0f)` 归零）：删除方向唯一，语义更清楚，
  * 也避免与「从屏幕左缘右滑返回」的系统手势打架。
  *
- * ## 门槛的移除（2026-09-14 第三轮用户反馈）
- * 此前的 [enabled] 要求「必须长按进多选，左滑才生效」（2026-09-13 用户为防误触所选）。
- * 实际用起来的问题是：**多了一道"先长按"的前置，手势显得不跟手**；且滑开后还要再
- * **点一次按钮**才弹确认，等于「滑动 + 点击 + 确认」三步。
- * ⇒ 本轮拍板：免长按直接滑，且**松手即裁决**（过半直接弹确认），压到两步。
+ * ## 门槛的回归（2026-09-16 第四轮用户反馈）
  *
- * [enabled] 参数保留，但语义退化为「**整个容器是否允许滑动删除**」——目前三处调用方
- * 都传 `true`（或不再传）。保留它是因为多选态下另有自己的批量操作路径，
- * 将来若需要在某些页面整体关掉滑动删除，仍可用它一键关闭。
+ * 第三轮为了"跟手"取消了「必须先长按」的门槛，结果是**误触**：
+ * 列表里横向滑动本来就容易在手势起手时被带出来（滚动起手带斜向位移、单手拇指区滑动），
+ * 一滑就弹删除确认 —— 用户判定这比多一步长按更糟。
+ * ⇒ [selectable] 语义回归为安全闸：**只有已进入选中态的条目才允许左滑删除**。
+ *
+ * ⚠️ [selectable] 为 `false` 时**完全不挂手势**（而不是挂上再忽略）：列表滚动、
+ * 卡片点击/长按全部照原样工作，不会因为多了一层 `pointerInput` 而产生任何延迟或抢事件。
  *
  * @param onDelete 二次确认点「删除」后的回调（真正删除由调用方执行）。
- * @param enabled 是否允许左滑进入删除（`false` 时手势完全让位给列表滚动与卡片点击）。
+ * @param selectable 该条目**当前是否已被选中**（即允许左滑删除）；调用方传
+ *        `item.id in selectedIds` 之类的表达式。为 `false` 时手势完全不挂载。
  * @param content 条目卡片（内部自带 [EntryCard] 的点击 / 长按选中）。
  */
 @Composable
 fun PressAndSwipeToDelete(
     onDelete: () -> Unit,
+    selectable: Boolean,
     modifier: Modifier = Modifier,
-    enabled: Boolean = true,
     content: @Composable () -> Unit,
 ) {
     val density = LocalDensity.current
@@ -136,6 +146,15 @@ fun PressAndSwipeToDelete(
     // 实时位移：滑动期间只改这一个 Float 状态（**不启动协程**，避免每个事件起一个）。
     var offsetX by remember { mutableFloatStateOf(0f) }
     var confirmOpen by remember { mutableStateOf(false) }
+
+    // ⚠️ 取消选中后位移必须归零：否则从选中态滑出去一半、这时点别处丢掉选中，
+    //    再回来卡片还停在半开位，红色区域留在屏上（且此时手势已不挂，用户滑不回去）。
+    LaunchedEffect(selectable) {
+        if (!selectable) {
+            offsetX = 0f
+            confirmOpen = false
+        }
+    }
 
     fun settleTo(target: Float) {
         scope.launch {
@@ -164,9 +183,9 @@ fun PressAndSwipeToDelete(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .graphicsLayer { translationX = if (enabled) offsetX else 0f }
+                .graphicsLayer { translationX = if (selectable) offsetX else 0f }
                 .swipeToReveal(
-                    enabled = enabled,
+                    enabled = selectable,
                     onDrag = { delta -> offsetX = (offsetX + delta).coerceIn(-actionWidthPx, 0f) },
                     onDragEnd = {
                         // ★ 松手即裁决：过半 → 直接弹二次确认并回弹；未过半 → 只回弹。

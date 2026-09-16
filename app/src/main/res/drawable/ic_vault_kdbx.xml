@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  KDBX（本地文件库）的类型标识 —— 解锁页用。
+
+  几何取自 Material Symbols 的 `lock` 轮廓并做圆角化处理（本项目自绘，非第三方资源）。
+  与 [ic_vault_bitwarden] 成对：解锁页按 `VaultSummary.kind` 二选一，
+  让"我现在开的是哪个库、是什么类型的库"一眼可辨。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M12,1.75C9.38,1.75 7.25,3.88 7.25,6.5V8.25H6.5C5.26,8.25 4.25,9.26 4.25,10.5V19C4.25,20.24 5.26,21.25 6.5,21.25H17.5C18.74,21.25 19.75,20.24 19.75,19V10.5C19.75,9.26 18.74,8.25 17.5,8.25H16.75V6.5C16.75,3.88 14.62,1.75 12,1.75ZM12,3.75C13.52,3.75 14.75,4.98 14.75,6.5V8.25H9.25V6.5C9.25,4.98 10.48,3.75 12,3.75ZM12,12.25C12.97,12.25 13.75,13.03 13.75,14C13.75,14.97 12.97,15.75 12,15.75C11.03,15.75 10.25,14.97 10.25,14C10.25,13.03 11.03,12.25 12,12.25Z" />
+</vector>

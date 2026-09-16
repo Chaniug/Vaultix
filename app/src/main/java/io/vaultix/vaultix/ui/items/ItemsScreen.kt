@@ -1012,14 +1012,16 @@ private fun ItemsList(
             }
             if (group.key !in collapsedGroups) {
                 items(group.items, key = { it.id }) { item ->
-                    // 「左滑 → 松手过半 → 二次确认」删除（软删除进回收站，见 ItemsViewModel.deleteItem）。
+                    // 「长按选中 → 左滑 → 松手过半 → 二次确认」删除
+                    // （软删除进回收站，见 ItemsViewModel.deleteItem）。
                     // 长按**选中**由内部 [ItemRow]/[EntryCard] 的 `onLongClick` 独占；本容器
                     // 只负责滑动删除信号（见 [PressAndSwipeToDelete]），不再回调选中，
                     // 避免一次长按触发两次 toggle（进不了多选）。
-                    // ⚠️ 2026-09-14：**不再要求先长按进多选**，任意条目直接左滑即可
-                    // （原 `enabled = selectedIds.isNotEmpty()` 已去掉，详见组件头注释）。
+                    // ⚠️ 2026-09-16：**必须已选中才允许左滑**（用户反馈「直接滑动就删除」
+                    // 误触太多）—— 未选中时组件完全不挂手势，横向滑动彻底不存在。
                     PressAndSwipeToDelete(
                         onDelete = { onDelete(item) },
+                        selectable = item.id in selectedIds,
                     ) {
                         ItemRow(
                             item = item,

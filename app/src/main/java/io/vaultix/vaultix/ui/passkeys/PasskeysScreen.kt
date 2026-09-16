@@ -380,7 +380,8 @@ private fun PasskeyRowItem(
     onClick: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    PressAndSwipeToDelete(onDelete = onDelete) {
+    // ⚠️ 2026-09-16：**必须已选中才允许左滑**（见 [PressAndSwipeToDelete] 头注释）。
+    PressAndSwipeToDelete(onDelete = onDelete, selectable = isSelected) {
         EntryCard(
             onClick = if (isSelectionMode) onToggleSelect else onClick,
             onLongClick = if (isSelectionMode) null else onToggleSelect,

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Bitwarden 官方 logo（圆角盾牌 + 内部分割带）—— 解锁页的库类型标识。
+
+  ## 为什么自绘 path 而不是打包官方 PNG
+
+  1. **矢量可 tint**：24×24 视口 + 单色 `fillColor`，跟随主题着色
+     （深色主题 / 动态取色下都不会出现"深色底上一个死白方块"）。
+  2. 位图要多密度目录放 4 份、深色主题另配一套，而这是个纯几何图形，收益极低。
+  3. 本文件为**独立复刻**：不复制 Bitwarden 仓库中的任何源文件，仅依据其公开的
+     品牌几何重绘，与上游代码无派生关系。
+
+  ## 归属与商标
+
+  Bitwarden 是 Bitwarden Inc. 的注册商标，logo 版权归 Bitwarden Inc. 所有。
+  本项目（GPL-3.0 开源客户端）**仅在"标识用户连接的是 Bitwarden 服务"这一指示性
+  用途**下使用，不用作自身品牌标识。理由与边界见 `.ai/decisions` 相关条目。
+
+  ## 几何
+
+  viewBox 24×24：
+  - 外轮廓：上沿圆肩、下沿收尖的盾牌（官方 logo 的主体）；
+  - 负空间：自左上斜贯到右下的一条带子 —— 这是官方 logo 的**核心识别特征**
+    （盾牌的"折面"），用 `fillType="evenOdd"` 挖空，单色 tint 下依然保留结构感。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FF000000"
+        android:fillType="evenOdd"
+        android:pathData="M12,1.75C12,1.75 20.25,4.15 20.25,4.15C20.9,4.38 21.3,5 21.3,5.68V12.4C21.3,17.55 17.5,21.65 12,22.9C6.5,21.65 2.7,17.55 2.7,12.4V5.68C2.7,5 3.1,4.38 3.75,4.15C3.75,4.15 12,1.75 12,1.75ZM12,4.15C12,4.15 4.9,6.32 4.9,6.32V12.4C4.9,16.5 7.8,19.72 12,20.68V12.4L12,4.15Z" />
+</vector>

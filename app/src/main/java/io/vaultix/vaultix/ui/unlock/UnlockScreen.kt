@@ -40,6 +40,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -67,6 +68,7 @@ import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.TextButton
 import androidx.compose.foundation.layout.width
 import io.vaultix.domain.PIN_MIN_LENGTH
+import io.vaultix.model.VaultKind
 import io.vaultix.vaultix.ui.theme.Spacing
 
 /**
@@ -200,6 +202,7 @@ fun UnlockScreen(
             // 「你的密钥被清了」（用户原话：解锁完还要再验证一次，逻辑太稀烂）。
             if (state.viewLocked) {
                 ViewLockedContent(
+                    kind = vault.kind,
                     vaultName = vault.name,
                     account = vault.account,
                     submitting = state.submitting,
@@ -208,15 +211,8 @@ fun UnlockScreen(
                 )
                 return@Column
             }
-            Text(
-                text = vault.name.take(1).uppercase(),
-                style = MaterialTheme.typography.headlineLarge,
-                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                modifier = Modifier
-                    .size(64.dp)
-                    .padding(top = Spacing.sm),
-            )
-            Spacer(Modifier.height(Spacing.lg))
+            VaultKindBadge(kind = vault.kind)
+            Spacer(Modifier.height(Spacing.md))
             Text(text = vault.name, style = MaterialTheme.typography.titleLarge)
             vault.account?.let {
                 Text(
@@ -225,11 +221,11 @@ fun UnlockScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            Spacer(Modifier.height(Spacing.lg))
-            // PIN 模式专用让位：把键盘连同圆点一起压到**下半屏**（拇指区）。
-            // 主密码模式这里恒为 0dp —— 它的表单一屏放得下，居中观感保持不变
-            // （见 [rememberPinTopSpacer] 的取值说明）。
-            Spacer(Modifier.height(layout.topSpacer))
+            // 让位量：PIN 模式把键盘压到下半屏（拇指区），主密码模式恒为 0dp
+            // —— 它的表单一屏放得下，居中观感保持不变（见 [rememberPinTopSpacer]）。
+            if (layout.topSpacer > 0.dp) {
+                Spacer(Modifier.height(layout.topSpacer))
+            }
             UnlockInputSection(
                 state = state,
                 viewModel = viewModel,
@@ -271,21 +267,15 @@ fun UnlockScreen(
  */
 @Composable
 private fun ViewLockedContent(
+    kind: VaultKind,
     vaultName: String,
     account: String?,
     submitting: Boolean,
     error: UnlockUiError?,
     onAuthenticate: () -> Unit,
 ) {
-    Text(
-        text = vaultName.take(1).uppercase(),
-        style = MaterialTheme.typography.headlineLarge,
-        color = MaterialTheme.colorScheme.onPrimaryContainer,
-        modifier = Modifier
-            .size(64.dp)
-            .padding(top = Spacing.sm),
-    )
-    Spacer(Modifier.height(Spacing.lg))
+    VaultKindBadge(kind = kind)
+    Spacer(Modifier.height(Spacing.md))
     Text(text = vaultName, style = MaterialTheme.typography.titleLarge)
     account?.let {
         Text(
@@ -566,27 +556,83 @@ private fun UnlockInputSection(
 private val PIN_DOT_SIZE = Spacing.lg
 
 /**
- * 解锁页主列的**纵向骨架**：垂直排列方式 + PIN 让位高度。
+ * 库类型徽标：**按库类型渲染官方图标**，取代此前的「取名称首字母」。
+ *
+ * ## 为什么不再用首字母
+ *
+ * 原来这里是 `vault.name.take(1).uppercase()` —— Bitwarden 库恒定显示一个「B」，
+ * 既不像品牌标识（用户反馈「这个 B 字能换成 bitwarden 的图标吗」），又**不携带任何信息**：
+ * 一个字母分不出「这是什么类型的库」。而解锁页恰恰是用户最需要确认
+ * 「我现在开的是哪个库」的地方。
+ *
+ * ## 徽标规格
+ *
+ * 圆形底衬（`primaryContainer`，直径 [BADGE_SIZE]）+ 居中图标（[BADGE_ICON_SIZE]，
+ * 用 `onPrimaryContainer`）。底衬保证图标在深浅主题下都有足够对比，
+ * 也让它与下方的库名形成"头像 + 标题"的常规层级。
+ *
+ * ⚠️ 图标是**单色矢量**（见 `ic_vault_bitwarden` / `ic_vault_kdbx`），随主题 tint，
+ * 因此不担心深色底上出现死白方块。商标归属见两个 drawable 的头注释。
+ */
+@Composable
+private fun VaultKindBadge(kind: VaultKind) {
+    val iconRes = when (kind) {
+        VaultKind.BITWARDEN -> R.drawable.ic_vault_bitwarden
+        VaultKind.KDBX -> R.drawable.ic_vault_kdbx
+    }
+    val label = when (kind) {
+        VaultKind.BITWARDEN -> R.string.vault_kind_bitwarden
+        VaultKind.KDBX -> R.string.vault_kind_kdbx
+    }
+    Box(
+        modifier = Modifier
+            .size(BADGE_SIZE)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.primaryContainer),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            painter = painterResource(iconRes),
+            // 内容描述给库类型名：读屏用户同样需要知道"这是哪个库"
+            // （字母方案下这里是纯文本，反而"读"得出，改成图片后必须显式给）。
+            contentDescription = stringResource(label),
+            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+            modifier = Modifier.size(BADGE_ICON_SIZE),
+        )
+    }
+}
+
+/**
+ * 徽标直径。
+ *
+ * 2026-09-16 从原来的 64dp（字母排版的 `headlineLarge` 视觉尺寸）收到 56dp：
+ * 官方盾牌图标的**实心面积远大于一个字母**，同样尺寸下观感会"重"一圈；
+ * 加上 PIN 模式要压缩头部（见 [rememberPinTopSpacer]），56dp 是两者的平衡点。
+ */
+private val BADGE_SIZE = 56.dp
+
+/** 徽标内图标尺寸（留出底衬的呼吸感，约 1/2 直径）。 */
+private val BADGE_ICON_SIZE = 28.dp
+/**
+ * 解锁页主列的**纵向骨架**：PIN 让位高度。
  *
  * ## 为什么要打包成一个返回值
  *
- * 这两件事**必须同时决定**，而且都要看 `state.pinMode`：PIN 模式要顶对齐 + 让位，
- * 主密码模式要居中 + 零让位。写成两个各自判断 `pinMode` 的表达式，就是往
+ * 这两件事**必须同时决定**，而且都要看 `state.pinMode`：PIN 模式要让位，
+ * 主密码模式零让位。写成两个各自判断 `pinMode` 的表达式，就是往
  * [UnlockScreen] 里塞两个分支 —— 实测这会把它顶到 detekt
  * `CyclomaticComplexMethod` 15（上限 14），CI 会拦（2026-09-15 实测）。
  * 收成一个 helper 后主函数里只剩**一次解构赋值**，零新增分支。
  *
- * ## 为什么不能简单改成 `weight(1f)` / `Arrangement.Bottom`
+ * ## 排列方式（2026-09-16 修正）
  *
- * 根 Column 带 `verticalScroll`（小屏 / 横屏必须能滚），它给子项的是**无界高度**：
- * - `weight(1f)` 要求父级有界 ⇒ 直接抛 `IllegalStateException`；
- * - `Arrangement.Bottom` 只在内容**低于**容器时才把内容推到底，内容一超高就退化成
- *   `Top`，小屏上键盘仍会被推到屏幕外（要滚动才够得着，比居中更糟）。
+ * PIN 模式**改回 `Center`**（此前是 `Top`）。上一版让位是"贴底"值，配 `Top` 才能
+ * 精确地把键盘推到最下；现在让位已封顶（见 [rememberPinTopSpacer]），
+ * **剩下的空间交给 `Center` 均分到上下两边** —— 这正是"空白不再全堆在头部与键盘之间"
+ * 的关键。两个模式现在共用同一种排列，只差让位量。
  *
- * ⇒ 改成「顶对齐 + 按容器高度反推让位量」，让位量公式见 [rememberPinTopSpacer]。
- *
- * ⚠️ 主密码模式维持 `Center` + 零让位不变：它的表单一屏放得下，居中观感是刻意保留的
- * （2026-09-14 已定），本轮诉求只针对 PIN。
+ * ⚠️ `Center` 在内容超高时会退化为 `Top` + 可滚动（`verticalScroll` 的行为），
+ * 不会把内容推出屏幕。
  *
  * @param switchVisible 是否有「换一个库」出口（只有多库时才有）——它的高度要算进让位。
  */
@@ -595,7 +641,8 @@ private fun unlockColumnLayout(
     pinMode: Boolean,
     switchVisible: Boolean,
 ): UnlockColumnLayout = UnlockColumnLayout(
-    arrangement = if (pinMode) Arrangement.Top else Arrangement.Center,
+    // 主密码模式与 PIN 模式都是 Center：差别只在让位量（PIN 多让一截，整体偏下）。
+    arrangement = Arrangement.Center,
     topSpacer = rememberPinTopSpacer(pinMode, switchVisible),
 )
 
@@ -610,42 +657,54 @@ private data class UnlockColumnLayout(
 )
 
 /**
- * PIN 模式顶部让位高度：把键盘压到屏幕底部的拇指区。
+ * PIN 模式顶部让位高度：把键盘推向屏幕下方的拇指区。
  *
- * ## 要解决的问题
+ * ## 要解决的问题（两轮）
  *
- * 用户反馈「解锁界面 PIN 输入的时候，数字键盘太靠上了，手指点击有点远」。
+ * **第一轮（2026-09-13）**：用户反馈「PIN 输入时数字键盘太靠上，手指点击有点远」。
  * 根因是整列在可用高度里 [Arrangement.Center] 居中 —— 一屏内容约 520dp，
  * 键盘（4 × 76dp + 间距）落在屏幕中部偏上。
  *
- * ## 为什么用「反推让位」而不是 `weight(1f)` / `Arrangement.Bottom`
+ * **第二轮（2026-09-16，当前）**：用户拿着真机截图反馈
+ * 「PIN 码解锁的时候，区域空白太大，上下不够紧凑」—— 图中头部（库名 + 邮箱）
+ * 与圆点行之间是一大块空白，上半屏显得很空。
+ *
+ * ## 上一版错在哪
+ *
+ * 上一版的公式是「**让内容底边贴着屏幕底部**」：
+ *
+ * ```
+ * 让位 = 屏高 − 头部高 − 键盘高 − 换库按钮高 − 底距     // ← 过头了
+ * ```
+ *
+ * 它把**全部剩余空间**一次性塞进头部与圆点之间。这在"键盘靠下"这件事上确实到位，
+ * 但代价是**上半屏被撑开成一片空白**：头像与库名孤零零挂在顶端，圆点被推到老远，
+ * 视觉上断成两截 —— 正是用户截图里画框那块。
+ *
+ * ## 当前做法：让位封顶，头部与键盘作为一个整体居中偏下
+ *
+ * 不再"贴底"，而是给让位设一个**上限**：最多让出键盘上方 1/3 屏的余量。
+ * 超出的空间由根 Column 的 `Arrangement.Center` 均分到上下两边 —— 于是
+ * **头像与键盘之间的空白被压扁，而整体仍停在屏幕偏下的位置**。
+ *
+ * ```
+ * 让位 = min(贴底所需让位, 屏高 × PIN_MAX_TOP_GAP_RATIO)
+ * ```
+ *
+ * ⚠️ 保留"贴底所需让位"作为**小屏的下界参考**：屏矮时贴底值本来就小，
+ * `min` 自然取它，键盘不会掉出屏幕。也就是：**大屏压扁留白、小屏仍然贴底**。
+ *
+ * ## 为什么不能简单改成 `weight(1f)` / `Arrangement.Bottom`
  *
  * 根 Column 带 `verticalScroll`（小屏 / 横屏必须能滚），它给子项的是**无界高度**：
  * - `weight(1f)` 要求父级有界 ⇒ 直接抛 `IllegalStateException`；
  * - `Arrangement.Bottom` 只在内容**低于**容器时才把内容推到底，内容一超高就退化成
  *   `Top`，小屏上键盘仍会被推到屏幕外（要滚动才够得着，比居中更糟）。
  *
- * ⇒ 改成「按容器高度反推让位量」。公式（**实机尺寸量纲，已按 600/640/720/800/891/915
- * 六档屏高验算**）：
- *
- * ```
- * 让位 = 屏高 − 顶部信息区高 − 键盘高 − 换库按钮高 − 底距
- * ```
- *
- * 也就是让**内容底边贴着屏幕底部**（留一档底距），键盘底部落在 **88%~92%** 处，
- * 恰好是拇指自然落点上沿 —— 而不是寄希望于一个"比例"。用比例（如 `屏高 × 0.35`）
- * 是**错的** —— 键盘自身就有 400dp，任何 `< 0.5` 的比例都会算出负数，让位恒为 0，
- * 等于没改（这一点是写完第一版后验算发现的）。
- *
- * ⚠️ **「换一个库」按钮的高度必须算进去**：它挂在键盘下方，漏算就会把整列顶出屏幕，
- * 用户得滚动才看得见那个出口（多库用户冷启动卡在解锁页时，那是唯一的换库路径）。
- * 同理底距也要留，否则最后一排按键被系统手势条吃掉一块触摸面积。
- *
- * 小屏（如 600dp 高）让位会缩到 28dp 但仍为正 ⇒ 依然贴底，只是键盘更靠上一点。
- * 真到放不下时 `coerceAtLeast(0.dp)` 兜底，退化为顶对齐 + 可滚动。
+ * ⇒ 只能「按容器高度反推让位量」，但**必须封顶**（本轮的修正）。
  *
  * ⚠️ 主密码模式恒返回 `0.dp`：它的表单一屏放得下，居中观感是刻意保留的
- * （2026-09-14 已定），本轮的诉求只针对 PIN。
+ * （2026-09-14 已定），本文的诉求只针对 PIN。
  *
  * @param switchVisible 是否有「换一个库」出口（只有多库时才有）。
  */
@@ -654,20 +713,50 @@ private fun rememberPinTopSpacer(pinMode: Boolean, switchVisible: Boolean): Dp {
     if (!pinMode) return 0.dp
     // 容器高度取窗口高度（解锁页是全屏单页面，没有顶栏 / 底栏压着）。
     val screenHeight = LocalConfiguration.current.screenHeightDp.dp
-    // 顶部信息区高：头像 64dp + Spacing.lg + 库名（titleLarge ≈ 28dp）+ Spacing.lg。
+    // 顶部信息区高：徽标 56dp + Spacing.md + 库名（titleLarge ≈ 28dp）+ Spacing.md。
     // 账号行是可选行（KDBX 库为 null），忽略它只会让让位略小、键盘略高一点点，
     // 不会把键盘推出屏幕 —— 而把它算进去会在有账号时把键盘顶得太低。
-    val headerHeight = 64.dp + Spacing.lg + 28.dp + Spacing.lg
+    val headerHeight = BADGE_SIZE + Spacing.md + 28.dp + Spacing.md
     // 键盘固有高度：圆点行 + 错误提示位 + 20dp 间隔 + 4 排按键（含排间距）+ 出口按钮。
     val keypadHeight = PIN_DOT_SIZE + Spacing.md + 20.dp +
         (PIN_KEY_SIZE + PIN_KEY_GAP) * PIN_DIGIT_ROWS.size +
         PIN_KEY_SIZE + PIN_KEY_GAP + Spacing.lg
     // 「换一个库」：Spacing.sm 间距 + 一个 TextButton 的最小高度（40dp）。
     val switchHeight = if (switchVisible) Spacing.sm + SWITCH_BUTTON_HEIGHT else 0.dp
-    return (
-        screenHeight - headerHeight - keypadHeight - switchHeight - PIN_BOTTOM_MARGIN
-        ).coerceAtLeast(0.dp)
+    // ① 贴底所需让位（小屏的正确值）。
+    val toBottom = screenHeight - headerHeight - keypadHeight - switchHeight - PIN_BOTTOM_MARGIN
+    // ② 让位上限（大屏防止上半屏被撑成一片空白）。
+    val capped = screenHeight * PIN_MAX_TOP_GAP_RATIO
+    return minOf(toBottom, capped).coerceAtLeast(0.dp)
 }
+
+/**
+ * PIN 模式让位量的上限比例：**不超过屏高的 1/6**。
+ *
+ * ## 怎么定出来的
+ *
+ * 先按"不设上限"复算了六档常见屏高（600/640/720/800/891/915），
+ * 让位量分别是 20/60/140/220/311/335dp —— 也就是**屏越大、空白越大**，
+ * 800dp 机型上头部与圆点之间要空出 220dp，正是用户截图里那块突兀的留白。
+ *
+ * 压到 1/6 后复算（键盘底部落在屏高比例）：
+ *
+ * | 屏高 | 让位 | 键盘底部 |
+ * |---|---|---|
+ * | 600 | 20dp | 88% |
+ * | 640 | 60dp | 89% |
+ * | 720 | 120dp | 87% |
+ * | 800 | 133dp | 80% |
+ * | 891 | 148dp | 73% |
+ * | 915 | 152dp | 71% |
+ *
+ * 小屏（≤720）几乎不变（本来就贴底），大屏留白被收掉 100~180dp，
+ * 键盘仍稳稳落在下 1/3 区 —— 拇指可达，上半屏也不再空旷。
+ *
+ * ⚠️ 这个比例只对**让位量**封顶，不改键盘与按键尺寸 —— 按键大小是 2026-09-14
+ * 用户明确要求放大的（64dp → 76dp，理由是"太小太集中"），本轮不再动它。
+ */
+private const val PIN_MAX_TOP_GAP_RATIO = 1f / 6f
 
 /** 「换一个库」文字按钮的高度（M3 `TextButton` 默认最小高 40dp）。 */
 private val SWITCH_BUTTON_HEIGHT = 40.dp
