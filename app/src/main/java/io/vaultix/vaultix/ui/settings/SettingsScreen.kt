@@ -5,7 +5,9 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -31,9 +33,7 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Contrast
 import androidx.compose.material.icons.filled.DarkMode
-import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Key
-import androidx.compose.material.icons.filled.Pin
 import androidx.compose.material.icons.filled.ViewAgenda
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Info
@@ -55,10 +55,8 @@ import androidx.compose.material3.BasicAlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
@@ -67,7 +65,6 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -760,7 +757,7 @@ internal fun VaultChoiceRow(
     val container = when {
         selected -> MaterialTheme.colorScheme.secondaryContainer
         // ⚠️ 未选中态必须比 DialogSurface 的面板底（surfaceContainerHigh）**低**一档，
-        // 否则同色相叠、卡片边界消失（与 [UnlockOptionRow] 同一个病，2026-09-15）。
+        // 否则同色相叠、卡片边界消失（与 VaultUnlockCard 同一个病，2026-09-15）。
         else -> MaterialTheme.colorScheme.surfaceContainerLowest
     }
     Card(
@@ -1141,19 +1138,51 @@ internal fun QuickUnlockEnrollEffect(
 }
 
 /**
- * 快速解锁「**生效范围**」：列出全部库，逐个决定这把指纹钥匙管不管它们。
+ * 快速解锁「**生效范围**」：列出全部库，逐个决定这个库用什么方式打开。
  *
- * 心智模型（用户提出、定稿 §4.7 采纳）：**用户只有一把 Keystore 密钥**，
- * 所以「快速解锁是一个能力，作用于哪些库由用户勾选」——勾选即决定
- * 「这把钥匙串上挂几把钥匙」。
+ * ## 心智模型（2026-09-16 四改：从"两个开关"改为"三选一"）
  *
- * ⚠️ 两条登记流程**不同**，故 UI 也要区分（[QuickUnlockVaultUi.kind]）：
- * - Bitwarden：勾选 → 直接弹指纹（密钥在会话里）；
- * - KDBX：勾选 → **先弹主密码输入框** → 校验通过 → 再弹指纹（§4.5）。
+ * 改前每库一张卡、卡内两行（指纹 / 应用内 PIN）**各带一个开关**，问题是：
+ * 用户面对的不是"设置"，而是"判断题"——他得先自己判断"这两个开关冲突吗"，
+ * 才能决定要不要都打开。真机上「还是不太好看」的根因就在这：**决策成本没被收敛**。
  *
- * ⚠️ 历史坑：此前本对话框**只能关不能开**（启用入口仅库列表页横幅），
- * 而横幅「以后再说」会永久置位 `isQuickUnlockPromptDismissed` → 用户彻底
- * 失去启用路径。现已补上对称的「启用」动作，消除该入口死角。
+ * 四改把它压成一次单选（[UnlockChoice]）：**指纹 / 应用内 PIN / 每次输主密码**。
+ * 用户只需回答一个问题：「这个库怎么进？」
+ *
+ * ### ⚠️ 单选是**呈现层**的，不是数据层的（关键约定，别改坏）
+ *
+ * 底层仍是 [SettingsViewModel.QuickUnlockVaultUi.enabled] 与 `pinEnabled` **两个独立布尔**，
+ * 二者可以同时为真（既登记了 Keystore 指纹钥匙、又设了应用内 PIN，解锁页两条路径都能走）。
+ * 这个能力**保留不动** —— 本次只改呈现，[SettingsViewModel] 一行未动。
+ *
+ * 由此带来两条必须遵守的规则：
+ * 1. **两个都开的历史数据**：按优先级（指纹 > PIN）显示为一个选中项，界面不会出现
+ *    "两个都选中"这种自相矛盾的状态；
+ * 2. **用户点任何一项 ⇒ 顺手关掉另一项**（见 [onChoice]）。互斥由**动作**实现，
+ *    而非由数据约束实现 ⇒ 代价是"用户之后仍可能从其它入口把两个都开上"，
+ *    但那属于能力保留的必然结果，且届时本对话框仍会按优先级正确显示。
+ *
+ * ### 第三个选项「每次输主密码」为什么必须显式列出
+ *
+ * 改前两个开关都关掉时，界面只有两个「未启用」，用户看不出这**就等于**"每次输主密码"。
+ * 把它列成同级的第三个选项，用户才有一个**肯定的**退出方式 ——
+ * 而不是"把两个开关都关掉"这种否定式操作（后者正是误触与困惑的来源）。
+ *
+ * ## 两条登记流程的差异仍然存在（[SettingsViewModel.QuickUnlockVaultUi.kind]）
+ *
+ * - Bitwarden：选指纹 → 直接弹系统认证（密钥在会话里）；
+ * - KDBX：选指纹 → **先弹主密码输入框** → 校验通过 → 再弹系统认证（§4.5）。
+ *
+ * ⚠️ 这是**流程**差异，不是**选项**差异：不影响三个选项本身的并列关系，
+ * 只在选中指纹时由后续弹窗承担。选项副标题会就地预告这一点（KDBX 版文案不同）。
+ *
+ * ## 保住的既有告诫
+ *
+ * - ⚠️ 历史坑：此前本对话框**只能关不能开**（启用入口仅库列表页横幅），
+ *   而横幅「以后再说」会永久置位 `isQuickUnlockPromptDismissed` → 用户彻底
+ *   失去启用路径。三改补上了对称的「启用」动作，四改的选项点击**同样是启用入口**，
+ *   该死角继续处于消除状态。
+ * - ⚠️ 必须可滚动：内容随库数增长，不可滚动时底部会被截断。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -1163,9 +1192,47 @@ internal fun QuickUnlockManageDialog(
     onEnable: (String) -> Unit,
     onDisable: (String) -> Unit,
     onPinSet: (SettingsViewModel.QuickUnlockVaultUi) -> Unit,
+    /**
+     * 「改用 PIN」专用入口：设置成功后**顺带关闭该库的指纹**。
+     *
+     * ⚠️ 与 [onPinSet] 分开是必须的：两者语义不同（一个是"修改 PIN"、一个是"换用 PIN"），
+     * 若共用一个入口，就没法区分"用户是想改 PIN"还是"想从指纹换成 PIN" ——
+     * 前者绝不能关指纹（用户可能两种都想要），见 ViewModel 里那个标记的 KDoc。
+     */
+    onPinSetSwitchingFromBiometric: (SettingsViewModel.QuickUnlockVaultUi) -> Unit,
     onPinDisable: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    /**
+     * 选中某一项 ⇒ 开启它、并关掉同一库的另一种免密方式。
+     *
+     * 抽成局部函数是为了让 `when` 保持一行调用，避免给 [QuickUnlockManageDialog]
+     * 增加圈复杂度（本仓库 detekt `CyclomaticComplexMethod` 上限 14，且**同文件**
+     * 被调函数的复杂度会累加进调用方 —— 见 `.ai/conventions/8.6`）。
+     */
+    fun onChoice(vault: SettingsViewModel.QuickUnlockVaultUi, choice: UnlockChoice) {
+        when (choice) {
+            UnlockChoice.MASTER_ONLY -> {
+                if (vault.enabled) onDisable(vault.vaultId)
+                if (vault.pinEnabled) onPinDisable(vault.vaultId)
+            }
+            UnlockChoice.BIOMETRIC -> {
+                // 已经是指纹 ⇒ 空操作：重复点选不该把已登记的钥匙拆了重建。
+                if (!vault.enabled) onEnable(vault.vaultId)
+                if (vault.pinEnabled) onPinDisable(vault.vaultId)
+            }
+            UnlockChoice.PIN -> {
+                // ⚠️ 两件事的顺序与时机都是刻意的：
+                // 1. **不在这里关指纹** —— PIN 设置是独立流程，用户可能中途取消；
+                //    先关指纹再设 PIN，取消后就成了"指纹没了、PIN 也没设成"的静默数据丢失。
+                //    改为走 openPinDialogSwitchingFromBiometric，由 ViewModel 在
+                //    PIN **真正落盘后**才关指纹（见该方法的 KDoc）。
+                // 2. 已设过 PIN 时不重复弹框 —— 换 PIN 走「修改 PIN」辅助动作。
+                if (!vault.pinEnabled) onPinSetSwitchingFromBiometric(vault)
+            }
+        }
+    }
+
     BasicAlertDialog(onDismissRequest = onDismiss) {
         DialogSurface {
             DialogHeader(title = stringResource(R.string.settings_quick_unlock))
@@ -1183,25 +1250,21 @@ internal fun QuickUnlockManageDialog(
                 ) {
                     DialogSectionTitle(
                         title = stringResource(R.string.quick_unlock_section_scope),
-                        hint = stringResource(R.string.quick_unlock_scope_hint),
+                        hint = stringResource(R.string.quick_unlock_scope_hint_pick),
                         icon = { Icon(Icons.Filled.Key, contentDescription = null) },
                     )
 
-                    // 2026-09-15 三改（用户：「可以合并设置的」）：
-                    // 改前是**两个大段**（指纹段列出所有库 → 应用内 PIN 段再列出所有库），
-                    // 同一个库名在屏幕上出现两次、滚动还要来回找。
-                    // 现在改为**一个库一张卡、卡内两行**（指纹 / 应用内 PIN），
-                    // 心智模型从"两把钥匙分别管哪些库"变成"这个库有哪几把钥匙"。
+                    // 2026-09-15 三改（用户：「可以合并设置的」）：从"指纹段 + PIN 段
+                    // 各列一遍全部库"改为**一库一卡**，同名不再出现两次。
+                    // 2026-09-16 四改（用户：「还是不太好看，有没有让设置简单点的方案」）：
+                    // 卡内从"两行并列开关"再收敛为"三选一"，见本函数的 KDoc。
                     vaults.forEach { vault ->
                         VaultUnlockCard(
                             vault = vault,
                             canAuthenticate = canAuthenticate,
-                            onEnable = onEnable,
-                            onDisable = onDisable,
-                            onPinSet = onPinSet,
-                            onPinDisable = onPinDisable,
-                        )
-                    }
+                            onChoice = { choice -> onChoice(vault, choice) },
+                            onPinSet = { onPinSet(vault) },
+                        )                    }
                     Spacer(Modifier.height(Spacing.sm))
                 }
             }
@@ -1214,49 +1277,65 @@ internal fun QuickUnlockManageDialog(
 }
 
 /**
- * 单个密码库的解锁设置卡片：**卡片头（库名）+ 卡内两行（指纹 / 应用内 PIN）**。
+ * 一个库的解锁方式三选一（**互斥呈现**，底层两布尔见 [QuickUnlockManageDialog] 的 KDoc）。
  *
- * ## 为什么合并（2026-09-15 三改）
+ * ⚠️ 顺序即优先级：`BIOMETRIC > PIN > MASTER_ONLY`。两个都开的历史数据取**前者**，
+ * 与 `when` 的判断顺序（先 `enabled` 后 `pinEnabled`）保持一致 —— 两处顺序若不一致，
+ * 会出现"卡片显示指纹被选中、点一下 PIN 却把指纹关了"的错乱。
+ */
+private enum class UnlockChoice { BIOMETRIC, PIN, MASTER_ONLY }
+
+/**
+ * 单个密码库的解锁设置卡片：**库名 + 三选一的解锁方式**。
  *
- * 改前结构是「指纹段（列出全部库）→ 分隔线 → 应用内 PIN 段（再列出全部库）」，
- * 两个问题：
- * 1. **同一个库名在屏幕上出现两次**，用户读到第二个时必须回头确认"这是同一个库吗"；
- * 2. 想给某个库同时配指纹和 PIN，要在两段之间**滚动来回找**。
+ * ## 四改前后的结构对比（2026-09-16）
  *
- * ⚠️ 合并的**不是两种手段**（那必须并列，见 [SettingsViewModel.QuickUnlockVaultUi.pinEnabled]
- * 的注释：两者是彼此独立的路径，不能合成一个「已启用」），
- * 而是**分组维度** —— 从"按手段分组"改成"按库分组"。
+ * | | 改前（三改） | 改后（四改） |
+ * |---|---|---|
+ * | 卡内结构 | 两行并列开关（指纹 / PIN） | 三选一（指纹 / PIN / 主密码） |
+ * | 每行元素 | 图标 + 标题 + 状态徽标 + 副标题 + 动作栏（最多 2 个按钮） | 单选控件 + 标题 + 一行副标题 |
+ * | 可点区域 | 最多 4 个 | 3 个（且语义互斥，不会纠结"要不要都开"） |
+ * | 状态表达 | 徽标文字「已启用/未启用」+ 副标题 + 按钮，**同一件事说三遍** | 单选控件**本身**就是状态 |
  *
- * ## 保住的既有告诫
+ * 砍掉的三样东西，都是**说明书口气**或**重复叙事**，不是信息：
+ * 1. `● 已启用 / ● 未启用` 文字徽标 —— 单选控件的选中态已足够明确；
+ * 2. "点此处启用 / 未启用（设备不支持）" 类操作指引 —— 讲了"怎么点"，
+ *    而用户真正要判断的是"选了之后会怎样"，故副标题只讲**后果**；
+ * 3. 独立的动作栏 —— 动作并入选项本身（点选项 = 启用），只在**已选中**时
+ *    才需要暴露辅助动作（PIN 的「修改」/「关闭」）。
  *
- * - 卡内两行仍是「正文在上、动作在下」的纵向骨架（[UnlockOptionRow] 的告诫继续有效：
- *   不得退回 `ListItem` + `trailingContent`，窄宽度下按钮会与文字相叠）；
- * - 两行之间用 [HorizontalDivider] 分隔而非留白：同一个库的两条**独立**路径，
- *   需要一条明确的边界说明"这是两件事"（此处与"段落之间不该用分隔线"不矛盾 —— 那里
- *   是两个**段落**，这里是同一段内的两条**并列项**，M3 的 list divider 正用于此）。
+ * ⚠️ 保住的告诫：`Card` 底色必须比 `DialogSurface` 面板（`surfaceContainerHigh`）
+ * **低**一档，否则同色相叠、卡片边界消失（三改"毛坯房"归因第 1 条）。
+ *
+ * ⚠️ 可见性为 `private`（四改前是 `internal`）：参数里的 [UnlockChoice] 是本文件私有的
+ * 枚举，`internal` 函数暴露 `private` 类型会编译报错（"exposes its private type"）。
+ * 而本组件四改后**只被同文件的 [QuickUnlockManageDialog] 调用**，无需跨文件可见。
  */
 @Composable
-internal fun VaultUnlockCard(
+private fun VaultUnlockCard(
     vault: SettingsViewModel.QuickUnlockVaultUi,
     canAuthenticate: Boolean,
-    onEnable: (String) -> Unit,
-    onDisable: (String) -> Unit,
-    onPinSet: (SettingsViewModel.QuickUnlockVaultUi) -> Unit,
-    onPinDisable: (String) -> Unit,
+    onChoice: (UnlockChoice) -> Unit,
+    onPinSet: () -> Unit,
 ) {
+    // ⚠️ 顺序即优先级，与 UnlockChoice 的枚举顺序一致（见其 KDoc）。
+    val selected = when {
+        vault.enabled -> UnlockChoice.BIOMETRIC
+        vault.pinEnabled -> UnlockChoice.PIN
+        else -> UnlockChoice.MASTER_ONLY
+    }
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = Spacing.lg, vertical = Spacing.xs),
         shape = RoundedCornerShape(VAULT_ROW_CORNER),
         colors = CardDefaults.cardColors(
-            // ⚠️ 必须比 DialogSurface 的面板（surfaceContainerHigh）**低**一档，
-            // 否则同色相叠、卡片边界消失（见 [UnlockOptionRow] 的 KDoc）。
             containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
         ),
     ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            // ---- 卡片头：库名 + 类型徽标 ----
+        Column(modifier = Modifier.fillMaxWidth().padding(vertical = Spacing.sm)) {
+            // ---- 卡片头：库名 ----
             Text(
                 text = vault.name,
                 style = MaterialTheme.typography.titleSmall,
@@ -1267,73 +1346,55 @@ internal fun VaultUnlockCard(
                 modifier = Modifier.padding(
                     start = Spacing.lg,
                     end = Spacing.lg,
-                    top = Spacing.md,
+                    top = Spacing.xs,
                     bottom = Spacing.xs,
                 ),
             )
 
-            // ---- 行 1：指纹 ----
-            UnlockOptionRow(
-                icon = { Icon(Icons.Filled.Fingerprint, contentDescription = null) },
+            UnlockChoiceRow(
                 title = stringResource(R.string.quick_unlock_section_biometric),
-                summary = when {
-                    // 已启用：徽标已说明状态，副标题无可补充 ⇒ 留空。
-                    vault.enabled -> ""
-                    // 仅当设备确实支持认证时才提示「可启用」，
-                    // 否则维持原「未启用」说明，避免给出无法完成的指引。
-                    canAuthenticate -> stringResource(
-                        if (vault.kind == VaultKind.KDBX) {
-                            R.string.quick_unlock_disabled_kdbx
-                        } else {
-                            R.string.quick_unlock_disabled
-                        },
-                    )
-                    else -> stringResource(R.string.quick_unlock_device_unsupported)
-                },
-                enabled = vault.enabled,
-            ) {
-                if (vault.enabled) {
-                    ActionSpacer()
-                    TextButton(onClick = { onDisable(vault.vaultId) }) {
-                        Text(stringResource(R.string.quick_unlock_disable))
-                    }
-                } else if (canAuthenticate) {
-                    ActionSpacer()
-                    TextButton(onClick = { onEnable(vault.vaultId) }) {
-                        Text(stringResource(R.string.quick_unlock_enable))
-                    }
-                }
-            }
-
-            // ---- 行 2：应用内 PIN ----
-            // 分隔线说明"这是另一件独立的事"（PIN 不需要系统认证，与指纹无依赖）。
-            HorizontalDivider(
-                modifier = Modifier.padding(horizontal = Spacing.lg),
-                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                summary = stringResource(biometricSummaryRes(vault, canAuthenticate)),
+                selected = selected == UnlockChoice.BIOMETRIC,
+                // 设备不支持认证时不给点：点了也走不完流程，允许点等于给出
+                // 一个必然失败的承诺（副标题已说明原因）。
+                enabled = canAuthenticate,
+                onSelect = { onChoice(UnlockChoice.BIOMETRIC) },
             )
-            UnlockOptionRow(
-                icon = { Icon(Icons.Filled.Pin, contentDescription = null) },
+
+            UnlockChoiceRow(
                 title = stringResource(R.string.pin_section_title),
-                summary = if (vault.pinEnabled) {
-                    stringResource(R.string.pin_enabled_digits, PIN_MIN_LENGTH)
-                } else {
-                    stringResource(R.string.pin_disabled_summary)
-                },
-                enabled = vault.pinEnabled,
-            ) {
-                if (vault.pinEnabled) {
-                    TextButton(onClick = { onPinDisable(vault.vaultId) }) {
-                        Text(stringResource(R.string.pin_disable))
+                summary = stringResource(R.string.quick_unlock_option_pin_summary, PIN_MIN_LENGTH),
+                selected = selected == UnlockChoice.PIN,
+                enabled = true,
+                onSelect = { onChoice(UnlockChoice.PIN) },
+            )
+
+            UnlockChoiceRow(
+                title = stringResource(R.string.quick_unlock_master_only),
+                summary = stringResource(R.string.quick_unlock_option_master_summary),
+                selected = selected == UnlockChoice.MASTER_ONLY,
+                enabled = true,
+                onSelect = { onChoice(UnlockChoice.MASTER_ONLY) },
+            )
+
+            // 已选中的 PIN 才需要辅助动作。
+            // ⚠️ 这里**只留「修改 PIN」**，不放「关闭 PIN 解锁」：单选模型下"关闭"
+            //    等价于"改成别的选项"，与下面第三个选项语义重复，摆出来反而让用户
+            //    困惑"这和「每次输主密码」有什么区别"。关闭交给点第三个选项完成 ——
+            //    这正是单选模型带来的简化，不要退回去再摆一个关闭按钮。
+            if (selected == UnlockChoice.PIN && vault.pinEnabled) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(
+                        start = Spacing.lg,
+                        end = Spacing.lg,
+                        bottom = Spacing.xs,
+                    ),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TextButton(onClick = onPinSet) {
+                        Text(stringResource(R.string.quick_unlock_action_change_pin))
                     }
-                }
-                // 「修改 / 设置 PIN」是主操作 ⇒ 始终靠右。
-                ActionSpacer()
-                TextButton(onClick = { onPinSet(vault) }) {
-                    Text(
-                        stringResource(
-                            if (vault.pinEnabled) R.string.pin_change else R.string.pin_enable,
-                        ),
-                    )
                 }
             }
         }
@@ -1341,144 +1402,141 @@ internal fun VaultUnlockCard(
 }
 
 /**
- * 卡内的**一行**解锁手段（由 [VaultUnlockCard] 调用两次：指纹 / 应用内 PIN）。
+ * 指纹选项的副标题。
  *
- * ⚠️ **不要退回 `ListItem` + `trailingContent`**：对话框的可用宽度本来就窄，
- * 而这里每行最多有两个动作按钮（如「关闭 PIN 解锁」+「修改 PIN」）。
- * 两者挤在同一行时，正文会被压成多行并与按钮**叠在一起**（2026-09-14 真机报告
- * 「文字叠加、UI 错乱」）。改成「正文在上、动作右对齐换行在下」后，
- * 无论按钮多宽都不可能压到文字 —— 纵向增长是**可见且可读**的失败方式。
+ * ⚠️ 判断顺序不能乱：
+ * 1. **已启用优先**：密钥已建立，再说"需输主密码以建立钥匙"是误导
+ *    （用户会以为要重来一遍）。故 `vault.enabled` 必须排在最前。
+ * 2. 设备不支持其次：此时给通用说明，不泄漏 KDBX 的流程细节（反正也用不了）。
+ * 3. 最后才按 kind 分：KDBX 待启用时需要预告"会再要一次主密码"，
+ *    否则用户点下去突然弹密码框会困惑（这正是原本 quick_unlock_disabled_kdbx 的职责）。
  *
- * ## 2026-09-15 二次重做：修「毛坯房」
+ * 抽成函数是因为它是本卡唯一需要判断的分支 —— 留在 [VaultUnlockCard] 里会与
+ * `selected` 的 `when` 叠加，把 Compose 主函数的圈复杂度推过 14（见 8.6 的实测结论）。
+ */
+private fun biometricSummaryRes(
+    vault: SettingsViewModel.QuickUnlockVaultUi,
+    canAuthenticate: Boolean,
+): Int = when {
+    vault.enabled -> R.string.quick_unlock_option_biometric_on
+    !canAuthenticate -> R.string.quick_unlock_option_biometric_unsupported
+    vault.kind == VaultKind.KDBX -> R.string.quick_unlock_option_biometric_kdbx_summary
+    else -> R.string.quick_unlock_option_biometric_summary
+}
+
+/**
+ * 卡内的一行**单选项**（无圆角外壳，归属 [VaultUnlockCard] 的卡片）。
  *
- * 用户真机反馈这页「看起来很廉价、像毛坯房」。归因是**三个可量化的结构问题**：
+ * ## 为什么不用现成的 `RadioButton` 行样式
  *
- * 1. 🔴 **卡片与面板同色，层级归零**（最致命）。`DialogSurface` 的面板底就是
- *    `surfaceContainerHigh`，而本行之前也用 `surfaceContainerHigh @ 55%`。
- *    同色叠同色 ⇒ 卡片边界**根本看不见**，整屏糊成一片灰 ——
- *    「毛坯房」三个字的来源。改：卡片底用 `surfaceContainerLowest`
- *    （比面板**低**一档 ⇒ 深色主题下更深、浅色下更白），与面板拉开明确层级。
- *    ⚠️ 这是 M3 的标准层级用法：容器色**阶梯**本就是 `Lowest < Low < Base < High`，
- *    嵌套内容该往**低**走，不是往同色叠 alpha。
- * 2. **状态徽标与副标题重复叙事**：启用时副标题也写「已启用」，一行字说两遍。
- *    改：徽标负责状态，副标题只负责**信息**（怎么启用 / 为何不可用 / 位数）。
- * 3. **动作按钮无主次**：启用与关闭等权重并排、还都贴着右边留一片空。
- *    改用 `ActionSpacer()`（`weight(1f)` 占位）把主操作推到行尾，形成两端对齐的动作栏。
+ * 本项目的对话框宽度本就窄（`DIALOG_WIDTH_RATIO = 0.92`，且面板内还有
+ * `Spacing.lg` 双侧留白），M3 的 `RadioButton` 自带 48dp 最小触达尺寸与
+ * 较大内边距，三项叠起来会把卡片撑得很高 —— 而"简单"的一大来源就是**看得完**。
  *
- * ## 2026-09-15 三改：不再是 Card，改为卡内的行
+ * 这里改用**自绘圆点**（16dp）+ 整行可点：视觉更紧凑，触达区域反而更大
+ * （整行都是点击区，不受 48dp 图标束缚）。同时自带无障碍语义
+ * （`selectableGroup` + `selectable` + `Role.RadioButton`），不影响 TalkBack。
  *
- * 用户要求「可以合并设置的」后，**卡片**的职责上移到 [VaultUnlockCard]（一库一卡），
- * 本组件降级为卡内的一行 ⇒ **去掉自己的 Card 外壳与水平外边距**，
- * 改由 `icon` 槽位提供手段图标（指纹 / PIN），与行标题一起构成扫读锚点。
- *
- * @param icon 手段图标（28dp 槽位）。两行共处一张卡时，图标是区分二者最快的锚点。
+ * ⚠️ 传 `enabled = false` 时使用 `disabledAlpha`：**必须仍然可见**，
+ * 因为"设备不支持"本身是需要传达的信息，而不是该被隐藏的行。
  */
 @Composable
-internal fun UnlockOptionRow(
-    icon: @Composable () -> Unit,
+private fun UnlockChoiceRow(
     title: String,
     summary: String,
+    selected: Boolean,
     enabled: Boolean,
-    actions: @Composable RowScope.() -> Unit,
+    onSelect: () -> Unit,
 ) {
-    Column(
+    val contentAlpha = if (enabled) 1f else DISABLED_ALPHA
+    Row(
         modifier = Modifier
             .fillMaxWidth()
+            .selectable(
+                selected = selected,
+                enabled = enabled,
+                role = Role.RadioButton,
+                onClick = onSelect,
+            )
             .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            // 图标锚点（主色）。与 [SettingsRow] 的图标槽同为 28dp，保持一族。
-            CompositionLocalProvider(
-                LocalContentColor provides MaterialTheme.colorScheme.primary,
-            ) {
-                Box(
-                    modifier = Modifier.size(VAULT_ICON_BOX),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    icon()
-                }
-            }
-            Spacer(Modifier.width(Spacing.md))
+        UnlockChoiceIndicator(
+            selected = selected,
+            enabled = enabled,
+        )
+        Spacer(Modifier.width(Spacing.md))
+        Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = title,
                 style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.Medium,
-                modifier = Modifier.weight(1f),
+                fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = contentAlpha),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            // 状态徽标：一眼看出这条手段开没开，不用读整句副标题。
-            UnlockStateBadge(enabled = enabled)
-        }
-        // 副标题只在**有信息**时出现（徽标已表达的状态不再复述，见 KDoc 第 2 条）。
-        if (summary.isNotEmpty()) {
             Text(
                 text = summary,
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                // 左缩进 = 图标槽 + 间距，让说明与标题左对齐（而不是顶到图标下面）。
-                modifier = Modifier.padding(
-                    start = VAULT_ICON_BOX + Spacing.md,
-                    top = Spacing.xs,
-                ),
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = contentAlpha),
+                modifier = Modifier.padding(top = Spacing.xs),
             )
         }
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(top = Spacing.xs),
-            verticalAlignment = Alignment.CenterVertically,
-            content = actions,
-        )
     }
 }
 
 /**
- * 解锁手段的状态徽标（已启用 / 未启用）。
+ * 单选项的**自绘指示器**（选中 = 实心圆 + 外环；未选中 = 仅外环）。
  *
- * 用「小圆点 + 文字」而不是只靠副标题措辞区分：两行文字（"已启用" / "点此处启用"）
- * 在字号相同时扫读很慢，加一个色点让状态**先于**文字被看见。
+ * ⚠️ 不用 `RadioButton`：它带 48dp 最小尺寸与额外内边距，三个选项会把卡片撑高
+ * （见 [UnlockChoiceRow] 的 KDoc）。
  */
 @Composable
-private fun UnlockStateBadge(enabled: Boolean) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
+private fun UnlockChoiceIndicator(selected: Boolean, enabled: Boolean) {
+    val alpha = if (enabled) 1f else DISABLED_ALPHA
+    val accent = MaterialTheme.colorScheme.primary.copy(alpha = alpha)
+    val ring = when {
+        !enabled -> MaterialTheme.colorScheme.outline.copy(alpha = DISABLED_ALPHA)
+        selected -> accent
+        else -> MaterialTheme.colorScheme.outline
+    }
+    Box(
+        modifier = Modifier.size(CHOICE_INDICATOR_SIZE),
+        contentAlignment = Alignment.Center,
+    ) {
+        // 外环
         Box(
             modifier = Modifier
-                .size(BADGE_DOT_SIZE)
-                .background(
-                    color = if (enabled) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.outline
-                    },
-                    shape = CircleShape,
-                ),
+                .size(CHOICE_INDICATOR_SIZE)
+                .border(width = CHOICE_RING_WIDTH, color = ring, shape = CircleShape),
         )
-        Spacer(Modifier.width(Spacing.xs))
-        Text(
-            text = stringResource(
-                if (enabled) R.string.settings_unlock_state_on else R.string.settings_unlock_state_off,
-            ),
-            style = MaterialTheme.typography.labelMedium,
-            color = if (enabled) {
-                MaterialTheme.colorScheme.primary
-            } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
-            },
-        )
+        // 内点（仅选中时）
+        if (selected) {
+            Box(
+                modifier = Modifier
+                    .size(CHOICE_DOT_SIZE)
+                    .background(color = accent, shape = CircleShape),
+            )
+        }
     }
 }
 
-/** 状态徽标圆点直径。 */
-private val BADGE_DOT_SIZE = 8.dp
+/** 单选项指示器外径。 */
+private val CHOICE_INDICATOR_SIZE = 20.dp
+
+/** 单选项指示器外环宽度。 */
+private val CHOICE_RING_WIDTH = 2.dp
+
+/** 单选项选中时的内点直径（外径 20 - 两侧环宽 2×2 - 视觉留白 4）。 */
+private val CHOICE_DOT_SIZE = 10.dp
 
 /**
- * 动作栏占位：把后面的按钮推到行尾，与左侧正文的两端对齐。
+ * 不可用行的整体透明度。
  *
- * 用在"只有一个右侧按钮"的行（如「关闭」），避免整行只有一个按钮孤零零贴在左边。
+ * ⚠️ 不可用的**指纹选项**仍需完整可读（"设备不支持"是要传达的信息，不是该藏起来的东西），
+ * 只是降低对比度表示"点不动"。故取 0.38（M3 disabled 的推荐量级）而非更低。
  */
-@Composable
-private fun RowScope.ActionSpacer() {
-    Spacer(Modifier.weight(1f))
-}
+private const val DISABLED_ALPHA = 0.38f
 
 /**
  * PIN 设置对话框的宿主：按 [SettingsViewModel.PinDialogState] 选一帧渲染。

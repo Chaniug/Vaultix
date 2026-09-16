@@ -151,7 +151,10 @@
     <string name="settings_vault_unlocked_hint">已解锁</string>
     <string name="settings_vault_default_badge">默认库</string>
     <string name="settings_vault_set_default">设为默认库</string>
-    <!-- 解锁手段的状态徽标（快速解锁对话框里每行右侧的小圆点 + 文字） -->
+    <!-- ⚠️ 2026-09-16 四改后**暂无代码引用**：解锁方式从「每行一个状态徽标」改为
+         「三选一单选组」，选中态由单选控件本身表达，状态徽标（圆点 + 文字）被删除。
+         **刻意保留**：这两句是通用的「已启用 / 未启用」措辞，若有其它开关类设置项
+         需要状态文字（而非控件表达），直接可用。别当僵尸串删掉。 -->
     <string name="settings_unlock_state_on">已启用</string>
     <string name="settings_unlock_state_off">未启用</string>
     <!-- 2026-09-16：设置首页「密码库」组只剩一个入口行（密码库管理），独占一个组标题太浪费，
@@ -309,20 +312,53 @@
          二级页入口），这句"重新打开"口径的说明仍是对的。 -->
     <string name="settings_quick_unlock_desc">锁定后用生物识别重新打开，免主密码与两步验证</string>
     <string name="quick_unlock_manage_none">尚未启用任何库</string>
+    <!-- ⚠️ 以下四条自 2026-09-16 四改起**暂无代码引用**：改前它们是「指纹行」的
+         启用/关闭按钮文字与状态文字（同一件事被按钮、徽标、副标题说了三遍，
+         正是四改要砍的冗余）。四改后"点单选项即为启用"，不再需要独立按钮文案。
+         **刻意保留**：`quick_unlock_enable` / `quick_unlock_disable` 是通用动作词，
+         其它「启用/关闭某能力」的场景可直接复用；`quick_unlock_enabled` /
+         `quick_unlock_disabled` 是快速解锁这个能力的**完整口径状态词**，
+         若日后做「快速解锁总览」这类只读展示，比 settings_unlock_state_* 更贴切。 -->
     <string name="quick_unlock_enable">启用</string>
     <string name="quick_unlock_disable">关闭</string>
     <string name="quick_unlock_enabled">已启用</string>
     <string name="quick_unlock_disabled">未启用</string>
+    <!-- ⚠️ 四改后**暂无代码引用**（并入上面这一组）：它是"未启用"的加长版，
+         仅用于指纹行且设备支持的场景。**刻意保留**，理由同上。 -->
     <string name="quick_unlock_device_unsupported">未启用（本设备未设置锁屏或生物识别，无法启用）</string>
     <!-- 快速解锁「生效范围」（定稿 §4.7：一把指纹钥匙管哪些库由用户勾选） -->
+    <!-- ⚠️ 2026-09-16 四改后**暂无代码引用**：卡片从「两行并列开关」改成「三选一单选组」
+         （指纹 / 应用内 PIN / 每次输主密码），"两种方式彼此独立"这句与新的单选心智
+         直接矛盾（用户看到的就是三选一），故替换为 quick_unlock_scope_hint_pick。
+         **刻意保留**：若日后恢复"两个独立开关"的呈现，这句"彼此独立"的口径仍然准确。 -->
     <string name="quick_unlock_scope_hint">每个库可分别开启指纹或应用内 PIN。两种方式彼此独立。</string>
+    <!-- 四改新引导语：把"每个库选一种"的心智模型直接讲出来。 -->
+    <string name="quick_unlock_scope_hint_pick">为每个库选择一种免主密码的打开方式</string>
     <!-- 对话框唯一的段落标题（2026-09-15 三改：原来「指纹解锁 / 应用内 PIN」两个段落
          合并成"一库一卡、卡内两行"，段落标题降级为**卡的引导语**；
          「指纹解锁」「应用内 PIN」变为卡内**行标题**，见下面两条。 -->
     <string name="quick_unlock_section_scope">选择要快速解锁的库</string>
-    <!-- 卡内行标题：指纹手段。（原为段落标题，三改后降级为行标题，文案不变） -->
+    <!-- 卡内选项标题：指纹手段。（原为段落标题 → 三改降为行标题 → 四改成为单选项标题） -->
     <string name="quick_unlock_section_biometric">指纹解锁</string>
+    <!-- 单选组第 3 项：显式的"不用快速解锁"。四改新增 —— 改前两个开关都关掉时
+         界面只有两个「未启用」，用户看不出这其实等于"每次输主密码"。 -->
+    <string name="quick_unlock_master_only">每次输主密码</string>
+    <!-- ⚠️ 2026-09-16 四改后**暂无代码引用**：KDBX 的"需再输一次主密码"原本写在
+         指纹行的副标题里；四改把副标题统一成"讲后果"的一句话，这条流程提示改为
+         选中后由 KdbxQuickUnlockPasswordDialog 承担（那条弹窗本来就会说要输密码）。
+         **刻意保留**：若日后需要在选项行上就地预告该流程，这句文案现成可用。 -->
     <string name="quick_unlock_disabled_kdbx">未启用（启用时需再输一次该库的主密码）</string>
+    <!-- 四改新增：三个单选项各自的"后果"副标题（只讲用户真正关心的，不讲操作步骤） -->
+    <string name="quick_unlock_option_biometric_summary">用系统指纹或设备 PIN 验证，免输主密码</string>
+    <!-- 已启用时的副标题：不再满足于"能免密打开"，补一句它同时**绕过了两步验证**
+         （与 quick_unlock_banner_text 同一口径，这里压缩为一行短句）。 -->
+    <string name="quick_unlock_option_biometric_on">已开启，免输主密码与两步验证</string>
+    <string name="quick_unlock_option_biometric_kdbx_summary">需再输一次该库的主密码以建立钥匙</string>
+    <string name="quick_unlock_option_biometric_unsupported">本设备未设置锁屏或生物识别，无法启用</string>
+    <string name="quick_unlock_option_pin_summary">用 %1$d 位数字解锁，不依赖系统锁屏</string>
+    <string name="quick_unlock_option_master_summary">最安全，每次打开都要输入</string>
+    <!-- 四改：单选项的辅助操作（已选中时才能做的事，如"修改 PIN"） -->
+    <string name="quick_unlock_action_change_pin">修改 PIN</string>
     <!-- KDBX 启用快速解锁前的主密码确认（定稿 §4.5，无法省略） -->
     <string name="kdbx_quick_unlock_title">启用快速解锁</string>
     <string name="kdbx_quick_unlock_message">请输入「%1$s」的主密码。它会被加密保存，用于以后用指纹打开该库。</string>
@@ -344,10 +380,18 @@
          **刻意保留**：它把"这是 PIN 的状态"写全了，若日后 PIN 行脱离「应用内 PIN」段落
          单独出现（例如合并成一个总开关），这句完整口径仍然可用。别当僵尸串删掉。 -->
     <string name="pin_enabled_summary">应用内 PIN：已启用（%1$d 位）</string>
-    <!-- PIN 已启用时的副标题：段落标题已说明"这是 PIN"、徽标已说明"已启用"，
-         故这里**只留位数**这一条真信息（2026-09-15「毛坯房」归因第 2 条）。 -->
+    <!-- ⚠️ 自 2026-09-16 四改起**暂无代码引用**：四改把 PIN 的启用/状态表达收进了
+         「三选一」的单选项（副标题固定为 quick_unlock_option_pin_summary），
+         不再需要"位数"这条动态状态 —— 用户选 PIN 时不需要先知道是几位。
+         **刻意保留**：若日后需要在选项行上显示已设置位数（例如"已设置 · 6 位"），
+         这句现成可用。 -->
     <string name="pin_enabled_digits">%1$d 位数字</string>
+    <!-- ⚠️ 自 2026-09-16 四改起**暂无代码引用**（同 pin_enabled_digits，状态交给单选项表达）。
+         **刻意保留**：它是"尚未设置"的通用短句。 -->
     <string name="pin_disabled_summary">尚未设置</string>
+    <!-- ⚠️ 自 2026-09-16 四改起**暂无代码引用**（四改后"选中即启用"，不再有独立按钮文案）。
+         **刻意保留**：它比通用动作词「启用」更明确（说明动作是"设 PIN"），
+         若日后把 PIN 设置拆成独立入口，这句更合适。 -->
     <string name="pin_enable">设置 PIN</string>
     <string name="pin_set_title">设置 PIN</string>
     <string name="pin_set_message">请输入 6 位数字。PIN 只用于解开本机已保存的密钥，不会上传。</string>
@@ -356,6 +400,9 @@
     <string name="pin_mismatch">两次输入不一致，请重新输入</string>
     <string name="pin_too_short">PIN 需要 %1$d 位数字</string>
     <string name="pin_disable">关闭 PIN 解锁</string>
+    <!-- ⚠️ 自 2026-09-16 四改起**暂无代码引用**：四改改用 quick_unlock_action_change_pin
+         （「修改 PIN」）—— 原「修改 PIN」与本条语义重复，二选一后保留了更直白的后者。
+         **刻意保留**：它点明了"改的是 PIN"且措辞更完整。 -->
     <string name="pin_change">修改 PIN</string>
     <string name="pin_kdbx_title">确认主密码</string>
     <string name="pin_kdbx_message">请输入「%1$s」的主密码。它会被加密保存，用于以后用 PIN 打开该库。</string>

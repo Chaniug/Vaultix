@@ -570,8 +570,29 @@ class SettingsViewModel @Inject constructor(
      */
     private var pendingPin: String = ""
 
+    /**
+     * 「设置 PIN 成功后，是否顺带关闭该库的指纹解锁」。
+     *
+     * ## 为什么需要这个标记（2026-09-16 四改）
+     *
+     * 四改把解锁方式收敛为三选一（指纹 / PIN / 每次输主密码）。用户在
+     * **有指纹**的库上点「应用内 PIN」，语义是"改用 PIN" ⇒ 指纹应当关掉。
+     *
+     * ⚠️ **但不能在点击时就关**：PIN 对话框是独立流程，用户完全可能中途取消。
+     * 若先关了指纹再设 PIN，取消后就变成"指纹没了、PIN 也没设成"，用户
+     * **白白丢了一种已配好的解锁方式** —— 这是静默的数据丢失，比 UI 难看严重得多。
+     * 故改为**登记意图、等 `PinEnrollOutcome.Enrolled` 真正成功后再执行**。
+     *
+     * ⚠️ **「修改 PIN」路径不能受影响**：那条路径下用户可能指纹与 PIN 同时开着，
+     * 顺手关掉指纹就是破坏用户配置。故只在 [openPinDialogSwitchingFromBiometric]
+     * 入口置位，其余入口（[openPinDialog]）不置位。
+     */
+    private var dismissBiometricAfterPinEnroll: String? = null
+
     fun openPinDialog(vault: QuickUnlockVaultUi) {
         pendingPin = ""
+        // 「修改 PIN」等常规入口：不动指纹（见 dismissBiometricAfterPinEnroll 的告诫）。
+        dismissBiometricAfterPinEnroll = null
         _pinDialog.value = PinDialogState.Entering(
             vaultId = vault.vaultId,
             vaultName = vault.name,
@@ -579,8 +600,21 @@ class SettingsViewModel @Inject constructor(
         )
     }
 
+    /**
+     * 从「指纹解锁」切换到「应用内 PIN」时打开 PIN 设置流程。
+     *
+     * 与 [openPinDialog] 的唯一差别：**PIN 设置成功后**会关闭该库的指纹解锁，
+     * 完成"改用 PIN"的语义。关的时机见 [dismissBiometricAfterPinEnroll] 的告诫。
+     */
+    fun openPinDialogSwitchingFromBiometric(vault: QuickUnlockVaultUi) {
+        openPinDialog(vault)
+        dismissBiometricAfterPinEnroll = vault.vaultId
+    }
+
     fun dismissPinDialog() {
         pendingPin = ""
+        // 用户取消 ⇒ 放弃"改用 PIN"的意图，**不能**留下标记（否则下次成功时会误关指纹）。
+        dismissBiometricAfterPinEnroll = null
         _pinDialog.value = PinDialogState.Idle
     }
 
@@ -659,6 +693,12 @@ class SettingsViewModel @Inject constructor(
                 PinEnrollOutcome.Enrolled -> {
                     pendingPin = ""
                     _pinDialog.value = PinDialogState.Idle
+                    // PIN 已真正落盘，此时才执行"改用 PIN ⇒ 关掉指纹"（见
+                    // dismissBiometricAfterPinEnroll 的告诫：不能在点击时就关）。
+                    // 取局部 `val` 后再清空，避免在调用链里读到半途状态。
+                    val switchFrom = dismissBiometricAfterPinEnroll
+                    dismissBiometricAfterPinEnroll = null
+                    if (switchFrom != null) disableQuickUnlock(switchFrom)
                 }
                 is PinEnrollOutcome.PinTooShort ->
                     failPin("PIN 需要 ${outcome.minimum} 位数字")
