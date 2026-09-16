@@ -2,6 +2,7 @@ package io.vaultix.vaultix.ui.common
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -36,6 +37,8 @@ import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -188,47 +191,54 @@ fun ItemFormDialog(
             }
         },
     ) {
-        FormHeader(
-            folders = folders,
-            folderId = folderId,
-            onFolderSelect = { folderId = it },
-            typeEditable = typeEditable,
-            type = type,
-            onTypeSelect = { type = it },
-        )
-        NameField(
-            name = name,
-            onNameChange = { name = it; showNameError = false },
-            favorite = favorite,
-            onFavoriteChange = { favorite = it },
-            showError = showNameError,
-        )
-        FormDivider()
-        when (type) {
-            VaultItemType.Login -> LoginFields(
-                username = username,
-                onUsernameChange = { username = it },
-                password = password,
-                onPasswordChange = { password = it },
-                uris = uris,
-                totp = totp,
-                onTotpChange = { totp = it },
-                onScanTotp = { scanning = true },
-                onPickApp = { showAppPicker = true },
+        // 卡片 1：基本信息（文件夹 / 类型 / 名称）
+        FormGroupCard {
+            FormHeader(
+                folders = folders,
+                folderId = folderId,
+                onFolderSelect = { folderId = it },
+                typeEditable = typeEditable,
+                type = type,
+                onTypeSelect = { type = it },
             )
-            VaultItemType.Card -> {
+            NameField(
+                name = name,
+                onNameChange = { name = it; showNameError = false },
+                favorite = favorite,
+                onFavoriteChange = { favorite = it },
+                showError = showNameError,
+            )
+        }
+        // 卡片 2：类型专属字段。
+        // ⚠️ 安全笔记**没有**专属字段 ⇒ 该分支不出卡（否则会留一张空卡）。
+        // ⚠️ 刻意写成 `when` 而不是「先 `if` 再 `when`」：`ItemFormDialog` 的圈复杂度
+        //    本就顶在 detekt 上限 14，多一个分支就会红 —— 用 `when` 保持分支数不变。
+        when (type) {
+            VaultItemType.SecureNote -> Unit
+            VaultItemType.Login -> GroupedTypeFields {
+                LoginFields(
+                    username = username,
+                    onUsernameChange = { username = it },
+                    password = password,
+                    onPasswordChange = { password = it },
+                    uris = uris,
+                    totp = totp,
+                    onTotpChange = { totp = it },
+                    onScanTotp = { scanning = true },
+                    onPickApp = { showAppPicker = true },
+                )
+            }
+            VaultItemType.Card -> GroupedTypeFields {
                 SectionLabel(text = stringResource(R.string.section_card), icon = Icons.Filled.CreditCard)
                 Spacer(Modifier.height(Spacing.sm))
                 LabeledFields(CARD_LABELS, cardValues)
             }
-            VaultItemType.Identity -> {
+            VaultItemType.Identity -> GroupedTypeFields {
                 SectionLabel(text = stringResource(R.string.section_identity), icon = Icons.Filled.Badge)
                 Spacer(Modifier.height(Spacing.sm))
                 LabeledFields(IDENTITY_LABELS, identityValues)
             }
-            VaultItemType.SshKey -> SshKeyFields(sshValues)
-            // 安全笔记只有名称 + 备注（该类型本就没有专属字段可填）
-            VaultItemType.SecureNote -> Unit
+            VaultItemType.SshKey -> GroupedTypeFields { SshKeyFields(sshValues) }
         }
         ItemFormTail(
             customFields = customFields,
@@ -268,26 +278,33 @@ private fun ItemFormTail(
     reprompt: VaultReprompt,
     onRepromptChange: (VaultReprompt) -> Unit,
 ) {
-    FormDivider()
-    SectionLabel(
-        text = stringResource(R.string.section_custom_fields),
-        icon = Icons.Filled.Tune,
-    )
-    Spacer(Modifier.height(Spacing.sm))
-    CustomFieldsEditor(fields = customFields)
     Spacer(Modifier.height(Spacing.md))
-    SectionLabel(text = stringResource(R.string.section_notes), icon = Icons.Filled.Notes)
-    Spacer(Modifier.height(Spacing.sm))
-    OutlinedTextField(
-        value = notes,
-        onValueChange = onNotesChange,
-        label = { Text(stringResource(R.string.item_field_notes)) },
-        minLines = 2,
-        modifier = Modifier.fillMaxWidth(),
-    )
-    // 主密码二次验证（对齐 Bitwarden「附加选项」里的开关）
-    FormDivider()
-    RepromptToggle(reprompt = reprompt, onRepromptChange = onRepromptChange)
+    // 卡片 3：附加内容（自定义字段 + 备注）
+    FormGroupCard {
+        SectionLabel(
+            text = stringResource(R.string.section_custom_fields),
+            icon = Icons.Filled.Tune,
+        )
+        Spacer(Modifier.height(Spacing.sm))
+        CustomFieldsEditor(fields = customFields)
+        Spacer(Modifier.height(Spacing.lg))
+        SectionLabel(text = stringResource(R.string.section_notes), icon = Icons.Filled.Notes)
+        Spacer(Modifier.height(Spacing.sm))
+        OutlinedTextField(
+            value = notes,
+            onValueChange = onNotesChange,
+            label = { Text(stringResource(R.string.item_field_notes)) },
+            minLines = 2,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+    Spacer(Modifier.height(Spacing.md))
+    // 卡片 4：安全选项（主密码二次验证，对齐 Bitwarden「附加选项」）。
+    // ⚠️ 单独成卡而不是并进附加内容：它回答的是「这个条目**怎么被保护**」，
+    //    与上面「填了什么内容」不是一回事，混在一起会让这张卡的标题失去意义。
+    FormGroupCard {
+        RepromptToggle(reprompt = reprompt, onRepromptChange = onRepromptChange)
+    }
 }
 
 /**
@@ -354,20 +371,54 @@ private fun SectionLabel(text: String, icon: ImageVector) {
     }
 }
 
+/** 表单分组卡片的圆角（与设置页卡片同一档，保持全局观感一致）。 */
+private val FORM_CARD_CORNER = 20.dp
+
 /**
- * 表单分组之间的分隔线。
+ * 表单的**分组卡片**（2026-09-16 新增，取代此前的 `SectionLabel` + 淡分隔线）。
  *
- * 为什么加它：此前整张表单只有 `Spacer(8.dp)` 的**等距堆叠** —— 名称、凭据、自定义字段、
- * 备注、二次验证全是一样大的间距，读起来像"一长串输入框"，分不出结构（用户反馈
- * 「新建密码条目的页面也丑」）。一条极淡的分隔线就能把分组"读"出来，
- * 且不像卡片那样需要猜底色。
+ * ## 为什么从"分隔线"升级为"卡片"
+ *
+ * 旧方案是一条极淡的 `HorizontalDivider`，它的注释里写着当时的取舍：
+ * 「不像卡片那样需要猜底色」—— 那是**保守**的选择。用户在看过实际效果后明确表示
+ * 「想好看一点，不用那么理性和克制」，于是把当初主动排除的卡片方案捡回来。
+ *
+ * 卡片比分隔线多给了三样东西：**边界**（哪里是一个组）、**底色**（组的范围可见）、
+ * **呼吸**（组内紧凑、组间留白，于是"结构"能一眼读出来）。
+ *
+ * ⚠️ 底色必须比宿主面板**低一档**：对话框面板是 `surfaceContainerHigh`，
+ *    这里用 `surfaceContainerLow`。同色相叠会让卡片边界消失
+ *    （这是 `VaultUnlockCard` 已经踩过的坑，别再犯）。
+ *
+ * ⚠️ 横向**不加** padding：宿主 [FullScreenDialogShell] 已给正文 24dp 侧边距，
+ *    再加会让卡片变得又窄又臃肿。
  */
 @Composable
-private fun FormDivider() {
-    HorizontalDivider(
-        modifier = Modifier.padding(top = 18.dp, bottom = 14.dp),
-        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f),
-    )
+private fun FormGroupCard(content: @Composable ColumnScope.() -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(FORM_CARD_CORNER),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+        ),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(Spacing.lg),
+            content = content,
+        )
+    }
+}
+
+/**
+ * 类型专属字段的**统一外壳**：卡片间留白 + [FormGroupCard]。
+ *
+ * 抽出来只为让主函数的 `when` 每个分支保持一行 —— 那里已经顶着 detekt
+ * `CyclomaticComplexMethod` 的上限，多写两行就会连带把复杂度顶破。
+ */
+@Composable
+private fun GroupedTypeFields(content: @Composable ColumnScope.() -> Unit) {
+    Spacer(Modifier.height(Spacing.md))
+    FormGroupCard(content)
 }
 
 /**
