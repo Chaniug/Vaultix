@@ -71,6 +71,13 @@ retrofit = "2.11.0"
 okhttp = "4.12.0"
 retrofitSerialization = "1.0.0"
 
+# ---- OneDrive / Microsoft Graph（app 模块：KDBX 网盘同步）----
+# MSAL（Microsoft Authentication Library）走 **public client + PKCE**，**不配 client secret** ——
+# 移动端存不住 secret，配了才是错的做法（上游 Bastion 同样没配，可对照）。
+# 版本与 Bastion 对齐（8.4.2），便于排查两边行为差异。
+# ⚠️ 它会传递带入 androidx.appcompat / browser / constraintlayout / gson / nimbus-jose-jwt。
+msal = "8.4.2"
+
 # ---- 扫码（TOTP 相机扫码，app 模块）----
 # 相机层用 CameraX（Google 现行推荐，生命周期感知）；解码用 ZXing core。
 # 选 ZXing 而非 ML Kit 的理由：① 轻量（core ~500KB，ML Kit unbundled 需 2-3MB）；
@@ -185,6 +192,8 @@ retrofit-core = { group = "com.squareup.retrofit2", name = "retrofit", version.r
 retrofit-kotlinx-serialization = { group = "com.jakewharton.retrofit", name = "retrofit2-kotlinx-serialization-converter", version.ref = "retrofitSerialization" }
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
 okhttp-logging-interceptor = { group = "com.squareup.okhttp3", name = "logging-interceptor", version.ref = "okhttp" }
+# Microsoft Graph 的调用**手写 OkHttp**（对齐 Bastion），故只要 MSAL 这一个新依赖。
+msal = { group = "com.microsoft.identity.client", name = "msal", version.ref = "msal" }
 androidx-credentials = { group = "androidx.credentials", name = "credentials", version.ref = "credential" }
 
 # ---- core:crypto ----

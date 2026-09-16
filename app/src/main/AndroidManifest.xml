@@ -214,6 +214,30 @@
         <receiver
             android:name=".autofill.shortcut.SmartCopyReceiver"
             android:exported="false" />
+
+        <!-- OneDrive（MSAL）授权回调宿主。
+             由 MSAL 自己拉起：用户在系统浏览器/Custom Tab 里登录后，
+             Microsoft 会把授权码重定向到 `msauth://io.vaultix.vaultix/<签名哈希>`，
+             这个 Activity 负责接住回调并交还 SDK。
+
+             ⚠️ 这里的 host 必须等于 applicationId，path 的 `/<哈希>` 必须是
+             **签名证书 SHA-1 的 base64**（标准 base64，含 + / =，不是 URL 编码值）。
+             哈希与 Azure 门户里登记的「签名哈希」框**同源**，改动签名即失效。
+             ⚠️ 只测「本地出包 + 重签」的包（见 .ai/conventions/8.7-环境.md）：
+             直接用 debug 签名安装时证书不同、哈希不同，回调会失败。 -->
+        <activity
+            android:name="com.microsoft.identity.client.BrowserTabActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="msauth"
+                    android:host="io.vaultix.vaultix"
+                    android:path="/s8Z1PBw9xUHOxihJdrGizMzPhb0=" />
+            </intent-filter>
+        </activity>
     </application>
 
 </manifest>

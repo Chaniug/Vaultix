@@ -149,6 +149,9 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.kotlinx.datetime)
 
+    // OneDrive / Microsoft Graph —— KDBX 网盘同步的鉴权层（MSAL public client + PKCE）。
+    implementation(libs.msal)
+
     // 平台能力
     implementation(libs.androidx.biometric)
     implementation(libs.androidx.credentials)
