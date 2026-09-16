@@ -138,6 +138,65 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 > 逐轮流水 → `.ai/SESSION-YYYY-MM-DD.md` · 坑 → `.ai/ISSUES.md`（索引，正文在 `issues/`）·
 > 性能专项 → [`Docs/progress/perf-plan.md`](../Docs/progress/perf-plan.md)。
 
+**第八十轮前后（2026-09-17 凌晨 · 本轮，见 `.ai/SESSION-2026-09-17.md`）**
+
+> 起点是用户报的三件 UI 事 + 一句「我项目里面的 kdbx 的同步功能还没接上（onedrive / webdav）」，
+> 终点是用户拍板 **「止血 + 鉴权并行」** 后两条线各推进一段。
+
+**推送 `d17772b → 37e963b`（8 个提交）· 门禁：detekt ✅ / `:app:compileFullDebugKotlin` ✅ /
+单测 656 项（去重）0 失败 ✅**
+
+1. **五组 UI（承接 09-16 诉求）**：填充建议行收窄（`5017029`）· 卡片圆角 12→16dp + 统一
+   0.5dp 描边（`8654e62`）· 表单改 4 张分组卡（`be8b15e`）· 全屏外壳改叠加布局实现真沉浸
+   （`5b4b41c`）· 多选栏摘「全选」+ 修被悬浮 Dock 遮挡（`5b9ff76`）。
+   ★ **卡片描边的理由（可复用）**：M3 filled card 与背景的明度差本就小，**动态取色**下更不可靠
+   （底色由壁纸派生）⇒ 描边把边界**说死**，且不吃底色、不与动态取色打架，比反复调底色稳。
+   ★ **「不沉浸」不是回归**：原先只是"窗口全屏"、内容层仍三行平铺，从第一天起就没穿越效果。
+2. ★★ **KDBX 写入口止血（`ISSUES.md` #106，`8fc1125`）** —— **不是用户报的**，
+   是排查网盘同步前置条件时发现的：**读路径按 `kind` 分流了，写路径没有** ⇒
+   「读这个存储、写那个存储」，**两个方向都在骗人**：`createItem` 静默写出一条 Room 孤儿行
+   （读侧走 `Kdbx.contentOf` 永远看不到 ⇒ 用户"存了却没出现"）；`updateItem` 报
+   「条目不存在」（KDBX 条目 id 来自 `itemIdOf(uuid)`，不在 Room）。
+   修法：`domain.ReadOnlyVaultException` + `ItemRepositoryImpl.requireWritable` 守在
+   **8 个写方法**的 `runCatching` 首行 + UI 收起写入口（详情页编辑/删除、条目页 FAB 与底部栏「+」）。
+   ⚠️ `cleanupExpiredTrash` 也要拦：残留孤儿行会让它给 KDBX 库入队**永不推送的毒丸**。
+   ⚠️ `removeFido2Credential` 要单独拦：否则先走 `loadItem`（查 Room）报出与真因无关的错。
+   > **判据**：**读路径按 `kind` 分流了，写路径就必须同时分流。**
+3. ★★ **OneDrive 鉴权骨架（`37e963b`）**：MSAL 8.4.2 + `res/raw/onedrive_msal_config.json` +
+   manifest 注册 `BrowserTabActivity` + 移植 `OneDriveAuthManager`（改 Hilt 单例、接 `VaultixLog`）
+   + `OneDriveGraphClient`（OkHttp 手写 Graph，**只做读**：列 children + 跟 `@odata.nextLink` 分页）。
+   ★ **本轮 spike 的价值兑现了 —— 抓到最大外部风险**：`msal:8.4.2 → common:24.6.0 →
+   com.microsoft.device.display:display-mask:0.3.0`，而 `display-mask` **只在微软 Surface Duo
+   SDK 的公共 feed 上**（Google Maven / Maven Central 都没有）⇒ `settings.gradle.kts` 必须加
+   `pkgs.dev.azure.com/MicrosoftDeviceSDK/DuoSDK-Public/...`。**这是外部单点**（feed 下线即构建挂）。
+   ⚠️ 下一步：设置页还没有「连接 OneDrive」入口 —— **交互式登录需要 Activity 才能拉起**，
+   必须有真实按钮才能真机跑通「登录 → 拿 token → 列文件」。
+4. ★★ **三条新纪律（代价已付）**：
+   ① **「任务 UP-TO-DATE」≠「那段代码是好的」** —— 本轮跑 `test` 才炸出 `data:repository`
+   单测**编译**断链（`atomicWriteDao` / 三个 enrollment 参数），**全是预先存在的**、
+   由更早的提交遗留；只因那些提交**只跑 `:app:` 编译没跑 `test`**，而
+   `compileDebugUnitTestKotlin` 一直 UP-TO-DATE ⇒ 从未重新编译。**门禁必须含 `test`。**
+   ② **给 mock 补桩要「转发」不要「mock 掉」**：`AtomicWriteDao` 用匿名子类把两个 `protected`
+   落点转发到 mock 的 Dao ⇒ `@Transaction` 编排照旧执行、原有 `coVerify` 断言依然成立；
+   直接 mock 掉 `upsertCipherAndEnqueue` 会让行不落库、所有"写完读回"的断言一起失效。
+   ③ **加写闸会改变测试的隐含前提**：`requireWritable` 调**挂起的** `vaultDao.get` ⇒
+   严格 mockk 未打桩会抛 `MockKException` 并**替换掉真正的失败消息** ⇒ 必须在 `setUp` 补桩。
+5. ★ **detekt 行数口径**（此前理解错了）：`LongMethod.allowedLines = 150`，但
+   `ItemsScreen` 主函数**物理约 235 行却过关** ⇒ **计数不含空行/注释**，与物理行数不是一回事。
+6. ✅ **Azure redirect_uri 实测复核通过**：从 `D:/vaultix-release.jks` 重算
+   SHA-1 base64 = `s8Z1PBw9xUHOxihJdrGizMzPhb0=`，与用户已填门户的值逐位一致。
+   ⚠️ 项目**无 `signingConfig`** ⇒ 装机包靠本地**重签**；直接装 debug 签名包时回调必失败。
+
+**第七十九轮（2026-09-16 · 用户睡前下单、睡醒验收，见 `.ai/SESSION-2026-09-16.md`）**
+
+1. 主密码解锁**误触发重新登录**（索要服务端 2FA）—— `bfb0179`。
+   「已经登录上了，用密码只是校验解开密码库，而不是重新登录」。
+2. **条目详情 / 新建编辑页 M3 2026 美化** —— `f5ec95c`。
+3. **设置页：从 Bastion 搬运 + 已有项合并精简 + M3 优化** —— `a56da7c`。
+4. 同轮另有一条**工具链性质**的深挖（记忆分层 / 文档分篇 / CI 与 APK 分块下载验证，
+   门禁从 4 类扩到 5 类、扫描面 164 → 293 文件），交付 `2d1adae` / `70651e7` / `f622f51`
+   （+ 文档 `aa133c9`）；CI `run 35084153580` success，APK 32,329,710 字节已校验。
+
 **第六十六轮五续（2026-09-15 · 通行密钥漏订阅、三个弹窗重做、`@OptIn` 的缝）**
 
 1. 🔴 **用户明确驳回了上一轮的修法**：「通行密钥界面打开还是没有显示，必须要点一下搜索，
@@ -463,6 +522,15 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 | 云同步图标 | `PendingOp` 取 `op IN ('CREATE','UPDATE')` 作判据（**判定集合必须 = 展示集合**）；Flow 自动翻转；KDBX 恒空 | `d062792` |
 | 下拉空隙 | 指示器默认贴容器顶 ⇒ 与让位后的首条之间是纯背景；自定义 indicator 加 `padding(top = topInset)` | `d062792` |
 
-> **踩坑全表**（现象 → 根因 → 解法，编号 #1~#80）：`.ai/ISSUES.md`。
+> **踩坑全表**（现象 → 根因 → 解法，编号 #1~**#106**）：`.ai/ISSUES.md`。
 > ⚠️ 其中 **#35 ↔ #43 ↔ #39 是一条「推翻链」**（passkey clientDataJSON 的错判与更正），
 > 接力时必须先看懂，不要只看旧条目就动手。
+
+> ⚠️ **本索引止于 2026-09-13（第五十一轮）** —— 之后不再逐条续写，避免与 §9 两处漂移。
+> **§9 才是"当前状态 + 最近几轮"的真源**，逐日细节在 `.ai/SESSION-YYYY-MM-DD.md`。
+> 2026-09-14 起的轮次请直接看 §9 顶部与对应的 SESSION 文件；其中最近两轮是：
+> - `SESSION-2026-09-16.md` —— 用户睡前下单、睡醒验收那一批
+>   （主密码解锁误触发重新登录 / 条目详情与新建编辑页 M3 / 设置页搬运合并，
+>   外加记忆分层与文档分篇的工具链深挖）。
+> - `SESSION-2026-09-17.md` —— **5 组 UI 入库 + KDBX 写入口止血（`ISSUES.md` #106）
+>   + OneDrive 鉴权骨架**。
