@@ -89,6 +89,20 @@ class VaultixPreferences @Inject constructor(
          * 信封却是空的"这种双源漂移 —— 那正是 #93「谎报状态的开关」的成因，别再造一个。
          */
         val QUICK_UNLOCK_SCOPE = stringSetPreferencesKey("quick_unlock_scope")
+
+        /**
+         * 「生效范围是否已被用户确认过」（2026-09-17 新增）。
+         *
+         * 为什么需要这个**独立的**标记，而不是拿 [QUICK_UNLOCK_SCOPE] 的空集兼职：
+         * 空集在这里有确定含义 —— 「一个库都不要」（等价于整体未启用）。若把"空集"再解释成
+         * "从未配置过 ⇒ 默认全部库"，就出现**一个值两种含义**：用户主动全部取消勾选之后，
+         * 界面会反过来告诉他"全都勾上了"。这正是「空有三态」那条纪律要防的塌缩。
+         *
+         * ⇒ 拆成两个事实：`false` = 从未配置 ⇒ 向导**默认全勾**（用户 99% 想要的效果）；
+         * `true` = 用户确认过范围 ⇒ 空集就是"一个都不要"，如实呈现。
+         */
+        val QUICK_UNLOCK_SCOPE_CONFIRMED = booleanPreferencesKey("quick_unlock_scope_confirmed")
+
         val TRASH_AUTO_DELETE_DAYS = intPreferencesKey("trash_auto_delete_days")
         val THEME_MODE = stringPreferencesKey("theme_mode")
         val OLED_PURE_BLACK = booleanPreferencesKey("oled_pure_black")
@@ -321,6 +335,34 @@ class VaultixPreferences @Inject constructor(
             } else {
                 prefs[QUICK_UNLOCK_SCOPE] = vaultIds
             }
+        }
+    }
+
+    /**
+     * 用户是否**确认过**生效范围。
+     *
+     * `false` = 从未配置 ⇒ 「管理解锁方式」向导**默认全勾**；`true` = 已确认 ⇒ 空集就是
+     * "一个都不要"。为什么这必须是独立事实而不是用空集兼职，见
+     * [QUICK_UNLOCK_SCOPE_CONFIRMED] 的说明。
+     */
+    fun isQuickUnlockScopeConfirmed(): Flow<Boolean> =
+        safeData.map { it[QUICK_UNLOCK_SCOPE_CONFIRMED] ?: false }
+
+    /**
+     * 写入范围并**同时**标记"已确认"。
+     *
+     * ⚠️ 两个事实必须在**同一次 edit** 里落盘：分两次写会留下一帧"范围已改、确认标记未改"的
+     * 中间态，此时 `composeState` 可能正好读到一个自相矛盾的组合（例如范围为空但标记仍是
+     * `false` ⇒ 界面把"一个都不要"显示成"全部库都在范围里"）。
+     */
+    suspend fun confirmQuickUnlockScope(vaultIds: Set<String>) {
+        dataStore.edit { prefs ->
+            if (vaultIds.isEmpty()) {
+                prefs.remove(QUICK_UNLOCK_SCOPE)
+            } else {
+                prefs[QUICK_UNLOCK_SCOPE] = vaultIds
+            }
+            prefs[QUICK_UNLOCK_SCOPE_CONFIRMED] = true
         }
     }
 

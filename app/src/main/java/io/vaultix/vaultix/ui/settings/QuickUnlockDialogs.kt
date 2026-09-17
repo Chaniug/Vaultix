@@ -18,10 +18,15 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Fingerprint
+import androidx.compose.material.icons.filled.Password
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.BasicAlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
@@ -32,6 +37,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -46,49 +52,112 @@ import io.vaultix.vaultix.ui.common.DialogEmptyBody
 import io.vaultix.vaultix.ui.common.DialogHeader
 import io.vaultix.vaultix.ui.common.DialogSectionTitle
 import io.vaultix.vaultix.ui.common.DialogSurface
+import io.vaultix.vaultix.ui.common.deviceCanAuthenticate
 import io.vaultix.vaultix.ui.common.rememberFragmentActivity
 import io.vaultix.vaultix.ui.theme.Spacing
 
 /**
- * 「快速解锁」的**能力级**设置对话框（2026-09-16 重构）。
+ * 「解锁方式」的三行设置项（**内联在密码库管理页**，不再是一个对话框）。
  *
- * ## 心智模型（为什么长这样）
+ * ## 为什么从对话框改成内联（2026-09-17）
  *
- * 上面两个**并列开关**（指纹 / PIN），下面一份**统一生效范围**。用户只需回答两个问题：
- * 「用哪些方式？」和「对哪些库生效？」。
+ * 旧形态 =「二级页里一行『快速解锁』→ 点进去的对话框里两个开关 + 一张逐库勾选的范围表」。
+ * 那层层级有两个毛病，而且都不是"不好看"这种主观问题：
+ * 1. 组名（「解锁方式」）与组内唯一的内容（「快速解锁」一行）**语义重复**；
+ * 2. 开关前面白多一次导航 —— 用户要改的正是"哪种方式"本身。
  *
- * ⚠️ 与旧版「每库一张卡、卡内三选一」的关键差别：**选项不再是每库独占的**。
- * 一个开关就能覆盖一批库 —— 这正是用户的诉求（原话：「这两个设置应该覆盖多个库」），
- * 也回到了定稿 §4.7 原本就写过的「增加一个生效范围」。
- *
- * ⚠️ **不做互斥**：指纹与 PIN 可以同时开。旧版那套「选指纹就关 PIN」是本次纠正的错误
- * （它还会造成"用户取消后指纹没了、PIN 也没设成"的静默数据丢失）。
+ * 定稿 §11.11 的目标形态也是把开关直接画在卡片里。⇒ 本轮内联，并**只留一行汇总**
+ * （「已对 N 个库生效」），不再逐库列行；逐库勾选挪进 [ConfigureDialog]
+ * （默认全勾，取消勾选是可选动作）。
  *
  * ## 开关的三种呈现（对应 [QuickUnlockController.CapabilityState]）
  *
  * | 状态 | 开关 | 副标题 |
  * |---|---|---|
- * | `On` | 开 | 已生效的说明 |
+ * | `On` | 开 | 「已对 N 个库生效」 |
  * | `Partial(n)` | 关 | 「有 n 个库未完成，点此继续」 |
- * | `Off` | 关 | 默认说明（或设备不支持） |
+ * | `Off` | 关 | 未启用（或设备不支持） |
  *
  * ⚠️ `Partial` 用**关**的开关 + 明确提示，而不是硬撑成"开" ——
  * 开关说开着但有的库其实打不开，就是 #93 那种「谎报状态」。
  * 点 `Partial` 的开关 = 继续把没配完的补上（不是关闭）。
+ *
+ * ⚠️ 两行开关**互不联动**：点一个不会顺手改另一个（各有各的信封，验收清单里单列了这一条）。
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun QuickUnlockSettingsDialog(
+internal fun QuickUnlockSettingsRows(
     state: QuickUnlockController.UiState,
     canAuthenticate: Boolean,
     onToggleBiometric: () -> Unit,
     onTogglePin: () -> Unit,
-    onToggleScope: (String) -> Unit,
-    onDismiss: () -> Unit,
+    onManage: () -> Unit,
 ) {
-    BasicAlertDialog(onDismissRequest = onDismiss) {
+    SettingsRow(
+        icon = { Icon(Icons.Filled.Fingerprint, contentDescription = null) },
+        title = stringResource(R.string.quick_unlock_section_biometric),
+        subtitle = biometricSummary(state, canAuthenticate),
+        enabled = canAuthenticate,
+        // 整行可点（热区比开关本身大得多）；开关自带处理，点开关不会双触发。
+        onClick = onToggleBiometric,
+        trailing = {
+            Switch(
+                checked = state.biometric is QuickUnlockController.CapabilityState.On,
+                onCheckedChange = { onToggleBiometric() },
+                // 设备不支持认证时不给点：点了也走不完流程，允许点等于给出一个必然失败的承诺。
+                enabled = canAuthenticate,
+            )
+        },
+    )
+    SettingsDivider()
+    SettingsRow(
+        icon = { Icon(Icons.Filled.Password, contentDescription = null) },
+        title = stringResource(R.string.pin_section_title),
+        subtitle = pinSummary(state),
+        onClick = onTogglePin,
+        trailing = {
+            Switch(
+                checked = state.pin is QuickUnlockController.CapabilityState.On,
+                onCheckedChange = { onTogglePin() },
+            )
+        },
+    )
+    SettingsDivider()
+    SettingsRow(
+        icon = { Icon(Icons.Filled.Tune, contentDescription = null) },
+        title = stringResource(R.string.quick_unlock_manage_action),
+        subtitle = stringResource(R.string.settings_quick_unlock_manage_desc),
+        onClick = onManage,
+    )
+}
+
+/**
+ * ★ **配置向导**：一次问清「对哪些库 + 用哪些方式」，确认后走完整流程。
+ *
+ * ## 为什么是这个形状（它替代了旧的三处入口）
+ *
+ * 旧交互是「逐库一行 + 两步对话框 + 每种方式各跑一遍」。其中"每种方式各跑一遍"是**有实际代价的**：
+ * KDBX 的主密码两种方式都要用（见 `QuickUnlockController` 类 KDoc 里那条引文），
+ * 分开跑就意味着**每个 KDBX 库要输两遍主密码**。合进一次流程、主密码只收一次，
+ * 才是真正砍掉那个重复次数的做法。
+ *
+ * ## 三条必须写在界面上的话
+ *
+ * 1. ★ **默认全勾**（首次配置）—— 用户 99% 想要"所有库都能快速解锁"，逐个勾选是纯负担；
+ * 2. ★ **PIN 必须一次做完** —— PIN 只在输入那一刻存在，包裹只能在同一流程里完成。
+ *    界面**不能**让用户以为"可以事后再给某个库补 PIN"（那会得到一个永远解不开的信封）；
+ * 3. ★ **取消勾选会清掉该库已保存的凭据** —— 写在动手**之前**：
+ *    事后的提示追不回已经删掉的东西。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ConfigureDialog(
+    state: QuickUnlockController.Dialog.Configure,
+    canAuthenticate: Boolean,
+    controller: QuickUnlockController,
+) {
+    BasicAlertDialog(onDismissRequest = controller::dismiss) {
         DialogSurface {
-            DialogHeader(title = stringResource(R.string.settings_quick_unlock))
+            DialogHeader(title = stringResource(R.string.quick_unlock_manage_action))
 
             Column(
                 modifier = Modifier
@@ -96,53 +165,92 @@ internal fun QuickUnlockSettingsDialog(
                     .weight(1f, fill = false)
                     .verticalScroll(rememberScrollState()),
             ) {
-                CapabilityRow(
-                    title = stringResource(R.string.quick_unlock_section_biometric),
-                    summary = biometricSummary(state.biometric, canAuthenticate),
-                    checked = state.biometric is QuickUnlockController.CapabilityState.On,
-                    // 设备不支持认证时不给点：点了也走不完流程，允许点等于给出一个必然失败的承诺。
-                    enabled = canAuthenticate,
-                    onToggle = onToggleBiometric,
-                )
-                CapabilityRow(
-                    title = stringResource(R.string.pin_section_title),
-                    summary = pinSummary(state.pin),
-                    checked = state.pin is QuickUnlockController.CapabilityState.On,
-                    enabled = true,
-                    onToggle = onTogglePin,
-                )
+                if (state.rows.isEmpty()) {
+                    DialogEmptyBody(stringResource(R.string.quick_unlock_manage_none))
+                } else {
+                    DialogSectionTitle(
+                        title = stringResource(R.string.quick_unlock_configure_vaults_title),
+                        hint = stringResource(R.string.quick_unlock_configure_vaults_hint),
+                    )
+                    state.rows.forEach { row ->
+                        ConfigureVaultRow(
+                            row = row,
+                            onToggle = { controller.toggleConfigureVault(row.vaultId) },
+                        )
+                    }
+                }
 
                 Spacer(Modifier.height(Spacing.sm))
                 HorizontalDivider()
                 Spacer(Modifier.height(Spacing.sm))
 
                 DialogSectionTitle(
-                    title = stringResource(R.string.quick_unlock_scope_title),
-                    hint = stringResource(R.string.quick_unlock_scope_hint),
+                    title = stringResource(R.string.quick_unlock_configure_methods_title),
+                    hint = stringResource(R.string.quick_unlock_configure_methods_hint),
                 )
-
-                if (state.rows.isEmpty()) {
-                    DialogEmptyBody(stringResource(R.string.quick_unlock_manage_none))
-                } else {
-                    state.rows.forEach { row ->
-                        ScopeRow(row = row, onToggle = { onToggleScope(row.vaultId) })
-                    }
+                ConfigureMethodRow(
+                    title = stringResource(R.string.quick_unlock_section_biometric),
+                    checked = state.methodBiometric,
+                    enabled = canAuthenticate,
+                    onToggle = {
+                        controller.toggleConfigureMethod(QuickUnlockController.UnlockMethod.BIOMETRIC)
+                    },
+                )
+                ConfigureMethodRow(
+                    title = stringResource(R.string.pin_section_title),
+                    checked = state.methodPin,
+                    enabled = true,
+                    onToggle = {
+                        controller.toggleConfigureMethod(QuickUnlockController.UnlockMethod.PIN)
+                    },
+                )
+                if (state.methodPin) {
+                    ConfigureHint(stringResource(R.string.quick_unlock_configure_pin_warning))
                 }
+                ConfigureHint(stringResource(R.string.quick_unlock_configure_uncheck_warning))
+                state.error?.let { DialogErrorText(it) }
                 Spacer(Modifier.height(Spacing.sm))
             }
 
             DialogActions {
-                DialogBackButton(onDismiss)
+                DialogBackButton(controller::dismiss)
+                TextButton(onClick = controller::confirmConfigure) {
+                    Text(stringResource(R.string.quick_unlock_configure_start))
+                }
             }
         }
     }
 }
 
-/** 一个能力开关 + 副标题。 */
+/** 向导里的一行库：勾选框 + 库名 + 已配好的能力。 */
 @Composable
-private fun CapabilityRow(
+private fun ConfigureVaultRow(row: QuickUnlockController.ConfigureRow, onToggle: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .toggleable(value = row.checked, onValueChange = { onToggle() })
+            .padding(horizontal = Spacing.lg, vertical = Spacing.xs),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Checkbox(checked = row.checked, onCheckedChange = { onToggle() })
+        Text(
+            text = row.name,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            text = readyLabel(row.biometricReady, row.pinReady),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/** 向导里的一个方式勾选项。 */
+@Composable
+private fun ConfigureMethodRow(
     title: String,
-    summary: String,
     checked: Boolean,
     enabled: Boolean,
     onToggle: () -> Unit,
@@ -154,97 +262,93 @@ private fun CapabilityRow(
             .padding(horizontal = Spacing.lg, vertical = Spacing.xs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.Medium,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Text(
-                text = summary,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        Switch(checked = checked, onCheckedChange = { onToggle() }, enabled = enabled)
-    }
-}
-
-/**
- * 范围列表里的一行。
- *
- * 右侧标出**已经配好的能力**（指纹 / PIN）—— 用户需要知道这个库到底配成了没有，
- * 否则「在范围内」与「真的能用」会混为一谈。
- */
-@Composable
-private fun ScopeRow(row: QuickUnlockController.VaultUi, onToggle: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .toggleable(value = row.inScope, onValueChange = { onToggle() })
-            .padding(horizontal = Spacing.lg, vertical = Spacing.xs),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Checkbox(checked = row.inScope, onCheckedChange = { onToggle() })
+        Checkbox(checked = checked, onCheckedChange = { onToggle() }, enabled = enabled)
         Text(
-            text = row.name,
+            text = title,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.weight(1f),
         )
-        Text(
-            text = readyLabel(row),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
     }
+}
+
+/** 向导里的说明句（约束 / 后果）。 */
+@Composable
+private fun ConfigureHint(message: String) {
+    Text(
+        text = message,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.xs),
+    )
 }
 
 /** 该库已配好的能力标签（都没配好时留空）。 */
 @Composable
-private fun readyLabel(row: QuickUnlockController.VaultUi): String {
+private fun readyLabel(biometricReady: Boolean, pinReady: Boolean): String {
     val parts = buildList {
-        if (row.biometricReady) add(stringResource(R.string.quick_unlock_cap_biometric))
-        if (row.pinReady) add(stringResource(R.string.quick_unlock_cap_pin))
+        if (biometricReady) add(stringResource(R.string.quick_unlock_cap_biometric))
+        if (pinReady) add(stringResource(R.string.quick_unlock_cap_pin))
     }
     return parts.joinToString(separator = " · ")
 }
 
 /**
- * 指纹开关的副标题。
+ * 指纹行的副标题（**一行汇总**，不再逐库列行）。
  *
  * ⚠️ 顺序有意义：**设备不支持**优先于其它说明（反正点不了，先说原因）；
  * `Partial` 其次（它是最需要用户行动的状态）。
  */
 @Composable
 private fun biometricSummary(
-    state: QuickUnlockController.CapabilityState,
+    state: QuickUnlockController.UiState,
     canAuthenticate: Boolean,
-): String = when {
-    !canAuthenticate -> stringResource(R.string.quick_unlock_option_biometric_unsupported)
-    state is QuickUnlockController.CapabilityState.Partial ->
-        stringResource(R.string.quick_unlock_partial_hint, state.pending)
-    state is QuickUnlockController.CapabilityState.On ->
-        stringResource(R.string.quick_unlock_option_biometric_on)
-    else -> stringResource(R.string.quick_unlock_option_biometric_summary)
-}
-
-/** PIN 开关的副标题。 */
-@Composable
-private fun pinSummary(state: QuickUnlockController.CapabilityState): String = when (state) {
-    is QuickUnlockController.CapabilityState.Partial ->
-        stringResource(R.string.quick_unlock_partial_hint, state.pending)
-    is QuickUnlockController.CapabilityState.On ->
-        stringResource(R.string.quick_unlock_option_pin_on, PIN_MIN_LENGTH)
-    else -> stringResource(R.string.quick_unlock_option_pin_summary, PIN_MIN_LENGTH)
+): String {
+    if (!canAuthenticate) {
+        return stringResource(R.string.quick_unlock_option_biometric_unsupported)
+    }
+    return when (val capability = state.biometric) {
+        is QuickUnlockController.CapabilityState.Partial ->
+            stringResource(R.string.quick_unlock_partial_hint, capability.pending)
+        is QuickUnlockController.CapabilityState.On ->
+            stringResource(R.string.quick_unlock_summary_on, readyCount(state, biometric = true))
+        QuickUnlockController.CapabilityState.Off ->
+            stringResource(R.string.quick_unlock_option_biometric_summary)
+    }
 }
 
 /**
- * 流程宿主：认证副作用 + 四个步骤对话框。
+ * PIN 行的副标题。
  *
- * 与主对话框分开：主对话框是"设置界面"，这里是"进行中的流程"
- * （输 PIN → 逐库问主密码 → 认证 → 结果），生命周期完全不同。
+ * ⚠️ 比指纹少一个分支：PIN 不依赖系统锁屏，所以没有"设备不支持"这一态。
+ */
+@Composable
+private fun pinSummary(state: QuickUnlockController.UiState): String =
+    when (val capability = state.pin) {
+        is QuickUnlockController.CapabilityState.Partial ->
+            stringResource(R.string.quick_unlock_partial_hint, capability.pending)
+        is QuickUnlockController.CapabilityState.On ->
+            stringResource(R.string.quick_unlock_summary_on, readyCount(state, biometric = false))
+        QuickUnlockController.CapabilityState.Off ->
+            stringResource(R.string.quick_unlock_option_pin_summary, PIN_MIN_LENGTH)
+    }
+
+/**
+ * 副标题里那个数字：范围内**已生效**的库数。
+ *
+ * ⚠️ 必须与 [QuickUnlockController.CapabilityState] 的推导口径一致（都只看 `inScope` 的行）——
+ * 两处口径不一致，就会出现"开关说已启用 3 个、数字写着 5 个"这种自相矛盾。
+ */
+private fun readyCount(state: QuickUnlockController.UiState, biometric: Boolean): Int =
+    state.rows.count { row ->
+        row.inScope && if (biometric) row.biometricReady else row.pinReady
+    }
+
+/**
+ * 流程宿主：认证副作用 + 配置向导 + 四个步骤对话框。
+ *
+ * 与设置项分开：设置项是"改开关"（内联在页面里），这里是"一次进行中的流程"
+ * （配置向导 → 输 PIN → 逐库问主密码 → 认证 → 结果），生命周期完全不同。
  *
  * ⚠️ 参数是**控制器本身**而不是某个 ViewModel：设置页与库列表页各持一个实例
  * （两者都要能发起登记），收 ViewModel 会让其中一个用不了。
@@ -252,6 +356,9 @@ private fun pinSummary(state: QuickUnlockController.CapabilityState): String = w
 @Composable
 internal fun QuickUnlockHost(controller: QuickUnlockController) {
     val activity = rememberFragmentActivity()
+    val context = LocalContext.current
+    // 向导里要不要禁用"指纹"那一项，与设置行用的是同一个判据（设备能否认证）。
+    val canAuthenticate = deviceCanAuthenticate(context)
     val cipher by controller.pendingCipher.collectAsStateWithLifecycle()
     val dialog by controller.dialog.collectAsStateWithLifecycle()
     val enrollTitle = stringResource(R.string.quick_unlock_enroll_title)
@@ -274,6 +381,7 @@ internal fun QuickUnlockHost(controller: QuickUnlockController) {
     when (val current = dialog) {
         QuickUnlockController.Dialog.Idle -> Unit
         QuickUnlockController.Dialog.Authenticating -> AuthenticatingDialog()
+        is QuickUnlockController.Dialog.Configure -> ConfigureDialog(current, canAuthenticate, controller)
         is QuickUnlockController.Dialog.PinEntry -> PinEntryDialog(current, controller)
         is QuickUnlockController.Dialog.KdbxPassword -> KdbxPasswordDialog(current, controller)
         is QuickUnlockController.Dialog.Report -> ReportDialog(current, controller)
@@ -376,6 +484,9 @@ private fun AuthenticatingDialog() {
  *
  * 三段分开列：**成功 / 跳过 / 失败**。「跳过」不能并进失败 —— 那是用户的选择，
  * 并进去会让他以为自己操作错了；也不能省略 —— 省了就是"假成功"。
+ *
+ * ⚠️ [QuickUnlockController.Dialog.Report.scopeOnly] 时三段都是空的，必须**另给一句话**说明
+ * "只更新了范围"；否则用户看到的是一个空结果页，读起来像"点坏了"。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -393,6 +504,9 @@ private fun ReportDialog(
                     .weight(1f, fill = false)
                     .verticalScroll(rememberScrollState()),
             ) {
+                if (state.scopeOnly) {
+                    ConfigureHint(stringResource(R.string.quick_unlock_report_scope_only))
+                }
                 ReportSection(
                     titleRes = R.string.quick_unlock_report_succeeded,
                     names = state.succeeded,

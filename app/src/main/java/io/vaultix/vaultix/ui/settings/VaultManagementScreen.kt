@@ -17,7 +17,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Cloud
-import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -64,8 +63,11 @@ import io.vaultix.vaultix.ui.theme.Spacing
  *
  * ## 边界
  *
- * - 行为零变化：这里只是把原有的三个对话框搬到同一页，**没有新增 / 删除任何设置项**，
- *   也没有改任何默认值（沿用定稿 §7）。
+ * - 本页承载的是**库相关**的设置：当前库 / 添加库 / 网盘账号 / 解锁方式。
+ * - ⚠️ 「解锁方式」组内的**三个设置行是 2026-09-17 内联**进来的（旧形态是"组内一行入口 +
+ *   点进去的对话框"）：组名与组内唯一一行语义重复，而且白多一次导航。
+ *   随之行为也变了 —— 逐库勾选挪进「管理解锁方式」向导，并且**默认全勾**
+ *   （理由与边界见 `QuickUnlockController` 类 KDoc）。
  * - 「退出数据库」**不**搬进来：它是清本地缓存的数据动作，不是库管理
  *   （定稿 §2① 已经把它纠正到「数据」组置底，那是正确的，别回退）。
  */
@@ -93,7 +95,6 @@ fun VaultManagementScreen(
 
     var showVaultPicker by rememberSaveable { mutableStateOf(false) }
     var showAddDialog by rememberSaveable { mutableStateOf(false) }
-    var showQuickUnlockDialog by rememberSaveable { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -153,14 +154,18 @@ fun VaultManagementScreen(
             }
 
             // ---- 解锁方式 ----
-            // 「快速解锁」从原「解锁与隐私」组搬来：它按库登记，属于库而不是隐私。
+            // ★ 2026-09-17：两个开关**内联到这一组**里，不再点进对话框。
+            //   旧形态是「组名『解锁方式』+ 组内唯一一行也叫『快速解锁』」—— 语义重复，
+            //   而且白多一次导航（定稿 §11.11 的目标形态本来就是开关直出）。
+            //   逐库勾选挪进了「管理解锁方式」的向导，且**默认全勾**。
             SettingsGroupTitle(stringResource(R.string.vault_management_group_unlock))
             SettingsGroupCard {
-                SettingsRow(
-                    icon = { Icon(Icons.Filled.Fingerprint, contentDescription = null) },
-                    title = stringResource(R.string.settings_quick_unlock),
-                    subtitle = stringResource(R.string.settings_quick_unlock_manage_desc),
-                    onClick = { showQuickUnlockDialog = true },
+                QuickUnlockSettingsRows(
+                    state = quickUnlockState,
+                    canAuthenticate = deviceCanAuthenticate(context),
+                    onToggleBiometric = viewModel.quickUnlock::toggleBiometric,
+                    onTogglePin = viewModel.quickUnlock::togglePin,
+                    onManage = viewModel.quickUnlock::manageUnlock,
                 )
             }
         }
@@ -214,17 +219,10 @@ fun VaultManagementScreen(
         )
     }
 
-    if (showQuickUnlockDialog) {
-        QuickUnlockSettingsDialog(
-            state = quickUnlockState,
-            canAuthenticate = deviceCanAuthenticate(context),
-            onToggleBiometric = viewModel.quickUnlock::toggleBiometric,
-            onTogglePin = viewModel.quickUnlock::togglePin,
-            onToggleScope = viewModel.quickUnlock::toggleScope,
-            onDismiss = { showQuickUnlockDialog = false },
-        )
-    }
-    // 指纹认证 + 流程对话框（输 PIN → 逐库问主密码 → 认证 → 结果）。
+    // ---- 对话框 ----
+    // ⚠️ 「解锁方式」的设置**不再是对话框**（2026-09-17 内联进上面的组里）；
+    //    这里只剩"库选择 / 添加库"两个对话框，外加下面的流程宿主。
+    // 指纹认证 + 流程对话框（配置向导 → 输 PIN → 逐库问主密码 → 认证 → 结果）。
     // ⚠️ 不传 Activity：它自己在内部用 `rememberFragmentActivity()` 解析 ——
     // BiometricPrompt 要的是 `FragmentActivity`，而 `ComponentActivity` 与
     // `FragmentActivity` 是**兄弟**（不是父子），从这里传会编译失败（2026-09-16 CI 实录）。

@@ -59,10 +59,25 @@ import kotlinx.coroutines.withContext
  * | 每库「指纹信封已建」 | `preferences.isLocalUnlockEnabled(vaultId)` |
  * | 每库「PIN 信封已建」 | `preferences.isPinUnlockEnabled(vaultId)` |
  * | **生效范围**（哪些库纳入） | `preferences.quickUnlockScope()` |
+ * | **范围是否已被用户确认** | `preferences.isQuickUnlockScopeConfirmed()` |
  *
  * **刻意不持久化「总开关」**：开关的 ON/OFF 由「范围 + 每库信封」推导。
  * 若另存一个开关字段，就会出现"开关说开着、信封却是空的"这种双源漂移 ——
  * 那正是 issue #93「谎报状态的开关」的成因，别再造一个。
+ *
+ * ### 为什么「范围」要配一个独立的"已确认"标记（2026-09-17 新增）
+ *
+ * 需求是「**默认全勾**」——用户 99% 想要"所有库都能快速解锁"，逐个勾选是纯负担。
+ * 但"默认全勾"**不能**用范围为空来表达：空集在这里已经有确定含义「一个库都不要」。
+ * 一个值背两种含义，后果是**用户主动全部取消勾选之后，界面反过来告诉他"全都勾上了"**。
+ * 这正是「空有三态」那条纪律要防的塌缩（同族：读路径解密失败被渲染成空列表）。
+ *
+ * ⇒ 拆成两个事实：
+ * - `confirmed = false`（从未配置）⇒ **所有库都在范围内**，向导默认全勾；
+ * - `confirmed = true` ⇒ 范围就是存储值，空集如实表示"一个都不要"。
+ *
+ * 这个拆法还顺带修掉一个新库的坑：新加的库在"未确认"阶段天然就在范围内，
+ * 不必等用户回来手动勾一次。
  *
  * 推导规则见 [derive]：`On` / `Partial(n)` / `Off` 三态。
  * ⚠️ `Partial` 与 `Off` 必须分开：用户主动关闭后应看到 `Off`，
@@ -73,6 +88,25 @@ import kotlinx.coroutines.withContext
  * 指纹与 PIN 是**两种并列手段**，可同时启用、各有各的信封。**不做任何互斥** ——
  * 旧实现那套「选指纹就关 PIN」正是本次要纠正的错误（它还会造成"用户中途取消后
  * 指纹没了、PIN 也没设成"的静默数据丢失）。
+ *
+ * ⚠️「互不干扰」说的是**开关与信封**，不包括配置流程 —— 两者走**同一个向导**（见下）。
+ *
+ * ## ★ 一次流程配完两种方式（2026-09-17；用户："逻辑很麻烦、操作很复杂"）
+ *
+ * 旧交互 =「逐库一行 + 两步对话框 + 每种方式各跑一遍」。其中重复的 N 次**不是平白多出来的**，
+ * 来源是可查的：**KDBX 的主密码两种方式都要用** ——
+ *
+ * ```
+ * enrollment.prepareForVaults(targets) { id -> passwordFor(id) }             // 指纹要
+ * vaultRepository.enrollPinForVaults(targets, pin) { id -> passwordFor(id) } // PIN 也要
+ * ```
+ *
+ * ⇒ 想同时开指纹与 PIN，**每个 KDBX 库的主密码要输两遍**。所以把两者合进**一次**流程
+ * （主密码只收一次、两种方式共用）才是真正砍掉那个 N 的做法；
+ * 只把"选库"那一步缩短，N 一点都不会少。
+ *
+ * 于是 [Dialog.Configure] 成为**唯一**的配置入口：一次问清「对哪些库 + 用哪些方式」，
+ * 随后是 `主密码 →（PIN 当场落盘）→（指纹备料 + 一次认证）→ 结果`。
  *
  * ## 逐库问主密码（用户 2026-09-16 拍板）
  *
@@ -150,7 +184,23 @@ class QuickUnlockController(
     sealed interface Dialog {
         data object Idle : Dialog
 
-        /** 输 PIN（仅 PIN 流程，在问主密码**之前**）。 */
+        /**
+         * ★ **配置向导的第一步（也是唯一入口）**：一次问清「对哪些库 + 用哪些方式」。
+         *
+         * 取代了旧的两个入口（对话框里逐库勾选范围 + 两个开关各自触发一遍流程）。
+         * 设计要点：
+         * - **默认全勾**（首次配置时）—— 见类 KDoc 的"已确认"标记；
+         * - 方式可多选 —— 主密码只收一次、两种方式共用（类 KDoc 里那条 N 的来源）；
+         * - 取消勾选某个库**不是必须动作**，只是可选项。
+         */
+        data class Configure(
+            val rows: List<ConfigureRow>,
+            val methodBiometric: Boolean,
+            val methodPin: Boolean,
+            val error: String? = null,
+        ) : Dialog
+
+        /** 输 PIN（仅当选了 PIN 方式；在问主密码**之前**）。 */
         data class PinEntry(
             val pin: String = "",
             val confirm: String = "",
@@ -178,22 +228,36 @@ class QuickUnlockController(
          *
          * 三段分开报而不是合成"成功/失败"：**跳过**是用户的选择、**失败**是出了问题，
          * 两者后续动作完全不同（前者不用管，后者要重试）。
+         *
+         * @param scopeOnly true = 本次**只改了范围、没有库需要登记**。单列出来是为了不把
+         *   "无事可做"演成"配置成功"（三个空列表的结果页会被读成后者，属"假成功"）。
          */
         data class Report(
             val succeeded: List<String>,
             val skipped: List<String>,
             val failed: List<FailureItem>,
+            val scopeOnly: Boolean = false,
         ) : Dialog
     }
 
     /** 结果页里单个库的失败项。 */
     data class FailureItem(val vaultName: String, val reason: String)
 
-    /** 供 Snackbar 的一次性提示。 */
-    sealed interface Notice {
-        /** 某个库被移出生效范围（连带删掉了它的信封，用户应当知道）。 */
-        data class ScopeRemoved(val vaultName: String) : Notice
-    }
+    /**
+     * 配置向导里的一行（一个库）。
+     *
+     * ⚠️ 与 [VaultUi] 分开而不是复用：两者的 `inScope` 语义不同 —— [VaultUi.inScope] 是
+     * **已落盘**的范围，这里是**向导里尚未提交**的勾选。混用一个类型，就会出现
+     * "用户还没确认，界面已经把范围当成已生效"的谎报（#93 同族）。
+     */
+    data class ConfigureRow(
+        val vaultId: String,
+        val name: String,
+        /** 是否勾选（首次配置时默认全勾）。 */
+        val checked: Boolean,
+        val biometricReady: Boolean,
+        val pinReady: Boolean,
+    )
 
     /** 界面需要的全部状态。 */
     data class UiState(
@@ -204,9 +268,6 @@ class QuickUnlockController(
 
     private val _dialog = MutableStateFlow<Dialog>(Dialog.Idle)
     val dialog: StateFlow<Dialog> = _dialog.asStateFlow()
-
-    private val _notices = MutableStateFlow<Notice?>(null)
-    val notices: StateFlow<Notice?> = _notices.asStateFlow()
 
     /**
      * 交给 UI 弹指纹的 cipher（仅 [Dialog.Authenticating] 期间有值）。
@@ -236,54 +297,180 @@ class QuickUnlockController(
     // ===== 范围与开关 =====
 
     /**
-     * 把一个库加入 / 移出生效范围。
+     * 点「管理解锁方式」：打开向导，两种方式**都不预选**（由用户勾）。
      *
-     * ⚠️ 移出范围 = 该库不再用快速解锁 ⇒ 同时删掉它的**两个**信封。
-     * 那是用户主动做的删除，故不弹二次确认；但发一条 [Notice] 让 UI 用 Snackbar 告知
-     * —— 重配需要再输 KDBX 主密码，用户应当知道发生了什么。
-     *
-     * ⚠️ 加入范围**只改范围、不当场登记**：用户可能想先把要覆盖的库勾齐，再一次性配置。
-     * 此时若开关原为 `On`，状态会自动变成 `Partial`（新勾的库还没信封）——
-     * 那正是诚实的表达，也正好提示用户"还差几个"。
+     * 与两个开关的分工：开关 = 「这个方式，对范围内的库，开关一下」的粗动作；
+     * 本入口 = 精细控制（挑库、挑方式），也就是旧实现那三种入口合并后的**唯一**入口。
      */
-    fun toggleScope(vaultId: String) {
+    fun manageUnlock() {
+        scope.launch { showConfigure(preferred = null) }
+    }
+
+    /** 向导里勾选 / 取消勾选一个库。 */
+    fun toggleConfigureVault(vaultId: String) {
+        val current = _dialog.value as? Dialog.Configure ?: return
+        _dialog.value = current.copy(
+            rows = current.rows.map {
+                if (it.vaultId == vaultId) it.copy(checked = !it.checked) else it
+            },
+            error = null,
+        )
+    }
+
+    /**
+     * 向导里勾选 / 取消勾选一种方式。
+     *
+     * ⚠️ 两种方式之间**没有任何联动**：勾指纹不会顺手勾上 PIN，反之亦然
+     * （旧实现「选指纹就关 PIN」那次错误的反面，别又做成一端）。
+     */
+    fun toggleConfigureMethod(method: UnlockMethod) {
+        val current = _dialog.value as? Dialog.Configure ?: return
+        _dialog.value = when (method) {
+            UnlockMethod.BIOMETRIC -> current.copy(methodBiometric = !current.methodBiometric, error = null)
+            UnlockMethod.PIN -> current.copy(methodPin = !current.methodPin, error = null)
+        }
+    }
+
+    /**
+     * 向导的「开始配置」：落范围 → 收主密码 →（PIN 当场落盘）→（指纹备料 + 一次认证）→ 结果。
+     *
+     * ⚠️ **取消勾选 = 移出生效范围 = 删掉它的两个信封**（沿用旧 `toggleScope` 的语义）。
+     * 用户重配时要再输一次那个库的主密码 —— 所以这句后果**写在向导里**（动手之前），
+     * 而不是事后弹提示：提示追不回已经删掉的东西（旧实现正是发了一条**无人消费**的提示，
+     * 见类 KDoc 的"沉默的分支"一处）。
+     */
+    fun confirmConfigure() {
+        val current = _dialog.value as? Dialog.Configure ?: return
+        val checked = current.rows.filter { it.checked }.map { it.vaultId }
+        val methods = buildSet {
+            if (current.methodBiometric) add(UnlockMethod.BIOMETRIC)
+            if (current.methodPin) add(UnlockMethod.PIN)
+        }
+        if (methods.isEmpty()) {
+            _dialog.value = current.copy(error = "请至少选择一种解锁方式")
+            return
+        }
+        if (checked.isEmpty()) {
+            _dialog.value = current.copy(error = "请至少选择一个密码库")
+            return
+        }
         scope.launch {
-            val current = preferences.quickUnlockScope().first()
-            if (vaultId in current) {
-                val name = vaultNameOf(vaultId)
-                vaultRepository.disableLocalUnlock(vaultId)
-                vaultRepository.disablePin(vaultId)
-                preferences.setQuickUnlockScope(current - vaultId)
-                _notices.value = Notice.ScopeRemoved(name)
+            val snapshot = state.value
+            // 从范围内移出的库：连带删掉它的两个信封 —— 否则会出现"界面说没启用、
+            // 实际仍能用指纹打开"的双源不一致（谎报状态那一类）。
+            snapshot.rows
+                .filter { it.inScope && it.vaultId !in checked }
+                .forEach { row ->
+                    vaultRepository.disableLocalUnlock(row.vaultId)
+                    vaultRepository.disablePin(row.vaultId)
+                }
+            preferences.confirmQuickUnlockScope(checked.toSet())
+
+            val newSession = Session(
+                methods = methods,
+                targets = checked,
+                rows = snapshot.rows.map { it.copy(inScope = it.vaultId in checked) },
+            )
+            session = newSession
+            _dialog.value = Dialog.Idle
+
+            if (newSession.pendingTargets().isEmpty()) {
+                // 勾选的库都已经配好了 ⇒ 这次只落了范围，**如实说明**而不是演出一个
+                // "配置成功"的空结果页（那正是"假成功"）。
+                _dialog.value = Dialog.Report(
+                    succeeded = emptyList(),
+                    skipped = emptyList(),
+                    failed = emptyList(),
+                    scopeOnly = true,
+                )
+                clearSession()
+                return@launch
+            }
+            // ⚠️ 只在**PIN 那边真有活**时才问 PIN：若勾选的库里 PIN 信封都已存在
+            //    （例如只有指纹那边还有活干），弹一个输了也不生效的 PIN 输入框，
+            //    正是"逻辑很麻烦"要消灭的那种多余步骤 —— 用户会以为 PIN 出了问题。
+            if (UnlockMethod.PIN in methods && newSession.targetsFor(UnlockMethod.PIN).isNotEmpty()) {
+                _dialog.value = Dialog.PinEntry()
             } else {
-                preferences.setQuickUnlockScope(current + vaultId)
+                advanceToPasswordOrExecute()
             }
         }
     }
 
     /**
+     * 打开配置向导。
+     *
+     * @param preferred 预选的方式（从某个开关进来时）；`null` = 「管理解锁方式」按钮。
+     *
+     * ⚠️ 「从未确认过 ⇒ 默认全勾」是本轮**最大的省事点**（用户 99% 想要"所有库都能快速解锁"）。
+     * 判据是 `isQuickUnlockScopeConfirmed()` 而**不是**范围是否为空 —— 见类 KDoc：
+     * 空集已经表示"一个都不要"，不能借它表示"还没配过"。
+     */
+    private suspend fun showConfigure(preferred: UnlockMethod?) {
+        val ui = state.value
+        val confirmed = preferences.isQuickUnlockScopeConfirmed().first()
+        val scopeIds = preferences.quickUnlockScope().first()
+        val checked = if (confirmed) scopeIds else ui.rows.map { it.vaultId }.toSet()
+        val biometricOn = ui.biometric is CapabilityState.On
+        val pinOn = ui.pin is CapabilityState.On
+        val bothOn = biometricOn && pinOn
+        // 「管理解锁方式」预选"还没配好的方式"；两种都已启用时都预选 ——
+        // 此时本来就没有要干的活，确认后会如实说"只更新了范围"，不会卡在一个空选择上。
+        _dialog.value = Dialog.Configure(
+            rows = ui.rows.map {
+                ConfigureRow(
+                    vaultId = it.vaultId,
+                    name = it.name,
+                    checked = it.vaultId in checked,
+                    biometricReady = it.biometricReady,
+                    pinReady = it.pinReady,
+                )
+            },
+            methodBiometric = when (preferred) {
+                UnlockMethod.BIOMETRIC -> true
+                UnlockMethod.PIN -> false
+                null -> bothOn || !biometricOn
+            },
+            methodPin = when (preferred) {
+                UnlockMethod.PIN -> true
+                UnlockMethod.BIOMETRIC -> false
+                null -> bothOn || !pinOn
+            },
+        )
+    }
+
+    /**
      * 点「指纹」开关。
      *
-     * - 当前 `On` ⇒ 视为**关闭**：删掉范围内所有库的指纹信封；
-     * - `Off` / `Partial` ⇒ 视为**打开或继续**：为范围内尚未建信封的库走登记流程。
+     * - 当前 `On` ⇒ 视为**关闭**：删掉范围内所有库的指纹信封（**不动 PIN 的信封**）；
+     * - `Off` / `Partial` ⇒ **打开配置向导并预选指纹**（默认全勾）。
      *
      * ⚠️ `Partial` 必须走"继续"而不是"关闭"：那正是补完剩下几个库的入口。
+     * 进了向导之后，"只补没配的那几个"是自动的（`Session.targetsFor` 会跳过已有信封的库），
+     * 用户不必自己判断哪些还没配。
      */
     fun toggleBiometric() {
         scope.launch {
-            when (state.value.biometric) {
-                CapabilityState.On -> disableAll(UnlockMethod.BIOMETRIC)
-                else -> beginEnroll(UnlockMethod.BIOMETRIC)
+            if (state.value.biometric is CapabilityState.On) {
+                disableAll(UnlockMethod.BIOMETRIC)
+            } else {
+                showConfigure(UnlockMethod.BIOMETRIC)
             }
         }
     }
 
-    /** 点「应用内 PIN」开关。语义同 [toggleBiometric]。 */
+    /**
+     * 点「应用内 PIN」开关。语义同 [toggleBiometric]。
+     *
+     * ⚠️ 与指纹**完全独立**：关掉这一个**不会**顺手关掉另一个（两者各有各的信封）。
+     * 这是验收清单里明确列出的一条 —— 旧实现那种"选一个就关另一个"是反例。
+     */
     fun togglePin() {
         scope.launch {
-            when (state.value.pin) {
-                CapabilityState.On -> disableAll(UnlockMethod.PIN)
-                else -> beginEnroll(UnlockMethod.PIN)
+            if (state.value.pin is CapabilityState.On) {
+                disableAll(UnlockMethod.PIN)
+            } else {
+                showConfigure(UnlockMethod.PIN)
             }
         }
     }
@@ -293,21 +480,27 @@ class QuickUnlockController(
      *
      * 语义 = 「把这个库纳入范围，然后立刻为它配指纹」。
      *
-     * ⚠️ 必须**等 state 反映新范围之后**再开始登记：`setQuickUnlockScope` 是异步落盘，
-     * 紧接着读 `state` 拿到的还是**旧范围** ⇒ 目标集合里没有这个库，
-     * 登记会「什么都没做」（用户看到横幅点了没反应）。
+     * ⚠️ 范围**尚未被确认过**时不需要写范围：那时"所有库都在范围内"（见类 KDoc 的
+     * "已确认"标记），写一个只含本库的范围反而会把"默认全勾"缩成"只有这一个"。
+     *
+     * ⚠️ 已确认过时要**等 state 反映新范围之后**再登记：`setQuickUnlockScope` 是异步落盘，
+     * 紧接着读 `state` 还是旧范围。本方法的目标是显式指定的 [vaultId]，所以等待的判据用
+     * "rows 里出现了这个库"（而不是"它在范围内"）—— 后者在未确认时会一直为真，
+     * 反而可能在 rows 尚为空时就推进流程。
      */
     fun enableForVault(vaultId: String) {
         scope.launch {
-            val current = preferences.quickUnlockScope().first()
-            if (vaultId !in current) {
-                preferences.setQuickUnlockScope(current + vaultId)
+            if (preferences.isQuickUnlockScopeConfirmed().first()) {
+                val current = preferences.quickUnlockScope().first()
+                if (vaultId !in current) {
+                    preferences.setQuickUnlockScope(current + vaultId)
+                }
             }
             val snapshot = state
-                .filter { ui -> ui.rows.any { it.vaultId == vaultId && it.inScope } }
+                .filter { ui -> ui.rows.any { it.vaultId == vaultId } }
                 .first()
             session = Session(
-                method = UnlockMethod.BIOMETRIC,
+                methods = setOf(UnlockMethod.BIOMETRIC),
                 targets = listOf(vaultId),
                 rows = snapshot.rows,
             )
@@ -389,6 +582,8 @@ class QuickUnlockController(
      * ⚠️ 必须连续循环、共用一个 cipher（auth-per-use，见类 KDoc）。
      * 逐库独立成败：某个库 wrap 失败只回退该库，绝不牵连其它 ——
      * 那会静默丢掉用户已经配好的部分。
+     *
+     * ⚠️ 结果页要**带上 PIN 段的结论**（它在此之前就已落盘）—— 见 [buildReport]。
      */
     fun onAuthenticated(cipher: Cipher) {
         _pendingCipher.value = null
@@ -399,22 +594,36 @@ class QuickUnlockController(
             val committed = withContext(Dispatchers.IO) {
                 vaultRepository.commitLocalUnlockEnrollForVaults(units, cipher)
             }
-            _dialog.value = buildBiometricReport(committed, sessionNow)
+            _dialog.value = buildReport(sessionNow, committed)
             clearSession()
         }
     }
 
     /**
-     * 认证失败 / 被用户取消：**擦掉备料明文**并结束本次流程。
+     * 认证失败 / 被用户取消：**擦掉备料明文**并结束本次指纹流程。
      *
      * 不做"保留备料下次再试"的优化：cipher 已作废（一次认证一把），留着也没有 cipher
      * 可用；而它里面躺着 KDBX 主密码，多留一刻都是风险。
+     *
+     * ⚠️ 但**PIN 段可能已经落盘了**（PIN 先执行）。那时若直接回设置界面，用户会以为
+     * "什么都没配成"，实际下次已经能用 PIN 打开 —— 与"看起来没配好、实际能打开"同族。
+     * ⇒ 只要 PIN 段有结论，就照样出结果页，如实说明"指纹已取消、PIN 已启用"。
      */
     fun onAuthenticationFailed() {
         _pendingCipher.value = null
         clearPrepared()
+        val sessionNow = session
+        val pinTouched = !sessionNow?.pinOutcomes.isNullOrEmpty()
         clearSession()
-        _dialog.value = Dialog.Idle
+        _dialog.value = if (sessionNow == null || !pinTouched) {
+            Dialog.Idle
+        } else {
+            buildReport(
+                sessionNow,
+                committed = emptyMap(),
+                extraFailures = listOf(FailureItem("—", "已取消指纹验证，指纹未启用")),
+            )
+        }
     }
 
     /** 用户取消对话框：清掉一切在途的敏感物。 */
@@ -425,33 +634,7 @@ class QuickUnlockController(
         _dialog.value = Dialog.Idle
     }
 
-    /** Snackbar 提示已消费。 */
-    fun noticeShown() {
-        _notices.value = null
-    }
-
     // ===== 内部：登记流程 =====
-
-    /**
-     * 开始为某个能力登记。
-     *
-     * 目标 = 范围内**尚未建信封**的库。全都建好了就什么都不做（此时开关已是 `On`）。
-     * PIN 流程要先收 PIN；指纹流程直接进"问主密码"阶段。
-     */
-    private suspend fun beginEnroll(method: UnlockMethod) {
-        val snapshot = state.value
-        val targets = snapshot.rows
-            .filter { it.inScope }
-            .filter { if (method == UnlockMethod.BIOMETRIC) !it.biometricReady else !it.pinReady }
-            .map { it.vaultId }
-        if (targets.isEmpty()) return
-        session = Session(method = method, targets = targets, rows = snapshot.rows)
-        if (method == UnlockMethod.PIN) {
-            _dialog.value = Dialog.PinEntry()
-        } else {
-            advanceToPasswordOrExecute()
-        }
-    }
 
     /**
      * 推进流程：还有库要问主密码就问下一个，否则执行。
@@ -473,16 +656,39 @@ class QuickUnlockController(
         )
     }
 
-    /** 备料/参数就绪后真正执行：指纹要弹认证，PIN 当场落盘。 */
+    /** 主密码收齐后真正执行。 */
     private fun execute() {
         val current = session ?: return
-        scope.launch {
-            if (current.method == UnlockMethod.BIOMETRIC) {
-                executeBiometric(current)
+        scope.launch { executeSession(current) }
+    }
+
+    /**
+     * 执行本次会话：**先 PIN，后指纹**。
+     *
+     * ⚠️ 顺序不可颠倒：PIN 是"当场落盘"（不碰系统认证），指纹要弹**一次**认证。若先弹认证、
+     * 再回头收 PIN，用户会在以为已经完事之后又被要求输一次 PIN（此时界面已回到结果页）。
+     *
+     * ⚠️ 一段失败**不清掉另一段**：PIN 段失败不影响已备好的指纹料，反之亦然 ——
+     * 那会静默丢掉用户已经配好的部分。
+     */
+    private suspend fun executeSession(current: Session) {
+        if (UnlockMethod.PIN in current.methods) {
+            val pinTargets = current.targetsFor(UnlockMethod.PIN)
+            current.pinOutcomes = if (pinTargets.isEmpty()) {
+                emptyMap()
             } else {
-                executePin(current)
+                withContext(Dispatchers.IO) {
+                    vaultRepository.enrollPinForVaults(pinTargets, current.pin) { id ->
+                        current.passwordFor(id)
+                    }
+                }
             }
         }
+        if (UnlockMethod.BIOMETRIC !in current.methods) {
+            finish(current, committed = emptyMap())
+            return
+        }
+        executeBiometric(current)
     }
 
     /**
@@ -493,16 +699,16 @@ class QuickUnlockController(
      * （没有东西要落盘，弹了纯属打扰）。
      */
     private suspend fun executeBiometric(current: Session) {
+        val bioTargets = current.targetsFor(UnlockMethod.BIOMETRIC)
         val outcomes = withContext(Dispatchers.IO) {
-            enrollment.prepareForVaults(current.targets) { id -> current.passwordFor(id) }
+            enrollment.prepareForVaults(bioTargets) { id -> current.passwordFor(id) }
         }
         current.prepareOutcomes = outcomes
         prepared = outcomes.values
             .filterIsInstance<LocalUnlockPrepareOutcome.Ready>()
             .map { it.prepared }
         if (prepared.isEmpty()) {
-            _dialog.value = buildBiometricReport(committed = emptyMap(), session = current)
-            clearSession()
+            finish(current, committed = emptyMap())
             return
         }
         // ⚠️ cipher 在**备料通过之后**才创建：反过来会在全都失败时也造一把用不上的 cipher。
@@ -510,11 +716,14 @@ class QuickUnlockController(
         if (cipher == null) {
             // 设备无可用认证方式 ⇒ 备料失去意义，立刻擦掉（含 KDBX 主密码明文）。
             clearPrepared()
-            clearSession()
-            _dialog.value = Dialog.Report(
-                succeeded = emptyList(),
-                skipped = emptyList(),
-                failed = listOf(FailureItem("—", "本设备未设置锁屏或生物识别，无法启用")),
+            // ⚠️ 走 finish 而不是自己拼一个只含失败的空报告：**PIN 段可能已经落盘了**，
+            //    自己拼会把那部分抹掉 ⇒ 结果页变成"假失败"（用户以为没配上，其实能用了）。
+            finish(
+                current,
+                committed = emptyMap(),
+                extraFailures = listOf(
+                    FailureItem("—", "本设备未设置锁屏或生物识别，无法启用"),
+                ),
             )
             return
         }
@@ -522,15 +731,13 @@ class QuickUnlockController(
         _pendingCipher.value = cipher
     }
 
-    /** PIN 路径：不碰系统认证，当场落盘。 */
-    private suspend fun executePin(current: Session) {
-        val results = withContext(Dispatchers.IO) {
-            vaultRepository.enrollPinForVaults(current.targets, current.pin) { id ->
-                current.passwordFor(id)
-            }
-        }
-        // ⚠️ 先取 names 再清 session —— 反过来的话报告里的库名会全变成 id。
-        _dialog.value = buildPinReport(results, current.names)
+    /** 收尾：出结果页、清会话。 */
+    private fun finish(
+        session: Session,
+        committed: Map<String, LocalUnlockEnrollOutcome>,
+        extraFailures: List<FailureItem> = emptyList(),
+    ) {
+        _dialog.value = buildReport(session, committed, extraFailures)
         clearSession()
     }
 
@@ -552,40 +759,95 @@ class QuickUnlockController(
 
     // ===== 内部：报告 =====
 
-    private fun buildBiometricReport(
-        committed: Map<String, LocalUnlockEnrollOutcome>,
+    /**
+     * 把一次会话的**全部**结论合并成结果页（PIN 段 + 指纹段）。
+     *
+     * ⚠️ 必须**合并**而不是各出各的报告：两种方式在同一次流程里配置，用户看到的是**一件事**的
+     * 结果。旧实现每种方式各跑一遍、各出一个报告，正是"逻辑很麻烦"的一部分。
+     *
+     * ⚠️ 三段（成功 / 跳过 / 失败）各自拆成了独立函数，不是为了好看：合并逻辑一旦挤在一处，
+     * 圈复杂度会直接顶到 detekt 上限（**实测** 15 > 14，门禁红过一次）。
+     *
+     * @param session 允许为 null（认证成功、但会话已被丢弃时）：此时库名退化成 id，
+     *   但结论**照样展示** —— 不能因为拿不到名字就把结果吞掉（那就是沉默的分支）。
+     */
+    private fun buildReport(
         session: Session?,
+        committed: Map<String, LocalUnlockEnrollOutcome>,
+        extraFailures: List<FailureItem> = emptyList(),
     ): Dialog.Report {
-        val names = session?.names ?: emptyMap()
-        val succeeded = committed
-            .filterValues { it is LocalUnlockEnrollOutcome.Enrolled }
-            .keys.map { names[it] ?: it }
-        val failed = buildList {
-            // 备料阶段就挂掉的（这些库连指纹都没等到）。
-            session?.prepareOutcomes?.forEach { (id, outcome) ->
-                prepareFailureReason(outcome)?.let { add(FailureItem(names[id] ?: id, it)) }
-            }
-            // 落盘阶段挂掉的。
-            committed.forEach { (id, outcome) ->
-                commitFailureReason(outcome)?.let { add(FailureItem(names[id] ?: id, it)) }
-            }
-        }
-        val skipped = session?.skipped?.map { names[it] ?: it }.orEmpty()
-        return Dialog.Report(succeeded = succeeded, skipped = skipped, failed = failed)
+        val names = session?.names.orEmpty()
+        return Dialog.Report(
+            succeeded = succeededNames(session, committed, names),
+            skipped = skippedNames(session, names),
+            // ⚠️ extraFailures 放**前面**：它多为"设备不支持"这类前置原因，
+            //    排在逐库失败之前读起来才是因果顺序。
+            failed = extraFailures + collectFailures(session, committed, names),
+        )
     }
 
-    private fun buildPinReport(
-        results: Map<String, PinEnrollOutcome>,
+    /** 结果页「已启用」：PIN 段 + 指纹段，去重（同一个库可能两种方式都成功）。 */
+    private fun succeededNames(
+        session: Session?,
+        committed: Map<String, LocalUnlockEnrollOutcome>,
         names: Map<String, String>,
-    ): Dialog.Report {
-        val succeeded = results.filterValues { it is PinEnrollOutcome.Enrolled }
-            .keys.map { names[it] ?: it }
-        val skipped = results.filterValues { it is PinEnrollOutcome.Skipped }
-            .keys.map { names[it] ?: it }
-        val failed = results
-            .filterValues { it !is PinEnrollOutcome.Enrolled && it !is PinEnrollOutcome.Skipped }
-            .map { (id, outcome) -> FailureItem(names[id] ?: id, pinFailureReason(outcome)) }
-        return Dialog.Report(succeeded = succeeded, skipped = skipped, failed = failed)
+    ): List<String> {
+        val pin = matchingNames(session?.pinOutcomes.orEmpty(), names) {
+            it is PinEnrollOutcome.Enrolled
+        }
+        val biometric = matchingNames(committed, names) {
+            it is LocalUnlockEnrollOutcome.Enrolled
+        }
+        return (pin + biometric).distinct()
+    }
+
+    /** 结果页「已跳过」：用户主动跳过的 + PIN 段判定跳过的。 */
+    private fun skippedNames(session: Session?, names: Map<String, String>): List<String> {
+        val userSkipped = session?.skipped.orEmpty().map { names[it] ?: it }
+        val pin = matchingNames(session?.pinOutcomes.orEmpty(), names) {
+            it is PinEnrollOutcome.Skipped
+        }
+        return (userSkipped + pin).distinct()
+    }
+
+    /**
+     * 结果页「未成功」：指纹备料 / 指纹落盘 / PIN 三段各自的失败项。
+     *
+     * ⚠️ 三段都要收集：漏掉任何一段都会让"失败"变成**静默**（用户以为只是没配完，
+     * 实际是出了错），而这两者的后续动作完全不同（一个不用管，一个要重试）。
+     */
+    private fun collectFailures(
+        session: Session?,
+        committed: Map<String, LocalUnlockEnrollOutcome>,
+        names: Map<String, String>,
+    ): List<FailureItem> {
+        val failures = mutableListOf<FailureItem>()
+        // 指纹**备料**阶段就挂掉的（这些库连指纹都没等到）。
+        addFailures(session?.prepareOutcomes.orEmpty(), names, ::prepareFailureReason, failures)
+        // 指纹**落盘**阶段挂掉的。
+        addFailures(committed, names, ::commitFailureReason, failures)
+        // PIN 阶段挂掉的。
+        addFailures(session?.pinOutcomes.orEmpty(), names, ::pinFailureReason, failures)
+        return failures
+    }
+
+    /** 一组逐库结论里满足 [predicate] 的库名（保序，取不到名字时退回 id）。 */
+    private fun <T> matchingNames(
+        outcomes: Map<String, T>,
+        names: Map<String, String>,
+        predicate: (T) -> Boolean,
+    ): List<String> = outcomes.filterValues(predicate).keys.map { names[it] ?: it }
+
+    /** 把一组逐库结论里"有失败原因"的那些收成失败项（原因返回 null 即不计）。 */
+    private fun <T> addFailures(
+        outcomes: Map<String, T>,
+        names: Map<String, String>,
+        reason: (T) -> String?,
+        into: MutableList<FailureItem>,
+    ) {
+        outcomes.forEach { (id, outcome) ->
+            reason(outcome)?.let { into += FailureItem(names[id] ?: id, it) }
+        }
     }
 
     /**
@@ -613,13 +875,18 @@ class QuickUnlockController(
             is LocalUnlockEnrollOutcome.Failed -> outcome.detail
         }
 
-    /** PIN 登记阶段单库失败的原因（`Enrolled` / `Skipped` 之外才有值）。 */
-    private fun pinFailureReason(outcome: PinEnrollOutcome): String = when (outcome) {
+    /**
+     * PIN 登记阶段单库失败的原因（`Enrolled` / `Skipped` 返回 null：都不进失败列表）。
+     *
+     * ⚠️ 返回可空而不是空串：空串会**混进失败列表并渲染成"库名 · "**（一个没有原因的失败），
+     * 而「跳过」根本不等于失败 —— 那是用户的选择，列进失败会让他以为自己操作错了。
+     */
+    private fun pinFailureReason(outcome: PinEnrollOutcome): String? = when (outcome) {
         is PinEnrollOutcome.PinTooShort -> "PIN 需要 ${outcome.minimum} 位数字"
         PinEnrollOutcome.InvalidCredentials -> "主密码不正确"
         PinEnrollOutcome.SessionUnavailable -> "该库未解锁，请先用主密码打开它"
         is PinEnrollOutcome.Failed -> outcome.detail
-        PinEnrollOutcome.Enrolled, PinEnrollOutcome.Skipped -> ""
+        PinEnrollOutcome.Enrolled, PinEnrollOutcome.Skipped -> null
     }
 
     // ===== 内部：状态组装 =====
@@ -627,8 +894,12 @@ class QuickUnlockController(
     private fun composeState(): StateFlow<UiState> =
         vaultRepository.observeVaults()
             .flatMapLatest { vaults ->
-                combine(preferences.quickUnlockScope(), flagsOf(vaults)) { scopeIds, flags ->
-                    assemble(vaults, flags, scopeIds)
+                combine(
+                    preferences.quickUnlockScope(),
+                    preferences.isQuickUnlockScopeConfirmed(),
+                    flagsOf(vaults),
+                ) { scopeIds, confirmed, flags ->
+                    assemble(vaults, flags, scopeIds, confirmed)
                 }
             }
             .stateIn(
@@ -656,11 +927,16 @@ class QuickUnlockController(
      * ⚠️ 库类型（[VaultUi.kind]）**直接取自本次发射的 [vaults]**，不走任何旁路缓存 ——
      * 缓存会因为初始化时机不对而退化成"所有库都被当成 Bitwarden"，
      * 表现为 KDBX 库登记时**不问主密码**，于是静默地建不出信封。
+     *
+     * ⚠️ [confirmed] = false（用户从未确认过范围）时，**所有库都算在范围内** —— 这是
+     * "默认全勾"的落点。别改成"范围为空就算全部库"：空集是指"一个都不要"，
+     * 借它表示"还没配过"会让用户主动全不勾之后被显示成全勾（「空有三态」那条纪律）。
      */
     private fun assemble(
         vaults: List<VaultSummary>,
         flags: List<EnvelopeFlags>,
         scopeIds: Set<String>,
+        confirmed: Boolean,
     ): UiState {
         val rows = vaults.mapIndexed { index, vault ->
             val flag = flags.getOrElse(index) { EnvelopeFlags(biometric = false, pin = false) }
@@ -668,7 +944,7 @@ class QuickUnlockController(
                 vaultId = vault.id,
                 name = vault.name,
                 kind = vault.kind,
-                inScope = vault.id in scopeIds,
+                inScope = !confirmed || vault.id in scopeIds,
                 biometricReady = flag.biometric,
                 pinReady = flag.pin,
             )
@@ -689,11 +965,6 @@ class QuickUnlockController(
         session = null
     }
 
-    private suspend fun vaultNameOf(vaultId: String): String =
-        runCatching {
-            vaultRepository.observeVaults().first().firstOrNull { it.id == vaultId }?.name
-        }.getOrNull() ?: vaultId
-
     private fun String.onlyDigits(): String = filter(Char::isDigit).take(PIN_MIN_LENGTH)
 
     /** 一个库里两个信封的存在性。 */
@@ -702,12 +973,15 @@ class QuickUnlockController(
     /**
      * 一次登记会话。
      *
-     * 把"目标是谁、已经问到哪、哪些被跳过"收在一处，避免散成一堆局部变量
+     * 把"用哪些方式、对谁、已经问到哪、哪些被跳过"收在一处，避免散成一堆局部变量
      * （散开之后最容易出的错是**状态迁移丢信息** —— 例如忘了把"跳过集合"带过去，
      * 于是结果页把跳过谎报成成功）。
+     *
+     * ⚠️ [methods] 是**集合**而不是单值：两种方式在同一次流程里配完（类 KDoc 那条
+     * "主密码两种方式都要用"），单值会让主密码又变成收两遍。
      */
     private inner class Session(
-        val method: UnlockMethod,
+        val methods: Set<UnlockMethod>,
         val targets: List<String>,
         rows: List<VaultUi>,
     ) {
@@ -717,19 +991,44 @@ class QuickUnlockController(
         /** 用户跳过的库。 */
         val skipped = mutableSetOf<String>()
 
-        /** PIN 流程收到的 PIN（指纹流程恒为空串）。 */
+        /** PIN 流程收到的 PIN（未选 PIN 时恒为空串）。 */
         var pin: String = ""
 
-        /** 备料阶段的逐库结论（仅指纹流程有值，供结果页与落盘结论合并展示）。 */
+        /** 指纹**备料**阶段的逐库结论（仅选了指纹时有值）。 */
         var prepareOutcomes: Map<String, LocalUnlockPrepareOutcome> = emptyMap()
+
+        /** PIN 阶段的逐库结论（仅选了 PIN 时有值）；与指纹段在 [buildReport] 里合并。 */
+        var pinOutcomes: Map<String, PinEnrollOutcome> = emptyMap()
 
         /** 供结果页展示的 id -> 库名。 */
         val names: Map<String, String> = rows.associate { it.vaultId to it.name }
 
-        /** 目标里需要问主密码的库（KDBX）。 */
-        val kdbxTargets: List<String> = targets.filter { id ->
-            rows.firstOrNull { it.vaultId == id }?.needsMasterPassword == true
+        /** 需要主密码的库（KDBX 才有这一项）。 */
+        private val masterPasswordIds: Set<String> =
+            rows.filter { it.needsMasterPassword }.map { it.vaultId }.toSet()
+
+        private val envelopeReady: Map<String, Pair<Boolean, Boolean>> =
+            rows.associate { it.vaultId to (it.biometricReady to it.pinReady) }
+
+        /**
+         * 某个方式下**真正要登记**的库（已有信封的跳过）。
+         *
+         * ⚠️ 这一层过滤是"默认全勾"能落地的关键：用户不必自己判断哪些库还没配 ——
+         * 勾了全体也没关系，已经配好的库既不会被重问主密码，也不会被重写信封。
+         */
+        fun targetsFor(method: UnlockMethod): List<String> = targets.filter { id ->
+            val (biometricReady, pinReady) = envelopeReady[id] ?: (false to false)
+            when (method) {
+                UnlockMethod.BIOMETRIC -> !biometricReady
+                UnlockMethod.PIN -> !pinReady
+            }
         }
+
+        /** 本次要处理的全部库（各已选方式的并集）；为空 = 只有范围要落盘。 */
+        fun pendingTargets(): List<String> = methods.flatMap { targetsFor(it) }.distinct()
+
+        /** 目标里需要问主密码的库（KDBX）。 */
+        val kdbxTargets: List<String> = pendingTargets().filter { it in masterPasswordIds }
 
         /** 下一个待问主密码的库（null = 都问过了）。 */
         fun currentTarget(): String? =

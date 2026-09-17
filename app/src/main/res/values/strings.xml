@@ -398,6 +398,22 @@
     <string name="quick_unlock_report_succeeded">已启用</string>
     <string name="quick_unlock_report_skipped">已跳过（未配置）</string>
     <string name="quick_unlock_report_failed">未成功</string>
+
+    <!-- ===== 2026-09-17「一次流程 + 默认全勾」新增 =====
+         ⚠️ 本节注释里**不要放 markdown 表格**：表格分隔行由连续短横线组成，
+         会让 aapt2 直接报 "Failed to parse XML file '(...).xml'"，而报错信息
+         完全不提注释，极难猜（这个坑踩过一次，记在 .workbuddy/memory）。
+         ⚠️ 「管理解锁方式」取代了旧的「逐库勾选范围」整块，是逐库勾选的**唯一**去处。 -->
+    <string name="quick_unlock_manage_action">管理解锁方式</string>
+    <string name="quick_unlock_summary_on">已对 %1$d 个库生效</string>
+    <string name="quick_unlock_configure_vaults_title">生效的库</string>
+    <string name="quick_unlock_configure_vaults_hint">默认全选。取消勾选会移除该库的快速解锁凭据。</string>
+    <string name="quick_unlock_configure_methods_title">解锁方式</string>
+    <string name="quick_unlock_configure_methods_hint">两种方式彼此独立、可同时启用，一次即可配完。</string>
+    <string name="quick_unlock_configure_pin_warning">PIN 只在输入那一刻存在，必须这次一次配完：事后再单独给某个库补 PIN 是不行的。</string>
+    <string name="quick_unlock_configure_uncheck_warning">取消勾选会清除该库已保存的快速解锁凭据，之后需要重新输入它的主密码。</string>
+    <string name="quick_unlock_configure_start">开始配置</string>
+    <string name="quick_unlock_report_scope_only">已更新生效范围。勾选的库此前都已配置好，这次没有需要重新配置的库。</string>
     <string name="pin_field_new">输入 PIN</string>
     <string name="pin_field_confirm">再次输入 PIN</string>
     <string name="action_continue">继续</string>
