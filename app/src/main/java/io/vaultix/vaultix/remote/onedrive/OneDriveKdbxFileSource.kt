@@ -94,7 +94,13 @@ class OneDriveKdbxFileSource(
             //   而那时我们手上必须有**冲突之后**的版本令牌才能写成功。
             //   拉失败也不影响主流程（currentVersion 传 null，上层会再 stat 一次）。
             val current = runCatching { graph.stat(token(), path).versionToken }.getOrNull()
-            throw KdbxFileConflictException(current, error.message ?: "OneDrive 上的文件已被其他设备修改")
+            // ⚠️ 把原异常挂到 cause 上：只为让用户看到一句人话而丢掉原始异常，
+            //   会让"到底是哪个请求 412 的"这类排查失去唯一线索。
+            throw KdbxFileConflictException(
+                current,
+                error.message ?: "OneDrive 上的文件已被其他设备修改",
+                error,
+            )
         }
         return KdbxFileWriteResult(
             versionToken = entry.versionToken,

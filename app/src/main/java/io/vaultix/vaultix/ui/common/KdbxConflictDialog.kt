@@ -63,18 +63,6 @@ import androidx.compose.ui.unit.dp
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.theme.Spacing
 
-/** 冲突处理选项（见文件头说明）。 */
-enum class KdbxConflictChoice {
-    /** 用本地覆盖远端 —— 远端那份改动会丢。 */
-    KeepLocalUpload,
-
-    /** 用远端覆盖本地 —— 本地那份改动会丢。 */
-    KeepRemoteDownload,
-
-    /** 稍后再决定（不做任何 IO，状态停在冲突）。 */
-    DecideLater,
-}
-
 /**
  * 网盘冲突对话框。
  *

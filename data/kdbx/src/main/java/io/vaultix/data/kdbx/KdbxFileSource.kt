@@ -174,11 +174,17 @@ interface KdbxFileSource {
  *
  * @param currentVersion 远端**现在**的版本令牌（null = 该来源拿不到）。
  *   留给冲突处理用：用户选"用远端覆盖本地"时，这一版就是他要的。
+ * @param cause 原始异常（如 OkHttp 侧的 412 异常）。
+ *
+ *   ⚠️ 有 `cause` 这条不是可有可无：本异常的作用是**把 HTTP 层面的失败翻译成一句
+ *   人话**给上层用。若翻译时把原异常丢掉，就再也查不出"到底是哪个请求、
+ *   服务端原话是什么"—— 而那正是排查同步问题的唯一线索。
  */
 class KdbxFileConflictException(
     val currentVersion: String?,
     message: String,
-) : Exception(message)
+    cause: Throwable? = null,
+) : Exception(message, cause)
 
 /**
  * 版本令牌归一化 —— **WebDAV 的必踩坑，但放在通用位置让所有来源共用**。

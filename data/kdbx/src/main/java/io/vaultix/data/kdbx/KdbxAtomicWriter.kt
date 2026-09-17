@@ -55,11 +55,7 @@ internal object KdbxAtomicWriter {
     const val BACKUP_SUFFIX: String = ".bak"
 
     fun write(target: File, bytes: ByteArray): File? {
-        val parent = target.parentFile
-            ?: throw IOException("目标文件没有父目录：${target.path}")
-        if (!parent.exists() && !parent.mkdirs()) {
-            throw IOException("无法创建目录：${parent.path}")
-        }
+        val parent = requireParentDirectory(target)
 
         // ① 先把当前内容备份走 —— 必须在动 target 之前。
         //    ⚠️ 用 copyTo 而不是 rename：rename 会让 target 消失一瞬间，
@@ -94,10 +90,39 @@ internal object KdbxAtomicWriter {
         }
 
         // ③ 原子替换。
+        replaceAtomically(target = target, temp = temp, bytes = bytes)
+        return backup
+    }
+
+    /**
+     * 取（必要时创建）目标文件的父目录。
+     *
+     * ⚠️ 抽出来是为了让 [write] 的 throw 数落在 detekt `ThrowsCount`（上限 2）之内 ——
+     * 而这里的两条都是**前置条件**（没有父目录 / 建不出目录），语义上属于同一类，
+     * 放在一起也更好读。放宽阈值不是选项：那等于把门禁关掉。
+     */
+    private fun requireParentDirectory(target: File): File {
+        val parent = target.parentFile
+            ?: throw IOException("目标文件没有父目录：${target.path}")
+        if (!parent.exists() && !parent.mkdirs()) {
+            throw IOException("无法创建目录：${parent.path}")
+        }
+        return parent
+    }
+
+    /**
+     * 用 [temp] 替换 [target]（原子优先，退化时覆写）。
+     *
+     * ## 两条路径
+     *
+     * 1. **正常**：`target.delete()` 成功后 `renameTo` ⇒ 原子。
+     * 2. **退化**：少数文件系统不允许 delete 后 rename（或被占用）⇒ 就地覆写。
+     *    不再原子，但内容写进去了；且**此时 backup 一定已存在**，最坏情况仍有退路。
+     *
+     * ⚠️ 无论走哪条，**临时文件都必须清掉**：残留的 `.tmp` 里是一份完整的密钥库。
+     */
+    private fun replaceAtomically(target: File, temp: File, bytes: ByteArray) {
         if (target.exists() && !target.delete()) {
-            // 少数文件系统不允许 delete 后 rename（或被占用）。
-            // 退化为"就地覆写"：不再原子，但至少把内容写进去了。
-            // ⚠️ 此时 backup 已经存在，所以最坏情况仍有退路。
             runCatching {
                 FileOutputStream(target).use { output ->
                     output.write(bytes)
@@ -109,14 +134,13 @@ internal object KdbxAtomicWriter {
                 throw IOException("写入失败，且无法替换目标文件：${target.path}", error)
             }
             deleteQuietly(temp)
-            return backup
+            return
         }
 
         if (!temp.renameTo(target)) {
             deleteQuietly(temp)
             throw IOException("无法替换目标文件：${target.path}")
         }
-        return backup
     }
 
     /** 清理临时文件。**失败时一定要调** —— 残留的 `.tmp` 里是完整的密钥库。 */

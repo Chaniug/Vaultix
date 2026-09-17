@@ -84,19 +84,18 @@ class WebDavKdbxFileSource(
     override suspend fun stat(): KdbxFileStat = withContext(Dispatchers.IO) {
         val response = execute(
             Request.Builder().url(fileUrl).head().build(),
-            "读取文件信息",
         )
         response.use {
-            if (it.code == 404) {
+            if (it.code == HTTP_NOT_FOUND) {
                 throw IOException("WebDAV 上找不到该文件：${displayPath(fileUrl)}")
             }
-            if (!it.isSuccessful) throw IOException(it.errorMessage("读取文件信息"))
+            if (!it.isSuccessful) throw IOException(it.errorMessage(ACTION_STAT))
             KdbxFileStat(
                 // ★ 坑 3：**必须归一化**。直接拿原始 ETag 会出现
                 //   "同一版却比不相等" ⇒ 误报冲突（用户看到一个不存在的冲突）。
-                versionToken = normalizeVersionToken(it.header("ETag")),
-                sizeBytes = it.header("Content-Length")?.toLongOrNull(),
-                lastModified = it.header("Last-Modified")?.let(::parseHttpDate),
+                versionToken = normalizeVersionToken(it.header(HEADER_ETAG)),
+                sizeBytes = it.header(HEADER_CONTENT_LENGTH)?.toLongOrNull(),
+                lastModified = it.header(HEADER_LAST_MODIFIED)?.let(::parseHttpDate),
                 remoteId = fileUrl,
                 displayName = displayPath(fileUrl),
             )
@@ -106,11 +105,12 @@ class WebDavKdbxFileSource(
     override suspend fun read(): ByteArray = withContext(Dispatchers.IO) {
         val response = execute(
             Request.Builder().url(fileUrl).get().build(),
-            "下载文件",
         )
         response.use {
-            if (it.code == 404) throw IOException("WebDAV 上找不到该文件：${displayPath(fileUrl)}")
-            if (!it.isSuccessful) throw IOException(it.errorMessage("下载文件"))
+            if (it.code == HTTP_NOT_FOUND) {
+                throw IOException("WebDAV 上找不到该文件：${displayPath(fileUrl)}")
+            }
+            if (!it.isSuccessful) throw IOException(it.errorMessage(ACTION_READ))
             it.body?.bytes() ?: throw IOException("WebDAV 返回了空响应")
         }
     }
@@ -158,56 +158,22 @@ class WebDavKdbxFileSource(
             val normalizedExpected = normalizeVersionToken(expectedVersion)
 
             // ① 写前预检（仅在"我们有版本令牌"时才有意义；null 走 CREATE_ONLY 语义）
-            if (normalizedExpected != null) {
-                val current = runCatching { stat() }.getOrNull()
-                if (current != null && current.versionToken != null &&
-                    current.versionToken != normalizedExpected
-                ) {
-                    throw KdbxFileConflictException(
-                        current.versionToken,
-                        "WebDAV 上的文件已被其他设备修改，为避免覆盖已取消写入",
-                    )
-                }
-            }
+            precheckVersion(normalizedExpected)
 
             // ② 条件 PUT
             val request = Request.Builder()
                 .url(fileUrl)
                 .put(bytes.toRequestBody(KDBX_MIME_TYPE.toMediaType()))
-                .apply {
-                    if (normalizedExpected == null) {
-                        // ★ 坑 4：CREATE_ONLY。没有它，并发新建同名文件会互相覆盖。
-                        header("If-None-Match", "*")
-                    } else {
-                        // ★ 坑 3：发出去的也必须是归一化后的值，否则部分服务器判 412。
-                        header("If-Match", normalizedExpected)
-                    }
-                }
+                .conditionalHeader(normalizedExpected)
                 .build()
 
             var newVersion: String?
             var lastModified: Long?
             var sizeBytes: Long?
-            execute(request, "写入文件").use { response ->
-                when {
-                    response.isSuccessful -> Unit
-                    // ★ 409 Conflict / 412 Precondition Failed 都是"前置条件不满足"。
-                    //   两个码都算冲突：不同服务器对 CREATE_ONLY 失败用哪个码并不一致
-                    //   （RFC 说 412，但实测有服务器回 409）。
-                    response.code == 412 || response.code == 409 -> {
-                        val current = runCatching { stat().versionToken }.getOrNull()
-                        throw KdbxFileConflictException(
-                            current,
-                            "WebDAV 上的文件已被其他设备修改（HTTP ${response.code}），为避免覆盖已取消写入",
-                        )
-                    }
-                    response.code == 401 || response.code == 403 ->
-                        throw IOException("WebDAV 账号或密码不正确（HTTP ${response.code}）")
-                    response.code == 507 -> throw IOException("WebDAV 服务器空间不足（HTTP 507）")
-                    else -> throw IOException(response.errorMessage("写入文件"))
-                }
-                newVersion = normalizeVersionToken(response.header("ETag"))
-                lastModified = response.header("Last-Modified")?.let(::parseHttpDate)
+            execute(request).use { response ->
+                classifyWriteResponse(response, normalizedExpected)
+                newVersion = normalizeVersionToken(response.header(HEADER_ETAG))
+                lastModified = response.header(HEADER_LAST_MODIFIED)?.let(::parseHttpDate)
                 // PUT 的响应体通常是空的 ⇒ 用本地字节数（我们刚写下去的就是它）；
                 // 不要用 Content-Length（它可能是 0，会让上层以为写了个空文件）。
                 sizeBytes = bytes.size.toLong()
@@ -231,6 +197,101 @@ class WebDavKdbxFileSource(
         }
 
     /**
+     * 写前预检：远端版本与我们的基线不符就拒写。
+     *
+     * ⚠️ 这一步**只缩小窗口、不消除 TOCTOU**（判定权仍在服务端，见类的 KDoc）。
+     * 抽成独立函数是为了让 [writeConditionally] 的主线（预检 → PUT → 校验）一眼可读，
+     * 而不是让版本比较的细节把主线埋掉。
+     *
+     * @param normalizedExpected 归一化后的基线；null = 走 CREATE_ONLY，跳过预检。
+     */
+    private suspend fun precheckVersion(normalizedExpected: String?) {
+        if (normalizedExpected == null) return
+        val current = runCatching { stat() }.getOrNull() ?: return
+        val currentToken = current.versionToken ?: return
+        if (currentToken != normalizedExpected) {
+            throw KdbxFileConflictException(
+                currentToken,
+                "WebDAV 上的文件已被其他设备修改，为避免覆盖已取消写入",
+            )
+        }
+    }
+
+    /**
+     * 给请求加上条件头。
+     *
+     * | [normalizedExpected] | 加的头 | 含义 |
+     * |---|---|---|
+     * | null | `If-None-Match: *` | ★ 坑 4：只创建。文件已存在则服务端拒绝 |
+     * | 非空 | `If-Match: <值>` | 覆盖，且必须还是那一版 |
+     */
+    private fun Request.Builder.conditionalHeader(normalizedExpected: String?): Request.Builder =
+        if (normalizedExpected == null) {
+            // ★ 坑 4：CREATE_ONLY。没有它，并发新建同名文件会互相覆盖。
+            header("If-None-Match", "*")
+        } else {
+            // ★ 坑 3：发出去的也必须是归一化后的值，否则部分服务器判 412。
+            header("If-Match", normalizedExpected)
+        }
+
+    /**
+     * 把条件 PUT 的响应翻成"成功"或一个明确的异常。
+     *
+     * ## 形状：先分类、再**只抛一次**
+     *
+     * 不是 `if (…) throw …; if (…) throw …`，而是让 [writeFailureOf] 返回一个
+     * "该抛什么"，这里只负责抛。理由有两条，第二条是硬约束：
+     *
+     * 1. 分类逻辑（哪个状态码算冲突 / 算认证失败）**本身就是被测的那部分**，
+     *    让它成为**返回值的纯函数**就能直接单测，不必去构造一个 Response。
+     * 2. detekt `ThrowsCount` 上限 2 —— 四个状态码分支写四个 `throw` 必然超标，
+     *    而"放宽阈值"等于把这扇门关掉。
+     *
+     * @param normalizedExpected 只用于失败措辞（新建 / 覆盖 提示不同）。
+     */
+    private suspend fun classifyWriteResponse(
+        response: okhttp3.Response,
+        normalizedExpected: String?,
+    ) {
+        if (response.isSuccessful) return
+        throw writeFailureOf(response, normalizedExpected)
+    }
+
+    /**
+     * 状态码 ⇒ 该抛的异常（**纯映射，自己不抛**）。
+     *
+     * ⚠️ 唯一带 IO 的一支是冲突：它要顺带把**当前**版本拉回来 ——
+     * 用户接下来很可能选"用远端覆盖本地"，那时手上必须有冲突**之后**的版本令牌。
+     * 拉失败不影响主流程（传 null，上层会自己再 stat 一次）。
+     */
+    private suspend fun writeFailureOf(
+        response: okhttp3.Response,
+        normalizedExpected: String?,
+    ): Exception = when (response.code) {
+        // ★ 409 与 412 都算冲突：不同服务器对 CREATE_ONLY 失败用哪个码并不一致
+        //   （RFC 说 412，但实测有服务器回 409）。
+        HTTP_PRECONDITION_FAILED, HTTP_CONFLICT -> KdbxFileConflictException(
+            runCatching { stat().versionToken }.getOrNull(),
+            "WebDAV 上的文件已被其他设备修改（HTTP ${response.code}），为避免覆盖已取消写入",
+        )
+
+        HTTP_UNAUTHORIZED, HTTP_FORBIDDEN ->
+            IOException("WebDAV 账号或密码不正确（HTTP ${response.code}）")
+
+        HTTP_INSUFFICIENT_STORAGE ->
+            IOException("WebDAV 服务器空间不足（HTTP $HTTP_INSUFFICIENT_STORAGE）")
+
+        // ⚠️ 不用 `else`：`when` 在**表达式**位置必须穷尽，所以留一个显式分支。
+        //    措辞区分新建 / 覆盖：同一个状态码在两条路径上的成因往往不同，
+        //    统一文案会把"文件已存在"说成"写入失败"，反而更难排查。
+        else -> IOException(response.errorMessage(writeActionLabel(normalizedExpected)))
+    }
+
+    /** 措辞用：新建与覆盖的失败原因不同，提示也该不同。 */
+    private fun writeActionLabel(normalizedExpected: String?): String =
+        if (normalizedExpected == null) "新建文件" else "写入文件"
+
+    /**
      * 用户**明确选择"用本地覆盖远端"**时的写入 —— 唯一允许绕开条件写的入口。
      *
      * 与 [writeConditionally] 的区别：不带任何条件头。
@@ -247,13 +308,13 @@ class WebDavKdbxFileSource(
             .url(fileUrl)
             .put(bytes.toRequestBody(KDBX_MIME_TYPE.toMediaType()))
             .build()
-        val result = execute(request, "强制覆盖文件").use { response ->
-            if (!response.isSuccessful) throw IOException(response.errorMessage("强制覆盖文件"))
+        val result = execute(request).use { response ->
+            if (!response.isSuccessful) throw IOException(response.errorMessage(ACTION_FORCE_WRITE))
             KdbxFileWriteResult(
-                versionToken = normalizeVersionToken(response.header("ETag")),
+                versionToken = normalizeVersionToken(response.header(HEADER_ETAG)),
                 sizeBytes = bytes.size.toLong(),
                 remoteId = fileUrl,
-                lastModified = response.header("Last-Modified")?.let(::parseHttpDate),
+                lastModified = response.header(HEADER_LAST_MODIFIED)?.let(::parseHttpDate),
             )
         }
         verifyReadBack(bytes)
@@ -279,29 +340,30 @@ class WebDavKdbxFileSource(
      */
     override suspend fun listChildren(): List<KdbxFileEntry> = withContext(Dispatchers.IO) {
         val base = directoryUrl(fileUrl)
-        val body = PROPFIND_BODY.toRequestBody("application/xml; charset=utf-8".toMediaType())
+        val body = PROPFIND_BODY.toRequestBody(PROPFIND_MEDIA_TYPE.toMediaType())
         val request = Request.Builder()
             .url(base)
             .method("PROPFIND", body)
             .header("Depth", "1")
             .build()
 
-        execute(request, "列出目录").use { response ->
-            if (response.code == 404) throw IOException("WebDAV 上找不到该目录")
-            if (response.code !in setOf(200, 207)) throw IOException(response.errorMessage("列出目录"))
+        execute(request).use { response ->
+            if (response.code == HTTP_NOT_FOUND) throw IOException("WebDAV 上找不到该目录")
+            if (response.code !in MULTISTATUS_CODES) throw IOException(response.errorMessage(ACTION_LIST))
             val xml = response.body?.string().orEmpty()
-            parsePropfind(xml, base)        }
+            parsePropfind(xml, base)
+        }
     }
 
     override suspend fun testConnection(): Result<Unit> = runCatching {
         withContext(Dispatchers.IO) {
             // 先 HEAD 目标文件：成功 ⇒ 文件在、凭据对。404 ⇒ 文件不在但**连接是通的**，
             // 这仍然是"配置可用"（用户可以据此新建）。401/403 才算真失败。
-            execute(Request.Builder().url(fileUrl).head().build(), "连通性自检").use { response ->
-                if (response.code == 401 || response.code == 403) {
+            execute(Request.Builder().url(fileUrl).head().build()).use { response ->
+                if (response.code == HTTP_UNAUTHORIZED || response.code == HTTP_FORBIDDEN) {
                     throw IOException("WebDAV 账号或密码不正确（HTTP ${response.code}）")
                 }
-                if (response.code >= 500) {
+                if (response.code >= HTTP_SERVER_ERROR_FLOOR) {
                     throw IOException("WebDAV 服务器错误（HTTP ${response.code}）")
                 }
             }
@@ -309,7 +371,14 @@ class WebDavKdbxFileSource(
         }
     }
 
-    private suspend fun execute(request: Request, action: String): okhttp3.Response {
+    /**
+     * 发一个带认证头的请求。
+     *
+     * ⚠️ 没有 `action` 参数（曾经有）：调用方各自的失败措辞不同，与其把文案穿进来
+     * 再原样带回，不如让调用方在拿到非 2xx 时自己调 [errorMessage]。少一个参数、
+     * 少一处"传进来的文案和调用点对不上"的可能。
+     */
+    private suspend fun execute(request: Request): okhttp3.Response {
         // ⚠️ 每次现取凭据：用户可能刚改过密码，缓存旧值只会让之后所有请求 401。
         val creds = credentialProvider()
         val authorized = request.newBuilder()
@@ -323,15 +392,47 @@ class WebDavKdbxFileSource(
             }
     }
 
+    /** 把 HTTP 错误响应拼成一句能直接展示的话（响应体作为补充细节，截断到 200 字）。 */
     private fun okhttp3.Response.errorMessage(action: String): String {
         val detail = runCatching { body?.string() }.getOrNull().orEmpty()
         return "$action 失败：HTTP $code" +
-            detail.take(200).takeIf { it.isNotBlank() }?.let { "（$it）" }.orEmpty()
+            detail.take(ERROR_BODY_PREVIEW_CHARS).takeIf { it.isNotBlank() }?.let { "（$it）" }.orEmpty()
     }
 
     private companion object {
         const val KDBX_MIME_TYPE = "application/x-keepass2"
+        const val PROPFIND_MEDIA_TYPE = "application/xml; charset=utf-8"
         const val USER_AGENT = "Vaultix-WebDAV"
+
+        // ---- HTTP 状态码（提成常量：它们在多处出现，写错一处会静默错报）----
+        const val HTTP_OK = 200
+        const val HTTP_MULTI_STATUS = 207
+        const val HTTP_UNAUTHORIZED = 401
+        const val HTTP_FORBIDDEN = 403
+        const val HTTP_NOT_FOUND = 404
+        /** 前置条件不满足（`If-Match` / `If-None-Match` 未通过）。 */
+        const val HTTP_PRECONDITION_FAILED = 412
+        /** 部分服务器对 CREATE_ONLY 失败回 409 而不是 412。 */
+        const val HTTP_CONFLICT = 409
+        const val HTTP_INSUFFICIENT_STORAGE = 507
+        /** 5xx 起点。 */
+        const val HTTP_SERVER_ERROR_FLOOR = 500
+
+        /** `PROPFIND` 成功只有这两种码（200 是某些实现的非标准简化）。 */
+        val MULTISTATUS_CODES = setOf(HTTP_OK, HTTP_MULTI_STATUS)
+
+        const val HEADER_ETAG = "ETag"
+        const val HEADER_LAST_MODIFIED = "Last-Modified"
+        const val HEADER_CONTENT_LENGTH = "Content-Length"
+
+        // ---- 可展示文案里的动作名 ----
+        const val ACTION_STAT = "读取文件信息"
+        const val ACTION_READ = "下载文件"
+        const val ACTION_FORCE_WRITE = "强制覆盖文件"
+        const val ACTION_LIST = "列出目录"
+
+        /** 错误响应体只展示这么多字（够定位问题，又不至于把整页 HTML 塞进对话框）。 */
+        const val ERROR_BODY_PREVIEW_CHARS = 200
 
         /**
          * `PROPFIND` 的请求体：只要我们关心的四个属性。
@@ -424,42 +525,56 @@ internal object WebDavPropfindParser {
             }.newDocumentBuilder().parse(xml.byteInputStream())
         }.getOrNull() ?: return emptyList()
 
-        val responses = document.getElementsByTagNameNS(DAV_NS, "response")
+        val responses = document.getElementsByTagNameNS(DAV_NS, RESPONSE_TAG)
         val entries = mutableListOf<KdbxFileEntry>()
         for (i in 0 until responses.length) {
             val node = responses.item(i) as? org.w3c.dom.Element ?: continue
-            val href = node.getElementsByTagNameNS(DAV_NS, "href").item(0)?.textContent
-                ?.trim()?.takeIf { it.isNotEmpty() } ?: continue
-
-            // ⚠️ PROPFIND 的结果**第一项是请求的那个目录自身**，必须排除，
-            //    否则"选库"列表里会多出一行指向目录的条目。
-            //
-            // ⚠️⚠️ 这里**不能拿 href 与完整 baseUrl 直接字符串比较**：
-            //    RFC 4918 说 href 是**绝对路径**（`/remote.php/dav/files/alice/Vaultix/`），
-            //    而 baseUrl 是完整 URL（`https://cloud.example.com/remote.php/dav/...`）
-            //    —— 两者永远不相等，目录自身就永远排除不掉。
-            //    ⇒ 只比**路径部分**（并且末尾的 `/` 不算差异）。
-            if (normalizedPathOf(href) == normalizedPathOf(baseUrl)) continue
-
-            val isDirectory = node.getElementsByTagNameNS(DAV_NS, "collection").length > 0
-            val rawName = node.firstText("displayname")
-                ?: href.trimEnd('/').substringAfterLast('/')
-
-            entries += KdbxFileEntry(
-                // 服务器可能返回 percent-encoded 的名字（群晖对中文就这么干）
-                name = runCatching { java.net.URLDecoder.decode(rawName, "UTF-8") }
-                    .getOrDefault(rawName),
-                id = href,
-                isDirectory = isDirectory,
-                // ★ 坑 3：弱 ETag（`W/"x"`）必须归一化，否则与自己后来看到的
-                //   强形态（`"x"`）比不相等 ⇒ 误报冲突。
-                versionToken = node.firstText("getetag")?.let(::normalizeVersionToken),
-                sizeBytes = node.firstText("getcontentlength")?.toLongOrNull(),
-                lastModified = node.firstText("getlastmodified")?.let(::parseHttpDate),
-            )
+            parseResponseElement(node, baseUrl)?.let(entries::add)
         }
         return entries.sortedWith(
             compareBy<KdbxFileEntry> { !it.isDirectory }.thenBy { it.name.lowercase() },
+        )
+    }
+
+    /**
+     * 把一条 `<D:response>` 翻成 [KdbxFileEntry]。
+     *
+     * @return null = 这条要**跳过**（缺 `href`，或它就是被请求的那个目录自身）。
+     *
+     * ⚠️ 抽成独立函数的原因是 **detekt `LoopWithTooManyJumpStatements`**：
+     * 原先循环体里有两个 `continue`（一个跳过非元素节点、一个跳过目录自身），
+     * 加起来超过"单循环一个跳转"的上限。而这两个跳过的**语义其实不同** ——
+     * 前者是"这条 XML 畸形"，后者是"这条合法但不是我们要的" ——
+     * 混在一个循环里读起来也更容易看错。分开后循环体只剩一行。
+     */
+    private fun parseResponseElement(node: org.w3c.dom.Element, baseUrl: String): KdbxFileEntry? {
+        val href = node.getElementsByTagNameNS(DAV_NS, HREF_TAG).item(0)?.textContent
+            ?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+
+        // ⚠️ PROPFIND 的结果**第一项是请求的那个目录自身**，必须排除，
+        //    否则"选库"列表里会多出一行指向目录的条目。
+        //
+        // ⚠️⚠️ 这里**不能拿 href 与完整 baseUrl 直接字符串比较**：
+        //    RFC 4918 说 href 是**绝对路径**（`/remote.php/dav/files/alice/Vaultix/`），
+        //    而 baseUrl 是完整 URL（`https://cloud.example.com/remote.php/dav/...`）
+        //    —— 两者永远不相等，目录自身就永远排除不掉。
+        //    ⇒ 只比**路径部分**（并且末尾的 `/` 不算差异）。
+        if (normalizedPathOf(href) == normalizedPathOf(baseUrl)) return null
+
+        val isDirectory = node.getElementsByTagNameNS(DAV_NS, COLLECTION_TAG).length > 0
+        val rawName = node.firstText(DISPLAYNAME_TAG)
+            ?: href.trimEnd('/').substringAfterLast('/')
+
+        return KdbxFileEntry(
+            // 服务器可能返回 percent-encoded 的名字（群晖对中文就这么干）
+            name = runCatching { java.net.URLDecoder.decode(rawName, "UTF-8") }.getOrDefault(rawName),
+            id = href,
+            isDirectory = isDirectory,
+            // ★ 坑 3：弱 ETag（`W/"x"`）必须归一化，否则与自己后来看到的
+            //   强形态（`"x"`）比不相等 ⇒ 误报冲突。
+            versionToken = node.firstText(GETETAG_TAG)?.let(::normalizeVersionToken),
+            sizeBytes = node.firstText(GETCONTENTLENGTH_TAG)?.toLongOrNull(),
+            lastModified = node.firstText(GETLASTMODIFIED_TAG)?.let(::parseHttpDate),
         )
     }
 
@@ -545,6 +660,15 @@ internal object WebDavPropfindParser {
     }
 
     private const val DAV_NS = "DAV:"
+
+    // ---- DAV: 名称空间下的元素名（PROPFIND 用到的全部）----
+    private const val RESPONSE_TAG = "response"
+    private const val HREF_TAG = "href"
+    private const val COLLECTION_TAG = "collection"
+    private const val DISPLAYNAME_TAG = "displayname"
+    private const val GETETAG_TAG = "getetag"
+    private const val GETCONTENTLENGTH_TAG = "getcontentlength"
+    private const val GETLASTMODIFIED_TAG = "getlastmodified"
 
     private fun org.w3c.dom.Element.firstText(localName: String): String? =
         getElementsByTagNameNS(DAV_NS, localName).item(0)?.textContent?.trim()

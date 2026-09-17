@@ -251,39 +251,7 @@ class OneDriveGraphClient @Inject constructor() {
         expectedETag: String?,
         forceReplace: Boolean,
     ): OneDriveEntry {
-        val sessionUrl = "$GRAPH_BASE_URL${buildCreateUploadSessionRelativeUrl(path)}"
-        val sessionBody = buildString {
-            append("""{"item":{"@microsoft.graph.conflictBehavior":""")
-            append(if (forceReplace) "replace" else "fail")
-            append("""}""")
-            if (!forceReplace && !expectedETag.isNullOrBlank()) {
-                // Graph 在 uploadSession 上用请求体里的 `ifMatch` 表达条件写
-                append(""","ifMatch":"$expectedETag"""")
-            }
-            append("}")
-        }
-        val sessionRequest = Request.Builder()
-            .url(sessionUrl)
-            .header("Authorization", "Bearer $accessToken")
-            .post(sessionBody.toRequestBody(JSON_MEDIA_TYPE.toMediaType()))
-            .build()
-
-        val uploadUrl = client.newCall(sessionRequest).execute().use { response ->
-            val body = response.body?.string().orEmpty()
-            if (!response.isSuccessful) {
-                if (response.code == 412) {
-                    throw OneDrivePreconditionFailedException(
-                        "OneDrive 上的文件已被其他设备修改（HTTP 412），为避免覆盖已取消写入",
-                    )
-                }
-                throw IOException(
-                    translateUploadError(response.code)
-                        ?: body.ifBlank { "创建上传会话失败：HTTP ${response.code}" },
-                )
-            }
-            json.decodeFromString<OneDriveUploadSessionDto>(body).uploadUrl
-                ?: throw IOException("OneDrive 未返回上传会话地址")
-        }
+        val uploadUrl = createUploadSession(accessToken, path, expectedETag, forceReplace)
 
         var offset = 0
         var lastDto = OneDriveDriveItemDto()
@@ -301,6 +269,75 @@ class OneDriveGraphClient @Inject constructor() {
         return lastDto.takeIf { it.id.isNotBlank() }
             ?: stat(accessToken, path)
     }
+
+    /**
+     * 创建分片上传会话，返回会话的上传 URL。
+     *
+     * ## 条件写在这里怎么表达
+     *
+     * Graph 的 uploadSession **不用 `If-Match` 头**，而是把条件写成请求体里的字段：
+     * - `conflictBehavior = "fail"` + `ifMatch = <eTag>` ⇒ 远端变了就拒（412）；
+     * - `conflictBehavior = "replace"` ⇒ 无条件覆盖（用户拍板后的强写）。
+     *
+     * ⚠️ 这个差异很关键：如果照 `If-Match` 那样写，条件**根本不会生效**
+     * （Graph 会忽略未知字段），表现为"远端被人改过，我们还是盖了上去" ——
+     * 静默数据丢失，而且没有任何报错。
+     *
+     * ⚠️ 抽成独立函数是为了让 [chunkedUpload] 的 throw 数落在 detekt
+     * `ThrowsCount`（上限 2）之内。这里的三条各自对应一类完全不同的失败
+     * （冲突 / 可翻译的 Graph 错误 / 缺上传地址），本来就不该和分片循环混在一起。
+     */
+    private fun createUploadSession(
+        accessToken: String,
+        path: String,
+        expectedETag: String?,
+        forceReplace: Boolean,
+    ): String {
+        val sessionUrl = "$GRAPH_BASE_URL${buildCreateUploadSessionRelativeUrl(path)}"
+        val sessionBody = buildString {
+            append("""{"item":{"@microsoft.graph.conflictBehavior":""")
+            append(if (forceReplace) "replace" else "fail")
+            append("""}""")
+            if (!forceReplace && !expectedETag.isNullOrBlank()) {
+                // Graph 在 uploadSession 上用请求体里的 `ifMatch` 表达条件写
+                append(""","ifMatch":"$expectedETag"""")
+            }
+            append("}")
+        }
+        val sessionRequest = Request.Builder()
+            .url(sessionUrl)
+            .header("Authorization", "Bearer $accessToken")
+            .post(sessionBody.toRequestBody(JSON_MEDIA_TYPE.toMediaType()))
+            .build()
+
+        return client.newCall(sessionRequest).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) throw sessionFailureOf(response, body)
+            json.decodeFromString<OneDriveUploadSessionDto>(body).uploadUrl
+                ?: throw IOException("OneDrive 未返回上传会话地址")
+        }
+    }
+
+    /**
+     * 创建上传会话失败的响应 ⇒ 该抛的异常（**纯映射，自己不抛**）。
+     *
+     * ⚠️ 形状（先分类、再只抛一次）是为了 detekt `ThrowsCount`（上限 2）——
+     * 与 `WebDavKdbxFileSource.writeFailureOf` 同一套做法：把分类抽成返回值的
+     * 纯函数，顺带也让"哪个码算什么失败"可以脱离 HTTP 单测。放宽阈值不是选项，
+     * 那等于把这扇门关掉。
+     */
+    private fun sessionFailureOf(response: okhttp3.Response, body: String): IOException =
+        when (response.code) {
+            // ★ 412 = 条件写失败 = 远端确实变了。这是**唯一**要单独成类的失败：
+            //   它不是"出错"，是"我们成功地阻止了一次覆盖"（见类的 KDoc）。
+            HTTP_PRECONDITION_FAILED -> OneDrivePreconditionFailedException(
+                "OneDrive 上的文件已被其他设备修改（HTTP 412），为避免覆盖已取消写入",
+            )
+            else -> IOException(
+                translateUploadError(response.code)
+                    ?: body.ifBlank { "创建上传会话失败：HTTP ${response.code}" },
+            )
+        }
 
     /** 单片上传 + 重试 [CHUNK_RETRY_COUNT] 次 —— 移动网络下单片失败很常见，不重试等于白传。 */
     private fun putChunkWithRetry(

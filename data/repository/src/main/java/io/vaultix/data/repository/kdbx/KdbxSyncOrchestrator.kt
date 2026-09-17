@@ -166,7 +166,11 @@ class KdbxSyncOrchestrator(
                 //    的既有事实误当成上传期间的新改动）。
                 //    ⇒ 上传完成后由调用方用**最新的**本地状态再判一次；
                 //      编排器先把"已上传"与新的版本令牌记下来。
-                markStatus(vaultId, KdbxSyncTransitions.markUploaded(localChangedDuringUpload = false), report.writtenVersion)
+                markStatus(
+                    vaultId = vaultId,
+                    status = KdbxSyncTransitions.markUploaded(localChangedDuringUpload = false),
+                    versionToken = report.writtenVersion,
+                )
                 SyncOutcome.Uploaded(newVersionToken = report.writtenVersion)
             },
             onFailure = { error ->
