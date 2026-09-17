@@ -11,6 +11,7 @@ import io.vaultix.domain.KdbxSyncRepository
 import io.vaultix.domain.VaultRepository
 import io.vaultix.domain.VaultSyncStatus
 import io.vaultix.model.VaultSummary
+import io.vaultix.vaultix.ui.common.KdbxConflictChoice
 import io.vaultix.vaultix.ui.settings.QuickUnlockController
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow

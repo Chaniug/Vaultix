@@ -112,16 +112,10 @@ class OneDriveGraphClient @Inject constructor() {
             "OneDrive 列目录完成：path=${directoryPath ?: "<root>"} pages=$page items=${collected.size}"
         }
 
-        collected.map { item ->
-            OneDriveEntry(
-                id = item.id,
-                name = item.name,
-                isDirectory = item.folder != null,
-                versionToken = item.eTag ?: item.cTag,
-                sizeBytes = item.size,
-                lastModified = item.lastModifiedDateTime,
-            )
-        }.sortedWith(
+        // ⚠️ 这里曾经把 `toEntry()` 的六个字段**手抄一遍**。那正是本轮 bug 的温床：
+        // 手抄版与 `toEntry()` 之间没有任何机制保证同步，下次改字段只会改一处。
+        // 统一走 `toEntry()`。
+        collected.map { it.toEntry() }.sortedWith(
             // 目录在前，其余按名称不区分大小写 —— 用户的库文件因此不会被随机顺序埋掉。
             compareBy<OneDriveEntry> { !it.isDirectory }
                 .thenBy { it.name.lowercase() },
@@ -272,7 +266,15 @@ class OneDriveGraphClient @Inject constructor() {
         // 最后一次片的响应体就是最终的 driveItem（带新 eTag）；
         // 若服务端只回了 202 的中间响应，则只有 uploadSession 本身能反映结果 ——
         // 这时补一次 stat 拿到真实 eTag，**不要**返回空（会让上层把令牌丢了）。
-        return lastDto.takeIf { it.id.isNotBlank() }
+        //
+        // ⚠️ ★ 两处细节都踩过（CI #171）：
+        // 1. `toEntry()` **不能漏**。`lastDto` 是私有的 `OneDriveDriveItemDto`（数据层 DTO），
+        //    本函数返回的是 `OneDriveEntry`（对外模型）—— 是**两个不同的类型**。
+        //    漏掉转换时 `?:` 两侧没有公共超类型，编译器报的是
+        //    `Return type mismatch: expected 'OneDriveEntry', actual 'Any'`，
+        //    而**不是**更好懂的"类型不匹配"。
+        // 2. 本函数必须是 `suspend`（下面调了 suspend 的 `stat`）。
+        return lastDto.takeIf { it.id.isNotBlank() }?.toEntry()
             ?: stat(accessToken, path)
     }
 
