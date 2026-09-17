@@ -320,13 +320,17 @@ jobs:
         # 纳入全部含单测的模块：core:crypto（172 例，Kover 门禁 ≥80%）、
         # core:common（TOTP/密码强度等纯算法 16 例）、core:model（关联字段
         # linkedId 分段编码锁定 5 例）、data:repository（会话/条目写路径）、
-        # data:bitwarden（CipherMapper 载荷保真/类型守恒 28 例）。
+        # data:bitwarden（CipherMapper 载荷保真/类型守恒 28 例）、
+        # data:kdbx（★ 2026-09-17 补：KDBX 读/写路径往返保真 + KPEX_* 字段，
+        #   含 KdbxWritePathTest 的 9 例。**此前漏登记 ⇒ 这些用例从未真正执行过**）。
         # 此前只跑 :app 与部分模块，新模块的测试等于从未在 CI 真正执行（盲区）。
+        # ⚠️ 新增带单测的模块时，**必须同时加进这里**，否则测试等于不存在。
         run: >-
           ./gradlew :core:crypto:testDebugUnitTest :core:common:testDebugUnitTest
           :core:model:testDebugUnitTest
           :app:testFullDebugUnitTest :data:repository:testDebugUnitTest
-          :data:bitwarden:testDebugUnitTest --continue --stacktrace
+          :data:bitwarden:testDebugUnitTest :data:kdbx:testDebugUnitTest
+          --continue --stacktrace
 
       - name: Upload unit test reports
         if: always()
@@ -336,5 +340,7 @@ jobs:
           path: |
             app/build/reports/tests/testDebugUnitTest
             app/build/test-results/testDebugUnitTest
+            data/kdbx/build/reports/tests/testDebugUnitTest
+            data/kdbx/build/test-results/testDebugUnitTest
           if-no-files-found: ignore
           retention-days: 3
