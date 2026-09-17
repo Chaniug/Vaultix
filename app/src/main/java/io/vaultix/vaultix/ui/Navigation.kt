@@ -77,6 +77,17 @@ data object AutofillSettingsRoute
 data object VaultManagementRoute
 
 /**
+ * 网盘账号二级页（从「密码库管理」进入）。
+ *
+ * ★ 独立成页的理由是**状态寿命**：OneDrive 登录态 / WebDAV 凭据是**长寿命**的
+ * （跨进程跨页面），而「添加密码库」是导航路由、一返回 ViewModel 即销毁
+ * ⇒ 把长寿命状态存在短寿命页面里，必然"返回就没了"（用户实测）。
+ * 详见 `.ai/decisions/设置页信息架构-定稿.md` §11.7。
+ */
+@Serializable
+data object CloudAccountsRoute
+
+/**
  * 导入 / 导出二级页（设置首页「数据管理 → 导入 / 导出」进入）。
  *
  * 无参数：导出 / 导入都作用于**当前活跃库**（[io.vaultix.vaultix.session.ActiveVaultStore]），

@@ -16,6 +16,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -78,6 +79,8 @@ fun VaultManagementScreen(
     onAddKdbxVault: () -> Unit = {},
     /** 「从网盘添加」（导航到 WebDAV / OneDrive 配置流程）。 */
     onAddCloudVault: () -> Unit = {},
+    /** 「网盘账号」（导航到 OneDrive / WebDAV 的账号与凭据管理，定稿 §11.7）。 */
+    onOpenCloudAccounts: () -> Unit = {},
     /** 点一个**未解锁**的库时，去它的解锁页输主密码。 */
     onOpenLockedVault: (String) -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel(),
@@ -136,6 +139,16 @@ fun VaultManagementScreen(
                         },
                     ),
                     onClick = { showAddDialog = true },
+                )
+                // ★ 入口放在**这一组里**而不是设置首页新开一组：
+                //   首页新开一个单行组会违反定稿 §2③「消灭单行组」。
+                //   语义上也对 —— 它就是"库的来源怎么连"。
+                SettingsDivider()
+                SettingsRow(
+                    icon = { Icon(Icons.Filled.Cloud, contentDescription = null) },
+                    title = stringResource(R.string.cloud_accounts_title),
+                    subtitle = stringResource(R.string.cloud_accounts_entry_desc),
+                    onClick = onOpenCloudAccounts,
                 )
             }
 

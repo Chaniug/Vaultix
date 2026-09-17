@@ -30,6 +30,7 @@ import io.vaultix.vaultix.ui.rootnav.RootNavViewModel
 import io.vaultix.vaultix.ui.settings.AutofillSettingsScreen
 import io.vaultix.vaultix.ui.settings.ImportExportScreen
 import io.vaultix.vaultix.ui.settings.SettingsScreen
+import io.vaultix.vaultix.ui.settings.CloudAccountsScreen
 import io.vaultix.vaultix.ui.settings.VaultManagementScreen
 import io.vaultix.vaultix.ui.shell.MainShellScreen
 import io.vaultix.vaultix.ui.shell.MainShellViewModel
@@ -320,9 +321,13 @@ private fun NavGraphBuilder.settingsGraph(navController: NavHostController) {
             onAddBitwardenVault = { navController.navigate(AddVaultRoute) },
             onAddKdbxVault = { navController.navigate(AddKdbxRoute) },
             onAddCloudVault = { navController.navigate(AddCloudVaultRoute) },
+            onOpenCloudAccounts = { navController.navigate(CloudAccountsRoute) },
             // 点未解锁的库 → 去解锁页（2026-09-15 修的空白页 bug，语义不能退化）。
             onOpenLockedVault = { vaultId -> navController.navigate(UnlockRoute(vaultId)) },
         )
+    }
+    composable<CloudAccountsRoute> {
+        CloudAccountsScreen(onBack = { navController.popBackStack() })
     }
     composable<AutofillSettingsRoute> {
         AutofillSettingsScreen(onBack = { navController.popBackStack() })

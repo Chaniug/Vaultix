@@ -989,6 +989,7 @@
 
     <!-- 「网盘账号」二级页（方案 §11.7：把 OneDrive/WebDAV 从「添加密码库」里独立出来） -->
     <string name="cloud_accounts_title">网盘账号</string>
+    <string name="cloud_accounts_entry_desc">管理 OneDrive 与 NAS（WebDAV）的登录状态与凭据</string>
     <string name="cloud_accounts_subtitle">这里管理 NAS（WebDAV）与 OneDrive 的登录状态。库文件在哪个网盘上，就用哪个账号去读它。</string>
     <string name="cloud_accounts_kind_webdav">WebDAV</string>
     <string name="cloud_accounts_kind_onedrive">OneDrive</string>
