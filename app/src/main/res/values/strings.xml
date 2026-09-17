@@ -986,4 +986,16 @@
     <string name="import_error_unsupported_kdf">文件使用了当前版本不支持的加密参数（KDF）</string>
 
     <string name="vault_export_unavailable">当前库未解锁，请先解锁后再导出</string>
+
+    <!-- 「网盘账号」二级页（方案 §11.7：把 OneDrive/WebDAV 从「添加密码库」里独立出来） -->
+    <string name="cloud_accounts_title">网盘账号</string>
+    <string name="cloud_accounts_subtitle">这里管理 NAS（WebDAV）与 OneDrive 的登录状态。库文件在哪个网盘上，就用哪个账号去读它。</string>
+    <string name="cloud_accounts_kind_webdav">WebDAV</string>
+    <string name="cloud_accounts_kind_onedrive">OneDrive</string>
+    <string name="cloud_accounts_used_by">%1$d 个库在用</string>
+    <string name="cloud_accounts_connected">已连接</string>
+    <string name="cloud_accounts_disconnected">未连接，需要重新填写凭据或登录</string>
+    <!-- ⚠️「空」有两态必须分开：还在读 / 真的一个都没有。塌成一个就是假空态。 -->
+    <string name="cloud_accounts_loading">正在读取…</string>
+    <string name="cloud_accounts_empty">还没有网盘账号。添加密码库时选「从网盘添加」即可配置。</string>
 </resources>
