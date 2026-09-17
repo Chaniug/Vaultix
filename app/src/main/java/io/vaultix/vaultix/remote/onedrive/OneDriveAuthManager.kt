@@ -296,9 +296,8 @@ class OneDriveAuthManager @Inject constructor(
         val all = runCatching { application.accounts.orEmpty() }.getOrDefault(emptyList())
 
         // ② ★ 形状容错：origin 存的是 uid，而 MSAL 的 id 是 "uid.utid"。
-        val byShape = all.firstOrNull { account ->
-            account.id == accountId || account.id.startsWith("$accountId.")
-        }
+        //    规则实现在 [matchesStoredAccountId]（与「网盘账号」清单**共用同一份**）。
+        val byShape = all.firstOrNull { matchesStoredAccountId(accountId, it.id) }
         if (byShape != null) {
             VaultixLog.d(TAG) { "getAccount: 精确未命中，按 uid 前缀命中" }
             return@withContext byShape
@@ -351,6 +350,22 @@ class OneDriveAuthManager @Inject constructor(
         const val DEFAULT_AUTHORITY: String = COMMON_AUTHORITY
     }
 }
+
+/**
+ * 判断「origin 里存的 accountId」是否指向某个**缓存账户的 id**。
+ *
+ * ## 为什么要有这条规则、且只能有一份
+ *
+ * origin 存的是 `IAccount.id`，而 MSAL 缓存里的键是 `homeAccountId`（形如 `<uid>.<utid>`）。
+ * 实测两者**不一致**（差 `.utid` 那半段）—— 详见 `OneDriveAuthManager.getAccount` 的 KDoc。
+ *
+ * ⇒ 判据是**按值比较**（精确相等，或前缀 `storedId.`），不去猜"这个 MSAL 版本给哪种形态"。
+ *
+ * ⚠️ 抽成顶层函数是因为它有**两个调用方**（`getAccount` 与「网盘账号」清单）。
+ * 规则写两份必然漂移，而漂移的表现是"清单说已连接、实际读不到"这种极难自查的现象。
+ */
+internal fun matchesStoredAccountId(storedId: String, cachedId: String?): Boolean =
+    cachedId != null && (cachedId == storedId || cachedId.startsWith("$storedId."))
 
 /** 该异常是否为「打盹期静默刷新被系统掐断」（**可自愈**，不是登录失效）。 */
 fun Throwable.isOneDriveAuthTemporarilyUnavailable(): Boolean =
