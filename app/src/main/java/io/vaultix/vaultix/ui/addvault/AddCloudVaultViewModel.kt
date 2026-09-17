@@ -54,6 +54,9 @@ import io.vaultix.data.repository.kdbx.WebDavUrlBuilder
 import io.vaultix.data.repository.kdbx.WebDavVaultOrigin
 import io.vaultix.domain.KdbxAddOutcome
 import io.vaultix.domain.VaultRepository
+import io.vaultix.vaultix.remote.CloudAccount
+import io.vaultix.vaultix.remote.CloudAccountInventory
+import io.vaultix.vaultix.remote.CloudAccountKind
 import io.vaultix.vaultix.remote.onedrive.OneDriveAuthManager
 import io.vaultix.vaultix.remote.onedrive.OneDriveKdbxFileSource
 import io.vaultix.vaultix.remote.onedrive.OneDriveVaultOrigin
@@ -91,6 +94,14 @@ class AddCloudVaultViewModel @Inject constructor(
     private val oneDriveAuth: OneDriveAuthManager,
     private val oneDriveFactory: OneDriveKdbxFileSource.Factory,
     private val okHttp: OkHttpClient,
+    /**
+     * 已配置的网盘账号清单（**从库的 origin 反推**，见该类的文件头）。
+     *
+     * ⚠️ 它是"账号"这条数据流的**唯一来源** —— 本页的目标形态是
+     * 「**选**一个账号 → 列目录 → 选文件」，而不再是"让用户在这里填凭据"。
+     * （定稿 §11.7 第 2 步：登录与凭据归设置里的「网盘账号」，不归添加页。）
+     */
+    private val cloudAccounts: CloudAccountInventory,
 ) : ViewModel() {
 
     data class UiState(
@@ -117,6 +128,12 @@ class AddCloudVaultViewModel @Inject constructor(
         /** 连接 / 列目录 / 登录 / 添加，任一在进行。 */
         val busy: Boolean = false,
         val error: UnlockUiError? = null,
+        /**
+         * 可选的网盘账号（空 = 还没配过 ⇒ UI 应给"去设置里配置"的引导，**不要**摊开登录表单）。
+         *
+         * ⚠️ 与 `browsing` 无关：这是"起点选择"，列目录之后它就不该再主导界面。
+         */
+        val configuredAccounts: List<CloudAccount> = emptyList(),
     ) {
         /** 当前输入的服务器地址是否是**明文** HTTP（局域网 NAS 的常见情形）。 */
         val insecureHttp: Boolean
@@ -373,6 +390,75 @@ class AddCloudVaultViewModel @Inject constructor(
                 return@launch
             }
             listInto(source, "")
+        }
+    }
+
+    // ------------------------------------------------------------ 选账号（新流程）
+
+    /** 重新读一遍已配置账号（进页面时调；账号可能刚在设置里配好）。 */
+    fun refreshConfiguredAccounts() {
+        viewModelScope.launch {
+            val accounts = cloudAccounts.list()
+            _state.update { it.copy(configuredAccounts = accounts) }
+        }
+    }
+
+    /**
+     * **选一个已配置账号**并直接列它的目录（新流程的核心动作）。
+     *
+     * 与旧的 `connectWebDav()` / `connectOneDrive()` 的区别：那两条要**当场收凭据**，
+     * 这条只是"用已经有凭据的账号去读" ⇒ 不保存任何东西、也不会失败于"凭据不对"
+     * （凭据对不对，在设置页配置时就验证过了）。
+     *
+     * ⚠️ 起点用 [CloudAccount.browseRoot]（从该账号的库反推）——
+     * **不要**在这里拼 `server + "/"`：用户当初填的可能是子目录，
+     * 拼出来的 URL 会 404，而界面只会说"找不到文件"（今天已经栽过两次）。
+     * 起点为 null 时如实报错，不猜。
+     */
+    fun pickAccount(account: CloudAccount) {
+        if (_state.value.busy) return
+        val root = account.browseRoot
+        if (root.isNullOrBlank()) {
+            _state.update { it.copy(error = asError("这个账号还没有可用的目录，请先在设置里重新配置")) }
+            return
+        }
+        _state.update {
+            it.copy(
+                provider = when (account.kind) {
+                    CloudAccountKind.WEBDAV -> CloudProvider.WEBDAV
+                    CloudAccountKind.ONEDRIVE -> CloudProvider.ONEDRIVE
+                },
+                busy = true,
+                error = null,
+            )
+        }
+        viewModelScope.launch {
+            // 把账号的身份装进现有字段，让列目录那段逻辑完全复用（不新开一条分支）。
+            when (account.kind) {
+                CloudAccountKind.WEBDAV -> {
+                    webDavCredentialId = account.storedId
+                    dirStack.clear()
+                    dirStack += root
+                    val source = runCatching { webDavSource(root) }.getOrNull()
+                    if (source == null) {
+                        failWith("这个库还没有可用的文件来源")
+                        return@launch
+                    }
+                    listInto(source, rootLabel(root))
+                }
+
+                CloudAccountKind.ONEDRIVE -> {
+                    oneDriveAccountId = account.storedId
+                    dirStack.clear()
+                    dirStack += root
+                    val source = oneDriveSource(oneDriveBrowsePath())
+                    if (source == null) {
+                        failWith("OneDrive 登录状态异常，请重试")
+                        return@launch
+                    }
+                    listInto(source, root)
+                }
+            }
         }
     }
 
