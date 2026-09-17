@@ -119,6 +119,11 @@ fun AddCloudVaultScreen(
         }
     }
 
+    // ★ 进页面时向 MSAL 要一次缓存账户（2026-09-17）。
+    //   本页是导航路由 ⇒ 一返回这个 ViewModel 就销毁，再进来是全新的、登录态为 null。
+    //   不主动恢复的话，界面会把"MSAL 里登录着"显示成"没登录"，逼用户重走一遍授权页。
+    LaunchedEffect(Unit) { viewModel.restoreOneDriveSessionIfAny() }
+
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {

@@ -329,6 +329,53 @@ class AddCloudVaultViewModel @Inject constructor(
         failWith("无法拉起 Microsoft 登录页（当前页面拿不到 Activity），请重启应用后重试")
     }
 
+    /**
+     * 进入页面时**恢复已缓存的 OneDrive 登录**（2026-09-17 修）。
+     *
+     * ## 为什么必须有这一步（用户实测："返回到添加密码库界面，登录状态就没了"）
+     *
+     * 本页是**导航路由**（`AddCloudVaultRoute`）。用户一返回，这个
+     * `hiltViewModel()` 作用域就随 NavBackStackEntry 一起销毁 ⇒ 再进来是**全新的 ViewModel**
+     * ⇒ [oneDriveAccountId] / `accountName` 都是 null ⇒ 界面显示"未登录"。
+     *
+     * ⚠️ **但那是假象**：MSAL 的账户与 refresh token 一直在它自己的缓存里
+     * （实测 `account_credential_cache.xml` 里 refreshtoken 始终在）。
+     * 也就是说 —— **界面说"没登录"，真源说"登录着"**。
+     * 这与今天那条共同病根完全同族：*把"我没记住"渲染成"没发生过"*。
+     *
+     * ⇒ 进页面时主动向真源要一次：有缓存账户就**直接恢复**（并顺手列根目录，
+     *   让用户回到他刚才那个浏览位置），而不是让用户重复走一遍授权页。
+     *
+     * ⚠️ 只在**没有进行中的操作**且**本 VM 还没有账户**时执行：否则会把用户
+     * 正在进行的"换号"覆盖回旧账户（那正是 `forceAccountChooser` 要防的那件事）。
+     */
+    fun restoreOneDriveSessionIfAny() {
+        val current = _state.value
+        if (current.provider != CloudProvider.ONEDRIVE) return
+        if (current.busy || current.browsing) return
+        if (oneDriveAccountId != null) return
+        viewModelScope.launch {
+            // 取不到（没登录过 / 缓存被清）就安静返回，界面维持"未登录"——那是**如实**的。
+            val cached = runCatching { oneDriveAuth.getCachedSession() }.getOrNull() ?: return@launch
+            oneDriveAccountId = cached.accountId
+            _state.update {
+                it.copy(
+                    busy = true,
+                    accountName = cached.username.ifBlank { cached.displayName },
+                    error = null,
+                )
+            }
+            dirStack.clear()
+            dirStack += ""
+            val source = oneDriveSource(rootPlaceholderPath())
+            if (source == null) {
+                failWith("OneDrive 登录状态异常，请重试")
+                return@launch
+            }
+            listInto(source, "")
+        }
+    }
+
     // ------------------------------------------------------------ 浏览
 
     /**

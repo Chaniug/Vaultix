@@ -260,8 +260,60 @@ class OneDriveAuthManager @Inject constructor(
     private suspend fun getAccounts(): List<IAccount> =
         withContext(Dispatchers.IO) { getApplication().accounts.orEmpty() }
 
-    private suspend fun getAccount(accountId: String): IAccount? =
-        withContext(Dispatchers.IO) { getApplication().getAccount(accountId) }
+    /**
+     * 按 origin 里存的 `accountId` 找账户。
+     *
+     * ## ⚠️ ★ 为什么不能只做精确匹配（2026-09-17 真机实证）
+     *
+     * origin 格式是 `onedrive:<accountId>:<path>`，accountId 取自 `IAccount.id`
+     * （见 [toSession]）。但 MSAL **自己缓存里的键**是 `homeAccountId`，形如 **`<uid>.<utid>`**。
+     * 实测两者**不一致**：
+     * ```
+     * origin 里存的   ：00000000-0000-0000-c8b8-c85b19b15ac7
+     * MSAL 缓存里的键 ：00000000-0000-0000-c8b8-c85b19b15ac7.9188040d-6c67-4c5b-b112-36a304b66dad
+     * ```
+     * ⇒ 精确查必然 miss ⇒ 报「OneDrive 账户已失效，请重新登录」⇒ **用户每次重启 App 都要重登**，
+     *   而账户**一直躺在缓存里**（`account_credential_cache.xml` 里 refresh token 始终在，
+     *   且 mtime 随每次刷新在变 —— 实证了两点：缓存没丢、刷新确实发生过）。
+     *
+     * ## 判据用「值比较」，不用「记住当前是哪种形态」
+     *
+     * 不去猜"这个 MSAL 版本给的是 `uid` 还是 `uid.utid`"（那会随版本漂移），而是**按值匹配**：
+     * 精确相等，**或**前缀 `accountId.`（`uid` 与 `uid.utid` 恰好就是这个关系）。
+     * ⇒ 两种形态都命中，且**自愈**：哪天 MSAL 又统一成别的写法，精确那支仍然有效。
+     *
+     * ⚠️ 最后的"单账户兜底"只在**确实只有一个缓存账户**时生效 —— 那时"用哪个账户"没有歧义。
+     * **多账户时绝不猜**：猜错会把 A 的 token 喂给 B 的库（比"要求重新登录"严重得多）。
+     */
+    private suspend fun getAccount(accountId: String): IAccount? = withContext(Dispatchers.IO) {
+        val application = getApplication()
+
+        // ① 精确匹配（MSAL 语义下的正路）。
+        runCatching { application.getAccount(accountId) }.getOrNull()?.let {
+            return@withContext it
+        }
+
+        val all = runCatching { application.accounts.orEmpty() }.getOrDefault(emptyList())
+
+        // ② ★ 形状容错：origin 存的是 uid，而 MSAL 的 id 是 "uid.utid"。
+        val byShape = all.firstOrNull { account ->
+            account.id == accountId || account.id.startsWith("$accountId.")
+        }
+        if (byShape != null) {
+            VaultixLog.d(TAG) { "getAccount: 精确未命中，按 uid 前缀命中" }
+            return@withContext byShape
+        }
+
+        // ③ 单账户兜底（仅一个缓存账户 ⇒ 无歧义）。
+        if (all.size == 1) {
+            VaultixLog.d(TAG) { "getAccount: 单账户兜底命中" }
+            return@withContext all.first()
+        }
+
+        // ④ 如实失败，并留下**可定位**的一条日志（缓存账户数：0 = 真丢了；>1 = 认不出是哪个）。
+        VaultixLog.d(TAG) { "getAccount: 未命中，缓存账户数=${all.size}" }
+        null
+    }
 
     private fun IAccount.toSession(accessToken: String? = null): OneDriveAccountSession {
         val resolvedId = id?.takeIf { it.isNotBlank() }
