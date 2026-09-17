@@ -8,8 +8,8 @@ import io.vaultix.datastore.VaultTimeout
 import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.datastore.VaultixPreferencesDefaults
 import io.vaultix.domain.ItemRepository
+import io.vaultix.domain.KdbxSyncRepository
 import io.vaultix.domain.VaultRepository
-import io.vaultix.domain.VaultSessionRepository
 import io.vaultix.model.VaultSummary
 import io.vaultix.vaultix.security.AutoLockController
 import io.vaultix.vaultix.session.ActiveVaultStore
@@ -20,7 +20,6 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import io.vaultix.vaultix.ui.items.ItemsCardDisplayMode
@@ -44,7 +43,6 @@ class SettingsViewModel @Inject constructor(
     private val itemRepository: ItemRepository,
     private val autoLockController: AutoLockController,
     private val activeVaultStore: ActiveVaultStore,
-    private val sessionRepository: VaultSessionRepository,
     /**
      * 快速解锁（生物识别）登记备料器。
      *
@@ -53,6 +51,13 @@ class SettingsViewModel @Inject constructor(
      * 的 40 上限（它本就顶格）。详见 [QuickUnlockController] 的 KDoc。
      */
     private val localUnlockEnrollment: LocalUnlockEnrollment,
+    /**
+     * KDBX 网盘同步（逐库「同步」动作要用）。
+     *
+     * ⚠️ 与 [vaultRepository] 分开注入：两者的仲裁语义根本不同
+     * （服务端 revision 仲裁 vs 条件写 + 用户拍板），见 [VaultActionsController]。
+     */
+    private val kdbxSyncRepository: KdbxSyncRepository,
 ) : ViewModel() {
     data class UiState(
         val vaultTimeout: VaultTimeout = VaultTimeout.DEFAULT,
@@ -365,31 +370,18 @@ class SettingsViewModel @Inject constructor(
     fun lockAllNow() = autoLockController.lockAllNow()
 
     /**
-     * **退出数据库**（取代原来的「立即锁定」）。
+     * **逐库动作**（锁定 / 同步 / 退出 / 移除）—— 2026-09-18 取代全局「退出数据库」。
      *
-     * 用户原话：「设置里的『立即锁定』应该改成**退出数据库**（清本地缓存，不动远程）」。
-     *
-     * 与 [lockAllNow] 的差别：
-     * - [lockAllNow] 只清内存密钥（真锁）→ 下次解锁要重输主密码，但离线缓存还在；
-     * - 本方法连**本地缓存**一起清（快速解锁凭据 / token / 待推送队列 / 密文条目与文件夹
-     *   / 同步基线），保留库行 —— 下次点一下重新登录即可，条目从服务端重新拉。
-     *
-     * ⚠️ 只清本地，**不碰远程**；但**本地未上传的改动会丢**（待推送队列属缓存），
-     * 所以 UI 必须先弹确认对话框（[SettingsScreen] 的 `ExitDatabaseDialog`）。
-     *
-     * 清完之后库里已无任何已解锁会话 → `RootNavState` 自动收敛到解锁页，
-     * 不需要额外导航（对齐 `lockAllNow` 的现有做法）。
+     * ★ 为什么删掉全局「退出数据库」（定稿 §11.10）：它是**全局**动作、**范围不可见**，
+     * 误点一次用户就以为数据丢了。改成逐库之后，范围就写在被点的那一行上，
+     * 不可能再误伤别的库；「退出 / 移除」也只在**有退出这回事**的库上出现。
      */
-    fun exitDatabase() {
-        viewModelScope.launch {
-            val ids = vaultRepository.observeVaults().first().map { it.id }
-            ids.forEach { vaultId ->
-                runCatching { vaultRepository.signOut(vaultId) }
-            }
-            // 查看层标记一并清：密钥已经没了，标记留着只会让根导航停在一个
-            // 「只有生物识别按钮、但密钥不在内存」的死角。
-            runCatching { sessionRepository.clearAllViewLocks() }
-        }
+    val vaultActions: VaultActionsController by lazy {
+        VaultActionsController(
+            vaultRepository = vaultRepository,
+            kdbxSyncRepository = kdbxSyncRepository,
+            scope = viewModelScope,
+        )
     }
 
     companion object {

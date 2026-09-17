@@ -5,6 +5,7 @@
     <string name="action_back">返回</string>
     <string name="action_cancel">取消</string>
     <string name="action_copy">复制</string>
+    <string name="action_dismiss">知道了</string>
     <string name="action_done">完成</string>
     <string name="action_save">保存</string>
     <!-- 通用「下一步」：多步流程（如勾选目标 → 输主密码 → 认证）的中间态按钮。
@@ -61,6 +62,8 @@
     <string name="add_cloud_connect">连接并浏览</string>
     <!-- 已配过网盘账号时：只让用户选账号（登录/凭据归设置里的「网盘账号」） -->
     <string name="add_cloud_pick_account">选择已配置的网盘账号</string>
+    <string name="add_cloud_connect_other">连接其他账号</string>
+    <string name="add_cloud_manage_accounts">在「网盘账号」里查看/管理已配置的账号</string>
     <string name="add_cloud_connecting">正在连接…</string>
     <string name="add_cloud_onedrive_hint">登录 Microsoft 账号后浏览 OneDrive 根目录，选中已有的 .kdbx 文件。</string>
     <string name="add_cloud_onedrive_signin">使用 Microsoft 账号登录</string>
@@ -229,11 +232,9 @@
     <string name="setting_trash_auto_delete">回收站清理</string>
     <string name="setting_lock_now">立即锁定</string>
     <string name="setting_lock_now_desc">清零全部库的解锁密钥并返回列表</string>
-    <!-- 「立即锁定」→「退出数据库」（用户语义：清本地缓存，不动远程） -->
-    <string name="setting_exit_database">退出数据库</string>
-    <string name="setting_exit_database_desc">清空本地缓存并锁定；库与远程数据保留</string>
-    <string name="setting_exit_database_confirm">将清除本机上的条目缓存、登录凭据与快速解锁设置，并锁定全部库。\n\n· 远程（服务器）数据不受影响，下次登录会重新拉取；\n· 本机尚未上传的改动会丢失（离线编辑的内容）。\n\n确定退出吗？</string>
-    <string name="setting_exit_database_action">退出</string>
+    <!-- ⚠️ 「退出数据库」（全局）已于 2026-09-18 **删除**：它是全局动作、范围不可见，
+         误点一次用户就以为数据丢了（定稿 §11.10）。取代它的是「密码库管理」里
+         **每个库各自的 ⋮**（锁定 / 同步 / 退出 / 移除）—— 范围写在被点的那一行上。 -->
 
     <!-- 自动填充（M2-a：系统 AutofillService） -->
     <string name="group_autofill">自动填充</string>
@@ -801,6 +802,27 @@
     <string name="ssh_fingerprint">指纹</string>
     <string name="ssh_fingerprint_hint">由公钥自动推导，可自行修改</string>
 
+    <!-- SSH 密钥生成（施工单 §3） -->
+    <string name="ssh_generate">生成密钥对</string>
+    <string name="ssh_generate_title">生成 SSH 密钥对</string>
+    <string name="ssh_generate_algorithm">算法</string>
+    <string name="ssh_generate_ed25519">Ed25519</string>
+    <string name="ssh_generate_ed25519_hint">推荐：现代算法，密钥短，KeePassXC 默认</string>
+    <string name="ssh_generate_rsa">RSA 3072</string>
+    <string name="ssh_generate_rsa_hint">兼容老服务器与旧工具，密钥更长、生成更慢</string>
+    <string name="ssh_generate_action">生成</string>
+    <string name="ssh_generating">正在生成密钥对…</string>
+    <string name="ssh_generate_done">密钥对已生成</string>
+    <!-- ★ 私钥不可再生 ⇒ 这条提示不可省（§3 硬要求） -->
+    <string name="ssh_generate_warning">私钥不可再生：它只存在于这条条目里，离开本页后不会再有机会重新导出。请先备份，或立刻用一次。</string>
+    <string name="ssh_generate_ack">我已备份，填入条目</string>
+    <string name="ssh_generate_failed">生成失败：%1$s</string>
+    <string name="ssh_overwrite_title">覆盖现有密钥？</string>
+    <string name="ssh_overwrite_message">条目里已经填了密钥。生成会覆盖它，且无法恢复。</string>
+    <string name="ssh_overwrite_confirm">覆盖并生成</string>
+    <string name="ssh_backup_notice">私钥不可再生，请先备份或立刻使用一次</string>
+    <string name="ssh_key_format_note">OpenSSH 新格式私钥，可直接用于 ssh / ssh-keygen</string>
+
     <!-- 身份信息 详情分区（对齐 Bitwarden identity 17 字段） -->
     <string name="section_identity">身份信息</string>
     <string name="identity_title">称谓</string>
@@ -1026,4 +1048,36 @@
     <!-- ⚠️「空」有两态必须分开：还在读 / 真的一个都没有。塌成一个就是假空态。 -->
     <string name="cloud_accounts_loading">正在读取…</string>
     <string name="cloud_accounts_empty">还没有网盘账号。添加密码库时选「从网盘添加」即可配置。</string>
+
+    <!--
+        ================================================================
+        逐库动作（定稿 §11.10：库改「行 + 右侧 ⋮」，取代全局「退出数据库」）
+
+        ★ 全局「退出数据库」被移除的原因：它是**全局**动作、**范围不可见** ——
+          误点一次就以为数据丢了。改成逐库之后，范围就写在被点的那一行上。
+        ★ 按钮**按能力显示**而不是全部列出再禁用：
+          本地 KDBX 没有「同步」（它的真相就是那个文件）、KDBX 没有「退出」（与锁定同义）。
+        ================================================================
+    -->
+    <string name="vault_management_group_all">全部密码库</string>
+    <string name="vault_action_lock">锁定</string>
+    <string name="vault_action_sync">同步</string>
+    <string name="vault_action_signout">退出</string>
+    <string name="vault_status_locked">已锁定</string>
+    <string name="vault_status_unlocked">已解锁</string>
+    <!-- 退出：清本机缓存与凭据，远程不动。⚠️「需重新登录」必须写明 —— 那是用户最想知道的后果。 -->
+    <string name="vault_signout_confirm">退出「%1$s」会清除它在本机的条目缓存与登录凭据，下次使用需要重新登录。\n\n· 远程数据不受影响；\n· 本机尚未上传的改动会丢失。</string>
+    <string name="vault_signout_action">退出</string>
+    <!-- 移除：只删本机这一行。⚠️「远程不动」必须写明 —— 用户最怕的是"删了库是不是数据也没了"。 -->
+    <string name="vault_result_locked">「%1$s」已锁定</string>
+    <string name="vault_result_signed_out">「%1$s」已退出，下次使用需重新登录</string>
+    <string name="vault_result_sync_done">「%1$s」已同步</string>
+    <string name="vault_result_sync_done_with_count">「%1$s」已同步 %2$d 个条目</string>
+    <!-- 「没有变化」≠「失败」：分开说，否则用户会以为同步坏了。 -->
+    <string name="vault_result_sync_unchanged">「%1$s」与远端一致，没有需要同步的内容</string>
+    <string name="vault_result_sync_failed">「%1$s」同步失败：%2$s</string>
+    <string name="vault_result_sync_unsupported">「%1$s」没有可同步的远端</string>
+    <!-- 🔴 远端更新但替换本地会话要重新解锁：不能当成"已同步"。 -->
+    <string name="vault_result_sync_needs_unlock">「%1$s」远端有更新，重新解锁后会拉取</string>
+    <string name="vault_result_failed">「%1$s」操作失败：%2$s</string>
 </resources>

@@ -700,7 +700,7 @@ private fun LabeledFields(labels: List<Int>, values: SnapshotStateList<String>) 
 }
 
 /**
- * SSH 密钥输入（S22）：私钥 / 公钥多行，指纹单行。
+ * SSH 密钥输入（S22）：私钥 / 公钥多行，指纹单行 + 「生成密钥对」入口。
  *
  * 三项都用**等宽**：密钥是机器文本，等宽便于逐字符核对（与详情页一致）。
  * 用 `LocalTextStyle.current.copy(...)` 而非自建 `TextStyle` —— 前者恰好等于
@@ -711,10 +711,51 @@ private fun LabeledFields(labels: List<Int>, values: SnapshotStateList<String>) 
  *
  * 指纹由公钥驱动：公钥的 onValueChange 走 [applyPublicKeyChange]，
  * 「自动 / 手动」的判定逻辑都在那边（纯函数，已单测）。
+ *
+ * 「生成密钥对」放在**最上面**（施工单 §3）：它回答的是"我还没有钥匙"，
+ * 排在三个输入框之前才符合先来后到；生成完私钥不可再生，故先问覆盖、再留备份提示。
  */
 @Composable
 private fun SshKeyFields(values: SnapshotStateList<String>) {
     SectionLabel(text = stringResource(R.string.section_ssh_key), icon = Icons.Filled.Key)
+    Spacer(Modifier.height(Spacing.sm))
+    // 生成态放在本函数内：它是"这个表单刚生成过一对"的事实，跟着表单走即可。
+    var showOverwriteConfirm by rememberSaveable { mutableStateOf(false) }
+    var showGenerator by rememberSaveable { mutableStateOf(false) }
+    var showBackupNotice by rememberSaveable { mutableStateOf(false) }
+    SshGenerateButton(onClick = {
+        if (values[SSH_PRIVATE_KEY_INDEX].isBlank() && values[SSH_PUBLIC_KEY_INDEX].isBlank()) {
+            showGenerator = true
+        } else {
+            showOverwriteConfirm = true
+        }
+    })
+    if (showBackupNotice) {
+        SshBackupNotice(onDismiss = { showBackupNotice = false })
+        Spacer(Modifier.height(Spacing.sm))
+    }
+    if (showOverwriteConfirm) {
+        SshOverwriteConfirmDialog(
+            onConfirm = {
+                showOverwriteConfirm = false
+                showGenerator = true
+            },
+            onDismiss = { showOverwriteConfirm = false },
+        )
+    }
+    if (showGenerator) {
+        SshKeyGenerateDialog(
+            onGenerated = { pair ->
+                values[SSH_PRIVATE_KEY_INDEX] = pair.privateKeyPem
+                // 走 applyPublicKeyChange 而不是直接赋值：指纹的"跟随公钥"判定在那里，
+                // 手改过的指纹不该被静默改写。
+                applyPublicKeyChange(values, pair.publicKey)
+                showGenerator = false
+                showBackupNotice = true
+            },
+            onDismiss = { showGenerator = false },
+        )
+    }
     Spacer(Modifier.height(Spacing.sm))
     val monospace = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace)
     OutlinedTextField(

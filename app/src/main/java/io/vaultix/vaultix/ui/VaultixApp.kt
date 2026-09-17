@@ -353,6 +353,8 @@ private fun NavGraphBuilder.settingsGraph(navController: NavHostController) {
         AddCloudVaultScreen(
             onBack = { navController.popBackStack() },
             onAdded = { navController.popBackStack() },
+            // 已配账号的管理（查看/注销）在「网盘账号」持久页，本页只给一条路过去。
+            onOpenCloudAccounts = { navController.navigate(CloudAccountsRoute) },
         )
     }
 }

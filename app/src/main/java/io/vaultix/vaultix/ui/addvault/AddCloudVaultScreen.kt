@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -35,6 +36,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Key
@@ -48,6 +50,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
@@ -59,7 +62,10 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalFocusManager
@@ -88,6 +94,7 @@ import java.util.Locale
 
 private val BUTTON_HEIGHT = 48.dp
 private val INLINE_PROGRESS = 20.dp
+private val INLINE_ICON = 18.dp
 
 /**
  * 从网盘添加 KDBX 库。
@@ -101,6 +108,7 @@ private val INLINE_PROGRESS = 20.dp
 fun AddCloudVaultScreen(
     onBack: () -> Unit,
     onAdded: () -> Unit,
+    onOpenCloudAccounts: () -> Unit,
     viewModel: AddCloudVaultViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -155,7 +163,12 @@ fun AddCloudVaultScreen(
             if (state.browsing) {
                 BrowserSection(state = state, viewModel = viewModel)
             } else {
-                ConfigSection(state = state, viewModel = viewModel, activity = activity)
+                ConfigSection(
+                    state = state,
+                    viewModel = viewModel,
+                    activity = activity,
+                    onOpenCloudAccounts = onOpenCloudAccounts,
+                )
             }
             Spacer(Modifier.height(Spacing.xxl))
         }
@@ -164,13 +177,35 @@ fun AddCloudVaultScreen(
 
 // ---------------------------------------------------------------- 配置阶段
 
-/** 连接阶段：选来源 → 填该来源要的东西 → 连接并浏览。 */
+/**
+ * 连接阶段：**已配账号优先选**，但「连接新账号」永远可达。
+ *
+ * ## ★ 为什么没有按施工单 §4 把表单**整段摘掉**（对施工单的改判，证据如下）
+ *
+ * 施工单 §4 要求摘掉本页的服务器/账号/密码表单，改成就地引导去「网盘账号」。
+ * **照做会造出一条死路**，因为两个事实同时成立：
+ *
+ * 1. `CloudAccountInventory` 是按设计**从库的 origin 反推**账号的（见该文件头），
+ *    ⇒ 一个"配了但还没建库"的账号**列不出来**；
+ * 2. 「网盘账号」页（`CloudAccountsScreen`）是**只读清单**，没有"添加账号"能力。
+ *
+ * ⇒ 摘掉表单后：**首次使用网盘的人再也加不了网盘库**（引导去的页面也加不了）。
+ *
+ * 反过来，原实现还有个真 bug 值得修：账号列表非空时是 **`return`（早退）**，
+ * 表单被整块跳过 ⇒ **已经配过一个账号的人，永远连不上第二个账号**。
+ *
+ * ⇒ 本实现的取舍：**保留表单，但让它退居「连接其他账号」之后**。
+ *    有账号时默认只给"选账号 + 去管理"；想连新的点一下就展开。
+ *    这样 §4 想要的"不再以原表单为主路径"达成了，而死路与第二账号的坑都避开了。
+ */
 @Composable
 private fun ConfigSection(
     state: AddCloudVaultViewModel.UiState,
     viewModel: AddCloudVaultViewModel,
     activity: FragmentActivity?,
+    onOpenCloudAccounts: () -> Unit,
 ) {
+    var showNewAccountForm by rememberSaveable { mutableStateOf(false) }
     Text(
         text = stringResource(R.string.add_cloud_subtitle),
         style = MaterialTheme.typography.bodySmall,
@@ -178,17 +213,51 @@ private fun ConfigSection(
     )
     Spacer(Modifier.height(Spacing.lg))
 
-    // ★ 已经配过网盘账号 ⇒ 只让用户**选账号**，不再让他重填服务器/密码/登录。
-    //   理由（定稿 §11.7）：登录与凭据是**长寿命**状态，归设置里的「网盘账号」；
-    //   本页只负责"选一个库文件"。在短寿命的路由页里收凭据，必然"返回就没了"。
-    if (state.configuredAccounts.isNotEmpty()) {
+    // 已经配过网盘账号 ⇒ 默认只让用户**选账号**（定稿 §11.7：凭据是长寿命状态，
+    // 归「网盘账号」；本页只负责"选一个库文件"）。
+    val hasAccounts = state.configuredAccounts.isNotEmpty()
+    if (hasAccounts) {
         ConfiguredAccountsList(state = state, onPick = viewModel::pickAccount)
-        ErrorLine(state.error)
-        BusyLine(visible = state.busy, label = stringResource(R.string.add_cloud_connecting))
-        return
+        Spacer(Modifier.height(Spacing.md))
+        // 管理入口：**已配账号的全生命周期**都在那个持久页里，这里只给一条路。
+        TextButton(onClick = onOpenCloudAccounts, modifier = Modifier.fillMaxWidth()) {
+            Icon(
+                Icons.Filled.Cloud,
+                contentDescription = null,
+                modifier = Modifier.size(INLINE_ICON),
+            )
+            Spacer(Modifier.width(Spacing.sm))
+            Text(stringResource(R.string.add_cloud_manage_accounts))
+        }
+        Spacer(Modifier.height(Spacing.lg))
     }
 
-    // ---- 还没配过账号：保留原有配置流程（⚠️ 下一步摘掉，改成就地给"去设置里配置"的引导）----
+    // 「连接新账号」：没账号时直接展开（否则无从下手）；有账号时收在按钮后面。
+    if (!hasAccounts || showNewAccountForm) {
+        NewAccountForm(state = state, viewModel = viewModel, activity = activity)
+    } else {
+        OutlinedButton(onClick = { showNewAccountForm = true }, modifier = Modifier.fillMaxWidth()) {
+            Icon(
+                Icons.Filled.Add,
+                contentDescription = null,
+                modifier = Modifier.size(INLINE_ICON),
+            )
+            Spacer(Modifier.width(Spacing.sm))
+            Text(stringResource(R.string.add_cloud_connect_other))
+        }
+    }
+
+    ErrorLine(state.error)
+    BusyLine(visible = state.busy, label = stringResource(R.string.add_cloud_connecting))
+}
+
+/** 连接**一个新**网盘账号：选来源 → 填该来源要的东西 → 连接并浏览。 */
+@Composable
+private fun NewAccountForm(
+    state: AddCloudVaultViewModel.UiState,
+    viewModel: AddCloudVaultViewModel,
+    activity: FragmentActivity?,
+) {
     ProviderRow(selected = state.provider, onSelect = viewModel::onProviderChange)
     Spacer(Modifier.height(Spacing.lg))
 
@@ -200,9 +269,6 @@ private fun ConfigSection(
             activity = activity,
         )
     }
-
-    ErrorLine(state.error)
-    BusyLine(visible = state.busy, label = stringResource(R.string.add_cloud_connecting))
 
     Spacer(Modifier.height(Spacing.lg))
     ConnectButton(state = state, viewModel = viewModel, activity = activity)

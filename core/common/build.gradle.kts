@@ -22,6 +22,9 @@ kotlin {
 dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.datetime)
+    // ★ SSH 密钥对生成需要 Ed25519：Android JCA 直到 API 33 才提供它，而 minSdk = 26
+    //   ⇒ 走 Bouncy Castle（纯 Java，与 API 级别无关）。core:crypto 已依赖同一库。
+    implementation(libs.bcprov.jdk18on)
 
     testImplementation(libs.junit)
     testImplementation(libs.truth)

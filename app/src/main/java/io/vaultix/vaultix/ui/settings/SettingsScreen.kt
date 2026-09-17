@@ -39,7 +39,6 @@ import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.ViewAgenda
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Password
 import androidx.compose.material.icons.filled.Policy
@@ -160,7 +159,6 @@ fun SettingsScreen(
     var showAutoLockDialog by rememberSaveable { mutableStateOf(false) }
     var showClipboardDialog by rememberSaveable { mutableStateOf(false) }
     var showAboutDialog by rememberSaveable { mutableStateOf(false) }
-    var showExitDatabaseDialog by rememberSaveable { mutableStateOf(false) }
 
     // 「检查更新」：一次手动检查，结论只活在这一次打开对话框期间。
     var showUpdateDialog by rememberSaveable { mutableStateOf(false) }
@@ -228,7 +226,6 @@ fun SettingsScreen(
             DataSection(
                 viewModel = viewModel,
                 onOpenImportExport = onOpenImportExport,
-                onExitDatabase = { showExitDatabaseDialog = true },
             )
 
             // ---- 关于（权限管理已并入，原「其他」组仅此一行）----
@@ -295,15 +292,6 @@ fun SettingsScreen(
                     Text(stringResource(R.string.action_back))
                 }
             },
-        )
-    }
-    if (showExitDatabaseDialog) {
-        ExitDatabaseDialog(
-            onConfirm = {
-                showExitDatabaseDialog = false
-                viewModel.exitDatabase()
-            },
-            onDismiss = { showExitDatabaseDialog = false },
         )
     }
     if (showUpdateDialog) {
@@ -463,36 +451,6 @@ private fun BoxScope.SettingsTopBar(
                         contentDescription = stringResource(R.string.action_back),
                     )
                 }
-            }
-        },
-    )
-}
-
-/**
- * 「退出数据库」确认对话框。
- *
- * ⚠️ **必须有**：这一步会丢掉本地未上传的改动（待推送队列属本地缓存），
- * 一个没有确认的破坏性动作是不可接受的（用户可能刚离线编辑了十条条目）。
- * 文案把三件事说清：清什么（本地缓存）、不碰什么（远程 / 库本身）、丢什么（未上传改动）。
- */
-@Composable
-private fun ExitDatabaseDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        icon = { Icon(Icons.Filled.Logout, contentDescription = null) },
-        title = { Text(stringResource(R.string.setting_exit_database)) },
-        text = { Text(stringResource(R.string.setting_exit_database_confirm)) },
-        confirmButton = {
-            TextButton(onClick = onConfirm) {
-                Text(
-                    text = stringResource(R.string.setting_exit_database_action),
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.action_cancel))
             }
         },
     )
@@ -983,7 +941,6 @@ private fun SettingsDisplayOptionsHost(
 private fun DataSection(
     viewModel: SettingsViewModel,
     onOpenImportExport: () -> Unit,
-    onExitDatabase: () -> Unit,
 ) {
     val trashDays by viewModel.trashAutoDeleteDays.collectAsStateWithLifecycle()
     var showTrashDialog by rememberSaveable { mutableStateOf(false) }
@@ -1002,14 +959,6 @@ private fun DataSection(
             title = stringResource(R.string.setting_trash_auto_delete),
             subtitle = trashAutoDeleteLabel(trashDays),
             onClick = { showTrashDialog = true },
-        )
-        SettingsDivider()
-        SettingsRow(
-            icon = { Icon(Icons.Filled.Logout, contentDescription = null) },
-            title = stringResource(R.string.setting_exit_database),
-            subtitle = stringResource(R.string.setting_exit_database_desc),
-            titleColor = MaterialTheme.colorScheme.error,
-            onClick = onExitDatabase,
         )
     }
 
