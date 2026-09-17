@@ -7,6 +7,7 @@ import io.mockk.verify
 import io.vaultix.crypto.SymmetricCryptoKey
 import io.vaultix.data.bitwarden.auth.BitwardenAuthRepository
 import io.vaultix.data.bitwarden.sync.BitwardenSyncService
+import io.vaultix.data.repository.kdbx.KdbxFileSourceResolver
 import io.vaultix.database.dao.CipherDao
 import io.vaultix.database.dao.FolderDao
 import io.vaultix.database.dao.PendingOpDao
@@ -31,7 +32,13 @@ import org.junit.Test
  */
 class VaultRepositorySignOutTest {
 
-    private val context = mockk<android.content.Context>(relaxed = true)
+    /**
+     * 来源解析：本测试只走 Bitwarden 路径，KDBX 来源一律返回 null。
+     *
+     * ⚠️ 用真的 SAM 实例而不是 `mockk`：`KdbxFileSourceResolver` 是 fun interface
+     * **且带一个默认方法**（`readBytes`），mock 掉会连默认实现一起抹掉。
+     */
+    private val kdbxFileSources = KdbxFileSourceResolver { null }
     private val vaultDao = mockk<VaultDao>(relaxed = true)
     private val cipherDao = mockk<CipherDao>(relaxed = true)
     private val folderDao = mockk<FolderDao>(relaxed = true)
@@ -70,7 +77,7 @@ class VaultRepositorySignOutTest {
             localUnlockEnrollment = localUnlockEnrollment,
             preferences = preferences,
             kdbxSessions = KdbxSessionFlow(),
-            context = context,
+            kdbxFileSources = kdbxFileSources,
         )
         coEvery { credentials.remove(any()) } returns Unit
         coEvery { credentials.getString(any()) } returns null

@@ -6,7 +6,7 @@
  * GNU General Public License as published by the Free Software Foundation, either version 3
  * of the License, or (at your option) any later version.
  *
- * 添加库的**类型选择**对话框：Bitwarden 云端 / 本地 KDBX 文件。
+ * 添加库的**类型选择**对话框：Bitwarden 云端 / 本地 KDBX 文件 / 网盘上的 KDBX。
  *
  * 为什么提到 `ui/common`：库列表（`+`）与设置页「密码库」两处都要这个入口。
  * 设置页过去**没有**任何添加入口 —— 而库列表路由在「已有一个库」时不可达
@@ -31,6 +31,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material3.BasicAlertDialog
 import androidx.compose.material3.Card
@@ -61,7 +62,7 @@ private val VAULT_TYPE_CARD_MIN_HEIGHT = 76.dp
 private val VAULT_TYPE_ICON_BOX = 28.dp
 
 /**
- * 添加库的类型选择（Bitwarden 云端 / 本地 KDBX 文件）。
+ * 添加库的类型选择（Bitwarden 云端 / 本地 KDBX 文件 / 网盘上的 KDBX）。
  *
  * ## 2026-09-15 重做
  *
@@ -69,19 +70,29 @@ private val VAULT_TYPE_ICON_BOX = 28.dp
  * 两个 `ListItem`：`ListItem` 默认**无卡片底**，两个选项糊成一片白底文字，
  * 且没有"这是一个可点的选项"的视觉暗示（只能靠文字猜）。
  *
- * 现改为**两张可选卡片**（与设置页 `SettingsRow` 同一套规格：20dp 圆角 +
+ * 现改为**可选卡片**（与设置页 `SettingsRow` 同一套规格：20dp 圆角 +
  * `surfaceContainerHigh` 底 + 28dp 图标槽 + primary 图标 + 右侧箭头），
  * 并套用 `ui/common/DialogShell.kt` 的统一面板。
  *
- * ⚠️ **行为零变化**：两个选项的接线、`AppFlavor.supportsBitwarden` 条件判断
- * 完全保留。本对话框被设置页与库列表页**两处共用**（见文件头说明），
- * 改这边两处一起变，这是刻意的（避免两处观感漂移）。
+ * ## 2026-09-17 加第三个入口：从网盘添加
+ *
+ * 「本地 KDBX 文件」与「网盘上的 KDBX」是**同一个引擎的两种文件来源**
+ * （见 `data:kdbx` 的 `KdbxFileSource`），但对用户是两件不同的事：
+ * 一个要经 SAF 选文件，一个要配服务器与账号。合成一个入口会让两套输入混在一页。
+ *
+ * ⚠️ 新入口**加在这里**（共用对话框）而不是散到设置首页 ——
+ * 设置页信息架构是拍过板的（`decisions/设置页信息架构-定稿.md`），
+ * 往首页加行等于把它推翻。这里加则两处调用方一起变，不会漂移。
+ *
+ * ⚠️ **行为零变化**：原有两个选项的接线、`AppFlavor.supportsBitwarden` 条件判断
+ * 完全保留。本对话框被设置页与库列表页**两处共用**（见文件头说明）。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AddVaultTypeDialog(
     onConnectBitwarden: () -> Unit,
     onOpenKdbx: () -> Unit,
+    onAddCloudKdbx: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     BasicAlertDialog(onDismissRequest = onDismiss) {
@@ -109,6 +120,12 @@ fun AddVaultTypeDialog(
                     title = stringResource(R.string.vault_open_kdbx),
                     subtitle = stringResource(R.string.vault_add_kdbx_desc),
                     onClick = onOpenKdbx,
+                )
+                VaultTypeCard(
+                    icon = Icons.Filled.CloudSync,
+                    title = stringResource(R.string.vault_add_cloud),
+                    subtitle = stringResource(R.string.vault_add_cloud_desc),
+                    onClick = onAddCloudKdbx,
                 )
             }
 

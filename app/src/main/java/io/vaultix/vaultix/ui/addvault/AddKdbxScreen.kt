@@ -190,7 +190,9 @@ fun AddKdbxScreen(
 
             PasswordField(state = state, viewModel = viewModel)
 
-            unlockErrorText(state.error)?.let { message ->
+            // ⚠️ `forKdbx = true`：KDBX 没有邮箱，凭据错必须说"主密码不正确"
+            //    （默认文案是给 Bitwarden 的"邮箱或主密码不正确"，见 ErrorText 的 KDoc）。
+            unlockErrorText(state.error, forKdbx = true)?.let { message ->
                 Text(
                     text = message,
                     style = MaterialTheme.typography.bodySmall,

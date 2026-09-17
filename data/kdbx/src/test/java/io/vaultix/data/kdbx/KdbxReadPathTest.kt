@@ -156,7 +156,10 @@ class KdbxReadPathTest {
 
 // ---- 测试用的库构造 ----
 
-private const val PASSWORD = "master-pw"
+// ⚠️ 下面两个是**本包共用的测试夹具**（`KdbxFileSourceReadTest` 也要造同一个库）。
+//    故意没有抽成一个单独的 TestFixture.kt：那样会把"造一个真实 KDBX"这件事
+//    与它的第一批断言分到两个文件，看代码时要来回跳。
+internal const val PASSWORD = "master-pw"
 private const val WORK_GROUP = "Work"
 private const val NESTED_GROUP = "Dev"
 private const val RECOVERY_FIELD = "Recovery"
@@ -164,7 +167,7 @@ private const val PLAIN_FIELD = "PlainField"
 private const val TOTP_SECRET = "JBSWY3DPEHPK3PXP"
 
 /** 造一个含分组 / 受保护字段 / TOTP / 自定义字段 / 回收站的真实 KDBX 4.x 字节。 */
-private fun buildDatabase(): ByteArray {
+internal fun buildDatabase(): ByteArray {
     val credentials = Credentials.from(EncryptedValue.fromString(PASSWORD))
     val created = KeePassDatabase.Ver4x.create(
         rootName = "VaultixTest",

@@ -18,6 +18,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
+import io.vaultix.vaultix.ui.addvault.AddCloudVaultScreen
 import io.vaultix.vaultix.ui.addvault.AddKdbxScreen
 import io.vaultix.vaultix.ui.addvault.AddVaultScreen
 import io.vaultix.vaultix.ui.detail.ItemDetailScreen
@@ -227,6 +228,7 @@ private fun NavGraphBuilder.vaultEntryGraph(
         VaultListScreen(
             onAddVault = { navController.navigate(AddVaultRoute) },
             onAddKdbx = { navController.navigate(AddKdbxRoute) },
+            onAddCloud = { navController.navigate(AddCloudVaultRoute) },
             onOpenVault = { vault ->
                 if (vault.unlocked) {
                     // 已解锁：定为活跃库后直接进主界面（A4：库是筛选状态，不是导航参数）
@@ -317,6 +319,7 @@ private fun NavGraphBuilder.settingsGraph(navController: NavHostController) {
             onBack = { navController.popBackStack() },
             onAddBitwardenVault = { navController.navigate(AddVaultRoute) },
             onAddKdbxVault = { navController.navigate(AddKdbxRoute) },
+            onAddCloudVault = { navController.navigate(AddCloudVaultRoute) },
             // 点未解锁的库 → 去解锁页（2026-09-15 修的空白页 bug，语义不能退化）。
             onOpenLockedVault = { vaultId -> navController.navigate(UnlockRoute(vaultId)) },
         )
@@ -336,6 +339,13 @@ private fun NavGraphBuilder.settingsGraph(navController: NavHostController) {
     // 添加本地 KDBX 库：成功后回到库列表（新库已解锁，可直接点进去）
     composable<AddKdbxRoute> {
         AddKdbxScreen(
+            onBack = { navController.popBackStack() },
+            onAdded = { navController.popBackStack() },
+        )
+    }
+    // 从网盘添加 KDBX 库（WebDAV / OneDrive）：成功后的返回语义与本地路径一致。
+    composable<AddCloudVaultRoute> {
+        AddCloudVaultScreen(
             onBack = { navController.popBackStack() },
             onAdded = { navController.popBackStack() },
         )

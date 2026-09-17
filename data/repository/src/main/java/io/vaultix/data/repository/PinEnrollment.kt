@@ -8,11 +8,8 @@
  */
 package io.vaultix.data.repository
 
-import android.content.Context
-import android.net.Uri
-import dagger.hilt.android.qualifiers.ApplicationContext
 import io.vaultix.data.kdbx.Kdbx
-import io.vaultix.data.kdbx.KdbxSource
+import io.vaultix.data.repository.kdbx.KdbxFileSourceResolver
 import io.vaultix.domain.PinEnrollOutcome
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -51,21 +48,15 @@ class PinEnrollment @Inject constructor(
      * 这也是 KDBX 校验走 [Kdbx.verify] 独立入口而不是复用仓储 `unlockKdbxInternal` 的原因。
      */
     private val sessions: VaultSessionManager,
-    @ApplicationContext context: Context,
-) {
-
     /**
-     * KDBX 文件读取器（SAF `content://` URI → 字节）。
+     * 「origin ⇒ 文件来源」的解析。
      *
-     * 与 [VaultRepositoryImpl] 里那份是**同一个 lambda 的复制**。刻意不复用：
-     * 那个是它的私有字段，为了共享而把它提升成公开 API，等于把"仓储怎么读文件"
-     * 变成对外契约，比重复这三行更贵。
+     * ⚠️ 与 [LocalUnlockEnrollment] / [VaultRepositoryImpl] 共用**同一张**判别表
+     * （见 [KdbxFileSourceResolver] 的 KDoc）。本类此前自带一个只认 SAF `content://`
+     * 的 `KdbxSource` lambda ⇒ 网盘库在这里必然"凭据无效"，而真因是文件读不到。
      */
-    private val kdbxSource = KdbxSource { uri ->
-        runCatching {
-            context.contentResolver.openInputStream(Uri.parse(uri))?.use { it.readBytes() }
-        }.getOrNull()
-    }
+    private val kdbxFileSources: KdbxFileSourceResolver,
+) {
 
     /**
      * 读 keyfile 的原始字节。
@@ -73,9 +64,8 @@ class PinEnrollment @Inject constructor(
      * ⚠️ 只包 URI 不行：授权可能失效、用户可能换过文件。而且 KDBX 的信封里躺的
      * 必须是**字节**（解锁时没有 URI 可读，见 `Kdbx.unlock` 的 `keyFileBytes` 参数）。
      */
-    private fun readKeyFile(keyFileUri: String?): ByteArray? = keyFileUri
-        ?.takeIf { it.isNotBlank() }
-        ?.let { uri -> runCatching { kdbxSource.read(uri) }.getOrNull() }
+    private suspend fun readKeyFile(keyFileUri: String?): ByteArray? =
+        kdbxFileSources.readBytes(keyFileUri)
 
     /**
      * Bitwarden：把**当前会话里的对称密钥**包进 PIN 信封。
@@ -133,18 +123,25 @@ class PinEnrollment @Inject constructor(
     ): PinEnrollOutcome = withContext(Dispatchers.IO) {
         val origin = originUri
             ?: return@withContext PinEnrollOutcome.Failed("本地不存在该库")
+        val source = kdbxFileSources.fileSourceFor(origin)
+            ?: return@withContext PinEnrollOutcome.Failed("这个库还没有可用的文件来源")
+
+        // ★ keyfile **只读一次**，校验与包裹用的是同一份字节。
+        //   原先分两处各读一次（`verify` 里一次、`encode` 前一次）⇒ 两次之间用户
+        //   若换了 keyfile，"验过的"和"包进去的"就不是同一份 —— 得到的正是本类
+        //   最想避免的那种信封：**看起来配好了，实际打不开**。
+        val keyFileBytes = readKeyFile(keyFileUri)
 
         // ★ 先校验、后包裹。校验走 `Kdbx.verify`（**只验不开库**，不碰会话），
         //   理由见 `Kdbx.verify` 的 KDoc：真开库会把明文拉进内存、并覆盖已有会话。
         val verified = Kdbx.verify(
-            sourceUri = origin,
+            source = source,
             password = masterPassword,
-            keyFileUri = keyFileUri,
-            source = kdbxSource,
+            keyFileBytes = keyFileBytes,
         )
         if (!verified) return@withContext PinEnrollOutcome.InvalidCredentials
 
-        wrap(vaultId, pin, KdbxUnlockPayload.encode(masterPassword, readKeyFile(keyFileUri)))
+        wrap(vaultId, pin, KdbxUnlockPayload.encode(masterPassword, keyFileBytes))
     }
 
     /**

@@ -88,6 +88,7 @@ import io.vaultix.vaultix.ui.theme.Spacing
 fun VaultListScreen(
     onAddVault: () -> Unit,
     onAddKdbx: () -> Unit,
+    onAddCloud: () -> Unit,
     onOpenVault: (VaultSummary) -> Unit,
     onOpenSettings: () -> Unit,
     viewModel: VaultListViewModel = hiltViewModel(),
@@ -226,6 +227,7 @@ fun VaultListScreen(
         onDismissAdd = { showAddDialog = false },
         onAddVault = onAddVault,
         onAddKdbx = onAddKdbx,
+        onAddCloud = onAddCloud,
     )
 
     // ★ KDBX 网盘冲突：三选项对话框（方案 §8 方案 B）。
@@ -269,6 +271,7 @@ private fun VaultListDialogs(
     onDismissAdd: () -> Unit,
     onAddVault: () -> Unit,
     onAddKdbx: () -> Unit,
+    onAddCloud: () -> Unit,
 ) {
     if (vaultToRemove != null) {
         AlertDialog(
@@ -291,7 +294,7 @@ private fun VaultListDialogs(
         )
     }
 
-    // 添加库：两种类型二选一（Bitwarden 云端 / 本地 KDBX 文件）。
+    // 添加库：三种类型三选一（Bitwarden 云端 / 本地 KDBX 文件 / 网盘上的 KDBX）。
     if (showAddDialog) {
         AddVaultTypeDialog(
             onConnectBitwarden = {
@@ -301,6 +304,10 @@ private fun VaultListDialogs(
             onOpenKdbx = {
                 onDismissAdd()
                 onAddKdbx()
+            },
+            onAddCloudKdbx = {
+                onDismissAdd()
+                onAddCloud()
             },
             onDismiss = onDismissAdd,
         )

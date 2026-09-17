@@ -1,9 +1,6 @@
 package io.vaultix.data.repository
 
-import android.content.Context
-import android.net.Uri
 import android.os.Build
-import dagger.hilt.android.qualifiers.ApplicationContext
 import io.vaultix.crypto.SecureBytes
 import io.vaultix.crypto.SymmetricCryptoKey
 import io.vaultix.data.bitwarden.auth.BitwardenAuthRepository
@@ -14,7 +11,7 @@ import io.vaultix.data.bitwarden.sync.SyncOutcome
 import io.vaultix.data.kdbx.Kdbx
 import io.vaultix.data.kdbx.KdbxFailure
 import io.vaultix.data.kdbx.KdbxOpenError
-import io.vaultix.data.kdbx.KdbxSource
+import io.vaultix.data.repository.kdbx.KdbxFileSourceResolver
 import io.vaultix.database.dao.CipherDao
 import io.vaultix.database.dao.FolderDao
 import io.vaultix.database.dao.PendingOpDao
@@ -103,20 +100,24 @@ class VaultRepositoryImpl @Inject constructor(
     private val preferences: VaultixPreferences,
     /** KDBX 会话变化的可观察桥（见 [KdbxSessionFlow] 的说明）。 */
     private val kdbxSessions: KdbxSessionFlow,
-    @ApplicationContext context: Context,
-) : VaultRepository {
-
     /**
-     * KDBX 文件读取器（SAF `content://` URI → 字节）。
+     * 「origin ⇒ 文件来源」的解析（**读路径**的唯一入口）。
      *
-     * 放在 Android 侧实现的原因：`data:kdbx` 是纯逻辑模块（只依赖 core:*、不碰 Android），
-     * 它只认 [KdbxSource] 这个函数式接口。附带好处是引擎的单测可以直接喂 ByteArray。
+     * ## 为什么必须是它，而不是"一个读 URI 的 lambda"（2026-09-17 迁移）
+     *
+     * 这里原本是一个 `KdbxSource { uri -> contentResolver.openInputStream(Uri.parse(uri)) }`
+     * —— **只认 SAF `content://`**。于是把 `"webdav:…"` / `"onedrive:…"` 交给
+     * `Uri.parse` 必然读不到，网盘库**即使配好了也加不进来、解锁不了**（方案 §16.1）。
+     *
+     * ⚠️ **判据**：读路径分流了，写路径就必须同时分流。写回早就走
+     * `KdbxFileSource`（支持网盘），读路径却还留在旧接口上 —— 两条路一分叉，
+     * 必然在某个新来源上悄悄失效，而且**不报错**。
+     *
+     * 现在两边共用 [KdbxCloudSyncCoordinator.fileSourceFor] 这一张判别表
+     * （见 [KdbxFileSourceResolver] 的 KDoc：那张表**只能有一份**）。
      */
-    private val kdbxSource = KdbxSource { uri ->
-        runCatching {
-            context.contentResolver.openInputStream(Uri.parse(uri))?.use { it.readBytes() }
-        }.getOrNull()
-    }
+    private val kdbxFileSources: KdbxFileSourceResolver,
+) : VaultRepository {
 
     override fun observeVaults(): Flow<List<VaultSummary>> =
         combine(vaultDao.observeAll(), sessions.unlockedIds, kdbxSessions.revisionFlow) { rows, unlocked, _ ->
@@ -253,19 +254,31 @@ class VaultRepositoryImpl @Inject constructor(
     override fun isVaultUnlocked(vaultId: String): Boolean =
         sessions.isUnlocked(vaultId) || Kdbx.isUnlocked(vaultId)
 
-    /** KDBX 解锁的公共尾部：读文件 → 尝试凭据 → 登记内存会话；失败分类成用户可执行提示。 */
+    /**
+     * KDBX 解锁的公共尾部：**解析来源** → 读文件 → 尝试凭据 → 登记内存会话；
+     * 失败分类成用户可执行提示。
+     *
+     * ⚠️ 第一步"解析来源"是 2026-09-17 补上的关键一步（方案 §16.2 R1）：
+     * 少了它，`webdav:` / `onedrive:` 的 origin 会被当成 SAF URI 去 `Uri.parse`，
+     * **静默读不到** ⇒ 添加与解锁双双失败，而错误提示还是"密码错误"那种误导人的话。
+     */
     private suspend fun unlockKdbxInternal(
         vaultId: String,
         sourceUri: String,
         password: String,
         keyFileUri: String?,
     ): UnlockResult = withContext(Dispatchers.IO) {
+        val source = kdbxFileSources.fileSourceFor(sourceUri)
+            ?: return@withContext UnlockResult.Unknown("这个库还没有可用的文件来源，请重新选择文件")
+        // keyfile 与库文件走**同一套解析**（SAF 场景下它也是一个 content://）。
+        // 读不到时会是 null ⇒ 引擎按"只有主密码"去试 ⇒ 验不过 ⇒ 报凭据错。
+        // 那不是降级，而是**如实**：keyfile 开不了的库拿掉 keyfile 确实开不了。
+        val keyFileBytes = kdbxFileSources.readBytes(keyFileUri)
         val opened = Kdbx.unlock(
             vaultId = vaultId,
-            sourceUri = sourceUri,
+            source = source,
             password = password,
-            keyFileUri = keyFileUri,
-            source = kdbxSource,
+            keyFileBytes = keyFileBytes,
         )
         opened.fold(
             onSuccess = {
@@ -571,14 +584,15 @@ class VaultRepositoryImpl @Inject constructor(
 
         val row = vaultDao.get(vaultId)
             ?: return@withContext KdbxUnlockOutcome.Unavailable("本地不存在该库")
+        // 来源解析失败（不认识这个 origin）⇒ 如实报"不可用"，让 UI 回退到主密码。
+        val source = kdbxFileSources.fileSourceFor(row.origin)
+            ?: return@withContext KdbxUnlockOutcome.Unavailable("这个库还没有可用的文件来源")
         val result = try {
             Kdbx.unlock(
                 vaultId = vaultId,
-                sourceUri = row.origin,
+                source = source,
                 password = credential.masterPassword,
                 // keyfile 字节直接喂进去，**不落临时文件**（见 `Kdbx.unlock` 的 KDoc）。
-                keyFileUri = null,
-                source = kdbxSource,
                 keyFileBytes = credential.keyFileBytes,
             )
         } finally {
@@ -655,14 +669,14 @@ class VaultRepositoryImpl @Inject constructor(
 
             val row = vaultDao.get(vaultId)
                 ?: return@withContext PinUnlockOutcome.Unavailable("本地不存在该库")
+            val source = kdbxFileSources.fileSourceFor(row.origin)
+                ?: return@withContext PinUnlockOutcome.Unavailable("这个库还没有可用的文件来源")
             val result = try {
                 Kdbx.unlock(
                     vaultId = vaultId,
-                    sourceUri = row.origin,
+                    source = source,
                     password = credential.masterPassword,
                     // keyfile 字节直接喂进去，**不落临时文件**（见 `Kdbx.unlock` 的 KDoc）。
-                    keyFileUri = null,
-                    source = kdbxSource,
                     keyFileBytes = credential.keyFileBytes,
                 )
             } finally {

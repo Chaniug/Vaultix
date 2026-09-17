@@ -44,6 +44,18 @@ data object AddVaultRoute
 @Serializable
 data object AddKdbxRoute
 
+/**
+ * 从**网盘**添加 KDBX 库（WebDAV / OneDrive）。
+ *
+ * 与 [AddKdbxRoute] 分开而不是合成一条：两者要填的东西完全不同
+ * （一边是 SAF 选文件，一边是服务器 + 账号 / OAuth 登录），
+ * 而"选哪一个"本身就已经由 [io.vaultix.vaultix.ui.common.AddVaultTypeDialog] 问过了。
+ *
+ * 无参数：来源在页面内选（方案 §16.3 与 §16.4 共用一个入口）。
+ */
+@Serializable
+data object AddCloudVaultRoute
+
 @Serializable
 data object SettingsRoute
 

@@ -110,7 +110,9 @@ class AddKdbxViewModel @Inject constructor(
     fun submit() {
         val current = _state.value
         if (current.fileUri.isNullOrBlank()) {
-            _state.update { it.copy(error = UnlockUiError.Unknown("请先选择 .kdbx 数据库文件")) }
+            // `Detail`（原样展示）而不是 `Unknown`：这句话已经完整，再挂一个
+            // 「出错了：」前缀只会把它切碎（见 UnlockUiError.Detail 的 KDoc）。
+            _state.update { it.copy(error = UnlockUiError.Detail("请先选择 .kdbx 数据库文件")) }
             return
         }
         if (current.password.isEmpty() || current.submitting) return

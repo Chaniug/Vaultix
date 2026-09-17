@@ -7,6 +7,7 @@ import io.mockk.mockk
 import io.vaultix.crypto.SymmetricCryptoKey
 import io.vaultix.data.bitwarden.auth.BitwardenAuthRepository
 import io.vaultix.data.bitwarden.sync.BitwardenSyncService
+import io.vaultix.data.repository.kdbx.KdbxFileSourceResolver
 import io.vaultix.database.dao.CipherDao
 import io.vaultix.database.dao.FolderDao
 import io.vaultix.database.dao.PendingOpDao
@@ -42,7 +43,14 @@ class VaultRepositoryRemoveTest {
     private val pinEnrollment = mockk<PinEnrollmentCoordinator>(relaxed = true)
     private val enrollment = mockk<PinEnrollment>(relaxed = true)
     private val preferences = mockk<VaultixPreferences>()
-    private val context = mockk<android.content.Context>(relaxed = true)
+    /**
+     * 来源解析：本测试只走 Bitwarden 路径，KDBX 来源一律返回 null。
+     *
+     * ⚠️ 用真的 SAM 实例而不是 `mockk`：`KdbxFileSourceResolver` 是 fun interface
+     * **且带一个默认方法**（`readBytes`），mock 掉会连默认实现一起抹掉 ——
+     * "没打桩的调用静默返回 null"这种失败就混进来了。
+     */
+    private val kdbxFileSources = KdbxFileSourceResolver { null }
     private val sessions = VaultSessionManager()
     private lateinit var repo: VaultRepositoryImpl
 
@@ -66,7 +74,7 @@ class VaultRepositoryRemoveTest {
             localUnlockEnrollment = localUnlockEnrollment,
             preferences = preferences,
             kdbxSessions = KdbxSessionFlow(),
-            context = context,
+            kdbxFileSources = kdbxFileSources,
         )
         coEvery { credentials.remove(any()) } returns Unit
         coEvery { preferences.setLocalUnlockEnabled(any(), any()) } returns Unit

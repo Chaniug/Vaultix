@@ -21,6 +21,22 @@ sealed interface UnlockUiError {
     data object KeyUnavailable : UnlockUiError
     data object VaultMissing : UnlockUiError
     data class Unknown(val detail: String?) : UnlockUiError
+
+    /**
+     * **已经是一句人话**的消息，原样展示（不加"出错了："这类前缀）。
+     *
+     * ## 与 [Unknown] 的分工（别混）
+     *
+     * [Unknown] 的语义是"我们也不知道这是什么错"，所以那句话需要前缀交代
+     * "这不太正常"。而本类型的消息来自**已经翻译过的来源** —— 例如
+     * `WebDavKdbxFileSource` 给的是"WebDAV 账号或密码不正确（HTTP 401）"、
+     * `OneDriveAuthManager` 给的是"请关闭系统电池优化…"。
+     * 那些句子本身已经完整，再套一层前缀只会把它切碎成
+     * 「出错了：WebDAV 账号或密码不正确（HTTP 401）」。
+     *
+     * ⚠️ 所以在**网络/来源类**失败上一律用它；[Unknown] 留给真正的兜底。
+     */
+    data class Detail(val message: String) : UnlockUiError
 }
 
 fun UnlockResult.toUnlockUiError(): UnlockUiError = when (this) {

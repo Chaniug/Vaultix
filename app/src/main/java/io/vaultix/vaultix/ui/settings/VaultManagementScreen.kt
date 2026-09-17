@@ -76,6 +76,8 @@ fun VaultManagementScreen(
     onAddBitwardenVault: () -> Unit = {},
     /** 「打开本地 KDBX 文件」（导航到文件选择流程）。 */
     onAddKdbxVault: () -> Unit = {},
+    /** 「从网盘添加」（导航到 WebDAV / OneDrive 配置流程）。 */
+    onAddCloudVault: () -> Unit = {},
     /** 点一个**未解锁**的库时，去它的解锁页输主密码。 */
     onOpenLockedVault: (String) -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel(),
@@ -190,6 +192,10 @@ fun VaultManagementScreen(
             onOpenKdbx = {
                 showAddDialog = false
                 onAddKdbxVault()
+            },
+            onAddCloudKdbx = {
+                showAddDialog = false
+                onAddCloudVault()
             },
             onDismiss = { showAddDialog = false },
         )

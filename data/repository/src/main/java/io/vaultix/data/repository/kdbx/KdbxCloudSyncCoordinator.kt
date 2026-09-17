@@ -26,6 +26,10 @@
  * - `webdav:<credentialId>:<url>` ⇒ [WebDavKdbxFileSource]
  * - `onedrive:<accountId>:<path>` ⇒ 由 app 侧注册的工厂（见 [registerFactory]）
  *
+ * ★ 本类**就是** [KdbxFileSourceResolver] 的实现 —— 解锁 / 校验路径也用它
+ * （2026-09-17 从"旧 `KdbxSource`"迁过来）。那张判别表因此只有一个定义点，
+ * 不会出现"同步找得到来源、解锁却找不到"这种无报错的漂移。
+ *
  * ⚠️ OneDrive 的构造需要 MSAL token（在 app 层），所以这里开一个**注册口** ——
  * 而不是让 `data:repository` 依赖 app（那会形成反向依赖）。
  * ---------------------------------------------------------------------------
@@ -80,7 +84,7 @@ class KdbxCloudSyncCoordinator(
     private val sessionReplacer: KdbxSessionReplacer,
     private val okHttp: () -> OkHttpClient?,
     private val webDavCredentials: WebDavCredentialLookup,
-) {
+) : KdbxFileSourceResolver {
 
     /**
      * app 侧注册的额外来源工厂（目前只有 OneDrive）。
@@ -97,11 +101,11 @@ class KdbxCloudSyncCoordinator(
     }
 
     /**
-     * 解析 origin ⇒ 来源。
+     * 解析 origin ⇒ 来源（实现 [KdbxFileSourceResolver]，因此 `override`）。
      *
      * @return null = 这个库没有可同步的网盘来源（UI 据此隐藏同步入口）。
      */
-    fun fileSourceFor(origin: String): KdbxFileSource? = when {
+    override fun fileSourceFor(origin: String): KdbxFileSource? = when {
         origin.startsWith("content://") -> safFactory(origin)
 
         WebDavVaultOrigin.matches(origin) -> {

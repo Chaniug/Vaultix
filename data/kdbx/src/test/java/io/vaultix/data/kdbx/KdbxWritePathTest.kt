@@ -101,41 +101,29 @@ class KdbxWritePathTest {
     }
 
     @Test
-    fun `round trip detects a key that would be lost`() {
+    fun `round trip reports a problem instead of always saying OK`() {
         // 反向用例：证明自检**真的会报**，而不是恒返回 OK。
-        // 做法：手工造一个"往返后少了一个 CustomData 键"的库作为对照 ——
-        // 这里用"编码前后人为删掉 key"来模拟编码器丢字段。
+        //
+        // ⚠️ 2026-09-17 重写。原版是这样做的：手工造一个"编码器把 KPEX 吃掉了"的库，
+        //    再用**自己刚写的三行 diff** 去比对，最后断言那三行 diff 非空。
+        //    那等于在测自己，`KdbxRoundTrip` **一行都没跑到** ——
+        //    它根本没有"注入一个有损编码器"的接口（`verify` 自己内部 encode）。
+        //    ⇒ 这种用例的绿色毫无信息量，还让人以为"自检的反向分支有覆盖"。
+        //
+        //    现在改为喂**错的凭据**：`encode → decode` 必然解不开，
+        //    走的正是 "连自己刚写出来的字节都解不开 ⇒ 绝不能落盘" 那条**真实**分支。
         val db = buildDatabase(
             customData = mapOf("KPEX_PASSKEY_KEYPAIRS" to CustomDataValue("blob")),
         )
-        val before = decode(KdbxEncoder.encode(db))
-        // 模拟：编码器把 KPEX 字段吃掉了
-        val stripped = before.content.group.entries.single().let { entry ->
-            entry.copy(customData = emptyMap())
-        }
-        val mutated = before.let { database ->
-            KeePassDatabase.Ver4x(
-                credentials = database.credentials,
-                header = database.header,
-                content = database.content.copy(
-                    group = database.content.group.copy(
-                        entries = listOf(stripped),
-                    ),
-                ),
-                innerHeader = database.innerHeader,
-            )
-        }
+        // 刻意与 `CREDENTIALS` 不同：自检必须用"打开这个库时的那一组"，
+        // 用错了就该报"解不开"，而不是"没问题"（见 `KdbxRoundTrip.verify` 的 KDoc）。
+        val wrongCredentials = Credentials.from(EncryptedValue.fromString(WRONG_PASSWORD))
 
-        // 现在拿"原始有 KPEX"的库 与 "丢了 KPEX"的库 比对 ⇒ 必须报出来
-        val mismatches = mutableListOf<String>()
-        val original = decode(KdbxEncoder.encode(db)).content.group.entries.single()
-        val after = mutated.content.group.entries.single()
-        if (original.customData.mapValues { it.value.value } !=
-            after.customData.mapValues { it.value.value }
-        ) {
-            mismatches += "CustomData 变化"
-        }
-        assertThat(mismatches).isNotEmpty()
+        val result = KdbxRoundTrip.verify(db, wrongCredentials)
+
+        assertThat(result.mismatches).isNotEmpty()
+        assertThat(result.isSafeToWrite).isFalse()
+        assertThat(result.entryCountAfter).isEqualTo(0)
     }
 
     // ---------------------------------------------------------------- 原子写入
@@ -310,6 +298,8 @@ class KdbxWritePathTest {
 
     private companion object {
         const val PASSWORD = "master-pw-123"
+        /** 刻意与 [PASSWORD] 不同 —— 只给"自检必须报错"那条反向用例用。 */
+        const val WRONG_PASSWORD = "definitely-not-the-password"
         val CREDENTIALS: Credentials = Credentials.from(EncryptedValue.fromString(PASSWORD))
         val ENTRY_UUID: UUID = UUID.fromString("11111111-2222-3333-4444-555555555555")
     }

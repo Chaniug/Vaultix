@@ -84,6 +84,26 @@ object KdbxCloudSyncModule {
         okHttp = { runCatching { okHttp.get() }.getOrNull() },
         webDavCredentials = webDavCredentials,
     )
+
+    /**
+     * 把「origin ⇒ 来源」这张表**单独暴露成一个小接口**（见 [KdbxFileSourceResolver] 的 KDoc）。
+     *
+     * 解锁 / 校验路径（`VaultRepositoryImpl` · `LocalUnlockEnrollment` · `PinEnrollment`）
+     * 靠它把旧 `KdbxSource` 换掉，从此 `webdav:` / `onedrive:` 的库**也能被打开**
+     * （2026-09-17 前它们只会被交给 `Uri.parse` 然后静默读不到，方案 §16.1）。
+     *
+     * ⚠️ 走 [Provider] 而不是直接注入协调器 —— 与上面编排器同款理由：
+     * 协调器依赖 `KdbxSessionReplacer`，而"免密会话替换"迟早要反过来依赖仓储
+     * （它得拿 app 侧的快解锁凭据才能解出主密码）。直接注入会成**构造环**，
+     * `get()` 把求值推迟到调用时，环就消失了。
+     */
+    @Provides
+    @Singleton
+    fun provideKdbxFileSourceResolver(
+        coordinator: Provider<KdbxCloudSyncCoordinator>,
+    ): KdbxFileSourceResolver = KdbxFileSourceResolver { origin ->
+        coordinator.get().fileSourceFor(origin)
+    }
 }
 
 /**

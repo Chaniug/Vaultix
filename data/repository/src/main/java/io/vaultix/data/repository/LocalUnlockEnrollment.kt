@@ -8,11 +8,8 @@
  */
 package io.vaultix.data.repository
 
-import android.content.Context
-import android.net.Uri
-import dagger.hilt.android.qualifiers.ApplicationContext
 import io.vaultix.data.kdbx.Kdbx
-import io.vaultix.data.kdbx.KdbxSource
+import io.vaultix.data.repository.kdbx.KdbxFileSourceResolver
 import io.vaultix.datastore.LocalUnlockKeyStore
 import io.vaultix.datastore.SecureCredentialStore
 import io.vaultix.datastore.VaultixPreferences
@@ -85,21 +82,16 @@ class LocalUnlockEnrollment @Inject constructor(
     private val localUnlockKeyStore: LocalUnlockKeyStore,
     private val vaultDao: VaultDao,
     private val preferences: VaultixPreferences,
-    @ApplicationContext context: Context,
-) {
-
     /**
-     * KDBX 文件读取器（SAF `content://` URI → 字节）。
+     * 「origin ⇒ 文件来源」的解析。
      *
-     * 与 [VaultRepositoryImpl] / [PinEnrollment] 里那两份是**同一个 lambda 的复制**。
-     * 刻意不复用：那些是各自的私有字段，为了共享而把它提升成公开 API，
-     * 等于把"仓储怎么读文件"变成对外契约，比重复这三行更贵。
+     * ⚠️ 本类曾经自带一个只认 SAF `content://` 的 `KdbxSource` lambda —— 于是
+     * `webdav:` / `onedrive:` 的库在这里**校验永远失败**，用户看到的是
+     * "主密码不正确"（真因是文件根本读不到）。2026-09-17 起改走与读写两侧**同一张**
+     * 判别表（见 [KdbxFileSourceResolver] 的 KDoc：那张表只能有一份）。
      */
-    private val kdbxSource = KdbxSource { uri ->
-        runCatching {
-            context.contentResolver.openInputStream(Uri.parse(uri))?.use { it.readBytes() }
-        }.getOrNull()
-    }
+    private val kdbxFileSources: KdbxFileSourceResolver,
+) {
 
     /**
      * 一个库「认证通过后要包进信封」的备料。
@@ -208,35 +200,42 @@ class LocalUnlockEnrollment @Inject constructor(
         }
     }
 
-    /** KDBX 的认证前备料：先校验，过了才把「主密码 + keyfile」组装好暂放在返回值里。 */
+    /**
+     * KDBX 的认证前备料：先校验，过了才把「主密码 + keyfile」组装好暂放在返回值里。
+     *
+     * ⚠️ 2026-09-17：来源解析从"旧 `KdbxSource`（只认 SAF）"换成 [KdbxFileSourceResolver]。
+     * 那之前，网盘库在这里**必然校验失败**（文件根本读不到），而用户看到的却是
+     * 「主密码不正确」—— 一条指向完全错误方向的提示。
+     */
     private suspend fun prepareKdbx(
         vaultId: String,
         displayName: String,
         originUri: String,
         masterPassword: String,
     ): LocalUnlockPrepareOutcome {
+        val source = kdbxFileSources.fileSourceFor(originUri)
+            ?: return LocalUnlockPrepareOutcome.SourceUnavailable("这个库还没有可用的文件来源")
         val keyFileUri = keyFileUriOf(vaultId)
+        // keyfile 与库文件走同一套解析；读不到会是 null，届时 `verify` 自然验不过
+        // （不是降级成"仅主密码"，而是**如实**：少一个 keyfile 字节就是开不了）。
+        val keyFileBytes = kdbxFileSources.readBytes(keyFileUri)
         // ★ 先校验、后组装。`wrap` 只负责封字节、不管字节对不对：先包后校会得到
         //   「启用成功、但躺的是错密码」，用户要到解锁时才发现打不开。
         val verified = Kdbx.verify(
-            sourceUri = originUri,
+            source = source,
             password = masterPassword,
-            keyFileUri = keyFileUri,
-            source = kdbxSource,
+            keyFileBytes = keyFileBytes,
         )
         if (!verified) {
             // 校验不过有两种可能：密码错，或文件读不到。分辨它们对用户很重要 ——
-            // 前者该重输，后者该重新选文件（`KdbxSource.read` 读不到会返回 null）。
-            val readable = kdbxSource.read(originUri) != null
+            // 前者该重输，后者该重新选文件（读不到时 `KdbxFileSource.read` 会抛）。
+            val readable = runCatching { source.read() }.isSuccess
             return if (readable) {
                 LocalUnlockPrepareOutcome.InvalidCredentials
             } else {
                 LocalUnlockPrepareOutcome.SourceUnavailable("读不到该库文件，请重新选择")
             }
         }
-        val keyFileBytes = keyFileUri
-            ?.takeIf { it.isNotBlank() }
-            ?.let { uri -> runCatching { kdbxSource.read(uri) }.getOrNull() }
         // ⚠️ keyfile 读不出来时**拒绝**而不是降级成"仅主密码"：keyfile 不是可选装饰，
         //    少它一个字节就是开不了。静默降级会让信封里躺一组永远解不开的凭据，
         //    而用户只会看到"指纹不对"，无从得知真因。（与 `PinEnrollment.enrollKdbx` 同款取向）
@@ -428,10 +427,15 @@ class LocalUnlockEnrollment @Inject constructor(
         discardStagedPayload()
     }
 
-    /** 读 keyfile 字节（只包 URI 不行：授权可能失效、用户可能换过文件）。 */
-    private fun readKeyFileBytes(keyFileUri: String?): ByteArray? = keyFileUri
-        ?.takeIf { it.isNotBlank() }
-        ?.let { uri -> runCatching { kdbxSource.read(uri) }.getOrNull() }
+    /**
+     * 读 keyfile 字节（只包 URI 不行：授权可能失效、用户可能换过文件）。
+     *
+     * ⚠️ 改 `suspend` 是 2026-09-17 迁移的连带结果：来源解析统一走
+     * [KdbxFileSourceResolver]，而它的签名是挂起的（网盘来源要走网络，
+     * 将来 keyfile 也可能放到网盘上）。调用点都在 `withContext(Dispatchers.IO)` 里。
+     */
+    private suspend fun readKeyFileBytes(keyFileUri: String?): ByteArray? =
+        kdbxFileSources.readBytes(keyFileUri)
 }
 
 /**

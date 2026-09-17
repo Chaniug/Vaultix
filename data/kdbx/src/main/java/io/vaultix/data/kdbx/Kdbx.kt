@@ -23,6 +23,7 @@ package io.vaultix.data.kdbx
 import io.vaultix.model.VaultFolder
 import io.vaultix.model.VaultItem
 import java.io.File
+import kotlinx.coroutines.CancellationException
 
 /** 打开 KDBX 的失败原因（UI 据此给可执行文案）。 */
 sealed interface KdbxOpenError {
@@ -66,59 +67,70 @@ data class KdbxUnlockedContent(
 )
 
 /**
- * KDBX 库源：把「一个 URI」变成「文件字节」。
- *
- * 抽象成接口的原因：`data:kdbx` 是**纯逻辑模块**（只依赖 core:*，不碰 Android 框架），
- * 因此它不知道 `ContentResolver`；由 `data:repository`（Android 侧）实现本接口后注入。
- * 附带好处：阶段 A 的全部单测都能直接喂 `ByteArray`，不需要真机存储。
- */
-fun interface KdbxSource {
-    /**
-     * 读取该库的原始字节。
-     *
-     * @return 读不到返回 null（授权失效 / 文件不存在）—— 调用方据此给出
-     *   「请重新选择文件」而不是「密码错误」。
-     */
-    fun read(sourceUri: String): ByteArray?
-}
-
-/**
  * KDBX 引擎门面（阶段 A：只读）。
  *
  * 会话按 vaultId 存在内存里；[lock] 即丢弃（明文的可达路径随之中断）。
+ *
+ * ## ★ 库源只有一个入口：[KdbxFileSource]（2026-09-17 收口）
+ *
+ * 本文件曾经另有一个 `fun interface KdbxSource { fun read(sourceUri: String): ByteArray? }`，
+ * 只服务读路径。它被**删除**了，原因不是"多余"，而是**它把来源压成了一个 SAF URI**：
+ * 唯一实现是 `ContentResolver.openInputStream(Uri.parse(uri))` ⇒ 把 `"webdav:…"` /
+ * `"onedrive:…"` 交给它必然读不到 ⇒ 网盘库**加不进来也解锁不了**（方案 §16.1）。
+ *
+ * ⚠️ **判据**：读路径按 `kind` 分流了，**写路径就必须同时分流** —— 反过来一样。
+ * 只要还留着一个"只认 SAF"的读入口，那条路就一定会在某个新来源上失效，
+ * 且失效方式是**静默读到 null**（不报错）。⇒ 所以宁可删掉，不留第二份真相。
  */
 object Kdbx {
     /** 引擎标识（诊断日志用）。 */
     const val ENGINE_NAME: String = "kotpass"
 
     /**
-     * 用主密码（可选 keyfile）打开 [sourceUri] 指向的库，并登记为 [vaultId] 的会话。
+     * 用主密码（可选 keyfile）打开 [source] 指向的库，并登记为 [vaultId] 的会话。
      *
      * 成功即覆盖同 id 的旧会话（换文件 / 换密码重开时不会残留旧明文）。
      *
-     * @param keyFileBytes keyfile **内容**（优先于 [keyFileUri]）。快速解锁场景下
-     *   keyfile 是从包裹物里解出来的字节，**没有 URI 可读**；若为了走 URI 参数而把
-     *   它落成临时文件，等于把明文写盘 —— 与「明文绝不落盘」的约定直接冲突。
-     *   因此这里直接支持字节输入：**有字节就用字节，没有才去读 URI**。
+     * ## 为什么参数是"一个来源对象"而不是"URI + 读取器"（2026-09-17 迁移）
+     *
+     * 旧签名是 `unlock(vaultId, sourceUri, password, keyFileUri, source: KdbxSource)`。
+     * 问题不在"参数多"，而在 `KdbxSource` 的实现**只认 SAF `content://`** ——
+     * 于是 `"webdav:…"` 传进来必然读不到，网盘库点了「解锁」什么都不会发生
+     * （方案 §16.1 记录的就是这个）。⇒ 收口成"传一个来源对象"，
+     * 由来源自己知道该去哪儿读、该怎么把失败翻译成人话。
+     *
+     * ## keyfile 为什么只能走字节（`keyFileUri` 参数已消失）
+     *
+     * ① 快速解锁 / PIN 场景下 keyfile 是**从包裹物里解出来的字节**，根本没有 URI 可读；
+     * ② 就算有 URI，为了走 URI 而把它落成临时文件等于把明文写盘，
+     *   与「明文绝不落盘」的约定直接冲突；
+     * ③ 既然 ① 已经要求"字节优先"，再留一条 URI 分支只会让两条路继续漂。
+     * ⇒ 由调用方用**另一个** [KdbxFileSource] 实例把 keyfile 读成字节再传进来
+     *   （SAF 场景下 keyfile 也是 `content://`，解析方式与库文件完全相同）。
+     *
+     * @param source 库文件的来源（本地 SAF / WebDAV / OneDrive）。它失败时**抛异常**
+     *   （见 [KdbxFileSource.read] 的约定），这里统一翻译成
+     *   [KdbxOpenError.SourceUnavailable] —— 用户的动作是"重选文件 / 查网络与账号"，
+     *   而不是"重输密码"。
      */
-    fun unlock(
+    @Suppress("TooGenericExceptionCaught") // 来源可能是 IO / 网络 / HTTP，异常族无法穷举
+    suspend fun unlock(
         vaultId: String,
-        sourceUri: String,
+        source: KdbxFileSource,
         password: String,
-        keyFileUri: String?,
-        source: KdbxSource,
         keyFileBytes: ByteArray? = null,
     ): Result<KdbxUnlockedContent> {
-        val bytes = source.read(sourceUri)
-            ?: return Result.failure(
-                KdbxFailure(KdbxOpenError.SourceUnavailable("无法读取该库文件，请重新选择")),
-            )
-        // 字节优先：包裹物解出的 keyfile 没有可读的 URI。
-        val resolvedKeyFileBytes = keyFileBytes
-            ?: keyFileUri?.let { uri -> source.read(uri) }
-            ?: null
+        val bytes = try {
+            source.read()
+        } catch (cancelled: CancellationException) {
+            // ⚠️ 取消**不是**"读不到"：把它伪装成 SourceUnavailable 会让用户看到
+            //    "文件读不到，请重新选择"，而真因只是页面被关掉了。
+            throw cancelled
+        } catch (error: Exception) {
+            return Result.failure(readFailure(error))
+        }
 
-        val opened = KdbxOpener.open(bytes = bytes, password = password, keyFileBytes = resolvedKeyFileBytes)
+        val opened = KdbxOpener.open(bytes = bytes, password = password, keyFileBytes = keyFileBytes)
         val session = opened.getOrElse { error ->
             return Result.failure(
                 error as? KdbxFailure ?: KdbxFailure(KdbxOpenError.Unknown(error.message.orEmpty())),
@@ -136,7 +148,7 @@ object Kdbx {
     }
 
     /**
-     * **只校验凭据、不开库**：这组主密码 / keyfile 能不能打开 [sourceUri]？
+     * **只校验凭据、不开库**：这组主密码 / keyfile 能不能打开 [source]？
      *
      * ## 为什么需要一个"只验不开"的入口（2026-09-16）
      *
@@ -157,23 +169,50 @@ object Kdbx {
      * ⚠️ **不要把它实现成 `unlock()` 包一层 try**：那正是上面第 2 条要避免的
      * 「副作用泄漏到校验路径」。校验必须是**无副作用**的。
      *
-     * @return 凭据对不对。文件读不到 / 不是 KDBX 文件等也一律算"不通过"——
-     *   调用方关心的是「能不能用这组凭据开库」，具体原因不影响它要不要包裹。
+     * ## 为什么读失败也返回 `false`（而不是抛）
+     *
+     * 调用方关心的是**能不能用这组凭据开库**，具体原因不影响它要不要包裹。
+     * 需要区分「密码错」与「文件读不到」的调用方（如设置页要给出不同提示）
+     * 自己再探一次即可 —— 见 `LocalUnlockEnrollment.prepareKdbx`。
+     *
+     * ⚠️ 这里用 `runCatching` 而不是显式 rethrow `CancellationException`（[unlock] 是显式的）：
+     * 取消落到 `false` 的后果只是"这次校验没通过"，调用方会退回让用户重输一次密码，
+     * **不会**产生任何假状态或数据风险；而 [unlock] 里把取消说成"文件读不到"会误导用户。
+     * 两者的代价不同，故处理方式刻意不同。
+     *
+     * @return 凭据对不对。文件读不到 / 不是 KDBX 文件等也一律算"不通过"。
      */
-    fun verify(
-        sourceUri: String,
+    suspend fun verify(
+        source: KdbxFileSource,
         password: String,
-        keyFileUri: String?,
-        source: KdbxSource,
+        keyFileBytes: ByteArray? = null,
     ): Boolean {
-        val bytes = source.read(sourceUri) ?: return false
-        val keyFileBytes = keyFileUri?.takeIf { it.isNotBlank() }?.let { uri -> source.read(uri) }
+        val bytes = runCatching { source.read() }.getOrNull() ?: return false
         return KdbxOpener.open(
             bytes = bytes,
             password = password,
             keyFileBytes = keyFileBytes,
         ).isSuccess
     }
+
+    /**
+     * 把「来源读不到」翻译成一句**用户能照着做**的话。
+     *
+     * 单独抽出来的理由：三个来源（SAF / WebDAV / OneDrive）的失败类型完全不同
+     * （`FileNotFoundException` / `IOException` / HTTP 4xx…），而它们的**用户动作
+     * 是同一件事** —— 「检查这个文件还能不能读到」。翻译规则只写一处，
+     * 将来加第四个来源时不会漏掉某条分支。
+     *
+     * ⚠️ 优先用来源自带的消息（`SafKdbxFileSource` 给的是"授权可能已失效，请重新选择"，
+     * WebDAV 给的是"账号或密码不对"），只有它空着时才用兜底句 ——
+     * 那才是真正对用户有用的信息，别用兜底句盖掉它。
+     */
+    private fun readFailure(error: Exception): KdbxFailure = KdbxFailure(
+        KdbxOpenError.SourceUnavailable(
+            error.message?.takeIf { it.isNotBlank() } ?: "无法读取该库文件，请重新选择",
+        ),
+        error,
+    )
 
     /** 已登记的会话内容（未解锁 / 已锁返回 null）。 */
     fun contentOf(vaultId: String): KdbxUnlockedContent? = KdbxSessionStore.get(vaultId)?.let { session ->

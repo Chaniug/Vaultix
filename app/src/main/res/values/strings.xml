@@ -44,6 +44,37 @@
     <!-- 成功反馈（issue #94）：重复添加同一文件会覆盖同一行、列表零变化，必须说明。 -->
     <string name="add_kdbx_added">已添加密码库</string>
     <string name="add_kdbx_updated">该文件已在列表中，已更新</string>
+
+    <!-- 从网盘添加 KDBX 库（WebDAV / OneDrive，方案 §16.3 / §16.4） -->
+    <string name="vault_add_cloud">从网盘添加</string>
+    <string name="vault_add_cloud_desc">打开 NAS（WebDAV）或 OneDrive 上已有的 .kdbx 文件</string>
+    <string name="add_cloud_title">从网盘添加</string>
+    <string name="add_cloud_subtitle">连接网盘后选中已有的 .kdbx 文件。账号密码只加密存在本机，库文件仍在网盘上。</string>
+    <string name="add_cloud_provider_webdav">WebDAV</string>
+    <string name="add_cloud_provider_onedrive">OneDrive</string>
+    <string name="add_cloud_server">服务器地址</string>
+    <string name="add_cloud_server_hint">填到库文件所在的目录，例如 https://nas.local:5006/dav/</string>
+    <string name="add_cloud_username">账号</string>
+    <string name="add_cloud_password">密码</string>
+    <!-- 明文 HTTP 只提示、不阻拦：局域网 NAS 用 http 是常态，拦下来会让功能对这些人直接不可用。 -->
+    <string name="add_cloud_insecure_http">注意：这是明文 HTTP，账号密码在局域网内以明文传输。公网地址请改用 HTTPS。</string>
+    <string name="add_cloud_connect">连接并浏览</string>
+    <string name="add_cloud_connecting">正在连接…</string>
+    <string name="add_cloud_onedrive_hint">登录 Microsoft 账号后浏览 OneDrive 根目录，选中已有的 .kdbx 文件。</string>
+    <string name="add_cloud_onedrive_signin">使用 Microsoft 账号登录</string>
+    <string name="add_cloud_onedrive_signed_in">已登录：%1$s</string>
+    <string name="add_cloud_onedrive_switch">切换账号</string>
+    <string name="add_cloud_onedrive_signout">注销</string>
+    <string name="add_cloud_dir_root">根目录</string>
+    <string name="add_cloud_up">上一级</string>
+    <string name="add_cloud_reconfigure">重新配置</string>
+    <string name="add_cloud_dir_empty">这个目录里没有 .kdbx 文件</string>
+    <string name="add_cloud_entry_folder">文件夹</string>
+    <string name="add_cloud_master_password">数据库主密码</string>
+    <string name="add_cloud_submit">添加到密码库</string>
+    <string name="add_cloud_working">正在读取云端数据库…</string>
+    <string name="add_cloud_added">已添加该网盘库</string>
+    <string name="add_cloud_updated">该库已在列表中，已更新</string>
     <string name="vault_badge_unlocked">已解锁</string>
     <string name="vault_badge_locked">已锁定</string>
     <!-- ⚠️ 本地 KDBX 库当前只读（M2 阶段 A 无写回，见 .ai/ISSUES.md #106）。
@@ -106,6 +137,9 @@
     <string name="error_fields_missing">请填写邮箱和主密码</string>
     <string name="error_invalid_server">服务器地址需以 http(s):// 开头</string>
     <string name="error_invalid_credentials">邮箱或主密码不正确</string>
+    <!-- KDBX（KeePass 文件）没有"邮箱"这个概念：对这类库必须换一句，
+         否则用户读到的是一句指向不存在字段的话（ErrorText 的 forKdbx 用它）。 -->
+    <string name="error_kdbx_password">主密码不正确</string>
     <string name="error_account_not_found">该邮箱尚未注册（官方 Bitwarden 未找到此账号）</string>
     <string name="error_two_factor_invalid">验证码错误或已过期，请重新输入</string>
     <string name="error_network">无法连接服务器，请检查网络后重试</string>

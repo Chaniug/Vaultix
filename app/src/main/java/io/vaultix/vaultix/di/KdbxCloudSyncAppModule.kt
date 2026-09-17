@@ -12,7 +12,7 @@
  * | 缺的是什么 | 为什么 data 层给不了 | 在这里怎么补 |
  * |---|---|---|
  * | OneDrive 来源 | 需要 MSAL（`OneDriveAuthManager` 就在 app） | `@Provides KdbxFileSource.Factory` |
- * | WebDAV 凭据 | 账号密码存 `SecureCredentialStore`，键格式是 app 约定 | `@Provides WebDavCredentialLookup` |
+ * | WebDAV 凭据 | 账号密码存 `SecureCredentialStore`（读写格式见 [WebDavCredentialStore]） | `@Provides WebDavCredentialLookup` |
  * | 会话替换 | 免密重开要 app 侧的快解锁凭据信封 | `@Provides KdbxSessionReplacer` |
  *
  * ⚠️ 这里**不**提供 `OkHttpClient` —— 那是 `data:bitwarden` 的 `NetworkModule` 已经在
@@ -37,9 +37,8 @@ import io.vaultix.data.kdbx.KdbxFileSource
 import io.vaultix.data.repository.kdbx.KdbxCloudSyncCoordinator
 import io.vaultix.data.repository.kdbx.KdbxSessionReplacer
 import io.vaultix.data.repository.kdbx.WebDavCredentialLookup
-import io.vaultix.data.repository.kdbx.WebDavCredentials
-import io.vaultix.datastore.SecureCredentialStore
 import io.vaultix.vaultix.remote.onedrive.OneDriveKdbxFileSource
+import io.vaultix.vaultix.remote.webdav.WebDavCredentialStore
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -63,28 +62,21 @@ object KdbxCloudSyncAppModule {
     /**
      * WebDAV 凭据查询。
      *
-     * ⚠️ 键格式（`webdav_credential::<credentialId>`）与 [WebDavCredentials] 的
-     * 序列化格式**必须**是这里说了算：账号密码以 `账号\n密码` 明文形态交给
-     * [SecureCredentialStore]，由后者用 Keystore 里的不可导出密钥做 AES-GCM 包装。
-     * 换句话说，**明文只在内存里存在一瞬间**，落盘的是密文。
+     * ★ 2026-09-17：读侧的"键格式 + `\n` 解析"**整体搬进了 [WebDavCredentialStore]**，
+     * 这里只剩一次转发。原因：配置 UI 要**写**同一份凭据，而写侧若自己拼一次
+     * `"$user\n$pass"`，两处格式就有漂移空间 —— 而那个错**没有任何报错**，
+     * 表现是"配置成功了但每次连接都说找不到凭据"。
+     * ⇒ 序列化与反序列化必须同处一地（见该类文件头）。
      *
-     * ⚠️ 用 `\n` 而不是 `:` 分隔：WebDAV 用户名**可以**含 `:`（域账号 `DOMAIN\user`
-     * 或 `user:sub` 都有），拿 `:` 当分隔符会在那种账号上静默截断密码。
-     * 而 `\n` 不可能是 HTTP Basic 用户名的一部分（header 里出现裸换行就是请求走私，
-     * 合法的用户名不可能含它）。
+     * ⚠️ 注意这里**拿不到** `credentialId` 之外的任何东西：origin 里只有它，
+     * 账号密码一律现取（用户可能刚改过密码）。
      */
     @Provides
     @Singleton
     fun provideWebDavCredentialLookup(
-        credentials: SecureCredentialStore,
+        store: WebDavCredentialStore,
     ): WebDavCredentialLookup = WebDavCredentialLookup { credentialId ->
-        val raw = credentials.getString(webDavCredentialKey(credentialId)) ?: return@WebDavCredentialLookup null
-        val separator = raw.indexOf('\n')
-        if (separator <= 0) return@WebDavCredentialLookup null
-        WebDavCredentials(
-            username = raw.substring(0, separator),
-            password = raw.substring(separator + 1),
-        )
+        store.read(credentialId)
     }
 
     /**
@@ -112,8 +104,6 @@ object KdbxCloudSyncAppModule {
             IllegalStateException("云端已更新。请先锁定并重新解锁该密码库，再执行同步。"),
         )
     }
-
-    internal fun webDavCredentialKey(credentialId: String): String = "webdav_credential::$credentialId"
 }
 
 /**
