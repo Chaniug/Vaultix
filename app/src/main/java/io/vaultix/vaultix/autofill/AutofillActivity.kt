@@ -15,6 +15,9 @@ import android.app.Activity
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import androidx.annotation.RequiresApi
+import androidx.credentials.provider.PendingIntentHandler
+import io.vaultix.vaultix.passkey.CredentialProviderEntryBuilder
 import android.view.autofill.AutofillManager
 import android.widget.Toast
 import androidx.compose.foundation.background
@@ -47,6 +50,7 @@ import dagger.hilt.android.AndroidEntryPoint
 import io.vaultix.common.OtpUriParser
 import io.vaultix.common.TotpGenerator
 import io.vaultix.datastore.VaultixPreferences
+import io.vaultix.domain.UnlockResult
 import io.vaultix.domain.VaultRepository
 import io.vaultix.domain.VaultSessionRepository
 import io.vaultix.vaultix.MainActivity
@@ -114,6 +118,17 @@ class AutofillActivity : FragmentActivity() {
     @Inject
     lateinit var candidates: AutofillCandidateSource
 
+    /**
+     * CP 解锁动作的**收尾**要用它重建候选列表。
+     *
+     * ⚠️ 依赖方向是从 autofill 指向 passkey（`CredentialProviderEntryBuilder`）——
+     * 这是有意的：那套构建逻辑原本私有在 CP 服务里，而**收尾必须由解锁 Activity 做**
+     * （系统不会回来重查，见 `finishCredentialFlowUnlocked` 的 KDoc）。
+     * 与其复制一份，不如让两边共用同一个构建器。
+     */
+    @Inject
+    lateinit var credentialEntryBuilder: CredentialProviderEntryBuilder
+
     private var biometricPrompt: BiometricPrompt? = null
 
     /** MODE_UNLOCK 下先隐藏卡片、等本地解锁判定；无可判定回退时再亮卡片。 */
@@ -136,11 +151,19 @@ class AutofillActivity : FragmentActivity() {
      * CP 的认证动作是**两段式**：用户完成认证后，系统会**重新调用**
      * `onBeginGetCredentialRequest`。因此这条流程里**没有、也不可能有**
      * [PendingFillStore] 暂存 —— 暂存只由 autofill 的 `onFillRequest` 写入。
-     * 解锁完只需 `finish()`，让系统重新取一次候选。
      *
-     * ⚠️ 不区分这条流程会形成**无限解锁环**：`prepareBiometricUnlock()` 返回 `Ready` 时
+     * ## ⚠️ 2026-09-17 更正：这里**不能**只 `finish()`
+     *
+     * 原文写的是"解锁完只需 `finish()`，让系统重新取一次候选" —— **那是错的**，
+     * 而且是一个真机可见的死循环的根因：系统是否重列候选，取决于这次
+     * `AuthenticationAction` 的 PendingIntent **回没回 `RESULT_OK`**；
+     * 只 `finish()` 等于回 `RESULT_CANCELED`，面板会判成"动作没完成"并**重发**。
+     * ⇒ 收尾一律走 [finishCredentialFlowUnlocked]（实证与完整时间线见它的 KDoc）。
+     *
+     * 原文还正确记录过一次同族问题（"[解锁环]：`prepareBiometricUnlock()` 返回 `Ready` 时
      * 会去 `deliverPendingFill()`，而 `takeValid()` 恒为 null ⇒ finish 不带任何结果 ⇒
-     * 系统重列候选时若判据未变 ⇒ 再次弹解锁。真机表现即用户说的「**反复让人解锁**」。
+     * 系统重列候选时若判据未变 ⇒ 再次弹解锁"）—— 当年的修法是"CP 就跳过 `deliverPendingFill`"，
+     * 但**漏掉了"跳过"之后仍然要给一个正向结果**。这次补上。
      */
     private val credentialFlow: Boolean by lazy { AutofillIntents.isCredentialFlow(intent) }
 
@@ -217,6 +240,117 @@ class AutofillActivity : FragmentActivity() {
         return unlocked.any { sessionRepository.isViewLocked(it) }
     }
 
+    /** 现在是否至少有一个库是解锁的（CP 收尾判断"这次解锁到底成没成"用）。 */
+    private suspend fun isAnyVaultUnlocked(): Boolean =
+        runCatching { vaultRepository.observeUnlockedVaultIds().first().isNotEmpty() }
+            .getOrDefault(false)
+
+    /**
+     * CP（凭据提供商）流程的**成功**收尾：先回 `RESULT_OK` 再 finish。
+     *
+     * ## 为什么必须回 OK，不能只 `finish()`（2026-09-17 真机实证）
+     *
+     * 库锁定时的解锁入口是一条 `AuthenticationAction`，它的 `PendingIntent` 指向本 Activity。
+     * **Credential Manager 用这次 PendingIntent 的 `resultCode` 判断"用户完成认证动作了吗"**：
+     *
+     * | 收尾方式 | 系统的判断 | 后果 |
+     * |---|---|---|
+     * | `RESULT_OK` | 动作完成 | **重新调用** `onBeginGetCredentialRequest`，那时库已解锁、正常列出通行密钥 |
+     * | 其他（默认 `RESULT_CANCELED`） | 动作**没完成** | **重发同一个 PendingIntent** |
+     *
+     * ⚠️ 本 Activity 的解锁路径全是"秒创建秒 finish"（[BiometricUnlockOutcome.Ready] 分支尤其快），
+     * 配上 CANCELED 就成了一个 **~2 次/秒的重发循环** —— 用户看到的正是
+     * 「明明解锁过了，还是不停让我解锁」。
+     *
+     * 实测日志（荣耀 BKQ-AN00 · Edge · 2026-09-17，`adb logcat` tag=`VaultixAutofill`）：
+     * ```
+     * 17:48:42.027  CP GET locked → authenticationActions     （面板弹出「解锁 Vaultix」）
+     * 17:48:45.375  unlockAllAndFinish: 认证成功 first=… rest=1（★ 库真的解锁了）
+     * 17:48:46.7 ~ 17:49:00.9  maybeBiometricUnlock: outcome=Ready  × 22
+     * 同期 ActivityTaskManager：23 次
+     *   START … cmp=…/.autofill.AutofillActivity with LAUNCH_MULTIPLE
+     *   (realCallingUid=10165 = com.google.android.gms:identitycredentials)
+     * ```
+     * `realCallingUid` 就是那个凭据面板进程 —— **重发者是面板本身**，不是我们的代码在循环。
+     *
+     * ## 也解释了用户说的"刷新页面就好了"
+     *
+     * 刷新会发起**全新的** `getCredential`，重新走一次 `onBeginGetCredentialRequest`，
+     * 绕开了这个卡死的认证动作 ⇒ 立刻正常。
+     *
+     * ## 上游对照
+     *
+     * Bastion 的解锁 `PendingIntent` 落在 `CredentialProviderActivity`（trampoline），
+     * 而那个 trampoline 会 `setResult(result.resultCode, result.data)` **原样透传**结果 ——
+     * 契约完全相同，只是载体不同。Vaultix 的载体就是本 Activity，所以结果得由**这里**给出。
+     */
+    private suspend fun finishCredentialFlowUnlocked() {
+        // minSdk 26：CP 只可能在 34+ 发生；这里显式判一次 API 既为 lint `NewApi`，
+        // 也把"低版本走不到这条路"写在代码里而不是靠注释约定。
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            finishWithRefreshedEntries()
+        } else {
+            finish()
+        }
+    }
+
+    /**
+     * CP 解锁动作的收尾：**把刷新后的候选列表塞进结果 Intent**，再以 `RESULT_OK` 收工。
+     *
+     * ## 为什么结果里必须带候选（2026-09-17 真机实证，这是本条 bug 的第二层）
+     *
+     * 加了 `RESULT_OK` 之后循环停了，但用户看到的是「**Vaultix 没有任何登录信息**，
+     * 得手动把面板关掉再来一次才有通行密钥」。原因：
+     *
+     * > **系统在认证动作完成后不会重新调用 `onBeginGetCredentialRequest`。**
+     *
+     * 日志实证（荣耀 BKQ-AN00 / Edge）：
+     * ```
+     * CP GET locked → authenticationActions      ← 面板弹出「解锁 Vaultix」
+     * fanout first=… → Success                   ← 指纹过了，库真的解锁了
+     * （之后再没有任何 CP GET 这一行）
+     * ```
+     * ⇒ 面板手里还是那份「只有解锁动作、没有候选」的旧响应。**刷新后的列表只能由我们
+     *   放进结果 Intent**：`PendingIntentHandler.setBeginGetCredentialResponse(...)`。
+     *
+     * ## 上游 Bitwarden 正是这么做的
+     *
+     * 它的解锁 `PendingIntent` 落在 `CredentialProviderActivity`（trampoline），
+     * 由 `CredentialProviderCompletionManagerImpl.completeProviderGetCredentialsRequest`
+     * 调 `PendingIntentHandler.setBeginGetCredentialResponse(...)` + `setResult(RESULT_OK)`；
+     * 那个方法由**解锁页 / 条目列表页**在解锁成功后调用 —— 所以它"一次指纹进去"。
+     * 它同时还 `setAuthenticationActions(emptyList())` 清掉解锁动作，
+     * 我们的构建器在非锁定分支已经这么做了（见 `CredentialProviderEntryBuilder`）。
+     *
+     * ## 拿不到原始请求时怎么办
+     *
+     * 回一个**空的 `RESULT_OK`**（不塞 payload）—— 那是诚实的降级：面板会收起，
+     * 用户重触发一次就能拿到候选。⚠️ **不要**回 `RESULT_CANCELED`：
+     * 那会让面板判成"认证动作没完成"并**不停重发**（2026-09-17 实测 23 次）。
+     */
+    @RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+    private suspend fun finishWithRefreshedEntries() {
+        val request = credentialEntryBuilder.pendingUnlockRequest
+        val response = request?.let { pending ->
+            runCatching { credentialEntryBuilder.buildGetResponse(pending) }.getOrNull()
+        }
+        // 请求对象用完即清（它只服务这一轮解锁动作）。
+        credentialEntryBuilder.clearPendingUnlockRequest()
+
+        val intent = Intent()
+        if (response != null) {
+            PendingIntentHandler.setBeginGetCredentialResponse(intent, response)
+            AutofillLogger.d(
+                "CP unlock → 回灌候选 entries=${response.credentialEntries.size} " +
+                    "actions=${response.authenticationActions.size}",
+            )
+        } else {
+            AutofillLogger.d("CP unlock → 无暂存请求，回空结果（用户需再触发一次）")
+        }
+        setResult(Activity.RESULT_OK, intent)
+        finish()
+    }
+
     override fun finish() {
         biometricPrompt?.cancelAuthentication()
         biometricPrompt = null
@@ -286,7 +420,10 @@ class AutofillActivity : FragmentActivity() {
                 // 行为上与直接 finish 等价，但会把「无暂存」伪装成「回灌失败」，日志难读。
                 BiometricUnlockOutcome.Ready ->
                     withContext(Dispatchers.Main) {
-                        if (credentialFlow) finish() else deliverPendingFill()
+                        // ⚠️ CP 流程**必须回 `RESULT_OK`，不能只 finish** ——
+                        //    否则面板把这次解锁动作当成"没完成"并**不停重发**
+                        //    PendingIntent。实证见 [finishCredentialFlowUnlocked]。
+                        if (credentialFlow) finishCredentialFlowUnlocked() else deliverPendingFill()
                     }
 
                 is BiometricUnlockOutcome.Prompt -> withContext(Dispatchers.Main) {
@@ -340,21 +477,50 @@ class AutofillActivity : FragmentActivity() {
                 "credentialFlow=$credentialFlow",
         )
         lifecycleScope.launch(Dispatchers.IO) {
-            unlockAll(pending, cipher)
+            val result = unlockAll(pending, cipher)
+            AutofillLogger.d(
+                "unlockAllAndFinish: 解封结果 first=${result.first::class.simpleName} " +
+                    "opened=${result.restOpened} failed=${result.restFailed}",
+            )
             withContext(Dispatchers.Main) {
-                // CP 流程无暂存可回灌：解锁即收工，让系统重新取候选。
-                if (credentialFlow) finish() else deliverPendingFill()
+                when {
+                    // CP 流程无暂存可回灌：解锁**成功**就回 RESULT_OK 收工
+                    // （见 finishCredentialFlowUnlocked 的 KDoc —— 少了它面板会死循环）。
+                    credentialFlow && result.first == UnlockResult.Success ->
+                        finishCredentialFlowUnlocked()
+
+                    // 认证过了但解封失败（KEK 失效 / 主密码被改过）：**不能谎报成功**，
+                    // 保持默认的 CANCELED 让用户重试或改走主密码。
+                    credentialFlow -> {
+                        AutofillLogger.d(
+                            "CP 解封未成功（first=${result.first::class.simpleName}）→ 不回 OK",
+                        )
+                        finish()
+                    }
+
+                    else -> deliverPendingFill()
+                }
             }
         }
     }
 
-    /** 解封首个库，随后趁 KEK 授权窗口解封其余已启用库（两处解锁路径共用）。 */
-    private suspend fun unlockAll(pending: PendingBiometricUnlock, cipher: Cipher) {
+    /**
+     * 解封首个库，随后趁 KEK 授权窗口解封其余已启用库（两处解锁路径共用）。
+     *
+     * ★ 2026-09-17：**返回**解封结论（此前把 `LocalUnlockFanout.Result` 直接丢掉）。
+     * 丢掉它意味着"指纹过了但某个库根本没打开"这件事**没有任何出口** ——
+     * 调用方既不能如实告知用户，也没法在 CP 流程里决定该不该回 `RESULT_OK`
+     * （谎报成功会让面板重列候选、却仍是锁定态，用户更困惑）。
+     */
+    private suspend fun unlockAll(
+        pending: PendingBiometricUnlock,
+        cipher: Cipher,
+    ): LocalUnlockFanout.Result {
         // ★ 2026-09-16：与解锁页共用同一份实现（`LocalUnlockFanout`）。
         //   此前这里与 `UnlockViewModel` 各写一份"按库类型分流"，而那条分流一旦
         //   写错只会**静默失效**（KDBX 走 Bitwarden 那条路会解出错误语义）——
         //   两份实现意味着同一个坑埋两次，且很可能只修好一处。
-        LocalUnlockFanout.unlockAll(
+        return LocalUnlockFanout.unlockAll(
             repository = vaultRepository,
             first = pending.first,
             rest = pending.rest,
@@ -379,8 +545,24 @@ class AutofillActivity : FragmentActivity() {
             // ⚠️ 诊断埋点（2026-09-13）：用户报「指纹解锁完还要再解锁、且看不到条目」，
             // 而这条路径此前**完全没有日志** ⇒ 无法判断卡在哪一步。这些 d() 是常驻的，
             // 以后同类问题可直接靠 logcat（tag=VaultixAutofill）定位。
-            AutofillLogger.d("deliverPendingFill: 无有效暂存 → 不回灌直接收工")
-            finish()
+            //
+            // ★ 2026-09-17 补：CP 流程走到这里**是正常的**（它没有暂存，见 credentialFlow 的说明），
+            //   而且此时用户刚在主界面解锁完回来 ⇒ 必须回 `RESULT_OK`，
+            //   否则面板同样会不停重发解锁动作（与 [finishCredentialFlowUnlocked] 同因）。
+            //   ⚠️ 但要**核实**解锁真的成了：用户可能只是按返回键退回来了 ——
+            //   那时报 OK 就是"假成功"（面板重列候选 ⇒ 还是解锁入口 ⇒ 更困惑）。
+            val unlockedNow = if (credentialFlow) isAnyVaultUnlocked() else false
+            AutofillLogger.d(
+                "deliverPendingFill: 无有效暂存 → 收工（credentialFlow=$credentialFlow " +
+                    "unlockedNow=$unlockedNow）",
+            )
+            if (unlockedNow) {
+                // ⚠️ 与指纹路径**同款收尾**：必须带上刷新后的候选，否则用户看到的是
+                //    「Vaultix 没有任何登录信息」（见 finishWithRefreshedEntries 的 KDoc）。
+                finishCredentialFlowUnlocked()
+            } else {
+                finish()
+            }
             return
         }
         val parsed = pending.parsed

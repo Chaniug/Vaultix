@@ -12,6 +12,7 @@ import io.vaultix.domain.KdbxUnlockOutcome
 import io.vaultix.domain.UnlockResult
 import io.vaultix.domain.VaultRepository
 import io.vaultix.model.VaultKind
+import io.vaultix.vaultix.autofill.AutofillLogger
 import javax.crypto.Cipher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -75,7 +76,14 @@ internal object LocalUnlockFanout {
         rest: List<String>,
         cipher: Cipher,
     ): Result {
+        // ★ 诊断埋点（2026-09-17 补）：此前这里**一条日志都没有** ⇒ 出现
+        //   「指纹过了却又让人解锁」时，日志里只能看到 `AutofillActivity` 的
+        //   「认证成功」，看不到**解封到底成没成** —— 而那正是分辨
+        //   「KEK 解不开」与「解锁成功但系统没收到结果」的唯一分界。
+        //   排这条问题必须能量化到"哪个库、哪种结论"，否则只能猜。
+        AutofillLogger.d("fanout start first=$first rest=${rest.size}")
         val firstResult = completeByKind(repository, first, cipher)
+        AutofillLogger.d("fanout first=$first → ${describe(firstResult)}")
         var opened = 0
         var failed = 0
         for (id in rest) {
@@ -84,11 +92,29 @@ internal object LocalUnlockFanout {
             val next = runCatching { repository.prepareLocalUnlock(id) }.getOrNull()
             if (next == null) {
                 failed++
+                AutofillLogger.d("fanout rest=$id → 取不到 cipher（该库登记已失效），跳过")
                 continue
             }
-            if (completeByKind(repository, id, next) == UnlockResult.Success) opened++ else failed++
+            val outcome = completeByKind(repository, id, next)
+            if (outcome == UnlockResult.Success) opened++ else failed++
+            AutofillLogger.d("fanout rest=$id → ${describe(outcome)}")
         }
+        AutofillLogger.d(
+            "fanout done first=${describe(firstResult)} opened=$opened failed=$failed",
+        )
         return Result(first = firstResult, restOpened = opened, restFailed = failed)
+    }
+
+    /**
+     * [UnlockResult] 的可读描述（**不含任何密钥材料**）。
+     *
+     * `Unknown` 要带上那句 detail：KDBX 的"包裹的主密码已过时"与
+     * "文件读不到"都落在这一支，而那两者的用户动作完全不同。
+     */
+    private fun describe(result: UnlockResult): String = when (result) {
+        UnlockResult.Success -> "Success"
+        is UnlockResult.Unknown -> "Unknown(${result.detail})"
+        else -> result::class.simpleName.orEmpty()
     }
 
     /**
