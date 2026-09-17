@@ -71,6 +71,11 @@ retrofit = "2.11.0"
 okhttp = "4.12.0"
 retrofitSerialization = "1.0.0"
 
+# okio 单列（而不是靠 okhttp 传递）：data:repository 要在**不引入 okhttp** 的前提下
+# 声明“okhttp 的同代人”这一约束。传递依赖拿不到版本目录里的名字，只能硬编码版本串，
+# 那会在升 okhttp 时静默漂移。单列后 `libs.okio` 与 `libs.okhttp` 成对维护。
+okio = "3.9.0"
+
 # ---- OneDrive / Microsoft Graph（app 模块：KDBX 网盘同步）----
 # MSAL（Microsoft Authentication Library）走 **public client + PKCE**，**不配 client secret** ——
 # 移动端存不住 secret，配了才是错的做法（上游 Bastion 同样没配，可对照）。
@@ -192,6 +197,9 @@ retrofit-core = { group = "com.squareup.retrofit2", name = "retrofit", version.r
 retrofit-kotlinx-serialization = { group = "com.jakewharton.retrofit", name = "retrofit2-kotlinx-serialization-converter", version.ref = "retrofitSerialization" }
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
 okhttp-logging-interceptor = { group = "com.squareup.okhttp3", name = "logging-interceptor", version.ref = "okhttp" }
+# ⚠️ 用 `okio-jvm` 而不是 `okio`：`okio`（KMP 元数据 jar）里**没有** `okio.ByteString`
+# 等 JVM 实现类，拿它编译 kotpass 相关代码会报 `cannot access class 'ByteString'`。
+okio = { group = "com.squareup.okio", name = "okio-jvm", version.ref = "okio" }
 # Microsoft Graph 的调用**手写 OkHttp**（对齐 Bastion），故只要 MSAL 这一个新依赖。
 msal = { group = "com.microsoft.identity.client", name = "msal", version.ref = "msal" }
 androidx-credentials = { group = "androidx.credentials", name = "credentials", version.ref = "credential" }

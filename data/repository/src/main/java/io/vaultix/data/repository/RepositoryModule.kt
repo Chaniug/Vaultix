@@ -4,8 +4,10 @@ import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
+import io.vaultix.data.repository.kdbx.KdbxSyncRepositoryImpl
 import io.vaultix.domain.FolderRepository
 import io.vaultix.domain.ItemRepository
+import io.vaultix.domain.KdbxSyncRepository
 import io.vaultix.domain.VaultExportRepository
 import io.vaultix.domain.VaultRepository
 import io.vaultix.domain.VaultSessionRepository
@@ -41,4 +43,14 @@ interface RepositoryModule {
     @Binds
     @Singleton
     fun bindVaultExportRepository(impl: VaultExportRepositoryImpl): VaultExportRepository
+
+    /**
+     * KDBX 网盘同步。
+     *
+     * ⚠️ 独立绑定而不是并进 [VaultRepository]：后者实现类已**正好 40 个函数**
+     * （detekt `TooManyFunctions` 硬上限），再加就爆。见 `KdbxSyncRepository` 的说明。
+     */
+    @Binds
+    @Singleton
+    fun bindKdbxSyncRepository(impl: KdbxSyncRepositoryImpl): KdbxSyncRepository
 }

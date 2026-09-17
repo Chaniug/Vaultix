@@ -30,6 +30,28 @@ interface VaultDao {
     @Query("UPDATE vaults SET revisionDate = :revision WHERE id = :id")
     suspend fun updateRevision(id: String, revision: String?)
 
+    /**
+     * ★ 更新 KDBX 网盘同步状态（2026-09-17 新增）。
+     *
+     * 单独一个方法而不是让调用方 `upsert` 整个 VaultEntity：
+     * `upsert` 要求**手上有一份完整的实体**，而同步路径上只关心这三个字段 ——
+     * 用"读出来改一改写回去"的做法会有丢字段的风险
+     * （比如别人并发改了 displayName，就会被这次 upsert 覆盖回旧值）。
+     */
+    @Query(
+        """
+        UPDATE vaults
+        SET syncStatus = :status, remoteVersionToken = :versionToken, lastSyncedAt = :syncedAt
+        WHERE id = :id
+        """,
+    )
+    suspend fun updateSyncState(
+        id: String,
+        status: String?,
+        versionToken: String?,
+        syncedAt: Long?,
+    )
+
     @Query("DELETE FROM vaults WHERE id = :id")
     suspend fun delete(id: String)
 }

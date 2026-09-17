@@ -533,6 +533,45 @@ sealed interface VaultSyncReport {
 }
 
 /**
+ * KDBX 网盘同步的结果（映射自 data 层 `SyncOutcome`）。
+ *
+ * ## 为什么与 [VaultSyncReport] 分开
+ *
+ * Bitwarden 的同步是「服务端说了算」（revision 仲裁），KDBX 的是「条件写 + 用户拍板」。
+ * 压成一个 sealed 接口会让 UI 拿到一堆永远走不到的分支，也会诱使调用方
+ * 用 Bitwarden 的语义（比如"重试就能好"）去处理 KDBX 的冲突（**重试永远好不了**）。
+ */
+sealed interface KdbxSyncReport {
+
+    /** 两边一致，什么都没做。 */
+    data object InSync : KdbxSyncReport
+
+    /** 本地改动已推上远端。 */
+    data class Uploaded(val newVersionToken: String?) : KdbxSyncReport
+
+    /** 远端版本已拉到本地并替换了会话。 */
+    data object Downloaded : KdbxSyncReport
+
+    /**
+     * ★ 两边都改了 —— **已拒写，远端未被覆盖**，需要用户拍板（见三个 `resolveKdbx*`）。
+     */
+    data class Conflict(val currentRemoteVersion: String?) : KdbxSyncReport
+
+    /**
+     * 🔴 远端更新、本地未改 —— 本该拉下来，但需要重新解锁才能替换本地会话。
+     *
+     * 调用方应提示「远端有更新，请重新解锁以拉取」，**不要**当成已同步。
+     */
+    data object NeedsReload : KdbxSyncReport
+
+    /** 该库没有配置网盘来源。 */
+    data object NoCloudSource : KdbxSyncReport
+
+    /** 同步失败（网络 / 凭据 / IO）。[reason] 可直接展示。 */
+    data class Failed(val reason: String) : KdbxSyncReport
+}
+
+/**
  * 同步触发来源（编排器用；语义与 Bastion SyncTriggerReason 对齐，见 data:repository
  * 的 BitwardenSyncOrchestrator）。非 MANUAL 的自动触发默认「静默」：成功后不打断 UI，
  * 失败仍要可见。

@@ -19,6 +19,7 @@
  */
 package io.vaultix.data.kdbx
 
+import app.keemobile.kotpass.database.Credentials
 import app.keemobile.kotpass.database.KeePassDatabase
 import app.keemobile.kotpass.database.decode
 import java.io.ByteArrayInputStream
@@ -30,6 +31,16 @@ internal class KdbxSession(
     val content: KdbxMappedContent,
     /** 成功打开所用的凭据形态（diagnostics 用；不含任何密钥 material）。 */
     val credentialLabel: String,
+    /**
+     * ★ 打开这个库所用的凭据 —— **写回时必须用同一组**。
+     *
+     * 为什么必须留着：KDBX 编码要先推导内容密钥，而推导依赖凭据。
+     * 拿一組错凭据去 encode，得到的要么是抛错、要么更糟 ——
+     * **一个用错密钥"加密"出来的文件，用户下次用原密码打不开**。
+     *
+     * ⚠️ 生命周期与 [database] 完全一致：锁库即随会话一起丢弃，不额外落盘、不进日志。
+     */
+    val credentials: Credentials,
 )
 
 /**
@@ -99,6 +110,7 @@ internal object KdbxOpener {
                         database = database,
                         content = database.toMappedContent(),
                         credentialLabel = candidate.label,
+                        credentials = candidate.credentials,
                     ),
                 )
             }

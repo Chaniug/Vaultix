@@ -30,7 +30,12 @@ object DatabaseModule {
     @Provides @Singleton
     fun provideDatabase(@ApplicationContext context: Context): VaultixDatabase =
         Room.databaseBuilder(context, VaultixDatabase::class.java, "vaultix.db")
-            .addMigrations(VaultixDatabase.MIGRATION_1_2)
+            // ⚠️ 每条 Migration 都必须在这里登记 —— 漏登记的话，
+            //    老用户升级 App 时 Room 会因"找不到升级路径"直接抛异常（开不了库 = 打不开 App）。
+            .addMigrations(
+                VaultixDatabase.MIGRATION_1_2,
+                VaultixDatabase.MIGRATION_2_3,
+            )
             .build()
 
     @Provides fun provideVaultDao(db: VaultixDatabase): VaultDao = db.vaultDao()

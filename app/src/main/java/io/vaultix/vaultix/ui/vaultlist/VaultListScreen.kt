@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
@@ -64,11 +65,14 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.vaultix.domain.VaultSyncStatus
+import io.vaultix.model.KdbxCloudSyncStatus
 import io.vaultix.model.VaultKind
 import io.vaultix.model.VaultSummary
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.AppFlavor
 import io.vaultix.vaultix.ui.common.AddVaultTypeDialog
+import io.vaultix.vaultix.ui.common.KdbxConflictChoice
+import io.vaultix.vaultix.ui.common.KdbxConflictDialog
 import io.vaultix.vaultix.ui.common.deviceCanAuthenticate
 import io.vaultix.vaultix.ui.settings.QuickUnlockHost
 import io.vaultix.vaultix.ui.theme.Spacing
@@ -97,7 +101,15 @@ fun VaultListScreen(
     var vaultToRemove by remember { mutableStateOf<VaultSummary?>(null) }
     var showAddDialog by remember { mutableStateOf(false) }
 
-    // 启用引导：收到 cipher 即弹认证，成功后完成密钥包裹（横幅自动消失）
+    /**
+     * ★ 待用户拍板的冲突（null = 不显示对话框）。
+     *
+     * ⚠️ 用 `remember`（**不是** `rememberSaveable`）：它携带 `VaultSummary` 对象，
+     * 没有可用的 Saver；而且进程被杀后"冲突"会由下一次同步重新发现 ——
+     * 持久化的其实是 `vaults.syncStatus = CONFLICT` 那一列（真正的真相源）。
+     */
+    var pendingConflict by remember { mutableStateOf<Pair<String, String>?>(null) }
+
     // 启用引导：横幅的「启用」走共用控制器（`viewModel.quickUnlock.enableForVault`）；
     // 认证弹窗与「逐库问主密码」都由文件末尾的 QuickUnlockHost 承担。
     LaunchedEffect(Unit) {
@@ -109,6 +121,17 @@ fun VaultListScreen(
                     snackbarHostState.showSnackbar(
                         context.getString(R.string.item_save_failed, event.message),
                     )
+                // KDBX 网盘同步的结果：成功走 snackbar。
+                is VaultListViewModel.Event.KdbxSynced ->
+                    snackbarHostState.showSnackbar(event.message)
+                is VaultListViewModel.Event.KdbxSyncFailed ->
+                    snackbarHostState.showSnackbar(
+                        context.getString(R.string.kdbx_conflict_resolve_failed, event.message),
+                    )
+                // ★ 冲突**不走 snackbar** —— 它要用户做一次有代价的选择，
+                //   一句自动消失的提示会把它降级成"哦，失败了啊"。
+                is VaultListViewModel.Event.KdbxConflict ->
+                    pendingConflict = event.vaultId to event.vaultName
             }
         }
     }
@@ -179,6 +202,14 @@ fun VaultListScreen(
                             syncStatus = syncStatuses[vault.id],
                             onClick = { onOpenVault(vault) },
                             onRemove = { vaultToRemove = vault },
+                            // ⚠️ 只在"该库确实是网盘库"时给同步入口（syncStatus 非 null）。
+                            //    给 Bitwarden / 本地 SAF 库也画一个「立即同步」是错的方向：
+                            //    前者走自己的同步链、后者根本没有远端。
+                            onSyncNow = if (vault.syncStatus != null) {
+                                { viewModel.syncKdbxVault(vault.id) }
+                            } else {
+                                null
+                            },
                         )
                     }
                 }
@@ -196,6 +227,25 @@ fun VaultListScreen(
         onAddVault = onAddVault,
         onAddKdbx = onAddKdbx,
     )
+
+    // ★ KDBX 网盘冲突：三选项对话框（方案 §8 方案 B）。
+    //
+    // ⚠️ `onDismiss`（按返回键 / 点外面）**必须**等价于「稍后再决定」：
+    //   不清状态的话它会永远停在 `SYNCING`（界面上是个转不完的圈）。
+    pendingConflict?.let { (vaultId, vaultName) ->
+        KdbxConflictDialog(
+            vaultName = vaultName,
+            onChoose = { choice ->
+                pendingConflict = null
+                viewModel.resolveKdbxConflict(vaultId, choice)
+            },
+            onDismiss = {
+                pendingConflict = null
+                viewModel.resolveKdbxConflict(vaultId, KdbxConflictChoice.DecideLater)
+            },
+        )
+    }
+
     // 快速解锁的认证与流程对话框（与设置页**共用同一个控制器**）。
     QuickUnlockHost(viewModel.quickUnlock)
 }
@@ -433,6 +483,8 @@ private fun VaultCard(
     syncStatus: VaultSyncStatus?,
     onClick: () -> Unit,
     onRemove: () -> Unit,
+    /** 「立即同步」；null = 这个库没有网盘来源 ⇒ 菜单里不显示该项。 */
+    onSyncNow: (() -> Unit)? = null,
 ) {
     Card(
         onClick = onClick,
@@ -454,6 +506,9 @@ private fun VaultCard(
                     maxLines = 1,
                 )
                 SyncStatusLine(syncStatus = syncStatus)
+                // KDBX 网盘库的**持久**同步状态（与上面那个"本次同步进行到哪"不同，
+                // 见 `KdbxCloudSyncStatus` 的说明）。null = 非网盘库，整行不渲染。
+                KdbxSyncStatusLine(vault.syncStatus)
             }
             if (!vault.unlocked) {
                 Icon(
@@ -463,7 +518,7 @@ private fun VaultCard(
                     modifier = Modifier.size(18.dp),
                 )
             }
-            VaultCardMenu(onRemove = onRemove)
+            VaultCardMenu(onRemove = onRemove, onSyncNow = onSyncNow)
         }
     }
 }
@@ -486,9 +541,9 @@ private fun vaultSubtitle(vault: VaultSummary): String = when (vault.kind) {
     VaultKind.BITWARDEN -> vault.account ?: vault.origin
 }
 
-/** 卡片更多菜单：移除库（破坏性动作入口；确认对话框在列表层）。 */
+/** 卡片更多菜单：立即同步（仅网盘库）/ 移除库（破坏性动作；确认对话框在列表层）。 */
 @Composable
-private fun VaultCardMenu(onRemove: () -> Unit) {
+private fun VaultCardMenu(onRemove: () -> Unit, onSyncNow: (() -> Unit)? = null) {
     var menuOpen by remember { mutableStateOf(false) }
     Box {
         IconButton(onClick = { menuOpen = true }) {
@@ -498,6 +553,18 @@ private fun VaultCardMenu(onRemove: () -> Unit) {
             )
         }
         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+            if (onSyncNow != null) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.kdbx_sync_now)) },
+                    leadingIcon = {
+                        Icon(Icons.Filled.Sync, contentDescription = null)
+                    },
+                    onClick = {
+                        menuOpen = false
+                        onSyncNow()
+                    },
+                )
+            }
             DropdownMenuItem(
                 text = {
                     Text(
@@ -512,6 +579,55 @@ private fun VaultCardMenu(onRemove: () -> Unit) {
             )
         }
     }
+}
+
+/**
+ * KDBX 网盘库的**持久**同步状态行（`vaults.syncStatus`）。
+ *
+ * ## 与 [SyncStatusLine] 的分工（别合并）
+ *
+ * | | SyncStatusLine | 本函数 |
+ * |---|---|---|
+ * | 数据 | `VaultSyncStatus[]`（Bitwarden 的**本次**同步进度） | `vaults.syncStatus`（**持久**差距） |
+ * | 生命周期 | 进程内，一次同步跑完就回到常态 | 跨重启，直到真的对上 |
+ * | 静默时 | 不显示（保持列表安静） | 也要显示（用户需要知道"还没推上去"） |
+ *
+ * ⚠️ 关键差异在最后一行：本状态**不该静默**。它代表"本地有改动还没上云"
+ * 或"云端有更新还没拉" —— 不显示等于让用户以为一切都好。
+ *
+ * 传 `null`（非网盘库）时整行不渲染 —— **不要**兜底成 [KdbxCloudSyncStatus.LOCAL_ONLY]，
+ * 那会给 Bitwarden 库画一个"仅本地"角标。
+ */
+@Composable
+private fun KdbxSyncStatusLine(status: KdbxCloudSyncStatus?) {
+    if (status == null) return
+    val (textRes, color) = when (status) {
+        // 「已同步」用次要色：一致是常态，不该抢眼。
+        KdbxCloudSyncStatus.IN_SYNC ->
+            R.string.kdbx_sync_in_sync to MaterialTheme.colorScheme.onSurfaceVariant
+        KdbxCloudSyncStatus.SYNCING ->
+            R.string.kdbx_sync_syncing to MaterialTheme.colorScheme.primary
+        KdbxCloudSyncStatus.PENDING_UPLOAD ->
+            R.string.kdbx_sync_pending_upload to MaterialTheme.colorScheme.onSurfaceVariant
+        KdbxCloudSyncStatus.REMOTE_CHANGED ->
+            R.string.kdbx_sync_remote_changed to MaterialTheme.colorScheme.onSurfaceVariant
+        // 下面三个都是"需要用户处理" ⇒ 用 error 色跳出来（与 CloudSyncIcon 同一约定）。
+        KdbxCloudSyncStatus.PENDING_UPLOAD_WITH_LOCAL_CHANGES ->
+            R.string.kdbx_sync_pending_upload_local_changes to MaterialTheme.colorScheme.error
+        KdbxCloudSyncStatus.CONFLICT ->
+            R.string.kdbx_sync_conflict to MaterialTheme.colorScheme.error
+        KdbxCloudSyncStatus.FAILED ->
+            R.string.kdbx_sync_failed to MaterialTheme.colorScheme.error
+        // 「仅本地」= 还没配网盘。用次要色：它是个中性事实，不是问题。
+        KdbxCloudSyncStatus.LOCAL_ONLY ->
+            R.string.kdbx_sync_in_sync to MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Text(
+        text = stringResource(textRes),
+        style = MaterialTheme.typography.labelSmall,
+        color = color,
+        maxLines = 1,
+    )
 }
 
 /**

@@ -37,6 +37,7 @@ import io.vaultix.domain.VaultRepository
 import io.vaultix.domain.VaultSyncReport
 import io.vaultix.model.VaultKind
 import io.vaultix.model.VaultSummary
+import io.vaultix.model.KdbxCloudSyncStatus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -131,6 +132,9 @@ class VaultRepositoryImpl @Inject constructor(
                     account = row.account,
                     origin = row.origin,
                     unlocked = isUnlocked,
+                    // null 原样传下去（= 该库不适用网盘同步），**不要**兜底成 LOCAL_ONLY：
+                    // 那会让 Bitwarden 库在 UI 上凭空长出一个「仅本地」角标。
+                    syncStatus = KdbxCloudSyncStatus.fromName(row.syncStatus),
                 )
             }
         }

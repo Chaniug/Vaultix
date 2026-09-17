@@ -6,6 +6,7 @@ import androidx.lifecycle.ProcessLifecycleOwner
 import dagger.hilt.android.HiltAndroidApp
 import io.vaultix.common.logging.LogLevel
 import io.vaultix.common.logging.VaultixLog
+import io.vaultix.vaultix.di.KdbxCloudSyncInitializer
 import io.vaultix.vaultix.security.AutoLockController
 import io.vaultix.vaultix.security.VaultLockManager
 import javax.inject.Inject
@@ -29,6 +30,22 @@ class VaultixApplication : Application() {
 
     @Inject
     lateinit var lockManager: VaultLockManager
+
+    /**
+     * KDBX 网盘同步的启动钩子（2026-09-17）。
+     *
+     * ⚠️ 这个字段**看起来没用**（没有任何地方读它），但它**必须存在**：
+     * [KdbxCloudSyncInitializer] 的全部价值就在它的 `init` 块里 ——
+     * 把 app 侧的 OneDrive 来源工厂注册进 `KdbxCloudSyncCoordinator`。
+     * 不在这里注入，Hilt 就不会构造它，注册也就不会发生 ⇒ 症状是
+     * **"配好了 OneDrive 库，同步却一直说没有云端来源"**，且没有任何报错。
+     *
+     * ⚠️ 必须是 `@Inject lateinit var`（而不是 `by lazy` 或 `Provider`）：
+     * 前者的构造时机是 `onCreate` 之前的字段注入期，早于任何同步请求；
+     * 后者会把注册推迟到"第一次真的要用"，那时已经晚了。
+     */
+    @Inject
+    lateinit var kdbxCloudSyncInitializer: KdbxCloudSyncInitializer
 
     /**
      * 本进程是否为「为自动填充 / 凭据提供商而拉起」。

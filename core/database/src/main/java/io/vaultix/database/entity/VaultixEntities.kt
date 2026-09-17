@@ -29,6 +29,28 @@ data class VaultEntity(
     /** 上次同步的服务端 revision（Bitwarden 用；KDBX 为 null） */
     val revisionDate: String? = null,
     val createdAt: Long,
+    /**
+     * ★ KDBX 网盘同步状态（`KdbxSyncStatus` 的名称），v3 新增。
+     *
+     * ⚠️ **必须可空**（null = 非网盘库 / 还没同步过）：
+     * Bitwarden 库与本地 SAF 库都不适用，用 `LOCAL_ONLY` 之类的默认值去填它们
+     * 会制造"本该没有状态的地方有了状态"，UI 就会在 Bitwarden 库上显示一个
+     * 毫无意义的"仅本地"角标。
+     */
+    val syncStatus: String? = null,
+    /**
+     * ★ 上次成功同步时远端的版本令牌（eTag / 内容 SHA-256），v3 新增。
+     *
+     * 它是**冲突检测的基线**：保存前拿它当条件写的 `expectedVersion`，
+     * 服务端据此判定"别人是不是改过了"。
+     *
+     * ⚠️ 这不是密钥材料（只是一串服务端给的不透明标识），落 Room 是安全的。
+     */
+    val remoteVersionToken: String? = null,
+    /**
+     * ★ 上次成功同步的时间（毫秒），v3 新增。用于展示"上次同步：3 分钟前"。
+     */
+    val lastSyncedAt: Long? = null,
 )
 
 /**

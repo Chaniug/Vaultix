@@ -620,6 +620,36 @@
     <!-- 条目云同步状态（行尾小云图标，见 .ai/ISSUES.md #76） -->
     <string name="sync_state_synced">已同步到云端</string>
     <string name="sync_state_pending">本地有改动待同步</string>
+
+    <!--
+        KDBX 网盘同步冲突（方案 §8 方案 B 的三选项）。
+
+        ⚠️ 每个选项的"后果"文案**必须**留着：「用本地覆盖」会丢远端那份改动、
+        「用远端覆盖」会丢本地那份 —— 两个都丢数据，只是丢哪边不同。
+        只写动作不写后果，用户没法做这个选择。
+    -->
+    <string name="kdbx_conflict_title">发现同步冲突</string>
+    <string name="kdbx_conflict_body">「%1$s」在本地和云端都被修改过。为了避免任何一方的改动被悄悄覆盖，这里不会自动选择。</string>
+    <string name="kdbx_conflict_no_auto">两个"覆盖"选项都会让另一边的那份改动永久丢失，请先确认哪一份更重要。</string>
+    <string name="kdbx_conflict_keep_local">用本地覆盖云端</string>
+    <string name="kdbx_conflict_keep_local_hint">云端那份改动会永久丢失</string>
+    <string name="kdbx_conflict_keep_remote">用云端覆盖本地</string>
+    <string name="kdbx_conflict_keep_remote_hint">本地那份改动会永久丢失</string>
+    <string name="kdbx_conflict_later">稍后再决定</string>
+    <string name="kdbx_conflict_later_hint">什么都不做，保持冲突状态；可以先在另一台设备上核对</string>
+    <string name="kdbx_conflict_resolved_by_local">已用本地覆盖云端</string>
+    <string name="kdbx_conflict_resolved_by_remote">已用云端覆盖本地</string>
+    <string name="kdbx_conflict_resolve_failed">处理冲突失败：%1$s</string>
+
+    <!-- KDBX 网盘同步状态（库列表角标与副标题） -->
+    <string name="kdbx_sync_now">立即同步</string>
+    <string name="kdbx_sync_in_sync">已同步</string>
+    <string name="kdbx_sync_syncing">同步中…</string>
+    <string name="kdbx_sync_pending_upload">有改动待上传</string>
+    <string name="kdbx_sync_remote_changed">云端有更新</string>
+    <string name="kdbx_sync_pending_upload_local_changes">上传期间又有改动，待续传</string>
+    <string name="kdbx_sync_conflict">同步冲突，需处理</string>
+    <string name="kdbx_sync_failed">同步失败</string>
     <string name="edit_item_title">编辑条目</string>
     <string name="section_login">登录信息</string>
     <string name="section_notes">备注</string>

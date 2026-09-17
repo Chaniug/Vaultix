@@ -37,6 +37,13 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
     // HttpException 分类（401 / 400 two_factor）需要 retrofit 类型
     implementation(libs.retrofit.core)
+    // ★ WebDAV 条件写（`If-Match` / `If-None-Match: *`）必须手写 OkHttp：
+    //   现成的 sardine-android 0.8 不支持条件请求头，用它等于放弃 TOCTOU 防护。
+    implementation(libs.okhttp)
+
+    // ⚠️ `compileOnly` **不是笔误**：本模块只**声明** okio 版本（见下），产物里不落 jar。
+    //   运行时的 okio 由 app 侧（okhttp / coil 传递而来）唯一提供一份。
+    compileOnly(libs.okio)
 
     // 测试
     testImplementation(libs.junit)
@@ -44,4 +51,8 @@ dependencies {
     testImplementation(libs.turbine)
     testImplementation(libs.mockk)
     testImplementation(libs.kotlinx.coroutines.test)
+    // 单测里真的要构造 OkHttpClient + 跑请求（WebDAV 条件写那些用例），
+    // 只有 `compileOnly(libs.okio)` 不够。
+    testImplementation(libs.okhttp)
+    testImplementation(libs.okio)
 }

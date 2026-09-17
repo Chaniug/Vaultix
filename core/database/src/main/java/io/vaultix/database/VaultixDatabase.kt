@@ -37,7 +37,7 @@ import io.vaultix.database.entity.VaultEntity
         FolderEntity::class,
         PendingOpEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = true,
 )
 abstract class VaultixDatabase : RoomDatabase() {
@@ -58,6 +58,28 @@ abstract class VaultixDatabase : RoomDatabase() {
         val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE vaults ADD COLUMN account TEXT")
+            }
+        }
+
+        /**
+         * v2→v3：vaults 增加 KDBX 网盘同步的三列。
+         *
+         * ## 为什么三列都要可空（不加 NOT NULL DEFAULT）
+         *
+         * 存量库里**绝大多数是 Bitwarden 与本地 SAF 库**，它们跟网盘同步无关。
+         * 若给 `syncStatus` 一个 `NOT NULL DEFAULT 'LOCAL_ONLY'`，
+         * 那些库在 UI 上就会突然多出一个"仅本地"角标 —— 那是**凭空造出来的状态**，
+         * 用户会以为自己的 Bitwarden 库出了同步问题。
+         * ⇒ 三列全可空，null = "这个库不适用网盘同步"。
+         *
+         * ⚠️ 三列必须**一次加完**：分成三条 Migration 会让版本号与
+         *    `@Database(version=…)` 对不上（Room 校验 schema 时会发现列缺失而崩）。
+         */
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE vaults ADD COLUMN syncStatus TEXT")
+                db.execSQL("ALTER TABLE vaults ADD COLUMN remoteVersionToken TEXT")
+                db.execSQL("ALTER TABLE vaults ADD COLUMN lastSyncedAt INTEGER")
             }
         }
     }
