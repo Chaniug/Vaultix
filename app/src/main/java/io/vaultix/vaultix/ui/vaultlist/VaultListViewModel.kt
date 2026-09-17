@@ -6,6 +6,8 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import io.vaultix.data.repository.BitwardenSyncOrchestrator
 import io.vaultix.data.repository.LocalUnlockEnrollment
 import io.vaultix.datastore.VaultixPreferences
+import io.vaultix.domain.KdbxSyncReport
+import io.vaultix.domain.KdbxSyncRepository
 import io.vaultix.domain.VaultRepository
 import io.vaultix.domain.VaultSyncStatus
 import io.vaultix.model.VaultSummary

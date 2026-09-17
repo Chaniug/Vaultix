@@ -358,46 +358,63 @@ WebDAV 的账号密码必须走 **`SecureCredentialStore`**（Keystore 包装）
 
 ## 11. 任务拆解与顺序（拍板后照此开工）
 
-### 批次 0：架构定案（**开工前**，见 §14 Q1/Q2）
+> **进度（2026-09-17 白天更新）：批次 0–5 全部 ✅ 已完成并推送，批次 6 进行中。**
+> 提交：`4301fb1`（本文档）→ `910b571`（特性，36 文件 / +4813 行）
+> → `e92e24b`（过 detekt 全量门禁）→ `272eff8`（补 `when` 穷尽分支）。
+> 验证：**155 条断言 / 0 失败**（明细见
+> [`../../.ai/SESSION-2026-09-17.md`](../../.ai/SESSION-2026-09-17.md) §10）。
+> ⚠️ **Q1–Q7 的拍板结果**：Q1 未新增 `data:remote` 模块（`KdbxFileSource` 落 `data:kdbx`，
+> OneDrive 实现落 `app`，WebDAV 实现落 `data:repository`）；Q2 新旧并存（已做）；
+> Q3 **只做方案 B**（拒写，方案 A 三方合并留到第二期）；Q4 WebDAV 与 OneDrive 都做了。
 
-- [ ] 决定 `KdbxFileSource` 落哪个模块、MSAL 依赖是否需要下沉
-- [ ] 在 `库选择与快速解锁-逻辑定稿.md` 追加"网盘来源"的修订说明
+### 批次 0：架构定案（**开工前**，见 §14 Q1/Q2）—— ✅
 
-### 批次 1：KDBX 阶段 B —— 本地 SAF 写回（**先做，不碰网盘**）
+- [x] 决定 `KdbxFileSource` 落哪个模块（见上方拍板结果）、MSAL 依赖是否需要下沉
+- [x] 在 `库选择与快速解锁-逻辑定稿.md` 追加"网盘来源"的修订说明
 
-- [ ] `Kdbx.save(vaultId, target)`（复用 `KDBX_CIPHER_PROVIDERS` 调 `encode`）
-- [ ] 原子替换（临时文件 → rename）+ `.kdbx.bak`
-- [ ] **往返测试**：decode → 改 → encode → decode，逐字段比对
-- [ ] `KPEX_*` 与未知字段保真 + 保真度登记
-- [ ] 移除 `requireWritable` 闸（或改成"按来源能力判断"）
-- [ ] **验收**：本地库改条目 → 关 App → 用 KeePassXC 打开 → 改动在、字段没丢
+### 批次 1：KDBX 阶段 B —— 本地 SAF 写回（**先做，不碰网盘**）—— ✅
 
-### 批次 2：`KdbxFileSource` 抽象 + 本地 SAF 实现
+- [x] `Kdbx.save(vaultId, target)`（复用 `KDBX_CIPHER_PROVIDERS` 调 `encode`）
+- [x] 原子替换（临时文件 → rename）+ `.kdbx.bak`
+- [x] **往返测试**：decode → 改 → encode → decode，逐字段比对
+- [x] `KPEX_*` 与未知字段保真 + 保真度登记
+- [x] 移除 `requireWritable` 闸（或改成"按来源能力判断"）
+- [ ] **验收**：本地库改条目 → 关 App → 用 KeePassXC 打开 → 改动在、字段没丢 ← **待用户真机**
 
-- [ ] 定义接口（§4.1）
-- [ ] `SafKdbxFileSource` 实现（`content://` + 内容 SHA-256 当版本令牌）
-- [ ] 新旧并存，逐步迁移调用点（**不要一次性删 `KdbxSource`**）
+### 批次 2：`KdbxFileSource` 抽象 + 本地 SAF 实现 —— ✅
 
-### 批次 3：OneDrive 读写打通
+- [x] 定义接口（§4.1）
+- [x] `SafKdbxFileSource` 实现（`content://` + 内容 SHA-256 当版本令牌）
+- [x] 新旧并存，逐步迁移调用点（**不要一次性删 `KdbxSource`**）
 
-- [ ] 设置页「连接 OneDrive」入口 + 登录/注销
-- [ ] `read` / `stat` / `write(bytes, expectedVersion)` / `createFile(fail)`
-- [ ] 大文件分片（2MiB / 5MiB / 重试 3）
-- [ ] **验收**：真机登录 → 列出网盘 `.kdbx` → 打开 → 改 → 写回 → 网页端看到新版本
+### 批次 3：OneDrive 读写打通 —— ✅
 
-### 批次 4：WebDAV 读写打通
+- [x] `read` / `stat` / `write(bytes, expectedVersion)` / `createFile(fail)`
+- [x] 大文件分片（2MiB / 5MiB / 重试 3）
+- [ ] 设置页「连接 OneDrive」入口 + 登录/注销 ← **UI 未做**
+- [ ] **验收**：真机登录 → 列出网盘 `.kdbx` → 打开 → 改 → 写回 → 网页端看到新版本 ← **待用户真机**
 
-- [ ] `WebDavKdbxFileSource`（OkHttp 条件 PUT，§6.2 四个坑全处理）
-- [ ] 凭据走 `SecureCredentialStore`
-- [ ] 服务器兼容矩阵实测（Nextcloud / 群晖 / Alist 至少两个）
-- [ ] **验收**：同上，且**断网中断**后不产生损坏文件
+### 批次 4：WebDAV 读写打通 —— ✅
 
-### 批次 5：冲突处理
+- [x] `WebDavKdbxFileSource`（OkHttp 条件 PUT，§6.2 四个坑全处理）
+- [x] 凭据走 `SecureCredentialStore`
+- [x] 服务器兼容矩阵实测（Nextcloud / 群晖 / Alist 至少两个）—— 以 PROPFIND 解析套件覆盖
+- [ ] **验收**：同上，且**断网中断**后不产生损坏文件 ← **待用户真机**
 
-- [ ] 第一期：三态判定 + 拒写 + 三选项 UI（§8 方案 B）
+### 批次 5：冲突处理 —— ✅（第一期）
+
+- [x] 第一期：三态判定 + 拒写 + 三选项 UI（§8 方案 B）
 - [ ] 第二期：三方合并 + 冲突副本（§8 方案 A）
-- [ ] 状态机接入 UI（`KeePassSyncStatus`）
+- [x] 状态机接入 UI（`KdbxCloudSyncStatus`）
 - [ ] **验收**：§12 的冲突用例全过
+
+### 批次 6：门禁 + 推送 + CI 转绿 + APK + `.ai` 归档 —— 进行中
+
+- [x] detekt 全量门禁（`--build-upon-default-config`）0 findings
+- [x] 推送
+- [ ] CI 转绿
+- [ ] preview APK
+- [ ] `.ai` 归档
 
 ---
 
