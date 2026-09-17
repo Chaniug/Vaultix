@@ -1,5 +1,47 @@
 # 下一步任务清单
 
+> ## ▶ 【2026-09-17 下午】**待开工：KDBX 网盘同步的剩余工作**（一次性完成的工作单）
+>
+> **⚠️ 这一条覆盖下面全部。** 用户指令：「写好文档进度吧，我重开一个会话一次性完成」。
+>
+> ★★ **工作单在 [`cloud-sync-plan.md`](./cloud-sync-plan.md) 的 §16**（自包含，
+> 零上下文会话可直接照做）。**开工前必读 §16.1。**
+>
+> ### 先记住这一句：**代码是完整的，但用户一个网盘库都加不进来、也打不开**
+>
+> 根因不是 UI 没做，而是**读、写两条路径用了两个不同的接口**：
+>
+> | 动作 | 走哪个接口 | 支持网盘？ |
+> |---|---|---|
+> | **写回**（`Kdbx.saveVia`） | 新的 `KdbxFileSource` | ✅ |
+> | **读 / 解锁 / 添加 / 凭据校验**（`Kdbx.unlock` / `Kdbx.verify`） | **旧的 `KdbxSource`** | ❌ |
+>
+> 旧的 `KdbxSource` 唯一实现是 `VaultRepositoryImpl` 里一个 `ContentResolver` lambda
+> —— **只认 SAF `content://`**。⇒ 把 `"webdav:…"` 丢给 `Uri.parse` 必然读不到。
+> **所以 UI 只是"看不见"，读路径未迁移才是"点了也没用"。**
+>
+> ### 剩余 4 项（详见 §16）
+>
+> | # | 事项 | 说明 |
+> |---|---|---|
+> | **R1** ★ 必做先做 | 把读路径迁到 `KdbxFileSource` | **5 个调用点**（`VaultRepositoryImpl` ×3 · `LocalUnlockEnrollment` · `PinEnrollment`）。不迁则 R2/R3 做完也白做 |
+> | **R2** | WebDAV **凭据写入** + 配置 UI | ★ 读侧接线是完整的、**写侧一行都没有** ⇒ `credentials()` 恒 null ⇒ **WebDAV 当前 100% 走不通**。且顺序必须是「先存凭据 → 再 testConnection」 |
+> | **R3** | OneDrive 配置 UI | 鉴权/Graph/文件源都已就绪，主要是接 UI（`signIn` **必须传真实 Activity**） |
+> | **R4** | `KdbxWritePathTest.kt`（9 用例）**从没跑过** | 沙箱无 JUnit/Truth；另复核 CI 的 test 模块清单是否含 `data:kdbx` |
+>
+> ⚠️ **R5（免解锁「用远端覆盖本地」）放到第二期** —— 现状是**有意不做假成功**，
+> 不是没做完。理由见 §16.6。
+>
+> ⚠️ **施工纪律在 §16.8**（12 条，逐条都是付过代价的：门禁含 `test`、
+> detekt 两种口径、前置项红≠后面都过、`VaultRepositoryImpl` 顶格 40 函数……）。
+
+> ## ✅ 【2026-09-17 白天】KDBX 接入 OneDrive / WebDAV —— 批次 0~6 全部完成
+>
+> `910b571`（特性，36 文件 / +4813 行）→ 5 轮 CI 修复 → `96a82fa`（CI 纳入 `data:kdbx` 单测）。
+> **155 条沙箱断言 0 失败**，CI 在 `bb5ebb5` 全绿，preview APK `app-full-debug.apk` = 35,883,835 字节。
+> 按 [`cloud-sync-plan.md`](./cloud-sync-plan.md) 施工；**§14 的 Q3 采纳了「只做方案 B（拒写）」**。
+> 明细与教训 → `.ai/SESSION-2026-09-17.md` **§10**（含 5 轮 CI 各红一层的复盘 + 5 个坑）。
+
 > ## ✅ 【2026-09-17 凌晨】5 组 UI 入库 + **KDBX 写入口止血（坑 #106）** + OneDrive 鉴权骨架
 >
 > **⚠️ 这一条覆盖下面全部**。用户输入只有两段：

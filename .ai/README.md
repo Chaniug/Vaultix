@@ -9,20 +9,29 @@
 此前约定「两边保持同步」，结果是同一主题两处各有一份、必然漂移（AI 会看错位置）。
 **要改内容，只改这里。**
 
-## 🕐 最新状态（2026-09-17 凌晨，接力请先看这 4 行）
+## 🕐 最新状态（**2026-09-17 下午**，接力请先看这 6 行）
 
-- **推送** `d17772b → 37e963b`（8 个提交）；门禁 detekt ✅ · `:app:compileFullDebugKotlin` ✅ ·
-  单测 **656 项（去重）0 失败** ✅。
-- **最近两轮**：`SESSION-2026-09-16.md`（睡前下单、睡醒验收那一批）·
-  **`SESSION-2026-09-17.md`（5 组 UI + KDBX 写入口止血 #106 + OneDrive 鉴权骨架）**。
-- **下一个卡口**：设置页还没有「连接 OneDrive」入口 —— 交互式登录需要 Activity 才能拉起，
-  必须先有真实按钮，才能真机跑通「登录 → 拿 token → 列出网盘 `.kdbx` 文件」。
-- ★ **网盘同步（OneDrive / WebDAV）的完整方案与任务清单** →
-  **[`Docs/progress/cloud-sync-plan.md`](../Docs/progress/cloud-sync-plan.md)**
-  （含前置阶段 B 的可行性核实、文件源接缝、三方合并冲突策略、5 个批次的任务拆解、9 条验收标准、
-  以及 **7 个待拍板问题**）。**今晚要动网盘，先读这一篇。**
-- ⚠️ **不要被「UP-TO-DATE」骗了**：本轮跑 `test` 才炸出 `data:repository` 的单测**编译**断链
-  （见 `SESSION-2026-09-17.md` §6.1）—— **门禁必须包含 `test`，不能只跑 `compile`。**
+- **HEAD** `3b2cc31`；门禁 detekt ✅ · `:app:compileFullDebugKotlin` ✅ · 单测全绿；
+  白天那批另有 **155 条沙箱断言 0 失败**。
+- ★★ **KDBX 网盘同步已落地**（`910b571` 起，批次 0–6 全部完成）：36 文件 / +4813 行，
+  `KdbxFileSource` / `KdbxFidelity` / `KdbxAtomicWriter` / `KdbxRoundTrip` /
+  `SafKdbxFileSource` / `WebDavKdbxFileSource` / `OneDriveKdbxFileSource` /
+  `KdbxCloudSyncCoordinator` / `KdbxSyncOrchestrator` / `KdbxConflictDialog` 全部入库。
+  → 细节读 **`SESSION-2026-09-17.md` §10**（含 5 轮 CI 各红一层的复盘）。
+- ▶ **但用户现在一个网盘库都加不进来、也打不开**。根因不是 UI 没做，而是
+  **读、写两条路径用了两个接口**：写回走新的 `KdbxFileSource`（✅ 支持网盘），
+  **读/解锁/添加/校验仍走旧的 `KdbxSource`（只认 SAF `content://`，❌）**。
+  ⇒ **剩余工作单在 [`cloud-sync-plan.md`](../Docs/progress/cloud-sync-plan.md) 的 §16**
+  （自包含，零上下文会话可照做）。**开工前必读 §16.1。**
+- **剩余 4 项**：**R1** ★ 把读路径迁到 `KdbxFileSource`（5 个调用点，**必须先做**）·
+  **R2** WebDAV **凭据写入** + 配置 UI（★ 读侧接线完整、**写侧一行都没有** ⇒ 当前 100% 走不通）·
+  **R3** OneDrive 配置 UI · **R4** `KdbxWritePathTest.kt`（9 用例）从没跑过。
+  R5（免解锁替换）**有意放到第二期**。
+- **最近三轮**：`SESSION-2026-09-16.md`（睡前下单、睡醒验收那批）·
+  `SESSION-2026-09-17.md`（凌晨：5 组 UI + 坑 #106 + OneDrive 鉴权骨架 /
+  白天：网盘同步落地）。
+- ⚠️ **不要被「UP-TO-DATE」骗了**：跑 `test` 才炸出过 `data:repository` 的单测**编译**断链
+  （`SESSION-2026-09-17.md` §6.1）—— **门禁必须包含 `test`，不能只跑 `compile`。**
 
 ## 目录结构（索引 + 分篇，**按需只开一篇**）
 

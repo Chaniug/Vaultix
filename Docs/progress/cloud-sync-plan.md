@@ -475,3 +475,266 @@ WebDAV 的账号密码必须走 **`SecureCredentialStore`**（Keystore 包装）
 8. **大文件阈值 2MiB、分片 5MiB**（Bastion 实测参数，别自己猜）。
 9. **冲突副本要计数并上报**，静默多出副本条目用户会以为是病毒。
 10. **`.kdbx.bak` + 临时文件 + rename** 是"不损坏"的唯一手段，别省。
+
+---
+
+# 16. ★★ 剩余工作 —— 一次性完成的工作单（2026-09-17 下午）
+
+> **本节的用途**：让**一个全新会话**（零上下文）能照着一次做完剩余工作。
+> 因此本节**自包含**：不假设你读过 §1–§15，但凡需要细节都会给出文件路径。
+>
+> **先给结论**：批次 0–5 的代码是完整的，但**用户现在一个网盘库都加不进来、也打不开**。
+> 原因不是 UI 没做，而是**「打开」这条路径还走在旧接口上**（见 §16.1）。
+> **先修 R1，再做 UI —— 顺序错了会白做。**
+
+---
+
+## 16.1 ★★★ 真正的关键路径：读、写两条路径用了**两个不同的接口**
+
+这是本节最重要的一件事。花两分钟看懂它，能省你一整天。
+
+| 动作 | 走哪个接口 | 支持网盘来源？ |
+|---|---|---|
+| **写回**（`Kdbx.saveVia(vaultId, source, …)`） | **新的 `KdbxFileSource`** | ✅ 是 |
+| **读 / 解锁 / 添加 / 凭据校验**（`Kdbx.unlock` / `Kdbx.verify`） | **旧的 `KdbxSource`** | ❌ **否** |
+
+**旧接口长什么样**（`data/kdbx/…/Kdbx.kt` 的 `fun interface KdbxSource`）：
+
+```kotlin
+fun interface KdbxSource { fun read(sourceUri: String): ByteArray? }
+```
+
+它的**唯一**实现是 `VaultRepositoryImpl` 里的一个 lambda（约 114 行），
+内容就是 `context.contentResolver.openInputStream(Uri.parse(uri))` ——
+**只认 SAF 的 `content://`**。
+
+**于是后果是**（这是实测推断出的、而非想象的）：
+
+1. `addKdbxVault(sourceUri = "webdav:…")` → 内部 `unlockKdbxInternal(sourceUri = "webdav:…")`
+   → 把 `"webdav:…"` 丢给 `Uri.parse` → **ContentResolver 读不到** → 添加失败。
+2. `unlockKdbxVault(vaultId)` → `unlockKdbxInternal(sourceUri = row.origin)` → **同样失败**。
+3. 快速解锁 / PIN 的凭据校验（`Kdbx.verify`）→ **同样失败**。
+
+⇒ **即使把配置 UI 做出来、库行也写进去了，用户依然进不去库。**
+UI 缺失只是"看不见"，读路径未迁移才是"点了也没用"。
+
+### 需要迁移的 5 个调用点（已核实）
+
+```bash
+# 复核命令（自己再跑一次，行号可能已变）
+grep -rn 'Kdbx.unlock(\|Kdbx.verify(' --include=*.kt data app | grep -v '/build/'
+```
+
+| 文件 | 位置 | 用途 |
+|---|---|---|
+| `data/repository/…/VaultRepositoryImpl.kt` | ~263 | `unlockKdbxInternal`（添加 + 解锁共用尾部） |
+| 同上 | ~575 | 另一处 `Kdbx.unlock` |
+| 同上 | ~659 | 另一处 `Kdbx.unlock` |
+| `data/repository/…/LocalUnlockEnrollment.kt` | ~221 | 快速解锁的凭据校验 `Kdbx.verify` |
+| `data/repository/…/PinEnrollment.kt` | ~139 | PIN 信封的凭据校验 `Kdbx.verify` |
+
+---
+
+## 16.2 R1（★ 必做，先做）：把读路径迁到 `KdbxFileSource`
+
+### 目标
+
+让 `Kdbx.unlock` / `Kdbx.verify` 能接受**任意来源**，从而：
+`webdav:` / `onedrive:` 的库**能被添加、被解锁、被校验**。
+
+### 建议做法
+
+1. **在 `data:kdbx` 加 `KdbxFileSource` 版本的重载**（不要改旧签名，旧调用点要能逐步迁）：
+
+   ```kotlin
+   // Kdbx.kt —— 与现有 source: KdbxSource 版本并列
+   suspend fun unlock(
+       vaultId: String, source: KdbxFileSource, password: String,
+       keyFileBytes: ByteArray? = null,
+   ): Result<KdbxUnlockedContent>
+   ```
+   > ⚠️ **注意参数差异**：`KdbxFileSource` **没有"uri"参数**——来源对象自己知道读哪儿。
+   > 旧接口的 `sourceUri: String` 与 `keyFileUri: String?` 在新接口下应消失；
+   > keyfile 只能走 `keyFileBytes`（这正是既有 `unlock` 已经支持的"字节优先"路径，
+   > 见 `Kdbx.kt` 的 KDoc）。**SAF 侧实现 `keyFile` 时也要用字节**：
+   > 由 `SafKdbxFileSource` 之外的另一个来源实例读 keyfile。
+
+2. **调用点改成"先解析来源，再传对象"**：
+
+   ```kotlin
+   val source = coordinator.fileSourceFor(row.origin)
+       ?: return UnlockResult.Unknown("该库还没有可用的来源")
+   Kdbx.unlock(vaultId = vaultId, source = source, password = password, keyFileBytes = …)
+   ```
+   `fileSourceFor(origin)` 已存在于 `KdbxCloudSyncCoordinator`，判别表是
+   `content://` → SAF · `webdav:` → WebDAV · 其余 → app 注册的工厂（OneDrive）。
+   ⇒ **它是「origin ⇒ 来源」的单一真值源，别再写第二份判别。**
+
+3. ⚠️ **小心 DI 构造环**。`KdbxCloudSyncCoordinator` 在 `data:repository`，
+   `VaultRepositoryImpl` 也在 `data:repository`，但**协调器依赖编排器、编排器依赖会话/仓储**
+   —— 直接注入很可能成环。会话 §10.4 记过这个坑：**用 `Provider<T>` 而不是提前捕获 lambda**。
+   若绕不开，就抽一个**只做来源解析**的更小接口（比如 `KdbxFileSourceResolver`），
+   由 `VaultRepositoryImpl` 依赖它而不是依赖整个协调器。
+
+4. 迁移完 5 个调用点后，**再**评估删掉 `KdbxSource`（`fun interface` + 那个 SAF lambda）。
+   ⚠️ 删之前先确认没有别的引用（`grep -rn 'KdbxSource' --include=*.kt`）。
+
+### 验收
+
+- [ ] 本地 SAF 库：添加 / 解锁 / 快速解锁 / PIN **全部照旧可用**（这是回归底线）。
+- [ ] 一个伪造的 `file://` 或内存来源能被 `Kdbx.unlock` 打开（证明不再依赖 ContentResolver）。
+- [ ] detekt + `:app:compileFullDebugKotlin` + `test` 三绿。
+
+---
+
+## 16.3 R2：WebDAV 凭据的**写入** + 配置 UI
+
+### 16.3.1 ★ 现在缺的是"写"，不是"读"
+
+已核实：**读侧接线是完整的**，写侧**一行都没有**。
+
+```kotlin
+// app/…/di/KdbxCloudSyncAppModule.kt:78 —— 读侧（已存在）
+fun provideWebDavCredentialLookup(credentials: SecureCredentialStore): WebDavCredentialLookup =
+    WebDavCredentialLookup { credentialId ->
+        val raw = credentials.getString(webDavCredentialKey(credentialId)) ?: return@… null
+        val separator = raw.indexOf('\n')            // ⚠️ 用 \n 分隔，不用 ':'（用户名可能是域账号含 ':'）
+        if (separator <= 0) return@… null
+        WebDavCredentials(raw.substring(0, separator), raw.substring(separator + 1))
+    }
+```
+
+```bash
+# 复核：全仓搜不到任何一处写 webDavCredentialKey 的地方
+grep -rn 'webDavCredentialKey' --include=*.kt data core app | grep -v '/build/'
+```
+
+⇒ 现在 `credentials(credentialId)` **恒返回 null** ⇒ `WebDavKdbxFileSource` 必然抛
+「找不到该 WebDAV 账号的凭据，请重新填写」。**WebDAV 链路当前 100% 走不通。**
+
+### 16.3.2 要做的事
+
+| # | 项 | 说明 |
+|---|---|---|
+| 1 | **凭据写入** | 复用 `SecureCredentialStore.putString(webDavCredentialKey(id), "$user\n$pass")`。**把写入封成一个方法**（例如放在 `KdbxCloudSyncAppModule` 附近或一个小的 `WebDavCredentialStore`），**不要**让 UI 直接拼 `\n` —— 拼错了读侧就解析不出来，且这个错**没有报错信息**。 |
+| 2 | **服务器地址校验** | 复用 `WebDavVaultOrigin.parse` 已有的规则：必须是 `http(s)://`、**authority 里不能有 `@`**（防把凭据写进 URL ⇒ 进日志）。UI 要**提前拦**，别等 `parse` 返回 null。 |
+| 3 | **连接自检** | 用 `KdbxFileSource.testConnection()`；失败时展示的 message 要是人话（`WebDavKdbxFileSource` 已经这样做了，如"账号或密码不对"而不是"HTTP 401"）。 |
+| 4 | **列目录选库** | `listChildren()` → 只显示 `entry.isKdbx`（大小写不敏感，已在 `KdbxFileEntry.isKdbx` 里实现）；按修改时间倒序；显示大小 + 时间。 |
+| 5 | **建库行** | `VaultRepository.addKdbxVault(sourceUri = WebDavVaultOrigin.build(credId, fileUrl), displayName = …, masterPassword = …, keyFileUri = null)`。<br>⚠️ **KDBX 库的 id 就是 sourceUri**（`addKdbxVault` 里 `id = sourceUri`）⇒ WebDAV 库的 id 形如 `webdav:<credId>:<url>`。这是既有设计，别改。 |
+| 6 | **UI 落点** | 设置页 → **「密码库管理」二级页**（`ui/settings/VaultManagementScreen.kt`，2026-09-15 建的）。在「添加密码库」那里加"从网盘添加"的分支。⚠️ **不要把新入口散到设置首页** —— 那会推翻 `decisions/设置页信息架构-定稿.md`。 |
+
+### 16.3.3 ★ 顺序约束（错了会白做）
+
+```
+保存凭据  →  testConnection  →  listChildren  →  选文件  →  addKdbxVault
+```
+
+**为什么凭据必须先存**：`fileSourceFor(origin)` 解析 WebDAV 来源时**立刻就要按
+`credentialId` 取凭据**（见协调器 ~114 行）。凭据不存在 ⇒ 来源对象构造时就抛错 ⇒
+你连 `testConnection` 都调不到。**不能"先测通再存"。**
+
+### 16.3.4 验收
+
+- [ ] 填一个**错的**服务器/密码 ⇒ 有明确人话提示，且**没写任何库行、没写凭据**（或写后能回滚）。
+- [ ] 填对的 ⇒ 能列出目录、能选中 `.kdbx`、能加进库列表。
+- [ ] 加进来的库**能解锁**（依赖 R1）。
+- [ ] 改条目 → 保存 → 网盘上文件版本变化；用 KeePassXC 打开**字段没丢**。
+- [ ] 断网中断 ⇒ **原文件仍是上一个完整版本**（不产生半截文件）。
+- [ ] 全量 logcat 搜不到密码明文。
+
+---
+
+## 16.4 R3：OneDrive 配置 UI
+
+前置已就绪（09-17 凌晨那批）：`OneDriveAuthManager`（MSAL 登录/静默取 token/注销）、
+`OneDriveGraphClient`（列 children + 分页）、`OneDriveKdbxFileSource`（含
+`PREFIX = "onedrive:"` 与工厂 `create`）、app 侧 `KdbxCloudSyncAppModule` 已 `registerFactory`。
+
+要做：
+
+| # | 项 | 说明 |
+|---|---|---|
+| 1 | **登录入口** | ⚠️ `signIn` **必须传一个真实可见的 Activity**（MSAL 要拉起授权页）。Compose 里用 `LocalActivity` / 把 Activity 传进 ViewModel，**不能用 applicationContext**。 |
+| 2 | **注销 / 换号** | 换号必须 `forceAccountChooser = true`（默认 `SELECT_ACCOUNT` 在只有一个缓存账户时会被 MSAL 优化成静默登录，用户点了换号却还是原账户）。注销要显式 `removeAccount`。 |
+| 3 | **列文件选库** | 同 R2 §16.3.2 的第 4 条。 |
+| 4 | **建库行** | `addKdbxVault(sourceUri = OneDriveKdbxFileSource.buildOrigin(accountId, path), …)`（origin 格式 `onedrive:<accountId>:<percentEncodedPath>`，构造器已在 `OneDriveKdbxFileSource` 里）。 |
+| 5 | **错误分流** | `isOneDriveAuthTemporarilyUnavailable()` ⇒ 提示"点亮屏幕/关电池优化后重试"；否则 ⇒ "重新登录"。**两者用户动作不同，别混成一句话。** |
+
+### 验收
+
+- [ ] 真机登录能回到应用（回调成功）。
+- [ ] 能列出网盘根目录的 `.kdbx`、能加库、能解锁（依赖 R1）。
+- [ ] 改条目 → 写回 → **网页端 OneDrive 看到新版本**。
+- [ ] 飞行模式下发起的同步：有明确提示、**不产生损坏文件**。
+
+---
+
+## 16.5 R4：`KdbxWritePathTest.kt` 从没跑过
+
+`data/kdbx/src/test/…/KdbxWritePathTest.kt` 有 **9 个 JUnit 用例**，
+但**从未编译/运行过** —— 沙箱无 JUnit / Truth 依赖。
+⇒ 在有依赖的环境（本机 Gradle 或 CI）跑一次，修掉暴露的问题。
+⚠️ 顺便确认它**在 CI 的模块列表里**（`96a82fa` 才把 `data:kdbx` 纳入单测；
+复核 `.github/workflows/ci-debug.yml` 的 test 任务模块清单）。
+
+---
+
+## 16.6 R5（可选，第二期）：免解锁的「用远端覆盖本地」
+
+现状：`RequiresUnlockSessionReplacer`（app 侧匿名实现）**故意**要求用户重新解锁。
+`KdbxCloudSyncModule` 里那版默认实现有 KDoc 解释这个取舍 ——
+**它不是"没做完"，是"有意不做假成功"**：状态记成已同步而会话里还是旧内容，
+会导致用户下次保存把旧内容推回去、**静默覆盖远端新版本**。
+
+要做免密版需要：app 侧用快解锁凭据（Keystore KEK 包裹的主密码）解出主密码 → 重新解码远端字节 → 替换会话。
+**风险高、且不影响主链路可用性** ⇒ 建议**放到第二期**，不要挤进这次"一次性完成"。
+
+---
+
+## 16.7 顺序与依赖（照着做）
+
+```
+R1（读路径迁移）  ← 必须先做，否则 R2/R3 做完了也用不了
+   ↓
+R2（WebDAV 凭据写入 + 配置 UI）   ← 建议先做这个（不需要 OAuth 注册）
+   ↓
+R3（OneDrive 配置 UI）            ← 鉴权已就绪，主要是接 UI
+   ↓
+R4（跑 KdbxWritePathTest + 确认 CI 模块清单）
+   ↓
+真机验收（见 §12 的 9 条 + 本节各 R 的验收清单）
+   ↓
+[第二期] R5 免解锁替换 · §8 方案 A 三方合并 · Google Drive
+```
+
+---
+
+## 16.8 ★ 施工纪律（本项目的门禁与陷阱，逐条都是付过代价的）
+
+| # | 纪律 |
+|---|---|
+| 1 | **门禁必须含 `test`，不能只跑 `compile`** —— 「任务 UP-TO-DATE」≠「那段代码是好的」。 |
+| 2 | **detekt 有两种口径**：CI 用 `./gradlew detekt`（带 `buildUponDefaultConfig`）。本地跑 CLI 必须加 `--build-upon-default-config`，否则得到 **0 findings 的假绿**（CI 上同一批文件报 22 处）。 |
+| 3 | **门禁前置项红 ⇒ 后面的检查一个都没跑**（不是"都过了"）。`when` 漏分支曾因此躲过两轮 CI。 |
+| 4 | **给 `sealed` 加分支后主动全局搜消费点**，别等编译器告诉你。 |
+| 5 | **`VaultRepositoryImpl` 顶格 40 个函数**（detekt 上限）⇒ 新能力要开**独立接口 + 独立实现**，别往里加方法。 |
+| 6 | **`ItemFormDialog` 的圈复杂度顶格 14** ⇒ 类型分支写成一个 `when`，别"先 if 再 when"。 |
+| 7 | **`ItemsScreen` 主 composable 贴 `LongMethod ≤150`** ⇒ 新逻辑收进 helper，别往主函数里塞分支。 |
+| 8 | **改完 detekt 必须再真跑一次 compile**（detekt 先于编译，会掩盖编译错误）。 |
+| 9 | **commit message 里不要用反引号**（bash 会当命令替换执行，静默丢字）。用 `git commit -F -` + heredoc。 |
+| 10 | **`git commit -F` 的路径必须 `C:/…`**，传 `/c/…` 会被 Windows 版 git 拒绝。 |
+| 11 | **Hilt 的 `Initializer` 必须被注入**（`VaultixApplication.kdbxCloudSyncInitializer` 看似没用但必须存在），否则 "配好了库、同步却说没有云端来源"，**且没有任何报错**。 |
+| 12 | **凭据绝不进 URL / 日志**：`WebDavVaultOrigin.parse` 会拒含 `@` 的 authority，别绕过它。 |
+
+---
+
+## 16.9 完成判据（这一批做完，用户能做什么）
+
+- [ ] 用户在设置里**能配**一个 NAS 的 WebDAV，选中上面的 `.kdbx`，加进库列表
+- [ ] **能解锁**它（R1 生效）
+- [ ] 改条目 → 保存 → **网盘上的文件真的变了**，且 KeePassXC 能打开、字段没丢
+- [ ] 另一台设备改了远端 → 本机能**发现冲突**并让用户在三选项里拍板
+- [ ] **断网 / 强杀中断不损坏文件**（原文件仍是上一个完整版本）
+- [ ] 同样的一遍在 **OneDrive** 上也能走通
+- [ ] 全量 logcat 里**没有**密码、token、账号明文
+
