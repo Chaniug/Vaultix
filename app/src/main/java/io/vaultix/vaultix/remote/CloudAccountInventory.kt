@@ -65,6 +65,20 @@ data class CloudAccount(
     val label: String,
     val vaultIds: List<String>,
     val connected: Boolean,
+    /**
+     * 列目录的**起点** —— "选完这个账号该列哪儿"。
+     *
+     * ⚠️ 语义**按来源不同**（刻意不强行统一成一种，那只会逼出一层无意义的转换）：
+     * - WebDAV：一个**目录 URL**（如 `https://nas/dav/Vaultix/`）
+     * - OneDrive：一个**相对路径**（如 `Keepass`；空串 = 根）
+     *
+     * ★ 它**不新增持久化**：从该账号**任一库**的 origin 反推 ——
+     * 账号的现实意义就是"它被哪些库在用"，起点自然也来自那些库。
+     *
+     * ⚠️ null = 没有任何库指向它（那就无从"列目录" —— **如实为 null，不要猜一个**；
+     * 顺手拼 `server + "/"` 正是今天那类"看起来能跑、实际 404"的错误来源）。
+     */
+    val browseRoot: String? = null,
 ) {
     val vaultCount: Int get() = vaultIds.size
 }
@@ -89,6 +103,7 @@ class CloudAccountInventory @Inject constructor(
 
         val vaultsOf = linkedMapOf<Pair<CloudAccountKind, String>, MutableList<String>>()
         val labels = mutableMapOf<Pair<CloudAccountKind, String>, String>()
+        val roots = mutableMapOf<Pair<CloudAccountKind, String>, String>()
 
         for (vault in rows) {
             val webDav = WebDavVaultOrigin.parse(vault.origin)
@@ -97,6 +112,8 @@ class CloudAccountInventory @Inject constructor(
                 val key = CloudAccountKind.WEBDAV to webDav.credentialId
                 vaultsOf.getOrPut(key) { mutableListOf() } += vault.id
                 labels.putIfAbsent(key, serverOf(webDav.fileUrl))
+                // 起点 = 这些库所在的**目录**（不是服务器根 —— 用户当初填的可能是子目录）。
+                roots.putIfAbsent(key, webDavDirectoryOf(webDav.fileUrl))
                 continue
             }
             val oneDrive = OneDriveVaultOrigin.parse(vault.origin)
@@ -104,6 +121,9 @@ class CloudAccountInventory @Inject constructor(
                 val key = CloudAccountKind.ONEDRIVE to oneDrive.accountId
                 vaultsOf.getOrPut(key) { mutableListOf() } += vault.id
                 labels.putIfAbsent(key, oneDriveLabel(oneDrive.accountId, sessions))
+                // OneDrive 的起点是**相对路径**（listChildren 取 path 的父目录）：
+                // 去掉文件名即所在目录，空串 = 根。
+                roots.putIfAbsent(key, oneDrive.path.substringBeforeLast('/', missingDelimiterValue = ""))
             }
         }
 
@@ -114,6 +134,7 @@ class CloudAccountInventory @Inject constructor(
                 storedId = storedId,
                 label = labels[key] ?: storedId,
                 vaultIds = vaultIds,
+                browseRoot = roots[key],
                 connected = when (kind) {
                     CloudAccountKind.WEBDAV -> webDavCredentials.read(storedId) != null
                     // ⚠️ 与 getAccount 共用同一条形状容错规则（见 matchesStoredAccountId）。
@@ -122,6 +143,20 @@ class CloudAccountInventory @Inject constructor(
                 },
             )
         }.sortedWith(compareBy({ it.kind.ordinal }, { it.label }))
+    }
+
+    /**
+     * 该文件的**所在目录**（保留尾部 `/`）。
+     *
+     * ⚠️ 规则与 [io.vaultix.data.repository.kdbx.WebDavKdbxFileSource] 的 `directoryUrl`
+     * **必须一致**，但那一份在 `private companion object` 里、外部拿不到 ⇒ 这里重复一行。
+     * 允许这一处重复的理由：它是一条**机械的字符串规则**（不是语义规则，不像 accountId
+     * 的匹配那样会随外部实现漂移）；且方向单一 —— 真源改了这里会立刻在浏览时暴露（列错目录）。
+     * ⚠️ 尾 `/` 不能省：`listChildren()` 内部还要用它砍最后一段，不带尾斜杠会砍错。
+     */
+    private fun webDavDirectoryOf(fileUrl: String): String {
+        val withoutQuery = fileUrl.substringBefore('?')
+        return withoutQuery.substringBeforeLast('/', missingDelimiterValue = withoutQuery) + "/"
     }
 
     /** OneDrive 的展示名优先用邮箱（拿不到就退回 accountId）。 */
