@@ -243,8 +243,14 @@ class OneDriveGraphClient @Inject constructor() {
      * ⚠️ 阈值 **2MiB**、片大小 **5MiB** 是 Bastion 实测参数，**别自己猜**：
      * Graph 的简单上传有约 4MB 上限，且片必须是 **320KiB 的整数倍**
      * （[CHUNK_SIZE_BYTES] = 320KiB × 16），否则部分服务端会 400。
+     * ⚠️ **必须是 `suspend`**：末尾那次兜底 `stat(...)` 是 suspend 函数
+     * （它自己 `withContext(Dispatchers.IO)`）。写成普通函数会在编译期报
+     * `Suspend function 'stat' can only be called from a coroutine`，
+     * 且 `?:` 的结果会被推成 `Any`（触发 `Return type mismatch`）。
+     * 调用方 [upload] 本身在 `withContext(Dispatchers.IO)` 里，
+     * 再叠一层 suspend 不产生额外调度开销。
      */
-    private fun chunkedUpload(
+    private suspend fun chunkedUpload(
         accessToken: String,
         path: String,
         bytes: ByteArray,

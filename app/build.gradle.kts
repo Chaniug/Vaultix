@@ -170,6 +170,19 @@ dependencies {
     implementation(projects.core.datastore)
     implementation(projects.domain)
     implementation(projects.data.repository)
+    // ⚠️ `data:kdbx` **必须显式声明**（2026-09-17 踩）：
+    // `data:repository` 是用 `implementation(projects.data.kdbx)` 引它的，
+    // 而 `implementation` **不传递给上层消费者** ⇒ app 侧拿不到
+    // `io.vaultix.data.kdbx.KdbxFileSource` 等类型，且报错极具误导性：
+    //     e: KdbxCloudSyncAppModule.kt:151 Cannot access class
+    //        'io.vaultix.data.kdbx.KdbxFileSource'.
+    //        Check your module classpath for missing or conflicting dependencies.
+    //     e: OneDriveKdbxFileSource.kt:35 Unresolved reference 'kdbx'.
+    // 读起来像"依赖冲突"，实际只是少了这一行。
+    // 不改成 `data:repository` 用 `api(...)`：那会把 KDBX 的全部实现
+    // （含 kotpass）泄给每一个消费者的编译期 classpath，
+    // 而 app 需要它只是因为 OneDrive 来源实现落在这里（见 KdbxCloudSyncAppModule）。
+    implementation(projects.data.kdbx)
 
     // 测试
     testImplementation(libs.junit)

@@ -33,6 +33,7 @@ import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
+import io.vaultix.data.kdbx.KdbxFileSource
 import io.vaultix.data.repository.kdbx.KdbxCloudSyncCoordinator
 import io.vaultix.data.repository.kdbx.KdbxSessionReplacer
 import io.vaultix.data.repository.kdbx.WebDavCredentialLookup
@@ -123,9 +124,9 @@ object KdbxCloudSyncAppModule {
  * 那种错会表现为"配置了 OneDrive 却总说没有来源"。包一层就有类型可依。
  */
 class OneDriveSourceFactory(
-    private val factory: (String) -> io.vaultix.data.kdbx.KdbxFileSource?,
+    private val factory: (String) -> KdbxFileSource?,
 ) {
-    fun create(origin: String): io.vaultix.data.kdbx.KdbxFileSource? = factory(origin)
+    fun create(origin: String): KdbxFileSource? = factory(origin)
 }
 
 /**
