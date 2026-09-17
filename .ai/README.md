@@ -11,8 +11,18 @@
 
 ## 🕐 最新状态（**2026-09-17 收工**·交接点，接力请先看这几行）
 
-- **工作区干净；今天的提交已全部推送。** 今日链条：R1–R4 → 通行密钥两层 → 签名统一 →
-  四处静默失败 → OneDrive 登录态 → ① 前三步 → 定稿三次修订 → **两份自包含施工工作单**。
+- **工作区干净；今天的提交已全部推送**（`main` 与 `rele` 均在 `7f0376e`）。
+  今日链条：R1–R4 → 通行密钥两层 → 签名统一 → 四处静默失败 → OneDrive 登录态 →
+  ① 前三步 → 定稿三次修订 → 两份自包含施工工作单 → **设置页 §1 落地并发布**。
+- ★★ **发布机制（2026-09-17 实测确认，务必记住）**：**push 到 `rele` 分支 = 直接触发正式发布**。
+  `.github/workflows/release.yml` 的触发条件是 `branches: [rele]` / `tags: [v*]` / 手动：
+  读根 `VERSION` → 打 `v*` tag → **混淆构建** `:app:assembleFullRelease` →
+  发布**非 prerelease 的 Latest Release**（附 APK + `checksums-sha256.txt`），
+  并按 `keep_releases`（默认 10）清理旧 Release。
+  ⇒ ⚠️ **不要为了"让分支保持同步"顺手 push `rele`** —— 那等于发版。
+  ⇒ 本次收工：main 已**快进**合入 rele ⇒ **v0.3.0 已发布成功**
+  （`Vaultix v0.3.0 (Stable)` · tag `v0.3.0` · **Latest** · 固定密钥签名 ⇒ 可覆盖安装）。
+  `main` 上的 `ci-debug.yml` 只把 debug APK 发到 `preview`（prerelease），不参与正式发布。
 - ★★ **下一步**：按 **`Docs/progress/settings-rework.md`** 的 **§2 → §3 → §4** 施工
   （**§1 已完成**：代码 + 三条门禁绿，⚠️ **真机未验** —— 细节见该文档 §1「施工记录」）。
   该文档**自包含**（纪律 + 落点 + 验收清单，**零上下文可做**），
