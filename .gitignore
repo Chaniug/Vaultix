@@ -55,3 +55,8 @@ Thumbs.db
 # Python 缓存（.ai/tools 下的自检脚本会产生）
 __pycache__/
 *.pyc
+
+# ---- 签名密钥（**永不入库**，仓库是公开的；见 .ai/conventions/8.7-环境.md）----
+keystore.properties
+*.jks
+*keystore*.txt

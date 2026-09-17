@@ -9,27 +9,33 @@
 此前约定「两边保持同步」，结果是同一主题两处各有一份、必然漂移（AI 会看错位置）。
 **要改内容，只改这里。**
 
-## 🕐 最新状态（**2026-09-17 下午**，接力请先看这 6 行）
+## 🕐 最新状态（**2026-09-17 傍晚**，接力请先看这 7 行）
 
-- **HEAD** `3b2cc31`；门禁 detekt ✅ · `:app:compileFullDebugKotlin` ✅ · 单测全绿；
-  白天那批另有 **155 条沙箱断言 0 失败**。
-- ★★ **KDBX 网盘同步已落地**（`910b571` 起，批次 0–6 全部完成）：36 文件 / +4813 行，
-  `KdbxFileSource` / `KdbxFidelity` / `KdbxAtomicWriter` / `KdbxRoundTrip` /
-  `SafKdbxFileSource` / `WebDavKdbxFileSource` / `OneDriveKdbxFileSource` /
-  `KdbxCloudSyncCoordinator` / `KdbxSyncOrchestrator` / `KdbxConflictDialog` 全部入库。
-  → 细节读 **`SESSION-2026-09-17.md` §10**（含 5 轮 CI 各红一层的复盘）。
-- ▶ **但用户现在一个网盘库都加不进来、也打不开**。根因不是 UI 没做，而是
-  **读、写两条路径用了两个接口**：写回走新的 `KdbxFileSource`（✅ 支持网盘），
-  **读/解锁/添加/校验仍走旧的 `KdbxSource`（只认 SAF `content://`，❌）**。
-  ⇒ **剩余工作单在 [`cloud-sync-plan.md`](../Docs/progress/cloud-sync-plan.md) 的 §16**
-  （自包含，零上下文会话可照做）。**开工前必读 §16.1。**
-- **剩余 4 项**：**R1** ★ 把读路径迁到 `KdbxFileSource`（5 个调用点，**必须先做**）·
-  **R2** WebDAV **凭据写入** + 配置 UI（★ 读侧接线完整、**写侧一行都没有** ⇒ 当前 100% 走不通）·
-  **R3** OneDrive 配置 UI · **R4** `KdbxWritePathTest.kt`（9 用例）从没跑过。
-  R5（免解锁替换）**有意放到第二期**。
-- **最近三轮**：`SESSION-2026-09-16.md`（睡前下单、睡醒验收那批）·
+- **HEAD** 仍是 `3b2cc31`（本批**尚未提交**，工作区有 16 个文件改动）；门禁全绿 ✅
+  detekt（全模块）· `:app:compileFullDebugKotlin` · `:data:kdbx:testDebugUnitTest` **47 项 0 失败** ·
+  `:data:repository:testDebugUnitTest`。4 个本地自检脚本：3 绿 + 1 **误报**（见下）。
+- ★★★ **R1–R4 全部完成**（工作单 = `cloud-sync-plan.md` §16，**现在读 §16 只当背景资料**）。
+  → 逐条细节读 **`SESSION-2026-09-17.md` §11**。
+  - **R1 读路径迁移**：删掉旧 `KdbxSource` 与非挂起重载；`Kdbx.unlock/verify` 改收
+    `KdbxFileSource`；新增 **`KdbxFileSourceResolver`**（origin⇒来源的**唯一**判别表，
+    由协调器实现）；5 个调用点全迁。**网盘库从此能添加、能解锁。**
+  - **R2/R3**：新增 `WebDavCredentialStore` · `AddCloudVaultViewModel` · `AddCloudVaultScreen`
+    （WebDAV 与 OneDrive 共用一条流程）· `WebDavUrlBuilder`（★ 参照上游 Bastion：
+    **子路径从"已验证可用的 base"拼，不用服务器回显的 `href`**）· 入口 = 添加库对话框第三张卡。
+  - **R4**：`KdbxWritePathTest` **一跑就炸**（编译都不过），且那条反向用例原本**测不到东西**；
+    已修 + 重写 ⇒ `data:kdbx` 47 项 0 失败。
+- ⚠️ **`.ai/tools/check_compile_smells.py` 有一处误报**（未修）：它按**名字**匹配跨文件 private，
+  没考虑"同名定义在本文件的 companion 里"（`KdbxCredentialCandidate.sha256Hex` 被误报）。
+  编译是绿的 ⇒ 不是真问题。**改探针前先跑 `.ai/tools/tests/` 的自测。**
+- 🔴 **用户新报：通行密钥「反复要求解锁」**（Bitwarden 库 + "从不加锁" + 清后台后网页登录，
+  指纹过了又要解锁约 3 次，刷新页面后正常）。**已知同款环**见 `AutofillActivity` 第 141-143 行
+  的 KDoc；两个待查点见 `SESSION-2026-09-17.md` §11.6。**取证前不要动代码**——
+  已给 `LocalUnlockFanout` 补上逐库埋点，但 `AutofillLogger` **只在 debug 构建输出**。
+- ⏳ **待用户真机验收**：R1–R3 只过了编译与静态检查（WebDAV 加库→解锁→改条目→KeePassXC 能开 ·
+  OneDrive 登录链路 · 断网中断不损坏）；另有 09-17 凌晨那 5 组 UI。
+- **最近三轮**：`SESSION-2026-09-16.md`（睡前下单、睡醒验收）·
   `SESSION-2026-09-17.md`（凌晨：5 组 UI + 坑 #106 + OneDrive 鉴权骨架 /
-  白天：网盘同步落地）。
+  白天：网盘同步落地 / **傍晚：R1–R4**）。
 - ⚠️ **不要被「UP-TO-DATE」骗了**：跑 `test` 才炸出过 `data:repository` 的单测**编译**断链
   （`SESSION-2026-09-17.md` §6.1）—— **门禁必须包含 `test`，不能只跑 `compile`。**
 

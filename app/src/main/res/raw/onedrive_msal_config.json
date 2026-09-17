@@ -1,7 +1,7 @@
 {
   "client_id": "51306f8c-de1c-41da-8ae0-df00d1e830cb",
   "authorization_user_agent": "DEFAULT",
-  "redirect_uri": "msauth://io.vaultix.vaultix/s8Z1PBw9xUHOxihJdrGizMzPhb0=",
+  "redirect_uri": "msauth://io.vaultix.vaultix/s8Z1PBw9xUHOxihJdrGizMzPhb0%3D",
   "account_mode": "MULTIPLE",
   "broker_redirect_uri_registered": false,
   "authorities": [

@@ -1,4 +1,5 @@
 import com.android.build.api.dsl.ApplicationExtension
+import java.util.Properties
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
@@ -66,10 +67,80 @@ android {
         ndk { abiFilters += listOf("arm64-v8a") }
     }
 
+    /**
+     * ---- 签名（2026-09-17）----
+     *
+     * ## 要解决的问题
+     *
+     * 此前：`assembleFullDebug` 产出的是 **Android debug 签名**，而设备上装的是
+     * **项目自有发布密钥**（`CN=Vaultix`）⇒ 每次装机都得手动 `apksigner sign` 重签一遍。
+     * 更麻烦的是 CI 产物与本地产物**互不兼容**（下载下来盖不上）。
+     *
+     * 现在：只要拿得到发布密钥，**debug 与 release 都用它签** ⇒
+     * 「CI 产物 == 本地产物 == 设备上已装的包」三者签名一致，下载即可原地覆盖安装。
+     *
+     * ## 密钥从哪来（按优先级，两处都拿不到就退回旧行为）
+     *
+     * 1. **环境变量** —— CI 用 GitHub Secrets 注入（`VAULTIX_KEYSTORE_PATH` /
+     *    `VAULTIX_STORE_PASSWORD` / `VAULTIX_KEY_ALIAS`）；
+     * 2. **仓库根的 `keystore.properties`** —— 本地开发用，**已 gitignore**；
+     * 3. 默认路径 `D:/vaultix-release.jks`（见 `.ai/conventions/8.7-环境.md`）存在就用它。
+     *
+     * ⚠️ **密钥永不入库**（仓库是公开的）：三种来源都在仓库之外。
+     * ⚠️ **key 密码 == store 密码**：密码文件里那个 `KEY_PASSWORD` 是错的，别照抄（8.7 有记录）。
+     * ⚠️ 日志里会打印**用了哪种来源**（不打印密码），否则"这次到底签没签"只能靠猜。
+     *
+     * ⚠️ 这里必须 `import java.util.Properties`（见文件头）：在 Gradle Kotlin 脚本里
+     * 写 `java.util.Properties()` 会被 `java`（JavaPluginExtension）**遮蔽**，
+     * 报 `Unresolved reference 'util'` —— 与"属性名写错"长得一模一样的假象。
+     */
+    val keystoreProps = Properties().apply {
+        val file = rootProject.file("keystore.properties")
+        if (file.exists()) file.inputStream().use { load(it) }
+    }
+
+    fun signingValue(envKey: String, propKey: String): String? =
+        System.getenv(envKey)?.takeIf { it.isNotBlank() }
+            ?: keystoreProps.getProperty(propKey)?.takeIf { it.isNotBlank() }
+
+    val releaseStore = signingValue("VAULTIX_KEYSTORE_PATH", "storeFile")
+        // ⚠️ **必须把反斜杠归一化成正斜杠**：`.properties` 里 `\` 是**转义字符**，
+        //    `D:\vaultix-release.jks` 会被 `Properties` 解析成 `D:vaultix-release.jks`
+        //    （`\v` → `v`），于是 file 解析失败、签名悄悄退回 debug。
+        //    这是"配置看着没错、效果却是没签"的典型来源，所以在代码里兜住，
+        //    而不是只在文档里写"请用正斜杠"。
+        ?.replace('\\', '/')
+        ?.let { rootProject.file(it) }
+        ?: rootProject.file("D:/vaultix-release.jks").takeIf { it.exists() }
+
+    val releaseStorePassword = signingValue("VAULTIX_STORE_PASSWORD", "storePassword")
+    val releaseKeyAlias = signingValue("VAULTIX_KEY_ALIAS", "keyAlias") ?: "vaultix"
+
+    val hasReleaseSigning = releaseStore != null && releaseStorePassword != null
+
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = releaseStore
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                // ⚠️ 与 store 密码相同（见 8.7 的坑），**不要**去读那个错的 KEY_PASSWORD。
+                keyPassword = releaseStorePassword
+            }
+        }
+    }
+
     buildTypes {
         debug {
             isMinifyEnabled = false
-            // 注意：不要加 applicationIdSuffix，保证 debug 与 release 可互相覆盖安装
+            // 注意：不要加 applicationIdSuffix，保证 debug 与 release 可互相覆盖安装。
+            // ⚠️ 有发布密钥时**刻意用它签 debug**（见上）：否则 CI 的 debug 包与设备上
+            //    已装的包签名不符，下载下来根本装不上，等于白出包。
+            signingConfig = if (hasReleaseSigning) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
         release {
             isMinifyEnabled = true
@@ -78,9 +149,31 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            // 签名由 CI 通过 -Pandroid.injected.signing.* 全局注入；本地 release 需自行配置
+            // 有发布密钥就用它；没有则保持"由 CI 通过 -Pandroid.injected.signing.* 注入"的旧路径。
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
+
+    logger.lifecycle(
+        "[Vaultix 签名] " + if (hasReleaseSigning) {
+            "使用项目发布密钥签名（别名 $releaseKeyAlias，来源 ${releaseStore?.path}）" +
+                " ⇒ debug/release 产物与设备上已装的包**签名一致**，可直接覆盖安装。"
+        } else {
+            // ⚠️ 分两种情况说清楚 —— 否则"签没签"这件事只能靠猜：
+            //    有密钥库但没给密码时，笼统地说"找不到密钥库"会把人引到错误的方向。
+            val why = if (releaseStore == null) {
+                "找不到 keystore（env VAULTIX_KEYSTORE_PATH / keystore.properties / " +
+                    "D:/vaultix-release.jks 都没有）"
+            } else {
+                "找到了 keystore（${releaseStore.path}）但**没有密码**" +
+                    "（env VAULTIX_STORE_PASSWORD 或 keystore.properties 的 storePassword）"
+            }
+            "未启用发布签名：$why ⇒ 退回旧行为：debug 用 Android debug 密钥签、release 不签。" +
+                "⚠️ 这样的产物装不上已有发布签名的设备（需手动重签，见 .ai/conventions/8.7-环境.md）。"
+        },
+    )
 
     // 分发维度：full（含 Bitwarden 网络同步）/ offline（仅 KDBX 本地）
     flavorDimensions += "distribution"

@@ -480,6 +480,24 @@ WebDAV 的账号密码必须走 **`SecureCredentialStore`**（Keystore 包装）
 
 # 16. ★★ 剩余工作 —— 一次性完成的工作单（2026-09-17 下午）
 
+> ## ✅ 本节已完成（2026-09-17 傍晚）—— **下面这份工作单现在只当背景资料读**
+>
+> R1 / R2 / R3 / R4 **全部做完**，门禁全绿：
+> detekt（全模块）· `:app:compileFullDebugKotlin` ·
+> `:data:kdbx:testDebugUnitTest` **47 项 0 失败**（★ 此前从未运行）· `:data:repository:testDebugUnitTest`。
+>
+> | 项 | 落点 | 与工作单的差异 |
+> |---|---|---|
+> | **R1** | `Kdbx.unlock/verify` 改收 `KdbxFileSource`；新增 `KdbxFileSourceResolver`（由协调器实现）；5 个调用点全迁 | ★ **删掉了旧 `KdbxSource`**（工作单说"并存、逐步迁"）—— §16.1 已证明并存=留一个静默失效的口子 |
+> | **R2** | `WebDavCredentialStore`（凭据唯一入口）+ `AddCloudVaultViewModel/Screen` | 另外抽了 **`WebDavUrlBuilder`**（★ 参照上游 Bastion：子路径从**已验证可用的 base** 拼，不用服务器回显的 `href`） |
+> | **R3** | 与 R2 **共用同一条流程**（新增 `AddCloudVaultRoute`） | 换号改为 **signOut + signIn(forceAccountChooser)** 两件都做；拿不到 Activity 时如实报错 |
+> | **R4** | `KdbxWritePathTest` 跑通 | ★ 它**编译都不过**；且那条反向用例原本**测不到 `KdbxRoundTrip`**（在用自己刚写的 diff 测自己）⇒ 已重写 |
+>
+> → 逐条细节与理由：**`.ai/SESSION-2026-09-17.md` §11**。
+>
+> ⏳ **尚未做**：真机验收（R1–R3 只过了编译与静态检查）；`git commit`（工作区 16 个文件）。
+> ⚠️ **仍未修**：`.ai/tools/check_compile_smells.py` 的一处**误报**（见 §11.5）。
+
 > **本节的用途**：让**一个全新会话**（零上下文）能照着一次做完剩余工作。
 > 因此本节**自包含**：不假设你读过 §1–§15，但凡需要细节都会给出文件路径。
 >
