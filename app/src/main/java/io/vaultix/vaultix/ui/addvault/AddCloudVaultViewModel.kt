@@ -516,10 +516,27 @@ class AddCloudVaultViewModel @Inject constructor(
      */
     private fun currentSource(): KdbxFileSource? = when (_state.value.provider) {
         CloudProvider.WEBDAV -> runCatching { webDavSource(currentDir()) }.getOrNull()
-        CloudProvider.ONEDRIVE -> oneDriveSource(currentDir().ifBlank { rootPlaceholderPath() })
+        CloudProvider.ONEDRIVE -> oneDriveSource(oneDriveBrowsePath())
     }
 
     private fun rootPlaceholderPath(): String = BROWSE_PLACEHOLDER
+
+    /**
+     * 列 OneDrive **当前目录**时该用的 path。
+     *
+     * ★ 2026-09-17 修：此前只在**根目录**加了占位文件名，进了子目录就直接把
+     * 目录路径（如 `Vaultix`）当 path 传下去 —— 而
+     * [io.vaultix.vaultix.remote.onedrive.OneDriveKdbxFileSource.listChildren] 取的是
+     * **path 的父目录**（`path.substringBeforeLast('/', "")`），
+     * 对没有 `/` 的 `"Vaultix"` 会返回**空串** ⇒ **列的还是根目录**，
+     * 而选中文件时 `selectedReference()` 却拼成 `"Vaultix/<名字>"` ⇒ Graph 404
+     * （界面只显示"OneDrive 上找不到该文件"，文件明明在）。
+     * ⇒ 与 WebDAV 那条路对齐：**任何一层目录都要带上占位文件名**。
+     */
+    private fun oneDriveBrowsePath(): String {
+        val dir = currentDir()
+        return if (dir.isBlank()) rootPlaceholderPath() else "$dir/$BROWSE_PLACEHOLDER"
+    }
 
     private fun rootLabel(serverUrl: String): String =
         serverUrl.removePrefix("https://").removePrefix("http://").trimEnd('/')

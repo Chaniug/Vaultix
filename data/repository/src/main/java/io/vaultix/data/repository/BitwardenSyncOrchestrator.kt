@@ -183,6 +183,23 @@ class BitwardenSyncOrchestrator {
             // 直接调用使测试可用虚拟时间推进（生产运行在注入 scope 上）
             vaultRepository.syncVault(vaultId)
         } catch (error: CancellationException) {
+            // ★★ 2026-09-17 修：取消路径**必须**把 isRunning 清掉，否则同步会**永久卡死**。
+            //
+            // 症状（用户实测）：「点一下同步就停了」—— 没有网络请求、没有错误提示、
+            // 也**没有任何日志**，看起来像"同步成功但没数据"。
+            // 根因：本函数入口有 `if (rt.isRunning) { 合并; return }` 的早退，
+            // 而 `rt.isRunning = false` 原本只在**正常路径**（下方 mutex 块里）执行。
+            // 一旦协程被取消（切后台、从最近任务划掉、进程被系统回收都在此列），
+            // 这里直接 rethrow ⇒ 清理一行都不跑 ⇒ isRunning 永久为 true
+            // ⇒ 之后**每一次**同步都在入口瞬间返回。
+            //
+            // ⚠️ 这里刻意**不**用 `withContext(NonCancellable)`：协程已取消时任何挂起点都会
+            //    立刻再抛，那样清理照样跑不到。而 `runtimeOf` / `updateStatus` 都是**非挂起**的
+            //    （只改内存 map + publish），所以直接调用既安全又一定执行得到。
+            // ⚠️ 取消**不是失败**：只清 isRunning，**不**写 lastError（那会把"用户切走了"
+            //    误报成"同步失败"，让用户去排查一个根本不存在的问题）。
+            runtimeOf(vaultId).isRunning = false
+            updateStatus(vaultId) { it.copy(isRunning = false) }
             throw error
         } catch (error: Exception) {
             VaultSyncReport.Retryable(error.message ?: "同步失败")

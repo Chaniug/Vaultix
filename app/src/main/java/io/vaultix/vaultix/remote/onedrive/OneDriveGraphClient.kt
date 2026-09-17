@@ -17,6 +17,7 @@
  */
 package io.vaultix.vaultix.remote.onedrive
 
+import android.net.Uri
 import io.vaultix.common.logging.VaultixLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -441,11 +442,24 @@ class OneDriveGraphClient @Inject constructor() {
     private fun buildCreateUploadSessionRelativeUrl(path: String): String =
         "${buildItemRelativeUrl(path)}:/createUploadSession"
 
-    /** 逐段编码：路径里的中文 / 空格 / `#` 不编码会让 Graph 返回 400 或找错文件。 */
+    /**
+     * 逐段编码：路径里的中文 / 空格 / `#` 不编码会让 Graph 返回 400 或找错文件。
+     *
+     * ⚠️ ★ **必须用 `Uri.encode`，不能用 `URLEncoder.encode`**（2026-09-17 修）：
+     * `URLEncoder` 是 **`application/x-www-form-urlencoded`（表单）** 编码，
+     * 它把**空格编成 `+`**。而在 URL 的**路径**里 `+` 是**字面加号**、不代表空格
+     * （RFC 3986；只有 query 里才按 form 规则解释）。
+     * ⇒ 一个叫 `我的 密码库.kdbx` 的文件会被拿去查 `我的+密码库.kdbx`
+     *   ⇒ Graph 回 **404**，而界面只会说"OneDrive 上找不到该文件"，
+     *   **文件明明就在那儿、名字也没打错** —— 这类"看着像权限/路径错"的 404，
+     *   根因往往就是这一处编码器选错。
+     *
+     * `Uri.encode` 编的是 URI 路径语义：空格 → `%20`、`+` → `%2B`，两者都不再混淆。
+     */
     private fun encodePath(path: String): String = path
         .split('/')
         .filter { it.isNotBlank() }
-        .joinToString("/") { segment -> java.net.URLEncoder.encode(segment, "UTF-8") }
+        .joinToString("/") { segment -> Uri.encode(segment) }
 
     private fun executeJsonRequest(relativeOrAbsoluteUrl: String, accessToken: String): String {
         val url = if (relativeOrAbsoluteUrl.startsWith("https://", ignoreCase = true)) {

@@ -401,14 +401,44 @@ class ItemRepositoryImpl @Inject constructor(
             }
             .flowOn(cryptoDispatcher)
 
-    /** 解密当前快照；解析或解密失败的条目跳过（列表可浏览优先；删除过滤由查询保证）。 */
+    /**
+     * 解密当前快照。
+     *
+     * ## ⚠️ ★ 「跳过个别坏行」与「整把密钥不对」必须分开（2026-09-17 真机实证）
+     *
+     * 原实现把两种失败**合并**成同一个结果（空列表）：
+     * ```
+     * rows.mapNotNull { runCatching { 解密 }.getOrNull() }   // 失败即跳过
+     * ```
+     * 密钥不对时**每一行都被跳过** ⇒ 返回空列表 ⇒ 用户看到「还没有保存的密码」，
+     * 与"这个库真的是空的"**在界面上无法区分** —— 于是用户以为**数据丢了**。
+     * （实测：库里有 218 条密文、归属与活跃库逐字一致；用指纹快速解锁进去是空的，
+     *  改用主密码走联网登录后 218 条全部出现 ⇒ 差别只在**密钥对不对**。）
+     *
+     * ⇒ 判据：**有行、却一条都解不出来** = 密钥不可用，不是库空。
+     *   处理：留一条日志，并**作废该库会话**（`lock`）—— 于是 `isUnlocked` 变 false，
+     *   UI 落到解锁页，用户能用**主密码**重开（那才是能解出正确密钥的那条路）。
+     *
+     * ⚠️ 真·空库必须**提前返回**：不能因为"0 行"就判成密钥错，
+     *    否则一个正常空库会变成"反复要求解锁"。
+     * ⚠️ 只有**全部**失败才作废：个别行损坏（编码不兼容等）不该把整个会话打掉。
+     */
     private suspend fun decodeAll(vaultId: String, rows: List<CipherEntity>): List<VaultItem> {
         val key = sessions.keyOf(vaultId) ?: return emptyList()
-        return rows.mapNotNull { row ->
+        // 真·空库：直接返回（见上，不能落到下面的"全部失败"判据里）。
+        if (rows.isEmpty()) return emptyList()
+        val decoded = rows.mapNotNull { row ->
             runCatching { json.decodeFromString<CipherDto>(row.encryptedPayload) }
                 .getOrNull()
                 ?.let { dto -> mapper.toDomain(dto, key) }
         }
+        if (decoded.isEmpty()) {
+            io.vaultix.common.logging.VaultixLog.d("VaultixItem") {
+                "decodeAll: rows=${rows.size} 全部解密失败 ⇒ 会话密钥不可用，作废会话要求重新解锁"
+            }
+            sessions.lock(vaultId)
+        }
+        return decoded
     }
 
     /**
