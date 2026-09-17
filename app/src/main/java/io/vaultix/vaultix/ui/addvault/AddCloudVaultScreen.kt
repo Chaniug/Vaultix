@@ -35,6 +35,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Visibility
@@ -73,6 +74,7 @@ import androidx.fragment.app.FragmentActivity
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.vaultix.data.kdbx.KdbxFileEntry
+import io.vaultix.vaultix.remote.CloudAccount
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.VaultixWavyProgressBar
 import io.vaultix.vaultix.ui.common.rememberFragmentActivity
@@ -123,6 +125,8 @@ fun AddCloudVaultScreen(
     //   本页是导航路由 ⇒ 一返回这个 ViewModel 就销毁，再进来是全新的、登录态为 null。
     //   不主动恢复的话，界面会把"MSAL 里登录着"显示成"没登录"，逼用户重走一遍授权页。
     LaunchedEffect(Unit) { viewModel.restoreOneDriveSessionIfAny() }
+    // 账号可能刚在设置里配好 ⇒ 每次进页面重读一次（不缓存）。
+    LaunchedEffect(Unit) { viewModel.refreshConfiguredAccounts() }
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -174,6 +178,17 @@ private fun ConfigSection(
     )
     Spacer(Modifier.height(Spacing.lg))
 
+    // ★ 已经配过网盘账号 ⇒ 只让用户**选账号**，不再让他重填服务器/密码/登录。
+    //   理由（定稿 §11.7）：登录与凭据是**长寿命**状态，归设置里的「网盘账号」；
+    //   本页只负责"选一个库文件"。在短寿命的路由页里收凭据，必然"返回就没了"。
+    if (state.configuredAccounts.isNotEmpty()) {
+        ConfiguredAccountsList(state = state, onPick = viewModel::pickAccount)
+        ErrorLine(state.error)
+        BusyLine(visible = state.busy, label = stringResource(R.string.add_cloud_connecting))
+        return
+    }
+
+    // ---- 还没配过账号：保留原有配置流程（⚠️ 下一步摘掉，改成就地给"去设置里配置"的引导）----
     ProviderRow(selected = state.provider, onSelect = viewModel::onProviderChange)
     Spacer(Modifier.height(Spacing.lg))
 
@@ -548,6 +563,63 @@ private fun BusyLine(visible: Boolean, label: String) {
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
+}
+
+/**
+ * 已配置账号的**选择列表**（"选一个 → 直接列它的目录"）。
+ *
+ * ⚠️ 只列**已有的**账号，不提供"在这里新建账号" —— 那正是要挪走的东西（定稿 §11.7）。
+ * 新建/换号/注销都在设置 → 密码库管理 →「网盘账号」。
+ */
+@Composable
+private fun ConfiguredAccountsList(
+    state: AddCloudVaultViewModel.UiState,
+    onPick: (CloudAccount) -> Unit,
+) {
+    Text(
+        text = stringResource(R.string.add_cloud_pick_account),
+        style = MaterialTheme.typography.titleSmall,
+    )
+    Spacer(Modifier.height(Spacing.sm))
+    state.configuredAccounts.forEach { account ->
+        ListItem(
+            modifier = Modifier.clickable(
+                enabled = !state.busy,
+                onClick = { onPick(account) },
+            ),
+            leadingContent = {
+                Icon(
+                    imageVector = Icons.Filled.Cloud,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            },
+            headlineContent = { Text(account.label) },
+            supportingContent = {
+                Text(
+                    // 连接状态直接写在这里：**未连接**的账号点了也会失败，得让用户先看见。
+                    text = stringResource(
+                        if (account.connected) {
+                            R.string.cloud_accounts_connected
+                        } else {
+                            R.string.cloud_accounts_disconnected
+                        },
+                    ),
+                    color = if (account.connected) {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    } else {
+                        MaterialTheme.colorScheme.error
+                    },
+                )
+            },
+            trailingContent = {
+                Icon(
+                    Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    contentDescription = null,
+                )
+            },
+        )
+    }
 }
 
 private fun CloudProvider.labelRes(): Int = when (this) {

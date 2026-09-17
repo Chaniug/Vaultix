@@ -59,6 +59,8 @@
     <!-- 明文 HTTP 只提示、不阻拦：局域网 NAS 用 http 是常态，拦下来会让功能对这些人直接不可用。 -->
     <string name="add_cloud_insecure_http">注意：这是明文 HTTP，账号密码在局域网内以明文传输。公网地址请改用 HTTPS。</string>
     <string name="add_cloud_connect">连接并浏览</string>
+    <!-- 已配过网盘账号时：只让用户选账号（登录/凭据归设置里的「网盘账号」） -->
+    <string name="add_cloud_pick_account">选择已配置的网盘账号</string>
     <string name="add_cloud_connecting">正在连接…</string>
     <string name="add_cloud_onedrive_hint">登录 Microsoft 账号后浏览 OneDrive 根目录，选中已有的 .kdbx 文件。</string>
     <string name="add_cloud_onedrive_signin">使用 Microsoft 账号登录</string>
