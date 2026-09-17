@@ -41,7 +41,12 @@ cd "$REPO_DIR" || exit 1
 
 BRANCH="${1:-$(git rev-parse --abbrev-ref HEAD)}"
 shift 2>/dev/null || true
-EXTRA="$*"
+# ⚠️ 用**数组**收集剩余参数，不能用 `EXTRA="$*"` 再配 `${EXTRA:+"$@"}`：
+#    后者在无额外参数时，`"$@"` 已为空 ⇒ 展开成空串 ⇒ 变成给 git push
+#    传了一个空位置参数，git 会把它当成一个空 refspec。
+#    （实测症状：stderr 冒出 grep/ssh 的 `Usage:` 报错。）
+#    数组 + `"${ARGS[@]}"` 是唯一在 set -u 下也安全的两全写法。
+ARGS=("$@")
 
 # 1) 备份并摘掉 URL 重写
 CFG=~/.gitconfig
@@ -56,7 +61,11 @@ git config --global --unset-all "url.https://github.com/.insteadof" 2>/dev/null
 #    `Host github.com` 的 HostName，把目标换成域名 ssh.github.com，
 #    而该域名在本沙箱走 DNS 解析到 198.18.x（保留网段）⇒ 必然 kex 失败。
 #    一切都交给 ~/.ssh/config（HostName 已写死 IP）。
-git push ${EXTRA:+"$@"} git@github.com:Chaniug/Vaultix.git "$BRANCH"
+if [ ${#ARGS[@]} -gt 0 ]; then
+  git push "${ARGS[@]}" git@github.com:Chaniug/Vaultix.git "$BRANCH"
+else
+  git push git@github.com:Chaniug/Vaultix.git "$BRANCH"
+fi
 rc=$?
 
 if [ $rc -eq 0 ]; then
