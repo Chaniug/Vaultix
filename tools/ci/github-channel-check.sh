@@ -41,7 +41,9 @@ is_bad_ip() { # 198.18.0.0/15 是沙箱占位网段
 }
 
 NEED_FIX=0; REPORT=()
-rm -f /tmp/.gh_hosts_new
+NEWHOSTS=/tmp/.gh_hosts_new
+rm -f "$NEWHOSTS"
+: > "$NEWHOSTS"
 
 for h in "${!DIRECT[@]}"; do
   cur=$(getent hosts "$h" 2>/dev/null | head -1 | awk '{print $1}')
@@ -52,42 +54,39 @@ for h in "${!DIRECT[@]}"; do
       alt=$(doh "$h" | head -1)
       [ -n "$alt" ] && ip="$alt"
     fi
-    printf '%s %s\n' "$ip" "$h" >> /tmp/.gh_hosts_new
+    printf '%s %s\n' "$ip" "$h" >> "$NEWHOSTS"
     NEED_FIX=1
     REPORT+=("$h -> $ip")
   fi
 done
 
-for h in "${FASTLY_HOSTS[@]}"; do
+# fastly 托管的域名（release 资产 / raw / objects）
+# ⚠️ 这四个 IP 是 GitHub 文档公开的稳定段，**不需要 DoH**，直接写死。
+#    之前这里依赖 DoH 的代码路径有个致命缺陷：删除旧记录与写入新记录
+#    不原子 —— 若 DoH 恰好不通、新记录为空，旧记录就被永久删掉了
+#    （实测：跑完 `-q` 后 release-assets 反而从可用变成 198.18.0.43）。
+#    现在无条件写死，且第 81 行改成「只有新记录非空才替换」。
+for h in "${FASTLY_HOSTS[@]}" raw.githubusercontent.com; do
   cur=$(getent hosts "$h" 2>/dev/null | head -1 | awk '{print $1}')
   if [ "$FORCE" -eq 1 ] || is_bad_ip "$cur"; then
     for t in 108 109 110 111; do
-      printf '185.199.%s.133 %s\n' "$t" "$h" >> /tmp/.gh_hosts_new
+      printf '185.199.%s.133 %s\n' "$t" "$h" >> "$NEWHOSTS"
     done
     NEED_FIX=1
     REPORT+=("$h -> 185.199.108-111.133")
   fi
 done
 
-# raw.githubusercontent 也是 fastly
-cur=$(getent hosts raw.githubusercontent.com 2>/dev/null | head -1 | awk '{print $1}')
-if [ "$FORCE" -eq 1 ] || is_bad_ip "$cur"; then
-  for t in 108 109 110 111; do
-    printf '185.199.%s.133 raw.githubusercontent.com\n' "$t" >> /tmp/.gh_hosts_new
-  done
-  NEED_FIX=1; REPORT+=("raw.githubusercontent.com -> 185.199.108-111.133")
-fi
-
-if [ "$NEED_FIX" -eq 1 ] && [ -s /tmp/.gh_hosts_new ]; then
+if [ "$NEED_FIX" -eq 1 ] && [ -s "$NEWHOSTS" ]; then
   # 先删旧条目再加，避免重复堆积
   python3 - <<'PY'
-import re
+import re, os
 keep=[]
 for line in open('/etc/hosts'):
     if re.search(r'\bgithub(usercontent)?\.com\b|\bgithubusercontent\.com\b', line):
         continue
     keep.append(line)
-new=open('/tmp/.gh_hosts_new').read()
+new=open(os.environ.get('NEWHOSTS','/tmp/.gh_hosts_new')).read()
 open('/etc/hosts','w').write(''.join(keep).rstrip('\n')+'\n'+new)
 PY
   cp /etc/hosts /root/.user_hosts 2>/dev/null
