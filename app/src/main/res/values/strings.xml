@@ -376,6 +376,11 @@
     <!-- 快速解锁「生效范围」（定稿 §4.7：一把指纹钥匙管哪些库由用户勾选） -->
     <!-- 2026-09-16「能力级重构」后**重新启用**：开关回到"两个并列"、范围回到"一份统一清单"，
          故"两种方式彼此独立"的口径重新成立，且它正是本次重构的核心卖点。 -->
+    <!-- ⚠️ 2026-09-17 §1（合并精简）后**再次暂无代码引用**：范围表整块搬进了
+         「管理解锁方式」向导，"两种方式彼此独立"的口径由 quick_unlock_configure_methods_hint 承担。
+         **刻意保留**：它描述的是「一份统一范围表」这个**机制**，机制只是被**搬走**、没有被消灭 ——
+         若日后向导显得太重而退回"两个开关 + 一张范围表"（自然的回退方向），
+         这句就是那一版界面的引导语，不必重写。 -->
     <string name="quick_unlock_scope_hint">指纹与应用内 PIN 彼此独立、可同时开启；下面勾选的就是它们作用的库。</string>
     <!-- ⚠️ 这是四改引入的"每库选一种"引导语，在**同日晚些的能力级重构中作废**。
          （教训：四改把"一个能力"误做成了"每库独占的选择题"，与 §4.7 的原始意图相反。）
@@ -383,11 +388,18 @@
     <string name="quick_unlock_scope_hint_pick">为每个库选择一种免主密码的打开方式</string>
 
     <!-- ===== 能力级重构新增（2026-09-16）===== -->
+    <!-- ⚠️ 2026-09-17 §1 后**暂无代码引用**：向导里改用 quick_unlock_configure_vaults_title
+         「生效的库」——"范围"是**机制**的说法、"生效的库"是**用户**的说法，向导里取后者。
+         **刻意保留**：同 quick_unlock_scope_hint —— 范围表若回到页面内联，"生效范围"更贴。
+         判据记在这里：**被"搬走"的留，被"取代"的删**。 -->
     <string name="quick_unlock_scope_title">生效范围</string>
     <string name="quick_unlock_partial_hint">有 %1$d 个库未完成，点此继续</string>
     <string name="quick_unlock_cap_biometric">指纹</string>
     <string name="quick_unlock_cap_pin">PIN</string>
-    <string name="quick_unlock_option_pin_on">已用 %1$d 位 PIN 保护</string>
+    <!-- ⚠️ 2026-09-17 §1 **已删除两条**：quick_unlock_option_pin_on（已用 N 位 PIN 保护）与
+         quick_unlock_option_biometric_on（已开启，免输主密码与两步验证）。
+         两条都描述"**不带数量**的已开启"，已被 quick_unlock_summary_on（已对 N 个库生效）取代 ——
+         而 §11.11 明确要的就是那个数量。**被"取代"的口径不留**（要恢复请查 git 历史）。 -->
     <string name="quick_unlock_kdbx_password_title">输入该库的主密码</string>
     <string name="quick_unlock_kdbx_password_hint">KDBX 的密码不会留在会话里，需要你提供一次。后面还有 %1$d 个库待输入。</string>
     <string name="quick_unlock_kdbx_password_label">主密码</string>
@@ -433,9 +445,6 @@
     <string name="quick_unlock_disabled_kdbx">未启用（启用时需再输一次该库的主密码）</string>
     <!-- 四改新增：三个单选项各自的"后果"副标题（只讲用户真正关心的，不讲操作步骤） -->
     <string name="quick_unlock_option_biometric_summary">用系统指纹或设备 PIN 验证，免输主密码</string>
-    <!-- 已启用时的副标题：不再满足于"能免密打开"，补一句它同时**绕过了两步验证**
-         （与 quick_unlock_banner_text 同一口径，这里压缩为一行短句）。 -->
-    <string name="quick_unlock_option_biometric_on">已开启，免输主密码与两步验证</string>
     <string name="quick_unlock_option_biometric_kdbx_summary">需再输一次该库的主密码以建立钥匙</string>
     <string name="quick_unlock_option_biometric_unsupported">本设备未设置锁屏或生物识别，无法启用</string>
     <string name="quick_unlock_option_pin_summary">用 %1$d 位数字解锁，不依赖系统锁屏</string>
