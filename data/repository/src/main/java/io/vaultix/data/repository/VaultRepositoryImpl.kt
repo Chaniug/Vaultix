@@ -901,6 +901,19 @@ internal fun buildFullKey(key: SymmetricCryptoKey): ByteArray {
  *
  * ⚠️ 必须**分类**而不是一律「未知错误」：用户看到「密码错误」与
  * 「文件读不到了（请重新选择）」时要做的事完全不同（前者重输、后者重选文件并重新授权）。
+ *
+ * ⚠️ ★ **[KdbxOpenError] 是 `sealed`，加分支时这里必须同步** ——
+ * 2026-09-17 踩过：`Kdbx.save` 写回路径新增了 `KdbxOpenError.NotUnlocked`，
+ * 但本 `when` 没加对应分支 ⇒ `'when' expression must be exhaustive`。
+ * **更麻烦的是它不一定会暴露**：`when` 作为**表达式**才要求穷尽，
+ * 而 CI 上这颗错误被前一步的 detekt 红牌 skip 掉了两轮（`build` 步骤都没跑到），
+ * 直到 detekt 修绿才浮出来。⇒ 给 sealed 加分支后，**主动全局搜 `when (` 的消费点**，
+ * 别等编译器告诉你。
+ *
+ * 映射取舍：`NotUnlocked` 归到 [UnlockResult.Unknown] 而不是新增一个 `UnlockResult` 分支 ——
+ * 这个函数只服务**解锁/添加库**路径，那条路径上"未解锁"本来就是不该出现的状态
+ * （你正在解锁它）；真出现了也只需要一句可读的提示。为它撑开 domain 层的
+ * `UnlockResult` 会让 UI 多一个永远走不到的分支。
  */
 private fun classifyKdbxError(error: Throwable): UnlockResult {
     val kind = (error as? KdbxFailure)?.error
@@ -913,6 +926,9 @@ private fun classifyKdbxError(error: Throwable): UnlockResult {
         is KdbxOpenError.NotKdbxFile -> UnlockResult.Unknown("该文件不是 KDBX 数据库")
         is KdbxOpenError.UnsupportedVersion ->
             UnlockResult.Unknown("不支持的 KDBX 版本 ${kind.version}（请用 KeePass 另存为 3.1 / 4.x）")
+
+        // 写回路径才有「未解锁」；解锁/添加路径走到这里说明会话已失效，提示重新解锁即可。
+        KdbxOpenError.NotUnlocked -> UnlockResult.Unknown("请先解锁该密码库")
 
         is KdbxOpenError.Unknown -> UnlockResult.Unknown(kind.detail)
     }
