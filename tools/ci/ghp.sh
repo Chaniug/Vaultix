@@ -22,8 +22,20 @@ set -uo pipefail
 REPO_DIR="${GH_REPO_DIR:-/workspace/Vaultix}"
 KEY=/root/.ssh/id_ed25519_vaultix
 
-# 0) 确保通道可用
-github-channel-check -q || { echo "❌ github 通道不可用，先修 hosts" >&2; exit 1; }
+# 0) 确保通道可用。
+#    ⚠️ 只把 **SSH 认证** 当硬门槛 —— 那才是 push 真正走的路。
+#    REST API（api.github.com）在沙箱里会间歇性被 SSL_ERROR_SYSCALL 掐断
+#    （实测同一命令可能 6/6 全 200，两分钟后又稳定全 000），
+#    它只用于「读 CI 状态」这类可选增强，**绝不能**因为它拦下推送。
+SSH_OUT=$(timeout 15 ssh -T git@github.com 2>&1)
+if echo "$SSH_OUT" | grep -q "successfully authenticated"; then
+  :
+else
+  echo "❌ SSH 认证失败，推送不可能成功：" >&2
+  echo "$SSH_OUT" >&2
+  echo "   → 先跑 github-channel-check（会修 hosts）" >&2
+  exit 1
+fi
 
 cd "$REPO_DIR" || exit 1
 
