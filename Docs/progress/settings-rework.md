@@ -125,6 +125,23 @@
 - [ ] 「移除库」后远程数据仍在（用另一设备/网页确认）
 - [ ] 本地 KDBX 行上**没有**「同步」
 
+### 施工记录（2026-09-18 —— 代码已完成；⚠️ 真机验收未做）
+
+- **新增 `VaultActionsController`**（`ui/settings/`），不往 `VaultRepositoryImpl` 里加函数
+  （§0-4，它已顶格 40）。动作封装成 `Outcome` 密封接口，UI 只负责把它翻成人话。
+- **按钮按能力显示**用 `VaultSummary` 上的两个扩展判定，判据就是现成的 `origin`：
+  ```kotlin
+  canSyncToRemote()   = !origin.startsWith("content://")   // 本地 KDBX 没得同步
+  canSignOutOfDevice() = kind == VaultKind.BITWARDEN        // KDBX 无 token/无队列，与锁定同义
+  ```
+  ⚠️ **没有**新增 `sourceType` 列（方案 §2：一加就有两处真相）。
+- **全局「退出数据库」整条删除**：`SettingsScreen` 的行 + `ExitDatabaseDialog` +
+  `SettingsViewModel.exitDatabase()` + `sessionRepository` 依赖 + 三条 `setting_exit_database*` 文案。
+- 冲突处理**复用**已有的 `KdbxConflictDialog`（用本地 / 用远程 / 稍后），没另写一套。
+- ⚠️ 文案踩过一次坑：新加的 `vault_remove_confirm` 与既有第 98 行**同名**，
+  Android 资源报 `Found item String/vault_remove_confirm more than one time`
+  ⇒ 删掉新写的、直接复用既有 `vault_remove_*` / `vault_removed` 四条。
+
 ---
 
 ## §3 SSH 条目「生成密钥对」（定稿 §11.12）
@@ -137,8 +154,26 @@
 | **PKCS#8 PEM**（`-----BEGIN PRIVATE KEY-----`） | **近乎零**（Android `KeyPairGenerator` 直接给） | ⚠️ 很多 SSH 客户端/老工具**不认** |
 | **OpenSSH 新格式**（`-----BEGIN OPENSSH PRIVATE KEY-----`） | ★ **要自实现 bcrypt-kdf + chacha20-poly1305 封装**，是独立一块 | ✅ 通用 |
 
-**建议**：先做 **PKCS#8 + `ssh-ed25519` 公钥**（能很快落地、立刻可用），
-OpenSSH 新格式导出**列为第二期**（等真有人抱怨客户端不认再补）。
+~~**建议**：先做 **PKCS#8 + `ssh-ed25519` 公钥**（能很快落地、立刻可用），
+OpenSSH 新格式导出**列为第二期**（等真有人抱怨客户端不认再补）。~~
+
+> ### 🔴 **已被推翻（2026-09-18 实测）—— 这里的建议不要照做**
+>
+> 实测环境 OpenSSH **9.6p1**（Ubuntu），`ssh-keygen -y -f <私钥>`：
+>
+> | 假设 | 实测 |
+> |---|---|
+> | PKCS#8 PEM 的 **RSA** 私钥 | ✅ 能读，`-y` 导出的公钥与本实现逐位一致 |
+> | PKCS#8 PEM 的 **Ed25519** 私钥 | 🔴 **`Load key "id_ed25519.pem": invalid format`** |
+>
+> ⇒ **Ed25519 走 PKCS#8 = 生成出来绝大多数 SSH 客户端直接用不了**。
+> 而本条自己点名的失败模式正是「做出一个**生成了但用不上**的按钮」—— 照原建议做，正好撞上。
+>
+> **最终做法：直接产出 OpenSSH 新格式私钥**（`-----BEGIN OPENSSH PRIVATE KEY-----`，
+> 内部 `cipher=none` / `kdf=none`）。无口令变体**不需要** bcrypt-kdf —— 那才是定稿说的
+> "独立一块"，而对"存在密码管理器里的私钥"来说，它已被库的主密码保护，不加密是合理的。
+> ⇒ 成本比定稿估计的低一个量级，兼容性却是满的（`ssh` / `ssh-keygen` / `ssh-add` /
+> PuTTYgen / KeePassXC-KeeAgent 都认）。
 
 ### 其余
 - **算法**：Ed25519 优先（现代、短、KeePassXC 默认），RSA 作为可选项。
@@ -149,31 +184,100 @@ OpenSSH 新格式导出**列为第二期**（等真有人抱怨客户端不认�
 - 相关现状：`SshKeyFields`（#97）+ `SshFingerprint`（`SHA256:<b64>`，与 `ssh-keygen -lf` 逐位一致）
   ⇒ 生成后**用它算出指纹并显示**，用户能立刻核对。
 
+### 施工记录（2026-09-18 —— 代码已完成；⚠️ 真机验收未做）
+
+- **算法落在 `core:common` 的 `SshKeyGenerator`**（纯 JVM、不依赖 `android.*`，可在单测里跑）。
+  ⚠️ **必须自己实现 Ed25519**：Android JCA 从 **API 33** 才给 Ed25519，而 `minSdk = 26`
+  ⇒ 直接用会在绝大多数设备上抛 `NoSuchAlgorithmException`。走 **Bouncy Castle**
+  （`core:crypto` 早就依赖同一个库，没有引入新的第三方）。
+- **私钥段按 OpenSSH 约定写**：Ed25519 的"私钥"是 **64 字节 = 种子 || 公钥**，
+  少了后半段 32 字节，`ssh-keygen -y` 会报公私钥不匹配。RSA 私有段顺序
+  `n, e, d, iqmp(q⁻¹ mod p), p, q`，`mpint` 最高位为 1 时**必须**前置 `0x00`，
+  否则那部分密钥会算出**错误且隐蔽**（另一端能解析、只是对不上）的指纹。
+- **UI 三步**（`ui/common/SshKeyGenerateDialog.kt`）：选算法 → 生成中 → 结果 + 备份闸门。
+  - 生成走 `Dispatchers.Default`：**Ed25519 是毫秒级，RSA-3072 是百毫秒级**，主线程会掉帧；
+  - 结果页**现算指纹**给用户当场与 `ssh-keygen -lf` 核对；
+  - 确认按钮写作「**我已备份，填入条目**」⇒ 备份提示是**必须点掉的闸门**，不是一句说明；
+  - 关掉对话框后表单里**仍留一行**提示（真正需要"立刻备份"的时刻是离开编辑页之后）；
+  - 已有密钥时先弹**覆盖确认**（私钥不可再生，覆盖 = 销毁）。
+- **单测 6 条**（`SshKeyGeneratorTest`）：只断言**容器结构**（magic / cipher / kdf /
+  密钥数 / 内嵌公钥与公钥行逐字节一致 / 两个校验字相同 / 两次生成不同）。
+  ⚠️ "这把钥匙真的能用"由**真机 `ssh-keygen`** 交叉验证（JVM 单测里跑不了），
+  已实测 Ed25519 与 RSA 各一组：`-y` 与 `-lf` 全部逐位一致。
+- ⚠️ **未涉及**：KDBX 侧目前**没有** SSH 条目的字段映射（`data/kdbx` 里搜不到 `sshKey`），
+  所以「字段名与 KeePassXC 逐字对齐」这条**尚未落地** —— 等 KDBX 写回阶段 B 覆盖 SSH 时再做。
+
 ---
 
 ## §4 最后一处小活（定稿 §11.9 第三条只部分达成）
 
 「添加密码库 → 从网盘添加」在**没有网盘账号**时，目前仍会落到**原表单**
 （服务器地址 / 账号 / 密码 / 「连接并浏览」/「使用 Microsoft 账号登录」）。
-⇒ **整段摘掉**，改成就地给「去设置里配置」的引导（可带一个跳转到「网盘账号」的按钮）。
-当前是**插入式**实现（有账号时 early-return 走新路径），所以摘除时：
-- 删掉 `AddCloudVaultScreen` 的 `ProviderRow` / `WebDavFields` / `OneDriveFields` / `ConnectButton`
-  ⇒ ⚠️ 删完**必须编译**（detekt 的 `UnusedPrivateMember` 会报残留）
-- `AddCloudVaultViewModel` 里的 `connectWebDav` / `connectOneDrive` / `validateWebDav` 等
-  ⇒ 这些能力**搬去「网盘账号」页用**（若那边已实现，则删；否则保留但不再从添加页调用）
+~~⇒ **整段摘掉**，改成就地给「去设置里配置」的引导（可带一个跳转到「网盘账号」的按钮）。~~
+
+> ### 🔴 **已被推翻（2026-09-18）—— 照原样摘掉会造出一条死路**
+>
+> 两个事实同时成立：
+>
+> 1. `CloudAccountInventory` 是**按设计从库的 origin 反推**账号的（该文件头写明了取舍：
+>    不另存一份账号注册表）⇒ **"配了但还没建库"的账号列不出来**；
+> 2. 「网盘账号」页（`CloudAccountsScreen`）是**只读清单** —— 只有 `refresh()`，
+>    **没有"添加账号"能力**；而 `WebDavCredentialStore` 的写入方
+>    （`webDavCredentials.save(...)`）全仓库**只有 `AddCloudVaultViewModel.connectWebDav()` 一处**。
+>
+> ⇒ 摘掉表单后：**首次使用网盘的人再也加不了网盘库**，而引导他去的那个页面同样加不了。
+>
+> **实际做法**：保留表单，但让它**退居「连接其他账号」之后** —— 无账号时直接展开，
+> 有账号时默认只给「选账号 + 去网盘账号管理」。§4 想要的"不再以原表单为主路径"达成了。
+>
+> 顺带修掉原实现的一个**真 bug**：账号列表非空时是 **早退（`return`）**，
+> 表单被整块跳过 ⇒ **已经配过一个账号的人，永远连不上第二个账号**。
+
+### 施工记录（2026-09-18 —— 代码已完成；⚠️ 真机验收未做）
+
+- `ConfigSection` 不再早退；表单收进新的 `NewAccountForm`，由 `showNewAccountForm` 控制。
+- 新增「去网盘账号管理」按钮 ⇒ `AddCloudVaultScreen` 多一个 `onOpenCloudAccounts` 参数，
+  由 `VaultixApp` 的 `settingsGraph` 接到 `CloudAccountsRoute`。
+- `AddCloudVaultViewModel` 的 `connectWebDav` / `connectOneDrive` **保留**（它们是全仓库
+  唯一的建账号入口，删了就真没了），只是不再是无账号时的默认路径。
+- 新增文案 2 条：`add_cloud_connect_other` / `add_cloud_manage_accounts`。
 
 ---
 
 ## §5 顺序与依赖
 
 ```
-§1 解锁方式精简        ← 先做（用户最烦这个，收益最直接）
+§1 解锁方式精简        ✅ 2026-09-17 落地（待真机验收）
+§2 库页改「行 + ⋮」     ✅ 2026-09-18 落地（待真机验收）
+§3 SSH 生成密钥对       ✅ 2026-09-18 落地（待真机验收）
+                        ⚠️ 导出格式已由实测改判为 OpenSSH 新格式（见 §3）
+§4 添加页表单          ✅ 2026-09-18 落地（★ 改判：不摘掉，见 §4）
   ↓
-§2 库页改「行 + ⋮」     ← 依赖 §1 顺手清掉全局「退出数据库」后的形态
-  ↓
-§3 SSH 生成密钥对       ← 独立，可并行；但**先定导出格式**
-  ↓
-§4 添加页摘掉原表单     ← 小活，随时可做（做完 §11.9 第三条才全绿）
-  ↓
-真机验收（每项各自的验收清单 + 装机后比 SHA-256）
+真机验收（每项各自的验收清单 + 装机后比 SHA-256）   ← **当前在这里**
 ```
+
+---
+
+## §6 本轮整体收尾（2026-09-18）
+
+**门禁（三条，实测全绿）**
+
+| 门禁 | 结果 |
+|---|---|
+| `detekt` | ✅ **0 findings**（全模块） |
+| `:app:compileFullDebugKotlin` | ✅ |
+| `gw test`（全模块，含单测） | ✅ **866 个用例 / 0 失败 / 0 错误** |
+| `.ai/tools/check_*.py` 四道脚本 | ⚠️ 3 道 OK；`check_compile_smells.py` 报 3 处，**经核为误报**（详见 §6.1） |
+
+### §6.1 一处已知误报（别浪费时间再查一次）
+
+`check_compile_smells.py` 报：`data/kdbx/.../KdbxCredentialCandidate.kt` 第 160 行的
+文件级 `private fun sha256Hex` 被 `SafKdbxFileSource.kt:80/111/134` 调用。
+**实际**：`SafKdbxFileSource.kt:195` 在自己的 companion object 里**另有一份同名** `sha256Hex`。
+脚本按名字跨文件匹配 ⇒ 误报。两处文件本轮**都没改过**，且全模块编译通过。
+
+### §6.2 下一步（顺势接的两件事）
+
+1. **真机验收** —— §1~§4 各自的验收清单，装机后比 SHA-256。
+2. **原生化评估** —— 见 [`native-rewrite-eval.md`](native-rewrite-eval.md)
+   （Rust / Go 重写的方案与建议；结论是"**现在别动**，先量真机"）。
