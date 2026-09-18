@@ -215,7 +215,38 @@
     <string name="group_appearance">显示与填充</string>
     <string name="group_data">数据</string>
     <string name="permission_management_title">权限管理</string>
-    <string name="permission_management_subtitle">在系统设置页查看与调整应用权限</string>
+    <string name="permission_management_subtitle">看看这个应用要什么权限、拿去做什么</string>
+    <!-- ===== 权限引导页（2026-09-18）===== -->
+    <!-- 分组标题。刻意不叫「权限」——因为它同时含"设备能力"（指纹）、"网络"这类
+         非运行时权限项，叫「权限」会让人以为每一项都能在这里开关。 -->
+    <string name="permission_group_needed">应用权限与能力</string>
+    <!-- 状态卡：全部就绪（正面回答"没问题吧"，而不是靠"没有红字"让用户自己推理） -->
+    <string name="permission_status_all_good">一切就绪</string>
+    <string name="permission_status_all_good_desc">需要用到的权限都已允许。相机权限只在扫码时用到，可随时在这页查看。</string>
+    <!-- 状态卡：还缺几项 -->
+    <string name="permission_status_pending">有 %1$d 项待允许</string>
+    <string name="permission_status_pending_desc">下面标了「授予 / 去设置」的项，开启后对应功能才能用。其余功能不受影响。</string>
+
+    <!-- 相机 -->
+    <string name="permission_camera_title">相机</string>
+    <string name="permission_camera_purpose">仅用于扫描验证码二维码。不拍照、不保存、不上传任何画面。</string>
+    <!-- 通知 -->
+    <string name="permission_notifications_title">通知</string>
+    <string name="permission_notifications_purpose">快速填充后，在通知栏接力复制用户名或验证码。通知内容不含密码。</string>
+    <!-- 生物识别 -->
+    <string name="permission_biometrics_title">指纹 / 设备密码</string>
+    <string name="permission_biometrics_purpose">用系统指纹或锁屏密码快速解锁密码库，免去每次输主密码。</string>
+    <!-- 网络 -->
+    <string name="permission_network_title">网络访问</string>
+    <string name="permission_network_purpose">仅用于连接你自选的云端密码库、网盘与站点图标。本地 KDBX 库全程离线。</string>
+
+    <!-- 行尾动作 -->
+    <string name="permission_action_grant">授予</string>
+    <string name="permission_action_settings">去设置</string>
+    <string name="permission_state_granted">已允许</string>
+    <string name="permission_state_unavailable">设备不支持</string>
+    <!-- 页脚 -->
+    <string name="permission_footer">系统的权限开关始终以系统设置为准。这一页只是把「要什么、做什么用」摊开讲清楚。</string>
     <string name="group_about">关于</string>
     <string name="setting_auto_lock">自动锁定</string>
     <string name="setting_clipboard_clear">剪贴板清除</string>
@@ -773,6 +804,9 @@
     <string name="qr_camera_permission_title">需要相机权限</string>
     <string name="qr_camera_permission_body">扫描 TOTP 二维码需要相机权限。Vaultix 只在本地识别画面内容，不会拍照、不会保存或上传任何图像。</string>
     <string name="qr_grant_permission">授予权限</string>
+    <!-- 相机权限被「拒绝且不再询问」后，应用内再申请不会弹框（系统直接回调失败）⇒
+         必须给一条去系统设置的路，否则扫码功能对这类用户彻底不可达。 -->
+    <string name="qr_open_permission_settings">去系统设置里开启</string>
     <string name="section_passkeys">通行密钥</string>
     <!-- 详情页只做「存在性提示」：动态验证码与通行密钥明细都移到「验证码」页（降功耗） -->
     <string name="detail_totp_present">该条目含 2FA</string>
@@ -926,6 +960,13 @@
     <string name="totp_field_motp_secret">密钥（mOTP 原始字符串）</string>
     <string name="totp_motp_hint">mOTP 固定 10 秒步长 / 6 位码，计算需 PIN 码参与</string>
     <string name="totp_hotp_counter">计数器 %1$d</string>
+    <!-- 条目上的「下一个验证码」小字标签（对齐 Bastion TotpCodeCard 的 Next）。
+         刻意用英文：它紧挨一个纯数字的等宽小码，是**位置标记**而不是正文 ——
+         中文「下一个」比这个码本身还长，会把大码挤得没地方站。 -->
+    <string name="totp_next_label">Next</string>
+    <!-- 临期复制下一个码后的轻提示。措辞要点：说明**为什么**复制的和屏幕上的不是同一个，
+         而不是单纯报告"复制成功"（后者 2026-09-13 已被用户要求去掉）。 -->
+    <string name="totp_copied_next">已复制下一个验证码（当前码即将失效）</string>
     <string name="totp_import_button">导入验证码</string>
     <string name="totp_import_title">导入验证码</string>
     <string name="totp_import_hint">粘贴 otpauth:// 链接、motp:// 链接、裸 Base32 密钥，或 Google Authenticator 的 otpauth-migration:// 批量导出（一次导入全部）</string>

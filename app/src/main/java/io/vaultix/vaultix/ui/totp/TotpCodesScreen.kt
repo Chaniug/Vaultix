@@ -107,6 +107,8 @@ import io.vaultix.vaultix.ui.theme.Spacing
  * 验证码统一界面（对齐 Bitwarden 的 TOTP 总览 + Bastion 独立验证器视图）。
  *
  * - 实时滚动验证码（逐秒刷新 + 进度条），点按复制当前码；
+ *   **当前码剩余 ≤5 秒时，复制的是下一个码**（对齐 Bastion `codeToCopy`，
+ *   2026-09-18 用户要求）——避免用户粘过去时那个码已经失效；
  * - 搜索发行方/账号；
  * - 条目分「已绑定 / 独立」两种徽标；独立项可「绑定到密码条目」；
  * - 编辑 / 删除；右下角新增独立验证码；
@@ -134,6 +136,9 @@ fun TotpCodesScreen(
     // （用户反馈「密码页新建的含验证码条目，在验证码页搜不到」）。
     val entries = rememberTotpEntries(state)
     val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+    // 提前解析：下面的回调不是 composable，拿不到 `stringResource`。
+    val copiedNextHint = stringResource(R.string.totp_copied_next)
     var searchActive by rememberSaveable { mutableStateOf(false) }
     // 搜索态自己消费返回手势：主界面是根路由（栈里没有上一层），不拦就会直接退回桌面。
     BackHandler(enabled = searchActive) {
@@ -244,6 +249,12 @@ fun TotpCodesScreen(
                 },
                 onBind = { entry -> if (!entry.bound) binding = entry },
                 onCopy = viewModel::copyCode,
+                // 临期换码时提示一句（文案在 [TotpBody] 里解析；这里只给出口）。
+                // 用页面级 `snackbarHostState`——它本来就为「批量导入结果」存在，
+                // 复用而不新增一个宿主，避免屏幕上出现两块 Snackbar 底板。
+                onCopyNext = {
+                    scope.launch { snackbarHostState.showSnackbar(copiedNextHint) }
+                },
             )
             if (!searchActive) {
                 TotpOverlayTopBar(
@@ -342,6 +353,16 @@ private fun TotpBody(
     onDeleteEntry: (TotpEntry) -> Unit,
     onBind: (TotpEntry) -> Unit,
     onCopy: (String) -> Unit,
+    /**
+     * 「临期时复制了下一个码」的轻提示出口。
+     *
+     * 由 [TotpCodesScreen] 注入（它持有 `snackbarHostState`），而不是在这里就地拿 ——
+     * [TotpBody] 只负责列表与空态分流，不该知道 SnackbarHost 在哪。
+     * **只有这一条路径提示**，普通复制保持安静（2026-09-13 用户明确要求去掉复制提示；
+     * 这里提示的不是"复制成功了"，而是"你复制的和屏幕上显示的不是同一个"，
+     * 属于必须说明的例外）。
+     */
+    onCopyNext: () -> Unit,
 ) {
     when {
         // ⚠️ **必须排在空态前面**：冷启动 / 解锁后条目流还没发首帧时，
@@ -410,6 +431,7 @@ private fun TotpBody(
                         onDelete = { onDeleteEntry(entry) },
                         onBind = { onBind(entry) },
                         onCopy = onCopy,
+                        onCopyNext = onCopyNext,
                     ),
                 )
             }
@@ -616,6 +638,15 @@ private data class TotpRowActions(
     val onEdit: () -> Unit,
     val onBind: () -> Unit,
     val onCopy: (String) -> Unit,
+    /**
+     * 「临期时复制了下一个码」的通知（只用于提示，不携带内容）。
+     *
+     * 与 [onCopy] 分开而不是给它加个布尔参数：两者是**不同的语义** ——
+     * [onCopy] 是"把这段文本放进剪贴板"，本项是"刚才那一下换码了，你看到的和复制的不是同一个"。
+     * 收进 [TotpRowActions] 而非做成第 5 个参数，也是为了让 [TotpRow] 继续守住
+     * detekt `LongParameterList ≤8`。
+     */
+    val onCopyNext: () -> Unit,
 )
 
 @Composable
@@ -639,16 +670,41 @@ private fun TotpRow(
     val onEdit = actions.onEdit
     val onBind = actions.onBind
     val onCopy = actions.onCopy
-    val code = TotpGenerator.generate(entry.toConfig(), nowSeconds)
+    val onCopyNext = actions.onCopyNext
+    val config = entry.toConfig()
+    val code = TotpGenerator.generate(config, nowSeconds)
     val isHotp = entry.type == OtpType.HOTP
     // HOTP 没有时间衰减，不做过期警示。
     val remaining = TotpGenerator.remainingSeconds(entry.period, nowSeconds)
+    // 下一个时间步的验证码（HOTP 无此概念 ⇒ 复用当前码，配合下面的 [isExpiring] 短路，
+    // 永远不会被复制走）。用当前时刻 + 一个周期去算，与 Bastion `TotpCodeCard` 的
+    // `currentSeconds + period` 口径一致。
+    val nextCode = if (isHotp) {
+        code
+    } else {
+        TotpGenerator.generate(config, nowSeconds + entry.period)
+    }
     // 点一下即复制（对齐 Bastion 验证器页：整行可点 → 复制）。
+    //
+    // ⚠️ 2026-09-18 起：**临期（剩余 ≤5 秒）时复制的是下一个码**，而不是那个粘过去
+    //    可能已经失效的当前码。这是 Bastion `codeToCopy` 的同款行为，也是用户明确要求的
+    //    「参考 bastion，只剩 5 秒的时候自动复制下一个验证码」。
+    //    判据与验证码转警示色的阈值共用 [TOTP_HOT_WARNING_SECONDS]：**同一个「快过期了」
+    //    概念在两处必须是同一个数**，否则会出现「码变红了但复制到的还是它」的错位。
+    // HOTP 基于计数器、无时间衰减 ⇒ 不参与临期换码。
+    val isExpiring = !isHotp && remaining <= TOTP_HOT_WARNING_SECONDS
+    val codeToCopy = if (isExpiring) nextCode else code
+    //
     // ⚠️ 2026-09-13 用户反馈「点击复制大家都知道的操作，不需要提示」—— 复制后的
     // `SnackbarHost` 提示已删除。它除了啰嗦，还会在悬浮胶囊底栏上方压出一块自带
     // surface 底板的深色方块（用户看到的「底栏外一圈黑色」），观感很脏。
     // 页面级 SnackbarHost **保留**：批量导入的结果提示仍然要用它。
-    val copyNow: () -> Unit = { onCopy(code) }
+    //
+    // ⚠️ 由此带来一个**必须**的补偿：临期换码时，用户点下去看得见的是「当前那个大码」，
+    //    而剪贴板里进的是**下一个码** —— 没有反馈的话，粘出来的数字对不上眼前这一屏，
+    //    只能读成"复制错了"。所以只在换码这一种情况下说明一句（[onCopyNext]）；
+    //    非临期（绝大多数情况）仍然保持 2026-09-13 定下的「安静复制」，不提示。
+    val copyNow: () -> Unit = { if (isExpiring) onCopyNext() else onCopy(code) }
 
     // 卡片外框与密码 / 卡包列表完全一致（见 [EntryCard]）；内边距由卡片统一给 16dp。
     // 「长按选中 → 左滑 → 二次确认」包在外层：长按**选中**由 [EntryCard] 的 `onLongClick`
@@ -736,11 +792,52 @@ private fun TotpRow(
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                } else {
+                    // 下一个验证码预览（用户 2026-09-18 要求：「在验证码条目上也显示下一个
+                    // 验证码，比较小字的那种」，对齐 Bastion `TotpCodeCard` 的 Next 块）。
+                    //
+                    // 为什么值得占这一块位置：验证码是「念给对面听 / 手抄到另一台设备」的
+                    // 东西，而换码是每 30 秒一次的悬崖 —— 当前码只剩几秒时，用户需要的是
+                    // 提前读到下一个，而不是等它跳完再看。把它摆在**大码正右方**，视线不用
+                    // 移动就能对照；等当前码过期，它会原地升格成新的大码。
+                    //
+                    // ⚠️ 用 `labelSmall` + 等宽（对齐 Bastion）：小一号且不喧宾夺主，
+                    //    等宽保证每秒刷新时宽度不抖（与上面大码同因）。
+                    // ⚠️ **不给 `SelectionContainer`**：这一块只在 5 秒内才有意义，
+                    //    真正要选中复制走的是整行点击（见 [copyNow]）。包上会让长按选择
+                    //    落到这个小码上，反而抢走整行手势。
+                    NextCodePreview(code = nextCode)
                 }
             }
             // 倒计时不再逐行画进度条：整页共用顶部的统一进度条（见 [UnifiedTotpProgressBar]），
             // 既统一观感，也省掉每行每秒一次的绘制/动画开销（用户要求「降低功耗」）。
         }
+    }
+}
+
+/**
+ * 行内的「下一个验证码」小字预览（对齐 Bastion `TotpCodeCard` 的 Next 块）。
+ *
+ * 竖排两行、整体贴右：上行是浅色 `Next` 标签（说明下面那个数字是什么），
+ * 下行是等宽小字验证码。抽成独立 composable 是为了让 [TotpRow] 守住
+ * detekt `LongMethod ≤150` —— 它本来就贴着线。
+ *
+ * @param code 下一个时间步的验证码（调用方算好；HOTP 不会走到这里）。
+ */
+@Composable
+private fun NextCodePreview(code: String) {
+    Column(horizontalAlignment = Alignment.End) {
+        Text(
+            text = stringResource(R.string.totp_next_label),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            text = groupCode(code),
+            style = MaterialTheme.typography.labelSmall,
+            fontFamily = FontFamily.Monospace,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 

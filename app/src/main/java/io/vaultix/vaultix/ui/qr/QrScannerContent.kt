@@ -35,16 +35,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.google.zxing.BinaryBitmap
 import com.google.zxing.MultiFormatReader
 import com.google.zxing.NotFoundException
 import com.google.zxing.PlanarYUVLuminanceSource
 import com.google.zxing.common.HybridBinarizer
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.util.SystemSettingsIntents
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -115,6 +116,7 @@ private fun ScannerTopBar(onBack: () -> Unit) {
 
 @Composable
 private fun PermissionRationale(onRequest: () -> Unit, onBack: () -> Unit) {
+    val context = LocalContext.current
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -134,6 +136,18 @@ private fun PermissionRationale(onRequest: () -> Unit, onBack: () -> Unit) {
         )
         Button(onClick = onRequest, modifier = Modifier.padding(top = Spacing.xl)) {
             Text(stringResource(R.string.qr_grant_permission))
+        }
+        // ⚠️ 2026-09-18 补：**权限被「拒绝且不再询问」之后，应用内再 `launch` 是不弹框的**
+        // （系统直接回调 false）。此时上面那个「授予权限」按钮点了毫无反应，用户被卡死在
+        // 这一屏 —— 只有系统设置能救。这条出口是**唯一**的补救路径，不能省。
+        // 不用判断"是否被永久拒绝"来决定显不显示：`shouldShowRequestPermissionRationale`
+        // 在"从没问过"和"勾了不再询问"两种情况下都返回 false（二义值），拿它控制显隐
+        // 会让入口时有时无。索性**常驻** —— 它同时也是"我想先去系统里看看"的正当入口。
+        TextButton(
+            onClick = { SystemSettingsIntents.openAppDetails(context) },
+            modifier = Modifier.padding(top = Spacing.sm),
+        ) {
+            Text(stringResource(R.string.qr_open_permission_settings))
         }
         TextButton(onClick = onBack) {
             Text(stringResource(R.string.action_cancel))

@@ -1,9 +1,6 @@
 package io.vaultix.vaultix.ui.settings
 
 import android.content.Context
-import android.content.Intent
-import android.net.Uri
-import android.provider.Settings
 import androidx.annotation.StringRes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -111,6 +108,7 @@ import io.vaultix.vaultix.ui.common.rememberFragmentActivity
 import io.vaultix.vaultix.ui.common.trashAutoDeleteLabel
 import io.vaultix.vaultix.ui.theme.ThemeMode
 import io.vaultix.vaultix.ui.theme.Spacing
+import io.vaultix.vaultix.util.SystemSettingsIntents
 import io.vaultix.vaultix.util.UpdateCheckResult
 import io.vaultix.vaultix.util.UpdateChecker
 
@@ -151,6 +149,19 @@ fun SettingsScreen(
      * 三件事放到一起）。这里只留一个入口 —— 首页的职责是分流，不是干活。
      */
     onOpenVaultManagement: () -> Unit = {},
+    /**
+     * 「关于」分区：进入**权限引导**二级页。
+     *
+     * ⚠️ 2026-09-18 行为变更：原先这一行**直接跳系统应用信息页**（`openAppPermissionSettings`），
+     * 现在先进一个应用内的二级页把「要什么权限、做什么用」讲清楚，再由那一页给出口。
+     * 理由：系统页只列权限名与开关，不解释**为什么**要 —— 而用户对密码管理器的权限
+     * 恰恰是最有戒心的，不解释就等于心虚。
+     *
+     * ⚠️ **不给默认值**（与 [onOpenAutofillSettings] 一致）：设置页有**两个**调用点
+     * （独立 `SettingsRoute` 与主界面设置 Tab），给了默认空实现会让 Tab 那一处
+     * **静默失效**（点了没反应，且编译期发现不了）。
+     */
+    onOpenPermissions: () -> Unit,
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -239,6 +250,7 @@ fun SettingsScreen(
                 // 定位到具体代码绰绰有余；versionCode 是给系统判断新旧的，不是构建计数器，
                 // 摆在界面上只会再次引起同样的误读。
                 versionName = BuildConfig.VERSION_NAME,
+                onOpenPermissions = onOpenPermissions,
                 onShowLicense = { showAboutDialog = true },
                 // ⚠️ 每次点击都**先清掉上一次的结论**：结论是"一次性"的，
                 // 留着旧结果会让下面那次 LaunchedEffect 直接跳过（见那里的注释），
@@ -299,7 +311,7 @@ fun SettingsScreen(
             checking = updateChecking,
             result = updateResult,
             error = updateError,
-            onOpenRelease = { url -> openUrl(context, url) },
+            onOpenRelease = { url -> SystemSettingsIntents.openUrl(context, url) },
             onDismiss = { showUpdateDialog = false },
         )
     }
@@ -542,6 +554,7 @@ private fun VaultUnlockSection(
 private fun AboutSection(
     context: Context,
     versionName: String,
+    onOpenPermissions: () -> Unit,
     onShowLicense: () -> Unit,
     onCheckUpdate: () -> Unit,
 ) {
@@ -549,11 +562,13 @@ private fun AboutSection(
     SettingsGroupCard {
         // 权限管理原属「其他」组（该组仅此一行，独占一个组标题）
         // ⇒ 并入「关于」：它本来就是"关于这个 App"的元信息（定稿 §2②）。
+        // ⚠️ 2026-09-18：点击目标从「系统应用信息页」改为「应用内权限引导页」
+        //    （见 [onOpenPermissions] 的说明）。组与行标题都不动（定稿已固定）。
         SettingsRow(
             icon = { Icon(Icons.Filled.Policy, contentDescription = null) },
             title = stringResource(R.string.permission_management_title),
             subtitle = stringResource(R.string.permission_management_subtitle),
-            onClick = { openAppPermissionSettings(context) },
+            onClick = onOpenPermissions,
         )
         SettingsDivider()
         SettingsRow(
@@ -573,7 +588,7 @@ private fun AboutSection(
             icon = { Icon(Icons.Filled.Security, contentDescription = null) },
             title = stringResource(R.string.about_source),
             subtitle = stringResource(R.string.about_github_url),
-            onClick = { openUrl(context, context.getString(R.string.about_github_url)) },
+            onClick = { SystemSettingsIntents.openUrl(context, context.getString(R.string.about_github_url)) },
         )
         SettingsDivider()
         SettingsRow(
@@ -972,32 +987,8 @@ private fun DataSection(
 }
 
 /**
- * 用浏览器打开一个链接。
- *
- * ⚠️ 必须 `runCatching`：系统里可能**没有任何**能处理 `ACTION_VIEW` 的组件
- * （受限资料 profile / 精简 ROM），此时 `startActivity` 抛 `ActivityNotFoundException`
- * —— 点一下「源码与反馈」就把 App 崩掉是不可接受的。
+ * 单选对话框：主题模式三态（跟随系统 / 浅色 / 深色）。
  */
-private fun openUrl(context: Context, url: String) {
-    runCatching {
-        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-    }
-}
-
-/** 系统应用信息页（权限管理）：唯一能改运行时权限的入口，系统不提供应用内开关。 */
-private fun openAppPermissionSettings(context: Context) {
-    runCatching {
-        context.startActivity(
-            Intent(
-                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                Uri.parse("package:${context.packageName}"),
-            ),
-        )
-    }
-}
-
-
-/** 单选对话框：主题模式三态（跟随系统 / 浅色 / 深色）。 */
 @Composable
 private fun ThemeModeDialog(
     current: ThemeMode,
