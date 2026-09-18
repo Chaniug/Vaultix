@@ -273,11 +273,87 @@ OpenSSH 新格式导出**列为第二期**（等真有人抱怨客户端不认�
 
 `check_compile_smells.py` 报：`data/kdbx/.../KdbxCredentialCandidate.kt` 第 160 行的
 文件级 `private fun sha256Hex` 被 `SafKdbxFileSource.kt:80/111/134` 调用。
-**实际**：`SafKdbxFileSource.kt:195` 在自己的 companion object 里**另有一份同名** `sha256Hex`。
-脚本按名字跨文件匹配 ⇒ 误报。两处文件本轮**都没改过**，且全模块编译通过。
+**经核为误报**（该文件本轮**没改过**，且全模块编译通过）。
+
+> ⚠️ **本节的根因说明在 2026-09-18 下半场被纠正过。**
+> 上面原版说"`SafKdbxFileSource.kt:195` 在自己 companion object 里另有一份同名实现，
+> 所以调用落在它身上" —— **这是错的**：那一份是 `private companion object` 的成员，
+> 从实例方法**根本看不见**，不可能成为解析目标。
+>
+> **真原因**：`data/kdbx` 与 `data/repository` 是**两个独立 Gradle 模块**，
+> 脚本跨文件按名字匹配 `private fun`，把另一个模块里的同名函数当成了唯一提供者。
+>
+> 证伪方式（可复现）：把 `SafKdbxFileSource.kt` 还原到改动前，
+> `gw :data:repository:compileDebugKotlin --rerun-tasks` ⇒ **BUILD SUCCESSFUL**。
+> 完整记录见 `.ai/SESSION-2026-09-18.md` §5.1。
+>
+> ⇒ 结论不变（**是误报**），但**理由以 §5.1 为准**。
 
 ### §6.2 下一步（顺势接的两件事）
 
 1. **真机验收** —— §1~§4 各自的验收清单，装机后比 SHA-256。
 2. **原生化评估** —— 见 [`native-rewrite-eval.md`](native-rewrite-eval.md)
    （Rust / Go 重写的方案与建议；结论是"**现在别动**，先量真机"）。
+
+---
+
+## §7 后续追加（2026-09-18 下半场，**不在原施工单内**）
+
+> 施工单 §1~§4 已收尾，这一节记**之后**用户另提的两件事。
+> 提交 `a4c8686`。完整细节 ⇒ `.ai/SESSION-2026-09-18.md` §8。
+
+### §7.1 验证码页：临期换码 + 行内 Next 预览
+
+落点 `app/.../ui/totp/TotpCodesScreen.kt`。用户要求两条：
+「只剩 5 秒的时候自动复制下一个验证码」+「在验证码条目上也显示下一个验证码，小字」。
+
+- 阈值**复用** `TOTP_HOT_WARNING_SECONDS`（=5），与验证码转警示色**同一个数**；
+- `nextCode = TotpGenerator.generate(config, nowSeconds + entry.period)`（对齐 Bastion）；
+- HOTP 不参与（无时间衰减）；
+- 行内新增 `NextCodePreview`（`labelSmall` + `Monospace`，**不包 `SelectionContainer`**）。
+
+★ **一处对既有纪律的定向例外**：2026-09-13 定的是「复制不要提示」（`Snackbar` 会在
+悬浮胶囊底栏上方压出一块自带 surface 底板的方块，观感很脏）。现在**只在临期换码**时
+补一句提示 —— 因为那时用户**看得见的是大码、进剪贴板的是下一个**，不说明只能读成
+"复制错了"。**这条例外不要推广**。
+
+### §7.2 设置页「关于 → 权限管理」的行为变更 ★
+
+| 项 | 原来（定稿 §5.2） | 现在 |
+|---|---|---|
+| 点击 | 直接跳系统应用信息页 | **先进应用内权限引导页**（`PermissionsRoute`） |
+| `permission_management_subtitle` | 在系统设置页查看与调整应用权限 | **看看这个应用要什么权限、拿去做什么** |
+| 位置 / 标题 | 「关于」段 · 权限管理 | **不变** |
+
+**为什么副标题必须重写**：定稿 §5.2 那一版虽然删掉了自指与斜杠，但它仍然是**指路语**
+（"在系统设置页…"），而定稿 §4 文案三条规则**明令禁止指路语**。当时是个妥协：
+功能上需要指路、规则上不许指路。现在那一行**不再跳系统页**，指路的必要消失 ⇒
+副标题回到规则的正解：**说清这一行让你看到什么，而不是点下去会去哪**。
+
+> ⇒ 这条修订**没有推翻 §4**，而是让 §4 收回了它本该有的作用。
+
+**新增代码**：
+- `app/.../ui/permissions/`（`PermissionEntry` / `PermissionStatusChecker` / `PermissionsScreen`）；
+- `app/.../util/SystemSettingsIntents.kt`（收拢所有跳系统页，原先散在三个页面各写一份）；
+- `app/src/test/.../PermissionStatusCheckerTest.kt`（13 用例，纯 JVM）。
+
+详见定稿 **§12**（含新增的三条"不要做"边界与装机验收清单）。
+
+### §7.3 顺手修的扫码页权限死胡同
+
+`app/.../ui/qr/QrScannerContent.kt`：权限被「拒绝且不再询问」后应用内再 `launch`
+**不弹框**（系统直接回调 `false`）⇒ 「授予权限」按钮点了毫无反应，用户卡死。
+补一条**常驻**的「去系统设置里开启」出口。
+
+⚠️ **不用 `shouldShowRequestPermissionRationale` 控显隐** —— 它在"从没问过"与
+"勾了不再询问"下**都返回 `false`**（二义值），控显隐会让入口时有时无。
+
+### §7.4 门禁（下半场）
+
+| 门禁 | 结果 |
+|---|---|
+| `detekt` | ✅ **0 findings**（全模块） |
+| `:app:compileFullDebugKotlin` | ✅ |
+| `:app:compileOfflineDebugKotlin` | ✅（`SystemSettingsIntents` 是共享代码，**两个 flavor 都得验**） |
+| `gw test`（全模块） | ✅ **892 用例 / 0 失败 / 0 错误** |
+| `.ai/tools/check_*.py` 四道脚本 | ✅ **4 道全 OK**（§6.1 那 3 处误报仍在，非本轮引入） |
