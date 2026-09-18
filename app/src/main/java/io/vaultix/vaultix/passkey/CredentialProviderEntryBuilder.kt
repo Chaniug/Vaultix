@@ -391,5 +391,19 @@ class CredentialProviderEntryBuilder @Inject constructor(
     //     incompatible」；荣耀 MagicOS 同族。挂上可能导致系统在渲染阶段丢弃整个 entry，
     //     表现仍是「浏览器里什么都不弹」——比不挂更糟。（曾短暂引入 RomCompat 判定对象，
     //     因逻辑最终无需启用而删除；若日后要挂，务必先恢复该 ROM 判定，勿直接挂。）
+    //  2. **无可用 cipher**：Vaultix 的库密钥只在内存（VaultSessionManager），没有绑定到
+    //     单个条目、且经 setUserAuthenticationRequired 的 Keystore 密钥可作 CryptoObject。
+    // 因此设备验证统一由条目点击后的 Activity（PasskeyGetActivity / PasswordGetActivity）
+    // 承担 —— 与 Vaultix 既有行为一致，且不受 ROM 差异影响。
+    //
+    // ⚠️ 由此带来的**用户可见后果**（2026-09-18 记录，勿当成 bug 重修）：
+    // 库锁定时的通行密钥登录会看到**两次**生物识别 ——
+    //  ① `AutofillActivity.maybeBiometricUnlock()`（文案「解锁 Vaultix」，CP 认证动作）；
+    //  ② `PasskeyGetActivity.verifyUser()`（文案「使用通行密钥登录」，WebAuthn UV）。
+    // ② 是协议要求（`sign()` 断言 `isUserVerified`，且签名用的私钥取自已解锁的仓储），
+    // **去不掉**；① 是否可以省掉取决于自动锁定档位是否命中 `VaultTimeout.OnAppRestart`
+    // 的 `createdForAutofill` 豁免（见 VaultLockManagerImpl.checkForVaultTimeoutInternal）。
+    // 这两条各自都写在别处，但**根因是本节的「不挂 BiometricPromptData」**，
+    // 所以在这里留一句指路，避免下一位接力者从两个 Activity 分头查起。
 
 }
