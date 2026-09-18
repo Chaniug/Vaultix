@@ -19,15 +19,26 @@
  * | | 做法 | 代价 |
  * |---|---|---|
  * | a | 新增一份"账号注册表"（DataStore） | **多一处持久化真相**，还得与凭据、与库的 origin 保持同步 —— 而"两处真相必然漂移"正是本项目反复被咬的那条 |
- * | b | ★ **从库的 origin 反推**（本文件） | 列不出"配了但还没建库"的账号 |
+ * | b | ★ **从库的 origin 反推** | 列不出"配了但还没建库"的账号 |
  *
- * **选 b**，理由不只是省事，而是它表达了一个更准的语义：
+ * 2026-09-17 **选 b**，理由不只是省事，而是它表达了一个更准的语义：
  *
  * > **一个网盘账号的"现实意义"，就是它被哪些库在用。**
  *
- * 「配了但没建库」的账号在界面上列出，只会制造"我配它干嘛"的困惑；
- * 而它的代价极小：那种中间态只存在于「已存凭据、还没建好库行」这一小段，
- * 且**即使留着也无害** —— 用同样的服务器 + 账号重配会命中同一格（`credentialIdFor` 是幂等的）。
+ * ## ⚠️ ★ 2026-09-18 修正：b 的代价在「账号页可配置」之后变成了**阻断性**的
+ *
+ * b 的代价原本"极小"，因为当时账号**只能**在添加库时顺带配置 —— 配完立刻建库，
+ * 中间态短到看不见。但定稿 §11.7 要求把配置搬到「网盘账号」页之后，
+ * 这个中间态就成了**常态**：用户在账号页配完凭据，回头一看清单里**没有它**
+ * ⇒ 只会得出一个结论："没配上"。
+ *
+ * ⇒ 修正做法：**两个来源合并**（见 [list]）。
+ *   - **已保存的凭据 / 已登录的会话** —— 回答"我配过哪些账号"（[WebDavCredentialStore.listConfigured] /
+ *     `OneDriveAuthManager.listCachedSessions()`）；
+ *   - **库的 origin** —— 回答"每个账号被哪些库在用"（[CloudAccount.vaultIds] 与 [CloudAccount.browseRoot]）。
+ *
+ * 二者是**同一件事的两个面**，不是两份真相：凭据存储自己维护了一份幂等索引
+ * （索引与凭据在同一处调用里同步增删，见 `WebDavCredentialStore` 的说明）。
  *
  * ## 这也让「注销账号」的后果可以算出来
  *
@@ -89,6 +100,8 @@ class CloudAccountInventory @Inject constructor(
     private val vaultRepository: VaultRepository,
     private val webDavCredentials: WebDavCredentialStore,
     private val oneDriveAuth: OneDriveAuthManager,
+    /** 只为复用它的 `normalizeServerUrl`（目录 URL 的规则必须只有一处）。 */
+    private val connector: CloudAccountConnector,
 ) {
 
     /**
@@ -101,10 +114,41 @@ class CloudAccountInventory @Inject constructor(
         val rows = runCatching { vaultRepository.observeVaults().first() }.getOrDefault(emptyList())
         val sessions = runCatching { oneDriveAuth.listCachedSessions() }.getOrDefault(emptyList())
 
+        // ① 先登记"配过哪些账号"（凭据 / 登录态）—— 哪怕一个库都还没用它。
+        //    ⚠️ 这是 2026-09-18 的修正：账号页能配置之后，"配了没建库"是常态而非中间态。
         val vaultsOf = linkedMapOf<Pair<CloudAccountKind, String>, MutableList<String>>()
         val labels = mutableMapOf<Pair<CloudAccountKind, String>, String>()
+        // ⚠️ 只 putIfAbsent：来自**库**的起点比"服务器根"更准（用户可能填的是子目录）。
         val roots = mutableMapOf<Pair<CloudAccountKind, String>, String>()
 
+        fun register(kind: CloudAccountKind, storedId: String, label: String) {
+            val key = kind to storedId
+            vaultsOf.putIfAbsent(key, mutableListOf())
+            labels.putIfAbsent(key, label)
+        }
+
+        runCatching { webDavCredentials.listConfigured() }
+            .getOrDefault(emptyList())
+            .forEach { configured ->
+                register(CloudAccountKind.WEBDAV, configured.credentialId, serverOf(configured.serverUrl))
+                // ★ 兜底起点：还没有任何库用它时，**用户填的那个地址**就是能列目录的地方。
+                //   没有它，"刚配好还没建库"的账号会显示成"没有可用目录"，点不动
+                //   —— 而用户刚填完地址，最自然的下一步正是"看看那上面有什么"。
+                //   ⚠️ putIfAbsent 保证来自**库**的起点优先（那才是库真实所在的位置）。
+                roots.putIfAbsent(
+                    CloudAccountKind.WEBDAV to configured.credentialId,
+                    connector.normalizeServerUrl(configured.serverUrl),
+                )
+            }
+        sessions.forEach { session ->
+            register(
+                CloudAccountKind.ONEDRIVE,
+                session.accountId,
+                session.username.takeIf { it.isNotBlank() } ?: session.accountId,
+            )
+        }
+
+        // ② 再挂上"被哪些库在用" + 浏览起点。
         for (vault in rows) {
             val webDav = WebDavVaultOrigin.parse(vault.origin)
             if (webDav != null) {

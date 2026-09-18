@@ -7,18 +7,33 @@
  * the License, or (at your option) any later version.
  *
  * ---------------------------------------------------------------------------
- * 从网盘添加 KDBX 库：配置来源 → 选文件 → 主密码 → 入库。
+ * 从网盘添加 KDBX 库：**选账号 → 选文件 → 主密码 → 入库**。
  *
- * 两段式而不是一页塞满：**配置**（服务器/账号，或登录 OneDrive）与**浏览**
- * （在目录树里选库）是完全不同的两件事，混在一页会让"我现在该填哪个框"变成猜谜。
- * 连接成功后才翻到第二段，此时第一段的输入已经用不上、也不该再显示
- * （改一个已生效的服务器地址只会让人以为改了就会生效）。
+ * ## ★ 本页**没有**账号表单（2026-09-18，定稿 §11.7 第 2 步落地）
+ *
+ * 旧的形态是"在这里填服务器/账号/密码（或点登录）→ 连接 → 浏览"。
+ * 它有两条错：
+ *
+ * 1. **生命周期错**：本页是导航路由，**一返回 ViewModel 即销毁**，而 OneDrive 登录态
+ *    活在 MSAL 缓存里、WebDAV 凭据活在 `SecureCredentialStore` 里 —— 都是长寿命状态。
+ *    把长寿命状态的操作放在短寿命宿主里，必然"返回就没了"（用户实测过的那个 bug）。
+ * 2. **职责错**：账号是**被多个库共用**的资源，它的增删改查该有唯一归宿，
+ *    而不是散在每个"用到网盘"的入口各配一遍。
+ *
+ * ⇒ 现在账号**只在设置 →「网盘账号」**里配。本页：
+ * - 有账号 ⇒ 列出来让用户选；
+ * - 一个都没有 ⇒ 给"去设置里配置"的引导，**不摊开表单**。
+ *
+ * ## 为什么"没账号时不给表单"不是倒退
+ *
+ * 关键在于 `CloudAccountInventory` 现在能列出**已保存凭据但还没建库**的账号
+ * （`WebDavCredentialStore` 加了幂等索引）。所以"去设置里配完再回来"这条路
+ * **是通的** —— 配完它就在列表里。此前不能摘表单，正是因为配完列不出来会造死路。
  * ---------------------------------------------------------------------------
  */
 package io.vaultix.vaultix.ui.addvault
 
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -36,16 +51,15 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
@@ -62,10 +76,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalFocusManager
@@ -75,15 +86,14 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
-import androidx.fragment.app.FragmentActivity
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.vaultix.data.kdbx.KdbxFileEntry
-import io.vaultix.vaultix.remote.CloudAccount
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.remote.CloudAccount
 import io.vaultix.vaultix.ui.common.VaultixWavyProgressBar
-import io.vaultix.vaultix.ui.common.rememberFragmentActivity
 import io.vaultix.vaultix.ui.error.UnlockUiError
 import io.vaultix.vaultix.ui.error.unlockErrorText
 import io.vaultix.vaultix.ui.theme.Spacing
@@ -96,13 +106,6 @@ private val BUTTON_HEIGHT = 48.dp
 private val INLINE_PROGRESS = 20.dp
 private val INLINE_ICON = 18.dp
 
-/**
- * 从网盘添加 KDBX 库。
- *
- * ⚠️ OneDrive 的登录**必须传真实 Activity**：MSAL 要拉起系统授权页，
- * 传 `applicationContext` 拿不到 Activity 就直接失败。这里用
- * [rememberFragmentActivity] 解析当前宿主（MainActivity 本身是 `FragmentActivity`）。
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AddCloudVaultScreen(
@@ -113,7 +116,6 @@ fun AddCloudVaultScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
-    val activity = rememberFragmentActivity()
     // 文案先取好：LaunchedEffect 里不能直接 stringResource。
     val addedText = stringResource(R.string.add_cloud_added)
     val updatedText = stringResource(R.string.add_cloud_updated)
@@ -129,10 +131,6 @@ fun AddCloudVaultScreen(
         }
     }
 
-    // ★ 进页面时向 MSAL 要一次缓存账户（2026-09-17）。
-    //   本页是导航路由 ⇒ 一返回这个 ViewModel 就销毁，再进来是全新的、登录态为 null。
-    //   不主动恢复的话，界面会把"MSAL 里登录着"显示成"没登录"，逼用户重走一遍授权页。
-    LaunchedEffect(Unit) { viewModel.restoreOneDriveSessionIfAny() }
     // 账号可能刚在设置里配好 ⇒ 每次进页面重读一次（不缓存）。
     LaunchedEffect(Unit) { viewModel.refreshConfiguredAccounts() }
 
@@ -160,13 +158,15 @@ fun AddCloudVaultScreen(
                 .imePadding()
                 .padding(horizontal = Spacing.xl),
         ) {
-            if (state.browsing) {
-                BrowserSection(state = state, viewModel = viewModel)
-            } else {
-                ConfigSection(
+            when {
+                state.browsing -> BrowserSection(state = state, viewModel = viewModel)
+                // ⚠️ 「空」有两态必须分开（本项目的老坑）：还在读 vs 真的一个都没有。
+                //    塌进一个 isEmpty() 就是**假空态** —— 用户会以为"我配的账号丢了"。
+                state.loadingAccounts -> LoadingAccounts()
+                state.configuredAccounts.isEmpty() -> NoAccountsYet(onOpenCloudAccounts)
+                else -> AccountPicker(
                     state = state,
-                    viewModel = viewModel,
-                    activity = activity,
+                    onPick = viewModel::pickAccount,
                     onOpenCloudAccounts = onOpenCloudAccounts,
                 )
             }
@@ -175,243 +175,152 @@ fun AddCloudVaultScreen(
     }
 }
 
-// ---------------------------------------------------------------- 配置阶段
+// ---------------------------------------------------------------- 选账号
 
 /**
- * 连接阶段：**已配账号优先选**，但「连接新账号」永远可达。
+ * 账号选择：**本页唯一的起点**。
  *
- * ## ★ 为什么没有按施工单 §4 把表单**整段摘掉**（对施工单的改判，证据如下）
- *
- * 施工单 §4 要求摘掉本页的服务器/账号/密码表单，改成就地引导去「网盘账号」。
- * **照做会造出一条死路**，因为两个事实同时成立：
- *
- * 1. `CloudAccountInventory` 是按设计**从库的 origin 反推**账号的（见该文件头），
- *    ⇒ 一个"配了但还没建库"的账号**列不出来**；
- * 2. 「网盘账号」页（`CloudAccountsScreen`）是**只读清单**，没有"添加账号"能力。
- *
- * ⇒ 摘掉表单后：**首次使用网盘的人再也加不了网盘库**（引导去的页面也加不了）。
- *
- * 反过来，原实现还有个真 bug 值得修：账号列表非空时是 **`return`（早退）**，
- * 表单被整块跳过 ⇒ **已经配过一个账号的人，永远连不上第二个账号**。
- *
- * ⇒ 本实现的取舍：**保留表单，但让它退居「连接其他账号」之后**。
- *    有账号时默认只给"选账号 + 去管理"；想连新的点一下就展开。
- *    这样 §4 想要的"不再以原表单为主路径"达成了，而死路与第二账号的坑都避开了。
+ * 每行显示连接状态 —— **未连接**的账号点了也会失败，得让用户先看见。
  */
 @Composable
-private fun ConfigSection(
+private fun AccountPicker(
     state: AddCloudVaultViewModel.UiState,
-    viewModel: AddCloudVaultViewModel,
-    activity: FragmentActivity?,
+    onPick: (CloudAccount) -> Unit,
     onOpenCloudAccounts: () -> Unit,
 ) {
-    var showNewAccountForm by rememberSaveable { mutableStateOf(false) }
     Text(
         text = stringResource(R.string.add_cloud_subtitle),
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
     Spacer(Modifier.height(Spacing.lg))
-
-    // 已经配过网盘账号 ⇒ 默认只让用户**选账号**（定稿 §11.7：凭据是长寿命状态，
-    // 归「网盘账号」；本页只负责"选一个库文件"）。
-    val hasAccounts = state.configuredAccounts.isNotEmpty()
-    if (hasAccounts) {
-        ConfiguredAccountsList(state = state, onPick = viewModel::pickAccount)
-        Spacer(Modifier.height(Spacing.md))
-        // 管理入口：**已配账号的全生命周期**都在那个持久页里，这里只给一条路。
-        TextButton(onClick = onOpenCloudAccounts, modifier = Modifier.fillMaxWidth()) {
-            Icon(
-                Icons.Filled.Cloud,
-                contentDescription = null,
-                modifier = Modifier.size(INLINE_ICON),
-            )
-            Spacer(Modifier.width(Spacing.sm))
-            Text(stringResource(R.string.add_cloud_manage_accounts))
-        }
-        Spacer(Modifier.height(Spacing.lg))
-    }
-
-    // 「连接新账号」：没账号时直接展开（否则无从下手）；有账号时收在按钮后面。
-    if (!hasAccounts || showNewAccountForm) {
-        NewAccountForm(state = state, viewModel = viewModel, activity = activity)
-    } else {
-        OutlinedButton(onClick = { showNewAccountForm = true }, modifier = Modifier.fillMaxWidth()) {
-            Icon(
-                Icons.Filled.Add,
-                contentDescription = null,
-                modifier = Modifier.size(INLINE_ICON),
-            )
-            Spacer(Modifier.width(Spacing.sm))
-            Text(stringResource(R.string.add_cloud_connect_other))
-        }
-    }
-
-    ErrorLine(state.error)
-    BusyLine(visible = state.busy, label = stringResource(R.string.add_cloud_connecting))
-}
-
-/** 连接**一个新**网盘账号：选来源 → 填该来源要的东西 → 连接并浏览。 */
-@Composable
-private fun NewAccountForm(
-    state: AddCloudVaultViewModel.UiState,
-    viewModel: AddCloudVaultViewModel,
-    activity: FragmentActivity?,
-) {
-    ProviderRow(selected = state.provider, onSelect = viewModel::onProviderChange)
-    Spacer(Modifier.height(Spacing.lg))
-
-    when (state.provider) {
-        CloudProvider.WEBDAV -> WebDavFields(state = state, viewModel = viewModel)
-        CloudProvider.ONEDRIVE -> OneDriveFields(
-            state = state,
-            viewModel = viewModel,
-            activity = activity,
-        )
-    }
-
-    Spacer(Modifier.height(Spacing.lg))
-    ConnectButton(state = state, viewModel = viewModel, activity = activity)
-}
-
-/** 来源二选一（两个 chip 而不是下拉菜单：只有两个选项时下拉是多余的一次点击）。 */
-@Composable
-private fun ProviderRow(selected: CloudProvider, onSelect: (CloudProvider) -> Unit) {
-    Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-        CloudProvider.entries.forEach { provider ->
-            FilterChip(
-                selected = provider == selected,
-                onClick = { onSelect(provider) },
-                label = { Text(stringResource(provider.labelRes())) },
-            )
-        }
-    }
-}
-
-/** WebDAV 的三个输入框 + 明文 HTTP 提示。 */
-@Composable
-private fun WebDavFields(
-    state: AddCloudVaultViewModel.UiState,
-    viewModel: AddCloudVaultViewModel,
-) {
-    OutlinedTextField(
-        value = state.serverUrl,
-        onValueChange = viewModel::onServerUrlChange,
-        label = { Text(stringResource(R.string.add_cloud_server)) },
-        supportingText = { Text(stringResource(R.string.add_cloud_server_hint)) },
-        singleLine = true,
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-        modifier = Modifier.fillMaxWidth(),
-    )
-    if (state.insecureHttp) {
-        // 只提示、不阻拦：局域网 NAS 用 http 是常态，拦下来等于让这批人用不了。
-        Text(
-            text = stringResource(R.string.add_cloud_insecure_http),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.error,
-            modifier = Modifier.padding(top = Spacing.xs),
-        )
-    }
-    Spacer(Modifier.height(Spacing.sm))
-    OutlinedTextField(
-        value = state.username,
-        onValueChange = viewModel::onUsernameChange,
-        label = { Text(stringResource(R.string.add_cloud_username)) },
-        singleLine = true,
-        modifier = Modifier.fillMaxWidth(),
+    Text(
+        text = stringResource(R.string.add_cloud_pick_account),
+        style = MaterialTheme.typography.titleSmall,
     )
     Spacer(Modifier.height(Spacing.sm))
-    OutlinedTextField(
-        value = state.password,
-        onValueChange = viewModel::onPasswordChange,
-        label = { Text(stringResource(R.string.add_cloud_password)) },
-        singleLine = true,
-        visualTransformation = state.password.visualTransformation(state.passwordVisible),
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-        trailingIcon = {
-            SecretVisibilityToggle(
-                visible = state.passwordVisible,
-                onToggle = viewModel::onPasswordVisibleChange,
-            )
-        },
-        modifier = Modifier.fillMaxWidth(),
-    )
-}
 
-/** OneDrive：登录说明 + 已登录态（含换号与注销）。 */
-@Composable
-private fun OneDriveFields(
-    state: AddCloudVaultViewModel.UiState,
-    viewModel: AddCloudVaultViewModel,
-    activity: FragmentActivity?,
-) {
-    Text(
-        text = stringResource(R.string.add_cloud_onedrive_hint),
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-    val account = state.accountName ?: return
-    Spacer(Modifier.height(Spacing.md))
-    Text(
-        text = stringResource(R.string.add_cloud_onedrive_signed_in, account),
-        style = MaterialTheme.typography.bodyMedium,
-    )
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        // ⚠️ 「切换账号」= signOut + signIn(forceAccountChooser)，两件都要做 ——
-        //    只做一件 MSAL 都可能静默复用旧账户（见 ViewModel 里那段的说明）。
-        TextButton(
-            onClick = {
-                if (activity == null) {
-                    viewModel.reportMissingActivity()
-                } else {
-                    viewModel.switchOneDriveAccount(activity)
-                }
-            },
-            enabled = !state.busy,
-        ) {
-            Text(stringResource(R.string.add_cloud_onedrive_switch))
-        }
-        TextButton(onClick = viewModel::signOutOneDrive) {
-            Text(stringResource(R.string.add_cloud_onedrive_signout))
-        }
-    }
-}
-
-/** 「连接并浏览」/「登录」——两种来源的按钮文案与动作不同。 */
-@Composable
-private fun ConnectButton(
-    state: AddCloudVaultViewModel.UiState,
-    viewModel: AddCloudVaultViewModel,
-    activity: FragmentActivity?,
-) {
-    val focusManager = LocalFocusManager.current
-    FilledTonalButton(
-        onClick = {
-            focusManager.clearFocus()
-            when (state.provider) {
-                CloudProvider.WEBDAV -> viewModel.connectWebDav()
-                // ⚠️ 传真实 Activity（MSAL 要拉起授权页）。拿不到就**如实报错**，
-                //    不静默禁按钮 —— 那样用户只看到"点了没反应"。
-                CloudProvider.ONEDRIVE -> if (activity == null) {
-                    viewModel.reportMissingActivity()
-                } else {
-                    viewModel.connectOneDrive(activity)
-                }
-            }
-        },
-        enabled = state.canConnect,
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(BUTTON_HEIGHT),
-    ) {
-        Text(
-            stringResource(
-                if (state.provider == CloudProvider.ONEDRIVE) {
-                    R.string.add_cloud_onedrive_signin
-                } else {
-                    R.string.add_cloud_connect
-                },
+    state.configuredAccounts.forEach { account ->
+        ListItem(
+            modifier = Modifier.clickable(
+                enabled = !state.busy,
+                onClick = { onPick(account) },
             ),
+            leadingContent = {
+                Icon(
+                    imageVector = Icons.Filled.Cloud,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            },
+            headlineContent = { Text(account.label) },
+            supportingContent = { AccountSubtitle(account) },
+            trailingContent = {
+                Icon(
+                    Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    contentDescription = null,
+                )
+            },
+        )
+    }
+
+    Spacer(Modifier.height(Spacing.md))
+    // 管理入口：账号的**全生命周期**都在那个持久页里，这里只给一条路。
+    OutlinedIconButton(
+        icon = Icons.Filled.Settings,
+        text = stringResource(R.string.add_cloud_manage_accounts),
+        onClick = onOpenCloudAccounts,
+    )
+    ErrorLine(state.error)
+    BusyLine(visible = state.busy, label = stringResource(R.string.add_cloud_working))
+}
+
+@Composable
+private fun AccountSubtitle(account: CloudAccount) {
+    val kind = stringResource(
+        if (account.kind == io.vaultix.vaultix.remote.CloudAccountKind.ONEDRIVE) {
+            R.string.cloud_accounts_kind_onedrive
+        } else {
+            R.string.cloud_accounts_kind_webdav
+        },
+    )
+    val usage = if (account.vaultCount > 0) {
+        stringResource(R.string.cloud_accounts_used_by, account.vaultCount)
+    } else {
+        stringResource(R.string.cloud_accounts_no_vault_yet)
+    }
+    val connection = stringResource(
+        if (account.connected) R.string.cloud_accounts_connected else R.string.cloud_accounts_disconnected,
+    )
+    Text(
+        text = "$kind · $usage · $connection",
+        style = MaterialTheme.typography.bodySmall,
+        color = if (account.connected) {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        } else {
+            MaterialTheme.colorScheme.error
+        },
+    )
+}
+
+/**
+ * 一个都没有 —— **给引导，不给表单**。
+ *
+ * ⚠️ 这里刻意不提供"就地填凭据"：配账号是设置页的职责，而且配完**这里能立刻看到**
+ * （`CloudAccountInventory` 现在列得出"已存凭据但没建库"的账号）。
+ * 摊开一个表单只会让"账号该在哪配"有两个答案。
+ */
+@Composable
+private fun NoAccountsYet(onOpenCloudAccounts: () -> Unit) {
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(top = Spacing.lg),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Icon(
+            imageVector = Icons.Filled.Cloud,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(ICON_LARGE),
+        )
+        Spacer(Modifier.height(Spacing.md))
+        Text(
+            text = stringResource(R.string.add_cloud_no_accounts_title),
+            style = MaterialTheme.typography.titleMedium,
+        )
+        Spacer(Modifier.height(Spacing.sm))
+        Text(
+            text = stringResource(R.string.add_cloud_no_accounts_body),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(Spacing.lg))
+        FilledTonalButton(
+            onClick = onOpenCloudAccounts,
+            modifier = Modifier.fillMaxWidth().height(BUTTON_HEIGHT),
+        ) {
+            Icon(
+                Icons.Filled.Settings,
+                contentDescription = null,
+                modifier = Modifier.size(INLINE_ICON),
+            )
+            Spacer(Modifier.width(Spacing.sm))
+            Text(stringResource(R.string.add_cloud_go_to_accounts))
+        }
+    }
+}
+
+@Composable
+private fun LoadingAccounts() {
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(top = Spacing.xxl),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        VaultixWavyProgressBar(modifier = Modifier.fillMaxWidth())
+        Spacer(Modifier.height(Spacing.sm))
+        Text(
+            text = stringResource(R.string.cloud_accounts_loading),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }
@@ -452,7 +361,7 @@ private fun BrowserSection(
     SubmitButton(state = state, onSubmit = viewModel::submit)
 }
 
-/** 当前目录 + 上一级 + 重新配置。 */
+/** 当前目录 + 上一级 + 重新选账号。 */
 @Composable
 private fun DirectoryBar(
     state: AddCloudVaultViewModel.UiState,
@@ -588,6 +497,23 @@ private fun SubmitButton(state: AddCloudVaultViewModel.UiState, onSubmit: () -> 
 
 // ---------------------------------------------------------------- 小组件
 
+/** 带图标的描边按钮（"去设置"这类"跳走去别处"的动作）。 */
+@Composable
+private fun OutlinedIconButton(
+    icon: ImageVector,
+    text: String,
+    onClick: () -> Unit,
+) {
+    OutlinedButton(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Icon(icon, contentDescription = null, modifier = Modifier.size(INLINE_ICON))
+        Spacer(Modifier.width(Spacing.sm))
+        Text(text)
+    }
+}
+
 /** 密码可见性开关（两处密码框共用，避免一处的图标行为与另一处不一致）。 */
 @Composable
 private fun SecretVisibilityToggle(visible: Boolean, onToggle: (Boolean) -> Unit) {
@@ -631,68 +557,6 @@ private fun BusyLine(visible: Boolean, label: String) {
     )
 }
 
-/**
- * 已配置账号的**选择列表**（"选一个 → 直接列它的目录"）。
- *
- * ⚠️ 只列**已有的**账号，不提供"在这里新建账号" —— 那正是要挪走的东西（定稿 §11.7）。
- * 新建/换号/注销都在设置 → 密码库管理 →「网盘账号」。
- */
-@Composable
-private fun ConfiguredAccountsList(
-    state: AddCloudVaultViewModel.UiState,
-    onPick: (CloudAccount) -> Unit,
-) {
-    Text(
-        text = stringResource(R.string.add_cloud_pick_account),
-        style = MaterialTheme.typography.titleSmall,
-    )
-    Spacer(Modifier.height(Spacing.sm))
-    state.configuredAccounts.forEach { account ->
-        ListItem(
-            modifier = Modifier.clickable(
-                enabled = !state.busy,
-                onClick = { onPick(account) },
-            ),
-            leadingContent = {
-                Icon(
-                    imageVector = Icons.Filled.Cloud,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                )
-            },
-            headlineContent = { Text(account.label) },
-            supportingContent = {
-                Text(
-                    // 连接状态直接写在这里：**未连接**的账号点了也会失败，得让用户先看见。
-                    text = stringResource(
-                        if (account.connected) {
-                            R.string.cloud_accounts_connected
-                        } else {
-                            R.string.cloud_accounts_disconnected
-                        },
-                    ),
-                    color = if (account.connected) {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    } else {
-                        MaterialTheme.colorScheme.error
-                    },
-                )
-            },
-            trailingContent = {
-                Icon(
-                    Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                    contentDescription = null,
-                )
-            },
-        )
-    }
-}
-
-private fun CloudProvider.labelRes(): Int = when (this) {
-    CloudProvider.WEBDAV -> R.string.add_cloud_provider_webdav
-    CloudProvider.ONEDRIVE -> R.string.add_cloud_provider_onedrive
-}
-
 private fun String.visualTransformation(visible: Boolean): VisualTransformation =
     if (visible) VisualTransformation.None else PasswordVisualTransformation()
 
@@ -729,3 +593,4 @@ private fun formatTime(millis: Long?): String? = millis
 
 private const val BYTES_PER_KB = 1024.0
 private const val TIME_PATTERN = "yyyy-MM-dd HH:mm"
+private val ICON_LARGE = 48.dp

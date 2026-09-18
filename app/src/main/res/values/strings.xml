@@ -61,9 +61,11 @@
     <string name="add_cloud_insecure_http">注意：这是明文 HTTP，账号密码在局域网内以明文传输。公网地址请改用 HTTPS。</string>
     <string name="add_cloud_connect">连接并浏览</string>
     <!-- 已配过网盘账号时：只让用户选账号（登录/凭据归设置里的「网盘账号」） -->
-    <string name="add_cloud_pick_account">选择已配置的网盘账号</string>
-    <string name="add_cloud_connect_other">连接其他账号</string>
-    <string name="add_cloud_manage_accounts">在「网盘账号」里查看/管理已配置的账号</string>
+    <string name="add_cloud_pick_account">选择一个网盘账号</string>
+    <string name="add_cloud_manage_accounts">管理网盘账号</string>
+    <string name="add_cloud_no_accounts_title">还没有配置网盘账号</string>
+    <string name="add_cloud_no_accounts_body">网盘账号在设置里统一管理（配置、换号、注销）。配好之后回到这一页就能选它。</string>
+    <string name="add_cloud_go_to_accounts">去「网盘账号」配置</string>
     <string name="add_cloud_connecting">正在连接…</string>
     <string name="add_cloud_onedrive_hint">登录 Microsoft 账号后浏览 OneDrive 根目录，选中已有的 .kdbx 文件。</string>
     <string name="add_cloud_onedrive_signin">使用 Microsoft 账号登录</string>
@@ -1088,7 +1090,24 @@
     <string name="cloud_accounts_disconnected">未连接，需要重新填写凭据或登录</string>
     <!-- ⚠️「空」有两态必须分开：还在读 / 真的一个都没有。塌成一个就是假空态。 -->
     <string name="cloud_accounts_loading">正在读取…</string>
-    <string name="cloud_accounts_empty">还没有网盘账号。添加密码库时选「从网盘添加」即可配置。</string>
+    <string name="cloud_accounts_empty">还没有网盘账号。点下面的「添加账号」配置一个。</string>
+    <string name="cloud_accounts_no_vault_yet">还没有库用它</string>
+    <string name="cloud_accounts_add">添加账号</string>
+    <string name="cloud_accounts_add_title">添加一个网盘账号</string>
+    <string name="cloud_accounts_test_connection">测试连接</string>
+    <string name="cloud_accounts_probe_idle">还没有测试过连接</string>
+    <string name="cloud_accounts_probe_running">正在连接…</string>
+    <string name="cloud_accounts_probe_ok">连接成功，账号已保存。回到密码库列表就能用它添加库。</string>
+    <string name="cloud_accounts_probe_failed">连接失败（凭据没有保存）</string>
+    <string name="cloud_accounts_onedrive_hint">登录 Microsoft 账号后，就可以用它浏览 OneDrive 上的 .kdbx 文件。</string>
+    <string name="cloud_accounts_onedrive_signin">登录 Microsoft 账号</string>
+    <string name="cloud_accounts_onedrive_switch">切换账号</string>
+    <string name="cloud_accounts_reconfigure">重新填写</string>
+    <string name="cloud_accounts_remove">注销</string>
+    <string name="cloud_accounts_remove_title">注销这个网盘账号？</string>
+    <string name="cloud_accounts_remove_impact">这个账号正被 %1$d 个库使用。注销后这些库都会变成"需要重新连接"（库本身和网盘上的文件都不会删除）。</string>
+    <string name="cloud_accounts_remove_no_impact">这个账号还没有被任何库使用。注销只是删除保存在本机的凭据，网盘上的文件不受影响。</string>
+    <string name="cloud_accounts_remove_confirm">注销</string>
 
     <!--
         ================================================================
