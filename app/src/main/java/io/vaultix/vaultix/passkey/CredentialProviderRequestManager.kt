@@ -66,10 +66,40 @@ object CredentialProviderRequestManager {
      *     ?: intent.getBooleanExtra(EXTRA_KEY_UV_PERFORMED_DURING_UNLOCK, false)
      * ```
      * 为真时跳过多余的生物识别弹窗。
+     *
+     * ⚠️ **读取请用 [consumeUserPreVerified]**，不要直接读本字段 ——
+     * 本标记是**流程内一次性**的（见 `.ai/decisions/通行密钥UV豁免-定稿.md` §3 I1），
+     * 直接读不会消费它，会导致同一标记被多次使用（退化成"验证过就一直免验证"）。
+     * 本字段保留为 `private set` 仅供 [markUserPreVerified] / [clear] 维护。
      */
     @Volatile
     var isUserPreVerified: Boolean = false
         private set
+
+    /**
+     * ★ 标记「本次凭据流程内刚完成过设备验证」（唯一合法写入点）。
+     *
+     * 目前唯一调用者是 `AutofillActivity`：**库锁定**时用户为完成 CP 认证动作而做的
+     * 那次生物识别，成功且解封成功后才可置位（决策文档 §3 I2 / I6）。
+     *
+     * ⚠️ **绝不可**由「库当前已解锁」这类**状态**反推置位（I2）——
+     * 解锁可能来自主密码、可能发生在很久以前，与"本次断言前的验证"不是一回事。
+     */
+    fun markUserPreVerified() {
+        isUserPreVerified = true
+    }
+
+    /**
+     * ★ 消费「已预验证」标记：返回当前值并**立即清零**（一次性语义）。
+     *
+     * 调用方（`PasskeyGetActivity` / `PasskeyCreateActivity`）拿到 `true` 后仍有义务
+     * 自己校验**库仍未上锁**（决策文档 §3 I5）——本方法只负责"读过即失效"。
+     */
+    fun consumeUserPreVerified(): Boolean {
+        val value = isUserPreVerified
+        isUserPreVerified = false
+        return value
+    }
 
     fun setCreateCredentialRequest(request: CreateCredentialRequest, preVerified: Boolean) {
         clear()

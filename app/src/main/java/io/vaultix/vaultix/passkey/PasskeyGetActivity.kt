@@ -63,6 +63,7 @@ import io.vaultix.model.VaultFido2Credential
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.autofill.AutofillLogger
 import io.vaultix.vaultix.autofill.match.UriMatcher
+import io.vaultix.vaultix.passkey.CredentialProviderIntentUtils.consumeUserPreVerified
 import io.vaultix.vaultix.ui.theme.VaultixTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -123,6 +124,17 @@ class PasskeyGetActivity : FragmentActivity() {
      * 上一次验证结果"泄漏"到下一次请求。
      */
     private var isUserVerified: Boolean = false
+
+    /**
+     * 本次流程内**已完成**设备验证（由解锁那一步的认证结转而来）。
+     *
+     * 为真时 [showConfirm] 的确认按钮**不再弹生物识别**，直接把 [isUserVerified]
+     * 结成真后签名。安全依据见 `.ai/decisions/通行密钥UV豁免-定稿.md`。
+     *
+     * ⚠️ 它是**一次性**结论：只服务本 Activity 的这一次流程（消费点见 `onCreate`）。
+     * 不要把它提升为进程级/持久状态 —— 那会退化成"验证过一次就一直免验证"。
+     */
+    private var preVerifiedByUnlock: Boolean = false
 
     /**
      * 本次流程内已失败的验证尝试次数。
@@ -252,6 +264,34 @@ class PasskeyGetActivity : FragmentActivity() {
                 }
                 credential = cred
                 rpName = cred.rpName.ifBlank { cred.rpId }
+                // ★ 本流程内已做过设备验证 ⇒ 跳过冗余的**第二次生物识别**。
+                //
+                // 为什么在这里判定、为什么安全（`.ai/decisions/通行密钥UV豁免-定稿.md`）：
+                //  - 走到这一行**已经证明库是解锁的**（`cred != null` 只在
+                //    `vaultUnlocked && anyUnlocked` 时才可能）⇒ 满足 §3 **I5**
+                //    「签名前库仍未上锁」；
+                //  - 标记是**流程内一次性**的（`consumeUserPreVerified()` 读完即清零）
+                //    ⇒ 满足 **I1**；
+                //  - 标记的唯一来源是 `AutofillActivity` 里**生物识别成功且解封成功**
+                //    的分支 ⇒ 满足 **I2 / I6**；
+                //  - `sign()` 的 `isUserVerified` 断言**照旧保留**（下面仍会走到它）
+                //    ⇒ 满足 **I4**。
+                //
+                // ⚠️ 注意顺序：**先消费、再判**。即使库态校验将来出问题，
+                //    标记也已被清掉，不会因为异常路径被重复使用。
+                val preVerified = intent.consumeUserPreVerified()
+                preVerifiedByUnlock = preVerified
+                // ⚠️ **仍然渲染确认卡片**（只是它的"确认"不再弹生物识别）。
+                //
+                // 为什么不能连卡片一起省：那张卡片是用户对「使用谁的通行密钥登录
+                // 哪个站点」的**显式同意**，与"设备验证"是两件事 ——
+                // 前者是授权（用户决定要不要用这条凭据），后者是证明"设备用户在场"。
+                // 解锁那次验证只解决了后者。省掉卡片会变成"点了候选就直接签名发出断言"，
+                // 用户失去最后一道确认机会（尤其站名/账号不符时）。
+                AutofillLogger.d(
+                    "PK lookup: preVerified=$preVerified vaultUnlocked=$vaultUnlocked " +
+                        "→ ${if (preVerified) "跳过 UV 生物识别（保留确认卡片）" else "确认后弹 UV"}",
+                )
                 AutofillLogger.d("PK confirm shown, waiting for user")
                 showConfirm()
             }
@@ -294,11 +334,30 @@ class PasskeyGetActivity : FragmentActivity() {
                     rpName = rpName,
                     rpId = rpId,
                     userName = credential?.userName.orEmpty(),
-                    onConfirm = { verifyUser() },
+                    onConfirm = { onConfirmClicked() },
                     onCancel = { cancel() },
                 )
             }
         }
+    }
+
+    /**
+     * 用户点了确认：已预验证则**直接签名**，否则先做设备验证。
+     *
+     * 两条路的**授权语义完全相同**（用户都显式点了确认）；差别只在"设备用户在场"
+     * 这件事要不要再证明一次 —— 本流程内刚证明过就不再重复
+     * （`.ai/decisions/通行密钥UV豁免-定稿.md` §2）。
+     */
+    private fun onConfirmClicked() {
+        if (preVerifiedByUnlock) {
+            // ⚠️ 这里置真**不是绕过** UV，而是把**本次流程内已完成的验证结论**结转过来。
+            //    `sign()` 的断言仍在（见 sign()）：它现在是兜底，不是唯一入口。
+            isUserVerified = true
+            AutofillLogger.d("PK confirm: 结转解锁时的 UV，跳过生物识别直接签名")
+            sign()
+            return
+        }
+        verifyUser()
     }
 
     private fun verifyUser() {

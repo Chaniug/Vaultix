@@ -36,6 +36,7 @@ package io.vaultix.vaultix.passkey
 
 import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
 import android.graphics.drawable.Icon
 import androidx.annotation.RequiresApi
 import androidx.credentials.provider.AuthenticationAction
@@ -309,6 +310,7 @@ class CredentialProviderEntryBuilder @Inject constructor(
         siblingCount: Int,
     ): CredentialEntry {
         val intent = PasskeyProviderIntents.passwordGetIntent(context, vaultId, item.id)
+            .markUvPerformedIfNeeded()
         val pendingIntent = PendingIntent.getActivity(
             context,
             REQUEST_PASSWORD_CP_BASE + item.id.hashCode(),
@@ -323,6 +325,28 @@ class CredentialProviderEntryBuilder @Inject constructor(
             .setIcon(Icon.createWithResource(context, R.drawable.ic_passkey))
         return builder.build()
     }
+
+    /**
+     * ★ 把「本次流程内刚完成过设备验证」的结论**随候选 Intent 带下去**。
+     *
+     * 见 `.ai/decisions/通行密钥UV豁免-定稿.md`：
+     * 库锁定时用户为完成 CP 认证动作已经做过一次生物识别（`AutofillActivity`），
+     * 候选被点击时不该再弹第二次。结论经两条路同时传递：
+     *  - **本 Intent extra**（随 PendingIntent 走，即使进程重建也不丢）；
+     *  - `CredentialProviderRequestManager` 的单例标记（同进程快路径）。
+     *
+     * ⚠️ 只在**确有**预验证时才加这个 extra。`false` 时**不加**（让读取侧走
+     * "没有 extra ⇒ 默认 false"的正常路径），避免把 false 也当成一条"明确结论"传下去。
+     *
+     * ⚠️ 读取侧（`PasskeyGetActivity` / `PasskeyCreateActivity`）除了看这个标记，
+     * **还必须自行校验库仍未上锁**（决策文档 §3 I5）。
+     */
+    private fun Intent.markUvPerformedIfNeeded(): Intent =
+        if (CredentialProviderRequestManager.isUserPreVerified) {
+            putExtra(CredentialProviderIntentUtils.EXTRA_KEY_UV_PERFORMED_DURING_UNLOCK, true)
+        } else {
+            this
+        }
 
     /**
      * 跨已解锁库扁平化所有登录条目的 fido2，按 rpId（+ allowCredentials）匹配。
@@ -368,7 +392,7 @@ class CredentialProviderEntryBuilder @Inject constructor(
             credentialId = m.credential.credentialId,
             rpId = m.credential.rpId,
             clientDataHash = option.clientDataHash,
-        )
+        ).markUvPerformedIfNeeded()
         val pendingIntent = PendingIntent.getActivity(
             context,
             m.credential.credentialId.hashCode(),

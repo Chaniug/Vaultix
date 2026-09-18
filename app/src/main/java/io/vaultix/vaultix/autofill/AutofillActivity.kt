@@ -18,6 +18,7 @@ import android.os.Bundle
 import androidx.annotation.RequiresApi
 import androidx.credentials.provider.PendingIntentHandler
 import io.vaultix.vaultix.passkey.CredentialProviderEntryBuilder
+import io.vaultix.vaultix.passkey.CredentialProviderRequestManager
 import android.view.autofill.AutofillManager
 import android.widget.Toast
 import androidx.compose.foundation.background
@@ -486,14 +487,33 @@ class AutofillActivity : FragmentActivity() {
                 when {
                     // CP 流程无暂存可回灌：解锁**成功**就回 RESULT_OK 收工
                     // （见 finishCredentialFlowUnlocked 的 KDoc —— 少了它面板会死循环）。
-                    credentialFlow && result.first == UnlockResult.Success ->
+                    credentialFlow && result.first == UnlockResult.Success -> {
+                        // ★ 标记「本流程内刚完成过设备验证」。
+                        //
+                        // 为什么在这里、只在这里：用户刚为**完成 CP 认证动作**做过一次
+                        // 生物识别（`maybeBiometricUnlock` 的 Prompt 分支），而且**解封成功**
+                        // ——这是"用户在场且被验证"的唯一可信来源。
+                        //
+                        // 为什么必须 `credentialFlow`：非 CP 流程（普通 autofill）没有后续的
+                        // 通行密钥断言，置位只会让标记在白等中过期（且违反"流程内"语义）。
+                        //
+                        // 为什么必须 `result.first == Success`：认证过了但解封失败时，
+                        // 库仍是锁定态 —— 此时置位会让候选列表把"已验证"传下去，
+                        // 而实际上库打不开（`PasskeyGetActivity` 的库态校验会拦住，
+                        // 但**不该**依赖下游兜底，这里就不该置）。
+                        //
+                        // ⚠️ 绝不由「库已解锁」这类**状态**反推（决策文档 §3 I2）：
+                        // 解锁可能来自主密码、可能发生在很久以前。
+                        CredentialProviderRequestManager.markUserPreVerified()
+                        AutofillLogger.d("CP unlock → 标记 UV 已完成（供候选断言复用）")
                         finishCredentialFlowUnlocked()
+                    }
 
                     // 认证过了但解封失败（KEK 失效 / 主密码被改过）：**不能谎报成功**，
                     // 保持默认的 CANCELED 让用户重试或改走主密码。
                     credentialFlow -> {
                         AutofillLogger.d(
-                            "CP 解封未成功（first=${result.first::class.simpleName}）→ 不回 OK",
+                            "CP 解封未成功（first=${result.first::class.simpleName}）→ 不回 OK，也不标记 UV",
                         )
                         finish()
                     }

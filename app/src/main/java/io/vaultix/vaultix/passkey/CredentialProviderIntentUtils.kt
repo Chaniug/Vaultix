@@ -70,11 +70,34 @@ object CredentialProviderIntentUtils {
      * ```
      *
      * 第一条来源是 Android 15+ 的 entry 级 BiometricPromptData（Vaultix 当前不挂，
-     * 见 `VaultixCredentialProviderService` 的说明）；第二条来源是本 App 自己的解锁流程
+     * 见 `VaultixCredentialProviderEntryBuilder` 的说明）；第二条来源是本 App 自己的解锁流程
      * （用户在解锁时刚做过生物识别，无需再弹一次）。
      */
     fun Intent.isUserPreVerified(): Boolean {
         val fromSystem = getProviderGetCredentialRequestOrNull()?.biometricPromptResult?.isSuccessful
         return fromSystem ?: getBooleanExtra(EXTRA_KEY_UV_PERFORMED_DURING_UNLOCK, false)
+    }
+
+    /**
+     * ★ 供 `PasskeyGetActivity` / `PasskeyCreateActivity` 使用：**读取并消费**「已预验证」标记。
+     *
+     * 为什么单独一个函数而不是让调用方直接用 [isUserPreVerified]：
+     * 本标记是**流程内一次性**的（见 `.ai/decisions/通行密钥UV豁免-定稿.md` §3 I1），
+     * 必须"读过即失效"，否则同一标记会被多次使用 ⇒ 退化成"验证过一次就一直免验证"。
+     * 把两条来源的**消费**集中在这里，调用方就不可能只读不清。
+     *
+     * 两条来源的优先级与 [isUserPreVerified] 一致；系统那条（`biometricPromptResult`）
+     * 由系统给出、天然与本次请求绑定，无需消费；本 App 自己那条走
+     * [CredentialProviderRequestManager.consumeUserPreVerified]（读后立即清零）。
+     *
+     * ⚠️ 返回 `true` **不代表可以跳过验证**——调用方还**必须**校验库仍未上锁
+     * （决策文档 §3 I5）。
+     */
+    fun Intent.consumeUserPreVerified(): Boolean {
+        getProviderGetCredentialRequestOrNull()
+            ?.biometricPromptResult
+            ?.isSuccessful
+            ?.let { return it }
+        return CredentialProviderRequestManager.consumeUserPreVerified()
     }
 }
