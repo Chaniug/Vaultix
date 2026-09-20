@@ -1,27 +1,33 @@
 #!/usr/bin/env python3
-"""本地没有编译器：三类 **detekt 查不出、只有 CI 编译才炸** 的错误的补位自检。
+"""本地没有编译器：五类 **detekt 查不出、只有 CI 编译才炸** 的错误的补位自检。
 
 ## 为什么需要这个
 
 沙箱里没有 Android SDK，**编译不了 Kotlin**；而 detekt **只跑静态规则集、不做
-符号解析也不做类型检查**。于是下面三类错误在本地是**完全静默**的，只有推上去
-等 CI 的 `compileFullDebugKotlin` 才暴露（每轮 CI 约 4 分钟）：
+符号解析也不做类型检查**。于是下面五类错误在本地是**完全静默**的，只有推上去
+等 CI 的 `Build Debug APK` 才暴露（每轮 CI 约 2~4 分钟）：
 
     e: ...ItemDetailScreen.kt:928:97  Unresolved reference 'Tune'.
     e: ...SettingsComponents.kt:80:30 Variable 'SETTINGS_ICON_BOX' must be initialized.
+    e: ...FullScreenDialogShell.kt:500:51 Unresolved reference 'value'.
 
-2026-09-16 实录：同一轮推送里这两条一起红了，而本地 detekt + 三个 `.ai/tools`
-脚本**全绿**。它们各自对应的规则：
+2026-09-16 实录：同一轮推送里前两条一起红了，而本地 detekt + 三个 `.ai/tools`
+脚本**全绿**。2026-09-20 又实录了后一条（推上去两次才绿）。它们各自对应的规则：
 
 | 规则 | 真实报错 | 触发改动 |
 |---|---|---|
 | A 图标引用 vs 导入差集 | `Unresolved reference 'Tune'` | 给自定义字段分区加图标，只写了 `Icons.Filled.Tune` 没补 import |
 | B 顶层属性前向引用 | `Variable 'X' must be initialized` | 把 `SETTINGS_ICON_BOX` 的声明放在了使用它计算 `SETTINGS_DIVIDER_INSET` **之后** |
 | C 悬空 `R.string.*` | `Unresolved reference 'xxx'` | 删/改名了字符串却没同步改代码 |
+| D `Dp / Dp` 后再 `.value` | `Unresolved reference 'value'` + `Cannot infer type for type parameter 'T'` | 把 `val f = a / b`（两个 Dp）当成 Dp 用，又写了 `.value` |
+| E 成员挂错接收者 | `Unresolved reference 'heightOffset'` | `behavior.heightOffset`，但它在 `behavior.state` 上 |
 
 ⚠️ 规则 A 与 8.6 里 2026-09-15 那条「`CompositionLocalProvider` / `LocalContentColor`
 只写用法没补导入」是**同一个坑的第二次犯**（那次靠手工 grep 抓，这次靠脚本）。
 ⇒ **教训：手工核对一次不算，要变成脚本。**
+
+⚠️ 规则 D / E 是 2026-09-20 补的，起因是同一个文件推了两次才编译过。
+**每次 CI 因编译失败红一次，就应当回来加一条规则** —— 否则同一类错会第三次犯。
 
 ## 判据
 
@@ -39,6 +45,19 @@
 **规则 C（资源）**：`R.string.<name>` 必须在任意 `res/values*/**/*.xml` 里有
 对应的 `<string name="...">`。同时反向列出**定义了却没人用**的 `R.string`
 （只提示、不算失败 —— 死资源不炸编译，但值得清）。
+
+**规则 D（Dp 除法）**：`Dp.div(Dp)` 的返回类型是 **`Float`**（不是 `Dp`）——
+`(a + B) / (c + D)` 这样的比例算完**已经是 Float**，再 `.value` 就报
+`Unresolved reference 'value'`；而且**一个错的 `.value` 会连带报出 4~6 条**
+`Cannot infer type for type parameter` / `Inapplicable candidate(s)`
+（因为下一行 `arrayOf(x to y, ...)` 的类型推断跟着崩），看日志时容易被条数带偏。
+⇒ 判据：`.value` 的接收者若形如「带括号且含 `/` 的表达式」或名字含
+`Fraction / Ratio / Percent / Pct`，报出来让人确认。
+
+**规则 E（成员接收者）**：外层对象与内层对象都有名字相近的 API 时，凭印象容易挂错层。
+登记本仓库已用到的那几组，逐个给「正确写法 + 为什么」。
+⚠️ 这类错**无法通用检测**（要真解析类型），所以是**白名单式**的：
+踩过一次就登记一条，用 `_MEMBER_RECEIVER_HINTS` 维护。
 
 ## 用法
 
@@ -104,6 +123,88 @@ IDENT_RE = re.compile(r"\b([A-Z][A-Z0-9_]{2,})\b")
 # 规则 C：资源引用
 # ---------------------------------------------------------------------------
 R_STRING_RE = re.compile(r"R\.string\.(\w+)")
+
+
+# ---------------------------------------------------------------------------
+# 规则 D：`Dp / Dp` 的结果是 Float，不是 Dp（2026-09-20 实录）
+# ---------------------------------------------------------------------------
+# 实录：写 `val opaqueFraction = (a + B) / (a + B + TAIL)`，两个操作数都是 Dp，
+# 于是 `Dp.div(Dp): Float` ⇒ 结果**已经是 Float**，再写 `.value` 就是
+#   `e: Unresolved reference 'value'`
+# 而下一行 `arrayOf(GRADIENT_START to x, opaqueFraction.value to y, ...)`
+# 因为前者报错，类型推断跟着崩：
+#   `e: Cannot infer type for type parameter 'T'` + `Inapplicable candidate(s)`
+# ⇒ **一个错的 `.value` 会连带报出 4~6 条错误**，看日志时容易被数量带偏。
+#
+# 判据：把「`.value` 的接收者」区分为三类，只报**算出来的**那种：
+#   ① `xxxState.value` / `xxx.value`（属性）—— 合法，大量存在
+#   ② `(a + b) / (c + d)` 这类**带括号的除法表达式**.value —— 可疑
+#   ③ 形如 `比较 / 长度` 且在 Dp 上下文里的 —— 可疑
+# ⚠️ 宁可漏报不可误报（ISSUES #101）：只在**明确的除法表达式**后面报。
+#    识别方式：`.value` 前面紧邻 `)`，且该括号组里含 `/`。
+_DIV_EXPR_VALUE_RE = re.compile(r"\([^()]*Dp[^()]*/[^()]*\)\s*\.value\b")
+# 兜底：`xxxFraction.value` / `xxxRatio.value` / `xxxPercent.value` 这类明显是比例的名字
+_FRACTION_VALUE_RE = re.compile(
+    r"\b(\w*(?:Fraction|Ratio|Percent|Pct)\w*)\s*\.value\b"
+)
+
+
+def check_dp_division_value(path: Path) -> list[str]:
+    """`Dp / Dp` 已经返回 Float ⇒ 不能再 `.value`。"""
+    src = path.read_text(encoding="utf-8")
+    out: list[str] = []
+    for line_no, line in enumerate(src.splitlines(), 1):
+        code = line.split("//")[0]  # 注释里提到 `.value` 不算
+        if _DIV_EXPR_VALUE_RE.search(code):
+            out.append(
+                f"L{line_no}: 除法表达式后接 `.value` —— 若两个操作数都是 `Dp`，"
+                f"`Dp.div(Dp)` 已返回 **Float**，`.value` 会 `Unresolved reference`；"
+                f"连带让 `arrayOf(...)` 报 Cannot infer type。"
+            )
+        elif _FRACTION_VALUE_RE.search(code):
+            out.append(
+                f"L{line_no}: `{{}}`.value` 里的名字像比例 —— 确认它是 `Dp`（可 .value）"
+                f"还是 `Float`（不可）。`Dp / Dp` 的结果是 Float，这是 CI 才抓得到的坑。".replace("{}", _FRACTION_VALUE_RE.search(code).group(1))
+            )
+    return out
+
+
+# ---------------------------------------------------------------------------
+# 规则 E：成员挂在错误的接收者上（2026-09-20 实录）
+# ---------------------------------------------------------------------------
+# 实录：写 `bottomBarScrollBehavior.heightOffset`，但
+# `BottomAppBarScrollBehavior` 只有 `state` / `nestedScrollConnection` / `isPinned` /
+# `*AnimationSpec` 五个成员 —— `heightOffset` 挂在 `behavior.state`
+# （`BottomAppBarState`）上 ⇒ `e: Unresolved reference 'heightOffset'`。
+#
+# 这类错的通病：**两层对象都有名字相近的 API，凭印象挂错层**。
+# 本仓库已用到的这类"外层→内层"关系，逐个登记：
+#   behavior.property 的**正确**形式 → 提示
+_MEMBER_RECEIVER_HINTS: list[tuple[str, str, str]] = [
+    # (错误形态正则, 正确写法, 说明)
+    (
+        r"\b\w*(?:ScrollBehavior|scrollBehavior)\s*\.\s*(heightOffset|collapsedFraction|contentOffset|heightOffsetLimit)\b",
+        "behavior.state.heightOffset",
+        "offset / fraction 都在 `BottomAppBarState` 上，不在 `BottomAppBarScrollBehavior` 上"
+        "（behavior 只有 state / nestedScrollConnection / isPinned / *AnimationSpec）",
+    ),
+]
+
+
+def check_member_receiver(path: Path) -> list[str]:
+    """成员是否挂在了错误的接收者上（内外层 API 名字相近时最易犯）。"""
+    src = path.read_text(encoding="utf-8")
+    out: list[str] = []
+    for line_no, line in enumerate(src.splitlines(), 1):
+        code = line.split("//")[0]
+        for pattern, correct, why in _MEMBER_RECEIVER_HINTS:
+            m = re.search(pattern, code)
+            if m:
+                out.append(
+                    f"L{line_no}: `{m.group(0)}` —— 成员可能挂错接收者。"
+                    f"正确写法形如 `{correct}`：{why}。"
+                )
+    return out
 
 
 def iter_kt_files() -> list[Path]:
@@ -622,7 +723,8 @@ def main() -> int:
         if not path.exists() or path.suffix != ".kt":
             continue
         problems = (check_icons(path) + check_init_order(path) + check_strings(path, defined)
-                    + check_duplicate_declarations(path))
+                    + check_duplicate_declarations(path) + check_dp_division_value(path)
+                    + check_member_receiver(path))
         if problems:
             print(f"\n{display(path)}")
             for p in problems:
@@ -644,7 +746,7 @@ def main() -> int:
               f"只在 CI 的 compile 步骤炸 —— 现在改掉。")
         return 1
     print(f"[OK] 检查了 {len(targets)} 个文件：图标导入 / 顶层常量初始化顺序 / "
-          f"R.string 引用 / 重复声明 / 跨文件 private 均未见异常。")
+          f"R.string 引用 / 重复声明 / Dp 除法 .value / 成员接收者 / 跨文件 private 均未见异常。")
     return 0
 
 

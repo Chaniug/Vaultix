@@ -289,7 +289,11 @@ fun FullScreenDialogShell(
                     onConfirm = onConfirm,
                     destructive = destructive,
                     navBarInset = navBar,
-                    scrollOffset = { bottomBarScrollBehavior.heightOffset.toFloat() },
+                    // ⚠️ `heightOffset` 挂在 `behavior.**state**` 上，不在 behavior 上：
+                    // `BottomAppBarScrollBehavior` 只有 `state` / `nestedScrollConnection` /
+                    // `isPinned` / `*AnimationSpec` 五个成员，offset 是 `BottomAppBarState` 的。
+                    // 同理 `collapsedFraction` 也在 state 上（若哪天要按收起比例淡出，用它）。
+                    scrollOffset = { bottomBarScrollBehavior.state.heightOffset },
                 )
             }
         }
@@ -466,10 +470,13 @@ private fun topGradientStops(surface: Color, statusBarInset: Dp): Array<Pair<Flo
     // ⚠️ 分母用 [layerHeight] 而不是手抄 `inset + 栏体 + 尾段`：
     // 它与 `TitleBar` 的 `.height(...)` 是**同一个表达式**，因此不透明段与栏的几何
     // 恒等对齐 —— 这是"卡片不会透进不透明段"这一论断能成立的前提（见本节 KDoc）。
-    val opaqueFraction = (statusBarInset + TITLE_BAR_HEIGHT) / layerHeight(statusBarInset, TITLE_BAR_HEIGHT)
-    return arrayOf(
+    // ⚠️ `Dp / Dp` 返回的是 **Float**（不是 Dp）⇒ 这里**不能**再写 `.value`。
+    // 注释会过时、类型不会 —— 这是编译器（CI 的 Build Debug APK）抓出来的一处。
+    val opaqueFraction: Float =
+        (statusBarInset + TITLE_BAR_HEIGHT) / layerHeight(statusBarInset, TITLE_BAR_HEIGHT)
+    return arrayOf<Pair<Float, Color>>(
         GRADIENT_START to surface,
-        opaqueFraction.value to surface,
+        opaqueFraction to surface,
         GRADIENT_END to surface.copy(alpha = 0f),
     )
 }
@@ -496,9 +503,10 @@ private fun topGradientStops(surface: Color, statusBarInset: Dp): Array<Pair<Flo
  *   需要它才能把 [GRADIENT_TAIL] 折算成档位比例。
  */
 private fun bottomGradientStops(surface: Color, layerHeight: Dp): Array<Pair<Float, Color>> {
-    val tailFraction = GRADIENT_TAIL / layerHeight
-    val opaqueUntil = GRADIENT_END - tailFraction.value
-    return arrayOf(
+    // ⚠️ 同 [topGradientStops]：`Dp / Dp` 已是 **Float**，不要再 `.value`。
+    val tailFraction: Float = GRADIENT_TAIL / layerHeight
+    val opaqueUntil: Float = GRADIENT_END - tailFraction
+    return arrayOf<Pair<Float, Color>>(
         // ⚠️ 用 `GRADIENT_START`(0f) 作第一档而非负值：`colorStops` 的档位必须在 [0,1]。
         GRADIENT_START to surface,
         opaqueUntil to surface,
