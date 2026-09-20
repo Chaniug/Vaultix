@@ -8,9 +8,6 @@
  */
 package io.vaultix.vaultix.ui.common
 
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,7 +18,6 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -30,6 +26,7 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
@@ -41,9 +38,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.ui.graphics.luminance
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.window.DialogWindowProvider
 import androidx.core.view.WindowCompat
@@ -142,17 +137,20 @@ fun FullScreenDialogShell(
             // ⚠️ 高度用常量而不是 `onGloballyPositioned` 实测：后者的首次组合拿不到值，
             // 会先按 0 让位、再跳一次 —— 那种一跳比"数值不精确"更难看。
             Box(modifier = Modifier.fillMaxSize().imePadding()) {
-                // ── 让位高度 = 系统栏内边距 + 栏自身高度（**不是**只让栏高）。
+                // ── 让位高度 = 系统栏内边距 + 栏的**垂直总占位**（**不是**只让栏体高）。
                 //
-                // ⚠️ 2026-09-20 用户反馈：「新建密码条目 / 验证码 / 卡包界面，不透明，
+                // ⚠️ 2026-09-20 第一轮用户反馈：「新建密码条目 / 验证码 / 卡包界面，不透明，
                 // 上边标题部分和下方部分遮住了显示内容。」
                 // 根因就在这里：两条栏都带 `statusBarsPadding()` / `navigationBarsPadding()`
-                // （**之外**再叠自己的 padding），而正文只让了 [ACTION_BAR_HEIGHT] 这类
-                // 纯栏高 ⇒ 正文首/末元素正好钻到那条**不透明**色带底下。
+                // （**之外**再叠自己的 padding），而正文只让了一个"纯栏高"常量
+                // ⇒ 正文首/末元素正好钻到那条**不透明**色带底下。
                 // 顶部少让一个状态栏（普通机型 24~48dp），底部少让一个手势条（24~48dp）。
                 //
+                // ⚠️ 第三轮把栏改成胶囊后，占位口径再多一层 → 见 [TITLE_BAR_OCCUPIED] /
+                // [ACTION_BAR_OCCUPIED]（含胶囊的 gap 与 margin 留白）。
+                //
                 // 让位改用**实测**而不是常量相加：状态栏/手势条高度随机型、分屏、折叠屏
-                // 变化，`TITLE_BAR_HEIGHT + 常量` 只是把误差从"少让"变成"多让"，换个机型还会偏。
+                // 变化，`栏高 + 常量` 只是把误差从"少让"变成"多让"，换个机型还会偏。
                 // 这里读的是与两条栏**同一份** [WindowInsets]，两者因此永远对齐。
                 //
                 // ⚠️ 仍保留常量作为**下限兜底**：极端情况下 insets 可能为 0（如全屏/桌面模式），
@@ -160,28 +158,29 @@ fun FullScreenDialogShell(
                 val statusBar = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
                 val navBar = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
 
-                // ── 沉浸：两条栏的**底色**随滚动淡出，与列表页「内容从栏下穿过」统一。
+                // ── 沉浸：两条栏改**悬浮胶囊**，内容从胶囊**外侧留白**穿过。
                 //
-                // ⚠️ 2026-09-20 用户第二轮反馈：「大小现在确实合适了，但是页面不沉浸，
-                // 滑动的时候上下也不是透明，跟密码条目页面、验证码条目页面的效果不一样。」
+                // ⚠️ 2026-09-20 第三轮用户反馈：「初始状态下，上方，下方还有黑色的，你说是胶囊。
+                // 但是感觉这样的造型不好看。优化一下。」
                 //
-                // 上一轮只把**让位**算对了（内容不再被遮），但两条栏的底色仍是写死的
-                // `.background(surface)` —— 恒不透明 ⇒ 内容滑到栏下就被盖住，"穿过"看不见。
-                // 而列表页顶栏走的是 [VaultixExpressiveTopBar]：`barBackgroundAlpha` 随
-                // `collapseFraction` 在 1 ↔ 0 之间过渡，一滚就透明。
-                // 两边观感不一致的根源就在这里。
+                // 前两轮的口径是"满宽栏 + 底色随滚动淡出"，但它有**两个都难看的状态**：
+                //   ① 未滚动：`alpha = 1` ⇒ 两条**满宽色带**。深色模式接近黑、**OLED 纯黑**下
+                //      `surface` 就是 `#000000` ⇒ 上下各一条**满宽纯黑带**（既然栏与页面同色，
+                //      用户看不出"这是栏"，只觉得上下被切了两刀）；
+                //   ② 滚动后：`alpha = 0` ⇒ 标题文字与卡片内容**同区同色叠印**。
+                // 这正是用户说的"造型不好看"。
                 //
-                // 口径与列表页**完全一致**：滚动偏移超过 [COLLAPSE_THRESHOLD_DP] 即视为
-                // "已滚动"，内部走 [BAR_FADE_MS] 的 tween —— 快照式而非连续
-                //（连续会让栏在滚动过程中一直闪）。
+                // ⇒ 改法与 [io.vaultix.vaultix.ui.shell.VaultixBottomDock] **完全同规格**：
+                //   圆角 50%、`surfaceContainerHigh`、tonal 3dp、shadow 6dp（恒定）。
+                //   胶囊**恒不透明**，靠"缩小自身体积 + 四周留白"制造沉浸感 ——
+                //   内容从胶囊外侧穿过（不经过胶囊本体），既不叠字、又有清晰层次。
+                //   ⚠️ 这同时否定了"毛玻璃/半透明"方向：`Modifier.blur` 在 minSdk 26 的
+                //      API 31- 是 no-op、且离屏渲染掉帧耗电、OLED 下模糊纯黑仍是纯黑；
+                //      半透明底色则踩 `8.4`「容器色阶嵌套必须换档，禁止同色叠 alpha」。
+                //
+                // ⇒ 因此不再需要滚动淡出：`barAlpha` / `scrollState` 的那套判定整体移除，
+                //   栏的外观与滚动位置**无关**（与列表页底栏 dock 一致）。
                 val scrollState = rememberScrollState()
-                val thresholdPx = with(LocalDensity.current) { COLLAPSE_THRESHOLD_DP.toPx() }
-                val collapsed = scrollState.value > thresholdPx
-                val barAlpha by animateFloatAsState(
-                    targetValue = if (collapsed) 0f else 1f,
-                    animationSpec = tween(BAR_FADE_MS),
-                    label = "fullscreen_bar_alpha",
-                )
 
                 Column(
                     modifier = Modifier
@@ -189,67 +188,93 @@ fun FullScreenDialogShell(
                         .verticalScroll(scrollState)
                         .padding(horizontal = Spacing.xl)
                         .padding(
-                            top = contentClearance(statusBar, TITLE_BAR_HEIGHT),
-                            bottom = contentClearance(navBar, ACTION_BAR_HEIGHT),
+                            top = contentClearance(statusBar, TITLE_BAR_OCCUPIED),
+                            bottom = contentClearance(navBar, ACTION_BAR_OCCUPIED),
                         ),
                     content = content,
                 )
 
-                // 顶部标题栏：底色随滚动淡出 → 内容从其下方**可见地**穿过。
-                // ⚠️ `background` 必须排在 `statusBarsPadding()` **之前** —— 这样淡出的是
-                //    含状态栏区域的整条色带（与 [VaultixExpressiveTopBar] 同款顺序）；
-                //    顺序反了状态栏那一条会永远留着底色，看着就像"没沉浸"。
-                Row(
+                // ── 顶部标题栏：悬浮胶囊（与列表页底栏同规格）──────────────
+                // ⚠️ `statusBarsPadding()` 排在胶囊**外层**（先 systemBar padding 再画胶囊）——
+                //    胶囊因此落在状态栏**下方**、四周留白露出内容（不再覆盖状态栏区域）。
+                //    这与前两轮"满宽栏覆盖状态栏"是有意的行为改变：胶囊要"浮"起来，
+                //    就不能吞掉整条状态栏；状态栏图标仍由上面的 SideEffect 按 surface 亮度定色。
+                Surface(
                     modifier = Modifier
                         .align(Alignment.TopCenter)
                         .fillMaxWidth()
-                        .background(MaterialTheme.colorScheme.surface.copy(alpha = barAlpha))
                         .statusBarsPadding()
-                        .padding(start = Spacing.sm, end = Spacing.sm, top = Spacing.sm)
-                        .height(TITLE_BAR_HEIGHT - Spacing.sm),
-                    verticalAlignment = Alignment.CenterVertically,
+                        .padding(
+                            start = FLOATING_BAR_MARGIN,
+                            end = FLOATING_BAR_MARGIN,
+                            top = FLOATING_TOP_GAP,
+                        ),
+                    shape = RoundedCornerShape(FLOATING_BAR_CORNER_PERCENT),
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    tonalElevation = FLOATING_BAR_TONAL,
+                    shadowElevation = FLOATING_BAR_SHADOW, // 恒定，不参与动画（见 ExpressiveTopBar 的掉帧记录）
                 ) {
-                    IconButton(onClick = onDismiss) {
-                        Icon(
-                            imageVector = Icons.Filled.Close,
-                            contentDescription = stringResource(R.string.action_cancel),
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = Spacing.sm, end = Spacing.sm),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        IconButton(onClick = onDismiss) {
+                            Icon(
+                                imageVector = Icons.Filled.Close,
+                                contentDescription = stringResource(R.string.action_cancel),
+                            )
+                        }
+                        Text(
+                            text = title,
+                            style = MaterialTheme.typography.titleLarge,
+                            modifier = Modifier.padding(start = Spacing.sm),
                         )
                     }
-                    Text(
-                        text = title,
-                        style = MaterialTheme.typography.titleLarge,
-                        modifier = Modifier.padding(start = Spacing.sm),
-                    )
                 }
 
-                // 底部操作条：同样只淡出**底色**，按钮与文字**不**淡出
-                //（它们必须始终可读可点 —— 全透会让按钮压在输入框上没法看）。
+                // ── 底部操作条：同样悬浮成胶囊（与顶部、与列表页底栏同规格）──────────
                 //
-                // ⚠️ 这里是本页与列表页**唯一的有意差异**：列表页底部是**悬浮胶囊**
-                //（[io.vaultix.vaultix.ui.shell.VaultixBottomDock]，四周留白、底部透出内容），
-                // 沉浸感来得很容易；而本页是同一扇 `Dialog` 窗口里的**满宽操作条**，
-                // 底部必须一直可点 ⇒ 保留"淡出底色"这一档，不改成悬浮胶囊。
-                // ⇒ 若哪天要做成胶囊，改的是这里，不是在外面再叠一层。
-                Row(
+                // ⚠️ 与 `.ai/SESSION-2026-09-20.md` §5.3 的关系：那条记录"有意保留满宽条、
+                //    不做胶囊"，理由是「底部必须**一直可点**」。本轮复核：**胶囊同样一直可点**
+                //    —— 列表页的 [io.vaultix.vaultix.ui.shell.VaultixBottomDock] 就是胶囊且恒在
+                //    最上层。§5.3 真正要防的是"按钮做成半透明、看不出能点"；胶囊**不透明**，
+                //    在不牺牲可点性的前提下消除了上下两条黑带，故 §5.3 的结论据此更新。
+                // ⚠️ `navigationBarsPadding()` 同样排在胶囊**外层**。
+                Surface(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .fillMaxWidth()
-                        .background(MaterialTheme.colorScheme.surface.copy(alpha = barAlpha))
                         .navigationBarsPadding()
-                        .padding(horizontal = Spacing.xl, vertical = Spacing.lg),
-                    horizontalArrangement = Arrangement.End,
-                    verticalAlignment = Alignment.CenterVertically,
+                        .padding(
+                            start = FLOATING_BAR_MARGIN,
+                            end = FLOATING_BAR_MARGIN,
+                            bottom = FLOATING_BAR_MARGIN,
+                        ),
+                    shape = RoundedCornerShape(FLOATING_BAR_CORNER_PERCENT),
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    tonalElevation = FLOATING_BAR_TONAL,
+                    shadowElevation = FLOATING_BAR_SHADOW,
                 ) {
-                    if (destructive != null) {
-                        destructive()
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = Spacing.lg, vertical = Spacing.md),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        if (destructive != null) {
+                            destructive()
+                            Spacer(Modifier.width(Spacing.sm))
+                        }
+                        TextButton(onClick = onDismiss) {
+                            Text(stringResource(R.string.action_cancel))
+                        }
                         Spacer(Modifier.width(Spacing.sm))
-                    }
-                    TextButton(onClick = onDismiss) {
-                        Text(stringResource(R.string.action_cancel))
-                    }
-                    Spacer(Modifier.width(Spacing.sm))
-                    TextButton(onClick = onConfirm, enabled = confirmEnabled) {
-                        Text(confirmLabel)
+                        TextButton(onClick = onConfirm, enabled = confirmEnabled) {
+                            Text(confirmLabel)
+                        }
                     }
                 }
             }
@@ -258,9 +283,9 @@ fun FullScreenDialogShell(
 }
 
 /**
- * 正文要为一条**叠加栏**让出的高度 = `系统栏内边距 + 栏自身高度`。
+ * 正文要为一条**悬浮胶囊栏**让出的高度 = `系统栏内边距 + 栏水平总占位`。
  *
- * ## ⚠️ 这个函数修的是一个真实 bug（2026-09-20 用户反馈）
+ * ## ⚠️ 这个函数修的是一个真实 bug（2026-09-20 第一轮用户反馈）
  *
  * 「新建密码条目 / 验证码 / 卡包界面，不透明，上边标题部分和下方部分遮住了显示内容。」
  *
@@ -273,12 +298,12 @@ fun FullScreenDialogShell(
  * | 顶部 | 状态栏 24 + 56 | 56 | **少让 24dp**（状态栏高的机型更多） |
  * | 底部 | 手势条 24 + 80 | 80 | **少让 24dp** |
  *
- * 正文首/末元素正好落在这条**不透明**色带底下 ⇒ 就是用户看到的"被遮住"。
+ * 正文首/末元素正好落在那条**不透明**色带底下 ⇒ 就是用户看到的"被遮住"。
  *
  * ## 为什么取实测 insets 而不是再加一个常量
  *
  * 状态栏/手势条高度随机型、分屏、折叠屏、分辨率而变（24 / 36 / 48dp 都见过）。
- * `TITLE_BAR_HEIGHT + 常量` 只是把误差从"少让"换成"多让"，换台机型仍然偏。
+ * `栏高 + 常量` 只是把误差从"少让"换成"多让"，换台机型仍然偏。
  * 这里读的是与两条栏**同一份** insets，两者因此永远对齐。
  *
  * ## 为什么要 `maxOf` 兜底
@@ -287,34 +312,64 @@ fun FullScreenDialogShell(
  * 那时不能退化成"零让位"，否则内容直接压在按钮上 —— 同一个 bug 换个成因再来一次。
  * 故下限取栏自身高度。
  *
+ * ## ⚠️ 2026-09-20 第三轮：两条栏改悬浮胶囊后，`barHeight` 的**口径**跟着变
+ *
+ * 栏从"满宽色带"改成"悬浮胶囊"后，垂直占位多出了**留白**（胶囊上/下 gap + 边缘 margin）。
+ * 传进来的 `barHeight` 因此不再是"栏身高"，而是**这一侧的总占位**（见
+ * [TITLE_BAR_OCCUPIED] / [ACTION_BAR_OCCUPIED]）—— 公式本身不变，`maxOf` 不变，
+ * 只是入参口径从"栏体高"升为"栏体高 + 胶囊留白"。
+ * 让位取的是**垂直方向的最大占位**（正文满宽，首/末元素可能与胶囊在垂直方向重叠），
+ * 宁可多让也不能少让（少让就退化成第一轮那个"被遮住"的 bug）。
+ *
  * @param systemBarInset 该侧的系统栏内边距。
- * @param barHeight 栏自身高度（**不含**系统栏内边距）。
+ * @param barHeight 该侧栏的**总垂直占位**（栏体高 + 胶囊留白，**不含**系统栏内边距）。
  */
 internal fun contentClearance(systemBarInset: Dp, barHeight: Dp): Dp =
     maxOf(barHeight, systemBarInset + barHeight)
 
 /**
- * 判定「已经滚动过」的阈值（dp）—— 超过它两条栏的背景就开始淡出。
+ * 悬浮胶囊栏的圆角百分比（50 = 50%，即两端完全半圆的「药丸」形）。
  *
- * 与列表页 [VaultixExpressiveTopBar] 用同一个值（`Spacing.sm`），保证两边
- * "滚多少才算滚动"的手感一致。
+ * `RoundedCornerShape(Int)` 的重载语义是**百分比**而非 dp（与
+ * [io.vaultix.vaultix.ui.shell.VaultixBottomDock] 同款写法）。
  */
-private val COLLAPSE_THRESHOLD_DP = Spacing.sm
-
-/** 栏背景淡出的时长（ms）—— 与列表页顶栏同值，切换手感一致。 */
-private const val BAR_FADE_MS = 200
+private const val FLOATING_BAR_CORNER_PERCENT = 50
 
 /**
- * 标题栏**自身**高度（不含状态栏内边距）：IconButton 48dp + 顶部内边距 8dp。
+ * 悬浮胶囊的色调高度与阴影高度 —— **与列表页底栏 dock 完全同值**。
  *
- * ⚠️ 它**不是**正文要给的全部让位 —— 标题栏还额外带 `statusBarsPadding()`。
- * 正文的让位见 [contentClearance]（必须把状态栏内边距一起算上）。
+ * ⚠️ `8.4` 纪律：**一屏里出现两套规格 = 观感廉价的首要来源**。本页上下两条栏、以及列表页
+ * 底栏必须是同一套规格，否则用户从列表页进编辑页会看到两种"悬浮"。
+ * ⚠️ `shadowElevation` 必须**恒定**（不来自 `animateXxxAsState`）：见
+ * [VaultixExpressiveTopBar] 里 `PILL_SHADOW` 的说明 —— 阴影几何参与动画要重建渲染层、会掉帧。
  */
-private val TITLE_BAR_HEIGHT = 56.dp
+private val FLOATING_BAR_TONAL = 3.dp
+private val FLOATING_BAR_SHADOW = 6.dp
 
 /**
- * 底部操作条**自身**高度（不含手势条内边距）：按钮 48dp + 上下内边距 16dp×2。
+ * 悬浮胶囊离屏幕左右边缘的留白（与列表页底栏 dock 的 `start/end = Spacing.md` 同口径）。
  *
- * ⚠️ 同上：它**不含** `navigationBarsPadding()`，别直接拿它当正文的底部让位。
+ * 这圈留白是"沉浸感"的来源：内容从胶囊**外侧**透出，胶囊因此有了真实的边界。
  */
-private val ACTION_BAR_HEIGHT = 80.dp
+private val FLOATING_BAR_MARGIN = Spacing.md
+
+/** 顶部胶囊离状态栏的下方留白（让胶囊明显抬离状态栏）。 */
+private val FLOATING_TOP_GAP = Spacing.sm
+
+/**
+ * 顶部悬浮胶囊的**总垂直占位**：胶囊高（IconButton 48dp）+ 下留白 [FLOATING_TOP_GAP] +
+ * 边缘留白 [FLOATING_BAR_MARGIN]（正文满宽，垂直方向须按此整段让开）。
+ *
+ * ⚠️ 这是正文让位用的**总占位**，不是"胶囊身高"—— 见 [contentClearance]。
+ */
+private val TITLE_BAR_OCCUPIED = 48.dp + FLOATING_TOP_GAP + FLOATING_BAR_MARGIN
+
+/**
+ * 底部悬浮胶囊的**总垂直占位**：胶囊高（按钮 48dp + 上下内边距 [Spacing.md]×2 = 72dp）
+ * + 边缘留白 [FLOATING_BAR_MARGIN]。
+ *
+ * ⚠️ 同上：**不含** `navigationBarsPadding()`（那部分由 [contentClearance] 的 insets 项负责）。
+ * ⚠️ 48dp 是 `TextButton` 的 M3 最小高度；`Spacing.md` = 12dp 与下方 `Row` 的
+ *    `vertical = Spacing.md` 严格对齐 —— 两处若不同步，让位就会偏。
+ */
+private val ACTION_BAR_OCCUPIED = 72.dp + FLOATING_BAR_MARGIN
