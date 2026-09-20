@@ -52,10 +52,10 @@ import io.vaultix.data.kdbx.KdbxFileEntry
 import io.vaultix.data.kdbx.KdbxFileSource
 import io.vaultix.data.kdbx.KdbxFileStat
 import io.vaultix.data.kdbx.KdbxFileWriteResult
+import io.vaultix.data.kdbx.sha256Hex
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.FileNotFoundException
-import java.security.MessageDigest
 
 /**
  * 把 SAF `content://` URI 当作 KDBX 文件来源。
@@ -185,16 +185,6 @@ class SafKdbxFileSource(
             OpenableColumns.SIZE,
             DocumentsContract.Document.COLUMN_LAST_MODIFIED,
         )
-
-        /**
-         * 内容哈希 —— 本地路径的版本令牌（为什么不给 mtime 用，见文件头说明）。
-         *
-         * 用 SHA-256 而不是 `hashCode()`：后者是 32 位且碰撞容易构造，
-         * 拿它当"内容有没有变"的判据会出现**假阴性**（不同内容算出同一个值 ⇒ 漏报冲突）。
-         */
-        fun sha256Hex(bytes: ByteArray): String =
-            MessageDigest.getInstance("SHA-256").digest(bytes)
-                .joinToString("") { "%02x".format(it) }
     }
 }
 

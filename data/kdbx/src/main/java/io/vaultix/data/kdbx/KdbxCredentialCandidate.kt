@@ -157,5 +157,16 @@ private fun decodeHex(value: String): ByteArray? {
 
 private fun sha256(input: ByteArray): ByteArray = MessageDigest.getInstance("SHA-256").digest(input)
 
-private fun sha256Hex(input: ByteArray): String =
+/**
+ * 内容哈希 —— 密码库文件的"内容有没有变"判据，也是各来源的版本令牌。
+ *
+ * 用 SHA-256 而不是 `hashCode()`：后者是 32 位且碰撞容易构造，
+ * 拿它当判据会出现**假阴性**（不同内容算出同一个值 ⇒ 漏报冲突）。
+ *
+ * ⚠️ 必须 `public`（不能 `internal`）：[SafKdbxFileSource][io.vaultix.data.repository.kdbx.SafKdbxFileSource]
+ * 在**另一个 Gradle 模块**（`data/repository`）里也要用同一个函数算版本令牌 ——
+ * 而 `internal` 只在**同一个模块**内可见，跨模块照样编译不过。
+ * 曾经两边各写了一份，本地模块编译得过、CI 跨模块才炸 —— 现在是唯一一份、公开的一份。
+ */
+fun sha256Hex(input: ByteArray): String =
     sha256(input).joinToString(separator = "") { HEX_BYTE_FORMAT.format(Locale.US, it.toInt() and BYTE_MASK) }

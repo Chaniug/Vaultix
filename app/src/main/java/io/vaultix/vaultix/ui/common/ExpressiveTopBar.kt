@@ -318,7 +318,29 @@ fun VaultixExpressiveTopBar(
                 shape = RoundedCornerShape(PILL_CORNER_PERCENT),
                 color = MaterialTheme.colorScheme.surface.copy(alpha = barBackgroundAlpha),
                 tonalElevation = 0.dp,
-                shadowElevation = if (collapseFraction < 0.5f) 1.dp else 0.dp,
+                // ── ⚠️ 2026-09-20 用户反馈：「右边三个按钮的胶囊颜色有一个加深的阴影，
+                // 阴影闪动的时候，页面会有掉帧卡顿的感觉。」
+                //
+                // 两个成因叠在一起，两个都必须改：
+                //
+                // **① 判据不一致 ⇒ 阴影与底色不同步。**
+                // 底色的判据是**动画后的**值（`barBackgroundAlpha` 自己由
+                // `barBackgroundAlpha` 的目标值驱动，见上），而这里原来用的是**原始的**
+                // `collapseFraction`。两者的翻转**不在同一时刻**：手指一越过阈值，
+                // `collapseFraction` 立刻跳变、阴影当场翻，而底色还要等 200ms 补间走完。
+                // 那 200ms 里"阴影没了但底色还在"（或反之），用户看到的就是**阴影在闪**。
+                // ⇒ 判据统一到动画后的值上，两者同步。
+                //
+                // **② `shadowElevation` 变一次就要重建一次渲染层。**
+                // M3 的 `Surface` 是用 `graphicsLayer{ shadowElevation }` + 阴影轮廓实现的，
+                // 高度值一动，阴影的几何就要重算、图层的轮廓缓存作废 ⇒ 掉帧
+                //（本项目 [VaultixBottomDock] 的 6dp 阴影是**恒定**的，从不参与动画，
+                //  所以那里没有这个问题 —— 这里才是那个例外）。
+                //
+                // ⇒ 阴影改为**恒定 1dp**：它只是给胶囊一点"浮起"的分隔感，
+                // 收起后内容本来就从下方穿过，缺这点阴影完全不影响可读性；
+                // 而恒定值意味着这层阴影在整个动画期间**一次都不用重算**。
+                shadowElevation = PILL_SHADOW,
             ) {
                 CompositionLocalProvider(LocalContentColor provides contentColor) {
                     Row(
@@ -350,3 +372,11 @@ private val ACTIONS_RESERVE = 156.dp
 /** 可点标题的圆角（dp）与箭头尺寸 —— 与 Bastion 的 8dp / 18-22dp 对齐。 */
 private const val TITLE_CLICK_CORNER_DP = 8
 private val TITLE_CHEVRON_SIZE = 20.dp
+
+/**
+ * 动作胶囊的阴影高度（**恒定，不参与动画**）。
+ *
+ * ⚠️ 不要改回"随收起状态在 1dp/0dp 之间切"：那样阴影几何在动画期间要重算，
+ * 会造成掉帧（详见 [VaultixExpressiveTopBar] 里 `shadowElevation` 处的说明）。
+ */
+private val PILL_SHADOW = 1.dp
