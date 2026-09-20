@@ -577,13 +577,32 @@ object WebAuthn {
         return buf.toByteArray()
     }
 
-    /** CBOR：attestationObject = {"fmt":"none","authData":bytes,"attestationStatement":{}}。 */
+    /**
+     * CBOR：`attestationObject = {"fmt":"none","attStmt":{},"authData":<bytes>}`。
+     *
+     * ## ⚠️ 键名是 `attStmt`，**不是** `attestationStatement`（2026-09-20 P0 修正）
+     *
+     * W3C WebAuthn L2 §6.5.4 / CTAP2 canonical CBOR 把 attestationObject 固定为
+     * `fmt` / **`attStmt`** / `authData` 三个键；MDN `AuthenticatorAttestationResponse.attestationObject`
+     * 与 FIDO Alliance CTAP 规范同为 `attStmt`。且 **`fmt = "none"` 时 `attStmt` 键仍必须存在
+     * 为一个空 map**（mozilla/authenticator-rs #183 明确强调；CTAP2 里 `attStmt` 才是"Optional"，
+     * 但为了与 WebAuthn 侧的解析口径一致，`none` 也照常给空 map）。
+     *
+     * 写错键名（曾用 `attestationStatement`）的后果：**RP 用 CBOR 解出 attestationObject 后
+     * 取不到 `attStmt`**，严格实现（GitHub 等）直接判注册无效 —— 症状正是"App 里能保存、
+     * 网页端却校验不出这条通行密钥"。对照 Bastion `PasskeyCreateActivity.createAttestationObject`
+     * （同样用 `attStmt`，其注释甚至贴出了该键的 CBOR hex `61747453746D74`）。
+     *
+     * ⚠️ 键顺序保持 `fmt` → `attStmt` → `authData`（与上游一致，便于逐字节比对；
+     *    CBOR map 顺序本无规范意义）。三个键/值的字节数 3/4/7/8 均 < 24，故 [writeText]
+     *    的短文本头足够。
+     */
     fun buildNoneAttestationObject(authData: ByteArray): ByteArray {
         val buf = ByteArrayOutputStream()
         buf.write(CBOR_MAP_3) // map(3)
         writeText(buf, "fmt"); writeText(buf, "none")
+        writeText(buf, "attStmt"); buf.write(CBOR_EMPTY_MAP) // map(0)
         writeText(buf, "authData"); writeByteString(buf, authData)
-        writeText(buf, "attestationStatement"); buf.write(CBOR_EMPTY_MAP) // empty map
         return buf.toByteArray()
     }
 
@@ -716,7 +735,15 @@ object WebAuthn {
 
     private fun writeText(buf: ByteArrayOutputStream, s: String) {
         val bytes = s.toByteArray(Charsets.UTF_8)
-        buf.write(CBOR_TEXT_HEAD or bytes.size) // 短文本（长度 < 24）
+        // ⚠️ 本实现只写"短文本头"（major type 3 + 长度 nibble），仅对 < 24 字节的文本正确。
+        // 长度 ≥ 24 需要额外的一/二字节长度头，此处**没有**实现 —— 若静默放行会写出
+        // **坏 CBOR**（如 24 字节会写成 `0x78` 后直接跟内容，缺长度字节），且这种坏字节
+        // 到 RP 侧才暴露、极难定位。故用 require 让它在写入点**当场崩**。
+        // 当前所有调用点（buildNoneAttestationObject 的键与值、encodeCoseP256 的键）均 < 24。
+        require(bytes.size < CBOR_SHORT_MAX) {
+            "writeText 只支持 < $CBOR_SHORT_MAX 字节的文本，收到 ${bytes.size}: $s"
+        }
+        buf.write(CBOR_TEXT_HEAD or bytes.size)
         buf.write(bytes)
     }
 

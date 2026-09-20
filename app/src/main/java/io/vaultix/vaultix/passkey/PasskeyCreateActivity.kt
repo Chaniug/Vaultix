@@ -16,8 +16,11 @@
  *
  * 注：attestation 用 `none`（软件密钥，密钥材料存于库内，与 Bitwarden 一致）；signCount 恒 0
  * （同步型 passkey 不推进计数器，避免多设备分叉，WebAuthn §6.1.1 允许）。
- * 浏览器流程（系统给了 `clientDataHash`）回传的 `clientDataJSON` 只放占位符 ——
- * 官方明确要求，且 provider 无法逐字节复刻浏览器那份 JSON，详见 `browserFlow` 字段注释。
+ * 浏览器流程（系统给了 `clientDataHash`）回传的 `clientDataJSON` **仍是自建的真实 JSON** ——
+ * 官方那句 "set a placeholder value for clientDataJSON" 带前置条件 `If you retrieve an origin`
+ * （仅经特权应用名单拿到 origin 的场景适用），本模块走「自证式读取」不适用；而 W3C WebAuthn L2
+ * §7.1 要求 RP 解析 clientDataJSON **明文**校验 `C.challenge`，空占位符必然失败。详见
+ * `.ai/issues/03` 的 #43（该条已推翻更早的 #35）。
  */
 package io.vaultix.vaultix.passkey
 

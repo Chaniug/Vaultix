@@ -103,12 +103,61 @@ class WebAuthnTest {
         val attObj = WebAuthn.buildNoneAttestationObject(authData)
         // map(3) 开头
         assertThat(attObj[0].toInt() and 0xff).isEqualTo(0xa3)
-        // 含 "fmt" / "none" / "authData" 文本键
+
+        // ══════════════════ 字节级断言（2026-09-20 P0 回归锁）══════════════════
+        //
+        // ⚠️ 为什么必须升到字节级：本用例**曾经**只写
+        //     `assertThat(text).contains("attestationStatement")`
+        // —— 它把**错误的键名**当成了期望值，于是 CBOR 键名写错（规范键名是 `attStmt`）
+        // 时测试照样全绿，bug 一路逃到真机（用户症状：App 能保存、网页端校验不出）。
+        // 教训：**协议结构的断言不能用 `String.contains(键名)`** —— 它对"键名对不对"
+        // 毫无鉴别力（写什么它就断言什么）。必须断言**字节布局**或"解码后的键集合相等"。
+        //
+        // 正确的 CBOR 字节布局（对照 Bastion `createAttestationObject` 注释里的 hex）：
+        //   A3                      map(3)
+        //     63 666D74             text(3) "fmt"
+        //     64 6E6F6E65           text(4) "none"
+        //     67 61747453746D74     text(7) "attStmt"   ← 规范键名，不是 attestationStatement
+        //     A0                    map(0)  空证明语句（fmt=none 时也必须存在）
+        //     68 6175746844617461   text(8) "authData"
+        //     58/59 XX <authData>   bytes(XX)
         val text = String(attObj, Charsets.UTF_8)
         assertThat(text).contains("fmt")
         assertThat(text).contains("none")
         assertThat(text).contains("authData")
-        assertThat(text).contains("attestationStatement")
+        // 键名必须是 attStmt（正+反双向锁：只断言 contains("attStmt") 不够 ——
+        // 若有人误写成 attestStmtX 之类仍会通过；必须同时锁死旧错误名不出现）
+        assertThat(text).contains("attStmt")
+        assertThat(text).doesNotContain("attestationStatement")
+
+        // 逐字节核验前三对键值，把"键名 + 值"钉死在字节层面。
+        // 布局（索引从 0 起）：
+        //   0        0xA3            map(3)
+        //   1        0x63            text(3) 头
+        //   2..5     "fmt"
+        //   5        0x64            text(4) 头
+        //   6..10    "none"
+        //   10       0x67            text(7) 头
+        //   11..18   "attStmt"
+        //   18       0xA0            map(0) 空证明语句
+        //   19       0x68            text(8) 头
+        //   20..28   "authData"
+        //   28       0x58/0x59       bytes 长度头
+        assertThat(attObj[1].toInt() and 0xff).isEqualTo(0x63) // text(3) 头
+        assertThat(String(attObj, 2, 3, Charsets.UTF_8)).isEqualTo("fmt")
+        assertThat(attObj[5].toInt() and 0xff).isEqualTo(0x64) // text(4) 头
+        assertThat(String(attObj, 6, 4, Charsets.UTF_8)).isEqualTo("none")
+        assertThat(attObj[10].toInt() and 0xff).isEqualTo(0x67) // text(7) 头
+        assertThat(String(attObj, 11, 7, Charsets.UTF_8)).isEqualTo("attStmt")
+        assertThat(attObj[18].toInt() and 0xff).isEqualTo(0xa0) // 空 map 必须存在
+        assertThat(attObj[19].toInt() and 0xff).isEqualTo(0x68) // text(8) 头
+        assertThat(String(attObj, 20, 8, Charsets.UTF_8)).isEqualTo("authData")
+        assertThat(attObj[28].toInt() and 0xff).isEqualTo(0x58) // bytes(1字节长度) 头
+        assertThat(attObj[29].toInt() and 0xff).isEqualTo(authData.size)
+
+        // authData 明文必须原样嵌在里面
+        val embedded = attObj.copyOfRange(30, 30 + authData.size)
+        assertThat(embedded).isEqualTo(authData)
 
         // create 响应可构造且含 attestationObject
         val createJson = WebAuthn.buildCreateResponseJson(key.credentialId, ByteArray(8), attObj)
