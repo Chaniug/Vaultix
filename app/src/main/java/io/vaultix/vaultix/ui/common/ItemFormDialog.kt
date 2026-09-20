@@ -387,19 +387,34 @@ private val FORM_CARD_CORNER = 20.dp
  * **呼吸**（组内紧凑、组间留白，于是"结构"能一眼读出来）。
  *
  * ⚠️ 底色必须比宿主面板**低一档**：对话框面板是 `surfaceContainerHigh`，
- *    这里用 `surfaceContainerLow`。同色相叠会让卡片边界消失
+ *    这里用 `surfaceContainerLow` —— 同色相叠会让卡片边界消失
  *    （这是 `VaultUnlockCard` 已经踩过的坑，别再犯）。
+ *
+ * ⚠️ **2026-09-20 用户反馈「不透明，上边标题部分遮住了显示内容」** —— 除了让位不足，
+ *    这里还有一半责任：`surfaceContainerLow` 与壳顶部/底部条的 `surface` 亮度只差
+ *    **1.049**（实测，见下），肉眼等同同色。于是内容滑到栏下面时，卡片与栏糊成一片，
+ *    用户看到的就是"被遮住"而不是"从下面穿过"。
+ *
+ *    M3 亮色基线实测对比度（vs `surface`）：
+ *    `surfaceContainerLow` 1.049 · `High` 1.164 · `Highest` 1.232。
+ *
+ *    ⇒ 改用 `surfaceContainerHighest`（1.232）：标题栏走的是 [VaultixExpressiveTopBar]
+ *    的"收起即透明"逻辑，收起后卡片本该**可见地**从栏下滑过；明显一档的底色让
+ *    「穿过」成立，同时给卡片一个真实的边界。
+ *
+ * ⚠️ **别指望卡片自己带边框来救** —— 那只会让"穿越"变成"一堵墙从标题下钻出来"。
+ *    边界感来自**底色差**，不是描边。
  *
  * ⚠️ 横向**不加** padding：宿主 [FullScreenDialogShell] 已给正文 24dp 侧边距，
  *    再加会让卡片变得又窄又臃肿。
  */
 @Composable
-private fun FormGroupCard(content: @Composable ColumnScope.() -> Unit) {
+internal fun FormGroupCard(content: @Composable ColumnScope.() -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(FORM_CARD_CORNER),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
         ),
     ) {
         Column(

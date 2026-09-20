@@ -15,12 +15,16 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -42,6 +46,7 @@ import androidx.core.view.WindowCompat
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -133,14 +138,31 @@ fun FullScreenDialogShell(
             // ⚠️ 高度用常量而不是 `onGloballyPositioned` 实测：后者的首次组合拿不到值，
             // 会先按 0 让位、再跳一次 —— 那种一跳比"数值不精确"更难看。
             Box(modifier = Modifier.fillMaxSize().imePadding()) {
+                // ── 让位高度 = 系统栏内边距 + 栏自身高度（**不是**只让栏高）。
+                //
+                // ⚠️ 2026-09-20 用户反馈：「新建密码条目 / 验证码 / 卡包界面，不透明，
+                // 上边标题部分和下方部分遮住了显示内容。」
+                // 根因就在这里：两条栏都带 `statusBarsPadding()` / `navigationBarsPadding()`
+                // （**之外**再叠自己的 padding），而正文只让了 [ACTION_BAR_HEIGHT] 这类
+                // 纯栏高 ⇒ 正文首/末元素正好钻到那条**不透明**色带底下。
+                // 顶部少让一个状态栏（普通机型 24~48dp），底部少让一个手势条（24~48dp）。
+                //
+                // 让位改用**实测**而不是常量相加：状态栏/手势条高度随机型、分屏、折叠屏
+                // 变化，`TITLE_BAR_HEIGHT + 常量` 只是把误差从"少让"变成"多让"，换个机型还会偏。
+                // 这里读的是与两条栏**同一份** [WindowInsets]，两者因此永远对齐。
+                //
+                // ⚠️ 仍保留常量作为**下限兜底**：极端情况下 insets 可能为 0（如全屏/桌面模式），
+                // 那时不能退化成"零让位"，否则内容会直接压在按钮上。
+                val statusBar = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+                val navBar = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
                         .verticalScroll(rememberScrollState())
                         .padding(horizontal = Spacing.xl)
                         .padding(
-                            top = TITLE_BAR_HEIGHT,
-                            bottom = ACTION_BAR_HEIGHT,
+                            top = contentClearance(statusBar, TITLE_BAR_HEIGHT),
+                            bottom = contentClearance(navBar, ACTION_BAR_HEIGHT),
                         ),
                     content = content,
                 )
@@ -198,10 +220,52 @@ fun FullScreenDialogShell(
 }
 
 /**
- * 标题栏高度（`statusBarsPadding` 之外的部分）：IconButton 48dp + 顶部内边距 8dp。
- * 用于给正文让位，见 [FullScreenDialogShell] 的说明。
+ * 正文要为一条**叠加栏**让出的高度 = `系统栏内边距 + 栏自身高度`。
+ *
+ * ## ⚠️ 这个函数修的是一个真实 bug（2026-09-20 用户反馈）
+ *
+ * 「新建密码条目 / 验证码 / 卡包界面，不透明，上边标题部分和下方部分遮住了显示内容。」
+ *
+ * 两条栏的 modifier 链都是 `background(surface)` → `statusBarsPadding()`/`navigationBarsPadding()`
+ * → 自身 padding ⇒ 它们占据的高度是 **insets + 栏高**。
+ * 而正文此前只让了**栏高**这一个常量，于是：
+ *
+ * | | 栏实际占位 | 正文让位 | 差额 |
+ * |---|---|---|---|
+ * | 顶部 | 状态栏 24 + 56 | 56 | **少让 24dp**（状态栏高的机型更多） |
+ * | 底部 | 手势条 24 + 80 | 80 | **少让 24dp** |
+ *
+ * 正文首/末元素正好落在这条**不透明**色带底下 ⇒ 就是用户看到的"被遮住"。
+ *
+ * ## 为什么取实测 insets 而不是再加一个常量
+ *
+ * 状态栏/手势条高度随机型、分屏、折叠屏、分辨率而变（24 / 36 / 48dp 都见过）。
+ * `TITLE_BAR_HEIGHT + 常量` 只是把误差从"少让"换成"多让"，换台机型仍然偏。
+ * 这里读的是与两条栏**同一份** insets，两者因此永远对齐。
+ *
+ * ## 为什么要 `maxOf` 兜底
+ *
+ * 极端情况下 insets 可能读到 0（全屏 / 桌面模式 / insets 尚未分发）。
+ * 那时不能退化成"零让位"，否则内容直接压在按钮上 —— 同一个 bug 换个成因再来一次。
+ * 故下限取栏自身高度。
+ *
+ * @param systemBarInset 该侧的系统栏内边距。
+ * @param barHeight 栏自身高度（**不含**系统栏内边距）。
+ */
+internal fun contentClearance(systemBarInset: Dp, barHeight: Dp): Dp =
+    maxOf(barHeight, systemBarInset + barHeight)
+
+/**
+ * 标题栏**自身**高度（不含状态栏内边距）：IconButton 48dp + 顶部内边距 8dp。
+ *
+ * ⚠️ 它**不是**正文要给的全部让位 —— 标题栏还额外带 `statusBarsPadding()`。
+ * 正文的让位见 [contentClearance]（必须把状态栏内边距一起算上）。
  */
 private val TITLE_BAR_HEIGHT = 56.dp
 
-/** 底部操作条高度（`navigationBarsPadding` 之外）：按钮 48dp + 上下内边距 16dp×2。 */
+/**
+ * 底部操作条**自身**高度（不含手势条内边距）：按钮 48dp + 上下内边距 16dp×2。
+ *
+ * ⚠️ 同上：它**不含** `navigationBarsPadding()`，别直接拿它当正文的底部让位。
+ */
 private val ACTION_BAR_HEIGHT = 80.dp

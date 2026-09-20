@@ -93,6 +93,7 @@ import io.vaultix.vaultix.ui.common.SelectionActionBar
 import io.vaultix.vaultix.ui.common.SiteIconByHost
 import io.vaultix.vaultix.ui.common.VaultixExpressiveTopBar
 import io.vaultix.vaultix.ui.shell.BottomDockOccupiedHeight
+import io.vaultix.vaultix.ui.common.FormGroupCard
 import io.vaultix.vaultix.ui.common.FullScreenDialogShell
 import io.vaultix.vaultix.ui.common.VaultixSearchTopAppBar
 import io.vaultix.vaultix.ui.common.rememberImmersiveBarPadding
@@ -1082,54 +1083,66 @@ private fun TotpEditDialog(
             }
         },
     ) {
-        TypeDropdown(type) { type = it }
-        Spacer(Modifier.height(Spacing.sm))
-        OutlinedTextField(
-            value = issuer,
-            onValueChange = { issuer = it },
-            label = { Text(stringResource(R.string.totp_field_issuer)) },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Spacer(Modifier.height(Spacing.sm))
-        OutlinedTextField(
-            value = account,
-            onValueChange = { account = it },
-            label = { Text(stringResource(R.string.totp_field_account)) },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Spacer(Modifier.height(Spacing.sm))
-        OutlinedTextField(
-            value = secret,
-            onValueChange = { secret = it },
-            label = { Text(secretLabel(type)) },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        when (type) {
-            OtpType.MOTP -> TotpMotpFields(pin, onPinChange = { pin = it })
-            OtpType.STEAM -> {
-                // Steam 固定 5 位 / 30s / SHA1，无可调参数
-            }
-            OtpType.HOTP -> TotpHotpFields(
-                counter = counter,
-                onCounterChange = { counter = it },
-                digits = digits,
-                onDigitsChange = { digits = it },
-                algorithm = algorithm,
-                onAlgorithmChange = { algorithm = it },
+        // ⚠️ 2026-09-20 用户反馈：「验证码界面不透明，上边标题部分和下方部分遮住了显示内容。」
+        // 除让位不足外，本页还有自己的问题：**字段是平铺的裸 OutlinedTextField**，
+        // 没有分组卡片 ⇒ 滚动时输入框的描边直接切在标题栏/底部条下面，
+        // 看起来就是"被遮住"。与条目编辑统一成卡片（[FormGroupCard]），
+        // 卡片底色 `surfaceContainerHighest` 明显区别于栏的 `surface`，穿越才看得出来。
+        FormGroupCard {
+            TypeDropdown(type) { type = it }
+            Spacer(Modifier.height(Spacing.sm))
+            OutlinedTextField(
+                value = issuer,
+                onValueChange = { issuer = it },
+                label = { Text(stringResource(R.string.totp_field_issuer)) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
             )
-            OtpType.TOTP, OtpType.YANDEX -> TotpTimedFields(
-                period = period,
-                onPeriodChange = { period = it },
-                digits = digits,
-                onDigitsChange = { digits = it },
-                algorithm = algorithm,
-                onAlgorithmChange = { algorithm = it },
+            Spacer(Modifier.height(Spacing.sm))
+            OutlinedTextField(
+                value = account,
+                onValueChange = { account = it },
+                label = { Text(stringResource(R.string.totp_field_account)) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(Spacing.sm))
+            OutlinedTextField(
+                value = secret,
+                onValueChange = { secret = it },
+                label = { Text(secretLabel(type)) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
             )
         }
+        // 参数卡：按类型出对应的可调参数（Steam 无可调参数 ⇒ 不出卡）。
+        if (type != OtpType.STEAM) {
+            Spacer(Modifier.height(Spacing.md))
+            FormGroupCard {
+                when (type) {
+                    OtpType.MOTP -> TotpMotpFields(pin, onPinChange = { pin = it })
+                    OtpType.STEAM -> Unit
+                    OtpType.HOTP -> TotpHotpFields(
+                        counter = counter,
+                        onCounterChange = { counter = it },
+                        digits = digits,
+                        onDigitsChange = { digits = it },
+                        algorithm = algorithm,
+                        onAlgorithmChange = { algorithm = it },
+                    )
+                    OtpType.TOTP, OtpType.YANDEX -> TotpTimedFields(
+                        period = period,
+                        onPeriodChange = { period = it },
+                        digits = digits,
+                        onDigitsChange = { digits = it },
+                        algorithm = algorithm,
+                        onAlgorithmChange = { algorithm = it },
+                    )
+                }
+            }
+        }
         if (showError) {
+            Spacer(Modifier.height(Spacing.sm))
             Text(
                 stringResource(R.string.totp_invalid_secret),
                 color = MaterialTheme.colorScheme.error,
@@ -1142,7 +1155,6 @@ private fun TotpEditDialog(
 /** mOTP 专属字段:PIN 码(密钥为原始字符串,固定 10s / 6 位)。 */
 @Composable
 private fun TotpMotpFields(pin: String, onPinChange: (String) -> Unit) {
-    Spacer(Modifier.height(Spacing.sm))
     OutlinedTextField(
         value = pin,
         onValueChange = onPinChange,
@@ -1168,7 +1180,6 @@ private fun TotpHotpFields(
     algorithm: String,
     onAlgorithmChange: (String) -> Unit,
 ) {
-    Spacer(Modifier.height(Spacing.sm))
     Row {
         OutlinedTextField(
             value = counter,
@@ -1188,7 +1199,6 @@ private fun TotpHotpFields(
             modifier = Modifier.weight(1f),
         )
     }
-    Spacer(Modifier.height(Spacing.sm))
     AlgorithmDropdown(algorithm, onSelected = onAlgorithmChange)
 }
 
@@ -1202,7 +1212,6 @@ private fun TotpTimedFields(
     algorithm: String,
     onAlgorithmChange: (String) -> Unit,
 ) {
-    Spacer(Modifier.height(Spacing.sm))
     Row {
         OutlinedTextField(
             value = period,
