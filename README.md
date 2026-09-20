@@ -26,6 +26,9 @@ Vaultix 是一个 Android 密码管理器。与多数同类不同的是，它**�
 
 两套库共用同一套界面、同一个自动填充引擎、同一份条目模型 —— 你可以在一个 App 里同时放着云端库和一个本地 .kdbx 文件。
 
+**KDBX 还能放在网盘上**：OneDrive 与 WebDAV 都是原生支持的文件源，带冲突检测与条件写。
+网盘账号在**设置 → 网盘账号**里统一管理，与"添加库"解耦（详见 [Docs/18](./Docs/18-Bastion参考地图.md) 与设置页信息架构定稿）。
+
 > 名字来自 **Vault**（保险库）+ **-ix**（技术感后缀）。
 
 ## ✨ 功能
@@ -33,10 +36,11 @@ Vaultix 是一个 Android 密码管理器。与多数同类不同的是，它**�
 <details open>
 <summary><b>凭据管理</b></summary>
 
-- 条目类型：登录 / 安全笔记 / 支付卡 / 身份（身份支持 17 个字段）
+- 条目类型：登录 / 安全笔记 / 支付卡 / 身份（身份按 Bitwarden `CipherIdentityData` **全 18 字段**建模）/ SSH 密钥
 - 分组文件夹、收藏、回收站、批量多选删除
 - 自定义字段（文本 / 隐藏 / 布尔）、附加选项（主密码二次验证）
-- 站点图标自动抓取与本地缓存
+- 站点图标自动抓取与本地缓存；取不到时回退**按标题哈希上色的首字母头像**
+- 密码生成器、SSH 密钥对生成
 
 </details>
 
@@ -46,8 +50,29 @@ Vaultix 是一个 Android 密码管理器。与多数同类不同的是，它**�
 - **AutofillService**：登录框下拉直填，支持用户名/密码/验证码
 - **Credential Provider**（Android 14+）：通行密钥（passkey）创建与断言
 - **解锁即回填**：库锁定时点填充 → 生物识别解锁 → 条目列表直接出现，无需返回重进
+- **单次生物识别**：通行密钥登录的"库解锁 + 用户验证"合并为一次指纹（UV 豁免）
 - **保存新凭据**：登录页保存提示三段式（SaveInfo → onSaveRequest → 确认页）
 - 填充后自动复制 TOTP（受开关门控）
+
+</details>
+
+<details open>
+<summary><b>验证码</b></summary>
+
+- 覆盖 5 种类型：**TOTP**（含 **Steam Guard**、**Yandex** 变体）/ **HOTP** / **mOTP**
+- 倒计时进度环；**剩余 ≤ 5 秒时自动复制下一个验证码**
+- 列表行内直接显示**下一个验证码**（小字），不用等到跳变
+- 绑定到条目与独立管理两种用法
+
+</details>
+
+<details open>
+<summary><b>多库与网盘</b></summary>
+
+- 一个 App 内并存多个库：Bitwarden 云端库 + 任意多个本地/网盘 KDBX
+- **网盘文件源**：OneDrive（MSAL 登录）、WebDAV（含自建/局域网，明文 HTTP 会提示风险）
+- 网盘账号页支持【测试连接】、重新填写凭据、注销；注销**只删凭据不删库**
+- KDBX 写回带走**条件写 + 冲突检测**，避免多端覆盖
 
 </details>
 
@@ -64,10 +89,11 @@ Vaultix 是一个 Android 密码管理器。与多数同类不同的是，它**�
 <details open>
 <summary><b>界面</b></summary>
 
-- Material Design 3 + 动态取色 + OLED 纯黑
-- 沉浸式顶栏、悬浮底栏、跟随滚动的收起动画
+- Material Design 3 + Material You 动态取色 + OLED 纯黑
+- 沉浸式顶栏、悬浮底栏、跟随滚动的收起/淡出动画
 - 全屏编辑页（长表单不再蜷在弹窗里）
-- 平板 / 大屏自适应
+- **权限管理页**：逐项说明"开这个权限是为了做什么"，可就地申请，失败回退系统设置
+- 平板 / 大屏自适应（宽度 ≥ 840dp 切 `NavigationRail`）
 
 </details>
 
@@ -79,7 +105,7 @@ Vaultix 是一个 Android 密码管理器。与多数同类不同的是，它**�
 | UI | Jetpack Compose + Material 3 |
 | 异步 | Coroutines / Flow |
 | 本地存储 | Room（条目缓存）+ DataStore（偏好）+ Android Keystore（密钥） |
-| 网络 | Retrofit / OkHttp |
+| 网络 | Retrofit / OkHttp + MSAL（OneDrive） |
 | DI | Hilt |
 | KDBX | [`app.keemobile:kotpass`](https://github.com/keemobile/kotpass)（MIT） |
 | 构建 | Gradle 9 + AGP 9 · compileSdk 37 · minSdk 26 · 只出 `arm64-v8a` |
@@ -109,7 +135,7 @@ cd Vaultix
 ```
 app/                 # UI 层：Compose 界面、导航、ViewModel、自动填充/通行密钥宿主
  ├ core/             # 跨领域基础设施（datastore: 偏好与 Keystore 封装 / ui: 设计系统 …）
- ├ data/             # 数据层：repository 实现（Bitwarden 同步、KDBX 会话、条目读写）
+ ├ data/             # 数据层：repository 实现（Bitwarden 同步、KDBX 会话、网盘文件源）
  └ domain/           # 领域层：纯 Kotlin 接口与模型，不依赖 Android
 ```
 
@@ -148,9 +174,35 @@ app/                 # UI 层：Compose 界面、导航、ViewModel、自动填�
 | 17 | [稳定性与防错规范](./Docs/17-稳定性与防错规范.md) | 序列化容错、协程取消、崩溃兜底 |
 | 18 | [Bastion 参考地图](./Docs/18-Bastion参考地图.md) | Bastion 代码/文档 → Vaultix 行为的参考索引 |
 
-进度与决策记录见 [Docs/progress/](./Docs/progress/README.md)。
+进度与决策记录见 [Docs/progress/](./Docs/progress/README.md)。设计取舍的"为什么"多在
+`.ai/`（会话记录、决策定稿、坑位清单），那是本项目对齐上下文的主要入口。
 
 </details>
+
+## ✅ 质量门
+
+每次提交在 CI 上跑完以下四关，全绿才算过：
+
+```bash
+./gradlew detekt                      # 静态检查（复杂度/规模/命名阈值）
+./gradlew :app:compileFullDebugKotlin # full flavor 编译
+./gradlew :app:testFullDebugUnitTest  # 单元测试
+```
+
+`.ai/tools/` 下另有 4 个本地脚本，专门抓 **detekt 查不出、本地单模块编译也不报、
+只有 CI 跨模块编译才炸**的那几类问题（跨文件 `private` 调用、`R.string` 引用、
+实验性 API 的 `@OptIn` 覆盖、签名里的类型名可解析）：
+
+```bash
+python3 .ai/tools/check_compile_smells.py       # 跨文件 private / 重复声明 / 图标导入
+python3 .ai/tools/check_signature_types.py      # 签名里的类型名能否解析
+python3 .ai/tools/check_import_packages.py      # import 包路径
+python3 .ai/tools/check_experimental_optin.py   # 实验性 API 的 @OptIn 作用域
+```
+
+> ⚠️ **门禁必须包含 `test`**。本项目踩过这个坑：曾有提交只跑 `:app:` 编译，
+> 而 `compileDebugUnitTestKotlin` 一直 UP-TO-DATE 从未重编，
+> 直到某轮跑了 `test` 才炸出别的模块里的单测编译断链。
 
 ## 🌿 分支策略与自动构建
 
@@ -194,10 +246,20 @@ base64 -w0 vaultix-release.jks
 
 ## 🗺 状态
 
-当前版本 **0.1.0**（早期开发中，API 与数据格式仍可能变动）。
+当前版本 **0.5.0**（见 [`VERSION`](./VERSION)；早期开发中，API 与数据格式仍可能变动）。
 
-- ✅ M1 基础框架 / M2-a Bitwarden 同步引擎 / M2-b KDBX 只读 / M3 自动填充与通行密钥 —— 主链路已通
-- 🚧 进行中：性能专项优化、PIN 快速解锁、KDBX 写入（阶段 B）
+| 里程碑 | 状态 |
+|---|---|
+| M0 基础骨架 + `core:crypto` | ✅ DONE |
+| M1 Bitwarden 同步 | ✅ 功能与回归收官 |
+| M2 KDBX 引擎 + 集成 | 🔄 **只读 + 写回已通**；写回带条件写与冲突检测 |
+| M2-a 自动填充服务 | ✅ 主链路已通（含"解锁即回填"、保存提示三段式） |
+| M2-b 网盘同步（OneDrive / WebDAV） | ✅ 文件源与账号管理已落地 |
+| M3 平台集成 / 安全中心 | 🔄 autofill 已并入 M2-a；安全中心待做 |
+| M4 / M5 发布准备 / 1.0 | ⬜ TODO |
+
+- ✅ 多库并存、通行密钥、验证码（含自动复制下一个）、卡包、权限管理页、网盘账号页
+- 🚧 进行中：性能专项优化、KDBX 库内 SSH 字段映射
 - 📋 计划：性能优化见 [Docs/progress/perf-plan.md](./Docs/progress/perf-plan.md)
 
 里程碑与验收标准见 [Docs/13-路线图与里程碑.md](./Docs/13-路线图与里程碑.md)。

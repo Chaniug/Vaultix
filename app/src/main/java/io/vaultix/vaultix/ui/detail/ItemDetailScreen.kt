@@ -96,7 +96,9 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import io.vaultix.vaultix.ui.common.Capability
 import io.vaultix.vaultix.ui.common.CapabilityIcon
+import io.vaultix.vaultix.ui.common.capabilityTint
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.layout.WindowInsets
 import io.vaultix.vaultix.ui.common.VaultixExpressiveTopBar
@@ -327,14 +329,14 @@ private fun DetailHeader(item: VaultItem, serverOrigin: String?) {
                 if (!item.totp.isNullOrBlank()) {
                     CapabilityIcon(
                         icon = Icons.Filled.Timer,
-                        tint = MaterialTheme.colorScheme.primary,
+                        tint = capabilityTint(Capability.TOTP),
                         contentDescription = stringResource(R.string.items_filter_totp),
                     )
                 }
                 if (item.fido2Credentials.isNotEmpty()) {
                     CapabilityIcon(
                         icon = Icons.Filled.Key,
-                        tint = MaterialTheme.colorScheme.tertiary,
+                        tint = capabilityTint(Capability.PASSKEY),
                         contentDescription = stringResource(R.string.items_filter_passkey),
                     )
                 }
@@ -1140,7 +1142,7 @@ private fun cardExpiryText(expMonth: String, expYear: String): String {
 }
 
 /**
- * 身份信息分区（type=Identity）。按 Bitwarden canonical 顺序展示 17 字段，
+ * 身份信息分区（type=Identity）。按 Bitwarden canonical 顺序展示 18 字段，
  * 仅渲染非空字段，每个值可复制。覆盖 Bastion 仅显示少数字段的兼容缺陷。
  */
 @Composable

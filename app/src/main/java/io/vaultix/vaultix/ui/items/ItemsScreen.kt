@@ -99,7 +99,9 @@ import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
 import io.vaultix.model.VaultKind
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.common.Capability
 import io.vaultix.vaultix.ui.common.CapabilityIcon
+import io.vaultix.vaultix.ui.common.capabilityTint
 import io.vaultix.vaultix.ui.common.CloudSyncIcon
 import io.vaultix.vaultix.ui.common.EntryCard
 import io.vaultix.vaultix.ui.common.EntryCardIconSize
@@ -1416,14 +1418,14 @@ private fun ItemRowTrailing(
         if (!item.totp.isNullOrBlank()) {
             CapabilityIcon(
                 icon = Icons.Filled.Timer,
-                tint = MaterialTheme.colorScheme.primary,
+                tint = capabilityTint(Capability.TOTP),
                 contentDescription = stringResource(R.string.items_filter_totp),
             )
         }
         if (item.fido2Credentials.isNotEmpty()) {
             CapabilityIcon(
                 icon = Icons.Filled.Key,
-                tint = MaterialTheme.colorScheme.tertiary,
+                tint = capabilityTint(Capability.PASSKEY),
                 contentDescription = stringResource(R.string.items_filter_passkey),
             )
         }

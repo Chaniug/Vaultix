@@ -107,7 +107,7 @@ fun cardValuesOf(card: VaultCard?): List<String> = listOf(
     card?.code.orEmpty(),
 )
 
-/** 身份字段 → 表单值（顺序同 ItemFormDialog 的 IDENTITY_LABELS，Bitwarden canonical 17 字段）。 */
+/** 身份字段 → 表单值（顺序同 ItemFormDialog 的 IDENTITY_LABELS，Bitwarden canonical 18 字段）。 */
 fun identityValuesOf(identity: VaultIdentity?): List<String> = listOf(
     identity?.title.orEmpty(),
     identity?.firstName.orEmpty(),

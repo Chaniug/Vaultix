@@ -94,7 +94,7 @@ import io.vaultix.vaultix.ui.theme.Spacing
  * 按条目类型决定可编辑字段，**除安全笔记外都可编辑**：
  * - Login：用户名 / 密码（含实时强度条）/ 网址（多值）/ TOTP 密钥；
  * - Card：持卡人 / 发卡行 / 卡号 / 有效期月·年 / 安全码（对齐 Bitwarden card 载荷）；
- * - Identity：全量 17 字段（对齐 Bitwarden identity 载荷，覆盖 Bastion 兼容缺陷）；
+ * - Identity：全量 18 字段（对齐 Bitwarden identity 载荷，覆盖 Bastion 兼容缺陷）；
  * - SshKey：私钥 / 公钥 / 指纹（指纹由公钥自动推导、可手改，见 [applyPublicKeyChange]）；
  * - SecureNote：仅名称 + 备注（该类型本就没有专属字段）。
  *
@@ -696,11 +696,11 @@ private fun LoginFields(
 
 /**
  * 按 [labels] 顺序渲染一组单行输入框，值就地写入 [values]（索引一一对应）。
- * 银行卡与身份字段共用：避免为 17 个字段各声明一个状态变量。
+ * 银行卡与身份字段共用：避免为 18 个字段各声明一个状态变量。
  */
 @Composable
 private fun LabeledFields(labels: List<Int>, values: SnapshotStateList<String>) {
-    // 身份有 17 个字段：8dp 的间距会把它们挤成"一堵输入框墙"，12dp 才有分组感。
+    // 身份有 18 个字段：8dp 的间距会把它们挤成"一堵输入框墙"，12dp 才有分组感。
     Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
         labels.forEachIndexed { index, labelRes ->
             OutlinedTextField(

@@ -165,7 +165,7 @@ private fun VaultItem.toExportCard(): BitwardenExportCard {
     )
 }
 
-/** 身份载荷（全 17 字段直译，不做子集裁剪）。 */
+/** 身份载荷（全 18 字段直译，不做子集裁剪）。 */
 private fun VaultItem.toExportIdentity(): BitwardenExportIdentity {
     val payload = requireNotNull(identity) { "VaultItem(type=Identity) must carry an identity payload" }
     return BitwardenExportIdentity(

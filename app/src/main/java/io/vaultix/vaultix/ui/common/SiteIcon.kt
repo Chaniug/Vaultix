@@ -10,9 +10,11 @@
  * 溯源声明（GPL-3.0 合规）
  * URL 规则见 [io.vaultix.common.SiteIconUrl]（端点与路径对照 Bitwarden Android 官方客户端：
  * `EnvironmentExtensions.kt:113-126` 的 `<base>/icons`、以及条目侧 `<base>/icons/<host>/icon.png`）。
- * 本文件只负责渲染与缓存（Coil + OkHttp），外观沿用 Vaultix 既有首字母头像规格
- * （`surfaceContainerHigh` 圆底 + onSurfaceVariant 字色），保证「有图标 / 没图标」
- * 两种状态下卡片左侧的尺寸与底色完全一致（不会一跳一跳）。
+ * 本文件只负责渲染与缓存（Coil + OkHttp）。
+ *
+ * 首字母头像的**彩色底衬**取自 Bitwarden Android 官方客户端的同类做法
+ * （`ui/theme/Theme.kt` 里按 hash 从一组色相里取定值），此处为独立实现：
+ * 色相由**标题的稳定哈希**决定，保证同一条目每次进来颜色都一样（不会"闪色"）。
  * ---------------------------------------------------------------------------
  */
 package io.vaultix.vaultix.ui.common
@@ -125,8 +127,8 @@ fun SiteIconByHost(
             .clip(CircleShape)
             .background(
                 // 图标多为透明 PNG：给白底，避免深色主题下深色描边糊在深色卡面上
-                // （Bitwarden 同样给站点图标垫白底）。兜底态则用容器色，与首字母头像一致。
-                if (showFallback) MaterialTheme.colorScheme.surfaceContainerHigh else Color.White,
+                // （Bitwarden 同样给站点图标垫白底）。兜底态则用彩色头像，见下。
+                if (showFallback) fallbackAvatar(fallbackText) else Color.White,
             ),
     ) {
         if (!showFallback) {
@@ -143,11 +145,87 @@ fun SiteIconByHost(
                 text = fallbackText.take(1).uppercase(),
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                // 底衬已换成饱和色（见 [fallbackAvatar]），字必须用**对白/对黑**，
+                // 不能再跟随主题的 onSurfaceVariant —— 那在彩色底上会读不清。
+                color = fallbackAvatarContentColor(),
             )
         }
     }
 }
+
+/**
+ * 首字母头像的**彩色底衬**（2026-09-20）。
+ *
+ * ## 为什么要上色
+ * 用户提问：「感觉目前界面的配色略微单一了。」
+ *
+ * 排查发现：三个列表页（密码 / 验证码 / 通行密钥）左端那个 40dp 头像，
+ * 取不到站点图标时**全是同一个灰底**（旧实现恒为 `surfaceContainerHigh` +
+ * `onSurfaceVariant` 字色）。而现实是**兜底才是常态** ——
+ * 自建 Vaultwarden 不开图标代理、局域网地址、KDBX 库（无 origin）全都走兜底。
+ * 于是一屏几十条里，最显眼的一列元素全是灰的 ⇒ 观感自然"单色"。
+ *
+ * ## 为什么底色可以上色，而容器色不行
+ * M3 对**大面积容器**（页面底、卡片、对话框）确实要求低饱和，那里改不得。
+ * 但 40dp 的圆形头像是一个**独立的小色块**，它的职责恰恰是"把这一条和那一条区分开"。
+ * Bitwarden 官方客户端就是这么做的（按 hash 取色相）——这不是背离 M3，
+ * 而是 M3 「bounded regions that need emphasis」那条的正当用法。
+ *
+ * ## 为什么用标题哈希而不是随机
+ * 头像每次都必须是同一个颜色。用随机色或按列表下标取色，滚动一遍颜色就全变了，
+ * 用户会把"颜色"误读成"状态"（以为条目变了）。哈希取色则稳定且**同一条目恒定**。
+ *
+ * ⚠️ 只取色相、固定饱和度和明度：这样深浅主题下都能保证与白/黑字的对比度。
+ * 不要改成随主题切换整套色表 —— 那会让同一条目在切换主题后"换了身份"。
+ */
+private fun fallbackAvatar(seed: String): Color {
+    val hue = avatarHue(seed)
+    return Color.hsl(hue = hue, saturation = AVATAR_SATURATION, lightness = AVATAR_LIGHTNESS)
+}
+
+/**
+ * 由标题算出稳定色相（0°..330°，12 档）。
+ *
+ * 抽成 `internal` 纯函数是为了**能被单测钉住** —— 这里有两个只在边界上才发作的坑
+ * （见下），靠真机看是看不出来的：
+ *
+ * 1. **`Int.MIN_VALUE` 没有对应的正数**：`seed.hashCode().absoluteValue` 对它是负数，
+ *    算出的色相为负 ⇒ `Color.hsl` 行为未定义。所以先取模再修正。
+ * 2. **色相必须落在 12 档上**：`%` 在 Kotlin 里对负数返回负值，不加修正会得到
+ *    负数档位。修正式 `(x % n + n) % n` 对正负输入都给出 `0..n-1`。
+ */
+internal fun avatarHue(seed: String): Float {
+    val bucket = ((seed.hashCode() % AVATAR_HUE_STEPS) + AVATAR_HUE_STEPS) % AVATAR_HUE_STEPS
+    return bucket * (HUE_WHEEL_DEGREES / AVATAR_HUE_STEPS)
+}
+
+/** 色相环总度数（把 0..n-1 的档位换算成 0°..360° 的色相）。 */
+private const val HUE_WHEEL_DEGREES = 360f
+
+/** 彩色底衬上的文字色：固定白字（底衬明度已锁定，见 [fallbackAvatar] 的告警）。 */
+private fun fallbackAvatarContentColor(): Color = Color.White
+
+/** 色相档数：12 档 = 每 30° 一档，相邻头像肉眼可分辨又不会花。 */
+internal const val AVATAR_HUE_STEPS = 12
+
+/** 饱和度：0.45 —— 够"有色"，又不至于在深色主题里刺眼。 */
+internal const val AVATAR_SATURATION = 0.45f
+
+/**
+ * 明度：**0.32** —— 实测调出来的值，不要凭感觉动。
+ *
+ * 白字要求对比度 ≥ 4.5:1（WCAG AA 正文）。**青色/黄色区最吃亏**：
+ * 同样是 HSL 明度，青黄两色的相对亮度远高于红蓝。实测各档对白字的最差对比度：
+ *
+ * | 明度 | 最差档位对比度 | |
+ * |---|---|---|
+ * | 0.45 | **2.57** | ❌ 青黄区完全读不清 |
+ * | 0.32 | **4.75** | ✅ 12 档全部达标 |
+ *
+ * 二分求解得上限是 0.331（对白字），这里取 0.32 留一点余量。
+ * ⚠️ 往亮处调之前**必须重跑一遍 12 个色相的对比度**，不能只看某一个色相顺眼就改。
+ */
+internal const val AVATAR_LIGHTNESS = 0.32f
 
 /**
  * 由「库 origin」+「条目」直接产出 URL 的便捷入口（供无 Compose 上下文的调用点复用）。

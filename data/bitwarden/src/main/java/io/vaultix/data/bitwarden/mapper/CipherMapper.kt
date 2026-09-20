@@ -87,7 +87,7 @@ class CipherMapper @Inject constructor(
                 } else {
                     null
                 },
-                // 身份信息：type=4 时映射全量 17 字段（解密失败降级空串，不丢字段）。
+                // 身份信息：type=4 时映射全量 18 字段（解密失败降级空串，不丢字段）。
                 // 对齐 Bitwarden canonical，覆盖 Bastion 仅映射少数字段的兼容缺陷。
                 identity = if (dto.type == TYPE_IDENTITY) {
                     dto.identity?.let { mapIdentity(it, key, itemKey) }
@@ -607,7 +607,7 @@ class CipherMapper @Inject constructor(
     )
 
     /**
-     * 身份信息密文 → 领域模型（全量 17 字段，逐字段解密，失败降级空串）。
+     * 身份信息密文 → 领域模型（全量 18 字段，逐字段解密，失败降级空串）。
      * 对齐 Bitwarden `CipherIdentityData`，覆盖 Bastion 仅映射少数字段的兼容缺陷。
      */
     private fun mapIdentity(

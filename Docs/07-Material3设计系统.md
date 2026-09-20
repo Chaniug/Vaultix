@@ -26,54 +26,94 @@
 | `outline` / `outlineVariant` | 描边、分割线、未选中图标 |
 | `surfaceVariant` / `onSurfaceVariant` | 次级文字、辅助信息 |
 
-### 2.2 主题配置
+### 2.2 主题配置（**以代码为准**）
+
+> ⚠️ 2026-09-20 更正：本节此前写的是**设计意图**（含 `contrast` 参数、种子色方案），
+> 但代码里从未实现。为避免"文档说一套、代码做一套"，这里改为**如实描述现有实现**，
+> 未实现的移到 §2.3 的"计划"里，不再与现状混写。
+
+实现见 `app/src/main/java/io/vaultix/vaultix/ui/theme/Theme.kt`：
 
 ```kotlin
+enum class ThemeMode { SYSTEM, LIGHT, DARK }   // 跟随系统 / 强制浅 / 强制深
+
 @Composable
 fun VaultixTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
-    dynamicColor: Boolean = true,          // API 31+ 生效
-    contrast: Contrast = Contrast.Standard, // 支持系统高对比度
+    themeMode: ThemeMode = ThemeMode.SYSTEM,
+    dynamicColor: Boolean = true,       // Android 12+ → Material You 取壁纸色
+    oledPureBlack: Boolean = false,     // 深色下 background/surface 改纯黑
     content: @Composable () -> Unit,
-) {
-    val colorScheme = when {
-        dynamicColor && Build.VERSION.SDK_INT >= 31 ->
-            if (darkTheme) dynamicDarkColorScheme(LocalContext.current)
-            else dynamicLightColorScheme(LocalContext.current)
-        darkTheme -> darkScheme      // 由种子色生成
-        else -> lightScheme
-    }
-    MaterialTheme(
-        colorScheme = colorScheme,
-        typography = VaultixTypography,
-        shapes = VaultixShapes,
-        content = content,
-    )
-}
+)
 ```
 
-### 2.3 主题策略（参考 Bastion 的多主题设计）
+配色来源**二选一**（不叠加）：
 
-提供 **5 套主题**，用户可随时切换：
-
-| 主题 | 说明 | 适用 |
-|---|---|---|
-| **自然（Nature）** | 低饱和的自然色系种子色（柔和绿/土色），长时间使用不易疲劳 | 默认推荐 |
-| **Material You（动态取色）** | API 31+ 取壁纸主色，与系统浑然一体 | 追求与系统一致的用户 |
-| **暗色（Dark）** | 标准 M3 深色（`surface` 为深灰，非纯黑） | OLED 之外的屏幕，省电且对比舒适 |
-| **纯黑（AMOLED Black）** | `surface = #000000`，卡片用极深灰区分层次 | OLED 屏幕，省电；密码类应用常见诉求 |
-| **RG 护眼** | 降低红/绿通道权重、压低蓝光比例的暖色调变体 | 夜间、对频闪/蓝光敏感的用户 |
-
-补充选项：
-
-| 项 | 选项 |
+| 条件 | 配色来源 |
 |---|---|
-| 深浅模式 | 跟随系统 / 始终浅色 / 始终深色（与上表主题叠加） |
-| 动态取色 | 开 / 关（关闭时用当前主题的静态种子色，仅"Material You"主题强制开启） |
-| 对比度 | 标准 / 中 / 高（跟随系统 `Contrast` 设置） |
-| 纯黑主题下的强调 | 卡片层级用 `#0A0A0A`–`#1A1A1A` 递进，**不靠阴影**区分 |
+| `dynamicColor && SDK ≥ 31` | `dynamicLight/DarkColorScheme(context)` —— 壁纸派生 |
+| 否则 | `lightColorScheme()` / `darkColorScheme()` —— **M3 基线色板** |
 
-> 实现要点：5 套主题共用同一套 `ColorScheme` 生成逻辑（种子色 → `lightColorScheme`/`darkColorScheme`），仅替换种子色与 `surface` 基准值，避免维护 5 份色表。
+`oledPureBlack` 在上述结果上再 `copy(background = Black, surface = Black)`。
+
+### 2.3 主题策略
+
+#### 现状（已实现）
+
+| 能力 | 状态 | 对应设置项 |
+|---|---|---|
+| **Material You 动态取色** | ✅ 已实现（API 31+） | 设置 → 外观 → 动态取色 |
+| **浅色 / 深色 / 跟随系统** | ✅ 已实现 | 设置 → 外观 → 主题模式 |
+| **纯黑（AMOLED Black）** | ✅ 已实现（深色下生效） | 设置 → 外观 → 纯黑主题 |
+| 静态种子色板 | ⚠️ **用的是 M3 基线色板**（`lightColorScheme()` 无参默认），并非自定义种子色 | — |
+
+#### 计划（**尚未实现**，不要当成已有能力）
+
+以下为设计意图，落地前不应在 README / 设置页里描述为已有能力：
+
+| 计划项 | 说明 | 状态 |
+|---|---|---|
+| **自然（Nature）种子色** | 低饱和自然色系（柔和绿/土色），长时间使用不易疲劳 | 📋 未做 |
+| **RG 护眼（低蓝光暖色）** | 压低蓝光比例，夜间 / 对蓝光敏感用户 | 📋 未做 |
+| **对比度档位（标准/中/高）** | 跟随系统 `Contrast` 设置 | 📋 未做（`VaultixTheme` 无此参数） |
+
+> 实现要点（若将来做）：多套主题应**共用同一套 `ColorScheme` 生成逻辑**（种子色 →
+> `lightColorScheme`/`darkColorScheme`），仅替换种子色与 `surface` 基准值，
+> 避免维护 N 份手写色表。
+
+### 2.3.1 强调色（accent）的分配纪律
+
+> 起因：2026-09-20 用户问「material3 设计上，我这个页面是否还要稍微加一点强调色之类的，
+> 感觉目前界面的配色略微单一了」。排查后的结论是 **不是强调色不够，是强调色缺语义**，
+> 因此本节把"哪个角色管什么"写死成纪律，而不是笼统地"再加点颜色"。
+
+**角色职责表**（改动前先查这张表）：
+
+| 角色 | 管什么 | 不要用来做 |
+|---|---|---|
+| `primary` | 主 CTA、选中态、解锁按钮、验证码能力图标 | 不要用来"给某个页面加点色" |
+| `tertiary` | 通行密钥能力图标、密码强度"中" | 不要因为"想多几种颜色"改成它 |
+| `secondaryContainer` | 条目/设置项**选中**底色 | — |
+| `error` / `errorContainer` | 危险操作、校验失败、弱密码 | 不要用于非危险的"醒目" |
+| `surfaceContainerLowest…Highest` | 背景分层（页面 → 卡片 → 输入框） | 不要当强调色用 |
+| `onSurfaceVariant` | 次级文字、辅助信息 | 不要用作图标的"强调" |
+
+**已落地的三处修正**（2026-09-20）：
+
+1. **能力图标配色收敛为唯一出处** —— `capabilityTint(Capability)`。
+   修正前 `ItemsScreen` 与 `ItemDetailScreen` **各写一遍** `colorScheme.tertiary`，
+   想调通行密钥的色相就得记得改两处，忘一处又制造出一组不一致。
+2. **首字母头像改为彩色底衬** —— `SiteIcon.fallbackAvatar(seed)`。
+   三个列表页左端那个 40dp 头像，取不到站点图标时**原本全是同一个灰底**，
+   而兜底恰恰是常态（自建 Vaultwarden 不开图标代理 / 局域网地址 / KDBX 无 origin
+   全都走兜底）⇒ 一屏几十条里最显眼的一列元素全是灰的，这正是"配色单一"的**主要来源**。
+   现按**标题哈希**取 12 档色相之一（同一条目恒定，不会滚动时"闪色"）。
+3. **对比度实测钉住** —— 头像明度取 `0.32` 而非直觉上的 `0.45`：
+   白字要求 ≥ 4.5:1，青黄两色的相对亮度远高于红蓝，实测 `L=0.45` 时最差档位只有
+   **2.57**（读不清），`L=0.32` 时 12 档全部 ≥ **4.75**。见 `AvatarHueTest`。
+
+> ⚠️ 别把"配色单一"理解成"要加更多颜色"。M3 的**大面积容器**（页面底、卡片、对话框）
+> 本就该低饱和，那里加色即是反模式（见 §9）。真正的着力点是**小面积、语义明确**的元素
+> （能力图标、头像、徽标）—— 它们天生就是"需要被区分开"的。
 
 ### 2.3 语义色（风险表达）
 

@@ -171,7 +171,7 @@ data class BitwardenExportCard(
 )
 
 /**
- * 身份载荷（对齐官方 `JsonIdentity`，全量 17 字段）。
+ * 身份载荷（对齐官方 `JsonIdentity`，全量 18 字段）。
  *
  * 字段集与 Vaultix [io.vaultix.model.VaultIdentity] 一一对应，映射即直译、
  * 不做任何子集裁剪（Vaultix 以 Bitwarden 全字段为规范）。

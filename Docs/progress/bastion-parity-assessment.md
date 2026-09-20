@@ -18,7 +18,7 @@
 - **Bastion 约有 1 万行代码是 Vaultix 架构上不需要的**——KeePass 本地库抽象、WebDAV/OneDrive 同步、跨库去重服务。Vaultix 是「Bitwarden canonical + CipherDto 密文存储」单后端架构，这些层**不应照搬**。
 - **Bastion 把一个设置项拆成一屏**（78 个设置字段散在 20+ 子屏），所以「Screen 数比值 13%」严重低估真实覆盖。
 - **两处 Vaultix 已反超 Bastion**（Bitwarden canonical 架构的直接红利）：
-  - 身份条目 17 字段全量（Bastion 静默丢弃 passportNumber / licenseNumber / ssn）；
+  - 身份条目 18 字段全量（Bastion 静默丢弃 passportNumber / licenseNumber / ssn）；
   - 自定义字段 4 态（含 Linked 指向字段），Bastion 仅 3 态。
 
 **结论**：正确目标不是「逐行追平 Bastion」，而是「在 Bitwarden 密文架构内，追平 Bastion 的**可用操作面**」。剩余差距主要集中在**自动填充、导入导出、生成器独立页、个性化定制**四类，且前两类是架构级工作量。
@@ -35,7 +35,7 @@
 | ⑤ | 通行密钥（本轮补强） | 列表/详情/删除/绑定保存已有；本轮补**创建时间展示 + 凭据 ID 复制** |
 | ⑥ | 卡片品牌识别（本轮） | 搬运 `CardBrandDetector`（GPL 溯源保留）；详情识别品牌 + 卡号分组；表单保存时自动回填品牌 |
 
-**已具备（非本轮、此前已有）**：双 flavor 架构、Bitwarden 同步、软删除/恢复/永久删除、主密码解锁、生物/快速解锁、自动锁定、剪贴板清除、防截屏、二维码扫描、SSH 密钥、安全笔记、自定义字段（4 态）、身份 17 字段。
+**已具备（非本轮、此前已有）**：双 flavor 架构、Bitwarden 同步、软删除/恢复/永久删除、主密码解锁、生物/快速解锁、自动锁定、剪贴板清除、防截屏、二维码扫描、SSH 密钥、安全笔记、自定义字段（4 态）、身份 18 字段。
 
 ---
 

@@ -42,7 +42,7 @@ data class VaultItem(
     val sshKey: VaultSshKey? = null,
     /**
      * 身份信息字段（type=Identity）。非身份条目恒为 null。
-     * 字段对齐 Bitwarden identity 载荷（17 字段全量）；只读展示（M1 编辑暂不支持）。
+     * 字段对齐 Bitwarden identity 载荷（18 字段全量）；只读展示（M1 编辑暂不支持）。
      *
      * ⚠️ 补字段必须同步补 Mapper（CipherMapper.mapIdentity / mapIdentityRequest）
      * 与 ItemDetailScreen.IdentitySection，见 MEMORY「保真度三级」约定——否则身份条目
@@ -203,9 +203,14 @@ data class VaultSshKey(
  * ⚠️ 明文承载：仅存在于已解锁的内存中，禁止落盘、禁止进日志（Docs/09）。
  *
  * 字段语义对齐 Bitwarden `CipherIdentityData`（官网/服务端字段集，非 Bastion 子集）：
- * 全量 17 字段，覆盖姓名 / 地址 / 联系方式 / 证件号。Bastion 对身份条目兼容性差
+ * 全量 **18** 字段，覆盖姓名 / 地址 / 联系方式 / 证件号。Bastion 对身份条目兼容性差
  * （仅映射了 title/name 等少量字段，其余如 passportNumber/licenseNumber/ssn 静默丢弃），
  * Vaultix 以 Bitwarden 全字段为规范（canonical），逐字段解密降级空串，绝不丢字段。
+ *
+ * ⚠️ 2026-09-20 更正：此前本注释写「17 字段」，与下面实际列出的 18 个字段不符。
+ * 以 Bitwarden 官方 `Identity` 结构为准（Rust SDK `bitwarden_vault/cipher/identity.rs`
+ * 与 Kotlin `CipherIdentityData` 均为 18 个），**是 18 不是 17**。
+ *
  * 溯源：GPL-3.0，字段集参照 Bitwarden 开源 `CipherIdentityData`。
  */
 @Serializable

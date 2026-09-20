@@ -570,7 +570,7 @@ class CipherMapperTotpUriFido2Test {
 
     @Test
     fun toDomainReadsIdentity() {
-        // 身份条目（type=4）：全量 17 字段必须进入领域模型（覆盖 Bastion 仅映射少数字段的兼容缺陷）
+        // 身份条目（type=4）：全量 18 字段必须进入领域模型（覆盖 Bastion 仅映射少数字段的兼容缺陷）
         val stored = CipherDto(
             id = "id1",
             type = 4,
