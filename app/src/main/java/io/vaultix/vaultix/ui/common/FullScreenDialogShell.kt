@@ -8,6 +8,8 @@
  */
 package io.vaultix.vaultix.ui.common
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -39,7 +41,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.window.DialogWindowProvider
 import androidx.core.view.WindowCompat
@@ -155,10 +159,34 @@ fun FullScreenDialogShell(
                 // 那时不能退化成"零让位"，否则内容会直接压在按钮上。
                 val statusBar = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
                 val navBar = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+
+                // ── 沉浸：两条栏的**底色**随滚动淡出，与列表页「内容从栏下穿过」统一。
+                //
+                // ⚠️ 2026-09-20 用户第二轮反馈：「大小现在确实合适了，但是页面不沉浸，
+                // 滑动的时候上下也不是透明，跟密码条目页面、验证码条目页面的效果不一样。」
+                //
+                // 上一轮只把**让位**算对了（内容不再被遮），但两条栏的底色仍是写死的
+                // `.background(surface)` —— 恒不透明 ⇒ 内容滑到栏下就被盖住，"穿过"看不见。
+                // 而列表页顶栏走的是 [VaultixExpressiveTopBar]：`barBackgroundAlpha` 随
+                // `collapseFraction` 在 1 ↔ 0 之间过渡，一滚就透明。
+                // 两边观感不一致的根源就在这里。
+                //
+                // 口径与列表页**完全一致**：滚动偏移超过 [COLLAPSE_THRESHOLD_DP] 即视为
+                // "已滚动"，内部走 [BAR_FADE_MS] 的 tween —— 快照式而非连续
+                //（连续会让栏在滚动过程中一直闪）。
+                val scrollState = rememberScrollState()
+                val thresholdPx = with(LocalDensity.current) { COLLAPSE_THRESHOLD_DP.toPx() }
+                val collapsed = scrollState.value > thresholdPx
+                val barAlpha by animateFloatAsState(
+                    targetValue = if (collapsed) 0f else 1f,
+                    animationSpec = tween(BAR_FADE_MS),
+                    label = "fullscreen_bar_alpha",
+                )
+
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
-                        .verticalScroll(rememberScrollState())
+                        .verticalScroll(scrollState)
                         .padding(horizontal = Spacing.xl)
                         .padding(
                             top = contentClearance(statusBar, TITLE_BAR_HEIGHT),
@@ -167,12 +195,15 @@ fun FullScreenDialogShell(
                     content = content,
                 )
 
-                // 顶部标题栏：叠加在最上层，内容从其下方滑过（被它遮住）。
+                // 顶部标题栏：底色随滚动淡出 → 内容从其下方**可见地**穿过。
+                // ⚠️ `background` 必须排在 `statusBarsPadding()` **之前** —— 这样淡出的是
+                //    含状态栏区域的整条色带（与 [VaultixExpressiveTopBar] 同款顺序）；
+                //    顺序反了状态栏那一条会永远留着底色，看着就像"没沉浸"。
                 Row(
                     modifier = Modifier
                         .align(Alignment.TopCenter)
                         .fillMaxWidth()
-                        .background(MaterialTheme.colorScheme.surface)
+                        .background(MaterialTheme.colorScheme.surface.copy(alpha = barAlpha))
                         .statusBarsPadding()
                         .padding(start = Spacing.sm, end = Spacing.sm, top = Spacing.sm)
                         .height(TITLE_BAR_HEIGHT - Spacing.sm),
@@ -191,12 +222,19 @@ fun FullScreenDialogShell(
                     )
                 }
 
-                // 底部操作条：同上，叠加在内容之上。
+                // 底部操作条：同样只淡出**底色**，按钮与文字**不**淡出
+                //（它们必须始终可读可点 —— 全透会让按钮压在输入框上没法看）。
+                //
+                // ⚠️ 这里是本页与列表页**唯一的有意差异**：列表页底部是**悬浮胶囊**
+                //（[io.vaultix.vaultix.ui.shell.VaultixBottomDock]，四周留白、底部透出内容），
+                // 沉浸感来得很容易；而本页是同一扇 `Dialog` 窗口里的**满宽操作条**，
+                // 底部必须一直可点 ⇒ 保留"淡出底色"这一档，不改成悬浮胶囊。
+                // ⇒ 若哪天要做成胶囊，改的是这里，不是在外面再叠一层。
                 Row(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .fillMaxWidth()
-                        .background(MaterialTheme.colorScheme.surface)
+                        .background(MaterialTheme.colorScheme.surface.copy(alpha = barAlpha))
                         .navigationBarsPadding()
                         .padding(horizontal = Spacing.xl, vertical = Spacing.lg),
                     horizontalArrangement = Arrangement.End,
@@ -254,6 +292,17 @@ fun FullScreenDialogShell(
  */
 internal fun contentClearance(systemBarInset: Dp, barHeight: Dp): Dp =
     maxOf(barHeight, systemBarInset + barHeight)
+
+/**
+ * 判定「已经滚动过」的阈值（dp）—— 超过它两条栏的背景就开始淡出。
+ *
+ * 与列表页 [VaultixExpressiveTopBar] 用同一个值（`Spacing.sm`），保证两边
+ * "滚多少才算滚动"的手感一致。
+ */
+private val COLLAPSE_THRESHOLD_DP = Spacing.sm
+
+/** 栏背景淡出的时长（ms）—— 与列表页顶栏同值，切换手感一致。 */
+private const val BAR_FADE_MS = 200
 
 /**
  * 标题栏**自身**高度（不含状态栏内边距）：IconButton 48dp + 顶部内边距 8dp。
