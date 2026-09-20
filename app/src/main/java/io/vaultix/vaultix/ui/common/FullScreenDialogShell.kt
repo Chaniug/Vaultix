@@ -8,6 +8,8 @@
  */
 package io.vaultix.vaultix.ui.common
 
+import android.graphics.drawable.ColorDrawable
+import android.os.Build
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -130,6 +132,12 @@ import io.vaultix.vaultix.ui.theme.Spacing
  * @param destructive 破坏性操作（如验证码编辑里的「移除」）；为 `null` 时不画，排在「取消」左侧。
  * @param content 表单正文（[ColumnScope]，纵向排列；需要横排时内部自己套 `Row`）。
  */
+// ⚠️ `@OptIn` 必须在 `@Composable` **之前**（两者都是注解，顺序无强制，但放一起更清楚）：
+// `BottomAppBarDefaults.exitAlwaysScrollBehavior()` 是 `@ExperimentalMaterial3Api` 的，
+// material3 1.5.0-alpha16 里**还没有** stable 替代品。
+// 选择"显式 OptIn 到具体 API"而不是给整个文件/模块加开关 —— 后者会让以后新引入的实验性
+// API 静默通过门禁。`.ai/tools/check_experimental_optin.py` 会校验这个作用域是否覆盖。
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FullScreenDialogShell(
     title: String,

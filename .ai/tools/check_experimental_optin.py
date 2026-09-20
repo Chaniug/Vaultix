@@ -78,6 +78,20 @@ SRC_ROOT = ROOT / "app" / "src"
 # ---------------------------------------------------------------------------
 # ⚠️ 只登记**本仓库实际用到、且确认需要 opt-in** 的。
 # 不确定的一律不登记 —— 误报会让人不再信任工具（ISSUES #101 的教训）。
+#
+# 🔴 2026-09-20 修正：**登记的名字必须是「调用点实际紧跟着 `(` 的那一段」**。
+#   原先的判据是 `SYMBOL(`，于是「实验性**对象**的成员函数」永远匹配不到：
+#
+#       BottomAppBarDefaults.exitAlwaysScrollBehavior()
+#       ^^^^^^^^^^^^^^^^^^^^ 后面跟的是 `.`，不是 `(`  ⇒ 永远漏报
+#
+#   实录：`FullScreenDialogShell` 用了 `BottomAppBarDefaults.exitAlwaysScrollBehavior()`
+#   （`@ExperimentalMaterial3Api`）却漏了 `@OptIn`，本脚本报 [OK]，
+#   实际在 CI `Build Debug APK` 上炸（`This material API is experimental`）——
+#   一次「假绿」，比不报更危险。
+#
+#   ⇒ 登记时写**方法名**（`exitAlwaysScrollBehavior`）而不是对象名。
+#     自测里有对应正例钉住这一点。
 EXPERIMENTAL_SYMBOLS: dict[str, str] = {
     "BasicAlertDialog": "ExperimentalMaterial3Api",
     "ModalBottomSheet": "ExperimentalMaterial3Api",
@@ -92,6 +106,16 @@ EXPERIMENTAL_SYMBOLS: dict[str, str] = {
     "LinearWavyProgressIndicator": "ExperimentalMaterial3ExpressiveApi",
     "ButtonGroup": "ExperimentalMaterial3ExpressiveApi",
     "ToggleButton": "ExperimentalMaterial3ExpressiveApi",
+}
+
+# ⚠️ 同一张表装不下「成员函数」，因为匹配规则不同（见下）：
+#   顶层符号匹配 `Sym(`（前面**不能**是 `.`，否则 `foo.Sym()` 会串味）；
+#   成员函数匹配 `.name(`（前面**必须**是 `.`）。
+# 把两者混在一张表里，无论用哪个正则都会漏一半 —— 上面那个 bug 就是这么来的。
+EXPERIMENTAL_MEMBER_CALLS: dict[str, str] = {
+    # 调用点形如 `BottomAppBarDefaults.exitAlwaysScrollBehavior()`
+    "exitAlwaysScrollBehavior": "ExperimentalMaterial3Api",
+    "enterAlwaysScrollBehavior": "ExperimentalMaterial3Api",
 }
 
 OPTIN_RE = re.compile(r"@OptIn\s*\(([^)]*)\)", re.DOTALL)
@@ -300,12 +324,28 @@ def find_functions(text: str) -> list[dict]:
     return funcs
 
 
-def used_symbols(body: str) -> set[str]:
-    """函数体里用到的实验性符号。"""
-    found = set()
+def required_optin(symbol: str) -> str:
+    """该符号需要哪个 opt-in 注解（顶层符号与成员函数两张表都查）。"""
+    return EXPERIMENTAL_SYMBOLS.get(symbol) or EXPERIMENTAL_MEMBER_CALLS[symbol]
+
+
+def used_symbols(body: str) -> dict[str, int]:
+    """函数体里用到的实验性符号 → 首次出现的下标。
+
+    - 顶层符号：`Sym(`，且前面**不能**是 `.` / 词字符（否则 `foo.Sym()` 会串味）；
+    - 成员函数：`.name(`，前面**必须**是 `.`。
+
+    返回 dict（而不是 set）是为了让调用方能算出行号报给用户。
+    """
+    found: dict[str, int] = {}
     for sym in EXPERIMENTAL_SYMBOLS:
-        if re.search(r"(?<![\w.])" + re.escape(sym) + r"\s*\(", body):
-            found.add(sym)
+        m = re.search(r"(?<![\w.])" + re.escape(sym) + r"\s*\(", body)
+        if m:
+            found[sym] = m.start()
+    for sym in EXPERIMENTAL_MEMBER_CALLS:
+        m = re.search(r"\.\s*" + re.escape(sym) + r"\s*\(", body)
+        if m:
+            found[sym] = m.start()
     return found
 
 
@@ -315,8 +355,8 @@ def check_text(text: str, label: str) -> list[tuple[int, str, str, str]]:
     if not funcs:
         return []
 
-    # 每个函数用到的实验性符号
-    usage: dict[int, set[str]] = {}
+    # 每个函数用到的实验性符号（dict：符号 → 首次下标）
+    usage: dict[int, dict[str, int]] = {}
     for idx, f in enumerate(funcs):
         if f["body_start"] is None:
             continue
@@ -354,7 +394,7 @@ def check_text(text: str, label: str) -> list[tuple[int, str, str, str]]:
             f = funcs[idx]
             need = usage[idx]
             # (a) 自己的注解覆盖了所需符号
-            if all(EXPERIMENTAL_SYMBOLS[s] in f["annotations"] for s in need):
+            if all(required_optin(s) in f["annotations"] for s in need):
                 opted_in.add(idx)
                 changed = True
                 continue
@@ -368,15 +408,13 @@ def check_text(text: str, label: str) -> list[tuple[int, str, str, str]]:
         if idx in opted_in:
             continue
         f = funcs[idx]
-        body = text[f["body_start"]: f["body_end"]]
-        for sym in sorted(usage[idx]):
-            ann = EXPERIMENTAL_SYMBOLS[sym]
+        for sym, offset in sorted(usage[idx].items()):
+            ann = required_optin(sym)
             if ann in f["annotations"]:
                 continue
-            mm = re.search(r"(?<![\w.])" + re.escape(sym) + r"\s*\(", body)
-            if not mm:
-                continue
-            line_no = text.count("\n", 0, f["body_start"] + mm.start()) + 1
+            # 行号直接用 used_symbols 记下的偏移算，避免再写一遍两套正则
+            # （上一版在这里重复了顶层符号的正则 ⇒ 成员函数连带漏报第二遍）。
+            line_no = text.count("\n", 0, f["body_start"] + offset) + 1
             problems.append((line_no, sym, ann, f["name"]))
     return problems
 
@@ -474,6 +512,31 @@ private fun Inner() {
 @Composable
 private fun UsesFromElsewhere() {
     AnotherFilesComposable()
+}
+""",
+            False,
+        ),
+        # 🔴 2026-09-20 新增：实验性**对象**的成员函数。
+        # 上面这组正例钉住「对象.方法()」形态 —— 这正是本脚本曾经漏报那一类
+        # （登记对象名则永远匹配不到，因为后面跟的是 `.` 不是 `(`）。
+        (
+            "漏 @OptIn 的『实验性对象的成员函数』",
+            """
+@Composable
+fun BadMemberCall() {
+    val behavior = BottomAppBarDefaults.exitAlwaysScrollBehavior()
+    val other = TopAppBarDefaults.topAppBarColors()
+}
+""",
+            True,
+        ),
+        (
+            "自己带 @OptIn 的成员函数调用",
+            """
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun GoodMemberCall() {
+    val behavior = BottomAppBarDefaults.exitAlwaysScrollBehavior()
 }
 """,
             False,
