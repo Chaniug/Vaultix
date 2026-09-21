@@ -71,7 +71,11 @@
 
 1. **KeePass 本地库层**——Vaultix 没有 KeePass 抽象，所有数据走 CipherDto 密文；强行引入会与既有 mapper/同步层冲突。
 2. **WebDAV / OneDrive 同步**——Vaultix 通过 Bitwarden REST API 同步，这两类是 Bastion 的多后端补丁。
-3. **浏览器扩展**——Bastion 的 `ExtensionsScreen` 实为「功能拓展聚合设置页」（剪贴板清理/通知栏验证器等），**并非真正的浏览器插件**；真正的浏览器表单填充由 AutofillService 承担。Vaultix 当前连 AutofillService 都没有，优先级应放在系统级自动填充而非扩展。
+3. **浏览器扩展**——Bastion 的 `ExtensionsScreen` 实为「功能拓展聚合设置页」（剪贴板清理/通知栏验证器等），**并非真正的浏览器插件**；真正的浏览器表单填充由 AutofillService 承担。
+   ⚠️ 2026-09-21 更正：原文此处写着「Vaultix 当前连 AutofillService 都没有」——**该结论已过期**
+   （与本文 §3 第 48 行「主体已落地」自相矛盾；且 `VaultixAutofillService` 早已是自动填充与通行密钥的主链路，
+   见 `.ai/issues/02-自动填充.md`）。**但"不应照搬 ExtensionsScreen"这个结论仍然成立**：
+   它的价值在于聚合 Bastion 多后端语义下的开关，Vaultix 单后端下没有对应物。
 4. **跨库去重服务**——Bastion 多后端合并产生的去重需求，Vaultix 单后端不存在。
 
 ---
