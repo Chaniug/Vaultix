@@ -1,0 +1,144 @@
+name: Prune Actions caches
+
+# 定期清理 GitHub Actions 缓存（2026-09-21 新增）。
+#
+# ## 为什么需要它
+#
+# 本仓库的 Actions 缓存长期贴着 **10 GB 上限**（实测曾达 10.5 GB / 93 条，
+# 其中 gradle-transforms 25 条吃 6.0 GiB、gradle-build-cache 27 条吃 2.1 GiB）。
+# 一旦触顶，GitHub 会**按 LRU 淘汰**最久未用的缓存 —— 后果是下一次构建
+# **冷启动**、明显变慢。与其被动等淘汰，不如主动、可控地清理。
+#
+# ## 策略（与 GitHub 自身的淘汰口径对齐）
+#
+# 删两类缓存的交集：
+#   1. **最久未访问**超过 N 天（默认 7，与 GitHub 的"7 天未用即回收"一致）；
+#   2. **不在**该缓存族最近的 K 条之内（默认 3）。
+# 第 2 条是保险：刚写入的切片缓存可能 `accessedAt` 还是旧的，被误删会让下一次构建白跑。
+#
+# ⚠️ 需要 `actions: write` 才能删缓存（`GITHUB_TOKEN` 默认没有，必须显式声明）。
+# ⚠️ 不删"所有"缓存：那等于每次清完都是冷启动，反而更慢 —— 目标是**腾出空间、保住热缓存**。
+
+on:
+  schedule:
+    # 每周一 03:00 UTC（北京时间 11:00），避开推送高峰
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+    inputs:
+      max_age_days:
+        description: 删除「超过这么多天未被访问」的缓存
+        required: false
+        default: '7'
+      keep_per_family:
+        description: 每个缓存族至少保留最近几条
+        required: false
+        default: '3'
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: actions-cache-prune
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO: ${{ github.repository }}
+      MAX_AGE_DAYS: ${{ inputs.max_age_days || '7' }}
+      KEEP_PER_FAMILY: ${{ inputs.keep_per_family || '3' }}
+    steps:
+      - name: Report usage before
+        run: |
+          gh api "repos/$REPO/actions/cache/usage" | tee /tmp/before.json
+          echo "### 清理前" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat /tmp/before.json >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      # 计算 + 执行都放在一个步骤里：中间结果只在本步骤内使用，拆开反而要落盘传递。
+      # heredoc 用**单引号** `<<'PY'`：确保 $ 不被 shell 展开（python 里用 os.environ 读环境变量）。
+      - name: Prune stale caches
+        run: |
+          set -euo pipefail
+          gh cache list --limit 100 --json id,key,createdAt,accessedAt,sizeInBytes > /tmp/caches.json
+          python3 - <<'PY'
+          import json, os, collections, subprocess, datetime
+
+          MAX_AGE_DAYS = int(os.environ.get("MAX_AGE_DAYS", "7"))
+          KEEP = int(os.environ.get("KEEP_PER_FAMILY", "3"))
+          caches = json.load(open("/tmp/caches.json"))
+
+          # 缓存族 = key 的稳定前缀。同一族的切片会不断新增，是空间占用的主要来源。
+          FAMILIES = (
+              "gradle-transforms", "gradle-build-cache", "gradle-home",
+              "gradle-dependencies", "gradle-wrapper-zips",
+              "gradle-generated-gradle-jars", "gradle-kotlin-dsl",
+              "gradle-instrumented-jars", "gradle-groovy-dsl",
+          )
+
+          def family(key):
+              for p in FAMILIES:
+                  if key.startswith(p):
+                      return p
+              return "other"
+
+          now = datetime.datetime.now(datetime.timezone.utc)
+          cutoff = now - datetime.timedelta(days=MAX_AGE_DAYS)
+
+          def parse(ts):
+              if not ts:
+                  return None
+              try:
+                  return datetime.datetime.fromisoformat(ts.replace("Z", "+00:00"))
+              except ValueError:
+                  return None
+
+          groups = collections.defaultdict(list)
+          for c in caches:
+              groups[family(c["key"])].append(c)
+
+          doomed, freed = [], 0
+          for fam, items in groups.items():
+              items.sort(key=lambda c: c.get("createdAt") or "", reverse=True)
+              protected = {c["id"] for c in items[:KEEP]}
+              for c in items:
+                  if c["id"] in protected:
+                      continue
+                  accessed = parse(c.get("accessedAt"))
+                  if accessed is not None and accessed < cutoff:
+                      doomed.append(c)
+                      freed += c.get("sizeInBytes") or 0
+
+          print(f"共 {len(caches)} 条，拟删 {len(doomed)} 条，约 {freed / 1048576:.0f} MiB")
+          print(f"（口径：未访问超过 {MAX_AGE_DAYS} 天，且不在每族最近 {KEEP} 条内）")
+
+          ok = fail = 0
+          for c in doomed:
+              r = subprocess.run(["gh", "cache", "delete", str(c["id"])], capture_output=True)
+              if r.returncode == 0:
+                  ok += 1
+              else:
+                  fail += 1
+          print(f"删除成功 {ok}，失败 {fail}")
+
+          summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary:
+              with open(summary, "a", encoding="utf-8") as fh:
+                  fh.write(f"\n### 本次清理\n\n- 缓存总数：{len(caches)}\n")
+                  fh.write(f"- 删除：{ok} 条（失败 {fail}）\n")
+                  fh.write(f"- 释放：约 {freed / 1048576:.0f} MiB\n")
+          PY
+
+      - name: Report usage after
+        if: always()
+        run: |
+          gh api "repos/$REPO/actions/cache/usage" | tee /tmp/after.json
+          echo "### 清理后" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat /tmp/after.json >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
