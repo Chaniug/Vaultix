@@ -77,6 +77,7 @@ import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.autofill.AutofillLogger
+import io.vaultix.vaultix.autofill.match.UriMatcher
 import io.vaultix.vaultix.passkey.CredentialProviderIntentUtils.consumeUserPreVerified
 import io.vaultix.vaultix.session.ActiveVaultStore
 import io.vaultix.vaultix.ui.theme.VaultixTheme
@@ -245,10 +246,33 @@ class PasskeyCreateActivity : FragmentActivity() {
     private fun loadLogins(vaultId: String) {
         lifecycleScope.launch(Dispatchers.IO) {
             val items = runCatching { itemRepository.observeItems(vaultId).first() }.getOrDefault(emptyList())
+            // ⚠️ 2026-09-21 用户反馈：「选取密码条目的时候还需要我自己滑动查找，有点费力」。
+            // 此前这里是 `items.filter { it.type == Login }` —— **全库登录条目平铺**：
+            // 不排序、不预选，库一大就得自己翻半天。
+            // 现在按「与 RP 同站」重排：**匹配项置顶**，并**默认预选第一条匹配**
+            // （与 Bitwarden 的手感一致：多数情况直接点「创建」即可，不必翻列表）。
+            val logins = items.filter { it.type == VaultItemType.Login }
+                .sortedByDescending { it.matchesRpId(rpId) }
+            // 已有选择（或换库前选过且仍存在）就保留，避免把用户的选择覆盖掉。
+            val preselected = selectedLoginId?.takeIf { id -> logins.any { it.id == id } }
+                ?: logins.firstOrNull { it.matchesRpId(rpId) }?.id
             withContext(Dispatchers.Main) {
-                loginCandidates.value = items.filter { it.type == VaultItemType.Login }
+                loginCandidates.value = logins
+                if (preselected != null) selectedLoginId = preselected
             }
         }
+    }
+
+    /**
+     * 该条目是否与本请求的 RP「同站」（用于排序与预选，**不是**授权门）。
+     *
+     * ⚠️ [UriMatcher.sameSite] 的语义是**宽容**的：任一侧为 null/空白即返回 `true`
+     * （它服务的是自动填充那种"宁可多列不可漏列"的场景）。所以这里**必须先挡空值** ——
+     * 否则一个没填网址的条目也会被算作"匹配"，排序与预选立刻失去意义。
+     */
+    private fun VaultItem.matchesRpId(rpId: String): Boolean {
+        if (rpId.isBlank()) return false
+        return uris.any { it.uri.isNotBlank() && UriMatcher.sameSite(it.uri, rpId) }
     }
 
     private fun showUi() {
@@ -483,6 +507,8 @@ private fun PasskeyCreateSheet(
 ) {
     var vaultExpanded by remember { mutableStateOf(false) }
     var loginExpanded by remember { mutableStateOf(false) }
+    // 条目搜索关键字（2026-09-21 新增：用户反馈「还得自己滑动查找，有点费力」）。
+    var loginQuery by remember { mutableStateOf("") }
 
     Box(
         modifier = Modifier
@@ -528,21 +554,54 @@ private fun PasskeyCreateSheet(
                 }
 
                 if (!createNewLogin) {
+                    // ⚠️ 2026-09-21：由「只读下拉」改为「可搜索下拉」。
+                    // 列表已由调用方按 RP 同站匹配重排（匹配项在最前）**并预选**，
+                    // 这里再叠一层关键字过滤 ⇒ 库大时也能一步定位，不必滑动翻找。
+                    val query = loginQuery.trim()
+                    val filtered = if (query.isBlank()) {
+                        logins
+                    } else {
+                        logins.filter {
+                            it.title.contains(query, ignoreCase = true) ||
+                                it.username.contains(query, ignoreCase = true)
+                        }
+                    }
                     ExposedDropdownMenuBox(expanded = loginExpanded, onExpandedChange = { loginExpanded = it }) {
                         OutlinedTextField(
-                            value = logins.firstOrNull { it.id == selectedLoginId }
-                                ?.let { it.title.ifBlank { it.username } }
-                                .orEmpty(),
-                            onValueChange = {},
-                            readOnly = true,
+                            // 展开时显示关键字（可编辑），收起时回显当前选择：一个控件兼作
+                            // 「搜索框」与「已选值展示」，避免在窄对话框里再挤一行。
+                            value = if (loginExpanded) {
+                                loginQuery
+                            } else {
+                                logins.firstOrNull { it.id == selectedLoginId }
+                                    ?.let { it.title.ifBlank { it.username } }
+                                    .orEmpty()
+                            },
+                            onValueChange = { loginQuery = it; loginExpanded = true },
+                            singleLine = true,
                             label = { Text(stringResource(R.string.passkey_create_choose_login)) },
+                            placeholder = { Text(stringResource(R.string.items_search_hint)) },
                             modifier = Modifier.menuAnchor().fillMaxWidth(),
                         )
-                        ExposedDropdownMenu(expanded = loginExpanded, onDismissRequest = { loginExpanded = false }) {
-                            logins.forEach { login ->
+                        ExposedDropdownMenu(expanded = loginExpanded, onDismissRequest = {
+                            loginExpanded = false
+                            loginQuery = ""
+                        }) {
+                            if (filtered.isEmpty()) {
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.items_search_empty)) },
+                                    onClick = {},
+                                    enabled = false,
+                                )
+                            }
+                            filtered.forEach { login ->
                                 DropdownMenuItem(
                                     text = { Text(login.title.ifBlank { login.username }) },
-                                    onClick = { onLoginSelected(login.id); loginExpanded = false },
+                                    onClick = {
+                                        onLoginSelected(login.id)
+                                        loginExpanded = false
+                                        loginQuery = ""
+                                    },
                                 )
                             }
                         }
