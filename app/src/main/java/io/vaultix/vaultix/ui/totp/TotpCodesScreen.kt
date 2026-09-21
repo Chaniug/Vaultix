@@ -687,6 +687,56 @@ private data class TotpRowActions(
     val codesHidden: Boolean,
 )
 
+/**
+ * 屏幕上要显示的验证码串（隐藏偏好打开时只留前几位）。
+ *
+ * ⚠️ **先遮罩、再分组**：反过来会把 [groupCode] 插进去的空格也算进长度，
+ * 保留位数就会算错（6 位分组后是 `123 456` 共 7 字符 ⇒ 会多留一位）。
+ * ⚠️ 只影响**显示**；复制与自动填充一律用**原始**码（见 [TotpGenerator.mask] 的 KDoc）。
+ */
+private fun displayCode(code: String, hidden: Boolean): String =
+    if (hidden) groupCode(TotpGenerator.mask(code)) else groupCode(code)
+
+/**
+ * 「下一个码」预览要显示的串。
+ *
+ * ⚠️ 隐藏时**必须一起遮**：下一个码同样是**有效验证码**（一秒后就变成当前码），
+ * 只遮当前码等于没遮。
+ */
+private fun previewNextCode(code: String, hidden: Boolean): String =
+    if (hidden) TotpGenerator.mask(code) else code
+
+/**
+ * 构造「点一下复制」的动作。
+ *
+ * ★ 2026-09-21 修掉一处**谎报成功**：原实现是
+ * `{ if (isExpiring) onCopyNext() else onCopy(code) }` —— 临期分支**只调了提示回调**
+ * （调用点把它接到 Snackbar），**根本没有把码放进剪贴板**；配套算出来的 `codeToCopy`
+ * 因此成了**死变量**。用户点下去看到「已复制下一个验证码」，粘出来却是空的。
+ * ⇒ 正确顺序是「**先复制、再提示**」，且两者必须由**同一个判据**派生，否则还会劈叉。
+ *
+ * 抽成独立函数还有个次要好处：让 [TotpRow] 的 `if/else` 少两处，
+ * 守住 detekt `CyclomaticComplexMethod ≤14`。
+ *
+ * @param copyNextOnExpiring 用户偏好（设置页可关）。关掉时临期也复制当前码，**且不提示**
+ *   —— 因为压根没发生换码，提示会变成另一种谎报。
+ */
+private fun copyAction(
+    code: String,
+    nextCode: String,
+    isExpiring: Boolean,
+    copyNextOnExpiring: Boolean,
+    onCopy: (String) -> Unit,
+    onCopyNext: () -> Unit,
+): () -> Unit = if (copyNextOnExpiring && isExpiring) {
+    {
+        onCopy(nextCode)
+        onCopyNext()
+    }
+} else {
+    { onCopy(code) }
+}
+
 @Composable
 private fun TotpRow(
     entry: TotpEntry,
@@ -731,16 +781,10 @@ private fun TotpRow(
     //    概念在两处必须是同一个数**，否则会出现「码变红了但复制到的还是它」的错位。
     // HOTP 基于计数器、无时间衰减 ⇒ 不参与临期换码。
     val isExpiring = !isHotp && remaining <= TOTP_HOT_WARNING_SECONDS
-    val codeToCopy = if (isExpiring) nextCode else code
-    // 屏幕上要显示的那串（隐藏偏好打开时只留前几位）。
-    // ⚠️ **先遮罩、再分组**：反过来会把 [groupCode] 插进去的空格也算进长度，
-    //    保留位数就会算错（6 位分组后是 "123 456" 共 7 字符 ⇒ 会多留一位）。
-    // ⚠️ 只影响显示；[codeToCopy] / 自动填充仍用**原始**码 —— 见 [TotpGenerator.mask] 的 KDoc。
-    val shownCode = if (actions.codesHidden) {
-        groupCode(TotpGenerator.mask(code))
-    } else {
-        groupCode(code)
-    }
+    // 显示/复制/提示这三个量全部由**纯函数**派生（见文件末尾 [displayCode] /
+    // [previewNextCode] / [copyAction]）：① 判据只在一处成立，不会两处漂移；
+    // ② [TotpRow] 本身已经很长，直接在体里堆 if/else 会顶穿 detekt `CyclomaticComplexMethod ≤14`。
+    val shownCode = displayCode(code, actions.codesHidden)
     //
     // ⚠️ 2026-09-13 用户反馈「点击复制大家都知道的操作，不需要提示」—— 复制后的
     // `SnackbarHost` 提示已删除。它除了啰嗦，还会在悬浮胶囊底栏上方压出一块自带
@@ -751,20 +795,14 @@ private fun TotpRow(
     //    而剪贴板里进的是**下一个码** —— 没有反馈的话，粘出来的数字对不上眼前这一屏，
     //    只能读成"复制错了"。所以只在换码这一种情况下说明一句（[onCopyNext]）；
     //    非临期（绝大多数情况）仍然保持 2026-09-13 定下的「安静复制」，不提示。
-    // ★ 2026-09-21 修复一处**谎报成功**（本轮加开关时才发现的）：
-    //   此前这里是 `{ if (isExpiring) onCopyNext() else onCopy(code) }` —— 临期分支**只调了
-    //   提示回调**（调用点把它接到 Snackbar），**根本没有把码放进剪贴板**；而上面那个
-    //   `codeToCopy` 就此成了**死变量**。用户点下去看到「已复制下一个验证码」，粘出来却是空的。
-    //   ⇒ 正确顺序是「**先复制，再提示**」：复制用 [codeToCopy]，提示用 [onCopyNext]。
-    // 开关：`copyNextOnExpiring` 关掉时，临期也复制当前码（且不提示 —— 因为没发生换码）。
-    val copyNow: () -> Unit = {
-        if (actions.copyNextOnExpiring && isExpiring) {
-            onCopy(codeToCopy)
-            onCopyNext()
-        } else {
-            onCopy(code)
-        }
-    }
+    val copyNow: () -> Unit = copyAction(
+        code = code,
+        nextCode = nextCode,
+        isExpiring = isExpiring,
+        copyNextOnExpiring = actions.copyNextOnExpiring,
+        onCopy = onCopy,
+        onCopyNext = onCopyNext,
+    )
 
     // 卡片外框与密码 / 卡包列表完全一致（见 [EntryCard]）；内边距由卡片统一给 16dp。
     // 「长按选中 → 左滑 → 二次确认」包在外层：长按**选中**由 [EntryCard] 的 `onLongClick`
@@ -868,9 +906,7 @@ private fun TotpRow(
                     //    落到这个小码上，反而抢走整行手势。
                     // ⚠️ 隐藏时预览也要遮：否则"藏了当前码、亮着下一个码" —— 下一个码
                     // 同样是**有效验证码**，等于没藏（它会在一秒后变成当前码）。
-                    NextCodePreview(
-                        code = if (actions.codesHidden) TotpGenerator.mask(nextCode) else nextCode,
-                    )
+                    NextCodePreview(code = previewNextCode(nextCode, actions.codesHidden))
                 }
             }
             // 倒计时不再逐行画进度条：整页共用顶部的统一进度条（见 [UnifiedTotpProgressBar]），

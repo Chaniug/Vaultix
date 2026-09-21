@@ -211,9 +211,15 @@ private val KEEP_PATTERN = Regex(
  * `-v time` 的行格式：`MM-DD HH:MM:SS.mmm PID TID L TAG: msg`
  * ⇒ 第 5 个空白分隔字段（下标 4）是级别。取不到时返回空格（不匹配任何过滤器，等于不显示）。
  */
+/** `-v time` 行里「级别」字符所在的字段下标（见 [levelOf]）。 */
+private const val LOGCAT_LEVEL_FIELD_INDEX = 4
+
 private fun levelOf(line: String): Char {
     val parts = line.trim().split(' ')
-    return parts.getOrNull(4)?.firstOrNull()?.takeIf { it in "VDIWEF" } ?: ' '
+    return parts.getOrNull(LOGCAT_LEVEL_FIELD_INDEX)
+        ?.firstOrNull()
+        ?.takeIf { it in "VDIWEF" }
+        ?: ' '
 }
 
 @Composable
