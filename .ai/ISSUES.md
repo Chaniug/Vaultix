@@ -11,7 +11,7 @@
 |---|---|---|
 | [01-构建与环境](./issues/01-构建与环境.md) | 工程 / 构建 / CI / 工具链 / 环境 | 29 |
 | [02-自动填充](./issues/02-自动填充.md) | 自动填充（AutofillService 链路） | 17 |
-| [03-通行密钥与凭据提供商](./issues/03-通行密钥与凭据提供商.md) | 通行密钥 / Credential Provider / 凭据回灌 | 15 |
+| [03-通行密钥与凭据提供商](./issues/03-通行密钥与凭据提供商.md) | 通行密钥 / Credential Provider / 凭据回灌 | 16 |
 | [04-锁与解锁](./issues/04-锁与解锁.md) | 锁态模型 / 解锁 / 生物识别 / 密钥 | 8 |
 | [05-KDBX本地库](./issues/05-KDBX本地库.md) | KDBX 本地库 | 8 |
 | [06-界面与交互](./issues/06-界面与交互.md) | 界面 / 布局 / 交互动效 / 空态 / 图标 | 22 |
@@ -95,6 +95,7 @@
 | 43 | 🔴🔴 通行密钥 `clientDataJSON` 回传空占位符 → GitHub 注册失败 |
 | 49 | `rawId` 形态判别的 **UUID 陷阱** |
 | 108 | 🔴 注册「能保存、但网页端校验不出」根因：`attestationObject` 的 CBOR 键名写成 `attestationStatement`（规范要求 `attStmt`）—— **单测曾把错误键名锁为期望值** ⇒ 教训：协议结构断言必须升到字节级 + 反向锁 |
+| 109 | 🔴 注册响应被**浏览器整份拒收**：create 响应的 `response` 缺 `publicKeyAlgorithm`（Chromium 必读）—— **#108 曾把这条误排除**，因为没写清"在哪个解析层不是"（浏览器层 vs RP 层）|
 
 ### [04-锁与解锁](./issues/04-锁与解锁.md) — 锁态模型 / 解锁 / 生物识别 / 密钥
 
