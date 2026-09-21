@@ -16,9 +16,9 @@
  *     内容下移 8dp → 0dp；
  *   - 栏背景 = `surface` 的 alpha 在**收起后变 0**（内容从栏下方穿过 = 沉浸），
  *     且背景在 `statusBarsPadding()` **之前**绘制 → 覆盖状态栏区域（状态栏沉浸）；
- *   - 右侧动作按钮装在一个胶囊里（`RoundedCornerShape(50)`、`surface` 同色、
- *     `tonalElevation = 0`、`shadowElevation = 1.dp`），高度 48dp → 40dp（spring），
- *     收起时整组缩放 1.0 → 0.85；内容色在收起时向 `onSurfaceVariant` 过渡；
+ *   - 右侧动作按钮**不套容器**（2026-09-21 去掉了上游的 `Surface` 胶囊 —— 理由见
+ *     [VaultixExpressiveTopBar] 里那段说明）；收起时整组缩放 1.0 → 0.85，
+ *     内容色在收起时向 `onSurfaceVariant` 过渡；
  *   - 标题过长时按 `onTextLayout` 的溢出反馈自动缩小字号（下限 0.72）。
  * 本文件为独立实现（去掉了上游与搜索框、左右滑手势、标题点击展开耦合的部分 ——
  * Vaultix 的搜索态走独立的固定高度顶栏，见 `VaultixSearchTopAppBar`）。
@@ -26,10 +26,8 @@
  */
 package io.vaultix.vaultix.ui.common
 
-import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
@@ -41,7 +39,6 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -57,7 +54,6 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -114,12 +110,6 @@ private const val LINE_HEIGHT_RATIO = 1.2f
 /** 展开态 / 收起态栏高（不含状态栏内边距）。 */
 private val BAR_EXPANDED = 72.dp
 private val BAR_COLLAPSED = 48.dp
-
-/**
- * 动作胶囊圆角百分比（50 = 50%，即两端完全半圆的「药丸」形）。
- * `RoundedCornerShape(Int)` 的重载语义是**百分比**而非 dp（与 [io.vaultix.vaultix.ui.shell.VaultixBottomDock] 同款写法）。
- */
-private const val PILL_CORNER_PERCENT = 50
 
 /**
  * 滚动收起的**快照**进度：0 = 展开，1 = 收起（对齐 Bastion 的 `derivedStateOf` 写法）。
@@ -216,11 +206,6 @@ fun VaultixExpressiveTopBar(
         animationSpec = tween(ANIM_MS),
         label = "topbar_content_offset",
     )
-    val pillHeight by animateDpAsState(
-        targetValue = lerp(48.dp, 40.dp, collapseFraction),
-        animationSpec = spring(dampingRatio = 0.85f, stiffness = Spring.StiffnessMediumLow),
-        label = "topbar_action_pill_height",
-    )
     // 栏背景：展开不透明（并覆盖状态栏区域），收起透明 → 内容从下方穿过。
     val barBackgroundAlpha by animateFloatAsState(
         targetValue = if (collapseFraction < 0.5f) 1f else 0f,
@@ -306,77 +291,61 @@ fun VaultixExpressiveTopBar(
             }
         }
 
-        // 右侧动作胶囊：与栏背景同色同透明度 → 收起后按钮直接浮在内容上。
+        // 右侧动作按钮：**不套任何容器**。
+        //
+        // ⚠️ 2026-09-21 用户反馈：「（条目列表）往下滑动的时候，右上角三个按钮的胶囊是
+        // 深色的，很不好看，直接透明的呗。不要这些效果。」
+        //
+        // 此前这里是一个 `Surface` 胶囊（`shape` = 50% 药丸、`color` = `surface` 同色、
+        // `shadowElevation` = 1dp、`tonalElevation` = 0），且已经返工过两轮 ——
+        // 但两轮都只在调"阴影何时变"，没人注意到更隐蔽的那半：
+        //
+        // **收起态下胶囊的填充 `alpha` = 0（本意是"透明"），可 `shadowElevation` 照画。**
+        // 于是「全透明填充 + 1dp 阴影」合成出一圈**比背景更深的灰**
+        // —— 在浅色列表上这就是一个实实在在的"深色胶囊"，不是"阴影太淡"的问题。
+        // 用户报的"深色胶囊"就是这个：**不是颜色算错，是阴影在没有底色垫着的地方单独可见**。
+        //
+        // ⇒ 删掉整个容器（而不是把阴影调成 0）：用户要的是"按钮直接浮着"。
+        // 展开态按钮与栏底色同色（本来就是同一个 `surface`）、收起态栏与按钮一起全透明
+        // —— 这才与 [VaultixExpressiveTopBar] 的"收起即隐身"语义自洽。
+        // 按钮组保留 0.85 缩放与 `contentColor` 过渡：收起这件事仍有反馈，
+        // 且两者都不产生额外图层（不像 `Surface` 的阴影要重建轮廓缓存）。
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .offset(y = contentOffset),
             contentAlignment = Alignment.CenterEnd,
         ) {
-            Surface(
-                modifier = Modifier.height(pillHeight),
-                shape = RoundedCornerShape(PILL_CORNER_PERCENT),
-                color = MaterialTheme.colorScheme.surface.copy(alpha = barBackgroundAlpha),
-                tonalElevation = 0.dp,
-                // ── ⚠️ 2026-09-20 用户反馈：「右边三个按钮的胶囊颜色有一个加深的阴影，
-                // 阴影闪动的时候，页面会有掉帧卡顿的感觉。」
-                //
-                // 两个成因叠在一起，两个都必须改：
-                //
-                // **① 判据不一致 ⇒ 阴影与底色不同步。**
-                // 底色的判据是**动画后的**值（`barBackgroundAlpha` 自己由
-                // `barBackgroundAlpha` 的目标值驱动，见上），而这里原来用的是**原始的**
-                // `collapseFraction`。两者的翻转**不在同一时刻**：手指一越过阈值，
-                // `collapseFraction` 立刻跳变、阴影当场翻，而底色还要等 200ms 补间走完。
-                // 那 200ms 里"阴影没了但底色还在"（或反之），用户看到的就是**阴影在闪**。
-                // ⇒ 判据统一到动画后的值上，两者同步。
-                //
-                // **② `shadowElevation` 变一次就要重建一次渲染层。**
-                // M3 的 `Surface` 是用 `graphicsLayer{ shadowElevation }` + 阴影轮廓实现的，
-                // 高度值一动，阴影的几何就要重算、图层的轮廓缓存作废 ⇒ 掉帧
-                //（本项目 [VaultixBottomDock] 的 6dp 阴影是**恒定**的，从不参与动画，
-                //  所以那里没有这个问题 —— 这里才是那个例外）。
-                //
-                // ⇒ 阴影改为**恒定 1dp**：它只是给胶囊一点"浮起"的分隔感，
-                // 收起后内容本来就从下方穿过，缺这点阴影完全不影响可读性；
-                // 而恒定值意味着这层阴影在整个动画期间**一次都不用重算**。
-                shadowElevation = PILL_SHADOW,
-            ) {
-                CompositionLocalProvider(LocalContentColor provides contentColor) {
-                    Row(
-                        modifier = Modifier
-                            .graphicsLayer {
-                                val scale = 1f + (0.85f - 1f) * progress
-                                scaleX = scale
-                                scaleY = scale
-                            }
-                            .padding(horizontal = Spacing.xs),
-                        verticalAlignment = Alignment.CenterVertically,
-                        content = actions,
-                    )
-                }
+            CompositionLocalProvider(LocalContentColor provides contentColor) {
+                Row(
+                    modifier = Modifier
+                        .graphicsLayer {
+                            val scale = 1f + (0.85f - 1f) * progress
+                            scaleX = scale
+                            scaleY = scale
+                        }
+                        .padding(horizontal = Spacing.xs),
+                    verticalAlignment = Alignment.CenterVertically,
+                    content = actions,
+                )
             }
         }
     }
 }
 
 /**
- * 顶栏右侧为动作胶囊预留的宽度（避免长标题压到按钮上）。
+ * 顶栏右侧为动作按钮预留的宽度（避免长标题压到按钮上）。
  *
  * ⚠️ 2026-09-14：`144.dp` → **`156.dp`**。144dp 正好等于「3 个 48dp 触控目标」的宽度
- * （实测胶囊跨度 504px @3.5x = 144dp），也就是说标题**紧贴**胶囊边缘、两者之间没有任何余量 ——
- * 用户看到的「隔太近」正是这 0 余量。多出的 12dp 是留给标题与胶囊之间的呼吸位。
+ * （实测按钮组跨度 504px @3.5x = 144dp，当时外面还套着胶囊），也就是说标题**紧贴**
+ * 按钮边缘、两者之间没有任何余量 —— 用户看到的「隔太近」正是这 0 余量。
+ * 多出的 12dp 是留给标题与按钮之间的呼吸位。
+ *
+ * ⚠️ 2026-09-21 胶囊删除后这个值**不需要变**：按钮的 48dp 触控目标没动，
+ * 变的只是它们外面的那层壳。
  */
 private val ACTIONS_RESERVE = 156.dp
 
 /** 可点标题的圆角（dp）与箭头尺寸 —— 与 Bastion 的 8dp / 18-22dp 对齐。 */
 private const val TITLE_CLICK_CORNER_DP = 8
 private val TITLE_CHEVRON_SIZE = 20.dp
-
-/**
- * 动作胶囊的阴影高度（**恒定，不参与动画**）。
- *
- * ⚠️ 不要改回"随收起状态在 1dp/0dp 之间切"：那样阴影几何在动画期间要重算，
- * 会造成掉帧（详见 [VaultixExpressiveTopBar] 里 `shadowElevation` 处的说明）。
- */
-private val PILL_SHADOW = 1.dp
