@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  FileProvider 路径白名单（2026-09-21 新增，配合 AndroidManifest 里的
+  androidx.core.content.FileProvider 使用）。
+
+  用途单一：开发者模式「导出日志」把 txt 写到 cacheDir/dev_logs 后，
+  经此白名单换取可分享的 content:// URI。
+
+  ⚠️ 只开放这一个子目录，**不要**用 `<cache-path name="cache" path="." />`
+  这种把整个 cacheDir 暴露出去的写法 —— 那会把 WebView / 图片库等缓存的
+  内容也变成可外发资源（越权面变大，且完全没必要）。
+
+  ⚠️ `path` 末尾不带 `/`（匹配的是相对 cacheDir 的路径前缀）。
+  代码侧写文件必须落在 `cacheDir/dev_logs/` 下，出这个目录 getUriForFile 会直接抛异常。
+-->
+<paths>
+    <cache-path name="dev_logs" path="dev_logs/" />
+</paths>

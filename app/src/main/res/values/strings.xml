@@ -250,6 +250,22 @@
     <!-- 页脚 -->
     <string name="permission_footer">系统的权限开关始终以系统设置为准。这一页只是把「要什么、做什么用」摊开讲清楚。</string>
     <string name="group_about">关于</string>
+    <string name="action_close">关闭</string>
+    <!-- 开发者模式（仅 debug 构建可见，2026-09-21）。
+         ⚠️ 日志只含**本应用进程**的条目（Android 4.1+ 无 READ_LOGS 时只能读自己的），
+         跨进程/系统组件的日志仍须用 adb —— 界面上那句 scope_hint 就是讲这件事。 -->
+    <string name="group_developer">开发者</string>
+    <string name="developer_logs_entry">查看与导出日志</string>
+    <string name="developer_logs_entry_desc">排查问题时给开发者看（仅 debug 构建可见）</string>
+    <string name="developer_logs_title">开发者日志</string>
+    <string name="developer_logs_filter_all">全部</string>
+    <string name="developer_logs_filter_error">错误</string>
+    <string name="developer_logs_filter_warn">警告</string>
+    <string name="developer_logs_scope_hint">仅含本应用的日志。浏览器 / 系统组件的日志不在其中，需要接电脑用 adb 抓。</string>
+    <string name="developer_logs_loading">正在读取…</string>
+    <string name="developer_logs_empty">没有可用日志（本应用还没输出，或已被系统缓冲回收）</string>
+    <string name="developer_logs_export">导出并分享</string>
+    <string name="developer_logs_refresh">刷新</string>
     <string name="setting_auto_lock">自动锁定</string>
     <string name="setting_clipboard_clear">剪贴板清除</string>
     <string name="setting_screen_security">防截屏</string>

@@ -238,6 +238,23 @@
                     android:path="/s8Z1PBw9xUHOxihJdrGizMzPhb0=" />
             </intent-filter>
         </activity>
+
+        <!--
+          开发者模式「导出日志」的分享出口（2026-09-21 新增）。
+          ⚠️ authority 必须与代码里的 `"${packageName}.fileprovider"` 一致，否则 getUriForFile 抛
+            IllegalArgumentException（"Failed to find configured root"）。
+          ⚠️ grantUriPermissions 必须为 true，否则 ACTION_SEND 拿到了 URI 也读不到文件。
+          ⚠️ 暴露范围由 res/xml/file_paths.xml 白名单限定（只给 cacheDir/dev_logs）。
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 
 </manifest>

@@ -29,6 +29,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Contrast
 import androidx.compose.material.icons.filled.DarkMode
@@ -172,6 +173,9 @@ fun SettingsScreen(
     var showAutoLockDialog by rememberSaveable { mutableStateOf(false) }
     var showClipboardDialog by rememberSaveable { mutableStateOf(false) }
     var showAboutDialog by rememberSaveable { mutableStateOf(false) }
+    // 开发者日志对话框（2026-09-21）。⚠️ 状态本身不区分构建类型；**入口**才做 debug 门禁，
+    // 这样 release 包里既看不到入口、也不会多一条可达路径。
+    var showDeveloperLogs by rememberSaveable { mutableStateOf(false) }
 
     // 「检查更新」：一次手动检查，结论只活在这一次打开对话框期间。
     var showUpdateDialog by rememberSaveable { mutableStateOf(false) }
@@ -269,6 +273,11 @@ fun SettingsScreen(
                     showUpdateDialog = true
                 },
             )
+            // ★ 2026-09-21：开发者模式入口，**仅 debug 构建渲染**。
+            // release 包连入口都不出现 —— 不误导用户，也不多一条可达路径。
+            if (BuildConfig.DEBUG) {
+                DeveloperSection(onOpenLogs = { showDeveloperLogs = true })
+            }
             Spacer(Modifier.height(Spacing.xxl))
             // 底部留出叠层悬浮底栏的高度（顶部的让位见上方 Spacer(barPadding)）：
             // 底栏改成叠层后内容铺到屏幕底，最后一项不再被胶囊压住。
@@ -313,6 +322,9 @@ fun SettingsScreen(
                 }
             },
         )
+    }
+    if (showDeveloperLogs) {
+        DeveloperLogsDialog(onDismiss = { showDeveloperLogs = false })
     }
     if (showUpdateDialog) {
         UpdateCheckDialog(
@@ -642,6 +654,27 @@ private fun AboutSection(
             icon = { Icon(Icons.Filled.Info, contentDescription = null) },
             title = stringResource(R.string.about_license),
             onClick = onShowLicense,
+        )
+    }
+}
+
+/**
+ * 开发者组（**仅 debug 构建**渲染，2026-09-21）。
+ *
+ * 为什么单独成组、不并进「关于」：两者回答的是不同的问题 ——
+ * 「关于」答"这个 App 是什么"，「开发者」答"出问题时怎么办"。
+ * 混在一起会让"关于"里出现一个与元信息无关的可点项，且 release 包整组都会消失，
+ * 语义上分开更干净。
+ */
+@Composable
+private fun DeveloperSection(onOpenLogs: () -> Unit) {
+    SettingsGroupTitle(stringResource(R.string.group_developer))
+    SettingsGroupCard {
+        SettingsRow(
+            icon = { Icon(Icons.Filled.Build, contentDescription = null) },
+            title = stringResource(R.string.developer_logs_entry),
+            subtitle = stringResource(R.string.developer_logs_entry_desc),
+            onClick = onOpenLogs,
         )
     }
 }
