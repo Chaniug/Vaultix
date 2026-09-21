@@ -10,6 +10,10 @@ package io.vaultix.vaultix.ui.common
 
 import android.graphics.drawable.ColorDrawable
 import android.os.Build
+import android.view.View
+import android.view.ViewParent
+import android.view.Window
+import android.view.WindowInsetsController
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -43,6 +47,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.SideEffect
 // ⚠️ `val barAlpha by animateFloatAsState(...)` 的 `by` 需要这个扩展运算符才能解包 `State<Float>`；
 // 少它 ⇒ 编译器报 `Type 'State<Float>' has no method 'getValue(...)'`（看着像类型错，其实是缺 import）。
@@ -97,7 +102,7 @@ import io.vaultix.vaultix.ui.theme.Spacing
  * | 七 | **满宽薄栏 + alpha 硬切**（对齐列表页） | — | ✅ 定稿：未滚动不透明 / 滚动后 `alpha 0` |
  *
  * **第三轮为什么反而更糟**：胶囊四周留了白，恰好把 `Dialog` 窗口的**黑色背景**露出来。
- * 黑带从来不是栏的形状问题 —— 真根因在窗口层，见函数体内 [SideEffect] 上方那段说明。
+ * 黑带从来不是栏的形状问题 —— 真根因在窗口层，见 [Dialog] 内容里那段说明。
  * **满宽栏反而能盖住它**，这是"改成胶囊后黑带更明显"的全部原因。
  *
  * **第四轮为什么形状不成立**：`RoundedCornerShape(Int)` 是**百分比**语义。本壳里栏是
@@ -218,23 +223,60 @@ fun FullScreenDialogShell(
         //      它会在三键导航下把导航栏压暗 20%，在底部制造一条"半黑带"——正是用户截图里
         //      底部那条。关掉后底部与顶部对称。（`isStatusBarContrastEnforced` 在 API 35+
         //      已是 no-op，无须碰。）
-        // ⚠️ 必须在 Dialog 内容里取 parent（这时 parent 才是这扇 dialog 窗口）。
+        // ⚠️ 取本扇 Dialog 自己的窗口：Compose 的 `DialogLayout` 是 View 且实现了
+        // `DialogWindowProvider`，沿 view 树向上一定能命中它。
+        // ⚠️ 用"逐级向上找"而不是 `view.parent as? DialogWindowProvider` —— 后者只要中间多一层
+        // 包装 ViewGroup 就返回 null，整段系统栏逻辑会**静默失效**（不报错、只是图标一直浅色）。
+        val dialogWindow = findDialogWindow(view.parent)
+
         SideEffect {
-            val dialogWindow = (view.parent as? DialogWindowProvider)?.window ?: return@SideEffect
+            val window = dialogWindow ?: return@SideEffect
             // ⚠️ `@Suppress("DEPRECATION")` 只压**局部**（不是整个 `SideEffect`）：
             // 作用域精确等于对那个旧 API 的调用，其余代码的废弃警告仍能正常报出来
             // —— 这次的教训正是"用 suppress 把'这行已不生效'的信号一起压掉了"。
             @Suppress("DEPRECATION") // API 35 起 deprecated（edge-to-edge 语义变化），但它仍是
                                      // **唯一**能真正改 Window 层背景的 API，覆盖 minSdk 26~37 全区间。
             val backgroundDrawable = ColorDrawable(surfaceArgb)
-            dialogWindow.setBackgroundDrawable(backgroundDrawable)
+            window.setBackgroundDrawable(backgroundDrawable)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                dialogWindow.isNavigationBarContrastEnforced = false
+                window.isNavigationBarContrastEnforced = false
             }
-            WindowCompat.getInsetsController(dialogWindow, view).apply {
-                isAppearanceLightStatusBars = lightSurface
-                isAppearanceLightNavigationBars = lightSurface
+        }
+
+        // ── ⚠️ 2026-09-21 第八轮：状态栏 / 导航栏的**图标深浅**要补设第二次 ──
+        //
+        // 用户反馈：「密码条目界面通知栏的颜色是正确的，但点开编辑后，通知栏和底部的颜色都不对，
+        // 感觉有一层白色遮住了这个。」逐像素取证（`.workbuddy/memory/2026-09-21.md`）结论：
+        //   - 编辑页状态栏**底色**与详情页完全一致（都是 `surface` = `#FBF7FF`）；
+        //   - 但**前景图标**是"比底色更白"的浅色（归一化放大 4× 后可见）⇒ 系统栏图标被当成
+        //     "深色背景"处理（`isAppearanceLightStatusBars = false`），白图标压白底，
+        //     看起来就是"一层白盖住了"。
+        //
+        // 为什么单次设置不生效：**Dialog 窗口在 `show()` / 首帧布局时会重新应用一整套系统栏外观，
+        // 把我们在 composition 阶段设的值覆盖掉**（本 App 的 Dialog 主题
+        // `android:Theme.Material.Light.NoActionBar` 未写 `windowLightStatusBar` ⇒ 默认浅色图标）。
+        // 佐证：Compose 官方文档与社区范例都是在 `LaunchedEffect` 里、用 `window.decorView` 设，
+        // 而不是在 composition 阶段用内容 view 设（见 `2026-09-21.md` 的检索记录）。
+        //
+        // ⇒ 用**三处幂等补设**覆盖所有时序（设了不会错，只是重复）：
+        //   ① 本效果立即设一次（key 含 window 与 lightSurface，主题切换会重设）；
+        //   ② `decorView.post {}` —— 等本帧布局跑完再设（此时窗口外观已应用完）；
+        //   ③ `OnAttachStateChangeListener` —— 窗口真正 attach 时再设一次。
+        // ⚠️ 判据仍是"**我们实际画出来的底色**"（`surface` 的亮度），不是系统深色模式 ——
+        // 本 App 有自己的主题设置，浅色 App + 深色系统时按系统判会得到相反的结论。
+        DisposableEffect(dialogWindow, lightSurface) {
+            val window = dialogWindow ?: return@DisposableEffect onDispose { }
+            window.setSystemBarIconAppearance(lightSurface)
+            val decor = window.decorView
+            val listener = object : View.OnAttachStateChangeListener {
+                override fun onViewAttachedToWindow(v: View) =
+                    window.setSystemBarIconAppearance(lightSurface)
+
+                override fun onViewDetachedFromWindow(v: View) = Unit
             }
+            decor.addOnAttachStateChangeListener(listener)
+            decor.post { window.setSystemBarIconAppearance(lightSurface) }
+            onDispose { decor.removeOnAttachStateChangeListener(listener) }
         }
         Surface(modifier = Modifier.fillMaxSize()) {
             // ── 2026-09-16：从 `Column`（标题栏 / 正文 / 底部条三者平铺、互不重叠）
@@ -577,3 +619,47 @@ private val ACTION_BAR_HEIGHT = BUTTON_MIN_HEIGHT + BAR_VERTICAL_PADDING * 2
  * 保证编辑壳与那两页观感同步：滚过阈值时栏与内容同一拍隐身。
  */
 private const val SHELL_BAR_FADE_MS = 200
+
+/**
+ * 沿 view 树逐级向上找**本扇 Dialog 的窗口**。
+ *
+ * Compose 的 Dialog 把内容挂在 `DialogLayout` 上，而
+ * `DialogLayout extends AbstractComposeView implements DialogWindowProvider`
+ * （已核对 compose-ui 1.11.0-beta02 / 1.11.2 的字节码）⇒ 向上找一定能命中它。
+ *
+ * ⚠️ **不要**改回 `view.parent as? DialogWindowProvider`：那依赖"内容 view 的**直接**父级
+ * 恰好是 DialogLayout"。一旦中间多插一层包装 ViewGroup，表达式就返回 `null`
+ * ⇒ 整段系统栏逻辑**静默失效**（不崩溃、不报错，只是状态栏图标一直是浅色）。
+ * 这正是第八轮"图标白到看不见"能被藏住这么久的原因。
+ */
+private tailrec fun findDialogWindow(node: ViewParent?): Window? = when (node) {
+    is DialogWindowProvider -> node.window
+    is View -> findDialogWindow(node.parent)
+    else -> null
+}
+
+/**
+ * 设置本窗口的状态栏 / 导航栏**图标深浅**。
+ *
+ * @param lightBars `true` = 系统栏背景是**浅色** ⇒ 图标要用**深色**
+ *   （即 `APPEARANCE_LIGHT_STATUS_BARS` 的语义：声明"栏是亮的"）。
+ *
+ * ⚠️ 两条路径都走，覆盖 minSdk 26~37：
+ *   - API 30+ 直接调 [WindowInsetsController.setSystemBarsAppearance]（最直接、无兼容层歧义）；
+ *   - 其余版本走 [WindowCompat] 的兼容实现（内部落到 `SYSTEM_UI_FLAG_LIGHT_*`）。
+ *
+ * ⚠️ 控制器一律传 [Window.getDecorView]（**不是**内容 view）—— 与官方文档及社区范例
+ * （Compose Unstyled 的 Dialog 文档、ProAndroidDev 的 edge-to-edge Dialog 一文）一致；
+ * 传内容 view 在一些实现里会落到只影响该 view 的分支上。
+ */
+private fun Window.setSystemBarIconAppearance(lightBars: Boolean) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        val mask = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
+            WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+        insetsController?.setSystemBarsAppearance(if (lightBars) mask else 0, mask)
+    }
+    WindowCompat.getInsetsController(this, decorView).apply {
+        isAppearanceLightStatusBars = lightBars
+        isAppearanceLightNavigationBars = lightBars
+    }
+}
