@@ -159,10 +159,26 @@ class WebAuthnTest {
         val embedded = attObj.copyOfRange(30, 30 + authData.size)
         assertThat(embedded).isEqualTo(authData)
 
-        // create 响应可构造且含 attestationObject
-        val createJson = WebAuthn.buildCreateResponseJson(key.credentialId, ByteArray(8), attObj)
+        // create 响应可构造，且**必含浏览器要求的字段**
+        val createJson = WebAuthn.buildCreateResponseJson(
+            credentialId = key.credentialId,
+            clientDataJson = ByteArray(8),
+            attestationObject = attObj,
+            authenticatorData = authData,
+            publicKeySpki = key.publicKeySpki,
+            algorithm = WebAuthn.COSE_ALG_ES256,
+        )
         assertThat(createJson).contains("\"attestationObject\"")
         assertThat(createJson).contains("\"type\":\"public-key\"")
+        // ★ 2026-09-21 真机回归：缺这几项会被 Chromium 直接拒收
+        //   （MojoClassFromJSON failed to convert JSON: field missing or invalid: publicKeyAlgorithm）
+        assertThat(createJson).contains("\"publicKeyAlgorithm\":-7")
+        assertThat(createJson).contains("\"publicKey\":\"")
+        assertThat(createJson).contains("\"authenticatorData\":\"")
+        assertThat(createJson).contains("\"transports\":[\"internal\",\"hybrid\"]")
+        // publicKey 必须是 DER SPKI 的 base64url（不是原始 x||y）
+        val pkB64 = createJson.substringAfter("\"publicKey\":\"").substringBefore("\"")
+        assertThat(java.util.Base64.getUrlDecoder().decode(pkB64)).isEqualTo(key.publicKeySpki)
     }
 
     @Test
@@ -373,14 +389,28 @@ class WebAuthnTest {
         val browserJson = WebAuthn.buildCreateClientDataJson(
             challenge = challenge, origin = "https://example.com", androidPackageName = null,
         )
-        val browser = WebAuthn.buildCreateResponseJson(key.credentialId, browserJson, attObj)
+        val browser = WebAuthn.buildCreateResponseJson(
+            credentialId = key.credentialId,
+            clientDataJson = browserJson,
+            attestationObject = attObj,
+            authenticatorData = authData,
+            publicKeySpki = key.publicKeySpki,
+            algorithm = WebAuthn.COSE_ALG_ES256,
+        )
         assertThat(browser).doesNotContain("\"clientDataJSON\":\"\"")
 
         // 原生流程：可带 androidPackageName
         val nativeJson = WebAuthn.buildCreateClientDataJson(
             challenge = challenge, origin = "https://example.com", androidPackageName = "com.example.app",
         )
-        val native = WebAuthn.buildCreateResponseJson(key.credentialId, nativeJson, attObj)
+        val native = WebAuthn.buildCreateResponseJson(
+            credentialId = key.credentialId,
+            clientDataJson = nativeJson,
+            attestationObject = attObj,
+            authenticatorData = authData,
+            publicKeySpki = key.publicKeySpki,
+            algorithm = WebAuthn.COSE_ALG_ES256,
+        )
         // 回传的是 base64url，需反解比对（明文不会出现在 JSON 里）
         val nativeB64 = native.substringAfter("\"clientDataJSON\":\"").substringBefore("\"")
         assertThat(nativeB64).isNotEmpty()

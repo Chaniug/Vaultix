@@ -43,7 +43,12 @@ import java.util.UUID
 /** WebAuthn / FIDO 常量与纯函数。全部抛 [IllegalArgumentException] / [WebAuthnException] 指明失败原因。 */
 object WebAuthn {
 
-    /** 标识使用的曲线（目前固定 P-256 / secp256r1）。 */
+    /**
+     * 标识使用的曲线（目前固定 P-256 / secp256r1）。
+     *
+     * ⚠️ 2026-09-21：它同时是 create 响应里 **`publicKeyAlgorithm` 字段的取值**（整数 -7）。
+     * 缺该字段会被 Chromium 直接拒收整份响应，见 [buildCreateResponseJson] 的 KDoc。
+     */
     const val COSE_ALG_ES256: Int = -7
 
     // ---- WebAuthn / FIDO2 / CBOR / COSE 协议常量（集中定义，避免散落魔法数）----
@@ -377,6 +382,8 @@ object WebAuthn {
             privateKeyPkcs8 = pkcs8,
             publicX = fieldToBytes(w.affineX),
             publicY = fieldToBytes(w.affineY),
+            // DER SubjectPublicKeyInfo —— create 响应的 `publicKey` 字段要的就是它。
+            publicKeySpki = pub.encoded,
         )
     }
 
@@ -709,11 +716,41 @@ object WebAuthn {
         return sb.toString()
     }
 
-    /** 组装 create 响应 JSON（字段集与 [buildGetResponseJson] 同口径）。 */
+    /**
+     * 组装 create 响应 JSON（PublicKeyCredential 的 `response` 形态）。
+     *
+     * ## ⚠️ 2026-09-21 真机根因修复：`response` 里少字段会让**浏览器直接拒收**
+     *
+     * 现场（Edge / Chromium + console.cloud.tencent.com 注册通行密钥）：
+     * ```
+     * CredentialManager: Final credential received from: …VaultixCredentialProviderService   ← 我们这边全对
+     * E chromium: [ERROR:…/fido2credentialrequest_native_android.cc:59]
+     *     MojoClassFromJSON failed to convert JSON: field missing or invalid: publicKeyAlgorithm
+     * E cr_ChromiumWebauthn: [CredManHelper] Failed to convert response from CredMan to Mojo object
+     * ```
+     * ⇒ **不是"我们失败了"，是"我们回的 JSON 不完整"**。此前 `response` 只有
+     * `clientDataJSON` + `attestationObject` 两项，而 Chromium 解析
+     * `AuthenticatorAttestationResponse` 时**必读 `publicKeyAlgorithm`**。
+     *
+     * 字段集现对齐 Bastion（`reference/bastion/.../passkey/PasskeyCreateActivity.kt`
+     * 的响应构造，一份跑通过的生产实现）：
+     * - `publicKeyAlgorithm`：COSE 算法标识（**int**，ES256 = -7）—— Chromium **必需**；
+     * - `publicKey`：公钥的 **DER SubjectPublicKeyInfo** 再 base64url（[GeneratedKey.publicKeySpki]）；
+     * - `authenticatorData`：base64url（与 attestationObject 内那份同源）；
+     * - `transports`：`["internal","hybrid"]` —— 平台内置 + 手机作为混合认证器，
+     *   与 Bitwarden / Bastion 同口径（RP 会把这份清单存为该凭据的可用传输方式）。
+     *
+     * ⚠️ 新增的四个参数**刻意不给默认值**：少了任何一个，浏览器都会拒收，
+     * 而那种失败发生在**调用方看不见的另一侧**（Chromium），极难回溯。
+     * 让编译器强迫每个调用点显式提供，是防这一类"静默不完整"的唯一可靠手段。
+     */
     fun buildCreateResponseJson(
         credentialId: ByteArray,
         clientDataJson: ByteArray,
         attestationObject: ByteArray,
+        authenticatorData: ByteArray,
+        publicKeySpki: ByteArray,
+        algorithm: Int,
     ): String {
         val id = base64Url(credentialId)
         val sb = StringBuilder()
@@ -725,6 +762,11 @@ object WebAuthn {
         sb.append(",\"response\":{")
         sb.append("\"clientDataJSON\":").append(quote(base64Url(clientDataJson)))
         sb.append(",\"attestationObject\":").append(quote(base64Url(attestationObject)))
+        // ⚠️ 以下四项缺一不可，见上方 KDoc 的真机现场。
+        sb.append(",\"authenticatorData\":").append(quote(base64Url(authenticatorData)))
+        sb.append(",\"publicKeyAlgorithm\":").append(algorithm)
+        sb.append(",\"publicKey\":").append(quote(base64Url(publicKeySpki)))
+        sb.append(",\"transports\":[\"internal\",\"hybrid\"]")
         sb.append("}")
         sb.append(",\"clientExtensionResults\":{}")
         sb.append("}")
@@ -771,13 +813,24 @@ object WebAuthn {
         val privateKeyPkcs8: ByteArray,
         val publicX: ByteArray,
         val publicY: ByteArray,
+        /**
+         * 公钥的 **DER SubjectPublicKeyInfo**（= `PublicKey.encoded`）。
+         *
+         * 用途单一但不可省：Credential Manager 的 create 响应里 `response.publicKey` 必须是
+         * 这一形态（WebAuthn 的 `AuthenticatorAttestationResponse.getPublicKey()` 就定义为
+         * DER SPKI）。2026-09-21 之前该响应根本没有 `publicKey` 字段，浏览器解析即失败。
+         */
+        val publicKeySpki: ByteArray,
     ) {
         override fun equals(other: Any?): Boolean =
             other is GeneratedKey && credentialId.contentEquals(other.credentialId) &&
                 privateKeyPkcs8.contentEquals(other.privateKeyPkcs8) &&
-                publicX.contentEquals(other.publicX) && publicY.contentEquals(other.publicY)
+                publicX.contentEquals(other.publicX) && publicY.contentEquals(other.publicY) &&
+                publicKeySpki.contentEquals(other.publicKeySpki)
+
         override fun hashCode(): Int =
             credentialId.contentHashCode() xor privateKeyPkcs8.contentHashCode() xor
-                publicX.contentHashCode() xor publicY.contentHashCode()
+                publicX.contentHashCode() xor publicY.contentHashCode() xor
+                publicKeySpki.contentHashCode()
     }
 }

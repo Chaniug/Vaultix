@@ -405,7 +405,17 @@ class PasskeyCreateActivity : FragmentActivity() {
                     val merged = (login?.fido2Credentials ?: emptyList()) + cred
                     itemRepository.updateFido2Credentials(vaultId, selectedLoginId!!, merged)
                 }
-                val responseJson = WebAuthn.buildCreateResponseJson(key.credentialId, clientDataBytes, attObj)
+                // ⚠️ 四个必需入参一项都不能少：浏览器（Chromium）解析
+                // `AuthenticatorAttestationResponse` 时会**必读** `publicKeyAlgorithm`，
+                // 缺了就直接拒收整份响应（真机现场见 WebAuthn.buildCreateResponseJson 的 KDoc）。
+                val responseJson = WebAuthn.buildCreateResponseJson(
+                    credentialId = key.credentialId,
+                    clientDataJson = clientDataBytes,
+                    attestationObject = attObj,
+                    authenticatorData = authData,
+                    publicKeySpki = key.publicKeySpki,
+                    algorithm = WebAuthn.COSE_ALG_ES256,
+                )
                 withContext(Dispatchers.Main) {
                     val resultIntent = Intent()
                     PendingIntentHandler.setCreateCredentialResponse(
