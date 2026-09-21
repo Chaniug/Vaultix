@@ -162,7 +162,14 @@ fun FullScreenDialogShell(
     destructive: (@Composable () -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    val view = LocalView.current
+    // ⚠️⚠️ 2026-09-21 第九轮：**这里不能取 `LocalView.current`**。
+    // 本函数体运行在**外层**（Activity）的 composition 里；在 `Dialog { }` 之前取的 `LocalView`
+    // 是 **Activity 的 view**，它的 parent 链里根本没有 `DialogLayout`
+    // ⇒ 窗口查找恒为 `null` ⇒ 整段系统栏逻辑（窗口背景 / 对比度遮罩 / **图标深浅**）
+    //    **从来没有执行过**。真机取证：编辑对话框窗口的 `mAttrs` 里连 `apr=` 这一行都没有
+    //    （`apr=LIGHT_STATUS_BARS` 缺失 ⇒ 图标是浅色 ⇒ 白图标压白底 = "一层白遮住"）。
+    // 取 Dialog 自己的 view 必须放到 `Dialog { }` 的内容里，见下面 [dialogView]。
+    //
     // ⚠️ 判「状态栏图标该用深色还是浅色」**不能看系统深色模式**，要看**我们实际画出来的底色**。
     // 2026-09-13 第三轮用户反馈：「状态栏沉浸的时候，**浅色模式下**状态栏的显示效果才有问题」
     // ——上一版我用的是 `isSystemInDarkTheme()`，而本 App 有**自己的主题设置**（浅色/深色/跟随系统
@@ -223,11 +230,14 @@ fun FullScreenDialogShell(
         //      它会在三键导航下把导航栏压暗 20%，在底部制造一条"半黑带"——正是用户截图里
         //      底部那条。关掉后底部与顶部对称。（`isStatusBarContrastEnforced` 在 API 35+
         //      已是 no-op，无须碰。）
-        // ⚠️ 取本扇 Dialog 自己的窗口：Compose 的 `DialogLayout` 是 View 且实现了
-        // `DialogWindowProvider`，沿 view 树向上一定能命中它。
-        // ⚠️ 用"逐级向上找"而不是 `view.parent as? DialogWindowProvider` —— 后者只要中间多一层
-        // 包装 ViewGroup 就返回 null，整段系统栏逻辑会**静默失效**（不报错、只是图标一直浅色）。
-        val dialogWindow = findDialogWindow(view.parent)
+        // ⚠️⚠️ 必须在 **Dialog 内容里**取 `LocalView`：这里才是 Dialog 自己的 composition，
+        // 取到的 view 挂在 `DialogLayout` 上（`DialogLayout extends AbstractComposeView
+        // implements DialogWindowProvider`）⇒ 向上找窗口一定能命中。
+        // 在外面取会拿到 **Activity 的** view，窗口查找恒为 null（第九轮踩的正是这个，见函数开头说明）。
+        val dialogView = LocalView.current
+        // ⚠️ 用"逐级向上找"而不是 `view.parent as? DialogWindowProvider`：后者只要中间多一层
+        // 包装 ViewGroup 就返回 null，同样会**静默失效**（不报错、只是图标一直浅色）。
+        val dialogWindow = findDialogWindow(dialogView.parent)
 
         SideEffect {
             val window = dialogWindow ?: return@SideEffect
