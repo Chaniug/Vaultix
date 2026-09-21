@@ -36,6 +36,8 @@ import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.ViewAgenda
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.NewReleases
+import androidx.compose.material.icons.filled.Numbers
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Password
 import androidx.compose.material.icons.filled.Policy
@@ -242,14 +244,20 @@ fun SettingsScreen(
             // ---- 关于（权限管理已并入，原「其他」组仅此一行）----
             AboutSection(
                 context = context,
-                // ⚠️ **只显示 versionName，不拼 versionCode**（2026-09-14 用户报告）。
-                // 原先拼成 `0.3.0 (3000)` / 旧版本是 `… (1)`，那个括号长得很像浏览器给
-                // 重复下载加的后缀，用户会以为「下载的文件名带了 (1)，装完版本号里也有 (1)」
-                // —— 两者其实毫无关系（前者是下载器加的，后者是 versionCode）。
-                // 而且 versionName 对 debug 包已带短 sha（`0.3.0-dev-abc1234`），
-                // 定位到具体代码绰绰有余；versionCode 是给系统判断新旧的，不是构建计数器，
-                // 摆在界面上只会再次引起同样的误读。
+                // ⚠️ **版本号这一行只放 versionName；内部版本号另起一行。**（2026-09-21 修订）
+                //
+                // 历史：2026-09-14 曾把两者拼成 `0.3.0 (3000)`，用户报告「那个括号长得很像
+                // 浏览器给重复下载加的后缀 (1)」⇒ 当时决定**只显示 versionName**。
+                // 2026-09-21 用户又要求「关于页内容丰富」，于是改回**展示** versionCode，
+                // 但**换一种呈现**：独立成行的「内部版本号」+ 标签。
+                // ⇒ 误读的成因是"括号 + 无标签"，不是"显示了 versionCode"本身；
+                //    标签化之后含义自明，那条原始担忧不再成立。
+                // ⚠️ 不要改回括号拼接（会重新触发 2026-09-14 的误读）。
                 versionName = BuildConfig.VERSION_NAME,
+                // `VERSION_CODE` = `X*1_000_000 + Y*1_000 + Z`（见 app/build.gradle.kts），
+                // 是**给系统判断新旧**用的，不是构建计数器；同一 VERSION 下的多个 dev 构建
+                // 它的值**相同**（区分构建要靠 versionName 里的短 sha）。
+                buildNumber = BuildConfig.VERSION_CODE,
                 onOpenPermissions = onOpenPermissions,
                 onShowLicense = { showAboutDialog = true },
                 // ⚠️ 每次点击都**先清掉上一次的结论**：结论是"一次性"的，
@@ -554,6 +562,7 @@ private fun VaultUnlockSection(
 private fun AboutSection(
     context: Context,
     versionName: String,
+    buildNumber: Int,
     onOpenPermissions: () -> Unit,
     onShowLicense: () -> Unit,
     onCheckUpdate: () -> Unit,
@@ -577,6 +586,29 @@ private fun AboutSection(
             subtitle = versionName,
         )
         SettingsDivider()
+        // ★ 2026-09-21 新增（用户要求"关于页内容丰富"）。
+        // ⚠️ **独立成行、带标签**，而不是拼进版本号的括号里 —— 见调用点那段注释：
+        // 2026-09-14 用户曾把 `0.3.0 (3000)` 的括号误读成下载器加的 (1) 后缀。
+        // 标签化之后含义自明，误读的成因就消失了。
+        SettingsRow(
+            icon = { Icon(Icons.Filled.Numbers, contentDescription = null) },
+            title = stringResource(R.string.about_build_number),
+            subtitle = buildNumber.toString(),
+        )
+        SettingsDivider()
+        // 渠道由构建类型推导：debug 包 = 预览版（CI 随 main 滚动发布），release = 正式版。
+        SettingsRow(
+            icon = { Icon(Icons.Filled.NewReleases, contentDescription = null) },
+            title = stringResource(R.string.about_channel),
+            subtitle = stringResource(
+                if (BuildConfig.DEBUG) {
+                    R.string.about_channel_preview
+                } else {
+                    R.string.about_channel_stable
+                },
+            ),
+        )
+        SettingsDivider()
         SettingsRow(
             icon = { Icon(Icons.Filled.Refresh, contentDescription = null) },
             title = stringResource(R.string.about_check_update),
@@ -589,6 +621,21 @@ private fun AboutSection(
             title = stringResource(R.string.about_source),
             subtitle = stringResource(R.string.about_github_url),
             onClick = { SystemSettingsIntents.openUrl(context, context.getString(R.string.about_github_url)) },
+        )
+        SettingsDivider()
+        // ★ 2026-09-21 新增：更新日志直达 Releases 页。
+        // 与「检查更新」的分工：那个回答"**有没有**新的"，这条负责"**新了什么**"
+        // （检查更新对话框里的更新说明是惰性的，得先点一次检查才看得到）。
+        SettingsRow(
+            icon = { Icon(Icons.Filled.NewReleases, contentDescription = null) },
+            title = stringResource(R.string.about_changelog),
+            subtitle = stringResource(R.string.about_changelog_desc),
+            onClick = {
+                SystemSettingsIntents.openUrl(
+                    context,
+                    context.getString(R.string.about_releases_url),
+                )
+            },
         )
         SettingsDivider()
         SettingsRow(

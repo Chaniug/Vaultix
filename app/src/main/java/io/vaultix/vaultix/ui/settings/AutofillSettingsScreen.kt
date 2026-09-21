@@ -107,6 +107,7 @@ fun AutofillSettingsScreen(
     val context = LocalContext.current
     val savePrompt by viewModel.autofillSavePrompt.collectAsStateWithLifecycle()
     val autoCopyTotp by viewModel.autoCopyTotp.collectAsStateWithLifecycle()
+    val copyNextOnExpiring by viewModel.totpCopyNextOnExpiring.collectAsStateWithLifecycle()
     val baseDomainMatch by viewModel.autofillBaseDomainMatch.collectAsStateWithLifecycle()
     val exactDomainOnly by viewModel.autofillExactDomainOnly.collectAsStateWithLifecycle()
     val fillAssistEnabled by viewModel.fillAssistEnabled.collectAsStateWithLifecycle()
@@ -197,6 +198,23 @@ fun AutofillSettingsScreen(
                         Switch(
                             checked = autoCopyTotp,
                             onCheckedChange = viewModel::setAutoCopyTotp,
+                        )
+                    },
+                )
+                SettingsDivider()
+                // ★ 2026-09-21 新增（用户要求把"临期复制下一个码"做成可开关的设置）。
+                // ⚠️ 与上一项的**区别**（两者容易被混为一谈）：
+                //   上一项 = 「**填充后**自动把验证码放进剪贴板」（由填充动作触发）；
+                //   本项   = 「你在**验证码页点复制**时，若当前码只剩几秒，改给下一个码」
+                //            —— 复制动作仍由你触发，不存在后台定时自动复制。
+                SettingsRow(
+                    icon = { Icon(Icons.Filled.Refresh, contentDescription = null) },
+                    title = stringResource(R.string.setting_copy_next_totp),
+                    subtitle = stringResource(R.string.setting_copy_next_totp_desc),
+                    trailing = {
+                        Switch(
+                            checked = copyNextOnExpiring,
+                            onCheckedChange = viewModel::setTotpCopyNextOnExpiring,
                         )
                     },
                 )

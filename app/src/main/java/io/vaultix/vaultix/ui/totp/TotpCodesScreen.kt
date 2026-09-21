@@ -248,6 +248,10 @@ fun TotpCodesScreen(
                     selectedIds = selectedIds - entry.itemId
                     viewModel.deleteTotp(entry)
                 },
+                // 两个**展示偏好**（2026-09-21）：隐藏数字 / 临期是否换码。
+                // 由 ViewModel 从偏好层下发，界面只消费、不自己读偏好。
+                codesHidden = state.codesHidden,
+                copyNextOnExpiring = state.copyNextOnExpiring,
                 onBind = { entry -> if (!entry.bound) binding = entry },
                 onCopy = viewModel::copyCode,
                 // 临期换码时提示一句（文案在 [TotpBody] 里解析；这里只给出口）。
@@ -261,6 +265,8 @@ fun TotpCodesScreen(
                 TotpOverlayTopBar(
                     collapseFraction = collapse,
                     embedded = embedded,
+                    codesHidden = state.codesHidden,
+                    onToggleCodesHidden = { viewModel.setCodesHidden(!state.codesHidden) },
                     onBack = onBack,
                     onSearch = { searchActive = true },
                     onImport = { importOpen = true },
@@ -364,6 +370,10 @@ private fun TotpBody(
      * 属于必须说明的例外）。
      */
     onCopyNext: () -> Unit,
+    /** 隐藏验证码数字（用户偏好，2026-09-21；只影响渲染）。 */
+    codesHidden: Boolean,
+    /** 临期是否改复制下一个码（用户偏好，2026-09-21）。 */
+    copyNextOnExpiring: Boolean,
 ) {
     when {
         // ⚠️ **必须排在空态前面**：冷启动 / 解锁后条目流还没发首帧时，
@@ -433,6 +443,8 @@ private fun TotpBody(
                         onBind = { onBind(entry) },
                         onCopy = onCopy,
                         onCopyNext = onCopyNext,
+                        copyNextOnExpiring = copyNextOnExpiring,
+                        codesHidden = codesHidden,
                     ),
                 )
             }
@@ -491,6 +503,8 @@ private fun TotpSelectionBar(
 private fun BoxScope.TotpOverlayTopBar(
     collapseFraction: Float,
     embedded: Boolean,
+    codesHidden: Boolean,
+    onToggleCodesHidden: () -> Unit,
     onBack: () -> Unit,
     onSearch: () -> Unit,
     onImport: () -> Unit,
@@ -499,6 +513,16 @@ private fun BoxScope.TotpOverlayTopBar(
         title = stringResource(R.string.totp_screen_title),
         collapseFraction = collapseFraction,
         modifier = Modifier.align(Alignment.TopCenter),
+        // ★ 2026-09-21：点标题「验证码」切换数字显隐（用户要求）。
+        // 复用组件自带的 `onTitleClick` / `titleExpanded` —— 列表页正是用它做「点库名展开快捷筛选」，
+        // 所以**箭头、点击、无障碍提示都是现成的**，与密码条目页是同一套交互词汇。
+        // ⚠️ 语义映射：`titleExpanded` = 「已展开（箭头朝上，可收起）」
+        //    ⇒ 展开时传 true、隐藏时传 false。
+        onTitleClick = onToggleCodesHidden,
+        titleExpanded = !codesHidden,
+        titleClickHint = stringResource(
+            if (codesHidden) R.string.totp_title_hint_show else R.string.totp_title_hint_hide,
+        ),
         navigationIcon = if (embedded) {
             null
         } else {
@@ -648,6 +672,19 @@ private data class TotpRowActions(
      * detekt `LongParameterList ≤8`。
      */
     val onCopyNext: () -> Unit,
+    /**
+     * 临期（剩余 ≤ 警示阈值）时是否改复制**下一个**码（用户偏好，2026-09-21 加开关）。
+     *
+     * ⚠️ 与 [onCopyNext] 分工不同：那个是"换码了，告知一声"的**回调**，本项是"要不要换"的**开关**。
+     */
+    val copyNextOnExpiring: Boolean,
+    /**
+     * 是否隐藏验证码数字（用户偏好，2026-09-21）。
+     *
+     * ⚠️ **只影响渲染**：`code` 的原始值仍会原样交给 [onCopy] / 自动填充 ——
+     * 这是"隐藏不影响复制与填充"这条验收项的落点。
+     */
+    val codesHidden: Boolean,
 )
 
 @Composable
@@ -695,6 +732,15 @@ private fun TotpRow(
     // HOTP 基于计数器、无时间衰减 ⇒ 不参与临期换码。
     val isExpiring = !isHotp && remaining <= TOTP_HOT_WARNING_SECONDS
     val codeToCopy = if (isExpiring) nextCode else code
+    // 屏幕上要显示的那串（隐藏偏好打开时只留前几位）。
+    // ⚠️ **先遮罩、再分组**：反过来会把 [groupCode] 插进去的空格也算进长度，
+    //    保留位数就会算错（6 位分组后是 "123 456" 共 7 字符 ⇒ 会多留一位）。
+    // ⚠️ 只影响显示；[codeToCopy] / 自动填充仍用**原始**码 —— 见 [TotpGenerator.mask] 的 KDoc。
+    val shownCode = if (actions.codesHidden) {
+        groupCode(TotpGenerator.mask(code))
+    } else {
+        groupCode(code)
+    }
     //
     // ⚠️ 2026-09-13 用户反馈「点击复制大家都知道的操作，不需要提示」—— 复制后的
     // `SnackbarHost` 提示已删除。它除了啰嗦，还会在悬浮胶囊底栏上方压出一块自带
@@ -705,7 +751,20 @@ private fun TotpRow(
     //    而剪贴板里进的是**下一个码** —— 没有反馈的话，粘出来的数字对不上眼前这一屏，
     //    只能读成"复制错了"。所以只在换码这一种情况下说明一句（[onCopyNext]）；
     //    非临期（绝大多数情况）仍然保持 2026-09-13 定下的「安静复制」，不提示。
-    val copyNow: () -> Unit = { if (isExpiring) onCopyNext() else onCopy(code) }
+    // ★ 2026-09-21 修复一处**谎报成功**（本轮加开关时才发现的）：
+    //   此前这里是 `{ if (isExpiring) onCopyNext() else onCopy(code) }` —— 临期分支**只调了
+    //   提示回调**（调用点把它接到 Snackbar），**根本没有把码放进剪贴板**；而上面那个
+    //   `codeToCopy` 就此成了**死变量**。用户点下去看到「已复制下一个验证码」，粘出来却是空的。
+    //   ⇒ 正确顺序是「**先复制，再提示**」：复制用 [codeToCopy]，提示用 [onCopyNext]。
+    // 开关：`copyNextOnExpiring` 关掉时，临期也复制当前码（且不提示 —— 因为没发生换码）。
+    val copyNow: () -> Unit = {
+        if (actions.copyNextOnExpiring && isExpiring) {
+            onCopy(codeToCopy)
+            onCopyNext()
+        } else {
+            onCopy(code)
+        }
+    }
 
     // 卡片外框与密码 / 卡包列表完全一致（见 [EntryCard]）；内边距由卡片统一给 16dp。
     // 「长按选中 → 左滑 → 二次确认」包在外层：长按**选中**由 [EntryCard] 的 `onLongClick`
@@ -770,7 +829,7 @@ private fun TotpRow(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 SelectionContainer(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = groupCode(code),
+                        text = shownCode,
                         // 对齐 Bastion `TotpCodeCard`（40sp / 普通模式 32–36sp）：
                         // 验证码是「一眼读出来照着敲」的数字，24sp 的 `headlineSmall` 在小屏上
                         // 得凑近看；**等宽**保证每秒刷新时数字宽度不抖，分组空格（[groupCode]）
@@ -807,7 +866,11 @@ private fun TotpRow(
                     // ⚠️ **不给 `SelectionContainer`**：这一块只在 5 秒内才有意义，
                     //    真正要选中复制走的是整行点击（见 [copyNow]）。包上会让长按选择
                     //    落到这个小码上，反而抢走整行手势。
-                    NextCodePreview(code = nextCode)
+                    // ⚠️ 隐藏时预览也要遮：否则"藏了当前码、亮着下一个码" —— 下一个码
+                    // 同样是**有效验证码**，等于没藏（它会在一秒后变成当前码）。
+                    NextCodePreview(
+                        code = if (actions.codesHidden) TotpGenerator.mask(nextCode) else nextCode,
+                    )
                 }
             }
             // 倒计时不再逐行画进度条：整页共用顶部的统一进度条（见 [UnifiedTotpProgressBar]），

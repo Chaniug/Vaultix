@@ -141,6 +141,25 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { preferences.setAutoCopyTotp(enabled) }
     }
 
+    /**
+     * 验证码**临期**（剩余 ≤ 警示阈值）时，复制的是**下一个**码（2026-09-21 新增开关）。
+     *
+     * ⚠️ 语义是「你点复制的那一刻给哪个码」，**不是**定时器自动写剪贴板
+     * （参考实现 Bastion 也是如此：其 `codeToCopy` 只决定"复制哪一个"）。
+     * 默认 `true` = 保持既有行为（该行为 2026-09-18 就在验证码页里了），
+     * 加开关只为让用户能关掉，不静默改变已有观感。
+     */
+    val totpCopyNextOnExpiring: StateFlow<Boolean> = preferences.totpCopyNextOnExpiring
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = true,
+        )
+
+    fun setTotpCopyNextOnExpiring(enabled: Boolean) {
+        viewModelScope.launch { preferences.setTotpCopyNextOnExpiring(enabled) }
+    }
+
     /** 域匹配：允许基域 / 子域名命中（默认开，对齐 Bitwarden）。 */
     val autofillBaseDomainMatch: StateFlow<Boolean> = preferences.autofillBaseDomainMatch
         .stateIn(

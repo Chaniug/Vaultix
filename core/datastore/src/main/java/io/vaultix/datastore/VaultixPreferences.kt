@@ -115,6 +115,25 @@ class VaultixPreferences @Inject constructor(
         val ITEMS_CARD_DISPLAY_MODE = stringPreferencesKey("items_card_display_mode")
         val ITEMS_SHOW_ICON = booleanPreferencesKey("items_show_icon")
 
+        /**
+         * 验证码页是否**隐藏数字**（2026-09-21 用户要求）。
+         *
+         * ⚠️ 这里存的是**当前状态本身**，不是"默认值" —— 用户明确要
+         * 「点击隐藏后，不再点击，重开 App 也保持隐藏」。
+         * 参考实现 Bastion 只持久化"默认是否隐藏"（当前展开态是 `remember`，离开即复位），
+         * **两者语义不同**，别照抄。
+         */
+        val TOTP_CODES_HIDDEN = booleanPreferencesKey("totp_codes_hidden")
+
+        /**
+         * 验证码**临期**（剩余 ≤ `TOTP_HOT_WARNING_SECONDS`）时，复制的是**下一个码**。
+         *
+         * 2026-09-21 加开关（行为本身 2026-09-18 就已在 `TotpCodesScreen` 实现）。
+         * ⚠️ 语义是"你点复制的那一刻给哪个码"，**不是**定时器自动写剪贴板 ——
+         * 参考实现 Bastion 也是如此（其 `codeToCopy` 只决定"复制哪一个"）。
+         */
+        val TOTP_COPY_NEXT_ON_EXPIRING = booleanPreferencesKey("totp_copy_next_on_expiring")
+
         const val DEFAULT_CLIPBOARD_CLEAR_MS = 30 * 1000L
     }
 
@@ -261,6 +280,24 @@ class VaultixPreferences @Inject constructor(
      */
     val itemsShowIcon: Flow<Boolean> =
         safeData.map { it[ITEMS_SHOW_ICON] ?: true }
+
+    /**
+     * 验证码页是否隐藏数字（**跨重启保持**；默认 `false` = 展开）。
+     *
+     * 用户 2026-09-21 要求：点顶栏「验证码」切换；隐藏时只显示前若干位；
+     * 隐藏**不影响**复制与自动填充（那两条走原始码，遮罩只作用在渲染层）。
+     */
+    val totpCodesHidden: Flow<Boolean> =
+        safeData.map { it[TOTP_CODES_HIDDEN] ?: false }
+
+    /**
+     * 验证码**临期**（剩余 ≤ `TOTP_HOT_WARNING_SECONDS`）时复制下一个码。
+     *
+     * 默认 `true` = 保持既有行为（2026-09-18 起就是这样，加开关只为让用户能关掉，
+     * 不静默改变已有观感）。
+     */
+    val totpCopyNextOnExpiring: Flow<Boolean> =
+        safeData.map { it[TOTP_COPY_NEXT_ON_EXPIRING] ?: true }
 
     val defaultVaultId: Flow<String?> = safeData.map { it[DEFAULT_VAULT_ID] }
 
@@ -496,6 +533,23 @@ class VaultixPreferences @Inject constructor(
     /** 条目卡片是否显示左侧图标。 */
     suspend fun setItemsShowIcon(enabled: Boolean) {
         dataStore.edit { it[ITEMS_SHOW_ICON] = enabled }
+    }
+
+    /**
+     * 验证码页隐藏/显示数字。
+     *
+     * ⚠️ 写的是**当前状态**（不是"默认值"）—— 用户要求跨重启保持，见 [TOTP_CODES_HIDDEN]。
+     * 刻意**不**做"关掉就删键"的取向（与其它布尔开关不同）：这里 `false` 是一个**有意义的
+     * 用户选择**（"我要一直显示"），删键会让它退回默认值 —— 目前默认恰好也是 false，
+     * 但一旦将来默认值改成 true，删键就会静默把用户的显式选择丢掉。
+     */
+    suspend fun setTotpCodesHidden(hidden: Boolean) {
+        dataStore.edit { it[TOTP_CODES_HIDDEN] = hidden }
+    }
+
+    /** 验证码临期时复制下一个码（默认开）。 */
+    suspend fun setTotpCopyNextOnExpiring(enabled: Boolean) {
+        dataStore.edit { it[TOTP_COPY_NEXT_ON_EXPIRING] = enabled }
     }
 
     /**

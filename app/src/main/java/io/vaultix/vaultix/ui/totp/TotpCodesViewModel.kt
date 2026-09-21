@@ -116,12 +116,36 @@ class TotpCodesViewModel @Inject constructor(
          * 一个（真实的）空列表。
          */
         val unlocked: Boolean? = null,
+        /**
+         * 验证码页是否隐藏数字（2026-09-21：点顶栏标题切换，**跨重启保持**）。
+         *
+         * ⚠️ 只影响**渲染**：复制与自动填充一律用原始码（[io.vaultix.common.TotpGenerator.mask]
+         * 的 KDoc 写明了这条纪律）。
+         */
+        val codesHidden: Boolean = false,
+        /** 临期（剩余 ≤ `TOTP_HOT_WARNING_SECONDS`）时复制**下一个**码。默认开。 */
+        val copyNextOnExpiring: Boolean = true,
     )
 
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
 
     init {
+        // 两个**展示偏好**（隐藏数字 / 临期换码）由偏好层单向下发到 UI 状态。
+        // ⚠️ 集中在这里收，而不是让界面各处自己读偏好：那会出现"同一开关两个读法"的漂移
+        // （本项目已有过先例：开关说开着、实际没生效）。
+        viewModelScope.launch {
+            combine(
+                preferences.totpCodesHidden,
+                preferences.totpCopyNextOnExpiring,
+            ) { hidden, copyNextOnExpiring ->
+                hidden to copyNextOnExpiring
+            }.collect { (hidden, copyNextOnExpiring) ->
+                _state.update {
+                    it.copy(codesHidden = hidden, copyNextOnExpiring = copyNextOnExpiring)
+                }
+            }
+        }
         // 与 ItemsViewModel 一致：由路由参数进入时把该库登记为活跃库
         routedVaultId?.let(activeVaultStore::select)
         if (routedVaultId == null) {
@@ -171,6 +195,21 @@ class TotpCodesViewModel @Inject constructor(
     }
 
     fun setQuery(q: String) = _state.update { it.copy(query = q) }
+
+    /**
+     * 切换验证码数字的隐藏。
+     *
+     * ⚠️ 必须**写偏好**（不是只改内存状态）：用户要求「不再点击，重开 App 也保持隐藏」。
+     * 写回后由 init 里的偏好收集器把新值推回 [UiState]，形成单向回流，避免两处各持一份状态。
+     */
+    fun setCodesHidden(hidden: Boolean) {
+        viewModelScope.launch { preferences.setTotpCodesHidden(hidden) }
+    }
+
+    /** 临期（剩余 ≤ 警示阈值）时是否复制**下一个**码。 */
+    fun setCopyNextOnExpiring(enabled: Boolean) {
+        viewModelScope.launch { preferences.setTotpCopyNextOnExpiring(enabled) }
+    }
 
     /**
      * 手动刷新：重新权威解析活跃库 id 并触发数据流重新订阅。

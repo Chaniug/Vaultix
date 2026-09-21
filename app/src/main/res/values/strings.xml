@@ -280,6 +280,10 @@
     <string name="version_code_max" translatable="false">999999999999</string>
     <string name="setting_auto_copy_totp">填充后复制验证码</string>
     <string name="setting_auto_copy_totp_desc">条目带验证码、但页面没有验证码框时，填充完成即把验证码放进剪贴板（沿用剪贴板清除时长）</string>
+    <!-- 2026-09-21 新增：验证码页「临期复制下一个码」的开关。⚠️ 与上一项区分清楚：
+         上一项是「填充后自动复制」，本项是「你点复制时，若只剩几秒就改给下一个码」。 -->
+    <string name="setting_copy_next_totp">临期复制下一个验证码</string>
+    <string name="setting_copy_next_totp_desc">在验证码页点复制时，若当前码只剩几秒就要失效，改为复制下一个码（不点复制就不会复制）</string>
     <string name="setting_autofill_save_prompt">保存提示</string>
     <string name="setting_autofill_save_prompt_desc">在 App / 网页登录成功后询问是否保存到 Vaultix（已有同账号条目时提示更新密码）</string>
 
@@ -365,6 +369,15 @@
     <!-- 检查更新（2026-09-16 从 Bastion 搬运；只给发布页链接，不在 App 内下载安装） -->
     <string name="about_check_update">检查更新</string>
     <string name="about_check_update_desc">对比 GitHub 上的最新构建</string>
+    <!-- 2026-09-21 用户要求"关于页内容丰富"。⚠️ 内部版本号用独立行 + 标签呈现，
+         不用 `0.3.0 (3000)` 那种括号后缀：2026-09-14 用户曾把括号误读成下载器加的 (1) 后缀。 -->
+    <string name="about_build_number">内部版本号</string>
+    <string name="about_channel">更新渠道</string>
+    <string name="about_channel_preview">预览版（debug 构建，随 main 滚动）</string>
+    <string name="about_channel_stable">正式版（rele 分支发布）</string>
+    <string name="about_changelog">更新日志</string>
+    <string name="about_changelog_desc">在 GitHub 上查看各版本说明</string>
+    <string name="about_releases_url">https://github.com/Chaniug/Vaultix/releases</string>
     <string name="update_check_title">检查更新</string>
     <string name="update_check_checking">正在检查…</string>
     <string name="update_check_latest">已是最新版本</string>
@@ -924,6 +937,9 @@
 
     <!-- 验证码统一界面（从密码条目列表 / 库内入口进入） -->
     <string name="totp_screen_title">验证码</string>
+    <!-- 点顶栏标题切换验证码数字显隐（2026-09-21）。用于标题的无障碍提示。 -->
+    <string name="totp_title_hint_hide">点此隐藏验证码数字</string>
+    <string name="totp_title_hint_show">点此显示验证码数字</string>
     <string name="totp_search_hint">搜索发行方或账号</string>
     <string name="totp_empty_title">还没有验证码</string>
     <string name="totp_empty_body">从密码条目里带上 TOTP，或点右下角手动添加独立验证码</string>

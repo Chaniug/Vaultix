@@ -160,6 +160,38 @@ object TotpGenerator {
         return 1.0f - (remaining.toFloat() / period)
     }
 
+    /** 遮罩时至少保留的位数（见 [mask]）。 */
+    private const val MASK_KEEP_MIN = 3
+
+    /** 遮罩字符。⚠️ 用 `•`（U+2022）而不是 `*`：等宽字体下两者宽度不同，见 [mask]。 */
+    private const val MASK_CHAR = '•'
+
+    /**
+     * 把验证码遮罩成「保留前若干位」的形态（**纯展示用**，不参与复制 / 填充）。
+     *
+     * 用户 2026-09-21 要求：「6 位数的验证码，隐藏到只显示 3 位数」。
+     * 保留位数 = `maxOf([MASK_KEEP_MIN], code.length / 2)`：
+     *
+     * | 码长 | 保留 | 遮罩后 |
+     * |---|---|---|
+     * | 6 | 3 | `123•••` |
+     * | 7 | 3 | `123••••` |
+     * | 8 | 4 | `1234••••` |
+     *
+     * 为什么要有 `[MASK_KEEP_MIN]` 下限：**位数很短的码不能被遮到只剩 1~2 位**，
+     * 否则用户根本无法自行辨认（那不是"隐藏"，是把功能废掉）。
+     *
+     * ⚠️ 遮罩字符用 `•`（U+2022）而不是 `*`：等宽字体下两者宽度不同，
+     * 用 `*` 会让遮罩后的字符串在位数变化时视觉忽宽忽窄。
+     * ⚠️ **本函数只在渲染层调用**；复制与自动填充一律用**原始** code ——
+     * 这是"隐藏不影响复制/填充"这条验收项的**唯一**保证方式。
+     */
+    fun mask(code: String, keepMin: Int = MASK_KEEP_MIN): String {
+        val keep = maxOf(keepMin, code.length / 2)
+        if (keep >= code.length) return code
+        return code.take(keep) + MASK_CHAR.toString().repeat(code.length - keep)
+    }
+
     private fun generateHmac(key: ByteArray, counter: Long, algorithm: String): ByteArray {
         val algorithmName = "Hmac$algorithm"
         val mac = Mac.getInstance(algorithmName)
