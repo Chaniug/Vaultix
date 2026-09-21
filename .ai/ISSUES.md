@@ -154,7 +154,7 @@
 | 89 | 应用图标：内层图形必须**等比缩放 + 质心对齐**，手工拼曲线会让它**漂移** |
 | 97 | SSH 密钥类型**只能看、不能填** —— 新建/编辑时专属字段无输入框（**2026-09-14 已实现：`SshKeyFields` + 指纹由公钥自动推导**） |
 | 103 | ⚠️ **回 ViewModel 读 `_state.value` 拿界面数据 = 漏订阅**：页面打开是空态、点一下搜索才出现（通行密钥页；验证码页早已踩过同一坑）—— **2026-09-15 已修** |
-| 107 | 全屏编辑壳上下两条栏在深色 / OLED 纯黑下呈"黑带" ⇒ **真根因是 `Dialog` 窗口背景（`TYPE_APPLICATION_PANEL` 不继承 Activity 的 edge-to-edge）+ `targetSdk 35` 起 `window.statusBarColor`/`navigationBarColor` 是 no-op**；定稿 = **满宽薄栏 + 与 `surface` 匹配的三档渐变保护层**（官方 edge-to-edge 的 Do）。⚠️ 中途曾误判为"形状问题"改悬浮胶囊，反而把黑带弄明显（第四轮用户否掉）。 |
+| 107 | 全屏编辑壳上下两条栏在深色 / OLED 纯黑下呈"黑带" ⇒ **真根因是 `Dialog` 窗口背景（`TYPE_APPLICATION_PANEL` 不继承 Activity 的 edge-to-edge）+ `targetSdk 35` 起 `window.statusBarColor`/`navigationBarColor` 是 no-op**；定稿 = **满宽薄栏 + 与 `surface` 匹配的三档渐变保护层**（官方 edge-to-edge 的 Do）。⚠️ 中途曾误判为"形状问题"改悬浮胶囊，反而把黑带弄明显（第四轮用户否掉）。<br>⚠️ **2026-09-21 第六轮再修两处**：① 栏体 72 → **56dp**（`Spacing.md` → `Spacing.xs`，去掉 24dp 纯留白）② **渐隐段必须落在内容侧** —— 第五轮把渐隐钉在"层底 = inset 空白区"⇒ 渐变等于没做、按钮上沿仍是**硬边**。⚠️ 这个 bug **只看代码发现不了**（两种写法数学等价），必须逐像素模拟「alpha + 该处有无内容」。详情见 [06-界面与交互](./issues/06-界面与交互.md) #107「★ 第六轮更正」。 |
 
 ### [07-数据与同步](./issues/07-数据与同步.md) — 数据模型 / 同步 / 会话
 

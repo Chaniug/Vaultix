@@ -332,15 +332,18 @@ private fun BoxScope.TitleBar(title: String, onDismiss: () -> Unit, statusBarIns
     // ⚠️ 用 `MaterialTheme.colorScheme.surface` 而**不是** `LocalContentColor`：
     // 壳里包着一层 `Surface`，本栏是其内容，画出来的底色才是渐变端点该匹配的东西。
     val surface = MaterialTheme.colorScheme.surface
+    // 本层总高先算出来：渐变要把尾段折算成档位比例，且**两端读数必须同源**
+    // （`TitleBar` 的 `.height(...)` 与 `topGradientStops` 的比例分母是同一个数）。
+    val layerHeight = layerHeight(statusBarInset, TITLE_BAR_HEIGHT)
     Box(
         modifier = Modifier
             .align(Alignment.TopCenter)
             .fillMaxWidth()
-            .height(layerHeight(statusBarInset, TITLE_BAR_HEIGHT))
+            .height(layerHeight)
             .drawBehind {
                 drawRect(
                     brush = Brush.verticalGradient(
-                        colorStops = topGradientStops(surface, statusBarInset),
+                        colorStops = topGradientStops(surface, statusBarInset, layerHeight),
                     ),
                 )
             },
@@ -382,6 +385,16 @@ private fun BoxScope.TitleBar(title: String, onDismiss: () -> Unit, statusBarIns
  * 少让则末元素被不透明栏盖住（= 用户已报过的老 bug）。`exitAlways` 保证用户
  * 真要读末尾内容时底栏是**在的**，故按「底栏可见」让位恰好正确。
  *
+ * ## ⚠️ `navBarInset` 的来源必须与主界面**一致**（不要"修正"它）
+ *
+ * 第六轮曾怀疑「底部白横条下沿不是屏幕底」是 `navigationBars` 取到了手势热区
+ * （约 45dp）而非可视内容区所致。核对后**否掉**：主界面
+ * `VaultixBottomDock.kt:87` 读的是**同一个** `WindowInsets.navigationBars`。
+ * 换一个 insets 源反而会让编辑壳与主界面**分叉** —— 而用户的判据恰恰是
+ * 「完全和主界面滑动的时候效果不搭调」。
+ * ⇒ 真正的成因是渐变的**不透明段**把这片 inset 空白整个涂满了（见
+ * [bottomGradientStops]），本轮改的是渐变分布，**不是** insets 源。
+ *
  * @param navBarInset 手势条内边距（实测值，与正文让位同一份）。
  * @param scrollOffset 取当前滚动引起的位移（像素）。用 lambda 传而不是直接传值，
  *   是为了不在每次滚动重组时都重新组合本栏 —— 只有 `graphicsLayer` 的绘制阶段会读它。
@@ -410,7 +423,7 @@ private fun BoxScope.ActionBar(
             .drawBehind {
                 drawRect(
                     brush = Brush.verticalGradient(
-                        colorStops = bottomGradientStops(surface, layerHeight),
+                        colorStops = bottomGradientStops(surface, navBarInset, layerHeight),
                     ),
                 )
             },
@@ -440,77 +453,129 @@ private fun BoxScope.ActionBar(
 }
 
 /**
- * 顶部渐变保护层的颜色档位：**不透明段严格等于「系统栏 + 栏体」**，之后才是过渡尾段。
+ * 顶部渐变保护层的颜色档位。
  *
- * ## 为什么必须三档，不能两档
+ * ## 档位语义（自上而下，`0f` = 屏幕顶）
  *
- * 两档（`0f → 1f` 直接由不透明到全透明）会让**栏体上半部分就已经半透明** ⇒
- * 标题文字逐渐变淡读不清、状态栏图标压在半透明上显得脏。
- * 三档的语义是「**不透明段 = 栏这个实体的总高（含系统栏 inset）**，
- * 尾段 = 给内容一个柔和过渡带」。
+ * ```
+ * 0f ────────────────────────────── 屏幕顶
+ *    surface，alpha = 1              ← 覆盖状态栏 inset = 状态栏沉浸
+ * (状态栏 + 栏体) ─────────────────  ★ 渐变起点：栏体下沿（= 正文首像素的位置）
+ *    surface → alpha 0                ← 过渡尾段，落在**内容侧**
+ * (状态栏 + 栏体 + 尾段) ────────── 全透明
+ * ```
  *
- * ## ⚠️ 不透明段的长度是「卡片不会透出来」的全部依据
+ * ## ⚠️ 2026-09-21 第六轮修正：尾段必须落在**内容侧**
+ *
+ * 上一版的档位是「不透明段 = `inset + 栏体`，**尾段在层底**」。数学上等价，
+ * **观感上完全相反** —— 用户第六轮原话：「上方的白条显得很大……不沉浸，滑动的时候也不透明」。
+ *
+ * 根因：**渐变层最后那 `GRADIENT_TAIL` 段（全在层底）恰好落在"没有内容"的地方。**
+ * 逐像素模拟（`SESSION-2026-09-20.md` §10）显示：渐变在 117~141dp 才从 1 → 0，
+ * 而 >117dp 是系统栏 inset 的空白区，那里本来就是纯 `surface` ⇒ **渐变等于没画**，
+ * 视觉上仍是"一条硬边白带"。真正有内容穿过（会露出卡片灰）的 12~60dp 区间反而是 1.00 恒不透明。
+ *
+ * ⇒ 尾段移到**栏体下沿之下**：不透明段仍是 `inset + 栏体`（让位恒等式不变），
+ * 但"全透明点"落在 `inset + 栏体 + 尾段`，中间这段正是内容滚过的地方 ⇒ 才有真实的淡出。
+ *
+ * ## 为什么不透明段还是「系统栏 + 栏体」 = [contentClearance]
  *
  * `FormGroupCard` 用的是 `surfaceContainerHighest`，与 `surface` **不同色**。
  * 渐变端点必须用 `surface`（官方 Don't：「渐变保护与各 pane 背景**不匹配**」），
  * 于是"卡片会不会透进不透明段"就成了真问题。答案是不会 —— 因为**正文让位
- * [contentClearance] 已经等于这个不透明段的长度**，正文的第一个像素永远从
- * 「栏底」开始，与不透明段**几何上不重叠**。尾段（半透明区）里卡片可见，
- * 而那**正是设计意图**：官方要的就是"内容从栏下方滚过时可见"。
+ * [contentClearance] 恰好等于不透明段的长度**，正文的第一个像素永远从「栏体下沿」开始，
+ * 与不透明段**几何上不重叠**。尾段（半透明区）里卡片可见，而那**正是设计意图**：
+ * 官方要的就是"内容从栏下方滚过时可见"。
  *
  * ⚠️ 不透明比例**必须按实测 inset 算**，不能写死：状态栏 0/24/36/48dp 四种机型下
- * `(inset + 栏体) / layerHeight` 分别是 0.750 / 0.800 / 0.818 / 0.833 ——
- * 写死 0.7 时，24dp 机型的栏体上沿实际落在 0.80 ⇒ 标题区**提前**变透明。
- * （这组数是纯算术推的，`SESSION-2026-09-20.md` §9.5 有对照表。）
+ * `(inset + 栏体) / layerHeight` 各不相同 —— 写死一个数会让某类机型的标题区**提前**变透明。
+ * （对照表见 `SESSION-2026-09-20.md` §10.4。）
  *
  * @param surface 栏与页面的共同底色（`colorScheme.surface`）。
  * @param statusBarInset 状态栏内边距（实测值）。
+ * @param layerHeight 本层总高（= [layerHeight]`(statusBarInset, TITLE_BAR_HEIGHT)`），
+ *   用来把 [GRADIENT_TAIL] 折算成档位比例。
  */
-private fun topGradientStops(surface: Color, statusBarInset: Dp): Array<Pair<Float, Color>> {
-    // ⚠️ 分母用 [layerHeight] 而不是手抄 `inset + 栏体 + 尾段`：
-    // 它与 `TitleBar` 的 `.height(...)` 是**同一个表达式**，因此不透明段与栏的几何
-    // 恒等对齐 —— 这是"卡片不会透进不透明段"这一论断能成立的前提（见本节 KDoc）。
+private fun topGradientStops(
+    surface: Color,
+    statusBarInset: Dp,
+    layerHeight: Dp,
+): Array<Pair<Float, Color>> {
+    // ⚠️ 分母用调用方传进来的 `layerHeight`（源头是 [layerHeight]），而不是在这里重算：
+    // 它与 `TitleBar` 的 `.height(...)` 是**同一个数**，因此不透明段与栏的几何恒等对齐
+    // —— 这是"卡片不会透进不透明段"这一论断能成立的前提（见本节 KDoc）。
     // ⚠️ `Dp / Dp` 返回的是 **Float**（不是 Dp）⇒ 这里**不能**再写 `.value`。
     // 注释会过时、类型不会 —— 这是编译器（CI 的 Build Debug APK）抓出来的一处。
-    val opaqueFraction: Float =
-        (statusBarInset + TITLE_BAR_HEIGHT) / layerHeight(statusBarInset, TITLE_BAR_HEIGHT)
+    val opaqueFraction: Float = (statusBarInset + TITLE_BAR_HEIGHT) / layerHeight
     return arrayOf<Pair<Float, Color>>(
         GRADIENT_START to surface,
+        // ★ 这里是「栏体下沿」，不是「层底」—— 尾段落在这条线**之后**（内容侧）。
         opaqueFraction to surface,
         GRADIENT_END to surface.copy(alpha = 0f),
     )
 }
 
 /**
- * 底部渐变保护层的颜色档位 —— 与顶部**镜像**：从屏幕底沿（栏底）不透明，
- * 向上经尾段过渡到全透明。
+ * 底部渐变保护层的颜色档位。
  *
- * ## 为什么底部不需要算 inset 比例（与 [topGradientStops] 不对称）
+ * ## 档位语义（自下而上，`1f` = 屏幕底）
  *
- * `Brush.verticalGradient` 的档位是相对**本层高度**的。底部这层的高度是
- * `navBarInset + ACTION_BAR_HEIGHT + GRADIENT_TAIL`，其中 `navBarInset` 是运行时值 ——
- * 若照抄顶部那样算比例，就得把 inset 一路传进来，平白多一个参数。
+ * 与 [topGradientStops] **镜像**，但**必须按 inset 折算比例**（不再能用上一版的倒序技巧，
+ * 原因见下）：
  *
- * ⇒ 改用**倒序写法**，把"不透明段"表达为「尾段之上全部不透明」：
- * 从 `0f`（层顶）到 `1f - 尾段占比`（栏体上沿）都填不透明色，最后一段才过渡。
- * 因为 `1f - 尾段占比 = (层高 - 尾段) / 层高 = (navBarInset + 栏体) / 层高` ——
- * **与顶部算出来的是同一个量**，只是换了个不含 inset 的等价表达。
+ * ```
+ * 0f ────────────────────────────── 层顶（= 屏幕底 - (手势条 + 栏体 + 尾段)）
+ *    surface，alpha = 0              ← ★ 渐变起点：栏体上沿之上，落在**内容侧**
+ * (尾段) ───────────────────────────  过渡尾段：内容从这里滚过时开始可见
+ * (尾段 + 栏体) ────────────────────  ★ 栏体上沿：到这里已经完全不透明
+ *    surface，alpha = 1              ← 覆盖栏体 + 手势条 inset
+ * 1f ────────────────────────────── 屏幕底
+ * ```
  *
- * ⚠️ 不透明段的长度同样等于「手势条 + 栏体」，"卡片不会透出来"的依据见 [topGradientStops]。
+ * ## ⚠️ 2026-09-21 第六轮修正：这是本轮的核心缺陷
+ *
+ * 上一版用倒序写法把不透明段表达为「尾段之上全部不透明」：
+ * `opaqueUntil = 1f - GRADIENT_TAIL / layerHeight` —— 等价于**把渐隐死死钉在层底**。
+ * 而层底 = `navBarInset` 所在的位置，**那是没有内容的空白区**（系统栏 inset 里本来就
+ * 没有任何元素在画）。逐像素模拟（`SESSION-2026-09-20.md` §10）：层高 141dp 时
+ * 不透明段 0~117dp、渐隐段 117~141dp，而 117dp 以下才有卡片/按钮 ——
+ * ⇒ **渐变全程发生在空白上，视觉上等于没画**；按钮上沿处两侧都是 1.00 ⇒ **硬边**。
+ *
+ * 这就是用户第六轮看到的东西：「下方保存和取消……一条很大很宽的白色横条……
+ * 滑动的时候也不透明。完全和主界面滑动的时候效果不搭调。」
+ *
+ * ## 为什么现在需要 `navBarInset` 入参（上一版特意省掉了它）
+ *
+ * 上一版 KDoc 的理由是「倒序写法可以避开 inset，省一个参数」—— 那个"省"恰恰把渐隐
+ * 钉到了错的地方。**渐隐段的位置在语义上依赖 inset**（inset 有多高，层底就有多厚的空白），
+ * 所以 inset 是**必要信息**，不是可以消掉的冗余。
+ * ⚠️ 结论：能省参数 ≠ 该省参数；当被省掉的信息决定语义时，省它就是错。
+ *
+ * ⚠️ 不透明段的长度仍等于「手势条 + 栏体」= [contentClearance]，"卡片不会透出来"的
+ * 依据见 [topGradientStops]。
  *
  * @param surface 栏与页面的共同底色（`colorScheme.surface`）。
- * @param layerHeight 本层总高（`navBarInset + ACTION_BAR_HEIGHT + GRADIENT_TAIL`）——
- *   需要它才能把 [GRADIENT_TAIL] 折算成档位比例。
+ * @param navBarInset 手势条内边距（实测值）—— 决定底部这片空白有多厚，即渐隐段该从哪开始。
+ * @param layerHeight 本层总高（= [layerHeight]`(navBarInset, ACTION_BAR_HEIGHT)`）。
  */
-private fun bottomGradientStops(surface: Color, layerHeight: Dp): Array<Pair<Float, Color>> {
+private fun bottomGradientStops(
+    surface: Color,
+    navBarInset: Dp,
+    layerHeight: Dp,
+): Array<Pair<Float, Color>> {
     // ⚠️ 同 [topGradientStops]：`Dp / Dp` 已是 **Float**，不要再 `.value`。
-    val tailFraction: Float = GRADIENT_TAIL / layerHeight
-    val opaqueUntil: Float = GRADIENT_END - tailFraction
+    // 「内容侧可见的」不透明段 = 屏幕底到栏体上沿 = inset + 栏体。
+    // 这一段的长度**必须**与 `contentClearance(navBarInset, ACTION_BAR_HEIGHT)` 相等。
+    val opaqueFraction: Float = (navBarInset + ACTION_BAR_HEIGHT) / layerHeight
+    // 渐隐段的占比 = 尾段 / 层高；它落在 [opaqueFraction, 1f] 之外的**层顶那一侧**。
+    val fadeStart: Float = GRADIENT_END - opaqueFraction
     return arrayOf<Pair<Float, Color>>(
         // ⚠️ 用 `GRADIENT_START`(0f) 作第一档而非负值：`colorStops` 的档位必须在 [0,1]。
-        GRADIENT_START to surface,
-        opaqueUntil to surface,
-        GRADIENT_END to surface.copy(alpha = 0f),
+        // ★ 层顶 = 内容侧，这里必须已经全透明 —— 上一版把不透明写到了 `1f - 尾段`，正是缺陷所。
+        GRADIENT_START to surface.copy(alpha = 0f),
+        // ★ 到这里（栏体上沿）为止都不透明；之后（更靠屏幕底）一直是 1f。
+        fadeStart to surface,
+        GRADIENT_END to surface,
     )
 }
 
@@ -592,17 +657,33 @@ private fun layerHeight(systemBarInset: Dp, barHeight: Dp): Dp =
 private val BUTTON_MIN_HEIGHT = 48.dp
 
 /**
- * 栏体的垂直内边距（`IconButton` 48dp + 它 ×2 = [TITLE_BAR_HEIGHT]）。
+ * 栏体的垂直内边距。`IconButton`/`TextButton` 的 48dp 触摸目标 + 它 ×2 = 栏体高。
+ *
+ * ⚠️ **2026-09-21 第六轮：`Spacing.md`(12dp) → `Spacing.xs`(4dp)**，两栏由 72dp 收到 56dp。
+ *
+ * 用户第六轮原话：「下方保存和取消**占用的空间太大**了，一条很大很宽的白色横条，
+ * 上方也是一整片的白色横条」。逐像素核对：底部白条实测约 87dp（含 inset），
+ * 而里面**真正有内容的按钮只有 48dp** —— 多出来的 24dp 是纯留白
+ * （上下各 `Spacing.md` = 12dp），栏体因此比内容高 **50%**。
+ *
+ * ⇒ 只去掉**超出的留白**，触摸目标不缩：4dp 是 `Spacing` 里最小的一档，
+ * 恰好充当"按钮与栏边的呼吸位"，不再是肉眼可辨的一大块空白。
+ * 与用户自己项目 Bastion 的 `NoteEditorTopBarHeight = 64.dp` 同量级
+ * （见 `reference/bastion/.../AddEditNoteScreen.kt`）。
  *
  * ⚠️ **两个栏共用同一个值**（顶部与底部都是这一档）—— 一屏里两套间距规格是观感廉价的首要
- * 来源（`8.4`）。底部沿用上一轮的 `Spacing.md`，顶部从"胶囊留白"回到同一档。
+ * 来源（`8.4`）。
  *
- * ⚠️ 同样受"声明顺序"约束：它在上面两条高度公式里被引用，故排在它们之前。
+ * ⚠️ **三处联动铁三角**，改这个值时必须同步核对：① 本常量 ② [TitleBar] / [ActionBar] 里
+ * `Row` 的 `padding(vertical = BAR_VERTICAL_PADDING)`（两处都直接读本常量，无需改）
+ * ③ 渐变比例的**分母** [layerHeight]（它引用下面的高度常量，自动跟随）。
+ *
+ * ⚠️ 同样受"声明顺序"约束：它在下面两条高度公式里被引用，故排在它们之前。
  */
-private val BAR_VERTICAL_PADDING = Spacing.md
+private val BAR_VERTICAL_PADDING = Spacing.xs
 
 /**
- * 顶部栏体高（**不含**状态栏内边距）= `IconButton` 48dp + [BAR_VERTICAL_PADDING] ×2 = 72dp。
+ * 顶部栏体高（**不含**状态栏内边距）= `IconButton` 48dp + [BAR_VERTICAL_PADDING] ×2 = **56dp**。
  *
  * ⚠️ 必须与 [TitleBar] 里 `Row` 的 `padding(vertical = BAR_VERTICAL_PADDING)` **严格对齐**：
  * 两处若不同步，正文让位就会偏，退化成第一轮那个"内容被遮住"的 bug。
@@ -610,9 +691,12 @@ private val BAR_VERTICAL_PADDING = Spacing.md
 private val TITLE_BAR_HEIGHT = BUTTON_MIN_HEIGHT + BAR_VERTICAL_PADDING * 2
 
 /**
- * 底部栏体高（**不含**手势条内边距）= `TextButton` 48dp + [BAR_VERTICAL_PADDING] ×2 = 72dp。
+ * 底部栏体高（**不含**手势条内边距）= `TextButton` 48dp + [BAR_VERTICAL_PADDING] ×2 = **56dp**。
  *
  * ⚠️ 同上，必须与 [ActionBar] 里 `Row` 的 `vertical = BAR_VERTICAL_PADDING` 严格对齐。
+ *
+ * ⚠️ 它还直接参与 [bottomGradientStops] 的 `opaqueFraction` 计算 —— 与正文让位
+ * （[contentClearance]）读的是**同一个常量**，这正是"不透明段 ≡ 让位长度"恒等式成立的原因。
  */
 private val ACTION_BAR_HEIGHT = BUTTON_MIN_HEIGHT + BAR_VERTICAL_PADDING * 2
 
@@ -621,6 +705,10 @@ private val ACTION_BAR_HEIGHT = BUTTON_MIN_HEIGHT + BAR_VERTICAL_PADDING * 2
  *
  * ⚠️ 它落在**半透明区**，内容从这里穿过时可见 —— 而那**正是设计意图**（官方 edge-to-edge
  * 的 Do 项要的就是"内容从栏下方滚过时可见"），**不是**缺陷，不要试图消除它。
+ *
+ * ⚠️ 2026-09-21 第六轮起，尾段的**位置**也是设计要点：必须落在**有内容的那一侧**
+ * （顶部在栏体下沿之下、底部在栏体上沿之上）。放在 inset 空白区等于没做 —— 见
+ * [topGradientStops] / [bottomGradientStops] 的 KDoc。
  */
 private val GRADIENT_TAIL = Spacing.xl
 
