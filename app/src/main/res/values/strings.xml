@@ -265,6 +265,7 @@
     <string name="developer_logs_loading">正在读取…</string>
     <string name="developer_logs_empty">没有可用日志（本应用还没输出，或已被系统缓冲回收）</string>
     <string name="developer_logs_export">导出并分享</string>
+    <string name="developer_logs_clear">清空</string>
     <string name="developer_logs_refresh">刷新</string>
     <string name="setting_auto_lock">自动锁定</string>
     <string name="setting_clipboard_clear">剪贴板清除</string>
@@ -391,6 +392,9 @@
     <string name="about_channel">更新渠道</string>
     <string name="about_channel_preview">预览版（debug 构建，随 main 滚动）</string>
     <string name="about_channel_stable">正式版（rele 分支发布）</string>
+    <!-- 副标题里用的短文案：版本行要在一行里塞下 版本号 + 内部版本 + 渠道，长的会被省略号截断。 -->
+    <string name="about_channel_preview_short">预览版</string>
+    <string name="about_channel_stable_short">正式版</string>
     <string name="about_changelog">更新日志</string>
     <string name="about_changelog_desc">在 GitHub 上查看各版本说明</string>
     <string name="about_releases_url">https://github.com/Chaniug/Vaultix/releases</string>

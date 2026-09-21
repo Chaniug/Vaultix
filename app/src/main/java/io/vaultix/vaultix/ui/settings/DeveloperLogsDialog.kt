@@ -60,6 +60,9 @@ private const val SHARE_TEXT_LIMIT = 48_000
 /** 日志导出目录名（**必须**与 `res/xml/file_paths.xml` 的白名单一致）。 */
 private const val EXPORT_DIR = "dev_logs"
 
+/** 毫秒 / 秒。logcat `-v epoch` 给的是**秒**（带小数），而 `System.currentTimeMillis()` 是毫秒。 */
+private const val MILLIS_PER_SECOND = 1000.0
+
 /**
  * 日志级别filter：全部 / 仅错误 / 仅警告。
  *
@@ -105,19 +108,22 @@ private enum class LogLevelFilter(val labelRes: Int) {
 fun DeveloperLogsDialog(onDismiss: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var lines by remember { mutableStateOf<List<String>>(emptyList()) }
+    var entries by remember { mutableStateOf<List<LogEntry>>(emptyList()) }
     var filter by remember { mutableStateOf(LogLevelFilter.ALL) }
     var loading by remember { mutableStateOf(true) }
+    // ★「清空」的时间下界（2026-09-21 用户要求）：清空后**只显示此刻之后**的日志。
+    // ⚠️ 行为不依赖 `logcat -c` 是否被系统允许 —— 见 [tryClearLogcatBuffer] 的说明。
+    var clearedAt by remember { mutableStateOf(0.0) }
 
     // 每次打开抓一次快照；点「刷新」再抓一次（不做实时跟随：那是 adb 的活）。
     var refreshTick by remember { mutableStateOf(0) }
-    LaunchedEffect(refreshTick) {
+    LaunchedEffect(refreshTick, clearedAt) {
         loading = true
-        lines = withContext(Dispatchers.IO) { captureLogcat() }
+        entries = withContext(Dispatchers.IO) { captureLogcat(clearedAt) }
         loading = false
     }
 
-    val shown = remember(lines, filter) { lines.filter { filter.accepts(levelOf(it)) } }
+    val shown = remember(entries, filter) { entries.filter { filter.accepts(it.level) } }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -138,22 +144,22 @@ fun DeveloperLogsDialog(onDismiss: () -> Unit) {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                val body = when {
-                    loading -> stringResource(R.string.developer_logs_loading)
-                    shown.isEmpty() -> stringResource(R.string.developer_logs_empty)
-                    else -> shown.joinToString("\n")
+                val body = if (loading) {
+                    stringResource(R.string.developer_logs_loading)
+                } else {
+                    stringResource(R.string.developer_logs_empty)
                 }
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(max = 320.dp),
                 ) {
-                    itemsIndexed(shown) { _, line ->
+                    itemsIndexed(shown) { _, entry ->
                         Text(
-                            text = line,
+                            text = entry.text,
                             style = MaterialTheme.typography.bodySmall,
                             fontFamily = FontFamily.Monospace,
-                            color = levelColor(levelOf(line)),
+                            color = levelColor(entry.level),
                         )
                     }
                     if (loading || shown.isEmpty()) {
@@ -164,14 +170,26 @@ fun DeveloperLogsDialog(onDismiss: () -> Unit) {
         },
         confirmButton = {
             TextButton(
-                onClick = { scope.launch { shareLogs(context, buildExportText(context, lines)) } },
-                enabled = lines.isNotEmpty(),
+                onClick = { scope.launch { shareLogs(context, buildExportText(context, entries)) } },
+                enabled = entries.isNotEmpty(),
             ) {
                 Text(stringResource(R.string.developer_logs_export))
             }
         },
         dismissButton = {
             Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                // ★ 清空（2026-09-21 用户要求）：先尽力把系统缓冲也清掉，再把时间下界推到"现在"
+                //   ⇒ 之后刷新只看到新日志，便于"复现一次、只看这一次"。
+                TextButton(
+                    onClick = {
+                        scope.launch {
+                            withContext(Dispatchers.IO) { tryClearLogcatBuffer() }
+                            clearedAt = System.currentTimeMillis() / MILLIS_PER_SECOND
+                        }
+                    },
+                ) {
+                    Text(stringResource(R.string.developer_logs_clear))
+                }
                 TextButton(onClick = { refreshTick++ }) {
                     Text(stringResource(R.string.developer_logs_refresh))
                 }
@@ -183,15 +201,63 @@ fun DeveloperLogsDialog(onDismiss: () -> Unit) {
     )
 }
 
-/** 抓一份 logcat 快照并按关键字过滤（只可能含本进程条目，见文件头的能力边界）。 */
-private fun captureLogcat(): List<String> = runCatching {
+/** 一条日志（时间戳 + 可读文本 + 级别）。 */
+private data class LogEntry(val timestamp: Double, val text: String, val level: Char)
+
+/**
+ * 抓一份 logcat 快照，只保留 [since] 之后的条目。
+ *
+ * 用 `-v epoch`（而不是 `-v time`）是为了让行首时间戳**可直接比较** ——
+ * 「清空」功能靠它做时间过滤（见 [DeveloperLogsDialog] 里的 `clearedAt`）。
+ *
+ * @param since 时间戳下界（epoch 秒）。`0.0` = 不筛。
+ */
+private fun captureLogcat(since: Double): List<LogEntry> = runCatching {
     val process = ProcessBuilder(
-        "logcat", "-d", "-t", LOGCAT_MAX_LINES.toString(), "-v", "time",
+        "logcat", "-d", "-t", LOGCAT_MAX_LINES.toString(), "-v", "epoch",
     ).redirectErrorStream(true).start()
-    val text = process.inputStream.bufferedReader().use { it.readLines() }
+    val raw = process.inputStream.bufferedReader().use { it.readLines() }
     process.waitFor()
-    text.filter { KEEP_PATTERN.containsMatchIn(it) || levelOf(it) in "EF" }
-}.getOrElse { listOf("<logcat 读取失败：${it.message}>") }
+    raw.asSequence()
+        .mapNotNull(::parseEntry)
+        .filter { it.timestamp > since }
+        .filter { KEEP_PATTERN.containsMatchIn(it.text) || it.level in "EF" }
+        .toList()
+}.getOrElse { emptyList() }
+
+/**
+ * 尽力清空系统日志缓冲。
+ *
+ * ⚠️ **可能失败且不报错**：清全局缓冲区在无 `READ_LOGS` 时会被系统拒绝，而 app 拿不到反馈。
+ * 所以「清空」不能只靠它 —— 真正保证效果的是 [LogEntry.timestamp] 那条时间下界
+ * （见 [DeveloperLogsDialog] 的 `clearedAt`）。这里清一次是"顺手把缓冲也清掉"，
+ * 失败也不影响用户看到的行为。
+ */
+private fun tryClearLogcatBuffer() {
+    runCatching {
+        ProcessBuilder("logcat", "-c").start().waitFor()
+    }
+}
+
+/**
+ * 解析 `-v epoch` 的一行：`<epoch>.<ms>  PID  TID  L  TAG: msg`
+ * （`limit = 6` ⇒ [0]=epoch、[1]=pid、[2]=tid、[3]=级别、[4]=tag、[5]=msg）。
+ *
+ * 显示时把 epoch 换成 `HH:mm:ss.SSS`：epoch 对人不可读，而秒级时间在排查"刚才那一下"时
+ * 恰恰是最关键的定位信息。
+ */
+private fun parseEntry(line: String): LogEntry? {
+    val parts = line.trim().split(WHITESPACE, limit = LOGCAT_FIELD_LIMIT)
+    val epoch = parts.getOrNull(0)?.toDoubleOrNull() ?: return null
+    val level = parts.getOrNull(3)?.firstOrNull()?.takeIf { it in "VDIWEF" } ?: ' '
+    val clock = CLOCK_FORMAT.format(Date((epoch * 1000).toLong()))
+    val rest = parts.drop(4).joinToString(" ")
+    return LogEntry(epoch, "$clock  $rest", level)
+}
+
+private val WHITESPACE = Regex("\\s+")
+private const val LOGCAT_FIELD_LIMIT = 6
+private val CLOCK_FORMAT = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
 
 /**
  * 关键字白名单：与本项目 adb 侧采集脚本（`.workbuddy/memory/2026-09-21.md` 记录的
@@ -211,17 +277,6 @@ private val KEEP_PATTERN = Regex(
  * `-v time` 的行格式：`MM-DD HH:MM:SS.mmm PID TID L TAG: msg`
  * ⇒ 第 5 个空白分隔字段（下标 4）是级别。取不到时返回空格（不匹配任何过滤器，等于不显示）。
  */
-/** `-v time` 行里「级别」字符所在的字段下标（见 [levelOf]）。 */
-private const val LOGCAT_LEVEL_FIELD_INDEX = 4
-
-private fun levelOf(line: String): Char {
-    val parts = line.trim().split(' ')
-    return parts.getOrNull(LOGCAT_LEVEL_FIELD_INDEX)
-        ?.firstOrNull()
-        ?.takeIf { it in "VDIWEF" }
-        ?: ' '
-}
-
 @Composable
 private fun levelColor(level: Char) = when (level) {
     'E', 'F' -> MaterialTheme.colorScheme.error
@@ -236,7 +291,7 @@ private fun levelColor(level: Char) = when (level) {
  * 而 `=== System Logcat ===` 段是原样导出的；我们的日志源**就是** logcat，
  * 所以出口这道脱敏是唯一的一道，不能省。
  */
-private fun buildExportText(context: Context, lines: List<String>): String {
+private fun buildExportText(context: Context, entries: List<LogEntry>): String {
     val header = buildString {
         appendLine("# Vaultix 开发者日志导出")
         appendLine("exportedAt=${SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date())}")
@@ -247,7 +302,7 @@ private fun buildExportText(context: Context, lines: List<String>): String {
         appendLine("device=${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}")
         appendLine()
     }
-    return sanitize(header + lines.joinToString("\n"))
+    return sanitize(header + entries.joinToString("\n") { it.text })
 }
 
 /**

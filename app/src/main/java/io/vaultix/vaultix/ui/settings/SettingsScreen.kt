@@ -595,30 +595,29 @@ private fun AboutSection(
         SettingsRow(
             icon = { Icon(Icons.Filled.Info, contentDescription = null) },
             title = stringResource(R.string.about_version),
-            subtitle = versionName,
-        )
-        SettingsDivider()
-        // ★ 2026-09-21 新增（用户要求"关于页内容丰富"）。
-        // ⚠️ **独立成行、带标签**，而不是拼进版本号的括号里 —— 见调用点那段注释：
-        // 2026-09-14 用户曾把 `0.3.0 (3000)` 的括号误读成下载器加的 (1) 后缀。
-        // 标签化之后含义自明，误读的成因就消失了。
-        SettingsRow(
-            icon = { Icon(Icons.Filled.Numbers, contentDescription = null) },
-            title = stringResource(R.string.about_build_number),
-            subtitle = buildNumber.toString(),
-        )
-        SettingsDivider()
-        // 渠道由构建类型推导：debug 包 = 预览版（CI 随 main 滚动发布），release = 正式版。
-        SettingsRow(
-            icon = { Icon(Icons.Filled.NewReleases, contentDescription = null) },
-            title = stringResource(R.string.about_channel),
-            subtitle = stringResource(
-                if (BuildConfig.DEBUG) {
-                    R.string.about_channel_preview
-                } else {
-                    R.string.about_channel_stable
-                },
-            ),
+            // ★ 2026-09-21 用户要求「关于里面的内容可以合并精简」：
+            // 把「内部版本号」「更新渠道」折回**同一行**的副标题，而不是各占一行。
+            // ⚠️ 仍然**不写成 `0.5.0 (5000000)` 那种括号后缀**（2026-09-14 用户曾把括号
+            //    误读成下载器加的 `(1)`）——这里显式带「内部版本」标签，语义自明。
+            // ⚠️ 渠道用短文案（预览版 / 正式版），长解释留在 `about_channel_preview` 那份里，
+            //    避免副标题过长被省略号截断。
+            subtitle = buildString {
+                append(versionName)
+                append(" · ")
+                append(stringResource(R.string.about_build_number))
+                append(' ')
+                append(buildNumber)
+                append(" · ")
+                append(
+                    stringResource(
+                        if (BuildConfig.DEBUG) {
+                            R.string.about_channel_preview_short
+                        } else {
+                            R.string.about_channel_stable_short
+                        },
+                    ),
+                )
+            },
         )
         SettingsDivider()
         SettingsRow(
@@ -633,21 +632,6 @@ private fun AboutSection(
             title = stringResource(R.string.about_source),
             subtitle = stringResource(R.string.about_github_url),
             onClick = { SystemSettingsIntents.openUrl(context, context.getString(R.string.about_github_url)) },
-        )
-        SettingsDivider()
-        // ★ 2026-09-21 新增：更新日志直达 Releases 页。
-        // 与「检查更新」的分工：那个回答"**有没有**新的"，这条负责"**新了什么**"
-        // （检查更新对话框里的更新说明是惰性的，得先点一次检查才看得到）。
-        SettingsRow(
-            icon = { Icon(Icons.Filled.NewReleases, contentDescription = null) },
-            title = stringResource(R.string.about_changelog),
-            subtitle = stringResource(R.string.about_changelog_desc),
-            onClick = {
-                SystemSettingsIntents.openUrl(
-                    context,
-                    context.getString(R.string.about_releases_url),
-                )
-            },
         )
         SettingsDivider()
         SettingsRow(
