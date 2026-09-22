@@ -162,9 +162,14 @@ object AssistStructureParser {
                 // （上游原文：`buildFilledItemOrNull` returns null and **drops the field
                 // from the fill dataset entirely**）。判据与算法见 [FillTargetResolver]。
                 val target = resolveFillTarget(node)
-                if (target != null) {
+                // ⚠️ 写回界面的地址是 `autofillId`，**不是** `ViewNode.id`：
+                // `ViewNode.id` 是 `R.id.xxx` 那个 int，和自动填充寻址毫无关系。
+                // [isFillableTarget] 已保证目标带 autofillId，这里再取一次 nullable 值
+                // 是为了让编译器自己证明非空，避免 `!!`。
+                val targetId = target?.autofillId
+                if (target != null && targetId != null) {
                     out += ParsedField(
-                        id = target.id,
+                        id = targetId,
                         hint = classified.hint,
                         strength = classified.strength,
                         // 值取**下钻后**目标节点的文本（容器自身通常没有值）。

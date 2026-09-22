@@ -9,7 +9,7 @@
 
 | 分篇 | 主题 | 条数 |
 |---|---|---|
-| [01-构建与环境](./issues/01-构建与环境.md) | 工程 / 构建 / CI / 工具链 / 环境 | 26 |
+| [01-构建与环境](./issues/01-构建与环境.md) | 工程 / 构建 / CI / 工具链 / 环境 | 27 |
 | [02-自动填充](./issues/02-自动填充.md) | 自动填充（AutofillService 链路） | 19 |
 | [03-通行密钥与凭据提供商](./issues/03-通行密钥与凭据提供商.md) | 通行密钥 / Credential Provider / 凭据回灌 | 17 |
 | [04-锁与解锁](./issues/04-锁与解锁.md) | 锁态模型 / 解锁 / 生物识别 / 密钥 | 8 |
@@ -61,6 +61,7 @@
 | 105 | 🔴 **沙箱「下不动 APK」是两层问题**：hosts 丢失（`198.18.0.x`）只是第一层；第二层是「整文件连续传输不可靠」。判别靠 **range 请求 `curl -r 0-0`（得 206）vs 整体下载（得 000）** 的对比实验。解法：**1MB 分块 + 5 重试 + `truncate` 回滚**。另：**别用 `file` 判断 APK 完整**（截断文件照样报 "Android package"），要用 `zipfile` |
 | 112 | 🔴 Windows 版 Python 写文件把 LF 变成 CRLF ⇒ 行式数据（id 列表）全部失效 —— 别吞 stderr |
 | 115 | 🔴 CI 红的定位方法（blob 域名被解析到假 IP，需 DoH + 分块直链取日志）与 detekt `MatchingDeclarationName` 的两记坑 |
+| 116 | 🔴 本地验证「假绿」：只编译**代码片段**、stub 签名失真 ⇒ CI 才炸出 `ViewNode.id`(Int) 被当成 `AutofillId`。纪律：验证必须覆盖**消费点**，且**新 harness 先做变异测试** |
 
 ### [02-自动填充](./issues/02-自动填充.md) — 自动填充（AutofillService 链路）
 
