@@ -134,8 +134,9 @@ object AssistStructureParser {
         //   上带 webDomain，iframe 内部的每个输入框自身都是 null —— 若只用
         //   `parsed.webDomain`（全局首值），跨域 iframe 里的登录框会被当成「主文档的框」，
         //   填充阶段拿主文档域名做校验 → 校验失败 → 静默不填。
-        //   自顶向下继承：本节点有值就用本节点的，没有就沿用父级。
-        val webDomain = node.webDomain?.takeIf { it.isNotBlank() } ?: parentWebDomain
+        //   自顶向下继承：本节点有值就用本节点的，没有就沿用父级（判据在
+        //   [FillTargetResolver.inheritWebDomain]：空白串等同"没有"）。
+        val webDomain = FillTargetResolver.inheritWebDomain(node.webDomain, parentWebDomain)
         // 地址栏只取网址，**不作为可填充字段**：否则地址栏文本含 "login" 会被启发式
         // 判成用户名字段，填充时把账号写进地址栏。
         val isUrlBar = BrowserUrlBars.isUrlBarNode(pagePackageName, node.idPackage, node.idEntry)
@@ -228,7 +229,7 @@ object AssistStructureParser {
      * 一个 `<input>` 完全可能 `autofillType == NONE`（`type=hidden`、`disabled`、
      * `readonly`），而 EditText 也可能因 `importantForAutofill=no` 而不可填。
      */
-    private fun isFillable(node: ViewNode): Boolean = canReceiveValue(node.autofillType)
+    private fun isFillable(node: ViewNode): Boolean = FillTargetResolver.canReceiveValue(node.autofillType)
 
     /**
      * 重定向后的落点：`autofillType == TEXT` **且** 带 `autofillId`。
@@ -242,8 +243,8 @@ object AssistStructureParser {
     /**
      * 解析本次填充真正该写入的节点：自己可填就用自己，否则**下钻**到第一个可填后代。
      *
-     * 算法本体在 [io.vaultix.vaultix.autofill.parser.resolveFillTarget]（纯函数，
-     * 单测见 `FillTargetResolverTest`）。这里只负责把框架的 [ViewNode] 树投影成最小
+     * 算法本体在 [FillTargetResolver.resolveFillTarget]（纯函数，单测见
+     * `FillTargetResolverTest`）。这里只负责把框架的 [ViewNode] 树投影成最小
      * 抽象 [FillTargetNode] —— `ViewNode` 是 `@SystemApi` 抽象类，构造不出实例，
      * 逻辑留在这一类里就没法做 JVM 单测。
      *
@@ -258,7 +259,7 @@ object AssistStructureParser {
         if (isFillableTarget(node)) return node
         val byPath = mutableMapOf<NodePath, ViewNode>()
         val projection = project(node, emptyList(), byPath)
-        val target = io.vaultix.vaultix.autofill.parser.resolveFillTarget(projection) ?: return null
+        val target = FillTargetResolver.resolveFillTarget(projection) ?: return null
         val path = target.identity as? NodePath ?: return null
         return byPath[path]
     }

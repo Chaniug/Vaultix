@@ -32,8 +32,8 @@ class FillTargetResolverTest {
 
     @Test
     fun `only AUTOFILL_TYPE_TEXT can receive a value`() {
-        assertThat(canReceiveValue(AUTOFILL_TYPE_TEXT)).isTrue()
-        assertThat(canReceiveValue(AUTOFILL_TYPE_NONE)).isFalse()
+        assertThat(FillTargetResolver.canReceiveValue(FillTargetResolver.AUTOFILL_TYPE_TEXT)).isTrue()
+        assertThat(FillTargetResolver.canReceiveValue(FillTargetResolver.AUTOFILL_TYPE_NONE)).isFalse()
     }
 
     @Test
@@ -41,10 +41,10 @@ class FillTargetResolverTest {
         // android.jar 是 stub jar，JVM 单测里直接引用 View.AUTOFILL_TYPE_* 会拿到 0
         // （字段不带常量值），与 NONE 撞车 → 全部断言假通过。这里用显式复制值并锁住它。
         // 真值出处：Android 平台 View.java —— AUTOFILL_TYPE_NONE = 0、AUTOFILL_TYPE_TEXT = 1。
-        assertThat(AUTOFILL_TYPE_NONE).isEqualTo(0)
-        assertThat(AUTOFILL_TYPE_TEXT).isEqualTo(1)
+        assertThat(FillTargetResolver.AUTOFILL_TYPE_NONE).isEqualTo(0)
+        assertThat(FillTargetResolver.AUTOFILL_TYPE_TEXT).isEqualTo(1)
         // 二者必须可区分：相等就意味着「容器」和「输入框」在重定向里没区别。
-        assertThat(AUTOFILL_TYPE_NONE).isNotEqualTo(AUTOFILL_TYPE_TEXT)
+        assertThat(FillTargetResolver.AUTOFILL_TYPE_NONE).isNotEqualTo(FillTargetResolver.AUTOFILL_TYPE_TEXT)
     }
 
     @Test
@@ -53,7 +53,7 @@ class FillTargetResolverTest {
         val self = container(child, identity = "self", canReceive = true)
 
         // 容器自己也能填时不下钻 —— 语义落点应当就是它自己。
-        assertThat(resolveFillTarget(self)?.identity).isEqualTo("self")
+        assertThat(FillTargetResolver.resolveFillTarget(self)?.identity).isEqualTo("self")
     }
 
     // ── 下钻 ──
@@ -64,7 +64,7 @@ class FillTargetResolverTest {
         val input = leaf(canReceive = true, identity = "input")
         val form = container(input, identity = "form")
 
-        assertThat(resolveFillTarget(form)?.identity).isEqualTo("input")
+        assertThat(FillTargetResolver.resolveFillTarget(form)?.identity).isEqualTo("input")
     }
 
     @Test
@@ -75,7 +75,7 @@ class FillTargetResolverTest {
         val middle = container(inner, identity = "middle-div")
         val form = container(middle, identity = "form")
 
-        assertThat(resolveFillTarget(form)?.identity).isEqualTo("input")
+        assertThat(FillTargetResolver.resolveFillTarget(form)?.identity).isEqualTo("input")
     }
 
     @Test
@@ -85,7 +85,7 @@ class FillTargetResolverTest {
         val second = leaf(canReceive = true, identity = "second")
         val form = container(container(first), container(second), identity = "form")
 
-        assertThat(resolveFillTarget(form)?.identity).isEqualTo("first")
+        assertThat(FillTargetResolver.resolveFillTarget(form)?.identity).isEqualTo("first")
     }
 
     @Test
@@ -94,7 +94,7 @@ class FillTargetResolverTest {
         val inner = leaf(canReceive = true, identity = "inner")
         val outer = container(inner, identity = "outer", canReceive = true)
 
-        assertThat(resolveFillTarget(outer)?.identity).isEqualTo("outer")
+        assertThat(FillTargetResolver.resolveFillTarget(outer)?.identity).isEqualTo("outer")
     }
 
     @Test
@@ -104,7 +104,7 @@ class FillTargetResolverTest {
         val input = leaf(canReceive = true, identity = "input")
         val form = container(labelBranch, input, identity = "form")
 
-        assertThat(resolveFillTarget(form)?.identity).isEqualTo("input")
+        assertThat(FillTargetResolver.resolveFillTarget(form)?.identity).isEqualTo("input")
     }
 
     // ── 边界：无可填节点时必须整体丢弃 ──
@@ -114,17 +114,17 @@ class FillTargetResolverTest {
         // 整棵子树都不可填 → 调用方**丢弃该字段**，而不是保留一个填不进去的目标。
         val form = container(container(leaf(canReceive = false)), leaf(canReceive = false))
 
-        assertThat(resolveFillTarget(form)).isNull()
+        assertThat(FillTargetResolver.resolveFillTarget(form)).isNull()
     }
 
     @Test
     fun `a lone non-fillable node resolves to null`() {
-        assertThat(resolveFillTarget(leaf(canReceive = false))).isNull()
+        assertThat(FillTargetResolver.resolveFillTarget(leaf(canReceive = false))).isNull()
     }
 
     @Test
     fun `an empty container resolves to null`() {
-        assertThat(resolveFillTarget(container())).isNull()
+        assertThat(FillTargetResolver.resolveFillTarget(container())).isNull()
     }
 
     @Test
@@ -134,8 +134,8 @@ class FillTargetResolverTest {
         val left = container(leaf(canReceive = true, identity = "left-input"), identity = "left")
         val right = container(leaf(canReceive = true, identity = "right-input"), identity = "right")
 
-        assertThat(resolveFillTarget(left)?.identity).isEqualTo("left-input")
-        assertThat(resolveFillTarget(right)?.identity).isEqualTo("right-input")
+        assertThat(FillTargetResolver.resolveFillTarget(left)?.identity).isEqualTo("left-input")
+        assertThat(FillTargetResolver.resolveFillTarget(right)?.identity).isEqualTo("right-input")
     }
 
     // ── 逐字段站点继承 ──
@@ -143,27 +143,27 @@ class FillTargetResolverTest {
     @Test
     fun `field without its own domain inherits the parent domain`() {
         // 跨域 iframe 的根节点带 webDomain，iframe 内部的输入框自身是 null → 继承。
-        assertThat(inheritWebDomain(null, "login.example.com")).isEqualTo("login.example.com")
+        assertThat(FillTargetResolver.inheritWebDomain(null, "login.example.com")).isEqualTo("login.example.com")
     }
 
     @Test
     fun `field with its own domain keeps it over the parent`() {
         // iframe 根节点自身带域名 → 用它自己那份，不沿用主文档域名。
-        assertThat(inheritWebDomain("evil.example.net", "login.example.com"))
+        assertThat(FillTargetResolver.inheritWebDomain("evil.example.net", "login.example.com"))
             .isEqualTo("evil.example.net")
     }
 
     @Test
     fun `blank domain is treated as absent and inherits`() {
         // 框架偶尔回空串而不是 null，等价于「本节点没有域名」。
-        assertThat(inheritWebDomain("", "login.example.com")).isEqualTo("login.example.com")
-        assertThat(inheritWebDomain("   ", "login.example.com")).isEqualTo("login.example.com")
+        assertThat(FillTargetResolver.inheritWebDomain("", "login.example.com")).isEqualTo("login.example.com")
+        assertThat(FillTargetResolver.inheritWebDomain("   ", "login.example.com")).isEqualTo("login.example.com")
     }
 
     @Test
     fun `no domain anywhere stays null for native app fields`() {
         // 原生 App 字段没有 webDomain，也不该被硬塞一个。
-        assertThat(inheritWebDomain(null, null)).isNull()
+        assertThat(FillTargetResolver.inheritWebDomain(null, null)).isNull()
     }
 
     // ── 构造小工具 ──
