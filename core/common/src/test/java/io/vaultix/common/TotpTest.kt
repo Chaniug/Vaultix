@@ -349,24 +349,24 @@ class TotpTest {
     @Test
     fun maskKeepsHalfOfSixDigitCode() {
         // 用户明确要求：6 位隐藏到只显示 3 位
-        assertEquals("123•••", TotpGenerator.mask("123456"))
+        assertEquals("123***", TotpGenerator.mask("123456"))
     }
 
     @Test
     fun maskKeepsHalfOfEightDigitCode() {
-        assertEquals("1234••••", TotpGenerator.mask("12345678"))
+        assertEquals("1234****", TotpGenerator.mask("12345678"))
     }
 
     @Test
     fun maskKeepsThreeForSevenDigitCode() {
         // 7/2 = 3（整除），仍不上浮
-        assertEquals("123••••", TotpGenerator.mask("1234567"))
+        assertEquals("123****", TotpGenerator.mask("1234567"))
     }
 
     @Test
     fun maskNeverShrinksBelowMinimumKeep() {
         // 4 位码：4/2 = 2 会被下限顶到 3 ⇒ 必须留 3 位，否则用户无法自行辨认
-        assertEquals("123•", TotpGenerator.mask("1234"))
+        assertEquals("123*", TotpGenerator.mask("1234"))
     }
 
     @Test
@@ -379,7 +379,7 @@ class TotpTest {
     @Test
     fun maskKeepsLettersForNonNumericCodes() {
         // Steam 等码可能是字母数字混合，遮罩只按长度算、不假设内容
-        assertEquals("ABCD••••", TotpGenerator.mask("ABCDEFGH"))
+        assertEquals("ABCD****", TotpGenerator.mask("ABCDEFGH"))
     }
 
     private companion object {
