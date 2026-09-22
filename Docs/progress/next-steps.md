@@ -1,5 +1,38 @@
 # 下一步任务清单
 
+> ## 🚧 【2026-09-22】Edge「偶尔不弹条目 / 偶尔提示无匹配」——按 Bitwarden 官方标准修 P0（**待真机验收**）
+>
+> 用户反馈：Edge 里**偶尔**不弹出密码条目，**偶尔**弹出但提示「密码库中无匹配条目」。
+> 「偶尔」是关键判据 ⇒ 不是静态判定写错，而是**两次捕获的输入信号不同**。
+>
+> **参考 Bitwarden 官方源码核对后**（`ViewNodeExtensions.kt` / `ViewStructureUtils.kt` /
+> `HtmlInfoExtensions.kt`）定位出**两条结构性 P0**（分类层本就对齐，不是问题所在）：
+> 1. **容器重定向缺失**：语义挂在 `autofillType == NONE` 的容器上（`<form autocomplete=username>`、
+>    包 `<input>` 的 `<div>`）时，框架回填会**丢弃整条 dataset** ——
+>    所以表象是「整个条目都不出现」。上游 `findFirstAutofillableChild` 就是干这个的。
+> 2. **逐字段站点用全局单值**：`webDomains.firstOrNull()` 把页面域名当成整页唯一值，
+>    而框架只在**跨域 iframe 根节点**带 `webDomain` ⇒ iframe 内的框被当成主文档的框，
+>    填充时站点校验不过 → 静默不填。上游是 `website = this.website ?: parentWebsite`。
+>
+> **已改**（3 文件）：
+> - **新增** `autofill/parser/FillTargetResolver.kt`：重定向 + 继承的**纯函数**策略。
+>   ⚠️ 抽出来是因为 `ViewNode` 是 `@SystemApi` 抽象类、JVM 单测构造不出实例；
+>   逻辑留在解析器里就永远不可测。
+> - 改 `autofill/parser/AssistStructureParser.kt`：接上重定向（语义落点 / 值 / 可见性
+>   全部改用下钻后的节点）；`traverse` 增 `parentWebDomain` 参数做自顶向下继承。
+> - **新增** `autofill/parser/FillTargetResolverTest.kt`：16 条用例。
+>
+> **验证**：16/16 通过；另做**变异测试**（`if (canReceiveValue)` → `if (false)`）
+> ⇒ 7 条失败，确认断言真能挡回归而非恒真。
+> 四道本地脚本：3 道 OK；`check_import_packages` 报的
+> `SettingsScreen.kt` 图标导入告警经 `git stash` 比对确认是**既有问题、与本轮无关**。
+>
+> ⚠️ **本轮未做**（留给后续）：① 真机验收（Edge 复现路径）；② P1「统一解析侧与填充侧
+> 的 `sameSite` 语义」；③ KVM 里无 Android SDK，故**整套 Gradle 编译与 `gw test` 未跑**，
+> 只对新增纯函数文件做了独立 kotlinc 编译 + JUnit 实跑。
+>
+> 细节 ⇒ **`ISSUES.md` #113 / #114**、`conventions/8.1-自动填充.md`。
+
 > ## ✅ 【2026-09-20 第三轮】胶囊阴影掉帧 + 强调色语义 + README 对齐 与 两处文档失真更正
 >
 > 提交 `475ac2a`（胶囊阴影）· `738d003`（强调色 + README + 文档更正）。

@@ -22,6 +22,14 @@ import io.vaultix.vaultix.autofill.model.FieldHint
 import io.vaultix.vaultix.autofill.model.ParsedField
 import io.vaultix.vaultix.autofill.model.ParsedStructure
 
+/**
+ * 从**重定向根**出发的子索引路径，用作 [ViewNode] 在投影树里的身份。
+ *
+ * 为什么用路径而不是对象引用：投影出的 [FillTargetNode] 是 data class，
+ * 两棵结构相同的子树会 `equals` 相等，拿它当 map 的键会互相覆盖。
+ */
+private typealias NodePath = List<Int>
+
 /** 把 [AssistStructure] 拆成 [ParsedStructure]（字段语义 + 登录框 id + WebView 标记）。 */
 object AssistStructureParser {
 
@@ -117,9 +125,17 @@ object AssistStructureParser {
         urlBarHosts: MutableList<String>,
         pagePackageName: String?,
         hostRules: List<HostRule>,
+        parentWebDomain: String? = null,
     ): Boolean {
         var webView = node.className?.contains("WebView", ignoreCase = true) == true
         node.webDomain?.let { webDomains += it }
+        // ★ 逐字段站点（对齐 Bitwarden `ViewNodeExtensions.toAutofillView`：
+        //   `website = this.website ?: parentWebsite`）。框架只在**跨域 iframe 的根节点**
+        //   上带 webDomain，iframe 内部的每个输入框自身都是 null —— 若只用
+        //   `parsed.webDomain`（全局首值），跨域 iframe 里的登录框会被当成「主文档的框」，
+        //   填充阶段拿主文档域名做校验 → 校验失败 → 静默不填。
+        //   自顶向下继承：本节点有值就用本节点的，没有就沿用父级。
+        val webDomain = node.webDomain?.takeIf { it.isNotBlank() } ?: parentWebDomain
         // 地址栏只取网址，**不作为可填充字段**：否则地址栏文本含 "login" 会被启发式
         // 判成用户名字段，填充时把账号写进地址栏。
         val isUrlBar = BrowserUrlBars.isUrlBarNode(pagePackageName, node.idPackage, node.idEntry)
@@ -138,23 +154,36 @@ object AssistStructureParser {
             // 规则覆盖本主机时 classified 为 null 表示「该节点不被规则承认」→ **不收进字段表**
             // （对齐上游：被规则覆盖的分区以规则为准，不做启发式兜底）。
             if (classified != null) {
-                out += ParsedField(
-                    id = id,
-                    hint = classified.hint,
-                    strength = classified.strength,
-                    value = node.text?.toString(),
-                    isFocused = node.isFocused,
-                    isVisible = node.visibility == View.VISIBLE,
-                    // 字段**自身**所属域名：页面里嵌了别的域名的 iframe 时，这些字段的
-                    // webDomain 与主页面不同 → 填充阶段据此跳过（逐字段站点校验，
-                    // 对齐 Bitwarden fillLoginPartition 的 website 比对）。
-                    webDomain = node.webDomain,
-                )
+                // ★ 容器重定向（对齐 Bitwarden `findFirstAutofillableChild`）：
+                // 外层容器被赋予语义 hint（如带 `autocomplete=username` 的 `<form>`/`<div>`）
+                // 但它自己 `autofillType == NONE`（收不到值）⇒ 必须下钻到第一个可填后代，
+                // 否则框架回填时整条 dataset 会因「目标不可填」被丢弃
+                // （上游原文：`buildFilledItemOrNull` returns null and **drops the field
+                // from the fill dataset entirely**）。判据与算法见 [FillTargetResolver]。
+                val target = resolveFillTarget(node)
+                if (target != null) {
+                    out += ParsedField(
+                        id = target.id,
+                        hint = classified.hint,
+                        strength = classified.strength,
+                        // 值取**下钻后**目标节点的文本（容器自身通常没有值）。
+                        value = target.text?.toString(),
+                        isFocused = target.isFocused,
+                        isVisible = target.visibility == View.VISIBLE,
+                        // 字段**自身**所属域名（含父级继承，见上方 webDomain 推导）：
+                        // 页面里嵌了别的域名的 iframe 时，这些字段的 webDomain 与主页面不同
+                        // → 填充阶段据此跳过（逐字段站点校验，对齐 Bitwarden
+                        // fillLoginPartition 的 website 比对）。
+                        webDomain = webDomain,
+                    )
+                }
             }
         }
         repeat(node.childCount) { index ->
             val child = node.getChildAt(index) ?: return@repeat
-            webView = traverse(child, out, webDomains, urlBarHosts, pagePackageName, hostRules) || webView
+            webView = traverse(
+                child, out, webDomains, urlBarHosts, pagePackageName, hostRules, webDomain,
+            ) || webView
         }
         return webView
     }
@@ -186,6 +215,73 @@ object AssistStructureParser {
         }
         if (!isEditableNode(node.htmlInfo?.tag, node.className, hints)) return null
         return HintClassifier.classify(hints, inputType, signal)
+    }
+
+    /**
+     * 该节点是否**自己就能收值**。
+     *
+     * 判据（对齐 Bitwarden `ViewNodeExtensions.toAutofillView`）：只有 `autofillType` 为
+     * `AUTOFILL_TYPE_TEXT` 的节点才能被框架回填；`AUTOFILL_TYPE_NONE`（0）表示
+     * 「这是个容器 / 不可填控件」——往它上面 `setValue` 会被框架丢弃。
+     *
+     * ⚠️ 判据是 `autofillType`，**不是**「是不是输入控件」（[isEditableNode]）。
+     * 一个 `<input>` 完全可能 `autofillType == NONE`（`type=hidden`、`disabled`、
+     * `readonly`），而 EditText 也可能因 `importantForAutofill=no` 而不可填。
+     */
+    private fun isFillable(node: ViewNode): Boolean = canReceiveValue(node.autofillType)
+
+    /**
+     * 重定向后的落点：`autofillType == TEXT` **且** 带 `autofillId`。
+     *
+     * 没有 `autofillId` 的节点框架无法寻址，写进去也不会生效 —— 必须继续往下找，
+     * 否则会出现「命中一个填不了的目标」，与完全不做重定向一样无效。
+     */
+    private fun isFillableTarget(node: ViewNode): Boolean =
+        isFillable(node) && node.autofillId != null
+
+    /**
+     * 解析本次填充真正该写入的节点：自己可填就用自己，否则**下钻**到第一个可填后代。
+     *
+     * 算法本体在 [io.vaultix.vaultix.autofill.parser.resolveFillTarget]（纯函数，
+     * 单测见 `FillTargetResolverTest`）。这里只负责把框架的 [ViewNode] 树投影成最小
+     * 抽象 [FillTargetNode] —— `ViewNode` 是 `@SystemApi` 抽象类，构造不出实例，
+     * 逻辑留在这一类里就没法做 JVM 单测。
+     *
+     * 投影时给每个节点挂上**从根出发的子索引路径**（`List<Int>`）作为身份，回溯时按同一
+     * 路径取回原节点。选路径而非对象引用，是因为 [FillTargetNode] 是 data class：
+     * 两棵结构相同的子树会 `equals` 相等，用它做 map 的键会互相覆盖。
+     *
+     * @return 可写入的节点；整棵子树都不可填时返回 null（调用方丢弃该字段）。
+     */
+    private fun resolveFillTarget(node: ViewNode): ViewNode? {
+        // 单节点快速路径：绝大多数节点自己就是输入框，不必建整棵投影树。
+        if (isFillableTarget(node)) return node
+        val byPath = mutableMapOf<NodePath, ViewNode>()
+        val projection = project(node, emptyList(), byPath)
+        val target = io.vaultix.vaultix.autofill.parser.resolveFillTarget(projection) ?: return null
+        val path = target.identity as? NodePath ?: return null
+        return byPath[path]
+    }
+
+    /**
+     * 把 [node] 子树投影成 [FillTargetNode]，同时把「路径 → 原节点」记进 [byPath]。
+     *
+     * @param path 从本次重定向的根出发的子索引路径（根为空列表）。
+     */
+    private fun project(
+        node: ViewNode,
+        path: NodePath,
+        byPath: MutableMap<NodePath, ViewNode>,
+    ): FillTargetNode {
+        byPath[path] = node
+        val children = (0 until node.childCount).mapNotNull { index ->
+            node.getChildAt(index)?.let { child -> project(child, path + index, byPath) }
+        }
+        return FillTargetNode(
+            canReceiveValue = isFillableTarget(node),
+            children = children,
+            identity = path,
+        )
     }
 
     /** 结构里第一个非空 webDomain（即页面主机）；没有则 null。 */
