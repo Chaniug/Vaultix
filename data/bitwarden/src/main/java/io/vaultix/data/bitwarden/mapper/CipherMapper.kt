@@ -218,6 +218,32 @@ class CipherMapper @Inject constructor(
             // 自定义字段改为按**表单意图**写回（此前固定沿用 stored.fields，
             // 等于用户在 Vaultix 里无法增删改自定义字段）
             fields = item.customFields.map { mapCustomFieldRequest(it, key) },
+            // ------------------------------------------------------------------
+            // ★ 以下三段**只透传、不解释**（2026-09-23）：
+            //
+            // 它们是「服务端有、Vaultix 领域模型没有」的字段。这里刻意**不做建模**，
+            // 只把服务端原值原样装回请求体 —— 因为目的不是"支持它们"，
+            // 而是**不要让一次无关的编辑把它们抹掉**。
+            //
+            // 判据来自 Bitwarden 服务端 `CipherRequestModel`：
+            //   · PasswordHistory：`PasswordHistory?.Select(...)` ⇒ 不带即清空；
+            //     且 `Data` 是整块重建的（`IgnoreWritingNull`），不是"不改动"。
+            //   · OrganizationId：`IsOrganizationCipher => !IsNullOrWhiteSpace(...)`
+            //     ⇒ 不带即被当成个人条目，组织成员**再也看不到这条**。
+            //   · LastKnownRevisionDate：一路传给 `SaveDetailsAsync(...)` 做冲突检测
+            //     ⇒ 不带即放弃检测，多设备并发编辑**静默互相覆盖**。
+            //
+            // ⚠️ 注意 `LoginDto.uris` 那种"能在 Vaultix 里编辑"的字段走 overlay；
+            //    这三段在 Vaultix 里**根本没有编辑入口**，所以"透传原值"就是正确语义，
+            //    不存在"用户改了却不生效"的问题。
+            // ⚠️ 附件（attachments）**不在此列**：服务端 `ToCipher`
+            //    `if (!hasAttachments2 && !hasAttachments) return existingCipher;`
+            //    —— 不带附件时服务端**原样保留**，无需透传（也不该透传：附件是
+            //    整体替换语义，透传反而有覆盖风险）。
+            // ------------------------------------------------------------------
+            passwordHistory = stored.passwordHistory,
+            organizationId = stored.organizationId,
+            lastKnownRevisionDate = stored.revisionDate.takeIf { it.isNotBlank() },
         )
     }
 

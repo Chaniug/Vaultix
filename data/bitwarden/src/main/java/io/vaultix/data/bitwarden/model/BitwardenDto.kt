@@ -197,6 +197,37 @@ data class CipherRequest(
     @SerialName("secureNote") val secureNote: SecureNoteDto? = null,
     @SerialName("sshKey") val sshKey: SshKeyDto? = null,
     @SerialName("fields") val fields: List<CustomFieldDto> = emptyList(),
+
+    // ---------------------------------------------------------------------
+    // ★ 以下三段是**纯透传字段**（2026-09-23 新增），Vaultix 领域模型里没有对应
+    //   概念，新增它们**不是为了支持**这些能力，而是为了**不让一次无关的编辑
+    //   把它们抹掉**。判据来自 Bitwarden 服务端
+    //   `src/Api/Vault/Models/Request/CipherRequestModel.cs`：
+    //
+    //   · PasswordHistory：`PasswordHistory = PasswordHistory?.Select(...)`
+    //     ⇒ **不带即清空**。且服务端是把整个 `Data` 块重建的
+    //       （序列化时 `IgnoreWritingNull`），所以"不传"= 置空，不是"不改动"。
+    //
+    //   · OrganizationId：`IsOrganizationCipher => !IsNullOrWhiteSpace(OrganizationId)`
+    //     ⇒ **不带即被当成个人条目**，组织成员再也看不到这条（对用户来说
+    //       等同于"条目从共享库里消失了"）。
+    //
+    //   · LastKnownRevisionDate：一路传给 `SaveDetailsAsync(...)` 做冲突检测
+    //     ⇒ **不带即放弃检测**，多设备并发编辑会静默互相覆盖。
+    //
+    //   ⚠️ 附件（attachments）**刻意不在此列**：服务端
+    //     `if (!hasAttachments2 && !hasAttachments) return existingCipher;`
+    //     ⇒ 不带附件时服务端**原样保留**，无需透传——而且透传反而危险，
+    //       因为附件的提交语义是"整体替换"，一旦塞回去就可能被当成一次
+    //       附件改写。所以这里什么都不做才是最安全的。
+    //
+    //   这三段只在**更新**路径（CipherMapper.toUpdateRequest）填值；新建路径
+    //   不填——那时服务端还没有这条记录，没有"原值"可言。
+    // ---------------------------------------------------------------------
+    @SerialName("passwordHistory")
+    val passwordHistory: List<PasswordHistoryDto> = emptyList(),
+    @SerialName("organizationId") val organizationId: String? = null,
+    @SerialName("lastKnownRevisionDate") val lastKnownRevisionDate: String? = null,
 )
 
 /**
