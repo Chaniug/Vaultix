@@ -86,6 +86,19 @@ class CloudAccountsViewModel @Inject constructor(
         /** 任一动作在进行（登录 / 自检 / 注销）。 */
         val busy: Boolean = false,
         val error: String? = null,
+        /**
+         * OneDrive 的**断开原因**（按账号存）。
+         *
+         * ⚠️ 为什么不能只用 [error] / [notice]：那两个是**一次性 snackbar**，两秒就没了。
+         * 而账号卡上的"未连接"是**持续状态** —— 用户隔天回来看见"未连接"，却想不起
+         * 当时那句一闪而过的原因，只能靠猜。这里把原因**挂在账号上**，让它跟着状态一起显示。
+         *
+         * ⚠️ 取值必须区分两类（见 `oneDriveMessage`）：**临时不可用**要"稍后重试"，
+         * **真失败**要"重新登录" —— 混成一句话会让用户白跑一次登录流程。
+         * 这正是 [io.vaultix.vaultix.remote.onedrive.OneDriveAuthTemporarilyUnavailableException]
+         * 存在的理由，UI 侧不能把它丢掉。
+         */
+        val oneDriveIssues: Map<String, String> = emptyMap(),
         /** 待确认注销的账号（弹出确认框，且**先算好影响面**）。 */
         val pendingRemoval: CloudAccount? = null,
         /** 刚做完的动作的成功提示（一次性，由 UI 读后清）。 */
@@ -275,12 +288,21 @@ class CloudAccountsViewModel @Inject constructor(
                 connector.signOutOneDrive(null)
             }
             connector.signInOneDrive(activity, forceAccountChooser)
-                .onSuccess { session ->
+                .onSuccess {
+                    // 登录成功 ⇒ 清掉该账号的断开原因（它已经不成立了）。
+                    //
+                    // ⚠️ 这里必须把**整张表清掉**，不能按 `session.accountId` 精确删：
+                    // 写入侧用的键是 `account.storedId`（取自库的 origin），
+                    // 而 `session.accountId` 是 MSAL 侧的 id —— 二者**形状不同**
+                    // （差 `.utid` 后缀，见 `matchesStoredAccountId` 的 KDoc）。
+                    // 按 MSAL id 删会静默删不掉，表现为"登录成功了但红字还挂着"。
+                    // 表本身很小（账号数个位数），清空是最简单且不会错的做法。
                     _state.update {
                         it.copy(
                             busy = false,
                             error = null,
                             notice = SETTINGS_CLOUD_ONEDRIVE_SIGNED_IN,
+                            oneDriveIssues = emptyMap(),
                         )
                     }
                     refresh()
@@ -294,6 +316,37 @@ class CloudAccountsViewModel @Inject constructor(
     /** 拿不到 Activity 时的如实上报（不静默禁用按钮 —— 那样用户只看到"点了没反应"）。 */
     fun reportMissingActivity() {
         _state.update { it.copy(error = SETTINGS_CLOUD_ACTIVITY_MISSING) }
+    }
+
+    /**
+     * 探测某个 OneDrive 账号**当前**能不能刷新出登录态，并把结果记进 [UiState.oneDriveIssues]。
+     *
+     * ## 为什么必须真去探一次，而不是只看 `account.connected`
+     *
+     * `connected` 只回答"MSAL 缓存里还有没有这个账户"，**回答不了"这个账户现在还能不能用"**。
+     * 而 OneDrive 最恼人的故障恰恰是这个组合：**账户还在（connected = true）、
+     * 但静默刷新被系统掐断**（设备打盹 + 电池优化未豁免）。此时界面显示"已连接"，
+     * 直到用户去读库才失败 —— 那时人已经在另一个页面了，看不到任何解释。
+     *
+     * ⚠️ **只在 connected 时探**：未连接说明登录态本来就没了，那是"需要重新登录"
+     * （界面已经如实写着），再探一次是浪费一次网络往返，还会把真正的"未连接"盖成
+     * "暂时不可用"。
+     * ⚠️ 探测失败**不写成 [error]**：它是**背景探测**，不是用户刚触发的动作 ——
+     * 弹一条 snackbar 出来会让人以为是自己的操作出了问题。只记进账号状态即可。
+     */
+    fun probeOneDriveHealth(account: CloudAccount) {
+        if (account.kind != CloudAccountKind.ONEDRIVE || !account.connected) return
+        viewModelScope.launch {
+            connector.probeOneDriveToken(account.storedId)
+                .onSuccess {
+                    _state.update { it.copy(oneDriveIssues = it.oneDriveIssues - account.storedId) }
+                }
+                .onFailure { error ->
+                    _state.update {
+                        it.copy(oneDriveIssues = it.oneDriveIssues + (account.storedId to oneDriveMessage(error)))
+                    }
+                }
+        }
     }
 
     // ---------------------------------------------------------------- 注销 / 移除

@@ -89,6 +89,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -175,19 +176,35 @@ fun CloudAccountsScreen(
                 state.accounts.isEmpty() && !state.formVisible -> EmptyHint()
 
                 else -> state.accounts.forEach { account ->
-                    CloudAccountCard(
-                        account = account,
-                        busy = state.busy,
-                        onRemove = { viewModel.requestRemoval(account) },
-                        onReconfigure = { viewModel.startReconfigure(account) },
-                        onSignIn = { force ->
-                            if (activity == null) {
-                                viewModel.reportMissingActivity()
-                            } else {
-                                viewModel.signInOneDrive(activity, forceAccountChooser = force)
-                            }
-                        },
-                    )
+                    // ★ 探测放在 `key()` 里而不是裸写在 `forEach` 中：
+                    //   `LaunchedEffect` 是**按调用位置**（而非参数值）与组合树匹配的，
+                    //   账号列表一旦增删，后面每一项的"位置"都会前移 —— 裸写在循环里
+                    //   会出现"A 的探测跑在 B 的槽位上"。`key(storedId)` 把身份显式绑上。
+                    //   ⚠️ 这正是本项目里"列表 + 副作用"的老坑，别图省事省掉 key。
+                    key(account.storedId) {
+                        CloudAccountCard(
+                            account = account,
+                            busy = state.busy,
+                            issue = state.oneDriveIssues[account.storedId],
+                            onRemove = { viewModel.requestRemoval(account) },
+                            onReconfigure = { viewModel.startReconfigure(account) },
+                            onSignIn = { force ->
+                                if (activity == null) {
+                                    viewModel.reportMissingActivity()
+                                } else {
+                                    viewModel.signInOneDrive(activity, forceAccountChooser = force)
+                                }
+                            },
+                        )
+                        // 进页面就探一次「已连接但静默刷新可能已被系统掐断」——
+                        // 这是 OneDrive 唯一会**悄悄坏掉**的状态（见 probeOneDriveHealth 的 KDoc）。
+                        // ⚠️ key 里**只放探测真正依赖的东西**：`connected` 参与判定，
+                        //    `oneDriveIssues` 不参与 —— 把后者也放进 key 会让每次探测结果
+                        //    反过来重启一次探测（结果 → 重组 → key 变 → 再探），自己咬自己。
+                        LaunchedEffect(account.storedId, account.connected) {
+                            viewModel.probeOneDriveHealth(account)
+                        }
+                    }
                     Spacer(Modifier.height(Spacing.md))
                 }
             }
@@ -268,38 +285,67 @@ fun CloudAccountsScreen(
 private fun CloudAccountCard(
     account: CloudAccount,
     busy: Boolean,
+    /** 该账号**当前**的断开原因（仅 OneDrive 有；见 `probeOneDriveHealth`）。 */
+    issue: String?,
     onRemove: () -> Unit,
     onReconfigure: () -> Unit,
     onSignIn: (forceAccountChooser: Boolean) -> Unit,
 ) {
+    val isOneDrive = account.kind == CloudAccountKind.ONEDRIVE
     SettingsGroupCard {
         SettingsRow(
             icon = {
                 Icon(
-                    imageVector = if (account.kind == CloudAccountKind.ONEDRIVE) {
-                        Icons.Filled.Cloud
-                    } else {
-                        Icons.Filled.Storage
-                    },
+                    imageVector = if (isOneDrive) Icons.Filled.Cloud else Icons.Filled.Storage,
                     contentDescription = null,
                 )
             },
             title = account.label,
+            // ⚠️ 副标题只说**稳定的**事实（来源 + 被谁在用）。
+            //    「连接状态」会变，另起一行单独说 —— 混进来会让人以为它是账号的固有属性。
             subtitle = stringResource(account.kind.subtitleRes()) + " · " +
                 stringResource(R.string.cloud_accounts_used_by, account.vaultCount),
         )
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = Spacing.xl, end = Spacing.lg, bottom = Spacing.sm),
-            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
-        ) {
-            // OneDrive：未连接时给"登录"，已连接时给"换号"。
-            if (account.kind == CloudAccountKind.ONEDRIVE) {
-                TextButton(
+
+        // ★ OneDrive 的**主操作**必须在这里，且要比「注销」强。
+        //
+        // 改前的形态是三个平级的 `TextButton`（登录 / 重填 / 注销），问题有两层：
+        // ① 「登录 Microsoft 账号」是本页**最核心、最难成功、最需要被看见**的动作，
+        //    却和「注销」长得一样；用户扫一眼分不出哪个是主路。
+        // ② 未连接时它承载的是**恢复路径**（"我该怎么把它弄回来"），
+        //    而 `TextButton` 是所有按钮里最弱的样式 —— 主路被做成了看起来最不重要的东西。
+        //
+        // 现在按下述层级重排（与 `VaultManagementScreen` / `AddAccountForm` 一致）：
+        //   主操作 = `FilledTonalButton`（登录 / 切换账号）
+        //   次操作 = `TextButton`（重新填写，仅 WebDAV）
+        //   破坏性 = `TextButton` + error 色（注销），且**永远置底**
+        if (isOneDrive) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = Spacing.xl, end = Spacing.lg, bottom = Spacing.sm),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                FilledTonalButton(
                     onClick = { onSignIn(account.connected) },
                     enabled = !busy,
+                    modifier = Modifier.height(BUTTON_HEIGHT),
                 ) {
+                    if (busy) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(INLINE_PROGRESS),
+                            strokeWidth = 2.dp,
+                        )
+                        Spacer(Modifier.width(Spacing.sm))
+                    } else {
+                        Icon(
+                            Icons.Filled.Cloud,
+                            contentDescription = null,
+                            modifier = Modifier.size(INLINE_ICON),
+                        )
+                        Spacer(Modifier.width(Spacing.sm))
+                    }
                     Text(
                         stringResource(
                             if (account.connected) {
@@ -310,40 +356,74 @@ private fun CloudAccountCard(
                         ),
                     )
                 }
-            }
-            // WebDAV：改密码是最常见的故障 ⇒ 给一条"重填密码"的路，
-            // 而不是逼用户注销再重加（那会连账号名一起丢掉）。
-            if (account.kind == CloudAccountKind.WEBDAV && !account.connected) {
-                TextButton(onClick = onReconfigure, enabled = !busy) {
-                    Text(stringResource(R.string.cloud_accounts_reconfigure))
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = onRemove, enabled = !busy) {
+                    Text(
+                        stringResource(R.string.cloud_accounts_remove),
+                        color = MaterialTheme.colorScheme.error,
+                    )
                 }
             }
-            TextButton(onClick = onRemove, enabled = !busy) {
-                Text(
-                    stringResource(R.string.cloud_accounts_remove),
-                    color = MaterialTheme.colorScheme.error,
-                )
+        } else {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = Spacing.xl, end = Spacing.lg, bottom = Spacing.sm),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                // WebDAV：改密码是最常见的故障 ⇒ 给一条"重填密码"的路，
+                // 而不是逼用户注销再重加（那会连账号名一起丢掉）。
+                if (!account.connected) {
+                    TextButton(onClick = onReconfigure, enabled = !busy) {
+                        Text(stringResource(R.string.cloud_accounts_reconfigure))
+                    }
+                }
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = onRemove, enabled = !busy) {
+                    Text(
+                        stringResource(R.string.cloud_accounts_remove),
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
             }
         }
     }
     // 连接状态**单独一行**：它**会变**（token 过期 / 凭据被清 / 库被移除），
     // 混进副标题会让人以为它是账号的固有属性。
-    Text(
-        text = stringResource(
-            if (account.connected) {
-                R.string.cloud_accounts_connected
+    //
+    // ★ OneDrive 还要往下再说一层「**为什么**断了」：
+    //   只有"未连接"三个字时，用户既不知道该重登还是该等一等 —— 而这两件事
+    //   的动作完全不同（见 `OneDriveAuthTemporarilyUnavailableException` 的 KDoc）。
+    //   改前这个原因只出现在**一闪而过的 snackbar** 里，隔天再回来看就没了。
+    Column(modifier = Modifier.padding(start = Spacing.xl, top = Spacing.xs, bottom = Spacing.sm)) {
+        Text(
+            text = stringResource(
+                if (account.connected) {
+                    R.string.cloud_accounts_connected
+                } else {
+                    R.string.cloud_accounts_disconnected
+                },
+            ),
+            style = MaterialTheme.typography.bodySmall,
+            color = if (account.connected) {
+                MaterialTheme.colorScheme.primary
             } else {
-                R.string.cloud_accounts_disconnected
+                MaterialTheme.colorScheme.error
             },
-        ),
-        style = MaterialTheme.typography.bodySmall,
-        color = if (account.connected) {
-            MaterialTheme.colorScheme.primary
-        } else {
-            MaterialTheme.colorScheme.error
-        },
-        modifier = Modifier.padding(start = Spacing.xl, top = Spacing.xs, bottom = Spacing.sm),
-    )
+        )
+        // 「已连接 + 有 issue」= 账户还在但静默刷新被掐断，属于**要提醒**的情形
+        // （用户以为一切正常，去读库才发现打不开）。颜色用 error 而非 primary：
+        // 此时此刻它**确实用不了**，只是账户还没被清掉而已。
+        issue?.let {
+            Text(
+                text = it,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(top = Spacing.xs),
+            )
+        }
+    }
 }
 
 @Composable
@@ -402,11 +482,31 @@ private fun AddAccountForm(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(Spacing.md))
+        // ★ 与 WebDAV 的【测试连接】保持同一形态：强按钮 + 图标 + **进行中显式可见**。
+        //
+        // 改前这里是"登录中"唯一的反馈只有 `busy` 把按钮置灰 —— 而 MSAL 要拉起系统
+        // 授权页、再等用户选账户，中间可能好几秒。**一个灰按钮和一个正在跑的按钮长得一样**，
+        // 用户会以为自己没点上而反复点。
+        // （WebDAV 那侧本来就做对了：`ProbeButton` 在 PROBING 时显进度圈。）
         FilledTonalButton(
             onClick = { onSignIn(false) },
             enabled = !state.busy,
             modifier = Modifier.fillMaxWidth().height(BUTTON_HEIGHT),
         ) {
+            if (state.busy) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(INLINE_PROGRESS),
+                    strokeWidth = 2.dp,
+                )
+                Spacer(Modifier.width(Spacing.sm))
+            } else {
+                Icon(
+                    Icons.Filled.Cloud,
+                    contentDescription = null,
+                    modifier = Modifier.size(INLINE_ICON),
+                )
+                Spacer(Modifier.width(Spacing.sm))
+            }
             Text(stringResource(R.string.cloud_accounts_onedrive_signin))
         }
     }

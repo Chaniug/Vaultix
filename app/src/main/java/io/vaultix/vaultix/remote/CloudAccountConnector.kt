@@ -173,6 +173,21 @@ class CloudAccountConnector @Inject constructor(
     suspend fun cachedOneDriveSessions(): List<OneDriveAccountSession> =
         runCatching { oneDriveAuth.listCachedSessions() }.getOrDefault(emptyList())
 
+    /**
+     * **静默**探一次该账号现在还能不能拿到 token（不打搅用户）。
+     *
+     * 与 [cachedOneDriveSessions] 的区别正是它存在的理由：后者只回答"MSAL 缓存里
+     * 还有没有这个账户"，回答不了"这个账户现在还能不能用"。OneDrive 最恼人的故障
+     * 恰恰是这个组合 —— **账户还在、但静默刷新被系统掐断**（设备打盹 + 未豁免电池优化，
+     * 见 `OneDriveAuthManager.acquireAccessToken`）。只有真去取一次 token 才知道。
+     *
+     * ⚠️ `Result` 里的失败**是有信息量的**，调用方必须区分：临时不可用
+     * （[io.vaultix.vaultix.remote.onedrive.isOneDriveAuthTemporarilyUnavailable]，
+     * 用户稍后重试即可自愈）vs 真失效（必须重新登录）。混成一句话会让用户白跑一次登录。
+     */
+    suspend fun probeOneDriveToken(accountId: String): Result<OneDriveAccountSession> =
+        runCatching { oneDriveAuth.acquireAccessToken(accountId) }
+
     /** 构造一个 OneDrive 来源（**不自检**）。找不到账户返回 null。 */
     fun oneDriveSource(accountId: String?, filePath: String): KdbxFileSource? {
         val id = accountId ?: return null
