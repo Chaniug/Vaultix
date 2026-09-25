@@ -72,15 +72,26 @@ import io.vaultix.vaultix.ui.theme.Spacing
  *
  * ## 开关的三种呈现（对应 [QuickUnlockController.CapabilityState]）
  *
- * | 状态 | 开关 | 副标题 |
+ * | 状态 | 尾部控件 | 副标题 |
  * |---|---|---|
- * | `On` | 开 | 「已对 N 个库生效」 |
- * | `Partial(n)` | 关 | 「有 n 个库未完成，点此继续」 |
- * | `Off` | 关 | 未启用（或设备不支持） |
+ * | `On` | 开着的开关 | 「已对 N 个库生效」 |
+ * | `Partial(n)` | **「继续」按钮**（不是开关） | 「有 n 个库未完成，点此继续」 |
+ * | `Off` | 关着的开关 | 未启用（或设备不支持） |
  *
- * ⚠️ `Partial` 用**关**的开关 + 明确提示，而不是硬撑成"开" ——
- * 开关说开着但有的库其实打不开，就是 #93 那种「谎报状态」。
- * 点 `Partial` 的开关 = 继续把没配完的补上（不是关闭）。
+ * ⚠️ `Partial` **不允许**硬撑成"开" —— 开关说开着但有的库其实打不开，
+ * 就是 #93 那种「谎报状态」；但也不能简单画成"关"（见下）。
+ *
+ * ⚠️ 2026-09-26 修正：`Partial` **不再渲染成关着的开关，而是渲染成一个「继续」按钮**。
+ * 原实现把 `Partial` 画成"关"（`checked = state is On`），于是用户看到关、点一下，
+ * 预期是"打开"，实际发生的却是"进入配置向导接着配"。这个错位在真机上表现为
+ * 「点了开关没打开，反而弹了个框」——注释里写清了"点 Partial = 继续"，
+ * 但**注释不是 UI，用户看不到**。
+ *
+ * 为什么不直接用三态开关（半开）：Material 3 的 `Switch` 只有开/关两态，
+ * 没有"半开"这一形态；自己画一个半开的 knob 属于自造控件，可读性与无障碍都更差。
+ * 而 `Partial` 的本质压根不是"开关的位置"，是**"一个还没做完的动作"**——
+ * 用一个明确写着「继续」的按钮来表达，比任何开关形态都准确，也不会让人误以为
+ * 它是"当前处于关闭状态"。
  *
  * ⚠️ 两行开关**互不联动**：点一个不会顺手改另一个（各有各的信封，验收清单里单列了这一条）。
  */
@@ -100,11 +111,11 @@ internal fun QuickUnlockSettingsRows(
         // 整行可点（热区比开关本身大得多）；开关自带处理，点开关不会双触发。
         onClick = onToggleBiometric,
         trailing = {
-            Switch(
-                checked = state.biometric is QuickUnlockController.CapabilityState.On,
-                onCheckedChange = { onToggleBiometric() },
-                // 设备不支持认证时不给点：点了也走不完流程，允许点等于给出一个必然失败的承诺。
+            CapabilityToggle(
+                capability = state.biometric,
                 enabled = canAuthenticate,
+                // 设备不支持认证时不给点：点了也走不完流程，允许点等于给出一个必然失败的承诺。
+                onToggle = onToggleBiometric,
             )
         },
     )
@@ -115,9 +126,10 @@ internal fun QuickUnlockSettingsRows(
         subtitle = pinSummary(state),
         onClick = onTogglePin,
         trailing = {
-            Switch(
-                checked = state.pin is QuickUnlockController.CapabilityState.On,
-                onCheckedChange = { onTogglePin() },
+            CapabilityToggle(
+                capability = state.pin,
+                enabled = true,
+                onToggle = onTogglePin,
             )
         },
     )
@@ -128,6 +140,56 @@ internal fun QuickUnlockSettingsRows(
         subtitle = stringResource(R.string.settings_quick_unlock_manage_desc),
         onClick = onManage,
     )
+}
+
+/**
+ * 一个「能力」的尾部控件：**三态渲染成两种控件**。
+ *
+ * - [QuickUnlockController.CapabilityState.On] / `Off` ⇒ 真正的 [Switch]（开 / 关）；
+ * - [QuickUnlockController.CapabilityState.Partial] ⇒ 一个写着「继续」的按钮。
+ *
+ * ## 为什么 Partial 必须换控件
+ *
+ * 因为它**不是一个开关状态**。开关的两个位置（开/关）回答的是"这个功能现在生效吗"，
+ * 而 `Partial` 回答的是另一个问题："这活儿干到一半，还剩几个库没配"。
+ * 把它塞进开关的"关"位置，用户就会按"关 → 点一下就开"去理解它，
+ * 于是得到的是"点了没开，弹了个框"的困惑。
+ *
+ * 换成按钮后，用户看到的是「继续」——一个动作提示，点它 = 把没配完的配完，
+ * 与 [QuickUnlockController.toggleBiometric] 里 `Partial ⇒ showConfigure(...)` 的实际行为
+ * 一一对应。**控件形态与行为语义对齐**，注释可以删掉，界面自己会说话。
+ *
+ * ## 无障碍
+ *
+ * 按钮用 [TextButton] 而非自绘，天然带 `Role.Button` 语义与最小触摸尺寸；
+ * 开关走 [Switch] 自带语义。两者都不需要额外 `semantics` 标注。
+ */
+@Composable
+private fun CapabilityToggle(
+    capability: QuickUnlockController.CapabilityState,
+    enabled: Boolean,
+    onToggle: () -> Unit,
+) {
+    when (capability) {
+        is QuickUnlockController.CapabilityState.Partial -> TextButton(
+            onClick = onToggle,
+            enabled = enabled,
+        ) {
+            Text(stringResource(R.string.quick_unlock_partial_action))
+        }
+
+        is QuickUnlockController.CapabilityState.On -> Switch(
+            checked = true,
+            onCheckedChange = { onToggle() },
+            enabled = enabled,
+        )
+
+        QuickUnlockController.CapabilityState.Off -> Switch(
+            checked = false,
+            onCheckedChange = { onToggle() },
+            enabled = enabled,
+        )
+    }
 }
 
 /**
