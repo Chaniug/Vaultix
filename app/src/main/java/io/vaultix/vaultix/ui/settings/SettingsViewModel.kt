@@ -20,8 +20,6 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.flatMapLatest
-import kotlinx.coroutines.flow.flowOf
 import io.vaultix.vaultix.ui.items.ItemsCardDisplayMode
 import io.vaultix.vaultix.ui.items.ItemsGroupMode
 import kotlinx.coroutines.flow.map
@@ -101,12 +99,30 @@ class SettingsViewModel @Inject constructor(
             initialValue = VaultixPreferencesDefaults.THEME_MODE,
         )
 
+    // ---- 布尔型设置项：**一律是 `Boolean?`，初值 `null`** ----------------------
+    //
+    // 下面这一组（OLED 纯黑 / 各类开关）的 `Boolean?` 不是可选用法，是**契约**：
+    //
+    //   null  = 「偏好还没从磁盘读出来」（.ai/ISSUES.md #84「三种空」）
+    //   true  = 明确的"开"
+    //   false = 明确的"关"
+    //
+    // ⚠️ **不要把 `initialValue` 改回 `true`/`false`**。那等于替用户先答一次题：
+    //   冷启动后快速进设置页，开关会从"假值"跳到"真值"，看上去像在闪烁
+    //   （2026-09-16 真机报告，动态取色开关）。反方向（`?: true`）同样错，
+    //   那正是 2026-09-14「防截屏先开后关」的成因。**两个方向都试过，都错**：
+    //   问题不在默认值取什么，而在**不该在不知道的时候给答案**。
+    //
+    // 渲染侧由 `SettingsSwitch(value: Boolean?)` 接住：拿到 null 就用同尺寸占位撑住
+    // 布局（且占位仍可点，避免点击被吞 —— 见该组件 KDoc）。
+    // 因此**新加开关时初值一律写 `null`**，别写具体值。
+
     /** OLED 纯黑（深色模式 surface/background 纯黑）。 */
-    val oledPureBlack: StateFlow<Boolean> = preferences.oledPureBlack
+    val oledPureBlack: StateFlow<Boolean?> = preferences.oledPureBlack
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5_000),
-            initialValue = false,
+            initialValue = null,
         )
 
     /** 回收站自动清理档位（天；0 = 不自动清空），与回收站页顶栏入口共用同一偏好。 */
@@ -118,11 +134,11 @@ class SettingsViewModel @Inject constructor(
         )
 
     /** 自动填充保存提示（登录成功后询问保存 / 更新凭据，默认开）。 */
-    val autofillSavePrompt: StateFlow<Boolean> = preferences.autofillSavePrompt
+    val autofillSavePrompt: StateFlow<Boolean?> = preferences.autofillSavePrompt
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5_000),
-            initialValue = true,
+            initialValue = null,
         )
 
     fun setAutofillSavePrompt(enabled: Boolean) {
@@ -130,11 +146,11 @@ class SettingsViewModel @Inject constructor(
     }
 
     /** 自动填充后自动复制验证码（条目带 TOTP 而页面没有验证码框时）。 */
-    val autoCopyTotp: StateFlow<Boolean> = preferences.autoCopyTotp
+    val autoCopyTotp: StateFlow<Boolean?> = preferences.autoCopyTotp
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5_000),
-            initialValue = true,
+            initialValue = null,
         )
 
     fun setAutoCopyTotp(enabled: Boolean) {
@@ -149,11 +165,11 @@ class SettingsViewModel @Inject constructor(
      * 默认 `true` = 保持既有行为（该行为 2026-09-18 就在验证码页里了），
      * 加开关只为让用户能关掉，不静默改变已有观感。
      */
-    val totpCopyNextOnExpiring: StateFlow<Boolean> = preferences.totpCopyNextOnExpiring
+    val totpCopyNextOnExpiring: StateFlow<Boolean?> = preferences.totpCopyNextOnExpiring
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5_000),
-            initialValue = true,
+            initialValue = null,
         )
 
     fun setTotpCopyNextOnExpiring(enabled: Boolean) {
@@ -161,11 +177,11 @@ class SettingsViewModel @Inject constructor(
     }
 
     /** 域匹配：允许基域 / 子域名命中（默认开，对齐 Bitwarden）。 */
-    val autofillBaseDomainMatch: StateFlow<Boolean> = preferences.autofillBaseDomainMatch
+    val autofillBaseDomainMatch: StateFlow<Boolean?> = preferences.autofillBaseDomainMatch
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5_000),
-            initialValue = true,
+            initialValue = null,
         )
 
     fun setAutofillBaseDomainMatch(enabled: Boolean) {
@@ -173,11 +189,11 @@ class SettingsViewModel @Inject constructor(
     }
 
     /** 域匹配：仅精确域（默认关）。关掉「严格匹配」是浏览器填不出来时的首选排查动作。 */
-    val autofillExactDomainOnly: StateFlow<Boolean> = preferences.autofillExactDomainOnly
+    val autofillExactDomainOnly: StateFlow<Boolean?> = preferences.autofillExactDomainOnly
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5_000),
-            initialValue = false,
+            initialValue = null,
         )
 
     fun setAutofillExactDomainOnly(enabled: Boolean) {
@@ -190,11 +206,11 @@ class SettingsViewModel @Inject constructor(
      * 关掉后不再按站点规则覆盖启发式识别；规则表缓存仍保留（下次打开立即生效，
      * 不必等 6 小时节流）。
      */
-    val fillAssistEnabled: StateFlow<Boolean> = preferences.fillAssistEnabled
+    val fillAssistEnabled: StateFlow<Boolean?> = preferences.fillAssistEnabled
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5_000),
-            initialValue = true,
+            initialValue = null,
         )
 
     fun setFillAssistEnabled(enabled: Boolean) {
@@ -230,11 +246,11 @@ class SettingsViewModel @Inject constructor(
     }
 
     /** 卡片是否显示左侧图标。 */
-    val itemsShowIcon: StateFlow<Boolean> = preferences.itemsShowIcon
+    val itemsShowIcon: StateFlow<Boolean?> = preferences.itemsShowIcon
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5_000),
-            initialValue = true,
+            initialValue = null,
         )
 
     fun setItemsShowIcon(enabled: Boolean) {
@@ -307,26 +323,6 @@ class SettingsViewModel @Inject constructor(
         activeVaultStore.select(vaultId)
         activeVaultStore.setDefault(vaultId)
     }
-
-    /**
-     * **活跃库**中的通行密钥总数（设置页「通行密钥」分组展示）。
-     *
-     * ⚠️ 口径必须与填充侧一致：autofill / CP 只查活跃库，这里若跨库累加就会出现
-     * 「设置页显示 5 个，填充时一个都不弹」。统计也只认解锁库 —— 锁定库的密文读不出来，
-     * 硬统计只会得到 0 并误导用户「我没存过通行密钥」，故副标题写明口径。
-     */
-    val passkeyCount: StateFlow<Int> = activeVaultStore.activeVaultId
-        .flatMapLatest { id ->
-            if (id.isNullOrBlank()) {
-                flowOf(0)
-            } else {
-                itemRepository.observeItems(id).map { items -> items.sumOf { it.fido2Credentials.size } }
-            }
-        }.stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5_000),
-            initialValue = 0,
-        )
 
     fun setVaultTimeout(timeout: VaultTimeout) {
         viewModelScope.launch { preferences.setVaultTimeout(timeout) }

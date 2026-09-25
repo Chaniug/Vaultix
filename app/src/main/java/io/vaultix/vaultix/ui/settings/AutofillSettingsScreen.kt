@@ -65,7 +65,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -195,8 +194,8 @@ fun AutofillSettingsScreen(
                     title = stringResource(R.string.setting_auto_copy_totp),
                     subtitle = stringResource(R.string.setting_auto_copy_totp_desc),
                     trailing = {
-                        Switch(
-                            checked = autoCopyTotp,
+                        SettingsSwitch(
+                            value = autoCopyTotp,
                             onCheckedChange = viewModel::setAutoCopyTotp,
                         )
                     },
@@ -212,8 +211,8 @@ fun AutofillSettingsScreen(
                     title = stringResource(R.string.setting_copy_next_totp),
                     subtitle = stringResource(R.string.setting_copy_next_totp_desc),
                     trailing = {
-                        Switch(
-                            checked = copyNextOnExpiring,
+                        SettingsSwitch(
+                            value = copyNextOnExpiring,
                             onCheckedChange = viewModel::setTotpCopyNextOnExpiring,
                         )
                     },
@@ -228,8 +227,8 @@ fun AutofillSettingsScreen(
                     title = stringResource(R.string.setting_autofill_save_prompt),
                     subtitle = stringResource(R.string.setting_autofill_save_prompt_desc),
                     trailing = {
-                        Switch(
-                            checked = savePrompt,
+                        SettingsSwitch(
+                            value = savePrompt,
                             onCheckedChange = viewModel::setAutofillSavePrompt,
                         )
                     },
@@ -334,12 +333,18 @@ private fun statusDescription(status: AutofillStatus): Int = when {
  *
  * 拆成独立 composable 纯粹是为了让 [AutofillSettingsScreen] 守住 detekt `LongMethod`
  * （≤150 行）——四行里三行是自带 Switch 的开关，行数刚性很大。
+ *
+ * ⚠️ 三个开关参数是 **`Boolean?` 而非 `Boolean`**，这是刻意设计，别顺手"修"成非空：
+ * 上层直接从 ViewModel 收 `StateFlow<Boolean?>`，`null` = 「偏好还没读出来」。
+ * 如果这里接 `Boolean`，调用点就必须写 `?: false` 之类把 `null` 压成一个确定的答案 ——
+ * 那正是 `.ai/ISSUES.md` #84「三种空」要避免的"拿假答案冒充事实"（冷启动进设置页
+ * 看到开关从"关"跳到"开"）。保持可空，让 `null` 一路走到 [SettingsSwitch] 去渲染占位。
  */
 @Composable
 private fun FillBehaviorSection(
-    exactDomainOnly: Boolean,
-    baseDomainMatch: Boolean,
-    fillAssistEnabled: Boolean,
+    exactDomainOnly: Boolean?,
+    baseDomainMatch: Boolean?,
+    fillAssistEnabled: Boolean?,
     viewModel: SettingsViewModel,
     onAddTile: () -> Unit,
 ) {
@@ -350,8 +355,8 @@ private fun FillBehaviorSection(
             title = stringResource(R.string.setting_autofill_exact_domain),
             subtitle = stringResource(R.string.setting_autofill_exact_domain_desc),
             trailing = {
-                Switch(
-                    checked = exactDomainOnly,
+                SettingsSwitch(
+                    value = exactDomainOnly,
                     onCheckedChange = viewModel::setAutofillExactDomainOnly,
                 )
             },
@@ -362,8 +367,8 @@ private fun FillBehaviorSection(
             title = stringResource(R.string.setting_autofill_base_domain),
             subtitle = stringResource(R.string.setting_autofill_base_domain_desc),
             trailing = {
-                Switch(
-                    checked = baseDomainMatch,
+                SettingsSwitch(
+                    value = baseDomainMatch,
                     onCheckedChange = viewModel::setAutofillBaseDomainMatch,
                 )
             },
@@ -378,8 +383,8 @@ private fun FillBehaviorSection(
             title = stringResource(R.string.setting_fill_assist),
             subtitle = stringResource(R.string.setting_fill_assist_desc),
             trailing = {
-                Switch(
-                    checked = fillAssistEnabled,
+                SettingsSwitch(
+                    value = fillAssistEnabled,
                     onCheckedChange = viewModel::setFillAssistEnabled,
                 )
             },

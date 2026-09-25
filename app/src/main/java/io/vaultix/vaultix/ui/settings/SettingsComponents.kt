@@ -52,6 +52,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -252,3 +253,68 @@ internal fun SettingsDivider() {
         color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
     )
 }
+
+/**
+ * 设置页的布尔开关：**数据未到达时不猜状态**。
+ *
+ * ## 为什么不能写 `value ?: false`
+ *
+ * `null` 的语义是「偏好还没从磁盘读出来」（`.ai/ISSUES.md` #84「三种空」），
+ * 而 `false` 是一个**确定的答案**。把前者渲染成后者，就是拿假答案冒充事实 ——
+ * 2026-09-16 真机报告：冷启动后**快速**进设置页，「动态取色」开关先从「关」
+ * 跳到「开」，看上去像在闪烁。
+ *
+ * ⚠️ 反过来的写法（`?: true`）同样错，只是把方向倒过来 —— 那正是 2026-09-14
+ * 「防截屏先开后关」的成因。**两个方向都试过了，都错**：问题不在于默认值该取什么，
+ * 而在于**不该在不知道的时候给答案**。
+ *
+ * ⇒ **不认识就什么都不说**：用同尺寸占位撑住布局，开关等数据到了再出现。
+ *   「短暂没有」比「短暂错」诚实。
+ *
+ * ## 占位为什么也要可点（2026-09-26 修正）
+ *
+ * 原实现占位是一个纯 [Spacer]，**不可点**。这造成一个讨厌的交互断层：数据没到的那
+ * 几百毫秒里，用户手指已经落在开关位置上，点击却被吞掉 —— 于是在用户看来，
+ * 「这个开关按了没反应（有时）」。这比"开关晚出现一会儿"更难理解。
+ *
+ * 修正为：占位期依然接收点击，语义是**「打开」**（`onCheckedChange(true)`）。
+ *
+ * ### 为什么是「打开」而不是「取反」
+ *
+ * 因为 `value == null` 时**根本没有"当前值"可以取反** —— 取反需要先知道现在是开还是关，
+ * 而那正是此刻不知道的东西。硬要"取反"，只能拿上一次会话的旧值来猜，等于把
+ * 一个未定状态偷偷替换成一个可能过期的确定值，又回到了本篇开头反对的老路。
+ *
+ * 而「打开」在**所有**情形下都是安全的：
+ * - 若该偏好本来就是开 → 点一下传 `true`，是幂等的，最终仍是开；
+ * - 若本来就是关 → 点一下传 `true`，正是用户"我要打开它"的意图。
+ *
+ * 反方向的「关闭」则不安全：对本来就是开的偏好，用户看到空占位、点一下，结果偏好被
+ * 关掉了，而他从头到尾没见过"开"的样子 —— 这是"我什么时候关的？"的来源。
+ *
+ * ⚠️ 已知代价：用户想关掉一个"本来是开"的开关，且恰好在 `null` 窗口内点击 ——
+ * 那一下会变成"确认打开"而非关闭，他需要再点一次。这个窗口是**订阅建立的那一瞬**
+ * （DataStore 首次 emit 极快），比"点击石沉大海"罕见得多，且用户再点一次即可纠正。
+ */
+@Composable
+internal fun SettingsSwitch(
+    value: Boolean?,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    if (value != null) {
+        Switch(checked = value, onCheckedChange = onCheckedChange)
+    } else {
+        // 占位：尺寸对齐 M3 Switch 的视觉宽度（track 52×32dp），避免数据到达时整行跳动。
+        // 刻意**不用禁用态开关** —— 那个会被读成「关」，正是要避免的那个假答案。
+        // 点击仍然接收（见上方 KDoc）：语义固定为「打开」，避免"按了没反应"。
+        Box(
+            modifier = Modifier
+                .size(SWITCH_VISUAL_WIDTH, SWITCH_VISUAL_HEIGHT)
+                .clickable { onCheckedChange(true) },
+        )
+    }
+}
+
+/** M3 `Switch` 的视觉尺寸（track 大小）。占位用它撑住布局，避免数据到达时跳动。 */
+private val SWITCH_VISUAL_WIDTH = 52.dp
+private val SWITCH_VISUAL_HEIGHT = 32.dp

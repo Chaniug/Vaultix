@@ -63,7 +63,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Switch
+import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -938,8 +938,11 @@ private fun DisplaySection(
             title = stringResource(R.string.setting_oled_pure_black),
             subtitle = stringResource(R.string.setting_oled_pure_black_desc),
             trailing = {
-                Switch(
-                    checked = oledPureBlack,
+                // ⚠️ 2026-09-26 由裸 Switch 改为 SettingsSwitch：本页其它开关（动态取色 /
+                // 防截屏）都走「数据未到达时不猜状态」，唯独这一处漏了 —— 而它恰恰是
+                // #84「三种空」里点名过的那个开关。同一页两种行为本身就是 bug。
+                SettingsSwitch(
+                    value = oledPureBlack,
                     onCheckedChange = viewModel::setOledPureBlack,
                 )
             },
@@ -1309,38 +1312,3 @@ private object AutoLockPresets {
     /** 自定义输入框位数上限。 */
     const val CUSTOM_MINUTES_DIGITS = 6
 }
-
-/**
- * 设置页的布尔开关：**数据未到达时不猜状态**。
- *
- * ## 为什么不能写 `value ?: false`
- *
- * `null` 的语义是「偏好还没从磁盘读出来」（`.ai/ISSUES.md` #84「三种空」），
- * 而 `false` 是一个**确定的答案**。把前者渲染成后者，就是拿假答案冒充事实 ——
- * 2026-09-16 真机报告：冷启动后**快速**进设置页，「动态取色」开关先从「关」
- * 跳到「开」，看上去像在闪烁。
- *
- * ⚠️ 反过来的写法（`?: true`）同样错，只是把方向倒过来 —— 那正是 2026-09-14
- * 「防截屏先开后关」的成因。**两个方向都试过了，都错**：问题不在于默认值该取什么，
- * 而在于**不该在不知道的时候给答案**。
- *
- * ⇒ **不认识就什么都不说**：用同尺寸占位撑住布局，开关等数据到了再出现。
- *   「短暂没有」比「短暂错」诚实。
- */
-@Composable
-private fun SettingsSwitch(
-    value: Boolean?,
-    onCheckedChange: (Boolean) -> Unit,
-) {
-    if (value != null) {
-        Switch(checked = value, onCheckedChange = onCheckedChange)
-    } else {
-        // 占位：尺寸对齐 M3 Switch 的视觉宽度（track 52×32dp），避免数据到达时整行跳动。
-        // 刻意**不用禁用态开关** —— 那个会被读成「关」，正是要避免的那个假答案。
-        Spacer(Modifier.size(SWITCH_VISUAL_WIDTH, SWITCH_VISUAL_HEIGHT))
-    }
-}
-
-/** M3 `Switch` 的视觉尺寸（track 大小）。占位用它撑住布局，避免数据到达时跳动。 */
-private val SWITCH_VISUAL_WIDTH = 52.dp
-private val SWITCH_VISUAL_HEIGHT = 32.dp

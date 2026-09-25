@@ -41,7 +41,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -53,6 +52,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.settings.SettingsSwitch
 import kotlinx.coroutines.launch
 import io.vaultix.vaultix.ui.theme.Spacing
 
@@ -61,14 +61,15 @@ import io.vaultix.vaultix.ui.theme.Spacing
  *
  * @param groupMode 当前分组方式。
  * @param cardDisplayMode 当前卡片信息密度。
- * @param showIcon 是否显示左侧图标。
+ * @param showIcon 是否显示左侧图标。**可空**：`null` = 偏好还没从磁盘读出来，
+ *   此时由 [SettingsSwitch] 渲染同尺寸占位（不猜状态，见 `.ai/ISSUES.md` #84）。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DisplayOptionsSheet(
     groupMode: ItemsGroupMode,
     cardDisplayMode: ItemsCardDisplayMode,
-    showIcon: Boolean,
+    showIcon: Boolean?,
     onDismiss: () -> Unit,
     onGroupMode: (ItemsGroupMode) -> Unit,
     onCardDisplayMode: (ItemsCardDisplayMode) -> Unit,
@@ -146,7 +147,9 @@ fun DisplayOptionsSheet(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.weight(1f).padding(start = Spacing.lg),
                 )
-                Switch(checked = showIcon, onCheckedChange = onShowIcon)
+                // ⚠️ 与设置页其它开关同款：数据未到达时不猜状态（见 SettingsSwitch KDoc）。
+                // showIcon 直接来自 StateFlow<Boolean?>，null = 偏好还没读出来。
+                SettingsSwitch(value = showIcon, onCheckedChange = onShowIcon)
             }
         }
     }
