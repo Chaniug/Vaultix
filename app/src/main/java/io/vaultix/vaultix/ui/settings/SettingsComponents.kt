@@ -60,6 +60,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.vaultix.vaultix.ui.theme.Spacing
 
@@ -84,6 +85,16 @@ private val SETTINGS_DIVIDER_INSET =
 
 /** 关态内容透明度（上游 0.38）。 */
 private const val DISABLED_CONTENT_ALPHA = 0.38f
+
+/**
+ * 副标题最大行数。
+ *
+ * 取 2 而不是 1：副标题的价值就在于「说清后果」（见 `.ai/issues/06-界面与交互.md` #128
+ * 那批"缺代价说明"的文案），砍到 1 行会把刚补上的信息又截掉。
+ * 但也不能不限 —— 不限时长副标题（如 `setting_manual_fill_tile_desc` 有 60+ 字）
+ * 在窄屏会撑高整行，让同组卡片里各行高度参差不齐，"一组一行"的分组感被破坏。
+ */
+private const val SETTINGS_SUBTITLE_MAX_LINES = 2
 
 /**
  * 设置页共用的行 / 分组标题组件。
@@ -121,6 +132,12 @@ internal fun SettingsGroupTitle(title: String, onClick: (() -> Unit)? = null) {
  *
  * ⚠️ 本组件**只是行**，不再自带卡片外壳：请把它放进 [SettingsGroupCard]，
  * 相邻两行之间插 [SettingsDivider]（见 [SettingsGroupCard] 的取舍说明）。
+ *
+ * ⚠️ 2026-09-26 删除了 `showSubtitle` 参数：它自引入起**全项目无任何调用点传值**
+ * （默认 `true`，各行都走这条默认路径），属冗余 API。删掉后本函数参数由 8 降到 7，
+ * 顺带消掉一处既存的 `LongParameterList` 违例（detekt 阈值 8 是「参数个数 ≥ 8 即报」，
+ * 即**实际上限是 7 个**，不是 8 个 —— 详见 `.ai/ISSUES.md` #130 的勘误）。
+ * 真要"整行不显示副标题"时，传 `subtitle = null` 即可，语义比布尔开关更直接。
  */
 @Composable
 internal fun SettingsRow(
@@ -130,7 +147,6 @@ internal fun SettingsRow(
     trailing: (@Composable () -> Unit)? = null,
     titleColor: Color? = null,
     enabled: Boolean = true,
-    showSubtitle: Boolean = true,
     onClick: (() -> Unit)? = null,
 ) {
     Row(
@@ -176,10 +192,12 @@ internal fun SettingsRow(
                     alpha = if (enabled) 1f else DISABLED_CONTENT_ALPHA,
                 ),
             )
-            if (showSubtitle && subtitle != null) {
+            if (subtitle != null) {
                 Text(
                     text = subtitle,
                     style = MaterialTheme.typography.bodyMedium,
+                    maxLines = SETTINGS_SUBTITLE_MAX_LINES,
+                    overflow = TextOverflow.Ellipsis,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(
                         alpha = if (enabled) 1f else DISABLED_CONTENT_ALPHA,
                     ),
