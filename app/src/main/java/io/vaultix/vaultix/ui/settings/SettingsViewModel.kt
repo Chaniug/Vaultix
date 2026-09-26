@@ -7,7 +7,6 @@ import io.vaultix.data.repository.LocalUnlockEnrollment
 import io.vaultix.datastore.VaultTimeout
 import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.datastore.VaultixPreferencesDefaults
-import io.vaultix.domain.ItemRepository
 import io.vaultix.domain.KdbxSyncRepository
 import io.vaultix.domain.VaultRepository
 import io.vaultix.model.VaultSummary
@@ -38,7 +37,6 @@ import javax.inject.Inject
 class SettingsViewModel @Inject constructor(
     private val preferences: VaultixPreferences,
     private val vaultRepository: VaultRepository,
-    private val itemRepository: ItemRepository,
     private val autoLockController: AutoLockController,
     private val activeVaultStore: ActiveVaultStore,
     /**
