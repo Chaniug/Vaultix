@@ -1,5 +1,42 @@
 # 下一步任务清单
 
+> ## 🏠 【2026-09-28 深夜】快速解锁「房子化」已定稿 —— 批次 0 实验待做（未动代码）
+>
+> **定稿**：[`.ai/decisions/快速解锁房子化-两级钥匙层级-定稿.md`](../../.ai/decisions/快速解锁房子化-两级钥匙层级-定稿.md)
+> **施工工作单**：[`quick-unlock-house-rework.md`](quick-unlock-house-rework.md)（批次 0 起，自包含）
+> **用户拍板**（2026-09-28 23:48）：「房子化吧」+ 追加「设置里面的快速解锁的设置也需要删掉多余的
+> 内容」⇒ 定稿 §5.1 删除清单五类：每库指纹/PIN 标记、Partial 态、勾库两步登记、
+> 每库 enabled/pinEnabled 双键真源、逐库成败分类。
+> **方案**：两级钥匙层级——门锁（指纹/PIN 各一信封）只包 1 把随机软件「房子钥匙」
+> （**绝不落盘** = 硬约束 #1，保住「杀后台=自然锁定」，刻意不学 Keyguard 持久会话），
+> 每库凭据改纯软件封装。H1/H2 从结构上消失；能力级 UI、生效范围、逐库问密码、
+> 先校验后包裹全部保留。两篇旧定稿已加修订横幅（历史保留）。
+> **下一步 = 工作单批次 0（P0 一分钟实验，需真手指）**：H1 → 插入止血批次 0.5；H2 → 直接批次 1。
+> 另：新增约定 [`conventions/8.9-文档分篇.md`](../../.ai/conventions/8.9-文档分篇.md)
+> （用户拍板：md 过长必须分篇，防 AI 接力读超长上下文；正文 ≈300 行/20KB 上限）。
+
+> ## 🔍 【2026-09-28 晚】Bitwarden / KDBX 连接与同步排查 —— **1 个 P0 真 bug + 3 个休眠设计隐患，未动代码**
+>
+> **报告**：[`Docs/progress/audit/bitwarden-kdbx-sync-audit.md`](audit/bitwarden-kdbx-sync-audit.md)（自包含）
+> **用户诉求**：「app 与 bitwarden 服务连接的时候，或 kdbx 连接的时候，是否还有 bug，比如同步的问题，排查一下」。
+>
+> **结论速览**：Bitwarden 侧历史修复（#8/#22/#91/#92/#119）**全部在位**；KDBX #106（写路径）已修、
+> 网盘同步（OneDrive/WebDAV，09-17 落地）实现齐整。新发现：
+> - 🔴 **P0 真 bug**：OneDrive KDBX 库的指纹快解在填充扇出中 **100% 失败**（真机 4 次实证，
+>   `opened=0`；失败在 ~50ms 的本地密码学层，报 `本地解锁凭据不可用`）。
+>   根因两个候选（报告 §3.2）：**H1** 多库登记「一个 cipher 连续 wrap」产出错位 payload /
+>   KEK 换代后未重包；**H2** auth-per-use 语义下 rest 库的新解密 cipher **未被本次生物认证授权**。
+>   ⚠️ 放大因素：KDBX 侧 unwrap 失败「勿删登记」**永不自愈**（Bitwarden 侧同场景会清登记）。
+>   **一分钟决定性实验**（报告 §3.4）：把 OneDrive 库切为活跃库→锁定→指纹解锁——
+>   仍失败 = H1（payload 坏）；成功 = H2（扇出授权缺口）。
+> - 🔴 **P1 休眠设计隐患**（R-6~R-9「KDBX 单条编辑」的**硬前置**，开放编辑前必须拍板）：
+>   ① NeedsReload 路径**提前推进 token 基线**（`KdbxSyncOrchestrator.kt:148`）——开放编辑后
+>   时序「NeedsReload→旧会话上编辑→再同步」会把远端新改动**静默覆盖**；
+>   ② `notifyLocalChangedDuringUpload` 三层实现、**app 层零调用**；
+>   ③ `localChangedSinceLastSync` 两处口径不一（库列表页硬编码 true / 设置页用 syncStatus），
+>   硬编码 true 会把「远端更新」伪报成「冲突」，误选「用本地覆盖远端」= **真数据丢失入口**。
+> - P2：`collectionIds`/`archivedDate` 未建模（#119 尾巴）——组织库激活前需一次服务端行为确认。
+
 > ## 🔍 【2026-09-28】后台被杀后「填充频繁要求解锁 / 匹配不到条目」——**诊断完成，未动代码**
 >
 > **报告**：[`Docs/progress/audit/autofill-relock-after-kill.md`](audit/autofill-relock-after-kill.md)（自包含）
