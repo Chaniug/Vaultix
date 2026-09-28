@@ -136,6 +136,28 @@ def package_of(path: str) -> str:
     return path.rsplit(".", 1)[0]
 
 
+def rule_a_in_scope(import_path: str) -> bool:
+    """规则 A 的**作用域**：只对 `androidx.*` / `io.vaultix.*` 生效。
+
+    ## 🔴 统计口径必须与检查口径一致（2026-09-28 修）
+
+    规则 A 靠「多数派」推约定，但**统计**（`build_exclusive_map`）与**检查**
+    （`check_file`）原本口径不同：前者把所有包都数进去，后者只对这两类包报错。
+
+    后果是一个自相矛盾的判定链：
+
+        平台包 `android.os.Build`（全文数十处，但**永远不会被检查**）
+          ⇒ 成为 `Build` 的"约定包"
+          ⇒ 而 `androidx.compose.material.icons.filled.Build`（**合法** Compose
+             图标扩展属性，编译器认可）属于**被检查的宇宙**
+          ⇒ 被判定为"偏离约定" ⇒ 误报。
+
+    从没参与过检查的东西，不该有权定义"约定"。故抽出本函数，两处共用，
+    让「谁被统计」与「谁被检查」成为同一条事实 —— 想改口径只能改这一处。
+    """
+    return import_path.startswith("androidx.") or import_path.startswith("io.vaultix.")
+
+
 def iter_kt_files() -> list[Path]:
     """全仓库真实模块里的 .kt（排除 build 产物与 reference/ 对照源码）。"""
     files: list[Path] = []
@@ -195,6 +217,11 @@ def build_exclusive_map(files: list[Path]) -> dict[str, str]:
         for m in IMPORT_RE.finditer(text):
             fp, alias = m.group(1), m.group(2)
             name = simple_name(fp, alias)
+            # ⚠️ 见 rule_a_in_scope：**只统计会被检查的宇宙**。
+            #    把 `android.os` 这类"永不检查"的平台包数进来，会让它成为约定包，
+            #    反过来误伤合法的 `androidx.*` 导入（2026-09-28 实录：`Build`）。
+            if not rule_a_in_scope(fp):
+                continue
             tally[name][package_of(fp)] += 1
 
     exclusive: dict[str, str] = {}
@@ -238,7 +265,8 @@ def check_file(
 
         # 规则 A：独占/多数包一致性
         # 仅对 androidx.* / io.vaultix.* 生效，避免误伤第三方库的合法同名。
-        if not (fp.startswith("androidx.") or fp.startswith("io.vaultix.")):
+        # ⚠️ 与 build_exclusive_map 的统计口径共用 rule_a_in_scope（同一条事实）。
+        if not rule_a_in_scope(fp):
             continue
         if name in _LEGIT_CROSS_PACKAGE:        # 两个包都真实存在，不算错
             continue

@@ -2,12 +2,6 @@
 # ⚠️ 这是**只减不增**的名单：清理掉一条就删一行。
 # 新增条目会让 `check_orphan_strings.py --gate` 失败。
 # 判读依据见该脚本开头：被「搬走」的留，被「取代」的删。
-about_changelog
-about_changelog_desc
-about_channel
-about_channel_preview
-about_channel_stable
-about_releases_url
 action_edit
 action_next
 action_open
