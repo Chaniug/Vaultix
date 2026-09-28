@@ -356,8 +356,10 @@ fun FullScreenDialogShell(
                         .nestedScroll(bottomBarScrollBehavior.nestedScrollConnection)
                         .padding(horizontal = Spacing.xl)
                         .padding(
-                            top = contentClearance(statusBar, TITLE_BAR_HEIGHT),
-                            bottom = contentClearance(navBar, ACTION_BAR_HEIGHT),
+                            // ⚠️ `+ CONTENT_BAR_GAP`：让位只保证"不被栏遮住"，
+                            //    呼吸位另加（见该常量的 KDoc —— 顶部原本是零间距）。
+                            top = contentClearance(statusBar, TITLE_BAR_HEIGHT) + CONTENT_BAR_GAP,
+                            bottom = contentClearance(navBar, ACTION_BAR_HEIGHT) + CONTENT_BAR_GAP,
                         ),
                     content = content,
                 )
@@ -566,6 +568,38 @@ private fun BoxScope.ActionBar(
  */
 internal fun contentClearance(systemBarInset: Dp, barHeight: Dp): Dp =
     maxOf(barHeight, systemBarInset + barHeight)
+
+/**
+ * 正文与两条栏之间的**呼吸间距**（在 [contentClearance] 之外另加）。
+ *
+ * ## 🔴 为什么必须补这一档（2026-09-28 用户反馈）
+ *
+ * 用户原话：「新建验证码页面和新建卡片的页面，顶部的部分和内容隔得是否太近了，
+ * 内容分布感觉有点怪异」——**是真的，而且是"零间距"而不是"有点近"**。
+ *
+ * `contentClearance` 算出的正文让位**恰好等于两条栏占的高度**（`inset + 栏高`），
+ * 它的职责只是"内容别钻到栏底下"，**从来不含任何呼吸位** ⇒ 第一张卡片精确地贴在
+ * 标题栏的下边缘上。
+ *
+ * ⚠️ 对照本项目**同一个 App 内的既有节奏**：列表页 / 设置页的内容第一行是
+ * [io.vaultix.vaultix.ui.settings.SettingsGroupTitle]，它自带 `top = Spacing.lg`（16dp）
+ * ⇒ 那些页面"栏到内容"**有 16dp**，而新建/编辑页是 **0**。
+ * 这就是"新建页看着和别处不一样、挤得慌"的量化来源 —— 不是审美分歧，
+ * 是**漏用了一档项目自己已经在用的间距**。
+ *
+ * ## 为什么取 `Spacing.lg` 而不是随手 `12dp` / `20dp`
+ *
+ * 因为它**就是**列表页那一档（见上）。取同一个值，两类页面的纵向节奏才对得上；
+ * 取别的值等于给"同一个 App 的两种页面"各定一套规格 —— 那正是 `8.4` 反复在防的漂移。
+ *
+ * ## 为什么底部也加
+ *
+ * 对称：顶部有 16dp、底部没有，会让"最后一张卡片贴死在按钮上"，
+ * 与顶部的问题同源。加完之后，滚到底时末元素与底部栏之间同样有 16dp。
+ * ⚠️ 加间距**只增不减**让位，故"内容不钻到栏下"这条不变式**依然成立**
+ * （见 [contentClearance] 的 KDoc）。
+ */
+private val CONTENT_BAR_GAP = Spacing.lg
 
 /**
  * M3 按钮的**最小触摸目标高度**（`ButtonDefaults.MinHeight` / `IconButton` 的 48dp 规范值）。
