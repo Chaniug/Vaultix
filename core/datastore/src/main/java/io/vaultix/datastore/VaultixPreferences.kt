@@ -116,6 +116,18 @@ class VaultixPreferences @Inject constructor(
         val ITEMS_SHOW_ICON = booleanPreferencesKey("items_show_icon")
 
         /**
+         * 检查更新时，是否把「前往下载」的地址换成**国内加速镜像**（2026-09-28 用户要求）。
+         *
+         * 默认 `false`（= 用 GitHub 原始地址）：镜像服务由第三方提供，可用性不保证；
+         * 让用户**显式开启**比默认偷偷改地址更诚实 —— 尤其是本 App 的下载页是用户
+         * 要去拿安装包的地方，地址被替换这种事必须让用户知情且可关闭。
+         *
+         * ⚠️ 只影响**打开下载页**，不影响 `api.github.com` 的检查请求
+         * （理由见 `UpdateChecker.MIRROR_PREFIXES`）。
+         */
+        val UPDATE_USE_MIRROR = booleanPreferencesKey("update_use_mirror")
+
+        /**
          * 验证码页是否**隐藏数字**（2026-09-21 用户要求）。
          *
          * ⚠️ 这里存的是**当前状态本身**，不是"默认值" —— 用户明确要
@@ -222,6 +234,15 @@ class VaultixPreferences @Inject constructor(
      */
     val autoCopyTotp: Flow<Boolean> =
         safeData.map { it[AUTO_COPY_TOTP] ?: true }
+
+    /**
+     * 检查更新时用国内加速镜像打开下载页。**默认关闭**（用 GitHub 原始地址）。
+     *
+     * 默认关的理由见 [Keys.UPDATE_USE_MIRROR] 的注释：下载页是要去拿安装包的地方，
+     * 地址被第三方代理这件事必须由用户显式选择，不能默认替他决定。
+     */
+    val updateUseMirror: Flow<Boolean> =
+        safeData.map { it[UPDATE_USE_MIRROR] ?: false }
 
     /**
      * 允许「基域 / 子域名」匹配（对齐 Bastion `allowBaseDomainMatch`，Bitwarden 默认开）。
@@ -505,6 +526,25 @@ class VaultixPreferences @Inject constructor(
     /** 自动填充后自动复制验证码开关。 */
     suspend fun setAutoCopyTotp(enabled: Boolean) {
         dataStore.edit { it[AUTO_COPY_TOTP] = enabled }
+    }
+
+    /**
+     * 检查更新时用国内加速镜像打开下载页（**默认关**，见 [Keys.UPDATE_USE_MIRROR]）。
+     *
+     * ⚠️ 关掉时**删键**而不是写 `false`：与 [setTotpCodesHidden] 的取向相反 ——
+     * 那里 `false` 是用户的一个显式选择（"我要一直显示"），不能删；而这里的
+     * `false` 恰好就是默认值，删键能让"用户从没碰过这个开关"与"用户明确关掉"
+     * 在磁盘上一致（两种情况下行为本来就相同：都用 GitHub 原始地址）。
+     * 若将来默认值改成 `true`，需要像 [setTotpCodesHidden] 那样改为无条件写入。
+     */
+    suspend fun setUpdateUseMirror(enabled: Boolean) {
+        dataStore.edit { prefs ->
+            if (enabled) {
+                prefs[UPDATE_USE_MIRROR] = true
+            } else {
+                prefs.remove(UPDATE_USE_MIRROR)
+            }
+        }
     }
 
     suspend fun setAutofillBaseDomainMatch(enabled: Boolean) {

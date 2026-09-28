@@ -380,28 +380,42 @@
     <string name="manual_fill_copy_totp">复制验证码</string>
     <string name="manual_fill_copied_username">已复制「%1$s」的用户名</string>
     <string name="about_version">版本</string>
-    <string name="about_source">源码与反馈</string>
+    <!-- ★ 2026-09-28 精简：原「权限管理」+「版本」+「检查更新」+「源码与反馈」+「开源许可」
+         五行，压成两行 —— 版本行（点击即检查更新）+ 「关于 Vaultix」入口（二级页）。
+         本批新增的字符串全部服务于这个新结构；被合并掉的旧串（about_source /
+         about_check_update* / about_channel* / about_changelog* / about_releases_url）
+         已**删除**，不要因为它们"以前在"就加回来（那是死资源，lint UnusedResources 会报）。 -->
+    <string name="about_entry_title">关于 Vaultix</string>
+    <string name="about_entry_desc">源码仓库 · 反馈渠道 · 开源许可</string>
+    <string name="about_group_links">链接</string>
+    <string name="about_group_license">许可</string>
+    <string name="about_repository_title">源码仓库</string>
+    <string name="about_repository_desc">github.com/Chaniug/Vaultix</string>
+    <string name="about_issues_title">问题反馈</string>
+    <string name="about_issues_desc">提交 Issue 或查看已知问题</string>
+    <string name="about_issues_url">https://github.com/Chaniug/Vaultix/issues</string>
+    <string name="about_releases_title">更新日志</string>
+    <string name="about_releases_desc">查看历史版本与发布说明</string>
+    <string name="about_license_title">开源许可</string>
+    <string name="about_license_desc">GPL-3.0 · 含第三方作品声明</string>
+    <!-- 下面两条**仍在使用**：about_license 作对话框标题、about_license_body 作正文
+         （二级页点「开源许可」就地弹出）。⚠️ 别因为名字带 about_ 就当作旧串删掉 ——
+         GPL-3.0 的溯源声明是许可证义务，不是可选装饰。 -->
     <string name="about_license">开源许可</string>
     <string name="about_license_body">Vaultix 以 GPL-3.0 发布。部分设计与代码参考 Bastion（GPL-3.0，Copyright 2025 JoyinJoester），搬运处均带溯源声明。\n\n本项目为密码管理客户端，自行承担使用风险。</string>
     <string name="about_github_url">https://github.com/Chaniug/Vaultix</string>
+    <string name="about_footer">Vaultix 是一个本地优先的密码管理器。你的密码库加密存储，密钥不出本机。</string>
     <!-- 库类型徽标（解锁页的图标无障碍描述；2026-09-16 由字母头像改为官方图标） -->
     <string name="vault_kind_bitwarden">Bitwarden 密码库</string>
     <string name="vault_kind_kdbx">KDBX 本地密码库</string>
-    <!-- 检查更新（2026-09-16 从 Bastion 搬运；只给发布页链接，不在 App 内下载安装） -->
-    <string name="about_check_update">检查更新</string>
-    <string name="about_check_update_desc">对比 GitHub 上的最新构建</string>
-    <!-- 2026-09-21 用户要求"关于页内容丰富"。⚠️ 内部版本号用独立行 + 标签呈现，
-         不用 `0.3.0 (3000)` 那种括号后缀：2026-09-14 用户曾把括号误读成下载器加的 (1) 后缀。 -->
+    <!-- 2026-09-21 用户要求"关于页内容丰富"。⚠️ 内部版本号用**标签**呈现（现在写在版本行
+         的副标题里），不用 `0.3.0 (3000)` 那种括号后缀：2026-09-14 用户曾把括号误读成
+         下载器加的 (1) 后缀。 -->
     <string name="about_build_number">内部版本号</string>
-    <string name="about_channel">更新渠道</string>
-    <string name="about_channel_preview">预览版（debug 构建，随 main 滚动）</string>
-    <string name="about_channel_stable">正式版（rele 分支发布）</string>
-    <!-- 副标题里用的短文案：版本行要在一行里塞下 版本号 + 内部版本 + 渠道，长的会被省略号截断。 -->
+    <!-- 副标题里用的短文案：版本行要在一行里塞下 版本号 + 内部版本 + 渠道，长的会被省略号截断。
+         （长版本 about_channel* 已删，只保留短文案。） -->
     <string name="about_channel_preview_short">预览版</string>
     <string name="about_channel_stable_short">正式版</string>
-    <string name="about_changelog">更新日志</string>
-    <string name="about_changelog_desc">在 GitHub 上查看各版本说明</string>
-    <string name="about_releases_url">https://github.com/Chaniug/Vaultix/releases</string>
     <string name="update_check_title">检查更新</string>
     <string name="update_check_checking">正在检查…</string>
     <string name="update_check_latest">已是最新版本</string>
@@ -412,6 +426,17 @@
     <string name="update_check_failed">检查更新失败，请稍后再试</string>
     <string name="update_check_failed_fmt">检查更新失败：%1$s</string>
     <string name="update_check_go">前往下载</string>
+    <!--
+      更新对话框的更新日志区（2026-09-28）。
+      whats_new = 区块小标题；notes_empty = 该 Release 没写正文时的兜底；
+      mirror_* = 对话框内的「国内镜像加速」开关文案
+      （mirror_desc = 关闭时说明、mirror_on_desc = 开启时点名代理主机）。
+    -->
+    <string name="update_check_whats_new">更新内容</string>
+    <string name="update_check_notes_empty">本次发布未提供说明</string>
+    <string name="update_check_mirror_title">使用国内镜像加速下载</string>
+    <string name="update_check_mirror_desc">经第三方代理打开下载页；仅影响链接地址，检查更新仍走官方接口</string>
+    <string name="update_check_mirror_on_desc">下载页将经 %1$s 代理打开</string>
     <string name="action_open">打开</string>
 
     <!-- 本地快速解锁（Keystore 包裹 + 生物识别/设备 PIN） -->

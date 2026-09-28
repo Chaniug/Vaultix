@@ -1,6 +1,5 @@
 package io.vaultix.vaultix.ui.settings
 
-import android.content.Context
 import androidx.annotation.StringRes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -42,7 +41,6 @@ import androidx.compose.material.icons.filled.Numbers
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Password
 import androidx.compose.material.icons.filled.Policy
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Star
@@ -64,6 +62,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -87,6 +86,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import com.mikepenz.markdown.m3.Markdown
 import io.vaultix.datastore.VaultTimeout
 import io.vaultix.domain.PIN_MIN_LENGTH
 import io.vaultix.model.VaultKind
@@ -165,14 +165,29 @@ fun SettingsScreen(
      * **静默失效**（点了没反应，且编译期发现不了）。
      */
     onOpenPermissions: () -> Unit,
+    /**
+     * 「关于」分区：进入**关于**二级页（源码仓库 / 反馈渠道 / 开源许可）。
+     *
+     * ★ 2026-09-28 新增：原先「源码与反馈」「开源许可」是设置首页上的两行，
+     * 现按用户要求合并为一行入口，内容收进 [AboutAppScreen]（主流开源 App 的做法）。
+     *
+     * ⚠️ 与 [onOpenPermissions] 同理**不给默认值**：两个调用点都要显式接线，
+     * 否则 Tab 那处会静默失效。
+     */
+    onOpenAbout: () -> Unit,
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    // 「检查更新」对话框里的国内镜像开关（默认关；只影响「前往下载」打开的地址）。
+    val updateUseMirror by viewModel.updateUseMirror.collectAsStateWithLifecycle()
 
     var showAutoLockDialog by rememberSaveable { mutableStateOf(false) }
     var showClipboardDialog by rememberSaveable { mutableStateOf(false) }
-    var showAboutDialog by rememberSaveable { mutableStateOf(false) }
+    // ⚠️ 原本这里还有一个 `showAboutDialog`（开源许可对话框）。2026-09-28 随「关于」组
+    //    精简，许可内容搬进 [AboutAppScreen]，本页那个对话框**再也无人触发** ——
+    //    留着它就是一段不可达代码（detekt 的 `UnusedParameter` 顺着 `onShowLicense`
+    //    把它揪了出来）。已整体删除，别再在设置首页重建。
     // 开发者日志对话框（2026-09-21）。⚠️ 状态本身不区分构建类型；**入口**才做 debug 门禁，
     // 这样 release 包里既看不到入口、也不会多一条可达路径。
     var showDeveloperLogs by rememberSaveable { mutableStateOf(false) }
@@ -230,6 +245,8 @@ fun SettingsScreen(
                 onOpenVaultManagement = onOpenVaultManagement,
                 onAutoLock = { showAutoLockDialog = true },
                 onClipboardClear = { showClipboardDialog = true },
+                // ★ 2026-09-28：权限管理从「关于」移入本组（见 VaultUnlockSection 的注释）。
+                onOpenPermissions = onOpenPermissions,
             )
 
             // ---- 显示与填充（自动填充入口已并入，原单行组）----
@@ -245,9 +262,8 @@ fun SettingsScreen(
                 onOpenImportExport = onOpenImportExport,
             )
 
-            // ---- 关于（权限管理已并入，原「其他」组仅此一行）----
+            // ---- 关于（权限管理已移入「密码库与解锁」；2026-09-28 精简为 2 行）----
             AboutSection(
-                context = context,
                 // ⚠️ **版本号这一行只放 versionName；内部版本号另起一行。**（2026-09-21 修订）
                 //
                 // 历史：2026-09-14 曾把两者拼成 `0.3.0 (3000)`，用户报告「那个括号长得很像
@@ -262,8 +278,7 @@ fun SettingsScreen(
                 // 是**给系统判断新旧**用的，不是构建计数器；同一 VERSION 下的多个 dev 构建
                 // 它的值**相同**（区分构建要靠 versionName 里的短 sha）。
                 buildNumber = BuildConfig.VERSION_CODE,
-                onOpenPermissions = onOpenPermissions,
-                onShowLicense = { showAboutDialog = true },
+                onOpenAbout = onOpenAbout,
                 // ⚠️ 每次点击都**先清掉上一次的结论**：结论是"一次性"的，
                 // 留着旧结果会让下面那次 LaunchedEffect 直接跳过（见那里的注释），
                 // 用户就会看到上一次的答案。
@@ -311,18 +326,6 @@ fun SettingsScreen(
             onDismiss = { showClipboardDialog = false },
         )
     }
-    if (showAboutDialog) {
-        AlertDialog(
-            onDismissRequest = { showAboutDialog = false },
-            title = { Text(stringResource(R.string.about_license)) },
-            text = { Text(stringResource(R.string.about_license_body)) },
-            confirmButton = {
-                TextButton(onClick = { showAboutDialog = false }) {
-                    Text(stringResource(R.string.action_back))
-                }
-            },
-        )
-    }
     if (showDeveloperLogs) {
         DeveloperLogsDialog(onDismiss = { showDeveloperLogs = false })
     }
@@ -331,6 +334,11 @@ fun SettingsScreen(
             checking = updateChecking,
             result = updateResult,
             error = updateError,
+            // ⚠️ `?: false`（而不是 `!!` 或直接传 null）：`null` = 偏好还没读出来，
+            //    此时**不该**按"已开启镜像"渲染 —— 那会让用户看到一个假的开状态。
+            //    关（false）= 用官方地址，是这里最保守、也最不意外的兜底。
+            useMirror = updateUseMirror ?: false,
+            onUseMirrorChange = viewModel::setUpdateUseMirror,
             onOpenRelease = { url -> SystemSettingsIntents.openUrl(context, url) },
             onDismiss = { showUpdateDialog = false },
         )
@@ -340,24 +348,68 @@ fun SettingsScreen(
 /**
  * 「检查更新」结论对话框。
  *
- * 只做三件事：告诉用户**当前是哪个版本**、**远端是哪个版本**、**去哪下载**。
+ * 做四件事：告诉用户**当前是哪个版本**、**远端是哪个版本**、**这一版改了什么**
+ * （可滚动的更新日志）、**去哪下载**。
+ *
  * 不在 App 内下载 / 安装 APK —— 对一个密码管理器来说，自动装上来路不明的安装包
  * 是比"多两步"严重得多的风险（理由见 [UpdateChecker] 的文件头）。
+ *
+ * ## 2026-09-28 改造（用户要求）
+ *
+ * 1. **更新日志**：`result.releaseNotes`（GitHub Release 的 GFM Markdown 原文）在一个
+ *    **可滚动区**里用 Markdown 渲染器呈现。为什么必须可滚动而不是直出：release notes
+ *    动辄几十行（分类标题 + 列表 + 链接），直出会把对话框撑爆、按钮被挤出屏幕。
+ *    ⚠️ 高度用 `heightIn(max = …)` 而不是固定高度：短日志（两行）不该留一大块空白。
+ * 2. **国内镜像**：底部一个开关，打开后「前往下载」打开的地址经镜像前缀代理
+ *    （见 [UpdateChecker.mirrorUrl]）。默认关 —— 下载页是要去拿安装包的地方，
+ *    地址被第三方代理这件事必须由用户显式选择。
+ *
+ * ## 为什么改用 [DialogSurface] 而不是 `AlertDialog`
+ *
+ * 内容从"三行字"变成了"三行字 + 一块可滚动日志 + 一个开关"，`AlertDialog` 的
+ * 约束（正文区不能嵌套可滚动区，否则崩溃 / 高度失控）在这里不再合适。
+ * [DialogSurface] 是本项目自己的对话框外壳（0.8 屏高、内容少时自然收缩），
+ * 25 处弹窗里有它自己的定位，正好接住这个"会长大的"对话框。
+ *
+ * @param useMirror 镜像开关的当前值（由调用方把 `Boolean?` 收敛为 `false` 兜底，
+ *   见调用处注释——`null`=偏好未读出时**不能**当成"已开启"）。
+ * @param onUseMirrorChange 开关切换回调（写 DataStore，实时生效、跨重启保持）。
+ * @param onOpenRelease 打开下载页（传入的已是**经镜像转换后**的最终地址）。
  */
 @Composable
 private fun UpdateCheckDialog(
     checking: Boolean,
     result: UpdateCheckResult?,
     error: String?,
+    useMirror: Boolean,
+    onUseMirrorChange: (Boolean) -> Unit,
     onOpenRelease: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        icon = { Icon(Icons.Filled.Refresh, contentDescription = null) },
-        title = { Text(stringResource(R.string.update_check_title)) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+    // 只在"确实有更新"时才展示日志区与镜像开关：已是最新时 GitHub 那段正文讲的是
+    // "这一版改了什么"，与本机无关，摆出来只会让用户以为"我该更新"
+    // （见 UpdateChecker 里 releaseNotes 只在有更新时填）。
+    //
+    // ⚠️ 用 `takeIf` 拿到**非空的结果对象本身**，而不是一个 `Boolean` 标志：
+    //    标志位会把"有更新"这个事实与 `result` 脱钩，编译器于是无法把 `result`
+    //    智能转换为非空 ⇒ 后面每处引用都得写 `result?.xxx`（Kotlin 也会就此发
+    //    "Unnecessary safe call" 警告：它知道那里不可能是空，我们却在防)。
+    //    提着对象走，**让类型系统承载这个保证**，`?.` 与警告就都不需要了。
+    val updated = result?.takeIf { it.isUpdateAvailable }
+
+    DialogSurface {
+        DialogHeader(stringResource(R.string.update_check_title))
+
+        Column(
+            modifier = Modifier
+                .weight(1f, fill = false)
+                .verticalScroll(rememberScrollState()),
+        ) {
+            // ---- 版本结论 ----
+            Column(
+                modifier = Modifier.padding(horizontal = Spacing.xl),
+                verticalArrangement = Arrangement.spacedBy(Spacing.xs),
+            ) {
                 when {
                     checking -> Text(
                         text = stringResource(R.string.update_check_checking),
@@ -412,25 +464,158 @@ private fun UpdateCheckDialog(
                     }
                 }
             }
-        },
-        confirmButton = {
+
+            // ---- 更新日志（限高、随外层一起滚）----
+            if (updated != null) {
+                DialogSectionTitle(stringResource(R.string.update_check_whats_new))
+                UpdateNotesBox(notes = updated.releaseNotes)
+            }
+
+            // ---- 国内镜像开关（只在"可下载"时有意义）----
+            // 放在**同一滚动列内**、日志之后：日志长时它会随内容滚到底部出现；
+            // 日志短时它紧跟在下方 —— 不需要为它单独占一行固定区。
+            // ⚠️ 不能把它移出这个 Column 放到 DialogSurface 直下：那样在日志较长时，
+            //    开关会永远压在日志块下方而挤掉日志的可视高度（两处争同一块垂直空间）。
+            if (updated != null) {
+                UpdateMirrorToggle(
+                    useMirror = useMirror,
+                    onUseMirrorChange = onUseMirrorChange,
+                )
+            }
+        }
+
+        DialogActions {
             // 检查中不给按钮（点了也只是等待）；有结论时「前往下载」直达发布页。
             if (!checking) {
                 TextButton(
                     onClick = {
-                        onOpenRelease(result?.releaseUrl ?: UpdateChecker.RELEASES_PAGE_URL)
+                        val raw = result?.releaseUrl ?: UpdateChecker.RELEASES_PAGE_URL
+                        // ⚠️ 在**点击那一刻**才做镜像转换：开关可以在对话框开着时被切换，
+                        //    若在上面就转换好、把结果存进 `result`，切换开关后按钮会仍指向旧地址。
+                        onOpenRelease(UpdateChecker.mirrorUrl(raw, useMirror))
                     },
                 ) {
                     Text(stringResource(R.string.update_check_go))
                 }
             }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.action_cancel))
-            }
-        },
-    )
+            DialogDismissButton(onClick = onDismiss)
+        }
+    }
+}
+
+/**
+ * 更新日志渲染区。
+ *
+ * ## 为什么是一个自绘容器而不是裸 [Markdown]
+ *
+ * 两件事必须由外层容器负责，Markdown 渲染器本身不提供：
+ * 1. **限高**：日志长度不可控（GitHub 上有人写一整篇），必须给一个上界，
+ *    否则对话框会被撑到屏幕外。用 `heightIn(max = …)` 让短日志自然收缩。
+ * 2. **视觉边界**：日志是"引用来的内容"，与 App 自己的文案不是一回事。给它一层
+ *    `surfaceContainerHighest` 底色 + 圆角，用户一眼就知道"这块是 GitHub 上的原文"。
+ *
+ * ## ⚠️ 这里**刻意不给** `verticalScroll`
+ *
+ * 本块位于对话框那条**已经可滚动**的外层 `Column` 之内。Compose 里同方向嵌套
+ * `verticalScroll` 会在测量阶段抛 `IllegalStateException`（"Vertically scrollable
+ * component was measured with an infinity maximum height"）。因此日志超过
+ * [UPDATE_NOTES_MAX_HEIGHT] 的部分由**外层**滚动接住 —— 用户体验上是一致的
+ * （手指滑动照样能看全），只是滚动的是整块正文而不是日志自己。
+ *
+ * ## 为什么正文直接用 `Markdown(content)` 而不传自定义 colors/typography
+ *
+ * `-m3` 版本的 `Markdown` 默认样式已经吃 `MaterialTheme`（颜色 / 字体全走主题），
+ * 传自定义值反而要在两处之间来回对账（主题改了忘改这里 → 观感漂移）。
+ * **能用默认就用默认**，只有确实需要压字号时再引入 `markdownTypography`。
+ *
+ * ## `notes` 为空时的兜底
+ *
+ * 有更新但 Release 没写正文（CI 自动生成的预览版常见）→ 显示一句
+ * [R.string.update_check_notes_empty]，而不是留一块空白（空白会被读成"渲染坏了"）。
+ */
+@Composable
+private fun UpdateNotesBox(notes: String?) {
+    val hasNotes = !notes.isNullOrBlank()
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.xl, vertical = Spacing.sm)
+            .background(
+                color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                shape = RoundedCornerShape(12.dp),
+            )
+            .heightIn(max = UPDATE_NOTES_MAX_HEIGHT)
+            .padding(Spacing.md),
+    ) {
+        if (hasNotes) {
+            // ⚠️ **必须显式传 `modifier`**：库的默认值是 `Modifier.fillMaxSize()`，
+            //    在外层 `heightIn(max = 240.dp)` 的约束下它会撑满到 240dp —— 结果是
+            //    两行日志也占一整块 240dp 高的底色，看起来像"渲染出一大块空白"。
+            //    传 `fillMaxWidth()` 让它按内容高度收缩，`heightIn(max)` 只在上界兜底。
+            Markdown(content = notes.orEmpty(), modifier = Modifier.fillMaxWidth())
+        } else {
+            Text(
+                text = stringResource(R.string.update_check_notes_empty),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/**
+ * 更新日志滚动区的高度上界。
+ *
+ * 取值理由：对话框整体是 0.8 屏高（[DialogSurface] 的 `DIALOG_HEIGHT_RATIO`），
+ * 减去标题 / 版本结论 / 开关 / 按钮，留给日志的合理空间约 240dp —— 够看十来行，
+ * 又不会把上面的"发现新版本 x.y.z"顶出视野（**那句才是主信息**，日志是补充）。
+ * 超过就走内部滚动。
+ */
+private val UPDATE_NOTES_MAX_HEIGHT = 240.dp
+
+/**
+ * 「国内镜像加速下载」开关行。
+ *
+ * 放在更新日志下方的**对话框内**，而不是设置页的某个组里：它的作用域是
+ * 「我这次下载」（用户对镜像是"用一次算一次"的心态），放在设置页会让它看起来像
+ * 一个常驻的系统级设置，与它实际只影响"打开下载页的地址"这件事不符。
+ *
+ * ⚠️ 开关状态**持久化**（DataStore），不是对话框内的临时 remembered 状态 ——
+ * 用户开了镜像就是想一直用，每次检查更新都重新打开一遍会很烦。
+ * 见 [io.vaultix.datastore.VaultixPreferences.setUpdateUseMirror]。
+ */
+@Composable
+private fun UpdateMirrorToggle(
+    useMirror: Boolean,
+    onUseMirrorChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.xl, vertical = Spacing.sm),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = stringResource(R.string.update_check_mirror_title),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Text(
+                text = if (useMirror) {
+                    stringResource(R.string.update_check_mirror_on_desc, UpdateChecker.mirrorHost())
+                } else {
+                    stringResource(R.string.update_check_mirror_desc)
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Spacer(Modifier.width(Spacing.md))
+        // ⚠️ 这里是**普通** `Switch` 而不是 `SettingsSwitch(Boolean?)`：镜像开关的
+        //    值由调用方已经收敛成非空 `Boolean`（null 走 false 兜底），不存在
+        //    "还没读出来"的第三态，也就不需要那个占位逻辑。
+        Switch(checked = useMirror, onCheckedChange = onUseMirrorChange)
+    }
 }
 
 /**
@@ -517,6 +702,7 @@ private fun VaultUnlockSection(
     onOpenVaultManagement: () -> Unit,
     onAutoLock: () -> Unit,
     onClipboardClear: () -> Unit,
+    onOpenPermissions: () -> Unit,
 ) {
     val active by viewModel.activeVault.collectAsStateWithLifecycle()
     SettingsGroupTitle(stringResource(R.string.group_vault_unlock))
@@ -555,13 +741,43 @@ private fun VaultUnlockSection(
             subtitle = clipboardClearLabel(state.clipboardClearMs),
             onClick = onClipboardClear,
         )
+        SettingsDivider()
+        // ★ 2026-09-28：从「关于」组移入本组（用户拍板）。
+        //   理由：用户是在**权限 / 隐私**语境下找它，而不是在"这个 App 是什么"语境下。
+        //   本组语义本就是"库怎么开、开了怎么锁、隐私怎么护"，权限管理正落在最后一项。
+        // ⚠️ 定稿 `设置页信息架构-定稿.md` §2② 曾把它并进「关于」，本轮**刻意推翻**
+        //   （定稿的结构目标"消灭单行组"不受影响：本组移入后仍 ≥2 行）。
+        // ⚠️ 2026-09-18：点击目标从「系统应用信息页」改为「应用内权限引导页」
+        //    （见 [onOpenPermissions] 的说明）。
+        SettingsRow(
+            icon = { Icon(Icons.Filled.Policy, contentDescription = null) },
+            title = stringResource(R.string.permission_management_title),
+            subtitle = stringResource(R.string.permission_management_subtitle),
+            onClick = onOpenPermissions,
+        )
     }
 }
 
 /**
- * 关于组（含权限管理 / 检查更新）。
+ * 关于组（2026-09-28 精简：5 行 → 2 行）。
  *
- * 为什么入口在设置页：Bastion 的多库是主界面里的一个**筛选维度**（`UnifiedCategoryFilterSelection`
+ * ## 本轮精简（用户原话：「关于部分感觉还是很冗余」）
+ *
+ * | 原 | 现 |
+ * |---|---|
+ * | 权限管理（独立一行） | **移入「密码库与解锁」组**（用户拍板，见下） |
+ * | 版本 + 检查更新（两行） | **合并为一行**：副标题给版本信息，点击即检查更新 |
+ * | 源码与反馈 + 开源许可（两行） | **合并为一行**「关于」→ 二级页 [AboutAppScreen] |
+ *
+ * ⚠️ **推翻 `设置页信息架构-定稿.md` §2②**：定稿当初把「权限管理」从「其他」组并入本组
+ * （理由：它是"关于这个 App"的元信息）。2026-09-28 用户要求移入「安全」类分组
+ * —— 理由同样成立且更贴合**用户找它的心智**：用户是在"权限/隐私"语境下找它，
+ * 不是在"这个 App 是什么"语境下找。定稿的**结构目标（消灭单行组）不受影响**：
+ * 移入后「密码库与解锁」组仍 ≥2 行，「关于」组仍有 ≥2 行。
+ *
+ * ## 为什么入口在设置页
+ *
+ * Bastion 的多库是主界面里的一个**筛选维度**（`UnifiedCategoryFilterSelection`
  * 把库与文件夹 / 分类平级），而 Vaultix 是「登录时二选一」的**单活跃库**语义 —— 主界面
  * 不该出现库的概念，于是把多库入口整体下沉到设置页
  * （Docs/progress/main-shell-migration.md §0 与 A4）。
@@ -569,34 +785,26 @@ private fun VaultUnlockSection(
  * 「检查更新」是 2026-09-16 从 Bastion 搬来的最后一块拼图：Vaultix 的分发渠道就是
  * GitHub Release，用户本来就得去那下载；这里只回答「有没有比本机新的构建」并给出
  * 发布页链接，**不在 App 内下载安装**（理由见 [UpdateChecker] 的文件头）。
+ *
+ * ⚠️ 参数里**没有** `onShowLicense` / `context`（2026-09-28 删）：许可对话框已随
+ * 「源码与反馈 + 开源许可 → 关于一行」的合并搬进 [AboutAppScreen]。它们留在这里
+ * 就是两个**无人使用**的参数，detekt `UnusedParameter` 会拦。
  */
 @Composable
 private fun AboutSection(
-    context: Context,
     versionName: String,
     buildNumber: Int,
-    onOpenPermissions: () -> Unit,
-    onShowLicense: () -> Unit,
+    onOpenAbout: () -> Unit,
     onCheckUpdate: () -> Unit,
 ) {
     SettingsGroupTitle(stringResource(R.string.group_about))
     SettingsGroupCard {
-        // 权限管理原属「其他」组（该组仅此一行，独占一个组标题）
-        // ⇒ 并入「关于」：它本来就是"关于这个 App"的元信息（定稿 §2②）。
-        // ⚠️ 2026-09-18：点击目标从「系统应用信息页」改为「应用内权限引导页」
-        //    （见 [onOpenPermissions] 的说明）。组与行标题都不动（定稿已固定）。
         SettingsRow(
-            icon = { Icon(Icons.Filled.Policy, contentDescription = null) },
-            title = stringResource(R.string.permission_management_title),
-            subtitle = stringResource(R.string.permission_management_subtitle),
-            onClick = onOpenPermissions,
-        )
-        SettingsDivider()
-        SettingsRow(
+            // ★ 2026-09-28：图标从 `Refresh` 改为 `Info` —— 这一行现在**同时代表版本与更新**
+            //    （点击才触发检查），用「刷新」图标会让人以为它是"改动"而非"查看 + 检查"。
             icon = { Icon(Icons.Filled.Info, contentDescription = null) },
             title = stringResource(R.string.about_version),
-            // ★ 2026-09-21 用户要求「关于里面的内容可以合并精简」：
-            // 把「内部版本号」「更新渠道」折回**同一行**的副标题，而不是各占一行。
+            // ★ 2026-09-28：版本信息折进副标题，点击**即**检查更新（原来要另起一行再点）。
             // ⚠️ 仍然**不写成 `0.5.0 (5000000)` 那种括号后缀**（2026-09-14 用户曾把括号
             //    误读成下载器加的 `(1)`）——这里显式带「内部版本」标签，语义自明。
             // ⚠️ 渠道用短文案（预览版 / 正式版），长解释留在 `about_channel_preview` 那份里，
@@ -618,26 +826,16 @@ private fun AboutSection(
                     ),
                 )
             },
-        )
-        SettingsDivider()
-        SettingsRow(
-            icon = { Icon(Icons.Filled.Refresh, contentDescription = null) },
-            title = stringResource(R.string.about_check_update),
-            subtitle = stringResource(R.string.about_check_update_desc),
             onClick = onCheckUpdate,
         )
         SettingsDivider()
         SettingsRow(
-            icon = { Icon(Icons.Filled.Security, contentDescription = null) },
-            title = stringResource(R.string.about_source),
-            subtitle = stringResource(R.string.about_github_url),
-            onClick = { SystemSettingsIntents.openUrl(context, context.getString(R.string.about_github_url)) },
-        )
-        SettingsDivider()
-        SettingsRow(
+            // ★ 2026-09-28：合并原「源码与反馈」+「开源许可」两行 ⇒ 一个「关于」入口。
+            //    这也是主流开源 App 的做法（一个 About 页装下仓库 / 反馈 / 许可证）。
             icon = { Icon(Icons.Filled.Info, contentDescription = null) },
-            title = stringResource(R.string.about_license),
-            onClick = onShowLicense,
+            title = stringResource(R.string.about_entry_title),
+            subtitle = stringResource(R.string.about_entry_desc),
+            onClick = onOpenAbout,
         )
     }
 }

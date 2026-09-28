@@ -143,6 +143,27 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { preferences.setAutofillSavePrompt(enabled) }
     }
 
+    /**
+     * 检查更新时用**国内加速镜像**打开下载页（默认关）。
+     *
+     * ⚠️ 与其它开关一样初值取 `null`（=「偏好还没读出来」），**不要**写 `false` ——
+     * 否则对话框里的开关会先按"关"渲染一帧，再从磁盘读到的真值跳一下（见本类顶部
+     * 那段「布尔型设置项一律 `Boolean?`、初值 `null`」的契约说明）。
+     *
+     * 语义边界见 [io.vaultix.datastore.VaultixPreferences.updateUseMirror]：
+     * 只影响「前往下载」打开的地址，不改 `api.github.com` 的检查请求。
+     */
+    val updateUseMirror: StateFlow<Boolean?> = preferences.updateUseMirror
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = null,
+        )
+
+    fun setUpdateUseMirror(enabled: Boolean) {
+        viewModelScope.launch { preferences.setUpdateUseMirror(enabled) }
+    }
+
     /** 自动填充后自动复制验证码（条目带 TOTP 而页面没有验证码框时）。 */
     val autoCopyTotp: StateFlow<Boolean?> = preferences.autoCopyTotp
         .stateIn(

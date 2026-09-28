@@ -256,6 +256,11 @@ dependencies {
     implementation(libs.androidx.camera.view)
     implementation(libs.zxing.core)
 
+    // Markdown 渲染（**唯一用途**：设置 →「版本」→ 检查更新对话框展示 Release notes）。
+    // core 与 -m3 必须同版本（见 libs.versions.toml 的 markdownRenderer 说明）。
+    implementation(libs.markdown.renderer)
+    implementation(libs.markdown.renderer.m3)
+
     // ---- 项目模块：UI 只依赖 domain 接口 + data:repository 实现 ----
     implementation(projects.core.model)
     implementation(projects.core.common)

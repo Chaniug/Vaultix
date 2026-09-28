@@ -83,6 +83,13 @@ fun MainShellScreen(
      */
     onOpenPermissions: () -> Unit,
     /**
+     * 设置 Tab 内的「关于」二级页（2026-09-28 新增）。
+     *
+     * ⚠️ 与 [onOpenPermissions] 同理必须由宿主接线 —— `SettingsScreen` 的
+     * [onOpenAbout][onOpenAbout] 参数**刻意不给默认值**，漏接线时编译不过。
+     */
+    onOpenAbout: () -> Unit,
+    /**
      * 去解锁**当前活跃库**（条目页空态里的兜底出口）。
      *
      * 与 [onSwitchVault] 分开：那个是「从多个库里挑一个」，单库时为 null（按纪律隐藏）；
@@ -243,6 +250,7 @@ fun MainShellScreen(
                             bottomInset = bottomInset,
                             onOpenVaultManagement = onOpenVaultManagement,
                             onOpenPermissions = onOpenPermissions,
+                            onOpenAbout = onOpenAbout,
                         )
                     }
                 }

@@ -59,6 +59,14 @@ data class UpdateCheckResult(
     val isUpdateAvailable: Boolean,
     /** Release 发布时间（epoch 秒）；解析不出为 null。 */
     val publishedAtEpochSeconds: Long? = null,
+    /**
+     * Release notes 原文（GFM Markdown）；空或缺失为 null。
+     *
+     * ★ 2026-09-28 新增：用户在「检查更新」对话框里要能看到**这一版改了什么**，
+     * 而不是只看到一个版本号。由 UI 层用 Markdown 渲染器呈现
+     * （见 `SettingsScreen.UpdateCheckDialog`）。
+     */
+    val releaseNotes: String? = null,
 )
 
 /**
@@ -79,6 +87,55 @@ object UpdateChecker {
 
     /** Release 列表页（「前往下载」兜底；也是检查不到时的去处）。 */
     const val RELEASES_PAGE_URL = "https://github.com/Chaniug/Vaultix/releases"
+
+    /**
+     * 国内加速镜像前缀（**只作用于「前往下载」的打开动作，不碰 API**）。
+     *
+     * ## 为什么只作用于下载链接
+     *
+     * GitHub 的 **API**（`api.github.com`）是查询接口，公开镜像稀少且不稳定 ——
+     * 把 API 也换镜像，收益是"可能快一点"，代价是"可能整个检查失败"。
+     * 而**下载页**（`github.com/.../releases/...`）是用户真正会打开的地方，
+     * 国内直连经常很慢，这里替换成本最低、收益最直接。
+     *
+     * ## 用什么镜像
+     *
+     * 用 gh-proxy 系的**通用加速前缀**（形如 `https://ghproxy.net/`）—— 它把任意
+     * `https://github.com/...` 代理成镜像地址，不改 URL 结构，因此**直接前缀拼接即可**，
+     * 不需要为每个 release 维护映射表。
+     *
+     * ⚠️ 用户可在设置里关闭；关闭后一律返回原始地址。
+     * ⚠️ 镜像列表**取第一个**；日后若某个挂掉，改这一处即可
+     * （`grep MIRROR_PREFIXES`）。
+     */
+    private val MIRROR_PREFIXES = listOf("https://ghproxy.net/")
+
+    private const val GITHUB_PREFIX = "https://github.com/"
+
+    /**
+     * 把一个 GitHub 网页地址换成镜像地址（供「前往下载」使用）。
+     *
+     * @param useMirror 用户是否启用镜像加速。**false 时原样返回**，调用方不必分支。
+     * @return 镜像地址；若地址不是 `https://github.com/` 开头（已经被换过、或是
+     *   `RELEASES_PAGE_URL` 之外的自定义地址），原样返回 —— **绝不盲目拼接**，
+     *   否则会得到一个 `https://ghproxy.net/https://ghproxy.net/...` 的二次代理。
+     */
+    fun mirrorUrl(url: String, useMirror: Boolean): String {
+        if (!useMirror) return url
+        if (!url.startsWith(GITHUB_PREFIX)) return url
+        val prefix = MIRROR_PREFIXES.first()
+        return prefix + url
+    }
+
+    /**
+     * 当前镜像的**主机名**（去掉 `https://` 前缀与结尾 `/`），供 UI 展示用。
+     *
+     * 用途：镜像开关打开后，对话框要如实告诉用户"你的下载页将被谁代理"
+     * （`update_check_mirror_on_desc`）—— 只说"已加速"而不说是谁在代理，
+     * 对一个密码管理器来说太含糊。取不到就退回整个前缀，保证 UI 永远有东西可显示。
+     */
+    fun mirrorHost(): String =
+        MIRROR_PREFIXES.first().removePrefix("https://").removeSuffix("/")
 
     private const val LATEST_API_URL =
         "https://api.github.com/repos/Chaniug/Vaultix/releases/latest"
@@ -136,6 +193,10 @@ object UpdateChecker {
             releaseUrl = release.htmlUrl.ifBlank { RELEASES_PAGE_URL },
             isUpdateAvailable = compareVersionTags(tag, currentVersion) > 0,
             publishedAtEpochSeconds = parseIsoEpochSeconds(release.publishedAt),
+            // ⚠️ 仅在**有更新**时给正文：已是最新时对话框不展示日志，省得白渲染一大段。
+            releaseNotes = release.body
+                ?.takeIf { it.isNotBlank() }
+                ?.takeIf { compareVersionTags(tag, currentVersion) > 0 },
         )
     }
 
@@ -169,6 +230,8 @@ object UpdateChecker {
             releaseUrl = preview.htmlUrl.ifBlank { RELEASES_PAGE_URL },
             isUpdateAvailable = hasUpdate,
             publishedAtEpochSeconds = parseIsoEpochSeconds(preview.publishedAt),
+            // 预览渠道：只在"确认有更新"时给正文（同 checkStable 的理由）。
+            releaseNotes = preview.body?.takeIf { it.isNotBlank() }?.takeIf { hasUpdate },
         )
     }
 
@@ -245,4 +308,6 @@ private data class GitHubRelease(
     val name: String? = null,
     val prerelease: Boolean = false,
     @SerialName("published_at") val publishedAt: String? = null,
+    /** Release notes（GFM Markdown）。UPDATE 2026-09-28：展示更新日志用。 */
+    val body: String? = null,
 )

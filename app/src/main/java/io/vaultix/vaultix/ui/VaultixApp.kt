@@ -28,6 +28,7 @@ import io.vaultix.vaultix.ui.passkeys.PasskeysScreen
 import io.vaultix.vaultix.ui.permissions.PermissionsScreen
 import io.vaultix.vaultix.ui.rootnav.RootNavState
 import io.vaultix.vaultix.ui.rootnav.RootNavViewModel
+import io.vaultix.vaultix.ui.settings.AboutAppScreen
 import io.vaultix.vaultix.ui.settings.AutofillSettingsScreen
 import io.vaultix.vaultix.ui.settings.ImportExportScreen
 import io.vaultix.vaultix.ui.settings.SettingsScreen
@@ -268,6 +269,9 @@ private fun NavGraphBuilder.vaultEntryGraph(
             // 设置 Tab 内的「权限管理」二级页（2026-09-18）：与独立 SettingsRoute 里
             // 那一行是同一个去处，两处都必须接线（SettingsScreen 的参数不给默认值）。
             onOpenPermissions = { navController.navigate(PermissionsRoute) },
+            // 设置 Tab 内的「关于」二级页（2026-09-28）：源码 / 反馈 / 更新日志 / 许可
+            // 合并收进那一页，与独立 SettingsRoute 是同一个去处（两处都必须接线）。
+            onOpenAbout = { navController.navigate(AboutAppRoute) },
             // 设置 Tab 内的「密码库管理」二级页：添加库（Bitwarden / 本地 KDBX）与
             // 「点未解锁的库去解锁」现在都是那一页内部的页内动作，主壳只负责导航过去。
             onOpenVaultManagement = { navController.navigate(VaultManagementRoute) },
@@ -316,6 +320,8 @@ private fun NavGraphBuilder.settingsGraph(navController: NavHostController) {
             onOpenAutofillSettings = { navController.navigate(AutofillSettingsRoute) },
             onOpenImportExport = { navController.navigate(ImportExportRoute) },
             onOpenPermissions = { navController.navigate(PermissionsRoute) },
+            // 设置首页「关于」组的二级页（2026-09-28）：源码 / 反馈 / 更新日志 / 许可。
+            onOpenAbout = { navController.navigate(AboutAppRoute) },
             // 「密码库」组现在只有一个入口：选库 / 加库 / 配解锁方式全在二级页。
             onOpenVaultManagement = { navController.navigate(VaultManagementRoute) },
         )
@@ -341,6 +347,10 @@ private fun NavGraphBuilder.settingsGraph(navController: NavHostController) {
     // 无参数：内容全部来自系统实时状态，与库 / 条目无关。
     composable<PermissionsRoute> {
         PermissionsScreen(onBack = { navController.popBackStack() })
+    }
+    // 「关于」二级页（2026-09-28）：源码仓库 / 问题反馈 / 更新日志 / 开源许可。
+    composable<AboutAppRoute> {
+        AboutAppScreen(onBack = { navController.popBackStack() })
     }
     composable<ImportExportRoute> {
         ImportExportScreen(onBack = { navController.popBackStack() })

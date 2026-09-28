@@ -92,6 +92,37 @@ msal = "8.4.2"
 cameraX = "1.5.2"
 zxing = "3.5.3"
 
+# ---- Markdown 渲染（更新日志展示，app 模块）----
+# 用途**只有一个**：设置 →「版本」→ 检查更新对话框里展示 GitHub Release 的
+# `body`（release notes）。GitHub 的 body 是 GFM Markdown（标题 / 列表 / 链接 /
+# 代码块 / 表格），纯 Text 直出会满屏 `##` 与 `**`，故需要一个渲染器。
+#
+# 选 mikepenz/multiplatform-markdown-renderer 的理由：
+#   ① 许可 **Apache-2.0**（与本项目 GPL-3.0 兼容，允许链接分发）；
+#   ② 提供 **-m3 模块**，默认样式直接吃 Material3 主题（无需自绘排版）；
+#   ③ 活跃维护（0.43.0，2026 年仍有提交）；
+#   ④ 自带解析，不要求另引解析器。
+#
+#   ⑤ **链接默认可点**：库内部已把 Markdown 链接接成 `LinkAnnotation.Url` +
+#      `LocalUriHandler.openUri()`（见 `AnnotatorSettings.annotatorSettings` 的
+#      默认 `linkInteractionListener`）⇒ release notes 里的 compare 链接直接可点，
+#      **不需要我们自己写链接处理**。这一条是 2026-09-28 读库源码确认的，
+#      不是猜的 —— 否则"日志里的链接点了没反应"会变成一个需要额外排查的坑。
+#
+# ⚠️ 已知代价（知情选择，2026-09-28 用户拍板）：
+#   会拉入 Markdown 解析器 → **APK 体积增加**。作为对照，本模块已有
+#   coil-compose / okhttp 等重型依赖；若日后体积敏感，可改自写"去语法"轻量渲染
+#   （代价：不支持表格 / 嵌套列表）。
+#
+# ⚠️ 解析器**不是** commonmark-java，而是 JetBrains 官方的 `org.jetbrains:markdown`
+#   （0.43.0 → 0.7.5）。曾误记为 commonmark-java，改正于 2026-09-28：
+#   这一点对体积评估有意义 —— JetBrains 解析器是纯 Kotlin multiplatform 实现，
+#   比 commonmark-java 更轻，实际代价小于最初预估。
+#
+# ⚠️ 版本对齐：core 与 -m3 **必须同版本**（-m3 针对性编译于对应 core 之上，
+#   跨版本可能 NoSuchMethodError）—— 与 composeBom/material3 同一纪律。
+markdownRenderer = "0.43.0"
+
 # ===== core:crypto 依赖版本 =====
 # Argon2id native 实现。锁 1.6.0（与 Bastion 完全一致）：
 #   1) 1.6.0 提供 Argon2KtResult.rawHashAsByteArray() / rawHash / encodedOutput，
@@ -172,6 +203,10 @@ androidx-camera-camera2 = { group = "androidx.camera", name = "camera-camera2", 
 androidx-camera-lifecycle = { group = "androidx.camera", name = "camera-lifecycle", version.ref = "cameraX" }
 androidx-camera-view = { group = "androidx.camera", name = "camera-view", version.ref = "cameraX" }
 zxing-core = { group = "com.google.zxing", name = "core", version.ref = "zxing" }
+
+# ---- Markdown 渲染：更新日志（core + m3 同版本，见上方 markdownRenderer 说明）----
+markdown-renderer = { group = "com.mikepenz", name = "multiplatform-markdown-renderer", version.ref = "markdownRenderer" }
+markdown-renderer-m3 = { group = "com.mikepenz", name = "multiplatform-markdown-renderer-m3", version.ref = "markdownRenderer" }
 androidx-security-crypto = { group = "androidx.security", name = "security-crypto", version.ref = "securityCrypto" }
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "coroutines" }
