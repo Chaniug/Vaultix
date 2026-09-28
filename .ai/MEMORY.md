@@ -144,10 +144,26 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 > 逐轮流水 → `.ai/SESSION-YYYY-MM-DD.md` · 坑 → `.ai/ISSUES.md`（索引，正文在 `issues/`）·
 > 性能专项 → [`Docs/progress/perf-plan.md`](../Docs/progress/perf-plan.md)。
 
-**快速解锁「房子化」批次 2 轮（2026-09-29 夜 · 最新，见 `.ai/SESSION-2026-09-29.md`）**
+**快速解锁「房子化」批次 2 + 3 轮（2026-09-29 夜 · 最新，见 `.ai/SESSION-2026-09-29.md`）**
 
-> 接续同日白天的批次 1：**动作表重排 + 重登记向导 + 扇出门禁三项全部完成，
-> 门禁三关实测全绿**（detekt 6s / compile 43s / 单测 **318 全过 0 failed**），`main` 已推送（`61ea1a3`）。
+> 接续同日白天的批次 1：**批次 2（动作表重排 + 重登记向导 + 扇出门禁）与
+> 批次 3（设置页简化「删五类」）全部完成，门禁三关实测全绿**（detekt / compile /
+> 单测 **328 全过 0 failed** + 孤儿串门禁未超基线），`main` 已推送（`61ea1a3` + `c827659`）。
+
+**批次 3 追加（同日深夜）**
+
+1. ★ **删 `Partial` 三态**：开关收敛为**二值**，判据只有「门锁装没装」。
+   「范围内 N 个库建好了几个」这个量**不再决定任何 UI**（那正是 #93 的成因）。
+2. ★ **删每库「指纹 / PIN」角标**：向导范围列表变纯复选框（门锁是全局的，
+   「这个库配了指纹没配 PIN」这种区分已不存在）。
+3. ★ **结果页**：成功/跳过改**计数**（「已纳入 N / 跳过 M」），**失败仍逐条列**
+   （失败必须可行动；只知道"有 2 个失败了"，用户唯一出路是全部重来）。
+4. ★ **副标题**改定稿 §5.1 文案；PIN 那句的两个数字由 `PIN_MIN_LENGTH` /
+   `PIN_MAX_ATTEMPTS` **传入而非写死**（文案数字与阈值分叉 = 不成立的承诺）。
+5. ★★ **批次 2 遗留 #1 已解决**：把 `lockState` / `locksToOpen` / `roomSealingBlocker` /
+   `assemble` 挪成**文件级 `internal` 纯函数** ⇒ `QuickUnlockControllerTest` 7 条 → **17 条**。
+   解法是"把判定从编排里剥出来"，不是给控制器注入 dispatcher（那会让构造参数再涨一个）。
+   ⚠️ **代价**：钉住的是**判定逻辑**，不是整条编排流程 —— 后者仍要靠批次 5 真机验收。
 
 1. ★ **动作表重排（定稿 §5）**：勾库 = **纯软件封装**（`sealRoomsForVaults`，**不碰指纹不碰门锁**）；
    开锁 = 各**一次** wrap；**已装着的门锁不重开**（`Session.locksToOpen` 与 `methods` 分开）；
@@ -160,10 +176,11 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 4. ★ **新建 `LocalUnlockFanoutTest`（8 用例）**：钉**扇出形状** —— `completeFingerprintUnlock`
    **恰好 1 次且不随库数增长**（旧形状 N 库 = N 次 Keystore = H2 病灶）。
    另新建 `LegacyQuickUnlockCleanupTest`（8 用例）。
-5. ⚠️ **诚实遗留（最重要的一条）**：**动作表重排没有单测覆盖** —— 控制器内部硬编码
-   `Dispatchers.IO`，纯 JVM 下 `runTest` 无法确定性推进那次线程跳转，强写会得到**间歇性红**
-   的测试。⇒ 随批次 3 的 `QuickUnlockControllerTest` 改写一起解决。
-   **动作表目前只有「三关绿」背书，没有行为级证据，真机验收必须专门走一遍。**
+5. ⚠️ **遗留（已于同日深夜批次 3 解决）**：动作表重排原本没有单测覆盖 —— 控制器内部
+   硬编码 `Dispatchers.IO`，纯 JVM 下 `runTest` 无法确定性推进那次线程跳转，强写会得到
+   **间歇性红**的测试。解法见上面「批次 3 追加」第 5 条。
+   ⚠️ 仍成立的部分：**整条编排流程（备料→弹认证→一次 wrap→封房间→回退→清旧）
+   仍无自动化证据**，只有三关绿背书 ⇒ 真机验收必须专门走一遍。
 6. 新坑：改完 SDK 的 `package.xml` 编译仍报 `Failed to find target with hash string 'android-37.0'`
    ⇒ 真凶是 **Gradle daemon 里没失效的 SDK loader 缓存**（`.ai/ISSUES.md` #128）。
 
