@@ -15,6 +15,7 @@ import io.vaultix.database.dao.VaultDao
 import io.vaultix.datastore.LocalUnlockKeyStore
 import io.vaultix.datastore.SecureCredentialStore
 import io.vaultix.datastore.VaultixPreferences
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertNull
 import org.junit.Before
@@ -35,13 +36,9 @@ class VaultRepositoryRemoveTest {
     private val syncService = mockk<BitwardenSyncService>()
     private val credentials = mockk<SecureCredentialStore>()
     private val localUnlockKeyStore = mockk<LocalUnlockKeyStore>()
-    /** relaxed：本测试不碰 PIN 路径，但构造函数需要它；未打桩的调用不该让测试失败。 */
-    private val pinUnlockStore = mockk<PinUnlockStore>(relaxed = true)
-    /** 同上：移除库会在 `runCatching { disableLocalUnlock(...) }` 里顺手丢弃单库暂存明文。 */
+    /** 房子化：移除库顺手删该库的房间信封（门锁是全局的，不动）。 */
+    private val houseKeyStore = mockk<HouseKeyStore>(relaxed = true)
     private val localUnlockEnrollment = mockk<LocalUnlockEnrollment>(relaxed = true)
-    /** 同上：本测试不走「多库配齐 PIN」路径，仅需满足构造。 */
-    private val pinEnrollment = mockk<PinEnrollmentCoordinator>(relaxed = true)
-    private val enrollment = mockk<PinEnrollment>(relaxed = true)
     private val preferences = mockk<VaultixPreferences>()
     /**
      * 来源解析：本测试只走 Bitwarden 路径，KDBX 来源一律返回 null。
@@ -68,16 +65,14 @@ class VaultRepositoryRemoveTest {
             syncService = syncService,
             credentials = credentials,
             localUnlockKeyStore = localUnlockKeyStore,
-            pinUnlockStore = pinUnlockStore,
-            pinEnrollment = pinEnrollment,
-            enrollment = enrollment,
+            houseKeyStore = houseKeyStore,
             localUnlockEnrollment = localUnlockEnrollment,
             preferences = preferences,
             kdbxSessions = KdbxSessionFlow(),
             kdbxFileSources = kdbxFileSources,
         )
-        coEvery { credentials.remove(any()) } returns Unit
-        coEvery { preferences.setLocalUnlockEnabled(any(), any()) } returns Unit
+        // removeRoomEnvelope 读范围镜像（空集 ⇒ 不会走到 setQuickUnlockScope）。
+        io.mockk.every { preferences.quickUnlockScope() } returns flowOf(emptySet())
         io.mockk.every { authRepository.logout(any()) } returns Unit
         coEvery { pendingOpDao.clearVault(vaultId) } returns Unit
         coEvery { vaultDao.delete(vaultId) } returns Unit
@@ -91,7 +86,8 @@ class VaultRepositoryRemoveTest {
 
         // 内存会话已清零：移除后任何解密入口都拿不到密钥
         assertNull(sessions.keyOf(vaultId))
-        coVerify(exactly = 1) { credentials.remove(any()) }
+        // 该库的房间信封删除（房子化：门锁是全局的，移除单库不动门锁）
+        coVerify(exactly = 1) { houseKeyStore.removeRoom(vaultId) }
         // 凭据与 host→server 登记一并清除（防残留会话被后续请求复用）
         io.mockk.verify(exactly = 1) { authRepository.logout(vaultId) }
         // 队列清理先于删行（同服务器重加账号时不允许残留旧离线改动）

@@ -29,7 +29,7 @@ import org.junit.Test
  *
  * ## 钉死的是什么
  * 解锁页有没有指纹入口，只取决于 [UnlockViewModel.UiState.localUnlockAvailable]。
- * 它的**唯一写入点**是订阅 `vaultRepository.localUnlockAvailable(id)` 的那一处；
+ * 它的**唯一写入点**是订阅 `vaultRepository.fingerprintQuickUnlockAvailable(id)` 的那一处；
  * 而 `id` 过去是从一个**跨协程共享的 `var vaultId`** 里读的 ——
  * 「选库」（协程 A）与「订阅可用性」（协程 C）并发收集同一个 `observeVaults()`，
  * 若 C 那次发射先到，`vaultId` 仍是空串，C 就提前 return、**再也不订阅**
@@ -113,11 +113,12 @@ class UnlockViewModelTest {
     ): UnlockViewModel {
         val repository = mockk<VaultRepository>()
         every { repository.observeVaults() } answers { vaultFlow() }
-        every { repository.localUnlockAvailable(any()) } returns flowOf(available)
+        every { repository.fingerprintQuickUnlockAvailable(any()) } returns flowOf(available)
         // PIN 入口是**另一条独立**的可用性流：本文件测的是指纹入口，
         // 所以这里恒为 false（PIN 入口不渲染，不干扰断言）。要测 PIN 请另开用例。
-        every { repository.pinUnlockAvailable(any()) } returns flowOf(false)
-        coEvery { repository.prepareLocalUnlock(any()) } returns null
+        // 房子化后门锁是全局的（不再按库），无参。
+        every { repository.pinLockAvailable() } returns flowOf(false)
+        coEvery { repository.prepareFingerprintUnlock() } returns null
 
         val sessions = mockk<VaultSessionRepository>()
         every { sessions.observeViewLockedVaultIds() } returns flowOf(emptySet())

@@ -10,16 +10,12 @@ package io.vaultix.data.repository
 
 import io.vaultix.data.kdbx.Kdbx
 import io.vaultix.data.repository.kdbx.KdbxFileSourceResolver
-import io.vaultix.datastore.LocalUnlockKeyStore
-import io.vaultix.datastore.SecureCredentialStore
 import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.database.dao.VaultDao
-import io.vaultix.domain.KdbxEnrollOutcome
 import io.vaultix.domain.LocalUnlockEnrollOutcome
 import io.vaultix.domain.LocalUnlockPrepareOutcome
 import io.vaultix.domain.LocalUnlockPreparedEnrollment
 import io.vaultix.model.VaultKind
-import javax.crypto.Cipher
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
@@ -27,140 +23,94 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 
 /**
- * 「本地快速解锁（生物识别）」登记的**备料与落盘**（2026-09-16 新增）。
+ * 快速解锁「生效范围」（房间信封）的**备料与落盘**。
  *
- * ## 为什么单独一个类
+ * 房子化（2026-09-28 定稿）后的职责边界：
  *
- * 本次要支持「一次勾选多个库、一次指纹全部启用」，而 [VaultRepositoryImpl] 的函数数
- * 实测**正好卡在 40**（detekt `TooManyFunctions` 上限，顶格）—— 任何新增方法都会爆。
- * 但更实际的理由与 [PinEnrollment] 当初抽出时完全一样：**职责**。
- * 「这一个库往信封里包什么明文」是独立关注点，本就该自成一处。
+ * | 事 | 谁 |
+ * |---|---|
+ * | 房钥匙 / 门锁信封 / 房间信封的钥匙学 | [HouseKeyStore] |
+ * | 「这个库往房间信封里包什么明文」+ 逐库校验 | 本类（[prepareForVaults]） |
+ * | 逐库软封装落盘 + 范围镜像同步 | 本类（[sealRoomsForVaults]） |
+ * | 向导编排（问密码、开门锁的顺序） | app 层控制器 |
  *
- * ⚠️ **下一个再往里加解锁手段时，同样要提取，而不是继续堆回 [VaultRepositoryImpl]。**
- * （同 [PinUnlockStore] / [PinEnrollmentCoordinator] / [PinEnrollment] 抽出去时留的告诫。）
+ * ## 与旧模型（每库信封）的关键差异
  *
- * ## 为什么不能复用单库路径（关键）
+ * - **勾库不再碰指纹**：房间信封是纯软件封装（[HouseKeyStore.sealRoom]），
+ *   没有任何系统认证参与 ——「备料 → 弹指纹 → 认证后连包」的三段式整体消失，
+ *   旧 [commitForVaults] 一把 cipher 连包 N 库的路径（H1 病灶）结构性不存在；
+ * - 备料产物 [Prepared.plaintext] **恒非空**：旧模型里 Bitwarden 的密钥留到
+ *   「认证后」取，是因为认证窗口里用户可能锁库；新模型没有认证窗口，
+ *   取与封同一个时刻完成，锁库边角由 [sealOne] 如实报 `Failed`。
  *
- * 单库路径的暂存位是 [VaultRepositoryImpl] 里的 `stagedKdbxPayload` —— 那是
- * **一个 `ByteArray?`，不按库分**。一次勾选多个 KDBX 库时，后一个库的明文会
- * **覆盖**前一个，于是前一个库的信封里躺的是别人的密码，用户要到解锁时才发现打不开。
- * 本类因此**完全绕开那个单槽**：备料结果由调用方（控制器）自己持有一份列表，
- * 认证通过后逐个落盘。与 [PinEnrollment.enrollKdbx] 绕开暂存槽是同一个思路。
+ * ## 仍然保留的两条老纪律
  *
- * ## 两段式是硬约束，不是风格选择（本类最重要的一条）
+ * - **先校验后包裹**：KDBX 先 [Kdbx.verify] 真验一次才组装明文 —— `sealRoom`
+ *   只负责封字节、不管字节对不对，先包后校会得到「启用成功、但躺的是错密码」；
+ * - **明文用完即擦**：[Prepared] 实现 `AutoCloseable`，[sealRoomsForVaults]
+ *   无论成败逐个 `close()`（且 [HouseKeyStore.sealRoom] 自带 `finally` 清零，
+ *   明文副本不落任何第二处）。
  *
- * 快解的保护器 KEK 是 **auth-per-use**（`setUserAuthenticationParameters(0, …)`），
- * 只有**被 BiometricPrompt 授权过的那一个 `Cipher` 实例**才能 `doFinal`。所以：
+ * ## 为什么不能复用单库路径（历史教训，路径已于房子化删除）
  *
- * 1. **认证前**只能做不需要 KEK 的事 —— 校验凭据、把要包的明文读出来备好；
- * 2. **认证后**用**同一个** cipher 连续把所有库 wrap 完。
- *
- * ⚠️ **绝不能"优化"成提前为每个库各准备一个 cipher**：那些 cipher 没有被授权，
- * 第二个库就会抛 `UserNotAuthenticatedException`。这正是 2026-09-14 那次闪退的根因
- * （当时是 `wrap` 跑在弹指纹之前），别绕回去。
- *
- * ## Bitwarden 与 KDBX 备料的东西不同（因此路径也不同）
- *
- * | 库类型 | 信封里包什么 | 备料时机 |
- * | --- | --- | --- |
- * | Bitwarden | 会话里的对称密钥（64B full key） | **认证后**取（认证前只验"会话在"） |
- * | KDBX | 主密码 + keyfile 字节 | **认证前**就要读出来（会话里没有主密码） |
- *
- * Bitwarden 侧之所以把取密钥留到认证后：密钥本来就在内存会话里，取出即用最省事，
- * 也顺带让"认证窗口里用户把库锁了"这种情况能被如实报成 [LocalUnlockEnrollOutcome.Failed]。
+ * 旧单库路径的暂存位是**一个不按库分的 `ByteArray?`**：一次勾选多个 KDBX 库时
+ * 后一个库的明文会覆盖前一个，前者的信封里躺的是别人的密码。该路径
+ * （`prepareKdbxEnroll` / `commitKdbxEnroll` / `discardKdbxEnroll`）连同暂存槽
+ * 于 2026-09-28 房子化时整体删除 —— app 层本就零调用。
  */
 @Singleton
 class LocalUnlockEnrollment @Inject constructor(
     /**
-     * 内存里的对称密钥（Bitwarden 侧要包的就是它）。
+     * 内存里的对称密钥（Bitwarden 侧房间信封里包的就是它派生的 64B full key）。
      *
      * ⚠️ 只依赖会话管理器，**不依赖 [VaultRepositoryImpl]** —— 反过来会让两者成环。
-     * 这也是 KDBX 校验走 [Kdbx.verify] 独立入口而不是复用仓储 `unlockKdbxInternal` 的原因。
      */
     private val sessions: VaultSessionManager,
-    private val credentials: SecureCredentialStore,
-    private val localUnlockKeyStore: LocalUnlockKeyStore,
+    private val houseKeyStore: HouseKeyStore,
     private val vaultDao: VaultDao,
     private val preferences: VaultixPreferences,
     /**
      * 「origin ⇒ 文件来源」的解析。
      *
-     * ⚠️ 本类曾经自带一个只认 SAF `content://` 的 `KdbxSource` lambda —— 于是
-     * `webdav:` / `onedrive:` 的库在这里**校验永远失败**，用户看到的是
-     * "主密码不正确"（真因是文件根本读不到）。2026-09-17 起改走与读写两侧**同一张**
-     * 判别表（见 [KdbxFileSourceResolver] 的 KDoc：那张表只能有一份）。
+     * ⚠️ 来源解析必须走与读写两侧**同一张**判别表（[KdbxFileSourceResolver] 的
+     * KDoc：那张表只能有一份）—— 曾各自维护一份导致网盘库在这里校验永远失败，
+     * 用户看到的却是"主密码不正确"。
      */
     private val kdbxFileSources: KdbxFileSourceResolver,
 ) {
 
     /**
-     * 一个库「认证通过后要包进信封」的备料。
+     * 一个库「要包进房间信封」的备料。
      *
      * 实现 [LocalUnlockPreparedEnrollment]（域层接口）而不是自带一套公开属性：
-     * 这样控制器只依赖 `domain` 的类型，不必反向依赖 `data.repository` ——
-     * 后者会让 `domain` 与 `data` 之间出现环。
+     * 控制器只依赖 `domain` 的类型，不会反向依赖 `data.repository`。
      *
-     * 实现 [AutoCloseable] 是为了**明文用完即擦**：KDBX 这份里躺着主密码，
-     * 没理由让它活到 GC。调用方必须保证 `close()` 一定被调到（用 `use { }` 或 finally）。
+     * [close] = 明文用完即擦：KDBX 这份里躺着主密码，没理由让它活到 GC。
+     * 调用方必须保证 `close()` 一定被调到（[sealRoomsForVaults] 内部已保证；
+     * 直接持有备料的调用方用 `use { }` 或 finally）。
      */
     class Prepared internal constructor(
         override val vaultId: String,
         override val displayName: String,
-        val kind: VaultKind,
-        /**
-         * 待包裹的明文。
-         *
-         * - KDBX：`KdbxUnlockPayload.encode(...)` 的结果（认证前已备好）；
-         * - Bitwarden：**null** —— 它的明文是会话里的对称密钥，认证后才取。
-         */
-        internal val plaintext: ByteArray?,
+        /** 待封装的明文（恒非空，见类 KDoc）。 */
+        internal val plaintext: ByteArray,
     ) : LocalUnlockPreparedEnrollment {
-        override val requiresPostAuthPlaintext: Boolean get() = plaintext == null
-
         override fun close() {
-            plaintext?.fill(0)
+            plaintext.fill(0)
         }
     }
 
     /**
-     * **单库路径**的暂存凭据（主密码 + keyfile 的编码）。
-     *
-     * ⚠️ 与多库路径的 `Prepared` 列表是**两套东西**，别合并：多库路径的备料由调用方
-     * （控制器）自己持有，走的是"一次认证连续 wrap 完一批"；单库路径由本类持有，
-     * 因为它的调用方是 [VaultRepositoryImpl] 的旧接口，没有地方放这份列表。
-     *
-     * ⚠️ 这是**单槽**（一个 `ByteArray?`，不按库分）。多库场景**绝不能**用它 ——
-     * 后一个库会覆盖前一个，导致前者的信封里躺着别人的密码。
-     * 多库一律走 [prepareForVaults] + [commitForVaults]。
-     *
-     * 生命周期（每个出口都要收尾，否则明文留在内存）：
-     * 写入 [prepareKdbxEnroll]（写前先擦）／消费 [commitKdbxEnroll]（成败都擦）／
-     * 丢弃 [discardKdbxEnroll]、[VaultRepositoryImpl.disableLocalUnlock]。
-     */
-    private var stagedSinglePayload: ByteArray? = null
-
-    /** 关闭某库的快速解锁时顺手丢弃单库暂存（用户可能在弹指纹前就关掉了开关）。 */
-    fun discardStagedPayload() {
-        stagedSinglePayload?.fill(0)
-        stagedSinglePayload = null
-    }
-
-    /**
-     * **认证之前**：逐库校验凭据 + 备料。
+     * 备料：逐库校验凭据 + 组装待封装明文（**不碰任何门锁 / 指纹**）。
      *
      * 逐个库独立判定（`associate`），**一个库失败不影响其它库** —— 这是刻意保留的
      * 真实状态：用户可能勾了 3 个库、其中 1 个密码不对，另外 2 个没有理由不生效。
      *
-     * KDBX 校验走 [Kdbx.verify]（**只验不开库**、不碰 `KdbxSessionStore`）：
-     * 用 `unlock()` 验会把明文拉进内存并**覆盖该库已有会话**，多库时更会互相打架。
+     * KDBX 校验走 [Kdbx.verify]（**只验不开库**、不碰 `KdbxSessionStore`）。
      *
      * @param passwordOf 为每个 KDBX 库**单独**取一次它的主密码。
      *   返回 null / 空白 ⇒ 视为**用户跳过该库**（[LocalUnlockPrepareOutcome.Skipped]）。
-     *   Bitwarden 库**不会**调用它（包裹物是会话里的密钥，不需要密码）。
-     *
-     *   ⚠️ 2026-09-16 从「一个共用的 masterPassword」改为回调（用户拍板）：多个 KDBX 库的
-     *   主密码**可以各不相同**，共用一个输入框会让密码不同的那些库凭空失败，
-     *   而用户只会看到「主密码不正确」—— 无从得知真因是自己的库本来就不同密码。
+     *   Bitwarden 库**不会**调用它（房间信封里包的是会话密钥，不需要密码）。
      */
     suspend fun prepareForVaults(
         vaultIds: List<String>,
@@ -169,7 +119,7 @@ class LocalUnlockEnrollment @Inject constructor(
         vaultIds.associateWith { vaultId -> prepareOne(vaultId, passwordOf) }
     }
 
-    /** 单个库的认证前备料（把 [prepareForVaults] 的 `when` 摊平成一行调用）。 */
+    /** 单个库的备料。 */
     private suspend fun prepareOne(
         vaultId: String,
         passwordOf: suspend (vaultId: String) -> String?,
@@ -178,14 +128,12 @@ class LocalUnlockEnrollment @Inject constructor(
             ?: return LocalUnlockPrepareOutcome.Failed("本地不存在该库")
         return when (VaultKind.fromName(row.kind)) {
             VaultKind.BITWARDEN -> {
-                // 认证前只确认"库还在会话里"。真正的密钥留到认证后取（见类 KDoc）。
-                if (sessions.keyOf(vaultId) == null) {
-                    LocalUnlockPrepareOutcome.Failed("该库未解锁，请先用主密码打开它")
-                } else {
-                    LocalUnlockPrepareOutcome.Ready(
-                        Prepared(vaultId, row.displayName, VaultKind.BITWARDEN, null),
-                    )
-                }
+                // 会话不在 ⇒ 没有密钥可包，如实报（不拿空信封糊过去）。
+                val key = sessions.keyOf(vaultId)
+                    ?: return LocalUnlockPrepareOutcome.Failed("该库未解锁，请先用主密码打开它")
+                LocalUnlockPrepareOutcome.Ready(
+                    Prepared(vaultId, row.displayName, buildFullKey(key)),
+                )
             }
             VaultKind.KDBX -> {
                 val masterPassword = passwordOf(vaultId)
@@ -201,11 +149,7 @@ class LocalUnlockEnrollment @Inject constructor(
     }
 
     /**
-     * KDBX 的认证前备料：先校验，过了才把「主密码 + keyfile」组装好暂放在返回值里。
-     *
-     * ⚠️ 2026-09-17：来源解析从"旧 `KdbxSource`（只认 SAF）"换成 [KdbxFileSourceResolver]。
-     * 那之前，网盘库在这里**必然校验失败**（文件根本读不到），而用户看到的却是
-     * 「主密码不正确」—— 一条指向完全错误方向的提示。
+     * KDBX 的备料：先校验，过了才把「主密码 + keyfile」组装好。
      */
     private suspend fun prepareKdbx(
         vaultId: String,
@@ -219,8 +163,7 @@ class LocalUnlockEnrollment @Inject constructor(
         // keyfile 与库文件走同一套解析；读不到会是 null，届时 `verify` 自然验不过
         // （不是降级成"仅主密码"，而是**如实**：少一个 keyfile 字节就是开不了）。
         val keyFileBytes = kdbxFileSources.readBytes(keyFileUri)
-        // ★ 先校验、后组装。`wrap` 只负责封字节、不管字节对不对：先包后校会得到
-        //   「启用成功、但躺的是错密码」，用户要到解锁时才发现打不开。
+        // ★ 先校验、后组装。`sealRoom` 只负责封字节、不管字节对不对。
         val verified = Kdbx.verify(
             source = source,
             password = masterPassword,
@@ -237,217 +180,90 @@ class LocalUnlockEnrollment @Inject constructor(
             }
         }
         // ⚠️ keyfile 读不出来时**拒绝**而不是降级成"仅主密码"：keyfile 不是可选装饰，
-        //    少它一个字节就是开不了。静默降级会让信封里躺一组永远解不开的凭据，
-        //    而用户只会看到"指纹不对"，无从得知真因。（与 `PinEnrollment.enrollKdbx` 同款取向）
+        //    少它一个字节就是开不了。静默降级会让信封里躺一组永远解不开的凭据。
         return LocalUnlockPrepareOutcome.Ready(
             Prepared(
                 vaultId = vaultId,
                 displayName = displayName,
-                kind = VaultKind.KDBX,
                 plaintext = KdbxUnlockPayload.encode(masterPassword, keyFileBytes),
             ),
         )
     }
 
     /**
-     * **认证之后**：用**本次认证的** cipher 逐库 wrap 并落盘。
+     * 落盘：把备好的明文逐库软封装成房间信封（纯软件，**不碰指纹、不收 cipher**）。
      *
-     * ⚠️ [cipher] 必须来自本次 BiometricPrompt 授权。KEK 是 auth-per-use，
-     * 一个 cipher 只对一次认证有效 —— 所以这里是**连续** wrap，不是"每库一个 cipher"。
+     * ## 前置：房钥匙必须在内存（至少一把门锁已开）
      *
-     * 逐库独立：某个库 wrap 失败（KEK 被指纹变更永久失效等）只回退**该库**，
-     * 绝不牵连其它库 —— 那会静默丢掉用户已经配好的部分。
+     * 定稿 §5 顺序约束 —— 房间信封只在至少一把门锁已存在时创建，否则房钥匙从未
+     * 被包裹过，进程一死房间信封即成孤儿。不满足时**全部库**如实报失败
+     * （不是静默跳过，那正是「假成功」）。
+     *
+     * ## 逐库独立成败
+     *
+     * 某个库封装失败（信封损坏等）只回退**该库**，绝不牵连其它库。
+     *
+     * ## 范围镜像同步
+     *
+     * 成功的库同步进 `QUICK_UNLOCK_SCOPE`（**真源仍是房间信封本身**，偏好键只是
+     * UI 响应式镜像 —— 见 `VaultixPreferences.QUICK_UNLOCK_SCOPE` 的 KDoc）。
      *
      * ⚠️ 无论成败，每个 [Prepared] 的明文都会被擦掉（`close()`）。
      */
-    suspend fun commitForVaults(
+    suspend fun sealRoomsForVaults(
         prepared: List<LocalUnlockPreparedEnrollment>,
-        cipher: Cipher,
     ): Map<String, LocalUnlockEnrollOutcome> = withContext(Dispatchers.IO) {
-        prepared.associate { unit ->
+        if (!houseKeyStore.isUnlocked) {
+            // 全部如实失败 + 备料明文统一擦除（KDBX 那些含主密码字节）。
+            prepared.forEach { it.close() }
+            return@withContext prepared.associate {
+                it.vaultId to LocalUnlockEnrollOutcome.Failed("请先开启并解锁一把门锁（指纹或 PIN）")
+            }
+        }
+        val outcomes = prepared.associate { unit ->
             val outcome = try {
-                // 🔴 这里曾经写成 `when (unit) { is Prepared -> ... }`，注释还说
-                //    "将来有第二个实现会在编译期提醒" —— **那是错的**：
-                //    `LocalUnlockPreparedEnrollment` 是**普通 interface**（不是 sealed，
-                //    因为实现 `Prepared` 在 data 模块、接口在 domain 模块，
-                //    跨模块无法构成 sealed 层级）。Kotlin 对非 sealed 类型的 `when`
-                //    不认为单分支是穷尽的 ⇒ CI 直接报
-                //      `'when' expression must be exhaustive. Add an 'else' branch.`
-                //    加 `else` 只会把"类型不对"从编译期推到运行期，反而不如强转诚实。
-                //
-                //    ⇒ 用强转：**唯一的构造入口是 `prepareForVaults`**（见类 KDoc），
-                //      它只会返回本类的 `Prepared`。真出现第二个实现，
-                //      这里会**立刻** ClassCastException（响亮地失败），而不是静默走 else。
+                // 🔴 强转而非 `when`：接口非 sealed（跨模块无法构成 sealed 层级），
+                //    非单分支 when 不穷尽 ⇒ CI 报错。唯一构造入口是 [prepareForVaults]，
+                //    真出现第二个实现会立刻 ClassCastException（响亮失败），
+                //    好过静默走 else（旧 commitForVaults 的同款取向）。
                 val target = unit as Prepared
-                commitOneSafely(target, cipher)
+                sealOneSafely(target)
             } finally {
-                // 明文凭据用完即擦（KDBX 这份含主密码字节）。
                 unit.close()
             }
             unit.vaultId to outcome
         }
+        syncScopeMirror(outcomes)
+        outcomes
     }
 
-    /** 单个库的认证后落盘。 */
-    private suspend fun commitOne(unit: Prepared, cipher: Cipher): LocalUnlockEnrollOutcome {
-        val plaintext = unit.plaintext ?: bitwardenPlaintext(unit.vaultId)
-        // 会话没了（用户在认证窗口里锁了库）⇒ 如实报，不要拿个空信封糊过去。
-        ?: return LocalUnlockEnrollOutcome.Failed("该库未解锁，请先用主密码打开它")
-        return try {
-            // ⚠️ 不吞异常（与 `enrollLocalUnlock` 同款取向）：`wrap` 抛错意味着这个
-            //    cipher 根本用不了（认证已过但 Cipher 状态错），那是编程/环境错误、
-            //    不是用户输入问题。吞成"启用失败"只会掩盖它。
-            val wrapped = localUnlockKeyStore.wrap(cipher, plaintext)
-            credentials.putString(localUnlockStorageKey(unit.vaultId), wrapped)
-            preferences.setLocalUnlockEnabled(unit.vaultId, true)
-            LocalUnlockEnrollOutcome.Enrolled
-        } finally {
-            // KDBX 的明文本就在 `unit.plaintext` 里、由 `close()` 统一擦；
-            // 这里只管 Bitwarden 那条临时取出来的会话密钥副本。
-            if (unit.plaintext == null) plaintext.fill(0)
-        }
+    /** 单个库的软封装落盘。 */
+    private suspend fun sealOne(unit: Prepared): LocalUnlockEnrollOutcome {
+        // plaintext 所有权转移给 sealRoom（内部 finally 清零）。
+        houseKeyStore.sealRoom(unit.vaultId, unit.plaintext)
+        return LocalUnlockEnrollOutcome.Enrolled
     }
 
     /**
-     * [commitOne] 的失败归类：**只有**真正属于「该库登记失败」的异常才吞，
-     * 其余一律重新抛出。
+     * [sealOne] 的失败归类：软封装的异常（GCM/存储层）吞成逐库 `Failed`。
      *
-     * ## 为什么不是直接 `catch (error: Exception)`
-     *
-     * 两难：`Keystore` 失效抛的是 `KeyPermanentlyInvalidatedException` /
-     * `UnrecoverableKeyException`（都是 **`GeneralSecurityException` 的子类**），
-     * 但 `wrap` 还可能抛别的 `GeneralSecurityException`（例如算法不可用），
-     * 那些不该被当成"用户配置坏了"。而写 `catch (error: Exception)` 会被
-     * detekt `TooGenericExceptionCaught` 拦下（CI 门禁，见 `config/detekt/detekt.yml`）。
-     *
-     * ⇒ 用项目既有的 `runCatching { }.getOrElse { }` 形态（detekt 该规则只看 `catch`
-     *   子句，不看 `getOrElse`），与 [VaultRepositoryImpl.completeLocalUnlock] 完全一致。
-     *   这不是绕过规则：归类逻辑确实需要看**任意**异常（`isLocalUnlockUnrecoverable`
-     *   本身就是沿 cause 链找特定类型），先接住再判定是对的。
+     * 用 `runCatching` 形态与项目既有取向一致（detekt `TooGenericExceptionCaught`
+     * 只看 `catch` 子句；这里确实需要接住任意异常再如实归类）。
      */
-    private suspend fun commitOneSafely(unit: Prepared, cipher: Cipher): LocalUnlockEnrollOutcome =
-        runCatching { commitOne(unit, cipher) }.getOrElse { error ->
-            // KEK 永久失效（用户新增/删除指纹）时会走到这里。若只吞掉异常而不清状态，
-            // 开关仍是 enabled、payload 仍在 ⇒ 设置页显示"已启用"但每次点都失败，
-            // 且无法自愈（见 `VaultRepositoryImpl.clearBrokenLocalUnlock` 的 KDoc）。
-            // ⚠️ 只清**这一个**库，绝不牵连其它库 —— 那会静默丢掉用户已配好的部分。
-            if (error.isLocalUnlockUnrecoverable()) {
-                clearBrokenEnrollment(unit.vaultId)
-                LocalUnlockEnrollOutcome.Failed("本地解锁已失效（可能因指纹变更），请重新启用")
-            } else {
-                LocalUnlockEnrollOutcome.Failed(error.message ?: "启用失败")
-            }
+    private suspend fun sealOneSafely(unit: Prepared): LocalUnlockEnrollOutcome =
+        runCatching { sealOne(unit) }.getOrElse { error ->
+            LocalUnlockEnrollOutcome.Failed(error.message ?: "房间信封封装失败")
         }
 
-    /**
-     * Bitwarden 侧的待包明文：会话里的对称密钥 → 64B full key。
-     *
-     * ⚠️ 必须 `suspend`：[VaultSessionManager.keyOf] 是 `suspend`（内部走 mutex），
-     * 它在这里不加 `suspend` 会编译失败：
-     *   `Suspend function 'keyOf' can only be called from a coroutine or another suspend function.`
-     * 唯一的调用点 [commitOne] 本就是 `suspend`，改成挂起函数无额外代价。
-     */
-    private suspend fun bitwardenPlaintext(vaultId: String): ByteArray? =
-        sessions.keyOf(vaultId)?.let { buildFullKey(it) }
-
-    /** 把单个库清回「未启用」（payload 与开关一起清，避免"显示已启用但永远失败"）。 */
-    private suspend fun clearBrokenEnrollment(vaultId: String) {
-        runCatching {
-            credentials.remove(localUnlockStorageKey(vaultId))
-            preferences.setLocalUnlockEnabled(vaultId, false)
-        }
+    /** 把成功的库并入范围镜像（真源是房间信封；空集语义见 `quickUnlockScope`）。 */
+    private suspend fun syncScopeMirror(outcomes: Map<String, LocalUnlockEnrollOutcome>) {
+        val succeeded = outcomes.filterValues { it == LocalUnlockEnrollOutcome.Enrolled }.keys
+        if (succeeded.isEmpty()) return
+        val current = preferences.quickUnlockScope().first()
+        preferences.setQuickUnlockScope(current + succeeded)
     }
 
     /** 该库的 keyfile URI（按库独立存于偏好；读失败当作"没配 keyfile"）。 */
     private suspend fun keyFileUriOf(vaultId: String): String? =
         runCatching { preferences.kdbxKeyFileUri(vaultId).first() }.getOrNull()
-
-    // ===== 单库路径（2026-09-16 从 VaultRepositoryImpl 迁入）=====
-
-    /**
-     * 单库 KDBX 启用：**先校验、后暂存**待包裹明文。
-     *
-     * ## 为什么校验方式由调用方传进来（而不是本类自己验）
-     *
-     * 单库路径的历史行为是**复用 `unlockKdbxInternal`（真实开库）**做校验 ——
-     * 用户刚证明自己能开这个库，把会话留着让他直接用，符合直觉。
-     * 但 `unlockKdbxInternal` 在 [VaultRepositoryImpl] 上，本类若直接依赖它会成环。
-     * 故把"怎么验"作为参数 [verifyCredentials] 传入：调用方（[VaultRepositoryImpl]）
-     * 传自己的真实开库路径，本类只管"验过了才组装明文"。
-     *
-     * ⚠️ 多库路径**不用**这种方式，它走 [prepareForVaults] 里的 [Kdbx.verify]
-     * （只验不开库）—— 一次勾多个库时"顺带开库"会互相覆盖会话，且用户并没要求打开它们。
-     *
-     * ⚠️ 顺序不可颠倒：`wrap` 只负责封字节、不管字节对不对，先包后校会得到
-     * 「启用成功但躺的是错密码」，用户要到下次解锁才发现打不开。
-     *
-     * @param verifyCredentials 给定 (vaultId, origin, password, keyFileUri) 返回凭据是否正确。
-     */
-    suspend fun prepareKdbxEnroll(
-        vaultId: String,
-        masterPassword: String,
-        keyFileUri: String?,
-        verifyCredentials: suspend (vaultId: String, origin: String, password: String, keyFileUri: String?) -> Boolean,
-    ): KdbxEnrollOutcome = withContext(Dispatchers.IO) {
-        val row = vaultDao.get(vaultId)
-            ?: return@withContext KdbxEnrollOutcome.Failed("本地不存在该库")
-        if (VaultKind.fromName(row.kind) != VaultKind.KDBX) {
-            return@withContext KdbxEnrollOutcome.Failed("该库不是 KDBX 类型")
-        }
-        if (!verifyCredentials(vaultId, row.origin, masterPassword, keyFileUri)) {
-            return@withContext KdbxEnrollOutcome.InvalidCredentials
-        }
-        // 覆盖上一份前先擦：任何时刻内存里最多只有一份暂存明文。
-        stagedSinglePayload?.fill(0)
-        stagedSinglePayload = KdbxUnlockPayload.encode(masterPassword, readKeyFileBytes(keyFileUri))
-        KdbxEnrollOutcome.Prepared
-    }
-
-    /** 单库 KDBX 启用第二步：用**已认证**的 cipher 包裹暂存明文并落盘。 */
-    suspend fun commitKdbxEnroll(vaultId: String, cipher: Cipher): Boolean =
-        withContext(Dispatchers.IO) {
-            val plaintext = stagedSinglePayload ?: return@withContext false
-            // 先取走再处理：无论 wrap 成败，暂存位都不能再指向这份明文。
-            stagedSinglePayload = null
-            // 与 Bitwarden 侧同款取向：**不吞异常**（`wrap` 抛错意味着这个 cipher
-            // 根本用不了，那是编程/环境错误，吞成「包裹失败」只会掩盖它）。
-            val wrapped = try {
-                localUnlockKeyStore.wrap(cipher, plaintext)
-            } finally {
-                // 明文凭据用完即擦（含主密码字节）：这是本项目对明文的一贯取向。
-                plaintext.fill(0)
-            }
-            credentials.putString(localUnlockStorageKey(vaultId), wrapped)
-            preferences.setLocalUnlockEnabled(vaultId, true)
-            true
-        }
-
-    /** 放弃单库 KDBX 登记：把暂存明文擦掉（幂等）。 */
-    fun discardKdbxEnroll() {
-        discardStagedPayload()
-    }
-
-    /**
-     * 读 keyfile 字节（只包 URI 不行：授权可能失效、用户可能换过文件）。
-     *
-     * ⚠️ 改 `suspend` 是 2026-09-17 迁移的连带结果：来源解析统一走
-     * [KdbxFileSourceResolver]，而它的签名是挂起的（网盘来源要走网络，
-     * 将来 keyfile 也可能放到网盘上）。调用点都在 `withContext(Dispatchers.IO)` 里。
-     */
-    private suspend fun readKeyFileBytes(keyFileUri: String?): ByteArray? =
-        kdbxFileSources.readBytes(keyFileUri)
 }
-
-/**
- * 本地快速解锁信封的存储键前缀。
- *
- * ⚠️ 提到包级 `internal` 是为了让 [LocalUnlockEnrollment] 与 [VaultRepositoryImpl]
- * **共用同一个常量**。此前它是 `VaultRepositoryImpl` 的私有常量，新类要用就只能
- * 复制一份字符串 —— 两份字面量一旦漂移，写入方与读取方会各看各的键，
- * 表现为"启用成功但解锁时找不到信封"，且不会有任何编译错误。
- */
-internal const val LOCAL_UNLOCK_STORAGE_PREFIX = "local_unlock_key::"
-
-/** 某个库的本地快速解锁信封存储键。 */
-internal fun localUnlockStorageKey(vaultId: String): String =
-    LOCAL_UNLOCK_STORAGE_PREFIX + vaultId

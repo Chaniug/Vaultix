@@ -118,256 +118,145 @@ interface VaultRepository {
     /** 触发一次同步（推送 dirty → revision 预检 → 全量拉取 → 安全校验 → 落库）。 */
     suspend fun syncVault(vaultId: String): VaultSyncReport
 
-    // ---- 本地快速解锁（Docs/10 §4 会话管理的设备侧扩展）----
+    // ---- 快速解锁（两级钥匙「房子化」，`.ai/decisions/快速解锁房子化-两级钥匙层级-定稿.md`）----
+    //
+    // 模型：指纹 / PIN 两把门锁各只有一个信封，包的都是**同一把**随机 256-bit
+    // 房子钥匙（仅存内存、绝不落盘）；每个库的凭据用这把钥匙**纯软件**封装
+    // （房间信封，每库一份）。一次生物识别授权 = 一次 Keystore 操作（解房钥匙），
+    // 其余全是软件解密。
 
     /**
-     * 该库是否已启用本地快速解锁（开关 + 包裹密钥均存在）。
-     * 为 true 时解锁页显示「生物识别 / 设备 PIN 解锁」，锁库后免主密码免 2FA。
+     * 指纹门锁是否已启用（**全局**；门锁信封存在 && KEK 非永久失效）。
+     *
+     * 取向沿用 2026-09-12 的修正：LOADABLE 与 UNKNOWN 都给出入口，真失败留到
+     * [prepareFingerprintUnlock] 那一刻如实报错 —— 否则一次瞬时 Keystore 异常
+     * 就会把指纹入口整条藏掉（用户被迫重新联网登录，实测过的回归）。
      */
-    fun localUnlockAvailable(vaultId: String): Flow<Boolean>
+    fun fingerprintLockAvailable(): Flow<Boolean>
+
+    /** PIN 门锁是否已启用（**全局**；真源 = 门锁信封存在性，取向同上）。 */
+    fun pinLockAvailable(): Flow<Boolean>
 
     /**
-     * 登录 / 主密码解锁成功后启用：把会话内对称密钥用「用户已认证的 cipher」
-     * 包裹并落盘。cipher 由 UI 经 [LocalUnlockKeyStore.newEncryptCipher] 创建并
-     * 交给 BiometricPrompt 认证后传入。
-     *
-     * @return false = 会话未解锁 / KEK 不可用（UI 提示稍后再试）。
+     * 该库是否可用指纹快解（指纹门锁在 && 该库房间信封在）。
+     * 解锁页指纹入口的可见性 = 本方法 —— 组合了「全局门锁」与「该库房间」两个事实。
      */
-    suspend fun enrollLocalUnlock(vaultId: String, cipher: javax.crypto.Cipher): Boolean
+    fun fingerprintQuickUnlockAvailable(vaultId: String): Flow<Boolean>
+
+    // ---- 指纹门锁（Keystore KEK，auth-per-use）----
 
     /**
-     * 解锁前准备：读取包裹密钥并初始化解密 Cipher（IV 来自 payload）。
-     * 返回的 cipher 必须立刻交给本次 BiometricPrompt；null = 未启用 / KEK 失效
-     * （指纹变更等）→ 回退主密码登录。
+     * 开指纹门锁第一步：创建包装用 Cipher（KEK 用户认证），交给 BiometricPrompt
+     * 认证后传入 [enrollFingerprintLock]。null = 设备无可用认证方式。
      */
-    suspend fun prepareLocalUnlock(vaultId: String): javax.crypto.Cipher?
+    suspend fun prepareFingerprintEnroll(): javax.crypto.Cipher?
 
     /**
-     * 启用前的准备：创建包装用 Cipher（KEK 用户认证），交给 BiometricPrompt
-     * 认证后传入 [enrollLocalUnlock]。null = 设备无可用认证方式。
+     * 开指纹门锁第二步（认证已过）：用授权 cipher 包裹房子钥匙 ——
+     * 登记只 wrap 这一个 blob（定稿硬约束 #3，H1 结构性消失）。
+     *
+     * @return true = 门锁信封已落盘。false = 另一把门锁已存在但房钥匙不在内存
+     *   （**先解现有门锁复得钥匙再开这把**，否则两把门锁会包不同的钥匙 ——
+     *   顺序约束由 `HouseKeyStore` 守，编排层负责引导用户先走一次解锁）。
      */
-    suspend fun prepareLocalEnroll(): javax.crypto.Cipher?
-
-    /** 认证通过后：解封本地密钥并建立会话（完全离线，不触发 2FA）。 */
-    suspend fun completeLocalUnlock(vaultId: String, cipher: javax.crypto.Cipher): UnlockResult
-
-    /** 关闭本地快速解锁：删除包裹密钥与开关（不动主密码登录）。 */
-    suspend fun disableLocalUnlock(vaultId: String)
-
-    // ---- 本地快速解锁：KDBX 侧（`.ai/decisions/库选择与快速解锁-逻辑定稿.md` §4）----
+    suspend fun enrollFingerprintLock(cipher: javax.crypto.Cipher): Boolean
 
     /**
-     * **KDBX 库**启用本地快速解锁 —— 第一步：**校验并暂存**（`.ai/ISSUES.md` #93）。
-     *
-     * 与 Bitwarden 侧的 [enrollLocalUnlock] 是**两个方法**而非一个重载，因为包裹物
-     * 本质不同：Bitwarden 包的是「会话里的对称密钥」，KDBX 会话**不含密钥**
-     * （`KdbxSession` 只有整库明文，`Kdbx.unlock()` 用完即弃）⇒ 只能包「主密码 +
-     * keyfile」这组**能重新开库的凭据**。
-     *
-     * ⚠️ **必须在 wrap 之前先用这组凭据真的解一次库**：`wrap` 只管包裹字节、
-     * 不管字节对不对。若用户输错密码照样 wrap 成功，下次指纹就会解出错密码
-     * ⇒ 开库失败且无法自愈。校验必须复用真实开库路径（不能只比对长度）。
-     *
-     * ### ★ 为什么必须拆成「准备 / 提交」两步（2026-09-14 修闪退）
-     *
-     * 快解的保护器 KEK 是 **auth-per-use**（`setUserAuthenticationParameters(0, …)`）：
-     * 只有**被 BiometricPrompt 授权过的那一个 Cipher 实例**才能完成 `doFinal`。
-     * 而 KDBX 的主密码只能在弹指纹**之前**拿到（包裹物必须提前组装好），于是：
-     *
-     * | 顺序 | 结果 |
-     * |---|---|
-     * | ❌ 先 wrap 再弹指纹 | `doFinal` 抛 `UserNotAuthenticatedException` ⇒ 协程未捕获 ⇒ **闪退** |
-     * | ✅ 先弹指纹再 wrap | 认证通过后用授权过的 cipher 包裹 |
-     *
-     * ⇒ 校验与组装密文留在本方法（此处的产物是**待包裹的明文**），
-     * 真正的 `wrap` 移到指纹成功之后由 [commitKdbxEnroll] 完成。
-     * 调用方在指纹**被取消/失败**时必须调 [discardKdbxEnroll] 把暂存明文擦掉。
-     *
-     * @param masterPassword 用户当场输入的主密码（**不落盘**，只进包裹物）。
-     * @param keyFileUri 该库登记的 keyfile URI（可空；由上层从 preferences 读）。
-     * @return 见 [KdbxEnrollOutcome]；`InvalidCredentials` 时 UI 应就地让用户重输。
-     *   `Enrolled` 的语义是「校验通过且凭据已暂存，等待指纹」，**不代表已落盘**。
+     * 解指纹门锁第一步：读门锁信封初始化解密 Cipher（IV 来自信封）。
+     * 返回的 cipher 必须立刻交给本次 BiometricPrompt；null = 门锁未启用 / KEK 失效
+     * （指纹变更等）→ 回退主密码。
      */
-    suspend fun prepareKdbxEnroll(
-        vaultId: String,
-        masterPassword: String,
-        keyFileUri: String?,
-    ): KdbxEnrollOutcome
+    suspend fun prepareFingerprintUnlock(): javax.crypto.Cipher?
 
     /**
-     * KDBX 快速解锁第二步：用**已认证**的 [cipher] 包裹暂存的凭据并落盘、置位开关。
+     * 解指纹门锁第二步（认证已过）：解出房钥匙进内存。
      *
-     * @return true = 包裹成功（此后指纹可用）；false = 没有暂存凭据（流程被中断/重复提交）。
-     * @throws Exception `wrap` 自身的异常（Keystore 状态错等）**不吞** —— 那是环境/编程错误，
-     *   吞成 false 会掩盖它（与 [enrollLocalUnlock] 同款取向）。包装失败时暂存明文仍会被擦除。
+     * 这是解锁路径上**唯一**的 Keystore 操作（定稿硬约束 #2）；此后各库走
+     * [unlockVaultFromRoom] 纯软件解密 ——「rest 库现取新 cipher」（H2）结构性不存在。
+     *
+     * @return false = unwrap 失败（KEK 失效 / 信封损坏）→ 按定稿 §6 优雅降级，
+     *   **不要**静默重试（auth-per-use 下再取 cipher 也无人授权）。
      */
-    suspend fun commitKdbxEnroll(vaultId: String, cipher: javax.crypto.Cipher): Boolean
+    suspend fun completeFingerprintUnlock(cipher: javax.crypto.Cipher): Boolean
 
     /**
-     * 放弃本次 KDBX 快速解锁登记：把暂存的凭据明文**擦掉**（幂等，无暂存时是空操作）。
+     * 关指纹门锁（删门锁信封；**全局**，定稿 §5.1：门锁开关 = 一次 wrap 的建立/删除）。
      *
-     * 调用时机 = 指纹被用户取消 / 被系统终止。没有它，主密码副本会在单例里留到
-     * 下一次登记或进程结束 —— 与项目「明文用完即擦」的一贯取向冲突。
+     * 若删完后一把门锁都不剩，房间信封会被连带清掉 —— 否则房钥匙再无恢复途径，
+     * 进程一死全部成永远解不开的孤儿信封（定稿 §5 顺序约束的推论）。
      */
-    suspend fun discardKdbxEnroll()
+    suspend fun disableFingerprintLock()
+
+    // ---- PIN 门锁（Argon2id，全局计数）----
 
     /**
-     * 认证通过后：解封 KDBX 包裹物（主密码 + keyfile）并**真的开库**。
-     *
-     * 返回 [KdbxUnlockOutcome.StaleCredentials] 表示「指纹本身通过了，但包裹物已失效」
-     * —— 典型成因是用户改了主密码。这是定稿 §4.4 的 **D3 = 明确提示 + 自动重包**：
-     * UI 提示「主密码可能已变更」，用户输新密码成功后自动重新包裹，
-     * 下次指纹即可用（**不删除用户的快速解锁登记**，与 [completeLocalUnlock]
-     * 对 Bitwarden 的「不可恢复」处理取向不同 —— 那侧包裹物是密钥、密码变了也还能开）。
+     * PIN 位数门槛。返回非 null 表示**应直接拒绝** —— 先验后做昂贵事：
+     * 位数都不对的 PIN 没必要白跑一次 Argon2id。
      */
-    suspend fun completeLocalUnlockKdbx(
-        vaultId: String,
-        cipher: javax.crypto.Cipher,
-    ): KdbxUnlockOutcome
+    fun validatePin(pin: String): PinEnrollOutcome?
 
     /**
-     * 一次勾选多个库启用快速解锁：**认证之后**用同一个 cipher 逐库落盘。
-     *
-     * ## 为什么要有这个批量入口
-     *
-     * 用户原话：「默认一个生物验证的指纹，管理解锁所有的库也可以吗」——
-     * 原来每个库都要单独点一遍指纹、单独走一遍流程，库多了很烦。
-     * 这个入口让「一次勾选 → 一次认证」覆盖全部选中的库。
-     *
-     * ## ⚠️ cipher 必须来自**本次**认证，且只能连续用完
-     *
-     * 快解的保护器 KEK 是 auth-per-use（`setUserAuthenticationParameters(0, …)`），
-     * **一个 cipher 只对一次认证有效**。所以这里必须是**连续** wrap 完所有库，
-     * 绝不能"提前给每个库各准备一个 cipher"—— 那些没被授权，第二个库就抛
-     * `UserNotAuthenticatedException`（2026-09-14 闪退同源）。
-     *
-     * ## 认证前的校验与备料不走本方法
-     *
-     * 「勾了哪些库、KDBX 主密码对不对、要包什么明文」是**认证前**的事，由
-     * `BiometricEnrollController` 直接调 `LocalUnlockEnrollment.prepareForVaults`
-     * 完成。这样接口只多这一个方法 —— `VaultRepositoryImpl` 的函数数才能守住
-     * detekt `TooManyFunctions` 的 40 上限（它本来就在顶格）。
-     *
-     * ## 部分成功是真实状态
-     *
-     * 返回值是**逐库**结论（`associate`），一个库失败不影响其它库。调用方必须
-     * 逐条展示，**不能因为有失败就整体报错**，也不能只显示成功。
-     *
-     * @return vaultId → 该库的结论。**不含**备料阶段就已失败的库（那些在
-     *   `prepareForVaults` 的结果里）。调用方应把两段结论合并后再展示。
+     * 开 PIN 门锁：Argon2id(PIN) 包裹房子钥匙。覆盖旧信封即「修改 PIN」
+     * （既有决策「修改 PIN = 关掉再开」在此自然成立）。返回值语义同 [enrollFingerprintLock]。
      */
-    suspend fun commitLocalUnlockEnrollForVaults(
+    suspend fun enrollPinLock(pin: String): Boolean
+
+    /**
+     * 用 PIN 解门锁（全局失败计数，连续输错 [PIN_MAX_ATTEMPTS] 次熔断 ——
+     * 门锁是全局的，计数也是，定稿 §6：比旧模型的每库独立 5 次更严）。
+     *
+     * 成功（`PinUnlockOutcome.Opened`）= 房钥匙已进内存，随后逐库 [unlockVaultFromRoom]。
+     */
+    suspend fun openHouseWithPin(pin: String): PinUnlockOutcome
+
+    /** 关 PIN 门锁（删信封 + 清计数；孤儿清理逻辑同 [disableFingerprintLock]）。 */
+    suspend fun disablePinLock()
+
+    // ---- 房间信封（生效范围：勾 = 该库房间信封已建，纯软件、不碰门锁）----
+
+    /**
+     * 「生效范围」登记：把备好的明文逐库**软件封装**成房间信封。
+     *
+     * **不收 cipher**（勾库不碰指纹，定稿 §5）：唯一前置是房钥匙在内存
+     * （至少一把门锁已开）。逐库独立成败（部分成功是真实状态）；
+     * **不含**备料阶段就已失败的库（那些在 `prepareForVaults` 的结果里）。
+     *
+     * @param prepared `LocalUnlockEnrollment.prepareForVaults` 的产物（备料仍由
+     *   控制器直接注入该类调用、不经本契约 —— 维持 2026-09-16 起「备料不经
+     *   repository」的函数数纪律）。
+     */
+    suspend fun sealRoomsForVaults(
         prepared: List<LocalUnlockPreparedEnrollment>,
-        cipher: javax.crypto.Cipher,
     ): Map<String, LocalUnlockEnrollOutcome>
 
-    // ===== 应用内 PIN 解锁（定位：解锁便利，**不是**找回手段）=====
+    /** 取消勾选某库：删它的房间信封（纯软件，不碰门锁）。幂等。 */
+    suspend fun removeVaultFromScope(vaultId: String)
+
+    // ---- 解锁扇出（1 次门锁 + N 次软件）----
 
     /**
-     * PIN 解锁入口是否可见（按库）。
+     * 用房间信封打开一个库：软件解密取回该库凭据，按库类型开库
+     * （Bitwarden 建会话 / KDBX 真开库）。
      *
-     * 取向与 [localUnlockAvailable] 一致：**只看持久化开关**，不在订阅时现探
-     * 密钥可用性 —— 否则一次瞬时异常就会把入口整条藏掉，用户以为功能没了。
-     * 真失败留到输入那一刻如实报错（那时原因才准确）。
+     * 前置：房钥匙已在内存（先过一把门锁：指纹 [completeFingerprintUnlock]
+     * 或 PIN [openHouseWithPin]）；不满足时返回 [RoomUnlockOutcome.Unavailable]。
+     *
+     * [RoomUnlockOutcome.StaleCredentials] = 该库主密码在别处改过（D3：门锁不动，
+     * UI 引导输新密码后重包**该房间的软件信封**）。
      */
-    fun pinUnlockAvailable(vaultId: String): Flow<Boolean>
+    suspend fun unlockVaultFromRoom(vaultId: String): RoomUnlockOutcome
 
     /**
-     * 「**一个 PIN 打开多个库**」的配齐流程（2026-09-16 用户诉求）。
-     *
-     * ## 用户要的效果
-     *
-     * 用户原话：「**我想要的是 app 一个 PIN 能够打开 bitwarden 和 kdbx。**」
-     * 在设置里**一次性**把同一个 PIN 登记到多个库，之后解锁页只需输入这一个 PIN，
-     * Bitwarden 与 KDBX 都能被打开 —— 而不是"每个库各设一次"。
-     *
-     * ⚠️ **PIN 值相同并不能让 KDBX 免掉主密码**：这是最容易误解的一点。
-     * 差别不在 PIN，而在**包进信封的东西**（下节）。
-     *
-     * ## 为什么必须"一次配齐"，而不能只设一次就自动通用
-     *
-     * 两种库**包进信封的东西本质不同**，这是本设计的硬约束：
-     * - Bitwarden 包的是**会话里的对称密钥**（库正解锁 ⇒ 直接可取，无需任何密码）；
-     * - KDBX 包的是**「主密码 + keyfile 字节」** —— KDBX 会话里**根本没有主密码**
-     *   （只有解密后的数据），所以必须由用户当场输入一次。
-     *
-     * ⇒ 想让同一个 PIN 覆盖多个库，KDBX 那部分的主密码**早晚要在某个时刻被收集**。
-     *   最省事的收法就是"在设置 PIN 时一次问清"，而不是留到解锁时才逐个补。
-     *   配齐之后，解锁链路**一行都不用改**：每个库本来就有自己的信封，
-     *   输入同一个 PIN 即可各开各的。
-     *
-     * ## 每库独立信封 + 独立失败计数（安全边界不变）
-     *
-     * 本方法只是把**同一 PIN 值**分别包裹进各库自己的信封（各库密钥不同 ⇒ 密文亦不同）。
-     * 因此：
-     * - 某个库在别处重设了 PIN ⇒ **只影响那个库**，其余库不受牵连；
-     * - 失败计数仍按库独立 ⇒ 一个库输错锁住，不会连带锁死其它库。
-     *
-     * ## 部分成功是真实状态
-     *
-     * 不做"全成功才算成功 / 整体回滚"：某个 KDBX 库的主密码可能输错，
-     * 而 Bitwarden 侧的登记是好的。如实逐库反馈比整体失败更有用
-     * （否则用户为了一个库的笔误就得把全部库重设一遍）。
-     *
-     * ## ⚠️ 必须由调用方指定目标，不得隐式覆盖全部库
-     *
-     * [vaultIds] 是**用户勾选**要设 PIN 的库。库表里有多少库 ≠ 用户想设几个 ——
-     * 有些库用户可能根本不想启用 PIN（例如只读的共享库）。
-     * 若本方法自己遍历全部库，就会**静默改掉用户没同意改的配置**，
-     * 而 PIN 覆盖会影响解锁入口，属于用户可感知的安全设置，不能替用户决定。
-     * UI 的默认勾选可以是全选（多数人的诉求就是"一个 PIN 全开"），
-     * 但**选择权必须在用户手上**，且要能取消。
-     *
-     * ## 分派规则（两种库各走各的）
-     *
-     * | 库类型 | 包什么 | 当场要不要密码 |
-     * | --- | --- | --- |
-     * | Bitwarden | 会话里的对称密钥 | ❌ 不需要 |
-     * | KDBX | 主密码 + keyfile 字节 | ✅ **必须**（先校验后包裹） |
-     *
-     * @param vaultIds 要设置 PIN 的库（调用方已按用户选择过滤）。
-     * @param pin 对所有目标库生效的同一个 PIN。
-     * @param passwordOf **逐库**取该库的主密码（只对 KDBX 库调用）。
-     *   - 返回非空 ⇒ 用它校验并包裹；
-     *   - 返回 null / 空白 ⇒ 视为**用户跳过该库**（`PinEnrollOutcome.Skipped`），
-     *     不报错、也不影响其它库。
-     *
-     *   ⚠️ 2026-09-16 从「一个共用的 masterPassword」改为回调：多个 KDBX 库的主密码
-     *   可以**各不相同**。共用一个输入框时，密码不一致的库会凭空失败，而用户只会看到
-     *   「PIN 设置失败」—— 无从得知真因是自己两个库的密码本来就不一样。
-     *   ⚠️ 回调返回的明文视为**一次性**：实现方须确保用后清零、不落盘。
-     * @return 每库的结果（含失败原因），键为 vaultId。
-     */
-    suspend fun enrollPinForVaults(
-        vaultIds: List<String>,
-        pin: String,
-        passwordOf: suspend (vaultId: String) -> String?,
-    ): Map<String, PinEnrollOutcome>
-
-    /**
-     * 全部库的「PIN 覆盖候选」（供设置对话框列出勾选项）。
+     * 全部库的「生效范围候选」（供设置对话框列出勾选项）。
      *
      * 返回**全部**库（含 KDBX），由 UI 决定默认勾选谁：
-     * - Bitwarden 库：可直接设置（无需额外输入）；
-     * - KDBX 库：也能设，但用户要**另外提供主密码**，UI 应把这点标出来。
+     * - Bitwarden 库：房间信封可直接建（凭据就在会话里）；
+     * - KDBX 库：也能纳入，但用户要**另外提供主密码**，UI 应把这点标出来。
      *
-     * ⚠️ 返回全部而不是"可设的"：KDBX 库并非不可设（只是要多输一次密码），
-     * 若在这里过滤掉，用户会以为 KDBX 不支持 PIN —— 那是**假状态**。
+     * ⚠️ 返回全部而不是"可纳入的"：KDBX 库并非不可纳入（只是要多输一次密码），
+     * 若在这里过滤掉，用户会以为 KDBX 不支持快速解锁 —— 那是**假状态**。
      */
-    suspend fun pinCandidateVaultIds(): List<String>
-
-    /** 用 PIN 解锁 **Bitwarden 库**（解出的密钥直接登记会话）。 */
-    suspend fun completePinUnlock(vaultId: String, pin: String): PinUnlockOutcome
-
-    /** 用 PIN 解锁 **KDBX 库**（解出凭据后**真的开库**，与 [completeLocalUnlockKdbx] 同理）。 */
-    suspend fun completePinUnlockKdbx(vaultId: String, pin: String): PinUnlockOutcome
-
-    /**
-     * 关闭 PIN 解锁：删除信封与开关，**并清零失败计数**。幂等。
-     *
-     * ⚠️ 只删 PIN 那一份，**不动**快速解锁的登记（两者是独立手段）。
-     */
-    suspend fun disablePin(vaultId: String)
+    suspend fun quickUnlockCandidateVaultIds(): List<String>
 }
 
 /**
@@ -435,31 +324,33 @@ sealed interface PinUnlockOutcome {
     data class Unavailable(val detail: String) : PinUnlockOutcome
 }
 
-/** [VaultRepository.prepareKdbxEnroll] 的结果（UI 据此决定文案与是否重输）。 */
-sealed interface KdbxEnrollOutcome {
-    /**
-     * 校验通过、凭据已**暂存**，等待指纹认证后由
-     * [VaultRepository.commitKdbxEnroll] 包裹落盘。
-     *
-     * ⚠️ 刻意**不叫 Enrolled + 不写「已落盘」**：这个名字若撒谎，调用方就会
-     * 以为可以跳过 [VaultRepository.commitKdbxEnroll]，于是「指纹按了却没生效」。
-     */
-    data object Prepared : KdbxEnrollOutcome
+/**
+ * [VaultRepository.unlockVaultFromRoom] 的结果：用房间信封打开一个库的统一结论。
+ *
+ * 形状沿用旧 `KdbxUnlockOutcome` 的三态（那套区分度已被证明必要），但**不区分
+ * 库类型** —— 房子化后 Bitwarden 与 KDBX 走同一条「软件解房间信封 → 开库」路径，
+ * 差别只在实现内部（建会话 vs 真开库）。
+ */
+sealed interface RoomUnlockOutcome {
+    /** 该库已打开（Bitwarden 建好会话 / KDBX 真开库）。 */
+    data object Opened : RoomUnlockOutcome
 
     /**
-     * 主密码（或 keyfile）不对 —— **校验阶段**就失败了，未写任何东西。
-     * UI 按「宽松」取向处理：提示后**保留输入框、就地重输**，不掉出流程。
+     * 房间信封解开了、但凭据开不了库（主密码在别处改过，D3）。
+     * 门锁不动；UI 引导输新密码后重包**该房间的软件信封**即可自愈。
      */
-    data object InvalidCredentials : KdbxEnrollOutcome
+    data object StaleCredentials : RoomUnlockOutcome
 
-    /** 库文件读不到（URI 授权失效 / 文件被删）。 */
-    data class SourceUnavailable(val detail: String) : KdbxEnrollOutcome
-
-    /** KEK 不可用 / 其它异常。 */
-    data class Failed(val detail: String) : KdbxEnrollOutcome
+    /** 未纳入范围 / 房钥匙不在内存 / 信封损坏 / 库文件不可用等。 */
+    data class Unavailable(val detail: String) : RoomUnlockOutcome
 }
 
-/** [VaultRepository.completeLocalUnlockKdbx] 的结果。 */
+/**
+ * KDBX 快解的旧结局类型（房子化前）。
+ *
+ * ⚠️ 房子化（2026-09-28）后快解统一走 [RoomUnlockOutcome]；本类型仍被 KDBX
+ * 引擎侧的开库结论使用，快解侧不再是它的出口。
+ */
 sealed interface KdbxUnlockOutcome {
     /** 解封成功且**库真的打开了**（会话已登记）。 */
     data object Opened : KdbxUnlockOutcome
@@ -476,7 +367,8 @@ sealed interface KdbxUnlockOutcome {
 }
 
 /** 解锁 / 添加库的结果分类，便于 UI 给出可执行的提示（Docs/10 §5）。 */
-sealed interface UnlockResult {    data object Success : UnlockResult
+sealed interface UnlockResult {
+    data object Success : UnlockResult
 
     /** 邮箱或主密码错误（401，或 OAuth invalid_grant） */
     data object InvalidCredentials : UnlockResult
@@ -691,12 +583,4 @@ interface LocalUnlockPreparedEnrollment : AutoCloseable {
 
     /** 用于结果展示的库名。 */
     val displayName: String
-
-    /**
-     * 是否需要在认证之后补取明文（Bitwarden 侧 = true）。
-     *
-     * KDBX 的明文（主密码 + keyfile）在备料阶段就必须备好，因为它只存在于用户脑子里；
-     * Bitwarden 的对称密钥则在内存会话里，认证后取更省事。
-     */
-    val requiresPostAuthPlaintext: Boolean
 }

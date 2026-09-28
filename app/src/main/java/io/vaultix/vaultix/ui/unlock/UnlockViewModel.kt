@@ -4,9 +4,9 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
-import io.vaultix.domain.KdbxUnlockOutcome
 import io.vaultix.domain.PIN_MIN_LENGTH
 import io.vaultix.domain.PinUnlockOutcome
+import io.vaultix.domain.RoomUnlockOutcome
 import io.vaultix.domain.UnlockResult
 import io.vaultix.domain.VaultRepository
 import io.vaultix.domain.VaultSessionRepository
@@ -208,26 +208,19 @@ class UnlockViewModel @Inject constructor(
                 .collectLatest { id ->
                     // 目标库确定后再校正一次查看锁（标记流可能先于选库到达）。
                     _state.update { it.copy(viewLocked = sessionRepository.isViewLocked(id)) }
-                    vaultRepository.localUnlockAvailable(id).collect { available ->
+                    // 房子化（2026-09-28）：入口可见性 = 全局指纹门锁 && 该库房间信封在。
+                    vaultRepository.fingerprintQuickUnlockAvailable(id).collect { available ->
                         _state.update { it.copy(localUnlockAvailable = available) }
-                        if (available) prewarmCipher(id)
+                        if (available) prewarmCipher()
                     }
                 }
         }
-        // PIN 可用性：**单独起一条协程**而不接在上面那条里 ——
-        // 上面那个 `localUnlockAvailable(id).collect {}` 永不结束，
-        // 在它后面顺序再写一个 `collect` 的话**永远不会被执行**（这是极易踩的坑）。
-        // 同样遵守 #88 的纪律：从**一次发射**自己解析目标库，不读跨协程写入的 `var vaultId`。
+        // PIN 门锁可用性：门锁是**全局**的（房子化后不再按库），不需要解析目标库 ——
+        // 直接订阅即可。上面那条 `collectLatest` 永不结束的告诫依旧成立，故仍单独起协程。
         viewModelScope.launch {
-            vaultRepository.observeVaults()
-                .map { vaults -> resolveTargetVaultId(vaults) }
-                .filter { it.isNotBlank() }
-                .distinctUntilChanged()
-                .collectLatest { id ->
-                    vaultRepository.pinUnlockAvailable(id).collect { available ->
-                        _state.update { it.copy(pinUnlockAvailable = available) }
-                    }
-                }
+            vaultRepository.pinLockAvailable().collect { available ->
+                _state.update { it.copy(pinUnlockAvailable = available) }
+            }
         }
     }
 
@@ -277,8 +270,10 @@ class UnlockViewModel @Inject constructor(
     /**
      * 提交 PIN。
      *
-     * 按**库类型分流**（与 #93 的解锁路径分流同一条纪律）：Bitwarden 侧解出的是
-     * 会话密钥、KDBX 侧解出的是凭据，两者后续动作不同 —— 混走是错语义。
+     * 房子化（2026-09-28）后是**两段**：先 `openHouseWithPin` 开全局门锁
+     * （房钥匙进内存），再 `unlockVaultFromRoom` 开目标库。库类型分流已下沉到
+     * repository 一侧，这里不再感知 —— 旧「Bitwarden / KDBX 各调一个方法」
+     * 的分叉随每库信封一起消失。
      */
     private suspend fun submitPin() {
         val id = vaultId
@@ -292,10 +287,10 @@ class UnlockViewModel @Inject constructor(
         val pin = pinBuffer
         _state.update { it.copy(pinSubmitting = true, pinError = null) }
         val outcome = withContext(Dispatchers.IO) {
-            if (vault.kind == VaultKind.KDBX) {
-                vaultRepository.completePinUnlockKdbx(id, pin)
-            } else {
-                vaultRepository.completePinUnlock(id, pin)
+            when (val house = vaultRepository.openHouseWithPin(pin)) {
+                PinUnlockOutcome.Opened -> vaultRepository.unlockVaultFromRoom(id).toPinOutcome()
+                // WrongPin / LockedOut / Unavailable 原样透传（文案四态各不相同）。
+                else -> house
             }
         }
         // 无论成败都把 PIN 从内存抹掉：它不该活过这次提交。
@@ -313,6 +308,13 @@ class UnlockViewModel @Inject constructor(
                 pinError = pinFailureText(outcome),
             )
         }
+    }
+
+    /** 门锁已开、开房间失败的映射（两套 sealed 的分支一一对应）。 */
+    private fun RoomUnlockOutcome.toPinOutcome(): PinUnlockOutcome = when (this) {
+        RoomUnlockOutcome.Opened -> PinUnlockOutcome.Opened
+        RoomUnlockOutcome.StaleCredentials -> PinUnlockOutcome.StaleCredentials
+        is RoomUnlockOutcome.Unavailable -> PinUnlockOutcome.Unavailable(detail)
     }
 
     /**
@@ -371,15 +373,18 @@ class UnlockViewModel @Inject constructor(
      * 后台把 BiometricPrompt 要用的 cipher 先备好。
      *
      * 为什么值得多此一举：自动弹认证（见 `UnlockScreen.AutoPromptQuickUnlock`）要等
-     * `localUnlockAvailable` 首帧 → 再 `prepareLocalUnlock` → 再等 Activity RESUMED，
+     * `localUnlockAvailable` 首帧 → 再 `prepareFingerprintUnlock` → 再等 Activity RESUMED，
      * 三次握手串起来就是用户感知的「指纹不能第一时间弹出来」。可用状态一到位就
      * 提前把最后一步做掉，等真正要弹时只剩「把 cipher 交给系统」这一件事。
+     *
+     * 房子化后门锁是**全局**的（不再按库取 cipher），参数只留作日志锚点也失去意义，
+     * 故无参。
      */
-    private fun prewarmCipher(id: String) {
+    private fun prewarmCipher() {
         if (preparedCipher != null) return
         viewModelScope.launch {
             preparedCipher = withContext(Dispatchers.IO) {
-                runCatching { vaultRepository.prepareLocalUnlock(id) }.getOrNull()
+                runCatching { vaultRepository.prepareFingerprintUnlock() }.getOrNull()
             }
         }
     }
@@ -392,11 +397,11 @@ class UnlockViewModel @Inject constructor(
         _state.update { it.copy(submitting = true, viewUnlockStarted = viewLock, error = null) }
         viewModelScope.launch {
             // ⚠️ Keystore / 解密都在**后台**做：`viewModelScope` 默认跑在主线程，
-            // 而 `prepareLocalUnlock` 要初始化一个 AES Cipher（首次还会触发 keystore
-            // 解密），冷启动或覆盖安装后首次进入时足以让首帧渲染卡住 —— 表现就是
-            // 用户看到的「指纹弹窗不能第一时间出来」。
+            // 而 `prepareFingerprintUnlock` 要初始化一个 AES Cipher（首次还会触发
+            // keystore 解密），冷启动或覆盖安装后首次进入时足以让首帧渲染卡住 ——
+            // 表现就是用户看到的「指纹弹窗不能第一时间出来」。
             val cipher = preparedCipher ?: withContext(Dispatchers.IO) {
-                vaultRepository.prepareLocalUnlock(vaultId)
+                vaultRepository.prepareFingerprintUnlock()
             }
             if (cipher == null) {
                 // 密钥包不可用（KEK 被指纹变更失效 / 从未启用）。
@@ -424,18 +429,18 @@ class UnlockViewModel @Inject constructor(
     }
 
     /**
-     * 除 [target] 之外，本次还应当顺带解封的库（**只挑已启用快速解锁的锁定库**）。
+     * 除 [target] 之外，本次还应当顺带开房间的库（**只挑已纳入范围的锁定库**）。
      *
-     * ## 为什么必须过滤成"已启用"的
+     * ## 为什么必须过滤成"已纳入范围"的
      *
-     * 库列表里通常既有启用了指纹的库，也有只走主密码的库。对后者调
-     * `prepareLocalUnlock` 必然返回 null（没有信封），白跑一趟还多算一次"失败"，
+     * 库列表里通常既有纳入了快速解锁的库，也有只走主密码的库。对后者调
+     * `unlockVaultFromRoom` 必然 NotEnrolled，白跑一趟还多算一次"失败"，
      * 结果页会报一堆莫名其妙的"未打开" —— 而用户根本没打算开它们。
      *
      * ## 为什么不包含已解锁的库
      *
-     * 已经解锁的库密钥就在内存里，再解封一次等于把同一把密钥写第二遍，白做一轮
-     * KDF 派生（同 [completeLocalUnlock] 对查看锁分支的告诫）。
+     * 已经解锁的库密钥就在内存里，再开一次房间是纯浪费（同
+     * [completeLocalUnlock] 对查看锁分支的告诫）。
      */
     private suspend fun candidateVaultIds(target: String): List<String> =
         withContext(Dispatchers.IO) {
@@ -444,18 +449,18 @@ class UnlockViewModel @Inject constructor(
                     .filter { it.id != target && !it.unlocked }
                     .map { it.id }
                     .filter { id ->
-                        runCatching { vaultRepository.localUnlockAvailable(id).first() }
+                        runCatching { vaultRepository.fingerprintQuickUnlockAvailable(id).first() }
                             .getOrDefault(false)
                     }
             }.getOrDefault(emptyList())
         }
 
     /**
-     * BiometricPrompt 认证成功（携带本次 cipher）：解封本地密钥建立会话。
+     * BiometricPrompt 认证成功（携带本次 cipher）：解门锁 → 开目标库（+顺带库）。
      *
      * @param forViewLock 本次认证是为查看层锁发起的 → 只清标记，**不重新解封密钥**
      *   （密钥本来就在会话里；再解封一次等于把同一把密钥写第二遍，白做一轮 KDF 派生）。
-     * @param rest 除目标库之外可顺带解封的库（见 [Event.PromptForUnlock.rest]）；
+     * @param rest 除目标库之外可顺带开房间的库（见 [Event.PromptForUnlock.rest]）；
      *   查看锁场景传空。
      */
     fun completeLocalUnlock(
@@ -472,12 +477,11 @@ class UnlockViewModel @Inject constructor(
                 _events.send(Event.Unlocked)
                 return@launch
             }
-            // 同上：unwrap（Keystore 解密 + 密钥重建）不占主线程。
-            // ⚠️ 按库类型分流（定稿 §4）：Bitwarden 的包裹物是「对称密钥」，
-            // KDBX 的是「主密码 + keyfile」—— 后者还要真的开一次库，
-            // 因此**不能**共用同一条路径（混用会解出完全错误的语义）。
-            // ★ 2026-09-16：分流逻辑与"顺带解封其余库"一并抽到 LocalUnlockFanout，
-            //   与 AutofillActivity 共用同一份实现（此前两处各写一遍，只可能修好一处）。
+            // 同上：Keystore 解密不占主线程。库类型分流已随房子化下沉到
+            // repository（unlockVaultFromRoom 内部按 kind 分流），编排只剩
+            // 「一次门锁 + 逐库房间」。
+            // ★ 2026-09-16：扇出逻辑抽到 LocalUnlockFanout，与 AutofillActivity
+            //   共用同一份实现（此前两处各写一遍，只可能修好一处）。
             val fanout = withContext(Dispatchers.IO) {
                 LocalUnlockFanout.unlockAll(
                     repository = vaultRepository,
@@ -486,29 +490,41 @@ class UnlockViewModel @Inject constructor(
                     cipher = cipher,
                 )
             }
-            val result = fanout.first
-            val isKdbx = _state.value.vault?.kind == VaultKind.KDBX
-            if (result == UnlockResult.Success) {
-                _state.update {
-                    it.copy(
-                        submitting = false,
-                        viewUnlockStarted = false,
-                        password = "",
-                        twoFactor = null,
-                        error = null,
-                    )
+            when (val result = fanout.first) {
+                RoomUnlockOutcome.Opened -> {
+                    _state.update {
+                        it.copy(
+                            submitting = false,
+                            viewUnlockStarted = false,
+                            password = "",
+                            twoFactor = null,
+                            error = null,
+                        )
+                    }
+                    _events.send(Event.Unlocked)
                 }
-                _events.send(Event.Unlocked)
-            } else {
-                // 仓储给的**具体原因**优先（例如「文件读不到了，请重新选择」），
-                // 没有具体原因时才用按库类型区分的兜底文案。
-                val detail = (result as? UnlockResult.Unknown)?.detail
-                _state.update {
-                    it.copy(
-                        submitting = false,
-                        viewUnlockStarted = false,
-                        error = UnlockUiError.Unknown(detail ?: localUnlockFailureText(isKdbx)),
-                    )
+                // 主密码在别处改过（只可能来自 KDBX）：给「输新密码」的指引，
+                // 别让用户误以为指纹坏了（定稿 §4.4 D3）。
+                RoomUnlockOutcome.StaleCredentials -> {
+                    _state.update {
+                        it.copy(
+                            submitting = false,
+                            viewUnlockStarted = false,
+                            error = UnlockUiError.Unknown(localUnlockFailureText(isKdbx = true)),
+                        )
+                    }
+                }
+                is RoomUnlockOutcome.Unavailable -> {
+                    // 仓储给的**具体原因**优先（例如「文件读不到了，请重新选择」），
+                    // 没有具体原因时才用按库类型区分的兜底文案。
+                    val isKdbx = _state.value.vault?.kind == VaultKind.KDBX
+                    _state.update {
+                        it.copy(
+                            submitting = false,
+                            viewUnlockStarted = false,
+                            error = UnlockUiError.Unknown(result.detail.ifBlank { localUnlockFailureText(isKdbx) }),
+                        )
+                    }
                 }
             }
         }

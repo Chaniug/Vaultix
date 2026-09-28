@@ -1,5 +1,19 @@
 # 下一步任务清单
 
+> ## 🏠 【2026-09-29】快速解锁「房子化」批次 1 收工 —— 钥匙层核心落地，门禁三关全绿
+>
+> **接力文档（下一会话从这里进，自包含）**：[`house-rework-batch1-handoff.md`](house-rework-batch1-handoff.md)
+> **施工工作单**：[`quick-unlock-house-rework.md`](quick-unlock-house-rework.md)（批次 1 ✅，2-5 未动）
+> **本轮**：两级钥匙层（门锁×2 包 1 把仅内存房钥匙 + 每库纯软件房间信封）全部落地；
+> **H1/H2 结构性消灭**；契约 17→16 方法；扇出重写为「1 次 Keystore + N 次纯软件」；
+> 新增 `HouseKeyStoreTest` 6 用例。门禁：detekt / compileFullDebugKotlin / 单测全绿（三关分开单跑）。
+> **批次 0 判别实验取消**（结构性修复已同时消灭 H1/H2，判别失去意义）。
+> **下一步 = 批次 2**：① QuickUnlockController 动作表完整重排（定稿 §5：勾库纯软件、
+> 开锁各一次 wrap、`Session.targetsFor` 收敛单维度）② 重登记向导（旧信封 + 旧 DataStore 键
+> 一次性清理，中途失败不半新半旧）③ `LocalUnlockFanoutTest`（断言 `completeFingerprintUnlock`
+> 恰 1 次、`unlockVaultFromRoom` 恰 N 次）。
+> ⚠️ 真机全链路未验（批次 5 清单 1-7；尤其「指纹一次开多库」「杀后台必须重新解锁」）。
+
 > ## 🏠 【2026-09-28 深夜】快速解锁「房子化」已定稿 —— 批次 0 实验待做（未动代码）
 >
 > **定稿**：[`.ai/decisions/快速解锁房子化-两级钥匙层级-定稿.md`](../../.ai/decisions/快速解锁房子化-两级钥匙层级-定稿.md)

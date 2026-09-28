@@ -15,6 +15,7 @@ import io.vaultix.database.dao.VaultDao
 import io.vaultix.datastore.LocalUnlockKeyStore
 import io.vaultix.datastore.SecureCredentialStore
 import io.vaultix.datastore.VaultixPreferences
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -47,12 +48,9 @@ class VaultRepositorySignOutTest {
     private val syncService = mockk<BitwardenSyncService>()
     private val credentials = mockk<SecureCredentialStore>(relaxed = true)
     private val localUnlockKeyStore = mockk<LocalUnlockKeyStore>(relaxed = true)
-    private val pinUnlockStore = mockk<PinUnlockStore>(relaxed = true)
-    /** 同上：退出数据库会顺手丢弃单库暂存明文（与 disableLocalUnlock 同路径）。 */
+    /** 房子化：退出数据库顺手删该库的房间信封（门锁是全局的，不动）。 */
+    private val houseKeyStore = mockk<HouseKeyStore>(relaxed = true)
     private val localUnlockEnrollment = mockk<LocalUnlockEnrollment>(relaxed = true)
-    /** 同上：本测试不走「多库配齐 PIN」路径，仅需满足构造。 */
-    private val pinEnrollment = mockk<PinEnrollmentCoordinator>(relaxed = true)
-    private val enrollment = mockk<PinEnrollment>(relaxed = true)
     private val preferences = mockk<VaultixPreferences>(relaxed = true)
     private val sessions = VaultSessionManager()
     private lateinit var repo: VaultRepositoryImpl
@@ -71,9 +69,7 @@ class VaultRepositorySignOutTest {
             syncService = syncService,
             credentials = credentials,
             localUnlockKeyStore = localUnlockKeyStore,
-            pinUnlockStore = pinUnlockStore,
-            pinEnrollment = pinEnrollment,
-            enrollment = enrollment,
+            houseKeyStore = houseKeyStore,
             localUnlockEnrollment = localUnlockEnrollment,
             preferences = preferences,
             kdbxSessions = KdbxSessionFlow(),
@@ -81,7 +77,8 @@ class VaultRepositorySignOutTest {
         )
         coEvery { credentials.remove(any()) } returns Unit
         coEvery { credentials.getString(any()) } returns null
-        coEvery { preferences.setLocalUnlockEnabled(any(), any()) } returns Unit
+        // removeRoomEnvelope 读范围镜像（空集 ⇒ 不会走到 setQuickUnlockScope）。
+        io.mockk.every { preferences.quickUnlockScope() } returns flowOf(emptySet())
         coEvery { preferences.setKdbxKeyFileUri(any(), any()) } returns Unit
         // `logout` 是非挂起函数（只清内存/加密存储），故用 every 而非 coEvery（见 ISSUES #11）
         io.mockk.every { authRepository.logout(any()) } returns Unit
@@ -98,6 +95,8 @@ class VaultRepositorySignOutTest {
         assertNull(sessions.keyOf(vaultId))
         // 1b) 查看层标记一并失效：密钥都没了，标记留着会让界面停在「只需认证」的死角
         assertFalse(sessions.isViewLocked(vaultId))
+        // 1c) 该库的房间信封删除（房子化：门锁是全局的，退出单库不动门锁）
+        coVerify(exactly = 1) { houseKeyStore.removeRoom(vaultId) }
         // 2) 认证凭据清除（token / refresh / protected key / host→server 登记）
         verify(exactly = 1) { authRepository.logout(vaultId) }
         // 3) 本地缓存四件套：待推送队列 / 密文条目 / 文件夹 / 同步基线

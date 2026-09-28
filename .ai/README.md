@@ -9,7 +9,30 @@
 此前约定「两边保持同步」，结果是同一主题两处各有一份、必然漂移（AI 会看错位置）。
 **要改内容，只改这里。**
 
-## 🕐 最新状态（**2026-09-26 收工**·交接点，接力请先看这几行）
+## 🕐 最新状态（**2026-09-29 收工**·交接点，接力请先看这几行）
+
+> ### ★ 本轮（2026-09-29）做了什么 —— 快速解锁「房子化」批次 1 落地（钥匙层核心）
+> 1. **门禁三关实测全绿**（detekt / `:app:compileFullDebugKotlin` / 单测，含新建
+>    `HouseKeyStoreTest` 6 用例）：两把全局门锁（指纹 KEK / PIN Argon2id 各一信封）包同一把
+>    随机 256-bit 房钥匙（**仅内存、绝不落盘**，硬约束 #1）+ 每库纯软件房间信封
+>    （AES-GCM，AAD 绑 vaultId 防错位）。**H1（一把 cipher 连包 N 库）与 H2（rest 库现取
+>    新 cipher 无人授权）已结构性消灭**；新建 `HouseKeyStore.kt`（~470 行，两级钥匙层唯一协调者）。
+> 2. **契约重排 + 扇出重写**：`VaultRepository` 17→16 方法（新增 `RoomUnlockOutcome` 三态）；
+>    `LocalUnlockFanout` 重写为「**1 次** `completeFingerprintUnlock`（解锁路径唯一 Keystore 操作）+
+>    **N 次** `unlockVaultFromRoom`（纯软件）」——首库特殊化随 H2 一起消失。
+>    ⚠️ `QuickUnlockController` **只做编译级适配**（行为可用、不背叛定稿；完整重排 = 批次 2 第一件事）。
+> 3. **批次 0（P0 判别实验）取消**——批次 1 的结构性修复同时消灭 H1/H2，判别失去意义；
+>    真机全链路验收（批次 5 清单）仍必做，尤其「指纹一次开多库」「杀后台后必须重新解锁」。
+>
+> ⚠️ **当前位置：`main` 已推送（本提交）；`rele` 未动。**
+> **下一轮起点 = 批次 2**：① QuickUnlockController 动作表完整重排（定稿 §5）
+> ② 重登记向导（旧信封 + 旧 DataStore 键一次性清理，中途失败不半新半旧）
+> ③ `LocalUnlockFanoutTest`（断言扇出 = 1 次 Keystore + N 次软件）。
+> **接力入口（自包含，下一会话先读这份）：
+> [`Docs/progress/house-rework-batch1-handoff.md`](../Docs/progress/house-rework-batch1-handoff.md)**
+> —— 模型速查 / 存储键表 / 16 方法契约 / 15 项刀序 / 5 条遗留 / 批次 2 开工点全在里面。
+
+---
 
 > ### ★ 本轮（2026-09-26）做了什么 —— 四句话
 > 1. **设置页「先修坏的」六件事全部落地**（用户拍板：先修坏的，再谈搬运）：
@@ -108,7 +131,7 @@
 | `conventions/` | 约定正文 8 篇：`8.1-自动填充` `8.2-锁与解锁` `8.3-M2KDBX` `8.4-UI·观感` `8.5-通行密钥` `8.6-工程质量` `8.7-环境` `8.8-M3Expressive-采纳范围与顺序` | 各 2~4KB |
 | `ISSUES.md` | **索引**：坑的「编号 → 分篇」总表（最新 **#126**）。⚠️ 「条数」列**校正过两次**（2026-09-21 / 09-26），每次都发现多篇漂移 —— **只信它、不信正文会误判进度**（见 #126 附近的记账注） | 13KB |
 | `issues/` | 坑的正文 7 篇：`01-构建与环境` … `07-数据与同步` | 各 4~43KB |
-| `decisions/` | **逻辑定稿**（用户拍板的方向，非根因、非实现）：`库选择与快速解锁-逻辑定稿.md`、`设置页信息架构-定稿.md` | — |
+| `decisions/` | **逻辑定稿**（用户拍板的方向，非根因、非实现）：`快速解锁房子化-两级钥匙层级-定稿.md`（**快速解锁现行真源**，2026-09-28 起修订前两篇）、`库选择与快速解锁-逻辑定稿.md`、`快速解锁能力级重构-定稿.md`、`设置页信息架构-定稿.md`、`通行密钥UV豁免-定稿.md` | — |
 | `SESSION-YYYY-MM-DD.md` | 逐轮工作日志（append-only） | — |
 | `tools/` | **本地自检脚本**（不需 Android SDK，`python3` 直接跑）。覆盖「编译器才能发现、detekt 查不到」的缝：<br>`check_compile_smells.py` = 图标导入 / 顶层常量顺序 / `R.string` 悬空引用 / **重复声明**（第四个检查，见 #103；带 `--detekt-probe` 两级探针）；<br>`check_signature_types.py` = 签名里的类型名是否存在；<br>`check_import_packages.py` = `import` 的包路径对不对（#101 / #104）；<br>`check_experimental_optin.py` = 实验性 API 有没有 `@OptIn`（#101.2，带 `--selftest`）；<br>`check_orphan_strings.py` = `strings.xml` 里**零引用**的字符串（#126；⚠️ 是**报告器不是删除器** —— 「被搬走的留，被取代的删」需人判读；`--gate` 用基线做**只减不增**约束）；<br>`check_state_flattening.py` = **多态状态（sealed ≥3 分支）有没有被压成二值开关**（#124；`Switch(checked = x is S.On)` 会把 `Partial` 与 `Off` 合并 —— `is On` 是合法 Kotlin，类型检查与 detekt **双双查不出**）；<br>`fetch_release_asset.sh` = **分块断点续传下载 release 资产**（沙箱整文件下载不可靠，见 #105；自带 `zipfile` 完整性校验） |
 | `tools/tests/` | **门禁自己的自测**（改探针前必跑）：<br>`selftest_duplicate_declarations.py` = 7 个正反用例；<br>`selftest_import_packages.py` = **端到端**（真把 import 改错、跑脚本、看退出码、还原）；<br>`selftest_cross_file_private.py` = **端到端**（真把 `internal` 改回 `private`、验证报出两个调用方、还原）；<br>`selftest_orphan_strings.py` = 7 个用例（含**前缀撞名** `a_head`/`a_header` 的经典误判，以及"零引用被误删只在运行时才炸"的各种引用形态）；<br>`selftest_state_flattening.py` = 9 个正反用例。⚠️ 含**全限定名**形态（`Outer.Cap.On`）—— 少了它，探针会在真实代码上静默失效（见该文件开头） |
@@ -124,8 +147,10 @@
 ## 接力流程
 
 1. 读 `MEMORY.md` —— 拿到项目定位、架构、硬约束与**当前状态（§9）**
-2. **要动「库选择 / 默认库 / 快速解锁」→ 先读 `decisions/库选择与快速解锁-逻辑定稿.md`**
-   （逻辑已由用户拍板闭合，**别重新论证**，直接从 §7 的任务清单开工）
+2. **要动「快速解锁」→ 先读 `decisions/快速解锁房子化-两级钥匙层级-定稿.md`**
+   （2026-09-28 起的现行真源，**别重新论证**；施工进度 = `Docs/progress/quick-unlock-house-rework.md`，
+   批次 1 已收工，**下一会话从 `Docs/progress/house-rework-batch1-handoff.md` 进**）
+   「库选择 / 默认库」→ 仍读 `decisions/库选择与快速解锁-逻辑定稿.md`（其快速解锁章节已被房子化定稿修订）
 2b. **要动「设置页」→ 先读 `decisions/设置页信息架构-定稿.md`**
    （7 组 → 5 组的目标结构 + 全量文案改动表，**别重新设计分组**；§6 是开工步骤）
 2c. **要动「Material 3 / 观感 / 动效」→ 先读 `conventions/8.8-M3Expressive-采纳范围与顺序.md`**

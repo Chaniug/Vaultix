@@ -374,11 +374,6 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { preferences.setTrashAutoDeleteDays(days) }
     }
 
-    /** 关闭某库的本地快速解锁（删除包裹密钥与开关）。 */
-    fun disableQuickUnlock(vaultId: String) {
-        viewModelScope.launch { vaultRepository.disableLocalUnlock(vaultId) }
-    }
-
     // ---- 快速解锁（能力级：两个开关 + 统一生效范围）----
 
     /**

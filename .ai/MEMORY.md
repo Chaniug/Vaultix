@@ -144,7 +144,29 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 > 逐轮流水 → `.ai/SESSION-YYYY-MM-DD.md` · 坑 → `.ai/ISSUES.md`（索引，正文在 `issues/`）·
 > 性能专项 → [`Docs/progress/perf-plan.md`](../Docs/progress/perf-plan.md)。
 
-**设置页缺陷修复轮（2026-09-26 · 本轮，见 `.ai/SESSION-2026-09-26.md`）**
+**快速解锁「房子化」批次 1 轮（2026-09-29 · 本轮，见 `.ai/SESSION-2026-09-29.md`）**
+
+> 2026-09-28 决策夜定稿（两级钥匙层级）后的第一批施工：**钥匙层核心全部落地，门禁三关实测全绿**
+> （detekt / compileFullDebugKotlin / 单测，三关分开单跑）。
+
+**推送（本轮 1 个提交：代码 + 测试 + 接力文档 + 记账）**
+
+1. ★ **两级钥匙层落地**：门锁（指纹 KEK / PIN Argon2id 各一信封）包同一把随机 256-bit 房钥匙
+   （**仅内存**，硬约束 #1 保住「杀后台 = 自然锁定」）；每库房间信封纯软件 AES-GCM、AAD 绑
+   vaultId 防错位；顺序约束（开第二把锁必先解第一把）由 `HouseKeyStore.obtainKeyForLockEnrollment`
+   守卫。**H1/H2 结构性消灭**；契约 17→16 方法；扇出重写为「1 次 Keystore + N 次纯软件」。
+2. ★ **语义修正两处**：PIN 失败计数在 `openWithPin` 验证通过即清零（门锁开没开与房间凭据无关，
+   不必等各库真开出来）；`quickUnlockCandidateVaultIds` 返回全部库 id **不过滤**（过滤 = 假状态）。
+3. ⚠️ **`VaultRepositoryImpl` 顶格 40 函数**：`quickUnlockCandidateVaultIds` 进接口的同时把
+   `normalizeServer` 挪到文件级腾位。**后续新逻辑一律进新类，别往它身上堆。**
+4. ⚠️ **诚实遗留**：QuickUnlockController 只是编译级适配（批次 2 完整重排）；fanout 单测第四类
+   未写；旧信封 + 旧 DataStore 键清理未做（重登记向导，批次 2）；真机全链路未验（批次 5）。
+5. **批次 0 判别实验取消**（结构性修复已同时消灭 H1/H2）。
+   **接力入口 = `Docs/progress/house-rework-batch1-handoff.md`（自包含）；下一轮 = 批次 2。**
+
+---
+
+**设置页缺陷修复轮（2026-09-26，见 `.ai/SESSION-2026-09-26.md`）**
 
 > 用户问四件事：Bastion 设置还有什么可搬 / 设置哪些能归拢 / **开关是否异常** /
 > 文案是否模糊。拍板：**先修「坏」的，再谈搬运**；KDBX 定位 = **开放单条编辑**。

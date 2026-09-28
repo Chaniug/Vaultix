@@ -78,13 +78,40 @@ class VaultixPreferences @Inject constructor(
         val QUICK_UNLOCK_PROMPT_DISMISSED = booleanPreferencesKey("quick_unlock_prompt_dismissed")
 
         /**
-         * **快速解锁的生效范围**：哪些库纳入快速解锁（指纹与 PIN 共用同一份范围）。
+         * **指纹门锁信封存在性**（全局；「房子化」定稿 2026-09-28 起的新键）。
          *
-         * 2026-09-16 新增。此前「快速解锁」被做成**每库独占的三选一**，与用户原本的意图
-         * （`库选择与快速解锁-逻辑定稿.md` §4.7：「增加一个生效范围，选取哪些库生效」）
-         * 相反 —— 用户要的是**能力级**：一个开关覆盖多个库。
+         * 语义：`true` = [SecureCredentialStore] 里存在「KEK 包裹的房子钥匙」信封
+         * —— 全 app 仅此一把指纹门锁信封，**没有每库粒度**。
          *
-         * ⚠️ 这里**只存范围**，不存「总开关」。开关的 ON/OFF 由「范围 + 每库信封是否存在」
+         * ⚠️ **真源是信封本身**，本键只是 UI 响应式的镜像（SharedPreferences 没有
+         * Flow，设置页开关需要响应式源）。写镜像必须与信封的建立/删除发生在
+         * **同一次动作**里，单独操作必造成双源漂移。
+         *
+         * 取代旧的每库 `local_unlock_enabled_*` 键：两把门锁包的是**同一把**房钥匙，
+         * 「这个库用哪种方式解锁」在两级钥匙层级下不存在（定稿 §5.1 删除清单）。
+         */
+        val FINGERPRINT_LOCK_ENROLLED = booleanPreferencesKey("fingerprint_lock_enrolled")
+
+        /**
+         * **PIN 门锁信封存在性**（全局；与 [FINGERPRINT_LOCK_ENROLLED] 同批新键）。
+         *
+         * 语义：`true` = [SecureCredentialStore] 里存在「Argon2id(PIN) 包裹的房子钥匙」
+         * 信封。真源同样是信封本身；PIN 失败计数在房子化后是**全局一份**（定稿 §6），
+         * 不再按库。
+         */
+        val PIN_LOCK_ENROLLED = booleanPreferencesKey("pin_lock_enrolled")
+
+        /**
+         * **快速解锁的生效范围**：哪些库建了「房间信封」—— 勾选的库用房子钥匙
+         * **纯软件**封装凭据（房子化定稿后的语义：勾库不碰指纹、不碰门锁）。
+         * 指纹与 PIN 共用同一份范围。
+         *
+         * 2026-09-16 新增（此前「快速解锁」被做成每库独占的三选一，改造背景见
+         * `库选择与快速解锁-逻辑定稿.md` §4.7 —— 用户要的是**能力级**：一个开关
+         * 覆盖多个库）。
+         *
+         * ⚠️ 这里**只存范围**，不存「门锁总开关」。两个门锁的 ON/OFF 由门锁信封
+         * 存在性（[FINGERPRINT_LOCK_ENROLLED] / [PIN_LOCK_ENROLLED]，真源 = 信封本身）
          * 推导（见 `QuickUnlockController`）：若另存一个开关字段，就会出现"开关说开着、
          * 信封却是空的"这种双源漂移 —— 那正是 #93「谎报状态的开关」的成因，别再造一个。
          */
@@ -331,53 +358,54 @@ class VaultixPreferences @Inject constructor(
     val activeVaultId: Flow<String?> = safeData.map { it[ACTIVE_VAULT_ID] }
 
     /**
-     * 本地快速解锁开关（按库）。仅为元数据：真正的包裹密钥密文在
-     * [SecureCredentialStore]（key：local_unlock_key::<vaultId>）。
+     * 指纹门锁信封存在性（**全局**镜像；真源 = [SecureCredentialStore] 的门锁信封键）。
+     *
+     * 房子化（2026-09-28 定稿）后「指纹快解开没开」是全屋一个事实：门锁信封
+     * （KEK 包裹的房子钥匙）存在 = 开。不存在每库粒度的指纹开关（定稿 §5.1）。
      */
-    fun isLocalUnlockEnabled(vaultId: String): Flow<Boolean> =
-        safeData.map { it[localUnlockKey(vaultId)] ?: false }
+    val fingerprintLockEnrolled: Flow<Boolean> =
+        safeData.map { it[FINGERPRINT_LOCK_ENROLLED] ?: false }
 
-    suspend fun setLocalUnlockEnabled(vaultId: String, enabled: Boolean) {
+    /**
+     * 写指纹门锁镜像。⚠️ 只在与门锁信封建立/删除的**同一次动作**里调用 ——
+     * 镜像单独走会漂移（真源是信封本身，这里只是 UI 响应式源）。
+     */
+    suspend fun setFingerprintLockEnrolled(enrolled: Boolean) {
         dataStore.edit { prefs ->
-            if (enabled) {
-                prefs[localUnlockKey(vaultId)] = true
+            if (enrolled) {
+                prefs[FINGERPRINT_LOCK_ENROLLED] = true
             } else {
-                prefs.remove(localUnlockKey(vaultId))
+                prefs.remove(FINGERPRINT_LOCK_ENROLLED)
             }
         }
     }
 
-    private fun localUnlockKey(vaultId: String) =
-        booleanPreferencesKey("local_unlock_enabled_$vaultId")
-
     /**
-     * 应用内 PIN 解锁开关（按库）。同样只是元数据：PIN 信封在
-     * [SecureCredentialStore]（key：local_pin_key::<vaultId>）。
+     * PIN 门锁信封存在性（**全局**镜像；真源 = [SecureCredentialStore] 的门锁信封键）。
      *
-     * ⚠️ 与快速解锁**分成两个键**而不是共用一个：两者是彼此独立的解锁手段
+     * ⚠️ 与指纹**分成两个键**而不是共用一个：两者是彼此独立的门锁
      * （PIN 不需要系统认证，指纹需要），用户可以只要其中之一。
      * 共用一个键会让「关掉指纹」顺手把 PIN 也关掉，那是静默的功能丢失。
      */
-    fun isPinUnlockEnabled(vaultId: String): Flow<Boolean> =
-        safeData.map { it[pinUnlockKey(vaultId)] ?: false }
+    val pinLockEnrolled: Flow<Boolean> =
+        safeData.map { it[PIN_LOCK_ENROLLED] ?: false }
 
-    suspend fun setPinUnlockEnabled(vaultId: String, enabled: Boolean) {
+    /** 写 PIN 门锁镜像（约束同 [setFingerprintLockEnrolled]：与信封动作同批）。 */
+    suspend fun setPinLockEnrolled(enrolled: Boolean) {
         dataStore.edit { prefs ->
-            if (enabled) {
-                prefs[pinUnlockKey(vaultId)] = true
+            if (enrolled) {
+                prefs[PIN_LOCK_ENROLLED] = true
             } else {
-                prefs.remove(pinUnlockKey(vaultId))
+                prefs.remove(PIN_LOCK_ENROLLED)
             }
         }
     }
 
-    private fun pinUnlockKey(vaultId: String) =
-        booleanPreferencesKey("pin_unlock_enabled_$vaultId")
-
     /**
-     * 快速解锁的**生效范围**（哪些库纳入）。
+     * 快速解锁的**生效范围**（哪些库建了房间信封 = 勾选的库）。
      *
-     * 空集 = 快速解锁整体未启用（等价于「每次输主密码」）。
+     * 空集 = 没有任何库纳入（等价于「每次输主密码」）；门锁信封是否另建
+     * 见 [fingerprintLockEnrolled] / [pinLockEnrolled]，两个事实彼此独立。
      *
      * ⚠️ 读出来是 `Set<String>`，**顺序不保证稳定** —— 需要有序展示时由调用方按库表顺序
      * 自行排列，不要依赖这个集合的迭代顺序（DataStore 的 stringSet 不保证保序）。
@@ -387,7 +415,7 @@ class VaultixPreferences @Inject constructor(
 
     suspend fun setQuickUnlockScope(vaultIds: Set<String>) {
         dataStore.edit { prefs ->
-            // 空集就删键，不留一个"空集合"的残留（与 setLocalUnlockEnabled 同款取向）。
+            // 空集就删键，不留一个"空集合"的残留（与门锁镜像 setter 同款取向）。
             if (vaultIds.isEmpty()) {
                 prefs.remove(QUICK_UNLOCK_SCOPE)
             } else {

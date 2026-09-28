@@ -127,7 +127,9 @@ class VaultListViewModel @Inject constructor(
             if (vault == null) {
                 flowOf(null)
             } else {
-                vaultRepository.localUnlockAvailable(vault.id)
+                // 房子化：banner 语义 = 「该库未纳入快速解锁范围」
+                //（指纹门锁全局开关 && 该库房间信封是否存在）。
+                vaultRepository.fingerprintQuickUnlockAvailable(vault.id)
                     .map { available -> if (available) null else vault }
             }
         }.stateIn(

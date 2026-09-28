@@ -56,9 +56,9 @@ import kotlinx.coroutines.withContext
  *
  * | 状态 | 存在哪 |
  * |---|---|
- * | 每库「指纹信封已建」 | `preferences.isLocalUnlockEnabled(vaultId)` |
- * | 每库「PIN 信封已建」 | `preferences.isPinUnlockEnabled(vaultId)` |
- * | **生效范围**（哪些库纳入） | `preferences.quickUnlockScope()` |
+ * | 指纹门锁信封 | `SecureCredentialStore`（`house_lock_fingerprint`，全局一把） |
+ * | PIN 门锁信封 | `SecureCredentialStore`（`house_lock_pin`，全局一把） |
+ * | **生效范围**（哪些库纳入） | `preferences.quickUnlockScope()`（房间信封的镜像） |
  * | **范围是否已被用户确认** | `preferences.isQuickUnlockScopeConfirmed()` |
  *
  * **刻意不持久化「总开关」**：开关的 ON/OFF 由「范围 + 每库信封」推导。
@@ -356,13 +356,13 @@ class QuickUnlockController(
         }
         scope.launch {
             val snapshot = state.value
-            // 从范围内移出的库：连带删掉它的两个信封 —— 否则会出现"界面说没启用、
-            // 实际仍能用指纹打开"的双源不一致（谎报状态那一类）。
+            // 从范围内移出的库：删它的房间信封（房子化：信封是「每库一份」，
+            // 不再按方式各一份；门锁是全局的，移出单个库不动门锁）—— 否则会出现
+            // "界面说没启用、实际仍能用指纹打开"的双源不一致（谎报状态那一类）。
             snapshot.rows
                 .filter { it.inScope && it.vaultId !in checked }
                 .forEach { row ->
-                    vaultRepository.disableLocalUnlock(row.vaultId)
-                    vaultRepository.disablePin(row.vaultId)
+                    vaultRepository.removeVaultFromScope(row.vaultId)
                 }
             preferences.confirmQuickUnlockScope(checked.toSet())
 
@@ -577,10 +577,13 @@ class QuickUnlockController(
     }
 
     /**
-     * 指纹认证成功：用本次 cipher **连续** wrap 完所有备料。
+     * 指纹认证成功：开指纹门锁（一次 wrap，只包房钥匙）+ 软封装全部备料。
      *
-     * ⚠️ 必须连续循环、共用一个 cipher（auth-per-use，见类 KDoc）。
-     * 逐库独立成败：某个库 wrap 失败只回退该库，绝不牵连其它 ——
+     * 房子化（2026-09-28）后是**两段**：`enrollFingerprintLock` 用本次认证的
+     * cipher 包房钥匙（H1 结构性消失）；`sealRoomsForVaults` 纯软件逐库落盘
+     * （不碰 Keystore）。旧「一把 cipher 连续 wrap N 个库」不再存在。
+     *
+     * 逐库独立成败：某个库封装失败只回退该库，绝不牵连其它 ——
      * 那会静默丢掉用户已经配好的部分。
      *
      * ⚠️ 结果页要**带上 PIN 段的结论**（它在此之前就已落盘）—— 见 [buildReport]。
@@ -592,7 +595,21 @@ class QuickUnlockController(
         val sessionNow = session
         scope.launch {
             val committed = withContext(Dispatchers.IO) {
-                vaultRepository.commitLocalUnlockEnrollForVaults(units, cipher)
+                val lockOk = vaultRepository.enrollFingerprintLock(cipher)
+                if (lockOk) {
+                    // 软封装：所有权转移（内部 close = 明文擦除）。
+                    vaultRepository.sealRoomsForVaults(units)
+                } else {
+                    // 顺序约束（定稿 §5）：另一把门锁已存在但房钥匙不在内存。
+                    // 没开成门锁就不能封房间（seal 的前置是钥匙在内存）——
+                    // 备料明文必须手动擦（seal 没跑，所有权没转移）。
+                    units.forEach { it.close() }
+                    units.associate {
+                        it.vaultId to LocalUnlockEnrollOutcome.Failed(
+                            "指纹门锁未开成：请先解锁现有门锁（输一次 PIN / 过一次指纹）再开指纹锁",
+                        )
+                    }
+                }
             }
             _dialog.value = buildReport(sessionNow, committed)
             clearSession()
@@ -600,29 +617,44 @@ class QuickUnlockController(
     }
 
     /**
-     * 认证失败 / 被用户取消：**擦掉备料明文**并结束本次指纹流程。
+     * 认证失败 / 被用户取消：结束本次**指纹**流程。
      *
-     * 不做"保留备料下次再试"的优化：cipher 已作废（一次认证一把），留着也没有 cipher
-     * 可用；而它里面躺着 KDBX 主密码，多留一刻都是风险。
+     * ⚠️ 但 PIN 段可能已经落盘了（先 PIN 后指纹）。而且房子化后房间信封是
+     * **纯软件**的 —— PIN 门锁已开（房钥匙在内存）时，房间照封不误，用户诉求
+     * 的 90%（能用 PIN 快解）已达成。此时直接回设置页会让用户以为"什么都没配成"，
+     * 实际下次已经能用 PIN 打开 —— 与"看起来没配好、实际能打开"同族。
+     * ⇒ 照样封房间、出结果页，如实注明"指纹已取消、其余已生效"。
      *
-     * ⚠️ 但**PIN 段可能已经落盘了**（PIN 先执行）。那时若直接回设置界面，用户会以为
-     * "什么都没配成"，实际下次已经能用 PIN 打开 —— 与"看起来没配好、实际能打开"同族。
-     * ⇒ 只要 PIN 段有结论，就照样出结果页，如实说明"指纹已取消、PIN 已启用"。
+     * 备料明文在两条路径上都会被消费或擦除（seal 转移所有权 / 手动 close），
+     * 不做"保留备料下次再试"的优化：cipher 已作废（一次认证一把）。
      */
     fun onAuthenticationFailed() {
         _pendingCipher.value = null
-        clearPrepared()
+        val units = prepared
+        prepared = emptyList()
         val sessionNow = session
-        val pinTouched = !sessionNow?.pinOutcomes.isNullOrEmpty()
-        clearSession()
-        _dialog.value = if (sessionNow == null || !pinTouched) {
-            Dialog.Idle
-        } else {
-            buildReport(
+        val pinLockOpened = sessionNow?.pinLockOpened == true
+        if (sessionNow == null || (!pinLockOpened && units.isEmpty())) {
+            clearPrepared()
+            clearSession()
+            _dialog.value = Dialog.Idle
+            return
+        }
+        scope.launch {
+            val committed = if (pinLockOpened && units.isNotEmpty()) {
+                // PIN 门锁已开 ⇒ 房间软封装照做（不需要指纹）。
+                withContext(Dispatchers.IO) { vaultRepository.sealRoomsForVaults(units) }
+            } else {
+                // PIN 门锁没开 ⇒ 房间无从封（钥匙不在内存），备料明文就地擦除。
+                withContext(Dispatchers.IO) { units.forEach { it.close() } }
+                emptyMap()
+            }
+            _dialog.value = buildReport(
                 sessionNow,
-                committed = emptyMap(),
+                committed,
                 extraFailures = listOf(FailureItem("—", "已取消指纹验证，指纹未启用")),
             )
+            clearSession()
         }
     }
 
@@ -663,56 +695,78 @@ class QuickUnlockController(
     }
 
     /**
-     * 执行本次会话：**先 PIN，后指纹**。
+     * 执行本次会话（房子化形态）：**备料一次 → 先开 PIN 门锁 → 后开指纹门锁**。
      *
      * ⚠️ 顺序不可颠倒：PIN 是"当场落盘"（不碰系统认证），指纹要弹**一次**认证。若先弹认证、
      * 再回头收 PIN，用户会在以为已经完事之后又被要求输一次 PIN（此时界面已回到结果页）。
      *
-     * ⚠️ 一段失败**不清掉另一段**：PIN 段失败不影响已备好的指纹料，反之亦然 ——
+     * 备料只做一次、两种方式共享（主密码只收一次的根基不变）；房间信封在最后
+     * 统一软封装（指纹路径在 [onAuthenticated]，纯 PIN 路径在 [finishWithoutBiometric]）。
+     *
+     * ⚠️ 一段失败**不清掉另一段**：PIN 门锁开不成不影响指纹段的备料与认证，反之亦然 ——
      * 那会静默丢掉用户已经配好的部分。
      */
     private suspend fun executeSession(current: Session) {
-        if (UnlockMethod.PIN in current.methods) {
-            val pinTargets = current.targetsFor(UnlockMethod.PIN)
-            current.pinOutcomes = if (pinTargets.isEmpty()) {
-                emptyMap()
-            } else {
-                withContext(Dispatchers.IO) {
-                    vaultRepository.enrollPinForVaults(pinTargets, current.pin) { id ->
-                        current.passwordFor(id)
+        // 统一备料：对 pendingTargets（任一方式尚未就绪的库）各备一份明文。
+        val targets = current.pendingTargets()
+        current.prepareOutcomes = withContext(Dispatchers.IO) {
+            enrollment.prepareForVaults(targets) { id -> current.passwordFor(id) }
+        }
+        prepared = current.prepareOutcomes.values
+            .filterIsInstance<LocalUnlockPrepareOutcome.Ready>()
+            .map { it.prepared }
+        if (UnlockMethod.PIN in current.methods && prepared.isNotEmpty()) {
+            current.pinOutcomes = withContext(Dispatchers.IO) {
+                // 开 PIN 门锁（Argon2id 包房钥匙，全局一把，不碰系统认证）。
+                if (vaultRepository.enrollPinLock(current.pin)) {
+                    current.pinLockOpened = true
+                    // 门锁开成：逐库成败留给 seal 段统一出（不在这里抢答）。
+                    emptyMap()
+                } else {
+                    // 顺序约束（定稿 §5）：指纹门锁已存在但房钥匙不在内存。
+                    targets.associateWith {
+                        PinEnrollOutcome.Failed("需先解锁现有门锁（过一次指纹）再开 PIN 锁")
                     }
                 }
             }
         }
         if (UnlockMethod.BIOMETRIC !in current.methods) {
-            finish(current, committed = emptyMap())
+            finishWithoutBiometric(current)
             return
         }
         executeBiometric(current)
     }
 
     /**
-     * 指纹路径：**认证前**备料（校验凭据 + 组装明文），再取 cipher 交给 UI 弹**一次**认证。
+     * 纯 PIN 路径的收尾：门锁已开（或已如实失败），房间软封装后出报告。
      *
-     * 备料失败的库在这里就被挑出来 —— 让用户按了指纹再告诉他"密码错"是本末倒置，
-     * 而且他会以为是指纹出了问题。若全部备料都失败，直接出报告、**不弹指纹**
-     * （没有东西要落盘，弹了纯属打扰）。
+     * ⚠️ PIN 门锁没开成（顺序约束）时**不能** seal（房钥匙不在内存），
+     * 备料明文就地擦除、committed 留空 —— 失败结论已在 [Session.pinOutcomes] 里。
+     */
+    private suspend fun finishWithoutBiometric(current: Session) {
+        val committed = if (current.pinLockOpened && prepared.isNotEmpty()) {
+            val units = prepared
+            prepared = emptyList()
+            withContext(Dispatchers.IO) { vaultRepository.sealRoomsForVaults(units) }
+        } else {
+            clearPrepared()
+            emptyMap()
+        }
+        finish(current, committed)
+    }
+
+    /**
+     * 指纹路径：备料已在 [executeSession] 完成，这里只取 cipher 交给 UI 弹**一次**认证。
+     *
+     * 备料全部失败时直接出报告、**不弹指纹**（没有东西要落盘，弹了纯属打扰）。
      */
     private suspend fun executeBiometric(current: Session) {
-        val bioTargets = current.targetsFor(UnlockMethod.BIOMETRIC)
-        val outcomes = withContext(Dispatchers.IO) {
-            enrollment.prepareForVaults(bioTargets) { id -> current.passwordFor(id) }
-        }
-        current.prepareOutcomes = outcomes
-        prepared = outcomes.values
-            .filterIsInstance<LocalUnlockPrepareOutcome.Ready>()
-            .map { it.prepared }
         if (prepared.isEmpty()) {
             finish(current, committed = emptyMap())
             return
         }
         // ⚠️ cipher 在**备料通过之后**才创建：反过来会在全都失败时也造一把用不上的 cipher。
-        val cipher = withContext(Dispatchers.IO) { vaultRepository.prepareLocalEnroll() }
+        val cipher = withContext(Dispatchers.IO) { vaultRepository.prepareFingerprintEnroll() }
         if (cipher == null) {
             // 设备无可用认证方式 ⇒ 备料失去意义，立刻擦掉（含 KDBX 主密码明文）。
             clearPrepared()
@@ -743,16 +797,26 @@ class QuickUnlockController(
 
     // ===== 内部：关闭 =====
 
-    /** 关闭某个能力：删掉范围内所有库的该信封。范围本身保留（另一个能力可能还在用）。 */
+    /**
+     * 关闭某个能力（房子化：关的是**全局门锁**，一次调用，不再逐库删信封）。
+     * 房间信封由 HouseKeyStore 的孤儿清理守卫连带处理（两把门锁都不剩时全清）。
+     *
+     * ⚠️ 范围镜像同批清零：`QUICK_UNLOCK_SCOPE` 是房间信封的响应式镜像，
+     * 门锁全没了房间即被 trim，镜像留着就是「同一个事实存两份」的漂移源。
+     */
     private suspend fun disableAll(method: UnlockMethod) {
-        val ids = state.value.rows.filter { it.inScope }.map { it.vaultId }
         withContext(Dispatchers.IO) {
-            ids.forEach { id ->
-                if (method == UnlockMethod.BIOMETRIC) {
-                    vaultRepository.disableLocalUnlock(id)
-                } else {
-                    vaultRepository.disablePin(id)
-                }
+            if (method == UnlockMethod.BIOMETRIC) {
+                vaultRepository.disableFingerprintLock()
+            } else {
+                vaultRepository.disablePinLock()
+            }
+            // 门锁全没了 ⇒ 房间已被 HouseKeyStore 连带清 ⇒ 范围镜像归零
+            //（读镜像键 + keyAvailable，均为轻量查询）。
+            val anyLockLeft = vaultRepository.fingerprintLockAvailable().first() ||
+                vaultRepository.pinLockAvailable().first()
+            if (!anyLockLeft) {
+                preferences.setQuickUnlockScope(emptySet())
             }
         }
     }
@@ -908,13 +972,23 @@ class QuickUnlockController(
                 initialValue = UiState(),
             )
 
-    /** 逐库两个信封的存在性（顺序与 [vaults] 一一对应）。 */
+    /**
+     * 逐库两个能力的可用性（顺序与 [vaults] 一一对应）。
+     *
+     * 房子化（2026-09-28）后的语义：`biometricReady` = 指纹门锁在 && 该库房间信封在；
+     * `pinReady` = PIN 门锁在 && 该库房间信封在。**房间信封是共享的**（两种门锁
+     * 包的是同一把房钥匙），差别只在门锁那一侧。
+     */
     private fun flagsOf(vaults: List<VaultSummary>): Flow<List<EnvelopeFlags>> {
         val flows = vaults.map { vault ->
             combine(
-                vaultRepository.localUnlockAvailable(vault.id),
-                vaultRepository.pinUnlockAvailable(vault.id),
-            ) { biometric, pin -> EnvelopeFlags(biometric, pin) }
+                vaultRepository.fingerprintLockAvailable(),
+                vaultRepository.pinLockAvailable(),
+                preferences.quickUnlockScope(),
+            ) { biometricLock, pinLock, scopeIds ->
+                val hasRoom = vault.id in scopeIds
+                EnvelopeFlags(biometric = biometricLock && hasRoom, pin = pinLock && hasRoom)
+            }
         }
         // ⚠️ 空列表必须短路成 flowOf：`combine(emptyList())` 永不发射，
         //    会让整条 state 流卡在初值 ⇒ 用户看到"列表永远空着"。
@@ -993,6 +1067,12 @@ class QuickUnlockController(
 
         /** PIN 流程收到的 PIN（未选 PIN 时恒为空串）。 */
         var pin: String = ""
+
+        /**
+         * PIN 门锁是否已在本次会话开成（房子化：门锁全局一把）。
+         * 认证失败/取消时据此判断房间信封还能不能纯软件补封（见 [onAuthenticationFailed]）。
+         */
+        var pinLockOpened: Boolean = false
 
         /** 指纹**备料**阶段的逐库结论（仅选了指纹时有值）。 */
         var prepareOutcomes: Map<String, LocalUnlockPrepareOutcome> = emptyMap()

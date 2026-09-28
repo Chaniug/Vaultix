@@ -51,7 +51,7 @@ import dagger.hilt.android.AndroidEntryPoint
 import io.vaultix.common.OtpUriParser
 import io.vaultix.common.TotpGenerator
 import io.vaultix.datastore.VaultixPreferences
-import io.vaultix.domain.UnlockResult
+import io.vaultix.domain.RoomUnlockOutcome
 import io.vaultix.domain.VaultRepository
 import io.vaultix.domain.VaultSessionRepository
 import io.vaultix.vaultix.MainActivity
@@ -445,21 +445,23 @@ class AutofillActivity : FragmentActivity() {
         }
     }
 
-    /** 找第一个「已锁定且启用本地快速解锁」的库并准备解密 Cipher。 */
+    /** 找第一个「已锁定且纳入快速解锁范围」的库，并备好全局指纹门锁的解密 Cipher。 */
     private suspend fun prepareBiometricUnlock(): BiometricUnlockOutcome {
         if (vaultRepository.observeUnlockedVaultIds().first().isNotEmpty()) {
             return BiometricUnlockOutcome.Ready
         }
         val vaults = runCatching { vaultRepository.observeVaults().first() }.getOrDefault(emptyList())
-        // ⚠️ 只挑**已启用快速解锁**的锁定库，与解锁页的 `candidateVaultIds` 同一口径：
-        //    对只走主密码的库调 `prepareLocalUnlock` 必然返回 null（没有信封），
+        // ⚠️ 只挑**已纳入范围**的锁定库，与解锁页的 `candidateVaultIds` 同一口径：
+        //    对只走主密码的库调 `unlockVaultFromRoom` 必然 NotEnrolled，
         //    白跑一趟还多算一次失败，日志里会冒出一堆莫名其妙的"未打开"。
         val lockedIds = vaults.filterNot { it.unlocked }.map { it.id }
         val unlockable = lockedIds.filter { id ->
-            runCatching { vaultRepository.localUnlockAvailable(id).first() }.getOrDefault(false)
+            runCatching { vaultRepository.fingerprintQuickUnlockAvailable(id).first() }
+                .getOrDefault(false)
         }
         val first = unlockable.firstOrNull() ?: return BiometricUnlockOutcome.Fallback
-        val cipher = runCatching { vaultRepository.prepareLocalUnlock(first) }.getOrNull()
+        // 门锁是全局的（房子化）：cipher 不再按库取，一次认证解门锁、逐库开房间。
+        val cipher = runCatching { vaultRepository.prepareFingerprintUnlock() }.getOrNull()
             ?: return BiometricUnlockOutcome.Fallback
         return BiometricUnlockOutcome.Prompt(
             PendingBiometricUnlock(
@@ -487,7 +489,7 @@ class AutofillActivity : FragmentActivity() {
                 when {
                     // CP 流程无暂存可回灌：解锁**成功**就回 RESULT_OK 收工
                     // （见 finishCredentialFlowUnlocked 的 KDoc —— 少了它面板会死循环）。
-                    credentialFlow && result.first == UnlockResult.Success -> {
+                    credentialFlow && result.first is RoomUnlockOutcome.Opened -> {
                         // ★ 标记「本流程内刚完成过设备验证」。
                         //
                         // 为什么在这里、只在这里：用户刚为**完成 CP 认证动作**做过一次
@@ -497,7 +499,7 @@ class AutofillActivity : FragmentActivity() {
                         // 为什么必须 `credentialFlow`：非 CP 流程（普通 autofill）没有后续的
                         // 通行密钥断言，置位只会让标记在白等中过期（且违反"流程内"语义）。
                         //
-                        // 为什么必须 `result.first == Success`：认证过了但解封失败时，
+                        // 为什么必须 `result.first is Opened`：认证过了但开房失败时，
                         // 库仍是锁定态 —— 此时置位会让候选列表把"已验证"传下去，
                         // 而实际上库打不开（`PasskeyGetActivity` 的库态校验会拦住，
                         // 但**不该**依赖下游兜底，这里就不该置）。

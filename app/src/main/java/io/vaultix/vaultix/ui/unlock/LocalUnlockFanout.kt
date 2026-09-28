@@ -8,58 +8,52 @@
  */
 package io.vaultix.vaultix.ui.unlock
 
-import io.vaultix.domain.KdbxUnlockOutcome
-import io.vaultix.domain.UnlockResult
+import io.vaultix.domain.RoomUnlockOutcome
 import io.vaultix.domain.VaultRepository
-import io.vaultix.model.VaultKind
 import io.vaultix.vaultix.autofill.AutofillLogger
 import javax.crypto.Cipher
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.withContext
 
 /**
- * 「一次认证 → 打开多个库」的**唯一实现**（2026-09-16 新增）。
+ * 「一次认证 → 打开多个库」的**唯一实现**（2026-09-16 新增；2026-09-29 房子化重写）。
  *
  * ## 为什么要有这个文件
  *
  * 在此之前，同一条逻辑在**两处**各写了一份：[UnlockViewModel.completeLocalUnlock]
- * 与 `AutofillActivity.completeLocalUnlockByKind`。两份都要处理「按库类型分流」
- * （Bitwarden 包对称密钥 / KDBX 包主密码），而这条分流一旦写错**不会报错、只会静默失效**
- * —— KDBX 的包裹物走 Bitwarden 那条路会解出完全错误的语义。
- * 两处各写一遍等于把同一个坑埋了两次，且很可能只修好一处（本项目已有同类教训）。
+ * 与 `AutofillActivity.completeLocalUnlockByKind`。两份都要处理「按库类型分流」，
+ * 而这条分流一旦写错**不会报错、只会静默失效** —— KDBX 的包裹物走 Bitwarden
+ * 那条路会解出完全错误的语义。两处各写一遍等于把同一个坑埋了两次，
+ * 且很可能只修好一处。现在两处都调这里，坑只存在一处。
  *
- * 现在两处都调这里，坑只存在一处。
+ * ## 房子化后的形态（两级钥匙，定稿 2026-09-28）
  *
- * ## 顺序与复用（关键）
+ * 旧版是「首个库用认证 cipher、其余库各自现取新 cipher」—— 后者正是 H2 病灶：
+ * auth-per-use 的 KEK 下，那些新 cipher **没有任何人授权过**，指纹变更后全部失效。
  *
- * 快解的保护器 KEK 是 **auth-per-use**：一个 [Cipher] 只对一次认证有效。
- * 首个库必须用**本次认证传回的 cipher**；其余库则要趁 KEK 的授权窗口
- * 各自新建一个**解密** cipher（`prepareLocalUnlock`）。这与设置页登记时
- * 「一个 cipher 连续 wrap」是同一约束的两面：
+ * 新版里「按库类型分流」和「首库特殊化」都消失了：
  *
- * | 场景 | cipher 来源 | 用途 |
- * |---|---|---|
- * | 登记（写信封） | 一次认证，`newEncryptCipher` | 连续 wrap 多个库 |
- * | 解锁（读信封） | 首个用认证 cipher，其余各自 `prepareLocalUnlock` | 各自 unwrap 一个库 |
+ * 1. **一次 Keystore 操作**：`completeFingerprintUnlock(cipher)` 用本次认证的
+ *    cipher 解指纹门锁，房钥匙进内存（解锁路径上唯一碰 Keystore 的动作）；
+ * 2. **N 次纯软件解密**：目标库与其余库一律 `unlockVaultFromRoom(id)` ——
+ *    房间信封的 AES-GCM 解密 + 按库类型开库，全部封装在 repository 一侧。
  *
- * ⚠️ 其余库的 cipher 取不到（`prepareLocalUnlock` 返回 null = 该库 KEK 也失效了）
- * 就**跳过该库**，不影响首个库 —— 首个库已经成功了，不能因为别的库失败而把它回滚。
+ * 库类型分流下沉到了 `VaultRepositoryImpl.unlockVaultFromRoom` 内部（按 vault 行
+ * 的 kind 分流），本层不再感知 ——「一处实现」的保证从「共享这个 object」
+ * 进一步收紧为「共享 repository 的同一方法」。
  */
 internal object LocalUnlockFanout {
 
     /** 一次 fanout 的结论。 */
     data class Result(
-        /** 首个库（本次认证直接解封的那个）的结论。 */
-        val first: UnlockResult,
+        /** 首个库（用户点指纹要开的那个）的结论。 */
+        val first: RoomUnlockOutcome,
         /** 其余库里成功打开的数量。 */
         val restOpened: Int,
-        /** 其余库里未能打开的数量（cipher 取不到 / 解封失败）。 */
+        /** 其余库里未能打开的数量。 */
         val restFailed: Int,
     )
 
     /**
-     * 解封 [first]，随后趁认证窗口解封 [rest] 里已启用快速解锁的库。
+     * 解指纹门锁，随后逐库开房间信封。
      *
      * ## 为什么首个库的结论要单独返回
      *
@@ -68,7 +62,8 @@ internal object LocalUnlockFanout {
      * 该不该报错（"3 个里成了 2 个"到底是成功还是失败？）。
      * 分开返回，语义就没歧义：**首个成功 = 用户的目的达成**。
      *
-     * @param cipher 本次 BiometricPrompt 认证返回的 cipher。**只能用于 [first]**。
+     * @param cipher 本次 BiometricPrompt 认证返回的 cipher —— 只用于解**门锁**
+     *   （一次 Keystore 操作），各库房间信封与它无关。
      */
     suspend fun unlockAll(
         repository: VaultRepository,
@@ -76,27 +71,31 @@ internal object LocalUnlockFanout {
         rest: List<String>,
         cipher: Cipher,
     ): Result {
-        // ★ 诊断埋点（2026-09-17 补）：此前这里**一条日志都没有** ⇒ 出现
-        //   「指纹过了却又让人解锁」时，日志里只能看到 `AutofillActivity` 的
-        //   「认证成功」，看不到**解封到底成没成** —— 而那正是分辨
-        //   「KEK 解不开」与「解锁成功但系统没收到结果」的唯一分界。
-        //   排这条问题必须能量化到"哪个库、哪种结论"，否则只能猜。
+        // ★ 诊断埋点（2026-09-17 补、房子化后保留）：排「指纹过了却又让人解锁」
+        //   必须能量化到"哪个库、哪种结论"，否则只能猜。
         AutofillLogger.d("fanout start first=$first rest=${rest.size}")
-        val firstResult = completeByKind(repository, first, cipher)
+        // 门锁解不开（KEK 失效 / 信封损坏）：没钥匙，各库全是 NoKey —— 早退，
+        // 不白跑循环。首库给主密码回退提示（定稿 §6：不静默重试，如实降级）。
+        val lockOpened = runCatching { repository.completeFingerprintUnlock(cipher) }
+            .getOrElse { false }
+        if (!lockOpened) {
+            AutofillLogger.d("fanout lock → 门锁解封失败（KEK 失效/信封损坏），全部回退主密码")
+            return Result(
+                first = RoomUnlockOutcome.Unavailable("指纹门锁已失效，请用主密码解锁"),
+                restOpened = 0,
+                restFailed = rest.size,
+            )
+        }
+        // 目标库与其余库地位完全相同（首库特殊化已随 H2 一起消失）。
+        val firstResult = runCatching { repository.unlockVaultFromRoom(first) }
+            .getOrElse { RoomUnlockOutcome.Unavailable(it.message ?: "打开失败") }
         AutofillLogger.d("fanout first=$first → ${describe(firstResult)}")
         var opened = 0
         var failed = 0
         for (id in rest) {
-            // 每个库要用各自新建的解密 cipher：认证窗口内 `prepareLocalUnlock`
-            // 会为该库的信封初始化一个 KEK cipher（IV 来自 payload）。
-            val next = runCatching { repository.prepareLocalUnlock(id) }.getOrNull()
-            if (next == null) {
-                failed++
-                AutofillLogger.d("fanout rest=$id → 取不到 cipher（该库登记已失效），跳过")
-                continue
-            }
-            val outcome = completeByKind(repository, id, next)
-            if (outcome == UnlockResult.Success) opened++ else failed++
+            val outcome = runCatching { repository.unlockVaultFromRoom(id) }
+                .getOrElse { RoomUnlockOutcome.Unavailable(it.message ?: "打开失败") }
+            if (outcome is RoomUnlockOutcome.Opened) opened++ else failed++
             AutofillLogger.d("fanout rest=$id → ${describe(outcome)}")
         }
         AutofillLogger.d(
@@ -106,57 +105,14 @@ internal object LocalUnlockFanout {
     }
 
     /**
-     * [UnlockResult] 的可读描述（**不含任何密钥材料**）。
+     * [RoomUnlockOutcome] 的可读描述（**不含任何密钥材料**）。
      *
-     * `Unknown` 要带上那句 detail：KDBX 的"包裹的主密码已过时"与
-     * "文件读不到"都落在这一支，而那两者的用户动作完全不同。
+     * `Unavailable` 要带上 detail：「主密码已过时」与「文件读不到」都落在这一支，
+     * 而那两者的用户动作完全不同。
      */
-    private fun describe(result: UnlockResult): String = when (result) {
-        UnlockResult.Success -> "Success"
-        is UnlockResult.Unknown -> "Unknown(${result.detail})"
-        else -> result::class.simpleName.orEmpty()
+    private fun describe(outcome: RoomUnlockOutcome): String = when (outcome) {
+        RoomUnlockOutcome.Opened -> "Opened"
+        RoomUnlockOutcome.StaleCredentials -> "StaleCredentials"
+        is RoomUnlockOutcome.Unavailable -> "Unavailable(${outcome.detail})"
     }
-
-    /**
-     * 按库类型走正确的本地解锁路径。
-     *
-     * ⚠️ **不能一律调 `completeLocalUnlock`**（定稿 §4）：那条路把包裹物当作
-     * **Bitwarden 对称密钥**（`enc ‖ mac`）解析；KDBX 的包裹物是「主密码 + keyfile」，
-     * 走过去会解出错误语义 —— `SymmetricCryptoKey.fromFullKey` 拿一段带魔数的字节
-     * 当密钥，轻则解锁失败，重则把会话建立成一把错密钥。**必须先查 kind 再分流。**
-     *
-     * ⚠️ 这里**不吞**异常到 `false`：调用方靠返回的 [UnlockResult] 区分
-     * 「凭据过期」与「环境错误」，吞掉会让"KDBX 主密码被改过"这种可自愈的情形
-     * 变成一句无意义的"解锁失败"。
-     */
-    private suspend fun completeByKind(
-        repository: VaultRepository,
-        vaultId: String,
-        cipher: Cipher,
-    ): UnlockResult {
-        val isKdbx = withContext(Dispatchers.IO) { isKdbxVault(repository, vaultId) }
-        return if (isKdbx) {
-            when (val outcome = repository.completeLocalUnlockKdbx(vaultId, cipher)) {
-                KdbxUnlockOutcome.Opened -> UnlockResult.Success
-                // ★ D3（定稿 §4.4）：指纹过了但包裹物打不开 ⇒ 主密码很可能已改。
-                //   归类为凭据错误，让 UI 提示「主密码可能已变更」并引导重输。
-                KdbxUnlockOutcome.StaleCredentials -> UnlockResult.InvalidCredentials
-                is KdbxUnlockOutcome.Unavailable -> UnlockResult.Unknown(outcome.detail)
-            }
-        } else {
-            repository.completeLocalUnlock(vaultId, cipher)
-        }
-    }
-
-    /**
-     * 该库是否为 KDBX。
-     *
-     * 以**库表**为准，不信 UI 侧的快照：解锁页的 `state.vault` 可能是首帧旧值，
-     * 用过期快照分流正是"静默失效"的温床。查不到（库已被移除）按非 KDBX 处理，
-     * 让 `completeLocalUnlock` 自己如实报错。
-     */
-    private suspend fun isKdbxVault(repository: VaultRepository, vaultId: String): Boolean =
-        runCatching {
-            repository.observeVaults().first().firstOrNull { it.id == vaultId }?.kind
-        }.getOrNull() == VaultKind.KDBX
 }

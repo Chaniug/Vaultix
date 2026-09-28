@@ -93,6 +93,16 @@ class SecureCredentialStore @Inject constructor(
         prefs.edit().remove(storageKey).apply()
     }
 
+    /**
+     * 枚举所有以 [prefix] 开头的存储键（**只读**，不解密值）。
+     *
+     * 用途：快速解锁「房子化」（2026-09-28 定稿）的**一次性迁移**——检测与清理旧
+     * 「每库信封」模型（`local_unlock_key::*` / `local_pin_key::*`）。值本身没有
+     * 枚举需求（信封的存在性即可判定），故只返回键、不触发任何 Keystore 解密。
+     */
+    fun keysWithPrefix(prefix: String): List<String> =
+        prefs.all.keys.filter { it.startsWith(prefix) }
+
     fun clear() {
         prefs.edit().clear().apply()
     }

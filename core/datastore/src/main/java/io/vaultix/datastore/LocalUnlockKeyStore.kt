@@ -63,16 +63,20 @@ enum class LocalUnlockKekStatus {
 }
 
 /**
- * 本地快速解锁的 Keystore 门禁（KEK）。
+ * 本地快速解锁的 Keystore 门禁（KEK）—— 房子化（2026-09-28 定稿）后是**指纹门锁**：
+ * 它包裹的只有一样东西，房子钥匙（见 `data/repository/HouseKeyStore`）。
  *
  * 模型：Android Keystore 里生成一把 **用户认证保护** 的 AES-256-GCM 密钥：
- * - 登录/主密码解锁成功后，用该 KEK 把账号对称密钥（64B）加密落盘
- *   （payload 由调用方存 [SecureCredentialStore]）；
- * - 锁库只清内存；再次解锁时先 `initDecrypt` 把 Cipher 交给
+ * - 登记时用它包裹**房子钥匙**（随机 256-bit 软件密钥，全 app 唯一被门锁
+ *   包裹之物）；每个库的凭据改用这把钥匙**纯软件**封装（房间信封），
+ *   不再过 Keystore —— [wrap]/[unwrap] 的调用方自 2026-09-28 起只有
+ *   `HouseKeyStore`，包裹的 blob 恒为 32 字节房钥匙；
+ * - 锁库只清内存（房钥匙清零）；再次解锁时先 `initDecrypt` 把 Cipher 交给
  *   BiometricPrompt（生物识别或设备 PIN，API 30+ 可两者，低版本生物识别），
- *   认证通过后 `decryptPayload` 取回密钥——主密码与 2FA 都无需再走网络；
+ *   认证通过后 `unwrap` 取回房钥匙，其余库全是软件解密 —— 主密码与 2FA
+ *   都无需再走网络；
  * - 指纹/人脸变更（enrollment 增删）会 invalidate KEK（默认行为），
- *   被包裹数据随之不可解 → 需要重新主密码登录一次。
+ *   被包裹的房钥匙随之不可解 → 按定稿 §6 优雅降级（禁用该锁 + 回主密码）。
  *
  * ⚠️ Cipher 一旦 init 必须立刻交给本次 BiometricPrompt；跨认证复用不安全。
  * ⚠️ **解密路径绝不新建 KEK**（见 [newDecryptCipher]）：静默重建会把「钥匙丢了」

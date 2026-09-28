@@ -1,7 +1,6 @@
 package io.vaultix.data.repository
 
 import android.os.Build
-import io.vaultix.crypto.SecureBytes
 import io.vaultix.crypto.SymmetricCryptoKey
 import io.vaultix.data.bitwarden.auth.BitwardenAuthRepository
 import io.vaultix.data.bitwarden.auth.TwoFactorInvalidException
@@ -21,14 +20,11 @@ import io.vaultix.datastore.LocalUnlockKeyStore
 import io.vaultix.datastore.SecureCredentialStore
 import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.domain.KdbxAddOutcome
-import io.vaultix.domain.KdbxEnrollOutcome
-import io.vaultix.domain.KdbxUnlockOutcome
 import io.vaultix.domain.LocalUnlockEnrollOutcome
 import io.vaultix.domain.LocalUnlockPreparedEnrollment
-import io.vaultix.domain.PIN_MAX_ATTEMPTS
-import io.vaultix.domain.PIN_MIN_LENGTH
 import io.vaultix.domain.PinEnrollOutcome
 import io.vaultix.domain.PinUnlockOutcome
+import io.vaultix.domain.RoomUnlockOutcome
 import io.vaultix.domain.UnlockResult
 import io.vaultix.domain.VaultRepository
 import io.vaultix.domain.VaultSyncReport
@@ -74,22 +70,15 @@ class VaultRepositoryImpl @Inject constructor(
     private val syncService: BitwardenSyncService,
     private val credentials: SecureCredentialStore,
     private val localUnlockKeyStore: LocalUnlockKeyStore,
-    /** 应用内 PIN 的落盘状态与信封开关（与 Keystore KEK 是**两条独立**的解锁路径）。 */
-    private val pinUnlockStore: PinUnlockStore,
     /**
-     * 「一个 PIN 打开多个库」的配齐编排。
+     * 房子钥匙层（两级钥匙层级的唯一协调者，2026-09-28 定稿）：
+     * 门锁信封（指纹 KEK / PIN Argon2id 各一）+ 房钥匙（仅内存）+ 房间信封（每库）。
      *
-     * ⚠️ 注入而不是把逻辑写在本类里：本类加完那批逻辑后会到 43 个函数（detekt 上限 40），
-     * 而"库生命周期"与"多库编排"本就是两件事。见 [PinEnrollmentCoordinator] 的 KDoc。
+     * ⚠️ 本类只做**薄转发 + 范围镜像同步**；钥匙学一律在 [HouseKeyStore]
+     * （旧 `PinUnlockStore` / `PinEnrollment` / `PinEnrollmentCoordinator`
+     * 的职责已全部并入它与 [LocalUnlockEnrollment]）。
      */
-    private val pinEnrollment: PinEnrollmentCoordinator,
-    /**
-     * PIN 信封的**组装动作**（按库类型包什么明文）。
-     *
-     * ⚠️ 与 [pinEnrollment] 分开的两个类：协调器管「给哪些库、按什么顺序」，
-     * 本类管「这一个库到底包什么字节」。见 [PinEnrollment] 的 KDoc。
-     */
-    private val enrollment: PinEnrollment,
+    private val houseKeyStore: HouseKeyStore,
     /**
      * 「本地快速解锁（生物识别）」的**多库备料与落盘**。
      *
@@ -346,6 +335,9 @@ class VaultRepositoryImpl @Inject constructor(
     }
 
     override suspend fun lockAll() {
+        // 房钥匙先清零（房子化硬约束 #4：锁 = 密钥清零）—— 顺序刻意在会话清理之前：
+        // 之后任何「再想用快解开库」的路径都必须重新过一次门锁。
+        houseKeyStore.lock()
         sessions.lockAll()
         Kdbx.lockAll()
         kdbxSessions.bump()
@@ -370,8 +362,8 @@ class VaultRepositoryImpl @Inject constructor(
         kdbxSessions.bump()
         // 1b) KDBX 的 keyfile 授权记录：属本地凭据，一并清（下次重新选文件）
         runCatching { preferences.setKdbxKeyFileUri(vaultId, null) }
-        // 2) 本地快速解锁痕迹（包裹密钥 + 开关）——不清就会留着用旧 KEK 解封的路径
-        runCatching { disableLocalUnlock(vaultId) }
+        // 2) 该库的房间信封与范围镜像（房子化：两把门锁是全局的，退出单个库只清它的房间）
+        runCatching { removeRoomEnvelope(vaultId) }
         // 3) 认证凭据与 host→server 登记清除（远端会话不受影响；重登即重新换 token）
         authRepository.logout(vaultId)
         // 4) 待推送队列：属「本地缓存」的一部分，必须清 —— 否则下次登录同一服务器时
@@ -390,8 +382,8 @@ class VaultRepositoryImpl @Inject constructor(
         sessions.lock(vaultId)
         Kdbx.lock(vaultId)
         kdbxSessions.bump()
-        // 2) 本地快速解锁痕迹（包裹密钥 + 开关）——尽力而为，失败不阻断移除
-        runCatching { disableLocalUnlock(vaultId) }
+        // 2) 该库的房间信封与范围镜像（同 signOut 第 2 步：门锁是全局的，不动）
+        runCatching { removeRoomEnvelope(vaultId) }
         // 3) 认证凭据与 host→server 登记清除（服务端会话保留，属正常）
         authRepository.logout(vaultId)
         // 4) 待推送队列显式清空（该表无外键，须先清，防止同服务器重加账号后
@@ -401,192 +393,200 @@ class VaultRepositoryImpl @Inject constructor(
         vaultDao.delete(vaultId)
     }
 
-    // ---- 本地快速解锁（Keystore 用户认证 KEK 包裹，见类 KDoc）----
+    // ---- 快速解锁（两级钥匙「房子化」，钥匙学在 HouseKeyStore）----
 
     /**
-     * 快速解锁入口是否可见。
+     * 指纹门锁入口是否可用（**全局**）。
      *
-     * ⚠️ **只以「用户开关 + KEK 非永久失效」为准，不再在每次订阅时同步读 payload**
-     * （2026-09-12 修回归）：payload 读的是 `SecureCredentialStore`（Keystore AES-GCM），
-     * 任何**瞬时** Keystore 异常都会被 `getString` 吞成 null，而这里是 `flow { emit(...) }`
-     * 的**一次性**读取 —— 于是「设备重启后 Keystore 尚未就绪」这一瞬间会把指纹入口整条藏掉，
-     * 用户被迫重新联网登录（用户实测反馈）。
-     *
-     * 现在的取向与项目其它状态检测一致（见 `CredentialProviderStatus` 的「读不到=已启用」）：
-     * **入口照常给出**，真失败时在 `prepareLocalUnlock` 那一刻如实报错（那时原因才准确）。
-     * 上游 Bitwarden 同款取向：生物解锁按钮由 `isUnlockWithBiometricsEnabled` 这个
-     * **持久化开关**决定，而不是每次现探密钥可用性。
+     * 取向沿用 2026-09-12 的修正：**入口照常给出**（LOADABLE 与 UNKNOWN 都算可用），
+     * 真失败留到 [prepareFingerprintUnlock] 那一刻如实报错 —— 订阅时现探可解性
+     * 会被瞬时 Keystore 异常骗成「入口消失」（实测回归）。
      */
-    override fun localUnlockAvailable(vaultId: String): Flow<Boolean> =
-        preferences.isLocalUnlockEnabled(vaultId)
-            .map { enabled -> enabled && localUnlockKeyStore.keyAvailable }
-            // ⚠️ `keyAvailable` 要做一次 Keystore 往返（`KeyStore.load` + `getKey`），
-            // 冷启动 / 覆盖安装后可达数百毫秒。留在默认（Main）调度器上会直接推迟
-            // 「本地解锁可用」这一帧 —— 而自动弹指纹正是在等这一帧（用户反馈
-            // 「指纹不能第一时间弹出」）。搬到 IO，首帧与探测并行发生。
+    override fun fingerprintLockAvailable(): Flow<Boolean> =
+        preferences.fingerprintLockEnrolled
+            .map { enrolled -> enrolled && localUnlockKeyStore.keyAvailable }
+            // `keyAvailable` 要一次 Keystore 往返（冷启动可达数百毫秒）；
+            // 搬 IO，首帧与探测并行（实测「指纹不能第一时间弹出」的修法）。
             .flowOn(Dispatchers.IO)
 
-    override suspend fun enrollLocalUnlock(vaultId: String, cipher: Cipher): Boolean {
-        val key = sessions.keyOf(vaultId) ?: return false
-        val fullKey = buildFullKey(key)
-        val wrapped = try {
-            localUnlockKeyStore.wrap(cipher, fullKey)
-        } finally {
-            fullKey.fill(0)
+    /** PIN 门锁入口是否可用（**全局**；镜像键 = 门锁信封存在性）。 */
+    override fun pinLockAvailable(): Flow<Boolean> = preferences.pinLockEnrolled
+
+    /**
+     * 该库是否可用指纹快解（指纹门锁在 && 该库在生效范围）。
+     * 范围真源是房间信封（`house_room::`），偏好键只是响应式镜像。
+     */
+    override fun fingerprintQuickUnlockAvailable(vaultId: String): Flow<Boolean> =
+        combine(fingerprintLockAvailable(), preferences.quickUnlockScope()) { lockAvailable, scope ->
+            lockAvailable && vaultId in scope
         }
-        credentials.putString(localUnlockStorageKey(vaultId), wrapped)
-        preferences.setLocalUnlockEnabled(vaultId, true)
-        return true
-    }
 
-    override suspend fun prepareLocalUnlock(vaultId: String): Cipher? {
-        val payload = credentials.getString(localUnlockStorageKey(vaultId)) ?: return null
-        return localUnlockKeyStore.newDecryptCipher(payload)
-    }
-
-    override suspend fun prepareLocalEnroll(): Cipher? =
+    /** 开指纹门锁第一步：备授权 cipher（KEK 门禁的既有入口，行为不变）。 */
+    override suspend fun prepareFingerprintEnroll(): Cipher? =
         localUnlockKeyStore.newEncryptCipher()
 
-    override suspend fun completeLocalUnlock(vaultId: String, cipher: Cipher): UnlockResult {
-        val payload = credentials.getString(localUnlockStorageKey(vaultId))
-            ?: return UnlockResult.Unknown("未启用本地快速解锁")
-        return runCatching {
-            val fullKey = localUnlockKeyStore.unwrap(cipher, payload)
+    /**
+     * 开指纹门锁第二步（认证已过）：包房钥匙 + 同步镜像键。
+     *
+     * @return false = 房钥匙不可得（另一把门锁已存在但未解 —— 先解它再开这把，
+     *   否则两把门锁会包不同的钥匙；顺序约束由 HouseKeyStore 守）。
+     */
+    override suspend fun enrollFingerprintLock(cipher: Cipher): Boolean {
+        val result = houseKeyStore.enrollFingerprintLock(cipher)
+        val enrolled = result == LockEnrollResult.Enrolled
+        if (enrolled) {
+            preferences.setFingerprintLockEnrolled(true)
+        }
+        return enrolled
+    }
+
+    /** 解指纹门锁第一步：备认证 cipher。null = 门锁未启用 / KEK 失效 → 回主密码。 */
+    override suspend fun prepareFingerprintUnlock(): Cipher? =
+        houseKeyStore.prepareFingerprintUnlock()
+
+    /**
+     * 解指纹门锁第二步（认证已过）：房钥匙进内存。
+     * 解锁路径上**唯一**的 Keystore 操作；此后各库 [unlockVaultFromRoom] 纯软件。
+     */
+    override suspend fun completeFingerprintUnlock(cipher: Cipher): Boolean =
+        houseKeyStore.completeFingerprintUnlock(cipher)
+
+    /** 关指纹门锁（全局；信封删除 + 镜像同步，孤儿房间由 HouseKeyStore 连带清理）。 */
+    override suspend fun disableFingerprintLock() {
+        houseKeyStore.disableFingerprintLock()
+        preferences.setFingerprintLockEnrolled(false)
+    }
+
+    // ---- 应用内 PIN 门锁（Argon2id，全局计数）----
+
+    /** 位数门槛（先验后做昂贵事）。 */
+    override fun validatePin(pin: String): PinEnrollOutcome? = houseKeyStore.validatePin(pin)
+
+    /** 开 PIN 门锁：包房钥匙 + 镜像同步（覆盖旧信封即「修改 PIN」）。 */
+    override suspend fun enrollPinLock(pin: String): Boolean {
+        val result = houseKeyStore.enrollPinLock(pin)
+        val enrolled = result == LockEnrollResult.Enrolled
+        if (enrolled) {
+            preferences.setPinLockEnrolled(true)
+        }
+        return enrolled
+    }
+
+    /** 用 PIN 解门锁（全局计数）。成功 = 房钥匙已在内存，随后逐库 [unlockVaultFromRoom]。 */
+    override suspend fun openHouseWithPin(pin: String): PinUnlockOutcome =
+        when (val open = houseKeyStore.openWithPin(pin)) {
+            PinOpen.Opened -> PinUnlockOutcome.Opened
+            else -> open.toFailureOutcome()
+        }
+
+    /** 关 PIN 门锁（信封 + 计数 + 镜像；孤儿清理同指纹侧）。 */
+    override suspend fun disablePinLock() {
+        houseKeyStore.disablePinLock()
+        preferences.setPinLockEnrolled(false)
+    }
+
+    // ---- 房间信封（生效范围）----
+
+    /**
+     * 逐库软封装落盘（纯转发：备料在 `LocalUnlockEnrollment.prepareForVaults`，
+     * 落盘与范围镜像同步在同处 —— 本类不展开任何逻辑，函数数纪律）。
+     */
+    override suspend fun sealRoomsForVaults(
+        prepared: List<LocalUnlockPreparedEnrollment>,
+    ): Map<String, LocalUnlockEnrollOutcome> =
+        localUnlockEnrollment.sealRoomsForVaults(prepared)
+
+    /** 取消勾选某库：删房间信封 + 范围镜像剔除（不碰门锁）。 */
+    override suspend fun removeVaultFromScope(vaultId: String) {
+        removeRoomEnvelope(vaultId)
+    }
+
+    /**
+     * 删某库房间信封并从范围镜像剔除（signOut / removeVault / 取消勾选共用）。
+     */
+    private suspend fun removeRoomEnvelope(vaultId: String) {
+        houseKeyStore.removeRoom(vaultId)
+        val scope = preferences.quickUnlockScope().first()
+        if (vaultId in scope) {
+            preferences.setQuickUnlockScope(scope - vaultId)
+        }
+    }
+
+    /**
+     * 全部库的「生效范围候选」：返回**全部**库 id（含 KDBX），由 UI 决定勾选谁。
+     *
+     * ⚠️ 不在这里过滤"可纳入的"：KDBX 库并非不可纳入（只是要多输一次主密码），
+     * 过滤掉会让用户以为 KDBX 不支持快速解锁 —— 那是**假状态**。
+     */
+    override suspend fun quickUnlockCandidateVaultIds(): List<String> =
+        withContext(Dispatchers.IO) {
+            vaultDao.observeAll().first().map { it.id }
+        }
+
+    // ---- 解锁扇出（1 次门锁 + N 次软件）----
+
+    /**
+     * 用房间信封打开一个库：软件解密取凭据 → 按库类型开库。
+     *
+     * 前置：房钥匙已在内存（先过一把门锁）。房间的 AEAD 自带完整性校验，
+     * 损坏如实报 [RoomUnlockOutcome.Unavailable]（只影响该库，可删可重建）。
+     */
+    override suspend fun unlockVaultFromRoom(vaultId: String): RoomUnlockOutcome =
+        withContext(Dispatchers.IO) {
+            val row = vaultDao.get(vaultId)
+                ?: return@withContext RoomUnlockOutcome.Unavailable("本地不存在该库")
+            when (VaultKind.fromName(row.kind)) {
+                VaultKind.BITWARDEN -> openBitwardenFromRoom(vaultId)
+                VaultKind.KDBX -> openKdbxFromRoom(vaultId, row.origin)
+                // 未知类型（数据损坏 / 未来新增）：不猜，如实报错。
+                null -> RoomUnlockOutcome.Unavailable("无法识别该库类型")
+            }
+        }
+
+    /** Bitwarden 房间：64B full key → 建会话（完全离线，不触发 2FA）。 */
+    private suspend fun openBitwardenFromRoom(vaultId: String): RoomUnlockOutcome {
+        val opened = houseKeyStore.openRoom(vaultId)
+        if (opened !is RoomOpen.Opened) {
+            return opened.toRoomFailure()
+        }
+        val outcome = runCatching {
+            val fullKey = opened.payload
             try {
-                val key = SymmetricCryptoKey.fromFullKey(fullKey)
-                sessions.unlock(vaultId, key)
+                sessions.unlock(vaultId, SymmetricCryptoKey.fromFullKey(fullKey))
             } finally {
                 fullKey.fill(0)
             }
-            // 进程重启后走快速解锁（不重登）：access token 持久化仍在，登记
-            // host→server 使请求拦截器能预挂 Bearer / 401 时可刷新
+            // 进程重启后走快解（不重登）：token 持久化仍在，登记 host→server
+            // 使请求拦截器能预挂 Bearer / 401 时可刷新。
             authRepository.registerServer(vaultId)
-            UnlockResult.Success
-        }.getOrElse { error ->
-            if (error.isLocalUnlockUnrecoverable()) {
-                // KEK 永久失效（新增/删除指纹）或不可恢复，
-                // 或认证会话失效 / 密文校验失败：
-                // 清干净，回退「未启用」→ UI 如实显示，用户可重新启用自愈。
-                clearBrokenLocalUnlock(vaultId)
-                UnlockResult.Unknown("本地解锁已失效（可能因指纹变更），请用主密码登录")
-            } else {
-                UnlockResult.Unknown(error.message)
-            }
+        }
+        return if (outcome.isSuccess) {
+            RoomUnlockOutcome.Opened
+        } else {
+            RoomUnlockOutcome.Unavailable(outcome.exceptionOrNull()?.message ?: "无法建立会话")
         }
     }
 
-    override suspend fun disableLocalUnlock(vaultId: String) {
-        // 顺手丢弃单库暂存：用户可能刚输完主密码、指纹还没弹就关掉了开关，
-        // 那份明文没有理由再留在内存里等下一次。
-        localUnlockEnrollment.discardStagedPayload()
-        credentials.remove(localUnlockStorageKey(vaultId))
-        preferences.setLocalUnlockEnabled(vaultId, false)
-    }
-
     /**
-     * 清理已不可用的快速解锁状态（Bastion 不变量移植）。
+     * KDBX 房间：主密码 + keyfile → **真的开库**。
      *
-     * **触发场景**：Keystore KEK 被永久失效 —— 用户新增/删除指纹时
-     * `setInvalidatedByBiometricEnrollment(true)`（Vaultix 默认行为）会让 KEK 彻底不可用；
-     * 或 Keystore 返回不可恢复的陈旧密钥。
-     *
-     * **为什么必须清理**：若只吞掉异常而不清状态，开关仍是 `enabled = true`、
-     * payload 仍在，`localUnlockAvailable` 就仍返回 true → 设置页显示「已启用」，
-     * 但用户每次点指纹都失败，**且无法自愈**（重试永远失败，只能手动关闭再启用）。
-     * Bastion 用 1923 行 + 回归测试防的正是这个静默死循环。
-     *
-     * **为什么不尝试自动重建**：Vaultix 的 KEK 用
-     * `setUserAuthenticationParameters(0, …)` = **每次使用都需认证**
-     * （安全性高于 Bastion 的 `setUserAuthenticationValidityDurationSeconds(300)`）。
-     * 主密码登录路径上没有生物认证窗口，`Cipher.init()` 必然抛
-     * `UserNotAuthenticatedException`，因此**无法静默重建**。清回「未启用」
-     * 让 UI 如实反映状态、并允许用户重新启用（届时会走一次真实认证），是正确取舍。
+     * `StaleCredentials` = 凭据开不了库（主密码在别处改过，D3）：门锁不动，
+     * 引导输新密码后重包该房间的**软件信封**即可自愈 —— 房子化后重包不再碰指纹。
      */
-    private suspend fun clearBrokenLocalUnlock(vaultId: String) {
-        runCatching {
-            credentials.remove(localUnlockStorageKey(vaultId))
-            preferences.setLocalUnlockEnabled(vaultId, false)
+    private suspend fun openKdbxFromRoom(vaultId: String, originUri: String): RoomUnlockOutcome {
+        val opened = houseKeyStore.openRoom(vaultId)
+        if (opened !is RoomOpen.Opened) {
+            return opened.toRoomFailure()
         }
-    }
-
-    // ---- 本地快速解锁：KDBX 侧（#93 / 定稿 §4）----
-
-    /**
-     * 单库 KDBX 启用快速解锁：**先真解一次库校验凭据**，通过才暂存「主密码 + keyfile」。
-     *
-     * 2026-09-16 实现迁到 [LocalUnlockEnrollment]（本类函数数顶格 40，必须腾位置），
-     * 这里只保留转发。⚠️ 唯一的注入点是 `verifyCredentials`：单库路径刻意沿用
-     * [unlockKdbxInternal]（**真实开库、登记会话**）—— 用户刚证明自己能开这个库，
-     * 把会话留着让他直接用，符合直觉；也不改变任何安全边界（能开到就能开）。
-     *
-     * 多库路径**不用**这条：一次勾多个库时"顺带开库"会互相覆盖会话，
-     * 且用户并没要求打开它们（那边走 `Kdbx.verify`，只验不开库）。
-     */
-    override suspend fun prepareKdbxEnroll(
-        vaultId: String,
-        masterPassword: String,
-        keyFileUri: String?,
-    ): KdbxEnrollOutcome = localUnlockEnrollment.prepareKdbxEnroll(
-        vaultId = vaultId,
-        masterPassword = masterPassword,
-        keyFileUri = keyFileUri,
-        // 单库路径刻意沿用真实开库做校验（见本方法 KDoc）。
-        verifyCredentials = { id, origin, password, keyFile ->
-            unlockKdbxInternal(id, origin, password, keyFile) == UnlockResult.Success
-        },
-    )
-
-    override suspend fun commitKdbxEnroll(vaultId: String, cipher: Cipher): Boolean =
-        localUnlockEnrollment.commitKdbxEnroll(vaultId, cipher)
-
-    override suspend fun discardKdbxEnroll() {
-        localUnlockEnrollment.discardKdbxEnroll()
-    }
-
-    /**
-     * 一次勾选多个库启用快速解锁：**认证之后**用同一个 cipher 逐库落盘。
-     *
-     * ⚠️ 只转发到 [LocalUnlockEnrollment]，实现见那里 —— 本类函数数已顶格 40，
-     * 不能在此展开任何逻辑。
-     *
-     * ⚠️ 认证**之前**的校验与备料（`prepareForVaults`）**不经本类**：它由
-     * `BiometricEnrollController` 直接注入 [LocalUnlockEnrollment] 调用。
-     * 这样接口只多这一个方法，`VaultRepositoryImpl` 的函数数才能守住 40。
-     */
-    override suspend fun commitLocalUnlockEnrollForVaults(
-        prepared: List<LocalUnlockPreparedEnrollment>,
-        cipher: Cipher,
-    ): Map<String, LocalUnlockEnrollOutcome> =
-        localUnlockEnrollment.commitForVaults(prepared, cipher)
-
-    override suspend fun completeLocalUnlockKdbx(
-        vaultId: String,
-        cipher: Cipher,
-    ): KdbxUnlockOutcome = withContext(Dispatchers.IO) {
-        val payload = credentials.getString(localUnlockStorageKey(vaultId))
-            ?: return@withContext KdbxUnlockOutcome.Unavailable("未启用本地快速解锁")
-
-        val plaintext = runCatching { localUnlockKeyStore.unwrap(cipher, payload) }
-            .getOrElse { error ->
-                // payload 都解不开 ⇒ KEK 已换（指纹变更）/ 数据损坏 ⇒ 回退主密码，勿删登记
-                return@withContext KdbxUnlockOutcome.Unavailable(
-                    error.message ?: "本地解锁凭据不可用",
-                )
-            }
-
-        val decoded = KdbxUnlockPayload.decode(plaintext)
-        plaintext.fill(0)
+        val decoded = KdbxUnlockPayload.decode(opened.payload)
+        opened.payload.fill(0)
         val credential = when (decoded) {
             is KdbxUnlockPayload.DecodeResult.Ok -> decoded
             is KdbxUnlockPayload.DecodeResult.Malformed ->
-                return@withContext KdbxUnlockOutcome.Unavailable(decoded.detail)
+                return RoomUnlockOutcome.Unavailable(decoded.detail)
         }
-
-        val row = vaultDao.get(vaultId)
-            ?: return@withContext KdbxUnlockOutcome.Unavailable("本地不存在该库")
-        // 来源解析失败（不认识这个 origin）⇒ 如实报"不可用"，让 UI 回退到主密码。
-        val source = kdbxFileSources.fileSourceFor(row.origin)
-            ?: return@withContext KdbxUnlockOutcome.Unavailable("这个库还没有可用的文件来源")
+        val source = kdbxFileSources.fileSourceFor(originUri)
+            ?: return RoomUnlockOutcome.Unavailable("这个库还没有可用的文件来源")
         val result = try {
             Kdbx.unlock(
                 vaultId = vaultId,
@@ -596,140 +596,23 @@ class VaultRepositoryImpl @Inject constructor(
                 keyFileBytes = credential.keyFileBytes,
             )
         } finally {
-            // 解出的 keyfile 字节用完即擦：与 `buildFullKey` 的取向一致
-            // （不留下额外的明文副本，减少可被内存转储捞到的窗口）。
+            // 解出的 keyfile 字节用完即擦（减少内存转储可捞到的明文窗口）。
             credential.keyFileBytes?.fill(0)
         }
-        result.fold(
+        return result.fold(
             onSuccess = {
                 sessions.clearViewLock(vaultId)
                 kdbxSessions.bump()
-                KdbxUnlockOutcome.Opened
+                RoomUnlockOutcome.Opened
             },
             onFailure = { error ->
-                // 凭据类失败 = 包裹的主密码已过时（用户改过密码）⇒ 可自愈，别删登记。
-                // 其余（文件丢了等）与快速解锁无关，按 Unavailable 让 UI 回退主密码提示。
                 when ((error as? KdbxFailure)?.error) {
-                    is KdbxOpenError.InvalidCredentials -> KdbxUnlockOutcome.StaleCredentials
-                    else -> KdbxUnlockOutcome.Unavailable(error.message ?: "无法打开该库")
+                    is KdbxOpenError.InvalidCredentials -> RoomUnlockOutcome.StaleCredentials
+                    else -> RoomUnlockOutcome.Unavailable(error.message ?: "无法打开该库")
                 }
             },
         )
     }
-
-    // ---- 应用内 PIN 解锁（定位：解锁便利，**不是**找回手段）----
-    //
-    // 与快速解锁的关系：**两条独立的解锁路径，包裹同一份明文**。
-    // 快速解锁的保护器是 Keystore KEK（每次需系统认证）；PIN 的保护器是
-    // PIN 派生密钥 + SecureCredentialStore 的硬件外层密钥（不需要系统认证）。
-    // 所以两者各有自己的开关与信封，互不影响（关掉一个不该顺手关掉另一个）。
-
-    // 落盘状态与「打开信封」都在 [PinUnlockStore]（那边**不认识库类型**）；
-    // 这里只负责**跟库对话**：取要包裹的明文、以及解开之后怎么开库。
-
-    override fun pinUnlockAvailable(vaultId: String): Flow<Boolean> =
-        pinUnlockStore.available(vaultId)
-
-    override suspend fun completePinUnlock(vaultId: String, pin: String): PinUnlockOutcome =
-        withContext(Dispatchers.IO) {
-            val open = pinUnlockStore.open(vaultId, pin)
-            if (open !is PinOpen.Opened) {
-                return@withContext open.toFailureOutcome()
-            }
-            val opened = runCatching {
-                sessions.unlock(vaultId, SymmetricCryptoKey.fromFullKey(open.payload))
-            }
-            // 明文用完即擦：无论成功与否都要走这一步
-            open.payload.fill(0)
-            if (opened.isFailure) {
-                return@withContext PinUnlockOutcome.Unavailable(
-                    opened.exceptionOrNull()?.message ?: "PIN 解锁失败",
-                )
-            }
-            // 与 completeLocalUnlock 同款：进程重启后走本地解锁也要能预挂 Bearer
-            authRepository.registerServer(vaultId)
-            // 成功了才清失败计数（失败计数由 PinUnlockStore 自己维护）
-            pinUnlockStore.clearFailures(vaultId)
-            PinUnlockOutcome.Opened
-        }
-
-    override suspend fun completePinUnlockKdbx(vaultId: String, pin: String): PinUnlockOutcome =
-        withContext(Dispatchers.IO) {
-            val open = pinUnlockStore.open(vaultId, pin)
-            if (open !is PinOpen.Opened) {
-                return@withContext open.toFailureOutcome()
-            }
-            val decoded = KdbxUnlockPayload.decode(open.payload)
-            open.payload.fill(0)
-            val credential = when (decoded) {
-                is KdbxUnlockPayload.DecodeResult.Ok -> decoded
-                is KdbxUnlockPayload.DecodeResult.Malformed ->
-                    return@withContext PinUnlockOutcome.Unavailable(decoded.detail)
-            }
-
-            val row = vaultDao.get(vaultId)
-                ?: return@withContext PinUnlockOutcome.Unavailable("本地不存在该库")
-            val source = kdbxFileSources.fileSourceFor(row.origin)
-                ?: return@withContext PinUnlockOutcome.Unavailable("这个库还没有可用的文件来源")
-            val result = try {
-                Kdbx.unlock(
-                    vaultId = vaultId,
-                    source = source,
-                    password = credential.masterPassword,
-                    // keyfile 字节直接喂进去，**不落临时文件**（见 `Kdbx.unlock` 的 KDoc）。
-                    keyFileBytes = credential.keyFileBytes,
-                )
-            } finally {
-                credential.keyFileBytes?.fill(0)
-            }
-            result.fold(
-                onSuccess = {
-                    sessions.clearViewLock(vaultId)
-                    kdbxSessions.bump()
-                    pinUnlockStore.clearFailures(vaultId)
-                    PinUnlockOutcome.Opened
-                },
-                onFailure = { error ->
-                    when ((error as? KdbxFailure)?.error) {
-                        // PIN **没错**，是包裹的凭据开不了库（主密码在别处被改过）
-                        // ⇒ 不计失败次数：用户不该为「我没输错」被锁在门外。
-                        is KdbxOpenError.InvalidCredentials -> PinUnlockOutcome.StaleCredentials
-                        else -> PinUnlockOutcome.Unavailable(error.message ?: "无法打开该库")
-                    }
-                },
-            )
-        }
-
-    override suspend fun disablePin(vaultId: String) {
-        pinUnlockStore.disable(vaultId)
-    }
-
-    // ---- 「一个 PIN 打开多个库」的配齐流程（2026-09-16）----
-    //
-    // 为什么只能"一次配齐"、不能"设一次就自动通用"：两种库包进信封的东西不同
-    // ——Bitwarden 包会话密钥（在内存里），KDBX 包「主密码 + keyfile」（**不在**会话里）。
-    // 所以 KDBX 的主密码早晚要被收集一次，最省事的时机就是设置 PIN 时。
-    // 详见 domain 里 [VaultRepository.enrollPinForVaults] 的 KDoc。
-
-    override suspend fun pinCandidateVaultIds(): List<String> = pinEnrollment.candidateVaultIds()
-
-    /**
-     * 把同一个 PIN 配到**用户勾选的**那些库上。
-     *
-     * 本方法是**纯委托**：编排（逐库分流 + KDBX 先校验后包裹）都在
-     * [PinEnrollmentCoordinator]，实际的落盘动作在 [PinEnrollment]。
-     * 直接原因是 detekt `TooManyFunctions`（本类曾到 43，上限 40），
-     * 但更实际的理由是职责：「库生命周期」与「PIN 组信封」本就是两件事。
-     *
-     * ⚠️ **只处理 [vaultIds]**，绝不自己遍历全表：静默给用户没选的库设 PIN 属于越权改配置。
-     * ⚠️ **逐库独立成败，不整体回滚**（部分成功是真实状态）。
-     */
-    override suspend fun enrollPinForVaults(
-        vaultIds: List<String>,
-        pin: String,
-        passwordOf: suspend (vaultId: String) -> String?,
-    ): Map<String, PinEnrollOutcome> =
-        pinEnrollment.enrollForVaults(vaultIds, pin, passwordOf)
 
     override suspend fun syncVault(vaultId: String): VaultSyncReport {
         val row = vaultDao.get(vaultId)
@@ -858,14 +741,6 @@ class VaultRepositoryImpl @Inject constructor(
     private fun deviceName(): String =
         "${Build.MANUFACTURER} ${Build.MODEL}".trim().ifBlank { DEFAULT_DEVICE_NAME }
 
-    private fun normalizeServer(server: String): String {
-        val trimmed = server.trim().trimEnd('/')
-        require(trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
-            "服务器地址需以 http(s):// 开头"
-        }
-        return trimmed
-    }
-
     private companion object {
         const val DISPLAY_NAME_BITWARDEN = "Bitwarden"
         const val DEFAULT_DISPLAY_NAME_KDBX = "KeePass 数据库"
@@ -878,6 +753,22 @@ class VaultRepositoryImpl @Inject constructor(
 
 /** 2FA 提交参数（provider + 验证码）。 */
 private data class TwoFactorAttempt(val provider: Int, val code: String)
+
+/**
+ * 服务器地址规范化（trim + 去尾部 `/` + 校验 http(s) 前缀）。
+ *
+ * ⚠️ 文件级纯函数（原类内 private，2026-09-29 房子化时移出）：类内函数数卡在
+ * detekt `TooManyFunctions` 40 上限，纯函数放文件作用域语义更诚实（同
+ * [classifyKdbxError] / [buildFullKey] 的先例）。同类 `deviceName` 仍留在类内
+ * （读 `Build` 常量，与类语境耦合更深，暂不动）。
+ */
+private fun normalizeServer(server: String): String {
+    val trimmed = server.trim().trimEnd('/')
+    require(trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+        "服务器地址需以 http(s):// 开头"
+    }
+    return trimmed
+}
 
 /*
  * ── 下面两个是**文件级**纯函数 ─────────────────────────────────────────────

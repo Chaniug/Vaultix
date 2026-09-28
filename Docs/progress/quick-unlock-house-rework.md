@@ -4,7 +4,9 @@
 > 根因与证据：[`Docs/progress/audit/bitwarden-kdbx-sync-audit.md`](audit/bitwarden-kdbx-sync-audit.md)（下称「报告」）。
 > **论证一律看定稿，不在会话里重新论证。**
 >
-> 状态：⏳ 未开工（2026-09-28 定稿后成单）
+> 状态：🚧 施工中（批次 1 ✅ 2026-09-29 收工，门禁三关全绿；批次 2-5 未动。
+> **接力入口：[`house-rework-batch1-handoff.md`](house-rework-batch1-handoff.md)**——已完成刀序、
+> 新契约速查、遗留清单、批次 2 开工点都在那份里，本单不再复述细节。）
 >
 > 门禁纪律（每批次收尾必做，详见 `conventions/8.6-工程质量.md`）：**三关分开单跑**
 > （detekt → compile → test，连跑会触发 daemon 环境崩）；**UP-TO-DATE ≠ 有效门禁**
