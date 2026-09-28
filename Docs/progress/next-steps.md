@@ -1,6 +1,22 @@
 # 下一步任务清单
 
-> ## 🏠 【2026-09-29 夜】快速解锁「房子化」批次 2 收工 —— 动作表重排 + 重登记向导 + 扇出门禁
+> ## 🏠 【2026-09-29 深夜】快速解锁「房子化」批次 3 收工 —— 设置页简化「删五类」
+>
+> **接力文档（下一会话从这里进，自包含）**：[`house-rework-batch3-handoff.md`](house-rework-batch3-handoff.md)
+> **施工工作单**：[`quick-unlock-house-rework.md`](quick-unlock-house-rework.md)（批次 1-3 ✅，4-5 未动）
+> **本轮**：① 删 `Partial` 三态（开关收敛为**二值** = 门锁存在性）
+> ② 删向导里每库「指纹 / PIN」角标（范围列表变纯复选框）
+> ③ 结果页成功/跳过改**计数**（「已纳入 N / 跳过 M」），**失败仍逐条列**
+> ④ 副标题改定稿 §5.1 文案（PIN 那句的两个数字由 `PIN_MIN_LENGTH` / `PIN_MAX_ATTEMPTS` 传入，不写死）
+> ⑤ **顺带解决批次 2 遗留 #1**：把 `lockState` / `locksToOpen` / `roomSealingBlocker` / `assemble`
+> 挪到文件级 `internal` 纯函数 ⇒ `QuickUnlockControllerTest` 7 条改写为 **17 条**，
+> 动作表判定终于有行为级证据。
+> 门禁：detekt / `:app:compileFullDebugKotlin` / 单测 **328 全过 0 failed** + 孤儿串门禁未超基线。
+> **下一步 = 批次 4（失效矩阵：rearm / 降级 / StaleCredentials 重包房间 / PIN 熔断全局 5 次）**
+> → 批次 5（真机验收 1-7）。
+> ⚠️ 遗留：**整条编排流程仍无自动化证据**（只有判定逻辑被钉住）⇒ 真机验收必做。
+
+> ## 🏠 【2026-09-29 夜】快速解锁「房子化」批次 2 收工 —— 动作表重排 + 重登记向导 + 扇出门禁（✅ 已被批次 3 接续）
 >
 > **接力文档（下一会话从这里进，自包含）**：[`house-rework-batch2-handoff.md`](house-rework-batch2-handoff.md)
 > **施工工作单**：[`quick-unlock-house-rework.md`](quick-unlock-house-rework.md)（批次 1-2 ✅，3-5 未动）
@@ -11,9 +27,8 @@
 > **恰 1 次且不随库数增长**）+ `LegacyQuickUnlockCleanupTest`（8 用例）。
 > 门禁：detekt / `:app:compileFullDebugKotlin` / 单测 **318 全过 0 failed**（三关分开单跑）。
 > `main` 已推送 `61ea1a3`；`rele` 未动。
-> **下一步 = 批次 3**：设置页简化「删五类」+ 副标题 + `QuickUnlockControllerTest` 改写
-> （顺带补**遗留 #1：动作表重排目前没有单测覆盖** —— 控制器硬编码 `Dispatchers.IO`，
-> 纯 JVM 下无法确定性推进）。
+> ✅ **上面的「下一步 = 批次 3」已于同日深夜完成**（含遗留 #1 的解法），见最顶部那个状态块
+> ⇒ **接力从最顶部读起，别再从这一条开工。**
 > ⚠️ 真机全链路未验（批次 5 清单 1-7；尤其「指纹一次开多库」「杀后台必须重新解锁」）。
 
 > ## 🏠 【2026-09-29 白天】快速解锁「房子化」批次 1 收工 —— 钥匙层核心落地，门禁三关全绿（✅ 已被批次 2 接续）

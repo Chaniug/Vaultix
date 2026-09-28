@@ -44,6 +44,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.vaultix.domain.PIN_MAX_ATTEMPTS
 import io.vaultix.domain.PIN_MIN_LENGTH
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.BiometricPrompter
@@ -71,28 +72,25 @@ import io.vaultix.vaultix.ui.theme.Spacing
  * （「已对 N 个库生效」），不再逐库列行；逐库勾选挪进 [ConfigureDialog]
  * （默认全勾，取消勾选是可选动作）。
  *
- * ## 开关的三种呈现（对应 [QuickUnlockController.CapabilityState]）
+ * ## 开关只有**两种**呈现（批次 3，2026-09-29 删 `Partial`）
  *
  * | 状态 | 尾部控件 | 副标题 |
  * |---|---|---|
  * | `On` | 开着的开关 | 「已对 N 个库生效」 |
- * | `Partial(n)` | **「继续」按钮**（不是开关） | 「有 n 个库未完成，点此继续」 |
  * | `Off` | 关着的开关 | 未启用（或设备不支持） |
  *
- * ⚠️ `Partial` **不允许**硬撑成"开" —— 开关说开着但有的库其实打不开，
- * 就是 #93 那种「谎报状态」；但也不能简单画成"关"（见下）。
+ * ### 为什么曾经有第三种、现在没有了
  *
- * ⚠️ 2026-09-26 修正：`Partial` **不再渲染成关着的开关，而是渲染成一个「继续」按钮**。
- * 原实现把 `Partial` 画成"关"（`checked = state is On`），于是用户看到关、点一下，
- * 预期是"打开"，实际发生的却是"进入配置向导接着配"。这个错位在真机上表现为
- * 「点了开关没打开，反而弹了个框」——注释里写清了"点 Partial = 继续"，
- * 但**注释不是 UI，用户看不到**。
+ * 旧模型是「每库各一份信封」，于是"范围内 8 个库里配好了 5 个"是一个真实存在的状态，
+ * 那时要把它画成开关的哪一档都不对：画"开"是谎报（#93 同族），画"关"又会让用户
+ * 以为点一下就能开全（实际是接着配剩下 3 个）⇒ 2026-09-26 把它画成了「继续」按钮。
  *
- * 为什么不直接用三态开关（半开）：Material 3 的 `Switch` 只有开/关两态，
- * 没有"半开"这一形态；自己画一个半开的 knob 属于自造控件，可读性与无障碍都更差。
- * 而 `Partial` 的本质压根不是"开关的位置"，是**"一个还没做完的动作"**——
- * 用一个明确写着「继续」的按钮来表达，比任何开关形态都准确，也不会让人误以为
- * 它是"当前处于关闭状态"。
+ * 房子化之后**这个状态在结构上不存在了**：开关只对应**一把全局门锁**，
+ * 开门锁 = 一次 wrap，要么成功要么不变。⇒ 三态渲染成两种控件的那段设计整体作废，
+ * 开关重新变回一个**普通的二值开关**。
+ *
+ * ⚠️ 这段历史留着不是怀旧：它解释的是"**为什么不能再按范围进度推导开关**"。
+ * 哪天有人为了"显示得更精细"又把按库进度接回来，#93 会原样复发。
  *
  * ⚠️ 两行开关**互不联动**：点一个不会顺手改另一个（各有各的信封，验收清单里单列了这一条）。
  */
@@ -160,26 +158,14 @@ internal fun QuickUnlockSettingsRows(
 }
 
 /**
- * 一个「能力」的尾部控件：**三态渲染成两种控件**。
+ * 一个「能力」的尾部控件：**就是一个普通开关**。
  *
- * - [QuickUnlockController.CapabilityState.On] / `Off` ⇒ 真正的 [Switch]（开 / 关）；
- * - [QuickUnlockController.CapabilityState.Partial] ⇒ 一个写着「继续」的按钮。
+ * ⚠️ 门禁（2026-09-26 #121 的教训，别再犯）：`checked` 必须是 `when` 分派出来的
+ * **常量**，不能写成 `capability is CapabilityState.On` —— 后者把多态状态压成二值，
+ * 类型检查 / detekt / `when` 穷尽性**全都查不出**，只在真机上表现为
+ * "点了没反应"。探针 `check_state_flattening.py` 就是守这一条的。
  *
- * ## 为什么 Partial 必须换控件
- *
- * 因为它**不是一个开关状态**。开关的两个位置（开/关）回答的是"这个功能现在生效吗"，
- * 而 `Partial` 回答的是另一个问题："这活儿干到一半，还剩几个库没配"。
- * 把它塞进开关的"关"位置，用户就会按"关 → 点一下就开"去理解它，
- * 于是得到的是"点了没开，弹了个框"的困惑。
- *
- * 换成按钮后，用户看到的是「继续」——一个动作提示，点它 = 把没配完的配完，
- * 与 [QuickUnlockController.toggleBiometric] 里 `Partial ⇒ showConfigure(...)` 的实际行为
- * 一一对应。**控件形态与行为语义对齐**，注释可以删掉，界面自己会说话。
- *
- * ## 无障碍
- *
- * 按钮用 [TextButton] 而非自绘，天然带 `Role.Button` 语义与最小触摸尺寸；
- * 开关走 [Switch] 自带语义。两者都不需要额外 `semantics` 标注。
+ * 无障碍：[Switch] 自带 `Role.Switch` 语义与最小触摸尺寸，不需要额外 `semantics`。
  */
 @Composable
 private fun CapabilityToggle(
@@ -187,26 +173,15 @@ private fun CapabilityToggle(
     enabled: Boolean,
     onToggle: () -> Unit,
 ) {
-    when (capability) {
-        is QuickUnlockController.CapabilityState.Partial -> TextButton(
-            onClick = onToggle,
-            enabled = enabled,
-        ) {
-            Text(stringResource(R.string.quick_unlock_partial_action))
-        }
-
-        is QuickUnlockController.CapabilityState.On -> Switch(
-            checked = true,
-            onCheckedChange = { onToggle() },
-            enabled = enabled,
-        )
-
-        QuickUnlockController.CapabilityState.Off -> Switch(
-            checked = false,
-            onCheckedChange = { onToggle() },
-            enabled = enabled,
-        )
+    val checked = when (capability) {
+        is QuickUnlockController.CapabilityState.On -> true
+        QuickUnlockController.CapabilityState.Off -> false
     }
+    Switch(
+        checked = checked,
+        onCheckedChange = { onToggle() },
+        enabled = enabled,
+    )
 }
 
 /**
@@ -301,7 +276,13 @@ private fun ConfigureDialog(
     }
 }
 
-/** 向导里的一行库：勾选框 + 库名 + 已配好的能力。 */
+/**
+ * 向导里的一行库 = **一个纯复选框 + 库名**（批次 3：删掉了行尾的「指纹 · PIN」标记）。
+ *
+ * ⚠️ 别再加回"这个库已配好哪些方式"的角标：房子化后门锁是**全局**的，
+ * 一个库的快速解锁状态只有一个事实（房间信封在不在），而"在不在"用户**看不见也不需要看见**
+ * —— 向导本来就默认全勾，已配好的库会被自动跳过，标出来只是把已经不存在的区分画给他看。
+ */
 @Composable
 private fun ConfigureVaultRow(row: QuickUnlockController.ConfigureRow, onToggle: () -> Unit) {
     Row(
@@ -317,11 +298,6 @@ private fun ConfigureVaultRow(row: QuickUnlockController.ConfigureRow, onToggle:
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.weight(1f),
-        )
-        Text(
-            text = readyLabel(row.biometricReady, row.pinReady),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }
@@ -362,21 +338,10 @@ private fun ConfigureHint(message: String) {
     )
 }
 
-/** 该库已配好的能力标签（都没配好时留空）。 */
-@Composable
-private fun readyLabel(biometricReady: Boolean, pinReady: Boolean): String {
-    val parts = buildList {
-        if (biometricReady) add(stringResource(R.string.quick_unlock_cap_biometric))
-        if (pinReady) add(stringResource(R.string.quick_unlock_cap_pin))
-    }
-    return parts.joinToString(separator = " · ")
-}
-
 /**
  * 指纹行的副标题（**一行汇总**，不再逐库列行）。
  *
- * ⚠️ 顺序有意义：**设备不支持**优先于其它说明（反正点不了，先说原因）；
- * `Partial` 其次（它是最需要用户行动的状态）。
+ * ⚠️ 顺序有意义：**设备不支持**优先于其它说明（反正点不了，先说原因）。
  */
 @Composable
 private fun biometricSummary(
@@ -386,9 +351,7 @@ private fun biometricSummary(
     if (!canAuthenticate) {
         return stringResource(R.string.quick_unlock_option_biometric_unsupported)
     }
-    return when (val capability = state.biometric) {
-        is QuickUnlockController.CapabilityState.Partial ->
-            stringResource(R.string.quick_unlock_partial_hint, capability.pending)
+    return when (state.biometric) {
         is QuickUnlockController.CapabilityState.On ->
             stringResource(R.string.quick_unlock_summary_on, readyCount(state, biometric = true))
         QuickUnlockController.CapabilityState.Off ->
@@ -400,16 +363,22 @@ private fun biometricSummary(
  * PIN 行的副标题。
  *
  * ⚠️ 比指纹少一个分支：PIN 不依赖系统锁屏，所以没有"设备不支持"这一态。
+ *
+ * ⚠️ 熔断次数取自 [PIN_MAX_ATTEMPTS] 而不是写死在文案里：文案里的数字
+ * 一旦与代码里的阈值分叉，用户就会被告知一个**不成立的承诺**
+ * （"输错 5 次锁定"其实 3 次就锁了 —— 谎报状态那一族）。
  */
 @Composable
 private fun pinSummary(state: QuickUnlockController.UiState): String =
-    when (val capability = state.pin) {
-        is QuickUnlockController.CapabilityState.Partial ->
-            stringResource(R.string.quick_unlock_partial_hint, capability.pending)
+    when (state.pin) {
         is QuickUnlockController.CapabilityState.On ->
             stringResource(R.string.quick_unlock_summary_on, readyCount(state, biometric = false))
         QuickUnlockController.CapabilityState.Off ->
-            stringResource(R.string.quick_unlock_option_pin_summary, PIN_MIN_LENGTH)
+            stringResource(
+                R.string.quick_unlock_option_pin_summary,
+                PIN_MIN_LENGTH,
+                PIN_MAX_ATTEMPTS,
+            )
     }
 
 /**
@@ -559,13 +528,18 @@ private fun AuthenticatingDialog() {
 }
 
 /**
- * 结果页。
+ * 结果页：**数量给结论、逐条给出路**（批次 3；定稿 §5.1）。
  *
- * 三段分开列：**成功 / 跳过 / 失败**。「跳过」不能并进失败 —— 那是用户的选择，
- * 并进去会让他以为自己操作错了；也不能省略 —— 省了就是"假成功"。
+ * - 「已纳入 N 个库」/「跳过 M 个」报**数字**（逐库列名对刚勾完 8 个库的用户是噪音）；
+ * - 「未成功」**逐条列库名 + 原因** —— 失败必须可行动，只知道"有 2 个失败了"，
+ *   用户唯一的出路就是全部重来一遍。
  *
- * ⚠️ [QuickUnlockController.Dialog.Report.scopeOnly] 时三段都是空的，必须**另给一句话**说明
- * "只更新了范围"；否则用户看到的是一个空结果页，读起来像"点坏了"。
+ * ⚠️ 「跳过」不能并进失败：那是用户的选择，并进去会让他以为自己操作错了；
+ * 也不能省略 —— 省了就是"假成功"。
+ *
+ * ⚠️ [QuickUnlockController.Dialog.Report.scopeOnly] / `lockOnly` 时两个数字都是 0，
+ * 必须**另给一句话**说明"只更新了范围 / 只开了锁"；否则用户看到的是一个空结果页，
+ * 读起来像"点坏了"。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -589,14 +563,18 @@ private fun ReportDialog(
                 if (state.lockOnly) {
                     ConfigureHint(stringResource(R.string.quick_unlock_report_lock_only))
                 }
-                ReportSection(
-                    titleRes = R.string.quick_unlock_report_succeeded,
-                    names = state.succeeded,
-                )
-                ReportSection(
-                    titleRes = R.string.quick_unlock_report_skipped,
-                    names = state.skipped,
-                )
+                // 0 不显示：空段只会把"这次其实没动库"演成"纳入了 0 个"（噪音），
+                // 那种情况已由上面的 scopeOnly / lockOnly 说明句接住。
+                if (state.enrolledCount > 0) {
+                    ReportCount(
+                        stringResource(R.string.quick_unlock_report_enrolled, state.enrolledCount),
+                    )
+                }
+                if (state.skippedCount > 0) {
+                    ReportCount(
+                        stringResource(R.string.quick_unlock_report_skipped, state.skippedCount),
+                    )
+                }
                 if (state.failed.isNotEmpty()) {
                     Text(
                         text = stringResource(R.string.quick_unlock_report_failed),
@@ -622,22 +600,16 @@ private fun ReportDialog(
     }
 }
 
-/** 结果页里的一段（成功 / 跳过）。空段不占地方。 */
+/** 结果页里的一句计数（「已纳入 N 个库」/「跳过 M 个」）。 */
 @Composable
-private fun ReportSection(titleRes: Int, names: List<String>) {
-    if (names.isEmpty()) return
+private fun ReportCount(text: String) {
     Text(
-        text = stringResource(titleRes),
+        text = text,
         style = MaterialTheme.typography.titleSmall,
         fontWeight = FontWeight.Medium,
         color = MaterialTheme.colorScheme.onSurface,
+        modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.xs),
     )
-    Text(
-        text = names.joinToString(separator = "、"),
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-    Spacer(Modifier.height(Spacing.xs))
 }
 
 /** 数字输入框（PIN 用；掩码 + 数字键盘）。 */

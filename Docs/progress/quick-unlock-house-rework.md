@@ -4,9 +4,10 @@
 > 根因与证据：[`Docs/progress/audit/bitwarden-kdbx-sync-audit.md`](audit/bitwarden-kdbx-sync-audit.md)（下称「报告」）。
 > **论证一律看定稿，不在会话里重新论证。**
 >
-> 状态：🚧 施工中（**批次 1-2 ✅ 2026-09-29 收工，门禁三关全绿；批次 3-5 未动。**
-> **接力入口：[`house-rework-batch2-handoff.md`](house-rework-batch2-handoff.md)**——批次 2 的
-> 动作表、重登记向导、新增测试、过程坑与遗留都在那份里；
+> 状态：🚧 施工中（**批次 1-3 ✅ 2026-09-29 收工，门禁三关全绿；批次 4-5 未动。**
+> **接力入口：[`house-rework-batch3-handoff.md`](house-rework-batch3-handoff.md)**——批次 3 的
+> 删五类、判定逻辑可测化、结果页与副标题改动都在那份里；
+> 批次 2（动作表 / 重登记向导）见 [`house-rework-batch2-handoff.md`](house-rework-batch2-handoff.md)；
 > 钥匙层模型速查见 [`house-rework-batch1-handoff.md`](house-rework-batch1-handoff.md)。）
 >
 > 门禁纪律（每批次收尾必做，详见 `conventions/8.6-工程质量.md`）：**三关分开单跑**
@@ -77,7 +78,7 @@
   软件包各房间 → 删旧信封；**中途失败不半新半旧**（同批生效或整体回退）；
 - 不写新旧兼容层（定稿 §8）。
 
-## 批次 3：设置页简化（定稿 §5.1 删除清单）
+## 批次 3：设置页简化（✅ 2026-09-29 深夜完成；三关全绿、单测 328 全过）
 
 - 删五类：每库「指纹/PIN」标记（范围列表变纯复选框）、Partial 态与「有 N 个库未完成」、
   三态推导（`QuickUnlockControllerTest` 7 条**改写**为两布尔 + 范围语义）、
