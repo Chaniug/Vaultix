@@ -551,11 +551,16 @@ class AutofillActivity : FragmentActivity() {
     /**
      * ★ 解锁即回填：用暂存的解析结果重建 Dataset 并回灌给系统。
      *
-     * 三种收尾（都必须 finish，否则用户被扣在一个透明 Activity 上）：
-     * - 暂存已过期 / 读不到条目 → 不回灌（`RESULT_CANCELED`），退回浏览器；
-     * - 匹配到登录条目 → 回灌**第一条**候选（用户点的是「Vaultix」那一行，
-     *   不是某条具体条目，所以取匹配度最高的那条最贴近意图）；
-     * - 未匹配 → 回灌第一条候选；一条候选都没有 → 不回灌。
+     * 收尾（都必须 finish，否则用户被扣在一个透明 Activity 上）。
+     * ⚠️ 2026-09-28 修订（B′）：**判据从"有没有回灌内容"改成"库到底解锁了没"** ——
+     * 只有「**确实仍未解锁**」才回 `RESULT_CANCELED`；其余一律回 `RESULT_OK`。
+     * 理由见下方两处 ★ 注释：非 OK 会被系统判成「认证动作没完成」并**重发解锁**，
+     * 那正是用户报的「反复要求解锁」。
+     * - 无有效暂存 + 库**已解锁** → 空 `RESULT_OK`（降级：用户再触发一次即得候选）；
+     * - 无有效暂存 + 库**仍未解锁** → `CANCELED`（用户可能只是按返回键退回来）；
+     * - 重建出候选 → `RESULT_OK` + `FillResponse`（列候选让用户挑）；
+     * - 已解锁但**重建不出候选**（`AutofillId` 失效）→ 空 `RESULT_OK`（不重发）；
+     * - 仍未解锁 → `CANCELED`。
      */
     private suspend fun deliverPendingFill() {
         if (delivered) return
@@ -566,20 +571,48 @@ class AutofillActivity : FragmentActivity() {
             // 而这条路径此前**完全没有日志** ⇒ 无法判断卡在哪一步。这些 d() 是常驻的，
             // 以后同类问题可直接靠 logcat（tag=VaultixAutofill）定位。
             //
-            // ★ 2026-09-17 补：CP 流程走到这里**是正常的**（它没有暂存，见 credentialFlow 的说明），
-            //   而且此时用户刚在主界面解锁完回来 ⇒ 必须回 `RESULT_OK`，
-            //   否则面板同样会不停重发解锁动作（与 [finishCredentialFlowUnlocked] 同因）。
-            //   ⚠️ 但要**核实**解锁真的成了：用户可能只是按返回键退回来了 ——
+            // ★ 2026-09-28 修（B′ 第一处）：**去掉 `else false`**。
+            //
+            // 原状（病灶）：
+            //     val unlockedNow = if (credentialFlow) isAnyVaultUnlocked() else false
+            // 非 CP 路（= 普通自动填充，浏览器/输入法点填充框）恒为 false ⇒ 走下面的
+            // `finish()`（不带 resultCode = `RESULT_CANCELED`）⇒ 系统判成「认证动作没完成」
+            // **不停重发**。这与 CP 路 2026-09-17 修掉的是**同一个坑**
+            // （见 [finishCredentialFlowUnlocked] 的 KDoc：实测重发 23 次）。
+            //
+            // 逻辑上这也是矛盾的：走到「无有效暂存」这一步，**恰恰说明用户刚完成了外部解锁**
+            // —— 普通路的入口是 onResume 的 `awaitingExternalUnlock` 分支（[openVaultAndFinish]
+            // 置位），用户不打开 Vaultix 解锁是不会回来的。把它当成「没解锁」等于：
+            // 用户刚解锁完，我们回一个"没解锁"，系统再弹一次解锁。
+            //
+            // ⚠️ 但**不能无条件报 OK**：用户可能只是按返回键退回来（没真解锁），
             //   那时报 OK 就是"假成功"（面板重列候选 ⇒ 还是解锁入口 ⇒ 更困惑）。
-            val unlockedNow = if (credentialFlow) isAnyVaultUnlocked() else false
+            //   ⇒ 两条路统一做**真实检查**（CP 路原本就有，普通路补上）。
+            val unlockedNow = isAnyVaultUnlocked()
             AutofillLogger.d(
                 "deliverPendingFill: 无有效暂存 → 收工（credentialFlow=$credentialFlow " +
                     "unlockedNow=$unlockedNow）",
             )
             if (unlockedNow) {
-                // ⚠️ 与指纹路径**同款收尾**：必须带上刷新后的候选，否则用户看到的是
-                //    「Vaultix 没有任何登录信息」（见 finishWithRefreshedEntries 的 KDoc）。
-                finishCredentialFlowUnlocked()
+                // ⚠️ 两条路的「正向收尾」**载体不同**，不能用同一个方法：
+                //  - CP 路：走 Credential Manager 的 `PendingIntentHandler.setBeginGetCredentialResponse`
+                //    （`finishCredentialFlowUnlocked`，@RequiresApi(34)）——**Autofill 框架用不了**。
+                //  - 普通路：走 Autofill 框架的 `RESULT_OK` + `EXTRA_AUTHENTICATION_RESULT`
+                //    （实证见 VaultixAutofillService 的 buildResponse，
+                //    以及 reference/bastion/.../AutofillAuthenticationActivity.kt:249-258）。
+                // ★ 2026-09-28：这里原本两条路都调 `finishCredentialFlowUnlocked()`，
+                //   对普通路是**错的载体**（低版本还会直接 finish()=CANCELED，等于没修）。
+                if (credentialFlow) {
+                    finishCredentialFlowUnlocked()
+                } else {
+                    // 普通 autofill：没有暂存 ⇒ 重建不出 FillResponse（模板 id 已随暂存丢失）。
+                    // 回一个**空的 `RESULT_OK`** —— 与 CP 路 L348-350 的降级同款：
+                    // 面板收起、判成"动作已完成"，**不再重发**；用户重新点一次填充即拿到候选。
+                    // ⚠️ 关键就是**不能回 CANCELED**：那会让系统判成"没完成"并重发（本次修的病灶）。
+                    AutofillLogger.d("autofill unlock → 无暂存可回灌，回空 RESULT_OK（不重发）")
+                    setResult(Activity.RESULT_OK)
+                    finish()
+                }
             } else {
                 finish()
             }
@@ -590,15 +623,35 @@ class AutofillActivity : FragmentActivity() {
         // 一次性语义：无论成功与否都清掉（同一批 AutofillId 不得二次回灌）。
         pendingFillStore.clear()
         AutofillLogger.d("deliverPendingFill: response=${response != null}")
+        // ★ 2026-09-28（B′ 第二处）：`response == null` 的两种成因，收尾必须分开。
+        //
+        // 原状是**一律回 CANCELED**，于是系统判成「认证动作没完成」⇒ **重发解锁**。
+        // 但两种成因里只有一种是"真的没成"：
+        //  ① `unlocked.isEmpty()`（库**仍是锁定**）→ 回 CANCELED 合理（解锁确实没发生）；
+        //  ② `added == 0`（库**已解锁**，只是这批字段重建不出候选）→ 回 CANCELED **是错的**：
+        //     用户明明解锁成功了，却因"没有候选"被判成"没解锁" ⇒ 再弹一次 ⇒
+        //     **这正是用户报的「匹配不到条目 + 反复解锁」的成因**（见 buildPendingResponse
+        //     L650 的既有记载：「观感就是『一直让我继续解锁』」）。
+        // ⇒ ② 要回 `RESULT_OK`：动作完成（面板收起、不重发）；用户重新触发一次即可拿到候选。
+        val unlockedNowForRebuild = isAnyVaultUnlocked()
         withContext(Dispatchers.Main) {
-            if (response == null) {
-                setResult(Activity.RESULT_CANCELED)
-            } else {
-                setResult(
+            when {
+                response != null -> setResult(
                     Activity.RESULT_OK,
                     // ⚠️ 必须回 FillResponse（列候选），不是 Dataset（直接填）—— 见函数 KDoc。
                     Intent().putExtra(AutofillManager.EXTRA_AUTHENTICATION_RESULT, response),
                 )
+
+                // ② 已解锁、但无候选：动作**完成**了，诚实地回 OK（空 payload）不重发。
+                unlockedNowForRebuild -> {
+                    AutofillLogger.d(
+                        "deliverPendingFill: 已解锁但无候选（AutofillId 可能已失效）→ 回空 RESULT_OK",
+                    )
+                    setResult(Activity.RESULT_OK)
+                }
+
+                // ① 仍未解锁：确实没成，保持 CANCELED（让用户重试或改走主密码）。
+                else -> setResult(Activity.RESULT_CANCELED)
             }
             finish()
         }
