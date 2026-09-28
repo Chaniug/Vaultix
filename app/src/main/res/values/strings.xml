@@ -389,6 +389,8 @@
     <string name="about_entry_desc">源码仓库 · 反馈渠道 · 开源许可</string>
     <string name="about_group_links">链接</string>
     <string name="about_group_license">许可</string>
+    <!-- 2026-09-28 新增：国内镜像开关从「检查更新」对话框迁到本页（持久设置不属于对话框）。 -->
+    <string name="about_group_updates">更新</string>
     <string name="about_repository_title">源码仓库</string>
     <string name="about_repository_desc">github.com/Chaniug/Vaultix</string>
     <string name="about_issues_title">问题反馈</string>
@@ -428,15 +430,19 @@
     <string name="update_check_go">前往下载</string>
     <!--
       更新对话框的更新日志区（2026-09-28）。
-      whats_new = 区块小标题；notes_empty = 该 Release 没写正文时的兜底；
-      mirror_* = 对话框内的「国内镜像加速」开关文案
-      （mirror_desc = 关闭时说明、mirror_on_desc = 开启时点名代理主机）。
+      whats_new = 区块小标题；notes_empty = 该 Release 没写正文时的兜底。
     -->
     <string name="update_check_whats_new">更新内容</string>
     <string name="update_check_notes_empty">本次发布未提供说明</string>
-    <string name="update_check_mirror_title">使用国内镜像加速下载</string>
-    <string name="update_check_mirror_desc">经第三方代理打开下载页；仅影响链接地址，检查更新仍走官方接口</string>
-    <string name="update_check_mirror_on_desc">下载页将经 %1$s 代理打开</string>
+    <!--
+      国内镜像加速（2026-09-28）。
+      ⚠️ 命名**不带** update_check_ ：它**不在检查更新对话框里**（那儿放持久化开关
+      不符合 M3 的对话框构成，见 SettingsScreen 的说明），而是「关于」二级页里的
+      一个标准设置行。mirror_on_desc = 开启时点名代理主机。
+    -->
+    <string name="update_mirror_title">使用国内镜像加速下载</string>
+    <string name="update_mirror_desc">经第三方代理打开下载页；仅影响链接地址，检查更新仍走官方接口</string>
+    <string name="update_mirror_on_desc">下载页将经 %1$s 代理打开</string>
     <string name="action_open">打开</string>
 
     <!-- 本地快速解锁（Keystore 包裹 + 生物识别/设备 PIN） -->

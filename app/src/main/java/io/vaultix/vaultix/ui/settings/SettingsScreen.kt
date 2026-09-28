@@ -62,7 +62,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -95,12 +94,11 @@ import io.vaultix.vaultix.BuildConfig
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.BiometricPrompter
 import io.vaultix.vaultix.ui.common.DialogActions
-import io.vaultix.vaultix.ui.common.DialogBackButton
+import io.vaultix.vaultix.ui.common.DialogCloseButton
 import io.vaultix.vaultix.ui.common.DialogDismissButton
 import io.vaultix.vaultix.ui.common.DialogEmptyBody
 import io.vaultix.vaultix.ui.common.DialogFootnote
 import io.vaultix.vaultix.ui.common.DialogHeader
-import io.vaultix.vaultix.ui.common.DialogSectionTitle
 import io.vaultix.vaultix.ui.common.DialogSurface
 import io.vaultix.vaultix.ui.items.DisplayOptionsSheet
 import io.vaultix.vaultix.ui.common.VaultixExpressiveTopBar
@@ -179,8 +177,6 @@ fun SettingsScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
-    // 「检查更新」对话框里的国内镜像开关（默认关；只影响「前往下载」打开的地址）。
-    val updateUseMirror by viewModel.updateUseMirror.collectAsStateWithLifecycle()
 
     var showAutoLockDialog by rememberSaveable { mutableStateOf(false) }
     var showClipboardDialog by rememberSaveable { mutableStateOf(false) }
@@ -334,11 +330,9 @@ fun SettingsScreen(
             checking = updateChecking,
             result = updateResult,
             error = updateError,
-            // ⚠️ `?: false`（而不是 `!!` 或直接传 null）：`null` = 偏好还没读出来，
-            //    此时**不该**按"已开启镜像"渲染 —— 那会让用户看到一个假的开状态。
-            //    关（false）= 用官方地址，是这里最保守、也最不意外的兜底。
-            useMirror = updateUseMirror ?: false,
-            onUseMirrorChange = viewModel::setUpdateUseMirror,
+            // ⚠️ 传取值函数（不是快照值）：`?: false` 的兜底语义 = 偏好还没读出来时
+            //    按"关闭镜像"处理 —— 拿假值当作"已开启"会让下载地址被悄悄代理。
+            isMirrorEnabled = { viewModel.updateUseMirror.value ?: false },
             onOpenRelease = { url -> SystemSettingsIntents.openUrl(context, url) },
             onDismiss = { showUpdateDialog = false },
         )
@@ -357,23 +351,30 @@ fun SettingsScreen(
  * ## 2026-09-28 改造（用户要求）
  *
  * 1. **更新日志**：`result.releaseNotes`（GitHub Release 的 GFM Markdown 原文）在一个
- *    **可滚动区**里用 Markdown 渲染器呈现。为什么必须可滚动而不是直出：release notes
+ *    **限高可滚动区**里用 Markdown 渲染器呈现。为什么必须限高而不是直出：release notes
  *    动辄几十行（分类标题 + 列表 + 链接），直出会把对话框撑爆、按钮被挤出屏幕。
- *    ⚠️ 高度用 `heightIn(max = …)` 而不是固定高度：短日志（两行）不该留一大块空白。
- * 2. **国内镜像**：底部一个开关，打开后「前往下载」打开的地址经镜像前缀代理
- *    （见 [UpdateChecker.mirrorUrl]）。默认关 —— 下载页是要去拿安装包的地方，
- *    地址被第三方代理这件事必须由用户显式选择。
+ *    ⚠️ 用 `heightIn(max = …)` 而不是固定高度：短日志（两行）不该留一大块空白。
  *
- * ## 为什么改用 [DialogSurface] 而不是 `AlertDialog`
+ * ## 🔴 2026-09-28 二改：按 M3 的对话框构成收敛（用户问「是否符合安卓开发标准」）
  *
- * 内容从"三行字"变成了"三行字 + 一块可滚动日志 + 一个开关"，`AlertDialog` 的
- * 约束（正文区不能嵌套可滚动区，否则崩溃 / 高度失控）在这里不再合适。
- * [DialogSurface] 是本项目自己的对话框外壳（0.8 屏高、内容少时自然收缩），
- * 25 处弹窗里有它自己的定位，正好接住这个"会长大的"对话框。
+ * 用户问得对 —— 第一版有**两处不符合 Material 3**：
  *
- * @param useMirror 镜像开关的当前值（由调用方把 `Boolean?` 收敛为 `false` 兜底，
- *   见调用处注释——`null`=偏好未读出时**不能**当成"已开启"）。
- * @param onUseMirrorChange 开关切换回调（写 DataStore，实时生效、跨重启保持）。
+ * 1. **对话框里放了持久化 `Switch`（国内镜像）**。M3 的对话框构成只有
+ *    「标题 + 正文 + 最多 3 个动作」，它是**为一次决定**服务的；而那个开关是**持久设置**
+ *    （写 DataStore、跨重启保持）—— 把一个设置项塞进瞬时的对话框，用户关掉对话框后
+ *    就再也找不到它了，既不合规范也不可发现。
+ *    ⇒ 已把它移到「关于」二级页，作为一个**标准设置行**（[SettingsRow] + `Switch`）。
+ *    本对话框回到"只报告结果 + 两个动作"。
+ * 2. **关闭动作写成「取消」**。这里没有任何可取消的操作（检查已经跑完了），
+ *    「取消」会被读成"取消这次检查"，但检查其实已完成。M3 要求动作文案**如实描述结果**
+ *    ⇒ 改为「关闭」([R.string.action_close])。
+ *
+ * ⚠️ **保留**更新日志在对话框内：长内容放对话框确实不是 M3 的首选（更规范的是独立页面
+ * 或底部弹层），但"更新说明随版本一起展示"是业界通行做法，且已限高 + 可滚动；
+ * 本项目**刻意不用底部弹层**（全仓库仅 1 处弹层，其余 25 处都是弹窗形态，
+ * 见 `DialogShell.kt` 的取舍），改成弹层会立刻显得"不是同一个 App"。
+ * ⇒ 这是一处**知情的偏离**，不是遗漏。
+ *
  * @param onOpenRelease 打开下载页（传入的已是**经镜像转换后**的最终地址）。
  */
 @Composable
@@ -381,12 +382,18 @@ private fun UpdateCheckDialog(
     checking: Boolean,
     result: UpdateCheckResult?,
     error: String?,
-    useMirror: Boolean,
-    onUseMirrorChange: (Boolean) -> Unit,
+    /**
+     * 「国内镜像」当前是否开启 —— 传**取值函数**而不是 `Boolean`。
+     *
+     * 开关已移出对话框（改到「关于」二级页），对话框与它不再有状态通道；
+     * 而「前往下载」**必须**尊重用户的当前偏好。传函数 = 在点击那一刻才取值，
+     * 因此即使用户刚在别处改过，也不会拿到对话框打开时的旧快照。
+     */
+    isMirrorEnabled: () -> Boolean,
     onOpenRelease: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    // 只在"确实有更新"时才展示日志区与镜像开关：已是最新时 GitHub 那段正文讲的是
+    // 只在"确实有更新"时才展示日志区：已是最新时 GitHub 那段正文讲的是
     // "这一版改了什么"，与本机无关，摆出来只会让用户以为"我该更新"
     // （见 UpdateChecker 里 releaseNotes 只在有更新时填）。
     //
@@ -397,19 +404,12 @@ private fun UpdateCheckDialog(
     //    提着对象走，**让类型系统承载这个保证**，`?.` 与警告就都不需要了。
     val updated = result?.takeIf { it.isUpdateAvailable }
 
-    DialogSurface {
-        DialogHeader(stringResource(R.string.update_check_title))
-
-        Column(
-            modifier = Modifier
-                .weight(1f, fill = false)
-                .verticalScroll(rememberScrollState()),
-        ) {
-            // ---- 版本结论 ----
-            Column(
-                modifier = Modifier.padding(horizontal = Spacing.xl),
-                verticalArrangement = Arrangement.spacedBy(Spacing.xs),
-            ) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.update_check_title)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+                // ---- 版本结论 ----
                 when {
                     checking -> Text(
                         text = stringResource(R.string.update_check_checking),
@@ -463,44 +463,44 @@ private fun UpdateCheckDialog(
                         )
                     }
                 }
-            }
 
-            // ---- 更新日志（限高、随外层一起滚）----
+                // ---- 更新日志（只在"确实有更新"时）----
+                if (updated != null) {
+                    Text(
+                        text = stringResource(R.string.update_check_whats_new),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(top = Spacing.sm),
+                    )
+                    UpdateNotesBox(notes = updated.releaseNotes)
+                }
+            }
+        },
+        confirmButton = {
+            // ⚠️ **只在"确实有更新"时**才给「前往下载」：动作必须与状态匹配。
+            //    - 已是最新 → 没有可下载的东西，摆一个「前往下载」是多余且误导的
+            //      （用户会以为有新版本没装）；此时只剩「关闭」一个动作；
+            //    - 检查中 → 不给按钮（点了也只是等待）；
+            //    - 检查失败 / 无法确定 → 同上，不诱导用户去下载。
+            //    （M3：对话框动作应如实反映当前状态下**可做**的事。）
             if (updated != null) {
-                DialogSectionTitle(stringResource(R.string.update_check_whats_new))
-                UpdateNotesBox(notes = updated.releaseNotes)
-            }
-
-            // ---- 国内镜像开关（只在"可下载"时有意义）----
-            // 放在**同一滚动列内**、日志之后：日志长时它会随内容滚到底部出现；
-            // 日志短时它紧跟在下方 —— 不需要为它单独占一行固定区。
-            // ⚠️ 不能把它移出这个 Column 放到 DialogSurface 直下：那样在日志较长时，
-            //    开关会永远压在日志块下方而挤掉日志的可视高度（两处争同一块垂直空间）。
-            if (updated != null) {
-                UpdateMirrorToggle(
-                    useMirror = useMirror,
-                    onUseMirrorChange = onUseMirrorChange,
-                )
-            }
-        }
-
-        DialogActions {
-            // 检查中不给按钮（点了也只是等待）；有结论时「前往下载」直达发布页。
-            if (!checking) {
                 TextButton(
                     onClick = {
-                        val raw = result?.releaseUrl ?: UpdateChecker.RELEASES_PAGE_URL
-                        // ⚠️ 在**点击那一刻**才做镜像转换：开关可以在对话框开着时被切换，
-                        //    若在上面就转换好、把结果存进 `result`，切换开关后按钮会仍指向旧地址。
-                        onOpenRelease(UpdateChecker.mirrorUrl(raw, useMirror))
+                        // ⚠️ 镜像开关已移出对话框（见本函数 KDoc）：点击那一刻才读**当前**偏好，
+                        //    而不是拿对话框打开时的快照 —— 开关是持久设置，随时可能被改。
+                        onOpenRelease(
+                            UpdateChecker.mirrorUrl(updated.releaseUrl, isMirrorEnabled()),
+                        )
                     },
                 ) {
                     Text(stringResource(R.string.update_check_go))
                 }
             }
-            DialogDismissButton(onClick = onDismiss)
-        }
-    }
+        },
+        // ⚠️ 用「关闭」而不是「取消」：这里没有可取消的操作（检查已跑完），
+        //    「取消」会被读成"取消这次检查"。M3 要求动作文案如实描述结果。
+        dismissButton = { DialogCloseButton(onClick = onDismiss) },
+    )
 }
 
 /**
@@ -514,13 +514,16 @@ private fun UpdateCheckDialog(
  * 2. **视觉边界**：日志是"引用来的内容"，与 App 自己的文案不是一回事。给它一层
  *    `surfaceContainerHighest` 底色 + 圆角，用户一眼就知道"这块是 GitHub 上的原文"。
  *
- * ## ⚠️ 这里**刻意不给** `verticalScroll`
+ * ## ⚠️ 这里**必须自带** `verticalScroll`（与上一版相反，2026-09-28 改回）
  *
- * 本块位于对话框那条**已经可滚动**的外层 `Column` 之内。Compose 里同方向嵌套
- * `verticalScroll` 会在测量阶段抛 `IllegalStateException`（"Vertically scrollable
- * component was measured with an infinity maximum height"）。因此日志超过
- * [UPDATE_NOTES_MAX_HEIGHT] 的部分由**外层**滚动接住 —— 用户体验上是一致的
- * （手指滑动照样能看全），只是滚动的是整块正文而不是日志自己。
+ * 本块现在位于 `AlertDialog` 的 `text` 槽里，而**该槽自身不滚动**。
+ * 于是外壳按内容收缩、日志超长则由**本块自己**滚 —— 这正是"卡片大小"的由来：
+ * 短日志（两行）时整块只有两行高，长日志时到 [UPDATE_NOTES_MAX_HEIGHT] 封顶后内部滚。
+ *
+ * ⚠️ 上一版我曾**去掉**这里的 `verticalScroll`，理由是"外层已经在滚、同方向嵌套会崩"。
+ * 那个顾虑本身没错，但外层滚动是**我自己加的**（当时用了 `DialogSurface` 且让其正文滚动）
+ * —— 是自造约束，不是 `AlertDialog` 的限制。改用 `AlertDialog` 后外层不再滚，
+ * 内层滚动既安全又必需。（教训：把"我这么做所以不能那样"写成了"那个控件不能这样"。）
  *
  * ## 为什么正文直接用 `Markdown(content)` 而不传自定义 colors/typography
  *
@@ -539,18 +542,23 @@ private fun UpdateNotesBox(notes: String?) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = Spacing.xl, vertical = Spacing.sm)
+            // ⚠️ 不加 horizontal padding：外层 `AlertDialog` 的 text 槽已有自己的内边距，
+            //    再叠一个 Spacing.xl 会把日志区挤得比正文窄一截（观感像缩进错了）。
+            //    这个 padding 是上一版配 `DialogSurface` 时加的，随外壳更换一并去掉。
             .background(
                 color = MaterialTheme.colorScheme.surfaceContainerHighest,
                 shape = RoundedCornerShape(12.dp),
             )
+            // ⚠️ 顺序：先 `heightIn(max)` 给上界，再 `verticalScroll` —— 反过来的话
+            //    滚动容器会拿到无界高度约束，measure 阶段直接抛 IllegalStateException。
             .heightIn(max = UPDATE_NOTES_MAX_HEIGHT)
+            .verticalScroll(rememberScrollState())
             .padding(Spacing.md),
     ) {
         if (hasNotes) {
             // ⚠️ **必须显式传 `modifier`**：库的默认值是 `Modifier.fillMaxSize()`，
-            //    在外层 `heightIn(max = 240.dp)` 的约束下它会撑满到 240dp —— 结果是
-            //    两行日志也占一整块 240dp 高的底色，看起来像"渲染出一大块空白"。
+            //    在上面的 `heightIn(max)` 约束下它会撑满到上界 —— 结果是
+            //    两行日志也占一整块底色，看起来像"渲染出一大块空白"。
             //    传 `fillMaxWidth()` 让它按内容高度收缩，`heightIn(max)` 只在上界兜底。
             Markdown(content = notes.orEmpty(), modifier = Modifier.fillMaxWidth())
         } else {
@@ -566,57 +574,13 @@ private fun UpdateNotesBox(notes: String?) {
 /**
  * 更新日志滚动区的高度上界。
  *
- * 取值理由：对话框整体是 0.8 屏高（[DialogSurface] 的 `DIALOG_HEIGHT_RATIO`），
- * 减去标题 / 版本结论 / 开关 / 按钮，留给日志的合理空间约 240dp —— 够看十来行，
- * 又不会把上面的"发现新版本 x.y.z"顶出视野（**那句才是主信息**，日志是补充）。
- * 超过就走内部滚动。
+ * 取值理由：对话框已改成**按内容收缩的 `AlertDialog`**（不再是 0.8 屏高的面板），
+ * 所以这个上界不再是"填满面板剩下的空"，而是**限制卡片不要长成整屏**：
+ * 版本结论 + 标题 + 按钮约占 200dp，日志再给 240dp ⇒ 最长约 440dp，
+ * 约三分之一屏 —— 够看十来行，又不至于把"发现新版本 x.y.z"（**主信息**）挤出视野。
+ * 超过就走日志区内部滚动。
  */
 private val UPDATE_NOTES_MAX_HEIGHT = 240.dp
-
-/**
- * 「国内镜像加速下载」开关行。
- *
- * 放在更新日志下方的**对话框内**，而不是设置页的某个组里：它的作用域是
- * 「我这次下载」（用户对镜像是"用一次算一次"的心态），放在设置页会让它看起来像
- * 一个常驻的系统级设置，与它实际只影响"打开下载页的地址"这件事不符。
- *
- * ⚠️ 开关状态**持久化**（DataStore），不是对话框内的临时 remembered 状态 ——
- * 用户开了镜像就是想一直用，每次检查更新都重新打开一遍会很烦。
- * 见 [io.vaultix.datastore.VaultixPreferences.setUpdateUseMirror]。
- */
-@Composable
-private fun UpdateMirrorToggle(
-    useMirror: Boolean,
-    onUseMirrorChange: (Boolean) -> Unit,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = Spacing.xl, vertical = Spacing.sm),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = stringResource(R.string.update_check_mirror_title),
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            Text(
-                text = if (useMirror) {
-                    stringResource(R.string.update_check_mirror_on_desc, UpdateChecker.mirrorHost())
-                } else {
-                    stringResource(R.string.update_check_mirror_desc)
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        Spacer(Modifier.width(Spacing.md))
-        // ⚠️ 这里是**普通** `Switch` 而不是 `SettingsSwitch(Boolean?)`：镜像开关的
-        //    值由调用方已经收敛成非空 `Boolean`（null 走 false 兜底），不存在
-        //    "还没读出来"的第三态，也就不需要那个占位逻辑。
-        Switch(checked = useMirror, onCheckedChange = onUseMirrorChange)
-    }
-}
 
 /**
  * 检查更新对话框里的「发布于 …」一行。

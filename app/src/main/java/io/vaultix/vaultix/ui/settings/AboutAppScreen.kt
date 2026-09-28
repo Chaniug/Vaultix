@@ -16,6 +16,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.History
@@ -36,9 +37,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.theme.Spacing
 import io.vaultix.vaultix.util.SystemSettingsIntents
+import io.vaultix.vaultix.util.UpdateChecker
 
 /**
  * 「关于」二级页（设置首页「关于 → 关于 Vaultix」进入）。
@@ -51,9 +55,10 @@ import io.vaultix.vaultix.util.SystemSettingsIntents
  *
  * ## 与其他页面的关系
  *
- * - **版本与更新**不在本页：它留在设置首页的「版本」行上（点击即检查更新），
+ * - **「检查更新」动作**不在本页：它留在设置首页的「版本」行上（点击即检查更新），
  *   因为那是**高频动作**——用户找它时不会想到要先进"关于"。
- *   但「更新日志」在本页给了一个入口（查看历史发布说明，低频、需要跳 GitHub）。
+ * - 但**「更新」相关的静态内容在本页**：「更新日志」入口 + **国内镜像开关**
+ *   （2026-09-28 从检查更新对话框迁入 —— 它是持久设置，不属于"为一次决定服务"的对话框）。
  * - 结构照抄 `PermissionsScreen` / `AutofillSettingsScreen`：
  *   `Scaffold + TopAppBar + 分组卡片`，不另起一套规格（约定 8.4）。
  *
@@ -78,13 +83,24 @@ import io.vaultix.vaultix.util.SystemSettingsIntents
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AboutAppScreen(onBack: () -> Unit) {
+fun AboutAppScreen(
+    onBack: () -> Unit,
+    /**
+     * 「国内镜像加速」开关要用（2026-09-28 从检查更新对话框迁入）。
+     *
+     * 复用 [SettingsViewModel] 而不是另起一个 VM：镜像偏好本来就归设置模块管，
+     * 再来一个 VM 只会多一份"谁写这个键"的账（本页是**唯一**的镜像开关入口）。
+     */
+    viewModel: SettingsViewModel = hiltViewModel(),
+) {
     val context = LocalContext.current
     val repositoryUrl = stringResource(R.string.about_github_url)
     val issuesUrl = stringResource(R.string.about_issues_url)
     val releasesUrl = UPDATE_CHECKER_RELEASES_URL
     // 开源许可对话框（2026-09-28 从设置首页迁入，见上）。
     var showLicense by rememberSaveable { mutableStateOf(false) }
+    // 国内镜像开关（可空：null = 偏好还没读出来，见 SettingsSwitch 的说明）。
+    val useMirror by viewModel.updateUseMirror.collectAsStateWithLifecycle()
 
     Scaffold(
         topBar = {
@@ -140,6 +156,34 @@ fun AboutAppScreen(onBack: () -> Unit) {
                     subtitle = stringResource(R.string.about_license_desc),
                     // ★ 2026-09-28：由"外跳仓库"改为"就地弹许可正文"（理由见文件头）。
                     onClick = { showLicense = true },
+                )
+            }
+
+            // ---- 更新（2026-09-28 从「检查更新」对话框迁入）----
+            //
+            // ⚠️ 为什么放在**这里**而不是原来的对话框里：它是一条**持久设置**
+            //    （写 DataStore、跨重启保持），而 M3 的对话框是**为一次决定**服务的
+            //    （构成只有 标题 + 正文 + 最多 3 个动作）。把设置项塞进瞬时对话框，
+            //    用户关掉后就再也找不到它 —— 既不符合规范，也谈不上可发现。
+            //    放在「关于」页与「更新日志」相邻，语义上也正好归位。
+            SettingsGroupTitle(stringResource(R.string.about_group_updates))
+            SettingsGroupCard {
+                SettingsRow(
+                    icon = { Icon(Icons.Filled.CloudDownload, contentDescription = null) },
+                    title = stringResource(R.string.update_mirror_title),
+                    // 副标题随开关变化：开启时**点名代理主机** —— 下载页是去拿安装包的地方，
+                    // 只说"已加速"而不说是谁在代理，对密码管理器来说太含糊。
+                    subtitle = if (useMirror == true) {
+                        stringResource(R.string.update_mirror_on_desc, UpdateChecker.mirrorHost())
+                    } else {
+                        stringResource(R.string.update_mirror_desc)
+                    },
+                    trailing = {
+                        SettingsSwitch(
+                            value = useMirror,
+                            onCheckedChange = viewModel::setUpdateUseMirror,
+                        )
+                    },
                 )
             }
 

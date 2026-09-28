@@ -165,6 +165,29 @@ fun DialogBackButton(onClick: () -> Unit) {
 }
 
 /**
+ * 次级动作按钮（「关闭」）。
+ *
+ * ## 为什么它必须与 [DialogDismissButton]（「取消」）分开
+ *
+ * 两者语义不同，混用会让用户**误判这个对话框在做什么**：
+ * - 「取消」= **打算做的事不做了**（有未完成的动作会被放弃，例如"取消这次检查"）；
+ * - 「关闭」= **只是把看过的内容收起来**（事情已经做完，没有任何东西可取消）。
+ *
+ * 对一个只**报告结果**的对话框（如检查更新：检查已经跑完、结果已显示），
+ * 写「取消」是错的 —— 用户会以为点了它就能"取消检查"，可检查并没有在跑。
+ * Material 3 对动作文案的要求是**如实描述发生的后果**，故这种场景一律用「关闭」。
+ *
+ * ⚠️ 2026-09-28 新增（用户问「是否符合安卓开发标准」时自查出来的既有瑕疵：
+ * 检查更新对话框原本用 [DialogDismissButton]，文案是「取消」）。
+ */
+@Composable
+fun DialogCloseButton(onClick: () -> Unit) {
+    TextButton(onClick = onClick) {
+        Text(stringResource(R.string.action_close))
+    }
+}
+
+/**
  * 对话框内的分组小标题（`labelLarge` + primary，对齐 `DisplayOptionsSheet`）。
  *
  * @param icon 可选的**图标锚点**。两段并列时（如「指纹 / 应用内 PIN」），
