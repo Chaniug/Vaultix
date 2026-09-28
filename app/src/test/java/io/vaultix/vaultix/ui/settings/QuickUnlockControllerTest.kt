@@ -33,6 +33,7 @@ class QuickUnlockControllerTest {
     private fun row(
         id: String,
         inScope: Boolean = true,
+        roomReady: Boolean = false,
         biometricReady: Boolean = false,
         pinReady: Boolean = false,
     ) = QuickUnlockController.VaultUi(
@@ -40,6 +41,7 @@ class QuickUnlockControllerTest {
         name = id,
         kind = VaultKind.BITWARDEN,
         inScope = inScope,
+        roomReady = roomReady,
         biometricReady = biometricReady,
         pinReady = pinReady,
     )

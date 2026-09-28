@@ -22,6 +22,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Password
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Upgrade
 import androidx.compose.material3.BasicAlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -99,10 +100,26 @@ import io.vaultix.vaultix.ui.theme.Spacing
 internal fun QuickUnlockSettingsRows(
     state: QuickUnlockController.UiState,
     canAuthenticate: Boolean,
+    /**
+     * 设备上是否还残留旧「每库信封」模型的垃圾数据。
+     *
+     * `true` ⇒ 顶部多一行「需重新登记」的提示：老用户的旧信封**无法自动升级**
+     * （定稿 §8 不写兼容层），不给这句话，用户看到的就是"升级之后快速解锁莫名不能用了"。
+     */
+    legacyRemains: Boolean,
     onToggleBiometric: () -> Unit,
     onTogglePin: () -> Unit,
     onManage: () -> Unit,
 ) {
+    if (legacyRemains) {
+        SettingsRow(
+            icon = { Icon(Icons.Filled.Upgrade, contentDescription = null) },
+            title = stringResource(R.string.quick_unlock_legacy_title),
+            subtitle = stringResource(R.string.quick_unlock_legacy_desc),
+            onClick = onManage,
+        )
+        SettingsDivider()
+    }
     SettingsRow(
         icon = { Icon(Icons.Filled.Fingerprint, contentDescription = null) },
         title = stringResource(R.string.quick_unlock_section_biometric),
@@ -568,6 +585,9 @@ private fun ReportDialog(
             ) {
                 if (state.scopeOnly) {
                     ConfigureHint(stringResource(R.string.quick_unlock_report_scope_only))
+                }
+                if (state.lockOnly) {
+                    ConfigureHint(stringResource(R.string.quick_unlock_report_lock_only))
                 }
                 ReportSection(
                     titleRes = R.string.quick_unlock_report_succeeded,

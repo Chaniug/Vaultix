@@ -3,6 +3,7 @@ package io.vaultix.vaultix.ui.settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import io.vaultix.data.repository.LegacyQuickUnlockCleanup
 import io.vaultix.data.repository.LocalUnlockEnrollment
 import io.vaultix.datastore.VaultTimeout
 import io.vaultix.datastore.VaultixPreferences
@@ -54,6 +55,13 @@ class SettingsViewModel @Inject constructor(
      * （服务端 revision 仲裁 vs 条件写 + 用户拍板），见 [VaultActionsController]。
      */
     private val kdbxSyncRepository: KdbxSyncRepository,
+    /**
+     * 旧「每库信封」模型残留的检测与清理（房子化批次 2）。
+     *
+     * ⚠️ 注入到 [QuickUnlockController] 而不是在这里直接用：清理时机由**那次登记会话
+     * 的结果**决定（只有新体系真站起来才清），本 ViewModel 拿不到那个时机。
+     */
+    private val legacyQuickUnlockCleanup: LegacyQuickUnlockCleanup,
 ) : ViewModel() {
     data class UiState(
         val vaultTimeout: VaultTimeout = VaultTimeout.DEFAULT,
@@ -391,6 +399,7 @@ class SettingsViewModel @Inject constructor(
             vaultRepository = vaultRepository,
             enrollment = localUnlockEnrollment,
             preferences = preferences,
+            cleanup = legacyQuickUnlockCleanup,
             scope = viewModelScope,
         )
     }

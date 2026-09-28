@@ -532,6 +532,9 @@
     <string name="quick_unlock_configure_uncheck_warning">取消勾选会清除该库已保存的快速解锁凭据，之后需要重新输入它的主密码。</string>
     <string name="quick_unlock_configure_start">开始配置</string>
     <string name="quick_unlock_report_scope_only">已更新生效范围。勾选的库此前都已配置好，这次没有需要重新配置的库。</string>
+    <string name="quick_unlock_report_lock_only">解锁方式已开启。纳入的库没有变化，无需重新输入主密码。</string>
+    <string name="quick_unlock_legacy_title">快速解锁已升级，需重新登记一次</string>
+    <string name="quick_unlock_legacy_desc">旧版保存的解锁凭据无法自动升级。点此重新登记，登记完成后旧凭据会被清除。</string>
     <string name="pin_field_new">输入 PIN</string>
     <string name="pin_field_confirm">再次输入 PIN</string>
     <string name="action_continue">继续</string>

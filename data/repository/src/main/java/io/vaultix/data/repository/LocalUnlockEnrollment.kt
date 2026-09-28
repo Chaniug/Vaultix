@@ -191,6 +191,18 @@ class LocalUnlockEnrollment @Inject constructor(
     }
 
     /**
+     * 房钥匙是否已在内存（= 至少一把门锁在本次进程内被开过 / 解过）。
+     *
+     * 暴露给 app 层控制器**提前判断**用：封房间（[sealRoomsForVaults]）的前置就是它。
+     * 与其让用户输完一整轮 KDBX 主密码、最后才被告知「房钥匙不在内存」，
+     * 不如在问密码**之前**就知道，并给出「先解锁一次」的明确指引
+     * —— 那是「先校验后包裹」这条老纪律在编排层的延伸。
+     *
+     * ⚠️ 非 suspend：读的是内存字段，不涉及 Keystore / IO，可在 UI 线程直接问。
+     */
+    val isHouseKeyReady: Boolean get() = houseKeyStore.isUnlocked
+
+    /**
      * 落盘：把备好的明文逐库软封装成房间信封（纯软件，**不碰指纹、不收 cipher**）。
      *
      * ## 前置：房钥匙必须在内存（至少一把门锁已开）

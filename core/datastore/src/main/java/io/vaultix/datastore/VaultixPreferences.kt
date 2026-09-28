@@ -17,9 +17,12 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withContext
 import java.io.IOException
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -129,6 +132,19 @@ class VaultixPreferences @Inject constructor(
          * `true` = 用户确认过范围 ⇒ 空集就是"一个都不要"，如实呈现。
          */
         val QUICK_UNLOCK_SCOPE_CONFIRMED = booleanPreferencesKey("quick_unlock_scope_confirmed")
+
+        /**
+         * ★ **已废弃**（旧「每库信封」模型的元数据，2026-09-29 房子化批次 2 起仅用于
+         * **一次性清理**）：按库的「本地解锁已启用」标记。
+         *
+         * 保留这两个前缀**不是**为了兼容读写（旧读写代码连同 `PinUnlockStore` 等已于
+         * 批次 1 整体删除，定稿 §8 明确**不写兼容层**），而是为了**认出并删掉**老用户
+         * 设备上残留的垃圾键 —— 不枚举就永远删不干净（键里带 vaultId，无法穷举）。
+         *
+         * ⚠️ 键名**不得**再改动：改了就认不出老数据，残留变成永久垃圾。
+         */
+        const val LEGACY_LOCAL_UNLOCK_ENABLED_PREFIX = "local_unlock_enabled_"
+        const val LEGACY_PIN_UNLOCK_ENABLED_PREFIX = "pin_unlock_enabled_"
 
         val TRASH_AUTO_DELETE_DAYS = intPreferencesKey("trash_auto_delete_days")
         val THEME_MODE = stringPreferencesKey("theme_mode")
@@ -422,6 +438,40 @@ class VaultixPreferences @Inject constructor(
                 prefs[QUICK_UNLOCK_SCOPE] = vaultIds
             }
         }
+    }
+
+    // ---- 旧体系（每库信封）残留：一次性检测与清理（房子化批次 2）----
+    //
+    // 旧模型的元数据键形如 `local_unlock_enabled_<vaultId>` —— **键里带 vaultId**，
+    // 没法用固定 key 去读，只能把当前偏好表遍历一遍按前缀认领。
+    // 这对方法只服务于 `LegacyQuickUnlockCleanup`，新代码**不得**再往这两个前缀下写东西。
+
+    /**
+     * 当前偏好表里属于旧「每库信封」模型的键名（空集 = 没有残留）。
+     *
+     * ⚠️ 只读键名、不读值：判定"有没有残留"不需要知道值，少一次反序列化。
+     */
+    suspend fun legacyQuickUnlockKeys(): Set<String> = withContext(Dispatchers.IO) {
+        val snapshot = runCatching { dataStore.data.first() }.getOrNull() ?: return@withContext emptySet()
+        snapshot.asMap().keys
+            .map { it.name }
+            .filter { name ->
+                name.startsWith(LEGACY_LOCAL_UNLOCK_ENABLED_PREFIX) ||
+                    name.startsWith(LEGACY_PIN_UNLOCK_ENABLED_PREFIX)
+            }
+            .toSet()
+    }
+
+    /**
+     * 删掉 [keys] 里的旧键（幂等：本来没有也不报错）。
+     *
+     * @return 实际删掉的键数，供调用方如实记录。
+     */
+    suspend fun removeLegacyQuickUnlockKeys(keys: Set<String>): Int = withContext(Dispatchers.IO) {
+        if (keys.isEmpty()) return@withContext 0
+        val targets = keys.mapTo(mutableSetOf()) { booleanPreferencesKey(it) }
+        dataStore.edit { prefs -> targets.forEach { prefs.remove(it) } }
+        keys.size
     }
 
     /**

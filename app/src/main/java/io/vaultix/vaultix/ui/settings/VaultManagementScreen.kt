@@ -114,6 +114,7 @@ fun VaultManagementScreen(
     val default by viewModel.defaultVault.collectAsStateWithLifecycle()
     val switchable by viewModel.switchableVaults.collectAsStateWithLifecycle()
     val quickUnlockState by viewModel.quickUnlock.state.collectAsStateWithLifecycle()
+    val legacyRemains by viewModel.quickUnlock.legacyRemains.collectAsStateWithLifecycle()
     val vaultActions = viewModel.vaultActions
     val actionDialog by vaultActions.dialog.collectAsStateWithLifecycle()
     val busyVaultId by vaultActions.busyVaultId.collectAsStateWithLifecycle()
@@ -208,6 +209,7 @@ fun VaultManagementScreen(
                 QuickUnlockSettingsRows(
                     state = quickUnlockState,
                     canAuthenticate = deviceCanAuthenticate(context),
+                    legacyRemains = legacyRemains,
                     onToggleBiometric = viewModel.quickUnlock::toggleBiometric,
                     onTogglePin = viewModel.quickUnlock::togglePin,
                     onManage = viewModel.quickUnlock::manageUnlock,

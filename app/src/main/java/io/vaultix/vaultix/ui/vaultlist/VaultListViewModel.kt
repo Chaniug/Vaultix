@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import io.vaultix.data.repository.BitwardenSyncOrchestrator
+import io.vaultix.data.repository.LegacyQuickUnlockCleanup
 import io.vaultix.data.repository.LocalUnlockEnrollment
 import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.domain.KdbxSyncReport
@@ -59,6 +60,13 @@ class VaultListViewModel @Inject constructor(
      * 不合并（见 `KdbxSyncRepository` 的说明）。
      */
     private val kdbxSyncRepository: KdbxSyncRepository,
+    /**
+     * 旧「每库信封」模型残留的检测与清理（房子化批次 2）。
+     *
+     * ⚠️ 这里也要注入：横幅「启用」与设置页**共用同一个控制器**，从这个入口
+     * 登记成功时同样要清掉旧残留（否则老用户从横幅配完，垃圾仍留在设备上）。
+     */
+    private val legacyQuickUnlockCleanup: LegacyQuickUnlockCleanup,
 ) : ViewModel() {
 
     sealed interface Event {
@@ -95,6 +103,7 @@ class VaultListViewModel @Inject constructor(
             vaultRepository = vaultRepository,
             enrollment = localUnlockEnrollment,
             preferences = preferences,
+            cleanup = legacyQuickUnlockCleanup,
             scope = viewModelScope,
         )
     }
