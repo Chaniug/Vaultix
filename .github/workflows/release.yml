@@ -84,6 +84,18 @@ jobs:
 
       - name: Validate signing secrets
         shell: bash
+        # ⚠️ 必须显式注入！Secrets 不会自动进入 `run` 的环境变量 —— 少了这段，
+        #    下面的 ${!name} 恒为空 ⇒ **无论配没配都刷 4 条「未配置」假警报**。
+        #
+        # 2026-09-28 实录（v0.6.0 发布）：本步骤刷了 4 条「未配置，将生成一次性密钥」，
+        # 而紧接着的「Decode / generate keystore」打印「固定密钥解码并校验通过」——
+        # **两处结论互相矛盾**，差点让人误判发布包签名不对、进而怀疑用户装不上新版。
+        # 与 2026-09-08 在 Decode 步骤修的是**同一个坑**（那次只修了那一处，本处漏网）。
+        env:
+          SIGNING_KEYSTORE_BASE64: ${{ secrets.SIGNING_KEYSTORE_BASE64 }}
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
         run: |
           missing=0
           for name in SIGNING_KEYSTORE_BASE64 SIGNING_STORE_PASSWORD SIGNING_KEY_ALIAS SIGNING_KEY_PASSWORD; do
@@ -92,6 +104,15 @@ jobs:
               missing=1
             fi
           done
+          # ★ 补正向结论：原先 `missing` 算完就丢，步骤**只在出问题时才有输出**，
+          #   于是"一切正常"与"这一步根本没跑"在日志里长得一样 —— 读者只能去
+          #   Decode 步骤反推结论（2026-09-28 我就是这么绕了一圈）。
+          #   正向 notice 让日志自己说清楚配没配。
+          if [ "$missing" = 0 ]; then
+            echo "::notice title=signing::4 个签名 Secrets 均已配置，将使用仓库固定密钥签名。"
+          else
+            echo "::notice title=signing::存在缺失的 Secrets，本次将使用一次性密钥（不可作正式分发）。"
+          fi
 
       - name: Decode / generate keystore
         shell: bash
