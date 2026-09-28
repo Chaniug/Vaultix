@@ -1,17 +1,31 @@
 # 下一步任务清单
 
-> ## 🏠 【2026-09-29】快速解锁「房子化」批次 1 收工 —— 钥匙层核心落地，门禁三关全绿
+> ## 🏠 【2026-09-29 夜】快速解锁「房子化」批次 2 收工 —— 动作表重排 + 重登记向导 + 扇出门禁
 >
-> **接力文档（下一会话从这里进，自包含）**：[`house-rework-batch1-handoff.md`](house-rework-batch1-handoff.md)
-> **施工工作单**：[`quick-unlock-house-rework.md`](quick-unlock-house-rework.md)（批次 1 ✅，2-5 未动）
+> **接力文档（下一会话从这里进，自包含）**：[`house-rework-batch2-handoff.md`](house-rework-batch2-handoff.md)
+> **施工工作单**：[`quick-unlock-house-rework.md`](quick-unlock-house-rework.md)（批次 1-2 ✅，3-5 未动）
+> **本轮**：① 动作表重排（勾库 = 纯软件封装不碰门锁；开锁各一次 wrap；**已装门锁不重开**；
+> `pendingRooms()` 收敛单维度；顺序约束加第二层「房钥匙还得在内存」，拦在问主密码之前）
+> ② 重登记向导（新建 `LegacyQuickUnlockCleanup`，**只在本次建成房间之后**才清旧信封，
+> 失败则回滚新开的门锁）③ 新建 `LocalUnlockFanoutTest`（8 用例，钉 `completeFingerprintUnlock`
+> **恰 1 次且不随库数增长**）+ `LegacyQuickUnlockCleanupTest`（8 用例）。
+> 门禁：detekt / `:app:compileFullDebugKotlin` / 单测 **318 全过 0 failed**（三关分开单跑）。
+> `main` 已推送 `61ea1a3`；`rele` 未动。
+> **下一步 = 批次 3**：设置页简化「删五类」+ 副标题 + `QuickUnlockControllerTest` 改写
+> （顺带补**遗留 #1：动作表重排目前没有单测覆盖** —— 控制器硬编码 `Dispatchers.IO`，
+> 纯 JVM 下无法确定性推进）。
+> ⚠️ 真机全链路未验（批次 5 清单 1-7；尤其「指纹一次开多库」「杀后台必须重新解锁」）。
+
+> ## 🏠 【2026-09-29 白天】快速解锁「房子化」批次 1 收工 —— 钥匙层核心落地，门禁三关全绿（✅ 已被批次 2 接续）
+>
+> **接力文档（钥匙层模型速查，已被批次 2 接续）**：[`house-rework-batch1-handoff.md`](house-rework-batch1-handoff.md)
+> **施工工作单**：[`quick-unlock-house-rework.md`](quick-unlock-house-rework.md)（批次 1-2 ✅，3-5 未动）
 > **本轮**：两级钥匙层（门锁×2 包 1 把仅内存房钥匙 + 每库纯软件房间信封）全部落地；
 > **H1/H2 结构性消灭**；契约 17→16 方法；扇出重写为「1 次 Keystore + N 次纯软件」；
 > 新增 `HouseKeyStoreTest` 6 用例。门禁：detekt / compileFullDebugKotlin / 单测全绿（三关分开单跑）。
 > **批次 0 判别实验取消**（结构性修复已同时消灭 H1/H2，判别失去意义）。
-> **下一步 = 批次 2**：① QuickUnlockController 动作表完整重排（定稿 §5：勾库纯软件、
-> 开锁各一次 wrap、`Session.targetsFor` 收敛单维度）② 重登记向导（旧信封 + 旧 DataStore 键
-> 一次性清理，中途失败不半新半旧）③ `LocalUnlockFanoutTest`（断言 `completeFingerprintUnlock`
-> 恰 1 次、`unlockVaultFromRoom` 恰 N 次）。
+> ✅ **上面的「下一步 = 批次 2」三条已于同日夜间全部完成**（`61ea1a3`），见最顶部那个状态块
+> ⇒ **接力从最顶部读起，别再从这一条开工。**
 > ⚠️ 真机全链路未验（批次 5 清单 1-7；尤其「指纹一次开多库」「杀后台必须重新解锁」）。
 
 > ## 🏠 【2026-09-28 深夜】快速解锁「房子化」已定稿 —— 批次 0 实验待做（未动代码）

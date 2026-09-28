@@ -4,9 +4,10 @@
 > 根因与证据：[`Docs/progress/audit/bitwarden-kdbx-sync-audit.md`](audit/bitwarden-kdbx-sync-audit.md)（下称「报告」）。
 > **论证一律看定稿，不在会话里重新论证。**
 >
-> 状态：🚧 施工中（批次 1 ✅ 2026-09-29 收工，门禁三关全绿；批次 2-5 未动。
-> **接力入口：[`house-rework-batch1-handoff.md`](house-rework-batch1-handoff.md)**——已完成刀序、
-> 新契约速查、遗留清单、批次 2 开工点都在那份里，本单不再复述细节。）
+> 状态：🚧 施工中（**批次 1-2 ✅ 2026-09-29 收工，门禁三关全绿；批次 3-5 未动。**
+> **接力入口：[`house-rework-batch2-handoff.md`](house-rework-batch2-handoff.md)**——批次 2 的
+> 动作表、重登记向导、新增测试、过程坑与遗留都在那份里；
+> 钥匙层模型速查见 [`house-rework-batch1-handoff.md`](house-rework-batch1-handoff.md)。）
 >
 > 门禁纪律（每批次收尾必做，详见 `conventions/8.6-工程质量.md`）：**三关分开单跑**
 > （detekt → compile → test，连跑会触发 daemon 环境崩）；**UP-TO-DATE ≠ 有效门禁**
@@ -64,7 +65,11 @@
 - 房钥匙明文擦除验证；
 - fanout 语义 = 1 次 Keystore + N 次软件解密。
 
-## 批次 2：登记与迁移
+## 批次 2：登记与迁移（✅ 2026-09-29 夜完成，`61ea1a3`；三关全绿、单测 318 全过）
+
+> 落地细节见 [`house-rework-batch2-handoff.md`](house-rework-batch2-handoff.md)。
+> ⚠️ 已知遗留：**动作表重排没有单测覆盖**（控制器硬编码 `Dispatchers.IO`，纯 JVM 下
+> `runTest` 无法确定性推进）⇒ 随批次 3 的 `QuickUnlockControllerTest` 改写一起解决。
 
 - `QuickUnlockController` 动作表按定稿 §5 更新：勾库 = 软件封装不碰指纹；开锁 = 各一次 wrap；
   ⚠️ **房间信封只在至少一把门锁已存在时创建**（定稿 §5 顺序约束——否则房钥匙无落点，进程一死即孤儿信封）；

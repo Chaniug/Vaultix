@@ -144,7 +144,32 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 > 逐轮流水 → `.ai/SESSION-YYYY-MM-DD.md` · 坑 → `.ai/ISSUES.md`（索引，正文在 `issues/`）·
 > 性能专项 → [`Docs/progress/perf-plan.md`](../Docs/progress/perf-plan.md)。
 
-**快速解锁「房子化」批次 1 轮（2026-09-29 · 本轮，见 `.ai/SESSION-2026-09-29.md`）**
+**快速解锁「房子化」批次 2 轮（2026-09-29 夜 · 最新，见 `.ai/SESSION-2026-09-29.md`）**
+
+> 接续同日白天的批次 1：**动作表重排 + 重登记向导 + 扇出门禁三项全部完成，
+> 门禁三关实测全绿**（detekt 6s / compile 43s / 单测 **318 全过 0 failed**），`main` 已推送（`61ea1a3`）。
+
+1. ★ **动作表重排（定稿 §5）**：勾库 = **纯软件封装**（`sealRoomsForVaults`，**不碰指纹不碰门锁**）；
+   开锁 = 各**一次** wrap；**已装着的门锁不重开**（`Session.locksToOpen` 与 `methods` 分开）；
+   `pendingRooms()` 收敛为「房间信封存在性」**单维度**（房间是共享的，与方式无关）。
+2. ★ **顺序约束第二层**：房钥匙还得**在内存**（绝不落盘 ⇒ 重启即失）⇒ 新增
+   `LocalUnlockEnrollment.isHouseKeyReady`，由 `roomSealingBlocker` **拦在问主密码之前**。
+3. ★ **重登记向导**：新建 `LegacyQuickUnlockCleanup`（三个旧信封前缀 + 两个旧 DataStore 前缀，
+   **只枚举键名不解密**）；控制器**只在本次至少建成一个房间信封之后**才清、失败则**回滚新开的门锁**
+   ⇒ 「同批生效或整体回退」的"不半新半旧"落点；设置页顶部加重登记提示行。
+4. ★ **新建 `LocalUnlockFanoutTest`（8 用例）**：钉**扇出形状** —— `completeFingerprintUnlock`
+   **恰好 1 次且不随库数增长**（旧形状 N 库 = N 次 Keystore = H2 病灶）。
+   另新建 `LegacyQuickUnlockCleanupTest`（8 用例）。
+5. ⚠️ **诚实遗留（最重要的一条）**：**动作表重排没有单测覆盖** —— 控制器内部硬编码
+   `Dispatchers.IO`，纯 JVM 下 `runTest` 无法确定性推进那次线程跳转，强写会得到**间歇性红**
+   的测试。⇒ 随批次 3 的 `QuickUnlockControllerTest` 改写一起解决。
+   **动作表目前只有「三关绿」背书，没有行为级证据，真机验收必须专门走一遍。**
+6. 新坑：改完 SDK 的 `package.xml` 编译仍报 `Failed to find target with hash string 'android-37.0'`
+   ⇒ 真凶是 **Gradle daemon 里没失效的 SDK loader 缓存**（`.ai/ISSUES.md` #128）。
+
+---
+
+**快速解锁「房子化」批次 1 轮（2026-09-29 白天，见 `.ai/SESSION-2026-09-29.md`）**
 
 > 2026-09-28 决策夜定稿（两级钥匙层级）后的第一批施工：**钥匙层核心全部落地，门禁三关实测全绿**
 > （detekt / compileFullDebugKotlin / 单测，三关分开单跑）。
@@ -162,7 +187,9 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 4. ⚠️ **诚实遗留**：QuickUnlockController 只是编译级适配（批次 2 完整重排）；fanout 单测第四类
    未写；旧信封 + 旧 DataStore 键清理未做（重登记向导，批次 2）；真机全链路未验（批次 5）。
 5. **批次 0 判别实验取消**（结构性修复已同时消灭 H1/H2）。
-   **接力入口 = `Docs/progress/house-rework-batch1-handoff.md`（自包含）；下一轮 = 批次 2。**
+   ✅ **上面第 4 点的遗留（动作表 / fanout 单测 / 旧信封清理）已于同日夜间批次 2 全部补上**
+   （`61ea1a3`）。**接力入口 = `Docs/progress/house-rework-batch2-handoff.md`；
+   本文的批次 1 段保留作钥匙层模型速查（`house-rework-batch1-handoff.md`）。**
 
 ---
 

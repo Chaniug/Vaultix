@@ -9,7 +9,7 @@
 
 | 分篇 | 主题 | 条数 |
 |---|---|---|
-| [01-构建与环境](./issues/01-构建与环境.md) | 工程 / 构建 / CI / 工具链 / 环境 | 32 |
+| [01-构建与环境](./issues/01-构建与环境.md) | 工程 / 构建 / CI / 工具链 / 环境 | 33 |
 | [02-自动填充](./issues/02-自动填充.md) | 自动填充（AutofillService 链路） | 18 |
 | [03-通行密钥与凭据提供商](./issues/03-通行密钥与凭据提供商.md) | 通行密钥 / Credential Provider / 凭据回灌 | 18 |
 | [04-锁与解锁](./issues/04-锁与解锁.md) | 锁态模型 / 解锁 / 生物识别 / 密钥 | 8 |
@@ -32,7 +32,7 @@
 
 ## 编号 → 分篇
 
-### [01-构建与环境](./issues/01-构建与环境.md) — 工程 / 构建 / CI / 工具链 / 环境（32 条，缺 #3、#15、#16、#24…：#113 归 02、#114 归 02）
+### [01-构建与环境](./issues/01-构建与环境.md) — 工程 / 构建 / CI / 工具链 / 环境（33 条，缺 #3、#15、#16、#24…：#113 归 02、#114 归 02）
 
 | # | 标题 |
 |---|---|
@@ -71,6 +71,7 @@
 | 116 | 🔴 本地验证「假绿」：只编译**代码片段**、stub 签名失真 ⇒ CI 才炸出 `ViewNode.id`(Int) 被当成 `AutofillId`。纪律：验证必须覆盖**消费点**，且**新 harness 先做变异测试** |
 | 124 | ⭐ 新增探针 `check_state_flattening.py`：抓「多态状态被压成二值开关」。**连坏两版都是假绿**（① 只扫当前文件的 sealed 声明 ⇒ 真 bug 在另一个文件里，报 0 ② 正则贪婪吃到倒数第二段 `QuickUnlockController.CapabilityState` ⇒ 仍报 0）。纪律：**探针的闭环证明是"把代码还原成出 bug 的版本，看它是否恰好报那几行"**，不是"自测全绿" |
 | 125 | `check_import_packages.py` 把 `Icons.Filled.Build` 误判成 `android.os.Build`（**未修**）。⚠️ 别顺手把 `Build` 加进豁免表 —— 那会把真的 `android.os.Build` 误用一起放行 |
+| 128 | 🔴 改完 SDK 的 `package.xml`，编译仍报 `Failed to find target with hash string 'android-37.0'` ⇒ **真凶是 Gradle daemon 里没失效的 SDK loader 缓存**（写 10 分钟 `Probe.java` 证伪 sdklib，再 `gradle --stop` + 删 `.gradle`/`daemon` 30 秒解决）。纪律：**改了 daemon 外部输入后门禁仍报同一行错，第一怀疑对象是 daemon 缓存** |
 
 ### [02-自动填充](./issues/02-自动填充.md) — 自动填充（AutofillService 链路）
 
