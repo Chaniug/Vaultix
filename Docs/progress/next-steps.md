@@ -1,5 +1,91 @@
 # 下一步任务清单
 
+> ## 🔍 【2026-09-28】后台被杀后「填充频繁要求解锁 / 匹配不到条目」——**诊断完成，未动代码**
+>
+> **报告**：[`Docs/progress/audit/autofill-relock-after-kill.md`](audit/autofill-relock-after-kill.md)（自包含）
+> **用户诉求**：Bitwarden 官方 App 后台被清后填充不密集解锁；Vaultix 即使设「从不加锁」仍频繁解锁，
+> 有时匹配不到条目。**问是否应对齐 Bitwarden**。
+> **用户拍板**：先要诊断报告，不动代码。
+>
+> **结论（一句话）**：不是 bug，是**架构差异**。Vaultix 把「已解锁」等同于「密钥在内存」
+> （`VaultSessionManager.sessions` 纯内存 Map，L29），进程死亡即锁死 ⇒
+> `VaultixAutofillService.kt:198` 的 `unlocked.isEmpty()` 必然成立 ⇒ 必弹解锁。
+> **「从不加锁」= `VaultTimeout.Never`，语义只是「不因超时自动锁」，管不了进程被杀。**
+>
+> **★ 一处自我更正（重要）**：最初假设「Bitwarden 用独立 `:autofill` 进程」——**已证伪**。
+> 实测 Bitwarden 官方 `AutofillService` 注册在**主 manifest**、无独立进程
+> （DeepWiki §6.2）；本仓库 `grep android:process` 亦为空。**此路不通，勿据此改造。**
+> 真实差异在 **`isLocked` 的判据来源**：上游走 `VaultTimeoutService`（可持久化+按时间重算），
+> 本项目走内存 Map。且 **Bitwarden 自己也承认 Force stop 后填充会停**（官方 troubleshooting 页）——
+> 它靠电池优化白名单降频，**不是架构免疫**。
+>
+> **四方案（均未实施，待拍板）**：A 持久化解锁态（⚠️ 与 `8.2` 真锁=密钥清零正面冲突，
+> **不推荐**）· **A′ 修 `createdForAutofill` 豁免（⭐ 强烈推荐：纯 bug 修复、零安全取舍）** ·
+> **B 只收敛体验：进程重建后走快速解锁信封「一次指纹」继续填充（推荐）** ·
+> **C 修「匹配不到条目」：`singleActiveVault` 取到的库无匹配时降级兜底（推荐，无安全影响，可独立做）** ·
+> D 电池优化白名单引导 + 文案澄清（建议附带）。
+> **★ 关键论证**：A 的实质是「B + 一层无收益的解锁态持久化标记」⇒ **B 才是最小改动**。
+>
+> ### ★★★ 第二轮排查（2026-09-28，用户补充「**已设指纹解锁**，仍很频繁，且更密集」）
+> **症状被拆成两种不同的病 —— 之前只查了一半：**
+> | 形态 | 含义 | 真因 | 状态 |
+> |---|---|---|---|
+> | **A. 频率高** | 每次填充都要认证一次 | §2 物理事实（解锁态纯内存） | 已定位 |
+> | **B. 密集/重复** | **同一次**填充被要求解锁**好几次** | **`PendingIntent` 重发** | ★ **新发现** |
+>
+> **★ 形态 B 的实证（项目自己的日志）**：`AutofillActivity.kt:252-270` KDoc 记有
+> 荣耀 BKQ-AN00 · Edge 实测 —— `maybeBiometricUnlock: outcome=Ready × 22`（14 秒内 22 次）。
+> **成因**：系统按 PendingIntent 的 `resultCode` 判"认证动作完成没"，非 `RESULT_OK` ⇒ **重发**。
+> **⚠️ 修复只覆盖了 CP 路**（`if (credentialFlow) … else …`，L427）；
+> **普通 autofill 路缺口在 `deliverPendingFill` L574**：
+> `val unlockedNow = if (credentialFlow) isAnyVaultUnlocked() else false` ← **普通路恒 false**
+> ⇒ 走到 L584 `finish()`（= `CANCELED`）⇒ **重发**。
+> **逻辑悖论**：走到「无有效暂存」恰恰说明用户**刚完成外部解锁**，却被当作"没解锁"。
+> ✅ **修法通路已确认**：Autofill 框架的正向结果 = `RESULT_OK` + `EXTRA_AUTHENTICATION_RESULT`
+> （`reference/bastion/.../AutofillAuthenticationActivity.kt:249-258` 实证；
+> **本仓 `VaultixAutofillService.kt:593-601` 已在用同一套**）⇒ **不需要 Credential Manager API**。
+>
+> **★ 形态「匹配不到条目」的真凶 = 暂存的 `AutofillId` 失效**：
+> `PendingFillStore` 存的是**字段 id**（类注释自述；`TTL_MS=120s`）。解锁期间浏览器若**重建页面**，
+> 回灌时 id 已失效 ⇒ `AutofillActivity.kt:576`「无有效暂存 → 收工」**静默失败**
+> ⇒ 系统重列候选、判据未变 ⇒ 用户看到「没有匹配项」。
+> **且会被形态 B 的"重发"放大**（重发期间页面更可能重建）⇒ **两条症状互相喂养**。
+> **补充**：锁定时**根本不进入匹配**（`VaultixAutofillService.kt:199-231` 直接返回解锁 fallback）
+> ⇒ 用户看到的"没有匹配"**不是匹配失败，是压根没匹配过** —— 极具误导性，建议文案区分。
+>
+> ⇒ **新增方案**：**B′（修 `else false`，⭐ 最高优先，纯 bug 修复，直接命中"密集"）** ·
+> **C′（① 锁定态文案区分"未解锁"vs"无匹配" ② 回灌失败给可见反馈 ③ 暂存能否不依赖 `AutofillId`）**。
+> ⇒ **新增取证 R5–R7**（R6 尤其重要：**先问清用户走的是普通填充还是通行密钥** ——
+> 本项目有过「拿按键返回复现手势返回」连错三轮的教训）。
+
+> ### ★★ 补充发现（2026-09-28，用户追问「bitwarden 的做法好吗」后深挖）
+> **`createdForAutofill` 豁免从未生效过 —— 这是一处真 bug，不是架构差异。**
+> - 上游机制**本项目已抄**：`VaultLockManagerImpl.kt:196-204` 的 `OnAppRestart` 分支含
+>   `if (firstTimeCreation || !createdForAutofill)` ⇒ 为 autofill 拉起的进程**本应豁免锁定**
+>   （`VaultLockManager.kt:115-122` 注释称其为「通行密钥流程不该把库锁掉的结构性保障」）。
+> - **缺陷 A**：`VaultixApplication.kt:85-88` 硬编码 `isFirstCreation = true` ⇒
+>   `true || !x` 恒真 ⇒ **豁免分支永远走不到**（语义漂移：KDoc「冷启动」vs 实现「进程被创建」）。
+> - **缺陷 B**：`markCreatedForAutofill()` 时序**物理不可能** —— `Application.onCreate()`
+>   必然早于 `Activity.onCreate()`，而标记在 Activity 里置位 ⇒ **读永远早于写**。
+>   且两处注释互相矛盾（`VaultixApplication.kt:58` 说 super.onCreate **之前**，
+>   `CredentialProviderActivity.kt:88` 说**之后**）。
+> - **缺陷 C**：`AutofillActivity` **根本没调用** `markCreatedForAutofill`
+>   （全仓唯一调用点是 `CredentialProviderActivity.kt:90`）。
+> - ⇒ **影响重估**：`Never` 档 → 走 §2 物理事实（主因）；`OnAppRestart` 档 → 走 §2.5
+>   （**本该豁免却不豁免**）。**A′ 是纯 bug 修复、零安全取舍，建议提为最高优先。**
+> ⚠️ 修法要点（`autofill-relock-after-kill.md` §7.1）：**单纯改传参无解**（用户冷启动与
+> 系统拉起 autofill 在 `Application.onCreate` 时刻**都表现为"进程刚创建"**）⇒ **必须换判据来源**；
+> ⚠️ 修前必须做**闭环证明**（还原成出 bug 版本看是否恰好报那几处 —— #124 有「连坏两版假绿」教训）。
+
+>
+> ⚠️ **改动前必须先做的取证（R1–R4）**：R1「从不加锁」落盘值是否被旧迁移误读为 `OnAppRestart`
+> （`Never=-2` vs `OnAppRestart=-1`，见 `8.2` L30）· R2「匹配不到条目」是否**只在多库**时出现 ·
+> R3 弹的是主密码框还是指纹（决定 B 能否直接生效）· R4「被杀」是手动划掉还是系统自动杀。
+>
+> ⚠️ **另需澄清的边界**：「锁态单一口径」（`8.1` L39-46 / #66）说的是**判据不要自相矛盾**；
+> 本报告的「解锁态不持久」说的是**该判据的输入无法跨进程存活**。
+> **两者不冲突 ⇒ 别混为一谈后推翻 #66 的修复。**
+>
 > ## ✅ 【2026-09-26】设置页缺陷修复（「先修坏的」）—— 六件事全部落地（**真机验收未做**）
 >
 > 用户问四件事：Bastion 设置还有什么可搬 / 设置哪些能归拢 / **开关是否异常** / 文案是否模糊。
