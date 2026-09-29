@@ -1,9 +1,7 @@
 <div align="center">
 
-<img src="./Docs/assets/vaultix-mascot.webp" alt="Vaultix 吉祥物" width="150" />
-
 <h1 align="center">
-  <img src="./Docs/assets/vaultix-wordmark.png" alt="Vaultix" width="430" />
+  <img src="./Docs/assets/vaultix-banner.webp" alt="Vaultix —— Android 开源密码管理器，同时支持 Bitwarden 云端库与 KeePass KDBX 本地库" width="600" />
 </h1>
 
 **Android 开源密码管理器 —— 同时支持 Bitwarden 云端库与 KeePass KDBX 本地库**
