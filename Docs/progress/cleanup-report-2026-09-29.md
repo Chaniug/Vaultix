@@ -83,3 +83,35 @@
 - 若还要清设备日志 → 需先重连设备。
 
 ⚠️ 无论哪种，**`.workbuddy/memory/` 与取证日志都不在删除范围**。
+
+---
+
+## 七、✅ 执行结果（2026-09-29 21:3x 已完成）
+
+**用户指令**：「你按照优先级完成1234吧」。
+**执行范围**：第 1-5、7、8、9、10 项 —— **保留第 6 项 `.gradle/`**（按本报告第一节的建议：
+删了下次构建要重下依赖）。
+
+**前置保护**：唯一有长期价值的文件已先救出 ——
+`perf-report-2026-09-13.md` → `Docs/progress/perf-report-2026-09-13.md`
+（**6713 字节，逐字节校验一致**），并已 `git add` 纳入版本管理。
+
+| 项 | 路径 | 结果 |
+|---|---|---|
+| 1-5 | `build/` · `app/build/` · `core/*/build/` · `data/*/build/` · `domain/build/` | ✅ 已删 |
+| 7 | `.kotlin/` | ✅ 已删（`.gitignore` 已含该行，见第四节建议） |
+| 8-9 | `.workbuddy/autofill-capture.log`(75M) · `.workbuddy/autofill-edge.log`(55M) | ✅ 已删 |
+| 10 | `.workbuddy/artifacts/`(32M，含 19M `rec_manual.mp4`) | ✅ 已删（报告已救出） |
+| 6 | `.gradle/`(67M) | ⏸ **有意保留** |
+
+**保留项核证（删后复查，均在）**：
+- ✅ `.workbuddy/memory/`（持久记忆）
+- ✅ `Docs/progress/audit/evidence/2026-09-28-bprime-verify-VaultixAutofill.log`（取证链）
+
+**未执行（有意留待）**：第四节**设备侧日志**（`/sdcard/vx-live.log` 377M ·
+`/sdcard/vxbr.log` **4G** · `/sdcard/heartbeat.log` 22M）——
+本次 `adb devices` **无设备连接**，需重连后再处置。
+
+**合计释放约 2.9G**（D 盘可用 315G）。
+
+⚠️ **副作用已知**：下次构建需重建 `build/` 输出（已保留 `.gradle/`，无需重下依赖）。
