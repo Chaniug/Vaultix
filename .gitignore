@@ -23,6 +23,9 @@ build/
 !gradle/wrapper/gradle-wrapper.jar
 captures/
 
+# Kotlin 增量编译会话缓存（Gradle 2.x 起会生成在项目根；非源码）
+.kotlin/
+
 # Local configuration file (sdk path, etc)
 local.properties
 

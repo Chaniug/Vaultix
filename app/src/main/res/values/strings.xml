@@ -696,6 +696,7 @@
     <string name="bio_enroll_report_none">没有任何库启用成功</string>
     <!-- 自动锁定档位 -->
     <string name="auto_lock_never">从不</string>
+    <string name="auto_lock_never_warning">离开 App 时仍会清除内存中的密钥；但回到 App 会自动恢复，无需再次验证。手机处于解锁状态时，任何人都能打开你的密码库，也能在其他应用的登录框中自动填充你的密码。</string>
     <string name="auto_lock_immediately">立即（切后台即锁）</string>
     <string name="auto_lock_on_restart">重启 App 时</string>
     <string name="auto_lock_minutes_fmt">%1$d 分钟</string>

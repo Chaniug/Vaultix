@@ -1323,6 +1323,26 @@ private fun AutoLockDialog(
                         selected = timeout == current,
                         onClick = { onSelect(timeout) },
                     )
+                    // ★ 「从不」档的风险提示（2026-09-29）。
+                    //
+                    // 对齐 Bitwarden 官方对 Never 档的 warning（其文档原文：该档会把加密密钥
+                    // 以未加密形式留在设备上，强烈建议改用其他档位）。Vaultix 的落地比
+                    // Bitwarden 更保守（离场仍软锁、信封经 Keystore 包裹），但用户仍需知道
+                    // **这个档位的真实含义**：手机解锁着就等于密码库可进。
+                    //
+                    // 只在这一档下显示 —— 它是唯一「回来不需要用户交互」的档位。
+                    if (timeout == VaultTimeout.Never) {
+                        Text(
+                            text = stringResource(R.string.auto_lock_never_warning),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(
+                                start = Spacing.xs,
+                                end = Spacing.xs,
+                                bottom = Spacing.xs,
+                            ),
+                        )
+                    }
                 }
                 SingleChoiceRow(
                     label = stringResource(R.string.auto_lock_custom),

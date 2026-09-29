@@ -9,15 +9,20 @@
  * ---------------------------------------------------------------------------
  * 「从不锁定」档自动恢复的**触发编排**（2026-09-29，对齐 Bitwarden）。
  *
- * ## 逐句对照 Bitwarden `VaultLockManagerImpl`
+ * ## 与 Bitwarden 的对照（2026-09-29 二次定稿）
  *
- * | 上游 | 本类 |
+ * | 上游 `VaultLockManagerImpl` | 本类 |
  * |---|---|
- * | `observeVaultTimeoutChanges`（settings 首值/变化 → `handleUserAutoUnlockChanges`） | [reconcile]（combine 档位 × 房钥匙内存态） |
+ * | `observeVaultTimeoutChanges` → `handleUserAutoUnlockChanges` | [reconcile]（combine 档位 × 房钥匙内存态） |
  * | 非 Never ⇒ 清 autoUnlockKey | [reconcile] 第一分支 |
  * | Never 且已解锁 ⇒ 存 key | [reconcile] 第二分支（幂等 enroll） |
  * | Never 且锁定且有 key ⇒ `InitUserCryptoMethod.DecryptedKey` 自动解锁 | [reconcile] 第三分支（restore → 逐库开房间） |
  * | `setVaultToUnlocked` ⇒ `storeUserAutoUnlockKeyIfNecessary` | [onUnlockSuccess] 钩子（unlockedIds 新增 → 幂等 enroll） |
+ *
+ * ⚠️ **上游 `handleUserAutoUnlockChanges` 不判前台** —— 本类同理。
+ *   上一轮曾加过 `lifecycle.isForeground` 前台门禁（为保护「离场软锁」），
+ *   但 **`Never` 档现已对齐 Bitwarden 不再软锁**，门禁失去保护对象，
+ *   反而会挡住 autofill 冷启动进程的恢复（→ 填充卡 5.6 秒）。已删。
  *
  * ## 为什么信封重建挂在「解锁成功」而不是「档位/钥匙状态」
  *
@@ -63,26 +68,20 @@ class AutoRestoreTrigger @Inject constructor(
     private val preferences: VaultixPreferences,
     private val autoUnlock: AutoUnlockRepository,
     private val vaultRepository: VaultRepository,
-    /**
-     * 前台状态（2026-09-29，方案 A 的**关键依赖**）。
-     *
-     * ## 为什么恢复必须加前台门禁
-     *
-     * 「从不」档现在的行为是**离场软锁**（清房钥匙、留信封）。软锁会让
-     * [AutoUnlockRepository.houseKeyInMemory] 从 true 翻成 false —— 而本类
-     * 正是在 `combine` 里观察这个值。**没有门禁的话**：
-     *
-     * ```
-     * 用户划掉后台 → softLock()（钥匙清零）
-     *   → houseKeyInMemory 变 false
-     *   → 本类 combine 立刻触发第三分支 → restore() 把钥匙解回内存
-     *   ⇒ 软锁从未发生：后台进程照样持着密钥（内存转储可捞）
-     * ```
-     *
-     * ⇒ 只有**前台**才允许恢复。用户回到前台时（`onStart` 把前台翻正）
-     * combine 重新求值，恢复照常发生 —— 体感仍是「回来就开着」。
-     */
-    private val lifecycle: AutoLockController,
+    // ⚠️ 2026-09-29 二次定稿：`AutoLockController`（前台状态）注入**已移除**。
+    //
+    //  上一轮方案 A 里，前台状态是「恢复的闸门」—— 因为那时 `Never` 档会
+    //  离场软锁，若不设闸，软锁翻掉 `houseKeyInMemory` 后本类会立刻把钥匙
+    //  解回内存，等于没锁。
+    //
+    //  **现在没有软锁了**（`Never` 对齐 Bitwarden 直接 return，见
+    //  `VaultLockManagerImpl.checkForVaultTimeoutInternal`），所以：
+    //  - `houseKeyInMemory` 只会在**进程死亡**时变 false（进程内钥匙只增不减）；
+    //  - 触发第三分支（恢复）的唯一现实场景 = **新进程冷启动**（autofill 拉起）；
+    //  - 冷启动时前台状态本来就是 false（还没走完 `onStart`），设闸反而会
+    //    **挡住 autofill 进程的恢复** —— 那正是上一轮「QQ 填充卡 5.6 秒」的真因。
+    //
+    //  ⇒ 闸门连同其依赖一并删除。恢复时机由 **进程启动** 隐式决定，不再需要显式判据。
 ) {
 
     // 进程级 scope（订阅生命周期 = 进程）。与 VaultLockManagerImpl 同款取向：
@@ -95,12 +94,10 @@ class AutoRestoreTrigger @Inject constructor(
             combine(
                 preferences.vaultTimeout,
                 autoUnlock.houseKeyInMemory,
-                // 第 3 源：前台状态 —— **恢复的闸门**（见构造参数 KDoc）。
-                lifecycle.isForeground,
-            ) { timeout, keyInMemory, foreground -> Triple(timeout, keyInMemory, foreground) }
+            ) { timeout, keyInMemory -> timeout to keyInMemory }
                 .distinctUntilChanged()
-                .collect { (timeout, keyInMemory, foreground) ->
-                    reconcile(timeout, keyInMemory, foreground)
+                .collect { (timeout, keyInMemory) ->
+                    reconcile(timeout, keyInMemory)
                 }
         }
         scope.launch { observeUnlockSuccesses() }
@@ -109,13 +106,15 @@ class AutoRestoreTrigger @Inject constructor(
     /**
      * 档位 / 钥匙内存态变化时的收敛动作（核心规则表）。
      *
-     * @param foreground 进程是否在前台。**只影响恢复那一支** ——
-     *   写信封（第二分支）与删信封（第一分支）在后台做都是安全且必要的。
+     * ⚠️ 三条分支的**语义边界**（2026-09-29 二次定稿后）：
+     * - 分支 2（写信封）在进程内是**幂等**的，`keyInMemory=true` 会反复触发也不怕；
+     * - 分支 3（恢复）现实里只在**新进程**首次求值时命中 ——
+     *   进程存活期间钥匙一旦进内存就不会再出去（没有软锁了），
+     *   所以 `keyInMemory=false` ⇔ 本进程从未解锁过 ⇔ 需要恢复。
      */
     private suspend fun reconcile(
         timeout: VaultTimeout,
         keyInMemory: Boolean,
-        foreground: Boolean,
     ) {
         if (timeout != VaultTimeout.Never) {
             if (autoUnlock.hasEnvelope()) {
@@ -126,12 +125,6 @@ class AutoRestoreTrigger @Inject constructor(
         }
         if (keyInMemory) {
             autoUnlock.enrollEnvelope()
-            return
-        }
-        // ★ 前台门禁（方案 A）：后台不恢复 —— 否则离场软锁会被自己立刻撤销，
-        //   「后台期间密钥不在内存」这个安全保证就没了。见构造参数 KDoc。
-        if (!foreground) {
-            VaultixLog.d(TAG) { "autoRestore → 后台不恢复（等回前台）；信封保留" }
             return
         }
         if (autoUnlock.hasEnvelope()) {

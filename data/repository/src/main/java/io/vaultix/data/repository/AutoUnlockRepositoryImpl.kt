@@ -15,15 +15,17 @@
  * 同 `KdbxSyncRepositoryImpl` 的理由：后者已正好 40 个函数（detekt 硬上限）。
  * 且「进程死亡后的会话恢复」与「用户配置快速解锁」语义不同层。
  *
- * ## 与 Bitwarden 的对照（逐条）
+ * ## 与 Bitwarden 的对照（逐条，2026-09-29 二次定稿）
  *
  * | Bitwarden（`VaultLockManagerImpl`） | 本类 / 本项目 |
  * |---|---|
  * | `storeUserAutoUnlockKeyIfNecessary`（解锁成功钩子，timeout=Never 时存 key） | [enrollEnvelope]（幂等） |
  * | `handleUserAutoUnlockChanges` else 分支（key 在、库锁着 → 自动解锁） | [restore] |
  * | `setVaultToLocked` 清 autoUnlockKey | `VaultRepositoryImpl.lockVault/lockAll` 调 `HouseKeyStore.removeAutoEnvelope` |
- * | **离开 App 时的锁定（Never 档也锁）** | **[softLock]**（清密钥、**留**信封 —— 回来自动开） |
+ * | `VaultTimeout.Never -> return`（**切后台不锁**，密钥常驻内存至进程死亡） | `VaultLockManagerImpl` 同款 `return@launch`（**无离场锁定**） |
  * | `InitUserCryptoMethod.DecryptedKey`（SDK 恢复会话） | `unlockVaultFromRoom`（房间信封，纯软件） |
+ *
+ * ⚠️ [softLock] 保留实现但**已无生产调用点**（原「Never 档离场软锁」已被推翻）。
  * ---------------------------------------------------------------------------
  */
 package io.vaultix.data.repository
@@ -101,9 +103,25 @@ class AutoUnlockRepositoryImpl @Inject constructor(
     }
 
     /**
-     * 离场软锁：清会话 + 清房钥匙，**刻意不删信封**。
+     * 软锁：清会话 + 清房钥匙，**刻意不删信封**。
      *
-     * ⚠️ 三个不可省的要点：
+     * ⚠️ **2026-09-29 二次定稿：本方法已无生产调用点。**
+     *
+     * `Never` 档对齐 Bitwarden 后直接 `return@launch`（不锁），
+     * 原先唯一调用者 `VaultLockManagerImpl.softLockForBackground()` 已删除。
+     *
+     * ## 为什么保留接口而不是删掉
+     *
+     * 1. 它是「清密钥但留信封」这组语义**唯一**的具名实现，删掉后若将来要做
+     *    「锁屏即锁」档（用户提过的需求），又得从零推导一遍顺序与陷阱；
+     * 2. 回归测试 `AutoUnlockRepositoryImplTest` 仍覆盖它（软件信封的
+     *    留/删边界值得长期钉住）。
+     *
+     * ⚠️ **别把它接回 `Never` 档的离场路径** —— 那会推翻用户三次拍板的
+     * 「对齐 Bitwarden」结论，见 `VaultLockManagerImpl` 的 KDoc「为什么推翻」。
+     *
+     * ## 三个不可省的要点（将来启用时照此实现）
+     *
      * 1. **先清房钥匙**（硬约束 #4：锁 = 密钥清零）。顺序反了的话，中间那一刻
      *    会话已死而房钥匙还在，`AutoRestoreTrigger` 的 combine 可能观察到
      *    「钥匙在内存」而重写信封 —— 无害但白跑。
@@ -112,9 +130,9 @@ class AutoUnlockRepositoryImpl @Inject constructor(
      * 3. **绝不调 [removeEnvelope]**：这是与硬锁的**唯一**差别。删了信封
      *    用户回来就得重新过门锁 —— 那是「方案 B」，不是用户选的「方案 A」。
      *
-     * ⚠️ 恢复时机由 `AutoRestoreTrigger` 的**前台门禁**把关：软锁后
-     * `houseKeyInMemory` 变 false，若没有前台门禁，那个 combine 会立刻把钥匙
-     * 读回内存 —— 等于没锁。见该类的 KDoc。
+     * ⚠️ 若将来启用，恢复时机需要新的门禁设计：现在
+     * `AutoRestoreTrigger` **没有**前台门禁（已随本方法弃用一并删除），
+     * 直接启用软锁会导致「锁完立刻被自动恢复」—— 两件事必须一起改。
      *
      * @return 软锁前仍处于解锁态的库 id（诊断 / 测试断言用）。
      */

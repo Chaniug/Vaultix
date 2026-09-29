@@ -70,8 +70,21 @@ interface VaultLockManager {
     /** 是否正处于「解锁中」。 */
     val isActiveUserUnlockingFlow: StateFlow<Boolean>
 
-    /** 是否来自「因锁定而跳转解锁」的流程（供导航回退判定）。 */
-    var isFromLockFlow: Boolean
+    // ⚠️ 2026-09-29：`isFromLockFlow` 已**删除**（原「是否来自锁定流程」布尔）。
+    //
+    // ## 为什么删（不是遗漏，是清理）
+    //
+    // 它是抄 Bitwarden 时留下的**残骸**：
+    // - **无消费方**：全项目（含测试）没有任何地方读它；
+    // - **赋值写反**：原实现 `if (isUserInitiated) isFromLockFlow = false`，
+    //   而 Bitwarden 原版是 `isFromLockFlow = isUserInitiated`；
+    // - **功能已被取代**：Bitwarden 用它表达「主动锁 ⇒ 不弹指纹」，
+    //   而 Vaultix 用**更细的** [io.vaultix.data.repository.VaultSessionRepository.isViewLocked]
+    //   （会话层、**逐库**粒度）表达同一语义，且已完整落地（见 `UnlockViewModel` 的
+    //   「查看层锁」分支 / `UnlockScreen` 的 `viewLocked` 渲染）。
+    //
+    // ⚠️ 别因为它"名字像 Bitwarden"就把它加回来 —— 加回来会与 `viewLocked` 形成
+    //    **双源真值**，两者对「主动锁」的粒度与生命周期都不同。
 
     /** 指定库当前是否已解锁（同步快照）。 */
     fun isVaultUnlocked(vaultId: String): Boolean
@@ -120,6 +133,17 @@ interface VaultLockManager {
      * 这条豁免就是「通行密钥流程不该把库锁掉」的**结构性**保障。
      */
     fun onAppCreated(isFirstCreation: Boolean, createdForAutofill: Boolean)
+
+    /**
+     * 屏幕点亮。
+     *
+     * 对齐 Bitwarden `ScreenStateBroadcastReceiver`（`ACTION_SCREEN_ON`）：熄屏期间
+     * 协程 `delay()` 的计时会因 CPU 挂起而**欠账**，亮屏时按单调时钟
+     * (`SystemClock.elapsedRealtime`) 重算每个定时器的剩余时长并重启它。
+     *
+     * 不是「可选优化」——没有它，长熄屏后的锁会**迟到**（详见实现类 KDoc 的举例）。
+     */
+    fun onScreenOn()
 
     /** 主动触发一次超时检查（如手动锁定前的统一入口）。 */
     fun checkForVaultTimeout(vaultId: String)

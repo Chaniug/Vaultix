@@ -50,7 +50,9 @@ import androidx.lifecycle.lifecycleScope
 import dagger.hilt.android.AndroidEntryPoint
 import io.vaultix.common.OtpUriParser
 import io.vaultix.common.TotpGenerator
+import io.vaultix.datastore.VaultTimeout
 import io.vaultix.datastore.VaultixPreferences
+import io.vaultix.domain.AutoUnlockRepository
 import io.vaultix.domain.RoomUnlockOutcome
 import io.vaultix.domain.VaultRepository
 import io.vaultix.domain.VaultSessionRepository
@@ -65,7 +67,9 @@ import io.vaultix.vaultix.ui.common.BiometricPrompter
 import io.vaultix.vaultix.ui.unlock.LocalUnlockFanout
 import io.vaultix.vaultix.ui.theme.VaultixTheme
 import io.vaultix.vaultix.util.VaultixClipboard
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -120,6 +124,27 @@ class AutofillActivity : FragmentActivity() {
     lateinit var candidates: AutofillCandidateSource
 
     /**
+     * 「从不」档的**免交互恢复**（2026-09-29）。
+     *
+     * 见 [prepareBiometricUnlock] 顶部的前置分支：Never 档 + 信封在 ⇒ 这里恢复，
+     * 用户不必按指纹。
+     *
+     * ⚠️ **与 [io.vaultix.vaultix.security.AutoRestoreTrigger] 的第三分支是
+     * 同一语义的两个触发点**（2026-09-29 二次定稿后语义已澄清）：
+     * - `AutoRestoreTrigger` 走 **combine 被动响应**（进程启动 / 档位变化时求值），
+     *   有调度延迟；
+     * - 本分支走 **fillRequest 主动按需**（填充请求到来那一刻同步恢复）。
+     *
+     * ⇒ **两条都要留**：autofill 的 fillRequest 可能早于 combine 首次求值到达
+     * （实测差 32ms），只靠被动那条会出现「信封就在、却仍走指纹 fallback」。
+     * ⚠️ 别因为「AutoRestoreTrigger 已经会恢复了」而删掉本分支 —— 上游 Bitwarden
+     * 也是「`handleUserAutoUnlockChanges` 自动解锁」+「`isVaultLocked` 等 500ms」
+     * 双管齐下，不是单靠一个观察者。
+     */
+    @Inject
+    lateinit var autoUnlock: AutoUnlockRepository
+
+    /**
      * CP 解锁动作的**收尾**要用它重建候选列表。
      *
      * ⚠️ 依赖方向是从 autofill 指向 passkey（`CredentialProviderEntryBuilder`）——
@@ -131,6 +156,18 @@ class AutofillActivity : FragmentActivity() {
     lateinit var credentialEntryBuilder: CredentialProviderEntryBuilder
 
     private var biometricPrompt: BiometricPrompt? = null
+
+    /**
+     * 「交付后补开其余库」用的**进程级短任务 scope**（2026-09-29）。
+     *
+     * 为什么不能用 `lifecycleScope`：本 Activity 交付完填充响应就 `finish()`，
+     * `lifecycleScope` 随之取消 ⇒ 补开会在半路被掐断，表现为「其余库永远开不满」。
+     *
+     * 与 `VaultLockManagerImpl` 的既有惯例一致（项目当前唯一的调度器限定符是
+     * 自建的 `CoroutineScope(SupervisorJob() + Dispatchers.Default)`，不额外引入 DI 限定符）。
+     * `SupervisorJob` 保证一个库补开失败不会连坐取消其余库的补开。
+     */
+    private val restOpenScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     /** MODE_UNLOCK 下先隐藏卡片、等本地解锁判定；无可判定回退时再亮卡片。 */
     private val showPrompt = mutableStateOf(true)
@@ -445,20 +482,95 @@ class AutofillActivity : FragmentActivity() {
         }
     }
 
-    /** 找第一个「已锁定且纳入快速解锁范围」的库，并备好全局指纹门锁的解密 Cipher。 */
+    /**
+     * 找第一个「已锁定且纳入快速解锁范围」的库，并备好全局指纹门锁的解密 Cipher。
+     *
+     * ## 判定顺序（三条，自上而下短路）
+     *
+     * 0. **「从不」档 + 信封在 ⇒ 免交互恢复**（2026-09-29，方案 A，见方法内联 KDoc）。
+     *    这一条排在最前：Never 档压根不该走到指纹这条路。
+     * 1. 已有解锁的库 ⇒ `Ready`（竞态：别的入口刚解锁）。
+     * 2. 否则备好 cipher ⇒ `Prompt`（弹指纹）/ `Fallback`（亮卡片走主密码）。
+     *
+     * ## ★ 为什么改成"一次快照"而不是逐库问（2026-09-29 提速修复）
+     *
+     * 旧实现是 `lockedIds.filter { fingerprintQuickUnlockAvailable(it).first() }` ——
+     * **每个库各订阅一次 Flow**，而那条 Flow 内部含 `localUnlockKeyStore.keyAvailable`，
+     * 即**一次 Keystore 往返**。N 个库 ⇒ **N 次串行 Keystore**。
+     *
+     * 真机日志实证：从「决定解锁」到「弹出指纹框」实测 **2.29 秒**
+     * （`locked: no unlocked vault → unlock fallback` → `maybeBiometricUnlock: outcome=Prompt`），
+     * 用户感知为「提醒我解锁的阶段很慢」。
+     *
+     * ⚠️ 这正是 `UnlockViewModel.candidateVaultIds` 在批次 5.0 已修过的同一个坑 ——
+     * 但 autofill 这条路径**漏改了**（`LocalUnlockFanout.openRest` 也只接到了解锁页）。
+     * 两条路径的判据其实是**两个全局事实**相乘，与"具体哪个库"无关：
+     * 1. 指纹门锁是否可用 —— **全局一份**（房子化后门锁只有一把）；
+     * 2. 该库是否在生效范围内 —— 一次读偏好（`house_key_scope`，DataStore，**零 Keystore**）。
+     *
+     * ⇒ 问**一次**就够，然后在内存里做集合过滤。与解锁页保持**同一实现口径**，
+     * 避免两处再次漂移（本类与该 ViewModel 的漂移已两次造成问题）。
+     */
     private suspend fun prepareBiometricUnlock(): BiometricUnlockOutcome {
         if (vaultRepository.observeUnlockedVaultIds().first().isNotEmpty()) {
             return BiometricUnlockOutcome.Ready
         }
+        // ★ 「从不」档：信封在就免交互恢复（2026-09-29）。
+        //
+        // ## 为什么还需要这条分支（真机实证 18:00:10.902 ~ 18:00:11.946）
+        //
+        // ⚠️ 2026-09-29 **二次定稿后理由已更新**（旧版本的「前台门禁开洞」说已作废：
+        //    `AutoRestoreTrigger` 的前台门禁已随「Never 取消软锁」一并删除）。
+        //
+        // 现在的理由是**时序**，而不是门禁：
+        //
+        // ```
+        // t=10.902  autofill 拉起进程 → AutoRestoreTrigger.combine 首次求值（异步，未完成）
+        // t=10.934  fillRequest 到达（比上面只晚 32ms）← 此刻信封还没解
+        // t=11.946  locked: no unlocked vault → unlock fallback   ← 明明信封就在，却要指纹
+        // ```
+        //
+        // ⇒ `AutoRestoreTrigger` 的恢复是 **combine 被动响应**，有调度延迟；
+        //   本分支是 **fillRequest 主动按需**，同步解信封。**两条互补，缺一不可** ——
+        //   只留被动那条，用户每次填充的第一下仍会被索要指纹，与「从不」（= 无交互）
+        //   语义相悖。用户实测原话：「提醒我解锁的阶段很慢」。
+        //
+        // ## 安全性（已与用户确认取舍）
+        //
+        // `AutoUnlockRepository.restore()` → `HouseKeyStore.openAutoEnvelope()` 用的是
+        // `AutoUnlockKeyStore`（`setUserAuthenticationRequired(false)`，**免认证**密钥），
+        // 不弹指纹、不阻塞。这与「用户自己打开 App 时信封自动恢复」是**同一个信任级别**
+        // —— 本分支不新建信任模型，只是把已有语义延伸到 autofill。
+        // 代价：手机解锁状态下，任何 App 的输入框都能免验证自动填充；
+        // 已同步补进设置页「从不」档的风险提示文案。
+        //
+        // ⚠️ 只对 Never 档生效：其它档位「回来要验证」本来就是设计意图，
+        //    这里若放宽会把定时锁的安全保证整个抹掉。
+        if (prefs.vaultTimeout.first() == VaultTimeout.Never && autoUnlock.hasEnvelope()) {
+            val report = autoUnlock.restore()
+            if (report.opened > 0) {
+                AutofillLogger.d(
+                    "prepareBiometricUnlock: Never 档信封恢复 envelope=${report.envelopeOpened} " +
+                        "rooms=${report.roomCount} opened=${report.opened} → Ready（免交互）",
+                )
+                return BiometricUnlockOutcome.Ready
+            }
+            // 信封在但一个库都没开成（凭据过期 / 文件被移走）⇒ 落到指纹那条路，
+            // 不谎报 Ready（Ready 会让下游直接交付 null，日志读起来像「填充坏了」）。
+            AutofillLogger.d(
+                "prepareBiometricUnlock: Never 档信封恢复 0 库成功 → 回落指纹 " +
+                    "failed=${report.failedVaultIds.size}",
+            )
+        }
         val vaults = runCatching { vaultRepository.observeVaults().first() }.getOrDefault(emptyList())
+        // 一次读范围（DataStore，零 Keystore），与库列表在内存里求交。
         // ⚠️ 只挑**已纳入范围**的锁定库，与解锁页的 `candidateVaultIds` 同一口径：
         //    对只走主密码的库调 `unlockVaultFromRoom` 必然 NotEnrolled，
         //    白跑一趟还多算一次失败，日志里会冒出一堆莫名其妙的"未打开"。
-        val lockedIds = vaults.filterNot { it.unlocked }.map { it.id }
-        val unlockable = lockedIds.filter { id ->
-            runCatching { vaultRepository.fingerprintQuickUnlockAvailable(id).first() }
-                .getOrDefault(false)
-        }
+        val scope = runCatching { prefs.quickUnlockScope().first() }.getOrDefault(emptySet())
+        val unlockable = vaults
+            .filter { !it.unlocked && it.id in scope }
+            .map { it.id }
         val first = unlockable.firstOrNull() ?: return BiometricUnlockOutcome.Fallback
         // 门锁是全局的（房子化）：cipher 不再按库取，一次认证解门锁、逐库开房间。
         val cipher = runCatching { vaultRepository.prepareFingerprintUnlock() }.getOrNull()
@@ -472,7 +584,33 @@ class AutofillActivity : FragmentActivity() {
         )
     }
 
-    /** 认证通过：解封首个库，随后趁 KEK 授权窗口解封其余已启用库，然后回灌并 finish。 */
+    /**
+     * 认证通过：先解封**首个库**（用户点指纹要开的那个）→ 立即交付填充响应 →
+     * 其余已启用库改由 [openRemainingInBackground] 异步补开。
+     *
+     * ## 为什么不能等全部库都开完才交付（2026-09-29，真机实证）
+     *
+     * 旧实现对 `pending.rest` 一并串行解锁（`LocalUnlockFanout.unlockAll` 的 `for` 循环），
+     * 全部开完才 `buildPendingResponse` / `deliverPendingFill`。真机日志实证：
+     *
+     * ```
+     * fanout first=https://pwd.vv1234.cn → Opened        30ms    ← 核心库极快
+     * fanout rest=onedrive:…valkjin.kdbx → Opened      3315ms    ← 网络下载 + KDF
+     * buildPendingResponse: unlocked=2                          ← 两库全开才构造响应
+     * deliverPendingFill: response=true
+     * ```
+     *
+     * KDBX 库的「开房间」并非纯软件解密 —— `unlockVaultFromRoom` 对 KDBX 会经
+     * `Kdbx.unlock(source)` **真的打开文件**（OneDrive 源 = 网络拉取 + KDF 派生），
+     * 实测稳定 3.3 秒（三次样本 3.32 / 3.65 / 3.32 秒）。
+     *
+     * ⚠️ **代价不只是慢**：系统 autofill 框架在等我们交 `FillResponse`，这段等待会
+     * 反馈到宿主输入交互上 —— 用户实测「条目弹出卡顿，连 QQ 都卡」。
+     * 而其余库对**本次填充**毫无贡献（用户要的是他点的那个库的条目）。
+     *
+     * ⇒ 与解锁页 `UnlockViewModel.completeLocalUnlock` 完全对齐：`rest = emptyList()`
+     * 只开核心库、立即放行，其余库「发射后不管」。
+     */
     private fun unlockAllAndFinish(pending: PendingBiometricUnlock, cipher: Cipher) {
         // ⚠️ 诊断埋点（常驻）：看到这行 = 生物认证**已成功**，接下来就是解封 + 回灌。
         AutofillLogger.d(
@@ -480,11 +618,14 @@ class AutofillActivity : FragmentActivity() {
                 "credentialFlow=$credentialFlow",
         )
         lifecycleScope.launch(Dispatchers.IO) {
-            val result = unlockAll(pending, cipher)
-            AutofillLogger.d(
-                "unlockAllAndFinish: 解封结果 first=${result.first::class.simpleName} " +
-                    "opened=${result.restOpened} failed=${result.restFailed}",
-            )
+            // ★ 先开核心库就放行（2026-09-29，对齐 UnlockViewModel.completeLocalUnlock）。
+            //
+            // 见 `unlockAllAndFinish` 的「为什么不能等全部库」KDoc：其余库（尤其是
+            // OneDrive 上的 KDBX —— 网络下载 + KDF 派生，实测 3.3 秒）是**附加收益**，
+            // 绝不该挡住用户点的那个库。旧实现把 rest 也塞进这一轮串行解锁，
+            // 于是「指纹过了却要干等三秒」——而且系统 autofill 框架在等我们交响应，
+            // 连宿主 QQ 的输入交互都被拖住（用户实测反馈）。
+            val result = unlockAll(pending.copy(rest = emptyList()), cipher)
             withContext(Dispatchers.Main) {
                 when {
                     // CP 流程无暂存可回灌：解锁**成功**就回 RESULT_OK 收工
@@ -508,6 +649,10 @@ class AutofillActivity : FragmentActivity() {
                         // 解锁可能来自主密码、可能发生在很久以前。
                         CredentialProviderRequestManager.markUserPreVerified()
                         AutofillLogger.d("CP unlock → 标记 UV 已完成（供候选断言复用）")
+                        // ★ 其余库同样改后台补开（2026-09-29）：CP 流程的收尾要重建候选，
+                        //   其余库未开会让候选缺项 —— 但不能为它挡住 RESULT_OK 的回执
+                        //   （面板在等，见 finishCredentialFlowUnlocked 的 KDoc）。
+                        openRemainingInBackground(pending, result.lockOpened)
                         finishCredentialFlowUnlocked()
                     }
 
@@ -520,9 +665,50 @@ class AutofillActivity : FragmentActivity() {
                         finish()
                     }
 
-                    else -> deliverPendingFill()
+                    else -> {
+                        AutofillLogger.d(
+                            "unlockAllAndFinish: 解封结果 first=${result.first::class.simpleName} " +
+                                "opened=${result.restOpened} failed=${result.restFailed}",
+                        )
+                        // ★ 交付**先于**补开其余库（2026-09-29）：`deliverPendingFill()` 是
+                        //   用户等的那一步（条目出现在输入框下方），必须第一优先；其余库
+                        //   在交付完成后再异步补开（`openRemainingInBackground`）。
+                        deliverPendingFill()
+                        openRemainingInBackground(pending, result.lockOpened)
+                    }
                 }
             }
+        }
+    }
+
+    /**
+     * 交付完成后，在后台补开其余已启用库（对齐 `UnlockViewModel.openRemainingInBackground`）。
+     *
+     * 为什么独立成一个「发射后不管」的协程：其余库是**附加收益** —— 用户点指纹的目的是
+     * 开他自己那个库，其余库开不开都不该影响他已拿到的填充结果。失败不打搅用户
+     * （只在日志留痕），与解锁页的处置保持一致。
+     *
+     * @param houseKeyInMemory 房钥匙是否已在内存（`LocalUnlockFanout.Result.lockOpened`）。
+     *   false 时直接跳过：没有钥匙，`unlockVaultFromRoom` 必然全败，白跑一轮还刷一堆日志。
+     *
+     * ⚠️ **不需要 cipher**：门锁已在 `unlockAll` 里用本次认证的 cipher 解开了，
+     *   此后各库是纯 `unlockVaultFromRoom`（房间信封，不碰 Keystore）。
+     *   若这里再收一个 cipher 会暗示「还要一次 Keystore 操作」，误导后来者。
+     */
+    private fun openRemainingInBackground(
+        pending: PendingBiometricUnlock,
+        houseKeyInMemory: Boolean,
+    ) {
+        if (pending.rest.isEmpty() || !houseKeyInMemory) return
+        // ⚠️ 用 restOpenScope（进程级）而非 lifecycleScope：本 Activity 交付完就会 finish，
+        //   lifecycleScope 随之取消 ⇒ 补开会在半路被掐断（现象：其余库永远开不满）。
+        restOpenScope.launch(Dispatchers.IO) {
+            val opened = LocalUnlockFanout.openRest(
+                repository = vaultRepository,
+                rest = pending.rest,
+                houseKeyInMemory = true,
+            )
+            AutofillLogger.d("unlockAllAndFinish: 后台补开其余库 opened=$opened/${pending.rest.size}")
         }
     }
 

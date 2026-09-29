@@ -65,15 +65,21 @@ class AutoLockController @Inject constructor(
     /**
      * 进程是否处于**前台**（`onStart` 之后到 `onStop` 之前）。
      *
-     * 为什么需要它（2026-09-29，方案 A 的关键依赖）：
-     * 「从不」档现在会在**离场时软锁**（清房钥匙、留信封）。软锁会让
-     * `AutoUnlockRepository.houseKeyInMemory` 从 true 变 false —— 而
-     * `AutoRestoreTrigger` 正是观察这个值的。**若没有前台门禁**，那个观察者
-     * 会在**后台**立刻把钥匙从信封解回内存，等于软锁从未发生（后台进程照样
-     * 持着密钥，内存转储可捞）。⇒ 恢复只允许在前台发生。
+     * ⚠️ **2026-09-29 二次定稿：当前没有生产消费者。**
      *
-     * 初值刻意是 `false`：进程创建那一刻还没走完 `onStart`，此时若允许恢复，
-     * 冷启动的恢复会与「按档位检查超时」抢时序。首个真实的 `onStart` 会把它翻正。
+     * 上一轮方案 A 里它是「`AutoRestoreTrigger` 恢复的前台门禁」（保护离场软锁）。
+     * 但 `Never` 档现已对齐 Bitwarden **取消离场软锁**，门禁失去保护对象，
+     * 且会挡住 autofill 冷启动进程的恢复 ⇒ 已从 `AutoRestoreTrigger` 移除。
+     *
+     * ## 为什么留着字段而不是删掉
+     *
+     * 1. [onStop] 仍要以它配套地驱动 `lockManager.onAppBackgrounded()`
+     *    （非 Never 档的「延迟 N 分钟锁定」全靠这个回调），前台态是它的天然伴生值，
+     *    留着成本为零；
+     * 2. 它是「进程前后台」这一事实的**唯一**单一来源；将来若要加
+     *    「锁屏即锁」档或做前后台统计，不必重新推导。
+     *
+     * 初值刻意是 `false`：进程创建那一刻还没走完 `onStart`。首个真实 `onStart` 翻正。
      */
     val isForeground: StateFlow<Boolean> = _isForeground.asStateFlow()
 

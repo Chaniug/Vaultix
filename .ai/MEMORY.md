@@ -144,42 +144,128 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 > 逐轮流水 → `.ai/SESSION-YYYY-MM-DD.md` · 坑 → `.ai/ISSUES.md`（索引，正文在 `issues/`）·
 > 性能专项 → [`Docs/progress/perf-plan.md`](../Docs/progress/perf-plan.md)。
 
-**快速解锁「房子化」批次 5.0 —— 软锁 + 前台门禁 + 解锁提速（2026-09-29 · 最新，见 `.ai/SESSION-2026-09-29.md`）**
+**快速解锁「房子化」批次 5.2 —— 亮屏时间补偿 + 删死字段 + 清理（2026-09-29 · 最新，见 `.ai/SESSION-2026-09-29.md`）**
 
+> 用户指令：「**按你推荐的来吧。然后顺手也清理一下这个项目中无用过期的文件产物，日志等内容**」
+> ⇒ 「按推荐」= ① 删死字段 `isFromLockFlow` ② **做**亮屏补偿 ③ **不做**软登出档。
+> 门禁：detekt ✅ · `:app:compileFullDebugKotlin` ✅ · 单测 **400 全过**（287+113，**均带 `--rerun-tasks`**）。
+> ⚠️ 全量单测**偶发 flaky**（第五次复现 1 次 11 failed，全为 `Could not initialize class VaultTimeout`）；
+> 连续 5 次成功 / 1 次失败，判定为顺序敏感竞态，与本批改动无关 —— issues **#129**。
+> 定稿实施记录 **§6.4**。
+
+1. ★★★ **亮屏时间补偿（本批主菜，不是可选优化）**：协程 `delay(n)` 计时依赖线程，
+   **线程在深度睡眠时被挂起** ⇒ **熄屏期间时间在走、定时器不走**。
+   举例：5 分钟档，锁屏 30 分钟 —— 无补偿时 `delay` 可能只推进 2 分钟 ⇒ 用户掏出手机时
+   **本应早已锁定的库还是开着的**。实现：`VaultLockManagerImpl.onScreenOn()`
+   + 注册 `ACTION_SCREEN_ON`，按 `SystemClock.elapsedRealtime()` 重算剩余并重启定时器。
+   **`startTimeMs` 从 `currentTimeMillis` 改 `elapsedRealtime`**（单调时钟，熄屏照常累加）。
+2. **删死字段 `isFromLockFlow`**：接口 + 实现 + 两处赋值全删。
+   ⚠️ **别加回来** —— 会与 `viewLocked` 形成**双源真值**。
+3. ★★ **本条是本批最重要的认知（自我纠错）**：`Docs/progress/bitwarden-lock-timing-matrix.md`
+   初稿断言「Vaultix 缺『主动锁收起指纹』⇒ 没实现」—— **错**。
+   真因：**只看了字段就外推成功能缺失**。实际由 `VaultSessionRepository.isViewLocked`
+   （会话层 + **逐库**）实现，**粒度优于** Bitwarden 的全局单值 bool。
+   ⇒ **纪律：判断"某功能是否缺失"必须搜消费侧行为，不能只看同名字段。**
+4. ⚠️ **单测盲区（诚实记录）**：`unitTests.isReturnDefaultValues = true`
+   ⇒ JVM 下 `elapsedRealtime() ≡ 0` ⇒ **测不了"已走过一半"的算术**。
+   新增 2 条测试只覆盖「空 map 早退」「补偿不提前锁」。
+   **算术只能真机验**：档位 1 分钟 → 熄屏 3 分钟 → 亮屏 ⇒ 应立即锁。
+5. ⚠️⚠️ **本批的变异验证未干净完成**（如实记录，**不宣称通过**）：
+   三轮注入的"变红"原因全是 `Could not initialize class VaultTimeout`
+   （= 环境/初始化竞态），**不是逻辑断言失败**。详见 `.ai/issues/01-构建与环境.md` **#129**。
+6. **已拍板不做**：软登出（`LOGOUT`）档、「锁屏即锁」档位。
+
+---
+
+**快速解锁「房子化」批次 5.0 —— 软锁 + 前台门禁 + 解锁提速（2026-09-29，见 `.ai/SESSION-2026-09-29.md`）**
+
+> ⚠️⚠️ **本批（批次 5.0）的「软锁 + 前台门禁」已被同日的批次 5.1 推翻**
+> —— 用户三次拍板「对齐 Bitwarden 的设计理念」，`Never` 档回归 `return@launch`（不锁）。
+> **下面的 1/2/5 条是已被否定的判断，保留仅为说明「为什么先做错」，不要照它施工。**
+> 见下方「**快速解锁「房子化」批次 5.1**」小节与定稿 **§6.3**。
+>
 > 用户真机反馈两条：①「设置**从不**，锁屏/清后台后 Vaultix 直接就是开着的，有风险」
 > （对照 Bitwarden 会锁）；②「指纹解锁进密码库要等好几秒，应秒解秒进」。
 > 用户拍板**方案 A**（对齐 Bitwarden：离开 App 就真锁，回来靠恢复信封免交互自动开）。
 > 门禁三关全绿（detekt / `:app:compileFullDebugKotlin` / 单测 **398 全过 0 failed** +
 > 孤儿串未超基线）。定稿实施记录 **§6.2**。
 
-1. ★★★ **核心洞察：软锁 vs 硬锁 = 信封的留与删**（本批最重要的认知）：
-   - **软锁**（新 `AutoUnlockRepository.softLock`）：离开 App 触发（划后台/锁屏），
-     清房钥匙 + 收会话，**保留**恢复信封 ⇒ 回来免交互自动开；
+1. ~~★★★ **核心洞察：软锁 vs 硬锁 = 信封的留与删**~~（⚠️ **已被批次 5.1 推翻**，
+   软锁机制已无生产调用点）：
+   - ~~**软锁**（新 `AutoUnlockRepository.softLock`）：离开 App 触发（划后台/锁屏），
+     清房钥匙 + 收会话，**保留**恢复信封 ⇒ 回来免交互自动开；~~
    - **硬锁**（既有 `lockVault`/`lockAll`）：点锁定/退出数据库，清密钥且**删除**信封 ⇒ 回来过门锁。
-   - 旧 bug 根因：`VaultTimeout.Never -> return@launch`（**任何原因都不锁**）= 密钥常驻内存的安全漏洞。
-2. ★★★ **前台门禁是安全底线（B2），不是优化**：软锁把 `houseKeyInMemory` 翻成 false，
-   而 `AutoRestoreTrigger` 正在 observe 它 —— **没有门禁的话**，软锁后该 combine **立刻
-   触发恢复分支把钥匙读回内存** ⇒ 软锁从未发生。修法：`AutoLockController.isForeground`
-   作为 `combine` 第三源，**非前台一律不恢复**。回归门禁 `AutoRestoreTriggerTest`。
+     —— ✅ 这条仍然有效。
+   - ~~旧 bug 根因：`VaultTimeout.Never -> return@launch`（**任何原因都不锁**）= 密钥常驻内存的安全漏洞。~~
+     ⚠️ **判断错误**：Bitwarden 的 `Never` 恰恰就是 `return`（不锁）。详见批次 5.1 第 1 条。
+2. ~~★★★ **前台门禁是安全底线（B2），不是优化**~~ —— ⚠️ **已被批次 5.1 推翻**（门禁已删）。
+   ~~软锁把 `houseKeyInMemory` 翻成 false……作为 `combine` 第三源，**非前台一律不恢复**。~~
+   当前 `AutoRestoreTrigger` **不判前台**。
 3. ★★ **提速的关键 = 消除 N 次串行 Keystore 往返**：旧 `UnlockViewModel.candidateVaultIds()`
    每库调 `fingerprintQuickUnlockAvailable(id).first()`（内含 `localUnlockKeyStore.keyAvailable`
    = 一次 Keystore 往返，冷启动可达数百毫秒）。正解 = 两个**全局事实**相乘：
    门锁可用性（全局一份）+ 生效范围（`preferences.quickUnlockScope()` 一次读，零 Keystore）。
+   ✅ 仍然有效。
 4. ★ **先开核心库再异步补开其余库**：`completeLocalUnlock` 拆两段 —— 核心库同步开 → 立即
    `Event.Unlocked` 放行 → `viewModelScope` 异步补开其余（`LocalUnlockFanout.openRest`，
    新增 `Result.lockOpened` 判房钥匙在不在）。其余库是附加收益，不该挡住用户点的那一个。
-5. **Never 档触发点**：`VaultLockManagerImpl` 只在 `AppBackgrounded` 软锁；
-   `AppCreated` **不**软锁（进程刚重建钥匙本就不在内存）。
+   ✅ 仍然有效。
+5. ~~**Never 档触发点**：`VaultLockManagerImpl` 只在 `AppBackgrounded` 软锁；~~
+   ⚠️ **已被批次 5.1 推翻** —— Never 档**任何原因都不锁**。
 6. ★ **测试纪律（本批又踩一次）**：`HouseKeyStore.lock()` / `isUnlocked` 是**非 suspend** 成员
    ⇒ 只能 `every`，用 `coEvery` **静默失效**、运行时才报 `no answer found`；
    含 `withContext(Dispatchers.IO)` 的实现（`softLock`/`restore`）在纯 JVM `runTest` 下
    **必须轮询终态**，`advanceUntilIdle()` 管不到真实线程池。
 7. ★ **写回归测试要做变异验证**：`VaultLockManagerImplNeverTest` 建好后，临时还原旧
    `Never -> return@launch` 确认它**变红**（否则可能是"什么都没验证"的假测试）。
+   ⚠️ 批次 5.1 后该测试**已反转**：现在断言「切后台**绝不**锁定」，
+   变异验证方向也反过来（塞回锁定调用应变红）。
+   ⚠️⚠️ **批次 5.2 的重要附注**：**变红 ≠ 验证通过** —— 必须看**失败原因**。
+   本批三轮变异都"变红"了，但原因全是 `Could not initialize class VaultTimeout`
+   （环境竞态，见 issues **#129**），**与变异逻辑无关**，因此**不算验证**。
+   ⇒ **变异验证的判据是「断言失败」，不是「测试失败」。**
 8. **批次 5 真机验收（下一轮）**：清单 1-11，⭐ 新增第 10 条（Never 档离场软锁 +
    回来自动开）、第 11 条（多库指纹秒进）。
-9. ⏳ **批次 3 可选遗留**（用户已确认、本批未做）：Bitwarden 的亮屏时间补偿
-   （`ACTION_SCREEN_ON` + `elapsedRealtimeMs` 重算剩余延迟）+ 新增「锁屏即锁」档位。
+   ⚠️ 第 10 条判据**已被批次 5.1 反转**（Never 档不再离场软锁）。
+9. ✅ ~~**批次 3 可选遗留**：Bitwarden 的亮屏时间补偿~~
+   ⚠️ **已于 2026-09-29 补齐**（批次 5.2）：`VaultLockManagerImpl.onScreenOn()`
+   + 注册 `ACTION_SCREEN_ON`，按 `SystemClock.elapsedRealtime()` 重算剩余并重启定时器。
+   ⚠️ 仍**未做**且已拍板不做：新增「锁屏即锁」档位、"软登出(LOGOUT)"档位。
+
+---
+
+**快速解锁「房子化」批次 5.1 —— Never 档对齐 Bitwarden（取消离场软锁）（2026-09-29 二次定稿）**
+
+> 用户三次拍板「对齐 Bitwarden」⇒ **推翻批次 5.0**。定稿实施记录 **§6.3**。
+> 门禁三关全绿（detekt / `:app:compileFullDebugKotlin` / 单测 —— 见 §6.3）。
+> 用户原话（逐次加重）：「对齐 Bitwarden（不软锁）」→「对齐bitwarden的设计方案吧」
+> →「对齐bitwarden的设计理念吧」。
+
+1. ★★★ **核心洞察：§6.2 把 Bitwarden 的信任模型读反了**（本批最重要，别再重走）：
+   Bitwarden 敢在 `Never` 档 `return`（切后台不锁），**不是**因为有恢复信封兜底，
+   而是因为**它信任 Android 的进程内存**：密钥只活在进程地址空间，**进程一死就没了**。
+   「内存转储」威胁的前提是攻击者拿到特权级访问 —— **而那个前提下 Vaultix 的恢复信封
+   同样会被解开**（信封用 `AutoUnlockKeyStore`，`setUserAuthenticationRequired(false)`，
+   **免认证**）。⇒ **信封不构成额外安全层**，只把「进程死亡」从「要指纹」变成「不要指纹」
+   （而这正是 Never 档的**定义**）。
+   ⇒ **软锁换来的「后台期间密钥不在内存」是有代价的伪安全**；真正的边界是
+   「**进程是否活着**」，不是「是否在前台」。
+2. ★★ **改动最小集**：`VaultLockManagerImpl` 的 `Never` 分支回归 `return@launch`（删
+   `softLockForBackground` + 构造参数 `AutoUnlockRepository`）；`AutoRestoreTrigger`
+   **删前台门禁**（`combine` 三源 → 两源，构造参数移除 `AutoLockController`）；
+   `AutoUnlockRepository.softLock()` 保留实现但**无生产调用点**；`AutoLockController.isForeground`
+   保留字段但**无消费者**。
+3. ★★ **`AutofillActivity.prepareBiometricUnlock` 的 Never 免交互恢复分支：保留！**
+   理由已从「补门禁的洞」改为「**主动按需恢复** vs `AutoRestoreTrigger` 的**被动 combine
+   响应**」的时序互补（fillRequest 可能早于 combine 首次求值 32ms）。上游 Bitwarden
+   也是「自动解锁 + `isVaultLocked` 等 500ms」双管齐下，不是单靠一个观察者。
+4. **测试反转（两处）**：`VaultLockManagerImplNeverTest` → 「切后台**绝不**锁定」；
+   `AutoRestoreTriggerTest` → 「**不含**前台门禁」（后台也恢复，`Never且无钥匙_后台也恢复`）。
+5. **遗留（如实记录，未修）**：① 接受的代价 = Never 档进程存活期间密钥常驻内存
+   （`adb`/root 可 dump，**与 Bitwarden 完全一致**，用户明确接受）；
+   ② 「第二三遍不弹」与软锁策略**无关**，真因是荣耀/鸿蒙 `AppFastHibernation` 激进冻杀
+   （实测 `doze → unF_Z → fillRequest → FiStopAppProc`，进程活不过 0.7s），另案；
+   ③ 若将来要「锁屏即锁」，**不要**把它接回 `Never`，应**新增独立档位**。
 
 ---
 

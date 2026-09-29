@@ -29,12 +29,14 @@
 
 package io.vaultix.vaultix.security
 
+import android.content.BroadcastReceiver
 import android.content.Context
-import android.util.Log
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.SystemClock
 import dagger.hilt.android.qualifiers.ApplicationContext
 import io.vaultix.datastore.VaultTimeout
 import io.vaultix.datastore.VaultixPreferences
-import io.vaultix.domain.AutoUnlockRepository
 import io.vaultix.domain.UnlockResult
 import io.vaultix.domain.VaultRepository
 import kotlinx.coroutines.CoroutineScope
@@ -53,7 +55,15 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/** 运行中的超时定时器（对齐 Bitwarden `TimeoutJobData`）。 */
+/**
+ * 运行中的超时定时器（对齐 Bitwarden `TimeoutJobData`）。
+ *
+ * @property startTimeMs 定时器启动时刻。⚠️ 取自 `SystemClock.elapsedRealtime()`，
+ *   **不是** `System.currentTimeMillis()` —— 见 [VaultLockManagerImpl.onScreenOn] 的
+ *   「为什么必须用单调时钟」。
+ * @property durationMs 本次定时器要求的**总时长**（不是剩余）。
+ *   亮屏补偿要用它减去已经走过的时长，重算剩余。见 [VaultLockManagerImpl.onScreenOn]。
+ */
 private data class TimeoutJobData(
     val job: Job,
     val startTimeMs: Long,
@@ -62,17 +72,12 @@ private data class TimeoutJobData(
 
 @Singleton
 class VaultLockManagerImpl @Inject constructor(
-    @ApplicationContext context: Context,
+    @ApplicationContext private val context: Context,
     private val vaultRepository: VaultRepository,
     private val preferences: VaultixPreferences,
-    /**
-     * 「从不」档离场软锁的动作实现（2026-09-29）。
-     *
-     * ⚠️ 注入 `AutoUnlockRepository` 而不是直接调 `VaultRepository.lockAll()`：
-     * 「软锁 = 清密钥但**留**信封」这个语义只在那边定义，混用会退化成
-     * 「离场即删信封」（用户回来要重新指纹 —— 方案 B，不是用户选的 A）。
-     */
-    private val autoUnlock: AutoUnlockRepository,
+    // ⚠️ 2026-09-29 二次定稿：`AutoUnlockRepository` 注入已移除 ——
+    //   `Never` 档对齐 Bitwarden 后不再有「离场软锁」这个动作，
+    //   本类也不再需要软锁的实现（保留会触发 detekt `UnusedPrivateMember`）。
 ) : VaultLockManager {
 
     // 进程级短任务 scope（启动/取消定时器）。项目当前唯一的调度器限定符是
@@ -97,8 +102,8 @@ class VaultLockManagerImpl @Inject constructor(
     private val _isActiveUserUnlockingFlow = MutableStateFlow(false)
     override val isActiveUserUnlockingFlow: StateFlow<Boolean> = _isActiveUserUnlockingFlow.asStateFlow()
 
-    @Volatile
-    override var isFromLockFlow: Boolean = false
+    // ⚠️ `isFromLockFlow` 已于 2026-09-29 删除（死代码 + 赋值写反 + 已被 `viewLocked` 取代）。
+    //   详见接口 `VaultLockManager` 的 KDoc。
 
     init {
         scope.launch {
@@ -113,6 +118,38 @@ class VaultLockManagerImpl @Inject constructor(
                     .map { VaultUnlockData(it.id, VaultUnlockData.Status.UNLOCKED) }
             }
         }
+        registerScreenOnReceiver()
+    }
+
+    /**
+     * 注册亮屏广播接收器（对齐 Bitwarden `init { context.registerReceiver(...) }`）。
+     *
+     * ## ⚠️ 为什么**不**反注册、也不怕泄漏
+     *
+     * 本类是 `@Singleton` 且随进程存活；`context` 是 `@ApplicationContext`
+     * （生命周期 = 进程）。所以：
+     * - 进程活着 → 接收器就该活着（定时器补偿随时可能被需要）；
+     * - 进程死亡 → 接收器与 context 一起被系统回收，无外部引用可泄漏。
+     *
+     * 也就是说**没有**「Activity 泄漏」那种需要 `onDestroy` 反注册的场景。
+     * 反过来，若在某个短生命周期处反注册，就会出现「用户锁屏放了一会，
+     * 接收器已被摘掉 ⇒ 亮屏不补偿 ⇒ 该锁的库还开着」的静默 bug。
+     *
+     * ## 为什么用 `ACTION_SCREEN_ON` 而不是 `ACTION_USER_PRESENT`
+     *
+     * Bitwarden 用的就是 `SCREEN_ON`（:`158`）。二者的差别在于：`USER_PRESENT` 要等
+     * 用户**解锁**，而 `SCREEN_ON` 在**屏幕刚亮**就触发 —— 更早、更稳，且不依赖
+     * 用户是否设了锁屏密码。补偿越早做，用户看到的锁态就越接近真实剩余时间。
+     */
+    private fun registerScreenOnReceiver() {
+        context.registerReceiver(
+            object : BroadcastReceiver() {
+                override fun onReceive(receiverContext: Context?, intent: Intent?) {
+                    onScreenOn()
+                }
+            },
+            IntentFilter(Intent.ACTION_SCREEN_ON),
+        )
     }
 
     override fun isVaultUnlocked(vaultId: String): Boolean =
@@ -125,7 +162,6 @@ class VaultLockManagerImpl @Inject constructor(
     override fun lockVault(vaultId: String, isUserInitiated: Boolean) {
         // 用户主动锁定：立即取消任何在跑的定时器（对齐 Bitwarden `lockVault` 先清 job）。
         cancelTimer(vaultId)
-        if (isUserInitiated) isFromLockFlow = false
         setVaultToLocked(vaultId)
     }
 
@@ -139,7 +175,6 @@ class VaultLockManagerImpl @Inject constructor(
         return try {
             val result = vaultRepository.unlockVault(vaultId, masterPassword)
             if (result is UnlockResult.Success) {
-                isFromLockFlow = false
                 _vaultStateEventFlow.tryEmit(VaultStateEvent.Unlocked(vaultId))
             }
             result
@@ -171,6 +206,57 @@ class VaultLockManagerImpl @Inject constructor(
         cancelTimer(vaultId)
     }
 
+    /**
+     * 屏幕点亮（对齐 Bitwarden `ScreenStateBroadcastReceiver`）。
+     *
+     * ## ★ 为什么需要它（核心原理，改动前必读）
+     *
+     * 协程的 `delay(n)` 之所以「到点执行」，最终依赖线程的定时等待，而线程在
+     * **设备深度睡眠时被完全挂起**。后果是：**熄屏期间时间在走，但定时器不走**。
+     *
+     * 举个具体的例子：档位 = 后台 5 分钟锁，用户锁屏后把手机放兜里 30 分钟。
+     * 如果只有 `delay()`，熄屏期间 CPU 挂起，30 分钟里 `delay` 可能只推进了 2 分钟
+     * ⇒ 用户掏出手机解锁的瞬间，**本应早已锁定的库还是开着的**，直到那"剩下的 3 分钟"
+     * 走完才锁 —— 这正是用户抱怨过的那类「锁得不及时」。
+     *
+     * 补偿办法：亮屏时不让原 job 继续跑，而是**按单调时钟重算剩余时长**，重启一个新 job。
+     * 走过了多少 = `elapsedRealtime() - startTimeMs`（单调时钟在熄屏期间**照常累加**，
+     * 这正是它区别于 `currentTimeMillis` 的关键）；剩余 = `durationMs - 走过`。
+     *
+     * ## 与 Bitwarden 的逐句对照
+     *
+     * ```kotlin
+     * // Bitwarden :737-749
+     * val durationSoFarMs = (realtimeManager.elapsedRealtimeMs - data.startTimeMs).coerceAtLeast(0L)
+     * handleTimeoutActionWithDelay(userId, data.vaultTimeoutAction, delayMs = data.durationMs - durationSoFarMs)
+     * ```
+     *
+     * ## 两处对 Bitwarden 的**有意收口**（不是抄错）
+     *
+     * 1. **剩余钳到 ≥0**：Bitwarden 只对 `durationSoFarMs` 保了下界，`delayMs`
+     *    理论上可为负（时钟被回拨等）。本项目统一 `coerceIn(0L, durationMs)`，
+     *    让「已超时」稳定退化为「立即锁」，而不是把负值丢给 `delay()`。
+     * 2. **补跑时不再依赖 `timerJobMap` 迭代期间的可变性**：Bitwarden 对 map 做 `map{}`
+     *    并在迭代中调 `handleTimeoutActionWithDelay`（内部又 `remove`/`put` 同一 map），
+     *    靠 Kotlin 的 `map{}` 先快照规避。这里显式取 `toList()` 快照，意图更直白。
+     */
+    override fun onScreenOn() {
+        // 先快照：下面的 handleTimeoutActionWithDelay 会改写 timerJobMap，
+        // 不能边遍历边改。
+        val snapshot = timerJobMap.toList()
+        if (snapshot.isEmpty()) return
+
+        snapshot.forEach { (vaultId, data) ->
+            val durationSoFarMs =
+                (SystemClock.elapsedRealtime() - data.startTimeMs).coerceAtLeast(0L)
+            val remainingMs = (data.durationMs - durationSoFarMs).coerceIn(0L, data.durationMs)
+            // 剩余 0 → 立即锁；否则按剩余重启定时器。
+            // 注意 handleTimeoutActionWithDelay 内部会先 cancelTimer(vaultId)，
+            // 所以这里的旧 job 会被正确取消，不会出现"新旧 job 同时到点锁两次"。
+            handleTimeoutActionWithDelay(vaultId = vaultId, delayMs = remainingMs)
+        }
+    }
+
     override fun onAppCreated(isFirstCreation: Boolean, createdForAutofill: Boolean) {
         val vaultId = activeVaultId ?: return
         checkForVaultTimeoutInternal(
@@ -190,25 +276,44 @@ class VaultLockManagerImpl @Inject constructor(
      * 超时检查（对齐 Bitwarden `checkForVaultTimeout`）。
      *
      * 分流规则**逐条照抄**：
-     * - `Never` → **离场时软锁**（见下），`AppCreated` 不锁；
+     * - `Never` → **直接返回，任何原因都不锁**（见下），`AppCreated` / `AppBackgrounded` 同；
      * - `OnAppRestart` → **只在** `AppCreated` 时触发；且 `createdForAutofill == true`
      *   且**非**首次创建时**豁免**（为 autofill/凭据流程拉起进程不该锁库）；
      * - 其它档位 → `AppCreated(firstTimeCreation = true)` 立即执行；
      *   `AppBackgrounded` / `UserChanged` 走「延迟 N 分钟后执行」。
      *
-     * ## ★ `Never` 档为什么也要锁（2026-09-29 修复，用户报「锁屏后也不锁库」）
+     * ## ★★ `Never` 档为什么不锁（2026-09-29 二次定稿，用户三次拍板「对齐 Bitwarden」）
      *
-     * 旧实现在 `Never` 分支直接 `return@launch` —— **任何原因都不锁**。后果不是
-     * 「方便」而是**安全漏洞**：用户划掉后台/锁屏后房钥匙一直留在内存里，
-     * 进程被内存转储时可捞到；而且「锁定」按钮之外没有任何路径能把它清掉。
+     * ⚠️ **本节推翻同日早些时候的结论**，先读「为什么推翻」再改代码。
      *
-     * 正确语义（对齐 Bitwarden：`Never` = 不按**时间**自动锁，但**离场仍然锁**）：
-     * 离场时走 [AutoUnlockRepository.softLock] —— **清密钥、留信封**。
-     * 用户回到前台时 `AutoRestoreTrigger` 免交互把库开回来，
-     * 所以体感仍与「一直开着」一致，但**后台期间密钥确实不在内存**。
+     * ### 推翻的理由
      *
-     * ⚠️ `AppCreated` **不**做软锁：进程刚重建时房钥匙本来就不在内存，
-     * 软锁无事可做；恢复由 `AutoRestoreTrigger` 负责（且有前台门禁）。
+     * 早先版本把 `Never -> return@launch` 判定为「安全漏洞」，并补了离场软锁
+     * （清密钥 + 留信封）+ `AutoRestoreTrigger` 前台门禁。**该判断被推翻**，
+     * 因为它误判了 Bitwarden 的安全模型：
+     *
+     * > Bitwarden 敢在 `Never` 档 `return`（进程创建/切后台都不锁），**不是**
+     * > 因为它有恢复信封兜底，而是因为**它信任 Android 的进程内存**：密钥只活在
+     * > 进程地址空间里，**进程一死就没了** —— 内存转储威胁的前提是攻击者能拿到
+     * > 特权，而那种前提下 Vaultix 的信封同样可被解开（信封用的是**免认证**
+     * > `AutoUnlockKeyStore` 密钥）。**信封不构成额外的安全层**，
+     * > 它只把「进程死亡」这一个场景从「要指纹」变成「不要指纹」。
+     *
+     * 换言之，软锁换来的「后台期间密钥不在内存」是**有代价的伪安全**：
+     * 真正的安全边界是「进程是否活着」，而非「是否在前台」。
+     *
+     * ### 代价与补偿（务必知悉）
+     *
+     * - **代价**：`Never` 档下，进程存活期间房钥匙常驻内存；`adb`/root 环境下
+     *   可 dump 进程内存拿到密钥。这**与 Bitwarden 完全一致**（用户明确接受）。
+     * - **补偿**：真正的防线是**进程死亡后用恢复信封仍需指纹**吗？—— 不是。
+     *   信封是免认证的，所以**进程死亡也不需要指纹**（这正是 Never 档的语义：
+     *   「从不要求重新验证」）。用户选择的锁屏防线 = **系统锁屏**（Vaultix 不额外设闸）。
+     * - ⇒ 于是 `AutoRestoreTrigger` 的**前台门禁失去意义**（没有软锁要保护），
+     *   一并去掉；恢复降级为「只服务进程死亡后的冷启动」（该场景仍然必要，
+     *   否则 autofill 拉起的新进程打不开库）。
+     *
+     * @see AutoUnlockRepositoryImpl.softLock 保留接口但不再被离场路径调用
      */
     private fun checkForVaultTimeoutInternal(vaultId: String, reason: CheckTimeoutReason) {
         scope.launch {
@@ -216,11 +321,10 @@ class VaultLockManagerImpl @Inject constructor(
 
             when (timeout) {
                 VaultTimeout.Never -> {
-                    // ★ 离场软锁（清密钥 + 留信封）。仅 `AppBackgrounded` 需要 ——
-                    //   `UserChanged` 在当前单账号模型下不发生，`AppCreated` 时钥匙本就不在。
-                    if (reason is CheckTimeoutReason.AppBackgrounded) {
-                        softLockForBackground()
-                    }
+                    // ★★ 对齐 Bitwarden：`VaultTimeout.Never -> return`（不锁）。
+                    //   进程创建、切后台、用户切换 —— 一律不触发任何锁定动作。
+                    //   密钥常驻内存，直到进程死亡；进程死亡后由恢复信封免交互开回。
+                    //   ⚠️ 别在这里加软锁：见上方 KDoc「为什么推翻」。
                     return@launch
                 }
 
@@ -271,7 +375,11 @@ class VaultLockManagerImpl @Inject constructor(
         }
         timerJobMap[vaultId] = TimeoutJobData(
             job = job,
-            startTimeMs = System.currentTimeMillis(),
+            // ★ 单调时钟（对齐 Bitwarden `realtimeManager.elapsedRealtimeMs`）。
+            //   必须是 elapsedRealtime 而非 currentTimeMillis：后者会被用户改系统时间、
+            //   被 NTP 校时、被时区切换推动 —— 一旦被往前拨，`durationMs - durationSoFarMs`
+            //   就会算错，导致定时器提前或延后触发。亮屏补偿的等差全靠这个基准。
+            startTimeMs = SystemClock.elapsedRealtime(),
             durationMs = delayMs,
         )
     }
@@ -282,22 +390,20 @@ class VaultLockManagerImpl @Inject constructor(
     }
 
     /**
-     * 「从不」档离场软锁：清会话 + 清房钥匙，**保留自动恢复信封**。
+     * ~~「从不」档离场软锁~~ —— **已废弃（2026-09-29 二次定稿）**。
      *
-     * ⚠️ 与 [setVaultToLocked] 的**唯一**差别是信封的留与删 —— 这正是
-     * 「回来后免交互打开」（用户选的方案 A）与「回来重新过门锁」（方案 B）
-     * 的分界。别把这里的 lock 实现成 `vaultRepository.lockVault()`：
-     * 后者会删信封，用户回来就要重新指纹，与承诺不符。
+     * `Never` 档现在对齐 Bitwarden 直接 `return@launch`，不再有任何离场锁定，
+     * 所以本方法**没有任何调用点**。保留为注释而非代码，是为了让接力的下一个
+     * 人不至于（像上一轮那样）重新发明这套「软锁 + 前台门禁」的机制：
+     * **它不是被遗漏，是被明确否决的**。
      *
-     * ⚠️ 走 [AutoUnlockRepository.softLock] 而不是 `VaultRepository.lockAll()`：
-     * 后者的语义是「用户要求锁上」（连带删信封），与本路径完全相反。
+     * 之所以删掉：detekt 对未使用的 private 函数报 `UnusedPrivateMember`，
+     * 留着会红门禁。
+     *
+     * 若将来要恢复「离开 App 就清密钥」的档位（用户提过想要「锁屏即锁」），
+     * 正确做法是**新增一个独立档位**，而不是把它塞回 `Never` ——
+     * 见 `.ai/decisions/快速解锁房子化-两级钥匙层级-定稿.md` § 二次定稿。
      */
-    private fun softLockForBackground() {
-        scope.launch {
-            runCatching { autoUnlock.softLock() }
-                .onFailure { Log.w(TAG, "离场软锁失败：${it.message}") }
-        }
-    }
 
     /** 取消并移除指定库的定时器。 */
     private fun cancelTimer(vaultId: String) {
