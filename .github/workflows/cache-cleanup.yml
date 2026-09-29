@@ -65,7 +65,12 @@ jobs:
       - name: Prune stale caches
         run: |
           set -euo pipefail
-          gh cache list --limit 100 --json id,key,createdAt,accessedAt,sizeInBytes > /tmp/caches.json
+          # ⚠️ 2026-09-29 修复：JSON 字段名是 `lastAccessedAt`，**不是 `accessedAt`**。
+          #    后者在 gh 里不存在 ⇒ gh 报 "Unknown JSON field: accessedAt" 并以 exit 1 退出，
+          #    配合 `set -euo pipefail` 直接让本步骤失败（这就是此前连续 4 次 8s 失败的根因）。
+          #    `--limit` 由 100 提到 1000：本仓库缓存切片会持续新增（曾 93 条、现 56 条），
+          #    留足余量避免超过上限后漏删。
+          gh cache list --limit 1000 --json id,key,createdAt,lastAccessedAt,sizeInBytes > /tmp/caches.json
           python3 - <<'PY'
           import json, os, collections, subprocess, datetime
 
@@ -109,7 +114,7 @@ jobs:
               for c in items:
                   if c["id"] in protected:
                       continue
-                  accessed = parse(c.get("accessedAt"))
+                  accessed = parse(c.get("lastAccessedAt"))
                   if accessed is not None and accessed < cutoff:
                       doomed.append(c)
                       freed += c.get("sizeInBytes") or 0
