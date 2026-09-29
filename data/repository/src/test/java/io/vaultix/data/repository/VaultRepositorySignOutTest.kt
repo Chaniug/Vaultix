@@ -52,6 +52,16 @@ class VaultRepositorySignOutTest {
     private val houseKeyStore = mockk<HouseKeyStore>(relaxed = true)
     private val localUnlockEnrollment = mockk<LocalUnlockEnrollment>(relaxed = true)
     private val preferences = mockk<VaultixPreferences>(relaxed = true)
+    /**
+     * 远端库文件的**本地缓存**（批次 B1，2026-09-30）。
+     *
+     * 「退出数据库」的用户语义包含「清掉本地那份副本」⇒ 缓存条目必须一并删除
+     * （虽然只是一份密文，但"退了还在"与预期相反）。
+     */
+    private val kdbxFileCache = mockk<io.vaultix.data.repository.kdbx.KdbxFileCache>(relaxed = true)
+
+    /** 断言「按 `origin` 清缓存」用的假 origin（缓存键就是它）。 */
+    private val kdbxOrigin = "webdav:cred-1:https://dav.example.com/valkjin.kdbx"
     private val sessions = VaultSessionManager()
     private lateinit var repo: VaultRepositoryImpl
 
@@ -74,9 +84,15 @@ class VaultRepositorySignOutTest {
             preferences = preferences,
             kdbxSessions = KdbxSessionFlow(),
             kdbxFileSources = kdbxFileSources,
+            // 批次 B1（2026-09-30）：远端库文件的本地缓存。本测试断言它被清（见下方用例）。
+            kdbxFileCache = kdbxFileCache,
         )
         coEvery { credentials.remove(any()) } returns Unit
         coEvery { credentials.getString(any()) } returns null
+        // 批次 B1：清缓存要按 origin ⇒ 给 vault 行一个真的 origin（否则会走"静默跳过"）。
+        val row = mockk<io.vaultix.database.entity.VaultEntity>(relaxed = true)
+        io.mockk.every { row.origin } returns kdbxOrigin
+        coEvery { vaultDao.get(vaultId) } returns row
         // removeRoomEnvelope 读范围镜像（空集 ⇒ 不会走到 setQuickUnlockScope）。
         io.mockk.every { preferences.quickUnlockScope() } returns flowOf(emptySet())
         coEvery { preferences.setKdbxKeyFileUri(any(), any()) } returns Unit
@@ -106,6 +122,9 @@ class VaultRepositorySignOutTest {
         coVerify(exactly = 1) { vaultDao.updateRevision(vaultId, null) }
         // 4) ★ vault 行**必须保留**（这是「退出」与「移除库」的唯一区别）
         coVerify(exactly = 0) { vaultDao.delete(any()) }
+        // 5) **远端库文件的本地缓存一并清**（批次 B1）——按 origin 删条目。
+        //    ⚠️ 这条变红 = 「退出登录」后本地还留着一份 kdbx 副本（与用户预期相反）。
+        coVerify(exactly = 1) { kdbxFileCache.remove(kdbxOrigin) }
     }
 
     @Test

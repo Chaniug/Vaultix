@@ -1,5 +1,18 @@
 # 下一步任务清单
 
+> ## ⚡【2026-09-30 凌晨 完成】批次 B1 —— KDBX 远端文件**本地缓存 + 条件回源**（解锁提速）
+>
+> **定稿**：[`.ai/decisions/多库锁模型-定稿.md`](../.ai/decisions/多库锁模型-定稿.md) §5「批次 B」（含**方案为何改版**的证据）
+> **改动**：`KdbxFileCache` / `FileKdbxFileCache`（带字节数校验，防半截文件）/ `CachedKdbxFileSource`（装饰器）
+> + 挂载在 `KdbxCloudSyncCoordinator.fileSourceFor`（唯一闸口 ⇒ 解锁/校验/keyfile/同步全覆盖）
+> + `noBackupFilesDir/kdbx_cache` 落盘 + `signOut`/`removeVault` 按 origin 清。
+> **门禁（分开单跑）**：detekt ✅ · `:app:compileFullDebugKotlin` ✅ · app **289** + repo **127** = **416 / 0 失败**。
+> **变异验证**：④ 漏掉 `token != null` ⇒ 1 红；⑤ 命中忘了 `return` ⇒ 1 红。
+> ⏳ **下一步 = B1 真机验收**（装新包 + 解锁一次）：目标 KDBX 解锁 **3.58 s → ≈1.2–1.5 s**；
+> 之后决定要不要做 **B2**（信封包派生密钥，再吃掉那 1.2 s）。
+> 再之后 = **批次 C**（管理页 UI：§7 单选区 + D7 解锁方式行）。
+> ⚠️ **改动在工作区未提交**（按用户指示：B/C 都做完再推；`rele` 未动）。
+
 > ## 🔒【2026-09-30 凌晨 完成】多库锁模型 **批次 A 第二片**（D3 + §3.2 档位侧）落地 ⇒ **批次 A 全部完成**
 >
 > **定稿**：[`.ai/decisions/多库锁模型-定稿.md`](../.ai/decisions/多库锁模型-定稿.md) §5「施工进度」

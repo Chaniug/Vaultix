@@ -70,6 +70,10 @@ class VaultRepositoryRemoveTest {
             preferences = preferences,
             kdbxSessions = KdbxSessionFlow(),
             kdbxFileSources = kdbxFileSources,
+            // 批次 B1：远端库文件的本地缓存（`removeVault` 会按 origin 清它）。
+            // 本测试的 `vaultDao.get` 未打桩 ⇒ 走「取不到 origin 则静默跳过」分支；
+            // 断言它真被清在 `VaultRepositorySignOutTest`（那里给了真的 origin）。
+            kdbxFileCache = io.mockk.mockk(relaxed = true),
         )
         // removeRoomEnvelope 读范围镜像（空集 ⇒ 不会走到 setQuickUnlockScope）。
         io.mockk.every { preferences.quickUnlockScope() } returns flowOf(emptySet())

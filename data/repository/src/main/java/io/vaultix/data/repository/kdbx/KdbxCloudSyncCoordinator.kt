@@ -76,6 +76,7 @@ fun interface WebDavCredentialLookup {
  * @param sessionReplacer 拉取后替换已解锁会话（见 [KdbxSessionReplacer]）。
  * @param okHttp 给 WebDAV 来源用（构造点在 app 的 DI，那边已有共享的 `OkHttpClient`）。
  * @param webDavCredentials 按 credentialId 取 WebDAV 账号密码。
+ * @param fileCache 远端 kdbx 的本地缓存（**批次 B1**，2026-09-30）：见 [CachedKdbxFileSource]。
  */
 class KdbxCloudSyncCoordinator(
     private val vaultDao: VaultDao,
@@ -84,6 +85,13 @@ class KdbxCloudSyncCoordinator(
     private val sessionReplacer: KdbxSessionReplacer,
     private val okHttp: () -> OkHttpClient?,
     private val webDavCredentials: WebDavCredentialLookup,
+    /**
+     * 远端 kdbx 的本地缓存（批次 B1）。
+     *
+     * ⚠️ **只在 [fileSourceFor] 里给远端来源套一层** —— 别在别处再包：
+     * 双重装饰会让缓存写两遍、"命中"判断套娃（外层命中内层还要再判一次）。
+     */
+    private val fileCache: KdbxFileCache,
 ) : KdbxFileSourceResolver {
 
     /**
@@ -106,23 +114,38 @@ class KdbxCloudSyncCoordinator(
      * @return null = 这个库没有可同步的网盘来源（UI 据此隐藏同步入口）。
      */
     override fun fileSourceFor(origin: String): KdbxFileSource? = when {
+        // 本地 SAF：**不缓存** —— 它的 `versionToken` 是内容 SHA-256，
+        // 算它本身就要读整份文件 ⇒ 缓存只会多做一次读。
         origin.startsWith("content://") -> safFactory(origin)
 
         WebDavVaultOrigin.matches(origin) -> {
             val parsed = WebDavVaultOrigin.parse(origin) ?: return null
             val client = okHttp() ?: return null
-            WebDavKdbxFileSource(
-                client = client,
-                fileUrl = parsed.fileUrl,
-                credentialProvider = {
-                    webDavCredentials.credentials(parsed.credentialId)
-                        ?: throw IllegalStateException("找不到该 WebDAV 账号的凭据，请重新填写")
-                },
+            withRemoteCache(
+                origin,
+                WebDavKdbxFileSource(
+                    client = client,
+                    fileUrl = parsed.fileUrl,
+                    credentialProvider = {
+                        webDavCredentials.credentials(parsed.credentialId)
+                            ?: throw IllegalStateException("找不到该 WebDAV 账号的凭据，请重新填写")
+                    },
+                ),
             )
         }
 
-        else -> extraFactory?.invoke(origin)
+        else -> extraFactory?.invoke(origin)?.let { withRemoteCache(origin, it) }
     }
+
+    /**
+     * 给**远端**来源套本地缓存（批次 B1，2026-09-30）。
+     *
+     * 只此一处套：`fileSourceFor` 是「origin ⇒ 来源」的唯一判据表，解锁 / 校验 /
+     * keyfile / 同步四条路径都从这里取来源 ⇒ 挂在这里即全覆盖（`KdbxFileSourceResolver`
+     * 的 KDoc：「判据只能有一份」）。
+     */
+    private fun withRemoteCache(origin: String, source: KdbxFileSource): KdbxFileSource =
+        CachedKdbxFileSource(delegate = source, cache = fileCache, cacheKey = origin)
 
     /**
      * 跑一次同步。

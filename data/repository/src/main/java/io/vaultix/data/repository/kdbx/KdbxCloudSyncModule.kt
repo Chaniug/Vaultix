@@ -39,6 +39,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import io.vaultix.data.kdbx.Kdbx
 import io.vaultix.database.dao.VaultDao
+import java.io.File
 import okhttp3.OkHttpClient
 import javax.inject.Provider
 import javax.inject.Singleton
@@ -63,6 +64,20 @@ object KdbxCloudSyncModule {
         fileSourceFactory = { origin -> coordinator.get().fileSourceFor(origin) },
     )
 
+    /**
+     * 远端 kdbx 的**本地缓存**（批次 B1，2026-09-30）。
+     *
+     * ⚠️ 根目录用 **`noBackupFilesDir`**：缓存不该进系统备份 —— 备份里多一份库文件
+     * 既无必要，也白白扩大暴露面（虽然它只是密文，见 [KdbxFileCache] 的安全取舍）。
+     */
+    @Provides
+    @Singleton
+    fun provideKdbxFileCache(
+        @ApplicationContext context: Context,
+    ): KdbxFileCache = FileKdbxFileCache(
+        root = File(context.applicationContext.noBackupFilesDir, "kdbx_cache"),
+    )
+
     @Provides
     @Singleton
     fun provideKdbxCloudSyncCoordinator(
@@ -72,6 +87,7 @@ object KdbxCloudSyncModule {
         sessionReplacer: KdbxSessionReplacer,
         okHttp: Provider<OkHttpClient>,
         webDavCredentials: WebDavCredentialLookup,
+        fileCache: KdbxFileCache,
     ): KdbxCloudSyncCoordinator = KdbxCloudSyncCoordinator(
         vaultDao = vaultDao,
         orchestrator = orchestrator,
@@ -83,6 +99,7 @@ object KdbxCloudSyncModule {
         //    "只是问一下有没有来源"时被触发。
         okHttp = { runCatching { okHttp.get() }.getOrNull() },
         webDavCredentials = webDavCredentials,
+        fileCache = fileCache,
     )
 
     /**

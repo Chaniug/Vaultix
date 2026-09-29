@@ -10,6 +10,7 @@ import io.vaultix.data.bitwarden.sync.SyncOutcome
 import io.vaultix.data.kdbx.Kdbx
 import io.vaultix.data.kdbx.KdbxFailure
 import io.vaultix.data.kdbx.KdbxOpenError
+import io.vaultix.data.repository.kdbx.KdbxFileCache
 import io.vaultix.data.repository.kdbx.KdbxFileSourceResolver
 import io.vaultix.database.dao.CipherDao
 import io.vaultix.database.dao.FolderDao
@@ -106,6 +107,15 @@ class VaultRepositoryImpl @Inject constructor(
      * （见 [KdbxFileSourceResolver] 的 KDoc：那张表**只能有一份**）。
      */
     private val kdbxFileSources: KdbxFileSourceResolver,
+    /**
+     * 远端 kdbx 的**本地缓存**（批次 B1，2026-09-30）：解锁提速用，
+     * 见 [io.vaultix.data.repository.kdbx.CachedKdbxFileSource]。
+     *
+     * ⚠️ 本类只**清**它（`signOut` / `removeVault` 时按 origin 删条目）——
+     * 读写都在 `fileSourceFor` 里由装饰器完成，本类不参与。
+     * 放在本文件是因为「删库 ⇒ 清它那份本地副本」是仓储的职责边界。
+     */
+    private val kdbxFileCache: KdbxFileCache,
 ) : VaultRepository {
 
     override fun observeVaults(): Flow<List<VaultSummary>> =
@@ -387,6 +397,9 @@ class VaultRepositoryImpl @Inject constructor(
         // 6) 同步基线归零：revisionDate 留着会让下次同步误判「服务端无变化」而跳过全量，
         //    结果是一个「退出了数据库却什么都没拉回来」的空库
         vaultDao.updateRevision(vaultId, null)
+        // 7) 远端库文件的本地缓存（批次 B1，2026-09-30）：「退出登录」的用户语义
+        //    包含**清掉本地那份副本** —— 留一份 kdbx 在那与预期相反（虽然它只是密文）。
+        evictKdbxFileCache(vaultDao, kdbxFileCache, vaultId)
     }
 
     override suspend fun removeVault(vaultId: String) {
@@ -402,6 +415,9 @@ class VaultRepositoryImpl @Inject constructor(
         //    把旧账号的离线改动推到新账号）
         pendingOpDao.clearVault(vaultId)
         // 5) vault 行删除：ciphers / folders 经外键 CASCADE 一并移除
+        // ⚠️ 先清远端库文件的本地缓存（批次 B1）—— **必须在删行之前**：
+        //    缓存键是 `origin`，删行之后就再也读不到它，条目会变成**永久孤儿**。
+        evictKdbxFileCache(vaultDao, kdbxFileCache, vaultId)
         vaultDao.delete(vaultId)
     }
 
@@ -849,4 +865,29 @@ private fun classifyKdbxError(error: Throwable): UnlockResult {
 
         is KdbxOpenError.Unknown -> UnlockResult.Unknown(kind.detail)
     }
+}
+
+/**
+ * 清某库**远端 kdbx 的本地缓存**（批次 B1，2026-09-30）。
+ *
+ * ## 为什么是**文件级**函数（不是类成员）
+ *
+ * `VaultRepositoryImpl` 的函数数**正好卡在 detekt `TooManyFunctions` 的 40 上限**，
+ * 任何新增成员都会爆门禁 —— 与 [classifyKdbxError] / [buildFullKey] 同一处置
+ * （见文件末尾的函数说明）。
+ *
+ * ## 两条纪律
+ *
+ * 1. ⚠️ 调用点必须在**删 vault 行之前**：缓存键是 `origin`，行没了就取不到键，
+ *    条目会变成永久孤儿（占空间、且用户以为"删干净了"）。
+ * 2. **取不到 origin / 删除失败一律静默跳过**：缓存是**优化**不是资产，
+ *    清不掉最多占点空间；让"退出登录 / 移除密码库"因此失败，代价远大于收益。
+ */
+private suspend fun evictKdbxFileCache(
+    vaultDao: VaultDao,
+    cache: KdbxFileCache,
+    vaultId: String,
+) {
+    val origin = runCatching { vaultDao.get(vaultId)?.origin }.getOrNull() ?: return
+    runCatching { cache.remove(origin) }
 }
