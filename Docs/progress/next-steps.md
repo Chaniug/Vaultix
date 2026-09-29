@@ -1,5 +1,27 @@
 # 下一步任务清单
 
+> ## 🔒 【2026-09-29 完成】批次 5.0 收工 —— 软锁 + 前台门禁 + 解锁提速
+>
+> **施工工作单**：[`quick-unlock-house-rework.md`](quick-unlock-house-rework.md)（批次 5.0 专节，自包含）
+> **定稿实施记录**：定稿 **§6.2**（含软锁/硬锁对照、前台门禁、提速与 Bitwarden 对照）。
+> **触发**：用户真机反馈 —— ①「设置**从不**，锁屏/清后台后 Vaultix 直接就是开着的，
+>   有风险」（对照 Bitwarden 会锁）；②「指纹解锁进密码库要等好几秒，应秒解秒进」。
+>   用户拍板**方案 A**：对齐 Bitwarden —— 离开 App 就真锁，回来靠恢复信封免交互自动开。
+> **① Never 档不再「从不锁」**：`VaultLockManagerImpl` 旧 `Never -> return@launch`
+>   改为 `AppBackgrounded` 时 `AutoUnlockRepository.softLock()` —— 清房钥匙 + 收两条
+>   会话模型，**保留信封**（回来自动开的凭据）。
+> **② ★★ 前台门禁（安全底线）**：软锁把 `houseKeyInMemory` 翻 false，而
+>   `AutoRestoreTrigger` 正 observe 它 —— **没门禁会立刻把钥匙读回内存、等于没锁**。
+>   故新增 `AutoLockController.isForeground` 作 `combine` 第三源，**非前台一律不恢复**。
+> **③ 指纹提速两层**：候选库改「一次读范围快照」消除 N 次串行 Keystore 往返；
+>   `completeLocalUnlock` 拆「先开核心库放行 → 异步补开其余库」。
+> **★ 核心洞察**：软锁 vs 硬锁 = **信封的留与删**（软 = 留、硬 = 删）；旧 bug 根因 =
+>   Never 档从不软锁 ⇒ 密钥常驻内存。
+> 门禁：detekt / `:app:compileFullDebugKotlin` / 单测 **398 全过 0 failed**
+> （`data:repository` 113 + `app` 285）+ 孤儿串未超基线。
+> **下一步 = 批次 5（真机验收清单 1-11，需真手指）**：⭐ 新增第 10 条（Never 档离场软锁 +
+> 回来自动开）、第 11 条（多库指纹秒进）。
+
 > ## 🏠 【2026-09-29 完成】快速解锁「房子化」批次 4 收工 —— 失效矩阵（定稿 §6）
 >
 > **接力文档（下一会话从这里进，自包含）**：[`house-rework-batch4-handoff.md`](house-rework-batch4-handoff.md)

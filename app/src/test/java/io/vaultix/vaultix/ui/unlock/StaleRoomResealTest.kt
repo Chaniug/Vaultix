@@ -6,6 +6,7 @@ import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.domain.RoomResealOutcome
 import io.vaultix.domain.RoomResealRepository
 import io.vaultix.domain.RoomUnlockOutcome
@@ -128,12 +129,18 @@ class StaleRoomResealTest {
         every { sessions.observeViewLockedVaultIds() } returns flowOf(emptySet())
         every { sessions.isViewLocked(any()) } returns false
 
+        // ⚠️ 范围偏好：候选库筛选现在直接读它（2026-09-29 提速修复，不再逐库过 Keystore）。
+        // 本文件只关心核心库的 Stale 重包，范围给空集即可（没有"其余库"要顺带开）。
+        val prefs = mockk<VaultixPreferences>(relaxed = true)
+        every { prefs.quickUnlockScope() } returns flowOf(emptySet())
+
         val vm = UnlockViewModel(
             SavedStateHandle(mapOf(UnlockViewModel.ARG_VAULT_ID to vaultId)),
             repository,
             sessions,
             mockk<UnlockRecoveryRepository>(relaxed = true),
             reseal,
+            prefs,
         )
         if (password != null) vm.onPasswordChange(password)
         return vm

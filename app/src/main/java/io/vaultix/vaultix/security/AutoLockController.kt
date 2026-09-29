@@ -60,6 +60,23 @@ class AutoLockController @Inject constructor(
     /** 锁定代次：UI 收集到新值即强制回到根路由（防状态穿透）。 */
     val lockEvents: StateFlow<Int> = _lockEvents.asStateFlow()
 
+    private val _isForeground = MutableStateFlow(false)
+
+    /**
+     * 进程是否处于**前台**（`onStart` 之后到 `onStop` 之前）。
+     *
+     * 为什么需要它（2026-09-29，方案 A 的关键依赖）：
+     * 「从不」档现在会在**离场时软锁**（清房钥匙、留信封）。软锁会让
+     * `AutoUnlockRepository.houseKeyInMemory` 从 true 变 false —— 而
+     * `AutoRestoreTrigger` 正是观察这个值的。**若没有前台门禁**，那个观察者
+     * 会在**后台**立刻把钥匙从信封解回内存，等于软锁从未发生（后台进程照样
+     * 持着密钥，内存转储可捞）。⇒ 恢复只允许在前台发生。
+     *
+     * 初值刻意是 `false`：进程创建那一刻还没走完 `onStart`，此时若允许恢复，
+     * 冷启动的恢复会与「按档位检查超时」抢时序。首个真实的 `onStart` 会把它翻正。
+     */
+    val isForeground: StateFlow<Boolean> = _isForeground.asStateFlow()
+
     init {
         // 锁定事件 → 代次自增（驱动导航回根）。
         lockManager.vaultStateEventFlow
@@ -72,10 +89,12 @@ class AutoLockController @Inject constructor(
     }
 
     override fun onStop(owner: LifecycleOwner) {
+        _isForeground.value = false
         lockManager.onAppBackgrounded()
     }
 
     override fun onStart(owner: LifecycleOwner) {
+        _isForeground.value = true
         lockManager.onAppForegrounded()
     }
 

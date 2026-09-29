@@ -4,9 +4,10 @@
 > 根因与证据：[`Docs/progress/audit/bitwarden-kdbx-sync-audit.md`](audit/bitwarden-kdbx-sync-audit.md)（下称「报告」）。
 > **论证一律看定稿，不在会话里重新论证。**
 >
-> 状态：🚧 施工中（**批次 1-4 ✅ 2026-09-29 收工（含批次 3.5 真机验收反馈修复），
+> 状态：🚧 施工中（**批次 1-4 + 批次 5.0 ✅ 2026-09-29 收工（含批次 3.5 真机验收反馈修复），
 > 门禁三关全绿；批次 5（真机验收）未动。**
-> 批次 4（失效矩阵）内容见下方专节；批次 3.5 内容见下方专节
+> 批次 4（失效矩阵）内容见下方专节；批次 5.0（软锁 + 前台门禁 + 解锁提速）见下方专节；
+> 批次 3.5 内容见下方专节
 > （「从不」档自动恢复对齐 Bitwarden + autofill 解密缓存 + 设置页三行精简）；
 > **接力入口：[`house-rework-batch3-handoff.md`](house-rework-batch3-handoff.md)**——批次 3 的
 > 删五类、判定逻辑可测化、结果页与副标题改动都在那份里；
@@ -150,6 +151,60 @@
 `RoomResealRepositoryImplTest` +8（新）· `LocalUnlockFanoutTest` +7 · `StaleRoomResealTest` +6（新）·
 `QuickUnlockControllerTest` +3。合计 **377 条零失败**。
 
+## 批次 5.0：软锁 + 前台门禁 + 解锁提速（✅ 2026-09-29 完成；三关全绿、单测 398 全过）
+
+> 触发：用户真机反馈两条 —— ①「设置了**从不**，锁屏/清后台后 Vaultix 直接就是开着的，
+> 有风险」（对照：Bitwarden 会加锁）；②「指纹解锁进密码库要等好几秒，正常应秒解秒进」。
+> **用户拍板方案 A**：对齐 Bitwarden —— 离开 App 就真锁（密钥清零），回来靠恢复信封免交互自动开。
+> 完整理由与对照见 **定稿 §6.2 实施记录**。
+
+### 问题①：Never 档「从不锁定」= 安全漏洞
+
+- 旧实现 `VaultTimeout.Never -> return@launch` —— **任何原因都不锁**，房钥匙常驻内存，
+  进程被内存转储时可捞到；除「锁定」按钮外无任何路径能清掉。
+- 修复 = **离场软锁**：
+  - `domain/AutoUnlockRepository` 新增 `softLock(): List<String>`；
+  - `data/AutoUnlockRepositoryImpl.softLock()`：`houseKeyStore.lock()` 清房钥匙 →
+    `sessions.lockAll()` + `Kdbx.lockAll()` 收两条会话模型 → **绝不 `removeAutoEnvelope()`**；
+  - `app/VaultLockManagerImpl`：`Never` 分支在 `AppBackgrounded` 时调 `softLockForBackground()`
+    （`AppCreated` 不调 —— 钥匙本就不在内存）。
+- **前台门禁（安全底线）**：`AutoLockController` 新增 `isForeground`；
+  `AutoRestoreTrigger` 的 `combine` 增第三源，**非前台一律不恢复** ——
+  否则软锁后 `houseKeyInMemory=false` 会立刻被自己的恢复分支撤销，等于没锁。
+
+### 问题②：指纹解锁慢
+
+- 根因：`UnlockViewModel.candidateVaultIds()` 对每个库调
+  `fingerprintQuickUnlockAvailable(id).first()` → 内含 `localUnlockKeyStore.keyAvailable`
+  = **一次 Keystore 往返**（冷启动可达数百毫秒），N 库 × 数百毫秒全串行，
+  且卡在「认证成功 → 结果返回」之间。
+- 修复两层：
+  1. 候选库改为**一次快照**：`preferences.quickUnlockScope().first()`（DataStore，零 Keystore）
+   - 与库列表在内存求交；
+  2. `completeLocalUnlock` 拆两段：**先开核心库 → 立即放行** → 异步补开其余库
+     （`LocalUnlockFanout.openRest`，新增 `Result.lockOpened` 供判断房钥匙在不在）。
+
+### 改动文件（6 生产 + 5 测试）
+
+| 层 | 文件 | 内容 |
+|---|---|---|
+| domain | `AutoUnlockRepository.kt` | `+softLock()` |
+| data:repository | `AutoUnlockRepositoryImpl.kt` | `+softLock()`（清密钥、留信封）+ 注入 `VaultSessionManager` |
+| app | `AutoLockController.kt` | `+isForeground: StateFlow<Boolean>` |
+| app | `VaultLockManagerImpl.kt` | Never 档 `AppBackgrounded` → `softLockForBackground()` |
+| app | `AutoRestoreTrigger.kt` | 前台门禁（`combine` 三源） |
+| app | `UnlockViewModel.kt` / `LocalUnlockFanout.kt` | 候选库一次快照 + 先开核心库异步补开 + `openRest`/`lockOpened` |
+
+测试：`VaultLockManagerImplNeverTest` **新**（+3，**已做变异验证：还原旧实现必变红**）·
+`AutoRestoreTriggerTest` **新**（+6，前台门禁）· `AutoUnlockRepositoryImplTest` **新**（+9，软锁不删信封）·
+`UnlockViewModelTest` +3（候选筛选：排除目标 / 排除范围外 / 排除已解锁）·
+`StaleRoomResealTest`（补 `VaultixPreferences` 参数）。合计 **398 条零失败**。
+
+> ⚠️ **写测试踩过的坑**：`HouseKeyStore.lock()` / `isUnlocked` 是**非 suspend** 成员，
+> 只能 `every`，用 `coEvery` 会静默失效（运行时才报 `no answer found`）；
+> `softLock()` 内含 `withContext(Dispatchers.IO)`，纯 JVM `runTest` 下**必须轮询终态**，
+> `advanceUntilIdle()` 管不到真实线程池。
+
 ## 批次 5：真机验收清单
 
 1. 指纹一次 → 范围内全部库打开（日志：1 次 Keystore + N 次软件）；
@@ -166,9 +221,15 @@
    再聚焦输入框 → **必须要求重新认证**（信封已删，真锁）；
 9. **（批次 3.5 新增）设置页**：解锁方式组只剩两行；On 态点整行 = 进向导（不关闭），
    点开关 = 关闭；Off 态点行/开关 = 进向导。
+10. **（批次 5.0 新增）Never 档离场软锁**：设置**从不**锁定 → 解锁一次 →
+    划掉后台（或锁屏）→ 观察日志 `VaultixAutoRestore → 离场软锁` → **回到前台应免交互自动开**
+    （信封保留）；随后主动锁库 → 必须要求重新认证（信封已删，真锁）。
+    ⚠️ 与第 8 条的区别：第 8 条验**填充路径**，本条验**生命周期软锁**。
+11. **（批次 5.0 新增）指纹提速**：多库（≥4）场景下指纹一次 → 进库应**秒进**（先开核心库放行），
+    其余库在后台补开（日志 `fanout rest`）；不再出现「指纹过了等好几秒」。
 
 ---
 
 ## 完成定义
 
-全批次三关门禁全绿 + 真机验收 1-7 全过 + 定稿补「实施记录」+ 本单各批次标 ✅。
+全批次三关门禁全绿 + 真机验收 1-11 全过 + 定稿补「实施记录」+ 本单各批次标 ✅。

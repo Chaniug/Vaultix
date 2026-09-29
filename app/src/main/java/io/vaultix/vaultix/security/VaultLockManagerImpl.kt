@@ -30,9 +30,11 @@
 package io.vaultix.vaultix.security
 
 import android.content.Context
+import android.util.Log
 import dagger.hilt.android.qualifiers.ApplicationContext
 import io.vaultix.datastore.VaultTimeout
 import io.vaultix.datastore.VaultixPreferences
+import io.vaultix.domain.AutoUnlockRepository
 import io.vaultix.domain.UnlockResult
 import io.vaultix.domain.VaultRepository
 import kotlinx.coroutines.CoroutineScope
@@ -63,6 +65,14 @@ class VaultLockManagerImpl @Inject constructor(
     @ApplicationContext context: Context,
     private val vaultRepository: VaultRepository,
     private val preferences: VaultixPreferences,
+    /**
+     * 「从不」档离场软锁的动作实现（2026-09-29）。
+     *
+     * ⚠️ 注入 `AutoUnlockRepository` 而不是直接调 `VaultRepository.lockAll()`：
+     * 「软锁 = 清密钥但**留**信封」这个语义只在那边定义，混用会退化成
+     * 「离场即删信封」（用户回来要重新指纹 —— 方案 B，不是用户选的 A）。
+     */
+    private val autoUnlock: AutoUnlockRepository,
 ) : VaultLockManager {
 
     // 进程级短任务 scope（启动/取消定时器）。项目当前唯一的调度器限定符是
@@ -180,18 +190,39 @@ class VaultLockManagerImpl @Inject constructor(
      * 超时检查（对齐 Bitwarden `checkForVaultTimeout`）。
      *
      * 分流规则**逐条照抄**：
-     * - `Never` → 直接返回，任何原因都不锁；
+     * - `Never` → **离场时软锁**（见下），`AppCreated` 不锁；
      * - `OnAppRestart` → **只在** `AppCreated` 时触发；且 `createdForAutofill == true`
      *   且**非**首次创建时**豁免**（为 autofill/凭据流程拉起进程不该锁库）；
      * - 其它档位 → `AppCreated(firstTimeCreation = true)` 立即执行；
      *   `AppBackgrounded` / `UserChanged` 走「延迟 N 分钟后执行」。
+     *
+     * ## ★ `Never` 档为什么也要锁（2026-09-29 修复，用户报「锁屏后也不锁库」）
+     *
+     * 旧实现在 `Never` 分支直接 `return@launch` —— **任何原因都不锁**。后果不是
+     * 「方便」而是**安全漏洞**：用户划掉后台/锁屏后房钥匙一直留在内存里，
+     * 进程被内存转储时可捞到；而且「锁定」按钮之外没有任何路径能把它清掉。
+     *
+     * 正确语义（对齐 Bitwarden：`Never` = 不按**时间**自动锁，但**离场仍然锁**）：
+     * 离场时走 [AutoUnlockRepository.softLock] —— **清密钥、留信封**。
+     * 用户回到前台时 `AutoRestoreTrigger` 免交互把库开回来，
+     * 所以体感仍与「一直开着」一致，但**后台期间密钥确实不在内存**。
+     *
+     * ⚠️ `AppCreated` **不**做软锁：进程刚重建时房钥匙本来就不在内存，
+     * 软锁无事可做；恢复由 `AutoRestoreTrigger` 负责（且有前台门禁）。
      */
     private fun checkForVaultTimeoutInternal(vaultId: String, reason: CheckTimeoutReason) {
         scope.launch {
             val timeout = preferences.vaultTimeout.first()
 
             when (timeout) {
-                VaultTimeout.Never -> return@launch
+                VaultTimeout.Never -> {
+                    // ★ 离场软锁（清密钥 + 留信封）。仅 `AppBackgrounded` 需要 ——
+                    //   `UserChanged` 在当前单账号模型下不发生，`AppCreated` 时钥匙本就不在。
+                    if (reason is CheckTimeoutReason.AppBackgrounded) {
+                        softLockForBackground()
+                    }
+                    return@launch
+                }
 
                 VaultTimeout.OnAppRestart -> {
                     // 仅「进程创建」这一原因会触发；切后台不锁。
@@ -250,6 +281,24 @@ class VaultLockManagerImpl @Inject constructor(
         setVaultToLocked(vaultId)
     }
 
+    /**
+     * 「从不」档离场软锁：清会话 + 清房钥匙，**保留自动恢复信封**。
+     *
+     * ⚠️ 与 [setVaultToLocked] 的**唯一**差别是信封的留与删 —— 这正是
+     * 「回来后免交互打开」（用户选的方案 A）与「回来重新过门锁」（方案 B）
+     * 的分界。别把这里的 lock 实现成 `vaultRepository.lockVault()`：
+     * 后者会删信封，用户回来就要重新指纹，与承诺不符。
+     *
+     * ⚠️ 走 [AutoUnlockRepository.softLock] 而不是 `VaultRepository.lockAll()`：
+     * 后者的语义是「用户要求锁上」（连带删信封），与本路径完全相反。
+     */
+    private fun softLockForBackground() {
+        scope.launch {
+            runCatching { autoUnlock.softLock() }
+                .onFailure { Log.w(TAG, "离场软锁失败：${it.message}") }
+        }
+    }
+
     /** 取消并移除指定库的定时器。 */
     private fun cancelTimer(vaultId: String) {
         timerJobMap.remove(vaultId)?.job?.cancel()
@@ -296,5 +345,6 @@ class VaultLockManagerImpl @Inject constructor(
 
     private companion object {
         const val MS_PER_MINUTE = 60_000L
+        const val TAG = "VaultixLockManager"
     }
 }

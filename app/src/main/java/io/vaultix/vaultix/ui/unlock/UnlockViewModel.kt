@@ -5,6 +5,7 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.domain.PIN_MIN_LENGTH
 import io.vaultix.domain.PinUnlockOutcome
 import io.vaultix.domain.RoomResealOutcome
@@ -68,6 +69,15 @@ class UnlockViewModel @Inject constructor(
      * 用刚输的密码重包一遍，让快速解锁自此自愈（否则每周都要重输主密码）。
      */
     private val roomReseal: RoomResealRepository,
+    /**
+     * 生效范围（`house_room::` 的镜像）。
+     *
+     * ⚠️ 为**解锁提速**而注入（2026-09-29）：候选库筛选需要「哪些库在快速解锁
+     * 范围内」这一个事实，而它就在偏好里（DataStore，**零 Keystore**）。
+     * 旧实现绕道 `VaultRepository.fingerprintQuickUnlockAvailable(id)` ——
+     * 那条路每个库都要过一次 Keystore（见 [candidateVaultIds] 的 KDoc）。
+     */
+    private val preferences: VaultixPreferences,
 ) : ViewModel() {
 
     data class TwoFactorUi(
@@ -458,22 +468,55 @@ class UnlockViewModel @Inject constructor(
      *
      * 已经解锁的库密钥就在内存里，再开一次房间是纯浪费（同
      * [completeLocalUnlock] 对查看锁分支的告诫）。
+     *
+     * ## ★ 为什么改成"一次快照"而不是逐库问（2026-09-29 提速修复）
+     *
+     * 旧实现是 `.filter { fingerprintQuickUnlockAvailable(it).first() }` ——
+     * **每个库各订阅一次 Flow**。而那条 Flow 内部含
+     * `localUnlockKeyStore.keyAvailable`，即**一次 Keystore 往返**
+     * （源码注释自述「冷启动可达数百毫秒」）。N 个库 ⇒ **N 次串行 Keystore**，
+     * 且全部发生在「指纹认证成功 → 结果返回」之间 ⇒ 用户感知「指纹过了却要等好几秒」。
+     *
+     * 正确的判据是**两个全局事实**相乘，与"具体哪个库"无关：
+     * 1. 指纹门锁是否可用 —— **全局一份**（房子化后门锁只有一把）；
+     * 2. 该库是否在生效范围内 —— 一次读偏好（`house_room::` 的镜像）。
+     *
+     * ⇒ 问**一次**就够，然后在内存里做集合过滤。Keystore 往返从 N 次降到 1 次
+     * （且那次 `fingerprintLockAvailable()` 在解锁页首帧已经预取过）。
+     *
+     * ⚠️ 这里刻意**不**再调 `fingerprintQuickUnlockAvailable(id)`：它逐库求值
+     * 的样子看着"更精确"，实际上是把两个全局量重复计算了 N 遍。
      */
     private suspend fun candidateVaultIds(target: String): List<String> =
         withContext(Dispatchers.IO) {
             runCatching {
-                vaultRepository.observeVaults().first()
-                    .filter { it.id != target && !it.unlocked }
+                val vaults = vaultRepository.observeVaults().first()
+                // 一次读范围（DataStore，零 Keystore），与库列表在内存里求交。
+                val scope = preferences.quickUnlockScope().first()
+                vaults
+                    .filter { it.id != target && !it.unlocked && it.id in scope }
                     .map { it.id }
-                    .filter { id ->
-                        runCatching { vaultRepository.fingerprintQuickUnlockAvailable(id).first() }
-                            .getOrDefault(false)
-                    }
             }.getOrDefault(emptyList())
         }
 
     /**
      * BiometricPrompt 认证成功（携带本次 cipher）：解门锁 → 开目标库（+顺带库）。
+     *
+     * ## ★ 为什么「先开核心库」再异步补开其余库（2026-09-29 提速修复）
+     *
+     * 旧实现一次性把「核心库 + 其余库」交给 `LocalUnlockFanout.unlockAll`，
+     * **等全部开完**才发 [Event.Unlocked]。而「其余库」是**附加收益**，
+     * 却挡在了用户的核心诉求（"我要进我点的那一个库"）前面 ——
+     * 库多时（每个库要解信封 + 开库，KDBX 还要解析整个文件）就是好几秒。
+     *
+     * 现在拆成两段：
+     * 1. **核心库同步开**（用户等着的那一个）→ 立刻发 [Event.Unlocked] 放行；
+     * 2. **其余库异步补开**（`viewModelScope` 里，发完事件之后）——
+     *    它们本来就只是"顺便也让别的库能用"，慢一点无所谓，
+     *    且其中任何失败都不该影响"我已经进去了"这个事实。
+     *
+     * ⚠️ 门锁解不开时的 rearm / 降级善后**仍属核心段**（在 fanout 里）——
+     * 那是用户必须知道的结论，不能推到后台异步里。
      *
      * @param forViewLock 本次认证是为查看层锁发起的 → 只清标记，**不重新解封密钥**
      *   （密钥本来就在会话里；再解封一次等于把同一把密钥写第二遍，白做一轮 KDF 派生）。
@@ -494,16 +537,14 @@ class UnlockViewModel @Inject constructor(
                 _events.send(Event.Unlocked)
                 return@launch
             }
-            // 同上：Keystore 解密不占主线程。库类型分流已随房子化下沉到
-            // repository（unlockVaultFromRoom 内部按 kind 分流），编排只剩
-            // 「一次门锁 + 逐库房间」。
-            // ★ 2026-09-16：扇出逻辑抽到 LocalUnlockFanout，与 AutofillActivity
-            //   共用同一份实现（此前两处各写一遍，只可能修好一处）。
+            // 核心段：一次门锁 + 只开用户点的那个库（其余库延后）。
+            // 库类型分流已随房子化下沉到 repository（unlockVaultFromRoom 内部按 kind 分流）。
             val fanout = withContext(Dispatchers.IO) {
                 LocalUnlockFanout.unlockAll(
                     repository = vaultRepository,
                     first = vaultId,
-                    rest = rest,
+                    // ★ 其余库不在这一段里 —— 见本方法 KDoc「先开核心库」。
+                    rest = emptyList(),
                     cipher = cipher,
                     // 门锁解不开时的分叉（rearm / 降级）在 fanout 里，
                     // 判据 = 房钥匙在不在内存（定稿 §6，批次 4）。
@@ -522,6 +563,8 @@ class UnlockViewModel @Inject constructor(
                         )
                     }
                     _events.send(Event.Unlocked)
+                    // ★ 放行之后**才**去补开其余库（异步，失败无人问津）。
+                    openRemainingInBackground(fanout.lockOpened, rest)
                 }
                 // 主密码在别处改过（只可能来自 KDBX）：给「输新密码」的指引，
                 // 别让用户误以为指纹坏了（定稿 §4.4 D3）。
@@ -553,6 +596,40 @@ class UnlockViewModel @Inject constructor(
                     }
                 }
             }
+        }
+    }
+
+    /**
+     * 放行之后异步补开「其余库」（2026-09-29 提速修复的第二段）。
+     *
+     * ## 为什么是"发完事件之后"而不是"和核心库一起"
+     *
+     * 见 [completeLocalUnlock] 的 KDoc：其余库是附加收益，用户等的是他点的那一个。
+     *
+     * ## 为什么可以"无人问津"
+     *
+     * 这些库的成败**不改变任何用户可见结论** —— 用户已经进库了。
+     * 它们唯一的用途是"下次跨库搜索/填充时这些库也是可用的"，失败时
+     * 用户下次解锁会自然重试。把结果塞进 UI 反而是噪音
+     * （旧实现在结果页报"有 N 个库未打开"，而用户根本没打算开它们）。
+     *
+     * ⚠️ `viewModelScope` 在 ViewModel 销毁时会取消 —— 这正是想要的语义：
+     * 用户已经离开解锁页，剩余库的补开就没必要了（下次解锁会重来）。
+     *
+     * @param lockOpened 门锁是否已开（房钥匙在不在内存）。false 时补开必全败，直接跳过。
+     */
+    private fun openRemainingInBackground(lockOpened: Boolean, rest: List<String>) {
+        if (rest.isEmpty()) return
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    LocalUnlockFanout.openRest(
+                        repository = vaultRepository,
+                        rest = rest,
+                        houseKeyInMemory = lockOpened,
+                    )
+                }
+            }.onFailure { Log.d(TAG, "其余库补开失败（不影响已进入的库）：${it.message}") }
         }
     }
 

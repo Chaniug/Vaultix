@@ -52,6 +52,17 @@ internal object LocalUnlockFanout {
         val restOpened: Int,
         /** 其余库里未能打开的数量。 */
         val restFailed: Int,
+        /**
+         * 门锁是否解开了（房钥匙是否进了内存）。
+         *
+         * 为什么值得单独返回（2026-09-29 提速拆分引入）：调用方现在把「核心库」
+         * 与「其余库」拆成两段执行 —— 第一段跑完后要判断**房钥匙在不在内存**，
+         * 才能决定要不要接着补开其余库（没钥匙的话 `unlockVaultFromRoom` 必然全败，
+         * 白跑一轮）。旧实现里这个信息隐含在 `first !is Unavailable` 中，拆分后
+         * 必须显式化：首库可能是因为**房间信封坏**而 `Unavailable`，
+         * 那时门锁其实是开着的，其余库照样能开。
+         */
+        val lockOpened: Boolean,
     )
 
     /**
@@ -113,6 +124,7 @@ internal object LocalUnlockFanout {
                 first = RoomUnlockOutcome.Unavailable(detail),
                 restOpened = 0,
                 restFailed = rest.size,
+                lockOpened = false,
             )
         }
         // 目标库与其余库地位完全相同（首库特殊化已随 H2 一起消失）。
@@ -130,7 +142,42 @@ internal object LocalUnlockFanout {
         AutofillLogger.d(
             "fanout done first=${describe(firstResult)} opened=$opened failed=$failed",
         )
-        return Result(first = firstResult, restOpened = opened, restFailed = failed)
+        return Result(
+            first = firstResult,
+            restOpened = opened,
+            restFailed = failed,
+            lockOpened = true,
+        )
+    }
+
+    /**
+     * 只补开「其余库」（核心库已开、事件已放行之后才调）。
+     *
+     * 单独抽出来的理由见调用方（`UnlockViewModel.completeLocalUnlock`）的 KDoc：
+     * 其余库是附加收益，不该挡住用户进他点的那一个库。
+     *
+     * @param houseKeyInMemory 房钥匙是否已在内存。false 时直接返回 ——
+     *   没有钥匙，`unlockVaultFromRoom` 必然全败，白跑一轮还刷一堆日志。
+     * @return 成功打开的数量（调用方通常不关心，留作诊断与测试断言）。
+     */
+    suspend fun openRest(
+        repository: VaultRepository,
+        rest: List<String>,
+        houseKeyInMemory: Boolean,
+    ): Int {
+        if (rest.isEmpty() || !houseKeyInMemory) {
+            AutofillLogger.d("fanout rest → 跳过（rest=${rest.size} key=$houseKeyInMemory）")
+            return 0
+        }
+        var opened = 0
+        for (id in rest) {
+            val outcome = runCatching { repository.unlockVaultFromRoom(id) }
+                .getOrElse { RoomUnlockOutcome.Unavailable(it.message ?: "打开失败") }
+            if (outcome is RoomUnlockOutcome.Opened) opened++
+            AutofillLogger.d("fanout rest=$id → ${describe(outcome)}")
+        }
+        AutofillLogger.d("fanout rest done opened=$opened failed=${rest.size - opened}")
+        return opened
     }
 
     /**

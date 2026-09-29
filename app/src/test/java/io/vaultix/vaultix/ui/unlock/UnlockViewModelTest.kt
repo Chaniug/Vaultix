@@ -5,6 +5,7 @@ import com.google.common.truth.Truth.assertThat
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
+import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.domain.RoomResealRepository
 import io.vaultix.domain.UnlockRecoveryRepository
 import io.vaultix.domain.VaultRepository
@@ -17,6 +18,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
@@ -109,8 +113,101 @@ class UnlockViewModelTest {
         assertThat(viewModel.state.value.localUnlockAvailable).isFalse()
     }
 
+    // ---- 候选库筛选（2026-09-29 提速修复，方案 C）----
+    //
+    // 一次认证要顺带开的"其余库"只可能是**纳入了快速解锁范围**、且**当前锁着**、
+    // 且**不是本次目标**的库。旧实现逐库订阅 `fingerprintQuickUnlockAvailable(id)`
+    // （每库一次 Keystore 往返 ⇒ 用户感知"指纹过了却要等好几秒"）；
+    // 现在只读一次范围快照，在内存里求交。下面三条钉死这个筛选语义。
+
+    @Test
+    fun candidateVaultsExcludeTheTargetItself() = runTest {
+        // 目标库由核心段单独开，不该出现在"其余库"里（否则白开一次、还多算一次失败）。
+        val vaults = listOf(
+            vaultSummary(id = "target"),
+            vaultSummary(id = "other"),
+        )
+        val viewModel = unlockViewModel(
+            vaultFlow = { flowOf(vaults) },
+            scope = setOf("target", "other"),
+        )
+        advanceUntilIdle()
+
+        val prompt = startAndCapturePrompt(viewModel)
+
+        assertThat(prompt.rest).containsExactly("other")
+    }
+
+    @Test
+    fun candidateVaultsExcludeVaultsOutsideTheQuickUnlockScope() = runTest {
+        // 只走主密码的库不在范围内：对它们开房间必然 NotEnrolled，纯浪费。
+        val vaults = listOf(
+            vaultSummary(id = "target"),
+            vaultSummary(id = "inScope"),
+            vaultSummary(id = "outOfScope"),
+        )
+        val viewModel = unlockViewModel(
+            vaultFlow = { flowOf(vaults) },
+            scope = setOf("target", "inScope"),
+        )
+        advanceUntilIdle()
+
+        val prompt = startAndCapturePrompt(viewModel)
+
+        assertThat(prompt.rest).containsExactly("inScope")
+    }
+
+    @Test
+    fun candidateVaultsExcludeAlreadyUnlockedVaults() = runTest {
+        // 已解锁的库密钥就在内存里，再开一次房间是纯浪费。
+        val vaults = listOf(
+            vaultSummary(id = "target"),
+            vaultSummary(id = "stillLocked"),
+            vaultSummary(id = "alreadyOpen", unlocked = true),
+        )
+        val viewModel = unlockViewModel(
+            vaultFlow = { flowOf(vaults) },
+            scope = setOf("target", "stillLocked", "alreadyOpen"),
+        )
+        advanceUntilIdle()
+
+        val prompt = startAndCapturePrompt(viewModel)
+
+        assertThat(prompt.rest).containsExactly("stillLocked")
+    }
+
+    /**
+     * 走到「弹认证」那一步并截获 [UnlockViewModel.Event.PromptForUnlock]。
+     *
+     * 为什么不能直接读 `state`：候选库是**随事件携带**的（`Event.PromptForUnlock.rest`），
+     * 刻意不进 UiState（认证期间库列表可能变化，进 state 会让 UI 读到过期值）。
+     * 故必须从事件流里取。
+     */
+    private suspend fun TestScope.startAndCapturePrompt(
+        viewModel: UnlockViewModel,
+    ): UnlockViewModel.Event.PromptForUnlock {
+        val prompts = mutableListOf<UnlockViewModel.Event.PromptForUnlock>()
+        // 收集必须在 `startLocalUnlock()` 之前就绪，故用 `backgroundScope`
+        // （runTest 结束时会自动取消，不会让测试挂住）。
+        backgroundScope.launch {
+            viewModel.events.collect {
+                if (it is UnlockViewModel.Event.PromptForUnlock) prompts += it
+            }
+        }
+        viewModel.startLocalUnlock()
+        // ⚠️ 不能只用 `advanceUntilIdle()`：`candidateVaultIds` 内部走
+        //   `withContext(Dispatchers.IO)`（真实线程池），测试调度器管不到它。
+        //   与项目既有纪律一致 —— 轮询终态。
+        val prompt = withTimeoutOrNull(5_000L) {
+            while (prompts.isEmpty()) delay(1)
+            prompts.single()
+        }
+        return prompt ?: error("没有收到 PromptForUnlock 事件（cipher 未就绪？）")
+    }
+
     private fun unlockViewModel(
         available: Boolean = true,
+        scope: Set<String> = emptySet(),
         vaultFlow: () -> Flow<List<VaultSummary>>,
     ): UnlockViewModel {
         val repository = mockk<VaultRepository>()
@@ -120,7 +217,10 @@ class UnlockViewModelTest {
         // 所以这里恒为 false（PIN 入口不渲染，不干扰断言）。要测 PIN 请另开用例。
         // 房子化后门锁是全局的（不再按库），无参。
         every { repository.pinLockAvailable() } returns flowOf(false)
-        coEvery { repository.prepareFingerprintUnlock() } returns null
+        // 弹认证需要一个可用的 cipher：relaxed 的 mockk 无法返回非 null 的 javax 对象，
+        // 故显式造一个未 init 的 AES Cipher（只被透传，不会被本层使用）。
+        coEvery { repository.prepareFingerprintUnlock() } returns
+            javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
 
         val sessions = mockk<VaultSessionRepository>()
         every { sessions.observeViewLockedVaultIds() } returns flowOf(emptySet())
@@ -133,16 +233,20 @@ class UnlockViewModelTest {
         //（那条路径见 `StaleRoomResealTest`）。
         val reseal = mockk<RoomResealRepository>(relaxed = true)
 
-        return UnlockViewModel(SavedStateHandle(), repository, sessions, recovery, reseal)
+        // 范围偏好：候选库筛选取快照（2026-09-29 提速修复）。
+        val prefs = mockk<VaultixPreferences>(relaxed = true)
+        every { prefs.quickUnlockScope() } returns flowOf(scope)
+
+        return UnlockViewModel(SavedStateHandle(), repository, sessions, recovery, reseal, prefs)
     }
 
-    private fun vaultSummary(id: String) = VaultSummary(
+    private fun vaultSummary(id: String, unlocked: Boolean = false) = VaultSummary(
         id = id,
         kind = VaultKind.BITWARDEN,
         name = "示例库",
         account = "user@example.com",
         origin = "https://vault.example.com",
-        unlocked = false,
+        unlocked = unlocked,
     )
 
     private companion object {
