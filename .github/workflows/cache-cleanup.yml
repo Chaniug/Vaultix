@@ -48,6 +48,12 @@ jobs:
     timeout-minutes: 20
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # ⚠️ 2026-09-29 修复：本 job **不 checkout 代码**，工作目录不是 git 仓库；
+      #    而 `gh cache list` / `gh cache delete` 需要知道目标仓库（gh 默认从 git remote 推断）。
+      #    不设 GH_REPO 时会报 `fatal: not a git repository` 并以 exit 1 退出。
+      #    `gh api "repos/$REPO/..."` 之所以能跑，是因为它把仓库名写进了 URL —— 但 cache 子命令没有。
+      #    显式指定 GH_REPO 后，所有 gh 子命令（含 Python 里 subprocess 调用的）都能正确定位仓库。
+      GH_REPO: ${{ github.repository }}
       REPO: ${{ github.repository }}
       MAX_AGE_DAYS: ${{ inputs.max_age_days || '7' }}
       KEEP_PER_FAMILY: ${{ inputs.keep_per_family || '3' }}
