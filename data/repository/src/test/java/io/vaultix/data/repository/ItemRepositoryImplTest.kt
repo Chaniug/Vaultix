@@ -362,12 +362,16 @@ class ItemRepositoryImplTest {
         )
         every { cipherDao.observeByVault(vaultId) } returns flowOf(listOf(entity))
 
-        // 未解锁 → 空列表（不泄密）
+        // 未解锁 → 空列表（不泄密）。
         val locked = repo.observeItems(vaultId).first()
         assertTrue(locked.isEmpty())
 
         sessions.unlock(vaultId, key)
-        val items = repo.observeItems(vaultId).first()
+        // 共享缓存（Eagerly + replay=1）先给到锁定期的旧快照，解锁触发的重算
+        // 由 shareScope 的真实线程异步完成 —— 用 first{非空} 等它追上
+        // （与 UI / autofill 消费响应式发射的方式一致；冷流时代的 first() 直读
+        // 当前状态，那个契约已随缓存化失效）。
+        val items = repo.observeItems(vaultId).first { it.isNotEmpty() }
         assertEquals(1, items.size)
         val item = items.single()
         assertEquals("GitHub", item.title)

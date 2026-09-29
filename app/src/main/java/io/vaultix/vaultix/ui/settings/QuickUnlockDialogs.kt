@@ -21,7 +21,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Password
-import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Upgrade
 import androidx.compose.material3.BasicAlertDialog
 import androidx.compose.material3.Checkbox
@@ -59,7 +58,7 @@ import io.vaultix.vaultix.ui.common.rememberFragmentActivity
 import io.vaultix.vaultix.ui.theme.Spacing
 
 /**
- * 「解锁方式」的三行设置项（**内联在密码库管理页**，不再是一个对话框）。
+ * 「解锁方式」的设置行（**内联在密码库管理页**，不再是一个对话框）。
  *
  * ## 为什么从对话框改成内联（2026-09-17）
  *
@@ -71,6 +70,21 @@ import io.vaultix.vaultix.ui.theme.Spacing
  * 定稿 §11.11 的目标形态也是把开关直接画在卡片里。⇒ 本轮内联，并**只留一行汇总**
  * （「已对 N 个库生效」），不再逐库列行；逐库勾选挪进 [ConfigureDialog]
  * （默认全勾，取消勾选是可选动作）。
+ *
+ * ## ★ 行与开关的分工（2026-09-29 删第三行，真机反馈"三行冗余"）
+ *
+ * | 点哪里 | 干什么 |
+ * |---|---|
+ * | **整行**（热区远大于开关） | 进 [ConfigureDialog] 向导：改库范围 / 补配另一种方式 |
+ * | **开关本体** | `On` ⇒ 关掉这把门锁；`Off` ⇒ 同样进向导（与点行等效） |
+ *
+ * 旧形态有第三行「管理解锁方式」专做进向导的入口 —— 但两个开关行**本来就可点**
+ * （热区大得多），再放一个功能相同的第三行，用户看到的只是"三行说一件事"
+ * （2026-09-29 真机验收原话："看起来有点冗余"）。⇒ 把"管理"并进整行点击，
+ * 第三行删除。向导标题仍叫「管理解锁方式」（[R.string.quick_unlock_manage_action]）。
+ *
+ * ⚠️ [onManage] 不是第三行的遗物：顶部「旧模型残留需重新登记」的提示行还在用它
+ * （那行的语义是"两种方式都不预选"，与按方式进向导不同）。
  *
  * ## 开关只有**两种**呈现（批次 3，2026-09-29 删 `Partial`）
  *
@@ -105,8 +119,15 @@ internal fun QuickUnlockSettingsRows(
      * （定稿 §8 不写兼容层），不给这句话，用户看到的就是"升级之后快速解锁莫名不能用了"。
      */
     legacyRemains: Boolean,
+    /** 点「指纹」**整行**：进向导并预选指纹（改范围 / 补配，见类 KDoc 的分工表）。 */
+    onManageBiometric: () -> Unit,
+    /** 点「PIN」**整行**：进向导并预选 PIN。 */
+    onManagePin: () -> Unit,
+    /** 拨「指纹」**开关**：`On` ⇒ 关门锁；`Off` ⇒ 进向导（与点行等效）。 */
     onToggleBiometric: () -> Unit,
+    /** 拨「PIN」**开关**：语义同 [onToggleBiometric]。 */
     onTogglePin: () -> Unit,
+    /** 旧模型残留提示行的点击（两种方式都不预选的向导）。 */
     onManage: () -> Unit,
 ) {
     if (legacyRemains) {
@@ -123,8 +144,9 @@ internal fun QuickUnlockSettingsRows(
         title = stringResource(R.string.quick_unlock_section_biometric),
         subtitle = biometricSummary(state, canAuthenticate),
         enabled = canAuthenticate,
-        // 整行可点（热区比开关本身大得多）；开关自带处理，点开关不会双触发。
-        onClick = onToggleBiometric,
+        // 整行 = 管理（进向导）：热区比开关本身大得多，且 On 态下"想改范围"远比
+        // "想关掉"高频 —— 关闭这个低频破坏性动作留给开关本体，避免误触整行即关闭。
+        onClick = onManageBiometric,
         trailing = {
             CapabilityToggle(
                 capability = state.biometric,
@@ -139,7 +161,7 @@ internal fun QuickUnlockSettingsRows(
         icon = { Icon(Icons.Filled.Password, contentDescription = null) },
         title = stringResource(R.string.pin_section_title),
         subtitle = pinSummary(state),
-        onClick = onTogglePin,
+        onClick = onManagePin,
         trailing = {
             CapabilityToggle(
                 capability = state.pin,
@@ -147,13 +169,6 @@ internal fun QuickUnlockSettingsRows(
                 onToggle = onTogglePin,
             )
         },
-    )
-    SettingsDivider()
-    SettingsRow(
-        icon = { Icon(Icons.Filled.Tune, contentDescription = null) },
-        title = stringResource(R.string.quick_unlock_manage_action),
-        subtitle = stringResource(R.string.settings_quick_unlock_manage_desc),
-        onClick = onManage,
     )
 }
 

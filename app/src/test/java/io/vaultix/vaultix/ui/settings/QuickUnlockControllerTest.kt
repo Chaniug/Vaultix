@@ -227,7 +227,8 @@ class QuickUnlockControllerTest {
 
     @Test
     fun `门锁在但房钥匙不在内存时也要拦下`() {
-        // ★ 顺序约束的**第二层**：房钥匙绝不落盘 ⇒ 进程重启即失；
+        // ★ 顺序约束的**第二层**：房钥匙明文仅存内存（硬约束 #1）⇒ 进程重启即失
+        // （Never 档的 auto 信封恢复发生在进程启动时，到向导这一步钥匙算已回来）；
         // 此时门锁信封还在也解不出钥匙，封了也是白封。
         val ui = state(biometricLock = true, pinLock = false)
 

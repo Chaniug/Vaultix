@@ -47,6 +47,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * 系统自动填充服务（M2-a）。
@@ -195,7 +196,20 @@ class VaultixAutofillService : AutofillService() {
             return null
         }
 
-        val unlocked = vaultRepository.observeUnlockedVaultIds().first()
+        val unlockedNow = vaultRepository.observeUnlockedVaultIds().first()
+        // ★ 自动恢复等待窗口（2026-09-29，对齐 Bitwarden AutofillCipherProviderImpl
+        //   isVaultLocked 的 firstWithTimeoutOrNull(500) { status != UNLOCKING }）：
+        //   「从不」档进程被杀后，AutoRestoreTrigger 正在后台恢复会话（解信封 →
+        //   逐库开房间，纯软件、无 KDF、无网络，量级在几十毫秒）。
+        //   先等它一小会，恢复完成就**直接列条目**，不打扰用户解锁；
+        //   超时（非 Never 档 / 信封不可解 / 冷启动太慢）才走「解锁 Vaultix」回灌。
+        val unlocked = if (unlockedNow.isNotEmpty()) {
+            unlockedNow
+        } else {
+            withTimeoutOrNull(AUTO_RESTORE_WAIT_MS) {
+                vaultRepository.observeUnlockedVaultIds().first { it.isNotEmpty() }
+            }.let { restored -> restored ?: unlockedNow }
+        }
         if (unlocked.isEmpty()) {
             AutofillLogger.d("locked: no unlocked vault → unlock fallback")
             // ★ 解锁即回填（`.ai/ISSUES.md` #60 第 4 步）：
@@ -306,6 +320,13 @@ class VaultixAutofillService : AutofillService() {
 
         /** 下拉面板最多给几条建议（超出转「在 Vaultix 中搜索」，防响应过大被系统丢弃）。 */
         const val MAX_DATASETS = 10
+
+        /**
+         * 「从不」档自动恢复的等待窗口。恢复本身是纯软件（Keystore 解密一次 +
+         * 每库一次 AES-GCM），几十毫秒量级；窗口给到秒级只兜「冷启动时 DataStore
+         * 首值晚到」的尾部（Bitwarden 同位置的等待是 500ms，只等 UNLOCKING 终态）。
+         */
+        const val AUTO_RESTORE_WAIT_MS = 1_000L
 
         /** 字段序列诊断串最多打几项（避免长页面把日志刷爆）。 */
         const val LOG_FIELD_SEQ_LIMIT = 12

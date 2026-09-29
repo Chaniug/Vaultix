@@ -1,6 +1,23 @@
 # 下一步任务清单
 
-> ## 🏠 【2026-09-29 深夜】快速解锁「房子化」批次 3 收工 —— 设置页简化「删五类」
+> ## 🏠 【2026-09-29 深夜续】真机验收反馈修复收工 —— 「从不锁定」对齐 Bitwarden + 解锁方式三行精简
+>
+> **接力文档**：[`quick-unlock-house-rework.md`](quick-unlock-house-rework.md)（批次 3.5 专节，自包含）
+> **触发**：用户真机装 debug 版验收（批次 5 提前反馈）——「从不锁定下划掉后台后填充不及时，
+> 对标 Bitwarden」+「解锁方式三行冗余」。
+> **本轮**：① ★★ **硬约束 #1 修订（定稿级）**：「房钥匙绝不落盘」→「绝不以**明文**落盘」；
+> Never 档对标 Bitwarden `userAutoUnlockKey`（`reference/bitwarden/` 源码核证）落地为
+> 第三把锁 `AutoUnlockKeyStore` + `AutoRestoreTrigger` 协调器（主动锁库删信封=真锁；
+> 解锁成功事件幂等重建）② autofill 双管齐下：`buildResponse` 1s 恢复等待窗口 +
+> `ItemRepositoryImpl.observeItems` 改 Eagerly 共享缓存（冷流每次全量重解密=卡顿主源）
+> ③ 设置页三行→两行：行点击=进向导（`manageBiometric`/`managePin`），开关=On 关/Off 进向导
+> ④ `HouseKeyStoreTest` +3 条 auto 信封用例。
+> 门禁：detekt / compile / 单测（app + data:repository `--rerun-tasks`）全绿 + 孤儿串未超基线。
+> **下一步 = 批次 4（失效矩阵：rearm / 降级 / StaleCredentials 重包房间 / PIN 熔断全局 5 次；
+> auto 信封失效分支已做已测）** → 批次 5（真机验收，清单已扩到 9 条，新增 ⑧ Never 档
+> 填充及时性 ⑨ 设置页两行交互）。
+
+> ## 🏠 【2026-09-29 深夜】快速解锁「房子化」批次 3 收工 —— 设置页简化「删五类」（✅ 已被真机验收修复轮接续）
 >
 > **接力文档（下一会话从这里进，自包含）**：[`house-rework-batch3-handoff.md`](house-rework-batch3-handoff.md)
 > **施工工作单**：[`quick-unlock-house-rework.md`](quick-unlock-house-rework.md)（批次 1-3 ✅，4-5 未动）

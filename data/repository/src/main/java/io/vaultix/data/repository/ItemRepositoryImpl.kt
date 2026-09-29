@@ -22,16 +22,23 @@ import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
 import io.vaultix.model.VaultKind
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.shareIn
 import kotlinx.serialization.json.Json
 import java.time.Instant
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -71,14 +78,51 @@ class ItemRepositoryImpl @Inject constructor(
     @CryptoDispatcher private val cryptoDispatcher: CoroutineDispatcher,
 ) : ItemRepository {
 
+    // ---- 解密结果缓存（2026-09-29，对齐 Bitwarden decryptCipherListResultStateFlow）----
+
+    /**
+     * 每 vault 一份的共享解密流。**解锁期间常驻、锁库即清空**（见 [observedItemsFlow]）。
+     */
+    private val sharedItemFlows = ConcurrentHashMap<String, SharedFlow<List<VaultItem>>>()
+
+    /** 缓存流的驱动 scope（进程级；收集的执行线程由各段的 flowOn 决定）。 */
+    private val shareScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    /**
+     * 解密流缓存键存在性无需清理：map 的键是 vaultId，随库删除后留一个空流
+     * （上游 `cipherDao.observeByVault` 对已删 vault 发空列表），无泄漏面。
+     */
     override fun observeItems(vaultId: String): Flow<List<VaultItem>> =
-        // ★ KDBX 读路径分流（M2 阶段 A）：KDBX 的条目**不在 Room 里**，而在 data:kdbx 的
-        // 内存会话里（明文整库，锁库即丢）。两条读路径在此分流，**UI / 自动填充侧零改动**
-        // —— 它们只认 `ItemRepository.observeItems`。
-        //
-        // ⚠️ 库种类是**挂起**查询（`vaultDao.get`），不能在方法体里直接判：那样
-        // `observeItems` 就不再是纯函数（每次订阅都要先挂起一次）。因此把它放进流里
-        // `flatMapLatest`，每次订阅时解析一次种类。
+        sharedItemFlows.getOrPut(vaultId) { observedItemsFlow(vaultId) }
+
+    /**
+     * [observeItems] 的原流（按 vaultId 缓存共享，2026-09-29）。
+     *
+     * ## 为什么要共享（对齐 Bitwarden `decryptCipherListResultStateFlow`）
+     *
+     * 原实现是冷流：**每个新订阅者**都从头跑一遍「Room 密文行 → 全量解密」。
+     * 自动填充的取数是 `observeItems(vaultId).first()` —— 每次聚焦输入框都是
+     * 一个全新订阅 ⇒ 几百条目的 JSON 解析 + AES-GCM 解密每次重跑一遍
+     * （真机 219 条实测可观），这正是「填充框弹条目不够及时」的组成部分。
+     * Bitwarden 的 autofill（`AutofillCipherProviderImpl`）取的是 repository 的
+     * 解密 StateFlow 现成值，纯内存过滤。
+     *
+     * ## 失效语义（不需要手动失效）
+     *
+     * - 密文行变化 ⇒ Room invalidation 重发 ⇒ 重新解密；
+     * - 解锁状态变化 ⇒ `sessions.unlockedIds` 重发 ⇒ 锁库瞬间列表归
+     *   `emptyList()`（内存里的明文随之失引用，可被 GC —— 不存在「锁了还
+     *   持有明文」的窗口）；
+     * - [decodeAll] 的「全失败 ⇒ 作废会话」副作用保持原位。
+     *
+     * ## 为什么 Eagerly 而不是 WhileSubscribed
+     *
+     * autofill 场景恰恰发生在**没有任何 UI 订阅**的时候（主界面在后台 /
+     * 进程只被 autofill 拉起）—— WhileSubscribed 断流后超时即丢缓存，
+     * 填充每次都撞冷启动解密。Eagerly 的代价（解锁期间明文列表常驻内存）
+     * 与 Bitwarden 解锁后全量持有 CipherView 同一取舍，且锁库即清（见上）。
+     */
+    private fun observedItemsFlow(vaultId: String): SharedFlow<List<VaultItem>> =
         vaultDao.observeAll()
             .map { vaults -> VaultKind.fromName(vaults.firstOrNull { it.id == vaultId }?.kind) }
             .distinctUntilChanged()
@@ -89,6 +133,7 @@ class ItemRepositoryImpl @Inject constructor(
                     observeState(vaultId, cipherDao.observeByVault(vaultId))
                 }
             }
+            .shareIn(shareScope, started = SharingStarted.Eagerly, replay = 1)
 
     /**
      * KDBX 库的条目流。

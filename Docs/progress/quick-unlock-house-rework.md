@@ -4,7 +4,9 @@
 > 根因与证据：[`Docs/progress/audit/bitwarden-kdbx-sync-audit.md`](audit/bitwarden-kdbx-sync-audit.md)（下称「报告」）。
 > **论证一律看定稿，不在会话里重新论证。**
 >
-> 状态：🚧 施工中（**批次 1-3 ✅ 2026-09-29 收工，门禁三关全绿；批次 4-5 未动。**
+> 状态：🚧 施工中（**批次 1-3 ✅ 2026-09-29 收工 + 批次 3.5（真机验收反馈修复）✅ 同日深夜，
+> 门禁三关全绿；批次 4-5 未动。**
+> 批次 3.5 内容见下方专节（「从不」档自动恢复对齐 Bitwarden + autofill 解密缓存 + 设置页三行精简）；
 > **接力入口：[`house-rework-batch3-handoff.md`](house-rework-batch3-handoff.md)**——批次 3 的
 > 删五类、判定逻辑可测化、结果页与副标题改动都在那份里；
 > 批次 2（动作表 / 重登记向导）见 [`house-rework-batch2-handoff.md`](house-rework-batch2-handoff.md)；
@@ -87,23 +89,55 @@
 - 孤儿串：`check_orphan_strings --gate`，**被取代的删**；
 - ⚠️ XML 资源注释里别放 markdown 表格（`--` 会炸 aapt2）。
 
+## 批次 3.5：真机验收反馈修复（✅ 2026-09-29 深夜完成；三关全绿、含新增 3 条 auto 信封用例）
+
+> 触发：用户真机装 debug 版验收（定稿批次 5 的提前反馈）——「从不锁定下划掉后台后，
+> 填充框弹条目不及时，看看 Bitwarden 的『从不』怎么实现的」+「解锁方式三行冗余」。
+> **硬约束 #1 修订（定稿级，顶部横幅已加）**：「房钥匙绝不落盘」→「绝不以**明文**落盘」。
+
+- **第三把锁（auto 恢复锁）**：`AutoUnlockKeyStore`（core:datastore，免认证 Keystore 密钥
+  `setUserAuthenticationRequired(false)`）+ 信封 `house_lock_auto`；对标 Bitwarden
+  `userAutoUnlockKey`（`reference/bitwarden/` 源码核证：keystoreEncryptedPreferences 载体、
+  进程重启无交互恢复、主动锁删 key、解锁成功幂等补写——四条规则全部对齐）；
+- **协调器 `AutoRestoreTrigger`**（app:security，`VaultixApplication` 字段注入强制早期构造）：
+  重建挂「解锁成功事件」（`unlockedIds` **新增**元素）而非状态组合（防 lockVault 死角）；
+  档位≠Never 且信封在→删；主动锁库（`VaultRepositoryImpl.lockVault/lockAll` 各一行）→删；
+- **域接口**：独立 `AutoUnlockRepository`（VaultRepositoryImpl 顶格 40 函数，KdbxSyncRepository 先例）；
+- **autofill 双管齐下**：`buildResponse` 1s 恢复等待窗口（对齐 Bitwarden
+  `firstWithTimeoutOrNull(500)` 等 UNLOCKING）；`ItemRepositoryImpl.observeItems` 改
+  **Eagerly 共享缓存**（原冷流每次 `.first()` 全量重解密 = 卡顿主源；锁库即清、明文可 GC）；
+- **设置页三行→两行**：删「管理解锁方式」第三行；行点击 = 进向导（`manageBiometric`/
+  `managePin`），开关 = On 关 / Off 进向导（关闭留给开关防误触）；
+  `quick_unlock_manage_action` 保留（向导标题），`settings_quick_unlock_manage_desc` 删；
+- **测试**：`HouseKeyStoreTest` +3（auto 生命周期 / 损坏自愈 / 门锁全删连带清）；
+  `ItemRepositoryImplTest` 1 条按响应式契约改写（解锁后 `first{非空}`）。
+
 ## 批次 4：失效矩阵（定稿 §6）
 
 - rearm：开门状态检测平台密钥失效 → 内存房钥匙静默重包门锁信封；
 - 降级：`ERROR_KEY_INVALIDATED` 类 → 禁用该锁 + 明确文案 + 回主密码
   （**绝不静默「本地解锁凭据不可用」**）；
 - StaleCredentials：某库主密码变更 → 重包**该房间软件信封**，门锁不动；
-- PIN 熔断改全局 5 次：旧每库计数作废，从 0 起。
+- PIN 熔断改全局 5 次：旧每库计数作废，从 0 起；
+- **auto 信封失效**（批次 3.5 新增）：`AutoUnlockKeyStore.decrypt` 返回 null（密钥不可用 /
+  信封损坏）⇒ 就地删信封自愈（`HouseKeyStore.openAutoEnvelope` 已实现，单测已钉）。
 
 ## 批次 5：真机验收清单
 
 1. 指纹一次 → 范围内全部库打开（日志：1 次 Keystore + N 次软件）；
 2. 勾选 KDBX 库进范围：只弹主密码框，**不弹指纹**；
-3. **硬约束 #1 专项**：解锁后杀后台 → 重启必须要求重新解锁（房钥匙未落盘的直接验证）；
+3. **硬约束 #1 专项**：解锁后杀后台 → 重启必须要求重新解锁（房钥匙未落盘的直接验证；
+   ⚠️ **Never 档除外**——批次 3.5 后 Never 档应**免交互自动恢复**，改验下面第 8 条）；
 4. 重录系统指纹：开门状态自动 rearm 无感；关门状态明确降级 + 主密码可进；
 5. PIN 连错 5 次 → 全局熔断，主密码可进，重置恢复；
 6. 升级迁移：老包升新包 → 重登记向导走通、旧信封已清；
-7. 装机核证照旧（`dumpsys package` + `pm path` 拉 APK 比 SHA-256）。
+7. 装机核证照旧（`dumpsys package` + `pm path` 拉 APK 比 SHA-256）；
+8. **（批次 3.5 新增）Never 档填充及时性**：设置从不锁定 → 解锁一次 → 划掉后台 →
+   任意 app 聚焦输入框 → 填充条目 **1s 内弹出**（恢复等待窗口 + 解密缓存，日志
+   `VaultixAutoRestore` 可核）且**不再要求重新解锁**；随后主动锁库（库列表 ⋮ → 锁定）→
+   再聚焦输入框 → **必须要求重新认证**（信封已删，真锁）；
+9. **（批次 3.5 新增）设置页**：解锁方式组只剩两行；On 态点整行 = 进向导（不关闭），
+   点开关 = 关闭；Off 态点行/开关 = 进向导。
 
 ---
 

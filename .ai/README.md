@@ -9,7 +9,27 @@
 此前约定「两边保持同步」，结果是同一主题两处各有一份、必然漂移（AI 会看错位置）。
 **要改内容，只改这里。**
 
-## 🕐 最新状态（**2026-09-29 收工 · 批次 1-3**·交接点，接力请先看这几行）
+## 🕐 最新状态（**2026-09-29 收工 · 真机验收修复轮 + 批次 1-3**·交接点，接力请先看这几行）
+
+> ### ★ 本轮（2026-09-29 深夜续）—— 真机验收反馈修复：「从不锁定」对齐 Bitwarden + 解锁方式三行精简
+> 1. ★★ **硬约束 #1 修订（定稿级，见 `.ai/decisions/快速解锁房子化-两级钥匙层级-定稿.md` 顶部横幅）**：
+>    「房钥匙绝不落盘」→「**绝不以明文落盘**」。对标 Bitwarden `userAutoUnlockKey`
+>    （`reference/bitwarden/` 稀疏克隆核证：keystoreEncryptedPreferences 载体、
+>    进程重启无交互自动恢复）。落地为第三把锁 `AutoUnlockKeyStore`（免认证 Keystore 密钥）。
+> 2. **信封生命周期协调器 `AutoRestoreTrigger`**（挂「解锁成功事件」防 lockVault 死角）：
+>    Never 且钥匙在内存→幂等写；无钥匙有信封→自动恢复；主动锁库→删（真锁）；
+>    档位改离 Never→删。域接口独立 `AutoUnlockRepository`（VaultRepositoryImpl 顶格 40 函数）。
+> 3. **autofill 双管齐下**：`buildResponse` 1s 恢复等待窗口（对齐 Bitwarden 500ms 等 UNLOCKING）；
+>    `ItemRepositoryImpl.observeItems` 改 **Eagerly 共享缓存**（原冷流每次 `.first()` 全量重解密 = 卡顿主源）。
+> 4. **设置页**：删第三行「管理解锁方式」；行点击 = 进向导（`manageBiometric`/`managePin`），
+>    开关 = On 关 / Off 进向导（关闭是低频破坏性动作，防误触）。
+> 5. **新增 `HouseKeyStoreTest` auto 信封 3 用例**（生命周期 / 损坏自愈 / 门锁全删连带清）。
+>
+> ⚠️ **当前位置：`main` 已推送（含本轮提交）；`rele` 未动。**
+> **下一轮起点 = 批次 4（失效矩阵）** → 批次 5（真机验收，**必做**：补验「划掉后台→
+> 填充 1s 内出条目、不再要求重新解锁（Never 档）」「主动锁库后必须重新认证」）。
+
+---
 
 > ### ★ 又一批（2026-09-29 深夜）—— 批次 3：设置页简化「删五类」，顺带补上批次 2 遗留 #1
 > 1. **删 `Partial` 三态**：开关收敛为**二值**（`On`/`Off`），判据只有「**门锁装没装**」。

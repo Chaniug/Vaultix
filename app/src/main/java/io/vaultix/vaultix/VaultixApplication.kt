@@ -8,6 +8,7 @@ import io.vaultix.common.logging.LogLevel
 import io.vaultix.common.logging.VaultixLog
 import io.vaultix.vaultix.di.KdbxCloudSyncInitializer
 import io.vaultix.vaultix.security.AutoLockController
+import io.vaultix.vaultix.security.AutoRestoreTrigger
 import io.vaultix.vaultix.security.VaultLockManager
 import javax.inject.Inject
 
@@ -46,6 +47,17 @@ class VaultixApplication : Application() {
      */
     @Inject
     lateinit var kdbxCloudSyncInitializer: KdbxCloudSyncInitializer
+
+    /**
+     * 「从不锁定」档自动恢复的触发器（2026-09-29，对齐 Bitwarden autoUnlockKey）。
+     *
+     * ⚠️ 与上面的初始化器同一模式：价值全在 `init` 块（订阅档位与房钥匙内存态，
+     * 进程死亡后自动恢复会话）。**必须**在进程启动早期构造 —— autofill 拉起的
+     * 进程也要能恢复（否则「从不」档在划掉后台后的第一次填充仍然要解锁，
+     * 那正是用户报的「填充框弹条目不及时」）。
+     */
+    @Inject
+    lateinit var autoRestoreTrigger: AutoRestoreTrigger
 
     /**
      * 本进程是否为「为自动填充 / 凭据提供商而拉起」。

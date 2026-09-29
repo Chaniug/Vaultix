@@ -137,7 +137,8 @@ import kotlinx.coroutines.withContext
  *
  * ### 顺序约束的第二层：房钥匙还得**在内存**
  *
- * 房钥匙**绝不落盘**（硬约束 #1）⇒ 进程重启后它就不在了，此时即使门锁信封还在，
+ * 房钥匙**明文仅存内存**（硬约束 #1）⇒ 进程重启后它就不在了（Never 档的自动恢复
+ * 信封除外，见 `AutoRestoreTrigger`），此时即使门锁信封还在，
  * 封房间也无从下手（`sealRoom` 前置 `isUnlocked`）。
  *
  * ⇒ 勾库前若 `enrollment.isHouseKeyReady == false`，**在问主密码之前**就如实告诉用户
@@ -395,9 +396,33 @@ class QuickUnlockController(
      *
      * 与两个开关的分工：开关 = 「这个方式，对范围内的库，开关一下」的粗动作；
      * 本入口 = 精细控制（挑库、挑方式），也就是旧实现那三种入口合并后的**唯一**入口。
+     *
+     * ⚠️ 2026-09-29 起设置页的第三行已删，本入口只服务「旧模型残留」的提示行 ——
+     * 它的语义是"重新登记"，不该预选任何一种方式（用户可能两种都要重配）。
      */
     fun manageUnlock() {
         scope.launch { showConfigure(preferred = null) }
+    }
+
+    /**
+     * 点「指纹解锁」**整行**：进向导并预选指纹（2026-09-29 删第三行后并入）。
+     *
+     * 与 [toggleBiometric] 的分工（`QuickUnlockSettingsRows` 类 KDoc 的表）：
+     * - 整行点击**总是**进向导 —— `On` 态改库范围 / 补配，`Off` 态等效于开开关；
+     * - 关闭门锁这个低频破坏性动作只留给**开关本体**，避免误触整行即关闭。
+     *
+     * ⚠️ 预选 = `preferred = BIOMETRIC` ⇒ 向导里 PIN 不勾（用户可自己勾上），
+     * 与旧第三行的"两种都不预选"刻意不同：从指纹行进来的用户意图已经明确。
+     */
+    fun manageBiometric() {
+        scope.launch { showConfigure(UnlockMethod.BIOMETRIC) }
+    }
+
+    /**
+     * 点「应用内 PIN」**整行**：进向导并预选 PIN。语义同 [manageBiometric]。
+     */
+    fun managePin() {
+        scope.launch { showConfigure(UnlockMethod.PIN) }
     }
 
     /** 向导里勾选 / 取消勾选一个库。 */
@@ -878,7 +903,8 @@ class QuickUnlockController(
     /**
      * 不弹指纹时的收尾：房钥匙在内存就软封装房间，否则明文就地擦除后如实报失败。
      *
-     * ⚠️ 房钥匙不在内存（硬约束 #1：绝不落盘 ⇒ 重启即失）时**不能** seal，
+     * ⚠️ 房钥匙不在内存（硬约束 #1：明文仅存内存 ⇒ 重启即失，Never 档恢复
+     * 由 `AutoRestoreTrigger` 走 auto 信封，与本流程无关）时**不能** seal，
      * 备料明文就地擦除、committed 留空 —— 失败结论已在 [Session.pinOutcomes] 里。
      */
     private suspend fun finishWithoutBiometric(current: Session) {
@@ -1371,7 +1397,8 @@ internal fun locksToOpen(
  * 两道闸，缺一不可：
  * 1. **至少一把门锁已存在** —— 否则房钥匙从未被任何门锁包裹过，进程一死
  *    房间信封即成孤儿（房钥匙无从恢复）；
- * 2. **房钥匙在内存** —— 它**绝不落盘**（硬约束 #1），进程重启即失；
+ * 2. **房钥匙在内存** —— 它**明文仅存内存**（硬约束 #1），进程重启即失
+ *    （Never 档的 auto 恢复信封在进程启动时已把它带回来，仍算"在内存"）；
  *    门锁信封还在也解不出钥匙，封了也是白封。
  *
  * ⚠️ 只在「本次要封房间、且本次不会开锁」时才可能拦下：`locksToOpen` 非空意味着

@@ -60,3 +60,6 @@ __pycache__/
 keystore.properties
 *.jks
 *keystore*.txt
+
+# ---- 参考源码克隆（调研用，体积大且非本仓库资产）----
+reference/

@@ -5,7 +5,7 @@
 > `Docs/progress/next-steps.md`（待办，最新在顶部）→ `Docs/progress/current-status.md`（进度快照）
 > → `.ai/SESSION-YYYY-MM-DD.md`（逐轮流水，需要细节才翻）。
 >
-> 最后更新：2026-09-26（设置页缺陷修复轮交付后）。**本文件已压缩重写**：逐轮叙事折叠进
+> 最后更新：2026-09-29（真机验收反馈修复轮交付后）。**本文件已压缩重写**：逐轮叙事折叠进
 > 第 9 节「当前状态」与第 10 节「历史轮次索引」，只留「不知道就会写错、且错了不报错」的内容。
 >
 > ⚠️ **2026-09-26 起 §9 顶部才是"最近几轮"的唯一真源**；§10 的索引止于 2026-09-13，
@@ -144,7 +144,42 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 > 逐轮流水 → `.ai/SESSION-YYYY-MM-DD.md` · 坑 → `.ai/ISSUES.md`（索引，正文在 `issues/`）·
 > 性能专项 → [`Docs/progress/perf-plan.md`](../Docs/progress/perf-plan.md)。
 
-**快速解锁「房子化」批次 2 + 3 轮（2026-09-29 夜 · 最新，见 `.ai/SESSION-2026-09-29.md`）**
+**真机验收反馈修复轮（2026-09-29 深夜续 · 最新，见 `.ai/SESSION-2026-09-29.md`）**
+
+> 用户真机装 debug 版后两条反馈：「从不锁定下划掉后台后填充不及时，对标 Bitwarden」
+> +「解锁方式三行冗余」。本轮双修，门禁三关全绿（detekt / compile / 单测含新增 3 条
+> auto 信封用例），`main` 已推送。
+
+1. ★★ **硬约束 #1 修订（定稿级）**：「房钥匙绝不落盘」→「**绝不以明文落盘**」。
+   调研核证 Bitwarden `userAutoUnlockKey`（`reference/bitwarden/` 稀疏克隆：
+   `VaultLockManagerImpl.kt` / `AuthDiskSourceImpl.kt`）—— Never 档解锁成功把
+   user key 存 keystoreEncryptedPreferences，进程重启 `handleUserAutoUnlockChanges`
+   **无交互自动恢复**。Vaultix 落地为第三把锁：`AutoUnlockKeyStore`
+   （免认证 Keystore 密钥 `setUserAuthenticationRequired(false)`，信封键 `house_lock_auto`）。
+2. **信封生命周期（`AutoRestoreTrigger`，app:security）**：重建挂「解锁成功事件」
+   （`unlockedIds` 集合**新增**元素）而非状态组合 —— 否则 lockVault 一次后永不重建（死角）；
+   主动锁库（lockVault/lockAll）→删信封（真锁，`VaultRepositoryImpl` 内各加一行）；
+   档位≠Never 且信封在→删。域接口独立 `AutoUnlockRepository`（`VaultRepositoryImpl`
+   顶格 40 函数，`KdbxSyncRepository` 先例；触发器走 `VaultixApplication` 字段注入
+   强制早期构造，`KdbxCloudSyncInitializer` 同款）。
+3. **autofill 双管齐下**：`buildResponse` 加 **1s 恢复等待窗口**（对齐 Bitwarden
+   `firstWithTimeoutOrNull(500)` 等 UNLOCKING）；`ItemRepositoryImpl.observeItems` 改
+   **Eagerly 共享缓存**（对齐 `decryptCipherListResultStateFlow`；原冷流每次 `.first()`
+   全量重解密 = 卡顿主源。⚠️ 既有测试 `observeItems_lockedEmpty_unlockedPlaintextRoundtrip`
+   按**响应式契约**改写：解锁后 `first{非空}` 等缓存追上 —— 冷流「订阅即当前值」的契约已失效）。
+4. **设置页精简**：删第三行「管理解锁方式」；行点击 = 进向导（新 `manageBiometric`/
+   `managePin`，Off 态与开开关等效），开关 = On 关 / Off 进向导（关闭是低频破坏性动作，
+   留给开关防误触）。`quick_unlock_manage_action` **保留**（向导标题在用），只删
+   `settings_quick_unlock_manage_desc`。`QuickUnlockController` 37→39 函数（余量 1）。
+5. **新坑（环境）**：Gradle wrapper 下载被墙（SSL 握手失败）—— 沙箱
+   `/opt/gradledist/gradle-9.5.1-bin.zip` 是预取的，拷进 `~/.gradle/wrapper/dists/
+   gradle-9.5.1-bin/<hash>/` 即过。
+6. **批次 5 真机验收补验项**：Never 档「划掉后台→聚焦输入框→1s 内出条目、
+   **不要求重新解锁**」；主动锁库后→必须重新认证（信封已删）。
+
+---
+
+**快速解锁「房子化」批次 2 + 3 轮（2026-09-29 夜，见 `.ai/SESSION-2026-09-29.md`）**
 
 > 接续同日白天的批次 1：**批次 2（动作表重排 + 重登记向导 + 扇出门禁）与
 > 批次 3（设置页简化「删五类」）全部完成，门禁三关实测全绿**（detekt / compile /

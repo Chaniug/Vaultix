@@ -1,10 +1,13 @@
 package io.vaultix.data.repository
 
+import io.mockk.Runs
 import io.mockk.every
+import io.mockk.just
 import io.mockk.mockk
 import io.vaultix.crypto.PinKeyWrapper
 import io.vaultix.crypto.PinUnwrapResult
 import io.vaultix.crypto.VaultixCrypto
+import io.vaultix.datastore.AutoUnlockKeyStore
 import io.vaultix.datastore.LocalUnlockKeyStore
 import io.vaultix.datastore.SecureCredentialStore
 import java.util.Base64
@@ -31,6 +34,9 @@ import org.junit.Test
  * 4. **顺序约束**（定稿 §5）：内存无钥匙 + 已有门锁信封 ⇒ 开新锁被拒绝
  *    （`HouseKeyUnavailable`），而不是凭空生成第二把钥匙。
  * 5. **孤儿清理**：最后一把门锁删除 ⇒ 房间信封全部连带清掉。
+ * 6. **auto 信封生命周期**（2026-09-29，Never 档对齐 Bitwarden）：
+ *    写入幂等；进程重启后免认证恢复**同一把**钥匙；信封损坏 ⇒ 就地自愈删除；
+ *    门锁全删 ⇒ 信封连带清掉。
  *
  * ## 测试基建说明
  * Keystore 不可入纯 JVM 测试，故 [SecureCredentialStore] 用内存 map 模拟、
@@ -47,6 +53,13 @@ class HouseKeyStoreTest {
     private val credentials = mockk<SecureCredentialStore>()
     private val localUnlockKeyStore = mockk<LocalUnlockKeyStore>()
     private val pinKeyWrapper = mockk<PinKeyWrapper>()
+
+    /**
+     * 「从不」档恢复锁的假实现（base64 恒等，与 [localUnlockKeyStore] 同风格）：
+     * 现有 6 用例不碰 auto 信封；留着恒等实现是为了后续 auto 用例（信封生命周期）
+     * 不必再动基建。Keystore 钥匙学正确性由平台守，这里同前两把门锁的处理。
+     */
+    private val autoUnlockKeyStore = mockk<AutoUnlockKeyStore>()
 
     /** 真实 AES-GCM（房间信封的 AEAD 校验必须是真的，篡改用例才不是自欺）。 */
     private val crypto = VaultixCrypto(Dispatchers.Unconfined)
@@ -85,11 +98,20 @@ class HouseKeyStoreTest {
                 PinUnwrapResult.Opened(Base64.getDecoder().decode(parts[2]))
             }
         }
+        // auto 恢复锁：base64 恒等（现有用例不碰；后续信封生命周期用例零成本接入）。
+        every { autoUnlockKeyStore.encrypt(any()) } answers {
+            Base64.getEncoder().encodeToString(firstArg<ByteArray>().copyOf())
+        }
+        every { autoUnlockKeyStore.decrypt(any()) } answers {
+            runCatching { Base64.getDecoder().decode(firstArg<String>()) }.getOrNull()
+        }
+        every { autoUnlockKeyStore.deleteKey() } just Runs
         house = HouseKeyStore(
             credentials = credentials,
             localUnlockKeyStore = localUnlockKeyStore,
             pinKeyWrapper = pinKeyWrapper,
             crypto = crypto,
+            autoUnlockKeyStore = autoUnlockKeyStore,
         )
     }
 
@@ -201,5 +223,63 @@ class HouseKeyStoreTest {
         assertFalse(house.hasRoom("vault-2"))
         assertTrue(house.roomVaultIds().isEmpty())
         assertFalse(house.isUnlocked)
+    }
+
+    // ===== 6) 「从不」档自动恢复信封（2026-09-29，对齐 Bitwarden autoUnlockKey）=====
+
+    @Test
+    fun `auto 信封_进程重启后免认证恢复同一把钥匙`() = runTest {
+        // Never 档完整生命周期：登记（生钥匙）→ 封房间 → 写 auto 信封 →「重启」→
+        // 免认证恢复 ⇒ 房间照样能开（恢复的是**同一把**钥匙，不是新造一把）。
+        house.enrollFingerprintLock(cipher)
+        val secret = "never 档的房间凭据".toByteArray()
+        house.sealRoom("vault-1", secret.copyOf())
+
+        assertTrue(house.enrollAutoEnvelope())
+        assertTrue(house.hasAutoEnvelope())
+        // 幂等：再次 enroll 不重写（Bitwarden storeUserAutoUnlockKeyIfNecessary 同款）。
+        val envelopeBefore = store.getValue("house_lock_auto")
+        assertTrue(house.enrollAutoEnvelope())
+        assertEquals(envelopeBefore, store.getValue("house_lock_auto"))
+
+        // 「进程重启」：内存钥匙消失，auto 信封还在盘上。
+        house.lock()
+        assertFalse(house.isUnlocked)
+        assertTrue(house.hasAutoEnvelope())
+
+        // 免认证恢复：解出钥匙 ⇒ 同一份房间信封可开（同一把钥匙的证明）。
+        assertTrue(house.openAutoEnvelope())
+        assertTrue(house.isUnlocked)
+        val restored = house.openRoom("vault-1")
+        assertTrue(restored is RoomOpen.Opened)
+        assertArrayEquals(secret, (restored as RoomOpen.Opened).payload)
+    }
+
+    @Test
+    fun `auto 信封损坏_恢复失败且就地自愈删除`() = runTest {
+        house.enrollFingerprintLock(cipher)
+        house.sealRoom("vault-1", "凭据".toByteArray())
+        assertTrue(house.enrollAutoEnvelope())
+
+        // 模拟信封损坏（解不出密文）⇒ 恢复必须失败，且信封就地删除 ——
+        // 否则每次启动都白跑一次注定失败的解密（永不自愈的坏味道）。
+        house.lock()
+        store["house_lock_auto"] = "@@@不是合法的base64@@@"
+        assertFalse(house.openAutoEnvelope())
+        assertFalse(house.hasAutoEnvelope())
+        assertFalse(house.isUnlocked)
+    }
+
+    @Test
+    fun `门锁全删_auto 信封一并清掉`() = runTest {
+        house.enrollFingerprintLock(cipher)
+        house.sealRoom("vault-1", "凭据".toByteArray())
+        assertTrue(house.enrollAutoEnvelope())
+
+        // 快速解锁体系整体下线 ⇒ 恢复基建没有单独存活的理由（否则每次启动
+        // 「解出钥匙 → 无房可开」白跑一遍）。
+        house.disableFingerprintLock()
+        assertFalse(house.hasAutoEnvelope())
+        assertFalse(house.hasRoom("vault-1"))
     }
 }

@@ -203,13 +203,16 @@ fun VaultManagementScreen(
             // ★ 2026-09-17：两个开关**内联到这一组**里，不再点进对话框。
             //   旧形态是「组名『解锁方式』+ 组内唯一一行也叫『快速解锁』」—— 语义重复，
             //   而且白多一次导航（定稿 §11.11 的目标形态本来就是开关直出）。
-            //   逐库勾选挪进了「管理解锁方式」的向导，且**默认全勾**。
+            //   逐库勾选挪进了配置向导（默认全勾），向导入口 = 点整行
+            //   （2026-09-29 删掉了「管理解锁方式」第三行，真机反馈三行冗余）。
             SettingsGroupTitle(stringResource(R.string.vault_management_group_unlock))
             SettingsGroupCard {
                 QuickUnlockSettingsRows(
                     state = quickUnlockState,
                     canAuthenticate = deviceCanAuthenticate(context),
                     legacyRemains = legacyRemains,
+                    onManageBiometric = viewModel.quickUnlock::manageBiometric,
+                    onManagePin = viewModel.quickUnlock::managePin,
                     onToggleBiometric = viewModel.quickUnlock::toggleBiometric,
                     onTogglePin = viewModel.quickUnlock::togglePin,
                     onManage = viewModel.quickUnlock::manageUnlock,

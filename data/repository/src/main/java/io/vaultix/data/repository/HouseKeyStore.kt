@@ -13,6 +13,7 @@ import io.vaultix.crypto.PinKeyWrapper
 import io.vaultix.crypto.PinUnwrapResult
 import io.vaultix.crypto.SecureBytes
 import io.vaultix.crypto.VaultixCrypto
+import io.vaultix.datastore.AutoUnlockKeyStore
 import io.vaultix.datastore.LocalUnlockKeyStore
 import io.vaultix.datastore.SecureCredentialStore
 import io.vaultix.domain.PIN_MAX_ATTEMPTS
@@ -24,6 +25,9 @@ import javax.crypto.Cipher
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 
 /**
@@ -121,15 +125,19 @@ sealed interface LockEnrollResult {
  *                        ▼
  *        ┌───────────────────────────────┐
  *        │ 房子钥匙（随机 256-bit）        │ ← 本类持有的唯一内存状态
- *        │ 仅存内存 · 绝不落盘            │
+ *        │ 明文仅存内存（硬约束 #1）       │
  *        └───────────────┬───────────────┘
  *            ┌───────────┼───────────┐
  *            ▼           ▼           ▼
  *       房间信封①     房间信封②     …（纯软件 AES-GCM，每库一份）
  * ```
+ * （另有第三把「从不」档免认证恢复锁，不画进主图：它只在 `vaultTimeout = Never`
+ * 时存在，包的也是同一把房钥匙；见 [enrollAutoEnvelope] 与
+ * `AutoUnlockKeyStore` 的 KDoc。）
  *
- * ## 硬约束（定稿 §4，逐条对应到代码）
- * 1. **房钥匙绝不落盘** —— 本类落盘的只有「被门锁包过的密文」与「纯软件封装的房间信封」；
+ * ## 硬约束（定稿 §4，逐条对应到代码；#1 含 2026-09-29 修订）
+ * 1. **房钥匙绝不以明文落盘** —— 本类落盘的只有「被门锁包过的密文」（指纹 / PIN /
+ *    Never 档恢复信封三者之一）与「纯软件封装的房间信封」；
  *    [lock] 是唯一擦除入口，[VaultRepositoryImpl.lockAll] 必须联动调它。
  * 2. 一次生物识别授权 = 一次 Keystore 操作 —— [completeFingerprintUnlock] 是解锁路径上
  *    **唯一**碰 Keystore 的动作；房间循环全是 [openRoom] 软件解密。H2 结构性消失。
@@ -161,6 +169,7 @@ sealed interface LockEnrollResult {
  * |---|---|
  * | `house_lock_fingerprint` | KEK 包裹的房钥匙（`iv.b64|cipher.b64`，[LocalUnlockKeyStore.wrap] 产物） |
  * | `house_lock_pin` | Argon2id(PIN) 包裹的房钥匙（`PV1:…`，[PinKeyWrapper.wrap] 产物） |
+ * | `house_lock_auto` | **仅 Never 档**：免认证 Keystore 密钥包裹的房钥匙（[AutoUnlockKeyStore] 产物；主动锁库即删） |
  * | `house_pin_attempts` | PIN 全局失败计数（**一份**，定稿 §6：门锁是全局的） |
  * | `house_room::<vaultId>` | 房钥匙纯软件封装的库凭据（`VG1.…`，AAD 绑 vaultId） |
  */
@@ -170,13 +179,26 @@ class HouseKeyStore @Inject constructor(
     private val localUnlockKeyStore: LocalUnlockKeyStore,
     private val pinKeyWrapper: PinKeyWrapper,
     private val crypto: VaultixCrypto,
+    /** 「从不」档自动恢复门禁（见 [enrollAutoEnvelope]；与指纹/PIN 门锁平行）。 */
+    private val autoUnlockKeyStore: AutoUnlockKeyStore,
 ) {
 
-    /** 内存里的房子钥匙；`null` = 未解出 / 已锁（硬约束 #1：仅存内存）。 */
+    /** 内存里的房子钥匙；`null` = 未解出 / 已锁（硬约束 #1：**明文**仅存内存）。 */
     private var houseKey: SecureBytes? = null
 
     /** 房钥匙是否在内存（= 门锁开过且尚未 [lock]）。 */
     val isUnlocked: Boolean get() = houseKey != null
+
+    private val _isUnlockedFlow = MutableStateFlow(false)
+
+    /**
+     * 房钥匙内存态的可观察版本（「从不」档自动恢复协调用）。
+     *
+     * ⚠️ 仅供协调器观察，**不要**拿来替代「锁库」动作 —— 它只是 [isUnlocked]
+     * 的镜像，写点只有钥匙真实变动处（[adoptHouseKey] / [obtainKeyForLockEnrollment] /
+     * [lock]）。
+     */
+    val isUnlockedFlow: StateFlow<Boolean> = _isUnlockedFlow.asStateFlow()
 
     /**
      * 锁：房钥匙清零（硬约束 #4）。
@@ -187,6 +209,7 @@ class HouseKeyStore @Inject constructor(
     fun lock() {
         houseKey?.zero()
         houseKey = null
+        _isUnlockedFlow.value = false
     }
 
     // ===== 门锁信封存在性（真源；偏好层镜像见 VaultixPreferences）=====
@@ -356,6 +379,64 @@ class HouseKeyStore @Inject constructor(
         withContext(Dispatchers.IO) { credentials.remove(PIN_ATTEMPTS_KEY) }
     }
 
+    // ===== 「从不」档自动恢复信封（第三把锁，免认证，对齐 Bitwarden autoUnlockKey）=====
+
+    /**
+     * 自动恢复信封是否存在。
+     *
+     * 取向同 [hasFingerprintEnvelope]：只读键名，不过 Keystore 解密。
+     */
+    suspend fun hasAutoEnvelope(): Boolean = withContext(Dispatchers.IO) {
+        credentials.keysWithPrefix(AUTO_ENVELOPE_KEY).isNotEmpty()
+    }
+
+    /**
+     * 写自动恢复信封：用免认证 Keystore 密钥包裹房钥匙落盘。
+     *
+     * **幂等**：信封已存在则跳过（Bitwarden `storeUserAutoUnlockKeyIfNecessary`
+     * 同款 —— 房钥匙在门锁存续期内恒定，旧信封包的就是同一把钥匙，重写无益）。
+     *
+     * @return false = 房钥匙不在内存（无法包裹）。调用方（协调器）靠
+     *   [isUnlockedFlow] 变化重试，不在这里轮询。
+     */
+    suspend fun enrollAutoEnvelope(): Boolean = withContext(Dispatchers.IO) {
+        if (credentials.keysWithPrefix(AUTO_ENVELOPE_KEY).isNotEmpty()) return@withContext true
+        val key = houseKey ?: return@withContext false
+        // useBytes 非 inline，判空必须在 lambda 外做（return@withContext 进不去）。
+        val wrapped = key.useBytes { bytes -> autoUnlockKeyStore.encrypt(bytes) }
+        if (wrapped == null) return@withContext false
+        credentials.putString(AUTO_ENVELOPE_KEY, wrapped)
+        true
+    }
+
+    /**
+     * 解自动恢复信封：房钥匙回内存（进程死亡后的自动恢复第一步）。
+     *
+     * @return false = 信封不存在 / 不可解（密钥失效或信封损坏 —— 后者就地删除，
+     *   避免每次启动白跑一次注定失败的解密）。失败不上抛：协调器按「回主密码」降级。
+     */
+    suspend fun openAutoEnvelope(): Boolean = withContext(Dispatchers.IO) {
+        val payload = credentials.getString(AUTO_ENVELOPE_KEY)
+            ?: return@withContext false
+        val plain = autoUnlockKeyStore.decrypt(payload)
+        if (plain == null) {
+            credentials.remove(AUTO_ENVELOPE_KEY)
+            return@withContext false
+        }
+        adoptHouseKey(plain)
+    }
+
+    /**
+     * 删自动恢复信封（**不删 Keystore 密钥** —— 密钥无害且可复用）。
+     *
+     * 调用点：① 主动锁库（lockVault/lockAll —— 用户表达「锁」的意图，自动恢复
+     * 让位，对齐 Bitwarden `setVaultToLocked` 清 autoUnlockKey）；② 档位离开
+     * Never（协调器）；③ 门锁全删（[trimRoomsIfNoLocksRemain]）。
+     */
+    suspend fun removeAutoEnvelope() {
+        withContext(Dispatchers.IO) { credentials.remove(AUTO_ENVELOPE_KEY) }
+    }
+
     // ===== 房间信封（每库一份，纯软件）=====
 
     /**
@@ -413,7 +494,10 @@ class HouseKeyStore @Inject constructor(
     private suspend fun obtainKeyForLockEnrollment(): SecureBytes? {
         houseKey?.let { return it }
         if (hasAnyLock()) return null
-        return SecureBytes.random(HOUSE_KEY_BYTES).also { houseKey = it }
+        return SecureBytes.random(HOUSE_KEY_BYTES).also {
+            houseKey = it
+            _isUnlockedFlow.value = true
+        }
     }
 
     /**
@@ -428,14 +512,22 @@ class HouseKeyStore @Inject constructor(
             return false
         }
         houseKey = SecureBytes.of(bytes, wipeSource = true)
+        _isUnlockedFlow.value = true
         return true
     }
 
-    /** 最后一把门锁没了 ⇒ 房间信封全清 + 锁内存（否则进程一死全是永远解不开的孤儿）。 */
+    /**
+     * 最后一把门锁没了 ⇒ 房间信封全清 + 锁内存（否则进程一死全是永远解不开的孤儿）。
+     *
+     * 自动恢复信封一并删：它包的也是房钥匙，且恢复依赖房间信封 —— 门锁全删后
+     * 每次启动都会「解出钥匙 → 无房可开」白跑。快速解锁体系整体下线，恢复基建
+     * 没有单独存活的理由。
+     */
     private suspend fun trimRoomsIfNoLocksRemain() {
         if (hasAnyLock()) return
         withContext(Dispatchers.IO) {
             credentials.keysWithPrefix(ROOM_ENVELOPE_PREFIX).forEach { credentials.remove(it) }
+            credentials.remove(AUTO_ENVELOPE_KEY)
         }
         lock()
     }
@@ -471,6 +563,13 @@ class HouseKeyStore @Inject constructor(
 
         /** PIN 全局失败计数（定稿 §6：门锁是全局的，计数也是）。 */
         const val PIN_ATTEMPTS_KEY = "house_pin_attempts"
+
+        /**
+         * 「从不」档自动恢复信封（免认证 Keystore 密钥包裹的房钥匙）。
+         * 生命周期由 vaultTimeout 档位驱动（见 [enrollAutoEnvelope]），
+         * 与指纹/PIN 两把门锁平行。
+         */
+        const val AUTO_ENVELOPE_KEY = "house_lock_auto"
 
         /** 房间信封键前缀。 */
         const val ROOM_ENVELOPE_PREFIX = "house_room::"

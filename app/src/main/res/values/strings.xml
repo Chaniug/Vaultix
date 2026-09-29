@@ -182,9 +182,6 @@
     <string name="vault_management_entry">密码库管理</string>
     <string name="vault_management_group_current">当前库</string>
     <string name="vault_management_group_unlock">解锁方式</string>
-    <!-- 「快速解锁」在二级页里的副标题：说清它按库生效，而不是"点进去看"。
-         ⛔ 不用 settings_quick_unlock_desc（那句是首页版的独立入口说明，措辞针对"重新打开"）。 -->
-    <string name="settings_quick_unlock_manage_desc">为每个库单独设置免主密码的打开方式</string>
     <string name="settings_active_vault">当前密码库</string>
     <string name="settings_add_vault_desc">连接 Bitwarden 云端，或打开本机 .kdbx 文件</string>
     <!-- 已有一个库时的措辞：避免「连接 Bitwarden」暗示要改当前库（见 .ai/decisions/设置页信息架构-定稿.md §5.2） -->
@@ -454,8 +451,9 @@
     <string name="action_enable">启用</string>
     <string name="action_later">以后再说</string>
     <string name="settings_quick_unlock">快速解锁</string>
-    <!-- ⚠️ 自 2026-09-15 起**暂无代码引用**（「快速解锁」搬进「密码库管理」二级页后，
-         该行副标题换成了 settings_quick_unlock_manage_desc）。
+    <!-- ⚠️ 自 2026-09-29 起**暂无代码引用**（「快速解锁」的行副标题已换成
+         quick_unlock_summary_on / quick_unlock_option_biometric_summary / quick_unlock_option_pin_summary，
+         原「管理解锁方式」第三行及其副标题已删，真机反馈三行冗余）。
          **刻意保留**，别当僵尸字符串删掉：它是 .ai/decisions/设置页信息架构-定稿.md §5.2
          里逐条改过文案的产物，且「快速解锁」若日后重新出现在设置首页（例如做成开关而不是
          二级页入口），这句"重新打开"口径的说明仍是对的。 -->

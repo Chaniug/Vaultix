@@ -5,6 +5,7 @@ import dagger.Module
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
 import io.vaultix.data.repository.kdbx.KdbxSyncRepositoryImpl
+import io.vaultix.domain.AutoUnlockRepository
 import io.vaultix.domain.FolderRepository
 import io.vaultix.domain.ItemRepository
 import io.vaultix.domain.KdbxSyncRepository
@@ -53,4 +54,12 @@ interface RepositoryModule {
     @Binds
     @Singleton
     fun bindKdbxSyncRepository(impl: KdbxSyncRepositoryImpl): KdbxSyncRepository
+
+    /**
+     * 「从不锁定」档自动恢复（同 [bindKdbxSyncRepository] 的独立绑定理由）。
+     * 触发编排（档位/内存态变化 → 调它）在 app 层 `AutoRestoreTrigger`。
+     */
+    @Binds
+    @Singleton
+    fun bindAutoUnlockRepository(impl: AutoUnlockRepositoryImpl): AutoUnlockRepository
 }
