@@ -50,7 +50,6 @@ import androidx.lifecycle.lifecycleScope
 import dagger.hilt.android.AndroidEntryPoint
 import io.vaultix.common.OtpUriParser
 import io.vaultix.common.TotpGenerator
-import io.vaultix.datastore.VaultTimeout
 import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.domain.AutoUnlockRepository
 import io.vaultix.domain.RoomUnlockOutcome
@@ -544,9 +543,11 @@ class AutofillActivity : FragmentActivity() {
         // 代价：手机解锁状态下，任何 App 的输入框都能免验证自动填充；
         // 已同步补进设置页「从不」档的风险提示文案。
         //
-        // ⚠️ 只对 Never 档生效：其它档位「回来要验证」本来就是设计意图，
-        //    这里若放宽会把定时锁的安全保证整个抹掉。
-        if (prefs.vaultTimeout.first() == VaultTimeout.Never && autoUnlock.hasEnvelope()) {
+        // ⚠️ **「只对 Never 档生效」这条判据已下沉到 `restore()`**（2026-09-29 · D3）：
+        //    它现在**按库**过滤，只恢复「档位 = Never 且未被用户主动锁」的房间 ——
+        //    其它档位「回来要验证」本来就是设计意图，放宽会把定时锁的安全保证整个抹掉。
+        //    所以这里只判「信封在不在」。
+        if (autoUnlock.hasEnvelope()) {
             val report = autoUnlock.restore()
             if (report.opened > 0) {
                 AutofillLogger.d(

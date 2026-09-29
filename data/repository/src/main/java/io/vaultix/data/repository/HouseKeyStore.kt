@@ -173,6 +173,7 @@ sealed interface LockEnrollResult {
  * | `house_lock_auto` | **仅 Never 档**：免认证 Keystore 密钥包裹的房钥匙（[AutoUnlockKeyStore] 产物；主动锁库即删） |
  * | `house_pin_attempts` | PIN 全局失败计数（**一份**，定稿 §6：门锁是全局的） |
  * | `house_room::<vaultId>` | 房钥匙纯软件封装的库凭据（`VG1.…`，AAD 绑 vaultId） |
+ * | `house_user_locked::<vaultId>` | **每库「用户主动锁」标记**（值 `"1"`；多库锁模型定稿 D1，2026-09-29） |
  */
 @Singleton
 class HouseKeyStore @Inject constructor(
@@ -460,6 +461,49 @@ class HouseKeyStore @Inject constructor(
         withContext(Dispatchers.IO) { credentials.remove(AUTO_ENVELOPE_KEY) }
     }
 
+    // ===== 每库「用户主动锁」标记（多库锁模型定稿 D1，2026-09-29）=====
+
+    /**
+     * 标记「这个库是**用户主动锁**的」（[VaultRepositoryImpl.lockVault] 写）。
+     *
+     * ## 为什么需要这个状态（而不是继续用「删自动恢复信封」表达锁的意图）
+     *
+     * 旧实现：锁单库 ⇒ 删掉**全局**的 `house_lock_auto` 信封。删的**本意是对的**
+     * （不删则下次冷启动会把刚锁的库悄悄开回来，「锁定」被静默撤销），
+     * 但**粒度错了** —— 那个信封包的是**全局房钥匙**，用一次单库动作删它，
+     * 会连带掐掉**其它库**的冷启动恢复能力（多库锁模型定稿 §4 第 2 条 / #131）。
+     *
+     * ⇒ 改成**每库**一份持久标记：`autoRestore` 逐库判定时跳过被标记的库
+     * （见 [AutoUnlockRepositoryImpl.restore]）。于是两件事同时成立：
+     * - 锁 A **不影响** B 的恢复能力；
+     * - A 也**不会**在冷启动被悄悄开回来。
+     *
+     * 清除时机：该库**重新解锁成功** —— 由 `AutoRestoreTrigger` 的解锁成功钩子
+     * 统一调 [AutoUnlockRepository.clearUserLock]，避免在 5 条解锁路径上各写一遍。
+     */
+    suspend fun markUserLocked(vaultId: String) {
+        withContext(Dispatchers.IO) { credentials.putString(userLockedKey(vaultId), "1") }
+    }
+
+    /** 解除「用户主动锁」标记（该库重新解锁成功时调用）。幂等。 */
+    suspend fun clearUserLocked(vaultId: String) {
+        withContext(Dispatchers.IO) { credentials.remove(userLockedKey(vaultId)) }
+    }
+
+    /** 该库当前是否处于「用户主动锁」态。 */
+    suspend fun isUserLocked(vaultId: String): Boolean = withContext(Dispatchers.IO) {
+        credentials.keysWithPrefix(userLockedKey(vaultId)).isNotEmpty()
+    }
+
+    /** 处于「用户主动锁」态的全部库 id（`autoRestore` 的跳过名单）。 */
+    suspend fun userLockedVaultIds(): Set<String> = withContext(Dispatchers.IO) {
+        credentials.keysWithPrefix(USER_LOCKED_PREFIX)
+            .map { it.removePrefix(USER_LOCKED_PREFIX) }
+            .toSet()
+    }
+
+    private fun userLockedKey(vaultId: String) = USER_LOCKED_PREFIX + vaultId
+
     // ===== 房间信封（每库一份，纯软件）=====
 
     /**
@@ -656,6 +700,15 @@ class HouseKeyStore @Inject constructor(
 
         /** 房间信封键前缀。 */
         const val ROOM_ENVELOPE_PREFIX = "house_room::"
+
+        /**
+         * 「每库用户主动锁」标记前缀（多库锁模型定稿 D1，2026-09-29）。
+         *
+         * 键 = `house_user_locked::<vaultId>`，值 `"1"`。放 [SecureCredentialStore]
+         * 而与房间信封同层：它是**安全状态**不是用户偏好，要与信封同生共死
+         * （清偏好不该动它）。
+         */
+        const val USER_LOCKED_PREFIX = "house_user_locked::"
 
         /** 房间信封 AAD 前缀（再拼 vaultId）。 */
         const val ROOM_AAD_PREFIX = "vaultix-room-v1:"

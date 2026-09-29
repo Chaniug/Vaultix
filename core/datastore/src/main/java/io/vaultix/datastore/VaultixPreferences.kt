@@ -199,14 +199,34 @@ class VaultixPreferences @Inject constructor(
         }
 
     /**
-     * 自动锁定档位（[VaultTimeout] 模型，对齐 Bitwarden）。
+     * **某库**的自动锁定档位（多库锁模型定稿 **D3**，2026-09-29）。
      *
-     * **含一次性迁移**（2026-09-11 起）：旧键 `auto_lock_minutes` 用裸 Int 表达档位，
-     * 其中 `-1` 表示「从不」；而新模型里 `-1`（`OnAppRestart`）表示「重启时锁定」——
-     * **语义正好相反**。因此首次读取时把旧值按
-     * [VaultTimeout.fromLegacyMinutes] 转换后写入新键，并置迁移标记；此后一律读新键。
+     * 存储键 `vault_timeout::<vaultId>`。
+     *
+     * ## 惰性迁移（为什么不是升级时枚举库写一遍）
+     *
+     * 该库尚未写过自己的键时，依次回退：
+     * ① 旧**全局**键 [VAULT_TIMEOUT]（D3 之前的唯一来源）；
+     * ② 更旧的 [AUTO_LOCK_MINUTES]（裸 Int，2026-09-11 起的既有迁移）；
+     * ③ [VaultTimeout.DEFAULT]。
+     *
+     * 偏好层拿不到库表（库在 Room 里），而惰性回退对**任何**库都成立；
+     * 用户一改某个库的档位，那个库就自然落成显式键 ⇒ **不需要**枚举式迁移。
+     *
+     * ⚠️ **旧全局键 [VAULT_TIMEOUT] 永不删除**：它是「还没写过显式档位的库」的
+     * 回退值。删了会让其它库**静默掉到默认档**（迁移事故）。
+     *
+     * 旧键 `auto_lock_minutes` 的语义陷阱见 [VaultTimeout.fromLegacyMinutes]：
+     * 它的 `-1` 表示「从不」，而新模型的 `-1` 表示「重启时锁定」——**正好相反**。
      */
-    val vaultTimeout: Flow<VaultTimeout> = safeData.map { prefs ->
+    fun vaultTimeout(vaultId: String): Flow<VaultTimeout> = safeData.map { prefs ->
+        prefs[vaultTimeoutKey(vaultId)]
+            ?.let { VaultTimeout.fromStorageValue(it) }
+            ?: legacyVaultTimeout(prefs)
+    }
+
+    /** 旧全局档位（D3 之前的唯一来源；仍作为「未写过显式档位的库」的回退）。 */
+    private fun legacyVaultTimeout(prefs: Preferences): VaultTimeout =
         if (prefs[AUTO_LOCK_MIGRATED_V2] == true) {
             prefs[VAULT_TIMEOUT]
                 ?.let { VaultTimeout.fromStorageValue(it) }
@@ -217,21 +237,21 @@ class VaultixPreferences @Inject constructor(
                 ?.let { VaultTimeout.fromLegacyMinutes(it) }
                 ?: VaultTimeout.DEFAULT
         }
-    }
 
     /**
-     * 写入新档位。
+     * 写**某库**的档位。
      *
-     * **同时清除旧键并置迁移标记**：否则下次读取时（标记为假）会被旧值覆盖，
-     * 用户的修改看起来"没生效"。
+     * ⚠️ **只写这一个键**，不碰旧全局键、也不清 `auto_lock_minutes` ——
+     * 那些仍是**其它库**（尚未写过显式档位的库）的回退值，清了就是迁移事故
+     * （见 [vaultTimeout] 的 KDoc）。
      */
-    suspend fun setVaultTimeout(value: VaultTimeout) {
+    suspend fun setVaultTimeout(vaultId: String, value: VaultTimeout) {
         dataStore.edit { prefs ->
-            prefs[VAULT_TIMEOUT] = VaultTimeout.toStorageValue(value)
-            prefs[AUTO_LOCK_MIGRATED_V2] = true
-            prefs.remove(AUTO_LOCK_MINUTES)
+            prefs[vaultTimeoutKey(vaultId)] = VaultTimeout.toStorageValue(value)
         }
     }
+
+    private fun vaultTimeoutKey(vaultId: String) = intPreferencesKey("vault_timeout::$vaultId")
 
     /** 敏感内容复制后自动清空剪贴板的延迟（0 = 不清除）。 */
     val clipboardClearMs: Flow<Long> =

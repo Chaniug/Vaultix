@@ -9,6 +9,8 @@ import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.domain.AutoUnlockRepository
 import io.vaultix.domain.AutoRestoreReport
 import io.vaultix.domain.VaultRepository
+import io.vaultix.model.VaultKind
+import io.vaultix.model.VaultSummary
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
@@ -72,13 +74,28 @@ class AutoRestoreTriggerTest {
         val keyInMemory = MutableStateFlow(false)
     }
 
+    /**
+     * D3（2026-09-29）后触发器要读**库表**（它按库聚合「是否还有 Never 档的库」）——
+     * 这里给一个固定库 id，测试仍靠翻转 `f.timeout` 驱动（`vaultTimeout(any())` 统一返回它）。
+     */
+    private fun vault(id: String) = VaultSummary(
+        id = id,
+        kind = VaultKind.BITWARDEN,
+        name = "库 $id",
+        account = null,
+        origin = "https://vault.example.com",
+        unlocked = true,
+    )
+
     private fun trigger(
         f: Fixture,
         hasEnvelope: Boolean = true,
         restoreReport: AutoRestoreReport = AutoRestoreReport(true, 1, 1, emptyList()),
     ): Pair<AutoRestoreTrigger, AutoUnlockRepository> {
         val prefs = mockk<VaultixPreferences>(relaxed = true)
-        every { prefs.vaultTimeout } returns f.timeout
+        // D3：档位**每库一份** ⇒ 触发器改为「按库聚合是否还有 Never」（`anyVaultNever()`）。
+        // 本夹具统一回同一支 flow，测试依旧靠翻转 `f.timeout` 驱动（与改前等价）。
+        every { prefs.vaultTimeout(any()) } returns f.timeout
 
         val autoUnlock = mockk<AutoUnlockRepository>(relaxed = true)
         every { autoUnlock.houseKeyInMemory } returns f.keyInMemory
@@ -87,6 +104,8 @@ class AutoRestoreTriggerTest {
 
         val repository = mockk<VaultRepository>(relaxed = true)
         every { repository.observeUnlockedVaultIds() } returns flowOf(emptySet())
+        // D3：`anyVaultNever()` 要先知道库表（逐库读档位）⇒ 这里给一个固定库。
+        every { repository.observeVaults() } returns flowOf(listOf(vault("vault-1")))
 
         return AutoRestoreTrigger(prefs, autoUnlock, repository) to autoUnlock
     }

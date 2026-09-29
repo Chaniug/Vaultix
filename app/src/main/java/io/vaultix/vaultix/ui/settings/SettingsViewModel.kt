@@ -16,11 +16,14 @@ import io.vaultix.vaultix.security.AutoLockController
 import io.vaultix.vaultix.session.ActiveVaultStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import io.vaultix.vaultix.ui.items.ItemsCardDisplayMode
 import io.vaultix.vaultix.ui.items.ItemsGroupMode
 import kotlinx.coroutines.flow.map
@@ -87,8 +90,23 @@ class SettingsViewModel @Inject constructor(
         val screenSecurity: Boolean? = null,
     )
 
+    /**
+     * **当前活跃库**的自动锁定档位（多库锁模型定稿 **D3**，2026-09-29）。
+     *
+     * 设置页「自动锁定」行的上方显示的就是活跃库名 ⇒ 这一行必须读写**该库**的档位。
+     * D3 之前这是**全局单值**，于是「给 A 设的档位会改到 B」——
+     * 正是用户报的「两个库互相干扰」（`.ai/issues/04-锁与解锁.md` #131）。
+     *
+     * 无活跃库（全锁 / 首帧未解析）时给 [VaultTimeout.DEFAULT] 占位：
+     * 主界面此时本就不可达（无已解锁库时 `RootNavState` 会收回解锁页）。
+     */
+    private val activeVaultTimeout: Flow<VaultTimeout> =
+        activeVaultStore.activeVaultId.flatMapLatest { vaultId ->
+            if (vaultId == null) flowOf(VaultTimeout.DEFAULT) else preferences.vaultTimeout(vaultId)
+        }
+
     val state: StateFlow<UiState> = combine(
-        preferences.vaultTimeout,
+        activeVaultTimeout,
         preferences.clipboardClearMs,
         preferences.dynamicColor,
         preferences.screenSecurity,
@@ -359,8 +377,21 @@ class SettingsViewModel @Inject constructor(
         activeVaultStore.setDefault(vaultId)
     }
 
+    /**
+     * 写**当前活跃库**的自动锁定档位（D3：每库一份）。
+     *
+     * ⚠️ 与 [setDefaultVault] 的分工：那个动「冷启动默认库」，本方法只动**当前库的档位**。
+     *
+     * 库 id 取 [ActiveVaultStore.activeVaultId]；为空时用 [ActiveVaultStore.resolve]
+     * **现算一次**（async 填充的首帧可能还没到 —— 与 autofill 侧同一个理由），
+     * 仍为空则**不写**：无库可归属时静默丢弃，好过写错库。
+     */
     fun setVaultTimeout(timeout: VaultTimeout) {
-        viewModelScope.launch { preferences.setVaultTimeout(timeout) }
+        viewModelScope.launch {
+            val vaultId = activeVaultStore.activeVaultId.value ?: activeVaultStore.resolve()
+            if (vaultId == null) return@launch
+            preferences.setVaultTimeout(vaultId, timeout)
+        }
     }
 
     fun setClipboardClearMs(ms: Long) {

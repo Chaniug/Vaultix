@@ -7,6 +7,8 @@ import io.mockk.just
 import io.mockk.mockk
 import io.mockk.Runs
 import io.mockk.verify
+import io.vaultix.datastore.VaultTimeout
+import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.domain.RoomUnlockOutcome
 import io.vaultix.domain.VaultRepository
 import io.vaultix.model.VaultKind
@@ -38,6 +40,12 @@ class AutoUnlockRepositoryImplTest {
     private val houseKeyStore = mockk<HouseKeyStore>()
     private val vaultRepository = mockk<VaultRepository>()
     private val sessions = mockk<VaultSessionManager>(relaxed = true)
+
+    /**
+     * 每库档位（D3，2026-09-29）：`restore()` 会按库读档位（只恢复 Never 档的房间）。
+     * 默认全部 Never ⇒ 与 D3 之前的行为等价（那时判据是全局档位）。
+     */
+    private val preferences = mockk<VaultixPreferences>(relaxed = true)
     private lateinit var repo: AutoUnlockRepositoryImpl
 
     private fun vault(id: String, unlocked: Boolean) = VaultSummary(
@@ -59,9 +67,16 @@ class AutoUnlockRepositoryImplTest {
         coEvery { houseKeyStore.hasAutoEnvelope() } returns true
         coEvery { houseKeyStore.removeAutoEnvelope() } just Runs
         coEvery { houseKeyStore.roomVaultIds() } returns emptyList()
+        // ★ 多库锁模型定稿 **D1**（2026-09-29）：`restore()` 现在会读「用户主动锁」名单
+        //   （跳过这些库）。HouseKeyStore 是**非 relaxed** mock ⇒ 未打桩即抛
+        //   "no answer found"，所以这两条是必需的。
+        coEvery { houseKeyStore.userLockedVaultIds() } returns emptySet()
+        coEvery { houseKeyStore.clearUserLocked(any()) } just Runs
+        // D3：默认所有库都是 Never 档（= D3 之前「全局 Never」的等价结论）。
+        every { preferences.vaultTimeout(any()) } returns flowOf(VaultTimeout.Never)
         every { vaultRepository.observeVaults() } returns
             flowOf(listOf(vault("a", true), vault("b", false), vault("c", true)))
-        repo = AutoUnlockRepositoryImpl(houseKeyStore, vaultRepository, sessions)
+        repo = AutoUnlockRepositoryImpl(houseKeyStore, vaultRepository, sessions, preferences)
     }
 
     @Test
@@ -133,5 +148,61 @@ class AutoUnlockRepositoryImplTest {
         val report = repo.restore()
         assertEquals(1, report.opened)
         assertEquals(listOf("b"), report.failedVaultIds)
+    }
+
+    // ============ 多库锁模型定稿 D1 / §3.2（2026-09-29）：用户主动锁的库不恢复 ============
+
+    /**
+     * ★★ **D1 的恢复侧一半**：用户主动锁过的库，自动恢复**必须跳过**。
+     *
+     * 「锁 A 不影响 B 的恢复能力」+「A 也不会在冷启动被悄悄开回来」两件事，
+     * 由「每库标记 + 这里跳过」共同保证（写标记在 `VaultRepositoryImpl.lockVault`，
+     * 清标记在 `AutoRestoreTrigger` 的解锁成功钩子）。
+     *
+     * ⚠️ 本条变红 = 用户锁过的库又被自动开了 ⇒「锁定」被静默撤销
+     * （旧实现靠删**全局**信封达到这个效果，代价是连带掐掉别的库 —— 见 #131）。
+     */
+    @Test
+    fun `恢复_跳过用户主动锁的库`() = runTest {
+        every { houseKeyStore.isUnlocked } returns true
+        coEvery { houseKeyStore.roomVaultIds() } returns listOf("a", "b")
+        coEvery { houseKeyStore.userLockedVaultIds() } returns setOf("a")
+        coEvery { vaultRepository.unlockVaultFromRoom("b") } returns RoomUnlockOutcome.Opened
+
+        val report = repo.restore()
+
+        assertEquals(1, report.roomCount)
+        assertEquals(1, report.opened)
+        coVerify(exactly = 0) { vaultRepository.unlockVaultFromRoom("a") }
+    }
+
+    /** 清标记透传（`AutoRestoreTrigger` 的解锁成功钩子调它）。 */
+    @Test
+    fun `用户锁解除_透传自HouseKeyStore`() = runTest {
+        repo.clearUserLock("a")
+        coVerify(exactly = 1) { houseKeyStore.clearUserLocked("a") }
+    }
+
+    /**
+     * ★★ **D3 / §3.2 的档位侧**：**非 Never 档**的库，冷启动**不恢复**。
+     *
+     * 非 Never 的语义是「离开期间可能已到期」⇒ 冷启动不该把它悄悄开回来
+     * （对齐 Bitwarden：`autoUnlockKey` 仅 Never 档存在）。
+     *
+     * ⚠️ 本条变红 = 定时档的库被冷启动静默开回来，档位形同虚设。
+     */
+    @Test
+    fun `恢复_跳过非Never档的库`() = runTest {
+        every { houseKeyStore.isUnlocked } returns true
+        coEvery { houseKeyStore.roomVaultIds() } returns listOf("a", "b")
+        every { preferences.vaultTimeout("a") } returns flowOf(VaultTimeout.Never)
+        every { preferences.vaultTimeout("b") } returns flowOf(VaultTimeout.FiveMinutes)
+        coEvery { vaultRepository.unlockVaultFromRoom("a") } returns RoomUnlockOutcome.Opened
+
+        val report = repo.restore()
+
+        assertEquals(1, report.roomCount)
+        assertEquals(1, report.opened)
+        coVerify(exactly = 0) { vaultRepository.unlockVaultFromRoom("b") }
     }
 }

@@ -9,302 +9,41 @@
 此前约定「两边保持同步」，结果是同一主题两处各有一份、必然漂移（AI 会看错位置）。
 **要改内容，只改这里。**
 
-## 🕐 最新状态（**2026-09-29 收尾 · 提交闭合 + 变异验证重做 + 门禁两坑已修（#129/#130）**·交接点，接力请先看这几行）
+## 🕐 最新状态（**2026-09-29 深夜 · 多库锁模型定稿（D1–D7）+ 文档瘦身执行**·交接点，接力请先看这几行）
 
-> ### ★★ 最新（2026-09-29 收尾轮）—— 提交闭合 + 变异验证重做 + 修掉两个"假绿"坑
-> **用户指令**：「你按照优先级完成1234吧」（承接上一轮盘点的 4 项未闭合项）。
->
-> 1. ✅ **提交闭合**：批次 5.1 + 5.2 的 **18 个文件**（`+1502/−274`）落成 **`4fd6eed`**，
->    **已 push `main`**（`rele` 未动）。此前它们**只存在于工作区**。
-> 2. ✅ **清理执行**（`5a65a75`）：删构建产物 + 过期日志，**保留 `.gradle/`**，
->    约释放 **2.9G**；`artifacts/` 里唯一有长期价值的 `perf-report-2026-09-13.md`
->    已**先救出**到 `Docs/progress/`。
->    清单与结果：[`Docs/progress/cleanup-report-2026-09-29.md`](../Docs/progress/cleanup-report-2026-09-29.md)。
-> 3. ★★★ **变异验证终于干净通过**（本轮最重要产出）：
->    ① 注入 `Never` 分支锁定 ⇒ **3 条** `AssertionError` 变红（切后台/进程创建/亮屏）；
->    ② 注入 `remainingMs = 0` ⇒ 「切后台后亮屏不提前锁」变红。
->    两次均 `AssertionError 计数 == 失败用例数`，环境竞态 **0 次**。
-> 4. ★★★ **但要做到 3，必须先修两个坑 —— 都是"假绿"类**：
->    - **#129（`VaultTimeout` 环形静态初始化）已修**：`KNOWN_BY_MINUTES` 急切 `val`
->      → **`by lazy`**。⚠️ **原记录"只全量跑才挂"是错的** —— **单跑该类同样必挂**，
->      上一轮那次"单跑通过"是**顺序侥幸** ⇒ **上轮的"门禁全绿"里含运气**。
->    - **#130（测试假绿）已修**：两个测试用**虚拟 `delay`** 去等
->      `Dispatchers.Default`（实现里**硬编码**）上的协程 ⇒ 断言先于协程执行；
->      这正是上轮"6 条只红 2 条"的原因。已改为**真实时间等待**（`settle`/`awaitUntil`）。
->    - ⇒ ★★ **新增纪律：基线不绿时做的变异验证没有意义。**
-> 5. **门禁（修复后重跑，分开单跑）**：detekt ✅ · `:app:testFullDebugUnitTest` ✅ ·
->    `:data:repository:testDebugUnitTest` ✅。
-> 6. **下一步 = 批次 5 真机验收**（清单 1-11）。本轮特别点名 **亮屏补偿的算术**：
->    档位 1 分钟 → 熄屏 3 分钟 → 亮屏应**立即锁** —— 这段在 JVM 下**测不到**
->    （`elapsedRealtime() ≡ 0`），只能真机证。
+> ### ★★ 最新（2026-09-29 深夜轮）—— 定稿：[`.ai/decisions/多库锁模型-定稿.md`](./decisions/多库锁模型-定稿.md)（自包含施工单）
+> **用户指令**：「两个库互相解锁/加锁的逻辑混淆，头大」→ 梳理 + 真机取证 ×3 → 逐项拍板 → 定稿。
+> 1. ★★★ **实测铁证**：同轮同指纹，BW 库解锁 **33 ms** vs KDBX **3.58 s**（差 100 倍）——
+>    KDBX 房间信封包**主密码**（每次重跑 Argon2id + 重解密整库），BW 包**派生 64B key**（零 KDF）。
+>    「两库解锁态互切 = 秒切（零认证）」亦已实测。
+> 2. **真凶澄清**：「又要验证」多为 Honor `iAwareF` 杀后台（单轮日志 4 连杀），
+>    **不是锁屏钩子**（Bitwarden 全仓零引用 keyguard/SCREEN_OFF，本地源码 + git 史核证）。
+> 3. **定稿 D1–D7**：D1 单库锁去跨层副作用（每库「用户主动锁」标记，不删全局 auto 信封）·
+>    D2 每库各自计时 · D3 档位每库一份 · D5 修「补开被 Job cancelled」·
+>    D6 库间隔离（**不做跨库条目**；写隔离、读聚合不限）· D7 设置加「解锁方式」行；
+>    D4（Never 信封绑认证）暂缓另议。
+> 4. **新坑记账**：#131（锁作用域不一致）· #132（KDBX 信封包密码）·
+>    #133（补开被取消）· #134（取证三坑：screenrecord 被 kill 丢 moov 等）。
+> 5. ★ **[8.9 文档分篇](./conventions/8.9-文档分篇.md)开始执行**：本状态区从 8 个轮次块压缩为
+>    2 块（被删块正文均在 `SESSION-2026-09-29.md` 有档，git 史可查）；
+>    存量欠账实测：`next-steps.md` **198KB**（最严重）· `MEMORY.md` 78KB —— 清单见 8.9 §6。
+> **下一批 = 定稿批次 A 第二片（D3：档位每库存储 + 惰性迁移 + 设置页每库入口）**，随后 B（KDBX 提速）、C（管理页 UI）。
+> 门禁照常三关分开单跑。**本轮零行为变更**（唯一代码改动：`VaultTimeout.kt` KDoc 纠错）。
 
-> ### （上一轮）—— 批次 5.2：**亮屏时间补偿 + 删死字段 + 项目清理**（定稿 §6.4）
-> **用户指令**：「按你推荐的来吧。然后顺手也清理一下这个项目中无用过期的文件产物，日志等内容」
-> ⇒ 「按推荐」= ① 删死字段 `isFromLockFlow` ② **做**亮屏时间补偿 ③ **不做**软登出档。
->
-> 1. ★★★ **亮屏时间补偿（本批主菜，不是可选优化）**：协程 `delay(n)` 计时依赖线程，
->    **线程在设备深度睡眠时被挂起** ⇒ **熄屏期间时间在走，定时器不走**。
->    举例：5 分钟档，锁屏放兜里 30 分钟 —— 无补偿时 `delay` 可能只推进 2 分钟
->    ⇒ 用户掏出手机，**本应早已锁定的库还是开着的**。
->    实现：`VaultLockManagerImpl.onScreenOn()` + 注册 `ACTION_SCREEN_ON`，
->    按 `SystemClock.elapsedRealtime()` 重算剩余并重启定时器（对齐 Bitwarden `:737-749`）。
->    **`startTimeMs` 从 `currentTimeMillis` 改 `elapsedRealtime`**（单调时钟，熄屏照常累加）。
-> 2. **删死字段 `isFromLockFlow`**：接口 + 实现 + 两处赋值全删（无消费方 / 赋值写反 /
->    已被 `viewLocked` 取代）。⚠️ **别加回来** —— 会与 `viewLocked` 形成双源真值。
-> 3. ★ **本批的自我纠错（重要纪律）**：对照表初稿断言「Vaultix 缺『主动锁收起指纹』」
->    —— **错**。真因是只看了**字段**就外推成**功能**缺失；实际由
->    `VaultSessionRepository.isViewLocked`（会话层 + **逐库**）实现，**粒度优于** Bitwarden 的全局单值。
->    ⇒ **判断"某功能是否缺失"必须搜消费侧行为，不能只看同名字段。**
-> 4. **单测盲区（诚实记录）**：`isReturnDefaultValues = true` ⇒ JVM 下 `elapsedRealtime() ≡ 0`
->    ⇒ **无法测"已走过一半"的算术**。新增 2 条测试只覆盖「空 map 早退」「补偿不提前锁」；
->    **算术只能真机验**（档位 1 分钟 → 熄屏 3 分钟 → 亮屏 ⇒ 应立即锁）。
-> 5. **遗留**：① Never 档密钥常驻内存（`adb`/root 可 dump，**与 Bitwarden 一致**，用户接受）；
->    ② 「第二三遍不弹」真因是荣耀/鸿蒙 `AppFastHibernation` 激进冻杀，**与锁策略无关**，另案；
->    ③ 已拍板**不做**：软登出（LOGOUT）档、「锁屏即锁」档位。
->
-> 门禁三关全绿（detekt / `:app:compileFullDebugKotlin` / 单测 **400 全过 0 failed**）
-> + 亮屏补偿**变异验证通过**（注入「无条件锁」→ Never 档测试变红）。
-> ⚠️ **当前位置：改动在工作区未提交；`rele` 未动（⚠️ push `rele` = 直接发正式版）。**
-> **接力入口：[`Docs/progress/quick-unlock-house-rework.md`](../Docs/progress/quick-unlock-house-rework.md)** ·
-> 定稿实施记录 **§6.4**（最新）。
+> ### ★ 最新进展（2026-09-30 凌晨）—— 批次 A **全部完成**（第一片 D1+D2+D5 / 第二片 D3+§3.2）
+> 第一片：D1 每库「用户主动锁」标记（锁单库不再删全局信封）· D2 每库各自计时 · D5 补开挪进程级 scope。
+> 第二片：D3 档位**每库一份**（`vault_timeout::<vaultId>`，惰性迁移不删旧键）· §3.2 档位侧
+> （`restore()` 只恢复 Never 档房间）· 设置页绑活跃库。
+> 门禁：detekt ✅ / compile ✅ / app **289** + `data:repository` **116** = **405 / 0 失败**；
+> **变异验证三次注入各「恰好一条」变红**（D1/D2/D3），还原后全绿。
+> **下一批 = B（KDBX 信封改包派生密钥 ⇒ 解锁提速）**，随后 C（管理页 UI）。
+> ⚠️ **改动在工作区未提交**（`rele` 未动）。详情：定稿 §5 + `SESSION-2026-09-29.md`。
 
-> ### （上一轮）—— 批次 5.1：**Never 档对齐 Bitwarden，取消离场软锁**（定稿 §6.3）
-> **用户三次拍板**（逐次加重）：「对齐 Bitwarden（不软锁）」→「对齐bitwarden的设计方案吧」
-> →「**对齐bitwarden的设计理念吧**」。⇒ **推翻同日批次 5.0 的「软锁 + 前台门禁」**。
->
-> 1. ★★★ **核心洞察：批次 5.0 把 Bitwarden 的信任模型读反了**：
->    Bitwarden 敢在 `Never` 档 `return`（切后台不锁），**不是**因为有恢复信封兜底，
->    而是因为**它信任 Android 的进程内存** —— 密钥只活在进程地址空间，进程一死就没了。
->    「内存转储」的前提是攻击者拿到特权访问，**而那个前提下 Vaultix 的信封同样会被解开**
->    （信封用免认证 `AutoUnlockKeyStore`）。⇒ **信封不构成额外安全层**；
->    软锁换来的「后台密钥不在内存」是**伪安全**。真正的边界是「**进程是否活着**」。
-> 2. **改动最小集**：`VaultLockManagerImpl.Never` 回归 `return@launch`（删
->    `softLockForBackground` + 注入 `AutoUnlockRepository`）；`AutoRestoreTrigger`
->    **删前台门禁**（combine 三源 → 两源）；`softLock()` 保留但**无调用点**；
->    `AutoLockController.isForeground` 保留但**无消费者**。
-> 3. ★ **`AutofillActivity.prepareBiometricUnlock` 的 Never 恢复分支必须保留** ——
->    理由已更新：是「**主动按需恢复**」与 `AutoRestoreTrigger`「**被动 combine 响应**」
->    的时序互补（fillRequest 可能早于 combine 首次求值 32ms），不是「补门禁的洞」。
-> 4. **测试反转两处**：`VaultLockManagerImplNeverTest` → 「切后台**绝不**锁定」；
->    `AutoRestoreTriggerTest` → 「**不含**前台门禁」。
-> 5. **遗留**：① Never 档密钥常驻内存（`adb`/root 可 dump，**与 Bitwarden 一致**，用户接受）；
->    ② 「第二三遍不弹」真因是荣耀/鸿蒙 `AppFastHibernation` 激进冻杀，**与软锁无关**，另案；
->    ③ 将来要「锁屏即锁」应**新增独立档位**，别接回 `Never`。
->
-> 门禁三关全绿（detekt / `:app:compileFullDebugKotlin` / 单测 **398 全过 0 failed**）
-> + 两处回归测试**变异验证通过**（注入锁定 → 变红）。
-> 定稿实施记录 **§6.3**（§6.2 保留为历史，已标注推翻）。
-
-> ### （上一轮，**⚠️ 结论已被批次 5.1 推翻**）—— 批次 5.0：软锁 + 前台门禁 + 解锁提速（定稿 §6.2）
-> 1. ~~★★★ **核心洞察：软锁 vs 硬锁 = 信封的留与删**~~（⚠️ 已推翻）：
->    ~~**软锁**（新 `AutoUnlockRepository.softLock`）= 离开 App 触发，清密钥 + **留**信封
->    ⇒ 回来自动开；**硬锁**（既有 `lockVault`/`lockAll`）= 点锁定，清密钥 + **删**信封
->    ⇒ 回来过门锁。旧 bug 根因 = `Never -> return@launch`。~~
->    —— ⚠️ 最后一句**是误判**：`Never -> return` 恰是 Bitwarden 的做法（见 §6.3）。
-> 2. ~~★★★ **前台门禁是安全底线，不是优化**~~（⚠️ 已删除，无保护对象）。
-> 3. ★★ **指纹提速 = 消除 N 次串行 Keystore 往返**：旧 `candidateVaultIds()` 每库调
->    `fingerprintQuickUnlockAvailable(id).first()`（内含一次 Keystore 往返）⇒ 改「一次读
->    范围快照（`preferences.quickUnlockScope()`，零 Keystore）+ 内存求交」。
->    ✅ **仍然有效。**
-> 4. ★ **先开核心库再异步补开其余**：`completeLocalUnlock` 拆两段（`LocalUnlockFanout.openRest`
->    + `Result.lockOpened`）—— 其余库是附加收益，不该挡住用户点的那一个。✅ **仍然有效。**
-> 5. **测试纪律**：非 suspend 成员（`lock()` / `isUnlocked`）只能 `every`
->    （`coEvery` 静默失效）；含 `withContext(Dispatchers.IO)` 的实现**必须轮询终态**。
->    ✅ **仍然有效。**
-
-> ### （上一轮）—— 快速解锁「房子化」批次 4：失效矩阵（定稿 §6）
-> 1. ★★ **rearm 的真实形态是「延迟重装」，不是「静默重包」**：硬约束 #2
->    （auth-per-use 一次授权只保一次 `doFinal`）⇒ 重写门锁信封**必须**再弹一次认证。
->    故 =「失效时只打标记（`house_lock_fingerprint_rearm_pending`）→ 下次认证时补写」。
->    用户拍板「可以接受重新安装」。
-> 2. ★★ **开门 / 关门唯一正确判据 = `HouseKeyStore.isUnlocked`**（不是「信封存不存在」——
->    重录指纹后两者分叉，误用后者会把 rearm 走成降级、**连带清掉房间信封**）。
-> 3. **降级绝不静默**：`UnlockRecoveryRepositoryImpl.degradeFingerprintLock()` → 禁锁 +
->    三选一明确文案 + 回主密码；无指纹信封时 no-op。
-> 4. **StaleCredentials**：`RoomResealRepositoryImpl.resealRoom(vaultId, newMasterPassword)`
->    只重包**该房间软件信封**，门锁不动；`UnlockViewModel` 在 `StaleCredentials` 分支调用。
-> 5. **PIN 熔断全局 5 次**：批次 1 已达成（N 信封 → 1 门锁信封 ⇒ 计数天然全局）。
-> 6. 新增失效三态分类 `LocalUnlockFailureKind { Recoverable, Rearmable, Unavailable }`。
->
-> **接力入口（自包含）：[`Docs/progress/house-rework-batch4-handoff.md`](../Docs/progress/house-rework-batch4-handoff.md)**
-> · 定稿实施记录 **§6.1**。
-
----
-
-> ### ★ 上一轮（2026-09-29 深夜续）—— 真机验收反馈修复：「从不锁定」对齐 Bitwarden + 解锁方式三行精简
-> 1. ★★ **硬约束 #1 修订（定稿级，见 `.ai/decisions/快速解锁房子化-两级钥匙层级-定稿.md` 顶部横幅）**：
->    「房钥匙绝不落盘」→「**绝不以明文落盘**」。对标 Bitwarden `userAutoUnlockKey`
->    （`reference/bitwarden/` 稀疏克隆核证：keystoreEncryptedPreferences 载体、
->    进程重启无交互自动恢复）。落地为第三把锁 `AutoUnlockKeyStore`（免认证 Keystore 密钥）。
-> 2. **信封生命周期协调器 `AutoRestoreTrigger`**（挂「解锁成功事件」防 lockVault 死角）：
->    Never 且钥匙在内存→幂等写；无钥匙有信封→自动恢复；主动锁库→删（真锁）；
->    档位改离 Never→删。域接口独立 `AutoUnlockRepository`（VaultRepositoryImpl 顶格 40 函数）。
-> 3. **autofill 双管齐下**：`buildResponse` 1s 恢复等待窗口（对齐 Bitwarden 500ms 等 UNLOCKING）；
->    `ItemRepositoryImpl.observeItems` 改 **Eagerly 共享缓存**（原冷流每次 `.first()` 全量重解密 = 卡顿主源）。
-> 4. **设置页**：删第三行「管理解锁方式」；行点击 = 进向导（`manageBiometric`/`managePin`），
->    开关 = On 关 / Off 进向导（关闭是低频破坏性动作，防误触）。
-> 5. **新增 `HouseKeyStoreTest` auto 信封 3 用例**（生命周期 / 损坏自愈 / 门锁全删连带清）。
->
-> ⚠️ **上一轮位置：`main` 已推送（含该轮提交）；`rele` 未动。**
-> （本轮批次 4 已在其上继续推进，见最顶部状态块。）
-> ~~下一轮起点 = 批次 4（失效矩阵）~~（✅ 已完成）。
-
----
-
-> ### ★ 又一批（2026-09-29 深夜）—— 批次 3：设置页简化「删五类」，顺带补上批次 2 遗留 #1
-> 1. **删 `Partial` 三态**：开关收敛为**二值**（`On`/`Off`），判据只有「**门锁装没装**」。
->    「范围内 N 个库配好了几个」这个量**不再决定任何 UI** —— 它正是 #93「谎报状态的开关」
->    的成因，房子化后在结构上不存在了（定稿 §5.1）。
-> 2. **删每库「指纹 / PIN」角标**：向导的范围列表变**纯复选框**（房子化后门锁是全局的，
->    「这个库配了指纹没配 PIN」这种区分已经不存在）。
-> 3. **结果页**：成功/跳过改**计数**（「已纳入 N / 跳过 M」），**失败仍逐条列**
->    （失败必须可行动 —— 只知道"有 2 个失败了"，用户唯一出路是全部重来）。
-> 4. **副标题**改定稿 §5.1 文案；PIN 那句的两个数字由 `PIN_MIN_LENGTH` / `PIN_MAX_ATTEMPTS`
->    **传入而非写死**（文案数字与阈值分叉 = 一句不成立的承诺）。
-> 5. ★★ **批次 2 遗留 #1 已解决**：把 `lockState` / `locksToOpen` / `roomSealingBlocker` /
->    `assemble` 挪成**文件级 `internal` 纯函数** ⇒ `QuickUnlockControllerTest` 7 条改写为
->    **17 条**，动作表判定终于有行为级证据。**代价要说清**：钉住的是**判定逻辑**，
->    不是整条编排流程（后者仍要靠批次 5 真机验收）。
->
-> ⚠️ **上一轮当前位置：`main` 已推送（批次 2 `61ea1a3` + 批次 3 提交）；`rele` 未动。**
-> （本轮批次 4 已在其上继续推进，见最顶部状态块。）
-> **接力入口（自包含）：[`Docs/progress/house-rework-batch3-handoff.md`](../Docs/progress/house-rework-batch3-handoff.md)**
-
----
-
-> ### ★ 本轮（2026-09-29 夜）做了什么 —— 快速解锁「房子化」批次 2 落地（动作表 + 重登记 + 扇出门禁）
-
-> ### ★ 本轮（2026-09-29 夜）做了什么 —— 快速解锁「房子化」批次 2 落地（动作表 + 重登记 + 扇出门禁）
-> 1. **动作表重排（`QuickUnlockController`，定稿 §5）**：勾库 = **纯软件封装**
->    （`sealRoomsForVaults`，**不碰指纹不碰门锁**）；开锁 = 各**一次** wrap；
->    **已装着的门锁不重开**（`Session.locksToOpen` 与 `methods` 分开 —— 否则每次进向导
->    都要再按一次指纹）；`pendingRooms()` 收敛为「房间信封存在性」**单维度**
->    （房间是共享的，与选了哪种方式无关）。
-> 2. **顺序约束加第二层**：房钥匙还得**在内存**（绝不落盘 ⇒ 重启即失），
->    新增 `LocalUnlockEnrollment.isHouseKeyReady`，**拦在问主密码之前**（输完一轮 KDBX
->    密码才说"不行"是编排层的反面教材）。
-> 3. **重登记向导（旧信封清理）**：新建 `LegacyQuickUnlockCleanup`（三个旧信封前缀 +
->    两个旧 DataStore 前缀，**只枚举键名不解密**）；控制器**只在本次至少建成一个房间信封
->    之后**才清、失败则回滚新开的门锁 ⇒ 「同批生效或整体回退」的"不半新半旧"落点。
->    设置页顶部新增「快速解锁已升级，需重新登记一次」提示行。
-> 4. **新建 `LocalUnlockFanoutTest`（8 用例）**：钉的是**扇出形状** ——
->    `completeFingerprintUnlock` **恰好 1 次且不随库数增长**（旧形状 N 库 = N 次 Keystore = H2）。
->
-> ⚠️ **当前位置：`main` 已推送（`61ea1a3`）；`rele` 未动。**
-> **下一轮起点 = 批次 3（设置页简化：删五类 / 副标题 / `QuickUnlockControllerTest` 改写）**，
-> 之后批次 4（失效矩阵）→ 批次 5（**真机验收，必做**）。
-> **接力入口（自包含）：[`Docs/progress/house-rework-batch2-handoff.md`](../Docs/progress/house-rework-batch2-handoff.md)**
-
----
-
-> ### ★ 上一轮（2026-09-29 白天）—— 快速解锁「房子化」批次 1 落地（钥匙层核心）
-> 1. **门禁三关实测全绿**（detekt / `:app:compileFullDebugKotlin` / 单测，含新建
->    `HouseKeyStoreTest` 6 用例）：两把全局门锁（指纹 KEK / PIN Argon2id 各一信封）包同一把
->    随机 256-bit 房钥匙（**仅内存、绝不落盘**，硬约束 #1）+ 每库纯软件房间信封
->    （AES-GCM，AAD 绑 vaultId 防错位）。**H1（一把 cipher 连包 N 库）与 H2（rest 库现取
->    新 cipher 无人授权）已结构性消灭**；新建 `HouseKeyStore.kt`（~470 行，两级钥匙层唯一协调者）。
-> 2. **契约重排 + 扇出重写**：`VaultRepository` 17→16 方法（新增 `RoomUnlockOutcome` 三态）；
->    `LocalUnlockFanout` 重写为「**1 次** `completeFingerprintUnlock`（解锁路径唯一 Keystore 操作）+
->    **N 次** `unlockVaultFromRoom`（纯软件）」——首库特殊化随 H2 一起消失。
->    ⚠️ `QuickUnlockController` **只做编译级适配**（行为可用、不背叛定稿；完整重排 = 批次 2 第一件事）。
-> 3. **批次 0（P0 判别实验）取消**——批次 1 的结构性修复同时消灭 H1/H2，判别失去意义；
->    真机全链路验收（批次 5 清单）仍必做，尤其「指纹一次开多库」「杀后台后必须重新解锁」。
->
-> ⚠️ **当前位置：`main` 已推送（`ae80aae`）；`rele` 未动。**
-> ✅ **上面列的「下一轮起点 = 批次 2」三条已于同日夜间全部完成**（`61ea1a3`），
-> 见最顶那个状态块 ⇒ **接力请从最顶读起，别再从这一条开工**。
-> 本块保留作**钥匙层模型的速查**：模型速查 / 存储键表 / 16 方法契约 / 15 项刀序 /
-> 5 条遗留 —— 全在
-> [`Docs/progress/house-rework-batch1-handoff.md`](../Docs/progress/house-rework-batch1-handoff.md)。
-
----
-
-> ### ★ 本轮（2026-09-26）做了什么 —— 四句话
-> 1. **设置页「先修坏的」六件事全部落地**（用户拍板：先修坏的，再谈搬运）：
->    ① 开关**不再猜状态** —— 8 个流 `StateFlow<Boolean>` → **`Boolean?`**、初值 `null`
->    （`initialValue = true` 把「偏好没读出来」伪装成「明确开着」）；在同一页上
->    **3 个开关用占位、7 个用裸 `Switch`**，两种行为并存 ⇒ 收口到唯一的 `SettingsSwitch`（#120）；
->    ② **快解三态开关失联** —— `checked = x is S.On` 把 `Partial`（「开了一部分」）
->    渲染成**关着的开关**，类型/detekt/穷尽性**全都查不出**（#121）；
->    ③ 副标题截断为 2 行 · ④ 删 `passkeyCount` 死代码 · ⑤ 一条文案改清楚 · ⑥ 新探针两个。
-> 2. **★ 记一条勘误（影响每个"再加一个参数"的决定）**：detekt `LongParameterList`
->    的阈值是**触发点**，**参数数 ≥ 8 就红**。项目里 `FormValues.kt:42`、
->    `TotpCodesScreen.kt:672` 两处注释写的「8 个刚好」**是错的**（#123）。
->    ⟹ 副作用：`ItemRepositoryImpl` 已 10 参 ⇒ **KDBX 写入必须抽独立协作者类**，不能加构造参数。
-> 3. **★ 新增两个探针，且两个都"坏过"**：
->    `check_state_flattening.py`（#124）**连坏两版都是假绿**（只扫当前文件的 sealed 声明 ⇒
->    真 bug 在另一个文件里；正则贪婪吃到倒数第二段 `…CapabilityState` ⇒ 仍报 0）。
->    `check_orphan_strings.py`（#126）834 条字符串里 **126 条零引用**，
->    **是报告器不是删除器**（按「被搬走的留，被取代的删」，这个数不可能归零）。
-> 4. **★ 账目大体检：7 篇里 6 篇计数是错的**，且此前**只有 06 篇有题注行**，其余六篇压根没有
->    ⟹「看数字判断进度」在多数分篇上根本不成立。已全部校正 + 补题注 + 加三重互校脚本。
->
-> ⚠️ **当前位置：`main` 已推送（`f160ace`）；`rele` 未动**。
-> **下一轮起点 = `R-6 … R-9`：开放 KDBX 单条编辑**（用户已拍板；方案见 `SESSION-2026-09-26.md` §8）。
-
-- **工作区干净；今天的提交已全部推送**（`main` → 见当日末尾；**`rele` 未动**）。
-  今日链条：副标题截断 → 开关收口「不猜状态」 → 快解三态开关 + 探针 → 一条文案 + 孤儿串探针 →
-  记账（#120–#126 + 七篇计数校正）→ **收工复核抓出自己引入的 `UnusedPrivateProperty`（#127，已修）**。
-- ★★ **当前最该记住的五条纪律**（都付过代价）：
-  1. **探针的闭环证明 = 「把代码还原成出 bug 的版本，看它是否恰好报那几行」**，
-     **不是「自测全绿」** —— 自测只证明"探针能处理我编的简化输入"（#124 连坏两版）；
-  2. **当注释不得不解释「点这个按钮是 A 不是 B」时，错的是控件，不是注释** ——
-     正解是换控件（按钮/开关二选一），不是给开关写更多解释（#122）；
-  3. **"同一原则改一半"比没改更危险** —— 它让「已修」看起来成立（#120：同页 3 占位 vs 7 裸开关）；
-  4. **类型改造最容易死在"中途某一层收窄"上，而收窄处编译不报** ——
-     `Boolean?` 传进 `Boolean` 参数才报，反过来是隐式的（`FillBehaviorSection` 泄漏点）；
-  5. ⭐ **"违例数没涨"不等于"没新增违例"** —— 净数把**抵消**（消 1 增 1）和**真的没动**
-     显示成一模一样（#127 实付代价）。判据必须是**逐条集合差**，且**掐掉行号**再比。
-- ⚠️ **真机验收未做**：本轮全部改动只过了 detekt / 类型检查 / 变异测试。
-  优先验「设置页所有开关的**首帧**不再闪 `true`」与「快速解锁 Partial 态显示为**「继续」按钮**」。
-- ⚠️ **沙箱里跑 detekt 的口径**（别被数字吓到）：项目自带的 `config/detekt/detekt.yml` 已经是
-  **旧属性名**（`threshold` / `functionThreshold`），可直接喂给沙箱里的 detekt 1.23.8。
-  但两边**默认规则集不同**（1.23.8 会多报一堆 `MagicNumber`）⇒
-  **本地这套只用来做「相对基线的差值」，不能用来判"是否绿"**；CI 的 `./gradlew detekt`
-  （2.0.0-alpha.6）才是真门禁。见 `SESSION-2026-09-26.md` §6。
-
-
-- ★★ **本轮最大的方法论收获**：`.ai/issues/03` **#108 曾把 `publicKeyAlgorithm` 判为"不需要"** ——
-  它只写了"为什么不是"，**没写"在哪个解析层不是"**（浏览器层 vs RP 层），于是后人当成全局结论用。
-  ⇒ **写排除结论必须绑定到具体的解析者/层。**
-- ⚠️ **GitHub Actions 缓存已顶到上限**（10.5 GB / 上限 10 GB；`gradle-transforms-v2` 25 条吃 6.0 GiB）
-  ⇒ 会触发 LRU 淘汰、偶发**冷启动变慢**。治本开关 `gradle-home-cache-cleanup: true` **尚未开启**。
-- ★★ **发布机制（2026-09-17 实测确认，务必记住）**：**push 到 `rele` 分支 = 直接触发正式发布**。
-  `.github/workflows/release.yml` 的触发条件是 `branches: [rele]` / `tags: [v*]` / 手动：
-  读根 `VERSION` → 打 `v*` tag → **混淆构建** `:app:assembleFullRelease` →
-  发布**非 prerelease 的 Latest Release**（附 APK + `checksums-sha256.txt`），
-  并按 `keep_releases`（默认 10）清理旧 Release。
-  ⇒ ⚠️ **不要为了"让分支保持同步"顺手 push `rele`** —— 那等于发版。
-  ⇒ 本次收工：main 已**快进**合入 rele ⇒ **v0.3.0 已发布成功**
-  （`Vaultix v0.3.0 (Stable)` · tag `v0.3.0` · **Latest** · 固定密钥签名 ⇒ 可覆盖安装）。
-  `main` 上的 `ci-debug.yml` 只把 debug APK 发到 `preview`（prerelease），不参与正式发布。
-- ★★ **下一步**：**真机验收 §1 ~ §4**（代码已全部完成，验收清单在
-  `Docs/progress/settings-rework.md` 各节末尾；装机后必比 SHA-256）。
-  ~~按 `settings-rework.md` 的 §2 → §3 → §4 施工~~ **（四项均已完成 2026-09-18，含两处改判）**。
-  设计依据仍是 `decisions/设置页信息架构-定稿.md` **§11.10 / §11.11 / §11.12**。
-- ⏳ **可选第二轮**：`Docs/progress/docs-slimming.md` —— 文档与记忆瘦身（三项，宜一次做完）。
-- ★★ **今天的共同病根**（三种形态，全踩过）——见 `SESSION-2026-09-17.md` §13.1：
-  | 形态 | 例子 |
-  |---|---|
-  | **沉默的分支** | 通行密钥 `Ready` 分支；同步取消分支不清 `isRunning` |
-  | **假空态** | 读路径解密失败 → 空列表（用户以为密码丢了） |
-  | **假未登录** | 长寿命状态存在短寿命页面里 ⇒ "返回就没" |
-  ⇒ 三条约定：**要么改状态要么留日志** · **「空」有三态** · **状态的生命周期不能短于页面的**。
-- ✅ **已真机验证修复**：通行密钥（一次指纹直达）· Bitwarden 空列表（改主密码解锁恢复）·
-  OneDrive 登录态（"**清掉后台也没丢**"，§11.9）。被排除的假设也记在 §11.9，别重走。
-- ✅ **设置页四项全部落地**（2026-09-18）—— ~~① 解锁方式合并精简~~ ~~② 库页改「行 + ⋮」~~
-  ~~③ SSH「生成密钥对」~~ ~~④ 添加页表单~~ **全部已完成，均待真机验收**。
-  规格 / 落点 / 纪律 / 验收清单 / **两处改判的证据**全在
-  [`Docs/progress/settings-rework.md`](../Docs/progress/settings-rework.md)（自包含；**本文件不复述**）。
-  ⚠️ ③ 的「私钥导出格式」已定：**OpenSSH 新格式**（不是 PKCS#8，理由见该文档 §3 的实测表）。
-- ⚠️ **未结**：B 决策文档（模块边界）· 跨格式中转站/灾备三层的成文（`SESSION §13.4`）·
-  `decodeTrashRows` 同款"静默跳过" · R1–R3 三条真机验收（WebDAV 改条目→KeePassXC 能开 / OneDrive 写回 / 断网不损坏）。
-- ⚠️ **诊断手法（今天验证有效）**：`run-as` + **`exec-out`** 拉 `databases/vaultix.db`
-  （**必须含 `-wal`/`-shm`**）→ 本地 sqlite3；MSAL 账户在
-  `shared_prefs/com.microsoft.identity.client.account_credential_cache.xml`。
-  ⚠️ Room 列名是**驼峰** · `adb pull` 要 **Windows 路径** · 大日志用 `exec-out tail -c 2500000` ·
-  **python 是 Windows 版、不认 `/d/...`** · 锁屏(`isKeyguardShowing=true`)+Dozing 时 `install` 会被拒。
-- ⚠️ **门禁必须含 `test`**（`SESSION §6.1`）· 装机后**必须比 SHA-256 核证**（install 输出可能是空白的假成功）。
+> ### （上一轮）—— 2026-09-29 收尾：提交闭合 + 变异验证重做 + 修 #129/#130
+> `4fd6eed`（批次 5.1+5.2 十八文件，已 push main）· `5a65a75`（清理 2.9G）·
+> 变异验证干净通过（#129 环形静态初始化 / #130 虚拟 delay 假绿，均修）·
+> 亮屏补偿真机验证由深夜轮补完（负对照 ✅ / 正对照用户目击 ✅）。
+> 细节：`SESSION-2026-09-29.md`「批次 5.2」「收尾轮」；工作单 `quick-unlock-house-rework.md`。
 
 ## 目录结构（索引 + 分篇，**按需只开一篇**）
 
@@ -313,7 +52,7 @@
 | `README.md` | 本文件：接力入口 | — |
 | `MEMORY.md` | 项目长期笔记（定位 / 架构 / 里程碑 / 技术栈硬约束 / 协议与来源 / 发布签名） | 44KB |
 | `MEMORY.md §8` | **索引**：写代码前的长期约定 → 正文在 ↓ | — |
-| `conventions/` | 约定正文 8 篇：`8.1-自动填充` `8.2-锁与解锁` `8.3-M2KDBX` `8.4-UI·观感` `8.5-通行密钥` `8.6-工程质量` `8.7-环境` `8.8-M3Expressive-采纳范围与顺序` | 各 2~4KB |
+| `conventions/` | 约定正文 9 篇：`8.1-自动填充` `8.2-锁与解锁` `8.3-M2KDBX` `8.4-UI·观感` `8.5-通行密钥` `8.6-工程质量` `8.7-环境` `8.8-M3Expressive-采纳范围与顺序` `8.9-文档分篇` | 各 2~4KB |
 | `ISSUES.md` | **索引**：坑的「编号 → 分篇」总表（最新 **#126**）。⚠️ 「条数」列**校正过两次**（2026-09-21 / 09-26），每次都发现多篇漂移 —— **只信它、不信正文会误判进度**（见 #126 附近的记账注） | 13KB |
 | `issues/` | 坑的正文 7 篇：`01-构建与环境` … `07-数据与同步` | 各 4~43KB |
 | `decisions/` | **逻辑定稿**（用户拍板的方向，非根因、非实现）：`快速解锁房子化-两级钥匙层级-定稿.md`（**快速解锁现行真源**，2026-09-28 起修订前两篇）、`库选择与快速解锁-逻辑定稿.md`、`快速解锁能力级重构-定稿.md`、`设置页信息架构-定稿.md`、`通行密钥UV豁免-定稿.md` | — |

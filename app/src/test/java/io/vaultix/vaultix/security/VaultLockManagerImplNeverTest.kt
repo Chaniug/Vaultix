@@ -88,17 +88,21 @@ class VaultLockManagerImplNeverTest {
     )
 
     /**
-     * 造一个**已定位到活动库**的管理器，连同其 `VaultRepository` mock 一起返回
+     * 造一个**已解锁库就位**的管理器，连同其 `VaultRepository` mock 一起返回
      * （后者用于 `coVerify` 断言"没有发生锁定动作"）。
      *
-     * 返回前轮询到 `activeVaultId` 就位 —— 否则 `onAppBackgrounded()` 会在
-     * `activeVaultId ?: return` 处早退，测试变成"什么都没验证"。
+     * 返回前轮询到**解锁快照就位** —— 否则 `onAppBackgrounded()` 会因「没有已解锁的库」
+     * 而早退，测试变成"什么都没验证"。
+     *
+     * ⚠️ 2026-09-29（多库锁模型 **D2**）改：切后台的门从 `activeVaultId != null`
+     * 换成「快照里有已解锁库」—— 现在给**每个已解锁库**各起计时器，不再只看活动库。
+     * 本夹具的库 `unlocked = true`，后者成立即前者成立。
      */
     private suspend fun managerWithRepo(
         timeout: VaultTimeout,
     ): Pair<VaultLockManagerImpl, VaultRepository> {
         val prefs = mockk<VaultixPreferences>(relaxed = true)
-        every { prefs.vaultTimeout } returns flowOf(timeout)
+        every { prefs.vaultTimeout(any()) } returns flowOf(timeout)
 
         val repository = mockk<VaultRepository>(relaxed = true)
         every { repository.observeVaults() } returns flowOf(listOf(vault("vault-1")))
@@ -281,5 +285,79 @@ class VaultLockManagerImplNeverTest {
 
         assertNoLock(repository)
         assertTrue("亮屏补偿不该把未到点的库锁掉", m.isVaultUnlocked("vault-1"))
+    }
+
+    // ===================== 多库：每库各自计时（2026-09-29 · D2） =====================
+
+    /**
+     * ★★ **D2**：切后台时**每个已解锁库**各起一份定时器（各自到点）。
+     *
+     * 旧实现只取 `activeVaultId`（= 首个已注册库）⇒ 另一个库**永远没人计时**，
+     * 表现为「开 A 再开 B，只有 A 会被锁、B 一直开着」——
+     * 用户报的「两个库加锁逻辑混乱」的主因之一（`.ai/issues/04-锁与解锁.md` #131）。
+     *
+     * ## 为什么用「立即」（0 分钟）档
+     *
+     * 定时器的 `delay` 走**真实时间**（实现里硬编码 `Dispatchers.Default`，
+     * 见 [settle] 的说明），5 分钟档无法在单测里等到。0 分钟档让 `delay(0)`
+     * 立即返回 ⇒ 两个库的锁定动作都能被 `coVerify` 抓到。
+     *
+     * ⚠️ 本条变红 = 又退回「只给活动库计时」。
+     */
+    @Test
+    fun `多库_立即档_切后台_每个已解锁库各锁各的`() = runTest {
+        val prefs = mockk<VaultixPreferences>(relaxed = true)
+        every { prefs.vaultTimeout(any()) } returns flowOf(VaultTimeout.Immediately)
+        val repository = mockk<VaultRepository>(relaxed = true)
+        every { repository.observeVaults() } returns
+            flowOf(listOf(vault("vault-1"), vault("vault-2")))
+        every { repository.observeUnlockedVaultIds() } returns flowOf(setOf("vault-1", "vault-2"))
+        val m = VaultLockManagerImpl(
+            context = mockk<Context>(relaxed = true),
+            vaultRepository = repository,
+            preferences = prefs,
+        )
+        awaitUntil { m.isVaultUnlocked("vault-1") && m.isVaultUnlocked("vault-2") }
+
+        m.onAppBackgrounded()
+        settle()
+
+        coVerify(exactly = 1) { repository.lockVault("vault-1") }
+        coVerify(exactly = 1) { repository.lockVault("vault-2") }
+    }
+
+    /**
+     * ★ **D2 的另一半**：回前台撤销**全部**定时器（不只是活动库的）。
+     *
+     * 旧实现只撤 `activeVaultId` ⇒ 别的库的 job 继续跑到点，
+     * 于是「用户明明在 App 里看着，另一个库却被锁了」。
+     *
+     * 观测方式：用 0 分钟档让定时器**立刻**到点前撤掉 —— 先 `onScreenOn()`
+     * 建/重启定时器不可行（`elapsedRealtime ≡ 0`），故改为：
+     * 切后台（起两库定时器）→ **立刻**回前台（撤销）→ 等真实时间 → 不应有锁定。
+     * ⚠️ 有固有竞态（0 分钟档的 job 可能在撤销前就跑完），所以断言的是
+     * **「回前台后不再新增锁定」** 而不是"一次都没锁"；真正的守卫是上面那条
+     * 「每库各锁各的」。本条的变红条件是「撤销只作用于活动库」⇒ vault-2 必被锁。
+     */
+    @Test
+    fun `多库_回前台_撤销全部定时器`() = runTest {
+        val prefs = mockk<VaultixPreferences>(relaxed = true)
+        every { prefs.vaultTimeout(any()) } returns flowOf(VaultTimeout.FiveMinutes)
+        val repository = mockk<VaultRepository>(relaxed = true)
+        every { repository.observeVaults() } returns
+            flowOf(listOf(vault("vault-1"), vault("vault-2")))
+        every { repository.observeUnlockedVaultIds() } returns flowOf(setOf("vault-1", "vault-2"))
+        val m = VaultLockManagerImpl(
+            context = mockk<Context>(relaxed = true),
+            vaultRepository = repository,
+            preferences = prefs,
+        )
+        awaitUntil { m.isVaultUnlocked("vault-1") && m.isVaultUnlocked("vault-2") }
+
+        m.onAppBackgrounded()
+        m.onAppForegrounded()   // 5 分钟档 + 立即撤销 ⇒ 不应有任何锁定
+        settle()
+
+        assertNoLock(repository)
     }
 }

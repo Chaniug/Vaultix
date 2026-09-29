@@ -49,10 +49,15 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /**
@@ -92,16 +97,43 @@ class AutoRestoreTrigger @Inject constructor(
     init {
         scope.launch {
             combine(
-                preferences.vaultTimeout,
+                // ★ **D3**（2026-09-29）：档位改成**每库一份**后，信封存在性的判据变成
+                //   「**有没有任何一个库**是 Never 档」—— 信封是**全局**的（包的是一把房钥匙），
+                //   而「该不该恢复某个库」由 `restore()` 逐库判定。
+                anyVaultNever(),
                 autoUnlock.houseKeyInMemory,
-            ) { timeout, keyInMemory -> timeout to keyInMemory }
+            ) { anyNever, keyInMemory -> anyNever to keyInMemory }
                 .distinctUntilChanged()
-                .collect { (timeout, keyInMemory) ->
-                    reconcile(timeout, keyInMemory)
+                .collect { (anyNever, keyInMemory) ->
+                    reconcile(anyNever, keyInMemory)
                 }
         }
         scope.launch { observeUnlockSuccesses() }
     }
+
+    /**
+     * 「**是否还有 Never 档的库**」—— auto 信封存在性的唯一判据（D3 起按库聚合）。
+     *
+     * 库表来自仓储（偏好层拿不到库表），逐库读 `preferences.vaultTimeout(id)`；
+     * 库集合变化时用 `flatMapLatest` 重建订阅（不为动态集合手工维护挂/摘）。
+     *
+     * ⚠️ **迁移期结论不变**：还没写过显式档位的库，`vaultTimeout(id)` 回退旧全局键
+     * ⇒ 与 D3 之前「读全局档位」完全一致。
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private fun anyVaultNever(): Flow<Boolean> =
+        vaultRepository.observeVaults()
+            .map { vaults -> vaults.map { it.id }.sorted() }
+            .distinctUntilChanged()
+            .flatMapLatest { ids ->
+                if (ids.isEmpty()) {
+                    flowOf(false)
+                } else {
+                    combine(ids.map { preferences.vaultTimeout(it) }) { perVault ->
+                        perVault.any { it == VaultTimeout.Never }
+                    }.distinctUntilChanged()
+                }
+            }
 
     /**
      * 档位 / 钥匙内存态变化时的收敛动作（核心规则表）。
@@ -113,10 +145,10 @@ class AutoRestoreTrigger @Inject constructor(
      *   所以 `keyInMemory=false` ⇔ 本进程从未解锁过 ⇔ 需要恢复。
      */
     private suspend fun reconcile(
-        timeout: VaultTimeout,
+        anyVaultNever: Boolean,
         keyInMemory: Boolean,
     ) {
-        if (timeout != VaultTimeout.Never) {
+        if (!anyVaultNever) {
             if (autoUnlock.hasEnvelope()) {
                 autoUnlock.removeEnvelope()
                 VaultixLog.d(TAG) { "autoRestore → 档位离开 Never，删除自动恢复信封" }
@@ -149,9 +181,17 @@ class AutoRestoreTrigger @Inject constructor(
             val newlyUnlocked = current - previous
             previous = current
             if (newlyUnlocked.isEmpty()) return@collect
-            if (preferences.vaultTimeout.first() == VaultTimeout.Never &&
-                autoUnlock.houseKeyInMemory.first()
-            ) {
+            // ★★ 多库锁模型定稿 **D1**（2026-09-29）：解锁成功 = 用户撤回了「锁」的意图
+            //   ⇒ 先清该库的「用户主动锁」标记（下一次进程死亡后它重新可被自动恢复）。
+            //   放在这里的理由：本类**就是**「解锁成功后维护锁态元数据」的归属
+            //   （见类 KDoc 对照表 `setVaultToUnlocked` 那一行），且解锁成功有 5 条路径 ——
+            //   散着写过一轮必然漏一条。
+            newlyUnlocked.forEach { autoUnlock.clearUserLock(it) }
+            // D3：信封是全局的 ⇒「**任一**新解锁库是 Never 档」即可写信封。
+            val anyNever = newlyUnlocked.any {
+                preferences.vaultTimeout(it).first() == VaultTimeout.Never
+            }
+            if (anyNever && autoUnlock.houseKeyInMemory.first()) {
                 autoUnlock.enrollEnvelope()
             }
         }

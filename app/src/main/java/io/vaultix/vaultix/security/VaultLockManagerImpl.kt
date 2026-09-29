@@ -193,17 +193,27 @@ class VaultLockManagerImpl @Inject constructor(
     // ===================== 生命周期驱动（本文件的核心） =====================
 
     override fun onAppBackgrounded() {
-        val vaultId = activeVaultId ?: return
-        checkForVaultTimeoutInternal(vaultId, CheckTimeoutReason.AppBackgrounded)
+        // ★★ 多库锁模型定稿 **D2**（2026-09-29）：**每个已解锁库各起一份定时器**，
+        //   各按自己的档位到点（档位每库一份见 D3，施工中）。
+        //
+        //   旧实现只取 `activeVaultId` ⇒ **非活动库永远不会被自动锁定**
+        //   （它在 App 离开后没有任何人在计时）—— 那正是用户报的
+        //   「开 A 再开 B，只有 B 会被锁、A 一直开着」。见 `.ai/issues/04-锁与解锁.md` #131。
+        //
+        //   定时器的时长仍是「离开 App 的时长」这一个语义（对齐 Bitwarden：
+        //   handleOnBackground 起、handleOnForeground 撤），所以回前台是**全撤**
+        //   （见 [onAppForegrounded]），不是只撤当前这个。
+        val unlocked = _vaultUnlockDataStateFlow.value.map { it.vaultId }
+        if (unlocked.isEmpty()) return
+        unlocked.forEach { checkForVaultTimeoutInternal(it, CheckTimeoutReason.AppBackgrounded) }
     }
 
     override fun onAppForegrounded() {
-        val vaultId = activeVaultId ?: return
-        // ⚠️ **只做这一件事**（对齐 Bitwarden `handleOnForeground`）：
-        //     val userId = activeUserId ?: return
-        //     userIdTimerJobMap.remove(key = userId)?.job?.cancel()
-        // 不判断「是否超时」——超时由 job 自己在到点后执行；前台只是撤销它。
-        cancelTimer(vaultId)
+        // ★★ D2 的另一半：回前台 = **撤销全部**定时器。
+        //   旧实现只撤 `activeVaultId`，别的库的 job 会继续跑到点 ——
+        //   于是「用户明明在 App 里看着，另一个库却被锁了」。
+        //   直接按 map 清，不用再查快照：快照可能不含已锁库的残留 job。
+        timerJobMap.keys.toList().forEach { cancelTimer(it) }
     }
 
     /**
@@ -317,7 +327,9 @@ class VaultLockManagerImpl @Inject constructor(
      */
     private fun checkForVaultTimeoutInternal(vaultId: String, reason: CheckTimeoutReason) {
         scope.launch {
-            val timeout = preferences.vaultTimeout.first()
+            // ★ **D3**（2026-09-29）：档位**每库一份** —— 读该库自己的档位，
+            //   而不是全局单值（全局单值是「两个库不同档位却互相干扰」的来源）。
+            val timeout = preferences.vaultTimeout(vaultId).first()
 
             when (timeout) {
                 VaultTimeout.Never -> {

@@ -64,6 +64,19 @@ interface AutoUnlockRepository {
     suspend fun removeEnvelope()
 
     /**
+     * 解除某库的「用户主动锁」标记（**多库锁模型定稿 D1**，2026-09-29）。
+     *
+     * 语义：该库**重新解锁成功**即视为用户撤回了「锁」的意图 —— 下一次进程死亡后
+     * 它重新回到自动恢复的范围内。
+     *
+     * ⚠️ 为什么把「清标记」放在本接口（而不是解锁路径上各写一遍）：解锁成功有
+     * 至少 5 条路径（主密码 / 2FA / 房间信封 × 库类型），散着写过一轮必然漏一条；
+     * 由 `AutoRestoreTrigger` 的**解锁成功钩子**统一调用（它本来就 observe
+     * `observeUnlockedVaultIds()` 的新增）。
+     */
+    suspend fun clearUserLock(vaultId: String)
+
+    /**
      * **离场软锁**（2026-09-29 新增，对齐 Bitwarden 的「Never 档离场仍锁」）。
      *
      * ## 为什么需要它：两种「锁」不能混为一谈

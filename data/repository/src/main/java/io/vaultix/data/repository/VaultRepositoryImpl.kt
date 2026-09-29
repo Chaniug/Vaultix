@@ -332,12 +332,16 @@ class VaultRepositoryImpl @Inject constructor(
         // KDBX 库的「密钥」是内存里的整库明文，锁库即丢弃（两条会话模型必须同时收）。
         Kdbx.lock(vaultId)
         kdbxSessions.bump()
-        // 「从不」档自动恢复信封一并删（2026-09-29，对齐 Bitwarden setVaultToLocked
-        // 清 autoUnlockKey）：用户表达了「锁」的意图，自动恢复必须让位 —— 否则
-        // 下次进程重启会把这个库悄悄重新解锁，「锁定」被静默撤销。下次解锁成功后
-        // 由协调器幂等重建。⚠️ lockVault 的现实调用方只有超时管理器（Never 档根本
-        // 不会走到超时锁定）与用户显式锁库，二者删信封都是正确语义。
-        runCatching { houseKeyStore.removeAutoEnvelope() }
+        // ★★ 多库锁模型定稿 **D1**（2026-09-29）：锁单库改为写**每库**「用户主动锁」标记，
+        //   **不再删全局 `house_lock_auto` 信封**。
+        //
+        //   旧实现删信封的**本意是对的**（不删则下次冷启动会把这个库悄悄重新解锁，
+        //   「锁定」被静默撤销），但**粒度错了**：那个信封包的是**全局房钥匙**，
+        //   用一次单库动作去删它，会连带掐掉**其它库**的冷启动恢复能力。
+        //   ⇒ 现在由每库标记表达意图，`AutoUnlockRepositoryImpl.restore()` 逐库跳过
+        //   （定稿 §3.2）—— 「锁 A 不影响 B」与「A 不会被悄悄开回来」同时成立。
+        //   ⚠️ 全局语义的动作仍删信封：见 [lockAll]。
+        runCatching { houseKeyStore.markUserLocked(vaultId) }
     }
 
     override suspend fun lockAll() {

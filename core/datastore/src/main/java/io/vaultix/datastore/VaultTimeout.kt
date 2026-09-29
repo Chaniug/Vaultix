@@ -27,7 +27,11 @@
 package io.vaultix.datastore
 
 /**
- * 单个库的自动锁定档位。
+ * 自动锁定档位。
+ *
+ * ⚠️ **当前实现是全局单值**（[VaultixPreferences.vaultTimeout]，存储键不带 vaultId）——
+ * 尽管本类语义面向"某个库"。2026-09-29 多库锁模型定稿 **D3** 将改为**每库一份**
+ * （老全局值作各库迁移初值），见 `.ai/decisions/多库锁模型-定稿.md` §2；届时本注释随迁。
  *
  * [vaultTimeoutInMinutes] 语义（与 Bitwarden 一致）：
  * - `null`：永不自动锁定（[Never]）；

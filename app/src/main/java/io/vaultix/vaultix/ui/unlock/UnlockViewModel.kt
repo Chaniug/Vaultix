@@ -20,7 +20,9 @@ import io.vaultix.model.VaultSummary
 import io.vaultix.vaultix.ui.common.TwoFactorProvider
 import io.vaultix.vaultix.ui.error.UnlockUiError
 import io.vaultix.vaultix.ui.error.toUnlockUiError
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -600,6 +602,29 @@ class UnlockViewModel @Inject constructor(
     }
 
     /**
+     * 补开「其余库」用的**进程级** scope（多库锁模型定稿 **D5**，2026-09-29）。
+     *
+     * ## 为什么不能用 `viewModelScope`
+     *
+     * 用户点开的核心库一旦打开就**立刻放行导航**，解锁页随即销毁 ⇒ `viewModelScope`
+     * 被取消 ⇒ 补开 job 一起被取消。真机实测的后果（`.ai/issues/04-锁与解锁.md` #133）：
+     *
+     * ```
+     * fanout rest=onedrive:… → Unavailable(Job was cancelled)
+     * VaultixUnlockVm: 其余库补开失败（不影响已进入的库）：Job was cancelled
+     * ```
+     *
+     * ⇒ 用户被迫为「一次认证开多库」**再按一次指纹**。本 scope 的存在就是为了让
+     * 这段工作活过导航。
+     *
+     * 形态与 `AutofillActivity.restOpenScope` 一致（同类问题、同一处置）：自建
+     * `SupervisorJob` 的短任务 scope —— 工作只有「解几个房间信封」，秒级完成；
+     * 失败也不影响任何用户可见结论（旧 KDoc 的「无人问津」取向不变）。
+     */
+    @Suppress("InjectDispatcher")
+    private val restOpenScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    /**
      * 放行之后异步补开「其余库」（2026-09-29 提速修复的第二段）。
      *
      * ## 为什么是"发完事件之后"而不是"和核心库一起"
@@ -613,14 +638,14 @@ class UnlockViewModel @Inject constructor(
      * 用户下次解锁会自然重试。把结果塞进 UI 反而是噪音
      * （旧实现在结果页报"有 N 个库未打开"，而用户根本没打算开它们）。
      *
-     * ⚠️ `viewModelScope` 在 ViewModel 销毁时会取消 —— 这正是想要的语义：
-     * 用户已经离开解锁页，剩余库的补开就没必要了（下次解锁会重来）。
+     * ⚠️ 跑在 [restOpenScope]（**进程级**）而不是 `viewModelScope` —— 后者会在
+     * 放行导航时被取消，那正是 D5 要修的病（见该 scope 的 KDoc）。
      *
      * @param lockOpened 门锁是否已开（房钥匙在不在内存）。false 时补开必全败，直接跳过。
      */
     private fun openRemainingInBackground(lockOpened: Boolean, rest: List<String>) {
         if (rest.isEmpty()) return
-        viewModelScope.launch {
+        restOpenScope.launch {
             runCatching {
                 withContext(Dispatchers.IO) {
                     LocalUnlockFanout.openRest(

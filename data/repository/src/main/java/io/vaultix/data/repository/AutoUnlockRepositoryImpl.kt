@@ -32,6 +32,8 @@ package io.vaultix.data.repository
 
 import io.vaultix.common.logging.VaultixLog
 import io.vaultix.data.kdbx.Kdbx
+import io.vaultix.datastore.VaultTimeout
+import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.domain.AutoUnlockRepository
 import io.vaultix.domain.AutoRestoreReport
 import io.vaultix.domain.RoomUnlockOutcome
@@ -55,6 +57,14 @@ class AutoUnlockRepositoryImpl @Inject constructor(
      * 这里注入具体会话管理器是安全的）。二者都是进程级单例。
      */
     private val sessions: VaultSessionManager,
+    /**
+     * **每库档位**（多库锁模型定稿 **D3**，2026-09-29）。
+     *
+     * [restore] 按库判定「该不该恢复」：只恢复 `档位 = Never` 的房间 ——
+     * 对齐 Bitwarden（`userAutoUnlockKey` 仅 Never 档存在，见类 KDoc 对照表），
+     * 也与定稿 §3.2 的规则表一致：非 Never 档的库**不该**被冷启动悄悄开回来。
+     */
+    private val preferences: VaultixPreferences,
 ) : AutoUnlockRepository {
 
     override val houseKeyInMemory = houseKeyStore.isUnlockedFlow
@@ -77,7 +87,21 @@ class AutoUnlockRepositoryImpl @Inject constructor(
                 failedVaultIds = emptyList(),
             )
         }
-        val rooms = houseKeyStore.roomVaultIds()
+        // ★★ 多库锁模型定稿 **§3.2 + D1 / D3**（2026-09-29）：**按库两道过滤**。
+        //   ① **用户主动锁**的库跳过（D1）：用户表达了「锁」的意图，自动恢复必须让位；
+        //   ② **档位 ≠ Never** 的库跳过（D3 / §3.2）：非 Never 的语义是「离开期间可能已到期」，
+        //      冷启动不该把它悄悄开回来（对齐 Bitwarden：`autoUnlockKey` 仅 Never 档存在）。
+        val userLocked = houseKeyStore.userLockedVaultIds()
+        val allRooms = houseKeyStore.roomVaultIds()
+        val rooms = ArrayList<String>(allRooms.size)
+        var skippedNonNever = 0
+        for (vaultId in allRooms) {
+            when {
+                vaultId in userLocked -> Unit
+                preferences.vaultTimeout(vaultId).first() != VaultTimeout.Never -> skippedNonNever++
+                else -> rooms += vaultId
+            }
+        }
         var count = 0
         val failed = mutableListOf<String>()
         for (vaultId in rooms) {
@@ -88,7 +112,8 @@ class AutoUnlockRepositoryImpl @Inject constructor(
             }
         }
         VaultixLog.d(TAG) {
-            "autoRestore → rooms=${rooms.size} opened=$count failed=${failed.size}"
+            "autoRestore → rooms=${rooms.size} opened=$count failed=${failed.size} " +
+                "skippedUserLocked=${userLocked.size} skippedNonNever=$skippedNonNever"
         }
         AutoRestoreReport(
             envelopeOpened = true,
@@ -100,6 +125,16 @@ class AutoUnlockRepositoryImpl @Inject constructor(
 
     override suspend fun removeEnvelope() {
         houseKeyStore.removeAutoEnvelope()
+    }
+
+    /**
+     * 解除某库的「用户主动锁」标记（多库锁模型定稿 D1）。
+     *
+     * 由 `AutoRestoreTrigger` 的解锁成功钩子统一调用 —— 见领域接口的 KDoc
+     * 「为什么把清标记放在本接口」。
+     */
+    override suspend fun clearUserLock(vaultId: String) {
+        houseKeyStore.clearUserLocked(vaultId)
     }
 
     /**
