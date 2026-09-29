@@ -18,7 +18,7 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
-import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.withContext
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
@@ -91,11 +91,30 @@ class AutoRestoreTriggerTest {
         return AutoRestoreTrigger(prefs, autoUnlock, repository) to autoUnlock
     }
 
-    /** 轮询终态：`Dispatchers.Default` 上的收集不受 `runTest` 调度控制（见项目纪律）。 */
+    /**
+     * 轮询终态：`Dispatchers.Default` 上的收集**不受 `runTest` 虚拟时钟控制**（见项目纪律）。
+     *
+     * ⚠️ **2026-09-29 修：必须走真实时间。**
+     *
+     * `AutoRestoreTrigger.scope` 硬编码 `Dispatchers.Default`，`Dispatchers.setMain(...)`
+     * 对它无效；而 `runTest` 只虚拟化**测试调度器**上的 `delay`。旧写法
+     * `withTimeoutOrNull(5_000L) { while (!predicate()) delay(1) }` 会在**真实时间的一瞬**
+     * 耗尽 5000ms 虚拟预算 ⇒ 等价于"只检查一次 predicate"，成败取决于 Default 线程
+     * 是否碰巧已跑完 —— **既可能假绿、也可能假红**。
+     *
+     * 现改为在 `Dispatchers.Default` 上 `delay` ⇒ 走真实时间，可靠等到终态。
+     */
     private suspend fun awaitCondition(description: String, predicate: () -> Boolean) {
-        withTimeoutOrNull(5_000L) { while (!predicate()) delay(1) }
-            ?: error("等待超时：$description")
+        val deadline = System.currentTimeMillis() + 5_000L
+        while (System.currentTimeMillis() < deadline) {
+            if (predicate()) return
+            withContext(Dispatchers.Default) { delay(10) }
+        }
+        error("等待超时：$description")
     }
+
+    /** 让出**真实时间**，等 `Dispatchers.Default` 上的协程跑完（同 [awaitCondition] 的理由）。 */
+    private suspend fun settle(ms: Long = 500L) = withContext(Dispatchers.Default) { delay(ms) }
 
     // ---- 规则 3：恢复（⚠️ 本文件的重点，已去掉前台门禁）----
 
@@ -124,7 +143,7 @@ class AutoRestoreTriggerTest {
 
         f.timeout.value = VaultTimeout.Never
         f.keyInMemory.value = false
-        delay(100)
+        settle()
 
         coVerify(exactly = 0) { autoUnlock.restore() }
     }
@@ -167,7 +186,7 @@ class AutoRestoreTriggerTest {
 
         f.timeout.value = VaultTimeout.FiveMinutes
         f.keyInMemory.value = false
-        delay(100)
+        settle()
 
         coVerify(exactly = 0) { autoUnlock.restore() }
     }

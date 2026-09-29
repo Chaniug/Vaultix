@@ -17,7 +17,7 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
-import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.withContext
 import org.junit.After
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -55,6 +55,13 @@ import org.junit.Test
  * **早退**（`activeVaultId` 未就位时 `onAppBackgrounded` 直接返回 ⇒ 无论实现怎么写
  * 都不会锁）。所以 [managerWithRepo] 里「轮询到 `activeVaultId` 就位」是这条门禁
  * 成立的**前提**，不可省。
+ *
+ * ## ★★ 2026-09-29 修的假绿缺陷（本文件第二个坑）
+ *
+ * 本文件原先用 `delay(50)` 等被测协程，但 `VaultLockManagerImpl.scope` **硬编码
+ * `Dispatchers.Default`** ⇒ 协程在**真实线程**上，而 `runTest` 的 `delay` 是**虚拟时间**
+ * ⇒ 断言可能先于协程执行，**随机变绿**。表现为变异验证时"6 条只红 2 条"。
+ * 已改为 [settle] / [awaitUntil]（真实时间等待）。**别把 `delay(50)` 写回来。**
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class VaultLockManagerImplNeverTest {
@@ -102,9 +109,8 @@ class VaultLockManagerImplNeverTest {
             vaultRepository = repository,
             preferences = prefs,
         )
-        // 等 `activeVaultId` 被 init 里的收集赋值。
-        withTimeoutOrNull(5_000L) { while (!m.isVaultUnlocked("vault-1")) delay(1) }
-            ?: error("activeVaultId 未就位 —— 后续断言会假绿")
+        // 等 `activeVaultId` 被 init 里的收集赋值（⚠️ 真实时间等待，见 [awaitUntil]）。
+        awaitUntil { m.isVaultUnlocked("vault-1") }
         return m to repository
     }
 
@@ -114,12 +120,58 @@ class VaultLockManagerImplNeverTest {
         coVerify(exactly = 0) { repository.lockAll() }
     }
 
+    // ===================== 真实时间等待（2026-09-29 修，别改回去） =====================
+
+    /**
+     * ★★ **必须等「真实时间」，不能用裸 `delay()`** —— 这是本文件曾经的**假绿源**。
+     *
+     * ## 为什么
+     *
+     * `VaultLockManagerImpl` 的 `scope` 是
+     * `CoroutineScope(SupervisorJob() + Dispatchers.Default)` —— **硬编码**在实现里。
+     * 因此 `Dispatchers.setMain(...)` 对它**完全无效**：`onAppBackgrounded()` 内部的
+     * `scope.launch { ... }` 跑在 **Default 真实线程池**上（失败栈里可见
+     * `CoroutineScheduler$Worker.run`）。
+     *
+     * 而 `runTest` 只虚拟化**测试调度器**上的 `delay`。旧写法 `delay(50)` 于是：
+     * **瞬间推进虚拟时间、却根本没等真实线程** ⇒ 断言在协程跑起来之前就执行了。
+     *
+     * **实测后果**：断言"没发生锁定"的用例会**随机变绿**。变异验证时注入锁定，
+     * 6 条里只有 2 条变红（其余是碰巧没跑到）⇒ **"绿"是运气，不是证据**。
+     *
+     * ## 正确做法
+     *
+     * 切到 `Dispatchers.Default`（跳出测试调度器）再 `delay` —— 此时 delay 走
+     * **真实时间**，足以让 Default 上的协程跑完。配合变异验证即可证明其灵敏度：
+     * 注入锁定后 [settle] 必定被 `coVerify` 抓到（变红）。
+     *
+     * ⚠️ **固有局限（如实记录）**：本类断言的是"**没发生**"；任何等待都只能证明
+     * "**这段时间内**没发生"。它的可信度来自**变异验证变红**，不是来自等待本身。
+     */
+    private suspend fun settle(ms: Long = 500L) = withContext(Dispatchers.Default) { delay(ms) }
+
+    /**
+     * 用**真实时间**轮询直到 [condition] 成立；超时即 `error`。
+     *
+     * 不用 `withTimeoutOrNull`：那走的是**虚拟时间**，而这里等的
+     * `activeVaultId` 同样是 Default 线程上收集来的（同 [settle] 的坑）。
+     * 宁可超时抛错，也不要静默放过去变成假绿。
+     */
+    private suspend fun awaitUntil(timeoutMs: Long = 5_000L, condition: () -> Boolean) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (condition()) return
+            withContext(Dispatchers.Default) { delay(10) }
+        }
+        error("条件在 ${timeoutMs}ms 内未成立 —— 后续断言会假绿")
+    }
+
     @Test
     fun `Never档_切后台_绝不锁定`() = runTest {
         val (m, repository) = managerWithRepo(VaultTimeout.Never)
 
         m.onAppBackgrounded()
-        delay(50)
+        settle()
 
         // ★ 这条变红 = Never 档又开始在离场时锁库（回到被推翻的「软锁」实现）。
         //   对齐 Bitwarden：切后台不锁，密钥常驻内存直到进程死亡。
@@ -131,7 +183,7 @@ class VaultLockManagerImplNeverTest {
         val (m, repository) = managerWithRepo(VaultTimeout.Never)
 
         m.onAppCreated(isFirstCreation = true, createdForAutofill = false)
-        delay(50)
+        settle()
 
         assertNoLock(repository)
     }
@@ -141,7 +193,7 @@ class VaultLockManagerImplNeverTest {
         val (m, repository) = managerWithRepo(VaultTimeout.Never)
 
         m.onAppForegrounded()
-        delay(50)
+        settle()
 
         assertNoLock(repository)
     }
@@ -154,7 +206,7 @@ class VaultLockManagerImplNeverTest {
         val (m, repository) = managerWithRepo(VaultTimeout.FiveMinutes)
 
         m.onAppBackgrounded()
-        delay(50)
+        settle()
 
         assertNoLock(repository)
         assertTrue("非 Never 档切后台后不该立刻变成锁定态", m.isVaultUnlocked("vault-1"))
@@ -181,7 +233,7 @@ class VaultLockManagerImplNeverTest {
         // 先切后台（Never 档下这不建定时器），再模拟亮屏。
         m.onAppBackgrounded()
         m.onScreenOn()
-        delay(50)
+        settle()
 
         assertNoLock(repository)
         assertTrue("Never 档亮屏后必须仍然解锁", m.isVaultUnlocked("vault-1"))
@@ -223,9 +275,9 @@ class VaultLockManagerImplNeverTest {
         val (m, repository) = managerWithRepo(VaultTimeout.FiveMinutes)
 
         m.onAppBackgrounded()   // 建 5 分钟定时器
-        delay(50)
+        settle()
         m.onScreenOn()          // 补偿：重算剩余并重启
-        delay(50)
+        settle()
 
         assertNoLock(repository)
         assertTrue("亮屏补偿不该把未到点的库锁掉", m.isVaultUnlocked("vault-1"))

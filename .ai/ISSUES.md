@@ -63,6 +63,9 @@
 | 74 | detekt 不会对 @Composable 网开一面 —— 抽块时参数必须 ≤8 |
 | 75 | 给函数加「带默认值的尾部参数」会吃掉调用点的尾随 lambda |
 | 101 | 🔴 `import` 的**包路径**写错（符号名对、包名错）：detekt 与 `check_signature_types.py` **双双查不出**，只有 CI 编译能炸 —— 已修，并新增 `.ai/tools/check_import_packages.py` 守护 |
+| 128 | 🔴 改完 SDK `package.xml` 编译仍报 `Failed to find target with hash string 'android-37.0'` —— 真凶是 **Gradle daemon 里没失效的 SDK loader 缓存** |
+| 129 | 🔴 单测挂 11 条（`Could not initialize class VaultTimeout`）—— `VaultTimeout` companion 的**急切 `val`** 造成**环形静态初始化**（底层是 `NullPointerException`）。**已修**（改 `by lazy`）。⚠️ 原判断"只全量跑才挂"**是错的**：**单跑该类同样必挂** |
+| 130 | 🔴 测试用**虚拟 `delay`** 去等 `Dispatchers.Default` 上的协程 ⇒ 断言"未发生"的用例**随机假绿**（变异验证时"6 条只红 2 条"即由此）。**已修**：改真实时间等待（`settle`/`awaitUntil`） |
 | 103 | 🔴 手改大文件时**整块复制**函数声明 → CI 报 `Conflicting overloads`（`VaultRepositoryImpl` 函数数顶格逼出"块级搬运"），**七道本地门禁全绿** —— 已修，并新增第 4 类门禁 `check_duplicate_declarations` |
 | 104 | 🔴 **写启发式探针必须配正反用例**：#103 的补救探针连坏两版（264 处 → 5 处误报，全在**扩展函数接收者**上）；且「探针报了我不可能引入的问题」= 探针坏了，不是源码坏了。永久回归集 `.ai/tools/tests/selftest_duplicate_declarations.py` |
 | 105 | 🔴 **沙箱「下不动 APK」是两层问题**：hosts 丢失（`198.18.0.x`）只是第一层；第二层是「整文件连续传输不可靠」。判别靠 **range 请求 `curl -r 0-0`（得 206）vs 整体下载（得 000）** 的对比实验。解法：**1MB 分块 + 5 重试 + `truncate` 回滚**。另：**别用 `file` 判断 APK 完整**（截断文件照样报 "Android package"），要用 `zipfile` |

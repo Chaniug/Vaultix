@@ -168,10 +168,29 @@ sealed class VaultTimeout {
          * 里重复写死魔法数字（detekt [MagicNumber] 门禁会拦截）；新增预设档位时只要把它加进
          * 这个列表就会被自动识别，无需再改 [fromStorageValue] 的分支。
          */
-        private val KNOWN_BY_MINUTES: Map<Int, VaultTimeout> = listOf(
-            Immediately, OneMinute, FiveMinutes, FifteenMinutes,
-            ThirtyMinutes, OneHour, FourHours,
-        ).mapNotNull { timeout -> timeout.vaultTimeoutInMinutes?.let { it to timeout } }.toMap()
+        /**
+         * ⚠️ **必须是 `by lazy`，不能改回急切 `val`**（2026-09-29 修，issues **#129**）。
+         *
+         * 急切实现在 `VaultTimeout.<clinit>` **执行期间**就会调用
+         * `timeout.vaultTimeoutInMinutes`；而该 getter 会引用嵌套的 [Type] 枚举
+         * ⇒ 构成**环形静态初始化**（`VaultTimeout` ⇄ `Type` ⇄ 各 data object，
+         * 谁的类加载先触发、走到哪一步，决定成败）。
+         *
+         * 实测后果：`VaultLockManagerImplNeverTest` / `AutoRestoreTriggerTest`
+         * **确定性**抛 `ExceptionInInitializerError: NullPointerException`，
+         * 其后所有引用退化为
+         * `NoClassDefFoundError: Could not initialize class VaultTimeout`
+         * —— 而报错信息完全指向错误方向（看着像 datastore 模块坏了）。
+         *
+         * 改 `by lazy` 后推迟到首次 [fromStorageValue] 调用才构建，此时所有类
+         * 均已初始化完毕。语义不变（首次访问构建一次 + 缓存），默认线程安全。
+         */
+        private val KNOWN_BY_MINUTES: Map<Int, VaultTimeout> by lazy {
+            listOf(
+                Immediately, OneMinute, FiveMinutes, FifteenMinutes,
+                ThirtyMinutes, OneHour, FourHours,
+            ).mapNotNull { timeout -> timeout.vaultTimeoutInMinutes?.let { it to timeout } }.toMap()
+        }
 
         fun fromStorageValue(value: Int): VaultTimeout {
             if (value == STORAGE_NEVER) return Never
