@@ -71,6 +71,65 @@ internal fun Throwable.isLocalUnlockUnrecoverable(): Boolean {
 }
 
 /**
+ * 快速解锁失败的**可恢复性分类**（2026-09-29 批次 4 新增）。
+ *
+ * ## 为什么在布尔之外还要一个分类
+ *
+ * [isLocalUnlockUnrecoverable] 只回答「**能不能靠重试好转**」，这对「是否清理坏状态」
+ * 足够了；但失效矩阵（定稿 §6）要做的决定更细 —— 同样是「不可恢复」，
+ * 有的**可以重装门锁信封自愈**，有的**只能降级**：
+ *
+ * | 分类 | 含义 | 失效矩阵动作 |
+ * |---|---|---|
+ * | [Recoverable] | 本次未认证（会话超时等）⇒ 重试即可 | **什么都不做**（等用户重试） |
+ * | [Rearmable] | 密钥/凭据变更或密文不匹配 ⇒ 旧信封解不开，但**可以重装** | 开门态：标记待重装；关门态：降级 |
+ * | [Unavailable] | 钥匙已丢（KEK 不可恢复）⇒ 重装也救不回旧信封 | 降级：禁用该锁 + 删信封 + 回主密码 |
+ *
+ * ⚠️ **[Rearmable] 与 [Unavailable] 的边界不是「异常类型」而是「钥匙在不在手」** ——
+ * 这正是它俩不能合成一个的原因：凭据变更（`KeyPermanentlyInvalidatedException`）时
+ * 若房钥匙已在内存（PIN 开过门 / Never 档恢复过），我们能**用内存里那把它**重装门锁；
+ * 反之两手空空，只能降级。分类只描述「异常说了什么」，**最终动作由调用方结合
+ * 「房钥匙在不在内存」决定**（见 `UnlockRecoveryRepository`）。
+ */
+enum class LocalUnlockFailureKind {
+    /** 本次未认证 / 瞬时不可用 —— 重试即可，**不得**清理任何状态。 */
+    Recoverable,
+
+    /**
+     * 密码学层确认旧信封已不可解，但**钥匙本身可能仍在手里** ⇒ 可重装自愈。
+     *
+     * 覆盖：`KeyPermanentlyInvalidatedException`（凭据变更）、
+     * `AEADBadTagException`（密文与当前 KEK 不匹配）、`UnrecoverableKeyException`。
+     */
+    Rearmable,
+
+    /**
+     * 钥匙已彻底不可得 ⇒ 重装也救不回，只能降级。
+     *
+     * ⚠️ 当前实现里**没有**单独的判定路径 —— 因为「钥匙丢没丢」无法从异常类型推出
+     * （`UnrecoverableKeyException` 既可能出现在凭据变更、也可能出现在钥匙丢失）。
+     * 真正的判据在调用方：`kekStatus == MISSING/INVALIDATED` **且**房钥匙不在内存。
+     * 这一档留给未来的显式区分（例如 Keystore 重置类异常的专有判定）。
+     */
+    Unavailable,
+}
+
+/**
+ * 把失败归类到 [LocalUnlockFailureKind]。
+ *
+ * 判定顺序：先排除 [Recoverable]（未认证语义），再识别密文层不可解（[Rearmable]）。
+ * 未识别的异常一律归 [Recoverable] —— 取向与 [isLocalUnlockUnrecoverable] 相反：
+ * **未知不等于坏**（旧实现把未知当"不可恢复"曾导致覆盖安装后指纹入口被清，见
+ * `LocalUnlockKeyStore` 的 `LocalUnlockKekStatus` KDoc）。
+ */
+internal fun Throwable.localUnlockFailureKind(): LocalUnlockFailureKind =
+    if (isLocalUnlockUnrecoverable()) {
+        LocalUnlockFailureKind.Rearmable
+    } else {
+        LocalUnlockFailureKind.Recoverable
+    }
+
+/**
  * 异常链遍历深度上限。
  *
  * 防御性上限：异常链理论上不应成环（`Throwable.cause` 由运行时保证 `cause !== this`），

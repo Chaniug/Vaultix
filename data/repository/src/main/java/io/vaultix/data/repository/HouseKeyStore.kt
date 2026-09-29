@@ -14,6 +14,7 @@ import io.vaultix.crypto.PinUnwrapResult
 import io.vaultix.crypto.SecureBytes
 import io.vaultix.crypto.VaultixCrypto
 import io.vaultix.datastore.AutoUnlockKeyStore
+import io.vaultix.datastore.LocalUnlockKekStatus
 import io.vaultix.datastore.LocalUnlockKeyStore
 import io.vaultix.datastore.SecureCredentialStore
 import io.vaultix.domain.PIN_MAX_ATTEMPTS
@@ -225,6 +226,24 @@ class HouseKeyStore @Inject constructor(
         credentials.keysWithPrefix(FINGERPRINT_ENVELOPE_KEY).isNotEmpty()
     }
 
+    /**
+     * 指纹门锁信封**在盘上**，但平台 KEK 已不可用 —— 探测失败，不是「没开锁」。
+     *
+     * 判据两个条件缺一不可：
+     * 1. 信封存在（否则是 [disableFingerprintLock] 之后的常态，不是失效）；
+     * 2. `kekStatus == INVALIDATED`（**只认永久失效**：`MISSING`/`UNKNOWN` 都不算 ——
+     *    把它们算进来会把「稍后可用」误报成「已废弃」，见 [LocalUnlockKekStatus]）。
+     *
+     * 与 [hasFingerprintEnvelope] 的分工：那个回答「用户开没开锁」，本方法回答
+     * **「锁还在但钥匙废了」**。两者都为 true 时 **绝不能**报「已启用」——
+     * 那是设置页谎报状态（#93）；也不能直接当「已关闭」删信封（钥匙丢了不该
+     * 顺手砸锁，见 [LocalUnlockKeyStore.newDecryptCipher] 的告诫）。
+     */
+    suspend fun isFingerprintLockInvalidated(): Boolean = withContext(Dispatchers.IO) {
+        credentials.keysWithPrefix(FINGERPRINT_ENVELOPE_KEY).isNotEmpty() &&
+            localUnlockKeyStore.kekStatus == LocalUnlockKekStatus.INVALIDATED
+    }
+
     /** PIN 门锁信封是否存在（取向同 [hasFingerprintEnvelope]）。 */
     suspend fun hasPinEnvelope(): Boolean = withContext(Dispatchers.IO) {
         credentials.keysWithPrefix(PIN_ENVELOPE_KEY).isNotEmpty()
@@ -304,7 +323,11 @@ class HouseKeyStore @Inject constructor(
      * 不指望每个调用方都记得。
      */
     suspend fun disableFingerprintLock() {
-        withContext(Dispatchers.IO) { credentials.remove(FINGERPRINT_ENVELOPE_KEY) }
+        withContext(Dispatchers.IO) {
+            credentials.remove(FINGERPRINT_ENVELOPE_KEY)
+            // 锁都关了，「待重装」自然失去意义（留着会让 UI 显示一个永远不兑现的承诺）。
+            credentials.remove(FINGERPRINT_REARM_PENDING_KEY)
+        }
         trimRoomsIfNoLocksRemain()
     }
 
@@ -547,6 +570,57 @@ class HouseKeyStore @Inject constructor(
 
     private fun roomStorageKey(vaultId: String) = ROOM_ENVELOPE_PREFIX + vaultId
 
+    // ===== 失效矩阵（定稿 §6；批次 4，2026-09-29）=====
+    // 失效信号 [isFingerprintLockInvalidated] 定义在「门锁信封存在性」一组里
+    // （它本质是那个问题的第三种答案）；本区放重装动作与标记。
+
+    /**
+     * 重装指纹门锁信封：用**本次认证的** cipher 把内存房钥匙重新包一遍。
+     *
+     * ## 为什么这不是"静默"的（定稿 §6 的措辞在此收窄）
+     *
+     * auth-per-use（硬约束 #2）下重包**必须**再弹一次 BiometricPrompt ——
+     * 平台契约如此，不存在真正的静默重装。定稿说的"静默"指的是**用户无需
+     * 重新走一遍登记向导**（不用重新勾库、不用重输主密码）。
+     *
+     * ⇒ 调用时机 = 用户下一次在设置向导里过指纹（那时天然有一个已授权的
+     * `newEncryptCipher()`）；而不是失效当场（当场没有已授权的 cipher）。
+     *
+     * @return false = 房钥匙不在内存（无从重包）/ cipher 不可用。
+     */
+    suspend fun rearmFingerprintLock(cipher: Cipher): Boolean = withContext(Dispatchers.IO) {
+        val key = houseKey ?: return@withContext false
+        val wrapped = runCatching { key.useBytes { bytes -> localUnlockKeyStore.wrap(cipher, bytes) } }
+            .getOrElse { return@withContext false }
+        credentials.putString(FINGERPRINT_ENVELOPE_KEY, wrapped)
+        // 重装成功 ⇒ 待重装标记作废（幂等：本来就没有也不报错）。
+        credentials.remove(FINGERPRINT_REARM_PENDING_KEY)
+        true
+    }
+
+    /**
+     * 是否有「指纹门锁待重装」标记。
+     *
+     * 语义 = 「这把锁的信封已经解不开了（凭据变更 / 密文不匹配），但房钥匙还在手上，
+     * 等下一次认证就能重装」。**不含**「钥匙也丢了」的情形（那时是降级，不是重装）。
+     */
+    suspend fun hasFingerprintRearmPending(): Boolean = withContext(Dispatchers.IO) {
+        credentials.keysWithPrefix(FINGERPRINT_REARM_PENDING_KEY).isNotEmpty()
+    }
+
+    /** 标记「指纹门锁待重装」（幂等；开门态检测到可重装失效时写）。 */
+    suspend fun markFingerprintRearmPending() {
+        withContext(Dispatchers.IO) { credentials.putString(FINGERPRINT_REARM_PENDING_KEY, "1") }
+    }
+
+    /**
+     * 清除待重装标记（用户主动关掉指纹锁 / 降级时调用 —— 两处都不该留下
+     * 「等会儿会自动重装」的假预期）。
+     */
+    suspend fun clearFingerprintRearmPending() {
+        withContext(Dispatchers.IO) { credentials.remove(FINGERPRINT_REARM_PENDING_KEY) }
+    }
+
     /** 房间信封的 AAD：绑死 vaultId，防「A 库的信封被塞进 B 库的槽位」这类错位。 */
     private fun roomAad(vaultId: String): ByteArray =
         (ROOM_AAD_PREFIX + vaultId).toByteArray(Charsets.UTF_8)
@@ -563,6 +637,15 @@ class HouseKeyStore @Inject constructor(
 
         /** PIN 全局失败计数（定稿 §6：门锁是全局的，计数也是）。 */
         const val PIN_ATTEMPTS_KEY = "house_pin_attempts"
+
+        /**
+         * 「指纹门锁待重装」标记（失效矩阵，定稿 §6）。
+         *
+         * 值为 `"1"`；存在即表示「信封已解不开但房钥匙还在手上，等下次认证重装」。
+         * 放 `SecureCredentialStore` 而同层于信封：它是**安全状态**不是用户偏好，
+         * 且要与信封同生共死（清偏好不该动它）。
+         */
+        const val FINGERPRINT_REARM_PENDING_KEY = "house_lock_fingerprint_rearm_pending"
 
         /**
          * 「从不」档自动恢复信封（免认证 Keystore 密钥包裹的房钥匙）。

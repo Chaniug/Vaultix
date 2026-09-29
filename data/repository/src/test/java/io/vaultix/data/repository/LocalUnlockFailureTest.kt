@@ -2,6 +2,7 @@ package io.vaultix.data.repository
 
 import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.UserNotAuthenticatedException
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -113,6 +114,69 @@ class LocalUnlockFailureTest {
         assertFalse(
             "超长无关异常链应快速返回 false，而非挂死",
             error.isLocalUnlockUnrecoverable(),
+        )
+    }
+
+    // ===== 批次 4（失效矩阵）：可恢复性分类 =====
+
+    @Test
+    fun failureKind_cryptoLayerFailures_areRearmable() {
+        // 凭据变更 / 密文不匹配 / 钥匙不可恢复 ⇒ 旧信封解不开，但可能重装。
+        val cryptoFailures = listOf(
+            KeyPermanentlyInvalidatedException(),
+            AEADBadTagException(),
+            UnrecoverableKeyException("stale handle"),
+        )
+
+        cryptoFailures.forEach { error ->
+            assertEquals(
+                "${error::class.simpleName} 应归入 Reammable（失效矩阵可重装自愈）",
+                LocalUnlockFailureKind.Rearmable,
+                error.localUnlockFailureKind(),
+            )
+        }
+    }
+
+    @Test
+    fun failureKind_unauthenticated_isRecoverable() {
+        // ★ 关键取向：未认证 = 重试即可，**不得**触发重装或降级。
+        assertEquals(
+            "UserNotAuthenticatedException 只是本次未认证，重试即可",
+            LocalUnlockFailureKind.Recoverable,
+            UserNotAuthenticatedException().localUnlockFailureKind(),
+        )
+    }
+
+    @Test
+    fun failureKind_unknownException_isRecoverableNotRearmable() {
+        // ★ 与 isLocalUnlockUnrecoverable 的取向一致：**未知不等于坏**。
+        // 若把未知当 Rearmable，一次瞬时故障就会让用户看到"指纹需重新启用"的假告警。
+        val unknowns = listOf(
+            IllegalStateException("boom"),
+            ProviderException("outer", IllegalStateException("inner")),
+            RuntimeException("generic"),
+        )
+
+        unknowns.forEach { error ->
+            assertEquals(
+                "未知异常不得被判为可重装（否则是假告警）",
+                LocalUnlockFailureKind.Recoverable,
+                error.localUnlockFailureKind(),
+            )
+        }
+    }
+
+    @Test
+    fun failureKind_wrappedInvalidation_isRearmable() {
+        // 分类同样必须穿透异常链（与 isLocalUnlockUnrecoverable 同一要求）。
+        val error = ProviderException(
+            "Failed to init cipher",
+            KeyPermanentlyInvalidatedException(),
+        )
+
+        assertEquals(
+            LocalUnlockFailureKind.Rearmable,
+            error.localUnlockFailureKind(),
         )
     }
 }

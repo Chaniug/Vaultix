@@ -9,6 +9,7 @@ import io.vaultix.datastore.VaultTimeout
 import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.datastore.VaultixPreferencesDefaults
 import io.vaultix.domain.KdbxSyncRepository
+import io.vaultix.domain.UnlockRecoveryRepository
 import io.vaultix.domain.VaultRepository
 import io.vaultix.model.VaultSummary
 import io.vaultix.vaultix.security.AutoLockController
@@ -62,6 +63,13 @@ class SettingsViewModel @Inject constructor(
      * 的结果**决定（只有新体系真站起来才清），本 ViewModel 拿不到那个时机。
      */
     private val legacyQuickUnlockCleanup: LegacyQuickUnlockCleanup,
+    /**
+     * 快速解锁失效善后（批次 4，定稿 §6）。
+     *
+     * ⚠️ 注入到 [QuickUnlockController] 而不是在这里直接用：本轮的唯一用途是读
+     * 「指纹门锁待重装」标记来渲染副标题，那是控制器状态组装的一部分。
+     */
+    private val unlockRecovery: UnlockRecoveryRepository,
 ) : ViewModel() {
     data class UiState(
         val vaultTimeout: VaultTimeout = VaultTimeout.DEFAULT,
@@ -400,6 +408,8 @@ class SettingsViewModel @Inject constructor(
             enrollment = localUnlockEnrollment,
             preferences = preferences,
             cleanup = legacyQuickUnlockCleanup,
+            // 失效善后（批次 4）：本轮只用来读「指纹门锁待重装」标记。
+            recovery = unlockRecovery,
             scope = viewModelScope,
         )
     }

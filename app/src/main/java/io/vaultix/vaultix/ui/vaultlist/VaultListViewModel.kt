@@ -9,6 +9,7 @@ import io.vaultix.data.repository.LocalUnlockEnrollment
 import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.domain.KdbxSyncReport
 import io.vaultix.domain.KdbxSyncRepository
+import io.vaultix.domain.UnlockRecoveryRepository
 import io.vaultix.domain.VaultRepository
 import io.vaultix.domain.VaultSyncStatus
 import io.vaultix.model.VaultSummary
@@ -67,6 +68,13 @@ class VaultListViewModel @Inject constructor(
      * 登记成功时同样要清掉旧残留（否则老用户从横幅配完，垃圾仍留在设备上）。
      */
     private val legacyQuickUnlockCleanup: LegacyQuickUnlockCleanup,
+    /**
+     * 快速解锁失效善后（批次 4，定稿 §6）。
+     *
+     * ⚠️ 注入到 [QuickUnlockController] 而不是在这里直接用：本轮的唯一用途是读
+     * 「指纹门锁待重装」标记来渲染副标题，那是控制器状态组装的一部分。
+     */
+    private val unlockRecovery: UnlockRecoveryRepository,
 ) : ViewModel() {
 
     sealed interface Event {
@@ -104,6 +112,8 @@ class VaultListViewModel @Inject constructor(
             enrollment = localUnlockEnrollment,
             preferences = preferences,
             cleanup = legacyQuickUnlockCleanup,
+            // 失效善后（批次 4）：本轮只用来读「指纹门锁待重装」标记。
+            recovery = unlockRecovery,
             scope = viewModelScope,
         )
     }

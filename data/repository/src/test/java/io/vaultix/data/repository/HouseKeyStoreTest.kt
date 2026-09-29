@@ -8,8 +8,10 @@ import io.vaultix.crypto.PinKeyWrapper
 import io.vaultix.crypto.PinUnwrapResult
 import io.vaultix.crypto.VaultixCrypto
 import io.vaultix.datastore.AutoUnlockKeyStore
+import io.vaultix.datastore.LocalUnlockKekStatus
 import io.vaultix.datastore.LocalUnlockKeyStore
 import io.vaultix.datastore.SecureCredentialStore
+import io.vaultix.domain.PIN_MAX_ATTEMPTS
 import java.util.Base64
 import javax.crypto.Cipher
 import kotlinx.coroutines.Dispatchers
@@ -281,5 +283,145 @@ class HouseKeyStoreTest {
         house.disableFingerprintLock()
         assertFalse(house.hasAutoEnvelope())
         assertFalse(house.hasRoom("vault-1"))
+    }
+
+    // ===== 7) 失效矩阵：待重装标记（2026-09-29 批次 4，定稿 §6）=====
+
+    @Test
+    fun `待重装标记_重装成功后自动清除`() = runTest {
+        house.enrollFingerprintLock(cipher)
+        house.sealRoom("vault-1", "凭据".toByteArray())
+
+        // 开门态检测到可重装失效 ⇒ 打标记（房钥匙仍在内存）。
+        house.markFingerprintRearmPending()
+        assertTrue(house.hasFingerprintRearmPending())
+        // 幂等：重复标记不炸。
+        house.markFingerprintRearmPending()
+        assertTrue(house.hasFingerprintRearmPending())
+
+        // 下一次认证拿到新 cipher ⇒ 重装：信封被新 cipher 覆盖 + 标记清除。
+        assertTrue(house.rearmFingerprintLock(cipher))
+        assertFalse(house.hasFingerprintRearmPending())
+        // 重装后房间仍能开（重包的还是同一把房钥匙 —— 这是"重装"与"降级"的分水岭）。
+        val opened = house.openRoom("vault-1")
+        assertTrue(opened is RoomOpen.Opened)
+    }
+
+    @Test
+    fun `房钥匙不在内存时_重装失败且不清标记`() = runTest {
+        house.enrollFingerprintLock(cipher)
+        house.markFingerprintRearmPending()
+
+        // 「进程重启」式局面：钥匙没了 —— 重装无从下手（没有可包裹的房钥匙）。
+        house.lock()
+        assertFalse(house.rearmFingerprintLock(cipher))
+        assertTrue(
+            "重装失败不得清标记：钥匙回来后（用户过 PIN）仍应能重装",
+            house.hasFingerprintRearmPending(),
+        )
+    }
+
+    @Test
+    fun `关掉指纹锁_待重装标记一并清掉`() = runTest {
+        house.enrollFingerprintLock(cipher)
+        house.markFingerprintRearmPending()
+
+        // 锁都关了，「待重装」失去意义；留着会让 UI 显示一个永不兑现的承诺。
+        house.disableFingerprintLock()
+        assertFalse(house.hasFingerprintRearmPending())
+    }
+
+    @Test
+    fun `信封还在但KEK永久失效_才算失效`() = runTest {
+        // ②是失效：信封在 + KEK 被平台永久失效（用户重录指纹）—— 报「已启用」
+        // 是谎报（#93），直接删信封又是「钥匙丢了顺手砸锁」（钥匙还能换新的）。
+        house.enrollFingerprintLock(cipher)
+        every { localUnlockKeyStore.kekStatus } returns LocalUnlockKekStatus.INVALIDATED
+        assertTrue(house.isFingerprintLockInvalidated())
+    }
+
+    @Test
+    fun `读不到KEK不算失效_稍后可用不是已废弃`() = runTest {
+        // UNKNOWN = 设备刚启动 / Keystore 瞬时读不到 / 本次未认证。判成失效会把
+        // 「稍后可用」误报成「已废弃」，正是 2026-09-12 修过的那次真实回归。
+        house.enrollFingerprintLock(cipher)
+        every { localUnlockKeyStore.kekStatus } returns LocalUnlockKekStatus.UNKNOWN
+        assertFalse(house.isFingerprintLockInvalidated())
+
+        // KEK 从未启用（或已被删除）也一样：那是常态，不是失效。
+        every { localUnlockKeyStore.kekStatus } returns LocalUnlockKekStatus.MISSING
+        assertFalse(house.isFingerprintLockInvalidated())
+    }
+
+    @Test
+    fun `没开过指纹锁_谈不上失效`() = runTest {
+        // 信封不在 ⇒ 这是「用户没开锁」不是「锁坏了」；KEK 因为别的原因失效
+        // （例如他自己刚关掉锁）不该被报成一把废锁 —— 否则设置页会冒出一个
+        // 用户根本没启用过、也就无从「重新启用」的行。
+        every { localUnlockKeyStore.kekStatus } returns LocalUnlockKekStatus.INVALIDATED
+        assertFalse(house.isFingerprintLockInvalidated())
+    }
+
+    // ===== 8) PIN 全局熔断（定稿 §6：全局一份 5 次）=====
+    //
+    // ⚠️ 断言用 [PinOpen]（仓库层）而非 `PinUnlockOutcome`（domain 层）：
+    //    `HouseKeyStore.openWithPin` 的返回类型就是前者，domain 的那个是给
+    //    `VaultRepositoryImpl.openHouseWithPin` 转手用 `toFailureOutcome()` 产出的。
+    //    两者字段一一对应（`toFailureOutcome()` 有单测守），这里测的是**计数逻辑**。
+
+    @Test
+    fun `PIN 计数是全局一份_不随库数漂移`() = runTest {
+        house.enrollPinLock("123456")
+
+        // 连错 3 次 ⇒ 计数 3（返回值里的 remaining 由同一份计数推出）。
+        repeat(3) { i ->
+            assertEquals(
+                "第 ${i + 1} 次错误应剩 ${PIN_MAX_ATTEMPTS - i - 1} 次",
+                PinOpen.WrongPin(remainingAttempts = PIN_MAX_ATTEMPTS - i - 1),
+                house.openWithPin("000000"),
+            )
+        }
+        // 计数不因"换库"而重置：门锁是全局的，计数也是全局的。
+        // ⚠️ 不断言 `isUnlocked`：那是**门锁开没开**的状态，与计数是两码事 ——
+        //    `enrollPinLock` 生钥匙时已把房钥匙放进内存（首启路径无钥匙可复用 ⇒
+        //    生成一把），此后连败 3 次并不会把已在内存的钥匙抽走（那是 `lock()` 的事）。
+        val fourth = house.openWithPin("111111")
+        assertEquals(
+            "第 4 次错误应剩 1 次（全局计数），而不是各自从 5 起算",
+            PIN_MAX_ATTEMPTS - 4,
+            (fourth as PinOpen.WrongPin).remainingAttempts,
+        )
+    }
+
+    @Test
+    fun `PIN 连错 5 次熔断_主密码可进`() = runTest {
+        house.enrollPinLock("123456")
+
+        repeat(PIN_MAX_ATTEMPTS - 1) { i ->
+            assertEquals(
+                PinOpen.WrongPin(remainingAttempts = PIN_MAX_ATTEMPTS - i - 1),
+                house.openWithPin("000000"),
+            )
+        }
+        // 第 5 次错误当场熔断（`registerPinFailure` 越过阈值即返回 LockedOut）。
+        assertEquals(PinOpen.LockedOut, house.openWithPin("000000"))
+        // 即使输对也不行（熔断语义：达到上限即锁死，须主密码解锁后重设）。
+        // 这一条是熔断的要害：正确的 PIN 也拿不到钥匙 —— 计数检查在 unwrap 之前。
+        assertEquals(PinOpen.LockedOut, house.openWithPin("123456"))
+    }
+
+    @Test
+    fun `换新 PIN_计数归零`() = runTest {
+        house.enrollPinLock("123456")
+        repeat(3) { house.openWithPin("000000") }
+
+        // 改 PIN（覆盖旧信封）⇒ 计数从 0 起，用户不会被上一次的失败锁住。
+        assertEquals(LockEnrollResult.Enrolled, house.enrollPinLock("654321"))
+        val outcome = house.openWithPin("000000")
+        assertEquals(
+            "换 PIN 后应回到满额 5 次",
+            PIN_MAX_ATTEMPTS - 1,
+            (outcome as PinOpen.WrongPin).remainingAttempts,
+        )
     }
 }

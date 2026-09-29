@@ -1,6 +1,29 @@
 # 下一步任务清单
 
-> ## 🏠 【2026-09-29 深夜续】真机验收反馈修复收工 —— 「从不锁定」对齐 Bitwarden + 解锁方式三行精简
+> ## 🏠 【2026-09-29 完成】快速解锁「房子化」批次 4 收工 —— 失效矩阵（定稿 §6）
+>
+> **接力文档（下一会话从这里进，自包含）**：[`house-rework-batch4-handoff.md`](house-rework-batch4-handoff.md)
+> **施工工作单**：[`quick-unlock-house-rework.md`](quick-unlock-house-rework.md)（批次 1-4 ✅，5 未动）
+> **定稿实施记录**：定稿 **§6.1**（含决策理由与与 Bitwarden 的有意偏离）。
+> **本轮四条目标全部落地**：
+> ① **rearm** —— ⚠️ 真实形态是「**延迟重装**」而非「静默重包」：硬约束 #2（auth-per-use
+>    一次授权只保一次 `doFinal`）⇒ 重写门锁信封**必须**再弹一次认证。故 =「失效时只打标记
+>    （`house_lock_fingerprint_rearm_pending`）→ 下次认证时补写新信封」。用户拍板
+>    「可以接受重新安装」。
+> ② **降级** —— `UnlockRecoveryRepositoryImpl.degradeFingerprintLock()` → 禁锁 + 三选一
+>    明确文案 + 回主密码（**绝不静默**）；无指纹信封时 no-op。
+> ③ **StaleCredentials** —— `RoomResealRepositoryImpl.resealRoom(vaultId, newMasterPassword)`
+>    复用 `LocalUnlockEnrollment` 只重包**该房间软件信封**，门锁不动。
+> ④ **PIN 熔断全局 5 次** —— 批次 1 已达成（N 信封 → 1 门锁信封 ⇒ 计数天然全局）。
+> 另新增失效三态分类 `LocalUnlockFailureKind { Recoverable, Rearmable, Unavailable }`。
+> **★ 最重要的判据**：开门 / 关门的唯一正确判据是 `HouseKeyStore.isUnlocked`（不是
+> 「信封存不存在」）—— 误用后者会把 rearm 走成降级、**连带清掉房间信封**（用户丢库）。
+> 门禁：detekt / `:app:compileFullDebugKotlin` / 单测 **377 全过 0 failed**
+> （`data:repository` 104 + `app` 273）+ 孤儿串未超基线。
+> **下一步 = 批次 5（真机验收清单 1-9，需真手指）**：⭐ 新增重点是第 4 条（重录指纹后
+> 开门态 rearm / 关门态降级）与设置页「需要重新启用」副标题。
+
+> ## 🏠 【2026-09-29 深夜续】真机验收反馈修复收工 —— 「从不锁定」对齐 Bitwarden + 解锁方式三行精简（✅ 已被批次 4 接续）
 >
 > **接力文档**：[`quick-unlock-house-rework.md`](quick-unlock-house-rework.md)（批次 3.5 专节，自包含）
 > **触发**：用户真机装 debug 版验收（批次 5 提前反馈）——「从不锁定下划掉后台后填充不及时，

@@ -1,12 +1,16 @@
 package io.vaultix.vaultix.ui.unlock
 
+import android.util.Log
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import io.vaultix.domain.PIN_MIN_LENGTH
 import io.vaultix.domain.PinUnlockOutcome
+import io.vaultix.domain.RoomResealOutcome
+import io.vaultix.domain.RoomResealRepository
 import io.vaultix.domain.RoomUnlockOutcome
+import io.vaultix.domain.UnlockRecoveryRepository
 import io.vaultix.domain.UnlockResult
 import io.vaultix.domain.VaultRepository
 import io.vaultix.domain.VaultSessionRepository
@@ -51,6 +55,19 @@ class UnlockViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val vaultRepository: VaultRepository,
     private val sessionRepository: VaultSessionRepository,
+    /**
+     * 指纹门锁失效后的善后（批次 4，定稿 §6）。
+     *
+     * 解锁页是**用户主动解锁**的入口 —— 只有这里有 UI 能如实呈现
+     * 「指纹锁需要重新启用 / 已关闭」并给出下一步，故失效矩阵接在这个调用点。
+     * `AutofillActivity` 的自动填充路径不接（没有可呈现的界面，降级留给这里）。
+     */
+    private val unlockRecovery: UnlockRecoveryRepository,
+    /**
+     * 房间信封重包（批次 4，定稿 §6 目标 3）：某库主密码变更后，把它的信封
+     * 用刚输的密码重包一遍，让快速解锁自此自愈（否则每周都要重输主密码）。
+     */
+    private val roomReseal: RoomResealRepository,
 ) : ViewModel() {
 
     data class TwoFactorUi(
@@ -488,6 +505,9 @@ class UnlockViewModel @Inject constructor(
                     first = vaultId,
                     rest = rest,
                     cipher = cipher,
+                    // 门锁解不开时的分叉（rearm / 降级）在 fanout 里，
+                    // 判据 = 房钥匙在不在内存（定稿 §6，批次 4）。
+                    recovery = unlockRecovery,
                 )
             }
             when (val result = fanout.first) {
@@ -505,7 +525,13 @@ class UnlockViewModel @Inject constructor(
                 }
                 // 主密码在别处改过（只可能来自 KDBX）：给「输新密码」的指引，
                 // 别让用户误以为指纹坏了（定稿 §4.4 D3）。
+                //
+                // ★ 2026-09-29（批次 4，定稿 §6 目标 3）：与旧行为的关键差别 ——
+                //   用户**之前**在本次会话里为这个库输过的新主密码，会被顺手用来
+                //   重包它的房间信封。旧行为是「当次能开、但信封没换」，于是下次
+                //   快速解锁又 Stale，用户每周都要重输一遍（真实体感：指纹解锁废了）。
                 RoomUnlockOutcome.StaleCredentials -> {
+                    resealStaleRoomIfPossible()
                     _state.update {
                         it.copy(
                             submitting = false,
@@ -528,6 +554,41 @@ class UnlockViewModel @Inject constructor(
                 }
             }
         }
+    }
+
+    /**
+     * 快速解锁走到 `StaleCredentials` 时，若用户**刚输过一次密码**，顺手把它
+     * 用来重包该库的房间信封（定稿 §6 目标 3）。
+     *
+     * ## 为什么需要「刚输过一次」
+     *
+     * `StaleCredentials` 的意思是「门锁开了、房钥匙拿到了，但信封里那份主密码
+     * 已经过时」。重包要一份**当前有效**的主密码 —— 唯一可能的来源就是用户
+     * 上一次输进 [UiState.password] 的那个。这个值在提交成功后会清空，
+     * 但 `StaleCredentials` 恰恰**不是**成功路径，故此刻它还在。
+     *
+     * ## 失败一律静默（有意）
+     *
+     * 重包是**次要的自我修复**：它的成败不该改变用户看到的主提示（「请输入当前主密码」）。
+     * 更重要的是失败**不能**变成另一个错误 —— 那会把一句清楚的指引升级成
+     * 两条互相矛盾的报错。用户下一次走正常解锁时若仍 Stale，会再到这里重试。
+     *
+     * ## 只在 KDBX 上有意义
+     *
+     * Bitwarden 库的房间信封包的是会话 full key（派生自当前会话），
+     * 与用户输入的密码无关 ⇒ 它压根不会 Stale。
+     */
+    private suspend fun resealStaleRoomIfPossible() {
+        val candidate = _state.value.password
+        if (candidate.isBlank()) return
+        runCatching {
+            when (val outcome = roomReseal.resealRoom(vaultId, candidate)) {
+                RoomResealOutcome.Resealed ->
+                    Log.d(TAG, "reseal $vaultId → 房间信封已用刚输的密码重包")
+                else ->
+                    Log.d(TAG, "reseal $vaultId → 未重包（$outcome），下次解锁再试")
+            }
+        }.onFailure { Log.d(TAG, "reseal $vaultId → 异常：${it.message}") }
     }
 
     /**
@@ -690,5 +751,12 @@ class UnlockViewModel @Inject constructor(
 
     companion object {
         const val ARG_VAULT_ID = "vaultId"
+
+        /**
+         * 日志 tag（用 `android.util.Log` 而非 `VaultixLog`：本类单测跑纯 JVM，
+         * 后者默认实现会碰 native 层。`testOptions.unitTests.isReturnDefaultValues`
+         * 已置 true，故 `Log.d` 在测试里是安全的 no-op）。
+         */
+        private const val TAG = "VaultixUnlockVm"
     }
 }

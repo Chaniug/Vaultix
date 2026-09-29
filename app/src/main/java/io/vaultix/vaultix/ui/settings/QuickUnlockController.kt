@@ -11,11 +11,13 @@ package io.vaultix.vaultix.ui.settings
 import io.vaultix.data.repository.LegacyQuickUnlockCleanup
 import io.vaultix.data.repository.LocalUnlockEnrollment
 import io.vaultix.datastore.VaultixPreferences
+import android.util.Log
 import io.vaultix.domain.LocalUnlockEnrollOutcome
 import io.vaultix.domain.LocalUnlockPrepareOutcome
 import io.vaultix.domain.LocalUnlockPreparedEnrollment
 import io.vaultix.domain.PIN_MIN_LENGTH
 import io.vaultix.domain.PinEnrollOutcome
+import io.vaultix.domain.UnlockRecoveryRepository
 import io.vaultix.domain.VaultRepository
 import io.vaultix.model.VaultKind
 import io.vaultix.model.VaultSummary
@@ -23,6 +25,7 @@ import javax.crypto.Cipher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -31,6 +34,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -181,6 +185,13 @@ class QuickUnlockController(
      * 就掀掉旧的，用户会两头落空（「不半新半旧」那条硬要求的落点）。
      */
     private val cleanup: LegacyQuickUnlockCleanup,
+    /**
+     * 失效善后（批次 4，定稿 §6）：本轮只用它读「指纹门锁待重装」标记。
+     *
+     * ⚠️ 注入 domain 接口（不是 `HouseKeyStore`）：控制器是 app 层编排，
+     * 与仓储层实现解耦（同本类其余依赖的取向）。
+     */
+    private val recovery: UnlockRecoveryRepository,
     private val scope: CoroutineScope,
 ) {
 
@@ -341,6 +352,16 @@ class QuickUnlockController(
         val rows: List<VaultUi> = emptyList(),
         val biometric: CapabilityState = CapabilityState.Off,
         val pin: CapabilityState = CapabilityState.Off,
+        /**
+         * 指纹门锁「待重装」（批次 4，定稿 §6）：信封解不开但房钥匙还在手上
+         * （PIN 开过门 / Never 档恢复过），等用户下次在向导里过指纹就自动补写。
+         *
+         * ⚠️ 与 [biometric] 的关系：`true` 时 `biometric` **仍是 `On`** ——
+         * 门锁信封还在盘上、开关也确实开着。这里说的是**另一个维度**：
+         * 「开着但暂时用不了」。UI 必须两个都说，否则要么谎报「正常」（#93），
+         * 要么谎报「已关闭」（用户会以为得从头配一遍）。
+         */
+        val biometricRearmPending: Boolean = false,
     )
 
     private val _dialog = MutableStateFlow<Dialog>(Dialog.Idle)
@@ -740,6 +761,18 @@ class QuickUnlockController(
             val committed = withContext(Dispatchers.IO) {
                 val lockOk = vaultRepository.enrollFingerprintLock(cipher)
                 if (lockOk) {
+                    // ★ 批次 4（定稿 §6）：门锁开成 = 信封已用**本次认证的** cipher
+                    //   重写过。若此前挂着「待重装」（用户重录指纹导致旧信封解不开），
+                    //   这一下正好把它兑现了 —— 标记必须清掉，否则设置页会一直显示
+                    //   「需要重新启用」，而其实早就好了（假告警比不告警更伤信任）。
+                    //
+                    // ⚠️ 时序上**必须**在 enroll 之后：先清标记再 enroll 的话，
+                    //   enroll 失败时标记就丢了（用户再也看不到该修好它）。
+                    //
+                    // ⚠️ 清标记失败只记日志：它是状态清理，不影响本次登记结论；
+                    //   抛出去会把「指纹配好了」这个好消息变成一个报错。
+                    runCatching { recovery.clearRearmPending() }
+                        .onFailure { Log.d(TAG, "清除待重装标记失败：${it.message}") }
                     // 门锁开成 ⇒ 房钥匙已在内存，房间照封（纯软件，不碰 Keystore）。
                     sessionNow?.houseKeyReady = true
                     if (units.isEmpty()) return@withContext emptyMap()
@@ -1143,8 +1176,18 @@ class QuickUnlockController(
                     preferences.isQuickUnlockScopeConfirmed(),
                     vaultRepository.fingerprintLockAvailable(),
                     vaultRepository.pinLockAvailable(),
-                ) { scopeIds, confirmed, biometricLock, pinLock ->
-                    assemble(vaults, scopeIds, confirmed, biometricLock, pinLock)
+                    // 待重装标记（批次 4）。为什么"读一次"就够、为什么不用
+                    // 「探测信封能否解开」，见 rearmPendingOnce 的 KDoc。
+                    rearmPendingOnce(),
+                ) { scopeIds, confirmed, biometricLock, pinLock, rearmPending ->
+                    assemble(
+                        vaults = vaults,
+                        scopeIds = scopeIds,
+                        confirmed = confirmed,
+                        biometricLock = biometricLock,
+                        pinLock = pinLock,
+                        biometricRearmPending = rearmPending,
+                    )
                 }
             }
             .stateIn(
@@ -1156,6 +1199,34 @@ class QuickUnlockController(
     private fun clearPrepared() {
         prepared.forEach { it.close() }
         prepared = emptyList()
+    }
+
+    /**
+     * 「指纹门锁待重装」标记的单次读取（批次 4）。
+     *
+     * ## 为什么是「读一次」而不是持续订阅
+     *
+     * 标记的真源是 `SecureCredentialStore` 里的一个键，**没有**可观察的变更流
+     * （见 `HouseKeyStore`：它是安全状态不是偏好，没走 DataStore）。给它造一条流
+     * 要把整个凭据仓包一层观察者，成本远大于收益。
+     *
+     * 实际需要的时机很窄：**设置页可见时**读一次（`WhileSubscribed` 的订阅生命周期
+     * 正好对上 —— 页面藏起来就取消，再打开重新读）。标记的写入点是解锁失败现场
+     * （那时用户不在设置页）与重装成功（那时在向导里、流程结束会刷新），
+     * 所以「进设置页读一次」足够。
+     *
+     * ⚠️ 异常兜成 `false`：读盘失败不该让设置页整片状态流崩掉（所有行一起消失）。
+     * 保守的那一侧 = 「不呈现标记」，宁可少说一句也不要误报。
+     *
+     * ⚠️ 非 suspend 且返回 `Flow`：`combine` 需要的是「能参与组合的源」，
+     * 而不是「每次重组都跑一次 IO」。`flow {}` 的冷语义恰好对上 `flatMapLatest`。
+     */
+    private fun rearmPendingOnce() = flow {
+        emit(
+            withContext(Dispatchers.IO) {
+                runCatching { recovery.hasRearmPending() }.getOrDefault(false)
+            },
+        )
     }
 
     private fun clearSession() {
@@ -1262,6 +1333,13 @@ class QuickUnlockController(
          * 写在属性初始化处不报、写在函数里就报 —— 这正是它先红一次的原因。
          */
         const val STOP_TIMEOUT_MS = 5_000L
+
+        /**
+         * 日志 tag（用 `android.util.Log` 而非 `VaultixLog`：本类单测跑纯 JVM，
+         * 后者默认实现会碰 native 层。`testOptions.unitTests.isReturnDefaultValues`
+         * 已置 true，故 `Log.d` 在测试里是安全的 no-op）。
+         */
+        private const val TAG = "VaultixQuickUnlock"
     }
 }
 
@@ -1432,6 +1510,7 @@ internal fun assemble(
     confirmed: Boolean,
     biometricLock: Boolean,
     pinLock: Boolean,
+    biometricRearmPending: Boolean = false,
 ): QuickUnlockController.UiState {
     val rows = vaults.map { vault ->
         val roomReady = vault.id in scopeIds
@@ -1449,5 +1528,9 @@ internal fun assemble(
         rows = rows,
         biometric = lockState(biometricLock),
         pin = lockState(pinLock),
+        // ⚠️ 只在门锁确实开着时才呈现标记：标记与信封同生共死（关锁即清），
+        // 不一致只会出现在读盘竞态的一瞬间 —— 那种瞬间宁可不说，
+        // 也不要在「已关闭」的行上冒出「需重新启用」（自相矛盾的两句话）。
+        biometricRearmPending = biometricLock && biometricRearmPending,
     )
 }

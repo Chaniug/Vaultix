@@ -126,17 +126,18 @@
    - 结果页显示「已纳入 N 个库 / 跳过 M 个」，失败仍能看到**是哪个库、为什么**；
    - 指纹副标题「用系统指纹打开所有已纳入的库」、PIN 副标题「6 位数字；连续输错 5 次将锁定」。
 
-## 批次 4 开工点（下一轮从这里开始）
+## 批次 4 开工点（✅ 2026-09-29 已完成 — 见 [`house-rework-batch4-handoff.md`](house-rework-batch4-handoff.md)）
 
-**失效矩阵（定稿 §6）**：
+**失效矩阵（定稿 §6）**：四条目标全部落地，门禁三关全绿、单测 377 全过。
 
-1. **rearm**：开门状态检测平台密钥失效 → 内存房钥匙静默重包门锁信封；
-2. **降级**：`ERROR_KEY_INVALIDATED` 类 → 禁用该锁 + 明确文案 + 回主密码
-   （**绝不静默「本地解锁凭据不可用」**）；
-3. **StaleCredentials**：某库主密码变更 → 重包**该房间软件信封**，门锁不动；
-4. **PIN 熔断改全局 5 次**：旧每库计数作废，从 0 起。
+| 目标 | 落地 |
+|---|---|
+| **rearm** | ⚠️ **真实形态是「延迟重装」**：硬约束 #2（auth-per-use）⇒ 重写门锁信封必须再弹一次认证；故「失效时只打标记 → 下次认证时补写新信封」。`HouseKeyStore.rearmFingerprintLock` + `house_lock_fingerprint_rearm_pending` |
+| **降级** | `UnlockRecoveryRepository.degradeFingerprintLock()` → 禁用该锁 + 三选一明确文案 + 回主密码（**绝不静默**）；无信封时 no-op |
+| **StaleCredentials** | `RoomResealRepository.resealRoom(vaultId, newMasterPassword)` 只重包**该房间软件信封**，门锁不动 |
+| **PIN 熔断全局 5 次** | 批次 1 已把 N 信封收敛为 1 门锁信封 ⇒ 计数天然全局 |
 
-→ 之后批次 5（真机验收清单 1-7）。
+→ 之后批次 5（真机验收清单 1-9，需真手指）。
 
 ## 门禁命令速查
 

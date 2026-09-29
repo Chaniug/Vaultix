@@ -280,6 +280,51 @@ class QuickUnlockControllerTest {
         assertEquals(null, blocker)
     }
 
+    // ---- 批次 4：指纹门锁「待重装」标记（定稿 §6）----
+
+    @Test
+    fun `门锁开着且有待重装标记_如实呈现`() {
+        // 用户重录过指纹 ⇒ 信封还在盘上（所以开关是 On）但已解不开。
+        // UI 必须能拿到这个第三态，否则要么谎报「已生效」(#93)，要么谎报「已关闭」。
+        val ui = assemble(
+            vaults = listOf(summary("a")),
+            scopeIds = setOf("a"),
+            confirmed = true,
+            biometricLock = true,
+            pinLock = false,
+            biometricRearmPending = true,
+        )
+
+        assertEquals(QuickUnlockController.CapabilityState.On, ui.biometric)
+        assertTrue(ui.biometricRearmPending)
+    }
+
+    @Test
+    fun `门锁关着时不呈现待重装标记`() {
+        // 标记与信封同生共死（关锁即清）。真出现"标记在但锁关了"只可能是读盘竞态
+        // 的一瞬间 —— 那种瞬间宁可不说：在「已关闭」的行上写「需重新启用」
+        // 是自相矛盾的两句话，用户只会更困惑。
+        val ui = assemble(
+            vaults = listOf(summary("a")),
+            scopeIds = setOf("a"),
+            confirmed = true,
+            biometricLock = false,
+            pinLock = false,
+            biometricRearmPending = true,
+        )
+
+        assertEquals(QuickUnlockController.CapabilityState.Off, ui.biometric)
+        assertFalse(ui.biometricRearmPending)
+    }
+
+    @Test
+    fun `默认无标记_老调用点不需要改`() {
+        // 参数有默认值 ⇒ 批次 3 的调用点（与测试）逐字不变即通过。
+        val ui = state(biometricLock = true)
+
+        assertFalse(ui.biometricRearmPending)
+    }
+
     @Test
     fun `库类型直接取自入参`() {
         // ⚠️ 走旁路缓存会退化成"所有库都被当成 Bitwarden"，

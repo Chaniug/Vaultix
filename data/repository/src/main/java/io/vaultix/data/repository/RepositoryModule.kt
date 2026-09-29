@@ -9,6 +9,8 @@ import io.vaultix.domain.AutoUnlockRepository
 import io.vaultix.domain.FolderRepository
 import io.vaultix.domain.ItemRepository
 import io.vaultix.domain.KdbxSyncRepository
+import io.vaultix.domain.RoomResealRepository
+import io.vaultix.domain.UnlockRecoveryRepository
 import io.vaultix.domain.VaultExportRepository
 import io.vaultix.domain.VaultRepository
 import io.vaultix.domain.VaultSessionRepository
@@ -62,4 +64,20 @@ interface RepositoryModule {
     @Binds
     @Singleton
     fun bindAutoUnlockRepository(impl: AutoUnlockRepositoryImpl): AutoUnlockRepository
+
+    /**
+     * 快速解锁失效矩阵的善后（重装 / 降级；同 [bindKdbxSyncRepository] 的独立绑定理由）。
+     * 触发者 = 解锁失败现场（`LocalUnlockFanout`）与登记向导指纹段，见接口 KDoc。
+     */
+    @Binds
+    @Singleton
+    fun bindUnlockRecoveryRepository(impl: UnlockRecoveryRepositoryImpl): UnlockRecoveryRepository
+
+    /**
+     * 房间信封重包（某库换了主密码之后；同 [bindKdbxSyncRepository] 的独立绑定理由）。
+     * 调用点 = 解锁页「输新主密码」分支与设置页「重新纳入此库」，见接口 KDoc。
+     */
+    @Binds
+    @Singleton
+    fun bindRoomResealRepository(impl: RoomResealRepositoryImpl): RoomResealRepository
 }

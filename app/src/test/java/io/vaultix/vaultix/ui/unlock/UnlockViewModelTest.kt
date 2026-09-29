@@ -5,6 +5,8 @@ import com.google.common.truth.Truth.assertThat
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
+import io.vaultix.domain.RoomResealRepository
+import io.vaultix.domain.UnlockRecoveryRepository
 import io.vaultix.domain.VaultRepository
 import io.vaultix.domain.VaultSessionRepository
 import io.vaultix.model.VaultKind
@@ -124,7 +126,14 @@ class UnlockViewModelTest {
         every { sessions.observeViewLockedVaultIds() } returns flowOf(emptySet())
         every { sessions.isViewLocked(any()) } returns false
 
-        return UnlockViewModel(SavedStateHandle(), repository, sessions)
+        // 失效善后：本文件测的是「指纹入口显不显示」，一次都没走到门锁失败分支，
+        // 故给 relaxed mock —— 真要测 rearm/降级分叉请用 `LocalUnlockFanoutTest`。
+        val recovery = mockk<UnlockRecoveryRepository>(relaxed = true)
+        // 房间信封重包：同上，本文件不覆盖 Stale 分支
+        //（那条路径见 `StaleRoomResealTest`）。
+        val reseal = mockk<RoomResealRepository>(relaxed = true)
+
+        return UnlockViewModel(SavedStateHandle(), repository, sessions, recovery, reseal)
     }
 
     private fun vaultSummary(id: String) = VaultSummary(

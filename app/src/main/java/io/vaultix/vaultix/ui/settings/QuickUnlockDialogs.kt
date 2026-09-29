@@ -368,7 +368,15 @@ private fun biometricSummary(
     }
     return when (state.biometric) {
         is QuickUnlockController.CapabilityState.On ->
-            stringResource(R.string.quick_unlock_summary_on, readyCount(state, biometric = true))
+            // ★ 批次 4（定稿 §6）：门锁开着但**信封已解不开**（用户重录过指纹）。
+            //   此时谎报 `summary_on`（「已对 N 个库生效」）是 #93 那类假状态；
+            //   而说成「已关闭」又会让用户以为得从头配一遍。真相是第三种：
+            //   **开着、暂时用不了、下次过指纹时自动补写**。
+            if (state.biometricRearmPending) {
+                stringResource(R.string.quick_unlock_summary_rearm_pending)
+            } else {
+                stringResource(R.string.quick_unlock_summary_on, readyCount(state, biometric = true))
+            }
         QuickUnlockController.CapabilityState.Off ->
             stringResource(R.string.quick_unlock_option_biometric_summary)
     }

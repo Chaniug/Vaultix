@@ -9,9 +9,33 @@
 此前约定「两边保持同步」，结果是同一主题两处各有一份、必然漂移（AI 会看错位置）。
 **要改内容，只改这里。**
 
-## 🕐 最新状态（**2026-09-29 收工 · 真机验收修复轮 + 批次 1-3**·交接点，接力请先看这几行）
+## 🕐 最新状态（**2026-09-29 收工 · 快速解锁「房子化」批次 1-4**·交接点，接力请先看这几行）
 
-> ### ★ 本轮（2026-09-29 深夜续）—— 真机验收反馈修复：「从不锁定」对齐 Bitwarden + 解锁方式三行精简
+> ### ★ 本轮（2026-09-29 收工）—— 快速解锁「房子化」批次 4：失效矩阵（定稿 §6）
+> 1. ★★ **rearm 的真实形态是「延迟重装」，不是「静默重包」**：硬约束 #2
+>    （auth-per-use 一次授权只保一次 `doFinal`）⇒ 重写门锁信封**必须**再弹一次认证。
+>    故 =「失效时只打标记（`house_lock_fingerprint_rearm_pending`）→ 下次认证时补写」。
+>    用户拍板「可以接受重新安装」。
+> 2. ★★ **开门 / 关门唯一正确判据 = `HouseKeyStore.isUnlocked`**（不是「信封存不存在」——
+>    重录指纹后两者分叉，误用后者会把 rearm 走成降级、**连带清掉房间信封**）。
+> 3. **降级绝不静默**：`UnlockRecoveryRepositoryImpl.degradeFingerprintLock()` → 禁锁 +
+>    三选一明确文案 + 回主密码；无指纹信封时 no-op。
+> 4. **StaleCredentials**：`RoomResealRepositoryImpl.resealRoom(vaultId, newMasterPassword)`
+>    只重包**该房间软件信封**，门锁不动；`UnlockViewModel` 在 `StaleCredentials` 分支调用。
+> 5. **PIN 熔断全局 5 次**：批次 1 已达成（N 信封 → 1 门锁信封 ⇒ 计数天然全局）。
+> 6. 新增失效三态分类 `LocalUnlockFailureKind { Recoverable, Rearmable, Unavailable }`。
+>
+> 门禁：detekt / `:app:compileFullDebugKotlin` / 单测 **377 全过 0 failed**
+> （`data:repository` 104 + `app` 273）+ 孤儿串未超基线。
+> ⚠️ **当前位置：`main` 已推送；`rele` 未动。**
+> **下一轮起点 = 批次 5（真机验收清单 1-9，需真手指）** —— ⭐ 新增重点是第 4 条
+> （重录指纹后：开门态 rearm / 关门态降级 + 设置页「需要重新启用」副标题）。
+> **接力入口（自包含）：[`Docs/progress/house-rework-batch4-handoff.md`](../Docs/progress/house-rework-batch4-handoff.md)**
+> · 定稿实施记录 **§6.1**。
+
+---
+
+> ### ★ 上一轮（2026-09-29 深夜续）—— 真机验收反馈修复：「从不锁定」对齐 Bitwarden + 解锁方式三行精简
 > 1. ★★ **硬约束 #1 修订（定稿级，见 `.ai/decisions/快速解锁房子化-两级钥匙层级-定稿.md` 顶部横幅）**：
 >    「房钥匙绝不落盘」→「**绝不以明文落盘**」。对标 Bitwarden `userAutoUnlockKey`
 >    （`reference/bitwarden/` 稀疏克隆核证：keystoreEncryptedPreferences 载体、
@@ -25,9 +49,9 @@
 >    开关 = On 关 / Off 进向导（关闭是低频破坏性动作，防误触）。
 > 5. **新增 `HouseKeyStoreTest` auto 信封 3 用例**（生命周期 / 损坏自愈 / 门锁全删连带清）。
 >
-> ⚠️ **当前位置：`main` 已推送（含本轮提交）；`rele` 未动。**
-> **下一轮起点 = 批次 4（失效矩阵）** → 批次 5（真机验收，**必做**：补验「划掉后台→
-> 填充 1s 内出条目、不再要求重新解锁（Never 档）」「主动锁库后必须重新认证」）。
+> ⚠️ **上一轮位置：`main` 已推送（含该轮提交）；`rele` 未动。**
+> （本轮批次 4 已在其上继续推进，见最顶部状态块。）
+> ~~下一轮起点 = 批次 4（失效矩阵）~~（✅ 已完成）。
 
 ---
 
@@ -46,8 +70,8 @@
 >    **17 条**，动作表判定终于有行为级证据。**代价要说清**：钉住的是**判定逻辑**，
 >    不是整条编排流程（后者仍要靠批次 5 真机验收）。
 >
-> ⚠️ **当前位置：`main` 已推送（批次 2 `61ea1a3` + 批次 3 提交）；`rele` 未动。**
-> **下一轮起点 = 批次 4（失效矩阵）** → 批次 5（真机验收，**必做**）。
+> ⚠️ **上一轮当前位置：`main` 已推送（批次 2 `61ea1a3` + 批次 3 提交）；`rele` 未动。**
+> （本轮批次 4 已在其上继续推进，见最顶部状态块。）
 > **接力入口（自包含）：[`Docs/progress/house-rework-batch3-handoff.md`](../Docs/progress/house-rework-batch3-handoff.md)**
 
 ---
@@ -214,7 +238,8 @@
 1. 读 `MEMORY.md` —— 拿到项目定位、架构、硬约束与**当前状态（§9）**
 2. **要动「快速解锁」→ 先读 `decisions/快速解锁房子化-两级钥匙层级-定稿.md`**
    （2026-09-28 起的现行真源，**别重新论证**；施工进度 = `Docs/progress/quick-unlock-house-rework.md`，
-   批次 1 已收工，**下一会话从 `Docs/progress/house-rework-batch1-handoff.md` 进**）
+   **批次 1-4 已收工（含批次 3.5 真机反馈修复），下一会话从
+   `Docs/progress/house-rework-batch4-handoff.md` 进；失效矩阵决策见定稿 §6.1**）
    「库选择 / 默认库」→ 仍读 `decisions/库选择与快速解锁-逻辑定稿.md`（其快速解锁章节已被房子化定稿修订）
 2b. **要动「设置页」→ 先读 `decisions/设置页信息架构-定稿.md`**
    （7 组 → 5 组的目标结构 + 全量文案改动表，**别重新设计分组**；§6 是开工步骤）

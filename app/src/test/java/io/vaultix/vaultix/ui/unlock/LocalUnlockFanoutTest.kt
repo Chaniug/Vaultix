@@ -9,13 +9,19 @@
 package io.vaultix.vaultix.ui.unlock
 
 import com.google.common.truth.Truth.assertThat
+import io.mockk.Runs
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.every
+import io.mockk.just
 import io.mockk.mockk
+import io.vaultix.domain.FingerprintDegradeReport
 import io.vaultix.domain.RoomUnlockOutcome
+import io.vaultix.domain.UnlockRecoveryRepository
 import io.vaultix.domain.VaultRepository
 import javax.crypto.Cipher
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
 
@@ -228,5 +234,167 @@ class LocalUnlockFanoutTest {
         assertThat(result.first).isInstanceOf(RoomUnlockOutcome.Unavailable::class.java)
         assertThat(result.restOpened).isEqualTo(1)
         assertThat(result.restFailed).isEqualTo(0)
+    }
+
+    // ---- 失效矩阵：门锁失败的分叉（定稿 §6，批次 4）----
+
+    /**
+     * 造一个失效善后假实现。
+     *
+     * @param keyInMemory 房钥匙是否还在内存 —— **唯一判据**，两路分叉由它决定。
+     * @param roomsRemoved 降级时连带清掉的房间信封数。
+     * @param remainingLocks 降级后是否还有别的门锁。
+     */
+    private fun recovery(
+        keyInMemory: Boolean,
+        roomsRemoved: Int = 0,
+        remainingLocks: Boolean = false,
+    ): UnlockRecoveryRepository = mockk {
+        every { houseKeyInMemory } returns MutableStateFlow(keyInMemory)
+        coEvery { markRearmPending() } just Runs
+        coEvery { degradeFingerprintLock() } returns FingerprintDegradeReport(
+            degraded = true,
+            roomsRemoved = roomsRemoved,
+            remainingLocks = remainingLocks,
+        )
+    }
+
+    private fun failedRepository(): VaultRepository = mockk {
+        coEvery { completeFingerprintUnlock(cipher) } returns false
+    }
+
+    @Test
+    fun `开门态门锁失败_标记待重装而不降级`() = runTest {
+        // ★ 本批最核心的分叉：房钥匙还在手上（PIN 开过门 / Never 档恢复过）⇒
+        // **绝不许降级** —— 降级会连带清掉房间信封，用户每个库都得重新登记。
+        val recovery = recovery(keyInMemory = true)
+        val repository = failedRepository()
+
+        val result = LocalUnlockFanout.unlockAll(
+            repository = repository,
+            first = "a",
+            rest = listOf("b"),
+            cipher = cipher,
+            recovery = recovery,
+        )
+
+        coVerify(exactly = 1) { recovery.markRearmPending() }
+        coVerify(exactly = 0) { recovery.degradeFingerprintLock() }
+        // 文案必须说真话：钥匙还在 ⇒ 「需重新启用」，不是「已失效」（那会让人以为要重配）。
+        val detail = (result.first as RoomUnlockOutcome.Unavailable).detail
+        assertThat(detail).contains("重新启用")
+        assertThat(detail).doesNotContain("已关闭")
+    }
+
+    @Test
+    fun `关门态门锁失败_降级且如实说清已关闭`() = runTest {
+        // 钥匙真的丢了 ⇒ 标记了也没人来兑现（补写要用内存房钥匙），只能降级。
+        val recovery = recovery(keyInMemory = false)
+        val repository = failedRepository()
+
+        LocalUnlockFanout.unlockAll(
+            repository = repository,
+            first = "a",
+            rest = listOf("b"),
+            cipher = cipher,
+            recovery = recovery,
+        )
+
+        coVerify(exactly = 1) { recovery.degradeFingerprintLock() }
+        coVerify(exactly = 0) { recovery.markRearmPending() }
+    }
+
+    @Test
+    fun `降级连带清掉房间信封时_文案要说重新启用`() = runTest {
+        // ★ 硬约束 #5「绝不静默」：这是最后一把门锁 ⇒ 房间信封全清，
+        // 用户下次进设置页会发现「库都不在快速解锁范围内」。
+        // 若文案只说「请用主密码解锁」，用户会以为设置被重置了（看不到任何解释）。
+        val recovery = recovery(keyInMemory = false, roomsRemoved = 3, remainingLocks = false)
+        val repository = failedRepository()
+
+        val result = LocalUnlockFanout.unlockAll(
+            repository = repository,
+            first = "a",
+            rest = emptyList(),
+            cipher = cipher,
+            recovery = recovery,
+        )
+
+        val detail = (result.first as RoomUnlockOutcome.Unavailable).detail
+        assertThat(detail).contains("已关闭")
+        assertThat(detail).contains("重新启用")
+    }
+
+    @Test
+    fun `降级但还有 PIN 锁时_提示改用 PIN`() = runTest {
+        // 还有 PIN 锁 ⇒ 用户的库**没受影响**（房间信封被 trimRooms 保住）。
+        // 提示语该指向那条真正可用的路（PIN），而不是让用户去输主密码。
+        val recovery = recovery(keyInMemory = false, roomsRemoved = 0, remainingLocks = true)
+        val repository = failedRepository()
+
+        val result = LocalUnlockFanout.unlockAll(
+            repository = repository,
+            first = "a",
+            rest = emptyList(),
+            cipher = cipher,
+            recovery = recovery,
+        )
+
+        val detail = (result.first as RoomUnlockOutcome.Unavailable).detail
+        assertThat(detail).contains("PIN")
+        assertThat(detail).doesNotContain("重新启用")
+    }
+
+    @Test
+    fun `未接恢复依赖时_行为与批次三逐字相同`() = runTest {
+        // ⚠️ 兼容性守卫：`AutofillActivity` 的自动填充路径不传 recovery，
+        // 文案必须保持原样（那边没有界面呈现「需重新启用」，改了只会让日志对不上）。
+        val result = LocalUnlockFanout.unlockAll(
+            repository = failedRepository(),
+            first = "a",
+            rest = listOf("b"),
+            cipher = cipher,
+        )
+
+        assertThat((result.first as RoomUnlockOutcome.Unavailable).detail)
+            .isEqualTo("指纹门锁已失效，请用主密码解锁")
+    }
+
+    @Test
+    fun `善后自身抛异常_不掩盖门锁失败这个主结论`() = runTest {
+        // 善后是次要动作：它炸了也不能把「门锁解不开」这个主结论吞掉，
+        // 更不能把一次认证失败升级成崩溃。
+        val recovery = mockk<UnlockRecoveryRepository> {
+            every { houseKeyInMemory } returns MutableStateFlow(false)
+            coEvery { degradeFingerprintLock() } throws RuntimeException("db locked")
+        }
+
+        val result = LocalUnlockFanout.unlockAll(
+            repository = failedRepository(),
+            first = "a",
+            rest = listOf("b"),
+            cipher = cipher,
+            recovery = recovery,
+        )
+
+        assertThat(result.first).isInstanceOf(RoomUnlockOutcome.Unavailable::class.java)
+        assertThat((result.first as RoomUnlockOutcome.Unavailable).detail).isNotEmpty()
+    }
+
+    @Test
+    fun `门锁成功时_完全不碰失效善后`() = runTest {
+        // 正常路径不该有多余副作用：一次成功解锁不该留下任何「待重装」痕迹。
+        val recovery = recovery(keyInMemory = true)
+
+        LocalUnlockFanout.unlockAll(
+            repository = repository(),
+            first = "a",
+            rest = listOf("b"),
+            cipher = cipher,
+            recovery = recovery,
+        )
+
+        coVerify(exactly = 0) { recovery.markRearmPending() }
+        coVerify(exactly = 0) { recovery.degradeFingerprintLock() }
     }
 }

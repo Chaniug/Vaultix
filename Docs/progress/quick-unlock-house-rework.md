@@ -4,9 +4,10 @@
 > 根因与证据：[`Docs/progress/audit/bitwarden-kdbx-sync-audit.md`](audit/bitwarden-kdbx-sync-audit.md)（下称「报告」）。
 > **论证一律看定稿，不在会话里重新论证。**
 >
-> 状态：🚧 施工中（**批次 1-3 ✅ 2026-09-29 收工 + 批次 3.5（真机验收反馈修复）✅ 同日深夜，
-> 门禁三关全绿；批次 4-5 未动。**
-> 批次 3.5 内容见下方专节（「从不」档自动恢复对齐 Bitwarden + autofill 解密缓存 + 设置页三行精简）；
+> 状态：🚧 施工中（**批次 1-4 ✅ 2026-09-29 收工（含批次 3.5 真机验收反馈修复），
+> 门禁三关全绿；批次 5（真机验收）未动。**
+> 批次 4（失效矩阵）内容见下方专节；批次 3.5 内容见下方专节
+> （「从不」档自动恢复对齐 Bitwarden + autofill 解密缓存 + 设置页三行精简）；
 > **接力入口：[`house-rework-batch3-handoff.md`](house-rework-batch3-handoff.md)**——批次 3 的
 > 删五类、判定逻辑可测化、结果页与副标题改动都在那份里；
 > 批次 2（动作表 / 重登记向导）见 [`house-rework-batch2-handoff.md`](house-rework-batch2-handoff.md)；
@@ -112,7 +113,7 @@
 - **测试**：`HouseKeyStoreTest` +3（auto 生命周期 / 损坏自愈 / 门锁全删连带清）；
   `ItemRepositoryImplTest` 1 条按响应式契约改写（解锁后 `first{非空}`）。
 
-## 批次 4：失效矩阵（定稿 §6）
+## 批次 4：失效矩阵（✅ 2026-09-29 完成；三关全绿、单测 377 全过）
 
 - rearm：开门状态检测平台密钥失效 → 内存房钥匙静默重包门锁信封；
 - 降级：`ERROR_KEY_INVALIDATED` 类 → 禁用该锁 + 明确文案 + 回主密码
@@ -121,6 +122,33 @@
 - PIN 熔断改全局 5 次：旧每库计数作废，从 0 起；
 - **auto 信封失效**（批次 3.5 新增）：`AutoUnlockKeyStore.decrypt` 返回 null（密钥不可用 /
   信封损坏）⇒ 就地删信封自愈（`HouseKeyStore.openAutoEnvelope` 已实现，单测已钉）。
+
+> ⚠️ **rearm 的真实形态是「延迟重装」**，不是「静默重包」：硬约束 #2（auth-per-use：一次
+> 授权只保一次 `doFinal`）⇒ 重写门锁信封必须再弹一次 `BiometricPrompt`。
+> 故落地为「失效时只打标记 → 下次认证时补写」，决策理由与实现形态见
+> **定稿 §6.1 实施记录**（用户 2026-09-29 拍板「可以接受重新安装」）。
+> ⚠️ 开门 / 关门的唯一判据是 `HouseKeyStore.isUnlocked`；误用「信封存在」会把 rearm
+> 走成降级、连带清掉房间信封。
+
+本批新增 / 改动（10 个生产文件 + 6 个测试文件）：
+
+| 层 | 文件 | 内容 |
+|---|---|---|
+| data:repository | `LocalUnlockFailure.kt` | 新增 `LocalUnlockFailureKind { Recoverable, Rearmable, Unavailable }` + `Throwable.localUnlockFailureKind()` |
+| data:repository | `HouseKeyStore.kt` | `isFingerprintLockInvalidated()`（信封在 **且** KEK `INVALIDATED`）+ rearm 四方法 + 标记常量 |
+| data:repository | `UnlockRecoveryRepositoryImpl.kt` **新** | 薄转发；`degradeFingerprintLock()` 如实算 `roomsRemoved` |
+| data:repository | `RoomResealRepositoryImpl.kt` **新** | 复用 `LocalUnlockEnrollment` 只重包该房间软件信封 |
+| data:repository | `RepositoryModule.kt` | 两个新 `@Binds` |
+| domain | `UnlockRecoveryRepository.kt` **新** | 失效善后契约（含 `FingerprintDegradeReport`）+ 开门态/关门态判定表 KDoc |
+| domain | `RoomResealRepository.kt` **新** | `resealRoom(vaultId, newMasterPassword): RoomResealOutcome` |
+| app | `LocalUnlockFanout.kt` | 门锁失败 → `handleLockFailure(recovery)`：开门态打标记 / 关门态降级，三选一文案 |
+| app | `UnlockViewModel.kt` | 接 `UnlockRecoveryRepository` + `RoomResealRepository`；`StaleCredentials` → `resealStaleRoomIfPossible()`（失败静默） |
+| app | `QuickUnlockController.kt` / `QuickUnlockDialogs.kt` / `strings.xml` | 设置页「待重装」状态呈现（`biometricRearmPending`）；`onAuthenticated` 成功后清标记 |
+| app | `SettingsViewModel.kt` / `VaultListViewModel.kt` | 接线 |
+
+测试：`LocalUnlockFailureTest` +13（新）· `HouseKeyStoreTest` 18 · `UnlockRecoveryRepositoryImplTest` +10（新）·
+`RoomResealRepositoryImplTest` +8（新）· `LocalUnlockFanoutTest` +7 · `StaleRoomResealTest` +6（新）·
+`QuickUnlockControllerTest` +3。合计 **377 条零失败**。
 
 ## 批次 5：真机验收清单
 

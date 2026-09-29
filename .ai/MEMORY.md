@@ -137,14 +137,60 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 | [8.8 M3Expressive](./conventions/8.8-M3Expressive-采纳范围与顺序.md) | M3E（2026）采纳范围与顺序 | — |
 | [8.9 文档分篇](./conventions/8.9-文档分篇.md) | 文档分篇（防超长上下文） | 5 |
 
-## 9. 当前状态与下一批（**第五十五轮**接力起手式）
+## 9. 当前状态与下一批（**第五十六轮**接力起手式）
 
 > ⚠️ **逐轮历史不在这里维护** —— 与本文件早期做法不同：历史只保留一处，避免两处不同步。
 > 最新待办 → [`Docs/progress/next-steps.md`](../Docs/progress/next-steps.md)（最新在顶部）·
 > 逐轮流水 → `.ai/SESSION-YYYY-MM-DD.md` · 坑 → `.ai/ISSUES.md`（索引，正文在 `issues/`）·
 > 性能专项 → [`Docs/progress/perf-plan.md`](../Docs/progress/perf-plan.md)。
 
-**真机验收反馈修复轮（2026-09-29 深夜续 · 最新，见 `.ai/SESSION-2026-09-29.md`）**
+**快速解锁「房子化」批次 4 —— 失效矩阵（2026-09-29 · 最新，见 `.ai/SESSION-2026-09-29.md`）**
+
+> 接续同日批次 1-3.5：**批次 4（失效矩阵，定稿 §6）完成，门禁三关全绿**
+> （detekt / `:app:compileFullDebugKotlin` / 单测 **377 全过 0 failed** +
+> 孤儿串未超基线），`main` 已推送。接力文档
+> [`Docs/progress/house-rework-batch4-handoff.md`](../Docs/progress/house-rework-batch4-handoff.md)，
+> 定稿实施记录 **§6.1**。
+
+1. ★★ **rearm 的真实形态是「延迟重装」，不是「静默重包」**（本批最重要的认知）：
+   硬约束 #2 —— 指纹门锁信封 KEK 是 **auth-per-use**，一次授权只保一次 `doFinal`
+   ⇒ 重写门锁信封**必须**再弹一次 `BiometricPrompt`。「静默」与「重写门锁信封」
+   **互斥**，实现不了。故拆成「**失效时只打标记**（`house_lock_fingerprint_rearm_pending`，
+   不弹窗）→ **下次认证时补写新信封**」；开门 / 关门两态分流。用户拍板
+   「可以接受重新安装」。
+2. ★★ **开门 / 关门的唯一正确判据 = `HouseKeyStore.isUnlocked`**（房钥匙是否在内存），
+   **不是**「门锁信封存不存在」。重录指纹后两者分叉：平台 KEK 失效但信封文件还在；
+   若用「信封在 ⇒ 视为开门」→ 会走进降级 → `disableFingerprintLock()` →
+   **连带清掉房间信封（用户丢库）**。
+3. **降级绝不静默**（硬约束 #5）：`UnlockRecoveryRepositoryImpl.degradeFingerprintLock()`
+   按 `roomsRemoved` / `remainingLocks` 三选一用户可见文案；无指纹信封时 **no-op**
+   （不误伤房间信封）。返回 `FingerprintDegradeReport`（如实上报连带清掉的房间数）。
+4. **StaleCredentials**：`RoomResealRepositoryImpl.resealRoom(vaultId, newMasterPassword)`
+   复用 `LocalUnlockEnrollment.prepareForVaults` → **只重包该房间软件信封**，门锁不动。
+   `UnlockViewModel` 在 `RoomUnlockOutcome.StaleCredentials` 分支用**刚输入的主密码**重包；
+   失败**一律静默**（不把「能进去」这个好消息变成报错）。
+5. **失效三态分类**：`LocalUnlockFailureKind { Recoverable, Rearmable, Unavailable }`
+   + `Throwable.localUnlockFailureKind()`（`data:repository/LocalUnlockFailure.kt`）。
+6. **PIN 熔断全局 5 次**：批次 1 已达成（N 信封 → 1 门锁信封 ⇒ 计数天然全局），本批未改。
+7. ★ **与 Bitwarden 的有意偏离**：Bitwarden 生物识别解密失败即 `BiometricDecodingError`
+   （`VaultRepositoryImpl.kt:288-349`）、锁定计数达 5 次即登出
+   （`VaultLockManagerImpl.kt:340-352`），**不做静默重装**。Vaultix 选更软的延迟重装，
+   前提是 Bitwarden **没有的**：房子钥匙已在内存（开门态）⇒ 重装只差一次认证，
+   不必重走整个登记向导。**前提若不成立（如未来改「切换即锁库」），这条偏离要重估。**
+8. **detekt `TooManyFunctions`（40/类）本批又撞一次**：`QuickUnlockController` 顶格 40 ⇒
+   新逻辑**内联进 `composeState()` 的 `combine` 源**、并**内联掉**一个已有小方法
+   （`clearRearmPending()`），而不是加私有方法。新能力一律走**独立接口 + 独立 Impl**
+   （本批两个新仓储 = `KdbxSyncRepository` / `AutoUnlockRepository` 先例）。
+9. **测试纪律（血泪）**：`Dispatchers.IO` 在纯 JVM `runTest` 下**不可确定性推进**
+   （实现里 `withContext(Dispatchers.IO)` 是真实线程池，`advanceUntilIdle()` 管不到）
+   ⇒ 必须用 `withTimeoutOrNull(5_000L) { while (!predicate()) delay(1) }` **轮询终态**；
+   `Dispatchers.setMain` 必须用**块体**（表达式体会让 `@After`/`@Before` 错乱）。
+10. **批次 5 真机验收（下一轮）**：清单 1-9，⭐ 新增重点是第 4 条
+    （重录指纹后：开门态 rearm / 关门态降级）与设置页「需要重新启用」副标题。
+
+---
+
+**真机验收反馈修复轮（2026-09-29 深夜续，见 `.ai/SESSION-2026-09-29.md`）**
 
 > 用户真机装 debug 版后两条反馈：「从不锁定下划掉后台后填充不及时，对标 Bitwarden」
 > +「解锁方式三行冗余」。本轮双修，门禁三关全绿（detekt / compile / 单测含新增 3 条

@@ -526,6 +526,14 @@
          ⚠️ 「管理解锁方式」取代了旧的「逐库勾选范围」整块，是逐库勾选的**唯一**去处。 -->
     <string name="quick_unlock_manage_action">管理解锁方式</string>
     <string name="quick_unlock_summary_on">已对 %1$d 个库生效</string>
+    <!-- ===== 2026-09-29 批次 4：失效矩阵的「待重装」文案（定稿 §6）=====
+         ⚠️ 必须同时说清**三件事**，少一件就是一个坑：
+           ① 现状（需要重新启用，不是"已失效"—— 钥匙还在手上，能修好）；
+           ② 动作（用一次指纹即可，不需要重走登记向导、不用重输主密码）；
+           ③ 时间（下次使用指纹时自动完成）—— 用户才知道"我现在什么都不用做"。
+         绝不能说成"已关闭"（用户会以为解绑了、要重配全部库），
+         也绝不能说"已对 N 个库生效"（那是 #93 那类假状态：明明用不了。）。 -->
+    <string name="quick_unlock_summary_rearm_pending">需要重新启用：系统指纹已变更，下次用指纹解锁时自动完成</string>
     <string name="quick_unlock_configure_vaults_title">生效的库</string>
     <string name="quick_unlock_configure_vaults_hint">默认全选。取消勾选会移除该库的快速解锁凭据。</string>
     <string name="quick_unlock_configure_methods_title">解锁方式</string>
