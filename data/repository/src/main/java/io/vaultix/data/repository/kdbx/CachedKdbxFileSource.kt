@@ -73,14 +73,53 @@ internal class CachedKdbxFileSource(
         }
 
         val token = remote.versionToken
-        if (cached != null && token != null && token == cached.versionToken) {
+        val hit = cached != null && token != null && token == cached.versionToken
+        // ★ 2026-09-30 加：**缓存没命中时要能说出"为什么"**。
+        //   背景：真机实测两次解锁都是 `read≈4–5s（下载 30189B）`，而缓存文件的 mtime
+        //   停在更早的时刻 ⇒ 命中判定从没通过，但**代码里看不到任何痕迹**（save 的失败
+        //   被 runCatching 吞了）。三类原因是完全不同的结论，必须分开：
+        //   - 没有缓存（load 失败 / 被清）⇒ 缓存机制没生效；
+        //   - token 为 null（来源不给令牌）⇒ 设计上就不该命中；
+        //   - token 变了（远端确实变了）⇒ **正常行为**（条件回源），别去"修"它。
+        //   ⚠️ 只记**长度与短哈希**，不记令牌原文（VaultixLog 铁律：不记 token）。
+        VaultixLog.d(TAG) {
+            buildString {
+                append("缓存判定：cached=").append(cached != null)
+                cached?.let {
+                    append("(").append(it.bytes.size).append("B,token=")
+                    append(it.versionToken.tag()).append(")")
+                }
+                append(" 远端token=").append(token.tag())
+                append(if (hit) " ⇒ 命中，不下载" else " ⇒ 未命中，下载")
+            }
+        }
+        if (hit && cached != null) {
             return cached.bytes
         }
 
         val bytes = delegate.read()
         // 缓存写失败不能影响解锁本身（缓存是**优化**，不是正确性前提）。
+        // ⚠️ 但**失败必须留痕**：静默吞掉会让"缓存永远不生效"这类问题查不出来（本次即如此）。
         runCatching { cache.save(cacheKey, CachedKdbxFile(bytes, token)) }
+            .onSuccess {
+                VaultixLog.d(TAG) {
+                    "已写缓存（${bytes.size}B, token=${token.tag()}）"
+                }
+            }
+            .onFailure { error ->
+                VaultixLog.w(TAG) { "写缓存失败（不影响本次解锁）：${error.message}" }
+            }
         return bytes
+    }
+
+    /**
+     * 令牌的诊断标记：**长度 + 短哈希**（够判定"两次是不是同一个"，又不落原文）。
+     * `null` 单独标记 —— 它代表"来源不给令牌"，是三类未命中原因里最需要区分的一类。
+     */
+    private fun String?.tag(): String = when {
+        this == null -> "null"
+        isEmpty() -> "空串"
+        else -> "#${"%08x".format(hashCode())}(len=$length)"
     }
 
     override suspend fun write(

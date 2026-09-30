@@ -139,6 +139,49 @@ private val ITEM_CARD_GAP = Spacing.sm
 /** 分组折叠/展开的箭头动画时长（对齐 Bastion 的 200ms 补间）。 */
 private const val GROUP_ANIM_MS = 200
 
+/** 只读提示里那个小锁的边长。 */
+private val READ_ONLY_ICON_SIZE = 16.dp
+
+/**
+ * 「此库只读」的可见提示（2026-09-30 加，真机反馈驱动）。
+ *
+ * ## 为什么必须**可见**，而不是只把「+」藏起来
+ *
+ * KDBX 是 M2 **阶段 A（只读）**（`.ai/ISSUES.md` #106）：FAB 被刻意不画、详情页收起
+ * 编辑/删除。这些"闸"本身都对 —— 但它们是**静默的**：用户看到的只是"没有新建按钮、
+ * 删不掉、改不了"，而**没有任何地方说明原因**。
+ *
+ * 真机实录：用户只能来问「kdbx 增删改查都没用」——一句话里三个"坏掉的"，实际是
+ * **一个尚未实现的功能**。⇒ 一行如实说明比藏一堆按钮诚实得多：
+ * **用户有权知道"这是只读，不是坏了"**（与本项目「不谎报 / 如实说明」同一条纪律；
+ * 差别只在于：静默地不给入口，也是一种需要消除的歧义）。
+ *
+ * ⚠️ 只读是**当前的阶段限制**，不是设计终点：写回（阶段 B）落地后本提示与
+ * 各处闸门要一起撤掉 —— 见 `.ai/conventions/8.3-M2KDBX.md`。
+ */
+@Composable
+private fun ReadOnlyVaultNotice() {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.xs, vertical = Spacing.xs),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.Filled.Lock,
+            contentDescription = null,
+            modifier = Modifier.size(READ_ONLY_ICON_SIZE),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.width(Spacing.sm))
+        Text(
+            text = stringResource(R.string.kdbx_vault_read_only_notice),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
 /**
  * 展开后的快捷筛选 chip 行高度（8dp 上下内边距 ×2 + 32dp 高的 FilterChip）。
  *
@@ -404,6 +447,8 @@ fun ItemsScreen(
                             selectedIds = selectedIds - item.id
                             viewModel.deleteItem(item)
                         },
+                        // 只读库（KDBX 阶段 A）在列表顶部说明原因（#106）。
+                        readOnly = readOnlyVault == true,
                     )
                 }
             }
@@ -522,6 +567,8 @@ private fun ItemsBody(
     onToggleGroup: (String) -> Unit,
     onToggleSelect: (VaultItem) -> Unit,
     onDelete: (VaultItem) -> Unit,
+    /** 只读库（KDBX 阶段 A）：列表顶部给一行说明，见 [ReadOnlyVaultNotice]。 */
+    readOnly: Boolean = false,
 ) {
     if (visibleItems.isEmpty()) {
         // 空态 / 搜不到：同样要让位，否则文案与插画被半透明顶栏压住。
@@ -551,6 +598,7 @@ private fun ItemsBody(
         onOpenItem = onOpenItem,
         syncStates = state.syncStates,
         onDelete = onDelete,
+        readOnly = readOnly,
     )
 }
 
@@ -1026,6 +1074,13 @@ private fun ItemsList(
     onDelete: (VaultItem) -> Unit,
     /** 条目 id → 是否已同步上云（行尾云图标，缺省视为已同步）。 */
     syncStates: Map<String, Boolean> = emptyMap(),
+    /**
+     * 该库是否**只读**（KDBX 阶段 A，`.ai/ISSUES.md` #106）。
+     *
+     * `true` ⇒ 列表顶部挂一行 [ReadOnlyVaultNotice]：把"没有 + 按钮 / 删不掉"这件事
+     * **说出来**，而不是让用户自己猜（2026-09-30 真机反馈驱动）。
+     */
+    readOnly: Boolean = false,
 ) {
     LazyColumn(
         state = listState,
@@ -1044,6 +1099,11 @@ private fun ItemsList(
         ),
         verticalArrangement = Arrangement.spacedBy(ITEM_CARD_GAP),
     ) {
+        if (readOnly) {
+            // 顶部一行如实说明（见 [ReadOnlyVaultNotice] 的 KDoc）：只读是**阶段限制**，
+            // 但"没有 + 按钮 / 删不掉"必须有个说法，否则用户只会以为坏了。
+            item(key = "readonly-notice") { ReadOnlyVaultNotice() }
+        }
         groups.forEach { group ->
             if (grouped) {
                 item(key = "header:${group.key}") {

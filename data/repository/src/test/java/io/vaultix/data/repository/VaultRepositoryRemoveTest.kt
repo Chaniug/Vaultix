@@ -48,7 +48,7 @@ class VaultRepositoryRemoveTest {
      * "没打桩的调用静默返回 null"这种失败就混进来了。
      */
     private val kdbxFileSources = KdbxFileSourceResolver { null }
-    private val sessions = VaultSessionManager()
+    private val sessions = VaultSessionManager(KdbxSessionFlow())
     private lateinit var repo: VaultRepositoryImpl
 
     private val vaultId = "https://vault.example.com"

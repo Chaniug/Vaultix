@@ -81,7 +81,7 @@ class ItemRepositoryImplTest {
             override suspend fun upsertPendingOp(op: PendingOpEntity) = pendingOpDao.enqueue(op)
         }
         syncService = mockk()
-        sessions = VaultSessionManager()
+        sessions = VaultSessionManager(KdbxSessionFlow())
         crypto = VaultixCrypto(Dispatchers.Default)
         mapper = CipherMapper(crypto)
         repo = ItemRepositoryImpl(

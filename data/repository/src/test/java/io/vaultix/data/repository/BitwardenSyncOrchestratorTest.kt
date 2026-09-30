@@ -26,7 +26,7 @@ import org.junit.Test
 class BitwardenSyncOrchestratorTest {
 
     private val vaultRepository = mockk<VaultRepository>()
-    private val sessions = VaultSessionManager()
+    private val sessions = VaultSessionManager(KdbxSessionFlow())
     private val vaultId = "https://vault.example.com"
 
     // fake 时钟起点取大值：Runtime.lastPageEnterAt=0 表示「从未同步」，

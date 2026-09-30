@@ -8,6 +8,7 @@
  */
 package io.vaultix.data.repository
 
+import io.vaultix.data.kdbx.Kdbx
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -49,4 +50,18 @@ class KdbxSessionFlow @Inject constructor() {
     fun bump() {
         revision.update { it + 1 }
     }
+
+    /**
+     * 该库当前**有没有 KDBX 会话**（= 内存里有没有它的整库明文）。
+     *
+     * ★ 为什么要在这里加一个查询，而不是让调用方直接读 `Kdbx.unlockedIds()`：
+     * `KdbxSessionStore` 是 `data:kdbx` 的 **internal**，外部测试注入不了；
+     * 而「有没有会话」这个判据需要一个**可替换的接缝**才能被单测钉住 ——
+     * 它正是 `VaultSessionManager.viewLock` 那个静默 no-op 的成因
+     * （见那里的 KDoc 与 `VaultSessionManagerTest` 的 viewLock 用例）。
+     *
+     * ⚠️ 口径必须与 `VaultRepositoryImpl.observeUnlockedVaultIds`（`sessions.unlockedIds + Kdbx.unlockedIds()`）
+     * 一致：**两个会话模型都要算**，否则又会出现"界面以为锁了 / 实际没锁"或反过来的双源不一致。
+     */
+    fun isUnlocked(vaultId: String): Boolean = vaultId in Kdbx.unlockedIds()
 }

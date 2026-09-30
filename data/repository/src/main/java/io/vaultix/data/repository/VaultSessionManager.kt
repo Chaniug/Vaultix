@@ -23,7 +23,13 @@ import javax.inject.Singleton
  *   AppLifecycleObserver 驱动 [lockAll]，本类不感知生命周期。
  */
 @Singleton
-class VaultSessionManager @Inject constructor() {
+class VaultSessionManager @Inject constructor(
+    /**
+     * KDBX 会话的可观察桥 —— 这里只用它的 [KdbxSessionFlow.isUnlocked] 判据
+     * （见 [hasOpenSession] 的 KDoc：**两个会话模型都要算**）。
+     */
+    private val kdbxSessions: KdbxSessionFlow,
+) {
 
     private val mutex = Mutex()
     private val sessions = mutableMapOf<String, SymmetricCryptoKey>()
@@ -117,11 +123,40 @@ class VaultSessionManager @Inject constructor() {
      */
     suspend fun viewLock(vaultId: String) {
         mutex.withLock {
-            if (sessions.containsKey(vaultId)) {
+            if (hasOpenSession(vaultId)) {
                 viewLockedIdsState.value = viewLockedIdsState.value + vaultId
             }
         }
     }
+
+    /**
+     * 该库当前**是否真有会话** —— 决定"查看锁"有没有意义（没有会话就没有可保护的东西）。
+     *
+     * ## ★ 2026-09-30 修：此前只看 Bitwarden 的会话表 ⇒ **KDBX 的查看锁永远是静默 no-op**
+     *
+     * 用户真机反馈：「kdbx 好像在密码条目页面，右上角点击锁定，**无法锁定**」。
+     * 根因就是这个判断：**Vaultix 有两个互不相干的会话模型** ——
+     *
+     * | 库 | 会话是什么 | 存在哪 |
+     * |---|---|---|
+     * | Bitwarden | 解包的**对称密钥** | 本类的 [sessions]（`SymmetricCryptoKey`） |
+     * | KDBX | **内存里的整库明文**（没有 SymmetricCryptoKey 可登记） | `KdbxSessionStore` |
+     *
+     * 而 `ItemsViewModel.lockNow`（条目页右上角「锁定」= **唯一的设置侧调用点**）走的
+     * 是 `viewLock(vaultId)` ⇒ 对 KDBX 库 `containsKey` 恒为 false ⇒ 标记设不上 ⇒
+     * 根导航（`RootNavViewModel`，它**确实**消费这个标记）看不到"查看锁" ⇒
+     * **按了就跟没按一样**。这个缺陷从 2026-09-12 就一直存在，直到用户点出来。
+     *
+     * ⚠️ 口径与 `VaultRepositoryImpl.observeUnlockedVaultIds` 一致（那里也是
+     * `sessions.unlockedIds + Kdbx.unlockedIds()`）—— **"已解锁"只有一个口径**，
+     * 别处不要再各写一份。
+     *
+     * ⚠️ 不要为了"灵活"把判据换成"标记一律设上"：那会让**真锁**（无会话）的库被根导航
+     * 当成查看锁 ⇒ 用户先白按一次生物识别、再被弹回解锁页要主密码（`.ai/ISSUES.md` #60
+     * 第 2 步的同族）。查看锁的语义是"**密钥还在**，只是界面收回"，没会话就不成立。
+     */
+    private fun hasOpenSession(vaultId: String): Boolean =
+        sessions.containsKey(vaultId) || kdbxSessions.isUnlocked(vaultId)
 
     /** 认证通过后清除查看锁（幂等）。 */
     suspend fun clearViewLock(vaultId: String) {

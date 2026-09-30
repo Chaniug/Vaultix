@@ -62,7 +62,7 @@ class VaultRepositorySignOutTest {
 
     /** 断言「按 `origin` 清缓存」用的假 origin（缓存键就是它）。 */
     private val kdbxOrigin = "webdav:cred-1:https://dav.example.com/valkjin.kdbx"
-    private val sessions = VaultSessionManager()
+    private val sessions = VaultSessionManager(KdbxSessionFlow())
     private lateinit var repo: VaultRepositoryImpl
 
     private val vaultId = "https://vault.example.com"
