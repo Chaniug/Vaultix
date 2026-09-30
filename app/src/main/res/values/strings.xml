@@ -96,6 +96,13 @@
     <string name="kdbx_vault_read_only_notice">此库当前只读：KDBX 写回尚未开放，新建 / 编辑 / 删除暂不可用</string>
     <!-- 库卡片副标题（KDBX）：显示文件名 + 「本地文件」标注，绝不显示 SAF 的 content:// URI。 -->
     <string name="vault_card_kdbx_subtitle">本地文件 · %1$s</string>
+    <!-- 条目页顶部的「密码库状态」行（2026-09-30 用户要求）：来源 + 条目数。
+         Bitwarden 只给域名（不带 https、不带路径），KDBX 给来源与路径。 -->
+    <string name="vault_origin_onedrive">OneDrive · %1$s</string>
+    <string name="vault_origin_webdav">WebDAV · %1$s</string>
+    <!-- 库状态行 = 来源 + 条目数。⚠️ 库**未解锁**时条目数不可知 ⇒ 只显示来源、不给数字
+         （显示 0 会是假信息：那是"不知道"，不是"没有"）。 -->
+    <string name="vault_status_with_count">%1$s · %2$d 个条目</string>
     <string name="vault_item_count">%1$d 项</string>
     <string name="vault_add_fab">添加密码库</string>
     <string name="vault_cloud_label">Bitwarden 同步库</string>

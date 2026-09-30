@@ -47,6 +47,7 @@ import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.ViewAgenda
@@ -89,6 +90,7 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.annotation.StringRes
@@ -117,6 +119,7 @@ import io.vaultix.vaultix.ui.common.itemTypeLabelRes
 import io.vaultix.vaultix.ui.common.rememberImmersiveBarPadding
 import io.vaultix.vaultix.ui.common.rememberScrollCollapseFraction
 import io.vaultix.vaultix.ui.common.toggleSelection
+import io.vaultix.vaultix.ui.common.vaultOriginLabel
 import io.vaultix.vaultix.ui.common.VaultixWavyProgressBar
 import io.vaultix.vaultix.ui.shell.BottomDockOccupiedHeight
 import io.vaultix.vaultix.ui.theme.Spacing
@@ -178,6 +181,47 @@ private fun ReadOnlyVaultNotice() {
             text = stringResource(R.string.kdbx_vault_read_only_notice),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/**
+ * 列表顶部的「密码库状态」行：**来源 + 条目数**（2026-09-30 用户要求）。
+ *
+ * 例：`vault.bitwarden.com · 42 个条目` / `OneDrive · Vaultix/我的库.kdbx · 12 个条目`。
+ *
+ * ## 为什么是**冷**色的一行小字，而不是卡片 / 徽标
+ *
+ * 它是"我在哪"的**环境信息**，不是待办、不是状态告警（告警有 [SyncNoteBanner] 与
+ * [ReadOnlyVaultNotice] 各司其职）。做成卡片会与真正的条目卡片抢视觉权重 ——
+ * 用户扫列表时第一眼应该落在条目上，不是落在"我在哪个库"。
+ *
+ * ⚠️ 文案由调用方组装（见 [ItemsList] 的 `vaultStatus`）：本函数不碰
+ * "域名怎么取 / 路径怎么拼" —— 那套口径集中在 `ui/common/VaultOriginLabel.kt`。
+ */
+@Composable
+private fun VaultStatusRow(text: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.xs, vertical = Spacing.xs),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.Filled.Storage,
+            contentDescription = null,
+            modifier = Modifier.size(READ_ONLY_ICON_SIZE),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.width(Spacing.sm))
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            // 网盘路径可能很长（WebDAV 是"主机 + 完整路径"）⇒ 单行截断，
+            // 不换行撑高整行。要看全就点 ⋮ 里的「切换密码库」，那里有完整信息。
+            overflow = TextOverflow.Ellipsis,
         )
     }
 }
@@ -582,6 +626,17 @@ private fun ItemsBody(
         )
         return
     }
+    // 「这个库在哪 · 有多少条」（2026-09-30 用户要求）。
+    // ⚠️ **未解锁时不给数字**：此刻条目数不可知，显示 0 就是把"不知道"说成"没有"
+    //    —— 与 [ItemsEmptyState] 区分「读不到 / 真的没有」是同一条纪律。
+    val vaultStatus = state.vault?.let { vault ->
+        val origin = vaultOriginLabel(vault)
+        if (vault.unlocked) {
+            stringResource(R.string.vault_status_with_count, origin, state.items.size)
+        } else {
+            origin
+        }
+    }
     ItemsList(
         groups = groups,
         listState = listState,
@@ -599,6 +654,7 @@ private fun ItemsBody(
         syncStates = state.syncStates,
         onDelete = onDelete,
         readOnly = readOnly,
+        vaultStatus = vaultStatus,
     )
 }
 
@@ -1081,6 +1137,14 @@ private fun ItemsList(
      * **说出来**，而不是让用户自己猜（2026-09-30 真机反馈驱动）。
      */
     readOnly: Boolean = false,
+    /**
+     * 「这个库在哪 · 有多少条」的状态行文案（null = 库未知，整行不画）。
+     *
+     * 由 [ItemsBody] 组装（它才有 [io.vaultix.model.VaultSummary] 与条目总数），
+     * 本函数只负责画 —— 分离的理由是**这里不再需要知道"域名/路径怎么来的"**，
+     * 那条口径集中在 `ui/common/VaultOriginLabel.kt`。
+     */
+    vaultStatus: String? = null,
 ) {
     LazyColumn(
         state = listState,
@@ -1099,6 +1163,12 @@ private fun ItemsList(
         ),
         verticalArrangement = Arrangement.spacedBy(ITEM_CARD_GAP),
     ) {
+        // 「这个库在哪 · 有多少条」放**最上面**（2026-09-30 用户要求）：它是列表的
+        // "表头"（我在哪个库、里面有多少东西），先有上下文再看内容。
+        // 只读提示排在它下面 —— 那是"为什么按钮少了"的解释，属于对**内容**的补充。
+        if (vaultStatus != null) {
+            item(key = "vault-status") { VaultStatusRow(text = vaultStatus) }
+        }
         if (readOnly) {
             // 顶部一行如实说明（见 [ReadOnlyVaultNotice] 的 KDoc）：只读是**阶段限制**，
             // 但"没有 + 按钮 / 删不掉"必须有个说法，否则用户只会以为坏了。
