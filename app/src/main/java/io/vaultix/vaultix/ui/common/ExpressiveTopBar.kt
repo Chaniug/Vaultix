@@ -19,7 +19,8 @@
  *   - 右侧动作按钮**不套容器**（2026-09-21 去掉了上游的 `Surface` 胶囊 —— 理由见
  *     [VaultixExpressiveTopBar] 里那段说明）；收起时整组缩放 1.0 → 0.85，
  *     内容色在收起时向 `onSurfaceVariant` 过渡；
- *   - 标题过长时**在组合期一次算好字号**（按可用宽度等比缩放，下限 0.72；再放不下才由
+ *   - 标题过长时在**组合期一次算好排布**（2026-10-01 起：一行放不下就**折两行**
+ *     —— 施工单 L2 —— 两行仍放不下才等比缩字号，下限 0.72；再放不下才由
  *     `TextOverflow.Ellipsis` 兜底）。⚠️ 旧实现在 `onTextLayout` 里发现溢出再改 state 缩一档
  *     ⇒ 必然"先按满字号画一帧、下一帧才变小"（用户 2026-09-30 反馈的"变大变小"）。
  * 本文件为独立实现（去掉了上游与搜索框、左右滑手势、标题点击展开耦合的部分 ——
@@ -106,7 +107,17 @@ private const val TITLE_EXPANDED_SP = 26f
 /** 收起态标题字号（sp）。 */
 private const val TITLE_COLLAPSED_SP = 16f
 
-/** 标题溢出自缩的下限。 */
+/**
+ * **两行**排布时的字号上限（施工单 L2，2026-10-01）。
+ *
+ * ⚠️ 为什么两行要单独一个更小的上限：栏高是**固定**的（`BAR_EXPANDED` = 72dp），
+ * 而列表顶部让位的高度也是按它算的（`rememberImmersiveBarPadding`）。
+ * 26sp 排两行 ≈ 62dp 文字 + 16dp 上下内边距 = 78dp ⇒ **超出预留 6dp**，
+ * 表现就是第一条内容被顶栏压住一点点（很隐蔽，只有长库名的库才有）。
+ * 20sp 两行 ≈ 48dp + 16dp = 64dp ⇒ 留在 72dp 里，不需要动栏高、不影响别的页面。
+ */
+private const val TITLE_TWO_LINE_SP = 20f
+
 /** 标题缩放的下限（低于它就宁可走省略号，也不再继续缩 —— 再小就不好读了）。 */
 private const val TITLE_MIN_SCALE = 0.72f
 
@@ -120,7 +131,22 @@ private val TITLE_CHEVRON_RESERVE = 30.dp
 private const val FONT_BUCKET_DIVISOR = 2f
 
 /**
- * 标题在 [availablePx] 内放得下的最大字号（下限 `fontSp * TITLE_MIN_SCALE`）。
+ * 标题的排布结论：字号 + 行数。
+ *
+ * ⚠️ 为什么要带行数（2026-10-01，施工单 L2）：用户反馈「左边的标题 `bitwarden` 或者
+ * `xxxx.kdbx` 显示很长，**滑动缩小时可以分成两栏显示**」。
+ * 此前唯一的应对是**一路缩字号**（下限 0.72），本质是在**牺牲可读性**换"放得下" ——
+ * 而"我在哪个库"恰恰是顶栏唯一不能丢的信息（KDBX 侧就是文件名）。
+ * ⇒ 一行放不下时改为**折成两行**（同一份信息换个排布，不丢内容），
+ *   两行仍放不下才继续缩字号，最后才交给省略号。
+ *
+ * ⚠️ 「两栏」在手机上落地就是「两行」：6 寸屏左右各占一半只会把两栏**都**压窄，
+ *   结果是两边都读不清。施工单 L2 的三个候选项里取的是 ①（标题两行）。
+ */
+private data class TitleLayout(val fontSp: Float, val maxLines: Int)
+
+/**
+ * 标题在 [availablePx] 内怎么排（字号 + 行数；字号下限 `fontSp * TITLE_MIN_SCALE`）。
  *
  * ## 为什么在**组合期**算，而不是"画完发现溢出再缩"
  *
@@ -135,24 +161,60 @@ private const val FONT_BUCKET_DIVISOR = 2f
  * ## 为什么不直接换成省略号（像 [MiddleEllipsizedText] 那样）
  *
  * 顶栏标题的**完整可读**比"字号绝对稳定"更重要：它是用户确认"我在哪个库"的第一眼信息，
- * 折成 `我的密…码库` 反而认不出。所以这里优先缩字号；只有当**缩到下限仍放不下**时才
- * 交给 `TextOverflow.Ellipsis` 兜底（那时至少说明"后面还有"）。
+ * 折成 `我的密…码库` 反而认不出。
+ *
+ * ⇒ 三级应对（2026-10-01 起的顺序，**先换行、再缩字、最后才省略**）：
+ * ① 一行放得下 ⇒ 原样；② 一行放不下 ⇒ **折两行**（见 [TitleLayout]）；
+ * ③ 两行仍放不下 ⇒ 缩字号（下限 [TITLE_MIN_SCALE]）；
+ * ④ 连最小字号都放不下 ⇒ 交给 `TextOverflow.Ellipsis`（那时至少说明"后面还有"）。
+ *
+ * ## ⚠️ 两行那一步是**估算**，不是真换行
+ *
+ * 判定用的是 `文本总宽 ≤ 可用宽 × 2`，即"**假设两行都填满**"。
+ * 真换行是贪心的：除最后一行外每行未必 100% 填满，所以理论上存在
+ * "总宽刚好卡在 2 倍以内、但实际要 3 行"的边界情况（断点很不巧时）。
+ *
+ * ⇒ 该情况的后果是**第 ④ 级兜底**（第二行尾部出现省略号），不会溢出、不会崩、不会压到按钮。
+ * 之所以不改成"按 constraints 真测一次"：真测要引入 `Constraints(maxWidth = …)` 参数，
+ * 与同项目 [MiddleEllipsizedText] 的宽度比较写法不再一致，而收益只是消掉一个很少命中的边界。
  */
-private fun fitTitleFontSize(
+private fun fitTitleLayout(
     measurer: TextMeasurer,
     baseStyle: TextStyle,
     title: String,
     availablePx: Int,
     fontSp: Float,
-): Float {
-    if (availablePx <= 0 || title.isEmpty()) return fontSp
+): TitleLayout {
+    if (availablePx <= 0 || title.isEmpty()) return TitleLayout(fontSp, maxLines = 1)
     val measured = measurer
         .measure(text = AnnotatedString(title), style = baseStyle)
         .size.width
-    if (measured <= availablePx) return fontSp
+    if (measured <= availablePx) return TitleLayout(fontSp, maxLines = 1)
+
+    // ⚠️ 收起态（16sp）**不折两行**：小字号折两行看着像"标题换行了"而不是"分栏"，
+    //    且收起态栏高只有 48dp，两行会把右侧按钮组挤下去。⇒ 收起态维持老行为（缩字号）。
+    if (fontSp > TITLE_COLLAPSED_SP) {
+        val twoLineSp = minOf(fontSp, TITLE_TWO_LINE_SP)
+        val twoLineStyle = baseStyle.copy(fontSize = twoLineSp.sp)
+        val measuredTwoLine = measurer
+            .measure(text = AnnotatedString(title), style = twoLineStyle)
+            .size.width
+        val twoLineAvailablePx = availablePx * 2
+        if (measuredTwoLine <= twoLineAvailablePx) return TitleLayout(twoLineSp, maxLines = 2)
+        // 两行也放不下 ⇒ 才继续缩（下限同单行）：此时至少已经把两行用完。
+        val ratio = twoLineAvailablePx.toFloat() / measuredTwoLine.toFloat()
+        return TitleLayout(
+            fontSp = (twoLineSp * ratio).coerceAtLeast(twoLineSp * TITLE_MIN_SCALE),
+            maxLines = 2,
+        )
+    }
+
     // 按比例缩放（不是逐档试）：一次到位，且不同长度的标题各自得到合适的字号。
     val ratio = availablePx.toFloat() / measured.toFloat()
-    return (fontSp * ratio).coerceAtLeast(fontSp * TITLE_MIN_SCALE)
+    return TitleLayout(
+        fontSp = (fontSp * ratio).coerceAtLeast(fontSp * TITLE_MIN_SCALE),
+        maxLines = 1,
+    )
 }
 
 /** 行高相对字号的倍数（上游同款：`lineHeight = fontSize * 1.2`）。 */
@@ -272,7 +334,7 @@ fun VaultixExpressiveTopBar(
         animationSpec = tween(ANIM_MS),
         label = "topbar_content_color",
     )
-    // ⚠️ 标题的"过长怎么办"**不在渲染之后再补救** —— 见 [fitTitleFontSize]。
+    // ⚠️ 标题的"过长怎么办"**不在渲染之后再补救** —— 见 [fitTitleLayout]。
     //    旧写法是在 `onTextLayout` 里发现溢出就改 state 缩一档、下一帧再量再缩（上限 0.72）。
     //    那必然先按满字号画一帧、再往下跳，用户看到的就是"左侧标题先大后小地动了一下"
     //    （2026-09-30 用户反馈：「左侧有个变大变小的情况，视觉体验不太好」）。
@@ -314,14 +376,14 @@ fun VaultixExpressiveTopBar(
                     // 直接用它会每帧都重算一次测量。按 0.5sp 粒度分桶 ⇒ 整段动画约 20 次测量，
                     // 既便宜又足够平滑（每桶之间字号只差 0.5sp，看不出台阶）。
                     val fontBucket = (titleFontSize * FONT_BUCKET_DIVISOR).roundToInt()
-                    val fittedFontSize = remember(
+                    val fitted = remember(
                         title,
                         constraints.maxWidth,
                         reservePx,
                         fontBucket,
                         baseStyle,
                     ) {
-                        fitTitleFontSize(
+                        fitTitleLayout(
                             measurer = measurer,
                             baseStyle = baseStyle.copy(fontSize = titleFontSize.sp),
                             title = title,
@@ -332,15 +394,19 @@ fun VaultixExpressiveTopBar(
                     Text(
                         text = title,
                         style = baseStyle,
-                        fontSize = fittedFontSize.sp,
-                        lineHeight = (fittedFontSize * LINE_HEIGHT_RATIO).sp,
+                        fontSize = fitted.fontSp.sp,
+                        lineHeight = (fitted.fontSp * LINE_HEIGHT_RATIO).sp,
                         fontWeight = FontWeight.SemiBold,
                         color = contentColor,
-                        maxLines = 1,
+                        // ⚠️ 1 或 2 行由 `fitTitleLayout` 在**组合期**定好：放得下就一行，
+                        //    放不下折两行（施工单 L2），不是"渲染后再补救"。
+                        maxLines = fitted.maxLines,
                         // ⚠️ 兜底是省略号而**不是** `Clip`：连最小字号都放不下时，
                         //    把尾巴裁掉会让用户以为标题就这么短；省略号至少说明"后面还有"。
                         overflow = TextOverflow.Ellipsis,
-                        softWrap = false,
+                        // ⚠️ 必须允许换行，否则两行排布根本不会发生（`softWrap = false`
+                        //    会把所有文本按一行量，再交给省略号）。
+                        softWrap = true,
                     )
                 }
             }
