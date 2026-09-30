@@ -131,11 +131,16 @@ class KdbxAutoUploaderTest {
     @Test
     fun `不同库_互不阻塞`() = runTest {
         val status = statusOf(KdbxCloudSyncStatus.PENDING_UPLOAD)
+        // ⚠️ stub 必须**显式带 receiver**（`dao.get(...)`），不能写成裸的 `get(...)`：
+        //    `coEvery { }` 块的 receiver 是 `MockKMatcherScope`，它自己有个 `get`
+        //    （返回 `DynamicCall`，用于动态调用）⇒ 裸写会被它**遮蔽**，
+        //    报 `expected 'MockKMatcherScope.DynamicCall', actual 'VaultEntity'`（CI 上炸过）。
+        //    既有测试（如 `BitwardenSyncOrchestratorTest`）一律写 `vaultRepository.syncVault(…)`
+        //    也是同一个原因。
         // 两个库的 origin 相同、而 `id` 不参与上传器的任何判定（锁用调用方传的 vaultId，
         // 云端判断只看 row.origin）⇒ 这里不必按入参分发行，也就不必用 `firstArg()`。
-        val dao = mockk<VaultDao> {
-            coEvery { get(any()) } coAnswers { row(CLOUD_ORIGIN, status.get(), OTHER_ID) }
-        }
+        val dao = mockk<VaultDao>()
+        coEvery { dao.get(any()) } coAnswers { row(CLOUD_ORIGIN, status.get(), OTHER_ID) }
         val running = AtomicInteger(0)
         val maxConcurrent = AtomicInteger(0)
         val coordinator = mockk<KdbxCloudSyncCoordinator> {
@@ -164,8 +169,13 @@ class KdbxAutoUploaderTest {
     private fun statusOf(initial: KdbxCloudSyncStatus): AtomicReference<String?> =
         AtomicReference(initial.name)
 
-    private fun daoFor(origin: String, status: AtomicReference<String?>): VaultDao = mockk {
-        coEvery { get(VAULT_ID) } coAnswers { row(origin, status.get(), VAULT_ID) }
+    private fun daoFor(origin: String, status: AtomicReference<String?>): VaultDao {
+        val dao = mockk<VaultDao>()
+        // ⚠️ 同上：`dao.get(...)` 的 receiver 不能省（省了会被 `MockKMatcherScope.get` 遮蔽）。
+        // ⚠️ `coAnswers` 而不是 `returns`：`row` 要读 `status` 的**实时值**，
+        //    否则"状态被上传消费掉"这件事测不出来（那样会跑满 MAX_ROUNDS）。
+        coEvery { dao.get(VAULT_ID) } coAnswers { row(origin, status.get(), VAULT_ID) }
+        return dao
     }
 
     private fun row(origin: String, status: String?, id: String): VaultEntity = VaultEntity(
