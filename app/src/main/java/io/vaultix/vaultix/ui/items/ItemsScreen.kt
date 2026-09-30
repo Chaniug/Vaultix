@@ -163,11 +163,15 @@ private val READ_ONLY_ICON_SIZE = 16.dp
  *
  * 1. **来源（域名 / 路径）走中间省略**（保头保尾）：路径的头（哪台服务器）与尾
  *    （哪个文件）最关键，中间目录最可省。尾部省略会把"打开的是哪个库"先吃掉；
- * 2. **条目数**用 `weight` 之外的位置 —— 它**不参与压缩**，永远不会被长路径挤掉。
- *    这是本行信息的"锚点"：来源可以被省略号截，但"有多少条"必须始终完整可读。
+ * 2. **条目数与同步角标另起一行**（2026-10-01 施工单 L1）：它们**不参与压缩**，
+ *    也就永远不会被长路径挤掉 —— 这是本块信息的"锚点"：
+ *    来源可以被省略号截，但"有多少条 / 云端是不是旧的"必须始终完整可读。
  *
- * ⇒ 最坏情况（WebDAV 长路径 + 窄屏）长这样：
- * `WebDAV · nas.local:50…我的密码库.kdbx        12 个条目`
+ * ⇒ 最坏情况（WebDAV 长路径 + 窄屏）长这样（**两行**）：
+ * ```
+ * 🗄 WebDAV · nas.local:50…我的密码库.kdbx
+ *    云端有更新 · 12 个条目
+ * ```
  *
  * ## 为什么是**冷**色的一行小字，而不是卡片 / 徽标
  *
@@ -177,48 +181,67 @@ private val READ_ONLY_ICON_SIZE = 16.dp
  */
 @Composable
 private fun VaultStatusRow(card: VaultCardInfo) {
-    Row(
+    // ★ 2026-10-01（施工单 L1）：**两行**。
+    //   一行放不下"长来源 + 角标 + 条目数"三样 —— 用户原话是"右边的密码库名称 +
+    //   路径条目放一起，一行很长"。挤在一行时，唯一的解法是**牺牲某一项的宽度**
+    //   （来源被折短 / 条目数被挤成省略号），而这两项恰恰都是不该丢的。
+    //   ⇒ 竖着分两行：第一行只放来源，第二行放角标与条目数。
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = Spacing.xs, vertical = Spacing.xs),
-        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(
-            Icons.Filled.Storage,
-            contentDescription = null,
-            modifier = Modifier.size(READ_ONLY_ICON_SIZE),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.width(Spacing.sm))
-        // 来源吃满剩余宽度、由 [MiddleEllipsizedText] 自己决定折到几个字符。
-        MiddleEllipsizedText(
-            text = card.origin,
-            modifier = Modifier.weight(1f),
-            style = MaterialTheme.typography.bodySmall.copy(
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            ),
-        )
-        // 同步角标放在条目数**之前**：它比"有多少条"更紧急（云端可能还是旧的），
-        // 而两者都不参与压缩 —— 宁可来源先被折短。
-        if (card.syncBadge != null) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                Icons.Filled.Storage,
+                contentDescription = null,
+                modifier = Modifier.size(READ_ONLY_ICON_SIZE),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             Spacer(Modifier.width(Spacing.sm))
-            Text(
-                text = syncBadgeLabel(card.syncBadge),
-                style = MaterialTheme.typography.labelMedium,
-                color = syncBadgeColor(card.syncBadge),
-                maxLines = 1,
+            // 来源独占整行宽度、由 [MiddleEllipsizedText] 自己决定折到几个字符。
+            MiddleEllipsizedText(
+                text = card.origin,
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodySmall.copy(
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                ),
             )
         }
-        if (card.countText != null) {
-            Spacer(Modifier.width(Spacing.sm))
-            // ⚠️ **不加 weight、不设 maxLines 压缩**：条目数是这一行的锚点信息，
-            //    长路径把它挤成省略号就失去意义了。宁可来源先被折短。
-            Text(
-                text = card.countText,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-            )
+        if (card.syncBadge != null || card.countText != null) {
+            Row(
+                // 缩进对齐来源文字（图标 + 图标后的间隙）⇒ 两行是一个整体信息块，
+                // 而不是两个各自为政的行。
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = READ_ONLY_ICON_SIZE + Spacing.sm, top = Spacing.xs),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                // 同步角标放在条目数**之前**：它比"有多少条"更紧急（云端可能还是旧的）。
+                if (card.syncBadge != null) {
+                    Text(
+                        text = syncBadgeLabel(card.syncBadge),
+                        // ⚠️ 两行之后"来源"不再替这一行吸收挤压 ⇒ 第二行的**可压缩项换成角标**
+                        //    （`fill = false`：只占文字实际宽度，不把条目数顶到行尾）。
+                        //    角标文案都很短（"云端有更新"），正常屏宽下压不到它头上。
+                        modifier = Modifier.weight(1f, fill = false),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = syncBadgeColor(card.syncBadge),
+                        maxLines = 1,
+                    )
+                }
+                if (card.countText != null) {
+                    if (card.syncBadge != null) Spacer(Modifier.width(Spacing.sm))
+                    // ⚠️ **不压缩**：条目数是这一行的锚点信息。分两行之后它已有整行
+                    //    可用，不再需要跟长路径抢宽度 —— 这正是拆行的收益。
+                    Text(
+                        text = card.countText,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                    )
+                }
+            }
         }
     }
 }
