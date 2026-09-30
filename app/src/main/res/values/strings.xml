@@ -1261,5 +1261,9 @@
     <string name="vault_result_sync_unsupported">「%1$s」没有可同步的远端</string>
     <!-- 🔴 远端更新但替换本地会话要重新解锁：不能当成"已同步"。 -->
     <string name="vault_result_sync_needs_unlock">「%1$s」远端有更新，重新解锁后会拉取</string>
+    <!-- 施工单 S4：锁着的库跑同步必然失败（`Kdbx.saveVia` 第一行就挡）。
+         入口处就挡住并单独成态 —— 说"解锁后才能同步"（**下一步**），
+         而不是等跑完一趟必然失败的同步再甩一句"请先解锁该密码库"。 -->
+    <string name="vault_result_sync_locked">「%1$s」已锁定，解锁后才能同步</string>
     <string name="vault_result_failed">「%1$s」操作失败：%2$s</string>
 </resources>

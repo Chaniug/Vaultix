@@ -182,23 +182,24 @@ class VaultListViewModel @Inject constructor(
     /**
      * 手动触发一次 KDBX 网盘同步。
      *
-     * ## `localChangedSinceLastSync` 传什么（这是本方法的唯一难点）
+     * ## `localChangedSinceLastSync` 传什么
      *
-     * ⚠️ 我们**不知道**"本地改没改" —— 条目级编辑发生在别处（条目页 / 自动填充回写），
-     * 没往这里上报。所以这里走保守路线：**传 true**（"本地可能改过"）。
+     * ⚠️ 2026-10-01（施工单 S3）：**现查** `KdbxSyncRepository.localChangedSinceLastSync`
+     * （读持久化的 `vaults.syncStatus`）。
      *
-     * 两种传法的后果对比：
-     * - 传 `false` 而本地其实改过 ⇒ 编排器判定"两边都没变"，直接 `AlreadyInSync`
-     *   ⇒ **用户的编辑永远推不上去**（换台设备看不到，且没有任何提示）。**这是数据丢失**。
-     * - 传 `true` 而本地其实没改 ⇒ 若远端恰好也变了，会报一次冲突让用户拍板。
-     *   **这只是一次多余的确认**，用户点"用远端覆盖"即可，没有数据丢失。
+     * 此前这里恒传 `true`（"本地可能改过"），理由是当时**没有**可靠判据：
+     * 条目级编辑发生在别处，没往这里上报。两种误判的代价不对等 ——
+     * - 传 `false` 而本地其实改过 ⇒ 编排器判"两边都没变" ⇒ **改动永远推不上去**（数据丢失）；
+     * - 传 `true` 而本地其实没改 ⇒ 最多多报一次冲突（用户点一下"用远端覆盖"即可）。
      *
-     * ⇒ 两种误判的代价完全不对等，必须选代价小的那个。
-     *   真正的"精确判定"要在条目编辑处埋一个 dirty 标记（后续批次）。
+     * ⇒ 保守传 `true` 在当时是对的。现在条目写回已经会 `markLocalEdited`
+     * （`KdbxItemRepository.persist`），持久化的 `syncStatus` 就是**那笔 dirty 标记**
+     * ⇒ 可以精确判定，不必再用"猜有"换"不丢"。
      */
     fun syncKdbxVault(vaultId: String) {
         viewModelScope.launch {
-            when (val report = kdbxSyncRepository.sync(vaultId, localChangedSinceLastSync = true)) {
+            val localChanged = kdbxSyncRepository.localChangedSinceLastSync(vaultId)
+            when (val report = kdbxSyncRepository.sync(vaultId, localChangedSinceLastSync = localChanged)) {
                 is KdbxSyncReport.InSync ->
                     _events.emit(Event.KdbxSynced("已是最新版本"))
 
@@ -209,14 +210,13 @@ class VaultListViewModel @Inject constructor(
                     _events.emit(Event.KdbxSynced("已从云端更新"))
 
                 // ★ 冲突：交给 UI 弹三选项对话框，这里不发 toast。
-                is KdbxSyncReport.Conflict -> {
-                    val name = vaultRepository.observeVaults().first()
-                        .firstOrNull { it.id == vaultId }?.name ?: "该密码库"
-                    _events.emit(Event.KdbxConflict(vaultId = vaultId, vaultName = name))
-                }
+                is KdbxSyncReport.Conflict -> emitConflict(vaultId)
 
-                is KdbxSyncReport.NeedsReload ->
-                    _events.emit(Event.KdbxSynced("云端有更新，重新解锁后会拉取"))
+                // ★ S2：远端有更新、本地没改 ⇒ **真的去拉**。
+                //   此前只 toast 一句"重新解锁后会拉取" —— 那句话承诺了一件
+                //   **没人去做的事**（解锁流程读的是缓存/远端，与这次同步无关），
+                //   用户拿不到新数据，只能一直看着"云端有更新"的角标。
+                is KdbxSyncReport.NeedsReload -> pullRemote(vaultId)
 
                 is KdbxSyncReport.NoCloudSource ->
                     _events.emit(Event.KdbxSyncFailed("这个库还没有配置云端来源"))
@@ -248,6 +248,31 @@ class VaultListViewModel @Inject constructor(
                 }
             }
         }
+    }
+
+    /**
+     * 拉取云端更新（施工单 S2）。
+     *
+     * ⚠️ 仓储侧已保证"本地有未上传改动时不拉"（那会丢数据）⇒ 这里只会看到
+     * 「拉到了」/「两边都改了，要拍板」/「失败（多半是会话换不了）」三种结果。
+     */
+    private suspend fun pullRemote(vaultId: String) {
+        when (val report = kdbxSyncRepository.pull(vaultId)) {
+            is KdbxSyncReport.Downloaded -> _events.emit(Event.KdbxSynced("已从云端更新"))
+
+            is KdbxSyncReport.Conflict -> emitConflict(vaultId)
+
+            is KdbxSyncReport.Failed -> _events.emit(Event.KdbxSyncFailed(report.reason))
+
+            else -> _events.emit(Event.KdbxSyncFailed("未能拉取云端更新"))
+        }
+    }
+
+    /** 冲突：交给 UI 弹三选项对话框，这里不发 toast（与 `syncKdbxVault` 的处理一致）。 */
+    private suspend fun emitConflict(vaultId: String) {
+        val name = vaultRepository.observeVaults().first()
+            .firstOrNull { it.id == vaultId }?.name ?: "该密码库"
+        _events.emit(Event.KdbxConflict(vaultId = vaultId, vaultName = name))
     }
 
     private suspend fun emitResolve(report: KdbxSyncReport, successMessage: String) {

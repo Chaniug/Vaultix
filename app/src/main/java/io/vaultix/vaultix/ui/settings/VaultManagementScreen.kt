@@ -560,6 +560,8 @@ private fun actionResultText(
         stringResource(R.string.vault_result_sync_unsupported, vaultName)
     VaultActionsController.Outcome.SyncNeedsUnlock ->
         stringResource(R.string.vault_result_sync_needs_unlock, vaultName)
+    VaultActionsController.Outcome.SyncLocked ->
+        stringResource(R.string.vault_result_sync_locked, vaultName)
     is VaultActionsController.Outcome.Failed ->
         stringResource(R.string.vault_result_failed, vaultName, outcome.detail)
 }

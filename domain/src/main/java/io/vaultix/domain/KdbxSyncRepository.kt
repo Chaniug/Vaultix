@@ -45,6 +45,31 @@ interface KdbxSyncRepository {
     suspend fun sync(vaultId: String, localChangedSinceLastSync: Boolean): KdbxSyncReport
 
     /**
+     * **拉取远端更新**（施工单 S2）。
+     *
+     * 语义与 [resolveUsingRemote] 相同（远端字节 → 替换已解锁会话），差别在**前置检查**：
+     * 只在"本地没有未上传的改动"时才真的拉。
+     *
+     * ⚠️ 这条限制不是保守，是**必须**：拉取会用远端内容替换会话，本地那笔没传上去的
+     * 改动就**永久没了**，而且没有任何报错（用户以为它还在）。
+     * ⇒ 两边都改时返回 [KdbxSyncReport.Conflict]，把决定权交回用户。
+     *
+     * @return [KdbxSyncReport.Downloaded] = 新数据已在会话里；
+     *         失败 / 没解锁 ⇒ [KdbxSyncReport.Failed]（**不要**当成已同步）。
+     */
+    suspend fun pull(vaultId: String): KdbxSyncReport
+
+    /**
+     * **现查**"自上次同步以来本地有没有改动"（施工单 S3）。
+     *
+     * ⚠️ 为什么要有这个入口：此前这份判据写在 `VaultActionsController` 里，
+     * 读的是 UI 传入的 `VaultSummary` **快照** —— 快照可能在 Room 刷新之前就被点掉，
+     * 于是判成"本地没改"⇒ 同步报"无变化"而**改动根本没上传**（静默丢改动）。
+     * ⇒ 判据下沉到数据层**现查** `vaults.syncStatus`，UI 不再自己抄一份。
+     */
+    suspend fun localChangedSinceLastSync(vaultId: String): Boolean
+
+    /**
      * 冲突时用户拍板「**用远端覆盖本地**」。
      *
      * 语义：把远端当前版本拉下来、**替换本地会话**，本地未上传的改动被丢弃。
@@ -76,8 +101,8 @@ interface KdbxSyncRepository {
      *
      * ## 为什么必须有这一步
      *
-     * 同步的 `localChangedSinceLastSync` 由调用方从**持久化的 `vaults.syncStatus`** 读出来
-     * （见 `VaultActionsController.localChanged`）。⇒ 改完不标记的话状态还停在 `IN_SYNC`，
+     * 同步的 `localChangedSinceLastSync` 由调用方从**持久化的 `vaults.syncStatus`** 现查出来
+     * （见 [localChangedSinceLastSync]）。⇒ 改完不标记的话状态还停在 `IN_SYNC`，
      * 下一次同步会判"两边都没变"直接返回"无变化" ⇒ **那笔改动永远推不上去**
      * （换台设备看不到，而用户以为已经同步了）。
      *

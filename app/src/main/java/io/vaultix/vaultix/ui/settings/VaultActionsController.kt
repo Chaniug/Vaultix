@@ -12,7 +12,6 @@ import io.vaultix.domain.KdbxSyncReport
 import io.vaultix.domain.KdbxSyncRepository
 import io.vaultix.domain.VaultRepository
 import io.vaultix.domain.VaultSyncReport
-import io.vaultix.model.KdbxCloudSyncStatus
 import io.vaultix.model.VaultKind
 import io.vaultix.model.VaultSummary
 import kotlinx.coroutines.CoroutineScope
@@ -55,8 +54,12 @@ import kotlinx.coroutines.launch
  * ## 同步的 `localChangedSinceLastSync` 从哪来
  *
  * `KdbxSyncRepository.sync` 要求调用方告诉它"本地改过没有"，**实现层不去猜**
- * （猜错两个方向都糟）。这里取持久化的 `vaults.syncStatus`：它描述的正是
- * "这个库与远端的差距"，比临时探一次内存可靠。
+ * （猜错两个方向都糟）。
+ *
+ * ⚠️ 2026-10-01（施工单 S3）：这个值**必须现查**
+ * （`KdbxSyncRepository.localChangedSinceLastSync`，读持久化的 `vaults.syncStatus`），
+ * **不能读 UI 传入的 `VaultSummary.syncStatus` 快照** —— 快照可能在 Room 刷新之前
+ * 就被点掉 ⇒ 判"没改" ⇒ 同步报"无变化"，而**改动根本没上传**（静默）。
  */
 class VaultActionsController(
     private val vaultRepository: VaultRepository,
@@ -110,6 +113,16 @@ class VaultActionsController(
          */
         data object SyncNeedsUnlock : Outcome
 
+        /**
+         * ★ 库是**锁着的**，同步做不了（施工单 S4）。
+         *
+         * 此前落在 [SyncFailed] 上，文案是 `Kdbx.saveVia` 那句「请先解锁该密码库」——
+         * 它没错，但是一条**死路**：用户看到一句失败，却不知道下一步该干什么
+         * （而且这句话是在**跑完一趟必然失败的同步**之后才出现的）。
+         * ⇒ 在入口就挡住并单独成态：文案说"解锁后才能同步"，是**下一步**而不是失败。
+         */
+        data object SyncLocked : Outcome
+
         data class Failed(val detail: String) : Outcome
     }
 
@@ -155,12 +168,20 @@ class VaultActionsController(
      *   否则会把它盖掉 —— 用户看到"没变化"而实际什么都没定下来）。
      */
     private suspend fun syncKdbx(vault: VaultSummary): Outcome? {
-        val report = kdbxSyncRepository.sync(vault.id, localChanged(vault))
+        // ★ S4：锁着的库**同步必然失败**（`Kdbx.saveVia` 第一行就挡）。
+        //   在入口挡住，而不是让用户看一句"请先解锁该密码库"的失败。
+        if (!vault.unlocked) return Outcome.SyncLocked
+
+        // ★ S3：判据**现查**，不用 UI 传进来的快照 —— 快照可能是 Room 刷新之前的那一版，
+        //   判"没改"会让这次同步报"无变化"而改动根本没上传（静默丢改动）。
+        val localChanged = kdbxSyncRepository.localChangedSinceLastSync(vault.id)
+        val report = kdbxSyncRepository.sync(vault.id, localChanged)
         return when (report) {
             is KdbxSyncReport.InSync -> Outcome.SyncUnchanged
             is KdbxSyncReport.Uploaded -> Outcome.Synced(null)
             is KdbxSyncReport.Downloaded -> Outcome.Synced(null)
-            is KdbxSyncReport.NeedsReload -> Outcome.SyncNeedsUnlock
+            // ★ S2：远端有更新、本地没改 ⇒ **真的去拉**（此前只如实上报，用户拿不到新数据）。
+            is KdbxSyncReport.NeedsReload -> pullRemote(vault)
             is KdbxSyncReport.NoCloudSource -> Outcome.SyncUnsupported
             is KdbxSyncReport.Failed -> Outcome.SyncFailed(report.reason)
             // ★ 冲突**不在这里收敛**：拒写之后重试永远好不了，必须让用户拍板。
@@ -169,6 +190,26 @@ class VaultActionsController(
                 null
             }
         }
+    }
+
+    /**
+     * 拉取远端更新（S2）后的结论。
+     *
+     * ⚠️ [KdbxSyncReport.Failed] 落在这里多半是**会话替换失败**（库在拉取期间被锁了 /
+     * 凭据拿不出来）⇒ 给 [Outcome.SyncNeedsUnlock]，它指向"重新解锁"这个**下一步**，
+     * 比一句失败有用。
+     */
+    private suspend fun pullRemote(vault: VaultSummary): Outcome? = when (
+        val report = kdbxSyncRepository.pull(vault.id)
+    ) {
+        is KdbxSyncReport.Downloaded -> Outcome.Synced(null)
+        is KdbxSyncReport.Failed -> Outcome.SyncNeedsUnlock
+        // 本地也有改动 ⇒ 拉了会丢，交回用户拍板（同 sync 的冲突分支）。
+        is KdbxSyncReport.Conflict -> {
+            _dialog.value = Dialog.Conflict(vault)
+            null
+        }
+        else -> Outcome.SyncFailed("拉取远端更新未成功")
     }
 
     /** 退出：清本机缓存与凭据（远程不动）。先出确认对话框。 */
@@ -237,14 +278,10 @@ class VaultActionsController(
         }
     }
 
-    /** 自上次同步以来本地有没有改动（取持久化的 `syncStatus`，不去猜）。 */
-    private fun localChanged(vault: VaultSummary): Boolean = when (vault.syncStatus) {
-        KdbxCloudSyncStatus.PENDING_UPLOAD,
-        KdbxCloudSyncStatus.PENDING_UPLOAD_WITH_LOCAL_CHANGES,
-        KdbxCloudSyncStatus.CONFLICT,
-        -> true
-        else -> false
-    }
+    // ⚠️ 原先这里有一份 `localChanged(vault)`：读 UI 传入的 `VaultSummary.syncStatus`
+    // **快照**，会在 Room 刷新之前被点掉 ⇒ 判"没改"⇒ 报"无变化"而改动没上传（S3）。
+    // 判据已下沉到 `KdbxSyncRepository.localChangedSinceLastSync`（**现查**），
+    // 枚举侧的定义在 `KdbxCloudSyncStatus.impliesLocalChanges` —— **只留一份**，别再抄回来。
 }
 
 /**

@@ -26,6 +26,7 @@ package io.vaultix.data.repository.kdbx
 import io.vaultix.domain.KdbxSyncReport
 import io.vaultix.domain.KdbxSyncRepository
 import io.vaultix.database.dao.VaultDao
+import io.vaultix.model.KdbxCloudSyncStatus
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import javax.inject.Inject
@@ -35,13 +36,46 @@ import javax.inject.Singleton
 class KdbxSyncRepositoryImpl @Inject constructor(
     private val coordinator: KdbxCloudSyncCoordinator,
     private val vaultDao: VaultDao,
+    /**
+     * 会话替换后要让界面重读（施工单 S2）。
+     *
+     * ⚠️ 少了这一次 bump：「拉取成功」而列表**还是旧内容** —— 用户以为拉坏了，
+     * 更糟的是他可能就此再保存一次，把旧内容推回远端。
+     */
+    private val kdbxSessions: KdbxSessionFlow,
 ) : KdbxSyncRepository {
 
     override suspend fun sync(vaultId: String, localChangedSinceLastSync: Boolean): KdbxSyncReport =
         coordinator.sync(vaultId, localChangedSinceLastSync).toReport()
 
-    override suspend fun resolveUsingRemote(vaultId: String): KdbxSyncReport =
-        coordinator.resolveUsingRemote(vaultId).toReport()
+    override suspend fun resolveUsingRemote(vaultId: String): KdbxSyncReport {
+        val result = coordinator.resolveUsingRemote(vaultId)
+        if (result is KdbxSyncResult.Downloaded) kdbxSessions.bump()
+        return result.toReport()
+    }
+
+    /**
+     * 拉取远端更新（施工单 S2）：复用 [KdbxCloudSyncCoordinator.resolveUsingRemote]
+     * 那条**已有**的路径（拉字节 → 替换会话 → 记状态），**不另写一条拉取** ——
+     * 两条路必然漂移，而漂移在这里的代价是"一边拉了、一边没拉"的静默不一致。
+     *
+     * 多出来的只有两件事：① 前置的"本地没改"检查；② 成功后 bump 让界面重读。
+     */
+    override suspend fun pull(vaultId: String): KdbxSyncReport {
+        // ⚠️ 本地有未上传的改动 ⇒ 拉下来会**永久丢掉**那笔改动，且没有任何报错。
+        //    ⇒ 转冲突，让用户在「用远端 / 用本地」之间拍板（绝不自动替他选）。
+        if (localChangedSinceLastSync(vaultId)) return KdbxSyncReport.Conflict(currentRemoteVersion = null)
+        return resolveUsingRemote(vaultId)
+    }
+
+    /**
+     * 现查本地有没有改动（施工单 S3）。
+     *
+     * 判据在 `KdbxCloudSyncStatus.impliesLocalChanges`（**只此一份**），
+     * 这里只负责"现查"——读的是库里**此刻**的 `syncStatus`，不是 UI 传进来的快照。
+     */
+    override suspend fun localChangedSinceLastSync(vaultId: String): Boolean =
+        KdbxCloudSyncStatus.fromName(vaultDao.get(vaultId)?.syncStatus)?.impliesLocalChanges == true
 
     override suspend fun resolveUsingLocal(vaultId: String): KdbxSyncReport =
         coordinator.resolveUsingLocal(vaultId).toReport()
