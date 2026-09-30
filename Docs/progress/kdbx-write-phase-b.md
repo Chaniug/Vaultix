@@ -86,6 +86,33 @@
 ⚠️ 这条与历史行为**相反**：旧代码能读 3.1，是本轮主动收窄的（用户 2026-09-30 拍板）。
 ⇒ `KdbxFileSource` / 解锁路径的既有测试里若有 3.1 样本，要一并改成"应被拒绝"。
 
+### 2.7 ✅ 历史记录：**跟随 KeePass 的做法**（2026-09-30 用户要求「参考他们的做法」）
+
+上游（KeePass / KeePassXC / KeePassDX 与 kotpass）存记录靠**三条腿**：
+
+| 机制 | 存什么 | kotpass 里的入口 |
+|---|---|---|
+| **`<History>`**（每条目） | **一份快照列表**，每项是一条**完整 `<Entry>` 副本**（不是 diff） | `Entry.withHistory { }` |
+| **`<Times>`**（每条目） | Creation / LastAccess / LastModification / LocationChanged / Expiry / Expires / UsageCount | `Group.modifyEntry` **自动**刷新后两者 |
+| **`<DeletedObjects>`**（整库） | 墓碑列表（"这条被删了"，供同步判定） | `removeEntry` 会写它 |
+| 修剪 | `Meta.historyMaxItems`（默认 10）/ `historyMaxSize` / `maintenanceHistoryDays`（默认 365） | `cleanupHistory(reference)` |
+
+★ **`withHistory` 的确切语义**（读上游源码核实，别凭签名猜）：
+**先把「当前 entry（并把它的 `history` 清空）」存成快照，再返回 `block()` 的结果、
+并把快照追加进结果的 `history`**。⇒ 就是「改之前那一版进历史」，与 KeePass 行为一致。
+
+**判决：W1 的 `updateEntry` 一律走 `withHistory`；修剪交给 `cleanupHistory`。**
+
+⚠️ **这条不能推迟**：`history` 是**不可事后补**的 —— 某一次编辑若没写快照，
+那一版旧值就**永久拿不回来**（没法凭空造）。所以必须在**第一次写回之前**定死，
+"先不存、以后再补"不成立。
+
+⚠️ **与 Bitwarden 的不对称要如实对待**：BW 只有 `passwordHistory`（**只存密码的旧值**，
+不存整条）。Vaultix 的 `CipherDto` 已声明 `passwordHistory` 但**没有映射进领域模型**
+（与 `creationDate` 同一种"服务端有、我们没接"，见 2026-09-30 的条目时间字段修复）。
+⇒ KDBX 侧用完整快照、BW 侧只有密码历史，**这是两个库能力的真实差异**，
+不要为了"体验统一"把 KDBX 降成只存密码（那是主动丢掉它更好的能力）。
+
 ## 3. 目标架构（三层，别多别少）
 
 ```
