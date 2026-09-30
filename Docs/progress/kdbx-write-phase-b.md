@@ -111,19 +111,26 @@ UI（不感知库类型）
 ## 4. 分批施工（每批独立可验收、可提交）
 
 ### 批次 W0 · **新建库**（纯 data:kdbx + 添加流程，可独立验收）
-- [ ] `KdbxCreator.createEmpty(name, password, keyFile?)`：
-      `KeePassDatabase.Ver4x.create(...)` → 建 `RecycleBin` 组 → `KdbxEncoder.encode` → 落盘
-      ⇒ 目标 **KDBX 4.1 + Argon2d + AES-256 + gzip**（**只选 XC/DX 都支持的套件**，见 §6）
-- [ ] **KDF 参数与 KC 对齐**：默认档位抄 KeepassXC 的"默认"（Argon2d 内存/迭代），
-      不要用 kotpass 的 `Argon2.default()` 裸值而不核对 —— 太弱会让 XC 提示"KDF 参数过旧"，
-      太强会让低端机解锁十几秒。**开工时把两边参数抄下来写在代码注释里**
-- [ ] 落盘三个来源各一条路径：SAF（`CREATE_DOCUMENT` 建新文件）/ OneDrive（上传新文件）/
-      WebDAV（`PUT` 新文件）；⚠️ `OneDriveKdbxFileSource` 目前只有"解析已有 origin"，
-      要补"创建远端新文件"的分支（先 `adb`/网页端核实 API 可行性）
-- [ ] 添加流程 UI：`AddVaultTypeDialog` 增「**新建 KDBX 库**」选项 + 名称/主密码/keyfile(可选) 表单
-- [ ] 测试：新建 → `KdbxOpener.open` 能开 → `KdbxRoundTrip` 零损失 → 空库条目数 = 0
-- [ ] ★ **互操作验收（本批就要过，别留到 W3）**：新建的文件分别用
-      **桌面 KeePassXC** 与 **手机 KeePassDX** 打开、建一条、存盘、再由 Vaultix 打开读回
+- [x] ✅ **数据层已完成（2026-09-30，提交 `e75de10`）**：`KdbxCreator.createEmpty`
+      （`Ver4x.create` → `withRecycleBin` → `KdbxEncoder.encode`）+ `Kdbx.createVault`
+      （编码 → 落盘 → **顺手登记会话**，省一次 Argon2 且避免"写的凭据 ≠ 读的凭据"）。
+      格式选型已逐字节反编译核实 = **KDBX 4.1 / AES-256 / GZip / Argon2**（见 §2.5）。
+- [x] ✅ **KDF/套件与 XC 对齐**：结论是**直接取 kotpass 默认值即为 XC/DX 通用组合**，
+      无需也不应该"手动调参"（代码里已写明"别顺手加强"）。
+- [x] ✅ 测试：`KdbxCreatorTest` 11 条（往返开库 / 版本 4.1 / **cipher UUID 逐字节钉死** /
+      GZip / 回收站组 / 空内容 / keyfile 三态 / **3.1 被拒** / 拒绝文案不许指向 3.x）。
+      ★ 变异验证：把 `SUPPORTED_MAJOR` 改回 3 ⇒ **恰好 1 条红**（非假绿）。
+- [ ] ⬜ **落盘三个来源**：SAF（`CREATE_DOCUMENT` 建新文件）/ OneDrive（上传新文件）/
+      WebDAV（`PUT` 新文件）。⚠️ `OneDriveKdbxFileSource` 目前只有"解析已有 origin"，
+      要补"创建远端新文件"；`KdbxFileSource.write(expectedVersion = null)` 这条路
+      **未在新文件上实机验证过**（SAF 侧理论上可用：`"wt"` 覆盖 + 写后读回校验）。
+- [ ] ⬜ **仓储入口**：`domain` 新接口 + `data:repository` 实现 + DI
+      （⚠️ **不要加到 `VaultRepository`**：`VaultRepositoryImpl` 正好卡 40 函数，加就爆门禁 —— 照
+      `KdbxSyncRepository` / `AutoUnlockRepository` / `LocalUnlockEnrollment` 的先例另立一个）。
+- [ ] ⬜ **添加流程 UI**：`AddVaultTypeDialog` 增「**新建 KDBX 库**」+ 名称/主密码/keyfile(可选) 表单
+      （SAF 用 `ActivityResultContracts.CreateDocument`，对齐 `ImportExportScreen` 的既有写法）。
+- [ ] ⬜ **互操作验收（本批就要过，别留到 W3）**：用 **桌面 KeePassXC** 与 **手机 KeePassDX**
+      打开刚新建的库、建一条、存盘、再由 Vaultix 读回。
 
 ### 批次 W1 · 写映射 + 内存事务（纯 data:kdbx，零 UI）
 - [ ] `KdbxItemWriter`：`createEntry / updateEntry / softDelete(→RecycleBin 组) / restore / permanentDelete`
@@ -207,14 +214,27 @@ UI（不感知库类型）
 
 **已完成（2026-09-30 夜）**
 - ✅ 今日第二批已提交（viewLock 静默 no-op 修复 · 只读可见提示 · 缓存未命中留证）。
-- ✅ **本单 §2 要求的 API 查证已做完**（§2.5 是反编译实证，直接照此写码）。
+- ✅ **§2.5 的 API 查证已做完**（反编译实证，直接照此写码）。
 - ✅ 顺带修掉 `7902f76` 顶破 detekt `TooManyFunctions` 造成的红门禁（抽 `VaultTimeoutPreferences`）。
+- ✅ **§2.6 已拍板 = B（严格只认 4.x）并落地**：`KdbxFormat.SUPPORTED_MAJOR` 3 → 4，
+  拒绝文案唯一化（原两处已漂、其中一处还把用户引向被拒的 3.1）。有回归用例 + 变异验证。
+- ✅ **W0 的数据层已完成**（`KdbxCreator` + `Kdbx.createVault` + 11 条测试，提交 `e75de10`）。
+- ★ 顺带逮到并修掉一个**真实线上 bug**（`ISSUES.md` **#135**）：kotpass 会**原地改写**
+  传进去的 keyfile 数组 ⇒ `LocalUnlockEnrollment` 先 verify 再拿同一份数组组信封
+  ⇒ **带 keyfile 的库启用快速解锁后指纹开不了它**。修在唯一边界 + 两条回归用例。
 
-**开工第一件**：**拍板 §2.6（3.1 老库的 A / B 策略）** —— 它决定 W1 要不要写"Ver3x → Ver4x"转换。
-未拍板时 W1 按"只处理 4.x 会话"推进（不白做）。
-
-**随后按 W0 → W1 → W2 → W3 → W4 顺序做**，每批独立可验收、独立提交。
+**下一批（按序，各自独立可验收、独立提交）**
+1. **W0 收尾**：落盘三来源（SAF `CreateDocument` / OneDrive / WebDAV 新建文件）+ 仓储入口
+   （⚠️ 另立 domain 接口，别动 `VaultRepository`）+ 添加流程 UI + **XC/DX 互操作验收**；
+2. **W1**：`KdbxItemWriter`（`createEntry / updateEntry / softDelete / restore / permanentDelete`），
+   ⚠️ 动手前先确认 `Entry.withHistory { }` 的确切语义（上游源码，别凭签名猜）；
+3. W2 → W3 → W4。
 
 **可并行、与本单无依赖**
 - 「解锁慢」的诊断埋点已装机（`CachedKdbxFileSource` 缓存判定日志），下次解锁即可取数；
   若查实是"token 判定 bug"，优先修（影响体验且改动小）。
+
+**纪律提醒（本轮新踩到的）**
+- ⚠️ 「提交信息里写门禁全绿」必须**复跑实证**：`7902f76` 自述"detekt 全绿"，实际是红的
+  （且"任务 UP-TO-DATE"≠"那段代码是好的"）。
+- ⚠️ 交给**第三方库**的密钥/凭据字节，**先 copy**（#135）。
