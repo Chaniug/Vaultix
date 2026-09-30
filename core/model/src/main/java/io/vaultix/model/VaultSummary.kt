@@ -65,6 +65,31 @@ enum class KdbxCloudSyncStatus {
     val needsAttention: Boolean
         get() = this == CONFLICT || this == FAILED || this == PENDING_UPLOAD_WITH_LOCAL_CHANGES
 
+    /**
+     * 是否**有待推上去的本地改动**（= 再跑一轮上传是合适的）。
+     *
+     * ⚠️ [CONFLICT] **不算**：它的语义是"两边都改了，要用户拍板"，
+     * 而重试上传永远好不了（编排器会再次拒写）⇒ 把它当"待上传"会让自动上传
+     * 在一个必须由人决定的问题上空转。
+     */
+    val hasPendingUpload: Boolean
+        get() = this == PENDING_UPLOAD || this == PENDING_UPLOAD_WITH_LOCAL_CHANGES
+
+    /**
+     * ★ 同步的 `localChangedSinceLastSync` 判据（**只此一份**）。
+     *
+     * 比 [hasPendingUpload] 多一个 [CONFLICT]：冲突时编排器**必须**拿到
+     * `localChanged = true` 才能判出"两边都改" ⇒ 传 false 会让它走"只有远端变"
+     * 的分支，把一个真冲突悄悄降级成一次拉取。
+     *
+     * ⚠️ 2026-10-01：此前这份判据**只在 `VaultActionsController` 里写了一遍**，
+     * 且读的是 UI 传入的 [VaultSummary] 快照 —— 快照可能在 Room 刷新之前就被点掉，
+     * 于是判成"本地没改"⇒ 报"无变化"而改动没上传（施工单 S3）。现改为**现查**，
+     * 判据本身留在这里，让"现查"与"快照"两条路用同一张表。
+     */
+    val impliesLocalChanges: Boolean
+        get() = hasPendingUpload || this == CONFLICT
+
     companion object {
         /** 从 Room `vaults.syncStatus` 字符串解析；null / 未知值一律返回 null（= 不适用）。 */
         fun fromName(name: String?): KdbxCloudSyncStatus? = entries.firstOrNull { it.name == name }
