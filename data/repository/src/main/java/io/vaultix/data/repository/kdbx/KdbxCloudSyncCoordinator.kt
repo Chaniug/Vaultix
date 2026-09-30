@@ -201,6 +201,16 @@ class KdbxCloudSyncCoordinator(
         val row = vaultDao.get(vaultId) ?: return KdbxSyncResult.Failed("找不到该密码库")
         val source = fileSourceFor(row.origin) ?: return KdbxSyncResult.NoCloudSource
 
+        // ★ 先拿令牌**再**读字节（2026-10-01 调序）。
+        //
+        // ⚠️ 顺序不是无所谓：读到字节之后远端可能又被人改了一版，那时再 stat
+        //    拿到的是**更新的**令牌，而本地会话里躺的却是**旧一版** —— 把那个更新的
+        //    令牌记成基线，就等于宣称"我已经跟上这一版了"，于是那一版再也不会被拉，
+        //    **静默漏掉别人的改动**。
+        //    ⇒ 令牌偏**旧**是安全的：下次同步只会再报一次"远端有更新"，多拉一次而已；
+        //      偏**新**是危险的。所以 stat 必须在 read **之前**。
+        val remoteToken = runCatching { source.stat().versionToken }.getOrNull()
+
         val bytes = runCatching { source.read() }.getOrElse { error ->
             return KdbxSyncResult.Failed(error.message?.takeIf { it.isNotBlank() } ?: "无法读取远端文件")
         }
@@ -210,8 +220,7 @@ class KdbxCloudSyncCoordinator(
             return KdbxSyncResult.Failed(error.message?.takeIf { it.isNotBlank() } ?: "无法替换本地会话")
         }
 
-        // 只有会话真的换好了才记"已同步"，并把远端的**当前**版本记为基线。
-        val remoteToken = runCatching { source.stat().versionToken }.getOrNull()
+        // 只有会话真的换好了才记"已同步"；`remoteToken` 为 null 时编排器保留旧基线（同样偏旧，安全）。
         orchestrator.markResolved(vaultId, remoteToken)
         return KdbxSyncResult.Downloaded
     }

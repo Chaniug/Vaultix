@@ -20,16 +20,19 @@
  *    - ★ 两边都变 ⇒ **拒写**，转 [KdbxSyncStatus.CONFLICT]，让用户拍板。
  * 4. 无论哪条路径，都把**新的版本令牌**记回去（下次条件写要用它）。
  *
- * ## 🔴 关于"只有远端变 ⇒ 拉下来替换本地"
+ * ## ★ 关于"只有远端变 ⇒ 拉下来替换本地"（2026-10-01 已打通）
  *
- * ⚠️ 本地路径**故意还没实现**（见 [SyncOutcome.RemoteNewerNeedsReload]）。
- * 理由：把远端内容拉下来之后，「本地」这个概念就变了 ——
- * 需要往 `KdbxSessionStore` 里**替换**那个已解锁的会话（换 `KeePassDatabase`
- * 与 `Credentials`），否则用户界面上还是旧内容，而下次保存会把旧内容推回去
+ * 拉下来之后「本地」这个概念就变了：必须往会话里**替换**掉已解锁的那份
+ * （换 `KeePassDatabase`），否则界面上还是旧内容，而下次保存会把旧内容推回去、
  * **覆盖刚拉下来的新版本**（= 静默丢失远端改动，正好违反硬要求）。
- * 那是一次会话级操作，必须连带处理 UI 刷新与"正在展示旧数据"的提示 ——
- * 归到下一批（冲突处理 UI）一起做，而不是在这里塞一个半成品。
- * ⇒ 本编排器**如实上报**这个状态，不假装成功。
+ *
+ * 这一步此前一直缺着，2026-10-01 由 [io.vaultix.data.kdbx.Kdbx.replaceSession] 补上
+ * （免密：复用会话里已有的那组凭据，详见那里的 KDoc）。
+ *
+ * ⚠️ 但**编排器自己仍然不拉** —— 它只**如实上报** [SyncOutcome.RemoteNewerNeedsReload]，
+ *    由调用方接着调 `pullRemote`。理由：拉取成功后还要 bump 让界面重读，
+ *    那是会话集合级的一次通知，属于调用方（`KdbxSyncRepositoryImpl`）的职责；
+ *    编排器自己不碰会话，才能保持"纯决策、可脱离网络单测"。
  *
  * ## 为什么不在这里做"上传"
  *
@@ -67,11 +70,14 @@ sealed interface SyncOutcome {
     data class NeedsUserDecision(val currentRemoteVersion: String?) : SyncOutcome
 
     /**
-     * 🔴 远端更新、本地未改 —— 应该拉下来，但**拉取后的会话替换还没有实现**。
+     * 远端更新、本地未改 —— **该拉一次**（调用方接着调 `pullRemote` 即可）。
      *
-     * 这不是失败（网络与凭据都好），而是**功能尚未完成**。
-     * 调用方应如实告诉用户"远端有更新，请在下次同步时处理"，
-     * **不要**把它当成"已同步"（那会让用户以为拿到最新数据了）。
+     * 这不是失败（网络与凭据都好），也不是"功能没做完"：拉取路径本身是通的。
+     * 它只是**编排器不代为执行**的那一类结果 —— 拉取成功后还要 bump 让界面重读，
+     * 那是调用方的事（见文件头）。
+     *
+     * ⚠️ 调用方**不要**把它当成"已同步"：此刻本地会话还是旧的，
+     *    当成已同步会让用户以为拿到最新数据了（而他并没有）。
      */
     data object RemoteNewerNeedsReload : SyncOutcome
 
@@ -143,9 +149,22 @@ class KdbxSyncOrchestrator(
         }
 
         if (remoteChanged) {
-            // 🔴 本地没改、远端改了 ⇒ 该拉。但"拉下来替换已解锁会话"还没实现，
-            //    见文件头说明。**如实上报**，不假装成功。
-            markStatus(vaultId, KdbxSyncTransitions.markRemoteChanges(), remoteNow)
+            // 本地没改、远端改了 ⇒ 该拉（由调用方接着调 `pullRemote`）。
+            //
+            // ⚠️ ★★ 下面这行**故意不传 `remoteNow`**（2026-10-01 修）。
+            //    此前传了，后果是一条已经发生过的数据丢失链：
+            //      ① 远端变到 T1，本机报 REMOTE_CHANGED，并把基线记成 T1；
+            //      ② 用户在本机改一笔 ⇒ 状态降为 PENDING_UPLOAD ⇒ 自动上传触发；
+            //      ③ 上传时拿 T1 当 expectedVersion，服务端当前也正好是 T1
+            //         ⇒ 条件写通过、写入成功；
+            //      ④ 而本机会话**还是旧的**（根本没拉过）⇒ 推上去的是「旧内容 + 新改动」，
+            //         远端 T1 上另一台设备的新内容被**静默覆盖**。
+            //    不推进 ⇒ 第 ③ 步的 `remoteChanged` 判定**仍然为真**，与"本地也改了"
+            //    合成 CONFLICT ⇒ 拒写、交用户拍板。那才是正确的结局。
+            //
+            //    一句话：**基线只在"本地真的跟上了远端"之后才推进**
+            //    （拉取成功见 `markResolved`，强推成功见 `resolveUsingLocal`）。
+            markStatus(vaultId, KdbxSyncTransitions.markRemoteChanges())
             return SyncOutcome.RemoteNewerNeedsReload
         }
 
