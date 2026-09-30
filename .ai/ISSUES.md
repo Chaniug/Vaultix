@@ -151,6 +151,7 @@
 | 98 | KDBX 启用**生物识别**快速解锁 = **必闪退**：KEK 是 auth-per-use，`wrap` 绝不能放在 BiometricPrompt **之前**（**2026-09-14 已修：两阶段 `prepare`/`commit`/`discard`**） |
 | 99 | 设置里点**未解锁**的库 ⇒ 条目页/验证码页**全白**（`orEmpty()` 抹掉了「锁着」这个唯一原因；**2026-09-15 已修：未解锁项点击改去解锁页 + 两页新增锁定空态**） |
 | 106 | ⚠️ **读路径分流了 KDBX、写路径没分流** ⇒ 在 KDBX 库**新建**条目静默丢失（写进 Room 孤儿行，读侧走 `Kdbx.contentOf` 永远看不到）、**编辑**条目报「条目不存在」（id 是 `itemIdOf(uuid)`，不在 Room）。**2026-09-17 排查 OneDrive 前置条件时发现，未修** |
+| 135 | 🔴 **kotpass 会原地改写你传进去的 keyfile 数组**（`EncryptedValue.fromBinary` 就地 XOR，而 `parseKeyfile(32 字节)` 又原样返回同一引用）⇒ 调用方那份字节用完就废。**真实受害点**：`LocalUnlockEnrollment` 先 `Kdbx.verify` 再拿同一份数组组信封 ⇒ **带 keyfile 的库启用快速解锁后，指纹再也开不了它**。**2026-09-30 写 W0 新建库单测时红出来，已修**（在唯一边界 `buildCredentialCandidates` copy；判据：交给第三方库前先 copy + 「同份密钥连用两次都要成功」用例） |
 
 ### [06-界面与交互](./issues/06-界面与交互.md) — 界面 / 布局 / 交互动效 / 空态（33 条，2026-09-26 起含 #120–#123、#126、#127）
 

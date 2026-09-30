@@ -858,7 +858,10 @@ private fun classifyKdbxError(error: Throwable): UnlockResult {
         is KdbxOpenError.SourceUnavailable -> UnlockResult.Unknown(kind.detail)
         is KdbxOpenError.NotKdbxFile -> UnlockResult.Unknown("该文件不是 KDBX 数据库")
         is KdbxOpenError.UnsupportedVersion ->
-            UnlockResult.Unknown("不支持的 KDBX 版本 ${kind.version}（请用 KeePass 另存为 3.1 / 4.x）")
+            // ⚠️ 用错误类型上的**唯一一份**文案（`guidance`），别在这里另写一句 ——
+            //    此前这里写的是"请用 KeePass 另存为 3.1 / 4.x"，而 3.1 自 2026-09-30 起
+            //    已被本应用拒绝，那句提示会把用户引向一个打不开的格式。
+            UnlockResult.Unknown(kind.guidance)
 
         // 写回路径才有「未解锁」；解锁/添加路径走到这里说明会话已失效，提示重新解锁即可。
         KdbxOpenError.NotUnlocked -> UnlockResult.Unknown("请先解锁该密码库")

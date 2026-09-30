@@ -35,6 +35,36 @@ internal data class KdbxCredentialCandidate(
 /**
  * 候选凭据生成（顺序即尝试顺序：密码优先，其次 keyfile 各形态）。
  *
+ * ## ★★★ 第一件事是 copy keyfile —— 上游会**原地改写**传进去的数组
+ *
+ * 上游 `EncryptedValue.fromBinary(bytes)` 的实现是"**就地 XOR 混淆**"：
+ *
+ * ```kotlin
+ * val salt = ByteArray(bytes.size); random.nextBytes(salt)
+ * for (i in bytes.indices) { bytes[i] = bytes[i] xor salt[i] }   // ← 改的是调用方的数组
+ * ```
+ *
+ * 而 `parseKeyfile(32 字节) = 原样返回同一个数组引用`（上游源码）——
+ * 于是**恰好 32 字节的裸 keyfile** 会把调用方那份**就地改掉**
+ * （64 字节 hex / XML 形态走的是"新建数组"，不在此列；所以这个坑很窄、很难撞见，
+ * 但撞上时**完全静默**：本次操作还是成功的）。
+ *
+ * ## 为什么修在这里（而不是每个调用点各 copy 一次）
+ *
+ * 本函数是 `data:kdbx` 里**唯一**把 keyfile 交给 kotpass 的地方，
+ * 而它的两个上层入口（[Kdbx.unlock] / [Kdbx.verify]）都会被波及。
+ * 实测到的真实受害点是 `LocalUnlockEnrollment`：
+ *
+ * ```
+ * val keyFileBytes = kdbxFileSources.readBytes(keyFileUri)
+ * Kdbx.verify(..., keyFileBytes = keyFileBytes)              // ← 此处数组被就地改写
+ * KdbxUnlockPayload.encode(masterPassword, keyFileBytes)     // ← 组装信封用的还是它 ⇒ 存进去的是废数据
+ * ```
+ *
+ * ⇒ 症状是「带 keyfile 的库，启用快速解锁后**指纹再也开不了这个库**」。
+ * 在**这一个**边界上 copy，`verify` 与 `unlock` 两条路一起被护住；
+ * 散在调用点各修一遍的话，下一个新入口必然又漏。
+ *
  * @param password 主密码（可为空 = 仅 keyfile）。
  * @param keyFileBytes keyfile 原始字节（null = 不用 keyfile）。
  */
@@ -42,7 +72,10 @@ internal fun buildCredentialCandidates(
     password: String,
     keyFileBytes: ByteArray?,
 ): List<KdbxCredentialCandidate> {
-    if (keyFileBytes == null) {
+    // ★ 见上方 KDoc：调用方那一份**必须**不被改动 —— 它常被复用（信封组装、多次解锁）。
+    //   命名用 `owned...` 是为了让"这份归我们、可以随便交给 kotpass"这件事在调用点自明。
+    val ownedKeyBytes = keyFileBytes?.copyOf()
+    if (ownedKeyBytes == null) {
         return listOf(
             KdbxCredentialCandidate(
                 label = LABEL_PASSWORD_ONLY,
@@ -53,7 +86,7 @@ internal fun buildCredentialCandidates(
 
     val candidates = mutableListOf<KdbxCredentialCandidate>()
     val seen = linkedSetOf<String>()
-    keyMaterialVariants(keyFileBytes).forEach { (variantLabel, keyBytes) ->
+    keyMaterialVariants(ownedKeyBytes).forEach { (variantLabel, keyBytes) ->
         val fingerprint = sha256Hex(keyBytes)
         // 有密码：密码 + keyfile。
         if (password.isNotEmpty()) {

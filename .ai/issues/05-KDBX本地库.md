@@ -490,3 +490,57 @@ detekt ✅ / `:app:compileFullDebugKotlin` ✅ / 单测 ✅（40 个类函数上
 > 否则「读 A 存储、写 B 存储」必然产生幽灵数据 —— 且**两个方向都骗人**：
 > 新建静默、编辑报错，用户无法从任何一条错误信息推出真实原因。
 > **新增任何 `kind ==` 分支时，读/写两侧成对检查。**
+
+## 135. 🔴 kotpass 会**原地改写**你传进去的 keyfile 数组 ⇒ 快速解锁信封存下**废数据**（2026-09-30，**已修**）
+
+**怎么发现的**：不是用户报的 —— 是写阶段 B 的**新建库**（W0）单测时，
+「用 keyfile 建的库必须带同一份 keyfile 才打得开」这条**红了**，
+而且红的方式很怪：**只给主密码开不了（对）**，**密码 + 原样同一份 keyfile 也开不了（错）**。
+两者矛盾 ⇒ 只能是"同一份字节在两次使用之间变了"。
+
+**实证**（一条诊断用例把它钉死）：
+给 `createEmpty` 传 `ByteArray(32){ it+1 }`，建库后**调用方那个数组已经不是 01 02 03…**
+（变成了一段随机-looking 字节）。也就是说**我们传进去的数组被就地改了**。
+
+**根因（上游源码，`EncryptedValue.fromBinary`）**：
+
+```kotlin
+val salt = ByteArray(bytes.size); random.nextBytes(salt)
+for (i in bytes.indices) { bytes[i] = bytes[i] xor salt[i] }   // ← 改的是**调用方的数组**
+return EncryptedValue(bytes, salt)
+```
+
+那是它「内存里不裸放密钥」的设计（`getBinary()` 再 XOR 回来，对**它自己那一份**自洽）。
+而 `Credentials.parseKeyfile(32 字节)` 又是"**原样返回同一个数组引用**"：
+⇒ **恰好 32 字节的裸 keyfile** 会把调用方那份就地 XOR 掉。
+（64 字节 hex / XML 形态走 `decodeHexToArray()` / `sha256()`，都是**新建数组**，不在此列
+—— 所以这个坑很**窄**，但撞上时**完全静默**：本次操作照样成功。）
+
+**受害点（真实存在，不是假想）**：`LocalUnlockEnrollment.prepareKdbx`
+
+```
+val keyFileBytes = kdbxFileSources.readBytes(keyFileUri)
+Kdbx.verify(..., keyFileBytes = keyFileBytes)             // ← 此处数组被就地改写
+KdbxUnlockPayload.encode(masterPassword, keyFileBytes)    // ← 组装信封用的还是它 ⇒ 信封里是废数据
+```
+
+⇒ 症状：**带 keyfile 的库一旦启用快速解锁，指纹就再也开不了这个库**
+（信封解出来的是被改写的字节 ⇒ 复合密钥不对 ⇒ 解锁失败）。
+与 #132（KDBX 信封包主密码）同族，但那条是**性能**问题，这条是**正确性**问题。
+
+**修法（一处边界，覆盖两条入口）**：
+`buildCredentialCandidates` 是 `data:kdbx` 里**唯一**把 keyfile 交给 kotpass 的地方，
+在函数开头 `keyFileBytes?.copyOf()` 一次 —— `Kdbx.unlock` 与 `Kdbx.verify` 一起被护住。
+新建路径同理：`KdbxCreator.credentialsFor` 也先 copy。
+（**不在每个调用点各修一遍**：散着修的话，下一个新入口必然又漏。）
+
+**判据（写进纪律）**：
+> **把密钥/凭据类字节交给第三方库之前，先 copy。**
+> 判据不是"这个库看起来会不会改"，而是：**它有没有可能持有一份引用**
+> —— `parseKeyfile` 这种"原样返回入参"的实现就是典型的引用外泄。
+> 并且：**同一份密钥字节被复用两次的流程（信封组装、多库解锁）必须有一条
+> "连用两次都要成功"的用例** —— 只测一次成功永远发现不了这类缺陷。
+
+**回归门禁**：`data/kdbx` 的 `KdbxCreatorTest` 两条 ——
+`诊断_新建不会改动调用方传进来的 keyfile 字节` 与
+`校验与解锁都不会改动调用方的 keyfile 字节`（后者还断言"同一份字节连用两次都成功"）。

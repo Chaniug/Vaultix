@@ -31,8 +31,28 @@ sealed interface KdbxOpenError {
     /** 文件不是 KDBX（选错文件 / 文件损坏）。 */
     data object NotKdbxFile : KdbxOpenError
 
-    /** KDBX 版本不受支持（如 KDBX 2.x）。 */
-    data class UnsupportedVersion(val version: String) : KdbxOpenError
+    /**
+     * KDBX 版本不受支持。
+     *
+     * ⚠️ **2026-09-30 起这不再是"罕见的老文件"**：用户拍板本应用**只支持 KDBX 4.x**，
+     * 于是**所有 3.1 库都会走到这里**（此前是能正常打开的）。见 `KdbxFormat.SUPPORTED_MAJOR`。
+     */
+    data class UnsupportedVersion(val version: String) : KdbxOpenError {
+        /**
+         * 给用户的**下一步** —— 只说"不支持的版本"等于把人堵死。
+         *
+         * ## 为什么文案放在错误类型上，而不是各个消费点各写一句
+         *
+         * 这个原因有**两个**消费点（`data:kdbx` 的 `KdbxFailure` 与
+         * `data:repository` 的 `classifyKdbxError`）。此前两处各写一句，措辞已经漂了
+         * （一处说"另存为 3.1 / 4.x"，另一处不说）—— 而 3.1 恰恰是本轮开始被拒绝的那个版本，
+         * 那句提示会把用户**引向一个已经被拒的格式**。
+         * ⇒ 文案只有一份，挂在类型上，谁要谁取。
+         */
+        val guidance: String
+            get() = "这是 KDBX $version 格式，本应用只支持 4.x。" +
+                "请先用 KeePassXC / KeePassDX 打开它并「另存为 KDBX 4」后，再重新导入。"
+    }
 
     /** 密码 / keyfile 不正确（已尝试 [attempted] 种组合）。 */
     data class InvalidCredentials(val attempted: List<String>) : KdbxOpenError
@@ -209,6 +229,71 @@ object Kdbx {
             password = password,
             keyFileBytes = keyFileBytes,
         ).isSuccess
+    }
+
+    /**
+     * **新建一个空白 KDBX 4.1 库**并落盘，随后直接登记会话（批次 W0）。
+     *
+     * ## 为什么建完库要**顺手登记会话**，而不是让调用方再 `unlock` 一次
+     *
+     * ① **省一次 KDF**：Argon2 推导一次要 0.3–3 s（真机实测 unlock 的 `open` 段
+     *    就有 350 ms，弱机更久）。刚建好的库**明文就在手上**，再读回来解密纯属白付；
+     * ② **更重要的是一致性**：登记会话用的凭据、写进文件的密钥、用户以为的主密码，
+     *    三者必须是**同一组**。分两步做（先写、再 unlock）就多出一个"写的凭据 ≠ 读的凭据"
+     *    的失败面 —— 而那正是"自己建的库自己打不开"这种最伤人的 bug。
+     *    ⇒ 由本方法把「编码用的凭据」原样交给会话（见 [CreatedKdbx.credentials]）。
+     *
+     * ## 写入约定
+     *
+     * - `expectedVersion = null`：**这是新建**，没有基线可比（见 [KdbxFileSource.write]：
+     *   该参数为 null 时实现方退化为"可用的最严保障"，而**不是**"随便覆盖"）；
+     * - `force` 保持 `false`：新建不需要绕过任何检查。
+     *
+     * @return 成功 = 文件已落盘 **且** 会话已登记（两者缺一都不能算成功 ——
+     *   只落盘不登记，用户看到的是一个"刚建的库居然是锁着的"）。
+     */
+    @Suppress("TooGenericExceptionCaught") // 来源可能是 IO / 网络 / HTTP，异常族无法穷举
+    suspend fun createVault(
+        vaultId: String,
+        source: KdbxFileSource,
+        name: String,
+        password: String,
+        keyFileBytes: ByteArray? = null,
+    ): Result<KdbxUnlockedContent> {
+        val created = try {
+            KdbxCreator.createEmpty(name = name, password = password, keyFileBytes = keyFileBytes)
+        } catch (error: Exception) {
+            // 编码失败（KDF 参数被拒 / 内存不足等）。到这一步**还没有碰过任何文件**，
+            // 因此不会在磁盘上留下半成品 —— 这一点对"新建"尤其重要。
+            return Result.failure(KdbxFailure(KdbxOpenError.Unknown(error.message.orEmpty()), error))
+        }
+
+        try {
+            source.write(bytes = created.bytes)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            return Result.failure(readFailure(error))
+        }
+
+        val session = KdbxSession(
+            database = created.database,
+            content = created.database.toMappedContent(),
+            credentialLabel = created.credentialLabel,
+            credentials = created.credentials,
+        )
+        KdbxSessionStore.put(vaultId, session)
+        VaultixLog.d(TAG) {
+            "createVault 完成：${created.bytes.size}B（${KdbxCreator.TARGET_FORMAT}），库名=$name"
+        }
+        return Result.success(
+            KdbxUnlockedContent(
+                items = session.content.items,
+                folders = session.content.folders,
+                recycleBinCount = session.content.recycleBinCount,
+                credentialLabel = session.credentialLabel,
+            ),
+        )
     }
 
     /**
@@ -409,7 +494,7 @@ object Kdbx {
 class KdbxFailure(val error: KdbxOpenError, cause: Throwable? = null) : Exception(
     when (error) {
         is KdbxOpenError.NotKdbxFile -> "不是 KDBX 文件"
-        is KdbxOpenError.UnsupportedVersion -> "不支持的 KDBX 版本 ${error.version}"
+        is KdbxOpenError.UnsupportedVersion -> error.guidance
         is KdbxOpenError.InvalidCredentials -> invalidCredentialMessage(error.attempted)
         is KdbxOpenError.SourceUnavailable -> error.detail
         is KdbxOpenError.Unknown -> error.detail
