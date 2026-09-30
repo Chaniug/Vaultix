@@ -50,10 +50,21 @@ import io.vaultix.model.CustomFieldType
 import io.vaultix.model.VaultItem
 import java.util.UUID
 
-/** 一次写操作的结果：新库 + 受影响的条目 uuid（新建时调用方要拿它算新的条目 id）。 */
+/** 一次写操作的结果：新库 + 受影响的条目 uuid + **改动是否真的发生了**。 */
 internal class KdbxWriteResult(
     val database: KeePassDatabase,
+    /** 受影响的条目 uuid；null = 连 id 都解析不出来（调用方据此报错，而不是假装成功）。 */
     val entryUuid: UUID?,
+    /**
+     * 这次改动**是否真的发生了**。
+     *
+     * ⚠️ 与 [entryUuid] 分工不同：`entryUuid` 只表达"能不能解析出条目 id"，
+     * 而 `applied = false` 还覆盖「**解析得出、但库里没有这一条**」——
+     * 上游的 `modifyEntry` / `moveEntry` 找不到目标时**原样返回旧库、不抛异常**。
+     * ⇒ 只看 `entryUuid` 会把"什么都没改"当成成功：上层随即落盘一份**内容未变**的文件，
+     * 用户看到"保存成功"，而他的改动一个字都没进去（这类静默失败最难查）。
+     */
+    val applied: Boolean = true,
 )
 
 /** 条目在**回收站里**的说明（供 UI 文案用；我们按"是否位于回收站子树"判定）。 */
@@ -90,9 +101,9 @@ internal object KdbxItemWriter {
      *   而不是写出一份看起来成功、实际什么都没改的结果）。
      */
     fun updateEntry(database: KeePassDatabase, before: VaultItem, after: VaultItem): KdbxWriteResult {
-        val uuid = entryUuidOf(after.id) ?: return KdbxWriteResult(database, null)
+        val uuid = entryUuidOf(after.id) ?: return KdbxWriteResult(database, null, applied = false)
         val existing = database.getEntry { it.uuid == uuid }?.second
-            ?: return KdbxWriteResult(database, uuid)
+            ?: return KdbxWriteResult(database, uuid, applied = false)
 
         val updated = database.modifyEntry(uuid) {
             // ⚠️ `withHistory` 必须在**最外层**：它把"改前这一版"存成快照，
@@ -110,7 +121,7 @@ internal object KdbxItemWriter {
      * 库还没有回收站时先建（`withRecycleBin` 幂等）。
      */
     fun moveToRecycleBin(database: KeePassDatabase, itemId: String): KdbxWriteResult {
-        val uuid = entryUuidOf(itemId) ?: return KdbxWriteResult(database, null)
+        val uuid = entryUuidOf(itemId) ?: return KdbxWriteResult(database, null, applied = false)
         // ⚠️ `withRecycleBin` 的 block 必须返回**库**（它自己的返回类型就是库），
         //    所以先把库算出来、再包成结果 —— 别想着在 block 里直接返回 KdbxWriteResult。
         val moved = database.withRecycleBin { recycleBinUuid -> moveEntry(uuid, recycleBinUuid) }
@@ -126,12 +137,12 @@ internal object KdbxItemWriter {
      * ⚠️ 这个守卫是必须的：`moveEntry` 是"先删后加"，目标组不存在时条目会**消失**。
      */
     fun restoreFromRecycleBin(database: KeePassDatabase, itemId: String): KdbxWriteResult {
-        val uuid = entryUuidOf(itemId) ?: return KdbxWriteResult(database, null)
+        val uuid = entryUuidOf(itemId) ?: return KdbxWriteResult(database, null, applied = false)
         // ⚠️ `getEntry` 的谓词是**普通** lambda（`(Entry) -> Boolean`）⇒ 用 `it`；
         //    而下面 `getGroupBy` 的是**接收者** lambda（`Group.() -> Boolean`）⇒ 用 `this`。
         //    两者只差一个 `Get`/`By` 后缀，混用会直接编译不过（本项目实测过两次）。
         val entry = database.getEntry { it.uuid == uuid }?.second
-            ?: return KdbxWriteResult(database, uuid)
+            ?: return KdbxWriteResult(database, uuid, applied = false)
         val target = entry.previousParentGroup
             // 同样不用 `getGroupBy`（见 [existingGroupUuid] 的说明）。
             ?.takeIf { previous -> database.content.group.containsGroup(previous) }
@@ -146,7 +157,7 @@ internal object KdbxItemWriter {
      * 别以为它多余而清掉。
      */
     fun permanentDelete(database: KeePassDatabase, itemId: String): KdbxWriteResult {
-        val uuid = entryUuidOf(itemId) ?: return KdbxWriteResult(database, null)
+        val uuid = entryUuidOf(itemId) ?: return KdbxWriteResult(database, null, applied = false)
         return KdbxWriteResult(database.removeEntry(uuid), uuid)
     }
 

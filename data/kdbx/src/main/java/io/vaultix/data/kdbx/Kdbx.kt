@@ -20,11 +20,13 @@
  */
 package io.vaultix.data.kdbx
 
+import app.keemobile.kotpass.database.KeePassDatabase
 import io.vaultix.common.logging.VaultixLog
 import io.vaultix.model.VaultFolder
 import io.vaultix.model.VaultItem
 import java.io.File
 import kotlinx.coroutines.CancellationException
+import java.util.UUID
 
 /** 打开 KDBX 的失败原因（UI 据此给可执行文案）。 */
 sealed interface KdbxOpenError {
@@ -294,6 +296,106 @@ object Kdbx {
                 credentialLabel = session.credentialLabel,
             ),
         )
+    }
+
+    /**
+     * 一次写回的产物：新的映射内容 + **待落盘的字节** + 受影响的条目 uuid。
+     *
+     * ## 为什么这里只有"字节"，没有"库"
+     *
+     * `data:repository` 需要的是「改完之后该写什么到哪去」，而**不需要**能碰 `KeePassDatabase`。
+     * 那正是本文件的一条老纪律（`.ai/ISSUES.md` #64「引擎门面：内部类型绝不外泄」）——
+     * 一旦把引擎类型放进公开签名，上层就有能力绕过保真纪律去自由拼库。
+     * ⇒ 公开 API 一律按**意图**命名、只回传字节；引擎类型留在模块内。
+     */
+    class KdbxPendingWrite(
+        val content: KdbxMappedContent,
+        val bytes: ByteArray,
+        /** 受影响的条目 uuid；null = 目标找不到（此时**不会**返回成功，见下）。 */
+        val entryUuid: UUID?,
+    )
+
+    /**
+     * **新建条目**（内存事务 + 编码；落盘由调用方决定去哪）。
+     */
+    suspend fun createItem(
+        vaultId: String,
+        folderId: String?,
+        item: VaultItem,
+    ): Result<KdbxPendingWrite> = mutate(vaultId) { database ->
+        KdbxItemWriter.createEntry(database = database, folderId = folderId, item = item)
+    }
+
+    /**
+     * **修改条目** —— 必须同时给 `before`（见 [KdbxItemWriter.updateEntry] 的说明：
+     * 没有它就做不到"没变的字段不重写"，会把 TOTP 等字段的原始表示改掉）。
+     */
+    suspend fun updateItem(
+        vaultId: String,
+        before: VaultItem,
+        after: VaultItem,
+    ): Result<KdbxPendingWrite> = mutate(vaultId) { database ->
+        KdbxItemWriter.updateEntry(database = database, before = before, after = after)
+    }
+
+    /** **删除 = 移进回收站**（KDBX 语义）。 */
+    suspend fun moveItemToRecycleBin(vaultId: String, itemId: String): Result<KdbxPendingWrite> =
+        mutate(vaultId) { database -> KdbxItemWriter.moveToRecycleBin(database, itemId) }
+
+    /** **从回收站恢复**（回原分组，原分组没了回根组）。 */
+    suspend fun restoreItemFromRecycleBin(vaultId: String, itemId: String): Result<KdbxPendingWrite> =
+        mutate(vaultId) { database -> KdbxItemWriter.restoreFromRecycleBin(database, itemId) }
+
+    /** **永久删除**（写墓碑，不进回收站）。 */
+    suspend fun purgeItem(vaultId: String, itemId: String): Result<KdbxPendingWrite> =
+        mutate(vaultId) { database -> KdbxItemWriter.permanentDelete(database, itemId) }
+
+    /**
+     * 内存事务的公共骨架：取会话 → 改 → **校验** → 编码 → **把新会话换回去**。
+     *
+     * ## 两条"不许"（顺序很重要）
+     *
+     * 1. **改之前必须已有会话**：没有会话（库里没解锁）时 `NotUnlocked` 是唯一诚实的答案 ——
+     *    绝不能"顺手解锁"或"先建个空库"，那两条都会让用户拿一份**不是他的库**去覆盖真文件。
+     * 2. **改完必须先确认真的改了**：`KdbxWriteResult.applied == false` 表示"目标条目/分组
+     *    找不到"。此时**返回失败**而不是成功 —— 否则上层会去落盘一份**内容与原来一模一样**的
+     *    文件，用户看到"保存成功"，而他的改动一个都没进去（这类静默失败最难查）。
+     *
+     * ## ⚠️ 编码是**贵操作**（每次都要跑一遍 KDF）
+     *
+     * `KdbxEncoder.encode` 内部要重新派生内容密钥并重新生成 IV/随机流 ⇒ 一次编辑的代价
+     * 与一次解锁的 KDF 相当（真机数百毫秒）。所以**调用方应当在 IO/Default 调度器上调用本方法**，
+     * 别把它塞进主线程的点击回调里（本函数刻意不做内部 `withContext`：与 [unlock] 保持一致，
+     * 调度交给调用方，避免"两层各自切一半"）。
+     */
+    private suspend fun mutate(
+        vaultId: String,
+        mutator: (KeePassDatabase) -> KdbxWriteResult,
+    ): Result<KdbxPendingWrite> {
+        val session = KdbxSessionStore.get(vaultId)
+            ?: return Result.failure(KdbxFailure(KdbxOpenError.NotUnlocked))
+
+        val result = mutator(session.database)
+        if (!result.applied) {
+            return Result.failure(
+                KdbxFailure(KdbxOpenError.Unknown("目标条目或分组不存在，未做任何改动")),
+            )
+        }
+
+        val content = result.database.toMappedContent()
+        val bytes = KdbxEncoder.encode(result.database)
+        // ⚠️ 会话必须换成**新的**那一份：后续读（`contentOf`）与下一次写都基于它，
+        //    漏掉这一步的表现是"改完界面没变、再改一次又回到老值"（读到的还是旧库）。
+        KdbxSessionStore.put(
+            vaultId,
+            KdbxSession(
+                database = result.database,
+                content = content,
+                credentialLabel = session.credentialLabel,
+                credentials = session.credentials,
+            ),
+        )
+        return Result.success(KdbxPendingWrite(content, bytes, result.entryUuid))
     }
 
     /**
