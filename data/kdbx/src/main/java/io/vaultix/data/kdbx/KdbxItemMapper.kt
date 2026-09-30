@@ -116,6 +116,14 @@ private fun Entry.toVaultItem(folderId: String?): VaultItem {
         fido2Credentials = listOfNotNull(passkey),
         customFields = custom,
         folderId = folderId,
+        // 2026-09-30 补入：KDBX 的 `<Times>`（此前**整块没读** ⇒ 详情页无从显示时间）。
+        // ⚠️ 取值是 `Instant?`：老库 / 第三方工具写的条目可能缺 `CreationTime`，
+        //    `?.toEpochMilli()` 之后仍是 null ⇒ UI 不显示该行（而不是兜一个默认时间）。
+        // ⚠️ `lastAccessTime` 刻意**不映射**：它的语义是"上次查看"，KeePass 每开一次都会刷新
+        //    （`Group.modifyEntry` 里就会写），把它当"最近修改"显示会**天天变**、完全误导。
+        //    用户要的"最近修改"= `lastModificationTime`。
+        createdAt = times?.creationTime?.toEpochMilli(),
+        updatedAt = times?.lastModificationTime?.toEpochMilli(),
     )
 }
 

@@ -846,6 +846,11 @@
     <string name="edit_item_title">编辑条目</string>
     <string name="section_login">登录信息</string>
     <string name="section_notes">备注</string>
+    <!-- 条目时间（2026-09-30 用户要求）：两个库都能给（Bitwarden 的 creationDate/revisionDate；
+         KDBX 的 <Times>），此前只是领域模型没接。⚠️ 取不到时**不显示该行**，不要兜默认值。 -->
+    <string name="section_timestamps">记录</string>
+    <string name="item_field_created_at">创建时间</string>
+    <string name="item_field_updated_at">最近修改</string>
     <string name="copy_username">已复制用户名</string>
     <string name="copy_username_clears">已复制用户名（%1$d 秒后自动清除）</string>
     <string name="copy_password">已复制密码</string>

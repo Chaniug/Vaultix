@@ -20,6 +20,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Fingerprint
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Visibility
@@ -106,6 +107,10 @@ import io.vaultix.vaultix.ui.common.rememberImmersiveBarPadding
 import io.vaultix.vaultix.ui.common.rememberScrollCollapseFraction
 import io.vaultix.vaultix.ui.common.VaultixWavyProgress
 import io.vaultix.vaultix.ui.theme.Spacing
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 /**
  * 详情页一次性事件 → 用户文案（Deleted 由调用方导航，返回 null）。
@@ -277,6 +282,12 @@ private fun DetailSections(
         if (item.notes.isNotBlank()) {
             Spacer(Modifier.height(Spacing.md))
             NotesSection(notes = item.notes)
+        }
+        // 时间放**最后**（2026-09-30 用户要求）：它是"核对条目"时的次要信息，
+        // 每次打开都看得到但不需要第一眼看到；放最前面会把登录字段挤下去。
+        if (item.createdAt != null || item.updatedAt != null) {
+            Spacer(Modifier.height(Spacing.md))
+            TimestampsSection(createdAt = item.createdAt, updatedAt = item.updatedAt)
         }
         Spacer(Modifier.height(Spacing.xl))
     }
@@ -620,6 +631,87 @@ private fun LoginSection(
         }
     }
 }
+
+/**
+ * 「记录」分区：条目的**创建时间 / 最近修改时间**（2026-09-30 用户要求）。
+ *
+ * ## 为什么两行都可以**不显示**（而不是兜一个默认值）
+ *
+ * null 的含义是「**这个来源没给**」—— 领域模型里两个字段都可空，来源有三类：
+ * - KDBX：老库 / 第三方工具写的条目可能没有 `<CreationTime>`；
+ * - Bitwarden：自建 Vaultwarden 可能不返回 `creationDate` / `revisionDate`；
+ * - 旧缓存 / 旧测试夹具造的条目本来就没有。
+ *
+ * ⇒ 兜默认值（如"现在"或 1970）会显示一个**看起来合理但完全错误**的时间，
+ *   用户会据此判断"这条是不是我昨天改的"。**宁可少一行，不给假信息**。
+ *   （与「空有三态」同一条纪律：把"不知道"说成"某个值"就是塌缩。）
+ *
+ * ## 为什么两行都不给「复制」按钮
+ *
+ * 页面里别的字段行都有复制 —— 但复制一个时间戳没有实际用途，
+ * 为一致性硬加一个按钮反而让人以为"这里能复制出什么有用的东西"。
+ */
+@Composable
+private fun TimestampsSection(createdAt: Long?, updatedAt: Long?) {
+    Column {
+        SectionTitle(text = stringResource(R.string.section_timestamps), icon = Icons.Filled.History)
+        DetailCard {
+            Column {
+                if (createdAt != null) {
+                    TimestampRow(label = stringResource(R.string.item_field_created_at), epochMillis = createdAt)
+                }
+                if (createdAt != null && updatedAt != null) {
+                    HorizontalDivider(
+                        modifier = Modifier.padding(start = Spacing.lg),
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                    )
+                }
+                if (updatedAt != null) {
+                    TimestampRow(label = stringResource(R.string.item_field_updated_at), epochMillis = updatedAt)
+                }
+            }
+        }
+    }
+}
+
+/** 时间行：与 [DetailFieldRow] 同款竖排两行式（标签在上、值在下），只是没有复制动作。 */
+@Composable
+private fun TimestampRow(label: String, epochMillis: Long) {
+    // 格式化结果只与这个时间戳有关 ⇒ 记一次即可，别每次重组都算（滚动时重组很频繁）。
+    val formatted = remember(epochMillis) { formatTimestamp(epochMillis) }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(text = formatted, style = MaterialTheme.typography.bodyLarge)
+    }
+}
+
+/**
+ * epoch 毫秒 → **本地时区**的可读文本。
+ *
+ * ⚠️ 必须显式 `atZone(ZoneId.systemDefault())`：`Instant` 本身没有时区，
+ * 直接格式化会得到 UTC —— 国内用户看到的"最近修改"会比实际**早 8 小时**，
+ * 而这种偏差很容易被误读成"数据不对"。
+ *
+ * 用 `java.time` 而不是 `SimpleDateFormat`（同 `AddCloudVaultScreen` 的取舍）：
+ * 后者是可变对象且带线程局部陷阱，而这里是 Compose 里可能被并发调用的代码。
+ *
+ * ⚠️ `Locale.getDefault()`：中文系统下用默认 locale 才符合用户对日期写法的预期。
+ */
+private fun formatTimestamp(epochMillis: Long): String =
+    Instant.ofEpochMilli(epochMillis)
+        .atZone(ZoneId.systemDefault())
+        .format(TIMESTAMP_FORMAT)
+
+private val TIMESTAMP_FORMAT: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm", Locale.getDefault())
 
 @Composable
 private fun NotesSection(notes: String) {

@@ -74,6 +74,37 @@ data class VaultItem(
      * Bitwarden 目前只有通用子类型（0），建模为其载体以便未来扩展。
      */
     val secureNote: VaultSecureNote? = null,
+    /**
+     * **条目创建时间**（epoch 毫秒；null = 该来源没提供）。
+     *
+     * ## 为什么是 epoch 毫秒、而不是各库的原始形态
+     *
+     * 两个库的时间**天然不同源**：
+     *
+     * | 库 | 原始形态 | 位置 |
+     * |---|---|---|
+     * | Bitwarden | **ISO-8601 明文串**（`"2026-09-30T12:34:56.789Z"`） | `CipherDto.creationDate` / `revisionDate` |
+     * | KDBX | `java.time.Instant`（KDBX 4.x 的 `<Times>`） | `Entry.times.creationTime` / `lastModificationTime` |
+     *
+     * 领域模型里如果各存各的原始形态，UI 就得**同时会解析两套**，而少写一个分支的症状是
+     * 「某个库的时间永远显示不出来」—— 那正是这类字段最常见的坏法。
+     * ⇒ 出口统一成 epoch 毫秒（唯一、可比较、可排序、`java.time` 可格式化），
+     *   解析失败一律 `null`（**不假装知道**：见下面 [updatedAt] 的说明）。
+     *
+     * ⚠️ 这是**展示与排序**用的字段，**不参与**任何写回/冲突判定：
+     *   Bitwarden 的冲突检测走 `CipherMapper` 里那份 `stored.revisionDate` 原串，
+     *   KDBX 的条件写走 `KdbxFileSource.stat().versionToken`。别把它们混起来用。
+     */
+    val createdAt: Long? = null,
+    /**
+     * **最近修改时间**（epoch 毫秒；null = 该来源没提供，**或这份数据来自旧版本**）。
+     *
+     * ⚠️ null 的两种来源必须区分清楚，否则会写出「显示 1970 年」这种假信息：
+     * - 来源真的没给（如某些自建 Vaultwarden 不返回 `revisionDate`）；
+     * - 或这份 `VaultItem` 来自**旧缓存**、旧测试夹具（本来就没有这个字段）。
+     * ⇒ UI 遇到 null 是**不显示这一行**，而不是兜一个默认时间。
+     */
+    val updatedAt: Long? = null,
 )
 
 /**

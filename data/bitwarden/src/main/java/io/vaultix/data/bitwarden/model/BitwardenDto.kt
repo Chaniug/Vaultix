@@ -57,6 +57,17 @@ data class CipherDto(
     @SerialName("folderId") val folderId: String? = null,
     @SerialName("organizationId") val organizationId: String? = null,
     @SerialName("revisionDate") val revisionDate: String = "",
+    /**
+     * 条目**创建时间**（ISO-8601 明文串，服务端原样返回）。
+     *
+     * ⚠️ 2026-09-30 补声明：服务端**一直**在返回这个字段，而本 DTO 此前没有它
+     * ⇒ 被 kotlinx.serialization 的 `ignoreUnknownKeys` **静默丢掉**，
+     * 于是「条目的创建时间」在 Vaultix 里根本无处可来（用户报「详情页看不到创建时间」）。
+     * 这类「服务端有、DTO 没声明」的字段是**静默**丢失的典型 —— 加字段时对照服务端响应核一遍。
+     *
+     * ⚠️ 与 [revisionDate] 一样是**明文**（Bitwarden 不对时间字段加密），直接解析即可。
+     */
+    @SerialName("creationDate") val creationDate: String? = null,
     @SerialName("deletedDate") val deletedDate: String? = null,
     @SerialName("reprompt") val reprompt: Int = 0,
     @SerialName("login") val login: LoginDto? = null,
