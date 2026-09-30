@@ -204,10 +204,11 @@ UI（不感知库类型）
   剩下的两块是**通行密钥的写**（`KPEX_*` 由浏览器/服务端创建）与**旧孤儿行的回收站清理**
   （#106 之前留下的脏数据，`cleanupExpiredTrash` 会查到它们并给 KDBX 库入队 DELETE ⇒ 毒丸）。
 
-### 批次 W4 · 回收站映射（可选，独立批）
-- [ ] `observeTrash` 对 KDBX 分流：RecycleBin 组 → `TrashEntry`
-- [ ] `restoreItem` / `permanentDeleteItem` 接 W1 的对应操作
-- [ ] ⚠️ 与 `TrashCleanupPolicy`（30 天自动清理）的交互：KDBX 侧清理 = 从 RecycleBin 组永久删除
+### 批次 W4 · 回收站映射 ⏭ **已挪走 → 见 [`kdbx-sync-and-items-layout.md`](./kdbx-sync-and-items-layout.md) 的批次 S5**
+
+⚠️ 规格**只在那一份**（避免两处各写一遍、必然漂移）。一句话摘要：
+`observeTrash` 对 KDBX 恒返回空 ⇒ 回收站页看不到已删条目；写侧的
+`restoreItemFromRecycleBin` / `purgeItem` **已经能用**，缺的是读侧映射与仓储接线。
 
 ## 5. 门禁与纪律（每批必过，不分批跳过）
 
