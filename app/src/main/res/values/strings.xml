@@ -101,6 +101,12 @@
     <!-- 库状态 = 来源 + 条目数（列表状态行与 ⋮ 菜单卡片共用同一份数据）。
          ⚠️ 库**未解锁**时条目数不可知 ⇒ 只显示来源、不给数字（显示 0 会是假信息：
          那是"不知道"，不是"没有"）。 -->
+    <!-- 网盘同步状态角标（2026-10-01）：编辑只落本地缓存、云端要等一次同步 ⇒
+         没有这个角标时，用户改完条目、界面一切正常，而云端文件还是旧的。 -->
+    <string name="vault_sync_badge_pending">待上传</string>
+    <string name="vault_sync_badge_failed">上传失败</string>
+    <string name="vault_sync_badge_conflict">有冲突</string>
+    <string name="vault_sync_badge_remote_changed">云端有更新</string>
     <string name="vault_item_count_only">%1$d 个条目</string>
     <!-- ⋮ 菜单的动作分组标题（2026-09-30 方案 B）：把"去哪"与"做什么"分开。
          「锁定」不归任何一组，单独用分隔线隔开（破坏性动作不挨着常用动作）。 -->

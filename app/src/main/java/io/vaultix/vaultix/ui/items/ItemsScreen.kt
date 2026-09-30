@@ -122,6 +122,8 @@ import io.vaultix.vaultix.ui.common.rememberScrollCollapseFraction
 import io.vaultix.vaultix.ui.common.MiddleEllipsizedText
 import io.vaultix.vaultix.ui.common.toggleSelection
 import io.vaultix.vaultix.ui.common.VaultCardInfo
+import io.vaultix.vaultix.ui.common.syncBadgeColor
+import io.vaultix.vaultix.ui.common.syncBadgeLabel
 import io.vaultix.vaultix.ui.common.vaultCardInfoOf
 import io.vaultix.vaultix.ui.common.vaultOriginLabel
 import io.vaultix.vaultix.ui.common.VaultixWavyProgressBar
@@ -196,6 +198,17 @@ private fun VaultStatusRow(card: VaultCardInfo) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             ),
         )
+        // 同步角标放在条目数**之前**：它比"有多少条"更紧急（云端可能还是旧的），
+        // 而两者都不参与压缩 —— 宁可来源先被折短。
+        if (card.syncBadge != null) {
+            Spacer(Modifier.width(Spacing.sm))
+            Text(
+                text = syncBadgeLabel(card.syncBadge),
+                style = MaterialTheme.typography.labelMedium,
+                color = syncBadgeColor(card.syncBadge),
+                maxLines = 1,
+            )
+        }
         if (card.countText != null) {
             Spacer(Modifier.width(Spacing.sm))
             // ⚠️ **不加 weight、不设 maxLines 压缩**：条目数是这一行的锚点信息，
@@ -971,6 +984,16 @@ private fun MenuVaultCard(card: VaultCardInfo) {
             maxLines = MENU_CARD_SUBTITLE_LINES,
             overflow = TextOverflow.Ellipsis,
         )
+        // 同步状态**单独一行**（卡片有空间）：它与"在哪 / 多少条"是不同性质的信息，
+        // 挤进副标题会既丢颜色、又让长路径把它推到看不见。
+        if (card.syncBadge != null) {
+            Text(
+                text = syncBadgeLabel(card.syncBadge),
+                style = MaterialTheme.typography.labelMedium,
+                color = syncBadgeColor(card.syncBadge),
+                maxLines = 1,
+            )
+        }
     }
 }
 

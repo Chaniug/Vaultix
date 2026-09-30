@@ -36,8 +36,11 @@
  */
 package io.vaultix.vaultix.ui.common
 
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.graphics.Color
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.res.stringResource
+import io.vaultix.model.KdbxCloudSyncStatus
 import io.vaultix.model.VaultKind
 import io.vaultix.model.VaultSummary
 import io.vaultix.vaultix.R
@@ -85,7 +88,65 @@ data class VaultCardInfo(
     val name: String,
     val origin: String,
     val countText: String?,
+    /**
+     * 网盘同步状态的**角标**（null = 没什么要说的）。
+     *
+     * ## 为什么必须让它可见（2026-10-01 用户实测驱动）
+     *
+     * 用户原话：「我要更改位于 OneDrive 上的一个条目，修改了之后，它能正常顺利同步到
+     * ……里面吗」。答案是**能，但上传不是自动的** —— 编辑只落本地缓存，云端要等一次「同步」。
+     *
+     * 加这个角标之前，`PENDING_UPLOAD` / `FAILED` **只在 设置→密码库管理** 显示一行文案，
+     * 条目页与库列表**都看不到** ⇒ 用户改完条目、界面一切正常，而云端文件还是旧的，
+     * **没有任何地方告诉他**。这正是本项目最忌讳的那种"静默"。
+     */
+    val syncBadge: SyncBadge? = null,
 )
+
+/**
+ * 需要在界面上主动说出来的同步状态（其余状态不必占用视觉）。
+ *
+ * ⚠️ 刻意**区分"待上传"与"上传失败"**：两者都意味着"云端还是旧的"，但用户可做的事不同
+ * —— 前者等一会儿就好，后者需要检查网络/账号或重试。合成一个"未同步"会让人不知道该干什么。
+ */
+enum class SyncBadge {
+    /** 本地改了、还没传上去。 */
+    PENDING,
+
+    /** 上次上传失败（网络 / 账号 / 冲突前置）。 */
+    FAILED,
+
+    /** 两端都改了，等用户拍板。 */
+    CONFLICT,
+
+    /** 远端有新版本，需要重新解锁后拉取。 */
+    REMOTE_CHANGED,
+    ;
+
+    /**
+     * 纯函数映射（可 JVM 单测）：只有"需要用户知道"的状态才给角标。
+     *
+     * - `null`（本地 SAF 库 / 从未同步）⇒ 无角标（它根本没有云端这回事）；
+     * - `IN_SYNC` / `SYNCING` ⇒ 无角标（前者无事，后者是瞬时态，闪一下反而像故障）；
+     * - `LOCAL_ONLY` ⇒ 无角标（"还没有网盘来源"是配置态，不该常驻提示）。
+     */
+    companion object {
+        fun of(status: KdbxCloudSyncStatus?): SyncBadge? = when (status) {
+            KdbxCloudSyncStatus.PENDING_UPLOAD,
+            KdbxCloudSyncStatus.PENDING_UPLOAD_WITH_LOCAL_CHANGES,
+            -> PENDING
+
+            KdbxCloudSyncStatus.FAILED -> FAILED
+            KdbxCloudSyncStatus.CONFLICT -> CONFLICT
+            KdbxCloudSyncStatus.REMOTE_CHANGED -> REMOTE_CHANGED
+            KdbxCloudSyncStatus.IN_SYNC,
+            KdbxCloudSyncStatus.SYNCING,
+            KdbxCloudSyncStatus.LOCAL_ONLY,
+            null,
+            -> null
+        }
+    }
+}
 
 /** 由库摘要 + 条目总数组装 [VaultCardInfo]。 */
 @Composable
@@ -97,7 +158,30 @@ fun vaultCardInfoOf(vault: VaultSummary, itemCount: Int): VaultCardInfo = VaultC
     } else {
         null
     },
+    syncBadge = SyncBadge.of(vault.syncStatus),
 )
+
+@Composable
+fun syncBadgeLabel(badge: SyncBadge): String = stringResource(
+    when (badge) {
+        SyncBadge.PENDING -> R.string.vault_sync_badge_pending
+        SyncBadge.FAILED -> R.string.vault_sync_badge_failed
+        SyncBadge.CONFLICT -> R.string.vault_sync_badge_conflict
+        SyncBadge.REMOTE_CHANGED -> R.string.vault_sync_badge_remote_changed
+    },
+)
+
+/**
+ * 角标颜色：**要用户动手的**（失败 / 冲突）用 error 色，其余只是告知。
+ *
+ * ⚠️ 不把四种状态都染成同一个颜色 —— 那等于把「该不该管」这条信息也抹掉了。
+ */
+@Composable
+fun syncBadgeColor(badge: SyncBadge): Color = when (badge) {
+    SyncBadge.FAILED, SyncBadge.CONFLICT -> MaterialTheme.colorScheme.error
+    SyncBadge.REMOTE_CHANGED -> MaterialTheme.colorScheme.primary
+    SyncBadge.PENDING -> MaterialTheme.colorScheme.onSurfaceVariant
+}
 
 /** KDBX 的来源分类（解析结果；供 UI 与单测共用）。 */
 internal sealed interface KdbxSourceTarget {
