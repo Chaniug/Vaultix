@@ -35,6 +35,7 @@ import io.vaultix.database.dao.VaultDao
 import io.vaultix.data.kdbx.Kdbx
 import io.vaultix.data.kdbx.KdbxFailure
 import io.vaultix.data.repository.kdbx.CachedKdbxFile
+import io.vaultix.data.repository.kdbx.KdbxAutoUploader
 import io.vaultix.data.repository.kdbx.KdbxCloudSyncCoordinator
 import io.vaultix.data.repository.kdbx.KdbxFileCache
 import io.vaultix.domain.VaultSaveOutcome
@@ -54,6 +55,14 @@ class KdbxItemRepository @Inject constructor(
     private val cloudSync: KdbxCloudSyncCoordinator,
     private val fileCache: KdbxFileCache,
     private val kdbxSessions: KdbxSessionFlow,
+    /**
+     * 网盘库的「保存后自动上传」（施工单 S1 + S6）。
+     *
+     * ⚠️ 只 `enqueue`、**不等它**：网盘一次写入 5–60 s，在保存路径里等它
+     * 会把"保存"卡成转圈（用户体感就是"点了保存没反应"）。
+     * 它自己保证串行与失败留痕，见 `KdbxAutoUploader` 的类注释。
+     */
+    private val autoUploader: KdbxAutoUploader,
 ) {
 
     suspend fun create(vaultId: String, item: VaultItem): Result<VaultSaveOutcome> = runCatching {
@@ -113,6 +122,10 @@ class KdbxItemRepository @Inject constructor(
             // `vaults.syncStatus` 读出来的，不标记的话下一次同步会判"两边都没变"，
             // 那笔改动永远推不上去（见 KdbxSyncOrchestrator.markLocalEdited 的 KDoc）。
             cloudSync.markLocalEdited(vaultId)
+            // 标记之后**立即**排一次上传：不然"改完必须手动点同步"，
+            // 而用户以为保存即同步（施工单 S1 的第一条用户反馈）。
+            // ⚠️ 顺序不能反：先落 PENDING_UPLOAD，上传器才会认为"有活要干"。
+            autoUploader.enqueue(vaultId)
         } else {
             // 本地文件库：文件即存储 ⇒ 直接写文件（本地 IO，毫秒级）。
             val source = cloudSync.fileSourceFor(origin)
