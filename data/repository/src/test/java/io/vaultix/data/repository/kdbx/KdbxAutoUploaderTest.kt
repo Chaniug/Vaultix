@@ -1,10 +1,11 @@
 package io.vaultix.data.repository.kdbx
 
-import io.mockk.coAnswers
+// ⚠️ `coAnswers` / `firstArg` **都不需要 import**（它们是 `MockKAnswerScope` 的成员，
+//    写了 `import io.mockk.coAnswers` 反而 `Unresolved reference` —— CI 上炸过一次）。
+//    参照同模块既有的 `BitwardenSyncOrchestratorTest`：它也用 `coAnswers`，同样没有 import。
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
-import io.mockk.firstArg
 import io.mockk.mockk
 import io.vaultix.database.dao.VaultDao
 import io.vaultix.database.entity.VaultEntity
@@ -130,8 +131,10 @@ class KdbxAutoUploaderTest {
     @Test
     fun `不同库_互不阻塞`() = runTest {
         val status = statusOf(KdbxCloudSyncStatus.PENDING_UPLOAD)
+        // 两个库的 origin 相同、而 `id` 不参与上传器的任何判定（锁用调用方传的 vaultId，
+        // 云端判断只看 row.origin）⇒ 这里不必按入参分发行，也就不必用 `firstArg()`。
         val dao = mockk<VaultDao> {
-            coEvery { get(any()) } coAnswers { row(CLOUD_ORIGIN, status.get(), firstArg()) }
+            coEvery { get(any()) } coAnswers { row(CLOUD_ORIGIN, status.get(), OTHER_ID) }
         }
         val running = AtomicInteger(0)
         val maxConcurrent = AtomicInteger(0)
@@ -147,8 +150,8 @@ class KdbxAutoUploaderTest {
         }
         val uploader = KdbxAutoUploader(dao, coordinator)
 
-        val a = launch { uploader.drain("vault-a") }
-        val b = launch { uploader.drain("vault-b") }
+        val a = launch { uploader.drain(VAULT_ID) }
+        val b = launch { uploader.drain(OTHER_ID) }
         a.join()
         b.join()
 
@@ -176,6 +179,7 @@ class KdbxAutoUploaderTest {
 
     private companion object {
         const val VAULT_ID = "vault-1"
+        const val OTHER_ID = "vault-2"
         const val CLOUD_ORIGIN = "onedrive:acc:/vault.kdbx"
         const val SAF_ORIGIN = "content://com.android.providers.downloads.documents/document/1"
         const val SYNC_DURATION_MS = 50L
