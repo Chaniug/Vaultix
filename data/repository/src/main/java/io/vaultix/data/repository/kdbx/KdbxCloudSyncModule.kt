@@ -37,7 +37,6 @@ import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
-import io.vaultix.data.kdbx.Kdbx
 import io.vaultix.database.dao.VaultDao
 import java.io.File
 import okhttp3.OkHttpClient
@@ -123,30 +122,18 @@ object KdbxCloudSyncModule {
     }
 }
 
-/**
- * **默认**的会话替换实现：诚实退化 —— 要求用户重新解锁。
+/*
+ * ⚠️ 这里**曾经**有一个 `RequiresUnlockSessionReplacer`（恒定返回失败的"占位实现"），
+ * 2026-10-01 已删除 —— 保留它的代价太高：
  *
- * ## 为什么先放这一版
+ * 1. 它其实**从未被注入过**：`@Inject constructor` 提供的是 `RequiresUnlockSessionReplacer`
+ *    这个具体类型，而不是 [KdbxSessionReplacer]，Hilt 只会去取 app 侧那个 `@Provides`。
+ *    ⇒ 它是一个**死类**，唯一的作用是让人以为"还有个兜底实现"。
+ * 2. 更糟的是它把一句错误结论写成了定论：「免密重开需要主密码，而主密码只在 app 侧」。
+ *    实际上已解锁的会话里就存着那组凭据（`KdbxSession.credentials`），
+ *    免密替换根本不需要把主密码取回来 —— 这个误判让拉取路径一直做不出来。
  *
- * 「用远端覆盖本地」之后的正确状态是"会话里已经是远端那份字节"。要做到**免密**，
- * 需要 [Kdbx.unlock] 拿到该库的主密码 —— 而那把密码只存在于 app 侧的快速解锁
- * 凭据（`LocalUnlockEnrollment` / `PinUnlockStore` 的信封）里，**不在 `data:repository`**。
- *
- * ⇒ 两害相权：
- * - **现在**：替换失败 ⇒ 返回一句人话，状态留在 `CONFLICT`（用户还能再选一次）。
- *   数据是安全的 —— 什么都没写，远端毫发无损。
- * - **硬凑一个"假成功"**：状态记成"已用远端覆盖"，而会话里还是旧内容 ⇒
- *   用户下一次保存就把旧内容推回去，**静默覆盖远端的新版本**。
- *   那正好违反"同步不丢"，比"多要求一次解锁"恶劣得多。
- *
- * ⇒ 所以这里**故意**不装作能做。真正免密的实现在 app 侧绑定（见 `KdbxCloudSyncModule`
- * 的说明与 `OneDriveModule` 附近的 app 装配），归下一批。
+ * ⇒ 现在只有**一份**实现：`Kdbx.replaceSession`（`data:kdbx`），由 app 侧
+ *   `KdbxCloudSyncAppModule.provideKdbxSessionReplacer` 直接指向它。
+ *   别再加第二个实现：两条替换路径迟早漂移，而漂移的代价是"一边换了会话、一边没换"。
  */
-@Singleton
-class RequiresUnlockSessionReplacer @javax.inject.Inject constructor() : KdbxSessionReplacer {
-
-    override suspend fun replace(vaultId: String, remoteBytes: ByteArray): Result<Unit> =
-        Result.failure(
-            IllegalStateException("云端已更新。请先锁定并重新解锁该密码库，再执行同步。"),
-        )
-}

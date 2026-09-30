@@ -33,6 +33,7 @@ import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
+import io.vaultix.data.kdbx.Kdbx
 import io.vaultix.data.kdbx.KdbxFileSource
 import io.vaultix.data.repository.kdbx.KdbxCloudSyncCoordinator
 import io.vaultix.data.repository.kdbx.KdbxSessionReplacer
@@ -80,29 +81,33 @@ object KdbxCloudSyncAppModule {
     }
 
     /**
-     * 会话替换 —— **免密**版。
+     * 会话替换 —— **免密**版（2026-10-01 接通）。
      *
-     * ## 为什么要免密（为什么不能用「请重新解锁」凑）
+     * ## 为什么必须免密
      *
-     * 「远端更新了，本地拉下来」是**自动同步**要做的事。如果每次都要用户重新输主密码，
-     * 自动同步就退化成"手动 + 输密码"，等于没做。免密的前提是 app 侧的快解锁凭据
-     * （`LocalUnlockEnrollment` / `PinUnlockStore` 的信封）能解出主密码。
+     * 「远端更新了，本地拉下来」是同步要做的事。若每次都要用户重新输主密码，
+     * 同步就退化成「手动 + 输密码」，等于没做。
      *
-     * ## ⚠️ 这里**只**尝试免密，失败就如实报告
+     * ## 免密的依据：凭据就在会话里
      *
-     * 解不出（用户没开快速解锁、或信封被系统认证锁住）时**不能**编一个"成功"返回 ——
-     * 那会让状态显示"已用远端覆盖"，而会话里还是旧内容，用户下次保存就把旧内容推回去，
-     * **静默覆盖远端的新版本**。宁可让用户多点一次解锁，也不能丢数据。
+     * 已解锁的会话**本来就存着**打开这个库用的那组凭据（`KdbxSession.credentials`，
+     * 写回时 `KdbxRoundTrip` 也正用它重编码整库）⇒ 拿同一组凭据去解远端字节即可，
+     * **不需要**快速解锁信封，也**不需要**把主密码以明文交回这一层。
      *
-     * 真正的解密动作委托给 [KdbxSessionReplacer] 的下一个实现（见下方 TODO 标注的
-     * `UnlockCredentialSessionReplacer`）—— 本批先不接，理由写在那里。
+     * ## ⚠️ 这里此前是一个**恒定失败**的占位
+     *
+     * 旧实现无条件返回「云端已更新，请先锁定并重新解锁」—— 而用户照做、重新解锁，
+     * 再点一次**还是这一句**（失败是恒定的，与解锁与否无关）。
+     * 后果：「用远端覆盖本地」与「拉取远端更新」两条路都是**死路**，
+     * 冲突永远解不掉、另一台设备的改动本机永远拉不下来。
+     *
+     * ⇒ 现在委托给 [Kdbx.replaceSession] —— 那是唯一一份实现，
+     *    「拉字节 → 替换会话 → 才记状态」的顺序由协调器保证。
      */
     @Provides
     @Singleton
-    fun provideKdbxSessionReplacer(): KdbxSessionReplacer = KdbxSessionReplacer { _, _ ->
-        Result.failure(
-            IllegalStateException("云端已更新。请先锁定并重新解锁该密码库，再执行同步。"),
-        )
+    fun provideKdbxSessionReplacer(): KdbxSessionReplacer = KdbxSessionReplacer { vaultId, bytes ->
+        Kdbx.replaceSession(vaultId = vaultId, remoteBytes = bytes)
     }
 }
 

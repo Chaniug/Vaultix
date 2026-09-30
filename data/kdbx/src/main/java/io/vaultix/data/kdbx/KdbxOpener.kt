@@ -82,13 +82,7 @@ internal object KdbxOpener {
         password: String,
         keyFileBytes: ByteArray?,
     ): Result<KdbxSession> {
-        when (val format = inspectKdbxFormat(bytes)) {
-            is KdbxFormat.NotKdbx -> return Result.failure(KdbxFailure(KdbxOpenError.NotKdbxFile))
-            is KdbxFormat.UnsupportedVersion ->
-                return Result.failure(KdbxFailure(KdbxOpenError.UnsupportedVersion(format.version)))
-
-            is KdbxFormat.Supported -> Unit
-        }
+        formatFailure(bytes)?.let { return Result.failure(it) }
 
         val candidates = buildCredentialCandidates(password = password, keyFileBytes = keyFileBytes)
         val attempted = mutableListOf<String>()
@@ -120,5 +114,81 @@ internal object KdbxOpener {
         return Result.failure(
             KdbxFailure(KdbxOpenError.InvalidCredentials(attempted), cause = lastError),
         )
+    }
+
+    /**
+     * ★ **用已解锁会话现有的那组凭据重新打开 [bytes]**（2026-10-01，拉取路径收口）。
+     *
+     * ## 为什么必须有这个入口
+     *
+     * 「远端更新了，拉下来替换会话」要求**免密**重开 —— 那一刻用户并没有重新输密码，
+     * 而会话里正握着打开这个库的那组 [Credentials]（见 [KdbxSession.credentials]）。
+     * 直接用它解码即可 ⇒ **既不需要** app 侧的快速解锁信封，**也不需要**把主密码
+     * 以明文形式交回这一层（此前正是"以为必须拿回主密码"才让替换一直做不出来）。
+     *
+     * ## ⚠️ 复用 [Credentials] 是安全的（不是巧合）
+     *
+     * [Credentials] 里的 `EncryptedValue` 只在**构造时**用随机 salt 做一次 XOR 混淆，
+     * 取值时按同一 salt 还原 ⇒ 同一个对象可以反复用于 decode / encode。
+     * 这一点早就被生产路径验证过：`KdbxRoundTrip.verify` 每次保存都用**同一组**
+     * 会话凭据重新编码整库（见 `Kdbx.saveVia`）。
+     *
+     * ## 失败的语义
+     *
+     * 解码失败几乎只意味着一件事：**远端这个库换了主密码或 keyfile**。
+     * 那与"用户输错了密码"是两回事 —— 归到 [KdbxOpenError.RemoteCredentialsMismatch]
+     * 而不是 [KdbxOpenError.InvalidCredentials]，否则用户会看到"密码不正确"，
+     * 然后去怀疑一个其实没输错的密码。
+     *
+     * ⚠️ 失败时**调用方的会话必须原封不动**：远端那份解不开，本地这份仍是用户
+     *   此刻唯一可信的内容，不能拿解不开的字节把它顶掉。
+     */
+    fun reopen(
+        bytes: ByteArray,
+        credentials: Credentials,
+        label: String,
+    ): Result<KdbxSession> {
+        formatFailure(bytes)?.let { return Result.failure(it) }
+
+        return runCatching {
+            ByteArrayInputStream(bytes).use { input ->
+                KeePassDatabase.decode(
+                    inputStream = input,
+                    credentials = credentials,
+                    cipherProviders = KDBX_CIPHER_PROVIDERS,
+                )
+            }
+        }.fold(
+            onSuccess = { database ->
+                Result.success(
+                    KdbxSession(
+                        database = database,
+                        content = database.toMappedContent(),
+                        credentialLabel = label,
+                        credentials = credentials,
+                    ),
+                )
+            },
+            onFailure = { error ->
+                Result.failure(
+                    KdbxFailure(KdbxOpenError.RemoteCredentialsMismatch, cause = error),
+                )
+            },
+        )
+    }
+
+    /**
+     * 先判格式再谈解密（[open] 与 [reopen] 共用的第一道闸）。
+     *
+     * ⚠️ 抽出来的理由与 `Kdbx.readFailure` 一样：**两个入口的格式判据必须同一份**。
+     * 各写一遍的话，将来改格式策略（比如再收窄一次版本）一定会漏掉一个 ——
+     * 而漏掉的那个会表现为"不是 KDBX 文件却报密码错误"，方向完全指错。
+     */
+    private fun formatFailure(bytes: ByteArray): KdbxFailure? = when (val format = inspectKdbxFormat(bytes)) {
+        is KdbxFormat.NotKdbx -> KdbxFailure(KdbxOpenError.NotKdbxFile)
+        is KdbxFormat.UnsupportedVersion ->
+            KdbxFailure(KdbxOpenError.UnsupportedVersion(format.version))
+
+        is KdbxFormat.Supported -> null
     }
 }

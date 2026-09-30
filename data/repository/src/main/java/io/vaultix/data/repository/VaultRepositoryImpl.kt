@@ -866,6 +866,11 @@ private fun classifyKdbxError(error: Throwable): UnlockResult {
         // 写回路径才有「未解锁」；解锁/添加路径走到这里说明会话已失效，提示重新解锁即可。
         KdbxOpenError.NotUnlocked -> UnlockResult.Unknown("请先解锁该密码库")
 
+        // ★ 拉取远端时才发现远端换了密码。解锁/添加路径**不可能**走到这里
+        //   （那条路径是用户当场输密码），列出来只为让 when 保持穷尽 ——
+        //   真出现了也只需把错误自带的「下一步」原样转述。
+        KdbxOpenError.RemoteCredentialsMismatch -> UnlockResult.Unknown(error.message)
+
         is KdbxOpenError.Unknown -> UnlockResult.Unknown(kind.detail)
     }
 }

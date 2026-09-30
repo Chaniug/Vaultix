@@ -72,6 +72,22 @@ sealed interface KdbxOpenError {
      * （「先解锁这个库」）而 [Unknown] 只能是「未知错误，重试看看」。
      */
     data object NotUnlocked : KdbxOpenError
+
+    /**
+     * ★ **远端的那份库用了另一组凭据**（2026-10-01，拉取路径）。
+     *
+     * 场景：另一台设备不仅改了内容，还改了这个库的**主密码或 keyfile**。
+     * 此时本机手上这组凭据解不开远端字节 —— 这不是"用户输错了密码"。
+     *
+     * ## 为什么不能并入 [InvalidCredentials]
+     *
+     * 并入的话用户会看到「数据库密码或密钥文件不正确」，于是去怀疑一个
+     * **他根本没输过、而且本来是对的**密码。真实情况是：远端的库变了密码，
+     * 正确动作是「锁定这个库，用新密码重新解锁」，而不是重试。
+     *
+     * ⇒ 两种失败的**用户动作完全不同**，必须分开（与 [NotUnlocked] 同理）。
+     */
+    data object RemoteCredentialsMismatch : KdbxOpenError
 }
 
 /**
@@ -192,6 +208,59 @@ object Kdbx {
                 credentialLabel = session.credentialLabel,
             ),
         )
+    }
+
+    /**
+     * ★ **把 [remoteBytes] 变成 [vaultId] 的新会话**（2026-10-01：同步拉取的落点）。
+     *
+     * ## 它在整条同步链上的位置
+     *
+     * 「远端更新了，拉下来」的完整动作是三步：**拉字节 → 替换会话 → 才记状态**。
+     * 中间那一步此前一直是空的（app 侧注入的 `KdbxSessionReplacer` 恒定返回失败），
+     * 于是「用远端覆盖本地」与「拉取远端更新」两条路都走不通 —— 状态记不成，
+     * 用户只能反复看到同一句「请先重新解锁」，而重新解锁之后**还是失败**。
+     * 本方法就是补上那一步。
+     *
+     * ## 免密的依据：会话里已经有凭据
+     *
+     * 打开一个库要用 kotpass 的 `Credentials`，而**已解锁的会话本来就存着它**
+     * （`KdbxSession.credentials`，写回时也正在用它重编码）。
+     * ⇒ 替换会话**不需要**向用户再要一次主密码，也不需要 app 侧的快速解锁信封 ——
+     *   此前正是「以为必须把主密码拿回来」让这一步一直做不出来。
+     *
+     * ## 三条"不许"
+     *
+     * 1. **不许在未解锁时凭空开一个**：没有会话就没有凭据，而拿一个空库去顶替
+     *    是最伤人的那类 bug（用户看到库空了）。未解锁 ⇒ 返回
+     *    [KdbxOpenError.NotUnlocked]，一个字节都不动。
+     * 2. **不许在解码失败时动会话**：远端那份解不开（换了密码 / 不是 KDBX /
+     *    版本不对）时，本地这份仍是用户此刻**唯一可信**的内容。
+     * 3. **不许只换 `database` 不换 `content`**：两者必须来自同一份字节，
+     *    否则界面读到旧内容、下一次保存却按新库编码（与 [mutate] 同款警告）。
+     *
+     * ⚠️ 解码要跑一遍 KDF（真机数百毫秒），调用方**别在主线程点它**（与 [mutate]
+     *    [save] 同款约定：本函数刻意不做内部 `withContext`）。
+     *
+     * @return 成功 = 会话已换成 [remoteBytes] 解出来的那份（此后保存写的是远端版本）。
+     */
+    fun replaceSession(vaultId: String, remoteBytes: ByteArray): Result<Unit> {
+        val current = KdbxSessionStore.get(vaultId)
+            ?: return Result.failure(KdbxFailure(KdbxOpenError.NotUnlocked))
+
+        val reopened = KdbxOpener.reopen(
+            bytes = remoteBytes,
+            credentials = current.credentials,
+            label = current.credentialLabel,
+        ).getOrElse { error ->
+            val failure = error as? KdbxFailure
+                ?: KdbxFailure(KdbxOpenError.Unknown(error.message.orEmpty()), error)
+            return Result.failure(failure)
+        }
+
+        KdbxSessionStore.put(vaultId, reopened)
+        // 只记条数，不记任何内容（VaultixLog 铁律）。
+        VaultixLog.d(TAG) { "replaceSession：$vaultId 条目=${reopened.content.items.size}" }
+        return Result.success(Unit)
     }
 
     /**
@@ -612,6 +681,9 @@ class KdbxFailure(val error: KdbxOpenError, cause: Throwable? = null) : Exceptio
         is KdbxOpenError.SourceUnavailable -> error.detail
         is KdbxOpenError.Unknown -> error.detail
         is KdbxOpenError.NotUnlocked -> "请先解锁该密码库"
+        KdbxOpenError.RemoteCredentialsMismatch ->
+            "远端的库已经换了密码或密钥文件，本机无法自动载入。" +
+                "请锁定该密码库，再用新密码解锁。"
     },
     cause,
 )
