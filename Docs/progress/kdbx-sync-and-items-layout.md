@@ -1,8 +1,9 @@
 # KDBX 网盘同步完善 + 条目页布局优化 —— 施工工作单
 
 > **状态**：✅ **代码已完成**（2026-10-01 当天做完，S1–S6 / 单测 / L1 / L2 **全部落地**）
-> ⏳ **待真机验收** —— 见 §3；⚠️ **编译与单测在接力的沙箱里跑不了**（无 Android SDK），
-> 由 CI 兜，门禁只跑到了 detekt 三关 + 6 个自检脚本（见 §6 本次记录）。
+> ✅ **CI 已通过**：`Android CI (Debug)` run 36769103066 —— 编译门禁 + 单测全绿
+> ⏳ **待真机验收** —— 见 §3（含 L1 / L2 两个要用户拍板的取舍）。
+> ⚠️ 沙箱跑不了编译，中途被 CI 抓到 2 处 detekt 查不出的错误，详见 §6.3。
 > **前置阅读**：`8.3-M2KDBX.md`（KDBX 上位约定）· `SESSION-2026-09-30.md`（阶段 B 已做了什么，**按需只读一节**）
 > **性质**：**补齐**（不是从零做）—— 阶段 B 的 W1/W2/W3 已上线，条目增删改**已经能用**，
 > 本单填的是"网盘同步这条链上剩下的洞"＋两处布局。
@@ -210,14 +211,36 @@
   那是 `SettingsScreen.kt` 的**既有**引用、与本次改动无关，属基线陈旧，**没有顺手改基线**
   （改基线该单独一笔，混进功能提交说不清）。
 
-### 6.3 ⚠️ **没做到**的门禁（如实写，别让下一位以为跑过了）
+### 6.3 沙箱跑不到的门禁，**由 CI 补上了**（且补的过程踩了两个坑）
 
 接力沙箱**没有 Android SDK**（`dl.google.com` 不可达，华为云镜像只到 platform-29、缺 API 37），
-⇒ `:app:compileFullDebugKotlin` 与 `:testFullDebugUnitTest` **一次都没跑过**。
+⇒ 本地 `:app:compileFullDebugKotlin` 与 `:testFullDebugUnitTest` **一次都没跑过**。
+detekt 只做**静态分析**，查不出编译错误 —— 本批提交信息因此**不写"门禁全绿"**。
 
-detekt 只做**静态分析**，查不出编译错误 / 签名笔误 / `@Composable` 误用。
-也就是说：**这批代码是"看起来对"，不是"编译过"**。CI 是唯一的编译验证点。
-⇒ 本批提交信息**不写"门禁全绿"**，只写"detekt 三关 + 6 自检脚本通过，编译/单测留给 CI"。
+**CI 最终状态**：`Android CI (Debug)` run **36769103066** ——
+`Run detekt (quality gate)` ✅ · `Check source encoding` ✅ · **`Build Debug APK (build gate)` ✅** ·
+`Run unit tests` ✅（日志里 `BUILD SUCCESSFUL` ×3、无 `e:` 编译错误、
+`:data:repository:testDebugUnitTest` 确已执行）。
+
+⚠️ **中途被 CI 抓到两处编译错误，都是 detekt 查不出的**（各花了一轮 CI 才发现）：
+
+1. **`KdbxSyncRepositoryImpl` 漏 import `KdbxSessionFlow`** —— KSP 阶段就挂：
+   `InjectProcessingStep was unable to process ... because 'KdbxSessionFlow' could not be resolved`。
+   该类型在父包 `io.vaultix.data.repository`，本文件在其子包 `...repository.kdbx`
+   ⇒ **子包不会自动继承父包可见性**，必须显式 import。
+2. **`KdbxAutoUploaderTest` 里 stub 的 `get` 被遮蔽** ——
+   `coEvery { get(any()) }` 裸写的 `get` 解析到了 **`MockKMatcherScope.get`**（返回 `DynamicCall`），
+   而不是 `VaultDao.get` ⇒ `expected 'MockKMatcherScope.DynamicCall', actual 'VaultEntity'`。
+   修法：**stub 一律显式带 receiver**（`coEvery { dao.get(any()) }`）——
+   仓库既有测试全写成 `vaultRepository.syncVault(…)` 也是这个原因，不是风格偏好。
+
+⚠️ **这两轮之所以"白等"，是因为 CI 的单测步标了 `continue-on-error: true`**：
+job 照样报 `success`，只有**下载 job 日志逐行看**才发现里面是 `BUILD FAILED`。
+沙箱里 `gh run list` / `gh run view` 全是绿的。详见 `ISSUES #145`。
+
+**另**：`AutoRestoreTriggerTest > 档位离开Never_删信封且不恢复` 在中间一轮失败过、
+在最终一轮**没有**失败 ⇒ 它是 **flaky**（用了 `awaitCondition` 的时序用例），
+**与本次改动无关**，但也因此不能拿"单测步骤红不红"当信号。
 
 ### 6.4 沙箱到 GitHub 的通道（下次接力可直接复用）
 

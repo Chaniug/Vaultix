@@ -77,6 +77,8 @@
 | 128 | 🔴 改完 SDK 的 `package.xml`，编译仍报 `Failed to find target with hash string 'android-37.0'` ⇒ **真凶是 Gradle daemon 里没失效的 SDK loader 缓存**（写 10 分钟 `Probe.java` 证伪 sdklib，再 `gradle --stop` + 删 `.gradle`/`daemon` 30 秒解决）。纪律：**改了 daemon 外部输入后门禁仍报同一行错，第一怀疑对象是 daemon 缓存** |
 | 137 | 🔴 **接力沙箱跑不了编译与单测**（无 Android SDK，`dl.google.com` 不可达、华为云镜像只到 platform-29 缺 API 37）⇒ **detekt 全绿 ≠ 代码能编译**（静态分析查不出签名笔误 / import 不存在）。纪律：这种环境下**提交信息禁止写「门禁全绿」**，且**detekt 全绿必须自证不是空跑**（压低阈值探针，确认扫到新文件与 test 源集） |
 | 138 | GitHub 在沙箱被劫持到 `198.18.0.x` 保留网段 ⇒ HTTPS/SSH 全不通。解法三步：阿里 DoH 查真实 IP → 写 `/etc/hosts` **和** `/root/.user_hosts` → ⚠️ **`~/.ssh/config` 的 `HostName` 必须写 IP**（写域名会绕过 hosts，等于白做） |
+| 146 | ⭐ mockk：stub 里**裸方法名会被 `MockKMatcherScope` 遮蔽**（`coEvery { get(any()) }` 的 `get` 解析到 `MockKMatcherScope.get`，报 `expected 'MockKMatcherScope.DynamicCall'`）。⇒ **stub 一律显式带 receiver**（`coEvery { dao.get(any()) }`）—— 既有测试全写 `vaultRepository.syncVault(…)` 就是这个原因，不是风格偏好。另：`coAnswers` / `firstArg` **都不需要 import**；要读实时值必须用 `coAnswers` 而非 `returns` |
+| 145 | 🔴 CI 的**单测步是 `continue-on-error: true`** ⇒ job 报 `success` **只代表命令跑完了**，不代表测试通过。实测：job 绿、日志里 `BUILD FAILED` + `:compileDebugUnitTestKotlin FAILED`（新测试 4 处编译错），沙箱完全看不到。纪律：**推完必须下载 job 日志逐行看**（日志域名 `productionresultssa2.blob.core.windows.net` 同样被劫持，要一并写 hosts）。另：单测**按模块显式登记**，`data:kdbx` 曾漏登记致用例从未执行。⚠️ 仓库挂着一个**既有失败** `AutoRestoreTriggerTest > 档位离开Never_删信封且不恢复`（与本次无关，未修） |
 
 ### [02-自动填充](./issues/02-自动填充.md) — 自动填充（AutofillService 链路）
 

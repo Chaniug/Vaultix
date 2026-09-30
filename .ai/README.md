@@ -26,14 +26,19 @@
 > ⚠️ 这里**刻意不写 HEAD 哈希**：它每提交一次就过期一次，而**过期不可观测**
 > （文件还在、只是内容旧了，AI 不会怀疑）。**开工前自己 `git log -1` / `git status -sb` 自查。**
 >
-> ### ⚠️ 这批代码**没编译过**（接力沙箱无 Android SDK）
+> ### ✅ CI 已通过（编译 + 单测都过了）—— 但过程值得看一眼
 >
-> `dl.google.com` 在沙箱不可达、华为云 Android 镜像只到 platform-29（缺 API 37）
-> ⇒ `:app:compileFullDebugKotlin` 与 `:testFullDebugUnitTest` **一次都没跑成**。
-> 跑到的只有 **detekt 三关（分开单跑，全绿，且做了"不是空跑"的自证）** + **6 个自检脚本**。
-> detekt **只做静态分析**，查不出编译错误 / 签名笔误。
-> ⇒ **验收时先看 CI 是否编译过**；用户睡醒真机验收前，别对外声称"这批是好的"。
+> 最终一轮：`Android CI (Debug)` run **36769103066** —— detekt ✅ · 编码检查 ✅ ·
+> **Build Debug APK ✅** · 单测 ✅（`:data:repository:testDebugUnitTest` 确已执行，无失败）。
+>
+> ⚠️ 但**接力沙箱跑不了编译**（无 Android SDK），所以中间被 CI 抓到 **2 处 detekt 查不出**
+> 的编译错误（漏 import `KdbxSessionFlow`；mockk stub 的 `get` 被 `MockKMatcherScope` 遮蔽），
+> 各花了一轮 CI。而它们之所以"白等一轮"，是因为 **CI 单测步是 `continue-on-error`** ——
+> job 照样报 success，**必须下载 job 日志逐行看**才能发现里面是 `BUILD FAILED`（`ISSUES #145`）。
+>
+> ⇒ 接力时记住：**本地 detekt 全绿 ≠ 能编译**；**CI 绿 ≠ 测试通过**（要看日志）。
 > 详见施工单 §6.3。
+> ⚠️ 另：`AutoRestoreTriggerTest` 有一个 **flaky** 失败（与本次无关），别拿它当信号。
 >
 > **待办两摊**：
 > 1. ⏳ **真机验收**上面那单（用户 2026-10-01 说「我睡醒了再验证」）：
