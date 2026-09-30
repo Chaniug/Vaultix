@@ -174,9 +174,27 @@ UI（不感知库类型）
       **"改 A 条目不影响 B 条目"** 用例（Fidelity 自检的判据就是它）
 
 ### 批次 W2 · 仓储分流（data:repository，撤第一道闸）
-- [ ] `ItemRepositoryImpl` 五个写方法加 `kind == KDBX` 分流（#106 的病根就在这：**当年没分流**）
-- [ ] `KdbxItemRepository`（或内联私有函数）：内存事务 + `VaultSaveOutcome`（新增 `LocalApplied`
-      语义或复用 Queued——**开工时定**，注意 BW 侧消费点）
+- [x] ✅ **data:kdbx 侧已完成（2026-09-30，提交 `5b44ba0`）**：`Kdbx.createItem / updateItem /
+      moveItemToRecycleBin / restoreItemFromRecycleBin / purgeItem` → `Result<KdbxPendingWrite>`
+      （新内容 + 待落盘字节 + 条目 uuid）。**公开签名不含 `KeePassDatabase`**（#64 引擎不外泄）。
+      事务三条"不许"（无会话不许建库 / 目标不存在必须判 `applied` / 改完必须换会话）已落测试。
+- [ ] ⬜ `ItemRepositoryImpl` 五个写方法加 `kind == KDBX` 分流（#106 的病根就在这：**当年没分流**）
+- [ ] ⬜ **落盘规则（本轮已核实，直接照此写）**：
+      - 缓存键就是 **`origin`**（见 `KdbxCloudSyncCoordinator.withRemoteCache`：`cacheKey = origin`）；
+      - **`origin.startsWith("content://")` ⇒ 本地 SAF，且它「不缓存」**（协调器注释明说）⇒
+        直接 `source.write(bytes)` 写文件即可，读侧读的就是那个文件；
+      - **网盘（webdav:/onedrive:）⇒ 写 `KdbxFileCache`**（`cache.save(origin, CachedKdbxFile(bytes, token=null))`），
+        再由同步编排器上传 —— 这就是「本地立即生效、上传异步」；
+      - 三处都要 `kdbxSessions.bump()`（`ItemRepositoryImpl.kdbxItems` 靠它重读会话）。
+- [ ] ⬜ **「待上传」标记要新增一个入口**：`KdbxSyncTransitions.markLocalChanges()` 已存在但
+      **全仓无调用者**；`KdbxSyncOrchestrator.markStatus` 是私有的 ⇒ 需要给
+      `KdbxSyncRepository`（或其实现）加一个 `markLocalEdited(vaultId)` 之类的公开方法。
+      ⚠️ 只对**网盘库**标记（本地 SAF 库标了会让 `VaultSummary.syncStatus` 从 null 变成非 null，
+      UI 会在一个根本没有云端的库上渲染「待上传」角标）。
+- [ ] ⬜ `VaultSaveOutcome` 目前只有 `Synced` / `Queued`。**倾向新增 `LocalApplied`**（更诚实：
+      KDBX 是"已落到本机、稍后上传"，而不是"进了待推送队列"）。消费点只有 3 处、
+      全是 `when`：`ItemDetailViewModel:196` · `ItemsViewModel:351` · `TrashViewModel:140`。
+- [ ] ⬜ `KdbxItemRepository`（或内联私有函数）：内存事务 + `VaultSaveOutcome`
 - [ ] 异步上传：接 `KdbxSyncOrchestrator`；失败 → 同步状态条（`KdbxSyncStatus` 已有 FAILED），
       **不静默**（"每个早退分支要么改状态、要么留日志"）
 - [ ] 撤 `requireWritable` 的 KDBX 拦截（保留给"库未解锁"场景的防御）
