@@ -159,53 +159,50 @@ UI（不感知库类型）
 - [ ] ⬜ **互操作验收（本批就要过，别留到 W3）**：用 **桌面 KeePassXC** 与 **手机 KeePassDX**
       打开刚新建的库、建一条、存盘、再由 Vaultix 读回。
 
-### 批次 W1 · 写映射 + 内存事务（纯 data:kdbx，零 UI）
-- [ ] `KdbxItemWriter`：`createEntry / updateEntry / softDelete(→RecycleBin 组) / restore / permanentDelete`
-      —— **底座直接用 §2.5 的 modifier**（`modifyEntry` / `removeEntry` / `withHistory` /
-      `withRecycleBin`），本类只做**领域字段 ↔ Entry 字段**的映射
-- [ ] 对齐 `KdbxItemMapper` 读方向的字段集合：OTP 位置式/`TimeOtp-*`、通行密钥 `KPEX_*`、自定义字段含排除表
-- [ ] ⚠️ **保真铁律**（8.3 预告，逐条落测试）：`KPEX_*` 与不认识的自定义字段**原样保留**；
-      位置式 `TOTP Settings` 按出现顺序写回；`TimeOtp-Secret-Hex|Base64` 真解码再编码；
-      目标格式 KDBX 4.1；群组路径用读方向预留的 `groupPaths`
-- [ ] **每次编辑都 `withHistory`**（KDBX 语义：改条目要把旧版推进历史，XC 里能看到）——
-      ⚠️ 别漏，否则用户在 XC 侧"历史记录"永远是空的，而且**不可事后补**
-- [ ] 内存事务 helper：`mutate(vaultId) { db -> db' }` = get → copy → 改 → **Fidelity 自检** → put → bump
-- [ ] 测试（`data:kdbx`，纯 JVM）：每操作一条"往返逐字段相等"用例 +
-      **"改 A 条目不影响 B 条目"** 用例（Fidelity 自检的判据就是它）
+### 批次 W1 · 写映射 + 内存事务 ✅ **已完成**（2026-10-01，提交 `214f6ec`）
+- ✅ `data:kdbx/KdbxItemWriter`：`createEntry / updateEntry / moveToRecycleBin /
+  restoreFromRecycleBin / permanentDelete`。
+- ★ **核心原则**：只覆盖**领域模型承载的字段**，其余交给 kotpass 的 `copy` 原样带过
+  （`KPEX_*` / 未知自定义字段 / 附件 / 自定义图标 / 历史）。
+  **代码里禁止"从领域模型重建一条 Entry"** —— 重建必然丢掉没建模的东西（8.3 铁律）。
+- ★ **三个会静默出事的地方**（各有对策 + 测试）：
+  ① **未变更的字段不重写**（TOTP 只在值真的变了时才动，否则 Hex 存法会被改成 otpauth）
+  —— 这也是 `updateEntry` 必须同时收 `before` 与 `after` 的原因；
+  ② **`moveEntry` 是"先删后加"**（目标组不存在 ⇒ 条目**凭空消失**）⇒ 所有移动前先验目标组存在；
+  ③ 改条目走 `withHistory`（施工单 §2.7 的判决）。
+- ✅ 测试 `data:kdbx/KdbxItemWriterTest` 14 条（每条对应一个"会静默坏事"）。
 
-### 批次 W2 · 仓储分流（data:repository，撤第一道闸）
-- [x] ✅ **data:kdbx 侧已完成（2026-09-30，提交 `5b44ba0`）**：`Kdbx.createItem / updateItem /
-      moveItemToRecycleBin / restoreItemFromRecycleBin / purgeItem` → `Result<KdbxPendingWrite>`
-      （新内容 + 待落盘字节 + 条目 uuid）。**公开签名不含 `KeePassDatabase`**（#64 引擎不外泄）。
-      事务三条"不许"（无会话不许建库 / 目标不存在必须判 `applied` / 改完必须换会话）已落测试。
-- [ ] ⬜ `ItemRepositoryImpl` 五个写方法加 `kind == KDBX` 分流（#106 的病根就在这：**当年没分流**）
-- [ ] ⬜ **落盘规则（本轮已核实，直接照此写）**：
-      - 缓存键就是 **`origin`**（见 `KdbxCloudSyncCoordinator.withRemoteCache`：`cacheKey = origin`）；
-      - **`origin.startsWith("content://")` ⇒ 本地 SAF，且它「不缓存」**（协调器注释明说）⇒
-        直接 `source.write(bytes)` 写文件即可，读侧读的就是那个文件；
-      - **网盘（webdav:/onedrive:）⇒ 写 `KdbxFileCache`**（`cache.save(origin, CachedKdbxFile(bytes, token=null))`），
-        再由同步编排器上传 —— 这就是「本地立即生效、上传异步」；
-      - 三处都要 `kdbxSessions.bump()`（`ItemRepositoryImpl.kdbxItems` 靠它重读会话）。
-- [ ] ⬜ **「待上传」标记要新增一个入口**：`KdbxSyncTransitions.markLocalChanges()` 已存在但
-      **全仓无调用者**；`KdbxSyncOrchestrator.markStatus` 是私有的 ⇒ 需要给
-      `KdbxSyncRepository`（或其实现）加一个 `markLocalEdited(vaultId)` 之类的公开方法。
-      ⚠️ 只对**网盘库**标记（本地 SAF 库标了会让 `VaultSummary.syncStatus` 从 null 变成非 null，
-      UI 会在一个根本没有云端的库上渲染「待上传」角标）。
-- [ ] ⬜ `VaultSaveOutcome` 目前只有 `Synced` / `Queued`。**倾向新增 `LocalApplied`**（更诚实：
-      KDBX 是"已落到本机、稍后上传"，而不是"进了待推送队列"）。消费点只有 3 处、
-      全是 `when`：`ItemDetailViewModel:196` · `ItemsViewModel:351` · `TrashViewModel:140`。
-- [ ] ⬜ `KdbxItemRepository`（或内联私有函数）：内存事务 + `VaultSaveOutcome`
-- [ ] 异步上传：接 `KdbxSyncOrchestrator`；失败 → 同步状态条（`KdbxSyncStatus` 已有 FAILED），
-      **不静默**（"每个早退分支要么改状态、要么留日志"）
-- [ ] 撤 `requireWritable` 的 KDBX 拦截（保留给"库未解锁"场景的防御）
-- [ ] 测试：`ItemRepositoryImpl` 层 KDBX 分流单测（mock `Kdbx` 门面）
+### 批次 W2 · 仓储分流 ✅ **已完成**（2026-10-01，提交 `5b44ba0` + `c92eac8`）
+- ✅ 数据层入口：`Kdbx.createItem / updateItem / moveItemToRecycleBin /
+  restoreItemFromRecycleBin / purgeItem` → `Result<KdbxPendingWrite>`
+  （**公开签名不含 `KeePassDatabase`** —— #64 引擎门面不外泄；引擎类型关在 `private mutate`）。
+- ✅ 新 `data:repository/KdbxItemRepository`：五个写方法各自分流。
+  **落盘规则**（本地 vs 网盘语义不同，实现前核实过）：
+  - 本地 SAF（`content://`）⇒ **直接写文件**（文件即存储，没有"云端"这回事）；
+  - 网盘 ⇒ **先写本地缓存 + 标记待上传**（上传异步；这就是"本地立即生效、上传异步"的落点）；
+  - ★ 缓存里的 `versionToken` **沿用旧的**（它是下次条件写的基线，换成新值就再也
+    检测不到"远端变过" ⇒ 会静默覆盖别人的改动）；
+  - 三处都要 `kdbxSessions.bump()`。
+- ✅ 「待上传」入口：`KdbxSyncRepository.markLocalEdited` + 协调器 `hasCloudSource/markLocalEdited`。
+  ★ **它不是锦上添花**：同步的 `localChangedSinceLastSync` 由调用方从**持久化的
+  `vaults.syncStatus`** 读出来（`VaultActionsController.localChanged`）⇒ 不标记的话
+  状态还停在 IN_SYNC，下次同步判"两边都没变"，**那笔改动永远推不上去**。
+  只对**网盘库**标记；冲突态不许降级。
+- ✅ `VaultSaveOutcome.Queued` 的语义扩写为「已安全落到本机」（覆盖三种情形），
+  文案去掉"联网后自动同步"（对本地库是假信息）。**刻意没加枚举值**（要改 3 个 ViewModel，
+  收益只是措辞更细）。
+- ✅ 回归门禁**按新行为重写**：原来那条锁死"KDBX 写被拒绝"的用例改成"委托给 KDBX 写回
+  且 Room 一个字节都不碰"；并补**反证**用例（单断言"没发生"是天生弱的 ——
+  也可能因为"整条路径根本没跑"而通过）。
 
-### 批次 W3 · UI 放闸（app，撤所有静默闸）
-- [ ] `ItemsScreen`：恢复「+」（`readOnlyVaultOf` 改为可写/删除本函数）、删 `ReadOnlyVaultNotice`
-- [ ] `ItemDetailViewModel.readOnly` → false 路径恢复编辑/删除按钮
-- [ ] 详情页保存成功后的反馈对齐 BW（含"待上传"状态条的展示时机）
-- [ ] 撤两条只读文案；孤儿串探针核对零新增
-- [ ] **真机验收**（清单见 §6）
+### 批次 W3 · UI 放闸 ✅ **已完成**（2026-10-01，提交 `c92eac8`）
+- ✅ `ItemsScreen`：删 `ReadOnlyVaultNotice` / `readOnlyVaultOf` / 局部 `readOnlyVault`、
+  FAB 的只读门、`AddRequestEffect` 的只读分支（它会把「+」请求换成一句"暂为只读"的 snackbar）。
+- ✅ `ItemDetailViewModel` + `ItemDetailScreen`：删 `UiState.readOnly` 与"不画编辑/删除"的分支。
+- ✅ 删掉两条只读文案（不删会变成孤儿串），孤儿串总数保持 **118（净零）**。
+- ⚠️ **保留两处"不支持"**（换名与理由）：`requireWritable` → `requireNotKdbx(vaultId, reason)`。
+  剩下的两块是**通行密钥的写**（`KPEX_*` 由浏览器/服务端创建）与**旧孤儿行的回收站清理**
+  （#106 之前留下的脏数据，`cleanupExpiredTrash` 会查到它们并给 KDBX 库入队 DELETE ⇒ 毒丸）。
 
 ### 批次 W4 · 回收站映射（可选，独立批）
 - [ ] `observeTrash` 对 KDBX 分流：RecycleBin 组 → `TrashEntry`
@@ -257,29 +254,32 @@ UI（不感知库类型）
 
 ## 8. 接力提示（新会话从这里开始）
 
-**已完成（2026-09-30 夜）**
-- ✅ 今日第二批已提交（viewLock 静默 no-op 修复 · 只读可见提示 · 缓存未命中留证）。
-- ✅ **§2.5 的 API 查证已做完**（反编译实证，直接照此写码）。
-- ✅ 顺带修掉 `7902f76` 顶破 detekt `TooManyFunctions` 造成的红门禁（抽 `VaultTimeoutPreferences`）。
-- ✅ **§2.6 已拍板 = B（严格只认 4.x）并落地**：`KdbxFormat.SUPPORTED_MAJOR` 3 → 4，
-  拒绝文案唯一化（原两处已漂、其中一处还把用户引向被拒的 3.1）。有回归用例 + 变异验证。
-- ✅ **W0 的数据层已完成**（`KdbxCreator` + `Kdbx.createVault` + 11 条测试，提交 `e75de10`）。
-- ★ 顺带逮到并修掉一个**真实线上 bug**（`ISSUES.md` **#135**）：kotpass 会**原地改写**
-  传进去的 keyfile 数组 ⇒ `LocalUnlockEnrollment` 先 verify 再拿同一份数组组信封
-  ⇒ **带 keyfile 的库启用快速解锁后指纹开不了它**。修在唯一边界 + 两条回归用例。
+**基座已确认**：`HEAD c92eac8` · **已推送 `origin/main`** · 工作区干净 · CI 绿
+⇒ 新会话能直接读到本单（接力第一步不会断）。
 
-**下一批（按序，各自独立可验收、独立提交）**
-1. **W0 收尾**：落盘三来源（SAF `CreateDocument` / OneDrive / WebDAV 新建文件）+ 仓储入口
-   （⚠️ 另立 domain 接口，别动 `VaultRepository`）+ 添加流程 UI + **XC/DX 互操作验收**；
-2. **W1**：`KdbxItemWriter`（`createEntry / updateEntry / softDelete / restore / permanentDelete`），
-   ⚠️ 动手前先确认 `Entry.withHistory { }` 的确切语义（上游源码，别凭签名猜）；
-3. W2 → W3 → W4。
+**已完成**：W0 数据层（`e75de10`）· W1（`214f6ec`）· W2（`5b44ba0` + `c92eac8`）·
+W3（`c92eac8`）。逐项做法与踩到的坑见各批次标题后的 ✅ 与
+[`SESSION-2026-09-30.md`](../../.ai/SESSION-2026-09-30.md)（**按需只读一节**）。
+
+**下一步（按序，各自独立可验收、独立提交）**
+
+1. **W4 · 回收站映射**（见上）—— 最小、独立、能立刻验收；
+2. **W0 收尾**：落盘三来源（SAF `CreateDocument` / OneDrive / WebDAV 新建文件）
+   + 仓储入口（⚠️ **另立 domain 接口，别动 `VaultRepository`**：`VaultRepositoryImpl`
+   正好卡 40 函数）+ 添加流程 UI + **XC/DX 互操作验收**。
+   ⚠️ 数据层（`KdbxCreator`）**已就绪**，缺的是"入口"—— 用户现在还不能新建一个空库。
 
 **可并行、与本单无依赖**
 - 「解锁慢」的诊断埋点已装机（`CachedKdbxFileSource` 缓存判定日志），下次解锁即可取数；
   若查实是"token 判定 bug"，优先修（影响体验且改动小）。
 
-**纪律提醒（本轮新踩到的）**
-- ⚠️ 「提交信息里写门禁全绿」必须**复跑实证**：`7902f76` 自述"detekt 全绿"，实际是红的
-  （且"任务 UP-TO-DATE"≠"那段代码是好的"）。
-- ⚠️ 交给**第三方库**的密钥/凭据字节，**先 copy**（#135）。
+**纪律提醒（本项目付过代价的，动手前读一遍）**
+- 提交信息里写"门禁全绿"必须**复跑实证**（`7902f76` 自述全绿、实际 detekt 是红的）；
+  「任务 UP-TO-DATE」≠「代码是好的」。
+- **门禁三关分开单跑**（串成一条会 `Gradle build daemon disappeared` —— 环境崩，不是代码错）。
+- 交给**第三方库**的密钥/凭据字节**先 copy**（#135）；
+  上游 API 行为与源码不符时**以行为为准**（#136）。
+- 写 KDoc **别让粗体紧接斜杠**（`**x**/` 会构成 `*/` 提前闭合注释）。
+- `VaultixPreferences` / `VaultRepositoryImpl` 等几个类**贴着 detekt 函数数上限**，
+  加方法前先想"该不该另立一个类"（本项目已有 `KdbxSync*` / `AutoUnlock*` / `LocalUnlockEnrollment`
+  等多个先例）。
