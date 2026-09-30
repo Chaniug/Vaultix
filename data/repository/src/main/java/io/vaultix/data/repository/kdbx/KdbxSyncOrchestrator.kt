@@ -238,6 +238,27 @@ class KdbxSyncOrchestrator(
         }
     }
 
+    /**
+     * **本地内容被改过**（条目写回成功后由仓储调用）—— 把同步状态降级为「待上传」。
+     *
+     * ## 为什么必须有这一步（不是"锦上添花"）
+     *
+     * 同步的 `localChangedSinceLastSync` **由调用方从持久化的 `vaults.syncStatus` 读出来**
+     * （见 `VaultActionsController.localChanged`）。⇒ 本地改完不标记的话，状态还停在
+     * `IN_SYNC`，下一次同步会判定"两边都没变"直接返回 `AlreadyInSync` ——
+     * **那笔改动永远推不上去**：换台设备看不到，用户还以为已经同步了。
+     *
+     * ⚠️ **冲突态不许降级**：`CONFLICT` 表达的是"要用户拍板"，把它覆盖成 `PENDING_UPLOAD`
+     * 会让冲突对话框失去依据（用户再也不会被问到，而重试又推不上去）。
+     * ⚠️ 只对**有网盘来源**的库调用（判断在 [KdbxCloudSyncCoordinator.markLocalEdited]）——
+     * 本地 SAF 库标了会让 UI 在一个根本没有云端的库上渲染「待上传」角标。
+     */
+    suspend fun markLocalEdited(vaultId: String) {
+        val current = vaultDao.get(vaultId) ?: return
+        if (current.syncStatus == KdbxSyncStatus.CONFLICT.name) return
+        markStatus(vaultId, KdbxSyncTransitions.markLocalChanges())
+    }
+
     private suspend fun markStatus(
         vaultId: String,
         status: KdbxSyncStatus,

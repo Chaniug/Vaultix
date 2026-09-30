@@ -116,7 +116,7 @@ class KdbxCloudSyncCoordinator(
     override fun fileSourceFor(origin: String): KdbxFileSource? = when {
         // 本地 SAF：**不缓存** —— 它的 `versionToken` 是内容 SHA-256，
         // 算它本身就要读整份文件 ⇒ 缓存只会多做一次读。
-        origin.startsWith("content://") -> safFactory(origin)
+        origin.startsWith(SAF_ORIGIN_PREFIX) -> safFactory(origin)
 
         WebDavVaultOrigin.matches(origin) -> {
             val parsed = WebDavVaultOrigin.parse(origin) ?: return null
@@ -135,6 +135,35 @@ class KdbxCloudSyncCoordinator(
         }
 
         else -> extraFactory?.invoke(origin)?.let { withRemoteCache(origin, it) }
+    }
+
+    /**
+     * 这个 origin 是不是**网盘**来源（本地 SAF 不算）。
+     *
+     * ## 为什么需要它（2026-10-01，W2）
+     *
+     * 条目写回成功后要标记「待上传」，而**本地 SAF 库没有"上传"这回事** ——
+     * 它的文件就是存储本身。给它标记的后果是 `VaultSummary.syncStatus`
+     * 从 null 变成非 null，UI 会在一个根本没有云端的库上渲染「待上传」角标。
+     *
+     * ⚠️ 判据与 [fileSourceFor] **同一张表**（就是上面那个 `when`），
+     * 不新加 `sourceType` 列 —— 两处真相必然漂移（这条纪律在本文件里已写过一次）。
+     * 并且额外要求"**真的能解析出来源**"：畸形 origin（如 `onedrive:` 缺路径）不该被
+     * 当成"有云端" —— 那会留下一个永远传不上去的「待上传」。
+     */
+    fun hasCloudSource(origin: String): Boolean =
+        !origin.startsWith(SAF_ORIGIN_PREFIX) && fileSourceFor(origin) != null
+
+    /**
+     * **本地内容改过**（条目写回成功后由仓储调用）。
+     *
+     * @return 是否真的标记了（false = 本地库 / 畸形来源 ⇒ 没有"待上传"这回事）。
+     */
+    suspend fun markLocalEdited(vaultId: String): Boolean {
+        val row = vaultDao.get(vaultId) ?: return false
+        if (!hasCloudSource(row.origin)) return false
+        orchestrator.markLocalEdited(vaultId)
+        return true
     }
 
     /**
@@ -236,6 +265,14 @@ class KdbxCloudSyncCoordinator(
         is SyncOutcome.Failed -> KdbxSyncResult.Failed(reason)
     }
 }
+
+/**
+ * 本地 SAF 来源的 origin 前缀。
+ *
+ * ⚠️ 抽成常量是为了让「本地 vs 网盘」这条判据**只有一处**
+ * （[fileSourceFor] 的表 + [hasCloudSource] 都用它）。
+ */
+private const val SAF_ORIGIN_PREFIX = "content://"
 
 /** 协调器层面的结果（形状与领域层 `KdbxSyncReport` 一致，少一次映射）。 */
 sealed interface KdbxSyncResult {

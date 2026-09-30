@@ -62,6 +62,10 @@ class KdbxSyncRepositoryImpl @Inject constructor(
         emit(row != null && coordinator.fileSourceFor(row.origin) != null)
     }
 
+    override suspend fun markLocalEdited(vaultId: String) {
+        coordinator.markLocalEdited(vaultId)
+    }
+
     override suspend fun notifyLocalChangedDuringUpload(vaultId: String) {
         coordinator.notifyLocalChangedDuringUpload(vaultId)
     }

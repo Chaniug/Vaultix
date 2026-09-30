@@ -72,6 +72,21 @@ interface KdbxSyncRepository {
     fun cloudSyncAvailable(vaultId: String): Flow<Boolean>
 
     /**
+     * **本地内容被改过**（条目写回成功后调用）。
+     *
+     * ## 为什么必须有这一步
+     *
+     * 同步的 `localChangedSinceLastSync` 由调用方从**持久化的 `vaults.syncStatus`** 读出来
+     * （见 `VaultActionsController.localChanged`）。⇒ 改完不标记的话状态还停在 `IN_SYNC`，
+     * 下一次同步会判"两边都没变"直接返回"无变化" ⇒ **那笔改动永远推不上去**
+     * （换台设备看不到，而用户以为已经同步了）。
+     *
+     * ⚠️ 实现方要**只对网盘库**标记：本地 SAF 库没有"上传"这回事，
+     * 给它标记会让 UI 在一个根本没有云端的库上显示「待上传」。
+     */
+    suspend fun markLocalEdited(vaultId: String)
+
+    /**
      * 上报「上传期间本地又改了」。
      *
      * ⚠️ 方案 §9 点名的**最容易漏的竞态**：用户在同步进行中继续编辑。

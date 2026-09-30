@@ -75,6 +75,14 @@ class ItemRepositoryImpl @Inject constructor(
     private val syncService: BitwardenSyncService,
     /** KDBX 会话变化的可观察桥（读路径分流后靠它重新取内容；见 [KdbxSessionFlow]）。 */
     private val kdbxSessions: KdbxSessionFlow,
+    /**
+     * KDBX 的条目写回（2026-10-01，批次 W2）。
+     *
+     * ⚠️ 五个写方法**照例先分流**：读路径早就按 `kind` 分流了，而写路径当年没分流 ——
+     * 那就是 `.ai/ISSUES.md` **#106**（在 KDBX 库新建条目写出一条 Room 孤儿行，
+     * 用户看到"保存成功、条目却没出现"）。**判据：读分流了，写就必须同时分流。**
+     */
+    private val kdbxItemWrites: KdbxItemRepository,
     @CryptoDispatcher private val cryptoDispatcher: CoroutineDispatcher,
 ) : ItemRepository {
 
@@ -204,7 +212,8 @@ class ItemRepositoryImpl @Inject constructor(
 
     override suspend fun createItem(vaultId: String, item: VaultItem): Result<VaultSaveOutcome> =
         runCatching {
-            requireWritable(vaultId)
+            // KDBX 走**完全另一套存储**（内存会话 + kdbx 文件），见 [KdbxItemRepository]。
+            if (isKdbx(vaultId)) return@runCatching kdbxItemWrites.create(vaultId, item).getOrThrow()
             val key = sessions.keyOf(vaultId) ?: error("库未解锁，无法保存：$vaultId")
 
             val localId = UUID.randomUUID().toString()
@@ -241,7 +250,8 @@ class ItemRepositoryImpl @Inject constructor(
 
     override suspend fun updateItem(vaultId: String, item: VaultItem): Result<VaultSaveOutcome> =
         runCatching {
-            requireWritable(vaultId)
+            // KDBX 走**完全另一套存储**（内存会话 + kdbx 文件），见 [KdbxItemRepository]。
+            if (isKdbx(vaultId)) return@runCatching kdbxItemWrites.update(vaultId, item).getOrThrow()
             val key = sessions.keyOf(vaultId) ?: error("库未解锁，无法保存：$vaultId")
             val existing = cipherDao.get(item.id) ?: error("条目不存在：${item.id}")
             require(existing.vaultId == vaultId) { "条目不属于该库：${item.id}" }
@@ -287,7 +297,8 @@ class ItemRepositoryImpl @Inject constructor(
 
     override suspend fun softDeleteItem(vaultId: String, itemId: String): Result<VaultSaveOutcome> =
         runCatching {
-            requireWritable(vaultId)
+            // KDBX 走**完全另一套存储**（内存会话 + kdbx 文件），见 [KdbxItemRepository]。
+            if (isKdbx(vaultId)) return@runCatching kdbxItemWrites.softDelete(vaultId, itemId).getOrThrow()
             val existing = cipherDao.get(itemId) ?: error("条目不存在：$itemId")
             require(existing.vaultId == vaultId) { "条目不属于该库：$itemId" }
 
@@ -310,7 +321,8 @@ class ItemRepositoryImpl @Inject constructor(
 
     override suspend fun restoreItem(vaultId: String, itemId: String): Result<VaultSaveOutcome> =
         runCatching {
-            requireWritable(vaultId)
+            // KDBX 走**完全另一套存储**（内存会话 + kdbx 文件），见 [KdbxItemRepository]。
+            if (isKdbx(vaultId)) return@runCatching kdbxItemWrites.restore(vaultId, itemId).getOrThrow()
             val existing = cipherDao.get(itemId) ?: error("条目不存在：$itemId")
             require(existing.vaultId == vaultId) { "条目不属于该库：$itemId" }
             requireNotNull(existing.deletedDate) { "条目不在回收站中：$itemId" }
@@ -332,7 +344,8 @@ class ItemRepositoryImpl @Inject constructor(
 
     override suspend fun permanentDeleteItem(vaultId: String, itemId: String): Result<VaultSaveOutcome> =
         runCatching {
-            requireWritable(vaultId)
+            // KDBX 走**完全另一套存储**（内存会话 + kdbx 文件），见 [KdbxItemRepository]。
+            if (isKdbx(vaultId)) return@runCatching kdbxItemWrites.permanentDelete(vaultId, itemId).getOrThrow()
             val existing = cipherDao.get(itemId) ?: error("条目不存在：$itemId")
             require(existing.vaultId == vaultId) { "条目不属于该库：$itemId" }
             requireNotNull(existing.deletedDate) { "条目不在回收站中，无法永久删除：$itemId" }
@@ -361,7 +374,7 @@ class ItemRepositoryImpl @Inject constructor(
             //   并给一个 KDBX 库入队 DELETE ⇒ 队列里躺下永不推送的毒丸
             //   （`flushAfterLocalWrite` 对非 Bitwarden 库恒返回 Queued，没人会消费它）。
             //   拒绝后由 `getOrDefault(0)` 兜成 0 —— 与「清理失败静默」的既有约定一致。
-            requireWritable(vaultId)
+            requireNotKdbx(vaultId, "KDBX 库没有回收站清理")
             val now = System.currentTimeMillis()
             val expired = cipherDao.getTrashByVault(vaultId)
                 .filter { row ->
@@ -395,7 +408,7 @@ class ItemRepositoryImpl @Inject constructor(
         itemId: String,
         credentials: List<VaultFido2Credential>,
     ): Result<VaultSaveOutcome> = runCatching {
-        requireWritable(vaultId)
+        requireNotKdbx(vaultId, PASSKEY_READ_ONLY_REASON)
         // 「库已解锁」前置校验：未解锁直接失败，避免走到 updateItem 才报错
         requireNotNull(sessions.keyOf(vaultId)) { "库未解锁，无法保存：$vaultId" }
         val existing = cipherDao.get(itemId) ?: error("条目不存在：$itemId")
@@ -418,7 +431,7 @@ class ItemRepositoryImpl @Inject constructor(
     ): Result<VaultSaveOutcome> = runCatching {
         // ⚠️ 必须在自己这一层就拦：否则会先走到 `loadItem` —— 它查的是 Room，
         //   KDBX 条目不在 Room ⇒ 返回 null ⇒ 报出**「条目不存在」这个与真实原因无关**的错误。
-        requireWritable(vaultId)
+        requireNotKdbx(vaultId, PASSKEY_READ_ONLY_REASON)
         val item = loadItem(vaultId, itemId) ?: error("条目不存在：$itemId")
         val remaining = item.fido2Credentials.filter { it.credentialId != credentialId }
         updateFido2Credentials(vaultId, itemId, remaining).getOrThrow()
@@ -501,35 +514,34 @@ class ItemRepositoryImpl @Inject constructor(
         }
     }
 
+    /** 这个库是不是 KDBX（读/写两侧分流的**唯一**判据，别在别处再抄一遍）。 */
+    private suspend fun isKdbx(vaultId: String): Boolean =
+        VaultKind.fromName(vaultDao.get(vaultId)?.kind) == VaultKind.KDBX
+
     /**
-     * 写入前置闸：**KDBX 库当前不可写**，一律拒绝，且**不改任何状态**。
+     * 「这个操作在 KDBX 库上**不支持**」的守卫。
      *
-     * ## 为什么必须有这道闸（2026-09-17，`.ai/ISSUES.md` #106）
+     * ## ⚠️ 2026-10-01 起它只管两件事（不是"整个库只读"了）
      *
-     * 本类的**读**路径按库类型分流（[observeItems] → KDBX 走 `Kdbx.contentOf`，
-     * 其余走 `cipherDao`），但**写**路径原先没有分流 —— 于是「读这个存储、写那个存储」，
-     * 必然产出幽灵数据，且**两个方向都在骗人**：
-     * - `createItem` 无任何 kind 判断 ⇒ 在 KDBX 库新建会写出一条 **Room 孤儿行**；
-     *   读侧永远看不到它 ⇒ 用户看到「保存成功、条目却没出现」（**静默丢失**）。
-     * - `updateItem` 先查 `cipherDao.get(id)`，而 KDBX 条目 id 来自 `itemIdOf(uuid)`、
-     *   不在 Room ⇒ 报「条目不存在」（**大声失败**，这是运气好的那一半）。
+     * KDBX 的**条目**已经可以增删改（走 [KdbxItemRepository]，那五个写方法各自先分流）。
+     * 剩下仍然拒绝的只有：
+     * 1. **通行密钥的写** —— `KPEX_*` 由浏览器 / 服务端创建，客户端只读；
+     * 2. **旧孤儿行的回收站清理** —— #106 修之前留下的脏数据，不许再碰
+     *    （`cleanupExpiredTrash` 会**查到**它们并给一个 KDBX 库入队 DELETE
+     *    ⇒ 队列里躺下永不推送的毒丸：`flushAfterLocalWrite` 对非 Bitwarden 库恒 Queued、没人消费）。
      *
-     * 现在两半统一成**诚实的拒绝**：明确说"暂为只读"，而不是静默丢、
-     * 也不是抛一句与真实原因无关的错误。
+     * ⇒ **再往里加"因为 KDBX 所以拒绝"之前，先确认那件事真的不该支持。**
+     *   这条守卫的历史名字是 requireWritable —— 那时的确是整个库都不可写（#106）。
      *
-     * ⚠️ 闸放在各写方法 `runCatching` **内部的第一行**：这样 `Result` 语义与其它业务拒绝
-     * （「条目不存在」「库未解锁」）完全一致，调用方的 `onFailure` 分支一行都不用改。
      * ⚠️ 每次**现查** `vaultDao.get` 而不是缓存 kind：与读路径「每次订阅重新解析种类」
      * 同一取向 —— 不引入第二份真相源（缓存一旦过期，闸就会漏）。
-     *
-     * @throws ReadOnlyVaultException 当 [vaultId] 是 KDBX 库。
      */
-    private suspend fun requireWritable(vaultId: String) {
+    private suspend fun requireNotKdbx(vaultId: String, reason: String) {
         val kind = VaultKind.fromName(vaultDao.get(vaultId)?.kind)
-        if (kind == VaultKind.KDBX) throw ReadOnlyVaultException(vaultId)
+        if (kind == VaultKind.KDBX) throw ReadOnlyVaultException(vaultId, reason)
     }
 
-    /** 写库完成后的轻量推送；非 Bitwarden 库（未来 KDBX）不入队推送逻辑。 */
+/** 写库完成后的轻量推送；非 Bitwarden 库（未来 KDBX）不入队推送逻辑。 */
     private suspend fun flushAfterLocalWrite(vaultId: String): VaultSaveOutcome {
         val row = vaultDao.get(vaultId)
         val server = row?.origin?.takeIf { VaultKind.fromName(row.kind) == VaultKind.BITWARDEN }
@@ -546,3 +558,13 @@ class ItemRepositoryImpl @Inject constructor(
         const val OP_DELETE = "DELETE"
     }
 }
+
+/**
+ * 通行密钥在 KDBX 上不可写的原因。
+ *
+ * ⚠️ **会直接显示给用户**（`ReadOnlyVaultException.message` 走 `onFailure { error.message }`
+ * 链路进 UI）⇒ 写成一句人话，而不是"不支持的操作"这种说了等于没说的台词。
+ */
+private const val PASSKEY_READ_ONLY_REASON =
+    "KDBX 库的通行密钥由浏览器 / 服务端管理，本应用不能修改"
+

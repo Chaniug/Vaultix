@@ -90,10 +90,8 @@
          这条是 UI 主动拦在入口处的。
          ⚠️ 两处都在说同一件事，改一处必须改另一处（domain 是纯 Kotlin 模块，
          读不到 Android 资源，无法共用一份常量）。 -->
-    <string name="kdbx_vault_read_only">KDBX 密码库暂为只读，无法保存改动（写回功能开发中）</string>
     <!-- ★ 2026-09-30：只读提示从"只藏按钮"改为"列表顶部说出来"。
          真机反馈「kdbx 增删改查都没用」= 一个尚未实现的功能被体验成三个 bug。 -->
-    <string name="kdbx_vault_read_only_notice">此库当前只读：KDBX 写回尚未开放，新建 / 编辑 / 删除暂不可用</string>
     <!-- 库卡片副标题（KDBX）：显示文件名 + 「本地文件」标注，绝不显示 SAF 的 content:// URI。 -->
     <string name="vault_card_kdbx_subtitle">本地文件 · %1$s</string>
     <!-- 条目页顶部的「密码库状态」行（2026-09-30 用户要求）：来源 + 条目数。
@@ -803,7 +801,7 @@
     <string name="password_strength_strong">强</string>
     <string name="password_strength_very_strong">非常强</string>
     <string name="item_saved_synced">已保存并同步到云端</string>
-    <string name="item_saved_queued">已保存到本地，联网后自动同步</string>
+    <string name="item_saved_queued">已保存到本地</string>
     <string name="item_save_failed">保存失败：%1$s</string>
 
     <!-- 条目详情 S9 / 编辑 -->

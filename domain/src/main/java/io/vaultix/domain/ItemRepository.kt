@@ -139,7 +139,20 @@ enum class VaultSaveOutcome {
     /** 已推送到服务器（本地行按服务端 id 重建） */
     Synced,
 
-    /** 网络不可用：已安全落本地并进入待推送队列 */
+    /**
+     * 已**安全落到本机**，同步是后续的事。
+     *
+     * ## 两种来源共用这一个值（2026-10-01 KDBX 写回接入时确认）
+     *
+     * | 来源 | 实际含义 |
+     * |---|---|
+     * | Bitwarden | 网络不可用 ⇒ 已落本地密文行并进入 `pending_ops` 待推送队列 |
+     * | KDBX（网盘库） | 已落本地缓存 ⇒ 由同步编排器稍后上传 |
+     * | KDBX（本地 SAF 库） | **已写进文件本身** —— 这个库根本没有"云端"，也就不存在"稍后同步" |
+     *
+     * ⚠️ 正因为第三行，UI 文案**不许**再写"联网后自动同步"（对本地库是假信息）。
+     * 云端的真实状态由 `VaultSummary.syncStatus`（待上传角标）单独表达，不靠这句文案承担。
+     */
     Queued,
 }
 
@@ -164,9 +177,19 @@ enum class VaultSaveOutcome {
  * @param vaultId 被拒绝的库 id —— **只作诊断字段**，刻意**不拼进** [message]
  *   （`message` 会直接显示给用户，UUID 对她没有意义）。
  */
-class ReadOnlyVaultException(val vaultId: String) : Exception(
-    "本地 KDBX 密码库暂为只读，无法保存改动",
-)
+class ReadOnlyVaultException(
+    val vaultId: String,
+    /**
+     * 给用户看的原因（会直接显示）。
+     *
+     * ⚠️ 2026-10-01 起它**不再是"整个库只读"**：KDBX 的**条目**已经能增删改
+     * （见 `data:repository` 的 `KdbxItemRepository`）。剩下的不可写只有两块：
+     * ① **通行密钥**（`KPEX_*` 由浏览器 / 服务端创建，客户端只读）；
+     * ② 旧孤儿行的回收站清理（#106 修之前留下的脏数据，不许再碰）。
+     * ⇒ 文案必须由调用方按**具体动作**给，别再用一句"库只读"概括两种不同的事。
+     */
+    reason: String = "KDBX 密码库不支持这个操作",
+) : Exception(reason)
 
 /**
  * 回收站行：明文条目 + 删除时间。

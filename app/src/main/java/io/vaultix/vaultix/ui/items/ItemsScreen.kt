@@ -146,48 +146,8 @@ private val ITEM_CARD_GAP = Spacing.sm
 /** 分组折叠/展开的箭头动画时长（对齐 Bastion 的 200ms 补间）。 */
 private const val GROUP_ANIM_MS = 200
 
-/** 只读提示里那个小锁的边长。 */
+/** 列表顶部那一行状态信息里，前导图标的边长（原只读提示用，现状态行也用）。 */
 private val READ_ONLY_ICON_SIZE = 16.dp
-
-/**
- * 「此库只读」的可见提示（2026-09-30 加，真机反馈驱动）。
- *
- * ## 为什么必须**可见**，而不是只把「+」藏起来
- *
- * KDBX 是 M2 **阶段 A（只读）**（`.ai/ISSUES.md` #106）：FAB 被刻意不画、详情页收起
- * 编辑/删除。这些"闸"本身都对 —— 但它们是**静默的**：用户看到的只是"没有新建按钮、
- * 删不掉、改不了"，而**没有任何地方说明原因**。
- *
- * 真机实录：用户只能来问「kdbx 增删改查都没用」——一句话里三个"坏掉的"，实际是
- * **一个尚未实现的功能**。⇒ 一行如实说明比藏一堆按钮诚实得多：
- * **用户有权知道"这是只读，不是坏了"**（与本项目「不谎报 / 如实说明」同一条纪律；
- * 差别只在于：静默地不给入口，也是一种需要消除的歧义）。
- *
- * ⚠️ 只读是**当前的阶段限制**，不是设计终点：写回（阶段 B）落地后本提示与
- * 各处闸门要一起撤掉 —— 见 `.ai/conventions/8.3-M2KDBX.md`。
- */
-@Composable
-private fun ReadOnlyVaultNotice() {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = Spacing.xs, vertical = Spacing.xs),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(
-            Icons.Filled.Lock,
-            contentDescription = null,
-            modifier = Modifier.size(READ_ONLY_ICON_SIZE),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.width(Spacing.sm))
-        Text(
-            text = stringResource(R.string.kdbx_vault_read_only_notice),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
 
 /**
  * 列表顶部的「密码库状态」行：**来源 + 条目数**（2026-09-30 用户要求）。
@@ -210,7 +170,7 @@ private fun ReadOnlyVaultNotice() {
  * ## 为什么是**冷**色的一行小字，而不是卡片 / 徽标
  *
  * 它是"我在哪"的**环境信息**，不是待办、不是状态告警（告警有 [SyncNoteBanner] 与
- * [ReadOnlyVaultNotice] 各司其职）。做成卡片会与真正的条目卡片抢视觉权重 ——
+ * 同步提示条各司其职）。做成卡片会与真正的条目卡片抢视觉权重 ——
  * 用户扫列表时第一眼应该落在条目上，不是落在"我在哪个库"。
  */
 @Composable
@@ -301,19 +261,6 @@ private fun rememberQuickFilterRowInset(expanded: Boolean): Dp =
  * ⚠️ 搜索态是例外：`Scaffold` 已按 `ScaffoldDefaults.contentWindowInsets` 为搜索顶栏
  * 预留了高度（见调用点的 `contentWindowInsets`），这里必须归零。
  */
-/**
- * 该库当前是否**不可写** —— `null` = 库信息还没到（`.ai/ISSUES.md` #106）。
- *
- * KDBX 是 M2 阶段 A（只读）⇒ 新建 / 编辑 / 删除都会被数据层拒绝，
- * UI 应当收起这些入口、而不是把用户领进死路。
- *
- * ⚠️ **三态而不是布尔**，这是本条的关键：`UiState.vault` 初值是 `null`，
- * 若写成 `vault?.kind == KDBX` 就会得到 `false` ⇒ FAB **先渲染出来、再消失** ——
- * 一次闪烁（与用户报过的「动态取色开关从关变开、有闪烁感」属同一类毛病）。
- * 所以未知时返回 `null`，调用方对它**不渲染**：宁可晚一点出现，也不要先画后撤。
- * 与 `SettingsSwitch(value: Boolean?)` 同一手法。
- */
-private fun readOnlyVaultOf(kind: VaultKind?): Boolean? = kind?.let { it == VaultKind.KDBX }
 
 private fun itemsTopInset(
     searchActive: Boolean,
@@ -415,7 +362,6 @@ fun ItemsScreen(
     // （2026-09-13 这一批加了「让位走 contentPadding」后曾到 152 行，靠压这行回到 147）。
     val filterRowInset = rememberQuickFilterRowInset(quickFiltersExpanded)
     val listTopInset = itemsTopInset(searchActive, barPadding, filterRowInset, state.syncNote != null)
-    val readOnlyVault = readOnlyVaultOf(state.vault?.kind)
     // 「这个库在哪 · 有多少条」（2026-09-30 用户要求）。
     // 在**本层**算一次、供顶栏的 ⋮ 菜单卡片与列表状态行**共用** ——
     // 两处若各算各的，迟早出现"卡片里 42 条、列表里 41 条"这种差一条的鬼故事。
@@ -436,7 +382,7 @@ fun ItemsScreen(
     val groups = rememberGroupedItems(visibleItems, folders, groupMode)
 
     // 底部导航条「+」→ 打开新建表单（Tab 内嵌时不展示自己的 FAB）
-    AddRequestEffect(addRequest, onAddConsumed, readOnly = readOnlyVault == true, host = snackbarHostState) {
+    AddRequestEffect(addRequest, onAddConsumed) {
         showCreateDialog = true
     }
 
@@ -459,8 +405,8 @@ fun ItemsScreen(
             }
         },
         floatingActionButton = {
-            // 只读库（KDBX 阶段 A）不画「+」：新建必然被拒（#106）；`== false` 的用意见 [readOnlyVaultOf]。
-            if (!embedded && readOnlyVault == false) {
+            // 2026-10-01 起 KDBX 也能新建（阶段 B 写回上线），不再有"只读库不画 +"这回事。
+            if (!embedded) {
                 FloatingActionButton(onClick = { showCreateDialog = true }) {
                     Icon(Icons.Filled.Add, contentDescription = stringResource(R.string.items_new_item))
                 }
@@ -520,8 +466,6 @@ fun ItemsScreen(
                             selectedIds = selectedIds - item.id
                             viewModel.deleteItem(item)
                         },
-                        // 只读库（KDBX 阶段 A）在列表顶部说明原因（#106）。
-                        readOnly = readOnlyVault == true,
                     )
                 }
             }
@@ -584,34 +528,19 @@ fun ItemsScreen(
 /**
  * 宿主「+」请求 → 打开新建表单；消费后由 [onConsumed] 清零，避免重复弹出。
  *
- * ## 只读库要拦在这里（2026-09-17，`.ai/ISSUES.md` #106）
- *
- * KDBX 库是 **M2 阶段 A（只读）**：没有写回，数据层会拒绝保存
- * （`ItemRepositoryImpl.requireWritable`）。所以对它**不能开表单** ——
- * 开了等于请用户白填一场，最后在保存那一步吃一句拒绝。
- * 改为直接说明原因（snackbar），**并把请求消费掉**（否则会反复触发）。
- *
- * ⚠️ 逻辑收在本函数内而不是 [ItemsScreen] 里：主 composable 贴着 detekt
- * `LongMethod ≤150` 的门禁线（曾到 152 行），往里加分支会直接顶破。
- *
- * ⚠️ 用 [rememberCoroutineScope] 而不是 `LaunchedEffect` 的 scope 弹 snackbar：
- * [onConsumed] 会把 `addRequest` 归零 ⇒ `LaunchedEffect` 的 key 变化 ⇒ 其子协程
- * **会连同 snackbar 一起被取消**（提示一闪即没）。`rememberCoroutineScope` 的生命周期
- * 跟组合走，不受 key 变化影响。
+ * ⚠️ 2026-10-01 起**不再有"只读库要拦在这里"这一支**：KDBX 的条目写回上线（阶段 B），
+ * 新建对两种库都成立。历史上这里会在 KDBX 库上弹一句"暂为只读"并把请求消费掉
+ * （那是 `.ai/ISSUES.md` #106 的诚实拒绝，现在换成真支持）。
  */
 @Composable
 private fun AddRequestEffect(
     addRequest: Int,
     onConsumed: () -> Unit,
-    readOnly: Boolean,
-    host: SnackbarHostState,
     onShow: () -> Unit,
 ) {
-    val scope = rememberCoroutineScope()
-    val message = stringResource(R.string.kdbx_vault_read_only)
-    LaunchedEffect(addRequest, readOnly) {
+    LaunchedEffect(addRequest) {
         if (addRequest > 0) {
-            if (readOnly) scope.launch { host.showSnackbar(message) } else onShow()
+            onShow()
             onConsumed()
         }
     }
@@ -641,8 +570,6 @@ private fun ItemsBody(
     onToggleGroup: (String) -> Unit,
     onToggleSelect: (VaultItem) -> Unit,
     onDelete: (VaultItem) -> Unit,
-    /** 只读库（KDBX 阶段 A）：列表顶部给一行说明，见 [ReadOnlyVaultNotice]。 */
-    readOnly: Boolean = false,
     /** 「这个库在哪 · 有多少条」（null = 未知则不画）。见 [ItemsScreen] 里的 `vaultCard`。 */
     vaultCard: VaultCardInfo? = null,
 ) {
@@ -676,7 +603,6 @@ private fun ItemsBody(
         onOpenItem = onOpenItem,
         syncStates = state.syncStates,
         onDelete = onDelete,
-        readOnly = readOnly,
         vaultCard = vaultCard,
     )
 }
@@ -1227,13 +1153,6 @@ private fun ItemsList(
     /** 条目 id → 是否已同步上云（行尾云图标，缺省视为已同步）。 */
     syncStates: Map<String, Boolean> = emptyMap(),
     /**
-     * 该库是否**只读**（KDBX 阶段 A，`.ai/ISSUES.md` #106）。
-     *
-     * `true` ⇒ 列表顶部挂一行 [ReadOnlyVaultNotice]：把"没有 + 按钮 / 删不掉"这件事
-     * **说出来**，而不是让用户自己猜（2026-09-30 真机反馈驱动）。
-     */
-    readOnly: Boolean = false,
-    /**
      * 「这个库在哪 · 有多少条」（null = 库未知，整行不画）。
      *
      * 由 [ItemsBody] 经 `vaultCardInfoOf` 组装（那里才有 [io.vaultix.model.VaultSummary]
@@ -1263,11 +1182,6 @@ private fun ItemsList(
         // 只读提示排在它下面 —— 那是"为什么按钮少了"的解释，属于对**内容**的补充。
         if (vaultCard != null) {
             item(key = "vault-status") { VaultStatusRow(card = vaultCard) }
-        }
-        if (readOnly) {
-            // 顶部一行如实说明（见 [ReadOnlyVaultNotice] 的 KDoc）：只读是**阶段限制**，
-            // 但"没有 + 按钮 / 删不掉"必须有个说法，否则用户只会以为坏了。
-            item(key = "readonly-notice") { ReadOnlyVaultNotice() }
         }
         groups.forEach { group ->
             if (grouped) {

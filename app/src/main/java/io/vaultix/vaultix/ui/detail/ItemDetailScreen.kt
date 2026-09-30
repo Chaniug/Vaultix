@@ -460,17 +460,13 @@ fun ItemDetailScreen(
                     // （详情页是二级路由，栈里有上一层，`BackHandler` 由导航库自己接管）。
                     // 去掉后标题左移到 16dp 起始位，长标题能多显示约一个字符位。
                     actions = {
-                        // ★ KDBX 库（阶段 A 只读）**不画**编辑 / 删除入口（`.ai/ISSUES.md` #106）：
-                        //   两个动作最终都要写库，而 KDBX 目前没有写回 ⇒ 数据层会拒绝。
-                        //   与其让用户改完一大段再被拒，不如一开始就不给这条路（诚实）。
-                        //   ⚠️ 数据层那道闸仍然保留 —— 这里只是"别领进死路"，不是安全边界。
-                        if (!state.readOnly) {
-                            IconButton(onClick = { editOpen = true }) {
-                                Icon(Icons.Filled.Edit, contentDescription = null)
-                            }
-                            IconButton(onClick = { deleteConfirmOpen = true }) {
-                                Icon(Icons.Filled.Delete, contentDescription = null)
-                            }
+                        // 2026-10-01 起 KDBX 也能编辑 / 删除（阶段 B 写回上线），
+                        //   不再有"只读库不画入口"这一支 —— 那是 #106 时代的诚实拒绝，现在换成了真支持。
+                        IconButton(onClick = { editOpen = true }) {
+                            Icon(Icons.Filled.Edit, contentDescription = null)
+                        }
+                        IconButton(onClick = { deleteConfirmOpen = true }) {
+                            Icon(Icons.Filled.Delete, contentDescription = null)
                         }
                     },
                 )

@@ -7,6 +7,7 @@ import io.mockk.mockk
 import io.mockk.slot
 import io.vaultix.crypto.SymmetricCryptoKey
 import io.vaultix.crypto.VaultixCrypto
+import io.vaultix.data.repository.KdbxItemRepository
 import io.vaultix.data.bitwarden.mapper.CipherMapper
 import io.vaultix.data.bitwarden.model.CipherDto
 import io.vaultix.data.bitwarden.model.CipherRequest
@@ -55,6 +56,9 @@ class ItemRepositoryImplTest {
     private lateinit var cipherDao: CipherDao
     private lateinit var pendingOpDao: PendingOpDao
     private lateinit var atomicWriteDao: AtomicWriteDao
+    /** KDBX 写回（W2 起写路径分层）。只有 KDBX 那条用例真的会用到它。 */
+    private val kdbxItemWrites = mockk<KdbxItemRepository>(relaxed = true)
+
     private lateinit var syncService: BitwardenSyncService
     private lateinit var sessions: VaultSessionManager
     private lateinit var crypto: VaultixCrypto
@@ -95,6 +99,9 @@ class ItemRepositoryImplTest {
             syncService = syncService,
             // KDBX 读路径分流用的会话桥：本测试全是 Bitwarden 库，桥永不被真正触发
             kdbxSessions = KdbxSessionFlow(),
+            // KDBX 写回（W2 起写路径也分流）。本文件绝大多数用例是 Bitwarden 库，
+            // 只有下面那条 KDBX 用例会真的用到它 ⇒ 用 relaxed mock，并逐条 coVerify。
+            kdbxItemWrites = kdbxItemWrites,
             cryptoDispatcher = Dispatchers.Default,
         )
         // 读路径分流要先问「这个库是什么类型」（见 observeItems）：
@@ -283,32 +290,59 @@ class ItemRepositoryImplTest {
     }
 
     /**
-     * ★ 只读库闸（`.ai/ISSUES.md` #106）。
+     * ★ KDBX 写路径分流（`.ai/ISSUES.md` #106，2026-10-01 起**真的写回**）。
      *
-     * 修之前，KDBX 库的写路径**没有分流**，两个方向都在骗人：
-     * - `createItem` 会把一条 **Room 孤儿行**写进去 —— 而读侧走 `Kdbx.contentOf`，
-     *   永远看不到它 ⇒ 用户看到「保存成功、条目却没出现」（**静默丢失**）；
-     * - `updateItem` 先查 `cipherDao.get(id)`，KDBX 条目的 id 来自 `itemIdOf(uuid)`、
-     *   不在 Room ⇒ 报「条目不存在」（与真实原因毫不相干）。
+     * ## 这条用例守两件事，第二件才是判据
      *
-     * 本用例锁死两条：**都返回 [ReadOnlyVaultException]** + **一个字节都没落**
-     * （行、队列都不许动）—— 后者才是"没有幽灵数据"的真正判据。
+     * 1. 三个写方法**都委托给 KDBX 的写回实现**（`KdbxItemRepository`）——
+     *    在这之前它们会直接抛"库只读"（那是 2026-09-30 的诚实拒绝，现在换成真支持）；
+     * 2. ★ **一个字节都没写进 Room**（行、队列都不许动）—— 这才是"没有幽灵数据"的判据。
+     *    修 #106 之前，`createItem` 在 KDBX 库会写出一条 Room 孤儿行，
+     *    而读侧走 `Kdbx.contentOf` 永远看不到它 ⇒ 用户看到「保存成功、条目却没出现」。
+     *    换成分流之后，Room 那侧必须**完全安静**：那条孤儿行就是从这里来的。
      */
     @Test
-    fun writeToKdbxVault_rejectedAndNothingWritten() = runTest {
-        sessions.unlock(vaultId, key)
+    fun writeToKdbxVault_delegatesToKdbxWriteAndTouchesNothingInRoom() = runTest {
         coEvery { vaultDao.get(vaultId) } returns kdbxVaultRow()
+        coEvery { kdbxItemWrites.create(vaultId, any()) } returns Result.success(VaultSaveOutcome.Queued)
+        coEvery { kdbxItemWrites.update(vaultId, any()) } returns Result.success(VaultSaveOutcome.Queued)
+        coEvery { kdbxItemWrites.softDelete(vaultId, any()) } returns Result.success(VaultSaveOutcome.Queued)
 
         val created = repo.createItem(vaultId, plainItem(id = ""))
         val updated = repo.updateItem(vaultId, plainItem(id = "cipher-1"))
         val deleted = repo.softDeleteItem(vaultId, "cipher-1")
 
-        assertTrue(created.exceptionOrNull() is ReadOnlyVaultException)
-        assertTrue(updated.exceptionOrNull() is ReadOnlyVaultException)
-        assertTrue(deleted.exceptionOrNull() is ReadOnlyVaultException)
+        assertTrue(created.isSuccess)
+        assertTrue(updated.isSuccess)
+        assertTrue(deleted.isSuccess)
+        coVerify(exactly = 1) { kdbxItemWrites.create(vaultId, any()) }
+        coVerify(exactly = 1) { kdbxItemWrites.update(vaultId, any()) }
+        coVerify(exactly = 1) { kdbxItemWrites.softDelete(vaultId, "cipher-1") }
+
+        // ★ 真正的判据：Room 侧**完全没被碰过**。
         coVerify(exactly = 0) { cipherDao.upsertAll(any()) }
         coVerify(exactly = 0) { cipherDao.deleteByIds(any()) }
         coVerify(exactly = 0) { pendingOpDao.enqueue(any()) }
+    }
+
+    /**
+     * 反证：**通道是通的**（不许把"没写 Room"归因于"根本没走到分流"）。
+     *
+     * 上面那条用例只断言"Room 没动"，而"Room 没动"也可能因为**整条路径根本没跑**
+     * （比如方法在第一行就抛了）。⇒ 补一条正向断言：委托调用**确实发生了**。
+     * 这正是变异验证的思路：把分流删掉，这条必须红。
+     */
+    @Test
+    fun writeToKdbxVault_reportsFailureWhenKdbxWriteFails() = runTest {
+        coEvery { vaultDao.get(vaultId) } returns kdbxVaultRow()
+        coEvery { kdbxItemWrites.create(vaultId, any()) } returns
+            Result.failure(IllegalStateException("请先解锁该密码库"))
+
+        val created = repo.createItem(vaultId, plainItem(id = ""))
+
+        assertTrue(created.isFailure)
+        assertEquals("请先解锁该密码库", created.exceptionOrNull()?.message)
+        coVerify(exactly = 0) { cipherDao.upsertAll(any()) }
     }
 
     private fun kdbxVaultRow() = VaultEntity(
