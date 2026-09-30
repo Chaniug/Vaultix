@@ -39,8 +39,8 @@ object TrashCleanupPolicy {
      * 兼容本地 `Instant.toString()`（毫秒精度）与服务端微秒 / 纳秒精度格式
      * （ISO-8601 小数秒 0-9 位均可）。
      */
-    fun deletedAtMillis(deletedDate: String): Long? =
-        runCatching { Instant.parse(deletedDate).toEpochMilliseconds() }.getOrNull()
+    fun deletedAtMillis(deletedDate: String?): Long? =
+        deletedDate?.let { runCatching { Instant.parse(it).toEpochMilliseconds() }.getOrNull() }
 
     /** 清理截止线（epoch millis）：删除时间早于该值即过期（严格小于）。 */
     fun cutoffMillis(nowMillis: Long, autoDeleteDays: Int): Long =
@@ -50,7 +50,7 @@ object TrashCleanupPolicy {
      * 是否已到期（应被自动清理）。策略未启用或删除时间不可解析时恒为 false
      * （宁可保留也不误删）。
      */
-    fun isExpired(deletedDate: String, nowMillis: Long, autoDeleteDays: Int): Boolean {
+    fun isExpired(deletedDate: String?, nowMillis: Long, autoDeleteDays: Int): Boolean {
         if (!shouldAutoCleanup(autoDeleteDays)) return false
         val deletedAt = deletedAtMillis(deletedDate) ?: return false
         return deletedAt < cutoffMillis(nowMillis, autoDeleteDays)
@@ -61,7 +61,7 @@ object TrashCleanupPolicy {
      * `max(0, autoDeleteDays - daysSinceDelete)`，同 Bastion 的整除天口径。
      * 策略未启用 / 删除时间不可解析时返回 null（UI 不显示倒计时）。
      */
-    fun remainingDays(deletedDate: String, nowMillis: Long, autoDeleteDays: Int): Int? {
+    fun remainingDays(deletedDate: String?, nowMillis: Long, autoDeleteDays: Int): Int? {
         if (!shouldAutoCleanup(autoDeleteDays)) return null
         val deletedAt = deletedAtMillis(deletedDate) ?: return null
         val daysSince = ((nowMillis - deletedAt) / MILLIS_PER_DAY).toInt()

@@ -43,6 +43,7 @@ internal fun KeePassDatabase.toMappedContent(): KdbxMappedContent {
     val meta = content.meta
     val recycleBinUuid = meta.recycleBinUuid
     val items = mutableListOf<VaultItem>()
+    val trash = mutableListOf<KdbxTrashItem>()
     val folders = mutableListOf<VaultFolder>()
     val groupPaths = mutableMapOf<UUID, String>()
     var recycleBinCount = 0
@@ -63,12 +64,18 @@ internal fun KeePassDatabase.toMappedContent(): KdbxMappedContent {
             folders += VaultFolder(id = folderIdOf(group.uuid), name = currentPath)
         }
         group.entries.forEach { entry ->
+            val folderId = if (isRoot) null else folderIdOf(group.uuid)
             if (nowInRecycleBin) {
                 recycleBinCount++
-            } else {
-                items += entry.toVaultItem(
-                    folderId = if (isRoot) null else folderIdOf(group.uuid),
+                // 回收站条目也要映射（施工单 S5）：回收站页与"恢复"都要靠它。
+                // ⚠️ 时间取 lastModificationTime —— KDBX 没有独立的删除时间，
+                //    详见 KdbxTrashItem 的 KDoc（**不许当成删除时间展示**）。
+                trash += KdbxTrashItem(
+                    item = entry.toVaultItem(folderId = folderId),
+                    lastModifiedAtMillis = entry.times?.lastModificationTime?.toEpochMilli(),
                 )
+            } else {
+                items += entry.toVaultItem(folderId = folderId)
             }
         }
         group.groups.forEach { child -> walk(child, currentPath, nowInRecycleBin) }
@@ -79,6 +86,7 @@ internal fun KeePassDatabase.toMappedContent(): KdbxMappedContent {
         items = items,
         folders = folders,
         recycleBinCount = recycleBinCount,
+        trashItems = trash,
         groupPaths = groupPaths,
     )
 }

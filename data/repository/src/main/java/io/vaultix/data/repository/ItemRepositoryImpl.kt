@@ -144,6 +144,27 @@ class ItemRepositoryImpl @Inject constructor(
             .shareIn(shareScope, started = SharingStarted.Eagerly, replay = 1)
 
     /**
+     * KDBX 库的回收站流（施工单 S5）。
+     *
+     * 与 [kdbxItems] 同一套触发机制（会话 bump ⇒ 重读），因为 KDBX 的会话是纯内存结构。
+     *
+     * ⚠️ [TrashEntry.deletedDate] 取的是**最后修改时间**：KDBX 没有独立的删除时间
+     * （详见 `KdbxTrashItem` 的 KDoc）。这里如实转换，不补默认值 ——
+     * 条目没有 `<Times>` 时就是 `null`，UI 不显示倒计时而不是显示一个编出来的日期。
+     */
+    private fun kdbxTrash(vaultId: String): Flow<List<TrashEntry>> =
+        kdbxSessions.asSignal()
+            .map {
+                Kdbx.contentOf(vaultId)?.trashItems.orEmpty().map { trash ->
+                    TrashEntry(
+                        item = trash.item,
+                        deletedDate = trash.lastModifiedAtMillis?.let { Instant.ofEpochMilli(it).toString() },
+                    )
+                }
+            }
+            .flowOn(cryptoDispatcher)
+
+    /**
      * KDBX 库的条目流。
      *
      * KDBX 会话是纯内存结构（没有可订阅的 Flow），所以用 [KdbxSessionFlow] 当触发器：
@@ -160,10 +181,11 @@ class ItemRepositoryImpl @Inject constructor(
             .map { vaults -> VaultKind.fromName(vaults.firstOrNull { it.id == vaultId }?.kind) }
             .distinctUntilChanged()
             .flatMapLatest { kind ->
-                // KDBX 阶段 A 不映射回收站（条目数由解锁内容里的 recycleBinCount 告知 UI），
-                // 因此回收站页对 KDBX 库恒为空 —— 明确返回空，而不是让 Room 查询碰巧返回别的。
+                // KDBX：回收站 = `meta.recycleBinUuid` 那棵子树（施工单 S5）。
+                // 阶段 A 这里恒定返回空列表（占位），**删掉的条目在回收站页看不见**；
+                // 现在映射真数据 —— 读方向的识别早在 `toMappedContent` 里就有了。
                 if (kind == VaultKind.KDBX) {
-                    flowOf(emptyList())
+                    kdbxTrash(vaultId)
                 } else {
                     combine(
                         cipherDao.observeTrashByVault(vaultId),

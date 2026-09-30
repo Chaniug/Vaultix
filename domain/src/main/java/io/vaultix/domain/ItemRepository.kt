@@ -196,8 +196,15 @@ class ReadOnlyVaultException(
  *
  * [deletedDate] 为 ISO-8601 字符串（与数据库行一致；本地写入 `Instant.now().toString()`，
  * 服务端同步下行同格式），供 `TrashCleanupPolicy` 计算剩余天数倒计时。
+ *
+ * ⚠️ **可为 null**（2026-10-01，施工单 S5）：KDBX 库**没有"删除时间"这个概念** ——
+ * 删除只是把条目挪进回收站分组，`<Times>` 里压根没有对应的字段
+ * （现存的最接近者是"最后修改时间"）。此前为了凑这个非空类型，KDBX 侧只能返回空列表
+ * （于是**删掉的条目在回收站页根本看不见**）。
+ * ⇒ 与其编一个时间填进来，不如让"没有"这件事说得出口：`null` = 库里没记这个时刻，
+ *   UI 据此不显示倒计时（`TrashCleanupPolicy` 对 null 的行为与"解析失败"一致：不清理、不倒计时）。
  */
 data class TrashEntry(
     val item: VaultItem,
-    val deletedDate: String,
+    val deletedDate: String?,
 )

@@ -83,8 +83,16 @@ sealed interface KdbxOpenError {
 data class KdbxUnlockedContent(
     val items: List<VaultItem>,
     val folders: List<VaultFolder>,
-    /** 回收站里的条目数（本阶段不映射，明确告知用户而不是静默吞掉）。 */
+    /** 回收站里的条目数（只想要个数时用；条目本身在 [trashItems]）。 */
     val recycleBinCount: Int,
+    /**
+     * 回收站子树里的条目（施工单 S5）：回收站页与"恢复"都靠它，此前恒为空列表
+     * （阶段 A 的占位），导致**删掉的条目在回收站页看不见**。
+     *
+     * ⚠️ 每条带的 `lastModifiedAtMillis` 是**最后修改时间、不是删除时间**，
+     * 详见 `KdbxTrashItem` 的 KDoc。
+     */
+    val trashItems: List<KdbxTrashItem> = emptyList(),
     /** 成功打开所用的凭据形态（诊断用；不含任何密钥material）。 */
     val credentialLabel: String,
 )
@@ -180,6 +188,7 @@ object Kdbx {
                 items = session.content.items,
                 folders = session.content.folders,
                 recycleBinCount = session.content.recycleBinCount,
+                trashItems = session.content.trashItems,
                 credentialLabel = session.credentialLabel,
             ),
         )
@@ -293,6 +302,7 @@ object Kdbx {
                 items = session.content.items,
                 folders = session.content.folders,
                 recycleBinCount = session.content.recycleBinCount,
+                trashItems = session.content.trashItems,
                 credentialLabel = session.credentialLabel,
             ),
         )
@@ -423,6 +433,7 @@ object Kdbx {
             items = session.content.items,
             folders = session.content.folders,
             recycleBinCount = session.content.recycleBinCount,
+            trashItems = session.content.trashItems,
             credentialLabel = session.credentialLabel,
         )
     }
