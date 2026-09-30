@@ -42,7 +42,7 @@ package io.vaultix.vaultix.security
 
 import io.vaultix.common.logging.VaultixLog
 import io.vaultix.datastore.VaultTimeout
-import io.vaultix.datastore.VaultixPreferences
+import io.vaultix.datastore.VaultTimeoutPreferences
 import io.vaultix.domain.AutoUnlockRepository
 import io.vaultix.domain.VaultRepository
 import javax.inject.Inject
@@ -70,7 +70,8 @@ import kotlinx.coroutines.launch
  */
 @Singleton
 class AutoRestoreTrigger @Inject constructor(
-    private val preferences: VaultixPreferences,
+    // 只依赖**档位**这一件事（2026-09-30 抽类后收窄；此前拿的是整个 `VaultixPreferences` 门面）。
+    private val vaultTimeoutPrefs: VaultTimeoutPreferences,
     private val autoUnlock: AutoUnlockRepository,
     private val vaultRepository: VaultRepository,
     // ⚠️ 2026-09-29 二次定稿：`AutoLockController`（前台状态）注入**已移除**。
@@ -114,7 +115,7 @@ class AutoRestoreTrigger @Inject constructor(
     /**
      * 「**是否还有 Never 档的库**」—— auto 信封存在性的唯一判据（D3 起按库聚合）。
      *
-     * 库表来自仓储（偏好层拿不到库表），逐库读 `preferences.vaultTimeout(id)`；
+     * 库表来自仓储（偏好层拿不到库表），逐库读 `vaultTimeoutPrefs.vaultTimeout(id)`；
      * 库集合变化时用 `flatMapLatest` 重建订阅（不为动态集合手工维护挂/摘）。
      *
      * ⚠️ **迁移期结论不变**：还没写过显式档位的库，`vaultTimeout(id)` 回退旧全局键
@@ -129,7 +130,7 @@ class AutoRestoreTrigger @Inject constructor(
                 if (ids.isEmpty()) {
                     flowOf(false)
                 } else {
-                    combine(ids.map { preferences.vaultTimeout(it) }) { perVault ->
+                    combine(ids.map { vaultTimeoutPrefs.vaultTimeout(it) }) { perVault ->
                         perVault.any { it == VaultTimeout.Never }
                     }.distinctUntilChanged()
                 }
@@ -189,7 +190,7 @@ class AutoRestoreTrigger @Inject constructor(
             newlyUnlocked.forEach { autoUnlock.clearUserLock(it) }
             // D3：信封是全局的 ⇒「**任一**新解锁库是 Never 档」即可写信封。
             val anyNever = newlyUnlocked.any {
-                preferences.vaultTimeout(it).first() == VaultTimeout.Never
+                vaultTimeoutPrefs.vaultTimeout(it).first() == VaultTimeout.Never
             }
             if (anyNever && autoUnlock.houseKeyInMemory.first()) {
                 autoUnlock.enrollEnvelope()

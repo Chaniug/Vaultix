@@ -36,7 +36,7 @@ import android.content.IntentFilter
 import android.os.SystemClock
 import dagger.hilt.android.qualifiers.ApplicationContext
 import io.vaultix.datastore.VaultTimeout
-import io.vaultix.datastore.VaultixPreferences
+import io.vaultix.datastore.VaultTimeoutPreferences
 import io.vaultix.domain.UnlockResult
 import io.vaultix.domain.VaultRepository
 import kotlinx.coroutines.CoroutineScope
@@ -74,7 +74,8 @@ private data class TimeoutJobData(
 class VaultLockManagerImpl @Inject constructor(
     @ApplicationContext private val context: Context,
     private val vaultRepository: VaultRepository,
-    private val preferences: VaultixPreferences,
+    // 只依赖**档位**这一件事（2026-09-30 抽类后收窄；此前拿的是整个 `VaultixPreferences` 门面）。
+    private val vaultTimeoutPrefs: VaultTimeoutPreferences,
     // ⚠️ 2026-09-29 二次定稿：`AutoUnlockRepository` 注入已移除 ——
     //   `Never` 档对齐 Bitwarden 后不再有「离场软锁」这个动作，
     //   本类也不再需要软锁的实现（保留会触发 detekt `UnusedPrivateMember`）。
@@ -329,7 +330,7 @@ class VaultLockManagerImpl @Inject constructor(
         scope.launch {
             // ★ **D3**（2026-09-29）：档位**每库一份** —— 读该库自己的档位，
             //   而不是全局单值（全局单值是「两个库不同档位却互相干扰」的来源）。
-            val timeout = preferences.vaultTimeout(vaultId).first()
+            val timeout = vaultTimeoutPrefs.vaultTimeout(vaultId).first()
 
             when (timeout) {
                 VaultTimeout.Never -> {

@@ -19,7 +19,7 @@
  *  class，`when` 分支就是穷尽的，编译器会挡住漏改（旧写法漏一个分支只会在运行时静默走 else）。
  *
  * ⚠️ **为什么放在 core:datastore 而不是 app:security**：本模型需要被
- * [VaultixPreferences]（core:datastore，叶子模块，不依赖任何项目模块）直接读写，
+ * [VaultTimeoutPreferences]（core:datastore，叶子模块，不依赖任何项目模块）直接读写，
  * 同时又要被 app 层的 `VaultLockManager` 消费。放在 core:datastore 是唯一不引入
  * 反向依赖的位置；它是纯 Kotlin 数据模型，不含 Android 依赖。
  */
@@ -31,7 +31,7 @@ package io.vaultix.datastore
  *
  * ## 作用域：**全局默认 + 每库可覆盖**（2026-09-30 傍晚定稿，推翻 D3 的"每库一份"）
  *
- * - **全局默认** = `vault_timeout` 键（`VaultixPreferences.globalVaultTimeout()`），
+ * - **全局默认** = `vault_timeout` 键（`VaultTimeoutPreferences.globalVaultTimeout()`），
  *   入口 = 设置首页「自动锁定」行；
  * - **每库覆盖** = `vault_timeout::<vaultId>` 键（`vaultTimeout(vaultId)` / `setVaultTimeout`），
  *   入口 = 库管理页该库的 ⋮（第一项「跟随全局设置」= 删除覆盖）；

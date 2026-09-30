@@ -5,7 +5,7 @@ import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import io.vaultix.datastore.VaultTimeout
-import io.vaultix.datastore.VaultixPreferences
+import io.vaultix.datastore.VaultTimeoutPreferences
 import io.vaultix.domain.AutoUnlockRepository
 import io.vaultix.domain.AutoRestoreReport
 import io.vaultix.domain.VaultRepository
@@ -92,7 +92,7 @@ class AutoRestoreTriggerTest {
         hasEnvelope: Boolean = true,
         restoreReport: AutoRestoreReport = AutoRestoreReport(true, 1, 1, emptyList()),
     ): Pair<AutoRestoreTrigger, AutoUnlockRepository> {
-        val prefs = mockk<VaultixPreferences>(relaxed = true)
+        val prefs = mockk<VaultTimeoutPreferences>(relaxed = true)
         // D3：档位**每库一份** ⇒ 触发器改为「按库聚合是否还有 Never」（`anyVaultNever()`）。
         // 本夹具统一回同一支 flow，测试依旧靠翻转 `f.timeout` 驱动（与改前等价）。
         every { prefs.vaultTimeout(any()) } returns f.timeout

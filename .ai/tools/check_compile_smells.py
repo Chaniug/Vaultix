@@ -632,10 +632,20 @@ def check_cross_file_private(files: list[Path]) -> dict[Path, list[str]]:
     #     **它自己那一份**，纯文本无从分辨 ⇒ 一律跳过，宁可漏报。
     #    这与 `check_import_packages` 的克制是同一种取向：
     #    **启发式探针不许为了多抓而制造误报。**
+    #
+    # 🔴 2026-09-30 修正：计数必须**不限可见性**（此前只数 `private ... fun`）。
+    #    误报实录：`VaultRepositoryImpl.kt` 的**文件级 private** `normalizeServer`
+    #    被报"跨文件调用"，而 `WebDavUrlBuilder.kt:78` 调的是**同文件那个 object
+    #    自己的成员** `fun normalizeServer(raw)`（无修饰符 ⇒ 旧计数看不见它）
+    #    ⇒ hits=1 ⇒ 判"唯一" ⇒ 假红。
+    #    这类成员的可见性是默认 public，同样是"别处可能有同名可调用体"的证据：
+    #    只要**任何**文件声明了同名函数，就该按歧义跳过 —— 与"宁可漏报"一致。
     ambiguous: set[str] = set()
     for name in owners:
         pattern = re.compile(
-            r"^\s*private\s+(?:suspend\s+|inline\s+|operator\s+)*fun\s+"
+            r"^[ \t]*(?:private|internal|public|protected)?\s*"
+            r"(?:suspend\s+|inline\s+|operator\s+|abstract\s+|override\s+|open\s+)*fun\s+"
+            rf"(?:<[^>]*>\s*)?"
             rf"(?:[A-Za-z_][\w.]*(?:<[^<>]*>)?\??\s*\.\s*)?{re.escape(name)}\b",
             re.M,
         )

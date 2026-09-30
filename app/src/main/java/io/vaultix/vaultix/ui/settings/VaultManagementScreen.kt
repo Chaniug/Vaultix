@@ -220,7 +220,7 @@ fun VaultManagementScreen(
     // ---- 对话框 ----
     // ⚠️ 2026-09-30 晚：**每库「自动锁定」入口已按用户要求移除**（原话：「感觉冗余了」）。
     //    档位统一由设置首页的「自动锁定」一行掌管（对所有库生效）。
-    //    逐库覆盖的数据层仍然保留（见 `VaultixPreferences.vaultTimeoutOverride` 的 KDoc：
+    //    逐库覆盖的数据层仍然保留（见 `VaultTimeoutPreferences.vaultTimeoutOverride` 的 KDoc：
     //    既有数据要能被正确解读、清理迁移要用、且单测钉住回退顺序），只是**不再有 UI 入口**
     //    ⇒ 用户不会再遇到"某个库被一条看不见的覆盖钉住、改了全局却不动"。
 

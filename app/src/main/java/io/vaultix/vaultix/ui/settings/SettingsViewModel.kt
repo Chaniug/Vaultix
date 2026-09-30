@@ -6,6 +6,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import io.vaultix.data.repository.LegacyQuickUnlockCleanup
 import io.vaultix.data.repository.LocalUnlockEnrollment
 import io.vaultix.datastore.VaultTimeout
+import io.vaultix.datastore.VaultTimeoutPreferences
 import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.datastore.VaultixPreferencesDefaults
 import io.vaultix.domain.KdbxSyncRepository
@@ -41,6 +42,14 @@ import javax.inject.Inject
 @OptIn(ExperimentalCoroutinesApi::class)
 class SettingsViewModel @Inject constructor(
     private val preferences: VaultixPreferences,
+    /**
+     * 自动锁定档位（全局默认 + 每库覆盖）。
+     *
+     * ⚠️ 2026-09-30 从 [VaultixPreferences] 抽出后**单独注入**：那组 11 个函数曾把
+     * `VaultixPreferences` 顶到 detekt 的 40 上限之上（见 [VaultTimeoutPreferences] 的 KDoc）。
+     * 本页只需要「全局默认」这一件事，别再把它并回 `preferences`。
+     */
+    private val vaultTimeoutPrefs: VaultTimeoutPreferences,
     private val vaultRepository: VaultRepository,
     private val autoLockController: AutoLockController,
     private val activeVaultStore: ActiveVaultStore,
@@ -99,10 +108,10 @@ class SettingsViewModel @Inject constructor(
      * ★ 2026-09-30 晚：**每库覆盖的 UI 入口已按用户要求移除**（原话「感觉冗余了」），
      * 所以本 ViewModel 不再暴露逐库档位（`vaultTimeouts` / `setVaultTimeout(vaultId,…)` /
      * `clearVaultTimeoutOverride` 都已删）。档位现在是**单一来源**：所有库跟随这一个值。
-     * 逐库覆盖的**数据层仍保留**（见 `VaultixPreferences.vaultTimeoutOverride` 的 KDoc：
+     * 逐库覆盖的**数据层仍保留**（见 `VaultTimeoutPreferences.vaultTimeoutOverride` 的 KDoc：
      * 既有数据要能被正确解读、清理迁移要用、单测钉住回退顺序），只是没有 UI 能写它。
      */
-    val globalVaultTimeout: StateFlow<VaultTimeout?> = preferences.globalVaultTimeout()
+    val globalVaultTimeout: StateFlow<VaultTimeout?> = vaultTimeoutPrefs.globalVaultTimeout()
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5_000),
@@ -118,7 +127,7 @@ class SettingsViewModel @Inject constructor(
         // —— 全局行与覆盖对话框都在这一页。
         // 门控键（`vault_timeout_scope_v2`）保证只跑一次：此后用户**有意**
         // 在 ⋮ 里建立的覆盖不会被清掉。
-        viewModelScope.launch { preferences.purgeLegacyPerVaultTimeoutsOnce() }
+        viewModelScope.launch { vaultTimeoutPrefs.purgeLegacyPerVaultTimeoutsOnce() }
     }
 
     val state: StateFlow<UiState> = combine(
@@ -398,7 +407,7 @@ class SettingsViewModel @Inject constructor(
      * （这正是「全局默认 + 每库可覆盖」的意思）。
      */
     fun setGlobalVaultTimeout(timeout: VaultTimeout) {
-        viewModelScope.launch { preferences.setGlobalVaultTimeout(timeout) }
+        viewModelScope.launch { vaultTimeoutPrefs.setGlobalVaultTimeout(timeout) }
     }
 
     fun setClipboardClearMs(ms: Long) {

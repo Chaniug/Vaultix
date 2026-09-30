@@ -33,7 +33,7 @@ package io.vaultix.data.repository
 import io.vaultix.common.logging.VaultixLog
 import io.vaultix.data.kdbx.Kdbx
 import io.vaultix.datastore.VaultTimeout
-import io.vaultix.datastore.VaultixPreferences
+import io.vaultix.datastore.VaultTimeoutPreferences
 import io.vaultix.domain.AutoUnlockRepository
 import io.vaultix.domain.AutoRestoreReport
 import io.vaultix.domain.RoomUnlockOutcome
@@ -64,7 +64,8 @@ class AutoUnlockRepositoryImpl @Inject constructor(
      * 对齐 Bitwarden（`userAutoUnlockKey` 仅 Never 档存在，见类 KDoc 对照表），
      * 也与定稿 §3.2 的规则表一致：非 Never 档的库**不该**被冷启动悄悄开回来。
      */
-    private val preferences: VaultixPreferences,
+    // 只依赖**档位**这一件事（2026-09-30 抽类后收窄；此前拿的是整个 `VaultixPreferences` 门面）。
+    private val vaultTimeoutPrefs: VaultTimeoutPreferences,
 ) : AutoUnlockRepository {
 
     override val houseKeyInMemory = houseKeyStore.isUnlockedFlow
@@ -98,7 +99,7 @@ class AutoUnlockRepositoryImpl @Inject constructor(
         for (vaultId in allRooms) {
             when {
                 vaultId in userLocked -> Unit
-                preferences.vaultTimeout(vaultId).first() != VaultTimeout.Never -> skippedNonNever++
+                vaultTimeoutPrefs.vaultTimeout(vaultId).first() != VaultTimeout.Never -> skippedNonNever++
                 else -> rooms += vaultId
             }
         }

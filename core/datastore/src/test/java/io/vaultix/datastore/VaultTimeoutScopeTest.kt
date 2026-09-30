@@ -26,7 +26,7 @@ import org.junit.Test
  *
  * 断言直接打在被抽出的**纯函数**上（`resolveVaultTimeout` / `resolveVaultTimeoutOverride` /
  * `globalDefaultTimeout`），因此不需要真的起一个 DataStore；下面那个 `noDataStore`
- * 只是为了让 `VaultixPreferences` 能被构造出来 —— 本文件一个字节都不会读写它。
+ * 只是为了让 `VaultTimeoutPreferences` 能被构造出来 —— 本文件一个字节都不会读写它。
  */
 class VaultTimeoutScopeTest {
 
@@ -39,7 +39,7 @@ class VaultTimeoutScopeTest {
         ): Preferences = transform(emptyPreferences())
     }
 
-    private val prefs = VaultixPreferences(noDataStore)
+    private val prefs = VaultTimeoutPreferences(noDataStore)
 
     /** ⚠️ 这里**故意**硬编码存储键格式：它是对**用户既有数据**的接口，改名 = 静默丢档位。 */
     private fun overrideKey(vaultId: String) = intPreferencesKey("vault_timeout::$vaultId")

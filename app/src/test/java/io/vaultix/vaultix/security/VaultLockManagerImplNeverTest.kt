@@ -5,7 +5,7 @@ import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import io.vaultix.datastore.VaultTimeout
-import io.vaultix.datastore.VaultixPreferences
+import io.vaultix.datastore.VaultTimeoutPreferences
 import io.vaultix.domain.VaultRepository
 import io.vaultix.model.VaultKind
 import io.vaultix.model.VaultSummary
@@ -101,7 +101,7 @@ class VaultLockManagerImplNeverTest {
     private suspend fun managerWithRepo(
         timeout: VaultTimeout,
     ): Pair<VaultLockManagerImpl, VaultRepository> {
-        val prefs = mockk<VaultixPreferences>(relaxed = true)
+        val prefs = mockk<VaultTimeoutPreferences>(relaxed = true)
         every { prefs.vaultTimeout(any()) } returns flowOf(timeout)
 
         val repository = mockk<VaultRepository>(relaxed = true)
@@ -111,7 +111,7 @@ class VaultLockManagerImplNeverTest {
         val m = VaultLockManagerImpl(
             context = mockk<Context>(relaxed = true),
             vaultRepository = repository,
-            preferences = prefs,
+            vaultTimeoutPrefs = prefs,
         )
         // 等 `activeVaultId` 被 init 里的收集赋值（⚠️ 真实时间等待，见 [awaitUntil]）。
         awaitUntil { m.isVaultUnlocked("vault-1") }
@@ -306,7 +306,7 @@ class VaultLockManagerImplNeverTest {
      */
     @Test
     fun `多库_立即档_切后台_每个已解锁库各锁各的`() = runTest {
-        val prefs = mockk<VaultixPreferences>(relaxed = true)
+        val prefs = mockk<VaultTimeoutPreferences>(relaxed = true)
         every { prefs.vaultTimeout(any()) } returns flowOf(VaultTimeout.Immediately)
         val repository = mockk<VaultRepository>(relaxed = true)
         every { repository.observeVaults() } returns
@@ -315,7 +315,7 @@ class VaultLockManagerImplNeverTest {
         val m = VaultLockManagerImpl(
             context = mockk<Context>(relaxed = true),
             vaultRepository = repository,
-            preferences = prefs,
+            vaultTimeoutPrefs = prefs,
         )
         awaitUntil { m.isVaultUnlocked("vault-1") && m.isVaultUnlocked("vault-2") }
 
@@ -341,7 +341,7 @@ class VaultLockManagerImplNeverTest {
      */
     @Test
     fun `多库_回前台_撤销全部定时器`() = runTest {
-        val prefs = mockk<VaultixPreferences>(relaxed = true)
+        val prefs = mockk<VaultTimeoutPreferences>(relaxed = true)
         every { prefs.vaultTimeout(any()) } returns flowOf(VaultTimeout.FiveMinutes)
         val repository = mockk<VaultRepository>(relaxed = true)
         every { repository.observeVaults() } returns
@@ -350,7 +350,7 @@ class VaultLockManagerImplNeverTest {
         val m = VaultLockManagerImpl(
             context = mockk<Context>(relaxed = true),
             vaultRepository = repository,
-            preferences = prefs,
+            vaultTimeoutPrefs = prefs,
         )
         awaitUntil { m.isVaultUnlocked("vault-1") && m.isVaultUnlocked("vault-2") }
 

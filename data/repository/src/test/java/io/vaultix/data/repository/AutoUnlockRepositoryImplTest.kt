@@ -8,7 +8,7 @@ import io.mockk.mockk
 import io.mockk.Runs
 import io.mockk.verify
 import io.vaultix.datastore.VaultTimeout
-import io.vaultix.datastore.VaultixPreferences
+import io.vaultix.datastore.VaultTimeoutPreferences
 import io.vaultix.domain.RoomUnlockOutcome
 import io.vaultix.domain.VaultRepository
 import io.vaultix.model.VaultKind
@@ -45,7 +45,7 @@ class AutoUnlockRepositoryImplTest {
      * 每库档位（D3，2026-09-29）：`restore()` 会按库读档位（只恢复 Never 档的房间）。
      * 默认全部 Never ⇒ 与 D3 之前的行为等价（那时判据是全局档位）。
      */
-    private val preferences = mockk<VaultixPreferences>(relaxed = true)
+    private val preferences = mockk<VaultTimeoutPreferences>(relaxed = true)
     private lateinit var repo: AutoUnlockRepositoryImpl
 
     private fun vault(id: String, unlocked: Boolean) = VaultSummary(
