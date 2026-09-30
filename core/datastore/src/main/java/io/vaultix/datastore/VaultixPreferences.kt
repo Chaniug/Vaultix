@@ -53,14 +53,29 @@ class VaultixPreferences @Inject constructor(
          * 旧版自动锁定档位键（裸 Int：0=立即 / N=分钟 / 负=从不）。
          *
          * 2026-09-11 起**只用于一次性迁移**，不再作为读取来源。保留键名以免用户数据丢失。
+         * ⚠️ 2026-09-30 起它仍是**全局默认档位**回退链的第二环（见 [globalDefaultTimeout]）。
          */
         val AUTO_LOCK_MINUTES = intPreferencesKey("auto_lock_minutes")
 
-        /** 新版自动锁定档位键（`VaultTimeout.toStorageValue()` 的编码）。 */
+        /**
+         * **全局默认**自动锁定档位键（`VaultTimeout.toStorageValue()` 的编码）。
+         *
+         * 2026-09-30 起**转正**为「全局默认」的唯一真源（此前是 D3 之前的旧全局键，
+         * 被降格为回退值；本轮模型修订把它的地位恢复回来 —— 见 [globalVaultTimeout]）。
+         */
         val VAULT_TIMEOUT = intPreferencesKey("vault_timeout")
 
-        /** 迁移完成标记（避免每次读取都做一次转换）。 */
-        val AUTO_LOCK_MIGRATED_V2 = booleanPreferencesKey("auto_lock_migrated_v2")
+        /** 每库**覆盖**键的前缀（唯一拼接处；清理时按前缀扫）。 */
+        const val PER_VAULT_TIMEOUT_PREFIX = "vault_timeout::"
+
+        /**
+         * 「档位作用域」迁移标记（2026-09-30）。
+         *
+         * 取代了已删除的 `auto_lock_migrated_v2`：那个标记**没有任何写入点**
+         * （见 [globalDefaultTimeout] 的说明），作为读取门控是纯粹的隐患。
+         * 本标记的用途只有一个：让 [purgeLegacyPerVaultTimeoutsOnce] 只跑一次。
+         */
+        val TIMEOUT_SCOPE_MIGRATED = booleanPreferencesKey("vault_timeout_scope_v2")
 
         val CLIPBOARD_CLEAR_MS = longPreferencesKey("clipboard_clear_ms")
         val DYNAMIC_COLOR = booleanPreferencesKey("dynamic_color")
@@ -199,51 +214,94 @@ class VaultixPreferences @Inject constructor(
         }
 
     /**
-     * **某库**的自动锁定档位（多库锁模型定稿 **D3**，2026-09-29）。
+     * **某库**的自动锁定档位（有效值 = 覆盖 ?: 全局默认）。
      *
-     * 存储键 `vault_timeout::<vaultId>`。
+     * 存储键 `vault_timeout::<vaultId>`（**仅当用户为该库单独指定过**才存在）。
      *
-     * ## 惰性迁移（为什么不是升级时枚举库写一遍）
+     * ## ★ 2026-09-30 下午：模型由「每库一份」修订为「**全局默认 + 每库可覆盖**」
      *
-     * 该库尚未写过自己的键时，依次回退：
-     * ① 旧**全局**键 [VAULT_TIMEOUT]（D3 之前的唯一来源）；
-     * ② 更旧的 [AUTO_LOCK_MINUTES]（裸 Int，2026-09-11 起的既有迁移）；
-     * ③ [VaultTimeout.DEFAULT]。
+     * 用户拍板（推翻 D3 的"档位每库一份"）：主流密码管理器（Bitwarden 按账号存、
+     * KeePassDX 是 App 级、1Password 全局）之所以"一个设置就够"，前提是它们
+     * **一次只有一个解锁对象**；Vaultix 是两个异构后端同时解锁，且两者重开成本
+     * 差 100 倍（BW ≈33ms / KDBX ≈1.2s+），所以"全局一个值"要保留为**默认**，
+     * 而"某库单独指定"降级为**覆盖**。
      *
-     * 偏好层拿不到库表（库在 Room 里），而惰性回退对**任何**库都成立；
-     * 用户一改某个库的档位，那个库就自然落成显式键 ⇒ **不需要**枚举式迁移。
-     *
-     * ⚠️ **旧全局键 [VAULT_TIMEOUT] 永不删除**：它是「还没写过显式档位的库」的
-     * 回退值。删了会让其它库**静默掉到默认档**（迁移事故）。
+     * 回退链（见 [globalDefaultTimeout]）：**更具体者优先** —— 该库的显式键 →
+     * 全局键 [VAULT_TIMEOUT] → 更旧的 [AUTO_LOCK_MINUTES] → [VaultTimeout.DEFAULT]。
      *
      * 旧键 `auto_lock_minutes` 的语义陷阱见 [VaultTimeout.fromLegacyMinutes]：
      * 它的 `-1` 表示「从不」，而新模型的 `-1` 表示「重启时锁定」——**正好相反**。
      */
     fun vaultTimeout(vaultId: String): Flow<VaultTimeout> = safeData.map { prefs ->
-        prefs[vaultTimeoutKey(vaultId)]
-            ?.let { VaultTimeout.fromStorageValue(it) }
-            ?: legacyVaultTimeout(prefs)
+        resolveVaultTimeout(prefs, vaultId)
     }
 
-    /** 旧全局档位（D3 之前的唯一来源；仍作为「未写过显式档位的库」的回退）。 */
-    private fun legacyVaultTimeout(prefs: Preferences): VaultTimeout =
-        if (prefs[AUTO_LOCK_MIGRATED_V2] == true) {
-            prefs[VAULT_TIMEOUT]
-                ?.let { VaultTimeout.fromStorageValue(it) }
-                ?: VaultTimeout.DEFAULT
-        } else {
-            // 未迁移：旧键有值则按其语义转换；没有则用默认档位。
-            prefs[AUTO_LOCK_MINUTES]
-                ?.let { VaultTimeout.fromLegacyMinutes(it) }
-                ?: VaultTimeout.DEFAULT
-        }
+    /**
+     * **全局默认**档位 —— 所有没单独指定档位的库共用这一档。
+     *
+     * 设置页「自动锁定」行读写的就是它（副标题「所有密码库默认：…」）。
+     */
+    fun globalVaultTimeout(): Flow<VaultTimeout> = safeData.map { globalDefaultTimeout(it) }
 
     /**
-     * 写**某库**的档位。
+     * 某库的**显式覆盖**；`null` = 该库没单独指定过 ⇒ **跟随全局**。
      *
-     * ⚠️ **只写这一个键**，不碰旧全局键、也不清 `auto_lock_minutes` ——
-     * 那些仍是**其它库**（尚未写过显式档位的库）的回退值，清了就是迁移事故
-     * （见 [vaultTimeout] 的 KDoc）。
+     * 与 [vaultTimeout]（有效值）的区别就是这个 `null`：档位对话框靠它决定
+     * 「跟随全局设置」那一项是否被选中（两者都返回同一个数时，没法从值上分辨）。
+     */
+    fun vaultTimeoutOverride(vaultId: String): Flow<VaultTimeout?> = safeData.map { prefs ->
+        resolveVaultTimeoutOverride(prefs, vaultId)
+    }
+
+    /**
+     * 有效档位的**纯函数**形式（不碰 DataStore）——回退顺序的唯一判定点。
+     *
+     * ⚠️ 抽出来只有一个目的：让 `VaultTimeoutScopeTest` 能用内存 `Preferences`
+     * 直接钉住**回退顺序**（覆盖 → 全局 → 更旧的裸分钟键 → 默认）。
+     * 这条顺序是本模块最容易写反的地方，而它写反的症状极隐蔽
+     * （"改了全局、某个库纹丝不动"）。
+     */
+    internal fun resolveVaultTimeout(prefs: Preferences, vaultId: String): VaultTimeout =
+        resolveVaultTimeoutOverride(prefs, vaultId) ?: globalDefaultTimeout(prefs)
+
+    /**
+     * 覆盖的**纯函数**形式；`null` = 该库跟随全局（这一区分是档位对话框初值的依据）。
+     */
+    internal fun resolveVaultTimeoutOverride(prefs: Preferences, vaultId: String): VaultTimeout? =
+        prefs[vaultTimeoutKey(vaultId)]?.let { VaultTimeout.fromStorageValue(it) }
+
+    /**
+     * 全局默认档位的回退链：全局键 → 更旧的裸分钟键 → [VaultTimeout.DEFAULT]。
+     *
+     * ⚠️ **2026-09-30 去掉了原来的 `auto_lock_migrated_v2` 门控**。理由（取证得出结论）：
+     * 那个标记**全仓库没有任何写入点**（`grep` 只剩定义与读取），而 `VAULT_TIMEOUT`
+     * 有历史写入 ⇒「全局键有值」本身就证明迁移发生过。留着它只会让"读哪把键"
+     * 取决于一个没人维护的布尔：一旦某台设备的标记是 false，**新写的全局值就静默读不到**。
+     * ⇒ 改成**纯"更具体者优先"**（与每库覆盖同一条规则），这条链就自洽了。
+     *
+     * `internal`（而非 private）：纯函数，单测直接钉（见 [resolveVaultTimeout]）。
+     */
+    internal fun globalDefaultTimeout(prefs: Preferences): VaultTimeout =
+        prefs[VAULT_TIMEOUT]
+            ?.let { VaultTimeout.fromStorageValue(it) }
+            ?: prefs[AUTO_LOCK_MINUTES]
+                ?.let { VaultTimeout.fromLegacyMinutes(it) }
+            ?: VaultTimeout.DEFAULT
+
+    /**
+     * 写**全局默认**档位（不影响任何已单独指定档位的库）。
+     */
+    suspend fun setGlobalVaultTimeout(value: VaultTimeout) {
+        dataStore.edit { prefs ->
+            prefs[VAULT_TIMEOUT] = VaultTimeout.toStorageValue(value)
+        }
+    }
+
+    /**
+     * 写**某库**的档位（= 建立一条**覆盖**）。
+     *
+     * ⚠️ **只写这一个键**，不碰全局键、也不清 `auto_lock_minutes` ——
+     * 后者仍是"更老的安装"的回退值，清了就是迁移事故（见 [vaultTimeout] 的 KDoc）。
      */
     suspend fun setVaultTimeout(vaultId: String, value: VaultTimeout) {
         dataStore.edit { prefs ->
@@ -251,7 +309,43 @@ class VaultixPreferences @Inject constructor(
         }
     }
 
-    private fun vaultTimeoutKey(vaultId: String) = intPreferencesKey("vault_timeout::$vaultId")
+    /**
+     * 删掉某库的覆盖 ⇒ 它回到**跟随全局**。
+     *
+     * ⚠️ 只删**这一个库**的键；其它库的覆盖与全局键都不动。
+     */
+    suspend fun clearVaultTimeoutOverride(vaultId: String) {
+        dataStore.edit { prefs -> prefs.remove(vaultTimeoutKey(vaultId)) }
+    }
+
+    /**
+     * 一次性清理：删掉 **D3 那版 UI（"每库一份"）留下的全部覆盖键**。
+     *
+     * ## 为什么这不是"删用户数据"
+     *
+     * D3 那一版的入口是**设置首页的一行**（副标题给活跃库的档位），用户点它时的心智
+     * 就是"设一个全局档位" —— 但它写的是**活跃库的键** ⇒ 每点一次就给一个库留下一条
+     * 覆盖。那些覆盖**不代表"这个库要单独指定"**，只代表"当时活跃的是它"。
+     * 值也与全局相同（同一台设备取证：3 条键的值一致）。
+     *
+     * 不清理的症状很具体：用户改了新的全局行，**两个库纹丝不动** ——
+     * 因为两条覆盖把它们钉住了 ⇒ 用户必然报「改了没用」。
+     *
+     * 幂等：由 [TIMEOUT_SCOPE_MIGRATED] 门控，只跑一次；此后用户**有意**建立的覆盖
+     * （在 ⋮ 里显式选的档位）不会被清掉。
+     */
+    suspend fun purgeLegacyPerVaultTimeoutsOnce() {
+        dataStore.edit { prefs ->
+            if (prefs[TIMEOUT_SCOPE_MIGRATED] == true) return@edit
+            prefs.asMap().keys
+                .filterIsInstance<Preferences.Key<Int>>()
+                .filter { it.name.startsWith(PER_VAULT_TIMEOUT_PREFIX) }
+                .forEach { prefs.remove(it) }
+            prefs[TIMEOUT_SCOPE_MIGRATED] = true
+        }
+    }
+
+    private fun vaultTimeoutKey(vaultId: String) = intPreferencesKey("$PER_VAULT_TIMEOUT_PREFIX$vaultId")
 
     /** 敏感内容复制后自动清空剪贴板的延迟（0 = 不清除）。 */
     val clipboardClearMs: Flow<Long> =

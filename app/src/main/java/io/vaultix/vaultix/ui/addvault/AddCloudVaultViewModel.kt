@@ -184,7 +184,15 @@ class AddCloudVaultViewModel @Inject constructor(
     fun pickAccount(account: CloudAccount) {
         if (_state.value.busy) return
         val root = account.browseRoot
-        if (root.isNullOrBlank()) {
+        // ⚠️ 判据只能是 `== null`（= 真的没有起点），**不能**写成 `isNullOrBlank()`：
+        //    OneDrive 的 browseRoot 是**相对路径**，而**空串就是根目录** ——
+        //    契约见 `CloudAccountInventory.CloudAccount.browseRoot` 与
+        //    `OneDriveGraphClient.listChildren(directoryPath)`（null / 空 = 根）。
+        //    用 isNullOrBlank 会把"根目录"判成"没有目录"。
+        //
+        // ★ 2026-09-30 用户报的「从网盘添加，显示这个账号没有可用目录」= 本判据 +
+        //    `CloudAccountInventory` 缺 OneDrive 兜底起点，**两处叠加**。两处都已修。
+        if (root == null) {
             _state.update { it.copy(error = asError("这个账号还没有可用的目录，请先在设置里重新配置")) }
             return
         }

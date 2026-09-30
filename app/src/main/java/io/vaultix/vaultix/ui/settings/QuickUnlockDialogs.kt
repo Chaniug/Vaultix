@@ -8,12 +8,14 @@
  */
 package io.vaultix.vaultix.ui.settings
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.KeyboardOptions
@@ -68,23 +70,26 @@ import io.vaultix.vaultix.ui.theme.Spacing
  * 2. 开关前面白多一次导航 —— 用户要改的正是"哪种方式"本身。
  *
  * 定稿 §11.11 的目标形态也是把开关直接画在卡片里。⇒ 本轮内联，并**只留一行汇总**
- * （「已对 N 个库生效」），不再逐库列行；逐库勾选挪进 [ConfigureDialog]
- * （默认全勾，取消勾选是可选动作）。
+ * （「已对 N 个库生效」），不再逐库列行。
  *
- * ## ★ 行与开关的分工（2026-09-29 删第三行，真机反馈"三行冗余"）
+ * ## ★ 2026-09-30 晚：**"拨开关 = 开始配置"**（用户要求"只需要一个打开的按钮"）
+ *
+ * 用户真机反馈：点开的那张**配置向导弹窗**"做的不好看、逻辑混乱、让人摸不着头脑"。
+ * ⇒ 向导**整体删除**（`Dialog.Configure` / `ConfigureDialog` / `ConfigureMethodRow`
+ * 一并删），现在：
  *
  * | 点哪里 | 干什么 |
  * |---|---|
- * | **整行**（热区远大于开关） | 进 [ConfigureDialog] 向导：改库范围 / 补配另一种方式 |
- * | **开关本体** | `On` ⇒ 关掉这把门锁；`Off` ⇒ 同样进向导（与点行等效） |
+ * | **整行** | 与拨开关**完全等效** —— 向导没了，"点行"不再有第二种含义 |
+ * | **开关本体** | `Off` ⇒ 开始这一种方式的登记流程；`On` ⇒ 关掉这把门锁 |
  *
- * 旧形态有第三行「管理解锁方式」专做进向导的入口 —— 但两个开关行**本来就可点**
- * （热区大得多），再放一个功能相同的第三行，用户看到的只是"三行说一件事"
- * （2026-09-29 真机验收原话："看起来有点冗余"）。⇒ 把"管理"并进整行点击，
- * 第三行删除。向导标题仍叫「管理解锁方式」（[R.string.quick_unlock_manage_action]）。
+ * 于是"注册"这件事只剩一个入口、一个动作：**打开这个开关**。流程本身仍是后台编排的
+ * （可能依次问你：PIN → 各 KDBX 库主密码 → 指纹认证 → 结果），但**不再有那张要先做选择的向导页**。
  *
- * ⚠️ [onManage] 不是第三行的遗物：顶部「旧模型残留需重新登记」的提示行还在用它
- * （那行的语义是"两种方式都不预选"，与按方式进向导不同）。
+ * ⚠️ 之前"先过向导挑方式"的一个副作用是"两种方式一起开时主密码只收一次"。
+ *   删掉向导后这一点**没有退步**：房间信封是**每库一份、与方式无关**的，
+ *   所以先开哪一种就把房间都封好了，再开另一种时 `Session.pendingRooms()` 为空
+ *   ⇒ **不会再问一遍主密码**（实测口径见 `QuickUnlockController.pendingRooms`）。
  *
  * ## 开关只有**两种**呈现（批次 3，2026-09-29 删 `Partial`）
  *
@@ -106,7 +111,8 @@ import io.vaultix.vaultix.ui.theme.Spacing
  * ⚠️ 这段历史留着不是怀旧：它解释的是"**为什么不能再按范围进度推导开关**"。
  * 哪天有人为了"显示得更精细"又把按库进度接回来，#93 会原样复发。
  *
- * ⚠️ 两行开关**互不联动**：点一个不会顺手改另一个（各有各的信封，验收清单里单列了这一条）。
+ * ⚠️ 两行开关**互不联动**：拨一个不会顺手改另一个（各有各的信封 —— 用户明确要的
+ * "可以都开或者只开一种"）。
  */
 @Composable
 internal fun QuickUnlockSettingsRows(
@@ -119,37 +125,37 @@ internal fun QuickUnlockSettingsRows(
      * （定稿 §8 不写兼容层），不给这句话，用户看到的就是"升级之后快速解锁莫名不能用了"。
      */
     legacyRemains: Boolean,
-    /** 点「指纹」**整行**：进向导并预选指纹（改范围 / 补配，见类 KDoc 的分工表）。 */
-    onManageBiometric: () -> Unit,
-    /** 点「PIN」**整行**：进向导并预选 PIN。 */
-    onManagePin: () -> Unit,
-    /** 拨「指纹」**开关**：`On` ⇒ 关门锁；`Off` ⇒ 进向导（与点行等效）。 */
+    /** 拨「指纹」开关（**点整行等价**）。 */
     onToggleBiometric: () -> Unit,
-    /** 拨「PIN」**开关**：语义同 [onToggleBiometric]。 */
+    /** 拨「PIN」开关。 */
     onTogglePin: () -> Unit,
-    /** 旧模型残留提示行的点击（两种方式都不预选的向导）。 */
-    onManage: () -> Unit,
 ) {
     if (legacyRemains) {
         SettingsRow(
             icon = { Icon(Icons.Filled.Upgrade, contentDescription = null) },
             title = stringResource(R.string.quick_unlock_legacy_title),
             subtitle = stringResource(R.string.quick_unlock_legacy_desc),
-            onClick = onManage,
+            // ⚠️ **刻意不可点**（2026-09-30 晚，向导删除后）：它的动作与下面两个开关
+            //    完全重合，留着 onClick 只会暗示"这里还有一个入口"。
+            //    文案已改成"打开下面的开关即可"，读起来是解释而不是入口。
         )
         SettingsDivider()
     }
     SettingsRow(
         icon = { Icon(Icons.Filled.Fingerprint, contentDescription = null) },
         title = stringResource(R.string.quick_unlock_section_biometric),
-        subtitle = biometricSummary(state, canAuthenticate),
+        // ⚠️ 状态没读出来时**不给副标题**（见 UiState.loaded）——写"未启用"与写"已启用"
+        //    一样都是猜测，而这一行的副标题恰恰在说"开没开"。
+        subtitle = if (state.loaded) biometricSummary(state, canAuthenticate) else null,
         enabled = canAuthenticate,
-        // 整行 = 管理（进向导）：热区比开关本身大得多，且 On 态下"想改范围"远比
-        // "想关掉"高频 —— 关闭这个低频破坏性动作留给开关本体，避免误触整行即关闭。
-        onClick = onManageBiometric,
+        // ★ 2026-09-30 晚（用户要求"只需要一个打开的按钮"）：**整行 = 拨开关**。
+        //   向导删掉之后，"点行"不再有第二种含义，于是整行就是那个按钮
+        //   （热区比开关本身大得多，避免"点了没反应"）。
+        onClick = if (canAuthenticate) onToggleBiometric else null,
         trailing = {
             CapabilityToggle(
                 capability = state.biometric,
+                loaded = state.loaded,
                 enabled = canAuthenticate,
                 // 设备不支持认证时不给点：点了也走不完流程，允许点等于给出一个必然失败的承诺。
                 onToggle = onToggleBiometric,
@@ -160,11 +166,12 @@ internal fun QuickUnlockSettingsRows(
     SettingsRow(
         icon = { Icon(Icons.Filled.Password, contentDescription = null) },
         title = stringResource(R.string.pin_section_title),
-        subtitle = pinSummary(state),
-        onClick = onManagePin,
+        subtitle = if (state.loaded) pinSummary(state) else null,
+        onClick = onTogglePin,
         trailing = {
             CapabilityToggle(
                 capability = state.pin,
+                loaded = state.loaded,
                 enabled = true,
                 onToggle = onTogglePin,
             )
@@ -173,7 +180,20 @@ internal fun QuickUnlockSettingsRows(
 }
 
 /**
- * 一个「能力」的尾部控件：**就是一个普通开关**。
+ * 一个「能力」的尾部控件：**就是一个普通开关**；状态未知时给**同尺寸占位**。
+ *
+ * ## ★ 为什么会有"未知"这一态（2026-09-30，用户报的闪烁）
+ *
+ * `UiState` 的初值是两个 `Off`，而 `Off` **是一个确定的答案**：磁盘上真实为 `On` 时，
+ * 开关会先画成"关"、再跳到"开" —— 用户看到的就是「一瞬间从关闭变成打开」。
+ * 这与 `.ai/ISSUES.md` #84「三种空」是同一族问题（同一个 SettingsViewModel 里
+ * 已为普通布尔开关写过同样一段话）。
+ *
+ * ⇒ 修法与那边一致：**不认识就什么都不说**。占位**特意不可点**（而 `SettingsSwitch`
+ * 的占位是可点的），因为两者的"点一下"代价不同：那个只是写一个布尔（幂等），
+ * 这里的开关是 `toggle` —— 若真实值是 `On`，占位期的一下点击会**把已启用的锁关掉**，
+ * 正是要避免的那个方向。占位期的点击**落到整行**（进向导），既没吞掉点击、
+ * 也不会误关。
  *
  * ⚠️ 门禁（2026-09-26 #121 的教训，别再犯）：`checked` 必须是 `when` 分派出来的
  * **常量**，不能写成 `capability is CapabilityState.On` —— 后者把多态状态压成二值，
@@ -185,9 +205,16 @@ internal fun QuickUnlockSettingsRows(
 @Composable
 private fun CapabilityToggle(
     capability: QuickUnlockController.CapabilityState,
+    loaded: Boolean,
     enabled: Boolean,
     onToggle: () -> Unit,
 ) {
+    if (!loaded) {
+        // 同尺寸占位（尺寸见 SettingsComponents 的 SWITCH_VISUAL_*，与 SettingsSwitch 一致）
+        // ⇒ 数据到达时既没有"假位置"、也不会整行跳动。
+        Box(modifier = Modifier.size(SWITCH_VISUAL_WIDTH, SWITCH_VISUAL_HEIGHT))
+        return
+    }
     val checked = when (capability) {
         is QuickUnlockController.CapabilityState.On -> true
         QuickUnlockController.CapabilityState.Off -> false
@@ -197,149 +224,6 @@ private fun CapabilityToggle(
         onCheckedChange = { onToggle() },
         enabled = enabled,
     )
-}
-
-/**
- * ★ **配置向导**：一次问清「对哪些库 + 用哪些方式」，确认后走完整流程。
- *
- * ## 为什么是这个形状（它替代了旧的三处入口）
- *
- * 旧交互是「逐库一行 + 两步对话框 + 每种方式各跑一遍」。其中"每种方式各跑一遍"是**有实际代价的**：
- * KDBX 的主密码两种方式都要用（见 `QuickUnlockController` 类 KDoc 里那条引文），
- * 分开跑就意味着**每个 KDBX 库要输两遍主密码**。合进一次流程、主密码只收一次，
- * 才是真正砍掉那个重复次数的做法。
- *
- * ## 三条必须写在界面上的话
- *
- * 1. ★ **默认全勾**（首次配置）—— 用户 99% 想要"所有库都能快速解锁"，逐个勾选是纯负担；
- * 2. ★ **PIN 必须一次做完** —— PIN 只在输入那一刻存在，包裹只能在同一流程里完成。
- *    界面**不能**让用户以为"可以事后再给某个库补 PIN"（那会得到一个永远解不开的信封）；
- * 3. ★ **取消勾选会清掉该库已保存的凭据** —— 写在动手**之前**：
- *    事后的提示追不回已经删掉的东西。
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun ConfigureDialog(
-    state: QuickUnlockController.Dialog.Configure,
-    canAuthenticate: Boolean,
-    controller: QuickUnlockController,
-) {
-    BasicAlertDialog(onDismissRequest = controller::dismiss) {
-        DialogSurface {
-            DialogHeader(title = stringResource(R.string.quick_unlock_manage_action))
-
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f, fill = false)
-                    .verticalScroll(rememberScrollState()),
-            ) {
-                if (state.rows.isEmpty()) {
-                    DialogEmptyBody(stringResource(R.string.quick_unlock_manage_none))
-                } else {
-                    DialogSectionTitle(
-                        title = stringResource(R.string.quick_unlock_configure_vaults_title),
-                        hint = stringResource(R.string.quick_unlock_configure_vaults_hint),
-                    )
-                    state.rows.forEach { row ->
-                        ConfigureVaultRow(
-                            row = row,
-                            onToggle = { controller.toggleConfigureVault(row.vaultId) },
-                        )
-                    }
-                }
-
-                Spacer(Modifier.height(Spacing.sm))
-                HorizontalDivider()
-                Spacer(Modifier.height(Spacing.sm))
-
-                DialogSectionTitle(
-                    title = stringResource(R.string.quick_unlock_configure_methods_title),
-                    hint = stringResource(R.string.quick_unlock_configure_methods_hint),
-                )
-                ConfigureMethodRow(
-                    title = stringResource(R.string.quick_unlock_section_biometric),
-                    checked = state.methodBiometric,
-                    enabled = canAuthenticate,
-                    onToggle = {
-                        controller.toggleConfigureMethod(QuickUnlockController.UnlockMethod.BIOMETRIC)
-                    },
-                )
-                ConfigureMethodRow(
-                    title = stringResource(R.string.pin_section_title),
-                    checked = state.methodPin,
-                    enabled = true,
-                    onToggle = {
-                        controller.toggleConfigureMethod(QuickUnlockController.UnlockMethod.PIN)
-                    },
-                )
-                if (state.methodPin) {
-                    ConfigureHint(stringResource(R.string.quick_unlock_configure_pin_warning))
-                }
-                ConfigureHint(stringResource(R.string.quick_unlock_configure_uncheck_warning))
-                state.error?.let { DialogErrorText(it) }
-                Spacer(Modifier.height(Spacing.sm))
-            }
-
-            DialogActions {
-                DialogBackButton(controller::dismiss)
-                TextButton(onClick = controller::confirmConfigure) {
-                    Text(stringResource(R.string.quick_unlock_configure_start))
-                }
-            }
-        }
-    }
-}
-
-/**
- * 向导里的一行库 = **一个纯复选框 + 库名**（批次 3：删掉了行尾的「指纹 · PIN」标记）。
- *
- * ⚠️ 别再加回"这个库已配好哪些方式"的角标：房子化后门锁是**全局**的，
- * 一个库的快速解锁状态只有一个事实（房间信封在不在），而"在不在"用户**看不见也不需要看见**
- * —— 向导本来就默认全勾，已配好的库会被自动跳过，标出来只是把已经不存在的区分画给他看。
- */
-@Composable
-private fun ConfigureVaultRow(row: QuickUnlockController.ConfigureRow, onToggle: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .toggleable(value = row.checked, onValueChange = { onToggle() })
-            .padding(horizontal = Spacing.lg, vertical = Spacing.xs),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Checkbox(checked = row.checked, onCheckedChange = { onToggle() })
-        Text(
-            text = row.name,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.weight(1f),
-        )
-    }
-}
-
-/** 向导里的一个方式勾选项。 */
-@Composable
-private fun ConfigureMethodRow(
-    title: String,
-    checked: Boolean,
-    enabled: Boolean,
-    onToggle: () -> Unit,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .toggleable(value = checked, enabled = enabled, onValueChange = { onToggle() })
-            .padding(horizontal = Spacing.lg, vertical = Spacing.xs),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Checkbox(checked = checked, onCheckedChange = { onToggle() }, enabled = enabled)
-        Text(
-            text = title,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.weight(1f),
-        )
-    }
 }
 
 /** 向导里的说明句（约束 / 后果）。 */
@@ -418,18 +302,19 @@ private fun readyCount(state: QuickUnlockController.UiState, biometric: Boolean)
 /**
  * 流程宿主：认证副作用 + 配置向导 + 四个步骤对话框。
  *
- * 与设置项分开：设置项是"改开关"（内联在页面里），这里是"一次进行中的流程"
- * （配置向导 → 输 PIN → 逐库问主密码 → 认证 → 结果），生命周期完全不同。
+ * 与设置项分开：设置项是"拨开关"（内联在页面里），这里是"一次进行中的流程"
+ * （输 PIN → 逐库问主密码 → 认证 → 结果），生命周期完全不同。
  *
  * ⚠️ 参数是**控制器本身**而不是某个 ViewModel：设置页与库列表页各持一个实例
  * （两者都要能发起登记），收 ViewModel 会让其中一个用不了。
+ *
+ * ⚠️ 2026-09-30 晚：**配置向导弹窗已删除**（用户反馈"弹出页面做的不好看、逻辑混乱"）。
+ * 现在拨开关就是流程本身，这里也就不再需要 `canAuthenticate`（那本来是给向导里
+ * "指纹"那一项做禁用判据的）。
  */
 @Composable
 internal fun QuickUnlockHost(controller: QuickUnlockController) {
     val activity = rememberFragmentActivity()
-    val context = LocalContext.current
-    // 向导里要不要禁用"指纹"那一项，与设置行用的是同一个判据（设备能否认证）。
-    val canAuthenticate = deviceCanAuthenticate(context)
     val cipher by controller.pendingCipher.collectAsStateWithLifecycle()
     val dialog by controller.dialog.collectAsStateWithLifecycle()
     val enrollTitle = stringResource(R.string.quick_unlock_enroll_title)
@@ -452,7 +337,6 @@ internal fun QuickUnlockHost(controller: QuickUnlockController) {
     when (val current = dialog) {
         QuickUnlockController.Dialog.Idle -> Unit
         QuickUnlockController.Dialog.Authenticating -> AuthenticatingDialog()
-        is QuickUnlockController.Dialog.Configure -> ConfigureDialog(current, canAuthenticate, controller)
         is QuickUnlockController.Dialog.PinEntry -> PinEntryDialog(current, controller)
         is QuickUnlockController.Dialog.KdbxPassword -> KdbxPasswordDialog(current, controller)
         is QuickUnlockController.Dialog.Report -> ReportDialog(current, controller)

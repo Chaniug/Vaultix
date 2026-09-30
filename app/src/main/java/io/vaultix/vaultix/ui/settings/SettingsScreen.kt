@@ -27,9 +27,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Build
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Contrast
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Key
@@ -43,23 +41,15 @@ import androidx.compose.material.icons.filled.Password
 import androidx.compose.material.icons.filled.Policy
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Shield
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.SwapVert
-import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.BasicAlertDialog
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.Text
@@ -86,20 +76,12 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import com.mikepenz.markdown.m3.Markdown
-import io.vaultix.datastore.VaultTimeout
 import io.vaultix.domain.PIN_MIN_LENGTH
-import io.vaultix.model.VaultKind
-import io.vaultix.model.VaultSummary
 import io.vaultix.vaultix.BuildConfig
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.BiometricPrompter
-import io.vaultix.vaultix.ui.common.DialogActions
+import io.vaultix.vaultix.ui.common.deviceCanAuthenticate
 import io.vaultix.vaultix.ui.common.DialogCloseButton
-import io.vaultix.vaultix.ui.common.DialogDismissButton
-import io.vaultix.vaultix.ui.common.DialogEmptyBody
-import io.vaultix.vaultix.ui.common.DialogFootnote
-import io.vaultix.vaultix.ui.common.DialogHeader
-import io.vaultix.vaultix.ui.common.DialogSurface
 import io.vaultix.vaultix.ui.items.DisplayOptionsSheet
 import io.vaultix.vaultix.ui.common.VaultixExpressiveTopBar
 import io.vaultix.vaultix.ui.common.rememberImmersiveBarPadding
@@ -151,6 +133,18 @@ fun SettingsScreen(
      */
     onOpenVaultManagement: () -> Unit = {},
     /**
+     * 「解锁方式」分区：进入**解锁方式**二级页（[UnlockMethodScreen]）。
+     *
+     * ★ 2026-09-30 晚新增：此前这一行**导航到 [VaultManagementRoute]（同一页）**，
+     * 因为它当时是那一页里的一个组 ⇒ 两行入口指向同一处（用户真机反馈：
+     * 「密码库设置和解锁方式打开好像都是同一个页面，这不对吧」）。
+     * 这两件事的**作用域不同**（库 = 逐个；门锁 = 全局），故各自成页。
+     *
+     * ⚠️ **不给默认值**（与 [onOpenPermissions] 同一条纪律）：设置页有**两个**调用点
+     * （独立 `SettingsRoute` 与主界面设置 Tab），给了默认空实现会让 Tab 那处**静默失效**。
+     */
+    onOpenUnlockMethod: () -> Unit,
+    /**
      * 「关于」分区：进入**权限引导**二级页。
      *
      * ⚠️ 2026-09-18 行为变更：原先这一行**直接跳系统应用信息页**（`openAppPermissionSettings`），
@@ -177,8 +171,9 @@ fun SettingsScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
-
-    var showAutoLockDialog by rememberSaveable { mutableStateOf(false) }
+    // ★ 2026-09-30 晚：「自动锁定」（全局默认档位）**已搬进「锁与安全」页**
+    //   （[UnlockMethodScreen]）—— 它本就是"锁的超时"，与锁的方式同屏更合适
+    //   （Android「设置 → 安全 → 屏幕锁定」亦如此）。本页不再持有它的状态与对话框。
     var showClipboardDialog by rememberSaveable { mutableStateOf(false) }
     // ⚠️ 原本这里还有一个 `showAboutDialog`（开源许可对话框）。2026-09-28 随「关于」组
     //    精简，许可内容搬进 [AboutAppScreen]，本页那个对话框**再也无人触发** ——
@@ -232,14 +227,14 @@ fun SettingsScreen(
             // 顶栏下方留一条死区（「不沉浸」）；Spacer 会随内容一起滚走。
             Spacer(modifier = Modifier.height(barPadding))
             // ---- 密码库与解锁（活跃库 = 全局单一真源，详见 VaultUnlockSection 的 KDoc）----
-            // 只剩一个入口：选库 / 加库 / 配解锁方式都在 VaultManagementScreen（二级页）。
-            // ⚠️ 2026-09-16 合并：原先「密码库」只有这一个入口行却独占一个组标题，
-            //    而它和自动锁定 / 防截屏 / 剪贴板清除讲的是同一件事（库怎么开、开了怎么锁）。
+            // 本组现在是**入口区**：库管理 / 锁与安全（门锁 + 自动锁定）/ 防截屏 / 剪贴板 / 权限。
+            // ⚠️ 2026-09-30 晚：「自动锁定」**搬进「锁与安全」页**（它是锁的超时），
+            //    本页相应少一行 —— 见 [UnlockMethodScreen] 的 KDoc。
             VaultUnlockSection(
                 viewModel = viewModel,
                 state = state,
                 onOpenVaultManagement = onOpenVaultManagement,
-                onAutoLock = { showAutoLockDialog = true },
+                onOpenUnlockMethod = onOpenUnlockMethod,
                 onClipboardClear = { showClipboardDialog = true },
                 // ★ 2026-09-28：权限管理从「关于」移入本组（见 VaultUnlockSection 的注释）。
                 onOpenPermissions = onOpenPermissions,
@@ -302,16 +297,6 @@ fun SettingsScreen(
         }
     }
 
-    if (showAutoLockDialog) {
-        AutoLockDialog(
-            current = state.vaultTimeout,
-            onSelect = {
-                viewModel.setVaultTimeout(it)
-                showAutoLockDialog = false
-            },
-            onDismiss = { showAutoLockDialog = false },
-        )
-    }
     if (showClipboardDialog) {
         ClipboardClearDialog(
             currentMs = state.clipboardClearMs,
@@ -664,11 +649,16 @@ private fun VaultUnlockSection(
     viewModel: SettingsViewModel,
     state: SettingsViewModel.UiState,
     onOpenVaultManagement: () -> Unit,
-    onAutoLock: () -> Unit,
+    /** ★ 2026-09-30 晚：「锁与安全」已是**独立页**（此前与库管理页同址）。 */
+    onOpenUnlockMethod: () -> Unit,
     onClipboardClear: () -> Unit,
     onOpenPermissions: () -> Unit,
 ) {
     val active by viewModel.activeVault.collectAsStateWithLifecycle()
+    // D7（多库锁模型定稿批次 C，2026-09-30）：「解锁方式」行的副标题 = 指纹/PIN 当前状态。
+    // 控制器本就是 lazy 的，设置页是它的宿主，这里收集不引入新的生命周期。
+    val quickUnlockState by viewModel.quickUnlock.state.collectAsStateWithLifecycle()
+    val canAuthenticate = deviceCanAuthenticate(LocalContext.current)
     SettingsGroupTitle(stringResource(R.string.group_vault_unlock))
     SettingsGroupCard {
         SettingsRow(
@@ -680,11 +670,17 @@ private fun VaultUnlockSection(
             onClick = onOpenVaultManagement,
         )
         SettingsDivider()
+        // ★ D7（多库锁模型定稿批次 C，2026-09-30）：「解锁方式」上提到设置首页。
+        //   指纹/PIN 两把门锁是**全局**的 —— 管的是整栋房子（全部库），不挑库。
+        //   ★ 2026-09-30 晚修正：它**有独立的一页**（[UnlockMethodScreen]）——
+        //     在此之前这行导航到的是"密码库管理"那一页（它当时是那页里的一个组），
+        //     于是两行入口打开同一个页面（用户真机反馈「这不对吧」）。
+        //     作用域不同就该各成页：库 = 逐个；门锁 = 全局（与系统 Keyguard 同构）。
         SettingsRow(
-            icon = { Icon(Icons.Filled.Timer, contentDescription = null) },
-            title = stringResource(R.string.setting_auto_lock),
-            subtitle = vaultTimeoutLabel(state.vaultTimeout),
-            onClick = onAutoLock,
+            icon = { Icon(Icons.Filled.Key, contentDescription = null) },
+            title = stringResource(R.string.lock_and_security_title),
+            subtitle = unlockMethodSubtitle(quickUnlockState, canAuthenticate),
+            onClick = onOpenUnlockMethod,
         )
         SettingsDivider()
         SettingsRow(
@@ -721,6 +717,34 @@ private fun VaultUnlockSection(
         )
     }
 }
+
+/**
+ * 「解锁方式」行的副标题（D7）：指纹 / PIN 两把门锁的当前状态，一行汇总。
+ *
+ * ⚠️ 与库管理页两个开关行的副标题**同源不同形**：那边逐行说明（含生效库数），
+ * 首页这里只要"开没开"。刻意不复用 `QuickUnlockDialogs` 的 `biometricSummary`——
+ * 那个带 `readyCount`（数字随库表波动），首页行不需要那么细，复用反而把两处
+ * 文案耦合在一起。
+ */
+@Composable
+private fun unlockMethodSubtitle(
+    state: QuickUnlockController.UiState,
+    canAuthenticate: Boolean,
+): String = stringResource(
+    R.string.settings_unlock_method_summary_fmt,
+    when {
+        // 设备不支持认证 → 「不可用」优先（先说原因，同 biometricSummary 的顺序纪律）。
+        !canAuthenticate -> stringResource(R.string.settings_unlock_state_unavailable)
+        state.biometric is QuickUnlockController.CapabilityState.On ->
+            stringResource(R.string.settings_unlock_state_on)
+        else -> stringResource(R.string.settings_unlock_state_off)
+    },
+    when (state.pin) {
+        is QuickUnlockController.CapabilityState.On ->
+            stringResource(R.string.settings_unlock_state_on)
+        else -> stringResource(R.string.settings_unlock_state_off)
+    },
+)
 
 /**
  * 关于组（2026-09-28 精简：5 行 → 2 行）。
@@ -822,232 +846,6 @@ private fun DeveloperSection(onOpenLogs: () -> Unit) {
             subtitle = stringResource(R.string.developer_logs_entry_desc),
             onClick = onOpenLogs,
         )
-    }
-}
-
-/**
- * 活跃库选择器。**列出全部库**（含未解锁）。
- *
- * ⚠️ 2026-09-14（issue #96）：原先只列已解锁库 ⇒ 未解锁的 KDBX 不在列表里，
- * 用户「找不到我的库」而以为库丢了。现在全部列出、未解锁项如实标注
- * 「未解锁 · 需先输入主密码」——**「找得到」优先于「点得动」**。
- *
- * ⚠️ 2026-09-15（用户报的空白页 bug）：**未解锁项不能「切过去」**。
- * 切过去后条目流为空（Bitwarden 无密钥 / KDBX 会话不在内存），条目页与验证码页
- * 会显示成「还没有保存的密码」——用户看到的就是**全白**；更糟的是「切库即锁旧库」
- * 会把原来能看的库一并锁掉，两个库都进不去。故未解锁项的点击语义 = **去解锁页**
- * （由 [onSelect] 的分支与宿主的 `onOpenLockedVault` 接线共同保证）。
- *
- * 两项动作分开（这是「活跃库 / 默认库」两键拆分的 UI 形态）：
- * - 点行 = 已解锁 → 切换**本次会话**看哪个；未解锁 → 去解锁页；
- * - 「设为默认」= 改**冷启动先开哪个**（唯一写入点，**不要求当下解锁**）。
- */
-/**
- * 当前库选择（2026-09-15 重做）。
- *
- * ## 为什么换掉 `AlertDialog`
- *
- * 用户真机反馈「这个页面好简陋」。原来的 `AlertDialog` 有两个硬伤：
- * 1. **宽度被压到约屏宽 7 成**，而每行要放「库名 + 状态 + 设为默认」三件事 ⇒ 全挤在一起；
- * 2. `AlertDialog` 的 `text` 槽**不滚动**，库一多（>4 个）底部直接被截断、点不到。
- *
- * 改用 [BasicAlertDialog]（M3 里 `AlertDialog` 的自定义容器版本）：外壳仍由我们控制，
- * 但可以把 `surface` 撑到 0.92×0.8 屏，并给内部一个**可滚动的列表区**。
- * **注意**：不是换成底部弹层 —— 全项目 25 处弹窗都用弹窗形态，只为这两处改成
- * 弹层会立刻显得"这不是同一个 App"（见 `.ai` 的形态一致性约定）。
- *
- * ## 文案精简
- *
- * 底部那段 `settings_default_vault_hint`（「勾选表示本次使用该库；「设为默认」决定…」）
- * 是一段 60 余字的说明，且含"勾选"这种**指路语**（定稿 §4 明令禁止）。
- * 现改为一句话副标题，把交互含义收进各行副标题里（见 [VaultChoiceRow]）。
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-internal fun ActiveVaultDialog(
-    vaults: List<VaultSummary>,
-    activeId: String?,
-    defaultId: String?,
-    onSelect: (VaultSummary) -> Unit,
-    onSetDefault: (VaultSummary) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    BasicAlertDialog(onDismissRequest = onDismiss) {
-        DialogSurface {
-            DialogHeader(title = stringResource(R.string.settings_active_vault))
-
-            if (vaults.isEmpty()) {
-                DialogEmptyBody(stringResource(R.string.settings_active_vault_locked_hint))
-            } else {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f, fill = false)
-                        .verticalScroll(rememberScrollState())
-                        .padding(horizontal = Spacing.lg),
-                ) {
-                    vaults.forEach { vault ->
-                        VaultChoiceRow(
-                            name = vault.name,
-                            locked = !vault.unlocked,
-                            selected = vault.id == activeId,
-                            isDefault = vault.id == defaultId,
-                            onClick = { onSelect(vault) },
-                            onSetDefault = { onSetDefault(vault) },
-                        )
-                    }
-                }
-                DialogFootnote(stringResource(R.string.settings_default_vault_hint))
-            }
-
-            DialogActions {
-                DialogDismissButton(onDismiss)
-            }
-        }
-    }
-}
-
-/**
- * 库选择器里的一行（2026-09-15 按 M3 卡片规格重做，与 [SettingsRow] 同族）。
- *
- * ## 为什么改
- *
- * 用户真机反馈「当前密码库这个页面好简陋」。旧实现是**裸 `Row` + 裸 `TextButton`**：
- * 没有卡片承载、没有选中底色、行高不等、右侧「设为默认」是长文案按钮把整行撑歪。
- * 而同一页的设置项卡片（[SettingsRow]）却是 20dp 圆角 + 72dp 最小高 + primary 图标 ——
- * 落差就是「简陋」的来源。
- *
- * ## 改法（对齐项目既有规格，不发明新视觉）
- *
- * - 整行包进 **20dp 圆角 Card**，选中态用 `secondaryContainer` 底色（同 [EntryCard] 选中语义）；
- * - 左侧**图标槽**（28dp）+ 库名 + 状态副标题（两行结构，同 [SettingsRow]）；
- * - 选中标记从 `RadioButton` 改为 **`Check`**（同 `DisplayOptionsSheet.OptionRow`）——
- *   对话框里 `RadioButton` 自带一圈很大，会把两行文字挤窄；
- * - 「设为默认」从长文案 `TextButton` 改为 **星形 `IconButton`**：
- *   已是默认 → `Star` 实心 primary；否则 → `StarBorder` 轮廓可点。
- *   这样右侧列宽固定，不再因文案长短抖动（原来「设为默认」四个字要占近半行宽）。
- *
- * ## ⚠️ 保留的既有告诫
- *
- * **未解锁项不得用选中标记**：旧实现给它一个方向箭头（`KeyboardArrowRight`）表示
- * 「点了是去解锁，不是切过去」。这个语义是对的 —— 若给未解锁项画上 `Check`/单选圈，
- * 用户会看到"已选中但内容空白"，正是 2026-09-15 修掉的那个 bug 的观感。
- */
-/** 库选择行圆角（与 [SettingsRow] 同族，略小以体现"行内行"）。 */
-private val VAULT_ROW_CORNER = 20.dp
-
-/** 库选择行最小高度（两行文本 + 图标，比 [SettingsRow] 的 72dp 略矮，对话框空间紧）。 */
-private val VAULT_ROW_MIN_HEIGHT = 64.dp
-
-/** 库选择行图标槽（28dp，与 [SettingsRow] 一致）。 */
-private val VAULT_ICON_BOX = 28.dp
-
-@Composable
-internal fun VaultChoiceRow(
-    name: String,
-    locked: Boolean,
-    selected: Boolean,
-    isDefault: Boolean,
-    onClick: () -> Unit,
-    onSetDefault: () -> Unit,
-) {
-    val container = when {
-        selected -> MaterialTheme.colorScheme.secondaryContainer
-        // ⚠️ 未选中态必须比 DialogSurface 的面板底（surfaceContainerHigh）**低**一档，
-        // 否则同色相叠、卡片边界消失（与 VaultUnlockCard 同一个病，2026-09-15）。
-        else -> MaterialTheme.colorScheme.surfaceContainerLowest
-    }
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = Spacing.xs)
-            .clickable(onClick = onClick, role = Role.Button),
-        shape = RoundedCornerShape(VAULT_ROW_CORNER),
-        colors = CardDefaults.cardColors(containerColor = container),
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = VAULT_ROW_MIN_HEIGHT)
-                .padding(start = Spacing.lg, end = Spacing.sm, top = Spacing.md, bottom = Spacing.md),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            // 图标槽（28dp）：未解锁给箭头（去解锁），已解锁给「库」图标。
-            Box(
-                modifier = Modifier.size(VAULT_ICON_BOX),
-                contentAlignment = Alignment.Center,
-            ) {
-                if (locked) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                } else {
-                    Icon(
-                        imageVector = Icons.Filled.Storage,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                    )
-                }
-            }
-
-            Spacer(Modifier.width(Spacing.md))
-
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = name,
-                    style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = if (locked) {
-                        stringResource(R.string.settings_vault_locked_tap_to_unlock)
-                    } else {
-                        stringResource(R.string.settings_vault_unlocked_hint)
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-
-            // 选中标记（未解锁项不画 —— 见 KDoc 里的告诫）。
-            if (selected && !locked) {
-                Icon(
-                    imageVector = Icons.Filled.Check,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(horizontal = Spacing.sm),
-                )
-            }
-
-            // 「设为默认」：星形开关。已是默认时不可点（再点无意义）。
-            IconButton(
-                onClick = onSetDefault,
-                enabled = !isDefault,
-            ) {
-                Icon(
-                    imageVector = if (isDefault) Icons.Filled.Star else Icons.Filled.StarBorder,
-                    contentDescription = stringResource(
-                        if (isDefault) {
-                            R.string.settings_vault_default_badge
-                        } else {
-                            R.string.settings_vault_set_default
-                        },
-                    ),
-                    tint = if (isDefault) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                )
-            }
-        }
     }
 }
 
@@ -1253,112 +1051,6 @@ private fun themeModeLabel(mode: ThemeMode): String = when (mode) {
     ThemeMode.DARK -> stringResource(R.string.theme_mode_dark)
 }
 
-/**
- * 单选列表对话框：自动锁定档位。
- *
- * 档位集合对齐 Bitwarden `VaultTimeout`（立即 / 1 / 5 / 15 / 30 / 60 / 240 分钟 /
- * 重启时 / 从不 / 自定义），取代旧的裸 Int 档位表。
- */
-@Composable
-private fun AutoLockDialog(
-    current: VaultTimeout,
-    onSelect: (VaultTimeout) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    var customOpen by rememberSaveable { mutableStateOf(false) }
-    var customText by rememberSaveable { mutableStateOf("") }
-    var customInvalid by rememberSaveable { mutableStateOf(false) }
-
-    if (customOpen) {
-        AlertDialog(
-            onDismissRequest = {
-                customOpen = false
-                customInvalid = false
-            },
-            title = { Text(stringResource(R.string.auto_lock_custom_title)) },
-            text = {
-                OutlinedTextField(
-                    value = customText,
-                    onValueChange = {
-                        customText = it.filter { c -> c.isDigit() }.take(AutoLockPresets.CUSTOM_MINUTES_DIGITS)
-                        customInvalid = false
-                    },
-                    isError = customInvalid,
-                    supportingText = if (customInvalid) {
-                        { Text(stringResource(R.string.auto_lock_custom_invalid)) }
-                    } else {
-                        null
-                    },
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    val value = customText.toIntOrNull()
-                    if (value == null || value < 1 || value > AutoLockPresets.MAX_CUSTOM_MINUTES) {
-                        customInvalid = true
-                    } else {
-                        onSelect(VaultTimeout.Custom(value))
-                    }
-                }) {
-                    Text(stringResource(R.string.action_save))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { customOpen = false; customInvalid = false }) {
-                    Text(stringResource(R.string.action_cancel))
-                }
-            },
-        )
-        return
-    }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.setting_auto_lock)) },
-        text = {
-            Column {
-                AutoLockPresets.VALUES.forEach { timeout ->
-                    SingleChoiceRow(
-                        label = vaultTimeoutLabel(timeout),
-                        selected = timeout == current,
-                        onClick = { onSelect(timeout) },
-                    )
-                    // ★ 「从不」档的风险提示（2026-09-29）。
-                    //
-                    // 对齐 Bitwarden 官方对 Never 档的 warning（其文档原文：该档会把加密密钥
-                    // 以未加密形式留在设备上，强烈建议改用其他档位）。Vaultix 的落地比
-                    // Bitwarden 更保守（离场仍软锁、信封经 Keystore 包裹），但用户仍需知道
-                    // **这个档位的真实含义**：手机解锁着就等于密码库可进。
-                    //
-                    // 只在这一档下显示 —— 它是唯一「回来不需要用户交互」的档位。
-                    if (timeout == VaultTimeout.Never) {
-                        Text(
-                            text = stringResource(R.string.auto_lock_never_warning),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(
-                                start = Spacing.xs,
-                                end = Spacing.xs,
-                                bottom = Spacing.xs,
-                            ),
-                        )
-                    }
-                }
-                SingleChoiceRow(
-                    label = stringResource(R.string.auto_lock_custom),
-                    selected = current is VaultTimeout.Custom,
-                    onClick = { customOpen = true },
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.action_cancel))
-            }
-        },
-    )
-}
-
 /** 单选列表对话框：复制后自动清除剪贴板时长。 */
 @Composable
 private fun ClipboardClearDialog(
@@ -1388,68 +1080,6 @@ private fun ClipboardClearDialog(
     )
 }
 
-@Composable
-private fun SingleChoiceRow(label: String, selected: Boolean, onClick: () -> Unit) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(vertical = 2.dp),
-    ) {
-        RadioButton(selected = selected, onClick = onClick)
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodyLarge,
-            modifier = Modifier.padding(start = Spacing.xs),
-        )
-    }
-}
-
-
-// ---- 档位文案（对齐 Bitwarden VaultTimeout 的档位命名）----
-
-/**
- * 自动锁定档位 → 文案。
- *
- * `when` 作用于 sealed class（穷尽分支，漏档编译器会报错），取代旧的裸 Int `when`
- * （后者漏一个档位只会在运行时静默落到 else）。
- */
-@Composable
-private fun vaultTimeoutLabel(timeout: VaultTimeout): String = when (timeout) {
-    VaultTimeout.Never -> stringResource(R.string.auto_lock_never)
-    VaultTimeout.Immediately -> stringResource(R.string.auto_lock_immediately)
-    VaultTimeout.OnAppRestart -> stringResource(R.string.auto_lock_on_restart)
-    VaultTimeout.OneMinute,
-    VaultTimeout.FiveMinutes,
-    VaultTimeout.FifteenMinutes,
-    VaultTimeout.ThirtyMinutes ->
-        // 这几个预设档位的 minutes 恒非空（各自 override 为非空 Int）；
-        // 组合分支不做智能转换，故显式 requireNotNull 断言该不变量。
-        stringResource(
-            R.string.auto_lock_minutes_fmt,
-            requireNotNull(timeout.vaultTimeoutInMinutes),
-        )
-    VaultTimeout.OneHour,
-    VaultTimeout.FourHours ->
-        stringResource(
-            R.string.auto_lock_hour_fmt,
-            requireNotNull(timeout.vaultTimeoutInMinutes) / AutoLockPresets.MINUTES_PER_HOUR,
-        )
-    is VaultTimeout.Custom -> when {
-        timeout.vaultTimeoutInMinutes % AutoLockPresets.MINUTES_PER_HOUR == 0 ->
-            stringResource(
-                R.string.auto_lock_hour_fmt,
-                timeout.vaultTimeoutInMinutes / AutoLockPresets.MINUTES_PER_HOUR,
-            )
-        timeout.vaultTimeoutInMinutes % AutoLockPresets.MINUTES_PER_DAY == 0 ->
-            stringResource(
-                R.string.auto_lock_day_fmt,
-                timeout.vaultTimeoutInMinutes / AutoLockPresets.MINUTES_PER_DAY,
-            )
-        else -> stringResource(R.string.auto_lock_minutes_fmt, timeout.vaultTimeoutInMinutes)
-    }
-}
 
 /** 剪贴板清除毫秒 → 文案。 */
 @Composable
@@ -1461,36 +1091,3 @@ private fun clipboardClearLabel(ms: Long): String = when (ms) {
     )
 }
 
-/**
- * 自动锁定档位表与文案换算常量。
- *
- * 档位对齐 Bitwarden `VaultTimeout`：立即 / 1 / 5 / 15 / 30 / 60 / 240 分钟 /
- * 重启时 / 从不（+ 自定义）。旧的 10 / 300 / 1440 三个非标准档位已从候选中移除——
- * 存量用户设置若落在这些值上，迁移时保留为 [VaultTimeout.Custom]，**不会丢失**
- * （见 `VaultTimeout.fromLegacyMinutes`）。
- */
-@Suppress("MagicNumber")
-private object AutoLockPresets {
-    /** 单选候选（顺序即 UI 顺序）。 */
-    val VALUES: List<VaultTimeout> = listOf(
-        VaultTimeout.Immediately,
-        VaultTimeout.OneMinute,
-        VaultTimeout.FiveMinutes,
-        VaultTimeout.FifteenMinutes,
-        VaultTimeout.ThirtyMinutes,
-        VaultTimeout.OneHour,
-        VaultTimeout.FourHours,
-        VaultTimeout.OnAppRestart,
-        VaultTimeout.Never,
-    )
-
-    const val MINUTES_PER_HOUR = 60
-    const val MINUTES_PER_DAY = 1440
-    const val MS_PER_SECOND = 1000
-
-    /** 自定义分钟数输入上限。 */
-    const val MAX_CUSTOM_MINUTES = 100_000
-
-    /** 自定义输入框位数上限。 */
-    const val CUSTOM_MINUTES_DIGITS = 6
-}

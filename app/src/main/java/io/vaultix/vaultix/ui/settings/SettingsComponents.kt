@@ -46,23 +46,34 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import io.vaultix.datastore.VaultTimeout
+import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.theme.Spacing
 
 /** 设置项卡片圆角（上游 20dp）。 */
@@ -315,6 +326,230 @@ internal fun SettingsSwitch(
     }
 }
 
-/** M3 `Switch` 的视觉尺寸（track 大小）。占位用它撑住布局，避免数据到达时跳动。 */
-private val SWITCH_VISUAL_WIDTH = 52.dp
-private val SWITCH_VISUAL_HEIGHT = 32.dp
+/**
+ * M3 `Switch` 的视觉尺寸（track 大小）。占位用它撑住布局，避免数据到达时跳动。
+ *
+ * ⚠️ `internal` 而不是 private：`QuickUnlockDialogs.CapabilityToggle` 也要用同尺寸占位
+ * （两处尺寸一旦分叉，同一页上"数据没到时"与"数据到了"的行高就不再一致）。
+ */
+internal val SWITCH_VISUAL_WIDTH = 52.dp
+internal val SWITCH_VISUAL_HEIGHT = 32.dp
+
+/**
+ * 对话框里的单选列表行（自动锁定档位 / 剪贴板清除时长 / 主题模式共用）。
+ *
+ * ★ 2026-09-30 批次 C 从 `SettingsScreen.kt` 的 private 提升到这里：
+ * 「自动锁定」随 D3 迁入库管理页（`VaultManagementScreen`）后，它有了**两个**消费方，
+ * private 只能复制粘贴 —— 复制 UI 行是观感漂移的起点。
+ */
+@Composable
+internal fun SingleChoiceRow(label: String, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 2.dp),
+    ) {
+        RadioButton(selected = selected, onClick = onClick)
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyLarge,
+            modifier = Modifier.padding(start = Spacing.xs),
+        )
+    }
+}
+
+/**
+ * 自动锁定档位表与文案换算常量。
+ *
+ * 档位对齐 Bitwarden `VaultTimeout`：立即 / 1 / 5 / 15 / 30 / 60 / 240 分钟 /
+ * 重启时 / 从不（+ 自定义）。旧的 10 / 300 / 1440 三个非标准档位已从候选中移除——
+ * 存量用户设置若落在这些值上，迁移时保留为 [VaultTimeout.Custom]，**不会丢失**
+ * （见 `VaultTimeout.fromLegacyMinutes`）。
+ *
+ * ★ 2026-09-30 批次 C 从 `SettingsScreen.kt` 的 private 提升到这里：
+ * `vaultTimeoutLabel` 随自动锁定迁入库管理页，但 `MS_PER_SECOND` 仍被
+ * 设置首页的剪贴板文案用到 —— 两边都要用，就不是任何一页的私产。
+ */
+@Suppress("MagicNumber")
+internal object AutoLockPresets {
+    /** 单选候选（顺序即 UI 顺序）。 */
+    val VALUES: List<VaultTimeout> = listOf(
+        VaultTimeout.Immediately,
+        VaultTimeout.OneMinute,
+        VaultTimeout.FiveMinutes,
+        VaultTimeout.FifteenMinutes,
+        VaultTimeout.ThirtyMinutes,
+        VaultTimeout.OneHour,
+        VaultTimeout.FourHours,
+        VaultTimeout.OnAppRestart,
+        VaultTimeout.Never,
+    )
+
+    const val MINUTES_PER_HOUR = 60
+    const val MINUTES_PER_DAY = 1440
+    const val MS_PER_SECOND = 1000
+
+    /** 自定义分钟数输入上限。 */
+    const val MAX_CUSTOM_MINUTES = 100_000
+
+    /** 自定义输入框位数上限。 */
+    const val CUSTOM_MINUTES_DIGITS = 6
+}
+
+/**
+ * 自动锁定档位 → 文案。
+ *
+ * `when` 作用于 sealed class（穷尽分支，漏档编译器会报错），取代旧的裸 Int `when`
+ * （后者漏一个档位只会在运行时静默落到 else）。
+ *
+ * ★ 2026-09-30 起两页共用（设置页的**全局**档位行 + 库管理页的**每库**档位），
+ * 故从 `VaultManagementScreen`/`SettingsScreen` 的 private 提升到这里。
+ */
+@Composable
+internal fun vaultTimeoutLabel(timeout: VaultTimeout): String = when (timeout) {
+    VaultTimeout.Never -> stringResource(R.string.auto_lock_never)
+    VaultTimeout.Immediately -> stringResource(R.string.auto_lock_immediately)
+    VaultTimeout.OnAppRestart -> stringResource(R.string.auto_lock_on_restart)
+    VaultTimeout.OneMinute,
+    VaultTimeout.FiveMinutes,
+    VaultTimeout.FifteenMinutes,
+    VaultTimeout.ThirtyMinutes ->
+        // 这几个预设档位的 minutes 恒非空（各自 override 为非空 Int）；
+        // 组合分支不做智能转换，故显式 requireNotNull 断言该不变量。
+        stringResource(
+            R.string.auto_lock_minutes_fmt,
+            requireNotNull(timeout.vaultTimeoutInMinutes),
+        )
+    VaultTimeout.OneHour,
+    VaultTimeout.FourHours ->
+        stringResource(
+            R.string.auto_lock_hour_fmt,
+            requireNotNull(timeout.vaultTimeoutInMinutes) / AutoLockPresets.MINUTES_PER_HOUR,
+        )
+    is VaultTimeout.Custom -> when {
+        timeout.vaultTimeoutInMinutes % AutoLockPresets.MINUTES_PER_HOUR == 0 ->
+            stringResource(
+                R.string.auto_lock_hour_fmt,
+                timeout.vaultTimeoutInMinutes / AutoLockPresets.MINUTES_PER_HOUR,
+            )
+        timeout.vaultTimeoutInMinutes % AutoLockPresets.MINUTES_PER_DAY == 0 ->
+            stringResource(
+                R.string.auto_lock_day_fmt,
+                timeout.vaultTimeoutInMinutes / AutoLockPresets.MINUTES_PER_DAY,
+            )
+        else -> stringResource(R.string.auto_lock_minutes_fmt, timeout.vaultTimeoutInMinutes)
+    }
+}
+
+/**
+ * 自动锁定档位对话框（设置首页「自动锁定」行）。
+ *
+ * 档位集合对齐 Bitwarden `VaultTimeout`（立即 / 1 / 5 / 15 / 30 / 60 / 240 分钟 /
+ * 重启时 / 从不 / 自定义）。
+ *
+ * ⚠️ 2026-09-30 晚：**「跟随全局设置（X）」那一项已删**。它原本是给"每库覆盖"用的
+ * （选它 = 删掉该库的覆盖键），而用户把逐库入口整个拿掉了（⋮ 里的「自动锁定」）
+ * —— 没有第二个调用点需要它，留着就是一条**永不执行的死分支**。
+ * 现在这个对话框只有一个语义：**设置所有库共用的那一档**。
+ */
+@Composable
+internal fun AutoLockDialog(
+    current: VaultTimeout,
+    onSelect: (VaultTimeout) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var customOpen by rememberSaveable { mutableStateOf(false) }
+    var customText by rememberSaveable { mutableStateOf("") }
+    var customInvalid by rememberSaveable { mutableStateOf(false) }
+
+    if (customOpen) {
+        AlertDialog(
+            onDismissRequest = {
+                customOpen = false
+                customInvalid = false
+            },
+            title = { Text(stringResource(R.string.auto_lock_custom_title)) },
+            text = {
+                OutlinedTextField(
+                    value = customText,
+                    onValueChange = {
+                        customText = it.filter { c -> c.isDigit() }
+                            .take(AutoLockPresets.CUSTOM_MINUTES_DIGITS)
+                        customInvalid = false
+                    },
+                    isError = customInvalid,
+                    supportingText = if (customInvalid) {
+                        { Text(stringResource(R.string.auto_lock_custom_invalid)) }
+                    } else {
+                        null
+                    },
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val value = customText.toIntOrNull()
+                    if (value == null || value < 1 || value > AutoLockPresets.MAX_CUSTOM_MINUTES) {
+                        customInvalid = true
+                    } else {
+                        onSelect(VaultTimeout.Custom(value))
+                    }
+                }) {
+                    Text(stringResource(R.string.action_save))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { customOpen = false; customInvalid = false }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
+        )
+        return
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.setting_auto_lock)) },
+        text = {
+            Column {
+                AutoLockPresets.VALUES.forEach { timeout ->
+                    SingleChoiceRow(
+                        label = vaultTimeoutLabel(timeout),
+                        selected = timeout == current,
+                        onClick = { onSelect(timeout) },
+                    )
+                    // ★ 「从不」档的风险提示（2026-09-29）。
+                    //
+                    // 对齐 Bitwarden 官方对 Never 档的 warning。Vaultix 的落地比
+                    // Bitwarden 更保守（离场仍软锁、信封经 Keystore 包裹），但用户仍需知道
+                    // **这个档位的真实含义**：手机解锁着就等于密码库可进。
+                    //
+                    // 只在这一档下显示 —— 它是唯一「回来不需要用户交互」的档位。
+                    if (timeout == VaultTimeout.Never) {
+                        Text(
+                            text = stringResource(R.string.auto_lock_never_warning),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(
+                                start = Spacing.xs,
+                                end = Spacing.xs,
+                                bottom = Spacing.xs,
+                            ),
+                        )
+                    }
+                }
+                SingleChoiceRow(
+                    label = stringResource(R.string.auto_lock_custom),
+                    selected = current is VaultTimeout.Custom,
+                    onClick = { customOpen = true },
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.action_cancel))
+            }
+        },
+    )
+}

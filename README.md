@@ -147,7 +147,10 @@ app/                 # UI 层：Compose 界面、导航、ViewModel、自动填�
 2. **锁态只有一个真源**（活跃库是否解锁），四类消费点（CP 候选 / passkey 断言 / 密码回灌 / 自动填充）读同一处；
 3. **KDBX 会话是整库明文（仅内存）**，不进数据库、不落盘、不进日志。
 
-详见 [Docs/01-系统架构设计.md](./Docs/01-系统架构设计.md)。
+详见 [Docs/01-系统架构设计.md](./Docs/01-系统架构设计.md)（⚠️ 那是 **2026-09-07 设计期蓝图**，
+里面的 `feature:*` 模块与 `VaultSource` 策略模式**在实现里并不存在**）；
+**当前实现的模块 / 依赖 / 目录地图**（模块依赖图 · 三层钥匙图 · 模块·目录·包清单）见
+[`.ai/conventions/8.10-架构与目录地图.md`](./.ai/conventions/8.10-架构与目录地图.md)。
 
 ## 📚 文档
 
@@ -191,15 +194,20 @@ app/                 # UI 层：Compose 界面、导航、ViewModel、自动填�
 ./gradlew :app:testFullDebugUnitTest  # 单元测试
 ```
 
-`.ai/tools/` 下另有 4 个本地脚本，专门抓 **detekt 查不出、本地单模块编译也不报、
-只有 CI 跨模块编译才炸**的那几类问题（跨文件 `private` 调用、`R.string` 引用、
-实验性 API 的 `@OptIn` 覆盖、签名里的类型名可解析）：
+`.ai/tools/` 下另有 8 个本地脚本，专门抓 **detekt 查不出、本地单模块编译也不报、
+只有 CI 跨模块编译才炸**，以及**连编译都不报**的那几类问题（跨文件 `private` 调用、
+`R.string` 引用、实验性 API 的 `@OptIn` 覆盖、签名里的类型名可解析、
+多态状态被压成二值、零引用字符串、**状态变量只写不读**）：
 
 ```bash
 python3 .ai/tools/check_compile_smells.py       # 跨文件 private / 重复声明 / 图标导入
 python3 .ai/tools/check_signature_types.py      # 签名里的类型名能否解析
 python3 .ai/tools/check_import_packages.py      # import 包路径
 python3 .ai/tools/check_experimental_optin.py   # 实验性 API 的 @OptIn 作用域
+python3 .ai/tools/check_state_flattening.py     # 多态状态有没有被压成二值开关
+python3 .ai/tools/check_orphan_strings.py       # strings.xml 里零引用的字符串（报告器）
+python3 .ai/tools/check_orphan_state.py         # Compose 状态变量「只写不读」（漏渲染对话框）
+python3 .ai/tools/verify_sync_fields.py         # 同步字段核对（用法见脚本头）
 ```
 
 > ⚠️ **门禁必须包含 `test`**。本项目踩过这个坑：曾有提交只跑 `:app:` 编译，

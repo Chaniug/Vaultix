@@ -92,9 +92,14 @@ import kotlinx.coroutines.withContext
  * 旧实现那套「选指纹就关 PIN」正是本次要纠正的错误（它还会造成"用户中途取消后
  * 指纹没了、PIN 也没设成"的静默数据丢失）。
  *
- * ⚠️「互不干扰」说的是**开关与信封**，不包括配置流程 —— 两者走**同一个向导**（见下）。
+ * ⚠️「互不干扰」说的是**开关与信封** —— 2026-09-30 晚起，**流程也各走各的**
+ * （拨哪个开关就跑哪一种；原先"两者共用一张向导表"已被删除，见下）。
  *
- * ## ★ 一次流程配完两种方式（2026-09-17；用户："逻辑很麻烦、操作很复杂"）
+ * ## ★ 为什么曾经"一次流程配完两种方式"（2026-09-17；用户："逻辑很麻烦、操作很复杂"）
+ *
+ * > ⚠️ **本节是历史记录**（2026-09-30 晚该方案已删）。留着的价值只有一个：
+ * > 解释"那张向导表当年是为了解决什么"，以免有人又把它发明一遍 ——
+ * > 而它**并不需要**（结论见本节末的 2026-09-30 段）。
  *
  * 旧交互 =「逐库一行 + 两步对话框 + 每种方式各跑一遍」。其中重复的 N 次**不是平白多出来的**，
  * 来源是可查的：**KDBX 的主密码两种方式都要用** ——
@@ -108,8 +113,25 @@ import kotlinx.coroutines.withContext
  * （主密码只收一次、两种方式共用）才是真正砍掉那个 N 的做法；
  * 只把"选库"那一步缩短，N 一点都不会少。
  *
- * 于是 [Dialog.Configure] 成为**唯一**的配置入口：一次问清「对哪些库 + 用哪些方式」，
- * 随后是 `主密码 →（PIN 当场落盘）→（指纹备料 + 一次认证）→ 结果`。
+ * ### ⚠️ 2026-09-30 晚：这段推理的**结论被架构本身取代**了
+ *
+ * 上面那段是**当初合并成向导的理由**（历史，留着解释"向导为什么长那样"），
+ * 但它推出的那个方案（一张表同时勾两种方式）**已被删除** —— 原因是用户真机反馈
+ * 那张弹窗"逻辑混乱、让人摸不着头脑"（见 [toggleBiometric] 的 KDoc）。
+ *
+ * 关键新认识：**"要输两遍主密码"其实不成立**。房间信封是**每库一份、与方式无关**的
+ * （它包的是该库的凭据，不是"某种方式"的凭据），所以：
+ *
+ * | 动作 | 会发生什么 |
+ * |---|---|
+ * | 先开指纹 | 建房间（问每个 KDBX 库一次主密码）+ 包指纹门锁 |
+ * | 再开 PIN | **`pendingRooms()` 为空 ⇒ 不再问主密码**，只包 PIN 门锁 |
+ *
+ * ⇒ 两次开关合起来仍是"每个 KDBX 库只输一次"。于是那张用来"省一次密码"的表格
+ * 就完全没必要了 —— **一次开关 = 一种方式**，入口少一层、心智少一层。
+ *
+ * 于是现在的入口是：[toggleBiometric] / [togglePin]（拨开关）。
+ * 随后是 `各库主密码 →（PIN 当场落盘）→（指纹备料 + 一次认证）→ 结果`。
  *
  * ## 逐库问主密码（用户 2026-09-16 拍板）
  *
@@ -250,21 +272,6 @@ class QuickUnlockController(
     sealed interface Dialog {
         data object Idle : Dialog
 
-        /**
-         * ★ **配置向导的第一步（也是唯一入口）**：一次问清「对哪些库 + 用哪些方式」。
-         *
-         * 取代了旧的两个入口（对话框里逐库勾选范围 + 两个开关各自触发一遍流程）。
-         * 设计要点：
-         * - **默认全勾**（首次配置时）—— 见类 KDoc 的"已确认"标记；
-         * - 方式可多选 —— 主密码只收一次、两种方式共用（类 KDoc 里那条 N 的来源）；
-         * - 取消勾选某个库**不是必须动作**，只是可选项。
-         */
-        data class Configure(
-            val rows: List<ConfigureRow>,
-            val methodBiometric: Boolean,
-            val methodPin: Boolean,
-            val error: String? = null,
-        ) : Dialog
 
         /** 输 PIN（仅当选了 PIN 方式；在问主密码**之前**）。 */
         data class PinEntry(
@@ -323,35 +330,25 @@ class QuickUnlockController(
     /** 结果页里单个库的失败项。 */
     data class FailureItem(val vaultName: String, val reason: String)
 
-    /**
-     * 配置向导里的一行（一个库）= **一个纯复选框**（批次 3：删掉每库的「指纹 / PIN」标记）。
-     *
-     * ## 为什么不再每行标「指纹 · PIN」
-     *
-     * 房子化之后，一个库的快速解锁状态只有**一个**事实：**房间信封在不在**。
-     * 门锁是**全局**的（两把，与库无关），所以"这个库配了指纹但没配 PIN"这种说法
-     * 已经不存在 —— 两把门锁包的是同一把房钥匙，房间信封也是**共享**的。
-     *
-     * ⇒ 每行挂两个方式标记，等于把**已经不存在的区分**画给用户看；
-     * 更要命的是它会诱导用户以为"我要给这个库单独选一种方式"
-     * （那正是 2026-09-16 重构要纠正的"每库三选一"心智）。
-     *
-     * ⚠️ 与 [VaultUi] 分开而不是复用：两者的 `inScope` 语义不同 —— [VaultUi.inScope] 是
-     * **已落盘**的范围，这里是**向导里尚未提交**的勾选。混用一个类型，就会出现
-     * "用户还没确认，界面已经把范围当成已生效"的谎报（#93 同族）。
-     */
-    data class ConfigureRow(
-        val vaultId: String,
-        val name: String,
-        /** 是否勾选（首次配置时默认全勾）。 */
-        val checked: Boolean,
-    )
-
     /** 界面需要的全部状态。 */
     data class UiState(
         val rows: List<VaultUi> = emptyList(),
         val biometric: CapabilityState = CapabilityState.Off,
         val pin: CapabilityState = CapabilityState.Off,
+        /**
+         * 真实状态**是否已从磁盘读出来**（2026-09-30 加）。
+         *
+         * ⚠️ **这条就是"进设置页时开关先关后开"闪烁的根因所在**：本类的初值是
+         * `UiState()`（两个 [CapabilityState] 都是 `Off`），而 `Off` 是一个**确定的答案**；
+         * 磁盘上真实是 `On` 时，开关会先渲染成"关"、再跳到"开"。
+         *
+         * 这正是 `.ai/ISSUES.md` #84「三种空」那一族（同一个 `SettingsViewModel`
+         * 里已为布尔开关写过一遍同样的话）。⇒ 修法与那边完全一致：
+         * **不认识就什么都不说** —— `false` 时渲染同尺寸占位（不是一个假位置）。
+         *
+         * ⚠️ 不要把初值改成 `true`（那是拿默认值冒充事实的另一个方向，同样错）。
+         */
+        val loaded: Boolean = false,
         /**
          * 指纹门锁「待重装」（批次 4，定稿 §6）：信封解不开但房钥匙还在手上
          * （PIN 开过门 / Never 档恢复过），等用户下次在向导里过指纹就自动补写。
@@ -410,216 +407,118 @@ class QuickUnlockController(
         }
     }
 
-    // ===== 范围与开关 =====
+    // ===== 开关（唯一入口：拨开关 = 开始配置 / 关闭）=====
 
     /**
-     * 点「管理解锁方式」：打开向导，两种方式**都不预选**（由用户勾）。
+     * 点「指纹」开关（**点整行等价**）。
      *
-     * 与两个开关的分工：开关 = 「这个方式，对范围内的库，开关一下」的粗动作；
-     * 本入口 = 精细控制（挑库、挑方式），也就是旧实现那三种入口合并后的**唯一**入口。
+     * - 当前 `On` ⇒ **关闭**：删掉全局指纹门锁（房间信封由孤儿清理连带处理，**不动 PIN**）；
+     * - `Off` ⇒ **开始登记**：直接进入流程（不再有"先过向导挑方式"那一步）。
      *
-     * ⚠️ 2026-09-29 起设置页的第三行已删，本入口只服务「旧模型残留」的提示行 ——
-     * 它的语义是"重新登记"，不该预选任何一种方式（用户可能两种都要重配）。
-     */
-    fun manageUnlock() {
-        scope.launch { showConfigure(preferred = null) }
-    }
-
-    /**
-     * 点「指纹解锁」**整行**：进向导并预选指纹（2026-09-29 删第三行后并入）。
+     * ★ 2026-09-30 晚（用户要求"只需要一个打开的按钮"）：那张**配置向导弹窗整体删除**
+     * （`Dialog.Configure` / `ConfigureDialog` / `ConfigureMethodRow` / `confirmConfigure`
+     * 一并删）。用户真机反馈它"做的不好看、逻辑混乱、让人摸不着头脑"，而它的全部价值
+     * 只是"一次问清：对哪些库 + 用哪些方式" —— 前者已被取消（一律全库），
+     * 后者由**你拨的是哪个开关**天然回答。⇒ 于是只剩这一个动作。
      *
-     * 与 [toggleBiometric] 的分工（`QuickUnlockSettingsRows` 类 KDoc 的表）：
-     * - 整行点击**总是**进向导 —— `On` 态改库范围 / 补配，`Off` 态等效于开开关；
-     * - 关闭门锁这个低频破坏性动作只留给**开关本体**，避免误触整行即关闭。
+     * ⚠️ 两种方式**互不联动**（用户明确要的"可以都开或者只开一种"）：拨一个不会顺手改
+     * 另一个 —— 各有各的信封。旧实现那种"选一个就关另一个"是反例。
      *
-     * ⚠️ 预选 = `preferred = BIOMETRIC` ⇒ 向导里 PIN 不勾（用户可自己勾上），
-     * 与旧第三行的"两种都不预选"刻意不同：从指纹行进来的用户意图已经明确。
-     */
-    fun manageBiometric() {
-        scope.launch { showConfigure(UnlockMethod.BIOMETRIC) }
-    }
-
-    /**
-     * 点「应用内 PIN」**整行**：进向导并预选 PIN。语义同 [manageBiometric]。
-     */
-    fun managePin() {
-        scope.launch { showConfigure(UnlockMethod.PIN) }
-    }
-
-    /** 向导里勾选 / 取消勾选一个库。 */
-    fun toggleConfigureVault(vaultId: String) {
-        val current = _dialog.value as? Dialog.Configure ?: return
-        _dialog.value = current.copy(
-            rows = current.rows.map {
-                if (it.vaultId == vaultId) it.copy(checked = !it.checked) else it
-            },
-            error = null,
-        )
-    }
-
-    /**
-     * 向导里勾选 / 取消勾选一种方式。
-     *
-     * ⚠️ 两种方式之间**没有任何联动**：勾指纹不会顺手勾上 PIN，反之亦然
-     * （旧实现「选指纹就关 PIN」那次错误的反面，别又做成一端）。
-     */
-    fun toggleConfigureMethod(method: UnlockMethod) {
-        val current = _dialog.value as? Dialog.Configure ?: return
-        _dialog.value = when (method) {
-            UnlockMethod.BIOMETRIC -> current.copy(methodBiometric = !current.methodBiometric, error = null)
-            UnlockMethod.PIN -> current.copy(methodPin = !current.methodPin, error = null)
-        }
-    }
-
-    /**
-     * 向导的「开始配置」：落范围 → 收主密码 →（PIN 当场落盘）→（指纹备料 + 一次认证）→ 结果。
-     *
-     * ⚠️ **取消勾选 = 移出生效范围 = 删掉它的两个信封**（沿用旧 `toggleScope` 的语义）。
-     * 用户重配时要再输一次那个库的主密码 —— 所以这句后果**写在向导里**（动手之前），
-     * 而不是事后弹提示：提示追不回已经删掉的东西（旧实现正是发了一条**无人消费**的提示，
-     * 见类 KDoc 的"沉默的分支"一处）。
-     */
-    fun confirmConfigure() {
-        val current = _dialog.value as? Dialog.Configure ?: return
-        val checked = current.rows.filter { it.checked }.map { it.vaultId }
-        val methods = buildSet {
-            if (current.methodBiometric) add(UnlockMethod.BIOMETRIC)
-            if (current.methodPin) add(UnlockMethod.PIN)
-        }
-        if (methods.isEmpty()) {
-            _dialog.value = current.copy(error = "请至少选择一种解锁方式")
-            return
-        }
-        if (checked.isEmpty()) {
-            _dialog.value = current.copy(error = "请至少选择一个密码库")
-            return
-        }
-        scope.launch {
-            val snapshot = state.value
-            // 从范围内移出的库：删它的房间信封（房子化：信封是「每库一份」，
-            // 不再按方式各一份；门锁是全局的，移出单个库不动门锁）—— 否则会出现
-            // "界面说没启用、实际仍能用指纹打开"的双源不一致（谎报状态那一类）。
-            snapshot.rows
-                .filter { it.inScope && it.vaultId !in checked }
-                .forEach { row ->
-                    vaultRepository.removeVaultFromScope(row.vaultId)
-                }
-            preferences.confirmQuickUnlockScope(checked.toSet())
-
-            // ★ 只开**还没装**的那把门锁（动作表第 2 条：装着的锁不重开，
-            //   否则用户每次进向导都要再按一次指纹，会以为锁坏了）。
-            val locksToOpen = locksToOpen(methods, snapshot)
-            val newSession = Session(
-                methods = methods,
-                targets = checked,
-                rows = snapshot.rows.map { it.copy(inScope = it.vaultId in checked) },
-                locksToOpen = locksToOpen,
-            )
-            val pending = newSession.pendingRooms()
-
-            // ★ 顺序约束（定稿 §5）：房间信封只在「至少一把门锁已存在」且
-            //   「房钥匙在内存」时才建 —— 在问主密码**之前**拦。
-            roomSealingBlocker(pending, locksToOpen, snapshot, enrollment.isHouseKeyReady)
-                ?.let { blocker ->
-                _dialog.value = blocker
-                clearSession()
-                return@launch
-            }
-            session = newSession
-            _dialog.value = Dialog.Idle
-
-            if (pending.isEmpty() && locksToOpen.isEmpty()) {
-                // 房间都建好了、门锁也都装好了 ⇒ 这次只落了范围，**如实说明**
-                // 而不是演出一个「配置成功」的空结果页（那正是「假成功」）。
-                _dialog.value = Dialog.Report(scopeOnly = true)
-                clearSession()
-                return@launch
-            }
-            // ⚠️ 只在**PIN 门锁真要新开**时才问 PIN：门锁已装时不问（动作表第 2 条），
-            //   弹一个输了也不生效的 PIN 输入框，正是「逻辑很麻烦」要消灭的那种
-            //   多余步骤 —— 用户会以为 PIN 出了问题。
-            if (UnlockMethod.PIN in locksToOpen) {
-                _dialog.value = Dialog.PinEntry()
-            } else {
-                advanceToPasswordOrExecute()
-            }
-        }
-    }
-
-    /**
-     * 打开配置向导。
-     *
-     * @param preferred 预选的方式（从某个开关进来时）；`null` = 「管理解锁方式」按钮。
-     *
-     * ⚠️ 「从未确认过 ⇒ 默认全勾」是本轮**最大的省事点**（用户 99% 想要"所有库都能快速解锁"）。
-     * 判据是 `isQuickUnlockScopeConfirmed()` 而**不是**范围是否为空 —— 见类 KDoc：
-     * 空集已经表示"一个都不要"，不能借它表示"还没配过"。
-     */
-    private suspend fun showConfigure(preferred: UnlockMethod?) {
-        val ui = state.value
-        val confirmed = preferences.isQuickUnlockScopeConfirmed().first()
-        val scopeIds = preferences.quickUnlockScope().first()
-        val checked = if (confirmed) scopeIds else ui.rows.map { it.vaultId }.toSet()
-        val biometricOn = ui.biometric is CapabilityState.On
-        val pinOn = ui.pin is CapabilityState.On
-        val bothOn = biometricOn && pinOn
-        // 「管理解锁方式」预选"还没配好的方式"；两种都已启用时都预选 ——
-        // 此时本来就没有要干的活，确认后会如实说"只更新了范围"，不会卡在一个空选择上。
-        _dialog.value = Dialog.Configure(
-            rows = ui.rows.map {
-                ConfigureRow(
-                    vaultId = it.vaultId,
-                    name = it.name,
-                    checked = it.vaultId in checked,
-                )
-            },
-            methodBiometric = when (preferred) {
-                UnlockMethod.BIOMETRIC -> true
-                UnlockMethod.PIN -> false
-                null -> bothOn || !biometricOn
-            },
-            methodPin = when (preferred) {
-                UnlockMethod.PIN -> true
-                UnlockMethod.BIOMETRIC -> false
-                null -> bothOn || !pinOn
-            },
-        )
-    }
-
-    /**
-     * 点「指纹」开关。
-     *
-     * - 当前 `On` ⇒ 视为**关闭**：删掉全局指纹门锁（房间信封由孤儿清理连带处理，
-     *   **不动 PIN**）；
-     * - `Off` ⇒ **打开配置向导并预选指纹**（默认全勾）。
-     *
-     * ⚠️ 进了向导之后，"只补没配的那几个"是自动的（[Session.pendingRooms] 会跳过
-     * 房间信封已建的库），用户不必自己判断哪些还没配 —— 所以「默认全勾」不是偷懒，
-     * 是**把判断交给程序**（用户勾了全体也不会被重问主密码、重写信封）。
+     * ⚠️ **重入保护**：流程进行中（PIN / 主密码 / 认证对话框在屏幕上）时忽略新的拨动。
+     * 没有这一条，用户连点两下会起两个班次，后一个把 [session] 覆盖掉 ——
+     * 表现为"输完密码之后什么都没发生"。
      */
     fun toggleBiometric() {
+        if (_dialog.value != Dialog.Idle) return
         scope.launch {
             if (state.value.biometric is CapabilityState.On) {
                 disableAll(UnlockMethod.BIOMETRIC)
             } else {
-                showConfigure(UnlockMethod.BIOMETRIC)
+                startEnrollment(UnlockMethod.BIOMETRIC)
+            }
+        }
+    }
+
+    /** 点「应用内 PIN」开关。语义同 [toggleBiometric]（含重入保护与互不联动）。 */
+    fun togglePin() {
+        if (_dialog.value != Dialog.Idle) return
+        scope.launch {
+            if (state.value.pin is CapabilityState.On) {
+                disableAll(UnlockMethod.PIN)
+            } else {
+                startEnrollment(UnlockMethod.PIN)
             }
         }
     }
 
     /**
-     * 点「应用内 PIN」开关。语义同 [toggleBiometric]。
+     * 开始**一种**方式的登记流程：范围（一律全部库）→ 收主密码 → PIN / 指纹 → 结果。
      *
-     * ⚠️ 与指纹**完全独立**：关掉这一个**不会**顺手关掉另一个（两者各有各的信封）。
-     * 这是验收清单里明确列出的一条 —— 旧实现那种"选一个就关另一个"是反例。
+     * 原先是向导「开始配置」按钮的回调（`confirmConfigure`）；2026-09-30 晚向导删除后
+     * 由 [toggleBiometric] / [togglePin] 直接调用 —— 编排逻辑一字未改，
+     * 变的只是**入口**：从"确认一张选择表"变成"拨一下开关"。
+     *
+     * ⚠️ 2026-09-30（用户拍板）：**范围一律 = 全部库**，用户不能再挑。
+     * 于是原来那段「从范围内移出的库要删房间信封」的代码**整段删掉了** ——
+     * 现在不存在"移出"这个动作，留着它就是一段永远不成立的死逻辑。
+     * （若某个库被**删除**，它的房间信封由 `removeVault` 那条既有路径清理，与本流程无关。）
+     *
+     * ⚠️ 「先开 A 再开 B」**不会重复收主密码**：房间信封是**每库一份、与方式无关**的，
+     * 先开的那一种已把房间封好 ⇒ 再开另一种时 [Session.pendingRooms] 为空，
+     * 不会重问。这正是原先"合并成一个向导"想省掉的那次重复 —— 现在由架构本身保证，
+     * 不再需要一张把两种方式放在一起勾的表格。
      */
-    fun togglePin() {
-        scope.launch {
-            if (state.value.pin is CapabilityState.On) {
-                disableAll(UnlockMethod.PIN)
-            } else {
-                showConfigure(UnlockMethod.PIN)
-            }
+    private suspend fun startEnrollment(method: UnlockMethod) {
+        val snapshot = state.value
+        val targets = snapshot.rows.map { it.vaultId }
+        if (targets.isEmpty()) {
+            // 没有库可纳入 ⇒ 如实说，而不是"开了一把没有任何房间的门锁"
+            //（那种状态下冷启动恢复也不会有任何库可开）。
+            _dialog.value = Dialog.Report(
+                failed = listOf(FailureItem("—", "还没有任何密码库，请先添加一个")),
+            )
+            return
+        }
+        preferences.confirmQuickUnlockScope(targets.toSet())
+
+        // ★ 只开**还没装**的那把门锁（动作表第 2 条：装着的锁不重开，
+        //   否则用户每次都要再按一次指纹，会以为锁坏了）。
+        val methods = setOf(method)
+        val locksToOpen = locksToOpen(methods, snapshot)
+        val newSession = Session(
+            methods = methods,
+            targets = targets,
+            // ⚠️ 直接用快照的 rows：`pendingRooms()` 只看 `targets` 与各库的 `roomReady`，
+            //    与 `inScope` 无关（范围现在恒等于全部库）。
+            rows = snapshot.rows,
+            locksToOpen = locksToOpen,
+        )
+        val pending = newSession.pendingRooms()
+
+        // ★ 顺序约束（定稿 §5）：房间信封只在「至少一把门锁已存在」且
+        //   「房钥匙在内存」时才建 —— 在问主密码**之前**拦。
+        roomSealingBlocker(pending, locksToOpen, snapshot, enrollment.isHouseKeyReady)
+            ?.let { blocker ->
+            _dialog.value = blocker
+            clearSession()
+            return
+        }
+        session = newSession
+        _dialog.value = Dialog.Idle
+
+        if (pending.isEmpty() && locksToOpen.isEmpty()) {
+            // 房间都建好了、门锁也装好了 ⇒ 这次什么都没变，**如实说明**，
+            // 而不是演出一个「配置成功」的空结果页（那正是「假成功」）。
+            _dialog.value = Dialog.Report(scopeOnly = true)
+            clearSession()
+            return
+        }
+        // ⚠️ 只在**PIN 门锁真要新开**时才问 PIN：门锁已装时不问（动作表第 2 条），
+        //   弹一个输了也不生效的 PIN 输入框，正是「逻辑很麻烦」要消灭的那种多余步骤。
+        if (UnlockMethod.PIN in locksToOpen) {
+            _dialog.value = Dialog.PinEntry()
+        } else {
+            advanceToPasswordOrExecute()
         }
     }
 
@@ -1528,6 +1427,9 @@ internal fun assemble(
         rows = rows,
         biometric = lockState(biometricLock),
         pin = lockState(pinLock),
+        // 到这里说明磁盘上的真实值都读到了（本函数只在 combine 的产物里被调用）
+        // ⇒ 从这一刻起可以如实渲染开关（见 UiState.loaded）。
+        loaded = true,
         // ⚠️ 只在门锁确实开着时才呈现标记：标记与信封同生共死（关锁即清），
         // 不一致只会出现在读盘竞态的一瞬间 —— 那种瞬间宁可不说，
         // 也不要在「已关闭」的行上冒出「需重新启用」（自相矛盾的两句话）。

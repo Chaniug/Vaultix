@@ -180,26 +180,35 @@
          标题 = 名词短语；副标题不指路；标点统一用中文全角。
          ================================================================ -->
     <string name="vault_management_entry">密码库管理</string>
-    <string name="vault_management_group_current">当前库</string>
-    <string name="vault_management_group_unlock">解锁方式</string>
-    <string name="settings_active_vault">当前密码库</string>
+    <!-- ★ 2026-09-30 晚：「解锁方式」独立成页（此前与"密码库管理"是同一页 —— 用户反馈
+         "打开好像都是同一个页面，这不对吧"）。这句是那一页的脚注：说明作用域是**全部库**
+         （与系统 Keyguard 同构：一把锁保护全部内容）。 -->
+    <!-- ★ 2026-09-30 晚：这一页改名为「锁与安全」—— 它管的是**锁的方式**（指纹/PIN）
+         与**锁的超时**（自动锁定），与 Android「设置 → 安全 → 屏幕锁定」同构。
+         设置首页那一行的标题也用同一个串（同一件事，两处必须同名）。 -->
+    <string name="lock_and_security_title">锁与安全</string>
+    <string name="unlock_method_scope_note">两项都作用于全部密码库：打开其中任意一项，所有库都用它解锁。</string>
     <string name="settings_add_vault_desc">连接 Bitwarden 云端，或打开本机 .kdbx 文件</string>
     <!-- 已有一个库时的措辞：避免「连接 Bitwarden」暗示要改当前库（见 .ai/decisions/设置页信息架构-定稿.md §5.2） -->
     <string name="settings_add_vault_desc_another">添加另一个密码库：Bitwarden 云端或本机 .kdbx 文件</string>
     <string name="settings_active_vault_none">未解锁任何库</string>
-    <string name="settings_active_vault_locked_hint">还没有任何密码库，请先添加一个</string>
     <!-- 2026-09-15 精简：原为「勾选表示本次使用该库；「设为默认」决定下次打开应用先进入
          哪个库。未解锁的库需先输入主密码才能使用。」—— 60 余字且含"勾选"这类**指路语**
          （定稿 §4 明令禁止）。交互含义已收进各行副标题，这里只留一句结论。 -->
-    <string name="settings_default_vault_hint">带星标的是下次启动先打开的库。</string>
     <string name="settings_vault_locked_suffix">未解锁 · 需先输入主密码</string>
-    <!-- 2026-09-15：未解锁项的副标题改成动作语义。原标题只说「要输密码」，
-         用户仍以为可以「先切过去看看」——切过去就是空白页（见 VaultChoiceRow 注释）。 -->
-    <string name="settings_vault_locked_tap_to_unlock">未解锁 · 点这里输入主密码</string>
-    <!-- 已解锁行的副标题：两行结构与未解锁行对齐（否则一行高一行矮，列表参差）。 -->
-    <string name="settings_vault_unlocked_hint">已解锁</string>
     <string name="settings_vault_default_badge">默认库</string>
     <string name="settings_vault_set_default">设为默认库</string>
+    <!-- ★ 批次 C（多库锁模型定稿 §8 + D7，2026-09-30）：
+         ① 设置首页「解锁方式」行的副标题 = 指纹/PIN 当前状态（D7）；
+         ② 库管理页「全部密码库」每行副标题带该库自己的自动锁定档位（§8 / D3）。 -->
+    <string name="settings_unlock_method_summary_fmt">指纹 %1$s · PIN %2$s</string>
+    <!-- 设备无生物识别硬件时指纹段的措辞（区别于「未启用」：不是用户不想开，是开不了）。 -->
+    <string name="settings_unlock_state_unavailable">不可用</string>
+    <string name="vault_management_group_sources">库的来源</string>
+    <!-- ★ 2026-09-30 模型修订（用户拍板「全局默认 + 每库可覆盖」）：
+         设置页「自动锁定」行的副标题 —— 说明它是**所有库的默认**，
+         以及每库可在自己 ⋮ 里单独指定（第一项「跟随全局」= 删掉覆盖）。 -->
+    <string name="auto_lock_global_summary_fmt">所有密码库默认：%1$s</string>
     <!-- ⚠️ 2026-09-16 四改后**暂无代码引用**：解锁方式从「每行一个状态徽标」改为
          「三选一单选组」，选中态由单选控件本身表达，状态徽标（圆点 + 文字）被删除。
          **刻意保留**：这两句是通用的「已启用 / 未启用」措辞，若有其它开关类设置项
@@ -458,7 +467,6 @@
          里逐条改过文案的产物，且「快速解锁」若日后重新出现在设置首页（例如做成开关而不是
          二级页入口），这句"重新打开"口径的说明仍是对的。 -->
     <string name="settings_quick_unlock_desc">锁定后用生物识别重新打开，免主密码与两步验证</string>
-    <string name="quick_unlock_manage_none">尚未启用任何库</string>
     <!-- ⚠️ 以下四条自 2026-09-16 四改起**暂无代码引用**：改前它们是「指纹行」的
          启用/关闭按钮文字与状态文字（同一件事被按钮、徽标、副标题说了三遍，
          正是四改要砍的冗余）。四改后"点单选项即为启用"，不再需要独立按钮文案。
@@ -524,7 +532,6 @@
          会让 aapt2 直接报 "Failed to parse XML file '(...).xml'"，而报错信息
          完全不提注释，极难猜（这个坑踩过一次，记在 .workbuddy/memory）。
          ⚠️ 「管理解锁方式」取代了旧的「逐库勾选范围」整块，是逐库勾选的**唯一**去处。 -->
-    <string name="quick_unlock_manage_action">管理解锁方式</string>
     <string name="quick_unlock_summary_on">已对 %1$d 个库生效</string>
     <!-- ===== 2026-09-29 批次 4：失效矩阵的「待重装」文案（定稿 §6）=====
          ⚠️ 必须同时说清**三件事**，少一件就是一个坑：
@@ -534,17 +541,11 @@
          绝不能说成"已关闭"（用户会以为解绑了、要重配全部库），
          也绝不能说"已对 N 个库生效"（那是 #93 那类假状态：明明用不了。）。 -->
     <string name="quick_unlock_summary_rearm_pending">需要重新启用：系统指纹已变更，下次用指纹解锁时自动完成</string>
-    <string name="quick_unlock_configure_vaults_title">生效的库</string>
-    <string name="quick_unlock_configure_vaults_hint">默认全选。取消勾选会移除该库的快速解锁凭据。</string>
-    <string name="quick_unlock_configure_methods_title">解锁方式</string>
-    <string name="quick_unlock_configure_methods_hint">两种方式彼此独立、可同时启用，一次即可配完。</string>
-    <string name="quick_unlock_configure_pin_warning">PIN 只在输入那一刻存在，必须这次一次配完：事后再单独给某个库补 PIN 是不行的。</string>
-    <string name="quick_unlock_configure_uncheck_warning">取消勾选会清除该库已保存的快速解锁凭据，之后需要重新输入它的主密码。</string>
-    <string name="quick_unlock_configure_start">开始配置</string>
-    <string name="quick_unlock_report_scope_only">已更新生效范围。勾选的库此前都已配置好，这次没有需要重新配置的库。</string>
+    <!-- ⚠️ 2026-09-30：范围不可选了（一律全部库），原句里的「勾选的库」已不成立 ⇒ 改写。 -->
+    <string name="quick_unlock_report_scope_only">解锁方式与此前一致。全部密码库都已纳入，本次没有需要重新配置的内容。</string>
     <string name="quick_unlock_report_lock_only">解锁方式已开启。纳入的库没有变化，无需重新输入主密码。</string>
     <string name="quick_unlock_legacy_title">快速解锁已升级，需重新登记一次</string>
-    <string name="quick_unlock_legacy_desc">旧版保存的解锁凭据无法自动升级。点此重新登记，登记完成后旧凭据会被清除。</string>
+    <string name="quick_unlock_legacy_desc">旧版保存的解锁凭据无法自动升级。打开下面的开关即可重新登记，登记完成后旧凭据会被清除。</string>
     <string name="pin_field_new">输入 PIN</string>
     <string name="pin_field_confirm">再次输入 PIN</string>
     <string name="action_continue">继续</string>

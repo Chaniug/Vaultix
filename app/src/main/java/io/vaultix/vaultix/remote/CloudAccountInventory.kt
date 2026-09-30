@@ -86,8 +86,9 @@ data class CloudAccount(
      * ★ 它**不新增持久化**：从该账号**任一库**的 origin 反推 ——
      * 账号的现实意义就是"它被哪些库在用"，起点自然也来自那些库。
      *
-     * ⚠️ null = 没有任何库指向它（那就无从"列目录" —— **如实为 null，不要猜一个**；
-     * 顺手拼 `server + "/"` 正是今天那类"看起来能跑、实际 404"的错误来源）。
+     * ⚠️ null = 没有任何**起点**可言（**正常情况下不该再出现**：OneDrive 账号的兜底是
+     * 空串=根、WebDAV 账号的兜底是它自己配置的服务器地址）。**不要**为 null 猜一个 ——
+     * 顺手拼 `server + "/"` 正是今天那类"看起来能跑、实际 404"的错误来源。
      */
     val browseRoot: String? = null,
 ) {
@@ -116,9 +117,11 @@ class CloudAccountInventory @Inject constructor(
 
         // ① 先登记"配过哪些账号"（凭据 / 登录态）—— 哪怕一个库都还没用它。
         //    ⚠️ 这是 2026-09-18 的修正：账号页能配置之后，"配了没建库"是常态而非中间态。
+        //    ⚠️ 这一步**只登记账号**；起点一律留到 ③ 补（顺序有讲究，见 ③ 的注释）。
         val vaultsOf = linkedMapOf<Pair<CloudAccountKind, String>, MutableList<String>>()
         val labels = mutableMapOf<Pair<CloudAccountKind, String>, String>()
-        // ⚠️ 只 putIfAbsent：来自**库**的起点比"服务器根"更准（用户可能填的是子目录）。
+        // ⚠️ 只 putIfAbsent：来自**库**的起点比"服务器根 / 网盘根"更准
+        //    （用户当初填的可能是子目录）—— 所以具体起点必须先落（②），兜底后补（③）。
         val roots = mutableMapOf<Pair<CloudAccountKind, String>, String>()
 
         fun register(kind: CloudAccountKind, storedId: String, label: String) {
@@ -127,19 +130,11 @@ class CloudAccountInventory @Inject constructor(
             labels.putIfAbsent(key, label)
         }
 
-        runCatching { webDavCredentials.listConfigured() }
+        val configuredWebDav = runCatching { webDavCredentials.listConfigured() }
             .getOrDefault(emptyList())
-            .forEach { configured ->
-                register(CloudAccountKind.WEBDAV, configured.credentialId, serverOf(configured.serverUrl))
-                // ★ 兜底起点：还没有任何库用它时，**用户填的那个地址**就是能列目录的地方。
-                //   没有它，"刚配好还没建库"的账号会显示成"没有可用目录"，点不动
-                //   —— 而用户刚填完地址，最自然的下一步正是"看看那上面有什么"。
-                //   ⚠️ putIfAbsent 保证来自**库**的起点优先（那才是库真实所在的位置）。
-                roots.putIfAbsent(
-                    CloudAccountKind.WEBDAV to configured.credentialId,
-                    connector.normalizeServerUrl(configured.serverUrl),
-                )
-            }
+        configuredWebDav.forEach { configured ->
+            register(CloudAccountKind.WEBDAV, configured.credentialId, serverOf(configured.serverUrl))
+        }
         sessions.forEach { session ->
             register(
                 CloudAccountKind.ONEDRIVE,
@@ -169,6 +164,37 @@ class CloudAccountInventory @Inject constructor(
                 // 去掉文件名即所在目录，空串 = 根。
                 roots.putIfAbsent(key, oneDrive.path.substringBeforeLast('/', missingDelimiterValue = ""))
             }
+        }
+
+        // ③ ★ **最后**补"兜底起点"：还没有任何库指向它的账号，起点就是账号自己的位置。
+        //
+        // ⚠️ **必须在 ② 之后**，这不是风格问题：`roots` 用 `putIfAbsent` 表达"先落者赢"，
+        //    而来自**库**的起点比"服务器地址 / 网盘根"**更具体**。此前 WebDAV 的兜底写在
+        //    ① 里（先落），于是库推来的更准目录**永远落不进去** —— 注释写着"库优先"，
+        //    实现却是反的。2026-09-30 加 OneDrive 兜底时由单测
+        //    「已有库指向它时以库所在目录为起点」当场逮到（该库在 `Keepass/` 下，
+        //    起点却回了根）。⇒ 把两个兜底统一挪到**所有具体起点都落完**之后。
+        configuredWebDav.forEach { configured ->
+            // ★ 兜底起点：还没有任何库用它时，**用户填的那个地址**就是能列目录的地方。
+            //   没有它，"刚配好还没建库"的账号会显示成"没有可用目录"，点不动
+            //   —— 而用户刚填完地址，最自然的下一步正是"看看那上面有什么"。
+            roots.putIfAbsent(
+                CloudAccountKind.WEBDAV to configured.credentialId,
+                connector.normalizeServerUrl(configured.serverUrl),
+            )
+        }
+        sessions.forEach { session ->
+            // ★ OneDrive 的兜底起点 = **空串**，它在这条路上就是「根目录」——与
+            //   `OneDriveGraphClient.listChildren(directoryPath)` 的契约一致
+            //   （null / 空 = 根），也与 `OneDriveKdbxFileSource.listChildren` 的
+            //   `takeIf { it.isNotBlank() }` 一致。
+            //
+            // ⚠️ **这一行是一个真实 bug 的一半**：此前 OneDrive 侧**没有**兜底
+            //   （WebDAV 侧有）⇒「已登录但还没有任何库指向它」的账号 `browseRoot = null`
+            //   ⇒ 添加库页直接报「这个账号还没有可用的目录，请先在设置里重新配置」——
+            //   而用户刚刚登录成功，最自然的下一步正是"看看网盘上有什么"。
+            //   （另一半在 `AddCloudVaultViewModel.pickAccount` 的判据上，见那里的注释。）
+            roots.putIfAbsent(CloudAccountKind.ONEDRIVE to session.accountId, "")
         }
 
         return vaultsOf.map { (key, vaultIds) ->

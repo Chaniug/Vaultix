@@ -76,6 +76,16 @@ fun MainShellScreen(
      */
     onOpenVaultManagement: () -> Unit,
     /**
+     * 设置 Tab 内的「解锁方式」二级页（2026-09-30 晚新增）。
+     *
+     * 与 [onOpenVaultManagement] 分开：**门锁是全局的**（管所有库），
+     * 而库管理页管的是"逐个库"。此前两者同址（两行入口打开同一页），用户真机反馈
+     * 「打开好像都是同一个页面，这不对吧」⇒ 各自成页。
+     *
+     * ⚠️ 同理不给默认值：漏接线要**编译不过**，而不是点了没反应。
+     */
+    onOpenUnlockMethod: () -> Unit,
+    /**
      * 设置 Tab 内的「权限管理」二级页（2026-09-18 新增）。
      *
      * ⚠️ 必须由宿主接线 —— `SettingsScreen` 的 [onOpenPermissions][onOpenPermissions] 参数
@@ -249,6 +259,7 @@ fun MainShellScreen(
                             onOpenImportExport = onOpenImportExport,
                             bottomInset = bottomInset,
                             onOpenVaultManagement = onOpenVaultManagement,
+                            onOpenUnlockMethod = onOpenUnlockMethod,
                             onOpenPermissions = onOpenPermissions,
                             onOpenAbout = onOpenAbout,
                         )

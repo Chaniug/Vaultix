@@ -20,6 +20,7 @@
  */
 package io.vaultix.data.kdbx
 
+import io.vaultix.common.logging.VaultixLog
 import io.vaultix.model.VaultFolder
 import io.vaultix.model.VaultItem
 import java.io.File
@@ -86,6 +87,9 @@ object Kdbx {
     /** 引擎标识（诊断日志用）。 */
     const val ENGINE_NAME: String = "kotpass"
 
+    /** 诊断日志 tag（B1 验收埋点等，见 [unlock] 的耗时分解日志）。 */
+    private const val TAG = "VaultixKdbx"
+
     /**
      * 用主密码（可选 keyfile）打开 [source] 指向的库，并登记为 [vaultId] 的会话。
      *
@@ -120,6 +124,12 @@ object Kdbx {
         password: String,
         keyFileBytes: ByteArray? = null,
     ): Result<KdbxUnlockedContent> {
+        // ★ B1 验收埋点（2026-09-30，多库锁模型定稿 §5 批次 B1）：把解锁耗时拆成
+        //   「读文件」（缓存命中后应只剩一次 stat 往返，<300ms）与「KDF+解析」
+        //   （Argon2id + 解析，B1 后的预期大头 ≈1.2s）两段 —— 真机验收用数字说话。
+        //   只记耗时与字节数，无任何敏感数据（VaultixLog 铁律）；release 构建零开销
+        //   （enabled=false 时连字符串拼接都不发生）。
+        val readStartMs = System.currentTimeMillis()
         val bytes = try {
             source.read()
         } catch (cancelled: CancellationException) {
@@ -129,8 +139,14 @@ object Kdbx {
         } catch (error: Exception) {
             return Result.failure(readFailure(error))
         }
+        val readMs = System.currentTimeMillis() - readStartMs
 
+        val openStartMs = System.currentTimeMillis()
         val opened = KdbxOpener.open(bytes = bytes, password = password, keyFileBytes = keyFileBytes)
+        val openMs = System.currentTimeMillis() - openStartMs
+        VaultixLog.d(TAG) {
+            "unlock 耗时分解：read=${readMs}ms（${bytes.size}B）+ open(KDF+解析)=${openMs}ms"
+        }
         val session = opened.getOrElse { error ->
             return Result.failure(
                 error as? KdbxFailure ?: KdbxFailure(KdbxOpenError.Unknown(error.message.orEmpty())),

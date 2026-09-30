@@ -29,9 +29,16 @@ package io.vaultix.datastore
 /**
  * 自动锁定档位。
  *
- * ⚠️ **当前实现是全局单值**（[VaultixPreferences.vaultTimeout]，存储键不带 vaultId）——
- * 尽管本类语义面向"某个库"。2026-09-29 多库锁模型定稿 **D3** 将改为**每库一份**
- * （老全局值作各库迁移初值），见 `.ai/decisions/多库锁模型-定稿.md` §2；届时本注释随迁。
+ * ## 作用域：**全局默认 + 每库可覆盖**（2026-09-30 傍晚定稿，推翻 D3 的"每库一份"）
+ *
+ * - **全局默认** = `vault_timeout` 键（`VaultixPreferences.globalVaultTimeout()`），
+ *   入口 = 设置首页「自动锁定」行；
+ * - **每库覆盖** = `vault_timeout::<vaultId>` 键（`vaultTimeout(vaultId)` / `setVaultTimeout`），
+ *   入口 = 库管理页该库的 ⋮（第一项「跟随全局设置」= 删除覆盖）；
+ * - 回退链：覆盖 → 全局键 → 更旧的 `auto_lock_minutes`（按其旧语义转换）→ [DEFAULT]。
+ *
+ * 理由与逐一取证见 `.ai/decisions/多库锁模型-定稿.md` §9（关键结论：主流密码管理器
+ * "一个设置全局生效"的前提是**一次只有一个解锁对象**，而 Vaultix 是异构双后端同时解锁）。
  *
  * [vaultTimeoutInMinutes] 语义（与 Bitwarden 一致）：
  * - `null`：永不自动锁定（[Never]）；

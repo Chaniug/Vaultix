@@ -32,6 +32,7 @@ import io.vaultix.vaultix.ui.settings.AboutAppScreen
 import io.vaultix.vaultix.ui.settings.AutofillSettingsScreen
 import io.vaultix.vaultix.ui.settings.ImportExportScreen
 import io.vaultix.vaultix.ui.settings.SettingsScreen
+import io.vaultix.vaultix.ui.settings.UnlockMethodScreen
 import io.vaultix.vaultix.ui.settings.CloudAccountsScreen
 import io.vaultix.vaultix.ui.settings.VaultManagementScreen
 import io.vaultix.vaultix.ui.shell.MainShellScreen
@@ -275,6 +276,9 @@ private fun NavGraphBuilder.vaultEntryGraph(
             // 设置 Tab 内的「密码库管理」二级页：添加库（Bitwarden / 本地 KDBX）与
             // 「点未解锁的库去解锁」现在都是那一页内部的页内动作，主壳只负责导航过去。
             onOpenVaultManagement = { navController.navigate(VaultManagementRoute) },
+            // 「解锁方式」二级页（2026-09-30 晚）：与库管理**分开** —— 门锁是全局的，
+            // 而库管理管"逐个库"。此前两行入口同址（用户反馈"打开都是同一个页面"）。
+            onOpenUnlockMethod = { navController.navigate(UnlockMethodRoute) },
             // 条目页空态里的兜底：活跃库锁着时去解它（与库数量无关，单库也需要）。
             onUnlockActiveVault = {
                 activeVaultId?.let { navController.navigate(UnlockRoute(it)) }
@@ -322,9 +326,14 @@ private fun NavGraphBuilder.settingsGraph(navController: NavHostController) {
             onOpenPermissions = { navController.navigate(PermissionsRoute) },
             // 设置首页「关于」组的二级页（2026-09-28）：源码 / 反馈 / 更新日志 / 许可。
             onOpenAbout = { navController.navigate(AboutAppRoute) },
-            // 「密码库」组现在只有一个入口：选库 / 加库 / 配解锁方式全在二级页。
+            // 「密码库」组现在只有一个入口：选库 / 加库在二级页。
             onOpenVaultManagement = { navController.navigate(VaultManagementRoute) },
+            // 「解锁方式」二级页（2026-09-30 晚）：门锁是全局的，与"逐个库"的库管理分开。
+            onOpenUnlockMethod = { navController.navigate(UnlockMethodRoute) },
         )
+    }
+    composable<UnlockMethodRoute> {
+        UnlockMethodScreen(onBack = { navController.popBackStack() })
     }
     composable<VaultManagementRoute> {
         VaultManagementScreen(

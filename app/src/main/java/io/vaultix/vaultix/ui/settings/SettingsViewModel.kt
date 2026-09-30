@@ -75,7 +75,6 @@ class SettingsViewModel @Inject constructor(
     private val unlockRecovery: UnlockRecoveryRepository,
 ) : ViewModel() {
     data class UiState(
-        val vaultTimeout: VaultTimeout = VaultTimeout.DEFAULT,
         val clipboardClearMs: Long = 30_000L,
         /**
          * 动态取色 / 防截屏。
@@ -91,28 +90,43 @@ class SettingsViewModel @Inject constructor(
     )
 
     /**
-     * **当前活跃库**的自动锁定档位（多库锁模型定稿 **D3**，2026-09-29）。
+     * **全局默认**档位（设置首页「自动锁定」行）。
      *
-     * 设置页「自动锁定」行的上方显示的就是活跃库名 ⇒ 这一行必须读写**该库**的档位。
-     * D3 之前这是**全局单值**，于是「给 A 设的档位会改到 B」——
-     * 正是用户报的「两个库互相干扰」（`.ai/issues/04-锁与解锁.md` #131）。
+     * ⚠️ 可空、初值 `null` = 「偏好还没从磁盘读出来」——与 [UiState] 那段契约同一条：
+     * 拿 [VaultTimeout.DEFAULT] 顶上会让副标题**先显示一个假答案再跳**。
+     * 渲染侧拿到 null 就不给这一行副标题。
      *
-     * 无活跃库（全锁 / 首帧未解析）时给 [VaultTimeout.DEFAULT] 占位：
-     * 主界面此时本就不可达（无已解锁库时 `RootNavState` 会收回解锁页）。
+     * ★ 2026-09-30 晚：**每库覆盖的 UI 入口已按用户要求移除**（原话「感觉冗余了」），
+     * 所以本 ViewModel 不再暴露逐库档位（`vaultTimeouts` / `setVaultTimeout(vaultId,…)` /
+     * `clearVaultTimeoutOverride` 都已删）。档位现在是**单一来源**：所有库跟随这一个值。
+     * 逐库覆盖的**数据层仍保留**（见 `VaultixPreferences.vaultTimeoutOverride` 的 KDoc：
+     * 既有数据要能被正确解读、清理迁移要用、单测钉住回退顺序），只是没有 UI 能写它。
      */
-    private val activeVaultTimeout: Flow<VaultTimeout> =
-        activeVaultStore.activeVaultId.flatMapLatest { vaultId ->
-            if (vaultId == null) flowOf(VaultTimeout.DEFAULT) else preferences.vaultTimeout(vaultId)
-        }
+    val globalVaultTimeout: StateFlow<VaultTimeout?> = preferences.globalVaultTimeout()
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = null,
+        )
+
+    init {
+        // ★ 2026-09-30 一次性迁移：清掉「D3 那版 UI（档位每库一份）」留下的覆盖键。
+        //
+        // 为什么放在这里而不是 Application 启动钩子：这是**幂等**且**不改变行为**的
+        // 清理（那些键的值与全局相同），晚跑没有代价；而它要纠正的那个症状
+        // （「改了全局、库纹丝不动」）恰好只在本 ViewModel 名下发生
+        // —— 全局行与覆盖对话框都在这一页。
+        // 门控键（`vault_timeout_scope_v2`）保证只跑一次：此后用户**有意**
+        // 在 ⋮ 里建立的覆盖不会被清掉。
+        viewModelScope.launch { preferences.purgeLegacyPerVaultTimeoutsOnce() }
+    }
 
     val state: StateFlow<UiState> = combine(
-        activeVaultTimeout,
         preferences.clipboardClearMs,
         preferences.dynamicColor,
         preferences.screenSecurity,
-    ) { timeout, clearMs, dynamic, secure ->
+    ) { clearMs, dynamic, secure ->
         UiState(
-            vaultTimeout = timeout,
             clipboardClearMs = clearMs,
             dynamicColor = dynamic,
             screenSecurity = secure,
@@ -378,20 +392,13 @@ class SettingsViewModel @Inject constructor(
     }
 
     /**
-     * 写**当前活跃库**的自动锁定档位（D3：每库一份）。
+     * 写**全局默认**档位（设置页「自动锁定」行）—— 所有库随之生效。
      *
-     * ⚠️ 与 [setDefaultVault] 的分工：那个动「冷启动默认库」，本方法只动**当前库的档位**。
-     *
-     * 库 id 取 [ActiveVaultStore.activeVaultId]；为空时用 [ActiveVaultStore.resolve]
-     * **现算一次**（async 填充的首帧可能还没到 —— 与 autofill 侧同一个理由），
-     * 仍为空则**不写**：无库可归属时静默丢弃，好过写错库。
+     * ⚠️ 不触碰任何库的覆盖键：用户在某库 ⋮ 里显式指定过的档位**不受影响**
+     * （这正是「全局默认 + 每库可覆盖」的意思）。
      */
-    fun setVaultTimeout(timeout: VaultTimeout) {
-        viewModelScope.launch {
-            val vaultId = activeVaultStore.activeVaultId.value ?: activeVaultStore.resolve()
-            if (vaultId == null) return@launch
-            preferences.setVaultTimeout(vaultId, timeout)
-        }
+    fun setGlobalVaultTimeout(timeout: VaultTimeout) {
+        viewModelScope.launch { preferences.setGlobalVaultTimeout(timeout) }
     }
 
     fun setClipboardClearMs(ms: Long) {
