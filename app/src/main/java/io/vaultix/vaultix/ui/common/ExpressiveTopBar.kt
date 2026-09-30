@@ -19,7 +19,9 @@
  *   - 右侧动作按钮**不套容器**（2026-09-21 去掉了上游的 `Surface` 胶囊 —— 理由见
  *     [VaultixExpressiveTopBar] 里那段说明）；收起时整组缩放 1.0 → 0.85，
  *     内容色在收起时向 `onSurfaceVariant` 过渡；
- *   - 标题过长时按 `onTextLayout` 的溢出反馈自动缩小字号（下限 0.72）。
+ *   - 标题过长时**在组合期一次算好字号**（按可用宽度等比缩放，下限 0.72；再放不下才由
+ *     `TextOverflow.Ellipsis` 兜底）。⚠️ 旧实现在 `onTextLayout` 里发现溢出再改 state 缩一档
+ *     ⇒ 必然"先按满字号画一帧、下一帧才变小"（用户 2026-09-30 反馈的"变大变小"）。
  * 本文件为独立实现（去掉了上游与搜索框、左右滑手势、标题点击展开耦合的部分 ——
  * Vaultix 的搜索态走独立的固定高度顶栏，见 `VaultixSearchTopAppBar`）。
  * ---------------------------------------------------------------------------
@@ -34,6 +36,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.WindowInsets
@@ -59,7 +62,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -70,12 +72,18 @@ import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextMeasurer
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.lerp
 import androidx.compose.ui.unit.sp
+import kotlin.math.roundToInt
 import io.vaultix.vaultix.ui.theme.Spacing
 
 /** 收起/展开的判定阈值（首个可见项偏移超过它即视为「已收起」）。 */
@@ -99,10 +107,53 @@ private const val TITLE_EXPANDED_SP = 26f
 private const val TITLE_COLLAPSED_SP = 16f
 
 /** 标题溢出自缩的下限。 */
+/** 标题缩放的下限（低于它就宁可走省略号，也不再继续缩 —— 再小就不好读了）。 */
 private const val TITLE_MIN_SCALE = 0.72f
 
-/** 每次检测到溢出时缩小的一档（上游同值 0.04）。 */
-private const val TITLE_SCALE_STEP = 0.04f
+/** 可点标题时给右侧展开箭头预留的宽度（测量标题时要从可用宽度里扣掉）。 */
+private val TITLE_CHEVRON_RESERVE = 30.dp
+
+/**
+ * 折叠动画期间字号是连续的（26sp → 16sp），而**测量是逐次的**。
+ * 按 0.5sp 分桶做缓存键：整段动画约 20 次测量（可忽略），又足够平滑（相邻桶只差 0.5sp）。
+ */
+private const val FONT_BUCKET_DIVISOR = 2f
+
+/**
+ * 标题在 [availablePx] 内放得下的最大字号（下限 `fontSp * TITLE_MIN_SCALE`）。
+ *
+ * ## 为什么在**组合期**算，而不是"画完发现溢出再缩"
+ *
+ * 旧实现在 `onTextLayout` 回调里判断 `hasVisualOverflow` 然后改 state 缩一档：
+ * 那是**布局之后**才知道溢出，于是必然按原字号先画一帧、下一帧才变小。
+ * 用户看到的就是标题"闪一下再缩"（2026-09-30 反馈「左侧有个变大变小的情况」），
+ * 而且一次布局只缩一档 ⇒ 特别长的标题要连跳好几帧才稳住。
+ *
+ * ⇒ 改成组合期一次算到底：**同一帧内**就决定字号，没有任何可见的中间态。
+ *   代价是一次文本测量（几十微秒），换来的是确定性 —— 同样的输入永远得到同样的字号。
+ *
+ * ## 为什么不直接换成省略号（像 [MiddleEllipsizedText] 那样）
+ *
+ * 顶栏标题的**完整可读**比"字号绝对稳定"更重要：它是用户确认"我在哪个库"的第一眼信息，
+ * 折成 `我的密…码库` 反而认不出。所以这里优先缩字号；只有当**缩到下限仍放不下**时才
+ * 交给 `TextOverflow.Ellipsis` 兜底（那时至少说明"后面还有"）。
+ */
+private fun fitTitleFontSize(
+    measurer: TextMeasurer,
+    baseStyle: TextStyle,
+    title: String,
+    availablePx: Int,
+    fontSp: Float,
+): Float {
+    if (availablePx <= 0 || title.isEmpty()) return fontSp
+    val measured = measurer
+        .measure(text = AnnotatedString(title), style = baseStyle)
+        .size.width
+    if (measured <= availablePx) return fontSp
+    // 按比例缩放（不是逐档试）：一次到位，且不同长度的标题各自得到合适的字号。
+    val ratio = availablePx.toFloat() / measured.toFloat()
+    return (fontSp * ratio).coerceAtLeast(fontSp * TITLE_MIN_SCALE)
+}
 
 /** 行高相对字号的倍数（上游同款：`lineHeight = fontSize * 1.2`）。 */
 private const val LINE_HEIGHT_RATIO = 1.2f
@@ -221,8 +272,11 @@ fun VaultixExpressiveTopBar(
         animationSpec = tween(ANIM_MS),
         label = "topbar_content_color",
     )
-    // 标题过长时按溢出反馈自缩（上限 0.72），避免尾部字符被裁。
-    var titleScale by remember(title) { mutableFloatStateOf(1f) }
+    // ⚠️ 标题的"过长怎么办"**不在渲染之后再补救** —— 见 [fitTitleFontSize]。
+    //    旧写法是在 `onTextLayout` 里发现溢出就改 state 缩一档、下一帧再量再缩（上限 0.72）。
+    //    那必然先按满字号画一帧、再往下跳，用户看到的就是"左侧标题先大后小地动了一下"
+    //    （2026-09-30 用户反馈：「左侧有个变大变小的情况，视觉体验不太好」）。
+    //    ⇒ 改成在**组合期一次算好**：不产生跳变，也不依赖"布局回调改状态"这种脆弱链路。
 
     Box(
         modifier = modifier
@@ -243,24 +297,52 @@ fun VaultixExpressiveTopBar(
             horizontalArrangement = Arrangement.spacedBy(Spacing.lg),
         ) {
             navigationIcon?.invoke()
-            // 标题溢出时逐步缩小字号（下限 0.72），避免末尾字符被裁。
             val titleText: @Composable () -> Unit = {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontSize = (titleFontSize * titleScale).sp,
-                    lineHeight = (titleFontSize * titleScale * LINE_HEIGHT_RATIO).sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = contentColor,
-                    maxLines = 1,
-                    overflow = TextOverflow.Clip,
-                    softWrap = false,
-                    onTextLayout = { result ->
-                        if (result.hasVisualOverflow && titleScale > TITLE_MIN_SCALE) {
-                            titleScale = (titleScale - TITLE_SCALE_STEP).coerceAtLeast(TITLE_MIN_SCALE)
-                        }
-                    },
-                )
+                // `BoxWithConstraints`：可用宽度**在组合期**就能拿到（不像 `onTextLayout`
+                // 要等布局完），所以能一次算好字号、不产生"先大后小"的跳变。
+                BoxWithConstraints {
+                    val measurer = rememberTextMeasurer()
+                    val density = LocalDensity.current
+                    // 保留 base 样式（letterSpacing / 字重都在里面）：只量裸文本宽度会与
+                    // 实际渲染宽度差一截，而差在哪里恰恰是"文字多的语言"最容易出问题的地方。
+                    val baseStyle = MaterialTheme.typography.headlineSmall
+                    // 可点时标题右边还有个展开箭头，要从可用宽度里扣掉，否则标题会与箭头相撞。
+                    val reservePx = with(density) {
+                        (if (onTitleClick == null) 0.dp else TITLE_CHEVRON_RESERVE).roundToPx()
+                    }
+                    // 量化字号缓存键：折叠动画期间 `titleFontSize` 是**连续**变化的（26→16sp），
+                    // 直接用它会每帧都重算一次测量。按 0.5sp 粒度分桶 ⇒ 整段动画约 20 次测量，
+                    // 既便宜又足够平滑（每桶之间字号只差 0.5sp，看不出台阶）。
+                    val fontBucket = (titleFontSize * FONT_BUCKET_DIVISOR).roundToInt()
+                    val fittedFontSize = remember(
+                        title,
+                        constraints.maxWidth,
+                        reservePx,
+                        fontBucket,
+                        baseStyle,
+                    ) {
+                        fitTitleFontSize(
+                            measurer = measurer,
+                            baseStyle = baseStyle.copy(fontSize = titleFontSize.sp),
+                            title = title,
+                            availablePx = constraints.maxWidth - reservePx,
+                            fontSp = titleFontSize,
+                        )
+                    }
+                    Text(
+                        text = title,
+                        style = baseStyle,
+                        fontSize = fittedFontSize.sp,
+                        lineHeight = (fittedFontSize * LINE_HEIGHT_RATIO).sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = contentColor,
+                        maxLines = 1,
+                        // ⚠️ 兜底是省略号而**不是** `Clip`：连最小字号都放不下时，
+                        //    把尾巴裁掉会让用户以为标题就这么短；省略号至少说明"后面还有"。
+                        overflow = TextOverflow.Ellipsis,
+                        softWrap = false,
+                    )
+                }
             }
             if (onTitleClick == null) {
                 titleText()

@@ -100,9 +100,14 @@
          Bitwarden 只给域名（不带 https、不带路径），KDBX 给来源与路径。 -->
     <string name="vault_origin_onedrive">OneDrive · %1$s</string>
     <string name="vault_origin_webdav">WebDAV · %1$s</string>
-    <!-- 库状态行 = 来源 + 条目数。⚠️ 库**未解锁**时条目数不可知 ⇒ 只显示来源、不给数字
-         （显示 0 会是假信息：那是"不知道"，不是"没有"）。 -->
-    <string name="vault_status_with_count">%1$s · %2$d 个条目</string>
+    <!-- 库状态 = 来源 + 条目数（列表状态行与 ⋮ 菜单卡片共用同一份数据）。
+         ⚠️ 库**未解锁**时条目数不可知 ⇒ 只显示来源、不给数字（显示 0 会是假信息：
+         那是"不知道"，不是"没有"）。 -->
+    <string name="vault_item_count_only">%1$d 个条目</string>
+    <!-- ⋮ 菜单的动作分组标题（2026-09-30 方案 B）：把"去哪"与"做什么"分开。
+         「锁定」不归任何一组，单独用分隔线隔开（破坏性动作不挨着常用动作）。 -->
+    <string name="items_menu_group_navigate">前往</string>
+    <string name="items_menu_group_actions">操作</string>
     <string name="vault_item_count">%1$d 项</string>
     <string name="vault_add_fab">添加密码库</string>
     <string name="vault_cloud_label">Bitwarden 同步库</string>

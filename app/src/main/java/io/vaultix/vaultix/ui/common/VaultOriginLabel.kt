@@ -71,6 +71,34 @@ internal fun serverHostOf(origin: String): String {
     return withoutScheme.substringBefore('/').trim()
 }
 
+/**
+ * 「当前库」的展示数据 —— **列表状态行**与 **⋮ 菜单顶部的库卡片**共用同一份。
+ *
+ * 两处共用是刻意的：它们要回答的是同一个问题（我在哪个库、里面有多少条），
+ * 各拼一遍必然漂移（典型症状：改了一处文案，另一处还是老措辞）。
+ * 差异只在**排版密度**：列表里一行（中间省略），菜单卡片里可以给全。
+ *
+ * @property countText 条目数文案；**null = 未解锁**（此刻条目数不可知）⇒ 调用方不显示它
+ *   —— 显示 0 就是把"不知道"说成"没有"。
+ */
+data class VaultCardInfo(
+    val name: String,
+    val origin: String,
+    val countText: String?,
+)
+
+/** 由库摘要 + 条目总数组装 [VaultCardInfo]。 */
+@Composable
+fun vaultCardInfoOf(vault: VaultSummary, itemCount: Int): VaultCardInfo = VaultCardInfo(
+    name = vault.name,
+    origin = vaultOriginLabel(vault),
+    countText = if (vault.unlocked) {
+        stringResource(R.string.vault_item_count_only, itemCount)
+    } else {
+        null
+    },
+)
+
 /** KDBX 的来源分类（解析结果；供 UI 与单测共用）。 */
 internal sealed interface KdbxSourceTarget {
     /** 本地 SAF 文件：只有文件名可展示（`content://` 不是给用户看的）。 */

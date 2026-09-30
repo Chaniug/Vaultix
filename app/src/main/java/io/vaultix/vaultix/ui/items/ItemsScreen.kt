@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
@@ -118,7 +119,10 @@ import io.vaultix.vaultix.ui.common.VaultixSearchTopAppBar
 import io.vaultix.vaultix.ui.common.itemTypeLabelRes
 import io.vaultix.vaultix.ui.common.rememberImmersiveBarPadding
 import io.vaultix.vaultix.ui.common.rememberScrollCollapseFraction
+import io.vaultix.vaultix.ui.common.MiddleEllipsizedText
 import io.vaultix.vaultix.ui.common.toggleSelection
+import io.vaultix.vaultix.ui.common.VaultCardInfo
+import io.vaultix.vaultix.ui.common.vaultCardInfoOf
 import io.vaultix.vaultix.ui.common.vaultOriginLabel
 import io.vaultix.vaultix.ui.common.VaultixWavyProgressBar
 import io.vaultix.vaultix.ui.shell.BottomDockOccupiedHeight
@@ -188,19 +192,29 @@ private fun ReadOnlyVaultNotice() {
 /**
  * 列表顶部的「密码库状态」行：**来源 + 条目数**（2026-09-30 用户要求）。
  *
- * 例：`vault.bitwarden.com · 42 个条目` / `OneDrive · Vaultix/我的库.kdbx · 12 个条目`。
+ * 例：`vault.bitwarden.com` · `42 个条目`；`OneDrive · Vaultix/我的库.kdbx` · `12 个条目`。
+ *
+ * ## 长文本怎么处理（用户问「需要分开或者是缩小字号吗」）
+ *
+ * **不缩字号**（理由见 `ui/common/MiddleEllipsis.kt` 的文件头：它是常驻信息，
+ * 缩字号等于每一眼都在付代价，而且小屏缩得最狠）。改用两条各自的规则：
+ *
+ * 1. **来源（域名 / 路径）走中间省略**（保头保尾）：路径的头（哪台服务器）与尾
+ *    （哪个文件）最关键，中间目录最可省。尾部省略会把"打开的是哪个库"先吃掉；
+ * 2. **条目数**用 `weight` 之外的位置 —— 它**不参与压缩**，永远不会被长路径挤掉。
+ *    这是本行信息的"锚点"：来源可以被省略号截，但"有多少条"必须始终完整可读。
+ *
+ * ⇒ 最坏情况（WebDAV 长路径 + 窄屏）长这样：
+ * `WebDAV · nas.local:50…我的密码库.kdbx        12 个条目`
  *
  * ## 为什么是**冷**色的一行小字，而不是卡片 / 徽标
  *
  * 它是"我在哪"的**环境信息**，不是待办、不是状态告警（告警有 [SyncNoteBanner] 与
  * [ReadOnlyVaultNotice] 各司其职）。做成卡片会与真正的条目卡片抢视觉权重 ——
  * 用户扫列表时第一眼应该落在条目上，不是落在"我在哪个库"。
- *
- * ⚠️ 文案由调用方组装（见 [ItemsList] 的 `vaultStatus`）：本函数不碰
- * "域名怎么取 / 路径怎么拼" —— 那套口径集中在 `ui/common/VaultOriginLabel.kt`。
  */
 @Composable
-private fun VaultStatusRow(text: String) {
+private fun VaultStatusRow(card: VaultCardInfo) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -214,15 +228,25 @@ private fun VaultStatusRow(text: String) {
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.width(Spacing.sm))
-        Text(
-            text = text,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            // 网盘路径可能很长（WebDAV 是"主机 + 完整路径"）⇒ 单行截断，
-            // 不换行撑高整行。要看全就点 ⋮ 里的「切换密码库」，那里有完整信息。
-            overflow = TextOverflow.Ellipsis,
+        // 来源吃满剩余宽度、由 [MiddleEllipsizedText] 自己决定折到几个字符。
+        MiddleEllipsizedText(
+            text = card.origin,
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.bodySmall.copy(
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            ),
         )
+        if (card.countText != null) {
+            Spacer(Modifier.width(Spacing.sm))
+            // ⚠️ **不加 weight、不设 maxLines 压缩**：条目数是这一行的锚点信息，
+            //    长路径把它挤成省略号就失去意义了。宁可来源先被折短。
+            Text(
+                text = card.countText,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+            )
+        }
     }
 }
 
@@ -392,6 +416,11 @@ fun ItemsScreen(
     val filterRowInset = rememberQuickFilterRowInset(quickFiltersExpanded)
     val listTopInset = itemsTopInset(searchActive, barPadding, filterRowInset, state.syncNote != null)
     val readOnlyVault = readOnlyVaultOf(state.vault?.kind)
+    // 「这个库在哪 · 有多少条」（2026-09-30 用户要求）。
+    // 在**本层**算一次、供顶栏的 ⋮ 菜单卡片与列表状态行**共用** ——
+    // 两处若各算各的，迟早出现"卡片里 42 条、列表里 41 条"这种差一条的鬼故事。
+    // ⚠️ **未解锁时 countText 为 null**：此刻条目数不可知，显示 0 就是把"不知道"说成"没有"。
+    val vaultCard = state.vault?.let { vault -> vaultCardInfoOf(vault, state.items.size) }
     // 搜索关闭动作（点 × 与系统返回共用）：退出搜索态 + 清空输入。
     val closeSearch: () -> Unit = { searchActive = false; viewModel.setQuery("") }
     SearchBackHandler(enabled = searchActive, onClose = closeSearch)
@@ -522,6 +551,7 @@ fun ItemsScreen(
                     onRetrySync = viewModel::retrySync,
                     onLock = { viewModel.lockNow(onLocked) },
                     onSwitchVault = onSwitchVault,
+                    vaultCard = vaultCard,
                 )
             }
         }
@@ -613,6 +643,8 @@ private fun ItemsBody(
     onDelete: (VaultItem) -> Unit,
     /** 只读库（KDBX 阶段 A）：列表顶部给一行说明，见 [ReadOnlyVaultNotice]。 */
     readOnly: Boolean = false,
+    /** 「这个库在哪 · 有多少条」（null = 未知则不画）。见 [ItemsScreen] 里的 `vaultCard`。 */
+    vaultCard: VaultCardInfo? = null,
 ) {
     if (visibleItems.isEmpty()) {
         // 空态 / 搜不到：同样要让位，否则文案与插画被半透明顶栏压住。
@@ -626,17 +658,8 @@ private fun ItemsBody(
         )
         return
     }
-    // 「这个库在哪 · 有多少条」（2026-09-30 用户要求）。
-    // ⚠️ **未解锁时不给数字**：此刻条目数不可知，显示 0 就是把"不知道"说成"没有"
-    //    —— 与 [ItemsEmptyState] 区分「读不到 / 真的没有」是同一条纪律。
-    val vaultStatus = state.vault?.let { vault ->
-        val origin = vaultOriginLabel(vault)
-        if (vault.unlocked) {
-            stringResource(R.string.vault_status_with_count, origin, state.items.size)
-        } else {
-            origin
-        }
-    }
+    // 「这个库在哪 · 有多少条」由**本层**算好后传进来（顶栏的 ⋮ 菜单卡片用的是同一份，
+    // 见 [ItemsScreen] 里的 `vaultCard`）—— 两处各算各的迟早差一条。
     ItemsList(
         groups = groups,
         listState = listState,
@@ -654,7 +677,7 @@ private fun ItemsBody(
         syncStates = state.syncStates,
         onDelete = onDelete,
         readOnly = readOnly,
-        vaultStatus = vaultStatus,
+        vaultCard = vaultCard,
     )
 }
 
@@ -856,6 +879,8 @@ private fun BoxScope.ItemsTopBar(
     onRetrySync: () -> Unit,
     onLock: () -> Unit,
     onSwitchVault: (() -> Unit)?,
+    /** 当前库（给 ⋮ 菜单顶部的卡片用）；null = 库未知，卡片不画。 */
+    vaultCard: VaultCardInfo?,
 ) {
     VaultixExpressiveTopBar(
         title = title,
@@ -894,6 +919,7 @@ private fun BoxScope.ItemsTopBar(
                 )
             }
             ItemsMoreMenu(
+                vaultCard = vaultCard,
                 onSwitchVault = onSwitchVault,
                 onOpenTotp = onOpenTotp,
                 onOpenTrash = onOpenTrash,
@@ -905,11 +931,24 @@ private fun BoxScope.ItemsTopBar(
 }
 
 /**
- * 顶栏「更多」菜单（⋮）：**切换密码库** / （验证码） / 回收站 / 同步 / 锁定查看层。
+ * 顶栏「更多」菜单（⋮）：**当前库卡片** + 按性质分组的动作（2026-09-30 用户选定「方案 B」）。
  *
- * ⚠️ 菜单项顺序 = 使用频率（2026-09-14 用户指定的重排）：
- * 回收站 → 同步 → 锁定；「锁定」是破坏性动作，用 error 色并单独用分隔线隔开
- * （对齐 M3「破坏性动作不挨着常用动作」的建议）。
+ * ## 为什么改（原实现是四件事平铺成一列）
+ *
+ * 平铺的毛病不在"不够好看"，而在**把四种性质不同的东西混在一起**：
+ *
+ * | 动作 | 性质 |
+ * |---|---|
+ * | 切换密码库 | **换上下文**（我在看哪个库） |
+ * | 验证码 / 回收站 | **去另一个页面**（不改数据） |
+ * | 同步 | 对当前库**做动作** |
+ * | 锁定 | **破坏性动作** |
+ *
+ * ⇒ 顶上一张卡片先回答"我在哪、有多少条"，下面按**前往 / 操作**分组。
+ *   分组标题给的是"这几项是同一类事"这条信息 —— 那是平铺列表里**读不出来的东西**。
+ *
+ * ⚠️ 菜单项顺序 = 使用频率（2026-09-14 用户指定的重排）：回收站 → 同步 → 锁定。
+ * 「锁定」不归任何一组，单独用分隔线隔开（破坏性动作不挨着常用动作，对齐 M3 建议）。
  *
  * ⚠️ 「切换密码库」放在**最上面**（2026-09-14，issue #96）：多库并存时这是
  * 「我要换个库看」的**唯一正确语义入口**。此前用户能碰到的只有「锁定」
@@ -922,6 +961,8 @@ private fun BoxScope.ItemsTopBar(
  */
 @Composable
 private fun ItemsMoreMenu(
+    /** 当前库（null = 库未知，此时不画卡片，菜单退化为纯动作列表）。 */
+    vaultCard: VaultCardInfo?,
     onSwitchVault: (() -> Unit)?,
     onOpenTotp: (() -> Unit)?,
     onOpenTrash: () -> Unit,
@@ -937,13 +978,17 @@ private fun ItemsMoreMenu(
             )
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            if (vaultCard != null) {
+                MenuVaultCard(card = vaultCard)
+                HorizontalDivider()
+            }
+            MenuGroupTitle(R.string.items_menu_group_navigate)
             // 只有一个库时不必显示（没有可切换的对象），故回调为 null 即整项隐藏。
             if (onSwitchVault != null) {
                 MenuAction(Icons.Filled.SwapHoriz, R.string.items_switch_vault) {
                     expanded = false
                     onSwitchVault()
                 }
-                HorizontalDivider()
             }
             if (onOpenTotp != null) {
                 MenuAction(Icons.Filled.QrCode2, R.string.totp_screen_title) {
@@ -955,6 +1000,7 @@ private fun ItemsMoreMenu(
                 expanded = false
                 onOpenTrash()
             }
+            MenuGroupTitle(R.string.items_menu_group_actions)
             MenuAction(Icons.Filled.Refresh, R.string.items_sync) {
                 expanded = false
                 onRetrySync()
@@ -968,6 +1014,56 @@ private fun ItemsMoreMenu(
         }
     }
 }
+
+/**
+ * 菜单顶部的**当前库卡片**：库名 + 来源 · 条目数。
+ *
+ * ⚠️ 这里**给全**（`maxLines = 2` 换行），与列表状态行的"中间省略"是**刻意的分层**：
+ * - 列表行：常驻、窄、必须一眼扫过 ⇒ 折到自己塞得下的长度（保头保尾）；
+ * - 菜单卡片：用户主动展开、空间宽裕 ⇒ 换行显示**完整路径**。
+ * 同一份数据、两种密度 —— 而不是让两处都去迁就最窄的那个。
+ */
+@Composable
+private fun MenuVaultCard(card: VaultCardInfo) {
+    Column(
+        modifier = Modifier
+            .widthIn(min = MENU_CARD_MIN_WIDTH)
+            .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
+    ) {
+        Text(
+            text = card.name,
+            style = MaterialTheme.typography.titleSmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        // 来源与条目数拼成一行：分号（`·`）分隔，条目数缺失（未解锁）时只剩来源。
+        val subtitle = listOfNotNull(card.origin, card.countText).joinToString(separator = " · ")
+        Text(
+            text = subtitle,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = MENU_CARD_SUBTITLE_LINES,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+/** 分组小标题：只回答"下面这几项是同一类事"，不加图标（避免与动作项抢辨识度）。 */
+@Composable
+private fun MenuGroupTitle(@StringRes labelRes: Int) {
+    Text(
+        text = stringResource(labelRes),
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(start = Spacing.lg, top = Spacing.sm, bottom = Spacing.xs),
+    )
+}
+
+/** 菜单卡片的最小宽度：窄屏上也要像个卡片，而不是一行被折成两截的碎字。 */
+private val MENU_CARD_MIN_WIDTH = 208.dp
+
+/** 卡片副标题最多两行（长 WebDAV 路径折一行，再长才截断）。 */
+private const val MENU_CARD_SUBTITLE_LINES = 2
 
 /** 菜单项（图标 + 文案；[destructive] 用 error 色标出不可逆 / 中断性动作）。 */
 @Composable
@@ -1138,13 +1234,12 @@ private fun ItemsList(
      */
     readOnly: Boolean = false,
     /**
-     * 「这个库在哪 · 有多少条」的状态行文案（null = 库未知，整行不画）。
+     * 「这个库在哪 · 有多少条」（null = 库未知，整行不画）。
      *
-     * 由 [ItemsBody] 组装（它才有 [io.vaultix.model.VaultSummary] 与条目总数），
-     * 本函数只负责画 —— 分离的理由是**这里不再需要知道"域名/路径怎么来的"**，
-     * 那条口径集中在 `ui/common/VaultOriginLabel.kt`。
+     * 由 [ItemsBody] 经 `vaultCardInfoOf` 组装（那里才有 [io.vaultix.model.VaultSummary]
+     * 与条目总数），本函数只负责画 —— "域名/路径怎么来"的口径集中在 `ui/common/VaultOriginLabel.kt`。
      */
-    vaultStatus: String? = null,
+    vaultCard: VaultCardInfo? = null,
 ) {
     LazyColumn(
         state = listState,
@@ -1166,8 +1261,8 @@ private fun ItemsList(
         // 「这个库在哪 · 有多少条」放**最上面**（2026-09-30 用户要求）：它是列表的
         // "表头"（我在哪个库、里面有多少东西），先有上下文再看内容。
         // 只读提示排在它下面 —— 那是"为什么按钮少了"的解释，属于对**内容**的补充。
-        if (vaultStatus != null) {
-            item(key = "vault-status") { VaultStatusRow(text = vaultStatus) }
+        if (vaultCard != null) {
+            item(key = "vault-status") { VaultStatusRow(card = vaultCard) }
         }
         if (readOnly) {
             // 顶部一行如实说明（见 [ReadOnlyVaultNotice] 的 KDoc）：只读是**阶段限制**，
