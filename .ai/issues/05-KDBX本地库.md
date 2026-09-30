@@ -544,3 +544,47 @@ KdbxUnlockPayload.encode(masterPassword, keyFileBytes)    // ← 组装信封用
 **回归门禁**：`data/kdbx` 的 `KdbxCreatorTest` 两条 ——
 `诊断_新建不会改动调用方传进来的 keyfile 字节` 与
 `校验与解锁都不会改动调用方的 keyfile 字节`（后者还断言"同一份字节连用两次都成功"）。
+
+## 136. ⚠️ kotpass 的 `getGroupBy` 在真实库上会返回 null（同一份数据直接遍历就能找到）（2026-09-30）
+
+**怎么发现的**：写阶段 B 的条目写回（W1）单测时，`从回收站恢复回原分组` 这条
+在 `restored.getGroupBy { uuid == group.uuid }!!` 处 NPE。加探针打出来的是：
+
+```
+直接子组=true  getGroupBy(工作)=false  getGroupBy(根)=false   子组清单=[工作, Recycle Bin]
+```
+
+即：**那个组确实是 `content.group.groups` 的直接子项**（`groups.any { it.uuid == 目标 }` 为 true），
+但 `getGroupBy` 返回 null；更离谱的是**连根组自己**（谓词恒真的那个）也返回 null。
+
+**上游源码看着没问题**（`develop` 分支）：
+
+```kotlin
+fun KeePassDatabase.getGroupBy(predicate: Group.() -> Boolean): Group? =
+    if (predicate(content.group)) content.group
+    else content.group.findChildGroup(null, predicate)?.let { (_, group) -> group }
+```
+
+字节码也与之逐条对应（`ifeq` → else 分支）。⇒ **行为与源码不符，原因未查清**
+（怀疑与 `findChildGroup` 内部的 `GroupOverride` 判定或某个其它分支有关），
+但**这不重要** —— 重要的是结论：
+
+> **不能拿它做数据安全判断。** 它返回 null 时的后果是"以为分组不存在"，
+> 而我们的用法正是"分组存在性守卫"（防 `modifyGroup` 匹配不到 ⇒ 条目静默落到根组）。
+
+**处置**：生产代码与测试都**不再用 `getGroupBy`/`getEntryBy` 类查找**，
+改成自己走一遍树（`Group.containsGroup`，几行、确定性由我们掌握）。
+⚠️ 注意区分上游同一族的几个函数，它们的 lambda 形态**不一样**，
+混用直接编译不过（本项目已踩两次）：
+
+| 函数 | 谓词形态 | 写法 |
+|---|---|---|
+| `getEntry`（无 By） | 普通 lambda | `{ it.uuid == x }` |
+| `getEntryBy` | **接收者** lambda | `{ uuid == x }` |
+| `getGroup`（无 By） | 普通 lambda | `{ it.uuid == x }` |
+| `getGroupBy` | **接收者** lambda | `{ uuid == x }`（⚠️ 就是本文这条，别用） |
+
+**判据（写进纪律）**：
+> **第三方 API 的行为与它的源码不一致时，以"行为"为准，并且不要再依赖它做判断。**
+> 尤其是"找不到就返回 null"这种**静默失败**签名 —— 它会让调用方把
+> "查不动"当成"不存在"。自己写几行遍历比赌一个行为可疑的 API 便宜得多。
