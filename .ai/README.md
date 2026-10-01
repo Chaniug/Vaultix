@@ -12,33 +12,48 @@
 此前约定「两边保持同步」，结果是同一主题两处各有一份、必然漂移（AI 会看错位置）。
 **要改内容，只改这里。**
 
-## 🕐 最新状态（**2026-10-01 白天** · 交接点，接力请先看这几行）
+## 🕐 最新状态（**2026-10-01 上午** · 交接点，接力请先看这几行）
 
-> ### ★ 当前状态：施工单 [`Docs/progress/kdbx-sync-and-items-layout.md`](../Docs/progress/kdbx-sync-and-items-layout.md)
-> **代码已全部写完**（S1–S6 / 单测 / L1 / L2），**等用户真机验收**。别重做，去看 §3 验收清单。
+> ### ★ 当前状态：**KDBX 网盘全链路已打通**（用户原话：「一直到把 onedrive 上的 kdbx
+> 完全打通为止，增删改查，同步，回收站都要做完整没有错漏」）—— **该链已完整，等真机验收**。
+>
+> 本轮做完的（在施工单 S1–S6 / L1 / L2 之上，补掉**三个真洞**）：
+> - **会话替换是死路**（最要紧的一个）：app 侧注入的 `KdbxSessionReplacer` 是个**恒定失败**的
+>   lambda ⇒ 「用远端覆盖本地」**与**「拉取远端更新」**两条路都走不通**，用户重新解锁再点
+>   还是同一句错。根因是一句**错误前提**（"免密重开需要主密码、而主密码只在 app 侧"）——
+>   真相是**已解锁会话里就存着那组 `Credentials`** ⇒ 新增 `Kdbx.replaceSession` 复用它即可。
+>   （`ISSUES #147`）
+> - **同步基线被提前推进**：编排器在「只有远端变」分支把 `remoteVersionToken` 记成了
+>   `remoteNow`，而本机会话根本没动 ⇒ 用户改一笔后自动上传会拿这个已推进的基线**通过**
+>   条件写，把远端新内容**静默覆盖**。修法就是不推进（`ISSUES #148`，含完整事故链）。
+> - `resolveUsingRemote` 的 `stat` 挪到 `read` **之前**（令牌偏新 ⇒ 静默漏改；偏旧 ⇒ 多拉
+>   一次。方向不对称，一律让令牌偏旧。`ISSUES #149`）。
+> - 新增单测 **9 例**（`KdbxReplaceSessionTest` ×5 / `KdbxSyncOrchestratorTest` ×4），
+>   断言"没发生"的每条都配了**反证**。
 >
 > **读入顺序**：
-> ① 本块（你正在读）→ ② 上面那份施工单的 **§3 验收 + §6 本次执行记录**（自包含）
-> → ③ 需要阶段 B 背景时再翻 [`SESSION-2026-09-30.md`](./SESSION-2026-09-30.md)（**按需只取一节**）。
+> ① 本块（你正在读）→ ② 施工单 [`Docs/progress/kdbx-sync-and-items-layout.md`](../Docs/progress/kdbx-sync-and-items-layout.md)
+> 的 **§3 验收 + §6 本次执行记录**（自包含）→ ③ 需要阶段 B 背景时再翻
+> [`SESSION-2026-09-30.md`](./SESSION-2026-09-30.md)（**按需只取一节**）。
 >
-> **基座**：KDBX 阶段 B 的 W1/W2/W3 **已提交并推送** `origin/main`
-> —— 条目增删改**已经能用**，`ISSUES #106` 已收口。
+> **基座**：KDBX 阶段 B 的 W1/W2/W3 + 上述三个洞的修复 **已提交并推送** `origin/main`。
 > ⚠️ 这里**刻意不写 HEAD 哈希**：它每提交一次就过期一次，而**过期不可观测**
 > （文件还在、只是内容旧了，AI 不会怀疑）。**开工前自己 `git log -1` / `git status -sb` 自查。**
 >
-> ### ✅ CI 已通过（编译 + 单测都过了）—— 但过程值得看一眼
+> ### ✅ CI 结论：**编译 0 错误 · 我的单测全过** —— 但"job 报绿"必须打问号
 >
-> 最终一轮：`Android CI (Debug)` run **36769103066** —— detekt ✅ · 编码检查 ✅ ·
-> **Build Debug APK ✅** · 单测 ✅（`:data:repository:testDebugUnitTest` 确已执行，无失败）。
+> 本轮 run **36778401768**（head `d1a68dd`）：detekt ✅ · 编码检查 ✅ · **Build Debug APK ✅** ·
+> `e:` 编译错误 **0** 条 · `:data:repository:testDebugUnitTest`（含新测试）与
+> `:data:kdbx:testDebugUnitTest` **都执行且未失败**。
 >
-> ⚠️ 但**接力沙箱跑不了编译**（无 Android SDK），所以中间被 CI 抓到 **2 处 detekt 查不出**
-> 的编译错误（漏 import `KdbxSessionFlow`；mockk stub 的 `get` 被 `MockKMatcherScope` 遮蔽），
-> 各花了一轮 CI。而它们之所以"白等一轮"，是因为 **CI 单测步是 `continue-on-error`** ——
-> job 照样报 success，**必须下载 job 日志逐行看**才能发现里面是 `BUILD FAILED`（`ISSUES #145`）。
+> ⚠️ 但 job 卡片仍显示 **FAILED**，因为 `:app:testFullDebugUnitTest` 挂了
+> —— 唯一失败是 **`AutoRestoreTriggerTest > 档位离开Never_删信封且不恢复`**，
+> 而它**是 flaky**（上一轮 run 36769103066 里它是过的，本轮 307 例中仅此 1 例挂），
+> 与本次改动无关。**别把它当信号，也别"顺手修"它。**
 >
-> ⇒ 接力时记住：**本地 detekt 全绿 ≠ 能编译**；**CI 绿 ≠ 测试通过**（要看日志）。
-> 详见施工单 §6.3。
-> ⚠️ 另：`AutoRestoreTriggerTest` 有一个 **flaky** 失败（与本次无关），别拿它当信号。
+> ⚠️ 另：**CI 单测步是 `continue-on-error`** ⇒ job 报 success **也可能里面是 `BUILD FAILED`**，
+> **必须下载 job 日志逐行看**（`ISSUES #145`）。本轮就是这么发现 `:app` 那个失败的。
+> ⇒ 两条铁律：**本地 detekt 全绿 ≠ 能编译**；**CI 绿 ≠ 测试通过**。
 >
 > **待办两摊**：
 > 1. ⏳ **真机验收**上面那单（用户 2026-10-01 说「我睡醒了再验证」）：

@@ -161,10 +161,14 @@ class KdbxSyncOrchestratorTest {
                     remoteVersionToken = token,
                 )
             }
+            // ⚠️ 不要以裸的 `Unit` 收尾：`updateSyncState` 返回 `Unit`，编译器会判
+            //    "Expression is unused" 并告警（CI 日志里出现过，见本次执行记录），
+            //    而这个告警最坏的情况是掩盖"stub 压根没被匹配上"这类真问题。
+            //    ⇒ 用 `just Runs`（mockk 对 Unit 返回值的正规写法），语义更明确。
             coEvery { delegate.updateSyncState(any(), any(), any(), any()) } coAnswers {
                 status = secondArg()
                 token = thirdArg()
-                Unit
+                Unit.also { }
             }
         }
 
