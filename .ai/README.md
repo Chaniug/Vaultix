@@ -55,6 +55,22 @@
 >
 > **版本**：`VERSION` 由 `0.7.0` 升到 **`0.8.0`**（原值对应的 `v0.7.0` tag 已存在，
 > 直接发会撞已存在的 tag）。`release.yml` 监听 `push → rele`，合入即发布。
+>
+> ### ✅ 已发布：**`v0.8.0`（Stable）** —— 2026-10-01 10:19 UTC
+> - `main` 快进合入 `rele`（`a072f17 → 4ceaf15`，fast-forward，无冲突）
+> - 发布流水线 run `36847685159` **25/25 步骤 success**，含
+>   `Build Release APK (stable, minified)`（**混淆版编译通过**）与 `Validate signing secrets`
+> - 产物：`app-full-release.apk` **7,361,827 B** + `checksums-sha256.txt`
+> - commit `4ceaf156a71150e4d469d83cb4188f836da25b9a`，ref `refs/heads/rele`
+> - `main` 与 `origin/main`、`rele` 与 `origin/rele` 均齐平，工作树干净
+>
+> ⏳ **唯一未闭环项（待你验）**：本轮是**纯视觉改动**，沙箱无 Android SDK ⇒
+> 观感从未被任何人的眼睛看过。装 `v0.8.0` 后请重点看两处：
+> ① 「+ 添加密码库 → 本地 KDBX 文件」页在**打开态**与**新建态**下的排布是否一致、
+>    模式切换器选中项是否"看起来是选中的"（不再发灰）；
+> ② 密码条目列表里，**标题与副标题的间距**、以及标题相对左侧图标的**垂直重心**。
+> 若不满意，改的是 `EntryCard.kt` 的 `EntryCardTitleLineHeight` / `EntryCardTextSpacing`
+> 两个常量（**改一个要同步全部 4 个列表页**，见 8.4 本轮新增纪律 ②）。
 
 ## 🕐 上一状态（**2026-10-01 上午** · KDBX 网盘全链路）
 
