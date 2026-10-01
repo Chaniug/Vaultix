@@ -308,8 +308,10 @@ job 照样报 `success`，只有**下载 job 日志逐行看**才发现里面是
 
 - detekt（五源集）：**0 违规**，且做了**探针自证**（塞超长常量命中 `MaxLineLength`）。
 - 自检：孤儿串 **114 < 基线 118**；KDoc 粗体紧接斜杠 **0**。
-- CI run **36778401768**（head `d1a68dd`）：detekt ✅ · 编码 ✅ · **Build Debug APK ✅** ·
-  `e:` **0**；`:data:repository` / `:data:kdbx` 单测**都执行且未失败**。
+- CI run **36796382286**（head `81ecf39`，含警告修复；上一轮 36778401768 / `d1a68dd` 结论相同，
+  两轮互为复现）：detekt ✅ · 编码 ✅ · **Build Debug APK ✅** ·
+  `e:` **0**；`:data:repository` / `:data:kdbx` 单测**都执行且未失败**；
+  新测试文件**零警告**。
 - ⚠️ job 卡片 **FAILED** 只因既有 **flaky**（`AutoRestoreTriggerTest > 档位离开Never…`，
   上一轮是过的）。**别算到本轮账上，也别顺手修。**
 - ⚠️ 日志里 `w: …KdbxSyncOrchestratorTest.kt:167 Expression is unused` 是编译器警告

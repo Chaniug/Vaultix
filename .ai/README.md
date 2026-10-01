@@ -42,9 +42,11 @@
 >
 > ### ✅ CI 结论：**编译 0 错误 · 我的单测全过** —— 但"job 报绿"必须打问号
 >
-> 本轮 run **36778401768**（head `d1a68dd`）：detekt ✅ · 编码检查 ✅ · **Build Debug APK ✅** ·
-> `e:` 编译错误 **0** 条 · `:data:repository:testDebugUnitTest`（含新测试）与
-> `:data:kdbx:testDebugUnitTest` **都执行且未失败**。
+> 最终 run **36796382286**（head `81ecf39`，含警告修复）：detekt ✅ · 编码检查 ✅ ·
+> **Build Debug APK ✅** · `e:` 编译错误 **0** 条 · `:data:repository` 与 `:data:kdbx` 的
+> `testDebugUnitTest` **都执行且未失败** · 新测试文件**零警告**（那个
+> `Expression is unused` 已消除）。
+> （上一轮 run 36778401768 / head `d1a68dd` 结论相同，两轮互为复现。）
 >
 > ⚠️ 但 job 卡片仍显示 **FAILED**，因为 `:app:testFullDebugUnitTest` 挂了
 > —— 唯一失败是 **`AutoRestoreTriggerTest > 档位离开Never_删信封且不恢复`**，
