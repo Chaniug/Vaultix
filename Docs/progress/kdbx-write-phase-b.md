@@ -147,17 +147,42 @@ UI（不感知库类型）
 - [x] ✅ 测试：`KdbxCreatorTest` 11 条（往返开库 / 版本 4.1 / **cipher UUID 逐字节钉死** /
       GZip / 回收站组 / 空内容 / keyfile 三态 / **3.1 被拒** / 拒绝文案不许指向 3.x）。
       ★ 变异验证：把 `SUPPORTED_MAJOR` 改回 3 ⇒ **恰好 1 条红**（非假绿）。
-- [ ] ⬜ **落盘三个来源**：SAF（`CREATE_DOCUMENT` 建新文件）/ OneDrive（上传新文件）/
-      WebDAV（`PUT` 新文件）。⚠️ `OneDriveKdbxFileSource` 目前只有"解析已有 origin"，
-      要补"创建远端新文件"；`KdbxFileSource.write(expectedVersion = null)` 这条路
-      **未在新文件上实机验证过**（SAF 侧理论上可用：`"wt"` 覆盖 + 写后读回校验）。
-- [ ] ⬜ **仓储入口**：`domain` 新接口 + `data:repository` 实现 + DI
-      （⚠️ **不要加到 `VaultRepository`**：`VaultRepositoryImpl` 正好卡 40 函数，加就爆门禁 —— 照
-      `KdbxSyncRepository` / `AutoUnlockRepository` / `LocalUnlockEnrollment` 的先例另立一个）。
-- [ ] ⬜ **添加流程 UI**：`AddVaultTypeDialog` 增「**新建 KDBX 库**」+ 名称/主密码/keyfile(可选) 表单
-      （SAF 用 `ActivityResultContracts.CreateDocument`，对齐 `ImportExportScreen` 的既有写法）。
+- [x] ✅ **SAF 落盘已完成（2026-10-01，提交 `450197a`）**：本地新建走
+      `ActivityResultContracts.CreateDocument` → `SafKdbxFileSource.write`
+      （`"wt"` 截断覆盖 + 写后读回校验）。
+- [ ] ⬜ **网盘落盘（OneDrive / WebDAV 新建文件）**：⚠️ `OneDriveKdbxFileSource`
+      目前只有"解析已有 origin"，要补"创建远端新文件"。
+      ★ **已知坑（2026-10-01 读代码发现，动手前必读）**：`OneDriveGraphClient`
+      在 `expectedETag == null` 时用的 `conflictBehavior` 是 **`fail`**（不是 `replace`），
+      所以"新建"时若远端已有同名文件会**被拒**。对"打开已有"这是对的（安全），
+      但对"新建"是个静默死路 ⇒ 新建那条路要么显式走 `replace`，
+      要么先提示"远端已有同名文件，要覆盖吗"再动手。**别直接复用现有调用的参数。**
+      另：`KdbxFileSource.write(expectedVersion = null)` 在**新文件**上
+      **未经实机验证**（SAF 侧已证可用）。
+- [x] ✅ **仓储入口已完成（2026-10-01，提交 `450197a`）**：新接口
+      `domain/KdbxCreateRepository` + `data:repository/KdbxCreateRepositoryImpl` + Hilt 绑定
+      （照 `KdbxSyncRepository` 的先例另立，**没有**动 `VaultRepository` —— 它正好卡 40 函数）。
+- [x] ✅ **添加流程 UI 已完成（2026-10-01，提交 `450197a`）**：
+      ⚠️ **实际做法与本节原计划不同** —— 原计划是"`AddVaultTypeDialog` 增一个「新建 KDBX 库」卡片"，
+      实际做成了**同一页的两段式切换**（`AddKdbxScreen` 的「打开已有 / 新建空白」）。
+      理由：两个动作要填的东西高度重叠（主密码 + 可选 keyfile），拆成两个卡片会让用户
+      "进入之前"就得先想清楚是哪个。⇒ 卡片本身仍是**一个**，
+      标题从「打开 KDBX 文件」改为中性的**「本地 KDBX 文件」**（"打开"只是页内一个动作的名字）。
 - [ ] ⬜ **互操作验收（本批就要过，别留到 W3）**：用 **桌面 KeePassXC** 与 **手机 KeePassDX**
       打开刚新建的库、建一条、存盘、再由 Vaultix 读回。
+
+#### W0 收尾时的两个 SAF 必做项（少一个就「新建 → 重启 → 打不开」）
+
+2026-10-01 落地时确认的两条，**写在这里免得下次重踩**：
+
+1. **`takePersistableUriPermission(READ | WRITE)`** —— `CreateDocument` 返回的 URI
+   **没有**持久授权。打开态只要**读**（那个文件不归我们写），新建要**读写**；
+   少 WRITE 的表现是"改一条"在下次启动后失败。
+2. **`origin` 以来源实际报的为准**（`stat().remoteId`），**不是**请求时那个 `targetUri` ——
+   SAF 的部分 provider（Downloads 之类）返回的是**临时** URI，最终路径另有一个。
+   拿 `targetUri` 当库 id ⇒「库在列表里，却怎么点都打不开」，
+   且**只在那些 provider 上复现**（AOSP Files 上一切正常）—— 这类"只在部分机型复现"
+   的故障排查起来最贵。有单测钉住（`KdbxCreateRepositoryTest` 里 `targetUri != remoteId`）。
 
 ### 批次 W1 · 写映射 + 内存事务 ✅ **已完成**（2026-10-01，提交 `214f6ec`）
 - ✅ `data:kdbx/KdbxItemWriter`：`createEntry / updateEntry / moveToRecycleBin /
@@ -252,24 +277,30 @@ UI（不感知库类型）
 | OneDrive 5–60s 延迟让用户以为没存上 | 本地先行 + 状态条；**不做**同步等待 |
 | 双端并发改同一条 | 条件写 + 冲突对话框（既有）；条目级合并**不做**（KDBX 无此语义） |
 | BW 侧回归 | W2 只加分支不动 BW 路径；`VaultSaveOutcome` 改动全仓搜消费点 |
+| ★ **新建的库「第二天打不开」** | `CreateDocument` 的 URI **没有**持久授权 ⇒ 必须 `takePersistableUriPermission(READ \| WRITE)`；且 `origin` 要取 `stat().remoteId`（部分 provider 给临时 URI）。见 §4 W0 的两条必做项 |
+| ★ **新建时远端已有同名文件**（网盘侧） | `OneDriveGraphClient` 在 `expectedETag == null` 时用 `conflictBehavior=fail` ⇒ 会被**静默拒绝**。新建那条路要显式处理（`replace` 或先问用户），**别直接复用现有调用参数** |
 
 ## 8. 接力提示（新会话从这里开始）
 
-**基座**：W1/W2/W3 已提交并推送 `origin/main` —— 新会话能直接读到本单（接力第一步不会断）。
+**基座**：W1/W2/W3 + W0 的**本地一半**（SAF 落盘 / 仓储入口 / 添加流程 UI，
+2026-10-01 提交 `450197a`）已提交并推送 `origin/main`。
 ⚠️ **本文件刻意不写 HEAD 哈希**：写死的哈希每提交一次就过期一次，而**过期不可观测**
 （文件还在、只是内容旧了，AI 不会怀疑）⇒ **开工前自己 `git log -1` / `git status -sb` 确认基座**。
 
 **已完成**：W0 数据层（`e75de10`）· W1（`214f6ec`）· W2（`5b44ba0` + `c92eac8`）·
-W3（`c92eac8`）。逐项做法与踩到的坑见各批次标题后的 ✅ 与
+W3（`c92eac8`）· **W0 本地一半**（`450197a`：SAF 落盘 + 仓储入口 + 添加流程 UI）。
+逐项做法与踩到的坑见各批次标题后的 ✅ 与
 [`SESSION-2026-09-30.md`](../../.ai/SESSION-2026-09-30.md)（**按需只读一节**）。
 
 **下一步（按序，各自独立可验收、独立提交）**
 
-1. **W4 · 回收站映射**（见上）—— 最小、独立、能立刻验收；
-2. **W0 收尾**：落盘三来源（SAF `CreateDocument` / OneDrive / WebDAV 新建文件）
-   + 仓储入口（⚠️ **另立 domain 接口，别动 `VaultRepository`**：`VaultRepositoryImpl`
-   正好卡 40 函数）+ 添加流程 UI + **XC/DX 互操作验收**。
-   ⚠️ 数据层（`KdbxCreator`）**已就绪**，缺的是"入口"—— 用户现在还不能新建一个空库。
+1. **W0 真正的收尾**：网盘落盘（OneDrive / WebDAV **新建文件**）——
+   本地那半已经能用（用户可以新建一个本地空库了）。
+   ⚠️ 动手前先读 §7 表里最后一行：OneDrive 在 `expectedETag == null` 时是
+   `conflictBehavior=fail` ⇒ 新建时远端同名文件会被**静默拒绝**。
+2. **互操作验收**：用桌面 KeePassXC + 手机 KeePassDX 打开刚落地的本地新库、
+   建一条、存盘、再由 Vaultix 读回（用户 2026-09-30 的硬要求，每批都要过）。
+3. 之后是阶段 B 之外的事。
 
 **可并行、与本单无依赖**
 - 「解锁慢」的诊断埋点已装机（`CachedKdbxFileSource` 缓存判定日志），下次解锁即可取数；
