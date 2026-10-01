@@ -24,15 +24,21 @@
     <string name="vault_list_empty_tagline">一个 App，管好云端与本地两个密码库</string>
     <string name="vault_list_empty_hint">两个入口不分主次，接入成功后可在设置页随时添加另一个。</string>
     <string name="vault_connect_bitwarden">连接 Bitwarden</string>
-    <string name="vault_open_kdbx">打开 KDBX 文件</string>
+    <!--
+      ⚠️ 这个入口**同时管打开与新建**（2026-10-01 加新建），所以标题不能再叫
+      「打开 KDBX 文件」——那是**页内其中一个动作**的名字，写在这里会让点进去想新建的
+      用户以为走错了门。副标题同理：只说「选已有的文件」就漏掉了新建。
+      中性说法只能到这一层（「本地 KDBX 文件」），**两个动作的区分留给页内的两段式切换**。
+    -->
+    <string name="vault_open_kdbx">本地 KDBX 文件</string>
     <string name="vault_add_type_hint">选择库类型：云端同步（Bitwarden）或本地文件（KeePass KDBX）</string>
     <string name="vault_add_bitwarden_desc">登录账号，跨设备同步（需网络）</string>
-    <string name="vault_add_kdbx_desc">选本机的 .kdbx 文件，全程离线、不经服务器</string>
+    <string name="vault_add_kdbx_desc">打开已有的 .kdbx，或新建一个空白库；全程离线、不经服务器</string>
     <string name="vault_kdbx_coming_soon">KDBX 本地库将在 M2 里程碑支持</string>
 
-    <!-- 添加本地 KDBX 库（M2 阶段 A：只读） -->
-    <string name="add_kdbx_title">打开 KDBX 文件</string>
-    <string name="add_kdbx_subtitle">选择 KeePass 数据库文件（KDBX 3.1 / 4.x）。文件留在本机，Vaultix 只读取内容、不上传。</string>
+    <!-- 本地 KDBX 库（打开 / 新建两态；M2 阶段 A 只读 → 阶段 B 可写） -->
+    <string name="add_kdbx_title">本地 KDBX 文件</string>
+    <string name="add_kdbx_subtitle">打开已有的 KeePass 数据库，或新建一个空白库。文件留在本机，Vaultix 不上传。</string>
     <string name="add_kdbx_file">数据库文件</string>
     <string name="add_kdbx_pick_file">尚未选择文件</string>
     <string name="add_kdbx_browse">选择</string>
@@ -45,6 +51,33 @@
     <!-- 成功反馈（issue #94）：重复添加同一文件会覆盖同一行、列表零变化，必须说明。 -->
     <string name="add_kdbx_added">已添加密码库</string>
     <string name="add_kdbx_updated">该文件已在列表中，已更新</string>
+
+    <!--
+      新建空白库（M2 阶段 B · 批次 W0）。
+      ⚠️ 与"打开"共用同一个页面，但**文案必须各说各的**：同一个输入框在打开时是
+      「验证旧密码」，在新建时是「设定新密码」—— 混用一句话会让用户不知道自己在做哪件事，
+      而 KDBX 的主密码**设错了没有任何找回途径**。
+    -->
+    <string name="add_kdbx_mode_open">打开已有</string>
+    <string name="add_kdbx_mode_create">新建空白</string>
+    <string name="add_kdbx_create_name">密码库名称</string>
+    <string name="add_kdbx_create_name_hint">例如：我的密码库</string>
+    <string name="add_kdbx_create_name_helper">这个名称会同时作为根组名写进文件，在 KeePassXC / KeePassDX 里显示的也是它。</string>
+    <!--
+      ⚠️ 二次输入声明"没有找回途径"是**刻意**的：KDBX 的主密码丢失 = 库永久打不开，
+      这不是我们可以在后面补救的事，只能在这里说清楚。
+    -->
+    <string name="add_kdbx_create_password">设定主密码</string>
+    <string name="add_kdbx_create_password_repeat">再输一次</string>
+    <string name="add_kdbx_create_password_helper">主密码没有找回途径。请务必记住或妥善保存它。</string>
+    <string name="add_kdbx_create_password_mismatch">两次输入的密码不一致</string>
+    <string name="add_kdbx_create_password_empty">请输入主密码</string>
+    <string name="add_kdbx_create_name_empty">请输入密码库名称</string>
+    <string name="add_kdbx_pick_file_missing">请先选择 .kdbx 数据库文件</string>
+    <string name="add_kdbx_create_no_persist">无法获得该位置的长期访问权限，请换一个位置再试</string>
+    <string name="add_kdbx_create_submit">创建并选择保存位置</string>
+    <string name="add_kdbx_create_working">正在创建密码库…</string>
+    <string name="add_kdbx_create_saved">密码库已创建</string>
 
     <!-- 从网盘添加 KDBX 库（WebDAV / OneDrive，方案 §16.3 / §16.4） -->
     <string name="vault_add_cloud">从网盘添加</string>

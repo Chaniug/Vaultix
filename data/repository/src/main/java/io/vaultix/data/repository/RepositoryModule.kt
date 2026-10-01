@@ -4,10 +4,12 @@ import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
+import io.vaultix.data.repository.kdbx.KdbxCreateRepositoryImpl
 import io.vaultix.data.repository.kdbx.KdbxSyncRepositoryImpl
 import io.vaultix.domain.AutoUnlockRepository
 import io.vaultix.domain.FolderRepository
 import io.vaultix.domain.ItemRepository
+import io.vaultix.domain.KdbxCreateRepository
 import io.vaultix.domain.KdbxSyncRepository
 import io.vaultix.domain.RoomResealRepository
 import io.vaultix.domain.UnlockRecoveryRepository
@@ -56,6 +58,16 @@ interface RepositoryModule {
     @Binds
     @Singleton
     fun bindKdbxSyncRepository(impl: KdbxSyncRepositoryImpl): KdbxSyncRepository
+
+    /**
+     * 新建空白 KDBX 库（M2 阶段 B · 批次 W0）。
+     *
+     * ⚠️ 独立绑定而不是并进 [VaultRepository]：后者实现类已**正好 40 个函数**
+     * （detekt `TooManyFunctions` 硬上限），再加就爆。见 `KdbxCreateRepository` 的说明。
+     */
+    @Binds
+    @Singleton
+    fun bindKdbxCreateRepository(impl: KdbxCreateRepositoryImpl): KdbxCreateRepository
 
     /**
      * 「从不锁定」档自动恢复（同 [bindKdbxSyncRepository] 的独立绑定理由）。
