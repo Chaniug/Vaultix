@@ -249,3 +249,74 @@ job 照样报 `success`，只有**下载 job 日志逐行看**才发现里面是
   与 `/root/.user_hosts`；**`/root/.ssh/config` 的 `HostName` 必须写 IP 而不是域名**
   （写域名会绕过 hosts —— 这是 `.ai/conventions/8.7-环境.md` 记过的坑 2）。
 - 克隆走 `https://ghfast.top/https://github.com/...` 镜像，随后 `git remote set-url` 换回 SSH。
+
+---
+
+## 7. 第二轮执行记录（同日稍晚）：**全链路打通**（用户要求"完整没有错漏"）
+
+> 用户原话：「**一直到把 onedrive 上的 kdbx 完全打通为止，增删改查，同步，回收站
+> 都要做完整没有错漏**」。⇒ 本轮不是"再补功能"，而是**对整条链做完整性审计**，
+> 把 §1.2 之外的洞也挖出来补齐。
+
+### 7.1 审计结论：**写侧与回收站无洞**（逐条核实，别再重复查）
+
+| 链路 | 结论 | 依据 |
+|---|---|---|
+| 条目增删改 | ✅ 无洞 | `KdbxItemRepository` 五个写方法**全部**走 `persist` |
+| 回收站（删除/恢复/永久删除） | ✅ 无洞 | 三个动作都走 `persist` ⇒ 同样触发 `markLocalEdited` + 自动上传 |
+| 回收站**读**（列表） | ✅ 无洞 | `observeTrash` 的 KDBX 分支已是 `kdbxTrash`（§1.2 S5 已修） |
+| OneDrive **条件写** | ✅ 无洞 | 小文件 `If-Match` 头；大文件 uploadSession 体里的 `ifMatch`（**不是** HTTP 头！） |
+| 缓存令牌传递 | ✅ 无洞 | `CachedKdbxFileSource.write` 用 `result.versionToken` 落缓存 |
+
+### 7.2 补掉的三个洞（**都不在原施工单 §1.2 的六条里**）
+
+#### 洞 A（最要紧）：会话替换**恒定失败** ⇒ 拉取与「用远端覆盖」都是死路
+
+- app 侧 `provideKdbxSessionReplacer` 是**无条件**返回 failure 的 lambda。
+- 后果：`resolveUsingRemote` 永远失败 ⇒ **冲突永远解不掉**；S2 的 `pull()` 走同一条路
+  ⇒ **另一台设备改了，本机永远拉不下来**。
+- ⚠️ 用户照提示「锁定并重新解锁」再点，**结果一模一样**（失败是恒定的）。
+- 根因是一句**被写成定论的错误前提**（见 `RequiresUnlockSessionReplacer` 的 KDoc）。
+  真相：**已解锁会话本来就存着那组 `Credentials`** ⇒ 复用即可免密。
+- 修法：`KdbxOpener.reopen` + `Kdbx.replaceSession` +
+  `KdbxOpenError.RemoteCredentialsMismatch` + app 侧 DI 改指向；删除**从未被注入过**的死类。
+
+#### 洞 B：同步基线**被提前推进** ⇒ 真实数据丢失链
+
+- 「只有远端变」分支 `markStatus(..., remoteNow)` 把基线推到了远端新版，而**本机没拉**。
+- 链：远端变 T1（基线记成 T1）→ 本机改一笔 → 自动上传拿 T1 条件写**通过**
+  → 但会话是旧的 ⇒ **静默覆盖**远端 T1 上别台设备的改动。
+- ⚠️ **S1 把自动上传接上之后，这条链才从"文档里的 P1 隐患"变成真事故。**
+- 修法：该分支**不传** `remoteNow` ⇒ 下次同步正确判出「两边都变」⇒ `CONFLICT` 交用户拍板。
+
+#### 洞 C：`resolveUsingRemote` 里 `stat` 在 `read` **之后** ⇒ 令牌可能偏新
+
+- read 后远端又被改 ⇒ stat 拿到**更新的**令牌而会话是**旧的** ⇒ 记成基线 ⇒ 那一版**永不拉**。
+- 修法：`stat` 挪到 `read` **之前**。令牌**偏旧=多拉一次（无害）**、**偏新=静默漏改（有害）**。
+
+> 三条已入 `.ai/ISSUES.md` **#147 / #148 / #149**（正文在 `07-数据与同步.md`）。
+
+### 7.3 新增单测 9 例（断言"没发生"的每条都配**反证**）
+
+- `data/kdbx/…/KdbxReplaceSessionTest`（5）：替换成功 / 未解锁⇒失败且**绝不凭空开库** /
+  远端换密码⇒失败且**会话一字节不动** / 非 KDBX⇒同上 /
+  ★「替换后还能继续写回」—— 把「复用 `Credentials` 是安全的」**钉成事实**。
+- `data/repository/…/KdbxSyncOrchestratorTest`（4）：「只有远端变」**不**推进基线 +
+  **反证**「两边都没变确实推进」+「两边都改」不推进 + ★**洞 B 那条链的复现**。
+
+### 7.4 门禁与 CI
+
+- detekt（五源集）：**0 违规**，且做了**探针自证**（塞超长常量命中 `MaxLineLength`）。
+- 自检：孤儿串 **114 < 基线 118**；KDoc 粗体紧接斜杠 **0**。
+- CI run **36778401768**（head `d1a68dd`）：detekt ✅ · 编码 ✅ · **Build Debug APK ✅** ·
+  `e:` **0**；`:data:repository` / `:data:kdbx` 单测**都执行且未失败**。
+- ⚠️ job 卡片 **FAILED** 只因既有 **flaky**（`AutoRestoreTriggerTest > 档位离开Never…`，
+  上一轮是过的）。**别算到本轮账上，也别顺手修。**
+- ⚠️ 日志里 `w: …KdbxSyncOrchestratorTest.kt:167 Expression is unused` 是编译器警告
+  （`coAnswers` 块裸 `Unit` 收尾），detekt 查不出 ⇒ 已改 `Unit.also { }`。**警告要读。**
+
+### 7.5 §3 验收清单的**追加项**
+
+- ★ **在另一台设备改一笔，回到本机点同步，应当真的拉下来** —— 这正是本轮打通的、此前是死路的那条。
+- ★ 造一个**真冲突**（两边各改一笔）→ 应弹三选项 → 选「用云端覆盖本地」→ **应当真的拉下来**
+  （此前必失败）；选「用本地覆盖云端」→ 应当真的推上去。
