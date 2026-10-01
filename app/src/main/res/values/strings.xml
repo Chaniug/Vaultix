@@ -38,7 +38,10 @@
 
     <!-- 本地 KDBX 库（打开 / 新建两态；M2 阶段 A 只读 → 阶段 B 可写） -->
     <string name="add_kdbx_title">本地 KDBX 文件</string>
-    <string name="add_kdbx_subtitle">打开已有的 KeePass 数据库，或新建一个空白库。文件留在本机，Vaultix 不上传。</string>
+    <!-- 只说"别人不知道的那件事"：文件留在本机。
+         ⚠️ 不要再把"打开已有的 / 新建一个空白库"写回来 —— 正下方的模式切换器
+         就是这两个词，重复一遍会让首屏最重的一块文字压在顶栏下方（8.4「一个元素只该说一件事」）。 -->
+    <string name="add_kdbx_privacy_note">文件只保存在本机，Vaultix 不会上传。</string>
     <string name="add_kdbx_file">数据库文件</string>
     <string name="add_kdbx_pick_file">尚未选择文件</string>
     <string name="add_kdbx_browse">选择</string>

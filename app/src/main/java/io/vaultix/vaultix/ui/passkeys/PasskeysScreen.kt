@@ -66,6 +66,7 @@ import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.EntryCard
 import io.vaultix.vaultix.ui.common.EntryCardIconSpacing
 import io.vaultix.vaultix.ui.common.EntryCardTextSpacing
+import io.vaultix.vaultix.ui.common.EntryCardTitleLineHeight
 import io.vaultix.vaultix.ui.common.PressAndSwipeToDelete
 import io.vaultix.vaultix.ui.common.SavePasskeyDialog
 import io.vaultix.vaultix.ui.common.SelectionActionBar
@@ -407,6 +408,8 @@ private fun PasskeyRowItem(
                         text = row.credential.rpName.ifBlank { row.credential.rpId },
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
+                        // 与条目卡统一收窄行高（见 [EntryCardTitleLineHeight] 的 KDoc）。
+                        lineHeight = EntryCardTitleLineHeight,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )

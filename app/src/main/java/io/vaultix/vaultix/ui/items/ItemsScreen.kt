@@ -110,6 +110,7 @@ import io.vaultix.vaultix.ui.common.EntryCard
 import io.vaultix.vaultix.ui.common.EntryCardIconSize
 import io.vaultix.vaultix.ui.common.EntryCardIconSpacing
 import io.vaultix.vaultix.ui.common.EntryCardTextSpacing
+import io.vaultix.vaultix.ui.common.EntryCardTitleLineHeight
 import io.vaultix.vaultix.ui.common.ItemFormDialog
 import io.vaultix.vaultix.ui.common.PressAndSwipeToDelete
 import io.vaultix.vaultix.ui.common.SelectionActionBar
@@ -1518,6 +1519,18 @@ private fun ItemRow(
                     text = item.title.ifBlank { stringResource(R.string.items_item_unnamed) },
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
+                    // ⚠️ 显式收窄行高：`titleMedium` 默认 24sp 行高对"恒为一行、
+                    //    且被 maxLines=1 截断"的标题是纯浪费 —— 那一截余量会变成
+                    //    标题上方看不见的空白，把文本块在卡片里往下推。
+                    //    取整的来龙去脉见 [EntryCardTitleLineHeight] 的 KDoc。
+                    lineHeight = EntryCardTitleLineHeight,
+                    // ⚠️ 这里**新增**了 `maxLines = 1`，是一次**行为变更**（长标题原先会折行）。
+                    //    理由：TOTP / 卡包 / 通行密钥三个列表用的都是同一个 [EntryCard]，
+                    //    且早已是 `maxLines = 1` —— 密码页是**唯一的例外**。
+                    //    留例外就是「同一规格在不同页长得不一样」（8.4 的头号廉价感来源），
+                    //    所以这里不是"顺手改行为"，而是把漏掉的一处**补齐**。
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
                 // 副标题（信息密度见 [ItemRowSubtitle]）。
                 ItemRowSubtitle(item = item, displayMode = displayMode)

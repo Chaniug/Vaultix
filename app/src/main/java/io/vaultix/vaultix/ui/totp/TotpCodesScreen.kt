@@ -88,6 +88,7 @@ import io.vaultix.vaultix.ui.common.CloudSyncIcon
 import io.vaultix.vaultix.ui.common.EntryCard
 import io.vaultix.vaultix.ui.common.EntryCardIconSpacing
 import io.vaultix.vaultix.ui.common.EntryCardTextSpacing
+import io.vaultix.vaultix.ui.common.EntryCardTitleLineHeight
 import io.vaultix.vaultix.ui.common.PressAndSwipeToDelete
 import io.vaultix.vaultix.ui.common.SelectionActionBar
 import io.vaultix.vaultix.ui.common.SiteIconByHost
@@ -838,6 +839,8 @@ private fun TotpRow(
                     text = entry.title.ifBlank { stringResource(R.string.totp_screen_title) },
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
+                    // 与条目卡统一收窄行高（见 [EntryCardTitleLineHeight] 的 KDoc）。
+                    lineHeight = EntryCardTitleLineHeight,
                     modifier = Modifier.weight(1f),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,

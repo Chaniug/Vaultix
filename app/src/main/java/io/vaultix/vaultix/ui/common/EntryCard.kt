@@ -38,6 +38,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import io.vaultix.vaultix.ui.theme.Spacing
 
 /**
@@ -131,8 +132,40 @@ fun EntryCard(
     }
 }
 
-/** 卡片内「标题 + 副标题」的纵向间距（Bastion 列表态 = 6dp）。 */
-val EntryCardTextSpacing = 6.dp
+/**
+ * 卡片内「标题 + 副标题」的**视觉**间距。
+ *
+ * ⚠️ 2026-10-01 **从 6dp 改成 4dp**，原因不是"想再紧一点"，而是**排印行高在骗人**：
+ * `titleMedium` 的行高是 24sp、字面高约 16sp ⇒ 光标题自身上下就各留了 ~4dp 的
+ * **行高余量**。所以"6dp 的 `spacedBy`"在屏幕上呈现出来的是
+ * **6 + 4 = 10dp 的缝**，而`bodyMedium`（20sp 行高 / 14sp 字面）又贡献 ~3dp。
+ * 两行文本之间的实际空隙因此接近 **13dp**，在一张 16dp 内边距的卡片里
+ * 会读成"标题和副标题是两件不相干的事"。
+ *
+ * ⇒ 取 `Spacing.xs`(4dp) 与行高余量相抵，**落在屏幕上的视觉间距回到 ~8dp**
+ * （正好是标尺的 `sm` 档 —— 这也是"视觉间距"与"布局间距"必须分开算的实例）。
+ *
+ * @see EntryCardTitleLineHeight
+ */
+val EntryCardTextSpacing = Spacing.xs
+
+/**
+ * 卡片内标题的**行高收窄**（`titleMedium` 的 24sp → 21sp）。
+ *
+ * ⚠️ 这是"左边标题部分排版"的另一半。原状是直接用 `typography.titleMedium`
+ * （16sp / **24sp** 行高），24sp 是 M3 给"可能换行的正文"准备的，而条目卡片的
+ * 标题在列表里**几乎永远是一行**、且被 `maxLines = 1` 截断 ⇒ 那份行高余量
+ * 全部变成了**首行上方看不到的空白**，把标题在卡片里往**下**推、
+ * 与左侧图标（40dp，垂直居中）错开，观感就是"文本块浮在卡片里"。
+ *
+ * 收到 21sp（≈ 1.3 倍字号，仍在可读区间）后：标题更贴卡片中轴、与图标的
+ * 视觉重心对齐，且不影响 `maxLines` 的截断行为。
+ *
+ * ⚠️ 刻意**不**改字号、不动字重：见 `.ai/conventions/8.8` §5
+ * 「不采纳强调排印（更大的 display 字号、更重的字重）」——
+ * 顶栏标题刚从 32sp 收到 26sp，方向必须一致。
+ */
+val EntryCardTitleLineHeight = 21.sp
 
 /** 卡片内左侧图标与文本区的间距（Bastion = 16dp）。 */
 val EntryCardIconSpacing = Spacing.lg
