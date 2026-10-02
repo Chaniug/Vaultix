@@ -468,16 +468,16 @@ class TotpTest {
     fun malformedPeriodInUriIsClampedAtTheParseBoundary() {
         // `toIntOrNull` 认 `0` / `-15` ⇒ 畸形值会一路带进 TotpConfig。
         // 夹在解析边界上，就不用指望每个消费点都记得兜。
-        assertEquals(30, TotpGenerator.parse("otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&period=0")?.period)
-        assertEquals(30, TotpGenerator.parse("otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&period=-15")?.period)
-        assertEquals(60, TotpGenerator.parse("otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&period=60")?.period)
+        assertEquals(30, OtpUriParser.parse("otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&period=0")?.period)
+        assertEquals(30, OtpUriParser.parse("otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&period=-15")?.period)
+        assertEquals(60, OtpUriParser.parse("otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&period=60")?.period)
     }
 
     @Test
     fun steamIsNotInferredFromTheAccountNameAlone() {
         // 原先 `labelPart.contains("steam")` 会让这类**普通 TOTP 条目**被判成 Steam
         // ⇒ 改用 Base64 解码 + 25 字母表 ⇒ 算出的码永远不对，且用户无从归因。
-        val config = TotpGenerator.parse(
+        val config = OtpUriParser.parse(
             "otpauth://totp/github.com:steam@example.com?secret=JBSWY3DPEHPK3PXP&issuer=Github",
         )
         assertEquals(OtpType.TOTP, config?.type)
@@ -486,9 +486,9 @@ class TotpTest {
     @Test
     fun steamStillDetectedViaExplicitMarkerOrIssuer() {
         // 收紧的只是"账号名"这一条腿；Steam 自己的两条主路必须照旧生效。
-        val byEncoder = TotpGenerator.parse("otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&encoder=steam")
+        val byEncoder = OtpUriParser.parse("otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&encoder=steam")
         assertEquals(OtpType.STEAM, byEncoder?.type)
-        val byIssuer = TotpGenerator.parse("otpauth://totp/Steam:me?secret=JBSWY3DPEHPK3PXP")
+        val byIssuer = OtpUriParser.parse("otpauth://totp/Steam:me?secret=JBSWY3DPEHPK3PXP")
         assertEquals(OtpType.STEAM, byIssuer?.type)
     }
 }
