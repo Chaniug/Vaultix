@@ -74,23 +74,50 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
+      # ⚠️ 不要在这里写 `gradle-version:`（2026-10-02 移除，见 .ai/ISSUES.md #145.3）。
+      # 原本写死 `gradle-version: 8.11.1`，而 `gradle-wrapper.properties` 是 9.5.1，
+      # 于是 CI 里**同时存在两个 Gradle**：setup-gradle 把 8.11.1 provision 到
+      # `/home/runner/work/_temp/.gradle-actions/`，而本 workflow 所有构建命令都用
+      # `./gradlew` ⇒ **实际跑的是 wrapper 的 9.5.1**。三个后果：
+      #   ① 8.11.1 白下载白解压（每次约 10s，还占一条缓存条目）；
+      #   ② setup-gradle 的缓存按 Gradle 版本分区 ⇒ provision 的 8.11.1 缓存
+      #      对实际构建的 9.5.1 **一点用都没有**（日志里 "Cache hit for: gradle-8.11.1"
+      #      看着像命中了，其实命中的是个没人用的版本）；
+      #   ③ **最危险**：哪天有人把 `./gradlew` 改成 `gradle`（用 setup-gradle 装的那个），
+      #      构建会**静默从 9.5.1 掉到 8.11.1** —— 一次无声的版本分叉。
+      # ⇒ `gradle/actions/setup-gradle` 默认就是「用仓库 wrapper 声明的版本」，
+      #   不指定即正确，且**版本只有一个来源**（wrapper properties），天然不会分叉。
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
         with:
-          gradle-version: 8.11.1
           cache-read-only: ${{ github.event_name == 'pull_request' }}
+          # validate-wrappers 默认 true（校验 wrapper jar 的 checksum，防供应链篡改）。
+          # 这里保持 false：仓库的 gradle-wrapper.jar 是手工提交进来的，未经官方
+          # checksum 校验流程登记；若改回 true 需先确认 jar 与 properties 版本一致。
           validate-wrappers: false
 
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      # 兜底：若仓库尚未提交 gradle-wrapper.jar（二进制），用 CI 安装的同版本 Gradle 现场生成 wrapper，
-      # 保证 ./gradlew 始终可用。仓库补上真实 jar 后此步骤自动跳过。
+      # 兜底：若仓库尚未提交 gradle-wrapper.jar（二进制），现场生成 wrapper，保证 ./gradlew 可用。
+      # 仓库已补上真实 jar（2026-10-01），此步骤自动跳过。
+      # ⚠️ 版本**从 properties 读**，不要写死（原本写死 8.11.1）：
+      #    jar 丢了时若生成 8.11.1，而 properties 仍写 9.5.1 ⇒ 生成的 wrapper 与
+      #    声明的版本分叉，下一次 ./gradlew 会去下载另一个版本、且无人察觉。
+      #    ⇒ 与 #125.1 同一个思路：**让版本只有一个来源**。
       - name: Ensure gradle wrapper jar
         run: |
           if [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
             echo "::warning title=Missing wrapper jar::gradle-wrapper.jar 缺失，CI 现场生成（建议本地执行 'gradle wrapper' 后提交）。"
-            gradle wrapper --gradle-version 8.11.1
+            # ⚠️ 分隔符必须用 `#`：用 `|` 时，正则里的 `(bin|all)` 会让 sed 认为
+            #    `s` 命令提前结束并报 `unknown option to 's'`（2026-10-02 实测踩到）。
+            gwv="$(sed -nE 's#^distributionUrl=.*/gradle-([0-9][0-9.]*)-(bin|all)\.zip$#\1#p' gradle/wrapper/gradle-wrapper.properties)"
+            if [ -z "$gwv" ]; then
+              echo "::error title=Unresolvable Gradle version::无法从 gradle-wrapper.properties 解析版本，拒绝猜测。"
+              exit 1
+            fi
+            echo "按 gradle-wrapper.properties 生成 wrapper：$gwv"
+            gradle wrapper --gradle-version "$gwv"
           fi
 
       - name: Install Android SDK platform 36
