@@ -163,10 +163,27 @@ class BitwardenSyncService @Inject constructor(
 
         val api = apiFactory.vault(server)
         var firstError: Throwable? = null
+        // ★「临时 id → 服务端 id」的改指表（2026-10-02 审计修复）。
+        //
+        //   为什么必须：**离线新建一条 → 顺手改一笔 → 联网** 是最日常的一条路径，
+        //   而此前它会静默丢数据 —— `ops` 是**一次性读出来**的列表，每个 op 对象里
+        //   记的还是离线时那个临时 UUID；CREATE 推送成功后 `remapCreatedLocalRow`
+        //   把行迁到了服务端 id，**队伍里后续那条 UPDATE 却毫不知情**，
+        //   仍拿废弃的临时 id 去 `PUT /ciphers/{oldId}` ⇒ 404 ⇒ 记为自定义失败被弃单
+        //   ⇒ 用户那笔编辑从此消失，界面还得意地显示"已同步"。
+        //
+        //   ⚠️ 只改内存里的 op 对象是不够的：下一次 `flushPending` 会从库中重读，
+        //      所以 `remapCreatedLocalRow` 里还要把库中的行一并改指（见该函数）。
+        val createdIdRemap = mutableMapOf<String, String>()
         for (op in ops) {
-            runCatching { executeOperation(api, op) }
+            val effective = createdIdRemap[op.cipherId]?.let { op.copy(cipherId = it) } ?: op
+            runCatching { executeOperation(api, effective) }
                 .onSuccess { response ->
-                    if (op.op == OP_CREATE) remapCreatedLocalRow(op, response)
+                    if (effective.op == OP_CREATE) {
+                        remapCreatedLocalRow(effective, response)?.let { serverId ->
+                            createdIdRemap[effective.cipherId] = serverId
+                        }
+                    }
                     pendingOpDao.remove(op.localId)
                 }
                 .onFailure { error ->
@@ -212,18 +229,31 @@ class BitwardenSyncService @Inject constructor(
     /**
      * 新建条目被服务端分配新 id 后，把本地临时行迁移到服务端 id：
      * 删除临时行 → 用请求密文（已加密字段与服务端一致）重建正式行。
+     *
+     * ★ 同时把**队列里其余还指着临时 id 的操作**改成新 id（否则它们会 404 被弃单，
+     *   详见 `flushPending` 里 `createdIdRemap` 的注释）。
+     *
+     * @return 实际采用的服务端 id；无需迁移时返回 null。
      */
-    private suspend fun remapCreatedLocalRow(op: PendingOpEntity, response: CipherResponse?) {
-        val serverId = response?.id?.takeIf { it.isNotBlank() } ?: return
-        if (serverId == op.cipherId) return // 服务端保留了客户端 id（少见），无需处理
-        val temp = cipherDao.get(op.cipherId) ?: return
+    private suspend fun remapCreatedLocalRow(op: PendingOpEntity, response: CipherResponse?): String? {
+        val serverId = response?.id?.takeIf { it.isNotBlank() } ?: return null
+        if (serverId == op.cipherId) return null // 服务端保留了客户端 id（少见），无需处理
+        val temp = cipherDao.get(op.cipherId) ?: return null
         val request = op.payload?.let { payload ->
             runCatching { json.decodeFromString<CipherRequest>(payload) }.getOrNull()
-        } ?: return
+        } ?: return null
 
-        val dto = request.toStoredCipherDto(serverId, response.revisionDate)
+        // `previous` 传的是迁移前那一行：请求体承载不了的字段（creationDate 等）
+        // 在 id 迁移这种"纯粹换个主键"的操作里当然要原样带过去。
+        val previous = runCatching {
+            json.decodeFromString<CipherDto>(temp.encryptedPayload)
+        }.getOrNull()
+        val dto = request.toStoredCipherDto(serverId, response.revisionDate, previous)
         cipherDao.deleteByIds(listOf(op.cipherId))
         cipherDao.upsertAll(listOf(dto.toEntity(temp.vaultId)))
+        // 库里的行改指：**下一次** flushPending 直接从库重读，若这里不改，那次仍会 404。
+        pendingOpDao.repointCipherId(oldId = op.cipherId, newId = serverId)
+        return serverId
     }
 
     private suspend fun executeOperation(api: BitwardenVaultApi, op: PendingOpEntity): CipherResponse? {

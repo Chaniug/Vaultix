@@ -3,6 +3,7 @@ package io.vaultix.common
 import java.security.MessageDigest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -388,5 +389,106 @@ class TotpTest {
         const val MOTP_DIGITS_EXPECTED = 6
         const val HOTP_COUNTER_EXPECTED = 42L
         const val YANDEX_PIN = "9999"
+    }
+
+    // ---------------------------------------------------------------- 保真回归
+
+    // RFC 6238 附录：算法不同则密钥长度不同（SHA256 用 32 字节、SHA512 用 64 字节）。
+    // 期望值由独立实现的参考计算得出，并与 RFC 公布向量一致（SHA256@T=59 → 46119246、
+    // SHA512@T=59 → 90693936），不是照抄本仓库自己的输出。
+    private val rfc256Secret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZA===="
+    // RFC 6238 的 SHA512 密钥是 64 字节；Base32 展开后很长，拆行拼接只为符合行长上限。
+    private val rfc512Secret =
+        "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ" +
+            "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNA="
+
+    @Test
+    fun keePassXcHyphenatedAlgorithmDoesNotCollapseToZeros() {
+        // 🔴 回归（KDBX 读路径）：KeePassXC / KeePassOTP 的 `TimeOtp-Algorithm`
+        // 取值形态是 **`HMAC-SHA-256`**。归一化缺失时拼成 `HmacHMAC-SHA-256`
+        // ⇒ `Mac.getInstance` 抛 `NoSuchAlgorithmException` ⇒
+        //   被 `generateTotp` 的 `catch (_: Exception)` 吞成 `"0".repeat(digits)`
+        // ⇒ 用户看到**恒定的** `00000000`，界面没有任何异常提示。
+        val code = TotpGenerator.generateTotp(
+            secret = rfc256Secret,
+            timeSeconds = 59,
+            period = 30,
+            digits = 8,
+            algorithm = "HMAC-SHA-256",
+        )
+        assertEquals("46119246", code)
+    }
+
+    @Test
+    fun everyVendorSpellingOfSha512AgreesOnTheSameCode() {
+        // 四种现实写法必须落到同一个 JCA 算法名。注意：只做"彼此相等"是不够的 ——
+        // 若归一化整体失效，四种全会变 SHA1 ⇒ 依然互相相等，却是错的。
+        // 所以这里同时钉住 RFC 绝对值。
+        val expected = "90693936"
+        listOf("SHA512", "HMAC-SHA-512", "HmacSHA512", "hmac-sha-512", " sha-512 ").forEach { spelling ->
+            val code = TotpGenerator.generateTotp(
+                secret = rfc512Secret,
+                timeSeconds = 59,
+                period = 30,
+                digits = 8,
+                algorithm = spelling,
+            )
+            assertEquals("写法 $spelling 归一化后有偏差", expected, code)
+        }
+    }
+
+    @Test
+    fun unknownAlgorithmFallsBackToSha1RatherThanThrowing() {
+        // 认不出的写法一律回落 RFC 默认，而不是拼进 Mac.getInstance 让它抛再被吞成 0
+        assertEquals("SHA1", normalizeAlgorithm("谁也不认识的算法"))
+        assertEquals("SHA1", normalizeAlgorithm(""))
+        assertEquals("SHA256", normalizeAlgorithm("HMAC-SHA-256"))
+        assertEquals("SHA224", normalizeAlgorithm("SHA224"))
+    }
+
+    @Test
+    fun zeroPeriodFallsBackInsteadOfDividingByZero() {
+        // 🔴 回归（崩溃）：`TotpCodesScreen` 在 Composable 里直接调 `remainingSeconds`
+        // 算倒计时，那里**没有 try/catch** —— period=0 ⇒ `timeSeconds % 0` 抛
+        // `ArithmeticException` ⇒ 重组帧抛出 ⇒ **整页崩**，而不是"这条码不对"。
+        assertEquals(1, TotpGenerator.remainingSeconds(period = 0, timeSeconds = 59))
+        assertEquals(1, TotpGenerator.remainingSeconds(period = -5, timeSeconds = 59))
+        assertEquals(10, TotpGenerator.remainingSeconds(period = 30, timeSeconds = 20))
+
+        // progress 不能溢出成 NaN / Infinity（进度条会拿到垃圾值却看不出错）
+        val p = TotpGenerator.progress(period = 0, timeSeconds = 59)
+        assertTrue("period=0 时 progress 越界：$p", p in 0f..1f)
+
+        // 生成侧同样不能退化成全 0（全 0 正是"异常被吞"的表征）
+        val code = TotpGenerator.generateTotp(rfcSecret, timeSeconds = 59, period = 0, digits = 8)
+        assertEquals("94287082", code)
+    }
+
+    @Test
+    fun malformedPeriodInUriIsClampedAtTheParseBoundary() {
+        // `toIntOrNull` 认 `0` / `-15` ⇒ 畸形值会一路带进 TotpConfig。
+        // 夹在解析边界上，就不用指望每个消费点都记得兜。
+        assertEquals(30, TotpGenerator.parse("otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&period=0")?.period)
+        assertEquals(30, TotpGenerator.parse("otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&period=-15")?.period)
+        assertEquals(60, TotpGenerator.parse("otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&period=60")?.period)
+    }
+
+    @Test
+    fun steamIsNotInferredFromTheAccountNameAlone() {
+        // 原先 `labelPart.contains("steam")` 会让这类**普通 TOTP 条目**被判成 Steam
+        // ⇒ 改用 Base64 解码 + 25 字母表 ⇒ 算出的码永远不对，且用户无从归因。
+        val config = TotpGenerator.parse(
+            "otpauth://totp/github.com:steam@example.com?secret=JBSWY3DPEHPK3PXP&issuer=Github",
+        )
+        assertEquals(OtpType.TOTP, config?.type)
+    }
+
+    @Test
+    fun steamStillDetectedViaExplicitMarkerOrIssuer() {
+        // 收紧的只是"账号名"这一条腿；Steam 自己的两条主路必须照旧生效。
+        val byEncoder = TotpGenerator.parse("otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&encoder=steam")
+        assertEquals(OtpType.STEAM, byEncoder?.type)
+        val byIssuer = TotpGenerator.parse("otpauth://totp/Steam:me?secret=JBSWY3DPEHPK3PXP")
+        assertEquals(OtpType.STEAM, byIssuer?.type)
     }
 }

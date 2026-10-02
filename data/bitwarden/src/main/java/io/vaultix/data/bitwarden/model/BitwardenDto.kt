@@ -247,15 +247,42 @@ data class CipherRequest(
  * 用途：新建条目经 `POST /ciphers` 成功后，服务端会分配新 id（请求体本身
  * 不含 id 字段），本地临时行需要按服务端 id 重建。请求里的字段全部是 EncString
  * 密文，与服务端存的一致（服务端不会二次加密），因此无需再拉一次全量条目。
+ *
+ * ## ⚠️ 2026-10-02 审计修复：请求体表达不了的字段必须**顺延**
+ *
+ * [CipherRequest] 只携带"要提交给服务端"的字段（见它那三个透传字段的注释），
+ * 而本地落库的 [CipherDto] 里还有几个**服务端有、请求体没有**的字段。
+ * 本函数此前只拷 14 个字段 ⇒ **每一次编辑都会把下面这些悄悄抹掉**：
+ *
+ * | 字段 | 抹掉后的后果 |
+ * |---|---|
+ * | `organizationId` | 组织成员条目从本地看**降级为个人条目**（"共享库里的东西不见了"） |
+ * | `passwordHistory` | 密码历史被清空（`toUpdateRequest` 费劲把它带去服务端，回来本地还是丢了） |
+ * | `creationDate` | 详情页的"创建于"消失 |
+ * | `attachments` / `key` | 附件元信息与条目级密钥被清空 |
+ *
+ * ⇒ 解决办法不是"把这些字段塞进请求体"（那会改变提交语义，见 `CipherRequest`
+ *   关于附件的注释），而是 **[previous] 顺延**：这些值在一次编辑里**本来就不变**，
+ *   原样带过去即可。缺省为 null（= 新建，本来就没有原值）。
+ *
+ * @param previous 改动前的那一行；**编辑路径必须传**，新建路径不传。
  */
-fun CipherRequest.toStoredCipherDto(id: String, revisionDate: String): CipherDto = CipherDto(
+fun CipherRequest.toStoredCipherDto(
+    id: String,
+    revisionDate: String,
+    previous: CipherDto? = null,
+): CipherDto = CipherDto(
     id = id,
     type = type,
     name = name,
     notes = notes,
     favorite = favorite,
     folderId = folderId,
+    organizationId = organizationId ?: previous?.organizationId,
     revisionDate = revisionDate,
+    creationDate = previous?.creationDate,
+    // deletedDate 同样顺延：编辑一条被软删的行**不该**让它从回收站"复活"。
+    deletedDate = previous?.deletedDate,
     reprompt = reprompt,
     login = login,
     card = card,
@@ -263,4 +290,7 @@ fun CipherRequest.toStoredCipherDto(id: String, revisionDate: String): CipherDto
     secureNote = secureNote,
     sshKey = sshKey,
     fields = fields,
+    passwordHistory = passwordHistory.ifEmpty { previous?.passwordHistory.orEmpty() },
+    attachments = previous?.attachments.orEmpty(),
+    key = previous?.key,
 )

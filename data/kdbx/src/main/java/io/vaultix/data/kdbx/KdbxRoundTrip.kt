@@ -93,10 +93,32 @@ internal object KdbxRoundTrip {
      * @param credentials 必须是**打开这个库时用的那一组**（否则解不开，会误报成损坏）。
      */
     fun verify(database: KeePassDatabase, credentials: Credentials): KdbxRoundTripResult {
-        val before = flatten(database.content.group)
-        val beforeByUuid = before.associateBy { it.uuid }
-
         val bytes = KdbxEncoder.encode(database)
+        return verifyEncoded(bytes, database, credentials)
+    }
+
+    /**
+     * 校验**已经编码好**的字节（不再重编码）。
+     *
+     * ## 为什么要这个入口（2026-10-02 审计修复）
+     *
+     * 写路径 `Kdbx.mutate` **已经**把库编码过一次（它要返回字节给上层去决定写到哪），
+     * 而 `verify` 会**再编码一次**。一次 `encode` 要重新派生内容密钥 + 重生成 IV/随机流，
+     * 代价与一次解锁相当（真机数百毫秒）⇒ 走 `verify` 等于每次编辑付两遍 KDF。
+     *
+     * ⇒ 这里只做**反向**那一半（解码 + 比对），把自检的成本压到最低 ——
+     *    "太贵所以被跳过"从来都不该是一场正确性保障的下场。
+     *
+     * @param expected 编码这份字节时用的那个库（通常是当前会话里的 `database`）。
+     * @param credentials 必须是**打开这个库时用的那一组**（否则解不开，会误报成损坏）。
+     */
+    fun verifyEncoded(
+        bytes: ByteArray,
+        expected: KeePassDatabase,
+        credentials: Credentials,
+    ): KdbxRoundTripResult {
+        val before = flatten(expected.content.group)
+        val beforeByUuid = before.associateBy { it.uuid }
 
         val decoded = runCatching {
             ByteArrayInputStream(bytes).use { input ->
@@ -136,7 +158,7 @@ internal object KdbxRoundTrip {
         }
 
         // ③ 分组结构（名称集合）
-        val groupsLost = groupNames(database.content.group) - groupNames(decoded.content.group)
+        val groupsLost = groupNames(expected.content.group) - groupNames(decoded.content.group)
         if (groupsLost.isNotEmpty()) {
             mismatches += "往返后丢失分组：$groupsLost"
         }
@@ -148,7 +170,7 @@ internal object KdbxRoundTrip {
             mismatches = mismatches,
             // 直接带 KdbxFidelityNote 列表：上层要把它与 inspect() 的结果合并，
             // 形状一致才不用再转换（也就不会在转换里丢掉 kind 分类）。
-            fidelityLosses = KdbxFidelity.describeLosses(database, decoded),
+            fidelityLosses = KdbxFidelity.describeLosses(expected, decoded),
         )
     }
 

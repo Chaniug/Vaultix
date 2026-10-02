@@ -128,6 +128,20 @@ interface PendingOpDao {
 
     @Upsert suspend fun enqueue(op: PendingOpEntity)
 
+    /**
+     * ★ 把某个临时本地 id 上的待推送操作**整体改指**到服务端 id。
+     *
+     * 场景：离线新建的条目用本地 UUID 入队，推送成功后服务端另分配一个 id，
+     * 本地行随之迁移（见 `BitwardenSyncService.remapCreatedLocalRow`）。
+     * 若只迁移条目行而留下队列，后续那些 UPDATE/DELETE 会拿着**已不存在的
+     * 临时 id** 去请求服务端 ⇒ 404 ⇒ 被当成自定义失败弃单 ⇒ 用户那笔编辑消失。
+     *
+     * ⚠️ 与之配套的另一半在 `flushPending`（内存里已读出的 op 列表也要跟着改，
+     *    否则**本次**循环里排在后面的那几条仍然是旧 id）—— 两处缺一不可。
+     */
+    @Query("UPDATE pending_ops SET cipherId = :newId WHERE cipherId = :oldId")
+    suspend fun repointCipherId(oldId: String, newId: String)
+
     @Query("DELETE FROM pending_ops WHERE localId = :localId")
     suspend fun remove(localId: Long)
 

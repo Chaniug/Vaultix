@@ -42,6 +42,8 @@ import io.vaultix.domain.VaultSaveOutcome
 import io.vaultix.model.VaultItem
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /** KDBX 条目的增删改（写回）。五个动作与 [io.vaultix.domain.ItemRepository] 的写方法一一对应。 */
 @Singleton
@@ -65,11 +67,20 @@ class KdbxItemRepository @Inject constructor(
     private val autoUploader: KdbxAutoUploader,
 ) {
 
-    suspend fun create(vaultId: String, item: VaultItem): Result<VaultSaveOutcome> = runCatching {
-        val write = Kdbx.createItem(vaultId, folderId = item.folderId, item = item)
-            .getOrElse { throw it.toUserFacing() }
-        persist(vaultId, write.bytes)
-    }
+    // ⚠️⚠️ 五个写动作一律 `withContext(Dispatchers.IO)`：它们内部都要经过
+    //     `Kdbx.mutate`，而 `mutate` 的 KDoc 明确写着「编码代价与一次 KDF 相当，
+    //     调用方应当切到 IO/Default」。ViewModel 却在 `viewModelScope`（主线程）里调用它们，
+    //     结果是**每次保存都同步跑一遍 Argon2/AES-KDF** —— 表现为"保存时界面卡几百毫秒"
+    //     （「打开库的流畅性」这条诉求里最容易被感知的一处）。
+    //     ⇒ 调度责任收在本类的 public 层（一次做完），而不是指望每个调用点各自记得切。
+    suspend fun create(vaultId: String, item: VaultItem): Result<VaultSaveOutcome> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val write = Kdbx.createItem(vaultId, folderId = item.folderId, item = item)
+                    .getOrElse { throw it.toUserFacing() }
+                persist(vaultId, write.bytes)
+            }
+        }
 
     /**
      * 修改条目。
@@ -78,29 +89,41 @@ class KdbxItemRepository @Inject constructor(
      * 从而做到"没变的不重写"（详见 `KdbxItemWriter.updateEntry` 的 KDoc）。
      * 拿不到（会话里没有这条）⇒ 报"条目不存在"，而不是拿一个空壳当 before 去覆盖。
      */
-    suspend fun update(vaultId: String, item: VaultItem): Result<VaultSaveOutcome> = runCatching {
-        val before = Kdbx.contentOf(vaultId)?.items?.firstOrNull { it.id == item.id }
-            ?: error("条目不存在：${item.id}")
-        val write = Kdbx.updateItem(vaultId, before = before, after = item)
-            .getOrElse { throw it.toUserFacing() }
-        persist(vaultId, write.bytes)
-    }
+    suspend fun update(vaultId: String, item: VaultItem): Result<VaultSaveOutcome> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val before = Kdbx.contentOf(vaultId)?.items?.firstOrNull { it.id == item.id }
+                    ?: error("条目不存在：${item.id}")
+                val write = Kdbx.updateItem(vaultId, before = before, after = item)
+                    .getOrElse { throw it.toUserFacing() }
+                persist(vaultId, write.bytes)
+            }
+        }
 
-    suspend fun softDelete(vaultId: String, itemId: String): Result<VaultSaveOutcome> = runCatching {
-        val write = Kdbx.moveItemToRecycleBin(vaultId, itemId).getOrElse { throw it.toUserFacing() }
-        persist(vaultId, write.bytes)
-    }
+    suspend fun softDelete(vaultId: String, itemId: String): Result<VaultSaveOutcome> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val write = Kdbx.moveItemToRecycleBin(vaultId, itemId).getOrElse { throw it.toUserFacing() }
+                persist(vaultId, write.bytes)
+            }
+        }
 
-    suspend fun restore(vaultId: String, itemId: String): Result<VaultSaveOutcome> = runCatching {
-        val write = Kdbx.restoreItemFromRecycleBin(vaultId, itemId)
-            .getOrElse { throw it.toUserFacing() }
-        persist(vaultId, write.bytes)
-    }
+    suspend fun restore(vaultId: String, itemId: String): Result<VaultSaveOutcome> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val write = Kdbx.restoreItemFromRecycleBin(vaultId, itemId)
+                    .getOrElse { throw it.toUserFacing() }
+                persist(vaultId, write.bytes)
+            }
+        }
 
-    suspend fun permanentDelete(vaultId: String, itemId: String): Result<VaultSaveOutcome> = runCatching {
-        val write = Kdbx.purgeItem(vaultId, itemId).getOrElse { throw it.toUserFacing() }
-        persist(vaultId, write.bytes)
-    }
+    suspend fun permanentDelete(vaultId: String, itemId: String): Result<VaultSaveOutcome> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val write = Kdbx.purgeItem(vaultId, itemId).getOrElse { throw it.toUserFacing() }
+                persist(vaultId, write.bytes)
+            }
+        }
 
     /**
      * 把**已经写好**的字节送到它该去的地方，并让界面能看见这次改动。
@@ -112,6 +135,22 @@ class KdbxItemRepository @Inject constructor(
     private suspend fun persist(vaultId: String, bytes: ByteArray): VaultSaveOutcome {
         val origin = vaultDao.get(vaultId)?.origin
             ?: error("这个库里没有对应记录，无法保存：$vaultId")
+
+        // ★★ 写回前的往返自检（2026-10-02 审计修复）
+        //
+        //   此前这里**完全没做**自检 —— 字节出了 `Kdbx.mutate` 就直接奔向文件/缓存。
+        //   而 `Kdbx.save(File)`（唯一自带自检的入口）在生产代码里零调用点，
+        //   于是「kotpass 对未知 XML 标签静默丢弃」这类编码损坏一路无人拦截：
+        //   本地库要等下次打开才发现，网盘库更糟 —— 坏字节会被上传上去，
+        //   把别的设备上的好副本一起覆盖。
+        //
+        //   ⚠️ 检查开销：只解码不重编码（见 `KdbxRoundTrip.verifyEncoded` 的说明），
+        //      一次 KDF 的量级。放在这里而不是 `#create/#update/...` 各自写一遍，
+        //      是为了让"五个写动作"共用同一个咽点 —— 散着写迟早漏一个。
+        //
+        //   ⚠️ 失败必须**抛出**而不是记日志继续：落盘一份坏库的代价远高于
+        //      "这次保存失败，用户的改动没进去"。后者用户会重试，前者不可逆。
+        Kdbx.verifyWrite(vaultId, bytes).getOrElse { throw it.toUserFacing() }
 
         if (cloudSync.hasCloudSource(origin)) {
             // 网盘：先落本地缓存（立即生效）。

@@ -122,6 +122,13 @@ internal object KdbxItemWriter {
      */
     fun moveToRecycleBin(database: KeePassDatabase, itemId: String): KdbxWriteResult {
         val uuid = entryUuidOf(itemId) ?: return KdbxWriteResult(database, null, applied = false)
+        // 🔴 存在性守卫（2026-10-02 审计修复）：缺了它，删一个**不存在的**条目会
+        //    静默"成功" —— `moveEntry` 找不到目标时**不抛异常、原样返回旧库**，
+        //    于是 `applied` 保持默认 true ⇒ 上层去落盘一份内容完全没变的文件，
+        //    而用户看到「已移入回收站」（其实什么都没发生）。
+        //    对密码管理器而言最坏的一种错：**谎报成功**。
+        database.getEntry { it.uuid == uuid }
+            ?: return KdbxWriteResult(database, uuid, applied = false)
         // ⚠️ `withRecycleBin` 的 block 必须返回**库**（它自己的返回类型就是库），
         //    所以先把库算出来、再包成结果 —— 别想着在 block 里直接返回 KdbxWriteResult。
         val moved = database.withRecycleBin { recycleBinUuid -> moveEntry(uuid, recycleBinUuid) }
@@ -158,6 +165,11 @@ internal object KdbxItemWriter {
      */
     fun permanentDelete(database: KeePassDatabase, itemId: String): KdbxWriteResult {
         val uuid = entryUuidOf(itemId) ?: return KdbxWriteResult(database, null, applied = false)
+        // 🔴 存在性守卫（2026-10-02 审计修复）：与 [moveToRecycleBin] 同源 ——
+        //    `removeEntry` 找不到 uuid 时同样静默返回旧库，`applied` 仍旧为 true
+        //    ⇒ 用户看到"已永久删除"，条目却还在原地（下次打开还在列表里）。
+        database.getEntry { it.uuid == uuid }
+            ?: return KdbxWriteResult(database, uuid, applied = false)
         return KdbxWriteResult(database.removeEntry(uuid), uuid)
     }
 

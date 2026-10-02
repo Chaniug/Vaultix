@@ -292,7 +292,15 @@ class ItemRepositoryImpl @Inject constructor(
             val stored = runCatching { json.decodeFromString<CipherDto>(existing.encryptedPayload) }
                 .getOrElse { error("本地密文损坏，无法编辑：${item.id}") }
             val request = mapper.toUpdateRequest(item, stored, key)
-            val dto = request.toStoredCipherDto(id = existing.id, revisionDate = existing.revisionDate)
+            // ⚠️ `previous = stored` **不能省**：请求体里没有 organizationId /
+            //    passwordHistory / creationDate / attachments / key 这些字段，
+            //    不把改动前的那一行递进去，一次普通的编辑就会把它们静默抹掉
+            //    （详见 `toStoredCipherDto` 的 KDoc —— 组织条目会本地降级为个人条目）。
+            val dto = request.toStoredCipherDto(
+                id = existing.id,
+                revisionDate = existing.revisionDate,
+                previous = stored,
+            )
 
             // ★ 原子写（同 CREATE）。UPDATE 尤其要紧：若只写了行却漏了队列，
             //   该行不在 `pendingIds` 里，下次同步会拿服务端旧版本**覆盖**这次编辑

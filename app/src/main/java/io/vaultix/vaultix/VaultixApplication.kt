@@ -9,6 +9,7 @@ import io.vaultix.common.logging.VaultixLog
 import io.vaultix.vaultix.di.KdbxCloudSyncInitializer
 import io.vaultix.vaultix.security.AutoLockController
 import io.vaultix.vaultix.security.AutoRestoreTrigger
+import io.vaultix.vaultix.security.ScreenSecurityGuard
 import io.vaultix.vaultix.security.VaultLockManager
 import javax.inject.Inject
 
@@ -60,6 +61,21 @@ class VaultixApplication : Application() {
     lateinit var autoRestoreTrigger: AutoRestoreTrigger
 
     /**
+     ★ **防截屏守卫**（2026-10-02 双库健康度审计 · 批次 A）。
+     *
+     * ⚠️ 必须在 `onCreate` 里显式 [install]（不同于上面几个"价值全在 init 块"的同伴）：
+     * 它需要 `Application` 引用来注册 `ActivityLifecycleCallbacks`，而这个引用在
+     * 字段注入期拿到会过早且没必要 —— `onCreate` 仍早于**任何** Activity 被创建。
+     *
+     * 为什么非它不可：`FLAG_SECURE` 原先只挂在 `MainActivity`（Composable 那一路），
+     * 其余 9 个 Activity（自动填充 / 凭据提供商 / 通行密钥存取）**全裸** ——
+     * 而那几张恰恰是用户在第三方 App 里最常看到、屏上又有密码与条目名的页面。
+     * 详见 [io.vaultix.vaultix.security.ScreenSecurityGuard] 的类 KDoc。
+     */
+    @Inject
+    lateinit var screenSecurityGuard: ScreenSecurityGuard
+
+    /**
      * 本进程是否为「为自动填充 / 凭据提供商而拉起」。
      *
      * 由 [MainActivity] / `AutofillActivity` / `CredentialProviderActivity` 在被系统
@@ -81,6 +97,9 @@ class VaultixApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // ★ 第一个就该做的事情：`super.onCreate()` 之后、任何 Activity 创建之前注册
+        //   防截屏。晚于此处的任何时机都会留下一个"能被截到敏感内容"的窗口。
+        screenSecurityGuard.install(this)
         // 诊断日志装配（2026-09-16）：**只有 DEBUG 构建才开**。
         // release 下 enabled=false ⇒ 门面在拼字符串之前就返回，零开销、也绝不外泄异常栈。
         // ⚠️ 日志内容有铁律（禁记密码/密钥/token/明文），见 VaultixLog 的 KDoc。

@@ -570,6 +570,42 @@ object Kdbx {
         )
     }
 
+    /**
+     * ★ 校验**已经编码好**的字节是否安全落盘（[KdbxRoundTrip] 的反向那一半）。
+     *
+     * ## 为什么必须有它（2026-10-02 审计修复）
+     *
+     * `data:repository` 的 `KdbxItemRepository.persist` 拿到的字节是 [mutate] 编码出来的，
+     * 而它此前**直接就把字节写进文件/缓存**，一次往返自检都没做。
+     * 后果：`Docs/09` 与 `SafKdbxFileSource` KDoc 里承诺的"编码不损坏"保障
+     * **在这条主路径上完全不成立** —— 而 `Kdbx.save(File)`（真正带自检的那个入口）
+     * 全项目零调用点，是一条**看起来在保护、实际没人走**的死路径。
+     *
+     * 这条主路径必须是带自检的，理由比"本地写"更硬：**网盘分支会把同一份字节上传**，
+     * 写坏一次就是「本地坏 + 云端被覆盖」双份灾难。
+     *
+     * ## 为什么不再_encode_一遍
+     *
+     * 见 [KdbxRoundTrip.verifyEncoded]：单次编码的代价与一次解锁（KDF）相当，
+     * 让它重跑一遍只会让人想把它关掉。这里做最省的自检。
+     *
+     * @return 自检通过时给出结论（含编码后的字节与保真度提示）；
+     *   不通过时返回 [KdbxWriteFailure.RoundTripFailed]，一个字节都别落盘。
+     */
+    fun verifyWrite(vaultId: String, bytes: ByteArray): Result<KdbxRoundTripResult> {
+        val session = KdbxSessionStore.get(vaultId)
+            ?: return Result.failure(KdbxFailure(KdbxOpenError.NotUnlocked))
+
+        // ⚠️ 比对基准必须是**当前会话里的那个库**：它正是 `mutate` 编码时的输入
+        //    （`mutate` 结尾已经把新会话换回去了），不是"随便一份旧内容"。
+        val checked = KdbxRoundTrip.verifyEncoded(bytes, session.database, session.credentials)
+        return if (checked.isSafeToWrite) {
+            Result.success(checked)
+        } else {
+            Result.failure(KdbxWriteFailure.RoundTripFailed(checked))
+        }
+    }
+
     /** 锁定单个库（丢弃明文）。幂等。 */
     fun lock(vaultId: String) = KdbxSessionStore.close(vaultId)
 

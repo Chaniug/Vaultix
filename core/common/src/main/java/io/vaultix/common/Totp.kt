@@ -48,6 +48,63 @@ private const val STEAM_PERIOD = 30
 private const val DEFAULT_PERIOD = 30
 private const val DEFAULT_DIGITS = 6
 
+/**
+ * 默认 HMAC 算法（RFC 6238 §1.2：实现 MUST 支持 SHA-1）。
+ *
+ * 同时也是 [normalizeAlgorithm] 认不出写法时的**回落值**。
+ *
+ * ⚠️ 刻意**不**把认不出的原始串直接拼进 `Mac.getInstance`：那会抛
+ * `NoSuchAlgorithmException`，而上层 `generateTotp` 的 `catch (_: Exception)`
+ * 会把它吞成 `"0".repeat(digits)` ⇒ 用户看到**恒定的 `000000`** 且没有任何提示。
+ * 宁可回落到 RFC 默认语义，也不要产出一段看似有效实则永假的验证码。
+ */
+private const val DEFAULT_ALGORITHM = "SHA1"
+
+/**
+ * JCA 认的 HMAC-SHA 位数白名单（`HmacSHA<n>` 中 `<n>` 的部分）。
+ *
+ * 只放行这张表：表外的位数一律回落，既挡住注入式的奇怪串，也保证
+ * `Mac.getInstance` 不会因为不认识的位数抛异常。
+ */
+private val SUPPORTED_SHA_BITS = setOf("1", "224", "256", "384", "512")
+
+/**
+ * 算法名的各种现实写法：`HMAC-SHA-256` / `SHA256` / `HmacSHA256` / `hmac-sha-1`。
+ * 前缀、大小写、分隔符全都可选，只萃取出 `SHA` 后面的位数。
+ */
+private val ALGORITHM_BITS = Regex("^(?:HMAC[-_ ]?)?SHA[-_ ]?(\\d+)$")
+
+/**
+ * 把各种写法归一成 JCA 认的算法后缀（用于 `Mac.getInstance("Hmac$result")`）。
+ *
+ * ## 为什么非要这一层
+ *
+ * 以前直接写 `"Hmac$algorithm"`，于是：
+ *
+ * | 来源 | 写法 | 拼出来的名字 | 后果 |
+ * |---|---|---|---|
+ * | Bitwarden / Google Authenticator | `SHA256` | `HmacSHA256` | ✅ 正常 |
+ * | KeePassXC / KeePassOTP 的 `TimeOtp-Algorithm` | **`HMAC-SHA-256`** | 🔴 抛异常 ⇒ 吞成 `000000` |
+ *
+ * KDBX 侧的 `KdbxTotpCodec.resolveSettings` 会把字段值 `trim().uppercase()` 原样透传，
+ * 所以「用 KeePassXC 建的 SHA-256 条目，在 Vaultix 里永远显示 `000000`」是必现的。
+ *
+ * ## ⚠️ 为什么是**顶层函数**而不是某个 object 的成员
+ *
+ * 计算（`TotpGenerator.generateHmac`）与解析（`OtpUriParser.parseOtpAuth`）**两个 object
+ * 都要用它** —— 挂在任何一个里，另一个就得写 `TotpGenerator.xxx` 这种跨模块倒依赖，
+ * 或者直接复制一份（两个副本各自漂移，正是这类"归一化"最容易失守的方式）。
+ *
+ * 回归防线设在 **[TotpGenerator.generateHmac] 这一个咽点上**：所有路径（URI / KDBX
+ * 字段 / 位置式 `30;6;SHA1`）最终都要过它，不可能有"某个入口忘了归一化"这种漏法。
+ *
+ * @return `SHA1` / `SHA224` / `SHA256` / `SHA384` / `SHA512`；认不出则 [DEFAULT_ALGORITHM]。
+ */
+internal fun normalizeAlgorithm(raw: String): String {
+    val bits = ALGORITHM_BITS.matchEntire(raw.trim().uppercase(Locale.US))?.groupValues?.get(1)
+    return if (bits != null && bits in SUPPORTED_SHA_BITS) "SHA$bits" else DEFAULT_ALGORITHM
+}
+
 /** mOTP 固定步长（秒）与码长。 */
 private const val MOTP_PERIOD = 10
 private const val MOTP_DIGITS = 6
@@ -79,7 +136,7 @@ object TotpGenerator {
     ): String {
         val safeDigits = digits.coerceIn(1, 10)
         return try {
-            val timeStep = timeSeconds / period
+            val timeStep = timeSeconds / safePeriod(period)
             val key = decodeBase32(secret)
             val hmac = generateHmac(key, timeStep, algorithm)
             truncateHmac(hmac, safeDigits)
@@ -150,15 +207,40 @@ object TotpGenerator {
 
     /** 当前验证码的剩余有效秒数（向上取整到步长边界）。 */
     fun remainingSeconds(period: Int = 30, timeSeconds: Long = System.currentTimeMillis() / 1000): Int {
-        val remainder = (timeSeconds % period).toInt()
-        return period - remainder
+        val safe = safePeriod(period)
+        val remainder = (timeSeconds % safe).toInt()
+        return safe - remainder
     }
 
     /** 当前时间步长的进度（0.0 刚刷新 → 1.0 即将刷新），用于倒计时进度条。 */
     fun progress(period: Int = 30, timeSeconds: Long = System.currentTimeMillis() / 1000): Float {
-        val remaining = remainingSeconds(period, timeSeconds)
-        return 1.0f - (remaining.toFloat() / period)
+        val safe = safePeriod(period)
+        val remaining = remainingSeconds(safe, timeSeconds)
+        return 1.0f - (remaining.toFloat() / safe)
     }
+
+    /**
+     * 步长兜底：`period <= 0` 一律按 [DEFAULT_PERIOD] 算。
+     *
+     * ## 🔴 为什么这一处守卫这么重要
+     *
+     * `otpauth://...?period=0`（以及负数）是**能被解析成功**的畸形输入：
+     * `parseOtpAuth` 的 `params["period"]?.toIntOrNull()` 取到 `0` 就照用，
+     * 于是下游 `timeSeconds % period` / `timeSeconds / period` 抛
+     * `ArithmeticException: divide by zero`。
+     *
+     * 致命之处在于它在**哪里**抛出：`TotpCodesScreen` 在 Composable 里直接调
+     * [remainingSeconds] 算倒计时 —— Compose 的重组帧没有 try/catch，
+     * 抛出即**整页崩溃**（不是"这条验证码显示不对"，是"验证码列表页打不开"）。
+     *
+     * ⇒ 三个入口（[generateTotp] / [remainingSeconds] / [progress]）统一过这里，
+     *   任何一个漏掉都会留下一条**可被外部数据触发的崩溃路径**。
+     *
+     * ⚠️ 注意 [generateTotp] 里的 `catch (_: Exception)` 能兜住除零（所以那里不会崩、
+     *    只是出 `000000`），但 [remainingSeconds] 是**无 catch 的纯计算** ——
+     *    「有保护的那条路径看起来正常」会掩盖边上的真崩溃，这正是它躲了这么久的原因。
+     */
+    internal fun safePeriod(period: Int): Int = if (period > 0) period else DEFAULT_PERIOD
 
     /** 遮罩时至少保留的位数（见 [mask]）。 */
     private const val MASK_KEEP_MIN = 3
@@ -198,8 +280,14 @@ object TotpGenerator {
         return code.take(keep) + MASK_CHAR.toString().repeat(code.length - keep)
     }
 
+    /**
+     * 唯一的 HMAC 咽点 —— 算法名的归一化**只在这里做一次**。
+     *
+     * 见 [normalizeAlgorithm]：不归一化的话，KeePassXC 写的 `HMAC-SHA-256`
+     * 会拼成 `HmacHMAC-SHA-256`，抛异常后一路被上层吞成恒定的 `000000`。
+     */
     private fun generateHmac(key: ByteArray, counter: Long, algorithm: String): ByteArray {
-        val algorithmName = "Hmac$algorithm"
+        val algorithmName = "Hmac${normalizeAlgorithm(algorithm)}"
         val mac = Mac.getInstance(algorithmName)
         mac.init(SecretKeySpec(key, algorithmName))
         val buffer = ByteBuffer.allocate(8)
@@ -399,17 +487,24 @@ object OtpUriParser {
         val secret = params["secret"]?.trim()?.takeIf { it.isNotEmpty() } ?: return null
         val issuerParam = params["issuer"]?.trim().orEmpty()
         val finalIssuer = issuerParam.ifBlank { labelIssuer }
-        val algorithmRaw = (params["algorithm"] ?: "SHA1").uppercase(Locale.US)
-        val type = detectOtpType(authority, finalIssuer, labelIssuer, algorithmRaw, params["encoder"].orEmpty())
+        val algorithmRaw = (params["algorithm"] ?: DEFAULT_ALGORITHM).uppercase(Locale.US)
+        val type = detectOtpType(authority, finalIssuer, algorithmRaw, params["encoder"].orEmpty())
         val counter = if (type == OtpType.HOTP) params["counter"]?.toLongOrNull() ?: 0L else 0L
         val pin = if (type == OtpType.YANDEX) params["pin"].orEmpty() else ""
-        val period = params["period"]?.toIntOrNull() ?: DEFAULT_PERIOD
+        // ⚠️ `period=0` / 负数是**能解析成功**的畸形输入（`toIntOrNull` 认它）：
+        //    原样存进 TotpConfig 会让下游整除/取模抛 ArithmeticException。
+        //    ⇒ 在**解析边界**就收掉，别指望每个消费点都记得兜。
+        val period = params["period"]?.toIntOrNull()?.takeIf { it > 0 } ?: DEFAULT_PERIOD
         val digits = if (type == OtpType.STEAM) {
             STEAM_DIGITS
         } else {
             params["digits"]?.toIntOrNull() ?: DEFAULT_DIGITS
         }
-        val algorithm = if (type == OtpType.STEAM) "SHA1" else algorithmRaw
+        val algorithm = if (type == OtpType.STEAM) {
+            DEFAULT_ALGORITHM
+        } else {
+            normalizeAlgorithm(algorithmRaw)
+        }
         return TotpConfig(
             secret = secret,
             period = period,
@@ -443,13 +538,12 @@ object OtpUriParser {
     private fun detectOtpType(
         authority: String,
         issuer: String,
-        labelPart: String,
         algorithm: String,
         encoder: String,
     ): OtpType = when {
         authority == "hotp" -> OtpType.HOTP
         authority == "yaotp" -> OtpType.YANDEX
-        isSteam(issuer, labelPart, algorithm, encoder) -> OtpType.STEAM
+        isSteam(issuer, algorithm, encoder) -> OtpType.STEAM
         issuer.contains("yandex", ignoreCase = true) -> OtpType.YANDEX
         else -> OtpType.TOTP
     }
@@ -467,11 +561,27 @@ object OtpUriParser {
      * Steam Guard 识别：满足其一即判定为 Steam 验证码（密钥为 Base64，非 Base32）。
      * 与 Bitwarden / Bastion 的识别口径一致（encoder=steam 为 Bastion 的显式标记）。
      */
-    private fun isSteam(issuer: String, labelPart: String, algorithm: String, encoder: String): Boolean {
+    /**
+     * Steam Guard 识别（密钥为 Base64，非 Base32；5 位 25 字符字母表）。
+     *
+     * 判定顺序即优先级：**显式标记 `encoder=steam` → 发行方含 "steam" → 算法字段等于 "steam"**。
+     *
+     * ## ⚠️ 为什么**不再**看 labelPart（账号部分）
+     *
+     * 原先四个条件里有一条 `labelPart.contains("steam")` —— 它会在
+     * `otpauth://totp/github.com:steam@example.com?...` 这类**普通 TOTP 条目**上误判：
+     * 账号名里带 "steam" 但走的是标准 Base32 + 6 位 SHA1。误判的后果不是显示难看，
+     * 而是**按 Steam 算法算出一个完全不同的码** ⇒ 这条验证码**永远不对**，
+     * 且用户完全无从判断是自己输还是软件错。
+     *
+     * ⇒ 拿掉 labelPart 不损失 Steam 的识别率：真实的 Steam Guard 条目一定有
+     *    `issuer=Steam` 或 label 的发行方段是 `Steam`（`detectOtpType` 传的是
+     *    [finalIssuer] 与 label 的发行方段，两者都不含账号部分）。
+     */
+    private fun isSteam(issuer: String, algorithm: String, encoder: String): Boolean {
         val s = "steam"
         return encoder.equals(s, ignoreCase = true) ||
             issuer.contains(s, ignoreCase = true) ||
-            labelPart.contains(s, ignoreCase = true) ||
             algorithm.equals(s, ignoreCase = true)
     }
 

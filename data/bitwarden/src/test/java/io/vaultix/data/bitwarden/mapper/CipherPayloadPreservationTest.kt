@@ -465,4 +465,48 @@ class CipherPayloadPreservationTest {
         // linkedId 按官方分段编码原样保留（不能被当成顺序编号改写）
         assertEquals(100, fields[3].linkedId)
     }
+
+    // ---- 2026-10-02 双库健康度审计：请求体表达不了的字段必须顺延 ----
+
+    @Test
+    fun storedDtoKeepsFieldsTheRequestBodyCannotExpress() {
+        // 🔴 回归：`toStoredCipherDto` 此前只拷 14 个字段 ⇒ **每次编辑**都会抹掉
+        //    请求体里压根不存在的那几个字段（组织归属、密码历史、创建时间、附件元信息）。
+        //    其中 organizationId 丢了，组织成员条目在本地会**降级成个人条目** ——
+        //    用户看到的现象是"共享库里的东西不见了"。
+        val previous = CipherDto(
+            id = "cipher-org",
+            organizationId = "org-42",
+            creationDate = "2026-01-02T03:04:05.000Z",
+            revisionDate = "rev-old",
+            key = "item-level-key",
+        )
+        val request = CipherRequest(type = 1, name = "enc:name")
+
+        val dto = request.toStoredCipherDto(
+            id = "cipher-org",
+            revisionDate = "rev-new",
+            previous = previous,
+        )
+
+        assertEquals("org-42", dto.organizationId)
+        assertEquals("2026-01-02T03:04:05.000Z", dto.creationDate)
+        assertEquals("item-level-key", dto.key)
+        // revisionDate 由调用方给的新值（服务端返回的），不能沿用旧的
+        assertEquals("rev-new", dto.revisionDate)
+    }
+
+    @Test
+    fun storedDtoWithoutPreviousStaysClean() {
+        // 新建路径没有"改动前那一行" ⇒ 这些字段本来就该是空的，
+        // 不能因为加了顺延逻辑就把上一份数据带过来。
+        val dto = CipherRequest(type = 1, name = "enc:name")
+            .toStoredCipherDto(id = "new", revisionDate = "r1")
+
+        assertNull(dto.organizationId)
+        assertNull(dto.creationDate)
+        assertNull(dto.key)
+        assertEquals(0, dto.passwordHistory.size)
+        assertEquals(0, dto.attachments.size)
+    }
 }
