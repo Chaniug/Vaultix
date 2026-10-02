@@ -184,12 +184,29 @@ class AutoRestoreTriggerTest {
 
     // ---- 规则 1：档位离开 Never ⇒ 删信封 ----
 
+    // ⚠️ **2026-10-02 修 flaky：起点必须让「恢复」组合不可能出现。**
+    //
+    // `AutoRestoreTrigger` 在 **`init` 里就 `scope.launch` 启动收集**（`Dispatchers.Default`），
+    // 而 `Fixture()` 的初始值是 `(Never, keyInMemory=false)`；再配上 `hasEnvelope=true`，
+    // 这**恰好就是「应恢复」的组合**（见 reconcile 分支 3）⇒ 收集协程一跑起来就会
+    // 调 `restore()`。测试随后断言 `coVerify(exactly = 0) { restore() }` ⇒ 时红时绿，
+    // 成败取决于 **Default 线程与测试线程谁先跑**。
+    //
+    // ⇒ 修法不是"多等一会儿"（等再久也抹不掉已经发生的调用），
+    //   而是**把起点挪到一个不可能触发恢复的组合**：
+    //   构造前先置 `keyInMemory = true` ⇒ 起点命中分支 2（幂等写信封），
+    //   此后**只翻档位、不动钥匙** ⇒ 任何时刻的组合都不可能是 `(Never, 无钥匙, 有信封)`。
+    //
+    // 另一半纪律：**只翻一个输入源**。同时翻两个源会经过中间态，而 `combine`
+    // 对中间态也会求值 —— 想测「A 与 B 同时成立」，就必须让路径上不出现别的组合。
     @Test
     fun `档位离开Never_删信封且不恢复`() = runTest {
         val f = Fixture()
+        f.keyInMemory.value = true // ← 起点 (Never, 有钥匙)：写信封，绝不恢复
         val (_, autoUnlock) = trigger(f, hasEnvelope = true)
 
-        f.keyInMemory.value = false
+        // 只翻档位（钥匙保持在内存 ⇒ 不会经过「无钥匙 + Never」这个恢复组合）。
+        // 分支 1 只看 anyNever，钥匙状态不影响本条断言的语义。
         f.timeout.value = VaultTimeout.FiveMinutes
         awaitCondition("离开 Never 应删信封") {
             runCatching { coVerify(exactly = 1) { autoUnlock.removeEnvelope() } }.isSuccess
@@ -200,11 +217,12 @@ class AutoRestoreTriggerTest {
 
     @Test
     fun `非Never档_即使有信封也不恢复`() = runTest {
+        // 同上：先把起点挪出「恢复」组合，再只翻档位。
         val f = Fixture()
+        f.keyInMemory.value = true
         val (_, autoUnlock) = trigger(f, hasEnvelope = true)
 
         f.timeout.value = VaultTimeout.FiveMinutes
-        f.keyInMemory.value = false
         settle()
 
         coVerify(exactly = 0) { autoUnlock.restore() }
