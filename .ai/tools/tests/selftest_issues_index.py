@@ -40,7 +40,7 @@ GOOD_INDEX = """# 问题与坑整理
 | [甲-样例](./issues/甲-样例.md) | 样例 | 2 |
 | [乙-样例](./issues/乙-样例.md) | 样例 | 1 |
 
-### [甲-样例](./issues/甲-样例.md) — 样例
+### [甲-样例](./issues/甲-样例.md) — 样例（2 条）
 
 | # | 标题 |
 |---|---|
@@ -62,6 +62,11 @@ E_BODY_WRONG_SUMMARY = GOOD_BODY.replace("共 **2** 条", "共 **9** 条")
 # 「正文有、索引缺」方向：正文加一条、索引不动
 F_BODY_EXTRA = GOOD_BODY + "\n## 3. 第三条坑（索引还没登记）\n\n正文。\n"
 
+# ⑦ 分节标题行里的「（N 条）」写错，而总表/题注/编号表**三处全对**
+#    —— 这正是 2026-10-02 探针漏掉的那一处（#160 自称校准了，实际没查它）。
+#    如果探针只查三处，本例会静默通过 ⇒ 用例存在的意义就是钉死这条。
+G_SECTION_TITLE_COUNT = GOOD_INDEX.replace("— 样例（2 条）", "— 样例（7 条）")
+
 
 def build(tmp: Path, body: str, index: str) -> Path:
     (tmp / ".ai" / "issues").mkdir(parents=True, exist_ok=True)
@@ -81,6 +86,7 @@ CASES = [
     ("④ 总表条数列写错 ⇒ 必须报", GOOD_BODY, D_INDEX_WRONG_COUNT, True),
     ("⑤ 题注数字写错、名单却是对的 ⇒ 单看名单发现不了", E_BODY_WRONG_SUMMARY, GOOD_INDEX, True),
     ("⑥ 正文多一条、索引没动 ⇒ 同 ② 的方向", F_BODY_EXTRA, GOOD_INDEX, True),
+    ("⑦ 分节标题行「（7 条）」写错、三处全对 ⇒ 只查三处会静默漏掉", GOOD_BODY, G_SECTION_TITLE_COUNT, True),
 ]
 
 
@@ -103,6 +109,8 @@ def main() -> int:
                 ok, detail = False, f"没落在总表列：{joined}"
             if name.startswith("⑤") and "题注" not in joined:
                 ok, detail = False, f"没落在题注：{joined}"
+            if name.startswith("⑦") and "分节标题行" not in joined:
+                ok, detail = False, f"没落在分节标题行：{joined}"
         print(("✅ " if ok else "❌ ") + name + (f"  ← {detail}" if detail else ""))
         if not ok:
             failures += 1
