@@ -12,7 +12,41 @@
 此前约定「两边保持同步」，结果是同一主题两处各有一份、必然漂移（AI 会看错位置）。
 **要改内容，只改这里。**
 
-## 🕐 最新状态（**2026-10-01 傍晚** · 交接点，接力请先看这几行）
+## 🕐 最新状态（**2026-10-02** · 双库健康度审计 · 批次 A）
+
+> ### ★ 当前状态：**7 个 "双库共有 / 只坏一条腿" 的洞已修；索引账务已校到实测值。**
+>
+> 起因是"两个引擎（Bitwarden / KDBX）各自健康吗"的一次通读式审计 —— 不看 spec、不猜，
+> 只问一句：**这条链上"成功"是谁报的、它有没有真的核过**（`ISSUES #153–#159`，#160 是副产品）。
+> 共同点是它们**全部报"成功"**：
+>
+> | # | 现象（都是"用户以为成功了"） | 解法一句话 |
+> |---|---|---|
+> | 153 | KeePassXC 建的 SHA-256 TOTP 条目**恒为 `000000`** | 算法名归一化（`HMAC-SHA-256` → `HmacSHA256`），咽点设在 `generateHmac` |
+> | 154 | `period=0` ⇒ Composable 里算倒计时抛除零，**验证码页整页崩** | `safePeriod()` + 在**解析边界**就夹住 |
+> | 155 | 编辑一次 Bitwarden 条目 ⇒ 组织条目**降级为个人条目**（`organizationId` 等 5 字段被抹） | `previous` 顺延（不是塞进请求体，那会改提交语义） |
+> | 156 | 离线"新建 → 编辑" ⇒ **那笔编辑静默丢弃** | `createdIdRemap`（管本次循环）+ `repointCipherId`（管下次）**两处缺一不可** |
+> | 157 | KDBX 软删 / 永久删**谎报成功** | 补存在性守卫；`applied` 默认 false |
+> | 158 | 注释说"由 `Kdbx.save(File)` 兜底"，而它**零调用点** —— 主写路径一步自检都没做 | 新加 `verifyWrite`（只解码不重编码）+ `persist` 共用咽点；五动作统一切 IO |
+> | 159 | `FLAG_SECURE` 只挂 `MainActivity`，**另外 9 个 Activity 全裸**（自动填充框/通行密钥选择） | `ScreenSecurityGuard` 生命周期级统一挂载（"记得写一行"必然漏） |
+>
+> **值得留给下一棒的判据**（都写进对应分篇）：凡 `catch` 之后返回**兜底值**的，要反问
+> "这值会不会被认成有效结果"（#153）；凡由请求体/领域模型**反推**本地快照的，要逐个回答
+> "这些字段去哪了"（#155）；凡 `id` 会被服务端替换的，要查**哪些地方缓存了旧 id**（#156）；
+> 凡表达"改动有没有真的发生"的标志位，**默认必须是"没发生"**（#157）；
+> 注释里写"由某某兜底"时，**当场确认那个调用点存在**（#158，与 #147 同源）。
+>
+> **门禁实证**：detekt 全源集（19 个）**0 违规**，且用压低阈值探针自证非空跑（报 27151）·
+> 孤儿串 **118 < 基线 120**（按 #127 做了**集合差**，无新增）· 其余 6 个 `.ai/tools` 脚本全绿 ·
+> TOTP 用**独立 JVM 工程真编译**跑 RFC 6238 向量，**27 条断言全通**（`#153` 记了复现方式）。
+> ⚠️ **沙箱无 Android SDK ⇒ 未跑编译与单测**（`#137`）：提交信息禁止写"门禁全绿"。
+>
+> **顺带修的数据库已经"账实不符"**：核对 `ISSUES.md` 时发现**第四次漂移**，四种形态
+> （标题层级写错 ⇒ 从未被计入 / 题注用**增量**改法 / 数字与名单**互不可证** / 跨表错位与重复行）。
+> ⇒ 新增 `.ai/tools/check_issues_index.py` + 6 例正反自测，**七篇已校到「索引 = 题注 = 正文」**（`#160`）。
+> ⚠️ 02、04 篇这次**恰好差额为 0** —— 这不能推出"不用查"（与 #145 的"卡片颜色既不能证明也不能否证"同构）。
+
+## 🕐 上一状态（**2026-10-01 傍晚** · v0.8.0 已发布）
 
 > ### ★ 当前状态：**KDBX 页与条目卡左栏的观感已重做；`v0.8.0` 待发**。
 >
@@ -175,7 +209,7 @@
 | `issues/` | 坑的正文 7 篇：`01-构建与环境` … `07-数据与同步` | 各 4~43KB |
 | `decisions/` | **逻辑定稿**（用户拍板的方向，非根因、非实现）：`快速解锁房子化-两级钥匙层级-定稿.md`（**快速解锁现行真源**，2026-09-28 起修订前两篇）、`库选择与快速解锁-逻辑定稿.md`、`快速解锁能力级重构-定稿.md`、`设置页信息架构-定稿.md`、`通行密钥UV豁免-定稿.md` | — |
 | `SESSION-YYYY-MM-DD.md` | 逐轮工作日志（append-only） | — |
-| `tools/` | **本地自检脚本**（不需 Android SDK，`python3` 直接跑）。覆盖「编译器才能发现、detekt 查不到」的缝：<br>`check_compile_smells.py` = 图标导入 / 顶层常量顺序 / `R.string` 悬空引用 / **重复声明**（第四个检查，见 #103；带 `--detekt-probe` 两级探针）；<br>`check_signature_types.py` = 签名里的类型名是否存在；<br>`check_import_packages.py` = `import` 的包路径对不对（#101 / #104）；<br>`check_experimental_optin.py` = 实验性 API 有没有 `@OptIn`（#101.2，带 `--selftest`）；<br>`check_orphan_strings.py` = `strings.xml` 里**零引用**的字符串（#126；⚠️ 是**报告器不是删除器** —— 「被搬走的留，被取代的删」需人判读；`--gate` 用基线做**只减不增**约束）；<br>`check_state_flattening.py` = **多态状态（sealed ≥3 分支）有没有被压成二值开关**（#124；`Switch(checked = x is S.On)` 会把 `Partial` 与 `Off` 合并 —— `is On` 是合法 Kotlin，类型检查与 detekt **双双查不出**）；<br>`check_orphan_state.py` = **Compose 状态变量是不是「只写不读」**（2026-09-30 真机实录：`var showX by remember…` + `onClick = { showX = true }` 都写了、**漏了 `if (showX) { XDialog() }`** ⇒ 点那行毫无反应；⚠️ 这一形状**五道门禁全盲**：Kotlin 对 `by` 委托的**局部**变量不报 unused、detekt 不查局部委托、孤儿串看不见。判据=「标识符只出现在声明与赋值左侧」；**零容忍**（无基线）。配套自测 `tests/selftest_orphan_state.py`）；<br>`fetch_release_asset.sh` = **分块断点续传下载 release 资产**（沙箱整文件下载不可靠，见 #105；自带 `zipfile` 完整性校验） |
+| `tools/` | **本地自检脚本**（不需 Android SDK，`python3` 直接跑）。覆盖「编译器才能发现、detekt 查不到」的缝：<br>`check_compile_smells.py` = 图标导入 / 顶层常量顺序 / `R.string` 悬空引用 / **重复声明**（第四个检查，见 #103；带 `--detekt-probe` 两级探针）；<br>`check_signature_types.py` = 签名里的类型名是否存在；<br>`check_import_packages.py` = `import` 的包路径对不对（#101 / #104）；<br>`check_experimental_optin.py` = 实验性 API 有没有 `@OptIn`（#101.2，带 `--selftest`）；<br>`check_issues_index.py` = **`ISSUES.md` 索引与分篇正文的一致**（#160：曾漂四次；查编号集合 / 题注数字 / 总表条数列三处相等，配套 `tests/selftest_issues_index.py` **6 例正反用例**）；<br>`check_orphan_strings.py` = `strings.xml` 里**零引用**的字符串（#126；⚠️ 是**报告器不是删除器** —— 「被搬走的留，被取代的删」需人判读；`--gate` 用基线做**只减不增**约束）；<br>`check_state_flattening.py` = **多态状态（sealed ≥3 分支）有没有被压成二值开关**（#124；`Switch(checked = x is S.On)` 会把 `Partial` 与 `Off` 合并 —— `is On` 是合法 Kotlin，类型检查与 detekt **双双查不出**）；<br>`check_orphan_state.py` = **Compose 状态变量是不是「只写不读」**（2026-09-30 真机实录：`var showX by remember…` + `onClick = { showX = true }` 都写了、**漏了 `if (showX) { XDialog() }`** ⇒ 点那行毫无反应；⚠️ 这一形状**五道门禁全盲**：Kotlin 对 `by` 委托的**局部**变量不报 unused、detekt 不查局部委托、孤儿串看不见。判据=「标识符只出现在声明与赋值左侧」；**零容忍**（无基线）。配套自测 `tests/selftest_orphan_state.py`）；<br>`fetch_release_asset.sh` = **分块断点续传下载 release 资产**（沙箱整文件下载不可靠，见 #105；自带 `zipfile` 完整性校验） |
 | `tools/tests/` | **门禁自己的自测**（改探针前必跑）：<br>`selftest_duplicate_declarations.py` = 7 个正反用例；<br>`selftest_import_packages.py` = **端到端**（真把 import 改错、跑脚本、看退出码、还原）；<br>`selftest_cross_file_private.py` = **端到端**（真把 `internal` 改回 `private`、验证报出两个调用方、还原）；<br>`selftest_orphan_strings.py` = 7 个用例（含**前缀撞名** `a_head`/`a_header` 的经典误判，以及"零引用被误删只在运行时才炸"的各种引用形态）；<br>`selftest_state_flattening.py` = 9 个正反用例。⚠️ 含**全限定名**形态（`Outer.Cap.On`）—— 少了它，探针会在真实代码上静默失效（见该文件开头） |
 
 > ⚠️ **各道脚本的扫描范围都是 `app/ core/ data/ domain/`**（排除 `reference/` 对照源码与 `build/`）。
