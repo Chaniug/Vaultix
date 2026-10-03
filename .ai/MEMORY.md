@@ -138,7 +138,7 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 | [8.4 UI·观感](./conventions/8.4-UI·观感.md) | UI·观感 | 12 |
 | [8.5 通行密钥](./conventions/8.5-通行密钥.md) | 通行密钥 | 12 |
 | [8.6 工程质量](./conventions/8.6-工程质量.md) | 工程质量 | 12 |
-| [8.7 环境](./conventions/8.7-环境.md) | 环境 | 9 |
+| [8.7 环境](./conventions/8.7-环境.md) | 环境（含**沙箱内真编译 + 真跑单测**，无 SDK 也能跑） | 10 |
 | [8.8 M3Expressive](./conventions/8.8-M3Expressive-采纳范围与顺序.md) | M3E（2026）采纳范围与顺序 | — |
 | [8.9 文档分篇](./conventions/8.9-文档分篇.md) | 文档分篇（防超长上下文） | 5 |
 | [8.10 架构与目录地图](./conventions/8.10-架构与目录地图.md) | **东西在哪 + 该信哪份文档**（接力地图） | — |
