@@ -39,6 +39,7 @@ import android.app.Application
 import android.os.Bundle
 import android.view.Window
 import android.view.WindowManager
+import io.mockk.capture
 import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
@@ -67,7 +68,11 @@ class ScreenSecurityGuardTest {
         every { prefs.screenSecurity } returns flowOf(screenSecurity)
         val app = mockk<Application>(relaxed = true)
         val captor = slot<Application.ActivityLifecycleCallbacks>()
-        every { app.registerActivityLifecycleCallbacks(captor) } just runs
+        // ⚠️ slot 必须用 `capture(...)` 包裹，直接传 captor 编译不过
+        //（`Argument type mismatch: actual type is 'CapturingSlot<…>'`）——
+        // 2026-10-03 由 CI 的 `:app:compileFullDebugUnitTestKotlin` 抓出，
+        // 写法与 `ItemRepositoryImplTest:151` 同款。
+        every { app.registerActivityLifecycleCallbacks(capture(captor)) } just runs
 
         ScreenSecurityGuard(prefs).install(app)
 
