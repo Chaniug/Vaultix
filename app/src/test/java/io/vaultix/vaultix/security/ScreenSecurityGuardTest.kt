@@ -19,17 +19,23 @@
  * **"忘了写" 不会编译失败、也不会崩，只会静默少一层保护。**
  * ⇒ 唯一能钉住它的办法就是测试：把"哪些时机必须设 flag"写成断言。
  *
- * ## 断言方向的选择（本文件的判据）
+ * ## 怎么消除竞态：等「快照写进去了」这个信号，而不是等它自己发生
  *
- * 开启侧与关闭侧的**竞态后果不对称**，所以两类用例的写法也不同：
+ * `enabledSnapshot` 初值是 `true`（安全默认），而真正把它改成实际偏好值的
+ * `collect` 跑在**进程级 `Dispatchers.Default`** 上。⇒ 若不等待就驱动生命周期回调，
+ * 那一次读到的是初值 `true`，会走 `setFlags` 分支；而**回调不会再有第二次**来纠正。
  *
- * | 用例 | 快照未就绪时的行为 | 风险 |
- * |---|---|---|
- * | 开启（`setFlags`） | 初值就是 `true` ⇒ 仍会 `setFlags` | **不会假绿** |
- * | 关闭（`clearFlags`） | 快照仍是 `true` ⇒ 会走 `setFlags` 而非 `clearFlags` | 只会**假红** |
+ * ⚠️ "驱动一次再 `verify(timeout = …)` 等 `clearFlags`"**救不了**：
+ *   `verify` 的 timeout 只轮询**已经发生**的调用，不会重新驱动回调。
+ *   那种写法的结果不是"偶尔红"，而是**稳定超时失败**——比flaky 更难查，因为它看起来
+ *   像"环境慢"。
  *
- * ⇒ 宁可偶发红（能看见、能重跑），也不要假绿（看不见、以为有保护）。
- * 这是 #130「区分『没等到』与『等到了不该发生的结果』」在测试设计上的应用。
+ * ⇒ 正确做法是**让夹具自己报信**：flow 每 emit 一个值就往 `Channel` 发一个信号，
+ *   测试 `receive()` 到信号 == 订阅确实把快照写完了。此后所有断言都能用 `exactly = n`，
+ *   **完全确定性、零 flaky**（见 [Harness.awaitSettled]）。
+ *
+ * 这是 #130.1（分清"没等到"与"等到了不该发生的结果"）之后的下一步：
+ * #130.1 让 flaky 变得**可诊断**，这里直接把竞态**从夹具里消除**，不再需要轮询。
  * ---------------------------------------------------------------------------
  */
 package io.vaultix.vaultix.security
@@ -39,7 +45,6 @@ import android.app.Application
 import android.os.Bundle
 import android.view.Window
 import android.view.WindowManager
-import io.mockk.capture
 import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
@@ -48,8 +53,14 @@ import io.mockk.slot
 import io.mockk.verify
 import io.vaultix.datastore.VaultixPreferences
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -62,16 +73,32 @@ class ScreenSecurityGuardTest {
      *
      * 抓回调而不是直接暴露内部方法：这里要验的正是
      * 「**系统通过生命周期回调驱动它**」这条链路本身。
+     *
+     * @param source 喂给 `screenSecurity` 的偏好流；由测试持有引用以便运行中翻转。
      */
-    private fun install(screenSecurity: Boolean): Harness {
+    private fun install(source: Flow<Boolean>): Harness {
+        // 每个被 collect 到的值都发一个信号 —— 它同时证明「订阅在跑」与
+        // 「`enabledSnapshot` 已经写成这个值了」，因为 emit 返回时
+        // 下游 `collect { enabledSnapshot = value }` 已经执行完
+        //（`distinctUntilChanged` 是转发型操作符，会等下游处理完才返回）。
+        val settled = Channel<Unit>(Channel.UNLIMITED)
         val prefs = mockk<VaultixPreferences>()
-        every { prefs.screenSecurity } returns flowOf(screenSecurity)
+        every { prefs.screenSecurity } returns flow {
+            source.collect { value ->
+                emit(value)
+                settled.send(Unit)
+            }
+        }
+
         val app = mockk<Application>(relaxed = true)
         val captor = slot<Application.ActivityLifecycleCallbacks>()
         // ⚠️ slot 必须用 `capture(...)` 包裹，直接传 captor 编译不过
-        //（`Argument type mismatch: actual type is 'CapturingSlot<…>'`）——
-        // 2026-10-03 由 CI 的 `:app:compileFullDebugUnitTestKotlin` 抓出，
-        // 写法与 `ItemRepositoryImplTest:151` 同款。
+        //（`Argument type mismatch: actual type is 'CapturingSlot<…>'`）。
+        // ⚠️ **不要 import io.mockk.capture** —— `capture` 是 `MockKMatcherScope`
+        //   的成员函数，`every {}` 的 lambda 自带该 receiver，直接写就能解析。
+        //   多写那行 import 会得到 `Unresolved reference 'capture'`（2026-10-03 实录，
+        //   连续两次被同一处绊倒）。既有用法见 `ItemRepositoryImplTest:151`，
+        //   它的 mockk import 只有 coEvery/coVerify/every/mockk/slot。
         every { app.registerActivityLifecycleCallbacks(capture(captor)) } just runs
 
         ScreenSecurityGuard(prefs).install(app)
@@ -79,22 +106,40 @@ class ScreenSecurityGuardTest {
         val window = mockk<Window>(relaxed = true)
         val activity = mockk<Activity>(relaxed = true)
         every { activity.window } returns window
-        return Harness(captor.captured, activity, window)
+        return Harness(captor.captured, activity, window, settled)
     }
 
     private class Harness(
         val callbacks: Application.ActivityLifecycleCallbacks,
         val activity: Activity,
         val window: Window,
-    )
+        private val settled: Channel<Unit>,
+    ) {
+        /**
+         * 等到偏好变更**已被订阅写进快照**。
+         *
+         * 超时而非无限等：万一 `install()` 里的 `launch` 被删了 / `collect` 没跑，
+         * 测试要在 5 秒内**响亮地失败**，而不是挂到 `runTest` 的 60 秒上限。
+         */
+        suspend fun awaitSettled() {
+            try {
+                withTimeout(5_000) { settled.receive() }
+            } catch (_: TimeoutCancellationException) {
+                error(
+                    "偏好变更 5 秒内没被订阅观察到 —— `install()` 里的 launch/collect 掉了？",
+                )
+            }
+        }
+    }
 
     // ---- 规则 1：开关开启 ⇒ 设 FLAG_SECURE ----
 
     @Test
     fun `开关开启_三个回调都设FLAG_SECURE`() = runTest {
-        // ⚠️ 开启侧**不需要**等订阅：`enabledSnapshot` 的初值就是 true（安全默认），
-        //   等不等订阅结果一样 —— 早等反而只是白花时间。
-        val h = install(screenSecurity = true)
+        val h = install(flowOf(true))
+        // 开启侧顺带钉住「订阅确实启动了」：初值虽也是 true（等不等结果一样），
+        // 但这里等一下，就能抓住「launch 被删掉」这种退化 —— 否则本用例永远绿。
+        h.awaitSettled()
 
         // 三个时机都必须覆盖 —— 少一个就有一类 Activity 裸奔：
         //  · onActivityPreCreated  API 29+，最早的时机
@@ -105,12 +150,13 @@ class ScreenSecurityGuardTest {
         h.callbacks.onActivityResumed(h.activity)
 
         verify(exactly = 3) { h.window.setFlags(secure, secure) }
-        verify(exactly = 0) { h.window.clearFlags(secure) }
+        verify(exactly = 0) { h.window.clearFlags(any()) }
     }
 
     @Test
     fun `开关开启_不调用clearFlags`() = runTest {
-        val h = install(screenSecurity = true)
+        val h = install(flowOf(true))
+        h.awaitSettled()
 
         h.callbacks.onActivityCreated(h.activity, null)
 
@@ -122,40 +168,71 @@ class ScreenSecurityGuardTest {
 
     @Test
     fun `开关关闭_清掉FLAG_SECURE`() = runTest {
-        val h = install(screenSecurity = false)
+        val h = install(flowOf(false))
+        // ⚠️ 这一步是本文件的关键：不等它，第一次 `onActivityCreated` 会读到初值
+        //   `true` 而误设flag，**且不会有第二次回调纠正**。
+        h.awaitSettled()
 
         h.callbacks.onActivityCreated(h.activity, null)
 
-        // 用 `verify(timeout = …)` 而不是「先 sleep 再断言」：订阅跑在 Default 上，
-        // 固定等待的长度取决于机器繁忙程度 ⇒ 那是把 flaky 换了个地方放。
-        verify(timeout = 5_000) { h.window.clearFlags(secure) }
-        // 必须在 clearFlags 发生**之后**再断言"没设过 flag"，
-        // 否则这个 0 只是在说"此刻还没设"，而不是"这条路径不会设"。
-        verify(exactly = 0) { h.window.setFlags(secure, secure) }
+        // 快照已确定为 false ⇒ 这里可以用 `exactly`，不需要 timeout 轮询。
+        verify(exactly = 1) { h.window.clearFlags(secure) }
+        // 这个 0 现在是**真断言**（此前做不到）：快照已落地，走的必然是关闭分支。
+        verify(exactly = 0) { h.window.setFlags(any(), any()) }
     }
 
     @Test
     fun `开关关闭_恢复时也保持清掉`() = runTest {
-        val h = install(screenSecurity = false)
+        val h = install(flowOf(false))
+        h.awaitSettled()
 
         h.callbacks.onActivityResumed(h.activity)
 
-        verify(timeout = 5_000) { h.window.clearFlags(secure) }
+        verify(exactly = 1) { h.window.clearFlags(secure) }
+        verify(exactly = 0) { h.window.setFlags(any(), any()) }
     }
 
-    // ---- 规则 3：其余回调不碰窗口 ----
+    // ---- 规则 3：运行中开关翻转 ⇒ 之后启动的 Activity 立刻按新值走 ----
+
+    @Test
+    fun `开关运行中从开变关_之后清掉FLAG_SECURE`() = runTest {
+        // 热流而不是 `flowOf`：`flowOf` 发一次就结束，测不到"持续跟随变化"。
+        // 而 `install()` 的实现注释明确声称「进程级订阅：开关变了要能立刻反映到
+        // **之后启动**的每个 Activity」—— 这条声称必须有用例钉住，否则它是注释而已。
+        val toggle = MutableStateFlow(true)
+        val h = install(toggle)
+        h.awaitSettled()
+
+        h.callbacks.onActivityCreated(h.activity, null)
+        verify(exactly = 1) { h.window.setFlags(secure, secure) }
+
+        toggle.value = false
+        h.awaitSettled()
+
+        h.callbacks.onActivityCreated(h.activity, null)
+        // 前一次的 setFlags 保留在记录里（=1），本次新增的 clearFlags 也是 1。
+        verify(exactly = 1) { h.window.clearFlags(secure) }
+        verify(exactly = 1) { h.window.setFlags(secure, secure) }
+    }
+
+    // ---- 规则 4：其余回调不碰窗口 ----
 
     @Test
     fun `其余生命周期回调不碰窗口`() = runTest {
-        // 初值 true ⇒ 无需等订阅
-        val h = install(screenSecurity = true)
+        val h = install(flowOf(true))
+        h.awaitSettled()
 
-        // ⚠️ `outState: Bundle` 是**非空**类型，不能传 null（那样编译不过）。
+        // ⚠️ `outState` 传了 `mockk<Bundle>()` 而不是 `null`：
+        //   `onActivitySaveInstanceState(activity, outState: Bundle)` 在**真实
+        //   android.jar** 里带 `@NonNull`，传 null 编译不过；这里传 mock 是最保险的写法。
+        //   ⚠️ 反过来，**本地 typecheck 抓不到这个错**——它用的是 robolectric 的
+        //   `android-all.jar`，字节码里没有空注解 ⇒ Kotlin 视作平台类型 ⇒ null 也放行。
+        //   （实测：把它改成 null，本地检查依然"通过"。）别拿本地绿灯当这件事的证据。
         h.callbacks.onActivityStarted(h.activity)
         h.callbacks.onActivityPaused(h.activity)
         h.callbacks.onActivityStopped(h.activity)
         h.callbacks.onActivityDestroyed(h.activity)
-        h.callbacks.onActivitySaveInstanceState(h.activity, mockk<Bundle>())
+        h.callbacks.onActivitySaveInstanceState(h.activity, mockk<Bundle>(relaxed = true))
 
         // 少写一个空实现就得实现整个接口，纯噪音；但写错了会在这里暴露。
         verify(exactly = 0) { h.window.setFlags(any(), any()) }
