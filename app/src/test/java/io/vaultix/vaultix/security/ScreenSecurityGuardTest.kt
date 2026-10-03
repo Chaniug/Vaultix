@@ -36,6 +36,29 @@
  *
  * 这是 #130.1（分清"没等到"与"等到了不该发生的结果"）之后的下一步：
  * #130.1 让 flaky 变得**可诊断**，这里直接把竞态**从夹具里消除**，不再需要轮询。
+ *
+ * ## ⚠️ 为什么用 `runBlocking` 而不是 `runTest`（代价换来的，务必别改回去）
+ *
+ * `runTest` 用的是**虚拟时间**：它会把 `withTimeout(5000)` 直接跳到 5 秒**立刻超时**，
+ * 根本不等真实线程。⇒ 拿它去等一个跑在`Dispatchers.Default` 上的信号，
+ * **超时不是保护，是随机抛异常**。
+ *
+ *⚠️ **它的表现是"随机"的，不是稳定红**（这一点最容易误判成"偶发 flaky，算了"）：
+ *   - 信号已就绪 ⇒ 不需要等待 ⇒ **绿**；
+ *   - 信号还没到 ⇒ 虚拟时间立刻跳满5 秒 ⇒ `awaitSettled()` 抛
+ *     `IllegalStateException` ⇒ **红**。
+ *   本地连跑 5 次：前 2 次绿、后 3 次红；换`runBlocking` 后连跑 8 次全绿。
+ *   CI run `37132804360` 上则是 6 条里**恰好 1 条红**（`开关运行中从开变关`，
+ *   那条要等**第二个**信号 ⇒ 最容易撞上虚拟时间）。
+ *
+ * ⇒ 这个文件里的等待都是**真实线程**上的等待，`runTest` 的虚拟调度器**毫无价值**，
+ * 换`runBlocking` 才是对的：超时恢复为真正的 5 秒。
+ * ⚠️ 反过来，若哪天被测代码改成跑在 `TestDispatcher` 上，就得换回 `runTest`——
+ * 判据是"**被等的那个协程在不在测试调度器里**"，不是哪个更常见。
+ *
+ * ⇒顺带一条**通用教训**：断言前的 `awaitSettled()` 只回答"快照写进去了吗"，
+ *   不回答"流程走完了吗"。第 6 条用例证明流程能连续走两次，靠的是
+ *   **第二次等待也真的等了**——若把它换成固定 `sleep`，那才是把随机性藏起来。
  * ---------------------------------------------------------------------------
  */
 package io.vaultix.vaultix.security
@@ -52,18 +75,16 @@ import io.mockk.runs
 import io.mockk.slot
 import io.mockk.verify
 import io.vaultix.datastore.VaultixPreferences
-import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
-import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.Test
 
-@OptIn(ExperimentalCoroutinesApi::class)
 class ScreenSecurityGuardTest {
 
     private val secure = WindowManager.LayoutParams.FLAG_SECURE
@@ -135,7 +156,7 @@ class ScreenSecurityGuardTest {
     // ---- 规则 1：开关开启 ⇒ 设 FLAG_SECURE ----
 
     @Test
-    fun `开关开启_三个回调都设FLAG_SECURE`() = runTest {
+    fun `开关开启_三个回调都设FLAG_SECURE`() = runBlocking {
         val h = install(flowOf(true))
         // 开启侧顺带钉住「订阅确实启动了」：初值虽也是 true（等不等结果一样），
         // 但这里等一下，就能抓住「launch 被删掉」这种退化 —— 否则本用例永远绿。
@@ -154,7 +175,7 @@ class ScreenSecurityGuardTest {
     }
 
     @Test
-    fun `开关开启_不调用clearFlags`() = runTest {
+    fun `开关开启_不调用clearFlags`() = runBlocking {
         val h = install(flowOf(true))
         h.awaitSettled()
 
@@ -167,7 +188,7 @@ class ScreenSecurityGuardTest {
     // ---- 规则 2：开关关闭 ⇒ 清 FLAG_SECURE（用户显式关掉的，必须尊重） ----
 
     @Test
-    fun `开关关闭_清掉FLAG_SECURE`() = runTest {
+    fun `开关关闭_清掉FLAG_SECURE`() = runBlocking {
         val h = install(flowOf(false))
         // ⚠️ 这一步是本文件的关键：不等它，第一次 `onActivityCreated` 会读到初值
         //   `true` 而误设flag，**且不会有第二次回调纠正**。
@@ -182,7 +203,7 @@ class ScreenSecurityGuardTest {
     }
 
     @Test
-    fun `开关关闭_恢复时也保持清掉`() = runTest {
+    fun `开关关闭_恢复时也保持清掉`() = runBlocking {
         val h = install(flowOf(false))
         h.awaitSettled()
 
@@ -195,7 +216,7 @@ class ScreenSecurityGuardTest {
     // ---- 规则 3：运行中开关翻转 ⇒ 之后启动的 Activity 立刻按新值走 ----
 
     @Test
-    fun `开关运行中从开变关_之后清掉FLAG_SECURE`() = runTest {
+    fun `开关运行中从开变关_之后清掉FLAG_SECURE`() = runBlocking {
         // 热流而不是 `flowOf`：`flowOf` 发一次就结束，测不到"持续跟随变化"。
         // 而 `install()` 的实现注释明确声称「进程级订阅：开关变了要能立刻反映到
         // **之后启动**的每个 Activity」—— 这条声称必须有用例钉住，否则它是注释而已。
@@ -218,7 +239,7 @@ class ScreenSecurityGuardTest {
     // ---- 规则 4：其余回调不碰窗口 ----
 
     @Test
-    fun `其余生命周期回调不碰窗口`() = runTest {
+    fun `其余生命周期回调不碰窗口`() = runBlocking {
         val h = install(flowOf(true))
         h.awaitSettled()
 

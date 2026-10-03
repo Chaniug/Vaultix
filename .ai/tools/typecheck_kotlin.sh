@@ -1,22 +1,29 @@
 #!/usr/bin/env bash
-# 本地 Kotlin 类型检查（2026-10-03 新增，见 issues/01 #145.4）
+# 本地 Kotlin **真编译 + 真运行**（2026-10-03 新增，见 issues/01 #145.4 #145.5）
 #
 # ## 它补的是哪个洞
 #
-# 本仓库的沙箱环境**没有 Android SDK**，所以新写的 Kotlin 只能靠 CI 编译。
-# 而 CI 有两个特性让"靠 CI 兜底"这条路比看上去贵得多：
+# 本仓库沙箱**没有 Android SDK**，所以新写的 Kotlin 只能靠 CI。而 CI 有两个特性
+# 让"靠 CI 兜底"比看上去贵得多：
 #
 #   1. `continue-on-error: true` 使 job 卡片绿/红都不可信（#145）；
 #   2. 编译失败藏在日志里，必须拉日志数 `(^|Z )e: ` 才知道（#145.1）。
 #
-# ⇒ 代价是：**每写错一个字符，就要赔一轮 CI（提交 + 等 + 拉日志 + 数）**。
-# 2026-10-03 为此栽了两次（`capture` 未用 `capture()` 包裹、多写了一行
-# `import io.mockk.capture`），两次都是"本地无SDK + 卡片是绿的"。
+# ⇒ 代价：**每写错一个字符，赔一轮 CI**。2026-10-03 为此栽了两次
+# （`capture` 未用 `capture()` 包裹、多写了一行 `import io.mockk.capture`）。
 #
-# 本脚本用**另一条路**补上：沙箱虽然没有 SDK，但**有Maven 网络**。
-# 而"类型检查"这件事**不需要 SDK**——它只需要被引用类的**签名**。
-# 于是：借`org.robolectric:android-all` 提供 `android.*` 的真实字节码，
-# 从 Maven 拉mockk / coroutines / junit，直接调 Kotlin 编译器。
+# 本脚本走**另一条路**：沙箱没有 SDK，但**跑这些单测并不需要 SDK** ——
+# 需要的是被引用类的**签名与可替换实现**：
+#   · `org.robolectric:android-all` 提供 `android.*` 真实字节码（含 API 29+ 回调）；
+#   · Maven 拉 mockk / coroutines / junit / byte-buddy；
+#   · Gradle 缓存里的 `kotlin-compiler-embeddable` 编译；
+#   · `JUnitCore` 真跑。
+#
+# ## 为什么不干脆装 Android SDK
+#
+# 装SDK 要下的东西（build-tools / platform-tools / AGP 依赖树）远大于
+# 「一个 jar 提供签名」—— 而**类型检查与这些单测的执行根本不需要那套**。
+# 实测：130MB `android-all` + 20MB 依赖 = 本地能编译**且能跑**。
 #
 # ## 能查什么、不能查什么
 #
@@ -24,36 +31,47 @@
 # |---|---|
 # | 类型不匹配、未解析引用、可见性、`import` 写错 | Android 资源（`R` 类）、`BuildConfig` |
 # | 泛型推断、lambda 签名、mockk 语法 | Compose 编译插件（要 AGP） |
-# | `mockk()` 参数形态（CI 上踩过的坑都在这一列） | detekt 规则、编码检查 |
-# | 项目自身类型错误（`XxxTest` 会自动带上被测类） | **依赖 Android SDK 的空注解**（见下） |
-# | | 单测的**运行时**行为（本脚本只编译，不执行） |
+# | `mockk()` 参数形态（CI 踩过的坑都在这列） | detekt 规则、编码检查 |
+# | 项目自身类型错误（`XxxTest` 自动带被测类） | **依赖 Android SDK 空注解**的写法（见下） |
+# | **运行期行为**：竞态、flaky、虚拟时间陷阱 | |
 #
 # ⚠️ **已知盲区（实测确认，别拿本地绿灯当证据）**：
-#   `android.*` 用的是 robolectric 的 `android-all.jar`，其字节码**没有 `@NonNull` 注解**
-#   ⇒ Kotlin 把这些参数当**平台类型**，于是 `onActivitySaveInstanceState(a, null)` 这种
-#   在真实 android.jar 下会编译不过的写法，**本地检查会放行**。
-#   凡是"因为 Kotlin 空安全而不能这么写"的问题，**只能靠 CI 验**。
+#   `android-all.jar` 字节码**没有 `@NonNull`** ⇒ Kotlin 把这些参数当**平台类型**
+#   ⇒ `onActivitySaveInstanceState(a, null)` 这种在真实 android.jar 下编译不过的
+#   写法，**本地检查会放行**。凡"因 Kotlin 空安全而不能这么写"的，只能靠 CI 验。
 #
-# ⇒ 它**不能替代** CI，只能把"一字符之差赔一轮 CI"降成"一秒"。绿灯之后**仍要**跑 CI。
+# ⇒ 它**不能替代** CI，但把反馈从**一轮 CI** 压到 **20 秒**。
+#
+# ## 它抓到的最典型一例（CI run `37132804360`，2026-10-03）
+#
+# 那次 CI **编译 0 错误**，但 6 条用例里 1 条红在 `IllegalStateException`——
+# 根因是 `runTest` 的**虚拟时间**把 `withTimeout(5000)` 直接跳满，于是"等真实线程"
+# 变成"立刻超时"。**这种错编译永远查不出来，只有真跑才看得见。**
+# ⚠️ 它在本地的表现是**随机的**（连跑 5 次：2 绿 3 红）⇒ 极易被误判成
+# "偶发 flaky，算了"。换 `runBlocking` 后连跑 8 次全绿。
 #
 # ## 用法
 #
 #     bash .ai/tools/typecheck_kotlin.sh <文件.kt> [更多文件...]
+#     VAULTIX_RUN_TESTS=0 bash .ai/tools/typecheck_kotlin.sh <文件>   # 只编译不跑
 #
-# 只检查给定文件（连同它们在仓库里引用的项目源码一起编）。
-# 首次运行要下载约 160MB 依赖到 ~/.cache/vaultix-typecheck/，之后走缓存。
+# `XxxTest.kt` 会**自动按包路径带上被测类**（`ScreenSecurityGuardTest` →
+# `src/main/java/…/ScreenSecurityGuard.kt`）并自动运行该测试类。
+# 首次运行下载约 160MB 依赖到 ~/.cache/vaultix-typecheck/，之后走缓存。
 #
 # ## 自身也做过变异测试（2026-10-03）
 #
-# 一个"能红的检查"和一个"永远绿的检查"长得一模一样。此脚本在交付前用两个
-# **已知坏**变体验证过——它们必须红，且报错信息与 CI 逐字一致：
+# "能红的检查"和"永远绿的检查"长得一模一样。此脚本在交付前用**已知坏**变体
+# 验证过——它们必须红，且报错与 CI 逐字一致：
 #
-#   - `registerActivityLifecycleCallbacks(captor)`（漏了 `capture()`）
+#   - `registerActivityLifecycleCallbacks(captor)`（漏 `capture()`）
 #     → `argument type mismatch: actual type is 'CapturingSlot<…>'`；
-#   - 多写 `import io.mockk.capture`
-#     → `unresolved reference 'capture'`。
+#   - 多写 `import io.mockk.capture` → `unresolved reference 'capture'`；
+#   - `verify(exactlyCount = 3)` → `no parameter with name 'exactlyCount' found`；
+#   - 回退到 `runTest`（**运行期**坏，编译完全正常）→ 连跑 5 次有 3 次红。
 #
-# 好版本（两个错误都已修）产出 0 error、18 个 class 文件。
+# 好版本（三个编译错误已修 + `runBlocking`）：20 个 class、6 条用例连跑 8 次全绿。
+
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -79,6 +97,13 @@ DEPS=(
   "org.jetbrains.kotlin:kotlin-stdlib:2.1.20|kotlin-stdlib-2.1.20.jar"
   "org.jetbrains:annotations:26.0.2|annotations-26.0.2.jar"
   "javax.inject:javax.inject:1|javax.inject-1.jar"
+  # ↓ 运行测试才需要（编译不需要）—— mockk 的字节码增强靠byte-buddy + objenesis。
+  #   漏掉它们的症状很有迷惑性：`ExceptionInInitializerError` +
+  #   `Could not initialize class io.mockk.impl.JvmMockKGateway`，看起来像 mockk 坏了。
+  "org.jetbrains.kotlin:kotlin-reflect:2.1.20|kotlin-reflect-2.1.20.jar"
+  "net.bytebuddy:byte-buddy:1.12.19|byte-buddy-1.12.19.jar"
+  "net.bytebuddy:byte-buddy-agent:1.12.19|byte-buddy-agent-1.12.19.jar"
+  "org.objenesis:objenesis:3.3|objenesis-3.3.jar"
 )
 
 # group:artifact:version -> group/artifact/version/artifact-version.jar
@@ -233,4 +258,41 @@ if [ "$CLASSES" -eq 0 ]; then
   exit 1
 fi
 echo "✅ 编译通过，产出 $CLASSES 个 class" >&2
-echo "⚠️  这只覆盖类型/mockk 语法。资源、detekt、编码、单测运行仍需 CI。" >&2
+
+# ---- 5. 真跑一遍（默认开启；VAULTIX_RUN_TESTS=0 可跳过）----
+# 为什么要这一步：2026-10-03 CI run `37132804360` 里，本文件**编译 0 错误**，
+# 却有一条用例红在 `IllegalStateException` —— 根因是`runTest` 的**虚拟时间**把
+# `withTimeout(5000)` 直接跳到5 秒，于是"等真实线程"变成"立刻超时"。
+# 这种错**只有运行才看得见**，编译永远查不到。
+# 而等 CI 复核一轮要好几分钟，且卡片绿还会骗人（#145.4）。
+[ "${VAULTIX_RUN_TESTS:-1}" = "0" ] && {
+  echo "💡 已跳过运行（VAULTIX_RUN_TESTS=0）。只编译查不出虚拟时间 / 竞态类问题。" >&2
+  exit 0
+}
+
+# 跑测试需要 mockk 的运行期依赖（编译不需要，所以上面没拉）：
+RUNCP="$CP:$LIBS/kotlin-reflect-2.1.20.jar:$LIBS/byte-buddy-1.12.19.jar:$LIBS/byte-buddy-agent-1.12.19.jar:$LIBS/objenesis-3.3.jar"
+CLASSES_TO_RUN=()
+for f in "$@"; do
+  base="$(basename "$f" .kt)"
+  case "$base" in *Test) ;; *) continue ;; esac   # 只跑 `XxxTest`
+  # 从 `…/src/test/java/<包路径>/XxxTest.kt` 反推**全限定类名**：
+  # 去掉 `.kt` 后缀，再把目录分隔符换成 `.`。（注意别再 `%/*` 去掉文件名。）
+  rel="${f#*/src/test/java/}"
+  CLASSES_TO_RUN+=("$(echo "${rel%.kt}" | tr '/' '.')")
+done
+if [ "${#CLASSES_TO_RUN[@]}" -eq 0 ]; then
+  echo "（没有 XxxTest 命名的文件，跳过运行）" >&2; exit 0
+fi
+echo "▸ 运行 ${CLASSES_TO_RUN[*]}" >&2
+set +e
+RUN_LOG="$(java -cp "$OUT:$RUNCP" org.junit.runner.JUnitCore "${CLASSES_TO_RUN[@]}" 2>&1)"
+RUN_RC=$?
+set -e
+echo "$RUN_LOG" | tail -25
+if [ "$RUN_RC" -eq 0 ]; then
+  echo "✅ 测试通过" >&2
+else
+  echo "❌ 测试**失败** —— 编译是绿的，问题在运行期（看上面堆栈）" >&2
+  exit 1
+fi
