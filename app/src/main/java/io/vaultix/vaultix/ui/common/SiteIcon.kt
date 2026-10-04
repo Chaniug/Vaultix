@@ -116,7 +116,23 @@ fun SiteIconByHost(
             .memoryCachePolicy(CachePolicy.ENABLED)
             .diskCachePolicy(CachePolicy.ENABLED)
             .size(ICON_REQUEST_PX)
-            .crossfade(true)
+            // ⚠️ 2026-10-04 用户反馈「往下滑动密码条目时，图标看起来一直在加载」——
+            //   取证结论：**并没有在下载**。`memoryCachePolicy`/`diskCachePolicy` 都开着，
+            //   `size` 也固定，缓存早已命中；发网络请求的只有 autofill 侧（那里只读磁盘缓存）。
+            //   看起来在"加载"的真凶是这个 `crossfade(true)`：
+            //   `LazyColumn` 里卡片滑进/滑出可见区会**重建 composable**，
+            //   而 `AsyncImage` 每次重建都把淡入动画**从头播一遍**（约 100ms 的 alpha 渐变）
+            //   ⇒ 每张卡片进出场都白播一次动画，看着像在加载。
+            //   代价是**实打实的每帧开销**（每张可见卡片一次 alpha 动画 + 一层重绘），
+            //   与「滚动卡顿」直接相关 ⇒ 关掉。
+            //
+            //   关闭后的观感代价：首次从磁盘缓存读出图标时是**瞬时出现**而非淡入。
+            //   这是可接受的 —— 卡片本身在滚动中进出，150ms 的淡入既看不清、
+            //   反而制造了「还在加载」的错觉（这正是本条要修的现象）。
+            //   ⚠️ 若将来要"首次联网下载时淡入、缓存命中时瞬显"，
+            //   正确做法是分两套 ImageRequest（按 `memoryCachePolicy` 区分），**不要**把
+            //   crossfade 整体开回来 —— 那正是本条修掉的东西。
+            .crossfade(false)
             .build()
     }
 

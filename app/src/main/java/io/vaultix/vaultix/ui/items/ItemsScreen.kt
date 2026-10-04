@@ -149,6 +149,37 @@ private val ITEM_CARD_GAP = Spacing.sm
 /** 分组折叠/展开的箭头动画时长（对齐 Bastion 的 200ms 补间）。 */
 private const val GROUP_ANIM_MS = 200
 
+/**
+ * `LazyColumn` 的 `contentType`：**决定滚动时哪些项可以复用彼此的 composition**。
+ *
+ * ## 为什么必须写（省电的真头，不是微优化）
+ *
+ * `LazyColumn` 复用 composition 的前提是「新旧两项**结构相同**」。`key` 只保证
+ * 「同一张卡在数据刷新后找得回自己的状态」，**不参与复用判定**。
+ * 缺 `contentType` 时 LazyColumn 只能保守处理 —— **宁可重建也不复用**：
+ * 每滚一下就有若干张卡被完整重组（`PressAndSwipeToDelete` → `EntryCard` →
+ * `Row` → `SiteIcon` 整条链走一遍），CPU 与电池就在这里被消耗。
+ *
+ * ⚠️ **这不是内存泄漏**（`LazyColumn` 照样只组合可见项），是**重复劳动**：
+ * 内存占用不变，但滚动时多出成倍的重组。
+ *
+ * ## 为什么只分两类（而不是每种卡片一个）
+ *
+ * 复用只在「结构相同」之间发生；分得越细越安全，但也越难命中。这里刻意只区分
+ * **列表项**与**标题/状态行**两类 —— 前者（密码/验证码/通行密钥/SSH 各页）内部
+ * 结构本来就统一，后者的 `VaultStatusRow` / `GroupHeader` 与之毫无共同点。
+ *
+ * ⚠️ 本常量与自动填充（`autofill/engine/AutofillItemIcon`）**无关**：
+ * 填充面板走的是独立渲染链路，不经过本列表，**不得**借"省电"之名改填充侧行为。
+ */
+private object ItemsContentType {
+    /** 密码/验证码/通行密钥等**条目卡片**（同构，可互相复用）。 */
+    const val ITEM = "item"
+
+    /** 「密码库状态」行与分组标题（结构与条目不同，禁止与 [ITEM] 混用）。 */
+    const val HEADER = "header"
+}
+
 /** 列表顶部那一行状态信息里，前导图标的边长（原只读提示用，现状态行也用）。 */
 private val READ_ONLY_ICON_SIZE = 16.dp
 
@@ -1248,11 +1279,13 @@ private fun ItemsList(
         // "表头"（我在哪个库、里面有多少东西），先有上下文再看内容。
         // 只读提示排在它下面 —— 那是"为什么按钮少了"的解释，属于对**内容**的补充。
         if (vaultCard != null) {
-            item(key = "vault-status") { VaultStatusRow(card = vaultCard) }
+            item(key = "vault-status", contentType = ItemsContentType.HEADER) {
+                VaultStatusRow(card = vaultCard)
+            }
         }
         groups.forEach { group ->
             if (grouped) {
-                item(key = "header:${group.key}") {
+                item(key = "header:${group.key}", contentType = ItemsContentType.HEADER) {
                     GroupHeader(
                         title = group.title,
                         count = group.items.size,
@@ -1262,7 +1295,7 @@ private fun ItemsList(
                 }
             }
             if (group.key !in collapsedGroups) {
-                items(group.items, key = { it.id }) { item ->
+                items(group.items, key = { it.id }, contentType = { ItemsContentType.ITEM }) { item ->
                     // 「长按选中 → 左滑 → 松手过半 → 二次确认」删除
                     // （软删除进回收站，见 ItemsViewModel.deleteItem）。
                     // 长按**选中**由内部 [ItemRow]/[EntryCard] 的 `onLongClick` 独占；本容器
