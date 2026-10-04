@@ -16,6 +16,7 @@ import io.vaultix.domain.LocalUnlockEnrollOutcome
 import io.vaultix.domain.LocalUnlockPrepareOutcome
 import io.vaultix.domain.LocalUnlockPreparedEnrollment
 import io.vaultix.domain.PIN_MIN_LENGTH
+import io.vaultix.domain.PinChangeOutcome
 import io.vaultix.domain.PinEnrollOutcome
 import io.vaultix.domain.UnlockRecoveryRepository
 import io.vaultix.domain.VaultRepository
@@ -221,6 +222,22 @@ class QuickUnlockController(
     enum class UnlockMethod { BIOMETRIC, PIN }
 
     /**
+     * PIN 输入框的两种用途。
+     *
+     * - [PinMode.Enroll] 首次设置：两个框（新 PIN / 确认）。
+     * - [PinMode.Change] 修改：三个框（当前 PIN / 新 PIN / 确认）。
+     *
+     * ⚠️ [PinMode.Change] 里的「当前 PIN」是**验证**，不是可选的装饰：
+     * 不验就重包，等于把门锁拆下来换个新密码别上；这正是 #161
+     * （设置页承诺"可在设置里重设"、实际只有开关两态）缺的那一环。
+     *
+     * ⚠️ 为什么是一个 `mode` 而不是两个独立的 Dialog 类型：两者共用同一套输入框、
+     * 同一套"新 PIN 位数 / 两次一致"判定。拆成两个 sealed 分支会让那两条判定各写一遍，
+     * 而项目纪律恰恰是「判定只有一处，别让两个入口各写一遍阈值」。
+     */
+    enum class PinMode { Enroll, Change }
+
+    /**
      * 一个「能力」的当前状态（**推导**得出，不是独立存储的开关）。
      *
      * ## ★ 只有两态（批次 3，2026-09-29 删 `Partial`）
@@ -273,12 +290,30 @@ class QuickUnlockController(
         data object Idle : Dialog
 
 
-        /** 输 PIN（仅当选了 PIN 方式；在问主密码**之前**）。 */
+        /**
+         * 输 PIN。
+         *
+         * Enroll = 首次设置（在问主密码**之前**）；Change = 修改（先验当前 PIN，再重包）。
+         * [old] 只在 Change 下有值 —— 它留空不是"待填"，是"这一步不存在"，
+         * 别让 UI 去渲染一个恒空的框（那是假状态）。
+         */
         data class PinEntry(
+            val mode: PinMode = PinMode.Enroll,
+            val old: String = "",
             val pin: String = "",
             val confirm: String = "",
             val error: String? = null,
         ) : Dialog
+
+        /**
+         * 「修改 PIN 完成」的一次性确认。
+         *
+         * ⚠️ 为什么不能像其它流程一样直接回到 [Dialog.Idle]：改 PIN 之后**开关状态、
+         * 副标题、库列表全都没有可见变化**（副标题本来就写"已启用 · 6 位"）。
+         * 关掉对话框等于什么都没说，用户只能自己猜"到底换了吗" ——
+         * 那与"假成功"是同一件事的一体两面：没说不等于没发生，但一定会被读成没成功。
+         */
+        data object PinChangeDone : Dialog
 
         /**
          * 逐个库问主密码。
@@ -596,16 +631,108 @@ class QuickUnlockController(
      */
     fun submitPin() {
         val current = _dialog.value as? Dialog.PinEntry ?: return
-        if (current.pin.length != PIN_MIN_LENGTH) {
-            _dialog.value = current.copy(error = "PIN 需要 $PIN_MIN_LENGTH 位数字")
-            return
-        }
-        if (current.pin != current.confirm) {
-            _dialog.value = current.copy(error = "两次输入不一致，请重新输入")
+        // 判定走 [newPinInvalid]：Enroll / Change 共用同一条规则。
+        newPinInvalid(current)?.let {
+            _dialog.value = current.copy(error = it)
             return
         }
         session?.pin = current.pin
         advanceToPasswordOrExecute()
+    }
+
+    /**
+     * 点设置页的「修改 PIN」那一行（仅 PIN 已启用时出现）。
+     *
+     * ⚠️ **刻意不走 [togglePin]**：那条路是「开 / 关」，这里要的是「改」。
+     * 若把已启用的开关改成触发改 PIN，同一个热区就有了两种含义 ——
+     * 而用户 2026-09-30 拍板的是"**只需要一个打开的按钮**"（整行 = 拨开关）。
+     * ⇒ 与其拆开现有热区的语义，不如在它**旁边另起一行**表达"改"，
+     * 开关的开关语义原样保留（历史 KDoc 里那套推理因此一句都不用改）。
+     */
+    fun startChangePin() {
+        if (_dialog.value != Dialog.Idle) return
+        if (state.value.pin !is CapabilityState.On) return
+        _dialog.value = Dialog.PinEntry(mode = PinMode.Change)
+    }
+
+    /** 输「当前 PIN」框。只吃数字且截断到 [PIN_MIN_LENGTH]（与另两个框同口径）。 */
+    fun onPinOldChange(value: String) {
+        val current = _dialog.value as? Dialog.PinEntry ?: return
+        if (current.mode != PinMode.Change) return
+        _dialog.value = current.copy(old = value.onlyDigits(), error = null)
+    }
+
+    /**
+     * 提交「修改 PIN」：当前 PIN → 新 PIN → 确认。
+     *
+     * ⚠️ 这里**不问各库主密码**，与 [submitPin] 那条路不同：房间信封在门锁存续期内
+     * 恒定（包的是房钥匙，不是"某种方式"的凭据），重包 PIN 门锁不碰它们。
+     * 白问一轮主密码正是"逻辑很麻烦"那类多余步骤。
+     */
+    fun submitChangePin() {
+        val current = _dialog.value as? Dialog.PinEntry ?: return
+        if (current.mode != PinMode.Change) return
+        newPinInvalid(current)?.let {
+            _dialog.value = current.copy(error = it)
+            return
+        }
+        // ★ 当前 PIN 单独判，且放在位数/一致之后：它要跑 Argon2id，
+        //   而上面两条是 O(1) —— 先便宜的后贵的，别让用户为"新 PIN 打短了"白消耗一次尝试。
+        if (current.old.length != PIN_MIN_LENGTH) {
+            _dialog.value = current.copy(error = "请输入当前 PIN（$PIN_MIN_LENGTH 位数字）")
+            return
+        }
+        scope.launch { runChangePin(current) }
+    }
+
+    /**
+     * Change 对话框里的「关闭 PIN 解锁」：走既有关门路径（删信封 + 清计数 + 范围归零）。
+     *
+     * ⚠️ 保留这个出口是**必需的**，不是顺手保留：PIN 被连续输错熔断后，
+     * [PinChangeOutcome.LockedOut] 这条改 PIN 的路是堵死的，用户唯一的出路
+     * 就是「关掉再开」—— 而 [disablePinLock] 不需要任何验证。
+     * 少了这个按钮，熔断用户就真的没有出路了。
+     */
+    fun disablePinFromChange() {
+        val current = _dialog.value as? Dialog.PinEntry ?: return
+        if (current.mode != PinMode.Change) return
+        scope.launch {
+            disableAll(UnlockMethod.PIN)
+            _dialog.value = Dialog.Idle
+        }
+    }
+
+    /**
+     * 新 PIN 的两条**本地**判定（位数 / 两次一致）。
+     *
+     * 返回错误文案，null = 通过。抽出来是为了让 [submitPin] 与 [submitChangePin]
+     * 共用一条判定 —— 同一个阈值抄两遍，迟早有一遍忘改。
+     */
+    private fun newPinInvalid(current: Dialog.PinEntry): String? {
+        if (current.pin.length != PIN_MIN_LENGTH) return "PIN 需要 $PIN_MIN_LENGTH 位数字"
+        if (current.pin != current.confirm) return "两次输入不一致，请重新输入"
+        return null
+    }
+
+    /** 落地「改 PIN」并把 domain 的每一态如实翻译成用户能看到的一句话。 */
+    private suspend fun runChangePin(current: Dialog.PinEntry) {
+        val outcome = withContext(Dispatchers.IO) {
+            vaultRepository.changePinLock(current.old, current.pin)
+        }
+        _dialog.value = when (outcome) {
+            PinChangeOutcome.Changed -> Dialog.PinChangeDone
+            is PinChangeOutcome.WrongPin -> current.copy(
+                // 剩余次数由 domain 算好带下来：两处各算一遍必然漂移（同 #153 的账）。
+                error = "当前 PIN 不正确，还剩 ${outcome.remainingAttempts} 次机会",
+            )
+            PinChangeOutcome.LockedOut -> current.copy(
+                error = "PIN 已因连续输错而锁定：请关掉「关闭 PIN 解锁」，再用主密码打开后重设",
+            )
+            is PinChangeOutcome.PinTooShort -> current.copy(
+                error = "PIN 需要 ${outcome.minimum} 位数字",
+            )
+            is PinChangeOutcome.Unavailable -> current.copy(error = outcome.detail)
+        }
     }
 
     /** 提交当前库的主密码，进入下一个库。 */

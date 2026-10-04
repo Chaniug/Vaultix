@@ -331,18 +331,38 @@ COMPILER_VER="${COMPILER##*kotlin-compiler-embeddable-}"
 COMPILER_VER="${COMPILER_VER%.jar}"
 
 KCP="$COMPILER"
-for pat in "kotlin-stdlib-${COMPILER_VER}.jar" "kotlin-script-runtime-"*.jar \
-           "kotlin-daemon-embeddable-${COMPILER_VER}.jar"; do
+# ⚠️ 四个 pattern **必须整串加引号**：写成 'kotlin-script-runtime-"*.jar'（引号内一段 + 引号外 *.jar）
+#    的话，bash 会把引号外的 * 拿去匹配**当前目录**的 jar（仓库根就有 gradle-wrapper.jar）
+#    ⇒ find 静默搜不到、f 为空 ⇒ 该 jar 被跳过（2026-10-04 实测）
+#    ⇒ 表现为编译期 NoClassDefFound 却查不出「哪个 jar 没进来」。
+#
+# ⚠️ 另外：这段注释里**不能出现反引号**，bash 即使在 # 注释里也会做命令替换，
+#    会把反引号里的字符串当命令执行（实测炸出一屏 command not found）。
+for pat in "kotlin-stdlib-${COMPILER_VER}.jar" "kotlin-script-runtime-${COMPILER_VER}.jar" \
+           "kotlin-daemon-embeddable-${COMPILER_VER}.jar" "kotlin-reflect-${COMPILER_VER}.jar"; do
   f="$(find "$KGP" -name "$pat" 2>/dev/null | sort | tail -1)"
   [ -n "$f" ] && KCP="$KCP:$f"
 done
 # embeddable 编译器的运行期依赖（少任何一个都会在启动时 NoClassDefFoundError）：
-#   trove4j      —— 本地虚拟文件路径计算
+#   trove4j      —— 本地虚拟文件路径计算（2026-10-04 实测本机 gradle 缓存里**没有** trove4j，
+#                   故下面按「非空才拼」处理，别让它变成 -cp 里的空条目）
 #   coroutines   —— 编译器内部用协程
 #   annotations  —— 字节码生成阶段读 @NotNull
+# ⚠️ 少了 kotlin-reflect 也不会在启动期报错，而是**跑到参数解析才炸**
+#    （2026-10-04 实测：NoClassDefFoundError: kotlin/reflect/jvm/ReflectJvmMapping，
+#     栈在 ArgumentUtilsKt.getArgumentAnnotation ⇒ 极具迷惑性，别只盯着 compiler/stdlib）。
 TROVE="$(find "$HOME/.gradle/caches/modules-2/files-2.1/org.jetbrains.intellij.deps/trove4j" \
           -name 'trove4j-*.jar' 2>/dev/null | sort | tail -1)"
-KCP="$KCP:$TROVE:$LIBS/kotlinx-coroutines-core-jvm-1.11.0.jar:$LIBS/annotations-26.0.2.jar"
+# ⚠️ trove4j 目录为空时 $TROVE 会是空串，直接拼会产生 `-cp a.jar::b.jar` 的**空条目**
+#    （Java 把它解释成当前目录，且容易掩盖真正的依赖缺失）。故只在非空时才拼。
+[ -n "$TROVE" ] && KCP="$KCP:$TROVE"
+# ⚠️ 这里的两个 jar 必须用**缓存名**（点换横杠）——$LIBS 里的文件名是
+#    `org-jetbrains-kotlinx-kotlinx-coroutines-core-jvm-1-11-0.jar`，
+#    写成 gav 原名的 `kotlinx-coroutines-core-jvm-1.11.0.jar` 会静默找不到
+#    ⇒ 编译器跑到启动后期才炸 ClassNotFoundException: kotlinx.coroutines.CoroutineScope
+#    （2026-10-04 实测；同一个坑 @ 528 行序列化插件那里已经踩过一次）。
+KCP="$KCP:$(ls "$LIBS"/*kotlinx-coroutines-core-jvm-*.jar 2>/dev/null | head -1)"
+KCP="$KCP:$(ls "$LIBS"/*jetbrains-annotations-*.jar 2>/dev/null | head -1)"
 
 # ---- 项目内符号解析 ----
 cd "$REPO_ROOT"
@@ -373,34 +393,39 @@ build_index() {
 }
 
 # 一个包路径下，有没有声明了 `class/object/interface/typealias/fun/val <cls>` 的文件
+
+# 声明行的公共匹配（class/object/interface/typealias/fun/val + 名字），下面两个函数共用。
+#
+# ⚠️ 2026-10-04 性能修复：这两个函数原本是 `for cand ... grep -qE "$cand"`，
+#    即「未解析符号数 × 该符号所属包的文件数」次 grep —— 每次都是一次进程 fork。
+#    data 模块实测要跑 **5 分钟以上**（domain 符号少所以看着还行）。
+#    改成**一次** `grep -lE` 把整个包的候选文件都喂进去（grep 本就支持多文件参数），
+#    命中数从 fork 数千次降到与符号数同阶。
+DECL_PAT='^ *(internal |private |public |abstract |open |sealed |data |enum |value |expect |actual )*(class|object|interface|typealias|fun|val) +'
+
 find_decl() { # pkg_path class_name -> "pkg_path<TAB>file"
   local pkg="$1" cls="$2" f
   [ -n "${PKG_INDEX[$pkg]:-}" ] || return 1
-  if [ -f "$pkg/$cls.kt" ]; then echo "$pkg	$pkg/$cls.kt"; return 0; fi
-  f=""
-  local cand
-  for cand in ${PKG_INDEX[$pkg]}; do
-    if grep -qE "^ *(internal |private |public |abstract |open |sealed |data |enum |value |expect |actual )*(class|object|interface|typealias|fun|val) +$cls\b" "$cand" 2>/dev/null; then
-      f="$cand"; break
-    fi
-  done
+  if [ -f "$pkg/$cls.kt" ]; then printf '%s\t%s\n' "$pkg" "$pkg/$cls.kt"; return 0; fi
+  f="$(grep -lE "$DECL_PAT$cls\b" ${PKG_INDEX[$pkg]} 2>/dev/null | head -1)"
   [ -n "$f" ] || return 1
-  echo "$pkg	$f"
+  printf '%s\t%s\n' "$pkg" "$f"
 }
 
 # 找出「所有声明了 pkg 里这个类的文件」。同名类在多个模块里都可能出现
 # （比如 core/model 与 data/* 各自有 DTO），全都要带上。
 find_decls_all() { # pkg_path class_name -> 每行 "pkg<TAB>file"
-  local pkg="$1" cls="$2" cand hit=0
+  local pkg="$1" cls="$2" cand hit=0 out
   [ -n "${PKG_INDEX[$pkg]:-}" ] || return 1
-  if [ -f "$pkg/$cls.kt" ]; then echo "$pkg	$pkg/$cls.kt"; hit=1; fi
-  for cand in ${PKG_INDEX[$pkg]}; do
-    [ "$cand" = "$pkg/$cls.kt" ] && continue
-    if grep -qE "^ *(internal |private |public |abstract |open |sealed |data |enum |value |expect |actual )*(class|object|interface|typealias|fun|val) +$cls\b" "$cand" 2>/dev/null; then
-      echo "$pkg	$cand"; hit=1
-    fi
-  done
-  [ "$hit" = 1 ]
+  if [ -f "$pkg/$cls.kt" ]; then printf '%s\t%s\n' "$pkg" "$pkg/$cls.kt"; hit=1; fi
+  out="$(grep -lE "$DECL_PAT$cls\b" ${PKG_INDEX[$pkg]} 2>/dev/null)"
+  if [ -n "$out" ]; then
+    while IFS= read -r cand; do
+      [ "$cand" = "$pkg/$cls.kt" ] && continue
+      printf '%s\t%s\n' "$pkg" "$cand"; hit=1
+    done <<<"$out"
+  fi
+  return "$hit"
 }
 
 CLOSED=""            # 已纳入的文件（相对仓库根，newline 分隔）
@@ -512,7 +537,12 @@ compile_and_report() { # outdir sources...
   #   （2.1.20 -> 2-1-20），写成 `${COMPILER_VER}` 就找不到。
   #   ⇒ 直接glob 匹配，唯一性由 artifactId 保证。
   local serplug
-  serplug="$(ls "$LIBS"/*kotlin-serialization-compiler-plugin-embeddable-*.jar 2>/dev/null | head -1)"
+  # ⚠️ 插件版本**必须**与 COMPILER_VER 一致（2.4.10 编译器 + 2.1.20 插件 ⇒
+  #   运行期 AbstractMethodError: SerializationComponentRegistrar does not define ...
+  #   getPluginId() —— 报错指向插件自身，极易误判成业务代码问题，2026-10-04 实测）。
+  #   ⇒ 先从 gradle 缓存按版本精确取，取不到才退回 $LIBS 里那个（可能过旧的）全局 jar。
+  serplug="$(find "$KGP" -name "kotlin-serialization-compiler-plugin-embeddable-${COMPILER_VER}.jar" 2>/dev/null | sort | tail -1)"
+  [ -s "$serplug" ] || serplug="$(ls "$LIBS"/*kotlin-serialization-compiler-plugin-embeddable-*.jar 2>/dev/null | head -1)"
   if [ -n "$serplug" ] && [ -s "$serplug" ]; then
     plugarg=(-Xplugin="$serplug")
   else

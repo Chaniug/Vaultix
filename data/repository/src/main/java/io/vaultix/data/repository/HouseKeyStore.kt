@@ -19,6 +19,7 @@ import io.vaultix.datastore.LocalUnlockKeyStore
 import io.vaultix.datastore.SecureCredentialStore
 import io.vaultix.domain.PIN_MAX_ATTEMPTS
 import io.vaultix.domain.PIN_MIN_LENGTH
+import io.vaultix.domain.PinChangeOutcome
 import io.vaultix.domain.PinEnrollOutcome
 import io.vaultix.domain.PinUnlockOutcome
 import io.vaultix.domain.RoomUnlockOutcome
@@ -355,6 +356,54 @@ class HouseKeyStore @Inject constructor(
         // 换了新 PIN 不能被上一次的失败计数锁住（与旧 PinUnlockStore.persist 同款）。
         clearPinFailures()
         LockEnrollResult.Enrolled
+    }
+
+    /**
+     * 修改 PIN：先验 [currentPin]，通过了才用 [newPin] 重新包裹房钥匙。
+     *
+     * ★ 这是 [enrollPinLock] 的"**验过旧 PIN**"版本。两者**不要**让调用方拆成两步用 ——
+     * 拆开就有三种错法：只验旧 PIN 就重包（等于门锁形同虚设）、
+     * 只重包不验旧 PIN（换了个陌生人的 PIN 上去，用户当场打不开自己的库）、
+     * 验完被中断（房钥匙在内存而信封没动，状态说不清）。
+     *
+     * **顺序本身就是安全边界**：[openWithPin] 通过 ⇒ 房钥匙进内存，才有资格重包；
+     * 不通过 ⇒ **一个字节都不写**。
+     *
+     * ⚠️ 新 PIN 的位数校验**先于**验旧 PIN，不是随手排的：位数判定是 O(1)，
+     * 验旧 PIN 要跑 Argon2id（64MiB 级内存硬）。顺序反过来，
+     * 一个手滑把新 PIN 打短了的用户会**白白消耗一次失败计数** ——
+     * 计数是防暴力的，不该为"新 PIN 长度不合法"买单。
+     *
+     * ⚠️ 重包**就是**改 PIN，不需要任何"改标记"动作：[PinKeyWrapper.wrap] 每次生成新盐，
+     * 覆盖写入即生效（与 [enrollPinLock] 同一套机制，见其 KDoc）。
+     *
+     * ⚠️ [clearPinFailures] 由 [enrollPinLock] 内部一并做了 ⇒ 换 PIN 顺带解除熔断。
+     * 这是对的：新 PIN 已经过一次完整验证，再让上一次的输错记数挂在它头上没有道理。
+     */
+    suspend fun changePinLock(
+        currentPin: String,
+        newPin: String,
+    ): PinChangeOutcome = withContext(Dispatchers.IO) {
+        validatePin(newPin)?.let { outcome ->
+            val minimum = (outcome as? PinEnrollOutcome.PinTooShort)?.minimum ?: PIN_MIN_LENGTH
+            return@withContext PinChangeOutcome.PinTooShort(minimum)
+        }
+        when (val opened = openWithPin(currentPin)) {
+            PinOpen.Opened -> {
+                val enrolled = enrollPinLock(newPin)
+                if (enrolled == LockEnrollResult.Enrolled) {
+                    PinChangeOutcome.Changed
+                } else {
+                    // ⚠️ 理论不可达（openWithPin 已把房钥匙送进内存，enroll 的前置必然满足）。
+                    // 但仍然如实返回，不留空：「静默没换成」会被用户下次解锁才发现 ——
+                    // 那是「假成功」里最坏的一种（闹到要用主密码，却没人告诉他 PIN 早变了）。
+                    PinChangeOutcome.Unavailable("PIN 门锁重新包裹失败，请重试")
+                }
+            }
+            is PinOpen.WrongPin -> PinChangeOutcome.WrongPin(opened.remainingAttempts)
+            PinOpen.LockedOut -> PinChangeOutcome.LockedOut
+            is PinOpen.Unavailable -> PinChangeOutcome.Unavailable(opened.detail)
+        }
     }
 
     /**

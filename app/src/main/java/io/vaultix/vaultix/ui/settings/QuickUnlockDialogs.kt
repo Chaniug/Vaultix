@@ -21,6 +21,7 @@ import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Password
 import androidx.compose.material.icons.filled.Upgrade
@@ -129,6 +130,17 @@ internal fun QuickUnlockSettingsRows(
     onToggleBiometric: () -> Unit,
     /** 拨「PIN」开关。 */
     onTogglePin: () -> Unit,
+    /**
+     * 点「修改 PIN」（**只有 PIN 已启用时那一行为可点**）。
+     *
+     * ⚠️ #161：设置页曾向用户承诺「忘记它不影响数据——用主密码解锁后在设置里重设即可」，
+     * 而设置里只有开关两态，拨一下是**关掉** PIN，重设无处可去。
+     *
+     * ⚠️ 为什么是**这一行**而不是把开关变成「改」：开关那一路的"开 / 关"语义
+     * 是 2026-09-30 用户拍板过的（"只需要一个打开的按钮"），把它改掉会同时
+     * 推翻下面那段「点整行 = 拨开关」的历史约定；在它旁开一行更省事也更稳。
+     */
+    onStartChangePin: () -> Unit,
 ) {
     if (legacyRemains) {
         SettingsRow(
@@ -177,6 +189,23 @@ internal fun QuickUnlockSettingsRows(
             )
         },
     )
+    // ★ 2026-10-04（#161）：PIN 已启用时，补一行「修改 PIN」。
+    //
+    // ⚠️ 用 when 分派出一个布尔，而不是直接写 `state.pin is CapabilityState.On`：
+    //   后者属于把多态状态压成二值（#121 的教训），类型检查 / detekt / when 穷尽性
+    //   全都查不出，只会在真机上表现为"该出现的一行没出现"。
+    val pinEnabled = when (state.pin) {
+        is QuickUnlockController.CapabilityState.On -> true
+        is QuickUnlockController.CapabilityState.Off -> false
+    }
+    if (state.loaded && pinEnabled) {
+        SettingsRow(
+            icon = { Icon(Icons.Filled.Edit, contentDescription = null) },
+            title = stringResource(R.string.pin_change),
+            onClick = onStartChangePin,
+        )
+        SettingsDivider()
+    }
 }
 
 /**
@@ -340,6 +369,35 @@ internal fun QuickUnlockHost(controller: QuickUnlockController) {
         is QuickUnlockController.Dialog.PinEntry -> PinEntryDialog(current, controller)
         is QuickUnlockController.Dialog.KdbxPassword -> KdbxPasswordDialog(current, controller)
         is QuickUnlockController.Dialog.Report -> ReportDialog(current, controller)
+        QuickUnlockController.Dialog.PinChangeDone -> PinChangeDoneDialog(controller)
+    }
+}
+
+/**
+ * 「修改 PIN 完成」的一次性确认。
+ *
+ * ⚠️ 为什么它值得占一个对话框：改完 PIN 之后，**开关、副标题、库列表全都没有可见变化**
+ * （副标题本来就写"已启用 · 6 位"）。对话框一关等于什么都没说，用户只能猜
+ * "到底换了吗、要不要重启才生效" —— 那正是 #161 的反面：设置页承诺过一件事却没兑现，
+ * 比当初不承诺更伤信任。这里兑现一次。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PinChangeDoneDialog(controller: QuickUnlockController) {
+    BasicAlertDialog(onDismissRequest = controller::dismiss) {
+        DialogSurface {
+            DialogHeader(title = stringResource(R.string.pin_change))
+            DialogSectionTitle(
+                title = stringResource(R.string.pin_change_done),
+                // 「忘记不影响数据、用主密码解锁后可重设」：改 PIN 之后这句话依然成立，
+                // 顺带把 #161 那条承诺的落点再点一遍（它现在是真的了）。
+                hint = stringResource(R.string.pin_section_hint),
+            )
+            Spacer(Modifier.height(Spacing.sm))
+            DialogActions {
+                DialogBackButton(controller::dismiss)
+            }
+        }
     }
 }
 
@@ -349,13 +407,31 @@ private fun PinEntryDialog(
     state: QuickUnlockController.Dialog.PinEntry,
     controller: QuickUnlockController,
 ) {
+    // mode 是 enum（本来就是二值），直接比 == 不存在"压成二值"的问题
+    // —— 那条纪律管的是 sealed 的多态状态（见 CapabilityToggle 的 KDoc）。
+    val isChange = state.mode == QuickUnlockController.PinMode.Change
+    val headerRes = when (state.mode) {
+        QuickUnlockController.PinMode.Enroll -> R.string.pin_section_title
+        QuickUnlockController.PinMode.Change -> R.string.pin_change
+    }
     BasicAlertDialog(onDismissRequest = controller::dismiss) {
         DialogSurface {
-            DialogHeader(title = stringResource(R.string.pin_section_title))
+            DialogHeader(title = stringResource(headerRes))
             DialogSectionTitle(
                 title = stringResource(R.string.pin_set_title, PIN_MIN_LENGTH),
+                // 「忘记不影响数据、用主密码解锁后可重设」—— 修改模式下的 hint 依然是这句，
+                // 它本来说的就是**重设**，这条承诺以前无处落地，现在落到这一行上。
                 hint = stringResource(R.string.pin_section_hint),
             )
+            // ★ 修改模式：第一个框是**验证当前 PIN**，不是装饰。
+            //   不验就重包 = 把门锁拆下来换个别家的密码（#161 真正的病灶）。
+            if (isChange) {
+                PinField(
+                    value = state.old,
+                    labelRes = R.string.pin_field_current,
+                    onValueChange = controller::onPinOldChange,
+                )
+            }
             PinField(
                 value = state.pin,
                 labelRes = R.string.pin_field_new,
@@ -369,8 +445,17 @@ private fun PinEntryDialog(
             state.error?.let { DialogErrorText(it) }
             Spacer(Modifier.height(Spacing.sm))
             DialogActions {
+                // 熔断（连错 5 次）之后，这是用户**唯一**的出路：
+                // 「关闭 PIN 解锁」不需要任何验证就能删信封，再重新设一个新 PIN。
+                if (isChange) {
+                    TextButton(onClick = controller::disablePinFromChange) {
+                        Text(stringResource(R.string.pin_disable))
+                    }
+                }
                 DialogBackButton(controller::dismiss)
-                TextButton(onClick = controller::submitPin) {
+                TextButton(
+                    onClick = if (isChange) controller::submitChangePin else controller::submitPin,
+                ) {
                     Text(stringResource(R.string.action_continue))
                 }
             }

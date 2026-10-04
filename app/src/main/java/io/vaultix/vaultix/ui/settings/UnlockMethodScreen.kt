@@ -117,6 +117,8 @@ fun UnlockMethodScreen(
                     // 点整行与拨开关等效（向导已删，见 QuickUnlockSettingsRows 的 KDoc）。
                     onToggleBiometric = viewModel.quickUnlock::toggleBiometric,
                     onTogglePin = viewModel.quickUnlock::togglePin,
+                    // 「修改 PIN」（#161）：只在 PIN 已启用时才会出现，见 QuickUnlockSettingsRows。
+                    onStartChangePin = viewModel.quickUnlock::startChangePin,
                 )
                 SettingsDivider()
                 // ★ 2026-09-30 晚搬入：**锁的超时**与锁的方式同页 ——

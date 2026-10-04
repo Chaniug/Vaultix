@@ -213,6 +213,44 @@ interface VaultRepository {
     /** 关 PIN 门锁（删信封 + 清计数；孤儿清理逻辑同 [disableFingerprintLock]）。 */
     suspend fun disablePinLock()
 
+    /**
+     * **修改** PIN：验过 [currentPin] 之后用 [newPin] 重新包裹房钥匙。
+     *
+     * ## ★ 为什么是**一个**方法，而不是让调用方拆成两步
+     *
+     * 「改 PIN」在底层是两件有因果的事：`openWithPin(current)`（房钥匙进内存）
+     * 之后才能 `enrollPinLock(new)`（重包信封）。拆成两步暴露出去，代价是
+     * **每一步的中间状态都可能被漏掉或写错**：
+     *
+     * - 只验旧 PIN 就重包 ⇒ **任何人都能改写门锁信封**（没有门了）；
+     * - 只重包不验旧 PIN ⇒ 换了个陌生人的 PIN，用户当场打不开自己的库；
+     * - 验完旧 PIN、重包前被中断 ⇒ 房钥匙留在内存而信封没变，状态说不清。
+     *
+     * ⇒ 由本方法一次性保证「验旧的通过才重包」，调用方拿不到拆开的机会。
+     *
+     * ## 顺序：先校验**新** PIN 的位数，再验旧 PIN
+     *
+     * 位数是 O(1)，验旧 PIN 要跑 Argon2id（64MiB 级内存硬）。若顺序反过来，
+     * 一个手滑打短了新 PIN 的用户会**白白消耗一次失败计数**（计数是防暴力的，
+     * 不该为"新 PIN 太短"买单）。
+     *
+     * ## 为什么要它（#161）
+     *
+     * 设置页曾向用户承诺「忘记 PIN 不影响数据——用主密码解锁后在设置里重设即可」，
+     * 而设置里只有「关掉」和「开启」，**重设**这件事无处可去：
+     * [PinUnlockOutcome.LockedOut] 的 KDoc 也要求「UI 应引导重设 PIN」。
+     * 底层能力（[PinKeyWrapper.wrap] 每次换新盐、[enrollPinLock] 覆盖即改
+     * —— 见其 KDoc）早已齐备，缺的正是这一个入口。
+     *
+     * ⚠️ 与 [enrollPinLock] 的关系：`enrollPinLock` 在房钥匙不在内存时会失败，
+     * 而本方法**先验旧 PIN**，因此走到重包时房钥匙必然已在内存 ⇒ 本方法
+     * 不会退化成"需要调用方先自己把门锁打开"。
+     */
+    suspend fun changePinLock(
+        currentPin: String,
+        newPin: String,
+    ): PinChangeOutcome
+
     // ---- 房间信封（生效范围：勾 = 该库房间信封已建，纯软件、不碰门锁）----
 
     /**
@@ -327,6 +365,41 @@ sealed interface PinUnlockOutcome {
 
     /** 未启用 / 信封缺失或损坏 ⇒ 回退主密码解锁（**不删登记**，用户可重设自愈）。 */
     data class Unavailable(val detail: String) : PinUnlockOutcome
+}
+
+/**
+ * [VaultRepository.changePinLock] 的结论：把「改 PIN」这件事的成败与原因一次性说清。
+ *
+ * ⚠️ **为什么不与 [PinEnrollOutcome] 复用**：那套是"逐库登记"的逐库结论（含
+ * [PinEnrollOutcome.Skipped]「用户主动跳过」这种**非失败**态）——本方法**一次只改一个
+ * 全局门锁**，没有"逐库"，也没有"跳过"这回事。硬塞进去只会让调用方判断时多一层
+ * "这个分支在这儿出现得对吗"（同 #93「谎报状态的开关」那一族：非本场景的状态混进来，
+ * 迟早被当成能走到）。
+ */
+sealed interface PinChangeOutcome {
+
+    /** 旧 PIN 验证通过、新 PIN 已重新包裹落盘（计数已清零）。 */
+    data object Changed : PinChangeOutcome
+
+    /**
+     * 当前 PIN 不对。[remainingAttempts] 是还剩几次（由 [PIN_MAX_ATTEMPTS] 减去本次计数），
+     * UI 直接展示 —— 不要把减法留给 UI，否则两处各算一遍必然漂移（同 [PinUnlockOutcome.WrongPin]）。
+     */
+    data class WrongPin(val remainingAttempts: Int) : PinChangeOutcome
+
+    /** 连续输错已达 [PIN_MAX_ATTEMPTS] ⇒ 本次改 PIN 被拒。UI 须给出路，不能只回一句"失败"。 */
+    data object LockedOut : PinChangeOutcome
+
+    /** 新 PIN 低于 [PIN_MIN_LENGTH]（先于验旧 PIN 判定，见 [changePinLock] 的顺序说明）。 */
+    data class PinTooShort(val minimum: Int) : PinChangeOutcome
+
+    /**
+     * 改不了：PIN 门锁没装 / 信封损坏 / 房钥匙用不上。
+     *
+     * ⚠️ [detail] 是**给人看的一句话**，不是异常消息 —— 它会直接进设置页的对话框。
+     * 与 [PinUnlockOutcome.Unavailable] 同理（不删登记，用户可自愈）。
+     */
+    data class Unavailable(val detail: String) : PinChangeOutcome
 }
 
 /**

@@ -23,6 +23,7 @@ import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.domain.KdbxAddOutcome
 import io.vaultix.domain.LocalUnlockEnrollOutcome
 import io.vaultix.domain.LocalUnlockPreparedEnrollment
+import io.vaultix.domain.PinChangeOutcome
 import io.vaultix.domain.PinEnrollOutcome
 import io.vaultix.domain.PinUnlockOutcome
 import io.vaultix.domain.RoomUnlockOutcome
@@ -511,6 +512,27 @@ class VaultRepositoryImpl @Inject constructor(
     override suspend fun disablePinLock() {
         houseKeyStore.disablePinLock()
         preferences.setPinLockEnrolled(false)
+    }
+
+    /**
+     * 修改 PIN：验旧 → 重包，**一次调用**完成。
+     *
+     * ⚠️ 刻意不拆成 `openHouseWithPin` + `enrollPinLock` 两步交给上层：那两条路各自
+     * 都有"看着能过"的组合，但拼起来正是漏洞所在（只验旧 PIN 就重包 = 门锁形同虚设）。
+     * 原子性由 [HouseKeyStore.changePinLock] 保证，这里只做转发 + 镜像。
+     *
+     * ⚠️ 镜像只在**成功**时补写 `true`，失败时一个字节都不动 —— 改 PIN 不改变"开关是不是
+     * 开着"这个事实（它本来就开着），但失败会让它保持原样，绝不能把"没换成"写成"换成了"。
+     */
+    override suspend fun changePinLock(
+        currentPin: String,
+        newPin: String,
+    ): PinChangeOutcome {
+        val outcome = houseKeyStore.changePinLock(currentPin, newPin)
+        if (outcome == PinChangeOutcome.Changed) {
+            preferences.setPinLockEnrolled(true)
+        }
+        return outcome
     }
 
     // ---- 房间信封（生效范围）----

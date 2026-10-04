@@ -601,6 +601,7 @@
     <string name="quick_unlock_report_lock_only">解锁方式已开启。纳入的库没有变化，无需重新输入主密码。</string>
     <string name="quick_unlock_legacy_title">快速解锁已升级，需重新登记一次</string>
     <string name="quick_unlock_legacy_desc">旧版保存的解锁凭据无法自动升级。打开下面的开关即可重新登记，登记完成后旧凭据会被清除。</string>
+    <string name="pin_field_current">当前 PIN</string>
     <string name="pin_field_new">输入 PIN</string>
     <string name="pin_field_confirm">再次输入 PIN</string>
     <string name="action_continue">继续</string>
@@ -722,10 +723,13 @@
     <string name="pin_mismatch">两次输入不一致，请重新输入</string>
     <string name="pin_too_short">PIN 需要 %1$d 位数字</string>
     <string name="pin_disable">关闭 PIN 解锁</string>
-    <!-- ⚠️ 自 2026-09-16 四改起**暂无代码引用**：四改改用 quick_unlock_action_change_pin
-         （「修改 PIN」）—— 原「修改 PIN」与本条语义重复，二选一后保留了更直白的后者。
-         **刻意保留**：它点明了"改的是 PIN"且措辞更完整。 -->
+    <!-- ✅ 2026-10-04（#161）起**已接上代码**：设置页「应用内 PIN」段在 PIN 已启用时
+         多一行「修改 PIN」，点它进入改 PIN 流程（先验「当前 PIN」，再重包门锁信封）。
+         在此之前，本条自 2026-09-16 四改起一直是孤儿串：那几年设置页的
+         pin_section_hint 向用户承诺「忘记后可在设置里重设」，而设置里只有开关两态，
+         拨一下是**关掉** PIN —— 这条串就是那个未兑现的承诺备下的料，如今落了地。 -->
     <string name="pin_change">修改 PIN</string>
+    <string name="pin_change_done">PIN 已修改，下次解锁请用新 PIN</string>
     <string name="pin_kdbx_title">确认主密码</string>
     <!-- 2026-09-16「一个 PIN 打开全部库」后，这一次输入会被拿去逐个校验**所有** KDBX 库，
          故措辞从"该库"改为"KDBX 库"，并说明各库密码不同时的处理方式
