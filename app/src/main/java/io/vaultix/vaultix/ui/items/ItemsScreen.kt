@@ -1012,16 +1012,30 @@ private fun ItemsMoreMenu(
 /**
  * 菜单顶部的**当前库卡片**：库名 + 来源 · 条目数。
  *
- * ⚠️ 这里**给全**（`maxLines = 2` 换行），与列表状态行的"中间省略"是**刻意的分层**：
+ * ## ⚠️ 宽度必须**固定**（2026-10-04 用户真机对照后发现）
+ *
+ * 此前是 `widthIn(min = MENU_CARD_MIN_WIDTH)` —— **只有下限**，实际宽度由内容撑开。
+ * 于是同一份代码在两种库下量出两种宽度（真机 density 3.47）：
+ * - Bitwarden 库：`pwd.vv1234.cn · 219 个条目` ⇒ 贴到下限，窄
+ * - KDBX 库：`OneDrive · Keepass/valkjin.kdbx · 217 个条目` ⇒ 被内容撑宽
+ * ⇒ 同一位置的浮层在切库后**宽度会跳变**，用户视角就是"换个库界面就变形了"
+ * （用户原话：「展开后与 bitwarden 那种密码库路径对比，就很不协调」）。
+ *
+ * ⇒ 改成 `width(MENU_CARD_WIDTH)`：切库时宽度**恒定**，浮层不跳。
+ * 代价是长路径改由**中间省略**兜底（`MiddleEllipsizedText` 已有），
+ * 这与本项目的取舍一致：**外框稳定 > 内容全展示**。
+ *
+ * ## 与列表状态行的分层（刻意不同，不是漂移）
+ *
  * - 列表行：常驻、窄、必须一眼扫过 ⇒ 折到自己塞得下的长度（保头保尾）；
- * - 菜单卡片：用户主动展开、空间宽裕 ⇒ 换行显示**完整路径**。
+ * - 菜单卡片：用户主动展开、空间宽裕 ⇒ 尽量给全，实在放不下才中间省略。
  * 同一份数据、两种密度 —— 而不是让两处都去迁就最窄的那个。
  */
 @Composable
 private fun MenuVaultCard(card: VaultCardInfo) {
     Column(
         modifier = Modifier
-            .widthIn(min = MENU_CARD_MIN_WIDTH)
+            .width(MENU_CARD_WIDTH)
             .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
     ) {
         Text(
@@ -1036,7 +1050,11 @@ private fun MenuVaultCard(card: VaultCardInfo) {
             text = subtitle,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = MENU_CARD_SUBTITLE_LINES,
+            // ⚠️ 固定宽度后**必须回到单行中间省略**（此前是 `maxLines = 2`）。
+            // 宽度恒定了，"给全"就不成立：KDBX 的 `OneDrive · Keepass/valkjin.kdbx · 217 个条目`
+            // 在 280dp 里放不下两行，第二行会把下面的分隔线顶开、菜单高度随内容跳。
+            // ⇒ 保头保尾折成一行（`MiddleEllipsizedText`），高度与切库无关。
+            maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
         // 同步状态**单独一行**（卡片有空间）：它与"在哪 / 多少条"是不同性质的信息，
@@ -1063,11 +1081,19 @@ private fun MenuGroupTitle(@StringRes labelRes: Int) {
     )
 }
 
-/** 菜单卡片的最小宽度：窄屏上也要像个卡片，而不是一行被折成两截的碎字。 */
-private val MENU_CARD_MIN_WIDTH = 208.dp
-
-/** 卡片副标题最多两行（长 WebDAV 路径折一行，再长才截断）。 */
-private const val MENU_CARD_SUBTITLE_LINES = 2
+/**
+ * 菜单卡片的**固定**宽度（2026-10-04 用户真机对照后定稿）。
+ *
+ * ⚠️ 此前是 `MENU_CARD_MIN_WIDTH = 208.dp` 且用 `widthIn(min =)` ——
+ * **只有下限**，实际宽度由内容撑开 ⇒ 切库时浮层宽度会跳：
+ * Bitwarden 库（短）贴到下限，KDBX 库（长）被撑宽 ⇒ 「很不协调」。
+ *
+ * 取 280.dp 的理由：能容下 KDBX 最常见的
+ * `OneDrive · Keepass/valkjin.kdbx · 217 个条目`（约 40 字符，bodySmall 下 ≈ 250dp），
+ * 且在窄屏（≥320dp）上仍留得住边距。固定后长文本走**中间省略**（保头保尾，
+ * 尾段的条目数与文件名是用户最想确认的），高度与切库无关。
+ */
+private val MENU_CARD_WIDTH = 280.dp
 
 /** 菜单项（图标 + 文案；[destructive] 用 error 色标出不可逆 / 中断性动作）。 */
 @Composable
