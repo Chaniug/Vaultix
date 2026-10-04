@@ -513,7 +513,11 @@ private fun KdbxPasswordDialog(
                 },
                 singleLine = true,
                 visualTransformation = PasswordVisualTransformation(),
-                modifier = Modifier.fillMaxWidth(),
+                // ⚠️ 2026-10-04：与 [PinField] 同一处缺失（`DialogSurface` 不给水平内边距），
+                //   这个弹窗的输入框同样贴到了面板左右边缘 ⇒ 补同一档 [Spacing.xl]。
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = Spacing.xl),
             )
             state.error?.let { DialogErrorText(it) }
             Spacer(Modifier.height(Spacing.sm))
@@ -645,7 +649,18 @@ private fun PinField(value: String, labelRes: Int, onValueChange: (String) -> Un
         singleLine = true,
         visualTransformation = PasswordVisualTransformation(),
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-        modifier = Modifier.fillMaxWidth(),
+        // ⚠️ 2026-10-04 用户反馈「点修改 PIN 时输入框顶到了弹窗边缘」。
+        //   根因：[DialogSurface] 的 Column **只给了 `padding(vertical = …)`，没有水平 padding**
+        //   —— 水平内边距是靠每个子元素**各自**带的（[DialogHeader] / [DialogSectionTitle] /
+        //   [DialogActions] 都是 `start/end = Spacing.xl`）。
+        //   而本函数原先是裸的 `fillMaxWidth()` ⇒ 输入框成了**唯一贴到面板左右边缘的元素**，
+        //   与上方标题、下方按钮的内缘对不上，看起来就是"顶到边框了"。
+        //   ⇒ 显式补上同一档 `Spacing.xl`，四类子元素的内缘从此对齐。
+        //   ⚠️ 不要改成 `DialogSurface` 统一给水平 padding：那是 25 处弹窗的共用外壳，
+        //   各调用点现有的内边距值并不统一（有的用 xl、有的用 lg），改外壳要重调全部调用点。
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.xl),
     )
 }
 

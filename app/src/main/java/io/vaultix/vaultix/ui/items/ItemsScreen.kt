@@ -1091,8 +1091,28 @@ private fun BoxScope.QuickFilterPanel(
 ) {
     AnimatedVisibility(
         visible = visible,
-        enter = fadeIn() + expandVertically(expandFrom = Alignment.Top),
-        exit = fadeOut() + shrinkVertically(shrinkTowards = Alignment.Top),
+        enter = fadeIn(animationSpec = tween(GROUP_ANIM_MS)) +
+            expandVertically(
+                expandFrom = Alignment.Top,
+                // ⚠️ 2026-10-04 用户反馈「点左上角折叠筛选按钮时遮住下方的密码条目」。
+                //   根因是**两个动画不同源**：
+                //     · 面板高度 = `AnimatedVisibility` 的 `expandVertically`，
+                //       默认用 spring 规格（时长与 200ms 无关）；
+                //     · 列表让位 = `rememberQuickFilterRowInset` 的
+                //       `animateDpAsState(tween(GROUP_ANIM_MS))`（200ms）。
+                //   两者曲线不同时长 ⇒ **动画进行中面板比让位高**，
+                //   那多出来的一截就压在第一条条目上（动画结束才落回正确位置）。
+                //   ⇒ 显式给同一个 `tween(GROUP_ANIM_MS)`，面板与让位**逐帧同步**，
+                //   任何一帧都不会出现"面板高于让位"。
+                //   ⚠️ 改这里必须同步改 [rememberQuickFilterRowInset]，反之亦然 ——
+                //   这两处是同一份契约的两端，改一头不改另一头就会重现本bug。
+                animationSpec = tween(GROUP_ANIM_MS),
+            ),
+        exit = fadeOut(animationSpec = tween(GROUP_ANIM_MS)) +
+            shrinkVertically(
+                shrinkTowards = Alignment.Top,
+                animationSpec = tween(GROUP_ANIM_MS),
+            ),
         modifier = Modifier.align(Alignment.TopCenter),
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
