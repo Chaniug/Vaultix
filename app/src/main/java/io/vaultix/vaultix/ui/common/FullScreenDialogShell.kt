@@ -39,6 +39,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.BottomAppBarDefaults
+import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -518,7 +519,16 @@ private fun BoxScope.ActionBar(
                 Text(stringResource(R.string.action_cancel))
             }
             Spacer(Modifier.width(Spacing.sm))
-            TextButton(onClick = onConfirm, enabled = confirmEnabled) {
+            // ⚠️ 2026-10-04 观感：主操作由 `TextButton` 改为 **filled `Button`**。
+            //    此前「取消」与「保存」是**两个同规格文字按钮**，并排等重——
+            //    而保存是这张表单唯一的出口，也是本页唯一"做完就走"的动作。
+            //    两者同权重 = 用户每次都得重新读一遍哪个是主操作。
+            //
+            //    ⚠️ **不要给这里加 `heightIn(min = 48.dp)`**：
+            //    M3 `Button` 的视觉高度是 40dp，但 `minimumInteractiveComponentSize`
+            //    已把**触摸目标**撑到 48dp —— 栏体 [ACTION_BAR_HEIGHT] 仍是 56dp，
+            //    放得下。强行再拉高只会让同栏的「取消」相对更矮、显得像次要残件。
+            Button(onClick = onConfirm, enabled = confirmEnabled) {
                 Text(confirmLabel)
             }
         }

@@ -134,11 +134,23 @@ fun UnlockMethodScreen(
                     onClick = { showAutoLockDialog = true },
                 )
             }
+            // ⚠️ 2026-10-04 观感：这段说明原先写 `horizontal = Spacing.xl`(24dp)，
+            //   而卡片自身的水平外边距是 `Spacing.lg`(16dp)
+            //   ⇒ **左缘比卡片内缩 8dp**，两条竖边对不齐，一眼看过去就是"歪的"。
+            //   且它与卡片之间只有卡片自己那 8dp 下边距 ⇒ 贴得太紧。
+            //   ⇒ ① 与卡片**左缘对齐**（同取 16dp）；② 上间距提到 8dp（合计 16dp，
+            //     正好是"分区之间"那一档，见 8.4「先量再改」）。
+            //   字号**维持 bodySmall 不动**：它是脚注，层级必须低于卡内行副标题
+            //   （bodyMedium）；把它调大只会让"哪句是补充"变得不可读。
             Text(
                 text = stringResource(R.string.unlock_method_scope_note),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = Spacing.xl),
+                modifier = Modifier.padding(
+                    start = Spacing.lg,
+                    end = Spacing.lg,
+                    top = Spacing.sm,
+                ),
             )
         }
     }

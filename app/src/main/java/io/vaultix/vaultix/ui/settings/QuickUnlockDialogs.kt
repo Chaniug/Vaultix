@@ -423,6 +423,13 @@ private fun PinEntryDialog(
                 // 它本来说的就是**重设**，这条承诺以前无处落地，现在落到这一行上。
                 hint = stringResource(R.string.pin_section_hint),
             )
+            // ⚠️ 2026-10-04 观感：三个输入框原先是**零间距**堆叠的 ——
+            //   [DialogSurface] 的 Column 没有 `verticalArrangement`，[PinField] 也没带
+            //   任何外边距 ⇒ 三个 `OutlinedTextField` 的描边直接贴合，
+            //   看上去是"一个大框被横线切成三段"，而不是三个独立字段。
+            //   ⇒ 12dp（[Spacing.md]）：与条目表单里"字段 ↔ 字段"那一档一致，
+            //   全 App 表单从此只有一套字段间距。
+            //
             // ★ 修改模式：第一个框是**验证当前 PIN**，不是装饰。
             //   不验就重包 = 把门锁拆下来换个别家的密码（#161 真正的病灶）。
             if (isChange) {
@@ -431,12 +438,14 @@ private fun PinEntryDialog(
                     labelRes = R.string.pin_field_current,
                     onValueChange = controller::onPinOldChange,
                 )
+                Spacer(Modifier.height(Spacing.md))
             }
             PinField(
                 value = state.pin,
                 labelRes = R.string.pin_field_new,
                 onValueChange = controller::onPinChange,
             )
+            Spacer(Modifier.height(Spacing.md))
             PinField(
                 value = state.confirm,
                 labelRes = R.string.pin_field_confirm,
@@ -445,12 +454,20 @@ private fun PinEntryDialog(
             state.error?.let { DialogErrorText(it) }
             Spacer(Modifier.height(Spacing.sm))
             DialogActions {
-                // 熔断（连错 5 次）之后，这是用户**唯一**的出路：
-                // 「关闭 PIN 解锁」不需要任何验证就能删信封，再重新设一个新 PIN。
+                // ⚠️ 2026-10-04 排版：破坏性动作与主操作**必须分开站位**（8.4「动作区两端对齐」）。
+                //   「关闭 PIN 解锁」删掉的是门锁本身（不可逆），此前它与「返回」「继续」
+                //   一起右对齐、彼此紧挨 —— 用户在"想退出"与"想继续"之间极易误触。
+                //   ⇒ 塞一个 `weight(1f)` 的空隙把它推到最左，右边只留返回/继续。
+                //   （`DialogActions` 的 content 是 `RowScope`，故这里能直接用 weight。）
                 if (isChange) {
+                    Spacer(Modifier.weight(1f))
                     TextButton(onClick = controller::disablePinFromChange) {
-                        Text(stringResource(R.string.pin_disable))
+                        Text(
+                            text = stringResource(R.string.pin_disable),
+                            color = MaterialTheme.colorScheme.error,
+                        )
                     }
+                    Spacer(Modifier.width(Spacing.sm))
                 }
                 DialogBackButton(controller::dismiss)
                 TextButton(
@@ -485,7 +502,14 @@ private fun KdbxPasswordDialog(
             OutlinedTextField(
                 value = state.password,
                 onValueChange = controller::onPasswordChange,
-                label = { Text(stringResource(R.string.quick_unlock_kdbx_password_label)) },
+                label = {
+                    // ⚠️ 2026-10-04 观感：与 [PinField] 同一规格（`bodyMedium`）。
+                    //   两个弹窗都是"一个密码框+ 错误文案"，字段名却一大一小 ⇒ 观感廉价。
+                    Text(
+                        text = stringResource(R.string.quick_unlock_kdbx_password_label),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                },
                 singleLine = true,
                 visualTransformation = PasswordVisualTransformation(),
                 modifier = Modifier.fillMaxWidth(),
@@ -610,7 +634,13 @@ private fun PinField(value: String, labelRes: Int, onValueChange: (String) -> Un
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
-        label = { Text(stringResource(labelRes)) },
+        // ⚠️ 2026-10-04 观感：显式降到 `bodyMedium`
+        //   —— `OutlinedTextField` 的 label 默认走 M3 的 `bodyLarge`(16sp)，
+        //   比「锁与安全」设置行副标题（`bodyMedium`）还大一号，
+        //   ⇒ 一屏里字段名比它的说明文字更显眼，**层级倒挂**。
+        //   不覆盖 color：M3 在聚焦/有值时会把它换成 primary / onSurfaceVariant，
+        //   那是状态提示，必须保留。
+        label = { Text(text = stringResource(labelRes), style = MaterialTheme.typography.bodyMedium) },
         singleLine = true,
         visualTransformation = PasswordVisualTransformation(),
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
@@ -624,6 +654,11 @@ private fun DialogErrorText(message: String) {
         text = message,
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.error,
-        modifier = Modifier.padding(top = Spacing.xs),
+        // ⚠️ 2026-10-04 观感：原先是 `Spacing.xs`(4dp)。
+        //   错误文案是**紧跟在出错的那个输入框下面**的，4dp 贴得太近，
+        //   看起来像输入框的一部分（描边外的"第四个框"）。
+        //   提到 [Spacing.sm](8dp) 后：上边 8dp（脱离字段）、下边由调用方的
+        //   [Spacing.sm] 收口⇒ 字段与错误文案合成一"组"，与下一个字段再分开。
+        modifier = Modifier.padding(top = Spacing.sm),
     )
 }

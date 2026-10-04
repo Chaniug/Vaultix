@@ -1,5 +1,6 @@
 package io.vaultix.vaultix.ui.common
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -278,7 +279,8 @@ private fun ItemFormTail(
     reprompt: VaultReprompt,
     onRepromptChange: (VaultReprompt) -> Unit,
 ) {
-    Spacer(Modifier.height(Spacing.md))
+    // 2026-10-04 观感：卡片↔卡片 12dp → 24dp（理由见 [GroupedTypeFields]）。
+    Spacer(Modifier.height(Spacing.xl))
     // 卡片 3：附加内容（自定义字段 + 备注）
     FormGroupCard {
         SectionLabel(
@@ -293,12 +295,14 @@ private fun ItemFormTail(
         OutlinedTextField(
             value = notes,
             onValueChange = onNotesChange,
-            label = { Text(stringResource(R.string.item_field_notes)) },
+            label = { FormFieldLabel(R.string.item_field_notes) },
             minLines = 2,
             modifier = Modifier.fillMaxWidth(),
         )
     }
-    Spacer(Modifier.height(Spacing.md))
+    // 卡片 4 之前同样提到 24dp：这张卡与上一张卡原本也是 12dp，
+    // 于是「卡片 3 ↔ 卡片 4」和「卡内小节 ↔ 小节」一样紧。
+    Spacer(Modifier.height(Spacing.xl))
     // 卡片 4：安全选项（主密码二次验证，对齐 Bitwarden「附加选项」）。
     // ⚠️ 单独成卡而不是并进附加内容：它回答的是「这个条目**怎么被保护**」，
     //    与上面「填了什么内容」不是一回事，混在一起会让这张卡的标题失去意义。
@@ -375,6 +379,66 @@ private fun SectionLabel(text: String, icon: ImageVector) {
 private val FORM_CARD_CORNER = 20.dp
 
 /**
+ * 表单里**所有**输入框的字段名（`OutlinedTextField` 的 `label` 槽）。
+ *
+ * ## 为什么不各写各的
+ *
+ * 2026-10-04 观感问题：字段名走 `OutlinedTextField` 的默认样式 = M3 `bodyLarge`(16sp)，
+ * 于是**二十来个字段名全都比卡片里的分区标题（`labelLarge` 14sp）更显眼**——
+ * 层级完全倒挂：用户扫视时先看到一排「用户名 / 密码 / 网址」，却看不到
+ * 「登录信息」这个分组标题。全表统一降到 `bodyMedium`(14sp) 后，
+ * 分区标题与字段名同档，标题靠**图标 + 主色**赢，而不是靠字号。
+ *
+ * ⚠️ **只设 `style`，不设 `color`**：M3 会根据状态把 label 染成
+ *    primary（有焦点）/ `onSurfaceVariant`（常态）/ error（出错）。
+ *    在这里写死颜色会把这套状态提示全部弄丢 —— 那是可访问性的一部分。
+ *
+ * @param labelRes 字段名文案资源。
+ * @param required 是否必填。为 `true` 时在文案后加一枚 `*`（见 `item_field_name`）。
+ */
+@Composable
+private fun FormFieldLabel(labelRes: Int, required: Boolean = false) {
+    if (required) {
+        // 必填项常态就带星号：等到保存失败才红字提示，用户已经白填了一遍。
+        // 常态强调 + 出错变红 = 两层，前者是"提前告知规则"，后者是"你违反了它"。
+        Text(text = stringResource(labelRes) + "*", style = MaterialTheme.typography.bodyMedium)
+    } else {
+        Text(text = stringResource(labelRes), style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+/**
+ * 关键字段的强调块：一层极淡的主色底 + 小圆角，把该字段圈出来。
+ *
+ * ## 为什么是"淡底"而不是"加粗字号"
+ *
+ * 8.4 的一条判据：**一个元素只该说一件事**。密码是这个表单里唯一
+ * "填错了会出事"的字段，但它跟用户名、网址在**结构上完全同类**（都是文本框），
+ * 所以不能靠改结构来区分—— 那会让表单长出一节专用布局。
+ * 淡底是唯一能做到"一眼看见、但不改变结构"的手段。
+ *
+ * ⚠️ **必须换色档，不能同色叠 alpha**：卡片底是 `surfaceContainerHighest`，
+ *    这里用 `primaryContainer`（M3 里与前三档 surface 不同色相）再压 alpha。
+ *    若用 `surfaceContainerHighest.copy(alpha = …)`，那正是 8.4 明令禁止的
+ *    「同色叠 alpha」—— 边界会糊掉，等于没做。
+ * ⚠️ alpha 只取 0.30 左右：这是**背景提示**，一旦过深就会与上面的分区标题抢注意力。
+ */
+@Composable
+private fun EmphasisBlock(content: @Composable ColumnScope.() -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(FORM_FIELD_BLOCK_CORNER))
+            .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.30f))
+            .padding(Spacing.md),
+        content = content,
+    )
+}
+
+/** 强调块的小圆角（比卡片小一档：它是卡的**内**部件，不是第四张卡）。 */
+private val FORM_FIELD_BLOCK_CORNER = 12.dp
+
+/**
  * 表单的**分组卡片**（2026-09-16 新增，取代此前的 `SectionLabel` + 淡分隔线）。
  *
  * ## 为什么从"分隔线"升级为"卡片"
@@ -429,10 +493,17 @@ internal fun FormGroupCard(content: @Composable ColumnScope.() -> Unit) {
  *
  * 抽出来只为让主函数的 `when` 每个分支保持一行 —— 那里已经顶着 detekt
  * `CyclomaticComplexMethod` 的上限，多写两行就会连带把复杂度顶破。
+ *
+ * ⚠️ 2026-10-04 观感：留白由 `Spacing.md`(12dp) 提到 `Spacing.xl`(24dp)。
+ *    原先「卡片↔卡片」与「卡内字段↔字段」「卡内小节↔小节」**同为 12dp**
+ *    ⇒ 三种层级一个值 = **层级坍塌**，肉眼看过去就是一长条均质灰块，
+ *    完全没有"这是四张卡片"的呼吸感。
+ *    ⇒ 现四档（`.ai/conventions/8.4` 阶梯）：
+ *    分区标题↔首字段 8 · 字段↔字段 12 · 卡内小节↔小节 16 · **卡片↔卡片 24**。
  */
 @Composable
 private fun GroupedTypeFields(content: @Composable ColumnScope.() -> Unit) {
-    Spacer(Modifier.height(Spacing.md))
+    Spacer(Modifier.height(Spacing.xl))
     FormGroupCard(content)
 }
 
@@ -440,6 +511,11 @@ private fun GroupedTypeFields(content: @Composable ColumnScope.() -> Unit) {
  * 表单头部：文件夹（库里有文件夹才显示）+ 类型选择（仅新建显示）。
  * 抽出的目的：控制主函数长度与圈复杂度；顺序对齐 Bitwarden 官方
  * （文件夹在最上，其次类型、名称）。
+ *
+ * ⚠️ 2026-10-04 观感：**字段↔字段 12dp，字段↔分区标题 8dp**。
+ *    此前两处都是 8dp ⇒ 「文件夹 → 类型 → 名称」这三个控件
+ *    加上各自的分区标题后，是一片等距的 8dp —— 眼睛分不出
+ *    "这里换了一个控件"和"这里换了一个话题"。
  */
 @Composable
 private fun FormHeader(
@@ -454,17 +530,22 @@ private fun FormHeader(
         SectionLabel(text = stringResource(R.string.item_folder), icon = Icons.Filled.Folder)
         Spacer(Modifier.height(Spacing.sm))
         FolderPicker(folders = folders, selectedId = folderId, onSelect = onFolderSelect)
-        Spacer(Modifier.height(Spacing.sm))
+        Spacer(Modifier.height(Spacing.md))
     }
     if (typeEditable) {
         SectionLabel(text = stringResource(R.string.item_field_type), icon = Icons.Filled.Category)
         Spacer(Modifier.height(Spacing.sm))
         TypePicker(selected = type, onSelect = onTypeSelect)
-        Spacer(Modifier.height(Spacing.sm))
+        Spacer(Modifier.height(Spacing.md))
     }
 }
 
-/** 名称输入 + 收藏星标（对齐 Bitwarden：收藏在标题行右侧）。 */
+/**
+ * 名称输入 + 收藏星标（对齐 Bitwarden：收藏在标题行右侧）。
+ *
+ * ⚠️ 2026-10-04：名称是本表单**唯一必填**字段，label 常态带 `*`。
+ *    此前只有保存失败后才出红字 + 「名称不能为空」，用户已经白填了整张表。
+ */
 @Composable
 private fun NameField(
     name: String,
@@ -477,7 +558,7 @@ private fun NameField(
         OutlinedTextField(
             value = name,
             onValueChange = onNameChange,
-            label = { Text(stringResource(R.string.item_field_name)) },
+            label = { FormFieldLabel(R.string.item_field_name, required = true) },
             singleLine = true,
             isError = showError,
             supportingText = if (showError) {
@@ -548,7 +629,7 @@ private fun FolderPicker(
             value = selected?.name ?: stringResource(R.string.item_folder_none),
             onValueChange = {},
             readOnly = true,
-            label = { Text(stringResource(R.string.item_folder)) },
+            label = { FormFieldLabel(R.string.item_folder) },
             modifier = Modifier.menuAnchor().fillMaxWidth(),
         )
         ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
@@ -611,49 +692,60 @@ private fun LoginFields(
     OutlinedTextField(
         value = username,
         onValueChange = onUsernameChange,
-        label = { Text(stringResource(R.string.item_field_username)) },
+        label = { FormFieldLabel(R.string.item_field_username) },
         singleLine = true,
         modifier = Modifier.fillMaxWidth(),
     )
-    Spacer(Modifier.height(Spacing.sm))
+    // 字段 ↔ 字段 = 12dp（阶梯第2 档）。原先这里是 8dp，与「分区标题↔首字段」
+    // 同值 ⇒ 分组标题反而没跟自己的字段连成一组。
+    Spacer(Modifier.height(Spacing.md))
     var showGenerator by remember { mutableStateOf(false) }
     // 明文查看开关：编辑已有条目时必须能确认原密码（否则只见掩码圆点，
     // 唯一能明文看到的反而是骰子生成的随机密码——Bitwarden 编辑页同款眼睛按钮）
     var revealPassword by remember { mutableStateOf(false) }
-    OutlinedTextField(
-        value = password,
-        onValueChange = onPasswordChange,
-        label = { Text(stringResource(R.string.item_field_password)) },
-        singleLine = true,
-        visualTransformation = if (revealPassword) {
-            VisualTransformation.None
-        } else {
-            PasswordVisualTransformation()
-        },
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-        trailingIcon = {
-            Row {
-                IconButton(onClick = { revealPassword = !revealPassword }) {
-                    Icon(
-                        imageVector = if (revealPassword) {
-                            Icons.Filled.VisibilityOff
-                        } else {
-                            Icons.Filled.Visibility
-                        },
-                        contentDescription = stringResource(R.string.item_reveal_value),
-                    )
+    // ⚠️ 2026-10-04 观感：密码 + 强度条裹进 [EmphasisBlock]。
+    //    此前它与用户名、网址、TOTP **排成一列同规格文本框**，
+    //    而它是全表单唯一"填错会出事"的字段—— 视觉上没有任何区别。
+    EmphasisBlock {
+        OutlinedTextField(
+            value = password,
+            onValueChange = onPasswordChange,
+            label = { FormFieldLabel(R.string.item_field_password) },
+            singleLine = true,
+            visualTransformation = if (revealPassword) {
+                VisualTransformation.None
+            } else {
+                PasswordVisualTransformation()
+            },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+            trailingIcon = {
+                Row {
+                    IconButton(onClick = { revealPassword = !revealPassword }) {
+                        Icon(
+                            imageVector = if (revealPassword) {
+                                Icons.Filled.VisibilityOff
+                            } else {
+                                Icons.Filled.Visibility
+                            },
+                            contentDescription = stringResource(R.string.item_reveal_value),
+                        )
+                    }
+                    // 随机密码生成（Bastion 同款能力）：弹出选项对话框后回填
+                    IconButton(onClick = { showGenerator = true }) {
+                        Icon(
+                            Icons.Filled.Casino,
+                            contentDescription = stringResource(R.string.item_generate_password),
+                        )
+                    }
                 }
-                // 随机密码生成（Bastion 同款能力）：弹出选项对话框后回填
-                IconButton(onClick = { showGenerator = true }) {
-                    Icon(
-                        Icons.Filled.Casino,
-                        contentDescription = stringResource(R.string.item_generate_password),
-                    )
-                }
-            }
-        },
-        modifier = Modifier.fillMaxWidth(),
-    )
+            },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        // 强度条与输入框描边之间原先是 0 距离，视觉上像"长在框底"。
+        // 进入带内边距的强调块后必须给 8dp，否则贴边更明显。
+        Spacer(Modifier.height(Spacing.sm))
+        PasswordStrengthHint(password = password)
+    }
     if (showGenerator) {
         PasswordGeneratorDialog(
             onUse = {
@@ -663,8 +755,10 @@ private fun LoginFields(
             onDismiss = { showGenerator = false },
         )
     }
-    PasswordStrengthHint(password = password)
-    Spacer(Modifier.height(Spacing.md))
+    // 卡内小节 ↔ 小节 = 16dp（阶梯第 3 档）。原先是 12dp，
+    // 与上面的字段间距同值 ⇒ 「网址」「TOTP」两个分区标题
+    // 看起来只是又一个字段，而不是换了一个话题。
+    Spacer(Modifier.height(Spacing.lg))
     SectionLabel(text = stringResource(R.string.section_uris), icon = Icons.Filled.Language)
     Spacer(Modifier.height(Spacing.sm))
     UriListEditor(
@@ -673,14 +767,14 @@ private fun LoginFields(
         onRemove = { uris.removeAt(it) },
         onPickApp = onPickApp,
     )
-    Spacer(Modifier.height(Spacing.md))
+    Spacer(Modifier.height(Spacing.lg))
     SectionLabel(text = stringResource(R.string.section_totp), icon = Icons.Filled.Timer)
     Spacer(Modifier.height(Spacing.sm))
     Row(verticalAlignment = Alignment.CenterVertically) {
         OutlinedTextField(
             value = totp,
             onValueChange = onTotpChange,
-            label = { Text(stringResource(R.string.section_totp)) },
+            label = { FormFieldLabel(R.string.section_totp) },
             placeholder = { Text(stringResource(R.string.item_totp_hint)) },
             singleLine = true,
             modifier = Modifier.weight(1f),
@@ -701,12 +795,15 @@ private fun LoginFields(
 @Composable
 private fun LabeledFields(labels: List<Int>, values: SnapshotStateList<String>) {
     // 身份有 18 个字段：8dp 的间距会把它们挤成"一堵输入框墙"，12dp 才有分组感。
+    // ⚠️ 2026-10-04：12dp **保持不变**。它是阶梯里的「字段 ↔ 字段」第 2 档，
+    //    与「卡内小节↔小节 16」「卡片↔卡片 24」拉开之后，
+    //    12dp 在这一档反而是对的 —— 18 个字段要靠这12dp 分组，不是靠留白大小。
     Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
         labels.forEachIndexed { index, labelRes ->
             OutlinedTextField(
                 value = values[index],
                 onValueChange = { values[index] = it },
-                label = { Text(stringResource(labelRes)) },
+                label = { FormFieldLabel(labelRes) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -771,38 +868,39 @@ private fun SshKeyFields(values: SnapshotStateList<String>) {
             onDismiss = { showGenerator = false },
         )
     }
-    Spacer(Modifier.height(Spacing.sm))
+    // 2026-10-04 观感：私钥/公钥/指纹是三个**并列字段**，属阶梯第 2 档 = 12dp。
+    // 原先全是 8dp，与表单其它字段（12dp）不一致 —— 同一档留白出现两个值。
+    Spacer(Modifier.height(Spacing.md))
     val monospace = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace)
     OutlinedTextField(
         value = values[SSH_PRIVATE_KEY_INDEX],
         onValueChange = { values[SSH_PRIVATE_KEY_INDEX] = it },
-        label = { Text(stringResource(R.string.ssh_private_key)) },
+        label = { FormFieldLabel(R.string.ssh_private_key) },
         minLines = SSH_KEY_MIN_LINES,
         maxLines = SSH_KEY_MAX_LINES,
         textStyle = monospace,
         modifier = Modifier.fillMaxWidth(),
     )
-    Spacer(Modifier.height(Spacing.sm))
+    Spacer(Modifier.height(Spacing.md))
     OutlinedTextField(
         value = values[SSH_PUBLIC_KEY_INDEX],
         onValueChange = { applyPublicKeyChange(values, it) },
-        label = { Text(stringResource(R.string.ssh_public_key)) },
+        label = { FormFieldLabel(R.string.ssh_public_key) },
         minLines = SSH_KEY_MIN_LINES,
         maxLines = SSH_KEY_MAX_LINES,
         textStyle = monospace,
         modifier = Modifier.fillMaxWidth(),
     )
-    Spacer(Modifier.height(Spacing.sm))
+    Spacer(Modifier.height(Spacing.md))
     OutlinedTextField(
         value = values[SSH_FINGERPRINT_INDEX],
         onValueChange = { values[SSH_FINGERPRINT_INDEX] = it },
-        label = { Text(stringResource(R.string.ssh_fingerprint)) },
+        label = { FormFieldLabel(R.string.ssh_fingerprint) },
         supportingText = { Text(stringResource(R.string.ssh_fingerprint_hint)) },
         singleLine = true,
         textStyle = monospace,
         modifier = Modifier.fillMaxWidth(),
     )
-    Spacer(Modifier.height(Spacing.sm))
 }
 
 /** SSH 密钥输入框的行数区间：私钥可能很长，给足可视空间又不至于撑爆整页。 */
@@ -959,7 +1057,7 @@ private fun CustomFieldRow(
             OutlinedTextField(
                 value = field.name,
                 onValueChange = { onFieldChange(field.copy(name = it)) },
-                label = { Text(stringResource(R.string.item_field_name)) },
+                label = { FormFieldLabel(R.string.item_field_name) },
                 singleLine = true,
                 modifier = Modifier.weight(1f),
             )
@@ -984,7 +1082,7 @@ private fun CustomFieldRow(
                 value = stringResource(CUSTOM_FIELD_TYPE_LABELS.getValue(field.type)),
                 onValueChange = {},
                 readOnly = true,
-                label = { Text(stringResource(R.string.item_field_type)) },
+                label = { FormFieldLabel(R.string.item_field_type) },
                 modifier = Modifier.menuAnchor().fillMaxWidth(),
             )
             ExposedDropdownMenu(expanded = typeExpanded, onDismissRequest = { typeExpanded = false }) {
@@ -1029,7 +1127,7 @@ private fun FieldValueInput(
             OutlinedTextField(
                 value = field.value,
                 onValueChange = { onFieldChange(field.copy(value = it)) },
-                label = { Text(stringResource(R.string.item_field_value)) },
+                label = { FormFieldLabel(R.string.item_field_value) },
                 singleLine = true,
                 visualTransformation = if (revealHidden) {
                     VisualTransformation.None
@@ -1050,7 +1148,7 @@ private fun FieldValueInput(
         CustomFieldType.Text -> OutlinedTextField(
             value = field.value,
             onValueChange = { onFieldChange(field.copy(value = it)) },
-            label = { Text(stringResource(R.string.item_field_value)) },
+            label = { FormFieldLabel(R.string.item_field_value) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
@@ -1072,7 +1170,7 @@ private fun LinkedValueInput(
             value = stringResource(selected?.let { LINKED_FIELD_LABELS[it] } ?: fallback),
             onValueChange = {},
             readOnly = true,
-            label = { Text(stringResource(R.string.item_field_value)) },
+            label = { FormFieldLabel(R.string.item_field_value) },
             modifier = Modifier.menuAnchor().fillMaxWidth(),
         )
         ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
