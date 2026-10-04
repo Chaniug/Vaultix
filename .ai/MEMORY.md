@@ -149,6 +149,18 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 > 最新待办 → [`Docs/progress/next-steps.md`](../Docs/progress/next-steps.md)（最新在顶部）·
 > 逐轮流水 → `.ai/SESSION-YYYY-MM-DD.md` · 坑 → `.ai/ISSUES.md`（索引，正文在 `issues/`）·
 > 性能专项 → [`Docs/progress/perf-plan.md`](../Docs/progress/perf-plan.md)。
+> **同一天接着报「Firefox 通行密钥取不到」⇒ 已定性为浏览器缺陷，不是本仓库问题**：
+> 日志里 `CP ` 埋点 **0 条**（用户已在 Firefox 上操作过）⇒ **系统压根没来问**，
+> 而非"我们筛不出候选"——两者用户侧现象**完全一样**，只能靠入口埋点区分。
+> Mozilla 官方 [Bugzilla 1862132](https://bugzilla.mozilla.org/show_bug.cgi?id=1862132) 下
+> m_kato 原文：「**只在 `Discoverable Credential` required 时才走 Credential Manager**」
+> ⇒ Firefox 默认 mediation 走自己那套**只支持 Google Password Manager** 的旧对话框，
+> 第三方 CP 一个都看不到（Proton Pass / 1Password 同样复现，见 bug 1907531）。
+> ⚠️ **不要为此改匹配逻辑**（那会把对的代码改坏）：Vaultix 侧前置条件已全部核实齐备。
+> 绕行：Firefox `about:config` 开 `security.webauthn.webauthn_enable_android_fido2.residentkey=true`
+> （不保证）· 或同站点改用 Chrome。本轮只补了 CREATE 侧缺失的入口埋点。
+> 详见 `03` 篇 **#163**。
+
 **Firefox Android 匹配不到密码条目 · 已修（2026-10-04 · 最新）**
 
 > 用户报「输入框能看到 vaultix 的提示，但密码条目无法匹配出来」。**日志一行定案**：

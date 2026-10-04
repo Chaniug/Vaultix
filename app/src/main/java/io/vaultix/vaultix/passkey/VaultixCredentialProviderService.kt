@@ -140,10 +140,27 @@ class VaultixCredentialProviderService : CredentialProviderService() {
         cancellationSignal: CancellationSignal,
         callback: OutcomeReceiver<BeginCreateCredentialResponse, CreateCredentialException>,
     ) {
+        // ⚠️ 埋点缺失（2026-10-04 补）：GET 侧每条路径都有 `CP ` 日志，CREATE 侧的**入口与成功/异常**
+        // 一条都没有（只有 cancel 打了）。而 Firefox 上的通行密钥问题**恰好只能靠入口这一条定性** ——
+        // 「系统根本没向 Vaultix 发起请求」与「发起了但我们筛不出候选」是两个完全不同的病因，
+        // 没有入口埋点就无法区分（判读方法见 .ai/issues/03 篇 #163）。
+        // ⇒ 口径与 GET 侧对齐：调用方包名 + origin（只打域名）+ 请求类型。
+        log(
+            "CREATE begin caller=${request.callingAppInfo?.packageName ?: "-"} " +
+                "origin=${CallingAppOrigin.originOrNull(request.callingAppInfo) ?: "-"} " +
+                "type=${request.createCredentialRequest?.request?.type ?: "-"}",
+        )
         val job = serviceScope.launch {
             runCatching { buildCreateResponse(request) }
-                .onSuccess { callback.onResult(it) }
-                .onFailure { callback.onError(CreateCredentialUnknownException(it.message)) }
+                .onSuccess {
+                    log("CREATE ok entries=${it.createEntries.size}")
+                    callback.onResult(it)
+                }
+                .onFailure {
+                    // 与 GET 同款：任何异常都会让整张列表为空（用户侧表现同样是「毫无反应」）。
+                    log("CREATE failed: ${it.javaClass.simpleName}: ${it.message}")
+                    callback.onError(CreateCredentialUnknownException(it.message))
+                }
         }
         cancellationSignal.setOnCancelListener {
             log("CREATE cancelled by system")
