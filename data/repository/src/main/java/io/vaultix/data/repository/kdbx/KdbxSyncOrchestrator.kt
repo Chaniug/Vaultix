@@ -278,6 +278,32 @@ class KdbxSyncOrchestrator(
         markStatus(vaultId, KdbxSyncTransitions.markLocalChanges())
     }
 
+    /**
+     * **后台新鲜度校验发现远端已变**（2026-10-05）—— 标成 [KdbxSyncStatus.REMOTE_CHANGED]。
+     *
+     * ## 为什么需要它（"折中"方案的第二半）
+     *
+     * 快速解锁改成了「先用本地缓存解密、`stat()` 丢后台」（见 [CachedKdbxFileSource]）。
+     * 代价是**解锁瞬间可能展示旧内容** —— 这一点用户已知并接受，但"知道可能过期"
+     * 必须变成"看得见"，否则就退化成静默给一份过期数据。
+     *
+     * ⇒ 复用**已有的** [KdbxSyncStatus.REMOTE_CHANGED]（"远端有改动，本地还没拉"）语义**恰好吻合**：
+     *   UI 侧（`VaultOriginLabel` 的 `SyncBadge.REMOTE_CHANGED` + 文案 + 配色）**早已完整实现**，
+     *   不必新造一个提示控件，也不必改任何 UI 代码。
+     *
+     * ⚠️ **不覆盖冲突态**（同 [markLocalEdited] 的理由）：`CONFLICT` 表达的是"要用户拍板"，
+     *   把它降级成 `REMOTE_CHANGED` 会让已有的冲突对话框失去依据。
+     * ⚠️ **不覆盖待上传态**：本地有未推的改动时，报"远端变了"会盖掉更需要提示的那件事
+     *   （那笔改动推不上去比"远端有更新"更紧急），交给下一次 sync 自己去判。
+     */
+    suspend fun markRemoteChanged(vaultId: String) {
+        val current = vaultDao.get(vaultId) ?: return
+        if (current.syncStatus == KdbxSyncStatus.CONFLICT.name) return
+        if (current.syncStatus == KdbxSyncStatus.PENDING_UPLOAD.name) return
+        if (current.syncStatus == KdbxSyncStatus.PENDING_UPLOAD_WITH_LOCAL_CHANGES.name) return
+        markStatus(vaultId, KdbxSyncTransitions.markRemoteChanges())
+    }
+
     private suspend fun markStatus(
         vaultId: String,
         status: KdbxSyncStatus,

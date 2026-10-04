@@ -40,6 +40,7 @@ import io.vaultix.data.kdbx.Kdbx
 import io.vaultix.data.kdbx.KdbxFileSource
 import io.vaultix.data.kdbx.KdbxWriteFailure
 import io.vaultix.database.dao.VaultDao
+import kotlinx.coroutines.CoroutineScope
 import okhttp3.OkHttpClient
 
 /**
@@ -92,6 +93,14 @@ class KdbxCloudSyncCoordinator(
      * 双重装饰会让缓存写两遍、"命中"判断套娃（外层命中内层还要再判一次）。
      */
     private val fileCache: KdbxFileCache,
+    /**
+     * 后台校验用的**应用级** scope（2026-10-05）。
+     *
+     * ⚠️ 必须是应用级而不是构造点随手 `CoroutineScope(Dispatchers.IO)`：
+     *   后台校验要活过「解锁完成 → 导航 → ViewModel 销毁」这一整段，
+     *   绑页面/会话的 scope 会在导航瞬间取消 ⇒ 提示永远不出现。
+     */
+    private val appScope: CoroutineScope,
 ) : KdbxFileSourceResolver {
 
     /**
@@ -174,7 +183,17 @@ class KdbxCloudSyncCoordinator(
      * 的 KDoc：「判据只能有一份」）。
      */
     private fun withRemoteCache(origin: String, source: KdbxFileSource): KdbxFileSource =
-        CachedKdbxFileSource(delegate = source, cache = fileCache, cacheKey = origin)
+        CachedKdbxFileSource(
+            delegate = source,
+            cache = fileCache,
+            cacheKey = origin,
+            scope = appScope,
+            // ⚠️ `origin` 就是 vaultId：KDBX 库的 `VaultEntity.id` 与 `origin` 同值
+            //   （见 `KdbxCreateRepositoryImpl` 建库时 `id = resolvedOrigin`），
+            //   所以这里不需要再查一次表 —— 查不到时 `markRemoteChanged` 自己会 `return`
+            //   （`vaultDao.get(vaultId) ?: return`），不存在的库不会写出坏状态。
+            onRemoteChanged = { orchestrator.markRemoteChanged(origin) },
+        )
 
     /**
      * 跑一次同步。

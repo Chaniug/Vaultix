@@ -39,6 +39,9 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import io.vaultix.database.dao.VaultDao
 import java.io.File
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import okhttp3.OkHttpClient
 import javax.inject.Provider
 import javax.inject.Singleton
@@ -99,6 +102,11 @@ object KdbxCloudSyncModule {
         okHttp = { runCatching { okHttp.get() }.getOrNull() },
         webDavCredentials = webDavCredentials,
         fileCache = fileCache,
+        // ⚠️ **应用级 scope + SupervisorJob**（2026-10-05）：后台新鲜度校验
+        //   必须活过「解锁 → 导航 → ViewModel 销毁」。用裸 `CoroutineScope(Dispatchers.IO)`
+        //   等价于可以（且很可能）被某个子任务连带取消；SupervisorJob 保证
+        //   **一个库的校验失败不会取消其它库的校验**。
+        appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
     )
 
     /**

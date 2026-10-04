@@ -3,25 +3,32 @@ package io.vaultix.data.repository.kdbx
 import io.vaultix.data.kdbx.KdbxFileSource
 import io.vaultix.data.kdbx.KdbxFileStat
 import io.vaultix.data.kdbx.KdbxFileWriteResult
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
 /**
- * 远端来源的**本地缓存装饰器**（多库锁模型定稿 **批次 B1**，2026-09-30）。
+ * 远端来源的**本地缓存装饰器**（多库锁模型定稿 **批次 B1**，2026-09-30；
+ * 2026-10-05 改「有缓存即返回、`stat()` 丢后台」）。
  *
  * ## 守的是什么
  *
- * 真机实测 KDBX 解锁 3.58 s 里 ≈3.4 s 花在「读文件」（库在 OneDrive、设备无副本）。
- * 本装饰器的全部价值就是**把那次下载压成一次元数据请求** —— 所以下面每条测试
- * 都盯着"到底有没有真的下载"（`readCount`），而不是只看返回值。
+ * B1 的价值是「把下载压成一次元数据请求」；但 **2026-10-05 真机实测证明那个前提不成立**：
+ * OneDrive 的 Graph 元数据往返要 1–2.8 s，与下载 30 KB 差不多慢
+ * （实测 `read=1096–2837ms` 而缓存**一直命中**）。
+ * ⇒ 改成**有缓存就先用它解密**、`stat()` 丢后台（用户拍板的「折中」：
+ * 允许瞬间看到旧内容，但必须让这个事实**可见**）。
  *
- * ## 最要紧的两条
+ * ## 最要紧的三条
  *
- * 1. **令牌相同 ⇒ 一次都不下载**（否则等于白做）；
- * 2. **令牌拿不到（null）⇒ 必须下载**（拿不到判据却声称命中，就会把一个**可能过期**的
- *    库静默交给用户，进而覆盖远端 —— 宁可慢一次，不可说谎一次）。
+ * 1. **有缓存时不等待 `stat()`** —— 由 [HangingStatSource] 把这条钉死（回归即超时）；
+ * 2. **后台发现远端变了 ⇒ 换新缓存 + 上报**（否则用户手里的旧内容没有任何提示）；
+ * 3. **没有缓存时 `stat()` 失败 ⇒ 如实抛**（没有可回退的东西，不能静默返回空字节）。
+ *
+ * ⚠️ 原 B1 的「令牌相同 ⇒ 一次都不下载」不再是**同步**契约：令牌比较已挪进后台校验。
+ *   现在的契约是「有缓存 ⇒ 这一次的 `read()` 不等网络」。
  */
 class CachedKdbxFileSourceTest {
 
@@ -69,8 +76,7 @@ class CachedKdbxFileSourceTest {
     }
 
     /** 内存缓存（接口本来就是为"可测"而拆出来的）。 */
-    private class FakeCache : KdbxFileCache {
-        private val map = mutableMapOf<String, CachedKdbxFile>()
+    private class FakeCache : KdbxFileCache {        private val map = mutableMapOf<String, CachedKdbxFile>()
 
         override suspend fun load(key: String): CachedKdbxFile? = map[key]
 
@@ -85,91 +91,132 @@ class CachedKdbxFileSourceTest {
         fun peek(key: String): CachedKdbxFile? = map[key]
     }
 
+    /**
+     * `stat()` **永远挂住**的来源 —— 用来证明"有缓存时 read 根本不等 stat"。
+     *
+     * ⚠️ 这是最贵也最直接的一条：2026-10-05 真机实测 OneDrive 的 Graph 元数据往返要
+     * 1–2.8 s，而缓存命中时**旧实现仍在同步等它**（那 95% 的 read 时间就花在那）。
+     * 若哪天有人把"先返回缓存"改回"先 stat 再返回"，本类会让那条测试**超时**，
+     * 而不是安静地通过 —— 这就是它存在的理由。
+     */
+    private class HangingStatSource(
+        private val bytes: ByteArray,
+        private val token: String?,
+    ) : KdbxFileSource {
+        var readCount = 0
+            private set
+
+        override suspend fun stat(): KdbxFileStat = kotlinx.coroutines.awaitCancellation()
+
+        override suspend fun read(): ByteArray {
+            readCount++
+            return bytes
+        }
+
+        override suspend fun write(
+            bytes: ByteArray,
+            expectedVersion: String?,
+            force: Boolean,
+        ): KdbxFileWriteResult = KdbxFileWriteResult(versionToken = token)
+
+        override suspend fun testConnection(): Result<Unit> = Result.success(Unit)
+    }
+
     private fun source(
         bytes: ByteArray,
         token: String?,
         statFails: Boolean = false,
     ) = FakeSource(bytes, token, statFails)
 
-    // ---- 1. 命中：不下载 ----
+    // ---- 1. 命中：先用缓存，stat 丢后台（2026-10-05 折中）----
 
     @Test
-    fun `令牌相同_命中缓存_一次都不下载`() = runTest {
+    fun `有缓存_直接返回缓存且当前这次不等待stat`() = runTest {
         val cache = FakeCache()
         cache.save(key, CachedKdbxFile("cached".toByteArray(), "etag-1"))
         val delegate = source("remote".toByteArray(), token = "etag-1")
 
-        val bytes = CachedKdbxFileSource(delegate, cache, key).read()
+        val bytes = CachedKdbxFileSource(delegate, cache, key, backgroundScope).read()
 
         assertArrayEquals("cached".toByteArray(), bytes)
         assertEquals("命中时不该发生下载", 0, delegate.readCount)
-        assertEquals("只应发生一次元数据请求", 1, delegate.statCount)
     }
 
-    // ---- 2/3. 未命中：下载并更新缓存 ----
+    @Test
+    fun `有缓存时read不等待stat_这正是秒开的来源`() = runTest {
+        val cache = FakeCache()
+        cache.save(key, CachedKdbxFile("cached".toByteArray(), "etag-1"))
+        // stat 挂住：若 read 还在等它，本测试会超时 ⇒ 直接锁住"不等 stat"这个契约。
+        val delegate = HangingStatSource("remote".toByteArray(), token = "etag-1")
+
+        val bytes = CachedKdbxFileSource(delegate, cache, key, backgroundScope).read()
+
+        assertArrayEquals("cached".toByteArray(), bytes)
+        assertEquals("命中时不该发生下载", 0, delegate.readCount)
+    }
 
     @Test
-    fun `令牌变了_重新下载并更新缓存`() = runTest {
+    fun `后台校验发现远端变了_换新缓存并置为STALE且上报`() = runTest {
         val cache = FakeCache()
         cache.save(key, CachedKdbxFile("stale".toByteArray(), "etag-1"))
         val delegate = source("fresh".toByteArray(), token = "etag-2")
+        var reported = 0
+        val sut = CachedKdbxFileSource(
+            delegate = delegate,
+            cache = cache,
+            cacheKey = key,
+            scope = backgroundScope,
+            onRemoteChanged = { reported++ },
+        )
 
-        val bytes = CachedKdbxFileSource(delegate, cache, key).read()
+        // 当前这次返回的是**旧**缓存（用户已知的取舍：不阻塞解锁）。
+        assertArrayEquals("stale".toByteArray(), sut.read())
+        assertEquals("当前会话仍应是旧内容", "stale", String(cache.peek(key)!!.bytes))
 
-        assertArrayEquals("fresh".toByteArray(), bytes)
-        assertEquals(1, delegate.readCount)
-        assertEquals("etag-2", cache.peek(key)?.versionToken)
+        // 后台校验跑完后：缓存换新 + 状态上报（折中的第二半）。
+        runCurrent()
+        assertEquals("缓存应换新", "fresh", String(cache.peek(key)!!.bytes))
+        assertEquals("应上报一次「远端变了」", 1, reported)
     }
+
+    @Test
+    fun `后台校验发现远端没变_不换缓存也不上报`() = runTest {
+        val cache = FakeCache()
+        cache.save(key, CachedKdbxFile("cached".toByteArray(), "etag-1"))
+        val delegate = source("remote".toByteArray(), token = "etag-1")
+        var reported = 0
+        val sut = CachedKdbxFileSource(delegate, cache, key, backgroundScope, onRemoteChanged = { reported++ })
+
+        sut.read()
+        runCurrent()
+
+        assertEquals("不该换缓存", "cached", String(cache.peek(key)!!.bytes))
+        assertEquals("没变就不该上报", 0, reported)
+    }
+
+    // ---- 2/3. 未命中：下载并更新缓存 ----
 
     @Test
     fun `没有缓存_下载并写入缓存`() = runTest {
         val cache = FakeCache()
         val delegate = source("remote".toByteArray(), token = "etag-1")
 
-        CachedKdbxFileSource(delegate, cache, key).read()
+        CachedKdbxFileSource(delegate, cache, key, backgroundScope).read()
 
         assertEquals(1, delegate.readCount)
         assertEquals("etag-1", cache.peek(key)?.versionToken)
     }
 
     @Test
-    fun `来源不给令牌_老实下载不冒充命中`() = runTest {
-        val cache = FakeCache()
-        // ★ 关键：缓存里那份**也必须是 null 令牌**。
-        //   若写成 "etag-1"，那么"漏掉 `token != null` 检查"的缺陷会让
-        //   `null == "etag-1"` 为假 ⇒ 仍然下载 ⇒ **测试照样绿，缺陷抓不到**（弱测试）。
-        //   只有两边都是 null 时，`null == null` 才会成立 —— 那才是要挡的误判命中。
-        cache.save(key, CachedKdbxFile("cached".toByteArray(), versionToken = null))
-        val delegate = source("remote".toByteArray(), token = null)
-
-        val bytes = CachedKdbxFileSource(delegate, cache, key).read()
-
-        assertArrayEquals("拿不到新鲜度判据就必须下载", "remote".toByteArray(), bytes)
-        assertEquals(1, delegate.readCount)
-    }
-
-    // ---- 4. 离线：回退缓存 ----
-
-    @Test
-    fun `元数据失败_有缓存则回退缓存`() = runTest {
-        val cache = FakeCache()
-        cache.save(key, CachedKdbxFile("cached".toByteArray(), "etag-1"))
-        val delegate = source("remote".toByteArray(), token = "etag-1", statFails = true)
-
-        val bytes = CachedKdbxFileSource(delegate, cache, key).read()
-
-        assertArrayEquals("离线也应能解锁（顺带获得的能力）", "cached".toByteArray(), bytes)
-        assertEquals(0, delegate.readCount)
-    }
-
-    @Test
-    fun `元数据失败且没有缓存_如实抛而不是返回空`() = runTest {
+    fun `没有缓存时stat失败_如实抛而不是返回空`() = runTest {
         val cache = FakeCache()
         val delegate = source("remote".toByteArray(), token = "etag-1", statFails = true)
 
         // ⚠️ 用 `runCatching` 而不是 `assertThrows`：后者要同步 lambda，
         //    而 `read()` 是挂起的（在 `runTest` 里套 `runBlocking` 会与测试调度器打架）。
-        val error = runCatching { CachedKdbxFileSource(delegate, cache, key).read() }.exceptionOrNull()
+        val error = runCatching {
+            CachedKdbxFileSource(delegate, cache, key, backgroundScope).read()
+        }.exceptionOrNull()
 
         assertEquals(IllegalStateException::class.java, error?.javaClass)
         assertEquals("没有缓存时不能静默返回空字节", 0, delegate.readCount)
@@ -182,7 +229,7 @@ class CachedKdbxFileSourceTest {
         val cache = FakeCache()
         cache.save(key, CachedKdbxFile("old".toByteArray(), "etag-1"))
         val delegate = source("remote".toByteArray(), token = "etag-1")
-        val source = CachedKdbxFileSource(delegate, cache, key)
+        val source = CachedKdbxFileSource(delegate, cache, key, backgroundScope)
 
         source.write("new".toByteArray(), expectedVersion = "etag-1")
 
