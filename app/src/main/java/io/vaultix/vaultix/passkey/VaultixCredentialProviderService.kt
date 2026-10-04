@@ -144,11 +144,22 @@ class VaultixCredentialProviderService : CredentialProviderService() {
         // 一条都没有（只有 cancel 打了）。而 Firefox 上的通行密钥问题**恰好只能靠入口这一条定性** ——
         // 「系统根本没向 Vaultix 发起请求」与「发起了但我们筛不出候选」是两个完全不同的病因，
         // 没有入口埋点就无法区分（判读方法见 .ai/issues/03 篇 #163）。
-        // ⇒ 口径与 GET 侧对齐：调用方包名 + origin（只打域名）+ 请求类型。
+        // ⇒ 口径与 GET 侧对齐：调用方包名 + origin（只打域名）+ rpId（也只打域名）。
+        //
+        // ⚠️ **rpId 必须走 `BeginCreatePublicKeyCredentialRequest` 的 `requestJson`**：
+        // `BeginCreateCredentialRequest` 基类上**没有** `createCredentialRequest` 属性
+        // （首次写成 `request.createCredentialRequest?.request?.type` 编译直接
+        //  `Unresolved reference`，CI run 37188546800 实证）。判定类型用 `is` 下转型，
+        // 与 `buildCreateResponse` 同一套口径。
+        val pkCreate = request as? BeginCreatePublicKeyCredentialRequest
+        val rpIdOrDash = runCatching {
+            JSONObject(pkCreate?.requestJson.orEmpty())
+                .optJSONObject("rp")?.optString("id")
+        }.getOrNull()?.takeIf { it.isNotBlank() } ?: "-"
         log(
             "CREATE begin caller=${request.callingAppInfo?.packageName ?: "-"} " +
                 "origin=${CallingAppOrigin.originOrNull(request.callingAppInfo) ?: "-"} " +
-                "type=${request.createCredentialRequest?.request?.type ?: "-"}",
+                "rpId=$rpIdOrDash isPublicKey=${pkCreate != null}",
         )
         val job = serviceScope.launch {
             runCatching { buildCreateResponse(request) }
