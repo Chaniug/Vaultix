@@ -159,7 +159,13 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 > ⚠️ **不要为此改匹配逻辑**（那会把对的代码改坏）：Vaultix 侧前置条件已全部核实齐备。
 > 绕行：Firefox `about:config` 开 `security.webauthn.webauthn_enable_android_fido2.residentkey=true`
 > （不保证）· 或同站点改用 Chrome。本轮只补了 CREATE 侧缺失的入口埋点。
-> 详见 `03` 篇 **#163**。
+> ⚠️⚠️ **别读成「Firefox 上一律不可用」**（我第一版结论就写过头了，已订正）：
+> Mozilla 官方论坛同一用户追记「**在别处生成**的通行密钥**可以**在 Firefox Android 上**登录**」，
+> 而那帖主题是**注册（create）**坏了（只给 "This Device"、存进 GPM）。
+> ⇒ **认证(get) 可以是通的 / 注册(create) 对第三方 PM 明确坏**；
+> 是否走 CM 取决于请求的 mediation / residentKey。
+> 下次遇到先问清是注册还是认证，再看 `CP GET` / `CP CREATE` **哪条入口埋点**被触发
+> （这次两条都没触发）。详见 `03` 篇 **#163**。
 
 **Firefox Android 匹配不到密码条目 · 已修（2026-10-04 · 最新）**
 
