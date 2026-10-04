@@ -138,7 +138,7 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 | [8.4 UI·观感](./conventions/8.4-UI·观感.md) | UI·观感 | 12 |
 | [8.5 通行密钥](./conventions/8.5-通行密钥.md) | 通行密钥 | 12 |
 | [8.6 工程质量](./conventions/8.6-工程质量.md) | 工程质量 | 12 |
-| [8.7 环境](./conventions/8.7-环境.md) | 环境（含**沙箱内真编译 + 真跑单测**，无 SDK 也能跑） | 10 |
+| [8.7 环境](./conventions/8.7-环境.md) | 环境（含**沙箱内真编译 + 真跑单测**，`--all` 可批量巡检全仓，无 SDK 也能跑） | 10 |
 | [8.8 M3Expressive](./conventions/8.8-M3Expressive-采纳范围与顺序.md) | M3E（2026）采纳范围与顺序 | — |
 | [8.9 文档分篇](./conventions/8.9-文档分篇.md) | 文档分篇（防超长上下文） | 5 |
 | [8.10 架构与目录地图](./conventions/8.10-架构与目录地图.md) | **东西在哪 + 该信哪份文档**（接力地图） | — |
@@ -149,6 +149,30 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 > 最新待办 → [`Docs/progress/next-steps.md`](../Docs/progress/next-steps.md)（最新在顶部）·
 > 逐轮流水 → `.ai/SESSION-YYYY-MM-DD.md` · 坑 → `.ai/ISSUES.md`（索引，正文在 `issues/`）·
 > 性能专项 → [`Docs/progress/perf-plan.md`](../Docs/progress/perf-plan.md)。
+**本地批量巡检 + 判读孤儿串（2026-10-04 · 最新）**
+
+> 工具 `bash .ai/tools/typecheck_kotlin.sh --all`：**无 SDK 也能批量真编译 + 真跑全仓单测**
+> （本次 8 个模块 / 97 个测试文件 / 28 个包组，17 组全绿约 727 条用例）。
+> ⚠️ 它的 ✅ **不能读成"全仓测试通过"** —— Compose 编译、KSP 代码生成、
+> 依赖 `android.jar` 空注解的写法、需要真实 Android 运行时的桩方法，**全都查不了**（见 #145.7）。
+> 本轮**没发现需要修的代码缺陷**；价值在于把"没发现"从"没查"变成"**查过且有明确边界**"。
+> **纪律 6**：改动可能影响别处时跑 `--all`（按包隔离，一个包编不过不牵连其他包）。
+>
+> **顺带结掉三条待定项**：`removeVaultFromScope()` 零调用方 → **已删**
+> （范围勾选向导早已整段删除，"取消勾选"不可能再触发，留着就是死逻辑）·
+> `isForeground` 无消费者 → **已定保留**（⚠️ 它是 `val ... asStateFlow()` 的**公开 API**，
+> `check_orphan_state.py` 只抓"赋值后零读取"，**抓不到它 ⇒ 门禁报 0 个 ≠ 没人用**）·
+> #88「仅在本地」→ **已核实过期**（`e724757` 早已入库）。
+>
+> 🔴 **新缺陷 #161（本轮挖出）**：「PIN 忘记后可在设置里重设」是**界面上的承诺**，
+> 但 `QuickUnlockDialogs.kt:167-178` 两处都是 `togglePin`（已启用时走关闭流程），
+> 全仓库 `app/src/main` 下 `change_pin` **零命中** ⇒ **用户按指引找不到任何入口**。
+> 零引用的 `quick_unlock_action_change_pin` / `pin_change` / `pin_mismatch` /
+> `pin_too_short` 正好是这个流程缺的文案 ⇒ 补入口时一并接上。
+> **判读孤儿串 118 条已做完**（见 `06`篇 #126「判读结论」）：本轮**一条都没删**，
+> 但顺带挖出 #161。**教训**：零引用串里可能藏着"承诺了但没实现"的证据 ——
+> 顺着它去看"它本该在的地方"，比删掉它值钱得多。
+
 **双库健康度审计 批次 A（2026-10-02 · 最新）**
 
 > 问题面："Bitwarden / KDBX 两条腿各自健康吗" ⇒ 通读审计找出 **#153–#159**（#160 是副产品）。
