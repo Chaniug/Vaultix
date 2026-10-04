@@ -1168,39 +1168,54 @@ private fun BoxScope.QuickFilterPanel(
     }
 }
 
-/** 横向可滚的 chip 行（chip 数会随维度增加，小屏必须能横滑）。 */
+/**
+ * 横向可滚的 chip 行（chip 数会随维度增加，小屏必须能横滑）。
+ *
+ * ## 方案 B（2026-10-04 定稿）：chip 行**融进页面**，不自带浮层底色
+ *
+ * ⚠️ 此前这里裹了一层 `Surface(color = surface, tonalElevation = 2.dp)`，
+ * 而 `colorScheme.surface` **与页面背景同值**（真机像素取证：两者都是
+ * `rgb(13,14,17)`，density 3.47）。于是 chip 行那 48dp 让位区在像素层面
+ * **与间隙属于同一块颜色** ⇒ 人眼读不出「chip 行底边在哪」⇒
+ * 观感就是 chip 行**坐在第一张卡片上**、卡片顶部圆角被吃掉一半。
+ *
+ * 几何让位本身一直是**对的**（实测间隙 72.5dp 确实存在），
+ * 错的是**边界不可见**。⇒ 这类问题调 `contentPadding` 数值、
+ * 改 `animationSpec` 都修不好（`.ai/conventions/8.4` 判据⑨）。
+ *
+ * ⇒ 方案 B 的做法是**删掉那层壳**而不是给它换个颜色：
+ * 融进页面后，chip 靠**自身的底色 + 边框 + 选中态图标**表达，
+ * 不再依赖一块「比背景略高」的板子撑出浮层感。
+ *
+ * @param topPadding 状态栏 + 顶栏高（与列表 `contentPadding` 用的是同一个
+ *   `rememberImmersiveBarPadding`，**必须共用** —— 否则 chip 行会与列表让位错位）。
+ */
 @Composable
 private fun QuickFilterChips(
     selected: ItemsQuickFilter,
     topPadding: Dp,
     onSelect: (ItemsQuickFilter) -> Unit,
 ) {
-    Surface(
-        color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 2.dp,
-        modifier = Modifier.fillMaxWidth(),
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = topPadding)
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = Spacing.md, vertical = Spacing.sm),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = topPadding)
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = Spacing.md, vertical = Spacing.sm),
-            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            ItemsQuickFilter.entries.forEach { filter ->
-                FilterChip(
-                    selected = filter == selected,
-                    onClick = { onSelect(filter) },
-                    label = { Text(stringResource(quickFilterLabelRes(filter))) },
-                    leadingIcon = if (filter == selected) {
-                        { Icon(Icons.Filled.Check, contentDescription = null) }
-                    } else {
-                        null
-                    },
-                )
-            }
+        ItemsQuickFilter.entries.forEach { filter ->
+            FilterChip(
+                selected = filter == selected,
+                onClick = { onSelect(filter) },
+                label = { Text(stringResource(quickFilterLabelRes(filter))) },
+                leadingIcon = if (filter == selected) {
+                    { Icon(Icons.Filled.Check, contentDescription = null) }
+                } else {
+                    null
+                },
+            )
         }
     }
 }
