@@ -149,7 +149,38 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 > 最新待办 → [`Docs/progress/next-steps.md`](../Docs/progress/next-steps.md)（最新在顶部）·
 > 逐轮流水 → `.ai/SESSION-YYYY-MM-DD.md` · 坑 → `.ai/ISSUES.md`（索引，正文在 `issues/`）·
 > 性能专项 → [`Docs/progress/perf-plan.md`](../Docs/progress/perf-plan.md)。
-**本地批量巡检 + 判读孤儿串（2026-10-04 · 最新）**
+**Firefox Android 匹配不到密码条目 · 已修（2026-10-04 · 最新）**
+
+> 用户报「输入框能看到 vaultix 的提示，但密码条目无法匹配出来」。**日志一行定案**：
+> `fields=3 user=true pass=true targets=2`（解析层正常）而
+> `candidates=216 matched=0 datasets=0`（候选全被过滤成 0 分）⇒ 病根是**拿不到域名**。
+>
+> **⚠️ 本轮最值钱的不是代码，是判读教训**：
+> 日志里「空串」8 次、「真 null」5 次。只盯空串那 8 次，会得出「补个 `isNotBlank()`
+> 就好了」的错误结论 —— 而真 null 那 5 次 `?:` 根本不短路、兜底**已经算了确实算不出来**。
+> 修掉空串，那 8 次只会退化成和另外 5 次一样的 null，**用户症状一点没变**。
+> ⇒ **「分布统计」比「典型样本」更能定性**：同一份日志里两种形态的**出现次数对比**，
+> 直接决定了「这是一处判据写错」还是「整条路在平台层就不通」。
+>
+> **两层根因（只修一层不够）**：① 空串穿透（`?:` 只对 null 短路，GeckoView 登录页上报
+> 的正是空串；同仓 `inheritWebDomain` 早有防御，唯独页面级收集处漏了 ⇒ **同一件事两处
+> 判据不一致**）；② **兜底全落空**（13 次 `fallback=` 全 null）。
+> **外部佐证**：Bitwarden Android 在 Firefox Android 上**同样**做不了域名匹配
+> （其 issue #5720 / 社区 #19444）⇒ **GeckoView 平台限制，不是我们判据写错**。
+>
+> **修法两刀**：新增纯函数 [WebDomainResolver]（`ViewNode` 是 `@SystemApi` 抽象类、
+> 构造不出实例，逻辑不抽出来没法 JVM 单测）+ **无域名降级**（`orderWithoutDomain`：
+> 拿不到域名时不再返回 0 条，改为按「收藏优先 → 名称升序」给全部候选，**对齐
+> Bitwarden 的搜索兜底语义** —— 它也没让用户挡在门外）。
+> ⚠️ 降级**不关闭**包名匹配闸门：浏览器里缺域名时包名是浏览器自己的，拿它匹配会弹出
+> 「浏览器身份」的无关条目，那才是真的错条目。
+>
+> **测试有效性已反向验证**：把 `isNotBlank` 改回原样后 **6 例变红**，报错精确复现
+> `effective=` 空串 ⇒ 闸门是真的，不是摆设。
+> **遗留**：`AutofillCredential` 没有 `lastUsedAt` ⇒ 降级只能按收藏+名称排，
+> 不能按「最近使用」（本条最大的可改进点）。详见 `06` 篇 **#162**。
+
+**本地批量巡检 + 判读孤儿串（2026-10-04）**
 
 > 工具 `bash .ai/tools/typecheck_kotlin.sh --all`：**无 SDK 也能批量真编译 + 真跑全仓单测**
 > （本次 8 个模块 / 97 个测试文件 / 28 个包组，17 组全绿约 727 条用例）。
