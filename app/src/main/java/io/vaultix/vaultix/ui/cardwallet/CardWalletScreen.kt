@@ -67,6 +67,7 @@ import io.vaultix.vaultix.ui.common.EntryCardTextSpacing
 import io.vaultix.vaultix.ui.common.EntryCardTitleLineHeight
 import io.vaultix.vaultix.ui.common.ItemFormDialog
 import io.vaultix.vaultix.ui.common.PressAndSwipeToDelete
+import io.vaultix.vaultix.ui.common.TopBarTitle
 import io.vaultix.vaultix.ui.common.VaultixExpressiveTopBar
 import io.vaultix.vaultix.ui.common.rememberImmersiveBarPadding
 import io.vaultix.vaultix.ui.common.rememberScrollCollapseFraction
@@ -224,7 +225,7 @@ fun CardWalletScreen(
             }
             if (!searchActive) {
                 VaultixExpressiveTopBar(
-                    title = stringResource(R.string.nav_card_wallet),
+                    title = TopBarTitle(stringResource(R.string.nav_card_wallet)),
                     collapseFraction = collapse,
                     modifier = Modifier.align(Alignment.TopCenter),
                     actions = {

@@ -83,6 +83,7 @@ import io.vaultix.vaultix.ui.common.BiometricPrompter
 import io.vaultix.vaultix.ui.common.deviceCanAuthenticate
 import io.vaultix.vaultix.ui.common.DialogCloseButton
 import io.vaultix.vaultix.ui.items.DisplayOptionsSheet
+import io.vaultix.vaultix.ui.common.TopBarTitle
 import io.vaultix.vaultix.ui.common.VaultixExpressiveTopBar
 import io.vaultix.vaultix.ui.common.rememberImmersiveBarPadding
 import io.vaultix.vaultix.ui.common.rememberScrollCollapseFraction
@@ -604,7 +605,7 @@ private fun BoxScope.SettingsTopBar(
     onBack: () -> Unit,
 ) {
     VaultixExpressiveTopBar(
-        title = stringResource(R.string.settings_title),
+        title = TopBarTitle(stringResource(R.string.settings_title)),
         collapseFraction = collapseFraction,
         modifier = Modifier.align(Alignment.TopCenter),
         navigationIcon = if (embedded) {

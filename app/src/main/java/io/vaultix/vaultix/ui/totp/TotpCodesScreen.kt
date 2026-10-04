@@ -92,6 +92,7 @@ import io.vaultix.vaultix.ui.common.EntryCardTitleLineHeight
 import io.vaultix.vaultix.ui.common.PressAndSwipeToDelete
 import io.vaultix.vaultix.ui.common.SelectionActionBar
 import io.vaultix.vaultix.ui.common.SiteIconByHost
+import io.vaultix.vaultix.ui.common.TopBarTitle
 import io.vaultix.vaultix.ui.common.VaultixExpressiveTopBar
 import io.vaultix.vaultix.ui.shell.BottomDockOccupiedHeight
 import io.vaultix.vaultix.ui.common.FormGroupCard
@@ -511,7 +512,7 @@ private fun BoxScope.TotpOverlayTopBar(
     onImport: () -> Unit,
 ) {
     VaultixExpressiveTopBar(
-        title = stringResource(R.string.totp_screen_title),
+        title = TopBarTitle(stringResource(R.string.totp_screen_title)),
         collapseFraction = collapseFraction,
         modifier = Modifier.align(Alignment.TopCenter),
         // ★ 2026-09-21：点标题「验证码」切换数字显隐（用户要求）。

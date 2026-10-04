@@ -102,6 +102,7 @@ import io.vaultix.vaultix.ui.common.CapabilityIcon
 import io.vaultix.vaultix.ui.common.capabilityTint
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.layout.WindowInsets
+import io.vaultix.vaultix.ui.common.TopBarTitle
 import io.vaultix.vaultix.ui.common.VaultixExpressiveTopBar
 import io.vaultix.vaultix.ui.common.rememberImmersiveBarPadding
 import io.vaultix.vaultix.ui.common.rememberScrollCollapseFraction
@@ -451,7 +452,7 @@ fun ItemDetailScreen(
             )
             if (item != null) {
                 VaultixExpressiveTopBar(
-                    title = item.title.ifBlank { stringResource(R.string.items_item_unnamed) },
+                    title = TopBarTitle(item.title.ifBlank { stringResource(R.string.items_item_unnamed) }),
                     collapseFraction = listCollapse,
                     modifier = Modifier.align(Alignment.TopCenter),
                     // ⚠️ 2026-09-13 第三轮用户要求：「左上角返回按钮可以取消了，现在都是手势返回，

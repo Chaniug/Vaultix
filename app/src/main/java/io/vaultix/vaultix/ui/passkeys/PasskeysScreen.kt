@@ -71,6 +71,7 @@ import io.vaultix.vaultix.ui.common.PressAndSwipeToDelete
 import io.vaultix.vaultix.ui.common.SavePasskeyDialog
 import io.vaultix.vaultix.ui.common.SelectionActionBar
 import io.vaultix.vaultix.ui.common.SiteIconByHost
+import io.vaultix.vaultix.ui.common.TopBarTitle
 import io.vaultix.vaultix.ui.common.VaultixExpressiveTopBar
 import io.vaultix.vaultix.ui.common.VaultixSearchTopAppBar
 import io.vaultix.vaultix.ui.common.rememberImmersiveBarPadding
@@ -470,7 +471,7 @@ private fun BoxScope.PasskeysOverlayTopBar(
     onSearch: () -> Unit,
 ) {
     VaultixExpressiveTopBar(
-        title = stringResource(R.string.passkeys_screen_title),
+        title = TopBarTitle(stringResource(R.string.passkeys_screen_title)),
         collapseFraction = collapseFraction,
         modifier = Modifier.align(Alignment.TopCenter),
         navigationIcon = {

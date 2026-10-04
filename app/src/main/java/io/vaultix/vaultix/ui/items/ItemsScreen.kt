@@ -115,6 +115,7 @@ import io.vaultix.vaultix.ui.common.ItemFormDialog
 import io.vaultix.vaultix.ui.common.PressAndSwipeToDelete
 import io.vaultix.vaultix.ui.common.SelectionActionBar
 import io.vaultix.vaultix.ui.common.SiteIcon
+import io.vaultix.vaultix.ui.common.TopBarTitle
 import io.vaultix.vaultix.ui.common.VaultixExpressiveTopBar
 import io.vaultix.vaultix.ui.common.VaultixSearchTopAppBar
 import io.vaultix.vaultix.ui.common.itemTypeLabelRes
@@ -859,7 +860,7 @@ private fun ItemsSearchBar(
  */
 @Composable
 private fun BoxScope.ItemsTopBar(
-    title: String,
+    title: TopBarTitle,
     collapseFraction: Float,
     embedded: Boolean,
     titleExpanded: Boolean,
@@ -1258,13 +1259,33 @@ private fun quickFilterLabelRes(filter: ItemsQuickFilter): Int = when (filter) {
 }
 
 /**
- * 顶栏标题：无筛选时就是库名；有筛选时拼成「库名 · 筛选名」。
+ * 顶栏标题：无筛选时只有库名；有筛选时**库名 26sp + 筛选名 14sp 独立第二行**。
  *
- * 为什么必须拼：筛选生效后列表条数会明显变少，标题不写清「现在在看什么」，
+ * ## 为什么筛选名必须出现在标题里
+ *
+ * 筛选生效后列表条数会明显变少，标题不写清「现在在看什么」，
  * 用户第一反应是「我的条目丢了」（`.ai/ISSUES.md` 里同类误报的常见来源）。
+ *
+ * ## ⚠️ 2026-10-04：为什么从「拼一个串」改成「两级标题」（方案 β）
+ *
+ * 此前是 `itemsTitle` 拼成 `"库名 · 筛选名"` 交给顶栏折行，真机观感很差：
+ * - `Bitwarden · 验证` / `码` —— **孤字行**（第二行只剩一个字），像标题坏了；
+ * - `valkjin.kdbx · 验` / `证码` —— 同样折，而且被折行逼到 **20sp**（`TITLE_TWO_LINE_SP`），
+ *   库名这个最重要的信息反而被降级。
+ *
+ * ⇒ 改为 [TopBarTitle]：库名保持 26sp **不折行**，筛选名以 14sp 小字另起一行。
+ * 主次分明，且两个字号都不用缩。
+ *
+ * ⚠️ 顺带修正一个此前的判断：折叠并非 KDBX 特有 —— `Bitwarden · 验证`（11 个字）
+ * 在同一块 26sp 区域里同样放不下，**两个库都在折**。所以这是**顶栏通用问题**，
+ * 修在共享组件里而不是 ItemsScreen 局部。
  */
-private fun itemsTitle(vaultName: String, filter: ItemsQuickFilter, filterLabel: String): String =
-    if (filter == ItemsQuickFilter.All) vaultName else "$vaultName · $filterLabel"
+private fun itemsTitle(vaultName: String, filter: ItemsQuickFilter, filterLabel: String): TopBarTitle =
+    TopBarTitle(
+        text = vaultName,
+        subtitle = if (filter == ItemsQuickFilter.All) null else filterLabel,
+    )
+
 /**
  * 条目列表（分组 + 「按住后滑动删除」）。
  *

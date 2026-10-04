@@ -38,6 +38,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.WindowInsets
@@ -68,6 +69,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.semantics.Role
@@ -121,6 +123,62 @@ private const val TITLE_TWO_LINE_SP = 20f
 /** 标题缩放的下限（低于它就宁可走省略号，也不再继续缩 —— 再小就不好读了）。 */
 private const val TITLE_MIN_SCALE = 0.72f
 
+/**
+ * 副标题（小字）字号（sp）与它与库名之间的间距。
+ *
+ * ⚠️ 2026-10-04：顶栏方案 β —— **库名保持 26sp 不折行，筛选名单独一行小字**。
+ *
+ * ## 为什么是「两行小字」而不是「一行里缩字号」
+ *
+ * 此前是拼成一个 26sp 的串（`库名 · 筛选名`），放不下就折两行（`Bitwarden · 验证` / `码`）。
+ * 真机观感差有两个原因，且**都不是字号问题**：
+ * ① 折行后第二行往往只剩一两个字（孤字），读起来像"标题坏了"；
+ * ② 为了塞进两行，字号从 26sp 掉到 20sp，**库名这个最重要的信息反而被降级**。
+ *
+ * ⇒ 改成两级信息：**库名 26sp 一行**（不折）+ **筛选名 14sp 独立一行**。
+ *   主次分明，且两个字号**都不用缩**。
+ *
+ * ## 为什么 14sp 不会把顶栏撑破（曾担心要加高栏，此处已算清）
+ *
+ * 栏高预留是固定的 [BAR_EXPANDED] = 72dp，而实际内容高 =
+ * `26 × 1.2`（[LINE_HEIGHT_RATIO]）+ `2`（间距）+ `14 × 1.2` + `上下内边距 2 × 8`
+ * = `31.2 + 2 + 16.8 + 16` = **66dp ≤ 72dp**（余 6dp）。
+ * ⇒ **不需要动 [BAR_EXPANDED]，也不需要动 [rememberImmersiveBarPadding]** ——
+ *   列表顶部让位那条链（`itemsTopInset` / `filterRowInset` / `QUICK_FILTER_ROW_HEIGHT`）
+ *   一行都不用改，"加高 18dp 导致列表让位错位"这个风险因此不存在。
+ */
+private const val TITLE_SUBTITLE_SP = 14f
+
+private val TITLE_SUBTITLE_SPACING = 2.dp
+
+/**
+ * 顶栏标题：**主标题 + 可选副标题**（上下两行，不拼接）。
+ *
+ * ## 为什么不直接给 [VaultixExpressiveTopBar] 加一个 `titleSubtitle` 参数
+ *
+ * 加了就是 9 个参数，越过 detekt `LongParameterList` 的 8 个硬上限（见 `config/detekt/detekt.yml`）。
+ * 而「标题本来就是两级信息」用类型表达更准确 ⇒ 收成 data class：
+ * ① 参数数**不变**（仍 8 个）；
+ * ② 其余 5 个页面只需把 `title = stringResource(…)` 包成 `title = TopBarTitle(stringResource(…))`，
+ * 语义零变化（副标题缺省即 null = 只有一行，与今天完全等价）。
+ *
+ * @property text 主标题（库名 / 页面名），渲染为 26sp。
+ * @property subtitle 副标题（当前筛选名），渲染为 14sp 独立一行；null = 不渲染第二行。
+ */
+data class TopBarTitle(
+    val text: String,
+    val subtitle: String? = null,
+)
+
+/**
+ * 副标题的读屏文案：`库名, 筛选名, 操作提示`。
+ *
+ * ⚠️ 与过去拼串不同：过去无障碍描述是 `"Bitwarden · 验证, 点按展开或收起分类筛选"`，
+ * 筛选名被 `·` 混在库名里；现在拆开报，读屏用户能听清"这是哪个库 / 现在在看哪一类"。
+ */
+private fun TopBarTitle.spokenLabel(hint: String): String =
+    if (subtitle == null) "$text, $hint" else "$text, $subtitle, $hint"
+
 /** 可点标题时给右侧展开箭头预留的宽度（测量标题时要从可用宽度里扣掉）。 */
 private val TITLE_CHEVRON_RESERVE = 30.dp
 
@@ -147,6 +205,18 @@ private data class TitleLayout(val fontSp: Float, val maxLines: Int)
 
 /**
  * 标题在 [availablePx] 内怎么排（字号 + 行数；字号下限 `fontSp * TITLE_MIN_SCALE`）。
+ *
+ * @param allowTwoLines 是否允许**折两行**（见参数说明）。
+ *
+ * ## ⚠️ `allowTwoLines` 为什么由调用方决定（2026-10-04，方案 β）
+ *
+ * 「折两行」这套应对是为**单串标题**设计的（一个 26sp 字符串放不下 ⇒ 换行）。
+ * 一旦有了 [TopBarTitle.subtitle]，第二行已经被副标题占了 —— 此时再让主标题折行，
+ * 栏高就变成 `库名两行 + 副标题一行 = 三行`（66dp → 97dp），**直接撑破 [BAR_EXPANDED]**，
+ * 顶栏会压到第一条内容上。
+ *
+ * ⇒ 有副标题时传 `false`：库名要么原样、要么**缩字号**（下限 [TITLE_MIN_SCALE]）、
+ *   最后才省略，**任何情况下都不折行**。
  *
  * ## 为什么在**组合期**算，而不是"画完发现溢出再缩"
  *
@@ -184,6 +254,7 @@ private fun fitTitleLayout(
     title: String,
     availablePx: Int,
     fontSp: Float,
+    allowTwoLines: Boolean = true,
 ): TitleLayout {
     if (availablePx <= 0 || title.isEmpty()) return TitleLayout(fontSp, maxLines = 1)
     val measured = measurer
@@ -193,7 +264,8 @@ private fun fitTitleLayout(
 
     // ⚠️ 收起态（16sp）**不折两行**：小字号折两行看着像"标题换行了"而不是"分栏"，
     //    且收起态栏高只有 48dp，两行会把右侧按钮组挤下去。⇒ 收起态维持老行为（缩字号）。
-    if (fontSp > TITLE_COLLAPSED_SP) {
+    //    有副标题时同理（第二行已被占用）—— 见 KDoc 的 `allowTwoLines`。
+    if (allowTwoLines && fontSp > TITLE_COLLAPSED_SP) {
         val twoLineSp = minOf(fontSp, TITLE_TWO_LINE_SP)
         val twoLineStyle = baseStyle.copy(fontSize = twoLineSp.sp)
         val measuredTwoLine = measurer
@@ -274,6 +346,100 @@ fun rememberImmersiveBarPadding(collapseFraction: Float): Dp {
 }
 
 /**
+ * 顶栏标题块：**库名（26sp）+ 可选副标题（14sp）上下两行**（2026-10-04 方案 β）。
+ *
+ * ## 抽出来的理由（detekt `LongMethod` ≤150）
+ *
+ * 之前这段直接内联在 [VaultixExpressiveTopBar] 里，加了副标题后函数体 159 行越界。
+ * 顺带的好处是**标题的排版契约被收在一处**：测量 / 折行判定 / 副标题出现条件
+ * 只此一份，其它页面（`title.subtitle == null`）走的是完全相同的旧路径。
+ *
+ * @param subtitleAlpha 副标题透明度（随收起 1→0，见调用处）。
+ * @param reserveChevron 标题右侧是否还有展开箭头（有则要从可用宽度里扣掉 [TITLE_CHEVRON_RESERVE]）。
+ */
+@Composable
+private fun TitleBlock(
+    title: TopBarTitle,
+    titleFontSize: Float,
+    subtitleAlpha: Float,
+    contentColor: Color,
+    reserveChevron: Boolean,
+) {
+    // `BoxWithConstraints`：可用宽度**在组合期**就能拿到（不像 `onTextLayout`
+    // 要等布局完），所以能一次算好字号、不产生"先大后小"的跳变。
+    BoxWithConstraints {
+        val measurer = rememberTextMeasurer()
+        val density = LocalDensity.current
+        // 保留 base 样式（letterSpacing / 字重都在里面）：只量裸文本宽度会与
+        // 实际渲染宽度差一截，而差在哪里恰恰是"文字多的语言"最容易出问题的地方。
+        val baseStyle = MaterialTheme.typography.headlineSmall
+        // 可点时标题右边还有个展开箭头，要从可用宽度里扣掉，否则标题会与箭头相撞。
+        val reservePx = with(density) {
+            (if (reserveChevron) TITLE_CHEVRON_RESERVE else 0.dp).roundToPx()
+        }
+        // 量化字号缓存键：折叠动画期间 `titleFontSize` 是**连续**变化的（26→16sp），
+        // 直接用它会每帧都重算一次测量。按 0.5sp 粒度分桶 ⇒ 整段动画约 20 次测量，
+        // 既便宜又足够平滑（每桶之间字号只差 0.5sp，看不出台阶）。
+        val fontBucket = (titleFontSize * FONT_BUCKET_DIVISOR).roundToInt()
+        val fitted = remember(
+            title.text,
+            constraints.maxWidth,
+            reservePx,
+            fontBucket,
+            baseStyle,
+        ) {
+            fitTitleLayout(
+                measurer = measurer,
+                baseStyle = baseStyle.copy(fontSize = titleFontSize.sp),
+                title = title.text,
+                availablePx = constraints.maxWidth - reservePx,
+                fontSp = titleFontSize,
+                // ⚠️ 有副标题时第二行已被占用 ⇒ 库名**绝不折行**，只缩字号。
+                allowTwoLines = title.subtitle == null,
+            )
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(TITLE_SUBTITLE_SPACING)) {
+            Text(
+                text = title.text,
+                style = baseStyle,
+                fontSize = fitted.fontSp.sp,
+                lineHeight = (fitted.fontSp * LINE_HEIGHT_RATIO).sp,
+                fontWeight = FontWeight.SemiBold,
+                color = contentColor,
+                // ⚠️ 1 或 2 行由 `fitTitleLayout` 在**组合期**定好：放得下就一行，
+                //    放不下折两行（施工单 L2），不是"渲染后再补救"。
+                maxLines = fitted.maxLines,
+                // ⚠️ 兜底是省略号而**不是** `Clip`：连最小字号都放不下时，
+                //    把尾巴裁掉会让用户以为标题就这么短；省略号至少说明"后面还有"。
+                overflow = TextOverflow.Ellipsis,
+                // ⚠️ 必须允许换行，否则两行排布根本不会发生（`softWrap = false`
+                //    会把所有文本按一行量，再交给省略号）。
+                softWrap = true,
+            )
+            if (title.subtitle != null) {
+                Text(
+                    text = title.subtitle,
+                    style = MaterialTheme.typography.labelLarge,
+                    // ⚠️ 副标题**字号不参与折叠动画**：它跟着库名一起消失，
+                    //    不需要再从 14sp 缩到 16sp（那会让"消失"变成"缩小"，更乱）。
+                    //    固定 14sp 是它作为副标题的语义身份。
+                    fontSize = TITLE_SUBTITLE_SP.sp,
+                    lineHeight = (TITLE_SUBTITLE_SP * LINE_HEIGHT_RATIO).sp,
+                    color = contentColor,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    softWrap = true,
+                    // ⚠️ 用 `graphicsLayer`（**绘制期**读 alpha）而不是 `alpha()`：
+                    //    后者会让整个 Text 离开渲染快路径；折叠动画每帧都跑，不该付这个代价。
+                    //    同时 alpha=0 时**仍占位** —— 这正是我们要的：栏高平滑收缩，不跳变。
+                    modifier = Modifier.graphicsLayer { alpha = subtitleAlpha },
+                )
+            }
+        }
+    }
+}
+
+/**
  * 沉浸式顶栏（大标题随滚动缩小、栏背景收起后透明、右侧按钮胶囊悬浮）。
  *
  * ⚠️ 必须**浮在内容之上**使用（`Box { 列表; 本顶栏 }`），并且列表顶部留白取
@@ -289,7 +455,7 @@ fun rememberImmersiveBarPadding(collapseFraction: Float): Dp {
  */
 @Composable
 fun VaultixExpressiveTopBar(
-    title: String,
+    title: TopBarTitle,
     collapseFraction: Float,
     modifier: Modifier = Modifier,
     navigationIcon: (@Composable () -> Unit)? = null,
@@ -334,6 +500,15 @@ fun VaultixExpressiveTopBar(
         animationSpec = tween(ANIM_MS),
         label = "topbar_content_color",
     )
+    // ⚠️ 副标题随**收起**淡出（不是随展开淡入 —— 展开态它就该在）。
+    //    用 `1 - collapseFraction` 而不是布尔切换：布尔切换会让第二行在 200ms 动画里
+    //    "啪"地一下出现/消失，栏高也跟着一跳；淡出则与字号、栏高、按钮组同一条补间。
+    //    展开态恒为 1，收起态趋近 0 ⇒ 用户看不到"第二行去哪了"。
+    val subtitleAlpha by animateFloatAsState(
+        targetValue = (1f - collapseFraction).coerceIn(0f, 1f),
+        animationSpec = tween(ANIM_MS),
+        label = "topbar_subtitle_alpha",
+    )
     // ⚠️ 标题的"过长怎么办"**不在渲染之后再补救** —— 见 [fitTitleLayout]。
     //    旧写法是在 `onTextLayout` 里发现溢出就改 state 缩一档、下一帧再量再缩（上限 0.72）。
     //    那必然先按满字号画一帧、再往下跳，用户看到的就是"左侧标题先大后小地动了一下"
@@ -360,55 +535,13 @@ fun VaultixExpressiveTopBar(
         ) {
             navigationIcon?.invoke()
             val titleText: @Composable () -> Unit = {
-                // `BoxWithConstraints`：可用宽度**在组合期**就能拿到（不像 `onTextLayout`
-                // 要等布局完），所以能一次算好字号、不产生"先大后小"的跳变。
-                BoxWithConstraints {
-                    val measurer = rememberTextMeasurer()
-                    val density = LocalDensity.current
-                    // 保留 base 样式（letterSpacing / 字重都在里面）：只量裸文本宽度会与
-                    // 实际渲染宽度差一截，而差在哪里恰恰是"文字多的语言"最容易出问题的地方。
-                    val baseStyle = MaterialTheme.typography.headlineSmall
-                    // 可点时标题右边还有个展开箭头，要从可用宽度里扣掉，否则标题会与箭头相撞。
-                    val reservePx = with(density) {
-                        (if (onTitleClick == null) 0.dp else TITLE_CHEVRON_RESERVE).roundToPx()
-                    }
-                    // 量化字号缓存键：折叠动画期间 `titleFontSize` 是**连续**变化的（26→16sp），
-                    // 直接用它会每帧都重算一次测量。按 0.5sp 粒度分桶 ⇒ 整段动画约 20 次测量，
-                    // 既便宜又足够平滑（每桶之间字号只差 0.5sp，看不出台阶）。
-                    val fontBucket = (titleFontSize * FONT_BUCKET_DIVISOR).roundToInt()
-                    val fitted = remember(
-                        title,
-                        constraints.maxWidth,
-                        reservePx,
-                        fontBucket,
-                        baseStyle,
-                    ) {
-                        fitTitleLayout(
-                            measurer = measurer,
-                            baseStyle = baseStyle.copy(fontSize = titleFontSize.sp),
-                            title = title,
-                            availablePx = constraints.maxWidth - reservePx,
-                            fontSp = titleFontSize,
-                        )
-                    }
-                    Text(
-                        text = title,
-                        style = baseStyle,
-                        fontSize = fitted.fontSp.sp,
-                        lineHeight = (fitted.fontSp * LINE_HEIGHT_RATIO).sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = contentColor,
-                        // ⚠️ 1 或 2 行由 `fitTitleLayout` 在**组合期**定好：放得下就一行，
-                        //    放不下折两行（施工单 L2），不是"渲染后再补救"。
-                        maxLines = fitted.maxLines,
-                        // ⚠️ 兜底是省略号而**不是** `Clip`：连最小字号都放不下时，
-                        //    把尾巴裁掉会让用户以为标题就这么短；省略号至少说明"后面还有"。
-                        overflow = TextOverflow.Ellipsis,
-                        // ⚠️ 必须允许换行，否则两行排布根本不会发生（`softWrap = false`
-                        //    会把所有文本按一行量，再交给省略号）。
-                        softWrap = true,
-                    )
-                }
+                TitleBlock(
+                    title = title,
+                    titleFontSize = titleFontSize,
+                    subtitleAlpha = subtitleAlpha,
+                    contentColor = contentColor,
+                    reserveChevron = onTitleClick != null,
+                )
             }
             if (onTitleClick == null) {
                 titleText()
@@ -420,7 +553,7 @@ fun VaultixExpressiveTopBar(
                         .clip(RoundedCornerShape(TITLE_CLICK_CORNER_DP.dp))
                         .clickable(role = Role.Button, onClick = onTitleClick)
                         .padding(horizontal = Spacing.xs, vertical = 2.dp)
-                        .semantics { contentDescription = "$title, $titleClickHint" },
+                        .semantics { contentDescription = title.spokenLabel(titleClickHint) },
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
