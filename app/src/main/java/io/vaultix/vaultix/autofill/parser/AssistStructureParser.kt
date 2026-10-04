@@ -51,15 +51,16 @@ object AssistStructureParser {
             webView = traverse(root, fields, webDomains, urlBarHosts, packageName, hostRules) || webView
         }
 
-        val webDomain = webDomains.firstOrNull()
+        val domain = WebDomainResolver.resolve(
+            collected = webDomains,
+            urlBarHosts = urlBarHosts,
+            structureTextHost = BrowserUrlBars.domainFromStructureText(structure),
+        )
+        val webDomain = domain.webDomain
         // Edge / 三星 / Opera 等浏览器的 WebView 不总会上报 webDomain：此时读地址栏
         // （包名 + idEntry 双重匹配），再退化到结构文本扫描。该兜底只用于匹配。
-        val fallbackWebDomain = if (webDomain.isNullOrBlank()) {
-            urlBarHosts.firstOrNull() ?: BrowserUrlBars.domainFromStructureText(structure)
-        } else {
-            null
-        }
-        val effectiveDomain = webDomain ?: fallbackWebDomain
+        val fallbackWebDomain = domain.fallbackWebDomain
+        val effectiveDomain = domain.effective
         val webUri = effectiveDomain?.let { "https://$it" }
         val resolved = promoteUsernameField(fields)
         // 只认**可见**的账号 / 密码框：隐藏框（自动填充辅助框、隐藏的登录弹层）既不该被填，
@@ -128,7 +129,10 @@ object AssistStructureParser {
         parentWebDomain: String? = null,
     ): Boolean {
         var webView = node.className?.contains("WebView", ignoreCase = true) == true
-        node.webDomain?.let { webDomains += it }
+        // ⚠️ 空白串防御（判据在 [WebDomainResolver.collect]）：GeckoView / Firefox 在登录页上
+        //   会把 webDomain 设成**空字符串**而非 null，而 `?:` 只对 null 短路 —— 这里若照收，
+        //   空串会一路穿透到匹配器，把所有候选静默变成 0 分（详见 [WebDomainResolver] 类 KDoc）。
+        WebDomainResolver.collect(node.webDomain)?.let { webDomains += it }
         // ★ 逐字段站点（对齐 Bitwarden `ViewNodeExtensions.toAutofillView`：
         //   `website = this.website ?: parentWebsite`）。框架只在**跨域 iframe 的根节点**
         //   上带 webDomain，iframe 内部的每个输入框自身都是 null —— 若只用

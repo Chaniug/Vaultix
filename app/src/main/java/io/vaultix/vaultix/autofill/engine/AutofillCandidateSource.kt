@@ -95,20 +95,61 @@ class AutofillCandidateSource @Inject constructor(
         ),
     )
 
-    /** 登录候选匹配（等价于 Service 里的 `BitwardenLikeAutofillMatcher.match` 调用）。 */
+    /**
+     * 登录候选匹配（等价于 Service 里的 `BitwardenLikeAutofillMatcher.match` 调用）。
+     *
+     * 🔴 **无域名降级**（2026-10-04，Firefox Android 真机日志实证）：`webDomain` 为 null 时
+     * 不能就此返回 0 条 —— 那会让所有候选静默变成 0 分，用户体感是
+     *「输入框能看到 Vaultix 的提示，但密码条目一条都匹配不出来」（原话）。
+     *
+     * ## 为什么必须降级而不是只修空白防御
+     *
+     * Firefox 用 **GeckoView**，它不给第三方 AutofillService 上报可用的
+     * `ViewNode.webDomain`：登录页上报的是**空字符串**（已修，见 [WebDomainResolver]），
+     * 而地址栏 / 结构文本兜底实测也取不到（日志里 13 次 `fillRequest` 的 `fallback=` 全为 null）。
+     * ⇒ **Firefox 上「域名匹配」这条路在平台层就走不通**，不是我们某处判据写错了。
+     *
+     * 外部佐证：Bitwarden Android 在 Firefox Android 上**同样**做不了域名匹配
+     * （其 issue #5720「Autofill does not propose correct vault entries (URI match detection)」
+     *  与社区帖 #19444），是已知的 GeckoView 限制。而 Bitwarden 的用户体感是
+     *「菜单会弹、但要自己在搜索框里翻」—— 它没有把用户挡在门外。
+     *
+     * ## 降级策略（对齐 Bitwarden 的搜索兜底语义）
+     *
+     * 拿不到域名时，返回**全部登录候选**，按「收藏优先 → 名称升序」排（与
+     * [BitwardenLikeAutofillMatcher] 的 `CREDENTIAL_ORDER` 同序，保证有域名时降级不改变体验）。
+     * 再由 [FillPlanner] / `MAX_DATASETS` 截断成有限几条 ⇒ 用户在 Firefox 上仍能看到
+     * 自己的条目并一键填入，而不是面对一个空面板。
+     *
+     * ⚠️ **安全边界**：降级只在「确实是登录表单」（`user`/`pass` 皆已识别）时生效，
+     * 由 Service 侧的 `noFillTarget` 闸门保证；且**不关闭** [AutofillRequestContextPolicy]
+     * 的包名匹配闸门 —— 浏览器里缺域名时包名是浏览器自己的，拿它匹配会弹出「浏览器身份」
+     * 的无关条目，那才是真的错条目。
+     */
     suspend fun matchLogins(
         credentials: List<AutofillCredential>,
         parsed: ParsedStructure,
         webDomain: String?,
-    ): List<AutofillCredential> = BitwardenLikeAutofillMatcher.match(
-        credentials = credentials,
-        packageName = parsed.packageName,
-        webDomain = webDomain,
-        config = matchConfigFor(parsed, webDomain),
-    )
+    ): List<AutofillCredential> {
+        val matched = BitwardenLikeAutofillMatcher.match(
+            credentials = credentials,
+            packageName = parsed.packageName,
+            webDomain = webDomain,
+            config = matchConfigFor(parsed, webDomain),
+        )
+        if (matched.isNotEmpty() || !webDomain.isNullOrBlank()) return matched
+        // 走到这里 = 本次请求没有任何域名，却一个候选都没匹配上。
+        return BitwardenLikeAutofillMatcher.orderWithoutDomain(credentials)
+    }
 
-    /** 页面域名（浏览器不上报 webDomain 时用地址栏 / 结构文本兜底）。 */
-    fun webDomainOf(parsed: ParsedStructure): String? = parsed.webDomain ?: parsed.fallbackWebDomain
+    /**
+     * 页面域名（浏览器不上报 webDomain 时用地址栏 / 结构文本兜底）。
+     *
+     * ⚠️ 判据是 `takeIf { it.isNotBlank() }` 而非 `?:`：**空串不是 null**，
+     * 直接 `?:` 会让它赢掉真正的兜底域名（GeckoView / Firefox 的实测形态，见 [WebDomainResolver]）。
+     */
+    fun webDomainOf(parsed: ParsedStructure): String? =
+        parsed.webDomain?.takeIf { it.isNotBlank() } ?: parsed.fallbackWebDomain
 }
 
 /** 一次填充请求内汇总的候选集合。 */

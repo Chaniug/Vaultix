@@ -147,4 +147,81 @@ class BitwardenLikeAutofillMatcherTest {
         val creds = listOf(credWith("a", "https://example.com", UriMatch.Never))
         assertThat(BitwardenLikeAutofillMatcher.match(creds, null, "example.com")).isEmpty()
     }
+
+    // ---------- 无域名降级（2026-10-04 Firefox Android）----------
+
+    /**
+     * 🔴 回归闸：拿不到域名时**必须**返回候选，而不是空列表。
+     *
+     * Firefox（GeckoView）实测 `webDomain` 为空串、地址栏/结构文本兜底也落空
+     * ⇒ `match` 全量 0 分 ⇒ 216 个候选被过滤成 `datasets=0`
+     * ⇒ 用户体感「能看到 Vaultix 的提示，但密码条目匹配不出来」。
+     */
+    @Test
+    fun `match 在无域名时全灭 但降级仍能给出候选`() {
+        val creds = listOf(
+            cred("bank", listOf("https://bank.com")),
+            cred("shop", listOf("https://shop.com")),
+        )
+        // 前提自证：无域名时 match 确实一条都匹配不出来（这就是 bug 的成因）
+        assertThat(BitwardenLikeAutofillMatcher.match(creds, "org.mozilla.firefox", null)).isEmpty()
+        // 但降级要给出全部候选
+        assertThat(
+            BitwardenLikeAutofillMatcher.orderWithoutDomain(creds).map { it.itemId },
+        ).containsExactly("bank", "shop").inOrder()
+    }
+
+    @Test
+    fun `降级按收藏优先再名称升序`() {
+        val creds = listOf(
+            cred("zebra", listOf("https://z.com"), favorite = false),
+            cred("alpha", listOf("https://a.com"), favorite = false),
+            cred("fav", listOf("https://f.com"), favorite = true),
+        )
+        assertThat(
+            BitwardenLikeAutofillMatcher.orderWithoutDomain(creds).map { it.itemId },
+        ).containsExactly("fav", "alpha", "zebra").inOrder()
+    }
+
+    @Test
+    fun `降级与匹配共用同一排序键`() {
+        // 不变量：降级顺序必须等于「同分候选在 match 里的顺序」，
+        // 否则用户会看到同一个条目在 Firefox / Chrome 下位置不一致，像是数据乱了。
+        val creds = listOf(
+            cred("b", listOf("https://b.com")),
+            cred("a", listOf("https://a.com"), favorite = true),
+            cred("c", listOf("https://c.com")),
+        )
+        val all = BitwardenLikeAutofillMatcher.orderWithoutDomain(creds).map { it.itemId }
+        // 用同一个域名匹配全部候选（构造全同分的局面）后顺序应与降级一致
+        val matched = BitwardenLikeAutofillMatcher
+            .match(creds.map { it.copy(uris = listOf(AutofillUri("https://same.com"))) }, null, "same.com")
+            .map { it.itemId }
+        assertThat(matched).containsExactly("a", "b", "c").inOrder()
+        assertThat(all).containsExactlyElementsIn(matched).inOrder()
+    }
+
+    @Test
+    fun `降级保留收藏条目 即使它排在最后输入`() {
+        val creds = listOf(
+            cred("first", listOf("https://f.com")),
+            cred("second", listOf("https://s.com")),
+            cred("star", listOf("https://t.com"), favorite = true),
+        )
+        assertThat(
+            BitwardenLikeAutofillMatcher.orderWithoutDomain(creds).first().itemId,
+        ).isEqualTo("star")
+    }
+
+    @Test
+    fun `降级对空候选列表安全`() {
+        assertThat(BitwardenLikeAutofillMatcher.orderWithoutDomain(emptyList())).isEmpty()
+    }
+
+    @Test
+    fun `降级不丢弃任何候选 包括无 uri 的条目`() {
+        // 无 uri 的条目在 match 里永远 0 分，但降级要保留它们 —— 用户仍可能想手动选
+        val creds = listOf(cred("no-uri", emptyList()), cred("with-uri", listOf("https://x.com")))
+        assertThat(BitwardenLikeAutofillMatcher.orderWithoutDomain(creds)).hasSize(2)
+    }
 }

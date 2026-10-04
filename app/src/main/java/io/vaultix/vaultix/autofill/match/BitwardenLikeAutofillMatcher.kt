@@ -64,6 +64,38 @@ object BitwardenLikeAutofillMatcher {
         .map { it.first }
         .toList()
 
+    /**
+     * 🔴 **无域名排序**（2026-10-04，Firefox Android 真机日志实证）：拿不到域名时，
+     * 把候选按同一套 [CREDENTIAL_ORDER] 排序**全部**返回，而不是返回空列表。
+     *
+     * ## 为什么需要它
+     *
+     * [match] 靠域名打分，`webDomain == null` 时[scoreWebUri] 直接 `return 0`
+     * ⇒ 216 个候选全被过滤 ⇒ `datasets=0`。用户看到的是「有提示、但一条都匹配不出来」。
+     *
+     * Firefox（GeckoView）实测拿不到域名：登录页上报空字符串，地址栏/结构文本兜底也落空
+     * （日志里 13 次 `fillRequest` 的 `fallback=` 全为 null）。**这不是我们判据写错**——
+     * Bitwarden Android 在 Firefox Android 上同样如此（其 issue #5720 / 社区 #19444）。
+     *
+     * ## 为什么排序规则必须复用 [CREDENTIAL_ORDER]
+     *
+     * 若降级用另一套顺序，同一个条目在「有域名」与「无域名」两种浏览器下会出现
+     * **位置不一致**（用户会以为数据乱了）。复用后：Firefox 上看到的是「收藏优先、名称序」，
+     * Chrome 上域名命中时是「相关度优先」—— 前者只是后者的粗粒度版本，体感连贯。
+     *
+     * ## 排序键只有收藏与名称，缺了什么
+     *
+     * 理想做法是按「最近使用」排（Bitwarden 有 `lastUsedAt`）。本项目当前候选模型
+     * （[AutofillCredential]）**没有**该字段 —— 已在 `AutofillCredentialMapper` 处留注，
+     * 补上 `lastUsedAt` 后应把它加进排序键的第一位（这是本方法最大的可改进点）。
+     */
+    fun orderWithoutDomain(credentials: List<AutofillCredential>): List<AutofillCredential> =
+        credentials.asSequence()
+            .map { it to 0 }
+            .sortedWith(CREDENTIAL_ORDER)
+            .map { it.first }
+            .toList()
+
     private fun scoreCredential(
         cred: AutofillCredential,
         packageName: String?,
