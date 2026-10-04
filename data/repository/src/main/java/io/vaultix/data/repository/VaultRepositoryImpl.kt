@@ -524,13 +524,13 @@ class VaultRepositoryImpl @Inject constructor(
     ): Map<String, LocalUnlockEnrollOutcome> =
         localUnlockEnrollment.sealRoomsForVaults(prepared)
 
-    /** 取消勾选某库：删房间信封 + 范围镜像剔除（不碰门锁）。 */
-    override suspend fun removeVaultFromScope(vaultId: String) {
-        removeRoomEnvelope(vaultId)
-    }
-
     /**
-     * 删某库房间信封并从范围镜像剔除（signOut / removeVault / 取消勾选共用）。
+     * 删某库房间信封并从范围镜像剔除（`signOut` / `removeVault` 共用）。
+     *
+     * ⚠️ 2026-10-04：这里曾有一个 `override removeVaultFromScope`（「取消勾选某库」）
+     *   同样转调本方法。因「范围勾选」向导已整段删除、范围恒等于全部库，
+     *   该动作不可能再被用户触发 ⇒ 连同接口方法一起删除，**本私有方法保留**
+     *   （`signOut` 第 2 步与 `removeVault` 第 2 步都还在用）。
      */
     private suspend fun removeRoomEnvelope(vaultId: String) {
         houseKeyStore.removeRoom(vaultId)

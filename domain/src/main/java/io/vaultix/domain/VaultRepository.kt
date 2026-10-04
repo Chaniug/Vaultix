@@ -230,8 +230,12 @@ interface VaultRepository {
         prepared: List<LocalUnlockPreparedEnrollment>,
     ): Map<String, LocalUnlockEnrollOutcome>
 
-    /** 取消勾选某库：删它的房间信封（纯软件，不碰门锁）。幂等。 */
-    suspend fun removeVaultFromScope(vaultId: String)
+    // ⚠️ 这里曾有过 `removeVaultFromScope(vaultId)`（「取消勾选某库」=删房间信封
+    //   + 范围镜像剔除），**2026-10-04 删除**：
+    //   「范围勾选」向导已整段删除，范围恒等于全部库（见 `startEnrollment`），
+    //   「移出范围」这个动作**已不可能由用户触发** ⇒ 留着它就是一段
+    //   永远不成立的死逻辑 —— 与 QuickUnlockController 里同一件事的处理同因。
+    //   库被**删除**时的房间信封清理由 `removeVault` 那条既有路径负责（不变）。
 
     // ---- 解锁扇出（1 次门锁 + N 次软件）----
 
