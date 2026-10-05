@@ -194,6 +194,7 @@ internal object KdbxItemWriter {
         // 多出来的 URL 是无处可存的，由调用方在 UI 层限制（见 KdbxItemWriter 的文件头说明）。
         fields = fields + (BasicField.Url.key to EntryValue.Plain(item.uris.firstOrNull()?.uri.orEmpty()))
         fields = applyTotp(fields, item = item, before = before)
+        fields = applyPasskeys(fields, item = item, before = before)
         return applyCustomFields(fields, item = item, before = before)
     }
 
@@ -279,6 +280,50 @@ internal object KdbxItemWriter {
                     EntryValue.Plain(field.value)
                 }
                 )
+        }
+        return result
+    }
+
+    /**
+     * 通行密钥写回（W2）：把 [VaultItem.fido2Credentials] 写成 `KPEX_PASSKEY_*` 字段。
+     *
+     * ⚠️ 必须走**专属通道**，不能塞进 [applyCustomFields]：后者按 R1 跳过保留键，
+     *   而通行密钥区正是保留区；反过来若走自定义字段，私钥 PEM 又会被明文展示在详情页。
+     *
+     * ⚠️ 私钥 PEM / credentialId / userHandle 按 [KdbxPasskeyCodec.isProtectedField]
+     *   **受保护**写入（`EntryValue.Encrypted`）：写明文等于
+     *   「KDBX 被别人打开即泄露私钥」（施工单 §4 风险表）。
+     */
+    internal fun applyPasskeys(
+        fields: EntryFields,
+        item: VaultItem,
+        before: VaultItem?,
+    ): EntryFields {
+        val desired = LinkedHashMap<String, String>()
+        item.fido2Credentials.forEachIndexed { index, credential ->
+            desired.putAll(KdbxPasskeyCodec.fromCredential(credential, index))
+        }
+        // KeePassDX 的空占位标记：表示「这个条目是通行密钥条目」。
+        if (item.fido2Credentials.isNotEmpty()) {
+            desired[KdbxPasskeyCodec.FIELD_PASSKEY] = ""
+        }
+        // 删除判据沿用 applyCustomFields：「before 有、after 没有」才是真删除 ——
+        // 第三方工具写进来的、领域模型没读出来的键一律不动。
+        val previous = ArrayList<String>()
+        if (before?.fido2Credentials?.isNotEmpty() == true) {
+            previous += KdbxPasskeyCodec.FIELD_PASSKEY
+        }
+        before?.fido2Credentials.orEmpty().forEachIndexed { index, credential ->
+            previous += KdbxPasskeyCodec.fromCredential(credential, index).keys
+        }
+        var result = fields.minus(previous.filter { key -> key !in desired })
+        desired.forEach { (key, value) ->
+            if (result[key]?.content == value) return@forEach
+            result = result + (key to if (KdbxPasskeyCodec.isProtectedField(key)) {
+                EntryValue.Encrypted(EncryptedValue.fromString(value))
+            } else {
+                EntryValue.Plain(value)
+            })
         }
         return result
     }

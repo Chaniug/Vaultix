@@ -111,7 +111,6 @@ private fun Entry.toVaultItem(folderId: String?): VaultItem {
     val isNote = username.isBlank() && password.isBlank() && notes.isNotBlank()
     // 通行密钥（KeePassDX 的 KPEX_PASSKEY_* 约定，见 KdbxPasskeyCodec）：映射为领域凭证后
     // 与 Bitwarden 侧同构 —— 「通行密钥」页 / 设置页统计 / 凭据提供商三条链路对 KDBX 库天然可用。
-    val passkey = KdbxPasskeyCodec.toCredential(fields.toPasskeyFields(), title = title)
     return VaultItem(
         id = itemIdOf(uuid),
         title = title.ifBlank { DEFAULT_TITLE },
@@ -121,7 +120,7 @@ private fun Entry.toVaultItem(folderId: String?): VaultItem {
         type = if (isNote) VaultItemType.SecureNote else VaultItemType.Login,
         uris = url.takeIf { it.isNotBlank() }?.let { listOf(VaultUri(uri = it)) }.orEmpty(),
         totp = KdbxTotpCodec.toOtpAuthUri(fields.toOtpFields(), title = title, account = username),
-        fido2Credentials = listOfNotNull(passkey),
+        fido2Credentials = fields.passkeyCredentials(title),
         customFields = custom,
         folderId = folderId,
         // 2026-09-30 补入：KDBX 的 `<Times>`（此前**整块没读** ⇒ 详情页无从显示时间）。
@@ -167,16 +166,21 @@ private fun EntryFields.toOtpFields(): KdbxOtpFields {
     )
 }
 
-/** KeePass 字段 → 通行密钥字段集。 */
-private fun EntryFields.toPasskeyFields(): KdbxPasskeyFields = KdbxPasskeyFields(
-    username = this[KdbxPasskeyCodec.FIELD_USERNAME]?.content.orEmpty(),
-    privateKeyPem = this[KdbxPasskeyCodec.FIELD_PRIVATE_KEY]?.content.orEmpty(),
-    credentialId = this[KdbxPasskeyCodec.FIELD_CREDENTIAL_ID]?.content.orEmpty(),
-    userHandle = this[KdbxPasskeyCodec.FIELD_USER_HANDLE]?.content.orEmpty(),
-    relyingParty = this[KdbxPasskeyCodec.FIELD_RELYING_PARTY]?.content.orEmpty(),
-    flagBe = this[KdbxPasskeyCodec.FIELD_FLAG_BE]?.content.orEmpty(),
-    flagBs = this[KdbxPasskeyCodec.FIELD_FLAG_BS]?.content.orEmpty(),
-)
+/**
+ * KeePass 字段 → 通行密钥凭证**列表**（W2：支持 `_n` 后缀的多凭证）。
+ *
+ * 拆解走 [KdbxPasskeyCodec.groupPasskeyFields]：第 0 条不带后缀、其余按 `_n` 升序，
+ * 与 bw2keepass 落法一致 —— 此前只读得出第一条，
+ * 「一条登录挂 2 个通行密钥」会**静默丢凭证**（施工单 §1.3 末）。
+ */
+private fun EntryFields.passkeyCredentials(title: String): List<VaultFido2Credential> {
+    val raw = entries
+        .filter { (key, _) -> KdbxPasskeyCodec.isPasskeyFieldName(key) }
+        .associate { (key, value) -> key to value.content }
+    return KdbxPasskeyCodec.groupPasskeyFields(raw).mapNotNull { group ->
+        KdbxPasskeyCodec.toCredential(KdbxPasskeyCodec.fromFieldMap(group), title = title)
+    }
+}
 
 private const val DEFAULT_TITLE = "（未命名）"
 
