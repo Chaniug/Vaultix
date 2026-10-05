@@ -211,7 +211,8 @@ Vaultix 读侧**需要补**同样的拆解，否则「一条登录挂 2 个通�
 ## 6. 自包含验收清单（零上下文可执行）
 
 - [ ] W1：`applyCustomFields` 遇标准键（含大小写变体）跳过；`STANDARD_FIELD_KEYS` 用 `"Url"`
-- [ ] W2：`KdbxPasskeyCodec.fromCredential` 存在且覆盖 10 个键；多凭证带后缀；私钥 `Encrypted`
+- [x] W2：`KdbxPasskeyCodec.fromCredential` 存在且覆盖 10 个键；多凭证带后缀；私钥 `Encrypted`
+  （2026-10-06 落地 `569c398`，CI `37348461753` 全绿；⚠️ `FLAG_BE`/`FLAG_BS` 不参与往返保真，见下）
 - [ ] W3：TOTP 参数化往返全绿
 - [ ] W4：多 URL 往返仍是 N 条；`VPX_*` 可反向识别
 - [ ] W5：转换入口可跑通，密码用完即弃

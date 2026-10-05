@@ -167,6 +167,21 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 > 下次遇到先问清是注册还是认证，再看 `CP GET` / `CP CREATE` **哪条入口埋点**被触发
 > （这次两条都没触发）。详见 `03` 篇 **#163**。
 
+**JSON⇄KDBX 无损互转 · W2 通行密钥写回（2026-10-06 · 最新）**
+
+> 施工单 W2（= HANDOFF 第 5 项「通行密钥写回 KDBX」）已落地 `569c398`，CI `37348461753` 全绿
+> （detekt + 全仓编译 + 单测 + 编码门禁）。
+> - `KdbxPasskeyCodec` 补 `RP_NAME` / `USER_DISPLAY_NAME` / `CREATION_DATE`，字段集与
+>   bw2keepass 并集 = **10 键**；新增 `fromCredential(credential, index)`
+> - 多凭证：第 0 条不带后缀、第 n 条带 `_n`；`isPasskeyFieldName` 改**后缀感知**
+>   （否则第 2 条凭证会漏进自定义字段 ⇒ 详情页明文展示私钥 PEM）
+> - 读侧 `KdbxItemMapper.toPasskeyFields` → `passkeyCredentials` 返回**列表**
+>   （此前「一条登录挂 2 个通行密钥」只读得出第一条 = 静默丢凭证）
+> - 写侧 `KdbxItemWriter.applyPasskeys` 走**专属通道**（通行密钥区是保留区，不能进
+>   `applyCustomFields`）；私钥 PEM / credentialId / userHandle 强制 `Encrypted`
+> - ⚠️ **已知不保真**：`FLAG_BE` / `FLAG_BS` 领域模型无此二位 ⇒ 写回取默认值
+>   「可备份且已备份」，第三方写入的 `false` 会被改写。W6 真机需确认 XC/DX 无副作用。
+
 **JSON⇄KDBX 无损互转 · W1 落地（2026-10-05 后续接力）**
 
 > 施工单 `Docs/progress/json-kdbx-lossless-conversion.md` 的 W1（修现网数据毁 bug）已落地：

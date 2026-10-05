@@ -1,5 +1,16 @@
 # 下一步任务清单
 
+> ## ⚡【2026-10-06 已落地 · CI 全绿】JSON⇄KDBX 无损互转 · W2（通行密钥写回）
+>
+> 施工单 W2（= HANDOFF 第 5 项）落地 `569c398`，CI `37348461753` 全绿（detekt + 编译 + 单测 + 编码门禁）。
+> - `KdbxPasskeyCodec.fromCredential` 覆盖 **10 键**（补 `RP_NAME`/`USER_DISPLAY_NAME`/`CREATION_DATE`，
+>   与 bw2keepass 并集）；多凭证第 n 条带 `_n` 后缀，`isPasskeyFieldName` 后缀感知
+> - 读侧 `toPasskeyFields` → `passkeyCredentials` 返回**列表**（修「一条登录挂 2 个通行密钥只读出一个」）
+> - 写侧 `KdbxItemWriter.applyPasskeys` 专属通道；私钥 PEM / credentialId / userHandle 强制 `Encrypted`
+>   单测 `KdbxPasskeyWritebackTest`（既有 `KdbxPasskeyCodecTest` 未动）。
+> ⚠️ 已知不保真：`FLAG_BE`/`FLAG_BS` 领域模型无此二位 ⇒ 写回取默认值，W6 真机需确认。
+> ⏳ 下一步 = **W3（TOTP 往返验证）→ W4（`VPX_` + 多 URL）**；W5 入口 / W6 真机互操作待真机。
+
 > ## ⚡【2026-10-05 已落地 · 待 CI + 真机验】JSON⇄KDBX 无损互转 · W1（修现网数据毁 bug）
 >
 > 施工单 [`Docs/progress/json-kdbx-lossless-conversion.md`](../Docs/progress/json-kdbx-lossless-conversion.md)（W1–W6）。
