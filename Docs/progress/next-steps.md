@@ -1,5 +1,14 @@
 # 下一步任务清单
 
+> ## ⚡【2026-10-05 已落地 · 待 CI + 真机验】JSON⇄KDBX 无损互转 · W1（修现网数据毁 bug）
+>
+> 施工单 [`Docs/progress/json-kdbx-lossless-conversion.md`](../Docs/progress/json-kdbx-lossless-conversion.md)（W1–W6）。
+> W1（自定义字段 `Title`/`Url` 覆盖标准键 + URL 白名单大小写 `"URL"`→`"Url"`）已落地：
+> 新增 `KdbxFieldKeys` 单一真源（`isReserved` 大小写折叠判区）+ `KdbxItemWriter.applyCustomFields` 写回前 R1 跳过
+> + `KdbxItemMapper.customFieldsOf` 改走 `KdbxFieldKeys.isReserved`。单测 `KdbxFieldKeysTest` / `KdbxReservedFieldTest` 落到 `:data:kdbx` test 源集。
+> ⚠️ 沙箱无 Android SDK ⇒ 未本地编译，靠 CI（`:data:kdbx:testDebugUnitTest`）+ 真机验；`check_compile_smells` / `check_orphan_strings --gate` 全绿。
+> W2–W6（通行密钥写回 / TOTP 往返 / `VPX_` 多值 / 转换入口 / 真机互操作）待做。
+
 > ## 🔧【2026-10-02 完成（待真机验收）】双库健康度审计 · 批次 A —— 七个「报了成功、其实没有」的洞
 >
 > **起因**：不为缺功能，而是逐个追问「每个返回成功的点，凭什么算成功」。 ⇒ ISSUES **#153–#159**。

@@ -167,6 +167,19 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 > 下次遇到先问清是注册还是认证，再看 `CP GET` / `CP CREATE` **哪条入口埋点**被触发
 > （这次两条都没触发）。详见 `03` 篇 **#163**。
 
+**JSON⇄KDBX 无损互转 · W1 落地（2026-10-05 后续接力）**
+
+> 施工单 `Docs/progress/json-kdbx-lossless-conversion.md` 的 W1（修现网数据毁 bug）已落地：
+> 新增 `KdbxFieldKeys` 单一真源（标准五键 + `isReserved` 大小写折叠判区，合并标准/OTP/通行密钥）；
+> `KdbxItemMapper.customFieldsOf` 改走 `KdbxFieldKeys.isReserved`；`KdbxItemWriter.applyCustomFields`
+> 写回前对保留键 `return@forEach` 跳过（R1 铁律）—— 名为 `Title`/`title`/`Url` 的自定义字段
+> **不再覆盖**库名/URL（kotpass 大小写敏感，探针实测真覆盖）。
+> 白名单 `"URL"` → `"Url"`（与写侧 `BasicField.Url.key` 对齐，漏判的 URL 标准键已修）。
+> 单测 `KdbxFieldKeysTest` + `KdbxReservedFieldTest` 落到 `:data:kdbx` test 源集。
+> ⚠️ **沙箱无 Android SDK ⇒ 未本地编译**，靠 CI（`:data:kdbx:testDebugUnitTest`）+ 真机验；
+> 静态自检 `check_compile_smells` / `check_orphan_strings --gate` 全绿。
+> W2–W6 待做（通行密钥写回 / TOTP 往返 / VPX_ 多值 / 转换入口 / 真机互操作）。
+
 **Firefox Android 匹配不到密码条目 · 已修（2026-10-04 · 最新）**
 
 > 用户报「输入框能看到 vaultix 的提示，但密码条目无法匹配出来」。**日志一行定案**：

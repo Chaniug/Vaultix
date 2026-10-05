@@ -193,11 +193,7 @@ private const val DEFAULT_TITLE = "（未命名）"
  */
 private fun customFieldsOf(fields: EntryFields): List<VaultCustomField> =
     fields.entries
-        .filter { (key, _) ->
-            key !in STANDARD_FIELD_KEYS &&
-                !KdbxTotpCodec.isOtpFieldName(key) &&
-                !KdbxPasskeyCodec.isPasskeyFieldName(key)
-        }
+        .filter { (key, _) -> !KdbxFieldKeys.isReserved(key) }
         .mapNotNull { (key, value) ->
             if (key.isBlank()) {
                 null
@@ -210,5 +206,4 @@ private fun customFieldsOf(fields: EntryFields): List<VaultCustomField> =
             }
         }
 
-private val STANDARD_FIELD_KEYS = setOf("Title", "UserName", "Password", "URL", "Notes")
 

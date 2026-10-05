@@ -248,7 +248,7 @@ internal object KdbxItemWriter {
      * 删除判据是"**在 before 里有、在 after 里没有**"（真正的删除动作），
      * 而不是"不在 after 里"（那会把第三方工具写进来的、领域模型没读出来的键一起清掉）。
      */
-    private fun applyCustomFields(fields: EntryFields, item: VaultItem, before: VaultItem?): EntryFields {
+    internal fun applyCustomFields(fields: EntryFields, item: VaultItem, before: VaultItem?): EntryFields {
         val desired = item.customFields
             .filter { it.name.isNotBlank() }
             .associate { it.name to it }
@@ -257,11 +257,20 @@ internal object KdbxItemWriter {
         val removed = before?.customFields.orEmpty()
             .map { it.name }
             .filter { name -> name.isNotBlank() && name !in desired }
+        // ★ W1（JSON⇄KDBX 无损互转）：被 R1 跳过的保留键计数（命中即不写入，见下）。
+        var skippedReserved = 0
         var result = fields.minus(removed)
 
         // ② 增改：值或可见性任一变过才写（没变的不动，保持原表示）。
         val previousByName = before?.customFields.orEmpty().associateBy { it.name }
         desired.values.forEach { field ->
+            // R1 铁律（W1）：保留键（标准 / OTP / 通行密钥）不可被自定义字段覆盖。
+            // kotpass 键名大小写敏感，判区必须自己折叠大小写；名为 "Title"/"title" 的
+            // 自定义字段会直接覆盖库名（现网 bug，数据毁），命中即跳过，绝不写入。
+            if (KdbxFieldKeys.isReserved(field.name)) {
+                skippedReserved++
+                return@forEach
+            }
             val previous = previousByName[field.name]
             if (previous != null && previous.value == field.value && previous.type == field.type) {
                 return@forEach
