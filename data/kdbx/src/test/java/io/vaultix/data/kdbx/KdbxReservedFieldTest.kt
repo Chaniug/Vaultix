@@ -43,7 +43,10 @@ class KdbxReservedFieldTest {
         val existing = EntryFields.createDefault() + (BasicField.Url.key to EntryValue.Plain("http://orig.example"))
         val result = KdbxItemWriter.applyCustomFields(
             existing,
-            item("kdbx-entry:00000000-0000-0000-0000-000000000002", listOf(VaultCustomField("Url", "http://evil.example"))),
+            item(
+                "kdbx-entry:00000000-0000-0000-0000-000000000002",
+                listOf(VaultCustomField("Url", "http://evil.example")),
+            ),
             null,
         )
         assertThat(result.url?.content).isEqualTo("http://orig.example")
