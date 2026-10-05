@@ -33,6 +33,7 @@ import io.vaultix.model.CustomFieldType
 import io.vaultix.model.VaultFolder
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultCustomField
+import io.vaultix.model.VaultFido2Credential
 import io.vaultix.model.VaultItemType
 import io.vaultix.model.VaultUri
 import java.util.UUID
