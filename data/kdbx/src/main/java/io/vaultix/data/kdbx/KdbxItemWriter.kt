@@ -257,8 +257,6 @@ internal object KdbxItemWriter {
         val removed = before?.customFields.orEmpty()
             .map { it.name }
             .filter { name -> name.isNotBlank() && name !in desired }
-        // ★ W1（JSON⇄KDBX 无损互转）：被 R1 跳过的保留键计数（命中即不写入，见下）。
-        var skippedReserved = 0
         var result = fields.minus(removed)
 
         // ② 增改：值或可见性任一变过才写（没变的不动，保持原表示）。
@@ -268,7 +266,6 @@ internal object KdbxItemWriter {
             // kotpass 键名大小写敏感，判区必须自己折叠大小写；名为 "Title"/"title" 的
             // 自定义字段会直接覆盖库名（现网 bug，数据毁），命中即跳过，绝不写入。
             if (KdbxFieldKeys.isReserved(field.name)) {
-                skippedReserved++
                 return@forEach
             }
             val previous = previousByName[field.name]

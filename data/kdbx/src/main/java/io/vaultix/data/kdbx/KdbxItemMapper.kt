@@ -205,5 +205,3 @@ private fun customFieldsOf(fields: EntryFields): List<VaultCustomField> =
                 )
             }
         }
-
-
