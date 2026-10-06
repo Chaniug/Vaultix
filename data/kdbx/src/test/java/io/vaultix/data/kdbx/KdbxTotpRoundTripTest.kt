@@ -35,6 +35,7 @@ package io.vaultix.data.kdbx
 import app.keemobile.kotpass.cryptography.EncryptedValue
 import app.keemobile.kotpass.database.Credentials
 import app.keemobile.kotpass.database.KeePassDatabase
+import app.keemobile.kotpass.database.getEntry
 import app.keemobile.kotpass.models.Meta
 import com.google.common.truth.Truth.assertThat
 import com.google.common.truth.Truth.assertWithMessage
