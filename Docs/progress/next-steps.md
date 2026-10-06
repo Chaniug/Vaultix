@@ -1,5 +1,27 @@
 # 下一步任务清单
 
+> ## ⚡【2026-10-06 已落地 · CI 全绿】JSON⇄KDBX 无损互转 · W3（TOTP 往返验证）
+>
+> 施工单 W3 落地 `4ea40f5` + `15ff84b`，CI `37444254405` 全绿（detekt + 编译 + 单测 + 编码门禁）。
+> **结论：往返本来就是通的，`KdbxTotpCodec` 一行未改** —— 新增
+> `KdbxTotpRoundTripTest`（9 条用例 / 11 种otpauth 形态）把「从未验证过」变成「已钉死」。
+> - 11 形态主判据：SHA1/256/512 × 6/8 位 × 15/30/60 秒step × HOTP counter × Steam × Yandex × label 含空格
+> - Steam base64 密钥（`+/=` 三类 URL 不安全字符）、HOTP `counter=42`、`digits=8`/`period=60` 不被默认兜底
+> - 幂等（未改 TOTP 不重写）、otp 不泄漏进 `customFields`、清空会真删字段
+>
+> **断的是 `OtpUriParser.parse` 之后的 `TotpConfig` 各分量，不是字面串** —— 两种合法写法之间
+> 比字符串会误报，真正的数据丢失反而可能放过。**纯新增测试，未动任何生产代码。**
+>
+> ⚠️ 过程中两次返工的教训（都写进了提交信息）：
+> ① 沙箱无 SDK 时**不能凭记忆改解析语义** —— 我一度想"修"位置式 `TOTP Settings` 里的
+>    HOTP counter，但既无 KeePass 格式佐证、既有测试也明确断言 `counter == 0L`（有意设计），
+>    遂回退。**没有证据就不改语义。**
+> ② **CI 的对勾不等于单测通过**：单测步骤标了 non-blocking，`37443116170` 显示 `✓ main`
+>    而 `:data:kdbx:compileDebugUnitTestKotlin` 其实 FAILED（漏 `getEntry` 扩展的 import）。
+>    ⇒ 判定必须落到具体任务行。
+>
+> ⏳ 下一步 = **W4（`VPX_` 工具字段 + 多 URL 降级）**；W5 入口 / W6 真机互操作待真机。
+
 > ## ⚡【2026-10-06 已落地 · CI 全绿】JSON⇄KDBX 无损互转 · W2（通行密钥写回）
 >
 > 施工单 W2（= HANDOFF 第 5 项）落地 `569c398`，CI `37348461753` 全绿（detekt + 编译 + 单测 + 编码门禁）。

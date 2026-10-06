@@ -145,6 +145,16 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 
 ## 9. 当前状态与下一批（接力起手式）
 
+> ⚡ **2026-10-06：JSON⇄KDBX 无损互转 W1 + W2 + W3 已落地，CI 全绿**（`101fe0c` / `569c398`
+> / `4ea40f5`+`15ff84b`，最新 CI `37444254405`）。W3 结论 = **TOTP 往返本来就通**，
+> 新增 `KdbxTotpRoundTripTest` 9 条/11形态钉死，`KdbxTotpCodec` 一行未改。
+> **下一步 = W4（`VPX_` 工具字段 + 多 URL 降级）**，W5 入口 / W6 真机互操作待真机。
+> 🔴 **CI 判定纪律（见 SESSION §九）**：单测步骤标了 **non-blocking**，
+> 所以「`gh run` 显示 ✓」**不代表单测通过** —— 必须确认
+> `:data:kdbx:testDebugUnitTest` 那一行是真实执行（非 FROM-CACHE）且无 FAILED。
+> 🔴 **沙箱无 Android SDK 的两条铁律**：① **符号存在性要实测**（下载 jar 用 `javap` 看，
+> 别凭印象写 API）；② **没有证据不改解析语义** —— 缺的不是胆子而是证据。
+
 > ⚠️ **逐轮历史不在这里维护** —— 与本文件早期做法不同：历史只保留一处，避免两处不同步。
 > 最新待办 → [`Docs/progress/next-steps.md`](../Docs/progress/next-steps.md)（最新在顶部）·
 > 逐轮流水 → `.ai/SESSION-YYYY-MM-DD.md` · 坑 → `.ai/ISSUES.md`（索引，正文在 `issues/`）·
