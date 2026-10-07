@@ -44,6 +44,18 @@ internal object KdbxFieldKeys {
     /**
      * 该键名是否属于「保留区」（标准 / OTP / 通行密钥），大小写折叠后判定。
      * 命中即**不可作为自定义字段写回**（R1）—— 见文件头说明。
+     *
+     * ⚠️ `VPX_` 工具字段（W4）**刻意不在此列**，但这**不是漏加**，改前先读这段：
+     *   - 判区只管**写入方向的冲突**（`applyCustomFields` 别把用户字段写进标准键）。
+     *     `VPX_URL_1` 与用户自己起的名字 `Url2` 靠**前缀**就分得开，不靠这张白名单；
+     *     把 `VPX_` 加进来会让 `applyCustomFields` 跳过它，
+     *     而它**根本不是自定义字段**，是 [KdbxToolFields] 的产物。
+     *   - 读方向的排除是另一套判据：`KdbxItemMapper.customFieldsOf` 里额外判
+     *     `!KdbxToolFields.isToolFieldName(key)` —— 因为同一个 `VPX_URL_1`
+     *     已经在 `uris` 里出现一次（详见那里的「两通道抢同一个键」说明）。
+     *
+     * 真正需要挡的是「同一份信息在两处出现」（如 `KPEX_*` 私钥已在
+     * `fido2Credentials` 里，再以自定义字段出现就是明文泄密）。
      */
     fun isReserved(name: String): Boolean {
         if (name.isBlank()) return false

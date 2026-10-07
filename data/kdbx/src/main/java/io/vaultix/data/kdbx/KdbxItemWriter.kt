@@ -190,12 +190,80 @@ internal object KdbxItemWriter {
         fields = fields + (BasicField.UserName.key to EntryValue.Plain(item.username))
         fields = fields + (BasicField.Password.key to passwordValue(existing, item.password))
         fields = fields + (BasicField.Notes.key to EntryValue.Plain(item.notes))
-        // KDBX 只有**一个** URL 字段（读方向也只映射成一条 VaultUri）⇒ 取第一条。
-        // 多出来的 URL 是无处可存的，由调用方在 UI 层限制（见 KdbxItemWriter 的文件头说明）。
-        fields = fields + (BasicField.Url.key to EntryValue.Plain(item.uris.firstOrNull()?.uri.orEmpty()))
+        fields = applyUris(fields, item = item, before = before)
         fields = applyTotp(fields, item = item, before = before)
         fields = applyPasskeys(fields, item = item, before = before)
         return applyCustomFields(fields, item = item, before = before)
+    }
+
+    /**
+     * URI 的**无损降级**（W4）：第 1 条进标准 `Url`，其余进 `VPX_URL_n`。
+     *
+     * ## 为什么不能只取第一条
+     *
+     * KDBX 的 `Url` 字段**只装一条**。此前 `applyDomainFields` 直接取
+     * `item.uris.firstOrNull()`，多出来的 URL **在写回时凭空消失** ——
+     * 一条挂 3 个网址的登录，改一次标题就被抹掉 2 个网址，且无任何提示。
+     *
+     * ## 为什么应用 URI（`androidapp://`）要另走字段
+     *
+     * 把 `androidapp://com.example` 塞进标准 `Url`，KeePassXC/DX 会**当域名去匹配**
+     * （永远匹配不上）⇒ 自动填充对 Android 应用**整体失效**。KeePassDX 的做法是
+     * 写进 `App Package Name` 字段；Bastion 读的也正是这个键（GPL-3.0，
+     * `reference/bastion/.../KeePassKdbxService.kt:3779`，兼容 `PackageName` 等别名）。
+     *
+     * ## 删除判据
+     *
+     * 沿用另两处的「before 有、after 没有才是真删除」：清掉**本次不再产生**的
+     * `VPX_URL_n` / `VPX_MATCH_n`，但第三方工具写进来的、我们不产出的工具字段一律不动。
+     * ⚠️ 下标重排要**整段替换**（见下）—— 用户把 3 条 URL 删到 2 条时，
+     * 旧 `VPX_URL_2` 会变成新 `VPX_URL_1` 的值，若只按键名增删，
+     * 留下的会是**错位的旧值**（比丢数据更坏：网址还在，但对应关系错了）。
+     */
+    internal fun applyUris(
+        fields: EntryFields,
+        item: VaultItem,
+        before: VaultItem?,
+    ): EntryFields {
+        val usable = item.uris.filter { it.uri.isNotBlank() }
+        val appFields = KdbxToolFields.appFieldsOf(usable)
+        // 标准 Url 只收**非应用** URI；应用 URI 走 App Package Name 字段。
+        val webUris = usable.filterNot { KdbxToolFields.isAndroidAppUri(it.uri) }
+        val desired = LinkedHashMap<String, String>()
+        desired.putAll(KdbxToolFields.fromUris(usable))
+        desired.putAll(appFields)
+
+        // ① 清：上一轮产生、本轮不再需要的工具键（含应用字段对）。
+        //    ⚠️ 整段删除而不是按键名增删 —— 下标重排时旧 `VPX_URL_2` 的值
+        //    会变成新 `VPX_URL_1`，按键名删会留下**错位的旧值**。
+        var result = fields.minus(previousToolKeys(before).filter { key -> key !in desired })
+
+        // ② 标准 Url：值未变则**一个字都不动**（同 applyTotp 的纪律）。
+        val primary = webUris.firstOrNull()?.uri.orEmpty()
+        if (result[BasicField.Url.key]?.content != primary) {
+            result = result + (BasicField.Url.key to EntryValue.Plain(primary))
+        }
+
+        // ③ 增改：值确实变了才写。
+        desired.forEach { (key, value) ->
+            if (result[key]?.content == value) return@forEach
+            result = result + (key to EntryValue.Plain(value))
+        }
+        return result
+    }
+
+    /**
+     * 上一轮（`before`）会产出的全部工具区键名（`VPX_URL_n` / `VPX_MATCH_n` / 应用字段对）。
+     *
+     * 全部走 [KdbxToolFields] 的两个产出函数重算一遍 —— **不另抄一份键名清单**，
+     * 抄一份就会与写侧漂移（那正是 W1 立`KdbxFieldKeys` 单一真源要治的病）。
+     */
+    private fun previousToolKeys(before: VaultItem?): List<String> {
+        if (before == null) return emptyList()
+        return LinkedHashSet<String>().apply {
+            addAll(KdbxToolFields.fromUris(before.uris).keys)
+            addAll(KdbxToolFields.appFieldsOf(before.uris).keys)
+        }.toList()
     }
 
     /**

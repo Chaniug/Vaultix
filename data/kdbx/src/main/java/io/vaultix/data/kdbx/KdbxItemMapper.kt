@@ -110,6 +110,9 @@ private fun Entry.toVaultItem(folderId: String?): VaultItem {
     val url = fields.url?.content.orEmpty()
     val custom = customFieldsOf(fields)
     val isNote = username.isBlank() && password.isBlank() && notes.isNotBlank()
+    // URI（W4）：标准 `Url` + `VPX_URL_n` 合回一个列表。此前只读第一条，
+    // 「一条登录挂 3 个网址」在KDBX 侧会**只显示一个**（往返即丢数据）。
+    val uris = fields.allUris(url)
     // 通行密钥（KeePassDX 的 KPEX_PASSKEY_* 约定，见 KdbxPasskeyCodec）：映射为领域凭证后
     // 与 Bitwarden 侧同构 —— 「通行密钥」页 / 设置页统计 / 凭据提供商三条链路对 KDBX 库天然可用。
     return VaultItem(
@@ -119,7 +122,7 @@ private fun Entry.toVaultItem(folderId: String?): VaultItem {
         password = password,
         notes = notes,
         type = if (isNote) VaultItemType.SecureNote else VaultItemType.Login,
-        uris = url.takeIf { it.isNotBlank() }?.let { listOf(VaultUri(uri = it)) }.orEmpty(),
+        uris = uris,
         totp = KdbxTotpCodec.toOtpAuthUri(fields.toOtpFields(), title = title, account = username),
         fido2Credentials = fields.passkeyCredentials(title),
         customFields = custom,
@@ -186,7 +189,32 @@ private fun EntryFields.passkeyCredentials(title: String): List<VaultFido2Creden
 private const val DEFAULT_TITLE = "（未命名）"
 
 /**
- * 自定义字段：除 5 个标准字段、OTP 相关字段、通行密钥字段外的全部字段。
+ * 全部 URI（W4 读方向）：标准 `Url` + `VPX_URL_1..n` + 包名字段合回一个列表。
+ *
+ * ⚠️ 三条来源的**顺序**即写侧的对称：标准 `Url` 在前、`VPX_URL_1..n` 按下标升序在后、
+ *   应用 URI 追加在末。顺序变了不会报错，但自动填充会按用户看到的第一条去匹配
+ *   ⇒ **"最可能对的那个"必须是第一条**，所以顺序本身是数据的一部分。
+ *
+ * ⚠️ 应用 URI 只在**合出来的列表里一条都没有**时才补（判据是 `none { isAndroidAppUri }`，
+ *   不是"标准 `Url` 是否为空"）—— 用户手改过条目、`VPX_URL_1` 里就是一条应用 URI 时，
+ *   两个判据会给出不同答案，而"补出一条重复的"症状是详情页同一个包名出现两次。
+ *
+ * @param standardUrl 标准 `Url` 字段的明文（可能为空）。
+ */
+private fun EntryFields.allUris(standardUrl: String): List<VaultUri> {
+    val all = LinkedHashMap<String, String>()
+    entries.forEach { (key, value) -> all[key] = value.content }
+    val tool = all.filterKeys { KdbxToolFields.isToolFieldName(it) }
+    val out = ArrayList(KdbxToolFields.toUris(standardUrl, tool))
+    val appUri = KdbxToolFields.appUriOf(all)
+    if (appUri != null && out.none { KdbxToolFields.isAndroidAppUri(it.uri) }) {
+        out.add(VaultUri(uri = appUri))
+    }
+    return out
+}
+
+/**
+ * 自定义字段：除 5 个标准字段、OTP / 通行密钥 / `VPX_` 工具字段外的全部字段。
  *
  * 受保护（`Protected="True"`）的字段映射为 [CustomFieldType.Hidden]，其余为 Text
  * ——与 Bitwarden 的 `fields[].type` 语义对齐（Hidden 在 UI 上默认掩码）。
@@ -195,10 +223,23 @@ private const val DEFAULT_TITLE = "（未命名）"
  * （`VaultItem.totp` / `fido2Credentials`），再以自定义字段出现一次就会出现
  * 「详情页明文展示私钥 PEM / TOTP 密钥」这种既重复又泄密的展示。
  * 排除判定统一走两个码本的 `isXxxFieldName`，不在本文件再抄一份字段名清单（抄一份就会漂移）。
+ *
+ * ⚠️⚠️ `VPX_` 工具字段（W4）**同样排除**，理由比前两者更强一层：
+ *   1. **重复展示**：`VPX_URL_1` 的值同时进 `uris` 和 `customFields` ⇒ 详情页
+ *      同一个网址出现两次（一次在"网址"区、一次在"自定义字段"区）。
+ *   2. **两个写通道抢同一个键**：[KdbxItemWriter.applyUris] 产出 `VPX_URL_1`，
+ *      [KdbxItemWriter.applyCustomFields] 若也把它当自定义字段写一遍，两条通道
+ *      各自判"值没变就不动"——**谁先跑谁说了算**，后跑的还会用错误的类型
+ *      （Text / Hidden）覆盖前一个。⚠️ 而 R1 铁律只挡"标准/OTP/通行密钥"，
+ *      挡不住工具字段自己撞自己。
+ *   ⇒ 与其堵两条通道，不如让 `customFields` 只承载"用户自己的字段"，
+ *      工具字段一律走 [allUris] / `VPX_BW_*` 的专属旁路。
+ *   （用户仍然能在 KeePassXC / KDBX 编辑器里看到 `VPX_URL_1` —— 黑箱的是
+ *   Vaultix 自己的 UI，不是用户的库文件。W1 里"工具字段要可见"的诉求指后者。）
  */
 private fun customFieldsOf(fields: EntryFields): List<VaultCustomField> =
     fields.entries
-        .filter { (key, _) -> !KdbxFieldKeys.isReserved(key) }
+        .filter { (key, _) -> !KdbxFieldKeys.isReserved(key) && !KdbxToolFields.isToolFieldName(key) }
         .mapNotNull { (key, value) ->
             if (key.isBlank()) {
                 null
