@@ -47,9 +47,13 @@ import org.junit.Test
  *
  * ## 每条用例对应一个具体的"会静默坏事"
  *
+ * ⚠️ 表里带 ⚠️ 的几行**不是假设，是本批次真实踩过的**（CI run 37610581524 抓到）：
+ *
  * | 用例 | 不这么做会怎样 |
  * |---|---|
  * | 3 条 URI 往返仍是 3 条且顺序不变 | 少掉的网址无声消失；顺序变了自动填充会挑错条目 |
+ * | ⚠️ 裸包名能读回应用 URI | 写侧存的是裸包名，读侧按 URI 解析 ⇒ **恒为 null**，应用条目整体消失且日志无错 |
+ * | ⚠️ 只有第 0 条有档位时也存得下| 标准 `Url` 不装匹配规则 ⇒ **第 0 条的档位静默退回默认** |
  * | `VPX_MATCH_n` 存回匹配档位 | 自动填充档位退回默认，用户不知为何匹配变松/变严 |
  * | `androidapp://` 落 `App Package Name` | KeePassXC 当域名匹配 ⇒ **Android 应用自动填充整体失效** |
  * | 标准 `Url` 不被 `androidapp://` 污染 | 同上，且详情页显示一个匹配不上的"网址" |
@@ -154,6 +158,44 @@ class KdbxToolFieldsRoundTripTest {
         assertThat(uris.map { it.uri }).containsExactly("https://a.example", "https://b.example").inOrder()
         // 认不出⇒null（基域匹配），绝不能瞎猜一个档位填上。
         assertThat(uris[1].match).isNull()
+    }
+
+    @Test
+    fun `只有第 0 条有匹配档位时也存得下来`() {
+        // ⚠️ 回归：曾只给 `VPX_URL_n`（n≥1）配`VPX_MATCH_n`，
+        // 而标准 `Url` 只装 URI 本身、不装匹配规则 ⇒ **第 0 条的档位无处可存**。
+        // 症状：那条网址的匹配档位静默退回默认基域匹配，用户发现自动填充
+        // "匹配得比之前松"，却完全无从追溯。
+        val after = roundTrip(
+            itemWithUris(listOf(VaultUri(uri = "https://a.example", match = UriMatch.Exact))),
+        )
+
+        assertThat(after.uris.single().match).isEqualTo(UriMatch.Exact)
+    }
+
+    @Test
+    fun `裸包名字段值能被读回应用 URI`() {
+        // ⚠️ 回归：写侧 `App Package Name` 存的是**裸包名**（KeePassDX 约定），
+        //   而 `androidAppPackage` 只认 `androidapp://` 开头 ⇒ 曾导致读回恒为 null。
+        // 症状极具迷惑性：写侧断言字段存在（绿），读侧一条应用 URI 都没有，
+        // 日志无任何错误，看起来像"库里本来就没有"。
+        val fields = EntryFields.createDefault().plus(
+            KdbxToolFields.APP_PACKAGE to EntryValue.Plain("com.example.mail"),
+        )
+
+        assertThat(KdbxToolFields.appUriOf(fields.asStringMap()))
+            .isEqualTo("androidapp://com.example.mail")
+    }
+
+    @Test
+    fun `字段值写成完整 URI 形态也能读回`() {
+        // 有的工具（与KDBX 交互的脚本）会直接写完整 URI，认不出就等于丢条目。
+        val fields = EntryFields.createDefault().plus(
+            KdbxToolFields.APP_PACKAGE to EntryValue.Plain("androidapp://com.example.mail"),
+        )
+
+        assertThat(KdbxToolFields.appUriOf(fields.asStringMap()))
+            .isEqualTo("androidapp://com.example.mail")
     }
 
     // ---------------------------------------------------------------- 应用 URI

@@ -143,6 +143,35 @@ internal object KdbxToolFields {
         return pkg.takeIf { it.isNotBlank() && it.contains('.') }
     }
 
+    /**
+     * 包名字段的**值** → 归一化包名；认不出返回 null。
+     *
+     * ##⚠️ 为什么需要它（不能直接调[androidAppPackage]）
+     *
+     * [APP_PACKAGE] 字段里存的是**裸包名**（`com.example.mail`），不是完整 URI ——
+     * 这是 KeePassDX 的约定，Bastion 读的也是裸包名。
+     * 而 [androidAppPackage] 只认 `androidapp://` 开头 ⇒ 直接拿它读字段**恒为 null**。
+     *
+     * 症状极具迷惑性：写侧明明写进去了（单元测试可以断言字段存在），
+     * 读侧却一条应用 URI 都读不回来 ⇒「应用条目整体消失」，
+     * 而日志里没有任何错误，看起来像"库里本来就没有"。
+     *
+     * ⇒ 字段值有两种可能（**裸包名** / **完整 URI**，有的工具写后者），两种都认。
+     */
+    fun normalizeAppPackage(raw: String): String? {
+        val trimmed = raw.trim()
+        if (trimmed.isEmpty()) return null
+        // ① 已是完整 URI（有的工具这么写）。
+        androidAppPackage(trimmed)?.let { return it }
+        // ② 裸包名：去掉可能带的路径/参数段，再验一次合法性。
+        val bare = trimmed
+            .substringBefore('/')
+            .substringBefore('?')
+            .substringBefore('#')
+            .trim()
+        return bare.takeIf { it.isNotBlank() && it.contains('.') && !it.contains(' ') }
+    }
+
     /** 是否为 Android 应用 URI（`androidapp://` / `android://` / `android-app://`）。 */
     fun isAndroidAppUri(uri: String): Boolean = androidAppPackage(uri) != null
 
@@ -161,19 +190,24 @@ internal object KdbxToolFields {
      */
     fun fromUris(uris: List<VaultUri>): Map<String, String> {
         val extra = usableWebUris(uris)
-        if (extra.size < 2) return emptyMap()
+        if (extra.isEmpty()) return emptyMap()
         val out = LinkedHashMap<String, String>()
-        // ⚠️ 下标从 **1** 起：第 0 条归标准 `Url`，本表只承接"第 2 条起"。
+        // ⚠️ 下标从 **1** 起：第 0 条归标准 `Url`，本表只承接"第 2 条起"的 URI 值。
         extra.drop(1).forEachIndexed { offset, uri ->
             val n = offset + 1
             out["$URL_PREFIX$n"] = uri.uri
             // ⚠️ match 取自**同一个过滤后对象**（`uri`），不能回头去索引原始 `uris` ——
             //    滤掉空串 / 应用 URI 后两个列表下标已错位，那样取到的是**另一条 URI 的规则**，
             //    症状是「自动填充的匹配档位莫名变了」，几乎无法归因。
-            uri.match?.let { match ->
-                out["$MATCH_PREFIX$n"] = match.name
-            }
+            uri.match?.let { match -> out["$MATCH_PREFIX$n"] = match.name }
         }
+        // ⚠️⚠️ 第 0 条的 match 必须存（`VPX_MATCH_0`），否则它**无处可存**：
+        //   标准 `Url` 只装 URI 本身、不装匹配规则，而 `VPX_URL_*` 从下标 1 起——
+        //   第 0 条的档位会**静默丢失**（症状：那条网址的匹配档位退回默认基域匹配，
+        //   用户会发现自动填充"匹配得比之前松"，却完全无从追溯）。
+        //   ⇒ **不论有几条都存**：单条时它是唯一那条的规则，两条时它是第 1 条的规则。
+        //   读侧 `toUris` 用同一个 `MATCH_PREFIX + 0` 取回，两侧下标口径一致。
+        extra.first().match?.let { match -> out["${MATCH_PREFIX}0"] = match.name }
         return out
     }
 
@@ -198,7 +232,11 @@ internal object KdbxToolFields {
      */
     fun toUris(standardUrl: String, toolFields: Map<String, String>): List<VaultUri> {
         val out = ArrayList<VaultUri>()
-        standardUrl.trim().takeIf { it.isNotEmpty() }?.let { out.add(VaultUri(uri = it)) }
+        // ⚠️ 标准 `Url` 那条也要取回 `VPX_MATCH_0` —— 它在 KDBX 里没有字段装匹配规则，
+        //    只能借工具字段存（见 [fromUris]）。漏这一步 ⇒ 第 0 条的档位永远丢。
+        standardUrl.trim().takeIf { it.isNotEmpty() }?.let {
+            out.add(VaultUri(uri = it, match = matchOf(toolFields, 0)))
+        }
         extras(toolFields).forEach { (n, uri) ->
             out.add(VaultUri(uri = uri, match = matchOf(toolFields, n)))
         }
@@ -255,7 +293,9 @@ internal object KdbxToolFields {
             .firstOrNull { (key, _) -> APP_PACKAGE_KEYS.any { key.equals(it, ignoreCase = true) } }
             ?.value
             .orEmpty()
-        return androidAppPackage(raw)?.let { "androidapp://$it" }
+        // ⚠️ 必须走 normalizeAppPackage（认裸包名），不能走 androidAppPackage（只认 URI）——
+        //    字段里存的就是裸包名，用错函数 ⇒ 读回恒为 null（CI run 37610581524 实测）。
+        return normalizeAppPackage(raw)?.let { "androidapp://$it" }
     }
 
     /**
