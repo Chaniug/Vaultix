@@ -237,7 +237,7 @@ Vaultix 读侧**需要补**同样的拆解，否则「一条登录挂 2 个通�
   ⚠️ 两次返工：① 曾试图"修"位置式 `TOTP Settings` 的 HOTP counter，但既无 KeePass 格式佐证、
   既有测试亦明确断言 `counter == 0L`（有意设计）⇒ **没有证据就不改语义**，已回退；
   ② CI 对勾 ≠ 单测通过（该步骤 non-blocking，`37443116170` 显示绿而单测编译其实 FAILED））
-- [ ] W4：多 URL 往返仍是 N 条；`VPX_*` 可反向识别
+- [x] W4：多 URL 往返仍是 N 条；`VPX_*` 可反向识别（`d141538`，CI `37612405103` 141 例零失败）
 - [ ] W5：转换入口可跑通，密码用完即弃
 - [ ] W6：VC/DX 真机打开产出文件，条目/TOTP/通行密钥/多 URL 全对
 - [ ] 门禁三关**分开单跑**全绿：detekt → `:app:compileFullDebugKotlin` → `:app:testFullDebugUnitTest`

@@ -145,15 +145,24 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 
 ## 9. 当前状态与下一批（接力起手式）
 
-> ⚡ **2026-10-06：JSON⇄KDBX 无损互转 W1 + W2 + W3 已落地，CI 全绿**（`101fe0c` / `569c398`
-> / `4ea40f5`+`15ff84b`，最新 CI `37444254405`）。W3 结论 = **TOTP 往返本来就通**，
-> 新增 `KdbxTotpRoundTripTest` 9 条/11形态钉死，`KdbxTotpCodec` 一行未改。
-> **下一步 = W4（`VPX_` 工具字段 + 多 URL 降级）**，W5 入口 / W6 真机互操作待真机。
-> 🔴 **CI 判定纪律（见 SESSION §九）**：单测步骤标了 **non-blocking**，
+> ⚡ **2026-10-07：JSON⇄KDBX 无损互转 W1 + W2 + W3 + W4 已落地**（`101fe0c` / `569c398`
+> / `4ea40f5`+`15ff84b` / `d141538`）。W3 结论 = **TOTP 往返本来就通**；
+> W4 新增 `KdbxToolFields`（`VPX_` 工具区单一真源）+ `KdbxToolFieldsRoundTripTest`27 例。
+> W4 之前多 URL 是**静默丢数据**（取 `uris.firstOrNull()`，改标题就抹掉其余网址）。
+> **下一步 = W5**（转换入口 UI + 转换器接口本体），W6 真机互操作待真机。
+> 🔴 **CI 判定纪律（见 SESSION §九、§十一）**：单测步骤标了 **non-blocking**，
 > 所以「`gh run` 显示 ✓」**不代表单测通过** —— 必须确认
 > `:data:kdbx:testDebugUnitTest` 那一行是真实执行（非 FROM-CACHE）且无 FAILED。
-> 🔴 **沙箱无 Android SDK 的两条铁律**：① **符号存在性要实测**（下载 jar 用 `javap` 看，
-> 别凭印象写 API）；② **没有证据不改解析语义** —— 缺的不是胆子而是证据。
+> **本轮已因此被"假绿"骗过两次**（`37609359341` 编译失败、`37610581524` 6 例断言失败，
+> 两次顶层都是 ✓）。取失败详情用 `gh api .../artifacts` 里的 `debug-unit-test-reports`
+> （比翻日志快，能直接看到 expected/actual）。
+> 🔴 **沙箱无 Android SDK 的三条铁律**：① **符号存在性要实测**（下载 jar 用 `javap` 看，
+> 别凭印象写API）；② **没有证据不改解析语义** —— 缺的不是胆子而是证据；
+> ③ **语法糖能不能用看 Kotlin 的运算符约定，不看 JVM 有没有那个方法** ——
+> `EntryFields` 有 `put`（javap 可见）但 `apply { this[k]=v }` 照样编译失败。
+> 🔴 **往返型缺陷只能靠"写→读"完整往返抓出来**（见 SESSION §十一 bug 1）：
+> 写侧断言"字段写进去了"、读侧断言"值读回来了"，两条都成立才叫往返 ——
+> 只验一侧的缺陷（自己写自己读、格式不对称）**两侧各自都对、接起来不对**。
 
 > ⚠️ **逐轮历史不在这里维护** —— 与本文件早期做法不同：历史只保留一处，避免两处不同步。
 > 最新待办 → [`Docs/progress/next-steps.md`](../Docs/progress/next-steps.md)（最新在顶部）·
