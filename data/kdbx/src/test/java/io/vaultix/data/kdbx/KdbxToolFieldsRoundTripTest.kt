@@ -37,6 +37,14 @@ import org.junit.Test
  *
  * ⇒ 主判据一律是**数量 + 内容 + 顺序**三者同时相等。
  *
+ * ## ⚠️ 造字段只能走 `plus`，不能写 `fields[k] = v`
+ *
+ * `[EntryFields]` 虽然实现了 `Map`（`javap` 可见 `put` / `get`），但 Kotlin 侧
+ * **没有 `set` 运算符**，在 `apply { }` 里写 `this[k] = v` 会编译失败：
+ * `No 'set' operator method providing array access`（CI run 37609359341 实测5 处）。
+ * ⇒ 一律用 `EntryFields.createDefault().plus("K" to EntryValue.Plain("V"))`
+ *   （本仓库既有测试 `KdbxReadPathTest` 也是这个写法）。
+ *
  * ## 每条用例对应一个具体的"会静默坏事"
  *
  * | 用例 | 不这么做会怎样 |
@@ -135,12 +143,11 @@ class KdbxToolFieldsRoundTripTest {
 
     @Test
     fun `VPX_MATCH_n 认不出的值按未知处理，不抛也不乱认`() {
-        val fields = EntryFields.createDefault().apply {
-            this[BasicField.Url.key] = EntryValue.Plain("https://a.example")
-            this["VPX_URL_1"] = EntryValue.Plain("https://b.example")
+        val fields = EntryFields.createDefault()
+            .plus(BasicField.Url.key to EntryValue.Plain("https://a.example"))
+            .plus("VPX_URL_1" to EntryValue.Plain("https://b.example"))
             // 模拟别的工具写了个我们不认识的档位（或用户手改了）。
-            this["VPX_MATCH_1"] = EntryValue.Plain("FuzzySomehow")
-        }
+            .plus("VPX_MATCH_1" to EntryValue.Plain("FuzzySomehow"))
 
         val uris = KdbxToolFields.toUris(fields[BasicField.Url.key]!!.content, fields.asStringMap())
 
@@ -239,9 +246,7 @@ class KdbxToolFieldsRoundTripTest {
     fun `第三方写的别名键也能读出应用 URI`() {
         // kotpass 的`EntryFields.get(String)` 是普通 Map.get ⇒ **大小写敏感**（javap 已核实）。
         // 所以只认自己写的那一个键名，读别人的库就会丢应用条目。
-        val fields = EntryFields.createDefault().apply {
-            this["AppPackageName"] = EntryValue.Plain("com.thirdparty.app")
-        }
+        val fields = EntryFields.createDefault().plus("AppPackageName" to EntryValue.Plain("com.thirdparty.app"))
 
         val uri = KdbxToolFields.appUriOf(fields.asStringMap())
 
@@ -250,9 +255,7 @@ class KdbxToolFieldsRoundTripTest {
 
     @Test
     fun `别名键的大小写不同也能读出`() {
-        val fields = EntryFields.createDefault().apply {
-            this["apppackagename"] = EntryValue.Plain("com.thirdparty.app")
-        }
+        val fields = EntryFields.createDefault().plus("apppackagename" to EntryValue.Plain("com.thirdparty.app"))
 
         val uri = KdbxToolFields.appUriOf(fields.asStringMap())
 

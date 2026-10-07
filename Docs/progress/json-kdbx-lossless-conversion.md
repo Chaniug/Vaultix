@@ -163,10 +163,28 @@ Vaultix 读侧**需要补**同样的拆解，否则「一条登录挂 2 个通�
   → 写 KDBX → 读回 → 断言与原 URI 等价
 - 发现不一致就修 `KdbxTotpCodec`，**不改** otpauth 语义
 
-### W4 · VPX_ 工具字段 + 多值降级
-- 多 URL → `VPX_URL_n`；`androidapp://` → `AndroidApp` 字段对
-- `VPX_BW_TYPE` / `VPX_BW_ID` / `VPX_PW_HISTORY`
-- 单测：3 条 URI 的登录条目往返后仍是 3 条
+### W4 · VPX_ 工具字段 + 多值降级 ✅ `92d62a0`
+- 多 URL → `VPX_URL_n`；`androidapp://` → `App Package Name` 字段
+  （⚠️ **不是**本文档 §2.2 写的 `AndroidApp`；Bastion 实测读的是 `App Package Name`
+  / `App Name` 并兼容 5 个别名，见 `reference/bastion/.../KeePassKdbxService.kt:3780`）
+- `VPX_BW_TYPE` / `VPX_BW_ID`（⚠️ `VPX_PW_HISTORY` **不做**：领域模型 `VaultItem` 无该字段，
+  写了"就再也读不出来"，等于换个地方丢数据 —— 理由见 `KdbxToolFields` 文件头表格）
+- 单测：3 条 URI 的登录条目往返后仍是 3 条 ✅（`KdbxToolFieldsRoundTripTest`，24 例）
+
+**落法（写侧）**：第 0 条 → 标准 `Url`；第 2 条起 → `VPX_URL_n`（下标从 1 起）；
+每条的匹配档位另存 `VPX_MATCH_n`；`androidapp://` → `App Package Name`。
+
+**三个必须记住的坑（都已在单测里钉死）**：
+
+| 坑 | 不这么做会怎样 |
+|---|---|
+| `applyUris` 必须**整段替换**而非按键名增删 | 3 条删到 2 条时旧 `VPX_URL_2` 变成新 `VPX_URL_1`，留下**错位的旧值**（比丢数据更坏：网址还在但对应关系错了） |
+| `typeOf` 的数字码是 1–5（0 不分配） | 曾整段错位一位（2→Card/3→Identity/4→SshKey）⇒ 卡片往返后变成身份，无任何症状 |
+| kotpass `EntryFields.get(String)` 是普通 `Map.get` ⇒ **键名大小写敏感**（已 `javap` 核实） | 读侧只认自己写的键名/大小写 ⇒ **读不出第三方库**，单向丢数据 |
+
+**已知取舍（钉死，别当bug 顺手"修"）**：多个 `androidapp://` 只保留第一个
+（`App Package Name` 是单个字段位，无 `_n` 落法；硬塞进 `VPX_URL_n` 会被 KeePassXC
+当域名匹配、必然匹配不上，等于为多存一条而让**所有**应用 URI 匹配全失效）。
 
 ### W5 · 转换入口（UI）
 - 导入导出页加「转换」：`选 BW JSON` → `文件密码` → **`VPX_ 输出库主密码`**
