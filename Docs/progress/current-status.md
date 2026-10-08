@@ -51,7 +51,7 @@
 | `core:crypto` | ✅ | 行覆盖 91.4% |
 | `core:database` | ✅ | Room v2；ciphers（整包密文）/ folders / pending_ops / 回收站流查询 |
 | `core:datastore` | ✅ | DataStore 设置 + Keystore 凭据（含 local_unlock_key） |
-| `core:ui` | ✅ | VaultixTheme |
+| ~~`core:ui`~~ | 🗑️ 已移除 | 2026-10-05 删除。模块内只有一个 `VaultixTheme`（蓝色系色板），**全仓零引用**，且与实际生效的 `app/.../ui/theme/Theme.kt` 同名不同色。主题色板现由 `app/.../ui/theme/BrandColor.kt` 单处提供 |
 | `data:bitwarden` | ✅ | 同步/认证/2FA/合并更新/预挂 Bearer+预刷新/刷新三分（400/401=失效，其余可重试） |
 | `data:repository` | ✅ | VaultRepositoryImpl / ItemRepositoryImpl + VaultSessionManager + BitwardenSyncOrchestrator；单测覆盖会话/写路径/回收站/移除库/编排器 |
 | `domain` | ✅ | VaultRepository / ItemRepository（observe/CRUD/回收站/移除库）+ SyncTrigger/VaultSyncStatus/VaultSaveOutcome |

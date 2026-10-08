@@ -47,11 +47,15 @@ rootProject.name = "Vaultix"
 
 include(":app")
 
-// core 层：通用能力 / 领域模型 / UI 主题 / 密码学
+// core 层：通用能力 / 领域模型 / 密码学
 include(":core:common")
 include(":core:crypto")
 include(":core:model")
-include(":core:ui")
+// 2026-10-05 移除 `:core:ui`。该模块只有一个文件 —— 那套**蓝色系** VaultixTheme，
+// 全仓零 import、零调用（实际生效的是 app 模块的 `ui.theme.VaultixTheme`）。
+// 两个同名主题各带一套色板是明确的维护陷阱，且 `Docs/progress/current-status.md`
+// 仍把它记为「✅ 已完成」，比死代码本身更容易误导。
+// 主题色板现由 `app/.../ui/theme/BrandColor.kt` 单处提供。
 
 // domain 与 data 层
 include(":domain")

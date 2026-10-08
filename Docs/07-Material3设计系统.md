@@ -6,11 +6,17 @@
 
 | 原则 | 落地 |
 |---|---|
-| **个人化** | 支持 Material You 动态取色（API 31+）与壁纸取色；低版本提供 6 套静态种子色 |
+| **个人化** | 支持 Material You 动态取色（API 31+）与壁纸取色；低版本回退 Vaultix 自有品牌色板 |
 | **清晰层级** | 容器色（`surface-container*`）分层替代阴影；条目卡片用 `surface-container-low` |
 | **一致性** | 所有组件直接用 `material3` 官方实现，**不重写**基础组件；自定义仅做组合封装 |
 | **克制的高亮** | 危险操作（删除、永久删除）用 `error` 容器；主操作用 `primary`，全屏主 CTA 不超过 1 个 |
 | **动效有语义** | M3 Expressive 的强调动效只用于"状态跃迁"（解锁成功、保存成功），不用于装饰 |
+
+> ⚠️ **「条目卡片用 `surface-container-low`」是硬纪律，且极易踩坑**：
+> `CardDefaults.cardColors()` 的默认值是 `surfaceContainerHighest`（对比度 1.232，
+> 而 `Low` 只有 1.049）—— **随手不传 `containerColor` 就自动违规了**。
+> 2026-10-05 就因为这个，`EntryCard` 一度是全项目唯一用最高档的卡片，
+> 列表里每张卡都是一块明显色斑。凡新增卡片，**必须显式写 `containerColor`**。
 
 ## 2. 色彩系统
 
@@ -51,7 +57,7 @@ fun VaultixTheme(
 | 条件 | 配色来源 |
 |---|---|
 | `dynamicColor && SDK ≥ 31` | `dynamicLight/DarkColorScheme(context)` —— 壁纸派生 |
-| 否则 | `lightColorScheme()` / `darkColorScheme()` —— **M3 基线色板** |
+| 否则 | `VaultixBrandColor.Light` / `.Dark` —— **Vaultix 自有品牌色板** |
 
 `oledPureBlack` 在上述结果上再 `copy(background = Black, surface = Black)`。
 
@@ -64,21 +70,53 @@ fun VaultixTheme(
 | **Material You 动态取色** | ✅ 已实现（API 31+） | 设置 → 外观 → 动态取色 |
 | **浅色 / 深色 / 跟随系统** | ✅ 已实现 | 设置 → 外观 → 主题模式 |
 | **纯黑（AMOLED Black）** | ✅ 已实现（深色下生效） | 设置 → 外观 → 纯黑主题 |
-| 静态种子色板 | ⚠️ **用的是 M3 基线色板**（`lightColorScheme()` 无参默认），并非自定义种子色 | — |
+| **静态品牌色板** | ✅ 已实现（`VaultixBrandColor`，靛蓝主色） | — |
+
+> ⚠️ **2026-10-05 更正**：本节此前把静态色板记为「⚠️ 用的是 M3 基线色板
+> （`lightColorScheme()` 无参默认），并非自定义种子色」。**该问题已修** ——
+> 用户反馈「默认浅色界面配色不对」，根因是 M3 基线色板**整体偏紫**：
+> `primary = #6750A4`，且 `surfaceContainer*` 六档的**绿通道比红通道低 3~5**
+> （`#F7F2FA` 的 G-R = -3），这才是"卡片呈明显紫灰"的来源。
+> 现在改为自有品牌色板，实测对比度见下表。
+
+#### 品牌色板（`app/.../ui/theme/BrandColor.kt`）
+
+色值取自 **Open Color 9** 的公开色阶（indigo / green / blue），非手调：
+
+| 角色 | 取值 | 语义 |
+|---|---|---|
+| `primary` | `indigo-7 #3B5BDB` | 主 CTA、选中态、解锁按钮 |
+| `secondary` | `blue-8 #293D8C` | 低饱和的同色相邻色 |
+| `tertiary` | `green-8 #1A7347` | 通行密钥能力图标、密码强度"中"（见 §2.3.1 的色相分工） |
+| `surface` 家族 | 冷中性灰，`G-R ∈ {0, -1}` | **刻意无色相偏置** —— 这是"不偏紫"的量化定义 |
+
+WCAG 实测（算式已用下方基线值反向校验，吻合到小数点后三位）：
+
+| 组合 | 浅色 | 深色 | 要求 |
+|---|---|---|---|
+| `primary` / `onPrimary` | 5.67 | 7.60 | ≥ 4.5 |
+| `onSurface` / `surface` | 16.94 | 14.59 | ≥ 4.5 |
+| `onSurface` / `surfaceContainerHighest` | 13.71 | 9.60 | ≥ 4.5 |
+| `outline` / `surface` | 4.44 | 5.87 | ≥ 3.0 |
+
+M3 基线浅色（供对照，`surfaceContainer*` vs `surface`）：`Low` 1.049 · `High` 1.164 · `Highest` 1.232。
+
+> 这些性质由 `app/src/test/.../VaultixBrandColorTest.kt` 钉住（判据：文本 ≥ 4.5、
+> UI ≥ 3.0、色阶单调、**绿通道不凹陷**）。改色值时会直接红 —— 配色 bug
+> 编译期完全无感、CI 门禁也查不出，没有断言就会被悄悄改回去。
 
 #### 计划（**尚未实现**，不要当成已有能力）
 
-以下为设计意图，落地前不应在 README / 设置页里描述为已有能力：
-
 | 计划项 | 说明 | 状态 |
 |---|---|---|
-| **自然（Nature）种子色** | 低饱和自然色系（柔和绿/土色），长时间使用不易疲劳 | 📋 未做 |
 | **RG 护眼（低蓝光暖色）** | 压低蓝光比例，夜间 / 对蓝光敏感用户 | 📋 未做 |
 | **对比度档位（标准/中/高）** | 跟随系统 `Contrast` 设置 | 📋 未做（`VaultixTheme` 无此参数） |
+| **多套品牌色板切换** | 如"自然绿 / 蓝 / 灰"三套 | 📋 未做 |
 
-> 实现要点（若将来做）：多套主题应**共用同一套 `ColorScheme` 生成逻辑**（种子色 →
-> `lightColorScheme`/`darkColorScheme`），仅替换种子色与 `surface` 基准值，
-> 避免维护 N 份手写色表。
+> ⚠️ 曾规划过的「自然（Nature）种子色」已被靛蓝品牌色板替代 ——
+> 用户在 2026-10-05 明确选择了蓝色。若将来要支持多套色板，
+> 应**共用同一套 `ColorScheme` 生成逻辑**（种子色 → `lightColorScheme`/`darkColorScheme`），
+> 仅替换种子色与 `surface` 基准值，避免维护 N 份手写色表。
 
 ### 2.3.1 强调色（accent）的分配纪律
 
@@ -308,3 +346,8 @@ fun VaultixTheme(
 4. 同一页面出现两个 `ExtendedFAB`。
 5. 用 Toast 承载需要用户处理的信息（应用 Snackbar + 动作）。
 6. 自定义 `TextField` 边框覆盖 M3 描边规范。
+7. **用 `lightColorScheme()` / `darkColorScheme()` 无参默认值当品牌色板**（M3 基线是紫的；
+   连它的 `surface` 家族也偏紫，绿通道比红低 3~5）。要改配色就改
+   `VaultixBrandColor`，别在调用点覆写单个色值 —— 那是"文档说一套、代码做一套"的起点。
+8. **新增卡片时不写 `containerColor`**（默认落到 `surfaceContainerHighest`，
+   违反 §1「条目卡片用 `surface-container-low`」，2026-10-05 的配色 bug 正是这么来的）。

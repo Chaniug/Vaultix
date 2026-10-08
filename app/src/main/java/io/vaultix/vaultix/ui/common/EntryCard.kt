@@ -10,13 +10,16 @@
  * 溯源声明（GPL-3.0 合规）
  * 条目**卡片外框**的规格移植自 Bastion（GPL-3.0，Copyright 2025 JoyinJoester）的
  * `ui/password/PasswordEntryCard.kt`：
- *   - 容器用 Material3 `Card`，且**沿用默认的 `CardDefaults.cardColors()` /
- *     `cardElevation()`**（上游原文即如此：底色与高度交给 M3 的 filled-card token，
- *     不自己拍一个 surface 颜色）；
- *   - 圆角 `RoundedCornerShape(12.dp)`（上游「稀疏列表卡片」取值；仅单卡态用 16dp）；
+ *   - 容器用 Material3 `Card`，圆角 `RoundedCornerShape(12.dp)`
+ *     （上游「稀疏列表卡片」取值；仅单卡态用 16dp）；
  *   - 内边距 16dp 四边等宽（上游 `padding(if (isSingleCard) 20.dp else 16.dp)`）；
  *   - 点击：先 `clip(shape)` 再 `clickable`，水波纹被裁进圆角内（上游同款写法）；
  *   - 标题字重 SemiBold、标题与副标题之间 `spacedBy(6.dp)`（上游列表态取值）。
+ *
+ * ⚠️ **2026-10-05 刻意偏离上游一处**：上游用 `CardDefaults.cardColors()` 默认底色，
+ *   即 `surfaceContainerHighest`。本项目改为显式 `surfaceContainerLow` ——
+ *   依据 `Docs/07-Material3设计系统.md` §1「条目卡片用 surface-container-low」。
+ *   详见 [EntryCard] 函数上方的「色档违规」说明。
  * 本文件为独立实现，不含其代码。
  * ---------------------------------------------------------------------------
  */
@@ -84,6 +87,28 @@ private val CARD_BORDER_WIDTH = 0.5.dp
  * 多选的美观问题 —— 用户要**先看到哪条被选中**，才敢去滑它。
  * 底色高亮因此是功能性的，不能省。
  *
+ * ## 色档：为什么是 `surfaceContainerLow`（2026-10-05 修配色 bug）
+ *
+ * 原先这里写的是 `CardDefaults.cardColors()` 默认值 ⇒ 底色落在
+ * `surfaceContainerHighest`。这有两处问题：
+ *
+ * 1. **违反项目自己的设计文档**。`Docs/07-Material3设计系统.md` §1「清晰层级」
+ *    明文写着「容器色（`surface-container*`）分层替代阴影；**条目卡片用
+ *    `surface-container-low`**」—— 而 `EntryCard` 是全项目**唯一**用到最高档的卡片，
+ *    其余卡片（`SettingsComponents.SettingsGroupCard`、`VaultListScreen.VaultCard`、
+ *    `ItemDetailScreen`、`AddKdbxScreen`）全部是 `surfaceContainerLow`。
+ * 2. **观感上确实不对**。实测（M3 亮色基线 vs `surface`）：
+ *    `Low` = 1.049 · `High` = 1.164 · **`Highest` = 1.232**。
+ *    1.232 是 M3 容器家族里与 `surface` 拉得最开的一档 ⇒ 列表里每张卡都是一块
+ *    明显的色斑，用户反馈「默认浅色界面配色不对」即源于此（与当时基线色板偏紫叠加）。
+ *
+ * ⇒ 改为 `surfaceContainerLow`，与项目其余卡片对齐。
+ *
+ * ⚠️ **别照抄 `ItemFormDialog.FormGroupCard` 的 `surfaceContainerHighest`**：
+ *    它用最高档是有**具体理由**的 —— 全屏对话框的顶栏「收起即透明」，
+ *    卡片需要明显一档的底色才能"可见地"从栏下滑过（该文件 KDoc 有完整推导）。
+ *    本卡片没有这个约束，跟着抄只会引入另一处不一致。
+ *
  * @param onClick 点击条目（水波纹被裁进圆角内）。
  * @param onLongClick 长按条目；为 `null` 时不挂长按（选择态）。
  * @param selected 是否处于选中态（改底色，不画 Checkbox —— 勾选项由调用方决定放哪）。
@@ -99,7 +124,9 @@ fun EntryCard(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val shape = RoundedCornerShape(CARD_CORNER)
-    val baseColors = CardDefaults.cardColors()
+    val baseColors = CardDefaults.cardColors(
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+    )
     Card(
         modifier = modifier.fillMaxWidth(),
         colors = if (selected) {
@@ -113,6 +140,12 @@ fun EntryCard(
         // 原因：M3 filled card 的默认底色与页面背景的明度差本就小，在**动态取色**下
         // 更不可靠（底色由壁纸派生）⇒ 卡片的边界得靠"猜"。
         // 描边把边界**说死**，且它不吃底色、不与动态取色打架 —— 比反复调底色稳。
+        //
+        // ⚠️ 2026-10-05 底色降到 surfaceContainerLow（对比度 1.049）后，
+        //    这道描边**更重要了**：卡片边界现在几乎全靠它。
+        //    `ItemFormDialog.FormGroupCard` 那边明确写了「别指望卡片自己带边框来救」——
+        //    那是**因为它不需要**（顶栏透明、卡片要"穿过"标题栏）。
+        //    本卡片没有那个约束，描边是边界的主要来源，别删。
         border = BorderStroke(CARD_BORDER_WIDTH, MaterialTheme.colorScheme.outlineVariant),
     ) {
         Column(
