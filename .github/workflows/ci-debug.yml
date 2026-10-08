@@ -364,9 +364,28 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: debug-unit-test-reports
+          # ⚠️ 2026-10-05 修正两处长期错配（此前**只有 data:kdbx 的报告被上传过**）：
+          #   ① app 有 `full` / `offline` 两个 flavor，跑的是 `testFullDebugUnitTest`，
+          #      而路径写的是 `testDebugUnitTest` ⇒ app 的 35 个测试类（含
+          #      VaultixBrandColorTest / AvatarHueTest）的报告**从未被收集过**。
+          #      同文件上方的 `lint` 步骤早就踩过这个坑并改成了 `lintFullDebug`，
+          #      唯独这里漏了。
+          #   ② core:* / data:repository / data:bitwarden 同样在跑测试，但路径里没有它们。
+          # ⇒ 后果是"CI 绿"完全不能代表单测通过。核对单测必须看本产物，不能只看顶层结论。
+          #    同 lint 的理由：`testDebugUnitTest` 在多 flavor 下有歧义，需显式指定 variant。
           path: |
-            app/build/reports/tests/testDebugUnitTest
-            app/build/test-results/testDebugUnitTest
+            app/build/reports/tests/testFullDebugUnitTest
+            app/build/test-results/testFullDebugUnitTest
+            core/crypto/build/reports/tests/testDebugUnitTest
+            core/crypto/build/test-results/testDebugUnitTest
+            core/common/build/reports/tests/testDebugUnitTest
+            core/common/build/test-results/testDebugUnitTest
+            core/model/build/reports/tests/testDebugUnitTest
+            core/model/build/test-results/testDebugUnitTest
+            data/repository/build/reports/tests/testDebugUnitTest
+            data/repository/build/test-results/testDebugUnitTest
+            data/bitwarden/build/reports/tests/testDebugUnitTest
+            data/bitwarden/build/test-results/testDebugUnitTest
             data/kdbx/build/reports/tests/testDebugUnitTest
             data/kdbx/build/test-results/testDebugUnitTest
           if-no-files-found: ignore
