@@ -13,30 +13,42 @@ import androidx.compose.ui.graphics.Color
 import com.google.common.truth.Truth.assertThat
 import com.google.common.truth.Truth.assertWithMessage
 import org.junit.Test
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
 
 /**
- * [VaultixBrandColor] 的单测 —— 钉死 2026-10-05 修掉的「浅色界面配色发紫」缺陷。
+ * [VaultixBrandColor] 的单测 —— 钉死两次配色反馈背后的缺陷。
+ *
+ * ## 缺陷一：浅色界面发紫（2026-10-05，用户反馈「默认浅色界面配色不对」）
+ *
+ * ## 缺陷二：蓝色太刺眼（2026-10-08，用户反馈「这个蓝色太亮了一点」）
+ *
+ * **"太亮"不等于"明度高"** —— 量化后主因是**饱和度**：
+ * 上一版 `primaryContainer` 的 `#DBE4FF` 是 Open Color 的 `blue-1`，
+ * 饱和度 **100%**（一个完全饱和的色），大面积铺开时最晃眼。
+ * 本版把它压到 36.6%，同时把 WCAG 对比度守在门槛之上。
  *
  * ## 这类缺陷为什么**必须**有单测
  *
  * 配色 bug 有三个特性，让它特别容易复发：
  *
  * 1. **编译期完全无感**。色值都是合法的 `Color`，detekt / kotlinc 一句都不会说；
- * 2. **CI 不会红**。没有单测的话，CI 四道门禁全绿，"改回基线紫"只是一次看起来
- *    无害的 diff —— 与 W4 踩过的「CI 对勾 ≠ 做对了」是同一类陷阱；
+ * 2. **CI 不会红**。没有单测的话，CI 四道门禁全绿，"改回基线紫"、"挑个好看的深蓝"
+ *    都只是一次看起来无害的 diff —— 与 W4 踩过的「CI 对勾 ≠ 做对了」是同一类陷阱；
  * 3. **纯靠肉眼守不住**。紫调恰恰是**低饱和**的（M3 基线 `surfaceContainerLow`
- *    的绿通道只比红低 3），低到"看起来像中性灰"。等用户说"配色不对"时，
+ *    的绿通道只比红低 3），低到"看起来像中性灰"；饱和度则相反，
+ *    稍一不注意就从"柔和的蓝"滑回"荧光蓝"。等用户说"配色不对"时，
  *    往往已经换了好几轮改版。
  *
- * ⇒ 判据全部**可量化**，锁在这里。谁把色板改回 `lightColorScheme()` 无参默认值，
- * 或者随手调偏了色相，[notPurple] 立刻会红。
+ * ⇒ 判据全部**可量化**，锁在这里。谁把色板改回 `lightColorScheme()` 无参默认值
+ * （[primaryIsNotM3BaselinePurple]会红），或者随手挑个高饱和深蓝
+ * （[accentSlotsStayBelowSaturationCeiling] 会红），CI 会当场拦下。
  *
  * ## 与 [io.vaultix.vaultix.ui.common.AvatarHueTest] 同一个思路
  *
- * WCAG 公式是**纯算术**，不依赖 Android 运行时，所以能在 JVM 单测里跑，
+ * WCAG 公式与 HSL 换算都是**纯算术**，不依赖 Android 运行时，所以能在 JVM 单测里跑，
  * 而不必靠截图回归。算式的正确性由 [contrastFormulaMatchesDocumentedMeasurements] 钉住。
  */
 class VaultixBrandColorTest {
@@ -286,6 +298,162 @@ class VaultixBrandColorTest {
         return "#$r$g$b"
     }
 
+    // ------------------------------------------------------------------
+    // 判据 5：★ 饱和度上限（"太亮"的真正病因，2026-10-08 用户反馈）
+    // ------------------------------------------------------------------
+
+    /**
+     * HSL 饱和度（0~100）。
+     *
+     * ⚠️ **自己算，不碰 Compose 的 HSL API**：`Color` 确实有 [Color.hsl] 之类的转换，
+     * 但沙箱内无Gradle 缓存、无法查证其签名是否稳定 —— 按项目铁律
+     * 「符号存在性要实测」，不赌这个 API。通道值 `red/green/blue` 是已在
+     * [relativeLuminance] 里实证可用的，这里复用同一组访问器。
+     *
+     * 实测确认：`8bit → float32 存储 → *255 → Int` 对**全部 256 个通道值精确可逆**
+     * （0 偏差），所以这里取整不会引入误差。
+     */
+    private fun saturationPercent(color: Color): Float {
+        val r = color.red
+        val g = color.green
+        val b = color.blue
+        val maxChannel = max(r, max(g, b))
+        val minChannel = min(r, min(g, b))
+        val lightness = (maxChannel + minChannel) / 2f
+        if (maxChannel == minChannel) return 0f
+        val delta = maxChannel - minChannel
+        return (delta / (1f - abs(2f * lightness - 1f)) * 100f).coerceIn(0f, 100f)
+    }
+
+    /** HSL 色相（0~360）。灰色（饱和度 0）返回 0。 */
+    private fun hueDegrees(color: Color): Float {
+        val r = color.red
+        val g = color.green
+        val b = color.blue
+        val maxChannel = max(r, max(g, b))
+        val minChannel = min(r, min(g, b))
+        if (maxChannel == minChannel) return 0f
+        val delta = maxChannel - minChannel
+        val sector = when (maxChannel) {
+            r -> ((g - b) / delta) % 6f
+            g -> (b - r) / delta + 2f
+            else -> (r - g) / delta + 4f
+        }
+        val degrees = sector * 60f
+        return if (degrees < 0f) degrees + 360f else degrees
+    }
+
+    /**
+     * ★ **护眼判据：品牌主色不许是高饱和荧光色**。
+     *
+     * 用户反馈「这个蓝色太亮」，量化后发现"亮"有两层且**主因是饱和度**：
+     * `primary` S=69.0%、`primaryContainer` S=**100%**（大面积浅蓝，最刺眼）。
+     * 上一版的 `#DBE4FF` 是 Open Color 的 `blue-1` —— 一个**完全饱和**的色，
+     * 看着"干净"，实际在大面积铺开时晃眼。
+     *
+     * ⇒ 上限取 **58%**（本版主色实测最高 55.56%，留 2.44 个点余量）。
+     * 界不是随手取的：低于 58% 时色彩开始发灰、失去品牌识别；
+     * 高于 60% 时浅色容器就会回到"荧光"观感。
+     *
+     * ⚠️ **刻意不覆盖 `error` 家族** —— 危险红是语义色不是品牌色（`Docs/07` §9.3），
+     * 实测 S≈60%~65%。判据越界去压它，等于为了配色好看而削弱"危险"的辨识度，
+     * 那是本末倒置。`error` 的对比度另有 [lightSchemeMeetsTextContrast] 等把关。
+     *
+     * ⚠️ 上限常量是 `Float` 而非 `Int`：Truth 的 `FloatSubject` 继承
+     * `ComparableSubject<Float>`，父类的 `isAtMost(Float)` 重载会被选中。
+     * 若把常量改成 `Int`，`Float` 实测值会走 `isAtMost(int)` 重载而**静默截断**
+     * （55.56 → 55），判据会变得比预期宽松。
+     */
+    @Test
+    fun accentSlotsStayBelowSaturationCeiling() {
+        for ((name, scheme) in schemes()) {
+            for ((role, color) in scheme.accentSlots()) {
+                val saturation = saturationPercent(color)
+                assertWithMessage(
+                    "%s %role=%s 的饱和度 %.1f%% 超过上限 %.0f%%",
+                    name, color.toHex(), saturation, MAX_ACCENT_SATURATION,
+                ).that(saturation).isAtMost(MAX_ACCENT_SATURATION)
+            }
+        }
+    }
+
+    /**
+     * ★ **大面积容器不许是高饱和浅色**（用户反馈"太亮"的头号病灶）。
+     *
+     * `primaryContainer` / `secondaryContainer` / `tertiaryContainer` 是 FAB、
+     * 选中态底色、分组底色 —— 一次出现就是**成片面积**，人眼对大面积高饱和最敏感。
+     *
+     * ⇒ 上限取 **40%**（float32 实测最高 39.13%，留 0.87 个点）。
+     * 上一版的 `#DBE4FF`是 **S=100%**，整整超标 60 个点。
+     *
+     * 同时钉住**明度 ≤ 96%**：饱和度降下来后，如果明度顶到 98%+ 仍会"发白刺眼"。
+     * 两条一起，才能真正把"大面积浅蓝"这件事按住。
+     *
+     * ⚠️ 同样受 [accentSlotsStayBelowSaturationCeiling] 里那条 Truth 重载陷阱影响：
+     * 常量必须保持 `Float`，改成 `Int` 会截断小数、把 39.13% 判成 39%。
+     */
+    @Test
+    fun largeAreaContainersStayMuted() {
+        for ((name, scheme) in schemes()) {
+            for ((role, color) in scheme.largeAreaContainers()) {
+                val saturation = saturationPercent(color)
+                val lightness = (max(color.red, max(color.green, color.blue)) +
+                    min(color.red, min(color.green, color.blue))) / 2f * 100f
+                assertWithMessage(
+                    "%s %role=%s 饱和度 %.1f%% 超过容器上限 %.0f%%",
+                    name, color.toHex(), saturation, MAX_CONTAINER_SATURATION,
+                ).that(saturation).isAtMost(MAX_CONTAINER_SATURATION)
+                assertWithMessage(
+                    "%s %role=%s 明度 %.1f%% 过高（会发白刺眼）",
+                    name, color.toHex(), lightness,
+                ).that(lightness).isAtMost(MAX_CONTAINER_LIGHTNESS)
+            }
+        }
+    }
+
+    /**
+     * ★ **降饱和 ≠ 变成灰色**。用户明确选了"保留蓝"，这条把蓝色身份钉住。
+     *
+     * 降饱和是无方向的——朝"灰"降和朝"柔和的蓝"降，在代码上都只是改两个数字。
+     * 一路降到底会得到一个毫无个性的灰蓝，品牌识别就没了。
+     *
+     * ⇒ `primary` 色相必须留在**蓝区 200°~250°**（本版实测 226.0° / 221.7°，居中）。
+     * 这条同时会拦住"顺手换成墨绿 / 高级灰"这类看起来更有格调的改法。
+     */
+    @Test
+    fun primaryKeepsBlueHue() {
+        for ((name, scheme) in schemes()) {
+            val hue = hueDegrees(scheme.primary)
+            val message = "%s primary=%s 的色相 %.1f° 不在蓝区 %.0f°~%.0f°"
+            val args = arrayOf<Any>(name, scheme.primary.toHex(), hue, MIN_BLUE_HUE, MAX_BLUE_HUE)
+            // Truth 的 `FloatSubject extends ComparableSubject<Float>`，父类提供
+            // `isAtLeast/isAtMost(Float)` —— 走的是**浮点**重载，不会截断小数。
+            assertWithMessage(message, *args).that(hue).isAtLeast(MIN_BLUE_HUE)
+            assertWithMessage(message, *args).that(hue).isAtMost(MAX_BLUE_HUE)
+        }
+    }
+
+    private fun schemes(): List<Pair<String, ColorScheme>> =
+        listOf("浅色" to VaultixBrandColor.Light, "深色" to VaultixBrandColor.Dark)
+
+    /** 品牌主色桶 —— 见 [accentSlotsStayBelowSaturationCeiling]。 */
+    private fun ColorScheme.accentSlots(): List<Pair<String, Color>> = listOf(
+        "primary" to primary,
+        "secondary" to secondary,
+        "tertiary" to tertiary,
+        "inversePrimary" to inversePrimary,
+        "onPrimaryContainer" to onPrimaryContainer,
+        "onSecondaryContainer" to onSecondaryContainer,
+        "onTertiaryContainer" to onTertiaryContainer,
+    )
+
+    /** 大面积容器桶 —— 见 [largeAreaContainersStayMuted]。刻意不含 `errorContainer`（语义色）。 */
+    private fun ColorScheme.largeAreaContainers(): List<Pair<String, Color>> = listOf(
+        "primaryContainer" to primaryContainer,
+        "secondaryContainer" to secondaryContainer,
+        "tertiaryContainer" to tertiaryContainer,
+    )
+
     private companion object {
         /** WCAG AA 文本级。 */
         const val MIN_TEXT_CONTRAST = 4.5
@@ -301,5 +469,20 @@ class VaultixBrandColorTest {
 
         /** 分隔线（outlineVariant）的对比度上限，见 [outlineVariantIsDecorativeAndStaysLowContrast]。 */
         const val DIVIDER_CONTRAST_CEILING = 3.0
+
+        /** 品牌主色饱和度上限（%）。本版最高实测 55.6%，上一版 69.0%。 */
+        const val MAX_ACCENT_SATURATION = 58f
+
+        /** 大面积容器饱和度上限（%）。本版最高实测 39.1%，上一版 100%。 */
+        const val MAX_CONTAINER_SATURATION = 40f
+
+        /** 大面积容器明度上限（%）。过高会"发白刺眼"。 */
+        const val MAX_CONTAINER_LIGHTNESS = 96f
+
+        /** 品牌主色色相下限（度）。 */
+        const val MIN_BLUE_HUE = 200f
+
+        /** 品牌主色色相上限（度）。 */
+        const val MAX_BLUE_HUE = 250f
     }
 }
