@@ -79,7 +79,7 @@ fun VaultixTheme(
 > （`#F7F2FA` 的 G-R = -3），这才是"卡片呈明显紫灰"的来源。
 > 现在改为自有品牌色板，实测对比度见下表。
 
-#### 品牌色板（`app/.../ui/theme/BrandColor.kt`）
+#### 品牌色板（`app/.../ui/theme/VaultixBrandColor.kt`）
 
 色值取自 **Open Color 9** 的公开色阶（indigo / green / blue），非手调：
 

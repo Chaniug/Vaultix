@@ -55,7 +55,7 @@ include(":core:model")
 // 全仓零 import、零调用（实际生效的是 app 模块的 `ui.theme.VaultixTheme`）。
 // 两个同名主题各带一套色板是明确的维护陷阱，且 `Docs/progress/current-status.md`
 // 仍把它记为「✅ 已完成」，比死代码本身更容易误导。
-// 主题色板现由 `app/.../ui/theme/BrandColor.kt` 单处提供。
+// 主题色板现由 `app/.../ui/theme/VaultixBrandColor.kt` 单处提供。
 
 // domain 与 data 层
 include(":domain")
