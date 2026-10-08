@@ -264,7 +264,12 @@ dependencies {
     // ---- 项目模块：UI 只依赖 domain 接口 + data:repository 实现 ----
     implementation(projects.core.model)
     implementation(projects.core.common)
-    implementation(projects.core.ui)
+    // 2026-10-05 移除 `implementation(projects.core.ui)`：该模块只有一个零引用的
+    // `VaultixTheme`（蓝色系），与本模块 `ui.theme.VaultixTheme` 同名不同色。
+    // ⚠️ 类型安全项目访问器（`projects.core.ui`）**不会被纯文本搜到** ——
+    // 删模块时必须同时清掉：①目录 ②settings.gradle.kts 的 include ③本行。
+    // 漏掉第 ③ 处的表现是 detekt 阶段直接报
+    // `Unresolved reference 'ui'`（2026-10-05 CI run 37732572340 实测）。
     implementation(projects.core.datastore)
     implementation(projects.domain)
     implementation(projects.data.repository)
