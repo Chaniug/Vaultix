@@ -352,8 +352,15 @@ class AtomicWriteBoundaryTest {
         assertEquals(listOf("CREATE:x", "DELETE:x"), tables.pendingOps)
 
         // batch 壳 → deleteCiphersAndEnqueueInTransaction
-        dao.upsertCipher(cipher("y"))
-        dao.upsertCipher(cipher("z"))
+        //
+        // ⚠️ 这里**不能**写 `dao.upsertCipher(...)` 来预置数据：`upsertCipher` 是
+        //    `protected`，而 `dao` 的静态类型是 `AtomicWriteDao` ⇒ 从**类外**不可见
+        //    （override 成 public 也没用，静态类型决定可见性）。CI 就是这么红的：
+        //    "Cannot access 'suspend fun upsertCipher(...)': it is protected"。
+        //    预置数据直接写内存表即可 —— 本用例关心的是**壳是否委托到核心**，
+        //    不关心行是怎么进去的。
+        tables.ciphers["y"] = """{"id":"y"}"""
+        tables.ciphers["z"] = """{"id":"z"}"""
         dao.deleteCiphersAndEnqueue(
             ids = listOf("y", "z"),
             ops = listOf(op("DELETE", "y"), op("DELETE", "z")),

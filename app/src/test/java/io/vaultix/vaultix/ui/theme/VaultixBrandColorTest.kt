@@ -122,7 +122,7 @@ class VaultixBrandColorTest {
         for ((name, scheme) in listOf("浅色" to VaultixBrandColor.Light, "深色" to VaultixBrandColor.Dark)) {
             for ((role, color) in scheme.surfaceFamily()) {
                 val gMinusR = channel8(color.green) - channel8(color.red)
-                assertWithMessage("%s %role=%s 的 G-R=%s", name, color.toHex(), gMinusR)
+                assertWithMessage("%s %s 的 G-R=%s", name, role, gMinusR)
                     .that(gMinusR)
                     .isAtLeast(NEUTRAL_COLD_TOLERANCE)
             }
@@ -363,6 +363,23 @@ class VaultixBrandColorTest {
      * `ComparableSubject<Float>`，父类的 `isAtMost(Float)` 重载会被选中。
      * 若把常量改成 `Int`，`Float` 实测值会走 `isAtMost(int)` 重载而**静默截断**
      * （55.56 → 55），判据会变得比预期宽松。
+     *
+     * ## ⚠️⚠️ `assertWithMessage` 只认 `%s`（2026-10-10 实测，本类曾因此整体报错）
+     *
+     * 它的模板**不是** `String.format`，而是 Truth 自己的简易替换：**只把 `%s` 当占位符**，
+     * `%.1f` / `%.0f` / `%%` / `%role` 一律**原样保留**且**不计入占位符数**。
+     * 于是「用了 `%.1f%%` 这类格式化符」的调用会这样炸：
+     *
+     * ```
+     * java.lang.IllegalArgumentException:
+     *   Incorrect number of args (4) for the given placeholders (2) in string template:"..."
+     * ```
+     *
+     * 注意它抛的是 **`IllegalArgumentException`**（在断言之前就崩），不是
+     * `AssertionError` —— 所以日志里看不到任何"期望/实际"值，极易误读成"色板不合规"。
+     * 本类这三个用例**从未在 CI 跑过**（步骤当时带 `continue-on-error`），
+     * 缺陷因此潜伏到 2026-10-10 打开硬门禁才暴露。
+     * ⇒ 数值格式化请自己拼（`"%.1f".format(x)`），模板里**只用 `%s`**。
      */
     @Test
     fun accentSlotsStayBelowSaturationCeiling() {
@@ -370,8 +387,8 @@ class VaultixBrandColorTest {
             for ((role, color) in scheme.accentSlots()) {
                 val saturation = saturationPercent(color)
                 assertWithMessage(
-                    "%s %role=%s 的饱和度 %.1f%% 超过上限 %.0f%%",
-                    name, color.toHex(), saturation, MAX_ACCENT_SATURATION,
+                    "%s %s 的饱和度 %s 超过上限 %s",
+                    name, role, saturation, MAX_ACCENT_SATURATION,
                 ).that(saturation).isAtMost(MAX_ACCENT_SATURATION)
             }
         }
@@ -400,12 +417,12 @@ class VaultixBrandColorTest {
                 val lightness = (max(color.red, max(color.green, color.blue)) +
                     min(color.red, min(color.green, color.blue))) / 2f * 100f
                 assertWithMessage(
-                    "%s %role=%s 饱和度 %.1f%% 超过容器上限 %.0f%%",
-                    name, color.toHex(), saturation, MAX_CONTAINER_SATURATION,
+                    "%s %s 饱和度 %s 超过容器上限 %s",
+                    name, role, saturation, MAX_CONTAINER_SATURATION,
                 ).that(saturation).isAtMost(MAX_CONTAINER_SATURATION)
                 assertWithMessage(
-                    "%s %role=%s 明度 %.1f%% 过高（会发白刺眼）",
-                    name, color.toHex(), lightness,
+                    "%s %s 明度 %s 过高（会发白刺眼）",
+                    name, role, lightness,
                 ).that(lightness).isAtMost(MAX_CONTAINER_LIGHTNESS)
             }
         }
@@ -424,12 +441,18 @@ class VaultixBrandColorTest {
     fun primaryKeepsBlueHue() {
         for ((name, scheme) in schemes()) {
             val hue = hueDegrees(scheme.primary)
-            val message = "%s primary=%s 的色相 %.1f° 不在蓝区 %.0f°~%.0f°"
-            val args = arrayOf<Any>(name, scheme.primary.toHex(), hue, MIN_BLUE_HUE, MAX_BLUE_HUE)
+            // ⚠️ `assertWithMessage` 只认 `%s` 这一种占位符（见 [accentSlotsStayBelowSaturationCeiling]）。
+            //    用 `%.1f` / `%s … %role=` 这类写法会抛 `IllegalArgumentException`：
+            //    "Incorrect number of args (N) for the given placeholders (M)"。
+            val message = "%s primary=%s 的色相 %s° 不在蓝区 %s°~%s°"
             // Truth 的 `FloatSubject extends ComparableSubject<Float>`，父类提供
             // `isAtLeast/isAtMost(Float)` —— 走的是**浮点**重载，不会截断小数。
-            assertWithMessage(message, *args).that(hue).isAtLeast(MIN_BLUE_HUE)
-            assertWithMessage(message, *args).that(hue).isAtMost(MAX_BLUE_HUE)
+            assertWithMessage(
+                message, name, scheme.primary.toHex(), hue, MIN_BLUE_HUE, MAX_BLUE_HUE,
+            ).that(hue).isAtLeast(MIN_BLUE_HUE)
+            assertWithMessage(
+                message, name, scheme.primary.toHex(), hue, MIN_BLUE_HUE, MAX_BLUE_HUE,
+            ).that(hue).isAtMost(MAX_BLUE_HUE)
         }
     }
 
