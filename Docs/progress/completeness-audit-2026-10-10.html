@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vaultix 功能完善度盘点 · 2026-10-10</title>
+<style>
+  :root {
+    --bg: #FDFCFB; --card: #F6F5F4; --card2: #F1F0EF; --line: #E2E1E0;
+    --fg: #1A1B1A; --fg2: #45464A; --fg3: #75767B;
+    --blue: #3B5BC4; --blue-bg: #E3E6F2;
+    --green: #3F6B4A; --green-bg: #E4EDE6;
+    --amber: #8A5A18; --amber-bg: #F5EAD8;
+    --red: #A8342A; --red-bg: #F6DEDB;
+    --radius: 10px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111110; --card: #1A1A19; --card2: #1E1E1D; --line: #333332;
+      --fg: #E4E3E2; --fg2: #C6C6C5; --fg3: #8E8F94;
+      --blue: #9DAFD8; --blue-bg: #2E3A63;
+      --green: #9CC5A6; --green-bg: #24462F;
+      --amber: #E0B36A; --amber-bg: #4A3A1C;
+      --red: #E6A9A2; --red-bg: #6E1D17;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 32px 20px 80px;
+    background: var(--bg); color: var(--fg);
+    font: 15px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1020px; margin: 0 auto; }
+  h1 { font-size: 27px; margin: 0 0 6px; letter-spacing: -0.4px; }
+  h2 { font-size: 19px; margin: 40px 0 14px; padding-bottom: 8px;
+       border-bottom: 1px solid var(--line); letter-spacing: -0.2px; }
+  h3 { font-size: 15.5px; margin: 24px 0 10px; }
+  .sub { color: var(--fg3); font-size: 13.5px; margin-bottom: 4px; }
+  .verdict {
+    background: var(--blue-bg); border-left: 3px solid var(--blue);
+    padding: 16px 18px; border-radius: var(--radius); margin: 22px 0 0;
+    font-size: 15px;
+  }
+  .verdict b { color: var(--blue); }
+  .grid { display: grid; gap: 12px; }
+  .g4 { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+  .g3 { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+  .stat { background: var(--card); border-radius: var(--radius); padding: 14px 16px; }
+  .stat .n { font-size: 25px; font-weight: 650; letter-spacing: -0.5px; }
+  .stat .l { font-size: 12.5px; color: var(--fg3); margin-top: 3px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; margin: 12px 0; }
+  th, td { text-align: left; padding: 9px 11px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-weight: 600; color: var(--fg2); background: var(--card2); font-size: 12.5px; }
+  tr:last-child td { border-bottom: none; }
+  code { background: var(--card2); padding: 1.5px 5px; border-radius: 4px;
+         font: 12.5px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  .tag { display: inline-block; padding: 1.5px 8px; border-radius: 20px;
+         font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+  .t-yes { background: var(--green-bg); color: var(--green); }
+  .t-part { background: var(--amber-bg); color: var(--amber); }
+  .t-no  { background: var(--red-bg); color: var(--red); }
+  .t-na  { background: var(--card2); color: var(--fg3); }
+  .bar-wrap { display: flex; align-items: center; gap: 10px; }
+  .bar { flex: 1; height: 7px; background: var(--card2); border-radius: 4px; overflow: hidden; min-width: 70px; }
+  .bar i { display: block; height: 100%; border-radius: 4px; }
+  .sev { font-weight: 700; }
+  .s-hi { color: var(--red); } .s-md { color: var(--amber); } .s-lo { color: var(--fg3); }
+  ul { padding-left: 22px; margin: 8px 0; }
+  li { margin: 4px 0; }
+  .note { font-size: 12.5px; color: var(--fg3); margin-top: 6px; }
+  .pill { display:inline-block; background: var(--card2); border-radius: 6px;
+          padding: 2px 8px; font-size: 12px; color: var(--fg2); margin-right: 5px; }
+  .cell-y { color: var(--green); font-weight: 700; }
+  .cell-p { color: var(--amber); font-weight: 700; }
+  .cell-n { color: var(--fg3); }
+  .legend { font-size: 12.5px; color: var(--fg3); margin: 10px 0; }
+  .hi-box { background: var(--red-bg); border-left: 3px solid var(--red);
+            padding: 14px 16px; border-radius: var(--radius); margin: 14px 0; }
+  .ok-box { background: var(--green-bg); border-left: 3px solid var(--green);
+            padding: 14px 16px; border-radius: var(--radius); margin: 14px 0; }
+  details { background: var(--card); border-radius: var(--radius); padding: 12px 16px; margin: 10px 0; }
+  summary { cursor: pointer; font-weight: 600; font-size: 14px; }
+  details[open] summary { margin-bottom: 8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Vaultix 功能完善度盘点</h1>
+<div class="sub">2026-10-10 · 基于 <code>main</code> @ <code>7acaec6</code> · 静态代码审查 + 竞品对照</div>
+<div class="sub">1225 个 Kotlin 文件 / 392,025 行 / 13 个 Gradle 模块 / 1055 个单元测试用例 / 0 个仪器测试</div>
+
+<div class="verdict">
+<b>一句话结论：</b>骨架完整、四条主链路真能跑，但对照同级竞品属<b>早期半成品</b>。
+工程质量（纪律、文档、纯逻辑测试）<b>显著高于</b>同类业余项目，
+而功能面上「<b>迁移进来 / 分享出去 / 审计健康 / 组织协作</b>」这四类用户最常问的能力<b>几乎全空</b>。
+真实完成度 ≈ <b>M1–M2 收口、M3 未开工</b>。定位是「能自用的 <code>0.9.0-dev</code>」，
+<b>不是</b>「对标 Bitwarden 的可发布客户端」。
+</div>
+
+<h2>一、完成度速览</h2>
+
+<div class="grid g4">
+  <div class="stat"><div class="n">4</div><div class="l">主链路真机验证通过</div></div>
+  <div class="stat"><div class="n">3 / 6</div><div class="l">里程碑完成（M0–M2）</div></div>
+  <div class="stat"><div class="n">1055</div><div class="l">单元测试用例 · 0 失败</div></div>
+  <div class="stat"><div class="n">0</div><div class="l">仪器 / UI / E2E 测试</div></div>
+</div>
+
+<h3>里程碑兑现情况</h3>
+<table>
+  <tr><th style="width:76px">期</th><th>承诺内容</th><th style="width:210px">进度</th><th style="width:132px">判定</th></tr>
+  <tr>
+    <td><b>M0</b></td><td>工程骨架 + <code>core:crypto</code>（PBKDF2/Argon2/HKDF/AES-GCM）</td>
+    <td><div class="bar-wrap"><div class="bar"><i style="width:100%;background:var(--green)"></i></div><span>100%</span></div></td>
+    <td><span class="tag t-yes">✅ DONE</span></td>
+  </tr>
+  <tr>
+    <td><b>M1</b></td><td>Bitwarden 同步（登录/增量/2FA/离线/冲突）</td>
+    <td><div class="bar-wrap"><div class="bar"><i style="width:95%;background:var(--green)"></i></div><span>95%</span></div></td>
+    <td><span class="tag t-yes">✅ 基本收官</span></td>
+  </tr>
+  <tr>
+    <td><b>M2</b></td><td>KDBX 引擎（读 + 写回 + 条件写 + 冲突检测）</td>
+    <td><div class="bar-wrap"><div class="bar"><i style="width:88%;background:var(--green)"></i></div><span>88%</span></div></td>
+    <td><span class="tag t-part">⚠️ SSH 字段缺</span></td>
+  </tr>
+  <tr>
+    <td><b>M2-a</b></td><td>自动填充服务（AutofillService + Credential Provider）</td>
+    <td><div class="bar-wrap"><div class="bar"><i style="width:85%;background:var(--green)"></i></div><span>85%</span></div></td>
+    <td><span class="tag t-yes">✅ 主链路通</span></td>
+  </tr>
+  <tr>
+    <td><b>M2-b</b></td><td>网盘同步（OneDrive / WebDAV）</td>
+    <td><div class="bar-wrap"><div class="bar"><i style="width:80%;background:var(--amber)"></i></div><span>80%</span></div></td>
+    <td><span class="tag t-part">⚠️ 冲突仅二选一</span></td>
+  </tr>
+  <tr>
+    <td><b>M3</b></td><td><b>安全中心</b>（13 类告警）+ 导入导出矩阵 + 大屏/无障碍打磨</td>
+    <td><div class="bar-wrap"><div class="bar"><i style="width:4%;background:var(--red)"></i></div><span>≈0%</span></div></td>
+    <td><span class="tag t-no">❌ 未开工</span></td>
+  </tr>
+  <tr>
+    <td><b>M4/M5</b></td><td>开源发布准备 / 正式 1.0</td>
+    <td><div class="bar-wrap"><div class="bar"><i style="width:5%;background:var(--red)"></i></div><span>≈0%</span></div></td>
+    <td><span class="tag t-no">❌ TODO</span></td>
+  </tr>
+</table>
+<div class="note">进度百分比是我基于代码实证的估计，非项目自报值。</div>
+
+<h2>二、声称能用 vs 真实能用</h2>
+<div class="legend">
+  <span class="pill">✅ 真</span>代码完整且可用 ·
+  <span class="pill">⚠️ 半真</span>能用但能力低于描述 ·
+  <span class="pill">❌ 缺失</span>README 提到或竞品普遍有但无实现
+</div>
+<table>
+  <tr><th style="width:170px">能力</th><th style="width:86px">判定</th><th>实情与证据</th></tr>
+  <tr><td>Bitwarden 登录 / 同步 / 增删改 / 回收站</td><td><span class="tag t-yes">✅ 真</span></td>
+      <td><code>BitwardenSyncOrchestrator</code> + <code>VaultRepositoryImpl</code> 完整；含预挂 Bearer、到期前 60s 预刷新、刷新失败三分</td></tr>
+  <tr><td>KDBX 读 + 写回（条件写 + 冲突检测）</td><td><span class="tag t-yes">✅ 真</span></td>
+      <td>15 个测试文件 / 141 用例；<code>KdbxFileConflictException</code></td></tr>
+  <tr><td>自动填充 AutofillService</td><td><span class="tag t-yes">✅ 真</span></td>
+      <td><code>AutofillService</code> + <code>AssistStructureParser</code> + PSL 10325 条</td></tr>
+  <tr><td>通行密钥 passkey</td><td><span class="tag t-part">⚠️ 半真</span></td>
+      <td>Bitwarden 侧创建+断言齐全；<b>KDBX 侧被产品策略关成只读</b>（<code>ItemRepositoryImpl.kt:441,464</code>）。且写回已知不保真（<code>FLAG_BE/FLAG_BS</code> 丢失）</td></tr>
+  <tr><td>站点图标抓取</td><td><span class="tag t-part">⚠️ 半真</span></td>
+      <td>抓的是 <b>Bitwarden 服务端预生成</b>的 icon（<code>&lt;服务器&gt;/icons/&lt;域名&gt;/icon.png</code>），<b>不是自己抓 favicon</b>。KDBX / 自托管无此端点 ⇒ 只剩首字母头像</td></tr>
+  <tr><td>SSH 密钥</td><td><span class="tag t-part">⚠️ 半真</span></td>
+      <td>Bitwarden 侧可用 + 有 OpenSSH 生成器；<b>KDBX 库内 SSH 字段映射未做</b>（项目自认）</td></tr>
+  <tr><td>五种类型编辑界面</td><td><span class="tag t-yes">✅ 真</span></td>
+      <td><code>ItemFormDialog.kt:217-242</code> 五分支齐全，非只有登录</td></tr>
+  <tr><td>主密码二次验证（reprompt）</td><td><span class="tag t-yes">✅ 真</span></td>
+      <td>可往返服务端。但注意：需 reprompt 的条目在<b>填充下拉里被整条过滤</b>（<code>FillPlanner.kt:131</code>）—— 属设计取舍</td></tr>
+  <tr><td>网盘冲突「自动合并」</td><td><span class="tag t-part">⚠️ 半真</span></td>
+      <td>只有 <code>KeepLocalUpload / KeepRemoteDownload / DecideLater</code> <b>二选一</b>，<b>无自动合并</b>。用词诚实，但能力低于竞品</td></tr>
+  <tr><td><b>安全中心 / 看门狗</b></td><td><span class="tag t-no">❌ 缺失</span></td>
+      <td>路线图 M3 核心交付。<code>grep watchtower|SecurityCenter|hibp</code> = <b>0 命中</b></td></tr>
+  <tr><td><b>导入器矩阵</b>（CSV / KeePass XML / LastPass…）</td><td><span class="tag t-no">❌ 缺失</span></td>
+      <td>只有 <code>BitwardenEncryptedImporter</code> —— <b>只认 Bitwarden 加密 JSON</b>。无 CSV、无 KeePass XML</td></tr>
+  <tr><td><b>Send</b>（安全分享）</td><td><span class="tag t-no">❌ 缺失</span></td>
+      <td>仅 crypto 原语，<b>零调用点</b>；<code>VaultixNavModel.kt:16</code> 自述「Send 为暂不具备」</td></tr>
+  <tr><td><b>附件</b></td><td><span class="tag t-no">❌ 缺失</span></td>
+      <td>只保留元信息不做传输（<code>BitwardenDto.kt:229</code> 注释"刻意不做"），<b>无任何附件 UI</b></td></tr>
+  <tr><td>组织 / 集合</td><td><span class="tag t-no">❌ 缺失</span></td>
+      <td>仅 DTO 透传 <code>organizationId</code>（<code>BitwardenDto.kt:58</code>），无集合浏览 / 组织切换 UI</td></tr>
+  <tr><td>主密码改密</td><td><span class="tag t-no">❌ 缺失</span></td>
+      <td>无入口。用户一旦怀疑泄露<b>无法自救</b></td></tr>
+</table>
+
+<h2>三、竞品功能矩阵</h2>
+<div class="legend">
+  列：<b>DX</b>=KeePassDX · <b>K2A</b>=KeePass2Android · <b>BW</b>=Bitwarden 官方 · <b>KG</b>=Keyguard · <b>BS</b>=Bastion · <b>1P</b>=1Password/Proton Pass
+  <br>普及度：<b>★★★</b> 几乎人人有 · <b>★★</b> 主流有 · <b>★</b> 少数有 · <b>—</b> 不适用该生态
+</div>
+<table>
+  <tr><th>功能</th><th style="width:64px">Vaultix</th><th>DX</th><th>K2A</th><th>BW</th><th>KG</th><th>BS</th><th>1P</th><th style="width:70px">普及度</th></tr>
+  <tr><td>登录 / 笔记 / 卡 / 身份</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td>★★★</td></tr>
+  <tr><td>TOTP / HOTP / Steam</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td>★★★</td></tr>
+  <tr><td>自动填充</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td>★★★</td></tr>
+  <tr><td>Passkey</td><td class="cell-p">⚠️ BW 侧</td><td class="cell-p">beta</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td>★★</td></tr>
+  <tr><td><b>安全审计</b>（HIBP/弱/重复/过期）</td><td class="cell-n">❌</td><td class="cell-p">★ 报告</td><td class="cell-p">★</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td><b>★★★</b></td></tr>
+  <tr><td><b>附件</b></td><td class="cell-n">❌</td><td class="cell-n">❌</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td><b>★★★</b></td></tr>
+  <tr><td><b>多格式导入器</b></td><td class="cell-n">❌</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td><b>★★★</b></td></tr>
+  <tr><td>主密码改密</td><td class="cell-n">❌</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-p">?</td><td class="cell-y">✅</td><td>★★★</td></tr>
+  <tr><td>自定义字段（4 态）</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-p">3 态</td><td class="cell-y">✅</td><td>★★★</td></tr>
+  <tr><td>SSH 密钥存储</td><td class="cell-p">⚠️ BW 侧</td><td class="cell-y">✅</td><td class="cell-p">?</td><td class="cell-y">✅</td><td class="cell-y">✅ GPG</td><td class="cell-y">✅</td><td class="cell-n">—</td><td>★★</td></tr>
+  <tr><td>生物识别</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td>★★★</td></tr>
+  <tr><td>离线模式</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td>★★★</td></tr>
+  <tr><td>多库并存</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-n">❌</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-n">❌</td><td>★★</td></tr>
+  <tr><td>Send（安全分享）</td><td class="cell-n">❌</td><td class="cell-n">—</td><td class="cell-n">—</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-p">?</td><td class="cell-y">✅</td><td>★★</td></tr>
+  <tr><td>组织 / 集合</td><td class="cell-n">❌</td><td class="cell-n">—</td><td class="cell-n">—</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td>★★（云系）</td></tr>
+  <tr><td>硬件密钥 YubiKey</td><td class="cell-n">❌</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-p">?</td><td class="cell-p">?</td><td class="cell-y">✅</td><td>★★</td></tr>
+  <tr><td>冲突自动合并</td><td class="cell-n">❌</td><td class="cell-n">—</td><td class="cell-n">—</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-p">?</td><td class="cell-y">✅</td><td>★★</td></tr>
+  <tr><td>浏览器扩展</td><td class="cell-n">❌</td><td class="cell-n">桌面配合</td><td class="cell-n">❌</td><td class="cell-y">✅</td><td class="cell-n">❌</td><td class="cell-n">❌</td><td class="cell-y">✅</td><td>★★★（云系）</td></tr>
+  <tr><td>SSH agent（转发）</td><td class="cell-n">❌</td><td class="cell-n">❌</td><td class="cell-n">❌</td><td class="cell-n">—</td><td class="cell-y">✅</td><td class="cell-n">❌</td><td class="cell-n">❌</td><td>★</td></tr>
+  <tr><td>Magic 键盘（防键盘记录）</td><td class="cell-n">❌</td><td class="cell-y">✅</td><td class="cell-y">✅</td><td class="cell-n">—</td><td class="cell-n">—</td><td class="cell-p">?</td><td class="cell-n">—</td><td>★</td></tr>
+</table>
+<div class="note">竞品数据来自 2025–2026 公开资料（README / 官方站）。标 <code>?</code> 的未逐项核源码，不排除实际已有。</div>
+
+<h2>四、功能缺口清单（按优先级）</h2>
+
+<h3><span class="sev s-hi">P0</span> — 不做，新用户「进得来、用不下去」</h3>
+<table>
+  <tr><th style="width:190px">缺口</th><th>为什么是 P0</th><th style="width:78px">工作量</th><th style="width:82px">普及度</th></tr>
+  <tr>
+    <td><b>导入器矩阵</b><br><span class="note">CSV / KeePass XML / LastPass / 1P</span></td>
+    <td>迁移用户的<b>第一道门槛</b>。现在只认 Bitwarden 加密 JSON ⇒ 用别的工具的人<b>根本搬不进来</b>。建议先做通用 CSV 映射器（列名映射 UI）</td>
+    <td>大</td><td>★★★</td>
+  </tr>
+  <tr>
+    <td><b>附件</b><br><span class="note">上传 / 下载 / 查看</span></td>
+    <td>密码库没有附件 ≈ 残缺（私钥文件、恢复码、证件照都放不进来）。需分块上传 + 加密 + 流式下载</td>
+    <td>大</td><td>★★★</td>
+  </tr>
+  <tr>
+    <td><b>安全中心 / 看门狗</b></td>
+    <td>路线图 M3 的核心交付，代码<b>零命中</b>。HIBP k-匿名（默认关）+ 弱密码 + 重复密码 + 过期 + 未开 2FA。这是"密码管理器作为安全产品"的<b>核心价值主张</b></td>
+    <td>大</td><td>★★★</td>
+  </tr>
+  <tr>
+    <td><b>主密码改密</b></td>
+    <td>无入口。用户一旦怀疑泄露<b>无法自救</b>——只能删库重建。安全性上是硬伤</td>
+    <td>中</td><td>★★★</td>
+  </tr>
+</table>
+
+<h3><span class="sev s-md">P1</span> — 明显的能力代差</h3>
+<ul>
+  <li><b>组织 / 集合</b>（云系 ★★）—— 只有 <code>organizationId</code> 透传，无集合筛选 / 组织切换 UI。工作量<b>大</b>。</li>
+  <li><b>Send 安全分享</b>（★★）—— 密码学原语已备（<code>VaultixCrypto</code> 有 Send 密钥派生），缺 API + UI。工作量<b>中</b>，可复用现有 crypto。</li>
+  <li><b>硬件密钥 / YubiKey 挑战响应</b>（★★）—— KeePassDX / BW 均支持。工作量<b>中-大</b>（依赖 NFC/USB 栈）。</li>
+  <li><b>KDBX 库内 SSH 字段映射</b> —— 项目<b>自认未做</b>。KDBX 库里建 SSH 条目<b>存不进去</b>。模型已有，只差 mapper。工作量<b>小-中</b>。</li>
+  <li><b>KDBX 侧 passkey 写回</b> —— 注意：<b>写回通道其实已存在</b>（<code>KdbxPasskeyCodec.fromCredential</code>，W2 已落地），但仓库层对 KDBX <b>主动抛只读</b>（<code>ItemRepositoryImpl.kt:441,464</code>）。是<b>能力存在但被产品策略关掉</b>，且已知不保真。工作量<b>小</b>。</li>
+</ul>
+
+<h3><span class="sev s-lo">P2</span> — 打磨 / 差异化</h3>
+<ul>
+  <li>冲突自动合并（现仅二选一）</li>
+  <li>Magic 键盘防键盘记录（KDBX 系特有，★）</li>
+  <li>自定义主题色（现仅动态取色 + 内置品牌色板）</li>
+  <li>浏览器扩展（Vaultix 走 Credential Provider 路线，可接受不做）</li>
+</ul>
+
+<h2>五、确认的代码缺陷</h2>
+
+<div class="hi-box">
+<b>🔴 S1 · <code>restoreItem</code> 没用原子写 → 恢复操作可静默失效</b>
+<div style="margin-top:8px;font-size:13.5px">
+<code>data/repository/.../ItemRepositoryImpl.kt:360-370</code>
+</div>
+<pre style="background:var(--bg);padding:11px;border-radius:6px;overflow:auto;font-size:12.5px;margin:9px 0"><code>cipherDao.upsertAll(listOf(existing.copy(deletedDate = null)))   // ① 先改行
+pendingOpDao.enqueue(PendingOpEntity(op = OP_RESTORE, ...))       // ② 后入队</code></pre>
+<div style="font-size:13.5px">
+项目为「行 + 队列」写专门建了 <code>AtomicWriteDao.upsertCipherAndEnqueue</code>（<code>@Transaction</code> 保证同生共死），
+并在 <code>createItem:250</code> / <code>updateItem:309</code> / <code>softDeleteItem:338</code> <b>全部使用</b>。
+<b>唯独 <code>restoreItem</code> 是两个独立的 suspend 调用</b>，且顺序是「先改行、后入队」。
+<br><br>
+<b>后果</b>：若 ② 失败（进程被杀 / IO 异常），本地行已清 <code>deletedDate</code>（条目重现），但队列里没有 <code>OP_RESTORE</code>
+⇒ 下次同步 <code>persistCiphers</code> 用服务端旧版（仍带 <code>deletedDate</code>）覆盖它
+⇒ <b>条目又回到回收站，用户以为恢复了却"恢复失败"</b>。
+<br><br>
+<b>这不是我猜的</b>：<code>AtomicWriteDao</code> 的 KDoc 第 22-26 行<b>精确预言了这个症状</b>——
+「软删除的条目则会被服务端版本<b>复活</b>」。
+<br><br>
+<b>修复</b>：改为 <code>atomicWriteDao.upsertCipherAndEnqueue(row = existing.copy(deletedDate = null), op = ...)</code>。
+</div>
+</div>
+
+<h3><span class="sev s-md">🟡 M2 · TOTP 生成失败静默返回恒定 <code>000000</code></span></h3>
+<p style="font-size:13.5px">
+<code>core/common/.../Totp.kt:143,163,203,357</code> —— Base32 解码失败 / 算法缺失时
+<code>catch (_: Exception) { "0".repeat(digits) }</code>，用户看到<b>一个恒定不变的 000000</b> 而非错误提示，
+会拿它去输入、失败后无法理解原因。属「错误被吞成合法的错误数据」。
+<br>
+⚠️ <b>但要如实说明</b>：该文件 KDoc 第 57-58 行<b>自己写着</b>「用户看到恒定的 <code>000000</code> 且没有任何提示」
+—— 这是作者<b>知情的取舍</b>（避免崩溃），不是疏漏。是否要改成返回 <code>null</code> 由 UI 显示「验证码不可用」，是个产品决策。
+</p>
+
+<h3><span class="sev s-lo">⚪ M3 · <code>ParsedCipherString</code> 是含 <code>ByteArray</code> 的 <code>data class</code></span></h3>
+<p style="font-size:13.5px">
+<code>core/crypto/.../CipherString.kt:56-61</code> —— <code>data class</code> 的 <code>equals</code>/<code>hashCode</code>
+对 <code>ByteArray</code> 做<b>引用比较</b>而非内容比较。项目内 <code>SymmetricCryptoKey.kt:15-16</code> 的 KDoc
+明说因同样原因它被改成了普通 <code>class</code> —— <b>同一项目内标准不一致</b>。
+当前若无 <code>==</code> 调用则无实际后果，但违反项目自定约定。
+</p>
+
+<h3><span class="sev s-lo">⚪ 可疑项（需进一步验证，<b>未</b>当作确定漏洞）</span></h3>
+<ul style="font-size:13.5px">
+  <li><b>Autofill 保存路径用明文 <code>String</code> 密码走 Intent extra</b>（<code>AutofillSaveIntents.kt:17-34</code>）——
+      与项目「口令禁止用 String 承载」的核心规范相悖。<code>Intent</code> 会经 Binder 复制到 system_server，
+      明文密码短暂存在于系统进程内存。属架构取舍，但严格说应至少用 <code>SecureBytes</code> 并在用后清零。</li>
+  <li><b>CredentialProvider 的 <code>PendingIntent.FLAG_MUTABLE</code></b>（<code>VaultixCredentialProviderService.kt:232-237</code>）——
+      CP 场景系统确实需要 mutable（回填结果），但未比对官方 sample 是否同样要求，也未做 Intent 白名单校验。</li>
+  <li><b>KDBX passkey 写回不保真</b> —— <code>FLAG_BE</code>/<code>FLAG_BS</code> 因领域模型无此二位取默认值，
+      第三方写入的 <code>false</code> 会被改写成「可备份且已备份」。W6 真机待验。</li>
+</ul>
+
+<div class="ok-box">
+<b>✅ 值得肯定的地方（同样是实证）</b><br>
+生产代码（<code>src/main</code>，约 325 文件）：
+<code>TODO</code>/<code>FIXME</code>/<code>HACK</code> = <b>0</b> · <code>GlobalScope</code> = <b>0</b> ·
+空吞异常 = <b>0</b> · <code>!!</code> 仅 <b>2</b> 处且均经核实安全（都因 Kotlin 无法智能转换）。
+<br><br>
+<code>SecureBytes</code>/<code>SymmetricCryptoKey</code> 设计正确、<code>fill(0)</code> 清零真实存在、
+<code>toString()</code> 只输出长度；AES-GCM nonce 用 <code>SecureRandom</code> 每次随机、128 位 tag；
+<code>KeyPermanentlyInvalidatedException</code> 有专门处理且穿透 <code>ProviderException</code> 包装链；
+<code>FLAG_SECURE</code> 经进程级 <code>ActivityLifecycleCallbacks</code> 全局覆盖全部 10 个 Activity。
+<br><br>
+<b>这是一个反常态地干净的安全敏感代码库。</b>正因如此，S1 才格外突出 ——
+它是同一条写路径家族里<b>唯一被遗漏的一致性保护</b>。
+</div>
+
+<h2>六、质量保障体系的真实可信度</h2>
+
+<h3>CI 四道门禁 —— 只有 3 条是真的</h3>
+<table>
+  <tr><th style="width:150px">步骤</th><th style="width:100px">blocking?</th><th>说明</th></tr>
+  <tr><td>Run detekt</td><td><span class="tag t-yes">✅ 真门禁</span></td>
+      <td>但仅启用 <b>7 条规则</b>（LongMethod / LargeClass / MagicNumber 等），<b>无安全类规则</b></td></tr>
+  <tr><td>Check encoding</td><td><span class="tag t-yes">✅ 真门禁</span></td><td>中文乱码检查</td></tr>
+  <tr><td>Build Debug APK</td><td><span class="tag t-yes">✅ 真门禁</span></td><td>构建门</td></tr>
+  <tr><td><b>Run unit tests</b></td><td><span class="tag t-no">❌ 假门禁</span></td>
+      <td><code>continue-on-error: true</code>（<code>ci-debug.yml:345</code>）⇒ <b>顶层 success 不代表单测通过</b></td></tr>
+  <tr><td>Run lint</td><td><span class="tag t-no">❌ 形同虚设</span></td>
+      <td>仅 <code>event != push</code> 时跑（<code>:127</code>），而仓库历史几乎全是 push；且同样 <code>continue-on-error</code></td></tr>
+  <tr><td><b>release.yml</b></td><td><span class="tag t-no">❌ 零测试门禁</span></td>
+      <td><code>:220</code> 直接 <code>assembleFullRelease</code> —— 无 detekt、无单测、无 lint。
+      <b>未通过单测的提交，只要能过编译就能打出签名稳定版</b></td></tr>
+</table>
+
+<h3>工程化对照：成熟开源项目该有的</h3>
+<table>
+  <tr><th style="width:250px">能力</th><th style="width:80px">有?</th><th>说明</th></tr>
+  <tr><td>CI 构建 + 签名发布</td><td><span class="tag t-yes">✅</span></td><td>debug preview + stable release</td></tr>
+  <tr><td>版本号单一真源</td><td><span class="tag t-yes">✅</span></td><td><code>VERSION</code> = 0.9.0</td></tr>
+  <tr><td>本地门禁脚本</td><td><span class="tag t-yes">✅</span></td><td><b>亮点</b>：<code>scripts/</code> 3 个 + <code>.ai/tools/</code> 12 个（含 selftest）</td></tr>
+  <tr><td>覆盖率门禁<b>实际生效</b></td><td><span class="tag t-no">❌</span></td><td>Kover 仅在 <code>core:crypto</code> 配了，CI <b>从不运行</b> <code>koverVerify</code> ⇒「91.4%」是纸面数字</td></tr>
+  <tr><td>依赖漏洞扫描</td><td><span class="tag t-no">❌</span></td><td>无 dependabot / renovate</td></tr>
+  <tr><td>SAST（静态安全扫描）</td><td><span class="tag t-no">❌</span></td><td>无 CodeQL / semgrep / trivy。对密码管理器<b>尤其重要</b></td></tr>
+  <tr><td>仪器 / UI / E2E 测试</td><td><span class="tag t-no">❌</span></td><td><b>androidTest = 0 个文件</b>（依赖已声明但是死配置）</td></tr>
+  <tr><td><code>.editorconfig</code></td><td><span class="tag t-no">❌</span></td><td>无</td></tr>
+  <tr><td><code>CONTRIBUTING.md</code></td><td><span class="tag t-no">❌</span></td><td>无（M4 才计划）</td></tr>
+  <tr><td>F-Droid / fastlane 元数据</td><td><span class="tag t-no">❌</span></td><td>无</td></tr>
+  <tr><td>Robolectric / MockWebServer</td><td><span class="tag t-no">❌</span></td><td>未引入</td></tr>
+</table>
+
+<h3>最危险的测试盲区</h3>
+<table>
+  <tr><th style="width:240px">盲区</th><th>证据</th></tr>
+  <tr><td><b>Room 持久层 + domain 层零测试</b></td>
+      <td><code>core:database</code> 5 个 main 文件 / <b>0 测试</b>；<code>domain</code> 11 个 main 文件 / <b>0 测试</b>。
+      密码库的本地持久化、DB 迁移、<code>AtomicWriteDao</code> 全裸 —— <b>丢数据风险最集中的地方恰好没测</b></td></tr>
+  <tr><td><b>androidTest = 0</b></td>
+      <td><code>Docs/12</code> 承诺 UI 20% + E2E 5%，实际一个都没有。Keystore / 生物识别<b>只能</b>用 instrumentation 覆盖 ⇒ 解锁/指纹链路无自动化验证</td></tr>
+  <tr><td><b>release 构建无测试门禁</b></td>
+      <td>见上表 <code>release.yml:220</code></td></tr>
+  <tr><td><b>19 个 ViewModel 只有 2 个有测试</b></td>
+      <td>UI 状态机、快速解锁 fanout、会话恢复逻辑基本无回归保护</td></tr>
+  <tr><td><b>同步编排器覆盖极薄</b></td>
+      <td><code>KdbxSyncOrchestratorTest</code> 仅 4 例、<code>BitwardenSyncOrchestratorTest</code> 仅 4 例。
+      「同步丢数据」是密码管理器头号风险，编排器却只有个位数用例</td></tr>
+</table>
+
+<details>
+<summary>单测覆盖面明细（点开）</summary>
+<table>
+  <tr><th style="width:150px">模块</th><th style="width:90px">文件 / 用例</th><th>测什么</th><th style="width:150px">盲区</th></tr>
+  <tr><td><code>app</code></td><td>37 / 345</td><td>大量纯函数（Autofill 规则、URL 匹配、颜色、格式）</td><td>19 个 ViewModel 只测 2 个</td></tr>
+  <tr><td><code>core:crypto</code></td><td>10 / 191</td><td>加密向量、AEAD、PIN 包裹（<b>真实算法</b>）</td><td>覆盖率门禁未接入 CI</td></tr>
+  <tr><td><code>core:common</code></td><td>13 / 146</td><td>TOTP / WebAuthn / 密码强度（纯函数）</td><td>—</td></tr>
+  <tr><td><code>data:repository</code></td><td>18 / 145</td><td>会话 / 写路径 / orchestrator（多为 mockk）</td><td>编排器仅各 4 例</td></tr>
+  <tr><td><code>data:kdbx</code></td><td>15 / 141</td><td><b>真·往返集成</b>（编码→解码→字段计数相等）</td><td>仅内存字节，无外部库交叉验证</td></tr>
+  <tr><td><code>data:bitwarden</code></td><td>9 / 64</td><td>mapper 载荷保真、KDF、2FA 解析</td><td>无 MockWebServer</td></tr>
+  <tr><td><code>core:datastore</code></td><td>2 / 18</td><td>超时作用域</td><td>⚠️ <b>CI 未登记，从不执行</b></td></tr>
+  <tr><td><code>core:model</code></td><td>1 / 5</td><td>linkedId 编码</td><td>—</td></tr>
+  <tr><td><code>core:database</code></td><td><b>0 / 0</b></td><td>—</td><td>⚠️ <b>数据持久层全裸</b></td></tr>
+  <tr><td><code>domain</code></td><td><b>0 / 0</b></td><td>—</td><td>⚠️ <b>领域接口全裸</b></td></tr>
+</table>
+<div class="note">
+真正有洞察的是那批<b>往返保真测试</b>（<code>KdbxToolFieldsRoundTripTest</code> 27 例、
+<code>KdbxTotpRoundTripTest</code> 9 例、<code>CipherPayloadPreservationTest</code> 14 例）——
+注释明确写了「W4 之前 URI 写回会静默丢 2 个网址」，用「数量 + 内容 + 顺序」三重判据。
+<b>这是全项目最有价值的部分。</b>
+</div>
+</details>
+
+<h2>七、文档体系</h2>
+<div class="grid g4">
+  <div class="stat"><div class="n">54</div><div class="l">Docs/ 文档 · 13,281 行</div></div>
+  <div class="stat"><div class="n">20</div><div class="l">.ai/ SESSION 接力文档</div></div>
+  <div class="stat"><div class="n">279</div><div class="l">.ai/issues 条目</div></div>
+  <div class="stat"><div class="n">12</div><div class="l">本地门禁脚本</div></div>
+</div>
+
+<div class="ok-box">
+<b>亮点（真实）</b>：<code>.ai/</code> 接力机制<b>活跃且自省</b> ——
+ISSUES.md 里坦承「条数列不可信，5 篇已漂移」；SESSION 记录了「CI 假绿」复盘；
+HANDOFF 记录「哪些结论已被推翻」。<b>这套元认知在开源项目中罕见。</b>
+</div>
+
+<div class="hi-box">
+<b>时效性风险</b>：<code>Docs/progress/current-status.md</code> 头部标「最后更新 <b>2026-09-20</b>」，
+而仓库 HEAD 是 <b>2026-10-10</b>。文中 <code>data:kdbx</code> 写「⬜ M2 未做」，
+实际已有 15 个测试文件 / 141 用例且 CI 已跑 —— <b>文档与代码直接矛盾</b>。
+同文档的「<code>core:crypto</code> 覆盖率 91.4%」因 CI 不跑 kover 而<b>不可复现</b>。
+<br><br>
+<code>Docs/12-测试与发布.md</code> 描述的是<b>理想态</b>（测试金字塔、MockWebServer、Robolectric、
+Paparazzi、F-Droid、Play 分阶段），<b>几乎全部未实现</b> ⇒ 是「设计蓝图」而非「现状描述」，易被误读为已完成。
+</div>
+
+<h2>八、总评与建议</h2>
+
+<table>
+  <tr><th style="width:200px">维度</th><th style="width:90px">评级</th><th>说明</th></tr>
+  <tr><td>纯逻辑单测质量</td><td><b>B+</b></td><td>KDBX 往返 / 加密向量是真实的、有洞察的</td></tr>
+  <tr><td>CI 强制力</td><td><b>D</b></td><td>唯一能证明「测试通过」的步骤 non-blocking；release 免测试</td></tr>
+  <tr><td>集成 / UI / E2E 覆盖</td><td><b>F</b></td><td>androidTest = 0，承诺的 40% 全空</td></tr>
+  <tr><td>安全工程化</td><td><b>F</b></td><td>无 SAST、无依赖扫描、detekt 无安全规则</td></tr>
+  <tr><td>代码卫生（生产代码）</td><td><b>A</b></td><td>0 TODO / 0 GlobalScope / 0 空 catch —— 反常态地干净</td></tr>
+  <tr><td>文档内容</td><td><b>A−</b></td><td>元认知极强，记账诚实</td></tr>
+  <tr><td>文档时效</td><td><b>D</b></td><td>关键状态文档滞后近 3 周且自相矛盾</td></tr>
+</table>
+
+<h3>最小改动清单（按性价比排序）</h3>
+<ol style="font-size:14px">
+  <li><b>修 S1</b>（<code>restoreItem</code> 改原子写）—— 一处改动，消除一个真实数据丢失缺口。<span class="note">成本：10 分钟</span></li>
+  <li><b>单测步骤去掉 <code>continue-on-error</code></b> —— 让 CI 的绿真正有意义。<span class="note">成本：1 行</span></li>
+  <li><b><code>release.yml</code> 加测试门禁 + 统一 Gradle 版本</b>（现用 8.11.1，wrapper 是 9.5.1）—— 防未测代码签出稳定版。<span class="note">成本：半天</span></li>
+  <li><b>补 <code>core:database</code> / <code>domain</code> 测试 + 同步编排器集成测试</b> —— 覆盖"丢数据风险最集中"的区域。<span class="note">成本：2–3 天</span></li>
+  <li><b>引入 Robolectric + 至少一个 instrumentation 冒烟</b> —— 让解锁/生物识别链路有自动化验证。<span class="note">成本：2–3 天</span></li>
+  <li><b>接 CodeQL / dependency-check</b> —— 密码管理器的基础安全工程化。<span class="note">成本：1 天</span></li>
+  <li><b>更新 <code>current-status.md</code></b>，并把 <code>Docs/12</code> 明确标注为「目标态蓝图」。<span class="note">成本：2 小时</span></li>
+</ol>
+
+<h3>功能路线建议</h3>
+<p style="font-size:14px">
+功能上，<b>P0 的四项（导入器 / 附件 / 安全中心 / 主密码改密）决定了这个项目能否被"非作者本人"使用</b>。
+其中<b>安全中心</b>与<b>导入器</b>性价比最高：前者是安全产品的核心价值主张，后者是用户进入的第一道门。
+建议把 M3 拆成 M3-a（导入导出矩阵，让它"进得来"）与 M3-b（安全中心，让它"有存在的理由"）。
+</p>
+
+<div class="note" style="margin-top:30px;border-top:1px solid var(--line);padding-top:14px">
+本报告基于静态代码审查（实际读取代码行、grep 统计、模块结构分析）+ 2025–2026 公开竞品资料。
+所有缺陷均附文件路径与行号。标注「需进一步验证」的项<b>未</b>当作确定漏洞。
+不引用项目自报的完成度百分比（其 Bastion 对照报告自认「5 条 ❌ 有 4 条是假的」）。
+</div>
+
+</div>
+</body>
+</html>
