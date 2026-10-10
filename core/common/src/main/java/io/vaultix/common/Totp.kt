@@ -141,6 +141,15 @@ internal fun normalizeAlgorithm(raw: String): String {
 const val TOTP_FAILURE_PLACEHOLDER: String = "000000"
 
 /**
+ * [isTotpFailurePlaceholder] 的 `digits` 合理区间下界/上界（仅用于防御性夹取，不参与业务判定）。
+ *
+ * 抽成常量只为一个原因：detekt 的 `MagicNumber` 会记字面量 `10` 的账
+ * （`1` 通常被默认豁免）。这两个数本身无业务含义 —— **别让它们长成"看起来有意义"的东西**。
+ */
+private const val MIN_PLACEHOLDER_DIGITS = 1
+private const val MAX_PLACEHOLDER_DIGITS = 10
+
+/**
  * `code` 是否是一个**计算失败**的占位符（而不是真实验证码）。
  *
  * 只应与 [TotpGenerator.generateUi]（失败返回 null）配合使用 —— 那里 null 是唯一的失败信号，
@@ -150,7 +159,7 @@ const val TOTP_FAILURE_PLACEHOLDER: String = "000000"
  * @param digits 该条目的期望码长（mOTP/Steam 分别是 6/5 位，占位符长度随之不同）。
  */
 fun isTotpFailurePlaceholder(code: String, digits: Int = 6): Boolean =
-    code.length == digits.coerceIn(1, 10) && code.all { it == '0' }
+    code.length == digits.coerceIn(MIN_PLACEHOLDER_DIGITS, MAX_PLACEHOLDER_DIGITS) && code.all { it == '0' }
 
 /** mOTP 固定步长（秒）与码长。 */
 private const val MOTP_PERIOD = 10

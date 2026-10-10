@@ -844,41 +844,18 @@ private fun TotpRow(
             onLongClick = if (isSelectionMode) null else onToggleSelect,
             selected = isSelected,
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                // 站点图标（库内服务器地址 + 条目域名），取不到回退首字母 ——
-                // 与密码列表同一套观感（见 [SiteIconByHost]）。
-                SiteIconByHost(
-                    domain = entry.domain,
-                    fallbackText = entry.title,
-                    serverOrigin = serverOrigin,
-                )
-                Spacer(Modifier.width(EntryCardIconSpacing))
-                Text(
-                    text = entry.title.ifBlank { stringResource(R.string.totp_screen_title) },
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    // 与条目卡统一收窄行高（见 [EntryCardTitleLineHeight] 的 KDoc）。
-                    lineHeight = EntryCardTitleLineHeight,
-                    modifier = Modifier.weight(1f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Badge(entry.bound)
-                // 云端同步状态（待推送 = 云加斜杠，error 色跳出来）。见 `.ai/ISSUES.md` #76。
-                if (!synced) CloudSyncIcon(synced = false)
-                if (isSelectionMode) {
-                    Checkbox(checked = isSelected, onCheckedChange = { onToggleSelect() })
-                } else {
-                    TotpRowMenu(
-                        onEdit = onEdit,
-                        onDelete = onDelete,
-                        onBind = if (entry.bound) null else onBind,
-                    )
-                }
-            }
+            // ⚠️ 2026-10-10（第二次）：标题行同样抽出 —— 见 [TotpRowHeader] 的 KDoc。
+            TotpRowHeader(
+                entry = entry,
+                serverOrigin = serverOrigin,
+                synced = synced,
+                isSelectionMode = isSelectionMode,
+                isSelected = isSelected,
+                onToggleSelect = onToggleSelect,
+                onEdit = onEdit,
+                onDelete = onDelete,
+                onBind = onBind,
+            )
             if (entry.account.isNotBlank()) {
                 Text(
                     text = entry.account,
@@ -890,63 +867,179 @@ private fun TotpRow(
             Spacer(Modifier.height(Spacing.sm))
             // ⚠️ 2026-10-10：算不出码时**整行换成一条说明**，而不是把空串/占位码画进大码位。
             //    判据是 `code == null`（唯一来源是 TotpGenerator.generateUi）。
-            if (code == null) {
-                TotpCodeUnavailable()
-            } else {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    SelectionContainer(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = shownCode.orEmpty(),
-                            // 对齐 Bastion `TotpCodeCard`（40sp / 普通模式 32–36sp）：
-                            // 验证码是「一眼读出来照着敲」的数字，24sp 的 `headlineSmall` 在小屏上
-                            // 得凑近看；**等宽**保证每秒刷新时数字宽度不抖，分组空格（[groupCode]）
-                            // 比 letterSpacing 更利于口头念读。
-                            fontSize = TOTP_CODE_FONT_SP,
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.ExtraBold,
-                            // 剩余 ≤5 秒转警示色：不必盯着顶部进度条也知道「快过期了，先别念」。
-                            color = if (isHotp || remaining > TOTP_HOT_WARNING_SECONDS) {
-                                MaterialTheme.colorScheme.onSurface
-                            } else {
-                                MaterialTheme.colorScheme.error
-                            },
-                        )
-                    }
-                    if (isHotp) {
-                        // HOTP 基于计数器，无时间衰减：展示当前 counter 而非倒计时
-                        Text(
-                            text = stringResource(R.string.totp_hotp_counter, entry.counter),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    } else {
-                        // 下一个验证码预览（用户 2026-09-18 要求：「在验证码条目上也显示下一个
-                        // 验证码，比较小字的那种」，对齐 Bastion `TotpCodeCard` 的 Next 块）。
-                        //
-                        // 为什么值得占这一块位置：验证码是「念给对面听 / 手抄到另一台设备」的
-                        // 东西，而换码是每 30 秒一次的悬崖 —— 当前码只剩几秒时，用户需要的是
-                        // 提前读到下一个，而不是等它跳完再看。把它摆在**大码正右方**，视线不用
-                        // 移动就能对照；等当前码过期，它会原地升格成新的大码。
-                        //
-                        // ⚠️ 用 `labelSmall` + 等宽（对齐 Bastion）：小一号且不喧宾夺主，
-                        //    等宽保证每秒刷新时宽度不抖（与上面大码同因）。
-                        // ⚠️ **不给 `SelectionContainer`**：这一块只在 5 秒内才有意义，
-                        //    真正要选中复制走的是整行点击（见 [copyNow]）。包上会让长按选择
-                        //    落到这个小码上，反而抢走整行手势。
-                        // ⚠️ 隐藏时预览也要遮：否则"藏了当前码、亮着下一个码" —— 下一个码
-                        // 同样是**有效验证码**，等于没藏（它会在一秒后变成当前码）。
-                        //
-                        // ⚠️ 2026-10-10：`nextCode` 现在也可能为 null（与 `code` 同一次失败）。
-                        //    null 时**整块不画** —— 大码那边已经有一条明确的错误说明，
-                        //    这里再挂一个空的 "Next" 标签只会多加一处噪声。
-                        nextCode?.let {
-                            NextCodePreview(code = previewNextCode(it, actions.codesHidden))
-                        }
-                    }
-                }
-            }
+            //
+            //    ⚠️ 2026-10-10（第二次）：这一整块抽成 [TotpCodeArea] —— 它把 [TotpRow] 的
+            //    圈复杂度顶到了 **19**，越过 detekt `CyclomaticComplexMethod ≤14` ⇒ 推送即红。
+            //    本地自查脚本**不跑 detekt**，所以是 CI 先发现的（见下）。
+            //    本文件的 KDoc 早已写明该用哪一招：「抽成独立 composable 是为了让
+            //    [TotpRow] 守住 detekt 上限」—— 新加一个判空分支时就该顺手再抽一层，
+            //    而不是等门禁变红。**同一条规则对 `LongMethod ≤150` 也适用**（整行现在
+            //    只差几行就到线）。
+            TotpCodeArea(
+                code = code,
+                shownCode = shownCode,
+                nextCode = nextCode,
+                isHotp = isHotp,
+                remaining = remaining,
+                counter = entry.counter,
+                codesHidden = actions.codesHidden,
+            )
             // 倒计时不再逐行画进度条：整页共用顶部的统一进度条（见 [UnifiedTotpProgressBar]），
             // 既统一观感，也省掉每行每秒一次的绘制/动画开销（用户要求「降低功耗」）。
+        }
+    }
+}
+
+/**
+ * 验证码条目的**标题行**：站点图标 · 标题 · 绑定徽标 · 云同步态 · 多选/菜单。
+ *
+ * ## 为什么抽出来（2026-10-10）
+ *
+ * 与 [TotpCodeArea] 同因：这些分支（`isSelectionMode` 二选一、`!synced`、
+ * `entry.bound`）留在 [TotpRow] 里会让它同时逼近 detekt 的
+ * `CyclomaticComplexMethod ≤14` 与 `LongMethod ≤150` 两条线 —— 而它每次
+ * 加功能都要再长一截。**按"一屏内可命名的视觉单元"切分，比按行数硬压更可持续。**
+ *
+ * ## ⚠️ 多选态下点击/长按的归属
+ *
+ * 长按选中由 [EntryCard] 自己的 `onLongClick` 独占；[PressAndSwipeToDelete] 只负责
+ * 「长按成立后进入拖拽删除」的信号。这里只画勾选框 ⇄ 菜单，**不接管**点击语义
+ * （点击在 [TotpRow] 的 `onClick` 上）。
+ */
+@Composable
+private fun TotpRowHeader(
+    entry: TotpEntry,
+    serverOrigin: String?,
+    synced: Boolean,
+    isSelectionMode: Boolean,
+    isSelected: Boolean,
+    onToggleSelect: () -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+    onBind: () -> Unit,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        // 站点图标（库内服务器地址 + 条目域名），取不到回退首字母 ——
+        // 与密码列表同一套观感（见 [SiteIconByHost]）。
+        SiteIconByHost(
+            domain = entry.domain,
+            fallbackText = entry.title,
+            serverOrigin = serverOrigin,
+        )
+        Spacer(Modifier.width(EntryCardIconSpacing))
+        Text(
+            text = entry.title.ifBlank { stringResource(R.string.totp_screen_title) },
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            // 与条目卡统一收窄行高（见 [EntryCardTitleLineHeight] 的 KDoc）。
+            lineHeight = EntryCardTitleLineHeight,
+            modifier = Modifier.weight(1f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Badge(entry.bound)
+        // 云端同步状态（待推送 = 云加斜杠，error 色跳出来）。见 `.ai/ISSUES.md` #76。
+        if (!synced) CloudSyncIcon(synced = false)
+        if (isSelectionMode) {
+            Checkbox(checked = isSelected, onCheckedChange = { onToggleSelect() })
+        } else {
+            TotpRowMenu(
+                onEdit = onEdit,
+                onDelete = onDelete,
+                onBind = if (entry.bound) null else onBind,
+            )
+        }
+    }
+}
+
+/**
+ * 验证码展示区：**算不出来 ⇒ 说明一行；算得出来 ⇒ 大码 + 右侧副信息**。
+ *
+ * ## 为什么单独抽出来（2026-10-10）
+ *
+ * 不是为了复用（只此一处调用），而是为了 **detekt 门禁**：这一块含
+ * `code == null` / `isHotp` / `remaining` 三个分支，把它们留在 [TotpRow] 里
+ * 会把那个函数的圈复杂度顶到 **19**，越过 `CyclomaticComplexMethod ≤14`。
+ * 本文件的 KDoc 早写明该抽层，只是加"失败态"时忘了照做 ⇒ 由 CI 抓到。
+ *
+ * ## 三个判据为什么必须在这里集中
+ *
+ * - `code == null`：**唯一来源**是 [TotpGenerator.generateUi]，三处（大码/复制/预览）
+ *   都从这一个 null 派生，不各自重算"算不算失败"；
+ * - `shownCode`：由 [displayCode] 纯函数给出（隐藏态 ⇒ 掩码）；
+ * - `nextCode`：HOTP 无"下一个"概念 ⇒ 调用方已复用当前码，这里靠 `isHotp` 短路，
+ *   因此**永远不会**出现"HOTP 也画一个 Next 预览"。
+ *
+ * @param code 当前验证码；`null` = 计算失败（此时整块退化成 [TotpCodeUnavailable]）。
+ * @param shownCode 已按「是否隐藏」处理过的可显示文本（`code != null` 时才有值）。
+ * @param nextCode 下一个时间步的验证码；与 `code` 同一次失败 ⇒ 同为 null 时整块不画。
+ */
+@Composable
+private fun TotpCodeArea(
+    code: String?,
+    shownCode: String?,
+    nextCode: String?,
+    isHotp: Boolean,
+    remaining: Int,
+    counter: Int,
+    codesHidden: Boolean,
+) {
+    if (code == null) {
+        TotpCodeUnavailable()
+        return
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        SelectionContainer(modifier = Modifier.weight(1f)) {
+            Text(
+                text = shownCode.orEmpty(),
+                // 对齐 Bastion `TotpCodeCard`（40sp / 普通模式 32–36sp）：
+                // 验证码是「一眼读出来照着敲」的数字，24sp 的 `headlineSmall` 在小屏上
+                // 得凑近看；**等宽**保证每秒刷新时数字宽度不抖，分组空格（[groupCode]）
+                // 比 letterSpacing 更利于口头念读。
+                fontSize = TOTP_CODE_FONT_SP,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.ExtraBold,
+                // 剩余 ≤5 秒转警示色：不必盯着顶部进度条也知道「快过期了，先别念」。
+                color = if (isHotp || remaining > TOTP_HOT_WARNING_SECONDS) {
+                    MaterialTheme.colorScheme.onSurface
+                } else {
+                    MaterialTheme.colorScheme.error
+                },
+            )
+        }
+        if (isHotp) {
+            // HOTP 基于计数器，无时间衰减：展示当前 counter 而非倒计时
+            Text(
+                text = stringResource(R.string.totp_hotp_counter, counter),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            // 下一个验证码预览（用户 2026-09-18 要求：「在验证码条目上也显示下一个
+            // 验证码，比较小字的那种」，对齐 Bastion `TotpCodeCard` 的 Next 块）。
+            //
+            // 为什么值得占这一块位置：验证码是「念给对面听 / 手抄到另一台设备」的
+            // 东西，而换码是每 30 秒一次的悬崖 —— 当前码只剩几秒时，用户需要的是
+            // 提前读到下一个，而不是等它跳完再看。把它摆在**大码正右方**，视线不用
+            // 移动就能对照；等当前码过期，它会原地升格成新的大码。
+            //
+            // ⚠️ 用 `labelSmall` + 等宽（对齐 Bastion）：小一号且不喧宾夺主，
+            //    等宽保证每秒刷新时宽度不抖（与上面大码同因）。
+            // ⚠️ **不给 `SelectionContainer`**：这一块只在 5 秒内才有意义，
+            //    真正要选中复制走的是整行点击（见 [copyNow]）。包上会让长按选择
+            //    落到这个小码上，反而抢走整行手势。
+            // ⚠️ 隐藏时预览也要遮：否则"藏了当前码、亮着下一个码" —— 下一个码
+            // 同样是**有效验证码**，等于没藏（它会在一秒后变成当前码）。
+            //
+            // ⚠️ 2026-10-10：`nextCode` 现在也可能为 null（与 `code` 同一次失败）。
+            //    null 时**整块不画** —— 大码那边已经有一条明确的错误说明，
+            //    这里再挂一个空的 "Next" 标签只会多加一处噪声。
+            nextCode?.let {
+                NextCodePreview(code = previewNextCode(it, codesHidden))
+            }
         }
     }
 }
