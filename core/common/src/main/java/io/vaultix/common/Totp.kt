@@ -53,11 +53,15 @@ private const val DEFAULT_DIGITS = 6
  *
  * 同时也是 [normalizeAlgorithm] 认不出写法时的**回落值**。
  *
- * ⚠️ 刻意**不**把认不出的原始串直接拼进 `Mac.getInstance`：那会抛
- * `NoSuchAlgorithmException`，而上层 `generateTotp` 的 `catch (_: Exception)`
- * 会把它吞成 `"0".repeat(digits)` ⇒ 用户看到**恒定的 `000000`** 且没有任何提示。
- * 宁可回落到 RFC 默认语义，也不要产出一段看似有效实则永假的验证码。
- */
+     * ⚠️ 刻意**不**把认不出的原始串直接拼进 `Mac.getInstance`：那会抛
+     * `NoSuchAlgorithmException`，而上层 `generateTotp` 的 `catch (_: Exception)`
+     * 会把它吞成 `"0".repeat(digits)`（见 [TOTP_FAILURE_PLACEHOLDER]）⇒ 用户看到恒定的
+     * `000000` 且没有任何提示。宁可回落到 RFC 默认语义，也不要产出一段看似有效实则永假的验证码。
+     *
+     * 📌 2026-10-10：下沉到归一化层的**部分**畸形串不再产生恒 `000000` 了，
+     *    但**彻底算不出**的密钥（如非法 Base32）仍会走到占位符 —— 那条路径现在会
+     *    被 [TotpGenerator.generateUi] 转成 `null`，由 UI 显式提示，不再静默。
+     */
 private const val DEFAULT_ALGORITHM = "SHA1"
 
 /**
@@ -105,6 +109,49 @@ internal fun normalizeAlgorithm(raw: String): String {
     return if (bits != null && bits in SUPPORTED_SHA_BITS) "SHA$bits" else DEFAULT_ALGORITHM
 }
 
+/**
+ * 计算失败时的占位符。
+ *
+ * > **它只该出现在"密钥本身就是坏的"这种非交互场景**，绝不该出现在用户正盯着的界面上。
+ *
+ * 历史：这是 [TotpGenerator] 四个生成函数的 `catch` 返回值。原设计意图是好的 ——
+ * 「宁可不崩溃」，且它对**自动填充**是正确的选择（[AutofillDatasetFactory.totpCode]
+ * 等方法签名是 `String?`，把 null 糊进数据集会引入一个新分支，而"填不了就别填"
+ * 本来就等于 null）。
+ *
+ * 但同一套返回值被复制到了**用户正在看的界面**上，于是产生一个静默失效：
+ * 一个密钥格式坏掉的条目，用户看到的是**恒定不变的 `000000`**，页面不报错、也没有任何
+ * 提示（[TotpCodesScreen] 的 `totp_invalid_secret` 只在**编辑表单**里用，管不到列表）。
+ * 用户没有任何线索判断"是软件错了、还是我抄错了、还是对方站点不认" —— 只会一遍遍复制
+ * 这个永远不会变的码。
+ *
+ * ⇒ 拆成两条路径（判据只有一个，见 [isPlaceholder]）：
+ *
+ * | 场景 | 入口 | 失败时 |
+ * |---|---|---|
+ * | 自动填充 / 后台（非交互） | [TotpGenerator.generate] 等 | 仍返回本占位符，行为不变 |
+ * | 用户正看着的界面（交互） | [TotpGenerator.generateUi] | 返回 null ⇒ UI 显示「验证码不可用」 |
+ *
+ * ⚠️ **判据只能有一个**：UI 用来判断"这个码是不是失败的"必须调 [isPlaceholder]，
+ *    而不是自己比 `code == "000000"`。后者会在**密钥合法、验证码恰好是 000000** 时误判
+ *    （此时不该切到错误态 —— 那条码虽然离谱但**是对的**，用户照抄能过）。
+ *    两种失败返回同一个占位符，正是为了让这条单一判据成立；哪天想给它们不同的占位符，
+ *    要同时补上"这次失败到底是哪种"的区分方式。
+ */
+const val TOTP_FAILURE_PLACEHOLDER: String = "000000"
+
+/**
+ * `code` 是否是一个**计算失败**的占位符（而不是真实验证码）。
+ *
+ * 只应与 [TotpGenerator.generateUi]（失败返回 null）配合使用 —— 那里 null 是唯一的失败信号，
+ * 判空即可。本函数是给**能拿到非空码、但需要在展示层复核**的路径用的兜底判据，
+ * 免得别处再写一遍 `== "000000"` 这种会误伤的散装判断。
+ *
+ * @param digits 该条目的期望码长（mOTP/Steam 分别是 6/5 位，占位符长度随之不同）。
+ */
+fun isTotpFailurePlaceholder(code: String, digits: Int = 6): Boolean =
+    code.length == digits.coerceIn(1, 10) && code.all { it == '0' }
+
 /** mOTP 固定步长（秒）与码长。 */
 private const val MOTP_PERIOD = 10
 private const val MOTP_DIGITS = 6
@@ -141,7 +188,7 @@ object TotpGenerator {
             val hmac = generateHmac(key, timeStep, algorithm)
             truncateHmac(hmac, safeDigits)
         } catch (_: Exception) {
-            "0".repeat(safeDigits)
+            placeholderFor(safeDigits)
         }
     }
 
@@ -161,7 +208,7 @@ object TotpGenerator {
             val hmac = generateHmac(key, counter, algorithm)
             truncateHmac(hmac, safeDigits)
         } catch (_: Exception) {
-            "0".repeat(safeDigits)
+            placeholderFor(safeDigits)
         }
     }
 
@@ -201,7 +248,7 @@ object TotpGenerator {
                 digitsOnly.padEnd(MOTP_DIGITS, '0')
             }
         } catch (_: Exception) {
-            "0".repeat(MOTP_DIGITS)
+            placeholderFor(MOTP_DIGITS)
         }
     }
 
@@ -241,6 +288,17 @@ object TotpGenerator {
      *    「有保护的那条路径看起来正常」会掩盖边上的真崩溃，这正是它躲了这么久的原因。
      */
     internal fun safePeriod(period: Int): Int = if (period > 0) period else DEFAULT_PERIOD
+
+    /**
+     * 构造指定码长的失败占位符（全部 `0`）。
+     *
+     * 四个生成函数的 `catch` 分支**统一从这里出**，而不是各写一遍 `"0".repeat(n)` ——
+     * 因为失败信号的"长相"必须唯一，[isTotpFailurePlaceholder] 才敢用一条判据认它。
+     * 哪天有人给某个类型改了占位符长相而没同步判据，那条散装写法就会静默失效
+     * （失败被当成真码显示，正是本次要修的病）。
+     */
+    private fun placeholderFor(digits: Int): String =
+        TOTP_FAILURE_PLACEHOLDER.take(digits.coerceIn(1, 10)).padEnd(digits.coerceIn(1, 10), '0')
 
     /** 遮罩时至少保留的位数（见 [mask]）。 */
     private const val MASK_KEEP_MIN = 3
@@ -298,6 +356,11 @@ object TotpGenerator {
     /**
      * 按 [TotpConfig] 生成当前验证码（五类型统一入口）。
      * HOTP 不依赖时间（用 config.counter）；mOTP 需 config.pin。
+     *
+     * ⚠️ 计算失败时返回 [TOTP_FAILURE_PLACEHOLDER]（恒 `0`）。
+     *    **非交互场景（自动填充 / 后台复制）继续用它** —— 那些调用点的语义是
+     *    「拿不到就别用」，占位符与 null 等价且不必改签名。
+     *    凡是**要显示给用户**的地方，请改用 [generateUi]（失败返回 null）。
      */
     fun generate(
         config: TotpConfig,
@@ -320,6 +383,62 @@ object TotpGenerator {
             config.digits,
             config.algorithm,
         )
+    }
+
+    /**
+     * ★ 面向**界面**的验证码生成：失败返回 `null`，而不是一个看起来像验证码的假码。
+     *
+     * ## 为什么必须有这个入口（2026-10-10）
+     *
+     * [generate] 失败时返回 [TOTP_FAILURE_PLACEHOLDER]，对自动填充是合适的；但同样的返回值
+     * 被用在了**用户正看着的验证码列表**上，结果是一条密钥坏掉的条目会显示一个**永不变化**的
+     * `000000`，页面不报错也不提示 —— 用户只能一遍遍复制这个死码，还以为是对方站点的问题。
+     *
+     * 把"失败"编码成 `null` 之后，UI 能明确落到「验证码不可用」这一步，
+     * 且**不再需要拿 `000000` 做字符串比较**去猜（那种猜法在真码恰好为 `000000` 时会误判）。
+     *
+     * ## 为什么不是 `Result`
+     *
+     * 调用方（Compose 重组里的 `val code = ...`）只需要"有没有值"这一个信息；
+     * `Result` 会逼着每个调用点写 `getOrNull()`，等于把 null 又绕回来一遍。
+     *
+     * ⚠️ 本函数**共用** [generate] 的全部实现，不是一个并行算法 ——
+     *    它只是把占位符翻译成 null，两者不可能算出不同的码。
+     */
+    fun generateUi(
+        config: TotpConfig,
+        timeSeconds: Long = System.currentTimeMillis() / 1000,
+    ): String? {
+        val code = generate(config, timeSeconds)
+        return code.takeUnless { isTotpFailurePlaceholder(it, effectiveDigits(config)) }
+    }
+
+    /**
+     * 该 config **实际会产出**的码长 —— [isTotpFailurePlaceholder] 的判据必须用它，
+     * 而不是 `config.digits`。
+     *
+     * ## ⚠️ 为什么不能直接用 `config.digits`（2026-10-10 实测踩到）
+     *
+     * 两个类型的**真实码长与 `config.digits` 无关**：
+     *
+     * | 类型 | 真实码长 | `config.digits` 默认值 |
+     * |---|---|---|
+     * | [OtpType.STEAM] | 5（[STEAM_DIGITS]，硬编码） | 6 |
+     * | [OtpType.MOTP] | 6（[MOTP_DIGITS]，硬编码） | 6 |
+     *
+     * 于是"Steam 算不出码"时：`generate` 给出 `"00000"`（5 位），而判据拿 `digits=6`
+     * 去比长度 ⇒ **不相等 ⇒ 判成不是占位符 ⇒ [generateUi] 把 `"00000"` 原样返回**。
+     * 结果正是本次要修的病本身：UI 上出现一个恒定不变的假码。
+     *
+     * 更阴的是：`TotpCodesScreen` 里 `entry.digits` 与 `entry.type` 不是同一个来源
+     * （digits 来自 `toDisplay`，Steam 时会被写成 5），所以这条在某些构造顺序下
+     * **不会**暴露 —— 也就是说，光靠"UI 上看着对"永远发现不了它。必须靠测试把
+     * "Steam 坏密钥 → null"这条断言钉死。
+     */
+    private fun effectiveDigits(config: TotpConfig): Int = when (config.type) {
+        OtpType.STEAM -> STEAM_DIGITS
+        OtpType.MOTP -> MOTP_DIGITS
+        else -> config.digits
     }
 
     /**
@@ -355,7 +474,7 @@ object TotpGenerator {
                 }
             }
         } catch (_: Exception) {
-            "0".repeat(STEAM_DIGITS)
+            placeholderFor(STEAM_DIGITS)
         }
     }
 

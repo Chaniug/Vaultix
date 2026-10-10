@@ -897,7 +897,18 @@ private fun TotpSection(totp: String?) {
             delay(TOTP_TICK_MS)
         }
     }
-    val code = if (revealed) config?.let { TotpGenerator.generate(it, nowSeconds) } else null
+    // ★ `generateUi`（2026-10-10）：失败返回 null，而不是恒定的 `000000`。
+    //
+    // ⚠️ 这里原先**没有**这个问题那么隐蔽 —— 本页的 `else` 分支本来就会显示
+    //    [R.string.detail_totp_hidden]（"点右侧眼睛显示验证码"）。但那只在**没 reveal**
+    //    时成立；一旦用户点了眼睛，`revealed` 为 true 而 `config` 算不出码时，
+    //    旧代码会把 `000000` 当成真码画进 `headlineSmall`，且**不再有任何提示** ——
+    //    用户以为"我看到了验证码"。改用 generateUi 后，这种情况会落到 else 分支，
+    //    提示语仍然是那句"点右侧眼睛"，措辞上不精确但**不会误导成"这是真码"**。
+    //
+    // 📌 刻意不在本页加一条独立的"验证码不可用"文案：详情页的空间很紧，
+    //    且这不是用户主要读到验证码的地方（主入口是底部的验证码页，那里有完整说明）。
+    val code = if (revealed) config?.let { TotpGenerator.generateUi(it, nowSeconds) } else null
 
     Column {
         SectionTitle(text = stringResource(R.string.section_totp), icon = Icons.Filled.Timer)
@@ -1105,7 +1116,6 @@ private fun CustomFieldRow(field: VaultCustomField, onCopy: () -> Unit) {
         }
     }
 }
-
 
 /** 关联字段编号 → 标准字段名（按 Bitwarden 官方分段编码；未知返回 null）。 */
 @Composable

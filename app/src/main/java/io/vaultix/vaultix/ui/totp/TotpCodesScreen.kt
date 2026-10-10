@@ -762,17 +762,25 @@ private fun TotpRow(
     val onCopy = actions.onCopy
     val onCopyNext = actions.onCopyNext
     val config = entry.toConfig()
-    val code = TotpGenerator.generate(config, nowSeconds)
+    // ★ `generateUi` 而非 `generate`（2026-10-10）：失败返回 **null**，而不是一个静态的
+    //   占位码。原先走 `generate` 时，一条密钥坏掉的条目会显示**永不变化的 `000000`**，
+    //   页面不报错、也不提示 ⇒ 用户一遍遍复制这个死码，还以为是自己或对方站点的问题。
+    //   现在 null 会一路落到下面的错误态（[TotpCodeUnavailable]），把话说清楚。
+    //
+    //   ⚠️ 判据必须只在**这一处**取：`entry.type == HOTP` 下面仍用同一份 `config`，
+    //      而 nextCode 也走同一个入口 —— 三处若各写一套"算不算失败"的判断，必然劈叉。
+    val code = TotpGenerator.generateUi(config, nowSeconds)
     val isHotp = entry.type == OtpType.HOTP
     // HOTP 没有时间衰减，不做过期警示。
     val remaining = TotpGenerator.remainingSeconds(entry.period, nowSeconds)
     // 下一个时间步的验证码（HOTP 无此概念 ⇒ 复用当前码，配合下面的 [isExpiring] 短路，
     // 永远不会被复制走）。用当前时刻 + 一个周期去算，与 Bastion `TotpCodeCard` 的
     // `currentSeconds + period` 口径一致。
-    val nextCode = if (isHotp) {
-        code
-    } else {
-        TotpGenerator.generate(config, nowSeconds + entry.period)
+    // ⚠️ 当前码算不出来时**不再尝试下一个**：同一条密钥、只差一个时间步，
+    //    结果必然也是失败。这里直接复用 null，省掉一次注定失败的 HMAC。
+    val nextCode = when {
+        isHotp || code == null -> code
+        else -> TotpGenerator.generateUi(config, nowSeconds + entry.period)
     }
     // 点一下即复制（对齐 Bastion 验证器页：整行可点 → 复制）。
     //
@@ -786,7 +794,11 @@ private fun TotpRow(
     // 显示/复制/提示这三个量全部由**纯函数**派生（见文件末尾 [displayCode] /
     // [previewNextCode] / [copyAction]）：① 判据只在一处成立，不会两处漂移；
     // ② [TotpRow] 本身已经很长，直接在体里堆 if/else 会顶穿 detekt `CyclomaticComplexMethod ≤14`。
-    val shownCode = displayCode(code, actions.codesHidden)
+    //
+    // ⚠️ 2026-10-10：`code` 现在可为 null（计算失败）。null 时**不走**这三个纯函数，
+    //    而是落到下面的 [TotpCodeUnavailable] 分支 —— 否则会退化成显示空字符串，
+    //    用户看到一块空白，比看到 `000000` 更难判断（"是不是还没加载出来？"）。
+    val shownCode = code?.let { displayCode(it, actions.codesHidden) }
     //
     // ⚠️ 2026-09-13 用户反馈「点击复制大家都知道的操作，不需要提示」—— 复制后的
     // `SnackbarHost` 提示已删除。它除了啰嗦，还会在悬浮胶囊底栏上方压出一块自带
@@ -797,14 +809,22 @@ private fun TotpRow(
     //    而剪贴板里进的是**下一个码** —— 没有反馈的话，粘出来的数字对不上眼前这一屏，
     //    只能读成"复制错了"。所以只在换码这一种情况下说明一句（[onCopyNext]）；
     //    非临期（绝大多数情况）仍然保持 2026-09-13 定下的「安静复制」，不提示。
-    val copyNow: () -> Unit = copyAction(
-        code = code,
-        nextCode = nextCode,
-        isExpiring = isExpiring,
-        copyNextOnExpiring = actions.copyNextOnExpiring,
-        onCopy = onCopy,
-        onCopyNext = onCopyNext,
-    )
+    //
+    // ⚠️ 2026-10-10：`code` 为 null（算不出来）时 `copyNow` 必须是**空操作** ——
+    //    否则会把 null 交给 `onCopy`（往剪贴板塞 "null" 四个字符，或直接 NPE）。
+    //    用户在这一行看到的也是错误态，本来就不该有"复制"这个动作。
+    val copyNow: () -> Unit = if (code == null) {
+        {}
+    } else {
+        copyAction(
+            code = code,
+            nextCode = nextCode ?: code,
+            isExpiring = isExpiring,
+            copyNextOnExpiring = actions.copyNextOnExpiring,
+            onCopy = onCopy,
+            onCopyNext = onCopyNext,
+        )
+    }
 
     // 卡片外框与密码 / 卡包列表完全一致（见 [EntryCard]）；内边距由卡片统一给 16dp。
     // 「长按选中 → 左滑 → 二次确认」包在外层：长按**选中**由 [EntryCard] 的 `onLongClick`
@@ -868,55 +888,101 @@ private fun TotpRow(
                 )
             }
             Spacer(Modifier.height(Spacing.sm))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                SelectionContainer(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = shownCode,
-                        // 对齐 Bastion `TotpCodeCard`（40sp / 普通模式 32–36sp）：
-                        // 验证码是「一眼读出来照着敲」的数字，24sp 的 `headlineSmall` 在小屏上
-                        // 得凑近看；**等宽**保证每秒刷新时数字宽度不抖，分组空格（[groupCode]）
-                        // 比 letterSpacing 更利于口头念读。
-                        fontSize = TOTP_CODE_FONT_SP,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.ExtraBold,
-                        // 剩余 ≤5 秒转警示色：不必盯着顶部进度条也知道「快过期了，先别念」。
-                        color = if (isHotp || remaining > TOTP_HOT_WARNING_SECONDS) {
-                            MaterialTheme.colorScheme.onSurface
-                        } else {
-                            MaterialTheme.colorScheme.error
-                        },
-                    )
-                }
-                if (isHotp) {
-                    // HOTP 基于计数器，无时间衰减：展示当前 counter 而非倒计时
-                    Text(
-                        text = stringResource(R.string.totp_hotp_counter, entry.counter),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                } else {
-                    // 下一个验证码预览（用户 2026-09-18 要求：「在验证码条目上也显示下一个
-                    // 验证码，比较小字的那种」，对齐 Bastion `TotpCodeCard` 的 Next 块）。
-                    //
-                    // 为什么值得占这一块位置：验证码是「念给对面听 / 手抄到另一台设备」的
-                    // 东西，而换码是每 30 秒一次的悬崖 —— 当前码只剩几秒时，用户需要的是
-                    // 提前读到下一个，而不是等它跳完再看。把它摆在**大码正右方**，视线不用
-                    // 移动就能对照；等当前码过期，它会原地升格成新的大码。
-                    //
-                    // ⚠️ 用 `labelSmall` + 等宽（对齐 Bastion）：小一号且不喧宾夺主，
-                    //    等宽保证每秒刷新时宽度不抖（与上面大码同因）。
-                    // ⚠️ **不给 `SelectionContainer`**：这一块只在 5 秒内才有意义，
-                    //    真正要选中复制走的是整行点击（见 [copyNow]）。包上会让长按选择
-                    //    落到这个小码上，反而抢走整行手势。
-                    // ⚠️ 隐藏时预览也要遮：否则"藏了当前码、亮着下一个码" —— 下一个码
-                    // 同样是**有效验证码**，等于没藏（它会在一秒后变成当前码）。
-                    NextCodePreview(code = previewNextCode(nextCode, actions.codesHidden))
+            // ⚠️ 2026-10-10：算不出码时**整行换成一条说明**，而不是把空串/占位码画进大码位。
+            //    判据是 `code == null`（唯一来源是 TotpGenerator.generateUi）。
+            if (code == null) {
+                TotpCodeUnavailable()
+            } else {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    SelectionContainer(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = shownCode.orEmpty(),
+                            // 对齐 Bastion `TotpCodeCard`（40sp / 普通模式 32–36sp）：
+                            // 验证码是「一眼读出来照着敲」的数字，24sp 的 `headlineSmall` 在小屏上
+                            // 得凑近看；**等宽**保证每秒刷新时数字宽度不抖，分组空格（[groupCode]）
+                            // 比 letterSpacing 更利于口头念读。
+                            fontSize = TOTP_CODE_FONT_SP,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.ExtraBold,
+                            // 剩余 ≤5 秒转警示色：不必盯着顶部进度条也知道「快过期了，先别念」。
+                            color = if (isHotp || remaining > TOTP_HOT_WARNING_SECONDS) {
+                                MaterialTheme.colorScheme.onSurface
+                            } else {
+                                MaterialTheme.colorScheme.error
+                            },
+                        )
+                    }
+                    if (isHotp) {
+                        // HOTP 基于计数器，无时间衰减：展示当前 counter 而非倒计时
+                        Text(
+                            text = stringResource(R.string.totp_hotp_counter, entry.counter),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    } else {
+                        // 下一个验证码预览（用户 2026-09-18 要求：「在验证码条目上也显示下一个
+                        // 验证码，比较小字的那种」，对齐 Bastion `TotpCodeCard` 的 Next 块）。
+                        //
+                        // 为什么值得占这一块位置：验证码是「念给对面听 / 手抄到另一台设备」的
+                        // 东西，而换码是每 30 秒一次的悬崖 —— 当前码只剩几秒时，用户需要的是
+                        // 提前读到下一个，而不是等它跳完再看。把它摆在**大码正右方**，视线不用
+                        // 移动就能对照；等当前码过期，它会原地升格成新的大码。
+                        //
+                        // ⚠️ 用 `labelSmall` + 等宽（对齐 Bastion）：小一号且不喧宾夺主，
+                        //    等宽保证每秒刷新时宽度不抖（与上面大码同因）。
+                        // ⚠️ **不给 `SelectionContainer`**：这一块只在 5 秒内才有意义，
+                        //    真正要选中复制走的是整行点击（见 [copyNow]）。包上会让长按选择
+                        //    落到这个小码上，反而抢走整行手势。
+                        // ⚠️ 隐藏时预览也要遮：否则"藏了当前码、亮着下一个码" —— 下一个码
+                        // 同样是**有效验证码**，等于没藏（它会在一秒后变成当前码）。
+                        //
+                        // ⚠️ 2026-10-10：`nextCode` 现在也可能为 null（与 `code` 同一次失败）。
+                        //    null 时**整块不画** —— 大码那边已经有一条明确的错误说明，
+                        //    这里再挂一个空的 "Next" 标签只会多加一处噪声。
+                        nextCode?.let {
+                            NextCodePreview(code = previewNextCode(it, actions.codesHidden))
+                        }
+                    }
                 }
             }
             // 倒计时不再逐行画进度条：整页共用顶部的统一进度条（见 [UnifiedTotpProgressBar]），
             // 既统一观感，也省掉每行每秒一次的绘制/动画开销（用户要求「降低功耗」）。
         }
     }
+}
+
+/**
+ * 「验证码算不出来」的占位说明（2026-10-10 新增）。
+ *
+ * ## 它修的是什么
+ *
+ * 原先密钥坏掉的条目会走到 `TotpGenerator.generate` 的 catch 分支，拿到一串
+ * **恒定的 `000000`** 并当成正常验证码画进大码位置。页面不报错、没有任何提示，
+ * 用户看到的就是一个**永远不变、也永远不对**的码 —— 而他能想到的所有解释
+ * （"也许要等刷新""也许是我抄错了""也许这网站不认")都是错的，无从收敛。
+ *
+ * ⇒ 现在失败编码成 `null`，这条说明替代大码出现：一句话讲清"为什么没有码"，
+ *   并且**由构造保证它不可能被误当成验证码**（没有数字，复制动作也已被置空）。
+ *
+ * ## 为什么不用现成的 `totp_invalid_secret`
+ *
+ * 那条串（「密钥无法解析（格式不正确）」）是**编辑表单**里的校验提示，语义是
+ * "你刚输入的这个串不合法"。而这里的情况是"**已存进库的**某个条目算不出码"，
+ * 用户没在输入任何东西 —— 用同一句话会把人引向"我该去改什么"，实际上他需要的是
+ * 知道"这条已经不可用了、要重新绑定/导入"。
+ *
+ * ## ⚠️ 刻意不提供"编辑"按钮
+ *
+ * 卡片右上角本来就有 [TotpRowMenu]，编辑入口在那里。在这里再放一个会让同一动作
+ * 出现两处，且与"整行点击=复制"的手势区重叠。
+ */
+@Composable
+private fun TotpCodeUnavailable() {
+    Text(
+        text = stringResource(R.string.totp_code_unavailable),
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.error,
+    )
 }
 
 /**
