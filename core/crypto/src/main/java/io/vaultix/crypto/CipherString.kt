@@ -58,7 +58,47 @@ data class ParsedCipherString(
     val iv: ByteArray,
     val ciphertext: ByteArray,
     val mac: ByteArray? = null,
-)
+) {
+    /**
+     * ★ **按内容**比较（2026-10-10 修）。
+     *
+     * ## 修的是什么
+     *
+     * `data class` 自动生成的 `equals` 对 `ByteArray` 字段退化成**引用比较** ——
+     * 两个 iv / 密文逐字节相同的实例会被判为"不相等"。这个坑对引用类型字段是通用的，
+     * 只是 `ByteArray` 最容易踩（它长得像个值）。
+     *
+     * ## 为什么这个文件里格外要命
+     *
+     * 本类**没有任何相等性依赖**（生产代码只用它的字段），所以"引用比较"本身不直接出错。
+     * 真正的风险在**测试**：断言 `assertEquals(parsed, expected)` 会**恒失败**（两个实例
+     * 永远是不同引用），于是后来的人只能退而写 `assertEquals(expected.iv, parsed.iv)`
+     * 这类逐字段比较 —— 看起来是"写得更细"，实际是**语义丢了**：
+     * 逐字段只覆盖写出来的那几个字段，将来给本类**加字段**时，新字段自动逃过断言。
+     * 而 `assertEquals(整个对象, ...)` 会强制实现者补齐 `equals`。
+     *
+     * ## 与项目内既有约定对齐
+     *
+     * [io.vaultix.common.WebAuthn.GeneratedKey] 早就是这么做的（一个 `data class`
+     * 里四个 `ByteArray` 字段 + 手写 `equals`/`hashCode`），本类此前是**唯一没跟上的**。
+     * [SymmetricCryptoKey] 的处置不同（改成普通 `class`）是因为它还要求 `SecureBytes`
+     * 的清零语义，属于另一类需求 —— 不要因为那里改了 class 就把这里的 data class 也拆掉：
+     * 本类是**纯数据载体**，`copy` / 解构都有用。
+     */
+    override fun equals(other: Any?): Boolean =
+        other is ParsedCipherString && type == other.type &&
+            iv.contentEquals(other.iv) && ciphertext.contentEquals(other.ciphertext) &&
+            (mac?.contentEquals(other.mac) ?: (other.mac == null))
+
+    /** 与 [equals] 同口径：用**内容**哈希，且对 `mac == null` 给一个确定值。 */
+    override fun hashCode(): Int {
+        var result = type
+        result = 31 * result + iv.contentHashCode()
+        result = 31 * result + ciphertext.contentHashCode()
+        result = 31 * result + (mac?.contentHashCode() ?: 0)
+        return result
+    }
+}
 
 /** EncString 分段数量：type 0 为 `iv|data`，type 2 为 `iv|data|mac`。 */
 private const val TYPE0_PART_COUNT = 2
