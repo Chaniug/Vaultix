@@ -984,7 +984,7 @@ private fun TotpCodeArea(
     nextCode: String?,
     isHotp: Boolean,
     remaining: Int,
-    counter: Int,
+    counter: Long,
     codesHidden: Boolean,
 ) {
     if (code == null) {
