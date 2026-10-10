@@ -62,11 +62,18 @@ class ItemRepositoryImpl @Inject constructor(
     private val cipherDao: CipherDao,
     private val pendingOpDao: PendingOpDao,
     /**
-     * 「本地行 + 入队」的**原子写**（2026-09-16 新增）。
+     * 「本地行 + 入队」的**原子写**（2026-09-16 新增，2026-10-10 补齐删除型原语）。
      *
      * ⚠️ 凡是要同时改这两处的写路径，**必须**走它 —— 分开写一旦第二次失败，
      * 会留下「行在、队列不在」的中间态：该行不在 `pendingIds` 里，
      * 随后会被 `pruneRemovedRows` 当成"服务端已删"删掉（或按旧版覆盖）。
+     *
+     * ⚠️ 反向的「队列在、行不在」同样是缺口（永久删除会被服务端**拉回来**），
+     * 所以删除路径走 `deleteCipherAndEnqueue` / `deleteCiphersAndEnqueue`。
+     *
+     * 📌 **2026-10-10 起，本类的全部 6 处写路径已收口到本 DAO**；
+     *    `cipherDao` / `pendingOpDao` 在此**只用于读**（observe / get / getTrashByVault）。
+     *    新增写路径时若绕开本 DAO，`AtomicWriteBoundaryTest` 会红。
      */
     private val atomicWriteDao: AtomicWriteDao,
     private val sessions: VaultSessionManager,
@@ -357,10 +364,14 @@ class ItemRepositoryImpl @Inject constructor(
             require(existing.vaultId == vaultId) { "条目不属于该库：$itemId" }
             requireNotNull(existing.deletedDate) { "条目不在回收站中：$itemId" }
 
-            // 本地立即清除删除标记（主列表恢复显示）；离线时队列联网补推
-            cipherDao.upsertAll(listOf(existing.copy(deletedDate = null)))
-            pendingOpDao.enqueue(
-                PendingOpEntity(
+            // ★ 清 deletedDate + 入队 OP_RESTORE 必须**原子**（走 AtomicWriteDao）：
+            //   若「行已清标记、队列没记」，下次同步 `persistCiphers` 会用服务端旧版
+            //   （仍带 deletedDate）覆盖它 ⇒ 条目**再次被打回回收站**，
+            //   而用户看到的是"恢复成功"。这正是 AtomicWriteDao KDoc 里
+            //   "软删除的条目则会被服务端版本复活" 的镜像场景。
+            atomicWriteDao.upsertCipherAndEnqueue(
+                row = existing.copy(deletedDate = null),
+                op = PendingOpEntity(
                     vaultId = vaultId,
                     cipherId = itemId,
                     op = OP_RESTORE,
@@ -380,10 +391,12 @@ class ItemRepositoryImpl @Inject constructor(
             require(existing.vaultId == vaultId) { "条目不属于该库：$itemId" }
             requireNotNull(existing.deletedDate) { "条目不在回收站中，无法永久删除：$itemId" }
 
-            // 本地立即移除（回收站视图随之消失）；DELETE 入队，离线时联网补推；
-            // 服务端已不存在（404）时由 flush 弃单（防毒丸）
-            pendingOpDao.enqueue(
-                PendingOpEntity(
+            // ★ 删行 + 入队必须**原子**（走 AtomicWriteDao）：若「行删了、队列没记」，
+            //   服务端会保留该条目，下次同步又把它**拉回来**（用户以为永久删了却复活）。
+            //   服务端已不存在（404）时由 flush 弃单（防毒丸）。
+            atomicWriteDao.deleteCipherAndEnqueue(
+                cipherId = itemId,
+                op = PendingOpEntity(
                     vaultId = vaultId,
                     cipherId = itemId,
                     op = OP_DELETE,
@@ -391,7 +404,6 @@ class ItemRepositoryImpl @Inject constructor(
                     createdAt = System.currentTimeMillis(),
                 ),
             )
-            cipherDao.deleteByIds(listOf(itemId))
 
             flushAfterLocalWrite(vaultId)
         }
@@ -413,20 +425,22 @@ class ItemRepositoryImpl @Inject constructor(
                 }
             if (expired.isEmpty()) return@runCatching 0
 
-            // 与 permanentDeleteItem 同口径：DELETE 入队（离线联网补推）→ 删本地行
+            // 与 permanentDeleteItem 同口径，且同样必须**原子**：
+            // DELETE 入队与删本地行要么都成，要么都不成（走 AtomicWriteDao）；
+            // 整批包在同一个事务里，避免"清到一半崩了"留下半清理状态。
             val createdAt = System.currentTimeMillis()
-            expired.forEach { row ->
-                pendingOpDao.enqueue(
+            atomicWriteDao.deleteCiphersAndEnqueue(
+                ids = expired.map { it.id },
+                ops = expired.map { row ->
                     PendingOpEntity(
                         vaultId = vaultId,
                         cipherId = row.id,
                         op = OP_DELETE,
                         payload = null,
                         createdAt = createdAt,
-                    ),
-                )
-            }
-            cipherDao.deleteByIds(expired.map { it.id })
+                    )
+                },
+            )
 
             flushAfterLocalWrite(vaultId)
             expired.size
@@ -597,4 +611,3 @@ class ItemRepositoryImpl @Inject constructor(
  */
 private const val PASSKEY_READ_ONLY_REASON =
     "KDBX 库的通行密钥由浏览器 / 服务端管理，本应用不能修改"
-

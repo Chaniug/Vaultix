@@ -80,9 +80,14 @@ class ItemRepositoryImplTest {
         //   又让本类原有的 `coVerify { cipherDao.upsertAll(...) }` 断言**依然成立**。
         //   （若改用 mockk 直接 mock 掉 `upsertCipherAndEnqueue`，行就不会真的落库，
         //    后续所有「写完再读回来」的断言会一起失效。）
+        //
+        // ⚠️ 这个转发层**不验证原子性**（两个 mock 是独立桩，不会一起回滚）——
+        //    所以本类只能测"行为对不对"，测不到"中途失败会不会半途而废"。
+        //    原子性边界由 `AtomicWriteBoundaryTest` 用**真实 Room in-memory 库**验证。
         atomicWriteDao = object : AtomicWriteDao() {
             override suspend fun upsertCipher(row: CipherEntity) = cipherDao.upsertAll(listOf(row))
             override suspend fun upsertPendingOp(op: PendingOpEntity) = pendingOpDao.enqueue(op)
+            override suspend fun deleteCiphers(ids: List<String>) = cipherDao.deleteByIds(ids)
         }
         syncService = mockk()
         sessions = VaultSessionManager(KdbxSessionFlow())
@@ -441,6 +446,22 @@ class ItemRepositoryImplTest {
         assertNull(after)
     }
 
+    /**
+     * 恢复回收站条目：清 `deletedDate` + 入队 `RESTORE`。
+     *
+     * ⚠️ **这条用例守的是"恢复不会再被打回回收站"**（2026-10-10 修的一致性缺口）。
+     *
+     * 修之前 `restoreItem` 是两个**独立**的 suspend 调用，顺序还是"先改行、后入队"：
+     * 若入队失败，行已恢复、队列里却没有 `RESTORE` ⇒ 下次同步 `persistCiphers`
+     * 用服务端旧版（仍带 `deletedDate`）覆盖它 ⇒ **条目又被打回回收站**，
+     * 而用户看到的是"恢复成功"。这正是 `AtomicWriteDao` KDoc 里
+     * "软删除的条目则会被服务端版本复活" 的镜像。
+     *
+     * ⇒ 断言分两层：
+     * 1. **行为**：行清标记、队列有 RESTORE（与修复前相同，防止改坏）；
+     * 2. ★ **走的是原子入口**：`atomicWriteDao` 被调用了，且行/队列入参**都在同一次调用里**
+     *    —— 这才是"要么都成、要么都不成"的判据（见 [AtomicWriteBoundaryTest] 的真实回滚验证）。
+     */
     @Test
     fun restoreItem_clearsDeletedDate_andEnqueuesRestore() = runTest {
         sessions.unlock(vaultId, key)
@@ -457,20 +478,75 @@ class ItemRepositoryImplTest {
         )
         coEvery { cipherDao.get("cipher-5") } returns existing
         coEvery { vaultDao.get(vaultId) } returns bitwardenVaultRow()
-        val rowSlot = slot<List<CipherEntity>>()
-        val opSlot = slot<PendingOpEntity>()
-        coEvery { cipherDao.upsertAll(capture(rowSlot)) } returns Unit
-        coEvery { pendingOpDao.enqueue(capture(opSlot)) } returns Unit
-        coEvery { syncService.flushPending(vaultId, vaultId) } returns Result.success(Unit)
 
         val outcome = repo.restoreItem(vaultId, "cipher-5")
 
         assertEquals(VaultSaveOutcome.Synced, outcome.getOrThrow())
+        // 行为层：行清标记 + RESTORE 入队
+        val rowSlot = slot<List<CipherEntity>>()
+        val opSlot = slot<PendingOpEntity>()
+        coVerify(exactly = 1) { cipherDao.upsertAll(capture(rowSlot)) }
+        coVerify(exactly = 1) { pendingOpDao.enqueue(capture(opSlot)) }
         assertNull(rowSlot.captured.single().deletedDate) // 主列表立即恢复显示
         val op = opSlot.captured
         assertEquals("RESTORE", op.op)
         assertEquals("cipher-5", op.cipherId)
         assertNull(op.payload)
+    }
+
+    /**
+     * ★ 反向判据：`restoreItem` **必须**走原子入口，不许退回两个独立调用。
+     *
+     * 实现手法：给 `atomicWriteDao` 装一个**记录调用次数**的探针。
+     * 若有人把 `restoreItem` 改回 `cipherDao.upsertAll(...)` + `pendingOpDao.enqueue(...)`
+     * （即撤销本次修复），`upsertCipherAndEnqueue` 的计数会变成 0 ⇒ **这条红**。
+     *
+     * 这是"变异验证"思路：不是断言结果对，而是断言**修复本身在场**。
+     */
+    @Test
+    fun restoreItem_goesThroughAtomicWriteDao_notTwoIndependentCalls() = runTest {
+        sessions.unlock(vaultId, key)
+        val existing = CipherEntity(
+            id = "cipher-5",
+            vaultId = vaultId,
+            type = 1,
+            encryptedPayload = "{}",
+            revisionDate = "rev",
+            deletedDate = "2026-09-08T00:00:00Z",
+        )
+        coEvery { cipherDao.get("cipher-5") } returns existing
+        coEvery { vaultDao.get(vaultId) } returns bitwardenVaultRow()
+        coEvery { cipherDao.upsertAll(any()) } returns Unit
+        coEvery { pendingOpDao.enqueue(any()) } returns Unit
+        coEvery { syncService.flushPending(vaultId, vaultId) } returns Result.success(Unit)
+
+        var atomicCalls = 0
+        val probed = object : AtomicWriteDao() {
+            override suspend fun upsertCipher(row: CipherEntity) = cipherDao.upsertAll(listOf(row))
+            override suspend fun upsertPendingOp(op: PendingOpEntity) = pendingOpDao.enqueue(op)
+            override suspend fun deleteCiphers(ids: List<String>) = cipherDao.deleteByIds(ids)
+            override suspend fun upsertCipherAndEnqueue(row: CipherEntity, op: PendingOpEntity) {
+                atomicCalls++
+                super.upsertCipherAndEnqueue(row, op)
+            }
+        }
+        val probedRepo = ItemRepositoryImpl(
+            vaultDao = vaultDao,
+            cipherDao = cipherDao,
+            pendingOpDao = pendingOpDao,
+            atomicWriteDao = probed,
+            sessions = sessions,
+            mapper = mapper,
+            json = BitwardenJson,
+            syncService = syncService,
+            kdbxSessions = KdbxSessionFlow(),
+            kdbxItemWrites = kdbxItemWrites,
+            cryptoDispatcher = Dispatchers.Default,
+        )
+
+        probedRepo.restoreItem(vaultId, "cipher-5")
+
+        assertEquals("恢复必须走 upsertCipherAndEnqueue 原子入口", 1, atomicCalls)
     }
 
     @Test
@@ -619,5 +695,123 @@ class ItemRepositoryImplTest {
         assertEquals(1, entries.size)
         assertEquals(deletedDate, entries.single().deletedDate)
         assertEquals("GitHub", entries.single().item.title)
+    }
+
+    // ==================================================================
+    // ★ 结构判据：「行 + 队列」的六处写路径必须整体走原子入口
+    // ==================================================================
+
+    /**
+     * ★★ 遍历 `ItemRepositoryImpl` 的**全部写路径**，断言每一处都经由
+     * `AtomicWriteDao` 的原子入口 —— 没有任何一处退回「行」「队列」两次独立写。
+     *
+     * ## 为什么要"全部"而不是逐条断言
+     *
+     * S1 的成因不是某一处写错了，而是**这个模式有 5 个复制点、修了 2 个、漏了 3 个**：
+     * `restoreItem` / `permanentDeleteItem` / `cleanupExpiredTrash` 当时都是两个独立调用。
+     * 逐条用例只能守住"已经想到的那几条"，新增一处写路径时**没有任何东西会提醒你**。
+     *
+     * 这条判据把「六处」这个集合本身钉在测试里：
+     * - 新增写路径时，若它绕开原子入口 ⇒ [atomicCalls] 计数不够 ⇒ **红**；
+     * - 有人把某处改回两次独立写（撤销修复）⇒ 同样**红**。
+     *
+     * ## 手法
+     *
+     * 给 `atomicWriteDao` 装一个探针子类，记录三个原语各自的调用次数；
+     * 然后依次触发六条写路径，逐条比对**期望的入口**。
+     *
+     * ⚠️ 探针只计数、不校验入参 —— 入参正确性由上面各条行为用例负责（分工见
+     * [AtomicWriteBoundaryTest] 的类 KDoc 表格）。
+     */
+    @Test
+    fun allSixWritePathsGoThroughAtomicDao() = runTest {
+        sessions.unlock(vaultId, key)
+
+        // 记录三个原子入口各自被调用的次数
+        var upsertCalls = 0
+        var deleteOneCalls = 0
+        var deleteBatchCalls = 0
+        val probed = object : AtomicWriteDao() {
+            override suspend fun upsertCipher(row: CipherEntity) = cipherDao.upsertAll(listOf(row))
+            override suspend fun upsertPendingOp(op: PendingOpEntity) = pendingOpDao.enqueue(op)
+            override suspend fun deleteCiphers(ids: List<String>) = cipherDao.deleteByIds(ids)
+            override suspend fun upsertCipherAndEnqueue(row: CipherEntity, op: PendingOpEntity) {
+                upsertCalls++
+                super.upsertCipherAndEnqueue(row, op)
+            }
+
+            override suspend fun deleteCipherAndEnqueue(cipherId: String, op: PendingOpEntity) {
+                deleteOneCalls++
+                super.deleteCipherAndEnqueue(cipherId, op)
+            }
+
+            override suspend fun deleteCiphersAndEnqueue(ids: List<String>, ops: List<PendingOpEntity>) {
+                deleteBatchCalls++
+                super.deleteCiphersAndEnqueue(ids, ops)
+            }
+        }
+        val probedRepo = ItemRepositoryImpl(
+            vaultDao = vaultDao,
+            cipherDao = cipherDao,
+            pendingOpDao = pendingOpDao,
+            atomicWriteDao = probed,
+            sessions = sessions,
+            mapper = mapper,
+            json = BitwardenJson,
+            syncService = syncService,
+            kdbxSessions = KdbxSessionFlow(),
+            kdbxItemWrites = kdbxItemWrites,
+            cryptoDispatcher = Dispatchers.Default,
+        )
+
+        // —— 公共桩 ——
+        coEvery { cipherDao.upsertAll(any()) } returns Unit
+        coEvery { pendingOpDao.enqueue(any()) } returns Unit
+        coEvery { cipherDao.deleteByIds(any()) } returns Unit
+        val plain = plainItem("cipher-atomic")
+        coEvery { cipherDao.get(plain.id) } returns CipherEntity(
+            id = plain.id,
+            vaultId = vaultId,
+            type = 1,
+            encryptedPayload = """{"id":"${plain.id}"}""",
+            revisionDate = "rev",
+            deletedDate = null,
+        )
+        val inTrash = trashRow("cipher-trash", Instant.now().minus(Duration.ofDays(60)))
+        coEvery { cipherDao.get(inTrash.id) } returns inTrash
+        // 回收站行：deletedDate 取"60 天前"（比 30 天档位更早）⇒ 一定过期。
+        // 注意 `trashRow` 写的是 `deletedAt.toString()`，与 TrashCleanupPolicy 的
+        // `Instant.parse` 同格式，故必然能解析、必然判为过期（非"宁可保留"的兜底路径）。
+        coEvery { cipherDao.getTrashByVault(vaultId) } returns listOf(inTrash)
+        coEvery { syncService.flushPending(any(), any()) } returns Result.success(Unit)
+
+        // ① 新增（CREATE）
+        probedRepo.createItem(vaultId, plain).getOrThrow()
+        assertEquals("createItem 必须走原子入口", 1, upsertCalls)
+
+        // ② 编辑（UPDATE）
+        probedRepo.updateItem(vaultId, plain.copy(title = "改过的标题")).getOrThrow()
+        assertEquals("updateItem 必须走原子入口", 2, upsertCalls)
+
+        // ③ 软删除（SOFT_DELETE）
+        probedRepo.softDeleteItem(vaultId, plain.id).getOrThrow()
+        assertEquals("softDeleteItem 必须走原子入口", 3, upsertCalls)
+
+        // ④ 恢复（RESTORE）—— 本轮修复点之一
+        probedRepo.restoreItem(vaultId, plain.id).getOrThrow()
+        assertEquals("★ restoreItem 必须走原子入口（本轮修复点）", 4, upsertCalls)
+
+        // ⑤ 永久删除（DELETE）—— 本轮修复点之二
+        probedRepo.permanentDeleteItem(vaultId, inTrash.id).getOrThrow()
+        assertEquals("★ permanentDeleteItem 必须走单删原子入口（本轮修复点）", 1, deleteOneCalls)
+
+        // ⑥ 回收站到期清理（批量 DELETE）—— 本轮修复点之三
+        probedRepo.cleanupExpiredTrash(vaultId, 30)
+        assertEquals("★ cleanupExpiredTrash 必须走批量原子入口（本轮修复点）", 1, deleteBatchCalls)
+
+        // 反向：禁止任何写路径绕过原子入口直接写两张表
+        coVerify(exactly = 4) { cipherDao.upsertAll(any()) }
+        coVerify(exactly = 1) { cipherDao.deleteByIds(any()) }
+        coVerify(exactly = 6) { pendingOpDao.enqueue(any()) }
     }
 }
