@@ -340,9 +340,19 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Run unit tests (non-blocking)
+      # ★ 2026-10-10：从「报告模式」升为**真门禁**（去掉 `continue-on-error`）。
+      #
+      # 为什么现在敢去掉：本步骤此前长期 `continue-on-error: true` ⇒ **单测失败 CI 仍绿**。
+      # 配合上一条 upload 步骤的路径错配（只收集了 data:kdbx 的报告），出现过这样的状态：
+      # 「顶层结论绿 · 日志里躺着 30 条 Unresolved reference · 实际跑了什么没人知道」。
+      # 那正是"CI 绿 ≠ 单测通过"的完整成因，也是本轮一批修复能潜伏至今的土壤。
+      #
+      # 现在按「单测是硬门禁」的常规做法取值：**失败即红**。
+      # ⚠️ 若是因为基础设施（Gradle 下载失败 / 缓存损坏）而非断言失败导致红，
+      #    请修基础设施本身，**不要**把这个 `continue-on-error` 加回来 ——
+      #    那等于重新把门禁关上（加回时请一并说明理由与恢复计划，同下方 lint 的处置方式）。
+      - name: Run unit tests (hard gate)
         id: unit_tests
-        continue-on-error: true
         # 同 lint：多 flavor 下 `testDebugUnitTest` 亦有歧义，需显式指定 variant。
         # 纳入全部含单测的模块：core:crypto（172 例，Kover 门禁 ≥80%）、
         # core:common（TOTP/密码强度等纯算法 16 例）、core:model（关联字段
@@ -350,11 +360,16 @@ jobs:
         # data:bitwarden（CipherMapper 载荷保真/类型守恒 28 例）、
         # data:kdbx（★ 2026-09-17 补：KDBX 读/写路径往返保真 + KPEX_* 字段，
         #   含 KdbxWritePathTest 的 9 例。**此前漏登记 ⇒ 这些用例从未真正执行过**）。
+        # ★ 2026-10-10 补 core:datastore（VaultTimeout 档位模型 + 旧档位迁移映射，
+        #   VaultTimeoutTest / VaultTimeoutScopeTest 共 18 例）—— 与 data:kdbx 同一种漏法：
+        #   模块有 `test` 源码集、`build.gradle.kts` 也有 junit+truth 依赖，
+        #   只是没人把它写进这条命令，于是**从未在 CI 跑过**。
+        #   查漏方法（别再靠眼睛扫）：把各模块 `src/test` 的文件数与这条命令对一遍。
         # 此前只跑 :app 与部分模块，新模块的测试等于从未在 CI 真正执行（盲区）。
         # ⚠️ 新增带单测的模块时，**必须同时加进这里**，否则测试等于不存在。
         run: >-
           ./gradlew :core:crypto:testDebugUnitTest :core:common:testDebugUnitTest
-          :core:model:testDebugUnitTest
+          :core:model:testDebugUnitTest :core:datastore:testDebugUnitTest
           :app:testFullDebugUnitTest :data:repository:testDebugUnitTest
           :data:bitwarden:testDebugUnitTest :data:kdbx:testDebugUnitTest
           --continue --stacktrace
@@ -373,6 +388,10 @@ jobs:
           #   ② core:* / data:repository / data:bitwarden 同样在跑测试，但路径里没有它们。
           # ⇒ 后果是"CI 绿"完全不能代表单测通过。核对单测必须看本产物，不能只看顶层结论。
           #    同 lint 的理由：`testDebugUnitTest` 在多 flavor 下有歧义，需显式指定 variant。
+          #
+          # ⚠️ 2026-10-10：又补了 core:datastore。**这条路径清单必须与上面的测试命令逐项对齐** ——
+          #    两处不一致时，缺的那一项就是"在跑但报告没人收"，核对时会看着像没跑过。
+          #    改上面命令时，请一并改这里。
           path: |
             app/build/reports/tests/testFullDebugUnitTest
             app/build/test-results/testFullDebugUnitTest
@@ -382,6 +401,8 @@ jobs:
             core/common/build/test-results/testDebugUnitTest
             core/model/build/reports/tests/testDebugUnitTest
             core/model/build/test-results/testDebugUnitTest
+            core/datastore/build/reports/tests/testDebugUnitTest
+            core/datastore/build/test-results/testDebugUnitTest
             data/repository/build/reports/tests/testDebugUnitTest
             data/repository/build/test-results/testDebugUnitTest
             data/bitwarden/build/reports/tests/testDebugUnitTest
