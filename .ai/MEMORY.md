@@ -145,6 +145,13 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 
 ## 9. 当前状态与下一批（接力起手式）
 
+> ⚡ **2026-10-12：CI 单测硬门禁转绿**（`f470bc4`，run `38235068372` success）。修的是一处**测试缺陷**
+> 而非产品 bug：`ItemRepositoryImplTest` 两例 —— `restoreItem_clearsDeletedDate` 漏 stub（`MockKException`）、
+> `allSixWritePathsGoThroughAtomicDao` 的 ④ 恢复对象不在回收站（踩 `ItemRepositoryImpl.kt:365` 守卫）+
+> 其末尾 `deleteByIds` 计数应为 2（该用例此前从未跑完 ④ 之后）。报告实证 **1073 例 0 失败**。
+> ⚠️ 教训：**一条测试可能因前半段异常而从未执行到后半段断言**（详见 `SESSION-2026-10-12.md`）。
+> `HANDOFF-2026-10-05` 的剩余工作不变。
+
 > ⚡ **2026-10-07：JSON⇄KDBX 无损互转 W1 + W2 + W3 + W4 已落地**（`101fe0c` / `569c398`
 > / `4ea40f5`+`15ff84b` / `d141538`）。W3 结论 = **TOTP 往返本来就通**；
 > W4 新增 `KdbxToolFields`（`VPX_` 工具区单一真源）+ `KdbxToolFieldsRoundTripTest`27 例。
