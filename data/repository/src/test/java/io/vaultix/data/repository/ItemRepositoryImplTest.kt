@@ -478,6 +478,11 @@ class ItemRepositoryImplTest {
         )
         coEvery { cipherDao.get("cipher-5") } returns existing
         coEvery { vaultDao.get(vaultId) } returns bitwardenVaultRow()
+        // 原子转发最终落到这两张表（setUp 探针的 upsertCipher / upsertPendingOp 转发的就是它们），
+        // 非 relaxed mock 不 stub 就抛 "no answer found"（与 507 用例的 519–521 对齐）。
+        coEvery { cipherDao.upsertAll(any()) } returns Unit
+        coEvery { pendingOpDao.enqueue(any()) } returns Unit
+        coEvery { syncService.flushPending(vaultId, vaultId) } returns Result.success(Unit)
 
         val outcome = repo.restoreItem(vaultId, "cipher-5")
 
@@ -783,6 +788,11 @@ class ItemRepositoryImplTest {
         // 注意 `trashRow` 写的是 `deletedAt.toString()`，与 TrashCleanupPolicy 的
         // `Instant.parse` 同格式，故必然能解析、必然判为过期（非"宁可保留"的兜底路径）。
         coEvery { cipherDao.getTrashByVault(vaultId) } returns listOf(inTrash)
+        // 恢复（④）专用：一条真正在回收站里的行。restoreItem 要求 deletedDate != null
+        // （ItemRepositoryImpl.kt:365 的存在性守卫）⇒ 不能复用 plain.id —— mock 不会因 ③ 的
+        // 软删而改变 get 的返回（cipher-atomic 的 deletedDate 恒为 null）。
+        val forRestore = trashRow("cipher-restore", Instant.now().minus(Duration.ofDays(60)))
+        coEvery { cipherDao.get("cipher-restore") } returns forRestore
         coEvery { syncService.flushPending(any(), any()) } returns Result.success(Unit)
 
         // ① 新增（CREATE）
@@ -798,7 +808,9 @@ class ItemRepositoryImplTest {
         assertEquals("softDeleteItem 必须走原子入口", 3, upsertCalls)
 
         // ④ 恢复（RESTORE）—— 本轮修复点之一
-        probedRepo.restoreItem(vaultId, plain.id).getOrThrow()
+        // ⚠️ 恢复的必须是一条 deletedDate != null 的回收站行（上面 forRestore），
+        //    复用 plain.id 会踩 ItemRepositoryImpl.kt:365 的"条目不在回收站中"守卫。
+        probedRepo.restoreItem(vaultId, "cipher-restore").getOrThrow()
         assertEquals("★ restoreItem 必须走原子入口（本轮修复点）", 4, upsertCalls)
 
         // ⑤ 永久删除（DELETE）—— 本轮修复点之二
@@ -811,7 +823,10 @@ class ItemRepositoryImplTest {
 
         // 反向：禁止任何写路径绕过原子入口直接写两张表
         coVerify(exactly = 4) { cipherDao.upsertAll(any()) }
-        coVerify(exactly = 1) { cipherDao.deleteByIds(any()) }
+        // deleteByIds 计 2：⑤ 永久删除（deleteCipherAndEnqueue → deleteCiphers([id])）与
+        // ⑥ 批量清理（deleteCiphersAndEnqueue → deleteCiphers(ids)）各触发一次 ——
+        // 见 AtomicWriteDao.deleteCipherAndEnqueueInTransaction / deleteCiphersAndEnqueueInTransaction。
+        coVerify(exactly = 2) { cipherDao.deleteByIds(any()) }
         coVerify(exactly = 6) { pendingOpDao.enqueue(any()) }
     }
 }
