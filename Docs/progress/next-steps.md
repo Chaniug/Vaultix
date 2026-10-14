@@ -2,6 +2,34 @@
 
 ---
 
+## ✅ KDBX × Bitwarden 边界审计五条已修完（2026-10-14）· CI `38495406982` 真绿
+
+**commits**：`57fc416`（license 头）→ `de0ab2e`（B6）→ `f2a4e03`（A1）→
+`cd99bbb`（A2）→ `a3782ca`（A3）→ `47ca162`（B5）→ `2c5f3eb`（审计文档 + `.ai` 同步）
+**实证**：本地全量门禁 1m14s 全绿；CI 工件解出 108 个 XML 重数 **1096 例 0 失败**
+（不只看步骤颜色）。审计报告：`kdbx-bitwarden-boundary-audit-2026-10-12.md`。
+
+| 条目 | 一句话 | 落点 |
+|---|---|---|
+| B6 | KDBX 通行密钥从「读得到、存不下」到读写闭环（私钥仍强制 `Encrypted`） | `ItemRepositoryImpl` 双会话校验 + KDBX 感知 `loadItem` |
+| A1 | 收藏从静默 no-op 到读写闭环 | `VPX_FAVORITE` 工具区（`KdbxToolFields` / mapper / writer） |
+| A2 | KDBX 文件夹从「四处不可见」到全链路可见 | `observeFolders` 按库分流 + `KdbxSessionFlow` 触发器 |
+| A3 | KDBX 库不再能建出「类型是卡、字段全空」的残骸 | 表单裁剪 + 卡包门控 + 仓储硬闸（截导入路径） |
+| B5 | #161 文案承诺兑现：「忘记 PIN？」不验任何东西清信封 | `QuickUnlockController` + 锁与安全页新行 |
+
+新增坑 #164–#168（ISSUES 索引已用 `check_issues_index.py` 核对一致）。
+共同判据：**「底层能力写好」≠「链路通」** —— 三条断在中间层
+（writer 有没人调 / mapper 有没人读 / 表单裁了导入没人拦）。
+
+### 下一步
+
+1. **W5**（JSON⇄KDBX 无损互转：转换器本体 + 入口 UI）—— 最大块未做项，顺序仍是
+   **先做转换器本体**（清晰契约 + 可测结果），UI 是薄壳；
+2. W6 真机互操作验证（KeePassXC / KeePassDX 打开 Vaultix 写的库）；
+3. 审计 B 组剩余项。
+
+---
+
 ## ✅ W4 已落地（2026-10-07）· `VPX_` 工具字段 + 多 URL 无损降级
 
 **commit**：`92d62a0`（实现 + 单测）→ `eb410a1`（单测编译修复）→ `d141538`（修两个真 bug）

@@ -145,6 +145,18 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 
 ## 9. 当前状态与下一批（接力起手式）
 
+> ⚡ **2026-10-14：KDBX × Bitwarden 边界审计五条全部修完**（`57fc416`…`2c5f3eb` 六个提交，
+> CI run `38495406982` success，报告实证 **1096 例 0 失败**）。修的四条产品边界 +
+> 一个早已立案的 #161，全部来自 `Docs/progress/kdbx-bitwarden-boundary-audit-2026-10-12.md`：
+> **B6** 通行密钥写回（`ItemRepositoryImpl` 双会话校验 + KDBX 感知 `loadItem`）·
+> **A1** 收藏读写（`VPX_FAVORITE` 工具区，读宽松真值 / 写未变不动）·
+> **A2** 文件夹可见（`observeFolders` 按库分流 + `KdbxSessionFlow` 触发器）·
+> **A3** 表单裁剪 + 卡包门控 + **仓储硬闸**（导入路径绕开表单，`requireSupportedType`）·
+> **B5** 「忘记 PIN？」（#161，不验任何东西清信封，PIN 不是根凭据）。
+> 新增坑 **#164–#167 + #168**（ISSUES 索引已核对一致）。共同形态判据：
+> **「底层能力写好」≠「链路通」** —— 五条里有三条是中间层断（writer 有没人调 /
+> mapper 有没人读 / 表单裁了没人拦导入）。下一批 = W5（转换器本体 + 入口 UI，仍待做）。
+
 > ⚡ **2026-10-12：CI 单测硬门禁转绿**（`f470bc4`，run `38235068372` success）。修的是一处**测试缺陷**
 > 而非产品 bug：`ItemRepositoryImplTest` 两例 —— `restoreItem_clearsDeletedDate` 漏 stub（`MockKException`）、
 > `allSixWritePathsGoThroughAtomicDao` 的 ④ 恢复对象不在回收站（踩 `ItemRepositoryImpl.kt:365` 守卫）+
@@ -401,14 +413,15 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 
 > ⚠️ **本索引止于 2026-09-13（第五十一轮）** —— 之后不再逐条续写，避免与 §9 两处漂移。
 > **§9 才是"当前状态 + 最近几轮"的真源**，逐日细节在 `.ai/SESSION-YYYY-MM-DD.md`。
-> 2026-09-14 起的轮次请直接看 §9 顶部与对应的 SESSION 文件；最近四轮是：
-> - `SESSION-2026-09-16.md` —— 用户睡前下单、睡醒验收那一批
->   （主密码解锁误触发重新登录 / 条目详情与新建编辑页 M3 / 设置页搬运合并，
->   外加记忆分层与文档分篇的工具链深挖）。
-> - `SESSION-2026-09-17.md` —— **5 组 UI 入库 + KDBX 写入口止血（`ISSUES.md` #106）
->   + OneDrive 鉴权骨架**。
-> - `SESSION-2026-09-21.md` —— **通行密钥注册链路打通（两层解析者 #108/#109）**
->   + 编辑壳去保护层 + 施工单 5 项落地。
+> 2026-09-14 起的轮次请直接看 §9 顶部与对应的 SESSION 文件；最近几轮是：
+> - `SESSION-2026-10-14.md` —— **KDBX × Bitwarden 边界审计五条修完**
+>   （B6 通行密钥写回 / A1 收藏 / A2 文件夹 / A3 类型裁剪+硬闸 / B5 忘记 PIN #161），
+>   CI `38495406982` 实证 1096 例 0 失败；新增坑 #164–#168。
+> - `SESSION-2026-10-12.md` —— **CI 单测硬门禁修复**（`f470bc4`，两处测试缺陷，
+>   未动产品代码；教训：一条测试可能因前半段异常从未执行到后半段断言）。
+> - `SESSION-2026-10-05.md` 至 `SESSION-2026-10-07.md` —— **JSON⇄KDBX 无损互转 W1–W4**
+>   （`KdbxFieldKeys` 单一真源 / `KdbxPasskeyCodec` 10 键 / TOTP 往返钉死 /
+>   `VPX_` 工具区多 URL 降级）。**W5 转换入口仍未做**（见 §9 与 next-steps）。
 > - `SESSION-2026-09-26.md` —— **设置页缺陷修复（开关「不猜状态」#120、快解三态开关 #121）
 >   + 两个新探针（都坏过 #124/#126）+ detekt 阈值勘误 #123 + 七篇计数校正**。
 >   **下一轮起点 = 开放 KDBX 单条编辑（R-6…R-9）**，该文件 §7 是完整交接。

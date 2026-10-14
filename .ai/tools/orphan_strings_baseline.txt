@@ -58,9 +58,7 @@ passkey_rp
 passkey_save_failed
 passkey_saved
 passkey_unnamed
-pin_change
 pin_confirm_label
-pin_disable
 pin_disabled_summary
 pin_enable
 pin_enabled_digits
@@ -102,8 +100,6 @@ setting_passkey_saved_locked
 setting_passkey_saved_none
 settings_quick_unlock
 settings_quick_unlock_desc
-settings_unlock_state_off
-settings_unlock_state_on
 settings_vault_locked_suffix
 ssh_generate_algorithm
 totp_action_copy
