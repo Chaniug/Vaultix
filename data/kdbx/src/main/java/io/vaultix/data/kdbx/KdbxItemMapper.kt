@@ -127,6 +127,10 @@ private fun Entry.toVaultItem(folderId: String?): VaultItem {
         fido2Credentials = fields.passkeyCredentials(title),
         customFields = custom,
         folderId = folderId,
+        // 收藏（A1 · 2026-10-13）：KDBX 无标准键 ⇒ `VPX_FAVORITE` 工具字段，
+        // 缺失即非收藏。此前整块没读 ⇒ KDBX 库的星标是**静默 no-op**：
+        // 表单里点了星、退出再进星没了，"收藏"快捷筛选对 KDBX 库恒为空。
+        favorite = fields.favoriteFlag(),
         // 2026-09-30 补入：KDBX 的 `<Times>`（此前**整块没读** ⇒ 详情页无从显示时间）。
         // ⚠️ 取值是 `Instant?`：老库 / 第三方工具写的条目可能缺 `CreationTime`，
         //    `?.toEpochMilli()` 之后仍是 null ⇒ UI 不显示该行（而不是兜一个默认时间）。
@@ -185,6 +189,20 @@ private fun EntryFields.passkeyCredentials(title: String): List<VaultFido2Creden
         KdbxPasskeyCodec.toCredential(KdbxPasskeyCodec.fromFieldMap(group), title = title)
     }
 }
+
+/**
+ * `VPX_FAVORITE` → 布尔（A1）。缺失 / 空值 = 非收藏。
+ *
+ * ⚠️ 键名比对**大小写不敏感**：kotpass 的 `EntryFields.get` 是大小写敏感的
+ * `Map.get`（同 [KdbxToolFields.extras] 的已知坑），用户用别的工具改过大小写
+ * 时也必须读得回来。真值判定走 [KdbxToolFields.isFavoriteTrue]（唯一口径）。
+ */
+private fun EntryFields.favoriteFlag(): Boolean =
+    KdbxToolFields.isFavoriteTrue(
+        entries.firstOrNull { (key, _) ->
+            key.equals(KdbxToolFields.FAVORITE, ignoreCase = true)
+        }?.value?.content,
+    )
 
 private const val DEFAULT_TITLE = "（未命名）"
 

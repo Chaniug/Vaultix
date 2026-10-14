@@ -201,6 +201,83 @@ class KdbxItemWriterTest {
         assertThat(fields[KdbxTotpCodec.FIELD_OTP]).isNull()
     }
 
+    // ---------------------------------------------------------------- 收藏（A1）
+
+    @Test
+    fun `新建收藏条目写入 VPX_FAVORITE，读回来是 true`() {
+        val db = databaseWith()
+
+        val result = KdbxItemWriter.createEntry(
+            db,
+            folderId = null,
+            item = sampleItem(title = "收藏我").copy(favorite = true),
+        )
+        val fields = result.database.getEntry { it.uuid == result.entryUuid }!!.second.fields
+
+        assertThat(fields[KdbxToolFields.FAVORITE]?.content).isEqualTo("true")
+        // 读方向闭环：星标必须在再次打开库之后还在（此前整块没读，星是静默 no-op）。
+        val item = result.database.toMappedContent().items.single()
+        assertThat(item.favorite).isTrue()
+        // ★ 工具区字段不得以自定义字段身份泄漏进详情页（否则用户看到一排 VPX_ 噪音）。
+        assertThat(item.customFields.map { it.name }).doesNotContain(KdbxToolFields.FAVORITE)
+    }
+
+    @Test
+    fun `新建不带收藏时不写 VPX_FAVORITE（不产空字段）`() {
+        val db = databaseWith()
+
+        val result = KdbxItemWriter.createEntry(db, folderId = null, item = sampleItem(title = "普通条目"))
+        val fields = result.database.getEntry { it.uuid == result.entryUuid }!!.second.fields
+
+        assertThat(fields[KdbxToolFields.FAVORITE]).isNull()
+        assertThat(result.database.toMappedContent().items.single().favorite).isFalse()
+    }
+
+    @Test
+    fun `取消收藏删掉 VPX_FAVORITE 键（缺失即假）`() {
+        val uuid = UUID.randomUUID()
+        val db = databaseWith(
+            entries = listOf(
+                entry(
+                    uuid = uuid,
+                    title = "星标条目",
+                    extraFields = mapOf(KdbxToolFields.FAVORITE to EntryValue.Plain("true")),
+                ),
+            ),
+        )
+        val before = db.toMappedContent().items.single()
+        assertThat(before.favorite).isTrue()
+
+        val updated = KdbxItemWriter.updateEntry(db, before, before.copy(favorite = false)).database
+        val fields = updated.getEntry { it.uuid == uuid }!!.second.fields
+
+        assertThat(fields[KdbxToolFields.FAVORITE]).isNull()
+        assertThat(updated.toMappedContent().items.single().favorite).isFalse()
+    }
+
+    @Test
+    fun `未变更的收藏不被重写（保持第三方写的 1）`() {
+        // ★ 与 TOTP 同一条纪律：一次无关编辑不该把用户库里的 "1" 改写成 "true"。
+        //   文件内容无故变化 ⇒ 版本控制 / 差异工具里全是噪音，且可能触发不必要的同步冲突。
+        val uuid = UUID.randomUUID()
+        val db = databaseWith(
+            entries = listOf(
+                entry(
+                    uuid = uuid,
+                    title = "T",
+                    extraFields = mapOf(KdbxToolFields.FAVORITE to EntryValue.Plain("1")),
+                ),
+            ),
+        )
+        val before = db.toMappedContent().items.single()
+        assertThat(before.favorite).isTrue()
+
+        val updated = KdbxItemWriter.updateEntry(db, before, before.copy(title = "改个标题")).database
+        val fields = updated.getEntry { it.uuid == uuid }!!.second.fields
+
+        assertThat(fields[KdbxToolFields.FAVORITE]?.content).isEqualTo("1")
+    }
+
     // ---------------------------------------------------------------- 自定义字段与通行密钥
 
     @Test

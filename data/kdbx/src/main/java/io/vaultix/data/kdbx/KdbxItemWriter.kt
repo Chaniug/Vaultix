@@ -193,6 +193,7 @@ internal object KdbxItemWriter {
         fields = applyUris(fields, item = item, before = before)
         fields = applyTotp(fields, item = item, before = before)
         fields = applyPasskeys(fields, item = item, before = before)
+        fields = applyFavorite(fields, item = item, before = before)
         return applyCustomFields(fields, item = item, before = before)
     }
 
@@ -394,6 +395,48 @@ internal object KdbxItemWriter {
             })
         }
         return result
+    }
+
+    /**
+     * 收藏（A1 · 2026-10-13）：[VaultItem.favorite] ⇄ `VPX_FAVORITE` 工具字段。
+     *
+     * ## 写入纪律（与另几个区同构）
+     *
+     * 1. **值未变则一个字都不动**：`before.favorite == after.favorite` 直接返回 ——
+     *    保持字段的原始形态（别的工具/旧版本写的 `"1"` 继续是 `"1"`，
+     *    一次无关编辑不该把用户的库改写得满是 `"true"`）；
+     * 2. **收藏 ⇒ 写 `"true"`**（不写 `"false"`，见 [KdbxToolFields.FAVORITE] 的 KDoc）；
+     * 3. **取消收藏 ⇒ 删键**：缺失即假，与"从未收藏"在文件里同形。
+     *
+     * ## 为什么不过 R1 保留区、也不进自定义字段
+     *
+     * 它有**专属通道**（同通行密钥）：`VPX_` 前缀不在 [KdbxFieldKeys.isReserved]
+     * 的判区里（那会让它被 `applyCustomFields` 跳过而永远写不进去），
+     * 读侧 `customFieldsOf` 又按工具区把它排除（不会以自定义字段身份出现在详情页）。
+     * 两个方向都不漏，正是"专属键区"的结构性好处。
+     */
+    internal fun applyFavorite(
+        fields: EntryFields,
+        item: VaultItem,
+        before: VaultItem?,
+    ): EntryFields {
+        // ① 没变过就不碰（含新建时 before == null 的全量路径）。
+        if (before != null && before.favorite == item.favorite) return fields
+        val existingKey = fields.keys.firstOrNull {
+            it.equals(KdbxToolFields.FAVORITE, ignoreCase = true)
+        }
+        return when {
+            item.favorite -> {
+                if (fields[KdbxToolFields.FAVORITE]?.content == KdbxToolFields.FAVORITE_TRUE) {
+                    fields
+                } else {
+                    fields + (KdbxToolFields.FAVORITE to EntryValue.Plain(KdbxToolFields.FAVORITE_TRUE))
+                }
+            }
+            // ② 取消收藏：删键（含第三方可能写的大小写变体）。
+            existingKey != null -> fields.minus(existingKey)
+            else -> fields
+        }
     }
 
     // ------------------------------------------------------------------ 解析

@@ -102,6 +102,36 @@ internal object KdbxToolFields {
     const val BW_TYPE = PREFIX + "BW_TYPE"
 
     /**
+     * 收藏标记（A1 · 2026-10-13）：`"true"` = 收藏，**缺失即非收藏**。
+     *
+     * ## 为什么落工具区，而不是某个标准键
+     *
+     * KDBX **没有"收藏"的标准字段**（5 个标准键里没有它，`Meta` 也没有条目级旗标）。
+     * 候选方案逐个核过：
+     *
+     * | 方案 | 否决理由 |
+     * |---|---|
+     * | 复用 `Tags` | KeePassXC/DX 的 Tags 是**用户可见、可编辑**的字符串列表，往里塞 `favorite` 会被用户当普通标签删掉/改掉，且别的工具会显示出来 |
+     * | 复用某个自定义字段名（如 `Favorite`） | 用户完全可能自己起一个叫 `Favorite` 的自定义字段 ⇒ **撞名即互相覆盖**（正是 R1 要防的那类事故） |
+     * | `Icon`/自定义图标 | 图标是**展示层**信息，改字段保护策略都不该动它；且丢失图标不等于取消收藏（语义不对） |
+     *
+     * ⇒ 按 R2 落 `VPX_FAVORITE`：私有前缀保证**不与任何用户字段撞名**，
+     * 读侧 `KdbxItemMapper` 认它、写侧 `KdbxItemWriter.applyFavorite` 管它，
+     * `customFieldsOf` 按工具区排除（不会以自定义字段的身份出现在详情页）。
+     *
+     * ⚠️ **与 BW_ID / BW_TYPE 不同，这个键是双向的**：领域模型有 [io.vaultix.model.VaultItem.favorite]
+     * 承载它，读回来不会造成任何"两套真相"——收藏只有 Vaultix 自己写，
+     * 第三方工具写的同名字段不存在（前缀挡住了），故不存在撞名风险。
+     *
+     * 值只写 `"true"` / 删键，**不写 `"false"`**：缺失即假，
+     * 少一个字段比多一个恒假字段干净（取消收藏即删除，与"从未收藏"在文件里同形）。
+     */
+    const val FAVORITE = PREFIX + "FAVORITE"
+
+    /** 收藏字段的**真值**文本（其余一切值——含 `"1"`/`"yes"`——读侧都认，写侧只写这个）。 */
+    const val FAVORITE_TRUE = "true"
+
+    /**
      * 多余 URI 的匹配规则：`VPX_MATCH_n`（与 [URL_PREFIX] 同下标）。
      *
      * ⚠️ 为什么连匹配规则也要存：Bitwarden 每条 URI 都带 `match`（0–5），
@@ -397,4 +427,16 @@ internal object KdbxToolFields {
 
     /** 是否属于工具区（`VPX_` 前缀，大小写不敏感）。 */
     fun isToolFieldName(name: String): Boolean = name.startsWith(PREFIX, ignoreCase = true)
+
+    /**
+     * 宽松真值判定（`true` / `1` / `yes`，大小写不敏感）；认不出一律 false。
+     *
+     * 读侧唯一口径：第三方工具若往 `VPX_FAVORITE` 写过别的真值形态（理论上不会，
+     * 私有前缀挡住了；防御的是"用户手改库"这种小众场景），也按真处理。
+     * 写侧只产出 [FAVORITE_TRUE]（见 [FAVORITE] 的 KDoc）。
+     */
+    fun isFavoriteTrue(raw: String?): Boolean = when (raw?.trim()?.lowercase(Locale.ROOT)) {
+        "true", "1", "yes" -> true
+        else -> false
+    }
 }
