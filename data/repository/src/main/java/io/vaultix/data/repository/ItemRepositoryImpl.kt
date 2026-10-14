@@ -416,7 +416,7 @@ class ItemRepositoryImpl @Inject constructor(
             //   并给一个 KDBX 库入队 DELETE ⇒ 队列里躺下永不推送的毒丸
             //   （`flushAfterLocalWrite` 对非 Bitwarden 库恒返回 Queued，没人会消费它）。
             //   拒绝后由 `getOrDefault(0)` 兜成 0 —— 与「清理失败静默」的既有约定一致。
-            requireNotKdbx(vaultId, "KDBX 库没有回收站清理")
+            requireNotKdbx(vaultId, KDBX_TRASH_CLEANUP_REASON)
             val now = System.currentTimeMillis()
             val expired = cipherDao.getTrashByVault(vaultId)
                 .filter { row ->
@@ -452,19 +452,24 @@ class ItemRepositoryImpl @Inject constructor(
         itemId: String,
         credentials: List<VaultFido2Credential>,
     ): Result<VaultSaveOutcome> = runCatching {
-        requireNotKdbx(vaultId, PASSKEY_READ_ONLY_REASON)
-        // 「库已解锁」前置校验：未解锁直接失败，避免走到 updateItem 才报错
-        requireNotNull(sessions.keyOf(vaultId)) { "库未解锁，无法保存：$vaultId" }
-        val existing = cipherDao.get(itemId) ?: error("条目不存在：$itemId")
-        require(existing.vaultId == vaultId) { "条目不属于该库：$itemId" }
-        require(existing.deletedDate == null) { "条目已在回收站，无法编辑：$itemId" }
-        require(existing.type == mapper.serverTypeOf(VaultItemType.Login)) {
-            "通行密钥只能绑定到登录（密码）条目，无法保存到类型 ${existing.type} 的条目"
+        // 「库已解锁」前置校验：两种会话模型各问各的（Bitwarden = 内存密钥；
+        // KDBX = 内存整库会话）。未解锁直接失败，避免走到 loadItem 才报一个
+        // 与真实原因无关的「条目不存在」——KDBX 条目不在 Room，未解锁时
+        // loadItem 必然返回 null（2026-10-13 起 KDBX 也支持写通行密钥）。
+        require(sessions.isUnlocked(vaultId) || Kdbx.isUnlocked(vaultId)) {
+            "库未解锁，无法保存：$vaultId"
         }
-        val item = loadItem(vaultId, itemId) ?: error("条目解析失败：$itemId")
+        val item = loadItem(vaultId, itemId) ?: error("条目不存在：$itemId")
+        // 通行密钥只挂登录条目（两个库同一口径）。KDBX 条目只可能是
+        // Login / SecureNote，安全笔记天然被这条拦下。
+        require(item.type == VaultItemType.Login) {
+            "通行密钥只能绑定到登录（密码）条目，无法保存到类型 ${item.type} 的条目"
+        }
         // 整体替换该登录条目的通行密钥集合。写回时 CipherMapper 按 credentialId
         // **保留未改动条目的服务端原密文**（绝不重加密），只有新增条目才加密 ——
         // 否则会把服务端已存的私钥材料（keyValue）覆写成 null（P0，不可逆）。
+        // KDBX 侧同一语义由 `KdbxItemWriter.applyPasskeys` 承担（W2，私钥强制
+        // `EntryValue.Encrypted`），updateItem 的分流会把本调用送到那一侧。
         updateItem(vaultId, item.copy(fido2Credentials = credentials)).getOrThrow()
     }
 
@@ -473,16 +478,27 @@ class ItemRepositoryImpl @Inject constructor(
         itemId: String,
         credentialId: String,
     ): Result<VaultSaveOutcome> = runCatching {
-        // ⚠️ 必须在自己这一层就拦：否则会先走到 `loadItem` —— 它查的是 Room，
+        // ⚠️ 解锁校验必须在自己这一层：否则会先走到 `loadItem` —— 它查的是 Room，
         //   KDBX 条目不在 Room ⇒ 返回 null ⇒ 报出**「条目不存在」这个与真实原因无关**的错误。
-        requireNotKdbx(vaultId, PASSKEY_READ_ONLY_REASON)
+        require(sessions.isUnlocked(vaultId) || Kdbx.isUnlocked(vaultId)) {
+            "库未解锁，无法保存：$vaultId"
+        }
         val item = loadItem(vaultId, itemId) ?: error("条目不存在：$itemId")
         val remaining = item.fido2Credentials.filter { it.credentialId != credentialId }
         updateFido2Credentials(vaultId, itemId, remaining).getOrThrow()
     }
 
-    /** 解码单条密文行为明文领域模型（删除态/未解锁返回 null）。 */
+    /**
+     * 解码单条密文行为明文领域模型（删除态/未解锁返回 null）。
+     *
+     * KDBX 分支（2026-10-13）：条目活在内存会话里，回收站条目在 `trashItems` 中
+     * ⇒ `items` 里取不到即为「不存在/已删除」，与 Bitwarden 侧
+     * 「deletedDate 视同不存在」同口径。
+     */
     private suspend fun loadItem(vaultId: String, itemId: String): VaultItem? {
+        if (isKdbx(vaultId)) {
+            return Kdbx.contentOf(vaultId)?.items?.firstOrNull { it.id == itemId }
+        }
         val row = cipherDao.get(itemId) ?: return null
         if (row.deletedDate != null) return null
         val key = sessions.keyOf(vaultId) ?: return null
@@ -565,14 +581,17 @@ class ItemRepositoryImpl @Inject constructor(
     /**
      * 「这个操作在 KDBX 库上**不支持**」的守卫。
      *
-     * ## ⚠️ 2026-10-01 起它只管两件事（不是"整个库只读"了）
+     * ## ⚠️ 2026-10-13 起它只剩一件事：旧孤儿行的回收站清理
      *
-     * KDBX 的**条目**已经可以增删改（走 [KdbxItemRepository]，那五个写方法各自先分流）。
+     * KDBX 的**条目**早已可以增删改（走 [KdbxItemRepository]），**通行密钥的写**
+     * 也于 2026-10-13 放开（`updateFido2Credentials` / `removeFido2Credential`
+     * 改走 KDBX 感知的 [loadItem] + `updateItem` 分流，写回由
+     * `KdbxItemWriter.applyPasskeys` 承担，私钥强制受保护）。
+     *
      * 剩下仍然拒绝的只有：
-     * 1. **通行密钥的写** —— `KPEX_*` 由浏览器 / 服务端创建，客户端只读；
-     * 2. **旧孤儿行的回收站清理** —— #106 修之前留下的脏数据，不许再碰
-     *    （`cleanupExpiredTrash` 会**查到**它们并给一个 KDBX 库入队 DELETE
-     *    ⇒ 队列里躺下永不推送的毒丸：`flushAfterLocalWrite` 对非 Bitwarden 库恒 Queued、没人消费）。
+     * **旧孤儿行的回收站清理** —— #106 修之前留下的脏数据，不许再碰
+     * （`cleanupExpiredTrash` 会**查到**它们并给一个 KDBX 库入队 DELETE
+     * ⇒ 队列里躺下永不推送的毒丸：`flushAfterLocalWrite` 对非 Bitwarden 库恒 Queued、没人消费）。
      *
      * ⇒ **再往里加"因为 KDBX 所以拒绝"之前，先确认那件事真的不该支持。**
      *   这条守卫的历史名字是 requireWritable —— 那时的确是整个库都不可写（#106）。
@@ -604,10 +623,11 @@ class ItemRepositoryImpl @Inject constructor(
 }
 
 /**
- * 通行密钥在 KDBX 上不可写的原因。
+ * KDBX 库的回收站清理拒绝理由（2026-10-13：通行密钥写回已放开，
+ * 这里只剩清理一件）。
  *
  * ⚠️ **会直接显示给用户**（`ReadOnlyVaultException.message` 走 `onFailure { error.message }`
  * 链路进 UI）⇒ 写成一句人话，而不是"不支持的操作"这种说了等于没说的台词。
  */
-private const val PASSKEY_READ_ONLY_REASON =
-    "KDBX 库的通行密钥由浏览器 / 服务端管理，本应用不能修改"
+private const val KDBX_TRASH_CLEANUP_REASON =
+    "KDBX 库的回收站由文件自身管理，不能按保留期自动清理"

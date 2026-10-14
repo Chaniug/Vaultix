@@ -14,6 +14,10 @@ import io.vaultix.data.bitwarden.model.CipherRequest
 import io.vaultix.data.bitwarden.model.toStoredCipherDto
 import io.vaultix.data.bitwarden.network.BitwardenJson
 import io.vaultix.data.bitwarden.sync.BitwardenSyncService
+import io.vaultix.data.kdbx.Kdbx
+import io.vaultix.data.kdbx.KdbxFileSource
+import io.vaultix.data.kdbx.KdbxFileStat
+import io.vaultix.data.kdbx.KdbxFileWriteResult
 import io.vaultix.database.dao.AtomicWriteDao
 import io.vaultix.database.dao.CipherDao
 import io.vaultix.database.dao.PendingOpDao
@@ -25,11 +29,13 @@ import io.vaultix.domain.ReadOnlyVaultException
 import io.vaultix.domain.VaultSaveOutcome
 import io.vaultix.model.VaultFido2Credential
 import io.vaultix.model.VaultItem
+import io.vaultix.model.VaultItemType
 import io.vaultix.model.VaultKind
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -629,6 +635,193 @@ class ItemRepositoryImplTest {
         assertEquals("github.com", crypto.decryptToString(stored.rpId!!, key))
         assertEquals("GitHub", crypto.decryptToString(stored.rpName!!, key))
     }
+
+    // ------------------------------------------------------------
+    // B6：KDBX 通行密钥写回（2026-10-13）
+    //
+    // 修复前 `updateFido2Credentials` / `removeFido2Credential` 第一行就是
+    // `requireNotKdbx` ⇒ KDBX 用户「读得到、存不下」：详情页能看通行密钥，
+    // 一保存就得到一句"由浏览器 / 服务端管理"。现在与条目增删改同一套分流：
+    // 解锁校验双会话、loadItem 走内存会话、updateItem 委托 kdbxItemWrites
+    // （写回由 `KdbxItemWriter.applyPasskeys` 承担，私钥强制受保护）。
+    // ------------------------------------------------------------
+
+    @After
+    fun tearDownKdbxSessions() {
+        // `KdbxSessionStore` 是进程级单例：B6 用例播的种必须清掉，
+        // 否则同 JVM 后续用例会看到一个"已经解锁"的 KDBX 库。
+        Kdbx.lock(vaultId)
+    }
+
+    /**
+     * KDBX 上的保存：委托给 KDBX 写回实现，Room 一个字节都不碰。
+     *
+     * 三条判据，第三条才是"没有幽灵数据"：
+     * 1. 委托**确实发生**（反证分流没被删掉——删了会走 Bitwarden 老路报"库未解锁"）；
+     * 2. 委托体 = 原条目（标题/用户名原样带着）+ 通行密钥（丢字段 = 静默数据丢失）；
+     * 3. Room 侧**完全安静**（行、队列都不许动）。
+     */
+    @Test
+    fun updateFido2Credentials_onKdbxVault_delegatesToKdbxWriteAndTouchesNothingInRoom() = runTest {
+        val itemId = seedKdbxVaultWithLoginItem()
+        val cred = VaultFido2Credential(
+            credentialId = "cred-kdbx-1",
+            rpId = "github.com",
+            rpName = "GitHub",
+            userName = "alice@example.com",
+        )
+        val captured = slot<VaultItem>()
+        coEvery { kdbxItemWrites.update(vaultId, capture(captured)) } returns
+            Result.success(VaultSaveOutcome.Queued)
+
+        val outcome = repo.updateFido2Credentials(vaultId, itemId, listOf(cred))
+
+        assertTrue("应当成功，实际：${outcome.exceptionOrNull()}", outcome.isSuccess)
+        // ① 委托确实发生
+        coVerify(exactly = 1) { kdbxItemWrites.update(vaultId, any()) }
+        // ② 委托体 = 原条目 + 通行密钥（领域对象原样透传，不重新解码）
+        val written = captured.captured
+        assertEquals(itemId, written.id)
+        assertEquals("GitHub", written.title)
+        assertEquals("alice@example.com", written.username)
+        assertEquals(listOf(cred), written.fido2Credentials)
+        // ③ Room 侧完全安静
+        coVerify(exactly = 0) { cipherDao.upsertAll(any()) }
+        coVerify(exactly = 0) { pendingOpDao.enqueue(any()) }
+    }
+
+    /**
+     * 删除单条通行密钥：只摘掉那一条，其余原样带回写。
+     *
+     * 播种时直接给条目挂**两条完整凭证**（`KdbxItemWriter.applyPasskeys` 新建即生效）。
+     * 必须完整：`KdbxPasskeyCodec.toCredential` 要求 rpId / credentialId /
+     * privateKeyPem / userName / userHandle 五项非空才回认凭证（缺一项就当普通条目）。
+     * 也不借道 `updateFido2Credentials` 预写——那一条走的是 **mock**，并不会真的
+     * 改会话，第二次 loadItem 会读到空集合，"只剩一条"将因"从来只有一条"假绿。
+     */
+    @Test
+    fun removeFido2Credential_onKdbxVault_removesOnlyThatCredential() = runTest {
+        val itemId = seedKdbxVaultWithLoginItem(
+            item = VaultItem(
+                id = "",
+                title = "GitHub",
+                username = "alice@example.com",
+                password = "s3cret-pass",
+                fido2Credentials = listOf(
+                    fullCredential("cred-keep", "gitlab.com", "GitLab"),
+                    fullCredential("cred-drop", "github.com", "GitHub"),
+                ),
+            ),
+        )
+        // 反证：会话里确实是两条（否则"删完剩一条"可能因为本来就只有一条而假绿）
+        assertEquals(2, Kdbx.contentOf(vaultId)!!.items.single().fido2Credentials.size)
+
+        val captured = slot<VaultItem>()
+        coEvery { kdbxItemWrites.update(vaultId, capture(captured)) } returns
+            Result.success(VaultSaveOutcome.Queued)
+
+        val outcome = repo.removeFido2Credential(vaultId, itemId, "cred-drop")
+
+        assertTrue("应当成功，实际：${outcome.exceptionOrNull()}", outcome.isSuccess)
+        val remaining = captured.captured.fido2Credentials
+        assertEquals(1, remaining.size)
+        assertEquals("cred-keep", remaining.single().credentialId)
+    }
+
+    /** 安全笔记不是登录条目 ⇒ 拒绝（两个库同一口径，KDBX 侧由类型守卫拦下）。 */
+    @Test
+    fun updateFido2Credentials_onKdbxVault_rejectsSecureNote() = runTest {
+        // ⚠️ 必须带**非空 notes**：KDBX 侧 SecureNote 是推导出来的
+        // （无用户名 + 无密码 + 有备注，见 KdbxItemMapper.toVaultItem），
+        // 空备注会被映射回 Login，类型守卫便不会触发（本用例第一版即如此，已红）。
+        val itemId = seedKdbxVaultWithLoginItem(
+            item = VaultItem(id = "", title = "会议笔记", notes = "周会纪要", type = VaultItemType.SecureNote),
+        )
+
+        val outcome = repo.updateFido2Credentials(
+            vaultId,
+            itemId,
+            listOf(VaultFido2Credential(credentialId = "cred-x", rpId = "github.com")),
+        )
+
+        assertTrue(outcome.isFailure)
+        assertTrue(outcome.exceptionOrNull()!!.message!!.contains("通行密钥只能绑定到登录（密码）条目"))
+        coVerify(exactly = 0) { kdbxItemWrites.update(any(), any()) }
+    }
+
+    /**
+     * 库未解锁 ⇒ 明确的"库未解锁"（而不是绕道 loadItem 报一句「条目不存在」——
+     * 那与真实原因无关：KDBX 条目不在 Room，未解锁时 loadItem 必然返回 null）。
+     */
+    @Test
+    fun updateFido2Credentials_onKdbxVault_failsWhenLocked() = runTest {
+        coEvery { vaultDao.get(vaultId) } returns kdbxVaultRow()
+        // 不播种会话 ⇒ Kdbx.isUnlocked(vaultId) == false
+
+        val outcome = repo.updateFido2Credentials(
+            vaultId,
+            "no-such-item",
+            listOf(VaultFido2Credential(credentialId = "cred-x", rpId = "github.com")),
+        )
+
+        assertTrue(outcome.isFailure)
+        assertEquals("库未解锁，无法保存：$vaultId", outcome.exceptionOrNull()?.message)
+    }
+
+    // ---- B6 夹具 ----
+
+    /**
+     * 用**公开 API** 播种一个真实的 KDBX 会话，再往会话里塞一个条目，
+     * 返回该条目的 id。
+     *
+     * `KdbxSessionStore` 是 `data:kdbx` 的 internal 类型，本模块测试摸不到
+     * ⇒ 只能走 `Kdbx.createVault` 这条唯一公开入口（与 `KdbxCreateRepositoryTest`
+     * 同一手法）。主密码只喂内存库，不进任何断言。
+     */
+    private suspend fun seedKdbxVaultWithLoginItem(
+        item: VaultItem = VaultItem(
+            id = "",
+            title = "GitHub",
+            username = "alice@example.com",
+            password = "s3cret-pass",
+        ),
+    ): String {
+        coEvery { vaultDao.get(vaultId) } returns kdbxVaultRow()
+        Kdbx.createVault(vaultId, inMemorySource(), "测试库", "correct horse battery staple")
+            .getOrThrow()
+        Kdbx.createItem(vaultId, folderId = null, item = item).getOrThrow()
+        return Kdbx.contentOf(vaultId)!!.items.single().id
+    }
+
+    /**
+     * 内存文件来源。`read()` 刻意抛错：新建路径**不该**读远端
+     * （调了就让用例红，而不是静默返回空数组）。
+     */
+    private fun inMemorySource(): KdbxFileSource = mockk {
+        coEvery { stat() } returns KdbxFileStat(versionToken = "token")
+        coEvery { write(bytes = any(), expectedVersion = any(), force = any()) } returns
+            KdbxFileWriteResult(versionToken = "token")
+        coEvery { read() } throws AssertionError("新建路径不应读远端文件")
+    }
+
+    /**
+     * 一条能被 `toCredential` 回认的完整凭证（五项必填非空，见用例注释）。
+     * credentialId 取非 base64 串 ⇒ 写读往返原样（编解码对旧数据不硬转换）。
+     */
+    private fun fullCredential(credentialId: String, rpId: String, rpName: String) =
+        VaultFido2Credential(
+            credentialId = credentialId,
+            rpId = rpId,
+            rpName = rpName,
+            userName = "alice@example.com",
+            userDisplayName = "alice@example.com",
+            userHandle = "user-handle-$credentialId",
+            keyValue = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2Vw\n-----END PRIVATE KEY-----",
+            keyType = "public-key",
+            keyCurve = "P-256",
+            counter = 0L,
+            discoverable = true,
+        )
 
     @Test
     fun restoreOrPermanentDeleteOfActiveItem_rejected() = runTest {        sessions.unlock(vaultId, key)

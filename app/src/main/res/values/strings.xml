@@ -1155,7 +1155,7 @@
     <!-- 首帧加载中：条目流还没发首帧，此时不能显示「还没有通行密钥」（那是假状态） -->
     <string name="passkeys_loading_body">正在读取通行密钥…</string>
     <string name="passkeys_detail_title">通行密钥详情</string>
-    <string name="passkeys_readonly_hint">通行密钥只读，仅可查看与删除（由服务器 / 平台管理）</string>
+    <string name="passkeys_readonly_hint">通行密钥仅可查看与删除，不可编辑</string>
     <string name="passkey_field_rp_id">依赖方 ID</string>
     <string name="passkey_field_rp_name">依赖方名称</string>
     <string name="passkey_field_credential_id">凭证 ID</string>
