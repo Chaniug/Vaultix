@@ -40,6 +40,7 @@ import io.vaultix.data.repository.kdbx.KdbxCloudSyncCoordinator
 import io.vaultix.data.repository.kdbx.KdbxFileCache
 import io.vaultix.domain.VaultSaveOutcome
 import io.vaultix.model.VaultItem
+import io.vaultix.model.VaultItemType
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
@@ -76,6 +77,7 @@ class KdbxItemRepository @Inject constructor(
     suspend fun create(vaultId: String, item: VaultItem): Result<VaultSaveOutcome> =
         withContext(Dispatchers.IO) {
             runCatching {
+                requireSupportedType(item)
                 val write = Kdbx.createItem(vaultId, folderId = item.folderId, item = item)
                     .getOrElse { throw it.toUserFacing() }
                 persist(vaultId, write.bytes)
@@ -92,6 +94,8 @@ class KdbxItemRepository @Inject constructor(
     suspend fun update(vaultId: String, item: VaultItem): Result<VaultSaveOutcome> =
         withContext(Dispatchers.IO) {
             runCatching {
+                // 同 #create：类型不对就连"改动前那一份"都不必取（取它只为写回比对）。
+                requireSupportedType(item)
                 val before = Kdbx.contentOf(vaultId)?.items?.firstOrNull { it.id == item.id }
                     ?: error("条目不存在：${item.id}")
                 val write = Kdbx.updateItem(vaultId, before = before, after = item)
@@ -124,6 +128,31 @@ class KdbxItemRepository @Inject constructor(
                 persist(vaultId, write.bytes)
             }
         }
+
+    /**
+     * A3：**类型硬闸** —— KDBX 库只收 [VaultItemType.Login] / [VaultItemType.SecureNote]。
+     *
+     * ## 为什么表单裁过了，这里还要再拦一道
+     *
+     * 表单的裁剪（`ItemTypePolicy`）只覆盖「用户手点」这一条路。而
+     * `VaultExportRepositoryImpl` 的**导入**同样汇入 [create]：一份 Bitwarden
+     * 加密 JSON 里若有银行卡/身份/SSH 条目，导入目标是 KDBX 库时就会绕开表单。
+     * 而 KDBX 的 writer 对这三类**没有对应字段区，也不报错**（静默丢弃）——
+     * 结果是导入报告"成功"，库里多出一批"类型是卡、字段全空"的残骸。
+     *
+     * ⇒ 在写动作的入口拦：类型不对就整体拒绝，会话与文件都不碰。
+     *
+     * ## 判据与 UI 同源
+     *
+     * 支持集 = `KdbxItemMapper.toVaultItem` 的**产出集**（读得出来才配存进去），
+     * 也正是 `ui/common/ItemTypePolicy.kt` 给表单看的那个集合。两处若漂移，
+     * 会出现"表单让建、仓储拒收"（用户白填一场）—— 由各自的单测钉住。
+     */
+    private fun requireSupportedType(item: VaultItem) {
+        require(item.type in KDBX_SUPPORTED_TYPES) {
+            "KDBX 密码库只支持登录与安全笔记条目，不能保存${item.type.displayName()}（未做任何改动）"
+        }
+    }
 
     /**
      * 把**已经写好**的字节送到它该去的地方，并让界面能看见这次改动。
@@ -187,4 +216,27 @@ class KdbxItemRepository @Inject constructor(
      */
     private fun Throwable.toUserFacing(): Throwable =
         if (this is KdbxFailure) IllegalStateException(message, this) else this
+}
+
+/**
+ * KDBX 库**支持**的条目类型（A3 硬闸的判据）。
+ *
+ * 与 `KdbxItemMapper.toVaultItem` 的产出集、`ui/common/ItemTypePolicy.kt` 的
+ * 表单裁剪集三处同源 —— 各自有单测钉住，改一处必须同步另两处。
+ */
+private val KDBX_SUPPORTED_TYPES = setOf(VaultItemType.Login, VaultItemType.SecureNote)
+
+/**
+ * 类型的中文名（只给 [requireSupportedType] 的拒绝文案用）。
+ *
+ * ⚠️ data 层够不到 `R.string`，且这里的文案**不面向最终用户**——
+ * 它沿 `Result.failure` 一路上浮，最终由 UI 层决定怎么呈现
+ * （与 [KdbxFailure] 的 message 同款处理，见 [toUserFacing] 的 KDoc）。
+ */
+private fun VaultItemType.displayName(): String = when (this) {
+    VaultItemType.Login -> "登录"
+    VaultItemType.SecureNote -> "安全笔记"
+    VaultItemType.Card -> "银行卡"
+    VaultItemType.Identity -> "身份信息"
+    VaultItemType.SshKey -> "SSH 密钥"
 }

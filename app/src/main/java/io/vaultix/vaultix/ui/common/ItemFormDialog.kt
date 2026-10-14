@@ -102,6 +102,10 @@ import io.vaultix.vaultix.ui.theme.Spacing
  * [typeEditable]：仅**新建**时开放类型选择。编辑态不允许改类型——改类型会让
  * 原类型载荷失去意义，且写路径有类型守恒守卫。
  *
+ * [selectableTypes]：该库**可选**的条目类型（A3 · 2026-10-13，见 [selectableItemTypes]）。
+ * KDBX 的 mapper 只产 Login / SecureNote、写回对 Card / Identity / SshKey 静默丢字段
+ * ⇒ 不放行那三种，否则用户存进去的是"类型是卡、字段全空"的残骸。
+ *
  * 密码等敏感值只在对话框存续期间存在于内存；关闭/保存后由调用方保证不再持有副本。
  * 编辑场景用 [initial] 预填；切换目标条目时（key 变化）状态自动重置。
  * 保存回传的是 [initial] 的 copy，未在本表单暴露的段（自定义字段 / 通行密钥等）原样保留。
@@ -115,10 +119,16 @@ fun ItemFormDialog(
     folders: List<VaultFolder> = emptyList(),
     saving: Boolean = false,
     typeEditable: Boolean = false,
+    selectableTypes: List<VaultItemType> = VaultItemType.entries.toList(),
     onDismiss: () -> Unit,
     onSave: (VaultItem) -> Unit,
 ) {
-    var type by rememberSaveable(initial) { mutableStateOf(initial.type) }
+    // A3：初始类型不在该库可选集里时（KDBX 库收到 Card 初始值 —— 正常路径不会，
+    // 但库摘要加载中 / 状态复现时可能出现），兜到可选集的第一个，
+    // 避免"一个筹码都没选中、用户还不知道存的是什么类型"。
+    var type by rememberSaveable(initial, selectableTypes) {
+        mutableStateOf(fallbackFormType(initial, selectableTypes))
+    }
     var name by rememberSaveable(initial) { mutableStateOf(initial.title) }
     var username by rememberSaveable(initial) { mutableStateOf(initial.username) }
     var password by rememberSaveable(initial) { mutableStateOf(initial.password) }
@@ -200,6 +210,7 @@ fun ItemFormDialog(
                 onFolderSelect = { folderId = it },
                 typeEditable = typeEditable,
                 type = type,
+                selectableTypes = selectableTypes,
                 onTypeSelect = { type = it },
             )
             NameField(
@@ -524,6 +535,7 @@ private fun FormHeader(
     onFolderSelect: (String?) -> Unit,
     typeEditable: Boolean,
     type: VaultItemType,
+    selectableTypes: List<VaultItemType>,
     onTypeSelect: (VaultItemType) -> Unit,
 ) {
     if (folders.isNotEmpty()) {
@@ -535,7 +547,16 @@ private fun FormHeader(
     if (typeEditable) {
         SectionLabel(text = stringResource(R.string.item_field_type), icon = Icons.Filled.Category)
         Spacer(Modifier.height(Spacing.sm))
-        TypePicker(selected = type, onSelect = onTypeSelect)
+        TypePicker(types = selectableTypes, selected = type, onSelect = onTypeSelect)
+        // A3：被裁剪过的库（KDBX）补一行说明 —— 否则用户只看到两个筹码，
+        // 会以为"功能没做完"而不是"这个库只支持这两种"。
+        if (selectableTypes.size < VaultItemType.entries.size) {
+            Text(
+                text = stringResource(R.string.item_type_kdbx_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         Spacer(Modifier.height(Spacing.md))
     }
 }
@@ -653,9 +674,14 @@ private fun FolderPicker(
     }
 }
 
-/** 新建条目的类型选择：一行可选筹码，选中态即当前类型。 */
+/**
+ * 新建条目的类型选择：一行可选筹码，选中态即当前类型。
+ *
+ * @param types 该库可选集（A3；KDBX 只有登录 / 安全笔记两种，见 [selectableItemTypes]）。
+ */
 @Composable
 private fun TypePicker(
+    types: List<VaultItemType>,
     selected: VaultItemType,
     onSelect: (VaultItemType) -> Unit,
 ) {
@@ -664,7 +690,7 @@ private fun TypePicker(
         verticalArrangement = Arrangement.spacedBy(Spacing.xs),
         modifier = Modifier.fillMaxWidth(),
     ) {
-        VaultItemType.entries.forEach { type ->
+        types.forEach { type ->
             FilterChip(
                 selected = type == selected,
                 onClick = { onSelect(type) },
@@ -1257,5 +1283,20 @@ private fun customFieldOf(parts: List<String>): VaultCustomField {
         linkedId = it.nextOrEmpty().toIntOrNull()?.takeIf { v -> v >= 0 },
     )
 }
+
+/**
+ * 表单**初始类型**的兜底（A3）：初始值不在该库可选集里时，落到可选集的第一个。
+ *
+ * 正常路径走不到（新建表单的初始类型本就来自可选集），但库摘要还没读出来、
+ * 或状态复现时初始值可能是 Card —— 不兜底就会渲染出"一枚筹码都没选中"的表单，
+ * 用户看不清自己即将存的是什么类型。
+ *
+ * 抽成文件级纯函数：主 composable 已贴着 detekt `CyclomaticComplexMethod` 上限，
+ * 这三个 `?:` 不能再算进它（同 [strengthLabelRes] 的处境）。
+ */
+private fun fallbackFormType(initial: VaultItem, selectableTypes: List<VaultItemType>): VaultItemType =
+    initial.type.takeIf { it in selectableTypes }
+        ?: selectableTypes.firstOrNull()
+        ?: VaultItemType.Login
 
 private fun Iterator<String>.nextOrEmpty(): String = if (hasNext()) next() else ""

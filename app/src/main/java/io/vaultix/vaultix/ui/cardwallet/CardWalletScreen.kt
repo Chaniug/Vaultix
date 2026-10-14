@@ -95,6 +95,7 @@ fun CardWalletScreen(
     viewModel: CardWalletViewModel = hiltViewModel(),
 ) {
     val cards by viewModel.cards.collectAsStateWithLifecycle()
+    val cardCreationSupported by viewModel.cardCreationSupported.collectAsStateWithLifecycle()
     val saving by viewModel.saving.collectAsStateWithLifecycle()
     var creating by remember { mutableStateOf<VaultItem?>(null) }
     val listState = rememberLazyListState()
@@ -103,7 +104,12 @@ fun CardWalletScreen(
 
     LaunchedEffect(addRequest) {
         if (addRequest > 0) {
-            creating = VaultItem(id = "", title = "", type = VaultItemType.Card)
+            // A3：KDBX 库建不了银行卡（mapper 只产登录/安全笔记，writer 对卡字段静默丢弃，
+            // 见 ui/common/ItemTypePolicy）⇒ 只把请求消费掉、不弹表单。
+            // ⚠️ 不能不消费：宿主按「计数非零」触发，不清的话下次重组还会再进这里。
+            if (cardCreationSupported) {
+                creating = VaultItem(id = "", title = "", type = VaultItemType.Card)
+            }
             onAddConsumed()
         }
     }
@@ -154,7 +160,16 @@ fun CardWalletScreen(
         floatingActionButton = {
             // ⚠️ 选中态下隐藏 FAB：此时用户的意图是"对这张卡做点什么"（左滑删除），
             // 一个"新建"按钮悬在那里与当前语义冲突，也容易误点。
-            if (!embedded && selectedCardId == null) {
+            // ⚠️ A3：KDBX 库不支持银行卡（见 ItemTypePolicy）⇒ 「+」也不给——
+            // 给了也是打开一个"存进去只剩空壳"的表单。
+            // 三个条件收成文件级纯函数：主 composable 贴着 detekt 复杂度上限，
+            // 且"什么时候不该出现 +"这条判据值得被单测直接钉（见 cardWalletFabVisible）。
+            if (cardWalletFabVisible(
+                    embedded = embedded,
+                    selectionActive = selectedCardId != null,
+                    creationSupported = cardCreationSupported,
+                )
+            ) {
                 FloatingActionButton(onClick = {
                     creating = VaultItem(id = "", title = "", type = VaultItemType.Card)
                 }) {
@@ -174,11 +189,10 @@ fun CardWalletScreen(
                     ) {
                         Text(
                             text = stringResource(
-                                if (cards.isEmpty()) {
-                                    R.string.card_wallet_empty
-                                } else {
-                                    R.string.card_wallet_no_match
-                                },
+                                cardEmptyStateRes(
+                                    hasCards = cards.isNotEmpty(),
+                                    creationSupported = cardCreationSupported,
+                                ),
                             ),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -258,6 +272,38 @@ fun CardWalletScreen(
 }
 
 private val CARD_GAP = Spacing.sm
+
+/**
+ * 卡包页的「+」**该不该出现**（A3 后有三重条件）。
+ *
+ * 三条各管一件事，缺一条都会出一种坏味道：
+ * 1. `embedded`（主界面 Tab 内嵌）——「+」由底部导航条统一承载，页内再放一个是双入口；
+ * 2. `selectionActive`（长按选中态）—— 此时用户意图是"对这张卡做点什么"，悬一个新建按钮易误点；
+ * 3. `creationSupported`（KDBX 库建不了银行卡，见 [io.vaultix.vaultix.ui.common.supportsCardEntries]）
+ *    —— 给了也是打开一个"存进去只剩空壳"的表单。
+ *
+ * 抽成文件级纯函数：主 composable 贴着 detekt `CyclomaticComplexMethod` 上限
+ * （同 [rememberCardSelection] 被抽成 holder 的理由），且这条判据值得被单测直接钉。
+ */
+private fun cardWalletFabVisible(
+    embedded: Boolean,
+    selectionActive: Boolean,
+    creationSupported: Boolean,
+): Boolean = !embedded && !selectionActive && creationSupported
+
+/**
+ * 卡包空态文案（三选一，A3 后多了一个"库类型不支持"分支）。
+ *
+ * - 有卡但被搜索词滤空 ⇒「没有匹配的卡片」；
+ * - 没卡且建得成 ⇒「还没有银行卡。按 + 添加一张。」；
+ * - 没卡且**建不成**（KDBX 库）⇒ 说明这个库只支持登录与安全笔记 ——
+ *   此时界面上根本没有「+」，文案不能再教用户去按一个不存在的按钮。
+ */
+private fun cardEmptyStateRes(hasCards: Boolean, creationSupported: Boolean): Int = when {
+    hasCards -> R.string.card_wallet_no_match
+    creationSupported -> R.string.card_wallet_empty
+    else -> R.string.card_wallet_empty_kdbx
+}
 
 /**
  * 卡包搜索过滤：标题 / 备注 / 用户名任一命中即可（不区分大小写）。

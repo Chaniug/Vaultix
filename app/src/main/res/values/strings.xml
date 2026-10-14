@@ -775,6 +775,9 @@
     <string name="item_type_card">银行卡</string>
     <string name="item_type_identity">身份信息</string>
     <string name="item_type_ssh_key">SSH 密钥</string>
+    <!-- A3：KDBX 库只支持前两种（见 ItemTypePolicy）。表单裁剪后补一行说明，
+         否则用户只看到两枚筹码会以为"功能没做完"，而不是"这个库就这两种" -->
+    <string name="item_type_kdbx_hint">KDBX 密码库只支持登录与安全笔记两种条目</string>
 
     <!-- 条目列表 S7 -->
     <!-- 2026-09-15：库未解锁时的空态。**不能说「还没有保存的密码」**——条目都在，
@@ -1202,6 +1205,8 @@
 
     <!-- 卡包 Tab（main-shell-migration §6.1.3） -->
     <string name="card_wallet_empty">还没有银行卡。按「+」添加一张。</string>
+    <!-- A3：KDBX 库不支持银行卡，卡包的「+」随之隐藏 ⇒ 空态不能再教用户按「+」 -->
+    <string name="card_wallet_empty_kdbx">当前是 KDBX 密码库，只能保存登录与安全笔记，不支持银行卡</string>
     <!-- 卡包搜索（2026-09-13 用户反馈「卡包里面没有搜索按钮」） -->
     <string name="card_wallet_search_hint">搜索卡片</string>
     <string name="card_wallet_search_close">关闭搜索</string>

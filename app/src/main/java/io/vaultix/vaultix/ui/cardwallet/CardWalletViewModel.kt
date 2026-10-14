@@ -21,15 +21,18 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import io.vaultix.domain.ItemRepository
+import io.vaultix.domain.VaultRepository
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
 import io.vaultix.vaultix.session.ActiveVaultStore
+import io.vaultix.vaultix.ui.common.supportsCardEntries
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -45,6 +48,7 @@ import javax.inject.Inject
 class CardWalletViewModel @Inject constructor(
     private val activeVaultStore: ActiveVaultStore,
     private val itemRepository: ItemRepository,
+    private val vaultRepository: VaultRepository,
 ) : ViewModel() {
 
     /** 卡包内容 = 活跃库内的全部 `type=Card` 条目。 */
@@ -57,6 +61,30 @@ class CardWalletViewModel @Inject constructor(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5_000),
             initialValue = emptyList(),
+        )
+
+    /**
+     * 当前活跃库**能不能建银行卡**（A3 · 2026-10-13）。
+     *
+     * KDBX 的 mapper 只产 Login / SecureNote，写回对 Card 字段静默丢弃
+     * ⇒ 在 KDBX 库里"新建银行卡"得到的是一个类型是卡、字段全空的残骸
+     * （看起来保存成功，详情页一片空白）。⇒ 卡包的新建入口据此显隐。
+     *
+     * 初始值 `true`（加载中不闪避）：库摘要流首发很快，FAB 不会可见地跳变。
+     */
+    val cardCreationSupported: StateFlow<Boolean> = activeVaultStore.activeVaultId
+        .flatMapLatest { vaultId ->
+            if (vaultId.isNullOrBlank()) {
+                flowOf(false)
+            } else {
+                vaultRepository.observeVaults()
+                    .map { vaults -> supportsCardEntries(vaults.firstOrNull { it.id == vaultId }?.kind) }
+            }
+        }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = true,
         )
 
     private val _saving = MutableStateFlow(false)

@@ -108,6 +108,7 @@ import io.vaultix.vaultix.ui.common.capabilityTint
 import io.vaultix.vaultix.ui.common.CloudSyncIcon
 import io.vaultix.vaultix.ui.common.EntryCard
 import io.vaultix.vaultix.ui.common.EntryCardIconSize
+import io.vaultix.vaultix.ui.common.selectableItemTypes
 import io.vaultix.vaultix.ui.common.EntryCardIconSpacing
 import io.vaultix.vaultix.ui.common.EntryCardTextSpacing
 import io.vaultix.vaultix.ui.common.EntryCardTitleLineHeight
@@ -584,6 +585,7 @@ fun ItemsScreen(
     if (showCreateDialog) {
         CreateItemDialog(
             folders = folders,
+            vaultKind = state.vault?.kind,
             saving = state.saving,
             onDismiss = { showCreateDialog = false },
             onSave = { item ->
@@ -1392,6 +1394,7 @@ private fun ItemsList(
 @Composable
 private fun CreateItemDialog(
     folders: List<VaultFolder>,
+    vaultKind: VaultKind?,
     saving: Boolean,
     onDismiss: () -> Unit,
     onSave: (VaultItem) -> Unit,
@@ -1405,6 +1408,9 @@ private fun CreateItemDialog(
         // 新建可选类型（登录 / 银行卡 / 身份 / 安全笔记 / SSH）；
         // 编辑态不开，避免改类型让原类型载荷失去意义。
         typeEditable = true,
+        // A3：KDBX 库只放行登录 / 安全笔记（mapper 只产这两种，写回对其余三种
+        // 静默丢字段 ⇒ 放行等于让用户存一个"字段全空"的残骸）。
+        selectableTypes = selectableItemTypes(vaultKind),
         onDismiss = onDismiss,
         onSave = onSave,
     )
