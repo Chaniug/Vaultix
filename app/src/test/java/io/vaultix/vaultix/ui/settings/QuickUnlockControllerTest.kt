@@ -8,10 +8,12 @@
  */
 package io.vaultix.vaultix.ui.settings
 
+import io.vaultix.domain.PIN_MIN_LENGTH
 import io.vaultix.model.VaultKind
 import io.vaultix.model.VaultSummary
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -27,9 +29,11 @@ import org.junit.Test
  * 房子化后开关只对应**一把全局门锁**：开门锁 = 一次 wrap，要么成功要么不变
  * ⇒ **「部分完成」在结构上不存在**，`Partial` 随之删除（定稿 §5.1）。
  *
- * ⇒ 本文件现在钉两件事：
+ * ⇒ 本文件现在钉三件事：
  * 1. **开关 = 门锁的存在性**（[lockState]，二值，与"库配好了几个"无关）；
- * 2. **范围语义**（[assemble]）：默认全勾、房间信封存在性单维度、每库 `ready` 是复合判定。
+ * 2. **范围语义**（[assemble]）：默认全勾、房间信封存在性单维度、每库 `ready` 是复合判定；
+ * 3. **新 PIN 的本地判定**（[newPinInvalid]，2026-10-14 从类里移到文件级后才可测）：
+ *    位数优先于一致性，登记与修改共用同一条阈值。
  *
  * ## 为什么测这两个**纯函数**而不是整个控制器
  *
@@ -339,5 +343,33 @@ class QuickUnlockControllerTest {
 
         assertTrue(ui.rows.first { it.vaultId == "k" }.needsMasterPassword)
         assertFalse(ui.rows.first { it.vaultId == "b" }.needsMasterPassword)
+    }
+
+    // ---- 新 PIN 本地判定（#161：登记与修改共用同一条阈值）----
+
+    /**
+     * 位数与一致性**都不过**时，报的是位数 —— 顺序即纪律：
+     * 位数判定 O(1)，一致性判定也 O(1)，但报错的优先级必须是位数
+     * （用户第一件事是把 PIN 凑到规定长度）。
+     */
+    @Test
+    fun `位数不够时报位数_即使两次也不一致`() {
+        val entry = QuickUnlockController.Dialog.PinEntry(pin = "123", confirm = "999")
+
+        assertEquals("PIN 需要 $PIN_MIN_LENGTH 位数字", newPinInvalid(entry))
+    }
+
+    @Test
+    fun `位数够但两次不一致_报不一致`() {
+        val entry = QuickUnlockController.Dialog.PinEntry(pin = "123456", confirm = "123457")
+
+        assertEquals("两次输入不一致，请重新输入", newPinInvalid(entry))
+    }
+
+    @Test
+    fun `位数够且一致_放行`() {
+        val entry = QuickUnlockController.Dialog.PinEntry(pin = "123456", confirm = "123456")
+
+        assertNull(newPinInvalid(entry))
     }
 }

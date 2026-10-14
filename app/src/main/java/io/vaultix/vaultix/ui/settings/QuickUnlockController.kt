@@ -316,6 +316,20 @@ class QuickUnlockController(
         data object PinChangeDone : Dialog
 
         /**
+         * 「忘记 PIN？」的二次确认（#161 / B5）。
+         *
+         * ## 为什么需要确认
+         *
+         * 这一步**不验任何东西**就清掉 PIN 门锁信封 —— 走到这里的用户恰恰证明不了
+         * 自己是谁（"忘记"的定义），而清完就意味着快速解锁少了一种方式。
+         * 误点的代价只是"重新设一遍 PIN"（数据无损），但依然值得一道确认：
+         * 这个入口的名字（「忘记 PIN？」）本身就会引来好奇的点按。
+         *
+         * 确认后的动作见 [onForgetPin]（同一个入口的第二次调用）。
+         */
+        data object PinForgotConfirm : Dialog
+
+        /**
          * 逐个库问主密码。
          *
          * @param vaultName 正在问的这个库（用户必须知道是**哪个**库的密码）
@@ -703,15 +717,43 @@ class QuickUnlockController(
     }
 
     /**
-     * 新 PIN 的两条**本地**判定（位数 / 两次一致）。
+     * 「忘记 PIN？」入口（#161 / B5）—— **一个方法兼顾"打开确认框"与"确认清除"**。
      *
-     * 返回错误文案，null = 通过。抽出来是为了让 [submitPin] 与 [submitChangePin]
-     * 共用一条判定 —— 同一个阈值抄两遍，迟早有一遍忘改。
+     * ## 为什么合成一个方法（而不是 open / confirm 两个）
+     *
+     * 本类的函数数已顶 detekt `TooManyFunctions` 的 40 上限（文件级那批纯函数
+     * 就是为腾位而存在的），而这两步本来就是同一条状态机的相邻两态：
+     * 确认框开着时再调一次 = 确认，空闲时调一次 = 打开。合成后净增一个函数。
+     *
+     * ## 两次调用各干什么
+     *
+     * | 调用时对话框状态 | 动作 |
+     * |---|---|
+     * | [Dialog.Idle] 且 PIN 已启用 | 打开 [Dialog.PinForgotConfirm] |
+     * | [Dialog.PinForgotConfirm] | 清 PIN 门锁信封（语义 = [disableAll] 那条路），回 Idle |
+     * | 其它任何流程中 | 忽略（与拨开关的重入保护同一条：连点两下不起两个班次） |
+     *
+     * ## 为什么确认时**不验当前 PIN**
+     *
+     * 用户就是不知道它才走到这里。验证只会把"忘记"的用户永久挡在门外 ——
+     * PIN 从来不是根凭据（主密码才是），清掉信封无损数据，用户用主密码开门后
+     * 把开关拨回 On 就是"重设"。#161 承诺的"在设置里重设"落到这一行上。
      */
-    private fun newPinInvalid(current: Dialog.PinEntry): String? {
-        if (current.pin.length != PIN_MIN_LENGTH) return "PIN 需要 $PIN_MIN_LENGTH 位数字"
-        if (current.pin != current.confirm) return "两次输入不一致，请重新输入"
-        return null
+    fun onForgetPin() {
+        when (_dialog.value) {
+            is Dialog.PinForgotConfirm -> scope.launch {
+                // disableAll 的完整语义：删信封 + 清失败计数 + 两把锁都没了时连带清房间
+                // + 范围镜像归零（见其 KDoc）—— 与拨开关关掉 PIN 走的是同一条路，
+                // 区别只在这一路有确认框、且不需要用户知道当前 PIN。
+                disableAll(UnlockMethod.PIN)
+                _dialog.value = Dialog.Idle
+            }
+            Dialog.Idle ->
+                if (state.value.pin is CapabilityState.On) {
+                    _dialog.value = Dialog.PinForgotConfirm
+                }
+            else -> Unit
+        }
     }
 
     /** 落地「改 PIN」并把 domain 的每一态如实翻译成用户能看到的一句话。 */
@@ -1380,6 +1422,23 @@ class QuickUnlockController(
  */
 private fun anyRoomSealed(committed: Map<String, LocalUnlockEnrollOutcome>): Boolean =
     committed.values.any { it is LocalUnlockEnrollOutcome.Enrolled }
+
+/**
+ * 新 PIN 的两条**本地**判定（位数 / 两次一致）。
+ *
+ * 返回错误文案，null = 通过。[QuickUnlockController.submitPin]（登记）与
+ * [QuickUnlockController.submitChangePin]（修改）共用这一条判定 ——
+ * 同一个阈值抄两遍，迟早有一遍忘改。
+ *
+ * ⚠️ 放在**文件级**而不是类里：`QuickUnlockController` 的函数数已卡 detekt
+ * `TooManyFunctions` 的 40 上限（同 [anyRoomSealed] 的处境）。附带收益是它
+ * 从此可被单测直接钉（`QuickUnlockControllerTest`），不必连 Repository 一起 mock。
+ */
+internal fun newPinInvalid(current: QuickUnlockController.Dialog.PinEntry): String? {
+    if (current.pin.length != PIN_MIN_LENGTH) return "PIN 需要 $PIN_MIN_LENGTH 位数字"
+    if (current.pin != current.confirm) return "两次输入不一致，请重新输入"
+    return null
+}
 
 /**
  * 是否该把本次新开的门锁**整体回退**（「不半新半旧」的落点之一）。

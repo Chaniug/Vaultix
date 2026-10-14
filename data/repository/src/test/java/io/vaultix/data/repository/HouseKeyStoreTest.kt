@@ -424,4 +424,46 @@ class HouseKeyStoreTest {
             (outcome as PinOpen.WrongPin).remainingAttempts,
         )
     }
+
+    // ===== 7) 「忘记 PIN」清除语义（B5 / #161）=====
+
+    /**
+     * 忘了 PIN 的用户走设置页「忘记 PIN？」入口：**不验任何东西**，直接清信封
+     * （controller.onForgetPin → disableAll → 本方法）。
+     *
+     * 钉三件事：
+     * ① 信封与失败计数**都没了** —— 用户可见状态是"未启用"而不是"已熔断"，
+     *    且计数器不能以旧值残留（否则重设后会被上一次的输错锁在门外）；
+     * ② 解锁入口回到"未启用 PIN 解锁"这句实话上（不是 LockedOut ——
+     *    忘了 PIN 与输错太多是两件事，后者要等主密码，前者现在就能重设）；
+     * ③ 重设 = 重新登记，**新 PIN 当即可用、旧 PIN 当场失效**。
+     */
+    @Test
+    fun `忘记 PIN 清信封_计数不残留_重设即新 PIN`() = runTest {
+        house.enrollPinLock("123456")
+        // 先制造两次输错：模拟"试到自己都忘了试过哪个"的现场。
+        // 计数键若在清除后残留，重设的用户会被旧账锁在门外。
+        house.openWithPin("000000")
+        house.openWithPin("000001")
+        assertTrue(house.hasPinEnvelope())
+
+        // 「忘记 PIN？」确认清除（controller 那一侧只是走到本方法的编排）。
+        house.disablePinLock()
+
+        // ① 信封没了，失败计数键也没了（物理地从凭据仓移除）。
+        assertFalse(house.hasPinEnvelope())
+        assertFalse(
+            "失败计数必须一并清除，否则重设后会被旧账熔断",
+            store.containsKey("house_pin_attempts"),
+        )
+        // ② 解锁页看到的是"未启用"——忘了 PIN 与输错熔断是两件事，
+        //    后者要等主密码解锁，前者现在就能重设。
+        val afterDisable = house.openWithPin("123456")
+        assertTrue("应是未启用而不是熔断：$afterDisable", afterDisable is PinOpen.Unavailable)
+        assertEquals("未启用 PIN 解锁", (afterDisable as PinOpen.Unavailable).detail)
+        // ③ 重设 = 重新登记：新 PIN 当即可用，旧 PIN 当场失效。
+        assertEquals(LockEnrollResult.Enrolled, house.enrollPinLock("654321"))
+        assertTrue(house.openWithPin("654321") is PinOpen.Opened)
+        assertTrue(house.openWithPin("123456") is PinOpen.WrongPin)
+    }
 }

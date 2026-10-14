@@ -119,6 +119,9 @@ fun UnlockMethodScreen(
                     onTogglePin = viewModel.quickUnlock::togglePin,
                     // 「修改 PIN」（#161）：只在 PIN 已启用时才会出现，见 QuickUnlockSettingsRows。
                     onStartChangePin = viewModel.quickUnlock::startChangePin,
+                    // 「忘记 PIN？」（B5 / #161）：同行出现，面向忘了当前 PIN 的人
+                    // （那一行要验旧 PIN，这条路不验 —— 清信封后用主密码开门再重设）。
+                    onForgetPin = viewModel.quickUnlock::onForgetPin,
                 )
                 SettingsDivider()
                 // ★ 2026-09-30 晚搬入：**锁的超时**与锁的方式同页 ——

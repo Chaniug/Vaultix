@@ -24,6 +24,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Fingerprint
+import androidx.compose.material.icons.filled.LockReset
 import androidx.compose.material.icons.filled.Password
 import androidx.compose.material.icons.filled.Upgrade
 import androidx.compose.material3.BasicAlertDialog
@@ -142,6 +143,14 @@ internal fun QuickUnlockSettingsRows(
      * 推翻下面那段「点整行 = 拨开关」的历史约定；在它旁开一行更省事也更稳。
      */
     onStartChangePin: () -> Unit,
+    /**
+     * 点「忘记 PIN？」（**只有 PIN 已启用时那一行为可点**）。
+     *
+     * 与 [onStartChangePin] 的分工：那一行面向**知道当前 PIN** 的人（要验旧 PIN）；
+     * 本入口面向**忘了 PIN** 的人 —— 他们的路只有一条：清掉信封、用主密码开门、
+     * 再把开关拨回 On 设新的（B5 / #161 的落点）。
+     */
+    onForgetPin: () -> Unit,
 ) {
     if (legacyRemains) {
         SettingsRow(
@@ -199,11 +208,24 @@ internal fun QuickUnlockSettingsRows(
         is QuickUnlockController.CapabilityState.On -> true
         is QuickUnlockController.CapabilityState.Off -> false
     }
+    // ⚠️ 这根分隔线是 2026-10-14 补的：加「修改 PIN」行时只补了它**后面**那根，
+    //   PIN 开关行与它之间是光秃秃贴着的 —— [SettingsGroupCard] 的契约是
+    //   "行间用 [SettingsDivider] 分隔"，两行粘成一行读起来像一行两个动作。
+    SettingsDivider()
     if (state.loaded && pinEnabled) {
         SettingsRow(
             icon = { Icon(Icons.Filled.Edit, contentDescription = null) },
             title = stringResource(R.string.pin_change),
             onClick = onStartChangePin,
+        )
+        SettingsDivider()
+        // ★ B5 / #161：「忘记 PIN？」—— 面向**忘了当前 PIN** 的人。
+        //   上面那一行要验旧 PIN，忘了的人走不通；这一行不验任何东西，
+        //   清掉信封后用主密码开门、再把开关拨回 On 即是"重设"。
+        SettingsRow(
+            icon = { Icon(Icons.Filled.LockReset, contentDescription = null) },
+            title = stringResource(R.string.pin_forgot),
+            onClick = onForgetPin,
         )
         SettingsDivider()
     }
@@ -371,6 +393,7 @@ internal fun QuickUnlockHost(controller: QuickUnlockController) {
         is QuickUnlockController.Dialog.KdbxPassword -> KdbxPasswordDialog(current, controller)
         is QuickUnlockController.Dialog.Report -> ReportDialog(current, controller)
         QuickUnlockController.Dialog.PinChangeDone -> PinChangeDoneDialog(controller)
+        QuickUnlockController.Dialog.PinForgotConfirm -> PinForgotConfirmDialog(controller)
     }
 }
 
@@ -396,6 +419,40 @@ private fun PinChangeDoneDialog(controller: QuickUnlockController) {
             )
             Spacer(Modifier.height(Spacing.sm))
             DialogActions {
+                DialogBackButton(controller::dismiss)
+            }
+        }
+    }
+}
+
+/**
+ * 「忘记 PIN？」的二次确认（B5 / #161）。
+ *
+ * ⚠️ 确认即清信封、**不验任何东西**：走到这里的用户恰恰证明不了自己是谁
+ * （"忘记"的定义），而 PIN 从来不是根凭据（主密码才是）—— 验它只会把
+ * 忘了的人永久挡在门外。清完无损数据：用主密码解锁（同时开着指纹则用指纹），
+ * 再把「PIN」开关拨回 On 就是重设。
+ *
+ * ⚠️ 破坏性动作**左置**（同 [PinEntryDialog] 里「关闭 PIN 解锁」的站位）：
+ * 右边只留返回，用户在"想退出"与"想清除"之间不会误触。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PinForgotConfirmDialog(controller: QuickUnlockController) {
+    BasicAlertDialog(onDismissRequest = controller::dismiss) {
+        DialogSurface {
+            DialogHeader(title = stringResource(R.string.pin_forgot))
+            DialogSectionTitle(title = stringResource(R.string.pin_forgot_body))
+            Spacer(Modifier.height(Spacing.sm))
+            DialogActions {
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = controller::onForgetPin) {
+                    Text(
+                        text = stringResource(R.string.pin_forgot_confirm),
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                Spacer(Modifier.width(Spacing.sm))
                 DialogBackButton(controller::dismiss)
             }
         }
