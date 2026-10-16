@@ -48,6 +48,7 @@ import app.keemobile.kotpass.models.Group
 import app.keemobile.kotpass.models.EntryValue
 import io.vaultix.model.CustomFieldType
 import io.vaultix.model.VaultItem
+import io.vaultix.model.VaultItemType
 import java.util.UUID
 
 /** 一次写操作的结果：新库 + 受影响的条目 uuid + **改动是否真的发生了**。 */
@@ -194,6 +195,7 @@ internal object KdbxItemWriter {
         fields = applyTotp(fields, item = item, before = before)
         fields = applyPasskeys(fields, item = item, before = before)
         fields = applyFavorite(fields, item = item, before = before)
+        fields = applySecureNote(fields, item = item, before = before)
         return applyCustomFields(fields, item = item, before = before)
     }
 
@@ -434,6 +436,51 @@ internal object KdbxItemWriter {
                 }
             }
             // ② 取消收藏：删键（含第三方可能写的大小写变体）。
+            existingKey != null -> fields.minus(existingKey)
+            else -> fields
+        }
+    }
+
+    /**
+     * 安全笔记类型标记（A4 · 2026-10-16）：[VaultItem.type] ⇄ `VPX_SECURE_NOTE` 工具字段。
+     *
+     * ## 为什么必须显式存类型
+     *
+     * KDBX 没有条目类型，读侧只能推导。推导规则（无用户名 + 无密码 + 有笔记）在
+     * **空笔记的安全笔记**上静默翻转：三个标准字段全空 ⇒ 读回变成登录
+     * （用户明明建的是安全笔记）。⇒ Vaultix 自建的条目带标记，读侧 marker 优先；
+     * 第三方条目没有标记，仍走启发式（兼容不动）。
+     *
+     * ## 写入纪律（与 [applyFavorite] 同构）
+     *
+     * 1. **类型未变则一个字都不动**（`before.type == after.type` 直接返回）——
+     *    一次无关编辑不重写标记，第三方写的 `"1"` 原样保留；
+     * 2. **安全笔记 ⇒ 写 `"true"`**（已是真值则不碰）；
+     * 3. **类型离开安全笔记 ⇒ 删键**（含第三方可能写的大小写变体）——
+     *    删了才回落到启发式，与"从未标记"同形。
+     *
+     * ⚠️ 与收藏不同，这里**不写 `"false"`**的理由见 [KdbxToolFields.SECURE_NOTE] 的 KDoc：
+     * 缺失不等于登录（第三方笔记型条目靠启发式），给每条登录镶恒假字段纯属噪音。
+     */
+    internal fun applySecureNote(
+        fields: EntryFields,
+        item: VaultItem,
+        before: VaultItem?,
+    ): EntryFields {
+        // ① 没变过就不碰（含新建时 before == null 的全量路径）。
+        if (before != null && before.type == item.type) return fields
+        val existingKey = fields.keys.firstOrNull {
+            it.equals(KdbxToolFields.SECURE_NOTE, ignoreCase = true)
+        }
+        return when {
+            item.type == VaultItemType.SecureNote -> {
+                if (fields[KdbxToolFields.SECURE_NOTE]?.content == KdbxToolFields.SECURE_NOTE_TRUE) {
+                    fields
+                } else {
+                    fields + (KdbxToolFields.SECURE_NOTE to EntryValue.Plain(KdbxToolFields.SECURE_NOTE_TRUE))
+                }
+            }
+            // ② 类型离开安全笔记：删键（回落到启发式，与"从未标记"同形）。
             existingKey != null -> fields.minus(existingKey)
             else -> fields
         }

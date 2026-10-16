@@ -278,6 +278,182 @@ class KdbxItemWriterTest {
         assertThat(fields[KdbxToolFields.FAVORITE]?.content).isEqualTo("1")
     }
 
+    // ---------------------------------------------------------------- 安全笔记类型标记（A4）
+
+    @Test
+    fun `新建空笔记的安全笔记_读回仍是安全笔记（核心回归）`() {
+        // ★ 本文件的 bug：表单的备注**可空** ⇒ 空笔记的安全笔记三个标准字段全空，
+        //   旧推导（无用户名 + 无密码 + 有笔记）判不出 ⇒ 读写往返后类型**静默翻转成登录**。
+        //   Bitwarden 侧类型是服务端显式字段，无此问题 —— 两个库两种命运。
+        val db = databaseWith()
+
+        val result = KdbxItemWriter.createEntry(
+            db,
+            folderId = null,
+            item = sampleItem(title = "空笔记").copy(
+                type = VaultItemType.SecureNote,
+                username = "",
+                password = "",
+                notes = "",
+            ),
+        )
+        val fields = result.database.getEntry { it.uuid == result.entryUuid }!!.second.fields
+
+        assertThat(fields[KdbxToolFields.SECURE_NOTE]?.content).isEqualTo("true")
+        // 读方向闭环：再次打开库之后，类型必须还是安全笔记。
+        val item = result.database.toMappedContent().items.single()
+        assertThat(item.type).isEqualTo(VaultItemType.SecureNote)
+        // ★ 工具区字段不得以自定义字段身份泄漏进详情页（否则用户看到一排 VPX_ 噪音）。
+        assertThat(item.customFields.map { it.name }).doesNotContain(KdbxToolFields.SECURE_NOTE)
+    }
+
+    @Test
+    fun `新建带笔记的安全笔记_读回是安全笔记（标记与启发式一致时不打架）`() {
+        val db = databaseWith()
+
+        val result = KdbxItemWriter.createEntry(
+            db,
+            folderId = null,
+            item = sampleItem(title = "护照信息").copy(
+                type = VaultItemType.SecureNote,
+                username = "",
+                password = "",
+                notes = "号码 12345",
+            ),
+        )
+
+        val item = result.database.toMappedContent().items.single()
+        assertThat(item.type).isEqualTo(VaultItemType.SecureNote)
+        assertThat(item.notes).isEqualTo("号码 12345")
+    }
+
+    @Test
+    fun `新建登录条目不写 VPX_SECURE_NOTE（不产空字段）`() {
+        val db = databaseWith()
+
+        val result = KdbxItemWriter.createEntry(db, folderId = null, item = sampleItem(title = "普通登录"))
+        val fields = result.database.getEntry { it.uuid == result.entryUuid }!!.second.fields
+
+        assertThat(fields[KdbxToolFields.SECURE_NOTE]).isNull()
+        assertThat(result.database.toMappedContent().items.single().type).isEqualTo(VaultItemType.Login)
+    }
+
+    @Test
+    fun `未标记的第三方笔记型条目_仍按启发式判安全笔记（兼容不回归）`() {
+        // 第三方工具（KeePassXC / DX）写的条目没有 VPX_SECURE_NOTE ⇒ 必须回落启发式。
+        // ⚠️ 这条是兼容性闸：若 marker 缺失时默认判登录，升级后用户库里
+        //   所有第三方安全笔记会一夜之间变成登录 —— 比原 bug 波及面更大。
+        val uuid = UUID.randomUUID()
+        val db = databaseWith(
+            entries = listOf(
+                Entry(
+                    uuid = uuid,
+                    fields = EntryFields(
+                        linkedMapOf<String, EntryValue>(
+                            BasicField.Title.key to EntryValue.Plain("第三方笔记"),
+                            BasicField.Notes.key to EntryValue.Plain("恢复码：xxxx"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        assertThat(db.toMappedContent().items.single().type).isEqualTo(VaultItemType.SecureNote)
+    }
+
+    @Test
+    fun `未标记的第三方登录型条目_仍是登录（反证启发式没被改坏）`() {
+        val uuid = UUID.randomUUID()
+        val db = databaseWith(entries = listOf(entry(uuid = uuid, title = "第三方登录")))
+
+        val item = db.toMappedContent().items.single()
+        assertThat(item.type).isEqualTo(VaultItemType.Login)
+        assertThat(item.username).isEqualTo("alice")
+    }
+
+    @Test
+    fun `第三方把标记写成 1_读回是安全笔记（宽松真值）`() {
+        // 用户手改库写成 "1" / "yes" 也按安全笔记处理（同收藏的宽松真值口径）。
+        val uuid = UUID.randomUUID()
+        val db = databaseWith(
+            entries = listOf(
+                entry(
+                    uuid = uuid,
+                    title = "手改标记",
+                    extraFields = mapOf(KdbxToolFields.SECURE_NOTE to EntryValue.Plain("1")),
+                ),
+            ),
+        )
+
+        assertThat(db.toMappedContent().items.single().type).isEqualTo(VaultItemType.SecureNote)
+    }
+
+    @Test
+    fun `标记显式为 false 时_即使是笔记型内容也判登录`() {
+        // marker 存在且非真值 ⇒ 显式结论压倒启发式（三态语义的另一半）。
+        val uuid = UUID.randomUUID()
+        val db = databaseWith(
+            entries = listOf(
+                Entry(
+                    uuid = uuid,
+                    fields = EntryFields(
+                        linkedMapOf<String, EntryValue>(
+                            BasicField.Title.key to EntryValue.Plain("显式登录"),
+                            BasicField.Notes.key to EntryValue.Plain("只有笔记"),
+                            KdbxToolFields.SECURE_NOTE to EntryValue.Plain("false"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        assertThat(db.toMappedContent().items.single().type).isEqualTo(VaultItemType.Login)
+    }
+
+    @Test
+    fun `未变更的类型不被重写（保持第三方写的 1）`() {
+        // ★ 与收藏 / TOTP 同一条纪律：一次无关编辑不该把用户库里的 "1" 改写成 "true"。
+        val uuid = UUID.randomUUID()
+        val db = databaseWith(
+            entries = listOf(
+                entry(
+                    uuid = uuid,
+                    title = "T",
+                    extraFields = mapOf(KdbxToolFields.SECURE_NOTE to EntryValue.Plain("1")),
+                ),
+            ),
+        )
+        val before = db.toMappedContent().items.single()
+        assertThat(before.type).isEqualTo(VaultItemType.SecureNote)
+
+        val updated = KdbxItemWriter.updateEntry(db, before, before.copy(title = "改个标题")).database
+        val fields = updated.getEntry { it.uuid == uuid }!!.second.fields
+
+        assertThat(fields[KdbxToolFields.SECURE_NOTE]?.content).isEqualTo("1")
+        assertThat(updated.toMappedContent().items.single().type).isEqualTo(VaultItemType.SecureNote)
+    }
+
+    @Test
+    fun `更新空笔记的安全笔记_类型不翻回登录`() {
+        // 编辑一条已标记的安全笔记（只改标题）：标记与类型都必须原样。
+        val db = databaseWith()
+        val note = sampleItem(title = "空笔记")
+            .copy(type = VaultItemType.SecureNote, username = "", password = "", notes = "")
+        val created = KdbxItemWriter.createEntry(
+            db,
+            folderId = null,
+            item = note,
+        )
+        val before = created.database.toMappedContent().items.single()
+        assertThat(before.type).isEqualTo(VaultItemType.SecureNote)
+
+        val updated = KdbxItemWriter.updateEntry(created.database, before, before.copy(title = "空笔记·改")).database
+        val item = updated.toMappedContent().items.single()
+
+        assertThat(item.type).isEqualTo(VaultItemType.SecureNote)
+        assertThat(item.title).isEqualTo("空笔记·改")
+    }
+
     // ---------------------------------------------------------------- 自定义字段与通行密钥
 
     @Test

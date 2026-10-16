@@ -132,6 +132,38 @@ internal object KdbxToolFields {
     const val FAVORITE_TRUE = "true"
 
     /**
+     * 安全笔记类型标记（A4 · 2026-10-16）：`"true"` = 安全笔记，**缺失即无标记**
+     * （回落到启发式，见下）。
+     *
+     * ## 为什么需要它：启发式会把「空笔记的安全笔记」翻转成登录
+     *
+     * KDBX **没有条目类型**（KeePass 只有标准五键，登录/安全笔记之分是 Vaultix 的领域概念）。
+     * 此前的推导规则是纯启发式：`无用户名 && 无密码 && 有笔记 ⇒ SecureNote`
+     * （`KdbxItemMapper`）。它在一种完全正常的内容上**静默翻转类型**：
+     * 用户建一条**空笔记的安全笔记**（表单的备注可空，只填标题 + 自定义字段完全合法）
+     * ⇒ 存盘时三个字段全空 ⇒ 下次读回 `isNote = false` ⇒ **类型变成登录**。
+     * Bitwarden 侧类型是服务端显式字段，无此问题 —— 又是"两个库两种命运"。
+     *
+     * ## 读写规则（与 FAVORITE 同构，但读侧是三态）
+     *
+     * - 写：类型是 SecureNote ⇒ 写 `"true"`；类型离开 SecureNote ⇒ 删键；
+     *   值未变（`before.type == after.type`）一字不动。
+     * - 读：**marker 优先** —— 有标记按标记（宽松真值，见 [isSecureNoteTrue]）；
+     *   **无标记才回落启发式**（第三方工具写的条目没有这个键，必须保持兼容）。
+     *
+     * ⚠️ 与 FAVORITE 的关键差异：收藏"缺失即假"是对的（没星就是没星）；
+     * 而这里**缺失不等于登录** —— 第三方写的笔记型条目（有笔记、无账号密码）
+     * 靠启发式判为安全笔记，KeePass 生态也这么 convention。所以：
+     * 只写 `"true"` 不写 `"false"`（不给每条登录都镶一个恒假字段），
+     * 代价是「Vaultix 自建的、只有笔记的登录条目」仍会被启发式判成安全笔记 ——
+     * 该内容形态本身歧义，且与第三方工具的解释一致，可接受。
+     */
+    const val SECURE_NOTE = PREFIX + "SECURE_NOTE"
+
+    /** 安全笔记标记的**真值**文本（其余一切值读侧按宽松真值认，写侧只写这个）。 */
+    const val SECURE_NOTE_TRUE = "true"
+
+    /**
      * 多余 URI 的匹配规则：`VPX_MATCH_n`（与 [URL_PREFIX] 同下标）。
      *
      * ⚠️ 为什么连匹配规则也要存：Bitwarden 每条 URI 都带 `match`（0–5），
@@ -435,7 +467,21 @@ internal object KdbxToolFields {
      * 私有前缀挡住了；防御的是"用户手改库"这种小众场景），也按真处理。
      * 写侧只产出 [FAVORITE_TRUE]（见 [FAVORITE] 的 KDoc）。
      */
-    fun isFavoriteTrue(raw: String?): Boolean = when (raw?.trim()?.lowercase(Locale.ROOT)) {
+    fun isFavoriteTrue(raw: String?): Boolean = isTruthyFlag(raw)
+
+    /**
+     * [SECURE_NOTE] 的宽松真值判定（与 [isFavoriteTrue] 同一口径，见 [isTruthyFlag]）。
+     *
+     * 读侧唯一口径：用户手改库写成 `"1"` / `"yes"` 也按安全笔记处理；
+     * 写侧只产出 [SECURE_NOTE_TRUE]。
+     */
+    fun isSecureNoteTrue(raw: String?): Boolean = isTruthyFlag(raw)
+
+    /**
+     * 布尔旗标的宽松真值（`true` / `1` / `yes`，大小写不敏感，首尾空白不算数）；
+     * 认不出一律 false。`VPX_` 布尔键（收藏 / 安全笔记标记）共用的唯一口径。
+     */
+    private fun isTruthyFlag(raw: String?): Boolean = when (raw?.trim()?.lowercase(Locale.ROOT)) {
         "true", "1", "yes" -> true
         else -> false
     }

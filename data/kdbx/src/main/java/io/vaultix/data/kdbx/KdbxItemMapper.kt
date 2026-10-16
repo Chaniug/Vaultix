@@ -109,7 +109,12 @@ private fun Entry.toVaultItem(folderId: String?): VaultItem {
     val notes = fields.notes?.content.orEmpty()
     val url = fields.url?.content.orEmpty()
     val custom = customFieldsOf(fields)
-    val isNote = username.isBlank() && password.isBlank() && notes.isNotBlank()
+    // 安全笔记类型判定（A4 · 2026-10-16）：显式标记优先，缺失才回落启发式。
+    // 此前纯启发式 ⇒ 「空备注的安全笔记」三字段全空 ⇒ 存盘再读回**静默翻成登录**。
+    // ⚠️ 三态语义：`secureNoteMarker()` 返回 null 表示"没有标记"（回落启发式，
+    //    兼容第三方条目），而不是"标记为非笔记"——二者不可压成一个布尔（#121 同款事故）。
+    val isNote = fields.secureNoteMarker()
+        ?: (username.isBlank() && password.isBlank() && notes.isNotBlank())
     // URI（W4）：标准 `Url` + `VPX_URL_n` 合回一个列表。此前只读第一条，
     // 「一条登录挂 3 个网址」在KDBX 侧会**只显示一个**（往返即丢数据）。
     val uris = fields.allUris(url)
@@ -203,6 +208,23 @@ private fun EntryFields.favoriteFlag(): Boolean =
             key.equals(KdbxToolFields.FAVORITE, ignoreCase = true)
         }?.value?.content,
     )
+
+/**
+ * `VPX_SECURE_NOTE` 工具字段 → 三态类型标记（A4 · 2026-10-16）。
+ *
+ * - `true`  = 显式安全笔记（写侧只产出 `"true"`，见 [KdbxToolFields.SECURE_NOTE_TRUE]）
+ * - `false` = 标记显式为假值（用户把安全笔记**改成**了登录型，回落会误判，必须信标记）
+ * - `null`  = 键不存在（第三方条目 / 老库）⇒ 调用方回落内容启发式
+ *
+ * ⚠️ 键名比对**大小写不敏感**（kotpass `EntryFields.get` 大小写敏感的已知坑，同 [favoriteFlag]）。
+ * 真值判定走 [KdbxToolFields.isSecureNoteTrue]（唯一口径，宽松认 true/1/yes）。
+ */
+private fun EntryFields.secureNoteMarker(): Boolean? {
+    val raw = entries.firstOrNull { (key, _) ->
+        key.equals(KdbxToolFields.SECURE_NOTE, ignoreCase = true)
+    }?.value?.content ?: return null
+    return KdbxToolFields.isSecureNoteTrue(raw)
+}
 
 private const val DEFAULT_TITLE = "（未命名）"
 
