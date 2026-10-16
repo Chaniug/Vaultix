@@ -1,6 +1,19 @@
 # ISSUES 分篇 · KDBX 本地库
 
-> 索引：[`../ISSUES.md`](../ISSUES.md)（编号 → 分篇）· 共 **19** 条：#59、#64、#69、#93、#94、#95、#96、#98、#99、#106、#135、#136、#157、#158、#164、#165、#166、#167、#169
+> 索引：[`../ISSUES.md`](../ISSUES.md)（编号 → 分篇）· 共 **20** 条：#59、#64、#69、#93、#94、#95、#96、#98、#99、#106、#135、#136、#157、#158、#164、#165、#166、#167、#169、#170
+>
+> ⚠️ **2026-10-16 A5 时间戳提案已驳回（不是 bug，无编号）**：曾据"writer 没写
+> times"要修「新建无时间戳 / 编辑不刷最近修改」，测试与上游源码查证后驳回——
+> kotpass 0.13.0 的 `Entry` 默认 `times = TimeData.create()`、
+> `Group.modifyEntry` 内部刷 `lastAccessTime`/`lastModificationTime`、
+> `moveEntry` 刷 `locationChanged`，全链路已包。查证记录在
+> `SESSION-2026-10-16.md` §七与 `KdbxItemWriter` 注释。**教训：「代码里没写」
+> ≠「没发生」**（数据类默认值 / 上游修饰器都是隐形写点）。
+>
+> ⚠️ **2026-10-16 A6 标准字段内存保护丢失**：新增 #170。Title/UserName/Notes
+> 无条件写 `EntryValue.Plain`，第三方库里受保护（`Protected="True"`）的
+> 用户名/备注被静默剥掉——**丢的不是值，是值的属性**（落盘那一步才丢，
+> 领域层无感）。同日起 A4（#169）修安全笔记类型往返翻转。
 >
 > ⚠️ **2026-10-16 A4 安全笔记类型往返翻转**：新增 #169。与 #164–#167 同族
 > （底层早就该有、断在一层没人接），但这次断的是**类型信息从未落盘**：
@@ -786,3 +799,29 @@ fun KeePassDatabase.getGroupBy(predicate: Group.() -> Boolean): Group? =
   登录条目不写键 / 第三方无标记**兼容不回归**（+反证）/ 宽松真值 `"1"` /
   显式 `"false"` 压启发式 / 未变更不重写第三方的 `"1"` / 更新不翻回。
   其中「第三方无标记」两条是兼容性闸：**闸比 bug 本身更值得守**。
+
+## 170. A6：KDBX 标准字段的「内存保护」属性被静默剥掉（2026-10-16）
+
+- **现象**：用 KeePassXC / DX 建库时给**用户名或备注**打了内存保护标记
+  （`Protected="True"`，KeePass 允许标在任意字段上），条目流转到 Vaultix
+  编辑一次（哪怕只改个标题）保存后，保护标记**没了**——再打开库，
+  那些字段变成明文属性。密码字段没这个问题（早就单独保留了）。
+- **根因**：`KdbxItemWriter.applyDomainFields` 里 Title / UserName / Notes
+  **无条件写 `EntryValue.Plain`**，只有密码走 `passwordValue` 保留
+  Encrypted 形态。而 kotpass 的编码器 `marshalFields` 只对
+  `EntryValue.Encrypted` 写 `Protected="True"` ⇒ **落盘即丢属性**。
+  读侧 `.content` 两种形态都解密，所以值不丢、界面无感——
+  丢的是安全属性，用户无从察觉。
+- **修法**：`protectedAware(existing, key, value)` 泛化原 `passwordValue`
+  的逻辑，四个标准字段一律走它。语义与 Kotlin 侧 typed accessor
+  逐字等价（都是 `fields[BasicField.X.key]` 的 Map.get，大小写敏感的
+  已知坑不变）——泛化不改变任何既有行为。
+- **⚠️ 判据**：这次是**从编码器倒推**坐实的（`marshalFields` 只认
+  `Encrypted`）。教训：读写两侧的"保真"不能只对拍领域模型，
+  要一路看到**序列化边界**——领域层看起来"值没丢"的属性，
+  可能在落盘那一步才丢。与 #22「读写字段不对称」同族，但这次丢的不是值，
+  是**值的属性**。
+- **测试**：`KdbxItemWriterTest` 2 例——受保护的用户名与备注更新后
+  保护不丢、值不丢（主用例）；未受保护的不被无端加密（反证：
+  把用户没标的字段升级成 Encrypted 同样是一种改坏用户库）。
+  变异验证（恒 Plain）精确 2 红：主用例 + 既有密码用例。
