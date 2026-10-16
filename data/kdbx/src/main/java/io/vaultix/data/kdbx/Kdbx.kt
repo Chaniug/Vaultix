@@ -378,6 +378,41 @@ object Kdbx {
     }
 
     /**
+     * ★ 把领域条目**平铺**成一个新的 KDBX 4.1 库并编码为字节（W5 · JSON → KDBX）。
+     *
+     * ## 与会话制入口（[createItem] / [createVault]）的区别
+     *
+     * 转换是**一次性、无会话**的批处理：产物是一个独立的 `.kdbx` 文件字节，
+     * 不登记任何会话、不碰任何已解锁的库。调用方（转换器）拿到字节后经 app 层
+     * SAF 落盘，与「导出」完全对称。详见 [KdbxConversionEngine.build] 的 KDoc
+     * （平铺依据 / 旁路字段 / 自检 / Card 类载荷的既有边界）。
+     *
+     * ⚠️ 编码要跑 KDF（真机数百毫秒），调用方应在 IO/Default 调度器上调用
+     *    （与 [mutate] 同款约定：本方法刻意不做内部 `withContext`）。
+     *
+     * @param name 库名（同时用作根组名与 `Meta.name`；留空有兜底，见 [KdbxCreator]）。
+     * @param password **输出库的主密码**（用户在转换时指定，与源 JSON 的文件密码无关）。
+     * @param items 待写入的条目（已解密明文，仅在内存）。
+     */
+    fun buildFromItems(name: String, password: String, items: List<VaultItem>): Result<ByteArray> =
+        KdbxConversionEngine.build(name = name, password = password, items = items)
+
+    /**
+     * ★ 一次性打开 KDBX 字节供**转换**使用（W5 · KDBX → JSON 方向）；**不登记会话**。
+     *
+     * 用户选的文件可能根本不想加进库（"只转成 JSON 扔给官方客户端"）⇒ 刻意不走
+     * [unlock]：不写 [KdbxSessionStore]、不覆盖任何既有会话、明文只活到本次返回。
+     * 读出的条目已应用旁路还原（id / type），见 [KdbxConversionContent]。
+     *
+     * ⚠️ 解码要跑 KDF，调用方应在 IO/Default 调度器上调用（同 [buildFromItems]）。
+     *
+     * @return 失败时返回 [KdbxFailure]，其 [KdbxOpenError] 可区分
+     *   「不是 KDBX / 版本不支持 / 密码不对 / 来源读不到」。
+     */
+    fun readForConversion(bytes: ByteArray, password: String): Result<KdbxConversionContent> =
+        KdbxConversionEngine.read(bytes = bytes, password = password)
+
+    /**
      * 一次写回的产物：新的映射内容 + **待落盘的字节** + 受影响的条目 uuid。
      *
      * ## 为什么这里只有"字节"，没有"库"

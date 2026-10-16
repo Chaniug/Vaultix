@@ -63,6 +63,8 @@ class BitwardenExportFacade @Inject constructor(
     /**
      * 加密导出 JSON → 领域条目 / 文件夹（**不落库**，供预览与后续导入）。
      *
+     * @param fileContent 文件全文。
+     * @param exportPassword 导出时设置的密码。
      * @throws BitwardenImportException 分类失败原因（格式非法 / 密码错误 / KDF 不支持）。
      */
     fun parse(fileContent: String, exportPassword: String): ParsedExport {
@@ -70,7 +72,13 @@ class BitwardenExportFacade @Inject constructor(
         val folders = result.plain.folders.map { VaultFolder(id = it.id, name = it.name) }
         // 未知类型条目返回 null（见 toVaultItem KDoc）——宁可丢弃也不猜测映射。
         val items = result.plain.items.mapNotNull { it.toVaultItem() }
-        return ParsedExport(folders = folders, items = items)
+        return ParsedExport(
+            folders = folders,
+            items = items,
+            // 被跳过的条目数（未知 type）：预览计数要如实告诉用户"有 n 条没进来"，
+            // 否则"文件里 50 条、导进来 47 条"的差异没有任何解释（W5）。
+            skippedCount = result.plain.items.size - items.size,
+        )
     }
 
     private companion object {
@@ -86,4 +94,10 @@ class BitwardenExportFacade @Inject constructor(
 data class ParsedExport(
     val folders: List<VaultFolder>,
     val items: List<VaultItem>,
+    /**
+     * 因未知 `type` 被跳过的条目数（W5 预览计数用）。
+     *
+     * 默认 0 保持既有调用点（`VaultExportRepositoryImpl`）不受影响。
+     */
+    val skippedCount: Int = 0,
 )

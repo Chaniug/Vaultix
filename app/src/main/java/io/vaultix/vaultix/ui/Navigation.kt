@@ -138,6 +138,18 @@ data object CloudAccountsRoute
 @Serializable
 data object ImportExportRoute
 
+/**
+ * 格式转换二级页（「导入与导出」页首「格式转换」入口进入；施工单 W5）。
+ *
+ * 与 [ImportExportRoute] 的差异：那条管「本库 ⇄ Bitwarden 加密备份」
+ * （要解锁当前库），本条管「Bitwarden 加密 JSON ⇄ .kdbx 文件」
+ * （独立文件字节，不碰任何库的解锁状态 —— 服务器宕机时的自救路径）。
+ *
+ * 无参数：两个方向的输入都是用户在页面里现选的文件，没有需要预传的东西。
+ */
+@Serializable
+data object ConversionRoute
+
 @Serializable
 data class UnlockRoute(val vaultId: String)
 

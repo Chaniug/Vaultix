@@ -1258,6 +1258,57 @@
 
     <string name="vault_export_unavailable">当前库未解锁，请先解锁后再导出</string>
 
+    <!-- 格式转换（W5 · JSON⇄KDBX；入口在「导入与导出」页首，独立二级页） -->
+    <string name="conversion_entry">格式转换</string>
+    <string name="conversion_entry_desc">在 Bitwarden 加密 JSON 与 KDBX 密码库文件之间互转</string>
+    <string name="conversion_title">格式转换</string>
+
+    <!-- JSON → KDBX 分区 -->
+    <string name="conversion_json_to_kdbx_title">Bitwarden JSON → KDBX</string>
+    <string name="conversion_json_to_kdbx_subtitle">把 Bitwarden 加密 JSON 转换为 .kdbx 密码库文件（可用任意 KeePass 兼容客户端打开）。文件夹层级会平铺，预览计数会提前告知。</string>
+    <string name="conversion_pick_json">选择 JSON 文件</string>
+    <string name="conversion_json_password_label">JSON 文件密码</string>
+    <string name="conversion_preview">解密并预览</string>
+    <string name="conversion_previewing">正在解密…</string>
+    <string name="conversion_change_file">重新选择文件</string>
+    <string name="conversion_output_name_label">新库名称</string>
+    <string name="conversion_output_password_label">新库主密码</string>
+    <string name="conversion_output_password_confirm_label">确认新库主密码</string>
+    <string name="conversion_convert_kdbx">转换为 KDBX</string>
+
+    <!-- KDBX → JSON 分区 -->
+    <string name="conversion_kdbx_to_json_title">KDBX → Bitwarden JSON</string>
+    <string name="conversion_kdbx_to_json_subtitle">把 .kdbx 密码库转换为 Bitwarden 加密 JSON（可用官方客户端导入）。分组与 TOTP、通行密钥都会保留。</string>
+    <string name="conversion_pick_kdbx">选择 KDBX 文件</string>
+    <string name="conversion_kdbx_password_label">KDBX 主密码</string>
+    <string name="conversion_export_password_label">导出 JSON 的文件密码</string>
+    <string name="conversion_export_password_confirm_label">确认导出密码</string>
+    <string name="conversion_convert_json">转换为 JSON</string>
+
+    <!-- 共用 -->
+    <string name="conversion_file_picked">已选择：%1$s</string>
+    <string name="conversion_converting">正在转换…</string>
+    <string name="conversion_password_too_weak">密码至少需要 8 个字符</string>
+    <string name="conversion_password_mismatch">两次输入的密码不一致</string>
+    <string name="conversion_preview_summary">共 %1$d 个条目、%2$d 个文件夹</string>
+    <string name="conversion_preview_totp">其中 %1$d 个带 TOTP 验证码（可保留）</string>
+    <string name="conversion_preview_passkey">其中 %1$d 个通行密钥（可保留）</string>
+    <string name="conversion_preview_degraded">其中 %1$d 个卡片 / 身份 / SSH 条目：KDBX 无法承载其明细，转换后仅保留标题与备注</string>
+    <string name="conversion_preview_skipped">其中 %1$d 个无法识别的条目将被跳过</string>
+    <string name="conversion_kdbx_success">已生成 KDBX 文件（%1$d 个条目）</string>
+    <string name="conversion_json_success">已生成 JSON 文件（%1$d 个条目）</string>
+    <string name="conversion_save_failed">保存失败：%1$s</string>
+    <string name="conversion_read_failed">读取文件失败，请重新选择</string>
+
+    <!-- 转换错误分类 -->
+    <string name="conversion_error_malformed_json">文件不是合法的 Bitwarden 加密导出文件</string>
+    <string name="conversion_error_wrong_password">密码不正确（JSON 文件密码 / KDBX 主密码 / 导出密码）</string>
+    <string name="conversion_error_not_kdbx">所选文件不是 KDBX 格式</string>
+    <string name="conversion_error_unsupported_version">不支持的 KDBX 版本：%1$s（本应用只支持 KDBX 4）</string>
+    <string name="conversion_error_unsupported_kdf">文件使用了当前版本不支持的加密参数（KDF）</string>
+    <string name="conversion_error_write_check">转换结果未通过写入自检，已取消。这是软件缺陷，请通过「关于 → 反馈」报告</string>
+    <string name="conversion_error_generic">转换失败：%1$s</string>
+
     <!-- 「网盘账号」二级页（方案 §11.7：把 OneDrive/WebDAV 从「添加密码库」里独立出来） -->
     <string name="cloud_accounts_title">网盘账号</string>
     <string name="cloud_accounts_entry_desc">管理 OneDrive 与 NAS（WebDAV）的登录状态与凭据</string>

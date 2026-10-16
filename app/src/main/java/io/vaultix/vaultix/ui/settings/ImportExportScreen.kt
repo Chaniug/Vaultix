@@ -30,16 +30,14 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.FileOpen
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Upload
-import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -70,13 +68,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.common.readAllBytes
+import io.vaultix.vaultix.ui.common.writeBytes
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -96,11 +93,16 @@ private const val ANY_MIME = "*/*"
  *
  * SAF 读 / 写都由本页持有（ViewModel 不碰文件系统，只收发字符串，
  * 对齐 Docs/09：data 层与业务层都不直接接触磁盘路径）。
+ *
+ * @param onOpenConversion 页首「格式转换」入口（JSON ⇄ KDBX 互转，施工单 W5）——
+ *   与导入 / 导出**语义正交**：那两条是「本库 ⇄ Bitwarden 备份」，这一条是
+ *   「Bitwarden 加密 JSON ⇄ .kdbx 文件」，后者不碰任何库的解锁状态。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ImportExportScreen(
     onBack: () -> Unit,
+    onOpenConversion: () -> Unit = {},
     viewModel: ImportExportViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -145,6 +147,20 @@ fun ImportExportScreen(
                 .imePadding()
                 .padding(bottom = Spacing.xxl),
         ) {
+            // 页首入口：格式转换（JSON ⇄ KDBX）。放在最前是因为它是「换格式」
+            // （与任何库无关），而下面的导入 / 导出都作用于当前活跃库 ——
+            // 两类操作的先验条件不同，混排会让用户拿错文件。
+            SettingsGroupCard {
+                SettingsRow(
+                    icon = { Icon(Icons.Filled.SwapHoriz, contentDescription = null) },
+                    title = stringResource(R.string.conversion_entry),
+                    subtitle = stringResource(R.string.conversion_entry_desc),
+                    onClick = onOpenConversion,
+                )
+            }
+
+            Spacer(Modifier.height(Spacing.sm))
+
             ExportSection(
                 state = state,
                 onPasswordChange = viewModel::onExportPasswordChange,
@@ -224,11 +240,7 @@ private fun rememberSafHandlers(
         if (uri == null || content == null) return@rememberLauncherForActivityResult
         scope.launch {
             val ok = withContext(Dispatchers.IO) {
-                runCatching {
-                    context.contentResolver.openOutputStream(uri)?.use { out ->
-                        out.write(content.toByteArray(Charsets.UTF_8))
-                    } ?: error("无法打开目标文件")
-                }.isSuccess
+                writeBytes(context, uri, content.toByteArray(Charsets.UTF_8))
             }
             onPendingExportContent(null)
             if (ok) {
@@ -247,11 +259,7 @@ private fun rememberSafHandlers(
         viewModel.onImportFilePicked(context, uri)
         scope.launch {
             val content = withContext(Dispatchers.IO) {
-                runCatching {
-                    context.contentResolver.openInputStream(uri)?.use { input ->
-                        input.readBytes().toString(Charsets.UTF_8)
-                    }
-                }.getOrNull()
+                readAllBytes(context, uri)?.toString(Charsets.UTF_8)
             }
             if (content != null) {
                 onImportFileContent(content)
@@ -431,85 +439,6 @@ private fun PreviewCard(itemCount: Int, folderCount: Int) {
             )
         }
     }
-}
-
-/** 密码输入框（带「显示 / 隐藏」切换），导出 / 导入共用。 */
-@Composable
-private fun PasswordField(
-    value: String,
-    onValueChange: (String) -> Unit,
-    label: String,
-    visible: Boolean,
-    onToggleVisible: (Boolean) -> Unit,
-    imeAction: ImeAction,
-) {
-    OutlinedTextField(
-        value = value,
-        onValueChange = onValueChange,
-        label = { Text(label) },
-        singleLine = true,
-        visualTransformation = if (visible) {
-            VisualTransformation.None
-        } else {
-            PasswordVisualTransformation()
-        },
-        keyboardOptions = KeyboardOptions(
-            keyboardType = KeyboardType.Password,
-            imeAction = imeAction,
-        ),
-        trailingIcon = {
-            IconButton(onClick = { onToggleVisible(!visible) }) {
-                Icon(
-                    imageVector = if (visible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
-                    contentDescription = null,
-                )
-            }
-        },
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = Spacing.lg, vertical = 6.dp),
-    )
-}
-
-/** 提交按钮（带忙碌态）。 */
-@Composable
-private fun ActionButton(
-    text: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    enabled: Boolean,
-    busy: Boolean,
-    busyText: String,
-    onClick: () -> Unit,
-) {
-    FilledTonalButton(
-        onClick = onClick,
-        enabled = enabled && !busy,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
-    ) {
-        if (busy) {
-            CircularProgressIndicator(
-                modifier = Modifier.size(18.dp),
-                strokeWidth = 2.dp,
-            )
-            Text(busyText, modifier = Modifier.padding(start = Spacing.sm))
-        } else {
-            Icon(icon, contentDescription = null)
-            Text(text, modifier = Modifier.padding(start = Spacing.sm))
-        }
-    }
-}
-
-/** 字段级错误提示（红色小字）。 */
-@Composable
-private fun FieldHint(text: String) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.error,
-        modifier = Modifier.padding(horizontal = Spacing.lg, vertical = 2.dp),
-    )
 }
 
 /** 错误卡片：把分类错误映射为可执行的中文文案。 */

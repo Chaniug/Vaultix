@@ -30,6 +30,7 @@ import io.vaultix.vaultix.ui.rootnav.RootNavState
 import io.vaultix.vaultix.ui.rootnav.RootNavViewModel
 import io.vaultix.vaultix.ui.settings.AboutAppScreen
 import io.vaultix.vaultix.ui.settings.AutofillSettingsScreen
+import io.vaultix.vaultix.ui.settings.ConversionScreen
 import io.vaultix.vaultix.ui.settings.ImportExportScreen
 import io.vaultix.vaultix.ui.settings.SettingsScreen
 import io.vaultix.vaultix.ui.settings.UnlockMethodScreen
@@ -362,7 +363,14 @@ private fun NavGraphBuilder.settingsGraph(navController: NavHostController) {
         AboutAppScreen(onBack = { navController.popBackStack() })
     }
     composable<ImportExportRoute> {
-        ImportExportScreen(onBack = { navController.popBackStack() })
+        ImportExportScreen(
+            onBack = { navController.popBackStack() },
+            // 页首「格式转换」入口（W5）：与导入 / 导出语义正交，独立二级页。
+            onOpenConversion = { navController.navigate(ConversionRoute) },
+        )
+    }
+    composable<ConversionRoute> {
+        ConversionScreen(onBack = { navController.popBackStack() })
     }
     composable<AddVaultRoute> {
         AddVaultScreen(

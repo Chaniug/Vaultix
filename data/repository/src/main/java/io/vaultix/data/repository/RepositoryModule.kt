@@ -13,6 +13,7 @@ import io.vaultix.domain.KdbxCreateRepository
 import io.vaultix.domain.KdbxSyncRepository
 import io.vaultix.domain.RoomResealRepository
 import io.vaultix.domain.UnlockRecoveryRepository
+import io.vaultix.domain.VaultConverterRepository
 import io.vaultix.domain.VaultExportRepository
 import io.vaultix.domain.VaultRepository
 import io.vaultix.domain.VaultSessionRepository
@@ -48,6 +49,17 @@ interface RepositoryModule {
     @Binds
     @Singleton
     fun bindVaultExportRepository(impl: VaultExportRepositoryImpl): VaultExportRepository
+
+    /**
+     * Bitwarden JSON ⇄ KDBX 格式转换（W5）。
+     *
+     * ⚠️ 独立绑定而不是并进 [VaultExportRepository]：两者的语义正交——
+     * 那个管「加密 JSON 进出**已解锁的库**」，这个管「加密 JSON 与 **.kdbx 文件**
+     * 互转」（与库解锁状态无关）。合并会让"导出的前提"与"转换的前提"混为一谈。
+     */
+    @Binds
+    @Singleton
+    fun bindVaultConverterRepository(impl: VaultConverterRepositoryImpl): VaultConverterRepository
 
     /**
      * KDBX 网盘同步。
