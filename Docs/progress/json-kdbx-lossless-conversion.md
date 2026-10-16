@@ -186,11 +186,21 @@ Vaultix 读侧**需要补**同样的拆解，否则「一条登录挂 2 个通�
 （`App Package Name` 是单个字段位，无 `_n` 落法；硬塞进 `VPX_URL_n` 会被 KeePassXC
 当域名匹配、必然匹配不上，等于为多存一条而让**所有**应用 URI 匹配全失效）。
 
-### W5 · 转换入口（UI）
-- 导入导出页加「转换」：`选 BW JSON` → `文件密码` → **`VPX_ 输出库主密码`**
-  → `预览条目数 + 各项计数（TOTP n / 通行密钥 n / 被跳过 n）` → `SAF 选路径` → 产出
-- ⚠️ 密码**用完即弃**（沿用 `ImportExportViewModel` 现有纪律）
-- 失败时**原 JSON 不受影响**（只读输入）
+### W5 · 转换入口（UI）—— 2026-10-16 落地 `6ae9bcd`（CI `38927742868` 全绿）
+- 入口：导入导出页页首「格式转换」行 → `ConversionRoute` 二级页
+  （`ConversionScreen` + `ConversionViewModel`，与导入/导出语义正交：
+  不碰任何库的解锁状态）
+- **JSON → KDBX**：`选 BW JSON` → `文件密码` → `解密并预览` →
+  `预览计数卡（条目 / 文件夹 / TOTP n / 通行密钥 n / 降级 n / 跳过 n）` →
+  `新库名 + 输出主密码 + 确认` → `SAF 选路径` → 产出 `.kdbx`
+- **KDBX → JSON**：`选 .kdbx` → `库主密码` → `导出 JSON 密码 + 确认` →
+  `SAF 选路径` → 产出加密 JSON（无预览步：读路径能力是超集，密码错当场报错）
+- ⚠️ 密码**用完即弃**（预览一出清文件密码、转换一成功清输出密码，
+  `ConversionViewModelTest` 11 例钉死 + 变异验证精确只红一例）
+- 失败时**原文件不受影响**（只读输入；domain 接口无任何写入口）
+- 实现要点：folder id 重映射为合法 UUID（官方导入器对非 UUID id 直接拒读）；
+  转换不登记会话（`Kdbx.buildFromItems` / `readForConversion` 两个无会话门面）；
+  `ConversionOutput` 字节由 UI 经 SAF 落盘（domain 不碰路径）
 
 ### W6 · 互操作验收（真机，不可省）
 - 产出的 `.kdbx` 用 **KeePassXC / KeePassDX 真机**打开，确认：
@@ -238,7 +248,14 @@ Vaultix 读侧**需要补**同样的拆解，否则「一条登录挂 2 个通�
   既有测试亦明确断言 `counter == 0L`（有意设计）⇒ **没有证据就不改语义**，已回退；
   ② CI 对勾 ≠ 单测通过（该步骤 non-blocking，`37443116170` 显示绿而单测编译其实 FAILED））
 - [x] W4：多 URL 往返仍是 N 条；`VPX_*` 可反向识别（`d141538`，CI `37612405103` 141 例零失败）
-- [ ] W5：转换入口可跑通，密码用完即弃
+- [x] W5：转换入口可跑通，密码用完即弃
+  （2026-10-16 落地 `6ae9bcd`，CI `38927742868` 全绿。测试合计 1142 例：
+  kdbx 171 / repository 175 / app 363 / bitwarden 64 / core:* 369，零失败。
+  含转换器端到端往返（JSON→KDBX→JSON 再解密逐字段比对）与
+  ViewModel 11 例（密码即弃 / 错误归类 / 按钮可用性 + 变异验证））
 - [ ] W6：VC/DX 真机打开产出文件，条目/TOTP/通行密钥/多 URL 全对
-- [ ] 门禁三关**分开单跑**全绿：detekt → `:app:compileFullDebugKotlin` → `:app:testFullDebugUnitTest`
-- [ ] `.ai/conventions/8.x` 更新：标准键铁律 + `KdbxFieldKeys` 单一真源的位置
+  ⚠️ **需真机，本环境不可执行** —— 唯一遗留项。验收脚本见 W6 段
+- [x] 门禁三关**分开单跑**全绿：detekt → `:app:compileFullDebugKotlin` → `:app:testFullDebugUnitTest`
+- [x] `.ai/conventions/8.x` 更新：标准键铁律 + `KdbxFieldKeys` 单一真源的位置
+  （2026-10-16 补录 `8.3-M2KDBX.md`：R1 标准键大小写折叠后不可被自定义字段覆盖 /
+  R2 工具字段一律 `VPX_` 前缀 / R3 外来字段原样保留）

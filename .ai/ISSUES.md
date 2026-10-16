@@ -9,7 +9,7 @@
 
 | 分篇 | 主题 | 条数 |
 |---|---|---|
-| [01-构建与环境](./issues/01-构建与环境.md) | 工程 / 构建 / CI / 工具链 / 环境 | 46 |
+| [01-构建与环境](./issues/01-构建与环境.md) | 工程 / 构建 / CI / 工具链 / 环境 | 47 |
 | [02-自动填充](./issues/02-自动填充.md) | 自动填充（AutofillService 链路） | 18 |
 | [03-通行密钥与凭据提供商](./issues/03-通行密钥与凭据提供商.md) | 通行密钥 / Credential Provider / 凭据回灌 | 18 |
 | [04-锁与解锁](./issues/04-锁与解锁.md) | 锁态模型 / 解锁 / 生物识别 / 密钥 | 12 |
@@ -37,7 +37,7 @@
 
 ## 编号 → 分篇
 
-### [01-构建与环境](./issues/01-构建与环境.md) — 工程 / 构建 / CI / 工具链 / 环境（46 条，缺 #3、#8、#15、#16、#20…：#3/15 归 04、#16 归 02、#20 归 06）
+### [01-构建与环境](./issues/01-构建与环境.md) — 工程 / 构建 / CI / 工具链 / 环境（47 条，缺 #3、#8、#15、#16、#20…：#3/15 归 04、#16 归 02、#20 归 06）
 
 | # | 标题 |
 |---|---|
@@ -87,6 +87,7 @@
 | 145 | 🔴 CI 的**单测步是 `continue-on-error: true`** ⇒ job 报 `success` **只代表命令跑完了**，不代表测试通过。实测：job 绿、日志里 `BUILD FAILED` + `:compileDebugUnitTestKotlin FAILED`（新测试 4 处编译错），沙箱完全看不到。纪律：**推完必须下载 job 日志逐行看**（日志域名 `productionresultssa2.blob.core.windows.net` 同样被劫持，要一并写 hosts）。另：单测**按模块显式登记**，`data:kdbx` 曾漏登记致用例从未执行。⚠️ 仓库挂着一个**既有失败** `AutoRestoreTriggerTest > 档位离开Never_删信封且不恢复`（与本次无关，未修） |
 | 160 | 🔴 **索引与正文第四次漂移**：四种形态（标题层级写错 ⇒ 从未被计入 / 题注用增量改法 / 数字与名单互不可证 / 跨表错位重复行）。⇒ 新增 `.ai/tools/check_issues_index.py` 全量重数 + `tests/selftest_issues_index.py`（6 例正反用例） |
 | 168 | ⭐ detekt 两个「顶格」类：给贴上限的类加分支前先腾位（CardWalletScreen 17 / ItemFormDialog 16 / QuickUnlockController 41 函数接连撞红 ⇒ 新分支一律抽文件级纯函数，天然可单测） |
+| 171 | 🔴 过期 test-results XML 误导核数：编译失败时旧 XML 残留 ⇒ 核数脚本数出幽灵失败（`Card条目_载荷守卫` FAIL 实为 22:47 变异验证残留）。判据：核数结论与当次日志矛盾时，先怀疑读到的数据不是这次的（先对 XML mtime） |
 
 ### [02-自动填充](./issues/02-自动填充.md) — 自动填充（AutofillService 链路）
 

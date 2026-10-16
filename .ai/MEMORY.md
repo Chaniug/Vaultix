@@ -145,6 +145,25 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 
 ## 9. 当前状态与下一批（接力起手式）
 
+> ⚡ **2026-10-16：W5 JSON⇄KDBX 双向转换落地**（`6ae9bcd`，CI run `38927742868` success，
+> 全量门禁 **1142 例 0 失败**）。施工单 `Docs/progress/json-kdbx-lossless-conversion.md`
+> 的 W1–W5 全段闭合：
+> - **转换器本体** `KdbxConversionEngine`（`data/kdbx`，`build`/`read` 双向；
+>   写完即 `KdbxRoundTrip.verify` 自检，不过 ⇒ `WriteCheckFailed`）；
+>   **无会话转换**（不登记 `KdbxSessionStore`，纯函数式进/出字节）。
+> - **入口 UI**：设置 → 导入/导出 → 页首「JSON ⇄ KDBX 转换」行 → `ConversionScreen`
+>   （SAF 两读两写 + 预览计数卡：条目/分组/TOTP/通行密钥/降级/跳过）。
+>   密码纪律延续：预览后即弃文件密码、转换成功后即弃输出密码。
+> - 关键设计：**`VPX_BW_ID`/`VPX_BW_TYPE` 旁路字段只写不读回领域模型**
+>   （Bitwarden 的 id/type 在 KDBX 里无标准位，只由转换器直接消费）；
+>   Bitwarden folder id 必须合法 UUID ⇒ `remapFolderIds` 换新 UUID；
+>   KDBX 无 Card/Identity/SshKey 承载 ⇒ **载荷守卫 + `typeDegradedCount` 告知**
+>   （降级必须可见，不静默）。
+> - `ConversionViewModelTest` 11 例（含变异验证：抽掉「预览后清空文件密码」
+>   精确只红 1 例）。
+> **下一步 = W6 真机互操作验收**（KeePassXC / KeePassDX 打开 Vaultix 写的库）——
+> **需真机，本环境不可执行，是唯一遗留项**。
+
 > ⚡ **2026-10-16：A4 + A6 已修，A5 提案驳回**（`3fc8649` A4 / `d50463f` A6，
 > CI `38894211052` + `38898302875`，全量门禁 **1108 例 0 失败**）。
 > **A4**：KDBX 无类型概念 ⇒ 读侧纯启发式 ⇒ **空笔记的安全笔记**（表单备注可空）
@@ -183,8 +202,9 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 > / `4ea40f5`+`15ff84b` / `d141538`）。W3 结论 = **TOTP 往返本来就通**；
 > W4 新增 `KdbxToolFields`（`VPX_` 工具区单一真源）+ `KdbxToolFieldsRoundTripTest`27 例。
 > W4 之前多 URL 是**静默丢数据**（取 `uris.firstOrNull()`，改标题就抹掉其余网址）。
-> **下一步 = W5**（转换入口 UI + 转换器接口本体），W6 真机互操作待真机。
-> 🔴 **CI 判定纪律（见 SESSION §九、§十一）**：单测步骤标了 **non-blocking**，
+> ~~**下一步 = W5**（转换入口 UI + 转换器接口本体），W6 真机互操作待真机。~~
+> ✅ **W5 已于 2026-10-16 落地**（见 §9 顶部），W6 真机互操作待真机。
+> 🔴 **CI 判定纪律（见 SESSION-2026-10-05/07 §九、§十一）**：单测步骤标了 **non-blocking**，
 > 所以「`gh run` 显示 ✓」**不代表单测通过** —— 必须确认
 > `:data:kdbx:testDebugUnitTest` 那一行是真实执行（非 FROM-CACHE）且无 FAILED。
 > **本轮已因此被"假绿"骗过两次**（`37609359341` 编译失败、`37610581524` 6 例断言失败，
@@ -429,6 +449,10 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 > ⚠️ **本索引止于 2026-09-13（第五十一轮）** —— 之后不再逐条续写，避免与 §9 两处漂移。
 > **§9 才是"当前状态 + 最近几轮"的真源**，逐日细节在 `.ai/SESSION-YYYY-MM-DD.md`。
 > 2026-09-14 起的轮次请直接看 §9 顶部与对应的 SESSION 文件；最近几轮是：
+> - `SESSION-2026-10-16.md` —— **A4 安全笔记类型往返翻转 + A6 标准字段内存保护丢失 +
+>   W5 JSON⇄KDBX 双向转换落地**（`3fc8649` / `d50463f` / `6ae9bcd`，
+>   CI `38894211052` + `38898302875` + `38927742868`；1142 例 0 失败；
+>   新增坑 #169 / #170 / #171；A5 时间戳提案查证后驳回）。
 > - `SESSION-2026-10-14.md` —— **KDBX × Bitwarden 边界审计五条修完**
 >   （B6 通行密钥写回 / A1 收藏 / A2 文件夹 / A3 类型裁剪+硬闸 / B5 忘记 PIN #161），
 >   CI `38495406982` 实证 1096 例 0 失败；新增坑 #164–#168。
@@ -436,7 +460,8 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 >   未动产品代码；教训：一条测试可能因前半段异常从未执行到后半段断言）。
 > - `SESSION-2026-10-05.md` 至 `SESSION-2026-10-07.md` —— **JSON⇄KDBX 无损互转 W1–W4**
 >   （`KdbxFieldKeys` 单一真源 / `KdbxPasskeyCodec` 10 键 / TOTP 往返钉死 /
->   `VPX_` 工具区多 URL 降级）。**W5 转换入口仍未做**（见 §9 与 next-steps）。
+>   `VPX_` 工具区多 URL 降级）。**W5 转换入口已于 2026-10-16 落地**（见 §9 顶部与
+>   next-steps），W6 真机互操作待真机。
 > - `SESSION-2026-09-26.md` —— **设置页缺陷修复（开关「不猜状态」#120、快解三态开关 #121）
 >   + 两个新探针（都坏过 #124/#126）+ detekt 阈值勘误 #123 + 七篇计数校正**。
 >   **下一轮起点 = 开放 KDBX 单条编辑（R-6…R-9）**，该文件 §7 是完整交接。

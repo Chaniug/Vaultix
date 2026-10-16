@@ -2,6 +2,41 @@
 
 ---
 
+## ✅ W5 已落地（2026-10-16）· CI `38927742868` 真绿
+
+**commit**：`6ae9bcd`（转换器 + 入口 UI + 测试，17 files +2995/-97）
+**实证**：本地 CI 同款 8 任务 + detekt 全绿，JUnit XML 重数 **1142 例 0 失败**
+（app 363 / repository 175 / kdbx 171 / bitwarden 64 / core:* 369）；
+CI run `38927742868` success。⚠️ 沙箱 `gh` 未认证 ⇒ run 状态走匿名 REST API，
+**工件下载 401 做不到** ⇒ 核数以本地同命令替代（已如实记入施工单）。
+
+| 项 | 一句话 | 落点 |
+|---|---|---|
+| 转换器本体 | `build`/`read` 双向；写完即 `KdbxRoundTrip.verify` 自检（不过 ⇒ `WriteCheckFailed`）；**无会话转换**（不登记 `KdbxSessionStore`） | `data/kdbx/KdbxConversion.kt` |
+| 领域接口 | `VaultConverterRepository` + 六类 `VaultConversionException` | domain / `data/repository/VaultConverterRepositoryImpl.kt` |
+| 入口 UI | 设置 → 导入/导出 → 页首转换行 → `ConversionScreen`（SAF 两读两写 + 预览计数卡） | `app/.../ui/settings/` |
+| 密码纪律 | 预览后即弃文件密码、转换成功后即弃输出密码；字节只经 UI 走 SAF 落盘 | `ConversionViewModel` 状态机 |
+
+三个关键设计决策（施工单与 SESSION 有完整论证）：
+
+1. **旁路字段只写不读**：`VPX_BW_ID` / `VPX_BW_TYPE` 只由转换器直接消费，
+   不进领域模型 —— KDBX 没有 Bitwarden 的 id/type 概念，泄漏进模型会污染主读写链。
+2. **降级必须可见**：KDBX 无 Card/Identity/SshKey 承载 ⇒ 载荷守卫
+   （`restoredType`）+ `typeDegradedCount` 计数，预览卡与转换结果都能看到。
+3. **Bitwarden UUID 硬约束**：folder/cipher id 必须合法 UUID ⇒
+   `remapFolderIds` 建新 UUID 映射（item 取 `VPX_BW_ID` 或裸 uuid 兜底）。
+
+新增坑 **#171**（过期 test-results XML 误导核数）。`ConversionViewModelTest` 11 例，
+含变异验证（抽掉「预览后清空文件密码」⇒ 精确只红 1 例）。
+
+### 下一步
+
+1. **W6 真机互操作验证**（KeePassXC / KeePassDX 打开 Vaultix 写的库）——
+   **需真机，本环境不可执行，是唯一遗留项**；
+2. 审计 B 组剩余项。
+
+---
+
 ## ✅ A4 + A6 已修 · A5 提案驳回（2026-10-16）· CI `38894211052` / `38898302875`
 
 **commits**：`3fc8649`（A4 安全笔记类型往返翻转）→ `fb7cc9d`（A4 文档）→
