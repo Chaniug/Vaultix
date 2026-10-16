@@ -22,11 +22,13 @@ import app.keemobile.kotpass.models.EntryFields
 import app.keemobile.kotpass.models.EntryValue
 import app.keemobile.kotpass.models.Group
 import app.keemobile.kotpass.models.Meta
+import app.keemobile.kotpass.models.TimeData
 import com.google.common.truth.Truth.assertThat
 import io.vaultix.model.CustomFieldType
 import io.vaultix.model.VaultCustomField
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
+import java.time.Instant
 import java.util.UUID
 import org.junit.Test
 
@@ -452,6 +454,109 @@ class KdbxItemWriterTest {
 
         assertThat(item.type).isEqualTo(VaultItemType.SecureNote)
         assertThat(item.title).isEqualTo("空笔记·改")
+    }
+
+    // ---------------------------------------------------------------- 时间戳：上游契约护栏（A5 查证记录）
+
+    @Test
+    fun `更新条目刷新最近修改时间且不碰创建时间（kotpass 契约护栏）`() {
+        // ⚠️ 这不是在测我们的代码，是在钉**上游契约**：kotpass 的
+        //    `Group.modifyEntry` 内部就会刷 lastAccessTime/lastModificationTime
+        //    （times 为 null 时填 TimeData.create()）。2026-10-16 曾据"modifyEntry
+        //    是纯替换"的印象写过一版自己的刷新逻辑，读上游源码后整段撤掉——
+        //    本用例留着当护栏：kotpass 升级后若这里变红，先查上游改了没有，
+        //    别下意识在我们的 writer 里再"修"一遍。
+        val uuid = UUID.randomUUID()
+        val old = Instant.parse("2026-01-02T03:04:05Z")
+        val db = databaseWith(
+            entries = listOf(
+                entry(uuid = uuid, title = "旧时间").copy(
+                    times = TimeData(
+                        creationTime = old,
+                        lastAccessTime = null,
+                        lastModificationTime = old,
+                        locationChanged = null,
+                        expiryTime = null,
+                        expires = false,
+                        usageCount = 0,
+                    ),
+                ),
+            ),
+        )
+        val before = db.toMappedContent().items.single()
+        assertThat(before.createdAt).isEqualTo(old.toEpochMilli())
+
+        val t0 = System.currentTimeMillis()
+        val updated = KdbxItemWriter.updateEntry(db, before, before.copy(title = "新标题")).database
+        val t1 = System.currentTimeMillis()
+
+        val times = updated.getEntry { it.uuid == uuid }!!.second.times!!
+        // 创建时间是用户的库的事实，原样；最近修改刷新到「刚刚」。
+        assertThat(times.creationTime).isEqualTo(old)
+        assertThat(times.lastModificationTime!!.toEpochMilli()).isAtLeast(t0)
+        assertThat(times.lastModificationTime!!.toEpochMilli()).isAtMost(t1)
+        // 读方向闭环 + 快照进 history 的是改前那版（旧时间戳留在历史里）。
+        val item = updated.toMappedContent().items.single()
+        assertThat(item.createdAt).isEqualTo(old.toEpochMilli())
+        assertThat(item.updatedAt).isAtLeast(t0)
+        assertThat(updated.getEntry { it.uuid == uuid }!!.second.history).hasSize(1)
+    }
+
+    // ---------------------------------------------------------------- 标准字段受保护属性（A6）
+
+    @Test
+    fun `第三方受保护的用户名与备注_更新后保护不丢、值不丢`() {
+        // A6：KeePassXC / DX 可给**任意**字段标内存保护（Protected="True"，
+        // kotpass 里就是 EntryValue.Encrypted）。此前只有密码做了保留，
+        // Title/UserName/Notes 无条件写 Plain ⇒ 受保护的用户名/备注被
+        // **静默剥掉保护**：值不丢（读侧 .content 两种都解密），保护属性丢了。
+        val uuid = UUID.randomUUID()
+        val db = databaseWith(
+            entries = listOf(
+                entry(
+                    uuid = uuid,
+                    title = "受保护字段",
+                    extraFields = mapOf(
+                        BasicField.UserName.key to EntryValue.Encrypted(EncryptedValue.fromString("alice")),
+                        BasicField.Notes.key to EntryValue.Encrypted(EncryptedValue.fromString("恢复码：abcd")),
+                    ),
+                ),
+            ),
+        )
+        val before = db.toMappedContent().items.single()
+        assertThat(before.username).isEqualTo("alice")
+        assertThat(before.notes).isEqualTo("恢复码：abcd")
+
+        val updated = KdbxItemWriter.updateEntry(db, before, before.copy(title = "改标题")).database
+        val fields = updated.getEntry { it.uuid == uuid }!!.second.fields
+
+        assertThat(fields[BasicField.UserName.key]).isInstanceOf(EntryValue.Encrypted::class.java)
+        assertThat(fields[BasicField.UserName.key]?.content).isEqualTo("alice")
+        assertThat(fields[BasicField.Notes.key]).isInstanceOf(EntryValue.Encrypted::class.java)
+        assertThat(fields[BasicField.Notes.key]?.content).isEqualTo("恢复码：abcd")
+    }
+
+    @Test
+    fun `未受保护的标准字段不被无端加密（反证）`() {
+        // Plain 的还是 Plain——把用户没标的字段无端升级成 Encrypted，
+        // 同样是一种"改坏用户库"（别的工具看到的表现会变）。
+        val uuid = UUID.randomUUID()
+        val db = databaseWith(
+            entries = listOf(
+                entry(
+                    uuid = uuid,
+                    title = "裸字段",
+                    extraFields = mapOf(BasicField.UserName.key to EntryValue.Plain("bob")),
+                ),
+            ),
+        )
+        val before = db.toMappedContent().items.single()
+
+        val updated = KdbxItemWriter.updateEntry(db, before, before.copy(title = "改标题")).database
+        val fields = updated.getEntry { it.uuid == uuid }!!.second.fields
+
+        assertThat(fields[BasicField.UserName.key]).isInstanceOf(EntryValue.Plain::class.java)
+        assertThat(fields[BasicField.Notes.key]).isInstanceOf(EntryValue.Plain::class.java)
     }
 
     // ---------------------------------------------------------------- 自定义字段与通行密钥

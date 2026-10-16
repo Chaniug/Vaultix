@@ -79,6 +79,10 @@ internal object KdbxItemWriter {
      *   那样条目会**看起来保存成功但哪里都没有**（list 里永远不出现）。
      */
     fun createEntry(database: KeePassDatabase, folderId: String?, item: VaultItem): KdbxWriteResult {
+        // ⚠️ times 不用写：`Entry` 数据类默认 `times = TimeData.create()`
+        //    （创建/访问/修改/位置四个时间全填 now）——显式写一遍只会漏掉
+        //    lastAccessTime / locationChanged，严格更差。更新侧的时间戳刷新
+        //    同样由 kotpass 负责，见 [updateEntry] 里的查证记录。
         val entry = Entry(
             uuid = UUID.randomUUID(),
             fields = applyDomainFields(existing = EntryFields.createDefault(), item = item, before = null),
@@ -109,6 +113,13 @@ internal object KdbxItemWriter {
         val updated = database.modifyEntry(uuid) {
             // ⚠️ `withHistory` 必须在**最外层**：它把"改前这一版"存成快照，
             //    再返回修改结果并把快照追加进结果的 history。
+            //
+            // ⚠️ 时间戳**不用我们管**（2026-10-16 查证，别"修"）：kotpass 的
+            //    `Group.modifyEntry` 内部就会 `times?.copy(lastAccessTime = now,
+            //    lastModificationTime = now) ?: TimeData.create()` —— 我们写的
+            //    times 会被上游用**原条目的** times 重算后整个盖掉。同理
+            //    `createEntry` 靠 `Entry` 数据类默认 `TimeData.create()`（now），
+            //    `moveEntry` 刷 `locationChanged`。三处合计：时间戳全链路已有。
             withHistory {
                 copy(fields = applyDomainFields(existing = fields, item = after, before = before))
             }
@@ -187,10 +198,16 @@ internal object KdbxItemWriter {
         before: VaultItem?,
     ): EntryFields {
         var fields = existing
-        fields = fields + (BasicField.Title.key to EntryValue.Plain(item.title))
-        fields = fields + (BasicField.UserName.key to EntryValue.Plain(item.username))
-        fields = fields + (BasicField.Password.key to passwordValue(existing, item.password))
-        fields = fields + (BasicField.Notes.key to EntryValue.Plain(item.notes))
+        // ⚠️ 四个标准字段一律走 [protectedAware]（A6 · 2026-10-16）：原字段带
+        //    `Protected="True"`（内存保护，KeePassXC/DX 可给任意字段标）就必须继续带。
+        //    此前只有密码做了保留（一个 `existing.password is Encrypted` 分支），
+        //    Title/UserName/Notes 无条件写 Plain ⇒ 第三方库里受保护的用户名/备注
+        //    被**静默剥掉保护**——值不丢，但内存里不再受流密码保护，
+        //    对密码管理器是保真度事故。
+        fields = fields + (BasicField.Title.key to protectedAware(existing, BasicField.Title.key, item.title))
+        fields = fields + (BasicField.UserName.key to protectedAware(existing, BasicField.UserName.key, item.username))
+        fields = fields + (BasicField.Password.key to protectedAware(existing, BasicField.Password.key, item.password))
+        fields = fields + (BasicField.Notes.key to protectedAware(existing, BasicField.Notes.key, item.notes))
         fields = applyUris(fields, item = item, before = before)
         fields = applyTotp(fields, item = item, before = before)
         fields = applyPasskeys(fields, item = item, before = before)
@@ -270,18 +287,29 @@ internal object KdbxItemWriter {
     }
 
     /**
-     * 密码字段：**保持它原本的"是否受保护"形态**。
+     * 标准字段的写入值（A6 · 2026-10-16）：**原字段带内存保护就继续带**。
      *
-     * KeePass 的约定是密码字段 `Protected="True"`（内存/磁盘上都加密），但历史与第三方
-     * 工具写过明文。读方向用 `fields.password?.content` 两种都能读，所以"读得到"不代表
-     * "应该改写成哪种"。⇒ 原本受保护的继续受保护、原本明文的保持明文，
-     * 避免一次编辑把用户的字段保护策略悄悄翻面。
+     * KDBX 的 `Protected="True"` 是**内存保护**标记（值在进程内存里过流密码），
+     * KeePassXC / KeePassDX 允许给**任意**字段标，不只密码。kotpass 用
+     * [EntryValue.Encrypted] 表达这个状态，[EntryValue.Plain] 则是裸值。
+     *
+     * 读方向用 `.content` 两种都能读（受保护的自动解密）⇒ "读得到"不代表
+     * "应该改写成哪种"：原本受保护的继续受保护、原本明文的保持明文。
+     *
+     * 此前的写法只有密码做了保留（一个 `existing.password is Encrypted` 分支），
+     * Title / UserName / Notes 无条件写 Plain ⇒ 第三方库里受保护的用户名 /
+     * 备注被**静默剥掉保护**：值不丢，但保护属性丢了 —— 对密码管理器是
+     * 保真度事故，且用户无从察觉。
+     *
+     * ⚠️ 语义与 Kotlin 侧的 typed accessor（`EntryFields.password` 等）逐字等价：
+     * 都是 `fields[BasicField.X.key]` 的 Map.get（大小写敏感，已知坑，见
+     * [KdbxToolFields.extras] 的说明）—— 泛化不改变任何既有行为。
      */
-    private fun passwordValue(existing: EntryFields, password: String): EntryValue =
-        if (existing.password is EntryValue.Encrypted) {
-            EntryValue.Encrypted(EncryptedValue.fromString(password))
+    private fun protectedAware(existing: EntryFields, key: String, value: String): EntryValue =
+        if (existing[key] is EntryValue.Encrypted) {
+            EntryValue.Encrypted(EncryptedValue.fromString(value))
         } else {
-            EntryValue.Plain(password)
+            EntryValue.Plain(value)
         }
 
     /**
