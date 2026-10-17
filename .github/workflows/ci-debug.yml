@@ -374,6 +374,35 @@ jobs:
           :data:bitwarden:testDebugUnitTest :data:kdbx:testDebugUnitTest
           --continue --stacktrace
 
+      - name: [TEMP PROBE] 单测失败取证（用完即删）
+        if: failure() && steps.unit_tests.outcome == 'failure'
+        run: |
+          echo "=================== PROBE BEGIN ==================="
+          cd "$GITHUB_WORKSPACE"
+          echo "--- 1) git diff --stat"
+          git --no-pager diff --stat HEAD~1 HEAD || true
+          echo "--- 2) 单测的 JUnit XML（只看失败/错误）"
+          find . -path "*/build/test-results/*" -name "*.xml" -print0 2>/dev/null \
+            | xargs -0 -r grep -l -E '<failure|<error' 2>/dev/null | head -20 || true
+          echo "--- 3) 各 test-results 目录的用例数"
+          for d in $(find . -type d -name "test-results" 2>/dev/null); do
+            n=$(find "$d" -name "*.xml" 2>/dev/null | wc -l)
+            echo "  $d : $n xml"
+          done
+          echo "--- 4) gradle --status / --version"
+          ./gradlew --version 2>&1 | sed -n '1,12p' || true
+          echo "============= rerun: 原命令 + --info（截断 400 行） ============="
+          ./gradlew :core:crypto:testDebugUnitTest :core:common:testDebugUnitTest \
+            :core:model:testDebugUnitTest :core:datastore:testDebugUnitTest \
+            :app:testFullDebugUnitTest :data:repository:testDebugUnitTest \
+            :data:bitwarden:testDebugUnitTest :data:kdbx:testDebugUnitTest \
+            --continue --stacktrace --info > /tmp/rerun.log 2>&1 || true
+          echo "--- rerun 尾部 400 行 ---"
+          tail -n 400 /tmp/rerun.log
+          echo "--- rerun 里的错误行 ---"
+          grep -n -E "^e: |FAILED|OutOfMemory|Could not|error:" /tmp/rerun.log | head -80 || true
+          echo "==================== PROBE END ===================="
+
       - name: Upload unit test reports
         if: always()
         uses: actions/upload-artifact@v7
