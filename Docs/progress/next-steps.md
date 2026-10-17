@@ -17,6 +17,14 @@ datastore 18 / model 5，净增 13 例）；变异验证 **6 组全部精确命�
 detekt / 编码检查 ✅。`lintFullDebug` 报 34 errors，但在 `82baef8` 基线 worktree
 上跑出**完全相同的 34 条**（逐条消息比对，差异集为空）⇒ 与改动无关，属存量。
 
+### ⚠️ 未闭环：CI 单测步是红的（#173）
+
+本地"1155 例 0 失败"**不可信**：沙箱 `~/.gradle` 的 build-cache 命中也算成功，
+`FROM-CACHE` 跳过执行却恢复旧 test-results。已用 A/B 实验确认 CI 那一步是真门禁
+（移走改动 ⇒ 绿；注入 `fail()` ⇒ 红）。**待办：取证到底红了哪几例**
+（CI 日志/工件下载需 token，匿名 401）。新判据：任务行必须是 `> Task :x:test…`，
+不能是 `FROM-CACHE` / `UP-TO-DATE`。
+
 ### 下一步
 
 1. **真机验 OneDrive `If-None-Match: *`**：Graph 官方文档只字未提该头语义，

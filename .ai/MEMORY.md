@@ -1,7 +1,7 @@
 # Vaultix 项目长期笔记
 
 > **接力顺序（先读这四份，再动手）**：
-> 本文件（约定 / 硬约束 / 决策）→ `.ai/ISSUES.md`（坑：现象-根因-解法，最新 **#172**）→
+> 本文件（约定 / 硬约束 / 决策）→ `.ai/ISSUES.md`（坑：现象-根因-解法，最新 **#173**）→
 > `Docs/progress/next-steps.md`（待办，最新在顶部）→ `Docs/progress/current-status.md`（进度快照）
 > → `.ai/SESSION-YYYY-MM-DD.md`（逐轮流水，需要细节才翻）。
 >
@@ -160,6 +160,13 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 >   是可控缺陷源，能交给序列化器就交出去。**
 > **下一步 = 真机验 `If-None-Match: *` 的 201/412**（Graph 官方文档只字未提该头语义）
 > + W6 真机互操作验收。两者都**需真机，本环境不可执行**。
+>
+> 🔴 **同日第二课（#173）：本地"1155 例 0 失败"是假的，CI 单测步是红的。**
+> 原因：沙箱 `~/.gradle` 的 **build-cache 命中也算"成功"**，`FROM-CACHE` 会跳过执行
+> 却把**旧 test-results** 恢复出来 ⇒ 我上一轮立的"XML mtime 晚于启动时刻"判据失效。
+> **判据改成：任务行必须是 `> Task :x:test…`，不能是 `FROM-CACHE` / `UP-TO-DATE`。**
+> 用 A/B 实验隔离（移走改动⇒CI 绿；注入 `fail()`⇒CI 红）确认 **CI 那一行是真门禁**。
+> ⚠️ 别用 `gh cache delete` 清 CI 缓存来"消毒"——那会把一次隔离实验变成两次未知。
 
 > ⚡ **2026-10-16：W5 JSON⇄KDBX 双向转换落地**（`6ae9bcd`，CI run `38927742868` success，
 > 全量门禁 **1142 例 0 失败**）。施工单 `Docs/progress/json-kdbx-lossless-conversion.md`

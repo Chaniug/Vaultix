@@ -9,7 +9,7 @@
 
 | 分篇 | 主题 | 条数 |
 |---|---|---|
-| [01-构建与环境](./issues/01-构建与环境.md) | 工程 / 构建 / CI / 工具链 / 环境 | 48 |
+| [01-构建与环境](./issues/01-构建与环境.md) | 工程 / 构建 / CI / 工具链 / 环境 | 49 |
 | [02-自动填充](./issues/02-自动填充.md) | 自动填充（AutofillService 链路） | 18 |
 | [03-通行密钥与凭据提供商](./issues/03-通行密钥与凭据提供商.md) | 通行密钥 / Credential Provider / 凭据回灌 | 18 |
 | [04-锁与解锁](./issues/04-锁与解锁.md) | 锁态模型 / 解锁 / 生物识别 / 密钥 | 12 |
@@ -37,7 +37,7 @@
 
 ## 编号 → 分篇
 
-### [01-构建与环境](./issues/01-构建与环境.md) — 工程 / 构建 / CI / 工具链 / 环境（48 条，缺 #3、#8、#15、#16、#20…：#3/15 归 04、#16 归 02、#20 归 06）
+### [01-构建与环境](./issues/01-构建与环境.md) — 工程 / 构建 / CI / 工具链 / 环境（49 条，缺 #3、#8、#15、#16、#20…：#3/15 归 04、#16 归 02、#20 归 06）
 
 | # | 标题 |
 |---|---|
@@ -88,6 +88,7 @@
 | 160 | 🔴 **索引与正文第四次漂移**：四种形态（标题层级写错 ⇒ 从未被计入 / 题注用增量改法 / 数字与名单互不可证 / 跨表错位重复行）。⇒ 新增 `.ai/tools/check_issues_index.py` 全量重数 + `tests/selftest_issues_index.py`（6 例正反用例） |
 | 168 | ⭐ detekt 两个「顶格」类：给贴上限的类加分支前先腾位（CardWalletScreen 17 / ItemFormDialog 16 / QuickUnlockController 41 函数接连撞红 ⇒ 新分支一律抽文件级纯函数，天然可单测） |
 | 171 | 🔴 过期 test-results XML 误导核数：编译失败时旧 XML 残留 ⇒ 核数脚本数出幽灵失败（`Card条目_载荷守卫` FAIL 实为 22:47 变异验证残留）。判据：核数结论与当次日志矛盾时，先怀疑读到的数据不是这次的（先对 XML mtime） |
+| 173 | 🔴 **沙箱里"全绿"的 1155 例，推到 CI 却红在单测步**：本地 `~/.gradle` 里的 build-cache 命中会 `FROM-CACHE` 返回**旧 test-results** ⇒ `--rerun-tasks` 与"XML mtime 晚于启动"两条判据**同时失效**。用 A/B 实验隔离（移走改动⇒CI 绿 / 注入一条故意失败⇒CI 红且无 continue-on-error）。⚠️ `gh cache delete` 清 CI 缓存来"消毒"会把一次隔离实验变成两次未知 —— 别做。⚠️ 步骤名以 `[` 开头会被 YAML 当流序列 ⇒ workflow 解析失败、0 秒红、`jobs` 为空 |
 | 172 | 🔴 OneDrive 无基线写入 = **无条件覆盖**（`expectedVersion = null` 时一个条件头都不发）；且 `createUploadSession` 手拼 JSON **值漏引号** ⇒ 任何 > 2MiB 的库在 OneDrive 上**从来没存进去过**。解法：接口加独立参数 `failIfExists`（不靠 null 推断）+ OneDrive 补写后读回校验 + 请求体改 DTO。判据：**"实现方遵守契约"不能靠调用方自觉来兜**。附三个坑：`Uri.encode` 是 Android 桩方法（返回 null）、`runTest` 测不了真线程（改 `runBlocking`）、Hilt 不接受带默认值参数的 `@Inject constructor` |
 
 ### [02-自动填充](./issues/02-自动填充.md) — 自动填充（AutofillService 链路）
