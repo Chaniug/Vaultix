@@ -65,6 +65,11 @@ import org.junit.Test
  * | 删掉 `forceReplace` 分支（让它继续走 If-Match） | 强制覆盖不得携带任何条件头 |
  */
 class OneDriveGraphClientWriteTest {
+    @Test
+    fun ci_probe_故意失败() {
+        org.junit.Assert.fail("CI 探针：这条必须红")
+    }
+
 
     // ───────────────────────── 夹具 ─────────────────────────
 
