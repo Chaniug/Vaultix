@@ -374,7 +374,7 @@ jobs:
           :data:bitwarden:testDebugUnitTest :data:kdbx:testDebugUnitTest
           --continue --stacktrace
 
-      - name: [TEMP PROBE] 单测失败取证（用完即删）
+      - name: TEMP PROBE 单测失败取证（用完即删）
         if: failure() && steps.unit_tests.outcome == 'failure'
         run: |
           echo "=================== PROBE BEGIN ==================="
