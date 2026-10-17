@@ -110,26 +110,47 @@ class SafKdbxFileSource(
     override suspend fun read(): ByteArray = withContext(Dispatchers.IO) { readBytesOrThrow() }
 
     /**
-     * 覆盖写入。
+     * 覆盖写入 / 只创建写入。
      *
      * @param expectedVersion 上一次 [stat]/[read] 的内容 SHA-256。
      *   ⚠️ 与网盘不同：本地**没有服务端能原子地替我们判定**，
      *   所以这里只能做"写前预检"（缩小窗口），**无法彻底消除 TOCTOU**。
      *   这是 SAF 的固有限制 —— 在本地单机场景下影响极小（同一时刻只有一个 App 写），
      *   但要如实写清楚，**不能假装有和 WebDAV 一样的保障**。
+     * @param failIfExists 只创建。⚠️ 本地同样"只能预检"：SAF 没有 `If-None-Match`，
+     *   所以做法是"先问文件在不在，在就拒写"。
      */
     override suspend fun write(
         bytes: ByteArray,
         expectedVersion: String?,
         force: Boolean,
+        failIfExists: Boolean,
     ): KdbxFileWriteResult =
         withContext(Dispatchers.IO) {
+            // ⓪ 只创建：目标已存在 ⇒ 直接拒写，**一个字节都不碰**。
+            //
+            //   ⚠️ 这一步必须排在 ② 的 `openOutputStream` **之前** ——
+            //      `"wt"` 一打开就已经把文件截断了，那时再检查等于已经毁了别人的库。
+            //   ⚠️ 判据用 `readBytesOrThrow()` 而不是 `DocumentFile.exists()`：
+            //      同一份实现里只留一种"文件在不在"的判据（读了有字节就是在，抛了就是不在）。
+            if (failIfExists) {
+                val existing = runCatching { readBytesOrThrow() }.getOrNull()
+                if (existing != null) {
+                    throw KdbxFileConflictException(
+                        currentVersion = sha256Hex(existing),
+                        message = "该位置已存在同名文件，已取消创建以免覆盖",
+                    )
+                }
+            }
+
             // ① 写前预检：本地只能做到这一步（见上面 KDoc 的说明）。
             //
             //   ⚠️ force = true 时**跳过预检** —— 用户已在冲突对话框里确认要用本地
             //      覆盖远端。保留预检的话，用户点了确认也永远写不进去
             //      （文件确实变了，条件必然不满足），只能反复点。
-            if (!force && expectedVersion != null) {
+            //   ⚠️ failIfExists 时也跳过：只创建场景没有"基线"这回事，
+            //      硬拿一个旧基线去比，只会把"新建失败"误报成"文件被别人改了"。
+            if (!force && !failIfExists && expectedVersion != null) {
                 val current = runCatching { sha256Hex(readBytesOrThrow()) }.getOrNull()
                 if (current != null && current != expectedVersion) {
                     throw KdbxFileConflictException(current, "文件已被其他程序修改，已取消写入")
@@ -172,7 +193,6 @@ class SafKdbxFileSource(
             if (queryMetadata() == null) {
                 throw FileNotFoundException("无法访问该文件，授权可能已失效，请重新选择文件")
             }
-            Unit
         }
     }
 

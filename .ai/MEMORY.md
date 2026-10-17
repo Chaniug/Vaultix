@@ -1,11 +1,11 @@
 # Vaultix 项目长期笔记
 
 > **接力顺序（先读这四份，再动手）**：
-> 本文件（约定 / 硬约束 / 决策）→ `.ai/ISSUES.md`（坑：现象-根因-解法，最新 **#160**）→
+> 本文件（约定 / 硬约束 / 决策）→ `.ai/ISSUES.md`（坑：现象-根因-解法，最新 **#172**）→
 > `Docs/progress/next-steps.md`（待办，最新在顶部）→ `Docs/progress/current-status.md`（进度快照）
 > → `.ai/SESSION-YYYY-MM-DD.md`（逐轮流水，需要细节才翻）。
 >
-> 最后更新：2026-09-29（批次 5.0「软锁 + 前台门禁 + 解锁提速」交付后）。**本文件已压缩重写**：逐轮叙事折叠进
+> 最后更新：2026-10-17（#172 修完后；§9 顶部的「最近几轮」才是真源，本行只记最后一次大改）。**本文件已压缩重写**：逐轮叙事折叠进
 > 第 9 节「当前状态」与第 10 节「历史轮次索引」，只留「不知道就会写错、且错了不报错」的内容。
 >
 > ⚠️ **2026-09-26 起 §9 顶部才是"最近几轮"的唯一真源**；§10 的索引止于 2026-09-13，
@@ -144,6 +144,22 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 | [8.10 架构与目录地图](./conventions/8.10-架构与目录地图.md) | **东西在哪 + 该信哪份文档**（接力地图） | — |
 
 ## 9. 当前状态与下一批（接力起手式）
+
+> ⚡ **2026-10-17：#172 已修**（OneDrive 无基线写入 = 无条件覆盖；分片上传
+> uploadSession 请求体一直是**非法 JSON**）。全量门禁 **1155 例 0 失败**
+> （CI 同款 8 任务 + `--rerun-tasks`），变异验证 6 组全中。
+> - **接口**：`KdbxFileSource.write` 加**独立参数** `failIfExists`。
+>   ⚠️ 不要"用 `expectedVersion == null` 推断只创建"——null 是"没有基线"，
+>   failIfExists 是"存在就是错"，**两件事**。`force` 同为独立参数，同构。
+> - **来源**：SAF 在 `openOutputStream("wt")` **之前**拦；WebDAV 强制丢基线发
+>   `If-None-Match: *`；OneDrive 简单上传发 `*`、分片上传用会话体
+>   `conflictBehavior: "fail"` 且**不带 `ifMatch`**、并补**写后读回**。
+> - **第二颗雷**：`createUploadSession` 手拼 `"@microsoft.graph.conflictBehavior":fail`
+>   （值漏引号）⇒ **> 2MiB 的库在 OneDrive 上从来没存进去过**（小库走简单上传不经过）。
+>   改 DTO + `Json(explicitNulls = false)`。**判据：手拼结构化文本（JSON/XML/SQL）
+>   是可控缺陷源，能交给序列化器就交出去。**
+> **下一步 = 真机验 `If-None-Match: *` 的 201/412**（Graph 官方文档只字未提该头语义）
+> + W6 真机互操作验收。两者都**需真机，本环境不可执行**。
 
 > ⚡ **2026-10-16：W5 JSON⇄KDBX 双向转换落地**（`6ae9bcd`，CI run `38927742868` success，
 > 全量门禁 **1142 例 0 失败**）。施工单 `Docs/progress/json-kdbx-lossless-conversion.md`

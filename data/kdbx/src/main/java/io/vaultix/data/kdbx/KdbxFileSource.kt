@@ -119,35 +119,44 @@ interface KdbxFileSource {
     suspend fun read(): ByteArray
 
     /**
-     * 写入（覆盖）。
+     * 写入（覆盖或创建）。
      *
      * @param expectedVersion ★ **上次 [stat]/[read] 拿到的 `versionToken`**。
      *   - 非空且来源支持条件写 ⇒ 服务端在 HTTP/文件系统边界强制"必须还是这一版"，
      *     不匹配就抛 [KdbxFileConflictException]（**这才是真正消除 TOCTOU 的做法**）；
-     *   - `null` ⇒ 调用方明确表示"不对并发做保证"（如首次创建、或来源不提供令牌）。
-     *     实现方**不要**把它当成"随便覆盖"的许可，而是退化为可用的最严保障
-     *     （写前预检 + 写后读回校验），并在发现被改动时抛 [KdbxFileConflictException]。
+     *   - `null` ⇒ 调用方明确表示"我没有基线"。实现方**不要**把它当成"随便覆盖"的许可，
+     *     而是退化为可用的最严保障（写前预检 + **写后读回校验**），
+     *     并在发现被改动时抛 [KdbxFileConflictException]。
      * @param force ★ **无条件强写**（见下）。
+     * @param failIfExists ★ **只创建**：目标已存在则失败，绝不覆盖。
+     *   见下方四象限表 —— 它与 `expectedVersion = null` **不是一回事**。
      * @return 写入后的新状态（含**新的** `versionToken`）。
      *
-     * ## ★ `force` 与 `expectedVersion = null` 的区别（别混）
+     * ## ★ 四个参数的语义象限（别混）
      *
-     * | 参数 | 含义 |
-     * |---|---|
-     * | `expectedVersion = null` | "我没带基线" —— 实现方**应退化为最严保障**（写前预检 + 写后读回校验），不要放弃检查 |
-     * | `force = true` | "**别检查，直接盖**" —— 只有用户在冲突对话框里明确选了「用本地覆盖远端」才允许 |
+     * | 组合 | 含义 | 谁会用 |
+     * |---|---|---|
+     * | `failIfExists = true` | "**这是新文件**，已存在就报错" | 新建库（`Kdbx.createVault`） |
+     * | `expectedVersion != null` | "必须还是这一版" | 正常保存（条件写） |
+     * | `force = true` | "**别检查，直接盖**" | 用户在冲突对话框里明确选了「用本地覆盖远端」 |
+     * | 全默认（`null` + false + false） | "我没带基线"，实现方退化为最严保障 | 本地 SAF 主写路径 |
      *
-     * ⚠️ 为什么值得一个独立参数：把它俩合成一个 `null` 会让"忘了传基线"
-     * （一个**编码疏忽**）静默升级成"强行覆盖远端"（一次**数据丢失**）。
-     * 两件事的风险差着量级，就必须是两个名字。
+     * ⚠️ **为什么 `failIfExists` 必须是一个独立的参数，而不是靠 `expectedVersion = null` 推断**
      *
-     * ⚠️ `force = true` 时 `expectedVersion` 被忽略，实现方**不要**再发条件头
+     * 这正是 2026-10-17 修掉的那个缺陷的成因（ISSUES #172）：
+     * "忘了传基线"是一个**编码疏忽**，"这是新文件、不许覆盖"是一个**明确意图**。
+     * 把两者压进同一个 `null`，疏忽就会静默降级成"无条件覆盖"——OneDrive 的简单上传
+     * 在 `expectedVersion = null` 时**一个条件头都不带**，于是同名库被静默盖掉。
+     * 与 `force` 单独存在的理由完全同构：风险差着量级的两件事，就必须是两个名字。
+     *
+     * ⚠️ `force = true` 时其余两个参数被忽略，实现方**不要**再发条件头
      * （发了必然失败——远端确实变了，这正是用户要覆盖的那次改动）。
      */
     suspend fun write(
         bytes: ByteArray,
         expectedVersion: String? = null,
         force: Boolean = false,
+        failIfExists: Boolean = false,
     ): KdbxFileWriteResult
 
     /** 列当前目录的子项（供选库）。来源不支持时返回空列表。 */

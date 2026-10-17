@@ -47,6 +47,26 @@ data class OneDriveAccountSession(
 )
 
 /**
+ * ★ 只要「能拿到 token」这一件事的最小接口（2026-10-17 引入）。
+ *
+ * ## 为什么需要它
+ *
+ * [OneDriveKdbxFileSource] 直接依赖 [OneDriveAuthManager] 的话，
+ * 单元测试就必须造出一个带 `@ApplicationContext` 的真管理器 ⇒ MSAL + 真 `Context`
+ * + 真账户，**JVM 单测里根本不可能**。于是「`failIfExists` 到底发不发
+ * `If-None-Match: *`」「读回校验不一致会不会抛冲突」这两条（ISSUES #172 的全部价值）
+ * 只能靠真机手工试 —— 一次回归就得重新注册一个 OneDrive 账号才能发现。
+ *
+ * 抽成接口后，测试给一个返回固定 token 的匿名实现即可。
+ * ⚠️ 接口**只放 token 获取**，不放登录/登出/列账户：那会让这层抽象变成
+ * "MSAL 的影子"，测试实现被迫实现一堆用不到的方法，改一处就要全改。
+ */
+interface OneDriveTokenProvider {
+    /** 取（必要时静默刷新的）token；账户已失效时返回 `accessToken = null`。 */
+    suspend fun acquireAccessToken(accountId: String): OneDriveAccountSession
+}
+
+/**
  * 登录状态**暂时**不可用（设备打盹 + 电池优化未豁免 ⇒ MSAL 静默刷新被系统掐断）。
  *
  * ⚠️ 与「凭据失效」要分开：前者用户点亮屏幕/豁免电池优化即可自愈，
@@ -86,7 +106,7 @@ class OneDriveAuthTemporarilyUnavailableException(
 @Singleton
 class OneDriveAuthManager @Inject constructor(
     @ApplicationContext private val appContext: Context,
-) {
+) : OneDriveTokenProvider {
 
     /** MSAL 实例的缓存槽 + 互斥（`createMultipleAccountPublicClientApplication` 是耗时 IO）。 */
     @Volatile
@@ -206,7 +226,7 @@ class OneDriveAuthManager @Inject constructor(
      * 而这与本应用无关。提前拦住并抛出可自愈的
      * [OneDriveAuthTemporarilyUnavailableException]，避免把它误报成"登录失效"。
      */
-    suspend fun acquireAccessToken(accountId: String): OneDriveAccountSession {
+    override suspend fun acquireAccessToken(accountId: String): OneDriveAccountSession {
         val application = getApplication()
         // 用 checkNotNull 而不是 `?: throw`：detekt `ThrowsCount`（上限 2）只数 `throw` 语句，
         // 而本函数需要把"刷新失败"这一处 throw 留给下面的 try/catch。语义上这里是

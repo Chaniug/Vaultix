@@ -325,8 +325,12 @@ object Kdbx {
      *
      * ## 写入约定
      *
-     * - `expectedVersion = null`：**这是新建**，没有基线可比（见 [KdbxFileSource.write]：
-     *   该参数为 null 时实现方退化为"可用的最严保障"，而**不是**"随便覆盖"）；
+     * - **`failIfExists = true`**：这是**新建**，语义就是"只创建"。
+     *   目标已存在时一律失败，**绝不覆盖** —— 那是别人的库（也可能是用户上一个自己的库）。
+     *   ⚠️ 2026-10-17 之前这里只传了默认参数，靠调用方先 `stat` 兜着（ISSUES #172）；
+     *   把意图写进参数后，来源层自己就能守住，不再依赖调用方的自觉。
+     * - `expectedVersion = null`：新建**没有**基线可比，这是正确的传法
+     *   （但它的含义是"我没有基线"，不等于"可以随便覆盖"，见 [KdbxFileSource.write]）。
      * - `force` 保持 `false`：新建不需要绕过任何检查。
      *
      * @return 成功 = 文件已落盘 **且** 会话已登记（两者缺一都不能算成功 ——
@@ -349,7 +353,7 @@ object Kdbx {
         }
 
         try {
-            source.write(bytes = created.bytes)
+            source.write(bytes = created.bytes, failIfExists = true)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {

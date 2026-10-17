@@ -209,6 +209,7 @@ class KdbxItemRepositoryTest {
             bytes: ByteArray,
             expectedVersion: String?,
             force: Boolean,
+            failIfExists: Boolean,
         ): KdbxFileWriteResult {
             writes += bytes
             return KdbxFileWriteResult(versionToken = "token", sizeBytes = bytes.size.toLong(), remoteId = VAULT_ID)

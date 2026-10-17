@@ -149,6 +149,41 @@ class KdbxCreateRepositoryTest {
         coVerify(exactly = 0) { prefs.trySetDefaultVaultIfAbsent(any()) }
     }
 
+    /**
+     * ★ 新建**必须**以「只创建」的语义写入（ISSUES #172）。
+     *
+     * 为什么这条值得单独一个用例：`Kdbx.createVault` 是先 `stat()` 确认目标为空、
+     * 再 `write()`。如果 `write` 不声明 `failIfExists = true`，那两次调用之间
+     * 别人正好建了同名库（多设备 / 另一台机器同步过来），我们就会**直接覆盖它** ——
+     * 而 `stat` 检查在那一瞬间已经过期了（TOCTOU）。声明之后，
+     * 服务端（OneDrive/WebDAV）会用 `If-None-Match: *` 替我们兜住。
+     *
+     * ⚠️ 这条断言的是**调用方的意图**，不是服务端行为 ——
+     * 服务端那一半由 `OneDriveGraphClientWriteTest` 与 WebDAV 的条件头保证，
+     * 两边合起来才是完整的一条链。少了任何一半，另一半点亮也没有意义。
+     */
+    @Test
+    fun `新建库必须声明只创建_以免覆盖同名文件`() = runTest {
+        val dao = RecordingVaultDao()
+        val source = fakeSource(RESOLVED_URI)
+        val repo = repositoryWith(dao = dao, source = source)
+
+        repo.createVault(
+            targetUri = VAULT_URI,
+            displayName = "我的库",
+            masterPassword = PASSWORD,
+        )
+
+        coVerify(exactly = 1) {
+            source.write(
+                bytes = any(),
+                expectedVersion = any(),
+                force = any(),
+                failIfExists = true,
+            )
+        }
+    }
+
     /** 来源解析不出来 ⇒ 失败，且**一行都不落**（还没碰过任何文件，安全）。 */
     @Test
     fun `来源解析不出来_失败且不落行`() = runTest {
@@ -184,7 +219,7 @@ class KdbxCreateRepositoryTest {
             remoteId = reportedId,
             displayName = "vault.kdbx",
         )
-        coEvery { write(bytes = any(), expectedVersion = any(), force = any()) } returns
+        coEvery { write(bytes = any(), expectedVersion = any(), force = any(), failIfExists = any()) } returns
             KdbxFileWriteResult(versionToken = "token", sizeBytes = 0, remoteId = reportedId)
         coEvery { read() } throws AssertionError("新建路径不应读远端文件")
     }
@@ -197,7 +232,7 @@ class KdbxCreateRepositoryTest {
             remoteId = reportedId,
             displayName = "vault.kdbx",
         )
-        coEvery { write(bytes = any(), expectedVersion = any(), force = any()) } throws
+        coEvery { write(bytes = any(), expectedVersion = any(), force = any(), failIfExists = any()) } throws
             IllegalStateException("写入后读回校验不一致")
     }
 

@@ -144,18 +144,24 @@ class WebDavKdbxFileSource(
         bytes: ByteArray,
         expectedVersion: String?,
         force: Boolean,
+        failIfExists: Boolean,
     ): KdbxFileWriteResult =
         // ★ force：用户已在冲突对话框里明确选了「用本地覆盖远端」。
         //   那一刻再做条件检查**必然失败**（远端确实变了 —— 就是这个条件挡住的），
         //   于是用户点了确认却什么也没发生。所以这里走 [forceReplace]。
-        if (force) forceReplace(bytes) else writeConditionally(bytes, expectedVersion)
+        if (force) forceReplace(bytes) else writeConditionally(bytes, expectedVersion, failIfExists)
 
     private suspend fun writeConditionally(
         bytes: ByteArray,
         expectedVersion: String?,
+        failIfExists: Boolean,
     ): KdbxFileWriteResult =
         withContext(Dispatchers.IO) {
-            val normalizedExpected = normalizeVersionToken(expectedVersion)
+            // ★ 只创建 ⇒ **强制**丢掉任何基线，走 CREATE_ONLY。
+            //   否则调用方若同时传了 expectedVersion，就会变成"覆盖"，与意图相反 ——
+            //   而那种组合恰恰是最危险的：调用方以为在"新建"，实际在"覆盖同名旧库"。
+            val normalizedExpected =
+                if (failIfExists) null else normalizeVersionToken(expectedVersion)
 
             // ① 写前预检（仅在"我们有版本令牌"时才有意义；null 走 CREATE_ONLY 语义）
             precheckVersion(normalizedExpected)
@@ -220,10 +226,18 @@ class WebDavKdbxFileSource(
     /**
      * 给请求加上条件头。
      *
-     * | [normalizedExpected] | 加的头 | 含义 |
-     * |---|---|---|
-     * | null | `If-None-Match: *` | ★ 坑 4：只创建。文件已存在则服务端拒绝 |
-     * | 非空 | `If-Match: <值>` | 覆盖，且必须还是那一版 |
+     * | [normalizedExpected] | [failIfExists] | 加的头 | 含义 |
+     * |---|---|---|---|
+     * | null | true | `If-None-Match: *` | ★ 明确「只创建」，已存在则服务端拒绝 |
+     * | null | false | `If-None-Match: *` | 无基线：**退化为最严保障**（不是"随便覆盖"） |
+     * | 非空 | — | `If-Match: <值>` | 覆盖，且必须还是那一版 |
+     *
+     * ⚠️ `failIfExists = false + expectedVersion = null` 与 `failIfExists = true`
+     * **发出的头完全相同**，但语义不同：前者是"我没有基线，请你替我挡住并发"，
+     * 后者是"这是新文件，存在就是错误"。当前实现下两者都指向 `If-None-Match: *`，
+     * 属于"最严的那一档"——这对密码库是对的：宁可让用户在冲突里多点一下，
+     * 也不要在无基线时把远端盖掉。保留两个名字是为了让**调用意图**可读，
+     * 也让将来若想为"无基线覆盖"放宽策略时，有地方区分。
      */
     private fun Request.Builder.conditionalHeader(normalizedExpected: String?): Request.Builder =
         if (normalizedExpected == null) {
@@ -367,7 +381,6 @@ class WebDavKdbxFileSource(
                     throw IOException("WebDAV 服务器错误（HTTP ${response.code}）")
                 }
             }
-            Unit
         }
     }
 

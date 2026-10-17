@@ -222,10 +222,15 @@ internal class CachedKdbxFileSource(
         bytes: ByteArray,
         expectedVersion: String?,
         force: Boolean,
+        failIfExists: Boolean,
     ): KdbxFileWriteResult {
         // 冲突时 `delegate.write` 抛 `KdbxFileConflictException` ⇒ 根本走不到下面，
         // 缓存不会被污染成"远端其实是旧的"。
-        val result = delegate.write(bytes, expectedVersion, force)
+        //
+        // ⚠️ `failIfExists` **必须原样透传**：本类只是一个缓存装饰器，
+        //    在这里把它吞掉就等于把"只创建"的保险丝剪断，
+        //    而被装饰的远端来源正是最需要那根保险丝的地方（ISSUES #172）。
+        val result = delegate.write(bytes, expectedVersion, force, failIfExists)
         runCatching { cache.save(cacheKey, CachedKdbxFile(bytes, result.versionToken)) }
         return result
     }

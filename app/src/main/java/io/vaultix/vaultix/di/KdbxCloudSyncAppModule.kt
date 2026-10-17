@@ -38,6 +38,7 @@ import io.vaultix.data.kdbx.KdbxFileSource
 import io.vaultix.data.repository.kdbx.KdbxCloudSyncCoordinator
 import io.vaultix.data.repository.kdbx.KdbxSessionReplacer
 import io.vaultix.data.repository.kdbx.WebDavCredentialLookup
+import io.vaultix.vaultix.remote.onedrive.OneDriveGraphClient
 import io.vaultix.vaultix.remote.onedrive.OneDriveKdbxFileSource
 import io.vaultix.vaultix.remote.webdav.WebDavCredentialStore
 import javax.inject.Inject
@@ -46,6 +47,21 @@ import javax.inject.Singleton
 @Module
 @InstallIn(SingletonComponent::class)
 object KdbxCloudSyncAppModule {
+
+    /**
+     * OneDrive Graph 客户端。
+     *
+     * ⚠️ **必须显式 `@Provides`，不能靠 `@Inject constructor`**：该类有两个
+     * 可替换接缝（`client` / `baseUrl`）且都带默认值，Kotlin 会为它们生成一个
+     * 合成构造，与 `@Inject` 那个撞车 ⇒ Hilt 报
+     * `may only contain one injected constructor`。详见该类 KDoc。
+     *
+     * 这里用**默认值**（生产参数），测试则直接 `OneDriveGraphClient(client = 假, baseUrl = 假)`，
+     * 两边都不绕 DI。
+     */
+    @Provides
+    @Singleton
+    fun provideOneDriveGraphClient(): OneDriveGraphClient = OneDriveGraphClient()
 
     /**
      * OneDrive 来源工厂 —— 接到协调器的注册口上。

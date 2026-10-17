@@ -63,6 +63,7 @@ class CachedKdbxFileSourceTest {
             bytes: ByteArray,
             expectedVersion: String?,
             force: Boolean,
+            failIfExists: Boolean,
         ): KdbxFileWriteResult {
             token = WRITE_TOKEN
             return KdbxFileWriteResult(versionToken = WRITE_TOKEN)
@@ -117,6 +118,7 @@ class CachedKdbxFileSourceTest {
             bytes: ByteArray,
             expectedVersion: String?,
             force: Boolean,
+            failIfExists: Boolean,
         ): KdbxFileWriteResult = KdbxFileWriteResult(versionToken = token)
 
         override suspend fun testConnection(): Result<Unit> = Result.success(Unit)

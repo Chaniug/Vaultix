@@ -451,6 +451,19 @@ private fun CreateSection(
         submitting = state.submitting,
         onSubmit = onSubmit,
     )
+
+    // ⚠️ 为什么"保存位置"要提前说一句（2026-10-17）：
+    //   保存位置是在点提交**之后**才由系统面板选的，用户在填表单时完全不知道
+    //   "这个库会落在哪"。而位置一旦定了就不好改（要重新绑定 origin、重新同步），
+    //   是这一屏里唯一"事后最难挽回"的决定 —— 所以必须在提交前给一次提示。
+    //   放在按钮**下方**而不是上方：它解释的是"接下来会发生什么"，
+    //   不属于表单字段，压在字段和按钮之间会打断填写节奏。
+    Spacer(Modifier.height(Spacing.sm))
+    Text(
+        text = stringResource(R.string.add_kdbx_create_location_hint),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
     Spacer(Modifier.height(Spacing.xxl))
 }
 

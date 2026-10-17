@@ -2,6 +2,31 @@
 
 ---
 
+## ✅ #172 已修（2026-10-17）· OneDrive 无基线覆盖 + 分片上传非法 JSON
+
+| 项 | 一句话 | 落点 |
+|---|---|---|
+| ① 无基线覆盖 | `KdbxFileSource.write` 加**独立参数** `failIfExists`（不靠 `expectedVersion == null` 推断），三个来源各自对齐 | 接口 + SAF / WebDAV / OneDrive |
+| ② 分片上传一直是非法 JSON | `createUploadSession` 手拼 `"conflictBehavior":fail`（值漏引号）⇒ **> 2MiB 的库在 OneDrive 上从来没存进去过**。改 DTO + `Json(explicitNulls = false)` | `OneDriveGraphClient` |
+| ③ 补写后读回 | `verifyReadBack`：size 廉价预筛 + 下载逐字节比对；**读不回来也算冲突** | `OneDriveKdbxFileSource` |
+| ④ 文案 | `add_kdbx_privacy_note` 原写"文件只保存在本机"—— 与支持 OneDrive/WebDAV **直接冲突**；另加"下一步选位置"提示 | `strings.xml` / `AddKdbxScreen` |
+
+**实证**：CI 同款 8 任务 `--rerun-tasks` 强制重跑，JUnit XML 重数 **1155 例 0 失败**
+（app 375 / repository 176 / kdbx 171 / crypto 195 / common 151 / bitwarden 64 /
+datastore 18 / model 5，净增 13 例）；变异验证 **6 组全部精确命中**；
+detekt / 编码检查 ✅。`lintFullDebug` 报 34 errors，但在 `82baef8` 基线 worktree
+上跑出**完全相同的 34 条**（逐条消息比对，差异集为空）⇒ 与改动无关，属存量。
+
+### 下一步
+
+1. **真机验 OneDrive `If-None-Match: *`**：Graph 官方文档只字未提该头语义，
+   201/412 的实际表现需实测（本环境无 Microsoft 账号）；
+2. **W6 真机互操作验证**（KeePassXC / KeePassDX 打开 Vaultix 写的库）——仍需真机；
+3. 存量 34 条 lint error 是否要做一轮清理（`LocalContextGetResourceValueCall` 25 条占大头）——待定，
+   注意 CI 里 lint 步骤是 `continue-on-error: true` 且 push 链路 `skipped`（见 ISSUES #100）。
+
+---
+
 ## ✅ W5 已落地（2026-10-16）· CI `38927742868` 真绿
 
 **commit**：`6ae9bcd`（转换器 + 入口 UI + 测试，17 files +2995/-97）

@@ -132,6 +132,7 @@ private class InMemoryKdbxSource(private val bytes: ByteArray) : KdbxFileSource 
         bytes: ByteArray,
         expectedVersion: String?,
         force: Boolean,
+        failIfExists: Boolean,
     ): KdbxFileWriteResult = throw UnsupportedOperationException("本测试只覆盖读路径")
 
     override suspend fun testConnection(): Result<Unit> = Result.success(Unit)
@@ -148,6 +149,7 @@ private class FailingKdbxSource(private val message: String) : KdbxFileSource {
         bytes: ByteArray,
         expectedVersion: String?,
         force: Boolean,
+        failIfExists: Boolean,
     ): KdbxFileWriteResult = throw IllegalStateException(message)
 
     override suspend fun testConnection(): Result<Unit> = Result.failure(IllegalStateException(message))

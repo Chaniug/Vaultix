@@ -799,7 +799,7 @@ class ItemRepositoryImplTest {
      */
     private fun inMemorySource(): KdbxFileSource = mockk {
         coEvery { stat() } returns KdbxFileStat(versionToken = "token")
-        coEvery { write(bytes = any(), expectedVersion = any(), force = any()) } returns
+        coEvery { write(bytes = any(), expectedVersion = any(), force = any(), failIfExists = any()) } returns
             KdbxFileWriteResult(versionToken = "token")
         coEvery { read() } throws AssertionError("新建路径不应读远端文件")
     }

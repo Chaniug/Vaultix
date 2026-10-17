@@ -17,7 +17,6 @@
  */
 package io.vaultix.vaultix.remote.onedrive
 
-import android.net.Uri
 import io.vaultix.common.logging.VaultixLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -30,8 +29,6 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
 import java.util.concurrent.TimeUnit
-import javax.inject.Inject
-import javax.inject.Singleton
 
 /** 网盘上的一个条目（目录或文件）。 */
 data class OneDriveEntry(
@@ -82,9 +79,44 @@ class OneDrivePreconditionFailedException(
  * ⚠️ **绝不能用 `conflictBehavior=replace` 做"更新"**：那是**无条件覆盖**，
  * 会把别的设备的改动直接抹掉（与用户的硬要求"同步不丢"直接冲突）。
  * 它只有在用户**明确选择"用本地覆盖远端"**时才合法（见 `forceReplace` 参数）。
+ *
+ * ## 为什么这里**没有** `@Inject constructor`（2026-10-17）
+ *
+ * 两个构造参数都是**可替换接缝**（`client` 给测试短路、`baseUrl` 给假服务端），
+ * 而 Hilt 对带默认值的构造参数会**同时**把它当成"可注入"与"有默认值"两回事：
+ * 实测报 `Type … may only contain one injected constructor. Found: [(OkHttpClient, String), ()]`
+ * —— Kotlin 为默认值生成的合成构造与 `@Inject` 那个撞在了一起。
+ *
+ * ⇒ 改由 `di/KdbxCloudSyncAppModule.provideOneDriveGraphClient()` 用 `@Provides` 提供。
+ * 好处是**接缝在生产/测试两侧都是显式的**，而不是靠"注入器能不能凑齐依赖"这种
+ * 编译期魔法决定。
+ *
+ * ## 为什么是 `open class`（2026-10-17）
+ *
+ * Kotlin 类默认 `final`，mockk 没法给 `final` 类打桩（除非挂 inline agent）。
+ * 而 [OneDriveKdbxFileSource] 的**写后读回校验**（#172 的第二道闸）要验的正是
+ * "upload 返回之后，本类会不会再 download 一次" —— 这是两个方法之间的**调用关系**，
+ * 用假服务端写不出来（假服务端只能验单个 HTTP 请求），只能靠 mock。
+ * 开放继承面是这里最小、最诚实的代价；⚠️ 它的子类只应存在于测试里。
  */
-@Singleton
-class OneDriveGraphClient @Inject constructor() {
+open class OneDriveGraphClient(
+    /**
+     * ★ 可测接缝（2026-10-17 引入）。
+     *
+     * 原先这里是个**无参**构造，`client` 是 companion 里写死的 `OkHttpClient`
+     * ⇒ `If-None-Match: *` 到底有没有发出去、412 有没有被映射成
+     * [OneDrivePreconditionFailedException]，这两件本可以纯逻辑验证的事
+     * **一行测试都写不了**，只能靠真机 + 抓包。
+     * 而 ISSUES #172 的修复恰恰全押在这两个行为上 —— 不测等于没修。
+     *
+     * ⚠️ **没有引入新依赖**：假服务端用 OkHttp 自带的
+     * `Interceptor` 直接短路请求（见测试里的 `FakeGraphServer`），
+     * 比 MockWebServer 更轻，也不需要真实端口。
+     */
+    private val client: OkHttpClient = defaultClient,
+    /** Graph 基址；测试时指向假服务端即可。 */
+    private val baseUrl: String = GRAPH_BASE_URL,
+) {
 
     /**
      * 列出一个目录下的子项。
@@ -126,7 +158,6 @@ class OneDriveGraphClient @Inject constructor() {
     /** 连通性自检：能不能拿到根目录的第一页？（失败原因原样抛出，由调用方翻译给用户） */
     suspend fun testConnection(accessToken: String): Result<Unit> = runCatching {
         executeJsonRequest("/me/drive/root?${'$'}select=id", accessToken)
-        Unit
     }
 
     /**
@@ -158,7 +189,7 @@ class OneDriveGraphClient @Inject constructor() {
     }
 
     /**
-     * 覆盖写入一个文件。
+     * 覆盖写入 / 只创建写入。
      *
      * ## 两条路径
      *
@@ -169,9 +200,15 @@ class OneDriveGraphClient @Inject constructor() {
      *   uploadSession 请求体里的 `ifMatch` 字段表达（Graph 支持，**不是** HTTP 头）。
      *
      * @param expectedETag ★ 上次 [stat] 拿到的 `eTag`；null = 调用方不对并发做保证。
+     *   ⚠️ 但 null **不等于"可以随便覆盖"**：见 [failIfExists] 与调用方
+     *   `OneDriveKdbxFileSource.write` 的写后读回校验（ISSUES #172）。
      * @param forceReplace ★ 用户明确选了"用本地覆盖远端"时的**唯一**合法入口 ——
      *   true 时走 `conflictBehavior=replace` **且不带条件**。
      *   ⚠️ 默认 false：**不要**在普通保存路径上传 true。
+     * @param failIfExists ★ **只创建**：目标已存在则失败，绝不覆盖。
+     *   实现走 HTTP 标准的 `If-None-Match: *`（RFC 9110），已存在时服务端回 412，
+     *   由 [OneDrivePreconditionFailedException] 承接。
+     *   ⚠️ 优先于 [expectedETag]：置 true 时**不再**发 `If-Match`（两者语义互斥）。
      * @return 写入后的新状态（含**新的** `eTag`，下一次条件写要用它）。
      */
     suspend fun upload(
@@ -180,11 +217,12 @@ class OneDriveGraphClient @Inject constructor() {
         bytes: ByteArray,
         expectedETag: String?,
         forceReplace: Boolean = false,
+        failIfExists: Boolean = false,
     ): OneDriveEntry = withContext(Dispatchers.IO) {
         if (bytes.size <= SIMPLE_UPLOAD_LIMIT_BYTES) {
-            simpleUpload(accessToken, path, bytes, expectedETag, forceReplace)
+            simpleUpload(accessToken, path, bytes, expectedETag, forceReplace, failIfExists)
         } else {
-            chunkedUpload(accessToken, path, bytes, expectedETag, forceReplace)
+            chunkedUpload(accessToken, path, bytes, expectedETag, forceReplace, failIfExists)
         }
     }
 
@@ -196,9 +234,10 @@ class OneDriveGraphClient @Inject constructor() {
         bytes: ByteArray,
         expectedETag: String?,
         forceReplace: Boolean,
+        failIfExists: Boolean,
     ): OneDriveEntry {
         val url = buildString {
-            append(GRAPH_BASE_URL).append(buildContentRelativeUrl(path))
+            append(baseUrl).append(buildContentRelativeUrl(path))
             // ★ 只有"用户明确选择覆盖"才带 replace。
             //   普通路径靠 `If-Match` 兜并发 —— 两者**不能同时**出现：
             //   replace 会让服务端跳过前置条件检查，那就等于无条件覆盖。
@@ -209,7 +248,18 @@ class OneDriveGraphClient @Inject constructor() {
             .header("Authorization", "Bearer $accessToken")
             .put(bytes.toRequestBody(KDBX_MIME_TYPE.toMediaType()))
             .apply {
-                if (!forceReplace && !expectedETag.isNullOrBlank()) {
+                // ★ 条件头三选一，顺序即优先级：
+                //   ① 只创建（If-None-Match: *）—— 标准语义，存在则 412
+                //   ② 条件覆盖（If-Match: etag）—— 必须还是那一版
+                //   ③ 什么都不带 —— ⚠️ **这是 2026-10-17 修掉的缺陷**：
+                //      原先只写了 ② ③，于是"无基线"直接变成"无条件覆盖同名文件"。
+                //      现在②③之间仍有可能走到③，但调用方（OneDriveKdbxFileSource）
+                //      会补写后读回校验兜底，见该类的 write。
+                if (forceReplace) {
+                    Unit
+                } else if (failIfExists) {
+                    header("If-None-Match", "*")
+                } else if (!expectedETag.isNullOrBlank()) {
                     header("If-Match", expectedETag)
                 }
             }
@@ -251,8 +301,15 @@ class OneDriveGraphClient @Inject constructor() {
         bytes: ByteArray,
         expectedETag: String?,
         forceReplace: Boolean,
+        failIfExists: Boolean,
     ): OneDriveEntry {
-        val uploadUrl = createUploadSession(accessToken, path, expectedETag, forceReplace)
+        val uploadUrl = createUploadSession(
+            accessToken,
+            path,
+            expectedETag,
+            forceReplace,
+            failIfExists,
+        )
 
         var offset = 0
         var lastDto = OneDriveDriveItemDto()
@@ -286,6 +343,7 @@ class OneDriveGraphClient @Inject constructor() {
      *
      * Graph 的 uploadSession **不用 `If-Match` 头**，而是把条件写成请求体里的字段：
      * - `conflictBehavior = "fail"` + `ifMatch = <eTag>` ⇒ 远端变了就拒（412）；
+     * - `conflictBehavior = "fail"`（无 `ifMatch`）= **只创建**，已存在就拒；
      * - `conflictBehavior = "replace"` ⇒ 无条件覆盖（用户拍板后的强写）。
      *
      * ⚠️ 这个差异很关键：如果照 `If-Match` 那样写，条件**根本不会生效**
@@ -301,18 +359,30 @@ class OneDriveGraphClient @Inject constructor() {
         path: String,
         expectedETag: String?,
         forceReplace: Boolean,
+        failIfExists: Boolean,
     ): String {
-        val sessionUrl = "$GRAPH_BASE_URL${buildCreateUploadSessionRelativeUrl(path)}"
-        val sessionBody = buildString {
-            append("""{"item":{"@microsoft.graph.conflictBehavior":""")
-            append(if (forceReplace) "replace" else "fail")
-            append("""}""")
-            if (!forceReplace && !expectedETag.isNullOrBlank()) {
-                // Graph 在 uploadSession 上用请求体里的 `ifMatch` 表达条件写
-                append(""","ifMatch":"$expectedETag"""")
-            }
-            append("}")
-        }
+        val sessionUrl = "$baseUrl${buildCreateUploadSessionRelativeUrl(path)}"
+        // ★ 请求体**交给序列化器生成**，不再手拼字符串。
+        //
+        //   ⚠️ 2026-10-17 修掉一个一直存在的**生产缺陷**（写单测时才发现）：
+        //   原先是 `append(if (forceReplace) "replace" else "fail")`，**值没加引号**，
+        //   实际发出的是 `{"item":{"@microsoft.graph.conflictBehavior":fail}}` ——
+        //   非法 JSON。Graph 会回 400，于是**任何超过 2MiB 的库文件在 OneDrive 上
+        //   都存不进去**（走的就是分片这条路），而界面只会显示"OneDrive 上传失败"。
+        //   这个 bug 活了很久没被发现，因为小库走简单上传、根本不经过这里。
+        //   手拼 JSON 的失败模式就是这样：少一对引号，编译器一声不吭。
+        val sessionBody = json.encodeToString(
+            OneDriveUploadSessionRequestDto(
+                item = OneDriveUploadSessionItemDto(
+                    conflictBehavior = if (forceReplace) "replace" else "fail",
+                    // ★ failIfExists 时**不带** ifMatch：两者的意图不同 ——
+                    //   "只创建"不关心远端是哪一版（存在就是错），带 ifMatch 反而会放过
+                    //   "恰好还是那一版"的覆盖（那等于把新建变成了覆盖）。
+                    ifMatch = expectedETag
+                        ?.takeIf { !forceReplace && !failIfExists && it.isNotBlank() },
+                ),
+            ),
+        )
         val sessionRequest = Request.Builder()
             .url(sessionUrl)
             .header("Authorization", "Bearer $accessToken")
@@ -389,7 +459,7 @@ class OneDriveGraphClient @Inject constructor() {
 
     private fun downloadBytes(relativeUrl: String, accessToken: String, context: String): ByteArray {
         val request = Request.Builder()
-            .url("$GRAPH_BASE_URL$relativeUrl")
+            .url("$baseUrl$relativeUrl")
             .header("Authorization", "Bearer $accessToken")
             .get()
             .build()
@@ -459,13 +529,75 @@ class OneDriveGraphClient @Inject constructor() {
     private fun encodePath(path: String): String = path
         .split('/')
         .filter { it.isNotBlank() }
-        .joinToString("/") { segment -> Uri.encode(segment) }
+        .joinToString("/") { segment -> percentEncodePathSegment(segment) }
+
+    /**
+     * 按 **RFC 3986 的路径段规则**做百分号编码（纯 Kotlin，不依赖 Android）。
+     *
+     * ## 为什么不再用 `Uri.encode`
+     *
+     * 2026-10-17 写条件头单测时被它挡住了：`Uri.encode` 是 `android.net` 的
+     * **桩方法**，JVM 单测里 `unitTests.isReturnDefaultValues = true` 会让它
+     * 直接返回 `null` ⇒ `encode(...) must not be null` 的 NPE，
+     * 于是**任何**走 Graph 的用例都跑不起来（实测 6 例全红，全是这个 NPE）。
+     *
+     * 当时有两条路：
+     * 1. 测试里绕开 —— 做不到，路径编码就在构造 URL 的主线上；
+     * 2. 换成纯 Kotlin 实现 —— **顺带消掉了一个隐藏的平台依赖**：
+     *    这函数本来就是纯字符串处理，没有任何理由绑 Android。
+     *
+     * 取第 2 条。编码集与 `Uri.encode` 对齐（`unreserved` + 允许的子分隔符），
+     * 因此**线上行为不变**：中文 → `%E4%B8%AD`、空格 → `%20`、`+` → `%2B`。
+     *
+     * ⚠️ **空格必须是 `%20` 而不是 `+`**（见上面 KDoc 里 2026-09-17 那条）：
+     * 路径里的 `+` 是字面加号，`URLEncoder` 那套表单规则在这里是错的。
+     */
+    private fun percentEncodePathSegment(segment: String): String {
+        val out = StringBuilder(segment.length)
+        for (byte in segment.toByteArray(Charsets.UTF_8)) {
+            val value = byte.toInt() and PATH_SEGMENT_MASK
+            val ch = value.toChar()
+            if (isPathSegmentSafe(ch)) out.append(ch) else out.appendPercentEncoded(value)
+        }
+        return out.toString()
+    }
+
+    /**
+     * 追加 `%XX`（大写十六进制，与 `Uri.encode` 一致）。
+     *
+     * ⚠️ 抽出来是为了把 [percentEncodePathSegment] 的复杂度拉回 detekt 门禁内：
+     * 一个 20 个 `||` 的大条件（`ComplexCondition` 上限 3）+ 一个循环（`CyclomaticComplexMethod`
+     * 上限 14）叠在一起必然撞红。**放宽阈值不是选项**（等于把这扇门关掉），
+     * 拆成"判一个字符 + 追加几个字符"两件独立的小事才是正解。
+     * 附带好处：`isPathSegmentSafe` 是个纯函数，可以脱离 HTTP 直接单测。
+     */
+    private fun StringBuilder.appendPercentEncoded(value: Int) {
+        append('%').append(HEX_UPPER[value shr HEX_SHIFT_BITS]).append(HEX_UPPER[value and HEX_LOW_NIBBLE])
+    }
+
+    /**
+     * 这个字符在 **URL 路径段**里是否可以原样出现（RFC 3986 §3.3）。
+     *
+     * 允许两类：
+     * - `unreserved`：ALPHA / DIGIT / `-` / `.` / `_` / `~`
+     * - `sub-delims` 里的 `!` `$` `&` `'` `(` `)` `*` `+` `,` `;` `=`
+     *   （保留下来只为减少输出噪音；Graph 对编不编都接受）
+     *
+     * ⚠️ 判断按 **Byte→Char** 做：调用方已经按 UTF-8 拆成字节，所以这里
+     * 只看 0–255 的单字节字符，中文必然落入"不安全"分支被编码 —— 这正是我们要的。
+     */
+    private fun isPathSegmentSafe(ch: Char): Boolean = when {
+        ch in 'A'..'Z' -> true
+        ch in 'a'..'z' -> true
+        ch in '0'..'9' -> true
+        else -> ch in PATH_SEGMENT_EXTRA_SAFE
+    }
 
     private fun executeJsonRequest(relativeOrAbsoluteUrl: String, accessToken: String): String {
         val url = if (relativeOrAbsoluteUrl.startsWith("https://", ignoreCase = true)) {
             relativeOrAbsoluteUrl
         } else {
-            "$GRAPH_BASE_URL$relativeOrAbsoluteUrl"
+            "$baseUrl$relativeOrAbsoluteUrl"
         }
         val request = Request.Builder()
             .url(url)
@@ -491,7 +623,7 @@ class OneDriveGraphClient @Inject constructor() {
         }
     }
 
-    private companion object {
+    companion object {
         const val TAG = "OneDriveGraph"
         const val GRAPH_BASE_URL = "https://graph.microsoft.com/v1.0"
         const val KDBX_MIME_TYPE = "application/x-keepass2"
@@ -533,7 +665,14 @@ class OneDriveGraphClient @Inject constructor() {
          * ⚠️ 判据用**目标 host** 而不是"是不是 302"：Graph 内部也可能有同域跳转，
          * 那种情况下摘头反而会 401。
          */
-        val client: OkHttpClient = OkHttpClient.Builder()
+        /**
+         * 生产用的默认客户端。
+         *
+         * ⚠️ 名字从 `client` 改成 `defaultClient`：原名叫 `client`，
+         * 与实例字段 `client` **同名**会让人误以为"companion 里那个就是实例用的"，
+         * 实际上改了构造参数后两者已经是两回事。改名是为了让这种误读不可能发生。
+         */
+        val defaultClient: OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(60, TimeUnit.SECONDS)
             .writeTimeout(60, TimeUnit.SECONDS)
@@ -553,7 +692,35 @@ class OneDriveGraphClient @Inject constructor() {
 
         const val GRAPH_HOST_SUFFIX = "graph.microsoft.com"
 
-        val json = Json { ignoreUnknownKeys = true }
+        /** 百分号编码用的十六进制字符表（大写，与 `Uri.encode` 一致）。 */
+        const val HEX_UPPER = "0123456789ABCDEF"
+
+        /** `Byte` 转无符号整数用（`and 0xFF`），去掉魔法数字。 */
+        const val PATH_SEGMENT_MASK = 0xFF
+
+        /** 一个字节 8 位 ⇒ 取高 4 位要右移 4 位（`%XX` 的高位半字节）。 */
+        const val HEX_SHIFT_BITS = 4
+
+        /** 取低 4 位（`%XX` 的低位半字节）。 */
+        const val HEX_LOW_NIBBLE = 0x0F
+
+        /**
+         * 路径段里除字母数字外**可以原样保留**的字符（RFC 3986 `sub-delims` 与 `-._~`）。
+         * 写成字符串常量而不是一串 `||`：既躲开 `ComplexCondition`，也让"哪些能留"一眼可见。
+         */
+        const val PATH_SEGMENT_EXTRA_SAFE = "-._~!$&'()*+,;="
+
+        /**
+         * ⚠️ `explicitNulls = false` **必须显式打开**（默认是 true）：
+         * 否则 `ifMatch = null` 会序列化成 `"ifMatch":null` 一起发出去，
+         * 而 Graph 对 uploadSession 的 `ifMatch` 只接受字符串 —— 收到 null 可能
+         * 回 400，也可能被当成"要匹配 null"直接拒。两种情况都比"不传"糟。
+         * `encodeDefaults = false`（默认值）保证带默认值的字段不会被顺手带上。
+         */
+        val json = Json {
+            ignoreUnknownKeys = true
+            explicitNulls = false
+        }
     }
 }
 
@@ -563,6 +730,27 @@ private data class OneDriveChildrenResponseDto(
     @SerialName("@odata.nextLink")
     val nextLink: String? = null,
     val value: List<OneDriveDriveItemDto> = emptyList(),
+)
+
+/**
+ * `createUploadSession` 的**请求体**。
+ *
+ * ⚠️ 用 DTO 而不是手拼字符串：字段名带 `@` 前缀、值需要加引号、条件字段时有时无 ——
+ * 三处手写都能出错，而且错了编译器不报（2026-10-17 就是因为漏引号，
+ * 让 >2MiB 的库在 OneDrive 上一直存不进去）。`encodeDefaults = false` 交给
+ * kotlinx-serialization 处理，`null` 字段自动省略。
+ */
+@Serializable
+private data class OneDriveUploadSessionRequestDto(
+    val item: OneDriveUploadSessionItemDto,
+)
+
+@Serializable
+private data class OneDriveUploadSessionItemDto(
+    @SerialName("@microsoft.graph.conflictBehavior")
+    val conflictBehavior: String,
+    /** 只有"覆盖且必须还是那一版"时才带上；`null` 时不会出现在 JSON 里。 */
+    val ifMatch: String? = null,
 )
 
 @Serializable
