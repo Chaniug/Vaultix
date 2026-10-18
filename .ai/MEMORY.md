@@ -1,11 +1,11 @@
 # Vaultix 项目长期笔记
 
 > **接力顺序（先读这四份，再动手）**：
-> 本文件（约定 / 硬约束 / 决策）→ `.ai/ISSUES.md`（坑：现象-根因-解法，最新 **#173**）→
+> 本文件（约定 / 硬约束 / 决策）→ `.ai/ISSUES.md`（坑：现象-根因-解法，最新 **#174**）→
 > `Docs/progress/next-steps.md`（待办，最新在顶部）→ `Docs/progress/current-status.md`（进度快照）
 > → `.ai/SESSION-YYYY-MM-DD.md`（逐轮流水，需要细节才翻）。
 >
-> 最后更新：2026-10-17（#172 修完后；§9 顶部的「最近几轮」才是真源，本行只记最后一次大改）。**本文件已压缩重写**：逐轮叙事折叠进
+> 最后更新：2026-10-18（#174 修完后；§9 顶部的「最近几轮」才是真源，本行只记最后一次大改）。**本文件已压缩重写**：逐轮叙事折叠进
 > 第 9 节「当前状态」与第 10 节「历史轮次索引」，只留「不知道就会写错、且错了不报错」的内容。
 >
 > ⚠️ **2026-09-26 起 §9 顶部才是"最近几轮"的唯一真源**；§10 的索引止于 2026-09-13，
@@ -144,6 +144,27 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 | [8.10 架构与目录地图](./conventions/8.10-架构与目录地图.md) | **东西在哪 + 该信哪份文档**（接力地图） | — |
 
 ## 9. 当前状态与下一批（接力起手式）
+
+> ⚡ **2026-10-18：#174 已修，CI 硬门禁转绿**（commit `214ea18` / run `39085733395`，
+> `> Task :app:testFullDebugUnitTest` 真实执行，非 `FROM-CACHE`）。
+> 上一轮 #173 记的"CI 单测步红"终于坐实到具体一例：
+> `UnlockViewModelTest > candidateVaultsExcludeTheTargetItself`，报
+> `Dispatchers.Main was accessed when the platform dispatcher was absent`。
+> - **机理**：`viewModelScope.launch { withContext(Dispatchers.IO) {…} }` 的**续体回主线程**
+>   是真线程 resume，而 `@After { Dispatchers.resetMain() }` 已把替身卸下 ⇒ **竞态**。
+>   ⚠️ `runTest` 自带的 `TestMainDispatcher` **只护虚拟调度器**，护不住真线程那条路。
+> - **解法**：`UnlockViewModel` 加两个 `internal var`（生产恒 null）——
+>   `testingScope`（默认 `viewModelScope`）、`testingIoDispatcher`（默认 `Dispatchers.IO`）；
+>   协程挂载点收敛到 `scope` / `io` 两个 getter。
+> - 🔴 **四条"更标准"的路全不通**（都实测）：构造参数默认值里读 `this` ⇒ `Cannot access '<this>'`；
+>   注入 `@HiltViewModel`（`Lazy`/`Provider`/`dagger.Lazy`）⇒ `prohibited`；
+>   可空构造参数 ⇒ `CoroutineScope cannot be provided`；**构造后赋值的 `var` 字段** ⇒ ✅。
+> - 🔴 **测试侧两坑**：① 只换 scope 不够（IO 段仍在真线程，实测 6 例报"没收到事件"）；
+>   ② `advanceUntilIdle()` 会把 `Channel` 缓冲快进掉 ⇒ "事件已发出、`prompts` 仍空"
+>   （改用 `runCurrent()` / `advanceTimeBy(1)`）。
+> - 本机 **377 例 0 失败**；变异验证 4 组各自精确命中（含"结构门禁"
+>   `overrideScopeIsActuallyUsedByTheViewModel`，用 Job 同一性钉"注入真的生效"）。
+> **下一步仍是两个真机项**（OneDrive `If-None-Match: *` 的 201/412、W6 KeePassXC 互操作）。
 
 > ⚡ **2026-10-17：#172 已修**（OneDrive 无基线写入 = 无条件覆盖；分片上传
 > uploadSession 请求体一直是**非法 JSON**）。全量门禁 **1155 例 0 失败**

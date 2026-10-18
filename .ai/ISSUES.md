@@ -9,7 +9,7 @@
 
 | 分篇 | 主题 | 条数 |
 |---|---|---|
-| [01-构建与环境](./issues/01-构建与环境.md) | 工程 / 构建 / CI / 工具链 / 环境 | 49 |
+| [01-构建与环境](./issues/01-构建与环境.md) | 工程 / 构建 / CI / 工具链 / 环境 | 50 |
 | [02-自动填充](./issues/02-自动填充.md) | 自动填充（AutofillService 链路） | 18 |
 | [03-通行密钥与凭据提供商](./issues/03-通行密钥与凭据提供商.md) | 通行密钥 / Credential Provider / 凭据回灌 | 18 |
 | [04-锁与解锁](./issues/04-锁与解锁.md) | 锁态模型 / 解锁 / 生物识别 / 密钥 | 12 |
@@ -37,7 +37,7 @@
 
 ## 编号 → 分篇
 
-### [01-构建与环境](./issues/01-构建与环境.md) — 工程 / 构建 / CI / 工具链 / 环境（49 条，缺 #3、#8、#15、#16、#20…：#3/15 归 04、#16 归 02、#20 归 06）
+### [01-构建与环境](./issues/01-构建与环境.md) — 工程 / 构建 / CI / 工具链 / 环境（50 条，缺 #3、#8、#15、#16、#20…：#3/15 归 04、#16 归 02、#20 归 06）
 
 | # | 标题 |
 |---|---|
@@ -89,6 +89,7 @@
 | 168 | ⭐ detekt 两个「顶格」类：给贴上限的类加分支前先腾位（CardWalletScreen 17 / ItemFormDialog 16 / QuickUnlockController 41 函数接连撞红 ⇒ 新分支一律抽文件级纯函数，天然可单测） |
 | 171 | 🔴 过期 test-results XML 误导核数：编译失败时旧 XML 残留 ⇒ 核数脚本数出幽灵失败（`Card条目_载荷守卫` FAIL 实为 22:47 变异验证残留）。判据：核数结论与当次日志矛盾时，先怀疑读到的数据不是这次的（先对 XML mtime） |
 | 173 | 🔴 **沙箱里"全绿"的 1155 例，推到 CI 却红在单测步**：本地 `~/.gradle` 里的 build-cache 命中会 `FROM-CACHE` 返回**旧 test-results** ⇒ `--rerun-tasks` 与"XML mtime 晚于启动"两条判据**同时失效**。用 A/B 实验隔离（移走改动⇒CI 绿 / 注入一条故意失败⇒CI 红且无 continue-on-error）。⚠️ `gh cache delete` 清 CI 缓存来"消毒"会把一次隔离实验变成两次未知 —— 别做。⚠️ 步骤名以 `[` 开头会被 YAML 当流序列 ⇒ workflow 解析失败、0 秒红、`jobs` 为空 |
+| 174 | 🔴 CI 单测那一条红的真相：`UnlockViewModelTest > candidateVaultsExcludeTheTargetItself` 报 `Dispatchers.Main was accessed when the platform dispatcher was absent`（`TestMainDispatcher.isDispatchNeeded`）。机理：`viewModelScope.launch { withContext(IO) {…} }` 的**续体回主线程**是真线程 resume，而 `@After resetMain()` 已把替身卸下 ⇒ **竞态**（同文件另两条同款代码没红）。⚠️ `runTest` 自带的 `TestMainDispatcher` 只护虚拟调度器，护不住真线程那条路。解法：VM 加 `testingScope` / `testingIoDispatcher` 两个 `internal var`（生产恒 null ⇒ `viewModelScope` / `Dispatchers.IO`）。🔴 四条"更标准"的路全不通：默认值里读 `this` 报 `Cannot access '<this>'`、注入 `@HiltViewModel` 报 `prohibited`、可空构造参数报 `CoroutineScope cannot be provided`。测试侧两坑：只换 scope 不够（IO 段仍在真线程）、`advanceUntilIdle` 会把 Channel 缓冲快进掉（改 `runCurrent` / `advanceTimeBy(1)`） |
 | 172 | 🔴 OneDrive 无基线写入 = **无条件覆盖**（`expectedVersion = null` 时一个条件头都不发）；且 `createUploadSession` 手拼 JSON **值漏引号** ⇒ 任何 > 2MiB 的库在 OneDrive 上**从来没存进去过**。解法：接口加独立参数 `failIfExists`（不靠 null 推断）+ OneDrive 补写后读回校验 + 请求体改 DTO。判据：**"实现方遵守契约"不能靠调用方自觉来兜**。附三个坑：`Uri.encode` 是 Android 桩方法（返回 null）、`runTest` 测不了真线程（改 `runBlocking`）、Hilt 不接受带默认值参数的 `@Inject constructor` |
 
 ### [02-自动填充](./issues/02-自动填充.md) — 自动填充（AutofillService 链路）

@@ -2,6 +2,24 @@
 
 ---
 
+## ✅ #174 已修（2026-10-18）· 解锁页协程作用域可注入，CI 单测步转绿
+
+| 项 | 一句话 | 落点 |
+|---|---|---|
+| ① 取到红了 | CI `Run unit tests (hard gate)` 只红一例：`UnlockViewModelTest > candidateVaultsExcludeTheTargetItself`，`Dispatchers.Main was accessed when the platform dispatcher was absent` | 工件 `debug-unit-test-reports` |
+| ② 机理 | `viewModelScope.launch { withContext(IO) {…} }` 的续体回主线程是真线程 resume，而 `@After resetMain()` 已把 `TestMainDispatcher` 卸下 ⇒ 竞态 | — |
+| ③ 修法 | `testingScope` / `testingIoDispatcher` 两个 `internal var`（生产恒 null），协程挂载点收敛到 `scope` / `io` | `UnlockViewModel` |
+| ④ 测试 | 注入 `TestScope` + `StandardTestDispatcher(testScheduler)`；等待从"轮询真实终态 + 5s 超时"改写为 `runCurrent()` / `advanceTimeBy(1)` | `UnlockViewModelTest` / `StaleRoomResealTest` |
+| ⑤ 门禁 | 新增 `overrideScopeIsActuallyUsedByTheViewModel`（Job 同一性）+ `promptCarriesTheFilteredCandidateVaults`（端到端），断言未放宽 | 同上 |
+
+**实证**：本地 app 单测真实执行（任务行非 `FROM-CACHE`）**377 例 0 失败**
+（原 375 + 2 条新门禁）；CI run `39085733395` **success**，硬门禁日志含
+`> Task :app:testFullDebugUnitTest` 与 `BUILD SUCCESSFUL`；detekt / 编码检查 /
+索引校验 ✅；`lintFullDebug` 仍为存量 34 errors（与基线逐条一致）。
+变异验证 4 组各自精确命中（细节见 `.ai/issues/01-构建与环境.md` #174）。
+
+---
+
 ## ✅ #172 已修（2026-10-17）· OneDrive 无基线覆盖 + 分片上传非法 JSON
 
 | 项 | 一句话 | 落点 |
@@ -17,13 +35,25 @@ datastore 18 / model 5，净增 13 例）；变异验证 **6 组全部精确命�
 detekt / 编码检查 ✅。`lintFullDebug` 报 34 errors，但在 `82baef8` 基线 worktree
 上跑出**完全相同的 34 条**（逐条消息比对，差异集为空）⇒ 与改动无关，属存量。
 
-### ⚠️ 未闭环：CI 单测步是红的（#173）
+### ✅ 已闭环：CI 单测步的红（#173 → #174，2026-10-18 修）
 
-本地"1155 例 0 失败"**不可信**：沙箱 `~/.gradle` 的 build-cache 命中也算成功，
-`FROM-CACHE` 跳过执行却恢复旧 test-results。已用 A/B 实验确认 CI 那一步是真门禁
-（移走改动 ⇒ 绿；注入 `fail()` ⇒ 红）。**待办：取证到底红了哪几例**
-（CI 日志/工件下载需 token，匿名 401）。新判据：任务行必须是 `> Task :x:test…`，
-不能是 `FROM-CACHE` / `UP-TO-DATE`。
+拿到 PAT 之后取到真相：**只红一例** ——
+`UnlockViewModelTest > candidateVaultsExcludeTheTargetItself`
+（`375 tests completed, 1 failed`），报
+`IllegalStateException: Dispatchers.Main was accessed when the platform dispatcher
+was absent`（`TestMainDispatcher.isDispatchNeeded`）。
+
+- **机理**：VM 里 `viewModelScope.launch { withContext(Dispatchers.IO) {…} }` 的
+  **续体回主线程**是真线程 resume；而 JVM 单测的 `Dispatchers.Main` 只是替身
+  （`kotlinx-coroutines-android` 不在测试 classpath），`@After resetMain()` 一卸
+  ⇒ 真线程恰好在这之后 resume 就炸。同文件另两条同款代码没红 ⇒ **竞态**。
+- **修法**：`UnlockViewModel` 加 `testingScope` / `testingIoDispatcher` 两个
+  `internal var`（生产恒 null ⇒ `viewModelScope` / `Dispatchers.IO`），
+  测试注入 `TestScope` + `StandardTestDispatcher(testScheduler)`，等待转成确定性虚拟时间。
+- **结果**：本地 `:app:testFullDebugUnitTest` 真实执行 **377 例 0 失败**
+  （任务行非 `FROM-CACHE`）；CI run `39085733395` 硬门禁
+  `> Task :app:testFullDebugUnitTest` + `BUILD SUCCESSFUL`。
+- 细节与四条"更标准的路为何不通"见 `.ai/issues/01-构建与环境.md` #174。
 
 ### 下一步
 
