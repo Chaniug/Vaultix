@@ -95,14 +95,46 @@ interface VaultLockManager {
     /** 锁定指定库。[isUserInitiated] 表示是否由用户主动触发（区别于超时自动锁定）。 */
     fun lockVault(vaultId: String, isUserInitiated: Boolean)
 
-    /** 锁定当前活动库（若有）。 */
-    fun lockVaultForCurrentUser(isUserInitiated: Boolean)
+    /**
+     * 锁定**全部**已解锁库（用户主动）。
+     *
+     * ⚠️ **2026-10-18 取代 `lockVaultForCurrentUser`**：那个方法只锁
+     * `activeVaultId`（= 首个已注册库），而它唯一的调用方是
+     * `AutoLockController.lockAllNow()`，对外承诺的是「**全部**库」。
+     * 多库下第二、三个库会**静默保持解锁** —— 用户点了"锁定"，界面上却还能进去。
+     * 这与 [VaultRepository.lockAll] 的语义不一致，也违背 D1「锁全=真锁」。
+     *
+     * ⇒ 直接转发到仓储的 [VaultRepository.lockAll]（房钥匙清零 + 删自动恢复信封），
+     * 语义只有一处定义，本类不再自己实现一遍。
+     */
+    fun lockAll(isUserInitiated: Boolean)
 
     /** 解锁指定库（主密码 / 2FA / 本地快速解锁均走此处或其专用方法）。 */
     suspend fun unlockVault(vaultId: String, masterPassword: String): UnlockResult
 
     /** 挂起直到指定库解锁（供凭据流程等待解锁完成）。 */
     suspend fun waitUntilUnlocked(vaultId: String)
+
+    /**
+     * 开始观察仓储的库列表（活动库 + 锁态快照）。**幂等**，由 `VaultixApplication.onCreate` 调用。
+     *
+     * ## ⚠️ 为什么启动时机要交出来，而不是在构造时就自启（2026-10-18）
+     *
+     * 原实现在 `init { scope.launch { observeVaults().collect { … } } }` 里自启。那条协程：
+     *
+     * 1. 在**构造期**就派发，那时测试的调度器覆写口还没赋值 ⇒ 它落在
+     *    `Dispatchers.Default` 上，虚拟时钟永远推不动；
+     * 2. 是**无界 `collect`**（永不结束），`runTest` 判断"是否还有待办"会被它搅乱 ⇒
+     *    单测出现"同一次构建里两条互斥断言同时红、且每次红的不是同一条"的随机结果。
+     *
+     * 把启动变成一个显式步骤后，测试可以「先注入调度器 → 再 start」，
+     * 生产行为完全不变（`VaultixApplication.onCreate` 里紧跟 Hilt 注入调用）。
+     *
+     * 默认实现为空，是为了不逼着测试替身去实现它。
+     */
+    fun startObservingVaults() {
+        // 默认无操作。
+    }
 
     /**
      * 应用进入后台。

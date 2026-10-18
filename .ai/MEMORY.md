@@ -1,11 +1,11 @@
 # Vaultix 项目长期笔记
 
 > **接力顺序（先读这四份，再动手）**：
-> 本文件（约定 / 硬约束 / 决策）→ `.ai/ISSUES.md`（坑：现象-根因-解法，最新 **#174**）→
+> 本文件（约定 / 硬约束 / 决策）→ `.ai/ISSUES.md`（坑：现象-根因-解法，最新 **#175**）→
 > `Docs/progress/next-steps.md`（待办，最新在顶部）→ `Docs/progress/current-status.md`（进度快照）
 > → `.ai/SESSION-YYYY-MM-DD.md`（逐轮流水，需要细节才翻）。
 >
-> 最后更新：2026-10-18（#174 修完后；§9 顶部的「最近几轮」才是真源，本行只记最后一次大改）。**本文件已压缩重写**：逐轮叙事折叠进
+> 最后更新：2026-10-18（#175 修完后；§9 顶部的「最近几轮」才是真源，本行只记最后一次大改）。**本文件已压缩重写**：逐轮叙事折叠进
 > 第 9 节「当前状态」与第 10 节「历史轮次索引」，只留「不知道就会写错、且错了不报错」的内容。
 >
 > ⚠️ **2026-09-26 起 §9 顶部才是"最近几轮"的唯一真源**；§10 的索引止于 2026-09-13，
@@ -144,6 +144,38 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 | [8.10 架构与目录地图](./conventions/8.10-架构与目录地图.md) | **东西在哪 + 该信哪份文档**（接力地图） | — |
 
 ## 9. 当前状态与下一批（接力起手式）
+
+> ⚡ **2026-10-18（第二轮）：#175 已修 —— 单测"随机假红"的总闸**。
+> 起因：`VaultLockManagerImplNeverTest` 改成虚拟时钟后**偶发 1–2 条红、每次红的不同**，
+> 甚至出现**两条互斥断言同时红**（`非Never档_切后台_不立即锁` 报 "should not be called"，
+> 同一次构建里 `非Never档_切后台满5分钟_锁定` 报 "was not called"）。
+> - **根因（在实现里，不在测试里）**：`VaultLockManagerImpl` / `AutoLockController`
+>   原来都在 **`init { scope.launch { … collect … } }`** 里自启收集协程。两层后果：
+>   ① **构造期派发** —— `launch` 发生在构造期间，`testingIoDispatcher` 只能在构造后赋值
+>   ⇒ 这一发已派到 `Dispatchers.Default`，虚拟时钟**永久推不动它**；
+>   ② **无界 `collect`** —— 永不结束，`runTest` 的 idle 判据被它搅乱 ⇒ 红哪条每次都变。
+> - **解法**：启动从 `init` 移出 ⇒ `startObservingVaults()` / `startCollecting()`（均幂等），
+>   生产在 `VaultixApplication.onCreate` 显式调；测试顺序固定为"先注入调度器 → 再 start"。
+> - 🔴 **两条不通的路（别重试）**：`scope` 改 getter（`init` 构造期就取走了）；
+>   自定义 `CoroutineDispatcher` 包装做"延迟解析"（`delay` **永不恢复**：
+>   `timer started` 5 次 / `fired` **0 次** —— 虚拟时钟要求上下文里的 dispatcher **就是**
+>   `TestDispatcher` 本身）。
+> - **虚拟时钟三条规则**（同一天连踩四轮才定）：`settle(m)`（反复 `runCurrent()` 直到
+>   **定时器计数稳定**）建钟不推钟 → 断言"不该锁"用 `advanceTimeBy(N-1)` + `runCurrent()`
+>   （**不能**跟 `advanceUntilIdle`，它会补齐那 1ms）→ 断言"会锁"用 `advanceTimeBy(N)` + `advanceUntilIdle()`。
+>   ⚠️ **`advanceUntilIdle` 不能用来表达"时间过去了多少"**，它把**所有** `delay` 推到尽头。
+> - 新增 `internal fun timerCountForTest()` 作为 `settle` 的收敛信号（判据是"计数稳定"，
+>   不是"跑了几轮"）。顺带删掉测试里一个**从未使用**的 `StandardTestDispatcher` 字段。
+> - **`AutoLockController` 此前零测试**，现补 6 条（`AutoLockControllerTest`）。
+> - 门禁：`:app:testFullDebugUnitTest --rerun-tasks` 真实执行 **388 例 0 失败**
+>   （原 377 + `AutoLockControllerTest` 6 + `VaultLockManagerImplNeverTest` 8→13 的净增 5）；
+>   `security.*` 整包 **19 例 × 连跑 6 次全绿**；detekt ✅（`--rerun-tasks` 真跑，非 UP-TO-DATE）；
+>   8 个 Python 静态检查全 OK；
+>   **变异验证 6 组全部精确命中**（红的条数 6/3/2/3/1/1，每组都能一句话解释范围）。
+> - 另一个产品缺陷（同轮早先）已修：`AutoLockController.lockAllNow()` 原来转发
+>   `lockVaultForCurrentUser`（**只锁活动库**），与"清零**全部**库"的文案不符 ⇒
+>   改转发 `VaultLockManager.lockAll()`。⚠️ 该入口目前是**生产零调用**的死链（见其 KDoc）。
+> **下一步仍是两个真机项**（OneDrive `If-None-Match: *` 的 201/412、W6 KeePassXC 互操作）。
 
 > ⚡ **2026-10-18：#174 已修，CI 硬门禁转绿**（commit `214ea18` / run `39085733395`，
 > `> Task :app:testFullDebugUnitTest` 真实执行，非 `FROM-CACHE`）。

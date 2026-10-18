@@ -15,14 +15,26 @@
  * 保留 [lockEvents] 是为了向后兼容既有的导航回根机制
  * （`VaultShellViewModel.lockEpoch` ← 本流；UI 收到新值即把导航栈弹回根）。
  * 该计数器改由锁定事件驱动，语义与重写前一致。
+ *
+ * ## ⚠️ [lockAllNow] 目前是**生产零调用**的入口（如实记录，别当活代码用）
+ *
+ * 它唯一的调用方是 `SettingsViewModel.lockAllNow()`，而设置页**没有**再调后者
+ * （`setting_lock_now` 文案零引用；`.ai/issues/04` #60 步 3 已把这一行换成「退出数据库」）。
+ * ⇒ 这是一条**带单测的死链**。
+ *
+ * 留着而不是删：2026-10-18 修的是它**自己**的正确性（原来只锁活动库），
+ * 而"要不要把它接回某个 UI"是产品决策、不是代码缺陷。
+ * **也别因为"没人调"就删掉那条测试** —— 那会让这个缺陷在它被接回时无人知晓。
  */
 
 package io.vaultix.vaultix.security
 
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -52,8 +64,45 @@ class AutoLockController @Inject constructor(
     private val lockManager: VaultLockManager,
 ) : DefaultLifecycleObserver {
 
+    private val supervisorJob = SupervisorJob()
+
+    /**
+     * 本类后台协程的 scope。
+     *
+     * ⚠️ 必须是 **getter**：属性初始化按声明顺序求值，写成
+     * `private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)` 时，
+     * 它在构造那一刻就固化，测试后赋值的 [testingIoDispatcher] 追不上。
+     * 每次读新建一个 `CoroutineScope` 包装，但 Job 只有一个（[supervisorJob]）。
+     *
+     * ⚠️⚠️ **别用自定义 `CoroutineDispatcher` 来做"延迟解析"**（2026-10-18 实测踩过）：
+     * 试过 `dispatch` 时现查 `ioDispatcher` 的包装调度器，`delay` **永远醒不过来** ——
+     * 虚拟时钟的恢复要求上下文里的 `CoroutineDispatcher` **就是** `TestDispatcher` 本身，
+     * 中间套一层它就认不出来了。
+     *
+     * ⇒ 收集协程"构造期就派发到真线程池"这个真问题，是靠 [startCollecting] **显式启动**
+     *   解决的（见其 KDoc），不是靠调度器包装。
+     */
     @Suppress("InjectDispatcher")
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val scope: CoroutineScope
+        get() = CoroutineScope(supervisorJob + ioDispatcher)
+
+    private val ioDispatcher: CoroutineDispatcher
+        get() = testingIoDispatcher ?: Dispatchers.Default
+
+    /**
+     * 测试替身调度器（**生产恒 `null`**）。
+     *
+     * 为什么需要它：本类会把一个收集协程挂到 `vaultStateEventFlow` 上。若 scope 硬编码
+     * `Dispatchers.Default`，测试就只能**真实时间轮询**「收集协程挂上了没有」
+     * （`subscriptionCount > 0`）—— 纯等待，慢且带运气成分（第一版就是在 `emit`
+     * 早于订阅时丢事件而假红）。注入 `StandardTestDispatcher(testScheduler)` 后，
+     * 收集点直接落在虚拟时钟上，判定变成**确定性顺序**而非计时。
+     *
+     * ⚠️ 别改成构造参数/`@Inject`：`@HiltViewModel` 的校验插件会拒（`prohibited`），
+     *    Dagger 会报 `MissingBinding`。**构造后赋值的 `internal var` 是实测唯一能过的路。**
+     */
+    @Volatile
+    internal var testingIoDispatcher: CoroutineDispatcher? = null
 
     private val _lockEvents = MutableStateFlow(0)
 
@@ -83,16 +132,40 @@ class AutoLockController @Inject constructor(
      */
     val isForeground: StateFlow<Boolean> = _isForeground.asStateFlow()
 
-    init {
-        // 锁定事件 → 代次自增（驱动导航回根）。
-        lockManager.vaultStateEventFlow
+    /**
+     * 启动「锁定事件 → 代次」的收集（**幂等**）。
+     *
+     * ## ⚠️ 为什么不在 `init` 里做（2026-10-18 实测踩过，别搬回去）
+     *
+     * 原来是 `init { …launchIn(scope) }`。`launchIn` 会**立即** `dispatch` 一次，而那次
+     * dispatch 发生在**构造期间** —— 那时 [testingIoDispatcher] 还没被赋值（它只能在
+     * 构造后赋），于是这一发落到 `Dispatchers.Default` 上。此后 `runTest` 的虚拟时钟
+     * **永远推不动它**：实测 `subscriptionCount` 恒为 0，6 条用例全红。
+     *
+     * ⇒ 启动时机交给调用方：
+     * - **生产**：`VaultixApplication.onCreate` 里显式调一次（紧跟 Hilt 注入之后）；
+     * - **测试**：先给 [testingIoDispatcher] 赋值，再调本方法 ⇒ 收集协程直接落在测试调度器上。
+     *
+     * 幂等：重复调用不会挂两个收集器（`collecting` 标记）。
+     *
+     * @return 收集用的 `Job`；重复调用返回同一个
+     */
+    fun startCollecting(): Job {
+        collectingJob?.let { return it }
+        val job = lockManager.vaultStateEventFlow
             .onEach { event ->
                 if (event is VaultStateEvent.Locked) {
                     _lockEvents.update { it + 1 }
                 }
             }
             .launchIn(scope)
+        collectingJob = job
+        return job
     }
+
+    /** [startCollecting] 的幂等守卫（见其 KDoc）。 */
+    @Volatile
+    private var collectingJob: Job? = null
 
     override fun onStop(owner: LifecycleOwner) {
         _isForeground.value = false
@@ -104,8 +177,14 @@ class AutoLockController @Inject constructor(
         lockManager.onAppForegrounded()
     }
 
-    /** 供「立即锁定」等入口直接调用（幂等）。 */
+    /**
+     * 供「立即锁定」等入口直接调用（幂等）。
+     *
+     * ⚠️ 2026-10-18：原来转发 `lockManager.lockVaultForCurrentUser`，**只锁活动库**，
+     * 而本方法名叫 `lockAllNow`、`setting_lock_now_desc` 写的也是"全部库" ——
+     * 多库下第二个库会静默保持解锁。现转发 [VaultLockManager.lockAll]。
+     */
     fun lockAllNow() {
-        lockManager.lockVaultForCurrentUser(isUserInitiated = true)
+        lockManager.lockAll(isUserInitiated = true)
     }
 }

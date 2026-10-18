@@ -39,6 +39,7 @@ import io.vaultix.datastore.VaultTimeout
 import io.vaultix.datastore.VaultTimeoutPreferences
 import io.vaultix.domain.UnlockResult
 import io.vaultix.domain.VaultRepository
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -83,8 +84,56 @@ class VaultLockManagerImpl @Inject constructor(
 
     // 进程级短任务 scope（启动/取消定时器）。项目当前唯一的调度器限定符是
     // @CryptoDispatcher（语义 = KDF/加解密 CPU 密集），用在这里会混淆语义。
+    //
+    // ⚠️ **必须是 getter，不能是 `val scope = …`（2026-10-18 实测踩过）**：
+    //    属性初始化按**声明顺序**求值，`scope` 声明在 [testingIoDispatcher] **之前**，
+    //    写成 `private val scope = …` 时它在构造那一刻就被求值 ⇒ 覆写口后来赋值追不上
+    //    （实测：测试里 `scope.coroutineContext` 打印出 `Dispatchers.Default`，
+    //    虚拟时钟推了 300_000ms，定时器纹丝不动、`lockVault` 一次都没调）。
+    //    改成 getter 后每次读取都重新取 [ioDispatcher] ⇒ 与声明顺序无关。
+    //    Job 仍然只建一次（[supervisorJob]），所以每次读出来的 `scope` 共享同一个 Job。
+    private val supervisorJob = SupervisorJob()
+
+    /**
+     * 本类所有后台协程的 scope。
+     *
+     * ⚠️ 必须是 **getter**：属性初始化按声明顺序求值，写成 `val` 会在构造那一刻固化。
+     * 每次读新建一个 `CoroutineScope` 包装，但 Job 是同一个（[supervisorJob]），不会分裂。
+     *
+     * ⚠️⚠️ **别换成自定义 `CoroutineDispatcher` 做"延迟解析"**（2026-10-18 实测踩过）：
+     * 试过让 `dispatch` 现查 `ioDispatcher` 的包装调度器，结果是 **`delay` 永远醒不过来** ——
+     * 虚拟时钟的恢复依赖上下文里的 `CoroutineDispatcher` **就是** `TestDispatcher` 本身，
+     * 中间套一层就认不出来了（实测：`timer coroutine started` 出现 5 次，`timer fired` 0 次）。
+     */
     @Suppress("InjectDispatcher")
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val scope: CoroutineScope
+        get() = CoroutineScope(supervisorJob + ioDispatcher)
+
+    /**
+     * ★ 2026-10-18（#130 同族隐患）：**只给单测用**的调度器覆写口，生产恒 `null`。
+     *
+     * 以前这里是硬编码 `Dispatchers.Default`，后果是测试里 `runTest` 的虚拟时钟
+     * **完全管不到本类**：
+     * - 定时器的 `delay(5 分钟)` 要走 5 分钟真实时间 ⇒ 「5 分钟档到点该锁」这条
+     *   核心语义**在单测里根本没法验**，只能拿 0 分钟档（`Immediately`）绕过去；
+     * - 断言"没发生"的用例只能靠 `withContext(Dispatchers.Default) { delay(500) }`
+     *   真实等待，而**等待只能证明"这段时间内没发生"**（详见 #130）。
+     *
+     * 换成 `StandardTestDispatcher(testScheduler)` 之后，测试可以
+     * `advanceTimeBy(5 分钟)` 直接跳到到点瞬间，判定变成**确定性**的。
+     *
+     * ⚠️ 为什么是**构造后赋值的 `var`** 而不是构造参数：`dagger.Lazy` /
+     *    `kotlin.Lazy` / 可空构造参数 / 默认值里读 `this` 四条路都实测不通
+     *    （`@HiltViewModel` 禁注入、Dagger 缺绑定、Kotlin 禁止在 init 前读 `this`），
+     *    详见 `.ai/issues/01-构建与环境.md` #174。这里同款写法，保持一致。
+     */
+    @Volatile
+    internal var testingIoDispatcher: CoroutineDispatcher? = null
+
+    /** 本类所有后台协程用的调度器。生产 = `Dispatchers.Default`，测试 = [testingIoDispatcher]。 */
+    private val ioDispatcher: CoroutineDispatcher
+        get() = testingIoDispatcher ?: Dispatchers.Default
+
 
     /** 当前活动库 id（Vaultix 一服务器一账号，取首个已注册的库）。 */
     @Volatile
@@ -107,7 +156,30 @@ class VaultLockManagerImpl @Inject constructor(
     //   详见接口 `VaultLockManager` 的 KDoc。
 
     init {
-        scope.launch {
+        registerScreenOnReceiver()
+    }
+
+    /**
+     * 开始观察仓储的库列表，维护 [activeVaultId] 与锁态快照（**幂等**）。
+     *
+     * ## ⚠️ 为什么不在 `init` 里做（2026-10-18 实测踩过，别搬回去）
+     *
+     * 原来 `init { scope.launch { observeVaults().collect { … } } }`。问题有两层：
+     *
+     * 1. **构造期派发**：`launch` 在构造期间就派发，那时 [testingIoDispatcher] 还没被赋值
+     *    ⇒ 收集协程永久跑在 `Dispatchers.Default` 上，测试的虚拟时钟**推不动它**；
+     * 2. **它是无界 `collect`**：这条协程永不结束。`runTest` 判断"是否还有待办"时会被它
+     *    搅乱，表现为**同一次构建里不同用例给出互相矛盾的结果**（"到点该锁"红、
+     *    "到点前不该锁"也红），而且红哪条每次都不一样。
+     *
+     * 修法与 `AutoLockController.startCollecting` 一致：**启动时机交给调用方**。
+     * 生产在 `VaultixApplication.onCreate` 调；测试先注入调度器再调。
+     *
+     * 幂等：重复调用不会挂两个收集器。
+     */
+    override fun startObservingVaults() {
+        if (observingJob != null) return
+        observingJob = scope.launch {
             vaultRepository.observeVaults().collect { vaults ->
                 activeVaultId = vaults.firstOrNull()?.id
                 // 锁态快照：把仓储的 unlocked 布尔映射为本管理器的三态模型。
@@ -119,8 +191,11 @@ class VaultLockManagerImpl @Inject constructor(
                     .map { VaultUnlockData(it.id, VaultUnlockData.Status.UNLOCKED) }
             }
         }
-        registerScreenOnReceiver()
     }
+
+    /** [startObservingVaults] 的幂等守卫。 */
+    @Volatile
+    private var observingJob: Job? = null
 
     /**
      * 注册亮屏广播接收器（对齐 Bitwarden `init { context.registerReceiver(...) }`）。
@@ -166,9 +241,28 @@ class VaultLockManagerImpl @Inject constructor(
         setVaultToLocked(vaultId)
     }
 
-    override fun lockVaultForCurrentUser(isUserInitiated: Boolean) {
-        val vaultId = activeVaultId ?: return
-        lockVault(vaultId, isUserInitiated)
+    /**
+     * 锁定**全部**已解锁库。
+     *
+     * ⚠️ 2026-10-18：取代原来的 `lockVaultForCurrentUser`（只锁 `activeVaultId`）。
+     * 那个实现与唯一调用方 `AutoLockController.lockAllNow()` 承诺的「全部库」矛盾，
+     * 多库下会静默留下未锁的库。见接口 KDoc。
+     *
+     * 先撤**全部**定时器再锁：锁定后残留的 job 到点还会再锁一次（幂等但多余），
+     * 更糟的是它会在 `timerJobMap` 里留下一个已锁库的条目，被 [onScreenOn] 拿去补偿。
+     */
+    override fun lockAll(isUserInitiated: Boolean) {
+        timerJobMap.keys.toList().forEach { cancelTimer(it) }
+        scope.launch {
+            // 锁态由仓储的 `observeVaults()` 回流更新（与 `lockVault` 同一条路径），
+            // 不在这里手工改 `_vaultUnlockDataStateFlow` —— 状态只有一个真源。
+            vaultRepository.lockAll()
+            // 事件逐个库发：`AutoLockController` 收 `Locked` 即自增代次（导航回根），
+            // 发多个也只是多自增几次、UI 幂等地回根。
+            _vaultUnlockDataStateFlow.value.forEach { data ->
+                _vaultStateEventFlow.tryEmit(VaultStateEvent.Locked(data.vaultId))
+            }
+        }
     }
 
     override suspend fun unlockVault(vaultId: String, masterPassword: String): UnlockResult {
@@ -417,6 +511,20 @@ class VaultLockManagerImpl @Inject constructor(
      * 正确做法是**新增一个独立档位**，而不是把它塞回 `Never` ——
      * 见 `.ai/decisions/快速解锁房子化-两级钥匙层级-定稿.md` § 二次定稿。
      */
+
+    /**
+     * **单测用**：当前挂着的定时器数量。生产代码零调用，只读、无副作用。
+     *
+     * 为什么需要暴露：测试要表达"**定时器已经挂好、但一个刻度都还没推**"这个状态，
+     * 而 `runTest` 没有现成的原语表达它（`runCurrent()` 跑几轮才够取决于内部跳数，
+     * `advanceUntilIdle()` 又会把定时器直接推到到点）。有了这个计数，
+     * 测试就能用"反复 `runCurrent()` 直到计数稳定"来收敛（见测试里的 `settle`），
+     * 把"跑几轮"这种脆弱的手工算术换成可断言的信号。
+     *
+     * ⚠️ 别把它当产品 API：将来若有人真的需要"当前有几个定时器在跑"，
+     * 应当新增一个正式方法并想清楚并发语义（`timerJobMap` 当前不是线程安全的）。
+     */
+    internal fun timerCountForTest(): Int = timerJobMap.size
 
     /** 取消并移除指定库的定时器。 */
     private fun cancelTimer(vaultId: String) {

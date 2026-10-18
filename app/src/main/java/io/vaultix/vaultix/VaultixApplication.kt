@@ -112,7 +112,14 @@ class VaultixApplication : Application() {
         }
         // 自动锁定：进程前台/后台事件（Docs/10 §4）
         ProcessLifecycleOwner.get().lifecycle.addObserver(autoLockController)
+        // 锁定事件 → 导航回根代次。**必须显式启动**（2026-10-18：原来是 init 里自启，
+        // 但 init 期间还没有机会注入测试调度器 ⇒ 单测里收集器挂不到虚拟时钟上）。
+        autoLockController.startCollecting()
         // 进程创建：按档位决定是否立即上锁（含 autofill 豁免）。
+        // 库列表观察（活动库 + 锁态快照）。**必须显式启动** —— 见
+        // `VaultLockManagerImpl.startObservingVaults` 的 KDoc（构造期派发 + 无界 collect
+        // 会把单测的虚拟时钟搅乱）。
+        lockManager.startObservingVaults()
         lockManager.onAppCreated(
             isFirstCreation = true,
             createdForAutofill = createdForAutofill,

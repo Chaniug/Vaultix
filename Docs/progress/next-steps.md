@@ -2,6 +2,47 @@
 
 ---
 
+## ✅ #175 已修（2026-10-18）· `init { scope.launch { … collect } }` 是单测随机假红的总闸
+
+| 项 | 一句话 | 落点 |
+|---|---|---|
+| ① 取到红了 | #174 把调度器注入做好之后，`security.*` 仍**偶发** 1–2 条红，且能出现**两条互斥断言同时红**（"不该锁"与"该锁"都红），每次红的不是同一条 | `VaultLockManagerImplNeverTest` |
+| ② 根因（两层） | `init { scope.launch { vaultRepository.observeVaults().collect {…} } }`：**构造期派发**（`scope` 的调度器来自构造后赋值的 `internal var`，那一发在赋之前就落到 `Dispatchers.Default`，虚拟时钟永远推不动）+ **无界 `collect`**（协程永不结束 ⇒ `runTest` 的 idle 判据被污染） | `VaultLockManagerImpl` / `AutoLockController` |
+| ③ 修法 | 启动时机从 `init` 交出来：`startObservingVaults()` / `startCollecting()`（均幂等 + `@Volatile` 守卫），生产在 `VaultixApplication.onCreate` 显式调；`scope` 保持 getter | 同上 + `VaultixApplication` |
+| ④ 测试 | 夹具顺序改为"**先注入调度器 → 再 start → `runCurrent()`**"；新增只读钩子 `timerCountForTest()`，`settle()` 用"计数稳定（≥3 轮下限）"当收敛信号；`AutoLockControllerTest` 从零补 6 例 | 两份测试文件 |
+| ⑤ 门禁 | `security.*` 19 例 × 连跑 6 次（`--rerun-tasks`）= **PASS 6 / FAIL 0**；探针全清（`probeCtxForTest` + 全部 `PROBE`/`DBG`） | — |
+
+**实证**：本地 `:app:testFullDebugUnitTest --rerun-tasks` 真实执行（任务行
+`> Task :app:testFullDebugUnitTest`，**非 `FROM-CACHE`**）**388 例 0 失败**
+（原 377 + `AutoLockControllerTest` 6 + `VaultLockManagerImplNeverTest` 8→13 的净增 5）；
+`security.*` 四类共 30 例（AutoLockController 6 / AutoRestoreTrigger 5 / ScreenSecurityGuard 6 /
+VaultLockManagerImplNever 13）。
+detekt ✅ BUILD SUCCESSFUL；8 个 Python 静态检查全 OK（`check_signature_types.py`
+因删掉 `DelegatingDispatcher` 死代码从 FAIL 转 OK）；`check_issues_index.py` ✅；
+变异验证 **6 组全部精确命中**（红的条数依次 6 / 3 / 2 / 3 / 1 / 1，每组范围都能一句话解释）。
+双变体编译 `:app:compileOfflineDebugKotlin` + `:app:compileFullDebugKotlin`
+（`--rerun-tasks` 真跑，非 UP-TO-DATE）✅ BUILD SUCCESSFUL。
+
+两条**试过但不通**的路已写进 KDoc 防止后人重踩：
+
+1. 自定义 `CoroutineDispatcher` 包装做"延迟解析" ⇒ **`delay` 永远醒不过来**
+   （虚拟时钟要求上下文里的 `CoroutineDispatcher` 就是 `TestDispatcher` 本身；实测
+   `timer coroutine started` 出现 5 次、`timer fired` 0 次）；
+2. `launchIn` 想"等到注入之后再派发" ⇒ 它**立即** `dispatch`，救不了构造期派发。
+
+虚拟时钟三条规则（连踩四轮才定）：`settle()` 建钟不推钟；
+`advanceTimeBy(N-1)` + `runCurrent()` 断"不该锁"（**不能跟 `advanceUntilIdle`**）；
+`advanceTimeBy(N)` + `advanceUntilIdle()` 断"会锁"。
+细节见 `.ai/issues/01-构建与环境.md` #175。
+
+### 遗留
+
+1. `AutoLockController.lockAllNow()` 是**生产零调用**的死链（已写进类 KDoc），是否接线到
+   UI 的"立即锁定"待定 —— 当前唯一入口是 `VaultLockManager.lockAll`；
+2. 两个真机项仍不可执行（见文末"下一步"）。
+
+---
+
 ## ✅ #174 已修（2026-10-18）· 解锁页协程作用域可注入，CI 单测步转绿
 
 | 项 | 一句话 | 落点 |
