@@ -17,13 +17,14 @@ import io.vaultix.model.VaultKind
 import io.vaultix.model.VaultSummary
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.setMain
-import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
@@ -42,20 +43,18 @@ import org.junit.Test
  * 新行为：`StaleCredentials` 那一刻，把用户**上一次输进密码框的那个值**
  * 顺手用来重包该库的信封（`RoomResealRepository`）⇒ 自愈。
  *
- * ## ⚠️ 本文件的同步纪律（别照抄 `advanceUntilIdle`）
+ * ## ⚠️ 本文件的同步纪律（已随 #174 改成虚拟时间）
  *
  * `completeLocalUnlock` 内部有 `withContext(Dispatchers.IO)` —— 那是**真实**
  * 线程池，`runTest` 的 `advanceUntilIdle()` 管不到它（它只推进测试调度器上的
- * 任务）。第一版这里写了 `advanceUntilIdle()` 然后断言，结果是**间歇性红**：
- * 断言跑在 IO 块完成之前，看到的是初值（本文件实测踩过，不是理论担心）。
+ * 任务）。2026-10 之前这里因此只能用 [awaitState] 轮询真实终态，代价是等一次
+ * 真实的线程跳转，且**必须靠 `Dispatchers.Main` 承载 `scope.launch` 的续体** ——
+ * 那正是 CI 上 `TestMainDispatcher` 被卸下后炸掉的那条路（#174）。
  *
- * ⇒ 本文件一律用 [awaitState] 轮询**可观测的终态**（state 字段），带超时。
- * 代价是等一次真实的线程跳转（毫秒级），换来的是确定性 ——
- * 同 `QuickUnlockControllerTest` KDoc 里记的那条教训（硬编码 IO dispatcher
- * 无法确定性推进，别硬推）。
- *
- * ⚠️ 更根本的修法是让 `UnlockViewModel` 接受一个可注入的 dispatcher；
- * 本轮不动生产签名（那是另一批的事），先让门禁稳定可用。
+ * ⇒ 修 #174 时给 `UnlockViewModel` 加了可注入的 `scope`，本文件注入自己的
+ * `TestScope`，于是 `runTest { advanceUntilIdle() }` 能**确定性地**等到
+ * `completeLocalUnlock` 的最后一跳，也不再摸 `Dispatchers.Main`。
+ * 断言本身（`coVerify` / state 字段）一条没改 —— 修的只是等待方式。
  *
  * ## 本文件的断言纪律
  *
@@ -67,6 +66,13 @@ import org.junit.Test
 @OptIn(ExperimentalCoroutinesApi::class)
 class StaleRoomResealTest {
 
+    /**
+     * `Dispatchers.Main` 的替身。
+     *
+     * ⚠️ 它只服务于**本 VM 之外**的代码（例如 `viewModelScope` 相关的第三方
+     * 组件的默认值）。`UnlockViewModel` 自己已不再经 `Dispatchers.Main`
+     * 派发任何东西（见 #174）。
+     */
     private val dispatcher = UnconfinedTestDispatcher()
 
     @Before
@@ -77,19 +83,6 @@ class StaleRoomResealTest {
     @After
     fun tearDown() {
         Dispatchers.resetMain()
-    }
-
-    /**
-     * 轮询等待**异步编排**推进到预期终态（见类 KDoc 的同步纪律）。
-     *
-     * 超时 = 红（而不是静默放过）：`withTimeoutOrNull` 返回 null 时断言必失败。
-     */
-    private suspend fun awaitState(description: String, predicate: () -> Boolean) {
-        val reached = withTimeoutOrNull(AWAIT_TIMEOUT_MS) {
-            while (!predicate()) delay(1)
-            true
-        }
-        if (reached != true) throw AssertionError("等待超时：$description")
     }
 
     private val vaultId = "vault-1"
@@ -109,7 +102,7 @@ class StaleRoomResealTest {
      * @param firstOutcome 门锁解开后首个库的结论（本文件的核心开关）。
      * @param password 提交前先塞进密码框的值（模拟「用户刚输过一次密码」）。
      */
-    private fun viewModel(
+    private fun TestScope.viewModel(
         firstOutcome: RoomUnlockOutcome,
         reseal: RoomResealRepository,
         password: String? = null,
@@ -134,6 +127,8 @@ class StaleRoomResealTest {
         val prefs = mockk<VaultixPreferences>(relaxed = true)
         every { prefs.quickUnlockScope() } returns flowOf(emptySet())
 
+        // ★ #174：把 VM 的协程钉在本测试的虚拟调度器上（构造后**立刻**赋值），
+        //   这样 `advanceUntilIdle()` 就能确定性地等到编排走完。
         val vm = UnlockViewModel(
             SavedStateHandle(mapOf(UnlockViewModel.ARG_VAULT_ID to vaultId)),
             repository,
@@ -141,7 +136,13 @@ class StaleRoomResealTest {
             mockk<UnlockRecoveryRepository>(relaxed = true),
             reseal,
             prefs,
-        )
+        ).also {
+            it.testingScope = this
+            // ★ #174 第二步：连后台调度器也换成本测试的虚拟调度器。
+            //   只换 scope 不够 —— `withContext(Dispatchers.IO)` 会真的跳到线程池，
+            //   虚拟时钟推不动它（实测：只换 scope 时 6 条用例报"没有收到事件"）。
+            it.testingIoDispatcher = StandardTestDispatcher(testScheduler)
+        }
         if (password != null) vm.onPasswordChange(password)
         return vm
     }
@@ -157,8 +158,8 @@ class StaleRoomResealTest {
         val vm = viewModel(RoomUnlockOutcome.StaleCredentials, reseal, password = "新主密码")
 
         vm.completeLocalUnlock(cipher, forViewLock = false)
-        // 等到编排真的走完（判据 = Stale 分支的终态：错误已置位）。
-        awaitState("Stale 分支落定") { vm.state.value.error != null }
+        // 编排全挂在注入的 TestScope 上 ⇒ 虚拟时间能确定性地走完。
+        advanceUntilIdle()
 
         // ★ 这就是自愈：把用户刚输的那一份**当前有效**密码交给重包。
         // 传别的值（空串 / 旧值）会把一个打不开的信封留在盘上。
@@ -174,7 +175,7 @@ class StaleRoomResealTest {
         val vm = viewModel(RoomUnlockOutcome.StaleCredentials, reseal, password = null)
 
         vm.completeLocalUnlock(cipher, forViewLock = false)
-        awaitState("Stale 分支落定") { vm.state.value.error != null }
+        advanceUntilIdle()
 
         coVerify(exactly = 0) { reseal.resealRoom(any(), any()) }
     }
@@ -186,8 +187,7 @@ class StaleRoomResealTest {
         val vm = viewModel(RoomUnlockOutcome.Opened, reseal, password = "某个密码")
 
         vm.completeLocalUnlock(cipher, forViewLock = false)
-        // `Opened` 的终态特征：密码框被清空（那是成功路径独有的动作）。
-        awaitState("Opened 分支落定") { vm.state.value.password.isEmpty() }
+        advanceUntilIdle()
 
         coVerify(exactly = 0) { reseal.resealRoom(any(), any()) }
     }
@@ -205,7 +205,7 @@ class StaleRoomResealTest {
         )
 
         vm.completeLocalUnlock(cipher, forViewLock = false)
-        awaitState("Unavailable 分支落定") { vm.state.value.error != null }
+        advanceUntilIdle()
 
         coVerify(exactly = 0) { reseal.resealRoom(any(), any()) }
     }
@@ -218,7 +218,7 @@ class StaleRoomResealTest {
         val vm = viewModel(RoomUnlockOutcome.StaleCredentials, reseal, password = "输错的")
 
         vm.completeLocalUnlock(cipher, forViewLock = false)
-        awaitState("Stale 分支落定") { vm.state.value.error != null }
+        advanceUntilIdle()
 
         coVerify(exactly = 1) { reseal.resealRoom(vaultId, "输错的") }
         // 提示仍在：用户该知道要做什么，而不是看到一片沉默。
@@ -235,19 +235,9 @@ class StaleRoomResealTest {
         val vm = viewModel(RoomUnlockOutcome.StaleCredentials, reseal, password = "新主密码")
 
         vm.completeLocalUnlock(cipher, forViewLock = false)
-        // 若异常逃出 helper，这里会一直等不到 ⇒ 超时红。
-        awaitState("Stale 分支落定（异常被吞）") { vm.state.value.error != null }
+        // 若异常逃出 helper，它会冒到 `runTest` 里 ⇒ 这里直接红（不会静默放过）。
+        advanceUntilIdle()
 
         assertThat(vm.state.value.error).isNotNull()
-    }
-
-    private companion object {
-        /**
-         * 等待异步编排落定的上限。
-         *
-         * 一次真实的 IO 线程跳转是毫秒级；给到秒级是留足 CI 抖动余量
-         * （超时只会让测试红，不会让实现"看起来通过"）。
-         */
-        const val AWAIT_TIMEOUT_MS = 5_000L
     }
 }

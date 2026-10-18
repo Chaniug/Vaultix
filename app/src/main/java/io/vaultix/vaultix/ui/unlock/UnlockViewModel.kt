@@ -21,7 +21,9 @@ import io.vaultix.vaultix.ui.common.TwoFactorProvider
 import io.vaultix.vaultix.ui.error.UnlockUiError
 import io.vaultix.vaultix.ui.error.toUnlockUiError
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -81,6 +83,62 @@ class UnlockViewModel @Inject constructor(
      */
     private val preferences: VaultixPreferences,
 ) : ViewModel() {
+
+    /**
+     * ★ #174：**只给单测用**的协程作用域覆写口。生产恒为 null ⇒ 落到 `viewModelScope`。
+     *
+     * ## 为什么需要它（真实事故）
+     *
+     * CI 上 `UnlockViewModelTest > candidateVaultsExcludeTheTargetItself` 稳定报
+     * `IllegalStateException: Dispatchers.Main was accessed when the platform dispatcher
+     * was absent…`（`TestMainDispatcher.isDispatchNeeded`）。机理：
+     * `startBiometricUnlock` 在 `withContext(Dispatchers.IO)` 之后**续体回主线程**，
+     * 而单测里 `Dispatchers.Main` 只是一具替身（`kotlinx-coroutines-android` 不在测试
+     * classpath 上），`@After resetMain()` 一执行它就没了 ⇒ 真线程恰好在那之后 resume
+     * 就炸。同一文件里另两条用例走同一段代码却没红 —— 是**竞态**，不是必现。
+     * （本地"全绿"是 build-cache 喂了旧结果，见 `.ai/issues` #173。）
+     *
+     * 覆写之后测试注入自己的 `TestScope` + 虚拟 IO 调度器：等待变成**确定性的虚拟时间**，
+     * 全程不碰 `Dispatchers.Main`。断言一条没放宽。
+     *
+     * ## ⚠️ 为什么是一个 `var` 而不是构造参数
+     *
+     * 本类是 `@HiltViewModel`，Dagger 对**构造签名里的每一个参数**都要求可满足的绑定。
+     * 四条路都试过：
+     *
+     * 1. 构造参数默认值里读 `viewModelScope` / `this`
+     *    ⇒ `Cannot access '<this>' before the instance has been initialized`
+     *    （默认值在实例初始化**前**求值；与基类无关，普通 class 同样复现）
+     * 2. 把 `viewModelScope` 做成 `@Provides` 注入（`Lazy` / `Provider` / `dagger.Lazy`）
+     *    ⇒ `Injection of an @HiltViewModel class is prohibited`（Hilt 硬校验）
+     * 3. `scopeOverride: CoroutineScope? = null` 当构造参数
+     *    ⇒ `CoroutineScope cannot be provided`（**可空 + 有默认值也照解析不误**）
+     * 4. **本字段（构造后赋值）** ⇒ ✅
+     *
+     * ⚠️ 必须在本 VM 发出任何协程**之前**赋值（测试里的工厂就是构造完立刻设）。
+     */
+    internal var testingScope: CoroutineScope? = null
+
+    /** 本页所有"发起即返回"的协程都挂在这里。生产 = `viewModelScope`，测试 = [testingScope]。 */
+    private val scope: CoroutineScope get() = testingScope ?: viewModelScope
+
+    /**
+     * ★ #174：**只给单测用**的后台调度器覆写口（生产恒为 null ⇒ 用 `Dispatchers.IO`）。
+     *
+     * ## 为什么需要它
+     *
+     * 只把 [scope] 换成 `TestScope` 是**不够**的：本页大量 `withContext(io)` 仍会把
+     * 协程扔到**真实线程池**上，虚拟时钟推不动那一段 —— 修 #174 时实测到过：
+     * 只换 scope 之后仍有 6 条用例报"没有收到 PromptForUnlock 事件"。
+     *
+     * 把后台调度器也参数化之后，IO 段也能在虚拟时间里跑完，测试不再赌真实线程时序。
+     *
+     * ⚠️ 生产行为一字不改：默认值就是 `Dispatchers.IO`（与从前每一处调用点完全相同）。
+     */
+    internal var testingIoDispatcher: CoroutineDispatcher? = null
+
+    /** 本页所有"后台活"用的调度器。生产 = `Dispatchers.IO`，测试 = [testingIoDispatcher]。 */
+    private val io: CoroutineDispatcher get() = testingIoDispatcher ?: Dispatchers.IO
 
     data class TwoFactorUi(
         val providers: List<Int>,
@@ -201,7 +259,7 @@ class UnlockViewModel @Inject constructor(
     private var pinBuffer: String = ""
 
     init {
-        viewModelScope.launch {
+        scope.launch {
             vaultRepository.observeVaults().collect { vaults ->
                 if (vaultId.isBlank()) vaultId = resolveTargetVaultId(vaults)
                 val target = vaults.firstOrNull { v -> v.id == vaultId }
@@ -216,12 +274,12 @@ class UnlockViewModel @Inject constructor(
             }
         }
         // 查看层锁标记变化：**只更新、不新建** viewLocked（用户认证成功清掉标记时这里会归位）。
-        viewModelScope.launch {
+        scope.launch {
             sessionRepository.observeViewLockedVaultIds().collect { locked ->
                 _state.update { it.copy(viewLocked = vaultId.isNotBlank() && vaultId in locked) }
             }
         }
-        viewModelScope.launch {
+        scope.launch {
             // ⚠️ 这里**绝不能**读 `var vaultId`：负责补它的那条流与本条**并发**收集同一个
             // `observeVaults()`，谁先处理同一次发射是不确定的。若本条先到，读到的还是空串
             // ⇒ 提前跳过；而 `localUnlockAvailable` 的**唯一写入点**正在下面
@@ -246,7 +304,7 @@ class UnlockViewModel @Inject constructor(
         }
         // PIN 门锁可用性：门锁是**全局**的（房子化后不再按库），不需要解析目标库 ——
         // 直接订阅即可。上面那条 `collectLatest` 永不结束的告诫依旧成立，故仍单独起协程。
-        viewModelScope.launch {
+        scope.launch {
             vaultRepository.pinLockAvailable().collect { available ->
                 _state.update { it.copy(pinUnlockAvailable = available) }
             }
@@ -284,7 +342,7 @@ class UnlockViewModel @Inject constructor(
         pinBuffer += digit
         _state.update { it.copy(pinLength = pinBuffer.length, pinError = null) }
         if (pinBuffer.length == PIN_MIN_LENGTH) {
-            viewModelScope.launch { submitPin() }
+            scope.launch { submitPin() }
         }
     }
 
@@ -315,7 +373,7 @@ class UnlockViewModel @Inject constructor(
         }
         val pin = pinBuffer
         _state.update { it.copy(pinSubmitting = true, pinError = null) }
-        val outcome = withContext(Dispatchers.IO) {
+        val outcome = withContext(io) {
             when (val house = vaultRepository.openHouseWithPin(pin)) {
                 PinUnlockOutcome.Opened -> vaultRepository.unlockVaultFromRoom(id).toPinOutcome()
                 // WrongPin / LockedOut / Unavailable 原样透传（文案四态各不相同）。
@@ -411,8 +469,8 @@ class UnlockViewModel @Inject constructor(
      */
     private fun prewarmCipher() {
         if (preparedCipher != null) return
-        viewModelScope.launch {
-            preparedCipher = withContext(Dispatchers.IO) {
+        scope.launch {
+            preparedCipher = withContext(io) {
                 runCatching { vaultRepository.prepareFingerprintUnlock() }.getOrNull()
             }
         }
@@ -424,12 +482,12 @@ class UnlockViewModel @Inject constructor(
         if (viewLock && !current.viewLocked) return
         if (!viewLock && current.localUnlockAvailable.not()) return
         _state.update { it.copy(submitting = true, viewUnlockStarted = viewLock, error = null) }
-        viewModelScope.launch {
+        scope.launch {
             // ⚠️ Keystore / 解密都在**后台**做：`viewModelScope` 默认跑在主线程，
             // 而 `prepareFingerprintUnlock` 要初始化一个 AES Cipher（首次还会触发
             // keystore 解密），冷启动或覆盖安装后首次进入时足以让首帧渲染卡住 ——
             // 表现就是用户看到的「指纹弹窗不能第一时间出来」。
-            val cipher = preparedCipher ?: withContext(Dispatchers.IO) {
+            val cipher = preparedCipher ?: withContext(io) {
                 vaultRepository.prepareFingerprintUnlock()
             }
             if (cipher == null) {
@@ -490,7 +548,7 @@ class UnlockViewModel @Inject constructor(
      * 的样子看着"更精确"，实际上是把两个全局量重复计算了 N 遍。
      */
     private suspend fun candidateVaultIds(target: String): List<String> =
-        withContext(Dispatchers.IO) {
+        withContext(io) {
             runCatching {
                 val vaults = vaultRepository.observeVaults().first()
                 // 一次读范围（DataStore，零 Keystore），与库列表在内存里求交。
@@ -530,7 +588,7 @@ class UnlockViewModel @Inject constructor(
         forViewLock: Boolean,
         rest: List<String> = emptyList(),
     ) {
-        viewModelScope.launch {
+        scope.launch {
             if (forViewLock) {
                 sessionRepository.clearViewLock(vaultId)
                 _state.update {
@@ -541,7 +599,7 @@ class UnlockViewModel @Inject constructor(
             }
             // 核心段：一次门锁 + 只开用户点的那个库（其余库延后）。
             // 库类型分流已随房子化下沉到 repository（unlockVaultFromRoom 内部按 kind 分流）。
-            val fanout = withContext(Dispatchers.IO) {
+            val fanout = withContext(io) {
                 LocalUnlockFanout.unlockAll(
                     repository = vaultRepository,
                     first = vaultId,
@@ -647,7 +705,7 @@ class UnlockViewModel @Inject constructor(
         if (rest.isEmpty()) return
         restOpenScope.launch {
             runCatching {
-                withContext(Dispatchers.IO) {
+                withContext(io) {
                     LocalUnlockFanout.openRest(
                         repository = vaultRepository,
                         rest = rest,
@@ -760,14 +818,14 @@ class UnlockViewModel @Inject constructor(
         if (current.submitting) return
 
         _state.update { it.copy(submitting = true, error = null) }
-        viewModelScope.launch {
+        scope.launch {
             // ★ KDBX 与 Bitwarden 的解锁是**两条完全不同的路**（M2 阶段 A）：
             // KDBX 认的是文件（离线、无账号、无 2FA），Bitwarden 认的是账号（联网 + 可能 2FA）。
             // 走错一条的后果不是「报错」而是「报错信息完全对不上」（如 KDBX 库被拿去联网 prelogin）。
             val target = _state.value.vault
             // PBKDF2 / Argon2 派生是秒级 CPU 活（Bitwarden 默认 600k 次迭代），
             // 必须离开主线程，否则「登录」按钮按下到转圈之间会整页卡住。
-            val result = withContext(Dispatchers.IO) {
+            val result = withContext(io) {
                 if (target?.kind == VaultKind.KDBX) {
                     vaultRepository.unlockKdbxVault(vaultId, current.password)
                 } else {
@@ -784,8 +842,8 @@ class UnlockViewModel @Inject constructor(
         val tf = current.twoFactor ?: return
         if (current.submitting || code.isBlank()) return
         _state.update { it.copy(submitting = true, error = null) }
-        viewModelScope.launch {
-            val result = withContext(Dispatchers.IO) {
+        scope.launch {
+            val result = withContext(io) {
                 vaultRepository.unlockVaultWithTwoFactor(
                     vaultId = vaultId,
                     masterPassword = current.password,
@@ -850,6 +908,32 @@ class UnlockViewModel @Inject constructor(
             }
         }
     }
+
+    // ---- ★ #174：给单测的两个把手（不含任何业务逻辑，见各自 KDoc）----
+
+    /**
+     * 把 [candidateVaultIds] 的筛选结果原样交出去。
+     *
+     * 为什么值得开这个口子：筛选语义（"不是目标 + 还锁着 + 在范围内"）是这一页最
+     * 容易改错、也最需要钉死的三条判据，而它们原本只能"真的走到弹认证、再从事件里
+     * 捞回来"才测得到 —— 那条路末尾有一次真实的线程跳转，在 CI 上会踩被卸下的
+     * `Dispatchers.Main`（#174 的事故现场），也让每条用例都多花一次真实往返。
+     *
+     * ⚠️ 这里**不做任何新逻辑**，只是转发；"筛出来的结果确实随事件发出去"另由
+     * `UnlockViewModelTest.promptCarriesTheFilteredCandidateVaults` 端到端钉死。
+     */
+    internal suspend fun candidateVaultIdsForTest(target: String): List<String> = candidateVaultIds(target)
+
+    /**
+     * 把本 VM 实际使用的 [scope] 交出去（调用方用 Job 同一性判定）。
+     *
+     * 它钉的不是业务逻辑，而是"注入真的生效"这个前提：把 [scope] 改回硬编码
+     * `viewModelScope`，`UnlockViewModelTest.overrideScopeIsActuallyUsedByTheViewModel`
+     * 必红。没有它，所有"确定性等待"都是错觉 —— 测的可能是另一条作用域。
+     *
+     * ⚠️ 别在业务代码里用它。
+     */
+    internal fun probeOwnScope(): CoroutineScope = scope
 
     companion object {
         const val ARG_VAULT_ID = "vaultId"
