@@ -344,6 +344,22 @@ class UnlockViewModelTest {
             //   只换 scope 不够 —— `withContext(Dispatchers.IO)` 会真的跳到线程池，
             //   虚拟时钟推不动它（实测：只换 scope 时 6 条用例报"没有收到事件"）。
             it.testingIoDispatcher = StandardTestDispatcher(testScheduler)
+            // ★ #176 第三步（**必设**）：把 IO 段**拦截**掉，让续体不跳线程。
+            //
+            //   只做 #174 那两步时，CI（run `39139391458`）上
+            //   `promptCarriesTheFilteredCandidateVaults` 仍报
+            //   `Dispatchers.Main was accessed …`，堆栈是
+            //   `DispatchedCoroutine.afterResume` ← `Dispatchers.IO` 的真线程 worker。
+            //
+            //   机理：`StandardTestDispatcher` 跑任务时**不恢复**原协程的
+            //   `ContinuationInterceptor` ⇒ 跨 `withContext(io)` 的续体恢复时，
+            //   上下文里既没有拦截器也没有 `Dispatchers.Main` ⇒
+            //   `TestMainDispatcher.isDispatchNeeded` 炸。
+            //
+            //   传一个 `StandardTestDispatcher`（不是 `TestDispatcher` 子类）会有意思：
+            //   它**不会**被 `runTest` 收编进虚拟时钟 ⇒ 只是把任务内联执行，
+            //   且**不改变上下文** ⇒ 续体恢复时拦截器还在 ⇒ 全程不碰 `Dispatchers.Main`。
+            it.testingBlockableIoDispatcher = StandardTestDispatcher(testScheduler)
         }
     }
 

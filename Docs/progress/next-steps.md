@@ -2,6 +2,26 @@
 
 ---
 
+## ✅ #176 已修（2026-10-18）· `StandardTestDispatcher` 只解决"时间"，不解决"线程"
+
+| 项 | 一句话 | 落点 |
+|---|---|---|
+| ① 取到红了 | CI run `39139391458`（sha `d646127`）硬门禁又红：`UnlockViewModelTest > promptCarriesTheFilteredCandidateVaults`，仍是 `Dispatchers.Main was accessed…`，**本地 `--rerun-tasks` 全绿** | CI 工件 `debug-unit-test-reports` |
+| ② 根因 | `StandardTestDispatcher.dispatch` 只把任务排进 `TestCoroutineScheduler`，跑任务时**不恢复** `ContinuationInterceptor` ⇒ `withContext(io)` 的续体恢复时上下文里既没拦截器也没 `Dispatchers.Main` ⇒ `TestMainDispatcher.isDispatchNeeded` 炸（堆栈 `DispatchedCoroutine.afterResume` ← `Dispatchers.IO` 真线程 worker） | `kotlinx-coroutines-test` 内部 |
+| ③ 修法 | 新增**拦截口** `testingBlockableIoDispatcher` + `ioContext`（语义是拦截不是替换），8 处 `withContext(io)` 改 `withContext(ioContext)`；测试传一个**非** `TestDispatcher` 子类的 `StandardTestDispatcher` ⇒ 不被 `runTest` 收编 ⇒ 内联执行且不改上下文 | `UnlockViewModel` / `UnlockViewModelTest` |
+| ④ 门禁 | `ui.unlock.*` 整包 **29 例 × 连跑 5 次 = 5/5 全绿**；全量 **388 例 0 失败**；detekt ✅；8 个静态检查 ✅；索引校验 ✅ | — |
+
+**实证**：`> Task :app:testFullDebugUnitTest` 真实执行（非 `FROM-CACHE`）388 例 0 失败；
+`detekt --rerun-tasks` BUILD SUCCESSFUL。
+
+判据一句话（写进 `.ai/issues/01` #176）：
+
+> **虚拟时钟管的是"时间"，不是"线程"。** 凡是用 `runTest` + 注入调度器消灭
+> `Dispatchers.Main` 竞态的，都要额外确认被测代码里有没有
+> `withContext(<别的调度器>)` —— 有的话，那个调度器必须在测试里被**拦截**掉。
+
+---
+
 ## ✅ #175 已修（2026-10-18）· `init { scope.launch { … collect } }` 是单测随机假红的总闸
 
 | 项 | 一句话 | 落点 |

@@ -38,6 +38,7 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.CoroutineContext
 import javax.inject.Inject
 
 /**
@@ -139,6 +140,37 @@ class UnlockViewModel @Inject constructor(
 
     /** 本页所有"后台活"用的调度器。生产 = `Dispatchers.IO`，测试 = [testingIoDispatcher]。 */
     private val io: CoroutineDispatcher get() = testingIoDispatcher ?: Dispatchers.IO
+
+    /**
+     * ★ #176：**只给单测用**的"后台活"调度器**拦截**口（生产恒为 null ⇒ 直接跑在 [io] 上）。
+     *
+     * ## 为什么在 [testingIoDispatcher] 之外还要一个（#176，CI 事故现场）
+     *
+     * #174 把 [io] 换成了 `StandardTestDispatcher(testScheduler)`，虚拟时钟于是能推它。
+     * **但这不等于"续体不跳线程"**：`StandardTestDispatcher` 内部把任务丢给
+     * `TestCoroutineScheduler`，而它跑任务时**不恢复**原协程的 `ContinuationInterceptor`
+     * ⇒ 跨 `withContext(io)` 的续体恢复时，上下文里既没有拦截器也没有 `Dispatchers.Main`，
+     * 于是 `DispatchedContinuation.resumeCancellableWith` → `TestMainDispatcher.isDispatchNeeded`
+     * → 炸 `Dispatchers.Main was accessed …`。
+     *
+     * #174 之后同类故障换了个受害者继续出现：CI run `39139391458` 上
+     * `promptCarriesTheFilteredCandidateVaults` 仍报同一句，堆栈里是
+     * `DispatchedCoroutine.afterResume` ← `Dispatchers.IO` 那个真线程 worker。
+     *
+     * ⇒ 测试里把它设成 `runTest` 自己的 `StandardTestDispatcher(testScheduler)`：
+     * - 它不是 `TestDispatcher` 类，**不会**被 `runTest` 收编进虚拟时钟，
+     *   所以它只是把任务**内联执行**（等价于 `Dispatchers.Unconfined` 的跳法），
+     *   同时**不改变**协程上下文 ⇒ 续体恢复时拦截器还在 ⇒ 永不碰 `Dispatchers.Main`；
+     * - 它是可捕获的惰性调度器：真被 `delay` 推上来也只会内联跑掉，不会挂住。
+     *
+     * ⚠️ 只设 [testingIoDispatcher] 而忘了设本字段 ⇒ 仍然会偶发踩 `Dispatchers.Main`
+     *    （本地绿、CI 红）。测试工厂里两个必须一起设。
+     */
+    internal var testingBlockableIoDispatcher: CoroutineDispatcher? = null
+
+    /** 真正执行"后台活"的调度器：测试被拦截 ⇒ 内联，生产/默认 = [io]。 */
+    private val ioContext: CoroutineContext
+        get() = (testingBlockableIoDispatcher ?: io) as CoroutineContext
 
     data class TwoFactorUi(
         val providers: List<Int>,
@@ -373,7 +405,7 @@ class UnlockViewModel @Inject constructor(
         }
         val pin = pinBuffer
         _state.update { it.copy(pinSubmitting = true, pinError = null) }
-        val outcome = withContext(io) {
+        val outcome = withContext(ioContext) {
             when (val house = vaultRepository.openHouseWithPin(pin)) {
                 PinUnlockOutcome.Opened -> vaultRepository.unlockVaultFromRoom(id).toPinOutcome()
                 // WrongPin / LockedOut / Unavailable 原样透传（文案四态各不相同）。
@@ -470,7 +502,7 @@ class UnlockViewModel @Inject constructor(
     private fun prewarmCipher() {
         if (preparedCipher != null) return
         scope.launch {
-            preparedCipher = withContext(io) {
+            preparedCipher = withContext(ioContext) {
                 runCatching { vaultRepository.prepareFingerprintUnlock() }.getOrNull()
             }
         }
@@ -487,7 +519,7 @@ class UnlockViewModel @Inject constructor(
             // 而 `prepareFingerprintUnlock` 要初始化一个 AES Cipher（首次还会触发
             // keystore 解密），冷启动或覆盖安装后首次进入时足以让首帧渲染卡住 ——
             // 表现就是用户看到的「指纹弹窗不能第一时间出来」。
-            val cipher = preparedCipher ?: withContext(io) {
+            val cipher = preparedCipher ?: withContext(ioContext) {
                 vaultRepository.prepareFingerprintUnlock()
             }
             if (cipher == null) {
@@ -548,7 +580,7 @@ class UnlockViewModel @Inject constructor(
      * 的样子看着"更精确"，实际上是把两个全局量重复计算了 N 遍。
      */
     private suspend fun candidateVaultIds(target: String): List<String> =
-        withContext(io) {
+        withContext(ioContext) {
             runCatching {
                 val vaults = vaultRepository.observeVaults().first()
                 // 一次读范围（DataStore，零 Keystore），与库列表在内存里求交。
@@ -599,7 +631,7 @@ class UnlockViewModel @Inject constructor(
             }
             // 核心段：一次门锁 + 只开用户点的那个库（其余库延后）。
             // 库类型分流已随房子化下沉到 repository（unlockVaultFromRoom 内部按 kind 分流）。
-            val fanout = withContext(io) {
+            val fanout = withContext(ioContext) {
                 LocalUnlockFanout.unlockAll(
                     repository = vaultRepository,
                     first = vaultId,
@@ -705,7 +737,7 @@ class UnlockViewModel @Inject constructor(
         if (rest.isEmpty()) return
         restOpenScope.launch {
             runCatching {
-                withContext(io) {
+                withContext(ioContext) {
                     LocalUnlockFanout.openRest(
                         repository = vaultRepository,
                         rest = rest,
@@ -825,7 +857,7 @@ class UnlockViewModel @Inject constructor(
             val target = _state.value.vault
             // PBKDF2 / Argon2 派生是秒级 CPU 活（Bitwarden 默认 600k 次迭代），
             // 必须离开主线程，否则「登录」按钮按下到转圈之间会整页卡住。
-            val result = withContext(io) {
+            val result = withContext(ioContext) {
                 if (target?.kind == VaultKind.KDBX) {
                     vaultRepository.unlockKdbxVault(vaultId, current.password)
                 } else {
@@ -843,7 +875,7 @@ class UnlockViewModel @Inject constructor(
         if (current.submitting || code.isBlank()) return
         _state.update { it.copy(submitting = true, error = null) }
         scope.launch {
-            val result = withContext(io) {
+            val result = withContext(ioContext) {
                 vaultRepository.unlockVaultWithTwoFactor(
                     vaultId = vaultId,
                     masterPassword = current.password,

@@ -9,7 +9,7 @@
 
 | 分篇 | 主题 | 条数 |
 |---|---|---|
-| [01-构建与环境](./issues/01-构建与环境.md) | 工程 / 构建 / CI / 工具链 / 环境 | 51 |
+| [01-构建与环境](./issues/01-构建与环境.md) | 工程 / 构建 / CI / 工具链 / 环境 | 52 |
 | [02-自动填充](./issues/02-自动填充.md) | 自动填充（AutofillService 链路） | 18 |
 | [03-通行密钥与凭据提供商](./issues/03-通行密钥与凭据提供商.md) | 通行密钥 / Credential Provider / 凭据回灌 | 18 |
 | [04-锁与解锁](./issues/04-锁与解锁.md) | 锁态模型 / 解锁 / 生物识别 / 密钥 | 12 |
@@ -37,7 +37,7 @@
 
 ## 编号 → 分篇
 
-### [01-构建与环境](./issues/01-构建与环境.md) — 工程 / 构建 / CI / 工具链 / 环境（51 条，缺 #3、#8、#15、#16、#20…：#3/15 归 04、#16 归 02、#20 归 06）
+### [01-构建与环境](./issues/01-构建与环境.md) — 工程 / 构建 / CI / 工具链 / 环境（52 条，缺 #3、#8、#15、#16、#20…：#3/15 归 04、#16 归 02、#20 归 06）
 
 | # | 标题 |
 |---|---|
@@ -92,6 +92,7 @@
 | 174 | 🔴 CI 单测那一条红的真相：`UnlockViewModelTest > candidateVaultsExcludeTheTargetItself` 报 `Dispatchers.Main was accessed when the platform dispatcher was absent`（`TestMainDispatcher.isDispatchNeeded`）。机理：`viewModelScope.launch { withContext(IO) {…} }` 的**续体回主线程**是真线程 resume，而 `@After resetMain()` 已把替身卸下 ⇒ **竞态**（同文件另两条同款代码没红）。⚠️ `runTest` 自带的 `TestMainDispatcher` 只护虚拟调度器，护不住真线程那条路。解法：VM 加 `testingScope` / `testingIoDispatcher` 两个 `internal var`（生产恒 null ⇒ `viewModelScope` / `Dispatchers.IO`）。🔴 四条"更标准"的路全不通：默认值里读 `this` 报 `Cannot access '<this>'`、注入 `@HiltViewModel` 报 `prohibited`、可空构造参数报 `CoroutineScope cannot be provided`。测试侧两坑：只换 scope 不够（IO 段仍在真线程）、`advanceUntilIdle` 会把 Channel 缓冲快进掉（改 `runCurrent` / `advanceTimeBy(1)`） |
 | 172 | 🔴 OneDrive 无基线写入 = **无条件覆盖**（`expectedVersion = null` 时一个条件头都不发）；且 `createUploadSession` 手拼 JSON **值漏引号** ⇒ 任何 > 2MiB 的库在 OneDrive 上**从来没存进去过**。解法：接口加独立参数 `failIfExists`（不靠 null 推断）+ OneDrive 补写后读回校验 + 请求体改 DTO。判据：**"实现方遵守契约"不能靠调用方自觉来兜**。附三个坑：`Uri.encode` 是 Android 桩方法（返回 null）、`runTest` 测不了真线程（改 `runBlocking`）、Hilt 不接受带默认值参数的 `@Inject constructor` |
 | 175 | 🔴 **`init { scope.launch { … collect … } }` 是单测随机假红的总闸**：①**构造期派发** —— `launch` 发生在构造期间，而 `testingIoDispatcher` 只能在构造后赋值 ⇒ 收集协程永久跑 `Dispatchers.Default`，虚拟时钟推不动；②**无界 `collect`** —— 永不结束，`runTest` 的 idle 判据被它搅乱 ⇒ **同一次构建里两条互斥断言同时红**（「不该锁」与「该锁」都红）、每次红的不同。判据：**互斥同时成立 ⇒ 先找无界协程，别调测试时序**。解法：启动从 `init` 移出（`VaultLockManagerImpl.startObservingVaults()` / `AutoLockController.startCollecting()`，均幂等，生产在 `VaultixApplication.onCreate` 调）。🔴 两条不通的路：`scope` 改 getter（`init` 构造期就取走了）、自定义 `CoroutineDispatcher` 包装（`delay` **永不恢复**：`timer started` 5 次 / `fired` 0 次）。虚拟时钟三条规则：`settle()` 建定时器不推钟 → `advanceTimeBy(N-1)`+`runCurrent()` 断「不该锁」→ `advanceTimeBy(N)`+`advanceUntilIdle()` 断「会锁」；**`advanceUntilIdle` 不能用来表达「时间过去了多少」** |
+| 176 | 🔴 **`StandardTestDispatcher` 跑测试任务时**不恢复拦截器** ⇒ 跨 `withContext(io)` 的续体照样踩 `Dispatchers.Main`**。#174 把 `io` 换成虚拟调度器只解决「时钟推得动」，**不解决「续体跳不跳线程」**——`StandardTestDispatcher.dispatch` 只把任务排进 `TestCoroutineScheduler`，跑任务时不恢复 `ContinuationInterceptor` ⇒ `withContext` 的续体恢复时上下文里既没拦截器也没 `Dispatchers.Main` ⇒ `TestMainDispatcher.isDispatchNeeded` 炸（堆栈 `DispatchedCoroutine.afterResume` ← `Dispatchers.IO` 的真线程 worker）。CI `39139391458` 上 `promptCarriesTheFilteredCandidateVaults` 复现，**本地全绿**。解法：第二个覆写口 `testingBlockableIoDispatcher`（语义是**拦截**不是替换）+ `ioContext`，测试传一个**非** `TestDispatcher` 子类的 `StandardTestDispatcher` ⇒ 不被 `runTest` 收编 ⇒ 内联执行且不改上下文。⚠️ 判据：**变量是时间（`advanceTimeBy`）还是线程（续体拦截）**，两者必须分开处理。 |
 
 ### [02-自动填充](./issues/02-自动填充.md) — 自动填充（AutofillService 链路）
 

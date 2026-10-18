@@ -1,11 +1,11 @@
 # Vaultix 项目长期笔记
 
 > **接力顺序（先读这四份，再动手）**：
-> 本文件（约定 / 硬约束 / 决策）→ `.ai/ISSUES.md`（坑：现象-根因-解法，最新 **#175**）→
+> 本文件（约定 / 硬约束 / 决策）→ `.ai/ISSUES.md`（坑：现象-根因-解法，最新 **#176**）→
 > `Docs/progress/next-steps.md`（待办，最新在顶部）→ `Docs/progress/current-status.md`（进度快照）
 > → `.ai/SESSION-YYYY-MM-DD.md`（逐轮流水，需要细节才翻）。
 >
-> 最后更新：2026-10-18（#175 修完后；§9 顶部的「最近几轮」才是真源，本行只记最后一次大改）。**本文件已压缩重写**：逐轮叙事折叠进
+> 最后更新：2026-10-18（#176 修完后；§9 顶部的「最近几轮」才是真源，本行只记最后一次大改）。**本文件已压缩重写**：逐轮叙事折叠进
 > 第 9 节「当前状态」与第 10 节「历史轮次索引」，只留「不知道就会写错、且错了不报错」的内容。
 >
 > ⚠️ **2026-09-26 起 §9 顶部才是"最近几轮"的唯一真源**；§10 的索引止于 2026-09-13，
@@ -144,6 +144,41 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 | [8.10 架构与目录地图](./conventions/8.10-架构与目录地图.md) | **东西在哪 + 该信哪份文档**（接力地图） | — |
 
 ## 9. 当前状态与下一批（接力起手式）
+
+> ⚡ **2026-10-18（第三轮）：#176 已修 —— 虚拟时钟管"时间"，不管"线程"**
+>
+> #175 修完、跑绿、推上去（`d646127`），**CI 又红了**（run `39139391458`），红的是
+> `UnlockViewModelTest > promptCarriesTheFilteredCandidateVaults`，报的还是
+> `Dispatchers.Main was accessed …`，而**本地 `--rerun-tasks` 全绿**。
+>
+> **根因**：#174 把 `UnlockViewModel.io` 换成 `StandardTestDispatcher(testScheduler)`，
+> 只解决了"虚拟时钟推得动"，**没解决"续体跳不跳线程"**。
+> `StandardTestDispatcher.dispatch` 只是把任务排进 `TestCoroutineScheduler`，
+> 它跑任务时**不恢复** `ContinuationInterceptor` ⇒ 跨 `withContext(io)` 的续体恢复时，
+> 上下文里既没有拦截器也没有 `Dispatchers.Main` ⇒ `TestMainDispatcher.isDispatchNeeded`
+> 炸（堆栈 `DispatchedCoroutine.afterResume` ← `Dispatchers.IO` 的真线程 worker）。
+>
+> **解法**：加**第二个**覆写口，语义是**拦截**而不是替换 ——
+> `testingBlockableIoDispatcher`（生产恒 null）+ `private val ioContext: CoroutineContext`，
+> 8 处 `withContext(io)` 改 `withContext(ioContext)`。测试里两个**都要设**：
+> ```kotlin
+> it.testingIoDispatcher = StandardTestDispatcher(testScheduler)          // 让时钟推得动
+> it.testingBlockableIoDispatcher = StandardTestDispatcher(testScheduler) // 让续体不跳线程
+> ```
+> 为什么 `StandardTestDispatcher` 能内联：它**不是** `TestDispatcher` 的子类，
+> `runTest` 收编共享调度器时只认 `TestDispatcher` ⇒ 这个实例不被收编 ⇒ 退化成
+> "可捕获的惰性调度器"，在已持锁线程上 `isDispatchNeeded == false` ⇒ 当场内联，
+> 且 `withContext` 后拦截器仍是它自己 ⇒ 续体恢复时不碰 `Dispatchers.Main`。
+>
+> 🔴 **别用 `Dispatchers.Unconfined`** 顶替：它不可捕获，真被 `delay` 排上来会抛
+> `UnsupportedOperationException`，只是把"偶发"换个地方偶发。
+>
+> **门禁**：`ui.unlock.*` 29 例 × 连跑 5 次 = 5/5 绿；全量 **388 例 0 失败**；
+> detekt `--rerun-tasks` ✅；8 个静态检查 ✅；索引校验 ✅。
+>
+> **判据（写死）**：虚拟时钟管的是**时间**，不是**线程**。凡是拿"注入调度器"去消灭
+> `Dispatchers.Main` 竞态的，都要额外确认被测代码里有没有 `withContext(<别的调度器>)`;
+> 有的话，那个调度器必须在测试里被**拦截**掉。**本地绿不算证据，看 CI 硬门禁。**
 
 > ⚡ **2026-10-18（第二轮）：#175 已修 —— 单测"随机假红"的总闸**。
 > 起因：`VaultLockManagerImplNeverTest` 改成虚拟时钟后**偶发 1–2 条红、每次红的不同**，
