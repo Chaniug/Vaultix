@@ -174,7 +174,8 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 > `UnsupportedOperationException`，只是把"偶发"换个地方偶发。
 >
 > **门禁**：`ui.unlock.*` 29 例 × 连跑 5 次 = 5/5 绿；全量 **388 例 0 失败**；
-> detekt `--rerun-tasks` ✅；8 个静态检查 ✅；索引校验 ✅。
+> detekt `--rerun-tasks` ✅；8 个静态检查 ✅；索引校验 ✅；
+> **CI run `39141070281` success**（sha `d32657c`，硬门禁日志含 `> Task :app:testFullDebugUnitTest`）。
 >
 > **判据（写死）**：虚拟时钟管的是**时间**，不是**线程**。凡是拿"注入调度器"去消灭
 > `Dispatchers.Main` 竞态的，都要额外确认被测代码里有没有 `withContext(<别的调度器>)`;

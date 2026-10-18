@@ -12,7 +12,8 @@
 | ④ 门禁 | `ui.unlock.*` 整包 **29 例 × 连跑 5 次 = 5/5 全绿**；全量 **388 例 0 失败**；detekt ✅；8 个静态检查 ✅；索引校验 ✅ | — |
 
 **实证**：`> Task :app:testFullDebugUnitTest` 真实执行（非 `FROM-CACHE`）388 例 0 失败；
-`detekt --rerun-tasks` BUILD SUCCESSFUL。
+`detekt --rerun-tasks` BUILD SUCCESSFUL。**CI run `39141070281` success**（sha `d32657c`），
+硬门禁日志含 `> Task :app:testFullDebugUnitTest` + `BUILD SUCCESSFUL`。
 
 判据一句话（写进 `.ai/issues/01` #176）：
 
