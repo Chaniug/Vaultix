@@ -38,6 +38,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -58,10 +59,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.theme.VaultixCorner
 import io.vaultix.vaultix.ui.theme.Spacing
 
 /** 悬浮胶囊底栏固定高度（对齐 Bastion：胶囊 60dp + 留白 6/20 = 86dp 视觉占位）。 */
@@ -73,25 +80,42 @@ private val DockBarHeight = 60.dp
  * 底栏改成**叠层悬浮**后（见 [AdaptiveMainScaffold]），内容会一直铺到屏幕底 ——
  * 好处是胶囊周围那圈留白能透出内容（酷安观感），代价是最后一条会被胶囊压住，
  * 所以各页列表必须把它算进 `contentPadding` 的底部。
+ *
+ * ⚠️ 2026-10-19：**这个常量只对默认字号成立**。2.0x 字号下 tab 的文字会把胶囊撑高
+ * （见 [DockTabItem] 的 `heightIn`），此时真实占位比 86dp 大。所以：
+ * - **列表让位一律调 [rememberBottomDockInset]**（它会按当前字号补上增量）；
+ * - 只有「需要在非组合环境里引用一个名义值」的地方（如 `SelectionActionBar` 的文档、
+ *   预览里的示意留白）才直接用这个常量。
  */
 val BottomDockOccupiedHeight: Dp = DockBarHeight + 6.dp + 20.dp
 
 /**
- * 列表底部应留出的高度 = 胶囊底栏占位 + 系统手势条高度。
+ * 2.0x 字号下 tab 文字把胶囊撑高的**增量上限**。
  *
- * 手势条高度随机型 / 横竖屏变化，故不做成常量。
+ * 依据：tab 文字 12sp → 2.0x 时 24sp，行高约 32sp ≈ **16dp 增量**（12sp 行高约 16dp）。
+ * 取 16dp 而不是精确测量：这里是**让位**用的保守值，宁可多留 16dp 的空白，
+ * 也不能少留导致最后一条被压住 —— 多留的空白在默认字号下是透明的，看不出来。
  */
-@Composable
-fun rememberBottomDockInset(): Dp =
-    BottomDockOccupiedHeight +
-        WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+private val DOCK_MAX_FONT_GROWTH = 16.dp
 
 /**
- * 胶囊圆角百分比（50 = 50%，即两端完全半圆的「药丸」形）。
+ * 列表底部应留出的高度 = 胶囊底栏占位 + **字体放大增量** + 系统手势条高度。
  *
- * `RoundedCornerShape(Int)` 的重载语义是**百分比**而非 dp，故 50 表示最大圆角。
+ * 手势条高度随机型 / 横竖屏变化，故不做成常量。
+ *
+ * ⚠️ 2026-10-19：补上字体增量。改前只算 86dp + 手势条，2.0x 字号下胶囊被 tab 文字撑高
+ * ⇒ 最后一条列表项仍然会被压住一截（审计 §3.3）。增量按 [LocalDensity] 的 `fontScale`
+ * 线性插值：1.0x → 0，2.0x → [DOCK_MAX_FONT_GROWTH]，中间档按比例。
  */
-private const val PILL_CORNER_PERCENT = 50
+@Composable
+fun rememberBottomDockInset(): Dp {
+    val fontScale = LocalDensity.current.fontScale
+    // 只对"超过 1.0 的部分"补偿；用户把字号调小（<1.0）时不多留空白。
+    val growth = DOCK_MAX_FONT_GROWTH * ((fontScale - 1f) / 1f).coerceIn(0f, 1f)
+    return BottomDockOccupiedHeight +
+        growth +
+        WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+}
 
 /**
  * 窄屏底部导航条：悬浮胶囊 + 中央「+」。
@@ -125,7 +149,7 @@ fun VaultixBottomDock(
     ) {
         Surface(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(PILL_CORNER_PERCENT),
+            shape = VaultixCorner.Pill,
             color = MaterialTheme.colorScheme.surfaceContainerHigh,
             tonalElevation = 3.dp,
             shadowElevation = 6.dp,
@@ -187,7 +211,7 @@ private fun AddButton(
     val addLabel = stringResource(R.string.nav_add)
     Surface(
         onClick = { onAdd(currentTab) },
-        shape = RoundedCornerShape(Spacing.lg),
+        shape = VaultixCorner.Panel,
         color = MaterialTheme.colorScheme.primary,
         contentColor = MaterialTheme.colorScheme.onPrimary,
         modifier = Modifier
@@ -241,25 +265,46 @@ private fun DockTabItem(
     Box(
         modifier = modifier
             .fillMaxHeight()
-            .clip(RoundedCornerShape(Spacing.lg))
+            .clip(VaultixCorner.Panel)
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
-            ) { onClick() },
+                // ★ 2026-10-19：自绘 tab 必须**自己声明语义**。
+                //   这是导航不是按钮 —— 读屏要报「密码，标签页，已选中」
+                //   而不是「密码，按钮」。缺 `role` + `selected` 时 TalkBack 完全读不出
+                //   "我现在在哪一页"，这对 4 个 tab 的底栏是**功能缺失**，不是观感问题。
+                //   `role` 让读屏按"标签页"播报；`selected` 提供选中态；
+                //   `onClickLabel` 与 `CollectionInfo` 由 `selected` 自动推导，无需手写。
+                role = Role.Tab,
+                onClick = { onClick() },
+            )
+            .semantics {
+                // ⚠️ 必须写显式 `selected`：`clickable` 的 `role` 只影响播报措辞，
+                //    **不会**自动带上选中态 —— 那句"已选中"完全来自这里。
+                this.selected = isSelected
+                // 图标与文字都会被子节点并入；给整项一个稳定名字，避免读到两遍。
+                contentDescription = label
+            },
         contentAlignment = Alignment.Center,
     ) {
         Column(
             modifier = Modifier
                 .widthIn(min = 56.dp)
-                .height(48.dp)
-                .clip(RoundedCornerShape(Spacing.lg))
+                // ⚠️ 2026-10-19：`height(48.dp)` → `heightIn(min = 48.dp)`。
+                //    固定高在 2.0x 字体下会把「22dp 图标 + 12sp 文字」裁掉下半截；
+                //    `heightIn` 保 48dp 的下限（触摸目标不缩），但允许它随字号长高。
+                //    代价是 60dp 的胶囊可能被撑高 —— 这是**对的**取舍：宁可底栏变高，
+                //    也不能让 tab 文字被裁成半个字（见 .ai/conventions/8.4 §字体缩放）。
+                .heightIn(min = 48.dp)
+                .clip(VaultixCorner.Panel)
                 .background(pillColor),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
             Icon(
                 imageVector = item.icon,
-                contentDescription = label,
+                // 名字已在 Box 层声明，图标不再重复播报。
+                contentDescription = null,
                 tint = contentTint,
                 modifier = Modifier.size(22.dp),
             )

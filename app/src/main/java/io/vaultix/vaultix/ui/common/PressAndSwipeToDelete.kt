@@ -64,7 +64,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.AlertDialog
@@ -90,6 +89,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.theme.VaultixCorner
 import kotlinx.coroutines.launch
 
 /** 左侧滑开后露出的删除动作区宽度（也是滑开后的停靠位）。 */
@@ -98,8 +98,13 @@ private val ACTION_WIDTH = 96.dp
 /** 回弹 / 停靠的动画时长。 */
 private const val SETTLE_MS = 180
 
-/** 删除底色与卡片同圆角（与 [EntryCard] 的 12dp 对齐）。 */
-private const val REVEAL_CORNER = 12
+/**
+ * 删除底色与卡片同圆角。
+ *
+ * ⚠️ 2026-10-19：原文写「与 [EntryCard] 的 12dp 对齐」—— **这个锚点早就过期了**：
+ * `EntryCard` 在 2026-09-16 就上调到 16dp，而这里还留在 12dp，于是左滑露出时
+ * 删除底色比卡片**小一圈**（四角露白）。现统一走 [VaultixCorner.Panel]。
+ */
 
 /**
  * 「长按选中 → 左滑 → 松手过半 → 二次确认」容器：把任意条目卡片包进去即可获得该交互。
@@ -173,7 +178,7 @@ fun PressAndSwipeToDelete(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(REVEAL_CORNER)),
+            .clip(VaultixCorner.Panel),
     ) {
         // 删除动作区：**常驻**在卡片之下、靠右对齐（不条件式增删节点，避免首帧抖动）。
         // ⚠️ 它现在是**纯视觉**的：不再挂 `TextButton`（点击职责已上移到「松手过半」），

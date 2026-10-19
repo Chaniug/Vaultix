@@ -25,6 +25,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.common.PrimaryActionButton
 import io.vaultix.vaultix.ui.error.UnlockUiError
 import io.vaultix.vaultix.ui.error.unlockErrorText
 import io.vaultix.vaultix.ui.theme.Spacing
@@ -137,16 +138,16 @@ fun TwoFactorStep(
         }
 
         Spacer(Modifier.height(Spacing.lg))
-        FilledTonalButton(
+        PrimaryActionButton(
+            text = stringResource(R.string.two_factor_submit),
             onClick = {
                 focusManager.clearFocus()
                 onSubmit(code)
             },
-            enabled = !submitting && codeValid(isYubiKey, code),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(stringResource(R.string.two_factor_submit))
-        }
+            enabled = codeValid(isYubiKey, code),
+            busy = submitting,
+            toned = true,
+        )
         TextButton(onClick = onBack, enabled = !submitting) {
             Text(stringResource(R.string.two_factor_back))
         }

@@ -21,7 +21,6 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Sync
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -75,6 +74,8 @@ import io.vaultix.vaultix.ui.common.KdbxConflictChoice
 import io.vaultix.vaultix.ui.common.KdbxConflictDialog
 import io.vaultix.vaultix.ui.common.deviceCanAuthenticate
 import io.vaultix.vaultix.ui.settings.QuickUnlockHost
+import io.vaultix.vaultix.ui.shell.rememberBottomDockInset
+import io.vaultix.vaultix.ui.theme.VaultixCorner
 import io.vaultix.vaultix.ui.theme.Spacing
 
 /**
@@ -193,7 +194,15 @@ fun VaultListScreen(
                         start = Spacing.lg,
                         end = Spacing.lg,
                         top = Spacing.sm,
-                        bottom = 96.dp,
+                        // ⚠️ 2026-10-19：原为字面量 `96.dp`，**小于**真实需要的高度。
+                        //    本页不在主壳的 Tab 里（`VaultListRoute`），但它自己的 Scaffold
+                        //    下面压着悬浮胶囊底栏的同一套占位 —— 胶囊 60 + 上留白 6 + 下留白 20
+                        //    = 86dp，**还要再加系统手势条**（4 键手势机约 32dp）⇒ 真实 ≈118dp。
+                        //    写死 96 的后果：最后一张库卡片永远被胶囊压住一截、点不到
+                        //    （本页是全 App 的落地页，`onSwitchVault` 也回这里）。
+                        //    ⇒ 一律调 [rememberBottomDockInset]，**别再写字面量**：
+                        //      手势条高度随机型 / 横竖屏变化，任何固定值都会在别的机型上再错一次。
+                        bottom = Spacing.sm + rememberBottomDockInset(),
                     ),
                     verticalArrangement = Arrangement.spacedBy(Spacing.md),
                 ) {
@@ -379,10 +388,14 @@ private fun QuickUnlockBanner(
  */
 @Composable
 private fun EmptyVaultState(onConnectBitwarden: () -> Unit, onOpenKdbx: () -> Unit) {
+    // ★ 2026-10-19：横向边距 28dp 魔法数 → `Spacing.xl`(24)，与另外 5 处空态一致
+    //   （审计 §2.6）。品牌块本身（72dp 图标 + headlineMedium + 两个等权按钮）
+    //   保留不动 —— 它承载"这是谁 / 你从哪进"的信息，不是 [EmptyState] 的三行式
+    //   能表达的东西；空态收敛**只统一间距与字号口径**，不把品牌页也压成一句标题。
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 28.dp),
+            .padding(horizontal = Spacing.xl),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
@@ -390,21 +403,21 @@ private fun EmptyVaultState(onConnectBitwarden: () -> Unit, onOpenKdbx: () -> Un
             painter = painterResource(R.drawable.ic_autofill_vaultix),
             contentDescription = null,
             tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(72.dp),
+            modifier = Modifier.size(EMPTY_BRAND_ICON),
         )
         Spacer(Modifier.height(Spacing.lg))
         Text(
             text = stringResource(R.string.app_name),
             style = MaterialTheme.typography.headlineMedium,
         )
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(Spacing.xs))
         Text(
             text = stringResource(R.string.vault_list_empty_tagline),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
         )
-        Spacer(Modifier.height(36.dp))
+        Spacer(Modifier.height(EMPTY_ACTIONS_TOP_GAP))
         if (AppFlavor.supportsBitwarden) {
             BrandVaultButton(
                 label = stringResource(R.string.vault_connect_bitwarden),
@@ -467,7 +480,7 @@ private fun BrandVaultButton(
             containerColor = container,
             contentColor = content,
         ),
-        shape = RoundedCornerShape(Spacing.lg),
+        shape = VaultixCorner.Panel,
         contentPadding = PaddingValues(horizontal = Spacing.lg, vertical = 10.dp),
         modifier = Modifier
             .fillMaxWidth()
@@ -663,3 +676,8 @@ private fun SyncStatusLine(syncStatus: VaultSyncStatus?) {
     )
 }
 
+/** 首启页品牌图标尺寸（72dp）。比 [EmptyState] 的 48dp 大一档：这是品牌位不是提示位。 */
+private val EMPTY_BRAND_ICON = 72.dp
+
+/** 品牌页「定位语」与两个入口按钮之间的间距（原为字面量 36dp，收进命名常量）。 */
+private val EMPTY_ACTIONS_TOP_GAP = 36.dp

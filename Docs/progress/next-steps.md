@@ -2,6 +2,47 @@
 
 ---
 
+## ✅ UI 设计审计 §4 五个施工项全部落地（2026-10-19）· P0 → P2
+
+来源 `Docs/progress/audit/ui-design-audit-2026-10-19.md` §4；交接 `.ai/SESSION-2026-10-19.md`。
+**没写代码的地方**：本轮全部是 UI 层，域名/契约/DB 零改动。
+
+| # | 级别 | 一句话 | 落点 |
+|---|---|---|---|
+| #31 | P2（**排最前做**） | 零 `@Preview` ⇒ 观感改动全靠装包验。建 `ui/preview/`，11 条，3 规格中心 × 字体档（1.0/1.3/2.0x）× 明暗 | `ui/preview/PreviewCanvas.kt`、`ComponentPreviews.kt` |
+| #32 | **P0** | **真 bug**：库列表让位写死 `96.dp`，4 键手势机真实需 ≈118dp ⇒ 首个落地页最后一条点不到。函数化为 `rememberBottomDockInset()`（86 占位 + 16 字体增量 + 导航栏） | `VaultixBottomDock.kt` / `VaultListScreen.kt` |
+| #32 | **P0** | `Role.Tab` 全项目 **0 处**（功能缺失）。补 5 处语义：底栏 tab / 显示选项 / 设置行 / 分组折叠 / 云账号列表 | 5 个文件 |
+| #33 | P1 | 主 CTA「3 填色 × 3 高度 × 2 宽度」9 种写法 → `PrimaryActionButton` 1 个组件 | `ui/common/PrimaryActionButton.kt` + 9 处调用 |
+| #33 | P1 | `IconButton` 压到 36dp ⇒ `minimumInteractiveComponentSize()`；字体缩放 2.0x 三处兜底 | `TotpCodesScreen` / `PasswordGeneratorDialog` |
+| #34 | P2 | 空态 5 套 → `EmptyState` 1 个（卡包同时拆成标题 + 正文，6 条新字符串） | `ui/common/EmptyState.kt` + 5 处 |
+| #34 | P2 | 圆角 6 种 → `VaultixCorner` 三档（`Small`/`Panel`/`Pill`，**按尺寸分档**）；顺带修 6 处「幽灵圆角」 | `ui/theme/VaultixCorner.kt` + `VaultixShapes.medium` |
+
+**门禁**：编译 ✅ · `detekt --rerun-tasks` **10 模块任务行真执行**（无 `UP-TO-DATE`）✅ ·
+`testFullDebugUnitTest` **42 套 / 388 例 0 失败**（数 `test-results/*.xml` 得）✅ ·
+9 个 Python 静态检查全 OK ✅ · CJK 行宽 28 文件全 ≤120 ✅ · 函数 ≤150 行 / 参数 ≤7 ✅。
+
+**新增判据 7 条**（已写进 `.ai/conventions/8.4-UI·观感.md`）：
+
+1. 让位 = 占位高度 + 字体增量 + 系统内边距，三项缺一都会在某种设备上翻车。
+2. `role` 与 `selected` 是两件事，`clickable` 一个都不给，自绘组件必须自己写。
+3. `Shapes(...)` 是**部分覆盖**不是全量替换 —— 只传 `extraSmall` 时其余档位吃 M3 基线。
+4. `MatchingDeclarationName` **不认挪文件** —— 一个文件只能有一个非 `private` 顶层声明。
+5. `minimumInteractiveComponentSize()` **优于**手写 `heightIn(min)`（后者会拉大水波纹）。
+6. Preview 的字体档必须覆写 `LocalDensity.fontScale`，设 `textSize` 是假的。
+7. 圆角**按尺寸分档不按组件分档**，一句话判定 = 看它有多高。
+
+**下一批（P3，都不建议现在单独做）**：
+
+| 项 | 为什么先不做 |
+|---|---|
+| §2.2 `Spacing` 语义化（205 处字面量）+ §3.7 图标 `18.dp`（9 文件） | **必须合并成一轮**，先定"语义常量层"的形态；否则会产出一堵没人记得住名字的常量墙 |
+| §2.5 顶栏四套收敛（沉浸式 6 页 vs 官方 10 页） | 需真机看折叠手感，纯数值改不动 |
+| §2.7 响应式三档 | **文档超期**而非代码缺陷，改文档即可 |
+| §3.4 中文硬编码 72 处 + `values-en` | 涉及 13 个 VM/Controller 例外，需单独排期 |
+| **真机验收（本轮全部 5 项都没在真机上量过）** | 要量：4 键手势机下库列表最后一条是否真可点、2.0x 字体下底栏是否还裁切、深色下 `EntryCard` 的 0.5dp 描边是否还看得见 |
+
+---
+
 ## ✅ #176 已修（2026-10-18）· `StandardTestDispatcher` 只解决"时间"，不解决"线程"
 
 | 项 | 一句话 | 落点 |

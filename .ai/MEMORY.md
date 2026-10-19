@@ -145,6 +145,41 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 
 ## 9. 当前状态与下一批（接力起手式）
 
+> ⚡ **2026-10-19：UI 审计 §4 的 5 个施工项全部落地（P0 → P2）**
+>
+> 来源：`Docs/progress/audit/ui-design-audit-2026-10-19.md`。完整交接见
+> **`.ai/SESSION-2026-10-19.md`**（七个判据 + 4 个踩坑全在里面）。要点：
+>
+> - **#31 Preview 基建先做**（P2 级别但排最前）：`ui/preview/` 两个文件 11 条 `@Preview`，
+>   覆盖 3 个规格中心 × 字体档（1.0/1.3/2.0x）× 明暗。**字体档必须覆写
+>   `LocalDensity.fontScale`，设 `textSize` 是假的** —— 只有前者才走到 `sp→px` 那条路，
+>   才能验证让位补偿。
+> - **#32 P0 真 bug**：库列表让位写死 `96.dp`，而 4 键手势机真实需 ≈118dp
+>   （86 占位 + 16 字体增量 + ≈32 系统内边距）⇒ 首个落地页最后一条点不到。
+>   已函数化为 `rememberBottomDockInset()`。**判据：让位 = 占位 + 字体增量 + 系统内边距，
+>   三项缺一都会在某种设备上翻车，不许写字面量。**
+>   同批补无障碍语义 5 处（`Role.Tab`+`selected` / `Role.RadioButton` / `stateDescription`）。
+>   **判据：`role` 决定"读屏叫它什么"，`selected` 决定"说没说它选中"，`clickable` 两个都不给，
+>   自绘组件必须自己写。**
+> - **#33 P1**：主 CTA 9 种写法 → `PrimaryActionButton` 1 个组件。踩坑：
+>   **detekt `MatchingDeclarationName` 要求一个文件只能有一个非 `private` 顶层声明，
+>   挪文件不解决**（这轮因为"组件 + 它的枚举"连踩两次：`PrimaryActionEmphasis` → 改 `Boolean`；
+>   `VaultixShapes` + `VaultixCorner` → 拆两个文件）。另：`IconButton` 补触摸目标用
+>   **`minimumInteractiveComponentSize()`，优于手写 `heightIn(min)`**（后者会拉大水波纹）。
+> - **#34 P2**：空态 5 套 → `EmptyState` 1 个；圆角 6 种 → `VaultixCorner` 三档
+>   （**按尺寸分档不按组件分档**，一句话判定 = 看它有多高；20dp 归 `Panel`，28dp 只留给对话框）。
+>   顺手修掉**幽灵圆角**：`VaultixShapes` 原来只覆盖 `extraSmall` ⇒ 6 处不传 `shape` 的 `Card`
+>   吃 M3 基线 12dp。**判据：`Shapes(...)` 是部分覆盖不是全量替换。**
+>
+> **门禁**：编译 ✅ · `detekt --rerun-tasks` **10 个模块任务行真执行** ✅ ·
+> `testFullDebugUnitTest` **42 套 / 388 例 0 失败**（数 `test-results/*.xml` 得，非看 ✓）✅ ·
+> 9 个 Python 静态检查全 OK ✅ · CJK 行宽 28 文件全 ≤120 ✅。
+>
+> **下一轮起点**：审计 §4 里 P0/P1/P2 已清空，剩的是 P3（§2.2 `Spacing` 语义化 +
+> §3.7 图标尺寸，建议**合并成一轮**先定常量层形态再动手；§2.5 顶栏收敛需真机；
+> §2.7 是文档超期；§3.4 中文硬编码需单独排期）。另有两个老的真机项：
+> OneDrive `If-None-Match: *` 的 201/412、W6 KeePassXC 互操作。
+
 > ⚡ **2026-10-18（第三轮）：#176 已修 —— 虚拟时钟管"时间"，不管"线程"**
 >
 > #175 修完、跑绿、推上去（`d646127`），**CI 又红了**（run `39139391458`），红的是
@@ -561,6 +596,9 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 > ⚠️ **本索引止于 2026-09-13（第五十一轮）** —— 之后不再逐条续写，避免与 §9 两处漂移。
 > **§9 才是"当前状态 + 最近几轮"的真源**，逐日细节在 `.ai/SESSION-YYYY-MM-DD.md`。
 > 2026-09-14 起的轮次请直接看 §9 顶部与对应的 SESSION 文件；最近几轮是：
+> - `SESSION-2026-10-19.md` —— **UI 设计审计 §4 五个施工项 P0→P2 全部落地**
+>   （Preview 基建 / 底部让位真 bug / 主 CTA 收敛 / 空态与圆角收敛），
+>   388 例 0 失败；新增判据 7 条（见 §9 顶部）。
 > - `SESSION-2026-10-16.md` —— **A4 安全笔记类型往返翻转 + A6 标准字段内存保护丢失 +
 >   W5 JSON⇄KDBX 双向转换落地**（`3fc8649` / `d50463f` / `6ae9bcd`，
 >   CI `38894211052` + `38898302875` + `38927742868`；1142 例 0 失败；

@@ -43,7 +43,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material3.AlertDialog
@@ -69,15 +68,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.vaultix.datastore.VaultTimeout
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.theme.Spacing
+import io.vaultix.vaultix.ui.theme.VaultixCorner
 
 /** 设置项卡片圆角（上游 20dp）。 */
-private val SETTINGS_CARD_CORNER = 20.dp
 
 /** 设置项最小高度（上游 72dp）。 */
 private val SETTINGS_ROW_MIN_HEIGHT = 72.dp
@@ -242,7 +243,7 @@ internal fun SettingsGroupCard(content: @Composable ColumnScope.() -> Unit) {
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
-        shape = RoundedCornerShape(SETTINGS_CARD_CORNER),
+        shape = VaultixCorner.Panel,
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
         ),
@@ -348,7 +349,13 @@ internal fun SingleChoiceRow(label: String, selected: Boolean, onClick: () -> Un
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            // ★ 2026-10-19：整行可点，但语义得自己补。
+            //   ① `Role.RadioButton`：读屏才会把它归入「一组单选」，而不是普通按钮。
+            //   ② `mergeDescendants = true`：把行内 `RadioButton` 与 `Text` 合并成**一个**
+            //      焦点。不合并时焦点会落在两个节点上 —— 先读到"未选中，单选按钮"，
+            //      再滑一下才读到"15 分钟"，一行要划两次，且两处状态可能不同步。
+            .semantics(mergeDescendants = true) { this.selected = selected }
+            .clickable(role = Role.RadioButton, onClick = onClick)
             .padding(vertical = 2.dp),
     ) {
         RadioButton(selected = selected, onClick = onClick)

@@ -23,7 +23,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -92,6 +91,7 @@ import io.vaultix.vaultix.ui.common.rememberFragmentActivity
 import io.vaultix.vaultix.ui.common.trashAutoDeleteLabel
 import io.vaultix.vaultix.ui.theme.ThemeMode
 import io.vaultix.vaultix.ui.theme.Spacing
+import io.vaultix.vaultix.ui.theme.VaultixCorner
 import io.vaultix.vaultix.util.SystemSettingsIntents
 import io.vaultix.vaultix.util.UpdateCheckResult
 import io.vaultix.vaultix.util.UpdateChecker
@@ -533,7 +533,7 @@ private fun UpdateNotesBox(notes: String?) {
             //    这个 padding 是上一版配 `DialogSurface` 时加的，随外壳更换一并去掉。
             .background(
                 color = MaterialTheme.colorScheme.surfaceContainerHighest,
-                shape = RoundedCornerShape(12.dp),
+                shape = VaultixCorner.Small,
             )
             // ⚠️ 顺序：先 `heightIn(max)` 给上界，再 `verticalScroll` —— 反过来的话
             //    滚动容器会拿到无界高度约束，measure 阶段直接抛 IllegalStateException。

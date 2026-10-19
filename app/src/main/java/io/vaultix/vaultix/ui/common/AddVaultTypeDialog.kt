@@ -35,7 +35,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
@@ -60,9 +59,9 @@ import androidx.compose.ui.unit.dp
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.AppFlavor
 import io.vaultix.vaultix.ui.theme.Spacing
+import io.vaultix.vaultix.ui.theme.VaultixCorner
 
-/** 类型选择卡片的圆角（与设置页 `SettingsRow` 同族）。 */
-private val VAULT_TYPE_CARD_CORNER = 20.dp
+/** 类型选择卡片的圆角：**大面**（卡片最小高 76dp）⇒ 走 [VaultixCorner.Panel]。 */
 
 /** 类型选择卡片最小高度。 */
 private val VAULT_TYPE_CARD_MIN_HEIGHT = 76.dp
@@ -163,7 +162,7 @@ private fun VaultTypeCard(
             .fillMaxWidth()
             .padding(vertical = 4.dp)
             .clickable(onClick = onClick, role = Role.Button),
-        shape = RoundedCornerShape(VAULT_TYPE_CARD_CORNER),
+        shape = VaultixCorner.Panel,
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.55f),
         ),

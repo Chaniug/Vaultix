@@ -63,6 +63,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.common.EmptyState
 import io.vaultix.vaultix.ui.common.EntryCard
 import io.vaultix.vaultix.ui.common.EntryCardIconSpacing
 import io.vaultix.vaultix.ui.common.EntryCardTextSpacing
@@ -344,21 +345,13 @@ private fun PasskeysBody(
  */
 @Composable
 private fun PasskeysEmptyState(topInset: Dp, message: String, title: String? = null) {
-    Column(
-        modifier = Modifier.fillMaxSize().padding(top = topInset, start = Spacing.xl, end = Spacing.xl),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        title?.let {
-            Text(text = it, style = MaterialTheme.typography.titleLarge)
-        }
-        Text(
-            text = message,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = Spacing.sm),
-        )
-    }
+    // ★ 2026-10-19：改用统一的 [EmptyState]（审计 §2.6）；`topInset` 由它自己接，
+    //   不再手写 `Modifier.padding(top = topInset, start = …, end = …)`。
+    EmptyState(
+        title = title ?: message,
+        body = if (title == null) null else message,
+        topInset = topInset,
+    )
 }
 
 /**

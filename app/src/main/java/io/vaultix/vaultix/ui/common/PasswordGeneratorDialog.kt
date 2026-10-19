@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -156,7 +157,10 @@ private fun GenToggle(label: String, checked: Boolean, onChange: (Boolean) -> Un
         horizontalArrangement = Arrangement.SpaceBetween,
         modifier = Modifier
             .fillMaxWidth()
-            .height(40.dp),
+            // ⚠️ 2026-10-19：`height(40.dp)` → `heightIn(min = 40.dp)`。
+            //    固定高在 2.0x 字体下会把标签裁掉半行（审计 §3.3）；
+            //    40dp 是**下限**（一行开关行的视觉节奏），不是上限。
+            .heightIn(min = 40.dp),
     ) {
         Text(text = label, style = MaterialTheme.typography.bodyMedium)
         Switch(checked = checked, onCheckedChange = onChange)

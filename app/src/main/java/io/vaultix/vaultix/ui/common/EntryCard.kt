@@ -40,18 +40,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.vaultix.vaultix.ui.theme.VaultixCorner
 import io.vaultix.vaultix.ui.theme.Spacing
-
-/**
- * 卡片圆角。
- *
- * ⚠️ 2026-09-16 **从 12dp 提到 16dp**（用户要求「好看一点，不用那么理性克制」）。
- * 这是**有意偏离**上游 Bastion 的「稀疏列表卡片 = 12dp」规格：
- * 12dp 在列表里偏方正、显得"平"，16dp 与设置页卡片（20dp）更接近，观感更柔和成套。
- */
-private val CARD_CORNER = 16.dp
 
 /** 卡片内边距（保持 Bastion 列表态 = 16dp 四边等宽）。 */
 private val CARD_PADDING = Spacing.lg
@@ -123,7 +116,7 @@ fun EntryCard(
     selected: Boolean = false,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    val shape = RoundedCornerShape(CARD_CORNER)
+    val shape: Shape = VaultixCorner.Panel
     val baseColors = CardDefaults.cardColors(
         containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
     )

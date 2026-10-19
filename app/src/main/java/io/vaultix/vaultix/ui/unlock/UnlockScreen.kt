@@ -12,11 +12,17 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Backspace
+import androidx.compose.material.icons.filled.Fingerprint
+import androidx.compose.material.icons.filled.Pin
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.CircularProgressIndicator
@@ -27,14 +33,15 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -53,22 +60,16 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.withResumed
-import io.vaultix.vaultix.R
-import io.vaultix.vaultix.ui.common.BiometricPrompter
-import io.vaultix.vaultix.ui.common.TwoFactorStep
-import io.vaultix.vaultix.ui.common.rememberFragmentActivity
-import io.vaultix.vaultix.ui.common.VaultixWavyProgress
-import io.vaultix.vaultix.ui.error.UnlockUiError
-import io.vaultix.vaultix.ui.error.unlockErrorText
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.filled.Backspace
-import androidx.compose.material.icons.filled.Fingerprint
-import androidx.compose.material.icons.filled.Pin
-import androidx.compose.material.icons.filled.SwapHoriz
-import androidx.compose.material3.TextButton
-import androidx.compose.foundation.layout.width
 import io.vaultix.domain.PIN_MIN_LENGTH
 import io.vaultix.model.VaultKind
+import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.common.BiometricPrompter
+import io.vaultix.vaultix.ui.common.PrimaryActionButton
+import io.vaultix.vaultix.ui.common.TwoFactorStep
+import io.vaultix.vaultix.ui.common.VaultixWavyProgress
+import io.vaultix.vaultix.ui.common.rememberFragmentActivity
+import io.vaultix.vaultix.ui.error.UnlockUiError
+import io.vaultix.vaultix.ui.error.unlockErrorText
 import io.vaultix.vaultix.ui.theme.Spacing
 
 /**
@@ -278,17 +279,16 @@ private fun ViewLockedContent(
         textAlign = TextAlign.Center,
     )
     Spacer(Modifier.height(Spacing.xl))
-    FilledTonalButton(
+    // ★ 2026-10-19：主 CTA 统一成 PrimaryActionButton（视觉 48dp / 满宽 / 统一忙碌态）——
+    //   「指纹 → 输主密码 → 两步验证」三段里的按钮高度从此一致（审计 §2.3）。
+    PrimaryActionButton(
+        text = stringResource(R.string.quick_unlock_biometric_button),
         onClick = onAuthenticate,
         enabled = !submitting,
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(48.dp),
-    ) {
-        Icon(Icons.Filled.Fingerprint, contentDescription = null)
-        Spacer(Modifier.width(Spacing.sm))
-        Text(stringResource(R.string.quick_unlock_biometric_button))
-    }
+        busy = submitting,
+        icon = Icons.Filled.Fingerprint,
+        toned = true,
+    )
     if (submitting) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -472,18 +472,18 @@ private fun PasswordForm(
     // ⚠️ 间距取 12dp 而不是原来的 24dp：指纹图标自己带 8dp 垂直留白，
     // 再叠 24dp 会让「密码框 → 指纹 → 解锁按钮」这一段松散成三截。
     Spacer(Modifier.height(Spacing.md))
-    FilledTonalButton(
+    PrimaryActionButton(
+        text = stringResource(R.string.unlock_submit),
+        // ⚠️ `enabled` 只留业务条件：忙碌态的禁用由 `busy` 统一叠加，
+        //    调用方再写 `!submitting &&` 就是两份真相（审计 §2.3 的根因之一）。
+        enabled = state.password.isNotEmpty(),
+        busy = state.submitting,
         onClick = {
             focusManager.clearFocus()
             viewModel.submit()
         },
-        enabled = !state.submitting && state.password.isNotEmpty(),
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(48.dp),
-    ) {
-        Text(stringResource(R.string.unlock_submit))
-    }
+        toned = true,
+    )
 }
 
 /**

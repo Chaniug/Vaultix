@@ -48,6 +48,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.common.PrimaryActionButton
 import io.vaultix.vaultix.ui.common.TwoFactorStep
 import io.vaultix.vaultix.ui.common.VaultixWavyProgressBar
 import io.vaultix.vaultix.ui.error.unlockErrorText
@@ -239,22 +240,15 @@ private fun VaultConnectForm(
         }
 
         Spacer(Modifier.height(Spacing.xl))
-        FilledTonalButton(
+        PrimaryActionButton(
+            text = stringResource(R.string.add_vault_submit),
             onClick = {
                 focusManager.clearFocus()
                 viewModel.submit()
             },
-            enabled = !state.submitting,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(48.dp),
-        ) {
-            if (state.submitting) {
-                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-            } else {
-                Text(stringResource(R.string.add_vault_submit))
-            }
-        }
+            busy = state.submitting,
+            toned = true,
+        )
         Spacer(Modifier.height(Spacing.xxl))
     }
 }

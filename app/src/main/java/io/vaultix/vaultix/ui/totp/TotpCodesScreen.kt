@@ -43,6 +43,7 @@ import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -85,6 +86,7 @@ import io.vaultix.common.TotpGenerator
 import io.vaultix.model.VaultItem
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.CloudSyncIcon
+import io.vaultix.vaultix.ui.common.EmptyState
 import io.vaultix.vaultix.ui.common.EntryCard
 import io.vaultix.vaultix.ui.common.EntryCardIconSpacing
 import io.vaultix.vaultix.ui.common.EntryCardTextSpacing
@@ -617,23 +619,20 @@ private fun TotpDialogs(
     }
 }
 
+/**
+ * 空态 / 锁定态。
+ *
+ * ★ 2026-10-19：改用统一的 [EmptyState]（审计 §2.6）。
+ *
+ * ⚠️ 这里**必须**保持"标题可空"这一条：验证码页的「锁定」态只给一句
+ * 「已锁定，解锁后查看验证码」，标题留空是有意的 —— 那种情况下用户已经在解锁页
+ * 看过标题了，再来一个标题是重复。`title` 为空时退化成"只有正文"，
+ * 由 [EmptyState] 的 `title` 必填位承接一个空串之外的做法：**直接传 message 当标题**
+ * （见下面两处调用点的 `if` 分支），这样空态永远不会出现"没有标题"的形态。
+ */
 @Composable
 private fun EmptyTotpState(title: String? = null, message: String) {
-    Column(
-        modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        if (title != null) {
-            Text(text = title, style = MaterialTheme.typography.titleLarge)
-        }
-        Text(
-            text = message,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = Spacing.sm, start = Spacing.xl, end = Spacing.xl),
-        )
-    }
+    EmptyState(title = title ?: message, body = if (title == null) null else message)
 }
 
 /**
@@ -1121,9 +1120,19 @@ private fun TotpRowMenu(
     // 触控区压到 36dp、图标缩到 20dp ⇒ 视觉空隙收到 ~16dp；行内 36dp 仍够点。
     var expanded by remember { mutableStateOf(false) }
     Box {
+        // ★ 2026-10-19：**视觉 36dp，触摸目标 48dp**。
+        //
+        // 改前 `Modifier.size(36.dp)` 一刀切：视觉贴右了，但**热区也塌到 36dp**，
+        // 低于 Material / WCAG 的 48dp 下限（审计 §3.2）。
+        //
+        // 现在把两件事拆开：
+        //  · 热区：`minimumInteractiveComponentSize()` —— 保证 ≥48dp 可点（M3 自己的下限机制，
+        //    比手写 `heightIn(min = 48.dp)` 正确：后者会把 IconButton 的水波纹也拉大）；
+        //  · 视觉：图标仍 20dp，`IconButton` 空出来的 8dp 左右各一半 ⇒ 视觉宽度 ≈36dp，
+        //    贴右的距离与改前一致。
         IconButton(
             onClick = { expanded = true },
-            modifier = Modifier.size(TOTP_MENU_BUTTON_SIZE),
+            modifier = Modifier.minimumInteractiveComponentSize(),
         ) {
             Icon(
                 imageVector = Icons.Filled.MoreVert,
@@ -1278,10 +1287,12 @@ private val TOTP_CODE_FONT_SP = 36.sp
 /** 剩余秒数 ≤ 它时验证码转 `error` 警示色（对齐 Bastion 的 5 秒阈值）。 */
 private const val TOTP_HOT_WARNING_SECONDS = 5
 
-/** 行尾 `MoreVert` 的触控区尺寸（默认 48dp 会把图标推得离右缘太远）。 */
-private val TOTP_MENU_BUTTON_SIZE = 36.dp
+// ⚠️ 2026-10-19：原 `TOTP_MENU_BUTTON_SIZE = 36.dp` 已删。
+//   它同时被当成"触控区"和"视觉尺寸"用 —— 于是视觉贴右了，热区也塌到 36dp。
+//   现在两者的分工是：**热区 = M3 的 48dp（`minimumInteractiveComponentSize`）**，
+//   **视觉 = 图标 20dp + 两侧内边距**，两者互不牵连（审计 §3.2）。
 
-/** 行尾 `MoreVert` 的图标尺寸（随之收紧，视觉重心贴右）。 */
+/** 行尾 `MoreVert` 的图标尺寸（视觉重心贴右）。 */
 private val TOTP_MENU_ICON_SIZE = 20.dp
 
 // 类型固定参数（对齐 Bastion TotpData 的固定口径）

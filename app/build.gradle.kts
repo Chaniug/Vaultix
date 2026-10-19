@@ -222,6 +222,10 @@ dependencies {
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
+    // ★ 2026-10-19：`ui-tooling` 只进 debug —— 它是 Android Studio 预览面板的渲染后端，
+    //   正式包里用不到。之前项目里 0 条 @Preview，所以这条一直缺；补上它 + `@Preview`
+    //   之后，改观感不用再"装包到真机看"（见 .ai/conventions/8.4 新纪律 4）。
+    debugImplementation(libs.androidx.compose.ui.tooling)
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.material.icons.extended)
     implementation(libs.androidx.navigation.compose)

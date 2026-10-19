@@ -88,6 +88,8 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.common.PRIMARY_ACTION_HEIGHT_TALL
+import io.vaultix.vaultix.ui.common.PrimaryActionButton
 import io.vaultix.vaultix.ui.error.unlockErrorText
 import io.vaultix.vaultix.ui.theme.Spacing
 import kotlinx.coroutines.Dispatchers
@@ -470,11 +472,14 @@ private fun CreateSection(
 /**
  * 提交按钮（抽出来避免主函数越 detekt 的行数门禁）。
  *
- * ⚠️ 2026-10-01（第 67 轮）两处改动：
+ * ⚠️ 2026-10-01（第 67 轮）两处改动（**2026-10-19 已并入 `PrimaryActionButton`**）：
  * ① `FilledTonalButton` → **`Button`**。整页只有这一个主操作，tonal 的低强调度让它
  *    和旁边的 `OutlinedButton`（"选择"）分不出主次；页面级的"打开/创建"该用主色。
+ *    ⇒ 现在表达为 `toned = false`（主色底）。
  * ② 高 **48dp → 56dp**（M3 的 large button 规格）。48dp 在满宽按钮上偏扁，
  *    且与下方 `Spacing.xxl` 的收尾留白比例不协调。
+ *    ⇒ 现在表达为 `height = PRIMARY_ACTION_HEIGHT_TALL`，**不再写字面量** ——
+ *      同一种"主 CTA 的视觉高"在全项目只能有一处定义（审计 §2.3 / 8.4 新纪律 1）。
  *
  * `submitting` 时按钮内嵌 20dp 小转圈而**不是**波浪进度条：
  * 见 `8.8` §4 P1-1 实测表 —— 18/20dp 内联小转圈换成波浪会被撑到 **48dp**，
@@ -488,26 +493,16 @@ private fun SubmitButton(
     onSubmit: () -> Unit,
 ) {
     val focusManager = LocalFocusManager.current
-    Button(
+    PrimaryActionButton(
+        text = label,
         onClick = {
             focusManager.clearFocus()
             onSubmit()
         },
         enabled = enabled,
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(56.dp),
-    ) {
-        if (submitting) {
-            CircularProgressIndicator(
-                modifier = Modifier.size(20.dp),
-                strokeWidth = 2.dp,
-                color = MaterialTheme.colorScheme.onPrimary,
-            )
-        } else {
-            Text(label, style = MaterialTheme.typography.titleSmall)
-        }
-    }
+        busy = submitting,
+        height = PRIMARY_ACTION_HEIGHT_TALL,
+    )
 }
 
 /**

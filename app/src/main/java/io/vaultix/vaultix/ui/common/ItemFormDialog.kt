@@ -88,6 +88,7 @@ import io.vaultix.model.VaultReprompt
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.qr.QrScannerContent
 import io.vaultix.vaultix.ui.theme.Spacing
+import io.vaultix.vaultix.ui.theme.VaultixCorner
 
 /**
  * 条目表单对话框（新建 / 编辑共用，Docs/08 S10）。
@@ -386,8 +387,7 @@ private fun SectionLabel(text: String, icon: ImageVector) {
     }
 }
 
-/** 表单分组卡片的圆角（与设置页卡片同一档，保持全局观感一致）。 */
-private val FORM_CARD_CORNER = 20.dp
+/** 表单分组卡片的圆角：大面 ⇒ [VaultixCorner.Panel]（与 `SettingsGroupCard` / `EntryCard` 同档）。 */
 
 /**
  * 表单里**所有**输入框的字段名（`OutlinedTextField` 的 `label` 槽）。
@@ -439,15 +439,14 @@ private fun EmphasisBlock(content: @Composable ColumnScope.() -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(FORM_FIELD_BLOCK_CORNER))
+            .clip(VaultixCorner.Small)
             .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.30f))
             .padding(Spacing.md),
         content = content,
     )
 }
 
-/** 强调块的小圆角（比卡片小一档：它是卡的**内**部件，不是第四张卡）。 */
-private val FORM_FIELD_BLOCK_CORNER = 12.dp
+/** 强调块的小圆角（它是卡的**内**部件，不是第四张卡）⇒ [VaultixCorner.Small]。 */
 
 /**
  * 表单的**分组卡片**（2026-09-16 新增，取代此前的 `SectionLabel` + 淡分隔线）。
@@ -487,7 +486,7 @@ private val FORM_FIELD_BLOCK_CORNER = 12.dp
 internal fun FormGroupCard(content: @Composable ColumnScope.() -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(FORM_CARD_CORNER),
+        shape = VaultixCorner.Panel,
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
         ),

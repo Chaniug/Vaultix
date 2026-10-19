@@ -43,6 +43,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.common.EmptyState
 import io.vaultix.vaultix.ui.common.TrashAutoDeleteDialog
 import io.vaultix.vaultix.ui.common.itemTypeLabelRes
 import io.vaultix.vaultix.ui.theme.Spacing
@@ -174,24 +175,12 @@ fun TrashScreen(
 
 @Composable
 private fun EmptyTrashState() {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = Spacing.xxl),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Text(
-            text = stringResource(R.string.trash_empty_title),
-            style = MaterialTheme.typography.titleLarge,
-        )
-        Text(
-            text = stringResource(R.string.trash_empty_body),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = Spacing.sm),
-        )
-    }
+    // ★ 2026-10-19：改用统一的 [EmptyState]（审计 §2.6）。
+    //   横向边距从 `Spacing.xxl`(32) 收到 24dp —— 与另外 5 处空态一致。
+    EmptyState(
+        title = stringResource(R.string.trash_empty_title),
+        body = stringResource(R.string.trash_empty_body),
+    )
 }
 
 @Composable

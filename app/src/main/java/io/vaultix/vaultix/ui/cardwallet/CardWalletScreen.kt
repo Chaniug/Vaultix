@@ -48,6 +48,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ScaffoldDefaults
 import androidx.compose.runtime.saveable.rememberSaveable
+import io.vaultix.vaultix.ui.common.EmptyState
 import io.vaultix.vaultix.ui.common.VaultixSearchTopAppBar
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -183,21 +184,25 @@ fun CardWalletScreen(
                 // 搜索态归零：Scaffold 已按 `contentWindowInsets` 为搜索栏预留了高度。
                 val topInset = if (searchActive) 0.dp else barPadding
                 if (visibleCards.isEmpty()) {
-                    Box(
-                        modifier = Modifier.fillMaxSize().padding(top = topInset),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            text = stringResource(
-                                cardEmptyStateRes(
-                                    hasCards = cards.isNotEmpty(),
-                                    creationSupported = cardCreationSupported,
-                                ),
+                    // ★ 2026-10-19：改用统一的 [EmptyState]，并**补上标题**（审计 §2.6）。
+                    //   改前这里只有一个内联 `Box` + 一句灰字，**没有标题** ——
+                    //   全项目 6 处空态里唯一一处，用户分不清"我还没有卡"和"加载失败"。
+                    EmptyState(
+                        title = stringResource(
+                            cardEmptyTitleRes(
+                                hasCards = cards.isNotEmpty(),
+                                creationSupported = cardCreationSupported,
                             ),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
+                        ),
+                        body = stringResource(
+                            cardEmptyStateRes(
+                                hasCards = cards.isNotEmpty(),
+                                creationSupported = cardCreationSupported,
+                            ),
+                        ),
+                        topInset = topInset,
+                        bottomInset = bottomInset,
+                    )
                 } else {
                     LazyColumn(
                         state = listState,
@@ -300,9 +305,21 @@ private fun cardWalletFabVisible(
  *   此时界面上根本没有「+」，文案不能再教用户去按一个不存在的按钮。
  */
 private fun cardEmptyStateRes(hasCards: Boolean, creationSupported: Boolean): Int = when {
-    hasCards -> R.string.card_wallet_no_match
-    creationSupported -> R.string.card_wallet_empty
-    else -> R.string.card_wallet_empty_kdbx
+    hasCards -> R.string.card_wallet_no_match_body
+    creationSupported -> R.string.card_wallet_empty_body
+    else -> R.string.card_wallet_empty_kdbx_body
+}
+
+/**
+ * 空态**标题**（正文见 [cardEmptyStateRes]）。
+ *
+ * ⚠️ 2026-10-19：这里原来没有标题，只有一句正文。拆成"标题 + 正文"是为了让用户一眼分清
+ * 「搜索没命中」和「我这个库本来就没有卡」—— 这两件事以前都是同一团灰字。
+ */
+private fun cardEmptyTitleRes(hasCards: Boolean, creationSupported: Boolean): Int = when {
+    hasCards -> R.string.card_wallet_no_match_title
+    creationSupported -> R.string.card_wallet_empty_title
+    else -> R.string.card_wallet_empty_kdbx_title
 }
 
 /**

@@ -90,6 +90,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -104,6 +106,7 @@ import io.vaultix.model.VaultKind
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.Capability
 import io.vaultix.vaultix.ui.common.CapabilityIcon
+import io.vaultix.vaultix.ui.common.EmptyState
 import io.vaultix.vaultix.ui.common.capabilityTint
 import io.vaultix.vaultix.ui.common.CloudSyncIcon
 import io.vaultix.vaultix.ui.common.EntryCard
@@ -1514,22 +1517,12 @@ private fun SyncNoteBanner(
 
 @Composable
 private fun EmptyItemsState() {
-    Column(
-        modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Text(
-            text = stringResource(R.string.items_empty_title),
-            style = MaterialTheme.typography.titleLarge,
-        )
-        Text(
-            text = stringResource(R.string.items_empty_body),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = Spacing.sm),
-        )
-    }
+    // ★ 2026-10-19：改用统一的 [EmptyState]（审计 §2.6）。
+    //   本处原本就是"标题 + 正文"的正确形态，收进组件后只变横向边距（页面给 → 24dp）。
+    EmptyState(
+        title = stringResource(R.string.items_empty_title),
+        body = stringResource(R.string.items_empty_body),
+    )
 }
 
 /** 搜索无命中时的空态（区别于「库里还没有条目」）。 */
@@ -1562,6 +1555,9 @@ private fun GroupHeader(
     expanded: Boolean,
     onToggle: () -> Unit,
 ) {
+    val expandedStateText = stringResource(
+        if (expanded) R.string.items_group_expanded else R.string.items_group_collapsed,
+    )
     val rotation by animateFloatAsState(
         targetValue = if (expanded) 0f else -90f,
         animationSpec = tween(GROUP_ANIM_MS),
@@ -1572,6 +1568,13 @@ private fun GroupHeader(
             .fillMaxWidth()
             .clip(RoundedCornerShape(Spacing.sm))
             .clickable(onClick = onToggle)
+            // ★ 2026-10-19：展开态**只有箭头方向**在表达，箭头 `contentDescription = null`
+            //   且只是旋转 —— 读屏完全不知道这组现在是展开还是收起。
+            //   `stateDescription` 让读屏补一句「已展开 / 已收起」（TalkBack 念作 state），
+            //   比把两个词塞进 `contentDescription` 更准：它**变化时**会被主动播报。
+            .semantics {
+                stateDescription = expandedStateText
+            }
             .padding(horizontal = Spacing.sm, vertical = Spacing.sm),
         verticalAlignment = Alignment.CenterVertically,
     ) {

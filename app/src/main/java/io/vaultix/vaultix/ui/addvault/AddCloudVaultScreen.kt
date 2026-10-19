@@ -82,6 +82,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -93,6 +95,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.vaultix.data.kdbx.KdbxFileEntry
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.remote.CloudAccount
+import io.vaultix.vaultix.ui.common.PrimaryActionButton
 import io.vaultix.vaultix.ui.common.VaultixWavyProgressBar
 import io.vaultix.vaultix.ui.error.UnlockUiError
 import io.vaultix.vaultix.ui.error.unlockErrorText
@@ -102,8 +105,8 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
-private val BUTTON_HEIGHT = 48.dp
-private val INLINE_PROGRESS = 20.dp
+// ⚠️ 2026-10-19：`BUTTON_HEIGHT`（48dp）与 `INLINE_PROGRESS`（20dp）已删 ——
+//   主 CTA 的规格统一到 `PrimaryActionButton`（转圈一律 18dp，不再有 18/20 两种）。
 private val INLINE_ICON = 18.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -202,8 +205,14 @@ private fun AccountPicker(
 
     state.configuredAccounts.forEach { account ->
         ListItem(
+            // ★ 2026-10-19：这是「从候选里挑一个」的**单选**，但外层没有任何选中标记
+            //   （选中之后就跳去下一步页面了），所以只补 `Role.RadioButton`：
+            //   读屏会归入「一组单选」，不会念成"按钮"。
+            //   ⚠️ 这条**不**加 `selected`：这里没有可表达的选中态，硬塞一个恒 false
+            //   的 `selected` 反而会让读屏多念一句永远不变的"未选中"。
             modifier = Modifier.clickable(
                 enabled = !state.busy,
+                role = Role.RadioButton,
                 onClick = { onPick(account) },
             ),
             leadingContent = {
@@ -294,18 +303,12 @@ private fun NoAccountsYet(onOpenCloudAccounts: () -> Unit) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(Spacing.lg))
-        FilledTonalButton(
+        PrimaryActionButton(
+            text = stringResource(R.string.add_cloud_go_to_accounts),
             onClick = onOpenCloudAccounts,
-            modifier = Modifier.fillMaxWidth().height(BUTTON_HEIGHT),
-        ) {
-            Icon(
-                Icons.Filled.Settings,
-                contentDescription = null,
-                modifier = Modifier.size(INLINE_ICON),
-            )
-            Spacer(Modifier.width(Spacing.sm))
-            Text(stringResource(R.string.add_cloud_go_to_accounts))
-        }
+            icon = Icons.Filled.Settings,
+            toned = true,
+        )
     }
 }
 
@@ -403,7 +406,10 @@ private fun EntryRow(
         modifier = if (entry.isDirectory) {
             Modifier.clickable(onClick = onOpen)
         } else {
-            Modifier.clickable(onClick = onSelect, role = Role.RadioButton)
+            Modifier
+                .clickable(onClick = onSelect, role = Role.RadioButton)
+                // 文件是单选（目录是"进下一层"，见上分支，不需要 selected）。
+                .semantics { this.selected = selected }
         },
         leadingContent = {
             Icon(
@@ -474,25 +480,16 @@ private fun MasterPasswordField(
 @Composable
 private fun SubmitButton(state: AddCloudVaultViewModel.UiState, onSubmit: () -> Unit) {
     val focusManager = LocalFocusManager.current
-    FilledTonalButton(
+    PrimaryActionButton(
+        text = stringResource(R.string.add_cloud_submit),
         onClick = {
             focusManager.clearFocus()
             onSubmit()
         },
         enabled = state.canSubmit,
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(BUTTON_HEIGHT),
-    ) {
-        if (state.busy) {
-            CircularProgressIndicator(
-                modifier = Modifier.size(INLINE_PROGRESS),
-                strokeWidth = 2.dp,
-            )
-        } else {
-            Text(stringResource(R.string.add_cloud_submit))
-        }
-    }
+        busy = state.busy,
+        toned = true,
+    )
 }
 
 // ---------------------------------------------------------------- 小组件

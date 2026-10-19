@@ -57,7 +57,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -105,12 +104,15 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.remote.CloudAccount
 import io.vaultix.vaultix.remote.CloudAccountKind
+import io.vaultix.vaultix.ui.common.PrimaryActionButton
 import io.vaultix.vaultix.ui.common.rememberFragmentActivity
 import io.vaultix.vaultix.ui.theme.Spacing
+import io.vaultix.vaultix.ui.theme.VaultixCorner
 
-private val BUTTON_HEIGHT = 48.dp
+// ⚠️ 2026-10-19：`BUTTON_HEIGHT`（48dp）与 `INLINE_PROGRESS`（18dp）已删 ——
+//   它们随主 CTA 统一进 `PrimaryActionButton`（见 `ui/common/PrimaryActionButton.kt`），
+//   留在这里只会让下一个人以为"本页的按钮规格是本地定义的"。
 private val INLINE_ICON = 18.dp
-private val INLINE_PROGRESS = 18.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -327,35 +329,22 @@ private fun CloudAccountCard(
                 horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                FilledTonalButton(
+                // 这一枚在 `Row` 里、不占满宽（右侧还有「移除」文字按钮），
+                // 故 `fillMaxWidth = false`。尺寸规格仍走同一个组件（审计 §2.3）。
+                PrimaryActionButton(
+                    text = stringResource(
+                        if (account.connected) {
+                            R.string.cloud_accounts_onedrive_switch
+                        } else {
+                            R.string.cloud_accounts_onedrive_signin
+                        },
+                    ),
                     onClick = { onSignIn(account.connected) },
-                    enabled = !busy,
-                    modifier = Modifier.height(BUTTON_HEIGHT),
-                ) {
-                    if (busy) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(INLINE_PROGRESS),
-                            strokeWidth = 2.dp,
-                        )
-                        Spacer(Modifier.width(Spacing.sm))
-                    } else {
-                        Icon(
-                            Icons.Filled.Cloud,
-                            contentDescription = null,
-                            modifier = Modifier.size(INLINE_ICON),
-                        )
-                        Spacer(Modifier.width(Spacing.sm))
-                    }
-                    Text(
-                        stringResource(
-                            if (account.connected) {
-                                R.string.cloud_accounts_onedrive_switch
-                            } else {
-                                R.string.cloud_accounts_onedrive_signin
-                            },
-                        ),
-                    )
-                }
+                    busy = busy,
+                    icon = Icons.Filled.Cloud,
+                    toned = true,
+                    fillMaxWidth = false,
+                )
                 Spacer(Modifier.weight(1f))
                 TextButton(onClick = onRemove, enabled = !busy) {
                     Text(
@@ -488,27 +477,13 @@ private fun AddAccountForm(
         // 授权页、再等用户选账户，中间可能好几秒。**一个灰按钮和一个正在跑的按钮长得一样**，
         // 用户会以为自己没点上而反复点。
         // （WebDAV 那侧本来就做对了：`ProbeButton` 在 PROBING 时显进度圈。）
-        FilledTonalButton(
+        PrimaryActionButton(
+            text = stringResource(R.string.cloud_accounts_onedrive_signin),
             onClick = { onSignIn(false) },
-            enabled = !state.busy,
-            modifier = Modifier.fillMaxWidth().height(BUTTON_HEIGHT),
-        ) {
-            if (state.busy) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(INLINE_PROGRESS),
-                    strokeWidth = 2.dp,
-                )
-                Spacer(Modifier.width(Spacing.sm))
-            } else {
-                Icon(
-                    Icons.Filled.Cloud,
-                    contentDescription = null,
-                    modifier = Modifier.size(INLINE_ICON),
-                )
-                Spacer(Modifier.width(Spacing.sm))
-            }
-            Text(stringResource(R.string.cloud_accounts_onedrive_signin))
-        }
+            busy = state.busy,
+            icon = Icons.Filled.Cloud,
+            toned = true,
+        )
     }
 
     Spacer(Modifier.height(Spacing.sm))
@@ -577,20 +552,17 @@ private fun WebDavFields(
 
 @Composable
 private fun ProbeButton(state: CloudAccountsViewModel.UiState, onClick: () -> Unit) {
-    Button(
+    // ★ 2026-10-19：原来这里是全项目唯一用 **filled `Button`** 的主 CTA，
+    //   而它上面那句注释自己写着「与 WebDAV 的【测试连接】保持同一形态」——
+    //   形态对的，规格是散的。统一走 [PrimaryActionButton] 的 `Primary` 档
+    //   （"测试连接"确实是这一屏的终点动作，比别处「登录」更该是主色）。
+    PrimaryActionButton(
+        text = stringResource(R.string.cloud_accounts_test_connection),
         onClick = onClick,
         enabled = state.canProbe,
-        modifier = Modifier.fillMaxWidth().height(BUTTON_HEIGHT),
-    ) {
-        if (state.probe == ProbeState.PROBING) {
-            CircularProgressIndicator(
-                modifier = Modifier.size(INLINE_PROGRESS),
-                strokeWidth = 2.dp,
-            )
-            Spacer(Modifier.width(Spacing.sm))
-        }
-        Text(stringResource(R.string.cloud_accounts_test_connection))
-    }
+        busy = state.probe == ProbeState.PROBING,
+        toned = false,
+    )
 }
 
 /**
@@ -614,7 +586,7 @@ private fun ProbeStatusCard(state: CloudAccountsViewModel.UiState) {
             MaterialTheme.colorScheme.error
     }
     Surface(
-        shape = RoundedCornerShape(12.dp),
+        shape = VaultixCorner.Small,
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
         modifier = Modifier.fillMaxWidth(),
     ) {

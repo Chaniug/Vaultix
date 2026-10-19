@@ -187,6 +187,9 @@ androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", versi
 androidx-compose-ui = { group = "androidx.compose.ui", name = "ui" }
 androidx-compose-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }
 androidx-compose-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
+# 只为 Android Studio 的 @Preview 面板服务，**只进 debug**（见 app/build.gradle.kts）。
+# 之前项目里一条 @Preview 都没有，所以这个包一直没加 —— 缺它 = 预览面板渲染不出来。
+androidx-compose-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
 # 显式锁版本（跟随 Bastion）：composeBom 与 material3 硬绑定，不可只改其一
 androidx-compose-material3 = { group = "androidx.compose.material3", name = "material3", version.ref = "material3" }
 androidx-compose-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended" }

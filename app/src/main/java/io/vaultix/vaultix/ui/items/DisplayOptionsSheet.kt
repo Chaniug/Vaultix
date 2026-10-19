@@ -49,6 +49,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import io.vaultix.vaultix.R
@@ -186,7 +189,14 @@ private fun OptionRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .clickable(
+                // ★ 2026-10-19：这行是**单选**（选中靠 Semibold + 末尾对勾，两者都不播报）。
+                //   缺 role 时读屏只会说「Double-tap to activate」，用户不知道这是一组互斥选项，
+                //   也不知道当前选的是哪一个。补 `Role.RadioButton` + `selected`。
+                role = Role.RadioButton,
+                onClick = onClick,
+            )
+            .semantics { this.selected = selected }
             .padding(horizontal = Spacing.xl, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

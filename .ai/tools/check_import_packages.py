@@ -125,6 +125,14 @@ _LEGIT_CROSS_PACKAGE: frozenset[str] = frozenset({
     # compose.ui.platform（旧）与 lifecycle.compose（新）两包都真实存在，
     # 后者是迁移目标，并存期间同时用不算错。
     "LocalLifecycleOwner",
+    # 🔴 2026-10-19 新增（补 @Preview 基建时踩到的**误报**）：
+    #   `androidx.camera.core.Preview`（CameraX 的预览用例）与
+    #   `androidx.compose.ui.tooling.preview.Preview`（预览注解）**同名且都合法**，
+    #   前者只在 `ui/qr/QrScannerContent.kt` 用（`Preview.Builder()`），后者的样本
+    #   来自新建的 `ui/preview/*` —— 一旦后者票数超过前者，摄像头那处就被判成
+    #   "该从 tooling.preview 导入"，而那是**错的方向**（真按它改就编译不过）。
+    #   两者语义毫无关系，唯一的共性是名字，故整体放行、不做约定。
+    "Preview",
 })
 
 
