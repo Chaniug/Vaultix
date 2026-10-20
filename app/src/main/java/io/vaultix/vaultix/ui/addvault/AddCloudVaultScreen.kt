@@ -100,6 +100,7 @@ import io.vaultix.vaultix.ui.common.VaultixWavyProgressBar
 import io.vaultix.vaultix.ui.error.UnlockUiError
 import io.vaultix.vaultix.ui.error.unlockErrorText
 import io.vaultix.vaultix.ui.theme.Spacing
+import io.vaultix.vaultix.ui.theme.UiSize
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -107,7 +108,6 @@ import java.util.Locale
 
 // ⚠️ 2026-10-19：`BUTTON_HEIGHT`（48dp）与 `INLINE_PROGRESS`（20dp）已删 ——
 //   主 CTA 的规格统一到 `PrimaryActionButton`（转圈一律 18dp，不再有 18/20 两种）。
-private val INLINE_ICON = 18.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -505,7 +505,7 @@ private fun OutlinedIconButton(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Icon(icon, contentDescription = null, modifier = Modifier.size(INLINE_ICON))
+        Icon(icon, contentDescription = null, modifier = Modifier.size(UiSize.InlineIcon))
         Spacer(Modifier.width(Spacing.sm))
         Text(text)
     }

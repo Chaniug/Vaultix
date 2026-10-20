@@ -56,7 +56,16 @@ class ItemDetailViewModel @Inject constructor(
         data object CopyFailed : UiEvent
         data object SaveSynced : UiEvent
         data object SaveQueued : UiEvent
-        data class SaveFailed(val message: String) : UiEvent
+        /**
+         * 保存 / 删除失败。
+         *
+         * ⚠️ `message` 可空，且**不要在 ViewModel 里填兜底文案**：异常常常没有
+         * `message`（`Throwable()` 而非业务异常），而"没细节时说什么"是**呈现**决定，
+         * 归 UI 层。此前这里写死 ``（审计 §3.4），后果是同一句话在
+         * 三个 ViewModel 里各存一份、且都不在 strings.xml。
+         * ⇒ 现在传 null，由 `ItemDetailScreen` 换成 `error_unknown_no_detail`。
+         */
+        data class SaveFailed(val message: String?) : UiEvent
         data object Deleted : UiEvent
     }
 
@@ -186,7 +195,7 @@ class ItemDetailViewModel @Inject constructor(
                             VaultSaveOutcome.Queued -> UiEvent.SaveQueued
                         }
                     },
-                    onFailure = { error -> UiEvent.SaveFailed(error.message ?: "未知错误") },
+                    onFailure = { error -> UiEvent.SaveFailed(error.message) },
                 ),
             )
         }
@@ -202,7 +211,7 @@ class ItemDetailViewModel @Inject constructor(
             outcome.fold(
                 onSuccess = { _events.send(UiEvent.Deleted) },
                 onFailure = { error ->
-                    _events.send(UiEvent.SaveFailed(error.message ?: "未知错误"))
+                    _events.send(UiEvent.SaveFailed(error.message))
                 },
             )
         }

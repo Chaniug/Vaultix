@@ -75,6 +75,7 @@ import io.vaultix.vaultix.ui.common.KdbxConflictDialog
 import io.vaultix.vaultix.ui.common.deviceCanAuthenticate
 import io.vaultix.vaultix.ui.settings.QuickUnlockHost
 import io.vaultix.vaultix.ui.shell.rememberBottomDockInset
+import io.vaultix.vaultix.ui.theme.UiSize
 import io.vaultix.vaultix.ui.theme.VaultixCorner
 import io.vaultix.vaultix.ui.theme.Spacing
 
@@ -121,14 +122,17 @@ fun VaultListScreen(
                     snackbarHostState.showSnackbar(context.getString(R.string.vault_removed))
                 is VaultListViewModel.Event.RemoveFailed ->
                     snackbarHostState.showSnackbar(
-                        context.getString(R.string.item_save_failed, event.message),
+                        context.getString(R.string.item_save_failed, event.notice.resolve(context)),
                     )
                 // KDBX 网盘同步的结果：成功走 snackbar。
                 is VaultListViewModel.Event.KdbxSynced ->
-                    snackbarHostState.showSnackbar(event.message)
+                    snackbarHostState.showSnackbar(event.notice.resolve(context))
                 is VaultListViewModel.Event.KdbxSyncFailed ->
                     snackbarHostState.showSnackbar(
-                        context.getString(R.string.kdbx_conflict_resolve_failed, event.message),
+                        context.getString(
+                            R.string.kdbx_conflict_resolve_failed,
+                            event.notice.resolve(context),
+                        ),
                     )
                 // ★ 冲突**不走 snackbar** —— 它要用户做一次有代价的选择，
                 //   一句自动消失的提示会把它降级成"哦，失败了啊"。
@@ -481,7 +485,7 @@ private fun BrandVaultButton(
             contentColor = content,
         ),
         shape = VaultixCorner.Panel,
-        contentPadding = PaddingValues(horizontal = Spacing.lg, vertical = 10.dp),
+        contentPadding = PaddingValues(horizontal = Spacing.lg, vertical = UiSize.RowVerticalPadding),
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 64.dp),
@@ -535,7 +539,7 @@ private fun VaultCard(
                     imageVector = Icons.Filled.Lock,
                     contentDescription = stringResource(R.string.vault_badge_locked),
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(18.dp),
+                    modifier = Modifier.size(UiSize.InlineIcon),
                 )
             }
             VaultCardMenu(onRemove = onRemove, onSyncNow = onSyncNow)
@@ -672,7 +676,7 @@ private fun SyncStatusLine(syncStatus: VaultSyncStatus?) {
         style = MaterialTheme.typography.labelSmall,
         color = color,
         maxLines = 1,
-        modifier = Modifier.padding(top = 2.dp),
+        modifier = Modifier.padding(top = UiSize.HairGap),
     )
 }
 
@@ -681,3 +685,18 @@ private val EMPTY_BRAND_ICON = 72.dp
 
 /** 品牌页「定位语」与两个入口按钮之间的间距（原为字面量 36dp，收进命名常量）。 */
 private val EMPTY_ACTIONS_TOP_GAP = 36.dp
+
+/**
+ * 把 [SyncNotice] 解析成**可上屏的一句话**。
+ *
+ * ⚠️ 这里拿 `Context` 而不是 `stringResource`：snackbar 是在 `LaunchedEffect` 里
+ * 用 `suspend` 的 `showSnackbar` 弹的，不在 Composable 作用域内 —— 那是本页既有
+ * 的做法（同一处其它分支也都在 `context.getString`），保持一致即可。
+ *
+ * ⚠️ [SyncNotice.Res] 全部是**无参**资源，所以不需要格式化参数。若将来某条要带参，
+ * 先给类型加上 `args`，别在调用点就地拼字符串 —— 那会让这里重新变成双源。
+ */
+private fun SyncNotice.resolve(context: android.content.Context): String = when (this) {
+    is SyncNotice.Res -> context.getString(id)
+    is SyncNotice.Detail -> message
+}

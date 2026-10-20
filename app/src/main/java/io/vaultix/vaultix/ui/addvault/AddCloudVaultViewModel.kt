@@ -193,7 +193,7 @@ class AddCloudVaultViewModel @Inject constructor(
         // ★ 2026-09-30 用户报的「从网盘添加，显示这个账号没有可用目录」= 本判据 +
         //    `CloudAccountInventory` 缺 OneDrive 兜底起点，**两处叠加**。两处都已修。
         if (root == null) {
-            _state.update { it.copy(error = asError("这个账号还没有可用的目录，请先在设置里重新配置")) }
+            _state.update { it.copy(error = UnlockUiError.Validation.CloudAccountRootMissing) }
             return
         }
         _state.update {
@@ -215,7 +215,7 @@ class AddCloudVaultViewModel @Inject constructor(
                     dirStack += root
                     val source = runCatching { webDavSource(root) }.getOrNull()
                     if (source == null) {
-                        failWith("这个库还没有可用的文件来源")
+                        failWith(UnlockUiError.Validation.CloudVaultSourceMissing)
                         return@launch
                     }
                     listInto(source, rootLabel(root))
@@ -227,7 +227,7 @@ class AddCloudVaultViewModel @Inject constructor(
                     dirStack += root
                     val source = oneDriveSource(oneDriveBrowsePath())
                     if (source == null) {
-                        failWith("OneDrive 登录状态异常，请重试")
+                        failWith(UnlockUiError.Validation.CloudSignInBroken)
                         return@launch
                     }
                     listInto(source, root)
@@ -252,7 +252,7 @@ class AddCloudVaultViewModel @Inject constructor(
         _state.update { it.copy(busy = true, error = null) }
         viewModelScope.launch {
             val source = currentSource() ?: run {
-                failWith("这个来源已不可用，请重新连接")
+                failWith(UnlockUiError.Validation.CloudSourceUnavailable)
                 return@launch
             }
             listInto(source, labelOf(next))
@@ -266,7 +266,7 @@ class AddCloudVaultViewModel @Inject constructor(
         _state.update { it.copy(busy = true, selectedName = "", error = null) }
         viewModelScope.launch {
             val source = currentSource() ?: run {
-                failWith("这个来源已不可用，请重新连接")
+                failWith(UnlockUiError.Validation.CloudSourceUnavailable)
                 return@launch
             }
             listInto(source, labelOf(currentDir()))
@@ -294,12 +294,12 @@ class AddCloudVaultViewModel @Inject constructor(
     fun submit() {
         val current = _state.value
         if (current.selectedName.isBlank()) {
-            _state.update { it.copy(error = asError("请先选中一个 .kdbx 文件")) }
+            _state.update { it.copy(error = UnlockUiError.Validation.CloudFileNotPicked) }
             return
         }
         if (current.masterPassword.isEmpty() || current.busy) return
         val origin = buildOrigin() ?: run {
-            _state.update { it.copy(error = asError("这个来源已不可用，请重新连接")) }
+            _state.update { it.copy(error = UnlockUiError.Validation.CloudSourceUnavailable) }
             return
         }
         _state.update { it.copy(busy = true, error = null) }
@@ -338,7 +338,10 @@ class AddCloudVaultViewModel @Inject constructor(
      */
     private suspend fun listInto(source: KdbxFileSource, label: String) {
         val listed = runCatching { source.listChildren() }.getOrElse { error ->
-            failWith(error.message ?: "无法列出目录")
+            failWith(
+                error.message?.let(UnlockUiError::Detail)
+                    ?: UnlockUiError.Validation.CloudListFailed,
+            )
             return
         }
         val visible = listed
@@ -481,17 +484,17 @@ class AddCloudVaultViewModel @Inject constructor(
         }
     }
 
-    private fun failWith(message: String) {
-        _state.update { it.copy(busy = false, error = asError(message)) }
+    private fun failWith(error: UnlockUiError) {
+        _state.update { it.copy(busy = false, error = error) }
     }
 
-    /**
-     * 包成 [UnlockUiError.Detail] 而不是 `Unknown`。
-     *
-     * 这里进出的每一句话都**已经是人话**（来源自带的消息、或本类写死的指引），
-     * 用 `Unknown` 会在前面多挂一个「出错了：」—— 把一句完整的话切碎。
-     */
-    private fun asError(message: String): UnlockUiError = UnlockUiError.Detail(message)
+    // ⚠️ 2026-10-21 §3.4：原有一个 `asError(msg) = UnlockUiError.Detail(msg)` 便捷包装，
+    //   用来把**本类写死的中文指引**塞进错误位。那个用法是错的 —— `Detail` 的契约是
+    //   "来源层已经翻译好的一句话"，我们自己的文案塞进去就绕开了资源系统，
+    //   哨兵也看不见它（哨兵只扫 `ui/**` 里的字面量，而这种包装会让人以为"已经处理过了"）。
+    //   ⇒ 自己的文案一律走 [UnlockUiError.Validation]，来源自带的消息才用 `Detail`。
+    //   包装函数随之删除：没有它，下一个人想偷懒时得先写一行 `Detail(...)`，
+    //   那一步足够让他停下来看一眼上面的理由。
 
     private companion object {
         /** 目录栈只有一个元素 = 已在根目录。 */

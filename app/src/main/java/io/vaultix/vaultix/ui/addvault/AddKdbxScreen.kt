@@ -92,6 +92,7 @@ import io.vaultix.vaultix.ui.common.PRIMARY_ACTION_HEIGHT_TALL
 import io.vaultix.vaultix.ui.common.PrimaryActionButton
 import io.vaultix.vaultix.ui.error.unlockErrorText
 import io.vaultix.vaultix.ui.theme.Spacing
+import io.vaultix.vaultix.ui.theme.UiSize
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -265,7 +266,7 @@ fun AddKdbxScreen(
                         imageVector = Icons.Filled.ErrorOutline,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.size(16.dp),
+                        modifier = Modifier.size(UiSize.MicroIcon),
                     )
                     Text(
                         text = message,
@@ -359,7 +360,7 @@ private fun ModeSwitcher(
                                 Icons.Filled.Add
                             },
                             contentDescription = null,
-                            modifier = Modifier.size(18.dp),
+                            modifier = Modifier.size(UiSize.InlineIcon),
                         )
                         Text(
                             stringResource(
@@ -599,7 +600,7 @@ private fun KeyFileRow(
 ) {
     if (state.keyFileUri == null) {
         TextButton(onClick = onPickKeyFile) {
-            Icon(Icons.Filled.Key, contentDescription = null, modifier = Modifier.size(18.dp))
+            Icon(Icons.Filled.Key, contentDescription = null, modifier = Modifier.size(UiSize.InlineIcon))
             Spacer(Modifier.size(Spacing.sm))
             Text(stringResource(R.string.add_kdbx_add_keyfile))
         }

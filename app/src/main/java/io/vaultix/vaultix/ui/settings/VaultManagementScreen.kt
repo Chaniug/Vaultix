@@ -60,10 +60,12 @@ import io.vaultix.model.KdbxCloudSyncStatus
 import io.vaultix.model.VaultKind
 import io.vaultix.model.VaultSummary
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.vaultlist.SyncNotice
 import io.vaultix.vaultix.ui.common.AddVaultTypeDialog
 import io.vaultix.vaultix.ui.common.KdbxConflictChoice
 import io.vaultix.vaultix.ui.common.KdbxConflictDialog
 import io.vaultix.vaultix.ui.theme.Spacing
+import io.vaultix.vaultix.ui.theme.UiSize
 
 /**
  * 「密码库管理」二级页（设置首页「密码库管理」一行进入）。
@@ -328,7 +330,7 @@ private fun VaultActionRow(
             }
             if (busy) {
                 // 忙碌时不给 ⋮：一次只该跑一个动作，避免连点出两个相互打架的结果。
-                CircularProgressIndicator(modifier = Modifier.size(BUSY_INDICATOR_SIZE))
+                CircularProgressIndicator(modifier = Modifier.size(UiSize.InlineProgress))
             } else {
                 Box {
                     IconButton(onClick = { menuExpanded = true }) {
@@ -555,7 +557,11 @@ private fun actionResultText(
     VaultActionsController.Outcome.SyncUnchanged ->
         stringResource(R.string.vault_result_sync_unchanged, vaultName)
     is VaultActionsController.Outcome.SyncFailed ->
-        stringResource(R.string.vault_result_sync_failed, vaultName, outcome.reason)
+        stringResource(
+            R.string.vault_result_sync_failed,
+            vaultName,
+            syncNoticeText(outcome.reason),
+        )
     VaultActionsController.Outcome.SyncUnsupported ->
         stringResource(R.string.vault_result_sync_unsupported, vaultName)
     VaultActionsController.Outcome.SyncNeedsUnlock ->
@@ -566,9 +572,21 @@ private fun actionResultText(
         stringResource(R.string.vault_result_failed, vaultName, outcome.detail)
 }
 
-/** 忙碌指示器的边长（行内 20dp，不顶高也不至于看不见）。 */
-private val BUSY_INDICATOR_SIZE = 20.dp
 
 // ⚠️ 档位对话框与档位文案**不在这里**：`AutoLockDialog` / `vaultTimeoutLabel` 已提升为
 // `SettingsComponents.kt` 的 internal（设置页的全局档位 + 本页的每库覆盖共用一个弹窗，
 // 复制一份必然漂移）。本页只负责"给哪个库开对话框"与结果落库。
+
+/**
+ * [SyncNotice] → 一句话。
+ *
+ * ⚠️ 抽成独立函数是**为 detekt 的复杂度服务**，不是为了好看：[actionResultText]
+ * 已经是个 11 分支的 `when`，把这里的 2 分支内联进去会把圈复杂度顶到 15
+ * （上限 14，2026-10-21 实测报红）。⇒ 以后往 `SyncNotice` 加分支，加在这里，
+ * **不要**往 `actionResultText` 里塞。
+ */
+@Composable
+private fun syncNoticeText(notice: SyncNotice): String = when (notice) {
+    is SyncNotice.Res -> stringResource(notice.id)
+    is SyncNotice.Detail -> notice.message
+}

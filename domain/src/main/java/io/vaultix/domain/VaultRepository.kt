@@ -339,6 +339,15 @@ sealed interface PinEnrollOutcome {
      */
     data object SessionUnavailable : PinEnrollOutcome
 
+    /**
+     * 会话在、房间也还没封，但**房钥匙不在内存**（顺序约束 §5）。
+     *
+     * ⚠️ 与 [SessionUnavailable] 分成两态：那是"会话没了"，用户重登一次即可；
+     * 这里是"会话在但门锁没开成"，重登不解决问题 —— 要先把门锁（指纹 / PIN）
+     * 开成、房钥匙进内存，房间才封得下去。合并成一态会让用户按错的方向去补救。
+     */
+    data object HouseKeyMissing : PinEnrollOutcome
+
     /** 库文件读不到（URI 授权失效 / 文件被删）或其它异常。 */
     data class Failed(val detail: String) : PinEnrollOutcome
 }

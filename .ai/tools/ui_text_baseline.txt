@@ -1,0 +1,23 @@
+# UI 层中文文案基线（`check_ui_hardcoded_text.py` 的唯一白名单）
+#
+# 格式：相对路径<TAB>行内代码特征<TAB>原因
+#   —— 三列缺一即报错。第三列强制回答「**为什么不进 strings.xml**」。
+#
+# ⚠️ 本文件**只减不增**。新增一条 = 在 PR 里承诺"这句话不需要翻译"，
+#   评审时请当场质疑：它真的不上屏吗？只是"暂时写死"就别登记，去改代码。
+# ⚠️ 判断顺序：先问「这句话会不会出现在屏幕上」——
+#   会 ⇒ 进 strings.xml（用资源）；
+#   不会（写进文件 / 写进数据库 / 只在日志）⇒ 才轮到本文件。
+#
+# 2026-10-21 §3.4 整改后从 117 处降到 4 处；`ui/preview/` 整目录豁免
+# （理由写在脚本的 `_EXEMPT_DIRS` 旁边，那里比这里更适合，因为改代码的人会看到）。
+
+# ---- 写进导出文件的文本（不是界面文案）----
+app/src/main/java/io/vaultix/vaultix/ui/settings/DeveloperLogsDialog.kt	# Vaultix 开发者日志导出	导出到 .txt 的头部首行，是 Markdown 注释；用户看到的是"已导出"的 UI 提示，这行只出现在被分享出去的日志文件里
+app/src/main/java/io/vaultix/vaultix/ui/settings/DeveloperLogsDialog.kt	exportedAt=	导出的元信息按 key=value 排列，与排查问题的解析习惯有契约，不能本地化
+
+# ---- 写进数据库的条目数据（不是界面文案）----
+app/src/main/java/io/vaultix/vaultix/ui/totp/TotpCodesViewModel.kt	验证码	同上 —— 它是 buildUriPreview 里同一个标题常量的定义处
+
+# ---- 兜底显示名（会显示，但它是"数据缺失"的占位而不是文案）----
+app/src/main/java/io/vaultix/vaultix/ui/vaultlist/VaultListViewModel.kt	该密码库	取不到库名时给冲突对话框的占位名。它进 Dialog.KdbxConflict(vaultName=…)，与真实库名同列显示；换成资源会逼对话框分"真名 / 占位名"两条渲染路径，而两条必须长得一样，分开反而更容易漂移

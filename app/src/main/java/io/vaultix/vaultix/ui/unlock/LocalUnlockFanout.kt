@@ -118,10 +118,10 @@ internal object LocalUnlockFanout {
         val lockOpened = runCatching { repository.completeFingerprintUnlock(cipher) }
             .getOrElse { false }
         if (!lockOpened) {
-            val detail = handleLockFailure(recovery)
-            AutofillLogger.d("fanout lock → 门锁解封失败（$detail）")
+            val failure = handleLockFailure(recovery)
+            AutofillLogger.d("fanout lock → 门锁解封失败（${failure.name}）")
             return Result(
-                first = RoomUnlockOutcome.Unavailable(detail),
+                first = RoomUnlockOutcome.Unavailable(failure.name),
                 restOpened = 0,
                 restFailed = rest.size,
                 lockOpened = false,
@@ -129,13 +129,13 @@ internal object LocalUnlockFanout {
         }
         // 目标库与其余库地位完全相同（首库特殊化已随 H2 一起消失）。
         val firstResult = runCatching { repository.unlockVaultFromRoom(first) }
-            .getOrElse { RoomUnlockOutcome.Unavailable(it.message ?: "打开失败") }
+            .getOrElse { RoomUnlockOutcome.Unavailable(it.message ?: OPEN_FAILED) }
         AutofillLogger.d("fanout first=$first → ${describe(firstResult)}")
         var opened = 0
         var failed = 0
         for (id in rest) {
             val outcome = runCatching { repository.unlockVaultFromRoom(id) }
-                .getOrElse { RoomUnlockOutcome.Unavailable(it.message ?: "打开失败") }
+                .getOrElse { RoomUnlockOutcome.Unavailable(it.message ?: OPEN_FAILED) }
             if (outcome is RoomUnlockOutcome.Opened) opened++ else failed++
             AutofillLogger.d("fanout rest=$id → ${describe(outcome)}")
         }
@@ -172,7 +172,7 @@ internal object LocalUnlockFanout {
         var opened = 0
         for (id in rest) {
             val outcome = runCatching { repository.unlockVaultFromRoom(id) }
-                .getOrElse { RoomUnlockOutcome.Unavailable(it.message ?: "打开失败") }
+                .getOrElse { RoomUnlockOutcome.Unavailable(it.message ?: OPEN_FAILED) }
             if (outcome is RoomUnlockOutcome.Opened) opened++
             AutofillLogger.d("fanout rest=$id → ${describe(outcome)}")
         }
@@ -197,27 +197,27 @@ internal object LocalUnlockFanout {
      * ⚠️ 全部动作都包在 `runCatching` 里：善后失败不能掩盖「门锁解不开」这个
      * 主结论，更不能把一次认证失败升级成崩溃。
      */
-    private suspend fun handleLockFailure(recovery: UnlockRecoveryRepository?): String {
-        if (recovery == null) return LOCK_FAILED_FALLBACK
+    private suspend fun handleLockFailure(recovery: UnlockRecoveryRepository?): LocalUnlockMessage {
+        if (recovery == null) return LocalUnlockMessage.LockFailed
         return runCatching {
             // 判据唯一 = 房钥匙在不在内存（不是「信封在不在」—— 见 unlockAll 的 KDoc）。
             val keyInMemory = recovery.houseKeyInMemory.first()
             if (keyInMemory) {
                 recovery.markRearmPending()
-                REARM_PENDING
+                LocalUnlockMessage.RearmPending
             } else {
                 val report = recovery.degradeFingerprintLock()
                 if (report.roomsRemoved > 0) {
-                    DEGRADED_ROOMS_REMOVED
+                    LocalUnlockMessage.DegradedRoomsRemoved
                 } else if (report.remainingLocks) {
-                    DEGRADED_PIN_REMAINS
+                    LocalUnlockMessage.DegradedPinRemains
                 } else {
-                    DEGRADED_FALLBACK
+                    LocalUnlockMessage.Degraded
                 }
             }
         }.getOrElse {
             AutofillLogger.d("fanout lock → 失效善后失败：${it.message}")
-            LOCK_FAILED_FALLBACK
+            LocalUnlockMessage.LockFailed
         }
     }
 
@@ -235,23 +235,13 @@ internal object LocalUnlockFanout {
 
     // ---- 门锁失败的用户可见文案（定稿 §6：绝不静默）----
     //
-    // 说明：本 object 在 app 层但**不是 Composable**（`AutofillActivity` 也调它），
-    // 拿不到 `stringResource`，故返回字面量与 `UnlockViewModel.localUnlockFailureText`
-    // 同款。真源在 `strings.xml`，此处为无法访问资源的调用路径的镜像 ——
-    // 两处措辞必须一致（`check_orphan_strings.py` 之外，此处靠 review 守）。
+    // ★ 2026-10-21 §3.4：这里原本有 **5 个中文字面量常量**（`LOCK_FAILED_FALLBACK` /
+    //   `REARM_PENDING` / `DEGRADED_*`），注释写着"与 UnlockViewModel 那处措辞必须一致，
+    //   靠 review 守"。那就是靠人守的双源 —— 两处都在 Kotlin 里、都不在 strings.xml，
+    //   既翻不了，孤儿串检查也看不见（它只扫 strings.xml）。
+    //   ⇒ 现在统一由 [LocalUnlockMessage] 承载（只带资源 id），本 object 只**产出枚举**，
+    //   解析交给有 `Context` 的调用方（`UnlockViewModel` / `AutofillActivity`）。
+    //   ⚠️ 别再把中文写回本文件：本 object 拿不到资源不是"写死中文"的理由。
 
-    private const val LOCK_FAILED_FALLBACK = "指纹门锁已失效，请用主密码解锁"
-
-    /** 开门态：钥匙在手，等下次认证补写 —— 别说「已失效」（那是假话）。 */
-    private const val REARM_PENDING = "指纹门锁需要重新启用（下次使用指纹时自动完成）"
-
-    /** 关门态：锁已关 + 房间信封连带清掉 —— 必须说清「要重新启用」。 */
-    private const val DEGRADED_ROOMS_REMOVED =
-        "系统指纹已变更，指纹解锁已关闭；快速解锁范围内已无密码库，请用主密码解锁后重新启用"
-
-    /** 关门态：锁已关但还有 PIN 锁在，用户的库没受影响。 */
-    private const val DEGRADED_PIN_REMAINS = "系统指纹已变更，指纹解锁已关闭，请改用 PIN 或主密码解锁"
-
-    /** 关门态：锁已关且再无其它门锁（且本来就没有房间信封）。 */
-    private const val DEGRADED_FALLBACK = "系统指纹已变更，指纹解锁已关闭，请用主密码解锁"
+    private const val OPEN_FAILED = "open_failed"
 }

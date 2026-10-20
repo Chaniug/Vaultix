@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.theme.Spacing
+import io.vaultix.vaultix.ui.theme.UiSize
 
 /**
  * 主 CTA 的**默认视觉高度**（48dp），M3 的 `Button` 中号档。
@@ -138,8 +139,8 @@ fun PrimaryActionButton(
         ) {
             if (busy) {
                 CircularProgressIndicator(
-                    modifier = Modifier.size(PROGRESS_SIZE),
-                    strokeWidth = PROGRESS_STROKE,
+                    modifier = Modifier.size(UiSize.InlineProgress),
+                    strokeWidth = UiSize.InlineProgressStroke,
                     // ⚠️ 必须显式给色：内联转圈默认取 `primary`，落在主色底上就是
                     //    主色压主色，看起来像"按钮上有个洞"。
                     color = progressColorFor(toned),
@@ -190,11 +191,7 @@ fun PrimaryActionButton(
 /** 图标与文案之间的间隙（走标尺，别写字面量）。 */
 private val BUTTON_CONTENT_PADDING = PaddingValues(horizontal = Spacing.xl, vertical = Spacing.sm)
 
-/** 内联转圈直径：18dp —— 与 2dp 描边配，在 48dp 高的按钮里不顶上下边。 */
-private val PROGRESS_SIZE = 18.dp
 
-/** 内联转圈描边。 */
-private val PROGRESS_STROKE = 2.dp
 
 /** 转圈颜色：主色底上用 `onPrimary`，次级底上用 `onSecondaryContainer`。 */
 @Composable

@@ -50,6 +50,7 @@ import io.vaultix.vaultix.ui.shell.BottomDockOccupiedHeight
 import io.vaultix.vaultix.ui.shell.VaultixBottomDock
 import io.vaultix.vaultix.ui.shell.VaultixNavItem
 import io.vaultix.vaultix.ui.theme.Spacing
+import io.vaultix.vaultix.ui.theme.UiSize
 
 /*
  * ===========================================================================
@@ -407,7 +408,7 @@ private fun TouchTargetDemo() {
             Icon(
                 imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
                 contentDescription = null,
-                modifier = Modifier.size(20.dp),
+                modifier = Modifier.size(UiSize.SecondaryIcon),
             )
         }
     }

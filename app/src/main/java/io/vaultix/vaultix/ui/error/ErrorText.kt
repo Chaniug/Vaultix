@@ -59,4 +59,14 @@ fun validationTextRes(error: UnlockUiError.Validation): Int = when (error) {
     UnlockUiError.Validation.PasswordMismatch -> R.string.add_kdbx_create_password_mismatch
     UnlockUiError.Validation.FileNotPicked -> R.string.add_kdbx_pick_file_missing
     UnlockUiError.Validation.SaveLocationUnavailable -> R.string.add_kdbx_create_no_persist
+    // ===== 2026-10-21 §3.4：从网盘添加（AddCloudVaultViewModel）那批硬编码中文 =====
+    // ⚠️ 它们此前经 `UnlockUiError.Detail` 原样上屏 —— 而 `Detail` 的契约是
+    //   "**来源层已经翻译好**的一句话"，我们自己的校验文案塞进去等于绕开了资源系统，
+    //   也绕开了孤儿串检查（那检查只看得见 strings.xml）。判据见 `Validation` 的 KDoc。
+    UnlockUiError.Validation.CloudAccountRootMissing -> R.string.cloud_pick_no_root
+    UnlockUiError.Validation.CloudSourceUnavailable -> R.string.cloud_pick_source_unavailable
+    UnlockUiError.Validation.CloudSignInBroken -> R.string.cloud_pick_sign_in_broken
+    UnlockUiError.Validation.CloudVaultSourceMissing -> R.string.cloud_pick_vault_source_missing
+    UnlockUiError.Validation.CloudFileNotPicked -> R.string.cloud_pick_file_not_picked
+    UnlockUiError.Validation.CloudListFailed -> R.string.cloud_pick_list_failed
 }

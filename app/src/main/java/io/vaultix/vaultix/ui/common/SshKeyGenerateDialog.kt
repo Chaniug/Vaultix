@@ -63,6 +63,7 @@ import io.vaultix.common.SshFingerprint
 import io.vaultix.common.SshKeyGenerator
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.theme.Spacing
+import io.vaultix.vaultix.ui.theme.UiSize
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -303,7 +304,7 @@ internal fun SshBackupNotice(onDismiss: () -> Unit) {
 @Composable
 internal fun SshGenerateButton(onClick: () -> Unit) {
     TextButton(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
-        Icon(Icons.Filled.Casino, contentDescription = null, modifier = Modifier.size(18.dp))
+        Icon(Icons.Filled.Casino, contentDescription = null, modifier = Modifier.size(UiSize.InlineIcon))
         Spacer(Modifier.width(Spacing.sm))
         Text(stringResource(R.string.ssh_generate))
     }

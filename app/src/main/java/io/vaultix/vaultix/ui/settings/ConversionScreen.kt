@@ -85,6 +85,7 @@ import io.vaultix.vaultix.ui.common.queryDisplayName
 import io.vaultix.vaultix.ui.common.readAllBytes
 import io.vaultix.vaultix.ui.common.writeBytes
 import io.vaultix.vaultix.ui.theme.Spacing
+import io.vaultix.vaultix.ui.theme.UiSize
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -537,7 +538,7 @@ private fun KdbxOutputFields(
         singleLine = true,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = Spacing.lg, vertical = 6.dp),
+            .padding(horizontal = Spacing.lg, vertical = UiSize.TightGap),
     )
     PasswordField(
         value = state.outputPassword,

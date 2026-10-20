@@ -86,6 +86,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.lerp
 import androidx.compose.ui.unit.sp
+import io.vaultix.vaultix.ui.theme.UiSize
 import kotlin.math.roundToInt
 import io.vaultix.vaultix.ui.theme.Spacing
 
@@ -149,7 +150,8 @@ private const val TITLE_MIN_SCALE = 0.72f
  */
 private const val TITLE_SUBTITLE_SP = 14f
 
-private val TITLE_SUBTITLE_SPACING = 2.dp
+/** 主标题与副标题之间的一行细缝（见下方算式里的那个 `2`）。 */
+private val TITLE_SUBTITLE_SPACING = UiSize.HairGap
 
 /**
  * 顶栏标题：**主标题 + 可选副标题**（上下两行，不拼接）。
@@ -552,10 +554,10 @@ fun VaultixExpressiveTopBar(
                     modifier = Modifier
                         .clip(RoundedCornerShape(TITLE_CLICK_CORNER_DP.dp))
                         .clickable(role = Role.Button, onClick = onTitleClick)
-                        .padding(horizontal = Spacing.xs, vertical = 2.dp)
+                        .padding(horizontal = Spacing.xs, vertical = UiSize.HairGap)
                         .semantics { contentDescription = title.spokenLabel(titleClickHint) },
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(UiSize.HairGap),
                 ) {
                     titleText()
                     Icon(
@@ -565,7 +567,7 @@ fun VaultixExpressiveTopBar(
                             Icons.Filled.ExpandMore
                         },
                         contentDescription = null,
-                        modifier = Modifier.size(TITLE_CHEVRON_SIZE),
+                        modifier = Modifier.size(UiSize.SecondaryIcon),
                         tint = contentColor,
                     )
                 }
@@ -629,4 +631,3 @@ private val ACTIONS_RESERVE = 156.dp
 
 /** 可点标题的圆角（dp）与箭头尺寸 —— 与 Bastion 的 8dp / 18-22dp 对齐。 */
 private const val TITLE_CLICK_CORNER_DP = 8
-private val TITLE_CHEVRON_SIZE = 20.dp

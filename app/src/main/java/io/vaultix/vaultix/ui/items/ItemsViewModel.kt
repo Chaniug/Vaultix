@@ -93,7 +93,13 @@ class ItemsViewModel @Inject constructor(
     sealed interface SaveEvent {
         data object SavedSynced : SaveEvent
         data object SavedQueued : SaveEvent
-        data class Failed(val message: String) : SaveEvent
+        /**
+         * 保存失败（含批量）。
+         *
+         * ⚠️ `message` 可空、且**不在这里填兜底文案** —— 理由见
+         * `ItemDetailViewModel.UiEvent.SaveFailed` 的 KDoc（同一轮 §3.4 修的同一件事）。
+         */
+        data class Failed(val message: String?) : SaveEvent
 
         /** 「按住后滑动删除」成功：提示已移入回收站（可恢复）。 */
         data class Deleted(val title: String) : SaveEvent
@@ -254,7 +260,7 @@ class ItemsViewModel @Inject constructor(
             val message = if (result.isSuccess) {
                 SaveEvent.Deleted(item.title)
             } else {
-                SaveEvent.Failed(result.exceptionOrNull()?.message ?: "未知错误")
+                SaveEvent.Failed(result.exceptionOrNull()?.message)
             }
             _saveEvents.send(message)
         }
@@ -352,7 +358,7 @@ class ItemsViewModel @Inject constructor(
                         VaultSaveOutcome.Queued -> SaveEvent.SavedQueued
                     }
                 },
-                onFailure = { error -> SaveEvent.Failed(error.message ?: "未知错误") },
+                onFailure = { error -> SaveEvent.Failed(error.message) },
             )
             _saveEvents.send(event)
         }

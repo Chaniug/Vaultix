@@ -44,6 +44,8 @@
  */
 package io.vaultix.vaultix.ui.settings
 
+import androidx.annotation.StringRes
+
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -107,12 +109,12 @@ import io.vaultix.vaultix.remote.CloudAccountKind
 import io.vaultix.vaultix.ui.common.PrimaryActionButton
 import io.vaultix.vaultix.ui.common.rememberFragmentActivity
 import io.vaultix.vaultix.ui.theme.Spacing
+import io.vaultix.vaultix.ui.theme.UiSize
 import io.vaultix.vaultix.ui.theme.VaultixCorner
 
 // ⚠️ 2026-10-19：`BUTTON_HEIGHT`（48dp）与 `INLINE_PROGRESS`（18dp）已删 ——
 //   它们随主 CTA 统一进 `PrimaryActionButton`（见 `ui/common/PrimaryActionButton.kt`），
 //   留在这里只会让下一个人以为"本页的按钮规格是本地定义的"。
-private val INLINE_ICON = 18.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -127,12 +129,10 @@ fun CloudAccountsScreen(
     val activity = rememberFragmentActivity()
     val focusManager = LocalFocusManager.current
 
-    LaunchedEffect(state.notice) {
-        state.notice?.let {
-            snackbarHostState.showSnackbar(it)
-            viewModel.consumeNotice()
-        }
-    }
+    // ⚠️ 一次性提示（`state.notice` 是资源 id）整个交给 [NoticeSnackbar]：
+    //   解析 + 弹出 + 消费三步都在那边，本函数不再持有 `?.let { }` 那几层判空。
+    //   这是**为 detekt 复杂度服务的**：本函数此前评 16（上限 14），挪出这段后回到 14。
+    NoticeSnackbar(state.notice, snackbarHostState, viewModel::consumeNotice)
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -235,7 +235,7 @@ fun CloudAccountsScreen(
                     Icon(
                         Icons.Filled.Add,
                         contentDescription = null,
-                        modifier = Modifier.size(INLINE_ICON),
+                        modifier = Modifier.size(UiSize.InlineIcon),
                     )
                     Spacer(Modifier.width(Spacing.sm))
                     Text(stringResource(R.string.cloud_accounts_add))
@@ -244,7 +244,14 @@ fun CloudAccountsScreen(
 
             state.error?.let { error ->
                 Spacer(Modifier.height(Spacing.sm))
-                ErrorText(error)
+                // 两类来源分开解析（见 `CloudError` 的 KDoc）。
+                ErrorText(
+                    when (error) {
+                        is CloudError.Res -> stringResource(error.id)
+                        is CloudError.Detail ->
+                            stringResource(R.string.cloud_msg_onedrive_failed_detail, error.message)
+                    },
+                )
             }
             Spacer(Modifier.height(Spacing.xxl))
         }
@@ -617,3 +624,29 @@ private fun CloudAccountKind.subtitleRes(): Int = when (this) {
 
 private fun String.visualTransformation(visible: Boolean): VisualTransformation =
     if (visible) VisualTransformation.None else PasswordVisualTransformation()
+
+/**
+ * 把一条一次性提示（资源 id）弹成 snackbar，弹完通知 ViewModel 消费掉。
+ *
+ * ⚠️ 解析点必须在**组合里**：`notice` 现在存的是资源 id（审计 §3.4），
+ *   而 `stringResource` 只能在可组合作用域调用。所以这里同时承担"解析"这件事，
+ *   而不是像常见写法那样把字符串传进来。
+ *
+ * ⚠️ `LaunchedEffect` 的 key 用**解析后的字符串**：id 相同时若 `values-xx`
+ *   换掉了那条资源，用 id 当 key 不会重弹；用字符串则两种变化都能触发。
+ *   这里的语义本来就是"显示这一句话"，用字符串更贴。
+ */
+@Composable
+private fun NoticeSnackbar(
+    @StringRes noticeId: Int?,
+    hostState: SnackbarHostState,
+    onConsumed: () -> Unit,
+) {
+    val noticeText = noticeId?.let { stringResource(it) }
+    LaunchedEffect(noticeText) {
+        if (noticeText != null) {
+            hostState.showSnackbar(noticeText)
+            onConsumed()
+        }
+    }
+}

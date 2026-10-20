@@ -104,6 +104,7 @@ import io.vaultix.vaultix.ui.common.rememberImmersiveBarPadding
 import io.vaultix.vaultix.ui.common.rememberScrollCollapseFraction
 import io.vaultix.vaultix.ui.common.toggleSelection
 import io.vaultix.vaultix.ui.common.VaultixWavyProgress
+import io.vaultix.vaultix.ui.theme.UiSize
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import io.vaultix.vaultix.ui.theme.Spacing
@@ -1137,7 +1138,7 @@ private fun TotpRowMenu(
             Icon(
                 imageVector = Icons.Filled.MoreVert,
                 contentDescription = stringResource(R.string.content_desc_more_options),
-                modifier = Modifier.size(TOTP_MENU_ICON_SIZE),
+                modifier = Modifier.size(UiSize.SecondaryIcon),
             )
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
@@ -1185,7 +1186,7 @@ private fun Badge(bound: Boolean) {
             text = stringResource(text),
             style = MaterialTheme.typography.labelSmall,
             color = color,
-            modifier = Modifier.padding(horizontal = Spacing.sm, vertical = 2.dp),
+            modifier = Modifier.padding(horizontal = Spacing.sm, vertical = UiSize.HairGap),
         )
     }
 }
@@ -1292,8 +1293,6 @@ private const val TOTP_HOT_WARNING_SECONDS = 5
 //   现在两者的分工是：**热区 = M3 的 48dp（`minimumInteractiveComponentSize`）**，
 //   **视觉 = 图标 20dp + 两侧内边距**，两者互不牵连（审计 §3.2）。
 
-/** 行尾 `MoreVert` 的图标尺寸（视觉重心贴右）。 */
-private val TOTP_MENU_ICON_SIZE = 20.dp
 
 // 类型固定参数（对齐 Bastion TotpData 的固定口径）
 private const val MOTP_FIXED_PERIOD = 10

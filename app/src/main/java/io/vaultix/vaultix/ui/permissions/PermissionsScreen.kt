@@ -75,6 +75,7 @@ import io.vaultix.vaultix.ui.settings.SettingsGroupCard
 import io.vaultix.vaultix.ui.settings.SettingsGroupTitle
 import io.vaultix.vaultix.ui.settings.SettingsRow
 import io.vaultix.vaultix.ui.theme.Spacing
+import io.vaultix.vaultix.ui.theme.UiSize
 import io.vaultix.vaultix.util.SystemSettingsIntents
 
 /**
@@ -201,7 +202,7 @@ private fun PermissionStatusCard(pendingCount: Int) {
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(UiSize.RowVerticalPadding),
             ) {
                 Icon(
                     imageVector = if (allGood) Icons.Filled.CheckCircle else Icons.Filled.ErrorOutline,

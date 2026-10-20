@@ -1,10 +1,12 @@
 package io.vaultix.vaultix.ui.unlock
 
+import android.content.Context
 import android.util.Log
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.domain.PIN_MIN_LENGTH
 import io.vaultix.domain.PinUnlockOutcome
@@ -17,6 +19,7 @@ import io.vaultix.domain.VaultRepository
 import io.vaultix.domain.VaultSessionRepository
 import io.vaultix.model.VaultKind
 import io.vaultix.model.VaultSummary
+import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.TwoFactorProvider
 import io.vaultix.vaultix.ui.error.UnlockUiError
 import io.vaultix.vaultix.ui.error.toUnlockUiError
@@ -83,6 +86,16 @@ class UnlockViewModel @Inject constructor(
      * 那条路每个库都要过一次 Keystore（见 [candidateVaultIds] 的 KDoc）。
      */
     private val preferences: VaultixPreferences,
+    /**
+     * 只用来把**我们自己写的**文案（[LocalUnlockMessage] 里的资源 id）解析成一句话。
+     *
+     * ⚠️ 为什么不把文案从 ViewModel 挪到 Composable：解锁失败的原因要经
+     * `UnlockUiError.Unknown(message)` 往上抛，而 `Unknown` 携带的是 `String?`
+     * （它有前缀「出错了：」的语义，见 `ErrorText.kt`）。改成携带资源 id 会牵动
+     * 整个 `UnlockUiError` 家族的契约 —— 那是另一件事，不该顺手做。
+     * ⇒ 本轮只把「文案存在哪里」修对（`strings.xml`），解析点仍在 ViewModel。
+     */
+    @ApplicationContext private val context: Context,
 ) : ViewModel() {
 
     /**
@@ -445,10 +458,9 @@ class UnlockViewModel @Inject constructor(
      */
     private fun pinFailureText(outcome: PinUnlockOutcome): String = when (outcome) {
         is PinUnlockOutcome.WrongPin ->
-            "PIN 不正确，还可尝试 ${outcome.remainingAttempts} 次"
-        PinUnlockOutcome.LockedOut -> "PIN 尝试次数过多，请改用主密码解锁后在设置里重设"
-        PinUnlockOutcome.StaleCredentials ->
-            "PIN 正确，但该库的主密码已在别处变更，请用主密码解锁后重设"
+            context.getString(R.string.pin_error_wrong, outcome.remainingAttempts)
+        PinUnlockOutcome.LockedOut -> context.getString(R.string.pin_error_locked_out)
+        PinUnlockOutcome.StaleCredentials -> context.getString(R.string.pin_error_stale)
         is PinUnlockOutcome.Unavailable -> outcome.detail
         PinUnlockOutcome.Opened -> ""
     }
@@ -531,7 +543,9 @@ class UnlockViewModel @Inject constructor(
                         submitting = false,
                         viewUnlockStarted = false,
                         viewLocked = if (viewLock) false else it.viewLocked,
-                        error = UnlockUiError.Unknown("本地解锁不可用，请用主密码登录"),
+                        error = UnlockUiError.Unknown(
+                            context.getString(R.string.quick_unlock_local_failed),
+                        ),
                     )
                 }
             } else {
@@ -678,12 +692,20 @@ class UnlockViewModel @Inject constructor(
                 is RoomUnlockOutcome.Unavailable -> {
                     // 仓储给的**具体原因**优先（例如「文件读不到了，请重新选择」），
                     // 没有具体原因时才用按库类型区分的兜底文案。
+                    //
+                    // ⚠️ 2026-10-21 §3.4：`detail` 有两种来源 —— 门锁失败时
+                    //   fanout 填的是 [LocalUnlockMessage] 的 `name`（**内部标识**，
+                    //   绝不能上屏），其余情况是仓储翻译好的一句话。先按标识认一次，
+                    //   认不出才当成人话用。判据与 `QuickUnlockController` 的
+                    //   `SEAL_NO_HOUSE_KEY` 完全一致。
                     val isKdbx = _state.value.vault?.kind == VaultKind.KDBX
+                    val message = lockMessageOf(result.detail)?.resolve(context)
+                        ?: result.detail.ifBlank { localUnlockFailureText(isKdbx) }
                     _state.update {
                         it.copy(
                             submitting = false,
                             viewUnlockStarted = false,
-                            error = UnlockUiError.Unknown(result.detail.ifBlank { localUnlockFailureText(isKdbx) }),
+                            error = UnlockUiError.Unknown(message),
                         )
                     }
                 }
@@ -793,11 +815,12 @@ class UnlockViewModel @Inject constructor(
      * 说明：ViewModel 层没有 `stringResource`，故此处返回字面量；
      * `detail` 非空时（仓储给了具体原因）优先用 detail。
      */
-    private fun localUnlockFailureText(isKdbx: Boolean): String = if (isKdbx) {
-        "主密码可能已在别处变更，请输入当前主密码"
-    } else {
-        "本地解锁失败，请用主密码登录"
-    }
+    private fun localUnlockFailureText(isKdbx: Boolean): String =
+        (if (isKdbx) {
+            LocalUnlockMessage.VaultOpenFailedKdbx
+        } else {
+            LocalUnlockMessage.VaultOpenFailed
+        }).resolve(context)
 
     /** 认证对话框被系统错误终止（非用户取消）时收起 busy 态。 */
     fun onBiometricPromptDismissed() {
@@ -978,3 +1001,15 @@ class UnlockViewModel @Inject constructor(
         private const val TAG = "VaultixUnlockVm"
     }
 }
+
+/**
+ * 把 `RoomUnlockOutcome.Unavailable.detail` 里的**内部标识**认回枚举（认不出返回 null）。
+ *
+ * ⚠️ `detail` 这个字段承载了两种东西：仓储翻译好的**人话**，以及
+ * `LocalUnlockFanout` 在门锁失败时填的**枚举名**（`name`）。后者绝对不能直接上屏，
+ * 否则用户会看到 `DegradedRoomsRemoved` 这种字符串。
+ * 用 `entries.firstOrNull { it.name == detail }` 而不是 `valueOf`：`valueOf` 会抛
+ * `IllegalArgumentException`，而这里恰恰是**失败路径**，不能因为一条文案再崩一次。
+ */
+private fun lockMessageOf(detail: String): LocalUnlockMessage? =
+    LocalUnlockMessage.entries.firstOrNull { it.name == detail }

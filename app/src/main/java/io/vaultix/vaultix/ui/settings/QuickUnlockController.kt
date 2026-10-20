@@ -22,6 +22,7 @@ import io.vaultix.domain.UnlockRecoveryRepository
 import io.vaultix.domain.VaultRepository
 import io.vaultix.model.VaultKind
 import io.vaultix.model.VaultSummary
+import io.vaultix.vaultix.R
 import javax.crypto.Cipher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -39,6 +40,17 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+/**
+ * 「房钥匙不在内存、房间封不下去」这一结论的**内部标识**，仅在本文件内流转。
+ *
+ * [io.vaultix.domain.LocalUnlockEnrollOutcome.Failed] 的 `detail` 有两种来源：
+ * 来源层已经翻译好的那句话（原样透传），以及**我们自己**要报的一句话。
+ * 后者不能硬塞中文（那会绕开 `strings.xml`），也不该塞一句英文（那会上屏），
+ * ⇒ 用这个标识当交接凭据，由 [QuickUnlockController.commitFailureReason]
+ * 认出来后映射成资源。用户永远看不到它。
+ */
+private const val SEAL_NO_HOUSE_KEY = "seal:no_house_key"
 
 /**
  * 「快速解锁」的**能力级**设置交互（2026-09-16 重构）。
@@ -302,7 +314,7 @@ class QuickUnlockController(
             val old: String = "",
             val pin: String = "",
             val confirm: String = "",
-            val error: String? = null,
+            val error: QuickUnlockText? = null,
         ) : Dialog
 
         /**
@@ -339,7 +351,7 @@ class QuickUnlockController(
             val vaultName: String,
             val remaining: Int,
             val password: String = "",
-            val error: String? = null,
+            val error: QuickUnlockText? = null,
         ) : Dialog
 
         /** 指纹认证中（备料已完成，等用户按指纹）。 */
@@ -377,7 +389,7 @@ class QuickUnlockController(
     }
 
     /** 结果页里单个库的失败项。 */
-    data class FailureItem(val vaultName: String, val reason: String)
+    data class FailureItem(val vaultName: String, val reason: QuickUnlockText)
 
     /** 界面需要的全部状态。 */
     data class UiState(
@@ -524,7 +536,7 @@ class QuickUnlockController(
             // 没有库可纳入 ⇒ 如实说，而不是"开了一把没有任何房间的门锁"
             //（那种状态下冷启动恢复也不会有任何库可开）。
             _dialog.value = Dialog.Report(
-                failed = listOf(FailureItem("—", "还没有任何密码库，请先添加一个")),
+                failed = listOf(FailureItem("—", text(R.string.quick_unlock_no_vaults_yet))),
             )
             return
         }
@@ -693,7 +705,7 @@ class QuickUnlockController(
         // ★ 当前 PIN 单独判，且放在位数/一致之后：它要跑 Argon2id，
         //   而上面两条是 O(1) —— 先便宜的后贵的，别让用户为"新 PIN 打短了"白消耗一次尝试。
         if (current.old.length != PIN_MIN_LENGTH) {
-            _dialog.value = current.copy(error = "请输入当前 PIN（$PIN_MIN_LENGTH 位数字）")
+            _dialog.value = current.copy(error = text(R.string.quick_unlock_pin_current_required, PIN_MIN_LENGTH))
             return
         }
         scope.launch { runChangePin(current) }
@@ -765,15 +777,15 @@ class QuickUnlockController(
             PinChangeOutcome.Changed -> Dialog.PinChangeDone
             is PinChangeOutcome.WrongPin -> current.copy(
                 // 剩余次数由 domain 算好带下来：两处各算一遍必然漂移（同 #153 的账）。
-                error = "当前 PIN 不正确，还剩 ${outcome.remainingAttempts} 次机会",
+                error = text(R.string.quick_unlock_pin_current_wrong, outcome.remainingAttempts),
             )
             PinChangeOutcome.LockedOut -> current.copy(
-                error = "PIN 已因连续输错而锁定：请关掉「关闭 PIN 解锁」，再用主密码打开后重设",
+                error = text(R.string.quick_unlock_pin_locked_out),
             )
             is PinChangeOutcome.PinTooShort -> current.copy(
-                error = "PIN 需要 ${outcome.minimum} 位数字",
+                error = text(R.string.quick_unlock_pin_too_short, outcome.minimum),
             )
-            is PinChangeOutcome.Unavailable -> current.copy(error = outcome.detail)
+            is PinChangeOutcome.Unavailable -> current.copy(error = QuickUnlockText.Detail(outcome.detail))
         }
     }
 
@@ -781,7 +793,7 @@ class QuickUnlockController(
     fun submitPassword() {
         val current = _dialog.value as? Dialog.KdbxPassword ?: return
         if (current.password.isBlank()) {
-            _dialog.value = current.copy(error = "请输入主密码，或选择跳过")
+            _dialog.value = current.copy(error = text(R.string.quick_unlock_master_password_required))
             return
         }
         val sessionNow = session ?: return
@@ -852,9 +864,7 @@ class QuickUnlockController(
                     // 备料明文必须手动擦（seal 没跑，所有权没转移）。
                     units.forEach { it.close() }
                     units.associate {
-                        it.vaultId to LocalUnlockEnrollOutcome.Failed(
-                            "指纹门锁未开成：请先解锁现有门锁（输一次 PIN / 过一次指纹）再开指纹锁",
-                        )
+                        it.vaultId to LocalUnlockEnrollOutcome.Failed(SEAL_NO_HOUSE_KEY)
                     }
                 }
             }
@@ -904,7 +914,7 @@ class QuickUnlockController(
             finish(
                 sessionNow,
                 committed,
-                extraFailures = listOf(FailureItem("—", "已取消指纹验证，指纹未启用")),
+                extraFailures = listOf(FailureItem("—", text(R.string.quick_unlock_biometric_cancelled))),
             )
         }
     }
@@ -977,7 +987,7 @@ class QuickUnlockController(
                 } else {
                     // 顺序约束（定稿 §5）：指纹门锁已存在但房钥匙不在内存。
                     current.pendingRooms().associateWith {
-                        PinEnrollOutcome.Failed("需先解锁现有门锁（过一次指纹）再开 PIN 锁")
+                        PinEnrollOutcome.HouseKeyMissing
                     }
                 }
             }
@@ -1038,7 +1048,7 @@ class QuickUnlockController(
                 current,
                 committed = emptyMap(),
                 extraFailures = listOf(
-                    FailureItem("—", "本设备未设置锁屏或生物识别，无法启用"),
+                    FailureItem("—", text(R.string.quick_unlock_no_device_auth)),
                 ),
             )
             return
@@ -1187,7 +1197,7 @@ class QuickUnlockController(
     private fun <T> addFailures(
         outcomes: Map<String, T>,
         names: Map<String, String>,
-        reason: (T) -> String?,
+        reason: (T) -> QuickUnlockText?,
         into: MutableList<FailureItem>,
     ) {
         outcomes.forEach { (id, outcome) ->
@@ -1204,20 +1214,31 @@ class QuickUnlockController(
      * ⚠️ 与解锁页的文案**不是一回事**，别合并：这里描述**登记**阶段，
      * 解锁页描述**开信封**阶段（指纹对了但信封打不开）。
      */
-    private fun prepareFailureReason(outcome: LocalUnlockPrepareOutcome): String? =
+    private fun prepareFailureReason(outcome: LocalUnlockPrepareOutcome): QuickUnlockText? =
         when (outcome) {
             is LocalUnlockPrepareOutcome.Ready -> null
             LocalUnlockPrepareOutcome.Skipped -> null
-            LocalUnlockPrepareOutcome.InvalidCredentials -> "主密码不正确"
-            is LocalUnlockPrepareOutcome.SourceUnavailable -> outcome.detail
-            is LocalUnlockPrepareOutcome.Failed -> outcome.detail
+            LocalUnlockPrepareOutcome.InvalidCredentials -> text(R.string.quick_unlock_master_wrong)
+            is LocalUnlockPrepareOutcome.SourceUnavailable -> QuickUnlockText.Detail(outcome.detail)
+            is LocalUnlockPrepareOutcome.Failed -> QuickUnlockText.Detail(outcome.detail)
         }
 
-    /** 落盘阶段单库失败的原因（`Enrolled` 返回 null）。 */
-    private fun commitFailureReason(outcome: LocalUnlockEnrollOutcome): String? =
+    /**
+     * 落盘阶段单库失败的原因（`Enrolled` 返回 null）。
+     *
+     * ⚠️ [SEAL_NO_HOUSE_KEY] 是**我们自己**填的占位 detail（房钥匙不在内存 ⇒ 房间封不下去），
+     * 不是来源层翻译好的那句话 ⇒ 必须映射成资源，不能走 [QuickUnlockText.Detail]
+     * 原样上屏（否则用户会看到一串英文标识）。
+     */
+    private fun commitFailureReason(outcome: LocalUnlockEnrollOutcome): QuickUnlockText? =
         when (outcome) {
             LocalUnlockEnrollOutcome.Enrolled -> null
-            is LocalUnlockEnrollOutcome.Failed -> outcome.detail
+            is LocalUnlockEnrollOutcome.Failed ->
+                if (outcome.detail == SEAL_NO_HOUSE_KEY) {
+                    text(R.string.quick_unlock_need_unlock_first)
+                } else {
+                    QuickUnlockText.Detail(outcome.detail)
+                }
         }
 
     /**
@@ -1226,11 +1247,12 @@ class QuickUnlockController(
      * ⚠️ 返回可空而不是空串：空串会**混进失败列表并渲染成"库名 · "**（一个没有原因的失败），
      * 而「跳过」根本不等于失败 —— 那是用户的选择，列进失败会让他以为自己操作错了。
      */
-    private fun pinFailureReason(outcome: PinEnrollOutcome): String? = when (outcome) {
-        is PinEnrollOutcome.PinTooShort -> "PIN 需要 ${outcome.minimum} 位数字"
-        PinEnrollOutcome.InvalidCredentials -> "主密码不正确"
-        PinEnrollOutcome.SessionUnavailable -> "该库未解锁，请先用主密码打开它"
-        is PinEnrollOutcome.Failed -> outcome.detail
+    private fun pinFailureReason(outcome: PinEnrollOutcome): QuickUnlockText? = when (outcome) {
+        is PinEnrollOutcome.PinTooShort -> text(R.string.quick_unlock_pin_too_short, outcome.minimum)
+        PinEnrollOutcome.InvalidCredentials -> text(R.string.quick_unlock_master_wrong)
+        PinEnrollOutcome.SessionUnavailable -> text(R.string.quick_unlock_vault_locked)
+        PinEnrollOutcome.HouseKeyMissing -> text(R.string.quick_unlock_need_unlock_first)
+        is PinEnrollOutcome.Failed -> QuickUnlockText.Detail(outcome.detail)
         PinEnrollOutcome.Enrolled, PinEnrollOutcome.Skipped -> null
     }
 
@@ -1434,9 +1456,9 @@ private fun anyRoomSealed(committed: Map<String, LocalUnlockEnrollOutcome>): Boo
  * `TooManyFunctions` 的 40 上限（同 [anyRoomSealed] 的处境）。附带收益是它
  * 从此可被单测直接钉（`QuickUnlockControllerTest`），不必连 Repository 一起 mock。
  */
-internal fun newPinInvalid(current: QuickUnlockController.Dialog.PinEntry): String? {
-    if (current.pin.length != PIN_MIN_LENGTH) return "PIN 需要 $PIN_MIN_LENGTH 位数字"
-    if (current.pin != current.confirm) return "两次输入不一致，请重新输入"
+internal fun newPinInvalid(current: QuickUnlockController.Dialog.PinEntry): QuickUnlockText? {
+    if (current.pin.length != PIN_MIN_LENGTH) return text(R.string.quick_unlock_pin_too_short, PIN_MIN_LENGTH)
+    if (current.pin != current.confirm) return text(R.string.quick_unlock_pin_mismatch)
     return null
 }
 
@@ -1580,8 +1602,8 @@ internal fun roomSealingBlocker(
 ): QuickUnlockController.Dialog.Report? {
     if (pending.isEmpty() || locksToOpen.isNotEmpty()) return null
     val reason = when {
-        !anyLockExists(ui) -> "请先开启「指纹解锁」或「PIN 解锁」，再加入要纳入的库"
-        !houseKeyReady -> "请先解锁一次（指纹或 PIN），再添加要纳入的库"
+        !anyLockExists(ui) -> text(R.string.quick_unlock_need_a_lock_first)
+        !houseKeyReady -> text(R.string.quick_unlock_need_unlock_first)
         else -> return null
     }
     return QuickUnlockController.Dialog.Report(

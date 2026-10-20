@@ -11,6 +11,7 @@ package io.vaultix.vaultix.ui.settings
 import io.vaultix.domain.PIN_MIN_LENGTH
 import io.vaultix.model.VaultKind
 import io.vaultix.model.VaultSummary
+import io.vaultix.vaultix.R
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -226,7 +227,13 @@ class QuickUnlockControllerTest {
 
         // 非 null = 拦下。文案要点是"先开一种解锁方式"，不是含糊的"失败"。
         assertEquals(1, blocker?.failed?.size)
-        assertTrue(blocker!!.failed.single().reason.contains("指纹解锁"))
+        // ⚠️ 2026-10-21 §3.4：断言改看**资源 id**，不再断言中文原文。
+        //   断言原文等于把"文案在这里"当成契约，文案一进 strings.xml 就失效，
+        //   而且它分不清"该翻译的没翻译"（正是 §3.4 要查的那个洞）。
+        assertEquals(
+            text(R.string.quick_unlock_need_a_lock_first),
+            blocker!!.failed.single().reason,
+        )
     }
 
     @Test
@@ -250,7 +257,10 @@ class QuickUnlockControllerTest {
         )
 
         assertEquals(1, blocked?.failed?.size)
-        assertTrue(blocked!!.failed.single().reason.contains("解锁一次"))
+        assertEquals(
+            text(R.string.quick_unlock_need_unlock_first),
+            blocked!!.failed.single().reason,
+        )
         assertEquals(null, allowed)
     }
 
@@ -356,14 +366,17 @@ class QuickUnlockControllerTest {
     fun `位数不够时报位数_即使两次也不一致`() {
         val entry = QuickUnlockController.Dialog.PinEntry(pin = "123", confirm = "999")
 
-        assertEquals("PIN 需要 $PIN_MIN_LENGTH 位数字", newPinInvalid(entry))
+        assertEquals(
+            text(R.string.quick_unlock_pin_too_short, PIN_MIN_LENGTH),
+            newPinInvalid(entry),
+        )
     }
 
     @Test
     fun `位数够但两次不一致_报不一致`() {
         val entry = QuickUnlockController.Dialog.PinEntry(pin = "123456", confirm = "123457")
 
-        assertEquals("两次输入不一致，请重新输入", newPinInvalid(entry))
+        assertEquals(text(R.string.quick_unlock_pin_mismatch), newPinInvalid(entry))
     }
 
     @Test

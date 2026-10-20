@@ -71,6 +71,7 @@ import io.vaultix.vaultix.ui.common.rememberFragmentActivity
 import io.vaultix.vaultix.ui.error.UnlockUiError
 import io.vaultix.vaultix.ui.error.unlockErrorText
 import io.vaultix.vaultix.ui.theme.Spacing
+import io.vaultix.vaultix.ui.theme.UiSize
 
 /**
  * 解锁页（Docs/08 S6）。
@@ -239,7 +240,7 @@ fun UnlockScreen(
                         Icon(
                             Icons.Filled.SwapHoriz,
                             contentDescription = null,
-                            modifier = Modifier.size(18.dp),
+                            modifier = Modifier.size(UiSize.InlineIcon),
                         )
                         Spacer(Modifier.width(Spacing.sm))
                         Text(stringResource(R.string.unlock_switch_vault))
@@ -294,7 +295,10 @@ private fun ViewLockedContent(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.padding(top = Spacing.lg),
         ) {
-            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+            CircularProgressIndicator(
+                modifier = Modifier.size(UiSize.InlineProgress),
+                strokeWidth = UiSize.InlineProgressStroke,
+            )
             Text(
                 text = stringResource(R.string.add_vault_working),
                 style = MaterialTheme.typography.bodySmall,
@@ -368,7 +372,7 @@ private fun QuickUnlockEntry(
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(top = 2.dp),
+            .padding(top = UiSize.HairGap),
         textAlign = TextAlign.Center,
     )
 }
@@ -440,7 +444,7 @@ private fun PasswordForm(
             Icon(
                 imageVector = Icons.Filled.Pin,
                 contentDescription = null,
-                modifier = Modifier.size(18.dp),
+                modifier = Modifier.size(UiSize.InlineIcon),
             )
             Spacer(Modifier.width(Spacing.sm))
             Text(stringResource(R.string.pin_unlock_enter))
@@ -464,8 +468,8 @@ private fun PasswordForm(
         CircularProgressIndicator(
             modifier = Modifier
                 .padding(top = Spacing.sm)
-                .size(20.dp),
-            strokeWidth = 2.dp,
+                .size(UiSize.InlineProgress),
+            strokeWidth = UiSize.InlineProgressStroke,
         )
     }
 

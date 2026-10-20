@@ -58,6 +58,24 @@ sealed interface UnlockUiError {
          * 而这个意味着库即使建好了也活不过一次重启 —— 必须在**建之前**就拦住。
          */
         SaveLocationUnavailable,
+
+        /** 从网盘添加：该账号在本机没有可用的浏览起点（需回设置页重新配置）。 */
+        CloudAccountRootMissing,
+
+        /** 从网盘添加：云端来源打不开（凭据失效 / 账号被移除）。 */
+        CloudSourceUnavailable,
+
+        /** 从网盘添加：OneDrive 登录态异常（需重新登录）。 */
+        CloudSignInBroken,
+
+        /** 从网盘添加：当前库没有可用的文件来源。 */
+        CloudVaultSourceMissing,
+
+        /** 从网盘添加：还没选中 `.kdbx` 文件。 */
+        CloudFileNotPicked,
+
+        /** 从网盘添加：列目录失败，且异常没带 message。 */
+        CloudListFailed,
     }
 
     /**

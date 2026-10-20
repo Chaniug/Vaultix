@@ -12,6 +12,8 @@ import io.vaultix.domain.KdbxSyncReport
 import io.vaultix.domain.KdbxSyncRepository
 import io.vaultix.domain.VaultRepository
 import io.vaultix.domain.VaultSyncReport
+import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.vaultlist.SyncNotice
 import io.vaultix.model.VaultKind
 import io.vaultix.model.VaultSummary
 import kotlinx.coroutines.CoroutineScope
@@ -102,7 +104,14 @@ class VaultActionsController(
         /** 两边一致，什么都没做 —— 这不是失败，要如实说"没变化"。 */
         data object SyncUnchanged : Outcome
 
-        data class SyncFailed(val reason: String) : Outcome
+        /**
+         * 同步失败。
+         *
+         * ⚠️ 理由是 [SyncNotice] 而不是 `String`：本分支三种来源（`Blocked` /
+         * `Retryable` / `Fatal`）给的是来源层翻译好的话，而 `pullRemote` 的 `else`
+         * 分支是**我们自己**写的一句 —— 混成 `String` 就分不清了（审计 §3.4）。
+         */
+        data class SyncFailed(val reason: SyncNotice) : Outcome
 
         data object SyncUnsupported : Outcome
 
@@ -153,9 +162,9 @@ class VaultActionsController(
             when (val report = vaultRepository.syncVault(it)) {
                 is VaultSyncReport.Success -> Outcome.Synced(report.cipherCount)
                 is VaultSyncReport.Skipped -> Outcome.SyncUnchanged
-                is VaultSyncReport.Blocked -> Outcome.SyncFailed(report.reason)
-                is VaultSyncReport.Retryable -> Outcome.SyncFailed(report.reason)
-                is VaultSyncReport.Fatal -> Outcome.SyncFailed(report.reason)
+                is VaultSyncReport.Blocked -> Outcome.SyncFailed(SyncNotice.Detail(report.reason))
+                is VaultSyncReport.Retryable -> Outcome.SyncFailed(SyncNotice.Detail(report.reason))
+                is VaultSyncReport.Fatal -> Outcome.SyncFailed(SyncNotice.Detail(report.reason))
                 is VaultSyncReport.Unsupported -> Outcome.SyncUnsupported
             }
         }
@@ -183,7 +192,7 @@ class VaultActionsController(
             // ★ S2：远端有更新、本地没改 ⇒ **真的去拉**（此前只如实上报，用户拿不到新数据）。
             is KdbxSyncReport.NeedsReload -> pullRemote(vault)
             is KdbxSyncReport.NoCloudSource -> Outcome.SyncUnsupported
-            is KdbxSyncReport.Failed -> Outcome.SyncFailed(report.reason)
+            is KdbxSyncReport.Failed -> Outcome.SyncFailed(SyncNotice.Detail(report.reason))
             // ★ 冲突**不在这里收敛**：拒写之后重试永远好不了，必须让用户拍板。
             is KdbxSyncReport.Conflict -> {
                 _dialog.value = Dialog.Conflict(vault)
@@ -209,7 +218,7 @@ class VaultActionsController(
             _dialog.value = Dialog.Conflict(vault)
             null
         }
-        else -> Outcome.SyncFailed("拉取远端更新未成功")
+        else -> Outcome.SyncFailed(SyncNotice.Res(R.string.kdbx_sync_pull_failed))
     }
 
     /** 退出：清本机缓存与凭据（远程不动）。先出确认对话框。 */
@@ -241,7 +250,7 @@ class VaultActionsController(
             kdbxSyncRepository.resolveUsingRemote(vaultId)
         }
         return when (report) {
-            is KdbxSyncReport.Failed -> Outcome.SyncFailed(report.reason)
+            is KdbxSyncReport.Failed -> Outcome.SyncFailed(SyncNotice.Detail(report.reason))
             else -> Outcome.Synced(null)
         }
     }

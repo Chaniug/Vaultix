@@ -147,10 +147,16 @@ class LocalUnlockFanoutTest {
 
         // 没钥匙 ⇒ 各库全是"打不开"，跑循环纯属白跑（且会在日志里演出 N 条假失败）。
         assertThat(roomCalls).isEmpty()
+        // ⚠️ `detail` 是内部标识（枚举名），**绝不能上屏** —— 这里顺带把它钉住：
+        //   解析方（UnlockViewModel.lockMessageOf）认的就是这个名字，改名会让解析失效。
+        assertThat((result.first as RoomUnlockOutcome.Unavailable).detail)
+            .isEqualTo(LocalUnlockMessage.LockFailed.name)
         assertThat(result.restOpened).isEqualTo(0)
-        // 如实降级（定稿 §6）：明确告诉用户回退主密码，而不是静默重试。
+        // 如实降级（定稿 §6）：必须是 Unavailable（而不是静默重试）。
+        // ⚠️ 「明确告诉用户回退主密码」这句由 `local_unlock_lock_failed` 那条资源承担，
+        //   不再在这里断中文 —— 措辞归 strings.xml，测试只守"这一态被选中"。
         assertThat(result.first).isInstanceOf(RoomUnlockOutcome.Unavailable::class.java)
-        assertThat((result.first as RoomUnlockOutcome.Unavailable).detail).contains("主密码")
+        assertThat(lockMessageOf(result)).isEqualTo(LocalUnlockMessage.LockFailed)
     }
 
     @Test
@@ -280,10 +286,11 @@ class LocalUnlockFanoutTest {
 
         coVerify(exactly = 1) { recovery.markRearmPending() }
         coVerify(exactly = 0) { recovery.degradeFingerprintLock() }
-        // 文案必须说真话：钥匙还在 ⇒ 「需重新启用」，不是「已失效」（那会让人以为要重配）。
-        val detail = (result.first as RoomUnlockOutcome.Unavailable).detail
-        assertThat(detail).contains("重新启用")
-        assertThat(detail).doesNotContain("已关闭")
+        // 局面必须说真话：钥匙还在 ⇒ RearmPending（「需重新启用」），
+        // 不是 LockFailed（「已失效」，那会让人以为要重配）。
+        assertThat(lockMessageOf(result)).isEqualTo(LocalUnlockMessage.RearmPending)
+        // 反面对照：绝不能落到任何"已关闭"局面（那是说锁被停了，与事实相反）。
+        assertThat(lockMessageOf(result)).isNotEqualTo(LocalUnlockMessage.Degraded)
     }
 
     @Test
@@ -292,7 +299,7 @@ class LocalUnlockFanoutTest {
         val recovery = recovery(keyInMemory = false)
         val repository = failedRepository()
 
-        LocalUnlockFanout.unlockAll(
+        val result = LocalUnlockFanout.unlockAll(
             repository = repository,
             first = "a",
             rest = listOf("b"),
@@ -302,6 +309,10 @@ class LocalUnlockFanoutTest {
 
         coVerify(exactly = 1) { recovery.degradeFingerprintLock() }
         coVerify(exactly = 0) { recovery.markRearmPending() }
+        // ⚠️ 2026-10-21：这条用例原先**不接返回值**，只 verify 两个副作用 ——
+        //   而"已关闭"那句文案当时没有断言（删掉了一行残留的 `detail` 断言后才看出来）。
+        //   房间一个都没清、也没有别的门锁 ⇒ 应落到最保守的 Degraded。
+        assertThat(lockMessageOf(result)).isEqualTo(LocalUnlockMessage.Degraded)
     }
 
     @Test
@@ -320,9 +331,10 @@ class LocalUnlockFanoutTest {
             recovery = recovery,
         )
 
-        val detail = (result.first as RoomUnlockOutcome.Unavailable).detail
-        assertThat(detail).contains("已关闭")
-        assertThat(detail).contains("重新启用")
+        // ⚠️ 2026-10-21 §3.4：`detail` 现在装的是 **LocalUnlockMessage 的枚举名**，
+        //   不再是那句中文。断言改成「选了哪个局面」—— 比断言文案更稳（改措辞不会红），
+        //   而且它同时钉住了"必须提到重新启用"这件事：那条资源就是 DegradedRoomsRemoved。
+        assertThat(lockMessageOf(result)).isEqualTo(LocalUnlockMessage.DegradedRoomsRemoved)
     }
 
     @Test
@@ -340,9 +352,10 @@ class LocalUnlockFanoutTest {
             recovery = recovery,
         )
 
-        val detail = (result.first as RoomUnlockOutcome.Unavailable).detail
-        assertThat(detail).contains("PIN")
-        assertThat(detail).doesNotContain("重新启用")
+        // 同上一处：断言局面而不是文案。`DegradedPinRemains` 与
+        // `DegradedRoomsRemoved` 的区分恰好就是"库有没有受影响"，断言枚举正好覆盖。
+        assertThat(lockMessageOf(result)).isEqualTo(LocalUnlockMessage.DegradedPinRemains)
+        assertThat(lockMessageOf(result)).isNotEqualTo(LocalUnlockMessage.DegradedRoomsRemoved)
     }
 
     @Test
@@ -356,8 +369,8 @@ class LocalUnlockFanoutTest {
             cipher = cipher,
         )
 
-        assertThat((result.first as RoomUnlockOutcome.Unavailable).detail)
-            .isEqualTo("指纹门锁已失效，请用主密码解锁")
+        // 无 recovery ⇒ 必须落到 LockFailed 这一态（对应资源仍是批次 3 那句原文）。
+        assertThat(lockMessageOf(result)).isEqualTo(LocalUnlockMessage.LockFailed)
     }
 
     @Test
@@ -397,4 +410,17 @@ class LocalUnlockFanoutTest {
         coVerify(exactly = 0) { recovery.markRearmPending() }
         coVerify(exactly = 0) { recovery.degradeFingerprintLock() }
     }
+
+    /**
+     * 取 fanout 给出的「门锁失败局面」。
+     *
+     * ⚠️ 断言局面而不是那句中文：文案已进 `strings.xml`（§3.4），
+     * 断言中文等于把措辞钉死在这里，改一个字就红 —— 那不是本测试要守的东西。
+     * 本测试守的是**分支选对没有**（钥匙在不在手上、房间清没清）。
+     */
+    private fun lockMessageOf(result: LocalUnlockFanout.Result): LocalUnlockMessage? {
+        val detail = (result.first as RoomUnlockOutcome.Unavailable).detail
+        return LocalUnlockMessage.entries.firstOrNull { it.name == detail }
+    }
+
 }

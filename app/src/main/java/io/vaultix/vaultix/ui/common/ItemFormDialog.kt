@@ -88,6 +88,7 @@ import io.vaultix.model.VaultReprompt
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.qr.QrScannerContent
 import io.vaultix.vaultix.ui.theme.Spacing
+import io.vaultix.vaultix.ui.theme.UiSize
 import io.vaultix.vaultix.ui.theme.VaultixCorner
 
 /**
@@ -371,7 +372,7 @@ private fun AppPickerHost(show: Boolean, uris: SnapshotStateList<String>, onDism
 private fun SectionLabel(text: String, icon: ImageVector) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        horizontalArrangement = Arrangement.spacedBy(UiSize.TightGap),
     ) {
         Icon(
             imageVector = icon,
@@ -1017,7 +1018,7 @@ private fun UriListEditor(
                     Icon(
                         Icons.Filled.Delete,
                         contentDescription = stringResource(R.string.item_remove_uri),
-                        modifier = Modifier.size(18.dp),
+                        modifier = Modifier.size(UiSize.InlineIcon),
                     )
                 }
             }
@@ -1025,14 +1026,14 @@ private fun UriListEditor(
         }
         Row(modifier = Modifier.fillMaxWidth()) {
             TextButton(onClick = onAdd, modifier = Modifier.weight(1f)) {
-                Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(UiSize.InlineIcon))
                 Spacer(Modifier.width(Spacing.sm))
                 Text(stringResource(R.string.item_add_uri))
             }
             // 关联手机 App：等价于 Bitwarden 在网址里填 androidapp://包名，
             // 但用户不该手敲包名——这里给一个应用列表直接选。
             TextButton(onClick = onPickApp, modifier = Modifier.weight(1f)) {
-                Icon(Icons.Filled.Android, contentDescription = null, modifier = Modifier.size(18.dp))
+                Icon(Icons.Filled.Android, contentDescription = null, modifier = Modifier.size(UiSize.InlineIcon))
                 Spacer(Modifier.width(Spacing.sm))
                 Text(stringResource(R.string.item_add_app))
             }
@@ -1061,7 +1062,7 @@ private fun CustomFieldsEditor(fields: SnapshotStateList<VaultCustomField>) {
             Spacer(Modifier.height(Spacing.sm))
         }
         TextButton(onClick = { fields.add(VaultCustomField()) }, modifier = Modifier.fillMaxWidth()) {
-            Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+            Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(UiSize.InlineIcon))
             Spacer(Modifier.width(Spacing.sm))
             Text(stringResource(R.string.item_add_field))
         }
@@ -1090,7 +1091,7 @@ private fun CustomFieldRow(
                 Icon(
                     Icons.Filled.Delete,
                     contentDescription = stringResource(R.string.item_remove_field),
-                    modifier = Modifier.size(18.dp),
+                    modifier = Modifier.size(UiSize.InlineIcon),
                 )
             }
         }
@@ -1165,7 +1166,7 @@ private fun FieldValueInput(
                 Icon(
                     imageVector = if (revealHidden) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
                     contentDescription = stringResource(R.string.item_reveal_value),
-                    modifier = Modifier.size(18.dp),
+                    modifier = Modifier.size(UiSize.InlineIcon),
                 )
             }
         }

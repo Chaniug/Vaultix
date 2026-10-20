@@ -53,6 +53,7 @@ import io.vaultix.vaultix.ui.common.TwoFactorStep
 import io.vaultix.vaultix.ui.common.VaultixWavyProgressBar
 import io.vaultix.vaultix.ui.error.unlockErrorText
 import io.vaultix.vaultix.ui.theme.Spacing
+import io.vaultix.vaultix.ui.theme.UiSize
 
 /**
  * 连接 Bitwarden 表单（Docs/08 S4 / 流程 5.1）+ 2FA 步骤。
@@ -325,7 +326,7 @@ private fun OfficialServerRow(url: String) {
                 imageVector = Icons.Filled.Cloud,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(20.dp),
+                modifier = Modifier.size(UiSize.SecondaryIcon),
             )
             Spacer(Modifier.width(Spacing.md))
             Column(modifier = Modifier.weight(1f)) {

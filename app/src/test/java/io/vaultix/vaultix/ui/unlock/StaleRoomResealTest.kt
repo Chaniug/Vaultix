@@ -136,6 +136,7 @@ class StaleRoomResealTest {
             mockk<UnlockRecoveryRepository>(relaxed = true),
             reseal,
             prefs,
+            textContext(),
         ).also {
             it.testingScope = this
             // ★ #174 第二步：连后台调度器也换成本测试的虚拟调度器。
@@ -240,4 +241,26 @@ class StaleRoomResealTest {
 
         assertThat(vm.state.value.error).isNotNull()
     }
+    /** 只给 ViewModel 解析文案用的假 Context：返回资源**名**，让断言能看出取的是哪条。 */
+    private fun textContext(): android.content.Context {
+        val ctx = mockk<android.content.Context>(relaxed = true)
+        every { ctx.getString(any()) } answers { resourceName(firstArg()) }
+        every { ctx.getString(any(), *anyVararg()) } answers { resourceName(firstArg()) }
+        return ctx
+    }
+
+    /**
+     * 把资源 id 反射回**符号名**。
+     *
+     * ⚠️ 为什么不用 Robolectric 的 `context.getString` 真解析：本模块单测不跑
+     * Android 运行时（全是纯 JVM + mockk），引 Robolectric 是为了这一件事付整个
+     * 运行时的代价。而断言真正关心的是"用的是哪条资源"，不是"那条资源的中文写了什么"
+     * —— 后者一改文案就会红，反而把文案钉死在测试里（那正是 §3.4 要治的病）。
+     */
+    private fun resourceName(id: Int): String =
+        io.vaultix.vaultix.R.string::class.java.fields
+            .firstOrNull { it.getInt(null) == id }
+            ?.name
+            ?: "unknown_$id"
+
 }

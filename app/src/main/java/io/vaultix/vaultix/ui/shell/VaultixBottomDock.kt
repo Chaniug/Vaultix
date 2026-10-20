@@ -68,6 +68,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.theme.UiSize
 import io.vaultix.vaultix.ui.theme.VaultixCorner
 import io.vaultix.vaultix.ui.theme.Spacing
 
@@ -87,7 +88,7 @@ private val DockBarHeight = 60.dp
  * - 只有「需要在非组合环境里引用一个名义值」的地方（如 `SelectionActionBar` 的文档、
  *   预览里的示意留白）才直接用这个常量。
  */
-val BottomDockOccupiedHeight: Dp = DockBarHeight + 6.dp + 20.dp
+val BottomDockOccupiedHeight: Dp = DockBarHeight + UiSize.TightGap + UiSize.SecondaryIcon
 
 /**
  * 2.0x 字号下 tab 文字把胶囊撑高的**增量上限**。
@@ -145,7 +146,7 @@ fun VaultixBottomDock(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .padding(start = Spacing.md, end = Spacing.md, top = 6.dp, bottom = 20.dp)
+            .padding(start = Spacing.md, end = Spacing.md, top = UiSize.TightGap, bottom = UiSize.SecondaryIcon)
     ) {
         Surface(
             modifier = Modifier.fillMaxWidth(),

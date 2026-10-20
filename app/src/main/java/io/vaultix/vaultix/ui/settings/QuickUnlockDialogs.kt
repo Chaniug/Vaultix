@@ -661,8 +661,11 @@ private fun ReportDialog(
                         color = MaterialTheme.colorScheme.error,
                     )
                     state.failed.forEach { item ->
+                        // 失败原因是 `QuickUnlockText`（可能是资源、也可能带参数），
+                        // 统一走 `resolve()` —— 与 [DialogErrorText] 同一套解析，
+                        // 别在这里再写一遍：两处解析一旦分叉，同一条原因会显示成两种话。
                         Text(
-                            text = "${item.vaultName} · ${item.reason}",
+                            text = "${item.vaultName} · ${item.reason.resolve()}",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -722,9 +725,9 @@ private fun PinField(value: String, labelRes: Int, onValueChange: (String) -> Un
 }
 
 @Composable
-private fun DialogErrorText(message: String) {
+private fun DialogErrorText(message: QuickUnlockText) {
     Text(
-        text = message,
+        text = message.resolve(),
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.error,
         // ⚠️ 2026-10-04 观感：原先是 `Spacing.xs`(4dp)。
@@ -734,4 +737,22 @@ private fun DialogErrorText(message: String) {
         //   [Spacing.sm] 收口⇒ 字段与错误文案合成一"组"，与下一个字段再分开。
         modifier = Modifier.padding(top = Spacing.sm),
     )
+}
+
+/**
+ * 把 [QuickUnlockText] 解析成**可上屏的一句话**。
+ *
+ * ⚠️ 为什么必须走同一个入口：改前「我们自己写的」和「来源层翻译好的」都是裸 `String`，
+ * 谁也分不清该不该翻译。统一在这里判一次，界面上不会出现「该翻译的没翻译」或
+ * 「已翻译的又被套成资源」这两种反向 bug。
+ *
+ * ⚠️ 不用 `stringResource(id, *args)` 一把梭：无参时 Kotlin 传空数组，
+ * 而带 `%` 的字面量（如「100% 安全」）经 `String.format` 会被当成格式符 ——
+ * 无参分支必须走不带格式化的重载。
+ */
+@Composable
+internal fun QuickUnlockText.resolve(): String = when (this) {
+    is QuickUnlockText.Res ->
+        if (args.isEmpty()) stringResource(id) else stringResource(id, *args.toTypedArray())
+    is QuickUnlockText.Detail -> message
 }

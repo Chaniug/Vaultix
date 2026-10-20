@@ -38,10 +38,14 @@
  */
 package io.vaultix.vaultix.ui.settings
 
+import android.content.Context
+import androidx.annotation.StringRes
 import android.app.Activity
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
+import io.vaultix.vaultix.R
 import io.vaultix.vaultix.remote.CloudAccount
 import io.vaultix.vaultix.remote.CloudAccountConnector
 import io.vaultix.vaultix.remote.CloudAccountInventory
@@ -63,6 +67,9 @@ enum class ProbeState { IDLE, PROBING, OK, FAILED }
 class CloudAccountsViewModel @Inject constructor(
     private val inventory: CloudAccountInventory,
     private val connector: CloudAccountConnector,
+    // ★ 2026-10-20：只为把**我们自己的**资源 id 解析成一句话（校验文案 / probe 兜底）。
+    //   来源层已翻译好的 `error.message` 不经过它，原样展示。
+    @ApplicationContext private val context: Context,
 ) : ViewModel() {
 
     data class UiState(
@@ -85,7 +92,14 @@ class CloudAccountsViewModel @Inject constructor(
         val probeMessage: String? = null,
         /** 任一动作在进行（登录 / 自检 / 注销）。 */
         val busy: Boolean = false,
-        val error: String? = null,
+        /**
+         * 表单/动作错误。
+         *
+         * ⚠️ 是**密封类型**而不是 `String?`：两类错误的来源不同，混成 String 就是
+         * 审计 §3.4 那个洞（我们自己写的中文进了 Kotlin，`strings.xml` 里没有它）。
+         * 见 [CloudError]。
+         */
+        val error: CloudError? = null,
         /**
          * OneDrive 的**断开原因**（按账号存）。
          *
@@ -101,8 +115,8 @@ class CloudAccountsViewModel @Inject constructor(
         val oneDriveIssues: Map<String, String> = emptyMap(),
         /** 待确认注销的账号（弹出确认框，且**先算好影响面**）。 */
         val pendingRemoval: CloudAccount? = null,
-        /** 刚做完的动作的成功提示（一次性，由 UI 读后清）。 */
-        val notice: String? = null,
+        /** 刚做完的动作的成功提示（一次性，由 UI 读后清）。⚠️ 同样是**资源 id**。 */
+        @StringRes val notice: Int? = null,
     ) {
         /** 当前输入的服务器地址是否是**明文** HTTP（局域网 NAS 的常见情形）。 */
         val insecureHttp: Boolean
@@ -229,7 +243,13 @@ class CloudAccountsViewModel @Inject constructor(
         val current = _state.value
         val problem = validateWebDav(current)
         if (problem != null) {
-            _state.update { it.copy(error = problem, probe = ProbeState.FAILED, probeMessage = problem) }
+            // ⚠️ `probeMessage` 仍是 String（它同时承载来源层那句已翻译好的话），
+            //   而校验文案是我们自己的资源 id ⇒ 在这里就地解析成一句话再塞进去。
+            //   UI 侧对 [UiState.error] 走 `stringResource`，两条路径最终显示的是同一句话。
+            val text = context.getString(problem)
+            _state.update {
+                it.copy(error = CloudError.Res(problem), probe = ProbeState.FAILED, probeMessage = text)
+            }
             return
         }
         _state.update { it.copy(busy = true, error = null, probe = ProbeState.PROBING, probeMessage = null) }
@@ -262,7 +282,7 @@ class CloudAccountsViewModel @Inject constructor(
             // ③ 失败 ⇒ 擦掉刚写的凭据。⚠️ 这里没有"库已用上它"的可能：
             //    本页只做配置，不会走到建库那一步。
             connector.removeWebDavCredential(credentialId)
-            val message = outcome.exceptionOrNull()?.message ?: SETTINGS_CLOUD_PROBE_FAILED
+            val message = outcome.exceptionOrNull()?.message ?: context.getString(SETTINGS_CLOUD_PROBE_FAILED)
             _state.update {
                 it.copy(busy = false, probe = ProbeState.FAILED, probeMessage = message)
             }
@@ -308,14 +328,15 @@ class CloudAccountsViewModel @Inject constructor(
                     refresh()
                 }
                 .onFailure { error ->
-                    _state.update { it.copy(busy = false, error = oneDriveMessage(error)) }
+                    // 来源层已经把原因翻译成人话了 ⇒ 走 [CloudError.Detail]，套一句前缀再展示。
+                    _state.update { it.copy(busy = false, error = CloudError.Detail(oneDriveMessage(error))) }
                 }
         }
     }
 
     /** 拿不到 Activity 时的如实上报（不静默禁用按钮 —— 那样用户只看到"点了没反应"）。 */
     fun reportMissingActivity() {
-        _state.update { it.copy(error = SETTINGS_CLOUD_ACTIVITY_MISSING) }
+        _state.update { it.copy(error = CloudError.Res(SETTINGS_CLOUD_ACTIVITY_MISSING)) }
     }
 
     /**
@@ -394,7 +415,8 @@ class CloudAccountsViewModel @Inject constructor(
 
     // ---------------------------------------------------------------- 内部
 
-    private fun validateWebDav(current: UiState): String? {
+    @StringRes
+    private fun validateWebDav(current: UiState): Int? {
         if (current.serverUrl.isBlank() || current.username.isBlank() || current.password.isEmpty()) {
             return SETTINGS_CLOUD_FIELDS_MISSING
         }
@@ -414,28 +436,33 @@ class CloudAccountsViewModel @Inject constructor(
      */
     private fun oneDriveMessage(error: Throwable): String =
         if (error.isOneDriveAuthTemporarilyUnavailable()) {
-            SETTINGS_CLOUD_ONEDRIVE_TEMP_UNAVAILABLE
+            context.getString(SETTINGS_CLOUD_ONEDRIVE_TEMP_UNAVAILABLE)
         } else {
-            error.toOneDriveUserMessage(SETTINGS_CLOUD_ONEDRIVE_FAILED)
+            error.toOneDriveUserMessage(context.getString(SETTINGS_CLOUD_ONEDRIVE_FAILED))
         }
 
     private companion object {
-        // ⚠️ 文案常量而不是 stringResource：ViewModel 拿不到 Context。
-        //   这些句子与添加页的 `add_cloud_*` 同义但**场景不同**（那是"连上就能选库"，
-        //   这里是"配好一个账号"），刻意不复用同一条 —— 混用会让一处的改动咬到另一处。
-        const val SETTINGS_CLOUD_FIELDS_MISSING = "请填写服务器地址、账号和密码"
-        const val SETTINGS_CLOUD_INVALID_SERVER = "服务器地址不是有效的 URL"
-        const val SETTINGS_CLOUD_CREDENTIALS_IN_URL =
-            "请把账号密码填在下面两个框里，不要写进服务器地址（写在地址里会泄露到日志）"
-        const val SETTINGS_CLOUD_PROBE_OK = "连接成功，账号已保存"
-        const val SETTINGS_CLOUD_PROBE_FAILED = "无法连接该服务器"
-        const val SETTINGS_CLOUD_ONEDRIVE_SIGNED_IN = "已登录 Microsoft 账号"
-        const val SETTINGS_CLOUD_ONEDRIVE_FAILED = "Microsoft 登录失败"
+        // ★ 2026-10-20（审计 §3.4）：常量从**中文串**改成 **资源 id**。
+        //
+        // 改前的注释写的是「文案常量而不是 stringResource：ViewModel 拿不到 Context」——
+        // 前半句对，后半句推出了错误结论：ViewModel 拿不到 Context，**所以**应该给
+        // `@StringRes Int` 让 UI 侧去取，而不是把中文抄进 Kotlin。两条后果：
+        // ① 这批句子在 `strings.xml` 里不存在 ⇒ 将来要出 `values-en` 时**翻不到**；
+        // ② 孤儿串检查器看不见它们（那个脚本查的是"资源没人用"），于是**永远没人发现**。
+        //
+        // 这些句子与添加页的 `add_cloud_*` 同义但**场景不同**（那是"连上就能选库"，
+        // 这里是"配好一个账号"），刻意不复用同一条 —— 混用会让一处的改动咬到另一处。
+        const val SETTINGS_CLOUD_FIELDS_MISSING = R.string.cloud_msg_fields_missing
+        const val SETTINGS_CLOUD_INVALID_SERVER = R.string.cloud_msg_invalid_server
+        const val SETTINGS_CLOUD_CREDENTIALS_IN_URL = R.string.cloud_msg_credentials_in_url
+        const val SETTINGS_CLOUD_PROBE_OK = R.string.cloud_msg_probe_ok
+        const val SETTINGS_CLOUD_PROBE_FAILED = R.string.cloud_msg_probe_failed
+        const val SETTINGS_CLOUD_ONEDRIVE_SIGNED_IN = R.string.cloud_msg_onedrive_signed_in
+        const val SETTINGS_CLOUD_ONEDRIVE_FAILED = R.string.cloud_msg_onedrive_failed
         const val SETTINGS_CLOUD_ONEDRIVE_TEMP_UNAVAILABLE =
-            "系统登录组件正忙（可能在更新浏览器），请稍后重试"
-        const val SETTINGS_CLOUD_ACTIVITY_MISSING =
-            "无法拉起 Microsoft 登录页（当前页面拿不到 Activity），请重启应用后重试"
-        const val SETTINGS_CLOUD_REMOVED_WEBDAV = "已删除该 WebDAV 账号的凭据"
-        const val SETTINGS_CLOUD_REMOVED_ONEDRIVE = "已注销该 Microsoft 账号"
+            R.string.cloud_msg_onedrive_temp_unavailable
+        const val SETTINGS_CLOUD_ACTIVITY_MISSING = R.string.cloud_msg_activity_missing
+        const val SETTINGS_CLOUD_REMOVED_WEBDAV = R.string.cloud_msg_removed_webdav
+        const val SETTINGS_CLOUD_REMOVED_ONEDRIVE = R.string.cloud_msg_removed_onedrive
     }
 }

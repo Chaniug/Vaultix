@@ -76,15 +76,14 @@ import androidx.compose.ui.unit.dp
 import io.vaultix.datastore.VaultTimeout
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.theme.Spacing
+import io.vaultix.vaultix.ui.theme.UiSize
 import io.vaultix.vaultix.ui.theme.VaultixCorner
-
-/** 设置项卡片圆角（上游 20dp）。 */
 
 /** 设置项最小高度（上游 72dp）。 */
 private val SETTINGS_ROW_MIN_HEIGHT = 72.dp
 
 /** 图标（28dp）与文字之间的间距（上游 18dp）。 */
-private val SETTINGS_ICON_GAP = 18.dp
+private val SETTINGS_ICON_GAP = UiSize.InlineIcon
 
 /** 行内的水平内边距（上游 20dp）。 */
 private val SETTINGS_ROW_PADDING_H = 20.dp
@@ -356,7 +355,7 @@ internal fun SingleChoiceRow(label: String, selected: Boolean, onClick: () -> Un
             //      再滑一下才读到"15 分钟"，一行要划两次，且两处状态可能不同步。
             .semantics(mergeDescendants = true) { this.selected = selected }
             .clickable(role = Role.RadioButton, onClick = onClick)
-            .padding(vertical = 2.dp),
+            .padding(vertical = UiSize.HairGap),
     ) {
         RadioButton(selected = selected, onClick = onClick)
         Text(

@@ -13,6 +13,7 @@ import io.vaultix.domain.UnlockRecoveryRepository
 import io.vaultix.domain.VaultRepository
 import io.vaultix.domain.VaultSyncStatus
 import io.vaultix.model.VaultSummary
+import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.KdbxConflictChoice
 import io.vaultix.vaultix.ui.settings.QuickUnlockController
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -79,10 +80,16 @@ class VaultListViewModel @Inject constructor(
 
     sealed interface Event {
         data object Removed : Event
-        data class RemoveFailed(val message: String) : Event
+        data class RemoveFailed(val notice: SyncNotice) : Event
 
-        /** KDBX 网盘同步结束（成功路径）；[message] 可直接展示。 */
-        data class KdbxSynced(val message: String) : Event
+        /**
+         * KDBX 网盘同步结束（成功路径）。
+         *
+         * ⚠️ 携带 [SyncNotice] 而不是 `String`：这里的文案**一半是我们自己写的**
+         * （"已上传到云端"）、一半是编排器翻译好的 —— 混成 `String` 就再也分不清
+         * 哪句漏进了 Kotlin（审计 §3.4 的原始病灶）。
+         */
+        data class KdbxSynced(val notice: SyncNotice) : Event
 
         /**
          * ★ 需要用户拍板的同步冲突 —— UI **必须**弹三个选项的对话框
@@ -93,8 +100,8 @@ class VaultListViewModel @Inject constructor(
          */
         data class KdbxConflict(val vaultId: String, val vaultName: String) : Event
 
-        /** KDBX 网盘同步失败（网络 / 凭据 / IO）；可重试。 */
-        data class KdbxSyncFailed(val message: String) : Event
+        /** KDBX 网盘同步失败（网络 / 凭据 / IO）；可重试。同 [KdbxSynced] 的分型理由。 */
+        data class KdbxSyncFailed(val notice: SyncNotice) : Event
     }
 
     private val _events = MutableSharedFlow<Event>(extraBufferCapacity = 4)
@@ -174,7 +181,12 @@ class VaultListViewModel @Inject constructor(
                     _events.emit(Event.Removed)
                 }
                 .onFailure { error ->
-                    _events.emit(Event.RemoveFailed(error.message ?: "未知错误"))
+                    _events.emit(
+                        Event.RemoveFailed(
+                            error.message?.let(SyncNotice::Detail)
+                                ?: SyncNotice.Res(R.string.error_unknown_no_detail),
+                        ),
+                    )
                 }
         }
     }
@@ -201,13 +213,13 @@ class VaultListViewModel @Inject constructor(
             val localChanged = kdbxSyncRepository.localChangedSinceLastSync(vaultId)
             when (val report = kdbxSyncRepository.sync(vaultId, localChangedSinceLastSync = localChanged)) {
                 is KdbxSyncReport.InSync ->
-                    _events.emit(Event.KdbxSynced("已是最新版本"))
+                    _events.emit(Event.KdbxSynced(SyncNotice.Res(R.string.kdbx_sync_in_sync)))
 
                 is KdbxSyncReport.Uploaded ->
-                    _events.emit(Event.KdbxSynced("已上传到云端"))
+                    _events.emit(Event.KdbxSynced(SyncNotice.Res(R.string.kdbx_sync_uploaded)))
 
                 is KdbxSyncReport.Downloaded ->
-                    _events.emit(Event.KdbxSynced("已从云端更新"))
+                    _events.emit(Event.KdbxSynced(SyncNotice.Res(R.string.kdbx_sync_downloaded)))
 
                 // ★ 冲突：交给 UI 弹三选项对话框，这里不发 toast。
                 is KdbxSyncReport.Conflict -> emitConflict(vaultId)
@@ -219,10 +231,12 @@ class VaultListViewModel @Inject constructor(
                 is KdbxSyncReport.NeedsReload -> pullRemote(vaultId)
 
                 is KdbxSyncReport.NoCloudSource ->
-                    _events.emit(Event.KdbxSyncFailed("这个库还没有配置云端来源"))
+                    _events.emit(
+                        Event.KdbxSyncFailed(SyncNotice.Res(R.string.kdbx_sync_no_cloud_source)),
+                    )
 
                 is KdbxSyncReport.Failed ->
-                    _events.emit(Event.KdbxSyncFailed(report.reason))
+                    _events.emit(Event.KdbxSyncFailed(SyncNotice.Detail(report.reason)))
             }
         }
     }
@@ -237,10 +251,16 @@ class VaultListViewModel @Inject constructor(
         viewModelScope.launch {
             when (choice) {
                 KdbxConflictChoice.KeepLocalUpload ->
-                    emitResolve(kdbxSyncRepository.resolveUsingLocal(vaultId), "已用本地覆盖云端")
+                    emitResolve(
+                        kdbxSyncRepository.resolveUsingLocal(vaultId),
+                        SyncNotice.Res(R.string.kdbx_sync_kept_local),
+                    )
 
                 KdbxConflictChoice.KeepRemoteDownload ->
-                    emitResolve(kdbxSyncRepository.resolveUsingRemote(vaultId), "已用云端覆盖本地")
+                    emitResolve(
+                        kdbxSyncRepository.resolveUsingRemote(vaultId),
+                        SyncNotice.Res(R.string.kdbx_sync_kept_remote),
+                    )
 
                 KdbxConflictChoice.DecideLater -> {
                     kdbxSyncRepository.defer(vaultId)
@@ -258,13 +278,16 @@ class VaultListViewModel @Inject constructor(
      */
     private suspend fun pullRemote(vaultId: String) {
         when (val report = kdbxSyncRepository.pull(vaultId)) {
-            is KdbxSyncReport.Downloaded -> _events.emit(Event.KdbxSynced("已从云端更新"))
+            is KdbxSyncReport.Downloaded ->
+                _events.emit(Event.KdbxSynced(SyncNotice.Res(R.string.kdbx_sync_downloaded)))
 
             is KdbxSyncReport.Conflict -> emitConflict(vaultId)
 
-            is KdbxSyncReport.Failed -> _events.emit(Event.KdbxSyncFailed(report.reason))
+            is KdbxSyncReport.Failed ->
+                _events.emit(Event.KdbxSyncFailed(SyncNotice.Detail(report.reason)))
 
-            else -> _events.emit(Event.KdbxSyncFailed("未能拉取云端更新"))
+            else ->
+                _events.emit(Event.KdbxSyncFailed(SyncNotice.Res(R.string.kdbx_sync_pull_failed)))
         }
     }
 
@@ -275,22 +298,31 @@ class VaultListViewModel @Inject constructor(
         _events.emit(Event.KdbxConflict(vaultId = vaultId, vaultName = name))
     }
 
-    private suspend fun emitResolve(report: KdbxSyncReport, successMessage: String) {
+    private suspend fun emitResolve(report: KdbxSyncReport, successMessage: SyncNotice) {
         when (report) {
             is KdbxSyncReport.Uploaded,
             is KdbxSyncReport.Downloaded,
             is KdbxSyncReport.InSync,
             -> _events.emit(Event.KdbxSynced(successMessage))
 
-            is KdbxSyncReport.Failed -> _events.emit(Event.KdbxSyncFailed(report.reason))
+            is KdbxSyncReport.Failed ->
+                _events.emit(Event.KdbxSyncFailed(SyncNotice.Detail(report.reason)))
 
             // 用户在对话框里选了覆盖，但远端在这期间又变了（极端竞态）。
             // ⚠️ 不能报"成功了" —— 那会让用户以为已经覆盖，实际根本没写进去。
-            is KdbxSyncReport.Conflict -> _events.emit(Event.KdbxSyncFailed("云端又有了新改动，请重新同步"))
+            is KdbxSyncReport.Conflict ->
+                _events.emit(
+                    Event.KdbxSyncFailed(SyncNotice.Res(R.string.kdbx_sync_remote_changed_again)),
+                )
 
             // 理论上到不了：这两个分支只在"还没开始同步"时出现。
-            is KdbxSyncReport.NeedsReload -> _events.emit(Event.KdbxSyncFailed("需要重新解锁后再试"))
-            is KdbxSyncReport.NoCloudSource -> _events.emit(Event.KdbxSyncFailed("这个库还没有配置云端来源"))
+            is KdbxSyncReport.NeedsReload ->
+                _events.emit(Event.KdbxSyncFailed(SyncNotice.Res(R.string.kdbx_sync_needs_reload)))
+
+            is KdbxSyncReport.NoCloudSource ->
+                _events.emit(
+                    Event.KdbxSyncFailed(SyncNotice.Res(R.string.kdbx_sync_no_cloud_source)),
+                )
         }
     }
 

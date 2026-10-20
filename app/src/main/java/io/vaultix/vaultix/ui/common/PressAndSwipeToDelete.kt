@@ -89,6 +89,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.theme.UiSize
 import io.vaultix.vaultix.ui.theme.VaultixCorner
 import kotlinx.coroutines.launch
 
@@ -246,13 +247,13 @@ private fun BoxScope.DeleteActionArea(reveal: Float) {
                 imageVector = Icons.Filled.Delete,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.onErrorContainer,
-                modifier = Modifier.size(20.dp),
+                modifier = Modifier.size(UiSize.SecondaryIcon),
             )
             Text(
                 text = stringResource(R.string.action_delete),
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onErrorContainer,
-                modifier = Modifier.padding(top = 2.dp),
+                modifier = Modifier.padding(top = UiSize.HairGap),
             )
         }
     }

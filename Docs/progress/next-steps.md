@@ -2,6 +2,51 @@
 
 ---
 
+## ✅ UI 审计剩余 5 项收口（2026-10-20）· 四项落地、一项判定不做
+
+来源 `Docs/progress/audit/ui-design-audit-2026-10-19.md`；交接 `.ai/SESSION-2026-10-20.md`。
+**上游这一轮已清空审计 §4 全表** —— 之后没有"审计遗留项"了，剩下的都是真机项与需硬件/需设计决策的项。
+
+| 审计条目 | 级别 | 判定 | 落点 |
+|---|---|---|---|
+| §2.2 `Spacing` 被绕过（205 处字面量）+ §3.7 `18.dp` 散落 | P3 | ✅ **合并成一轮做完**：新增第四张表 `UiSize`（9 个成员），80 处字面量逐行精确替换（27 文件），清掉 9 个孤儿私有常量 | `app/.../ui/theme/UiSize.kt`（新建） |
+| §3.4 中文硬编码 + 无 `values-en` | P3 | ✅ **117 → 0**（审计写 72，实测 117）：四类 `Res/Detail` 密封类型 + 反向哨兵脚本 | `settings/CloudError.kt`、`QuickUnlockText.kt`、`vaultlist/SyncNotice.kt`、`unlock/LocalUnlockMessage.kt`、`.ai/tools/check_ui_hardcoded_text.py` |
+| §2.7 响应式三档未落地 | P3 | ✅ **只改文档**（一行布局没动）：`Docs/08 §4` 拆成 4.1 已实现 / 4.2 计划，登记 #177 | `Docs/08-界面设计规格.md` §4、`.ai/issues/06` #177 |
+| §2.5 顶栏四套收敛 | P2 | ❌ **明确不做**：审计自己写"需真机看折叠手感"，本地改数值等于凭感觉 | 无改动 |
+
+**§2.7 待做三项**（`Docs/08 §4.2` 计划表，均需硬件）：
+
+| 项 | 目标 | 前置条件 |
+|---|---|---|
+| 三档化（Compact / Medium / Expanded） | 引入 `WindowSizeClass`，Medium 与 Expanded 分别定布局 | 折叠屏 + 平板真机 |
+| Expanded 双栏 | `ListDetailPaneScaffold`：列表 360dp 固定 + 详情自适应、最大 720 居中 | 同上；且与"详情是独立页面"的导航模型冲突，要先定返回栈语义 |
+| 折叠铰链避让 | `FoldingFeature` 取铰链位置，两侧各占一屏 | 折叠设备 |
+
+**门禁**：编译 ✅ · `detekt --rerun-tasks` **`178 actionable tasks: 178 executed`** ✅ ·
+`testFullDebugUnitTest` **`tests=388 skipped=0 failures=0 errors=0`**（数 XML 得）✅ ·
+9 个 Python 静态检查全 OK ✅ · CJK 行宽超标 11 处全是 KDoc 表格行（detekt 实跑未报）✅。
+
+**新增判据 5 条**（已写进 `.ai/conventions/8.4-UI·观感.md` 新纪律 5/6）：
+
+1. **`Spacing` 管"两者之间"、`UiSize` 管"自己多大"**；18 与 20 并存不是重复，判据是**它和谁并排**。
+2. **`Spacing` 纪律第 2 条「不在标尺上的值保持字面量」有边界** —— 一旦同一语义的值在几十个文件里反复出现，它就已经是语义了，该升级成常量。
+3. **文案哨兵是反方向的**：`check_orphan_strings` 管"资源没人用"，`check_ui_hardcoded_text` 管"代码里写死了中文"，两条才闭环。
+4. **兜底文案归 UI 层**：ViewModel 原样传 `null`，由 UI 拼模板 —— "异常没细节时说什么"是呈现决定。
+5. **"拿不到 `Context`"不是写死中文的理由**：共享层产出带资源 id 的枚举，解析交给有 `Context` 的调用方。
+
+**下一件该做的事：真机验收**（6 项一起量，一次装包全测完）
+
+| # | 量什么 | 关联 |
+|---|---|---|
+| 1 | 4 键手势机下，库列表最后一条是否真的可点 | §2.1（2026-10-19 修） |
+| 2 | 2.0x 字体下底栏是否还裁切 | §3.3 |
+| 3 | 深色模式 `EntryCard` 0.5dp 描边是否还看得见 | §2.4 |
+| 4 | 顶栏在 6 个沉浸式页面下的折叠手感（决定 §2.5 收敛方案） | §2.5（本轮判定不做） |
+| 5 | OneDrive `If-None-Match: *` 的 201 / 412 | 旧真机项 |
+| 6 | W6 KeePassXC 互操作 | 旧真机项 |
+
+---
+
 ## ✅ UI 设计审计 §4 五个施工项全部落地（2026-10-19）· P0 → P2
 
 来源 `Docs/progress/audit/ui-design-audit-2026-10-19.md` §4；交接 `.ai/SESSION-2026-10-19.md`。

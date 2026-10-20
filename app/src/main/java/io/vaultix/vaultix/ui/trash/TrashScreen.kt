@@ -80,7 +80,11 @@ fun TrashScreen(
                 is TrashViewModel.UiEvent.AutoCleaned ->
                     context.getString(R.string.trash_auto_cleaned, event.count)
                 is TrashViewModel.UiEvent.Failed ->
-                    context.getString(R.string.item_save_failed, event.message)
+                    // 兜底理由同 ItemsScreen（见 TrashViewModel.UiEvent.Failed 的 KDoc）。
+                    context.getString(
+                        R.string.item_save_failed,
+                        event.message ?: context.getString(R.string.error_unknown_no_detail),
+                    )
             }
             snackbarHostState.showSnackbar(message)
         }

@@ -45,6 +45,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import io.vaultix.vaultix.ui.theme.Spacing
+import io.vaultix.vaultix.ui.theme.UiSize
 
 /** 密码输入框（带「显示 / 隐藏」切换），导出 / 导入 / 转换共用。 */
 @Composable
@@ -80,7 +81,7 @@ internal fun PasswordField(
         },
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = Spacing.lg, vertical = 6.dp),
+            .padding(horizontal = Spacing.lg, vertical = UiSize.TightGap),
     )
 }
 
@@ -103,8 +104,8 @@ internal fun ActionButton(
     ) {
         if (busy) {
             CircularProgressIndicator(
-                modifier = Modifier.size(18.dp),
-                strokeWidth = 2.dp,
+                modifier = Modifier.size(UiSize.InlineProgress),
+                strokeWidth = UiSize.InlineProgressStroke,
             )
             Text(busyText, modifier = Modifier.padding(start = Spacing.sm))
         } else {
@@ -121,6 +122,6 @@ internal fun FieldHint(text: String) {
         text = text,
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.error,
-        modifier = Modifier.padding(horizontal = Spacing.lg, vertical = 2.dp),
+        modifier = Modifier.padding(horizontal = Spacing.lg, vertical = UiSize.HairGap),
     )
 }

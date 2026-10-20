@@ -43,6 +43,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.theme.Spacing
+import io.vaultix.vaultix.ui.theme.UiSize
 
 /** 操作条的水平内边距（与列表卡片的 16dp 对齐）。 */
 private val BAR_PADDING = Spacing.lg
@@ -128,7 +129,7 @@ fun SelectionActionBar(
                 Icon(
                     imageVector = Icons.Filled.Delete,
                     contentDescription = null,
-                    modifier = Modifier.padding(end = 6.dp),
+                    modifier = Modifier.padding(end = UiSize.TightGap),
                 )
                 Text(stringResource(R.string.action_delete_selected))
             }

@@ -135,6 +135,7 @@ import io.vaultix.vaultix.ui.common.vaultOriginLabel
 import io.vaultix.vaultix.ui.common.VaultixWavyProgressBar
 import io.vaultix.vaultix.ui.shell.BottomDockOccupiedHeight
 import io.vaultix.vaultix.ui.theme.Spacing
+import io.vaultix.vaultix.ui.theme.UiSize
 import kotlinx.coroutines.launch
 
 /**
@@ -185,8 +186,6 @@ private object ItemsContentType {
     const val HEADER = "header"
 }
 
-/** 列表顶部那一行状态信息里，前导图标的边长（原只读提示用，现状态行也用）。 */
-private val READ_ONLY_ICON_SIZE = 16.dp
 
 /**
  * 列表顶部的「密码库状态」行：**来源 + 条目数**（2026-09-30 用户要求）。
@@ -232,7 +231,7 @@ private fun VaultStatusRow(card: VaultCardInfo) {
             Icon(
                 Icons.Filled.Storage,
                 contentDescription = null,
-                modifier = Modifier.size(READ_ONLY_ICON_SIZE),
+                modifier = Modifier.size(UiSize.MicroIcon),
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.width(Spacing.sm))
@@ -251,7 +250,7 @@ private fun VaultStatusRow(card: VaultCardInfo) {
                 // 而不是两个各自为政的行。
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = READ_ONLY_ICON_SIZE + Spacing.sm, top = Spacing.xs),
+                    .padding(start = UiSize.MicroIcon + Spacing.sm, top = Spacing.xs),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 // 同步角标放在条目数**之前**：它比"有多少条"更紧急（云端可能还是旧的）。
@@ -799,7 +798,12 @@ private fun SaveEventSnackbar(
                 ItemsViewModel.SaveEvent.SavedQueued ->
                     context.getString(R.string.item_saved_queued)
                 is ItemsViewModel.SaveEvent.Failed ->
-                    context.getString(R.string.item_save_failed, event.message)
+                    // ⚠️ 异常没带 message 时在这里兜一句话，**不在 ViewModel 里**：
+                    //   "没细节时说什么"是呈现决定。见 SaveEvent.Failed 的 KDoc。
+                    context.getString(
+                        R.string.item_save_failed,
+                        event.message ?: context.getString(R.string.error_unknown_no_detail),
+                    )
                 is ItemsViewModel.SaveEvent.Deleted ->
                     context.getString(R.string.items_deleted_to_trash, event.title)
             }
@@ -1454,7 +1458,7 @@ private fun SyncNoteBanner(
             is ItemsViewModel.SyncNote.Warning -> {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(horizontal = Spacing.lg, vertical = 6.dp),
+                    modifier = Modifier.padding(horizontal = Spacing.lg, vertical = UiSize.TightGap),
                 ) {
                     Icon(
                         Icons.Filled.Warning,
@@ -1478,7 +1482,7 @@ private fun SyncNoteBanner(
             is ItemsViewModel.SyncNote.Success -> {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(horizontal = Spacing.lg, vertical = 6.dp),
+                    modifier = Modifier.padding(horizontal = Spacing.lg, vertical = UiSize.TightGap),
                 ) {
                     Icon(
                         Icons.Filled.Check,
@@ -1496,7 +1500,7 @@ private fun SyncNoteBanner(
             ItemsViewModel.SyncNote.Skipped -> {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(horizontal = Spacing.lg, vertical = 6.dp),
+                    modifier = Modifier.padding(horizontal = Spacing.lg, vertical = UiSize.TightGap),
                 ) {
                     Icon(
                         Icons.Filled.Check,
@@ -1582,19 +1586,19 @@ private fun GroupHeader(
             imageVector = Icons.Filled.ExpandMore,
             contentDescription = null,
             tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(18.dp).graphicsLayer { rotationZ = rotation },
+            modifier = Modifier.size(UiSize.InlineIcon).graphicsLayer { rotationZ = rotation },
         )
         Text(
             text = title,
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.padding(start = 6.dp),
+            modifier = Modifier.padding(start = UiSize.TightGap),
         )
         Text(
             text = count.toString(),
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(start = 6.dp),
+            modifier = Modifier.padding(start = UiSize.TightGap),
         )
     }
 }

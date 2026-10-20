@@ -27,6 +27,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import io.vaultix.vaultix.ui.theme.UiSize
 
 /** 徽标圆角（小圆角，比胶囊更"标签"；与文字行高匹配）。 */
 private const val BADGE_CORNER_DP = 6
@@ -50,7 +51,7 @@ fun TypeBadge(text: String, tone: BadgeTone, modifier: Modifier = Modifier) {
             style = MaterialTheme.typography.labelSmall,
             color = content,
             maxLines = 1,
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+            modifier = Modifier.padding(horizontal = UiSize.TightGap, vertical = UiSize.HairGap),
         )
     }
 }

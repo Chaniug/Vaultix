@@ -47,6 +47,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.vaultix.common.CardBrand
 import io.vaultix.vaultix.ui.theme.Spacing
+import io.vaultix.vaultix.ui.theme.UiSize
 
 /**
  * 无矢量 logo 品牌在图标框里显示的短标签。
@@ -103,7 +104,7 @@ fun CardBrandIcon(
                 logo = logo,
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(horizontal = Spacing.xs, vertical = 2.dp)
+                    .padding(horizontal = Spacing.xs, vertical = UiSize.HairGap)
             )
         }
         return

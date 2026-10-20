@@ -79,6 +79,8 @@ import io.vaultix.model.VaultItemType
 import io.vaultix.model.VaultLinkedId
 import io.vaultix.model.VaultSshKey
 import io.vaultix.model.VaultUri
+import io.vaultix.vaultix.ui.theme.UiSize
+import io.vaultix.vaultix.ui.theme.VaultixCorner
 import kotlinx.coroutines.delay
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.BadgeTone
@@ -150,7 +152,11 @@ private fun detailEventMessage(context: Context, event: ItemDetailViewModel.UiEv
         ItemDetailViewModel.UiEvent.SaveSynced -> context.getString(R.string.item_saved_synced)
         ItemDetailViewModel.UiEvent.SaveQueued -> context.getString(R.string.item_saved_queued)
         is ItemDetailViewModel.UiEvent.SaveFailed ->
-            context.getString(R.string.item_save_failed, event.message)
+            // 兜底理由同 ItemsScreen（见 UiEvent.SaveFailed 的 KDoc）。
+            context.getString(
+                R.string.item_save_failed,
+                event.message ?: context.getString(R.string.error_unknown_no_detail),
+            )
         ItemDetailViewModel.UiEvent.Deleted -> null
     }
 
@@ -549,8 +555,8 @@ private fun DetailCard(content: @Composable ColumnScope.() -> Unit) {
 /** 分区卡片描边宽度（与 [EntryCard] 一致）。 */
 private val DETAIL_CARD_BORDER_WIDTH = 0.5.dp
 
-/** 分区卡片圆角（见 [DetailCard] 的取舍说明）。 */
-private val DETAIL_CARD_SHAPE = RoundedCornerShape(16.dp)
+/** 分区卡片圆角（见 [DetailCard] 的取舍说明；与 `EntryCard` 同属「大面」档）。 */
+private val DETAIL_CARD_SHAPE = VaultixCorner.Panel
 
 /**
  * 分区小标题（登录信息 / 网址 / 2FA / 通行密钥 …）。
@@ -571,7 +577,7 @@ private fun SectionTitle(text: String, icon: ImageVector) {
             imageVector = icon,
             contentDescription = null,
             tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(18.dp),
+            modifier = Modifier.size(UiSize.InlineIcon),
         )
         Text(
             text = text,
@@ -618,7 +624,7 @@ private fun LoginSection(
                                     Icons.Filled.Visibility
                                 },
                                 contentDescription = null,
-                                modifier = Modifier.size(18.dp),
+                                modifier = Modifier.size(UiSize.InlineIcon),
                             )
                         }
                     },
@@ -772,7 +778,7 @@ private fun DetailFieldRow(
             Icon(
                 Icons.Filled.ContentCopy,
                 contentDescription = null,
-                modifier = Modifier.size(18.dp),
+                modifier = Modifier.size(UiSize.InlineIcon),
             )
         }
     }
@@ -857,7 +863,7 @@ private fun UriRow(kind: UriKind, canOpen: Boolean, onCopy: () -> Unit, onOpen: 
                 Icon(
                     Icons.Filled.Public,
                     contentDescription = stringResource(R.string.item_open_uri),
-                    modifier = Modifier.size(18.dp),
+                    modifier = Modifier.size(UiSize.InlineIcon),
                 )
             }
         }
@@ -865,7 +871,7 @@ private fun UriRow(kind: UriKind, canOpen: Boolean, onCopy: () -> Unit, onOpen: 
             Icon(
                 Icons.Filled.ContentCopy,
                 contentDescription = null,
-                modifier = Modifier.size(18.dp),
+                modifier = Modifier.size(UiSize.InlineIcon),
             )
         }
     }
@@ -916,14 +922,19 @@ private fun TotpSection(totp: String?) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = Spacing.lg, end = Spacing.xs, top = 10.dp, bottom = 10.dp),
+                    .padding(
+                        start = Spacing.lg,
+                        end = Spacing.xs,
+                        top = UiSize.RowVerticalPadding,
+                        bottom = UiSize.RowVerticalPadding,
+                    ),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(
                     imageVector = Icons.Filled.Timer,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(20.dp),
+                    modifier = Modifier.size(UiSize.SecondaryIcon),
                 )
                 Column(
                     modifier = Modifier
@@ -940,14 +951,14 @@ private fun TotpSection(totp: String?) {
                             style = MaterialTheme.typography.headlineSmall,
                             fontFamily = FontFamily.Monospace,
                             fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(top = 2.dp),
+                            modifier = Modifier.padding(top = UiSize.HairGap),
                         )
                     } else {
                         Text(
                             text = stringResource(R.string.detail_totp_hidden),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(top = 2.dp),
+                            modifier = Modifier.padding(top = UiSize.HairGap),
                         )
                     }
                 }
@@ -1016,7 +1027,7 @@ private fun HintRow(
             imageVector = icon,
             contentDescription = null,
             tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(20.dp),
+            modifier = Modifier.size(UiSize.SecondaryIcon),
         )
         Column(modifier = Modifier.padding(start = Spacing.md)) {
             Text(text = title, style = MaterialTheme.typography.titleSmall)
@@ -1025,7 +1036,7 @@ private fun HintRow(
                     text = body,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 2.dp),
+                    modifier = Modifier.padding(top = UiSize.HairGap),
                 )
             }
         }
@@ -1087,7 +1098,7 @@ private fun CustomFieldRow(field: VaultCustomField, onCopy: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = Spacing.lg, end = Spacing.sm, top = 6.dp, bottom = 6.dp),
+            .padding(start = Spacing.lg, end = Spacing.sm, top = UiSize.TightGap, bottom = UiSize.TightGap),
     ) {
         Column(modifier = Modifier.weight(1f).padding(end = Spacing.xs)) {
             Text(
@@ -1107,12 +1118,12 @@ private fun CustomFieldRow(field: VaultCustomField, onCopy: () -> Unit) {
                 Icon(
                     imageVector = if (revealHidden) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
                     contentDescription = null,
-                    modifier = Modifier.size(18.dp),
+                    modifier = Modifier.size(UiSize.InlineIcon),
                 )
             }
         }
         IconButton(onClick = onCopy) {
-            Icon(Icons.Filled.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp))
+            Icon(Icons.Filled.ContentCopy, contentDescription = null, modifier = Modifier.size(UiSize.InlineIcon))
         }
     }
 }

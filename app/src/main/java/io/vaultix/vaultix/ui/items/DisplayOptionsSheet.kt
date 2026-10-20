@@ -56,6 +56,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.settings.SettingsSwitch
+import io.vaultix.vaultix.ui.theme.UiSize
 import kotlinx.coroutines.launch
 import io.vaultix.vaultix.ui.theme.Spacing
 
@@ -217,7 +218,7 @@ private fun OptionRow(
                 imageVector = Icons.Filled.Check,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(20.dp),
+                modifier = Modifier.size(UiSize.SecondaryIcon),
             )
         }
     }

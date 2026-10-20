@@ -1,11 +1,11 @@
 # Vaultix 项目长期笔记
 
 > **接力顺序（先读这四份，再动手）**：
-> 本文件（约定 / 硬约束 / 决策）→ `.ai/ISSUES.md`（坑：现象-根因-解法，最新 **#176**）→
+> 本文件（约定 / 硬约束 / 决策）→ `.ai/ISSUES.md`（坑：现象-根因-解法，最新 **#177**）→
 > `Docs/progress/next-steps.md`（待办，最新在顶部）→ `Docs/progress/current-status.md`（进度快照）
 > → `.ai/SESSION-YYYY-MM-DD.md`（逐轮流水，需要细节才翻）。
 >
-> 最后更新：2026-10-18（#176 修完后；§9 顶部的「最近几轮」才是真源，本行只记最后一次大改）。**本文件已压缩重写**：逐轮叙事折叠进
+> 最后更新：2026-10-21（UI 审计收口；§9 顶部的「最近几轮」才是真源，本行只记最后一次大改）。**本文件已压缩重写**：逐轮叙事折叠进
 > 第 9 节「当前状态」与第 10 节「历史轮次索引」，只留「不知道就会写错、且错了不报错」的内容。
 >
 > ⚠️ **2026-09-26 起 §9 顶部才是"最近几轮"的唯一真源**；§10 的索引止于 2026-09-13，
@@ -135,7 +135,7 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 | [8.1 自动填充](./conventions/8.1-自动填充.md) | 自动填充 | 16 |
 | [8.2 锁与解锁](./conventions/8.2-锁与解锁.md) | 锁与解锁 | 6 |
 | [8.3 M2KDBX](./conventions/8.3-M2KDBX.md) | M2KDBX | 12 |
-| [8.4 UI·观感](./conventions/8.4-UI·观感.md) | UI·观感 | 12 |
+| [8.4 UI·观感](./conventions/8.4-UI·观感.md) | UI·观感（含**三张尺寸表分工** + **中文文案哨兵**） | 14 |
 | [8.5 通行密钥](./conventions/8.5-通行密钥.md) | 通行密钥 | 12 |
 | [8.6 工程质量](./conventions/8.6-工程质量.md) | 工程质量 | 12 |
 | [8.7 环境](./conventions/8.7-环境.md) | 环境（含**沙箱内真编译 + 真跑单测**，`--all` 可批量巡检全仓，无 SDK 也能跑） | 10 |
@@ -144,6 +144,49 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 | [8.10 架构与目录地图](./conventions/8.10-架构与目录地图.md) | **东西在哪 + 该信哪份文档**（接力地图） | — |
 
 ## 9. 当前状态与下一批（接力起手式）
+
+> ⚡ **2026-10-21：UI 审计剩余 5 项收口（§2.2 / §2.7 / §3.4 / §3.7 + §2.5 判定不做）**
+>
+> 完整交接见 **`.ai/SESSION-2026-10-20.md`**。四项落地、一项明确不做：
+>
+> - **§2.2 + §3.7 合并成一轮**（同一类：语义常量层）：新增第四张表 `ui/theme/UiSize.kt`
+>   （`InlineIcon`18 / `SecondaryIcon`20 / `MicroIcon`16 / `InlineProgress`18 /
+>   `InlineProgressStroke`2 / `TouchTarget`48 / `HairGap`2 / `TightGap`6 /
+>   `RowVerticalPadding`10），**80 处字面量逐行精确替换**（27 文件）、
+>   清掉 9 个孤儿私有常量、补 27 个 import。
+>   🔴 **判据：`Spacing` 管"两者之间"、`UiSize` 管"自己多大"。18 与 20 并存不是重复，
+>   判据是"它和谁并排" —— 18dp 在 `TextButton` 图标槽内（不改按钮高度），20dp 独立。**
+> - **§3.4 中文硬编码 117 → 0**：新增哨兵 `.ai/tools/check_ui_hardcoded_text.py`
+>   （查**反方向** —— Kotlin 里有没有本该进资源的中文；`check_orphan_strings.py` 只管
+>   "资源没人用"）。四类 `Res/Detail` 类型封同一判据（见 §8.4 新纪律 5/6）。
+>   🔴 **教训**：`LocalUnlockFanout` 因"拿不到 `Context`"镜像了一份中文字面量、
+>   注释写"靠 review 守" ⇒ 那是靠人守的双源。改成产出 `LocalUnlockMessage` 枚举。
+> - **§2.7 文档纠偏**（`Docs/08 §4`）：原四档表读起来像已实现，实际只有一个 600dp
+>   阈值两档。已拆成「4.1 已实现（照实描述 + 代码位置）」/「4.2 计划（均未实现）」，
+>   三档化 / 双栏 / 铰链避让登记为待做（`.ai/issues/06` #177）。**没有改任何布局。**
+> - **§2.5 顶栏四套收敛：不做**。审计自己写"需真机看折叠手感"，本地改数值等于凭感觉 ——
+>   与 §2.7 不擅自实现三档是同一个理由。
+>
+> **门禁**：编译 ✅ · `detekt --rerun-tasks` ✅（**修了 3 个真违例**：
+> `CloudAccountsScreen` 复杂度 16→14 抽出 `NoticeSnackbar`、`actionResultText` 15→14
+> 抽出 `syncNoticeText`、`LocalUnlockFanoutTest` 补末尾换行）·
+> `testFullDebugUnitTest` **套数=42 / `tests=388` / `skipped=0` / `failures=0` / `errors=0`**
+> （**三个数都对上**，且 `185 actionable tasks: 185 executed`，XML 时间戳全在当次窗口内）✅ ·
+> 9 个 Python 静态检查全 OK ✅（顺手修了 `check_compile_smells` 把 KDoc 里的
+> `R.string.<name>` 示例当悬空引用、`check_issues_index` 缺 #177 两处）·
+> CJK 行宽：超 120 的 11 处**全是 KDoc 表格行**，detekt `MaxLineLength` 实跑未报（既有状态）。
+>
+> 🔴 **本轮踩坑（都记进 §8.4 / §8.6 / `issues/01`）**：
+> ① 基线特征串是对**引号内内容**匹配，不是整行 —— 写成 `X =` 永不命中且不报错；
+> ② 给 ViewModel 注入 `Context` 会连带炸两处直接构造它的单测（补 `textContext()` 假 Context）；
+> ③ 把 `when` 内联进已有大 `when` 的参数会顶爆圈复杂度 —— detekt 当场抓住；
+> ④ 🔴 **`failures=0` 不等于全过**：daemon 中途崩溃只生成 39/42 套 XML，而那份报告是
+> `tests=367 failures=0 errors=0` —— **零失败**。⇒ **测试门禁必须核三个数：套数 42 /
+> tests 388 / failures 0**，少核「套数」就会把"没跑到"读成"全过"。详见 §8.6 末节。
+>
+> **下一轮起点**：审计项全部收口。剩下的是**真机项**（§2.5 顶栏折叠手感、
+> OneDrive `If-None-Match: *` 的 201/412、W6 KeePassXC 互操作）与
+> **响应式三档化 / Expanded 双栏 / 铰链避让**（需要折叠屏 + 平板）。
 
 > ⚡ **2026-10-19：UI 审计 §4 的 5 个施工项全部落地（P0 → P2）**
 >

@@ -49,7 +49,13 @@ class TrashViewModel @Inject constructor(
 
         /** 进入回收站时的自动清理结果（仅实际删除时发送）。 */
         data class AutoCleaned(val count: Int) : UiEvent
-        data class Failed(val message: String) : UiEvent
+        /**
+         * 操作失败。
+         *
+         * ⚠️ `message` 可空、且**不在这里填兜底文案** —— 理由见
+         * `ItemDetailViewModel.UiEvent.SaveFailed` 的 KDoc（同一轮 §3.4 修的同一件事）。
+         */
+        data class Failed(val message: String?) : UiEvent
     }
 
     /** busy = 恢复/永久删除请求进行中（行按钮禁用防连点）。 */
@@ -138,7 +144,7 @@ class TrashViewModel @Inject constructor(
         _events.trySend(
             result.fold(
                 onSuccess = { outcome -> toEvent(outcome == VaultSaveOutcome.Synced) },
-                onFailure = { error -> UiEvent.Failed(error.message ?: "未知错误") },
+                onFailure = { error -> UiEvent.Failed(error.message) },
             ),
         )
     }

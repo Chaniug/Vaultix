@@ -79,6 +79,7 @@ import io.vaultix.vaultix.ui.common.rememberImmersiveBarPadding
 import io.vaultix.vaultix.ui.common.rememberScrollCollapseFraction
 import io.vaultix.vaultix.ui.common.toggleSelection
 import io.vaultix.vaultix.ui.theme.Spacing
+import io.vaultix.vaultix.ui.theme.UiSize
 
 /** 通行密钥列表的卡片间距（与密码条目 / 验证码 / 卡包三个列表一致）。 */
 private val PASSKEY_CARD_GAP = Spacing.sm
@@ -548,7 +549,7 @@ private fun PasskeyDetailDialog(row: PasskeyRow, onDismiss: () -> Unit, onDelete
 @Composable
 private fun DetailLine(label: String, value: String) {
     if (value.isBlank()) return
-    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = UiSize.HairGap)) {
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,

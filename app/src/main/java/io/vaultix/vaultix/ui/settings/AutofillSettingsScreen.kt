@@ -88,6 +88,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.autofill.shortcut.AutofillTileService
+import io.vaultix.vaultix.ui.theme.UiSize
 import io.vaultix.vaultix.util.AutofillStatus
 import io.vaultix.vaultix.util.AutofillStatusChecker
 import io.vaultix.vaultix.ui.theme.Spacing
@@ -289,7 +290,7 @@ private fun AutofillStatusCard(
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(UiSize.RowVerticalPadding),
             ) {
                 Icon(
                     Icons.Filled.Password,
