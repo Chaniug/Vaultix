@@ -2,6 +2,43 @@
 
 ---
 
+## ✅ KDBX 写入/同步链三条静默丢数据（2026-10-20 下半场）· #178–#180 修完
+
+来源：用户「还有其他的bug需要修复吗？一起修复了」。交接 `.ai/SESSION-2026-10-20-b.md`。
+三条的共同形态：**失败不报错、用户以为成功** —— 密码管理器里最坏的一类。
+
+| # | 缺陷 | 根因 | 落点 |
+|---|---|---|---|
+| 178 | 并发编辑**静默丢一笔**，两次都返回成功 | `mutate` 的 `get → 改 → put` 不原子；`ConcurrentHashMap` 只保护单次操作 | `Kdbx.writeLocks` / `lockOf`（每库 `Mutex`，与 `replaceSession` 共用） |
+| 179 | 锁掉/删除的库仍握着一把活锁 | `getOrPut` 只增不减，`lock` 只 `close` 会话 | `Kdbx.lock` / `lockAll` 一并 `remove` / `clear`（**先 close 会话再丢锁**） |
+| 180 | 「用远端覆盖/拉取」窗口内的编辑被整体抹掉且记 `IN_SYNC` | check-then-act：`read` 要 1–10 s，判断却在 `read` 之前做完 | `KdbxCloudSyncCoordinator.resolveUsingRemote` 在 `read` **之前**再判一次 |
+
+**验证**（三条都做了变异验证，撤掉修复 → 对应用例转红）：
+
+| # | 正例 | 反证 |
+|---|---|---|
+| 178 | 两**线程**并发改不同条目，两笔都必须留（用协程撞不进窗口 —— `runBlocking` 是单线程事件循环） | 撤锁 → 5/5 红（`missing (1): 改乙`） |
+| 179 | 写一次后计数 `> 0` → `lock` 后 `== 0` | 反证在**同一用例内**，证明装置能观测到"有" |
+| 180 | `coVerify(exactly = 0) { source.read() }` 且不替换会话 | 独立用例：本地没改时必须 read 1 次、替换 1 次 |
+
+**门禁**：`:app:compileFullDebugKotlin` + `:app:compileFullDebugUnitTestKotlin` + `detekt --rerun-tasks` ✅ ·
+`gradle test --rerun-tasks` **套数=84 / 用例=776 / 失败=0 / 错误=0 / 跳过=0**（XML 时间戳在当次窗口内）✅ ·
+9 个 Python 静态检查全 OK ✅（`check_issues_index` → "索引 = 题注 = 正文，全部一致"）。
+
+> 🔴 **本轮又踩到"假绿"**：第一次 `gradle test` 超时被转后台，回来读到的 42 套/388 例
+> 是 **08:21 的旧报告**。纪律重申：**看数字之前先 `stat` 报告时间戳**。
+
+**查过但判定不是 bug（下一轮别重复查）**：
+
+| 位置 | 结论 |
+|---|---|
+| `persist` 里 `source.write(bytes)` 不传 `expectedVersion` | 有意为之：`KdbxFileSource.write` 四象限表写明"全默认 = 本地 SAF 主写路径" |
+| `KdbxItemRepository.update` 在锁外取 `before` | 安全：`applyDomainFields` 用锁内 `existing` 打底，`before` 只判"哪些字段被用户删了" |
+| KDBX 库无 SSH 字段映射 | A3 入口硬闸整体拒收，不会产生静默残骸 |
+| `Kdbx.save(File)` 零生产调用 | 能力（往返自检）已迁到 `persist` 的 `Kdbx.verifyWrite` |
+
+---
+
 ## ✅ UI 审计剩余 5 项收口（2026-10-20）· 四项落地、一项判定不做
 
 来源 `Docs/progress/audit/ui-design-audit-2026-10-19.md`；交接 `.ai/SESSION-2026-10-20.md`。

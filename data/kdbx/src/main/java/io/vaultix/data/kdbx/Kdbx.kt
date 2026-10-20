@@ -26,7 +26,10 @@ import io.vaultix.model.VaultFolder
 import io.vaultix.model.VaultItem
 import java.io.File
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 /** 打开 KDBX 的失败原因（UI 据此给可执行文案）。 */
 sealed interface KdbxOpenError {
@@ -137,6 +140,71 @@ object Kdbx {
     private const val TAG = "VaultixKdbx"
 
     /**
+     * 每库一把写锁 —— **读-改-写必须原子**（2026-10-20 修掉的一处静默丢改动）。
+     *
+     * ## 不加锁时会发生什么（已用单测复现）
+     *
+     * [mutate] 的形状是 `get → 改 → put`。`KdbxSessionStore` 是 `ConcurrentHashMap`，
+     * 它只保证 map 操作本身安全，**不保证这三步合起来原子**。两条写并发时：
+     *
+     * ```
+     * A.get → B.get → A.put(含甲) → B.put(含乙、不含甲)   ⇒ 甲被静默丢掉
+     * ```
+     *
+     * 而且**两次都返回成功**，用户与界面都看不见任何异常。
+     *
+     * ## 为什么这里真的会并发（不是我臆想的场景）
+     *
+     * - 五个写入口在 `withContext(Dispatchers.IO)` 里跑（`KdbxItemRepository`）；
+     * - 自动上传器 `KdbxAutoUploader` 自带 `Dispatchers.IO` 的 scope，上传里的
+     *   `saveVia` 读的是**同一个** `session.database` 去序列化；
+     * - 用户"保存后立刻再改一笔"是最常见的操作序列，而第一次保存会 `enqueue` 上传。
+     *
+     * ⇒ 上传与编辑天然不同线程。**只有"上传的字节包含编辑"是不够的** ——
+     *   如果编辑之间互相覆盖，被吞掉的那一笔根本进不了会话，也就进不了上传。
+     *
+     * ## 为什么是 `ConcurrentHashMap<String, Mutex>` 而不是 `synchronized`
+     *
+     * 临界区里要 `await`（`mutate` 是 `suspend`），而 `synchronized` 会阻塞线程
+     * 且不能在挂起点之间持有；`Mutex` 是挂起友好的，且按库分锁 ⇒ 不同库互不阻塞。
+     *
+     * ## ⚠️ 只锁"会话读写"，不锁网络 / 文件 IO
+     *
+     * [saveVia] 里的 `stat` / `write` 是秒级网络操作。把它们纳入本锁会让
+     * "上传时用户点保存"卡住十几秒（体感就是"点了没反应"）。
+     * 那边的正确性由 `expectedVersion` 条件写 + 状态机保证，不靠这把锁。
+     * ⇒ 本锁的职责只有一个：**保证"读出会话 → 改 → 放回"中间不被别的写插进来**。
+     *
+     * ## 为什么锁要随 [lock] 一起清掉（2026-10-20 补）
+     *
+     * 这张 map 是"每库一个 `Mutex`"的缓存，而 `getOrPut` **只增不减**：删库 / 退出登录
+     * （`VaultRepositoryImpl.removeVault` / `signOut`）都会 `Kdbx.lock(vaultId)`，
+     * 但那个 `vaultId` 会一直留在本 map 里。单条泄漏可以忽略，问题在**语义**：
+     * 一个已经"锁掉、甚至删掉"的库还握着一把活锁，与 `KdbxSessionStore.close`
+     * 那句"锁库即丢弃"的约定不一致 —— 下次同名库再来时也分不清是"老库残留"
+     * 还是"新库的锁"。⇒ [lock] 里一并 `remove`。
+     *
+     * ⚠️ 正在被等待的 `Mutex` 被 `remove` 掉是**安全**的：等待者手里握着的是对象引用，
+     * 而不是 map 的键；它们照样能拿到锁并正常排队。只是"下一个来的写"会拿到
+     * **另一把新锁** —— 而那种情况下会话已被丢弃（`KdbxSessionStore.get` 返回 null），
+     * `mutate` 会直接拒绝写，不存在"两把锁同时放行两笔写"的窗口。
+     */
+    private val writeLocks = ConcurrentHashMap<String, Mutex>()
+
+    /** 该库的写锁（按需创建；与 [KdbxSessionStore] 同生命周期，见 [writeLocks] 的说明）。 */
+    private fun lockOf(vaultId: String): Mutex = writeLocks.getOrPut(vaultId) { Mutex() }
+
+    /**
+     * 当前登记着写锁的库 id 数量 —— **仅为单测**观测"锁有没有随 [lock] 被清掉"。
+     *
+     * 为什么要留这个口子：这个泄漏的**唯一**可观测后果就是"map 只增不减"，
+     * 不暴露一个计数就只能靠"读代码相信它"，而那正是本项目反复吃过的亏
+     * （`.ai/MEMORY.md` 的"核数而非信 ✓"）。`internal` ⇒ 只对同模块可见，
+     * 不进任何跨模块签名；`data:repository` 用不到它。
+     */
+    internal fun writeLockCountForTest(): Int = writeLocks.size
+
+    /**
      * 用主密码（可选 keyfile）打开 [source] 指向的库，并登记为 [vaultId] 的会话。
      *
      * 成功即覆盖同 id 的旧会话（换文件 / 换密码重开时不会残留旧明文）。
@@ -243,7 +311,31 @@ object Kdbx {
      *
      * @return 成功 = 会话已换成 [remoteBytes] 解出来的那份（此后保存写的是远端版本）。
      */
-    fun replaceSession(vaultId: String, remoteBytes: ByteArray): Result<Unit> {
+    suspend fun replaceSession(vaultId: String, remoteBytes: ByteArray): Result<Unit> =
+        lockOf(vaultId).withLock {
+            replaceSessionLocked(vaultId, remoteBytes)
+        }
+
+    /**
+     * [replaceSession] 的临界区本体（调用方必须已持有该库的写锁）。
+     *
+     * ## 为什么这里也必须拿**同一把** [writeLocks]
+     *
+     * 「拉取远端」是 `check(本地没改) → 下载(数秒) → 替换会话` 的形状。
+     * 中间的下载窗口里用户完全可以再编辑一笔，而 [mutate] 拿的是**同一把锁** ⇒
+     * 两种情况被区分开了：
+     *
+     * | 编辑发生在 | 结果 |
+     * |---|---|
+     * | 替换**之前**（拿到锁先跑完） | 编辑已进会话，随后被本函数整体替换 ⇒ **编辑丢失** |
+     * | 替换**之后** | 编辑基于新会话 ⇒ 安全 |
+     *
+     * ⚠️ 本锁**只能**保证"替换"这一步原子，**不能**消掉"下载期间编辑被覆盖"这件事 ——
+     *    那要靠调用方在下载**之后**用最新的 `localChangedSinceLastSync` 再判一次
+     *    （`KdbxCloudSyncCoordinator.resolveUsingRemote` 负责，见那里的说明）。
+     *    这两件事是配套的：锁管"同一时刻只有一个人在改会话"，重判管"替不替换得上"。
+     */
+    private fun replaceSessionLocked(vaultId: String, remoteBytes: ByteArray): Result<Unit> {
         val current = KdbxSessionStore.get(vaultId)
             ?: return Result.failure(KdbxFailure(KdbxOpenError.NotUnlocked))
 
@@ -489,6 +581,19 @@ object Kdbx {
     private suspend fun mutate(
         vaultId: String,
         mutator: (KeePassDatabase) -> KdbxWriteResult,
+    ): Result<KdbxPendingWrite> = lockOf(vaultId).withLock {
+        mutateLocked(vaultId, mutator)
+    }
+
+    /**
+     * [mutate] 的**临界区本体**（调用方必须已持有 [writeLocks] 里这个库的锁）。
+     *
+     * ⚠️ 拆出来是为了让"加锁"这件事只有一个入口 —— 直接在本函数里 `withLock` 会让
+     *    [saveVia] / 未来的写路径各写一遍，迟早漏一个，而漏的那次就是丢改动。
+     */
+    private suspend fun mutateLocked(
+        vaultId: String,
+        mutator: (KeePassDatabase) -> KdbxWriteResult,
     ): Result<KdbxPendingWrite> {
         val session = KdbxSessionStore.get(vaultId)
             ?: return Result.failure(KdbxFailure(KdbxOpenError.NotUnlocked))
@@ -645,11 +750,25 @@ object Kdbx {
         }
     }
 
-    /** 锁定单个库（丢弃明文）。幂等。 */
-    fun lock(vaultId: String) = KdbxSessionStore.close(vaultId)
+    /**
+     * 锁定单个库（丢弃明文与它的写锁）。幂等。
+     *
+     * ⚠️ 两步的顺序**不能反**：先 `close` 会话，再丢锁。反过来的话，在两个动作之间
+     * 挤进来的写会先 `getOrPut` 造一把**新锁**，而它刚拿到的会话马上就没了 ——
+     * 结果是一把没人认领的锁留在 map 里（就是要修的那个泄漏）。按现在的顺序，
+     * 挤进来的写会在 `mutateLocked` 里看到"未解锁"而直接失败，且在失败前
+     * 已经重新登记了自己那把锁 —— 下次 `lock` 会一并清掉。
+     */
+    fun lock(vaultId: String) {
+        KdbxSessionStore.close(vaultId)
+        writeLocks.remove(vaultId)
+    }
 
     /** 锁定全部（退出数据库 / 全量锁定）。幂等。 */
-    fun lockAll() = KdbxSessionStore.closeAll()
+    fun lockAll() {
+        KdbxSessionStore.closeAll()
+        writeLocks.clear()
+    }
 
     /**
      * 把 [vaultId] 的会话编码并**经 [source] 写入**（阶段 B × 网盘）。

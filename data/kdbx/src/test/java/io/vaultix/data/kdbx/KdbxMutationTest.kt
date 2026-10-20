@@ -18,6 +18,9 @@ import app.keemobile.kotpass.models.EntryValue
 import app.keemobile.kotpass.models.Meta
 import com.google.common.truth.Truth.assertThat
 import java.util.UUID
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Test
@@ -91,10 +94,104 @@ class KdbxMutationTest {
         assertThat(inspectKdbxFormat(write.bytes)).isEqualTo(KdbxFormat.Supported("4.1", 4))
     }
 
+    /**
+     * **并发两次写不同条目，两笔改动都必须留下**（2026-10-20）。
+     *
+     * ## 这条钉的是 `mutate` 的读-改-写窗口
+     *
+     * `KdbxSessionStore` 用的是 `ConcurrentHashMap` —— 它只保证"map 本身的操作"安全，
+     * **不保证"读出来 → 改 → 放回去"这个序列原子**。而 `mutate` 正是这个形状：
+     *
+     * ```
+     * ① val session = KdbxSessionStore.get(vaultId)     // 拿到库 A
+     * ② mutator(session.database)                       // 在 A 上加一笔
+     * ③ KdbxSessionStore.put(vaultId, …)                // 放回 A'
+     * ```
+     *
+     * 两条写并发（A 线程改条目甲、B 线程改条目乙）会交错成：
+     * `A.get → B.get → A.put(含甲的 A') → B.put(含乙、**不含甲**的 B')`
+     * ⇒ **甲那一笔改动被静默丢掉**，而两边都返回"成功"。
+     *
+     * ## 为什么这个并发在本项目里是**真会**发生的
+     *
+     * 写动作在 `withContext(Dispatchers.IO)` 里跑（`KdbxItemRepository` 五个入口），
+     * 而自动上传器 `KdbxAutoUploader` 自带 `Dispatchers.IO` 的 scope；上传里的
+     * `saveVia` 也读同一个 `session.database` 去序列化。⇒ 上传与编辑本来就不同线程。
+     *
+     * ⚠️ 断言必须看**两笔都在**：只看"两次都返回成功"会绿（丢改动的那次也返回成功）。
+     */
+    @Test
+    fun `并发写两条不同条目_两笔改动都不能丢`(): Unit = runBlocking {
+        registerSession(secondEntryToo = true)
+        val items = Kdbx.contentOf(VAULT_ID)!!.items
+        val first = items.first { it.title == "原始" }
+        val second = items.first { it.title == "原始2" }
+
+        // ⚠️ 用**线程**而不是协程：`runBlocking` 是单线程事件循环，两个 `launch` 会顺序执行，
+        //    根本撞不进同一个窗口（那样这条用例会永远绿，等于没测）。
+        val start = CountDownLatch(1)
+        val done = CountDownLatch(2)
+        val failures = ConcurrentLinkedQueue<Throwable>()
+
+        fun writer(before: io.vaultix.model.VaultItem, newTitle: String) = Thread {
+            start.await()
+            try {
+                // 每个线程自己跑一段真实的 suspend 调用（内部要拿 session 再放回）。
+                runBlocking { Kdbx.updateItem(VAULT_ID, before = before, after = before.copy(title = newTitle)) }
+                    .onFailure { failures += it }
+            } catch (t: Throwable) {
+                failures += t
+            } finally {
+                done.countDown()
+            }
+        }.apply { isDaemon = true; start() }
+
+        writer(first, "改甲")
+        writer(second, "改乙")
+        start.countDown()
+        done.await(10, TimeUnit.SECONDS)
+
+        assertThat(failures).isEmpty()
+        val titles = Kdbx.contentOf(VAULT_ID)!!.items.map { it.title }.toSet()
+        assertThat(titles).containsAtLeast("改甲", "改乙")
+    }
+
+    /**
+     * **锁库必须把写锁一并丢掉**（2026-10-20）。
+     *
+     * ## 这条钉的是 `writeLocks` 只增不减
+     *
+     * 每库一把 `Mutex` 存在 `ConcurrentHashMap<String, Mutex>` 里，`getOrPut` 只增不减。
+     * 删库 / 退出登录都会 `Kdbx.lock(vaultId)`，而那条路径此前**只** `close` 会话，
+     * map 里的 `vaultId` 永远留着 ⇒ 一个"已经锁掉、甚至删掉"的库还握着一把活锁。
+     *
+     * ## 为什么这条必须配反证
+     *
+     * 断言"清干净了"（`== 0`）有假绿风险：**如果锁压根没被创建过**，计数天然是 0，
+     * 看起来"修好了"。⇒ 同一条用例里先做一次写、确认 `> 0`（装置能观测到"有"），
+     * 再 `lock` 并确认回到 0（装置能观测到"没有"）。
+     */
+    @Test
+    fun `锁库后写锁一并释放_不留孤儿锁`() = runBlocking {
+        Kdbx.lock(VAULT_ID)
+        registerSession()
+        val before = Kdbx.contentOf(VAULT_ID)!!.items.single()
+        Kdbx.updateItem(VAULT_ID, before = before, after = before.copy(title = "占住锁")).getOrThrow()
+
+        // ① 反证：锁真的被创建了（否则下面的 0 毫无意义）。
+        assertThat(Kdbx.writeLockCountForTest()).isGreaterThan(0)
+
+        Kdbx.lock(VAULT_ID)
+
+        // ② 锁掉之后一条都不许剩。
+        assertThat(Kdbx.writeLockCountForTest()).isEqualTo(0)
+        assertThat(KdbxSessionStore.get(VAULT_ID)).isNull()
+    }
+
     // ---------------------------------------------------------------- helpers
 
-    private fun registerSession() {
-        val database = databaseWithOneEntry()
+    private fun registerSession(secondEntryToo: Boolean = false) {
+        val database = databaseWithOneEntry(secondEntryToo)
         KdbxSessionStore.put(
             VAULT_ID,
             KdbxSession(
@@ -106,7 +203,7 @@ class KdbxMutationTest {
         )
     }
 
-    private fun databaseWithOneEntry(): KeePassDatabase {
+    private fun databaseWithOneEntry(secondEntryToo: Boolean = false): KeePassDatabase {
         val created = KeePassDatabase.Ver4x.create(
             rootName = "Root",
             meta = Meta(name = "Mutation"),
@@ -120,9 +217,24 @@ class KdbxMutationTest {
                 ),
             ),
         )
+        val entries = if (secondEntryToo) {
+            listOf(
+                entry,
+                Entry(
+                    uuid = SECOND_ENTRY_UUID,
+                    fields = EntryFields(
+                        linkedMapOf<String, EntryValue>(
+                            BasicField.Title.key to EntryValue.Plain("原始2"),
+                        ),
+                    ),
+                ),
+            )
+        } else {
+            listOf(entry)
+        }
         return created.copy(
             content = created.content.copy(
-                group = created.content.group.copy(entries = listOf(entry)),
+                group = created.content.group.copy(entries = entries),
             ),
         )
     }
@@ -141,6 +253,7 @@ class KdbxMutationTest {
         const val VAULT_ID = "kdbx-vault-mutation-test"
         const val PASSWORD = "master-pw"
         val ENTRY_UUID: UUID = UUID.fromString("cccccccc-dddd-eeee-ffff-000000000000")
+        val SECOND_ENTRY_UUID: UUID = UUID.fromString("cccccccc-dddd-eeee-ffff-111111111111")
         val CREDENTIALS: Credentials = Credentials.from(EncryptedValue.fromString(PASSWORD))
     }
 }

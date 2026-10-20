@@ -1,6 +1,6 @@
 # ISSUES 分篇 · KDBX 本地库
 
-> 索引：[`../ISSUES.md`](../ISSUES.md)（编号 → 分篇）· 共 **20** 条：#59、#64、#69、#93、#94、#95、#96、#98、#99、#106、#135、#136、#157、#158、#164、#165、#166、#167、#169、#170
+> 索引：[`../ISSUES.md`](../ISSUES.md)（编号 → 分篇）· 共 **22** 条：#59、#64、#69、#93、#94、#95、#96、#98、#99、#106、#135、#136、#157、#158、#164、#165、#166、#167、#169、#170、#178、#179
 >
 > ⚠️ **2026-10-16 A5 时间戳提案已驳回（不是 bug，无编号）**：曾据"writer 没写
 > times"要修「新建无时间戳 / 编辑不刷最近修改」，测试与上游源码查证后驳回——
@@ -825,3 +825,36 @@ fun KeePassDatabase.getGroupBy(predicate: Group.() -> Boolean): Group? =
   保护不丢、值不丢（主用例）；未受保护的不被无端加密（反证：
   把用户没标的字段升级成 Encrypted 同样是一种改坏用户库）。
   变异验证（恒 Plain）精确 2 红：主用例 + 既有密码用例。
+
+## 178. 🔴 `Kdbx.mutate` 的读-改-写不原子 ⇒ 并发编辑**静默丢一笔**，两次都返回成功（2026-10-20）
+
+- **现象**：用户"保存一笔、紧接着再改一笔"，其中一笔改动凭空消失，界面与日志都没有任何异常。
+- **根因**：`mutate` 的形状是 `KdbxSessionStore.get → 改 → put`，而 `KdbxSessionStore` 用的是
+  `ConcurrentHashMap` —— 它只保证 **map 操作本身**安全，**不保证这三步合起来原子**。两条写并发时：
+  ```
+  A.get → B.get → A.put(含甲) → B.put(含乙、不含甲)   ⇒ 甲被静默丢掉
+  ```
+- **为什么本项目真的会并发**（不是臆想）：五个写入口都在 `withContext(Dispatchers.IO)` 里跑；
+  自动上传器 `KdbxAutoUploader` 自带 `Dispatchers.IO` 的 scope，上传时 `saveVia` 读**同一个**
+  `session.database` 去序列化。"保存后立刻再改一笔"是最常见的操作序列。
+- **解法**：每库一把 `Mutex`（`ConcurrentHashMap<String, Mutex>` + `getOrPut`），`mutate` 与
+  `replaceSession` 共用。为什么是 `Mutex` 而不是 `synchronized`：临界区里有挂起点；
+  为什么**不**把网络/文件 IO 纳入这把锁：那会让"上传时点保存"卡十几秒，那边的正确性由
+  `expectedVersion` 条件写保证。
+- **⚠️ 判据**：**`ConcurrentHashMap` 不等于线程安全**，它只保护单次操作。凡是
+  "get → 改 → put" 的写法都要问一句"这两步之间有没有别人能插进来"。
+- **验证**：用**线程**（不是协程，`runBlocking` 是单线程事件循环，撞不进窗口）并发写两个不同条目，
+  断言两笔都在。撤掉锁 → 5/5 失败（`missing (1): 改乙`）；装回锁 → 10/10 通过。
+
+## 179. `writeLocks` 只增不减：锁掉 / 删除的库仍握着一把活锁（2026-10-20）
+
+- **现象**：`getOrPut` 建的锁永不释放；`VaultRepositoryImpl.removeVault` / `signOut` 都调
+  `Kdbx.lock(vaultId)`，但那条路径**只** `close` 会话，`vaultId` 永远留在 map 里。
+- **为什么算 bug 而不算"可忽略的泄漏"**：语义上它让一个"已经锁掉、甚至删掉"的库还握着一把活锁，
+  与 `KdbxSessionStore.close` 那句"锁库即丢弃"的约定不一致。
+- **解法**：`lock` / `lockAll` 一并 `remove` / `clear`；把两处 `getOrPut` 收口成 `lockOf`。
+  ⚠️ **顺序不能反**：先 `close` 会话再丢锁（反过来的话挤进来的写会先造一把新锁、刚拿到的会话就没了）。
+- **安全说明**：正在被等待的 `Mutex` 被 `remove` 是安全的 —— 等待者握的是对象引用不是 map 键；
+  且会话已丢弃，`mutateLocked` 会直接返回 `NotUnlocked`，不存在"两把锁同时放行两笔写"。
+- **验证**：`KdbxMutationTest > 锁库后写锁一并释放_不留孤儿锁`，**同一用例内含反证**（先确认写一次后
+  计数 `> 0`，再 `lock` 后 `== 0`）。撤掉 `remove` → 该用例失败。

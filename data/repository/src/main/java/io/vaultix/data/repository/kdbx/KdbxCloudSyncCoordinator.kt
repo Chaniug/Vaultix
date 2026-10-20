@@ -40,6 +40,7 @@ import io.vaultix.data.kdbx.Kdbx
 import io.vaultix.data.kdbx.KdbxFileSource
 import io.vaultix.data.kdbx.KdbxWriteFailure
 import io.vaultix.database.dao.VaultDao
+import io.vaultix.model.KdbxCloudSyncStatus
 import kotlinx.coroutines.CoroutineScope
 import okhttp3.OkHttpClient
 
@@ -206,6 +207,17 @@ class KdbxCloudSyncCoordinator(
     }
 
     /**
+     * **现查**本地有没有未上传的改动（读持久化的 `vaults.syncStatus`）。
+     *
+     * 判据只有一份：[KdbxCloudSyncStatus.impliesLocalChanges]。
+     * `KdbxSyncRepositoryImpl.localChangedSinceLastSync` 与这里同源 ——
+     * 在这个类里也留一份，是因为 [resolveUsingRemote] 需要在**下载之前**
+     * 自己再判一次（见那里的说明），而它拿不到仓储层。
+     */
+    private suspend fun localChangedSinceLastSync(vaultId: String): Boolean =
+        KdbxCloudSyncStatus.fromName(vaultDao.get(vaultId)?.syncStatus)?.impliesLocalChanges == true
+
+    /**
      * 用户拍板「用远端覆盖本地」。
      *
      * ## 这里**必须**真的把字节拉下来替换会话
@@ -229,6 +241,33 @@ class KdbxCloudSyncCoordinator(
         //    ⇒ 令牌偏**旧**是安全的：下次同步只会再报一次"远端有更新"，多拉一次而已；
         //      偏**新**是危险的。所以 stat 必须在 read **之前**。
         val remoteToken = runCatching { source.stat().versionToken }.getOrNull()
+
+        // ★★ 下载**之前**再判一次"本地有没有新改动"（2026-10-20）。
+        //
+        // ## 为什么必须在 read 之前
+        //
+        // `source.read()` 是一次真实网络下载（真机 1–10 s）。调用方（`pull` / 冲突对话框
+        // 「用远端覆盖」）在**开始前**判过一次"本地没改"，但那个判断在这几秒里会过期：
+        // 用户完全可以在下载过程中再编辑一笔。而 `replaceSession` 是**整体替换**会话 ⇒
+        // 那笔编辑被静默抹掉，且当前状态马上被记成 `IN_SYNC`（"已同步"）——
+        // **没有任何地方会再提醒他**。
+        //
+        // 判据用 `localChangedSinceLastSync`（读持久化的 `syncStatus`，只此一份），
+        // 它在 `persist` 里由 `markLocalEdited` 同步写入 ⇒ 编辑一落盘就能看见。
+        //
+        // ⚠️ 窗口的残留：判断与 read 之间仍有微秒级 gap，但真正长的窗口（下载）被覆盖了；
+        //    要彻底消掉得把"编辑"也纳入同一把锁，而那是 UI 线程会等的锁 —— 不值。
+        //    这里选择"宁可多报一次冲突，也不静默覆盖"：报冲突最坏是多点一下，
+        //    覆盖的代价是**用户那一笔永远没了**。
+        if (localChangedSinceLastSync(vaultId)) {
+            // ⚠️ **不要**用 `markDeferred`：它只在状态已是 CONFLICT 时生效（它的语义是
+            //    "用户点了稍后"），用在这里等于什么都不做，状态会停在 `SYNCING`。
+            //    也不要把本地改动改写成 CONFLICT —— 那会伪报"两边都改了"，
+            //    把用户推向「用本地覆盖远端」这个**真丢数据**的选项。
+            //    ⇒ 原样保留 `PENDING_UPLOAD`（甚至什么都不写）：下一次同步自然拿到
+            //      `localChangedSinceLastSync = true`，走编排器自己那条冲突判定。
+            return KdbxSyncResult.Conflict(currentRemoteVersion = remoteToken)
+        }
 
         val bytes = runCatching { source.read() }.getOrElse { error ->
             return KdbxSyncResult.Failed(error.message?.takeIf { it.isNotBlank() } ?: "无法读取远端文件")

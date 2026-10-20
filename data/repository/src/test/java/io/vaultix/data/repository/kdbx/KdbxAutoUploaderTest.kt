@@ -165,6 +165,57 @@ class KdbxAutoUploaderTest {
 
     // ---- 装置 ----
 
+    /**
+     * 「上传成功后状态被无条件写成 `IN_SYNC`」在**上传字节已含全部改动**时是**安全的**。
+     *
+     * ## 这条用例存在的意义是**把那句"安全"钉成可回归的事实**
+     *
+     * 排查时一度怀疑这里会丢改动（状态被 `markStatus(IN_SYNC)` 无条件覆盖，
+     * 而 `persist` 的 `markLocalEdited` 在 drain 排队期间就发生了）。逐层核过之后
+     * 结论是**不丢**，原因是结构性的：
+     *
+     * ```
+     * persist → Kdbx.mutate 改的是 session.database（内存会话）
+     *            ↓
+     * autoUploader.enqueue → drain → saveVia → 序列化的是 session.database
+     * ```
+     *
+     * ⇒ 上传字节 = **上传那一刻的整个会话**，天然包含期间的所有编辑。
+     * 状态被写成 `IN_SYNC` 只是个标签，不承担"哪些改动传上去了"的信息。
+     *
+     * ## 真正会丢改动的是另一件事（已在 `KdbxMutationTest` 修掉）
+     *
+     * 两笔**并发**编辑互相覆盖（`get → 改 → put` 不原子）⇒ 其中一笔根本进不了会话，
+     * 也就进不了上传。那才是丢数据的入口。
+     *
+     * ⇒ 本用例保证"上传已含改动时不要多跑一轮"（多跑一轮就是拿同样内容再传一次，
+     *   白烧流量与电量），避免为了"保险"去加一轮无谓上传。
+     */
+    @Test
+    fun `上传期间又改了一笔_该改动已被本次上传带走时收敛为已同步且不空转`() = runTest {
+        val status = statusOf(KdbxCloudSyncStatus.PENDING_UPLOAD)
+        val dao = daoFor(CLOUD_ORIGIN, status)
+        val uploads = AtomicInteger(0)
+        val coordinator = mockk<KdbxCloudSyncCoordinator> {
+            every { hasCloudSource(CLOUD_ORIGIN) } returns true
+            coEvery { sync(VAULT_ID, true) } coAnswers {
+                uploads.incrementAndGet()
+                // 模拟"用户在上传刚开始时又改了一笔"：persist 会把状态打回 PENDING_UPLOAD。
+                status.set(KdbxCloudSyncStatus.PENDING_UPLOAD.name)
+                delay(SYNC_DURATION_MS)
+                // saveVia 序列化的是内存会话（已含那笔改动）⇒ 编排器记 IN_SYNC。
+                status.set(KdbxCloudSyncStatus.IN_SYNC.name)
+                KdbxSyncResult.Uploaded("v2")
+            }
+        }
+
+        KdbxAutoUploader(dao, coordinator).drain(VAULT_ID)
+
+        // 已收敛 ⇒ 只跑一轮（否则会拿同样的内容再传一次）。
+        assertEquals("上传已含那笔改动时不该再跑一轮", 1, uploads.get())
+        assertEquals(KdbxCloudSyncStatus.IN_SYNC.name, status.get())
+    }
+
     /** 会变的 `syncStatus`（模拟编排器写回状态）。 */
     private fun statusOf(initial: KdbxCloudSyncStatus): AtomicReference<String?> =
         AtomicReference(initial.name)

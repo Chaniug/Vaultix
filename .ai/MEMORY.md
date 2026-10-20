@@ -145,6 +145,33 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 
 ## 9. 当前状态与下一批（接力起手式）
 
+> ⚡ **2026-10-20（下半场）：KDBX 写入/同步链三条静默丢数据修完（#178–#180）**
+>
+> 完整交接见 **`.ai/SESSION-2026-10-20-b.md`**。三条的共同形态：**失败不报错、用户以为成功**。
+>
+> - **#178 `Kdbx.mutate` 读-改-写不原子** ⇒ 并发编辑静默丢一笔、**两次都返回成功**。
+>   修法：每库一把 `Mutex`（`writeLocks` / `lockOf`），`mutate` 与 `replaceSession` 共用。
+>   🔴 **判据：`ConcurrentHashMap` 不等于线程安全** —— 它只保护单次操作，
+>   "get → 改 → put" 的三步合起来照样能被插进来。
+> - **#179 `writeLocks` 只增不减**：`lock` 只 `close` 会话不丢锁 ⇒ 删掉/锁掉的库还握着活锁。
+>   修法：`lock` / `lockAll` 一并 `remove` / `clear`，且**顺序必须是"先 close 会话、再丢锁"**。
+> - **#180 「用远端覆盖 / 拉取」的下载窗口**：`read` 要几秒，窗口内的编辑被
+>   `replaceSession` 整体抹掉并记成 `IN_SYNC`（**再也不会重试**）。
+>   修法：`read()` **之前**再判一次 `localChangedSinceLastSync`，有改动就返回 `Conflict` 不下载。
+>   ⚠️ 两个"不要"：不要用 `markDeferred`（只在已 CONFLICT 时生效，等于没做）；
+>   不要把本地改动改写成 `CONFLICT`（伪报"两边都改了"，把用户推向真丢数据的选项）。
+>
+> **验证**：三条都做了变异验证（撤掉修复 → 对应用例转红），#179 的反证写在同一用例内。
+> **门禁**：编译 ✅ · `detekt --rerun-tasks` ✅ ·
+> `gradle test --rerun-tasks` **套数=84 / 用例=776 / 失败=0 / 错误=0 / 跳过=0** ✅ ·
+> 9 个 Python 静态检查全 OK ✅。
+> 🔴 **又踩到"假绿"**：第一次 `gradle test` 超时转后台，回来看到的 42 套/388 例是
+> **08:21 的旧报告**。纪律：**看数字前先 `stat` 报告时间戳**。
+>
+> **查过但不是 bug（别重复查）**：`persist` 不传 `expectedVersion`（四象限表里本地 SAF 有意如此）·
+> `update` 在锁外取 `before`（`applyDomainFields` 用锁内 `existing` 打底，`before` 只判删除）·
+> KDBX 无 SSH 映射（A3 入口硬闸整体拒收）· `Kdbx.save(File)` 零调用（能力已迁到 `verifyWrite`）。
+
 > ⚡ **2026-10-21：UI 审计剩余 5 项收口（§2.2 / §2.7 / §3.4 / §3.7 + §2.5 判定不做）**
 >
 > 完整交接见 **`.ai/SESSION-2026-10-20.md`**。四项落地、一项明确不做：
