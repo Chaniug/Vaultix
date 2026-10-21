@@ -95,6 +95,7 @@ import io.vaultix.vaultix.ui.common.itemTypeLabelRes
 import android.content.Context
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Badge
+import androidx.compose.material.icons.filled.Business
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.CreditCard
 import androidx.compose.material.icons.filled.Key
@@ -205,6 +206,11 @@ private class DetailActions(
     val onCopyHistoryPassword: (String) -> Unit,
     val onDownloadAttachment: (VaultAttachment) -> Unit,
     val isDownloadingAttachment: Boolean = false,
+    /**
+     * 条目所属组织名（2026-10-21）。null = 个人条目 / 组织名还没解出来。
+     * 做成 getter 而不是常量：组织名随解密流异步到达，条目先到时会短暂为 null。
+     */
+    val organizationNameOf: (String) -> String? = { null },
 )
 
 /** 详情内容区：忙碌转圈 / 缺失提示 / 分区卡片（独立以便控制主 Composable 圈复杂度）。 */
@@ -420,6 +426,7 @@ fun ItemDetailScreen(
     viewModel: ItemDetailViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val organizationNames by viewModel.organizationNames.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
     // 沉浸式浮动顶栏用：内容滚动状态 → 顶栏收起比例（与密码 / 验证码 / 卡包页同一套）。
@@ -462,7 +469,7 @@ fun ItemDetailScreen(
         // 顶栏不再由 Scaffold 预留高度（沉浸式），状态栏内边距由顶栏自己处理。
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
     ) { padding ->
-    val actions = remember(viewModel, state.downloadingAttachment) {
+    val actions = remember(viewModel, state.downloadingAttachment, organizationNames) {
         DetailActions(
             onCopyUsername = viewModel::copyUsername,
             onCopyPassword = viewModel::copyPassword,
@@ -472,6 +479,7 @@ fun ItemDetailScreen(
             onCopyHistoryPassword = viewModel::copyHistoryPassword,
             onDownloadAttachment = viewModel::downloadAttachment,
             isDownloadingAttachment = state.downloadingAttachment,
+            organizationNameOf = { orgId -> organizationNames[orgId] },
         )
     }
         // ⚠️ 2026-09-13 第二轮用户反馈：「密码详情页，标题距离上边还存在一些间隙不好看，
@@ -1210,6 +1218,14 @@ private fun openDownloadedAttachment(context: Context, uri: String, fileName: St
  */
 @Composable
 private fun HistoryAndAttachments(item: VaultItem, actions: DetailActions) {
+    // 共享库归属（2026-10-21）：个人条目没有 organizationId ⇒ 整块不画。
+    item.organizationId?.let { orgId ->
+        Spacer(Modifier.height(Spacing.md))
+        OrganizationSection(
+            organizationName = actions.organizationNameOf(orgId),
+            collectionCount = item.collectionIds.size,
+        )
+    }
     if (item.passwordHistory.isNotEmpty()) {
         Spacer(Modifier.height(Spacing.md))
         PasswordHistorySection(
@@ -1224,6 +1240,41 @@ private fun HistoryAndAttachments(item: VaultItem, actions: DetailActions) {
             downloading = actions.isDownloadingAttachment,
             onDownload = actions.onDownloadAttachment,
         )
+    }
+}
+
+/**
+ * 「这条是共享库的」分区（2026-10-21）。
+ *
+ * 只显示组织名与集合数量，**不列集合名**：集合可能是几十个，
+ * 而这里要回答的问题只有一个 ——「这条为什么我在自己的库里也看得到」。
+ * 想看按集合筛，去列表页的筛选面板。
+ *
+ * 组织名尚未解出来（解密流还没到）时显示占位名，**不隐藏整块**：
+ * 隐藏会让人以为"这条是个人条目"。
+ */
+@Composable
+private fun OrganizationSection(organizationName: String?, collectionCount: Int) {
+    Column {
+        SectionTitle(text = stringResource(R.string.section_organization), icon = Icons.Filled.Business)
+        DetailCard {
+            Column(modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm)) {
+                Text(
+                    text = organizationName ?: stringResource(R.string.organization_name_pending),
+                    style = MaterialTheme.typography.bodyLarge,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (collectionCount > 0) {
+                    Text(
+                        text = stringResource(R.string.organization_collection_count, collectionCount),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = UiSize.HairGap),
+                    )
+                }
+            }
+        }
     }
 }
 

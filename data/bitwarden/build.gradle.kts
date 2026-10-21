@@ -42,7 +42,10 @@ dependencies {
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
 
-    // 测试（DTO 容错、解析双形态）
+    // 测试（DTO 容错、解析双形态、同步落库）
     testImplementation(libs.junit)
     testImplementation(libs.truth)
+    // 同步落库测试要 mock DAO 与 API 并跑挂起函数（2026-10-21 加）
+    testImplementation(libs.mockk)
+    testImplementation(libs.kotlinx.coroutines.test)
 }

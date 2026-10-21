@@ -73,3 +73,17 @@ fun List<VaultItem>.applyQuickFilter(filter: ItemsQuickFilter): List<VaultItem> 
     ItemsQuickFilter.Note -> filter { it.type == VaultItemType.SecureNote }
     ItemsQuickFilter.Favorite -> filter { it.favorite }
 }
+
+/**
+ * 按组织筛选（2026-10-21，P1 组织视图）。
+ *
+ * `organizationId == null` ⇒ 原样返回（不筛）。判据用 `item.organizationId`：
+ * 只有组织条目才带它，个人条目恒为 null ⇒ 选任一组织时个人条目自然被排除，
+ * 这正是"组织视图"该有的语义。
+ *
+ * ⚠️ **不做"未共享"这个反向筛选**：Bitwarden 网页端有「我的条目」，
+ * 但它在服务端是"没有 organizationId"，与"不知道归属"无法区分
+ * —— 条目还没同步完时会把全部条目都算成个人条目，让用户以为数据丢了。
+ */
+fun List<VaultItem>.applyOrganizationFilter(organizationId: String?): List<VaultItem> =
+    if (organizationId == null) this else filter { it.organizationId == organizationId }

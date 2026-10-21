@@ -135,6 +135,34 @@ data class VaultItem(
      *   把文件塞进 `VaultItem` 会让"列表里 50 条"变成"50 份文件常驻内存"。
      */
     val attachments: List<VaultAttachment> = emptyList(),
+    /**
+     * 所属组织 id（Bitwarden 共享库条目）。null = 个人条目；KDBX 恒 null。
+     *
+     * ⚠️ **只存 id，不存组织名**：名字在 `VaultOrganization` 里，由组织密钥解出。
+     * 每条都带一份名字会在服务端改名后不同步，而且列表 50 条就有 50 份重复字符串。
+     */
+    val organizationId: String? = null,
+    /** 所属集合 id 列表（组织条目才有；个人条目 / KDBX 恒为空）。 */
+    val collectionIds: List<String> = emptyList(),
+)
+
+/**
+ * 组织（Bitwarden 共享库的顶层分组）——**只读展示**用。
+ *
+ * Vaultix 不提供组织的创建/成员/权限管理（那是管理端的事），这里只负责
+ * "让用户知道这条共享条目属于哪"以及"按组织筛条目"。
+ */
+data class VaultOrganization(
+    val id: String,
+    /** 解密后的组织名；解不出来时为占位文案（**不丢这条组织**）。 */
+    val name: String,
+)
+
+/** 集合（组织内的二级分组）；[organizationId] 用于按组织建树。 */
+data class VaultCollection(
+    val id: String,
+    val organizationId: String,
+    val name: String,
 )
 
 /**

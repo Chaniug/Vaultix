@@ -14,11 +14,15 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import io.vaultix.database.dao.AtomicWriteDao
 import io.vaultix.database.dao.CipherDao
+import io.vaultix.database.dao.CollectionDao
 import io.vaultix.database.dao.FolderDao
+import io.vaultix.database.dao.OrganizationDao
 import io.vaultix.database.dao.PendingOpDao
 import io.vaultix.database.dao.VaultDao
 import io.vaultix.database.entity.CipherEntity
+import io.vaultix.database.entity.CollectionEntity
 import io.vaultix.database.entity.FolderEntity
+import io.vaultix.database.entity.OrganizationEntity
 import io.vaultix.database.entity.PendingOpEntity
 import io.vaultix.database.entity.VaultEntity
 
@@ -36,8 +40,10 @@ import io.vaultix.database.entity.VaultEntity
         CipherEntity::class,
         FolderEntity::class,
         PendingOpEntity::class,
+        OrganizationEntity::class,
+        CollectionEntity::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = true,
 )
 abstract class VaultixDatabase : RoomDatabase() {
@@ -45,6 +51,8 @@ abstract class VaultixDatabase : RoomDatabase() {
     abstract fun cipherDao(): CipherDao
     abstract fun folderDao(): FolderDao
     abstract fun pendingOpDao(): PendingOpDao
+    abstract fun organizationDao(): OrganizationDao
+    abstract fun collectionDao(): CollectionDao
 
     /**
      * 「本地行 + 入队」的**原子写**（2026-09-16 新增）。
@@ -80,6 +88,42 @@ abstract class VaultixDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE vaults ADD COLUMN syncStatus TEXT")
                 db.execSQL("ALTER TABLE vaults ADD COLUMN remoteVersionToken TEXT")
                 db.execSQL("ALTER TABLE vaults ADD COLUMN lastSyncedAt INTEGER")
+            }
+        }
+
+        /**
+         * v3→v4：增加组织 / 集合两张表（2026-10-21，P1 组织视图）。
+         *
+         * 纯新增表，不动存量列 ⇒ 无需回填。两表都只存**密文名**与包裹态密钥。
+         *
+         * ⚠️ SQL 必须与 Room 生成的 schema **逐字一致**：`@Entity` 里声明的
+         *    foreignKeys / indices 都要写出来（含 ON DELETE CASCADE 与索引名）。
+         *    少一个，`MigrationTestHelper` 的 schema 校验会直接报"迁移后 schema 不符"。
+         */
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `organizations` (" +
+                        "`id` TEXT NOT NULL, `vaultId` TEXT NOT NULL, " +
+                        "`encryptedName` TEXT, `wrappedKey` TEXT, " +
+                        "`status` INTEGER NOT NULL, PRIMARY KEY(`id`), " +
+                        "FOREIGN KEY(`vaultId`) REFERENCES `vaults`(`id`) " +
+                        "ON UPDATE NO ACTION ON DELETE CASCADE )",
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_organizations_vaultId` ON `organizations` (`vaultId`)")
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `collections` (" +
+                        "`id` TEXT NOT NULL, `vaultId` TEXT NOT NULL, " +
+                        "`organizationId` TEXT NOT NULL, `encryptedName` TEXT, " +
+                        "PRIMARY KEY(`id`), " +
+                        "FOREIGN KEY(`vaultId`) REFERENCES `vaults`(`id`) " +
+                        "ON UPDATE NO ACTION ON DELETE CASCADE )",
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_collections_vaultId` ON `collections` (`vaultId`)")
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_collections_organizationId` " +
+                        "ON `collections` (`organizationId`)",
+                )
             }
         }
     }

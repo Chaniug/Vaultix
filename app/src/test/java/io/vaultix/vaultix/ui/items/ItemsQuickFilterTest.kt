@@ -81,4 +81,35 @@ class ItemsQuickFilterTest {
         assertThat(ItemsQuickFilter.from("unknown")).isEqualTo(ItemsQuickFilter.All)
         assertThat(ItemsQuickFilter.from(null)).isEqualTo(ItemsQuickFilter.All)
     }
+
+    // ---- 组织筛选（2026-10-21，P1 组织视图）----
+
+    @Test
+    fun organizationFilterNullReturnsEverythingUntouched() {
+        // null = 不限组织，必须**原样返回**（不复制），与 All 的契约一致
+        assertThat(all.applyOrganizationFilter(null)).isSameInstanceAs(all)
+    }
+
+    @Test
+    fun organizationFilterKeepsOnlyThatOrganization() {
+        val orgA = login.copy(id = "10", title = "组织 A 条目", organizationId = "org-a")
+        val orgB = login.copy(id = "11", title = "组织 B 条目", organizationId = "org-b")
+        val items = all + orgA + orgB
+
+        val result = items.applyOrganizationFilter("org-a")
+
+        // ★ 关键：个人条目（organizationId = null）**不能**混进组织视图
+        assertThat(result.map { it.id }).containsExactly("10")
+    }
+
+    @Test
+    fun organizationFilterComposesWithSearchAsIntersection() {
+        val orgA = login.copy(id = "10", title = "组织 A 条目", organizationId = "org-a")
+        val items = all + orgA
+
+        val filtered = items.applyOrganizationFilter("org-a")
+        val searched = io.vaultix.vaultix.ui.common.ItemFilter.filter(filtered, "组织")
+
+        assertThat(searched.map { it.id }).containsExactly("10")
+    }
 }

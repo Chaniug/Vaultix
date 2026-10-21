@@ -23,15 +23,21 @@ import io.vaultix.data.bitwarden.model.CipherDto
 import io.vaultix.data.bitwarden.model.CipherRequest
 import io.vaultix.data.bitwarden.model.CipherResponse
 import io.vaultix.data.bitwarden.model.FolderDto
+import io.vaultix.data.bitwarden.model.OrganizationDto
+import io.vaultix.data.bitwarden.model.OrganizationProfileDto
 import io.vaultix.data.bitwarden.model.SyncResponse
 import io.vaultix.data.bitwarden.model.toStoredCipherDto
 import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.database.dao.CipherDao
+import io.vaultix.database.dao.CollectionDao
 import io.vaultix.database.dao.FolderDao
+import io.vaultix.database.dao.OrganizationDao
 import io.vaultix.database.dao.PendingOpDao
 import io.vaultix.database.dao.VaultDao
 import io.vaultix.database.entity.CipherEntity
+import io.vaultix.database.entity.CollectionEntity
 import io.vaultix.database.entity.FolderEntity
+import io.vaultix.database.entity.OrganizationEntity
 import io.vaultix.database.entity.PendingOpEntity
 import kotlinx.coroutines.flow.first
 import kotlinx.serialization.json.Json
@@ -71,6 +77,8 @@ class BitwardenSyncService @Inject constructor(
     private val vaultDao: VaultDao,
     private val cipherDao: CipherDao,
     private val folderDao: FolderDao,
+    private val organizationDao: OrganizationDao,
+    private val collectionDao: CollectionDao,
     private val pendingOpDao: PendingOpDao,
     private val authRepository: BitwardenAuthRepository,
     private val json: Json,
@@ -133,6 +141,7 @@ class BitwardenSyncService @Inject constructor(
         // 4) 落库 + 清理服务端已移除的本地行
         persistCiphers(vaultId, response.ciphers)
         persistFolders(vaultId, response.folders)
+        persistOrganizations(vaultId, response)
         pruneRemovedRows(vaultId, response)
         vaultDao.updateRevision(vaultId, remoteRevision?.toString() ?: localRevision)
 
@@ -405,6 +414,100 @@ class BitwardenSyncService @Inject constructor(
         }
     }
 
+    /**
+     * 落库组织与集合（2026-10-21，P1 组织视图）。
+     *
+     * ## 为什么名字与密钥分开来源
+     *
+     * - **名字**在顶层 `organizations` / `collections`（EncString）；
+     * - **密钥**在 `profile.organizations[i].key`（被账号密钥包裹的组织密钥）。
+     * 两者按 **id** 合并；任何一侧缺失都不让另一侧失效 ——
+     * 名字缺了显示占位名，密钥缺了这个组织的条目名会解不出来（但不删数据）。
+     *
+     * ## ⚠️ 为什么"没有组织"时**不清空**
+     *
+     * 旧版客户端 / 部分 Vaultwarden 版本 sync 不带 `organizations` 字段。
+     * 若照 folders 的做法"服务端没有 ⇒ 全删"，一次这样的响应就会把上次存下的
+     * 组织密钥抹掉 ⇒ 组织条目名从此解不开，且要等下次完整 sync 才恢复。
+     * ⇒ 判据：**响应里两处都是空数组才算"服务端确实没有"**，才清空本地。
+     */
+    private suspend fun persistOrganizations(vaultId: String, response: SyncResponse) {
+        val profileKeys = response.profile?.organizations.orEmpty()
+            .associateBy { it.id }
+        val orgs = response.organizations
+        val collections = response.collections
+
+        if (orgs.isEmpty() && collections.isEmpty() && profileKeys.isEmpty()) {
+            // 整段缺失（老服务器）：**不动**本地，见上方 KDoc。
+            VaultixLog.d(TAG) { "sync 响应不含组织信息（旧服务器/旧版 API），保留本地组织缓存" }
+            return
+        }
+
+        // 组织行：顶层名字 + profile 密钥按 id 合并（见函数 KDoc）。
+        val merged = mergeOrganizations(
+            vaultId = vaultId,
+            orgs = orgs,
+            profileKeys = profileKeys,
+            existing = organizationDao.listByVault(vaultId).associateBy { it.id },
+        )
+        if (merged.isNotEmpty()) organizationDao.upsertAll(merged)
+
+        if (collections.isNotEmpty()) {
+            collectionDao.upsertAll(
+                collections.map { dto ->
+                    CollectionEntity(
+                        id = dto.id,
+                        vaultId = vaultId,
+                        organizationId = dto.organizationId,
+                        encryptedName = dto.name,
+                    )
+                },
+            )
+        }
+    }
+
+    /**
+     * 把「顶层 organizations（名字）」与「profile.organizations（密钥）」按 id 合并成行。
+     *
+     * 三条来源各可能缺：
+     * - 顶层有、profile 没有 ⇒ 名字在、密钥沿用本地旧值（旧版本 sync 不给密钥）；
+     * - profile 有、顶层没有 ⇒ 密钥在、名字沿用本地旧值（管理端未下发 name）；
+     * - 两边都有 ⇒ 取新值；`status == 0`（未填）时也沿用旧值，别把已知状态抹成 0。
+     *
+     * 抽成独立函数：[persistOrganizations] 的圈复杂度已到 16（门禁 ≤14），
+     * 合并逻辑本身是一个完整判断单元，拆出来两边都更清楚。
+     */
+    private fun mergeOrganizations(
+        vaultId: String,
+        orgs: List<OrganizationDto>,
+        profileKeys: Map<String, OrganizationProfileDto>,
+        existing: Map<String, OrganizationEntity>,
+    ): List<OrganizationEntity> {
+        val merged = LinkedHashMap<String, OrganizationEntity>()
+        orgs.forEach { dto ->
+            val prev = existing[dto.id]
+            merged[dto.id] = OrganizationEntity(
+                id = dto.id,
+                vaultId = vaultId,
+                encryptedName = dto.name ?: prev?.encryptedName,
+                wrappedKey = profileKeys[dto.id]?.key ?: prev?.wrappedKey,
+                status = dto.status.takeIf { it != 0 } ?: prev?.status ?: dto.status,
+            )
+        }
+        profileKeys.values.forEach { prof ->
+            if (prof.id in merged) return@forEach
+            val prev = existing[prof.id]
+            merged[prof.id] = OrganizationEntity(
+                id = prof.id,
+                vaultId = vaultId,
+                encryptedName = prev?.encryptedName,
+                wrappedKey = prof.key ?: prev?.wrappedKey,
+                status = prof.status.takeIf { it != 0 } ?: prev?.status ?: prof.status,
+            )
+        }
+        return merged.values.toList()
+    }
+
     private suspend fun persistFolders(vaultId: String, folders: List<FolderDto>) {
         if (folders.isEmpty()) return
         folderDao.upsertAll(folders.map { dto -> dto.toEntity(vaultId) })
@@ -427,6 +530,30 @@ class BitwardenSyncService @Inject constructor(
                 "prune cipher: 删除本地 ${removedCiphers.size} 条（服务端 ${response.ciphers.size} 条）"
             }
             cipherDao.deleteByIds(removedCiphers)
+        }
+
+        // 组织 / 集合：只有服务端**明确给了这两段**时才收敛（见 persistOrganizations 的说明——
+        // 否则一次不带 organizations 的响应就会抹掉组织密钥缓存）。
+        val serverReportedOrgs = response.organizations.isNotEmpty() ||
+            response.collections.isNotEmpty() ||
+            !response.profile?.organizations.isNullOrEmpty()
+        if (serverReportedOrgs) {
+            val serverOrgIds = response.organizations.map { it.id }.toSet()
+            val removedOrgs = organizationDao.listByVault(vaultId)
+                .map { it.id }
+                .filter { it !in serverOrgIds }
+            if (removedOrgs.isNotEmpty()) {
+                VaultixLog.w(TAG) { "prune organization: 删除本地 ${removedOrgs.size} 条" }
+                organizationDao.deleteByIds(removedOrgs)
+            }
+            val serverCollectionIds = response.collections.map { it.id }.toSet()
+            val removedCollections = collectionDao.listByVault(vaultId)
+                .map { it.id }
+                .filter { it !in serverCollectionIds }
+            if (removedCollections.isNotEmpty()) {
+                VaultixLog.w(TAG) { "prune collection: 删除本地 ${removedCollections.size} 条" }
+                collectionDao.deleteByIds(removedCollections)
+            }
         }
 
         val serverFolderIds = response.folders.map { it.id }.toSet()

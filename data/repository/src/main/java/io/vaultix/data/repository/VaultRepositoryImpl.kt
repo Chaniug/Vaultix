@@ -66,6 +66,8 @@ class VaultRepositoryImpl @Inject constructor(
     private val vaultDao: VaultDao,
     private val cipherDao: CipherDao,
     private val folderDao: FolderDao,
+    private val organizationDao: io.vaultix.database.dao.OrganizationDao,
+    private val collectionDao: io.vaultix.database.dao.CollectionDao,
     private val pendingOpDao: PendingOpDao,
     private val authRepository: BitwardenAuthRepository,
     private val sessions: VaultSessionManager,
@@ -395,6 +397,10 @@ class VaultRepositoryImpl @Inject constructor(
         // 5) 缓存条目与文件夹（vault 行保留）
         cipherDao.clearVault(vaultId)
         folderDao.clearVault(vaultId)
+        // 组织 / 集合（v4，2026-10-21）：同属本地缓存，退出登录一并清
+        // （不清的话，换一个账号登同一台服务器会看到上一个账号的组织名）。
+        organizationDao.clearVault(vaultId)
+        collectionDao.clearVault(vaultId)
         // 6) 同步基线归零：revisionDate 留着会让下次同步误判「服务端无变化」而跳过全量，
         //    结果是一个「退出了数据库却什么都没拉回来」的空库
         vaultDao.updateRevision(vaultId, null)

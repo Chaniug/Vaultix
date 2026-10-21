@@ -76,6 +76,19 @@ class SymmetricCryptoKey(
         macKey.zero()
     }
 
+    /**
+     * 复制一把**独立**的对称密钥（2026-10-21，组织密钥缓存在用）。
+     *
+     * ⚠️ **不能返回 this**：缓存的密钥会被多处持有（条目解密 / 附件密钥解包），
+     * 任何一处调 [clear] 就会把别人的钥匙一起清零 —— 症状是"用着用着突然解不开"，
+     * 且极难复现。拷贝的数据来自 [useBytes] 的副本（它不会清零底层），
+     * 因此复制动作本身不会动到源密钥。
+     */
+    fun duplicate(): SymmetricCryptoKey = SymmetricCryptoKey(
+        encKey = encKey.useBytes { it.copyOf() },
+        macKey = macKey.useBytes { it.copyOf() },
+    )
+
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (other !is SymmetricCryptoKey) return false

@@ -887,6 +887,12 @@
     <string name="items_filter_ssh">SSH</string>
     <string name="items_filter_note">笔记</string>
     <string name="items_filter_favorite">收藏</string>
+    <!-- 组织筛选（2026-10-21）：仅当库里有组织时才出现 -->
+    <string name="items_filter_organization_clear">不限组织</string>
+    <!-- 条目详情：共享库归属（2026-10-21） -->
+    <string name="section_organization">共享组织</string>
+    <string name="organization_name_pending">（正在读取组织名…）</string>
+    <string name="organization_collection_count">属于 %1$d 个集合</string>
     <string name="items_new_item">新建条目</string>
     <string name="items_item_unnamed">（未命名）</string>
     <string name="items_search">搜索</string>

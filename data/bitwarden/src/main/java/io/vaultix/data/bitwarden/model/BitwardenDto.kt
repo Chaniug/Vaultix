@@ -21,7 +21,76 @@ import kotlinx.serialization.Serializable
 data class SyncResponse(
     @SerialName("folders") val folders: List<FolderDto> = emptyList(),
     @SerialName("ciphers") val ciphers: List<CipherDto> = emptyList(),
+    /**
+     * 组织（2026-10-21）：`[{id, name(EncString), ...}]`。
+     *
+     * ⚠️ 官方 sync 响应的 `profile.organizations` 与顶层 `organizations` 两处都出现过
+     * （客户端版本不同）；Vaultwarden 顶层给。本 DTO 取顶层，缺失即空列表 ——
+     * 空列表的语义是"没有组织或服务器没给"，UI 据此整块隐藏，不会误报。
+     */
+    @SerialName("organizations") val organizations: List<OrganizationDto> = emptyList(),
+    /** 集合（每个 belong 到某个组织）。 */
+    @SerialName("collections") val collections: List<CollectionDto> = emptyList(),
+    /**
+     * 账号档案（含 `organizations`）：组织密钥（包裹态）在这里。
+     *
+     * ⚠️ 顶层 `organizations` 给的是**名字/状态**，密钥在 profile 里 —— 两处都要读，
+     * 少一个就会出现"组织列表有了、名字全是乱码/解密失败"。
+     */
+    @SerialName("profile") val profile: ProfileDto? = null,
 )
+
+/** sync 响应里的 `profile`：本轮只用到 [organizations]（组织密钥）。 */
+@Serializable
+data class ProfileDto(
+    @SerialName("id") val id: String = "",
+    @SerialName("organizations") val organizations: List<OrganizationProfileDto> = emptyList(),
+)
+
+/**
+ * 组织（共享库的顶层分组）。
+ *
+ * [name] 是 EncString，用**组织密钥**解；组织密钥又要先由 `profile.organizations`
+ * 里的 `key`（被账号密钥包裹）解出来 —— 见 `OrganizationKeyResolver`。
+ */
+@Serializable
+data class OrganizationDto(
+    @SerialName("id") val id: String,
+    @SerialName("name") val name: String? = null,
+    @SerialName("status") val status: Int = 0,
+    @SerialName("key") val key: String? = null,
+)
+
+/**
+ * 集合（组织内的二级分组）。
+ *
+ * [name] 用组织密钥解。`externalId` 只有 SSO 场景有，本客户端不用。
+ * ⚠️ `readOnly` / `manage` 是**权限位**：只读集合里的条目改不动，
+ * 本轮只做展示与筛选，不做写入，因此不建模权限。
+ */
+@Serializable
+data class CollectionDto(
+    @SerialName("id") val id: String,
+    @SerialName("organizationId") val organizationId: String = "",
+    @SerialName("name") val name: String? = null,
+)
+
+/**
+ * 组织密钥条目（`profile.organizations[i]`）。
+ *
+ * ⚠️ 与 [OrganizationDto] **分开建模**：`profile` 里的结构只有 id + 加密的 key，
+ * 没有 name/status。硬塞进同一个类会让那三个字段在 profile 路径上恒为默认值，
+ * 读的人会误以为"服务器没给"。
+ */
+@Serializable
+data class OrganizationProfileDto(
+    @SerialName("id") val id: String,
+    /** 组织密钥的包裹态（EncString，用账号密钥解）。 */
+    @SerialName("key") val key: String? = null,
+    /** 0 = Invited / 1 = Accepted / 2 = Confirmed / 3 = Revoked…；只有 >=2 才是正式成员。 */
+    @SerialName("status") val status: Int = 0,
+)
+
 
 @Serializable
 data class FolderDto(
@@ -56,6 +125,8 @@ data class CipherDto(
     @SerialName("favorite") val favorite: Boolean = false,
     @SerialName("folderId") val folderId: String? = null,
     @SerialName("organizationId") val organizationId: String? = null,
+    /** 所属集合 id 列表（组织条目才有；个人条目为空）。用途：集合筛选 + 写回透传。 */
+    @SerialName("collectionIds") val collectionIds: List<String> = emptyList(),
     @SerialName("revisionDate") val revisionDate: String = "",
     /**
      * 条目**创建时间**（ISO-8601 明文串，服务端原样返回）。
@@ -250,6 +321,14 @@ data class CipherRequest(
     @SerialName("passwordHistory")
     val passwordHistory: List<PasswordHistoryDto> = emptyList(),
     @SerialName("organizationId") val organizationId: String? = null,
+    /**
+     * 集合归属（组织条目）。
+     *
+     * ⚠️ **必须透传**（2026-10-21）：服务端 `CipherRequestModel` 对 collectionIds
+     * 的处理是整体替换 —— 不带 = 清空。组织条目在 Vaultix 里被编辑一次，
+     * 就会从所有集合里掉出来（组织成员在原客户端看不到它）。
+     */
+    @SerialName("collectionIds") val collectionIds: List<String> = emptyList(),
     @SerialName("lastKnownRevisionDate") val lastKnownRevisionDate: String? = null,
 )
 
@@ -291,6 +370,9 @@ fun CipherRequest.toStoredCipherDto(
     favorite = favorite,
     folderId = folderId,
     organizationId = organizationId ?: previous?.organizationId,
+    // 集合归属同理顺延（2026-10-21）：请求体里带了就是"按它整体替换"，
+    // 没带就是"一条都不属于" —— 与上面的 organizationId 是同一类静默丢失。
+    collectionIds = collectionIds.ifEmpty { previous?.collectionIds.orEmpty() },
     revisionDate = revisionDate,
     creationDate = previous?.creationDate,
     // deletedDate 同样顺延：编辑一条被软删的行**不该**让它从回收站"复活"。

@@ -10,6 +10,8 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.domain.FolderRepository
 import io.vaultix.domain.ItemRepository
+import io.vaultix.domain.OrganizationRepository
+import kotlinx.coroutines.flow.map
 import io.vaultix.domain.VaultRepository
 import io.vaultix.domain.VaultSaveOutcome
 import io.vaultix.model.VaultAttachment
@@ -43,11 +45,24 @@ class ItemDetailViewModel @Inject constructor(
     private val prefs: VaultixPreferences,
     private val clipboard: VaultixClipboard,
     private val folderRepository: FolderRepository,
+    /** 组织名（只读展示用，2026-10-21）：条目详情里标出"这条是共享库的"。 */
+    private val organizationRepository: OrganizationRepository,
     @ApplicationContext private val appContext: Context,
 ) : ViewModel() {
 
     val vaultId: String = checkNotNull(savedStateHandle[ARG_VAULT_ID])
     val itemId: String = checkNotNull(savedStateHandle[ARG_ITEM_ID])
+
+    /**
+     * 组织 id → 组织名（未解锁 / 无组织时为空 map，2026-10-21）。
+     *
+     * ⚠️ **必须声明在 [vaultId] 之后**：Kotlin 属性按声明顺序初始化，
+     * 放在前面会读到尚未赋值的 `vaultId`（null / 未初始化）。
+     */
+    val organizationNames: StateFlow<Map<String, String>> = organizationRepository
+        .observeOrganizations(vaultId)
+        .map { orgs -> orgs.associate { org -> org.id to org.name } }
+        .stateIn(scope = viewModelScope, started = SharingStarted.Eagerly, initialValue = emptyMap())
 
     /** 一次性 UI 事件。 */
     sealed interface UiEvent {

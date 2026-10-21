@@ -38,6 +38,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Business
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ExpandMore
@@ -103,6 +104,7 @@ import io.vaultix.model.VaultFolder
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
 import io.vaultix.model.VaultKind
+import io.vaultix.model.VaultOrganization
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.Capability
 import io.vaultix.vaultix.ui.common.CapabilityIcon
@@ -292,6 +294,14 @@ private fun VaultStatusRow(card: VaultCardInfo) {
 private val QUICK_FILTER_ROW_HEIGHT = 48.dp
 
 /**
+ * 组织 chip 行高度（2026-10-21）：与上面那行同规格（8dp 上下内边距 + 32dp chip）。
+ *
+ * ⚠️ 只有「库里有组织」时才多这一行 —— 个人账号用户看到的面板高度必须与以前完全一致，
+ * 否则他们会莫名多出一截空白（本项目的判据：**新增状态不能改变旧场景的观感**）。
+ */
+private val QUICK_FILTER_ORG_ROW_HEIGHT = 48.dp
+
+/**
  * 搜索态的返回手势：主界面是**根路由**（导航栈里没有上一层），不拦系统返回就会
  * 直接结束 Activity 退回桌面 —— 用户期望的是「退出搜索、回到列表」。
  */
@@ -307,9 +317,17 @@ private fun SearchBackHandler(enabled: Boolean, onClose: () -> Unit) {
  * 已贴着 detekt `LongMethod ≤150` 的门禁线。
  */
 @Composable
-private fun rememberQuickFilterRowInset(expanded: Boolean): Dp =
+private fun rememberQuickFilterRowInset(expanded: Boolean, organizationRow: Boolean = false): Dp =
     animateDpAsState(
-        targetValue = if (expanded) QUICK_FILTER_ROW_HEIGHT else 0.dp,
+        // 2026-10-21：有组织时面板多一行（组织 chip 行），让位必须同步加高
+        // —— 否则组织 chip 行会压住第一条条目（与 #62 同一类问题）。
+        targetValue = if (!expanded) {
+            0.dp
+        } else if (organizationRow) {
+            QUICK_FILTER_ROW_HEIGHT + QUICK_FILTER_ORG_ROW_HEIGHT
+        } else {
+            QUICK_FILTER_ROW_HEIGHT
+        },
         animationSpec = tween(GROUP_ANIM_MS),
         label = "items_filter_row_inset",
     ).value
@@ -416,6 +434,7 @@ fun ItemsScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val visibleItems by viewModel.visibleItems.collectAsStateWithLifecycle()
     val folders by viewModel.folders.collectAsStateWithLifecycle()
+    val organizations by viewModel.organizations.collectAsStateWithLifecycle()
     val groupMode by viewModel.groupMode.collectAsStateWithLifecycle()
     val cardDisplayMode by viewModel.cardDisplayMode.collectAsStateWithLifecycle()
     val showIcon by viewModel.showIcon.collectAsStateWithLifecycle()
@@ -432,12 +451,11 @@ fun ItemsScreen(
     val barPadding = rememberImmersiveBarPadding(collapse)
     // ⚠️ 挤在一行是有意的：主 composable 贴着 detekt `LongMethod ≤150` 的门禁线
     // （2026-09-13 这一批加了「让位走 contentPadding」后曾到 152 行，靠压这行回到 147）。
-    val filterRowInset = rememberQuickFilterRowInset(quickFiltersExpanded)
+    val filterRowInset = rememberQuickFilterRowInset(quickFiltersExpanded, organizations.isNotEmpty())
     val listTopInset = itemsTopInset(searchActive, barPadding, filterRowInset, state.syncNote != null)
-    // 「这个库在哪 · 有多少条」（2026-09-30 用户要求）。
-    // 在**本层**算一次、供顶栏的 ⋮ 菜单卡片与列表状态行**共用** ——
-    // 两处若各算各的，迟早出现"卡片里 42 条、列表里 41 条"这种差一条的鬼故事。
-    // ⚠️ **未解锁时 countText 为 null**：此刻条目数不可知，显示 0 就是把"不知道"说成"没有"。
+    // 「这个库在哪 · 有多少条」（2026-09-30 用户要求）：在本层算一次，供 ⋮ 菜单卡片与
+    // 列表状态行**共用**（各算各的迟早出现"卡片 42 条、列表 41 条"）。
+    // ⚠️ 未解锁时 countText 为 null：条目数不可知 ≠ 0。
     val vaultCard = state.vault?.let { vault -> vaultCardInfoOf(vault, state.items.size) }
     // 搜索关闭动作（点 × 与系统返回共用）：退出搜索态 + 清空输入。
     val closeSearch: () -> Unit = { searchActive = false; viewModel.setQuery("") }
@@ -548,6 +566,9 @@ fun ItemsScreen(
                     topPadding = barPadding,
                     onSelect = viewModel::setQuickFilter,
                     onDismiss = { quickFiltersExpanded = false },
+                    organizations = organizations,
+                    selectedOrganizationId = state.organizationFilter,
+                    onSelectOrganization = viewModel::setOrganizationFilter,
                 )
                 ItemsTopBar(
                     title = itemsTitle(
@@ -573,16 +594,7 @@ fun ItemsScreen(
         }
     }
 
-    DisplayOptionsHost(
-        visible = displayOptionsOpen,
-        groupMode = groupMode,
-        cardDisplayMode = cardDisplayMode,
-        showIcon = showIcon,
-        onDismiss = { displayOptionsOpen = false },
-        onGroupMode = viewModel::setGroupMode,
-        onCardDisplayMode = viewModel::setCardDisplayMode,
-        onShowIcon = viewModel::setShowIcon,
-    )
+    ItemDisplayOptionsHost(viewModel, displayOptionsOpen, onDismiss = { displayOptionsOpen = false })
 
     if (showCreateDialog) {
         CreateItemDialog(
@@ -596,6 +608,34 @@ fun ItemsScreen(
             },
         )
     }
+}
+
+/**
+ * 「显示选项」浮层的宿主（2026-10-21 从主 Composable 抽出）。
+ *
+ * 抽出的原因：主 Composable 贴着 detekt `LongMethod ≤150` 的门禁线，加了组织筛选后到 153。
+ * 这 9 行是**一组完整的宿主接线**（把 ViewModel 的四个状态/动作喂给浮层），
+ * 拆出来有独立含义 —— 比继续压注释可读得多。
+ */
+@Composable
+private fun ItemDisplayOptionsHost(
+    viewModel: ItemsViewModel,
+    visible: Boolean,
+    onDismiss: () -> Unit,
+) {
+    val groupMode by viewModel.groupMode.collectAsStateWithLifecycle()
+    val cardDisplayMode by viewModel.cardDisplayMode.collectAsStateWithLifecycle()
+    val showIcon by viewModel.showIcon.collectAsStateWithLifecycle()
+    DisplayOptionsHost(
+        visible = visible,
+        groupMode = groupMode,
+        cardDisplayMode = cardDisplayMode,
+        showIcon = showIcon,
+        onDismiss = onDismiss,
+        onGroupMode = viewModel::setGroupMode,
+        onCardDisplayMode = viewModel::setCardDisplayMode,
+        onShowIcon = viewModel::setShowIcon,
+    )
 }
 
 /**
@@ -1155,6 +1195,13 @@ private fun BoxScope.QuickFilterPanel(
     topPadding: Dp,
     onSelect: (ItemsQuickFilter) -> Unit,
     onDismiss: () -> Unit,
+    /**
+     * 组织列表（2026-10-21）：**空则不画组织行**，面板高度与以前完全一致
+     * （个人账号用户不该因为这次改动看到多出来的空白）。
+     */
+    organizations: List<VaultOrganization> = emptyList(),
+    selectedOrganizationId: String? = null,
+    onSelectOrganization: (String?) -> Unit = {},
 ) {
     AnimatedVisibility(
         visible = visible,
@@ -1195,11 +1242,20 @@ private fun BoxScope.QuickFilterPanel(
                         onClick = onDismiss,
                     ),
             )
-            QuickFilterChips(
-                selected = selected,
-                topPadding = topPadding,
-                onSelect = onSelect,
-            )
+            Column {
+                QuickFilterChips(
+                    selected = selected,
+                    topPadding = topPadding,
+                    onSelect = onSelect,
+                )
+                if (organizations.isNotEmpty()) {
+                    OrganizationFilterChips(
+                        organizations = organizations,
+                        selectedId = selectedOrganizationId,
+                        onSelect = onSelectOrganization,
+                    )
+                }
+            }
         }
     }
 }
@@ -1250,6 +1306,56 @@ private fun QuickFilterChips(
                     { Icon(Icons.Filled.Check, contentDescription = null) }
                 } else {
                     null
+                },
+            )
+        }
+    }
+}
+
+/**
+ * 组织 chip 行（2026-10-21）：第一枚是「不限组织」，其后每个组织一枚。
+ *
+ * 与上面那排的关系：**单选且互斥** —— 选中任一组织会把快捷筛选重置为「全部」
+ * （见 `ItemsViewModel.setOrganizationFilter`），反过来选快捷筛选也会清掉组织。
+ * 两套同时生效会造出"组织 A 里的验证码"这种回不去的组合，而顶栏标题只能显示一种。
+ *
+ * ⚠️ 高度必须与 [QUICK_FILTER_ORG_ROW_HEIGHT] 一致（列表让位按它计算）。
+ */
+@Composable
+private fun OrganizationFilterChips(
+    organizations: List<VaultOrganization>,
+    selectedId: String?,
+    onSelect: (String?) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = Spacing.md)
+            .padding(bottom = Spacing.sm),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        FilterChip(
+            selected = selectedId == null,
+            onClick = { onSelect(null) },
+            label = { Text(stringResource(R.string.items_filter_organization_clear)) },
+            leadingIcon = if (selectedId == null) {
+                { Icon(Icons.Filled.Check, contentDescription = null) }
+            } else {
+                null
+            },
+        )
+        organizations.forEach { org ->
+            val isSelected = org.id == selectedId
+            FilterChip(
+                selected = isSelected,
+                onClick = { onSelect(if (isSelected) null else org.id) },
+                label = { Text(org.name) },
+                leadingIcon = if (isSelected) {
+                    { Icon(Icons.Filled.Check, contentDescription = null) }
+                } else {
+                    { Icon(Icons.Filled.Business, contentDescription = null) }
                 },
             )
         }

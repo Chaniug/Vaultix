@@ -149,6 +149,10 @@ class CipherMapper @Inject constructor(
                         wrappedKey = attachment.key,
                     )
                 }.filter { it.id.isNotEmpty() },
+                // 2026-10-21 补入：组织 / 集合归属（只存 id，名字在 VaultOrganization）。
+                // ⚠️ 只用于展示与筛选；写回由 toUpdateRequest 原样透传（漏了就掉出共享库）。
+                organizationId = dto.organizationId?.takeIf { it.isNotBlank() },
+                collectionIds = dto.collectionIds.filter { it.isNotBlank() },
             )
         } finally {
             itemKey?.clear()
@@ -274,6 +278,8 @@ class CipherMapper @Inject constructor(
             // ------------------------------------------------------------------
             passwordHistory = stored.passwordHistory,
             organizationId = stored.organizationId,
+            // 集合归属透传（2026-10-21）：不带 = 服务端整体替换成空 = 条目从所有集合掉出。
+            collectionIds = stored.collectionIds,
             lastKnownRevisionDate = stored.revisionDate.takeIf { it.isNotBlank() },
         )
     }

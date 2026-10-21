@@ -104,6 +104,57 @@ data class FolderEntity(
     val revisionDate: String,
 )
 
+/**
+ * 组织（Bitwarden 共享库顶层分组），v4 新增（2026-10-21）。
+ *
+ * 只存**密文名**：组织名用组织密钥加密，解密发生在内存（与 folders 同口径）。
+ * [wrappedKey] 是该组织密钥被账号密钥包裹的 EncString —— 落库是安全的
+ * （它本身是密文），且**必须落库**：`profile.organizations` 不一定每次 sync 都下发，
+ * 只放内存的话进程重启后组织名就解不出来。
+ */
+@Entity(
+    tableName = "organizations",
+    foreignKeys = [
+        ForeignKey(
+            entity = VaultEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["vaultId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [Index("vaultId")],
+)
+data class OrganizationEntity(
+    @PrimaryKey val id: String,
+    val vaultId: String,
+    /** EncString 密文（组织名） */
+    val encryptedName: String?,
+    /** EncString 密文（组织密钥，用账号密钥解） */
+    val wrappedKey: String?,
+    val status: Int = 0,
+)
+
+/** 集合（组织内二级分组），v4 新增。只存密文名。 */
+@Entity(
+    tableName = "collections",
+    foreignKeys = [
+        ForeignKey(
+            entity = VaultEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["vaultId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [Index("vaultId"), Index("organizationId")],
+)
+data class CollectionEntity(
+    @PrimaryKey val id: String,
+    val vaultId: String,
+    val organizationId: String,
+    /** EncString 密文 */
+    val encryptedName: String?,
+)
+
 /** 待上传操作（离线时入队，联网后推送）。 */
 @Entity(tableName = "pending_ops", indices = [Index("vaultId")])
 data class PendingOpEntity(

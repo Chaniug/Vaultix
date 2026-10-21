@@ -12,7 +12,9 @@ import androidx.room.Dao
 import androidx.room.Query
 import androidx.room.Upsert
 import io.vaultix.database.entity.CipherEntity
+import io.vaultix.database.entity.CollectionEntity
 import io.vaultix.database.entity.FolderEntity
+import io.vaultix.database.entity.OrganizationEntity
 import io.vaultix.database.entity.PendingOpEntity
 import io.vaultix.database.entity.VaultEntity
 import kotlinx.coroutines.flow.Flow
@@ -102,6 +104,48 @@ interface FolderDao {
     suspend fun deleteByIds(ids: List<String>)
 
     @Query("DELETE FROM folders WHERE vaultId = :vaultId")
+    suspend fun clearVault(vaultId: String)
+}
+
+/**
+ * 组织（v4，2026-10-21）。
+ *
+ * ⚠️ 没有任何写路径走"读出来改一改写回去"：sync 是**整体替换**语义
+ * （`upsertAll` + 按服务端集合 `deleteByIds`），与 folders 一致 —— 组织在
+ * Vaultix 里不可创建，服务端才是唯一真源。
+ */
+@Dao
+interface OrganizationDao {
+    @Query("SELECT * FROM organizations WHERE vaultId = :vaultId ORDER BY id")
+    fun observeByVault(vaultId: String): Flow<List<OrganizationEntity>>
+
+    @Query("SELECT * FROM organizations WHERE vaultId = :vaultId")
+    suspend fun listByVault(vaultId: String): List<OrganizationEntity>
+
+    @Upsert suspend fun upsertAll(items: List<OrganizationEntity>)
+
+    @Query("DELETE FROM organizations WHERE id IN (:ids)")
+    suspend fun deleteByIds(ids: List<String>)
+
+    @Query("DELETE FROM organizations WHERE vaultId = :vaultId")
+    suspend fun clearVault(vaultId: String)
+}
+
+/** 集合（v4）。语义与 [OrganizationDao] 相同：sync 整体替换。 */
+@Dao
+interface CollectionDao {
+    @Query("SELECT * FROM collections WHERE vaultId = :vaultId ORDER BY id")
+    fun observeByVault(vaultId: String): Flow<List<CollectionEntity>>
+
+    @Query("SELECT * FROM collections WHERE vaultId = :vaultId")
+    suspend fun listByVault(vaultId: String): List<CollectionEntity>
+
+    @Upsert suspend fun upsertAll(items: List<CollectionEntity>)
+
+    @Query("DELETE FROM collections WHERE id IN (:ids)")
+    suspend fun deleteByIds(ids: List<String>)
+
+    @Query("DELETE FROM collections WHERE vaultId = :vaultId")
     suspend fun clearVault(vaultId: String)
 }
 

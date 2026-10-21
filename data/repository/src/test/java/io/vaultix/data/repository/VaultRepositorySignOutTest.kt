@@ -73,6 +73,10 @@ class VaultRepositorySignOutTest {
             vaultDao = vaultDao,
             cipherDao = cipherDao,
             folderDao = folderDao,
+            // 组织 / 集合（v4，2026-10-21）：signOut 会清这两张表；本测试不关心，
+            // 用 relaxed mock（不 relaxed 的话 clearVault 未打桩会抛 MockKException）。
+            organizationDao = io.mockk.mockk(relaxed = true),
+            collectionDao = io.mockk.mockk(relaxed = true),
             pendingOpDao = pendingOpDao,
             authRepository = authRepository,
             sessions = sessions,

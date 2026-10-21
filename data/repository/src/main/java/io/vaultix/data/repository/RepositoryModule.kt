@@ -8,6 +8,7 @@ import io.vaultix.data.repository.kdbx.KdbxCreateRepositoryImpl
 import io.vaultix.data.repository.kdbx.KdbxSyncRepositoryImpl
 import io.vaultix.domain.AutoUnlockRepository
 import io.vaultix.domain.FolderRepository
+import io.vaultix.domain.OrganizationRepository
 import io.vaultix.domain.ItemRepository
 import io.vaultix.domain.KdbxCreateRepository
 import io.vaultix.domain.KdbxSyncRepository
@@ -41,6 +42,11 @@ interface RepositoryModule {
     @Binds
     @Singleton
     fun bindFolderRepository(impl: FolderRepositoryImpl): FolderRepository
+
+    /** 组织 / 集合（只读，2026-10-21）：与文件夹并列的"结构类"只读仓储。 */
+    @Binds
+    @Singleton
+    fun bindOrganizationRepository(impl: OrganizationRepositoryImpl): OrganizationRepository
 
     @Binds
     @Singleton

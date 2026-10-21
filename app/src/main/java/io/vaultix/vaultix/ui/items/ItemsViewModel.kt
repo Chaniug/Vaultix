@@ -14,7 +14,9 @@ import io.vaultix.domain.VaultSaveOutcome
 import io.vaultix.domain.VaultSessionRepository
 import io.vaultix.domain.VaultSyncStatus
 import io.vaultix.model.VaultItem
+import io.vaultix.domain.OrganizationRepository
 import io.vaultix.model.VaultFolder
+import io.vaultix.model.VaultOrganization
 import io.vaultix.model.VaultSummary
 import io.vaultix.vaultix.ui.common.ItemFilter
 import io.vaultix.vaultix.session.ActiveVaultStore
@@ -54,6 +56,8 @@ class ItemsViewModel @Inject constructor(
     private val itemRepository: ItemRepository,
     private val syncOrchestrator: BitwardenSyncOrchestrator,
     private val folderRepository: FolderRepository,
+    /** 组织 / 集合（只读，2026-10-21）：供筛选条与条目归属展示。 */
+    private val organizationRepository: OrganizationRepository,
     private val activeVaultStore: ActiveVaultStore,
     private val preferences: VaultixPreferences,
 ) : ViewModel() {
@@ -112,6 +116,8 @@ class ItemsViewModel @Inject constructor(
         val query: String = "",
         /** 顶栏点库名展开的那一排快捷筛选中，当前选中的维度。 */
         val quickFilter: ItemsQuickFilter = ItemsQuickFilter.All,
+        /** 按组织筛选（`null` = 不限）；与 [quickFilter] 互斥，见 [setOrganizationFilter]。 */
+        val organizationFilter: String? = null,
         val syncNote: SyncNote? = null,
         val saving: Boolean = false,
         /**
@@ -175,6 +181,11 @@ class ItemsViewModel @Inject constructor(
         .flatMapLatest { id -> folderRepository.observeFolders(id) }
         .stateIn(scope = viewModelScope, started = SharingStarted.Eagerly, initialValue = emptyList())
 
+    /** 该库所属组织列表（未解锁 / 无组织时为空 —— UI 据此整块隐藏筛选区）。 */
+    val organizations: StateFlow<List<VaultOrganization>> = vaultIdState
+        .flatMapLatest { id -> organizationRepository.observeOrganizations(id) }
+        .stateIn(scope = viewModelScope, started = SharingStarted.Eagerly, initialValue = emptyList())
+
     /** 同步进行中（下拉刷新指示器用；手动触发后 Orchestrator 状态流转驱动）。 */
     val isSyncing: StateFlow<Boolean> =
         combine(vaultIdState, syncOrchestrator.statusByVault) { id, statuses ->
@@ -196,7 +207,22 @@ class ItemsViewModel @Inject constructor(
      * 而顶部那排 chip 收起时看不见 —— 这就是「条目莫名其妙不见了」类投诉的来源。
      */
     fun setQuickFilter(filter: ItemsQuickFilter) =
-        _state.update { it.copy(quickFilter = filter) }
+        _state.update { it.copy(quickFilter = filter, organizationFilter = null) }
+
+    /**
+     * 按组织筛选（`null` = 不限组织）。
+     *
+     * ⚠️ 与 [setQuickFilter] **互相清空**：两套筛选叠加时列表会变成
+     * "组织 A 里的验证码条目"这种极难回到全集的组合；顶栏标题也只能显示一种。
+     * ⇒ 同一时刻只有一种"范围筛选"生效（搜索框是独立维度，可叠加）。
+     */
+    fun setOrganizationFilter(organizationId: String?) =
+        _state.update {
+            it.copy(
+                organizationFilter = organizationId,
+                quickFilter = if (organizationId != null) ItemsQuickFilter.All else it.quickFilter,
+            )
+        }
 
     /** 当前筛选维度（UI 收集；[ItemsQuickFilter.All] = 不筛选）。 */
     val quickFilter: StateFlow<ItemsQuickFilter> = _state
@@ -275,7 +301,12 @@ class ItemsViewModel @Inject constructor(
      */
     val visibleItems: StateFlow<List<VaultItem>> = _state
         .map { state ->
-            ItemFilter.filter(state.items.applyQuickFilter(state.quickFilter), state.query)
+            ItemFilter.filter(
+                state.items
+                    .applyOrganizationFilter(state.organizationFilter)
+                    .applyQuickFilter(state.quickFilter),
+                state.query,
+            )
         }
         .stateIn(
             scope = viewModelScope,
