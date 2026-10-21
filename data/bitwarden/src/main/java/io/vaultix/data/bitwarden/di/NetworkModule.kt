@@ -126,6 +126,29 @@ object NetworkModule {
         io.vaultix.data.bitwarden.network.BitwardenAuthInterceptor(provider)
 
     /**
+     * 附件下载专用 client（[AttachmentHttpClient]）：**不挂** authInterceptor /
+     * Authenticator —— 下载地址是第三方对象存储签名 URL，带上 Bearer 等于把
+     * 访问令牌泄漏给 amazonaws.com / blob.core.windows.net（见 qualifier KDoc）。
+     *
+     * 请求头指纹保留：部分自托管站点（Vaultwarden 直链同样过 CF）仍需要浏览器指纹。
+     */
+    @Provides @Singleton
+    @AttachmentHttpClient
+    fun provideAttachmentOkHttpClient(): OkHttpClient =
+        OkHttpClient.Builder()
+            .connectTimeout(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            .readTimeout(READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            .retryOnConnectionFailure(true)
+            .addInterceptor { chain ->
+                val request = chain.request().newBuilder()
+                    .header("User-Agent", USER_AGENT)
+                    .header("Accept-Language", java.util.Locale.getDefault().toLanguageTag())
+                    .build()
+                chain.proceed(request)
+            }
+            .build()
+
+    /**
      * 只提供 Builder，不固定 baseUrl：用户可配置官方或自托管服务器，
      * 由 [BitwardenApiFactory] 在运行时按库地址创建实例。
      */

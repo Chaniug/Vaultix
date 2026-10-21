@@ -14,6 +14,7 @@
  */
 package io.vaultix.data.bitwarden.api
 
+import io.vaultix.data.bitwarden.model.AttachmentDownloadResponse
 import io.vaultix.data.bitwarden.model.CipherRequest
 import io.vaultix.data.bitwarden.model.CipherResponse
 import io.vaultix.data.bitwarden.model.FolderDto
@@ -30,7 +31,7 @@ import retrofit2.http.Path
 /**
  * Bitwarden 数据服务（`/api` 基址）端点。
  *
- * M1 首批只覆盖同步与条目 / 文件夹 CRUD；附件与 Send 留到后续。
+ * M1 首批只覆盖同步与条目 / 文件夹 CRUD；附件下载 2026-10-21 补齐，Send 仍留后续。
  */
 interface BitwardenVaultApi {
 
@@ -58,6 +59,19 @@ interface BitwardenVaultApi {
     /** 软删（进回收站）。 */
     @DELETE("ciphers/{id}")
     suspend fun softDeleteCipher(@Path("id") id: String)
+
+    /**
+     * 附件下载地址（2026-10-21）。
+     *
+     * ⚠️ 返回的是**签名 URL**（第三方对象存储），下载请求**不能**走挂了
+     * Bearer 的 OkHttp client —— token 会泄漏给第三方域名（见
+     * [io.vaultix.data.bitwarden.attachment.BitwardenAttachmentDownloader]）。
+     */
+    @GET("ciphers/{id}/attachment/{attachmentId}")
+    suspend fun attachmentDownload(
+        @Path("id") id: String,
+        @Path("attachmentId") attachmentId: String,
+    ): AttachmentDownloadResponse
 
     /** 永久删除。 */
     @DELETE("ciphers/{id}/delete")

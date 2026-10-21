@@ -3,15 +3,20 @@ package io.vaultix.vaultix.ui.detail
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import android.content.Context
+import androidx.core.content.FileProvider
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.domain.FolderRepository
 import io.vaultix.domain.ItemRepository
 import io.vaultix.domain.VaultRepository
 import io.vaultix.domain.VaultSaveOutcome
+import io.vaultix.model.VaultAttachment
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultFolder
 import io.vaultix.vaultix.util.VaultixClipboard
+import java.io.File
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -38,6 +43,7 @@ class ItemDetailViewModel @Inject constructor(
     private val prefs: VaultixPreferences,
     private val clipboard: VaultixClipboard,
     private val folderRepository: FolderRepository,
+    @ApplicationContext private val appContext: Context,
 ) : ViewModel() {
 
     val vaultId: String = checkNotNull(savedStateHandle[ARG_VAULT_ID])
@@ -67,6 +73,15 @@ class ItemDetailViewModel @Inject constructor(
          */
         data class SaveFailed(val message: String?) : UiEvent
         data object Deleted : UiEvent
+
+        /**
+         * 附件下载完成。`fileUri` 是 FileProvider 的 `content://` URI，
+         * UI 用它发起 `ACTION_VIEW` 让用户选应用打开 / 另存。
+         */
+        data class DownloadDone(val fileName: String, val fileUri: String) : UiEvent
+
+        /** 附件下载失败（解包失败 / MAC 不匹配 / 网络）。`message` 语义同 [SaveFailed]。 */
+        data class DownloadFailed(val message: String?) : UiEvent
     }
 
     data class UiState(
@@ -82,6 +97,8 @@ class ItemDetailViewModel @Inject constructor(
         val serverOrigin: String? = null,
         val saving: Boolean = false,
         val deleting: Boolean = false,
+        /** 正在下载附件（同一时刻只允许一个，UI 据此禁用其它附件的下载按钮）。 */
+        val downloadingAttachment: Boolean = false,
     )
 
     private val _state = MutableStateFlow(UiState())
@@ -146,6 +163,58 @@ class ItemDetailViewModel @Inject constructor(
     fun copyField(text: String) {
         if (text.isBlank()) return
         doCopy(text, isField = true)
+    }
+
+    /**
+     * 复制**历史密码**（密码历史分区）。
+     *
+     * 按敏感密码对待（`isPassword = true`）：同样走敏感剪贴板 + 自动清除，
+     * 提示文案复用"已复制密码（N 秒后清除）"——它本来就是密码，不必为历史再开一套文案。
+     */
+    fun copyHistoryPassword(password: String) {
+        if (password.isBlank()) return
+        doCopy(password, isPassword = true)
+    }
+
+    /**
+     * 下载一个附件到应用缓存并解密，完成后发 [UiEvent.DownloadDone]（携带
+     * FileProvider URI，UI 发起 `ACTION_VIEW`）。
+     *
+     * - 落点 `cacheDir/attachments/<itemId>/`：只对本应用可读的私有目录，
+     *   明文**不进公共下载目录**（用户要外发走系统"打开/另存"的分享链路）；
+     * - 文件名把路径分隔符替换成下划线：`fileName` 是解密出来的服务端数据，
+     *   不能直接拼进路径（`../../` 穿越）。
+     */
+    fun downloadAttachment(attachment: VaultAttachment) {
+        if (_state.value.downloadingAttachment) return
+        _state.update { it.copy(downloadingAttachment = true) }
+        viewModelScope.launch {
+            val result = runCatching {
+                val dir = File(appContext.cacheDir, "attachments/$itemId")
+                    .apply { mkdirs() }
+                val safeName = attachment.fileName.replace(Regex("[/\\\\]"), "_")
+                val file = File(dir, "${attachment.id}_$safeName")
+                file.outputStream().use { sink ->
+                    itemRepository
+                        .downloadAttachment(vaultId, itemId, attachment.id, sink)
+                        .getOrThrow()
+                }
+                FileProvider.getUriForFile(
+                    appContext,
+                    "${appContext.packageName}.fileprovider",
+                    file,
+                )
+            }
+            _state.update { it.copy(downloadingAttachment = false) }
+            result.fold(
+                onSuccess = { uri ->
+                    _events.trySend(UiEvent.DownloadDone(attachment.fileName, uri.toString()))
+                },
+                onFailure = { e ->
+                    _events.trySend(UiEvent.DownloadFailed(e.message))
+                },
+            )
+        }
     }
 
     private fun doCopy(

@@ -113,6 +113,8 @@ class ItemRepositoryImplTest {
             // KDBX 写回（W2 起写路径也分流）。本文件绝大多数用例是 Bitwarden 库，
             // 只有下面那条 KDBX 用例会真的用到它 ⇒ 用 relaxed mock，并逐条 coVerify。
             kdbxItemWrites = kdbxItemWrites,
+            // 附件下载（2026-10-21）：本文件没有附件下载用例，relaxed mock 即可。
+            attachmentDownloader = mockk(relaxed = true),
             cryptoDispatcher = Dispatchers.Default,
         )
         // 读路径分流要先问「这个库是什么类型」（见 observeItems）：
@@ -552,6 +554,8 @@ class ItemRepositoryImplTest {
             syncService = syncService,
             kdbxSessions = KdbxSessionFlow(),
             kdbxItemWrites = kdbxItemWrites,
+            // 附件下载（2026-10-21）：本文件没有附件下载用例，relaxed mock 即可。
+            attachmentDownloader = mockk(relaxed = true),
             cryptoDispatcher = Dispatchers.Default,
         )
 
@@ -959,6 +963,8 @@ class ItemRepositoryImplTest {
             syncService = syncService,
             kdbxSessions = KdbxSessionFlow(),
             kdbxItemWrites = kdbxItemWrites,
+            // 附件下载（2026-10-21）：本文件没有附件下载用例，relaxed mock 即可。
+            attachmentDownloader = mockk(relaxed = true),
             cryptoDispatcher = Dispatchers.Default,
         )
 

@@ -71,12 +71,15 @@ import io.vaultix.common.CardBrand
 import io.vaultix.common.CardBrandDetector
 import io.vaultix.common.formatCardNumberGrouped
 import io.vaultix.model.VaultCard
+import io.vaultix.model.VaultAttachment
+import io.vaultix.model.VaultAttachmentSource
 import io.vaultix.model.VaultCustomField
 import io.vaultix.model.VaultFido2Credential
 import io.vaultix.model.VaultIdentity
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
 import io.vaultix.model.VaultLinkedId
+import io.vaultix.model.VaultPasswordHistoryEntry
 import io.vaultix.model.VaultSshKey
 import io.vaultix.model.VaultUri
 import io.vaultix.vaultix.ui.theme.UiSize
@@ -90,7 +93,9 @@ import io.vaultix.vaultix.ui.common.SiteIcon
 import io.vaultix.vaultix.ui.common.TypeBadge
 import io.vaultix.vaultix.ui.common.itemTypeLabelRes
 import android.content.Context
+import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Badge
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.CreditCard
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Language
@@ -158,6 +163,14 @@ private fun detailEventMessage(context: Context, event: ItemDetailViewModel.UiEv
                 event.message ?: context.getString(R.string.error_unknown_no_detail),
             )
         ItemDetailViewModel.UiEvent.Deleted -> null
+        is ItemDetailViewModel.UiEvent.DownloadFailed ->
+            // 兜底理由同 [UiEvent.SaveFailed]：没细节时说什么归呈现层。
+            context.getString(
+                R.string.attachment_download_failed,
+                event.message ?: context.getString(R.string.error_unknown_no_detail),
+            )
+        // DownloadDone 不是文案事件：要发起 ACTION_VIEW（可能失败并转提示），见收集处。
+        is ItemDetailViewModel.UiEvent.DownloadDone -> null
     }
 
 /** 掩码星号数量上限（密码过长时截断显示，复制不受影响）。 */
@@ -179,6 +192,9 @@ private const val HIDDEN_MASK_MAX = 24
 /**
  * 详情区的复制动作集合。
  * 收敛成单个对象是为了把 [DetailBodyContent] 的参数数压到门禁线内（≤8）。
+ *
+ * [isDownloadingAttachment] 放这里而不是给 [DetailBodyContent]/[DetailSections]
+ * 再添一个参数（参数数会破门禁线）；对象本身在下载状态变化时重建（见调用处的 remember 键）。
  */
 private class DetailActions(
     val onCopyUsername: () -> Unit,
@@ -186,6 +202,9 @@ private class DetailActions(
     val onCopyUri: (String) -> Unit,
     val onCopyTotp: (String) -> Unit,
     val onCopyField: (String) -> Unit,
+    val onCopyHistoryPassword: (String) -> Unit,
+    val onDownloadAttachment: (VaultAttachment) -> Unit,
+    val isDownloadingAttachment: Boolean = false,
 )
 
 /** 详情内容区：忙碌转圈 / 缺失提示 / 分区卡片（独立以便控制主 Composable 圈复杂度）。 */
@@ -290,6 +309,9 @@ private fun DetailSections(
             Spacer(Modifier.height(Spacing.md))
             NotesSection(notes = item.notes)
         }
+        // 历史与附件放在备注之后、时间之前：都是"这条目还带了什么"的延伸信息，
+        // 但比创建/修改时间更值得被看到（时间放最后的理由见下方 2026-09-30 注释）。
+        HistoryAndAttachments(item = item, actions = actions)
         // 时间放**最后**（2026-09-30 用户要求）：它是"核对条目"时的次要信息，
         // 每次打开都看得到但不需要第一眼看到；放最前面会把登录字段挤下去。
         if (item.createdAt != null || item.updatedAt != null) {
@@ -412,6 +434,17 @@ fun ItemDetailScreen(
         viewModel.events.collect { event ->
             when (event) {
                 ItemDetailViewModel.UiEvent.Deleted -> onDeleted()
+                is ItemDetailViewModel.UiEvent.DownloadDone -> {
+                    val opened = runCatching {
+                        openDownloadedAttachment(context, event.fileUri, event.fileName)
+                    }.isSuccess
+                    if (!opened) {
+                        // 打不开（无应用认领该类型）≠ 下载失败：明文已经解密落盘了。
+                        snackbarHostState.showSnackbar(
+                            context.getString(R.string.attachment_downloaded_open_failed),
+                        )
+                    }
+                }
                 else -> {
                     val message = detailEventMessage(context, event)
                     if (!message.isNullOrBlank()) {
@@ -429,15 +462,18 @@ fun ItemDetailScreen(
         // 顶栏不再由 Scaffold 预留高度（沉浸式），状态栏内边距由顶栏自己处理。
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
     ) { padding ->
-        val actions = remember(viewModel) {
-            DetailActions(
-                onCopyUsername = viewModel::copyUsername,
-                onCopyPassword = viewModel::copyPassword,
-                onCopyUri = viewModel::copyUri,
-                onCopyTotp = viewModel::copyTotp,
-                onCopyField = viewModel::copyField,
-            )
-        }
+    val actions = remember(viewModel, state.downloadingAttachment) {
+        DetailActions(
+            onCopyUsername = viewModel::copyUsername,
+            onCopyPassword = viewModel::copyPassword,
+            onCopyUri = viewModel::copyUri,
+            onCopyTotp = viewModel::copyTotp,
+            onCopyField = viewModel::copyField,
+            onCopyHistoryPassword = viewModel::copyHistoryPassword,
+            onDownloadAttachment = viewModel::downloadAttachment,
+            isDownloadingAttachment = state.downloadingAttachment,
+        )
+    }
         // ⚠️ 2026-09-13 第二轮用户反馈：「密码详情页，标题距离上边还存在一些间隙不好看，
         // 排版和布局不好看，滑动的时候效果不好看。」
         // 根因：这里原本用 `LargeTopAppBar` —— 它在「动作行」和「大标题」之间自带一段
@@ -1146,6 +1182,241 @@ private fun launchAndroidApp(context: Context, packageName: String) {
         val intent = context.packageManager.getLaunchIntentForPackage(packageName)
         if (intent != null) context.startActivity(intent)
     }
+}
+
+/**
+ * 打开刚下载解密的附件（FileProvider 的 content:// URI）。
+ *
+ * MIME 按扩展名猜（服务端不提供类型）；猜不出给 `application/octet-stream`。
+ * 抛出的异常由调用方接住并转「已下载但没有能打开它的应用」提示 ——
+ * **不能吞成"失败"**：文件其实已经下载解密成功了。
+ */
+private fun openDownloadedAttachment(context: Context, uri: String, fileName: String) {
+    val ext = fileName.substringAfterLast('.', "").lowercase()
+    val mime = android.webkit.MimeTypeMap.getSingleton()
+        .getMimeTypeFromExtension(ext) ?: "application/octet-stream"
+    val intent = Intent(Intent.ACTION_VIEW).apply {
+        setDataAndType(android.net.Uri.parse(uri), mime)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    context.startActivity(intent)
+}
+
+/**
+ * 密码历史 + 附件两个分区（都放备注之后、时间之前）。
+ *
+ * 独立成函数：[DetailSections] 的圈复杂度已贴门禁线（≤14），
+ * 这两个"按有无渲染"的 `if` 挪出来刚好压回去。空则什么都不画。
+ */
+@Composable
+private fun HistoryAndAttachments(item: VaultItem, actions: DetailActions) {
+    if (item.passwordHistory.isNotEmpty()) {
+        Spacer(Modifier.height(Spacing.md))
+        PasswordHistorySection(
+            entries = item.passwordHistory,
+            onCopyHistoryPassword = actions.onCopyHistoryPassword,
+        )
+    }
+    if (item.attachments.isNotEmpty()) {
+        Spacer(Modifier.height(Spacing.md))
+        AttachmentsSection(
+            attachments = item.attachments,
+            downloading = actions.isDownloadingAttachment,
+            onDownload = actions.onDownloadAttachment,
+        )
+    }
+}
+
+/**
+ * 密码历史分区（只读）。
+ *
+ * 默认只显示前 [PASSWORD_HISTORY_PREVIEW_COUNT] 条：历史密码是"出问题才查"的信息
+ * （找回旧密码 / 核对改动），几十条全铺会把主字段挤出首屏。超过阈值给"展开"按钮。
+ *
+ * 每条默认**掩码显示**（与主密码同待遇——历史密码同样是能登录的活密码），
+ * 点眼睛逐条显隐；复制走 [PasswordHistoryRow] 的复制按钮（敏感剪贴板 + 自动清除）。
+ */
+private const val PASSWORD_HISTORY_PREVIEW_COUNT = 3
+
+@Composable
+private fun PasswordHistorySection(
+    entries: List<VaultPasswordHistoryEntry>,
+    onCopyHistoryPassword: (String) -> Unit,
+) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    Column {
+        SectionTitle(text = stringResource(R.string.section_password_history), icon = Icons.Filled.History)
+        DetailCard {
+            Column(modifier = Modifier.padding(vertical = Spacing.sm)) {
+                val shown = if (expanded) entries else entries.take(PASSWORD_HISTORY_PREVIEW_COUNT)
+                shown.forEachIndexed { index, entry ->
+                    if (index > 0) {
+                        HorizontalDivider(
+                            modifier = Modifier.padding(start = Spacing.lg),
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                        )
+                    }
+                    PasswordHistoryRow(entry = entry, onCopy = { onCopyHistoryPassword(entry.password) })
+                }
+                if (entries.size > PASSWORD_HISTORY_PREVIEW_COUNT) {
+                    TextButton(onClick = { expanded = !expanded }) {
+                        Text(
+                            text = if (expanded) {
+                                stringResource(R.string.password_history_collapse)
+                            } else {
+                                stringResource(R.string.password_history_expand, entries.size)
+                            },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 历史密码单行：时间在上、密码（可显隐）在下，右侧眼睛 + 复制。 */
+@Composable
+private fun PasswordHistoryRow(entry: VaultPasswordHistoryEntry, onCopy: () -> Unit) {
+    var revealed by remember(entry.password) { mutableStateOf(false) }
+    val lastUsedAt = entry.lastUsedAt
+    val timeLabel = if (lastUsedAt != null) {
+        // remember 住格式化结果：滚动重组很频繁，别每次都跑 DateTimeFormatter。
+        // （先取局部变量：跨模块属性在 lambda 里拿不到 smart cast。）
+        remember(lastUsedAt) { formatTimestamp(lastUsedAt) }
+    } else {
+        stringResource(R.string.password_history_unknown_time)
+    }
+    val masked = "•".repeat(entry.password.length.coerceAtMost(MAX_MASK_LENGTH))
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = Spacing.lg, end = Spacing.sm, top = Spacing.sm, bottom = Spacing.sm),
+    ) {
+        Column(modifier = Modifier.weight(1f).padding(end = Spacing.xs)) {
+            Text(
+                text = timeLabel,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = if (revealed) entry.password else masked,
+                style = MaterialTheme.typography.bodyLarge,
+                fontFamily = FontFamily.Monospace,
+                maxLines = MONOSPACE_MAX_LINES,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        IconButton(onClick = { revealed = !revealed }) {
+            Icon(
+                imageVector = if (revealed) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                contentDescription = null,
+                modifier = Modifier.size(UiSize.InlineIcon),
+            )
+        }
+        IconButton(onClick = onCopy) {
+            Icon(
+                Icons.Filled.ContentCopy,
+                contentDescription = stringResource(R.string.password_history_copy),
+                modifier = Modifier.size(UiSize.InlineIcon),
+            )
+        }
+    }
+}
+
+/**
+ * 附件分区。
+ *
+ * - Bitwarden 附件：显示文件名 / 大小，带「下载并打开」按钮 —— 下载期间
+ *   其它附件的按钮一并禁用（ViewModel 同一时刻只跑一个下载，避免大文件并发）。
+ * - KDBX 附件：只显示文件名 + 只读说明（kotpass 结构限制，见
+ *   [io.vaultix.model.VaultAttachment] 的 KDoc），不给按钮。
+ */
+@Composable
+private fun AttachmentsSection(
+    attachments: List<VaultAttachment>,
+    downloading: Boolean,
+    onDownload: (VaultAttachment) -> Unit,
+) {
+    Column {
+        SectionTitle(text = stringResource(R.string.section_attachments), icon = Icons.Filled.AttachFile)
+        DetailCard {
+            Column(modifier = Modifier.padding(vertical = Spacing.sm)) {
+                attachments.forEachIndexed { index, attachment ->
+                    if (index > 0) {
+                        HorizontalDivider(
+                            modifier = Modifier.padding(start = Spacing.lg),
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                        )
+                    }
+                    AttachmentRow(
+                        attachment = attachment,
+                        downloading = downloading,
+                        onDownload = { onDownload(attachment) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** 附件单行：文件名 + 大小；Bitwarden 来源带「下载并打开」按钮。 */
+@Composable
+private fun AttachmentRow(
+    attachment: VaultAttachment,
+    downloading: Boolean,
+    onDownload: () -> Unit,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = Spacing.lg, end = Spacing.sm, top = Spacing.sm, bottom = Spacing.sm),
+    ) {
+        Column(modifier = Modifier.weight(1f).padding(end = Spacing.xs)) {
+            Text(
+                text = attachment.fileName,
+                style = MaterialTheme.typography.bodyLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (attachment.source == VaultAttachmentSource.Kdbx) {
+                Text(
+                    text = stringResource(R.string.attachment_kdbx_readonly),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = UiSize.HairGap),
+                )
+            } else if (attachment.size > 0) {
+                Text(
+                    text = formatAttachmentSize(attachment.size),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = UiSize.HairGap),
+                )
+            }
+        }
+        if (attachment.source == VaultAttachmentSource.Bitwarden) {
+            IconButton(onClick = onDownload, enabled = !downloading) {
+                Icon(
+                    Icons.Filled.Download,
+                    contentDescription = stringResource(R.string.attachment_download),
+                    modifier = Modifier.size(UiSize.InlineIcon),
+                )
+            }
+        }
+    }
+}
+
+/** 字节换算基数：KB / MB（附件大小展示用）。 */
+private const val ATTACHMENT_SIZE_KB = 1 shl 10
+private const val ATTACHMENT_SIZE_MB = 1 shl 20
+
+/** 字节数 → 可读大小（B/KB/MB，向上取整到一位小数以内的整数）。 */
+private fun formatAttachmentSize(bytes: Long): String = when {
+    bytes >= ATTACHMENT_SIZE_MB -> "${bytes / ATTACHMENT_SIZE_MB} MB"
+    bytes >= ATTACHMENT_SIZE_KB -> "${bytes / ATTACHMENT_SIZE_KB} KB"
+    else -> "$bytes B"
 }
 
 /** 银行卡/SSH 等普通字段的「标签 + 值 + 复制」一行。monospace 用于密钥/卡号。 */

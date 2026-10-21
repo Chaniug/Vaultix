@@ -187,6 +187,18 @@ data class AttachmentDto(
 )
 
 /**
+ * 附件下载地址响应（`GET /ciphers/{id}/attachment/{attachmentId}`）。
+ *
+ * 官方服务器返回**短时效签名 URL**（Azure/AWS S3）；Vaultwarden 返回指向
+ * 自身的直链。`url` 为空 = 服务器不支持该端点（过老的 Vaultwarden）——
+ * 调用方按"附件不可下载"处理，**不要**回退去猜其它路径。
+ */
+@Serializable
+data class AttachmentDownloadResponse(
+    @SerialName("url") val url: String? = null,
+)
+
+/**
  * 创建 / 更新条目请求体。
  *
  * login/card/identity/secureNote/sshKey/fields 均为**可空保留段**：

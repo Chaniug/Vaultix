@@ -15,4 +15,10 @@
 -->
 <paths>
     <cache-path name="dev_logs" path="dev_logs/" />
+    <!--
+      附件下载目录（2026-10-21）：详情页附件「下载并打开」把解密后的明文写到
+      cacheDir/attachments/<itemId>/，经 FileProvider 换 content:// 发起 ACTION_VIEW。
+      同样只开这一个子目录，不暴露整个 cacheDir（理由同上）。
+    -->
+    <cache-path name="attachments" path="attachments/" />
 </paths>

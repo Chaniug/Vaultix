@@ -90,6 +90,8 @@ class ItemRepositoryImpl @Inject constructor(
      * 用户看到"保存成功、条目却没出现"）。**判据：读分流了，写就必须同时分流。**
      */
     private val kdbxItemWrites: KdbxItemRepository,
+    /** Bitwarden 附件下载编排（签名 URL 拉取 + 验 MAC + 解密，2026-10-21）。 */
+    private val attachmentDownloader: io.vaultix.data.bitwarden.attachment.BitwardenAttachmentDownloader,
     @CryptoDispatcher private val cryptoDispatcher: CoroutineDispatcher,
 ) : ItemRepository {
 
@@ -486,6 +488,31 @@ class ItemRepositoryImpl @Inject constructor(
         val item = loadItem(vaultId, itemId) ?: error("条目不存在：$itemId")
         val remaining = item.fido2Credentials.filter { it.credentialId != credentialId }
         updateFido2Credentials(vaultId, itemId, remaining).getOrThrow()
+    }
+
+    override suspend fun downloadAttachment(
+        vaultId: String,
+        itemId: String,
+        attachmentId: String,
+        sink: java.io.OutputStream,
+    ): Result<Long> = runCatching {
+        require(sessions.isUnlocked(vaultId)) { "库未解锁，无法下载附件：$vaultId" }
+        // KDBX 分流：结构限制（kotpass 未公开按 hash 取二进制的入口），诚实失败。
+        require(!isKdbx(vaultId)) { "KDBX 附件暂不支持导出" }
+        val row = vaultDao.get(vaultId)
+        val server = row?.origin
+            ?.takeIf { VaultKind.fromName(row.kind) == VaultKind.BITWARDEN }
+            ?: error("只有 Bitwarden 库支持联网下载附件")
+        val dto = cipherDao.get(itemId)?.encryptedPayload
+            ?.let { payload -> runCatching { json.decodeFromString<CipherDto>(payload) }.getOrNull() }
+            ?: error("条目不存在或密文无法解析：$itemId")
+        val accountKey = sessions.keyOf(vaultId) ?: error("库未解锁：$vaultId")
+        // 与字段解密同构的回退顺序：条目密钥优先 → 账号密钥。
+        val candidates = listOfNotNull(mapper.resolveItemKey(dto, accountKey), accountKey)
+        val wrappedKey = dto.attachments.firstOrNull { it.id == attachmentId }?.key
+        attachmentDownloader
+            .downloadTo(server, itemId, attachmentId, wrappedKey, candidates, sink)
+            .getOrThrow()
     }
 
     /**

@@ -132,6 +132,23 @@ interface ItemRepository {
         itemId: String,
         credentialId: String,
     ): Result<VaultSaveOutcome>
+
+    /**
+     * 下载并解密一个附件，明文写入 [sink]（**不关闭** —— 生命周期归调用方）。
+     *
+     * - Bitwarden 来源：签名 URL 下载（无鉴权 client）→ 解包附件密钥 →
+     *   先验 MAC、再解密（未认证内容一个字节都不会写进 [sink]）。
+     * - KDBX 来源：当前实现返回失败（kotpass 未暴露按 hash 取二进制的公开入口，
+     *   见 `KdbxItemMapper` 的说明），UI 侧不给下载入口。
+     *
+     * @return 成功时携带写出的明文字节数。
+     */
+    suspend fun downloadAttachment(
+        vaultId: String,
+        itemId: String,
+        attachmentId: String,
+        sink: java.io.OutputStream,
+    ): Result<Long>
 }
 
 /** 新建条目后的落点状态。 */

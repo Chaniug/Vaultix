@@ -32,6 +32,19 @@ data class KdbxMappedContent(
     val trashItems: List<KdbxTrashItem>,
     /** 分组路径 → uuid（阶段 B 写回时要用）。 */
     val groupPaths: Map<UUID, String>,
+    /**
+     * **库内二进制附件索引**：`hash(hex) → 名字`（2026-10-21）。
+     *
+     * ## 为什么只存"名字"不存字节
+     *
+     * 附件字节属于**整库**（`meta.binaries`），同一份内容挂在多个条目上只存一次；
+     * 而 `VaultItem` 是**每条一条**的视图。把字节塞进 `KdbxMappedContent` 意味着
+     * **每次读列表都要把库里所有附件读进内存** —— 一个 80MB 的库会直接把列表页拖垮。
+     *
+     * ⇒ 这里只留"有哪些 hash、各自叫什么"，字节在真正要导出时按 hash 现取
+     * （`Kdbx.binaryOf(vaultId, hash)`）。这也与 `VaultAttachment` 只承载元信息的约定一致。
+     */
+    val binaryNames: Map<String, String> = emptyMap(),
 )
 
 /**

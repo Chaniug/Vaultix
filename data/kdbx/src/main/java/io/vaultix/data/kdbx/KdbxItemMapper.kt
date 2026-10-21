@@ -30,6 +30,8 @@ import app.keemobile.kotpass.models.EntryValue
 import app.keemobile.kotpass.models.Group
 import app.keemobile.kotpass.models.Meta
 import io.vaultix.model.CustomFieldType
+import io.vaultix.model.VaultAttachment
+import io.vaultix.model.VaultAttachmentSource
 import io.vaultix.model.VaultFolder
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultCustomField
@@ -48,6 +50,10 @@ internal fun KeePassDatabase.toMappedContent(): KdbxMappedContent {
     val folders = mutableListOf<VaultFolder>()
     val groupPaths = mutableMapOf<UUID, String>()
     var recycleBinCount = 0
+    // 库内二进制：`meta.binaries` 是 `hash -> BinaryData`，名字不在这里 —— 名字挂在
+    // 条目的 `BinaryReference` 上（KDBX 4 按内容哈希去重，同名不同内容会是两条）。
+    // 这里收集"hash -> 名字"只为**展示**；字节在导出时按 hash 现取（见 Kdbx.binaryOf）。
+    val binaryNames = linkedMapOf<String, String>()
 
     fun walk(group: Group, parentPath: String, inRecycleBin: Boolean) {
         val isRoot = group.uuid == root.uuid
@@ -72,11 +78,11 @@ internal fun KeePassDatabase.toMappedContent(): KdbxMappedContent {
                 // ⚠️ 时间取 lastModificationTime —— KDBX 没有独立的删除时间，
                 //    详见 KdbxTrashItem 的 KDoc（**不许当成删除时间展示**）。
                 trash += KdbxTrashItem(
-                    item = entry.toVaultItem(folderId = folderId),
+                    item = entry.toVaultItem(folderId = folderId, binaryNames = binaryNames),
                     lastModifiedAtMillis = entry.times?.lastModificationTime?.toEpochMilli(),
                 )
             } else {
-                items += entry.toVaultItem(folderId = folderId)
+                items += entry.toVaultItem(folderId = folderId, binaryNames = binaryNames)
             }
         }
         group.groups.forEach { child -> walk(child, currentPath, nowInRecycleBin) }
@@ -89,6 +95,7 @@ internal fun KeePassDatabase.toMappedContent(): KdbxMappedContent {
         recycleBinCount = recycleBinCount,
         trashItems = trash,
         groupPaths = groupPaths,
+        binaryNames = binaryNames,
     )
 }
 
@@ -100,7 +107,10 @@ private fun isRecycleBin(group: Group, meta: Meta, recycleBinUuid: UUID?): Boole
 
 private val RECYCLE_BIN_NAMES = setOf("recyclebin", "recycle bin", "trash", "回收站")
 
-private fun Entry.toVaultItem(folderId: String?): VaultItem {
+private fun Entry.toVaultItem(
+    folderId: String?,
+    binaryNames: MutableMap<String, String> = mutableMapOf(),
+): VaultItem {
     // ⚠️ `fields.title` 等是 `EntryValue?`（不是 String）：取值必须过 `.content`
     // —— 它对受保护字段（Protected="True"）会自动解密，是 kotpass 提供的唯一明文入口。
     val title = fields.title?.content.orEmpty()
@@ -144,6 +154,32 @@ private fun Entry.toVaultItem(folderId: String?): VaultItem {
         //    用户要的"最近修改"= `lastModificationTime`。
         createdAt = times?.creationTime?.toEpochMilli(),
         updatedAt = times?.lastModificationTime?.toEpochMilli(),
+        // 2026-10-21 补入：附件元信息。此前 **整块没读** ⇒ 库里挂着附件的条目在界面上
+        // 完全看不出来（底层数据完好，只是没人展示），用户会以为"附件丢了"。
+        //
+        // ⚠️ **只做"可见"，暂不做"导出"** —— 不是偷懒，是 kotpass 0.13.0 的结构限制：
+        //    `Entry.binaries` 只是 `BinaryReference`（hash + name），字节在
+        //    `Meta.binaries` 里，而**那个属性是 `@PublishedApi internal`**（已用 javap
+        //    核对字节码），从模块外拿不到；`KeePassDatabase` 也没有任何公开的
+        //    "按 hash 取二进制"的扩展函数。⇒ 想导出只能反射，那在密码库里不可接受。
+        //    解锁路径见 `.ai/issues/05` 的对应条目（升级 kotpass / 上游加公开 API）。
+        // ⚠️ 名字优先取引用上的 `name`（KDBX 允许同一个二进制在不同条目上叫不同名字），
+        //    没有才回落到库里记的名字，再没有就给占位名 —— **不丢这一条**。
+        attachments = binaries.mapNotNull { ref ->
+            val hash = ref.hash.hex()
+            val name = ref.name?.takeIf { it.isNotBlank() }
+                ?: binaryNames[hash]
+                ?: KDBX_FALLBACK_ATTACHMENT_NAME
+            binaryNames[hash] = name
+            VaultAttachment(
+                id = hash,
+                fileName = name,
+                // ⚠️ 尺寸不在这里算：要拿到 `BinaryData.content` 就得解压/解密整份附件，
+                //    读列表时做这件事等于"打开库就把所有附件读一遍"。导出时再报真实大小。
+                size = 0L,
+                source = VaultAttachmentSource.Kdbx,
+            )
+        },
     )
 }
 
@@ -227,6 +263,14 @@ private fun EntryFields.secureNoteMarker(): Boolean? {
 }
 
 private const val DEFAULT_TITLE = "（未命名）"
+
+/**
+ * 附件名未知时的占位名。
+ *
+ * 为什么不直接跳过这条附件：`BinaryReference.name` 在 KDBX 规范里是**可选**的
+ * （早期 KeePass 只写 hash），但这些字节确实挂在条目上 —— 跳过就是"用户看不到自己的文件"。
+ */
+private const val KDBX_FALLBACK_ATTACHMENT_NAME = "（附件）"
 
 /**
  * 全部 URI（W4 读方向）：标准 `Url` + `VPX_URL_1..n` + 包名字段合回一个列表。

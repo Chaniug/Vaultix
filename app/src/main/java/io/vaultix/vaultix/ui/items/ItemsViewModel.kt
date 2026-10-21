@@ -38,8 +38,9 @@ import javax.inject.Inject
 /**
  * 条目列表（S7）。
  *
- * - 同步统一走 [BitwardenSyncOrchestrator]：进页 = PAGE_ENTER 静默同步（90s 节流），
- *   手动刷新 = MANUAL（force，跳节流），失败自动指数退避重试；
+ * - 同步统一走 [BitwardenSyncOrchestrator]：进页**不再自动同步**（2026-09-08 用户反馈，
+ *   见 `init` 末尾注释）；拉取走顶栏按钮 / 下拉刷新（MANUAL，force，失败自动指数退避重试），
+ *   本地修改随保存/删除 flush 推送；
  * - 提示条由 orchestrator 的 per-vault 状态派生：仅非静默结果（成功/跳过）与
  *   运行/错误展示；静默自动同步成功不打扰（Bastion 语义）；
  * - 新建走 [ItemRepository.createItem]：本地密文行 + dirty 队列 + 轻量推送。

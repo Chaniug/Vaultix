@@ -105,7 +105,93 @@ data class VaultItem(
      * ⇒ UI 遇到 null 是**不显示这一行**，而不是兜一个默认时间。
      */
     val updatedAt: Long? = null,
+    /**
+     * **密码历史**（Bitwarden `cipher.passwordHistory`，最新的在前由服务端决定，这里不排序）。
+     *
+     * ## 为什么必须承载（2026-10-21）
+     *
+     * `CipherDto.passwordHistory` 早就声明了，`CipherRequest.toStoredCipherDto` 也一直
+     * 费力地把它"顺延"回本地行 —— 但领域模型里没有这个字段 ⇒ **界面上永远看不到**，
+     * 用户改错密码时**没有退路**。Bitwarden 官方与 KeePassXC 都有，这是密码管理器的
+     * 基本兜底能力，不是锦上添花。
+     *
+     * ## 为什么是"[明文密码 + 时间]"而不是加密串
+     *
+     * 领域模型是**解密后**的统一视图（同一份数据在 KDBX 里本来就没有"历史密文"这个概念）。
+     * 把 EncString 泄漏到这一层，会让每个消费点都得自己再解一遍 —— 正是
+     * `uris`/`totp` 已经踩过的老路。解密统一收在 `CipherMapper`（见那边的说明）。
+     *
+     * ⚠️ 这是**只读**字段：写回时不由它产生任何请求体字段。服务端的历史由服务端在
+     * "密码真的变了"时自己追加，客户端回传历史反而会污染（详见 `CipherRequest` 那段注释）。
+     */
+    val passwordHistory: List<VaultPasswordHistoryEntry> = emptyList(),
+    /**
+     * **条目附件**（只读）。
+     *
+     * 两种库共用这一个字段、但**取得字节的方式不同**：
+     * - Bitwarden：这里只有元信息，字节要联网下载并解密（见 `AttachmentRepository`）；
+     * - KDBX：附件就在库文件里，字节可以从已解锁的会话直接取。
+     * ⇒ 所以本模型**只承载"[有哪几个附件] + [怎么取]"**，绝不承载字节本体：
+     *   把文件塞进 `VaultItem` 会让"列表里 50 条"变成"50 份文件常驻内存"。
+     */
+    val attachments: List<VaultAttachment> = emptyList(),
 )
+
+/**
+ * 一条密码历史（Bitwarden `cipher.passwordHistory[i]`；KDBX 无对应概念，恒为空）。
+ *
+ * [lastUsedAt] 是 epoch 毫秒，规则与 [VaultItem.createdAt] 完全一致（解析失败 → null，
+ * UI **不显示**这一行，而不是兜一个 1970）。
+ */
+@Serializable
+data class VaultPasswordHistoryEntry(
+    /** 旧密码明文。 */
+    val password: String,
+    /** 该密码停用的时间（epoch 毫秒；null = 服务端没给或解析失败）。 */
+    val lastUsedAt: Long? = null,
+)
+
+/**
+ * 条目附件**元信息**（不含字节）。
+ *
+ * ## 为什么 `id` 就是一切
+ *
+ * - Bitwarden：`id` 是服务端附件 id，下载路径 `/ciphers/{cipherId}/attachment/{id}`；
+ * - KDBX：`id` 是库内二进制的 **hash（十六进制）** —— KDBX 4 起附件按内容哈希去重，
+ *   同一个 hash 挂在多个条目上只存一份。
+ *
+ * ⇒ 两边的 `id` 语义不同，但**都足以唯一定位字节**，所以这里统一成"不透明 id"。
+ *   调用方不要对它做任何格式假设（不要 `UUID.fromString`，KDBX 的是哈希）。
+ */
+@Serializable
+data class VaultAttachment(
+    /** 不透明 id：Bitwarden 附件 id / KDBX 二进制 hash（hex）。 */
+    val id: String,
+    /** 文件名（解密后的明文）。 */
+    val fileName: String,
+    /** 字节数（**明文字节**数；未知 = 0）。 */
+    val size: Long = 0,
+    /** 来源，决定用哪条路去取字节。 */
+    val source: VaultAttachmentSource = VaultAttachmentSource.Bitwarden,
+    /**
+     * 附件独立密钥的**包裹态**（Bitwarden `attachments[i].key` 的 EncString 原文；
+     * null = 老附件直接用账号密钥加密）。
+     *
+     * 承载**密文**不是承载明文：EncString 本身就是加密结果，放进领域模型
+     * 不会扩大明文暴露面；而下载/解密时没有服务端往返就拿不到它，
+     * 必须随条目走。KDBX 来源恒为 null。
+     */
+    val wrappedKey: String? = null,
+)
+
+/** 附件的**取字节方式**（不是"是哪个库"，而是"该走哪条路"）。 */
+enum class VaultAttachmentSource {
+    /** 联网：先 GET 拿签名 URL，再下载，再用附件密钥解密。 */
+    Bitwarden,
+
+    /** 就在已解锁的 KDBX 会话里：按 hash 直接取明文字节。 */
+    Kdbx,
+}
 
 /**
  * 主密码二次验证开关（对齐 Bitwarden cipher.reprompt 0/1）。

@@ -1156,6 +1156,20 @@
     <string name="linked_password">密码</string>
     <string name="linked_uri">网址</string>
 
+    <!-- 密码历史（Bitwarden cipher.passwordHistory，2026-10-21） -->
+    <string name="section_password_history">密码历史</string>
+    <string name="password_history_unknown_time">时间未知</string>
+    <string name="password_history_expand">展开（共 %1$d 条）</string>
+    <string name="password_history_collapse">收起</string>
+    <string name="password_history_copy">复制这条历史密码</string>
+
+    <!-- 条目附件（Bitwarden 元信息 / KDBX 库内二进制，2026-10-21） -->
+    <string name="section_attachments">附件</string>
+    <string name="attachment_kdbx_readonly">附件存在这个密码库里，当前版本暂不支持导出</string>
+    <string name="attachment_download">下载并打开这个附件</string>
+    <string name="attachment_downloaded_open_failed">附件已下载，但没有能打开它的应用</string>
+    <string name="attachment_download_failed">附件下载失败：%1$s</string>
+
     <!-- 通用字段复制提示 -->
     <string name="copy_field">已复制</string>
     <string name="copy_field_clears">已复制（%1$d 秒后自动清除）</string>

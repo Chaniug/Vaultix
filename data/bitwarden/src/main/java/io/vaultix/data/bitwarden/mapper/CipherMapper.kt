@@ -22,12 +22,15 @@ import io.vaultix.data.bitwarden.model.SshKeyDto
 import io.vaultix.data.bitwarden.model.UriDto
 import io.vaultix.model.CustomFieldType
 import io.vaultix.model.UriMatch
+import io.vaultix.model.VaultAttachment
+import io.vaultix.model.VaultAttachmentSource
 import io.vaultix.model.VaultCard
 import io.vaultix.model.VaultCustomField
 import io.vaultix.model.VaultFido2Credential
 import io.vaultix.model.VaultIdentity
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
+import io.vaultix.model.VaultPasswordHistoryEntry
 import io.vaultix.model.VaultReprompt
 import io.vaultix.model.VaultSecureNote
 import io.vaultix.model.VaultSshKey
@@ -122,6 +125,30 @@ class CipherMapper @Inject constructor(
                 // 只是此前 DTO 没声明 `creationDate` ⇒ 静默丢弃；详见 `CipherDto.creationDate`。
                 createdAt = parseBitwardenInstant(dto.creationDate),
                 updatedAt = parseBitwardenInstant(dto.revisionDate),
+                // 2026-10-21 补入：密码历史。此前 DTO 有、请求体也一直"顺延"，
+                // 但领域模型没有这个字段 ⇒ 界面上永远看不到（改错密码就没有退路）。
+                passwordHistory = dto.passwordHistory.map { entry ->
+                    VaultPasswordHistoryEntry(
+                        password = decryptToString(entry.password, key, itemKey),
+                        lastUsedAt = parseBitwardenInstant(entry.lastUsedDate),
+                    )
+                }.filter { it.password.isNotEmpty() },
+                // 2026-10-21 补入：附件元信息（只读）。字节**不在**模型里承载
+                // —— 见 `VaultAttachment` 的说明（50 条 × N 份文件不能常驻内存）。
+                attachments = dto.attachments.map { attachment ->
+                    VaultAttachment(
+                        id = attachment.id,
+                        // ⚠️ 文件名解密失败**不丢这条附件**：宁可显示占位名，
+                        //    也不能让用户"以为附件没了"（id 仍可用于下载）。
+                        fileName = decryptToString(attachment.fileName, key, itemKey)
+                            .ifBlank { FALLBACK_ATTACHMENT_NAME },
+                        size = attachment.size,
+                        source = VaultAttachmentSource.Bitwarden,
+                        // 包裹态附件密钥（密文，非明文）：下载/解密时按「条目密钥 →
+                        // 账号密钥」的顺序尝试解包，与字段解密的回退顺序同构。
+                        wrappedKey = attachment.key,
+                    )
+                }.filter { it.id.isNotEmpty() },
             )
         } finally {
             itemKey?.clear()
@@ -412,8 +439,11 @@ class CipherMapper @Inject constructor(
     /**
      * 解包条目独立密钥；null = 该条目直接用账号密钥加密。
      * 解包失败也按 null 处理（回退账号密钥 + 空串兜底）。
+     *
+     * 公开（2026-10-21）：附件下载链路需要**同一把**条目密钥去解包
+     * `attachments[i].key` —— 判据只有 mapper 有一份，不能在下载器里再猜一遍。
      */
-    private fun resolveItemKey(dto: CipherDto, accountKey: SymmetricCryptoKey): SymmetricCryptoKey? {
+    fun resolveItemKey(dto: CipherDto, accountKey: SymmetricCryptoKey): SymmetricCryptoKey? {
         val wrapped = dto.key ?: return null
         return runCatching { crypto.decryptSymmetricKey(wrapped, accountKey) }.getOrNull()
     }
@@ -712,6 +742,13 @@ class CipherMapper @Inject constructor(
 
     private companion object {
         const val TYPE_LOGIN = 1
+        /**
+         * 附件文件名解不出来时的占位名。
+         *
+         * 为什么不直接把这条附件丢掉：附件**体积大、不常重建**，用户看到"附件少了一个"
+         * 会以为数据丢了；而 id 还在，下载路径仍然成立。占位名只是难看，丢一条是丢数据。
+         */
+        const val FALLBACK_ATTACHMENT_NAME = "（附件）"
         const val TYPE_SECURE_NOTE = 2
         const val TYPE_CARD = 3
         const val TYPE_IDENTITY = 4

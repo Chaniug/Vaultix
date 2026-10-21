@@ -40,6 +40,13 @@ dependencies {
     // KDBX 读写引擎（MIT，见 gradle/libs.versions.toml 的说明）
     implementation(libs.kotpass)
 
+    // okio 显式声明（2026-10-21）：KDBX 的附件引用 `BinaryReference.hash` 就是 `okio.ByteString`，
+    // 而 kotpass 只把它当**传递依赖**带进来 ⇒ 编译器够不到该类
+    // （报 `Cannot access class 'okio.ByteString'`）。
+    // ⚠️ 靠传递依赖还有第二个隐患：kotpass 升版换实现时 okio 版本会静默漂移。
+    //    与 `core:model` / `data:repository` 的做法一致，单列出来成对维护。
+    implementation(libs.okio)
+
     implementation(libs.kotlinx.coroutines.android)
 
     // 依赖注入
