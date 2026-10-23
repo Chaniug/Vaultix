@@ -101,6 +101,18 @@ class ItemDetailViewModel @Inject constructor(
 
     data class UiState(
         val item: VaultItem? = null,
+        /**
+         * 是否**已经收到过一次**条目流的发射（不论解出的是不是 null）。
+         *
+         * ⚠️ 2026-10-22（用户反馈：从条目列表点进详情时，闪过不到 1 帧的
+         * 「条目不存在或已被删除」）：`item == null` 有**两种**含义 ——
+         * "还没解出来"与"真的不存在"，而 [item] 的初始值就是 null ⇒ 两者在 UI 上
+         * 无法区分。窗口很窄（ViewModel 的新实例、订阅尚在建立、或库类型/密钥尚未就绪），
+         * 窄到只剩一两次重组 —— 但**恰恰是那一两帧**被用户看见了。
+         *
+         * 判据：**"未知"必须是一种显式状态，不能借用"空值"来表达**。
+         */
+        val itemLoaded: Boolean = false,
         val vaultName: String = "",
         /**
          * 所属库的服务器地址。
@@ -133,7 +145,9 @@ class ItemDetailViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             itemRepository.observeItem(vaultId, itemId).collect { item ->
-                _state.update { it.copy(item = item) }
+                // `itemLoaded` 一旦置真就不再回落：流重发（同步刷写 / 编辑后）时若短暂
+                // 解不出条目，应当继续显示上一次的内容，而不是把页面闪回"不存在"。
+                _state.update { it.copy(item = item, itemLoaded = true) }
             }
         }
         viewModelScope.launch {

@@ -34,6 +34,7 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.shareIn
 import kotlinx.serialization.json.Json
 import java.time.Instant
@@ -207,9 +208,27 @@ class ItemRepositoryImpl @Inject constructor(
                 }
             }
 
+    /**
+     * 单条目流（详情页）。
+     *
+     * ## ⚠️ 首帧不能是 null（2026-10-22，用户反馈「入页闪过 1 帧『条目不存在或已被删除』」）
+     *
+     * 这里的 `vaultDao.observeAll()` 是**上游的前置条件**（`flatMapLatest` 要先知道库类型）：
+     * Room 流本身要跑一次首次查询才发值，而在这之前**下游连 `cipherDao.observe()` 都不会订阅**。
+     * 详情页的 `UiState.item` 初始值是 null ⇒ 这段"还不知道"的窗口被当成"确认不存在"渲染。
+     *
+     * ⇒ 两个修法缺一不可：
+     * 1. **本方法**：`.onStart { emit(null) }` 让下游**立刻**开始订阅条目行流（真实数据先到，
+     *    库类型随后到达时 `kind == null` 与 Bitwarden 走同一条分支，不会多翻转一次）；
+     * 2. **消费方**：UI 必须能区分"还不知道"与"确认不存在"（见 `ItemDetailViewModel.UiState.itemLoaded`）。
+     *
+     * 为什么用 `onStart { emit(null) }` 而不是 `flowOf(null) + 真流`：后者多一次**真实解码**
+     * （整条 DTO 解密跑两遍），而前者只让订阅提前，不改变任何数据的来源。
+     */
     override fun observeItem(vaultId: String, itemId: String): Flow<VaultItem?> =
         vaultDao.observeAll()
             .map { vaults -> VaultKind.fromName(vaults.firstOrNull { it.id == vaultId }?.kind) }
+            .onStart { emit(null) }
             .distinctUntilChanged()
             .flatMapLatest { kind ->
                 if (kind == VaultKind.KDBX) {

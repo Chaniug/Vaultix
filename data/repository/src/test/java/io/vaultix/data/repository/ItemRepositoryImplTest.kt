@@ -32,7 +32,9 @@ import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
 import io.vaultix.model.VaultKind
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -470,6 +472,49 @@ class ItemRepositoryImplTest {
      * 2. ★ **走的是原子入口**：`atomicWriteDao` 被调用了，且行/队列入参**都在同一次调用里**
      *    —— 这才是"要么都成、要么都不成"的判据（见 [AtomicWriteBoundaryTest] 的真实回滚验证）。
      */
+    /**
+     * ★ 详情页**订阅到的第一个值**不能是 null（2026-10-22，用户反馈「入页闪过约 1 帧的
+     * 『条目不存在或已被删除』」）。
+     *
+     * 根因链：`VaultDao.observeAll()` 是 Room 流，**它自己先要跑一次查询才发首值**；
+     * 而 `observeItem` 把它当 `flatMapLatest` 的**前置** —— 上游未发射之前，下游连
+     * `cipherDao.observe()` 都不会订阅。详情页 `UiState.item` 初始就是 null ⇒ 这段
+     * "还不知道"的窗口被渲染成"确认不存在"。
+     *
+     * ⇒ 本用例：条目**明明存在**，但**库表流延迟 200ms 才发首值**（模拟 Room 首次查询
+     * 的耗时），首值必须仍是条目本身，不能是 null。
+     *
+     * ⚠️ 变异验证：撤掉 `observeItem` 里的 `.onStart { emit(null) }`（回到原样）时，
+     * 本用例首值拿到 null ⇒ 红。
+     */
+    @Test
+    fun observeItem_firstEmissionIsNeverNullOrBeforeVaultKindResolves() = runTest {
+        sessions.unlock(vaultId, key)
+        every { vaultDao.observeAll() } answers {
+            flow {
+                delay(200)
+                emit(listOf(bitwardenVaultRow()))
+            }
+        }
+        val target = "cipher-slow-1"
+        every { cipherDao.observe(target) } returns flowOf(
+            CipherEntity(
+                id = target,
+                vaultId = vaultId,
+                type = 1,
+                encryptedPayload = BitwardenJson.encodeToString(
+                    mapper.toRequest(plainItem(target), key).toStoredCipherDto(target, "rev"),
+                ),
+                revisionDate = "rev",
+                deletedDate = null,
+            ),
+        )
+
+        val first = repo.observeItem(vaultId, target).first()
+        assertNotNull("首值不能为 null（null 会被详情页画成『条目不存在』）", first)
+        assertEquals("GitHub", first?.title)
+    }
+
     @Test
     fun restoreItem_clearsDeletedDate_andEnqueuesRestore() = runTest {
         sessions.unlock(vaultId, key)

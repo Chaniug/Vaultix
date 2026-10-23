@@ -213,11 +213,19 @@ private class DetailActions(
     val organizationNameOf: (String) -> String? = { null },
 )
 
-/** 详情内容区：忙碌转圈 / 缺失提示 / 分区卡片（独立以便控制主 Composable 圈复杂度）。 */
+/**
+ * 详情内容区：忙碌转圈 / 缺失提示 / 分区卡片（独立以便控制主 Composable 圈复杂度）。
+ *
+ * ⚠️ [loading] 与 `item == null` 是**两件事**（2026-10-22）：前者 = "还不知道有没有"，
+ * 后者 = "确认没有"。两者同时成立时只能画转圈 —— 画"条目不存在"就是
+ * 用户点进条目时闪过的那一帧提示。
+ */
 @Composable
 private fun DetailBodyContent(
     modifier: Modifier,
     busy: Boolean,
+    /** 条目流是否已发射过（false = 还不知道有没有这条，见 `ItemDetailViewModel.UiState.itemLoaded`）。 */
+    loading: Boolean,
     item: VaultItem?,
     serverOrigin: String?,
     showPassword: Boolean,
@@ -227,6 +235,8 @@ private fun DetailBodyContent(
 ) {
     Box(modifier = modifier) {
         when {
+            // 加载中：画转圈而不是"不存在"（见本函数 KDoc）。
+            loading && item == null -> VaultixWavyProgress(modifier = Modifier.align(Alignment.Center))
             busy -> VaultixWavyProgress(modifier = Modifier.align(Alignment.Center))
             item == null -> Text(
                 text = stringResource(R.string.detail_missing),
@@ -493,6 +503,7 @@ fun ItemDetailScreen(
             DetailBodyContent(
                 modifier = Modifier.fillMaxSize(),
                 busy = state.saving || state.deleting,
+                loading = !state.itemLoaded,
                 item = item,
                 serverOrigin = state.serverOrigin,
                 showPassword = showPassword,
