@@ -153,6 +153,7 @@ class VaultixPreferences @Inject constructor(
         val ITEMS_GROUP_MODE = stringPreferencesKey("items_group_mode")
         val ITEMS_CARD_DISPLAY_MODE = stringPreferencesKey("items_card_display_mode")
         val ITEMS_SHOW_ICON = booleanPreferencesKey("items_show_icon")
+        val ITEMS_FILTER_JUMP_TO_TOP = booleanPreferencesKey("items_filter_jump_to_top")
 
         /**
          * 检查更新时，是否把「前往下载」的地址换成**国内加速镜像**（2026-09-28 用户要求）。
@@ -305,6 +306,22 @@ class VaultixPreferences @Inject constructor(
      */
     val itemsShowIcon: Flow<Boolean> =
         safeData.map { it[ITEMS_SHOW_ICON] ?: true }
+
+    /**
+     * 展开快捷筛选面板时，是否把列表**拉回顶端**（2026-10-24 用户反馈后的取向修正）。
+     *
+     * 背景：`#182` 为了让"往下滑之后点筛选"别往空白里展开，实现了"滚到顶端 + 外壳下移
+     * + 逐项反向补偿"。补偿做到了**可见内容一像素不跳**，但用户实测后的结论是
+     * **"会直接返回最上面，这样设定不友好"** —— 位置连续性 > 面板下方有没有内容可看。
+     *
+     * ⇒ 默认 **`false`**（**不**拉回顶端，保住滚动位置）。开关留给"我就想从顶部重新看"
+     * 的人，在「显示选项」浮层里。
+     *
+     * ⚠️ 关掉之后，往下滑再展开面板时顶栏之下仍是空白（那正是 #182 描述的"难看"）。
+     * 这个取舍**由用户选**，不是我们又猜了一次 —— 两边的诉求都真实，只是优先级不同。
+     */
+    val itemsFilterJumpToTop: Flow<Boolean> =
+        safeData.map { it[ITEMS_FILTER_JUMP_TO_TOP] ?: false }
 
     /**
      * 验证码页是否隐藏数字（**跨重启保持**；默认 `false` = 展开）。
@@ -612,6 +629,11 @@ class VaultixPreferences @Inject constructor(
     /** 条目卡片是否显示左侧图标。 */
     suspend fun setItemsShowIcon(enabled: Boolean) {
         dataStore.edit { it[ITEMS_SHOW_ICON] = enabled }
+    }
+
+    /** 展开快捷筛选面板时是否把列表拉回顶端（见 [itemsFilterJumpToTop]）。 */
+    suspend fun setItemsFilterJumpToTop(enabled: Boolean) {
+        dataStore.edit { it[ITEMS_FILTER_JUMP_TO_TOP] = enabled }
     }
 
     /**

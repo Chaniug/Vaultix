@@ -276,6 +276,23 @@ class ItemsViewModel @Inject constructor(
     }
 
     /**
+     * 展开快捷筛选面板时是否把列表拉回顶端（默认 **false** = 保住滚动位置）。
+     *
+     * 见 `VaultixPreferences.itemsFilterJumpToTop` 的 KDoc：`#182` 的"滚到顶端"实测后
+     * 被用户判定为"不友好"，因此改为**可选项**且默认关闭。
+     */
+    val filterJumpToTop: StateFlow<Boolean> = preferences.itemsFilterJumpToTop
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.Eagerly,
+            initialValue = false,
+        )
+
+    fun setFilterJumpToTop(enabled: Boolean) {
+        viewModelScope.launch { preferences.setItemsFilterJumpToTop(enabled) }
+    }
+
+    /**
      * 列表内「按住后滑动删除」：走**软删除**（进回收站，可恢复 / 也可在回收站永久删除）。
      *
      * 与详情页的删除同一路径（`ItemRepository.softDeleteItem`），不新增数据语义；

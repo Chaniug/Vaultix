@@ -36,6 +36,7 @@ import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Title
+import androidx.compose.material.icons.filled.VerticalAlignTop
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -74,10 +75,17 @@ fun DisplayOptionsSheet(
     groupMode: ItemsGroupMode,
     cardDisplayMode: ItemsCardDisplayMode,
     showIcon: Boolean?,
+    /**
+     * 展开快捷筛选面板时是否把列表拉回顶端（`#182` 的行为，2026-10-24 起**默认关闭**）。
+     *
+     * 同样**可空**：`null` = 偏好还没读出来 ⇒ 交给 [SettingsSwitch] 画占位，不猜状态。
+     */
+    filterJumpToTop: Boolean? = null,
     onDismiss: () -> Unit,
     onGroupMode: (ItemsGroupMode) -> Unit,
     onCardDisplayMode: (ItemsCardDisplayMode) -> Unit,
     onShowIcon: (Boolean) -> Unit,
+    onFilterJumpToTop: (Boolean) -> Unit = {},
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scope = rememberCoroutineScope()
@@ -154,6 +162,32 @@ fun DisplayOptionsSheet(
                 // ⚠️ 与设置页其它开关同款：数据未到达时不猜状态（见 SettingsSwitch KDoc）。
                 // showIcon 直接来自 StateFlow<Boolean?>，null = 偏好还没读出来。
                 SettingsSwitch(value = showIcon, onCheckedChange = onShowIcon)
+            }
+
+            OptionDivider()
+            // ⚠️ 2026-10-24：这一组是**列表滚动态**的偏好，不是"看的方式"（分组/密度/图标），
+            // 但它是同一个问题的另一半 —— 「点筛选之后列表该怎么办」。放在这里而不是设置页：
+            // 它只在**这个列表**上有意义（设置页是全局的，放那儿会让人以为影响所有页面）。
+            OptionGroupTitle(stringResource(R.string.items_filter_jump_to_top))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = Spacing.xl, vertical = Spacing.sm),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.VerticalAlignTop,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(22.dp),
+                )
+                Text(
+                    text = stringResource(R.string.items_filter_jump_to_top_desc),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f).padding(start = Spacing.lg),
+                )
+                SettingsSwitch(value = filterJumpToTop, onCheckedChange = onFilterJumpToTop)
             }
         }
     }

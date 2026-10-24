@@ -518,6 +518,20 @@ private fun rememberFilterBarCollapse(
  * 顶栏不会在切换时缩一下（2026-09-15 用户报的那个毛病不再出现），
  * 也就不需要再靠"冻结收起度"压着它。
  *
+ * ## ⚠️ 2026-10-24 当晚：这个行为**默认关闭**了（用户反馈）
+ *
+ * 用户原话：「现在往下滑动的时候，发现点击筛选，会直接返回最上面。这样设定不友好」。
+ * 补偿只保证"不跳"，没保证"不换位置" —— **位置连续性本身**才是用户的诉求：
+ * 他正看到第 30 条，点个筛选是为了在**这个上下文里**换一维，不是从头再看一遍。
+ *
+ * ⇒ 改成偏好项 [ItemsViewModel.filterJumpToTop]，默认 `false`（= 本函数整条不生效，
+ *   `holding` 恒为 false，`reveal` 恒为 0，回到 #182 之前的滚动行为）。
+ *   想要"展开即回到顶部"的人在「显示选项」里自己打开。
+ *
+ * ⚠️ 关掉之后的代价（如实记）：往下滑再展开面板时，顶栏之下仍是空白 —— 那正是 #182
+ *   想解决的"难看"。这是**用户选的取舍**，不是我们又替他猜了一次。
+ *
+ * @param jumpToTop 偏好开关（false = 完全不插手滚动位置）。
  * @return 终态是否为「列表顶端卡在面板下方」。调用方据此决定外壳要不要下移
  *   （见 [itemsFilterPanelReveal]）。
  */
@@ -526,13 +540,17 @@ private fun rememberListEdgeHolder(
     listState: LazyListState,
     panelExpanded: Boolean,
     filter: ItemsQuickFilter,
+    jumpToTop: Boolean,
 ): Boolean {
     var holding by remember { mutableStateOf(false) }
     // 当前卡点值：从状态里读会给组合期引入一次快照读（`firstVisibleItemScrollOffset`），
     // 滚一下重组一次；而本函数每帧的结果只取决于"第 ① 项 + 是否已展开"。
     val anchorPx = with(LocalDensity.current) { QUICK_FILTER_TOP_ANCHOR.toPx().roundToInt() }
-    LaunchedEffect(panelExpanded, filter) {
-        if (!panelExpanded) {
+    LaunchedEffect(panelExpanded, filter, jumpToTop) {
+        // 偏好关闭（默认）：**一个字节都不碰滚动位置** —— 不只是"不滚到卡点"，
+        // 连"切 chip 回第 0 项"也不做（那条规则属于 #182 配套的一部分，
+        // 用户要的是"保持原位"，不是"换一种方式回顶部"）。
+        if (!panelExpanded || !jumpToTop) {
             holding = false
             return@LaunchedEffect
         }
@@ -612,6 +630,7 @@ fun ItemsScreen(
     val groupMode by viewModel.groupMode.collectAsStateWithLifecycle()
     val cardDisplayMode by viewModel.cardDisplayMode.collectAsStateWithLifecycle()
     val showIcon by viewModel.showIcon.collectAsStateWithLifecycle()
+    val jumpToTop by viewModel.filterJumpToTop.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     var showCreateDialog by rememberSaveable { mutableStateOf(false) }
     var searchActive by rememberSaveable { mutableStateOf(false) }
@@ -627,10 +646,9 @@ fun ItemsScreen(
     // （2026-09-13 这一批加了「让位走 contentPadding」后曾到 152 行，靠压这行回到 147）。
     val filterRowInset = rememberQuickFilterRowInset(quickFiltersExpanded, organizations.isNotEmpty())
     val listTopInset = itemsTopInset(searchActive, barPadding, filterRowInset, state.syncNote != null)
-    // 2026-10-24：面板展开**且列表已滚离顶部**时，列表外壳下移一截并反向补偿滚动偏移 ——
-    // 让"往下滑之后再点筛选"能看见面板下方的列表顶端（见 [itemsShellTopInset]）。
-    // 列表本就在顶部时 reveal 恒为 0，整条路径与改动前完全一致。
-    val holdingEdge = rememberListEdgeHolder(listState, quickFiltersExpanded, state.quickFilter)
+    // 2026-10-24：面板展开**且列表已滚离顶部**时，外壳下移一截并反向补偿滚动偏移
+    // （见 [itemsShellTopInset]）。偏好默认关 ⇒ reveal 恒为 0，同改动前完全一致。
+    val holdingEdge = rememberListEdgeHolder(listState, quickFiltersExpanded, state.quickFilter, jumpToTop)
     val reveal = itemsFilterPanelReveal(quickFiltersExpanded, holdingEdge)
     val shellTopInset = itemsShellTopInset(searchActive, listTopInset, reveal)
     // 「这个库在哪 · 有多少条」（2026-09-30 用户要求）：在本层算一次，供 ⋮ 菜单卡片与
@@ -811,15 +829,18 @@ private fun ItemDisplayOptionsHost(
     val groupMode by viewModel.groupMode.collectAsStateWithLifecycle()
     val cardDisplayMode by viewModel.cardDisplayMode.collectAsStateWithLifecycle()
     val showIcon by viewModel.showIcon.collectAsStateWithLifecycle()
+    val filterJumpToTop by viewModel.filterJumpToTop.collectAsStateWithLifecycle()
     DisplayOptionsHost(
         visible = visible,
         groupMode = groupMode,
         cardDisplayMode = cardDisplayMode,
         showIcon = showIcon,
+        filterJumpToTop = filterJumpToTop,
         onDismiss = onDismiss,
         onGroupMode = viewModel::setGroupMode,
         onCardDisplayMode = viewModel::setCardDisplayMode,
         onShowIcon = viewModel::setShowIcon,
+        onFilterJumpToTop = viewModel::setFilterJumpToTop,
     )
 }
 
@@ -1059,20 +1080,25 @@ private fun DisplayOptionsHost(
     groupMode: ItemsGroupMode,
     cardDisplayMode: ItemsCardDisplayMode,
     showIcon: Boolean,
+    /** 展开筛选时是否把列表拉回顶端（默认关；见 [rememberListEdgeHolder] 的 KDoc）。 */
+    filterJumpToTop: Boolean = false,
     onDismiss: () -> Unit,
     onGroupMode: (ItemsGroupMode) -> Unit,
     onCardDisplayMode: (ItemsCardDisplayMode) -> Unit,
     onShowIcon: (Boolean) -> Unit,
+    onFilterJumpToTop: (Boolean) -> Unit = {},
 ) {
     if (!visible) return
     DisplayOptionsSheet(
         groupMode = groupMode,
         cardDisplayMode = cardDisplayMode,
         showIcon = showIcon,
+        filterJumpToTop = filterJumpToTop,
         onDismiss = onDismiss,
         onGroupMode = onGroupMode,
         onCardDisplayMode = onCardDisplayMode,
         onShowIcon = onShowIcon,
+        onFilterJumpToTop = onFilterJumpToTop,
     )
 }
 

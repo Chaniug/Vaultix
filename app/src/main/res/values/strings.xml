@@ -911,7 +911,10 @@
     <string name="items_display_title_username">仅标题 + 用户名</string>
     <string name="items_display_title_only">仅标题</string>
     <string name="items_show_icon">显示图标</string>
-    <string name="items_show_icon_desc">在条目左侧显示图标（首字母头像 / 品牌图标）</string>    <string name="items_group_none">不分组</string>
+    <string name="items_show_icon_desc">在条目左侧显示图标（首字母头像 / 品牌图标）</string>
+    <string name="items_filter_jump_to_top">展开筛选时回到列表顶部</string>
+    <string name="items_filter_jump_to_top_desc">展开分类筛选面板时，把列表拉回最上面（关闭则保持当前位置）</string>
+    <string name="items_group_none">不分组</string>
     <string name="items_group_type">按类型</string>
     <string name="items_group_folder">按文件夹</string>
     <string name="items_group_initial">按首字母</string>
