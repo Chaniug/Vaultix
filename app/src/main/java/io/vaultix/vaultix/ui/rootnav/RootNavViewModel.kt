@@ -35,6 +35,7 @@ package io.vaultix.vaultix.ui.rootnav
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import io.vaultix.datastore.OnboardingPreferences
 import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.domain.VaultRepository
 import io.vaultix.domain.VaultSessionRepository
@@ -42,6 +43,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /**
@@ -89,6 +91,7 @@ class RootNavViewModel @Inject constructor(
     vaultRepository: VaultRepository,
     sessionRepository: VaultSessionRepository,
     private val preferences: VaultixPreferences,
+    private val onboardingPreferences: OnboardingPreferences,
 ) : ViewModel() {
 
     /**
@@ -141,4 +144,49 @@ class RootNavViewModel @Inject constructor(
         started = SharingStarted.WhileSubscribed(5_000),
         initialValue = RootNavState.Splash,
     )
+
+    /**
+     * 是否要**先看引导**再进库列表（2026-10-24，#184）。
+     *
+     * ## 为什么放在这里而不是塞进 [RootNavState]
+     *
+     * [RootNavState] 的每个分支表达的都是一条**数据事实**（有没有库、锁没锁），
+     * 而"看过引导"是一条 **UI 记录**。混进去会让 `when` 的每个分支都要回答两个问题，
+     * 而这个 sealed 类的判定顺序已经被启动死锁那次的修复绑死了
+     * （见 [RootNavState.Splash] 的 KDoc）。
+     *
+     * ## 判定 = 「无库」且「没看过」
+     *
+     * 反过来单独用任何一半都不成立：
+     * - 只看"没看过" ⇒ 已有库的老用户（从旧版本升级上来、那个键根本不存在）
+     *   会被引导页拦一次，而他根本不需要；
+     * - 只看"无库" ⇒ 删光库的老用户每次都要重看一遍。
+     *
+     * ⚠️ **初值取 `false`**（= 不拦）：引导页晚出现一帧只是慢，而"闪一下引导页再被
+     * 收到主界面"会让用户以为点错了。宁可少拦，不可错拦 —— 想看的用户下次冷启动
+     * 仍会看到（键没被写，条件依然成立）。
+     */
+    val showOnboarding: StateFlow<Boolean> = combine(
+        vaultRepository.observeVaults(),
+        onboardingPreferences.onboardingSeen,
+    ) { vaults, seen ->
+        vaults.isEmpty() && !seen
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5_000),
+        initialValue = false,
+    )
+
+    /**
+     * 引导结束（看完最后一页 / 点跳过 / 第 3 页点了「去开启自动填充」）。
+     *
+     * 两者的区别只在**要不要顺手记下"自动填充已问过"**：
+     * 点了"去开启"说明这一步已经问过了，下次首启不必再提；跳过则没问过。
+     */
+    fun finishOnboarding(fillSetupAsked: Boolean = false) {
+        viewModelScope.launch {
+            onboardingPreferences.markOnboardingSeen()
+            if (fillSetupAsked) onboardingPreferences.markFillSetupPrompted()
+        }
+    }
 }

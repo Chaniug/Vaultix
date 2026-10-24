@@ -10,6 +10,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavGraphBuilder
@@ -24,6 +25,7 @@ import io.vaultix.vaultix.ui.addvault.AddVaultScreen
 import io.vaultix.vaultix.ui.detail.ItemDetailScreen
 import io.vaultix.vaultix.ui.items.ItemsScreen
 import io.vaultix.vaultix.ui.items.ItemsViewModel
+import io.vaultix.vaultix.ui.onboarding.OnboardingScreen
 import io.vaultix.vaultix.ui.passkeys.PasskeysScreen
 import io.vaultix.vaultix.ui.permissions.PermissionsScreen
 import io.vaultix.vaultix.ui.rootnav.RootNavState
@@ -45,6 +47,7 @@ import io.vaultix.vaultix.ui.trash.TrashScreen
 import io.vaultix.vaultix.ui.unlock.UnlockScreen
 import io.vaultix.vaultix.ui.unlock.UnlockViewModel
 import io.vaultix.vaultix.ui.vaultlist.VaultListScreen
+import io.vaultix.vaultix.util.SystemSettingsIntents
 import io.vaultix.vaultix.ui.common.VaultixWavyProgress
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
@@ -84,6 +87,8 @@ fun VaultixApp() {
     // Compose 无法直接注入进程级单例，用空壳 ViewModel 做依赖桥（活跃库真源）
     val shellBridge: MainShellViewModel = hiltViewModel()
     val rootNavState by rootNavViewModel.rootNavState.collectAsStateWithLifecycle()
+    // 是否要先看引导（无库 **且** 没看过）。见 `RootNavViewModel.showOnboarding`。
+    val showOnboarding by rootNavViewModel.showOnboarding.collectAsStateWithLifecycle()
     // 首帧是否已经落过路由：落过之后「已解锁」不再重复换栈（换栈会重建主界面、
     // 丢失 Tab 位置），只有「锁定」才强制收敛回解锁页。
     var routedOnce by rememberSaveable { mutableStateOf(false) }
@@ -103,8 +108,16 @@ fun VaultixApp() {
             // 会话密钥没被清，所以不必重登。
             is RootNavState.VaultLocked ->
                 navController.navigateToRoot(UnlockEntryRoute(vaultId = state.vaultId.orEmpty()))
-            // 首次使用（一个库都没有）→ 库列表引导添加
-            RootNavState.Onboarding -> navController.navigateToRoot(VaultListRoute)
+            // 首次使用（一个库都没有）→ 先看引导（若没看过），否则直接去库列表添加。
+            // ⚠️ 只有**真正的冷启动**才落引导：`routedOnce` 已为真时说明本次会话已经落过
+            // 某条路由，此时再因为"库被删光"而跳到引导会打断用户手上的操作
+            // （典型场景：在设置里删掉最后一个库）。删光库的老用户下次启动
+            // `onboarding_seen` 已是 true，本来也不会被拦。
+            RootNavState.Onboarding -> if (!routedOnce && showOnboarding) {
+                navController.navigateToRoot(OnboardingRoute)
+            } else {
+                navController.navigateToRoot(VaultListRoute)
+            }
             // 已解锁：仅在首帧落一次（对齐 Bastion「解锁即进主界面」）；
             // 解锁动作本身由 UnlockScreen 的 onUnlocked 负责跳转。
             RootNavState.VaultUnlockedGraph -> if (!routedOnce) {
@@ -212,6 +225,31 @@ private fun NavGraphBuilder.vaultEntryGraph(
     shellBridge: MainShellViewModel,
 ) {
     composable<SplashRoute> { SplashScreen() }
+    // 首次启动引导（3 页）。两条出口都写 onboarding_seen，然后落品牌空态页。
+    composable<OnboardingRoute> {
+        val appContext = LocalContext.current
+        // ⚠️ 这里取到的是**另一个** `RootNavViewModel` 实例：`hiltViewModel()` 默认按
+        // `NavBackStackEntry` 建，与 `VaultixApp` 顶层那个不是同一个对象。
+        // 这样安全，是因为本类**没有可变状态** —— 两个 Flow 都从 DataStore / 仓库派生，
+        // `finishOnboarding` 只是写 DataStore。写完之后**顶层那个实例**的 `showOnboarding`
+        // 会经由 `onboardingSeen` 变成 `false`，于是下次再落到 `Onboarding` 根状态时
+        // 走的是 `VaultListRoute` 那一支。
+        // （本函数是独立的 `NavGraphBuilder` 扩展，看不见外层 `VaultixApp` 的局部变量，
+        //   所以不能直接把顶层的 VM 传进来。）
+        val onboardingViewModel: RootNavViewModel = hiltViewModel()
+        OnboardingScreen(
+            onFinished = {
+                onboardingViewModel.finishOnboarding()
+                navController.navigateToRoot(VaultListRoute)
+            },
+            onOpenAutofillSettings = {
+                // 记下"这一步问过了"再跳系统页；**不结束引导本身** ——
+                // 用户可能只是去看看，回来还应该停在第三页（他可能想再读一遍）。
+                onboardingViewModel.finishOnboarding(fillSetupAsked = true)
+                SystemSettingsIntents.openAutofillSettings(appContext)
+            },
+        )
+    }
     // 解锁入口（根导航直达）：无参数版本，内部自动选中第一个已锁定的库。
     composable<UnlockEntryRoute> { entry ->
         val viewModel: UnlockViewModel = hiltViewModel(entry)

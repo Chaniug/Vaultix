@@ -37,6 +37,26 @@ data object MainShellRoute
 @Serializable
 data object SplashRoute
 
+/**
+ * **首次启动引导**（`Docs/08` §2 的 S2，3 页）。2026-10-24 新增。
+ *
+ * 落点由 [io.vaultix.vaultix.ui.rootnav.RootNavViewModel] 旁边的判断决定，
+ * 条件是 **「一个库都没有」且「没看过引导」**（`OnboardingPreferences.onboardingSeen`）：
+ *
+ * | 无库 | 看过 | 落点 |
+ * |---|---|---|
+ * | ✅ | ❌ | **本路由**（引导 3 页） |
+ * | ✅ | ✅ | [VaultListRoute]（品牌空态，老用户删光库的场景） |
+ * | ❌ | — | 与本路由无关 |
+ *
+ * ⚠️ 引导页**不是**根状态的第四个分支：`RootNavState.Onboarding` 的语义是
+ * "没有库可解锁"，而"要不要先看引导"是一个**偏好**，不是会话状态。
+ * 混进 `RootNavState` 会让那个 sealed 类同时表达"数据事实"与"UI 记录"两件事，
+ * 而它的判定链已经被 `Splash → VaultLocked → UnlockedGraph → Onboarding` 的顺序绑死了。
+ */
+@Serializable
+data object OnboardingRoute
+
 @Serializable
 data object AddVaultRoute
 

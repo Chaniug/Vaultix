@@ -2,8 +2,10 @@ package io.vaultix.vaultix.ui.rootnav
 
 import app.cash.turbine.test
 import com.google.common.truth.Truth.assertThat
+import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import io.vaultix.datastore.OnboardingPreferences
 import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.domain.VaultRepository
 import io.vaultix.domain.VaultSessionRepository
@@ -196,11 +198,14 @@ class RootNavViewModelTest {
         }
     }
 
+    /** 构造被测 ViewModel。`onboarding` 可传入以便对写入做 `coVerify`。 */
     private fun rootNavViewModel(
         vaults: List<VaultSummary>,
         unlockedIds: Set<String>,
         viewLockedIds: Set<String> = emptySet(),
         defaultVaultId: String? = null,
+        onboardingSeen: Boolean = false,
+        onboarding: OnboardingPreferences = mockk(relaxed = true),
     ): RootNavViewModel {
         val repository = mockk<VaultRepository>()
         every { repository.observeVaults() } returns flowOf(vaults)
@@ -209,7 +214,78 @@ class RootNavViewModelTest {
         every { sessions.observeViewLockedVaultIds() } returns flowOf(viewLockedIds)
         val preferences = mockk<VaultixPreferences>(relaxed = true)
         every { preferences.defaultVaultId } returns flowOf(defaultVaultId)
-        return RootNavViewModel(repository, sessions, preferences)
+        every { onboarding.onboardingSeen } returns flowOf(onboardingSeen)
+        return RootNavViewModel(repository, sessions, preferences, onboarding)
+    }
+
+    // ───────────────── 首次启动引导的准入判定（2026-10-24，#184）─────────────────
+    // 这四条钉的正是「无库」与「没看过」必须**同时**成立的语义。
+    // 任一条件写错都不会崩，只会让引导出现在不该出现的场景里 / 永远不出现。
+
+    @Test
+    fun onboardingShowsWhenNoVaultAndNeverSeen() = runTest {
+        val viewModel = rootNavViewModel(
+            vaults = emptyList(),
+            unlockedIds = emptySet(),
+            onboardingSeen = false,
+        )
+
+        viewModel.showOnboarding.test {
+            assertThat(awaitItem()).isTrue()
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun onboardingHiddenAfterSeenEvenWithoutVault() = runTest {
+        // 老用户把库删光了：同一个 Onboarding 根状态，但不该被再引导一遍
+        val viewModel = rootNavViewModel(
+            vaults = emptyList(),
+            unlockedIds = emptySet(),
+            onboardingSeen = true,
+        )
+
+        viewModel.showOnboarding.test {
+            assertThat(awaitItem()).isFalse()
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun onboardingHiddenForReturningUserWithVault() = runTest {
+        // 从旧版本升级上来的老用户：`onboarding_seen` 键根本不存在（读作 false），
+        // 但已有库 ⇒ 不能拦。
+        val viewModel = rootNavViewModel(
+            vaults = listOf(vaultSummary(id = "vault-1", unlocked = false)),
+            unlockedIds = emptySet(),
+            onboardingSeen = false,
+        )
+
+        viewModel.showOnboarding.test {
+            assertThat(awaitItem()).isFalse()
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun finishingOnboardingMarksSeenAndOnlyOptionallyFillSetup() = runTest {
+        val onboarding = mockk<OnboardingPreferences>(relaxed = true)
+        every { onboarding.onboardingSeen } returns flowOf(false)
+        val viewModel = rootNavViewModel(
+            vaults = emptyList(),
+            unlockedIds = emptySet(),
+            onboarding = onboarding,
+        )
+
+        // 「跳过」/ 看完：只记"看过了"，自动填充这一步**还没问**。
+        viewModel.finishOnboarding(fillSetupAsked = false)
+        coVerify(exactly = 1) { onboarding.markOnboardingSeen() }
+        coVerify(exactly = 0) { onboarding.markFillSetupPrompted() }
+
+        // 第 3 页点了「去开启自动填充」：两个都记。
+        viewModel.finishOnboarding(fillSetupAsked = true)
+        coVerify(exactly = 2) { onboarding.markOnboardingSeen() }
+        coVerify(exactly = 1) { onboarding.markFillSetupPrompted() }
     }
 
     private fun vaultSummary(id: String, unlocked: Boolean) = VaultSummary(

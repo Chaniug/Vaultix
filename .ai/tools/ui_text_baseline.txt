@@ -21,3 +21,6 @@ app/src/main/java/io/vaultix/vaultix/ui/totp/TotpCodesViewModel.kt	验证码	同
 
 # ---- 兜底显示名（会显示，但它是"数据缺失"的占位而不是文案）----
 app/src/main/java/io/vaultix/vaultix/ui/vaultlist/VaultListViewModel.kt	该密码库	取不到库名时给冲突对话框的占位名。它进 Dialog.KdbxConflict(vaultName=…)，与真实库名同列显示；换成资源会逼对话框分"真名 / 占位名"两条渲染路径，而两条必须长得一样，分开反而更容易漂移
+app/src/main/java/io/vaultix/vaultix/ui/onboarding/OnboardingPreview.kt	插画对照 · 浅 / 深	Compose Preview 的**预览名与分栏标注**，只出现在 IDE 设计预览面板里，永远不上屏；进 strings.xml 会白多一条永不使用的资源（翻译平台也会白翻）。同 ui/preview/ 的豁免理由
+app/src/main/java/io/vaultix/vaultix/ui/onboarding/OnboardingPreview.kt	浅色	同上：预览画布里给\"这一行是浅色主题\"打的标注，不是界面文案
+app/src/main/java/io/vaultix/vaultix/ui/onboarding/OnboardingPreview.kt	深色	同上：预览画布里给\"这一行是深色主题\"打的标注，不是界面文案

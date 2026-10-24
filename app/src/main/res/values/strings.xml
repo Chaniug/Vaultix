@@ -1518,4 +1518,22 @@
          而不是等跑完一趟必然失败的同步再甩一句"请先解锁该密码库"。 -->
     <string name="vault_result_sync_locked">「%1$s」已锁定，解锁后才能同步</string>
     <string name="vault_result_failed">「%1$s」操作失败：%2$s</string>
+    <!-- ══════════ 首次启动引导（3 页，Docs/08 §2 的 S2）2026-10-24 ══════════
+         只在「一个库都没有」且「没看过引导」时出现；看完或跳过都记 onboarding_seen。
+         文案纪律：说"它替你做什么"，不说"我们有多安全" —— 后者是空话，
+         用户对密码管理器的戒心不是靠形容词解的。 -->
+    <string name="onboarding_skip">跳过</string>
+    <string name="onboarding_start">开始使用</string>
+    <string name="onboarding_page_indicator">第 %1$d 页，共 %2$d 页</string>
+
+    <string name="onboarding_title_vault">你的密码，放在一个只有你打得开的地方</string>
+    <string name="onboarding_body_vault">条目在这台设备上加密保存，锁上以后谁也读不到 —— 包括不联网的离线分发。</string>
+
+    <string name="onboarding_title_two_vaults">云端和本地，两个库地位一样</string>
+    <string name="onboarding_body_two_vaults">接一个 Bitwarden 账号，或者打开电脑上现有的 KDBX 文件。两个都是主要入口，先接哪个都行，之后随时补另一个。</string>
+
+    <string name="onboarding_title_fill">让它替你在浏览器里填密码</string>
+    <string name="onboarding_body_fill">在系统设置里把 Vaultix 选为自动填充服务，之后登录网页就不用再翻 App 抄密码了。这一步现在可以跳过，之后在「设置 → 自动填充」里随时打开。</string>
+    <string name="onboarding_fill_setup">去开启自动填充</string>
+    <string name="onboarding_fill_setup_done">已前往系统设置，回来后可在此确认</string>
 </resources>
