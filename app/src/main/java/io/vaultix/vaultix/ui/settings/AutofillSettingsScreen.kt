@@ -44,7 +44,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -88,10 +87,11 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.autofill.shortcut.AutofillTileService
+import io.vaultix.vaultix.ui.theme.Spacing
 import io.vaultix.vaultix.ui.theme.UiSize
+import io.vaultix.vaultix.ui.theme.VaultixCorner
 import io.vaultix.vaultix.util.AutofillStatus
 import io.vaultix.vaultix.util.AutofillStatusChecker
-import io.vaultix.vaultix.ui.theme.Spacing
 
 /**
  * 自动填充二级设置页（设置首页「自动填充」入口进入，也是系统凭据设置的落地页）。
@@ -261,6 +261,13 @@ fun AutofillSettingsScreen(
  *
  * 「前往系统设置」按钮只在未出现「已启用」时出现：已启用时它与下方「系统自动填充」
  * 入口完全重复，语义上也和「已设为默认服务」冲突（Bastion 同处理）。
+ *
+ * ## 2026-10-24 圆角 28dp → [VaultixCorner.Panel]（16dp）
+ *
+ * 状态卡下面是 [SettingsGroupCard]（16dp），两者**同宽、同列、上下紧邻**。
+ * 外框用 28dp 时左右边缘齐了但**曲率不齐**，并置时会读成"两套规格"
+ * （`VaultixCorner` KDoc：28dp 只留给 M3 对话框，不进"面"的三档）。
+ * 权限管理页的 `PermissionStatusCard` 是同一个问题、同一次改的 —— 两页保持一致。
  */
 @Composable
 private fun AutofillStatusCard(
@@ -281,7 +288,7 @@ private fun AutofillStatusCard(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = Spacing.lg, vertical = Spacing.md),
-        shape = RoundedCornerShape(28.dp),
+        shape = VaultixCorner.Panel,
         colors = CardDefaults.cardColors(containerColor = container),
     ) {
         Column(
