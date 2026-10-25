@@ -39,6 +39,7 @@ import io.vaultix.datastore.VaultTimeout
 import io.vaultix.datastore.VaultTimeoutPreferences
 import io.vaultix.domain.UnlockResult
 import io.vaultix.domain.VaultRepository
+import io.vaultix.vaultix.util.VaultixClipboard
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -80,6 +81,8 @@ class VaultLockManagerImpl @Inject constructor(
     // ⚠️ 2026-09-29 二次定稿：`AutoUnlockRepository` 注入已移除 ——
     //   `Never` 档对齐 Bitwarden 后不再有「离场软锁」这个动作，
     //   本类也不再需要软锁的实现（保留会触发 detekt `UnusedPrivateMember`）。
+    /** 锁库时顺手清掉本应用放进剪贴板的敏感内容（#188）。 */
+    private val clipboard: VaultixClipboard,
 ) : VaultLockManager {
 
     // 进程级短任务 scope（启动/取消定时器）。项目当前唯一的调度器限定符是
@@ -221,10 +224,17 @@ class VaultLockManagerImpl @Inject constructor(
         context.registerReceiver(
             object : BroadcastReceiver() {
                 override fun onReceive(receiverContext: Context?, intent: Intent?) {
-                    onScreenOn()
+                    when (intent?.action) {
+                        Intent.ACTION_SCREEN_ON -> onScreenOn()
+                        Intent.ACTION_SCREEN_OFF -> onScreenOff()
+                        else -> Unit
+                    }
                 }
             },
-            IntentFilter(Intent.ACTION_SCREEN_ON),
+            IntentFilter().apply {
+                addAction(Intent.ACTION_SCREEN_ON)
+                addAction(Intent.ACTION_SCREEN_OFF)
+            },
         )
     }
 
@@ -360,6 +370,19 @@ class VaultLockManagerImpl @Inject constructor(
             // 所以这里的旧 job 会被正确取消，不会出现"新旧 job 同时到点锁两次"。
             handleTimeoutActionWithDelay(vaultId = vaultId, delayMs = remainingMs)
         }
+    }
+
+    /**
+     * 熄屏（`ACTION_SCREEN_OFF`）→ 按「已离开 App」起一次超时计时。
+     *
+     * 理由见接口 KDoc（#189）。**不是**"熄屏立即锁"：档位语义照旧
+     * （`Never` 不锁、`OnAppRestart` 不锁、`N 分钟` 起 N 分钟定时器）。
+     *
+     * 为什么复用 [onAppBackgrounded] 而不是另写一套：熄屏与切后台对"用户是否还在看屏幕"
+     * 是同一件事，判定分流必须一致 —— 两份实现迟早会走偏（这正是本文件反复出现的教训）。
+     */
+    override fun onScreenOff() {
+        onAppBackgrounded()
     }
 
     override fun onAppCreated(isFirstCreation: Boolean, createdForAutofill: Boolean) {
@@ -539,6 +562,12 @@ class VaultLockManagerImpl @Inject constructor(
     private fun setVaultToLocked(vaultId: String) {
         scope.launch {
             vaultRepository.lockVault(vaultId)
+            // ★ 锁库即清剪贴板（#188，2026-10-26）。
+            //   为什么挂在这里而不是"复制时排的那个定时器"：定时器依赖进程活着
+            //   且不被冻结，而**锁定是"用户已经离开"的唯一可靠信号** —— 它在
+            //   进程还活着时一定被调用一次。清的对象有校验（只清本应用标记过
+            //   IS_SENSITIVE 的那些），不会误伤用户自己复制的内容。
+            runCatching { clipboard.clearNow() }
             _vaultStateEventFlow.tryEmit(VaultStateEvent.Locked(vaultId))
         }
     }

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 11 及以下的备份规则（`.ai/ISSUES.md` #186，2026-10-26）。
+
+  ⚠️ 当前 `AndroidManifest.xml` 里 `android:allowBackup="false"`，本文件**不会**生效。
+  它存在的意义是「第二道防线」：将来若因为某种原因放开备份（或某个渠道强制开启），
+  下面的排除项会立刻接管，不需要重新推导一遍"哪些文件不能出门"。
+
+  排除范围与理由（真源见 `SecureCredentialStore` / `HouseKeyStore` / `DatabaseModule`）：
+
+  | 路径 | 里面是什么 | 为什么不能备份 |
+  | (表格) | (表格) | (表格) |
+  | `shared_prefs/vaultix_secure.xml` | 指纹/PIN/KEK 门锁信封、每库房间信封、WebDAV 账号密码、Bitwarden token | 信封由 Keystore 密钥包裹，而 Keystore **不参与备份**；恢复后是一份永远解不开的密文，且会让用户误以为"门锁还在" |
+  | `databases/vaultix.db` | 条目密文镜像 + 元数据/文件夹/同步计数 | 正文由主密码派生密钥加密，恢复后打不开；元数据（标题、条目 id）本身即敏感 |
+  | `files/` | 自动填充规则缓存等内部产物 | 无需迁移，重新生成即可 |
+  | `cache/` | 解密后的附件明文（`attachments/`）、日志导出（`dev_logs/`） | 备份**不会**搬 cache，这里显式写出来是为了防止将来有人改成 files |
+
+  `shared_pref` 的写法：Android 的备份规则把 `shared_prefs/<name>.xml` 映射为
+  `domain="sharedpref" path="<name>"`（**不带** `.xml` 后缀）。写错成 `vaultix_secure.xml`
+  会静默不匹配——这是最容易踩的坑，改的时候别加后缀。
+
+  注：XML 注释里**不能出现连续两个短横线**，所以上面的表格与正文一律用单个短横或全角破折号。
+-->
+<full-backup-content>
+    <exclude domain="sharedpref" path="vaultix_secure" />
+    <exclude domain="database" path="vaultix.db" />
+    <exclude domain="file" path="." />
+    <exclude domain="cache" path="." />
+</full-backup-content>

@@ -56,6 +56,7 @@ import io.vaultix.vaultix.autofill.engine.AutofillCredentialMapper
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.autofill.AutofillIntents
 import io.vaultix.vaultix.autofill.AutofillLogger
+import io.vaultix.vaultix.autofill.engine.RequestCodes
 import io.vaultix.vaultix.autofill.match.BitwardenLikeAutofillMatcher
 import io.vaultix.vaultix.autofill.match.UriMatcher
 import io.vaultix.vaultix.session.ActiveVaultStore
@@ -99,11 +100,14 @@ class CredentialProviderEntryBuilder @Inject constructor(
     private fun log(message: String) = AutofillLogger.d("CP $message")
 
     private companion object {
-        /** 解锁动作 PendingIntent 的 requestCode（与其它 PendingIntent 区分开）。 */
+        /**
+         * 解锁动作 PendingIntent 的 requestCode。
+         *
+         * ⚠️ 认领区间 `1 .. 7999`（见 [io.vaultix.vaultix.autofill.engine.RequestCodes]）：
+         * 该分配器从 8000 起发号，两者永不相交 —— 交点一旦出现，后果是
+         * 「CP 的解锁 pending」与「autofill 的某个条目 pending」互相改写 extras。
+         */
         const val REQUEST_UNLOCK_CP = 2101
-
-        /** 密码条目 PendingIntent 的 requestCode 基数（每条目 +index，避免互相覆盖）。 */
-        const val REQUEST_PASSWORD_CP_BASE = 2200
     }
     suspend fun buildGetResponse(request: BeginGetCredentialRequest): BeginGetCredentialResponse {
         val pkOptions = request.beginGetCredentialOptions.filterIsInstance<BeginGetPublicKeyCredentialOption>()
@@ -313,7 +317,10 @@ class CredentialProviderEntryBuilder @Inject constructor(
             .markUvPerformedIfNeeded()
         val pendingIntent = PendingIntent.getActivity(
             context,
-            REQUEST_PASSWORD_CP_BASE + item.id.hashCode(),
+            // ⚠️ 不能用 `item.id.hashCode()`（#187）：FLAG_UPDATE_CURRENT 下
+            // 「requestCode 相同 + filterEquals」会复用并**改写 extras** ⇒ 撞号时
+            // 用户点 A 条目却拿 B 条目的密码。改用进程内单调自增。
+            RequestCodes.next(),
             intent,
             PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
@@ -395,7 +402,8 @@ class CredentialProviderEntryBuilder @Inject constructor(
         ).markUvPerformedIfNeeded()
         val pendingIntent = PendingIntent.getActivity(
             context,
-            m.credential.credentialId.hashCode(),
+            // 同上（#187）：通行密钥候选也不能靠哈希撞号。
+            RequestCodes.next(),
             intent,
             PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )

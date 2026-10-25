@@ -37,6 +37,7 @@ import io.vaultix.vaultix.autofill.model.ParsedStructure
 import io.vaultix.vaultix.autofill.parser.AssistStructureParser
 import io.vaultix.vaultix.autofill.save.AutofillSaveInfo
 import io.vaultix.vaultix.autofill.save.AutofillSaveIntents
+import io.vaultix.vaultix.autofill.save.PendingSaveStore
 import io.vaultix.vaultix.session.ActiveVaultStore
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
@@ -76,6 +77,15 @@ class VaultixAutofillService : AutofillService() {
     /** 填充辅助规则（站点级选择器）；拉不到时行为等同没有它。 */
     @Inject
     lateinit var fillAssistRepository: FillAssistRepository
+
+    /**
+     * 「待确认保存」的明文暂存（#187）。
+     *
+     * ⚠️ 必须由 Service 持有并**在拉起界面前** stage：明文只在这一层与 ViewModel 之间流转，
+     * 中间那句 `startActivity` 只带一次性票据（见 `AutofillSaveIntents`）。
+     */
+    @Inject
+    lateinit var pendingSaveStore: PendingSaveStore
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var activeJob: Job? = null
@@ -145,25 +155,81 @@ class VaultixAutofillService : AutofillService() {
      * 保存要写密文，必须在解锁会话里进行，且要让用户确认存成什么名字。
      */
     override fun onSaveRequest(request: SaveRequest, callback: SaveCallback) {
-        val parsed = request.fillContexts.lastOrNull()?.structure?.let(AssistStructureParser::parse)
-        val webDomain = parsed?.webDomain ?: parsed?.fallbackWebDomain
-        val username = parsed?.fields?.firstOrNull { it.hint == FieldHint.USERNAME }?.value.orEmpty()
-        val password = parsed?.fields?.firstOrNull { it.hint == FieldHint.PASSWORD }?.value.orEmpty()
         // 先回执：框架不等我们，保存界面自己异步起。
         callback.onSuccess()
-        if (username.isBlank() && password.isBlank()) return
-        scope.launch {
-            if (!prefs.autofillSavePrompt.first()) return@launch
-            val intent = AutofillSaveIntents.create(
-                context = this@VaultixAutofillService,
-                packageName = parsed?.packageName,
-                webDomain = webDomain,
-                username = username,
-                password = password,
-            )
-            withContext(Dispatchers.Main) { startActivity(intent) }
-        }
+        scope.launch { handleSaveRequest(request) }
     }
+
+    /**
+     * 保存请求的实际处理（在 [scope] 里跑：要读偏好、要解析结构）。
+     *
+     * ⚠️ 2026-10-26 修了三处（`.ai/ISSUES.md` #187）：
+     *
+     * 1. **`parse` 必须带 `fillAssistRules`**。原写法是方法引用
+     *    `AssistStructureParser::parse`，于是 `fillAssistRules` 永远取默认的
+     *    `FillAssistRules.EMPTY` ⇒ 在填充时**认得出**字段的站点（靠站点选择器），
+     *    到了保存时**认不出**，用户看到"能填但不能存"。
+     * 2. **取字段不再"第一个是账号、第一个是密码"**。那种取法在真实页面上很容易抓到
+     *    搜索框 / 验证码框 / 隐藏输入，把错误的值存进库里（比不存更糟）。改为复用
+     *    `AutofillFillTargetPolicy.fillTargets` 的判定顺序，并跳过隐藏字段。
+     * 3. **明文不再进 Intent**：交给 [PendingSaveStore] 暂存，Intent 只带一次性票据。
+     */
+    private suspend fun handleSaveRequest(request: SaveRequest) {
+        val structure = request.fillContexts.lastOrNull()?.structure ?: return
+        if (!prefs.autofillSavePrompt.first()) return
+
+        val fillAssistEnabled = runCatching { prefs.fillAssistEnabled.first() }.getOrDefault(true)
+        val parsed = runCatching {
+            AssistStructureParser.parse(
+                structure = structure,
+                fillAssistRules = if (fillAssistEnabled) {
+                    fillAssistRepository.currentRules()
+                } else {
+                    FillAssistRules.EMPTY
+                },
+            )
+        }.getOrNull() ?: return
+
+        val username = saveValueOf(parsed, FieldHint.USERNAME)
+        val password = saveValueOf(parsed, FieldHint.PASSWORD)
+        if (username.isEmpty() && password.isEmpty()) {
+            AutofillLogger.d("saveRequest: 没有取到可保存的值，放弃")
+            return
+        }
+        val webDomain = parsed.webDomain ?: parsed.fallbackWebDomain
+        val token = pendingSaveStore.stage(
+            username = username,
+            password = password,
+            packageName = parsed.packageName,
+            webDomain = webDomain,
+        )
+        AutofillLogger.d(
+            "saveRequest pkg=${parsed.packageName} domain=$webDomain " +
+                "hasUser=${username.isNotEmpty()} hasPass=${password.isNotEmpty()}",
+        )
+        val intent = AutofillSaveIntents.create(
+            context = this@VaultixAutofillService,
+            packageName = parsed.packageName,
+            webDomain = webDomain,
+            token = token,
+        )
+        withContext(Dispatchers.Main) { startActivity(intent) }
+    }
+
+    /**
+     * 取某类语义字段的**可保存值**（隐藏字段与非输入值一律跳过）。
+     *
+     * 为什么不是「第一个匹配 hint 的字段」：真实登录页里 `USERNAME` 语义位常被
+     * 页头的搜索框占用（`AutofillFillTargetPolicy` 在填充侧专门处理这件事，
+     * 保存侧却漏了）。宁可让后一个真账号框胜出，也不要存进搜索词。
+     */
+    private fun saveValueOf(parsed: ParsedStructure, hint: FieldHint): String =
+        parsed.fields
+            .firstOrNull { field ->
+                field.hint == hint && field.isVisible && !field.value.isNullOrBlank()
+            }
+            ?.value
+            .orEmpty()
 
     override fun onDestroy() {
         activeJob?.cancel()
@@ -241,6 +307,12 @@ class VaultixAutofillService : AutofillService() {
                 ),
                 title = getString(R.string.autofill_unlock_title),
                 subtitle = getString(R.string.autofill_unlock_subtitle),
+                // ⚠️⚠️ **锁定态同样必须挂 SaveInfo**（#187，2026-10-26）。
+                // 之前这里漏了，而 `onSaveRequest` 的前提是 FillResponse 上挂着 SaveInfo ——
+                // ⇒ 用户「第一次在某站点登录」时库往往是锁着的（冷启动直接来浏览器），
+                //   于是这一路径**永远**不会收到保存提示，保存功能等于只对"已解锁用户"生效。
+                // 下面「无匹配」分支本来就挂了（那里还有一段解释），锁态分支是漏网的那个。
+                saveInfo = AutofillSaveInfo.build(parsed),
             )
         }
 

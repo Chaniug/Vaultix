@@ -246,6 +246,22 @@ class ItemDetailViewModel @Inject constructor(
         }
     }
 
+    /**
+     * 复制并上报结果。
+     *
+     * ⚠️ **网址不算敏感内容**（#188，2026-10-26）：
+     * 原来这里一律 `sensitive = true` + 自动清除，于是「复制网址」——
+     * 一个用户马上要粘到微信/浏览器地址栏的东西——被 30 秒后清掉了。
+     * 用户看到的现象是"提示说已复制，粘出来是空的"，而这条路径本身
+     * 连提示文案都写着"（30 秒后自动清除）"，等于让用户以为网址也是秘密。
+     *
+     * 判据：**清除是为了防止「离开设备的人拿到密码」**。网址本来就明文显示在屏幕上、
+     * 也存在于浏览器历史里，清它没有安全收益，只有"粘不上"的代价。
+     * 所以网址走 `sensitive = false` + `autoClearMs = 0`（不排清除任务、不打 IS_SENSITIVE）。
+     *
+     * 注意 `isUri` 参数仍然保留：它决定的是**提示文案**（"已复制网址"而非"已复制密码"），
+     * 两者是可正交的（网址的提示不带清除倒计时，正是因为这里不再自动清除）。
+     */
     private fun doCopy(
         text: String,
         isPassword: Boolean = false,
@@ -253,13 +269,15 @@ class ItemDetailViewModel @Inject constructor(
         isTotp: Boolean = false,
         isField: Boolean = false,
     ) {
+        val sensitive = !isUri
+        val clearMs = if (sensitive) clipboardClearMs else 0L
         runCatching {
-            clipboard.copy(text = text, sensitive = true, autoClearMs = clipboardClearMs)
+            clipboard.copy(text = text, sensitive = sensitive, autoClearMs = clearMs)
         }.onSuccess {
             _events.trySend(
                 UiEvent.CopyDone(
                     isPassword = isPassword,
-                    clearSeconds = if (clipboardClearMs > 0) clipboardClearMs / 1000 else 0,
+                    clearSeconds = if (clearMs > 0) clearMs / 1000 else 0,
                     isUri = isUri,
                     isTotp = isTotp,
                     isField = isField,

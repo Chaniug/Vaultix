@@ -1,6 +1,8 @@
 package io.vaultix.vaultix.ui.common
 
 import com.google.common.truth.Truth.assertThat
+import io.vaultix.model.CustomFieldType
+import io.vaultix.model.VaultCustomField
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
 import io.vaultix.model.VaultUri
@@ -60,6 +62,36 @@ class ItemFilterTest {
     @Test
     fun noMatchReturnsEmpty() {
         assertThat(ItemFilter.filter(items, "不存在的关键词")).isEmpty()
+    }
+
+    @Test
+    fun matchesNotes() {
+        // #191：识别信息常写在备注里（「建行 工资卡」），搜不到等于搜索坏了。
+        val card = VaultItem(id = "n", title = "银行卡", notes = "建行 工资卡，柜台办的")
+        assertThat(ItemFilter.matches(card, "工资")).isTrue()
+        assertThat(ItemFilter.matches(card, "工资卡")).isTrue()
+        assertThat(ItemFilter.matches(card, "中行")).isFalse()
+    }
+
+    @Test
+    fun matchesCustomFieldNameAndValue() {
+        val item = VaultItem(
+            id = "cf",
+            title = "公司 VPN",
+            customFields = listOf(
+                VaultCustomField(name = "工号", value = "A10293", type = CustomFieldType.Text),
+            ),
+        )
+        assertThat(ItemFilter.matches(item, "工号")).isTrue()
+        assertThat(ItemFilter.matches(item, "a10293")).isTrue()
+        assertThat(ItemFilter.matches(item, "A102")).isTrue()
+    }
+
+    @Test
+    fun passwordIsNotSearchable() {
+        // 有意为之：搜密码会让"输错一个字母"也命中，且结果截图会泄露密码。
+        val item = VaultItem(id = "p", title = "站点", password = "Tr0ub4dor")
+        assertThat(ItemFilter.matches(item, "Tr0ub4dor")).isFalse()
     }
 
     @Test

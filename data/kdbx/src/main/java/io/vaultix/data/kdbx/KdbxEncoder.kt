@@ -36,6 +36,14 @@ package io.vaultix.data.kdbx
 
 import app.keemobile.kotpass.database.KeePassDatabase
 import app.keemobile.kotpass.database.encode
+import io.vaultix.model.VaultCard
+import io.vaultix.model.VaultCustomField
+import io.vaultix.model.VaultFido2Credential
+import io.vaultix.model.VaultIdentity
+import io.vaultix.model.VaultPasswordHistoryEntry
+import io.vaultix.model.VaultSecureNote
+import io.vaultix.model.VaultSshKey
+import io.vaultix.model.VaultUri
 import java.io.ByteArrayOutputStream
 import java.security.MessageDigest
 
@@ -106,22 +114,159 @@ internal object KdbxEncoder {
         val trashed = content.trashItems.asSequence().map { it.item to true }
         (living + trashed).forEach { (item, inTrash) ->
             digest.update(if (inTrash) TRASHED_MARK else LIVING_MARK)
-            digest.update(item.id.toByteArray(Charsets.UTF_8))
-            digest.update(item.title.toByteArray(Charsets.UTF_8))
-            digest.update(item.username.toByteArray(Charsets.UTF_8))
-            digest.update(item.password.toByteArray(Charsets.UTF_8))
-            digest.update(item.notes.toByteArray(Charsets.UTF_8))
+            update(digest, item.id, item.title, item.username, item.password, item.notes)
             // ⚠️ 这里**刻意不 digest `updatedAt`**：见 KDoc「为什么不把 updatedAt 算进去」。
+            digest.update(item.type.name.toByteArray(Charsets.UTF_8))
+            digest.update(item.folderId.orEmpty().toByteArray(Charsets.UTF_8))
+            digest.update(if (item.favorite) FAVORITE_MARK else NOT_FAVORITE_MARK)
+            digest.update(item.reprompt.name.toByteArray(Charsets.UTF_8))
+            fingerprintUris(digest, item.uris)
+            digest.update(item.totp.orEmpty().toByteArray(Charsets.UTF_8))
+            fingerprintFido2(digest, item.fido2Credentials)
+            fingerprintCard(digest, item.card)
+            fingerprintSshKey(digest, item.sshKey)
+            fingerprintIdentity(digest, item.identity)
+            fingerprintCustomFields(digest, item.customFields)
+            fingerprintSecureNote(digest, item.secureNote)
+            fingerprintPasswordHistory(digest, item.passwordHistory)
         }
         content.folders.forEach { folder ->
             digest.update(folder.id.toByteArray(Charsets.UTF_8))
             digest.update(folder.name.toByteArray(Charsets.UTF_8))
         }
         digest.update(content.recycleBinCount.toString().toByteArray(Charsets.UTF_8))
+        // 附件的"有哪些、叫什么"也是内容：远端新增/删掉一个附件同样是内容变化。
+        // 按 hash 排序消除 Map 迭代顺序带来的不确定性（HashMap 顺序不保证稳定，
+        // 若直接按 entrySet 迭代，同一份内容可能算出不同指纹 = 假阳性）。
+        content.binaryNames.entries
+            .sortedBy { it.key }
+            .forEach { (hash, name) -> update(digest, hash, name) }
         return digest.digest().joinToString(separator = "") { byte -> "%02x".format(byte) }
+    }
+
+    /**
+     * 逐串喂入摘要，并在**每个字段之间**插入分隔符。
+     *
+     * ## 为什么必须有分隔符（无分隔符的摘要拼接是可构造的碰撞）
+     *
+     * 若直接连续 `digest.update("ab"); digest.update("c")` 与 `"a" + "bc"`，
+     * 字节流完全一样 ⇒ 两份**不同内容**算出同一个指纹 ⇒ 假阴性 ⇒ 放过一次覆盖。
+     * 这在真实数据上不是理论问题：标题 `"ab"` + 用户名 `"c"` 与标题 `"a"` + 用户名 `"bc"`
+     * 都是普通用户打得出来的组合。
+     *
+     * 用 `0x00`（不可能出现在这些字符串里 —— 它们来自 JSON/XML 解析，NUL 会被拒绝或转义）
+     * 作为域分隔，并**在每次 update 前后都写**，形成 `值值` 的形式。
+     */
+    private fun update(digest: MessageDigest, vararg values: String) {
+        values.forEach { value ->
+            digest.update(FIELD_SEPARATOR)
+            digest.update(value.toByteArray(Charsets.UTF_8))
+        }
+    }
+
+    /** 网址：`uri` + 匹配规则。规则不同 = 填充行为不同，必须算内容。 */
+    private fun fingerprintUris(digest: MessageDigest, uris: List<VaultUri>) {
+        digest.update(uris.size.toString().toByteArray(Charsets.UTF_8))
+        uris.forEach { uri ->
+            update(digest, uri.uri, uri.match?.name.orEmpty())
+        }
+    }
+
+    /** 通行密钥：全字段（凭证 id / RP / 用户名 / 公私钥 / 算法…）—— 少一个就可能漏掉一次改密钥。 */
+    private fun fingerprintFido2(digest: MessageDigest, items: List<VaultFido2Credential>) {
+        digest.update(items.size.toString().toByteArray(Charsets.UTF_8))
+        items.forEach { c ->
+            update(
+                digest,
+                c.credentialId,
+                c.rpId,
+                c.rpName,
+                c.userName,
+                c.userDisplayName,
+                c.userHandle.orEmpty(),
+                c.keyAlgorithm.orEmpty(),
+                c.creationDate.orEmpty(),
+                c.keyType.orEmpty(),
+                c.keyCurve.orEmpty(),
+                c.keyValue.orEmpty(),
+            )
+        }
+    }
+
+    private fun fingerprintCard(digest: MessageDigest, card: VaultCard?) {
+        digest.update(if (card == null) ABSENT_MARK else PRESENT_MARK)
+        card ?: return
+        update(
+            digest,
+            card.cardholderName,
+            card.brand,
+            card.number,
+            card.expMonth,
+            card.expYear,
+            card.code,
+        )
+    }
+
+    private fun fingerprintSshKey(digest: MessageDigest, sshKey: VaultSshKey?) {
+        digest.update(if (sshKey == null) ABSENT_MARK else PRESENT_MARK)
+        sshKey ?: return
+        update(digest, sshKey.privateKey, sshKey.publicKey, sshKey.keyFingerprint)
+    }
+
+    private fun fingerprintIdentity(digest: MessageDigest, identity: VaultIdentity?) {
+        digest.update(if (identity == null) ABSENT_MARK else PRESENT_MARK)
+        identity ?: return
+        // `toString()` 会按**声明顺序**枚举全部字段 —— 这正是我们要的"全字段"语义，
+        // 且将来给 VaultIdentity 加字段时这里自动跟上（不会像手写列表那样漏）。
+        update(digest, identity.toString())
+    }
+
+    private fun fingerprintCustomFields(digest: MessageDigest, fields: List<VaultCustomField>) {
+        digest.update(fields.size.toString().toByteArray(Charsets.UTF_8))
+        fields.forEach { field ->
+            update(
+                digest,
+                field.name,
+                field.value,
+                field.type.name,
+                field.linkedId?.toString().orEmpty(),
+            )
+        }
+    }
+
+    private fun fingerprintSecureNote(digest: MessageDigest, note: VaultSecureNote?) {
+        digest.update(if (note == null) ABSENT_MARK else PRESENT_MARK)
+        note ?: return
+        digest.update(note.type.toString().toByteArray(Charsets.UTF_8))
+    }
+
+    private fun fingerprintPasswordHistory(
+        digest: MessageDigest,
+        history: List<VaultPasswordHistoryEntry>,
+    ) {
+        digest.update(history.size.toString().toByteArray(Charsets.UTF_8))
+        history.forEach { entry ->
+            update(digest, entry.password, entry.lastUsedAt?.toString().orEmpty())
+        }
     }
 
     /** 在用 / 回收站标记：同一条目从"在用"挪进回收站，指纹也必须跟着变。 */
     private const val LIVING_MARK = 0.toByte()
     private const val TRASHED_MARK = 1.toByte()
+
+    /** 可选段存在性标记（card / sshKey / identity / secureNote 为 null 时也要参与摘要）。 */
+    private const val ABSENT_MARK = 0.toByte()
+    private const val PRESENT_MARK = 1.toByte()
+
+    /** 收藏标记。 */
+    private const val NOT_FAVORITE_MARK = 0.toByte()
+    private const val FAVORITE_MARK = 1.toByte()
+
+    /**
+     * 字段分隔符。
+     *
+     * ⚠️ 不是可选项：无分隔符的连续 `update` 让「标题 ab + 用户名 c」与
+     * 「标题 a + 用户名 bc」字节流相同 ⇒ 不同内容同指纹 ⇒ 假阴性。见 [update]。
+     */
+    private const val FIELD_SEPARATOR = 0.toByte()
 }

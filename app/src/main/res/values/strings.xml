@@ -444,6 +444,9 @@
     <string name="autofill_save_done">已保存到 Vaultix</string>
     <string name="autofill_save_updated">已更新密码</string>
     <string name="autofill_save_locked">请先解锁 Vaultix 再保存（锁定状态下无法写入密文）</string>
+    <!-- #187：保存请求的明文不再经 Intent 传递，只暂存在内存 60 秒；过期后不再重放。 -->
+    <string name="autofill_save_expired_title">这次保存已失效</string>
+    <string name="autofill_save_expired_body">为了不把密码留在系统里，待保存的凭据只在内存保留 60 秒。现在已经过期，请回到刚才的登录页重新提交一次。</string>
     <string name="setting_manual_fill_tile">快速填充磁贴</string>
     <string name="setting_manual_fill_tile_desc">在快捷设置（下拉通知栏）添加「快速填充」磁贴：选条目即复制密码，通知栏可接力复制用户名 / 验证码。不依赖输入法与无障碍</string>
     <string name="setting_manual_fill_tile_hint">请下拉通知栏 → 点「编辑」（铅笔图标）→ 把「快速填充」拖到可见区域。快捷设置的排列由系统管理，应用无法直接开关磁贴</string>
@@ -1047,7 +1050,9 @@
     <string name="item_remove_uri">删除此网址</string>
     <string name="item_open_uri">打开网址</string>
     <string name="copy_uri">已复制网址</string>
-    <string name="copy_uri_clears">已复制网址（%1$d 秒后自动清除）</string>
+    <!-- #188：网址不再按敏感内容自动清除（粘贴不上的代价 > 安全收益），
+         这条文案保留只为兼容旧路径的 getString(res, int) 调用形态，不要在 UI 上出现。 -->
+    <string name="copy_uri_clears">已复制网址</string>
     <string name="section_totp">2FA</string>
     <!-- 详情页头部摘要（一行概览：几条网址 / 有没有 2FA / 几个通行密钥） -->
     <string name="detail_summary_uris">%1$d 个网址</string>

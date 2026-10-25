@@ -10,6 +10,7 @@ import io.vaultix.datastore.VaultTimeoutPreferences
 import io.vaultix.domain.VaultRepository
 import io.vaultix.model.VaultKind
 import io.vaultix.model.VaultSummary
+import io.vaultix.vaultix.util.VaultixClipboard
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.job
@@ -158,6 +159,9 @@ class VaultLockManagerImplNeverTest {
             context = mockk<Context>(relaxed = true),
             vaultRepository = repository,
             vaultTimeoutPrefs = prefs,
+            // #188：锁库后会顺手清剪贴板。这个测试只关心"有没有锁"，
+            //  clipboard 传 relaxed mock（`clearNow()` 在 runCatching 里，不会影响断言）。
+            clipboard = mockk(relaxed = true),
         )
         // ★ 把后台调度器换成本测试的虚拟调度器 ⇒ 定时器与 init 收集全部走虚拟时间。
         //   ⚠️ 必须在 `runCurrent()` **之前**设：`scope` 是 `by lazy`-ish 的 getter，
@@ -222,12 +226,93 @@ class VaultLockManagerImplNeverTest {
     }
 
     /** 断言「任何形式的锁定都没发生」。 */
+    /**
+     * 同 [managerWithRepo]，另外把 clipboard mock 也交出来（#188 的断言需要它）。
+     *
+     * 为什么不直接把 clipboard 塞进 [managerWithRepo] 的返回值：绝大多数用例
+     * 不关心剪贴板，返回三元组会让每个调用点都要解构一个用不上的变量。
+     */
+    private fun TestScope.managerWithRepoAndClipboard(
+        timeout: VaultTimeout,
+    ): Triple<VaultLockManagerImpl, VaultRepository, VaultixClipboard> {
+        val prefs = mockk<VaultTimeoutPreferences>(relaxed = true)
+        every { prefs.vaultTimeout(any()) } returns flowOf(timeout)
+        val repository = mockk<VaultRepository>(relaxed = true)
+        every { repository.observeVaults() } returns flowOf(listOf(vault("vault-1")))
+        every { repository.observeUnlockedVaultIds() } returns flowOf(setOf("vault-1"))
+        val clipboard = mockk<VaultixClipboard>(relaxed = true)
+
+        val m = VaultLockManagerImpl(
+            context = mockk<Context>(relaxed = true),
+            vaultRepository = repository,
+            vaultTimeoutPrefs = prefs,
+            clipboard = clipboard,
+        )
+        m.testingIoDispatcher = StandardTestDispatcher(testScheduler)
+        m.startObservingVaults()
+        runCurrent()
+        return Triple(m, repository, clipboard)
+    }
+
     private fun assertNoLock(repository: VaultRepository) {
         coVerify(exactly = 0) { repository.lockVault(any()) }
         coVerify(exactly = 0) { repository.lockAll() }
     }
 
     // ---- Never 档：任何触发都不锁 ----
+
+    // ---- 熄屏（#189）与锁库清剪贴板（#188）----
+
+    @Test
+    fun `熄屏按离开处理_五分钟后锁定`() = runTest {
+        // #189：熄屏未必切后台（前台 Activity 熄屏时通常仍 resumed），
+        // 而锁定时器原来只在切后台时启动 ⇒ 熄屏 10 分钟再亮屏仍有整段窗口。
+        // 这里断言"熄屏 == 切后台"：起定时器、到点锁。
+        val (m, repository) = managerWithRepo(VaultTimeout.FiveMinutes)
+
+        m.onScreenOff()
+        // ⚠️ 用 `settle` 而不是只 `runCurrent()`：`onScreenOff` 内部是 `scope.launch`，
+        //    "读到档位 → 起定时器"要跳好几帧。挂上之后才能开始推时间。
+        settle(m)
+        // 差一毫秒：不能提前锁。
+        advanceTimeBy(VaultTimeout.FiveMinutes.vaultTimeoutInMinutes * 60_000L - 1)
+        runCurrent()
+        assertNoLock(repository)
+
+        // 补上最后一毫秒：必须锁。
+        advanceTimeBy(2)
+        advanceUntilIdle()
+        coVerify(exactly = 1) { repository.lockVault("vault-1") }
+    }
+
+    @Test
+    fun `熄屏_Never档仍不锁`() = runTest {
+        // 熄屏复用切后台的判定 ⇒ Never 档必须与切后台一致地"什么都不做"。
+        // 这条变红 = 有人把 onScreenOff 写成了"熄屏立即锁"，把那档作废了。
+        val (m, repository) = managerWithRepo(VaultTimeout.Never)
+
+        m.onScreenOff()
+        runCurrent()
+        advanceTimeBy(60 * 60 * 1000L)
+        advanceUntilIdle()
+
+        assertNoLock(repository)
+    }
+
+    @Test
+    fun `自动锁定后清空剪贴板`() = runTest {
+        // #188：定时清除在 Doze / 进程冻结下不可靠，锁定是"用户已离开"的可靠信号。
+        val (m, repository, clipboard) = managerWithRepoAndClipboard(VaultTimeout.FiveMinutes)
+
+        m.onAppBackgrounded()
+        settle(m)
+        advanceTimeBy(VaultTimeout.FiveMinutes.vaultTimeoutInMinutes * 60_000L + 1)
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { repository.lockVault("vault-1") }
+        // 锁定发生 → 必须清一次（且只清一次）。
+        io.mockk.verify(exactly = 1) { clipboard.clearNow() }
+    }
 
     @Test
     fun `Never档_切后台_绝不锁定`() = runTest {

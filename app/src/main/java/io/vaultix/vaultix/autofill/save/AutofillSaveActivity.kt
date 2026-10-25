@@ -136,6 +136,7 @@ private fun SaveScreen(
                 .clickable(onClick = { }),
         ) {
             when {
+                state.expired -> ExpiredBody(onDismiss = onDismiss)
                 state.loading || state.saving -> SavingBody()
                 state.locked -> LockedBody(onOpenVault = onOpenVault, onDismiss = onDismiss)
                 else -> SaveBody(
@@ -159,6 +160,25 @@ private fun SavingBody() {
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         VaultixWavyProgress()
+    }
+}
+
+@Composable
+private fun ExpiredBody(onDismiss: () -> Unit) {
+    Column(modifier = Modifier.padding(Spacing.xl)) {
+        Text(
+            text = stringResource(R.string.autofill_save_expired_title),
+            style = MaterialTheme.typography.titleMedium,
+        )
+        Text(
+            text = stringResource(R.string.autofill_save_expired_body),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = Spacing.sm),
+        )
+        TextButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth().padding(top = Spacing.md)) {
+            Text(text = stringResource(R.string.action_dismiss))
+        }
     }
 }
 

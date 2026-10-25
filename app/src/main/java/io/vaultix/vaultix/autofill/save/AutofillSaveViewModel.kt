@@ -34,6 +34,15 @@ import javax.inject.Inject
  *
  * 只在**已解锁**的库上工作：库锁定时不保存明文（不落盘、不排队），只提示用户先解锁
  * （加密密钥只在内存会话里，锁定时无法写密文）。
+ *
+ * ## ⚠️ 明文从哪来（#187，2026-10-26）
+ *
+ * **不再**从 `SavedStateHandle` 取。原来的写法把账号密码当 Intent extra 传进来，
+ * 而 `SavedStateHandle` 的内容会被 `onSaveInstanceState` 序列化进系统侧快照 ——
+ * 明文密码因此进了 /data/system。现在改成从 [PendingSaveStore] 按**一次性票据**取，
+ * 取到即从内存清空；`SavedStateHandle` 里只剩票据本身与非秘密的来源标记。
+ *
+ * 代价（有意接受）：进程被杀后暂存消失，界面会显示"信息已过期"而不是静默重放一份旧密码。
  */
 @HiltViewModel
 class AutofillSaveViewModel @Inject constructor(
@@ -42,12 +51,22 @@ class AutofillSaveViewModel @Inject constructor(
     private val vaultRepository: VaultRepository,
     private val itemRepository: ItemRepository,
     private val activeVaultStore: ActiveVaultStore,
+    pendingSaveStore: PendingSaveStore,
 ) : ViewModel() {
 
-    private val username: String = savedStateHandle[AutofillSaveIntents.EXTRA_USERNAME] ?: ""
-    private val password: String = savedStateHandle[AutofillSaveIntents.EXTRA_PASSWORD] ?: ""
-    private val packageName: String? = savedStateHandle[AutofillSaveIntents.EXTRA_PACKAGE]
-    private val webDomain: String? = savedStateHandle[AutofillSaveIntents.EXTRA_DOMAIN]
+    private val pending: PendingSave? =
+        pendingSaveStore.consume(savedStateHandle[AutofillSaveIntents.EXTRA_TOKEN])
+
+    private val username: String = pending?.username.orEmpty()
+    private val password: String = pending?.password.orEmpty()
+
+    /** 票据取不到（过期 / 进程被杀 / 重复取）⇒ 明文已经不存在，界面必须让用户重来。 */
+    private val expired: Boolean = pending == null
+
+    private val packageName: String? =
+        pending?.packageName ?: savedStateHandle[AutofillSaveIntents.EXTRA_PACKAGE]
+    private val webDomain: String? =
+        pending?.webDomain ?: savedStateHandle[AutofillSaveIntents.EXTRA_DOMAIN]
 
     private val uri = AutofillSaveMatcher.targetUri(webDomain, packageName)
     private val suggestedTitle = AutofillSaveMatcher.defaultTitle(
@@ -57,7 +76,16 @@ class AutofillSaveViewModel @Inject constructor(
     )
 
     private val _state = MutableStateFlow(
-        UiState(username = username, password = password, uri = uri, title = suggestedTitle),
+        UiState(
+            username = username,
+            password = password,
+            uri = uri,
+            title = suggestedTitle,
+            // 明文已过期时**不进主流程**：直接按「无法保存」渲染，避免出现一个
+            // 账号密码都空着的表单让用户误点保存。
+            loading = !expired,
+            expired = expired,
+        ),
     )
     val state: StateFlow<UiState> = _state.asStateFlow()
 
@@ -117,6 +145,7 @@ class AutofillSaveViewModel @Inject constructor(
 
     /** 库未解锁时引导解锁：密钥只在内存，锁定状态下无法写密文。 */
     private suspend fun resolveTarget() {
+        if (expired) return
         // ★ 保存目标 = **唯一活跃库**（迁移文档阶段 2）。历史行为是「任取一个已解锁库」
         // （`firstOrNull()`），多库并存时写进哪个全凭 Set 迭代顺序 → 用户感知为
         // 「保存重复 / 存了找不到」。活跃库解析为空时仍退化为单个已解锁库，不遍历全部。
@@ -169,6 +198,8 @@ class AutofillSaveViewModel @Inject constructor(
         val vaultName: String = "",
         val locked: Boolean = false,
         val loading: Boolean = true,
+        /** 一次性票据已失效（过期 / 进程被回收）⇒ 只能提示重来，不能落库。 */
+        val expired: Boolean = false,
         val saving: Boolean = false,
         val done: Boolean = false,
         val error: String? = null,

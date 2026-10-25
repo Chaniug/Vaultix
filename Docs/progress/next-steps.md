@@ -2,6 +2,53 @@
 
 ---
 
+## ✅ 与开源项目对标审计 → 七组修复（2026-10-26）· #186–#192
+
+用户：「与别的开源优秀项目进行对比，看看还有哪些功能缺失，或者不完善，有明显bug。修复这些漏洞」。
+做法：先跑**四维度只读审计**（备份与自动填充 / 锁与设置面 / 通行密钥与 KDBX / 安全加固与 CI），
+基准是 Bitwarden 官方 Android、Keyguard、KeePassDX、Keepass2Android、Monica、Bastion 快照，
+**再逐条落地**。本轮落地七组。
+
+| 编号 | 问题 | 修法 |
+|---|---|---|
+| #186 | `allowBackup` 默认 true ⇒ 锁库信封被云备份搬走，Keystore 不跟着走 ⇒ 新机上是一把「看着还在、打不开」的假锁 | `allowBackup="false"` + 两份排除规则（`dataExtractionRules` 与 `fullBackupContent`），四条路径在**两条通路**上都排 |
+| #187 | 自动填充保存链四处断裂：锁定态漏挂 `saveInfo`（首次锁态登录永不提示保存）／`parse(::…)` 丢实参 + 字段不跳隐藏与空值／`requestCode = id.hashCode()` 撞号（点第 2 行填第 1 条）／明文密码进 `Intent` | 补 `saveInfo`；显式传参 + `saveValueOf`；`RequestCodes.next()`（8000 起 CAS 自增）；`PendingSaveStore` 一次性票据 + 60s TTL + 「已过期」界面 |
+| #188 | 锁库不清剪贴板；复制网址被当敏感内容 30 秒后清空 | `clearNow()`（只在确认是自己放的才清）+ `sensitive = !isUri`；`clipboardScope` 改 `Default` |
+| #189 | 熄屏不保证 `onStop` ⇒ 自动锁定计时器不启动 | 监听 `ACTION_SCREEN_OFF` 复用 `onAppBackgrounded()` 分流 |
+| #190 | ① **409 被当「确定性失败」弃单** ⇒ 远端改动永久丢失；② **内容指纹只摘 5 个字段** ⇒ #185 那道防线在「改网址/改 TOTP/改卡片/改自定义字段/换文件夹」上**恒失效且静默** | ① `HTTP_CONFLICT` 从 4xx 集合剔除，409 走 `incrementRetry`；② 指纹扩为全字段 + `FIELD_SEPARATOR` + Map 按 hash 排序 + `ABSENT/PRESENT` |
+| #191 | 搜索只比标题/用户名/uri ⇒ 备注与自定义字段「看得见却搜不到」 | `matches` 补 `notes` + `customFields`；**明确不搜密码**并配反向测试 |
+| #192 | `pruneRemovedRows` 把「远端没返回分组」当「远端删了」⇒ 一次不完整响应能清空本地所有文件夹 | 空分组 + 待删 ≥3 时只报警不删 |
+
+**⚠️ 本轮三条最值得记住的判据**：
+1. **指纹漏字段 = 那道防线在该字段上恒为真，而且静默**（#190 ②）。审查时看着防线是有的，
+   比"没有防线"更难发现。所以要用**表驱动** `FIELD_MUTATORS`（21 字段逐个断言必变）钉住，
+   并写死纪律：给 `VaultItem` 加字段必须往表里加一条。
+2. **4xx ≠ 可以扔**（#190 ①）。401/408/409/429 都是「再试」类。
+3. **「远端没有」≠「远端删了」**（#192），批量删除必须有数量熔断且熔断在保守侧。
+
+**门禁**：编译 ✅ · detekt ✅ · `gradle test --offline --max-workers=1 --no-daemon`
+**170 套 / 1671 例 / 0 失败** ✅（本轮 +8 套 / +51 例）· 索引一致性脚本 ✅。
+
+**待真机验收**：
+① 锁态下在浏览器登录一个站点 → 解锁后应弹出「保存到 Vaultix」；
+② 密码列表点第 2 条 → 填进去的必须是第 2 条；
+③ 复制密码后锁库 → 到别处粘贴应为空；复制网址 → 30 秒后仍能粘；
+④ 设「离开 5 分钟锁定」→ 熄屏 6 分钟后点亮 → 应要求解锁；
+⑤ 两台设备制造一次 409（同一条两端同时改）→ 改动不应该消失。
+
+**审计里尚未落地的（下一批，按优先级）**：
+① **`release.yml:68,79` 写死 `gradle-version: 8.11.1`**（release 会用错版本编不过）；
+② 附件明文缓存 `cacheDir/attachments/<itemId>` 锁库不清；
+③ `keyAlgorithm` 常量 `"ECDSA"`（`PasskeyCreateActivity`）vs `"ES256"`（`KdbxPasskeyCodec`）不统一；
+④ `AutofillIntents` 带 TOTP 私钥 + `CredentialProviderEntryBuilder` 三处 `FLAG_MUTABLE`；
+⑤ 通行密钥候选不做 Origin 校验；⑥ PIN 熔断无冷却 + 忘记 PIN 绕过；
+⑦ 自动拉取零接线（`SyncTrigger.PAGE_ENTER/APP_RESUME/PERIODIC` 无人调用）；
+⑧ 导出丢密码历史/时间戳、`passwordRevisionDate` 从不更新、CSV 导入、文件夹 CRUD、
+passphrase UI、安全中心；⑨ `UpdateChecker` 走 `ghproxy.net` 且不校验 SHA-256；
+⑩ `KdbxRoundTrip.verify` 只比字段名不比值。
+
+---
+
 ## ✅ 写回基线：令牌对得上 ≠ 内容来源对得上（2026-10-25 晚）· #185
 
 源自上一轮盘点里"如果只能挑一件就做这件"的那一项（原本在

@@ -36,10 +36,28 @@
          主因就是这里的预览。别把它们回退。
          【若要保留预测式手感】改成 true 并配合 `PredictiveBackHandler` **自绘**预览
          （我们的转场是纯位移，自绘后就不会有缩放）。 -->
+    <!-- ⚠️⚠️ `android:allowBackup` 于 2026-10-26 由 true 改为 **false**（`.ai/ISSUES.md` #186）。
+         别改回 true。
+         【为什么】本应用的全部长寿命秘密都活在**应用私有目录**里：
+           - `shared_prefs/vaultix_secure.xml` —— 指纹门锁信封（`house_lock_fingerprint`）、
+             PIN 门锁信封（`house_lock_pin`）、KEK 信封（`house_lock_auto`）、每库房间信封
+             （`house_room::<vaultId>`）、WebDAV 账号密码（`webdav_credential::*`）；
+             这些**不能**随云备份离开设备。信封本身由 Keystore 密钥包裹，而 Keystore 密钥
+             不参与备份（`Auto Backup` 只搬文件、不搬 Keymaster blob），所以恢复起来是
+             "一份永远解不开的废纸"——用户换机后所有门锁无声失效，还多出一堆没法清理的残留。
+           - `databases/vaultix.db` —— 条目密文的本地镜像（正文已加密，但元数据、条目 id、
+             文件夹结构、同步计数都在）；
+           - `files/` —— 自动填充规则缓存等。
+         【为什么不是"只加排除规则"】`allowBackup=false` 同时关掉云备份与 D2D 迁移两条通路，
+         而密码管理器**没有**"备份出去能恢复"的正向收益（跨设备迁移走的是导出/云库那一套）。
+         代码层面保留 `backup_rules.xml` / `data_extraction_rules.xml` 作第二道防线：
+         将来若真要放开备份，那两个文件里已经写好的排除项会立刻生效，不用再想一遍。 -->
     <application
         android:name=".VaultixApplication"
-        android:allowBackup="true"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:enableOnBackInvokedCallback="false"
+        android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:supportsRtl="true"

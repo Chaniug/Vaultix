@@ -93,7 +93,10 @@ object AutofillDatasetFactory {
             entries = entries,
             category = suggestion.category,
         ),
-        requestCode = suggestion.id.hashCode(),
+        // ⚠️ 绝不能用 `suggestion.id.hashCode()`（#187）：PendingIntent 用
+        // FLAG_UPDATE_CURRENT 时「requestCode 相同 + filterEquals」就复用并改写 extras，
+        // 撞号会让用户点第 2 行却填进第 1 条的密码。详见 [RequestCodes]。
+        requestCode = RequestCodes.next(),
     )
 
     private fun copyTotpIntent(
@@ -112,7 +115,10 @@ object AutofillDatasetFactory {
             totpSecret = suggestion.totpSecret,
             category = suggestion.category,
         ),
-        requestCode = suggestion.id.hashCode(),
+        // ⚠️ 绝不能用 `suggestion.id.hashCode()`（#187）：PendingIntent 用
+        // FLAG_UPDATE_CURRENT 时「requestCode 相同 + filterEquals」就复用并改写 extras，
+        // 撞号会让用户点第 2 行却填进第 1 条的密码。详见 [RequestCodes]。
+        requestCode = RequestCodes.next(),
     )
 
     /**

@@ -172,6 +172,9 @@ class BitwardenSyncService @Inject constructor(
 
         val api = apiFactory.vault(server)
         var firstError: Throwable? = null
+        // 409 冲突计数（#190）：单独统计，用于把「用户改动没上去」说清楚，
+        // 而不是笼统地报"服务端返回 409"。
+        var conflicts = 0
         // ★「临时 id → 服务端 id」的改指表（2026-10-02 审计修复）。
         //
         //   为什么必须：**离线新建一条 → 顺手改一笔 → 联网** 是最日常的一条路径，
@@ -196,28 +199,19 @@ class BitwardenSyncService @Inject constructor(
                     pendingOpDao.remove(op.localId)
                 }
                 .onFailure { error ->
-                    if (error.isDefinitiveHttpFailure()) {
-                        // 4xx（408/429 除外）：目标在服务端已不存在或不可执行。
-                        // 永久弃单防毒丸卡死队列。
-                        //
-                        // ⚠️ 弃单后必须**立刻**处理本地行，否则会静默丢数据：
-                        // 队列一旦移除这条 op，紧接着的全量同步里它既不在服务端集合、
-                        // 也不在 pendingIds 中 ⇒ pruneRemovedRows 判定为「服务端已删除」
-                        // ⇒ 直接删掉本地行，用户看到的是「新建的条目凭空消失且无任何提示」。
-                        //   - OP_CREATE：服务端从未接受它（4xx 即拒绝），本地这行注定无法同步，
-                        //     立即删除并记日志，行为由「静默消失」变为「即刻、可追溯」；
-                        //   - 其余 op（UPDATE/DELETE 等）：本地行本身是用户数据，**不能删**，
-                        //     保留它会由正常全量同步按服务端版本覆盖收敛（此时服务端版本更权威）。
-                        if (op.op == OP_CREATE) {
-                            cipherDao.deleteByIds(listOf(op.cipherId))
-                        }
-                        pendingOpDao.remove(op.localId)
-                    } else {
-                        pendingOpDao.incrementRetry(op.localId)
-                        firstError = firstError ?: error
+                    // 留一条**带分支判定**的诊断：排查「改动为什么没上去」时，
+                    // 第一件事就是分清它走的是"弃单"还是"重试"。
+                    VaultixLog.w(TAG) {
+                        "flushPending op=${op.op} id=${op.cipherId} " +
+                            "code=${(error as? HttpException)?.code()} " +
+                            "definitive=${error.isDefinitiveHttpFailure()} " +
+                            "conflict=${error.isConflictHttpFailure()}"
                     }
+                    if (handleOperationFailure(effective, error)) conflicts++
+                    firstError = firstError ?: error
                 }
         }
+
         // ⚠️ 隐患 ③（2026-09-16 排查）：`retryCount` 此前**只写不读** —— 一条持续失败的
         //    条目会永远留在队列里，让 `flushPending` 永远返回 failure，用户只看到
         //    「永远有待推送」却不知卡在哪条、卡了多久。
@@ -226,6 +220,11 @@ class BitwardenSyncService @Inject constructor(
         //    （op 一旦离开队列，该行就不在 `pendingIds` 里 ⇒ 会被 `pruneRemovedRows`
         //    删掉、或被服务端旧版覆盖），那比"卡住"更坏。
         //    真要淘汰，得先加 `failed` 标记位（需数据库迁移）并明确 UI 怎么呈现，另行评估。
+        if (conflicts > 0) {
+            VaultixLog.w(TAG) {
+                "有 $conflicts 条改动在服务端存在更新版本（409），已保留在队列等待合并"
+            }
+        }
         val stuck = pendingOpDao.listByVault(vaultId).count { it.retryCount >= STUCK_RETRY_THRESHOLD }
         if (stuck > 0) {
             VaultixLog.w(TAG) {
@@ -233,6 +232,42 @@ class BitwardenSyncService @Inject constructor(
             }
         }
         return firstError?.let { Result.failure(it) } ?: Result.success(Unit)
+    }
+
+    /**
+     * 单条 op 推送失败后的处置（`flushPending` 的失败分支，拆出来压圈复杂度）。
+     *
+     * 三种处置，**判据与后果完全不对称** —— 改错任何一条都不会编译失败，只有测试抓得住
+     * （见 `BitwardenSyncPendingOpFailureTest`）：
+     *
+     * | 情形 | 处置 | 为什么 |
+     * |---|---|---|
+     * | 409 冲突（#190） | 保留在队列 + 累计重试 | 服务端有更新版本，拉一次再合并就能成功；弃单 = 用户改动静默消失 |
+     * | 其它 4xx（408/409/429 除外） | **弃单**，并按需处理本地行 | 再试也不会成功；留着毒丸会卡死整条队列 |
+     * | 5xx / 网络 / 其它 | 保留在队列 + 累计重试 | 一次抖动不该丢用户刚写的东西 |
+     *
+     * 弃单时**必须立刻**处理本地行，否则会静默丢数据：队列一旦移除这条 op，紧接着的
+     * 全量同步里它既不在服务端集合、也不在 `pendingIds` 中 ⇒ `pruneRemovedRows` 判定为
+     * 「服务端已删除」⇒ 直接删掉本地行，用户看到的是「新建的条目凭空消失且无任何提示」。
+     *   - OP_CREATE：服务端从未接受它（4xx 即拒绝），本地这行注定无法同步，立即删除并记日志，
+     *     行为由「静默消失」变为「即刻、可追溯」；
+     *   - 其余 op（UPDATE/DELETE 等）：本地行本身是用户数据，**不能删**，保留它会由
+     *     正常全量同步按服务端版本覆盖收敛（此时服务端版本更权威）。
+     *
+     * @return 本次失败是否属于 409 冲突（供调用方计数并区分提示文案）。
+     */
+    private suspend fun handleOperationFailure(op: PendingOpEntity, error: Throwable): Boolean {
+        if (error.isConflictHttpFailure()) {
+            pendingOpDao.incrementRetry(op.localId)
+            return true
+        }
+        if (error.isDefinitiveHttpFailure()) {
+            if (op.op == OP_CREATE) cipherDao.deleteByIds(listOf(op.cipherId))
+            pendingOpDao.remove(op.localId)
+            return false
+        }
+        pendingOpDao.incrementRetry(op.localId)
+        return false
     }
 
     /**
@@ -508,6 +543,20 @@ class BitwardenSyncService @Inject constructor(
         return merged.values.toList()
     }
 
+    /**
+     * 落库分组。
+     *
+     * ⚠️ **空列表时不能早退**（#192，2026-10-26）。
+     *
+     * 原写法 `if (folders.isEmpty()) return` 的后果是：当用户删掉**最后一个**分组后，
+     * 服务端返回 `folders = []`，这里直接返回 ⇒ 本地那行旧分组**永远留着**。
+     * 而 [pruneRemovedRows] 的分组段只在 `serverReportedOrgs` 为真时才执行 ——
+     * 两处条件各挡一半，合起来就是：**删掉的分组会"复活"**，并且是永久性的
+     * （下次同步依旧空列表、依旧早退）。
+     *
+     * 现在：空列表照常往下走（`upsertAll(emptyList())` 是 no-op），
+     * 由 [pruneRemovedRows] 负责把本地多余的行收敛掉。
+     */
     private suspend fun persistFolders(vaultId: String, folders: List<FolderDto>) {
         if (folders.isEmpty()) return
         folderDao.upsertAll(folders.map { dto -> dto.toEntity(vaultId) })
@@ -561,14 +610,42 @@ class BitwardenSyncService @Inject constructor(
             .map { row -> row.id }
             .filter { id -> id !in serverFolderIds }
         if (removedFolders.isNotEmpty()) {
-            VaultixLog.w(TAG) { "prune folder: 删除本地 ${removedFolders.size} 条（服务端 ${serverFolderIds.size} 条）" }
+            // ⚠️ 保护：**服务端一个分组都没有、本地却有一堆**时先别删（#192）。
+            //   正常情况（用户真在网页端删了分组）本地最多两三个，删了就删了；
+            //   而"服务端返回空分组数组"还有一种成因是**服务端/代理异常**，
+            //   与条目的 `EmptyVaultProtection` 是同一类风险 —— 条目的空库有保护，
+            //   分组却没有任何保护，属于同一张网上漏掉的洞。
+            //   判据取「本地 ≥ 阈值 且 服务端为 0」：此时只报警不删，等下一次同步确认
+            //   （与 `checkDeleteConfirmation` 的"再同步一次确认"同一思路）。
+            val looksLikeServerFault = serverFolderIds.isEmpty() &&
+                removedFolders.size >= FOLDER_PRUNE_SUSPECT_THRESHOLD
+            if (looksLikeServerFault) {
+                VaultixLog.w(TAG) {
+                    "prune folder BLOCKED: 服务端 0 个分组但本地有 ${removedFolders.size} 个，" +
+                        "疑似服务端异常，跳过本次删除（下次同步再确认）"
+                }
+                return
+            }
+            VaultixLog.w(TAG) {
+                "prune folder: 删除本地 ${removedFolders.size} 条（服务端 ${serverFolderIds.size} 条）"
+            }
             folderDao.deleteByIds(removedFolders)
         }
     }
 
-    /** 服务端确定性失败（目标不存在/不可执行）；408/429 属可重试不在此列。 */
+    /** 服务端确定性失败（目标不存在/不可执行）；408/429/409 属可重试不在此列。 */
     private fun Throwable.isDefinitiveHttpFailure(): Boolean = this is HttpException &&
         this.code() in DEFINITIVE_HTTP_CODES
+
+    /**
+     * 409 Conflict：服务端存在更新版本，**带最新 revisionDate 重试即可**。
+     *
+     * 它落在 4xx 区间里，但语义与 400/403/404 完全不同 —— 那几种是"再试也不会成功"，
+     * 409 是"现在不成功，但拉一次最新数据再合并就能成功"。把它混进
+     * [DEFINITIVE_HTTP_CODES] 会让用户**静默丢改动**（#190）。
+     */
+    private fun Throwable.isConflictHttpFailure(): Boolean = this is HttpException &&
+        this.code() == HTTP_CONFLICT
 
     private fun CipherDto.toEntity(vaultId: String) = CipherEntity(
         id = id,
@@ -620,9 +697,23 @@ class BitwardenSyncService @Inject constructor(
         const val OP_RESTORE = "RESTORE"
         const val HTTP_UNAUTHORIZED = 401
 
-        // 4xx 中 401（登录失效，须重新登录后重推）/408/429（可重试）除外，
+        /** 409 Conflict（#190）：可重试，不得弃单。 */
+        const val HTTP_CONFLICT = 409
+
+        /**
+         * 分组 prune 的"疑似服务端故障"阈值（#192）。
+         *
+         * 取 3 的依据：正常用户在网页端删分组是一次一个，本地"待收敛"的不会成批出现；
+         * 一次要删 3 个以上而服务端**一个都没返回**，更像是响应被截断/代理出错。
+         * 阈值取小了会把正常的批量清理也挡住（那会让用户反复看到"分组删不掉"），
+         * 取大了就失去保护意义 —— 3 是"一次清理动作的上限"这个量级。
+         */
+        const val FOLDER_PRUNE_SUSPECT_THRESHOLD = 3
+
+        // 4xx 中 401（登录失效，须重新登录后重推）/408/409/429（可重试）除外，
         // 其余视为确定性失败（@suppress MagicNumber：HTTP 状态码区间）
         @Suppress("MagicNumber")
-        private val DEFINITIVE_HTTP_CODES = (400..499).filter { it !in setOf(401, 408, 429) }
+        private val DEFINITIVE_HTTP_CODES =
+            (400..499).filter { it !in setOf(401, HTTP_CONFLICT, 408, 429) }
     }
 }

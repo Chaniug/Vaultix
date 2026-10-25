@@ -9,13 +9,13 @@
 
 | 分篇 | 主题 | 条数 |
 |---|---|---|
-| [01-构建与环境](./issues/01-构建与环境.md) | 工程 / 构建 / CI / 工具链 / 环境 | 52 |
-| [02-自动填充](./issues/02-自动填充.md) | 自动填充（AutofillService 链路） | 18 |
-| [03-通行密钥与凭据提供商](./issues/03-通行密钥与凭据提供商.md) | 通行密钥 / Credential Provider / 凭据回灌 | 18 |
-| [04-锁与解锁](./issues/04-锁与解锁.md) | 锁态模型 / 解锁 / 生物识别 / 密钥 | 12 |
-| [05-KDBX本地库](./issues/05-KDBX本地库.md) | KDBX 本地库 | 22 |
-| [06-界面与交互](./issues/06-界面与交互.md) | 界面 / 布局 / 交互动效 / 空态 / 图标 | 43 |
-| [07-数据与同步](./issues/07-数据与同步.md) | 数据模型 / 同步 / 会话 | 21 |
+| [01-构建与环境](./issues/01-构建与环境.md) | 工程 / 构建 / CI / 工具链 / 环境 | 53 |
+| [02-自动填充](./issues/02-自动填充.md) | 自动填充（AutofillService 链路） | 19 |
+| [03-通行密钥与凭据提供商](./issues/03-通行密钥与凭据提供商.md) | 通行密钥 / Credential Provider / 凭据回灌 | 19 |
+| [04-锁与解锁](./issues/04-锁与解锁.md) | 锁态模型 / 解锁 / 生物识别 / 密钥 | 14 |
+| [05-KDBX本地库](./issues/05-KDBX本地库.md) | KDBX 本地库 | 23 |
+| [06-界面与交互](./issues/06-界面与交互.md) | 界面 / 布局 / 交互动效 / 空态 / 图标 | 44 |
+| [07-数据与同步](./issues/07-数据与同步.md) | 数据模型 / 同步 / 会话 | 23 |
 
 > ✅ **2026-10-02 全息核对：七篇数字全部由「`## NN.` 实测」重数，非增量修订。**
 > 上一版此列 36/18/16/11/10/33/6 —— 与实测差 **12 / 0 / 1 / 0 / 4 / 4 / 13** 条。
@@ -37,7 +37,7 @@
 
 ## 编号 → 分篇
 
-### [01-构建与环境](./issues/01-构建与环境.md) — 工程 / 构建 / CI / 工具链 / 环境（52 条，缺 #3、#8、#15、#16、#20…：#3/15 归 04、#16 归 02、#20 归 06）
+### [01-构建与环境](./issues/01-构建与环境.md) — 工程 / 构建 / CI / 工具链 / 环境（53 条，缺 #3、#8、#15、#16、#20…：#3/15 归 04、#16 归 02、#20 归 06）
 
 | # | 标题 |
 |---|---|
@@ -93,6 +93,7 @@
 | 172 | 🔴 OneDrive 无基线写入 = **无条件覆盖**（`expectedVersion = null` 时一个条件头都不发）；且 `createUploadSession` 手拼 JSON **值漏引号** ⇒ 任何 > 2MiB 的库在 OneDrive 上**从来没存进去过**。解法：接口加独立参数 `failIfExists`（不靠 null 推断）+ OneDrive 补写后读回校验 + 请求体改 DTO。判据：**"实现方遵守契约"不能靠调用方自觉来兜**。附三个坑：`Uri.encode` 是 Android 桩方法（返回 null）、`runTest` 测不了真线程（改 `runBlocking`）、Hilt 不接受带默认值参数的 `@Inject constructor` |
 | 175 | 🔴 **`init { scope.launch { … collect … } }` 是单测随机假红的总闸**：①**构造期派发** —— `launch` 发生在构造期间，而 `testingIoDispatcher` 只能在构造后赋值 ⇒ 收集协程永久跑 `Dispatchers.Default`，虚拟时钟推不动；②**无界 `collect`** —— 永不结束，`runTest` 的 idle 判据被它搅乱 ⇒ **同一次构建里两条互斥断言同时红**（「不该锁」与「该锁」都红）、每次红的不同。判据：**互斥同时成立 ⇒ 先找无界协程，别调测试时序**。解法：启动从 `init` 移出（`VaultLockManagerImpl.startObservingVaults()` / `AutoLockController.startCollecting()`，均幂等，生产在 `VaultixApplication.onCreate` 调）。🔴 两条不通的路：`scope` 改 getter（`init` 构造期就取走了）、自定义 `CoroutineDispatcher` 包装（`delay` **永不恢复**：`timer started` 5 次 / `fired` 0 次）。虚拟时钟三条规则：`settle()` 建定时器不推钟 → `advanceTimeBy(N-1)`+`runCurrent()` 断「不该锁」→ `advanceTimeBy(N)`+`advanceUntilIdle()` 断「会锁」；**`advanceUntilIdle` 不能用来表达「时间过去了多少」** |
 | 176 | 🔴 **`StandardTestDispatcher` 跑测试任务时**不恢复拦截器** ⇒ 跨 `withContext(io)` 的续体照样踩 `Dispatchers.Main`**。#174 把 `io` 换成虚拟调度器只解决「时钟推得动」，**不解决「续体跳不跳线程」**——`StandardTestDispatcher.dispatch` 只把任务排进 `TestCoroutineScheduler`，跑任务时不恢复 `ContinuationInterceptor` ⇒ `withContext` 的续体恢复时上下文里既没拦截器也没 `Dispatchers.Main` ⇒ `TestMainDispatcher.isDispatchNeeded` 炸（堆栈 `DispatchedCoroutine.afterResume` ← `Dispatchers.IO` 的真线程 worker）。CI `39139391458` 上 `promptCarriesTheFilteredCandidateVaults` 复现，**本地全绿**。解法：第二个覆写口 `testingBlockableIoDispatcher`（语义是**拦截**不是替换）+ `ioContext`，测试传一个**非** `TestDispatcher` 子类的 `StandardTestDispatcher` ⇒ 不被 `runTest` 收编 ⇒ 内联执行且不改上下文。⚠️ 判据：**变量是时间（`advanceTimeBy`）还是线程（续体拦截）**，两者必须分开处理。 |
+| 186 | 🔴 `allowBackup` 默认 true ⇒ `shared_prefs/vaultix_secure.xml`（门锁 / KEK / 房间信封、WebDAV 凭据、Bitwarden token）被云备份与 device-transfer 搬走，而解封它的 **Keystore 密钥不参与备份** ⇒ 新机上一把「看着还在、实际打不开」的假锁。修法 = `allowBackup="false"` + **两份**规则资源（API 31+ 的 `dataExtractionRules` 与 API 30- 的 `fullBackupContent`，**保险丝**：将来谁改回 true 也搬不走） |<br>⚠️ `data_extraction_rules.xml` 的 `<cloud-backup>` 与 `<device-transfer>` **两段都要排**（换机迁移走后者）。<br>⚠️ `sharedpref` 的 `path` **不带 `.xml`**，写了会**静默不匹配**。<br>⚠️ XML 注释里不能出现连续两个短横线；`<exclude` 别跨行写（单测按字符串断言）。<br>判据：**加密材料与解密密钥分开存放时，备份策略按后者决定** |
 
 ### [02-自动填充](./issues/02-自动填充.md) — 自动填充（AutofillService 链路）
 
@@ -116,6 +117,7 @@
 | 90 | `noHistory="true"` 打断「解锁即回填」—— #82 的**第三个**入口（照抄 Bitwarden 配置的陷阱） |
 | 113 | 容器重定向缺失 + 逐字段站点用全局单值 —— 「偶尔不弹条目 / 偶尔提示无匹配」的结构性根因 |
 | 114 | 一个 `firstOrNull()` 假设同时污染「匹配」与「填充」两侧 |
+| 187 | 🔴 自动填充「保存」链四处断裂：① **锁定态分支漏挂 `saveInfo`** ⇒ 第一次在锁态登录永远不提示保存（`onSaveRequest` 压根不会被调用）② `parse(::…)` 方法引用**丢实参**、字段取「第一个 USERNAME/PASSWORD」**不跳隐藏与空值** ③ `requestCode = id.hashCode()` + `FLAG_UPDATE_CURRENT` ⇒ **撞号就点哪行填同一条**（改 `RequestCodes.next()` 从 8000 起 CAS 自增）④ 明文密码进 `Intent` / `SavedStateHandle`（改 `PendingSaveStore` 一次性票据 + 60s TTL，取不到画「已过期」而非永转圈） |<br>⚠️ 票据 `consume` 必须**原子且一次性**（`SavedStateHandle` 进程重建会重放）。<br>⚠️ TTL 用 `elapsedRealtime` 不用 `currentTimeMillis`（改系统时间能复活票据）。<br>判据：**`PendingIntent` 的 requestCode 是身份，不能由内容哈希兼任**；**凭据不进 `Intent`** |
 
 ### [03-通行密钥与凭据提供商](./issues/03-通行密钥与凭据提供商.md) — 通行密钥 / Credential Provider / 凭据回灌
 
@@ -138,7 +140,10 @@
 | 50 | ⚠️ **【03 篇 own #50，与 02 篇 #50 重号】**「通行密钥登录指纹弹了两次」—— 两次分属两个请求，其中一次去不掉（02 篇的 #50 是「精准填充」，引用时务必带分篇名） |
 | 108 | 🔴 注册「能保存、但网页端校验不出」根因：`attestationObject` 的 CBOR 键名写成 `attestationStatement`（规范要求 `attStmt`）—— **单测曾把错误键名锁为期望值** ⇒ 教训：协议结构断言必须升到字节级 + 反向锁 |
 | 109 | 🔴 注册响应被**浏览器整份拒收**：create 响应的 `response` 缺 `publicKeyAlgorithm`（Chromium 必读）—— **#108 曾把这条误排除**，因为没写清"在哪个解析层不是"（浏览器层 vs RP 层）|
+| 190 | 见 05 篇 #190（内容指纹全字段，含  11 字段） |
+| 190 | 见 05 篇 #190（内容指纹扩为全字段，`fido2Credentials` 11 个字段也进摘要） |
 | 163 | 🔴 Firefox Android 通行密钥「取不到」= **浏览器根本没发请求**：m_kato 原文「只在 `Discoverable Credential` required 时才走 Credential Manager」（Bugzilla 1862132，Android 13 及以下只走 GPM）⇒ **非本仓库缺陷，代码侧无从修** |
+| 190 | 见 05 篇 #190（内容指纹全字段，含 `fido2Credentials` 11 字段） |
 
 ### [04-锁与解锁](./issues/04-锁与解锁.md) — 锁态模型 / 解锁 / 生物识别 / 密钥
 
@@ -156,8 +161,10 @@
 | 132 | KDBX 快速解锁比 Bitwarden 慢 100 倍：房间信封包「主密码」而非「派生密钥」 |
 | 133 | 「一次认证开多库」的补开被导航取消 ⇒ 用户被迫按第二次指纹 |
 | 161 | ✅ **已修（2026-10-14 B5）**「PIN 忘记后可在设置里重设」—— 文案承诺了功能，入口不存在（「修改 PIN」+「忘记 PIN」两条路都通；判据：有重设路径 ≠ 忘了凭据的人有重设路径） |
+| 188 | 🟡 锁库**不清剪贴板**（密码留在里面任何 App 可粘）+ 复制**网址**被当敏感内容 30 秒后清空 ⇒ 新增 `VaultixClipboard.clearNow()`（只在确认是自己放的才清，读不到**什么都不做**；判据 `EXTRA_IS_SENSITIVE` 或 label）；`doCopy` 改 `sensitive = !isUri`。⚠️ `clipboardScope` 从 `Main.immediate` 改 `Default` —— 主线程 `delay` 会被 Doze / 界面忙整体推迟 |<br>判据：**「定时清理」必须配一个「立即清理」的触发点**，锁库这一刻正是最需要它的时候 |
+| 189 | 🟡 熄屏**不保证**触发 `onStop`（媒体播放 / 画中画 / `showWhenLocked` 下 Activity 仍 resumed）⇒ 「离开 5 分钟自动锁」熄屏一夜也不锁。修法 = 同时监听 `ACTION_SCREEN_OFF` 并复用 `onAppBackgrounded()` 分流（`Never`/`OnAppRestart` 档位不变）。⚠️ 单测里 `onScreenOff()` 后直接推时间是**假红**，要先 `settle(m)` |<br>判据：**「用户看不见了」至少有三条独立通路：熄屏 / 切后台 / 分屏** |
 
-### [05-KDBX本地库](./issues/05-KDBX本地库.md) — KDBX 本地库（22 条；2026-10-20 新增 #178 并发编辑静默丢一笔 / #179 writeLocks 只增不减）
+### [05-KDBX本地库](./issues/05-KDBX本地库.md) — KDBX 本地库（23 条；2026-10-20 新增 #178 并发编辑静默丢一笔 / #179 writeLocks 只增不减）
 
 > ★ **「库选择 / 默认库 / 快速解锁」的完整逻辑定稿在
 > [`decisions/库选择与快速解锁-逻辑定稿.md`](./decisions/库选择与快速解锁-逻辑定稿.md)**
@@ -185,10 +192,11 @@
 | 167 | A3：KDBX 库能建出「类型是卡、字段全空」的残骸 —— writer 静默丢字段 + 导入绕开表单 ⇒ 三层防线 |
 | 178 | 🔴 `mutate` 的读-改-写不原子 ⇒ 并发编辑**静默丢一笔**、两次都返回成功（`ConcurrentHashMap` 只保护单次操作） |
 | 179 | `writeLocks` 只增不减 —— 锁掉/删除的库仍握着一把活锁（`lock` 要一并 `remove`，且先 `close` 会话再丢锁） |
+| 190 | 🔴 `contentFingerprint` 只摘 5 个字段 ⇒ #185 写回基线防线对「改网址/改 TOTP/改卡片/改自定义字段/改收藏/换文件夹」**完全失效且静默**。修法 = 全字段 + `FIELD_SEPARATOR`（消除可构造碰撞）+ Map 按 hash 排序（顺序不稳=假阳性）+ `ABSENT/PRESENT` 区分 null 与空串。验证用**表驱动** `FIELD_MUTATORS`（21 字段逐个断言必变） |<br>纪律：**给 `VaultItem` 加字段必须往 `FIELD_MUTATORS` 里加一条**，否则「全字段」会随模型演进退化回「部分字段」 |
 | 169 | A4：KDBX 安全笔记类型往返翻转 —— 空笔记（备注可空）三字段全空 ⇒ 启发式判登录 ⇒ 存盘再读回**静默翻成登录**（落 `VPX_SECURE_NOTE` 工具区；读侧三态：marker 优先 / 缺失回落 / 显式假值信任标记；#121 三态压二值同款事故） |
 | 170 | A6：KDBX 标准字段「内存保护」属性被静默剥掉 —— Title/UserName/Notes 无条件写 Plain，第三方库受保护的用户名/备注落盘即丢 `Protected="True"`（丢的不是值，是值的属性；从序列化边界倒推坐实） |
 
-### [06-界面与交互](./issues/06-界面与交互.md) — 界面 / 布局 / 交互动效 / 空态（43 条，2026-09-26 起含 #120–#123、#126、#127；2026-10-01 起含 #142–#144；2026-10-04 起含 #162；2026-10-21 起含 #177；2026-10-22 新增 #181 详情页假"不存在"；2026-10-24 新增 #182 筛选面板边界与滚动后展开、#183 权限页行尾不齐与状态卡曲率、#184 首启 3 页引导）
+### [06-界面与交互](./issues/06-界面与交互.md) — 界面 / 布局 / 交互动效 / 空态（44 条，2026-09-26 起含 #120–#123、#126、#127；2026-10-01 起含 #142–#144；2026-10-04 起含 #162；2026-10-21 起含 #177；2026-10-22 新增 #181 详情页假"不存在"；2026-10-24 新增 #182 筛选面板边界与滚动后展开、#183 权限页行尾不齐与状态卡曲率、#184 首启 3 页引导）
 
 | # | 标题 |
 |---|---|
@@ -235,8 +243,9 @@
 | 182 | 🟡 筛选 chip 行贴条目 + 往下滑后展开难看 ⇒ **两条边界都没有落点**；修法 = 下内边距 8→12dp + 让位另加 8dp 呼吸缝（高度改算式）、展开时「外壳下移 56dp + 逐项 `graphicsLayer` 反向补偿」把列表顶端接在面板下沿（**先让位再滚**，两帧） |<br>⚠️ **182.1 更正（当晚）**：「滚到顶端」被用户否决（「会直接返回最上面，这样设定不友好」）⇒ 改为偏好 `itemsFilterJumpToTop`（**默认关**），关闭时**完全不碰滚动位**；开关在「条目显示」浮层。判据：**「画面连续」≠「位置连续」**
 | 183 | 🟡 权限页行尾不齐 + 状态卡曲率打架 ⇒ **同一屏两套规格的两种形态（缩进 / 曲率）**；修法 = 抽 `TrailingSlot`（`min 112dp` + `CenterEnd` + `TouchTarget`）把状态与按钮装进同一外框，`TrailingLabel` 统一 `labelLarge`；两页状态卡 28dp → `VaultixCorner.Panel`(16dp) |<br>⚠️ 宽度必须**写死**：`wrapContent` 会让每行各贴各的，宽度不够则换行 ⇒ 行高 72→96dp。<br>⚠️ **必须两页同改**（`PermissionsScreen` + `AutofillSettingsScreen`），只改一页等于把问题挪个位置 |
 | 184 | 🟢 首次启动引导缺失（`Docs/08` 的 S2「3 页引导」从未实现，品牌空态页顶替了它）⇒ 新增 `OnboardingPreferences`（独立类）+ `RootNavViewModel.showOnboarding` + `ui/onboarding`（Pager 3 页 + Canvas 矢量插画） |<br>🔴 准入条件是「**无库**」且「**没看过**」，**不是**「第一次装 App」：只看前者 ⇒ 删光库的老用户反复被引导；只看后者 ⇒ 从旧版本升级的老用户被拦一次（键不存在读作 false）。<br>⚠️ 只在 `!routedOnce`（真冷启动）时落引导，否则「删掉最后一个库」会把人从设置页拽走。<br>⚠️ 第 2 页说「两个库地位一样」，插画里两块就**必须等大**。<br>⚠️ 测试桩别手写：`DataStore.edit{}` 内部也读 `data`，桩写错会造出产品里不存在的失败路径（本轮真踩） |
+| 191 | 🟡 搜索只比标题/用户名/uri ⇒ 备注与自定义字段里的信息「看得见却搜不到」（官方与 KeePassDX 都覆盖）。补 `notes` + `customFields(name/value)`；**明确不搜密码**并配反向测试 `passwordIsNotSearchable` |<br>判据：**界面上展示出来的字段都该可搜索**，例外必须写进注释 + 反向锁定 |
 
-### [07-数据与同步](./issues/07-数据与同步.md) — 数据模型 / 同步 / 会话（21 条；2026-10-01 起含 #147–#152；2026-10-20 新增 #180 下载窗口覆盖本地编辑；2026-10-25 新增 #185 写回基线盲区）
+### [07-数据与同步](./issues/07-数据与同步.md) — 数据模型 / 同步 / 会话（23 条；2026-10-01 起含 #147–#152；2026-10-20 新增 #180 下载窗口覆盖本地编辑；2026-10-25 新增 #185 写回基线盲区；2026-10-26 新增 #190 409 弃单、#192 空分组误删）
 
 | # | 标题 |
 |---|---|
@@ -260,3 +269,6 @@
 | 155 | 🔴 `toStoredCipherDto` 只拷 14 个字段 ⇒ **每次编辑**都抹掉服务端有、请求体没有的字段（组织条目本地**降级为个人条目**） |
 | 156 | 🔴 离线「新建 → 编辑」再联网，那笔编辑被**静默丢弃**（内存列表与库里的队列行都缓存着废弃的临时 id） |
 | 180 | 🔴 「用远端覆盖/拉取」的**下载窗口**：`read` 要几秒，窗口内的编辑被 `replaceSession` 整体抹掉且记成 `IN_SYNC`（判据必须在 `read` **之前**再查一次） |
+| 185 | 🔴 写回基线盲区：令牌对得上 ≠ 内容来源对得上，远端改动会被静默覆盖（两道防线：编排器不提前推进 token + `KdbxBaseStore` 内容指纹基线；2026-10-26 由 #190 把指纹补成全字段） |
+| 190 | 🔴 **409 Conflict 被当「确定性失败」弃单**（`(400..499)` 一刀切）⇒ 删队列行不重试 ⇒ 远端那条改动**永久丢失**、无提示、无残留。修法 = `HTTP_CONFLICT` 从集合剔除 + `handleOperationFailure()`（409 走 `incrementRetry`）。⚠️ 拆方法是被 detekt 逼的（圈复杂度 16>14，且**提前 return 也算分支**）。⚠️ 测试 404 用例一开始**假红**：夹具 `payload="{}"` 缺 `CipherRequest.type`，请求还没发就抛 `MissingFieldException` 被归成网络类 |<br>判据：**4xx ≠ 可以扔**，401/408/409/429 都是「再试」类 |
+| 192 | 🔴 `pruneRemovedRows` 把「远端没返回分组」当「远端删了分组」⇒ 一次不完整响应能清空本地所有文件夹。修法 = 空分组 + 待删 ≥3 时只报警不删（1~2 个放行，日常删除照常通过） |<br>判据：**「远端没有」≠「远端删了」**，批量删除必须有数量熔断且熔断在保守侧 |

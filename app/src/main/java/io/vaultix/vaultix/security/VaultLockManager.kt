@@ -177,6 +177,28 @@ interface VaultLockManager {
      */
     fun onScreenOn()
 
+    /**
+     * 屏幕熄灭（`ACTION_SCREEN_OFF`）。
+     *
+     * ## 为什么必须单独一条（#189，2026-10-26）
+     *
+     * 之前只有「亮屏补偿」，而锁定的**定时器是在切后台时启动的**。熄屏时 App 未必
+     * 切到后台（前台 Activity 在熄屏时通常仍是 resumed，「后台」要等
+     * `ProcessLifecycleOwner` 的 `onStop`），而 Doze / 应用待机下那个 `delay`
+     * 根本不会准时唤醒 ⇒
+     *
+     * > 用户设「离开 1 分钟锁定」，熄屏 10 分钟，亮屏后仍有近 1 分钟窗口。
+     *
+     * 这正是用户报的「锁得不及时」。`ACTION_SCREEN_OFF` 是**熄屏那一刻**唯一可靠的信号：
+     * 它一定送达（系统直接广播给已注册的接收器），且不依赖进程是否被冻结多久。
+     * 所以在熄屏时按「已离开 App」处理一次 —— 与切后台同一套判定（`Never` / 
+     * `OnAppRestart` 档照旧不锁，见实现类 `checkForVaultTimeoutInternal`）。
+     *
+     * ⚠️ 不要把它做成「熄屏立即锁」：那会把用户选择的档位彻底作废
+     * （设 30 分钟的用户熄一次屏就要求指纹）。这里只做「**开始计时**」。
+     */
+    fun onScreenOff()
+
     /** 主动触发一次超时检查（如手动锁定前的统一入口）。 */
     fun checkForVaultTimeout(vaultId: String)
 }
