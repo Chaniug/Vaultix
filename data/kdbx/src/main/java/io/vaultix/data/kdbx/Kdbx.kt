@@ -24,12 +24,13 @@ import app.keemobile.kotpass.database.KeePassDatabase
 import io.vaultix.common.logging.VaultixLog
 import io.vaultix.model.VaultFolder
 import io.vaultix.model.VaultItem
+import java.io.ByteArrayInputStream
 import java.io.File
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
 
 /** 打开 KDBX 的失败原因（UI 据此给可执行文案）。 */
 sealed interface KdbxOpenError {
@@ -350,6 +351,9 @@ object Kdbx {
         }
 
         KdbxSessionStore.put(vaultId, reopened)
+        // 会话刚被**远端那一版**整体替换 ⇒ 写回基线就是它（#185）。
+        // 从此以后，"本机内容是不是远端那一版"有了确定的答案。
+        KdbxBaseStore.record(vaultId, reopened.content)
         // 只记条数，不记任何内容（VaultixLog 铁律）。
         VaultixLog.d(TAG) { "replaceSession：$vaultId 条目=${reopened.content.items.size}" }
         return Result.success(Unit)
@@ -523,6 +527,28 @@ object Kdbx {
         val bytes: ByteArray,
         /** 受影响的条目 uuid；null = 目标找不到（此时**不会**返回成功，见下）。 */
         val entryUuid: UUID?,
+        /**
+         * **这次编辑出发时**的内容指纹（`KdbxEncoder.contentFingerprint`，改动**之前**取）。
+         * 用途只有一个：上层的写回基线（`KdbxBaseStore`）据此判断"我这次改动是在
+         * **远端那一版**的基础上做的吗"（#185）。
+         *
+         * ⚠️ 是**内容指纹**不是字节：KDBX 每次编码都换 IV / 随机流，字节天生不稳定，
+         *    拿字节比对等于永远不相等（详见 `contentFingerprint` 的两个坑）。
+         */
+        val baseFingerprint: String,
+        /** 这次编辑**做完之后**的内容指纹：上层"基线该不该跟着推进"要把它登记进去（#185）。 */
+        val newFingerprint: String,
+        /**
+         * 本次写回是否**可以**推进写回基线（#185）。
+         *
+         * 判据是**改动之前**那条事实，只有一条：`baseFingerprint` == 当前登记的基线。
+         * 为 `true` 表示"这次改动是在远端那一版上做的" ⇒ 上层可以在同步干净时把基线
+         * 推成 [newFingerprint]；为 `false`（含"根本没有基线"）则**原地不动**。
+         *
+         * ⚠️ 这里是 `false` 不等于错误：正常解锁后的第一次编辑就没有基线，那件事
+         * 交给同步的对账去补（见 `adoptBaselineIfMatches`）。
+         */
+        val baselineAligned: Boolean,
     )
 
     /**
@@ -598,6 +624,13 @@ object Kdbx {
         val session = KdbxSessionStore.get(vaultId)
             ?: return Result.failure(KdbxFailure(KdbxOpenError.NotUnlocked))
 
+        // ⚠️ 必须在 `mutator` **之前**取指纹：`mutator` 是**就地改动**这个 `database`，
+        //    改完之后再取就永远是"新内容"，写回基线要问的恰恰是"**改之前**是不是远端那一版"（#185）。
+        //    ⚠️ 这里绝不能改成 `KdbxEncoder.encode(...)`：编码每次换 IV/随机流，字节必然不同
+        //       ⇒ 指纹永远对不上 ⇒ 所有正常保存都被判成"内容过期"。详见 `contentFingerprint`。
+        val baseFingerprint = KdbxEncoder.contentFingerprint(session.content)
+        val baselineAligned = KdbxBaseStore.current(vaultId) == baseFingerprint
+
         val result = mutator(session.database)
         if (!result.applied) {
             return Result.failure(
@@ -618,7 +651,17 @@ object Kdbx {
                 credentials = session.credentials,
             ),
         )
-        return Result.success(KdbxPendingWrite(content, bytes, result.entryUuid))
+        return Result.success(
+            KdbxPendingWrite(
+                content = content,
+                bytes = bytes,
+                entryUuid = result.entryUuid,
+                baseFingerprint = baseFingerprint,
+                baselineAligned = baselineAligned,
+                // 改完之后的指纹：上层"写回基线该不该跟着推进"要用它（#185）。
+                newFingerprint = KdbxEncoder.contentFingerprint(content),
+            ),
+        )
     }
 
     /**
@@ -751,6 +794,56 @@ object Kdbx {
     }
 
     /**
+     * 把写回基线推进到**刚写出去的内容**（#185）。
+     *
+     * 只在上层确认了两件事之后才该被调用：① 本次改动出发时基线是对齐的
+     * （[KdbxPendingWrite.baselineAligned]）；② 该库在改动之前是**同步干净的**
+     * （`IN_SYNC`，否则"内容 = 远端"这句话不成立）。两个判据留给上层是因为
+     * 只有它看得见持久化的同步状态。
+     *
+     * ⚠️ 不做任何校验就写：这是**内部可信调用**，传错等于把最后一道防线关掉
+     * （所以它不放在 `data:repository` 能随意调到的地方 —— 参数是引擎侧的指纹产物）。
+     */
+    fun advanceBaseline(vaultId: String, write: KdbxPendingWrite) {
+        KdbxBaseStore.recordFingerprint(vaultId, write.newFingerprint)
+    }
+
+    /**
+     * **内容对账**：远端那份 [remoteBytes] 解出来的内容，是不是与本机会话**一模一样**？
+     * 是则把远端这一版登记为写回基线（#185）。
+     *
+     * ## 为什么需要它
+     *
+     * "令牌变了"不等于"内容变了"（远端可能只是重新编码 / 换了个 eTag），也**不等于**
+     * "本机那份是旧的"。而写回基线（[KdbxBaseStore]）只能回答后者，它需要
+     * 一个**内容比对**的入口 —— 这就是本函数。
+     *
+     * ## 语义选择（保守优先）
+     *
+     * - 未解锁 ⇒ 返回 `false`：没有会话就没有"本机内容"可比，此时**不许**凭空登记，
+     *   否则会给出一个"已对齐"的假信号；
+     * - 解码失败 ⇒ 返回 `false` 并**不动**已有基线（远端解不开多半是换了密码，
+     *   那是"远端变了"的强证据，绝不能因为解不开就清掉防线）；
+     * - 内容不同 ⇒ 返回 `false` 且**不动**基线（保持"本机不是远端那一版"的判定）；
+     * - 内容相同 ⇒ 登记基线并返回 `true`（此后写回可以照常进行）。
+     *
+     * @return `true` = 内容一致且基线已对齐。
+     */
+    suspend fun adoptBaselineIfMatches(vaultId: String, remoteBytes: ByteArray): Boolean =
+        lockOf(vaultId).withLock {
+            val session = KdbxSessionStore.get(vaultId) ?: return@withLock false
+            val opened = KdbxOpener.reopen(
+                bytes = remoteBytes,
+                credentials = session.credentials,
+                label = session.credentialLabel,
+            ).getOrNull() ?: return@withLock false
+            val same = KdbxEncoder.contentFingerprint(opened.content) ==
+                KdbxEncoder.contentFingerprint(session.content)
+            if (same) KdbxBaseStore.record(vaultId, opened.content)
+            same
+        }
+
+    /**
      * 锁定单个库（丢弃明文与它的写锁）。幂等。
      *
      * ⚠️ 两步的顺序**不能反**：先 `close` 会话，再丢锁。反过来的话，在两个动作之间
@@ -761,12 +854,16 @@ object Kdbx {
      */
     fun lock(vaultId: String) {
         KdbxSessionStore.close(vaultId)
+        // 基线随会话一起丢：它回答的是"会话里那份内容来自哪一版"，
+        // 会话没了这个问题就不成立（下次解锁 / 对账会重新建立，见 `KdbxBaseStore` 文件头）。
+        KdbxBaseStore.clear(vaultId)
         writeLocks.remove(vaultId)
     }
 
     /** 锁定全部（退出数据库 / 全量锁定）。幂等。 */
     fun lockAll() {
         KdbxSessionStore.closeAll()
+        KdbxBaseStore.clearAll()
         writeLocks.clear()
     }
 
@@ -807,19 +904,63 @@ object Kdbx {
      *   `null` 只表示"我没带基线"，本方法仍会 stat 一次并采用拿到的版本
      *   （即仍是乐观并发）；[force] 才是真正的"不看、直接盖"。
      *   把这两件事混成一个 null 会让"忘了传基线"悄悄变成"强行覆盖远端"。
+     *
+     * @return 本机内容**不是**远端那一版（远端变过而没拉）时返回
+     *   [KdbxWriteFailure.StaleBaseline]，**写出之前**就拦下 —— 见
+     *   `KdbxBaseStore` 文件头与 `.ai/ISSUES.md` #185。
      */
     suspend fun saveVia(
         vaultId: String,
         source: KdbxFileSource,
         expectedVersion: String? = null,
         force: Boolean = false,
+        /** 本次要写的**原始密文字节**；`null` = 现编码一份（旧调用方 / 强制覆盖路径）。 */
+        encodedBytes: ByteArray? = null,
+        /**
+         * 这次写回的**内容来源是否对得上远端那一版**（#185）。
+         *
+         * - `true`：本机内容就是从远端那一版来的 ⇒ 放行；
+         * - `false`：**拒写**（远端变过而我们没拉，写下去就是静默覆盖）；
+         * - `null`（默认）：**不表态**，交给版本令牌那层兜底。
+         *   主写路径应传 `KdbxPendingWrite.baselineAligned`；本地 SAF 保存 / 强制覆盖
+         *   没有"远端那一版"这个概念，保持 `null` 即可。
+         *
+         * ⚠️ 为什么是参数而不是在这里现查：见下方闸门处的说明（会话内容此时已是改后的）。
+         */
+        baselineAligned: Boolean? = null,
     ): Result<KdbxSaveReport> {
         val session = KdbxSessionStore.get(vaultId)
             ?: return Result.failure(KdbxFailure(KdbxOpenError.NotUnlocked))
 
+        // ⚠️ 字节只算一次：主写路径由调用方把 `mutate` 现成的字节递进来（避免多跑一遍
+        //    KDF 级别的编码）；没有递进来时（强制覆盖 / 旧路径）才在这里补一次。
+        val bytes = encodedBytes ?: KdbxEncoder.encode(session.database)
+
+        // ★★ 基线与内容对账（`.ai/ISSUES.md` #185）：令牌对得上 ≠ 内容来源对得上。
+        //
+        //    ## ⚠️ 判据为什么是"调用方声明"而不是"现查会话内容"（2026-10-25 实测踩到）
+        //
+        //    天然想法是"拿 `session.content` 的指纹和基线比一下"。**那是错的** ——
+        //    走到这里时 `session.content` 已经是**改完之后**的内容（`mutateLocked` 在写锁里
+        //    就把会话换成了新那一份），而基线记的是"改之前"的那一版 ⇒ 两者必然不等，
+        //    于是**每一次正常保存都被判成"内容过期"**（实测：本机 A 改成 B，基线是 A，
+        //    这里比的是 B ⇒ 全线误拦）。
+        //
+        //    "基线对不对"这个判断只能在**改动之前**做，而 `mutateLocked` 已经在做，
+        //    结论随 [KdbxPendingWrite.baselineAligned] 一起递上来。
+        //    ⇒ 本方法只负责**执行**这个结论：`false` 就拒写；`null`（旧调用方 / 强制覆盖）
+        //    不表态，交由版本令牌那层兜底。
+        //
+        //    ⚠️ `force` 恒放行：那是用户在冲突对话框里**明确选择**"用本地覆盖远端"，
+        //       此时拦下等于让确认按钮失效。
+        if (!force && baselineAligned == false) {
+            return Result.failure(KdbxWriteFailure.StaleBaseline())
+        }
+
         val checked = KdbxRoundTrip.verify(
             database = session.database,
             credentials = session.credentials,
+            encoded = bytes,
         )
         if (!checked.isSafeToWrite) {
             return Result.failure(KdbxWriteFailure.RoundTripFailed(checked))
@@ -925,6 +1066,21 @@ sealed class KdbxWriteFailure(message: String, cause: Throwable? = null) : Excep
      */
     class RoundTripFailed(val result: KdbxRoundTripResult) : KdbxWriteFailure(
         "保存前的自检未通过，为保护数据已取消写入（${result.mismatches.joinToString("；")}）",
+    )
+
+    /**
+     * ★ **本机内容已不是远端那一版** —— 写出之前就被写回基线拦下（#185）。
+     *
+     * 与 [Conflict] 的区别：冲突是**服务端**说"你已经不是最新版"，本类是**我们自己**
+     * 在发请求之前就发现"我手里这份内容根本不是远端那一版"（典型：远端变过而没拉，
+     * 用户接着编辑，而主写路径拿的仍是本地缓存里的旧令牌 ⇒ 服务端会放行）。
+     *
+     * 对用户的意义相同：**远端一个字节都没被覆盖，改动也没丢（还在本机）**，
+     * 拉下来重做 / 明确选择覆盖都可以。区别是它**没有**远端版本号可带 ——
+     * 这次压根没去问远端。
+     */
+    class StaleBaseline : KdbxWriteFailure(
+        "云端有更新还没拉下来，为避免覆盖云端改动已暂停保存（你的修改仍在本地，请先同步）",
     )
 
     /** 落盘失败（磁盘满 / 权限 / 目标被占用 / 网络断）。 */

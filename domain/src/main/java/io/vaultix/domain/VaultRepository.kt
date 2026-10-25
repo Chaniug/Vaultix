@@ -546,6 +546,17 @@ sealed interface KdbxSyncReport {
     /** 该库没有配置网盘来源。 */
     data object NoCloudSource : KdbxSyncReport
 
+    /**
+     * ★ **本机内容不是远端那一版**，写回被基线拦下（#185）。
+     *
+     * 典型成因：远端变过而没拉，用户继续编辑并保存 —— 版本令牌那层放行了
+     * （主写路径拿的是本地缓存里的旧令牌），内容那层把它拦了下来。
+     *
+     * ⚠️ 与 [Conflict] 分开的理由：冲突**带得出远端版本号**（用户选「用远端覆盖本地」
+     * 就有东西可拉）；这里**没问过远端**，所以 UI 只能引导"先同步一次"。
+     */
+    data object StaleBaseline : KdbxSyncReport
+
     /** 同步失败（网络 / 凭据 / IO）。[reason] 可直接展示。 */
     data class Failed(val reason: String) : KdbxSyncReport
 }

@@ -98,6 +98,24 @@ internal object KdbxRoundTrip {
     }
 
     /**
+     * 同 [verify]，但**字节已经编码好了** —— 不重复付一次编码（KDF）的钱。
+     *
+     * ## 为什么要这个重载（#185 的副作用）
+     *
+     * `saveVia` 为了做内容指纹（写回基线），必须在**同一份字节**上既比对指纹、
+     * 又做往返自检。`verify` 会自己再 `encode` 一遍 ⇒ 那份字节就不是被判指纹的那份了
+     * （KDBX 每次编码都换密钥与 IV，两遍字节必然不同）。所以把字节显式交进来，
+     * 让"判指纹的字节"与"写出去的字节"**是同一份**。
+     *
+     * ⚠️ 内部仍然走 `verifyEncoded`：只解码不重编码（见那里的说明）。
+     */
+    fun verify(
+        database: KeePassDatabase,
+        credentials: Credentials,
+        encoded: ByteArray,
+    ): KdbxRoundTripResult = verifyEncoded(encoded, database, credentials)
+
+    /**
      * 校验**已经编码好**的字节（不再重编码）。
      *
      * ## 为什么要这个入口（2026-10-02 审计修复）

@@ -118,12 +118,43 @@ class KdbxSyncOrchestratorTest {
         assertEquals(KdbxSyncStatus.CONFLICT.name, dao.status())
     }
 
+    /**
+     * ★ #185 第二道防线：**"令牌变了"不等于"内容变了"**。
+     *
+     * 远端可能只是被重新编码了一次（同一个库经另一台设备另存），内容一字未改。
+     * 此时仍报 `REMOTE_CHANGED` 会让用户白点一次"同步"，点完发现"啥也没变" ——
+     * 那是最伤信任的一类交互。
+     *
+     * ⇒ 编排器会做**内容对账**：远端字节解出来的内容 == 本机会话内容 ⇒ 直接判一致。
+     *
+     * ⚠️ 本条用例的会话是空的（未解锁）：对账必然失败 ⇒ 退回保守判定。它钉的是
+     *    **"对账失败不许假定一样"**这条纪律 —— 而这正是静默覆盖的入口。
+     *    "对账成功则降级"由 `KdbxWriteBaselineTest` 的 `adoptBaselineIfMatches` 那几条覆盖。
+     */
+    @Test
+    fun `远端只换令牌时对账失败也绝不假定内容相同`() = runTest {
+        val dao = RecordingDao(initialToken = T0)
+        val orchestrator = orchestratorWith(dao, remoteToken = T1, remoteBytes = ByteArray(0))
+
+        val outcome = orchestrator.sync(VAULT_ID, ORIGIN, localChangedSinceLastSync = false)
+
+        assertEquals(SyncOutcome.RemoteNewerNeedsReload, outcome)
+        assertEquals(KdbxSyncStatus.REMOTE_CHANGED.name, dao.status())
+        // ★ 对账没成功 ⇒ 基线一点都不能动（动了就等于承认"本机已是远端那一版"）。
+        assertEquals(T0, dao.token())
+    }
+
     // ---------------------------------------------------------------- 装置
 
-    private fun orchestratorWith(dao: RecordingDao, remoteToken: String?): KdbxSyncOrchestrator =
+    private fun orchestratorWith(
+        dao: RecordingDao,
+        remoteToken: String?,
+        /** 远端字节；给了对账才会真的去 `read()`。 */
+        remoteBytes: ByteArray? = null,
+    ): KdbxSyncOrchestrator =
         KdbxSyncOrchestrator(
             vaultDao = dao.dao,
-            fileSourceFactory = { sourceStub(remoteToken) },
+            fileSourceFactory = { sourceStub(remoteToken, remoteBytes) },
         )
 
     /**
@@ -132,9 +163,10 @@ class KdbxSyncOrchestratorTest {
      * **遮蔽**（它有个 `get`）⇒ `expected 'MockKMatcherScope.DynamicCall', actual …`，
      * CI 上炸过（`.ai/ISSUES.md` #146）。
      */
-    private fun sourceStub(remoteToken: String?): KdbxFileSource {
+    private fun sourceStub(remoteToken: String?, remoteBytes: ByteArray? = null): KdbxFileSource {
         val source = mockk<KdbxFileSource>()
         coEvery { source.stat() } returns KdbxFileStat(versionToken = remoteToken)
+        coEvery { source.read() } returns (remoteBytes ?: ByteArray(0))
         return source
     }
 

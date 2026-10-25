@@ -177,6 +177,16 @@ class KdbxCloudSyncCoordinator(
     }
 
     /**
+     * 该库**此刻**的持久化同步状态（无记录 / 未知值 ⇒ `null`）。
+     *
+     * 用途：调用方要"在改动之前"看一眼状态时不许自己 `vaultDao.get` ——
+     * 那等于把"状态字符串 ↔ 枚举"的翻译再抄一份，抄漏一个名字就会静默当成
+     * "不在同步中"（而这条判据正好决定**写回基线该不该推进**，见 `KdbxItemRepository.persist`）。
+     */
+    suspend fun currentSyncStatus(vaultId: String): KdbxCloudSyncStatus? =
+        KdbxCloudSyncStatus.fromName(vaultDao.get(vaultId)?.syncStatus)
+
+    /**
      * 给**远端**来源套本地缓存（批次 B1，2026-09-30）。
      *
      * 只此一处套：`fileSourceFor` 是「origin ⇒ 来源」的唯一判据表，解锁 / 校验 /
@@ -279,6 +289,8 @@ class KdbxCloudSyncCoordinator(
         }
 
         // 只有会话真的换好了才记"已同步"；`remoteToken` 为 null 时编排器保留旧基线（同样偏旧，安全）。
+        // ⚠️ 写回基线（#185）由 `Kdbx.replaceSession` 一并建立 —— 会话换成了远端那一版，
+        //    "本机内容来自哪一版"这个问题从这一刻起有了确定答案。
         orchestrator.markResolved(vaultId, remoteToken)
         return KdbxSyncResult.Downloaded
     }
@@ -304,6 +316,7 @@ class KdbxCloudSyncCoordinator(
             onFailure = { error ->
                 when (error) {
                     is KdbxWriteFailure.Conflict -> KdbxSyncResult.Conflict(error.currentVersion)
+                    is KdbxWriteFailure.StaleBaseline -> KdbxSyncResult.StaleBaseline
                     else -> KdbxSyncResult.Failed(error.message?.takeIf { it.isNotBlank() } ?: "覆盖远端失败")
                 }
             },
@@ -347,6 +360,17 @@ sealed interface KdbxSyncResult {
     data class Uploaded(val newVersionToken: String?) : KdbxSyncResult
     data object Downloaded : KdbxSyncResult
     data class Conflict(val currentRemoteVersion: String?) : KdbxSyncResult
+
+    /**
+     * ★ **本机内容不是远端那一版**，写回被基线拦下（#185）。
+     *
+     * 与 [Conflict] 并列但**不能合并**：冲突带得出"远端现在是哪一版"（用户点了
+     * 「用远端覆盖本地」就有东西可拉），而这里**压根没问过远端** —— 必须让
+     * 调用方先跑一次同步把远端拉下来/对账，再谈怎么合。
+     * 合并成一个 `Conflict(null)` 会让"用远端覆盖本地"变成一个拉不到东西的死按钮。
+     */
+    data object StaleBaseline : KdbxSyncResult
+
     data object NeedsReload : KdbxSyncResult
     data object NoCloudSource : KdbxSyncResult
     data class Failed(val reason: String) : KdbxSyncResult

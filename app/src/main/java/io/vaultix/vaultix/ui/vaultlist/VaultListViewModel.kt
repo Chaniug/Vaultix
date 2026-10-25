@@ -237,6 +237,14 @@ class VaultListViewModel @Inject constructor(
 
                 is KdbxSyncReport.Failed ->
                     _events.emit(Event.KdbxSyncFailed(SyncNotice.Detail(report.reason)))
+
+                // ★ #185 写回基线：本机这份不是云端那一版 ⇒ 服务器拒绝了写入。
+                //   ⚠️ 这里**不能**报成功，也不能顺手去 pull —— 用户的改动还在内存/缓存里，
+                //   自动拉取会把它盖掉。只如实告诉他"先同步，再重做"。
+                is KdbxSyncReport.StaleBaseline ->
+                    _events.emit(
+                        Event.KdbxSyncFailed(SyncNotice.Res(R.string.kdbx_sync_stale_baseline)),
+                    )
             }
         }
     }
@@ -322,6 +330,13 @@ class VaultListViewModel @Inject constructor(
             is KdbxSyncReport.NoCloudSource ->
                 _events.emit(
                     Event.KdbxSyncFailed(SyncNotice.Res(R.string.kdbx_sync_no_cloud_source)),
+                )
+
+            // #185：用户在对话框里选了"用本机覆盖"，但本机这份根本不是云端那一版
+            // （云端有更新还没拉过）⇒ 写回基线把它拦下了。同样不能报成功。
+            is KdbxSyncReport.StaleBaseline ->
+                _events.emit(
+                    Event.KdbxSyncFailed(SyncNotice.Res(R.string.kdbx_sync_stale_baseline)),
                 )
         }
     }

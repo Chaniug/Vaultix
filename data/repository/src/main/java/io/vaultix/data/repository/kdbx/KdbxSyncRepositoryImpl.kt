@@ -112,6 +112,7 @@ class KdbxSyncRepositoryImpl @Inject constructor(
         is KdbxSyncResult.Conflict -> KdbxSyncReport.Conflict(currentRemoteVersion)
         is KdbxSyncResult.NeedsReload -> KdbxSyncReport.NeedsReload
         is KdbxSyncResult.NoCloudSource -> KdbxSyncReport.NoCloudSource
+        is KdbxSyncResult.StaleBaseline -> KdbxSyncReport.StaleBaseline
         is KdbxSyncResult.Failed -> KdbxSyncReport.Failed(reason)
     }
 }

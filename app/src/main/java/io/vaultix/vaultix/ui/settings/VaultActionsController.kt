@@ -132,6 +132,15 @@ class VaultActionsController(
          */
         data object SyncLocked : Outcome
 
+        /**
+         * ★ **本机内容不是云端那一版**，保存被写回基线拦下（#185）。
+         *
+         * ⚠️ 必须与 [SyncFailed] 分开：失败意味着"重试可能好"，
+         * 而这里**重试一定还是同一个结果** —— 该做的是**先同步**把云端拉下来。
+         * 文案要给下一步，而不是一句"保存失败"。
+         */
+        data object SyncStaleBaseline : Outcome
+
         data class Failed(val detail: String) : Outcome
     }
 
@@ -192,6 +201,8 @@ class VaultActionsController(
             // ★ S2：远端有更新、本地没改 ⇒ **真的去拉**（此前只如实上报，用户拿不到新数据）。
             is KdbxSyncReport.NeedsReload -> pullRemote(vault)
             is KdbxSyncReport.NoCloudSource -> Outcome.SyncUnsupported
+            // ★ 基线过期**不是失败**：重试解决不了，必须先同步（#185）。
+            is KdbxSyncReport.StaleBaseline -> Outcome.SyncStaleBaseline
             is KdbxSyncReport.Failed -> Outcome.SyncFailed(SyncNotice.Detail(report.reason))
             // ★ 冲突**不在这里收敛**：拒写之后重试永远好不了，必须让用户拍板。
             is KdbxSyncReport.Conflict -> {

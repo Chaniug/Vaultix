@@ -121,9 +121,20 @@ fanout done first=Success opened=0 failed=1
 
 ---
 
-## 4. ⚠️ 设计隐患（当前休眠，R-6~R-9 开放编辑后激活）
+## 4. ⚠️ 设计隐患（**2026-10-25 核对：R-6~R-9 早已开放，本节两处状态已过期**）
+
+> **状态订正（2026-10-25）**：
+> - §4.1 **已修** ⇒ 见 `.ai/ISSUES.md` #185（两道防线：令牌层不推进 + 内容指纹层）。
+> - §4.2 **部分失效**：`KdbxAutoUploader` 已改为"每轮现查"，大部分场景被顶掉，但仍有零调用点残留。
+> - §4.3 **已修**：`VaultListViewModel` 已改为现查（施工单 S3，2026-10-01）。
+> 下方原文保留作**当时的判断记录**，不要按它动手。
 
 ### 4.1 NeedsReload 路径提前推进 token 基线 → 潜在静默覆盖
+
+> ✅ **2026-10-25 已修（#185）**。实际危险比下面的推演更直接：token 甚至不需要被"提前推进" ——
+> 主写路径带的是**缓存里的旧令牌**，本来就回答不了"我这内容是不是远端那一版"。
+> 修法两道：① 该分支**不推进 token**，改做内容对账（相同才降级 `IN_SYNC`）；
+> ② 新增 `KdbxBaseStore` 内容指纹基线，`KdbxItemRepository.persist` 落字节前拦截。
 
 `KdbxSyncOrchestrator.sync` 的「远端更新、本地未改」分支（:145-149）：
 
@@ -148,9 +159,17 @@ return SyncOutcome.RemoteNewerNeedsReload
 
 ### 4.2 `notifyLocalChangedDuringUpload` 全链路实现、零调用
 
+> 🟡 **2026-10-25 核对：部分失效**。`KdbxAutoUploader` 已改为"每轮现查本地状态"，
+> 那条竞态里的大部分场景已被顶掉；`app` 层仍有零调用点（`KdbxAutoUploader.kt:107`
+> 一带是**有意保留**的写入点）。⇒ 优先级从"必须接上"降为"清理残留"。
+
 「上传期间本地又改了 ⇒ 那笔改动永远推不上去」的竞态防护：`KdbxSyncOrchestrator:203-210` 实现、`KdbxCloudSyncCoordinator:204-206` 转发、`KdbxSyncRepositoryImpl:65-66` 再转发——**app 层没有任何调用方**（全仓 grep 仅数据层三跳）。当前只读所以无感；开放编辑后必须接上。
 
 ### 4.3 `localChangedSinceLastSync` 两处口径不一 + 伪冲突的数据丢失入口
+
+> ✅ **2026-10-25 核对：已修**。`VaultListViewModel.syncKdbxVault` 已改为
+> **现查** `KdbxSyncRepository.localChangedSinceLastSync`（施工单 S3，2026-10-01），
+> 不再硬编码 `true`。下表是修复前的样子，留作记录。
 
 | 入口 | 判定 | 位置 |
 |---|---|---|

@@ -34,11 +34,13 @@ package io.vaultix.data.repository
 import io.vaultix.database.dao.VaultDao
 import io.vaultix.data.kdbx.Kdbx
 import io.vaultix.data.kdbx.KdbxFailure
+import io.vaultix.data.kdbx.KdbxWriteFailure
 import io.vaultix.data.repository.kdbx.CachedKdbxFile
 import io.vaultix.data.repository.kdbx.KdbxAutoUploader
 import io.vaultix.data.repository.kdbx.KdbxCloudSyncCoordinator
 import io.vaultix.data.repository.kdbx.KdbxFileCache
 import io.vaultix.domain.VaultSaveOutcome
+import io.vaultix.model.KdbxCloudSyncStatus
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
 import javax.inject.Inject
@@ -80,7 +82,7 @@ class KdbxItemRepository @Inject constructor(
                 requireSupportedType(item)
                 val write = Kdbx.createItem(vaultId, folderId = item.folderId, item = item)
                     .getOrElse { throw it.toUserFacing() }
-                persist(vaultId, write.bytes)
+                persist(vaultId, write)
             }
         }
 
@@ -100,7 +102,7 @@ class KdbxItemRepository @Inject constructor(
                     ?: error("条目不存在：${item.id}")
                 val write = Kdbx.updateItem(vaultId, before = before, after = item)
                     .getOrElse { throw it.toUserFacing() }
-                persist(vaultId, write.bytes)
+                persist(vaultId, write)
             }
         }
 
@@ -108,7 +110,7 @@ class KdbxItemRepository @Inject constructor(
         withContext(Dispatchers.IO) {
             runCatching {
                 val write = Kdbx.moveItemToRecycleBin(vaultId, itemId).getOrElse { throw it.toUserFacing() }
-                persist(vaultId, write.bytes)
+                persist(vaultId, write)
             }
         }
 
@@ -117,7 +119,7 @@ class KdbxItemRepository @Inject constructor(
             runCatching {
                 val write = Kdbx.restoreItemFromRecycleBin(vaultId, itemId)
                     .getOrElse { throw it.toUserFacing() }
-                persist(vaultId, write.bytes)
+                persist(vaultId, write)
             }
         }
 
@@ -125,7 +127,7 @@ class KdbxItemRepository @Inject constructor(
         withContext(Dispatchers.IO) {
             runCatching {
                 val write = Kdbx.purgeItem(vaultId, itemId).getOrElse { throw it.toUserFacing() }
-                persist(vaultId, write.bytes)
+                persist(vaultId, write)
             }
         }
 
@@ -157,11 +159,14 @@ class KdbxItemRepository @Inject constructor(
     /**
      * 把**已经写好**的字节送到它该去的地方，并让界面能看见这次改动。
      *
+     * @param write `mutate` 的产物。`bytes` 落盘、`baseFingerprint`/`newFingerprint` 用于
+     *   判断**写回基线**该不该跟着推进（#185，见下面的说明）。
      * @return 恒为 [VaultSaveOutcome.Queued] —— 它的新语义是"**已安全落到本机**"
      *   （见该枚举的 KDoc：本地库写进文件、网盘库写进缓存待上传），
      *   两种情形对用户都是"保存好了"，区别在于云端状态由 `VaultSummary.syncStatus` 表达。
      */
-    private suspend fun persist(vaultId: String, bytes: ByteArray): VaultSaveOutcome {
+    private suspend fun persist(vaultId: String, write: Kdbx.KdbxPendingWrite): VaultSaveOutcome {
+        val bytes = write.bytes
         val origin = vaultDao.get(vaultId)?.origin
             ?: error("这个库里没有对应记录，无法保存：$vaultId")
 
@@ -181,15 +186,42 @@ class KdbxItemRepository @Inject constructor(
         //      "这次保存失败，用户的改动没进去"。后者用户会重试，前者不可逆。
         Kdbx.verifyWrite(vaultId, bytes).getOrElse { throw it.toUserFacing() }
 
+        // ★★ 写回基线闸门（#185）：这是**唯一**会"带着旧令牌写"的路径 ——
+        //    编辑走的 `saveVia(expectedVersion = 缓存里的旧令牌)` 天生不满足
+        //    "内容与令牌配套"：远端变过而没拉时服务端会放行 ⇒ 静默覆盖别人的改动。
+        //
+        //    ⚠️ 只在**有云端来源**时判（本地 SAF 库没有"远端那一版"这个概念，
+        //       基线永远不会登记，判它等于把所有本地保存全线拦掉 —— 实测就是这个后果）。
+        //    ⚠️ 传 `null` 给 `saveVia` 的调用方（同步编排器）是另一回事：它推的是
+        //        "会话里的全部改动"，本来就该让条件写去判，见那里的说明。
+        if (cloudSync.hasCloudSource(origin) && !write.baselineAligned) {
+            throw KdbxWriteFailure.StaleBaseline().toUserFacing()
+        }
+
         if (cloudSync.hasCloudSource(origin)) {
             // 网盘：先落本地缓存（立即生效）。
             // ⚠️ 沿用旧令牌 —— 它是下一次条件写的基线，换成新值就再也检测不到"远端变过"。
             val previousToken = runCatching { fileCache.load(origin) }.getOrNull()?.versionToken
+            // ⚠️ 状态必须在写缓存**之前**读：下面 `markLocalEdited` 会把它改成 PENDING_UPLOAD。
+            val statusBeforeWrite = cloudSync.currentSyncStatus(vaultId)
             fileCache.save(origin, CachedKdbxFile(bytes, previousToken))
             // 再标记待上传。**这一步不能省**：同步的"本地改过没有"是从持久化的
             // `vaults.syncStatus` 读出来的，不标记的话下一次同步会判"两边都没变"，
             // 那笔改动永远推不上去（见 KdbxSyncOrchestrator.markLocalEdited 的 KDoc）。
             cloudSync.markLocalEdited(vaultId)
+            // ★★ 写回基线（#185）：**只在"出发时内容 == 远端那一版"且"出发时是同步干净的"时推进**。
+            //
+            //   同步未完成时（PENDING_UPLOAD / REMOTE_CHANGED / CONFLICT）基线**必须留在原处**，
+            //   它正是"本机内容不是远端那一版"这件事的唯一载体 —— 一旦推进，
+            //   `Kdbx.saveVia` 那道最后防线就再也拦不住"基于旧内容的编辑覆盖远端新改动"。
+            //
+            //   ⚠️ 两个条件缺一不可：只看内容一致会漏掉"上传成功但幂等没推上去"的混合态
+            //      （内容已对齐远端，可那笔改动还没落地）；只看状态干净则会放过
+            //      "基线根本没记录"的情形（那种情形由对账补，不该在这里瞎猜）。
+            if (write.baselineAligned && statusBeforeWrite == KdbxCloudSyncStatus.IN_SYNC) {
+                // 基线推进由引擎门面做（它握着指纹，上层不碰）：见 `Kdbx.advanceBaseline`。
+                Kdbx.advanceBaseline(vaultId, write)
+            }
             // 标记之后**立即**排一次上传：不然"改完必须手动点同步"，
             // 而用户以为保存即同步（施工单 S1 的第一条用户反馈）。
             // ⚠️ 顺序不能反：先落 PENDING_UPLOAD，上传器才会认为"有活要干"。

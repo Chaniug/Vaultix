@@ -42,6 +42,7 @@
  */
 package io.vaultix.data.repository.kdbx
 
+import io.vaultix.common.logging.VaultixLog
 import io.vaultix.data.kdbx.Kdbx
 import io.vaultix.data.kdbx.KdbxFileSource
 import io.vaultix.data.kdbx.KdbxWriteFailure
@@ -164,11 +165,36 @@ class KdbxSyncOrchestrator(
             //
             //    一句话：**基线只在"本地真的跟上了远端"之后才推进**
             //    （拉取成功见 `markResolved`，强推成功见 `resolveUsingLocal`）。
+            //
+            // ⚠️ 上面这半（版本令牌）只是**两道防线里的第一道**，而且它有两处天生够不着：
+            //
+            //  1. **进程重启之后它就不成立了**：`remoteVersionToken` 是持久化的，而"会话里
+            //     那份内容来自哪一版"是内存态 ⇒ 用户看不到角标也会继续编辑；
+            //  2. **它管不住主写路径**：主写路径的 `expectedVersion` 取自本地缓存里的旧令牌，
+            //     "内容与令牌配套"这个前提从一开始就不满足（`.ai/ISSUES.md` #185）。
+            //
+            //   ⇒ 第二道防线是**内容对账**（下面这段）：手里若有远端当前字节，就比一比
+            //     "本机内容 == 远端内容吗"。相同 ⇒ 安全，顺手把令牌采纳成远端现在的值
+            //     （这不算"提前推进"—— 内容确实已在远端那一版上，采纳只是让它变成可用基线）；
+            //     不同 ⇒ **保持 REMOTE_CHANGED、一个字节都不写**，直到用户真的拉下来。
             markStatus(vaultId, KdbxSyncTransitions.markRemoteChanges())
-            return SyncOutcome.RemoteNewerNeedsReload
+            return if (adoptRemoteIfSameContent(vaultId, source)) {
+                // 内容本来就等于远端那一版（典型：本机刚打开时读到过它）⇒ 从"远端有改动"
+                // 降级为"一致"。持久化状态由上面的 markStatus 先写，这里再补一次真相。
+                markStatus(vaultId, KdbxSyncStatus.IN_SYNC, remoteNow)
+                SyncOutcome.AlreadyInSync
+            } else {
+                SyncOutcome.RemoteNewerNeedsReload
+            }
         }
 
         // ④ 本地改了、远端没改 ⇒ 推。
+        //
+        // ⚠️ `baselineAligned = null` 是刻意的：编发器推的是**会话当前内容**，
+        //    而它可能是"上次编辑后一直没推上去"的旧货（这时基线本来就已经对不上）。
+        //    这里不做内容闸门，真正的判断交给条件写（`lastKnownVersion`）——
+        //    远端若在期间变过，服务端会拒写并转 CONFLICT，那才是这条路径的正解。
+        //    写回基线只服务于**条目编辑的即时保存**（`KdbxItemRepository.persist`）。
         val saveResult = Kdbx.saveVia(
             vaultId = vaultId,
             source = source,
@@ -304,6 +330,37 @@ class KdbxSyncOrchestrator(
         markStatus(vaultId, KdbxSyncTransitions.markRemoteChanges())
     }
 
+    /**
+     * **内容对账**：本机内容是不是**已经**等于远端当前那一版？（#185 的第二道防线）
+     *
+     * ## 为什么不能只看版本令牌
+     *
+     * 令牌回答"远端有没有动过"，回答不了"我手里这份是不是它"。两者分开之后才有正确结论：
+     *
+     * | 令牌变了 | 内容相同 | 真相 |
+     * |---|---|---|
+     * | 是 | 是 | 远端换了编码/换了个 eTag，**内容没变** ⇒ 该采纳，不该逼用户拉一次 |
+     * | 是 | 否 | 远端真的有改动 ⇒ 必须 `REMOTE_CHANGED`（写回会被基线拦下） |
+     *
+     * @return `true` = 内容一致，基线已可用（调用方可以把它当成"已同步"）。
+     *
+     * ⚠️ 读远端是**整份下载**的代价，所以只在"令牌变了"这一支才会走到 ——
+     *   那是原本就要用户手动拉一次的情形，多读一次不改变量级；而**省掉的是**
+     *   "本机明明就是最新版却要用户点一次同步"（真机上最容易让人怀疑数据的一步）。
+     * ⚠️ 任何读取/解码失败一律返回 `false`：对账失败要**退回保守判定**，
+     *   绝不能因为"读不到"就假定"一样"（那正是静默覆盖的入口）。
+     */
+    private suspend fun adoptRemoteIfSameContent(
+        vaultId: String,
+        source: KdbxFileSource,
+    ): Boolean = runCatching {
+        Kdbx.adoptBaselineIfMatches(vaultId, source.read())
+    }.getOrElse { error ->
+        // 只记原因类别，不记内容（VaultixLog 铁律）。
+        error.message?.let { reason -> VaultixLog.d(TAG) { "对账失败（按未对齐处理）：$vaultId $reason" } }
+        false
+    }
+
     private suspend fun markStatus(
         vaultId: String,
         status: KdbxSyncStatus,
@@ -326,4 +383,9 @@ class KdbxSyncOrchestrator(
 
     private fun normalizeToken(raw: String?): String? =
         io.vaultix.data.kdbx.normalizeVersionToken(raw)
+
+    private companion object {
+        /** logcat 里按它过滤（`adb logcat -s VaultixKdbxSync`）。 */
+        const val TAG = "VaultixKdbxSync"
+    }
 }
