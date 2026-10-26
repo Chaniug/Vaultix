@@ -11,7 +11,7 @@
 |---|---|---|
 | [01-构建与环境](./issues/01-构建与环境.md) | 工程 / 构建 / CI / 工具链 / 环境 | 54 |
 | [02-自动填充](./issues/02-自动填充.md) | 自动填充（AutofillService 链路） | 19 |
-| [03-通行密钥与凭据提供商](./issues/03-通行密钥与凭据提供商.md) | 通行密钥 / Credential Provider / 凭据回灌 | 20 |
+| [03-通行密钥与凭据提供商](./issues/03-通行密钥与凭据提供商.md) | 通行密钥 / Credential Provider / 凭据回灌 | 22 |
 | [04-锁与解锁](./issues/04-锁与解锁.md) | 锁态模型 / 解锁 / 生物识别 / 密钥 | 15 |
 | [05-KDBX本地库](./issues/05-KDBX本地库.md) | KDBX 本地库 | 23 |
 | [06-界面与交互](./issues/06-界面与交互.md) | 界面 / 布局 / 交互动效 / 空态 / 图标 | 44 |
@@ -145,6 +145,8 @@
 | 190 | 见 05 篇 #190（内容指纹扩为全字段，`fido2Credentials` 11 个字段也进摘要） |
 | 163 | 🔴 Firefox Android 通行密钥「取不到」= **浏览器根本没发请求**：m_kato 原文「只在 `Discoverable Credential` required 时才走 Credential Manager」（Bugzilla 1862132，Android 13 及以下只走 GPM）⇒ **非本仓库缺陷，代码侧无从修** |
 | 195 | 🔴 ① `keyAlgorithm` 同一把密钥两个名字：`PasskeyCreateActivity` / `CipherMapper` 写 `"ECDSA"`，`KdbxPasskeyCodec` 写 `"ES256"` ⇒ 任何按算法名判断的地方在**一半数据上判错且不报错**。修法 = `core:model` 新增 `PasskeyKeyAlgorithm`，三处统一引 `ES256`（具体算法名，不是族名）。② 四处 `FLAG_MUTABLE`（解锁动作 / 密码候选 / 通行密钥候选 / 创建入口）—— `AutofillIntents.pending` 早就 IMMUTABLE，**同一条规则只执行了一半** ⇒ 统一改 IMMUTABLE（extras 带 `requestJson`/`credentialId`，可写 = 能让签名指向另一把密钥） |<br>⚠️ 不要加"两种算法名都认"的归一化：那会让"该写哪个"永远悬着。<br>判据：**同一条规则写在两处、只改一处，看起来就"已修"了**（同 #120 / #193） |
+| 196 | 🔴 创建通行密钥**完全不校验** origin 与 rpId 的从属关系：origin 推导顺序与 GET 侧相反，且末级是**凭空构造**的 `"https://$rpId"`（任何没带 origin 的请求都被判合法）⇒ 新建 `PasskeyOriginPolicy`（主机相等、或 rpId 为可注册后缀、且 rpId 不得宽于可注册域），删掉凭空构造的兜底，`Rejected` 直接 `fail`（**文案不含域名**，reason 只进日志） |<br>⚠️ **不能用 `UriMatcher.sameSite`**：那是 Cookie 口径（可注册域相等），会让 `a.example.com` 与 `b.example.com` 互相通过，而 WebAuthn 里两者互不通用。<br>顺带核实**不是漏洞**：`isSameRpId` 是精确匹配（合规）；`CallingAppOrigin` 已是自证式读取 |
+| 197 | 🔴 `authenticatorSelection.residentKey` 从不读，`discoverable` 硬编码 `true` ⇒ 库里所有通行密钥都自称可发现凭证，筛选 / 统计全错，条件发现流程会把 RP 声明为 `discouraged` 的凭证也列出来 ⇒ 新建 `PasskeyAuthenticatorSelection`，按 `required` / `preferred` / `discouraged` / 旧 `requireResidentKey` / 缺省 逐项判定 |<br>⚠️ 缺省记 `true` 是**有意偏离** WebAuthn L2 的 `discouraged` 默认（与 Bitwarden Android 一致），理由见类 KDoc。<br>🔴 本条顺带挖出**测试基建坑**：单测里的 `org.json` 是 mockable 空壳（连 `JSONObject(String)` 构造器都是空的）⇒ `testRuntimeOnly(libs.org.json)` + `UnitTestEnvironmentTest` 守卫，详见 03 篇 #197.4 |
 | 190 | 见 05 篇 #190（内容指纹全字段，含 `fido2Credentials` 11 字段） |
 
 ### [04-锁与解锁](./issues/04-锁与解锁.md) — 锁态模型 / 解锁 / 生物识别 / 密钥

@@ -178,7 +178,8 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 > 被归成"网络类"；`VaultixLog` 默认 sink 丢弃日志，定位只能靠临时 `System.err` 再读测试 XML；
 > ③ `onScreenOff()` 之后直接推进虚拟时间是假红 —— 定时器在协程里挂上，要先 `settle(m)`。
 >
-> **门禁**：compile ✅ · detekt ✅ · test **174 套 / 1706 例 / 0 失败** ✅（`--max-workers=1 --no-daemon`）。
+> **门禁**：compile ✅ · detekt ✅ · test **180 套 / 1744 例 / 0 失败** ✅（`--max-workers=1 --no-daemon`）。
+> （2026-10-26 晚更新：原记 174/1706，本轮 #196/#197 + 环境守卫 +6 套 / +38 例。）
 >
 > **同日夜补齐第二批（#193–#195 + TOTP 票据）**：
 > `#193` `release.yml` 写死 `gradle-version: 8.11.1`（`ci-debug.yml` 2026-10-02 就修过，这条路漏网）；
@@ -192,8 +193,9 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 > 判据：**修法不是"记得两边都改"，是让事实只有一个来源**。
 >
 > **审计里还没落地的（下一批，按优先级）**：
-> ① 通行密钥候选**不做 Origin 校验**；`excludeCredentials` / `authenticatorSelection` 不读；
-> `backupEligible/backedUp` 强制 true；
+> ① ~~通行密钥候选不做 Origin 校验~~（**已修** #196/#197：创建侧 origin↔rpId 从属校验
+> + 读 `authenticatorSelection.residentKey`；`backupEligible/backedUp` 强制 true 属**有意为之**，
+> 见 `WebAuthn.buildAuthenticatorData` 的 KDoc，不修）；
 > ② PIN 熔断无冷却 + 忘记 PIN 绕过；「从不」档 KEK 不绑认证；
 > ③ 自动拉取零接线（`SyncTrigger.PAGE_ENTER/APP_RESUME/PERIODIC` 全仓零调用）；
 > ④ 导出丢密码历史/时间戳、`passwordRevisionDate` 从不更新、CSV 导入、文件夹 CRUD、

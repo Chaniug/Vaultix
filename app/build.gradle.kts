@@ -207,6 +207,25 @@ android {
 
     testOptions {
         unitTests.isReturnDefaultValues = true
+
+        // ★ 给 JVM 单测补一份**真实可用的 `org.json`**（2026-10-26，.ai/ISSUES.md #197）。
+        //
+        // 现象：单测里 `JSONObject("{...}")` 构造出来是空的 —— `has()` 恒 false、
+        // `optString()` 返回 null、`toString()` 返回 null，任何解析 JSON 的逻辑
+        // 在单测里都只会走"解析失败"分支，**看起来像被测代码有 bug**。
+        //
+        // 根因：AGP 的 mockable android.jar 把 `org.json.JSONObject` 的**所有方法**
+        // 替换成"返回默认值"（`has` → `ireturn 0`、`getJSONObject` → `aconst_null`），
+        // 连 `JSONObject(String)` 构造器也是空实现（`aload_0; invokespecial Object.<init>; return`）。
+        // 于是"读 JSON"的代码在 JVM 单测里**根本跑不到真实逻辑**，而在真机上却是好的。
+        //
+        // 修法：把 `org.json:json` 加进单测 classpath（见 dependencies 里的
+        // `testRuntimeOnly(libs.org.json)`）。Gradle 的测试 fork 把**测试运行时依赖**
+        // 排在 `mockable-android.jar` 之前，于是真实实现优先被加载。
+        // 这**不影响** app 编译与运行时 —— 那边用的是系统自带的 org.json。
+        //
+        // 守卫：`UnitTestEnvironmentTest` 会断言"单测里的 org.json 是真实实现"，
+        // 依赖被误删或 AGP 改策略时会立刻红，而不是变成某个业务断言莫名失败。
     }
 }
 
@@ -298,6 +317,12 @@ dependencies {
     testImplementation(libs.mockk)
     // ViewModel / Flow 单测：Main 调度器替换（runTest + UnconfinedTestDispatcher）
     testImplementation(libs.kotlinx.coroutines.test)
+    // ⚠️ **必须排在测试 classpath 最前面**：AGP 的 mockable android.jar 里的
+    // `org.json.JSONObject` 全是"返回默认值"的空壳（`has()` 恒 false、
+    // `JSONObject(String)` 构造器什么都不做），见 testOptions 里的长注释。
+    // 用 `testRuntimeOnly` 而不是 `testImplementation`：单测源码**不直接** import
+    // org.json，只是运行时需要真实实现替掉空壳。
+    testRuntimeOnly(libs.org.json)
     // Compose BOM 必须同时声明给 androidTest 配置：ui-test-junit4 等依赖本身不带版本号
     // （在 catalog 中无 version），仅 implementation(platform(bom)) 不会传递给 androidTest，
     // 否则解析时版本为空（表现为 "Could not find androidx.compose.ui:ui-test-junit4:."）。

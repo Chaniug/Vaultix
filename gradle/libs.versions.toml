@@ -141,6 +141,13 @@ junit = "4.13.2"
 truth = "1.4.4"
 turbine = "1.2.0"
 mockk = "1.14.11"
+# org.json：**仅供 JVM 单测**使用的真实实现。
+#
+# AGP 的 mockable android.jar 把 `org.json.JSONObject` 的每个方法都换成
+# "返回默认值"（连 `JSONObject(String)` 构造器都是空的），于是任何解析 JSON
+# 的逻辑在单测里都只会走"解析失败"分支 —— 表现为"看起来像 bug"的假红。
+# 运行时与编译期都用系统自带的 org.json，本依赖不进制品。
+orgJson = "20240303"
 # Kover：行覆盖率工具。选 0.9.9（当前最新稳定版）：
 #   - 0.9.x 是唯一同时提供 Android 变体报告（koverHtmlReportDebug / koverVerifyDebug）
 #     与 JVM 字节码插桩的线，0.7.x 在 AGP 9 下拿不到 Kotlin 编译产物；
@@ -221,6 +228,8 @@ junit = { group = "junit", name = "junit", version.ref = "junit" }
 truth = { group = "com.google.truth", name = "truth", version.ref = "truth" }
 turbine = { group = "app.cash.turbine", name = "turbine", version.ref = "turbine" }
 mockk = { group = "io.mockk", name = "mockk", version.ref = "mockk" }
+# 只挂到单测 classpath（见 app/build.gradle.kts 的 testRuntimeOnly 声明）。
+org-json = { group = "org.json", name = "json", version.ref = "orgJson" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version = "1.2.1" }
 androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version = "3.6.1" }
 

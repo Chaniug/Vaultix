@@ -175,18 +175,23 @@ class PasskeyCreateActivity : FragmentActivity() {
 
         // ⚠️ 不直接读已收紧的 `callingAppInfo.origin`（1.6.0 起为 internal），走兼容层。
         //
-        // origin 的三级推导顺序**对齐 Bastion `PasskeyOriginResolver`**：
-        //   1) 请求 JSON 里调用方自带（无特权名单时唯一可信来源，最权威）；
-        //   2) CallingAppOrigin 兼容层；
-        //   3) rpId 兜底。
-        // 次序很重要：把 CallingAppOrigin 放第一会在部分 ROM 上拿到与请求方不一致的值，
-        // 使 RP 的 `C.origin` 校验失败（§7.1 第三项）。
+        // origin 推导顺序（2026-10-26 #196 起与 GET 侧统一）：
+        //   1) `CallingAppOrigin` 兼容层（系统亲自签发的调用方身份，最权威）；
+        //   2) 请求 JSON 里调用方自带的 `origin`（浏览器/App 自述，只能退居其次）。
+        //
+        // ★ 删掉了旧的第三级 `?: "https://$rpId"` —— 那是**凭空构造**：
+        //   rpId 为空时得到 `"https://"`，rpId 非空时得到一个"看起来合法"的 origin，
+        //   于是任何"没带 origin"的请求都会被自动判成合法，校验形同虚设。
+        //   现在推导不出就留空，交给下面的 [PasskeyOriginPolicy] 明确拒绝。
         val providerReq = runCatching {
             PendingIntentHandler.retrieveProviderCreateCredentialRequest(intent)
         }.getOrNull()
-        origin = runCatching { JSONObject(requestJson).optString("origin").takeIf { it.isNotBlank() } }.getOrNull()
-            ?: CallingAppOrigin.originOrNull(providerReq?.callingAppInfo)
-            ?: "https://$rpId"
+        val originFromCaller = CallingAppOrigin.originOrNull(providerReq?.callingAppInfo)
+            ?.takeIf { it.isNotBlank() }
+        val originFromRequest = runCatching {
+            JSONObject(requestJson).optString("origin").takeIf { it.isNotBlank() }
+        }.getOrNull()
+        origin = originFromCaller ?: originFromRequest.orEmpty()
         // clientDataHash 只挂在 CreatePublicKeyCredentialRequest 上（基类没有）→ 需下转型。
         // 由 Service 经 Intent 透传（对齐 GET 侧的 `option.clientDataHash`）。
         clientDataHash = intent.getByteArrayExtra(PasskeyProviderIntents.EXTRA_CLIENT_DATA_HASH)
@@ -194,6 +199,21 @@ class PasskeyCreateActivity : FragmentActivity() {
 
         if (requestJson.isBlank() || rpId.isBlank()) {
             fail(CreateCredentialUnknownException("Missing create parameters"))
+            return
+        }
+
+        // ★ RP 归属校验（#196）：origin 的主机必须等于 rpId 或是它的可注册后缀。
+        // 不做这步的话，任何能构造 `CreatePublicKeyCredentialRequest` 的调用方
+        // 都能让本应用给 `rpId = bank.example` 生成密钥、origin 随便写。
+        // ℹ️ 用户可见文案**不含域名**（reason 只进日志）：这条提示会出现在别的 App 里。
+        val verdict = PasskeyOriginPolicy.check(origin, rpId)
+        AutofillLogger.d(
+            "PKC origin caller=${originFromCaller ?: "-"} request=${originFromRequest ?: "-"} " +
+                "rpId=$rpId verdict=${verdict.javaClass.simpleName}",
+        )
+        if (verdict is PasskeyOriginPolicy.Verdict.Rejected) {
+            AutofillLogger.d("PKC rejected: ${verdict.reason}")
+            fail(CreateCredentialUnknownException("Origin does not match relying party"))
             return
         }
 
@@ -401,6 +421,10 @@ class PasskeyCreateActivity : FragmentActivity() {
                         "${WebAuthn.clientDataJsonMatchesHash(clientDataBytes, clientDataHash)}",
                 )
                 val userId = json.optJSONObject("user")?.optString("id")?.takeIf { it.isNotBlank() }
+                // ★ 尊重 RP 的 `authenticatorSelection.residentKey`（#197）。
+                // 旧实现硬编码 true —— 库里所有凭证都自称可发现，是**语义造假**而非崩溃，
+                // 但会让条件发现流程列出 RP 明确声明为 discouraged 的凭证。
+                val discoverable = PasskeyAuthenticatorSelection.isDiscoverable(requestJson)
                 val cred = VaultFido2Credential(
                     credentialId = WebAuthn.base64Url(key.credentialId),
                     rpId = rpId,
@@ -414,7 +438,7 @@ class PasskeyCreateActivity : FragmentActivity() {
                     keyValue = WebAuthn.base64Url(key.privateKeyPkcs8),
                     creationDate = Instant.now().toString(),
                     counter = 0,
-                    discoverable = true,
+                    discoverable = discoverable,
                 )
                 if (createNewLogin || selectedLoginId == null) {
                     val item = VaultItem(

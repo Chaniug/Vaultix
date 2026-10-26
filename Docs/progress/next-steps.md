@@ -48,11 +48,25 @@
 > 🔴 **共享根因**：**同一条规则写在两处、只改了一处，看起来就"已修"**。
 > 修法不是"记得两边都改"，是**让事实只有一个来源**。
 
-**门禁**：编译 ✅ · detekt ✅ · `gradle test` **174 套 / 1706 例 / 0 失败** ✅ · 索引一致 ✅。
+**门禁**：编译 ✅ · detekt ✅ · `gradle test` **180 套 / 1744 例 / 0 失败** ✅ · 索引一致 ✅。
+
+---
+
+## ✅ 第三批：通行密钥创建侧的**作用域**与**语义**（2026-10-26 晚）· #196 / #197
+
+| 编号 | 问题 | 修法 |
+|---|---|---|
+| #196 | 创建通行密钥**完全不校验** origin ↔ rpId 从属；origin 推导顺序与 GET 侧相反；末级兜底是**凭空构造**的 `"https://$rpId"` | 新建 `PasskeyOriginPolicy`（主机相等 / rpId 为可注册后缀 / rpId 不得宽于可注册域）；删掉凭空构造；`Rejected` 直接 `fail`，**文案不含域名** |
+| #197 | `authenticatorSelection.residentKey` 从不读，`discoverable` 恒 `true` | 新建 `PasskeyAuthenticatorSelection`，按 `required`/`preferred`/`discouraged`/旧 `requireResidentKey`/缺省 判定 |
+| 基建 | **单测里的 `org.json` 是 mockable 空壳**（连 `JSONObject(String)` 构造器都是空的）⇒ 所有"读 JSON"的代码在单测里只走失败分支，且"恒返回默认值"会让**该失败的用例通过** | `testRuntimeOnly(libs.org.json)` + `UnitTestEnvironmentTest` 守卫 |
+
+> ⚠️ **`excludeCredentials` 仍不读** —— 它影响的是"用户体感"（同一站点重复注册不提示），
+> 不属于安全缺口，排在下一批。
 
 **审计里尚未落地的（下一批，按优先级）**：
-① 通行密钥候选**不做 Origin 校验**；`excludeCredentials` / `authenticatorSelection` 不读；
-`backupEligible/backedUp` 强制 true；
+① `excludeCredentials` 不读（注册时不会提示"这站点已有这把密钥"）；
+   ~~通行密钥候选不做 Origin 校验~~ / ~~`authenticatorSelection` 不读~~ → **已修** #196/#197；
+   `backupEligible/backedUp` 强制 true → **有意为之**，不改（见 `WebAuthn` KDoc）；
 ② PIN 熔断无冷却 + 忘记 PIN 绕过；「从不」档 KEK 不绑认证；
 ③ 自动拉取零接线（`SyncTrigger.PAGE_ENTER/APP_RESUME/PERIODIC` 全仓零调用）；
 ④ 导出丢密码历史/时间戳、`passwordRevisionDate` 从不更新、CSV 导入、文件夹 CRUD、

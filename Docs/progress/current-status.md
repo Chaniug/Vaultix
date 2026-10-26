@@ -356,7 +356,7 @@
 |---|---|
 | 编译（full / offline 双变体） | ✅ |
 | `./gradlew detekt` | ✅ |
-| `./gradlew test --offline --max-workers=1 --no-daemon` | ✅ **174 套 / 1706 例 / 0 失败**（本轮 +12 套 / +86 例） |
+| `./gradlew test --offline --max-workers=1 --no-daemon` | ✅ **180 套 / 1744 例 / 0 失败**（第三批 #196/#197 后 +6 套 / +38 例） |
 | `python3 .ai/tools/check_issues_index.py` | ✅ 索引 = 题注 = 正文 全部一致 |
 
 ### 里程碑（与 `.ai/MEMORY.md` §3 同源）
@@ -375,8 +375,8 @@
 
 1. **自动拉取零接线**：`SyncTrigger.PAGE_ENTER / APP_RESUME / PERIODIC` 三个枚举值全仓零调用
    （2026-09-08 决策「自动同步 = 本地修改 flush；拉取 = 手动」，现仍是手动）；
-2. 通行密钥：候选**不做 Origin 校验**；`excludeCredentials` / `authenticatorSelection` 不读；
-   `backupEligible / backedUp` 强制 true；
+2. 通行密钥：`excludeCredentials` 仍不读（**Origin 校验与 `authenticatorSelection` 已于
+   2026-10-26 修**，见 #196 / #197；`backupEligible / backedUp` 强制 true 属有意为之）；
 3. PIN 熔断无冷却、忘记 PIN 可绕过；「从不」档 KEK 不绑认证；
 4. 安全中心（M3）**整块为空**；`Docs/08` S11–S20 多项未做（`archivedDate` 领域模型**没有字段**）；
 5. 附件**只能看不能加**；导出只有 Bitwarden 加密 JSON，且丢密码历史/时间戳；
