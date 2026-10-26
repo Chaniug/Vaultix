@@ -292,6 +292,47 @@ enum class UriMatch {
  * 写回时由 [io.vaultix.data.bitwarden.mapper.CipherMapper] 逐字段加密（creationDate 不加密，
  * 保持 Bitwarden 期望的可解析 DateTime 形态）。
  */
+/**
+ * 通行密钥**密钥算法名**的唯一来源（#194，2026-10-26）。
+ *
+ * ## 为什么需要它
+ *
+ * 这个字符串在三个地方被写入，而它们此前**各写各的**：
+ *
+ * | 写入点 | 原值 |
+ * |---|---|
+ * | `PasskeyCreateActivity`（本应用注册的新通行密钥） | `"ECDSA"` |
+ * | `KdbxPasskeyCodec.fromCredential`（从 KDBX 的 `KPEX_PASSKEY_*` 读回） | `"ES256"` |
+ * | `CipherMapper`（Bitwarden 写回，缺失时的默认值） | `"ECDSA"` |
+ *
+ * 于是同一种密钥（ES256 / P-256）在库里有两个名字：用户新建的通行密钥显示 "ECDSA"，
+ * 从 KeePassDX 导入的显示 "ES256"，而它们**是同一把曲线上的同一类密钥**。
+ * 更实际的问题是：任何按算法名做判断的地方（例如将来支持 Ed25519 通行密钥时
+ * "这把是不是 ES256"）都会在其中一半数据上判错，**而且不会报错**。
+ *
+ * ## 该选哪一个
+ *
+ * **`ES256`**。理由是它更精确：
+ * - `ES256` 是 WebAuthn / COSE 里那个具体算法的名字（ECDSA + P-256 + SHA-256）；
+ * - `ECDSA` 只是一个**算法族**（还可以是 ES384/ES512、或别的曲线）——
+ *   用一个族名去标注一把具体的密钥，信息量本来就少一层；
+ * - 本项目实际也只支持这一把（`P-256` + SHA-256），写成 `ES256` 与能力相符。
+ *
+ * 反方向的兼容：Bitwarden 服务端对该字段**不做枚举校验**（它是加密的自定义字段，
+ * 服务端看不到明文），所以存 `ES256` 不会被拒；官方客户端写的是 `ECDSA`，
+ * 但双方都只是"原样存取"，读回来照常显示。⇒ 不需要为兼容而保留旧值。
+ *
+ * ⚠️ **不要在这里加"两种都认"的归一化**：那会让"到底该写哪个"这个问题永远悬着，
+ * 新一代数据继续分裂。要改就一次改一处 —— 就是这里。
+ */
+object PasskeyKeyAlgorithm {
+    /** ECDSA + P-256 + SHA-256（WebAuthn 覆盖率最高的算法）。 */
+    const val ES256: String = "ES256"
+
+    /** 默认算法（本应用只发这一种）。 */
+    const val DEFAULT: String = ES256
+}
+
 @Serializable
 data class VaultFido2Credential(
     val credentialId: String = "",

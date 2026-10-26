@@ -1,6 +1,6 @@
 # 当前进度快照
 
-> 最后更新：**2026-10-26**（与开源项目对标审计 → 七组修复 #186–#192）—— **现状请看文末「当前状态（2026-10-26）」，下方 10-25 及更早的正文只作过程留痕。**
+> 最后更新：**2026-10-26**（与开源项目对标审计 → 九组修复 #186–#195）—— **现状请看文末「当前状态（2026-10-26）」，下方 10-25 及更早的正文只作过程留痕。**
 >
 > 上一版头注（2026-09-20，第三轮：胶囊阴影掉帧 + 强调色语义 + README/文档对齐）：
 >
@@ -331,7 +331,7 @@
 
 > 本节是**现状快照**，取代上方所有历史轮次记录（那些保留作过程留痕）。
 
-### 本轮落地：与开源项目对标审计 → 七组修复（#186–#192）
+### 本轮落地：与开源项目对标审计 → 九组修复（#186–#195）
 
 做法：先跑**四维度只读审计**（备份与自动填充 / 锁与设置面 / 通行密钥与 KDBX / 安全加固与 CI），
 基准为 Bitwarden 官方 Android、Keyguard、KeePassDX、Keepass2Android、Monica、Bastion 快照，
@@ -346,6 +346,9 @@
 | #190 | 409 被当弃单（同步）+ 内容指纹只摘 5 字段（KDBX） | **4xx ≠ 可以扔**；**指纹漏字段 = 那道防线在该字段上恒失效且静默** |
 | #191 | 搜索不覆盖备注与自定义字段 | **界面上展示的字段都该可搜索**，例外要反向锁定 |
 | #192 | 空分组被当「远端删了」⇒ 能清空本地文件夹 | **「远端没有」≠「远端删了」** |
+| #193 | `release.yml` 写死 `gradle-version: 8.11.1`（`ci-debug.yml` 已修，这条路漏网） | **同一条规则写在两处，改一处就"看起来已修"** |
+| #194 | 附件解密后的明文留在 `cacheDir` 锁库不清 | **「临时文件」≠「安全文件」** |
+| #195 | `keyAlgorithm` 两个名字（`ECDSA`/`ES256`）+ 四处 `FLAG_MUTABLE` + TOTP 密钥进 extras | 同上；**IMMUTABLE 是默认，MUTABLE 要理由** |
 
 ### 门禁
 
@@ -353,7 +356,7 @@
 |---|---|
 | 编译（full / offline 双变体） | ✅ |
 | `./gradlew detekt` | ✅ |
-| `./gradlew test --offline --max-workers=1 --no-daemon` | ✅ **170 套 / 1671 例 / 0 失败**（本轮 +8 套 / +51 例） |
+| `./gradlew test --offline --max-workers=1 --no-daemon` | ✅ **174 套 / 1706 例 / 0 失败**（本轮 +12 套 / +86 例） |
 | `python3 .ai/tools/check_issues_index.py` | ✅ 索引 = 题注 = 正文 全部一致 |
 
 ### 里程碑（与 `.ai/MEMORY.md` §3 同源）
@@ -372,12 +375,12 @@
 
 1. **自动拉取零接线**：`SyncTrigger.PAGE_ENTER / APP_RESUME / PERIODIC` 三个枚举值全仓零调用
    （2026-09-08 决策「自动同步 = 本地修改 flush；拉取 = 手动」，现仍是手动）；
-2. **转发版 `release.yml:68,79` 仍写死 `gradle-version: 8.11.1`**（与本机 9.5.1 不符，release 会用错版本）；
-3. 附件明文缓存 `cacheDir/attachments/<itemId>` 锁库不清；附件**只能看不能加**；
-4. 通行密钥：候选不做 Origin 校验；`excludeCredentials` / `authenticatorSelection` 不读；
-   `backupEligible/backedUp` 强制 true；`keyAlgorithm` 常量 `"ECDSA"` vs `"ES256"` 不统一；
-5. PIN 熔断无冷却、忘记 PIN 可绕过；「从不」档 KEK 不绑认证；
-6. 安全中心（M3）**整块为空**；`Docs/08` S11–S20 多项未做（`archivedDate` 领域模型**没有字段**）；
-7. 导出只有 Bitwarden 加密 JSON，且丢密码历史/时间戳；无 CSV 导入；无文件夹 CRUD；
-8. `UpdateChecker` 走 `ghproxy.net` 且不校验 SHA-256；`FillAssistRepository` 默认联网拉规则；
-9. `KdbxRoundTrip.verify` 只比字段名不比值；`KdbxFidelity.NON_DEFAULT_CIPHER` 从不产生。
+2. 通行密钥：候选**不做 Origin 校验**；`excludeCredentials` / `authenticatorSelection` 不读；
+   `backupEligible / backedUp` 强制 true；
+3. PIN 熔断无冷却、忘记 PIN 可绕过；「从不」档 KEK 不绑认证；
+4. 安全中心（M3）**整块为空**；`Docs/08` S11–S20 多项未做（`archivedDate` 领域模型**没有字段**）；
+5. 附件**只能看不能加**；导出只有 Bitwarden 加密 JSON，且丢密码历史/时间戳；
+   无 CSV 导入；无文件夹 CRUD；`passwordRevisionDate` 从不更新；
+6. `UpdateChecker` 走 `ghproxy.net` 且不校验 SHA-256；`FillAssistRepository` 默认联网拉规则；
+   `DeveloperLogsDialog` 的 E/F 兜底不脱敏；
+7. `KdbxRoundTrip.verify` 只比字段名不比值；`KdbxFidelity.NON_DEFAULT_CIPHER` 从不产生。

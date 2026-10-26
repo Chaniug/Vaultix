@@ -29,6 +29,21 @@
  * 而 CP 密码分支任一环节失败就返回空 ⇒ 密码框什么都不弹、老 AutofillService 同时被绕过（两条路全废）。
  * 因此密码填充回归 [io.vaultix.vaultix.autofill.VaultixAutofillService.onFillRequest]，两路各司其职。
  */
+// ---------------------------------------------------------------------------
+// ⚠️ 本文件的 PendingIntent 一律 `FLAG_IMMUTABLE`（#195，2026-10-26）
+//
+// `FLAG_MUTABLE` 的语义是"持有者可以改这个 PendingIntent 里的 extras"。这几处交出去的
+// 是系统凭据选择器（Credential Manager），里面的 Intent 全是本应用构造好的**显式 Intent**，
+// 不需要系统往里填任何东西（填值靠 API 33+ 的 `CredentialEntry` 本身，不靠改 extras）。
+//
+// 反面代价很实：MUTABLE 让任何拿到它的组件都能改写 extras，而这里 extras 带着
+// `requestJson`（含 challenge / allowCredentials）、`vaultId` / `itemId` / `credentialId`
+// —— 改写它等于让签名请求指向另一把密钥。改为 IMMUTABLE 后这些字段构造完即不可变。
+//
+// 对照：`AutofillIntents.pending` 从一开始就是 IMMUTABLE（"系统用它拉起认证界面，
+// 必须 IMMUTABLE"）。同一条规则在 credential provider 这条路上被写成了 MUTABLE ——
+// 这正是 `.ai/ISSUES.md` #120 记的那种失败模式：**同一条规则只执行了一半**。
+// ---------------------------------------------------------------------------
 package io.vaultix.vaultix.passkey
 
 import android.app.PendingIntent
@@ -233,7 +248,7 @@ class VaultixCredentialProviderService : CredentialProviderService() {
             this,
             REQUEST_CREATE_CP,
             intent,
-            PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         val entry = CreateEntry.Builder(
             getString(R.string.passkey_create_for, rpName.ifBlank { rpId }),

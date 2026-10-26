@@ -10,6 +10,7 @@ import io.vaultix.datastore.VaultTimeoutPreferences
 import io.vaultix.domain.VaultRepository
 import io.vaultix.model.VaultKind
 import io.vaultix.model.VaultSummary
+import io.vaultix.vaultix.util.SensitiveCache
 import io.vaultix.vaultix.util.VaultixClipboard
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.flowOf
@@ -162,6 +163,8 @@ class VaultLockManagerImplNeverTest {
             // #188：锁库后会顺手清剪贴板。这个测试只关心"有没有锁"，
             //  clipboard 传 relaxed mock（`clearNow()` 在 runCatching 里，不会影响断言）。
             clipboard = mockk(relaxed = true),
+            // #193：锁库后还会清 `cache/` 下的明文附件与缩略图。同上，relaxed mock 足够。
+            sensitiveCache = mockk(relaxed = true),
         )
         // ★ 把后台调度器换成本测试的虚拟调度器 ⇒ 定时器与 init 收集全部走虚拟时间。
         //   ⚠️ 必须在 `runCurrent()` **之前**设：`scope` 是 `by lazy`-ish 的 getter，
@@ -241,18 +244,49 @@ class VaultLockManagerImplNeverTest {
         every { repository.observeVaults() } returns flowOf(listOf(vault("vault-1")))
         every { repository.observeUnlockedVaultIds() } returns flowOf(setOf("vault-1"))
         val clipboard = mockk<VaultixClipboard>(relaxed = true)
+        val sensitiveCache = mockk<SensitiveCache>(relaxed = true)
 
         val m = VaultLockManagerImpl(
             context = mockk<Context>(relaxed = true),
             vaultRepository = repository,
             vaultTimeoutPrefs = prefs,
             clipboard = clipboard,
+            sensitiveCache = sensitiveCache,
         )
         m.testingIoDispatcher = StandardTestDispatcher(testScheduler)
         m.startObservingVaults()
         runCurrent()
         return Triple(m, repository, clipboard)
     }
+
+    /** 同时需要剪贴板与敏感缓存两个 mock 的用例（#193）。 */
+    private fun TestScope.managerWithRepoClipboardAndCache(
+        timeout: VaultTimeout,
+    ): Quadruple<VaultLockManagerImpl, VaultRepository, VaultixClipboard, SensitiveCache> {
+        val prefs = mockk<VaultTimeoutPreferences>(relaxed = true)
+        every { prefs.vaultTimeout(any()) } returns flowOf(timeout)
+
+        val repository = mockk<VaultRepository>(relaxed = true)
+        every { repository.observeVaults() } returns flowOf(listOf(vault("vault-1")))
+        every { repository.observeUnlockedVaultIds() } returns flowOf(setOf("vault-1"))
+        val clipboard = mockk<VaultixClipboard>(relaxed = true)
+        val cache = mockk<SensitiveCache>(relaxed = true)
+
+        val m = VaultLockManagerImpl(
+            context = mockk<Context>(relaxed = true),
+            vaultRepository = repository,
+            vaultTimeoutPrefs = prefs,
+            clipboard = clipboard,
+            sensitiveCache = cache,
+        )
+        m.testingIoDispatcher = StandardTestDispatcher(testScheduler)
+        m.startObservingVaults()
+        runCurrent()
+        return Quadruple(m, repository, clipboard, cache)
+    }
+
+    /** 四元组（Kotlin 标准库只到 Triple）。 */
+    private data class Quadruple<A, B, C, D>(val first: A, val second: B, val third: C, val fourth: D)
 
     private fun assertNoLock(repository: VaultRepository) {
         coVerify(exactly = 0) { repository.lockVault(any()) }
@@ -312,6 +346,44 @@ class VaultLockManagerImplNeverTest {
         coVerify(exactly = 1) { repository.lockVault("vault-1") }
         // 锁定发生 → 必须清一次（且只清一次）。
         io.mockk.verify(exactly = 1) { clipboard.clearNow() }
+    }
+
+    @Test
+    fun `自动锁定后清明文附件缓存`() = runTest {
+        // #193：附件下载后落在 cacheDir 里是**解密好的明文**，而系统只在"存储空间不足"时
+        // 才回收缓存 —— 一台大容量手机可能几个月都不回收。锁库是"用户已离开"的可靠信号，
+        // 在这里清，风险窗口就从"不可控"收窄到"本次解锁会话"。
+        // 四元组用具名访问器，不用解构（detekt `DestructuringDeclarationWithTooManyEntries`
+        // 只允许 3 项 —— 它拦的是"位置解构到第 4 个以后基本靠数"的可读性问题）。
+        val f = managerWithRepoClipboardAndCache(VaultTimeout.FiveMinutes)
+        val m = f.first
+        val repository = f.second
+        val cache = f.fourth
+
+        m.onAppBackgrounded()
+        settle(m)
+        advanceTimeBy(VaultTimeout.FiveMinutes.vaultTimeoutInMinutes * 60_000L + 1)
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { repository.lockVault("vault-1") }
+        io.mockk.verify(exactly = 1) { cache.clearAll() }
+    }
+
+    @Test
+    fun `Never档_绝不清明文附件缓存`() = runTest {
+        // 反向锁定：`Never` 档什么都不发生 —— 既不该锁库，也不该清缓存。
+        // 如果哪天有人把"清缓存"挂到 `onAppBackgrounded` 上（而不是"锁定时"），
+        // 这条会立刻变红：那等于用户每切一次后台，附件就被清一次（下载白做了）。
+        val f = managerWithRepoClipboardAndCache(VaultTimeout.Never)
+        val m = f.first
+        val cache = f.fourth
+
+        m.onAppBackgrounded()
+        runCurrent()
+        advanceTimeBy(60 * 60 * 1000L)
+        advanceUntilIdle()
+
+        io.mockk.verify(exactly = 0) { cache.clearAll() }
     }
 
     @Test

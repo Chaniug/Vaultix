@@ -20,6 +20,7 @@ import io.vaultix.data.bitwarden.model.LoginDto
 import io.vaultix.data.bitwarden.model.SecureNoteDto
 import io.vaultix.data.bitwarden.model.SshKeyDto
 import io.vaultix.data.bitwarden.model.UriDto
+import io.vaultix.model.PasskeyKeyAlgorithm
 import io.vaultix.model.CustomFieldType
 import io.vaultix.model.UriMatch
 import io.vaultix.model.VaultAttachment
@@ -671,7 +672,7 @@ class CipherMapper @Inject constructor(
         Fido2CredentialDto(
             credentialId = encryptOpt(c.credentialId, key),
             keyType = encryptOpt(c.keyType ?: KEY_TYPE_PUBLIC, key),
-            keyAlgorithm = encryptOpt(c.keyAlgorithm ?: KEY_ALGORITHM_ECDSA, key),
+            keyAlgorithm = encryptOpt(c.keyAlgorithm ?: PasskeyKeyAlgorithm.DEFAULT, key),
             keyCurve = encryptOpt(c.keyCurve ?: KEY_CURVE_P256, key),
             keyValue = encryptOpt(c.keyValue.orEmpty(), key),
             rpId = encryptOpt(c.rpId, key),
@@ -774,7 +775,6 @@ class CipherMapper @Inject constructor(
         const val TYPE_FIELD_LINKED = 3
         // 通行密钥字段默认值（对齐 Bitwarden login.fido2Credentials）
         const val KEY_TYPE_PUBLIC = "public-key"
-        const val KEY_ALGORITHM_ECDSA = "ECDSA"
         const val KEY_CURVE_P256 = "P-256"
     }
 }

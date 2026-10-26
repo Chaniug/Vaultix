@@ -11,6 +11,7 @@ import io.vaultix.data.bitwarden.model.SshKeyDto
 import io.vaultix.data.bitwarden.model.UriDto
 import io.vaultix.data.bitwarden.model.toStoredCipherDto
 import io.vaultix.model.UriMatch
+import io.vaultix.model.PasskeyKeyAlgorithm
 import io.vaultix.model.VaultCard
 import io.vaultix.model.VaultFido2Credential
 import io.vaultix.model.VaultIdentity
@@ -135,6 +136,36 @@ class CipherMapperTotpUriFido2Test {
      * → 编辑一次条目就把服务端已存的 `keyValue`（密钥材料）、`counter`、`discoverable`
      * 覆盖成空/默认值，官方端与其它设备上的这条通行密钥再也签不了名（不可逆）。
      */
+    @Test
+    fun `keyAlgorithm 缺失时默认值与 KDBX 侧一致_ES256`() {
+        // #194（2026-10-26）：这个默认值原本是 "ECDSA"，而 `KdbxPasskeyCodec` 写的是 "ES256"，
+        // 同一个算法的两种叫法 —— 新建的通行密钥显示 ECDSA、从 KeePassDX 导入的显示 ES256。
+        // 这条用例把"缺省值"钉在 `PasskeyKeyAlgorithm.DEFAULT` 上：改回去就会红。
+        val item = VaultItem(
+            id = "i1",
+            type = VaultItemType.Login,
+            title = "站点",
+            fido2Credentials = listOf(
+                VaultFido2Credential(
+                    credentialId = "cid",
+                    rpId = "x.com",
+                    // ★ 故意留空：走 `?: PasskeyKeyAlgorithm.DEFAULT` 那条分支
+                    keyAlgorithm = null,
+                ),
+            ),
+        )
+
+        val request = mapper.toRequest(item, accountKey)
+
+        val written = request.login!!.fido2Credentials.single()
+        assertEquals(
+            PasskeyKeyAlgorithm.ES256,
+            crypto.decryptToString(written.keyAlgorithm!!, accountKey),
+        )
+        // 与领域层的常量字面一致（防止有人只改常量、忘了这边是硬编码）
+        assertEquals("ES256", PasskeyKeyAlgorithm.DEFAULT)
+    }
+
     @Test
     fun fido2RoundTripKeepsKeyMaterialCounterAndDiscoverable() {
         val stored = CipherDto(

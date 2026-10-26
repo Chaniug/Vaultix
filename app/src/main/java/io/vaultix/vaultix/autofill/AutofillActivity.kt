@@ -118,6 +118,10 @@ class AutofillActivity : FragmentActivity() {
     @Inject
     lateinit var pendingFillStore: PendingFillStore
 
+    /** TOTP 密钥的短期暂存（#195）：Intent 里只有票据，密钥从这里换。 */
+    @Inject
+    lateinit var totpTickets: TotpTicketStore
+
     /** 候选来源：与填充服务共用同一实现，保证两条路径结论一致。 */
     @Inject
     lateinit var candidates: AutofillCandidateSource
@@ -885,7 +889,7 @@ class AutofillActivity : FragmentActivity() {
         // 上限保护同服务端：FillResponse 经 Binder 传输有大小限制。
         for (suggestion in plan.suggestions.take(maxUnlockDatasets)) {
             val dataset = AutofillDatasetFactory
-                .datasetFor(this, parsed, suggestion, copyTotp) ?: continue
+                .datasetFor(this, parsed, suggestion, copyTotp, totpTickets) ?: continue
             builder.addDataset(dataset)
             added++
         }
@@ -944,7 +948,11 @@ class AutofillActivity : FragmentActivity() {
      */
     private fun deliverDatasetAndDeliverTotp(title: String, subtitle: String) {
         deliverDataset(title, subtitle)
-        val secret = AutofillIntents.totpSecretOf(intent) ?: return
+        // ★ 用票据换回密钥（#195）：extras 里只有票据，密钥在 [TotpTicketStore] 内存里。
+        //   取不到（过期 60 秒 / 进程重建过）就静默不复制 —— 这不是错误，
+        //   而是"这条建议已经太旧了"，弹个 toast 只会让用户困惑。
+        val ticket = AutofillIntents.totpTicketOf(intent)
+        val secret = totpTickets.consume(ticket) ?: return
         ProcessLifecycleOwner.get().lifecycleScope.launch(Dispatchers.IO) {
             if (!runCatching { prefs.autoCopyTotp.first() }.getOrDefault(false)) return@launch
             val code = runCatching {

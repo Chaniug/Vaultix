@@ -178,17 +178,29 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 > 被归成"网络类"；`VaultixLog` 默认 sink 丢弃日志，定位只能靠临时 `System.err` 再读测试 XML；
 > ③ `onScreenOff()` 之后直接推进虚拟时间是假红 —— 定时器在协程里挂上，要先 `settle(m)`。
 >
-> **门禁**：compile ✅ · detekt ✅ · test **170 套 / 1671 例 / 0 失败** ✅（`--max-workers=1 --no-daemon`）。
+> **门禁**：compile ✅ · detekt ✅ · test **174 套 / 1706 例 / 0 失败** ✅（`--max-workers=1 --no-daemon`）。
+>
+> **同日夜补齐第二批（#193–#195 + TOTP 票据）**：
+> `#193` `release.yml` 写死 `gradle-version: 8.11.1`（`ci-debug.yml` 2026-10-02 就修过，这条路漏网）；
+> `#194` 附件解密后的明文留在 `cacheDir` 锁库不清 ⇒ 新增 `SensitiveCache` 统一归口；
+> `#195` `keyAlgorithm` 同一把密钥两个名字（`ECDSA` vs `ES256`）+ 四处 `FLAG_MUTABLE` 改 IMMUTABLE；
+> 顺带把 TOTP 密钥从 `PendingIntent` extras 挪进 `TotpTicketStore`（60 秒可重读，**不能做成一次性**
+> —— `AutofillActivity` 可能被重投递，第二次拿 null 等于"点了没反应"）。
+>
+> 🔴 **这三条共享同一个根因模型**：**同一条规则写在两处、只改了一处，看起来就"已修"了**
+> （#193 ↔ `ci-debug` 已修 / #195 ↔ `AutofillIntents.pending` 早就 IMMUTABLE / #120 的原型）。
+> 判据：**修法不是"记得两边都改"，是让事实只有一个来源**。
 >
 > **审计里还没落地的（下一批，按优先级）**：
-> ① **`release.yml` 写死 `gradle-version: 8.11.1`**（release 会用错版本编不过）；
-> ② 附件明文缓存 `cacheDir/attachments/<itemId>` 锁库不清；
-> ③ `keyAlgorithm` 常量 `"ECDSA"` vs `"ES256"` 不统一；
-> ④ `AutofillIntents` 带 TOTP 私钥 + 三处 `FLAG_MUTABLE`；
-> ⑤ 通行密钥候选不做 Origin 校验；⑥ PIN 熔断无冷却；
-> ⑦ 自动拉取零接线（`SyncTrigger.PAGE_ENTER/APP_RESUME/PERIODIC` 无人调用）；
-> ⑧ 导出丢密码历史/时间戳、`passwordRevisionDate` 从不更新、CSV 导入、文件夹 CRUD；
-> ⑨ `UpdateChecker` 走 `ghproxy.net` 且不校验 SHA-256。
+> ① 通行密钥候选**不做 Origin 校验**；`excludeCredentials` / `authenticatorSelection` 不读；
+> `backupEligible/backedUp` 强制 true；
+> ② PIN 熔断无冷却 + 忘记 PIN 绕过；「从不」档 KEK 不绑认证；
+> ③ 自动拉取零接线（`SyncTrigger.PAGE_ENTER/APP_RESUME/PERIODIC` 全仓零调用）；
+> ④ 导出丢密码历史/时间戳、`passwordRevisionDate` 从不更新、CSV 导入、文件夹 CRUD、
+> passphrase UI、安全中心；
+> ⑤ `UpdateChecker` 走 `ghproxy.net` 且不校验 SHA-256；`FillAssistRepository` 默认联网拉规则；
+> `DeveloperLogsDialog` 的 E/F 兜底不脱敏；
+> ⑥ `KdbxRoundTrip.verify` 只比字段名不比值；`KdbxFidelity.NON_DEFAULT_CIPHER` 从不产生。
 
 > ⚡ **2026-10-25 晚：写回基线 —— 令牌对得上 ≠ 内容来源对得上（#185）**
 >

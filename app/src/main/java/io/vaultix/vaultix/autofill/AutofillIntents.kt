@@ -39,7 +39,14 @@ object AutofillIntents {
     const val MODE_COPY_TOTP = 3
 
     private const val EXTRA_MODE = "vaultix.autofill.mode"
-    private const val EXTRA_TOTP = "vaultix.autofill.totp"
+    /**
+     * TOTP 密钥的**一次性票据**（不是密钥本身，#195，2026-10-26）。
+     *
+     * PendingIntent 会被系统保存（甚至被 `dumpsys` 带出来），而 TOTP 密钥是
+     * **长期共享秘密** —— 不像验证码 30 秒就换，泄露它等于永久拿到二次验证能力。
+     * 所以 extras 里只放这张票据，密钥由 [TotpTicketStore] 留在内存里。
+     */
+    private const val EXTRA_TOTP_TICKET = "vaultix.autofill.totp_ticket"
     private const val EXTRA_TITLE = "vaultix.autofill.title"
     private const val EXTRA_SUBTITLE = "vaultix.autofill.subtitle"
     private const val EXTRA_DATASET_ID = "vaultix.autofill.dataset_id"
@@ -94,12 +101,12 @@ object AutofillIntents {
         subtitle: String,
         datasetId: String? = null,
         entries: List<Pair<AutofillId, String>> = emptyList(),
-        totpSecret: String? = null,
+        totpTicket: String? = null,
         category: FillCategory? = null,
     ): Intent = Intent(context, AutofillActivity::class.java)
         .setAction(Intent.ACTION_MAIN)
         .putExtra(EXTRA_MODE, mode)
-        .putExtra(EXTRA_TOTP, totpSecret)
+        .putExtra(EXTRA_TOTP_TICKET, totpTicket)
         .putExtra(EXTRA_TITLE, title)
         .putExtra(EXTRA_SUBTITLE, subtitle)
         .putExtra(EXTRA_DATASET_ID, datasetId)
@@ -127,8 +134,8 @@ object AutofillIntents {
         return FillCategory.entries.firstOrNull { it.name == raw }
     }
 
-    /** 待自动复制的 TOTP 密钥（仅 [MODE_COPY_TOTP] 携带）。 */
-    fun totpSecretOf(intent: Intent): String? = intent.getStringExtra(EXTRA_TOTP)
+    /** 待自动复制的 TOTP **票据**（仅 [MODE_COPY_TOTP] 携带；密钥用 [TotpTicketStore] 换）。 */
+    fun totpTicketOf(intent: Intent): String? = intent.getStringExtra(EXTRA_TOTP_TICKET)
 
     /** 待回填的「目标字段 → 值」（与 [AutofillIntents.create] 入参顺序一致）。 */
     fun entriesOf(intent: Intent): List<Pair<AutofillId, String>> {

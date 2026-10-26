@@ -74,6 +74,10 @@ class VaultixAutofillService : AutofillService() {
     @Inject
     lateinit var pendingFillStore: PendingFillStore
 
+    /** TOTP 密钥的短期暂存（#195）：Intent 里只有票据，密钥从这里换。 */
+    @Inject
+    lateinit var totpTickets: TotpTicketStore
+
     /** 填充辅助规则（站点级选择器）；拉不到时行为等同没有它。 */
     @Inject
     lateinit var fillAssistRepository: FillAssistRepository
@@ -340,7 +344,7 @@ class VaultixAutofillService : AutofillService() {
         // 整个响应失败（表现为「浏览器里一点反应都没有」）。
         for (suggestion in plan.suggestions.take(MAX_DATASETS)) {
             val dataset = AutofillDatasetFactory
-                .datasetFor(this, parsed, suggestion, copyTotp) ?: continue
+                .datasetFor(this, parsed, suggestion, copyTotp, totpTickets) ?: continue
             builder.addDataset(dataset)
             added++
         }

@@ -72,6 +72,7 @@ import dagger.hilt.android.AndroidEntryPoint
 import io.vaultix.common.WebAuthn
 import io.vaultix.domain.ItemRepository
 import io.vaultix.domain.VaultRepository
+import io.vaultix.model.PasskeyKeyAlgorithm
 import io.vaultix.model.VaultFido2Credential
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
@@ -407,7 +408,7 @@ class PasskeyCreateActivity : FragmentActivity() {
                     userName = userName,
                     userDisplayName = userDisplayName,
                     userHandle = userId,
-                    keyAlgorithm = "ECDSA",
+                    keyAlgorithm = PasskeyKeyAlgorithm.DEFAULT,
                     keyType = "public-key",
                     keyCurve = "P-256",
                     keyValue = WebAuthn.base64Url(key.privateKeyPkcs8),

@@ -32,6 +32,21 @@
  * ⚠️ 本类只做**纯构建**：不做任何 `setResult`/`finish`，也不碰 UI。收尾由调用方负责。
  * ---------------------------------------------------------------------------
  */
+// ---------------------------------------------------------------------------
+// ⚠️ 本文件的 PendingIntent 一律 `FLAG_IMMUTABLE`（#195，2026-10-26）
+//
+// `FLAG_MUTABLE` 的语义是"持有者可以改这个 PendingIntent 里的 extras"。这几处交出去的
+// 是系统凭据选择器（Credential Manager），里面的 Intent 全是本应用构造好的**显式 Intent**，
+// 不需要系统往里填任何东西（填值靠 API 33+ 的 `CredentialEntry` 本身，不靠改 extras）。
+//
+// 反面代价很实：MUTABLE 让任何拿到它的组件都能改写 extras，而这里 extras 带着
+// `requestJson`（含 challenge / allowCredentials）、`vaultId` / `itemId` / `credentialId`
+// —— 改写它等于让签名请求指向另一把密钥。改为 IMMUTABLE 后这些字段构造完即不可变。
+//
+// 对照：`AutofillIntents.pending` 从一开始就是 IMMUTABLE（"系统用它拉起认证界面，
+// 必须 IMMUTABLE"）。同一条规则在 credential provider 这条路上被写成了 MUTABLE ——
+// 这正是 `.ai/ISSUES.md` #120 记的那种失败模式：**同一条规则只执行了一半**。
+// ---------------------------------------------------------------------------
 package io.vaultix.vaultix.passkey
 
 import android.app.PendingIntent
@@ -218,7 +233,12 @@ class CredentialProviderEntryBuilder @Inject constructor(
      * **重新调用** `onBeginGetCredentialRequest`，届时库已解锁，正常返回凭据。
      *
      * 对齐 Bitwarden `createFido2UnlockPendingIntent`：显式 action + 显式 Activity class，
-     * `FLAG_MUTABLE`，**不加 NEW_TASK**（见其 KDoc 警告）。
+     * **不加 NEW_TASK**（见其 KDoc 警告）。
+     *
+     * ⚠️ 与 Bitwarden 的**有意分歧**：它用 `FLAG_MUTABLE`，本文件用 `FLAG_IMMUTABLE`（#195）。
+     * Bitwarden 当年用 MUTABLE 是因为要宿主往 extras 里回填认证结果；本应用不需要
+     * （解锁完成后系统会**重新调用** `onBeginGetCredentialRequest`，见上），
+     * 所以没有任何理由留着可写口子。
      *
      * ⚠️ 解锁走的是 `AutofillActivity`（MODE_UNLOCK）：它已实现"原地生物识别解锁，
      * 无本地快速解锁则亮卡片引导打开 Vaultix"，是 Vaultix 既有的成熟解锁链。
@@ -234,7 +254,7 @@ class CredentialProviderEntryBuilder @Inject constructor(
             context,
             REQUEST_UNLOCK_CP,
             intent,
-            PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         return AuthenticationAction.Builder(
             context.getString(R.string.credential_unlock_title),
@@ -322,7 +342,7 @@ class CredentialProviderEntryBuilder @Inject constructor(
             // 用户点 A 条目却拿 B 条目的密码。改用进程内单调自增。
             RequestCodes.next(),
             intent,
-            PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         val username = item.username.ifBlank { item.title }
         val builder = PasswordCredentialEntry.Builder(context, username, pendingIntent, option)
@@ -405,7 +425,7 @@ class CredentialProviderEntryBuilder @Inject constructor(
             // 同上（#187）：通行密钥候选也不能靠哈希撞号。
             RequestCodes.next(),
             intent,
-            PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         val username = m.credential.userName.ifBlank { m.loginTitle.ifBlank { m.credential.rpName } }
         val builder = PublicKeyCredentialEntry.Builder(context, username, pendingIntent, option)

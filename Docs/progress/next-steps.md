@@ -36,16 +36,30 @@
 ④ 设「离开 5 分钟锁定」→ 熄屏 6 分钟后点亮 → 应要求解锁；
 ⑤ 两台设备制造一次 409（同一条两端同时改）→ 改动不应该消失。
 
+### 第二批（同日 · #193–#195）
+
+| 编号 | 问题 | 修法 |
+|---|---|---|
+| #193 | `release.yml` 写死 `gradle-version: 8.11.1`（wrapper 9.5.1）—— `ci-debug.yml` 10-02 就修过，**这条路漏网** | 删 `gradle-version:`（版本只有一个来源）+ 兜底从 properties 读、解析不出 `exit 1` |
+| #194 | 附件解密后的**明文**留在 `cache/attachments/` 锁库不清（系统只在缺空间时回收） | 新增 `SensitiveCache` 统一归口（同根 ⇒ 一次删净）；锁库 `clearAll()`、删条目 `invalidateFor()` |
+| #195 | ① `keyAlgorithm` 两套名字（`ECDSA` vs `ES256`）② 四处 `FLAG_MUTABLE` | ① `core:model` 新增 `PasskeyKeyAlgorithm`，三处统一 `ES256` ② 全部改 `FLAG_IMMUTABLE` |
+| #195 | TOTP 密钥原文进 `PendingIntent` extras（长期共享秘密） | `TotpTicketStore`：extras 只带票据，60 秒可重读 |
+
+> 🔴 **共享根因**：**同一条规则写在两处、只改了一处，看起来就"已修"**。
+> 修法不是"记得两边都改"，是**让事实只有一个来源**。
+
+**门禁**：编译 ✅ · detekt ✅ · `gradle test` **174 套 / 1706 例 / 0 失败** ✅ · 索引一致 ✅。
+
 **审计里尚未落地的（下一批，按优先级）**：
-① **`release.yml:68,79` 写死 `gradle-version: 8.11.1`**（release 会用错版本编不过）；
-② 附件明文缓存 `cacheDir/attachments/<itemId>` 锁库不清；
-③ `keyAlgorithm` 常量 `"ECDSA"`（`PasskeyCreateActivity`）vs `"ES256"`（`KdbxPasskeyCodec`）不统一；
-④ `AutofillIntents` 带 TOTP 私钥 + `CredentialProviderEntryBuilder` 三处 `FLAG_MUTABLE`；
-⑤ 通行密钥候选不做 Origin 校验；⑥ PIN 熔断无冷却 + 忘记 PIN 绕过；
-⑦ 自动拉取零接线（`SyncTrigger.PAGE_ENTER/APP_RESUME/PERIODIC` 无人调用）；
-⑧ 导出丢密码历史/时间戳、`passwordRevisionDate` 从不更新、CSV 导入、文件夹 CRUD、
-passphrase UI、安全中心；⑨ `UpdateChecker` 走 `ghproxy.net` 且不校验 SHA-256；
-⑩ `KdbxRoundTrip.verify` 只比字段名不比值。
+① 通行密钥候选**不做 Origin 校验**；`excludeCredentials` / `authenticatorSelection` 不读；
+`backupEligible/backedUp` 强制 true；
+② PIN 熔断无冷却 + 忘记 PIN 绕过；「从不」档 KEK 不绑认证；
+③ 自动拉取零接线（`SyncTrigger.PAGE_ENTER/APP_RESUME/PERIODIC` 全仓零调用）；
+④ 导出丢密码历史/时间戳、`passwordRevisionDate` 从不更新、CSV 导入、文件夹 CRUD、
+passphrase UI、安全中心；
+⑤ `UpdateChecker` 走 `ghproxy.net` 且不校验 SHA-256；`FillAssistRepository` 默认联网拉规则；
+`DeveloperLogsDialog` 的 E/F 兜底不脱敏；
+⑥ `KdbxRoundTrip.verify` 只比字段名不比值；`KdbxFidelity.NON_DEFAULT_CIPHER` 从不产生。
 
 ---
 

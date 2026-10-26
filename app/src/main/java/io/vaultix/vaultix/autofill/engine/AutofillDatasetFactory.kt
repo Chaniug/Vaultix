@@ -29,6 +29,7 @@ import io.vaultix.common.OtpUriParser
 import io.vaultix.common.TotpGenerator
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.autofill.AutofillIntents
+import io.vaultix.vaultix.autofill.TotpTicketStore
 import io.vaultix.vaultix.autofill.model.FillCategory
 import io.vaultix.vaultix.autofill.model.FillSuggestion
 import io.vaultix.vaultix.autofill.model.ParsedStructure
@@ -55,13 +56,21 @@ object AutofillDatasetFactory {
         parsed: ParsedStructure,
         suggestion: FillSuggestion,
         copyTotpEnabled: Boolean,
+        /**
+         * TOTP 密钥的暂存处（#195）。
+         *
+         * 传 null 表示"本次不挂复制验证码"（`plainDatasetFor` 的卡片/身份路径）。
+         * 之所以是**参数**而不是单例直调：本类是 `object`、无 Hilt 注入点，
+         * 而 `TotpTicketStore` 需要可测（纯 JVM 单测里不能碰 Android）。
+         */
+        totpTickets: TotpTicketStore? = null,
     ): Dataset? {
         val entries = AutofillDatasets.entriesFor(parsed, suggestion)
         if (entries.isEmpty()) return null
         val authIntent = when {
             suggestion.requiresReprompt -> repromptIntent(context, suggestion, entries)
-            copyTotpEnabled && !suggestion.totpSecret.isNullOrBlank() ->
-                copyTotpIntent(context, suggestion, entries)
+            copyTotpEnabled && !suggestion.totpSecret.isNullOrBlank() && totpTickets != null ->
+                copyTotpIntent(context, suggestion, entries, totpTickets)
             else -> null
         }
         return AutofillDatasets.build(
@@ -103,6 +112,7 @@ object AutofillDatasetFactory {
         context: Context,
         suggestion: FillSuggestion,
         entries: List<Pair<AutofillId, String>>,
+        totpTickets: TotpTicketStore,
     ): PendingIntent = AutofillIntents.pending(
         context = context,
         intent = AutofillIntents.create(
@@ -112,7 +122,9 @@ object AutofillDatasetFactory {
             subtitle = suggestion.subtitle,
             datasetId = suggestion.id,
             entries = entries,
-            totpSecret = suggestion.totpSecret,
+            // ★ 只把**票据**放进 Intent（#195）：TOTP 密钥是长期共享秘密，
+            //   而 PendingIntent 会被系统保存。密钥本体留在 [TotpTicketStore] 的内存里。
+            totpTicket = totpTickets.stage(requireNotNull(suggestion.totpSecret)),
             category = suggestion.category,
         ),
         // ⚠️ 绝不能用 `suggestion.id.hashCode()`（#187）：PendingIntent 用

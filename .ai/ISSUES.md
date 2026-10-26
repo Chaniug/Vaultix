@@ -9,10 +9,10 @@
 
 | 分篇 | 主题 | 条数 |
 |---|---|---|
-| [01-构建与环境](./issues/01-构建与环境.md) | 工程 / 构建 / CI / 工具链 / 环境 | 53 |
+| [01-构建与环境](./issues/01-构建与环境.md) | 工程 / 构建 / CI / 工具链 / 环境 | 54 |
 | [02-自动填充](./issues/02-自动填充.md) | 自动填充（AutofillService 链路） | 19 |
-| [03-通行密钥与凭据提供商](./issues/03-通行密钥与凭据提供商.md) | 通行密钥 / Credential Provider / 凭据回灌 | 19 |
-| [04-锁与解锁](./issues/04-锁与解锁.md) | 锁态模型 / 解锁 / 生物识别 / 密钥 | 14 |
+| [03-通行密钥与凭据提供商](./issues/03-通行密钥与凭据提供商.md) | 通行密钥 / Credential Provider / 凭据回灌 | 20 |
+| [04-锁与解锁](./issues/04-锁与解锁.md) | 锁态模型 / 解锁 / 生物识别 / 密钥 | 15 |
 | [05-KDBX本地库](./issues/05-KDBX本地库.md) | KDBX 本地库 | 23 |
 | [06-界面与交互](./issues/06-界面与交互.md) | 界面 / 布局 / 交互动效 / 空态 / 图标 | 44 |
 | [07-数据与同步](./issues/07-数据与同步.md) | 数据模型 / 同步 / 会话 | 23 |
@@ -37,7 +37,7 @@
 
 ## 编号 → 分篇
 
-### [01-构建与环境](./issues/01-构建与环境.md) — 工程 / 构建 / CI / 工具链 / 环境（53 条，缺 #3、#8、#15、#16、#20…：#3/15 归 04、#16 归 02、#20 归 06）
+### [01-构建与环境](./issues/01-构建与环境.md) — 工程 / 构建 / CI / 工具链 / 环境（54 条，缺 #3、#8、#15、#16、#20…：#3/15 归 04、#16 归 02、#20 归 06）
 
 | # | 标题 |
 |---|---|
@@ -94,6 +94,7 @@
 | 175 | 🔴 **`init { scope.launch { … collect … } }` 是单测随机假红的总闸**：①**构造期派发** —— `launch` 发生在构造期间，而 `testingIoDispatcher` 只能在构造后赋值 ⇒ 收集协程永久跑 `Dispatchers.Default`，虚拟时钟推不动；②**无界 `collect`** —— 永不结束，`runTest` 的 idle 判据被它搅乱 ⇒ **同一次构建里两条互斥断言同时红**（「不该锁」与「该锁」都红）、每次红的不同。判据：**互斥同时成立 ⇒ 先找无界协程，别调测试时序**。解法：启动从 `init` 移出（`VaultLockManagerImpl.startObservingVaults()` / `AutoLockController.startCollecting()`，均幂等，生产在 `VaultixApplication.onCreate` 调）。🔴 两条不通的路：`scope` 改 getter（`init` 构造期就取走了）、自定义 `CoroutineDispatcher` 包装（`delay` **永不恢复**：`timer started` 5 次 / `fired` 0 次）。虚拟时钟三条规则：`settle()` 建定时器不推钟 → `advanceTimeBy(N-1)`+`runCurrent()` 断「不该锁」→ `advanceTimeBy(N)`+`advanceUntilIdle()` 断「会锁」；**`advanceUntilIdle` 不能用来表达「时间过去了多少」** |
 | 176 | 🔴 **`StandardTestDispatcher` 跑测试任务时**不恢复拦截器** ⇒ 跨 `withContext(io)` 的续体照样踩 `Dispatchers.Main`**。#174 把 `io` 换成虚拟调度器只解决「时钟推得动」，**不解决「续体跳不跳线程」**——`StandardTestDispatcher.dispatch` 只把任务排进 `TestCoroutineScheduler`，跑任务时不恢复 `ContinuationInterceptor` ⇒ `withContext` 的续体恢复时上下文里既没拦截器也没 `Dispatchers.Main` ⇒ `TestMainDispatcher.isDispatchNeeded` 炸（堆栈 `DispatchedCoroutine.afterResume` ← `Dispatchers.IO` 的真线程 worker）。CI `39139391458` 上 `promptCarriesTheFilteredCandidateVaults` 复现，**本地全绿**。解法：第二个覆写口 `testingBlockableIoDispatcher`（语义是**拦截**不是替换）+ `ioContext`，测试传一个**非** `TestDispatcher` 子类的 `StandardTestDispatcher` ⇒ 不被 `runTest` 收编 ⇒ 内联执行且不改上下文。⚠️ 判据：**变量是时间（`advanceTimeBy`）还是线程（续体拦截）**，两者必须分开处理。 |
 | 186 | 🔴 `allowBackup` 默认 true ⇒ `shared_prefs/vaultix_secure.xml`（门锁 / KEK / 房间信封、WebDAV 凭据、Bitwarden token）被云备份与 device-transfer 搬走，而解封它的 **Keystore 密钥不参与备份** ⇒ 新机上一把「看着还在、实际打不开」的假锁。修法 = `allowBackup="false"` + **两份**规则资源（API 31+ 的 `dataExtractionRules` 与 API 30- 的 `fullBackupContent`，**保险丝**：将来谁改回 true 也搬不走） |<br>⚠️ `data_extraction_rules.xml` 的 `<cloud-backup>` 与 `<device-transfer>` **两段都要排**（换机迁移走后者）。<br>⚠️ `sharedpref` 的 `path` **不带 `.xml`**，写了会**静默不匹配**。<br>⚠️ XML 注释里不能出现连续两个短横线；`<exclude` 别跨行写（单测按字符串断言）。<br>判据：**加密材料与解密密钥分开存放时，备份策略按后者决定** |
+| 193 | 🔴 `release.yml` 仍写死 `gradle-version: 8.11.1`（wrapper 是 9.5.1）—— `ci-debug.yml` 2026-10-02 就修过，**release 这条路漏网**。后果：白下载 / 缓存分区无效 / **改 `./gradlew` 为 `gradle` 会静默掉版**。修法 = 删 `gradle-version:`（版本只有一个来源）+ 兜底从 properties 读 |<br>⚠️ sed 分隔符必须 `#`（`(bin|all)` 会让 `s` 提前结束）。<br>判据：**"两处写同一个事实"必然分叉**，修法不是"记得两边都改"，是**让事实只有一个来源** |
 
 ### [02-自动填充](./issues/02-自动填充.md) — 自动填充（AutofillService 链路）
 
@@ -143,6 +144,7 @@
 | 190 | 见 05 篇 #190（内容指纹全字段，含  11 字段） |
 | 190 | 见 05 篇 #190（内容指纹扩为全字段，`fido2Credentials` 11 个字段也进摘要） |
 | 163 | 🔴 Firefox Android 通行密钥「取不到」= **浏览器根本没发请求**：m_kato 原文「只在 `Discoverable Credential` required 时才走 Credential Manager」（Bugzilla 1862132，Android 13 及以下只走 GPM）⇒ **非本仓库缺陷，代码侧无从修** |
+| 195 | 🔴 ① `keyAlgorithm` 同一把密钥两个名字：`PasskeyCreateActivity` / `CipherMapper` 写 `"ECDSA"`，`KdbxPasskeyCodec` 写 `"ES256"` ⇒ 任何按算法名判断的地方在**一半数据上判错且不报错**。修法 = `core:model` 新增 `PasskeyKeyAlgorithm`，三处统一引 `ES256`（具体算法名，不是族名）。② 四处 `FLAG_MUTABLE`（解锁动作 / 密码候选 / 通行密钥候选 / 创建入口）—— `AutofillIntents.pending` 早就 IMMUTABLE，**同一条规则只执行了一半** ⇒ 统一改 IMMUTABLE（extras 带 `requestJson`/`credentialId`，可写 = 能让签名指向另一把密钥） |<br>⚠️ 不要加"两种算法名都认"的归一化：那会让"该写哪个"永远悬着。<br>判据：**同一条规则写在两处、只改一处，看起来就"已修"了**（同 #120 / #193） |
 | 190 | 见 05 篇 #190（内容指纹全字段，含 `fido2Credentials` 11 字段） |
 
 ### [04-锁与解锁](./issues/04-锁与解锁.md) — 锁态模型 / 解锁 / 生物识别 / 密钥
@@ -161,6 +163,7 @@
 | 132 | KDBX 快速解锁比 Bitwarden 慢 100 倍：房间信封包「主密码」而非「派生密钥」 |
 | 133 | 「一次认证开多库」的补开被导航取消 ⇒ 用户被迫按第二次指纹 |
 | 161 | ✅ **已修（2026-10-14 B5）**「PIN 忘记后可在设置里重设」—— 文案承诺了功能，入口不存在（「修改 PIN」+「忘记 PIN」两条路都通；判据：有重设路径 ≠ 忘了凭据的人有重设路径） |
+| 194 | 🟡 附件解密后的**明文**留在 `cache/attachments/<itemId>/`，锁库不清 —— 系统只在"存储空间不足"时才回收，一台大容量手机可能几个月都不回收。修法 = 新增 `SensitiveCache` 统一归口（所有敏感缓存挂同一根 ⇒ `clearAll` 一次删净，**将来加第三种自动被清**）+ 锁库 `clearAll()` + 删条目 `invalidateFor()` |<br>⚠️ 与剪贴板不同：`cacheDir` 这几个子目录**只有本应用会写** ⇒ **无条件清**（少一层判断就少一次"判断错了于是没清"）。<br>⚠️ 别误伤 `cache/dev_logs/`（用户主动导出的日志），有反向锁定用例。<br>判据：**"临时文件"≠"安全文件"** —— 若"它什么时候消失"的答案是"系统缺空间的时候"，等于没有答案 |
 | 188 | 🟡 锁库**不清剪贴板**（密码留在里面任何 App 可粘）+ 复制**网址**被当敏感内容 30 秒后清空 ⇒ 新增 `VaultixClipboard.clearNow()`（只在确认是自己放的才清，读不到**什么都不做**；判据 `EXTRA_IS_SENSITIVE` 或 label）；`doCopy` 改 `sensitive = !isUri`。⚠️ `clipboardScope` 从 `Main.immediate` 改 `Default` —— 主线程 `delay` 会被 Doze / 界面忙整体推迟 |<br>判据：**「定时清理」必须配一个「立即清理」的触发点**，锁库这一刻正是最需要它的时候 |
 | 189 | 🟡 熄屏**不保证**触发 `onStop`（媒体播放 / 画中画 / `showWhenLocked` 下 Activity 仍 resumed）⇒ 「离开 5 分钟自动锁」熄屏一夜也不锁。修法 = 同时监听 `ACTION_SCREEN_OFF` 并复用 `onAppBackgrounded()` 分流（`Never`/`OnAppRestart` 档位不变）。⚠️ 单测里 `onScreenOff()` 后直接推时间是**假红**，要先 `settle(m)` |<br>判据：**「用户看不见了」至少有三条独立通路：熄屏 / 切后台 / 分屏** |
 

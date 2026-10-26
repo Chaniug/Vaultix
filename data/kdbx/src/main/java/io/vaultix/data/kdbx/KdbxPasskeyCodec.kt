@@ -24,6 +24,7 @@
  */
 package io.vaultix.data.kdbx
 
+import io.vaultix.model.PasskeyKeyAlgorithm
 import io.vaultix.model.VaultFido2Credential
 import java.util.Base64
 import java.util.Locale
@@ -240,7 +241,7 @@ object KdbxPasskeyCodec {
             // 私钥 PEM 原样进 keyValue：WebAuthn 签名时由 passkey 层解析
             //（与 Bitwarden 的 keyValue 语义一致，见 SavePasskeyDialog 的写入路径）。
             keyValue = privateKey,
-            keyAlgorithm = KEY_ALGORITHM_ES256,
+            keyAlgorithm = PasskeyKeyAlgorithm.DEFAULT,
             keyType = KEY_TYPE_PUBLIC_KEY,
             keyCurve = KEY_CURVE_P256,
             // ⚠️ 恒 0（不实现计数器）：`.ai/ISSUES.md` #33 的结论 —— 同步型通行密钥
@@ -264,7 +265,6 @@ object KdbxPasskeyCodec {
         parseBooleanCompat(fields.flagBe) ?: true
 
     private const val PASSKEY_TITLE_SUFFIX = " [Passkey]"
-    private const val KEY_ALGORITHM_ES256 = "ES256"
     private const val KEY_TYPE_PUBLIC_KEY = "public-key"
     private const val KEY_CURVE_P256 = "P-256"
 

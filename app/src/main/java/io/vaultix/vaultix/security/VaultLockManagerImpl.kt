@@ -39,6 +39,7 @@ import io.vaultix.datastore.VaultTimeout
 import io.vaultix.datastore.VaultTimeoutPreferences
 import io.vaultix.domain.UnlockResult
 import io.vaultix.domain.VaultRepository
+import io.vaultix.vaultix.util.SensitiveCache
 import io.vaultix.vaultix.util.VaultixClipboard
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -83,6 +84,14 @@ class VaultLockManagerImpl @Inject constructor(
     //   本类也不再需要软锁的实现（保留会触发 detekt `UnusedPrivateMember`）。
     /** 锁库时顺手清掉本应用放进剪贴板的敏感内容（#188）。 */
     private val clipboard: VaultixClipboard,
+    /**
+     * 锁库时清掉 `cache/` 下的明文附件与缩略图（#193）。
+     *
+     * 与 [clipboard] 同一个触发点、同一个理由：**锁定是「用户已经离开」的唯一可靠信号**。
+     * 区别只有一处 —— 剪贴板是全系统共享的，清之前要确认"是我放的"；
+     * 而 `cacheDir` 下这几个目录**只有本应用会写**，所以无条件清。
+     */
+    private val sensitiveCache: SensitiveCache,
 ) : VaultLockManager {
 
     // 进程级短任务 scope（启动/取消定时器）。项目当前唯一的调度器限定符是
@@ -568,6 +577,11 @@ class VaultLockManagerImpl @Inject constructor(
             //   进程还活着时一定被调用一次。清的对象有校验（只清本应用标记过
             //   IS_SENSITIVE 的那些），不会误伤用户自己复制的内容。
             runCatching { clipboard.clearNow() }
+            // ★ 锁库即清明文附件缓存（#193，2026-10-26）。
+            //   附件下载后落在 cacheDir 里是**解密好的明文**，系统只在"存储空间不足"时
+            //   才会回收它 —— 一台大容量手机可能几个月都不回收。锁库这一刻清掉，
+            //   风险窗口就从"不可控"收窄到"本次解锁会话"。
+            runCatching { sensitiveCache.clearAll() }
             _vaultStateEventFlow.tryEmit(VaultStateEvent.Locked(vaultId))
         }
     }

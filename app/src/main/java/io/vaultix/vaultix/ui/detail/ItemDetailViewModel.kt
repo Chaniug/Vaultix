@@ -17,6 +17,7 @@ import io.vaultix.domain.VaultSaveOutcome
 import io.vaultix.model.VaultAttachment
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultFolder
+import io.vaultix.vaultix.util.SensitiveCache
 import io.vaultix.vaultix.util.VaultixClipboard
 import java.io.File
 import kotlinx.coroutines.channels.Channel
@@ -47,6 +48,8 @@ class ItemDetailViewModel @Inject constructor(
     private val folderRepository: FolderRepository,
     /** 组织名（只读展示用，2026-10-21）：条目详情里标出"这条是共享库的"。 */
     private val organizationRepository: OrganizationRepository,
+    /** 敏感落盘缓存的统一管理处（#193）：附件明文、缩略图都经它定位与清除。 */
+    private val sensitiveCache: SensitiveCache,
     @ApplicationContext private val appContext: Context,
 ) : ViewModel() {
 
@@ -219,8 +222,7 @@ class ItemDetailViewModel @Inject constructor(
         _state.update { it.copy(downloadingAttachment = true) }
         viewModelScope.launch {
             val result = runCatching {
-                val dir = File(appContext.cacheDir, "attachments/$itemId")
-                    .apply { mkdirs() }
+                val dir = sensitiveCache.dirForItem(SensitiveCache.KIND_ATTACHMENTS, itemId)
                 val safeName = attachment.fileName.replace(Regex("[/\\\\]"), "_")
                 val file = File(dir, "${attachment.id}_$safeName")
                 file.outputStream().use { sink ->
@@ -325,7 +327,15 @@ class ItemDetailViewModel @Inject constructor(
             val outcome = itemRepository.softDeleteItem(vaultId, itemId)
             _state.update { it.copy(deleting = false) }
             outcome.fold(
-                onSuccess = { _events.send(UiEvent.Deleted) },
+                onSuccess = {
+                    // ★ 条目删了就把它解密出来的附件明文一起清掉（#193）。
+                    //   挂在"删除成功之后"而不是之前：删除可能失败（KDBX 写回冲突等），
+                    //   失败时条目还在，缓存还得继续用。
+                    runCatching {
+                        sensitiveCache.invalidateFor(itemId)
+                    }
+                    _events.send(UiEvent.Deleted)
+                },
                 onFailure = { error ->
                     _events.send(UiEvent.SaveFailed(error.message))
                 },
