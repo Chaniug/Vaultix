@@ -145,6 +145,7 @@ class VaultixPreferences @Inject constructor(
         val TRASH_AUTO_DELETE_DAYS = intPreferencesKey("trash_auto_delete_days")
         val THEME_MODE = stringPreferencesKey("theme_mode")
         val OLED_PURE_BLACK = booleanPreferencesKey("oled_pure_black")
+        val LIQUID_GLASS_DOCK = booleanPreferencesKey("liquid_glass_dock")
         val AUTOFILL_SAVE_PROMPT = booleanPreferencesKey("autofill_save_prompt")
         val AUTO_COPY_TOTP = booleanPreferencesKey("auto_copy_totp")
         val AUTOFILL_BASE_DOMAIN_MATCH = booleanPreferencesKey("autofill_base_domain_match")
@@ -224,6 +225,16 @@ class VaultixPreferences @Inject constructor(
     /** OLED 纯黑（对齐 Bastion oledPureBlackEnabled）：深色模式下 surface/background 用纯黑。 */
     val oledPureBlack: Flow<Boolean> =
         safeData.map { it[OLED_PURE_BLACK] ?: false }
+
+    /**
+     * 底栏「液态玻璃」开关（2026-10-27 用户需求）。
+     *
+     * 开启后悬浮胶囊底栏改为**半透明 + 实时模糊其后的内容**（真模糊，不是假磨砂贴图）。
+     * 默认**关**：模糊在低端机上是一笔真实的 GPU 开销，且它是观感选项而非安全选项，
+     * 应该由用户主动打开（对齐 iOS 26 Liquid Glass 的"用户可关"取向）。
+     */
+    val liquidGlassDock: Flow<Boolean> =
+        safeData.map { it[LIQUID_GLASS_DOCK] ?: false }
 
     /**
      * 自动填充保存提示（对齐 Bitwarden `isAutofillSavePromptDisabled` 的反向开关）：
@@ -572,6 +583,11 @@ class VaultixPreferences @Inject constructor(
     /** OLED 纯黑（深色模式 surface/background 纯黑）。 */
     suspend fun setOledPureBlack(enabled: Boolean) {
         dataStore.edit { it[OLED_PURE_BLACK] = enabled }
+    }
+
+    /** 底栏液态玻璃（半透明 + 实时模糊）。 */
+    suspend fun setLiquidGlassDock(enabled: Boolean) {
+        dataStore.edit { it[LIQUID_GLASS_DOCK] = enabled }
     }
 
     /** 自动填充保存提示开关（关闭后登录成功不再询问保存）。 */

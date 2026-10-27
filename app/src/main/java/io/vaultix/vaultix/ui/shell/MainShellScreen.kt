@@ -108,6 +108,14 @@ fun MainShellScreen(
     onUnlockActiveVault: () -> Unit = {},
     onLocked: () -> Unit,
     onSwitchVault: (() -> Unit)? = null,
+    /**
+     * 底栏液态玻璃（设置页「主题模式 → 液态玻璃底栏」）。
+     *
+     * 由 [io.vaultix.vaultix.MainActivity] 从偏好收集后逐层传下来 —— 不在这里
+     * `hiltViewModel()` 取，原因见 `VaultixTheme` 的同一取向：**主题类观感偏好只有一个
+     * 真源（DataStore），在组合顶层收一次、往下传**，避免"同一个开关两个 ViewModel 各读一份"。
+     */
+    liquidGlassDock: Boolean = false,
 ) {
     val configuration = LocalConfiguration.current
     val isCompactWidth = configuration.screenWidthDp < WIDE_SCREEN_MIN_WIDTH_DP
@@ -159,6 +167,7 @@ fun MainShellScreen(
                 selected = currentTab,
                 onSelect = { currentTab = it },
                 onAdd = dispatchAdd,
+                liquidGlass = liquidGlassDock,
             )
         },
     ) { padding ->

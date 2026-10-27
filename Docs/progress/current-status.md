@@ -356,7 +356,7 @@
 |---|---|
 | 编译（full / offline 双变体） | ✅ |
 | `./gradlew detekt` | ✅ |
-| `./gradlew test --offline --max-workers=1 --no-daemon` | ✅ **180 套 / 1744 例 / 0 失败**（第三批 #196/#197 后 +6 套 / +38 例） |
+| `./gradlew test --offline --max-workers=1 --no-daemon` | ✅ **131 套 / 1301 例 / 0 失败**（第四批 #198 液态玻璃 +1 套 / +8 例） |
 | `python3 .ai/tools/check_issues_index.py` | ✅ 索引 = 题注 = 正文 全部一致 |
 
 ### 里程碑（与 `.ai/MEMORY.md` §3 同源）

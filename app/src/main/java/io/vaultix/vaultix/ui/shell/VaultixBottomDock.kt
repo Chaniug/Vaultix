@@ -57,7 +57,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -68,6 +70,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.glass.LiquidGlassLayer
+import io.vaultix.vaultix.ui.glass.liquidGlassStyle
 import io.vaultix.vaultix.ui.theme.UiSize
 import io.vaultix.vaultix.ui.theme.VaultixCorner
 import io.vaultix.vaultix.ui.theme.Spacing
@@ -141,6 +145,13 @@ fun VaultixBottomDock(
     onSelect: (VaultixNavItem) -> Unit,
     onAdd: (VaultixNavItem) -> Unit,
     modifier: Modifier = Modifier,
+    /**
+     * 液态玻璃底栏（设置页「主题模式 → 液态玻璃底栏」，默认关）。
+     *
+     * 开启后胶囊改为**半透明 + 实时模糊其后的内容**，而不是 `surfaceContainerHigh` 实色。
+     * 参数放在末尾且给默认值，是为了让既有调用点与预览一行都不改。
+     */
+    liquidGlass: Boolean = false,
 ) {
     // 外层留白：bottom 20dp 让胶囊明显抬离系统手势条，底部透出内容（酷安观感）。
     Box(
@@ -148,58 +159,103 @@ fun VaultixBottomDock(
             .fillMaxWidth()
             .padding(start = Spacing.md, end = Spacing.md, top = UiSize.TightGap, bottom = UiSize.SecondaryIcon)
     ) {
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            shape = VaultixCorner.Pill,
-            color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            tonalElevation = 3.dp,
-            shadowElevation = 6.dp,
-        ) {
-            Row(
+        if (liquidGlass) {
+            // ★ 液态玻璃分支（2026-10-27）：真模糊 + 半透明填充 + 上沿高光。
+            //
+            // ⚠️ 这里**不能**继续用 Surface：Surface 会先铺一层不透明底色，
+            //    于是 RenderEffect 模糊到的是那块纯色，视觉上"开了跟没开一样"
+            //    （详见 ui/glass/LiquidGlass.kt 的顺序陷阱）。
+            //    阴影也只能靠外层 modifiers —— Surface 的 shadowElevation 会随实色一起丢掉。
+            // ⚠️ 判深浅**不能看 `isSystemInDarkTheme()`** —— 本 App 有自己的「主题模式」
+            //   （浅色 / 深色 / 跟随系统 + 动态取色 + OLED 纯黑）。App 设成深色、系统是浅色时，
+            //   按系统判会把填充取成"浅色档"（更实），玻璃就不再透。
+            //   取实际渲染出来的底色亮度最可靠（与 `FullScreenDialogShell` 的做法一致）。
+            val surface = MaterialTheme.colorScheme.surfaceContainerHigh
+            LiquidGlassLayer(
+                shape = VaultixCorner.Pill,
+                enabled = true,
+                style = liquidGlassStyle(
+                    darkTheme = surface.luminance() <= 0.5f,
+                    surface = surface,
+                    onSurface = MaterialTheme.colorScheme.onSurface,
+                ),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(DockBarHeight),
-                verticalAlignment = Alignment.CenterVertically,
+                    .shadow(elevation = 6.dp, shape = VaultixCorner.Pill),
             ) {
-                // 布局：左 2 个 + 中间「+」+ 右 2 个（不足则用 Spacer 占位保持「+」居中）。
-                val leftTabs = tabs.take(2)
-                val rightTabs = tabs.drop(2).take(2)
-
-                leftTabs.forEach { item ->
-                    key(item) {
-                        DockTabItem(
-                            item = item,
-                            isSelected = item == selected,
-                            onClick = { onSelect(item) },
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
-                }
-                repeat(2 - leftTabs.size) { Spacer(modifier = Modifier.weight(1f)) }
-
-                // 中央「+」：独立函数无法访问 RowScope.weight，故此处显式传 weight 修饰符。
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight(),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    AddButton(currentTab = selected, onAdd = onAdd)
-                }
-
-                rightTabs.forEach { item ->
-                    key(item) {
-                        DockTabItem(
-                            item = item,
-                            isSelected = item == selected,
-                            onClick = { onSelect(item) },
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
-                }
-                repeat(2 - rightTabs.size) { Spacer(modifier = Modifier.weight(1f)) }
+                DockRow(tabs = tabs, selected = selected, onSelect = onSelect, onAdd = onAdd)
+            }
+        } else {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = VaultixCorner.Pill,
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                tonalElevation = 3.dp,
+                shadowElevation = 6.dp,
+            ) {
+                DockRow(tabs = tabs, selected = selected, onSelect = onSelect, onAdd = onAdd)
             }
         }
+    }
+}
+
+/**
+ * 胶囊内的 tab 行（两种外观共用）。
+ *
+ * 抽出来是为了让"实色"与"液态玻璃"两条分支**共用同一份布局**：
+ * 否则以后调 tab 间距 / 中央「+」尺寸时只会改一处，
+ * 而另一条分支会静默停在旧规格（本项目已因"同一规则写两处"栽过三次，#120/#193/#195）。
+ */
+@Composable
+private fun DockRow(
+    tabs: List<VaultixNavItem>,
+    selected: VaultixNavItem,
+    onSelect: (VaultixNavItem) -> Unit,
+    onAdd: (VaultixNavItem) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(DockBarHeight),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // 布局：左 2 个 + 中间「+」+ 右 2 个（不足则用 Spacer 占位保持「+」居中）。
+        val leftTabs = tabs.take(2)
+        val rightTabs = tabs.drop(2).take(2)
+
+        leftTabs.forEach { item ->
+            key(item) {
+                DockTabItem(
+                    item = item,
+                    isSelected = item == selected,
+                    onClick = { onSelect(item) },
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+        repeat(2 - leftTabs.size) { Spacer(modifier = Modifier.weight(1f)) }
+
+        // 中央「+」：独立函数无法访问 RowScope.weight，故此处显式传 weight 修饰符。
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight(),
+            contentAlignment = Alignment.Center,
+        ) {
+            AddButton(currentTab = selected, onAdd = onAdd)
+        }
+
+        rightTabs.forEach { item ->
+            key(item) {
+                DockTabItem(
+                    item = item,
+                    isSelected = item == selected,
+                    onClick = { onSelect(item) },
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+        repeat(2 - rightTabs.size) { Spacer(modifier = Modifier.weight(1f)) }
     }
 }
 

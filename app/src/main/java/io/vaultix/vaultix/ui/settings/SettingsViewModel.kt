@@ -180,6 +180,14 @@ class SettingsViewModel @Inject constructor(
             initialValue = null,
         )
 
+    /** 底栏液态玻璃（半透明 + 实时模糊）。 */
+    val liquidGlassDock: StateFlow<Boolean?> = preferences.liquidGlassDock
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = null,
+        )
+
     /** 回收站自动清理档位（天；0 = 不自动清空），与回收站页顶栏入口共用同一偏好。 */
     val trashAutoDeleteDays: StateFlow<Int> = preferences.trashAutoDeleteDays
         .stateIn(
@@ -430,6 +438,11 @@ class SettingsViewModel @Inject constructor(
     /** OLED 纯黑开关。 */
     fun setOledPureBlack(enabled: Boolean) {
         viewModelScope.launch { preferences.setOledPureBlack(enabled) }
+    }
+
+    /** 底栏液态玻璃开关。 */
+    fun setLiquidGlassDock(enabled: Boolean) {
+        viewModelScope.launch { preferences.setLiquidGlassDock(enabled) }
     }
 
     /** 回收站自动清理档位（天；0 = 不自动清空）。 */

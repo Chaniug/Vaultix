@@ -81,7 +81,13 @@ import androidx.compose.animation.slideOutHorizontally
  * offline 分发不展示「连接 Bitwarden」入口（AppFlavor）。
  */
 @Composable
-fun VaultixApp() {
+fun VaultixApp(
+    /**
+     * 底栏液态玻璃。由 [io.vaultix.vaultix.MainActivity] 在组合顶层从偏好收一次再传下来
+     * （与 `VaultixTheme` 的 themeMode / dynamicColor 同一取向：观感偏好只有一个真源）。
+     */
+    liquidGlassDock: Boolean = false,
+) {
     val navController = rememberNavController()
     val rootNavViewModel: RootNavViewModel = hiltViewModel()
     // Compose 无法直接注入进程级单例，用空壳 ViewModel 做依赖桥（活跃库真源）
@@ -159,7 +165,7 @@ fun VaultixApp() {
         sizeTransform = null,
     ) {
         // 导航图按链路拆分（detekt LongMethod ≤150 行）
-        vaultEntryGraph(navController, shellBridge)
+        vaultEntryGraph(navController, shellBridge, liquidGlassDock)
         settingsGraph(navController)
         itemsGraph(navController)
     }
@@ -223,6 +229,8 @@ private fun NavHostController.navigateToRoot(route: Any) {
 private fun NavGraphBuilder.vaultEntryGraph(
     navController: NavHostController,
     shellBridge: MainShellViewModel,
+    /** 底栏液态玻璃（见 [VaultixApp] 同名参数）。 */
+    liquidGlassDock: Boolean,
 ) {
     composable<SplashRoute> { SplashScreen() }
     // 首次启动引导（3 页）。两条出口都写 onboarding_seen，然后落品牌空态页。
@@ -293,6 +301,7 @@ private fun NavGraphBuilder.vaultEntryGraph(
         // 能力不存在时隐藏，而不是给一个点了没意义的入口。
         val vaultCount by shellBridge.vaultCount.collectAsStateWithLifecycle()
         MainShellScreen(
+            liquidGlassDock = liquidGlassDock,
             onOpenItem = { item ->
                 activeVaultId?.let { vaultId ->
                     navController.navigate(ItemRoute(vaultId = vaultId, itemId = item.id))

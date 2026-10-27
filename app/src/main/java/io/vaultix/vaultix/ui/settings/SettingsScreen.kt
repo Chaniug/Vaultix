@@ -26,6 +26,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.BlurOn
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Contrast
 import androidx.compose.material.icons.filled.DarkMode
@@ -89,6 +90,7 @@ import io.vaultix.vaultix.ui.common.rememberScrollCollapseFraction
 import io.vaultix.vaultix.ui.common.TrashAutoDeleteDialog
 import io.vaultix.vaultix.ui.common.rememberFragmentActivity
 import io.vaultix.vaultix.ui.common.trashAutoDeleteLabel
+import io.vaultix.vaultix.ui.glass.isLiquidGlassBlurSupported
 import io.vaultix.vaultix.ui.theme.ThemeMode
 import io.vaultix.vaultix.ui.theme.Spacing
 import io.vaultix.vaultix.ui.theme.VaultixCorner
@@ -870,6 +872,10 @@ private fun DisplaySection(
 ) {
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
     val oledPureBlack by viewModel.oledPureBlack.collectAsStateWithLifecycle()
+    val liquidGlassDock by viewModel.liquidGlassDock.collectAsStateWithLifecycle()
+    // 系统能不能做真模糊（API 31+）。设置页要说清楚 —— 打开了却看不到模糊，
+    // 用户会以为开关坏了（静默降级是最难排查的一类"功能不存在"）。
+    val blurSupported = remember { isLiquidGlassBlurSupported() }
     var showThemeDialog by rememberSaveable { mutableStateOf(false) }
     var showDisplayOptions by rememberSaveable { mutableStateOf(false) }
 
@@ -905,6 +911,24 @@ private fun DisplaySection(
                 SettingsSwitch(
                     value = oledPureBlack,
                     onCheckedChange = viewModel::setOledPureBlack,
+                )
+            },
+        )
+        SettingsDivider()
+        // 液态玻璃底栏（2026-10-27 用户需求）：与「主题模式」同组 —— 它属于观感，
+        // 而且和 OLED 纯黑一样是"整体外形"级别的开关，不是某一页的局部选项。
+        SettingsRow(
+            icon = { Icon(Icons.Filled.BlurOn, contentDescription = null) },
+            title = stringResource(R.string.setting_liquid_glass),
+            subtitle = if (blurSupported) {
+                stringResource(R.string.setting_liquid_glass_desc)
+            } else {
+                stringResource(R.string.setting_liquid_glass_unsupported)
+            },
+            trailing = {
+                SettingsSwitch(
+                    value = liquidGlassDock,
+                    onCheckedChange = viewModel::setLiquidGlassDock,
                 )
             },
         )

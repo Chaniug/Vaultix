@@ -57,6 +57,10 @@ class MainActivity : FragmentActivity() {
                 .collectAsStateWithLifecycle(initialValue = true)
             val oledPureBlack by preferences.oledPureBlack
                 .collectAsStateWithLifecycle(initialValue = false)
+            // 底栏液态玻璃：与 themeMode / dynamicColor 同一取向 —— 观感偏好只在
+            // 组合顶层收一次，再往下传给主壳（避免两处各读一份偏好）。
+            val liquidGlassDock by preferences.liquidGlassDock
+                .collectAsStateWithLifecycle(initialValue = false)
             val screenSecure by preferences.screenSecurity
                 .collectAsStateWithLifecycle(initialValue = true)
 
@@ -76,7 +80,7 @@ class MainActivity : FragmentActivity() {
                 LaunchedEffect(exitAfterUnlockNow, unlockedIds) {
                     if (exitAfterUnlockNow && unlockedIds.isNotEmpty()) finish()
                 }
-                VaultixApp()
+                VaultixApp(liquidGlassDock = liquidGlassDock)
             }
         }
     }
