@@ -202,7 +202,8 @@ fun Modifier.liquidGlassBackdrop(
     //    是 ContentDrawScope 的成员扩展，只有这里的 receiver 才调得到。
     //    层 A 是空 Box，没有子节点 ⇒ 不必调 `drawContent()`。
     val srcSize = source.size
-    if (srcSize.minDimension < 1 || size.minDimension < 1f) return@drawWithContent
+    // ⚠️ IntSize 没有 `minDimension`（那是 Size 的），只能逐分量判 —— 写错一个字就编译不过。
+    if (srcSize.width < 1 || srcSize.height < 1 || size.minDimension < 1f) return@drawWithContent
     val blur = blurEffect(radiusPx) ?: return@drawWithContent
     drawIntoCanvas { canvas ->
         canvas.save()
