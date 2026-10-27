@@ -15,7 +15,8 @@
     - `sharedpref` 域名下写**不带 `.xml`** 的偏好文件名；
     - `file` 域名下写相对路径；`path="."` 表示整目录。
 
-  ⚠️ **不要**写 `<exclude domain="cache" ... />`：合法 domain 里没有 `cache`
+  ⚠️ **不要**给 exclude 标一个 cache 域（写法就是把 `domain=` 换成 cache 字样）：
+  合法 domain 里没有 `cache`
   （lint `FullBackupContent` 报 **fatal**，会让 `:app:lintVitalFullRelease` 中断发布构建，
   见 `.ai/ISSUES.md` #201）；而 cache 目录本来就不参与备份，写了也是多余的。
 -->

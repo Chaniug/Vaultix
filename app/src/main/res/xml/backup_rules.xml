@@ -15,7 +15,8 @@
   | `files/` | 自动填充规则缓存等内部产物 | 无需迁移，重新生成即可 |
   | `cache/` | 解密后的附件明文（`attachments/`）、日志导出（`dev_logs/`） | 备份**不会**搬 cache（它不在任何合法 domain 里），无需排除 |
 
-  ⚠️ **不要**写 `<exclude domain="cache" ... />`：`FullBackupContent` 的合法 domain 只有
+  ⚠️ **不要**给 exclude 标一个 cache 域（写法就是 `domain=` 换成 cache 字样）：
+  `FullBackupContent` 的合法 domain 只有
   `file` / `database` / `sharedpref` / `external` / `root`（及 `device_*` 系列），
   **`cache` 不在其中** ⇒ lint 报 `Unexpected domain cache`（**fatal**，会让
   `:app:lintVitalFullRelease` 直接中断发布构建，见 `.ai/ISSUES.md` #201）。

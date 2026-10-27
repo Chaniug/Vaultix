@@ -131,6 +131,22 @@ class BackupPolicyConfigTest {
         )
     }
 
+    @Test
+    fun `排除项里的 domain 必须是 lint 认可的合法值`() {
+        val all = xmlRuleFile("backup_rules.xml") + xmlRuleFile("data_extraction_rules.xml")
+        val domains = DOMAIN_ATTR.findAll(all).map { it.groupValues[1] }.toSet()
+        assertTrue("#186：两份规则文件里一个 exclude 都没解析到", domains.isNotEmpty())
+
+        val illegal = domains - LEGAL_BACKUP_DOMAINS
+        assertTrue(
+            "#201：出现了非法的备份 domain：$illegal\n" +
+                "合法值只有 $LEGAL_BACKUP_DOMAINS（大小写敏感，且没有 cache）。\n" +
+                "写错不会编译失败，只会在发版时让 lintVitalFullRelease 报 fatal —— " +
+                "恰恰是 CI 调试流水线看不到的那半边。",
+            illegal.isEmpty(),
+        )
+    }
+
     private companion object {
         /**
          * 必须排除的 (domain, path) 全表。
@@ -142,7 +158,30 @@ class BackupPolicyConfigTest {
             "sharedpref" to "vaultix_secure",
             "database" to "vaultix.db",
             "file" to ".",
-            "cache" to ".",
         )
+
+        /**
+         * `FullBackupContent` 的**全部**合法 domain（AOSP `FullBackup.BackupScheme`）。
+         *
+         * 写表外的值 ⇒ lint `Unexpected domain`，而 `lintVitalFullRelease` 把它当 **fatal**：
+         * 调试构建照旧成功、CI 里 `e:` 为 0，只有发版构建会炸（`.ai/ISSUES.md` #201）。
+         * 所以这条约束必须由单测钉住，不能指望"编译过 = 写对了"。
+         */
+        val LEGAL_BACKUP_DOMAINS = setOf(
+            "root",
+            "file",
+            "database",
+            "sharedpref",
+            "external",
+        )
+
+        /**
+         * `< exclude domain="..."` 里的 domain 取值（本文用空格断开，免得这行自己也被扫到）。
+         *
+         * ⚠️ 扫描对象是**整份文件文本**，注释里出现的反例同样会被匹配到。
+         * 所以两份 XML 顶部那句"不要写非法 domain"的示例**不能带等号和引号**，
+         * 否则这条断言会在代码已经改对的情况下继续报错（比不写还糟）。
+         */
+        val DOMAIN_ATTR = Regex("""<exclude\s+domain="([^"]+)\"""")
     }
 }
