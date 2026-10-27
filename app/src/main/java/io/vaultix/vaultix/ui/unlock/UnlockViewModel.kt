@@ -133,6 +133,13 @@ class UnlockViewModel @Inject constructor(
      */
     internal var testingScope: CoroutineScope? = null
 
+    /**
+     * 观察协程是否已启动（[startObservers] 的幂等守卫）。
+     *
+     * 生产在 `init` 里置 true；单测由测试工厂在"设完接缝之后"调 [startObservers] 置 true。
+     */
+    private val observersStarted = java.util.concurrent.atomic.AtomicBoolean(false)
+
     /** 本页所有"发起即返回"的协程都挂在这里。生产 = `viewModelScope`，测试 = [testingScope]。 */
     private val scope: CoroutineScope get() = testingScope ?: viewModelScope
 
@@ -303,7 +310,42 @@ class UnlockViewModel @Inject constructor(
      */
     private var pinBuffer: String = ""
 
+    /**
+     * 启动各条观察协程。
+     *
+     * ## ★ 为什么不是 `init { … }` 直接写（2026-10-28，CI run 40563967972）
+     *
+     * 三个测试接缝（[testingScope] / [testingIoDispatcher] / [testingBlockableIoDispatcher]）
+     * 都是**构造之后**才赋值的 —— Hilt 不允许把 `viewModelScope` 注入构造（见 [testingScope] 的
+     * 四种失败尝试）。而 `init` 在构造**期间**就跑：那一刻 [scope] 还是 `viewModelScope`，
+     * 也就是 `Dispatchers.Main.immediate`。
+     *
+     * 单测里 `Dispatchers.setMain` 把它换成了测试调度器，于是"构造期间"与"赋值之后"用的是
+     * **两个不同的调度器**：前者的协程还挂在旧的 `TestMainDispatcher` 上。等到 `@After`
+     * `resetMain()` 把它卸掉，那一刻恰好在跑的任务就炸 `Dispatchers.Main was accessed …`。
+     *
+     * 更糟的是它**偶发**：本地绿、CI 红（`fingerprintEntryStaysHiddenWhen…` 就是这样挂的），
+     * 而且换一条用例就换一个受害者 —— 典型的"竞态，不是必现"。
+     *
+     * ⇒ 把协程启动挪进一个显式方法，测试工厂在**设完接缝之后**调用它；生产由 `init` 调用
+     * （行为一字不改）。判据：**接缝的生效范围必须覆盖"用到它的第一个协程"**，
+     * 而 `init` 天然不满足这一点。
+     */
     init {
+        // 生产路径照旧：构造完就开始观察（此时 viewModelScope 已经可用）。
+        // 单测不走这里 —— 见 [startObservers] 的说明。
+        if (testingScope == null) startObservers()
+    }
+
+    /**
+     * 启动观察协程（幂等：重复调用不会起第二份）。
+     *
+     * 生产走 `init`；测试必须先设好 [testingScope] 等接缝再调 —— 详见 `init` 上的说明。
+     */
+    internal fun startObservers() {
+        // 幂等守卫：测试工厂可能先构造、设完接缝再调一次，而 init 已经起过一份。
+        // 用 CAS 而不是布尔判断，避免"检查与设置"之间被并发插入。
+        if (!observersStarted.compareAndSet(false, true)) return
         scope.launch {
             vaultRepository.observeVaults().collect { vaults ->
                 if (vaultId.isBlank()) vaultId = resolveTargetVaultId(vaults)

@@ -361,6 +361,14 @@ class UnlockViewModelTest {
             //   它**不会**被 `runTest` 收编进虚拟时钟 ⇒ 只是把任务内联执行，
             //   且**不改变上下文** ⇒ 续体恢复时拦截器还在 ⇒ 全程不碰 `Dispatchers.Main`。
             it.testingBlockableIoDispatcher = StandardTestDispatcher(testScheduler)
+            // ★ 2026-10-28：接缝全设好之后才启动观察协程（自己调，不靠 init）。
+            //
+            //   以前 `init` 里直接 `scope.launch` —— 那一刻 testingScope 还是 null ⇒
+            //   落在 `viewModelScope`（= `Dispatchers.Main.immediate`，被 `setMain` 换成了
+            //   **旧的**那个 TestMainDispatcher）上。`@After resetMain()` 卸掉它时，
+            //   正在跑的协程就炸 `Dispatchers.Main was accessed …`。
+            //   CI run 40563967972 的 `fingerprintEntryStaysHiddenWhen…` 即此（偶发）。
+            it.startObservers()
         }
     }
 

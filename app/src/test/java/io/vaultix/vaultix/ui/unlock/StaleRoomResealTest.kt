@@ -143,6 +143,10 @@ class StaleRoomResealTest {
             //   只换 scope 不够 —— `withContext(Dispatchers.IO)` 会真的跳到线程池，
             //   虚拟时钟推不动它（实测：只换 scope 时 6 条用例报"没有收到事件"）。
             it.testingIoDispatcher = StandardTestDispatcher(testScheduler)
+            // ★ 2026-10-28：接缝设完再启动观察协程（testingScope 非空时 init 不自启）。
+            //   否则 init 那一刻会用 viewModelScope（= Dispatchers.Main），
+            //   与 UnlockViewModelTest 同一个 CI 事故（run 40563967972）。
+            it.startObservers()
         }
         if (password != null) vm.onPasswordChange(password)
         return vm
