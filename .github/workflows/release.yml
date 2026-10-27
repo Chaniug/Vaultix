@@ -294,6 +294,16 @@ jobs:
             printf '%s\n' "$apk_list" | sed 's/^/> *   `/; s/$/`/'
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
+          # ★ 2026-10-28：把 checksums 内容也做成 output。
+          #   下面 Publish 步骤的 `body:` 是 **YAML 字符串**，不是 shell —— 写 `$(cat …)`
+          #   不会被执行，只会**原样印进发布说明**（v0.10.2 实测：Release 页面的
+          #   「校验和」区块显示的就是那行命令本身，等于没给校验和）。
+          #   GitHub Actions 里往 body 里塞动态内容的唯一途径是 `${{ steps.X.outputs.Y }}`。
+          {
+            echo "checksums<<EOF"
+            cat "$GITHUB_WORKSPACE/checksums-sha256.txt"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Remove existing release/tag for this version (idempotent re-run)
         shell: bash
@@ -356,7 +366,7 @@ jobs:
 
             ## 校验和 (SHA-256)
             ```
-            $(cat "$GITHUB_WORKSPACE/checksums-sha256.txt" 2>/dev/null || echo "见附件 checksums-sha256.txt")
+            ${{ steps.apk_meta.outputs.checksums }}
             ```
           files: |
             app/build/outputs/apk/**/release/*.apk
