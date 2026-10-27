@@ -13,6 +13,10 @@ import android.graphics.Shader
 import android.os.Build
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
@@ -20,51 +24,88 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RenderEffect as ComposeRenderEffect
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.asComposeRenderEffect
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 
 /**
- * 液态玻璃（Liquid Glass）观感的唯一实现点。
+ * 液态玻璃（Liquid Glass）观感的**唯一实现点**。
  *
- * ## 为什么"真模糊"只能这样做
+ * ## 一轮返工（2026-10-27 真机反馈）
  *
- * Compose 没有"模糊背后的像素"这个能力：`Modifier.blur` 模糊的是**自己**绘制的内容，
- * 不是身后已经画好的像素。要真正把"底栏后面的列表"糊掉，只有一条路 ——
- * 把底栏所在的**图层**做成模糊渲染层：
+ * 第一版把 `graphicsLayer { renderEffect = 模糊 }` 挂在包住底栏图标的 Box 上 ——
+ * `RenderEffect` 模糊的是**该图层的输出，含全部子内容** ⇒ 图标文字+中央「+」被一起糊成
+ * 灰雾。**这个 KDoc 上一版写的"必须挂最外层 Box"是错的**，真机截图直接证伪。
  *
- * - **Android 12（API 31）起**：`RenderEffect.createBlurEffect` 作用于该图层的**输入**
- *   （= 背后已合成的内容），这正是我们要的；
- * - **Android 12 以下**：没有公开 API。只能做半透明降级（见 [isLiquidGlassBlurSupported]）。
+ * ## 现在的结构（对齐 chrisbanes/Haze 的源→消费分离）
  *
- * ⚠️ 不要在别处再叠"半透明白色蒙层假装磨砂"：那会和真模糊互相打架，
- * 表现为同一台机器上"有时糊有时不糊"，且难以解释。
+ * ```
+ * ┌ 源：Modifier.liquidGlassSource（Tab 内容区，recording 进 GraphicsLayer，屏幕不落像素）
+ * └ 浮层：LiquidGlassLayer
+ *      ├─ 层 A：Modifier.liquidGlassBackdrop —— 只画"模糊后的源"，带 clip 与 renderEffect
+ *      └─ 层 B：content() —— 图标 / 文字 / 中央「+」，完全不含任何模糊
+ * ```
+ *
+ * `Box` 的兄弟节点各画各的层，所以层 B 不会被层 A 的 `RenderEffect` 波及。
+ * 这是 StackOverflow「内容放在同一层里也会受效果影响，解法是两个叠加的 Box」
+ * 所说的做法，也是 Haze `hazeEffect` 内部对源图层的处理方式。
+ *
+ * ## 🔴 为什么填充 / 高光 / 描边画在层 B 上，而不是层 A
+ *
+ * 层 A 上有 `renderEffect`：**在同一图层内先画填充再挂效果，填充自己也会被糊**（虽然
+ * 半透明纯色糊了看不出，但上沿高光那条 1~6dp 的细带会被糊没 —— 而它恰恰是"玻璃"与
+ * "塑料板"的观感分界）。所以视觉装饰一律画在**上层（层 B）的 `drawBehind`**：
+ * 它盖在模糊结果之上，是清晰的。
  *
  * ## 为什么没有做 iOS 26 那种"折射"
  *
- * iOS 26 的 Liquid Glass 还有一层**透镜折射**（边缘把背景像素往里挤）。在
- * `RenderEffect` 之上再叠折射需要把背景内容当纹理喂给 AGSL `RuntimeShader`，
- * 而 Compose 的 `graphicsLayer { renderEffect = ... }` 只能对自己图层的输入生效、
- * 拿不到可控的采样源；硬做只能 `PixelCopy` 逐帧回读屏幕 —— 列表滚动时帧率直接打穿。
- * ⇒ **本实现是"模糊 + 上沿高光 + 内描边"的液态玻璃观感，不是折射模拟。**
- * 这是有意的取舍，写在这里免得下一棒以为是漏做。
+ * 折射需要把背景当**纹理**喂给 AGSL `RuntimeShader` 做位移采样。现在源已经是
+ * 一块 `GraphicsLayer` 了，理论上可以 `toImageBitmap()` 拿到纹理 —— 但那是**每帧
+ * 一次 GPU→CPU→GPU 回读**，列表滚动时帧率直接打穿。⇒ **本实现是"模糊 + 上沿高光 +
+ * 内描边"的液态玻璃观感，不是折射模拟。** 这是有意的取舍，不是漏做。
  */
 
-/** 模糊半径（dp）。24dp 足够把文字糊成色块，同时保留大色块走向。 */
+/** 模糊半径（dp）。Haze 的 `HazeMaterials` 默认值就是 24dp，与它对齐便于横向对照。 */
 private val BlurRadius = 24.dp
 
 /** 液态玻璃的视觉参数（集中一处，避免各处拼参数导致观感漂移）。 */
 object LiquidGlass {
-    /** 半透明填充不透明度（深色下更低才显得"透"）。 */
-    const val FILL_ALPHA_LIGHT = 0.62f
-    const val FILL_ALPHA_DARK = 0.48f
+    /**
+     * 填充不透明度 —— **直接取自 chrisbanes/Haze 的 `HazeMaterials`**（Apache-2.0，
+     * 数值可对照其 `haze-materials/…/HazeMaterials.kt`）：
+     *
+     * | 档位 | light | dark |
+     * |---|---|---|
+     * | ultraThin | 0.35 | 0.55 |
+     * | thin | 0.60 | 0.65 |
+     * | regular | 0.73 | 0.80 |
+     * | thick | 0.83 | 0.90 |
+     * | ultraThick | 0.92 | 0.97 |
+     *
+     * 第一版取的 0.62 / 0.48（**深色比浅色更透**）是拍脑袋定的，而且方向反了：
+     * 深色主题下背景本身更暗、模糊结果更接近黑，填充再薄就分不清"玻璃"与"背景"，
+     * 图标反而更难看清。Haze 五档**全部是深色更实**。
+     * ⇒ 取 **thin**（0.60 / 0.65）：仍能看出后面的内容在动，同时保住图标对比度。
+     */
+    const val FILL_ALPHA_LIGHT = 0.60f
+    const val FILL_ALPHA_DARK = 0.65f
 
-    /** 降级（无模糊）时补上的额外不透明度 —— 保证文字压在滚动内容上仍可读。 */
-    const val FALLBACK_EXTRA_ALPHA = 0.18f
+    /**
+     * 降级（无模糊硬件能力）时**直接画实色**，而不是"半透明 + 一点补偿"。
+     *
+     * Haze 的做法同样是降级成 flat scrim（`fallbackColorEffect`），而不是留半透明糊弄：
+     * 半透明的底栏浮在滚动内容上，文字会**穿过**底栏（读不清），那才是真正不可用的状态。
+     * ⇒ 无模糊 = 主题色 `surfaceContainerHigh` **全不透明**，观感等同第一版的实心底栏。
+     */
+    const val FALLBACK_ALPHA = 1f
 
     /** 上沿高光带高（占整体高度的比例）。 */
     const val EDGE_HIGHLIGHT_FRACTION = 0.16f
@@ -75,12 +116,15 @@ object LiquidGlass {
     /** 内描边透明度（深色下白描边要更淡）。 */
     const val STROKE_ALPHA_LIGHT = 0.55f
     const val STROKE_ALPHA_DARK = 0.28f
+
+    /** 阴影高度：玻璃态比实心态更需要它把胶囊"抬"离内容，否则边界读不出来。 */
+    val ShadowElevation = 8.dp
 }
 
 /**
  * 系统是否支持**真模糊**。
  *
- * 只有 API 31+ 可以。低版本返回 false，UI 侧据此给出"降级为半透明"的说明 ——
+ * 只有 API 31+ 可以。低版本返回 false，UI 侧据此给出"降级为实心底栏"的说明 ——
  * **不要静默降级**：用户打开开关却看不到模糊，会以为开关坏了。
  *
  * @param sdkInt 显式入参只为可单测；业务代码不要传。
@@ -99,7 +143,7 @@ internal fun shouldApplyBlur(requested: Boolean, sdkInt: Int = Build.VERSION.SDK
 /**
  * 液态玻璃的绘制参数（由调用方从主题取，本文件不读 `MaterialTheme`）。
  *
- * @param fill **必须带 alpha**：不透明的填充会把模糊结果整块盖掉（表现为"开了没效果"）。
+ * @param fill **必须带 alpha**（真模糊档）：不透明的填充会把模糊结果整块盖掉。
  * @param stroke 内描边色。
  * @param sheen 上沿高光色（固定白，深色下仍成立）。
  */
@@ -109,32 +153,61 @@ data class LiquidGlassStyle(
     val sheen: Color,
 )
 
-/** 按深浅色取一套风格，避免各调用点各写一套 alpha。 */
-fun liquidGlassStyle(darkTheme: Boolean, surface: Color, onSurface: Color): LiquidGlassStyle =
-    LiquidGlassStyle(
-        fill = surface.copy(
-            alpha = if (darkTheme) LiquidGlass.FILL_ALPHA_DARK else LiquidGlass.FILL_ALPHA_LIGHT,
-        ),
+/**
+ * 按深浅色取一套风格。
+ *
+ * @param blurAvailable 有没有真模糊。**没有时填充直接拉到不透明**（见 [LiquidGlass.FALLBACK_ALPHA]）：
+ *   这是"降级成实心底栏"，不是"半透明凑合"。
+ */
+fun liquidGlassStyle(
+    darkTheme: Boolean,
+    surface: Color,
+    onSurface: Color,
+    blurAvailable: Boolean = true,
+): LiquidGlassStyle {
+    val alpha = when {
+        !blurAvailable -> LiquidGlass.FALLBACK_ALPHA
+        darkTheme -> LiquidGlass.FILL_ALPHA_DARK
+        else -> LiquidGlass.FILL_ALPHA_LIGHT
+    }
+    return LiquidGlassStyle(
+        fill = surface.copy(alpha = alpha),
         stroke = onSurface.copy(
             alpha = if (darkTheme) LiquidGlass.STROKE_ALPHA_DARK else LiquidGlass.STROKE_ALPHA_LIGHT,
         ),
         sheen = Color.White,
     )
+}
+
+/** 一个 `RenderEffect` 模糊。API < 31 与创建失败都返回 null（调用方按降级处理）。 */
+internal fun blurEffect(radiusPx: Float): ComposeRenderEffect? {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return null
+    // ⚠️ 某些 ROM / 软件渲染路径上创建 RenderEffect 会抛 —— 那应当降级成实色，
+    //    而不是让整个主界面崩掉。
+    return runCatching {
+        RenderEffect.createBlurEffect(radiusPx, radiusPx, Shader.TileMode.CLAMP)
+            .asComposeRenderEffect()
+    }.getOrNull()
+}
 
 /**
- * 液态玻璃图层：真模糊 + 半透明填充 + 上沿高光 + 内描边。
+ * 液态玻璃图层（= 上面结构图里的"浮层"）。
  *
- * ## 🔴 顺序陷阱（本功能最容易踩、且**不报错**的一处）
+ * ## 🔴 本函数最长的一行注释：层 A 与层 B 必须**分开**
  *
- * `graphicsLayer { renderEffect = blur }` 模糊的是**该图层的输入**，也就是它背后
- * 已合成的内容。所以：
+ * ```kotlin
+ * Box(modifier) {
+ *     Box(Modifier.matchParentSize().liquidGlassBackdrop(…))   // ← 层 A：唯一带模糊的东西
+ *     Box(Modifier.drawBehind { drawGlass(…) }) { content() }   // ← 层 B：图标，零模糊
+ * }
+ * ```
  *
- * - ✅ 对：把 `clip` + `blurBehind` **挂在最外层 Box 上**，背景由 `drawBehind` 画；
- * - ❌ 错 1：挂到内层内容 Box 上 → 模糊的是"内层自己"（几乎空白），看起来像没生效；
- * - ❌ 错 2：先用不透明 `Surface(color=…)` 铺底再模糊 → 模糊的是那块纯色，同样像没生效。
+ * 只要把这两件事写进**同一个** `Box` 的 modifier 链（第一版的写法），
+ * `renderEffect` 就会连层 B 一起糊。要验证有没有写错，看**图标清不清晰**就够了。
  *
  * @param shape 外轮廓（底栏是药丸形）。
  * @param enabled 用户开关（设置页「主题模式」组里的「液态玻璃底栏」）。
+ * @param source 背景源；null 时等同一块纯色背景（预览 / 无源的场合）。
  * @param style 填充 / 描边 / 高光配色。
  */
 @Composable
@@ -143,55 +216,71 @@ fun LiquidGlassLayer(
     enabled: Boolean,
     style: LiquidGlassStyle,
     modifier: Modifier = Modifier,
+    source: LiquidGlassSource? = null,
     content: @Composable () -> Unit,
 ) {
     val density = LocalDensity.current
     val blur = shouldApplyBlur(requested = enabled)
-    Box(
-        modifier = modifier
-            .clip(shape)
-            .blurBehind(radius = with(density) { BlurRadius.toPx() }, enabled = blur)
-            .drawBehind {
-                if (enabled) drawGlass(style = style, density = density, blurAvailable = blur)
-            },
-    ) {
-        content()
+    val radiusPx = with(density) { BlurRadius.toPx() }
+    // 浮层相对源的偏移。**必须是 state**：坐标系每帧都可能变（旋转、手势条、字号），
+    // 而 `drawWithCache` 只在 key 变化时重建 —— 用普通字段会停在首帧的偏移上（底栏错位一截）。
+    var offset by remember { mutableStateOf(Offset.Zero) }
+
+    Box(modifier = modifier) {
+        if (blur && source != null) {
+            // ★ 层 A：只画"源被模糊之后的样子"。这里**不能**再画任何填充 ——
+            //   同一个 renderEffect 会把它自己的填充也糊掉（见文件头 KDoc 的第四条注释）。
+            //
+            // ⚠️ `.clip(shape)` 是层 A 的第一要务：源录的是整块 Tab 区域，比胶囊高得多，
+            //   不裁剪就会把一大块糊影画到胶囊外面去。
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .clip(shape)
+                    // 位置要在 backdrop **之前**更新：修饰符链按顺序执行，
+                    // 放后面会让首帧用旧 offset 画一次（真机上表现为底栏糊影往上错一截）。
+                    // ⚠️ `boundsInRoot()` 要取**自己**的位置，所以这个节点外的
+                    //   `onGloballyPositioned` 拿到的就是本层 —— 与 [backdrop] 同尺寸。
+                    .onGloballyPositioned { coords ->
+                        val own = coords.boundsInRoot()
+                        val src = source.bounds
+                        val next = Offset(src.left - own.left, src.top - own.top)
+                        if (next != offset) offset = next
+                    }
+                    .liquidGlassBackdrop(source = source, offset = offset, radiusPx = radiusPx),
+            )
+        }
+        // ★ 层 B：视觉装饰 + 内容。装饰画在 `drawBehind`，因此永远是清晰的。
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .clip(shape)
+                .drawBehind { if (enabled) drawGlass(style = style, density = density, blurAvailable = blur) },
+        ) {
+            content()
+        }
     }
 }
 
 /**
- * 模糊渲染效果。
+ * 填充 + 上沿高光 + 内描边。**画在浮层的上层**（层 B 的 `drawBehind`）。
  *
- * ⚠️ 这里用 `runCatching` 包住：某些 ROM / 软件渲染路径上创建 `RenderEffect` 会抛，
- * 那应当**降级成半透明**而不是让整个界面崩掉。
+ * 真模糊与降级只差"填充的不透明度"：降级时 style 已经是全不透明（见 [liquidGlassStyle]）。
  */
-private fun Modifier.blurBehind(radius: Float, enabled: Boolean): Modifier =
-    if (!enabled) {
-        this
-    } else {
-        graphicsLayer {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                renderEffect = runCatching {
-                    RenderEffect.createBlurEffect(radius, radius, Shader.TileMode.CLAMP)
-                        .asComposeRenderEffect()
-                }.getOrNull()
-            }
-        }
-    }
-
-/** 填充 + 上沿高光 + 内描边。真模糊与降级只差"要不要补不透明度"。 */
-private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawGlass(
+private fun DrawScope.drawGlass(
     style: LiquidGlassStyle,
     density: Density,
     blurAvailable: Boolean,
 ) {
-    val fill = if (blurAvailable) {
-        style.fill
-    } else {
-        style.fill.copy(alpha = (style.fill.alpha + LiquidGlass.FALLBACK_EXTRA_ALPHA).coerceAtMost(1f))
-    }
+    val fill = style.fill
+    // 真模糊档再叠一道极轻的竖向渐变，让玻璃"上亮下暗"有厚度感；
+    // 降级档不加 —— 不透明色再做渐变就是两块塑料，反而更廉价。
     drawRect(
-        brush = Brush.verticalGradient(listOf(fill, fill.copy(alpha = fill.alpha * 0.88f))),
+        brush = if (blurAvailable) {
+            Brush.verticalGradient(listOf(fill, fill.copy(alpha = fill.alpha * 0.88f)))
+        } else {
+            Brush.verticalGradient(listOf(fill, fill))
+        },
     )
 
     // 上沿高光：只盖顶部一小段，迅速淡出（真实玻璃的受光边永远在上沿）。
@@ -214,3 +303,15 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawGlass(
         style = Stroke(width = w),
     )
 }
+
+/**
+ * 深色判定的亮度中点。
+ *
+ * 0.5 不是随手取的：WCAG 的相对亮度在中点附近最容易分错，而 Material 的深浅两套
+ * `colorScheme` 里 `surfaceContainerHigh` 恰好分别落在 0.02~0.15（深）与 0.85~0.95（浅），
+ * 离 0.5 都足够远 ⇒ 判定不会因为主题微调而翻转。
+ */
+private const val DARK_LUMINANCE_THRESHOLD = 0.5f
+
+/** 深色判定：取实际渲染底色的亮度，**不要**用 `isSystemInDarkTheme()`。 */
+internal fun isDarkSurface(surface: Color): Boolean = surface.luminance() <= DARK_LUMINANCE_THRESHOLD

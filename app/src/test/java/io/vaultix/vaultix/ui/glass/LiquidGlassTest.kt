@@ -3,8 +3,8 @@
  * Copyright (C) 2026 Vaultix contributors
  *
  * Vaultix is free software: you can redistribute it and/or modify it under the terms of
- * the GNU General Public License as published by the Free Software Foundation, either version 3
- * of the License, or (at your option) any later version.
+ * the GNU General Public License as published by the Free Software Foundation, either version 3 of
+ * the License, or (at your option) any later version.
  */
 package io.vaultix.vaultix.ui.glass
 
@@ -20,8 +20,15 @@ import org.junit.Test
  *
  * 1. **API 门槛**：`RenderEffect` 只有 API 31+ 有。低于 31 若仍声称"支持"，用户会看到
  *    开关打开、底栏却不糊 —— 表现为"开关坏了"，而且不报任何错。
- * 2. **填充必须带半透明**：填充 alpha 一旦是 1.0，模糊结果会被整块盖掉，
+ * 2. **填充必须带半透明（真模糊档）**：填充 alpha 一旦是 1.0，模糊结果会被整块盖掉，
  *    同样是"开了跟没开一样"。这条最容易在重构配色时被改坏。
+ *
+ * ## 2026-10-27 第二轮：真机截图证伪了第一版的两条"纪律"，这里补上反向锁定
+ *
+ * 第一版断言「深色更透」并以此为据取了 0.62 / 0.48。真机上一是**图标被一起糊掉**
+ * （架构问题，单测测不到，见 `LiquidGlassSource` 的 KDoc），二是**深色下填充太薄**，
+ * 玻璃与背景分不开。现在数值直接对齐 chrisbanes/Haze 的 `HazeMaterials` 五档
+ * （**全部深色更实**），下面的用例把这个方向钉住。
  */
 class LiquidGlassTest {
 
@@ -60,22 +67,24 @@ class LiquidGlassTest {
     }
 
     /**
-     * 填充透明度：深浅色都必须 < 1（否则模糊被盖掉），且深色更透。
+     * 真模糊档的填充必须半透明（否则模糊被盖掉），且**深色更实**。
      *
-     * "深色更透"不是审美偏好 —— 深色背景本身对比度低，填充越实越像一块塑料板。
+     * 「深色更实」是 Haze 五档的共同规律（0.55/0.65、0.65/0.80、0.80/0.90…）：
+     * 深色主题下背景更暗、模糊结果更接近黑，填充再薄就分不清"玻璃"与"背景"。
+     * 第一版取反了（深色 0.48 < 浅色 0.62），真机上玻璃透得连边界都看不出来。
      */
     @Test
-    fun `填充保持半透明且深色更透`() {
+    fun `真模糊档填充保持半透明且深色更实`() {
         assertThat(LiquidGlass.FILL_ALPHA_LIGHT).isLessThan(1f)
         assertThat(LiquidGlass.FILL_ALPHA_DARK).isLessThan(1f)
-        assertThat(LiquidGlass.FILL_ALPHA_DARK).isLessThan(LiquidGlass.FILL_ALPHA_LIGHT)
+        assertThat(LiquidGlass.FILL_ALPHA_DARK).isGreaterThan(LiquidGlass.FILL_ALPHA_LIGHT)
 
         val surface = Color(0xFF1A1C1E)
         val light = liquidGlassStyle(darkTheme = false, surface = surface, onSurface = Color.Black)
         val dark = liquidGlassStyle(darkTheme = true, surface = surface, onSurface = Color.White)
         assertThat(light.fill.alpha).isLessThan(1f)
         assertThat(dark.fill.alpha).isLessThan(1f)
-        assertThat(dark.fill.alpha).isLessThan(light.fill.alpha)
+        assertThat(dark.fill.alpha).isGreaterThan(light.fill.alpha)
     }
 
     /** 填充色只改 alpha，不许改 RGB（底栏底色要跟着主题走）。 */
@@ -100,17 +109,43 @@ class LiquidGlassTest {
     }
 
     /**
-     * 降级补偿必须能让填充达到"不透"（可读性兜底），但补偿量要小到**只补不盖**。
+     * 降级档（无真模糊）必须**全不透明**。
      *
-     * 若 `FALLBACK_EXTRA_ALPHA` 大到 `FILL + EXTRA >= 1`，降级态就退化成实心底栏 ——
-     * 用户会觉得"开了开关反而更丑"。
+     * 第一版是"半透明 + 0.18 补偿"（约 0.80），理由是"补到接近不透"。
+     * 那在真机上等于**文字能穿过底栏**：底栏浮在滚动列表上，半透明就意味着
+     * 底下的条目从图标之间透出来，读不清 —— 这是"不可用"，不是"不够好看"。
+     * Haze 对无模糊平台的做法同样是画 flat scrim（`fallbackColorEffect`）。
+     * ⇒ 现在降级 = 实色底栏，与第一版的实心观感一致。
      */
     @Test
-    fun `降级补偿把填充推到接近不透但不越界`() {
-        assertThat(LiquidGlass.FALLBACK_EXTRA_ALPHA).isGreaterThan(0f)
-        val worst = LiquidGlass.FILL_ALPHA_LIGHT + LiquidGlass.FALLBACK_EXTRA_ALPHA
-        assertThat(worst).isAtLeast(0.75f)
-        assertThat(worst).isLessThan(1f)
+    fun `降级档直接不透明`() {
+        assertThat(LiquidGlass.FALLBACK_ALPHA).isEqualTo(1f)
+        val surface = Color(0xFF1A1C1E)
+        listOf(true, false).forEach { dark ->
+            val style = liquidGlassStyle(
+                darkTheme = dark,
+                surface = surface,
+                onSurface = Color.White,
+                blurAvailable = false,
+            )
+            assertThat(style.fill.alpha).isEqualTo(1f)
+            assertThat(style.fill.red).isEqualTo(surface.red)
+        }
+    }
+
+    /** 默认参数 `blurAvailable = true` —— 老调用点不掉进降级档。 */
+    @Test
+    fun `blurAvailable 默认按真模糊算`() {
+        val surface = Color(0xFF1A1C1E)
+        val default = liquidGlassStyle(darkTheme = true, surface = surface, onSurface = Color.White)
+        val explicit = liquidGlassStyle(
+            darkTheme = true,
+            surface = surface,
+            onSurface = Color.White,
+            blurAvailable = true,
+        )
+        assertThat(default).isEqualTo(explicit)
+        assertThat(default.fill.alpha).isLessThan(1f)
     }
 
     /** 上沿高光带只占顶部一小段，且不能是 0（否则玻璃退化成一块纯色）。 */
@@ -120,5 +155,19 @@ class LiquidGlassTest {
         assertThat(LiquidGlass.EDGE_HIGHLIGHT_FRACTION).isLessThan(0.5f)
         assertThat(LiquidGlass.TOP_SHEEN_ALPHA).isGreaterThan(0f)
         assertThat(LiquidGlass.TOP_SHEEN_ALPHA).isAtMost(1f)
+    }
+
+    /**
+     * 深色判定看**实际底色亮度**，不看系统主题。
+     *
+     * 本 App 有独立的「主题模式」（浅/深/跟随系统）与 OLED 纯黑：App 设深色、系统浅色时，
+     * 按系统判会把填充取成浅色档，玻璃立刻不透。这条第一版就有，保留防回归。
+     */
+    @Test
+    fun `深浅判定取底色亮度而非系统主题`() {
+        assertThat(isDarkSurface(Color(0xFF0D0E11))).isTrue()
+        assertThat(isDarkSurface(Color(0xFF000000))).isTrue()
+        assertThat(isDarkSurface(Color(0xFFFDFCFF))).isFalse()
+        assertThat(isDarkSurface(Color.White)).isFalse()
     }
 }

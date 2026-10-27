@@ -40,6 +40,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import io.vaultix.model.VaultItem
 import io.vaultix.vaultix.ui.cardwallet.CardWalletScreen
+import io.vaultix.vaultix.ui.glass.rememberLiquidGlassSource
+import io.vaultix.vaultix.ui.glass.liquidGlassSource
 import io.vaultix.vaultix.ui.items.ItemsScreen
 import io.vaultix.vaultix.ui.settings.SettingsScreen
 import io.vaultix.vaultix.ui.totp.TotpCodesScreen
@@ -136,6 +138,14 @@ fun MainShellScreen(
     // 所以各页的滚动内容必须自己留出胶囊的高度，否则最后一条永远被压住。
     val bottomInset = rememberBottomDockInset()
 
+    // ★ 液态玻璃的**背景源**（2026-10-27 第二轮）。
+    //
+    // 底栏的模糊不能再靠"给自己的图层挂 renderEffect" —— 那会把图标一起糊掉
+    // （用户真机截图：整条胶囊连同按钮糊成灰雾）。改成"源 → 消费"：
+    // 下面那个内容 Box 把自己的内容录进 [glassSource]，底栏再采样它。
+    // 详细约束见 ui/glass/LiquidGlassSource.kt 的 KDoc。
+    val glassSource = rememberLiquidGlassSource()
+
     // 「+」分发：按当前 Tab 决定新建什么（Bastion `when(currentTab)` 语义）。
     // 设置 Tab 回退为「新建密码」（Bastion `else -> handlePasswordAddOpen()`）。
     val dispatchAdd: (VaultixNavItem) -> Unit = { tab ->
@@ -170,13 +180,22 @@ fun MainShellScreen(
                 onSelect = { currentTab = it },
                 onAdd = dispatchAdd,
                 liquidGlass = liquidGlassDock,
+                glassSource = glassSource,
             )
         },
     ) { padding ->
         // propagateMinConstraints：把整块可用区域「压」给 Tab 内容，否则各页的
         // Scaffold 会按内容尺寸收缩（Box 默认给子项的是松约束）。
+        //
+        // ★ 这个 Box 同时是液态玻璃的**背景源**：它录下整块 Tab 内容（含滚动中的列表），
+        //   底栏再采样并模糊它。放在这里（而不是各页各自登记）是因为：
+        //   ① 四个 Tab 共用同一处，不必改 4 个页面；② 页面切换过渡动画也在录制范围内
+        //   ⇒ 切 Tab 时底栏的糊影会跟着内容一起动，不会出现"背景已经换了、底栏还是旧的"。
         Box(
-            modifier = Modifier.fillMaxSize().padding(padding),
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .liquidGlassSource(source = glassSource, enabled = liquidGlassDock),
             propagateMinConstraints = true,
         ) {
             // ⚠️ 「跳过首次过渡」旗标 —— 详见下面 `transitionSpec` 里的说明。

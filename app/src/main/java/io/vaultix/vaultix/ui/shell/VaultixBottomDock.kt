@@ -59,7 +59,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -70,8 +69,12 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.glass.LiquidGlass
 import io.vaultix.vaultix.ui.glass.LiquidGlassLayer
+import io.vaultix.vaultix.ui.glass.LiquidGlassSource
+import io.vaultix.vaultix.ui.glass.isDarkSurface
 import io.vaultix.vaultix.ui.glass.liquidGlassStyle
+import io.vaultix.vaultix.ui.glass.shouldApplyBlur
 import io.vaultix.vaultix.ui.theme.UiSize
 import io.vaultix.vaultix.ui.theme.VaultixCorner
 import io.vaultix.vaultix.ui.theme.Spacing
@@ -152,6 +155,14 @@ fun VaultixBottomDock(
      * 参数放在末尾且给默认值，是为了让既有调用点与预览一行都不改。
      */
     liquidGlass: Boolean = false,
+    /**
+     * 液态玻璃的**背景源**（2026-10-27 第二轮）。由 [MainShellScreen] 挂在 Tab 内容区上，
+     * 这里只负责采样。
+     *
+     * ⚠️ 为 null 时退化成"一块纯色玻璃"（不糊任何东西）—— 预览 / 单测环境就是这种情况。
+     * **不要**因此把模糊挂回自己身上：那正是用户截图里"图标全糊"的那个 bug。
+     */
+    glassSource: LiquidGlassSource? = null,
 ) {
     // 外层留白：bottom 20dp 让胶囊明显抬离系统手势条，底部透出内容（酷安观感）。
     Box(
@@ -160,28 +171,34 @@ fun VaultixBottomDock(
             .padding(start = Spacing.md, end = Spacing.md, top = UiSize.TightGap, bottom = UiSize.SecondaryIcon)
     ) {
         if (liquidGlass) {
-            // ★ 液态玻璃分支（2026-10-27）：真模糊 + 半透明填充 + 上沿高光。
+            // ★ 液态玻璃分支（2026-10-27 第二轮重做）。
             //
-            // ⚠️ 这里**不能**继续用 Surface：Surface 会先铺一层不透明底色，
-            //    于是 RenderEffect 模糊到的是那块纯色，视觉上"开了跟没开一样"
-            //    （详见 ui/glass/LiquidGlass.kt 的顺序陷阱）。
-            //    阴影也只能靠外层 modifiers —— Surface 的 shadowElevation 会随实色一起丢掉。
+            // 🔴 第一版错在哪：把 `graphicsLayer { renderEffect = 模糊 }` 直接挂在本层，
+            //    RenderEffect 会糊掉**本图层的一切**，包括 [DockRow] 里的图标与文字
+            //    ⇒ 真机上整条胶囊连同按钮一起变成灰雾（用户截图）。
+            //    现在模糊只作用于"采样 [glassSource] 的那一层"，DockRow 在**另一层**。
+            // ⚠️ 这里**不能**继续用 Surface：会给胶囊铺一层不透明底色，
+            //    模糊就被那块纯色盖掉了（见 ui/glass/LiquidGlass.kt 的顺序说明）。
+            //    阴影只能靠外层 modifiers —— Surface 的 shadowElevation 会随实色一起丢掉。
             // ⚠️ 判深浅**不能看 `isSystemInDarkTheme()`** —— 本 App 有自己的「主题模式」
             //   （浅色 / 深色 / 跟随系统 + 动态取色 + OLED 纯黑）。App 设成深色、系统是浅色时，
             //   按系统判会把填充取成"浅色档"（更实），玻璃就不再透。
             //   取实际渲染出来的底色亮度最可靠（与 `FullScreenDialogShell` 的做法一致）。
             val surface = MaterialTheme.colorScheme.surfaceContainerHigh
+            val blurAvailable = shouldApplyBlur(requested = true)
             LiquidGlassLayer(
                 shape = VaultixCorner.Pill,
                 enabled = true,
+                source = glassSource,
                 style = liquidGlassStyle(
-                    darkTheme = surface.luminance() <= 0.5f,
+                    darkTheme = isDarkSurface(surface),
                     surface = surface,
                     onSurface = MaterialTheme.colorScheme.onSurface,
+                    blurAvailable = blurAvailable,
                 ),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .shadow(elevation = 6.dp, shape = VaultixCorner.Pill),
+                    .shadow(elevation = LiquidGlass.ShadowElevation, shape = VaultixCorner.Pill),
             ) {
                 DockRow(tabs = tabs, selected = selected, onSelect = onSelect, onAdd = onAdd)
             }

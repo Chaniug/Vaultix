@@ -145,7 +145,36 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 
 ## 9. 当前状态与下一批（接力起手式）
 
-> ⚡ **2026-10-27（最新）：文件夹 CRUD 落地（#199）· 全仓库 133 套 / 1328 例 / 0 失败**
+> ⚡ **2026-10-27（最新）：液态玻璃底栏返工（#198.1）· 全仓库 134 套 / 1328 例 / 0 失败**
+>
+> 用户真机截图：「液态玻璃的底栏不对啊，按钮都看不清，参考开源项目是如何实现的？」
+> —— 整条胶囊连同 4 个 tab 图标、文字、中央「+」全糊成灰雾。
+>
+> 🔴 **一句话根因**：`graphicsLayer { renderEffect = 模糊 }` 模糊的是**该图层的输出，
+> 包含它全部子内容**。第一版把它挂在包住 `DockRow` 的 Box 上 ⇒ 图标自己也被糊。
+> **上一版 KDoc 里写的"必须挂最外层 Box 才对"是错的**，真机截图直接证伪。
+>
+> ✅ **正确架构 = 源 → 消费 两段分离**（对齐 chrisbanes/Haze 的 `hazeSource`/`hazeEffect`，
+> 但**不引新依赖**，用 Compose 自带的 `rememberGraphicsLayer` + `record` + `drawLayer` 自实现）：
+> - **源**：`Modifier.liquidGlassSource` 挂在 Tab 内容区 Box 上，
+>   `drawWithContent { layer.record { drawContent() } }`（内容只进 layer，**不画到屏幕**）；
+> - **消费**：`Modifier.liquidGlassBackdrop` 挂在浮层的"背景层"，
+>   `canvas.translate(-offset); layer.renderEffect = blur; drawLayer(layer)`；
+> - **结构必须分两层兄弟节点**：层 A 只画糊影（唯一带 `renderEffect`），层 B 画
+>   填充/高光/描边 + 图标。写进一个 Box 的 modifier 链就复现 bug。
+>
+> ⚠️ 三条连带判据：
+> ① **源的子树里不能有不透明铺底**（`Surface(color=…)`）—— 录到的会是那块纯色，
+>   糊它等于没做；本项目 Tab 页透明、**顶栏是不透明 `Surface`** ⇒ 源不能含顶栏。
+> ② 源录的是**整块 Tab 区**（比胶囊高得多），层 A 必须 `clip(shape)`，否则糊影溢到胶囊外。
+> ③ 填充数值改为**直接对齐 Haze `HazeMaterials` thin 档**（0.60 / 0.65，**深色更实**）——
+>   第一版的 0.62 / 0.48 是拍脑袋且**方向反了**（Haze 五档全部深色更实）。
+>   降级档也不再"半透明 + 0.18 补偿"，改为**全不透明**：半透明底栏浮在列表上会透出条目。
+>
+> 门禁：compile（双变体）✅ · detekt ✅ · test **134 套 / 1328 例 / 0 失败** ✅。
+> `LiquidGlassTest` 8 → **10 例**（2 例被真机证伪后改写方向）。详见 `.ai/issues/06` §198.1。
+>
+> ⚡ **2026-10-27：文件夹 CRUD 落地（#199）· 全仓库 133 套 / 1328 例 / 0 失败**
 >
 > 用户：「继续开发，完善设置，以及日常的功能」。挑的是功能盘点里**唯一"看得见、动不了"**的一块：
 > `FolderRepository` 只有读、`FolderDao` 只有整体替换 ⇒ 用户看得见文件夹却建不了改不了删不了
