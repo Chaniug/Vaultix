@@ -15,6 +15,7 @@
  */
 package io.vaultix.data.bitwarden.export
 
+import io.vaultix.data.bitwarden.time.BitwardenTimestamps
 import io.vaultix.model.CustomFieldType
 import io.vaultix.model.UriMatch
 import io.vaultix.model.VaultCard
@@ -22,7 +23,6 @@ import io.vaultix.model.VaultCustomField
 import io.vaultix.model.VaultFido2Credential
 import io.vaultix.model.VaultIdentity
 import io.vaultix.model.VaultItem
-import io.vaultix.data.bitwarden.time.BitwardenTimestamps
 import io.vaultix.model.VaultItemType
 import io.vaultix.model.VaultPasswordHistoryEntry
 import io.vaultix.model.VaultReprompt
@@ -83,12 +83,14 @@ internal fun BitwardenExportCipher.toVaultItem(): VaultItem? {
 /** 密码历史：空串的 `lastUsedDate`（本 App 导出时的"没有时间"形态）→ null。 */
 private fun BitwardenExportPasswordHistory.toVaultPasswordHistory(): VaultPasswordHistoryEntry =
     VaultPasswordHistoryEntry(
-        password = password,
-        lastUsedAt = BitwardenTimestamps.parse(lastUsedDate),
+        password = password.orEmpty(),
+        lastUsedAt = BitwardenTimestamps.parse(lastUsedDate.orEmpty()),
     )
 
 /** 网址：`match` 编号 → [UriMatch]；未知编号按 null（基域匹配）处理，不猜测。 */
 private fun BitwardenExportUri.toVaultUri(): VaultUri = VaultUri(
+    // 官方 `uri` 可空、本领域非空 ⇒ null 与空串都落成空串（与 CipherMapper 同口径）。
+    // 代价写在 KDoc 里（见文件尾），不在这里造哨兵值。
     uri = uri.orEmpty(),
     match = when (match) {
         0 -> UriMatch.Domain

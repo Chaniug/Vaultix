@@ -225,10 +225,11 @@ data class BitwardenExportField(
     @SerialName("linkedId") val linkedId: Int? = null,
 )
 
-/** 密码历史条目（对齐官方 `JsonPasswordHistory`；Vaultix 暂不承载，保留模型以对齐契约）。 */
+/** 密码历史条目（对齐官方 `JsonPasswordHistory`；2026-10-28 起导出/导入双向承载）。 */
 @Serializable
 data class BitwardenExportPasswordHistory(
-    @SerialName("password") val password: String,
+    /** 旧密码明文；空串按「没有」处理 ⇒ 省略字段（官方侧读回默认空串，等价）。 */
+    @SerialName("password") val password: String? = null,
     @SerialName("lastUsedDate") val lastUsedDate: String,
 )
 

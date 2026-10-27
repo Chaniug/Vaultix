@@ -84,9 +84,26 @@ internal fun VaultItem.toExportCipher(): BitwardenExportCipher {
  */
 private fun VaultPasswordHistoryEntry.toExportPasswordHistory(): BitwardenExportPasswordHistory =
     BitwardenExportPasswordHistory(
-        password = password,
+        password = password.ifEmpty { null },
         lastUsedDate = BitwardenTimestamps.format(lastUsedAt).orEmpty(),
     )
+
+/**
+ * 导出 / 导入的**已知不保真处**（2026-10-28 补，逐条给理由，不要"顺手磨平"）。
+ *
+ * 1. **`login.uris[i].uri` 的 `null` ↔ `""` 不可区分**
+ *    官方该字段可空（省略 = 从没有过网址），本领域 `VaultUri.uri` 非空。
+ *    导入时两者都落成空串（与 `CipherMapper` 同口径）。代价：条目"网址行存在但内容空"
+ *    这一状态往返后保留形状、丢失"是空串还是 null"的区分。
+ *    影响面仅限**本来就没有 URL 的登录条目**；不会改变匹配行为（空串不匹配任何站点）。
+ *    没做哨兵值（如 mogrify 成占位串）—— 那种做法会让导出文件的 `uri` 出现本 App 专属的假网址，
+ *    官方端会当成真网址展示，比丢一个空串更糟。
+ *
+ * 2. **密码历史里 `password` 为空的条目，`password` 字段被省略**
+ *    官方 `password: String` 非空，省略后官方导入器会退回默认空串 —— 语义等价。
+ *
+ * 3. **自定义字段的 `linkedId` 只在 `type == Linked` 时有意义**：官方同样如此，不改。
+ */
 
 /** 领域条目类型 → Bitwarden `CipherType` 编号。 */
 private fun VaultItemType.toExportTypeCode(): Int = when (this) {

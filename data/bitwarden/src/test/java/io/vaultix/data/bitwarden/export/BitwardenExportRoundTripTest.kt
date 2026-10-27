@@ -9,9 +9,14 @@
 package io.vaultix.data.bitwarden.export
 
 import io.vaultix.data.bitwarden.time.BitwardenTimestamps
+import io.vaultix.model.CustomFieldType
+import io.vaultix.model.UriMatch
+import io.vaultix.model.VaultCustomField
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
 import io.vaultix.model.VaultPasswordHistoryEntry
+import io.vaultix.model.VaultReprompt
+import io.vaultix.model.VaultUri
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -77,6 +82,48 @@ class BitwardenExportRoundTripTest {
         assertEquals("2025-11-01T12:26:40.000Z", cipher.creationDate)
         assertEquals("2025-11-13T02:13:20.000Z", cipher.revisionDate)
         assertNull(cipher.deletedDate)
+    }
+
+    /**
+     * 官方**没有**给的字段（省略 / null）读回来必须是"空"，不是假值。
+     *
+     * 这条测的是"别人家的文件"：官方 exporter 会省略空字段，若我们把缺字段当异常，
+     * 导入整份官方备份会直接失败。
+     */
+    @Test
+    fun `官方文件缺字段时导入不炸且为空`() {
+        val lenientJson = Json { ignoreUnknownKeys = true }
+        val raw = """
+            {
+              "id": "3d0f5b0e-0000-4000-8000-0000000000ff",
+              "name": "legacy",
+              "type": 1,
+              "login": { "uris": [ { "uri": "example.com" } ] }
+            }
+        """.trimIndent()
+
+        val back = lenientJson.decodeFromString(BitwardenExportCipher.serializer(), raw).toVaultItem()!!
+
+        assertEquals("legacy", back.title)
+        assertEquals("example.com", back.uris.single().uri)
+        assertNull("官方省略 match ⇒ 领域 null（不要自作主张填 Domain）", back.uris.single().match)
+        assertTrue("缺 passwordHistory ⇒ 空表", back.passwordHistory.isEmpty())
+        assertNull(back.createdAt)
+        assertNull(back.updatedAt)
+    }
+
+    /** 密码历史里 password 为空的条目：导出省略该字段，导入回落空串（官方同语义）。 */
+    @Test
+    fun `历史密码为空 导出省略且导入回落空串`() {
+        val cipher = loginItem(history = listOf(VaultPasswordHistoryEntry(""))).toExportCipher()
+        assertNull("空密码不写成 \"\"，直接省字段", cipher.passwordHistory!!.single().password)
+
+        val back = json.decodeFromString(
+            BitwardenExportCipher.serializer(),
+            json.encodeToString(BitwardenExportCipher.serializer(), cipher),
+        ).toVaultItem()!!
+
+        assertEquals("", back.passwordHistory.single().password)
     }
 
     /** 序列化后的 JSON 里字段名与官方一致（`lastUsedDate` / `creationDate` / `revisionDate`）。 */
@@ -180,5 +227,69 @@ class BitwardenExportRoundTripTest {
         assertEquals(1_759_236_896_789L, BitwardenTimestamps.parse("2025-09-30T12:54:56.789Z"))
         assertEquals(1_759_236_896_000L, BitwardenTimestamps.parse("2025-09-30T12:54:56Z"))
         assertEquals(1_759_236_896_000L, BitwardenTimestamps.parse("2025-09-30T12:54:56+00:00"))
+    }
+
+    /**
+     * ★ 全字段往返：**每个字段**都变一次，逐一断言能原样回来。
+     *
+     * 只挑三个字段测的问题（如本文件早期版本）是：**没被测到的字段丢了你不会知道**。
+     * 这条用 `copy()` 把 [VaultItem] 的每个会被导出承载的字段都改成非默认值，
+     * 再整条比对 —— 与 #190 的 `FIELD_MUTATORS` 表同一个思路（表驱动，不靠记性）。
+     *
+     * ⚠️ 它做不到"像 data class 的 `equals` 那样自动覆盖所有新字段"：
+     * 新增字段仍要在这里加一行。**这条注释就是提醒**（#190 的老教训）。
+     */
+    @Test
+    fun `全字段往返保真`() {
+        val source = VaultItem(
+            id = "3d0f5b0e-0000-4000-8000-000000000002",
+            title = "full.example",
+            username = "bob",
+            password = "p@ss",
+            notes = "备注",
+            type = VaultItemType.Login,
+            uris = listOf(
+                VaultUri("https://a.example", UriMatch.Exact),
+                VaultUri("https://b.example", UriMatch.Never),
+                VaultUri("https://c.example", null),
+            ),
+            totp = "otpauth://totp/x?secret=AAAA",
+            folderId = "9f0e1d2c-0000-4000-8000-0000000000aa",
+            favorite = true,
+            reprompt = VaultReprompt.Password,
+            customFields = listOf(
+                VaultCustomField("明文", "v1", CustomFieldType.Text),
+                VaultCustomField("隐藏", "v2", CustomFieldType.Hidden),
+                VaultCustomField("布尔", "true", CustomFieldType.Boolean),
+                VaultCustomField("关联", "bob", CustomFieldType.Linked, linkedId = 100),
+            ),
+            passwordHistory = listOf(
+                VaultPasswordHistoryEntry("older", 1_762_500_000_000L),
+                VaultPasswordHistoryEntry("oldest", 1_762_000_000_000L),
+            ),
+            createdAt = 1_762_000_000_000L,
+            updatedAt = 1_763_000_000_000L,
+        )
+
+        val back = json.decodeFromString(
+            BitwardenExportCipher.serializer(),
+            json.encodeToString(BitwardenExportCipher.serializer(), source.toExportCipher()),
+        ).toVaultItem()!!
+
+        assertEquals(source.id, back.id)
+        assertEquals(source.title, back.title)
+        assertEquals(source.username, back.username)
+        assertEquals(source.password, back.password)
+        assertEquals(source.notes, back.notes)
+        assertEquals(source.type, back.type)
+        assertEquals(source.uris, back.uris)
+        assertEquals(source.totp, back.totp)
+        assertEquals(source.folderId, back.folderId)
+        assertEquals(source.favorite, back.favorite)
+        assertEquals(source.reprompt, back.reprompt)
+        assertEquals(source.customFields, back.customFields)
+        assertEquals(source.passwordHistory, back.passwordHistory)
+        assertEquals(source.createdAt, back.createdAt)
+        assertEquals(source.updatedAt, back.updatedAt)
     }
 }
