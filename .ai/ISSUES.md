@@ -12,7 +12,7 @@
 | [01-构建与环境](./issues/01-构建与环境.md) | 工程 / 构建 / CI / 工具链 / 环境 | 55 |
 | [02-自动填充](./issues/02-自动填充.md) | 自动填充（AutofillService 链路） | 19 |
 | [03-通行密钥与凭据提供商](./issues/03-通行密钥与凭据提供商.md) | 通行密钥 / Credential Provider / 凭据回灌 | 22 |
-| [04-锁与解锁](./issues/04-锁与解锁.md) | 锁态模型 / 解锁 / 生物识别 / 密钥 | 15 |
+| [04-锁与解锁](./issues/04-锁与解锁.md) | 锁态模型 / 解锁 / 生物识别 / 密钥 | 16 |
 | [05-KDBX本地库](./issues/05-KDBX本地库.md) | KDBX 本地库 | 23 |
 | [06-界面与交互](./issues/06-界面与交互.md) | 界面 / 布局 / 交互动效 / 空态 / 图标 | 47 |
 | [07-数据与同步](./issues/07-数据与同步.md) | 数据模型 / 同步 / 会话 | 24 |
@@ -167,6 +167,7 @@
 | 133 | 「一次认证开多库」的补开被导航取消 ⇒ 用户被迫按第二次指纹 |
 | 161 | ✅ **已修（2026-10-14 B5）**「PIN 忘记后可在设置里重设」—— 文案承诺了功能，入口不存在（「修改 PIN」+「忘记 PIN」两条路都通；判据：有重设路径 ≠ 忘了凭据的人有重设路径） |
 | 194 | 🟡 附件解密后的**明文**留在 `cache/attachments/<itemId>/`，锁库不清 —— 系统只在"存储空间不足"时才回收，一台大容量手机可能几个月都不回收。修法 = 新增 `SensitiveCache` 统一归口（所有敏感缓存挂同一根 ⇒ `clearAll` 一次删净，**将来加第三种自动被清**）+ 锁库 `clearAll()` + 删条目 `invalidateFor()` |<br>⚠️ 与剪贴板不同：`cacheDir` 这几个子目录**只有本应用会写** ⇒ **无条件清**（少一层判断就少一次"判断错了于是没清"）。<br>⚠️ 别误伤 `cache/dev_logs/`（用户主动导出的日志），有反向锁定用例。<br>判据：**"临时文件"≠"安全文件"** —— 若"它什么时候消失"的答案是"系统缺空间的时候"，等于没有答案 |
+| 203 | 🔴 **`init { scope.launch }` 让测试接缝晚一步生效** ⇒ CI 偶发 `Dispatchers.Main was accessed`（`TestMainDispatcherJvm.kt:45`），本地同版本全绿。三接缝（`testingScope`/`testingIoDispatcher`/`testingBlockableIoDispatcher`）只能构造后赋值，而 `init` 在构造期间就跑、落到 `viewModelScope`；`@After resetMain()` 卸掉旧 Main 时仍在跑的任务就炸。修法 = 抽 `startObservers()`（`AtomicBoolean` 幂等）+ `init` 仅在 `testingScope == null` 自启 + 测试工厂设完接缝后手动调 |<br>判据：**接缝的生效范围必须覆盖"用到它的第一个协程"**，`init` 天然不满足。<br>⚠️ 不是"再 setMain 一次"能解决的：问题是有**两个** Main，不是 Main 被卸掉 |
 | 188 | 🟡 锁库**不清剪贴板**（密码留在里面任何 App 可粘）+ 复制**网址**被当敏感内容 30 秒后清空 ⇒ 新增 `VaultixClipboard.clearNow()`（只在确认是自己放的才清，读不到**什么都不做**；判据 `EXTRA_IS_SENSITIVE` 或 label）；`doCopy` 改 `sensitive = !isUri`。⚠️ `clipboardScope` 从 `Main.immediate` 改 `Default` —— 主线程 `delay` 会被 Doze / 界面忙整体推迟 |<br>判据：**「定时清理」必须配一个「立即清理」的触发点**，锁库这一刻正是最需要它的时候 |
 | 189 | 🟡 熄屏**不保证**触发 `onStop`（媒体播放 / 画中画 / `showWhenLocked` 下 Activity 仍 resumed）⇒ 「离开 5 分钟自动锁」熄屏一夜也不锁。修法 = 同时监听 `ACTION_SCREEN_OFF` 并复用 `onAppBackgrounded()` 分流（`Never`/`OnAppRestart` 档位不变）。⚠️ 单测里 `onScreenOff()` 后直接推时间是**假红**，要先 `settle(m)` |<br>判据：**「用户看不见了」至少有三条独立通路：熄屏 / 切后台 / 分屏** |
 
