@@ -48,7 +48,7 @@ import androidx.compose.ui.unit.dp
  * ## 现在的结构（对齐 chrisbanes/Haze 的源→消费分离）
  *
  * ```
- * ┌ 源：Modifier.liquidGlassSource（Tab 内容区，recording 进 GraphicsLayer，屏幕不落像素）
+ * ┌ 源：Modifier.liquidGlassSource（Tab 内容区：录一份进 contentLayer，并照常回屏）
  * └ 浮层：LiquidGlassLayer
  *      ├─ 层 A：Modifier.liquidGlassBackdrop —— 只画"模糊后的源"，带 clip 与 renderEffect
  *      └─ 层 B：content() —— 图标 / 文字 / 中央「+」，完全不含任何模糊
@@ -57,6 +57,13 @@ import androidx.compose.ui.unit.dp
  * `Box` 的兄弟节点各画各的层，所以层 B 不会被层 A 的 `RenderEffect` 波及。
  * 这是 StackOverflow「内容放在同一层里也会受效果影响，解法是两个叠加的 Box」
  * 所说的做法，也是 Haze `hazeEffect` 内部对源图层的处理方式。
+ *
+ * ## 🔴 2026-10-28（第三轮）：源必须**照常回屏**，模糊必须挂在**中转层**
+ *
+ * 第二轮把源写成"只录不画、屏幕不落像素"，自称是与 Haze 的"唯一有意分歧"。
+ * 结果是**除底栏外整屏没有像素** ⇒ 露出窗口底色 ⇒ 用户报「开启液态玻璃后整个页面变白」。
+ * 现在：源 `record` 后 `drawLayer(contentLayer)` 回屏；模糊只挂 `effectLayer`。
+ * **与 Haze 零分歧**。细节与五条约束见 `LiquidGlassSource.kt` 文件头。
  *
  * ## 🔴 为什么填充 / 高光 / 描边画在层 B 上，而不是层 A
  *
@@ -244,7 +251,8 @@ fun LiquidGlassLayer(
                     .onGloballyPositioned { coords ->
                         val own = coords.boundsInRoot()
                         val src = source.bounds
-                        val next = Offset(src.left - own.left, src.top - own.top)
+                        // ⚠️ 符号别手写：底栏在源下方 ⇒ 该值 y 为负，绘制时按**同值**平移。
+                        val next = backdropOffset(sourceBounds = src, layerBounds = own)
                         if (next != offset) offset = next
                     }
                     .liquidGlassBackdrop(source = source, offset = offset, radiusPx = radiusPx),

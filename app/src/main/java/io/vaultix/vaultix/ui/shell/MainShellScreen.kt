@@ -40,6 +40,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import io.vaultix.model.VaultItem
 import io.vaultix.vaultix.ui.cardwallet.CardWalletScreen
+import io.vaultix.vaultix.ui.glass.isLiquidGlassBlurSupported
 import io.vaultix.vaultix.ui.glass.rememberLiquidGlassSource
 import io.vaultix.vaultix.ui.glass.liquidGlassSource
 import io.vaultix.vaultix.ui.items.ItemsScreen
@@ -141,10 +142,15 @@ fun MainShellScreen(
     // ★ 液态玻璃的**背景源**（2026-10-27 第二轮）。
     //
     // 底栏的模糊不能再靠"给自己的图层挂 renderEffect" —— 那会把图标一起糊掉
-    // （用户真机截图：整条胶囊连同按钮糊成灰雾）。改成"源 → 消费"：
+    // （用户真机截图：整条胶囊连同按钮糊成灰雾）。改成"源 → 效果层 → 消费"：
     // 下面那个内容 Box 把自己的内容录进 [glassSource]，底栏再采样它。
     // 详细约束见 ui/glass/LiquidGlassSource.kt 的 KDoc。
     val glassSource = rememberLiquidGlassSource()
+    //
+    // ⚠️ 源**只在真的会挂模糊时**才登记：录一帧源 = 一次整屏离屏拷贝，
+    //   而 API < 31 根本没有 RenderEffect（底栏走实色分支，见 VaultixBottomDock）。
+    //   不在这一层挡掉的话，老设备上每帧白拷一次全屏。
+    val glassSourceActive = liquidGlassDock && isLiquidGlassBlurSupported()
 
     // 「+」分发：按当前 Tab 决定新建什么（Bastion `when(currentTab)` 语义）。
     // 设置 Tab 回退为「新建密码」（Bastion `else -> handlePasswordAddOpen()`）。
@@ -195,7 +201,7 @@ fun MainShellScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .liquidGlassSource(source = glassSource, enabled = liquidGlassDock),
+                .liquidGlassSource(source = glassSource, enabled = glassSourceActive),
             propagateMinConstraints = true,
         ) {
             // ⚠️ 「跳过首次过渡」旗标 —— 详见下面 `transitionSpec` 里的说明。
