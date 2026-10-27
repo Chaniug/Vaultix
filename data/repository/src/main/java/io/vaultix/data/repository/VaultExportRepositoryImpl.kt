@@ -22,6 +22,8 @@ import io.vaultix.data.bitwarden.export.BitwardenExportFacade
 import io.vaultix.data.bitwarden.export.BitwardenImportException
 import io.vaultix.data.kdbx.Kdbx
 import io.vaultix.domain.FolderRepository
+import io.vaultix.domain.ImportDuplicatePolicy
+import io.vaultix.domain.ImportPlan
 import io.vaultix.domain.ImportedVault
 import io.vaultix.domain.ItemRepository
 import io.vaultix.domain.VaultExportRepository
@@ -85,13 +87,16 @@ class VaultExportRepositoryImpl @Inject constructor(
 
         // 文件夹：按名字匹配目标库已有文件夹（Vaultix 不支持客户端新建文件夹）。
         val folderIdByName = existingFolderIdByName(vaultId)
+        val duplicateKeys = duplicateKeys(vaultId, imported)
 
         var written = 0
         imported.items.forEach { item ->
+            // 已存在 → 跳过（判定口径见 ImportDuplicatePolicy；预览页已告知用户数量）。
+            if (ImportDuplicatePolicy.keyOf(item) in duplicateKeys) return@forEach
             val remapped = item.copy(
                 // 目标库重新分配 id（createItem 会覆盖，这里显式置空以免误导）。
                 id = "",
-                // 源端 folderId 是导出库的 UUID；按名字映射到目标库的文件夹 id，找不到则清空。
+                // 源端 folderId 是导出库的 UUID：按名字映射到目标库 id，找不到则清空。
                 folderId = item.folderId?.let { sourceId ->
                     imported.folders.firstOrNull { it.id == sourceId }
                         ?.let { folderIdByName[it.name] }
@@ -103,7 +108,40 @@ class VaultExportRepositoryImpl @Inject constructor(
         return written
     }
 
-    /** 目标库「文件夹名 → id」映射（同名取第一个，导出与导入库同名文件夹的常见情形）。 */
+    override suspend fun previewImport(vaultId: String, imported: ImportedVault): ImportPlan {
+        if (!isUnlocked(vaultId)) throw VaultNotUnlockedException(vaultId)
+
+        // 只看"当前可浏览的条目"：回收站里的条目按设计就是用户不要了，
+        // 拿它来挡导入会让用户怎么导都导不进去。
+        val existing = itemRepository.observeItems(vaultId).first()
+        val conflicts = ImportDuplicatePolicy.conflicts(imported.items, existing)
+        return ImportPlan(
+            newItemCount = imported.items.size - conflicts.size,
+            duplicateCount = conflicts.size,
+            // 去重后取前几个：同一标题撞多条时不必重复显示同一个名字。
+            duplicateTitles = conflicts.map { it.existingTitle }.distinct().take(ImportPlan.IMPORT_CONFLICT_SAMPLE),
+        )
+    }
+
+    /**
+     * 目标库里"已存在"的条目键集合（判定口径唯一来源：[ImportDuplicatePolicy]）。
+     *
+     * 与 [previewImport] 各自读一次 [ItemRepository.observeItems]：两处之间用户可能
+     * 在别的页面新建 / 删除条目。**以写入那一刻的库状态为准** —— 预演只是
+     * 给用户看的预告，不能当成写入的凭据（"预览说新建 10 条"而实际写了 9 条，
+     * 比反过来安全）。
+     */
+    private suspend fun duplicateKeys(
+        vaultId: String,
+        imported: ImportedVault,
+    ): Set<ImportDuplicatePolicy.Key> {
+        val existing = itemRepository.observeItems(vaultId).first()
+        return ImportDuplicatePolicy.conflicts(imported.items, existing)
+            .map { ImportDuplicatePolicy.keyOf(it.imported) }
+            .toSet()
+    }
+
+    /** 目标库「文件夹名 → id」映射（同名取第一个，两库同名文件夹的常见情形）。 */
     private suspend fun existingFolderIdByName(vaultId: String): Map<String, String> =
         folderRepository.observeFolders(vaultId).first()
             .associate { it.name to it.id }

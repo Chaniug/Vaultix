@@ -8,7 +8,7 @@ import io.vaultix.model.VaultItem
  *
  * 为什么单列一个仓储接口而不是塞进 [VaultRepository]：
  * - 导出 / 导入是**一次性、重计算、带独立密码**的批处理动作，与库生命周期 / 同步
- *   完全正交（`VaultRepository` 的语义是「库状态机 + 同步」，此处塞进去会让它继续膨胀）；
+ *   完全正交（`VaultRepository` 是「库状态机 + 同步」，塞进去只会让它继续膨胀）；
  * - 该能力只在设置页使用，UI 侧只要一个窄接口，不需要看到条目 / 文件夹的读写细节。
  *
  * 实现位于 data:repository（内部委托 data:bitwarden 的导出器 / 导入器 + 条目 / 文件夹仓储）。
@@ -49,6 +49,37 @@ interface VaultExportRepository {
      * @return 实际写入的条目数（未知类型条目会被跳过，故可能小于文件内条目数）。
      */
     suspend fun applyImportedVault(vaultId: String, imported: ImportedVault): Int
+
+    /**
+     * 写入前的**预演**：算出哪些条目会被跳过（已存在）、哪些会被新建。
+     *
+     * 为什么不把"去重"塞进 [applyImportedVault] 内部：
+     * 导入是**不可撤销的批量写**（会往库里塞进几十上百条），用户必须在写之前就看到
+     * "会新建 N 条 / 已存在 M 条"，并由自己决定 M 条是跳过还是照样导入。
+     * 一个"悄悄帮我跳过"的导入器，用户只会以为**文件少了条**。
+     *
+     * @return 新建数、重复数、重复样例标题（最多 [IMPORT_CONFLICT_SAMPLE] 条，
+     *   仅供文案展示 —— 全量清单不进 UI 状态）。
+     */
+    suspend fun previewImport(vaultId: String, imported: ImportedVault): ImportPlan
+}
+
+/** 导入预演结果（[VaultExportRepository.previewImport]）。 */
+data class ImportPlan(
+    /** 会被新建的条目数。 */
+    val newItemCount: Int,
+    /** 因"已存在"被跳过的条目数（[ImportDuplicatePolicy] 判定）。 */
+    val duplicateCount: Int,
+    /** 重复条目的样例标题（去重后，最多 [IMPORT_CONFLICT_SAMPLE] 个）。 */
+    val duplicateTitles: List<String>,
+) {
+    companion object {
+        /** 提示文案里最多展示几个重复条目名（再多就"等 N 条"）。 */
+        const val IMPORT_CONFLICT_SAMPLE = 3
+
+        /** 文件里没有任何可导入条目时的空计划。 */
+        val EMPTY = ImportPlan(newItemCount = 0, duplicateCount = 0, duplicateTitles = emptyList())
+    }
 }
 
 /** 解密并映射后的导出内容（预览 + 导入的输入）。 */

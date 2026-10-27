@@ -71,6 +71,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.vaultix.domain.ImportPlan
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.readAllBytes
 import io.vaultix.vaultix.ui.common.writeBytes
@@ -398,7 +399,12 @@ private fun ImportSection(
         )
     } else {
         // 第三步：预览 + 确认导入
-        PreviewCard(itemCount = preview.items.size, folderCount = preview.folders.size)
+        PreviewCard(
+            itemCount = preview.items.size,
+            folderCount = preview.folders.size,
+            plan = state.importPlan,
+            allDuplicated = state.allDuplicated,
+        )
         ActionButton(
             text = stringResource(R.string.import_confirm),
             icon = Icons.Filled.Description,
@@ -418,25 +424,63 @@ private fun ImportSection(
     }
 }
 
-/** 预览卡：显示将导入的条目 / 文件夹数量。 */
+/**
+ * 预览卡：文件里有多少条，以及**写进去会发生什么**（新建几条 / 已存在几条）。
+ *
+ * 为什么必须把"已存在"写出来：导入是不可撤销的批量写。只说"文件里 50 条"而不说
+ * "其中 12 条已存在会被跳过"，用户会以为 50 条都进去了（或以为去重把数据吃了）。
+ */
 @Composable
-private fun PreviewCard(itemCount: Int, folderCount: Int) {
+private fun PreviewCard(
+    itemCount: Int,
+    folderCount: Int,
+    plan: ImportPlan?,
+    allDuplicated: Boolean,
+) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
     ) {
-        Row(
-            modifier = Modifier.padding(Spacing.lg),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Spacing.md),
-        ) {
-            Icon(Icons.Filled.Description, contentDescription = null)
-            Text(
-                text = stringResource(R.string.import_preview_summary, itemCount, folderCount),
-                style = MaterialTheme.typography.bodyLarge,
-            )
+        Column(modifier = Modifier.padding(Spacing.lg), verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+            ) {
+                Icon(Icons.Filled.Description, contentDescription = null)
+                Text(
+                    text = stringResource(R.string.import_preview_summary, itemCount, folderCount),
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+            }
+            when {
+                // 预演算完之前什么都不说：显示"正在计算"比显示 0 更诚实。
+                plan == null -> Text(
+                    text = stringResource(R.string.import_plan_pending),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                plan.duplicateCount == 0 -> Text(
+                    text = stringResource(R.string.import_plan_all_new, plan.newItemCount),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                else -> Text(
+                    text = if (allDuplicated) {
+                        stringResource(R.string.import_plan_all_duplicated, plan.duplicateCount)
+                    } else {
+                        stringResource(
+                            R.string.import_plan_duplicates,
+                            plan.newItemCount,
+                            plan.duplicateCount,
+                            plan.duplicateTitles.joinToString("、"),
+                        )
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }

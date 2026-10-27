@@ -29,6 +29,7 @@ import android.provider.OpenableColumns
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import io.vaultix.domain.ImportPlan
 import io.vaultix.domain.ImportedVault
 import io.vaultix.domain.VaultExportRepository
 import io.vaultix.domain.VaultImportException
@@ -73,6 +74,8 @@ class ImportExportViewModel @Inject constructor(
         val importPasswordVisible: Boolean = false,
         /** 已解密并映射、等待用户确认落库的预览内容（null = 还没解密）。 */
         val importPreview: ImportedVault? = null,
+        /** 写入预演（新建几条 / 已存在几条）；null = 尚未算完。 */
+        val importPlan: ImportPlan? = null,
         val importing: Boolean = false,
         val decoding: Boolean = false,
         // ---- 共用 ----
@@ -89,8 +92,15 @@ class ImportExportViewModel @Inject constructor(
         val canDecrypt: Boolean
             get() = !decoding && !importUri.isNullOrBlank() && importPassword.isNotEmpty()
 
-        /** 确认导入按钮可用：已解密出预览 + 非忙碌。 */
-        val canApply: Boolean get() = !importing && importPreview != null
+        /**
+         * 确认导入按钮可用：预览 + 预演都出来了 + 非忙碌。
+         *
+         * 预演没算完就允许点，等于让用户在**看不到"会新建几条"**时按下不可撤销的批量写。
+         */
+        val canApply: Boolean get() = !importing && importPreview != null && importPlan != null
+
+        /** 文件里全部条目都已存在（预演算完且新建数为 0）—— 按钮该灰掉并说明原因。 */
+        val allDuplicated: Boolean get() = importPlan?.let { it.newItemCount == 0 && it.duplicateCount > 0 } == true
 
         companion object {
             /** 文件密码最短长度（对齐官方「弱密码」判定的下限口径）。 */
@@ -183,8 +193,9 @@ class ImportExportViewModel @Inject constructor(
             it.copy(
                 importUri = uri.toString(),
                 importFileName = displayNameOf(context, uri) ?: uri.lastPathSegment.orEmpty(),
-                // 换文件即清掉旧预览 / 旧密码，避免用 A 文件的密码解 B 文件。
+                // 换文件即清掉旧预览 / 旧预演 / 旧密码，避免用 A 文件的密码解 B 文件。
                 importPreview = null,
+                importPlan = null,
                 importPassword = "",
                 error = null,
                 errorDetail = null,
@@ -208,6 +219,14 @@ class ImportExportViewModel @Inject constructor(
         val current = _state.value
         if (!current.canDecrypt) return
 
+        // 库没解锁就别白解密：解密本身能成（文件密码对），但预演必然失败，
+        // 用户会以为"文件有问题"。前置判定让错因落在正确的地方。
+        val vaultId = activeVaultStore.current()
+        if (vaultId == null) {
+            _state.update { it.copy(error = ErrorKind.VAULT_LOCKED) }
+            return
+        }
+
         _state.update { it.copy(decoding = true, error = null, errorDetail = null) }
         viewModelScope.launch {
             val result = runCatching {
@@ -221,10 +240,13 @@ class ImportExportViewModel @Inject constructor(
                         it.copy(
                             decoding = false,
                             importPreview = imported,
+                            // 预演随后算（见下），此间 canApply 为 false ⇒ 点不动。
+                            importPlan = null,
                             // 预览已出，密码用完即弃（后续 apply 不再需要它）。
                             importPassword = "",
                         )
                     }
+                    loadImportPlan(vaultId = vaultId, imported = imported)
                 },
                 onFailure = { error ->
                     _state.update {
@@ -240,7 +262,35 @@ class ImportExportViewModel @Inject constructor(
         }
     }
 
-    /** 把预览内容逐条写入当前库（增量，不覆盖已有条目）。 */
+    /**
+     * 算写入预演（新建几条 / 已存在几条）。
+     *
+     * ## 为什么预演失败不该拦住导入
+     *
+     * 预演要读一遍目标库明文。它失败（中途锁库 / 读盘出错）时若把整条导入链判失败，
+     * 用户看到的是"文件解不开"——**错因被安错了地方**。所以这里失败只把预演置空
+     * 并给出错误分类，用户可再点一次「解密」重试；而预演为空时 `canApply` 恒 false，
+     * 不会出现"没有预演也照样写库"。
+     *
+     * @param vaultId 目标库（解密前已确认非空，见 [decryptForPreview]）。
+     */
+    private suspend fun loadImportPlan(vaultId: String, imported: ImportedVault) {
+        val result = runCatching { exportRepository.previewImport(vaultId, imported) }
+        result.fold(
+            onSuccess = { plan -> _state.update { it.copy(importPlan = plan) } },
+            onFailure = { error ->
+                _state.update {
+                    it.copy(
+                        importPlan = null,
+                        error = error.toErrorKind(),
+                        errorDetail = error.message,
+                    )
+                }
+            },
+        )
+    }
+
+    /** 把预览内容逐条写入当前库（增量，不覆盖已有条目；已存在的跳过）。 */
     fun applyImport() {
         val current = _state.value
         val preview = current.importPreview ?: return
@@ -257,7 +307,13 @@ class ImportExportViewModel @Inject constructor(
             result.fold(
                 onSuccess = { count ->
                     _state.update {
-                        it.copy(importing = false, importPreview = null, importUri = null, importFileName = "")
+                        it.copy(
+                            importing = false,
+                            importPreview = null,
+                            importPlan = null,
+                            importUri = null,
+                            importFileName = "",
+                        )
                     }
                     _events.send(Event.ImportDone(count))
                 },
@@ -275,7 +331,9 @@ class ImportExportViewModel @Inject constructor(
     }
 
     /** 取消预览（回到「选文件 + 输密码」态）。 */
-    fun clearPreview() = _state.update { it.copy(importPreview = null, error = null, errorDetail = null) }
+    fun clearPreview() = _state.update {
+        it.copy(importPreview = null, importPlan = null, error = null, errorDetail = null)
+    }
 
     /** 建议文件名（不含扩展名，扩展名由 SAF 的 MIME 推导）。 */
     private fun suggestFileName(): String =
