@@ -16,11 +16,13 @@
  */
 package io.vaultix.data.bitwarden.export
 
+import io.vaultix.data.bitwarden.time.BitwardenTimestamps
 import io.vaultix.model.CustomFieldType
 import io.vaultix.model.UriMatch
 import io.vaultix.model.VaultCustomField
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
+import io.vaultix.model.VaultPasswordHistoryEntry
 import io.vaultix.model.VaultReprompt
 import io.vaultix.model.VaultUri
 
@@ -59,13 +61,32 @@ internal fun VaultItem.toExportCipher(): BitwardenExportCipher {
         reprompt = reprompt.toExportCode(),
         // 空集合传 null ⇒ 该字段整体省略（官方 skip_serializing_if = Vec::is_empty）
         fields = customFields.takeIf { it.isNotEmpty() }?.map { it.toExportField() },
-        // 领域模型暂不承载时间戳与密码历史；字段留空即省略，官方导入器按可选处理。
-        passwordHistory = null,
-        revisionDate = null,
-        creationDate = null,
+        // ★ 2026-10-28：这三个字段**此前恒为 null**（导出界面照样报"成功"）
+        //   ⇒ 用户拿到的备份里没有密码历史、没有创建/修改时间，等于"导了个半份"。
+        //   领域模型从 2026-10-21 起就承载了这些数据，缺的只是这一层映射。
+        //   ⚠️ 空集合 / null 时间 → 字段省略（官方 `skip_serializing_if`）。
+        passwordHistory = passwordHistory.takeIf { it.isNotEmpty() }?.map { it.toExportPasswordHistory() },
+        revisionDate = BitwardenTimestamps.format(updatedAt),
+        creationDate = BitwardenTimestamps.format(createdAt),
+        // 软删条目不进导出，恒 null（领域模型没有"删除时间"这个概念）。
         deletedDate = null,
     )
 }
+
+/**
+ * 密码历史 → 官方 `JsonPasswordHistory`。
+ *
+ * ⚠️ `lastUsedDate` 在官方结构里是**非空 `String`**（`last_used_date: String`）：
+ * 字段缺失会让官方导入器在**反序列化阶段**直接报错（整份文件导入失败，不是一个字段丢）。
+ * 而本领域的 [VaultPasswordHistoryEntry.lastUsedAt] 允许为 null（服务端没给 / 解析失败）。
+ * ⇒ 没有时间时写**空串**：字段在、不是假时间（"现在"或 1970 才是假信息），
+ *    本 App 导入时按 blank → `null` 处理（见 `BitwardenTimestamps.parse`）。
+ */
+private fun VaultPasswordHistoryEntry.toExportPasswordHistory(): BitwardenExportPasswordHistory =
+    BitwardenExportPasswordHistory(
+        password = password,
+        lastUsedDate = BitwardenTimestamps.format(lastUsedAt).orEmpty(),
+    )
 
 /** 领域条目类型 → Bitwarden `CipherType` 编号。 */
 private fun VaultItemType.toExportTypeCode(): Int = when (this) {

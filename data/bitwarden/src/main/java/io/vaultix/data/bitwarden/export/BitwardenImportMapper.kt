@@ -22,7 +22,9 @@ import io.vaultix.model.VaultCustomField
 import io.vaultix.model.VaultFido2Credential
 import io.vaultix.model.VaultIdentity
 import io.vaultix.model.VaultItem
+import io.vaultix.data.bitwarden.time.BitwardenTimestamps
 import io.vaultix.model.VaultItemType
+import io.vaultix.model.VaultPasswordHistoryEntry
 import io.vaultix.model.VaultReprompt
 import io.vaultix.model.VaultSecureNote
 import io.vaultix.model.VaultSshKey
@@ -69,8 +71,21 @@ internal fun BitwardenExportCipher.toVaultItem(): VaultItem? {
         } else {
             null
         },
+        // ★ 2026-10-28：这三个字段此前**不读** ⇒ 把自己导出的文件再导回来，
+        //   密码历史与创建/修改时间全部归零（导出侧同日补齐，两侧必须成对改）。
+        //   ⚠️ 解析失败 → null（UI 不显示这一行），绝不兜 1970。
+        passwordHistory = passwordHistory.orEmpty().map { it.toVaultPasswordHistory() },
+        createdAt = BitwardenTimestamps.parse(creationDate),
+        updatedAt = BitwardenTimestamps.parse(revisionDate),
     )
 }
+
+/** 密码历史：空串的 `lastUsedDate`（本 App 导出时的"没有时间"形态）→ null。 */
+private fun BitwardenExportPasswordHistory.toVaultPasswordHistory(): VaultPasswordHistoryEntry =
+    VaultPasswordHistoryEntry(
+        password = password,
+        lastUsedAt = BitwardenTimestamps.parse(lastUsedDate),
+    )
 
 /** 网址：`match` 编号 → [UriMatch]；未知编号按 null（基域匹配）处理，不猜测。 */
 private fun BitwardenExportUri.toVaultUri(): VaultUri = VaultUri(

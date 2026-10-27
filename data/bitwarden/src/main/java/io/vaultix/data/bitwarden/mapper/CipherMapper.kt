@@ -20,6 +20,7 @@ import io.vaultix.data.bitwarden.model.LoginDto
 import io.vaultix.data.bitwarden.model.SecureNoteDto
 import io.vaultix.data.bitwarden.model.SshKeyDto
 import io.vaultix.data.bitwarden.model.UriDto
+import io.vaultix.data.bitwarden.time.BitwardenTimestamps
 import io.vaultix.model.PasskeyKeyAlgorithm
 import io.vaultix.model.CustomFieldType
 import io.vaultix.model.UriMatch
@@ -124,14 +125,14 @@ class CipherMapper @Inject constructor(
                 },
                 // 2026-09-30 补入：条目时间（创建 / 最近修改）。服务端一直在给，
                 // 只是此前 DTO 没声明 `creationDate` ⇒ 静默丢弃；详见 `CipherDto.creationDate`。
-                createdAt = parseBitwardenInstant(dto.creationDate),
-                updatedAt = parseBitwardenInstant(dto.revisionDate),
+                createdAt = BitwardenTimestamps.parse(dto.creationDate),
+                updatedAt = BitwardenTimestamps.parse(dto.revisionDate),
                 // 2026-10-21 补入：密码历史。此前 DTO 有、请求体也一直"顺延"，
                 // 但领域模型没有这个字段 ⇒ 界面上永远看不到（改错密码就没有退路）。
                 passwordHistory = dto.passwordHistory.map { entry ->
                     VaultPasswordHistoryEntry(
                         password = decryptToString(entry.password, key, itemKey),
-                        lastUsedAt = parseBitwardenInstant(entry.lastUsedDate),
+                        lastUsedAt = BitwardenTimestamps.parse(entry.lastUsedDate),
                     )
                 }.filter { it.password.isNotEmpty() },
                 // 2026-10-21 补入：附件元信息（只读）。字节**不在**模型里承载
@@ -547,24 +548,8 @@ class CipherMapper @Inject constructor(
         null -> null
     }
 
-    /**
-     * Bitwarden 的时间串 → epoch 毫秒。
-     *
-     * 服务端给的是 **ISO-8601 明文**（`"2026-09-30T12:34:56.789Z"`），**不加密**
-     * （与 Fido2 的 `creationDate` 同款，见 [mapFido2] 的说明）。
-     *
-     * ⚠️ **解析失败一律 `null`，绝不兜一个"现在"或"1970"**：
-     * 兜默认值的症状是「详情页显示一个**看起来合理但完全错误**的时间」，
-     * 用户会据此判断"这条是不是我昨天改的" —— 那是**假信息**，比不显示更坏。
-     * 而不显示只是"少一行"，用户可以接受。
-     *
-     * ⚠️ 用 `java.time.Instant.parse` 而不是手写正则：它能同时吃
-     * `...Z`、带毫秒 / 不带毫秒、带 `+08:00` 偏移这几种服务端常见写法；
-     * 自建 Vaultwarden 上偶尔会有非标准串，`runCatching` 兜住即可。
-     */
-    private fun parseBitwardenInstant(raw: String?): Long? =
-        raw?.takeIf { it.isNotBlank() }
-            ?.let { runCatching { Instant.parse(it).toEpochMilli() }.getOrNull() }
+    // 时间串 ⇄ epoch 毫秒收敛到 BitwardenTimestamps（导出侧要用它的反向），
+    // 两处各写一份解析必然漂移 —— 详见那里的 KDoc。
 
     /**
      * 通行密钥密文 → 领域模型。
