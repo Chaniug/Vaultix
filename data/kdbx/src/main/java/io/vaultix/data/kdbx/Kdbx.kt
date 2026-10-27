@@ -586,6 +586,75 @@ object Kdbx {
     suspend fun purgeItem(vaultId: String, itemId: String): Result<KdbxPendingWrite> =
         mutate(vaultId) { database -> KdbxItemWriter.permanentDelete(database, itemId) }
 
+    // ------------------------------------------------------------ 分组（= 文件夹）
+
+    /**
+     * **新建分组**（文件夹 CRUD · 2026-10-27）。
+     *
+     * @param parentFolderId 父分组（`kdbx-group:<uuid>`）；null = 根下。
+     *   父分组不存在时落到**根**（与 [createItem] 同口径，见 `KdbxItemWriter.createGroup`）。
+     * @return 与条目写回同形：`entryUuid` 位放**新组的 uuid**（KDBX 没有额外的新建回执通道）。
+     */
+    suspend fun createFolder(
+        vaultId: String,
+        parentFolderId: String?,
+        name: String,
+    ): Result<KdbxPendingWrite> = mutate(vaultId) { database ->
+        KdbxItemWriter.createGroup(database = database, parentFolderId = parentFolderId, name = name)
+    }
+
+    /** **重命名分组**（只改组名，子组与条目原样保留）。 */
+    suspend fun renameFolder(
+        vaultId: String,
+        folderId: String,
+        name: String,
+    ): Result<KdbxPendingWrite> = mutate(vaultId) { database ->
+        KdbxItemWriter.renameGroup(database = database, folderId = folderId, name = name)
+    }
+
+    /**
+     * **删除分组**。
+     *
+     * ⚠️ 是**递归删整棵子树**（子组 + 组内条目一起没）。代价由 writer 算进
+     * `KdbxWriteResult.affected`，但它**不随 [KdbxPendingWrite] 上浮** —— 确认框必须在
+     * **调用之前**就知道代价，见 `KdbxFolderInspection`。
+     */
+    suspend fun deleteFolder(vaultId: String, folderId: String): Result<KdbxPendingWrite> =
+        mutate(vaultId) { database -> KdbxItemWriter.removeGroup(database, folderId) }
+
+    /**
+     * **预览删除一个分组的代价**（只读，不做任何改动）。
+     *
+     * 存在的理由：删除确认框要在用户点"删除"**之前**显示"这里还有 N 条、M 个子组"。
+     * 让 UI 自己走一遍树会造出第二套数法（两处必然漂移，而漂移的后果是确认框**少报**）。
+     * ⇒ 数法只有 `KdbxItemWriter` 一处，这里只是把它的结果取出来。
+     */
+    fun folderDeletionCostOf(vaultId: String, folderId: String): Result<KdbxFolderDeletionCost> {
+        val session = KdbxSessionStore.get(vaultId)
+            ?: return Result.failure(KdbxFailure(KdbxOpenError.NotUnlocked))
+        val database = session.database
+        return runCatching { KdbxItemWriter.deletionCostOf(database, folderId) }.map { cost ->
+            KdbxFolderDeletionCost(
+                subGroups = cost?.subGroups ?: 0,
+                entries = cost?.entries ?: 0,
+                // 解析不出 / 不是真分区 ⇒ 没有代价可算；上层据此**不显示具体数字**（不要瞎猜 0）。
+                measurable = cost != null,
+            )
+        }
+    }
+
+    /**
+     * 删除一个文件夹的**代价预览**（给确认框用）。
+     *
+     * @param measurable false = 算不出来（id 非法 / 分组不存在 / 指向回收站组）。
+     *   ⚠️ 这时**不要**把 0 当成答案展示 —— "0 条"会让用户以为删的是个空组。
+     */
+    data class KdbxFolderDeletionCost(
+        val subGroups: Int,
+        val entries: Int,
+        val measurable: Boolean,
+    )
+
     /**
      * 内存事务的公共骨架：取会话 → 改 → **校验** → 编码 → **把新会话换回去**。
      *

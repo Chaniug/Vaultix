@@ -22,4 +22,9 @@ kotlin {
 dependencies {
     implementation(projects.core.model)
     implementation(libs.kotlinx.coroutines.android)
+
+    // 本模块此前没有测试目录；FolderNamePolicy（纯函数）是第一个 —— 校验规则放在
+    // domain 是因为仓储与 UI 都要用它，放在任一侧都会让另一侧重复实现一遍。
+    testImplementation(libs.junit)
+    testImplementation(libs.truth)
 }

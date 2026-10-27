@@ -54,6 +54,7 @@ private const val WIDE_SCREEN_MIN_WIDTH_DP = 600
  *
  * @param onOpenItem 打开条目详情（二级页，仍带 `vaultId` 路由参数）。
  * @param onOpenTrash 打开回收站。
+ * @param onOpenFolders 打开「文件夹管理」（#199，⋮ 菜单「前往」组）。
  * @param onOpenPasskeys 打开通行密钥列表（验证码 Tab 内的入口，对齐 Bastion）。
  * @param onOpenAutofillSettings 打开自动填充设置（设置 Tab 二级页）。
  * @param onOpenImportExport 打开导入 / 导出二级页（设置 Tab 二级页）。
@@ -65,6 +66,7 @@ private const val WIDE_SCREEN_MIN_WIDTH_DP = 600
 fun MainShellScreen(
     onOpenItem: (VaultItem) -> Unit,
     onOpenTrash: () -> Unit,
+    onOpenFolders: () -> Unit,
     onOpenPasskeys: () -> Unit,
     onOpenAutofillSettings: () -> Unit,
     onOpenImportExport: () -> Unit,
@@ -232,6 +234,7 @@ fun MainShellScreen(
                             onBack = {},
                             onLocked = onLocked,
                             onOpenTrash = onOpenTrash,
+                            onOpenFolders = onOpenFolders,
                             onOpenItem = onOpenItem,
                             // 不传 onOpenTotp：底部导航已有「验证码」页签，
                             // 再在 ⋮ 里放一个重复入口只会让菜单多一项（用户 2026-09-14 要求）。

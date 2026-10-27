@@ -13,6 +13,7 @@ import androidx.room.Query
 import androidx.room.Transaction
 import androidx.room.Upsert
 import io.vaultix.database.entity.CipherEntity
+import io.vaultix.database.entity.FolderEntity
 import io.vaultix.database.entity.PendingOpEntity
 
 /**
@@ -124,6 +125,22 @@ abstract class AtomicWriteDao {
     open suspend fun deleteCiphersAndEnqueue(ids: List<String>, ops: List<PendingOpEntity>) =
         deleteCiphersAndEnqueueInTransaction(ids, ops)
 
+    // ------------------------------------------------------- 文件夹（2026-10-27 · #199）
+
+    /**
+     * ★ 单行文件夹写入，**原子**（新建与改名共用）。
+     *
+     * 为什么文件夹也需要原子：与条目同理 —— "远端已成功、本地没落库"会让用户
+     * 重启后看不到自己刚建的文件夹（它其实在服务端），而且下一次同步才会补回来。
+     * 这里把「远端调用」之后的本地写入包成一个事务，至少保证**本地这一步不会半途而废**。
+     */
+    @Transaction
+    open suspend fun upsertFolder(row: FolderEntity) = upsertFolderInTransaction(row)
+
+    /** ★ 删除文件夹行，**原子**（只有一行，事务是为与上一条对称的调用形态）。 */
+    @Transaction
+    open suspend fun deleteFolder(id: String) = deleteFolderInTransaction(id)
+
     /**
      * [upsertCipherAndEnqueue] 的**编排核心**：不含事务注解，只负责调用顺序。
      *
@@ -146,5 +163,43 @@ abstract class AtomicWriteDao {
     protected open suspend fun deleteCiphersAndEnqueueInTransaction(ids: List<String>, ops: List<PendingOpEntity>) {
         deleteCiphers(ids)
         ops.forEach { upsertPendingOp(it) }
+    }
+
+    /** [upsertFolder] 的编排核心（同上）。 */
+    protected open suspend fun upsertFolderInTransaction(row: FolderEntity) {
+        upsertFolderRow(row)
+    }
+
+    /** [deleteFolder] 的编排核心（同上）。 */
+    protected open suspend fun deleteFolderInTransaction(id: String) {
+        deleteFolderRow(id)
+    }
+
+    /**
+     * 文件夹行的真实写入口。
+     *
+     * ⚠️ 用**独立方法**而不是直接调 `folderDao.upsertOne(...)`：`AtomicWriteDao`
+     * 与 `FolderDao` 是两个 DAO，Room 只保证**同一个 DAO 的方法**能进同一个事务。
+     * 写在这里（同一个 abstract class 内）才能真的原子。
+     *
+     * ## 为什么是 `@Upsert` + **非抽象**（有默认实现）
+     *
+     * 用的是 Room `@Upsert` 的「**已注册实体**」形态：`FolderEntity` 是
+     * `VaultixDatabase` 里 `@Database(entities = …)` 登记过的实体，Room 能凭类型
+     * 找到表 ⇒ 本方法由 Room 自己生成实现，**不需要**子类手写。
+     *
+     * 这正好也是单测的解法：abstract class 上有非抽象方法时，Kotlin 编译出的子类
+     * **不必**实现它（`data:repository` 里那几个手写的 `AtomicWriteDao` 转发子类
+     * 一个字都不用改）。代价是：若哪天有人把它改成 `protected abstract`，
+     * 那 5 个子类会立刻编译失败 —— 这个失败是**想要的**，别去 override 应付。
+     */
+    @Upsert
+    protected open suspend fun upsertFolderRow(row: FolderEntity) {
+        error("upsertFolderRow 未接线：应由 Room 生成实现，或由测试子类转发给 FolderDao")
+    }
+
+    @Query("DELETE FROM folders WHERE id = :id")
+    protected open suspend fun deleteFolderRow(id: String) {
+        error("deleteFolderRow 未接线：应由 Room 生成实现，或由测试子类转发给 FolderDao")
     }
 }

@@ -100,8 +100,23 @@ interface FolderDao {
 
     @Upsert suspend fun upsertAll(items: List<FolderEntity>)
 
+    /**
+     * 单行写入（2026-10-27 · 文件夹 CRUD）。
+     *
+     * ⚠️ 此前**只有** [upsertAll] 这个"整体替换"入口 —— 那是为 sync 的
+     * 服务端全量收敛设计的。文件夹的新建/改名需要一个"只动这一行"的写，
+     * 用 `upsertAll(listOf(row))` 也能达到同样效果，但语义上会被误读成"同步写"。
+     */
+    @Upsert suspend fun upsertOne(row: FolderEntity)
+
     @Query("DELETE FROM folders WHERE id IN (:ids)")
     suspend fun deleteByIds(ids: List<String>)
+
+    @Query("DELETE FROM folders WHERE id = :id")
+    suspend fun deleteById(id: String)
+
+    @Query("SELECT * FROM folders WHERE id = :id")
+    suspend fun get(id: String): FolderEntity?
 
     @Query("DELETE FROM folders WHERE vaultId = :vaultId")
     suspend fun clearVault(vaultId: String)

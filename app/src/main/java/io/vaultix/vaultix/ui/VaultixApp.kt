@@ -23,6 +23,7 @@ import io.vaultix.vaultix.ui.addvault.AddCloudVaultScreen
 import io.vaultix.vaultix.ui.addvault.AddKdbxScreen
 import io.vaultix.vaultix.ui.addvault.AddVaultScreen
 import io.vaultix.vaultix.ui.detail.ItemDetailScreen
+import io.vaultix.vaultix.ui.folders.FoldersScreen
 import io.vaultix.vaultix.ui.items.ItemsScreen
 import io.vaultix.vaultix.ui.items.ItemsViewModel
 import io.vaultix.vaultix.ui.onboarding.OnboardingScreen
@@ -310,6 +311,9 @@ private fun NavGraphBuilder.vaultEntryGraph(
             onOpenTrash = {
                 activeVaultId?.let { navController.navigate(TrashRoute(vaultId = it)) }
             },
+            onOpenFolders = {
+                activeVaultId?.let { navController.navigate(FoldersRoute(vaultId = it)) }
+            },
             onOpenPasskeys = {
                 activeVaultId?.let { navController.navigate(PasskeysRoute(vaultId = it)) }
             },
@@ -457,6 +461,9 @@ private fun NavGraphBuilder.itemsGraph(navController: NavHostController) {
             onOpenTrash = {
                 navController.navigate(TrashRoute(vaultId = route.vaultId))
             },
+            onOpenFolders = {
+                navController.navigate(FoldersRoute(vaultId = route.vaultId))
+            },
             onOpenItem = { item ->
                 navController.navigate(ItemRoute(vaultId = route.vaultId, itemId = item.id))
             },
@@ -487,6 +494,11 @@ private fun NavGraphBuilder.itemsGraph(navController: NavHostController) {
     }
     composable<TrashRoute> {
         TrashScreen(onBack = { navController.popBackStack() })
+    }
+    composable<FoldersRoute> {
+        // ⚠️ 与 PasskeysRoute 同理：`FoldersViewModel` 用 `hiltViewModel()` 构造，
+        // 它的 `SavedStateHandle` 直接来自本导航条目，`ARG_VAULT_ID` 因此拿得到值。
+        FoldersScreen(onBack = { navController.popBackStack() })
     }
     composable<ItemRoute> { entry ->
         // 详情页不再传 `onBack`：左上角返回箭头已按要求去掉（手势返回 / 返回键由导航库接管），

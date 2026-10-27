@@ -131,6 +131,54 @@ class KdbxItemRepository @Inject constructor(
             }
         }
 
+    // ---------------------------------------------------------------- 文件夹（分组）
+
+    /**
+     * **新建文件夹**（= KDBX 分组）。
+     *
+     * ⚠️ 和五个条目写动作走**同一个** [persist]：往返自检、写回基线闸门、
+     * 缓存/文件分流、`kdbxSessions.bump()` 全都在那里。分组写若自己再写一份落盘逻辑，
+     * 那些保护在文件夹路径上就等于不存在（本项目已因"同一规则写两处"栽过三次）。
+     */
+    suspend fun createFolder(
+        vaultId: String,
+        parentFolderId: String?,
+        name: String,
+    ): Result<VaultSaveOutcome> = withContext(Dispatchers.IO) {
+        runCatching {
+            val write = Kdbx.createFolder(vaultId, parentFolderId = parentFolderId, name = name)
+                .getOrElse { throw it.toUserFacing() }
+            persist(vaultId, write)
+        }
+    }
+
+    /** **重命名文件夹**（只改组名，组内条目与子组原样保留）。 */
+    suspend fun renameFolder(
+        vaultId: String,
+        folderId: String,
+        name: String,
+    ): Result<VaultSaveOutcome> = withContext(Dispatchers.IO) {
+        runCatching {
+            val write = Kdbx.renameFolder(vaultId, folderId = folderId, name = name)
+                .getOrElse { throw it.toUserFacing() }
+            persist(vaultId, write)
+        }
+    }
+
+    /**
+     * **删除文件夹** —— ⚠️ KDBX 语义是**递归删整棵子树**（子组 + 组内条目一起没）。
+     *
+     * 代价预览在写之前由 [Kdbx.folderDeletionCostOf] 取得（UI 的确认框用），
+     * 这里不重复计算（数法只有 `KdbxItemWriter` 一处）。
+     */
+    suspend fun deleteFolder(vaultId: String, folderId: String): Result<VaultSaveOutcome> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val write = Kdbx.deleteFolder(vaultId, folderId).getOrElse { throw it.toUserFacing() }
+                persist(vaultId, write)
+            }
+        }
+
     /**
      * A3：**类型硬闸** —— KDBX 库只收 [VaultItemType.Login] / [VaultItemType.SecureNote]。
      *

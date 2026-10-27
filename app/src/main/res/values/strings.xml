@@ -169,6 +169,38 @@
          「锁定」不归任何一组，单独用分隔线隔开（破坏性动作不挨着常用动作）。 -->
     <string name="items_menu_group_navigate">前往</string>
     <string name="items_menu_group_actions">操作</string>
+
+    <!-- ===== 文件夹管理（#199）=====
+         入口 = 条目页 ⋮ 菜单「前往」组。是一整页而不是弹窗：新建 / 改名 / 删除
+         三种动作都在这里，弹窗里堆三段并不比一页清楚。 -->
+    <string name="folders_title">文件夹</string>
+    <string name="folders_menu_entry">文件夹管理</string>
+    <string name="folders_add">新建文件夹</string>
+    <string name="folders_item_count">%1$d 个条目</string>
+    <string name="folders_empty_title">还没有文件夹</string>
+    <string name="folders_empty_body">文件夹用来把条目分类。这里建的文件夹会同步到你接的密码库里，Bitwarden 上叫「文件夹」，KDBX 文件里叫「分组」。</string>
+    <string name="folders_locked_body">这个库还没解锁，解锁后才能查看和管理文件夹。</string>
+
+    <string name="folder_name_new_title">新建文件夹</string>
+    <string name="folder_name_rename_title">重命名文件夹</string>
+    <!-- 平时显示的上限提示；占位符是 FolderNamePolicy.MAX_LENGTH，改策略时文案自动跟上。 -->
+    <string name="folder_name_hint">最多 %1$d 个字符</string>
+    <string name="folder_name_footnote">名字里不能有「/」或「\\」—— KDBX 文件用它们表示分组层级，写进去就分不清层级了。</string>
+
+    <!-- 删除确认：两种库的后果不一样，文案必须分开（见 FolderRepository.deleteFolder 的 KDoc）。 -->
+    <string name="folder_delete_bitwarden_title">删除文件夹？</string>
+    <string name="folder_delete_bitwarden_message">「%1$s」这个文件夹会被删除。里面的 %2$d 个条目不会被删，只是变成「无文件夹」。</string>
+    <string name="folder_delete_kdbx_title">删除分组？</string>
+    <string name="folder_delete_kdbx_message">「%1$s」会连同里面的 %2$d 个条目一起删除，不能撤销。</string>
+
+    <string name="folder_created">文件夹已新建</string>
+    <string name="folder_renamed">文件夹已重命名</string>
+    <string name="folder_deleted">文件夹已删除</string>
+    <string name="folder_op_failed">操作失败</string>
+
+    <string name="folder_action_rename">重命名</string>
+    <string name="folder_action_delete">删除文件夹</string>
+
     <string name="vault_item_count">%1$d 项</string>
     <string name="vault_add_fab">添加密码库</string>
     <string name="vault_cloud_label">Bitwarden 同步库</string>

@@ -40,6 +40,7 @@ import app.keemobile.kotpass.database.modifiers.modifyGroup
 import app.keemobile.kotpass.database.modifiers.modifyParentGroup
 import app.keemobile.kotpass.database.modifiers.moveEntry
 import app.keemobile.kotpass.database.modifiers.removeEntry
+import app.keemobile.kotpass.database.modifiers.removeGroup
 import app.keemobile.kotpass.database.modifiers.withHistory
 import app.keemobile.kotpass.database.modifiers.withRecycleBin
 import app.keemobile.kotpass.models.Entry
@@ -66,6 +67,22 @@ internal class KdbxWriteResult(
      * 用户看到"保存成功"，而他的改动一个字都没进去（这类静默失败最难查）。
      */
     val applied: Boolean = true,
+    /**
+     * 删除分组时**被连带删掉的东西**（只有 [KdbxItemWriter.removeGroup] 会填）。
+     *
+     * 为什么由写操作自己算：UI 要在确认框里显示"这里面还有 N 条 / M 个子组"。
+     * 让 UI 再走一遍树去数是**第二套数法**，两处必然漂移（本项目已因"同一事实存两份"
+     * 栽过多次），而漂移的后果是**确认框少报** —— 用户以为只删了个空组。
+     */
+    val affected: GroupDeletion? = null,
+)
+
+/** 一次分组删除的**代价**（用于确认框，见 [KdbxWriteResult.affected]）。 */
+data class GroupDeletion(
+    /** 子孙分组的数量（不含被删的这个组自身）。 */
+    val subGroups: Int,
+    /** 整棵子树里的条目总数（含所有子组里的）。 */
+    val entries: Int,
 )
 
 /** 条目在**回收站里**的说明（供 UI 文案用；我们按"是否位于回收站子树"判定）。 */
@@ -183,6 +200,100 @@ internal object KdbxItemWriter {
         database.getEntry { it.uuid == uuid }
             ?: return KdbxWriteResult(database, uuid, applied = false)
         return KdbxWriteResult(database.removeEntry(uuid), uuid)
+    }
+
+    // ------------------------------------------------------------------ 分组（文件夹）
+
+    /**
+     * **新建分组**（2026-10-27 · 文件夹 CRUD）。
+     *
+     * @param parentFolderId 父分组（`kdbx-group:<uuid>`）；null = 建在**根**下。
+     *   ⚠️ 父分组不存在时**落到根**（与 [createEntry] 同口径）：`modifyGroup` 找不到 uuid
+     *   会原样返回，那样新建的组会"保存成功但哪里都没有"。
+     * @return `entryUuid` 位放的是**新组的 uuid** —— 字段名沿用（同一个"受影响对象 uuid"），
+     *   调用方据此拿到新 id（KDBX 没有额外的新建回执通道）。
+     */
+    fun createGroup(database: KeePassDatabase, parentFolderId: String?, name: String): KdbxWriteResult {
+        val group = Group(uuid = UUID.randomUUID(), name = name)
+        val parent = existingGroupUuid(database, parentFolderId)
+        val updated = if (parent == null) {
+            database.modifyParentGroup { copy(groups = groups + group) }
+        } else {
+            database.modifyGroup(parent) { copy(groups = groups + group) }
+        }
+        return KdbxWriteResult(updated, group.uuid)
+    }
+
+    /**
+     * **重命名分组**（只改组名，不动结构）。
+     *
+     * ⚠️ 子组与条目**必须原样保留** —— 所以这里只能 `copy(name = ...)`，
+     * 绝不能"新建一个同名的组再把内容搬过去"：那样会丢掉组上的
+     * 自定义图标 / 自定义数据 / 展开状态 / 自动填充设置（领域模型没有建模这些）。
+     *
+     * 守卫与条目侧同源（见 [permanentDelete] 的说明）：目标不存在 / 是回收站组 ⇒ `applied = false`。
+     */
+    fun renameGroup(database: KeePassDatabase, folderId: String, name: String): KdbxWriteResult {
+        val uuid = guardedGroupUuid(database, folderId)
+            ?: return KdbxWriteResult(database, null, applied = false)
+        return KdbxWriteResult(database.modifyGroup(uuid) { copy(name = name) }, uuid)
+    }
+
+    /**
+     * **删除分组** —— ⚠️ 上游 [removeGroup] 是**递归删整棵子树**（子组 + 组内条目一起没）。
+     *
+     * ## 为什么这里不替用户拦截
+     *
+     * "删一个空组"和"删一整棵子树"是两种完全不同的意图，判据只在用户手上。
+     * 强行拦住非空组会逼用户先逐条搬走再删（KeePass 官方就是要人确认，不是禁止）。
+     * ⇒ 正确做法是**把代价算出来交给 UI 确认**：见 [KdbxWriteResult.affected]。
+     *
+     * ## 为什么也不搬空
+     *
+     * 把组内条目移到父组再删组，看起来"更安全"，但那是**用户没要求的副作用**：
+     * 一次性删 40 条时会把它们全倒进父组，用户还得再整理一遍。
+     */
+    fun removeGroup(database: KeePassDatabase, folderId: String): KdbxWriteResult {
+        val uuid = guardedGroupUuid(database, folderId)
+            ?: return KdbxWriteResult(database, null, applied = false)
+        val cost = deletionCostOf(database, folderId)
+            ?: return KdbxWriteResult(database, uuid, applied = false)
+        return KdbxWriteResult(
+            database = database.removeGroup(uuid),
+            entryUuid = uuid,
+            affected = cost,
+        )
+    }
+
+    /**
+     * **只读**地算一次删除的代价（供删除确认框在**动手之前**展示）。
+     *
+     * 返回 null = 这个 id 不是库里真实存在的分组（或指向回收站组）——
+     * 此时 UI **不显示具体数字**，而不是显示 0（"0 条"会让用户以为是个空组）。
+     *
+     * ⚠️ 数法与 [removeGroup] 必须同源：两边都走 [countDescendantGroups] /
+     * [countEntriesInSubtree]，绝不能在别处再写一遍。
+     */
+    fun deletionCostOf(database: KeePassDatabase, folderId: String): GroupDeletion? {
+        val uuid = guardedGroupUuid(database, folderId) ?: return null
+        val target = database.content.group.findGroup(uuid) ?: return null
+        return GroupDeletion(
+            subGroups = target.countDescendantGroups(),
+            entries = target.countEntriesInSubtree(),
+        )
+    }
+
+    /**
+     * 分组写操作的统一守卫：能解析出 uuid、**组确实在库里**、且**不是回收站组**。
+     *
+     * ⚠️ 回收站组必须排除：它是 KDBX 的**功能组**（`meta.recycleBinUuid`），
+     * 改名/删除会让"移入回收站"这条路径整体失效（`withRecycleBin` 会再建一个，
+     * 旧的回收站里的条目就变成了普通组里的普通条目 —— 用户以为删掉的东西全都回来了）。
+     */
+    private fun guardedGroupUuid(database: KeePassDatabase, folderId: String): UUID? {
+        val uuid = groupUuidOf(folderId) ?: return null
+        if (uuid == database.content.meta.recycleBinUuid) return null
+        return uuid.takeIf { candidate -> database.content.group.containsGroup(candidate) }
     }
 
     // ------------------------------------------------------------------ 字段映射
@@ -542,6 +653,18 @@ internal object KdbxItemWriter {
         if (uuid == target) return true
         return groups.any { it.containsGroup(target) }
     }
+
+    /** 深度优先取分组**对象**（含根组自身）；找不到返回 null。理由同 [existingGroupUuid]。 */
+    private fun Group.findGroup(target: UUID): Group? {
+        if (uuid == target) return this
+        return groups.firstNotNullOfOrNull { it.findGroup(target) }
+    }
+
+    /** 子孙分组数量（不含自身）。 */
+    private fun Group.countDescendantGroups(): Int = groups.sumOf { 1 + it.countDescendantGroups() }
+
+    /** 整棵子树的条目总数（含所有子组里的）。 */
+    private fun Group.countEntriesInSubtree(): Int = entries.size + groups.sumOf { it.countEntriesInSubtree() }
 }
 
 /** 与 [folderIdOf] 同源（改一处要改两处 —— 两个函数放在同一个文件里就是为了这个）。 */

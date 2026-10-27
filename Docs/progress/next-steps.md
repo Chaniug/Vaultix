@@ -2,6 +2,41 @@
 
 ---
 
+## ✅ 文件夹 CRUD（2026-10-27）· #199
+
+用户：「继续开发，完善设置，以及日常的功能」。挑的是功能盘点里**唯一"看得见、动不了"**的一块：
+`FolderRepository` 只有读方法、`FolderDao` 只有整体替换 ⇒ 用户能**看到**文件夹（分组视图、
+表单下拉框都在消费它），但**建不了、改不了、删不了**。Bitwarden 官方客户端与 KeePassDX 都能建分组。
+
+| 决策点 | 用户选定 |
+|---|---|
+| 写失败怎么办 | **直连 API，失败当场报错** |
+| KDBX 分组一并支持？ | **是** |
+| 入口放哪 | **条目页 ⋮ 菜单「前往」组** |
+
+| 层 | 内容 |
+|---|---|
+| 领域 | `FolderNamePolicy`（名字校验唯一一处，禁 `/` `\` 与超长）+ `FolderRepository` 三个写方法 |
+| KDBX | `KdbxItemWriter.createGroup/renameGroup/removeGroup/deletionCostOf` + `Kdbx` 门面 |
+| 仓储 | `FolderRepositoryImpl` 用 `resolve(vaultId)` 分流到 `Remote(api)` / `Kdbx` |
+| 库 | `AtomicWriteDao.upsertFolder/deleteFolder`（`@Transaction`，Room `@Upsert` 生成实现） |
+| UI | `ui/folders/`：`FoldersViewModel` + `FoldersScreen` + `FolderNameDialog`；`FoldersRoute` |
+
+**⚠️ 三条最值得记住的判据**：
+1. **Bitwarden 侧不能照搬条目的「本地先行 + `pending_ops`」**：`pruneRemovedRows` 的判定是
+   "服务端没返回的 folder 行 = 已删" ⇒ **刚建未推的文件夹会被下一次同步静默删除**。
+   ⇒ 成功才写本地，失败一个字不改（代价：离线不能建文件夹，KDoc 已写明）。
+   反证用例 `新建失败_本地零写入` 专门锁这条。
+2. **两种库的删除文案必须分开**：Bitwarden 只脱标签（条目变「无文件夹」、不删）／
+   KDBX 递归删整棵子树（不可撤销）。同一句话会让 KDBX 用户无预警丢数据。
+3. **数法只能有一处**：`deletionCostOf` 同时供 `removeGroup` 与 UI 预览；
+   UI 侧 KDBX 那支**刻意不显示条目数**（子组没算进去会偏小，给偏小的数字更危险）。
+
+**门禁**：编译（offline + full）✅ · detekt 全模块 ✅ ·
+**133 套 / 1328 例 / 0 失败** ✅（本轮 +2 套 / +27 例）。
+
+---
+
 ## ✅ 与开源项目对标审计 → 七组修复（2026-10-26）· #186–#192
 
 用户：「与别的开源优秀项目进行对比，看看还有哪些功能缺失，或者不完善，有明显bug。修复这些漏洞」。

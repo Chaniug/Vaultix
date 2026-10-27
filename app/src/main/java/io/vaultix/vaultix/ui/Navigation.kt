@@ -193,6 +193,15 @@ data class ItemsRoute(val vaultId: String)
 @Serializable
 data class TrashRoute(val vaultId: String)
 
+/**
+ * 文件夹管理（#199）：新建 / 重命名 / 删除。
+ *
+ * 带 `vaultId`（与 [TrashRoute] 同口径）：文件夹属于具体库，且两种库的
+ * 写路径完全不同（Bitwarden 直连 API / KDBX 写回文件）。
+ */
+@Serializable
+data class FoldersRoute(val vaultId: String)
+
 @Serializable
 data class ItemRoute(val vaultId: String, val itemId: String)
 

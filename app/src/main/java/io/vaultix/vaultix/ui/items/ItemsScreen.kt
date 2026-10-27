@@ -42,6 +42,7 @@ import androidx.compose.material.icons.filled.Business
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreVert
@@ -588,6 +589,7 @@ fun ItemsScreen(
     onBack: () -> Unit,
     onLocked: () -> Unit,
     onOpenTrash: () -> Unit,
+    onOpenFolders: () -> Unit,
     onOpenItem: (VaultItem) -> Unit,
     /**
      * 验证码页出口；**null = 宿主不需要该入口**。
@@ -726,10 +728,8 @@ fun ItemsScreen(
                     onDismiss = viewModel::dismissSyncNote,
                     onRetry = viewModel::retrySync,
                 )
-                // 下拉伸手区（指示器让位与状态都在这里闭环，见 [ItemsPullToRefresh]）。
-                // ⚠️ 2026-10-24：这里多了一层 `padding(top = reveal)` —— 它是**唯一**的
-                // 外层让位，且只在「面板展开 + 列表已滚离顶部」时非零（见
-                // [itemsShellTopInset]）；`ItemsList` 会反向补偿滚动偏移，可见内容不跳。
+                // 下拉伸手区；`padding(top = reveal)` 是**唯一**的外层让位，只在「面板展开 +
+                // 列表已滚离顶部」时非零（见 [itemsShellTopInset]），`ItemsList` 反向补偿滚动。
                 ItemsPullToRefresh(
                     syncing = syncing,
                     onRefresh = viewModel::retrySync,
@@ -788,6 +788,7 @@ fun ItemsScreen(
                     onToggleSearch = { searchActive = true },
                     onOpenTotp = onOpenTotp,
                     onOpenTrash = onOpenTrash,
+                    onOpenFolders = onOpenFolders,
                     onRetrySync = viewModel::retrySync,
                     onLock = { viewModel.lockNow(onLocked) },
                     onSwitchVault = onSwitchVault,
@@ -799,18 +800,44 @@ fun ItemsScreen(
 
     ItemDisplayOptionsHost(viewModel, displayOptionsOpen, onDismiss = { displayOptionsOpen = false })
 
-    if (showCreateDialog) {
-        CreateItemDialog(
-            folders = folders,
-            vaultKind = state.vault?.kind,
-            saving = state.saving,
-            onDismiss = { showCreateDialog = false },
-            onSave = { item ->
-                viewModel.createItem(item)
-                showCreateDialog = false
-            },
-        )
-    }
+    NewItemDialogHost(
+        visible = showCreateDialog,
+        folders = folders,
+        vaultKind = state.vault?.kind,
+        saving = state.saving,
+        onDismiss = { showCreateDialog = false },
+        onCreate = {
+            viewModel.createItem(it)
+            showCreateDialog = false
+        },
+    )
+}
+
+/**
+ * 新建条目对话框的宿主（2026-10-27 抽出，#199）。
+ *
+ * 抽出的原因与 [ItemDisplayOptionsHost] 完全相同：主 Composable 贴着 detekt
+ * `LongMethod ≤150` 的门禁线，加「文件夹管理」菜单项后到 151。
+ * 这 12 行是**一组完整的宿主接线**（把表单的开关 / 依赖数据 / 两个回调喂给对话框），
+ * 拆出来有独立含义 —— 比继续压注释可读得多。
+ */
+@Composable
+private fun NewItemDialogHost(
+    visible: Boolean,
+    folders: List<VaultFolder>,
+    vaultKind: VaultKind?,
+    saving: Boolean,
+    onDismiss: () -> Unit,
+    onCreate: (VaultItem) -> Unit,
+) {
+    if (!visible) return
+    CreateItemDialog(
+        folders = folders,
+        vaultKind = vaultKind,
+        saving = saving,
+        onDismiss = onDismiss,
+        onSave = onCreate,
+    )
 }
 
 /**
@@ -1146,6 +1173,7 @@ private fun BoxScope.ItemsTopBar(
     /** null = 宿主没有验证码页可去（主界面底部已有该页签）⇒ 菜单里不出现这一项。 */
     onOpenTotp: (() -> Unit)?,
     onOpenTrash: () -> Unit,
+    onOpenFolders: () -> Unit,
     onRetrySync: () -> Unit,
     onLock: () -> Unit,
     onSwitchVault: (() -> Unit)?,
@@ -1193,6 +1221,7 @@ private fun BoxScope.ItemsTopBar(
                 onSwitchVault = onSwitchVault,
                 onOpenTotp = onOpenTotp,
                 onOpenTrash = onOpenTrash,
+                onOpenFolders = onOpenFolders,
                 onRetrySync = onRetrySync,
                 onLock = onLock,
             )
@@ -1236,6 +1265,7 @@ private fun ItemsMoreMenu(
     onSwitchVault: (() -> Unit)?,
     onOpenTotp: (() -> Unit)?,
     onOpenTrash: () -> Unit,
+    onOpenFolders: () -> Unit,
     onRetrySync: () -> Unit,
     onLock: () -> Unit,
 ) {
@@ -1269,6 +1299,12 @@ private fun ItemsMoreMenu(
             MenuAction(Icons.Filled.Delete, R.string.trash_title) {
                 expanded = false
                 onOpenTrash()
+            }
+            // #199：文件夹是**数据**（能建/改名/删），不是"看的方式"，所以放「前往」组
+            // 而不是"显示选项"卡片 —— 那里调的是分组/密度，都是视图状态。
+            MenuAction(Icons.Filled.Folder, R.string.folders_menu_entry) {
+                expanded = false
+                onOpenFolders()
             }
             MenuGroupTitle(R.string.items_menu_group_actions)
             MenuAction(Icons.Filled.Refresh, R.string.items_sync) {
