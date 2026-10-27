@@ -364,6 +364,8 @@ jobs:
         #   VaultTimeoutTest / VaultTimeoutScopeTest 共 18 例）—— 与 data:kdbx 同一种漏法：
         #   模块有 `test` 源码集、`build.gradle.kts` 也有 junit+truth 依赖，
         #   只是没人把它写进这条命令，于是**从未在 CI 跑过**。
+        # ★ 2026-10-27 补 :domain（#199 起该模块有了第一个测试：FolderNamePolicyTest 6 例）。
+        #   与 data:kdbx / core:datastore 同一种漏法 —— 模块新增 `src/test` 时最容易忘的就是这里。
         #   查漏方法（别再靠眼睛扫）：把各模块 `src/test` 的文件数与这条命令对一遍。
         # 此前只跑 :app 与部分模块，新模块的测试等于从未在 CI 真正执行（盲区）。
         # ⚠️ 新增带单测的模块时，**必须同时加进这里**，否则测试等于不存在。
@@ -372,6 +374,7 @@ jobs:
           :core:model:testDebugUnitTest :core:datastore:testDebugUnitTest
           :app:testFullDebugUnitTest :data:repository:testDebugUnitTest
           :data:bitwarden:testDebugUnitTest :data:kdbx:testDebugUnitTest
+          :domain:testDebugUnitTest
           --continue --stacktrace
 
       - name: Upload unit test reports
@@ -409,5 +412,7 @@ jobs:
             data/bitwarden/build/test-results/testDebugUnitTest
             data/kdbx/build/reports/tests/testDebugUnitTest
             data/kdbx/build/test-results/testDebugUnitTest
+            domain/build/reports/tests/testDebugUnitTest
+            domain/build/test-results/testDebugUnitTest
           if-no-files-found: ignore
           retention-days: 3
