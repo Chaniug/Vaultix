@@ -13,7 +13,13 @@
   | `shared_prefs/vaultix_secure.xml` | 指纹/PIN/KEK 门锁信封、每库房间信封、WebDAV 账号密码、Bitwarden token | 信封由 Keystore 密钥包裹，而 Keystore **不参与备份**；恢复后是一份永远解不开的密文，且会让用户误以为"门锁还在" |
   | `databases/vaultix.db` | 条目密文镜像 + 元数据/文件夹/同步计数 | 正文由主密码派生密钥加密，恢复后打不开；元数据（标题、条目 id）本身即敏感 |
   | `files/` | 自动填充规则缓存等内部产物 | 无需迁移，重新生成即可 |
-  | `cache/` | 解密后的附件明文（`attachments/`）、日志导出（`dev_logs/`） | 备份**不会**搬 cache，这里显式写出来是为了防止将来有人改成 files |
+  | `cache/` | 解密后的附件明文（`attachments/`）、日志导出（`dev_logs/`） | 备份**不会**搬 cache（它不在任何合法 domain 里），无需排除 |
+
+  ⚠️ **不要**写 `<exclude domain="cache" ... />`：`FullBackupContent` 的合法 domain 只有
+  `file` / `database` / `sharedpref` / `external` / `root`（及 `device_*` 系列），
+  **`cache` 不在其中** ⇒ lint 报 `Unexpected domain cache`（**fatal**，会让
+  `:app:lintVitalFullRelease` 直接中断发布构建，见 `.ai/ISSUES.md` #201）。
+  而 cache 目录本来就不参与备份，这行既非法又多余。
 
   `shared_pref` 的写法：Android 的备份规则把 `shared_prefs/<name>.xml` 映射为
   `domain="sharedpref" path="<name>"`（**不带** `.xml` 后缀）。写错成 `vaultix_secure.xml`
@@ -25,5 +31,4 @@
     <exclude domain="sharedpref" path="vaultix_secure" />
     <exclude domain="database" path="vaultix.db" />
     <exclude domain="file" path="." />
-    <exclude domain="cache" path="." />
 </full-backup-content>

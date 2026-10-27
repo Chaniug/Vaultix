@@ -9,7 +9,7 @@
 
 | 分篇 | 主题 | 条数 |
 |---|---|---|
-| [01-构建与环境](./issues/01-构建与环境.md) | 工程 / 构建 / CI / 工具链 / 环境 | 54 |
+| [01-构建与环境](./issues/01-构建与环境.md) | 工程 / 构建 / CI / 工具链 / 环境 | 55 |
 | [02-自动填充](./issues/02-自动填充.md) | 自动填充（AutofillService 链路） | 19 |
 | [03-通行密钥与凭据提供商](./issues/03-通行密钥与凭据提供商.md) | 通行密钥 / Credential Provider / 凭据回灌 | 22 |
 | [04-锁与解锁](./issues/04-锁与解锁.md) | 锁态模型 / 解锁 / 生物识别 / 密钥 | 15 |
@@ -37,7 +37,7 @@
 
 ## 编号 → 分篇
 
-### [01-构建与环境](./issues/01-构建与环境.md) — 工程 / 构建 / CI / 工具链 / 环境（54 条，缺 #3、#8、#15、#16、#20…：#3/15 归 04、#16 归 02、#20 归 06）
+### [01-构建与环境](./issues/01-构建与环境.md) — 工程 / 构建 / CI / 工具链 / 环境（55 条，缺 #3、#8、#15、#16、#20…：#3/15 归 04、#16 归 02、#20 归 06）
 
 | # | 标题 |
 |---|---|
@@ -95,6 +95,7 @@
 | 176 | 🔴 **`StandardTestDispatcher` 跑测试任务时**不恢复拦截器** ⇒ 跨 `withContext(io)` 的续体照样踩 `Dispatchers.Main`**。#174 把 `io` 换成虚拟调度器只解决「时钟推得动」，**不解决「续体跳不跳线程」**——`StandardTestDispatcher.dispatch` 只把任务排进 `TestCoroutineScheduler`，跑任务时不恢复 `ContinuationInterceptor` ⇒ `withContext` 的续体恢复时上下文里既没拦截器也没 `Dispatchers.Main` ⇒ `TestMainDispatcher.isDispatchNeeded` 炸（堆栈 `DispatchedCoroutine.afterResume` ← `Dispatchers.IO` 的真线程 worker）。CI `39139391458` 上 `promptCarriesTheFilteredCandidateVaults` 复现，**本地全绿**。解法：第二个覆写口 `testingBlockableIoDispatcher`（语义是**拦截**不是替换）+ `ioContext`，测试传一个**非** `TestDispatcher` 子类的 `StandardTestDispatcher` ⇒ 不被 `runTest` 收编 ⇒ 内联执行且不改上下文。⚠️ 判据：**变量是时间（`advanceTimeBy`）还是线程（续体拦截）**，两者必须分开处理。 |
 | 186 | 🔴 `allowBackup` 默认 true ⇒ `shared_prefs/vaultix_secure.xml`（门锁 / KEK / 房间信封、WebDAV 凭据、Bitwarden token）被云备份与 device-transfer 搬走，而解封它的 **Keystore 密钥不参与备份** ⇒ 新机上一把「看着还在、实际打不开」的假锁。修法 = `allowBackup="false"` + **两份**规则资源（API 31+ 的 `dataExtractionRules` 与 API 30- 的 `fullBackupContent`，**保险丝**：将来谁改回 true 也搬不走） |<br>⚠️ `data_extraction_rules.xml` 的 `<cloud-backup>` 与 `<device-transfer>` **两段都要排**（换机迁移走后者）。<br>⚠️ `sharedpref` 的 `path` **不带 `.xml`**，写了会**静默不匹配**。<br>⚠️ XML 注释里不能出现连续两个短横线；`<exclude` 别跨行写（单测按字符串断言）。<br>判据：**加密材料与解密密钥分开存放时，备份策略按后者决定** |
 | 193 | 🔴 `release.yml` 仍写死 `gradle-version: 8.11.1`（wrapper 是 9.5.1）—— `ci-debug.yml` 2026-10-02 就修过，**release 这条路漏网**。后果：白下载 / 缓存分区无效 / **改 `./gradlew` 为 `gradle` 会静默掉版**。修法 = 删 `gradle-version:`（版本只有一个来源）+ 兜底从 properties 读 |<br>⚠️ sed 分隔符必须 `#`（`(bin|all)` 会让 `s` 提前结束）。<br>判据：**"两处写同一个事实"必然分叉**，修法不是"记得两边都改"，是**让事实只有一个来源** |
+| 201 | 🔴 **CI 全绿也照样发不了版**：`ci-debug.yml` 的 `Run lint` 带 `if: github.event_name != 'push'` ⇒ push 到 `main` 时**根本不跑 lint**（只有 PR 才跑）， 而 release 构建默认跑 `lintVital`、**fatal 直接中断构建** ⇒ 任何 lint fatal 都被推迟到**发版那一刻**才暴露。本次 v0.10.1 首发失败即 `:app:lintVitalFullRelease` 报 `Unexpected domain cache` ×3（`backup_rules.xml` / `data_extraction_rules.xml`）| <br>修法：删掉那三行 `<exclude domain="cache" path="." />` —— 合法 domain 只有 `file`/`database`/`sharedpref`/`external`/`root`（及 `device_*`），**没有 `cache`**；而 cache 目录本来就不参与备份，那三行既非法又多余（#186 写它是想"显式声明防将来改"）。<br>🔴 判据：**被跳过的步骤就是盲区** —— `if:` 让它消失的那一步，等于"只在发版那天跑一次"；写"门禁全绿"要说清绿的是哪几条。**`lintVital` 的 fatal ≠ 普通 lint 警告**（前者中断 release、debug 构建完全无感）。<br>⚠️ 资源 XML 的错误**不在 Kotlin 编译里** ⇒ 本次日志 `e:` 为 0 却 `BUILD FAILED`，失败信息只在 `What went wrong` 里。<br>建议（未做）：把 lint 加回 push 路径，或在 release 前单独跑一次 `:app:lintVitalFullRelease` |
 
 ### [02-自动填充](./issues/02-自动填充.md) — 自动填充（AutofillService 链路）
 
