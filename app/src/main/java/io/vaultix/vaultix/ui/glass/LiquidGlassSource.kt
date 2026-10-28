@@ -203,7 +203,9 @@ fun Modifier.liquidGlassBackdrop(
     val srcSize = source.size
     // ⚠️ IntSize 没有 `minDimension`（那是 Size 的），只能逐分量判 —— 写错一个字就编译不过。
     val blur = blurEffect(radiusPx)
-    if (srcSize.width < 1 || srcSize.height < 1 || size.minDimension < 1f || blur == null) {
+    // ⚠️ detekt `ComplexCondition` 阈值是 3：这里先折成两个判定，别写成四项 `||`。
+    val hasSource = srcSize.width > 0 && srcSize.height > 0
+    if (!hasSource || size.minDimension < 1f || blur == null) {
         // 🔴 提前返回时**必须**把子树画出来。
         //   `drawWithContent` 不调 `drawContent()` 的写法等于"条件一不满足就把这一层吞掉"：
         //   现在层 A 是空 Box、看不出后果，但这是**同一类"静默消失"**的写法
