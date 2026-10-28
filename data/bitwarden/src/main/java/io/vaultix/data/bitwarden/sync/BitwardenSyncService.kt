@@ -470,7 +470,9 @@ class BitwardenSyncService @Inject constructor(
         val profileKeys = response.profile?.organizations.orEmpty()
             .associateBy { it.id }
         val orgs = response.organizations
-        val collections = response.collections
+        // null = 响应里没有 collections 字段（旧服务器）；empty = 明确一个都没有。
+        // 落库侧两者都不写，区别只在 prune（见 pruneRemovedRows）。
+        val collections = response.collections.orEmpty()
 
         if (orgs.isEmpty() && collections.isEmpty() && profileKeys.isEmpty()) {
             // 整段缺失（老服务器）：**不动**本地，见上方 KDoc。
@@ -581,10 +583,9 @@ class BitwardenSyncService @Inject constructor(
             cipherDao.deleteByIds(removedCiphers)
         }
 
-        // 组织 / 集合：只有服务端**明确给了这两段**时才收敛（见 persistOrganizations 的说明——
-        // 否则一次不带 organizations 的响应就会抹掉组织密钥缓存）。
+        // 组织：只有服务端**明确给了** organizations / profile.organizations 时才收敛
+        //（见 persistOrganizations 的说明——否则一次不带 organizations 的响应就会抹掉密钥缓存）。
         val serverReportedOrgs = response.organizations.isNotEmpty() ||
-            response.collections.isNotEmpty() ||
             !response.profile?.organizations.isNullOrEmpty()
         if (serverReportedOrgs) {
             val serverOrgIds = response.organizations.map { it.id }.toSet()
@@ -595,7 +596,12 @@ class BitwardenSyncService @Inject constructor(
                 VaultixLog.w(TAG) { "prune organization: 删除本地 ${removedOrgs.size} 条" }
                 organizationDao.deleteByIds(removedOrgs)
             }
-            val serverCollectionIds = response.collections.map { it.id }.toSet()
+        }
+
+        // 集合**单独判**（2026-10-28）：null = 字段缺失，保留本地；emptyList = 明确为空。
+        // 混用会让"只回组织不回集合"的旧服务器/代理清空本地集合名与归属（#192 同族）。
+        response.collections?.let { reportedCollections ->
+            val serverCollectionIds = reportedCollections.map { it.id }.toSet()
             val removedCollections = collectionDao.listByVault(vaultId)
                 .map { it.id }
                 .filter { it !in serverCollectionIds }

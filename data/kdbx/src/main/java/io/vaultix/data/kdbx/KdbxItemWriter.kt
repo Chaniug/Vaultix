@@ -45,11 +45,13 @@ import app.keemobile.kotpass.database.modifiers.withHistory
 import app.keemobile.kotpass.database.modifiers.withRecycleBin
 import app.keemobile.kotpass.models.Entry
 import app.keemobile.kotpass.models.EntryFields
-import app.keemobile.kotpass.models.Group
 import app.keemobile.kotpass.models.EntryValue
+import app.keemobile.kotpass.models.Group
+import app.keemobile.kotpass.models.TimeData
 import io.vaultix.model.CustomFieldType
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
+import java.time.Instant
 import java.util.UUID
 
 /** 一次写操作的结果：新库 + 受影响的条目 uuid + **改动是否真的发生了**。 */
@@ -96,12 +98,19 @@ internal object KdbxItemWriter {
      *   那样条目会**看起来保存成功但哪里都没有**（list 里永远不出现）。
      */
     fun createEntry(database: KeePassDatabase, folderId: String?, item: VaultItem): KdbxWriteResult {
-        // ⚠️ times 不用写：`Entry` 数据类默认 `times = TimeData.create()`
-        //    （创建/访问/修改/位置四个时间全填 now）——显式写一遍只会漏掉
-        //    lastAccessTime / locationChanged，严格更差。更新侧的时间戳刷新
-        //    同样由 kotpass 负责，见 [updateEntry] 里的查证记录。
+        // ★ 导入的条目带原始时间（M3）：KDBX 的 times 是我们能保真的；
+        //   Bitwarden 服务端不接受客户端时间，只能在本地 DTO 暂存。
+        //   没有 item.createdAt 时退回 now（与 Entry 默认一致）；
+        //   更新侧的时间戳仍由 kotpass 负责（见 [updateEntry] 的查证记录）。
+        val created = Instant.ofEpochMilli(item.createdAt ?: System.currentTimeMillis())
+        val modified = item.updatedAt?.let(Instant::ofEpochMilli) ?: created
         val entry = Entry(
             uuid = UUID.randomUUID(),
+            times = TimeData.create(now = created).copy(
+                lastAccessTime = modified,
+                lastModificationTime = modified,
+                locationChanged = modified,
+            ),
             fields = applyDomainFields(existing = EntryFields.createDefault(), item = item, before = null),
         )
         val target = existingGroupUuid(database, folderId)

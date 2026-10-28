@@ -269,7 +269,14 @@ class ItemRepositoryImpl @Inject constructor(
             val localId = UUID.randomUUID().toString()
             val now = System.currentTimeMillis()
             val request = mapper.toRequest(item.copy(id = localId), key)
-            val dto = request.toStoredCipherDto(id = localId, revisionDate = "")
+            val dto = request.toStoredCipherDto(
+                id = localId,
+                revisionDate = "",
+                // M3：导入的条目带着源文件的创建/修改时间；新建 API 不收时间，
+                // 先落在本地 DTO（修改时间走 vaultixLocalRevisionDate，不参与冲突检测）。
+                localCreationAtMs = item.createdAt,
+                localUpdatedAtMs = item.updatedAt,
+            )
 
             // ★ 落库 + 入队必须**原子**（见 AtomicWriteDao 的 KDoc）：
             //   分开写时若第二次失败，会留下「行在、队列不在」的中间态，

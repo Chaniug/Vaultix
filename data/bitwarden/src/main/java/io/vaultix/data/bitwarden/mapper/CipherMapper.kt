@@ -126,7 +126,9 @@ class CipherMapper @Inject constructor(
                 // 2026-09-30 补入：条目时间（创建 / 最近修改）。服务端一直在给，
                 // 只是此前 DTO 没声明 `creationDate` ⇒ 静默丢弃；详见 `CipherDto.creationDate`。
                 createdAt = BitwardenTimestamps.parse(dto.creationDate),
-                updatedAt = BitwardenTimestamps.parse(dto.revisionDate),
+                // 导入后、首次同步前：优先本地保留的原始修改时间（M3）。
+                // 同步覆盖本地行后该字段消失，自然回落到服务端 revisionDate。
+                updatedAt = BitwardenTimestamps.parse(dto.vaultixLocalRevisionDate ?: dto.revisionDate),
                 // 2026-10-21 补入：密码历史。此前 DTO 有、请求体也一直"顺延"，
                 // 但领域模型没有这个字段 ⇒ 界面上永远看不到（改错密码就没有退路）。
                 passwordHistory = dto.passwordHistory.map { entry ->

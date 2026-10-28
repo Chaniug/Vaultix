@@ -14,6 +14,7 @@
  */
 package io.vaultix.data.bitwarden.model
 
+import io.vaultix.data.bitwarden.time.BitwardenTimestamps
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
@@ -29,8 +30,15 @@ data class SyncResponse(
      * 空列表的语义是"没有组织或服务器没给"，UI 据此整块隐藏，不会误报。
      */
     @SerialName("organizations") val organizations: List<OrganizationDto> = emptyList(),
-    /** 集合（每个 belong 到某个组织）。 */
-    @SerialName("collections") val collections: List<CollectionDto> = emptyList(),
+    /**
+     * 集合（每个 belong 到某个组织）。
+     *
+     * ⚠️ **可空**（2026-10-28）：`null` = 响应里**没有这个字段**；`emptyList()` =
+     * 服务端明确说「一个集合都没有」。两者不能混为一谈 —— 旧版 Vaultwarden / 代理
+     * 只回 `organizations` 不回 `collections` 时，把「字段缺失」当成「服务端删光了」
+     * 会清空本地集合名与归属。prune 只在**非 null** 时执行。
+     */
+    @SerialName("collections") val collections: List<CollectionDto>? = null,
     /**
      * 账号档案（含 `organizations`）：组织密钥（包裹态）在这里。
      *
@@ -139,6 +147,16 @@ data class CipherDto(
      * ⚠️ 与 [revisionDate] 一样是**明文**（Bitwarden 不对时间字段加密），直接解析即可。
      */
     @SerialName("creationDate") val creationDate: String? = null,
+    /**
+     * **本地专用**：导入时保留的原始「最后修改时间」。
+     *
+     * - 不是服务端字段（服务端只认 [revisionDate]，且新建 API 不接受时间）；
+     * - 只在「本地新建、尚未同步」期间给 UI 显示用；下一次 sync 用服务端 DTO
+     *   覆盖本地行时，这个字段自然消失，`updatedAt` 回落到服务端 `revisionDate`；
+     * - ⚠️ **绝不能用它替代 [revisionDate] 参与写回冲突检测**（`lastKnownRevisionDate`
+     *   必须是服务端那一版），否则第一次编辑就会被判 409。
+     */
+    @SerialName("vaultixLocalRevisionDate") val vaultixLocalRevisionDate: String? = null,
     @SerialName("deletedDate") val deletedDate: String? = null,
     @SerialName("reprompt") val reprompt: Int = 0,
     @SerialName("login") val login: LoginDto? = null,
@@ -357,11 +375,17 @@ data class CipherRequest(
  *   原样带过去即可。缺省为 null（= 新建，本来就没有原值）。
  *
  * @param previous 改动前的那一行；**编辑路径必须传**，新建路径不传。
+ * @param localCreationAtMs 仅**导入新建**时传：保留源文件的创建时间（epoch ms），
+ *   供首次同步前展示；服务端新建 API 不接受时间。
+ * @param localUpdatedAtMs 仅**导入新建**时传：写进本地专用
+ *   [CipherDto.vaultixLocalRevisionDate]，不参与服务端冲突检测；同步后自然被服务端值覆盖。
  */
 fun CipherRequest.toStoredCipherDto(
     id: String,
     revisionDate: String,
     previous: CipherDto? = null,
+    localCreationAtMs: Long? = null,
+    localUpdatedAtMs: Long? = null,
 ): CipherDto = CipherDto(
     id = id,
     type = type,
@@ -374,7 +398,9 @@ fun CipherRequest.toStoredCipherDto(
     // 没带就是"一条都不属于" —— 与上面的 organizationId 是同一类静默丢失。
     collectionIds = collectionIds.ifEmpty { previous?.collectionIds.orEmpty() },
     revisionDate = revisionDate,
-    creationDate = previous?.creationDate,
+    creationDate = localCreationAtMs?.let(BitwardenTimestamps::format) ?: previous?.creationDate,
+    vaultixLocalRevisionDate = localUpdatedAtMs?.let(BitwardenTimestamps::format)
+        ?: previous?.vaultixLocalRevisionDate,
     // deletedDate 同样顺延：编辑一条被软删的行**不该**让它从回收站"复活"。
     deletedDate = previous?.deletedDate,
     reprompt = reprompt,

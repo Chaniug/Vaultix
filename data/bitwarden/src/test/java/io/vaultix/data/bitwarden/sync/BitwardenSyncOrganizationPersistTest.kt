@@ -218,4 +218,55 @@ class BitwardenSyncOrganizationPersistTest {
         coVerify { organizationDao.upsertAll(capture(saved)) }
         assertThat(saved.single().single().status).isEqualTo(2)
     }
+
+    /**
+     * 反证（2026-10-28）：`collections` 字段**缺失**（null）≠ 服务端说「没有集合」。
+     * 旧版服务器只回 organizations 时，绝不能清掉本地集合。
+     */
+    @Test
+    fun `集合字段缺失时不清本地集合`() = runTest {
+        coEvery { collectionDao.listByVault(vaultId) } returns listOf(
+            CollectionEntity(
+                id = "col-1",
+                vaultId = vaultId,
+                organizationId = "org-1",
+                encryptedName = "C",
+            ),
+        )
+        stubSync(
+            SyncResponse(
+                organizations = listOf(OrganizationDto(id = "org-1", name = "N", status = 2)),
+                collections = null,
+            ),
+        )
+
+        service.sync(vaultId, server, force = true)
+
+        coVerify(exactly = 0) { collectionDao.deleteByIds(any()) }
+    }
+
+    /** 正向：服务端**明确**给了空数组，才代表「一个集合都没有」，此时允许收敛。 */
+    @Test
+    fun `集合明确为空时才清本地集合`() = runTest {
+        coEvery { collectionDao.listByVault(vaultId) } returns listOf(
+            CollectionEntity(
+                id = "col-1",
+                vaultId = vaultId,
+                organizationId = "org-1",
+                encryptedName = "C",
+            ),
+        )
+        stubSync(
+            SyncResponse(
+                organizations = listOf(OrganizationDto(id = "org-1", name = "N", status = 2)),
+                collections = emptyList(),
+            ),
+        )
+
+        service.sync(vaultId, server, force = true)
+
+        val removed = mutableListOf<List<String>>()
+        coVerify { collectionDao.deleteByIds(capture(removed)) }
+        assertThat(removed.single()).containsExactly("col-1")
+    }
 }

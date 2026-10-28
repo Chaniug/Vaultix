@@ -183,6 +183,35 @@ class ItemRepositoryImplTest {
         coVerify { syncService.flushPending(vaultId, vaultId) }
     }
 
+    /**
+     * M3：导入的条目带 `createdAt/updatedAt`，而新建 API 不收时间 —— 必须落进本地 DTO，
+     * 首次同步前才看得到原始时间。`vaultixLocalRevisionDate` 只给展示，**不能**写进
+     * 服务端 `revisionDate`（否则第一次编辑会把导入时间当 `lastKnownRevisionDate` 发出去）。
+     */
+    @Test
+    fun createItem_preservesImportedTimestampsInLocalDto() = runTest {
+        sessions.unlock(vaultId, key)
+        coEvery { vaultDao.get(vaultId) } returns bitwardenVaultRow()
+        val rowSlot = slot<List<CipherEntity>>()
+        coEvery { cipherDao.upsertAll(capture(rowSlot)) } returns Unit
+        coEvery { pendingOpDao.enqueue(any()) } returns Unit
+        coEvery { syncService.flushPending(vaultId, vaultId) } returns Result.success(Unit)
+
+        val imported = plainItem(id = "").copy(
+            createdAt = 1_600_000_000_000L,
+            updatedAt = 1_700_000_000_000L,
+        )
+        repo.createItem(vaultId, imported)
+
+        val dto = BitwardenJson.decodeFromString<CipherDto>(
+            rowSlot.captured.single().encryptedPayload,
+        )
+        assertEquals("2020-09-13T12:26:40.000Z", dto.creationDate)
+        assertEquals("2023-11-14T22:13:20.000Z", dto.vaultixLocalRevisionDate)
+        // 服务端 revision 必须保持空：导入时间不能拿去当 lastKnownRevisionDate。
+        assertEquals("", dto.revisionDate)
+    }
+
     @Test
     fun createItem_offlineFlushFailure_returnsQueued_andKeepsRow() = runTest {
         sessions.unlock(vaultId, key)
