@@ -200,11 +200,18 @@ fun Modifier.liquidGlassBackdrop(
 ): Modifier = drawWithContent {
     // ⚠️ 用 drawWithContent（而不是 drawBehind / drawWithCache）：`GraphicsLayer.record`
     //    是 ContentDrawScope 的成员扩展，只有这里的 receiver 才调得到。
-    //    层 A 是空 Box，没有子节点 ⇒ 不必调 `drawContent()`。
     val srcSize = source.size
     // ⚠️ IntSize 没有 `minDimension`（那是 Size 的），只能逐分量判 —— 写错一个字就编译不过。
-    if (srcSize.width < 1 || srcSize.height < 1 || size.minDimension < 1f) return@drawWithContent
-    val blur = blurEffect(radiusPx) ?: return@drawWithContent
+    val blur = blurEffect(radiusPx)
+    if (srcSize.width < 1 || srcSize.height < 1 || size.minDimension < 1f || blur == null) {
+        // 🔴 提前返回时**必须**把子树画出来。
+        //   `drawWithContent` 不调 `drawContent()` 的写法等于"条件一不满足就把这一层吞掉"：
+        //   现在层 A 是空 Box、看不出后果，但这是**同一类"静默消失"**的写法
+        //   （对照 #205 的底栏高度塌 0 —— 那次是没人告诉父 Box 尺寸，这次是没人画子树）。
+        //   本文件 KDoc 反复讲的"不报错、只是不糊"里，最坏的一档就是"不画"。
+        drawContent()
+        return@drawWithContent
+    }
     drawIntoCanvas { canvas ->
         canvas.save()
         // 把 layer 挪到"源本来该在的位置"：layer 的坐标系原点是源的左上角，

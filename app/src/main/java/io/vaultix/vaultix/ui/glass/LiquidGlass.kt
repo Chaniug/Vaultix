@@ -259,9 +259,21 @@ fun LiquidGlassLayer(
             )
         }
         // ★ 层 B：视觉装饰 + 内容。装饰画在 `drawBehind`，因此永远是清晰的。
+        //
+        // 🔴 这一层必须是**唯一参与父 Box 测量**的子节点（2026-10-28 第四轮修复）。
+        //
+        //   原先它和层 A 一样写 `matchParentSize()` ⇒ 父 Box 里**没有一个可测量的子节点**
+        //   ⇒ 高度只能取约束下限 = **0** ⇒ `clip(shape)` 把 0 高的区域裁成空
+        //   ⇒ **整条底栏不可见**（用户报「打开液态玻璃后，底栏消失不见了」）。
+        //
+        //   `matchParentSize()` 的语义是「尺寸跟随父，且**不参与**父的尺寸计算」——
+        //   全都用它，就等于没有谁告诉父 Box "你该多高"。这不是"没生效"，是"算出来就是 0"。
+        //   第二轮的"整页变白"把这个问题盖住了（屏幕一片白时看不出底栏没了）。
+        //
+        //   ⇒ 这里改成按内容测量：`fillMaxWidth()` 只锁宽度，高度随 [content]。
         Box(
             modifier = Modifier
-                .matchParentSize()
+                .fillMaxWidth()
                 .clip(shape)
                 .drawBehind { if (enabled) drawGlass(style = style, density = density, blurAvailable = blur) },
         ) {
