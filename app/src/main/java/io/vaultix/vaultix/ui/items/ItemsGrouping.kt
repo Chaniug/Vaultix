@@ -89,7 +89,14 @@ private fun groupByFolder(
     noFolderLabel: String,
 ): List<ItemsGroup> {
     val nameById = folders.associate { it.id to it.name }
-    val (withoutFolder, withFolder) = items.partition { it.folderId.isNullOrBlank() }
+    // ⚠️ 悬空 folderId（文件夹被删 / 尚未同步）也归「无文件夹」：
+    //    否则会以旧 folderId 为 key 再生成一个同标题的「无文件夹」分组 ——
+    //    界面上出现两个同名组，且条目不在真正的 NO_FOLDER_KEY 组里。
+    //    Bitwarden 的做法是删文件夹后主动清空 entries 的 folderId；这里在展示侧
+    //    再兜一层，历史遗留的悬空值也能正确归组。
+    val (withoutFolder, withFolder) = items.partition {
+        it.folderId.isNullOrBlank() || it.folderId !in nameById
+    }
     val groups = withFolder
         .groupBy { it.folderId.orEmpty() }
         .map { (folderId, grouped) ->

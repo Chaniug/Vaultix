@@ -62,7 +62,7 @@ data class KdbxTrashItem(
 )
 
 /** 分组 uuid → Vaultix 文件夹 id（前缀避免与 Bitwarden 的 folder id 撞车）。 */
-internal fun folderIdOf(groupUuid: UUID): String = "kdbx-group:$groupUuid"
+fun folderIdOf(groupUuid: UUID): String = "kdbx-group:$groupUuid"
 
 /** 条目 uuid → Vaultix 条目 id。 */
 internal fun itemIdOf(entryUuid: UUID): String = "kdbx-entry:$entryUuid"

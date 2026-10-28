@@ -124,12 +124,12 @@ class FolderRepositoryImpl @Inject constructor(
 
     // ------------------------------------------------------------------ 写
 
-    override suspend fun createFolder(vaultId: String, name: String): Result<Unit> =
+    override suspend fun createFolder(vaultId: String, name: String): Result<VaultFolder> =
         withContext(Dispatchers.IO) {
             runCatching {
                 val folderName = checkedName(name)
                 when (val target = resolve(vaultId)) {
-                    Target.Kdbx -> kdbx(kdbxItemWrites.createFolder(vaultId, null, folderName))
+                    Target.Kdbx -> kdbxFolder(kdbxItemWrites.createFolder(vaultId, null, folderName))
                     is Target.Remote -> createRemote(target, vaultId, folderName)
                 }
             }
@@ -167,7 +167,11 @@ class FolderRepositoryImpl @Inject constructor(
      * ⚠️ 本地 id 一律用 `dto.id`：sync 的 `persistFolders` 按 id 做 `upsertAll`，
      * 本地若自己造一个 id，同步后会多出一行重复的文件夹（同一名字出现两次）。
      */
-    private suspend fun createRemote(target: Target.Remote, vaultId: String, name: String) {
+    private suspend fun createRemote(
+        target: Target.Remote,
+        vaultId: String,
+        name: String,
+    ): VaultFolder {
         val key = requireKey(vaultId)
         val dto = target.api.createFolder(FolderRequest(crypto.encryptString(name, key)))
         require(dto.id.isNotBlank()) { "服务器没有返回文件夹 id，请稍后重试" }
@@ -180,6 +184,7 @@ class FolderRepositoryImpl @Inject constructor(
                 revisionDate = dto.revisionDate,
             ),
         )
+        return VaultFolder(id = dto.id, name = name)
     }
 
     /**
@@ -272,6 +277,10 @@ class FolderRepositoryImpl @Inject constructor(
     private fun kdbx(result: Result<*>): Unit {
         result.getOrElse { throw it }
     }
+
+    /** 同 [kdbx]，但把新建文件夹的结果带出来（导入要拿它做 id 映射）。 */
+    private fun kdbxFolder(result: Result<VaultFolder>): VaultFolder =
+        result.getOrElse { throw it }
 
     private companion object {
         const val HTTP_NOT_FOUND = 404

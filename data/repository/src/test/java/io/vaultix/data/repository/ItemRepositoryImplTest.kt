@@ -191,12 +191,34 @@ class ItemRepositoryImplTest {
         coEvery { pendingOpDao.enqueue(any()) } returns Unit
         coEvery { syncService.flushPending(vaultId, vaultId) } returns
             Result.failure(IllegalStateException("no network"))
+        // 离线时本地行还在（只是没推上去）⇒ 仍应是 Queued。
+        coEvery { cipherDao.get(any()) } returns mockk<CipherEntity>(relaxed = true)
 
         val outcome = repo.createItem(vaultId, plainItem("x"))
 
         assertEquals(VaultSaveOutcome.Queued, outcome.getOrThrow())
         // 失败不删除队列（重试语义在 BitwardenSyncService 内，repository 只判断结果）
         coVerify(exactly = 1) { pendingOpDao.enqueue(any()) }
+    }
+
+    /**
+     * 服务端确定性 4xx 把 `OP_CREATE` 弃单时，本地临时行已被 `flushPending` 删除。
+     * 此时必须返回失败 —— 不能再报 `Queued`（UI 会显示「已保存到本地」，而条目没了）。
+     */
+    @Test
+    fun createItem_serverRejectsAndRowRemoved_returnsFailure() = runTest {
+        sessions.unlock(vaultId, key)
+        coEvery { vaultDao.get(vaultId) } returns bitwardenVaultRow()
+        coEvery { cipherDao.upsertAll(any()) } returns Unit
+        coEvery { pendingOpDao.enqueue(any()) } returns Unit
+        coEvery { syncService.flushPending(vaultId, vaultId) } returns
+            Result.failure(IllegalStateException("HTTP 400 Bad Request"))
+        coEvery { cipherDao.get(any()) } returns null
+
+        val result = repo.createItem(vaultId, plainItem("x"))
+
+        assertTrue(result.isFailure)
+        assertTrue(result.exceptionOrNull()!!.message!!.contains("服务器拒绝"))
     }
 
     @Test

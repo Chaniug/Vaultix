@@ -1412,11 +1412,15 @@
     <string name="import_confirm">确认导入</string>
     <string name="import_in_progress">正在导入…</string>
     <string name="import_success">已导入 %1$d 个条目</string>
+    <string name="import_success_with_skips">已导入 %1$d 个条目；跳过 %2$d 个（已存在 %3$d / 文件内重复 %4$d / 当前库不支持 %5$d / 写入失败 %6$d）</string>
     <string name="import_failed">导入失败：%1$s</string>
     <string name="import_plan_pending">正在比对库里已有的条目…</string>
     <string name="import_plan_all_new">将新建 %1$d 个条目（库里没有同名的）</string>
     <string name="import_plan_duplicates">将新建 %1$d 个条目；另有 %2$d 个已存在（%3$s），会被跳过</string>
     <string name="import_plan_all_duplicated">这 %1$d 个条目库里都已经有了，没有需要导入的新条目</string>
+    <string name="import_plan_nothing_importable">没有可导入的新条目（已存在 %1$d、文件内重复 %2$d、当前库不支持 %3$d）</string>
+    <string name="import_plan_details">将新建 %1$d 个条目；另有 %2$d 个已存在、%3$d 个在文件里重复、%4$d 个当前库不支持，会被跳过</string>
+    <string name="import_plan_new_folders">会先新建 %1$d 个文件夹</string>
 
     <!-- 导入错误分类 -->
     <string name="import_error_malformed">文件格式不正确，不是有效的 Bitwarden 加密导出文件</string>

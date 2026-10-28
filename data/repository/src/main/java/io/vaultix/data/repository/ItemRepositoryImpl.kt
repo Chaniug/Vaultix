@@ -295,7 +295,7 @@ class ItemRepositoryImpl @Inject constructor(
                 ),
             )
 
-            flushAfterLocalWrite(vaultId)
+            flushAfterLocalWrite(vaultId, createdCipherId = localId)
         }
 
     override suspend fun updateItem(vaultId: String, item: VaultItem): Result<VaultSaveOutcome> =
@@ -650,13 +650,32 @@ class ItemRepositoryImpl @Inject constructor(
         if (kind == VaultKind.KDBX) throw ReadOnlyVaultException(vaultId, reason)
     }
 
-/** 写库完成后的轻量推送；非 Bitwarden 库（未来 KDBX）不入队推送逻辑。 */
-    private suspend fun flushAfterLocalWrite(vaultId: String): VaultSaveOutcome {
+    /**
+     * 写库完成后的轻量推送；非 Bitwarden 库（未来 KDBX）不入队推送逻辑。
+     *
+     * @param createdCipherId 仅新建路径传入：**用来识破"保存被服务端拒绝"**。
+     *   `flushPending` 对 `OP_CREATE` 的确定性 4xx 会删掉本地临时行并弃单；
+     *   此时若仍返回 [VaultSaveOutcome.Queued]，UI 会显示「已保存到本地」——
+     *   而条目已经不存在（2026-10-28 修：静默丢数据）。
+     *   判据取「行还在不在」：还在 = 只是没推上去（Queued）；没了 = 被拒绝（抛错）。
+     */
+    private suspend fun flushAfterLocalWrite(
+        vaultId: String,
+        createdCipherId: String? = null,
+    ): VaultSaveOutcome {
         val row = vaultDao.get(vaultId)
         val server = row?.origin?.takeIf { VaultKind.fromName(row.kind) == VaultKind.BITWARDEN }
             ?: return VaultSaveOutcome.Queued
         val flush = syncService.flushPending(vaultId, server)
-        return if (flush.isSuccess) VaultSaveOutcome.Synced else VaultSaveOutcome.Queued
+        if (flush.isSuccess) return VaultSaveOutcome.Synced
+        val error = flush.exceptionOrNull()
+        if (createdCipherId != null && cipherDao.get(createdCipherId) == null) {
+            throw IllegalStateException(
+                "服务器拒绝了这次保存，条目未保存：${error?.message.orEmpty()}",
+                error,
+            )
+        }
+        return VaultSaveOutcome.Queued
     }
 
     private companion object {

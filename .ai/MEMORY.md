@@ -69,8 +69,11 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
   | 项目 | 路径 | 说明 |
   |---|---|---|
   | Bastion | `reference/bastion/`（**仓内 vendored @369ed56**） | 只读参考，不参与构建/detekt |
-  | Bitwarden Android | `D:\Vaultix-refs\bitwarden-android`（仓外，`--depth 1`） | **功能层真源** |
-  | Keyguard | `D:\Vaultix-refs\keyguard-app`（仓外） | **仅 UI 交互参考**，含 `androidLibAutofill/` |
+  | Bitwarden Android | `D:\Vaultix-refs\bitwarden-android`（仓外，浅克隆） | **功能层真源** |
+  | Keyguard | `D:\Vaultix-refs\keyguard-app`（仓外，浅克隆） | **仅 UI 交互参考**，含 `androidLibAutofill/` |
+  | kotpass | `D:\Vaultix-refs\kotpass`（仓外，浅克隆） | KDBX 引擎上游源码；**依赖版本以 `libs.versions.toml` 为准** |
+- 查参考实现**先读本地**，不必联网；刷新方式与当前 HEAD 见
+  [`conventions/8.10`](conventions/8.10-架构与目录地图.md) §6.1 与 `issues/01` §42。
 - **复用判断口诀**：搬「思想」和「无依赖的核」，**不搬**「缠成一团的业务实现」。
   可搬 ✅ 安全策略 / 算法 / 流程模式（空库保护、失败分类、KDF、401 刷新）；
   不可搬 ❌ 强耦合其模型与存储的巨型实现（`BitwardenSyncService.kt` 2594 行、

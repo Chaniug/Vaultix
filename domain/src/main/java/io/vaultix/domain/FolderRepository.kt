@@ -41,8 +41,11 @@ interface FolderRepository {
      * 新建文件夹。
      *
      * @param name 用户输入（内部会 [FolderNamePolicy] 校验并 trim）。
+     * @return 新建的文件夹（含目标库分配的 id）。
+     *   ⚠️ 返回 id 是**导入**的硬需求：导入要先建文件夹，再把源端 folderId
+     *   映射到目标 id；只返回 `Unit` 就只能按名字二次查找，同名文件夹会互相顶掉。
      */
-    suspend fun createFolder(vaultId: String, name: String): Result<Unit>
+    suspend fun createFolder(vaultId: String, name: String): Result<VaultFolder>
 
     /** 重命名文件夹；[folderId] 必须属于该库。 */
     suspend fun renameFolder(vaultId: String, folderId: String, name: String): Result<Unit>

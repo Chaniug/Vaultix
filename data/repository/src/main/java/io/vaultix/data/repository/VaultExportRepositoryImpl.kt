@@ -21,14 +21,18 @@ import io.vaultix.crypto.di.CryptoDispatcher
 import io.vaultix.data.bitwarden.export.BitwardenExportFacade
 import io.vaultix.data.bitwarden.export.BitwardenImportException
 import io.vaultix.data.kdbx.Kdbx
+import io.vaultix.database.dao.VaultDao
 import io.vaultix.domain.FolderRepository
 import io.vaultix.domain.ImportDuplicatePolicy
 import io.vaultix.domain.ImportPlan
+import io.vaultix.domain.ImportResult
 import io.vaultix.domain.ImportedVault
 import io.vaultix.domain.ItemRepository
 import io.vaultix.domain.VaultExportRepository
 import io.vaultix.domain.VaultImportException
 import io.vaultix.domain.VaultNotUnlockedException
+import io.vaultix.model.VaultFolder
+import io.vaultix.model.VaultKind
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
@@ -56,6 +60,7 @@ class VaultExportRepositoryImpl @Inject constructor(
     private val folderRepository: FolderRepository,
     private val sessions: VaultSessionManager,
     private val facade: BitwardenExportFacade,
+    private val vaultDao: VaultDao,
     @CryptoDispatcher private val cryptoDispatcher: CoroutineDispatcher,
 ) : VaultExportRepository {
 
@@ -82,30 +87,50 @@ class VaultExportRepositoryImpl @Inject constructor(
             }
         }
 
-    override suspend fun applyImportedVault(vaultId: String, imported: ImportedVault): Int {
+    override suspend fun applyImportedVault(vaultId: String, imported: ImportedVault): ImportResult {
         if (!isUnlocked(vaultId)) throw VaultNotUnlockedException(vaultId)
 
-        // 文件夹：按名字匹配目标库已有文件夹（Vaultix 不支持客户端新建文件夹）。
-        val folderIdByName = existingFolderIdByName(vaultId)
-        val duplicateKeys = duplicateKeys(vaultId, imported)
+        // 以**写入这一刻**的库状态为准（预览只是预告，不能当凭据）。
+        val existing = itemRepository.observeItems(vaultId).first()
+        val duplicatePlan = ImportDuplicatePolicy.plan(imported.items, existing)
+        val supportsAllTypes = targetSupportsAllTypes(vaultId)
+
+        // 先建文件夹：任何失败都在写条目之前中止（条目还一条没动）。
+        val folderIdMap = ensureFolders(vaultId, imported.folders)
 
         var written = 0
-        imported.items.forEach { item ->
-            // 已存在 → 跳过（判定口径见 ImportDuplicatePolicy；预览页已告知用户数量）。
-            if (ImportDuplicatePolicy.keyOf(item) in duplicateKeys) return@forEach
+        var unsupported = 0
+        var failed = 0
+        var firstFailure: Throwable? = null
+        duplicatePlan.newItems.forEach { item ->
+            if (!supportsAllTypes && item.type !in KDBX_SUPPORTED_TYPES) {
+                unsupported++
+                return@forEach
+            }
             val remapped = item.copy(
                 // 目标库重新分配 id（createItem 会覆盖，这里显式置空以免误导）。
                 id = "",
-                // 源端 folderId 是导出库的 UUID：按名字映射到目标库 id，找不到则清空。
-                folderId = item.folderId?.let { sourceId ->
-                    imported.folders.firstOrNull { it.id == sourceId }
-                        ?.let { folderIdByName[it.name] }
-                },
+                // 源端 folderId 是导出库的 id：按**id 映射**到目标库，找不到则清空。
+                folderId = item.folderId?.let { sourceId -> folderIdMap[sourceId] },
             )
             val result = itemRepository.createItem(vaultId, remapped)
-            if (result.isSuccess) written++
+            if (result.isSuccess) {
+                written++
+            } else {
+                failed++
+                firstFailure = firstFailure ?: result.exceptionOrNull()
+            }
         }
-        return written
+        // 一条都没写进去且确实有失败 ⇒ 抛出去让 UI 报错，而不是"0 条成功"的假结果。
+        if (written == 0 && failed > 0) firstFailure?.let { throw it }
+
+        return ImportResult(
+            written = written,
+            duplicateExisting = duplicatePlan.existingDuplicates.size,
+            duplicateInFile = duplicatePlan.inFileDuplicates.size,
+            unsupported = unsupported,
+            failed = failed,
+        )
     }
 
     override suspend fun previewImport(vaultId: String, imported: ImportedVault): ImportPlan {
@@ -114,37 +139,68 @@ class VaultExportRepositoryImpl @Inject constructor(
         // 只看"当前可浏览的条目"：回收站里的条目按设计就是用户不要了，
         // 拿它来挡导入会让用户怎么导都导不进去。
         val existing = itemRepository.observeItems(vaultId).first()
-        val conflicts = ImportDuplicatePolicy.conflicts(imported.items, existing)
+        val plan = ImportDuplicatePolicy.plan(imported.items, existing)
+        val supportsAllTypes = targetSupportsAllTypes(vaultId)
+        val unsupported = if (supportsAllTypes) {
+            0
+        } else {
+            plan.newItems.count { it.type !in KDBX_SUPPORTED_TYPES }
+        }
+        val existingFolderNames = folderRepository.observeFolders(vaultId).first()
+            .map { it.name }
+            .toSet()
+        val newFolderCount = imported.folders
+            .map { it.name }
+            .filter { it.isNotBlank() }
+            .distinct()
+            .count { it !in existingFolderNames }
         return ImportPlan(
-            newItemCount = imported.items.size - conflicts.size,
-            duplicateCount = conflicts.size,
+            newItemCount = plan.newItems.size - unsupported,
+            duplicateCount = plan.existingDuplicates.size,
             // 去重后取前几个：同一标题撞多条时不必重复显示同一个名字。
-            duplicateTitles = conflicts.map { it.existingTitle }.distinct().take(ImportPlan.IMPORT_CONFLICT_SAMPLE),
+            duplicateTitles = plan.existingDuplicates
+                .map { it.existingTitle }
+                .distinct()
+                .take(ImportPlan.IMPORT_CONFLICT_SAMPLE),
+            duplicateInFileCount = plan.inFileDuplicates.size,
+            unsupportedCount = unsupported,
+            newFolderCount = newFolderCount,
         )
     }
 
     /**
-     * 目标库里"已存在"的条目键集合（判定口径唯一来源：[ImportDuplicatePolicy]）。
+     * 确保 [folders] 在目标库里都有对应行，返回「源端 id → 目标 id」。
      *
-     * 与 [previewImport] 各自读一次 [ItemRepository.observeItems]：两处之间用户可能
-     * 在别的页面新建 / 删除条目。**以写入那一刻的库状态为准** —— 预演只是
-     * 给用户看的预告，不能当成写入的凭据（"预览说新建 10 条"而实际写了 9 条，
-     * 比反过来安全）。
+     * - 先按**名字**复用目标库已有文件夹（同名的取第一个，`putIfAbsent`）；
+     * - 缺失的逐个新建，新建成功后立刻写进名字表 —— 同一份文件里两个同名文件夹
+     *   会复用刚建的那一个，而不是建两遍（与预览的 `distinct()` 口径一致）；
+     * - 任何一次新建失败都**直接抛出**：此时条目还一条没写，重试即可；
+     *   绝不能把条目静默倒进「无文件夹」（那是不可逆的组织信息丢失）。
      */
-    private suspend fun duplicateKeys(
+    private suspend fun ensureFolders(
         vaultId: String,
-        imported: ImportedVault,
-    ): Set<ImportDuplicatePolicy.Key> {
-        val existing = itemRepository.observeItems(vaultId).first()
-        return ImportDuplicatePolicy.conflicts(imported.items, existing)
-            .map { ImportDuplicatePolicy.keyOf(it.imported) }
-            .toSet()
+        folders: List<VaultFolder>,
+    ): Map<String, String> {
+        if (folders.isEmpty()) return emptyMap()
+        val nameToId = LinkedHashMap<String, String>()
+        folderRepository.observeFolders(vaultId).first()
+            .forEach { folder -> nameToId.putIfAbsent(folder.name, folder.id) }
+        val sourceToTarget = HashMap<String, String>(folders.size)
+        folders.forEach { folder ->
+            val name = folder.name
+            if (name.isBlank()) return@forEach
+            val targetId = nameToId[name] ?: folderRepository.createFolder(vaultId, name)
+                .getOrElse { throw it }
+                .also { created -> nameToId[name] = created.id }
+                .id
+            sourceToTarget[folder.id] = targetId
+        }
+        return sourceToTarget
     }
 
-    /** 目标库「文件夹名 → id」映射（同名取第一个，两库同名文件夹的常见情形）。 */
-    private suspend fun existingFolderIdByName(vaultId: String): Map<String, String> =
-        folderRepository.observeFolders(vaultId).first()
-            .associate { it.name to it.id }
+    /** 目标库是否支持全部 5 种条目类型（KDBX 只收 Login / SecureNote）。 */
+    private suspend fun targetSupportsAllTypes(vaultId: String): Boolean =
+        VaultKind.fromName(vaultDao.get(vaultId)?.kind) != VaultKind.KDBX
 
     /** 解锁判定：内存会话（Bitwarden）或 KDBX 会话任一在场即视为已解锁。 */
     private fun isUnlocked(vaultId: String): Boolean =

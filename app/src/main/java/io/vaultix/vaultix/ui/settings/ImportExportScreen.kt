@@ -282,7 +282,19 @@ private fun rememberSafHandlers(
                     snackbarHostState.showSnackbar(context.getString(R.string.export_success))
                 is ImportExportViewModel.Event.ImportDone ->
                     snackbarHostState.showSnackbar(
-                        context.getString(R.string.import_success, event.count),
+                        if (event.result.skipped == 0) {
+                            context.getString(R.string.import_success, event.result.written)
+                        } else {
+                            context.getString(
+                                R.string.import_success_with_skips,
+                                event.result.written,
+                                event.result.skipped,
+                                event.result.duplicateExisting,
+                                event.result.duplicateInFile,
+                                event.result.unsupported,
+                                event.result.failed,
+                            )
+                        },
                     )
             }
         }
@@ -461,22 +473,52 @@ private fun PreviewCard(
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                plan.duplicateCount == 0 -> Text(
-                    text = stringResource(R.string.import_plan_all_new, plan.newItemCount),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                else -> Text(
+                plan.newItemCount == 0 -> Text(
                     text = if (allDuplicated) {
                         stringResource(R.string.import_plan_all_duplicated, plan.duplicateCount)
                     } else {
                         stringResource(
-                            R.string.import_plan_duplicates,
-                            plan.newItemCount,
+                            R.string.import_plan_nothing_importable,
                             plan.duplicateCount,
-                            plan.duplicateTitles.joinToString("、"),
+                            plan.duplicateInFileCount,
+                            plan.unsupportedCount,
                         )
                     },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                plan.duplicateCount == 0 &&
+                    plan.duplicateInFileCount == 0 &&
+                    plan.unsupportedCount == 0 -> Text(
+                    text = stringResource(R.string.import_plan_all_new, plan.newItemCount),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                plan.duplicateInFileCount == 0 && plan.unsupportedCount == 0 -> Text(
+                    text = stringResource(
+                        R.string.import_plan_duplicates,
+                        plan.newItemCount,
+                        plan.duplicateCount,
+                        plan.duplicateTitles.joinToString("、"),
+                    ),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                else -> Text(
+                    text = stringResource(
+                        R.string.import_plan_details,
+                        plan.newItemCount,
+                        plan.duplicateCount,
+                        plan.duplicateInFileCount,
+                        plan.unsupportedCount,
+                    ),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (plan != null && plan.newFolderCount > 0) {
+                Text(
+                    text = stringResource(R.string.import_plan_new_folders, plan.newFolderCount),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

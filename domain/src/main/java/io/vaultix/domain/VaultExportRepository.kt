@@ -43,12 +43,28 @@ interface VaultExportRepository {
      * 把 [parseEncryptedJson] 的结果**写入目标库**。
      *
      * 语义：**增量导入**——逐条 [ItemRepository.createItem] 新建（不覆盖同 id 条目，
-     * 由目标库重新分配 id）；文件夹按名字匹配已有文件夹，缺失的跳过
-     * （Vaultix 不支持在客户端新建文件夹，见 [FolderRepository] 的说明）。
+     * 由目标库重新分配 id）。
      *
-     * @return 实际写入的条目数（未知类型条目会被跳过，故可能小于文件内条目数）。
+     * ## 文件夹（2026-10-28 修正）
+     *
+     * 此前只按名字匹配已有文件夹、缺失的跳过（注释理由是「Vaultix 不支持客户端新建
+     * 文件夹」）。该理由在 #199（2026-10-27）之后已不成立：`FolderRepository`
+     * 三个写方法齐全。现在**先建缺失文件夹、再写条目**，并用**源端 id → 目标 id**
+     * 映射条目归属；不再按名字二次查找（同名文件夹会互相顶掉）。
+     *
+     * ⚠️ 文件夹创建失败会**在写任何条目之前**中止：宁可整次导入失败，也不要把
+     * 条目静默倒进「无文件夹」——那是不可逆的组织信息丢失。
+     *
+     * ## 跳过与失败都要计数
+     *
+     * - 已存在（[ImportDuplicatePolicy] 判定）；
+     * - **文件内部重复**（同一份导出里本来就有两条一样的）；
+     * - 当前库不支持的类型（KDBX 只收 Login / SecureNote）；
+     * - 逐条写入失败（不静默吞掉）。
+     *
+     * @return 结构化结果；UI 必须把「成功 / 各类跳过 / 失败」分别告诉用户。
      */
-    suspend fun applyImportedVault(vaultId: String, imported: ImportedVault): Int
+    suspend fun applyImportedVault(vaultId: String, imported: ImportedVault): ImportResult
 
     /**
      * 写入前的**预演**：算出哪些条目会被跳过（已存在）、哪些会被新建。
@@ -66,12 +82,23 @@ interface VaultExportRepository {
 
 /** 导入预演结果（[VaultExportRepository.previewImport]）。 */
 data class ImportPlan(
-    /** 会被新建的条目数。 */
+    /** 会被新建的条目数（已扣除「当前库不支持的类型」）。 */
     val newItemCount: Int,
-    /** 因"已存在"被跳过的条目数（[ImportDuplicatePolicy] 判定）。 */
+    /** 因"库里已存在"被跳过的条目数（[ImportDuplicatePolicy] 判定）。 */
     val duplicateCount: Int,
     /** 重复条目的样例标题（去重后，最多 [IMPORT_CONFLICT_SAMPLE] 个）。 */
     val duplicateTitles: List<String>,
+    /**
+     * 因**文件内部重复**被跳过的条目数（2026-10-28 新增）。
+     *
+     * 去重若只拿"现有库"当基准，同一份文件里两条一样的会被原样复制；
+     * 这一项让预览与写入共用同一份判定，避免"预演说新建 2、实际写 1"。
+     */
+    val duplicateInFileCount: Int = 0,
+    /** 目标库不支持、会被跳过的条目数（KDBX 只收 Login / SecureNote）。 */
+    val unsupportedCount: Int = 0,
+    /** 目标库缺失、导入时会新建的文件夹数（按名字去重后的口径）。 */
+    val newFolderCount: Int = 0,
 ) {
     companion object {
         /** 提示文案里最多展示几个重复条目名（再多就"等 N 条"）。 */
@@ -80,6 +107,28 @@ data class ImportPlan(
         /** 文件里没有任何可导入条目时的空计划。 */
         val EMPTY = ImportPlan(newItemCount = 0, duplicateCount = 0, duplicateTitles = emptyList())
     }
+}
+
+/**
+ * 一次导入的完整结果（2026-10-28）。
+ *
+ * 为什么不是 `Int`：只报「写了几条」等于把**没写进去的**全藏起来。用户在 KDBX 目标上
+ * 导入一份含卡/身份/SSH 的备份时，会看到「已导入 3 条」而不知道另外 7 条为什么不见。
+ */
+data class ImportResult(
+    /** 实际写入的条目数。 */
+    val written: Int,
+    /** 库里已存在而跳过的条目数。 */
+    val duplicateExisting: Int,
+    /** 文件内部重复而跳过的条目数。 */
+    val duplicateInFile: Int,
+    /** 目标库不支持而跳过的条目数。 */
+    val unsupported: Int,
+    /** 写入失败的条目数（不静默吞掉）。 */
+    val failed: Int,
+) {
+    /** 所有没有写进去的条目总数。 */
+    val skipped: Int get() = duplicateExisting + duplicateInFile + unsupported + failed
 }
 
 /** 解密并映射后的导出内容（预览 + 导入的输入）。 */

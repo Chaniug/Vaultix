@@ -215,18 +215,31 @@ internal object KdbxRoundTrip {
     }
 
     /**
-     * 比对两个条目的**字段名集合**与**CustomData 键值**。
+     * 比对两个条目的**字段名集合、字段值**与 **CustomData 键值**。
      *
      * @return 不一致的描述；null = 一致。
      */
     private fun diffFields(original: Entry, roundTripped: Entry): String? {
-        // 字段名（值是加密的，直接比会因 IV 不同而不等 ⇒ 比"有哪些字段"）
         val originalFields = original.fields.keys
         val roundTrippedFields = roundTripped.fields.keys
         if (originalFields != roundTrippedFields) {
             val lost = originalFields - roundTrippedFields
             val added = roundTrippedFields - originalFields
             return "字段集合变化（丢=$lost 多=$added）"
+        }
+
+        // ★ 字段**值**（2026-10-28）：此前只比字段名 ⇒「密码被写进用户名」「值被截断」
+        //   这类损坏全部放行，`isSafeToWrite` 仍为 true。`EntryValue.content` 会解密
+        //   受保护字段（写入侧判断"值有没有变"用的就是它），IV 不同不会影响比较结果。
+        val originalValues: Map<String, String> =
+            original.fields.entries.associate { (key, value) -> key to value.content }
+        val roundTrippedValues: Map<String, String> =
+            roundTripped.fields.entries.associate { (key, value) -> key to value.content }
+        if (originalValues != roundTrippedValues) {
+            val changed = originalValues
+                .filter { (key, value) -> roundTrippedValues[key] != value }
+                .keys
+            return "字段值变化（$changed）"
         }
 
         // ★ CustomData（`KPEX_*` 插件字段就住在这里 —— 丢了等于通行密钥失效）

@@ -56,24 +56,68 @@ object ImportDuplicatePolicy {
     data class Conflict(val imported: VaultItem, val existingTitle: String)
 
     /**
-     * 计算重复情况。
+     * 一次导入的**分类计划**（2026-10-28 新增）。
      *
-     * @param imported 本次要导入的条目（已映射为领域模型）。
-     * @param existing 目标库**当前**的条目（未删除的，回收站里的不算 —— 回收站条目
-     *   按设计就是"用户不要了"，拿它来挡导入会让用户怎么导都导不进去）。
-     * @return 被判为"已存在"的条目（顺序与 [imported] 一致，便于提示时取前几条）。
+     * 把"新建 / 库里已存在 / 文件内重复"三类一次分完，预览与写入**共用这一份**。
+     * 此前的 `conflicts()` 只比现有库，文件内部的两条一样的会全部进"新建"，
+     * 于是同一次导入就能把重复原样复制一遍。
      */
-    fun conflicts(imported: List<VaultItem>, existing: List<VaultItem>): List<Conflict> {
-        if (imported.isEmpty()) return emptyList()
-        val byKey = HashMap<Key, String>(existing.size)
+    data class Plan(
+        /** 会被新建的条目（顺序与输入一致）。 */
+        val newItems: List<VaultItem>,
+        /** 与目标库已有条目冲突的（按输入顺序）。 */
+        val existingDuplicates: List<Conflict>,
+        /** 与**本批次前面某条**冲突的（按输入顺序；代表标题取先出现的那条）。 */
+        val inFileDuplicates: List<Conflict>,
+    )
+
+    /**
+     * 计算导入分类。
+     *
+     * 判定顺序（也是唯一口径）：
+     * 1. 与 [existing] 同键 ⇒ [Plan.existingDuplicates]；
+     * 2. 与**本批次已接受**的某条同键 ⇒ [Plan.inFileDuplicates]；
+     * 3. 其余 ⇒ [Plan.newItems]。
+     *
+     * ⚠️ 只有被接受的条目才进入 `seen`。被现有库挡下的条目不参与"批次内重复"判定，
+     * 否则同一份文件里重复三次的条目会报成"1 条已存在 + 2 条文件内重复"，而用户
+     * 真正需要知道的是"这 3 条一条都不会写"。
+     */
+    fun plan(imported: List<VaultItem>, existing: List<VaultItem>): Plan {
+        if (imported.isEmpty()) return Plan(emptyList(), emptyList(), emptyList())
+        val existingTitles = HashMap<Key, String>(existing.size)
         existing.forEach { item ->
             // 同键多条（库里本来就有两份）：留最早一条的标题即可 —— 提示只需一个代表。
-            byKey.putIfAbsent(keyOf(item), item.title)
+            existingTitles.putIfAbsent(keyOf(item), item.title)
         }
-        return imported.mapNotNull { item ->
-            byKey[keyOf(item)]?.let { title -> Conflict(imported = item, existingTitle = title) }
+        val acceptedKeys = HashSet<Key>(imported.size)
+        val newItems = ArrayList<VaultItem>(imported.size)
+        val existingDuplicates = ArrayList<Conflict>()
+        val inFileDuplicates = ArrayList<Conflict>()
+        imported.forEach { item ->
+            val key = keyOf(item)
+            val existingTitle = existingTitles[key]
+            when {
+                existingTitle != null -> existingDuplicates += Conflict(item, existingTitle)
+                !acceptedKeys.add(key) -> inFileDuplicates += Conflict(item, item.title)
+                else -> newItems += item
+            }
         }
+        return Plan(
+            newItems = newItems,
+            existingDuplicates = existingDuplicates,
+            inFileDuplicates = inFileDuplicates,
+        )
     }
+
+    /**
+     * 只取"与现有库冲突"的部分。
+     *
+     * 保留这个入口是为了不破坏既有调用/单测；新代码请直接用 [plan] ——
+     * 只调这个函数就会漏掉"文件内重复"这一维（正是 2026-10-28 修掉的 bug）。
+     */
+    fun conflicts(imported: List<VaultItem>, existing: List<VaultItem>): List<Conflict> =
+        plan(imported, existing).existingDuplicates
 
     /** 归一化键：类型 + 去首尾空白并转小写的标题 + 同口径的用户名。 */
     fun keyOf(item: VaultItem): Key = Key(

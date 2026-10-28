@@ -305,10 +305,11 @@ class FolderRepositoryImplTest {
     fun `KDBX 库建文件夹转交 KdbxItemRepository`() = runTest {
         coEvery { vaultDao.get(vaultId) } returns kdbxVaultRow()
         coEvery { kdbxItemWrites.createFolder(vaultId, null, "工作") } returns
-            Result.success(VaultSaveOutcome.Queued)
+            Result.success(VaultFolder(id = "kdbx-group:new", name = "工作"))
 
-        assertThat(repo.createFolder(vaultId, "工作").isSuccess).isTrue()
+        val created = repo.createFolder(vaultId, "工作").getOrThrow()
 
+        assertThat(created.id).isEqualTo("kdbx-group:new")
         coVerify(exactly = 1) { kdbxItemWrites.createFolder(vaultId, null, "工作") }
         coVerify(exactly = 0) { api.createFolder(any()) }
     }

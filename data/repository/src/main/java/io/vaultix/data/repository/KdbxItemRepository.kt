@@ -35,12 +35,14 @@ import io.vaultix.database.dao.VaultDao
 import io.vaultix.data.kdbx.Kdbx
 import io.vaultix.data.kdbx.KdbxFailure
 import io.vaultix.data.kdbx.KdbxWriteFailure
+import io.vaultix.data.kdbx.folderIdOf
 import io.vaultix.data.repository.kdbx.CachedKdbxFile
 import io.vaultix.data.repository.kdbx.KdbxAutoUploader
 import io.vaultix.data.repository.kdbx.KdbxCloudSyncCoordinator
 import io.vaultix.data.repository.kdbx.KdbxFileCache
 import io.vaultix.domain.VaultSaveOutcome
 import io.vaultix.model.KdbxCloudSyncStatus
+import io.vaultix.model.VaultFolder
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
 import javax.inject.Inject
@@ -144,11 +146,15 @@ class KdbxItemRepository @Inject constructor(
         vaultId: String,
         parentFolderId: String?,
         name: String,
-    ): Result<VaultSaveOutcome> = withContext(Dispatchers.IO) {
+    ): Result<VaultFolder> = withContext(Dispatchers.IO) {
         runCatching {
             val write = Kdbx.createFolder(vaultId, parentFolderId = parentFolderId, name = name)
                 .getOrElse { throw it.toUserFacing() }
+            // entryUuid 位放的是新组 uuid（见 KdbxItemWriter.createGroup 的 KDoc）。
+            val uuid = write.entryUuid ?: error("新建分组没有返回 id，未做任何改动")
+            val folder = VaultFolder(id = folderIdOf(uuid), name = name)
             persist(vaultId, write)
+            folder
         }
     }
 
@@ -304,7 +310,7 @@ class KdbxItemRepository @Inject constructor(
  * 与 `KdbxItemMapper.toVaultItem` 的产出集、`ui/common/ItemTypePolicy.kt` 的
  * 表单裁剪集三处同源 —— 各自有单测钉住，改一处必须同步另两处。
  */
-private val KDBX_SUPPORTED_TYPES = setOf(VaultItemType.Login, VaultItemType.SecureNote)
+internal val KDBX_SUPPORTED_TYPES = setOf(VaultItemType.Login, VaultItemType.SecureNote)
 
 /**
  * 类型的中文名（只给 [requireSupportedType] 的拒绝文案用）。

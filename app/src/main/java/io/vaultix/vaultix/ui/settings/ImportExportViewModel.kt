@@ -30,6 +30,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import io.vaultix.domain.ImportPlan
+import io.vaultix.domain.ImportResult
 import io.vaultix.domain.ImportedVault
 import io.vaultix.domain.VaultExportRepository
 import io.vaultix.domain.VaultImportException
@@ -93,14 +94,24 @@ class ImportExportViewModel @Inject constructor(
             get() = !decoding && !importUri.isNullOrBlank() && importPassword.isNotEmpty()
 
         /**
-         * 确认导入按钮可用：预览 + 预演都出来了 + 非忙碌。
+         * 确认导入按钮可用：预览 + 预演都出来了、预演里确实有可写条目、非忙碌。
          *
-         * 预演没算完就允许点，等于让用户在**看不到"会新建几条"**时按下不可撤销的批量写。
+         * 预演没算完就允许点，等于让用户在**看不到"会新建几条"**时按下不可撤销的批量写；
+         * `newItemCount == 0`（全是重复 / 不支持）时按钮也必须灰掉 —— 否则点下去只会
+         * 得到一次"导入 0 条"的空操作。
          */
-        val canApply: Boolean get() = !importing && importPreview != null && importPlan != null
+        val canApply: Boolean
+            get() = !importing && importPreview != null && (importPlan?.newItemCount ?: 0) > 0
 
-        /** 文件里全部条目都已存在（预演算完且新建数为 0）—— 按钮该灰掉并说明原因。 */
-        val allDuplicated: Boolean get() = importPlan?.let { it.newItemCount == 0 && it.duplicateCount > 0 } == true
+        /** 预演算完但没有任何会写进去的条目（全重复 / 不支持）—— 按钮灰掉并说明原因。 */
+        val nothingImportable: Boolean get() = importPlan?.let { it.newItemCount == 0 } == true
+
+        /** 文件里全部条目都已存在（用于选"都已存在"文案）。 */
+        val allDuplicated: Boolean
+            get() = importPlan?.let {
+                it.newItemCount == 0 && it.duplicateCount > 0 &&
+                    it.duplicateInFileCount == 0 && it.unsupportedCount == 0
+            } == true
 
         companion object {
             /** 文件密码最短长度（对齐官方「弱密码」判定的下限口径）。 */
@@ -115,8 +126,8 @@ class ImportExportViewModel @Inject constructor(
         /** 导出成功（写盘完成后由 UI 回执，这里只用于提示文案）。 */
         data object ExportDone : Event
 
-        /** 导入成功，携带实际写入条目数。 */
-        data class ImportDone(val count: Int) : Event
+        /** 导入结束，携带实际写入与各类跳过/失败明细。 */
+        data class ImportDone(val result: ImportResult) : Event
     }
 
     private val _state = MutableStateFlow(UiState())
@@ -290,7 +301,12 @@ class ImportExportViewModel @Inject constructor(
         )
     }
 
-    /** 把预览内容逐条写入当前库（增量，不覆盖已有条目；已存在的跳过）。 */
+    /**
+     * 把预览内容写入当前库：**先补缺失文件夹**，再逐条新建。
+     *
+     * 跳过三类（已存在 / 文件内重复 / 当前库不支持）与逐条失败都会计数，
+     * 由 [Event.ImportDone] 一并交给 UI —— 不再只报一个"成功 N 条"。
+     */
     fun applyImport() {
         val current = _state.value
         val preview = current.importPreview ?: return
@@ -305,7 +321,7 @@ class ImportExportViewModel @Inject constructor(
         viewModelScope.launch {
             val result = runCatching { exportRepository.applyImportedVault(vaultId, preview) }
             result.fold(
-                onSuccess = { count ->
+                onSuccess = { result ->
                     _state.update {
                         it.copy(
                             importing = false,
@@ -315,7 +331,7 @@ class ImportExportViewModel @Inject constructor(
                             importFileName = "",
                         )
                     }
-                    _events.send(Event.ImportDone(count))
+                    _events.send(Event.ImportDone(result))
                 },
                 onFailure = { error ->
                     _state.update {

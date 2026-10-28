@@ -114,7 +114,8 @@ class FoldersViewModel @Inject constructor(
     )
 
     fun create(name: String) = launchWrite(Done.Created) {
-        folderRepository.createFolder(vaultId, name)
+        // 仓储返回新建文件夹（含 id）；本页只关心成功/失败。
+        folderRepository.createFolder(vaultId, name).map { }
     }
 
     fun rename(folderId: String, newName: String) = launchWrite(Done.Renamed) {

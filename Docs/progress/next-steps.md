@@ -2280,6 +2280,8 @@ workflow 顺序 = **detekt → compile**；detekt 一红即中断 ⇒ 编译步�
 ### 另：参考源码本地副本（不纳入 git / 不同步 GitHub）
 
 `D:\Vaultix-refs\bitwarden-android` @`74c0e04`、`D:\Vaultix-refs\keyguard-app` @`f95c865`（`--depth 1`）。
+> ⚠️ 以上为**当时快照**；2026-10-28 已刷新（bitwarden `1e624ad` / keyguard `693c2073`），
+> 现况以 [`.ai/conventions/8.10`](../../.ai/conventions/8.10-架构与目录地图.md) §6.1 为准。
 
 ## 第三十三轮 2026-09-11 · 搜索框按 Bitwarden 标准重写 + 打通 GitHub 推送
 
