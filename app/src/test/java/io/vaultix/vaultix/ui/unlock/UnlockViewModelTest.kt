@@ -250,8 +250,9 @@ class UnlockViewModelTest {
         //   「VM 真的把协程挂在我注入的 scope 上」这个前提上。
         //   把 VM 里的 `testingScope ?: viewModelScope` 改成直接用 `viewModelScope`
         //   时，下面的断言必须红 —— 否则"注入成功"只是错觉，回归会静默通过。
-        val viewModel = unlockViewModel { flowOf(lockedVaults) }
-        advanceUntilIdle()
+        // ⚠️ 不启动观察协程、也不 advanceUntilIdle：本用例只验 scope 注入，
+        //    让协程跑起来反而会把续体拖进已被卸下的 Dispatchers.Main（CI 偶发）。
+        val viewModel = unlockViewModel(startObservers = false) { flowOf(lockedVaults) }
 
         val usedScope = viewModel.probeOwnScope()
         // 判据 = **同一个 Job**：注入失败时 VM 拿到的是 `viewModelScope`，Job 不同。
@@ -300,6 +301,12 @@ class UnlockViewModelTest {
     private fun TestScope.unlockViewModel(
         available: Boolean = true,
         scope: Set<String> = emptySet(),
+        /**
+         * 是否启动观察协程。**只验作用域注入的用例传 false**：
+         * 它们不需要任何协程真的跑起来，而启动后一旦有续体落到
+         * `Dispatchers.Main`（`@After resetMain()` 已卸下）就会偶发炸。
+         */
+        startObservers: Boolean = true,
         vaultFlow: () -> Flow<List<VaultSummary>>,
     ): UnlockViewModel {
         val repository = mockk<VaultRepository>()
@@ -368,7 +375,7 @@ class UnlockViewModelTest {
             //   **旧的**那个 TestMainDispatcher）上。`@After resetMain()` 卸掉它时，
             //   正在跑的协程就炸 `Dispatchers.Main was accessed …`。
             //   CI run 40563967972 的 `fingerprintEntryStaysHiddenWhen…` 即此（偶发）。
-            it.startObservers()
+            if (startObservers) it.startObservers()
         }
     }
 
