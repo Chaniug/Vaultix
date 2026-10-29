@@ -410,7 +410,7 @@
 |---|---|
 | 本地脚本（8 项） | ✅ 索引一致性 ✅ |
 | 新增单测 | +27 例（`LogScrubberTest` / `PasskeyExcludePolicyTest` / `CipherMapperPasswordRevisionTest` / `UpdateCheckerTest`） |
-| 编译 / detekt | **待 CI**（沙箱无 Android SDK） |
+| 编译 / detekt | ✅ CI run **40908552787**（head `358c7a6`）：10 模块 detekt + 9 模块单测 + `assembleFullDebug`，`e:` **0** |
 | 发版 | v0.10.3 已发（`d631c3d`）；#204 的校验和区块在真实发版路径上验过 ⇒ **闭环** |
 
 ### 已知未做（2026-10-29 重新核实过）

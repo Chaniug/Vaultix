@@ -30,7 +30,7 @@
 ProviderConfiguration / Custom）⇒ **"我记得有这个类"不算数，依赖里的类名要数一遍**；
 ② **`const val` 不能写在普通 class 里**（顶层 / object / companion 才行）。
 
-**门禁**：本地 8 项脚本全过（索引 = 题注 = 正文）· 新增 **27 例**单测 · 编译/detekt **待 CI**。
+**门禁**：本地 8 项脚本全过（索引 = 题注 = 正文）· 新增 **27 例**单测 · CI run **40908552787** ✅（10 个模块 detekt + 9 个模块单测 + `assembleFullDebug`，`e:` 0，**一轮过**）。
 
 **待真机验收**：
 ① 开发者日志里含 `password=` 的行应显示 `<redacted>`，系统噪声不再刷屏；
