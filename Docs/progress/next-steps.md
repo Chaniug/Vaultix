@@ -2,6 +2,44 @@
 
 ---
 
+## ✅ 查漏补齐四项（2026-10-29）· #206–#209
+
+用户：「继续完成计划的开发任务，修复漏洞。查漏补齐」。做法：**先把 `current-status` 里
+挂着的那七类「已知未做」逐个 grep 核实**（清单会过期，照着做会"修"一个已经修好的），
+再挑出四项小而实的落地。完整流水见 `.ai/SESSION-2026-10-29.md`。
+
+| # | 问题 | 修法 |
+|---|---|---|
+| #206 | 开发者日志**屏幕显示没有脱敏**（脱敏只挂在导出出口），且 `E/F` 兜底（`\|\| level in "EF"`）把白名单**架空** | 抽 `LogScrubber`：**采集即脱敏**（显示与导出都干净）；兜底收窄为「**且**含 `vaultix`」 |
+| #207 | 镜像开关打开时下载页指向 `ghproxy.net`，App 内**没有任何**官方校验和入口 | `UpdateCheckResult.checksumsUrl`（挑 `checksums-sha256.txt`）+ 对话框「核对校验和」；**该地址不走镜像** |
+| #208 | 注册请求里的 `excludeCredentials` **全仓零命中** ⇒ 同站点能注册出两把密钥 | `PasskeyExcludePolicy`（解析失败=空集合；命中=拦）；`CreateCredentialCustomException("InvalidStateError")` |
+| #209 | 改密码后 `passwordRevisionDate` 不更新、密码历史**永不增长**（两段都只透传） | `passwordRevisionPlan()`：一次解密算两笔账（新 revision + 旧密码进历史，沿用原密文不重加密）；上限 20 |
+
+**⚠️ 四条最值得记住的判据**：
+1. **审计清单是"当时的结论"，不是"现在的现状"** —— 本轮就抓到一条已经修好的
+   （`UpdateChecker` 走 ghproxy：镜像只作用于下载页、且**默认关闭**）。动手前 grep 一遍。
+2. **脱敏要保护的是"看的人"，不只是"分享出去的那份"**；**兜底只能比主判据更严**，
+   比主判据更宽的兜底等于没有判据（#206 的 `\|\| level in "EF"`）。
+3. **校验物的来源必须与被测物独立**（#207）—— 拿镜像给的校验和验镜像给的 APK 是没验。
+4. **「沿用服务端原密文」是手段（别整条重写），不是目的（保持原样）**（#209）——
+   这条防丢失的纪律被错误套到了恰恰应该变化的字段上，症状是"不报错但结果是假的"。
+
+**⚠️ 两个沙箱代价（各值一整轮 CI，已自查拦下）**：
+① androidx.credentials **1.6.0 没有** `CreateCredentialInvalidStateException`
+（下载 AAR 数过：只有 Unknown / Cancelled / Interrupted / NoCreateOption / Unsupported /
+ProviderConfiguration / Custom）⇒ **"我记得有这个类"不算数，依赖里的类名要数一遍**；
+② **`const val` 不能写在普通 class 里**（顶层 / object / companion 才行）。
+
+**门禁**：本地 8 项脚本全过（索引 = 题注 = 正文）· 新增 **27 例**单测 · 编译/detekt **待 CI**。
+
+**待真机验收**：
+① 开发者日志里含 `password=` 的行应显示 `<redacted>`，系统噪声不再刷屏；
+② 检查更新 → 有更新时出现「核对校验和」且能打开官方 txt；
+③ 同一站点重复创建通行密钥应被拒（不是又建一把）；
+④ 改一次密码 → 网页端 / 其它客户端应看到密码历史多一条、`passwordRevisionDate` 变新。
+
+---
+
 ## ✅ 文件夹 CRUD（2026-10-27）· #199
 
 用户：「继续开发，完善设置，以及日常的功能」。挑的是功能盘点里**唯一"看得见、动不了"**的一块：
@@ -131,7 +169,7 @@
 ③ 关闭后回到原实心底栏；④ 深色 + 动态色不显脏；⑤ 底栏三段两种外观下布局完全一致。
 
 **审计里尚未落地的（下一批，按优先级）**：
-① `excludeCredentials` 不读（注册时不会提示"这站点已有这把密钥"）；
+① ~~`excludeCredentials` 不读~~ → **已修** #208（2026-10-29）；
    ~~通行密钥候选不做 Origin 校验~~ / ~~`authenticatorSelection` 不读~~ → **已修** #196/#197；
    `backupEligible/backedUp` 强制 true → **有意为之**，不改（见 `WebAuthn` KDoc）；
 ② PIN 熔断无冷却 + 忘记 PIN 绕过；「从不」档 KEK 不绑认证；

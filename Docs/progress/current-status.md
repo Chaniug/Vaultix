@@ -384,3 +384,42 @@
 6. `UpdateChecker` 走 `ghproxy.net` 且不校验 SHA-256；`FillAssistRepository` 默认联网拉规则；
    `DeveloperLogsDialog` 的 E/F 兜底不脱敏；
 7. `KdbxRoundTrip.verify` 只比字段名不比值；`KdbxFidelity.NON_DEFAULT_CIPHER` 从不产生。
+
+---
+
+## 当前状态（2026-10-29）
+
+> 本节是**现状快照**，取代上方所有历史轮次记录（那些保留作过程留痕）。
+
+### 本轮：查漏补齐四项（#206–#209）
+
+做法：先把上面「已知未做」那七类**逐个 grep 核实**（清单会过期），再落地四项。
+核实结论里有两条清单已经过期：`UpdateChecker` 走 ghproxy（镜像只作用于下载页、
+**默认关闭**）、`KdbxRoundTrip.verify` 比字段值（10-28 那批已修）。
+
+| # | 一句话 | 关键判据 |
+|---|---|---|
+| #206 | 开发者日志**屏幕显示没脱敏** + `E/F` 兜底架空白名单 | **脱敏保护的是"看的人"**；**兜底只能比主判据更严** |
+| #207 | 镜像下载后无处可验 → 「核对校验和」入口（**不走镜像**） | **校验物来源必须与被测物独立** |
+| #208 | `excludeCredentials` 从不读 ⇒ 同站点能注册两把密钥 | 规范写死的语义，不实现就是洞 |
+| #209 | 改密码后 revision 不更新、密码历史**永不增长** | **「沿用原密文」是手段，不是目的** |
+
+### 门禁
+
+| 项 | 结果 |
+|---|---|
+| 本地脚本（8 项） | ✅ 索引一致性 ✅ |
+| 新增单测 | +27 例（`LogScrubberTest` / `PasskeyExcludePolicyTest` / `CipherMapperPasswordRevisionTest` / `UpdateCheckerTest`） |
+| 编译 / detekt | **待 CI**（沙箱无 Android SDK） |
+| 发版 | v0.10.3 已发（`d631c3d`）；#204 的校验和区块在真实发版路径上验过 ⇒ **闭环** |
+
+### 已知未做（2026-10-29 重新核实过）
+
+1. **自动拉取零接线**（`SyncTrigger.PAGE_ENTER / APP_RESUME / PERIODIC`）——
+   ⚠️ **不是漏做，是 2026-09-08 决定不做**（「自动同步 = 本地修改 flush；拉取 = 手动」），
+   要改须先动决策，不是补代码；
+2. PIN 熔断无冷却；「从不」档 KEK 不绑认证（**忘记 PIN 入口已于 #161/B5 落地**）；
+3. 安全中心（M3）**整块为空**；`Docs/08` S11–S20 多项未做（`archivedDate` 无字段）；
+4. 附件**只能看不能加**；**无 CSV 导入**；
+5. `FillAssistRepository` 默认联网拉规则（无开关）；
+6. `KdbxFidelity.NON_DEFAULT_CIPHER` 从不产生（只声明、未检测）。

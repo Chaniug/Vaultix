@@ -9,13 +9,13 @@
 
 | 分篇 | 主题 | 条数 |
 |---|---|---|
-| [01-构建与环境](./issues/01-构建与环境.md) | 工程 / 构建 / CI / 工具链 / 环境 | 56 |
+| [01-构建与环境](./issues/01-构建与环境.md) | 工程 / 构建 / CI / 工具链 / 环境 | 57 |
 | [02-自动填充](./issues/02-自动填充.md) | 自动填充（AutofillService 链路） | 19 |
-| [03-通行密钥与凭据提供商](./issues/03-通行密钥与凭据提供商.md) | 通行密钥 / Credential Provider / 凭据回灌 | 22 |
+| [03-通行密钥与凭据提供商](./issues/03-通行密钥与凭据提供商.md) | 通行密钥 / Credential Provider / 凭据回灌 | 23 |
 | [04-锁与解锁](./issues/04-锁与解锁.md) | 锁态模型 / 解锁 / 生物识别 / 密钥 | 16 |
 | [05-KDBX本地库](./issues/05-KDBX本地库.md) | KDBX 本地库 | 23 |
-| [06-界面与交互](./issues/06-界面与交互.md) | 界面 / 布局 / 交互动效 / 空态 / 图标 | 48 |
-| [07-数据与同步](./issues/07-数据与同步.md) | 数据模型 / 同步 / 会话 | 24 |
+| [06-界面与交互](./issues/06-界面与交互.md) | 界面 / 布局 / 交互动效 / 空态 / 图标 | 49 |
+| [07-数据与同步](./issues/07-数据与同步.md) | 数据模型 / 同步 / 会话 | 25 |
 
 > ✅ **2026-10-02 全息核对：七篇数字全部由「`## NN.` 实测」重数，非增量修订。**
 > 上一版此列 36/18/16/11/10/33/6 —— 与实测差 **12 / 0 / 1 / 0 / 4 / 4 / 13** 条。
@@ -37,7 +37,7 @@
 
 ## 编号 → 分篇
 
-### [01-构建与环境](./issues/01-构建与环境.md) — 工程 / 构建 / CI / 工具链 / 环境（56 条，缺 #3、#8、#15、#16、#20…：#3/15 归 04、#16 归 02、#20 归 06）
+### [01-构建与环境](./issues/01-构建与环境.md) — 工程 / 构建 / CI / 工具链 / 环境（57 条，缺 #3、#8、#15、#16、#20…：#3/15 归 04、#16 归 02、#20 归 06）
 
 | # | 标题 |
 |---|---|
@@ -97,6 +97,7 @@
 | 193 | 🔴 `release.yml` 仍写死 `gradle-version: 8.11.1`（wrapper 是 9.5.1）—— `ci-debug.yml` 2026-10-02 就修过，**release 这条路漏网**。后果：白下载 / 缓存分区无效 / **改 `./gradlew` 为 `gradle` 会静默掉版**。修法 = 删 `gradle-version:`（版本只有一个来源）+ 兜底从 properties 读 |<br>⚠️ sed 分隔符必须 `#`（`(bin|all)` 会让 `s` 提前结束）。<br>判据：**"两处写同一个事实"必然分叉**，修法不是"记得两边都改"，是**让事实只有一个来源** |
 | 201 | 🔴 **CI 全绿也照样发不了版**：`ci-debug.yml` 的 `Run lint` 带 `if: github.event_name != 'push'` ⇒ push 到 `main` 时**根本不跑 lint**（只有 PR 才跑）， 而 release 构建默认跑 `lintVital`、**fatal 直接中断构建** ⇒ 任何 lint fatal 都被推迟到**发版那一刻**才暴露。本次 v0.10.1 首发失败即 `:app:lintVitalFullRelease` 报 `Unexpected domain cache` ×3（`backup_rules.xml` / `data_extraction_rules.xml`）| <br>修法：删掉那三行 `<exclude domain="cache" path="." />` —— 合法 domain 只有 `file`/`database`/`sharedpref`/`external`/`root`（及 `device_*`），**没有 `cache`**；而 cache 目录本来就不参与备份，那三行既非法又多余（#186 写它是想"显式声明防将来改"）。<br>🔴 判据：**被跳过的步骤就是盲区** —— `if:` 让它消失的那一步，等于"只在发版那天跑一次"；写"门禁全绿"要说清绿的是哪几条。**`lintVital` 的 fatal ≠ 普通 lint 警告**（前者中断 release、debug 构建完全无感）。<br>⚠️ 资源 XML 的错误**不在 Kotlin 编译里** ⇒ 本次日志 `e:` 为 0 却 `BUILD FAILED`，失败信息只在 `What went wrong` 里。<br>🔁 删掉三行后调试 CI（run 40554694782）立刻红：`BackupPolicyConfigTest` 的期望表里把 `cache` 也列为"必须排除"，**同一个错误的两个副本只改了一处**。已补一条更值钱的断言：排除项的 domain 必须在白名单 `root/file/database/sharedpref/external` 内 —— 把"只有 lint 才知道的约束"搬进毫秒级 JVM 单测。<br>⚠️ 该断言扫**整份文件文本**，XML 注释里若写出可被解析的非法标签，会在"已改对"时误报 ⇒ **注释里写反例 = 给扫描器喂假阳性**。<br>建议（未做）：把 lint 加回 push 路径，或在 release 前单独跑一次 `:app:lintVitalFullRelease` |
 | 204 | 🟡 **发布说明里的校验和显示成 shell 命令原文**：v0.10.2 的 Release 页面「校验和」区块印的是 `$(cat "$GITHUB_WORKSPACE/checksums-sha256.txt" …)` 本身。根因 = `softprops/action-gh-release` 的 `with.body:` 是 **YAML 字符串**，不是 shell，`$( )` 不会展开。修法 = 文件内容做成 step output，body 用 `${{ steps.apk_meta.outputs.checksums }}` |<br>判据：**`run:` 是 shell，`with:` 是模板** —— `with:` 里出现 `$(`、反引号、`\&\&`、`||` 都是写错了地方；这类错误**不会让构建失败**（只是内容不对），只能靠**打开产物看一眼**发现 |
+| 207 | 「核对校验和」入口：镜像下载之后无处可验 |
 
 ### [02-自动填充](./issues/02-自动填充.md) — 自动填充（AutofillService 链路）
 
@@ -150,6 +151,7 @@
 | 196 | 🔴 创建通行密钥**完全不校验** origin 与 rpId 的从属关系：origin 推导顺序与 GET 侧相反，且末级是**凭空构造**的 `"https://$rpId"`（任何没带 origin 的请求都被判合法）⇒ 新建 `PasskeyOriginPolicy`（主机相等、或 rpId 为可注册后缀、且 rpId 不得宽于可注册域），删掉凭空构造的兜底，`Rejected` 直接 `fail`（**文案不含域名**，reason 只进日志） |<br>⚠️ **不能用 `UriMatcher.sameSite`**：那是 Cookie 口径（可注册域相等），会让 `a.example.com` 与 `b.example.com` 互相通过，而 WebAuthn 里两者互不通用。<br>顺带核实**不是漏洞**：`isSameRpId` 是精确匹配（合规）；`CallingAppOrigin` 已是自证式读取 |
 | 197 | 🔴 `authenticatorSelection.residentKey` 从不读，`discoverable` 硬编码 `true` ⇒ 库里所有通行密钥都自称可发现凭证，筛选 / 统计全错，条件发现流程会把 RP 声明为 `discouraged` 的凭证也列出来 ⇒ 新建 `PasskeyAuthenticatorSelection`，按 `required` / `preferred` / `discouraged` / 旧 `requireResidentKey` / 缺省 逐项判定 |<br>⚠️ 缺省记 `true` 是**有意偏离** WebAuthn L2 的 `discouraged` 默认（与 Bitwarden Android 一致），理由见类 KDoc。<br>🔴 本条顺带挖出**测试基建坑**：单测里的 `org.json` 是 mockable 空壳（连 `JSONObject(String)` 构造器都是空的）⇒ `testRuntimeOnly(libs.org.json)` + `UnitTestEnvironmentTest` 守卫，详见 03 篇 #197.4 |
 | 190 | 见 05 篇 #190（内容指纹全字段，含 `fido2Credentials` 11 字段） |
+| 208 | 注册请求里的 `excludeCredentials` **从不读** |
 
 ### [04-锁与解锁](./issues/04-锁与解锁.md) — 锁态模型 / 解锁 / 生物识别 / 密钥
 
@@ -204,7 +206,7 @@
 | 169 | A4：KDBX 安全笔记类型往返翻转 —— 空笔记（备注可空）三字段全空 ⇒ 启发式判登录 ⇒ 存盘再读回**静默翻成登录**（落 `VPX_SECURE_NOTE` 工具区；读侧三态：marker 优先 / 缺失回落 / 显式假值信任标记；#121 三态压二值同款事故） |
 | 170 | A6：KDBX 标准字段「内存保护」属性被静默剥掉 —— Title/UserName/Notes 无条件写 Plain，第三方库受保护的用户名/备注落盘即丢 `Protected="True"`（丢的不是值，是值的属性；从序列化边界倒推坐实） |
 
-### [06-界面与交互](./issues/06-界面与交互.md) — 界面 / 布局 / 交互动效 / 空态（48 条，2026-09-26 起含 #120–#123、#126、#127；2026-10-01 起含 #142–#144；2026-10-04 起含 #162；2026-10-21 起含 #177；2026-10-22 新增 #181 详情页假"不存在"；2026-10-24 新增 #182 筛选面板边界与滚动后展开、#183 权限页行尾不齐与状态卡曲率、#184 首启 3 页引导；2026-10-27 新增 #198 底栏液态玻璃、#199 文件夹 CRUD；2026-10-28 新增 #200 液态玻璃整页变白、#205 底栏高度塌 0）
+### [06-界面与交互](./issues/06-界面与交互.md) — 界面 / 布局 / 交互动效 / 空态（49 条，2026-09-26 起含 #120–#123、#126、#127；2026-10-01 起含 #142–#144；2026-10-04 起含 #162；2026-10-21 起含 #177；2026-10-22 新增 #181 详情页假"不存在"；2026-10-24 新增 #182 筛选面板边界与滚动后展开、#183 权限页行尾不齐与状态卡曲率、#184 首启 3 页引导；2026-10-27 新增 #198 底栏液态玻璃、#199 文件夹 CRUD；2026-10-28 新增 #200 液态玻璃整页变白、#205 底栏高度塌 0）
 
 | # | 标题 |
 |---|---|
@@ -256,8 +258,9 @@
 | 199 | 🟢 **文件夹 CRUD**（新建 / 重命名 / 删除）此前**整条写路径不存在**：`FolderRepository` 只有读、`FolderDao` 只有整体替换 ⇒ 用户看得见文件夹却建不了改不了删不了。用户选定三个决策点：**直连 API 失败当场报错** / **KDBX 分组一并支持** / 入口在 **⋮ 菜单「前往」组** |<br>🔴 **为什么不能照搬条目的「本地先行 + pending_ops」**：① `pending_ops` 主键是 `cipherId` + 五种 cipher 操作，装不进 folder；② **`pruneRemovedRows` 会把本地新行当已删清掉** ⇒ 刚建未推的文件夹被下次同步静默删除；③ `FolderDao` 无单行 upsert。⇒ 成功才写本地，失败一个字不改（代价：离线不能建）。<br>🔴 名字禁 `/` `\`：KDBX 的 `VaultFolder.name` 是**完整路径**，带分隔符则层级不可解析。<br>🔴 **两种库删除语义必须分文案**：Bitwarden 只脱标签（条目不删）/ KDBX 递归删整棵子树（不可撤销）。<br>⚠️ `AtomicWriteDao` 的文件夹方法故意**非 abstract**（Room `@Upsert` 已注册实体形态）⇒ 5 个手写测试子类零改动；改回 abstract 会让它们全部编译失败，**这个失败是想要的**。<br>⚠️ 删除代价「数法只能有一处」（`deletionCostOf`），UI 侧 KDBX 那支**刻意不显示条目数**（子组没算进去会系统性偏小，给偏小的数字比不给更危险） |
 | 200 | 🔴 **液态玻璃开启后整个页面变白**（用户原话）—— #198.1 那一轮把源写成「只 `record` 进 layer、**屏幕上不落像素**」，而浮层只覆盖底栏一小块 ⇒ 其余整屏没有绘制命令 ⇒ 露出窗口底色。修法 = `record` 之后 `drawLayer(contentLayer)` **画回屏幕**（与 Haze 一致，所谓"有意分歧"不成立）|<br>🔴 **派生约束**：内容一旦靠 `drawLayer(contentLayer)` 回屏，模糊就**不能**再挂 contentLayer（一块 layer 只有一个 renderEffect，会连屏幕那份一起糊）⇒ 必须挂**独立中转层 effectLayer**（`record(源尺寸){ drawLayer(contentLayer) }` → 挂模糊 → 画到浮层）。<br>⚠️ 采样偏移 `translate(offset.x, offset.y)` 用的是**同值**，不是它的相反数（上一轮写成 `-offset`，糊的是屏幕外一块空白；已抽 `backdropOffset` 纯函数 + 4 例单测）。<br>⚠️ `GraphicsLayer.record` 只有 `ContentDrawScope` 的成员扩展 ⇒ 浮层必须用 `drawWithContent`；且 `record` 不传 `size` 会按浮层尺寸裁内容 ⇒ 必须显式传源的 `IntSize`。<br>⚠️ 源只在 `开关 && isLiquidGlassBlurSupported()` 时登记（老设备别每帧白拷全屏）。<br>判据：**接管子树绘制到离屏 layer 时，必须先回答"屏幕上的像素由谁负责"** —— "没人画"在 Compose 里不是报错，是露底色 |
 | 205 | 🔴 **打开液态玻璃后整条底栏消失**：`LiquidGlassLayer` 的两个子节点都写 `matchParentSize()`，而它的语义是「跟随父尺寸、**不参与**父的尺寸计算」⇒ 父 `Box` 高度停在 `constraints.minHeight` = 0 ⇒ 子节点被 `Constraints(minHeight=0,maxHeight=0)` 测成 0 高 ⇒ `clip(shape)` 裁光。宽度没事是因为外层 `fillMaxWidth()` 给了 `minWidth=maxWidth`。修法 = 层 B 改 `fillMaxWidth()`（按内容测高），成为唯一参与父测量的子节点 |<br>判据：**`matchParentSize` 只能"盖在别人身上"，不能"撑起父容器"** —— 每写一个都要指出"谁在决定父尺寸"，指不出来就是 0。<br>⚠️ 藏了两轮才被发现：第二轮修完是"整页变白"，**屏幕一片白时看不出底栏没了** ⇒ 主诉症状缓解后要**重新完整过验收清单** |
+| 206 | 开发者日志：屏幕显示没有脱敏，`E/F` 兜底把白名单架空 |
 
-### [07-数据与同步](./issues/07-数据与同步.md) — 数据模型 / 同步 / 会话（24 条；2026-10-01 起含 #147–#152；2026-10-20 新增 #180 下载窗口覆盖本地编辑；2026-10-25 新增 #185 写回基线盲区；2026-10-26 新增 #190 409 弃单、#192 空分组误删；2026-10-28 新增 #202 重复导入去重）
+### [07-数据与同步](./issues/07-数据与同步.md) — 数据模型 / 同步 / 会话（25 条；2026-10-01 起含 #147–#152；2026-10-20 新增 #180 下载窗口覆盖本地编辑；2026-10-25 新增 #185 写回基线盲区；2026-10-26 新增 #190 409 弃单、#192 空分组误删；2026-10-28 新增 #202 重复导入去重）
 
 | # | 标题 |
 |---|---|
@@ -285,3 +288,4 @@
 | 190 | 🔴 **409 Conflict 被当「确定性失败」弃单**（`(400..499)` 一刀切）⇒ 删队列行不重试 ⇒ 远端那条改动**永久丢失**、无提示、无残留。修法 = `HTTP_CONFLICT` 从集合剔除 + `handleOperationFailure()`（409 走 `incrementRetry`）。⚠️ 拆方法是被 detekt 逼的（圈复杂度 16>14，且**提前 return 也算分支**）。⚠️ 测试 404 用例一开始**假红**：夹具 `payload="{}"` 缺 `CipherRequest.type`，请求还没发就抛 `MissingFieldException` 被归成网络类 |<br>判据：**4xx ≠ 可以扔**，401/408/409/429 都是「再试」类 |
 | 192 | 🔴 `pruneRemovedRows` 把「远端没返回分组」当「远端删了分组」⇒ 一次不完整响应能清空本地所有文件夹。修法 = 空分组 + 待删 ≥3 时只报警不删（1~2 个放行，日常删除照常通过） |<br>判据：**「远端没有」≠「远端删了」**，批量删除必须有数量熔断且熔断在保守侧 |
 | 202 | 🔴 **重复导入 = 每个条目两份**：`applyImportedVault` 一律逐条新建、从不合并 ⇒ 用户导两次，库里每条两份，**改了一份、自动填充撞另一份**。修法 = `ImportDuplicatePolicy`（判重键 **type+title+username**，trim+小写归一化）+ `previewImport` 预演「新建 N / 已存在 M」+ 预演没出来时「确认导入」点不动 |<br>判据：**批量且不可撤销的写，之前必须给出可核对的数字，且数字与实际写入一致**；**判重口径只能有一处**。不静默跳过 —— 悄悄跳过用户只会以为文件少了条 |
+| 209 | 改密码后：`passwordRevisionDate` 不更新、密码历史永不增长 |
