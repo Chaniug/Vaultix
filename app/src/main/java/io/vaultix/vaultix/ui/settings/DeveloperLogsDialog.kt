@@ -221,7 +221,9 @@ private fun captureLogcat(since: Double): List<LogEntry> = runCatching {
     raw.asSequence()
         .mapNotNull(::parseEntry)
         .filter { it.timestamp > since }
-        .filter { KEEP_PATTERN.containsMatchIn(it.text) || it.level in "EF" }
+        // ★ 先判定再脱敏：只给"确定要显示"的行付正则的成本。
+        .filter { LogScrubber.shouldKeep(it.text, it.level) }
+        .map { it.copy(text = LogScrubber.scrub(it.text)) }
         .toList()
 }.getOrElse { emptyList() }
 
@@ -260,18 +262,6 @@ private const val LOGCAT_FIELD_LIMIT = 6
 private val CLOCK_FORMAT = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
 
 /**
- * 关键字白名单：与本项目 adb 侧采集脚本（`.workbuddy/memory/2026-09-21.md` 记录的
- * `logcap.py`）保持**同一套口径**，避免"应用内看到的"和"adb 看到的"两套过滤互相打架。
- *
- * ⚠️ 不要退回"保留所有 E/F 级"：Honor 机型的 `afehal` / `WifiEnhanceServiceImpl` 等会刷屏，
- * 几十秒就能把有用记录淹没（这条是实测踩出来的）。
- */
-private val KEEP_PATTERN = Regex(
-    "Vaultix|Credential|passkey|Passkey|WebAuthn|Autofill|autofill|CredMan|FIDO|" +
-        "KeyStore|keystore|Biometric|AndroidRuntime|FATAL",
-)
-
-/**
  * 取日志级别字符。
  *
  * `-v time` 的行格式：`MM-DD HH:MM:SS.mmm PID TID L TAG: msg`
@@ -285,11 +275,12 @@ private fun levelColor(level: Char) = when (level) {
 }
 
 /**
- * 组装导出文本：头部元信息 + 日志正文（已脱敏）。
+ * 组装导出文本：头部元信息 + 日志正文。
  *
- * ⚠️ **脱敏必须在出口做一次**：Bastion 的对应实现只对"结构化日志"脱敏、
- * 而 `=== System Logcat ===` 段是原样导出的；我们的日志源**就是** logcat，
- * 所以出口这道脱敏是唯一的一道，不能省。
+ * ⚠️ **出口这道脱敏不能省**（#206）：正文在采集时已脱敏一次，这里再脱一次是**双保险** ——
+ * 头部是本机拼出来的（设备名 / 版本），而设备名可能带用户信息（如"张三的 Pixel"）。
+ * Bastion 的对应实现只对"结构化日志"脱敏、`=== System Logcat ===` 段原样导出；
+ * 我们的日志源**就是** logcat，所以这里必须有。
  */
 private fun buildExportText(context: Context, entries: List<LogEntry>): String {
     val header = buildString {
@@ -302,31 +293,8 @@ private fun buildExportText(context: Context, entries: List<LogEntry>): String {
         appendLine("device=${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}")
         appendLine()
     }
-    return sanitize(header + entries.joinToString("\n") { it.text })
+    return LogScrubber.scrub(header + entries.joinToString("\n") { it.text })
 }
-
-/**
- * 脱敏：**只做保守替换**，宁可多遮不可漏遮。
- *
- * 覆盖四类：`键=值` 形态的敏感键、邮箱、手机号、超长 base64/hex 串。
- * 最后一条是为了兜住"某个地方不小心把密钥/token 打进了日志"——
- * 项目纪律（`AutofillLogger` KDoc）要求只记非敏感元数据，但**纪律靠人守，脱敏靠机器**。
- */
-private fun sanitize(text: String): String {
-    var out = text
-    out = out.replace(SENSITIVE_KV) { m -> "${m.groupValues[1]}=<redacted>" }
-    out = out.replace(EMAIL, "<email>")
-    out = out.replace(PHONE, "<phone>")
-    out = out.replace(LONG_BLOB, "<redacted>")
-    return out
-}
-
-private val SENSITIVE_KV = Regex(
-    "(?i)(password|passwd|pwd|secret|token|api_?key|private_?key|recovery)\\s*[=:]\\s*\\S+",
-)
-private val EMAIL = Regex("[\\w.+-]+@[\\w-]+\\.[\\w.]+")
-private val PHONE = Regex("1[3-9]\\d{9}")
-private val LONG_BLOB = Regex("[A-Za-z0-9+/=]{40,}")
 
 /**
  * 写文件到 `cacheDir/dev_logs/` 并走 FileProvider + `ACTION_SEND` 分享出去。

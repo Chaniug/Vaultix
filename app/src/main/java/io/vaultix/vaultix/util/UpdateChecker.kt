@@ -67,6 +67,17 @@ data class UpdateCheckResult(
      * （见 `SettingsScreen.UpdateCheckDialog`）。
      */
     val releaseNotes: String? = null,
+    /**
+     * 官方 `checksums-sha256.txt` 的**直连**地址（release 没有该附件时为 null）。
+     *
+     * ★ 2026-10-29（#207）：镜像开关打开时，「前往下载」指向第三方镜像
+     * （`ghproxy.net`），用户**从那儿拿到的 APK 由镜像提供**。此时必须有一个
+     * **官方来源的校验和**可供比对，否则"下载完对不对得上"全凭信任镜像。
+     *
+     * ⚠️ 这个地址**绝不走镜像**（`mirrorUrl` 不作用于它）—— 拿镜像给的校验和
+     * 去验镜像给的 APK，等于什么都没验。
+     */
+    val checksumsUrl: String? = null,
 )
 
 /**
@@ -154,6 +165,13 @@ object UpdateChecker {
     /** 版本号退化为「取前 N 段数字」时取几段（`X.Y.Z` 三段）。 */
     private const val VERSION_PARTS_LIMIT = 3
 
+    /**
+     * 官方校验和附件的固定文件名（发版工作流 `release.yml` 产出，见 `.ai/issues/01` #204）。
+     *
+     * ⚠️ 名字变了这里要跟着改 —— **只有这一处**，`grep CHECKSUMS_ASSET_NAME` 可定位。
+     */
+    private const val CHECKSUMS_ASSET_NAME = "checksums-sha256.txt"
+
     private const val USER_AGENT = "Vaultix-Android"
 
     private const val CONNECT_TIMEOUT_SECONDS = 10L
@@ -197,6 +215,7 @@ object UpdateChecker {
             releaseNotes = release.body
                 ?.takeIf { it.isNotBlank() }
                 ?.takeIf { compareVersionTags(tag, currentVersion) > 0 },
+            checksumsUrl = pickChecksumsUrl(release.assets),
         )
     }
 
@@ -232,6 +251,8 @@ object UpdateChecker {
             publishedAtEpochSeconds = parseIsoEpochSeconds(preview.publishedAt),
             // 预览渠道：只在"确认有更新"时给正文（同 checkStable 的理由）。
             releaseNotes = preview.body?.takeIf { it.isNotBlank() }?.takeIf { hasUpdate },
+            // 预览包由 CI 直接覆盖同一个附件，发布流程不产校验和文件 ⇒ 通常为 null。
+            checksumsUrl = pickChecksumsUrl(preview.assets),
         )
     }
 
@@ -255,6 +276,17 @@ object UpdateChecker {
         if (body.isNullOrBlank()) throw IOException("未能获取发布信息")
         return body
     }
+
+    /**
+     * 从附件列表里挑出**官方**校验和文件的下载地址（#207）。
+     *
+     * @return 直连 `github.com` 的地址；列表为空 / 没有该附件 / 地址为空 ⇒ `null`
+     *   （拿不到就不给入口，不要编一个"看起来像"的地址）。
+     */
+    internal fun pickChecksumsUrl(assets: List<ReleaseAsset>?): String? =
+        assets?.firstOrNull { it.name.equals(CHECKSUMS_ASSET_NAME, ignoreCase = true) }
+            ?.downloadUrl
+            ?.takeIf { it.isNotBlank() }
 
     /** ISO-8601 UTC 时间戳 → epoch 秒；解析不出返回 null（时间只是附加信息，不该让检查失败）。 */
     private fun parseIsoEpochSeconds(value: String?): Long? =
@@ -301,6 +333,18 @@ object UpdateChecker {
     }
 }
 
+/**
+ * Release 的一个附件。
+ *
+ * ⚠️ **internal 不是随意**：[UpdateChecker.pickChecksumsUrl] 要被单测直接调用，
+ * 而 public 函数不能把 private 类型当参数（`ReleaseAsset` 是它的入参类型）。
+ */
+@Serializable
+internal data class ReleaseAsset(
+    val name: String = "",
+    @SerialName("browser_download_url") val downloadUrl: String = "",
+)
+
 @Serializable
 private data class GitHubRelease(
     @SerialName("tag_name") val tagName: String,
@@ -310,4 +354,6 @@ private data class GitHubRelease(
     @SerialName("published_at") val publishedAt: String? = null,
     /** Release notes（GFM Markdown）。UPDATE 2026-09-28：展示更新日志用。 */
     val body: String? = null,
+    /** 附件列表（从中挑官方校验和文件）。 */
+    val assets: List<ReleaseAsset>? = null,
 )

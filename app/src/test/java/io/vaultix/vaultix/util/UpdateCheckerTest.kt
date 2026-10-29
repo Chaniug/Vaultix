@@ -9,6 +9,7 @@
 package io.vaultix.vaultix.util
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -20,9 +21,10 @@ import org.junit.Test
  * "库怎么发请求"的实现细节上（换个 HTTP 客户端就得改测试），而对**行为正确性**
  * 的覆盖并不比端到端手测更强。网络那部分靠真机手动检查（设置 → 版本）验证。
  *
- * 这里只覆盖**不碰网络、但逻辑边界多**的两处：
+ * 这里只覆盖**不碰网络、但逻辑边界多**的三处：
  *   - [UpdateChecker.mirrorUrl]：地址转换 + **防二次代理**的守卫；
- *   - [UpdateChecker.compareVersionTags]：语义化版本比对（预览版 / 带 `v` 前缀 / 段数不等）。
+ *   - [UpdateChecker.compareVersionTags]：语义化版本比对（预览版 / 带 `v` 前缀 / 段数不等）；
+ *   - [UpdateChecker.pickChecksumsUrl]：从附件里挑官方校验和（#207）。
  */
 class UpdateCheckerTest {
 
@@ -105,5 +107,42 @@ class UpdateCheckerTest {
         // 段数不等时，缺的段按 0 处理：`0.5` == `0.5.0`，而 `0.5.1` > `0.5`。
         assertEquals(0, UpdateChecker.compareVersionTags("0.5", "0.5.0"))
         assertTrue(UpdateChecker.compareVersionTags("0.5.1", "0.5") > 0)
+    }
+
+    // ---- pickChecksumsUrl -------------------------------------------------
+
+    @Test
+    fun pickChecksumsUrl_picksTheOfficialChecksumAsset() {
+        val url = "https://github.com/Chaniug/Vaultix/releases/download/v0.10.3/checksums-sha256.txt"
+        val picked = UpdateChecker.pickChecksumsUrl(
+            listOf(
+                ReleaseAsset("app-full-release.apk", "https://github.com/x/app.apk"),
+                ReleaseAsset("checksums-sha256.txt", url),
+            ),
+        )
+        assertEquals(url, picked)
+    }
+
+    @Test
+    fun pickChecksumsUrl_ignoresCaseOfAssetName() {
+        // 发版流程改个大小写不该让"核对校验和"入口凭空消失（对用户是"功能没了"）。
+        val url = "https://github.com/Chaniug/Vaultix/releases/download/v0.10.3/Checksums-SHA256.txt"
+        assertEquals(url, UpdateChecker.pickChecksumsUrl(listOf(ReleaseAsset("Checksums-SHA256.txt", url))))
+    }
+
+    @Test
+    fun pickChecksumsUrl_returnsNullWhenAssetMissing() {
+        // ★ 拿不到就不给入口，**绝不**拼一个"看起来像"的地址 —— 用户点开 404
+        //   只会得出"这个项目不靠谱"，比不给按钮更糟。
+        assertNull(
+            UpdateChecker.pickChecksumsUrl(listOf(ReleaseAsset("app-full-release.apk", "https://x/a.apk"))),
+        )
+        assertNull(UpdateChecker.pickChecksumsUrl(null))
+        assertNull(UpdateChecker.pickChecksumsUrl(emptyList()))
+    }
+
+    @Test
+    fun pickChecksumsUrl_returnsNullForBlankUrl() {
+        assertNull(UpdateChecker.pickChecksumsUrl(listOf(ReleaseAsset("checksums-sha256.txt", "  "))))
     }
 }

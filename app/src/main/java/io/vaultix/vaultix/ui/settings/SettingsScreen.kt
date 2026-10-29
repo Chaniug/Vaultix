@@ -487,7 +487,23 @@ private fun UpdateCheckDialog(
         },
         // ⚠️ 用「关闭」而不是「取消」：这里没有可取消的操作（检查已跑完），
         //    「取消」会被读成"取消这次检查"。M3 要求动作文案如实描述结果。
-        dismissButton = { DialogCloseButton(onClick = onDismiss) },
+        //
+        // ★「核对校验和」（#207）：镜像开关打开时下载页是第三方镜像，用户拿到的 APK
+        //   由镜像提供 ⇒ 必须同时给出一个**官方**的 SHA-256 清单供比对。
+        //   ⚠️ 这里传的是原始地址（**不走** `mirrorUrl`）：用镜像给的校验和验镜像给的
+        //   安装包，等于什么都没验。
+        //   ⚠️ 只在"确实有更新"时给：没有可下载的东西就没有可核对的东西。
+        dismissButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                val checksumsUrl = updated?.checksumsUrl
+                if (checksumsUrl != null) {
+                    TextButton(onClick = { onOpenRelease(checksumsUrl) }) {
+                        Text(stringResource(R.string.update_check_verify))
+                    }
+                }
+                DialogCloseButton(onClick = onDismiss)
+            }
+        },
     )
 }
 

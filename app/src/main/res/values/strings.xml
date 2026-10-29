@@ -560,6 +560,11 @@
     <string name="update_check_whats_new">更新内容</string>
     <string name="update_check_notes_empty">本次发布未提供说明</string>
     <!--
+      #207（2026-10-29）：打开官方 SHA-256 校验和清单（直连 GitHub，不走镜像）。
+      只在"确实有更新"时出现 —— 没有可下载的东西就没有可核对的东西。
+    -->
+    <string name="update_check_verify">核对校验和</string>
+    <!--
       国内镜像加速（2026-09-28）。
       ⚠️ 命名**不带** update_check_ ：它**不在检查更新对话框里**（那儿放持久化开关
       不符合 M3 的对话框构成，见 SettingsScreen 的说明），而是「关于」二级页里的

@@ -63,6 +63,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.core.content.ContextCompat
 import androidx.credentials.CreatePublicKeyCredentialResponse
 import androidx.credentials.exceptions.CreateCredentialCancellationException
+import androidx.credentials.exceptions.CreateCredentialCustomException
 import androidx.credentials.exceptions.CreateCredentialException
 import androidx.credentials.exceptions.CreateCredentialUnknownException
 import androidx.credentials.provider.PendingIntentHandler
@@ -371,6 +372,25 @@ class PasskeyCreateActivity : FragmentActivity() {
         val vaultId = selectedVaultId
         if (vaultId.isBlank()) {
             fail(CreateCredentialUnknownException("No vault selected"))
+            return
+        }
+        // ★ 尊重 RP 的 `excludeCredentials`（#208）：本次请求的 rpId 下**已经有过**的凭证
+        // 一律不再创建第二把 —— 规范（WebAuthn §6.3）要求此时中止并返回 InvalidStateError。
+        //
+        // ⚠️ 判定的凭证集合 = [loginCandidates]（活跃库里的登录条目）：通行密钥只挂在
+        // 登录条目上，而本流程的写入目标也只有这一处 ⇒ 它就是"已有的全部"。
+        // ⚠️ 在启动协程**之前**判定：`fail()` 要 `setResult` + `finish`，必须在主线程。
+        val excluded = PasskeyExcludePolicy.excludedIds(requestJson)
+        val conflict = PasskeyExcludePolicy.firstConflict(
+            excluded = excluded,
+            existing = loginCandidates.value.flatMap { it.fido2Credentials },
+            rpId = rpId,
+        )
+        if (conflict != null) {
+            AutofillLogger.d("PKC exclude hit: rpId=$rpId excluded=${excluded.size}")
+            // ⚠️ 用自定义 type 而不是 UnknownException：语义是"已有凭证"，
+            //   RP 能据此给用户"这站点已经注册过"的提示。消息里**不带** credentialId。
+            fail(CreateCredentialCustomException("InvalidStateError", "Credential already registered"))
             return
         }
         isCreating = true

@@ -17,6 +17,7 @@ import io.vaultix.data.bitwarden.model.CustomFieldDto
 import io.vaultix.data.bitwarden.model.Fido2CredentialDto
 import io.vaultix.data.bitwarden.model.IdentityDto
 import io.vaultix.data.bitwarden.model.LoginDto
+import io.vaultix.data.bitwarden.model.PasswordHistoryDto
 import io.vaultix.data.bitwarden.model.SecureNoteDto
 import io.vaultix.data.bitwarden.model.SshKeyDto
 import io.vaultix.data.bitwarden.model.UriDto
@@ -240,6 +241,10 @@ class CipherMapper @Inject constructor(
         stored: CipherDto,
         key: SymmetricCryptoKey,
     ): CipherRequest {
+        // ★ 密码变更的连带账（#209）：`passwordRevisionDate` + `passwordHistory`。
+        // 两件事必须**一起**算：它们依赖同一次"旧密码解密"，分开算会解两遍 KDF 无关的
+        // 对称解密，且容易算出一个改、另一个不改的自相矛盾请求。
+        val revision = passwordRevisionPlan(item, stored, key)
         return CipherRequest(
             type = mapTypeToInt(item.type),
             name = crypto.encryptString(item.title, key),
@@ -249,7 +254,7 @@ class CipherMapper @Inject constructor(
             favorite = item.favorite,
             folderId = item.folderId,
             reprompt = repromptToInt(item.reprompt),
-            login = overlayLogin(item, stored, key),
+            login = overlayLogin(item, stored, key, revision.revisionDate),
             card = overlayCard(item, stored, key),
             identity = overlayIdentity(item, stored, key),
             secureNote = overlaySecureNote(item, stored),
@@ -267,6 +272,8 @@ class CipherMapper @Inject constructor(
             // 判据来自 Bitwarden 服务端 `CipherRequestModel`：
             //   · PasswordHistory：`PasswordHistory?.Select(...)` ⇒ 不带即清空；
             //     且 `Data` 是整块重建的（`IgnoreWritingNull`），不是"不改动"。
+            //     ⚠️ 2026-10-29（#209）：**密码变更时必须追加一条**，不能只透传 ——
+            //     只透传 ⇒ 用户改多少次密码，历史永远只有服务端原来那几条。
             //   · OrganizationId：`IsOrganizationCipher => !IsNullOrWhiteSpace(...)`
             //     ⇒ 不带即被当成个人条目，组织成员**再也看不到这条**。
             //   · LastKnownRevisionDate：一路传给 `SaveDetailsAsync(...)` 做冲突检测
@@ -280,7 +287,7 @@ class CipherMapper @Inject constructor(
             //    —— 不带附件时服务端**原样保留**，无需透传（也不该透传：附件是
             //    整体替换语义，透传反而有覆盖风险）。
             // ------------------------------------------------------------------
-            passwordHistory = stored.passwordHistory,
+            passwordHistory = revision.history ?: stored.passwordHistory,
             organizationId = stored.organizationId,
             // 集合归属透传（2026-10-21）：不带 = 服务端整体替换成空 = 条目从所有集合掉出。
             collectionIds = stored.collectionIds,
@@ -290,19 +297,26 @@ class CipherMapper @Inject constructor(
 
     /**
      * 登录段：服务端有 login 时按表单明文重新加密**可编辑**字段
-     * （username / password / uri / totp），其余字段（如 passwordRevisionDate）
-     * 沿用服务端原值。`fido2Credentials` 由 [mergeFido2Credentials] 单独处理 ——
+     * （username / password / uri / totp）。
+     *
+     * `passwordRevisionDate` 由 [passwordRevisionPlan] 决定：密码**真的变了**才写新时间，
+     * 否则沿用服务端原值（#209 —— 此前恒沿用原值 ⇒ 用户改了密码，"密码年龄"永远停在
+     * 建条目那天，服务端与其它客户端都看不到这次变更）。
+     *
+     * `fido2Credentials` 由 [mergeFido2Credentials] 单独处理 ——
      * 默认原样沿用服务端密文，不重加密。
      */
     private fun overlayLogin(
         item: VaultItem,
         stored: CipherDto,
         key: SymmetricCryptoKey,
+        revisionDate: String?,
     ): LoginDto? {
         val storedLogin = stored.login ?: return null
         return storedLogin.copy(
             username = item.username.takeIf { it.isNotBlank() }?.let { crypto.encryptString(it, key) },
             password = item.password.takeIf { it.isNotBlank() }?.let { crypto.encryptString(it, key) },
+            passwordRevisionDate = revisionDate ?: storedLogin.passwordRevisionDate,
             // uri/totp：用户可见段，按表单明文重新加密覆盖（item 反映最新意图）
             uris = item.uris.map { v ->
                 UriDto(
@@ -379,6 +393,76 @@ class CipherMapper @Inject constructor(
             .filter { it.credentialId.trim() !in storedSet }
             .forEach { merged += mapFido2Request(it, key) }
         return merged
+    }
+
+    /**
+     * 算「密码是否变了」以及变了该连带改什么（`.ai/ISSUES.md` #209，2026-10-29）。
+     *
+     * ## 为什么要它
+     *
+     * 官方语义里一次改密码会留下**两笔账**：
+     * - `login.passwordRevisionDate` = 当前密码的**启用时间**（"这密码用了多久"）；
+     * - `passwordHistory[]` 追加一条 = 旧密码 + 它的**停用时间**（可回滚 / 可查历史）。
+     *
+     * 此前两者都只做「透传服务端原值」⇒ 用户在 Vaultix 里改一百次密码，
+     * 服务端与其它客户端看到的仍是建条目那天的状态：**密码年龄恒旧、历史恒空**，
+     * 且没有任何报错（这是"不报错但结果是假的"那类洞）。
+     *
+     * ## 保守边界（宁可不写，不可写错）
+     *
+     * - 旧密码**解不开** ⇒ 不加历史条目（写进去的是空串，等于往历史里塞一条假记录），
+     *   但 `passwordRevisionDate` 照写（密码确实被重写了这一事实成立）；
+     * - 表单密码为空 / 与旧值相同 ⇒ 两笔账都不动（"没改"就不该留下痕迹）；
+     * - 非 Login 类型 / 服务端本来没有 login 段 ⇒ 不动。
+     *
+     * @return 两笔账的建议值；`null` 表示"沿用服务端原值"。
+     */
+    private fun passwordRevisionPlan(
+        item: VaultItem,
+        stored: CipherDto,
+        key: SymmetricCryptoKey,
+    ): PasswordRevisionPlan {
+        val storedLogin = stored.login ?: return PasswordRevisionPlan()
+        if (item.type != VaultItemType.Login) return PasswordRevisionPlan()
+        val itemKey = resolveItemKey(stored, key)
+        val oldPassword = try {
+            decryptToString(storedLogin.password, key, itemKey)
+        } finally {
+            itemKey?.clear()
+        }
+        // 判定"确实改了"：新密码非空 **且** 与旧明文不同。
+        if (item.password.isBlank() || item.password == oldPassword) return PasswordRevisionPlan()
+        val nowCipher = runCatching {
+            BitwardenTimestamps.format(System.currentTimeMillis())?.let { crypto.encryptString(it, key) }
+        }.getOrNull()
+        // 旧密文解不开 ⇒ 拿不到"旧密码是什么" ⇒ 不加历史（见 KDoc 的保守边界）。
+        val oldKnown = storedLogin.password.isNullOrBlank() || oldPassword.isNotEmpty()
+        val history = if (oldKnown) appendPasswordHistory(storedLogin, stored, nowCipher) else null
+        return PasswordRevisionPlan(revisionDate = nowCipher, history = history)
+    }
+
+    /**
+     * 把**旧密码**追加进历史。
+     *
+     * ⚠️ 两段都直接沿用服务端**原密文**（`password` / `passwordRevisionDate`），
+     * 不解密再重加密 —— 重加密没有任何收益，却多一次"失败即丢数据"的机会。
+     *
+     * @param nowCipher 当前时间的密文（旧条目没有 `passwordRevisionDate` 时的兜底）。
+     */
+    private fun appendPasswordHistory(
+        storedLogin: LoginDto,
+        stored: CipherDto,
+        nowCipher: String?,
+    ): List<PasswordHistoryDto> {
+        val oldCipher = storedLogin.password.orEmpty()
+        if (oldCipher.isBlank()) return stored.passwordHistory
+        val entry = PasswordHistoryDto(
+            password = oldCipher,
+            lastUsedDate = storedLogin.passwordRevisionDate ?: nowCipher.orEmpty(),
+        )
+        val merged = stored.passwordHistory + entry
+        // 服务端不设上限，但无限增长会让每次保存都上传一整坨 ⇒ 保留**最近**的若干条。
+        return if (merged.size > MAX_PASSWORD_HISTORY) merged.takeLast(MAX_PASSWORD_HISTORY) else merged
     }
 
     /** 银行卡段：Card 类型按表单明文重加密；其余类型沿用服务端原密文（防丢载荷）。 */
@@ -763,5 +847,16 @@ class CipherMapper @Inject constructor(
         // 通行密钥字段默认值（对齐 Bitwarden login.fido2Credentials）
         const val KEY_TYPE_PUBLIC = "public-key"
         const val KEY_CURVE_P256 = "P-256"
+        /**
+         * 密码历史上限（#209）：服务端不设限，但每次保存都要上传整个列表，
+         * 留最近 [MAX_PASSWORD_HISTORY] 条足够"找回上一个密码"这个真实用途。
+         */
+        const val MAX_PASSWORD_HISTORY = 20
     }
 }
+
+/** [CipherMapper.passwordRevisionPlan] 的结论；两个字段为 null 都表示"沿用服务端原值"。 */
+private data class PasswordRevisionPlan(
+    val revisionDate: String? = null,
+    val history: List<PasswordHistoryDto>? = null,
+)
