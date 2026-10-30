@@ -377,6 +377,59 @@ jobs:
           :domain:testDebugUnitTest
           --continue --stacktrace
 
+      # 失败用例名转 annotation（2026-10-30 加）。
+      #
+      # ⚠️ 为什么需要这一步：`Run unit tests` 挂了之后，**顶层 annotation 只有一句
+      #    "Process completed with exit code 1."** —— 失败用例名、断言差异、异常栈
+      #    全在 artifact 的 XML 里，而 artifact 下载**需要认证**（匿名 401）。
+      #    结果是：CI 红了但任何人在本地都拿不到"哪个用例红了"，只能靠猜着改。
+      #    这不是第一次 —— #199/#203 那几轮也是靠反复 push 试探。
+      #
+      # 把 `<testcase>` 里带 `<failure>` 的项直接打成 notice，日志页一眼能看到
+      # 「类名.用例名 + 第一行错误」。只取前 40 条：Gradle 一次挂几十个用例时，
+      # 后面的基本都是同一个根因的连带失败，读前 40 条足够定位。
+      - name: Summarize failed unit tests
+        if: always()
+        shell: bash
+        run: |
+          set -uo pipefail
+          python3 - <<'PY'
+          import glob, sys, xml.etree.ElementTree as ET
+
+          files = glob.glob('**/build/test-results/**/TEST-*.xml', recursive=True)
+          if not files:
+              print('::notice title=unit tests::未找到 test-results XML')
+              sys.exit(0)
+
+          failed = []
+          total = 0
+          for path in files:
+              try:
+                  root = ET.parse(path).getroot()
+              except Exception as exc:          # noqa: BLE001 - 报告损坏不该让门禁崩
+                  print(f'::notice title=unit tests::无法解析 {path}: {exc}')
+                  continue
+              for case in root.iter('testcase'):
+                  total += 1
+                  node = case.find('failure')
+                  if node is None:
+                      node = case.find('error')
+                  if node is None:
+                      continue
+                  cls = case.get('classname') or ''
+                  name = case.get('name') or ''
+                  head = (node.get('message') or node.text or '').strip().splitlines()
+                  first = head[0][:220] if head else '(无消息)'
+                  failed.append(f'{cls}.{name} → {first}')
+
+          print(f'::notice title=unit tests::共 {total} 例，失败 {len(failed)} 例')
+          for line in failed[:40]:
+              # notice 的消息里不能有裸换行，压成一行。
+              print('::notice title=failed test::' + line.replace('\n', ' '))
+          if len(failed) > 40:
+              print(f'::notice title=unit tests::其余 {len(failed) - 40} 例省略（多为同一根因）')
+          PY
+
       - name: Upload unit test reports
         if: always()
         uses: actions/upload-artifact@v7
