@@ -510,7 +510,7 @@
 | 设置入口 | 「进入 App 时仍需验证」开关，**只在** 全局档位==`Never` 且生物识别可用时显示 |
 | 新增单测 | `AutoViewGateTest` 6 条 + `VaultLockManagerImplSystemLockTest` 4 条 + `VaultSessionManagerTest` 2 条 + `VaultTimeoutTest` 3 条 + `AutoRestoreTriggerTest` 2 条（恢复后的门禁接线） |
 | 门禁 | detekt 2.0.0-alpha.6：全部改动 + 测试源 **0 issue**；`check_issues_index.py` ✅（04 篇 19→20） |
-| CI | `812218b` ❌ → 唯一红点：`AutoRestoreTriggerTest` 仍按三参构造（detekt/编码/keystore 全绿，只有 `Build Debug APK` 红）⇒ `f7ac3d2` 修 |
+| CI | `812218b` ❌（编译：`AutoRestoreTriggerTest` 仍三参）→ `f7ac3d2` ❌（`AutoViewGate` 读错偏好类）→ `788d805` → `d3485d0` ✅ **success**（detekt / 编码 / 编译 / 32 个测试类的全部单测 / APK 已发 preview Release） |
 | 待办 | **用户真机复测**：从不档 ① 熄屏回来要指纹 ② 清后台重开要指纹 ③ 填充仍直通 ④ 熄屏后回来看条目不用重新输主密码 |
 
 ### 判据（本轮新增四条）
