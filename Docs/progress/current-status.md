@@ -1,6 +1,6 @@
 # 当前进度快照
 
-> 最后更新：**2026-10-26**（与开源项目对标审计 → 九组修复 #186–#195）—— **现状请看文末「当前状态（2026-10-26）」，下方 10-25 及更早的正文只作过程留痕。**
+> 最后更新：**2026-10-30**（锁语义澄清 + 开发者「保持不锁」#210 / 通行密钥 type 串 #211）—— **现状请看文末「当前状态（2026-10-30）」，下方更早的正文只作过程留痕。**
 >
 > 上一版头注（2026-09-20，第三轮：胶囊阴影掉帧 + 强调色语义 + README/文档对齐）：
 >
@@ -423,3 +423,47 @@
 4. 附件**只能看不能加**；**无 CSV 导入**；
 5. `FillAssistRepository` 默认联网拉规则（无开关）；
 6. `KdbxFidelity.NON_DEFAULT_CIPHER` 从不产生（只声明、未检测）。
+
+---
+
+## 当前状态（2026-10-30）· 锁语义澄清 + 开发者「保持不锁」
+
+触发：用户四问（日志内容 / 日志性能 / 两版指纹差异 / 要不要开发者设置），前提是"两个环境
+都设了自动锁定 = **从不**"。
+
+### 结论（一句话各一条）
+
+| 问题 | 一句话 |
+|---|---|
+| 两版指纹差异 | 「清后台 / 熄屏回来要验证」= **`OnAppRestart`（重启 App 时）** 档，**不是「从不」**。「从不」下任何触发源都不锁、进程死后免交互恢复 ⇒ 同是「从不」不可能一个锁一个不锁，先核对**实际档位**（设置页那行副标题）与解锁页形态（只有指纹按钮 = 查看层锁） |
+| 日志内容 | **上一轮 #206 已优化**（采集即脱敏 + 兜底收窄）。真要再动是"过滤范围"，不是脱敏 |
+| 日志性能 | **release 零开销**（`enabled=BuildConfig.DEBUG`，关着时连 lambda 都不执行）；debug 只是 `Log.d`（系统缓冲，不写文件）；采集只在点开对话框时跑一次 `logcat -d -t 1200`（IO 线程） |
+| 要不要开发者设置 | **已加**（#210），与日志同组，`BuildConfig.DEBUG` 才渲染 |
+
+### 改动
+
+| 文件 | 改动 |
+|---|---|
+| `core/datastore/.../VaultixPreferences.kt` | 新键 `dev_relax_screen_lock`（默认 `true`）+ Flow + write-only 属性写口（**不加第 41 个函数**） |
+| `app/.../security/VaultLockManagerImpl.kt` | `OnAppRestart` 分支加开关判断；`devRelaxScreenLockEnabled()`（读失败按 `true`=锁） |
+| `app/.../ui/settings/SettingsScreen.kt` | `DeveloperSection` 加「保持不锁（开发用）」行 |
+| `app/.../ui/settings/SettingsViewModel.kt` | `devRelaxScreenLock: StateFlow<Boolean?>` + setter |
+| `app/.../passkey/PasskeyCreateActivity.kt` | `excludeCredentials` 命中的 type 串改成规范值（#211） |
+
+### 门禁
+
+| 项 | 结果 |
+|---|---|
+| 文档一致性脚本 | ✅ 七篇条数 = 索引表 = 分节标题 = 篇内头部；索引零孤儿行 |
+| detekt | ✅ `dev.detekt 2.0.0-alpha.6` CLI 逐文件，7 个改动文件 0 issue |
+| 新增单测 | +3 例（`OnAppRestart` 正向 / 开关关掉 / 反向边界） |
+| 编译 | ✅ CI run `5dded0c`（第一轮 `41033038640` ❌：两处 `e:`，均由"想当然"造成，见下） |
+
+### ⚠️ 两条新判据（都付了 CI 时间）
+
+1. **`@get:/@set:JvmName` 只改 JVM 方法名** —— Kotlin 成员解析永远用属性名；
+2. **`javap` 的 `public` ≠ Kotlin 的 `public`** —— 依赖里的常量要看 Kotlin 可见性（本次那个是 `internal`）。
+
+### 仍未做（不变）
+
+「已知未做」那六条与 10-29 版一致，本轮未触碰（尤其**自动拉取零接线是决策不是漏做**）。
