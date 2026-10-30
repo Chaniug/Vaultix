@@ -492,5 +492,5 @@
 | 为何上轮没抓到 | 写入是成功的（写的就是旧值），偏好层单测全绿；`!` 类型合法，detekt 看不见；#212 的命中框问题同时存在，掩盖了它 |
 | 修法 | 语义翻正（`true`=保持不锁，默认 `false`）+ 换键 `dev_relax_screen_lock_v2` + UI `onCheckedChange = viewModel::setDevRelaxScreenLock` **不取反** + 锁管理 `if (!…)`、读失败默认 `false` |
 | 新增测试 | `VaultixPreferencesDevRelaxTest` 3 条（默认值 / 写口往返 / 旧键必须被忽略） |
-| 门禁 | detekt 6 个文件 0 issue；`check_issues_index.py` ✅；编译与单测等 CI |
+| 门禁 | detekt 6 个文件 0 issue；`check_issues_index.py` ✅；CI `c69fa9e` ✅ success（含新增 3 条偏好层单测） |
 | 待办 | **用户第二次真机复测** |
