@@ -889,16 +889,23 @@ private fun DeveloperSection(
             icon = { Icon(Icons.Filled.LockOpen, contentDescription = null) },
             title = stringResource(R.string.developer_relax_lock_title),
             // 副标题随开关变化 —— 说清"现在到底是什么行为"，而不是只描述开关本身。
-            subtitle = if (relaxScreenLock == false) {
-                stringResource(R.string.developer_relax_lock_desc_off)
+            // ⚠️ `== true` 而不是 `!= false`：`null`（偏好还没读出来）时按"与正式版一致"说，
+            //    与下面开关的占位态一致 —— 占位期点击等于"打开"，文案不该先说"已关闭验证"。
+            subtitle = if (relaxScreenLock == true) {
+                stringResource(R.string.developer_relax_lock_desc_relaxed)
             } else {
-                stringResource(R.string.developer_relax_lock_desc_on)
+                stringResource(R.string.developer_relax_lock_desc_normal)
             },
             trailing = {
                 SettingsSwitch(
                     value = relaxScreenLock,
-                    // 语义取反：开关叫"保持不锁"，而存的偏好是"是否仍要求验证"。
-                    onCheckedChange = { relax -> viewModel.setDevRelaxScreenLock(!relax) },
+                    // ★ 2026-10-30 修正（#213）：**不要再取反**。
+                    //   `Switch` 回调传进来的已经是"新值"（即 `!checked`），
+                    //   这里若写成 `setDevRelaxScreenLock(!relax)`，语义上又把偏好
+                    //   当成"是否要验证"，两个负号相消 ⇒ 每次点击都写回**旧值**，
+                    //   开关永远停在原位（用户报的"始终是打开状态"就是这么来的）。
+                    //   现在偏好与开关同向（true = 保持不锁），直接透传即可。
+                    onCheckedChange = viewModel::setDevRelaxScreenLock,
                 )
             },
         )

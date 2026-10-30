@@ -141,15 +141,17 @@ class VaultLockManagerImplNeverTest {
      * `VaultixPreferences` 的替身，**只**把 [VaultixPreferences.devRelaxScreenLock] 定死。
      *
      * ⚠️ 为什么必须显式 stub（2026-10-30 加开关时踩的坑）：
-     * `OnAppRestart` 分支现在是 `if (devRelaxScreenLockEnabled()) handleTimeoutAction(...)`，
-     * 而 relaxed mock 的 `Boolean` 返回是 **`false`** ⇒ 等于"开发者开关关掉了"⇒
-     * **锁定根本不会发生**，`非Never档_进程创建_立即锁` 这类用例会以"锁没发生"的形式变红，
-     * 而报错信息完全指不到真因（看着像"OnAppRestart 不锁"）。
-     * 显式 stub 成 `true` = **生产语义**（读不到偏好时也按 `true`）。
+     * `OnAppRestart` 分支是 `if (!devRelaxScreenLockEnabled()) handleTimeoutAction(...)`，
+     * 而 relaxed mock 的 `Boolean` 返回是 **`false`** ⇒ 恰好等于"生产语义"（锁）——
+     * 这在**现在**是对的，但语义翻正之前它是"不锁"，`非Never档_进程创建_立即锁`
+     * 会以"锁根本没发生"的形式变红，报错信息完全指不到真因。所以仍然显式 stub：
+     * **这条用例要验证什么，就把那条路径的取值写死**，不靠 relaxed mock 的巧合。
+     *
+     * @param relaxScreenLock 与偏好同向：`true` = 保持不锁（不验证），`false` = 照常锁。
      */
-    private fun relaxedPreferences(devRelaxScreenLock: Boolean): VaultixPreferences {
+    private fun relaxedPreferences(relaxScreenLock: Boolean): VaultixPreferences {
         val prefs = mockk<VaultixPreferences>(relaxed = true)
-        every { prefs.devRelaxScreenLock } returns flowOf(devRelaxScreenLock)
+        every { prefs.devRelaxScreenLock } returns flowOf(relaxScreenLock)
         return prefs
     }
 
@@ -177,10 +179,9 @@ class VaultLockManagerImplNeverTest {
             context = mockk<Context>(relaxed = true),
             vaultRepository = repository,
             vaultTimeoutPrefs = prefs,
-            // 2026-10-30：`OnAppRestart` 分支会读「开发者 → 保持不锁」开关（默认生产 = 锁）。
-            // relaxed mock 的布尔返回是 `false` —— 那正是"**不锁**"！所以必须**显式**
-            // stub 成 `true`，否则 `OnAppRestart` 的用例会静默变绿（锁定根本没发生）。
-            preferences = relaxedPreferences(devRelaxScreenLock = true),
+            // 2026-10-30：`OnAppRestart` 分支会读「开发者 → 保持不锁」开关。
+            // 显式 stub 成 `false` = 生产语义（照常锁），不依赖 relaxed mock 的默认值。
+            preferences = relaxedPreferences(relaxScreenLock = false),
             // #188：锁库后会顺手清剪贴板。这个测试只关心"有没有锁"，
             //  clipboard 传 relaxed mock（`clearNow()` 在 runCatching 里，不会影响断言）。
             clipboard = mockk(relaxed = true),
@@ -271,7 +272,7 @@ class VaultLockManagerImplNeverTest {
             context = mockk<Context>(relaxed = true),
             vaultRepository = repository,
             vaultTimeoutPrefs = prefs,
-            preferences = relaxedPreferences(devRelaxScreenLock = true),
+            preferences = relaxedPreferences(relaxScreenLock = false),
             clipboard = clipboard,
             sensitiveCache = sensitiveCache,
         )
@@ -298,7 +299,7 @@ class VaultLockManagerImplNeverTest {
             context = mockk<Context>(relaxed = true),
             vaultRepository = repository,
             vaultTimeoutPrefs = prefs,
-            preferences = relaxedPreferences(devRelaxScreenLock = true),
+            preferences = relaxedPreferences(relaxScreenLock = false),
             clipboard = clipboard,
             sensitiveCache = cache,
         )
@@ -462,9 +463,10 @@ class VaultLockManagerImplNeverTest {
     }
 
     @Test
-    fun `OnAppRestart档_开发者保持不锁开关关掉后_进程创建不锁`() = runTest {
-        // 开发者设置（2026-10-30）：debug 构建里把「保持不锁」关掉 ⇒ OnAppRestart 退化成 Never。
+    fun `OnAppRestart档_开发者保持不锁打开后_进程创建不锁`() = runTest {
+        // 开发者设置（2026-10-30）：debug 构建里把「保持不锁」打开 ⇒ OnAppRestart 退化成 Never。
         // 语义边界：**只**影响这一档，Never / N 分钟不受影响（见下一类的反向断言）。
+        // ⚠️ 开关方向（#213）：`true` = 放松 = 不锁。写反了这条会红 —— 这正是要它守的。
         val prefs = mockk<VaultTimeoutPreferences>(relaxed = true)
         every { prefs.vaultTimeout(any()) } returns flowOf(VaultTimeout.OnAppRestart)
         val repository = mockk<VaultRepository>(relaxed = true)
@@ -475,8 +477,8 @@ class VaultLockManagerImplNeverTest {
             context = mockk<Context>(relaxed = true),
             vaultRepository = repository,
             vaultTimeoutPrefs = prefs,
-            // ★ 开关 = false（"完全保持不锁"）
-            preferences = relaxedPreferences(devRelaxScreenLock = false),
+            // ★ 开关 = true（"保持不锁"已打开）
+            preferences = relaxedPreferences(relaxScreenLock = true),
             clipboard = mockk(relaxed = true),
             sensitiveCache = mockk(relaxed = true),
         )
@@ -491,7 +493,7 @@ class VaultLockManagerImplNeverTest {
     }
 
     @Test
-    fun `开发者开关关掉后_五分钟档_照旧到点锁`() = runTest {
+    fun `开发者保持不锁打开后_五分钟档_照旧到点锁`() = runTest {
         // 反向边界：开发者开关**不得**把非 OnAppRestart 档位一起关掉。
         // 若把 `devRelaxScreenLockEnabled()` 挪到 `when (timeout)` 外面统一判断，这条会红。
         val prefs = mockk<VaultTimeoutPreferences>(relaxed = true)
@@ -504,7 +506,7 @@ class VaultLockManagerImplNeverTest {
             context = mockk<Context>(relaxed = true),
             vaultRepository = repository,
             vaultTimeoutPrefs = prefs,
-            preferences = relaxedPreferences(devRelaxScreenLock = false),
+            preferences = relaxedPreferences(relaxScreenLock = true),
             clipboard = mockk(relaxed = true),
             sensitiveCache = mockk(relaxed = true),
         )

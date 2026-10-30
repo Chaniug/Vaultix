@@ -1,6 +1,6 @@
 # 当前进度快照
 
-> 最后更新：**2026-10-30**（晚：开关命中框 52×32→52×48 #212；同日：锁语义澄清 + 开发者「保持不锁」#210 / 通行密钥 type 串 #211）—— **现状请看文末「当前状态（2026-10-30）」，下方更早的正文只作过程留痕。**
+> 最后更新：**2026-10-30**（晚：开关双重取反 ⇒ 恒等映射 #213；命中框 52×32→52×48 #212；同日：锁语义澄清 + 开发者「保持不锁」#210 / 通行密钥 type 串 #211）—— **现状请看文末「当前状态（2026-10-30）」，下方更早的正文只作过程留痕。**
 >
 > 上一版头注（2026-09-20，第三轮：胶囊阴影掉帧 + 强调色语义 + README/文档对齐）：
 >
@@ -444,7 +444,7 @@
 
 | 文件 | 改动 |
 |---|---|
-| `core/datastore/.../VaultixPreferences.kt` | 新键 `dev_relax_screen_lock`（默认 `true`）+ Flow + write-only 属性写口（**不加第 41 个函数**） |
+| `core/datastore/.../VaultixPreferences.kt` | 新键 ~~`dev_relax_screen_lock`（默认 `true`）~~ → **已改为 `dev_relax_screen_lock_v2`（默认 `false`）**，见下文 #213 + Flow + write-only 属性写口（**不加第 41 个函数**） |
 | `app/.../security/VaultLockManagerImpl.kt` | `OnAppRestart` 分支加开关判断；`devRelaxScreenLockEnabled()`（读失败按 `true`=锁） |
 | `app/.../ui/settings/SettingsScreen.kt` | `DeveloperSection` 加「保持不锁（开发用）」行 |
 | `app/.../ui/settings/SettingsViewModel.kt` | `devRelaxScreenLock: StateFlow<Boolean?>` + setter |
@@ -480,3 +480,17 @@
 | ⚠️ 死路 | `Modifier.minimumInteractiveComponentSize()` 对 `Switch` **无效**（它只"提供" Local，`Switch` 不读）；`Box.clickable` 扩热区会**切两次弹回原样** |
 | 门禁 | detekt 2.0.0-alpha.6 CLI：改动 3 文件 0 issue（先跑过坏样例确认 CLI 会报错）<br>CI `bccb1f9` ✅ success |
 | 待办 | **用户真机复测**（按开关边缘也应生效） |
+
+---
+
+## 当前状态（2026-10-30 深夜）· #213 恒等映射（#212 之后仍点不动的真因）
+
+| 项 | 结论 |
+|---|---|
+| 用户反馈 | 「还是无法点击，**按钮始终是打开状态**」 |
+| 真因 | 偏好第一版是**反义**（`true`=仍需验证），UI 又取反一次；而 `Switch` 回调传入的**已是新值** ⇒ 写入 `!(!checked)` = 当前值 ⇒ **`f(!x)=x` 恒等映射**，状态永远不变 |
+| 为何上轮没抓到 | 写入是成功的（写的就是旧值），偏好层单测全绿；`!` 类型合法，detekt 看不见；#212 的命中框问题同时存在，掩盖了它 |
+| 修法 | 语义翻正（`true`=保持不锁，默认 `false`）+ 换键 `dev_relax_screen_lock_v2` + UI `onCheckedChange = viewModel::setDevRelaxScreenLock` **不取反** + 锁管理 `if (!…)`、读失败默认 `false` |
+| 新增测试 | `VaultixPreferencesDevRelaxTest` 3 条（默认值 / 写口往返 / 旧键必须被忽略） |
+| 门禁 | detekt 6 个文件 0 issue；`check_issues_index.py` ✅；编译与单测等 CI |
+| 待办 | **用户第二次真机复测** |

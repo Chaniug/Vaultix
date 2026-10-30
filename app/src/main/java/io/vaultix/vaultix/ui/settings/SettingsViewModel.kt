@@ -121,8 +121,11 @@ class SettingsViewModel @Inject constructor(
     /**
      * **开发者设置：熄屏 / 进程重建是否仍要求验证**（2026-10-30；仅 debug 构建有入口）。
      *
-     * `true`（默认）= 与正式版一致：清掉后台或熄屏回来后要指纹/主密码；
-     * `false` = 开发时保持不锁（`OnAppRestart` 档退化成 `Never`）。
+     * `true` = **保持不锁**（开发用）：`OnAppRestart` 档退化成 `Never`；
+     * `false`（默认）= 与正式版一致：清掉后台或熄屏回来后要指纹/主密码。
+     *
+     * ⚠️ 语义与偏好键同向（`dev_relax_screen_lock_v2`）。翻正之前它是反的，结果
+     * UI 再取反一次、两个负号抵消，开关**怎么点都不动**（#213）。
      *
      * ⚠️ 可空、初值 `null` = 还没读出来 —— 与 [UiState] 那段契约同一条，
      * 消费侧（`SettingsSwitch`）拿到 null 时**不猜**状态。
@@ -447,7 +450,12 @@ class SettingsViewModel @Inject constructor(
     }
 
     /**
-     * 开发者设置：熄屏 / 进程重建后是否仍要求验证（见 [devRelaxScreenLock]）。
+     * 开发者设置：熄屏 / 进程重建后是否**保持不锁**（见 [devRelaxScreenLock]）。
+     *
+     * ⚠️ **入参语义与 [devRelaxScreenLock] 的值完全一致**，不做任何取反：
+     * `true` = 不锁。UI 侧直接 `onCheckedChange = viewModel::setDevRelaxScreenLock`。
+     * 一旦在调用点写成 `setDevRelaxScreenLock(!it)`，就会与 `Switch` 内部
+     * "传进来的已经是 `!checked`"再抵消一次 ⇒ 写回旧值、开关纹丝不动（#213）。
      *
      * ⚠️ 写口是 `VaultixPreferences` 上的一个 write-only **属性** `writeDevRelaxScreenLock`
      * （`@set:JvmName("setDevRelaxScreenLock")`，它的 Java 侧名字才是 `set…`），

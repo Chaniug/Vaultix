@@ -483,11 +483,12 @@ class VaultLockManagerImpl @Inject constructor(
                         // 首次创建必查；非首次创建时，若本次是为 autofill 拉起 → 跳过。
                         if (reason.firstTimeCreation || !reason.createdForAutofill) {
                             // ★ 开发者设置（2026-10-30）：debug 构建的「开发者 → 保持不锁」
-                            //   开关为 false 时，本档位退化成 `Never`（不锁）。
-                            //   release 包读到的恒为默认 `true` ⇒ 行为与之前**逐字节相同**。
+                            //   开关**打开**时，本档位退化成 `Never`（不锁）。注意这里是否定：
+                            //   该偏好 `true` = 放松，与键名同向（第一版写成反义，见 #213）。
+                            //   release 包读到的恒为默认 `false` ⇒ 行为与之前**逐字节相同**。
                             //   ⚠️ 只拦这一档，不碰 `Never` / `N 分钟`：那两个档位的语义
                             //      与"开发者图省事"无关，改了会让单测与产品语义分叉。
-                            if (devRelaxScreenLockEnabled()) handleTimeoutAction(vaultId)
+                            if (!devRelaxScreenLockEnabled()) handleTimeoutAction(vaultId)
                         }
                     }
                 }
@@ -516,17 +517,18 @@ class VaultLockManagerImpl @Inject constructor(
     }
 
     /**
-     * 开发者设置「熄屏 / 进程重建后仍要求验证」是否生效（2026-10-30）。
+     * 开发者设置「保持不锁」是否生效（2026-10-30）。`true` = 不验证。
      *
-     * `false` 只在 debug 构建里可能被写出来（设置 → 开发者 → 保持不锁）；
-     * release 包读到的恒为默认 `true`，行为与加这个开关之前**完全一致**。
+     * `true` 只在 debug 构建里可能被写出来（设置 → 开发者 → 保持不锁）；
+     * release 包读到的恒为默认 `false`，行为与加这个开关之前**完全一致**。
      *
-     * ⚠️ 读失败时按 `true`（锁）：这里是**安全**判定，读不到偏好宁可多锁一次，
-     *    绝不能因为一次 IO 异常就永久放行。这与 `runCatching{}.getOrDefault(false)`
-     *    那类"图省事"的兜底方向**正好相反**，别照抄。
+     * ⚠️ 读失败时按 `false` = **不放松** = 照常锁：这是**安全**判定，读不到偏好宁可
+     *    多锁一次，绝不能因为一次 IO 异常就永久放行。
+     *    ⚠️ 别把这里的默认值"顺手改成 true" —— 那是"读不到就永久不锁"，方向正好反了。
+     *    （偏好语义翻正之前，安全侧写的是 `getOrDefault(true)`；只看字面会以为改错了。）
      */
     private suspend fun devRelaxScreenLockEnabled(): Boolean =
-        runCatching { preferences.devRelaxScreenLock.first() }.getOrDefault(true)
+        runCatching { preferences.devRelaxScreenLock.first() }.getOrDefault(false)
 
     /**
      * 延迟执行超时动作（对齐 Bitwarden `handleTimeoutActionWithDelay`）。

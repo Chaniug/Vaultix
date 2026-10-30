@@ -66,21 +66,28 @@ class VaultixPreferences @Inject constructor(
         val SCREEN_SECURITY = booleanPreferencesKey("screen_security")
 
         /**
-         * **开发者设置：锁屏 / 进程重建是否仍需验证**（2026-10-30，默认 `true`）。
+         * **开发者设置：熄屏 / 进程重建后是否「保持不锁」**（2026-10-30，默认 `false`）。
          *
-         * 语义：`true`（生产默认）= 熄屏与进程被清掉后**回到验证**（自动锁定档位的
-         * `OnAppRestart` 语义）；`false` = 完全不在这些时机锁。
+         * 语义**与键名同向**（别再写反）：
+         * - `true` = 放松：这些时机**不验证**（`OnAppRestart` 档退化成 `Never`）；
+         * - `false`（生产默认）= 与正式版一致：回到前台仍要指纹 / 主密码。
+         *
+         * ⚠️ **键名带 `_v2` 不是笔误，是刻意的"另起一把键"**。
+         * 第一版的 `dev_relax_screen_lock` 存的是**反义**（`true` = 仍需验证），
+         * 而 UI 又对它取反了一次，两个负号抵消 ⇒ 那个开关**永远写不进新值**
+         * （见 `.ai/ISSUES.md` #213）。但用户点过的机器上可能留着一条 `true`；
+         * 若沿用旧键并翻转语义，那条 `true` 升级后会突然变成"不锁" ——
+         * 一次**静默的安全降级**。换键 ⇒ 旧值被忽略，升级后一律回到 `false`。
          *
          * ⚠️ 这个开关**只在 debug 构建的「开发者」组里出现**（见 `SettingsScreen.DeveloperSection`），
-         * release 包既没有入口、读到的也永远是默认值 —— 它不构成新的产品档位，
-         * 只是把「开发时别老弹指纹」这件事做成一个可见、可解释的开关。
+         * release 包既没有入口、读到的也永远是默认值 —— 它不构成新的产品档位。
          * 真正的产品语义仍由 `VaultTimeout` 表达（用户诉求 = `OnAppRestart`）。
          *
          * ⚠️ **消费点是 `VaultLockManagerImpl.checkForVaultTimeoutInternal` 的
-         * `OnAppRestart` 分支**：开关为 `false` 时该分支退化成 `Never`（不锁）。
+         * `OnAppRestart` 分支**：本键为 `true` 时该分支退化成 `Never`（不锁）。
          * 别在 UI 层做"改档位"的近似 —— 那会把用户的显式档位选择改掉。
          */
-        val DEV_RELAX_SCREEN_LOCK = booleanPreferencesKey("dev_relax_screen_lock")
+        val DEV_RELAX_SCREEN_LOCK = booleanPreferencesKey("dev_relax_screen_lock_v2")
 
         val DEFAULT_VAULT_ID = stringPreferencesKey("default_vault_id")
 
@@ -237,19 +244,20 @@ class VaultixPreferences @Inject constructor(
         safeData.map { it[SCREEN_SECURITY] ?: true }
 
     /**
-     * 开发者设置：熄屏 / 进程重建是否**仍然**要求验证（默认 `true`，见 [DEV_RELAX_SCREEN_LOCK]）。
+     * 开发者设置：熄屏 / 进程重建是否**保持不锁**（默认 `false` = 仍要验证，见 [DEV_RELAX_SCREEN_LOCK]）。
      *
      * ⚠️ 本类**已顶格 40 个函数**（detekt `TooManyFunctions`，`OnboardingPreferences` 的 KDoc
      * 记过这一条）。所以本开关**故意写成"一个只读属性 + 一个带 JvmName 的 setter 属性"**：
-     * `devRelaxScreenLock` 只读、`setDevRelaxScreenLock` 是 write-only 的 `var`。
+     * `devRelaxScreenLock` 只读、`writeDevRelaxScreenLock` 是 write-only 的 `var`
+     * （它的 JVM 侧 setter 名才是 `setDevRelaxScreenLock`）。
      * 两者对 Kotlin 调用方与「一个 Flow 属性 + 一个 suspend fun」**完全等价**，
      * 但 detekt 把它们算作属性 ⇒ 不占函数名额。
      * 别"顺手"合并成 `suspend fun setDevRelaxScreenLock(...)`：那会让本类变成 41 个函数。
      */
     val devRelaxScreenLock: Flow<Boolean> =
-        safeData.map { it[DEV_RELAX_SCREEN_LOCK] ?: true }
+        safeData.map { it[DEV_RELAX_SCREEN_LOCK] ?: false }
 
-    /** [devRelaxScreenLock] 的写口；用法 `prefs.setDevRelaxScreenLock = false`（见上一段的命名说明）。 */
+    /** [devRelaxScreenLock] 的写口；用法 `prefs.writeDevRelaxScreenLock = true`（见上一段的命名说明）。 */
     @set:JvmName("setDevRelaxScreenLock")
     @Suppress("unused")
     var writeDevRelaxScreenLock: Boolean

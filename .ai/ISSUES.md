@@ -11,8 +11,8 @@
 |---|---|---|
 | [01-构建与环境](./issues/01-构建与环境.md) | 工程 / 构建 / CI / 工具链 / 环境 | 57 |
 | [02-自动填充](./issues/02-自动填充.md) | 自动填充（AutofillService 链路） | 19 |
-| [03-通行密钥与凭据提供商](./issues/03-通行密钥与凭据提供商.md) | 通行密钥 / Credential Provider / 凭据回灌 | 25 |
-| [04-锁与解锁](./issues/04-锁与解锁.md) | 锁态模型 / 解锁 / 生物识别 / 密钥 | 18 |
+| [03-通行密钥与凭据提供商](./issues/03-通行密钥与凭据提供商.md) | 通行密钥 / Credential Provider / 凭据回灌 | 24 |
+| [04-锁与解锁](./issues/04-锁与解锁.md) | 锁态模型 / 解锁 / 生物识别 / 密钥 | 19 |
 | [05-KDBX本地库](./issues/05-KDBX本地库.md) | KDBX 本地库 | 23 |
 | [06-界面与交互](./issues/06-界面与交互.md) | 界面 / 布局 / 交互动效 / 空态 / 图标 | 49 |
 | [07-数据与同步](./issues/07-数据与同步.md) | 数据模型 / 同步 / 会话 | 25 |
@@ -154,7 +154,7 @@
 | 211 | 🟡 同上那条 `fail(...)` 的 `type` 写成了裸字面量 `"InvalidStateError"` ⇒ GMS 侧按字符串分派时落进"未知类型"，浏览器 `navigator.credentials.create()` 拿到的 reject 原因不是规范的 `InvalidStateError`，站点无法提示"已注册过"。改用库常量 `InvalidStateError.TYPE_CREATE_PUBLIC_KEY_CREDENTIAL_INVALID_STATE_ERROR`（= `androidx.credentials.TYPE_INVALID_STATE_ERROR`，已 `javap -constants` 核对） |<br>判据：**跨进程协议字段永远用对方的常量，不写字面量** —— 字面量本地测试恒绿，只在真机 + 真 RP 上暴露 |
 | 190 | 见 05 篇 #190（内容指纹全字段，含 `fido2Credentials` 11 字段） |
 
-### [04-锁与解锁](./issues/04-锁与解锁.md) — 锁态模型 / 解锁 / 生物识别 / 密钥（17 条；2026-10-30 新增 #210「从不」档认知澄清 + 开发者「保持不锁」）
+### [04-锁与解锁](./issues/04-锁与解锁.md) — 锁态模型 / 解锁 / 生物识别 / 密钥（19 条；2026-10-30 新增 #210「从不」档认知澄清 + 开发者「保持不锁」、#212 开关命中框、#213 双重取反把开关钉死）
 
 | # | 标题 |
 |---|---|
@@ -176,6 +176,7 @@
 | 189 | 🟡 熄屏**不保证**触发 `onStop`（媒体播放 / 画中画 / `showWhenLocked` 下 Activity 仍 resumed）⇒ 「离开 5 分钟自动锁」熄屏一夜也不锁。修法 = 同时监听 `ACTION_SCREEN_OFF` 并复用 `onAppBackgrounded()` 分流（`Never`/`OnAppRestart` 档位不变）。⚠️ 单测里 `onScreenOff()` 后直接推时间是**假红**，要先 `settle(m)` |<br>判据：**「用户看不见了」至少有三条独立通路：熄屏 / 切后台 / 分屏** |
 | 210 | 🟡 「从不」档 ≠ 用户以为的「清后台/锁屏回来要验证」。`Never` 在任何触发源下都不锁、进程死亡后由信封免交互恢复；用户想要的那套行为其实是 **`OnAppRestart`（重启 App 时）** 档。真机若两版表现不同，先查**实际档位**（设置→锁与安全那行副标题）与**查看层锁/门锁待重装**，别先改锁模型。按用户要求补 **debug-only「保持不锁」开关**（设置→开发者，与日志同组）：偏好 `dev_relax_screen_lock`（默认 `true`），只在 `OnAppRestart` 分支生效，读失败按 `true`（锁） |<br>⚠️ `VaultixPreferences` 已顶格 40 函数 ⇒ 写口做成 `@set:JvmName` 的 write-only 属性。<br>⚠️ relaxed mock 的 `Boolean` 恒 `false` ⇒ 会让 `OnAppRestart` 用例静默变绿，必须显式 stub。<br>判据：**给"开发便利"开口子时，只拦那一档、且默认值必须是安全侧** |
 | 212 | 🔴 **#210 的开关「点了没反应」**（真机回归）。数据流没问题，问题在**命中框**：M3 `Switch` 画出来 52×32dp，`toggleable` 的命中框就是这 52×32dp，而 `SettingsRow` 这行没传 `onClick` ⇒ 行内唯一热区只有 32dp 高，拇指上下差 8dp 就落空。⚠️ 给 `Switch` 包 `Modifier.minimumInteractiveComponentSize()` **无效**：它只是**提供** `LocalMinimumInteractiveComponentSize`，`Switch` 的实现里**没读**（读它的是 `Checkbox`/`RadioButton`/`Slider`）。修法 = `SwitchWithTouchTarget` 让开关占 52×48dp 格子（`Switch` 仍居中画 32dp，视觉零变化），`SettingsSwitch` 内置 + `CapabilityToggle` 三分支共用；矮行（`DisplayOptionsSheet`）改 `Spacing.md` 刚好装下 |<br>⚠️ 别用 `Box.clickable` 扩热区：内外都收到点击 ⇒ 切两次弹回原样，症状同样是"没反应"。<br>判据：**"点了没反应"先量命中框，别先怀疑数据流** |
+| 213 | 🔴 **#212 之后仍然"点不动"**：双重取反把开关接成**恒等映射**。偏好第一版是反义（`true`=仍需验证），UI 又在 `onCheckedChange` 里取反一次；而 Compose `Switch` 的回调传进来**已经是新值**（`!checked`）⇒ 写入 `!(!checked)` = 当前值 ⇒ 每次点击都写回旧值、状态永远不变（用户："始终是打开状态"）。⚠️ 数据流单测全绿、detekt 也看不见 —— 写入是成功的，只是写的是同一个值。修法 = 语义翻正（`true`=保持不锁，默认 `false`）+ **换键 `dev_relax_screen_lock_v2`**（旧键存的是反义，复用会让老机器的 `true` 静默变"不锁"）+ UI `onCheckedChange = viewModel::setDevRelaxScreenLock` **不再取反**；`VaultLockManagerImpl` 改 `if (!…)`，读失败默认 `false` |<br>⚠️ 改名要问"`true` 时开关该是开还是关"，不同向就一定会有人补一个 `!`。<br>⚠️ 改语义必换键：旧数据在新语义下会被反向误读，且通常朝"放松安全"的方向。<br>判据：**"点了永远不动"先怀疑 `f(!x)=x`，别只怀疑命中框** |
 
 ### [05-KDBX本地库](./issues/05-KDBX本地库.md) — KDBX 本地库（23 条；2026-10-20 新增 #178 并发编辑静默丢一笔 / #179 writeLocks 只增不减）
 
