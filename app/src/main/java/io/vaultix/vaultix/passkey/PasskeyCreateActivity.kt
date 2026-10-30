@@ -66,6 +66,7 @@ import androidx.credentials.exceptions.CreateCredentialCancellationException
 import androidx.credentials.exceptions.CreateCredentialCustomException
 import androidx.credentials.exceptions.CreateCredentialException
 import androidx.credentials.exceptions.CreateCredentialUnknownException
+import androidx.credentials.exceptions.domerrors.InvalidStateError
 import androidx.credentials.provider.PendingIntentHandler
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.lifecycleScope
@@ -390,7 +391,22 @@ class PasskeyCreateActivity : FragmentActivity() {
             AutofillLogger.d("PKC exclude hit: rpId=$rpId excluded=${excluded.size}")
             // ⚠️ 用自定义 type 而不是 UnknownException：语义是"已有凭证"，
             //   RP 能据此给用户"这站点已经注册过"的提示。消息里**不带** credentialId。
-            fail(CreateCredentialCustomException("InvalidStateError", "Credential already registered"))
+            //
+            // ⚠️⚠️ type **必须**用库里的常量 `InvalidStateError.TYPE_CREATE_PUBLIC_KEY_
+            //   CREDENTIAL_INVALID_STATE_ERROR`（= `androidx.credentials.TYPE_INVALID_STATE_ERROR`），
+            //   **不能**写裸串 "InvalidStateError"（2026-10-30 修正）：
+            //   androidx.credentials 1.6.0 **没有** `CreateCredentialInvalidStateException`
+            //   这个类（解包 aar 逐个核对过），唯一带 「InvalidState」语义的公开入口就是
+            //   这个常量。GMS 侧按 type 字符串转成 DOMException 回给 RP，裸串会让 RP
+            //   收到一个不认识的 type ⇒ 表现为"注册失败但说不清原因"，而不是规范的
+            //   `InvalidStateError`（浏览器侧 `navigator.credentials.create()`
+            //   reject 的就是 DOMException 名为 "InvalidStateError" 那个）。
+            fail(
+                CreateCredentialCustomException(
+                    InvalidStateError.TYPE_CREATE_PUBLIC_KEY_CREDENTIAL_INVALID_STATE_ERROR,
+                    "Credential already registered",
+                ),
+            )
             return
         }
         isCreating = true

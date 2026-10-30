@@ -118,6 +118,22 @@ class SettingsViewModel @Inject constructor(
             initialValue = null,
         )
 
+    /**
+     * **开发者设置：熄屏 / 进程重建是否仍要求验证**（2026-10-30；仅 debug 构建有入口）。
+     *
+     * `true`（默认）= 与正式版一致：清掉后台或熄屏回来后要指纹/主密码；
+     * `false` = 开发时保持不锁（`OnAppRestart` 档退化成 `Never`）。
+     *
+     * ⚠️ 可空、初值 `null` = 还没读出来 —— 与 [UiState] 那段契约同一条，
+     * 消费侧（`SettingsSwitch`）拿到 null 时**不猜**状态。
+     */
+    val devRelaxScreenLock: StateFlow<Boolean?> = preferences.devRelaxScreenLock
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = null,
+        )
+
     init {
         // ★ 2026-09-30 一次性迁移：清掉「D3 那版 UI（档位每库一份）」留下的覆盖键。
         //
@@ -428,6 +444,17 @@ class SettingsViewModel @Inject constructor(
 
     fun setScreenSecurity(enabled: Boolean) {
         viewModelScope.launch { preferences.setScreenSecurity(enabled) }
+    }
+
+    /**
+     * 开发者设置：熄屏 / 进程重建后是否仍要求验证（见 [devRelaxScreenLock]）。
+     *
+     * ⚠️ 写口是 `VaultixPreferences` 上的一个 write-only 属性（`setDevRelaxScreenLock =`），
+     * 不是 `suspend fun` —— 那个类已顶格 40 个函数，见那边的 KDoc。所以这里**不需要**
+     * `viewModelScope.launch`：写入自带应用级 scope，且本键只影响"下次锁不锁"。
+     */
+    fun setDevRelaxScreenLock(enabled: Boolean) {
+        preferences.setDevRelaxScreenLock = enabled
     }
 
     /** 主题模式（system / light / dark），MainActivity 收集后实时切换。 */

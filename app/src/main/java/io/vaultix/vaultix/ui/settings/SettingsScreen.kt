@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Contrast
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.ViewAgenda
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Info
@@ -285,7 +286,7 @@ fun SettingsScreen(
             // ★ 2026-09-21：开发者模式入口，**仅 debug 构建渲染**。
             // release 包连入口都不出现 —— 不误导用户，也不多一条可达路径。
             if (BuildConfig.DEBUG) {
-                DeveloperSection(onOpenLogs = { showDeveloperLogs = true })
+                DeveloperSection(viewModel = viewModel, onOpenLogs = { showDeveloperLogs = true })
             }
             Spacer(Modifier.height(Spacing.xxl))
             // 底部留出叠层悬浮底栏的高度（顶部的让位见上方 Spacer(barPadding)）：
@@ -854,9 +855,27 @@ private fun AboutSection(
  * 「关于」答"这个 App 是什么"，「开发者」答"出问题时怎么办"。
  * 混在一起会让"关于"里出现一个与元信息无关的可点项，且 release 包整组都会消失，
  * 语义上分开更干净。
+ *
+ * ## 2026-10-30：收纳「开发时别老弹指纹」这件事
+ *
+ * 用户原话：「开发的时候避免 app 频繁上锁，保持不锁状态也有好处，只是开发预览版
+ * 是否要加一个开发者设置，在里面把日志、上锁的和完全不锁的功能都放到里面」。
+ *
+ * ⇒ 本组现在承载两件事，都不进产品语义：
+ * 1. **日志**（既有）：查看/导出 + 清空；
+ * 2. **保持不锁**（新增）：`OnAppRestart` 档位在开发构建里退化成「不锁」。
+ *
+ * ⚠️ **不把「自动锁定」整行搬进来**。它已经是「锁与安全」页里的一等设置
+ * （2026-09-30 晚用户拍板的位置），搬进 debug-only 的组会让同一设置出现两份入口 ——
+ * 而 debug 包恰好是天天在用的那个，两份必然漂移。这里的第二行只是**一个开发辅助开关**，
+ * 副标题直接写明"正式版没有这一行"，避免被当成产品档位。
  */
 @Composable
-private fun DeveloperSection(onOpenLogs: () -> Unit) {
+private fun DeveloperSection(
+    viewModel: SettingsViewModel,
+    onOpenLogs: () -> Unit,
+) {
+    val relaxScreenLock by viewModel.devRelaxScreenLock.collectAsStateWithLifecycle()
     SettingsGroupTitle(stringResource(R.string.group_developer))
     SettingsGroupCard {
         SettingsRow(
@@ -864,6 +883,24 @@ private fun DeveloperSection(onOpenLogs: () -> Unit) {
             title = stringResource(R.string.developer_logs_entry),
             subtitle = stringResource(R.string.developer_logs_entry_desc),
             onClick = onOpenLogs,
+        )
+        SettingsDivider()
+        SettingsRow(
+            icon = { Icon(Icons.Filled.LockOpen, contentDescription = null) },
+            title = stringResource(R.string.developer_relax_lock_title),
+            // 副标题随开关变化 —— 说清"现在到底是什么行为"，而不是只描述开关本身。
+            subtitle = if (relaxScreenLock == false) {
+                stringResource(R.string.developer_relax_lock_desc_off)
+            } else {
+                stringResource(R.string.developer_relax_lock_desc_on)
+            },
+            trailing = {
+                SettingsSwitch(
+                    value = relaxScreenLock,
+                    // 语义取反：开关叫"保持不锁"，而存的偏好是"是否仍要求验证"。
+                    onCheckedChange = { relax -> viewModel.setDevRelaxScreenLock(!relax) },
+                )
+            },
         )
     }
 }

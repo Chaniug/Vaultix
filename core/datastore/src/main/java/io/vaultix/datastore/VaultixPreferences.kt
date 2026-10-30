@@ -16,10 +16,13 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -61,6 +64,24 @@ class VaultixPreferences @Inject constructor(
         val CLIPBOARD_CLEAR_MS = longPreferencesKey("clipboard_clear_ms")
         val DYNAMIC_COLOR = booleanPreferencesKey("dynamic_color")
         val SCREEN_SECURITY = booleanPreferencesKey("screen_security")
+
+        /**
+         * **开发者设置：锁屏 / 进程重建是否仍需验证**（2026-10-30，默认 `true`）。
+         *
+         * 语义：`true`（生产默认）= 熄屏与进程被清掉后**回到验证**（自动锁定档位的
+         * `OnAppRestart` 语义）；`false` = 完全不在这些时机锁。
+         *
+         * ⚠️ 这个开关**只在 debug 构建的「开发者」组里出现**（见 `SettingsScreen.DeveloperSection`），
+         * release 包既没有入口、读到的也永远是默认值 —— 它不构成新的产品档位，
+         * 只是把「开发时别老弹指纹」这件事做成一个可见、可解释的开关。
+         * 真正的产品语义仍由 `VaultTimeout` 表达（用户诉求 = `OnAppRestart`）。
+         *
+         * ⚠️ **消费点是 `VaultLockManagerImpl.checkForVaultTimeoutInternal` 的
+         * `OnAppRestart` 分支**：开关为 `false` 时该分支退化成 `Never`（不锁）。
+         * 别在 UI 层做"改档位"的近似 —— 那会把用户的显式档位选择改掉。
+         */
+        val DEV_RELAX_SCREEN_LOCK = booleanPreferencesKey("dev_relax_screen_lock")
+
         val DEFAULT_VAULT_ID = stringPreferencesKey("default_vault_id")
 
         /**
@@ -193,6 +214,14 @@ class VaultixPreferences @Inject constructor(
     /** 统一读取兜底（只吞 IO 异常、其余原样抛）——策略真源见 [safePreferencesFlow]。 */
     private val safeData: Flow<Preferences> = dataStore.safePreferencesFlow()
 
+    /**
+     * 供**非 suspend 的写口**使用的应用级 scope（目前只有 [writeDevRelaxScreenLock] 用）。
+     *
+     * ⚠️ 只有"属性 setter 无法 suspend"这一种情况才用它。其余写入一律保持 `suspend fun`
+     * —— 那是可被调用方等待完成的语义，换成 `launch` 会把"写完没"变成不可知。
+     */
+    private val writeScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     // ⚠️ 自动锁定档位（全局默认 + 每库覆盖）的读写**不在这里** —— 2026-09-30 为了让本类
     //    回到 detekt 的单类 40 上限，整组（11 个函数 + 4 把键）已搬到 [VaultTimeoutPreferences]。
     //    需要档位请在构造器注入那个类；**别把方法搬回来**（见本类 KDoc 的抽类纪律）。
@@ -206,6 +235,32 @@ class VaultixPreferences @Inject constructor(
     /** 是否开启 FLAG_SECURE（防截屏 / 防最近任务缩略图）。 */
     val screenSecurity: Flow<Boolean> =
         safeData.map { it[SCREEN_SECURITY] ?: true }
+
+    /**
+     * 开发者设置：熄屏 / 进程重建是否**仍然**要求验证（默认 `true`，见 [DEV_RELAX_SCREEN_LOCK]）。
+     *
+     * ⚠️ 本类**已顶格 40 个函数**（detekt `TooManyFunctions`，`OnboardingPreferences` 的 KDoc
+     * 记过这一条）。所以本开关**故意写成"一个只读属性 + 一个带 JvmName 的 setter 属性"**：
+     * `devRelaxScreenLock` 只读、`setDevRelaxScreenLock` 是 write-only 的 `var`。
+     * 两者对 Kotlin 调用方与「一个 Flow 属性 + 一个 suspend fun」**完全等价**，
+     * 但 detekt 把它们算作属性 ⇒ 不占函数名额。
+     * 别"顺手"合并成 `suspend fun setDevRelaxScreenLock(...)`：那会让本类变成 41 个函数。
+     */
+    val devRelaxScreenLock: Flow<Boolean> =
+        safeData.map { it[DEV_RELAX_SCREEN_LOCK] ?: true }
+
+    /** [devRelaxScreenLock] 的写口；用法 `prefs.setDevRelaxScreenLock = false`（见上一段的命名说明）。 */
+    @set:JvmName("setDevRelaxScreenLock")
+    @Suppress("unused")
+    var writeDevRelaxScreenLock: Boolean
+        get() = error("write-only，只用于写")
+        set(value) {
+            // ⚠️ 与同类其它 setter 一致：DataStore 的 edit 是 suspend，而属性 setter 不能是
+            //    suspend。这里起一个应用级 scope 的写任务 —— **写入是异步的**，
+            //    但本键只影响"下次锁不锁"，不需要调用方等它落盘。
+            //    debug 下设置页会立刻用 Flow 的下一帧回显，观感上仍是即时的。
+            writeScope.launch { dataStore.edit { it[DEV_RELAX_SCREEN_LOCK] = value } }
+        }
 
     /**
      * 回收站自动清理档位（天；0 = 不自动清空，语义见 [VaultixPreferencesDefaults.TRASH_AUTO_DELETE_DAYS]）。

@@ -386,6 +386,10 @@
     <string name="developer_logs_export">导出并分享</string>
     <string name="developer_logs_clear">清空</string>
     <string name="developer_logs_refresh">刷新</string>
+    <!-- 2026-10-30 开发者设置：保持不锁（仅 debug 构建可见，与「锁与安全」里的自动锁定档位是两个东西） -->
+    <string name="developer_relax_lock_title">保持不锁（开发用）</string>
+    <string name="developer_relax_lock_desc_on">当前与正式版一致：熄屏或清掉后台后，回来要指纹 / 主密码</string>
+    <string name="developer_relax_lock_desc_off">已关闭自动验证：熄屏、清后台后进来都不用再验证。正式版没有这一项</string>
     <string name="setting_auto_lock">自动锁定</string>
     <string name="setting_clipboard_clear">剪贴板清除</string>
     <string name="setting_screen_security">防截屏</string>
