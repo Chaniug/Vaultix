@@ -28,17 +28,27 @@
  *   2. **每一行各自是一张卡片**。18 行 = 18 张漂浮的小"药丸"，页面被切成一堆碎片，
  *      读不出"这几行是一组" ⇒ 改为**一组一张卡片**，行间用 [SettingsDivider] 分隔
  *      （M3 设置页的标准形态）。
+ *
+ * ⚠️ 2026-10-30 **上游还漏了一处，本文件补上**：开关的**触摸目标**。
+ *   上游 `SettingsItemWithSwitch` 直接把 `Switch` 放进行尾 —— M3 `Switch` 的命中框
+ *   就是它自己画的 52×32dp（`Switch` 不读 `LocalMinimumInteractiveComponentSize`，
+ *   包一层 `minimumInteractiveComponentSize()` 也放大不了），而 Material 要求 ≥48dp。
+ *   结果是"按在开关上却像按在开关边上"，真机上表现为**按钮点了没反应**。
+ *   ⇒ [SwitchWithTouchTarget] 让开关占一个 52×48dp 的格子（视觉仍是 52×32dp 居中）。
  * ---------------------------------------------------------------------------
  */
 package io.vaultix.vaultix.ui.settings
 
+import android.util.Log
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -61,6 +71,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -306,23 +317,32 @@ internal fun SettingsDivider() {
  * ⚠️ 已知代价：用户想关掉一个"本来是开"的开关，且恰好在 `null` 窗口内点击 ——
  * 那一下会变成"确认打开"而非关闭，他需要再点一次。这个窗口是**订阅建立的那一瞬**
  * （DataStore 首次 emit 极快），比"点击石沉大海"罕见得多，且用户再点一次即可纠正。
+ *
+ * ### 触摸目标（2026-10-30）
+ *
+ * [Switch] 自带 `Role.Switch` 语义，但**不带** Material 的 48dp 最小触摸尺寸 ——
+ * 它的命中框就是自己画的 52×32dp。所以本函数统一套 [SwitchWithTouchTarget]，
+ * 调用点（含 [io.vaultix.vaultix.ui.items.DisplayOptionsSheet]）不需要各自处理。
  */
 @Composable
 internal fun SettingsSwitch(
     value: Boolean?,
     onCheckedChange: (Boolean) -> Unit,
 ) {
-    if (value != null) {
-        Switch(checked = value, onCheckedChange = onCheckedChange)
-    } else {
-        // 占位：尺寸对齐 M3 Switch 的视觉宽度（track 52×32dp），避免数据到达时整行跳动。
-        // 刻意**不用禁用态开关** —— 那个会被读成「关」，正是要避免的那个假答案。
-        // 点击仍然接收（见上方 KDoc）：语义固定为「打开」，避免"按了没反应"。
-        Box(
-            modifier = Modifier
-                .size(SWITCH_VISUAL_WIDTH, SWITCH_VISUAL_HEIGHT)
-                .clickable { onCheckedChange(true) },
-        )
+    // ★ 2026-10-30：热区 48dp 外壳内置在这里（三态共用），调用点无需关心。
+    SwitchWithTouchTarget {
+        if (value != null) {
+            Switch(checked = value, onCheckedChange = onCheckedChange)
+        } else {
+            // 占位：尺寸对齐 M3 Switch 的视觉（track 52×32dp），避免数据到达时整行跳动。
+            // 刻意**不用禁用态开关** —— 那个会被读成「关」，正是要避免的那个假答案。
+            // 点击仍然接收（见上方 KDoc）：语义固定为「打开」，避免"按了没反应"。
+            Box(
+                modifier = Modifier
+                    .size(SWITCH_VISUAL_WIDTH, SWITCH_VISUAL_HEIGHT)
+                    .clickable { onCheckedChange(true) },
+            )
+        }
     }
 }
 
@@ -334,6 +354,107 @@ internal fun SettingsSwitch(
  */
 internal val SWITCH_VISUAL_WIDTH = 52.dp
 internal val SWITCH_VISUAL_HEIGHT = 32.dp
+
+/**
+ * 开关的**触摸目标下限**（2026-10-30，修「保持不锁的按钮无法点击」）。
+ *
+ * ## 症状与根因
+ *
+ * 真机（1256px 宽 ≈ 393dp，xhdpi 系）上拇指按在开关**区域**里，开关纹丝不动。
+ * M3 `Switch` 画出来只有 **52×32dp**、thumb 更小（≈20dp），而它的 `toggleable`
+ * **命中框就是这 52×32dp 本身** —— Material 要求触摸目标 ≥48dp，M3 `Switch`
+ * **自己不补**这层：`minimumInteractiveComponentSize` 只有 `Checkbox` /
+ * `RadioButton` / `Slider` 这类在**自己的实现里**读 `LocalMinimumInteractiveComponentSize`
+ * 的组件才吃得到；`Switch` 没读，所以把它包一层 `minimumInteractiveComponentSize()`
+ * **不会有任何效果**（第一版曾这么写，属于"看着对、实际没生效"，别再犯）。
+ * 32dp 高意味着拇指上下各差 8dp 就落空，"按在开关上"变成"按在开关边上"。
+ *
+ * ## 做法：命中框只扩**纵向**，扩出去的部分由父级让出来
+ *
+ * 设置行内可用高度 = `SETTINGS_ROW_MIN_HEIGHT`(72) − 2×`Spacing.md`(12) = **48dp**，
+ * 正好等于触摸目标下限。于是外壳**按 52×48dp 布局**、`Switch` 照旧 52×32dp
+ * 居中画在里面 ⇒ 视觉零变化，命中框从 52×32 变成 52×48（上下各多 8dp，全落在行内边距里，
+ * 不会顶到相邻行）。
+ *
+ * ## 唯一安全的上限是 `LocalMinimumInteractiveComponentSize`（＝48dp）
+ *
+ * 这不是拍脑袋定的：M3 的 `Checkbox` / `RadioButton` / `Slider` 都用
+ * "`toggleable` + 0 尺寸子节点 + `minimumInteractiveComponentSize`" 这一手，
+ * 理由写在 Compose 的 `InteractiveComponentSize.kt` 里 —— **比这更大的可点区域会
+ * 抢到相邻组件本该收到的手势**。于是这里把高度**封顶在 48dp**、宽度沿用 track 的 52dp：
+ * 大得能稳稳按中，又不至于顶到上一行/下一行。
+ *
+ * ## 为什么不做成"整行可点"
+ *
+ * 会点的用户有一半是想读那行字，整行可点意味着"点哪都改设置"—— 对
+ * 「保持不锁」这种改的是锁行为的开关，误触代价太高。行内只留开关一处热区，
+ * 但把它做大到拇指能稳稳命中。
+ */
+private val SWITCH_TOUCH_TARGET_MIN = 48.dp
+
+/**
+ * 把任意开关内容包进 **52×48dp** 的触摸外壳（见 [SWITCH_TOUCH_TARGET_MIN]）。
+ *
+ * `SettingsSwitch`、`QuickUnlockDialogs.CapabilityToggle` 的"未知 / 开 / 关"三条分支
+ * 都走这一层 ⇒ 同一页上所有开关的热区、行高、垂直居中完全一致
+ * （数据到达前后不会出现"忽然变得好点了"）。
+ *
+ * ## 高度：行高够就给 48dp，不够就退到「当前行高」并打出告警
+ *
+ * 设置行（[SettingsRow]）高 72dp、垂直内边距 12dp，装下 48dp 绰绰有余。
+ * 但同一组件也被 [io.vaultix.vaultix.ui.items.DisplayOptionsSheet] 那种矮行
+ * （`Spacing.sm` 内边距，内容高约 34dp）复用 —— 在那里强行要 48dp 会把行撑高、观感变形。
+ * 所以用 `BoxWithConstraints` 量一次：够就 48dp（合规），不够就按行高封顶 + `Log.w`。
+ * 这条告警是**给下一个人看的**：他会知道那一处不是漏改，而是受行高制约。
+ *
+ * ⚠️ 也别把外壳做成"可点的放大区"（`Box.clickable { 再调一次 onCheckedChange }`）：
+ * 一次点击会依次落到内层 `Switch` 和外层 `Box` 上，**切换两次** ⇒ 状态弹回原样，
+ * 用户看到的同样是"点了没反应"（正是本 bug 的伪装形态）。要放大热区，只能让
+ * `Switch` 自己占更大的布局格子 —— 也就是这里 48dp 高的外壳。
+ */
+@Composable
+internal fun SwitchWithTouchTarget(content: @Composable () -> Unit) {
+    BoxWithConstraints(
+        modifier = Modifier.width(SWITCH_VISUAL_WIDTH),
+        contentAlignment = Alignment.Center,
+    ) {
+        // `maxHeight` 来自父级给的约束：
+        //   - 设置行里是 `heightIn(min = 72dp)` 的 Row，行内高度 48dp ⇒ 拿到 48dp；
+        //   - 矮行里是 WrapContent ⇒ 拿到该行的实际内容高度（Switch 自身的 32dp）。
+        val constrainedByParent = maxHeight < SWITCH_TOUCH_TARGET_MIN
+        if (constrainedByParent) {
+            // ⚠️ 这条是**开发期路标**，不是运行期报错：只在"调用点行高确实不够"时出现，
+            //   而且只该出现在上面 KDoc 点名的矮行里。自己新加开关时看到它，
+            //   意味着那行的上下 padding 给少了（而不是这个组件写错了）。
+            //
+            // ⚠️ 只在该行的**第一次**组合时报，不能每帧报：`BoxWithConstraints`
+            //   在尺寸变化时会重组，一次滚动就能刷出几百行同样的话，日志反而不可读。
+            //   这里借 `remember` 记住"这棵子树报过了"——主线程组合阶段串行执行，
+            //   不需要额外同步。
+            val reported = remember { mutableStateOf(false) }
+            if (!reported.value) {
+                reported.value = true
+                Log.w(
+                    TAG,
+                    "开关热区只有 $maxHeight，低于 Material 的 $SWITCH_TOUCH_TARGET_MIN：" +
+                        "行内边距太小，装不下 48dp。请检查该行的上下 padding。",
+                )
+            }
+        }
+        val targetHeight = if (constrainedByParent) maxHeight else SWITCH_TOUCH_TARGET_MIN
+        Box(
+            modifier = Modifier
+                .width(SWITCH_VISUAL_WIDTH)
+                .height(targetHeight),
+            contentAlignment = Alignment.Center,
+        ) {
+            content()
+        }
+    }
+}
+
+/** 开关热区告警的日志 tag（见 [SwitchWithTouchTarget]）。 */
+private const val TAG = "SettingsSwitch"
 
 /**
  * 对话框里的单选列表行（自动锁定档位 / 剪贴板清除时长 / 主题模式共用）。

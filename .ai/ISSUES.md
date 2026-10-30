@@ -11,8 +11,8 @@
 |---|---|---|
 | [01-构建与环境](./issues/01-构建与环境.md) | 工程 / 构建 / CI / 工具链 / 环境 | 57 |
 | [02-自动填充](./issues/02-自动填充.md) | 自动填充（AutofillService 链路） | 19 |
-| [03-通行密钥与凭据提供商](./issues/03-通行密钥与凭据提供商.md) | 通行密钥 / Credential Provider / 凭据回灌 | 24 |
-| [04-锁与解锁](./issues/04-锁与解锁.md) | 锁态模型 / 解锁 / 生物识别 / 密钥 | 17 |
+| [03-通行密钥与凭据提供商](./issues/03-通行密钥与凭据提供商.md) | 通行密钥 / Credential Provider / 凭据回灌 | 25 |
+| [04-锁与解锁](./issues/04-锁与解锁.md) | 锁态模型 / 解锁 / 生物识别 / 密钥 | 18 |
 | [05-KDBX本地库](./issues/05-KDBX本地库.md) | KDBX 本地库 | 23 |
 | [06-界面与交互](./issues/06-界面与交互.md) | 界面 / 布局 / 交互动效 / 空态 / 图标 | 49 |
 | [07-数据与同步](./issues/07-数据与同步.md) | 数据模型 / 同步 / 会话 | 25 |
@@ -175,6 +175,7 @@
 | 188 | 🟡 锁库**不清剪贴板**（密码留在里面任何 App 可粘）+ 复制**网址**被当敏感内容 30 秒后清空 ⇒ 新增 `VaultixClipboard.clearNow()`（只在确认是自己放的才清，读不到**什么都不做**；判据 `EXTRA_IS_SENSITIVE` 或 label）；`doCopy` 改 `sensitive = !isUri`。⚠️ `clipboardScope` 从 `Main.immediate` 改 `Default` —— 主线程 `delay` 会被 Doze / 界面忙整体推迟 |<br>判据：**「定时清理」必须配一个「立即清理」的触发点**，锁库这一刻正是最需要它的时候 |
 | 189 | 🟡 熄屏**不保证**触发 `onStop`（媒体播放 / 画中画 / `showWhenLocked` 下 Activity 仍 resumed）⇒ 「离开 5 分钟自动锁」熄屏一夜也不锁。修法 = 同时监听 `ACTION_SCREEN_OFF` 并复用 `onAppBackgrounded()` 分流（`Never`/`OnAppRestart` 档位不变）。⚠️ 单测里 `onScreenOff()` 后直接推时间是**假红**，要先 `settle(m)` |<br>判据：**「用户看不见了」至少有三条独立通路：熄屏 / 切后台 / 分屏** |
 | 210 | 🟡 「从不」档 ≠ 用户以为的「清后台/锁屏回来要验证」。`Never` 在任何触发源下都不锁、进程死亡后由信封免交互恢复；用户想要的那套行为其实是 **`OnAppRestart`（重启 App 时）** 档。真机若两版表现不同，先查**实际档位**（设置→锁与安全那行副标题）与**查看层锁/门锁待重装**，别先改锁模型。按用户要求补 **debug-only「保持不锁」开关**（设置→开发者，与日志同组）：偏好 `dev_relax_screen_lock`（默认 `true`），只在 `OnAppRestart` 分支生效，读失败按 `true`（锁） |<br>⚠️ `VaultixPreferences` 已顶格 40 函数 ⇒ 写口做成 `@set:JvmName` 的 write-only 属性。<br>⚠️ relaxed mock 的 `Boolean` 恒 `false` ⇒ 会让 `OnAppRestart` 用例静默变绿，必须显式 stub。<br>判据：**给"开发便利"开口子时，只拦那一档、且默认值必须是安全侧** |
+| 212 | 🔴 **#210 的开关「点了没反应」**（真机回归）。数据流没问题，问题在**命中框**：M3 `Switch` 画出来 52×32dp，`toggleable` 的命中框就是这 52×32dp，而 `SettingsRow` 这行没传 `onClick` ⇒ 行内唯一热区只有 32dp 高，拇指上下差 8dp 就落空。⚠️ 给 `Switch` 包 `Modifier.minimumInteractiveComponentSize()` **无效**：它只是**提供** `LocalMinimumInteractiveComponentSize`，`Switch` 的实现里**没读**（读它的是 `Checkbox`/`RadioButton`/`Slider`）。修法 = `SwitchWithTouchTarget` 让开关占 52×48dp 格子（`Switch` 仍居中画 32dp，视觉零变化），`SettingsSwitch` 内置 + `CapabilityToggle` 三分支共用；矮行（`DisplayOptionsSheet`）改 `Spacing.md` 刚好装下 |<br>⚠️ 别用 `Box.clickable` 扩热区：内外都收到点击 ⇒ 切两次弹回原样，症状同样是"没反应"。<br>判据：**"点了没反应"先量命中框，别先怀疑数据流** |
 
 ### [05-KDBX本地库](./issues/05-KDBX本地库.md) — KDBX 本地库（23 条；2026-10-20 新增 #178 并发编辑静默丢一笔 / #179 writeLocks 只增不减）
 

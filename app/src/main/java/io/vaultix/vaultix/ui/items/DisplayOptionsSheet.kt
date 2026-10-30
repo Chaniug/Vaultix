@@ -144,7 +144,12 @@ fun DisplayOptionsSheet(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = Spacing.xl, vertical = Spacing.sm),
+                    // ★ 2026-10-30：垂直内边距由 `Spacing.sm` 提到 `Spacing.md`。
+                    //   `SettingsSwitch` 的触摸热区是 48dp（Material 下限），原先行内只有
+                    //   32dp 高，装不下 ⇒ 热区被行高压回 32dp，"按在开关边上"照样点不中
+                    //   （就是用户报的「按钮无法点击」）。`Spacing.md` 下这段内容高
+                    //   22dp（图标）→ 恰好 48dp，`Switch` 照旧是 32dp，观感只多 8dp 留白。
+                    .padding(horizontal = Spacing.xl, vertical = Spacing.md),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(
@@ -172,7 +177,8 @@ fun DisplayOptionsSheet(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = Spacing.xl, vertical = Spacing.sm),
+                    // 同上：装得下 48dp 开关热区（见上一处注释）。
+                    .padding(horizontal = Spacing.xl, vertical = Spacing.md),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(

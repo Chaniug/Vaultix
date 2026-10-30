@@ -10,7 +10,6 @@ package io.vaultix.vaultix.ui.settings
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -30,7 +29,6 @@ import androidx.compose.material.icons.filled.Upgrade
 import androidx.compose.material3.BasicAlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -252,7 +250,14 @@ internal fun QuickUnlockSettingsRows(
  * 类型检查 / detekt / `when` 穷尽性**全都查不出**，只在真机上表现为
  * "点了没反应"。探针 `check_state_flattening.py` 就是守这一条的。
  *
- * 无障碍：[Switch] 自带 `Role.Switch` 语义与最小触摸尺寸，不需要额外 `semantics`。
+ * 无障碍：[Switch] 自带 `Role.Switch` 语义，不需要额外 `semantics`。
+ *
+ * ⚠️ **触摸目标**（2026-10-30 勘误）：别再写"[Switch] 自带最小触摸尺寸"——它**没有**。
+ * M3 `Switch` 的命中框就是它自己画出来的 52×32dp，用户按在它旁边 8dp 完全没反应
+ * （同一症状在设置页的「保持不锁」上被真机复现过，见 `SettingsComponents` 的
+ * `SWITCH_TOUCH_TARGET_MIN`）。这里与 `SettingsSwitch` 用同一个外壳 [SwitchWithTouchTarget]，
+ * 占位分支也走同一个外壳 —— 三条分支（未知 / 开 / 关）热区必须一致，
+ * 否则"数据到了之后突然变得好点了"本身就是一个 bug 级的不一致。
  */
 @Composable
 private fun CapabilityToggle(
@@ -264,18 +269,24 @@ private fun CapabilityToggle(
     if (!loaded) {
         // 同尺寸占位（尺寸见 SettingsComponents 的 SWITCH_VISUAL_*，与 SettingsSwitch 一致）
         // ⇒ 数据到达时既没有"假位置"、也不会整行跳动。
-        Box(modifier = Modifier.size(SWITCH_VISUAL_WIDTH, SWITCH_VISUAL_HEIGHT))
+        // ★ 2026-10-30：外壳与真实开关共用（含 48dp 热区），否则占位期点击落点
+        //   比加载后小一圈 —— 用户刚点上去时恰好是最容易"点了没反应"的那一瞬。
+        SwitchWithTouchTarget {
+            Box(modifier = Modifier.size(SWITCH_VISUAL_WIDTH, SWITCH_VISUAL_HEIGHT))
+        }
         return
     }
     val checked = when (capability) {
         is QuickUnlockController.CapabilityState.On -> true
         QuickUnlockController.CapabilityState.Off -> false
     }
-    Switch(
-        checked = checked,
-        onCheckedChange = { onToggle() },
-        enabled = enabled,
-    )
+    SwitchWithTouchTarget {
+        Switch(
+            checked = checked,
+            onCheckedChange = { onToggle() },
+            enabled = enabled,
+        )
+    }
 }
 
 /** 向导里的说明句（约束 / 后果）。 */
