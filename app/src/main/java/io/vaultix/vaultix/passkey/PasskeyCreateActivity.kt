@@ -66,7 +66,6 @@ import androidx.credentials.exceptions.CreateCredentialCancellationException
 import androidx.credentials.exceptions.CreateCredentialCustomException
 import androidx.credentials.exceptions.CreateCredentialException
 import androidx.credentials.exceptions.CreateCredentialUnknownException
-import androidx.credentials.exceptions.domerrors.InvalidStateError
 import androidx.credentials.provider.PendingIntentHandler
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.lifecycleScope
@@ -92,6 +91,22 @@ import org.json.JSONObject
 import java.time.Instant
 import javax.inject.Inject
 import io.vaultix.vaultix.ui.theme.Spacing
+
+/**
+ * WebAuthn / CredentialManager 的 `InvalidStateError` 类型串。
+ *
+ * 值取自 `androidx.credentials.exceptions.domerrors.InvalidStateError.Companion`
+ * 里的 `TYPE_CREATE_PUBLIC_KEY_CREDENTIAL_INVALID_STATE_ERROR`
+ * （`javap -constants` 读出来就是 `"androidx.credentials.TYPE_INVALID_STATE_ERROR"`）。
+ *
+ * ⚠️ 只能手抄这个值，不能直接引用那个常量：在 credentials 1.6.0 里它是 **`internal`**
+ * （CI 实测 `Cannot access … it is internal`），而 `CreateCredentialInvalidStateException`
+ * **这个类不存在**（解包 aar 逐个核对过）。
+ * ⇒ 「custom type + 规范串」是唯一公开路径；裸写 `"InvalidStateError"`
+ * 会被 GMS 当成未知类型，RP 就收不到规范错误。
+ * ⚠️ 升级 credentials 时重新 `javap -constants` 核一次这个值有没有变。
+ */
+private const val INVALID_STATE_ERROR_TYPE = "androidx.credentials.TYPE_INVALID_STATE_ERROR"
 
 @RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
 @AndroidEntryPoint
@@ -392,18 +407,21 @@ class PasskeyCreateActivity : FragmentActivity() {
             // ⚠️ 用自定义 type 而不是 UnknownException：语义是"已有凭证"，
             //   RP 能据此给用户"这站点已经注册过"的提示。消息里**不带** credentialId。
             //
-            // ⚠️⚠️ type **必须**用库里的常量 `InvalidStateError.TYPE_CREATE_PUBLIC_KEY_
-            //   CREDENTIAL_INVALID_STATE_ERROR`（= `androidx.credentials.TYPE_INVALID_STATE_ERROR`），
-            //   **不能**写裸串 "InvalidStateError"（2026-10-30 修正）：
-            //   androidx.credentials 1.6.0 **没有** `CreateCredentialInvalidStateException`
-            //   这个类（解包 aar 逐个核对过），唯一带 「InvalidState」语义的公开入口就是
-            //   这个常量。GMS 侧按 type 字符串转成 DOMException 回给 RP，裸串会让 RP
-            //   收到一个不认识的 type ⇒ 表现为"注册失败但说不清原因"，而不是规范的
-            //   `InvalidStateError`（浏览器侧 `navigator.credentials.create()`
-            //   reject 的就是 DOMException 名为 "InvalidStateError" 那个）。
+            // ⚠️⚠️ type **必须**是 `androidx.credentials.TYPE_INVALID_STATE_ERROR`
+            //   （= CredentialManager 侧 `InvalidStateError` 的规范类型串），**不能**自己造
+            //   `"InvalidStateError"`（2026-10-30 修正）：
+            //   GMS 按 type 字符串分派，裸串会落进"未知类型"⇒ 浏览器
+            //   `navigator.credentials.create()` 拿到的 reject 原因不是规范的
+            //   `InvalidStateError`，站点没法提示"已注册过"。
+            //
+            // ⚠️ 这个串**只能手写**：`InvalidStateError.Companion.TYPE_CREATE_PUBLIC_KEY_
+            //   CREDENTIAL_INVALID_STATE_ERROR` 在 1.6.0 里是 **internal**（CI 实测
+            //   `Cannot access ... it is internal`），库也没有 `CreateCredentialInvalidState
+            //   Exception` 这个类（解包 aar 逐个核对过）⇒ 公开路径只有"custom type + 规范串"。
+            //   ⇒ 别改成引用那个常量，会编译不过。
             fail(
                 CreateCredentialCustomException(
-                    InvalidStateError.TYPE_CREATE_PUBLIC_KEY_CREDENTIAL_INVALID_STATE_ERROR,
+                    INVALID_STATE_ERROR_TYPE,
                     "Credential already registered",
                 ),
             )

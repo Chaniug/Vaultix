@@ -449,12 +449,18 @@ class SettingsViewModel @Inject constructor(
     /**
      * 开发者设置：熄屏 / 进程重建后是否仍要求验证（见 [devRelaxScreenLock]）。
      *
-     * ⚠️ 写口是 `VaultixPreferences` 上的一个 write-only 属性（`setDevRelaxScreenLock =`），
+     * ⚠️ 写口是 `VaultixPreferences` 上的一个 write-only **属性** `writeDevRelaxScreenLock`
+     * （`@set:JvmName("setDevRelaxScreenLock")`，它的 Java 侧名字才是 `set…`），
      * 不是 `suspend fun` —— 那个类已顶格 40 个函数，见那边的 KDoc。所以这里**不需要**
      * `viewModelScope.launch`：写入自带应用级 scope，且本键只影响"下次锁不锁"。
+     *
+     * ⚠️ Kotlin 的 property setter 名字**永远不参与**成员解析：`@set:JvmName` 只影响
+     * JVM 方法名（给 Java 调用方与反射看）。从 Kotlin 里写必须用**属性本身的名字**
+     * （`writeDevRelaxScreenLock = …`）—— 写成 `setDevRelaxScreenLock = …` 会
+     * `Unresolved reference`（CI 实测过）。
      */
     fun setDevRelaxScreenLock(enabled: Boolean) {
-        preferences.setDevRelaxScreenLock = enabled
+        preferences.writeDevRelaxScreenLock = enabled
     }
 
     /** 主题模式（system / light / dark），MainActivity 收集后实时切换。 */

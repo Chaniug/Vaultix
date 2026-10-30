@@ -11,8 +11,8 @@
 |---|---|---|
 | [01-构建与环境](./issues/01-构建与环境.md) | 工程 / 构建 / CI / 工具链 / 环境 | 57 |
 | [02-自动填充](./issues/02-自动填充.md) | 自动填充（AutofillService 链路） | 19 |
-| [03-通行密钥与凭据提供商](./issues/03-通行密钥与凭据提供商.md) | 通行密钥 / Credential Provider / 凭据回灌 | 23 |
-| [04-锁与解锁](./issues/04-锁与解锁.md) | 锁态模型 / 解锁 / 生物识别 / 密钥 | 16 |
+| [03-通行密钥与凭据提供商](./issues/03-通行密钥与凭据提供商.md) | 通行密钥 / Credential Provider / 凭据回灌 | 24 |
+| [04-锁与解锁](./issues/04-锁与解锁.md) | 锁态模型 / 解锁 / 生物识别 / 密钥 | 17 |
 | [05-KDBX本地库](./issues/05-KDBX本地库.md) | KDBX 本地库 | 23 |
 | [06-界面与交互](./issues/06-界面与交互.md) | 界面 / 布局 / 交互动效 / 空态 / 图标 | 49 |
 | [07-数据与同步](./issues/07-数据与同步.md) | 数据模型 / 同步 / 会话 | 25 |
@@ -123,7 +123,7 @@
 | 114 | 一个 `firstOrNull()` 假设同时污染「匹配」与「填充」两侧 |
 | 187 | 🔴 自动填充「保存」链四处断裂：① **锁定态分支漏挂 `saveInfo`** ⇒ 第一次在锁态登录永远不提示保存（`onSaveRequest` 压根不会被调用）② `parse(::…)` 方法引用**丢实参**、字段取「第一个 USERNAME/PASSWORD」**不跳隐藏与空值** ③ `requestCode = id.hashCode()` + `FLAG_UPDATE_CURRENT` ⇒ **撞号就点哪行填同一条**（改 `RequestCodes.next()` 从 8000 起 CAS 自增）④ 明文密码进 `Intent` / `SavedStateHandle`（改 `PendingSaveStore` 一次性票据 + 60s TTL，取不到画「已过期」而非永转圈） |<br>⚠️ 票据 `consume` 必须**原子且一次性**（`SavedStateHandle` 进程重建会重放）。<br>⚠️ TTL 用 `elapsedRealtime` 不用 `currentTimeMillis`（改系统时间能复活票据）。<br>判据：**`PendingIntent` 的 requestCode 是身份，不能由内容哈希兼任**；**凭据不进 `Intent`** |
 
-### [03-通行密钥与凭据提供商](./issues/03-通行密钥与凭据提供商.md) — 通行密钥 / Credential Provider / 凭据回灌
+### [03-通行密钥与凭据提供商](./issues/03-通行密钥与凭据提供商.md) — 通行密钥 / Credential Provider / 凭据回灌（24 条；2026-10-29 新增 #208 excludeCredentials，2026-10-30 新增 #211 type 用官方常量）
 
 | # | 标题 |
 |---|---|
@@ -150,10 +150,11 @@
 | 195 | 🔴 ① `keyAlgorithm` 同一把密钥两个名字：`PasskeyCreateActivity` / `CipherMapper` 写 `"ECDSA"`，`KdbxPasskeyCodec` 写 `"ES256"` ⇒ 任何按算法名判断的地方在**一半数据上判错且不报错**。修法 = `core:model` 新增 `PasskeyKeyAlgorithm`，三处统一引 `ES256`（具体算法名，不是族名）。② 四处 `FLAG_MUTABLE`（解锁动作 / 密码候选 / 通行密钥候选 / 创建入口）—— `AutofillIntents.pending` 早就 IMMUTABLE，**同一条规则只执行了一半** ⇒ 统一改 IMMUTABLE（extras 带 `requestJson`/`credentialId`，可写 = 能让签名指向另一把密钥） |<br>⚠️ 不要加"两种算法名都认"的归一化：那会让"该写哪个"永远悬着。<br>判据：**同一条规则写在两处、只改一处，看起来就"已修"了**（同 #120 / #193） |
 | 196 | 🔴 创建通行密钥**完全不校验** origin 与 rpId 的从属关系：origin 推导顺序与 GET 侧相反，且末级是**凭空构造**的 `"https://$rpId"`（任何没带 origin 的请求都被判合法）⇒ 新建 `PasskeyOriginPolicy`（主机相等、或 rpId 为可注册后缀、且 rpId 不得宽于可注册域），删掉凭空构造的兜底，`Rejected` 直接 `fail`（**文案不含域名**，reason 只进日志） |<br>⚠️ **不能用 `UriMatcher.sameSite`**：那是 Cookie 口径（可注册域相等），会让 `a.example.com` 与 `b.example.com` 互相通过，而 WebAuthn 里两者互不通用。<br>顺带核实**不是漏洞**：`isSameRpId` 是精确匹配（合规）；`CallingAppOrigin` 已是自证式读取 |
 | 197 | 🔴 `authenticatorSelection.residentKey` 从不读，`discoverable` 硬编码 `true` ⇒ 库里所有通行密钥都自称可发现凭证，筛选 / 统计全错，条件发现流程会把 RP 声明为 `discouraged` 的凭证也列出来 ⇒ 新建 `PasskeyAuthenticatorSelection`，按 `required` / `preferred` / `discouraged` / 旧 `requireResidentKey` / 缺省 逐项判定 |<br>⚠️ 缺省记 `true` 是**有意偏离** WebAuthn L2 的 `discouraged` 默认（与 Bitwarden Android 一致），理由见类 KDoc。<br>🔴 本条顺带挖出**测试基建坑**：单测里的 `org.json` 是 mockable 空壳（连 `JSONObject(String)` 构造器都是空的）⇒ `testRuntimeOnly(libs.org.json)` + `UnitTestEnvironmentTest` 守卫，详见 03 篇 #197.4 |
+| 208 | 🔴 注册请求里的 `excludeCredentials` **从不读** ⇒ RP 明确声明「这些凭证我已经有了」时仍会建出第二把同 rpId 的通行密钥（WebAuthn §6.3 要求此时中止并回 `InvalidStateError`）。修法 = `PasskeyExcludePolicy`（解析失败落在**增益侧**不阻断，命中**必须**拦）+ `PasskeyCreateActivity.createPasskey()` 起协程**之前**判定 |<br>⚠️ 判定集合 = `loginCandidates`（通行密钥只挂在登录条目上，本流程写入目标也只有那里）。<br>判据：**规范里写死的语义，不实现就是洞**（哪怕不是安全缺口，后果直接落在体感上） |
+| 211 | 🟡 同上那条 `fail(...)` 的 `type` 写成了裸字面量 `"InvalidStateError"` ⇒ GMS 侧按字符串分派时落进"未知类型"，浏览器 `navigator.credentials.create()` 拿到的 reject 原因不是规范的 `InvalidStateError`，站点无法提示"已注册过"。改用库常量 `InvalidStateError.TYPE_CREATE_PUBLIC_KEY_CREDENTIAL_INVALID_STATE_ERROR`（= `androidx.credentials.TYPE_INVALID_STATE_ERROR`，已 `javap -constants` 核对） |<br>判据：**跨进程协议字段永远用对方的常量，不写字面量** —— 字面量本地测试恒绿，只在真机 + 真 RP 上暴露 |
 | 190 | 见 05 篇 #190（内容指纹全字段，含 `fido2Credentials` 11 字段） |
-| 208 | 注册请求里的 `excludeCredentials` **从不读** |
 
-### [04-锁与解锁](./issues/04-锁与解锁.md) — 锁态模型 / 解锁 / 生物识别 / 密钥
+### [04-锁与解锁](./issues/04-锁与解锁.md) — 锁态模型 / 解锁 / 生物识别 / 密钥（17 条；2026-10-30 新增 #210「从不」档认知澄清 + 开发者「保持不锁」）
 
 | # | 标题 |
 |---|---|
@@ -173,6 +174,7 @@
 | 203 | 🔴 **`init { scope.launch }` 让测试接缝晚一步生效** ⇒ CI 偶发 `Dispatchers.Main was accessed`（`TestMainDispatcherJvm.kt:45`），本地同版本全绿。三接缝（`testingScope`/`testingIoDispatcher`/`testingBlockableIoDispatcher`）只能构造后赋值，而 `init` 在构造期间就跑、落到 `viewModelScope`；`@After resetMain()` 卸掉旧 Main 时仍在跑的任务就炸。修法 = 抽 `startObservers()`（`AtomicBoolean` 幂等）+ `init` 仅在 `testingScope == null` 自启 + 测试工厂设完接缝后手动调 |<br>判据：**接缝的生效范围必须覆盖"用到它的第一个协程"**，`init` 天然不满足。<br>⚠️ 不是"再 setMain 一次"能解决的：问题是有**两个** Main，不是 Main 被卸掉 |
 | 188 | 🟡 锁库**不清剪贴板**（密码留在里面任何 App 可粘）+ 复制**网址**被当敏感内容 30 秒后清空 ⇒ 新增 `VaultixClipboard.clearNow()`（只在确认是自己放的才清，读不到**什么都不做**；判据 `EXTRA_IS_SENSITIVE` 或 label）；`doCopy` 改 `sensitive = !isUri`。⚠️ `clipboardScope` 从 `Main.immediate` 改 `Default` —— 主线程 `delay` 会被 Doze / 界面忙整体推迟 |<br>判据：**「定时清理」必须配一个「立即清理」的触发点**，锁库这一刻正是最需要它的时候 |
 | 189 | 🟡 熄屏**不保证**触发 `onStop`（媒体播放 / 画中画 / `showWhenLocked` 下 Activity 仍 resumed）⇒ 「离开 5 分钟自动锁」熄屏一夜也不锁。修法 = 同时监听 `ACTION_SCREEN_OFF` 并复用 `onAppBackgrounded()` 分流（`Never`/`OnAppRestart` 档位不变）。⚠️ 单测里 `onScreenOff()` 后直接推时间是**假红**，要先 `settle(m)` |<br>判据：**「用户看不见了」至少有三条独立通路：熄屏 / 切后台 / 分屏** |
+| 210 | 🟡 「从不」档 ≠ 用户以为的「清后台/锁屏回来要验证」。`Never` 在任何触发源下都不锁、进程死亡后由信封免交互恢复；用户想要的那套行为其实是 **`OnAppRestart`（重启 App 时）** 档。真机若两版表现不同，先查**实际档位**（设置→锁与安全那行副标题）与**查看层锁/门锁待重装**，别先改锁模型。按用户要求补 **debug-only「保持不锁」开关**（设置→开发者，与日志同组）：偏好 `dev_relax_screen_lock`（默认 `true`），只在 `OnAppRestart` 分支生效，读失败按 `true`（锁） |<br>⚠️ `VaultixPreferences` 已顶格 40 函数 ⇒ 写口做成 `@set:JvmName` 的 write-only 属性。<br>⚠️ relaxed mock 的 `Boolean` 恒 `false` ⇒ 会让 `OnAppRestart` 用例静默变绿，必须显式 stub。<br>判据：**给"开发便利"开口子时，只拦那一档、且默认值必须是安全侧** |
 
 ### [05-KDBX本地库](./issues/05-KDBX本地库.md) — KDBX 本地库（23 条；2026-10-20 新增 #178 并发编辑静默丢一笔 / #179 writeLocks 只增不减）
 
