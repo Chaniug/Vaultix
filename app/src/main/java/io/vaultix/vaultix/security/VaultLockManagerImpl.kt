@@ -29,6 +29,7 @@
 
 package io.vaultix.vaultix.security
 
+import android.app.KeyguardManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -102,6 +103,13 @@ class VaultLockManagerImpl @Inject constructor(
      * 而 `cacheDir` 下这几个目录**只有本应用会写**，所以无条件清。
      */
     private val sensitiveCache: SensitiveCache,
+    /**
+     * 「从不」档的**界面门禁**（2026-10-30，用户诉求见 `AutoViewGate` 文件头）。
+     *
+     * ⚠️ 只由 [onScreenOff] 调用；**切后台不调** —— 普通切后台触发门禁会把
+     * 「从不」档退化成「立即」，用户复制密码去粘贴回来就要指纹。
+     */
+    private val autoViewGate: AutoViewGate,
 ) : VaultLockManager {
 
     // 进程级短任务 scope（启动/取消定时器）。项目当前唯一的调度器限定符是
@@ -163,6 +171,17 @@ class VaultLockManagerImpl @Inject constructor(
 
     /** 每个库的运行中定时器（对齐 Bitwarden `userIdTimerJobMap`）。 */
     private val timerJobMap = mutableMapOf<String, TimeoutJobData>()
+
+    /**
+     * 「这一次熄屏」的凭据（2026-10-30）。
+     *
+     * `onScreenOff` 自增后交给延迟复检；`onScreenOn` 也自增 ⇒ 在途的复检发现
+     * 凭据已变就放弃。见 [scheduleSystemLockCheck]。
+     *
+     * `@Volatile`：写发生在广播接收器（主线程）与协程（[ioDispatcher]）两侧。
+     */
+    @Volatile
+    private var screenOffToken = 0
 
     private val _vaultUnlockDataStateFlow = MutableStateFlow<List<VaultUnlockData>>(emptyList())
     override val vaultUnlockDataStateFlow: StateFlow<List<VaultUnlockData>> =
@@ -375,6 +394,12 @@ class VaultLockManagerImpl @Inject constructor(
      *    靠 Kotlin 的 `map{}` 先快照规避。这里显式取 `toList()` 快照，意图更直白。
      */
     override fun onScreenOn() {
+        // ★ 2026-10-30：作废在途的「锁屏复检」。
+        //   复检有 300ms 延迟（等那些晚一步才把 isDeviceLocked 翻 true 的 ROM）。
+        //   若用户在这 300ms 内又点亮了屏幕，那次复检必须作废 ——
+        //   否则会在用户已经看着界面的瞬间把库锁掉，表现为"用着用着突然弹解锁页"。
+        screenOffToken++
+
         // 先快照：下面的 handleTimeoutActionWithDelay 会改写 timerJobMap，
         // 不能边遍历边改。
         val snapshot = timerJobMap.toList()
@@ -392,16 +417,93 @@ class VaultLockManagerImpl @Inject constructor(
     }
 
     /**
-     * 熄屏（`ACTION_SCREEN_OFF`）→ 按「已离开 App」起一次超时计时。
+     * 熄屏（`ACTION_SCREEN_OFF`）→ 两件事，**顺序不能反**。
      *
-     * 理由见接口 KDoc（#189）。**不是**"熄屏立即锁"：档位语义照旧
-     * （`Never` 不锁、`OnAppRestart` 不锁、`N 分钟` 起 N 分钟定时器）。
+     * ① [onAppBackgrounded]：按「已离开 App」起一次超时计时（#189，修熄屏期间
+     *    `delay` 的计时欠账）。对 `Never` / `OnAppRestart` / `OnSystemLock` 都不锁
+     *    （各自在 `checkForVaultTimeoutInternal` 里早退）。
+     * ② [scheduleSystemLockCheck]：`OnSystemLock` 档的**唯一**触发点 —— 设备真的上锁了
+     *    才立即锁。
      *
-     * 为什么复用 [onAppBackgrounded] 而不是另写一套：熄屏与切后台对"用户是否还在看屏幕"
-     * 是同一件事，判定分流必须一致 —— 两份实现迟早会走偏（这正是本文件反复出现的教训）。
+     * ## 为什么 ② 不能并进 ①（两件事的判定源不同）
+     *
+     * ① 的判据是「用户离开 App」（时间维度）；② 的判据是「设备进入锁屏」（安全状态维度）。
+     * 熄屏**不等于**锁屏：未设锁屏密码的设备熄屏后系统从未上锁，此时 ② 必须不锁
+     * （否则 `OnSystemLock` 会退化成"熄屏即锁"，而这正是用户**没有**选的语义）。
+     * 把它们写成一份实现，就必然要给 ① 加一个它不需要的参数。
      */
     override fun onScreenOff() {
         onAppBackgrounded()
+        // ★ 2026-10-30：「从不」档的界面门禁（只管界面，不动密钥 ⇒ 填充直通）。
+        //   与下面的系统锁检查是**两件事**，都保留：
+        //   - 本行：Never / OnAppRestart 档打 viewLock 标记（进 App 要指纹）；
+        //   - 下一行：OnSystemLock 档真锁（清密钥）。
+        //   若两者同时命中，`handleTimeoutAction` 的 lock 会清掉标记（`VaultSessionManager.lock`），
+        //   最终用户看到的是主密码解锁页 —— 那是更强的那个结果，正确。
+        scope.launch { autoViewGate.gateUnlockedVaults() }
+        scheduleSystemLockCheck()
+    }
+
+    /**
+     * 熄屏后判定「设备是否真的上锁」，是则通知所有库做一次 [CheckTimeoutReason.SystemLocked]
+     * 检查（2026-10-30，`VaultTimeout.OnSystemLock`）。
+     *
+     * ## 为什么要延迟复检一次
+     *
+     * `ACTION_SCREEN_OFF` 与 Keyguard 进入 locked 是**并行**的两件事，没有先后保证。
+     * 多数设备在广播送达时 `isDeviceLocked` 已是 `true`，但部分 ROM（尤其带"抬起唤醒 /
+     * 智能锁"的）会晚几十到几百毫秒。只查一次 ⇒ 那一档在那些机器上**静默失效**，
+     * 而用户完全看不出来（他会以为是自己没设对）。
+     *
+     * ⇒ 先查一次（命中就立即锁，锁得越早越好），未命中再延迟 [SYSTEM_LOCK_RECHECK_DELAY_MS]
+     * 复检一次。**只复检一次**：再多也只是把"永远不锁"拖长，不会变对。
+     *
+     * ## 复检必须可作废
+     *
+     * 用 [screenOffToken] 作为"这一次熄屏"的凭据：`onScreenOn` 会自增它。
+     * 于是「熄屏 → 300ms 内又亮屏」时复检自动失效，不会在用户已经看着界面时锁库。
+     * 这不是优化，是**必须**：安全机制造成的"误锁"比漏锁更快被用户当成 bug 关掉。
+     */
+    private fun scheduleSystemLockCheck() {
+        if (isDeviceLocked()) {
+            notifySystemLocked()
+            return
+        }
+        val token = ++screenOffToken
+        scope.launch {
+            delay(SYSTEM_LOCK_RECHECK_DELAY_MS)
+            if (screenOffToken == token && isDeviceLocked()) {
+                notifySystemLocked()
+            }
+        }
+    }
+
+    /**
+     * 设备当前是否处于**需要凭据才能解开**的锁定状态。
+     *
+     * 用 `isDeviceLocked`（API 22+）而不是 `isKeyguardLocked`：
+     * 后者在"仅滑动解锁"的设备上也会返回 `true`，而那种设备根本没有凭据 ——
+     * 把它算作"已锁"会让 `OnSystemLock` 在无密码手机上变成"熄屏即锁"，
+     * 与档位语义不符（严格判定，见 [VaultTimeout.OnSystemLock] 的 KDoc）。
+     */
+    private fun isDeviceLocked(): Boolean =
+        (context.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager)
+            ?.isDeviceLocked == true
+
+    /**
+     * 通知所有已注册库「设备已锁屏」，由各自档位决定是否真的锁。
+     *
+     * ⚠️ **不在这里判断档位**：档位分流只有 [checkForVaultTimeoutInternal] 一处
+     * （本文件的固定纪律 —— 两份分流迟早会走偏）。所以 `Never` / `N 分钟` 档
+     * 收到这个原因会各自早退，不会误锁。
+     *
+     * `internal` 让单测可以直接模拟"系统锁了"（JVM 里拿不到真的 KeyguardManager）；
+     * 生产侧唯一调用者是 [scheduleSystemLockCheck]。
+     */
+    internal fun notifySystemLocked() {
+        val vaultIds = _vaultUnlockDataStateFlow.value.map { it.vaultId }
+        if (vaultIds.isEmpty()) return
+        vaultIds.forEach { checkForVaultTimeoutInternal(it, CheckTimeoutReason.SystemLocked) }
     }
 
     override fun onAppCreated(isFirstCreation: Boolean, createdForAutofill: Boolean) {
@@ -493,26 +595,80 @@ class VaultLockManagerImpl @Inject constructor(
                     }
                 }
 
-                else -> when (reason) {
-                    is CheckTimeoutReason.AppCreated -> {
-                        // 冷启动（首次创建）一律按档位执行，保证用户看到的是正确状态；
-                        // 非首次创建（如 autofill 拉起）不在此路径处理，避免误锁。
-                        if (reason.firstTimeCreation) {
-                            handleTimeoutAction(vaultId)
-                        }
-                    }
+                VaultTimeout.OnSystemLock -> {
+                    // ★★ 只认「设备真的锁了」这一个原因（2026-10-30）。
+                    //
+                    // ⚠️ **这个分支不能删、也不能并进 else**：本档位的
+                    //   `vaultTimeoutInMinutes` 是 `-3`（见 STORAGE_ON_SYSTEM_LOCK），
+                    //   而 else 分支会做 `minutes.coerceAtLeast(0) * MS_PER_MINUTE`
+                    //   ⇒ 负数被夹成 0 ⇒ **切一次后台就立即锁**，
+                    //   与"只在锁屏时锁"正好相反，而且用户完全看不出是哪一步错了。
+                    //
+                    // 语义边界（逐条对应 VaultTimeout.OnSystemLock 的 KDoc）：
+                    //   - SystemLocked → 锁；
+                    //   - AppBackgrounded / UserChanged / AppCreated → **一律不锁**
+                    //     （AppCreated 时进程都没了，库本来就是锁的，再"锁"一次只是噪音）。
+                    if (reason is CheckTimeoutReason.SystemLocked) handleTimeoutAction(vaultId)
+                }
 
-                    CheckTimeoutReason.AppBackgrounded,
-                    CheckTimeoutReason.UserChanged,
-                    -> {
-                        val minutes = timeout.vaultTimeoutInMinutes ?: 0
-                        handleTimeoutActionWithDelay(
-                            vaultId = vaultId,
-                            delayMs = minutes.coerceAtLeast(0).toLong() * MS_PER_MINUTE,
-                        )
-                    }
+                else -> handleMinuteBasedTimeout(vaultId, timeout, reason)
+            }
+        }
+    }
+
+    /**
+     * 「按分钟数计」的档位（`Immediately` / `N 分钟` / `Custom`）在各原因下的处理
+     * （2026-10-30 抽出）。
+     *
+     * ## 为什么抽出来（两条理由都不是"为了好看"）
+     *
+     * 1. **门禁**：`checkForVaultTimeoutInternal` 的圈复杂度已经顶到 detekt 的 14，
+     *    再加一个档位就是 15。但**不该**为了骗过门禁去合并 `when` 分支 ——
+     *    那是把"两个语义不同的结论"写成一行，比超限更糟。
+     * 2. **它本来就是独立的一条规则**：这一族档位**只认时间**，不认设备锁状态；
+     *    而 `Never` / `OnAppRestart` / `OnSystemLock` 那三个是"认事件"的。
+     *    两族的判据不同，本来就该分在两张表里读。
+     *
+     * ## 判据表
+     *
+     * | 原因 | 动作 |
+     * |---|---|
+     * | `AppCreated`（首次） | 立即锁 |
+     * | `AppCreated`（非首次，如 autofill 拉起） | **不锁**（避免误锁） |
+     * | `AppBackgrounded` / `UserChanged` | 按该库的分钟数起定时器 |
+     * | `SystemLocked` | **不锁** —— 分钟档的判据是时间，设备锁不锁与它无关 |
+     *
+     * ⚠️ 最后一行不能靠"漏掉就不匹配"实现：`reason` 是 sealed class，`when`
+     * 语句对 sealed 类型不穷尽在 Kotlin 1.7+ 是**编译错误**。它不是可选的兜底，
+     * 而是必须写出来的显式结论。
+     */
+    private fun handleMinuteBasedTimeout(
+        vaultId: String,
+        timeout: VaultTimeout,
+        reason: CheckTimeoutReason,
+    ) {
+        when (reason) {
+            is CheckTimeoutReason.AppCreated -> {
+                // 冷启动（首次创建）一律按档位执行，保证用户看到的是正确状态；
+                // 非首次创建（如 autofill 拉起）不在此路径处理，避免误锁。
+                if (reason.firstTimeCreation) {
+                    handleTimeoutAction(vaultId)
                 }
             }
+
+            CheckTimeoutReason.AppBackgrounded,
+            CheckTimeoutReason.UserChanged,
+            -> {
+                val minutes = timeout.vaultTimeoutInMinutes ?: 0
+                handleTimeoutActionWithDelay(
+                    vaultId = vaultId,
+                    delayMs = minutes.coerceAtLeast(0).toLong() * MS_PER_MINUTE,
+                )
+            }
+
+            // ★ 2026-10-30：分钟档（含 Immediately / Custom）收到「设备已锁屏」
+            //   **什么都不做** —— 它们的判据是时间，不是设备锁状态。
+            CheckTimeoutReason.SystemLocked -> Unit
         }
     }
 
@@ -641,10 +797,29 @@ class VaultLockManagerImpl @Inject constructor(
 
         /** 活动账号发生变更。 */
         data object UserChanged : CheckTimeoutReason()
+
+        /**
+         * 设备进入锁屏（Keyguard 已上锁，2026-10-30）。
+         *
+         * 唯一的生产入口是 [notifySystemLocked]（由 [scheduleSystemLockCheck] 在
+         * `ACTION_SCREEN_OFF` 后判定 `isDeviceLocked` 为真时调用）。
+         *
+         * ⚠️ 它**不是**「熄屏」的同义词：熄屏但设备未上锁（无锁屏密码）时不会发出本原因。
+         */
+        data object SystemLocked : CheckTimeoutReason()
     }
 
     private companion object {
         const val MS_PER_MINUTE = 60_000L
         const val TAG = "VaultixLockManager"
+
+        /**
+         * 熄屏后复检「设备是否上锁」的延迟（2026-10-30）。
+         *
+         * 300ms 是权衡：太短 ⇒ 挡不住那几个"锁屏流程比广播慢"的 ROM；太长 ⇒ 用户从
+         * 熄屏到再打开若很快，会看到"刚亮屏就被锁"（虽然有 [screenOffToken] 作废，
+         * 但作废只覆盖"亮屏"，不覆盖"已经亮屏并开始操作"）。
+         */
+        const val SYSTEM_LOCK_RECHECK_DELAY_MS = 300L
     }
 }

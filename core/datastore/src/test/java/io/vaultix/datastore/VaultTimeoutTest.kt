@@ -20,6 +20,7 @@ class VaultTimeoutTest {
     fun `storage value encoding matches documented table`() {
         assertEquals(-2, VaultTimeout.toStorageValue(VaultTimeout.Never))
         assertEquals(-1, VaultTimeout.toStorageValue(VaultTimeout.OnAppRestart))
+        assertEquals(-3, VaultTimeout.toStorageValue(VaultTimeout.OnSystemLock))
         assertEquals(0, VaultTimeout.toStorageValue(VaultTimeout.Immediately))
         assertEquals(5, VaultTimeout.toStorageValue(VaultTimeout.FiveMinutes))
         assertEquals(240, VaultTimeout.toStorageValue(VaultTimeout.FourHours))
@@ -31,6 +32,7 @@ class VaultTimeoutTest {
         val all = listOf(
             VaultTimeout.Never,
             VaultTimeout.OnAppRestart,
+            VaultTimeout.OnSystemLock,
             VaultTimeout.Immediately,
             VaultTimeout.OneMinute,
             VaultTimeout.FiveMinutes,
@@ -62,6 +64,28 @@ class VaultTimeoutTest {
     fun `unknown positive values become Custom`() {
         assertEquals(VaultTimeout.Custom(7), VaultTimeout.fromStorageValue(7))
         assertEquals(VaultTimeout.Custom(1440), VaultTimeout.fromStorageValue(1440))
+    }
+
+    @Test
+    fun `on system lock decodes from minus three`() {
+        // 新键里的 -3 = 「系统锁屏时」。这条与下面的 legacy 用例**成对存在**：
+        // 同一个数值在新旧两条读路径上语义不同，是这个模型最容易看错的地方。
+        assertEquals(VaultTimeout.OnSystemLock, VaultTimeout.fromStorageValue(-3))
+    }
+
+    @Test
+    fun `legacy minus three still means Never not OnSystemLock`() {
+        // ★ 2026-10-30 新增档位时最危险的静默降级点。
+        //
+        // 旧键 `auto_lock_minutes` 的约定是「负数 = 从不锁定」（见 fromLegacyMinutes）。
+        // 新档位把 -3 用掉了，但**旧读路径绝不能跟着改**：
+        // 若 fromLegacyMinutes(-3) 返回 OnSystemLock，一台老机器上残留的 -3
+        // （理论上不该有，但数据是可以被改的）会从"从不锁"变成"锁屏就锁" ——
+        // 方向正好相反，而且用户只会觉得"升级后突然开始要指纹了"。
+        //
+        // ⇒ 旧路径保持 `minutes < 0 -> Never`，**与新增档位互不影响**。
+        assertEquals(VaultTimeout.Never, VaultTimeout.fromLegacyMinutes(-3))
+        assertNotEquals(VaultTimeout.OnSystemLock, VaultTimeout.fromLegacyMinutes(-3))
     }
 
     @Test
@@ -110,5 +134,6 @@ class VaultTimeoutTest {
     fun `never has null minutes and on app restart has minus one`() {
         assertEquals(null, VaultTimeout.Never.vaultTimeoutInMinutes)
         assertEquals(-1, VaultTimeout.OnAppRestart.vaultTimeoutInMinutes)
+        assertEquals(-3, VaultTimeout.OnSystemLock.vaultTimeoutInMinutes)
     }
 }

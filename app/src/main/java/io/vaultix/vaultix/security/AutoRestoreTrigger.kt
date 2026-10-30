@@ -74,6 +74,16 @@ class AutoRestoreTrigger @Inject constructor(
     private val vaultTimeoutPrefs: VaultTimeoutPreferences,
     private val autoUnlock: AutoUnlockRepository,
     private val vaultRepository: VaultRepository,
+    /**
+     * 「从不」档的**界面门禁**（2026-10-30）。
+     *
+     * 只看上面那行 `restore()` 就明白为什么必须在这里补一道：
+     * **信封是免认证的**（`AutoUnlockKeyStore` 用的密钥不需要用户认证），
+     * 所以进程被清掉后重建时，库会被**无验证**地开回来。
+     * 若不补门禁，「清掉后台再打开」就等于完全没验证 —— 正是用户报的场景
+     * （「屏幕熄屏或者清除后台后，……还是会需要指纹解锁」）。
+     */
+    private val autoViewGate: AutoViewGate,
     // ⚠️ 2026-09-29 二次定稿：`AutoLockController`（前台状态）注入**已移除**。
     //
     //  上一轮方案 A 里，前台状态是「恢复的闸门」—— 因为那时 `Never` 档会
@@ -166,6 +176,13 @@ class AutoRestoreTrigger @Inject constructor(
                 "autoRestore → 恢复完成 envelope=${report.envelopeOpened} " +
                     "rooms=${report.roomCount} opened=${report.opened} failed=${report.failedVaultIds.size}"
             }
+            // ★ 2026-10-30：**恢复 ≠ 免验证**。
+            //   这里补一道界面门禁（只打 viewLock 标记，不动刚恢复的密钥）：
+            //   - 用户重新打开 App → 看到解锁页 → 指纹一次 → 进入；
+            //   - 自动填充 / 凭据提供商 → `AutofillActivity` 会看穿自动标记，**直通**。
+            //   `opened == 0`（没有库真被开开）时不必打标记 —— 那说明恢复没成功，
+            //   界面本来就会停在真锁的解锁页，再多一个标记只是噪音。
+            if (report.opened > 0) autoViewGate.gateUnlockedVaults()
         }
     }
 

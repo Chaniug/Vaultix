@@ -187,6 +187,9 @@ class VaultLockManagerImplNeverTest {
             clipboard = mockk(relaxed = true),
             // #193：锁库后还会清 `cache/` 下的明文附件与缩略图。同上，relaxed mock 足够。
             sensitiveCache = mockk(relaxed = true),
+            // 2026-10-30：「从不」档界面门禁（熄屏 / 冷启动后打 viewLock）。
+            // 本文件断言的是"有没有真锁"，门禁是另一层，relaxed mock 足够。
+            autoViewGate = mockk(relaxed = true),
         )
         // ★ 把后台调度器换成本测试的虚拟调度器 ⇒ 定时器与 init 收集全部走虚拟时间。
         //   ⚠️ 必须在 `runCurrent()` **之前**设：`scope` 是 `by lazy`-ish 的 getter，
@@ -275,6 +278,9 @@ class VaultLockManagerImplNeverTest {
             preferences = relaxedPreferences(relaxScreenLock = false),
             clipboard = clipboard,
             sensitiveCache = sensitiveCache,
+            // 2026-10-30：「从不」档界面门禁（熄屏 / 冷启动后打 viewLock）。
+            // 本文件断言的是"有没有真锁"，门禁是另一层，relaxed mock 足够。
+            autoViewGate = mockk(relaxed = true),
         )
         m.testingIoDispatcher = StandardTestDispatcher(testScheduler)
         m.startObservingVaults()
@@ -302,6 +308,9 @@ class VaultLockManagerImplNeverTest {
             preferences = relaxedPreferences(relaxScreenLock = false),
             clipboard = clipboard,
             sensitiveCache = cache,
+            // 2026-10-30：「从不」档界面门禁（熄屏 / 冷启动后打 viewLock）。
+            // 本文件断言的是"有没有真锁"，门禁是另一层，relaxed mock 足够。
+            autoViewGate = mockk(relaxed = true),
         )
         m.testingIoDispatcher = StandardTestDispatcher(testScheduler)
         m.startObservingVaults()
@@ -481,6 +490,9 @@ class VaultLockManagerImplNeverTest {
             preferences = relaxedPreferences(relaxScreenLock = true),
             clipboard = mockk(relaxed = true),
             sensitiveCache = mockk(relaxed = true),
+            // 2026-10-30：「从不」档界面门禁（熄屏 / 冷启动后打 viewLock）。
+            // 本文件断言的是"有没有真锁"，门禁是另一层，relaxed mock 足够。
+            autoViewGate = mockk(relaxed = true),
         )
         m.testingIoDispatcher = StandardTestDispatcher(testScheduler)
         m.startObservingVaults()
@@ -509,6 +521,9 @@ class VaultLockManagerImplNeverTest {
             preferences = relaxedPreferences(relaxScreenLock = true),
             clipboard = mockk(relaxed = true),
             sensitiveCache = mockk(relaxed = true),
+            // 2026-10-30：「从不」档界面门禁（熄屏 / 冷启动后打 viewLock）。
+            // 本文件断言的是"有没有真锁"，门禁是另一层，relaxed mock 足够。
+            autoViewGate = mockk(relaxed = true),
         )
         m.testingIoDispatcher = StandardTestDispatcher(testScheduler)
         m.startObservingVaults()

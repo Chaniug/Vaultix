@@ -13,8 +13,12 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -73,9 +77,30 @@ class VaultTimeoutPreferences @Inject constructor(
          * 本标记的用途只有一个：让 [purgeLegacyPerVaultTimeoutsOnce] 只跑一次。
          */
         val TIMEOUT_SCOPE_MIGRATED = booleanPreferencesKey("vault_timeout_scope_v2")
+
+        /**
+         * 「从不」档的**界面门禁**开关（2026-10-30，默认 `true`）。
+         *
+         * 键名刻意不叫 `view_lock`：`viewLock` 在本项目已有确切含义
+         * （`VaultSessionManager.viewLock` = 手动/自动的**界面标记**），
+         * 而这里是"要不要自动打那个标记"的**策略开关**。
+         */
+        val AUTO_VIEW_GATE_ON_NEVER = booleanPreferencesKey("auto_view_gate_on_never")
     }
 
     private val safeData: Flow<Preferences> = dataStore.safePreferencesFlow()
+
+    /**
+     * 写偏好用的进程级 scope（**只为 write-only 属性服务**）。
+     *
+     * ⚠️ 与 `VaultixPreferences.writeScope` 同款取舍：本类的写口是
+     * `var xxx: Boolean`（`@set:JvmName`），属性 setter **不能是 `suspend`**，
+     * 所以必须自带 scope。别改成"让调用方 `viewModelScope.launch`" ——
+     * 那会把"什么时候落盘"的责任散到每个 UI 调用点（见 #213 的教训：
+     * UI 层多做一步，就多一个能写反的地方）。
+     */
+    @Suppress("InjectDispatcher")
+    private val writeScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /**
      * **某库**的自动锁定档位（有效值 = 覆盖 ?: 全局默认）。
@@ -210,4 +235,52 @@ class VaultTimeoutPreferences @Inject constructor(
     }
 
     private fun vaultTimeoutKey(vaultId: String) = intPreferencesKey("$PER_VAULT_TIMEOUT_PREFIX$vaultId")
+
+    /**
+     * 「从不」档是否启用**界面门禁**（默认 `true`）。
+     *
+     * ## 这是什么（用户诉求 = 对齐 Bitwarden 的保护强度）
+     *
+     * 用户原话：
+     *
+     * > 开启了从不锁定的设置，屏幕熄屏或者清除后台后，bitwarden 好像还是会需要指纹解锁。
+     * > 但是填充并不会受影响……只是进入 bitwarden 这个软件的时候需要验证指纹，其他的不变。
+     *
+     * 也就是**两层锁**，别混成一层：
+     *
+     * | 层 | 管什么 | 「从不」档下的行为 |
+     * |---|---|---|
+     * | 密钥层（`VaultSessionManager.sessions`） | 密钥在不在内存 | **永不真锁** ⇒ 自动填充 / 凭据提供商直通 |
+     * | 界面层（`VaultSessionManager.viewLockedIds`） | 界面要不要挡 | 熄屏 / 冷启动后要指纹 ⇒ **进 App 要验证** |
+     *
+     * ## ⚠️ 三条边界，改之前先读
+     *
+     * 1. **不能做成"真锁"**（清密钥）：自动填充就要重新解锁，正好违背
+     *    「填充并不会受影响」。这里只打 `viewLock` 标记。
+     * 2. **只在指纹门锁可用时生效**（见 `AutoViewGate`）：没有快速解锁手段时，
+     *    这个开关会退化成"每次回来输主密码" —— 比不做门禁更糟。
+     * 3. **触发点只有两个**：熄屏（`ACTION_SCREEN_OFF`）与冷启动自动恢复。
+     *    **普通切后台不触发** —— 用户复制密码去别的 App 粘贴、再回来，
+     *    是高频操作，每次都弹指纹会被当成 bug（用户原话只提了"熄屏"和"清后台"）。
+     *
+     * 默认 `true`：这是**安全侧**的默认值，且用户明确要求"保护效果不错"。
+     * 想完全不被打扰的用户（含开发者）可以关掉它。
+     */
+    val autoViewGateOnNever: Flow<Boolean> =
+        safeData.map { it[AUTO_VIEW_GATE_ON_NEVER] ?: true }
+
+    /**
+     * [autoViewGateOnNever] 的写口；用法 `prefs.writeAutoViewGateOnNever = false`。
+     *
+     * ⚠️ Kotlin 成员解析**只认属性名**：`@set:JvmName("setAutoViewGateOnNever")`
+     * 只改 JVM 方法名，调用方**不能**写 `prefs.setAutoViewGateOnNever = …`
+     * （那会 `Unresolved reference`，见 `.ai/ISSUES.md` #210 第一次 CI 红）。
+     */
+    @set:JvmName("setAutoViewGateOnNever")
+    @Suppress("unused")
+    var writeAutoViewGateOnNever: Boolean
+        get() = error("write-only，只用于写")
+        set(value) {
+            writeScope.launch { dataStore.edit { it[AUTO_VIEW_GATE_ON_NEVER] = value } }
+        }
 }

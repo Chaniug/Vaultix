@@ -57,6 +57,7 @@ class VaultSessionManager @Inject constructor(
             // 根导航会把界面收在「已解锁但查看锁定」的分支上，用户输入主密码解锁后
             // 又被弹回解锁页（2026-09-12 规范化时的判据，见 .ai/ISSUES.md #60 第 2 步）。
             viewLockedIdsState.value = viewLockedIdsState.value - vaultId
+            autoViewLockedIdsState.value = autoViewLockedIdsState.value - vaultId
             unlockedIdsState.value = sessions.keys.toSet()
         }
     }
@@ -67,6 +68,7 @@ class VaultSessionManager @Inject constructor(
             sessions.values.forEach { it.clear() }
             sessions.clear()
             viewLockedIdsState.value = emptySet()
+            autoViewLockedIdsState.value = emptySet()
             unlockedIdsState.value = emptySet()
         }
     }
@@ -107,24 +109,72 @@ class VaultSessionManager @Inject constructor(
     //  - 因此 [viewLock] 必须在未解锁时是**幂等 no-op**（没密钥可保护，标记无意义）。
     private val viewLockedIdsState = MutableStateFlow<Set<String>>(emptySet())
 
+    /**
+     * **自动界面门禁**打上的查看锁（`viewLockedIdsState` 的子集）。
+     *
+     * ## 为什么必须区分来源（2026-10-30，用户诉求「填充不受影响」）
+     *
+     * 同是"界面被挡"，两种来源对**自动填充**的含义完全相反：
+     *
+     * | 来源 | 用户的意图 | 填充时该不该再认证 |
+     * |---|---|---|
+     * | 手动（条目页锁按钮） | "我现在就把界面关上" | **该** —— 否则那个按钮形同虚设 |
+     * | 自动（熄屏 / 冷启动门禁） | "我离开了一下，回来确认是我" | **不该** —— 用户原话「自动填充依然是生效的」 |
+     *
+     * 若不做这个区分，两条路只能二选一：要么填充每次都被要求认证（违背诉求），
+     * 要么手动锁定后填充照样能读（安全语义倒挂）。子集关系天然成立：
+     * 自动门禁一定是"查看了得挡"，反之不成立。
+     */
+    private val autoViewLockedIdsState = MutableStateFlow<Set<String>>(emptySet())
+
     /** 已「锁查看层」的库 id（UI 据此停回解锁页；不影响 autofill/CP 的可用性判定）。 */
     val viewLockedIds: Flow<Set<String>> = viewLockedIdsState.asStateFlow()
 
     /** 该库当前是否只是「查看层被锁」（密钥仍在内存）。 */
     fun isViewLocked(vaultId: String): Boolean = vaultId in viewLockedIdsState.value
 
+    /**
+     * 该库的查看锁**是不是自动门禁打上的**（= 自动填充应当直通）。
+     *
+     * 见 [autoViewLockedIdsState] 的对照表：手动锁仍然要在填充前认证一次，
+     * 自动门禁不要。
+     */
+    fun isAutoViewLocked(vaultId: String): Boolean = vaultId in autoViewLockedIdsState.value
+
     /** 任一库处于查看锁（根导航 / 解锁页自动选库用；只读快照）。 */
     fun anyViewLocked(): Boolean = viewLockedIdsState.value.isNotEmpty()
+
+    /**
+     * 是否有库处于**手动**查看锁（自动填充据此决定"要不要先让用户打开 App 认证"）。
+     *
+     * ⚠️ 自动门禁**不算**：那层只是"回到 App 时确认一下身份"，而填充本身是用户
+     * 在另一个 App 里主动发起的动作，不该被它拦住（用户原话「填充并不会受影响」）。
+     */
+    fun anyManualViewLocked(): Boolean =
+        (viewLockedIdsState.value - autoViewLockedIdsState.value).isNotEmpty()
 
     /**
      * 锁「查看层」：**不动密钥**，仅置标记。
      *
      * 未解锁时是 no-op（没有会话可保护，也不需要挡界面）。
+     *
+     * @param automatic `true` = 自动界面门禁（熄屏 / 冷启动恢复）打上的标记。
+     *   **自动填充会看穿它**（见 [isAutoViewLocked]）；手动锁不会。
+     *
+     * ⚠️ **手动锁会把自动标记"升级"掉**（从 [autoViewLockedIdsState] 里移除）：
+     * 同一库先被自动门禁挡住、用户又在条目页点了锁按钮，此刻的意图是**手动**的，
+     * 填充就该重新认证。反过来的方向（自动覆盖手动）绝不允许 —— 那等于用户的
+     * 显式锁定被一次熄屏悄悄降级成"只挡界面"。
      */
-    suspend fun viewLock(vaultId: String) {
+    suspend fun viewLock(vaultId: String, automatic: Boolean = false) {
         mutex.withLock {
             if (hasOpenSession(vaultId)) {
                 viewLockedIdsState.value = viewLockedIdsState.value + vaultId
+                autoViewLockedIdsState.value = if (automatic) {
+                    autoViewLockedIdsState.value + vaultId
+                } else {
+                    autoViewLockedIdsState.value - vaultId
+                }
             }
         }
     }
@@ -158,15 +208,19 @@ class VaultSessionManager @Inject constructor(
     private fun hasOpenSession(vaultId: String): Boolean =
         sessions.containsKey(vaultId) || kdbxSessions.isUnlocked(vaultId)
 
-    /** 认证通过后清除查看锁（幂等）。 */
+    /** 认证通过后清除查看锁（幂等，两个集合一起清）。 */
     suspend fun clearViewLock(vaultId: String) {
         mutex.withLock {
             viewLockedIdsState.value = viewLockedIdsState.value - vaultId
+            autoViewLockedIdsState.value = autoViewLockedIdsState.value - vaultId
         }
     }
 
     /** 清空全部查看锁（解锁/退出数据库时一并调用）。 */
     suspend fun clearAllViewLocks() {
-        mutex.withLock { viewLockedIdsState.value = emptySet() }
+        mutex.withLock {
+            viewLockedIdsState.value = emptySet()
+            autoViewLockedIdsState.value = emptySet()
+        }
     }
 }

@@ -119,6 +119,23 @@ class SettingsViewModel @Inject constructor(
         )
 
     /**
+     * 「从不」档的**界面门禁**（2026-10-30，默认 `true`）。
+     *
+     * `true` = 档位选「从不」时，熄屏 / 冷启动恢复后进入 App 仍要一次指纹；
+     * `false` = 完全免验证（旧行为）。
+     *
+     * ⚠️ 它**不是**"自动锁定"的替代品，也不是新的档位：档位管「密钥要不要清」，
+     * 本开关只管「界面要不要挡」。自动填充在两种取值下都直通
+     * （用户原话「填充并不会受影响」）。
+     */
+    val autoViewGateOnNever: StateFlow<Boolean> = vaultTimeoutPrefs.autoViewGateOnNever
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = true,
+        )
+
+    /**
      * **开发者设置：熄屏 / 进程重建是否仍要求验证**（2026-10-30；仅 debug 构建有入口）。
      *
      * `true` = **保持不锁**（开发用）：`OnAppRestart` 档退化成 `Never`；
@@ -435,6 +452,17 @@ class SettingsViewModel @Inject constructor(
      */
     fun setGlobalVaultTimeout(timeout: VaultTimeout) {
         viewModelScope.launch { vaultTimeoutPrefs.setGlobalVaultTimeout(timeout) }
+    }
+
+    /**
+     * 写「从不」档的界面门禁开关（见 [autoViewGateOnNever]）。
+     *
+     * ⚠️ 入参与 [autoViewGateOnNever] 的值**完全同向、不取反**：
+     * `SettingsSwitch` 回调传入的已经是新值。在调用点再取反一次会接成
+     * `f(!x) = x` 的恒等映射 —— 症状是"开关永远不动"（`.ai/ISSUES.md` #213）。
+     */
+    fun setAutoViewGateOnNever(enabled: Boolean) {
+        vaultTimeoutPrefs.writeAutoViewGateOnNever = enabled
     }
 
     fun setClipboardClearMs(ms: Long) {

@@ -262,23 +262,43 @@ class AutofillActivity : FragmentActivity() {
             lifecycleScope.launch(Dispatchers.Default) { deliverPendingFill() }
             return
         }
-        // 用户在主界面点的是「主页锁按钮」（查看层锁）：密钥仍在内存，回来时库里
+        // 用户在主界面点的是「主页锁按钮」（**手动**查看层锁）：密钥仍在内存，回来时库里
         // **仍是已解锁**，我们要做的是把界面门禁的认证走一遍 —— 亮卡片让他「打开 Vaultix」
         // 认证一次，回来时上面那条分支会完成回灌。不这么做的话本页会停在透明状态，
         // 用户看到的就是「点了填充什么都没发生」。
+        //
+        // ★ 2026-10-30：**自动**界面门禁（熄屏 / 冷启动恢复后由 `AutoViewGate` 打上）
+        //   不在此列 —— 它只挡 App 界面，填充要直通（用户原话「自动填充依然是生效的」）。
+        //   判断散在 `hasManualViewLockedVault()` 里，别在这里再写一遍条件。
         if (!delivered && !showPrompt.value) {
             lifecycleScope.launch(Dispatchers.Default) {
-                if (hasViewLockedVault()) withContext(Dispatchers.Main) { showPrompt.value = true }
+                if (hasManualViewLockedVault()) withContext(Dispatchers.Main) { showPrompt.value = true }
             }
         }
     }
 
-    /** 是否有库正处「查看层锁」（界面被挡但密钥仍在 → 填充本可读，只差一次认证）。 */
-    private suspend fun hasViewLockedVault(): Boolean {
-        if (!sessionRepository.anyViewLocked()) return false
+    /**
+     * 是否有库正处**手动**「查看层锁」（界面被挡但密钥仍在 → 填充本可读，只差一次认证）。
+     *
+     * ## ★ 为什么必须排除「自动门禁」（2026-10-30，用户诉求）
+     *
+     * 两种查看锁的来源对填充的含义相反（详见 `VaultSessionManager.autoViewLockedIdsState`）：
+     *
+     * | 来源 | 用户意图 | 填充要不要先认证 |
+     * |---|---|---|
+     * | 手动（条目页锁按钮） | "现在把界面关上" | **要** —— 否则那个按钮形同虚设 |
+     * | 自动（熄屏 / 冷启动门禁） | "离开了一下，回来确认是我" | **不要** —— 用户原话「填充不受影响」 |
+     *
+     * 若这里只看 `anyViewLocked()`，熄屏后再去别的 App 填充就会弹一次
+     * "打开 Vaultix 认证" —— 那正是用户说不要的行为。
+     */
+    private suspend fun hasManualViewLockedVault(): Boolean {
+        if (!sessionRepository.anyManualViewLocked()) return false
         val unlocked = runCatching { vaultRepository.observeUnlockedVaultIds().first() }
             .getOrDefault(emptySet())
-        return unlocked.any { sessionRepository.isViewLocked(it) }
+        return unlocked.any {
+            sessionRepository.isViewLocked(it) && !sessionRepository.isAutoViewLocked(it)
+        }
     }
 
     /** 现在是否至少有一个库是解锁的（CP 收尾判断"这次解锁到底成没成"用）。 */

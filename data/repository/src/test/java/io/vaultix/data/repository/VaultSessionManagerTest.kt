@@ -143,6 +143,47 @@ class VaultSessionManagerTest {
     }
 
     @Test
+    fun viewLock_自动门禁只挡界面_自动填充能看穿_手动锁不能() = runTest {
+        // ★ 2026-10-30：用户诉求「从不锁定 + 熄屏后进 App 要指纹，但填充不受影响」。
+        //   实现就是把"自动"与"手动"的查看锁分开记：
+        //   - 自动（AutoViewGate）：`anyManualViewLocked()` 为 false ⇒ 填充直通；
+        //   - 手动（条目页锁按钮）：为 true ⇒ 填充前先让用户认证一次。
+        //   若这条断言坏了，用户会看到"熄屏后再去别的 App 填充，又被要求打开 Vaultix 认证"。
+        val manager = managerWith()
+        manager.unlock("bw", freshKey(11))
+
+        manager.viewLock("bw", automatic = true)
+        assertTrue(manager.isViewLocked("bw"))
+        assertTrue(manager.isAutoViewLocked("bw"))
+        assertFalse(manager.anyManualViewLocked())
+
+        // 同一库上再来一次**手动**锁 ⇒ 升级为手动：填充该重新认证了。
+        // （反方向绝不允许 —— 用户的显式锁定不能被一次熄屏悄悄降级。）
+        manager.viewLock("bw")
+        assertFalse(manager.isAutoViewLocked("bw"))
+        assertTrue(manager.anyManualViewLocked())
+    }
+
+    @Test
+    fun 自动门禁标记_真锁与全清都会一并清掉() = runTest {
+        // 两个集合必须同生共死：只清 viewLockedIds 而留下 autoViewLockedIds，
+        // 下次熄屏后 `isAutoViewLocked` 会对一个"没锁"的库返回 true ——
+        // 自动填充会误以为"这是自动门禁，可以直通"，而实际上库是真锁的。
+        val manager = managerWith()
+        manager.unlock("bw", freshKey(12))
+        manager.viewLock("bw", automatic = true)
+
+        manager.lock("bw")
+        assertFalse(manager.isAutoViewLocked("bw"))
+
+        manager.unlock("bw", freshKey(13))
+        manager.viewLock("bw", automatic = true)
+        manager.clearAllViewLocks()
+        assertFalse(manager.isAutoViewLocked("bw"))
+        assertFalse(manager.anyManualViewLocked())
+    }
+
+    @Test
     fun viewLock_两种会话都没有时是noOp() = runTest {
         val manager = managerWith()
         manager.viewLock("ghost")

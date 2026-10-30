@@ -111,6 +111,40 @@ sealed class VaultTimeout {
         override val vaultTimeoutInMinutes: Int get() = -1
     }
 
+    /**
+     * 系统锁屏时锁定（**设备真正上锁**才锁）。
+     *
+     * ## 来自上游的新档位（2026-10-30 补）
+     *
+     * Bitwarden 在 **2025.11.0** 新增了 `On system lock` / `On app restart` / `Never`
+     * 三个档位（先只在 Android 客户端生效，2025.12.1 起全客户端）。官方描述：
+     *
+     * > On system lock: When the device is locked or the screensaver activates.
+     *
+     * 本类此前只补了后两个 —— 因为 `.ai/decisions/快速解锁房子化-两级钥匙层级-定稿.md`
+     * 里「❌ 仍不做：锁屏即锁档位」的依据是"对齐 Bitwarden，上游没有这一档"。
+     * **该依据已被上游自己推翻**（见该定稿 2026-10-30 的勘误段）。
+     * 用户原话也是两句、对应两档：「app 清掉后台或者**锁屏**后，指纹解锁是正确的方案」。
+     *
+     * ## 语义边界（**只锁这一件事**，别扩大）
+     *
+     * - ✅ 设备进入锁屏（`KeyguardManager.isDeviceLocked == true`）→ 立即锁；
+     * - ❌ 切后台**不锁**（这是本档位与 [Immediately] 的全部区别，也是它的已知弱点：
+     *   手机解锁着被别人拿到，切回 App 仍是开着的 —— 那正是用户选择更严档位的场景）；
+     * - ❌ 进程创建**不锁**（进程都没了，库本来就是锁的，再"锁"一次只是噪音）；
+     * - ❌ 熄屏但设备没锁（未设锁屏密码）→ **不锁**，因为系统层面根本没有"锁"发生。
+     *
+     * ⚠️ **无锁屏密码的设备上本档位永远不会触发**。这一点必须在 UI 上说出来
+     * （见 `auto_lock_on_system_lock_note`），否则就会造出一个"选了但永远没效果"的
+     * 档位 —— 与 #93「谎报状态的开关」是同一族问题。
+     */
+    data object OnSystemLock : VaultTimeout() {
+        override val type: Type get() = Type.ON_SYSTEM_LOCK
+
+        /** `-3`（见 [STORAGE_ON_SYSTEM_LOCK] 的取值说明）。 */
+        override val vaultTimeoutInMinutes: Int get() = STORAGE_ON_SYSTEM_LOCK
+    }
+
     /** 永不自动锁定（只手动锁定 / 进程死亡导致的内存清零）。 */
     data object Never : VaultTimeout() {
         override val type: Type get() = Type.NEVER
@@ -140,6 +174,7 @@ sealed class VaultTimeout {
         ONE_HOUR,
         FOUR_HOURS,
         ON_APP_RESTART,
+        ON_SYSTEM_LOCK,
         NEVER,
         CUSTOM,
     }
@@ -162,6 +197,7 @@ sealed class VaultTimeout {
         fun toStorageValue(value: VaultTimeout): Int = when (value) {
             Never -> STORAGE_NEVER
             OnAppRestart -> STORAGE_ON_APP_RESTART
+            OnSystemLock -> STORAGE_ON_SYSTEM_LOCK
             else -> value.vaultTimeoutInMinutes ?: STORAGE_NEVER
         }
 
@@ -206,6 +242,7 @@ sealed class VaultTimeout {
         fun fromStorageValue(value: Int): VaultTimeout {
             if (value == STORAGE_NEVER) return Never
             if (value == STORAGE_ON_APP_RESTART) return OnAppRestart
+            if (value == STORAGE_ON_SYSTEM_LOCK) return OnSystemLock
             KNOWN_BY_MINUTES[value]?.let { return it }
             return if (value > 0) Custom(value) else DEFAULT
         }
@@ -232,5 +269,22 @@ sealed class VaultTimeout {
 
         /** `OnAppRestart` 的存储值（与 Bitwarden 一致）。 */
         const val STORAGE_ON_APP_RESTART: Int = -1
+
+        /**
+         * [OnSystemLock] 的存储值。
+         *
+         * ⚠️ **`-3` 是本项目的取值，不是 Bitwarden 的原值**。上游用
+         * `vaultTimeoutInMinutes = -1` 表示 `OnAppRestart`、另有一个枚举区分
+         * `OnSystemLock`；而本项目的 `-1`/`-2` 已被 [OnAppRestart] / [Never] 占住
+         * （`-2` 是因为**旧数据里 `-1` 曾是「从不」**，见 [fromLegacyMinutes]），
+         * 所以只能取 `-3`。语义与上游一致，数值刻意不同 —— **别照抄上游的 -2**，
+         * 那会读成 `Never`。
+         *
+         * ⚠️ 负数档位有个共同陷阱：`vaultTimeoutInMinutes` 被 `* 60_000` 之前若只做
+         * `coerceAtLeast(0)`，`-3` 会变成 **0 分钟 = 立即锁**。所以
+         * `VaultLockManagerImpl.checkForVaultTimeoutInternal` 必须给本档位**显式分支**，
+         * 不能让它落进 `else`（那里是按分钟数起定时器的）。
+         */
+        const val STORAGE_ON_SYSTEM_LOCK: Int = -3
     }
 }

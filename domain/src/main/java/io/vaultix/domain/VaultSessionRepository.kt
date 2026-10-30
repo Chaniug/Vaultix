@@ -37,11 +37,29 @@ interface VaultSessionRepository {
     fun anyViewLocked(): Boolean
 
     /**
+     * 是否有库处于**手动**查看锁（自动填充据此决定"要不要先让用户打开 App 认证"）。
+     *
+     * ⚠️ 自动门禁**不算** —— 那层只挡界面，填充照常（用户诉求「填充不受影响」）。
+     */
+    fun anyManualViewLocked(): Boolean
+
+    /**
      * 锁**查看层**：只置内存标记，**不清零、不移除会话密钥**。
      *
      * 未解锁时幂等 no-op（没有会话可保护，标记也无意义）。
+     *
+     * @param automatic `true` = **自动界面门禁**（熄屏 / 冷启动恢复后由
+     *   `AutoViewGate` 打上）。自动填充会**看穿**这类标记（见 [anyManualViewLocked]）；
+     *   手动锁（条目页锁按钮）不会。默认 `false` = 手动。
      */
-    suspend fun viewLock(vaultId: String)
+    suspend fun viewLock(vaultId: String, automatic: Boolean = false)
+
+    /**
+     * 该库的查看锁是否由**自动界面门禁**打上（= 自动填充应当直通）。
+     *
+     * 与 [isViewLocked] 的关系是子集：自动 ⇒ 一定 [isViewLocked]；反之不成立。
+     */
+    fun isAutoViewLocked(vaultId: String): Boolean
 
     /** 认证通过后清除查看锁（幂等）。 */
     suspend fun clearViewLock(vaultId: String)

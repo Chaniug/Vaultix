@@ -886,6 +886,14 @@
     <string name="auto_lock_never_warning">离开 App 时仍会清除内存中的密钥；但回到 App 会自动恢复，无需再次验证。手机处于解锁状态时，任何人都能打开你的密码库，也能在其他应用的登录框中自动填充你的密码。</string>
     <string name="auto_lock_immediately">立即（切后台即锁）</string>
     <string name="auto_lock_on_restart">重启 App 时</string>
+    <!-- 2026-10-30：对齐 Bitwarden 2025.11.0 新增的 On system lock 档位 -->
+    <string name="auto_lock_on_system_lock">系统锁屏时</string>
+    <!-- 2026-10-30：「从不」档的界面门禁。档位管"密钥要不要清"，这一层只管"界面要不要挡"。
+         措辞刻意点明「自动填充不受影响」—— 这既是用户诉求，也是它与「立即锁定」的唯一区别。 -->
+    <string name="auto_view_gate_title">进入 App 时仍需验证</string>
+    <string name="auto_view_gate_desc_on">熄屏或重启 App 后，打开 Vaultix 要指纹；自动填充不受影响</string>
+    <string name="auto_view_gate_desc_off">已关闭：熄屏或重启 App 后不再验证，打开即用（自动填充一直不受影响）</string>
+    <string name="auto_lock_on_system_lock_note">设备真正上锁时立即锁定；只是切换到后台不会锁。手机没有设置锁屏密码时，这一档永远不会触发。</string>
     <string name="auto_lock_minutes_fmt">%1$d 分钟</string>
     <string name="auto_lock_hour_fmt">%1$d 小时</string>
     <string name="auto_lock_day_fmt">%1$d 天</string>

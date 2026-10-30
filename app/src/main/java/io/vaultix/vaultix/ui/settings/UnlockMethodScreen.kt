@@ -15,6 +15,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -136,6 +137,42 @@ fun UnlockMethodScreen(
                     },
                     onClick = { showAutoLockDialog = true },
                 )
+                // ★ 2026-10-30：「从不」档的**界面门禁**（用户诉求 = 对齐 Bitwarden 的保护强度）。
+                //
+                //   为什么只在「从不」档显示：
+                //   - `N 分钟` / `立即` 档有自己的真锁（会清密钥），本来就要验证，再加一层是重复；
+                //   - `重启 App 时` / `系统锁屏时` 档的**卖点就是切后台不打扰**，
+                //     给它们叠"熄屏就验证"会直接破坏所选档位的语义。
+                //   只有「从不」档是"进程活着期间永不免验证"的空白区，这一行就是补它。
+                //
+                //   为什么还要判指纹已启用：本门禁的唯一解锁手段是生物识别
+                //   （`UnlockScreen` 的查看锁分支只给指纹按钮）。没有指纹时它只能
+                //   降级成"每次回来输主密码" —— 比不做门禁更糟，所以**不显示**
+                //   （显示一个"拨了没效果"的开关就是 #93「谎报状态的开关」）。
+                if (globalTimeout == VaultTimeout.Never &&
+                    quickUnlockState.biometric is QuickUnlockController.CapabilityState.On
+                ) {
+                    val autoGate by viewModel.autoViewGateOnNever.collectAsStateWithLifecycle()
+                    SettingsDivider()
+                    SettingsRow(
+                        icon = { Icon(Icons.Filled.Fingerprint, contentDescription = null) },
+                        title = stringResource(R.string.auto_view_gate_title),
+                        subtitle = stringResource(
+                            if (autoGate) {
+                                R.string.auto_view_gate_desc_on
+                            } else {
+                                R.string.auto_view_gate_desc_off
+                            },
+                        ),
+                        trailing = {
+                            SettingsSwitch(
+                                value = autoGate,
+                                // 同向透传：`SettingsSwitch` 回调传入的已经是新值（#213）。
+                                onCheckedChange = viewModel::setAutoViewGateOnNever,
+                            )
+                        },
+                    )
+                }
             }
             // ⚠️ 2026-10-04 观感：这段说明原先写 `horizontal = Spacing.xl`(24dp)，
             //   而卡片自身的水平外边距是 `Spacing.lg`(16dp)

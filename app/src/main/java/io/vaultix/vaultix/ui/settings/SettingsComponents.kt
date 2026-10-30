@@ -510,6 +510,9 @@ internal object AutoLockPresets {
         VaultTimeout.ThirtyMinutes,
         VaultTimeout.OneHour,
         VaultTimeout.FourHours,
+        // ★ 2026-10-30：顺序照 Bitwarden 的菜单（系统锁屏 → App 重启 → 从不）。
+        //   从严到松，用户从上往下读就是"越来越宽松"。
+        VaultTimeout.OnSystemLock,
         VaultTimeout.OnAppRestart,
         VaultTimeout.Never,
     )
@@ -539,6 +542,7 @@ internal fun vaultTimeoutLabel(timeout: VaultTimeout): String = when (timeout) {
     VaultTimeout.Never -> stringResource(R.string.auto_lock_never)
     VaultTimeout.Immediately -> stringResource(R.string.auto_lock_immediately)
     VaultTimeout.OnAppRestart -> stringResource(R.string.auto_lock_on_restart)
+    VaultTimeout.OnSystemLock -> stringResource(R.string.auto_lock_on_system_lock)
     VaultTimeout.OneMinute,
     VaultTimeout.FiveMinutes,
     VaultTimeout.FifteenMinutes,
@@ -574,7 +578,12 @@ internal fun vaultTimeoutLabel(timeout: VaultTimeout): String = when (timeout) {
  * 自动锁定档位对话框（设置首页「自动锁定」行）。
  *
  * 档位集合对齐 Bitwarden `VaultTimeout`（立即 / 1 / 5 / 15 / 30 / 60 / 240 分钟 /
- * 重启时 / 从不 / 自定义）。
+ * **系统锁屏时** / 重启 App 时 / 从不 / 自定义）。
+ *
+ * ⚠️ 「系统锁屏时」是 2026-10-30 补的（上游 2025.11.0 新增）。它与「重启 App 时」
+ * 是**两个不同的触发点**，不可互相替代：锁屏但没被杀进程 → 只有前者会锁；
+ * 被杀进程但没锁过屏 → 只有后者会锁。用户上一轮那句「清掉后台**或者**锁屏后
+ * 要指纹」，在 Bitwarden 里就是这两档的组合。
  *
  * ⚠️ 2026-09-30 晚：**「跟随全局设置（X）」那一项已删**。它原本是给"每库覆盖"用的
  * （选它 = 删掉该库的覆盖键），而用户把逐库入口整个拿掉了（⋮ 里的「自动锁定」）
@@ -653,6 +662,24 @@ internal fun AutoLockDialog(
                     // **这个档位的真实含义**：手机解锁着就等于密码库可进。
                     //
                     // 只在这一档下显示 —— 它是唯一「回来不需要用户交互」的档位。
+                    // ★ 「系统锁屏时」的说明（2026-10-30）。
+                    //
+                    //   必须写出来，因为这一档**有一个静默失效的场景**：手机没设锁屏密码时
+                    //   系统层面从未"上锁"，本档永远不会触发。不说明，用户就会得到
+                    //   一个"选了但永远没效果"的档位 —— 与 #93「谎报状态的开关」同族。
+                    //   同时也点明它**不防切后台**，避免用户把它当"立即"的替代品。
+                    if (timeout == VaultTimeout.OnSystemLock) {
+                        Text(
+                            text = stringResource(R.string.auto_lock_on_system_lock_note),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(
+                                start = Spacing.xs,
+                                end = Spacing.xs,
+                                bottom = Spacing.xs,
+                            ),
+                        )
+                    }
                     if (timeout == VaultTimeout.Never) {
                         Text(
                             text = stringResource(R.string.auto_lock_never_warning),

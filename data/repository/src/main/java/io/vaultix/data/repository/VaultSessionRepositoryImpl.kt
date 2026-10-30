@@ -22,7 +22,12 @@ class VaultSessionRepositoryImpl @Inject constructor(
 
     override fun anyViewLocked(): Boolean = sessions.anyViewLocked()
 
-    override suspend fun viewLock(vaultId: String) = sessions.viewLock(vaultId)
+    override fun anyManualViewLocked(): Boolean = sessions.anyManualViewLocked()
+
+    override fun isAutoViewLocked(vaultId: String): Boolean = sessions.isAutoViewLocked(vaultId)
+
+    override suspend fun viewLock(vaultId: String, automatic: Boolean) =
+        sessions.viewLock(vaultId, automatic)
 
     override suspend fun clearViewLock(vaultId: String) = sessions.clearViewLock(vaultId)
 
