@@ -91,6 +91,15 @@ class AutoRestoreTriggerTest {
         f: Fixture,
         hasEnvelope: Boolean = true,
         restoreReport: AutoRestoreReport = AutoRestoreReport(true, 1, 1, emptyList()),
+        /**
+         * 2026-10-30 新增入参：恢复成功后的**界面门禁**（`AutoViewGate`）。
+         *
+         * 默认 `relaxed`：本文件守的是「什么情况下该恢复 / 该删信封」，
+         * 门禁是恢复之后的下一件事，不该让本文件的用例去感知它。
+         * 「恢复之后 ⇒ 一定打门禁、且只在 `opened > 0` 时打」由下面两条
+         * `恢复成功_打界面门禁` / `恢复一笔都没开_不打门禁` 单独断言。
+         */
+        gate: AutoViewGate = mockk<AutoViewGate>(relaxed = true),
     ): Pair<AutoRestoreTrigger, AutoUnlockRepository> {
         val prefs = mockk<VaultTimeoutPreferences>(relaxed = true)
         // D3：档位**每库一份** ⇒ 触发器改为「按库聚合是否还有 Never」（`anyVaultNever()`）。
@@ -107,7 +116,7 @@ class AutoRestoreTriggerTest {
         // D3：`anyVaultNever()` 要先知道库表（逐库读档位）⇒ 这里给一个固定库。
         every { repository.observeVaults() } returns flowOf(listOf(vault("vault-1")))
 
-        return AutoRestoreTrigger(prefs, autoUnlock, repository) to autoUnlock
+        return AutoRestoreTrigger(prefs, autoUnlock, repository, gate) to autoUnlock
     }
 
     /**
@@ -165,6 +174,56 @@ class AutoRestoreTriggerTest {
         settle()
 
         coVerify(exactly = 0) { autoUnlock.restore() }
+    }
+
+    @Test
+    fun `恢复成功_打界面门禁`() = runTest {
+        // ★ 2026-10-30：**恢复 ≠ 免验证**。
+        //   信封是免认证的（AutoUnlockKeyStore 的密钥不要用户认证），所以"清掉后台
+        //   再打开"会被一声不响地恢复。若不在这里补一道门禁，用户报的场景
+        //   （「熄屏或者清除后台后……还是会需要指纹解锁」）在「清后台」这一半上就没人管。
+        //   变红的含义：有人删掉了 `if (report.opened > 0) autoViewGate.gateUnlockedVaults()`。
+        val f = Fixture()
+        // 门禁的 mock 引用必须留在手里（trigger 只是把它转手给触发器），
+        // 否则断言的是"某个看不见的对象被调用了"。
+        val gate = mockk<AutoViewGate>(relaxed = true)
+        val (_, autoUnlock) = trigger(
+            f,
+            restoreReport = AutoRestoreReport(true, 2, 2, emptyList()),
+            gate = gate,
+        )
+
+        f.timeout.value = VaultTimeout.Never
+        f.keyInMemory.value = false
+
+        awaitCondition("恢复成功 ⇒ 应打界面门禁") {
+            runCatching { coVerify(exactly = 1) { gate.gateUnlockedVaults() } }.isSuccess
+        }
+        // 顺带把「恢复确实发生了」也钉住，否则这条用例在"根本没恢复"时也能假绿
+        // （`opened > 0` 的分支压根没被走到）。
+        coVerify(exactly = 1) { autoUnlock.restore() }
+    }
+
+    @Test
+    fun `恢复一笔都没开_不打门禁`() = runTest {
+        // `opened == 0` ⇒ 没有任何库真被开开，界面本来就停在真锁的解锁页，
+        // 再打一个 viewLock 标记只会多一层噪音（而且会掩盖真正的解锁流程）。
+        val f = Fixture()
+        val gate = mockk<AutoViewGate>(relaxed = true)
+        val (_, autoUnlock) = trigger(
+            f,
+            restoreReport = AutoRestoreReport(true, 1, 0, listOf("vault-1")),
+            gate = gate,
+        )
+
+        f.timeout.value = VaultTimeout.Never
+        f.keyInMemory.value = false
+
+        awaitCondition("恢复动作应已发生") {
+            runCatching { coVerify(exactly = 1) { autoUnlock.restore() } }.isSuccess
+        }
+        settle()
+        coVerify(exactly = 0) { gate.gateUnlockedVaults() }
     }
 
     // ---- 规则 2：幂等写信封 ----
