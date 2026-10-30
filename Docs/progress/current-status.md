@@ -478,5 +478,5 @@
 | 真因 | **不是数据流**（3 条单测已钉住），是**命中框**：M3 `Switch` 52×32dp，`toggleable` 命中框就这 52×32dp；该行又没传 `onClick` ⇒ 行内唯一热区只有 32dp 高 |
 | 修法 | `SwitchWithTouchTarget`：开关占 52×**48**dp 格子、`Switch` 仍居中画 52×32 ⇒ 视觉零变化、热区 +8dp/侧；`SettingsSwitch` 内置（13 调用点）、`CapabilityToggle` 三分支共用；`DisplayOptionsSheet` 矮行 padding 提一档 |
 | ⚠️ 死路 | `Modifier.minimumInteractiveComponentSize()` 对 `Switch` **无效**（它只"提供" Local，`Switch` 不读）；`Box.clickable` 扩热区会**切两次弹回原样** |
-| 门禁 | detekt 2.0.0-alpha.6 CLI：改动 3 文件 0 issue（先跑过坏样例确认 CLI 会报错） |
+| 门禁 | detekt 2.0.0-alpha.6 CLI：改动 3 文件 0 issue（先跑过坏样例确认 CLI 会报错）<br>CI `bccb1f9` ✅ success |
 | 待办 | **用户真机复测**（按开关边缘也应生效） |
