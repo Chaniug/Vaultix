@@ -68,9 +68,11 @@ class AutoViewGateTest {
 
         val timeoutPrefs = mockk<VaultTimeoutPreferences>(relaxed = true)
         every { timeoutPrefs.vaultTimeout(any()) } returns flowOf(timeout)
+        // ⚠️ 产品开关挂在 `VaultTimeoutPreferences` 上，**不在** `VaultixPreferences`。
+        //    这两个开关听上去是一组，实际分属两个类（2026-10-30 CI 红就红在这里）。
+        every { timeoutPrefs.autoViewGateOnNever } returns flowOf(gateOn)
 
         val preferences = mockk<VaultixPreferences>(relaxed = true)
-        every { preferences.autoViewGateOnNever } returns flowOf(gateOn)
         every { preferences.devRelaxScreenLock } returns flowOf(devRelax)
 
         val sessions = mockk<VaultSessionRepository>(relaxed = true)

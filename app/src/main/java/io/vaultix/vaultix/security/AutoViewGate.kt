@@ -75,10 +75,16 @@ class AutoViewGate @Inject constructor(
     private val sessionRepository: VaultSessionRepository,
     private val vaultTimeoutPrefs: VaultTimeoutPreferences,
     /**
-     * 两个开关的读口：`autoViewGateOnNever`（产品开关）与 `devRelaxScreenLock`（开发者）。
+     * **开发者**开关 `devRelaxScreenLock` 的读口。
      *
-     * 读整个门面而不是再抽子类：这两个开关分属不同语义（产品策略 / debug 辅助），
-     * 硬塞进 [VaultTimeoutPreferences] 会让那组 KDoc 自相矛盾（同 #210 的取舍）。
+     * ⚠️ 产品开关 `autoViewGateOnNever` **不在**这里，它挂在 [vaultTimeoutPrefs] 上
+     * —— 与"自动锁定档位"同组（它就是那个档位的一个附属策略）。
+     *
+     * 曾经写错过一次（2026-10-30 `812218b` 的 CI 红）：本类按
+     * `preferences.autoViewGateOnNever` 去读，而 `VaultixPreferences` 里**根本没有**
+     * 这个属性 ⇒ `Unresolved reference` + 三个 `Cannot infer type`。报错指向的是第一处
+     * 使用点，而不是"属性不存在"这个事实，看着像泛型问题。
+     * 判据：**加属性前先确认它在哪个类里**（`grep -rn "名字"`），别凭"这两个开关听起来是一组"。
      */
     private val preferences: VaultixPreferences,
 ) {
@@ -121,7 +127,7 @@ class AutoViewGate @Inject constructor(
      * 这处决定的是"要不要挡界面"（可用性动作）。别把两处的默认值抄成一样。
      */
     private suspend fun gateEnabled(): Boolean {
-        val product = runCatching { preferences.autoViewGateOnNever.first() }.getOrDefault(false)
+        val product = runCatching { vaultTimeoutPrefs.autoViewGateOnNever.first() }.getOrDefault(false)
         if (!product) return false
         val devRelax = runCatching { preferences.devRelaxScreenLock.first() }.getOrDefault(false)
         return !devRelax

@@ -1,6 +1,6 @@
 # 当前进度快照
 
-> 最后更新：**2026-10-30**（晚：开关双重取反 ⇒ 恒等映射 #213；命中框 52×32→52×48 #212；同日：锁语义澄清 + 开发者「保持不锁」#210 / 通行密钥 type 串 #211）—— **现状请看文末「当前状态（2026-10-30）」，下方更早的正文只作过程留痕。**
+> 最后更新：**2026-10-30**（晚：**两层锁 #214** —— 「从不」档界面门禁 `AutoViewGate` + 新档位 `OnSystemLock`；更早：开关双重取反 ⇒ 恒等映射 #213；命中框 52×32→52×48 #212；锁语义澄清 + 开发者「保持不锁」#210 / 通行密钥 type 串 #211）—— **现状请看文末「当前状态（2026-10-30）」，下方更早的正文只作过程留痕。**
 >
 > 上一版头注（2026-09-20，第三轮：胶囊阴影掉帧 + 强调色语义 + README/文档对齐）：
 >
@@ -494,3 +494,28 @@
 | 新增测试 | `VaultixPreferencesDevRelaxTest` 3 条（默认值 / 写口往返 / 旧键必须被忽略） |
 | 门禁 | detekt 6 个文件 0 issue；`check_issues_index.py` ✅；CI `c69fa9e` ✅ success（含新增 3 条偏好层单测） |
 | 待办 | **用户第二次真机复测** |
+
+---
+
+## 当前状态（2026-10-30 本轮）· #214 两层锁 + 「系统锁屏时」档
+
+| 项 | 结论 |
+|---|---|
+| 用户诉求 | 「开启了从不锁定，熄屏或者清除后台后还是会需要指纹解锁；但填充并不受影响……其他的不变」 |
+| 真因（两处） | ① `AutoRestoreTrigger` 用**免认证信封**恢复 ⇒ 清后台静默开回来；② `VaultixApplication`/`AutoLockController` 对 `Never` 直接 return ⇒ 无人挡界面 |
+| 为什么不能"熄屏就锁库" | 那会让填充重新认证、密钥清零 ⇒ 违反「其他的不变」。缺的不是更狠的锁，是**两层** |
+| 修法 | 第二层复用已有的 `viewLock`（#61，只挡界面不动密钥）+ 新增 `AutoViewGate` 在**仅两个**时刻自动置位（`ACTION_SCREEN_OFF` / 信封恢复且 `opened>0`）；自动标记存 `autoViewLockedIdsState` **子集** ⇒ 界面全挡、填充看穿自动但仍尊重手动 |
+| 前置条件 | 已解锁库 / 产品开关 / 档位==`Never` / **指纹可用** / 开发者不锁 —— 缺一即跳过；读失败 **fail-open**（与 `devRelax` 的 fail-closed 相反，KDoc 写了理由） |
+| 新档位 | `VaultTimeout.OnSystemLock`（`-3`）：严格 `isDeviceLocked()` + 300ms 复查 + `screenOffToken` 取消；`fromLegacyMinutes(-3)` 仍 `Never`（`assertNotEquals` 钉死） |
+| 设置入口 | 「进入 App 时仍需验证」开关，**只在** 全局档位==`Never` 且生物识别可用时显示 |
+| 新增单测 | `AutoViewGateTest` 6 条 + `VaultLockManagerImplSystemLockTest` 4 条 + `VaultSessionManagerTest` 2 条 + `VaultTimeoutTest` 3 条 + `AutoRestoreTriggerTest` 2 条（恢复后的门禁接线） |
+| 门禁 | detekt 2.0.0-alpha.6：全部改动 + 测试源 **0 issue**；`check_issues_index.py` ✅（04 篇 19→20） |
+| CI | `812218b` ❌ → 唯一红点：`AutoRestoreTriggerTest` 仍按三参构造（detekt/编码/keystore 全绿，只有 `Build Debug APK` 红）⇒ `f7ac3d2` 修 |
+| 待办 | **用户真机复测**：从不档 ① 熄屏回来要指纹 ② 清后台重开要指纹 ③ 填充仍直通 ④ 熄屏后回来看条目不用重新输主密码 |
+
+### 判据（本轮新增四条）
+
+1. **「锁」至少两层，先问锁哪一层** —— 密钥可见性与界面可见性是两个独立问题，合成一个布尔必然二选一。
+2. **门禁类改动先问"能力不可用时退化长什么样"** —— 没有指纹时门禁 = 每次回来输主密码，比不做更糟。
+3. **自动置位的锁态必须是可区分子集** —— 共用标志 ⇒ 下游只能"一律认证"或"一律放行"，后者是安全倒退。
+4. **fail-open / fail-closed 按"代价更大的一侧"定，每个都写理由** —— 同项目里两种方向可以并存。

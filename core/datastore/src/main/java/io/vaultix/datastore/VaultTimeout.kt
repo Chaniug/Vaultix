@@ -202,20 +202,12 @@ sealed class VaultTimeout {
         }
 
         /**
-         * 反序列化：存储整数 → 档位。
-         *
-         * 已知分钟数会还原成对应的 data object（而不是 `Custom`），这样 UI 的单选状态、
-         * `==` 比较与来回映射都是稳定双射（避免 `Custom(5) != FiveMinutes` 这类"看起来一样
-         * 但不相等"的坑）。
-         */
-        /**
          * 已知预设档位的「分钟数 → 档位」查找表。
          *
          * 用各 data object 自身的 [vaultTimeoutInMinutes] 作键，避免在 [fromStorageValue]
          * 里重复写死魔法数字（detekt [MagicNumber] 门禁会拦截）；新增预设档位时只要把它加进
          * 这个列表就会被自动识别，无需再改 [fromStorageValue] 的分支。
-         */
-        /**
+         *
          * ⚠️ **必须是 `by lazy`，不能改回急切 `val`**（2026-09-29 修，issues **#129**）。
          *
          * 急切实现在 `VaultTimeout.<clinit>` **执行期间**就会调用
@@ -239,6 +231,19 @@ sealed class VaultTimeout {
             ).mapNotNull { timeout -> timeout.vaultTimeoutInMinutes?.let { it to timeout } }.toMap()
         }
 
+        /**
+         * 反序列化：存储整数 → 档位。
+         *
+         * 已知分钟数会还原成对应的 data object（而不是 `Custom`），这样 UI 的单选状态、
+         * `==` 比较与来回映射都是稳定双射（避免 `Custom(5) != FiveMinutes` 这类"看起来一样
+         * 但不相等"的坑）。
+         *
+         * 负数档位的判定顺序**有意写死在前面**（[STORAGE_NEVER] → [STORAGE_ON_APP_RESTART]
+         * → [STORAGE_ON_SYSTEM_LOCK]），没有塞进 [KNOWN_BY_MINUTES]：那张表按
+         * `vaultTimeoutInMinutes` 建构，把负数也放进去依赖"不会有人返回 null 当键"，
+         * 而 `Never.vaultTimeoutInMinutes` 恰好是 null —— 一旦有人改了那个返回值，
+         * 负数会被静默吞掉。显式分支不会。
+         */
         fun fromStorageValue(value: Int): VaultTimeout {
             if (value == STORAGE_NEVER) return Never
             if (value == STORAGE_ON_APP_RESTART) return OnAppRestart
