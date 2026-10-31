@@ -1,6 +1,6 @@
 # 当前进度快照
 
-> 最后更新：**2026-10-30**（晚：**两层锁 #214** —— 「从不」档界面门禁 `AutoViewGate` + 新档位 `OnSystemLock`；更早：开关双重取反 ⇒ 恒等映射 #213；命中框 52×32→52×48 #212；锁语义澄清 + 开发者「保持不锁」#210 / 通行密钥 type 串 #211）—— **现状请看文末「当前状态（2026-10-30）」，下方更早的正文只作过程留痕。**
+> 最后更新：**2026-10-31**（**一次指纹够所有库 #215** —— 认证粒度对齐全局，`clearAutoViewLocks()` 跨库清自动门禁、手动锁不动；更早：两层锁 #214「从不」档界面门禁 + `OnSystemLock` 档；双重取反 #213；命中框 #212；锁语义澄清 #210）—— **现状请看文末「当前状态（2026-10-31）」，下方更早的正文只作过程留痕。**
 >
 > 上一版头注（2026-09-20，第三轮：胶囊阴影掉帧 + 强调色语义 + README/文档对齐）：
 >
@@ -519,3 +519,55 @@
 2. **门禁类改动先问"能力不可用时退化长什么样"** —— 没有指纹时门禁 = 每次回来输主密码，比不做更糟。
 3. **自动置位的锁态必须是可区分子集** —— 共用标志 ⇒ 下游只能"一律认证"或"一律放行"，后者是安全倒退。
 4. **fail-open / fail-closed 按"代价更大的一侧"定，每个都写理由** —— 同项目里两种方向可以并存。
+
+---
+
+## 当前状态（2026-10-31）· 一次指纹够所有库（#215）
+
+触发：用户报「进 App 要验两次指纹」—— 两个密码库，熄屏后重进，验完进第一个库、
+**切到第二个库又弹一次**。用户判据是对的：「两个密码库不应该是同一个指纹吗，指纹检验一次就够了啊」。
+
+### 真因：认证是全局的，门禁标记却是按库的
+
+| 环节 | 行为 | 后果 |
+|---|---|---|
+| `AutoViewGate.gateUnlockedVaults()`（#214） | 熄屏给**每个**已解锁的「从不」库各打一个 `automatic = true` | 两库 ⇒ 两个标记 |
+| `RootNavViewModel` | 「**任一**库带查看锁 ⇒ 收回解锁页」 | 剩一个标记，整个 UI 就停在解锁页 |
+| `UnlockViewModel.completeLocalUnlock(forViewLock = true)` | 原来只调 `clearViewLock(vaultId)` | 只清当前库 ⇒ 切库再验一次 |
+
+⇒ **验几次 = 用户有几个库**。Bitwarden 无此问题是因为它的锁定态是**账号级**，门禁与认证同粒度；
+#214 把门禁细化到库、没同步细化认证，错位就出现了。
+
+### 改动
+
+| 文件 | 改动 |
+|---|---|
+| `data/repository/.../VaultSessionManager.kt` | 新增 `clearAutoViewLocks()`：`viewLockedIds -= autoViewLockedIds`（**只清自动子集**），同一 `mutex` 临界区内一次改完 |
+| `domain/.../VaultSessionRepository.kt` | 同名接口成员 + KDoc（为什么不 `for` 循环 `clearViewLock`） |
+| `data/repository/.../VaultSessionRepositoryImpl.kt` | 零逻辑直通 |
+| `app/.../ui/unlock/UnlockViewModel.kt` | `forViewLock` 分支一行：`clearViewLock(vaultId)` → `clearAutoViewLocks()` |
+| `data/repository/src/test/.../VaultSessionManagerTest.kt` | +1 例：跨库一次清干净 + 手动锁原样保留 |
+| `app/src/test/.../ui/unlock/ViewUnlockScopeTest.kt` | **新文件**，2 例：钉「UI 到底调了哪个方法」+ 查看锁不碰密钥 |
+
+刻意**弃用**的两条：`clearAllViewLocks()`（会连带抹掉**手动**锁 = 安全倒退）、
+UI 里 `for` 循环 `clearViewLock`（仍是逐库，且漏掉之后才出现的库）。
+
+### 门禁
+
+| 项 | 结果 |
+|---|---|
+| 编码 / U+FFFD / 括号配平（6 文件） | ✅ 无异常 |
+| 新增行 ≤120 列 | ✅ 超出者全是注释（detekt 不计） |
+| 七个 `check_*.py` 静态脚本 | ✅ 全 exit 0 |
+| `check_issues_index.py` | ✅ 索引 = 题注 = 正文 |
+| 编译 / 单测 | CI（沙箱无 Android SDK，CI 是唯一编译器） |
+
+### ⚠️ 新判据
+
+1. **认证粒度必须与门禁粒度对齐** —— 一全局一按库，立刻退化成「每库各验一次」；
+2. **「存储方式」不许升格成「语义」** —— 按库存标记是为了知道锁哪几个库，不是让用户按库出认证；
+3. **回归门禁要钉在调用点** —— 只测数据层的话，把 UI 改回 `clearViewLock(vaultId)` 依然全绿。
+
+### 仍未做（不变）
+
+「已知未做」六条与 10-29/10-30 版一致，本轮未触碰。

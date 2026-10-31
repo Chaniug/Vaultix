@@ -12,7 +12,7 @@
 | [01-构建与环境](./issues/01-构建与环境.md) | 工程 / 构建 / CI / 工具链 / 环境 | 57 |
 | [02-自动填充](./issues/02-自动填充.md) | 自动填充（AutofillService 链路） | 19 |
 | [03-通行密钥与凭据提供商](./issues/03-通行密钥与凭据提供商.md) | 通行密钥 / Credential Provider / 凭据回灌 | 24 |
-| [04-锁与解锁](./issues/04-锁与解锁.md) | 锁态模型 / 解锁 / 生物识别 / 密钥 | 20 |
+| [04-锁与解锁](./issues/04-锁与解锁.md) | 锁态模型 / 解锁 / 生物识别 / 密钥 | 21 |
 | [05-KDBX本地库](./issues/05-KDBX本地库.md) | KDBX 本地库 | 23 |
 | [06-界面与交互](./issues/06-界面与交互.md) | 界面 / 布局 / 交互动效 / 空态 / 图标 | 49 |
 | [07-数据与同步](./issues/07-数据与同步.md) | 数据模型 / 同步 / 会话 | 25 |
@@ -154,7 +154,7 @@
 | 211 | 🟡 同上那条 `fail(...)` 的 `type` 写成了裸字面量 `"InvalidStateError"` ⇒ GMS 侧按字符串分派时落进"未知类型"，浏览器 `navigator.credentials.create()` 拿到的 reject 原因不是规范的 `InvalidStateError`，站点无法提示"已注册过"。改用库常量 `InvalidStateError.TYPE_CREATE_PUBLIC_KEY_CREDENTIAL_INVALID_STATE_ERROR`（= `androidx.credentials.TYPE_INVALID_STATE_ERROR`，已 `javap -constants` 核对） |<br>判据：**跨进程协议字段永远用对方的常量，不写字面量** —— 字面量本地测试恒绿，只在真机 + 真 RP 上暴露 |
 | 190 | 见 05 篇 #190（内容指纹全字段，含 `fido2Credentials` 11 字段） |
 
-### [04-锁与解锁](./issues/04-锁与解锁.md) — 锁态模型 / 解锁 / 生物识别 / 密钥（20 条；2026-10-30 新增 #210「从不」档认知澄清 + 开发者「保持不锁」、#212 开关命中框、#213 双重取反把开关钉死、#214 两层锁 + 「系统锁屏时」档）
+### [04-锁与解锁](./issues/04-锁与解锁.md) — 锁态模型 / 解锁 / 生物识别 / 密钥（21 条；2026-10-30 新增 #210「从不」档认知澄清 + 开发者「保持不锁」、#212 开关命中框、#213 双重取反把开关钉死、#214 两层锁 + 「系统锁屏时」档；2026-10-31 #215 认证粒度对齐全局 ⇒ 一次指纹清所有库的自动门禁）
 
 | # | 标题 |
 |---|---|
@@ -178,6 +178,7 @@
 | 212 | 🔴 **#210 的开关「点了没反应」**（真机回归）。数据流没问题，问题在**命中框**：M3 `Switch` 画出来 52×32dp，`toggleable` 的命中框就是这 52×32dp，而 `SettingsRow` 这行没传 `onClick` ⇒ 行内唯一热区只有 32dp 高，拇指上下差 8dp 就落空。⚠️ 给 `Switch` 包 `Modifier.minimumInteractiveComponentSize()` **无效**：它只是**提供** `LocalMinimumInteractiveComponentSize`，`Switch` 的实现里**没读**（读它的是 `Checkbox`/`RadioButton`/`Slider`）。修法 = `SwitchWithTouchTarget` 让开关占 52×48dp 格子（`Switch` 仍居中画 32dp，视觉零变化），`SettingsSwitch` 内置 + `CapabilityToggle` 三分支共用；矮行（`DisplayOptionsSheet`）改 `Spacing.md` 刚好装下 |<br>⚠️ 别用 `Box.clickable` 扩热区：内外都收到点击 ⇒ 切两次弹回原样，症状同样是"没反应"。<br>判据：**"点了没反应"先量命中框，别先怀疑数据流** |
 | 213 | 🔴 **#212 之后仍然"点不动"**：双重取反把开关接成**恒等映射**。偏好第一版是反义（`true`=仍需验证），UI 又在 `onCheckedChange` 里取反一次；而 Compose `Switch` 的回调传进来**已经是新值**（`!checked`）⇒ 写入 `!(!checked)` = 当前值 ⇒ 每次点击都写回旧值、状态永远不变（用户："始终是打开状态"）。⚠️ 数据流单测全绿、detekt 也看不见 —— 写入是成功的，只是写的是同一个值。修法 = 语义翻正（`true`=保持不锁，默认 `false`）+ **换键 `dev_relax_screen_lock_v2`**（旧键存的是反义，复用会让老机器的 `true` 静默变"不锁"）+ UI `onCheckedChange = viewModel::setDevRelaxScreenLock` **不再取反**；`VaultLockManagerImpl` 改 `if (!…)`，读失败默认 `false` |<br>⚠️ 改名要问"`true` 时开关该是开还是关"，不同向就一定会有人补一个 `!`。<br>⚠️ 改语义必换键：旧数据在新语义下会被反向误读，且通常朝"放松安全"的方向。<br>判据：**"点了永远不动"先怀疑 `f(!x)=x`，别只怀疑命中框** |
 | 214 | 🟢 **「从不」档对齐 Bitwarden：两层锁**（密钥层不锁 / 界面层验指纹）+ 新增「系统锁屏时」档。原 `Never` 有两个洞：① `AutoRestoreTrigger` 用**免认证信封**恢复（清后台后静默开回来）② `VaultixApplication`/`AutoLockController` 对 `Never` 直接 return ⇒ 没有东西挡界面。⚠️ 不能按直觉"熄屏就锁库"：那会让填充重新认证、密钥清零，违反用户"填充不受影响、其他的不变"。修法 = 复用已有的 `viewLock`（#61，只挡界面不动密钥），新增 `AutoViewGate` 在**仅两个**时刻自动置位（`ACTION_SCREEN_OFF` / 信封恢复且 `opened>0`），自动标记存 `autoViewLockedIdsState` **子集** ⇒ `AutofillActivity` 看穿自动、仍尊重手动（`anyManualViewLocked`）。五个前置条件（已解锁库/开关/`Never`/**指纹可用**/开发者不锁）缺一即跳过；读失败 **fail-open**（挡界面属可用性，与 `devRelax` 的 fail-closed 相反）。另加 `VaultTimeout.OnSystemLock`（`-3`，用严格 `isDeviceLocked()` + 300ms 复查）|<br>⚠️ 把"密钥在不在内存"和"界面要不要验证"合成一个布尔，必然在"填充要认证"和"清后台能进"之间二选一。<br>⚠️ 自动置位的锁态必须是**可区分子集**，否则下游只能二选一，而"一律放行"是安全倒退。<br>⚠️ 门禁必须先问"退化路径"：没有指纹时门禁 = 每次回来输主密码，所以"指纹可用"是硬前置条件。<br>⚠️ `-3` 与"负数=旧键 Never"冲突：`fromLegacyMinutes(-3)` 仍返回 `Never`，用 `assertNotEquals` 钉死。<br>判据：**"锁"至少两层，先问锁哪一层；再问这层退化时长什么样** |
+| 215 | 🟢 **「进 App 要验两次指纹」—— 认证是全局的，门禁标记却是按库的**（#214 的直接后续）。用户：「进入 app 时候验证指纹怎么需要两次，两个密码库？两个密码库不应该是同一个指纹吗，指纹检验一次就够了啊」。真因是**粒度错位**：① `AutoViewGate` 熄屏时给**每个**已解锁的「从不」库各打一个 `automatic` 标记；② `RootNavViewModel` 判据是「**任一**库带查看锁 ⇒ 收回解锁页」；③ 认证成功只调 `clearViewLock(vaultId)` ⇒ 只清当前库 ⇒ 切下一个库再验一次，**验几次 = 用户有几个库**。⚠️ Bitwarden 没这个 bug 是因为它的锁定态是**账号级**，门禁与认证天然同粒度；#214 把门禁细化到库、却没同步细化认证。修法 = 把**认证**粒度对齐到全局（不是把门禁粗化）：新增 `clearAutoViewLocks()`，`viewLockedIds -= autoViewLockedIds` 子集相减；UI 一行 `clearViewLock(vaultId)` → `clearAutoViewLocks()`。⚠️ 刻意不用 `clearAllViewLocks()`（会连带抹掉**手动**锁 = 安全倒退），也不在 UI 里 for 循环 `clearViewLock`（仍是逐库，且漏掉之后才出现的库）。测试两层各钉一遍：`ViewUnlockScopeTest` 钉「UI 到底调了哪个方法」，`VaultSessionManagerTest` 钉集合代数（自动跨库全清 + 手动原样保留）—— 只测数据层的话，UI 改回去依然全绿 |<br>⚠️ 认证粒度必须与门禁粒度对齐：一个全局、一个按库，立刻退化成「每库各验一次」。<br>⚠️ 「存储方式」不许升格成「语义」：按库存标记是为了知道锁哪几个库，不是让用户按库出认证。<br>⚠️ 要扩大清除范围时，正确解往往是**新增一个更精确的方法**，而不是放宽已有的那个。<br>判据：**用户说「验一次就够了」时，先查认证粒度和门禁粒度是不是同一个粒度** |
 
 ### [05-KDBX本地库](./issues/05-KDBX本地库.md) — KDBX 本地库（23 条；2026-10-20 新增 #178 并发编辑静默丢一笔 / #179 writeLocks 只增不减）
 
