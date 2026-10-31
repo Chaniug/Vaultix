@@ -330,8 +330,25 @@ jobs:
         run: |
           set +e
           cur="${{ steps.meta.outputs.tag }}"
-          prev="$(git tag -l 'v*' --sort=-v:refname | grep -v "^${cur}$" | head -1 || true)"
-          notes="$(python3 "${{ github.workspace }}/.github/scripts/generate_changelog.py" --prev "$prev" --head HEAD --repo "${{ github.workspace }}")"
+          # ★ 2026-10-31：优先用人工撰写的版本说明（`Docs/release-notes/v<X.Y.Z>.md`）。
+          #
+          # 原因：提交列表里混着「修 CI 红」「补充文档」这类**内部账**，
+          # 直接贴给用户会让"更新了什么"淹没在噪音里（v0.10.4 就是这么发的，
+          # 事后只能手工改，而 PATCH Release 需要 token ⇒ 改不动）。
+          #
+          # ⚠️ 保留回退而不是替换：没有人工版时**必须**还能发版，
+          # 否则某次忘了写文件就等于发布失败。提交列表仍是事实来源。
+          handwritten="Docs/release-notes/${cur}.md"
+          if [ -f "$handwritten" ]; then
+            # 文件正文**直接是**更新内容（不写标题、不写元说明）——
+            # 元说明写在这里，而不是写进文件：多一层剥离逻辑只会多一处出错的地方。
+            notes="$(cat "$handwritten")"
+            echo "Using handwritten notes: $handwritten"
+          else
+            prev="$(git tag -l 'v*' --sort=-v:refname | grep -v "^${cur}$" | head -1 || true)"
+            notes="$(python3 "${{ github.workspace }}/.github/scripts/generate_changelog.py" --prev "$prev" --head HEAD --repo "${{ github.workspace }}")"
+            echo "Using generated notes (no $handwritten); previous tag: ${prev:-none}"
+          fi
           if [ -z "$notes" ]; then
             notes="- 无变更记录"
           fi
@@ -340,7 +357,6 @@ jobs:
             echo "$notes"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
-          echo "Previous tag: ${prev:-none}"
 
       - name: Publish Stable Release
         uses: softprops/action-gh-release@v3

@@ -181,6 +181,13 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 > 📄 详见 `.ai/issues/04-锁与解锁.md` **#215**
 >
 > ✅ CI `a877736` **一次过**（`build_failed=false` / 1422 例 0 失败）。
+>
+> 🚀 **已发版：v0.10.4**（`ddcb113`，2026-10-31）。#214 + #215 一起进稳定版。
+> 流程：`main` bump `VERSION` → `rele` 快进 → push `rele` 触发 `release.yml`。
+> ⚠️ **别用 tag 触发**：`release.yml` 的「Remove existing release/tag」在 tag 事件下会先删掉刚推的 tag。
+> 产物 `app-full-release.apk` 7.24 MB + `checksums-sha256.txt`。
+> 📌 发版前写 `Docs/release-notes/v<版本>.md`（人工版更新说明）—— 否则 Release 正文会是提交列表，
+> 而 `PATCH /releases` 需要 token、沙箱里只有 SSH key ⇒ **事后改不掉**。没有人工版时回退提交列表。
 > 加接口成员时先 `grep -rn "clearViewLock"` 把接口 / Impl / 调用点 / 测试一次看全 —— #214 连红两次都栽在"我以为它在那个类里"。
 >
 > ⚡ **2026-10-30：对齐 Bitwarden —— 「从不」档要的是两层锁（#214）**
