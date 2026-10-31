@@ -64,6 +64,22 @@ interface VaultSessionRepository {
     /** 认证通过后清除查看锁（幂等）。 */
     suspend fun clearViewLock(vaultId: String)
 
+    /**
+     * **一次认证，清掉所有库的自动界面门禁**（2026-10-31，用户报「指纹要验两次」）。
+     *
+     * ## 为什么不是 [clearViewLock] 的 `for` 循环
+     *
+     * 指纹是**全局**的（房子化后只有一把门锁），"验证过是本人"也是全局的；
+     * 而查看锁标记是**按库**存的（熄屏时每个已解锁的「从不」库各一个）。
+     * 只清当前库 ⇒ 别的库还带着标记 ⇒ 根导航仍判 `VaultLocked` ⇒
+     * **用户切到下一个库又被要求验一次**，库越多验越多次。
+     *
+     * ## 只清自动标记，不动手动锁
+     *
+     * 手动查看锁是用户对**某一个库**的显式指令，不该被一次身份确认顺手撤销。
+     */
+    suspend fun clearAutoViewLocks()
+
     /** 清空全部查看锁（真锁 / 退出数据库 / 全量解锁成功时一并调用）。 */
     suspend fun clearAllViewLocks()
 }

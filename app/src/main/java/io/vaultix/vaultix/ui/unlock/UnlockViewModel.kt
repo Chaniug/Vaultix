@@ -668,6 +668,8 @@ class UnlockViewModel @Inject constructor(
      *
      * @param forViewLock 本次认证是为查看层锁发起的 → 只清标记，**不重新解封密钥**
      *   （密钥本来就在会话里；再解封一次等于把同一把密钥写第二遍，白做一轮 KDF 派生）。
+     *   ⚠️ 清的是**所有库的自动门禁**，不是只清 [vaultId] —— 见方法体内注释与
+     *   `VaultSessionRepository.clearAutoViewLocks` 的 KDoc（一次指纹够全部库）。
      * @param rest 除目标库之外可顺带开房间的库（见 [Event.PromptForUnlock.rest]）；
      *   查看锁场景传空。
      */
@@ -678,7 +680,20 @@ class UnlockViewModel @Inject constructor(
     ) {
         scope.launch {
             if (forViewLock) {
-                sessionRepository.clearViewLock(vaultId)
+                // ★ 2026-10-31：清**所有库**的自动门禁，不只当前库 —— 见
+                //   [VaultSessionRepository.clearAutoViewLocks] 的 KDoc。
+                //
+                // 用户报告的「进来要验两次指纹」就是这里：熄屏时 AutoViewGate 给
+                // **每个**已解锁的「从不」库各打了一个标记，而这里原来只清当前库。
+                // 根导航看到别的库还带着标记 ⇒ 又判成 VaultLocked ⇒ 再验一次。
+                //
+                // ⚠️ 一次认证之所以够：指纹是**全局**的（房子化后只有一把门锁），
+                //   "验过是本人"与"哪个库"无关。分区标记只是 UI 的实现细节，
+                //   不该把它升格成"每个库各验一次"。
+                //
+                // ⚠️ 手动查看锁**不动**：那是用户对单个库的显式指令，
+                //   不能被一次身份确认顺手撤销（此方法内部只清自动子集）。
+                sessionRepository.clearAutoViewLocks()
                 _state.update {
                     it.copy(submitting = false, viewUnlockStarted = false, error = null)
                 }

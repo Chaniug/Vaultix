@@ -31,5 +31,7 @@ class VaultSessionRepositoryImpl @Inject constructor(
 
     override suspend fun clearViewLock(vaultId: String) = sessions.clearViewLock(vaultId)
 
+    override suspend fun clearAutoViewLocks() = sessions.clearAutoViewLocks()
+
     override suspend fun clearAllViewLocks() = sessions.clearAllViewLocks()
 }

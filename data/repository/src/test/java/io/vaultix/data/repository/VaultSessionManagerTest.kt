@@ -184,6 +184,33 @@ class VaultSessionManagerTest {
     }
 
     @Test
+    fun 清自动门禁_跨库一次清干净_手动锁原样保留() = runTest {
+        // ★ 2026-10-31：用户报「进 App 要验两次指纹，两个库不应该是同一个指纹吗」。
+        //
+        // 成因：熄屏时 AutoViewGate 给**每个**已解锁的「从不」库各打一个自动标记，
+        // 而认证成功后只清了当前库 ⇒ 根导航看到别的库还带着标记 ⇒ 再验一次。
+        //
+        // 本用例同时钉住两个方向：
+        //   ✅ 自动标记 → **跨库全清**（一次认证覆盖全部库，因为门锁本来就是全局一把）；
+        //   ✅ 手动锁 → **一个都不动**（用户对单库的显式锁定不能被顺手撤销）。
+        val manager = managerWith()
+        manager.unlock("bw", freshKey(21))
+        manager.unlock("kdbx", freshKey(22))
+        manager.viewLock("bw", automatic = true)
+        manager.viewLock("kdbx", automatic = true)
+        // 第二个库被用户**手动**锁过 ⇒ 清自动标记后它必须仍然是锁的。
+        manager.viewLock("kdbx")
+
+        manager.clearAutoViewLocks()
+
+        // 自动的那个（bw）放行；手动的那个（kdbx）保持锁住。
+        assertFalse(manager.isViewLocked("bw"))
+        assertTrue(manager.isViewLocked("kdbx"))
+        assertFalse(manager.isAutoViewLocked("kdbx"))
+        assertTrue(manager.anyManualViewLocked())
+    }
+
+    @Test
     fun viewLock_两种会话都没有时是noOp() = runTest {
         val manager = managerWith()
         manager.viewLock("ghost")

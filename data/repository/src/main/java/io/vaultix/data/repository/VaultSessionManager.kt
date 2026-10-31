@@ -223,4 +223,33 @@ class VaultSessionManager @Inject constructor(
             autoViewLockedIdsState.value = emptySet()
         }
     }
+
+    /**
+     * 一次认证，清掉**所有**库的**自动**界面门禁（2026-10-31，用户报「指纹要验两次」）。
+     *
+     * ## 为什么必须是「全部」而不是只清当前库
+     *
+     * 指纹是**全局**的（房子化后门锁只有一把，`HouseKeyStore`），所以"验证过是本人"
+     * 这件事本身也是全局的。但 [viewLock] 的标记是**按库**存的 —— 熄屏时
+     * [AutoViewGate] 会给**每个**已解锁的「从不」库各打一个标记。只清当前库的话：
+     *
+     * 1. `RootNavViewModel` 看到"还有别的库带着查看锁" ⇒ 再次判成 `VaultLocked`
+     *    ⇒ 用户刚验过指纹，切到另一个库又被要求验一次（**这就是用户看到的现象**）；
+     * 2. 而且第二次、第三次……每个库各要一次，库越多越离谱。
+     *
+     * Bitwarden 里锁定状态是**账号级**的（一个账号一次认证），不存在这个问题；
+     * 项目改成多库之后，"门禁"与"认证"的粒度就不一致了 —— 本轮把认证粒度对齐到全局。
+     *
+     * ## 为什么**只**清自动标记
+     *
+     * 手动查看锁（条目页那个锁按钮）是用户对**某一个库**的显式指令。
+     * 一次熄屏后的身份确认不该顺手把它撤销 —— 那等于"用户锁了 A，验个指纹 A 也开了"。
+     * 两个集合本来就分得开（见 [autoViewLockedIdsState]），这里正是它的用武之地。
+     */
+    suspend fun clearAutoViewLocks() {
+        mutex.withLock {
+            viewLockedIdsState.value = viewLockedIdsState.value - autoViewLockedIdsState.value
+            autoViewLockedIdsState.value = emptySet()
+        }
+    }
 }
