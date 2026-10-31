@@ -560,7 +560,7 @@ UI 里 `for` 循环 `clearViewLock`（仍是逐库，且漏掉之后才出现的
 | 新增行 ≤120 列 | ✅ 超出者全是注释（detekt 不计） |
 | 七个 `check_*.py` 静态脚本 | ✅ 全 exit 0 |
 | `check_issues_index.py` | ✅ 索引 = 题注 = 正文 |
-| 编译 / 单测 | CI（沙箱无 Android SDK，CI 是唯一编译器） |
+| 编译 / 单测 | ✅ CI `a877736` **一次过**：`build_failed=false`、**1422 例 / 失败 0** |
 
 ### ⚠️ 新判据
 
