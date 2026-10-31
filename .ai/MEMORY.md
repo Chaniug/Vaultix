@@ -188,6 +188,8 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 > 产物 `app-full-release.apk` 7.24 MB + `checksums-sha256.txt`。
 > 📌 发版前写 `Docs/release-notes/v<版本>.md`（人工版更新说明）—— 否则 Release 正文会是提交列表，
 > 而 `PATCH /releases` 需要 token、沙箱里只有 SSH key ⇒ **事后改不掉**。没有人工版时回退提交列表。
+> ⚠️ `ci-debug.yml` 的 `paths` 现已含 `.github/workflows/**`（`f90dcfd`）—— 之前只列它自己，
+> 改 `release.yml` **一条 CI 都不跑**（实测 `total_count = 0`）。
 > 加接口成员时先 `grep -rn "clearViewLock"` 把接口 / Impl / 调用点 / 测试一次看全 —— #214 连红两次都栽在"我以为它在那个类里"。
 >
 > ⚡ **2026-10-30：对齐 Bitwarden —— 「从不」档要的是两层锁（#214）**
