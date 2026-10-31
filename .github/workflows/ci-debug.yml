@@ -26,7 +26,10 @@ on:
       - '**/*.toml'
       - '**/*.sh'
       - '.github/scripts/**'
-      - '.github/workflows/ci-debug.yml'
+      # ★ 2026-10-31：原只列了 ci-debug.yml 自己 —— 改 **release.yml** 不触发任何验证，
+      #   而它里面是有手写 shell 的（Generate changelog 的取值分支）。
+      #   「改了发布逻辑却在 CI 里看不到」是比多跑一次更贵的问题。
+      - '.github/workflows/**'
       - 'config/**'
   pull_request:
     branches: [ main ]
@@ -42,7 +45,7 @@ on:
       - 'gradlew'
       - 'gradlew.bat'
       - '.github/scripts/**'
-      - '.github/workflows/ci-debug.yml'
+      - '.github/workflows/**'
       - 'config/**'
   workflow_dispatch:
 
