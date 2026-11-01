@@ -31,6 +31,11 @@ on:
       #   「改了发布逻辑却在 CI 里看不到」是比多跑一次更贵的问题。
       - '.github/workflows/**'
       - 'config/**'
+      # ★ 2026-11-01：`paths` 里没有 `.ai/tools/**` ⇒ 只改自检脚本时 **整个 CI 都不跑**。
+      #   实测：提交 6bccb9d（只动了 read_apk_signer.py / selftest_apk_signer.py 与文档）
+      #   **没有触发任何 run**，等了十分钟才发现 —— 而这几个脚本本身是 CI 的门禁。
+      #   「改门禁 → 门禁不跑 → 以为门禁通过」比门禁缺失更危险：它给的是**假的绿灯**。
+      - '.ai/tools/**'
   pull_request:
     branches: [ main ]
     paths:
@@ -47,6 +52,11 @@ on:
       - '.github/scripts/**'
       - '.github/workflows/**'
       - 'config/**'
+      # ★ 2026-11-01：`paths` 里没有 `.ai/tools/**` ⇒ 只改自检脚本时 **整个 CI 都不跑**。
+      #   实测：提交 6bccb9d（只动了 read_apk_signer.py / selftest_apk_signer.py 与文档）
+      #   **没有触发任何 run**，等了十分钟才发现 —— 而这几个脚本本身是 CI 的门禁。
+      #   「改门禁 → 门禁不跑 → 以为门禁通过」比门禁缺失更危险：它给的是**假的绿灯**。
+      - '.ai/tools/**'
   workflow_dispatch:
 
 permissions:
