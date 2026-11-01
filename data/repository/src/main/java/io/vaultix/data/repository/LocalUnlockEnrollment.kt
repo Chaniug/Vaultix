@@ -278,4 +278,47 @@ class LocalUnlockEnrollment @Inject constructor(
     /** 该库的 keyfile URI（按库独立存于偏好；读失败当作"没配 keyfile"）。 */
     private suspend fun keyFileUriOf(vaultId: String): String? =
         runCatching { preferences.kdbxKeyFileUri(vaultId).first() }.getOrNull()
+
+    /**
+     * 新增库成功后**自动**把它纳入快速解锁范围（2026-11-01，修 #222）。
+     *
+     * ## 为什么能全自动（不问主密码、不按指纹）
+     *
+     * 调用点紧跟在「添加库成功」之后 —— 那一刻该库的会话密钥已在内存
+     * （[VaultSessionManager.keyOf] 非空），而房间信封要包的正是它；
+     * 房钥匙若也在内存（本次进程内至少开过一次门锁），[HouseKeyStore.sealRoom]
+     * 是纯软件 AES-GCM，**没有任何系统认证参与**。
+     *
+     * ## 为什么可能什么也做不了，且这是**正常**的
+     *
+     * 冷启动后还没解锁任何库就直接新增库时，房钥匙不在内存（`isUnlocked == false`）
+     * —— 物理上没有可用的房钥匙去封信封。此时如实返回 `false`，交给库列表横幅兜底
+     * （用户点一下、按一次指纹即可）。**不在这里弹认证**：本类在 data 层，
+     * 弹窗属于 UI 职责，越界会让仓储变成半个界面。
+     *
+     * ## 三道守卫，各自对应一种"不该动"的真实状态
+     *
+     * 1. 房钥匙不在内存 —— 没钥匙可封；
+     * 2. 一把门锁都没装 —— 快速解锁从未启用，不能借"新增库"替用户擅自开启；
+     * 3. 范围为**空集** —— 空集在这个键里有确定含义（"一个库都不要"，
+     *    见 `VaultixPreferences.QUICK_UNLOCK_SCOPE` 的 KDoc），不是"未配置"。
+     *    用户手动取消全部勾选后，不该被一次新增库悄悄改回来。
+     *
+     * @return true = 已为 [vaultId] 建好房间信封（并同步了范围镜像）。
+     */
+    suspend fun autoEnrollNewVault(vaultId: String): Boolean = withContext(Dispatchers.IO) {
+        if (!houseKeyStore.isUnlocked) return@withContext false
+        if (!houseKeyStore.hasAnyLock()) return@withContext false
+        if (preferences.quickUnlockScope().first().isEmpty()) return@withContext false
+
+        val prepared = prepareForVaults(listOf(vaultId)) { _ -> null }
+            .values
+            .filterIsInstance<LocalUnlockPrepareOutcome.Ready>()
+            .map { it.prepared }
+        // 会话密钥不在（理论上不该发生：调用点刚 add 成功）⇒ 如实报"没做成"，
+        // 不拿一个空信封糊过去（那正是「假成功」）。
+        if (prepared.isEmpty()) return@withContext false
+
+        sealRoomsForVaults(prepared).values.any { it == LocalUnlockEnrollOutcome.Enrolled }
+    }
 }

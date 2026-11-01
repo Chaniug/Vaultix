@@ -751,6 +751,18 @@ class VaultRepositoryImpl @Inject constructor(
         return UnlockResult.Success
     }
 
+    /**
+     * 新增库的**统一收尾**：写库表 → 设默认库 → 自动纳入快速解锁 → 重开引导横幅。
+     *
+     * ⚠️ 为什么把后两件事挂在这里，而不是各自的 add 方法里：
+     * - 本类函数数已卡在 detekt `TooManyFunctions`（≤40）上限，再加一个私有函数就爆；
+     *   而本方法本来就是两条添加路径（普通 / 两步验证）**唯一**的共同收尾，
+     *   天然就是「新库已就位」这个时刻的落点；
+     * - 挂在唯一收尾处，后加第 N 条添加路径也不会漏。
+     *
+     * 两件附加动作都 `runCatching`：它们是**增强**，失败不该把"库已经加成功"变成失败
+     * （库行与会话都已就位，用户确实能用了）。
+     */
     private suspend fun registerVaultRow(server: String, email: String) {
         val now = System.currentTimeMillis()
         val existing = vaultDao.get(server)
@@ -770,6 +782,13 @@ class VaultRepositoryImpl @Inject constructor(
         // 只有仓储知道它 —— 让 ViewModel 自己再算一遍会引入「两处口径漂移」
         // （一处改了、另一处没改 ⇒ 默认库写成了一个不存在的 id）。
         if (existing == null) preferences.trySetDefaultVaultIfAbsent(server)
+
+        // ★ 新库自动纳入快速解锁（#222 P0）：房钥匙在内存时无需任何认证即可封房间信封。
+        //   冷启动未开门锁时静默跳过，由库列表横幅兜底（见 autoEnrollNewVault 的 KDoc）。
+        runCatching { localUnlockEnrollment.autoEnrollNewVault(server) }
+        // ★ 「以后再说」不该对**未来新增**的库永久生效（#222 P2）：清掉标记，
+        //   让横幅能为这个新库重新出现一次。重复添加同一个库不清（用户已表达过意愿）。
+        if (existing == null) runCatching { preferences.setQuickUnlockPromptDismissed(false) }
     }
 
     private fun classifyLoginError(error: Throwable): UnlockResult = when (error) {

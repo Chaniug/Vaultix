@@ -141,22 +141,37 @@ class VaultListViewModel @Inject constructor(
             initialValue = emptyMap(),
         )
 
-    /** 首个「已解锁但未启用快速解锁」的库（banner 对象；null = 不显示）。 */
+    /**
+     * 首个「已解锁但**尚未**能快速解锁」的库（banner 对象；null = 不显示）。
+     *
+     * ⚠️ 2026-11-01 修 #222：此前先 `firstOrNull { it.id in unlocked }` 挑出**第一个已解锁
+     * 的库**、再只问它一个能不能快解。若那个库早已启用（`available == true`），结果就是
+     * `null` —— 排在它后面的新库**永远查不到**。用户看到的现象正是
+     * 「新加的库不会自动关联快速解锁，也没有任何提示」。
+     * ⇒ 现在对**每个**已解锁的库各问一次，取第一个真正还不能快解的；
+     * 且仍用 Flow 组合（而不是一次性读取）保持响应性：任一库启用后横幅会自动消失。
+     */
     val quickUnlockSuggest: StateFlow<VaultSummary?> =
         combine(
             vaultRepository.observeVaults(),
             vaultRepository.observeUnlockedVaultIds(),
             preferences.isQuickUnlockPromptDismissed(),
         ) { vaults, unlocked, dismissed ->
-            if (dismissed) null else vaults.firstOrNull { it.id in unlocked }
-        }.flatMapLatest { vault ->
-            if (vault == null) {
+            // 「以后再说」⇒ 整批不提示（对**未来新库**的永久静音已由 #222 P2 修掉）。
+            if (dismissed) emptyList() else vaults.filter { it.id in unlocked }
+        }.flatMapLatest { candidates ->
+            if (candidates.isEmpty()) {
                 flowOf(null)
             } else {
                 // 房子化：banner 语义 = 「该库未纳入快速解锁范围」
                 //（指纹门锁全局开关 && 该库房间信封是否存在）。
-                vaultRepository.fingerprintQuickUnlockAvailable(vault.id)
-                    .map { available -> if (available) null else vault }
+                val availability = candidates.map { vault ->
+                    vaultRepository.fingerprintQuickUnlockAvailable(vault.id)
+                        .map { available -> vault to available }
+                }
+                combine(availability) { pairs ->
+                    pairs.firstOrNull { (_, available) -> !available }?.first
+                }
             }
         }.stateIn(
             scope = viewModelScope,
