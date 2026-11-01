@@ -49,6 +49,8 @@ data class KdbxPasskeyFields(
     val creationDate: String = "",
     val flagBe: String = "",
     val flagBs: String = "",
+    /** 私有扩展 `"<counter>:<0|1>"`；空 = 没存过（按默认 0 / true 处理）。 */
+    val meta: String = "",
 )
 
 /**
@@ -73,6 +75,25 @@ object KdbxPasskeyCodec {
     const val FIELD_FLAG_BE = "KPEX_PASSKEY_FLAG_BE"
     const val FIELD_FLAG_BS = "KPEX_PASSKEY_FLAG_BS"
 
+    /**
+     * **私有扩展**：签名计数器 + 可发现性标志（`"<counter>:<0|1>"`，如 `"7:0"`）。
+     *
+     * ## 为什么必须另开一个键
+     *
+     * `KPEX_PASSKEY_*` 那 10 个键是 KeePassDX 的约定，**里面没有 counter / discoverable**
+     * （它们是 Bitwarden 侧才暴露的 WebAuthn 元数据）。不存就只剩默认值：
+     * 读回来恒为 `counter = 0` / `discoverable = true`。
+     *
+     * 后果不是"显示少两行"：
+     * - `counter` 是 WebAuthn 的**防克隆信号**。真机用它判断"这把钥匙是不是被复制过"，
+     *   归零后每一次断言都像"计数器退化"，严格实现会拒绝该凭证；
+     * - `discoverable` 决定这把钥匙能不能**免用户名登录**（resident key）。
+     *   从 false 变 true ⇒ 界面会提示"可免用户名"，而实际断言会失败。
+     *
+     * ⇒ 用 `VPX_` 私有前缀（不冒用 `KPEX_` 归属），只在本应用写、读侧缺失时按默认值。
+     */
+    const val FIELD_META = "VPX_PASSKEY_META"
+
     /** 插件惯用的空占位字段（值恒为空串，仅表示「这个条目是通行密钥条目」）。 */
     const val FIELD_PASSKEY = "Passkey"
 
@@ -94,6 +115,7 @@ object KdbxPasskeyCodec {
         FIELD_FLAG_BE,
         FIELD_FLAG_BS,
         FIELD_PASSKEY,
+        FIELD_META,
     ).map { it.lowercase(Locale.ROOT) }.toSet()
 
     /** 写回时**必须受保护**的字段（对齐 KeePassDX 惯例，见文件头溯源）。 */
@@ -170,6 +192,10 @@ object KdbxPasskeyCodec {
         put(FIELD_CREATION_DATE, credential.creationDate)
         out[FIELD_FLAG_BE + suffix] = backupEligible.toString()
         out[FIELD_FLAG_BS + suffix] = backedUp.toString()
+        // 私有扩展：counter 与 discoverable 在 `KPEX_` 里没有位置（见 [FIELD_META]）。
+        // 恒写，不"缺省就省"：省掉的话读侧会退回默认值，而默认值是**错的**
+        // （counter 归零 / discoverable 翻转），比"没有这个键"更容易误导。
+        out[FIELD_META + suffix] = "${credential.counter}:${if (credential.discoverable) 1 else 0}"
         return out
     }
 
@@ -205,6 +231,7 @@ object KdbxPasskeyCodec {
             creationDate = value(FIELD_CREATION_DATE),
             flagBe = value(FIELD_FLAG_BE),
             flagBs = value(FIELD_FLAG_BS),
+            meta = value(FIELD_META),
         )
     }
 
@@ -244,10 +271,19 @@ object KdbxPasskeyCodec {
             keyAlgorithm = PasskeyKeyAlgorithm.DEFAULT,
             keyType = KEY_TYPE_PUBLIC_KEY,
             keyCurve = KEY_CURVE_P256,
-            // ⚠️ 恒 0（不实现计数器）：`.ai/ISSUES.md` #33 的结论 —— 同步型通行密钥
-            // 递增计数器必然跨设备分叉，规范允许用 0 表示「不实现」。
-            counter = 0L,
-            discoverable = true,
+            // ⚠️ counter / discoverable 有**两个来源**，必须分开对待：
+            //
+            // 1. `VPX_PASSKEY_META` 存在（本应用写的库，或从 Bitwarden 转来的）
+            //    ⇒ 用原值。转换器的职责是**不改写数据**：Bitwarden 里是 7 就是 7。
+            // 2. 缺失（KeePassDX 建的库，`KPEX_` 里没有这两个字段）
+            //    ⇒ 按默认 0 / true。
+            //
+            // 关于「为什么本应用自己生成时用 0」：`.ai/ISSUES.md` #33 —— 同步型通行密钥
+            // 递增计数器必然跨设备分叉，规范允许 0 表示「不实现」。
+            // 那是**本应用生成新凭证**时的策略，与「读别人的库时不要改人家数据」是两件事；
+            // 早先把两条混成一条（无条件写 0）⇒ 从 Bitwarden 转来的凭证计数器被清零。
+            counter = parseMeta(fields.meta)?.first ?: 0L,
+            discoverable = parseMeta(fields.meta)?.second ?: true,
             creationDate = fields.creationDate.trim().takeIf { it.isNotBlank() },
         )
     }
@@ -263,6 +299,23 @@ object KdbxPasskeyCodec {
     /** `BE`（Backup Eligible）：缺失时按「可备份」处理（同步型通行密钥的语义）。 */
     fun isBackupEligible(fields: KdbxPasskeyFields): Boolean =
         parseBooleanCompat(fields.flagBe) ?: true
+
+    /**
+     * 解析私有扩展 `"<counter>:<0|1>"`；缺失 / 格式不对返回 null（调用方用默认值）。
+     *
+     * ⚠️ 格式不对**不猜**：宁可退回默认（0 / true），也不把半截字符串当有效值 ——
+     *   猜错会让凭证在真机上直接签不出名，而用户完全看不出原因。
+     */
+    private fun parseMeta(raw: String): Pair<Long, Boolean>? {
+        val text = raw.trim()
+        if (text.isEmpty()) return null
+        val counter = text.substringBefore(':').toLongOrNull() ?: return null
+        return counter to when (text.substringAfter(':', "").trim()) {
+            "1" -> true
+            "0" -> false
+            else -> return null
+        }
+    }
 
     private const val PASSKEY_TITLE_SUFFIX = " [Passkey]"
     private const val KEY_TYPE_PUBLIC_KEY = "public-key"

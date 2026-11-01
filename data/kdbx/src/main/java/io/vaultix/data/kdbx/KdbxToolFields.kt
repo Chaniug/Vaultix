@@ -40,6 +40,7 @@
  */
 package io.vaultix.data.kdbx
 
+import io.vaultix.model.CustomFieldType
 import io.vaultix.model.UriMatch
 import io.vaultix.model.VaultItemType
 import io.vaultix.model.VaultUri
@@ -130,6 +131,94 @@ internal object KdbxToolFields {
      * ⇒ 需要还原类型时由转换器**直接读这个字段**，不走领域模型。
      */
     const val BW_TYPE = PREFIX + "BW_TYPE"
+
+    /**
+     * Bitwarden 组织 id（`cipher.organizationId`）——**只写**，由转换器还原。
+     *
+     * ## 为什么"KDBX 没有组织"不等于"可以丢"
+     *
+     * KDBX 确实没有组织概念，看起来像"格式装不下、丢了活该"。但转换是**双向**的：
+     * 用户把组织库导出成 JSON 转成 .kdbx 归档，若干月后再转回 Bitwarden，
+     * 组织归属没了 ⇒ 那些共享密码**悄悄落进个人库**。
+     * 共享库凭证进个人库是**权限事故**（离职后仍持有前司密码），
+     * 而过程中没有任何提示 —— 这类"无声的降级"比报错更危险。
+     *
+     * ⇒ 用私有键带着走：KDBX 侧看不见（`customFieldsOf` 按工具区排除），
+     *   但转换回 Bitwarden 时原样写回 `organizationId`。
+     */
+    const val BW_ORG = PREFIX + "BW_ORG"
+
+    /**
+     * Bitwarden 集合 id 列表（`cipher.collectionIds`）——`VPX_BW_COLLECTIONS`，**只写**。
+     *
+     * 格式：UUID 用 `,` 连接。安全依据是 **UUID 本身不含逗号**
+     * （`BitwardenExportCipher.collectionIds` 的元素恒为 UUID 字符串），
+     * 所以不需要转义；万一有人手工塞了含逗号的值，最坏是拆出一个非法 id，
+     * 而**不是**整串丢失。
+     */
+    const val BW_COLLECTIONS = PREFIX + "BW_COLLECTIONS"
+
+    /** [BW_COLLECTIONS] 的分隔符（见该常量的 KDoc 说明为何无需转义）。 */
+    const val COLLECTION_SEPARATOR = ","
+
+    /**
+     * 时间戳的**毫秒余数**——`VPX_TIME_MS`，格式 `<createdAtMs>:<updatedAtMs>`。
+     *
+     * ## 为什么必须补这一手
+     *
+     * KDBX 的 `<Times>` 在**加密的 v4 文件**里是「自公元 1 年起的**整秒**」的
+     * 8 字节二进制（解开 kotpass 0.13.0 的 `InstantKt.marshal` 核实过：
+     * `Instant.getEpochSecond() + 62135596800L` 后直接 base64，
+     * `getInstant` 反向 `ofEpochSecond`）⇒ **毫秒在格式层就没了**，
+     * 与我们自己的代码无关，是规范的硬边界。
+     *
+     * 但"格式装不下"不等于"可以丢"（同 [BW_ORG] 的处境）：
+     * 转换器若把 `1700000000123` 读回来成 `1700000000000`，
+     * 就是**悄悄改写了用户数据**；而往返转换应当尽量无损。
+     *
+     * ⇒ `<Times>` 照常写（保证 KeePassXC / KeePassDX 看得懂秒级时间），
+     *   本键只补**秒以下的余数**（0..999）。两个值都用 `Long` 承载，
+     *   拼接格式固定、无逗号歧义；解析不出来就当作"没有余数"（旧文件天然如此）。
+     *
+     * 值恒为 `<ms1>:<ms2>`，**缺失即两级都为 0**（与"整秒"同义）。
+     * 余数为 0 时仍写（`0:0`），这样"从 KDBX 原生条目"（无此键）
+     * 和"转换来的条目"（余数恰好为 0）在语义上等价，不需要靠猜。
+     */
+    const val TIME_MS = PREFIX + "TIME_MS"
+
+    /** [TIME_MS] 两个值之间的分隔符。 */
+    const val TIME_MS_SEPARATOR = ':'
+
+    /**
+     * 把一对毫秒时间戳编码成 [TIME_MS] 的写法（只取秒以下余数）。
+     *
+     * 入参为 `null` 的那一项按 `0` 处理 —— 缺失与"整秒"同义。
+     */
+    fun encodeTimeMillis(createdAt: Long?, updatedAt: Long?): String {
+        val created = (createdAt ?: 0L).mod(MILLIS_PER_SECOND)
+        val updated = (updatedAt ?: 0L).mod(MILLIS_PER_SECOND)
+        return "$created$TIME_MS_SEPARATOR$updated"
+    }
+
+    /**
+     * 解出 [TIME_MS] 的两个余数；格式不对返回 `null`（**不猜**）。
+     *
+     * 调用方拿到 `null` 时应保持 KDBX `<Times>` 的整秒值不动，
+     * 而不是把时间归零 —— 宁可少一点精度，也不能毁掉时间戳。
+     */
+    fun decodeTimeMillis(raw: String?): Pair<Long, Long>? {
+        if (raw == null) return null
+        val parts = raw.split(TIME_MS_SEPARATOR)
+        if (parts.size != 2) return null
+        val created = parts[0].trim().toLongOrNull() ?: return null
+        val updated = parts[1].trim().toLongOrNull() ?: return null
+        if (created !in 0L until MILLIS_PER_SECOND) return null
+        if (updated !in 0L until MILLIS_PER_SECOND) return null
+        return created to updated
+    }
+
+    /** 一秒的毫秒数（[encodeTimeMillis] / [decodeTimeMillis] 取余用）。 */
+    const val MILLIS_PER_SECOND = 1000L
 
     /**
      * 收藏标记（A1 · 2026-10-13）：`"true"` = 收藏，**缺失即非收藏**。
@@ -337,6 +426,72 @@ internal object KdbxToolFields {
     /** 该载荷字段是否应受保护（卡号 / CVV / 护照 / 执照 / SSN）。 */
     fun isPayloadProtected(field: String): Boolean = field.lowercase(Locale.ROOT) in PAYLOAD_PROTECTED
 
+    // ------------------------------------------------------- 自定义字段的类型（2026-11-01）
+
+    /**
+     * 自定义字段**类型**的落法：`VPX_FIELD_META_<字段名>`。
+     *
+     * ## 为什么必须存
+     *
+     * KDBX 的自定义字段只有两种状态：明文（`EntryValue.Plain`）与内存保护
+     * （`EntryValue.Encrypted`）。而 Bitwarden 有四种：
+     *
+     * | Bitwarden | KDBX 能表达吗 | 不存类型会怎样 |
+     * |---|---|---|
+     * | `Text`（0） | ✅ Plain | — |
+     * | `Hidden`（1） | ✅ Encrypted | — |
+     * | `Boolean`（2） | ❌ 只剩 `"true"` 这串字 | 读回来变成 `Text`：界面从开关变成一行字 |
+     * | `Linked`（3） | ❌ 只剩值 | 读回来变成 `Text`：`linkedId` 没了，"这字段就是用户名"的语义消失 |
+     *
+     * `Boolean` / `Linked` 是**静默降级**的典型：值一个不差，只有类型换了，
+     * 所以任何"只比 value 不比 type"的往返测试都抓不到（这正是它躲了两轮的原因）。
+     *
+     * ## 为什么键名里直接拼字段名
+     *
+     * 必须**按字段名**索引，不能按下标：用户可能在 KeePassXC 里插一个新字段，
+     * 下标一错位，类型就会**张冠李戴**（把 A 的 Boolean 安到 B 头上）——
+     * 那比丢失更坏，因为它看起来"有值有类型"，没人会怀疑。
+     *
+     * 键名拼字段名是安全的：KDBX 的 `<Key>` 是任意 XML 文本（空格/中文都合法），
+     * 而 `VPX_` 前缀保证它不会与用户字段撞名（用户若真建了同名字段，
+     * 它自己会先被 [isToolFieldName] 排除）。
+     */
+    const val FIELD_META_PREFIX = PREFIX + "FIELD_META_"
+
+    /** 某自定义字段的类型元数据键名。 */
+    fun fieldMetaKey(fieldName: String): String = FIELD_META_PREFIX + fieldName
+
+    /**
+     * 编码类型元数据；返回 null 表示**不需要存**（`Text` / `Hidden` 由条目值形态即可推出）。
+     *
+     * 格式：`Boolean` 或 `Linked:100`（`Linked` 且 `linkedId == null` 时为纯 `Linked`）。
+     */
+    fun encodeFieldMeta(type: CustomFieldType, linkedId: Int?): String? = when (type) {
+        CustomFieldType.Boolean -> "Boolean"
+        CustomFieldType.Linked -> linkedId?.let { "Linked:$it" } ?: "Linked"
+        CustomFieldType.Text, CustomFieldType.Hidden -> null
+    }
+
+    /**
+     * 解码类型元数据；认不出时返回 null（调用方回落到「按值形态推导」）。
+     *
+     * ⚠️ 不认识的类型名**不猜测**：宁可退回 Text，也不把某个陌生字符串
+     *   当成 Boolean 去渲染（界面上会多出一个开关，用户会以为值坏了）。
+     */
+    fun decodeFieldMeta(raw: String?): Pair<CustomFieldType, Int?>? {
+        val text = raw?.trim().orEmpty()
+        if (text.isEmpty()) return null
+        val head = text.substringBefore(':')
+        val tail = text.substringAfter(':', "").toIntOrNull()
+        return when {
+            head.equals("Boolean", ignoreCase = true) -> CustomFieldType.Boolean to null
+            head.equals("Linked", ignoreCase = true) -> CustomFieldType.Linked to tail
+            head.equals("Text", ignoreCase = true) -> CustomFieldType.Text to null
+            head.equals("Hidden", ignoreCase = true) -> CustomFieldType.Hidden to null
+            else -> null
+        }
+    }
+
     /**
      * 从**全部字段**里挑出某个前缀的载荷，返回「字段名（去掉前缀）→ 值」。
      *
@@ -491,66 +646,87 @@ internal object KdbxToolFields {
     // ---------------------------------------------------------------- 写方向
 
     /**
-     * [VaultItem.uris] → 工具字段表（**只含标准 `Url` 装不下的那几条**）。
+     * [VaultItem.uris] → 工具字段表（**按下标全套落盘**，含第 0 条与应用 URI）。
      *
-     * 契约：
-     * - 第 0 条**不写这里**（它进标准 `Url` 字段，由 [KdbxItemWriter] 处理）；
-     * - 空串 / 纯空白 URI 跳过（不产出空字段）；
-     * - 应用 URI（`androidapp://…`）**既不进标准 `Url` 也不进本表** ——
-     *   它走 [appFieldsOf] 的字段对（`App Package Name`），理由见那里的说明。
+     * ## 2026-11-01 改过一次口径，为什么
+     *
+     * 旧口径：应用 URI（`androidapp://…`）**不进本表**，只写一个 `App Package Name`。
+     * 代价是三条静默丢失（用户："数据不能遗漏"）：
+     * 1. **位置**：读回时应用 URI 被追加到末尾 ⇒ `[a, app, b]` 变成 `[a, b, app]`；
+     * 2. **match**：`App Package Name` 只是一个包名，装不下匹配档位
+     *    ⇒ 本该「永不匹配」的网址变成「基域匹配」，自动填充变得比用户设的更宽松；
+     * 3. **第二个起的应用 URI** 整条消失（`App Package Name` 只有一个字段位）。
+     *
+     * 新口径：**只在「列表里有应用 URI」时启用**，此时全部 URI 按原始下标落
+     * `VPX_URL_n` / `VPX_MATCH_n`（含 index 0）。`App Package Name` 仍然照写
+     * （给 KeePassDX 认），但它降级为**兼容副本**，不再承担"唯一载体"的职责。
+     *
+     * ## 为什么按需升级、而不是一律用新口径
+     *
+     * 纯 web 列表时，旧口径产出的 `n` **恰好等于原始下标**（"第 0 条进 `Url`、
+     * 其余从 1 起"与"原始下标"是同一个数），两种口径完全等价。
+     * ⇒ 没必要为了统一而给每条登录都镶一个 `VPX_URL_0`：那是**纯冗余**，
+     *   还会让老库/新库在同一份数据上产出不同的字节（破坏"值没变就一个字都不动"）。
+     *
+     * ## 兼容：`VPX_URL_0` 的存在即"新格式"标记
+     *
+     * 旧格式从不写 `VPX_URL_0`（第 0 条进标准 `Url`）。读侧见到它就按新口径
+     * 重建整个列表（并忽略标准 `Url`，避免第一条重复），见不到就走旧口径。
      *
      * @return 键值对；`VPX_URL_n` 与 `VPX_MATCH_n` 按同一 `n` 成对产出。
      */
     fun fromUris(uris: List<VaultUri>): Map<String, String> {
-        val extra = usableWebUris(uris)
-        if (extra.isEmpty()) return emptyMap()
+        val usable = uris.filter { it.uri.trim().isNotEmpty() }
+        if (usable.isEmpty()) return emptyMap()
         val out = LinkedHashMap<String, String>()
-        // ⚠️ 下标从 **1** 起：第 0 条归标准 `Url`，本表只承接"第 2 条起"的 URI 值。
-        extra.drop(1).forEachIndexed { offset, uri ->
+        // 触发条件只有"含应用 URI"：只有它无法用旧口径表达（旧口径会把它整条滤掉）。
+        if (usable.any { isAndroidAppUri(it.uri) }) {
+            usable.forEachIndexed { index, uri ->
+                out["$URL_PREFIX$index"] = uri.uri
+                uri.match?.let { match -> out["$MATCH_PREFIX$index"] = match.name }
+            }
+            return out
+        }
+        // 旧口径：第 0 条归标准 `Url`，只把它的 match 存下来（`Url` 装不下匹配规则）。
+        usable.drop(1).forEachIndexed { offset, uri ->
             val n = offset + 1
             out["$URL_PREFIX$n"] = uri.uri
-            // ⚠️ match 取自**同一个过滤后对象**（`uri`），不能回头去索引原始 `uris` ——
-            //    滤掉空串 / 应用 URI 后两个列表下标已错位，那样取到的是**另一条 URI 的规则**，
-            //    症状是「自动填充的匹配档位莫名变了」，几乎无法归因。
             uri.match?.let { match -> out["$MATCH_PREFIX$n"] = match.name }
         }
-        // ⚠️⚠️ 第 0 条的 match 必须存（`VPX_MATCH_0`），否则它**无处可存**：
-        //   标准 `Url` 只装 URI 本身、不装匹配规则，而 `VPX_URL_*` 从下标 1 起——
-        //   第 0 条的档位会**静默丢失**（症状：那条网址的匹配档位退回默认基域匹配，
-        //   用户会发现自动填充"匹配得比之前松"，却完全无从追溯）。
-        //   ⇒ **不论有几条都存**：单条时它是唯一那条的规则，两条时它是第 1 条的规则。
-        //   读侧 `toUris` 用同一个 `MATCH_PREFIX + 0` 取回，两侧下标口径一致。
-        extra.first().match?.let { match -> out["${MATCH_PREFIX}0"] = match.name }
+        usable.first().match?.let { match -> out["${MATCH_PREFIX}0"] = match.name }
         return out
     }
-
-    /**
-     * 能写进标准 `Url` / `VPX_URL_n` 的 URI：滤掉应用 URI、滤掉纯空白，**保持原顺序**。
-     *
-     * 单独成函数，是为了让 [fromUris] 与 `KdbxItemWriter.applyUris` 的"第 0 条"
-     * 取自**同一份过滤结果** —— 否则标准 `Url` 与 `VPX_URL_1` 可能来自两条不同的口径
-     * （一个滤了应用 URI、一个没滤），写出去的两条内容就**对不上第几轮是什么**。
-     */
-    private fun usableWebUris(uris: List<VaultUri>): List<VaultUri> =
-        uris.filter { uri -> uri.uri.trim().isNotEmpty() && !isAndroidAppUri(uri.uri) }
 
     // ---------------------------------------------------------------- 读方向
 
     /**
      * 工具字段表 → [VaultItem.uris]（把标准 `Url` 与 `VPX_URL_n` 合回一个列表）。
      *
+     * ## 两种口径，靠 `VPX_URL_0` 是否存在分流（2026-11-01）
+     *
+     * - **新格式**（本应用 2026-11-01 起写的库）：`VPX_URL_0..n` 是**完整列表**，
+     *   按下标排序即原顺序。此时**忽略标准 `Url`** —— 它只是一份给外部工具看的
+     *   冗余副本，重复计入会让第一条网址出现两次。
+     * - **旧格式 / 第三方库**：没有 `VPX_URL_0`。标准 `Url` 是第 0 条，
+     *   `VPX_URL_1..n` 是其余的，`KP2A_URL_n`（KeePassXC）也在这个分支里被收进来。
+     *
      * @param standardUrl 标准 `Url` 字段的值（可能为空）。
      * @param toolFields 其余全部字段的键值对（调用方负责先剥掉 OTP / 通行密钥区）。
-     * @return 按「标准 Url 在前、`VPX_URL_1..n` 按序在后」拼接；空结果返回空列表。
+     * @return 按原顺序排列的 URI 列表；空结果返回空列表。
      */
     fun toUris(standardUrl: String, toolFields: Map<String, String>): List<VaultUri> {
+        val extra = extras(toolFields)
+        // 新格式判据：`VPX_URL_0` 存在（旧格式从不写它）。
+        if (extra.any { (n, _) -> n == 0 }) {
+            return extra.map { (n, uri) -> VaultUri(uri = uri, match = matchOf(toolFields, n)) }
+        }
         val out = ArrayList<VaultUri>()
         // ⚠️ 标准 `Url` 那条也要取回 `VPX_MATCH_0` —— 它在 KDBX 里没有字段装匹配规则，
         //    只能借工具字段存（见 [fromUris]）。漏这一步 ⇒ 第 0 条的档位永远丢。
         standardUrl.trim().takeIf { it.isNotEmpty() }?.let {
             out.add(VaultUri(uri = it, match = matchOf(toolFields, 0)))
         }
-        extras(toolFields).forEach { (n, uri) ->
+        extra.forEach { (n, uri) ->
             out.add(VaultUri(uri = uri, match = matchOf(toolFields, n)))
         }
         return out
@@ -721,7 +897,15 @@ internal object KdbxToolFields {
         name.startsWith(PREFIX, ignoreCase = true) ||
             isCardPayloadKey(name) ||
             isIdentityPayloadKey(name) ||
-            isAdditionalUrlKey(name)
+            isAdditionalUrlKey(name) ||
+            // ⚠️ 应用包名也是"已消费的载荷"（读侧 [appUriOf] 把它合成了 `androidapp://`
+            //    URI）。不认它，详情页就会把同一个包名**再显示一次**自定义字段 ——
+            //    用户看到"网址里有它、自定义字段里也有它"，改掉其中一个就互相矛盾。
+            isAppPackageKey(name)
+
+    /** 是否为应用包名字段（含 KeePassDX / Bastion / 第三方用过的全部别名）。 */
+    private fun isAppPackageKey(name: String): Boolean =
+        APP_PACKAGE_KEYS.any { name.equals(it, ignoreCase = true) }
 
     /** 是否为 `KP2A_URL_n`（KeePassXC / KeePass2Android 约定的「第 n 条额外网址」）。 */
     fun isAdditionalUrlKey(name: String): Boolean {

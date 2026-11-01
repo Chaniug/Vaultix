@@ -246,6 +246,9 @@ private fun NavGraphBuilder.vaultEntryGraph(
         // （本函数是独立的 `NavGraphBuilder` 扩展，看不见外层 `VaultixApp` 的局部变量，
         //   所以不能直接把顶层的 VM 传进来。）
         val onboardingViewModel: RootNavViewModel = hiltViewModel()
+        // 「去开启自动填充」点过没有 —— 读回来驱动第 3 页的确认文案。
+        // 此前这个偏好**只写不读** ⇒ 用户从系统设置回来看到一模一样的界面，会反复点。
+        val fillSetupPrompted by onboardingViewModel.fillSetupPrompted.collectAsStateWithLifecycle()
         OnboardingScreen(
             onFinished = {
                 onboardingViewModel.finishOnboarding()
@@ -257,6 +260,7 @@ private fun NavGraphBuilder.vaultEntryGraph(
                 onboardingViewModel.finishOnboarding(fillSetupAsked = true)
                 SystemSettingsIntents.openAutofillSettings(appContext)
             },
+            fillSetupPrompted = fillSetupPrompted,
         )
     }
     // 解锁入口（根导航直达）：无参数版本，内部自动选中第一个已锁定的库。

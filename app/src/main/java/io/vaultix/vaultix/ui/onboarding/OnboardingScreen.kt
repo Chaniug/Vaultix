@@ -89,6 +89,7 @@ import kotlinx.coroutines.launch
 fun OnboardingScreen(
     onFinished: () -> Unit,
     onOpenAutofillSettings: () -> Unit,
+    fillSetupPrompted: Boolean = false,
 ) {
     val pagerState = rememberPagerState(pageCount = { PAGES.size })
     val scope = rememberCoroutineScope()
@@ -135,6 +136,8 @@ fun OnboardingScreen(
         Spacer(Modifier.height(Spacing.lg))
 
         // 第 3 页在"下一步"上方多给一颗**可选**的次按钮；前两页没有它。
+        // 点过之后再回到这一页，按钮下方补一句「已前往系统设置」——
+        // 否则用户从系统设置回来会看到**和点之前一模一样**的界面，以为没生效而反复点。
         if (isLastPage) {
             OutlinedButton(
                 onClick = onOpenAutofillSettings,
@@ -143,6 +146,18 @@ fun OnboardingScreen(
                     .padding(horizontal = Spacing.xl),
             ) {
                 Text(stringResource(R.string.onboarding_fill_setup))
+            }
+            if (fillSetupPrompted) {
+                Spacer(Modifier.height(Spacing.xs))
+                Text(
+                    text = stringResource(R.string.onboarding_fill_setup_done),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = Spacing.xl),
+                )
             }
             Spacer(Modifier.height(Spacing.sm))
         }

@@ -3,7 +3,6 @@
 # 新增条目会让 `check_orphan_strings.py --gate` 失败。
 # 判读依据见该脚本开头：被「搬走」的留，被「取代」的删。
 action_edit
-action_next
 action_open
 action_select_all
 add_cloud_connect
@@ -84,7 +83,6 @@ quick_unlock_disabled
 quick_unlock_disabled_kdbx
 quick_unlock_enable
 quick_unlock_enabled
-quick_unlock_local_failed
 quick_unlock_master_only
 quick_unlock_option_biometric_kdbx_summary
 quick_unlock_option_master_summary

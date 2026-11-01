@@ -43,6 +43,7 @@ import io.vaultix.model.VaultPasswordHistoryEntry
 import io.vaultix.model.VaultReprompt
 import io.vaultix.model.VaultSshKey
 import io.vaultix.model.VaultUri
+import java.time.Instant
 import java.util.UUID
 
 /** 把已解密的 kotpass 数据库映射为 Vaultix 领域模型。 */
@@ -137,6 +138,10 @@ private fun Entry.toVaultItem(
     //   这五块此前**读侧整块没有** ⇒ 写侧不敢写（写了也读不回来，等于静默丢）。
     //   现在两侧成对接上，Bitwarden ⇄ KDBX 的这三类条目才真的"无损"。
     val payload = fields.payloadTable()
+    // 时间戳的毫秒余数：`<Times>` 在加密 v4 里只有整秒，补存见 `KdbxToolFields.TIME_MS`。
+    val millisRemainder = KdbxToolFields.decodeTimeMillis(
+        fields.valueByKey(KdbxToolFields.TIME_MS),
+    )
     val card = payload.toVaultCard()
     val identity = payload.toVaultIdentity()
     val sshKey = payload.toVaultSshKey()
@@ -180,8 +185,12 @@ private fun Entry.toVaultItem(
         // ⚠️ `lastAccessTime` 刻意**不映射**：它的语义是"上次查看"，KeePass 每开一次都会刷新
         //    （`Group.modifyEntry` 里就会写），把它当"最近修改"显示会**天天变**、完全误导。
         //    用户要的"最近修改"= `lastModificationTime`。
-        createdAt = times?.creationTime?.toEpochMilli(),
-        updatedAt = times?.lastModificationTime?.toEpochMilli(),
+        // ⚠️ 毫秒余数（2026-11-20）：加密 v4 文件的 `<Times>` 只存**整秒**（见
+        //    `KdbxToolFields.TIME_MS` 的 KDoc），`toEpochMilli()` 必然是 `...000`。
+        //    转换器写过的条目额外有 `VPX_TIME_MS`，把秒以下余数补回来；
+        //    KDBX 原生条目没有这个键 ⇒ 保持整秒（解码失败也保持整秒，绝不归零）。
+        createdAt = times?.creationTime?.withRemainder(millisRemainder?.first),
+        updatedAt = times?.lastModificationTime?.withRemainder(millisRemainder?.second),
         // 2026-10-21 补入：附件元信息。此前 **整块没读** ⇒ 库里挂着附件的条目在界面上
         // 完全看不出来（底层数据完好，只是没人展示），用户会以为"附件丢了"。
         //
@@ -587,10 +596,49 @@ private fun customFieldsOf(fields: EntryFields): List<VaultCustomField> =
             if (key.isBlank()) {
                 null
             } else {
+                // 类型还原（2026-11-01）：KDBX 只有「明文 / 保护」两态，装不下 Bitwarden 的
+                // Boolean / Linked。缺了这一步，`Boolean` 会静默变成一行 "true" 的 Text，
+                // `Linked` 的 `linkedId` 直接消失 —— 值都在，只有类型换了，
+                // 所以"只比值不比类型"的测试永远抓不到。
+                //
+                // ⚠️ 优先级：**元数据 > 值形态**。受保护字段默认判 Hidden，但它也可能是
+                //    一个被用户标了保护的 Boolean —— 有 meta 时以 meta 为准。
+                val meta = KdbxToolFields.decodeFieldMeta(
+                    fields.metaOf(key),
+                )
+                val byShape = if (value is EntryValue.Encrypted) {
+                    CustomFieldType.Hidden
+                } else {
+                    CustomFieldType.Text
+                }
                 VaultCustomField(
                     name = key,
                     value = value.content,
-                    type = if (value is EntryValue.Encrypted) CustomFieldType.Hidden else CustomFieldType.Text,
+                    type = meta?.first ?: byShape,
+                    linkedId = meta?.second,
                 )
             }
         }
+
+/**
+ * 按**完整键名**取一个字段的明文值（键名大小写不敏感）。
+ *
+ * 走 `EntryFields` 而不是转成 Map，是为了保住 `EntryValue.content` 的解密能力：
+ * 这类工具字段本身恒为明文，但用同一入口取更不容易被后来的人写错。
+ */
+private fun EntryFields.valueByKey(fieldKey: String): String? =
+    entries.firstOrNull { (key, _) -> key.equals(fieldKey, ignoreCase = true) }?.value?.content
+
+/** 取某自定义字段的类型元数据（`VPX_FIELD_META_<字段名>`，见 [valueByKey]）。 */
+private fun EntryFields.metaOf(fieldName: String): String? =
+    valueByKey(KdbxToolFields.fieldMetaKey(fieldName))
+
+/**
+ * KDBX 的整秒时间 + 我们补存的毫秒余数 = 原始毫秒时间戳。
+ *
+ * @param remainder 秒以下的毫秒（0..999）；null = 没有余数记录（KDBX 原生条目）⇒ 保持整秒。
+ * ⚠️ 余数为 null 时**不能**当"错误"处理，也不能归零：绝大多数条目（第三方工具写的）
+ *   本来就没有这个键，能给出整秒已经是完整信息。
+ */
+private fun Instant.withRemainder(remainder: Long?): Long =
+    toEpochMilli() + (remainder ?: 0L)

@@ -178,6 +178,23 @@ class RootNavViewModel @Inject constructor(
     )
 
     /**
+     * 用户是否点过第 3 页的「去开启自动填充」——用于在返回引导页时给出确认文案。
+     *
+     * ⚠️ 此前 [markFillSetupPrompted] 是**只写不读**的孤岛状态
+     *   （`onboarding_fill_setup_done` 那条文案也因此零引用、卡住了文案门禁）：
+     *   点了按钮 → 跳系统设置 → 用户回来，页面上**没有任何变化**，
+     *   于他会反复点那颗按钮（"是不是没生效？"）。这里把写下来的事实读回来。
+     *
+     * ⚠️ 初值 `false`（= 不显示确认）：晚一帧显示只是慢，而"先闪一句已前往设置"
+     *   再消失会让人以为真的去过。与 [showOnboarding] 同一条取舍。
+     */
+    val fillSetupPrompted: StateFlow<Boolean> = onboardingPreferences.fillSetupPrompted.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5_000),
+        initialValue = false,
+    )
+
+    /**
      * 引导结束（看完最后一页 / 点跳过 / 第 3 页点了「去开启自动填充」）。
      *
      * 两者的区别只在**要不要顺手记下"自动填充已问过"**：

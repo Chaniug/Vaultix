@@ -36,6 +36,7 @@ import app.keemobile.kotpass.cryptography.EncryptedValue
 import app.keemobile.kotpass.database.KeePassDatabase
 import app.keemobile.kotpass.database.getEntry
 import app.keemobile.kotpass.database.modifiers.modifyEntry
+import app.keemobile.kotpass.database.modifiers.modifyEntries
 import app.keemobile.kotpass.database.modifiers.modifyGroup
 import app.keemobile.kotpass.database.modifiers.modifyParentGroup
 import app.keemobile.kotpass.database.modifiers.moveEntry
@@ -97,14 +98,28 @@ internal object KdbxItemWriter {
      * @param folderId 目标分组（`kdbx-group:<uuid>`）；null = 根组。
      *   ⚠️ 分组不存在时退回**根组**而不是静默失败：`modifyGroup` 找不到 uuid 就原样返回，
      *   那样条目会**看起来保存成功但哪里都没有**（list 里永远不出现）。
+     * @param extraFields 与领域字段**一起写进去**的附加字段（转换器的 provenance 用）。
+     *   ⚠️ 必须走这个口子，**不能**建完再 `modifyEntry` 补写（2026-11-01 修正）：
+     *   kotpass 的 `modifyEntry` 会把 `lastAccessTime` / `lastModificationTime`
+     *   强制重置成 `Instant.now()`（反编译 `EntryKt.modifyEntry` 核实过）⇒
+     *   "建好再补一个字段"会把刚写进去的 `updatedAt` 抹成当前时间。
+     *   转换器此前正是这么干的：`createdAt` 保住了、`updatedAt` 静默变成导入时刻。
      */
-    fun createEntry(database: KeePassDatabase, folderId: String?, item: VaultItem): KdbxWriteResult {
+    fun createEntry(
+        database: KeePassDatabase,
+        folderId: String?,
+        item: VaultItem,
+        extraFields: Map<String, EntryValue> = emptyMap(),
+    ): KdbxWriteResult {
         // ★ 导入的条目带原始时间（M3）：KDBX 的 times 是我们能保真的；
         //   Bitwarden 服务端不接受客户端时间，只能在本地 DTO 暂存。
         //   没有 item.createdAt 时退回 now（与 Entry 默认一致）；
         //   更新侧的时间戳仍由 kotpass 负责（见 [updateEntry] 的查证记录）。
         val created = Instant.ofEpochMilli(item.createdAt ?: System.currentTimeMillis())
         val modified = item.updatedAt?.let(Instant::ofEpochMilli) ?: created
+        val domainFields = applyDomainFields(
+            existing = EntryFields.createDefault(), item = item, before = null,
+        )
         val entry = Entry(
             uuid = UUID.randomUUID(),
             times = TimeData.create(now = created).copy(
@@ -112,7 +127,7 @@ internal object KdbxItemWriter {
                 lastModificationTime = modified,
                 locationChanged = modified,
             ),
-            fields = applyDomainFields(existing = EntryFields.createDefault(), item = item, before = null),
+            fields = domainFields + extraFields,
         )
         val target = existingGroupUuid(database, folderId)
         val updated = if (target == null) {
@@ -151,7 +166,36 @@ internal object KdbxItemWriter {
                 copy(fields = applyDomainFields(existing = fields, item = after, before = before))
             }
         }
-        return KdbxWriteResult(updated, uuid)
+        // ★ 毫秒余数要在**上游盖完时间戳之后**重算（2026-11-20）：
+        //   上一行的 `modifyEntry` 会把 `lastModificationTime` 强制重置成 `Instant.now()`
+        //   （反编译 kotpass 的 `EntryKt.modifyEntry` 核实过），所以
+        //   `applyDomainFields` 里按 `after.updatedAt` 算出的余数**必然过期** ——
+        //   落盘后会变成「秒是新的、毫秒余数是旧的」，读回的时间戳自相矛盾。
+        //   ⇒ 这里再进一次 `modifyEntries`，用上游刚刚写入的真实时间重算余数。
+        //   ⚠️ `modifyEntries` 的 lambda 是**接收者** lambda（`Entry.() -> Entry`，用 `this`），
+        //   不是 `(Entry) -> Entry`；同时它遍历**全库**条目 ⇒ 必须自己按 uuid 守卫。
+        //   混用两种 lambda 形态本项目已栽过（见 `restoreFromRecycleBin` 的注释）。
+        //   ⚠️ 把目标 uuid 存成局部变量：接收者 lambda 里 `uuid` 会被解析成 `Entry.uuid`（`this.uuid`），
+        //   恰好是"看起来对、其实取的是当前条目"的那类隐蔽写法，显式命名避免歧义。
+        val targetUuid = uuid
+        val withMillis = updated.modifyEntries {
+            if (uuid != targetUuid) {
+                this
+            } else {
+                val times = this.times
+                copy(
+                    fields = fields + (
+                        KdbxToolFields.TIME_MS to EntryValue.Plain(
+                            KdbxToolFields.encodeTimeMillis(
+                                times?.creationTime?.toEpochMilli(),
+                                times?.lastModificationTime?.toEpochMilli(),
+                            ),
+                        )
+                        ),
+                )
+            }
+        }
+        return KdbxWriteResult(withMillis, uuid)
     }
 
     /**
@@ -339,7 +383,22 @@ internal object KdbxItemWriter {
         //   KDBX 后只剩标题与备注（`ConversionStats.typeDegradedCount` 就是为这个
         //   计数而存在的）。现在写进 `VPX_*` 专属区，读侧 `KdbxItemMapper` 原样读回。
         fields = applyPayloads(fields, item = item, before = before)
+        fields = applyTimeMillis(fields, item = item)
         return applyCustomFields(fields, item = item, before = before)
+    }
+
+    /**
+     * 毫秒余数（2026-11-20）：加密 v4 的 `<Times>` 只到**整秒**，
+     * 见 [KdbxToolFields.TIME_MS] 的 KDoc。这里把秒以下的余数补存到工具字段。
+     *
+     * ⚠️ 恒写（余数为 0 也写 `0:0`）：这样「转换来的条目」（余数恰好 0）与
+     *   「KDBX 原生条目」（无此键）在语义上等价，读侧不需要靠猜区分。
+     *   **不做"没变就跳过"的优化** —— 条目被 `updateEntry` 改过时间后余数可能变化，
+     *   跳过就会留下**上一次的旧余数**（第 7 类「不报错的错」）。
+     */
+    private fun applyTimeMillis(fields: EntryFields, item: VaultItem): EntryFields {
+        val encoded = KdbxToolFields.encodeTimeMillis(item.createdAt, item.updatedAt)
+        return fields + (KdbxToolFields.TIME_MS to EntryValue.Plain(encoded))
     }
 
     /**
@@ -519,8 +578,10 @@ internal object KdbxItemWriter {
     ): EntryFields {
         val usable = item.uris.filter { it.uri.isNotBlank() }
         val appFields = KdbxToolFields.appFieldsOf(usable)
-        // 标准 Url 只收**非应用** URI；应用 URI 走 App Package Name 字段。
-        val webUris = usable.filterNot { KdbxToolFields.isAndroidAppUri(it.uri) }
+        // 标准 Url 只收**非应用** URI（见 KdbxToolFields.appFieldsOf 的说明：
+        // KeePassXC/DX 会把 `androidapp://` 当域名匹配）。应用 URI 的值仍完整落在
+        // `VPX_URL_n` 里，标准 Url 只是给外部工具看的副本。
+        val primaryUri = usable.firstOrNull { !KdbxToolFields.isAndroidAppUri(it.uri) }
         val desired = LinkedHashMap<String, String>()
         desired.putAll(KdbxToolFields.fromUris(usable))
         desired.putAll(appFields)
@@ -531,7 +592,7 @@ internal object KdbxItemWriter {
         var result = fields.minus(previousToolKeys(before).filter { key -> key !in desired })
 
         // ② 标准 Url：值未变则**一个字都不动**（同 applyTotp 的纪律）。
-        val primary = webUris.firstOrNull()?.uri.orEmpty()
+        val primary = primaryUri?.uri.orEmpty()
         if (result[BasicField.Url.key]?.content != primary) {
             result = result + (BasicField.Url.key to EntryValue.Plain(primary))
         }
@@ -630,6 +691,10 @@ internal object KdbxItemWriter {
             .map { it.name }
             .filter { name -> name.isNotBlank() && name !in desired }
         var result = fields.minus(removed)
+        // ⚠️ 字段删了、它的**类型元数据**也必须跟着删：留下一个指向不存在字段的
+        //    `VPX_FIELD_META_x` 本身无害（读侧会忽略），但用户下次建一个同名同类型
+        //    之外的字段时，那个陈旧 meta 会把新字段的类型**改回去**。
+        removed.forEach { name -> result = result.minus(KdbxToolFields.fieldMetaKey(name)) }
 
         // ② 增改：值或可见性任一变过才写（没变的不动，保持原表示）。
         val previousByName = before?.customFields.orEmpty().associateBy { it.name }
@@ -639,6 +704,21 @@ internal object KdbxItemWriter {
             // 自定义字段会直接覆盖库名（现网 bug，数据毁），命中即跳过，绝不写入。
             if (KdbxFieldKeys.isReserved(field.name)) {
                 return@forEach
+            }
+            val metaKey = KdbxToolFields.fieldMetaKey(field.name)
+            // ★ 类型元数据（2026-11-01）：Boolean / Linked 在 KDBX 侧没有对应的
+            //   存储形态（只有"明文 / 受保护"两态）⇒ 不存就**静默降级成 Text**。
+            //   每次都要写（不能"没变就跳过"）：用户可能只改了值没改类型，
+            //   此时若跳过 meta，而 meta 又恰好缺失，类型就永久丢了。
+            KdbxToolFields.encodeFieldMeta(field.type, field.linkedId)?.let { meta ->
+                if (result[metaKey]?.content != meta) {
+                    result = result + (metaKey to EntryValue.Plain(meta))
+                }
+            } ?: run {
+                // Text / Hidden 不需要元数据 ⇒ 顺手清掉可能残留的旧值（类型从
+                // Boolean 改回 Text 时，旧 meta 必须消失，否则读回来还是 Boolean）。
+                result.keys.firstOrNull { it.equals(metaKey, ignoreCase = true) }
+                    ?.let { result = result.minus(it) }
             }
             val previous = previousByName[field.name]
             if (previous != null && previous.value == field.value && previous.type == field.type) {

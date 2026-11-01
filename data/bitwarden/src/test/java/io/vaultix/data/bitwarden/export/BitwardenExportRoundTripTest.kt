@@ -112,8 +112,53 @@ class BitwardenExportRoundTripTest {
         assertNull(back.updatedAt)
     }
 
-    /** 密码历史里 password 为空的条目：导出省略该字段，导入回落空串（官方同语义）。 */
+    /**
+     * 组织归属（`organizationId` / `collectionIds`）必须能**往返**。
+     *
+     * ⚠️ 此前导出侧构造 `BitwardenExportCipher` 时**根本没传这两个参数**
+     *   （文件头注释还写着"恒输出"，注释与代码不一致），导入侧也不读
+     *   ⇒ 组织库导出的备份里这两项全是 null，拿去恢复时共享密码全部落进个人库。
+     *   这类"共享库变个人库"在界面上没有任何提示，属于权限事故而不是显示问题。
+     */
     @Test
+    fun `组织归属往返保真`() {
+        val item = loginItem().copy(
+            organizationId = "11111111-2222-3333-4444-555555555555",
+            collectionIds = listOf(
+                "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                "11111111-aaaa-bbbb-cccc-222222222222",
+            ),
+        )
+
+        val cipher = item.toExportCipher()
+        assertEquals(item.organizationId, cipher.organizationId)
+        assertEquals(item.collectionIds, cipher.collectionIds)
+
+        val back = json.decodeFromString(
+            BitwardenExportCipher.serializer(),
+            json.encodeToString(BitwardenExportCipher.serializer(), cipher),
+        ).toVaultItem()!!
+
+        assertEquals(item.organizationId, back.organizationId)
+        assertEquals(item.collectionIds, back.collectionIds)
+    }
+
+    /** 个人条目（无组织）：导出的必须是 null，不是 `""` / `[]`（官方口径）。 */
+    @Test
+    fun `个人条目不带组织字段`() {
+        val cipher = loginItem().toExportCipher()
+        assertNull(cipher.organizationId)
+        assertNull(cipher.collectionIds)
+
+        val back = json.decodeFromString(
+            BitwardenExportCipher.serializer(),
+            json.encodeToString(BitwardenExportCipher.serializer(), cipher),
+        ).toVaultItem()!!
+        assertNull(back.organizationId)
+        assertTrue(back.collectionIds.isEmpty())
+    }
+
+    /** 密码历史里 password 为空的条目：导出省略该字段，导入回落空串（官方同语义）。 */    @Test
     fun `历史密码为空 导出省略且导入回落空串`() {
         val cipher = loginItem(history = listOf(VaultPasswordHistoryEntry(""))).toExportCipher()
         assertNull("空密码不写成 \"\"，直接省字段", cipher.passwordHistory!!.single().password)

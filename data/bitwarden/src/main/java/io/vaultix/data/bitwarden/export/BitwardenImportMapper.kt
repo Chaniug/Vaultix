@@ -77,6 +77,12 @@ internal fun BitwardenExportCipher.toVaultItem(): VaultItem? {
         passwordHistory = passwordHistory.orEmpty().map { it.toVaultPasswordHistory() },
         createdAt = BitwardenTimestamps.parse(creationDate),
         updatedAt = BitwardenTimestamps.parse(revisionDate),
+        // ★ 组织归属（2026-11-20）：此前**不读** ⇒ 从组织库导出的条目再导回来时
+        //   组织/集合归属全丢，共享密码悄悄变成个人条目（权限事故，且无任何提示）。
+        //   ⚠️ 空串归一成 null / 空列表：Bitwarden 对"个人条目"写的是 null，
+        //   但第三方工具可能写 `""`；两种都要落成"无组织"，否则 `VPX_BW_ORG` 会带一个空串过去。
+        organizationId = organizationId?.takeIf { it.isNotBlank() },
+        collectionIds = collectionIds.orEmpty().filter { it.isNotBlank() },
     )
 }
 

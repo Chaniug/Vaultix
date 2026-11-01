@@ -113,17 +113,16 @@ internal object KdbxConversionEngine {
 
         // ② 再写条目，落到各自分组（找不到分组 ⇒ 根组，不丢条目）。
         items.forEach { item ->
+            // ⚠️ provenance 字段**与条目一起写**（`extraFields`），不要建完再 `modifyEntry`：
+            //   后者会把 `lastModificationTime` 重置成 now（kotpass 内部行为），
+            //   于是 `createdAt` 保住了、`updatedAt` 静默变成导入时刻（2026-11-01 修正）。
             val written = KdbxItemWriter.createEntry(
                 database = database,
                 folderId = item.folderId?.let { groupOf[it] },
                 item = item,
+                extraFields = provenanceFields(item),
             )
             database = written.database
-            // createEntry 的 uuid 是它自己生成的，恒非空；空即上游行为变更，直接炸而不是猜。
-            val uuid = written.entryUuid ?: error("createEntry 未返回条目 uuid")
-            database = database.modifyEntry(uuid) {
-                copy(fields = fields + provenanceFields(item))
-            }
         }
         val checked = KdbxRoundTrip.verify(database, credentials)
         if (!checked.isSafeToWrite) {
@@ -205,6 +204,18 @@ internal object KdbxConversionEngine {
             put(KdbxToolFields.BW_ID, EntryValue.Plain(item.id))
         }
         put(KdbxToolFields.BW_TYPE, EntryValue.Plain(KdbxToolFields.typeName(item.type)))
+        // 组织归属（2026-11-01）：KDBX 没有组织概念，但转换是双向的 ——
+        // 丢了它，组织库的共享密码转回 Bitwarden 时会**悄悄落进个人库**。
+        item.organizationId?.takeIf { it.isNotBlank() }?.let { org ->
+            put(KdbxToolFields.BW_ORG, EntryValue.Plain(org))
+        }
+        val collections = item.collectionIds.filter { it.isNotBlank() }
+        if (collections.isNotEmpty()) {
+            put(
+                KdbxToolFields.BW_COLLECTIONS,
+                EntryValue.Plain(collections.joinToString(KdbxToolFields.COLLECTION_SEPARATOR)),
+            )
+        }
     }
 
     /**
@@ -230,7 +241,7 @@ internal object KdbxConversionEngine {
         return Result.success(KdbxConversionContent(items = items, folders = content.folders))
     }
 
-    /** 应用旁路还原（id + type），见 [read] 与 [KdbxConversionContent] 的说明。 */
+    /** 应用旁路还原（id + type + 组织归属），见 [read] 与 [KdbxConversionContent] 的说明。 */
     private fun restoreProvenance(item: VaultItem, prov: EntryProvenance?): VaultItem {
         val restoredId = prov?.bwId?.takeIf { it.isNotBlank() }
             // 无 VPX_BW_ID（第三方库 / 用户手建条目）⇒ 退回条目 uuid 的裸形态。
@@ -238,7 +249,17 @@ internal object KdbxConversionEngine {
             //    合法 UUID（BitwardenExportCipher.id 的注释），带前缀会反序列化报错。
             ?: entryUuidOf(item.id)?.toString()
             ?: item.id
-        return item.copy(id = restoredId, type = restoredType(prov?.bwType, item))
+        return item.copy(
+            id = restoredId,
+            type = restoredType(prov?.bwType, item),
+            // 组织归属：原样写回。缺键 = 个人条目（不是"未知"，Bitwarden 个人条目
+            // 的 organizationId 本来就是 null），所以缺键时保持 null 即可。
+            organizationId = prov?.bwOrg?.takeIf { it.isNotBlank() },
+            collectionIds = prov?.bwCollections
+                ?.split(KdbxToolFields.COLLECTION_SEPARATOR)
+                ?.filter { it.isNotBlank() }
+                .orEmpty(),
+        )
     }
 
     /**
@@ -268,15 +289,26 @@ internal object KdbxConversionEngine {
         } ?: item.type
     }
 
-    /** 旁路字段采集（全库遍历，含子组；只认本库写出的两个键）。 */
+    /** 旁路字段采集（全库遍历，含子组；只认本库写出的几个键）。 */
     private fun provenanceOf(database: KeePassDatabase): Map<String, EntryProvenance> {
         val out = mutableMapOf<String, EntryProvenance>()
         fun walk(group: Group) {
             group.entries.forEach { entry ->
-                val bwId = fieldValue(entry, KdbxToolFields.BW_ID)
-                val bwType = fieldValue(entry, KdbxToolFields.BW_TYPE)
-                if (!bwId.isNullOrBlank() || !bwType.isNullOrBlank()) {
-                    out[itemIdOf(entry.uuid)] = EntryProvenance(bwId, bwType)
+                // 四个键任一非空就收集（条件拆成 `listOf(...).any` 是为了过 detekt 的
+                // ComplexCondition：写成一串 `||` 是 7 个条件，而上限是 3）。
+                val values = listOf(
+                    fieldValue(entry, KdbxToolFields.BW_ID),
+                    fieldValue(entry, KdbxToolFields.BW_TYPE),
+                    fieldValue(entry, KdbxToolFields.BW_ORG),
+                    fieldValue(entry, KdbxToolFields.BW_COLLECTIONS),
+                )
+                if (values.any { !it.isNullOrBlank() }) {
+                    out[itemIdOf(entry.uuid)] = EntryProvenance(
+                        bwId = values[0],
+                        bwType = values[1],
+                        bwOrg = values[2],
+                        bwCollections = values[3],
+                    )
                 }
             }
             group.groups.forEach(::walk)
@@ -297,5 +329,10 @@ internal object KdbxConversionEngine {
             ?.value?.content
 
     /** 一条旁路记录（内部形态；对外只以还原后的 [VaultItem] 出现）。 */
-    private data class EntryProvenance(val bwId: String?, val bwType: String?)
+    private data class EntryProvenance(
+        val bwId: String?,
+        val bwType: String?,
+        val bwOrg: String? = null,
+        val bwCollections: String? = null,
+    )
 }

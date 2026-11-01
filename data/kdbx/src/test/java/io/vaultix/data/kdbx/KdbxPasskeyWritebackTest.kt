@@ -25,6 +25,9 @@ class KdbxPasskeyWritebackTest {
     @Test
     fun `fromCredential emits all ten keys`() {
         // 字段集 = 与 bw2keepass 的并集（施工单 §1.3）。
+        // ✅ 2026-11-01 多一个 `VPX_PASSKEY_META`：KPEX_ 那 10 个键里没有
+        //    counter / discoverable 的位子（见 KdbxPasskeyCodec.FIELD_META），
+        //    不另开私有键就会在往返时把 Bitwarden 的原值改写成 0 / true。
         assertThat(KdbxPasskeyCodec.fromCredential(credential(), 0).keys).containsExactly(
             "KPEX_PASSKEY_USERNAME",
             "KPEX_PASSKEY_PRIVATE_KEY_PEM",
@@ -36,6 +39,7 @@ class KdbxPasskeyWritebackTest {
             "KPEX_PASSKEY_CREATION_DATE",
             "KPEX_PASSKEY_FLAG_BE",
             "KPEX_PASSKEY_FLAG_BS",
+            "VPX_PASSKEY_META",
         )
     }
 
@@ -53,6 +57,7 @@ class KdbxPasskeyWritebackTest {
             "KPEX_PASSKEY_CREATION_DATE_1",
             "KPEX_PASSKEY_FLAG_BE_1",
             "KPEX_PASSKEY_FLAG_BS_1",
+            "VPX_PASSKEY_META_1",
         )
     }
 

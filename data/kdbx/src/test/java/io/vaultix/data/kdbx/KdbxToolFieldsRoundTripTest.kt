@@ -236,15 +236,25 @@ class KdbxToolFieldsRoundTripTest {
         assertThat(after.uris.map { it.uri }).contains("https://web2.example")
     }
 
+    /**
+     * 多个应用 URI **全部保留**（2026-11-01 改）。
+     *
+     * ## 这条用例此前的写法与它的理由是错的
+     *
+     * 它原先断言"只保留第一个"，理由是：
+     * > 若改成「全部塞进 `VPX_URL_n`」，那些 `androidapp://` 会被 KeePassXC 当域名匹配
+     *
+     * 核实过（`KdbxXmlReader.cpp` / `KeePass2.cpp` 全文搜 `AdditionalUrlAttribute`）：
+     * **KeePassXC 的读取器里没有任何额外 URL 键的引用**，也**没有**"遍历全部字段找 URL"
+     * 的逻辑 —— `KP2A_URL_n` 只出现在它的 Bitwarden/ProtonPass **导入器**（写方向）。
+     * 而 `VPX_` 是本应用的私有前缀，第三方工具根本不看。
+     * ⇒ 那条理由不成立，代价却是**真的丢数据**（第 2 个应用 URI 整条消失）。
+     *
+     * 现在的落法：全部 URI（含应用 URI）按原始下标进 `VPX_URL_n`，
+     * 同时仍写 `App Package Name` 给 KeePassDX 认。
+     */
     @Test
-    fun `多个应用 URI 时只保留第一个（KDBX 字段位只有一个，这是已知取舍不是 bug）`() {
-        // `App Package Name` 是**单个**字段位（KeePassDX 约定就是一条一个包名），
-        // 没有 `App Package Name_2` 这种落法⇒ 第 2 个应用 URI 在 KDBX 侧无处可存。
-        //
-        // ⚠️ 用例存在的意义是**钉死这个行为**，让后来者别把它当 bug"顺手修"：
-        //   若改成"全部塞进 VPX_URL_n"，那些 `androidapp://` 会被 KeePassXC 当域名匹配
-        //   （必然匹配不上），等于**为了多存一条而让所有应用 URI 的匹配都失效**。
-        //   宁可少一条，也不要全部失效。
+    fun `多个应用 URI 全部保留`() {
         val after = roundTrip(
             itemWithUris(
                 listOf(
@@ -254,7 +264,48 @@ class KdbxToolFieldsRoundTripTest {
             ),
         )
 
-        assertThat(after.uris.map { it.uri }).containsExactly("androidapp://com.example.first")
+        assertThat(after.uris.map { it.uri }).containsExactly(
+            "androidapp://com.example.first",
+            "androidapp://com.example.second",
+        ).inOrder()
+    }
+
+    /**
+     * 应用 URI 与 web URI 混排时，**顺序**必须保持原样。
+     *
+     * 旧落法把应用 URI 单独抽到 `App Package Name`，读回时追加在末尾 ⇒
+     * `[web, app, web]` 会变成 `[web, web, app]`。顺序不是装饰：
+     * 详情页第一条是用户最常用的那个，自动填充也按它优先匹配。
+     */
+    @Test
+    fun `应用 URI 与 web URI 混排时顺序不变`() {
+        val after = roundTrip(
+            itemWithUris(
+                listOf(
+                    VaultUri(uri = "https://a.example.com"),
+                    VaultUri(uri = "androidapp://com.example.app"),
+                    VaultUri(uri = "https://c.example.com"),
+                ),
+            ),
+        )
+
+        assertThat(after.uris.map { it.uri }).containsExactly(
+            "https://a.example.com",
+            "androidapp://com.example.app",
+            "https://c.example.com",
+        ).inOrder()
+    }
+
+    /** 应用 URI 的匹配档位不许降级（旧落法只剩包名，`Never` 会变回"基域匹配"）。 */
+    @Test
+    fun `应用 URI 的匹配档位往返保真`() {
+        val after = roundTrip(
+            itemWithUris(
+                listOf(VaultUri(uri = "androidapp://com.example.app", match = UriMatch.Never)),
+            ),
+        )
+
+        assertThat(after.uris.single().match).isEqualTo(UriMatch.Never)
     }
 
     @Test

@@ -70,6 +70,12 @@ internal fun VaultItem.toExportCipher(): BitwardenExportCipher {
         creationDate = BitwardenTimestamps.format(createdAt),
         // 软删条目不进导出，恒 null（领域模型没有"删除时间"这个概念）。
         deletedDate = null,
+        // ★ 组织归属（2026-11-20）：文件头早就写着「恒输出」，但**构造时根本没传**
+        //   ⇒ 从组织库导出的 JSON 里 organizationId / collectionIds 全是 null。
+        //   用户拿这份备份去恢复，共享密码全部落进个人库 —— 静默的权限事故。
+        //   ⚠️ 空串归一成 null（官方对个人条目写 null，不写 ""）。
+        organizationId = organizationId?.takeIf { it.isNotBlank() },
+        collectionIds = collectionIds.filter { it.isNotBlank() }.takeIf { it.isNotEmpty() },
     )
 }
 

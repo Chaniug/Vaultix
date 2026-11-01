@@ -42,6 +42,9 @@ import app.keemobile.kotpass.models.Group
 import com.google.common.truth.Truth.assertThat
 import com.google.common.truth.Truth.assertWithMessage
 import io.vaultix.common.OtpUriParser
+import io.vaultix.model.CustomFieldType
+import io.vaultix.model.PasskeyKeyAlgorithm
+import io.vaultix.model.UriMatch
 import io.vaultix.model.VaultCard
 import io.vaultix.model.VaultCustomField
 import io.vaultix.model.VaultFido2Credential
@@ -140,10 +143,12 @@ class KdbxConversionTest {
         assertWithMessage("rpId").that(restored.rpId).isEqualTo("example.com")
         assertWithMessage("credentialId").that(restored.credentialId).isEqualTo("////")
         assertWithMessage("userName").that(restored.userName).isEqualTo("alice")
-        // ⚠️ counter 是**已知边界**，不是本转换器的缺陷：KeePassDX 的 KPEX_ 字段集
-        //   没有 counter 位（KdbxPasskeyCodec.toCredential 恒填 0），既有写回测试
-        //   同样不断言它。要补得先给码本加字段，那是独立立项，别顺手改。
-        assertWithMessage("counter（已知边界：KPEX_ 无此字段）").that(restored.counter).isEqualTo(0)
+        // ✅ 2026-11-01 起 counter / discoverable 不再丢：`KPEX_` 那 10 个键里确实没有
+        //   它们的位子，但转换器用私有扩展 `VPX_PASSKEY_META` 带过去了。
+        //   这条断言此前写的是 `isEqualTo(0)`（"已知边界"），是**把缺陷当成规格**——
+        //   转换器的职责是不改写数据，Bitwarden 里是 7 就得是 7。
+        assertWithMessage("counter").that(restored.counter).isEqualTo(7)
+        assertWithMessage("discoverable").that(restored.discoverable).isTrue()
         assertWithMessage("私钥 PEM").that(restored.keyValue).isEqualTo(credential.keyValue)
 
         // ★ 私钥必须落在**受保护**字段上（Protected="True" ⇒ EntryValue.Encrypted）：
@@ -807,6 +812,162 @@ class KdbxConversionTest {
         username = username,
         password = password,
         type = VaultItemType.Login,
+    )
+
+    // ------------------------------------------------- 全字段对账（2026-11-01 用户追问）
+
+    /**
+     * **全字段对账**：给每个领域字段填**互不相同**的哨兵值，走 `build → read`，
+     * 逐字段比对。少一项就在这里红，而不是等用户发现"我的数据少了一块"。
+     *
+     * ## 为什么这条测试不能省
+     *
+     * 已有的往返测试都是**逐个功能**写的（卡一条、身份一条、SSH 一条……）。
+     * 那种写法天然漏掉"新增了字段但没人补测试"—— 而领域模型加了字段、
+     * 写侧忘了写，正是这类转换器最典型的坏法（#219/#223 连着两轮都是它）。
+     * 这条用**一处集中的字段清单**兜底：加字段的人只要往这里加一行，漏写当场红。
+     *
+     * ⚠️ 断言用 [assertWithMessage] 逐项写，**不要**用 `isEqualTo(expected)`
+     *   比整个对象：整对象比对失败时只给一大坨 diff，看不出是哪一项丢了。
+     */
+    @Test
+    fun `全字段对账_领域模型每个字段往返后都不丢`() {
+        val item = allFieldsItem()
+
+        val back = buildAndRead(listOf(item)).items.single()
+
+        assertWithMessage("id").that(back.id).isEqualTo(item.id)
+        assertWithMessage("title").that(back.title).isEqualTo(item.title)
+        assertWithMessage("username").that(back.username).isEqualTo(item.username)
+        assertWithMessage("password").that(back.password).isEqualTo(item.password)
+        assertWithMessage("notes").that(back.notes).isEqualTo(item.notes)
+        assertWithMessage("type").that(back.type).isEqualTo(item.type)
+        assertWithMessage("folderId").that(back.folderId).isEqualTo(item.folderId)
+        assertWithMessage("favorite").that(back.favorite).isEqualTo(item.favorite)
+        assertWithMessage("reprompt").that(back.reprompt).isEqualTo(item.reprompt)
+        assertWithMessage("uris").that(back.uris).isEqualTo(item.uris)
+        assertWithMessage("totp").that(back.totp).isEqualTo(item.totp)
+        assertWithMessage("fido2Credentials")
+            .that(back.fido2Credentials).isEqualTo(item.fido2Credentials)
+        assertWithMessage("card").that(back.card).isEqualTo(item.card)
+        assertWithMessage("identity").that(back.identity).isEqualTo(item.identity)
+        assertWithMessage("sshKey").that(back.sshKey).isEqualTo(item.sshKey)
+        assertWithMessage("secureNote").that(back.secureNote).isEqualTo(item.secureNote)
+        assertWithMessage("customFields").that(back.customFields).isEqualTo(item.customFields)
+        assertWithMessage("passwordHistory")
+            .that(back.passwordHistory).isEqualTo(item.passwordHistory)
+        assertWithMessage("createdAt").that(back.createdAt).isEqualTo(item.createdAt)
+        assertWithMessage("updatedAt").that(back.updatedAt).isEqualTo(item.updatedAt)
+    }
+
+    /**
+     * 组织信息（`organizationId` / `collectionIds`）必须能带过去。
+     *
+     * ⚠️ KDBX **没有**组织概念，所以这是典型的「格式装不下」——
+     *   但"装不下"不等于"可以丢"：用户从组织库导出 JSON 转成 KDBX，
+     *   以后再转回 Bitwarden 时若组织归属没了，条目会掉进个人库，
+     *   而**共享库的密码凭空进了个人库**这件事没有任何提示。
+     *   ⇒ 用 `VPX_` 工具字段带着走，KDBX 侧看不见但不会丢。
+     */
+    @Test
+    fun `组织归属往返保真（KDBX 没有组织概念，靠工具字段带过去）`() {
+        val item = sampleItem(title = "组织条目").copy(
+            organizationId = "11111111-2222-3333-4444-555555555555",
+            collectionIds = listOf("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
+        )
+
+        val back = buildAndRead(listOf(item)).items.single()
+
+        assertThat(back.organizationId).isEqualTo(item.organizationId)
+        assertThat(back.collectionIds).isEqualTo(item.collectionIds)
+    }
+
+    /**
+     * 自定义字段的**类型**必须保住：`Boolean` 不能被读成 `Text`，`Linked` 的
+     * `linkedId` 更不能丢。
+     *
+     * ⚠️ 这是最隐蔽的一类丢失 —— 值都在，只有类型换了：
+     *   - `Boolean` → `Text`：界面上从开关变成一行 "true"，用户以为字段坏了；
+     *   - `Linked` → `Text`：Bitwarden 里"这个字段就是用户名"的语义没了，
+     *     再导回官方客户端时变成一个独立文本字段，自动填充不再认它。
+     *   而**往返测试若只比值不比类型，永远抓不到**。
+     */
+    @Test
+    fun `自定义字段的四种类型往返都不降级`() {
+        val item = sampleItem(title = "字段类型").copy(
+            customFields = listOf(
+                VaultCustomField(name = "纯文本", value = "v1", type = CustomFieldType.Text),
+                VaultCustomField(name = "隐藏", value = "v2", type = CustomFieldType.Hidden),
+                VaultCustomField(name = "布尔", value = "true", type = CustomFieldType.Boolean),
+                VaultCustomField(
+                    name = "链接用户名",
+                    value = "alice",
+                    type = CustomFieldType.Linked,
+                    linkedId = 100,
+                ),
+            ),
+        )
+
+        val back = buildAndRead(listOf(item)).items.single()
+
+        val byName = back.customFields.associateBy { it.name }
+        assertWithMessage("纯文本").that(byName["纯文本"]?.type).isEqualTo(CustomFieldType.Text)
+        assertWithMessage("隐藏").that(byName["隐藏"]?.type).isEqualTo(CustomFieldType.Hidden)
+        assertWithMessage("布尔").that(byName["布尔"]?.type).isEqualTo(CustomFieldType.Boolean)
+        assertWithMessage("链接类型").that(byName["链接用户名"]?.type).isEqualTo(CustomFieldType.Linked)
+        assertWithMessage("linkedId").that(byName["链接用户名"]?.linkedId).isEqualTo(100)
+        // 值也要一字不差（类型对了值丢了同样没用）。
+        assertThat(back.customFields.map { it.value })
+            .containsExactly("v1", "v2", "true", "alice")
+    }
+
+    /** 填满所有字段的条目（对账用；每项都是**互不相同**的哨兵值）。 */
+    private fun allFieldsItem(): VaultItem = VaultItem(
+        id = "6f1a2b3c-4d5e-6f70-8192-a3b4c5d6e7f8",
+        title = "全字段条目",
+        username = "user@example.com",
+        password = "p@ss|with|pipes",
+        notes = "备注第一行\n备注第二行",
+        type = VaultItemType.Login,
+        uris = listOf(
+            VaultUri(uri = "https://first.example.com", match = UriMatch.Exact),
+            VaultUri(uri = "https://second.example.com", match = UriMatch.Host),
+            VaultUri(uri = "androidapp://com.example.app", match = UriMatch.Never),
+        ),
+        totp = "otpauth://totp/Example:alice?secret=JBSWY3DPEHPK3PXP&digits=7&period=45",
+        fido2Credentials = listOf(
+            VaultFido2Credential(
+                credentialId = "////",
+                rpId = "example.com",
+                rpName = "示例站点",
+                userName = "alice",
+                userDisplayName = "Alice",
+                userHandle = "aGFuZGxl",
+                keyAlgorithm = PasskeyKeyAlgorithm.ES256,
+                creationDate = "2026-01-02T03:04:05.006Z",
+                keyType = "public-key",
+                keyCurve = "P-256",
+                keyValue = "-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----",
+                counter = 7L,
+                discoverable = false,
+            ),
+        ),
+        customFields = listOf(
+            VaultCustomField(name = "文本", value = "t", type = CustomFieldType.Text),
+            VaultCustomField(name = "隐藏", value = "h", type = CustomFieldType.Hidden),
+            VaultCustomField(name = "布尔", value = "false", type = CustomFieldType.Boolean),
+            VaultCustomField(name = "链接", value = "alice", type = CustomFieldType.Linked, linkedId = 100),
+        ),
+        folderId = null,
+        favorite = true,
+        reprompt = VaultReprompt.Password,
+        secureNote = null,
+        createdAt = 1_700_000_000_123L,
+        updatedAt = 1_700_000_999_456L,
+        passwordHistory = listOf(
+            VaultPasswordHistoryEntry(password = "old-1", lastUsedAt = 1_690_000_000_000L),
+            VaultPasswordHistoryEntry(password = "old-2", lastUsedAt = null),
+        ),
     )
 
 }
