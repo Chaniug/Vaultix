@@ -468,6 +468,10 @@ jobs:
           files: |
             app/build/outputs/apk/**/release/*.apk
             ${{ github.workspace }}/checksums-sha256.txt
+          # ★ 2026-11-01（#221）：glob 匹配不到就当场红。
+          #   默认 false 时 action 会安静地发一个 0 附件的 Release —— 这正是 preview
+          #   那次「构建成功、Release 页却是空的」的成因（键被吞进 body，见 ci-debug.yml）。
+          fail_on_unmatched_files: true
           draft: false
           prerelease: false
           make_latest: true

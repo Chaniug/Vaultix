@@ -228,6 +228,22 @@ jobs:
         shell: bash
         run: python3 "$GITHUB_WORKSPACE/.ai/tools/tests/selftest_signing_var_names.py"
 
+      # ★ 2026-11-01（#221）：发布产物清单的键是否真的存在。
+      #
+      # 事故：`Publish Debug APK to preview Release` 结论绿、日志里没有一句
+      # `Uploading asset`、Release 页 `assets=0` —— 用户看到「最新 dev 构建没出 APK」。
+      # 根因是 `files: |` 被粘在了 `body:` 末行末尾：YAML 完全接受（它就是一段更长的
+      # 正文），而 `with.files` 这个键**不存在**，action 走了「没有 files」的分支。
+      #
+      # 这类错没有任何运行时信号：bash 过、yaml 过、action success、Release 页也确实更新了。
+      - name: Check release assets (files key not swallowed by body)
+        shell: bash
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/check_release_assets.py" "$GITHUB_WORKSPACE"
+
+      - name: Self-test release assets checker
+        shell: bash
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/tests/selftest_release_assets.py"
+
       # push 时注入仓库固定签名，使 preview(debug) 与 stable release 签名完全一致、可互相覆盖安装。
       # 注意：本步骤与 release.yml 使用同一套 SIGNING_* Secret，密码也复用 Secret（不再硬编码 android），
       # 这是“同一设备 debug/release 覆盖安装”的硬性前提（同 applicationId + 同签名证书）。
@@ -660,9 +676,15 @@ jobs:
 
             ${{ steps.apk_meta.outputs.apk_list }}
 
-            > 与上一个预览包**签名一致**时可直接覆盖安装（保留数据与指纹解锁）；若提示签名不一致，说明这次的签名密钥变了 —— 安装前请先导出备份。          files: |
+            > 与上一个预览包**签名一致**时可直接覆盖安装（保留数据与指纹解锁）；若提示签名不一致，说明这次的签名密钥变了 —— 安装前请先导出备份。
+          # ⚠️ `files` 必须与 `body` **同级**（10 空格），且绝不能粘在 body 最后一行末尾 ——
+          #    粘上去 YAML 依然合法（只是正文多了几个字），但 `with.files` 这个键**不存在**，
+          #    action 会安静地建一个 0 附件的 release 并返回成功（#221）。
+          files: |
             app/build/outputs/apk/*/debug/*.apk
             app/build/outputs/apk/*/debug/*.APK
+          # ★ #221：glob 匹配不到就当场红，别安静地发个 0 附件 Release。
+          fail_on_unmatched_files: true
           draft: false
           prerelease: true
           make_latest: false
