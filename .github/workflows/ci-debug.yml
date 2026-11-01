@@ -299,6 +299,8 @@ jobs:
       - name: Summarize build errors
         if: always()
         shell: bash
+        # 同上：纯报告步骤，不允许失败。
+        continue-on-error: true
         run: |
           set -uo pipefail
           LOG=/tmp/build_log.txt
@@ -453,9 +455,18 @@ jobs:
       - name: Summarize failed unit tests
         if: always()
         shell: bash
+        # ⚠️ 2026-11-01：本步骤**只做报告，不允许失败**。
+        #    事故：CI #336 里它把 `Process completed with exit code 1` 挂在了自己身上，
+        #    而它报的内容是「共 915 例，失败 0 例」—— 一个纯读取步骤，硬是把整条 CI 判红。
+        #    本地按同样脚本复现（无 XML / 有 XML）都 exit 0，说明成因在 runner 侧的
+        #    输出处理（`::notice::` 逐行输出 + 内容里的特殊字符）。
+        #    ⇒ 诊断步骤的职责是**提供信息**，不是**下判决**。它一旦能失败，
+        #      就会把"真正的失败"替换成"诊断器自己坏了"，这正是这一轮连环红的最后一段。
+        #    真正的门禁是上一步 `Run unit tests (hard gate)`，那一步该红就红。
+        continue-on-error: true
         run: |
           set -uo pipefail
-          python3 - <<'PY'
+          python3 - <<'PY' || true
           import glob, sys, xml.etree.ElementTree as ET
 
           files = glob.glob('**/build/test-results/**/TEST-*.xml', recursive=True)
