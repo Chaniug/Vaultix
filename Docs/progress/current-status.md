@@ -739,3 +739,33 @@ Coil 内存缓存默认 = `memoryClass` 的 **20%**（≈51MB）；一张 120px 
 
 > 判据：**兜底路径必须在"兜底的场景"里被验证过**。
 > 每加一条兜底，就要加一个能让主路径失败的测试。
+
+---
+
+### 补记（同轮，CI #341 实测）· 诊断本身在说谎（#218.5）
+
+CI #341 跑完，页面结果里冒出一条 annotation：
+
+```
+[error] Keystore store password wrong —— SIGNING_STORE_PASSWORD 与 keystore 不符
+```
+
+而**同一次 run 的上一步**说「固定密钥解码通过」。两句互相矛盾 —— 而我刚为消除这种矛盾写完 #218.1。
+
+**根因**：`Build Debug APK` 步骤没有 `env:` 块。Secrets 不会自动变成环境变量，
+于是该步骤里 `${SIGNING_STORE_PASSWORD}` 恒空 ⇒ 回落 `android` ⇒ `keytool -certreq` 必然失败
+⇒ 走到「store 密码错」分支。**同一句教训 2026-09-08 已经在另一步上踩过并写了长注释。**
+
+修法三件：
+1. 补三行 `env:`（`SIGNING_STORE_PASSWORD` / `SIGNING_KEY_PASSWORD` / `SIGNING_KEY_ALIAS`）。
+2. 告警带上「Secret 到底有没有配」：`已配置（N 字符）` / `未配置，已回落 android`。
+3. 新增门禁 `.ai/tools/check_workflow_secret_env.py`：扫每个 step 的 `run` 里出现的 `${SIGNING_*}`，
+   没注入就判红。反向验证：删掉那三条 → 报 3 处、退出码 1，而 `bash -n` 仍说 OK。
+
+> 判据：**诊断代码本身也会说谎**。凡是"推断病因并打印"的代码，必须能区分
+> 「输入确实是 A」和「输入根本没送到」；否则它输出的不是诊断，是猜测 ——
+> 而错误的诊断比没有诊断更贵，因为它会把人引向错误的修法。
+
+另外一个仍未解的现象：`apksigner` 已经找到并执行（`build-tools/37.0.0/apksigner`），
+但**输出一个字节都没有**（stderr 被 `2>/dev/null` 吞掉）。本轮已改为把 stderr 打成 annotation，
+下一次 run 就能看到它为什么沉默。指纹这次仍未读出来，如实记在这里。

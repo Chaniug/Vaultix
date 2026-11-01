@@ -180,6 +180,16 @@ jobs:
         shell: bash
         run: python3 "$GITHUB_WORKSPACE/.ai/tools/check_workflow_shell.py"
 
+      # ★ 2026-11-01：Secret 变量「引用了但没注入」的检查。
+      #
+      # 同一句教训踩了两遍：2026-09-08 在 `Decode signing keystore` 上，2026-11-01 又在
+      # `Build Debug APK` 上。后者更糟 —— 它打出一条**假的** `Keystore store password wrong`，
+      # 与上一步的「解码通过」互相矛盾，等于把 #218.1 想修的误诊又造了一遍。
+      # `${VAR:-android}` 语法永远合法、`bash -n` 永远通过；缺陷在 YAML 层，只能跨文件比对。
+      - name: Check workflow secret env (referenced but never injected)
+        shell: bash
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/check_workflow_secret_env.py" "$GITHUB_WORKSPACE"
+
       # ★ 2026-11-01：APK 签名块解析器的自检。
       # 为什么非要有：`apksigner` 不在 runner 的 PATH 上，能用的只有我们自己写的
       # `.ai/tools/read_apk_signer.py`。它一旦静默读错，Release 页的「签名」就永远显示
@@ -304,7 +314,11 @@ jobs:
                 | sed -nE 's/.*SHA256:[[:space:]]*//p' | head -1 | tr -d '[:space:]' | tr 'A-F' 'a-f')"
               echo "::warning title=Keystore key password invalid::固定密钥库可打开（store 密码正确），但 key 密码解不开私钥 ⇒ 本包改用一次性密钥、**无法覆盖安装**。修法：把 SIGNING_KEY_PASSWORD 改成与 store 密码相同（或改成 key 的真实密码）。本次已解码密钥的证书指纹：${ks_fp:-<读取失败>}"
             else
-              echo "::error title=Keystore store password wrong::固定密钥库连 store 密码都打不开 ⇒ SIGNING_STORE_PASSWORD 与 keystore 不符。本次改用一次性密钥（无法覆盖安装）。"
+              # ⚠️ 2026-11-01 二次踩坑：这条**曾经是假的**（CI #341）。真因是本步骤缺 `env:`
+              #    ⇒ `SIGNING_STORE_PASSWORD` 恒空 ⇒ 回落 `android` ⇒ 必然打不开。
+              #    现在本步骤已显式注入三个 SIGNING_* env；同时把「Secret 到底有没有配」
+              #    写进告警里 —— 空值导致的误诊不该再靠人去比对另一条日志才能识破。
+              echo "::error title=Keystore store password wrong::固定密钥库连 store 密码都打不开 ⇒ SIGNING_STORE_PASSWORD 与 keystore 不符。本次改用一次性密钥（无法覆盖安装）。诊断：SIGNING_STORE_PASSWORD ${SIGNING_STORE_PASSWORD:+已配置（${#SIGNING_STORE_PASSWORD} 字符）}${SIGNING_STORE_PASSWORD:-未配置，已回落 android}；SIGNING_KEY_PASSWORD ${SIGNING_KEY_PASSWORD:+已配置}${SIGNING_KEY_PASSWORD:-未配置，已回落 android}；SIGNING_KEY_ALIAS=${SIGNING_KEY_ALIAS:-未配置，已回落 vaultix}"
             fi
             rm -f "$KS_FILE"
           fi
@@ -373,6 +387,16 @@ jobs:
             exit "$BUILD_EXIT"
           fi
           echo "::notice title=Build gate diagnostics::build_failed=false"
+        env:
+          # ⚠️ 2026-11-01 二次踩坑：**Secrets 不会自动变成环境变量**（同一句教训 2026-09-08 已经
+          #    在 `Decode signing keystore` 上写过一遍，这里又漏了）。缺这三行的后果是：
+          #    本步骤里 `${SIGNING_STORE_PASSWORD}` 恒为空 ⇒ 全部回落 `android`
+          #    ⇒ `keytool -certreq` 必然失败 ⇒ **CI #341 打出一条假的**
+          #    `Keystore store password wrong`，而 Decode 那步（有 env）明明报「解码通过」。
+          #    两句日志互相矛盾，人只会更糊涂 —— #218.1 想修的正是这种症状。
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
 
       # ★ 2026-11-01：**把编译错误的原文打到 annotation 上**。
       #
@@ -486,15 +510,26 @@ jobs:
           subject=""
           if [ -n "$apk0" ] && [ -x "${apksigner_bin:-/nonexistent}" ]; then
             echo "::notice title=apksigner::$apksigner_bin"
-            signer="$("$apksigner_bin" verify --print-certs "$apk_root/$apk0" 2>/dev/null | head -1 || true)"
+            # ⚠️ 2026-11-01 实测（CI #341）：apksigner 找到了、也执行了，但**输出一个字节都没有**。
+            #    原因是 `2>/dev/null` 把所有解释都吞了 —— 「工具在位」≠「工具能用」。
+            #    ⇒ 为了下一次不用再猜：失败时把它的 stderr 前几行打成 annotation。
+            signer="$("$apksigner_bin" verify --print-certs "$apk_root/$apk0" 2>/tmp/apksig.err | head -1 || true)"
+            if [ -z "$signer" ]; then
+              reason="$(head -3 /tmp/apksig.err 2>/dev/null | tr '\n' ' ' | cut -c1-300)"
+              echo "::warning title=apksigner gave no output::${apksigner_bin} 执行了但没有输出。stderr：${reason:-<空>}"
+            fi
             fingerprint="$(printf '%s' "$signer" | sed -nE 's/.*SHA-256 digest:[[:space:]]*([0-9a-fA-F]+).*/\1/p' | head -1)"
             subject="$(printf '%s' "$signer" | sed -nE 's/.*DN: *(.*)$/\1/p' | head -1)"
           fi
           if [ -z "$fingerprint" ] && [ -n "$apk0" ]; then
             # 兜底：自己解 v2/v3 签名块（apksigner 确实不存在时才走这条）。
-            parsed="$(python3 "$GITHUB_WORKSPACE/.ai/tools/read_apk_signer.py" "$apk_root/$apk0" 2>/dev/null || true)"
+            parsed="$(python3 "$GITHUB_WORKSPACE/.ai/tools/read_apk_signer.py" "$apk_root/$apk0" 2>/tmp/readsigner.err || true)"
             fingerprint="${parsed%%|*}"
             subject="${parsed#*|}"
+            if [ -z "$fingerprint" ]; then
+              err="$(head -3 /tmp/readsigner.err 2>/dev/null | tr '\n' ' ' | cut -c1-300)"
+              echo "::warning title=v2 parser gave nothing::$apk0 里没有可解析的 v2/v3 签名块。stderr：${err:-<空>}"
+            fi
           fi
           if [ -n "$fingerprint" ]; then
             echo "signer_fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
@@ -541,8 +576,11 @@ jobs:
       #
       #  ① 标题里是**一长串 commit SHA**：`⚠️ Development Preview (dev-341be3a58fb…)`，
       #     在 Releases 列表里被截断，看不出是哪个版本 —— 而这是用户唯一能看到的身份。
-      #     ⇒ 换成 `Vaultix v0.10.4-dev+341be3a`：与包里 `versionName`、与设置页显示
+      #     ⇒ 换成 `Vaultix v0.10.4-dev-341be3a`：与包里 `versionName`、与设置页显示
       #       三者同源（`.ai/ISSUES.md` #145.1 的承诺），SHA 只留 7 位可读形式。
+      #       ⚠️ 分隔符必须是 `-`（不是 `+`）：`+` 在语义化版本里是 build metadata，
+      #         `+` 之后的东西**不参与版本比较**；而这里 SHA 恰恰是区分先后的一部分。
+      #         也与 `PackageManager` 解析/显示的行为保持一致（它会把 versionName 原样给出）。
       #  ② 正文里「Debug APK」「debug 构建产物」「Generated APKs」三处说的是同一件事，
       #     还挤在一段 blockquote 里。⇒ 压成：一行定位 + 一张构建信息表 + APK 清单。
       #  ③ 新增**签名指纹**。这是本轮真实发生的事故：某次 CI 用一次性密钥签了包，
