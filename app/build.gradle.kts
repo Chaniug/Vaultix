@@ -103,7 +103,27 @@ android {
         System.getenv(envKey)?.takeIf { it.isNotBlank() }
             ?: keystoreProps.getProperty(propKey)?.takeIf { it.isNotBlank() }
 
-    val releaseStore = signingValue("VAULTIX_KEYSTORE_PATH", "storeFile")
+    fun firstEnv(vararg keys: String): Pair<String, String>? {
+        for (k in keys) {
+            val v = System.getenv(k)?.takeIf { it.isNotBlank() }
+            if (v != null) return v to k
+        }
+        return null
+    }
+
+    // ★ 2026-11-01（#218.8）：两套命名通道**都认**。
+    //
+    // 事故：workflow 用 `-Pandroid.injected.signing.*` + `SIGNING_*`，而这里**只**读
+    // `VAULTIX_*` ⇒ CI 上 hasReleaseSigning 恒为 false ⇒ debug 包用一次性 debug key 签
+    // ⇒ 与本机 dev 包证书不同、盖不上。**三句日志全都是对的**（密钥校验通过、构建成功、
+    // 「解码并校验通过」也是真的），缺的那一步在日志里不留任何痕迹。
+    // 门禁：.ai/tools/check_signing_var_names.py（跨文件比对两端的变量名）。
+    val storeEnv = firstEnv("VAULTIX_KEYSTORE_PATH", "SIGNING_KEYSTORE_PATH")
+    val storePwEnv = firstEnv("VAULTIX_STORE_PASSWORD", "SIGNING_STORE_PASSWORD")
+    val aliasEnv = firstEnv("VAULTIX_KEY_ALIAS", "SIGNING_KEY_ALIAS")
+
+    val releaseStore = (storeEnv?.first
+        ?: signingValue("VAULTIX_KEYSTORE_PATH", "storeFile"))
         // ⚠️ **必须把反斜杠归一化成正斜杠**：`.properties` 里 `\` 是**转义字符**，
         //    `D:\vaultix-release.jks` 会被 `Properties` 解析成 `D:vaultix-release.jks`
         //    （`\v` → `v`），于是 file 解析失败、签名悄悄退回 debug。
@@ -113,8 +133,11 @@ android {
         ?.let { rootProject.file(it) }
         ?: rootProject.file("D:/vaultix-release.jks").takeIf { it.exists() }
 
-    val releaseStorePassword = signingValue("VAULTIX_STORE_PASSWORD", "storePassword")
-    val releaseKeyAlias = signingValue("VAULTIX_KEY_ALIAS", "keyAlias") ?: "vaultix"
+    val releaseStorePassword = storePwEnv?.first
+        ?: signingValue("VAULTIX_STORE_PASSWORD", "storePassword")
+    val releaseKeyAlias = aliasEnv?.first
+        ?: signingValue("VAULTIX_KEY_ALIAS", "keyAlias")
+        ?: "vaultix"
 
     val hasReleaseSigning = releaseStore != null && releaseStorePassword != null
 
@@ -158,20 +181,41 @@ android {
 
     logger.lifecycle(
         "[Vaultix 签名] " + if (hasReleaseSigning) {
-            "使用项目发布密钥签名（别名 $releaseKeyAlias，来源 ${releaseStore?.path}）" +
+            // 打印**命中的环境变量名**（不是密码）：「这次走的是哪条通道」必须能从日志读出来，
+            // 否则下一次改 workflow 时，没人知道 gradle 到底认不认新名字。
+            val via = listOfNotNull(
+                storeEnv?.let { "keystore←${it.second}" },
+                storePwEnv?.let { "store 密码←${it.second}" },
+                aliasEnv?.let { "别名←${it.second}" },
+            ).ifEmpty { listOf("keystore.properties") }.joinToString("、")
+            "使用项目发布密钥签名（别名 $releaseKeyAlias，来源 ${releaseStore?.path}；$via）" +
                 " ⇒ debug/release 产物与设备上已装的包**签名一致**，可直接覆盖安装。"
         } else {
             // ⚠️ 分两种情况说清楚 —— 否则"签没签"这件事只能靠猜：
             //    有密钥库但没给密码时，笼统地说"找不到密钥库"会把人引到错误的方向。
             val why = if (releaseStore == null) {
-                "找不到 keystore（env VAULTIX_KEYSTORE_PATH / keystore.properties / " +
-                    "D:/vaultix-release.jks 都没有）"
+                "找不到 keystore（env VAULTIX_KEYSTORE_PATH / SIGNING_KEYSTORE_PATH / " +
+                    "keystore.properties / D:/vaultix-release.jks 都没有）"
             } else {
                 "找到了 keystore（${releaseStore.path}）但**没有密码**" +
-                    "（env VAULTIX_STORE_PASSWORD 或 keystore.properties 的 storePassword）"
+                    "（env VAULTIX_STORE_PASSWORD 或 SIGNING_STORE_PASSWORD，或 " +
+                    "keystore.properties 的 storePassword）"
+            }
+            // ★ 2026-11-01（#218.8）：把「只有 -Pandroid.injected.signing.*」这一种情况单独指出来。
+            //   实测（本机 Gradle 9.5.1）：只传那四个属性时，走的就是这个分支、且**构建完全成功** ——
+            //   AGP 的注入属性**不会**让这里的 hasReleaseSigning 变成 true。
+            //   不点破的话，读者会以为是"密钥不对"，而其实是"密钥没送到"。
+            val injectedOnly = project.hasProperty("android.injected.signing.store.file")
+            val hint = if (injectedOnly) {
+                "⚠️ 检测到 `-Pandroid.injected.signing.*` 属性，但**本脚本不读它们** —— " +
+                    "请改用环境变量 SIGNING_KEYSTORE_PATH / SIGNING_STORE_PASSWORD" +
+                    "（或 VAULTIX_*）下发密钥。"
+            } else {
+                ""
             }
             "未启用发布签名：$why ⇒ 退回旧行为：debug 用 Android debug 密钥签、release 不签。" +
-                "⚠️ 这样的产物装不上已有发布签名的设备（需手动重签，见 .ai/conventions/8.7-环境.md）。"
+                "⚠️ 这样的产物装不上已有发布签名的设备（需手动重签，见 .ai/conventions/8.7-环境.md）。" +
+                hint
         },
     )
 

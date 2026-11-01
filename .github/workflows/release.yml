@@ -273,6 +273,15 @@ jobs:
           KS_OPTS="$KS_OPTS -Pandroid.injected.signing.store.password=${SIGNING_STORE_PASSWORD:-android}"
           KS_OPTS="$KS_OPTS -Pandroid.injected.signing.key.alias=${SIGNING_KEY_ALIAS:-vaultix}"
           KS_OPTS="$KS_OPTS -Pandroid.injected.signing.key.password=${SIGNING_KEY_PASSWORD:-android}"
+          # ★ 2026-11-01：与 ci-debug.yml 同一条修正 —— gradle 侧的签名配置**不读**
+          #   `-Pandroid.injected.signing.*`，它读环境变量。只给 -P 的话，
+          #   `hasReleaseSigning == false` ⇒ release 走"不签"分支（由 AGP 兜底），
+          #   而 AGP 的兜底签名与 debug 包不一定同源。密钥必须走 gradle 真会读的那条通道。
+          #   两套变量名都给，理由见 ci-debug.yml。
+          export VAULTIX_KEYSTORE_PATH="$GITHUB_WORKSPACE/release.jks"
+          export VAULTIX_STORE_PASSWORD="${SIGNING_STORE_PASSWORD:-android}"
+          export VAULTIX_KEY_ALIAS="${SIGNING_KEY_ALIAS:-vaultix}"
+          export SIGNING_KEYSTORE_PATH="$GITHUB_WORKSPACE/release.jks"
           # 只出 full 分发（2026-09-09 用户拍板）：offline（仅 KDBX）暂停参与构建，
           # 待决定是否做纯本地版后再改回 :app:assembleRelease 双包。
           ./gradlew :app:assembleFullRelease \

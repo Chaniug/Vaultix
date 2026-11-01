@@ -209,6 +209,25 @@ jobs:
         shell: bash
         run: python3 "$GITHUB_WORKSPACE/.ai/tools/tests/selftest_apk_signer.py"
 
+      # ★ 2026-11-01：签名变量名跨文件核对。
+      #
+      # 事故（用户报「最新安装包与本机上一个 dev 包签名不一致」）：
+      #   workflow 把密钥以 `-Pandroid.injected.signing.*` + `SIGNING_*` 交给构建，
+      #   而 `app/build.gradle.kts` 只认 `VAULTIX_*` ⇒ `hasReleaseSigning == false`
+      #   ⇒ debug 包一直用**一次性 debug key** 签。
+      #   最要命的是**没有任何一处报错**：`keytool -certreq` 校验真的通过（密钥没问题）、
+      #   构建真的成功（debug 签名总会成功），两句话都是对的，只有包里的证书不对。
+      # ⇒ 变量名对不对，只能靠跨文件比对，不能靠读代码"确认"。
+      - name: Check signing var names (workflow vs gradle)
+        shell: bash
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/check_signing_var_names.py" "$GITHUB_WORKSPACE"
+
+      # 同上一步的自检：这条门禁目前是绿的，而"绿"必须能被证明是"检查在工作"，
+      # 不是"检查根本没在检查"。自检造两个临时仓库（断链 / 接通）分别要求 rc=1 / rc=0。
+      - name: Self-test signing var name checker
+        shell: bash
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/tests/selftest_signing_var_names.py"
+
       # push 时注入仓库固定签名，使 preview(debug) 与 stable release 签名完全一致、可互相覆盖安装。
       # 注意：本步骤与 release.yml 使用同一套 SIGNING_* Secret，密码也复用 Secret（不再硬编码 android），
       # 这是“同一设备 debug/release 覆盖安装”的硬性前提（同 applicationId + 同签名证书）。
@@ -335,12 +354,32 @@ jobs:
           if [ ! -s "$KS_FILE" ]; then KS_FILE=""; fi
           KS_OPTS=""
           if [ -n "$KS_FILE" ]; then
-            # 与 release.yml 完全一致的签名参数：store.password / key.alias / key.password 均复用 Secret
-            # （缺省 android 仅用于“未配置 Secret”的兜底场景，此时无法与 release 互相覆盖）
+            # ★ 2026-11-01：这里**只**给 `-Pandroid.injected.signing.*` 是不够的。
+            #
+            # 事故（用户报「最新安装包与本机上一个 dev 包签名不一致」）：
+            #   `app/build.gradle.kts` 的签名配置**从不读** `android.injected.signing.*`，
+            #   它读的是环境变量 `VAULTIX_*`（后来已改为同时认 `SIGNING_*`）。
+            #   于是 `hasReleaseSigning == false` ⇒ **debug 包用 Android 一次性 debug key 签**。
+            #   同一份日志里：本步骤的 `keytool -certreq` 校验**真的通过**、构建**真的成功** ——
+            #   没有一句错话，只有包里的证书不是那把密钥的。
+            # ⇒ 现在密钥路径/密码/别名**同时以环境变量下发**（见本步骤 `env:`），
+            #   gradle 侧按 `SIGNING_*` → `VAULTIX_*` 的顺序命中。
+            #   两套都给，是为了让"改名"这件事不再需要同时改两个文件（那正是本轮的病根）。
+            #
+            # ⚠️ `-Pandroid.injected.signing.*` **保留不动**：AGP 官方通道，若将来 gradle
+            #    侧改回由 AGP 接管，它仍然生效；且删掉它属于"顺手清理"，没有收益只有风险。
             KS_OPTS="-Pandroid.injected.signing.store.file=$KS_FILE"
             KS_OPTS="$KS_OPTS -Pandroid.injected.signing.store.password=${SIGNING_STORE_PASSWORD:-android}"
             KS_OPTS="$KS_OPTS -Pandroid.injected.signing.key.alias=${SIGNING_KEY_ALIAS:-vaultix}"
             KS_OPTS="$KS_OPTS -Pandroid.injected.signing.key.password=${SIGNING_KEY_PASSWORD:-android}"
+            # 与上面同一个值，但走 gradle 真正会读的那条通道。
+            export VAULTIX_KEYSTORE_PATH="$KS_FILE"
+            export VAULTIX_STORE_PASSWORD="${SIGNING_STORE_PASSWORD:-android}"
+            export VAULTIX_KEY_ALIAS="${SIGNING_KEY_ALIAS:-vaultix}"
+            export SIGNING_KEYSTORE_PATH="$KS_FILE"
+            echo "::notice title=signing::密钥已下发（env VAULTIX_* / SIGNING_* + -Pandroid.injected.signing.*）"
+          else
+            echo "::warning title=signing::本次**没有**可用固定密钥 ⇒ debug 包将用一次性密钥签名，**无法覆盖安装**已有包。"
           fi
           # 基号取 VERSION（真源）；读不到就退 0.0.0 保证构建不中断。
           BASE_VERSION="$(tr -d '[:space:]' < "$GITHUB_WORKSPACE/VERSION" 2>/dev/null)"
@@ -621,8 +660,7 @@ jobs:
 
             ${{ steps.apk_meta.outputs.apk_list }}
 
-            > 与上一个预览包**签名一致**时可直接覆盖安装（保留数据与指纹解锁）；若提示签名不一致，说明这次的签名密钥变了 —— 安装前请先导出备份。
-          files: |
+            > 与上一个预览包**签名一致**时可直接覆盖安装（保留数据与指纹解锁）；若提示签名不一致，说明这次的签名密钥变了 —— 安装前请先导出备份。          files: |
             app/build/outputs/apk/*/debug/*.apk
             app/build/outputs/apk/*/debug/*.APK
           draft: false
