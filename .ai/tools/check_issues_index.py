@@ -168,9 +168,14 @@ def check(root: Path) -> tuple[list[str], list[str]]:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="ISSUES 索引一致性检查")
-    ap.add_argument("--root", default=".", type=Path, help="仓库根目录")
+    # 位置参数优先（与其他自检脚本一致：CI 里统一写 `python3 <script> "$GITHUB_WORKSPACE"`）；
+    # `--root` 保留兼容旧调用。⚠️ 2026-11-01 首次接 CI 就是死在这里：
+    #    只有 `--root`、CI 却按惯例传了位置参数 ⇒ argparse 直接 exit 2。
+    ap.add_argument("path", nargs="?", default=None, type=Path, help="仓库根目录（位置参数）")
+    ap.add_argument("--root", default=None, type=Path, help="仓库根目录（兼容旧写法）")
     args = ap.parse_args()
-    errors, warnings = check(args.root)
+    root = args.root or args.path or Path(".")
+    errors, warnings = check(root)
     for w in warnings:
         print(f"⚠️  {w}")
     for e in errors:

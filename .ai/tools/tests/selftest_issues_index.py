@@ -18,12 +18,15 @@
 
 from __future__ import annotations
 
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from check_issues_index import check  # noqa: E402  （有意在插路径之后导入）
+
+TOOL = Path(__file__).resolve().parents[1] / "check_issues_index.py"
 
 GOOD_MAIN_JIA = """# ISSUES 分篇 · 甲
 
@@ -130,6 +133,27 @@ CASES = [
 ]
 
 
+def cli_case() -> tuple[bool, str]:
+    """命令行接口：**位置参数必须被接受**。
+
+    ★ 2026-11-01 首次接 CI 就死在这里：脚本原本只认 `--root`，而 CI 按其他自检脚本的
+    惯例传了位置参数 ⇒ `argparse` 直接 exit 2（`unrecognized arguments`）。
+    本地没跑过 CI 那条命令，所以六条用例全绿、CI 一上来就红。
+
+    教训：**只测函数不测入口**，等于没测"别人怎么用它"。凡是接进 CI / 被外部脚本调用的
+    工具，必须有一条"按真实调用方式跑一遍"的用例。
+    """
+    with tempfile.TemporaryDirectory() as d:
+        root = build(Path(d), GOOD_MAIN_JIA, GOOD_PART_JIA, GOOD_INDEX)
+        r = subprocess.run(
+            [sys.executable, str(TOOL), str(root)],
+            capture_output=True,
+            text=True,
+        )
+        detail = (r.stderr or r.stdout).strip().splitlines()
+        return r.returncode == 0, (detail[-1][:120] if detail else "")
+
+
 def main() -> int:
     failures = 0
     for name, main_jia, part_jia, index, expect_errors in CASES:
@@ -157,6 +181,14 @@ def main() -> int:
             failures += 1
             for e in errors:
                 print(f"      ok？ → {e}")
+
+    # ⑦ 入口层：按 CI 真实调用方式（位置参数）跑一遍
+    cli_ok, cli_detail = cli_case()
+    print(("✅ " if cli_ok else "❌ ") + "⑦ 命令行：位置参数必须被接受（CI 真实用法）"
+          + (f"  ← {cli_detail}" if not cli_ok else ""))
+    if not cli_ok:
+        failures += 1
+
     print(f"\n{'✅ 全部通过' if not failures else f'❌ {failures} 例失败'}")
     return 1 if failures else 0
 

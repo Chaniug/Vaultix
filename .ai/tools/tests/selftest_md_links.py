@@ -16,12 +16,15 @@
 
 from __future__ import annotations
 
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from check_md_links import scan  # noqa: E402  （有意在插路径之后导入）
+
+TOOL = Path(__file__).resolve().parents[1] / "check_md_links.py"
 
 BASE_OK = {
     ".ai/a.md": "[ok](./b.md)\n",
@@ -71,6 +74,24 @@ def build(root: Path, files: dict[str, str]) -> None:
         p.write_text(content, encoding="utf-8")
 
 
+def cli_case() -> tuple[bool, str]:
+    """命令行接口：位置参数 = 仓库根（CI 的真实调用方式）。
+
+    与 selftest_issues_index 的 ⑦ 同一条教训：`scan()` 测通不代表命令行能跑。
+    `check_md_links` 的参数是**手写解析**（不是 argparse），更容易在改动中失配。
+    """
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        build(root, BASE_OK)
+        r = subprocess.run(
+            [sys.executable, str(TOOL), str(root)],
+            capture_output=True,
+            text=True,
+        )
+        detail = (r.stderr or r.stdout).strip().splitlines()
+        return r.returncode == 0, (detail[-1][:120] if detail else "")
+
+
 def main() -> int:
     failures = 0
     for name, files, expect in CASES:
@@ -93,6 +114,13 @@ def main() -> int:
             failures += 1
             for p in problems:
                 print(f"      ok？ → {p}")
+
+    cli_ok, cli_detail = cli_case()
+    print(("✅ " if cli_ok else "❌ ") + "⑨ 命令行：位置参数必须被接受（CI 真实用法）"
+          + (f"  ← {cli_detail}" if not cli_ok else ""))
+    if not cli_ok:
+        failures += 1
+
     print(f"\n{'✅ 全部通过' if not failures else f'❌ {failures} 例失败'}")
     return 1 if failures else 0
 
