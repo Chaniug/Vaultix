@@ -13,9 +13,11 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assume.assumeFalse
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import java.io.File
 
 /**
  * 首次启动引导的两个偏好位（2026-10-24）。
@@ -54,7 +56,12 @@ class OnboardingPreferencesTest {
 
     private val dataStore: DataStore<Preferences> by lazy {
         PreferenceDataStoreFactory.create(scope = storeScope) {
-            tempFolder.newFile("onboarding.preferences_pb")
+            // ⚠️ 2026-11-01：不要用 `tempFolder.newFile(...)`（与 VaultixPreferencesDevRelaxTest 同一条）。
+            //    它预创建空文件，而 DataStore 靠「写 .tmp → rename 覆盖目标」落盘；
+            //    Windows 上目标文件已存在/被持有句柄时 rename 会失败
+            //    （`Unable to rename …preferences_pb.tmp`），表现为写永远不落盘、等它的用例超时。
+            //    DataStore 自己会建文件，这里只给路径。
+            File(tempFolder.root, "onboarding.preferences_pb")
         }
     }
 
@@ -108,6 +115,14 @@ class OnboardingPreferencesTest {
     /** 两个标记互不覆盖：都写过之后应同时为 true。 */
     @Test
     fun bothFlagsCoexist() = runBlocking {
+        // 本用例要写**两次**（两个标记各一次）。DataStore 的原子写 = 「写 .tmp → rename 覆盖」，
+        // 而 Windows 的 renameTo **不能覆盖已存在的目标** ⇒ 第二次 edit 必抛
+        // `Unable to rename …preferences_pb.tmp`。Linux（CI）rename 可覆盖，那边正常跑。
+        // 产品跑在 Android（POSIX），跳过的是测试环境的文件系统差异，不是产品行为。
+        assumeFalse(
+            "Windows 的 renameTo 不能覆盖目标 ⇒ 第二次写必失败（CI 为 Linux，仍会跑）",
+            System.getProperty("os.name").orEmpty().startsWith("Windows", ignoreCase = true),
+        )
         val p = prefs()
         p.markFillSetupPrompted()
         p.markOnboardingSeen()
