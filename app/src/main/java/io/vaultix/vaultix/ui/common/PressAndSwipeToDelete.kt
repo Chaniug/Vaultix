@@ -181,10 +181,21 @@ fun PressAndSwipeToDelete(
             .fillMaxWidth()
             .clip(VaultixCorner.Panel),
     ) {
-        // 删除动作区：**常驻**在卡片之下、靠右对齐（不条件式增删节点，避免首帧抖动）。
-        // ⚠️ 它现在是**纯视觉**的：不再挂 `TextButton`（点击职责已上移到「松手过半」），
-        // 但保留图标 + 文字，让用户滑开时明确知道「这一滑通向删除」。
-        DeleteActionArea(reveal = reveal)
+        // ★ 2026-11-01：删除动作区**只在真的滑开时**才组合（此前是常驻 + `alpha = 0`）。
+        //
+        // 视觉上两者完全一样，但代价差一整条子树：常驻时每一行都要白付
+        // `Box(matchParentSize) → Column → Icon(vector) → Text` 的**组合 + 文字排版**，
+        // 外加 `graphicsLayer` 的一层 RenderNode。一屏 9~10 行就是 9~10 份，
+        // 而**滚动时每进一行都要重新付一遍** —— 这些节点在任何时刻都不可能被看见
+        // （`reveal == 0` ⇒ alpha 0 ⇒ 被卡片完全盖住）。
+        //
+        // ⚠️ 不要改成"按 [selectable] 挂"：选中态下 `offsetX` 恒为 0、`reveal` 仍是 0，
+        //    那时它同样看不见，提前组合等于把浪费从"全部行"缩小到"已选行"，没必要。
+        // ⚠️ 也不必担心"首帧抖动"：`matchParentSize()` 不参与父 Box 的尺寸计算，
+        //    增删它不改变布局；而滑开那一帧 `offsetX` 已经在变，组合/布局/绘制同帧完成。
+        if (reveal > 0f) {
+            DeleteActionArea(reveal = reveal)
+        }
 
         Box(
             modifier = Modifier

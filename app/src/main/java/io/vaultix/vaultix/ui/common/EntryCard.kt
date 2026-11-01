@@ -13,7 +13,8 @@
  *   - 容器用 Material3 `Card`，圆角 `RoundedCornerShape(12.dp)`
  *     （上游「稀疏列表卡片」取值；仅单卡态用 16dp）；
  *   - 内边距 16dp 四边等宽（上游 `padding(if (isSingleCard) 20.dp else 16.dp)`）；
- *   - 点击：先 `clip(shape)` 再 `clickable`，水波纹被裁进圆角内（上游同款写法）；
+ *   - 点击：水波纹被裁进圆角内（上游靠 `clip(shape)` + `clickable`；**本项目不另加 clip** ——
+ *     `Card` 内部的 `Surface` 已经裁过一次，见下方 `Column` 处的说明）；
  *   - 标题字重 SemiBold、标题与副标题之间 `spacedBy(6.dp)`（上游列表态取值）。
  *
  * ⚠️ **2026-10-05 刻意偏离上游一处**：上游用 `CardDefaults.cardColors()` 默认底色，
@@ -39,7 +40,6 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -144,7 +144,15 @@ fun EntryCard(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(shape)
+                // ★ 2026-11-01：这里**不再** `.clip(shape)` —— 它是重复裁剪。
+                //
+                // `Card` 在 M3 里就是 `Surface(...)`，而 `Modifier.surface()` 内部已经做过
+                // `background(color, shape)` + **`clip(shape)`**；内容（本 Column）本来就被
+                // 父节点裁进圆角了。再裁一次只是给每一行多加一层 `clipToOutline`
+                // （一屏 10 行 = 10 层），视觉上没有任何差别 —— ripple 也已经被父级裁掉。
+                //
+                // ⚠️ 若将来把 `Card` 换成不自带 shape 的容器（如裸 `Box` + `background`），
+                //    必须把这行加回来，否则 ripple 的四角会溢出圆角。
                 .then(
                     if (onLongClick == null) {
                         Modifier.clickable(onClick = onClick)
