@@ -433,13 +433,31 @@ jobs:
         #   查漏方法（别再靠眼睛扫）：把各模块 `src/test` 的文件数与这条命令对一遍。
         # 此前只跑 :app 与部分模块，新模块的测试等于从未在 CI 真正执行（盲区）。
         # ⚠️ 新增带单测的模块时，**必须同时加进这里**，否则测试等于不存在。
-        run: >-
-          ./gradlew :core:crypto:testDebugUnitTest :core:common:testDebugUnitTest
-          :core:model:testDebugUnitTest :core:datastore:testDebugUnitTest
-          :app:testFullDebugUnitTest :data:repository:testDebugUnitTest
-          :data:bitwarden:testDebugUnitTest :data:kdbx:testDebugUnitTest
-          :domain:testDebugUnitTest
-          --continue --stacktrace
+        # ★ 2026-11-01：**把退出码打出来再判**。
+        #
+        # 事故：CI #336/#337 的结论是「共 915 例，失败 0 例」，但整条 CI 仍是红的，
+        # 锚点却落在报告步骤上。这里有一个**没人能回答的问题**：
+        # 「`testDebugUnitTest` 到底返回了什么？」
+        # 之前无法回答，是因为 Gradle 的退出码只在 runner 里存在，日志要认证才能下载。
+        # ⇒ 用 `PIPESTATUS` 抓真实退出码，并同时 grep 出测试 JVM 崩溃 / OOM 的痕迹。
+        #   这样下一次红的时候，"是断言挂还是进程挂"一眼可判。
+        shell: bash
+        run: |
+          set +e
+          ./gradlew :core:crypto:testDebugUnitTest :core:common:testDebugUnitTest \
+            :core:model:testDebugUnitTest :core:datastore:testDebugUnitTest \
+            :app:testFullDebugUnitTest :data:repository:testDebugUnitTest \
+            :data:bitwarden:testDebugUnitTest :data:kdbx:testDebugUnitTest \
+            :domain:testDebugUnitTest \
+            --continue --stacktrace 2>&1 | tee /tmp/test_log.txt
+          TEST_EXIT=${PIPESTATUS[0]}
+          echo "::notice title=unit test exit::gradlew 退出码 = ${TEST_EXIT}"
+          # 测试进程崩溃（不是断言失败）的典型痕迹：
+          grep -nE "OutOfMemoryError|Process 'Gradle Test Executor|Test worker.*crashed|Could not complete execution|There were failing tests|FAILED" \
+            /tmp/test_log.txt | head -20 | while IFS= read -r line; do
+              echo "::notice title=test_log::${line}"
+            done
+          exit "$TEST_EXIT"
 
       # 失败用例名转 annotation（2026-10-30 加）。
       #
