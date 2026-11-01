@@ -32,20 +32,51 @@ LINK = re.compile(r"\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
 SKIP_PREFIX = ("http://", "https://", "mailto:", "#")
 
 
+def _code_spans(line: str) -> list[tuple[int, int]]:
+    """该行内行内代码（反引号）的区间。
+
+    ⚠️ 2026-11-01 首次接 CI 的第二条真因：8.9 里有一句
+    ``只写 `见 [8.x](...)` / `见 SESSION-...` `` —— 那是**示例语法**，不是真链接。
+    Windows 上 `...` 恰好能解析成一个目录（假绿），Linux 上直接报断链。
+    ⇒ 行内代码里的 `](...)` 一律不当链接看。
+    """
+    spans: list[tuple[int, int]] = []
+    i = 0
+    while (a := line.find("`", i)) >= 0:
+        b = line.find("`", a + 1)
+        if b < 0:
+            break
+        spans.append((a, b))
+        i = b + 1
+    return spans
+
+
 def dangling(path: Path) -> list[tuple[int, str]]:
-    text = path.read_text(encoding="utf-8", errors="ignore")
+    """返回 [(行号, 原始链接)]。跳过代码块与行内代码。"""
     bad: list[tuple[int, str]] = []
-    for m in LINK.finditer(text):
-        raw = m.group(1)
-        if raw.startswith(SKIP_PREFIX):
+    fence = False
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    for lineno, line in enumerate(text.splitlines(), 1):
+        stripped = line.lstrip()
+        if stripped.startswith("```"):
+            fence = not fence
             continue
-        target = raw.split("#", 1)[0]
-        if not target:
+        if fence:
             continue
-        resolved = (path.parent / unquote(target)).resolve()
-        if not resolved.exists():
-            line = text.count("\n", 0, m.start()) + 1
-            bad.append((line, raw))
+        spans = _code_spans(line)
+        for m in LINK.finditer(line):
+            # 落在反引号区间内 ⇒ 是示例语法，不是链接
+            if any(a <= m.start() <= b for a, b in spans):
+                continue
+            raw = m.group(1)
+            if raw.startswith(SKIP_PREFIX):
+                continue
+            target = raw.split("#", 1)[0]
+            if not target:
+                continue
+            resolved = (path.parent / unquote(target)).resolve()
+            if not resolved.exists():
+                bad.append((lineno, raw))
     return bad
 
 

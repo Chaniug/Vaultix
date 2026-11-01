@@ -64,6 +64,26 @@ CASES = [
         {"Docs/a.md": "[bad](../.ai/nope.md)\n"},
         1,
     ),
+    (
+        "⑨ 行内代码里的链接语法 ⇒ 示例不是链接，跳过",
+        # ⚠️ 两个形态都要放：
+        #   ① `(...)` 是 8.9 里的真实写法 —— 但它在 Windows 上会被解析成一个**存在的**目录
+        #      （实测：去掉跳过逻辑后本用例仍绿 ⇒ 假绿），只有 Linux 才报错；
+        #   ② `./nonexistent-example.md` 在所有平台都不存在 ⇒ 跳过逻辑一旦失效，本用例**必红**。
+        #   教训：用例的输入要选「能判红」的，不能依赖某平台的路径怪癖。
+        {
+            ".ai/a.md": (
+                "- 只写 `见 [8.x](...)` / `见 SESSION-...`。\n"
+                "- 反例保护：`见 [8.x](./nonexistent-example.md)`\n"
+            )
+        },
+        0,
+    ),
+    (
+        "⑩ 代码块里的链接语法 ⇒ 跳过",
+        {".ai/a.md": "```\nsample [a](./nope.md)\n```\n"},
+        0,
+    ),
 ]
 
 
@@ -116,7 +136,7 @@ def main() -> int:
                 print(f"      ok？ → {p}")
 
     cli_ok, cli_detail = cli_case()
-    print(("✅ " if cli_ok else "❌ ") + "⑨ 命令行：位置参数必须被接受（CI 真实用法）"
+    print(("✅ " if cli_ok else "❌ ") + "⑪ 命令行：位置参数必须被接受（CI 真实用法）"
           + (f"  ← {cli_detail}" if not cli_ok else ""))
     if not cli_ok:
         failures += 1
