@@ -65,7 +65,7 @@ data class KdbxConversionContent(
 internal object KdbxConversionEngine {
 
     /**
-     * 领域条目 → **平铺** KDBX 4.1 库字节（W5 · JSON → KDBX 方向）。
+     * 领域模型 → KDBX 4.1 库字节（W5 · JSON → KDBX 方向）。
      *
      * ## 为什么用「输出库主密码」而不是复用某个已解锁库的凭据
      *
@@ -73,31 +73,51 @@ internal object KdbxConversionEngine {
      * 与源 JSON 的文件密码、与任何已解锁库的密码都无关。三者在密码学上必须分开，
      * 否则"用 A 库的密码加密 B 库的内容"会让用户完全无法预期哪个密码开哪个文件。
      *
-     * ## 三条纪律（每条都对应一个具体的坏味道）
+     * ## 四条纪律（每条都对应一个具体的坏味道）
      *
-     * 1. **平铺**（施工单 §2.4 用户拍板）：Bitwarden 文件夹层级不映射为 KDBX 分组，
-     *    全部条目落根组。目录信息的有无由调用方在预览计数里如实告知，不静默。
+     * 1. **文件夹 ⟶ 分组**（2026-11-01 改）：此前按施工单 §2.4「平铺」把层级丢掉，
+     *    用户反馈要「KeePassXC 那样的无损转换」⇒ 改为按 `name` 里的 `/` 逐级建组
+     *    （对齐 KeePassXC `BitwardenReader::createGroup`）。见 [createFolderPath]。
      * 2. **旁路字段保幂等**：每条写入 `VPX_BW_ID` / `VPX_BW_TYPE`（施工单 §2.2），
      *    反向转换据此还原 id 与类型 —— 转两次不会得到两个新 id。
-     * 3. **落盘前自检**（[KdbxRoundTrip.verify]）：编码后立刻解码回来逐字段比对，
+     * 3. **载荷全带上**（2026-11-01 改）：Card / Identity / SshKey / 密码历史 / 收藏 /
+     *    二次验证 / 时间戳全部写进专属字段区（见 `KdbxItemWriter.applyPayloads`），
+     *    不再"只剩标题与备注"。
+     * 4. **落盘前自检**（[KdbxRoundTrip.verify]）：编码后立刻解码回来逐字段比对，
      *    不一致就返回失败、**一个字节都不交出去**（与 [Kdbx.save] 同款保障）。
-     *
-     * ⚠️ **Card / Identity / SshKey 的载荷不在 KDBX 承载范围**（KDBX 无类型概念，
-     *    [KdbxItemWriter.applyDomainFields] 只写标准字段 + TOTP / 通行密钥 / 工具区）：
-     *    这三类条目转过去只剩标题与备注。这是领域模型 ↔ KDBX 的**既有能力边界**
-     *    （Vaultix 的 KDBX 库本来就只有 Login / SecureNote 两种条目形态），
-     *    不是本函数的缺陷；调用方必须在预览里计数告知，别让它静默。
      *
      * ⚠️ 编码要跑 KDF（真机数百毫秒），调用方应在 IO/Default 调度器上调用
      *    （本函数刻意不做内部 `withContext`，与 [Kdbx.mutate] 同款约定：
      *    调度交给调用方，避免"两层各自切一半"）。
+     *
+     * @param folders 源库的文件夹；条目按 `folderId` 归组。为空 = 全部落根组。
      */
-    fun build(name: String, password: String, items: List<VaultItem>): Result<ByteArray> {
+    fun build(
+        name: String,
+        password: String,
+        items: List<VaultItem>,
+        folders: List<VaultFolder> = emptyList(),
+    ): Result<ByteArray> {
         val credentials = KdbxCreator.credentialsFor(password, keyFileBytes = null)
         var database = KdbxCreator.blankDatabase(name, credentials)
+
+        // ① 先建分组，拿到「源 folder id → kdbx-group:<uuid>」对照。
+        val groupOf = HashMap<String, String>(folders.size)
+        folders.forEach { folder ->
+            val target = createFolderPath(database, groupOf, folder)
+            if (target != null) {
+                database = target.first
+                groupOf[folder.id] = target.second
+            }
+        }
+
+        // ② 再写条目，落到各自分组（找不到分组 ⇒ 根组，不丢条目）。
         items.forEach { item ->
-            // folderId = null ⇒ 落根组（平铺，见上）。
-            val written = KdbxItemWriter.createEntry(database = database, folderId = null, item = item)
+            val written = KdbxItemWriter.createEntry(
+                database = database,
+                folderId = item.folderId?.let { groupOf[it] },
+                item = item,
+            )
             database = written.database
             // createEntry 的 uuid 是它自己生成的，恒非空；空即上游行为变更，直接炸而不是猜。
             val uuid = written.entryUuid ?: error("createEntry 未返回条目 uuid")
@@ -110,6 +130,63 @@ internal object KdbxConversionEngine {
             return Result.failure(KdbxWriteFailure.RoundTripFailed(checked))
         }
         return Result.success(checked.bytes)
+    }
+
+    /**
+     * 按文件夹名里的 `/` 建出整条分组路径，返回「新库 + 最末级分组 id」。
+     *
+     * ## 为什么靠名字里的 `/` 而不是父子 id
+     *
+     * Bitwarden 的 `folder` 只有 `id` + `name` 两个字段，**没有 parentId**；
+     * 它的「文件夹层级」是用户直接在名字里打 `/` 表达的（官方客户端的
+     * `folderName` 就是以 `/` 分隔展示）。KeePassXC 的 `BitwardenReader::createGroup`
+     * 也是同一口径：`folderName.split("/")` 逐级建组。== 这里对齐它，
+     * 让同一份 Bitwarden 导出行在 KeePassXC 与本应用里得到**同样的分组树**。
+     *
+     * ## 三级同名不会重复建
+     *
+     * 用 `groupOf` 缓存**完整路径**（`A` / `A/B` / `A/B/C`）→ 分组 id，
+     * 于是「`A/B` 与 `A/B/C` 两个文件夹」只会建出 `A` 与 `B` 一次，
+     * 第二级直接复用。缓存键带整条路径而不是单段名，避免
+     * 「`Work/Dev` 与 `Home/Dev`」被折叠成同一个 `Dev`。
+     *
+     * @return null = 这条路径一段都建不出来（名字全空 / 全是 `/`），调用方跳过，
+     *   条目会退回根组 —— 丢分组名但不能丢条目。
+     */
+    private fun createFolderPath(
+        database: KeePassDatabase,
+        groupOf: MutableMap<String, String>,
+        folder: VaultFolder,
+    ): Pair<KeePassDatabase, String>? {
+        val segments = folder.name.split('/').map { it.trim() }.filter { it.isNotEmpty() }
+        if (segments.isEmpty()) return null
+
+        var current = database
+        var parentId: String? = null
+        var path = ""
+        var lastId: String? = null
+        segments.forEach { segment ->
+            path = if (path.isEmpty()) segment else "$path/$segment"
+            val known = groupOf[path]
+            if (known != null) {
+                // 这条路径已经建过（另一条更深的路径会走到这里）。
+                parentId = known
+                lastId = known
+                return@forEach
+            }
+            val created = KdbxItemWriter.createGroup(
+                database = current,
+                parentFolderId = parentId,
+                name = segment,
+            )
+            val newId = created.entryUuid?.let(::folderIdOf) ?: return null
+            current = created.database
+            groupOf[path] = newId
+            parentId = newId
+            lastId = newId
+        }
+        val id = lastId ?: return null
+        return current to id
     }
 
     /**

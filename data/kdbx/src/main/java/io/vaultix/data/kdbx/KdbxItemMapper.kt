@@ -32,11 +32,16 @@ import app.keemobile.kotpass.models.Meta
 import io.vaultix.model.CustomFieldType
 import io.vaultix.model.VaultAttachment
 import io.vaultix.model.VaultAttachmentSource
+import io.vaultix.model.VaultCard
 import io.vaultix.model.VaultFolder
+import io.vaultix.model.VaultIdentity
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultCustomField
 import io.vaultix.model.VaultFido2Credential
 import io.vaultix.model.VaultItemType
+import io.vaultix.model.VaultPasswordHistoryEntry
+import io.vaultix.model.VaultReprompt
+import io.vaultix.model.VaultSshKey
 import io.vaultix.model.VaultUri
 import java.util.UUID
 
@@ -128,6 +133,24 @@ private fun Entry.toVaultItem(
     // URI（W4）：标准 `Url` + `VPX_URL_n` 合回一个列表。此前只读第一条，
     // 「一条登录挂 3 个网址」在KDBX 侧会**只显示一个**（往返即丢数据）。
     val uris = fields.allUris(url)
+    // ★ 载荷区（2026-11-01）：卡 / 身份 / SSH / 密码历史 / 二次验证。
+    //   这五块此前**读侧整块没有** ⇒ 写侧不敢写（写了也读不回来，等于静默丢）。
+    //   现在两侧成对接上，Bitwarden ⇄ KDBX 的这三类条目才真的"无损"。
+    val payload = fields.payloadTable()
+    val card = payload.toVaultCard()
+    val identity = payload.toVaultIdentity()
+    val sshKey = payload.toVaultSshKey()
+    // 类型判定（2026-11-01 顺序化）：先看载荷，再看显式标记，最后才回落启发式。
+    // ⚠️ 顺序**不能**反过来：一条银行卡条目若卡号为空（用户只填了卡名），
+    //    启发式会把它判成安全笔记（无账号密码、备注可能有），从而丢掉 `card` 载荷 ——
+    //    下次转换回 Bitwarden 就变成一条笔记。载荷存在本身就是**最强证据**。
+    val type = when {
+        card != null -> VaultItemType.Card
+        identity != null -> VaultItemType.Identity
+        sshKey != null -> VaultItemType.SshKey
+        isNote -> VaultItemType.SecureNote
+        else -> VaultItemType.Login
+    }
     // 通行密钥（KeePassDX 的 KPEX_PASSKEY_* 约定，见 KdbxPasskeyCodec）：映射为领域凭证后
     // 与 Bitwarden 侧同构 —— 「通行密钥」页 / 设置页统计 / 凭据提供商三条链路对 KDBX 库天然可用。
     return VaultItem(
@@ -136,10 +159,15 @@ private fun Entry.toVaultItem(
         username = username,
         password = password,
         notes = notes,
-        type = if (isNote) VaultItemType.SecureNote else VaultItemType.Login,
+        type = type,
         uris = uris,
         totp = KdbxTotpCodec.toOtpAuthUri(fields.toOtpFields(), title = title, account = username),
         fido2Credentials = fields.passkeyCredentials(title),
+        card = card,
+        identity = identity,
+        sshKey = sshKey,
+        passwordHistory = payload.toPasswordHistory(),
+        reprompt = if (payload.toRepromptFlag()) VaultReprompt.Password else VaultReprompt.None,
         customFields = custom,
         folderId = folderId,
         // 收藏（A1 · 2026-10-13）：KDBX 无标准键 ⇒ `VPX_FAVORITE` 工具字段，
@@ -181,6 +209,101 @@ private fun Entry.toVaultItem(
             )
         },
     )
+}
+
+// ================================================================ 载荷区读回（2026-11-01）
+
+/**
+ * 全部字段转成「键 → 明文」表（**受保护字段已解密**）。
+ *
+ * ⚠️ 载荷区解析必须走 `.content`：卡号 / CVV / SSN 在写侧是 `EntryValue.Encrypted`，
+ *   直接 `toString()` 拿到的是 `Encrypted{...}` 字面量（正是"看起来读到了其实是乱码"那类坑）。
+ */
+private fun EntryFields.payloadTable(): Map<String, String> =
+    entries.associate { (key, value) -> key to value.content }
+
+/**
+ * 载荷表 → [VaultCard]；**一个非空字段都没有就返回 null**（= 不是银行卡条目）。
+ *
+ * ⚠️ 判据是"有没有任何一个字段被写过"，不是"卡号是否非空"：用户完全可能只记了
+ *   持卡人姓名与品牌，卡号留给别处；那也是一条银行卡条目，不该被降级成笔记。
+ */
+private fun Map<String, String>.toVaultCard(): VaultCard? {
+    val payload = KdbxToolFields.payloadOf(this, KdbxToolFields.CARD_PREFIX)
+    if (payload.isEmpty()) return null
+    val values = KdbxToolFields.orderedValues(payload, KdbxToolFields.cardKeys())
+    if (values.all { it.isEmpty() }) return null
+    return VaultCard(
+        cardholderName = values[0],
+        brand = values[1],
+        number = values[2],
+        expMonth = values[3],
+        expYear = values[4],
+        code = values[5],
+    )
+}
+
+/** 载荷表 → [VaultIdentity]；判据同 [toVaultCard]。 */
+private fun Map<String, String>.toVaultIdentity(): VaultIdentity? {
+    val payload = KdbxToolFields.payloadOf(this, KdbxToolFields.IDENTITY_PREFIX)
+    if (payload.isEmpty()) return null
+    val values = KdbxToolFields.orderedValues(payload, KdbxToolFields.identityKeys())
+    if (values.all { it.isEmpty() }) return null
+    return VaultIdentity(
+        title = values[0],
+        firstName = values[1],
+        middleName = values[2],
+        lastName = values[3],
+        address1 = values[4],
+        address2 = values[5],
+        address3 = values[6],
+        city = values[7],
+        state = values[8],
+        postalCode = values[9],
+        country = values[10],
+        company = values[11],
+        email = values[12],
+        phone = values[13],
+        ssn = values[14],
+        username = values[15],
+        passportNumber = values[16],
+        licenseNumber = values[17],
+    )
+}
+
+/** 载荷表 → [VaultSshKey]；判据同 [toVaultCard]。 */
+private fun Map<String, String>.toVaultSshKey(): VaultSshKey? {
+    val payload = KdbxToolFields.payloadOf(this, KdbxToolFields.SSH_PREFIX)
+    if (payload.isEmpty()) return null
+    val values = KdbxToolFields.orderedValues(payload, KdbxToolFields.sshKeys())
+    if (values.all { it.isEmpty() }) return null
+    return VaultSshKey(privateKey = values[0], publicKey = values[1], keyFingerprint = values[2])
+}
+
+/**
+ * 密码历史：`VPX_PW_HISTORY_<n>` 按 `n` **数值升序**（不是字符串序）。
+ *
+ * ⚠️ 字符串序会把 `_10` 排到 `_2` 前面 —— 顺序错了不会报错，只是"历史里第 7 条
+ *   与第 8 条调了个儿"，用户几乎不可能发现。
+ */
+private fun Map<String, String>.toPasswordHistory(): List<VaultPasswordHistoryEntry> =
+    entries
+        .mapNotNull { (key, value) ->
+            if (!key.startsWith(KdbxToolFields.PW_HISTORY_PREFIX, ignoreCase = true)) return@mapNotNull null
+            val index = key.drop(KdbxToolFields.PW_HISTORY_PREFIX.length).toIntOrNull()
+                ?: return@mapNotNull null
+            val (stamp, password) = KdbxToolFields.decodeHistory(value)
+            index to VaultPasswordHistoryEntry(password = password, lastUsedAt = stamp)
+        }
+        .sortedBy { it.first }
+        .map { it.second }
+
+/** `VPX_REPROMPT` 视为真 ⇒ 需要主密码二次验证（宽松真值，同收藏）。 */
+private fun Map<String, String>.toRepromptFlag(): Boolean {
+    val raw = entries
+        .firstOrNull { (key, _) -> key.equals(KdbxToolFields.REPROMPT, ignoreCase = true) }
+        ?.value
+    return KdbxToolFields.isFavoriteTrue(raw)
 }
 
 /** KeePass 字段 → OTP 字段集（键名大小写不敏感；同时判定密钥的编码形态）。 */

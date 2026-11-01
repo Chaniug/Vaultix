@@ -51,6 +51,7 @@ import app.keemobile.kotpass.models.TimeData
 import io.vaultix.model.CustomFieldType
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
+import io.vaultix.model.VaultReprompt
 import java.time.Instant
 import java.util.UUID
 
@@ -333,7 +334,136 @@ internal object KdbxItemWriter {
         fields = applyPasskeys(fields, item = item, before = before)
         fields = applyFavorite(fields, item = item, before = before)
         fields = applySecureNote(fields, item = item, before = before)
+        // ★ 2026-11-01：载荷区（卡 / 身份 / SSH / 密码历史 / 二次验证）。
+        //   此前这些字段**一律不写** ⇒ Bitwarden 的银行卡、身份、SSH 条目转成
+        //   KDBX 后只剩标题与备注（`ConversionStats.typeDegradedCount` 就是为这个
+        //   计数而存在的）。现在写进 `VPX_*` 专属区，读侧 `KdbxItemMapper` 原样读回。
+        fields = applyPayloads(fields, item = item, before = before)
         return applyCustomFields(fields, item = item, before = before)
+    }
+
+    /**
+     * 载荷区写出：卡 / 身份 / SSH / 密码历史 / 二次验证。
+     *
+     * ## 与 [applyCustomFields] 的分工
+     *
+     * 这些键**都在 `VPX_` 工具区**，读侧 `customFieldsOf` 会按前缀把它们从
+     * 「用户自定义字段」里排除 ⇒ 不会在详情页重复展示，用户也改不到它们。
+     * 写侧因此必须自己负责清理：**载荷没了就删键**，否则用户把一条银行卡
+     * 改成登录条目后，旧的 `VPX_CARD_number` 会永远留在文件里。
+     *
+     * ## 删除判据（沿用全文件口径）
+     *
+     * 「before 里有、after 里没有」才删。差别在于这里多一条：
+     * 载荷区是**整体**语义（类型离开 Card 就该整片消失），所以按
+     * 「上一个载荷存在 && 本载荷为 null」整片删，而不是逐个键比对 ——
+     * 逐个比对会把"from Card 改成 Login、但恰好保留了 `brand` 字段"这种情况判成没删。
+     */
+    private fun applyPayloads(
+        fields: EntryFields,
+        item: VaultItem,
+        before: VaultItem?,
+    ): EntryFields {
+        var result = fields
+        result = replacePayload(
+            fields = result,
+            prefix = KdbxToolFields.CARD_PREFIX,
+            desired = item.card?.let { card ->
+                val values = listOf(
+                    card.cardholderName, card.brand, card.number, card.expMonth, card.expYear, card.code,
+                )
+                KdbxToolFields.cardKeys().zip(values).toMap()
+            },
+            hadBefore = before?.card != null,
+        )
+        result = replacePayload(
+            fields = result,
+            prefix = KdbxToolFields.IDENTITY_PREFIX,
+            desired = item.identity?.let { identity ->
+                val values = listOf(
+                    identity.title, identity.firstName, identity.middleName, identity.lastName,
+                    identity.address1, identity.address2, identity.address3, identity.city,
+                    identity.state, identity.postalCode, identity.country, identity.company,
+                    identity.email, identity.phone, identity.ssn, identity.username,
+                    identity.passportNumber, identity.licenseNumber,
+                )
+                KdbxToolFields.identityKeys().zip(values).toMap()
+            },
+            hadBefore = before?.identity != null,
+        )
+        result = replacePayload(
+            fields = result,
+            prefix = KdbxToolFields.SSH_PREFIX,
+            desired = item.sshKey?.let { key ->
+                KdbxToolFields.sshKeys()
+                    .zip(listOf(key.privateKey, key.publicKey, key.keyFingerprint))
+                    .toMap()
+            },
+            hadBefore = before?.sshKey != null,
+        )
+
+        // 密码历史 / 二次验证：**每次都重算**（它们不像卡那样"整片有/无"，
+        // 而是列表 / 布尔，逐键比对反而更容易错）。这两个区都很小。
+        result = result.minus(result.keys.filter { it.startsWith(KdbxToolFields.PW_HISTORY_PREFIX) })
+        item.passwordHistory.forEachIndexed { index, history ->
+            result = result + (
+                "${KdbxToolFields.PW_HISTORY_PREFIX}${index + 1}" to
+                    EntryValue.Plain(KdbxToolFields.encodeHistory(history.lastUsedAt, history.password))
+                )
+        }
+        val repromptKey = result.keys.firstOrNull {
+            it.equals(KdbxToolFields.REPROMPT, ignoreCase = true)
+        }
+        result = if (item.reprompt == VaultReprompt.Password) {
+            result + (KdbxToolFields.REPROMPT to EntryValue.Plain(KdbxToolFields.SECURE_NOTE_TRUE))
+        } else {
+            repromptKey?.let { result.minus(it) } ?: result
+        }
+        return result
+    }
+
+    /**
+     * 整片替换一个载荷前缀的字段。
+     *
+     * @param desired 本条目应有的「字段名（去前缀）→ 值」；null = 本条目没有这类载荷。
+     * @param hadBefore 上一个状态是否有这类载荷；有而 now 为 null ⇒ 整片删。
+     *
+     * ⚠️ 空值**不写字段**（`brand` 为空就不产出 `VPX_CARD_brand`）：KDBX 里
+     *    "字段存在但值为空"与"没有这个字段"在 UI 上一样，多写的空字段只会让
+     *    文件变脏、并让别的工具以为"用户清空过这一项"。
+     */
+    private fun replacePayload(
+        fields: EntryFields,
+        prefix: String,
+        desired: Map<String, String>?,
+        hadBefore: Boolean,
+    ): EntryFields {
+        if (desired == null) {
+            if (!hadBefore) return fields
+            return fields.minus(
+                fields.keys.filter { it.startsWith(prefix, ignoreCase = true) },
+            )
+        }
+        var result = fields
+        desired.forEach { (name, value) ->
+            val key = prefix + name
+            val existingKey = result.keys.firstOrNull { it.equals(key, ignoreCase = true) }
+            if (value.isEmpty()) {
+                // 本次为空 ⇒ 清掉旧值（用户确实把卡号删了）。
+                if (existingKey != null && existingKey != key) result = result.minus(existingKey)
+                if (existingKey != null) result = result.minus(key)
+                return@forEach
+            }
+            if (result[key]?.content == value) return@forEach
+            result = result + (
+                key to if (KdbxToolFields.isPayloadProtected(name)) {
+                    EntryValue.Encrypted(EncryptedValue.fromString(value))
+                } else {
+                    EntryValue.Plain(value)
+                }
+                )
+        }
+        return result
     }
 
     /**

@@ -1,6 +1,6 @@
 # ISSUES 分篇 · KDBX 本地库
 
-> 索引：[`../ISSUES.md`](../ISSUES.md)（编号 → 分篇）· 共 **23** 条：#59、#64、#69、#93、#94、#95、#96、#98、#99、#106、#135、#136、#157、#158、#164、#165、#166、#167、#169、#170、#178、#179、#190
+> 索引：[`../ISSUES.md`](../ISSUES.md)（编号 → 分篇）· 共 **24** 条：#59、#64、#69、#93、#94、#95、#96、#98、#99、#106、#135、#136、#157、#158、#164、#165、#166、#167、#169、#170、#178、#179、#190、#219
 >
 > ⚠️ **2026-10-16 A5 时间戳提案已驳回（不是 bug，无编号）**：曾据"writer 没写
 > times"要修「新建无时间戳 / 编辑不刷最近修改」，测试与上游源码查证后驳回——
@@ -889,3 +889,52 @@ fun KeePassDatabase.getGroupBy(predicate: Group.() -> Boolean): Group? =
   没有这条纪律，"全字段"会随着模型演进慢慢退化回"部分字段"。
 - **判据**：**凡是"用指纹判断相等"的地方，指纹漏掉任何可变字段，这个判断就在那些字段上
   恒为真**。而且它会**静默**地恒为真 —— 不报错、不降级，只是防线消失。
+
+---
+
+## 219. 🔴 JSON→KDBX 转换"无损"是空话：卡 / 身份 / SSH / 密码历史**读写两侧都没接**，文件夹还被主动丢弃（2026-11-01）
+
+- **现象**：用户拿 Bitwarden 加密 JSON 转 .kdbx，再用 KeePassXC 打开，银行卡、身份、
+  SSH 条目**只剩标题与备注**；所有条目都堆在根组，文件夹全没了。
+  整个链路**不报错、不警告**，预览页也只写一行"其中 N 个条目会降级"。
+- **对照**：用户明确要求「KeePassXC 能把 Bitwarden 的 JSON 无损转成 kdbx，搬它的实现」。
+  KeePassXC `src/format/BitwardenReader.cpp`（GPL-2.0/3.0）的做法是：
+  1. `writeVaultToDatabase` 读 `folders`（组织库读 `collections`），
+     `createGroup` 按 `name.split("/")` **逐级建组**，item 的 `folderId` → 组；
+  2. 身份信息、银行卡、自定义字段分别转成 `identity_*` / `card_*` / 原名字段
+     （`code` / `ssn` / `passportNumber` / `licenseNumber` 标为受保护）；
+  3. 多 URL：第一条进 `Url`，其余进 `KP2A_URL_n`；
+  4. TOTP：裸密钥补成 `otpauth://totp/<标题>:<用户名>?secret=<密钥>`；
+  5. 通行密钥：`credentialId` 十六进制 → base64url，私钥包成 PEM 存 `KPEX_PASSKEY_*`；
+  6. 时间戳写 `creationDate` / `revisionDate`；密码历史逐条建历史条目。
+- **根因（两处同时断，任一修好都还会丢）**：
+  - **写侧**：`KdbxItemWriter.applyDomainFields` 只写 5 个标准字段 + URI + TOTP +
+    通行密钥 + 收藏 + 安全笔记标记。`VaultItem.card / identity / sshKey /
+    passwordHistory / reprompt` **一个都不写**。
+  - **读侧**：`KdbxItemMapper.toVaultItem` 也不产出这五个字段 —— 所以"只补写侧"
+    会变成**写进文件但读不回来**（更隐蔽的静默丢）。
+  - **文件夹**：`KdbxConversionEngine.build` 写死 `folderId = null`，
+    注释称"施工单 §2.4 用户拍板平铺"—— 用户现在明确否掉了这个拍板。
+- **修法**：
+  - 新增 `VPX_CARD_*` / `VPX_IDENTITY_*` / `VPX_SSH_*` / `VPX_PW_HISTORY_n` / `VPX_REPROMPT`
+    五组专属字段（`KdbxToolFields`），写侧 `applyPayloads`、读侧三个 `toVault*` 成对接上；
+  - 卡号 / CVV / SSN / 护照 / 执照按 `EntryValue.Encrypted` 写（敏感值不能因为
+    "换个容器"就变明文）；
+  - 密码历史编码为 `epoch毫秒|密码`，按**数值**下标排序（字符串序会把 `_10` 排到 `_2` 前）；
+  - 类型判定顺序改为 **载荷 > 显式标记 > 启发式**（否则"只填了卡名没填卡号"的卡
+    会被启发式判成笔记，再转回 Bitwarden 就变成一条笔记）；
+  - `build` 接收 `folders`，`createFolderPath` 按 `/` 逐级建组并缓存**完整路径**
+    （`Work/Dev` 与 `Home/Dev` 不能折叠成同一个 `Dev`）。
+- **验证**：`KdbxConversionTest` 新增 13 条（卡 / 身份 18 字段 / SSH / 12 条历史顺序 /
+  密码含 `|` / reprompt / 受保护写入 / 文件夹层级 / 重复路径 / 空名退回根组 /
+  卡改登录后旧键清理）。旧的「Card 载荷守卫 ⇒ 回退 Login」用例**反向改写**成
+  「载荷完整往返」，它同时是"边界已消除"的哨兵。
+- **⚠️ 三个坑**：
+  1. **只改一侧 = 静默丢**：写侧写入、读侧不产出 ⇒ 数据在文件里躺着，界面上没有。
+     这类改动的验收标准必须是**往返测试**，而不是"写进去了（单测断言字段存在）"。
+  2. **读侧 `VaultFolder.name` 是完整路径**（`父/子`），而 `id` 指向真实分组。
+     断言归属必须按 id 查名，按名字字面匹配会把 `工作/服务器` 判成不存在。
+  3. **`typeDegradedCount` 从此恒 0**：它是"还有多少条降级"的哨兵，
+     哪天冒出新的降级字段要记得把它加回来，否则用户又看不到降级提示。
+- **判据**：**"支持某类条目"必须以往返为证** —— `Bitwarden → Item → KDBX → Item`
+  全字段相等，才算支持。领域模型有字段、DTO 有字段、写侧写了字段，三者**都不算**。

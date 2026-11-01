@@ -163,6 +163,155 @@ internal object KdbxToolFields {
     /** 安全笔记标记的**真值**文本（其余一切值读侧按宽松真值认，写侧只写这个）。 */
     const val SECURE_NOTE_TRUE = "true"
 
+    // ---------------------------------------------------------------- 载荷键区（2026-11-01）
+
+    /**
+     * 主密码二次验证标记（`VPX_REPROMPT`）：`"true"` = 打开该条目需再次验证主密码。
+     *
+     * 对齐 Bitwarden `cipher.reprompt`（0/1）。KDBX 没有这个概念，但 **KeePassXC 有**
+     * 「二次确认（Protected / History 限制）」—— 那属于库级策略，不是条目级旗标，
+     * 无法一一对应 ⇒ 只能落工具字段。
+     *
+     * ⚠️ 只写 `"true"`、`None` 时删键（同 [FAVORITE] 的纪律）：Bitwarden 的默认值就是 0，
+     *    给每个条目镶一个恒假字段纯属噪音；而 `VaultReprompt` 只有 `None` / `Password`
+     *    两态（见领域模型 [io.vaultix.model.VaultReprompt]），所以"缺失即 None"无歧义。
+     */
+    const val REPROMPT = PREFIX + "REPROMPT"
+
+    /**
+     * 银行卡载荷前缀：`VPX_CARD_<字段名>`（如 `VPX_CARD_number`）。
+     *
+     * ## 为什么是六个字段而不是一段 JSON
+     *
+     * 一段 JSON 塞进一个字段，KeePassXC 里打开只看到 `{"cardholderName":"…"}` 一坨，
+     * 用户没法单独复制卡号、KeePassDX 的「复制银行卡号」等功能也认不出来。
+     * 拆成六个独立字段后：值本身**与 KeePassXC 的 `Card` 模板同名**（`number` /
+     * `expMonth` / `expYear` / `code` / `brand` / `cardholderName`），
+     * 用户在自己的 KDBX 客户端里看到的就是熟悉的那套卡字段。
+     *
+     * ## 哪些受保护
+     *
+     * [PAYLOAD_PROTECTED] 列出的键（卡号 / CVV）按 `EntryValue.Encrypted` 写 ——
+     * 卡号与 CVV 在 Bitwarden 侧是加密载荷，落 KDBX 时转明文等于**主动降级**。
+     * 姓名 / 品牌 / 有效期不敏感，写明文（让用户能直接在别的工具里看见）。
+     */
+    const val CARD_PREFIX = PREFIX + "CARD_"
+
+    /** 身份信息载荷前缀：`VPX_IDENTITY_<字段名>`（如 `VPX_IDENTITY_email`）。理由同 [CARD_PREFIX]。 */
+    const val IDENTITY_PREFIX = PREFIX + "IDENTITY_"
+
+    /** SSH 密钥载荷前缀：`VPX_SSH_<字段名>`（`privateKey` / `publicKey` / `keyFingerprint`）。 */
+    const val SSH_PREFIX = PREFIX + "SSH_"
+
+    /**
+     * 密码历史：`VPX_PW_HISTORY_1..n?`（十进制，1 为**最早**一条），
+     * 值为 `epoch毫秒|密码`。
+     *
+     * ## 为什么存在这里，而不是 KDBX 原生的 History
+     *
+     * KDBX 的 `Entry.history` 是**整条快照**（改前那一版的所有字段），不是"密码历史"，
+     * 且 kotpass 的 `withHistory` 只替我们管理"本次编辑前的那一版"。硬塞进去有两次坑：
+     * 1. 快照会带上当时的用户名/网址，用户回滚一次历史就等于回滚了整条条目；
+     * 2. 每次编辑都会**再追加一份**，条目用久了历史里躺着几十条重复快照。
+     *
+     * ⇒ 用编号字段自己管：一条历史 = 一个键，可逆、可读、与历史快照互不干扰。
+     *
+     * ## 为什么带时间戳，且用 `|` 分隔
+     *
+     * Bitwarden 的 `passwordHistory[i]` 有 `lastUsedDate`，丢了它就等于丢了
+     * "什么时候改的密码"这一半信息。`|` 是**不会出现在 epoch 毫秒里**的最简分隔符；
+     * 密码本身可以含 `|`（解析时只切第一个），所以顺序必须是「时间在前」。
+     *
+     * ⚠️ 值**不加密**：密码历史里的旧密码同样是敏感信息，但它们与当前密码同处
+     *    一个已加密的 KDBX 文件内（文件级加密已覆盖），再加逐字段加密只会让
+     *    第三方工具展示成一串乱码，反而丢掉可读性。
+     */
+    const val PW_HISTORY_PREFIX = PREFIX + "PW_HISTORY_"
+
+    /** 历史的「时间|密码」分隔符（解析只切第一个）。 */
+    const val HISTORY_SEPARATOR = "|"
+
+    /** 卡 / 身份载荷里**必须受保护**的字段名（小写）。 */
+    private val PAYLOAD_PROTECTED: Set<String> = setOf("number", "code", "ssn", "passportnumber", "licensenumber")
+
+    /** 银行卡字段顺序（与 Bitwarden `card` 载荷逐字段对应，顺序即写侧产出顺序）。 */
+    private val CARD_KEYS = listOf("cardholderName", "brand", "number", "expMonth", "expYear", "code")
+
+    /** 身份信息字段顺序（对齐 Bitwarden identity 的 18 字段）。 */
+    private val IDENTITY_KEYS = listOf(
+        "title", "firstName", "middleName", "lastName",
+        "address1", "address2", "address3", "city", "state", "postalCode", "country",
+        "company", "email", "phone", "ssn", "username", "passportNumber", "licenseNumber",
+    )
+
+    /** SSH 密钥字段顺序。 */
+    private val SSH_KEYS = listOf("privateKey", "publicKey", "keyFingerprint")
+
+    /** 银行卡键表（供写侧按域模型取值；读侧据此还原）。 */
+    fun cardKeys(): List<String> = CARD_KEYS
+
+    /** 身份信息键表。 */
+    fun identityKeys(): List<String> = IDENTITY_KEYS
+
+    /** SSH 键表。 */
+    fun sshKeys(): List<String> = SSH_KEYS
+
+    /** 该载荷字段是否应受保护（卡号 / CVV / 护照 / 执照 / SSN）。 */
+    fun isPayloadProtected(field: String): Boolean = field.lowercase(Locale.ROOT) in PAYLOAD_PROTECTED
+
+    /**
+     * 从**全部字段**里挑出某个前缀的载荷，返回「字段名（去掉前缀）→ 值」。
+     *
+     * @param prefix [CARD_PREFIX] / [IDENTITY_PREFIX] / [SSH_PREFIX]。
+     * @return 键为**去掉前缀后的原始大小写**（写侧就是按 [cardKeys] 的驼峰写的）。
+     */
+    fun payloadOf(fields: Map<String, String>, prefix: String): Map<String, String> {
+        val out = LinkedHashMap<String, String>()
+        fields.forEach { (key, value) ->
+            if (!key.startsWith(prefix, ignoreCase = true)) return@forEach
+            val name = key.substring(prefix.length)
+            if (name.isNotBlank()) out[name] = value
+        }
+        return out
+    }
+
+    /**
+     * 按 [order] 取值，**键名大小写不敏感**（别的工具改过大小写也读得回来）。
+     *
+     * @return 与 `order` 等长的列表；缺失项为空串。
+     */
+    fun orderedValues(payload: Map<String, String>, order: List<String>): List<String> {
+        val byLower = payload.entries.associate { it.key.lowercase(Locale.ROOT) to it.value }
+        return order.map { byLower[it.lowercase(Locale.ROOT)].orEmpty() }
+    }
+
+    /** 密码历史编码：`epoch毫秒|密码`。 */
+    fun encodeHistory(lastUsedAt: Long?, password: String): String =
+        "${lastUsedAt ?: 0L}$HISTORY_SEPARATOR$password"
+
+    /**
+     * 密码历史解码；格式不对时返回「时间为 null + 整串当密码」——
+     * **宁可把整串当密码也不丢内容**（丢了的旧密码是找不回来的）。
+     */
+    fun decodeHistory(raw: String): Pair<Long?, String> {
+        val index = raw.indexOf(HISTORY_SEPARATOR)
+        if (index < 0) return null to raw
+        val stamp = raw.substring(0, index).toLongOrNull()
+        return stamp?.takeIf { it > 0L } to raw.substring(index + 1)
+    }
+
+    /**
+     * 工具字段名是否属于**载荷区**（卡 / 身份 / SSH / 密码历史）。
+     *
+     * 读侧把载荷区从「自定义字段」里排掉（[isToolFieldName] 已经覆盖全部 `VPX_`），
+     * 写侧据此判断"哪些键是本条目产出的"以便清理。
+     */
+    fun isPayloadFieldName(name: String): Boolean =
+        name.startsWith(CARD_PREFIX, ignoreCase = true) ||
+            name.startsWith(IDENTITY_PREFIX, ignoreCase = true) ||
+            name.startsWith(SSH_PREFIX, ignoreCase = true) ||
+            name.startsWith(PW_HISTORY_PREFIX, ignoreCase = true)
+
     /**
      * 多余 URI 的匹配规则：`VPX_MATCH_n`（与 [URL_PREFIX] 同下标）。
      *

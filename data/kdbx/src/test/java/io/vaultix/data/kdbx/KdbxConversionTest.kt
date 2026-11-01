@@ -44,8 +44,13 @@ import com.google.common.truth.Truth.assertWithMessage
 import io.vaultix.common.OtpUriParser
 import io.vaultix.model.VaultCard
 import io.vaultix.model.VaultFido2Credential
+import io.vaultix.model.VaultFolder
+import io.vaultix.model.VaultIdentity
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
+import io.vaultix.model.VaultPasswordHistoryEntry
+import io.vaultix.model.VaultReprompt
+import io.vaultix.model.VaultSshKey
 import io.vaultix.model.VaultUri
 import java.util.UUID
 import org.junit.Test
@@ -191,7 +196,11 @@ class KdbxConversionTest {
     }
 
     @Test
-    fun `Card条目_载荷守卫_读回不还原类型且不抛异常`() {
+    fun `Card条目_载荷现在完整往返（2026-11-01 起不再是已知边界）`() {
+        // ⚠️ 本用例此前断言「类型回退为 Login、载荷丢失」—— 那是 2026-10-31 之前的
+        //    已知边界（写侧不写 VaultCard、读侧不产出）。现在两侧都接上了，
+        //    银行卡转成 KDBX 再转回来就是**同一张卡**。
+        //    守卫仍然有用：`restoredType` 的载荷判断还在，只是不再被触发。
         val card = sampleItem(title = "招行信用卡", username = "", password = "").copy(
             type = VaultItemType.Card,
             card = VaultCard(cardholderName = "ZHANG SAN", number = "6225xxxxxxxx1234"),
@@ -199,12 +208,10 @@ class KdbxConversionTest {
 
         val back = buildAndRead(listOf(card)).items.single()
 
-        // ⚠️ 这是**已知边界**（不是 bug）：KDBX 无 Card 载荷承载（写侧不写、读侧不产出），
-        //   照字面还原类型会让导出侧 requireNotNull(payload) 直接抛异常、整次转换崩在
-        //   最后一个条目上。守卫 ⇒ 类型回退为 Login，标题与备注仍在。
-        //   预览计数（typeDegradedCount）负责提前告知用户，不静默。
-        assertWithMessage("type").that(back.type).isEqualTo(VaultItemType.Login)
+        assertWithMessage("type").that(back.type).isEqualTo(VaultItemType.Card)
         assertWithMessage("title").that(back.title).isEqualTo("招行信用卡")
+        assertWithMessage("卡号").that(back.card?.number).isEqualTo("6225xxxxxxxx1234")
+        assertWithMessage("持卡人").that(back.card?.cardholderName).isEqualTo("ZHANG SAN")
     }
 
     @Test
@@ -298,6 +305,213 @@ class KdbxConversionTest {
         val item = read.items.single()
         assertWithMessage("条目归属").that(item.folderId).isEqualTo(folderIdOf(groupUuid))
         assertWithMessage("userName").that(item.username).isEqualTo("carol")
+    }
+
+    // ---------------------------------------------------------------- 无损：载荷与文件夹
+
+    @Test
+    fun `银行卡条目往返_六个卡字段全部保真且类型不降级`() {
+        // ⚠️ 2026-11-01 之前：卡 / 身份 / SSH 的载荷**两边都没实现** ⇒ 转成 KDBX 后
+        //    只剩标题与备注，再转回去变成一条登录。用户看到的是一条"空条目"。
+        val card = VaultCard(
+            cardholderName = "张伟",
+            brand = "Visa",
+            number = "4111111111111111",
+            expMonth = "7",
+            expYear = "2031",
+            code = "123",
+        )
+        val item = sampleItem(title = "招行信用卡").copy(type = VaultItemType.Card, card = card)
+
+        val read = buildAndRead(listOf(item)).items.single()
+
+        assertWithMessage("类型").that(read.type).isEqualTo(VaultItemType.Card)
+        assertWithMessage("卡载荷").that(read.card).isEqualTo(card)
+    }
+
+    @Test
+    fun `卡号与安全码必须受保护写入（不然库被别人打开就泄露）`() {
+        val item = sampleItem().copy(
+            type = VaultItemType.Card,
+            card = VaultCard(number = "4111111111111111", code = "999", brand = "Visa"),
+        )
+
+        val bytes = KdbxConversionEngine.build("Vaultix", password, listOf(item)).getOrThrow()
+        val fields = openRaw(bytes).content.group.entries.single().fields
+
+        assertWithMessage("卡号").that(fields["${KdbxToolFields.CARD_PREFIX}number"])
+            .isInstanceOf(EntryValue.Encrypted::class.java)
+        assertWithMessage("安全码").that(fields["${KdbxToolFields.CARD_PREFIX}code"])
+            .isInstanceOf(EntryValue.Encrypted::class.java)
+        assertWithMessage("品牌不敏感、写明文").that(fields["${KdbxToolFields.CARD_PREFIX}brand"])
+            .isInstanceOf(EntryValue.Plain::class.java)
+    }
+
+    @Test
+    fun `身份信息条目往返_十八个字段全部保真`() {
+        val identity = VaultIdentity(
+            title = "Mr", firstName = "伟", middleName = "M", lastName = "张",
+            address1 = "长青路 1 号", address2 = "5 栋", address3 = "902",
+            city = "深圳", state = "广东", postalCode = "518000", country = "中国",
+            company = "示例科技", email = "wei@example.com", phone = "+86 13800000000",
+            ssn = "110101199001011234", username = "weizhang",
+            passportNumber = "E12345678", licenseNumber = "440300199001011234",
+        )
+        val item = sampleItem(title = "身份").copy(type = VaultItemType.Identity, identity = identity)
+
+        val read = buildAndRead(listOf(item)).items.single()
+
+        assertWithMessage("类型").that(read.type).isEqualTo(VaultItemType.Identity)
+        assertWithMessage("身份载荷").that(read.identity).isEqualTo(identity)
+    }
+
+    @Test
+    fun `SSH 密钥条目往返_私钥公钥指纹全部保真`() {
+        val sshKey = VaultSshKey(
+            privateKey = "-----BEGIN OPENSSH PRIVATE KEY-----\nAAA\n-----END OPENSSH PRIVATE KEY-----",
+            publicKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA test",
+            keyFingerprint = "SHA256:abc123",
+        )
+        val item = sampleItem(title = "服务器").copy(type = VaultItemType.SshKey, sshKey = sshKey)
+
+        val read = buildAndRead(listOf(item)).items.single()
+
+        assertWithMessage("类型").that(read.type).isEqualTo(VaultItemType.SshKey)
+        assertWithMessage("SSH 载荷").that(read.sshKey).isEqualTo(sshKey)
+    }
+
+    @Test
+    fun `密码历史往返_顺序按数值而非字符串（第 10 条不能排到第 2 条前面）`() {
+        val history = (1..12).map { n ->
+            VaultPasswordHistoryEntry(password = "old-$n", lastUsedAt = 1_700_000_000_000L + n)
+        }
+        val item = sampleItem().copy(passwordHistory = history)
+
+        val read = buildAndRead(listOf(item)).items.single()
+
+        assertWithMessage("历史条数").that(read.passwordHistory).hasSize(12)
+        assertWithMessage("顺序").that(read.passwordHistory.map { it.password })
+            .isEqualTo(history.map { it.password })
+        assertWithMessage("时间").that(read.passwordHistory.map { it.lastUsedAt })
+            .isEqualTo(history.map { it.lastUsedAt })
+    }
+
+    @Test
+    fun `密码里含竖线也不被切坏（只切第一个分隔符）`() {
+        val item = sampleItem().copy(
+            passwordHistory = listOf(VaultPasswordHistoryEntry(password = "a|b|c", lastUsedAt = 42L)),
+        )
+
+        val read = buildAndRead(listOf(item)).items.single()
+
+        assertWithMessage("密码").that(read.passwordHistory.single().password).isEqualTo("a|b|c")
+        assertWithMessage("时间").that(read.passwordHistory.single().lastUsedAt).isEqualTo(42L)
+    }
+
+    @Test
+    fun `需要主密码二次验证的标记往返`() {
+        val item = sampleItem().copy(reprompt = VaultReprompt.Password)
+
+        val read = buildAndRead(listOf(item)).items.single()
+
+        assertWithMessage("reprompt").that(read.reprompt).isEqualTo(VaultReprompt.Password)
+    }
+
+    @Test
+    fun `二次验证为默认值时不写字段（不给每条镶恒假键）`() {
+        val bytes = KdbxConversionEngine.build("Vaultix", password, listOf(sampleItem())).getOrThrow()
+
+        val fields = openRaw(bytes).content.group.entries.single().fields
+
+        assertThat(fields.keys.map { it.uppercase() }).doesNotContain(KdbxToolFields.REPROMPT.uppercase())
+    }
+
+    @Test
+    fun `文件夹层级按名字里的斜杠逐级建组，条目落回对应分组`() {
+        // 对齐 KeePassXC `BitwardenReader::createGroup`：Bitwarden 的 folder 只有
+        // id + name，层级靠名字里的 `/` 表达。
+        val folders = listOf(
+            VaultFolder(id = "f1", name = "工作"),
+            VaultFolder(id = "f2", name = "工作/服务器"),
+            VaultFolder(id = "f3", name = "个人"),
+        )
+        val items = listOf(
+            sampleItem(title = "根").copy(folderId = null),
+            sampleItem(title = "工作根").copy(folderId = "f1"),
+            sampleItem(title = "服务器").copy(folderId = "f2"),
+            sampleItem(title = "个人").copy(folderId = "f3"),
+        )
+
+        val bytes = KdbxConversionEngine.build("Vaultix", password, items, folders).getOrThrow()
+        val read = KdbxConversionEngine.read(bytes, password).getOrThrow()
+
+        assertWithMessage("分组名").that(read.folders.map { it.name })
+            .containsExactly("工作", "工作/服务器", "个人")
+        // ⚠️ 读侧的 `VaultFolder.name` 是**完整路径**（`KdbxItemMapper` 的约定：
+        //    根组路径为空、子组拼成 `父/子`），而 `id` 指向各自的**真实分组**。
+        //    这不是 bug：Bitwarden 的 folder 没有 parentId，层级本来就靠名字里的 `/` 表达，
+        //    所以带路径的名字反过来正好能被下一次导出原样用上（往返稳定）。
+        //    断言归属必须按 **id** 取组名，不能按名字猜。
+        val groupNameOf = read.folders.associate { it.id to it.name }
+        val byTitle = read.items.associate { it.title to groupNameOf[it.folderId] }
+        assertThat(byTitle["根"]).isNull()
+        assertThat(byTitle["工作根"]).isEqualTo("工作")
+        assertWithMessage("二级目录要落在子组里，不能拍平到一级")
+            .that(byTitle["服务器"]).isEqualTo("工作/服务器")
+        assertThat(byTitle["个人"]).isEqualTo("个人")
+        assertWithMessage("子组的 id 必须与父组不同（否则条目全挤在父组）")
+            .that(read.folders.map { it.id }).containsNoDuplicates()
+    }
+
+    @Test
+    fun `重复的文件夹路径只建一次组（A、B 两个文件夹同名于 A-Sub）`() {
+        val folders = listOf(
+            VaultFolder(id = "a", name = "A"),
+            VaultFolder(id = "ab", name = "A/B"),
+            VaultFolder(id = "ac", name = "A/C"),
+        )
+        val items = listOf(
+            sampleItem(title = "x").copy(folderId = "ab"),
+            sampleItem(title = "y").copy(folderId = "ac"),
+        )
+
+        val bytes = KdbxConversionEngine.build("Vaultix", password, items, folders).getOrThrow()
+        val read = KdbxConversionEngine.read(bytes, password).getOrThrow()
+
+        assertWithMessage("A 只应出现一次").that(read.folders.count { it.name == "A" }).isEqualTo(1)
+        assertWithMessage("总分组数").that(read.folders).hasSize(3)    }
+
+    @Test
+    fun `文件夹名全空时条目退回根组（丢目录名但不能丢条目）`() {
+        val folders = listOf(VaultFolder(id = "blank", name = "  "))
+        val item = sampleItem(title = "孤儿").copy(folderId = "blank")
+
+        val bytes = KdbxConversionEngine.build("Vaultix", password, listOf(item), folders).getOrThrow()
+        val read = KdbxConversionEngine.read(bytes, password).getOrThrow()
+
+        assertWithMessage("条目不能消失").that(read.items.map { it.title }).contains("孤儿")
+        assertThat(read.items.single().folderId).isNull()
+    }
+
+    @Test
+    fun `把银行卡改成登录后旧卡字段必须清掉`() {
+        // ⚠️ 不清的话，用户把一条银行卡改成登录条目后，`VPX_CARD_number` 会永远
+        //    留在文件里 —— 下次转换回 Bitwarden 又会"复活"成一张卡。
+        val cardItem = sampleItem(title = "卡").copy(
+            type = VaultItemType.Card,
+            card = VaultCard(number = "4111111111111111"),
+        )
+        val credentials = KdbxCreator.credentialsFor(password, keyFileBytes = null)
+        var db = KdbxCreator.blankDatabase("Vaultix", credentials)
+        db = KdbxItemWriter.createEntry(db, folderId = null, item = cardItem).database
+        val before = db.toMappedContent().items.single()
+
+        val updated = KdbxItemWriter.updateEntry(db, before, before.copy(type = VaultItemType.Login, card = null))
+
+        val fields = updated.database.content.group.entries.single().fields
+        assertThat(fields.keys.filter { it.startsWith(KdbxToolFields.CARD_PREFIX, ignoreCase = true) })
+            .isEmpty()
+        assertThat(updated.database.toMappedContent().items.single().card).isNull()
     }
 
     // ---------------------------------------------------------------- helpers

@@ -155,7 +155,10 @@ class VaultConverterRepositoryImplTest {
         assertEquals(2, preview.stats.itemCount)
         assertEquals(1, preview.stats.totpCount)
         assertEquals(1, preview.stats.passkeyCount)
-        assertEquals("Card 条目转 KDBX 只剩标题备注，必须计数告知", 1, preview.stats.typeDegradedCount)
+        // ⚠️ 2026-11-01：此前断言 1（"Card 条目转 KDBX 只剩标题备注"）。
+        //    现在卡/身份/SSH 的载荷会写进 `VPX_*` 并读回，**不再有降级** ⇒ 恒 0。
+        //    这条断言是"降级已消除"的哨兵：哪天又冒出新的降级，它会变红提醒补计数。
+        assertEquals("卡载荷已能无损往返，不应再计降级", 0, preview.stats.typeDegradedCount)
     }
 
     @Test

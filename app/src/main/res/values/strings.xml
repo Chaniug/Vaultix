@@ -1453,7 +1453,7 @@
 
     <!-- JSON → KDBX 分区 -->
     <string name="conversion_json_to_kdbx_title">Bitwarden JSON → KDBX</string>
-    <string name="conversion_json_to_kdbx_subtitle">把 Bitwarden 加密 JSON 转换为 .kdbx 密码库文件（可用任意 KeePass 兼容客户端打开）。文件夹层级会平铺，预览计数会提前告知。</string>
+    <string name="conversion_json_to_kdbx_subtitle">把 Bitwarden 加密 JSON 转换为 .kdbx 密码库文件（可用任意 KeePass 兼容客户端打开）。文件夹会转成 KDBX 分组，卡片 / 身份 / SSH 与密码历史一并保留。</string>
     <string name="conversion_pick_json">选择 JSON 文件</string>
     <string name="conversion_json_password_label">JSON 文件密码</string>
     <string name="conversion_preview">解密并预览</string>
@@ -1466,7 +1466,7 @@
 
     <!-- KDBX → JSON 分区 -->
     <string name="conversion_kdbx_to_json_title">KDBX → Bitwarden JSON</string>
-    <string name="conversion_kdbx_to_json_subtitle">把 .kdbx 密码库转换为 Bitwarden 加密 JSON（可用官方客户端导入）。分组与 TOTP、通行密钥都会保留。</string>
+    <string name="conversion_kdbx_to_json_subtitle">把 .kdbx 密码库转换为 Bitwarden 加密 JSON（可用官方客户端导入）。分组、TOTP、通行密钥、卡片 / 身份 / SSH 都会保留。</string>
     <string name="conversion_pick_kdbx">选择 KDBX 文件</string>
     <string name="conversion_kdbx_password_label">KDBX 主密码</string>
     <string name="conversion_export_password_label">导出 JSON 的文件密码</string>
@@ -1481,7 +1481,7 @@
     <string name="conversion_preview_summary">共 %1$d 个条目、%2$d 个文件夹</string>
     <string name="conversion_preview_totp">其中 %1$d 个带 TOTP 验证码（可保留）</string>
     <string name="conversion_preview_passkey">其中 %1$d 个通行密钥（可保留）</string>
-    <string name="conversion_preview_degraded">其中 %1$d 个卡片 / 身份 / SSH 条目：KDBX 无法承载其明细，转换后仅保留标题与备注</string>
+    <string name="conversion_preview_degraded">其中 %1$d 个条目的部分内容无法完整保留（当前版本应恒为 0，可见即缺陷）</string>
     <string name="conversion_preview_skipped">其中 %1$d 个无法识别的条目将被跳过</string>
     <string name="conversion_kdbx_success">已生成 KDBX 文件（%1$d 个条目）</string>
     <string name="conversion_json_success">已生成 JSON 文件（%1$d 个条目）</string>

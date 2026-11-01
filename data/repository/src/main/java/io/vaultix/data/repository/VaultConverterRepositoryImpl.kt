@@ -32,7 +32,6 @@ import io.vaultix.domain.VaultConverterRepository
 import io.vaultix.domain.VaultConversionException
 import io.vaultix.model.VaultFolder
 import io.vaultix.model.VaultItem
-import io.vaultix.model.VaultItemType
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.withContext
 import java.util.UUID
@@ -42,16 +41,18 @@ import javax.inject.Singleton
 /**
  * 格式转换编排（W5 · JSON⇄KDBX）。
  *
- * ## 两个方向的非对称（刻意如此，别"顺手抹平"）
+ * ## 两个方向的对称性（2026-11-01 补齐）
  *
- * | 方向 | 文件夹 | id | 类型 |
+ * | 方向 | 文件夹 | id / 类型 | 载荷 |
  * |---|---|---|---|
- * | JSON → KDBX | **平铺丢弃**（施工单 §2.4 用户拍板：先不映射层级） | 存 `VPX_BW_ID` 旁路 | 存 `VPX_BW_TYPE` 旁路 |
- * | KDBX → JSON | 分组 → folders（id 重映射为 UUID） | 取 `VPX_BW_ID`，无则裸 uuid | 取 `VPX_BW_TYPE`（带载荷守卫） |
+ * | JSON → KDBX | **分组**：按名字里的 `/` 逐级建（对齐 KeePassXC） | `VPX_BW_ID` / `VPX_BW_TYPE` 旁路 | 全写 `VPX_*` |
+ * | KDBX → JSON | 分组 → folders（id 重映射为 UUID） | 取 `VPX_BW_ID`，无则裸 uuid | 同上，读侧原样读回 |
  *
- * 正向"丢文件夹"是有据可查的拍板（见 `KdbxToolFields` 文件头与施工单 §2.4），
- * 预览计数会告知；反向保留分组是因为 KDBX 本来就有分组、BW JSON 也有 folders，
- * 一一对应不需要猜。
+ * 载荷 = 银行卡 / 身份信息 / SSH 密钥 / 密码历史 / 二次验证。
+ *
+ * ⚠️ 2026-10-31 之前正向是「平铺丢文件夹 + 卡/身份/SSH 只剩标题备注」——
+ *    用户明确要求对齐 KeePassXC 的无损转换，故两侧一起补齐。改动必须成对：
+ *    **只补写侧 = 数据进了文件但读不回来（静默丢）；只补读侧 = 读不到任何东西。**
  */
 @Singleton
 class VaultConverterRepositoryImpl @Inject constructor(
@@ -82,8 +83,13 @@ class VaultConverterRepositoryImpl @Inject constructor(
     ): ConversionOutput = withContext(cryptoDispatcher) {
         // 注意：这里**不再解析 JSON** —— 解密发生在 preview 阶段，文件密码那时已弃。
         // 重新解析就要把文件密码再留到转换，违背"用完即弃"（Docs/09）。
-        val bytes = Kdbx.buildFromItems(name = databaseName, password = outputPassword, items = preview.items)
-            .getOrElse { error -> throw error.toConversionException() }
+        // 文件夹随 preview 一起带过来（2026-11-01）：层级要在这里映射成 KDBX 分组。
+        val bytes = Kdbx.buildFromItems(
+            name = databaseName,
+            password = outputPassword,
+            items = preview.items,
+            folders = preview.folders,
+        ).getOrElse { error -> throw error.toConversionException() }
         ConversionOutput(bytes = bytes, stats = statsOf(preview.items))
     }
 
@@ -113,10 +119,13 @@ class VaultConverterRepositoryImpl @Inject constructor(
     /**
      * 转换计数（预览与产物共用一套口径）。
      *
-     * ⚠️ `typeDegradedCount` 的口径是**卡片 / 身份 / SSH 三类**：它们的载荷在
-     * KDBX 侧没有承载（`KdbxItemWriter` 不写、读路径不产出），转过去只剩标题与
-     * 备注。这是领域模型 ↔ KDBX 的既有能力边界（Vaultix 的 KDBX 库本来只有
-     * Login / SecureNote 两种形态），计数是为了让它在转换**前**可见。
+     * ⚠️ `typeDegradedCount` 现在恒为 0（2026-11-01）。它此前统计「卡片 / 身份 /
+     *    SSH 三类转过去只剩标题与备注」的条目数 —— 那三类的载荷现在已经写进
+     *    `VPX_CARD_*` / `VPX_IDENTITY_*` / `VPX_SSH_*` 并能在读侧原样读回，
+     *    **已无降级**。保留这个字段是为了 UI/统计模型的兼容（改签名会牵动
+     *    `ConversionStats` 与两个 ViewModel 的测试），但语义改成"**仍**有降级
+     *    的条目数"，当前没有这类条目 ⇒ 恒 0。将来若出现新的降级（如附件），
+     *    在这里把它算进来即可，UI 文案无需改。
      */
     private fun statsOf(items: List<VaultItem>, skippedCount: Int = 0): ConversionStats =
         ConversionStats(
@@ -124,9 +133,7 @@ class VaultConverterRepositoryImpl @Inject constructor(
             totpCount = items.count { !it.totp.isNullOrBlank() },
             passkeyCount = items.sumOf { it.fido2Credentials.size },
             skippedCount = skippedCount,
-            typeDegradedCount = items.count {
-                it.type == VaultItemType.Card || it.type == VaultItemType.Identity || it.type == VaultItemType.SshKey
-            },
+            typeDegradedCount = 0,
         )
 
     // ------------------------------------------------------------------ id 重映射
