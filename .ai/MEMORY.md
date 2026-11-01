@@ -148,6 +148,41 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 
 ## 9. 当前状态与下一批（接力起手式）
 
+> ⚡ **2026-11-01（最新）：图标"每次都重新加载" —— 三个根因，其中一个是尺寸算错（#216）**
+>
+> 用户：「条目图标好像每次打开都是重新加载的，滑动的时候有一些图标是从空白再加载出来的」
+> + 「我要提升性能与美观度」。
+>
+> **先算量级否掉直觉**：Coil 内存缓存 = `memoryClass` 的 20% ≈ 51MB；一张 120px 图标 ≈ 56KB；
+> 整库几百条几 MB。差两个数量级 ⇒ **不是容量问题，也不是"在下载"**。往源码里挖出三个真因：
+>
+> | # | 根因 | 性质 |
+> |---|---|---|
+> | ① | `ICON_REQUEST_PX = 96` 是死写的**像素**值（= 假设密度恒 2x）。40dp 在 3x 屏要 120px、56dp 要 168px ⇒ 图标被**放大 1.25~1.75 倍**绘制 | **美观**（高密度机一律发虚） |
+> | ② | `LazyColumn` 滑回的卡片**重建 composable**，`AsyncImage` 必过一次协程调度 ⇒ **第一帧必然空白**（60Hz 16.7ms，肉眼可见） | 性能 + 观感 |
+> | ③ | 旧 `onError` 把失败带进卡片生命周期 ⇒ 一次 DNS 抖动让该条目本次浏览**永远**停在首字母 | 正确性 |
+>
+> ✅ 修法：**组合期同步查 `ImageLoader.memoryCache`**（O(1) LRU，命中直接 `BitmapPainter`，
+> 不建 `ImageRequest`、不启协程、不查磁盘）+ `LocalDensity` 换算 px + 失败 30s 重试 1 次
+> + 加载中/失败一律画**首字母**（任何时刻不空白）+ 全局 `respectCacheHeaders(false)`。
+>
+> ⚠️ **踩坑（值得单独记）**：为了让"同步查缓存"能算出同一个键，自然会加 `.memoryCacheKey(...)`。
+> 但 Coil 源码 `MemoryCacheService.newCacheKey()` 第一句是
+> `request.memoryCacheKey?.let { return it }` —— **显式键整条替换默认键**，而默认键
+> `MemoryCache.Key(base, extras)` 的 `extras` 里才装着**尺寸**。⇒ 40dp 与 56dp 共用一条缓存 ⇒
+> `isCacheValueValid` 判尺寸不符 ⇒ **每进一次详情页白解码一轮**（不崩、不报、不打日志）。
+> 键改成 `site-icon:$px:$url` 并由 `SiteIconCacheKeyTest`（6 例）钉死。
+>
+> 判据：① **显式覆盖框架算好的键/哈希前，先列出"它原本算了什么"，再自己补回去**；
+> ② **"看起来在加载"≠"在下载"** —— 先把量级算出来，再往源码里找；
+> ③ **`| tail` 会吞掉退出码**：`cmd | tail -4; exit=$?` 取到的是 tail 的（永远 0）。
+> 本轮发现 `check_ui_hardcoded_text` 自 2026-10-30 起一直红着却没人知道，就是这条导致的。
+>
+> 顺带修两个长期误报的门禁：`check_import_packages`（图标 `material.icons.filled.Image`
+> 与组件 `foundation.Image` 同名 ⇒ 被算进组件票数）+ `check_ui_hardcoded_text`（跨行调用
+> 按逻辑行合并）。两处都补了反向自测。
+>
+
 > ⚡ **2026-10-31（最新）：一次指纹够所有库 —— 认证粒度对齐全局（#215）**
 >
 > 用户：「进入 app 时候验证指纹怎么需要两次，两个密码库？两个密码库不应该是同一个指纹吗，
