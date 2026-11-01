@@ -55,7 +55,7 @@ SUMMARY_RE = re.compile(r"共 \*\*(\d+)\*\* 条")
 # 分节标题行里的「（N 条，…）」或「（N 条）」——第四份拷贝，只在写了数字时才校验
 SECTION_COUNT_RE = re.compile(r"（(\d+)\s*条")
 # 主篇「章节明细」表：`| 12 | 标题 | [part](./01-…-part1.md) |`
-DETAIL_ROW_RE = re.compile(r"^\|\s*\d+\s*\|.*\[part\]\(")
+DETAIL_ROW_RE = re.compile(r"^\|\s*(\d+)\s*\|.*\[part\]\(")
 # 分篇文件名：`01-构建与环境-part2`
 PART_RE = re.compile(r"^(.*)-part\d+$")
 
@@ -121,12 +121,20 @@ def check(root: Path) -> tuple[list[str], list[str]]:
         elif int(m.group(1)) != len(nums):
             errors.append(f"{stem}: 头部题注写 {m.group(1)} 条，分篇合计 {len(nums)} 条")
 
-        # ② 章节明细表行数（替代已移出的「总表编号集合相等」）
-        detail = [ln for ln in text.splitlines() if DETAIL_ROW_RE.match(ln)]
-        if len(detail) != len(nums):
-            errors.append(
-                f"{stem}: 章节明细 {len(detail)} 行，分篇合计 {len(nums)} 条"
-            )
+        # ② 章节明细表的**编号集合** == 分篇正文的编号集合
+        #    ⚠️ 不只比数量：#160 的原始病灶就是"数量恰好蒙对、名单是错的"
+        #    （03 篇曾"写 18 条、只列 16 个号"）。数量相等证明不了名单相等。
+        detail_nums = [
+            int(m.group(1))
+            for ln in text.splitlines()
+            if (m := DETAIL_ROW_RE.match(ln))
+        ]
+        only_body = sorted(set(nums) - set(detail_nums))
+        only_detail = sorted(set(detail_nums) - set(nums))
+        if only_body:
+            errors.append(f"{stem}: 分篇有、明细缺 → #{', #'.join(map(str, only_body))}")
+        if only_detail:
+            errors.append(f"{stem}: 明细有、分篇缺 → #{', #'.join(map(str, only_detail))}")
 
         # ③ 篇内重号（合并后检查：跨 part 重复也算）
         dup = sorted({n for n in nums if nums.count(n) > 1})

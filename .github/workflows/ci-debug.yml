@@ -244,6 +244,32 @@ jobs:
         shell: bash
         run: python3 "$GITHUB_WORKSPACE/.ai/tools/tests/selftest_release_assets.py"
 
+      # ★ 2026-11-01：文档索引 / 相对链接的一致性（拆篇之后才出现的一类静默错）。
+      #
+      # 当天按 8.9 §7.1 把 7 个 issues 篇拆成 7 个索引 + 41 个分篇、并把 17 篇 SESSION
+      # 移进 `archive/sessions-2026-09/`。于是多出两处"只有人点进去才发现"的缝：
+      #   ① `ISSUES.md` 条数 / 主篇题注 / 章节明细 三者对不上 —— 同一事实的多份拷贝
+      #      必然漂移，本项目已漂过四次（#160）；其中"数量恰好蒙对、名单是错的"最难发现。
+      #   ② 文件搬家后相对链接少一层 ⇒ 点进去 404；而"点进去"往往发生在最需要那条判据的时刻。
+      #
+      # 两者都**不会**让 compile / test / detekt 任何一个变红 —— 所以必须各自配门禁，
+      # 并且各配一条自测（探针自己判错会制造假红，假红几次之后就没人看它了）。
+      - name: Check issues index (index vs parts)
+        shell: bash
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/check_issues_index.py" "$GITHUB_WORKSPACE"
+
+      - name: Self-test issues index checker
+        shell: bash
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/tests/selftest_issues_index.py"
+
+      - name: Check markdown links (relative paths exist)
+        shell: bash
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/check_md_links.py" "$GITHUB_WORKSPACE"
+
+      - name: Self-test markdown link checker
+        shell: bash
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/tests/selftest_md_links.py"
+
       # push 时注入仓库固定签名，使 preview(debug) 与 stable release 签名完全一致、可互相覆盖安装。
       # 注意：本步骤与 release.yml 使用同一套 SIGNING_* Secret，密码也复用 Secret（不再硬编码 android），
       # 这是“同一设备 debug/release 覆盖安装”的硬性前提（同 applicationId + 同签名证书）。

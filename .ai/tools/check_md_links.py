@@ -49,23 +49,45 @@ def dangling(path: Path) -> list[tuple[int, str]]:
     return bad
 
 
-def main() -> int:
-    verbose = "-v" in sys.argv
+def scan(root: Path, roots: tuple[Path, ...] = ROOTS) -> tuple[list[str], int]:
+    """扫描 root 下的文档，返回 (问题列表, 扫描文件数)。
+
+    暴露成函数而不是只在 `main` 里内联：自测（`tests/selftest_md_links.py`）
+    要在临时目录上跑正反用例 —— 没有反例的门禁，等于没有门禁。
+    """
     files = sorted(
-        p for root in ROOTS if root.exists() for p in root.rglob("*.md")
+        p
+        for r in roots
+        if (root / r).exists()
+        for p in (root / r).rglob("*.md")
         if "build" not in p.parts
     )
-    problems = 0
+    problems: list[str] = []
     for p in files:
         for line, raw in dangling(p):
-            problems += 1
-            print(f"{p}:{line}: 断链 -> {raw}")
+            try:
+                shown = p.relative_to(root)
+            except ValueError:
+                shown = p
+            problems.append(f"{shown}:{line}: 断链 -> {raw}")
+    return problems, len(files)
+
+
+def main() -> int:
+    # 位置参数 = 仓库根（与 check_issues_index.py 等一致，CI 里传 $GITHUB_WORKSPACE）；
+    # `-v` 只控制是否打印扫描文件数，不当路径用。
+    positional = [a for a in sys.argv[1:] if not a.startswith("-")]
+    root = Path(positional[0]) if positional else Path(".")
+    verbose = "-v" in sys.argv
+    problems, count = scan(root)
+    for msg in problems:
+        print(msg)
     if verbose:
-        print(f"扫描 {len(files)} 个 md 文件")
+        print(f"扫描 {count} 个 md 文件")
     if problems:
-        print(f"\n❌ {problems} 处断链")
+        print(f"\n❌ {len(problems)} 处断链")
         return 1
-    print(f"✅ 链接全部有效（{len(files)} 个文件）")
+    print(f"✅ 链接全部有效（{count} 个文件）")
     return 0
 
 
