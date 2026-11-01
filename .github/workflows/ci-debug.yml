@@ -170,6 +170,25 @@ jobs:
         shell: bash
         run: python3 "$GITHUB_WORKSPACE/.ai/tools/tests/selftest_version_code.py"
 
+      # ★ 2026-11-01：workflow 里「两条语句被写成一行」的静默错误。
+      #
+      # 事故（就是本文件）：给 Release 页面加签名指纹时，`else` 分支的两条 `echo` 被写成了一行，
+      # `bash -n` 判合法、CI #340 全绿、页面照常生成 —— 只是「签名」那行印出
+      # `SHA-256 echo signer_subject=unknown`。**没有任何门禁会因此变红**，
+      # 唯一发现途径是去打开页面看。⇒ 补一个能提前抓住它的检查。
+      - name: Check workflow shell (swallowed statements)
+        shell: bash
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/check_workflow_shell.py"
+
+      # ★ 2026-11-01：APK 签名块解析器的自检。
+      # 为什么非要有：`apksigner` 不在 runner 的 PATH 上，能用的只有我们自己写的
+      # `.ai/tools/read_apk_signer.py`。它一旦静默读错，Release 页的「签名」就永远显示
+      # 「未能读取」—— 而这一整块功能存在的意义，恰恰是让人能一眼看出包是谁签的。
+      # 自检现场生成证书、拼一个符合 v2 结构的 APK，断言指纹与证书 SHA-256 逐字节相等。
+      - name: Self-test APK signer parser (v2 signature block)
+        shell: bash
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/tests/selftest_apk_signer.py"
+
       # push 时注入仓库固定签名，使 preview(debug) 与 stable release 签名完全一致、可互相覆盖安装。
       # 注意：本步骤与 release.yml 使用同一套 SIGNING_* Secret，密码也复用 Secret（不再硬编码 android），
       # 这是“同一设备 debug/release 覆盖安装”的硬性前提（同 applicationId + 同签名证书）。
@@ -449,34 +468,42 @@ jobs:
           # ⇒ 把「这个包实际是谁签的」直接印在 Release 页上：一次 eye-check 即可判定。
           apk0="$(printf '%s\n' "$apk_list" | sed '/^$/d' | head -1)"
           signer=""
-          if [ -n "$apk0" ] && command -v apksigner >/dev/null 2>&1; then
-            signer="$(apksigner verify --print-certs "$apk_root/$apk0" 2>/dev/null | head -1 || true)"
+          # ⚠️ 2026-11-01 实测教训（两次踩同一件事）：
+          #    ① `apksigner` **不在 runner 的 PATH 上**（在 `$ANDROID_SDK_ROOT/build-tools/<ver>/`），
+          #       第一版 `command -v apksigner` 恒假；
+          #    ② 当时的兜底读 `META-INF/*.RSA` 也读不到 —— debug 包用 **v2 签名**，
+          #       证书在 APK Signing Block 里，`META-INF/` 下根本没有 `.RSA`。
+          #    两条路都落空 ⇒ 页面印出「未能读取」。**"有兜底"不等于"兜底能兜住"。**
+          # ⇒ 现在 v2 解析器独立成 `.ai/tools/read_apk_signer.py`，并有自检
+          #   `selftest_apk_signer.py` 守着（造样本 → 断言指纹与证书 SHA-256 相等）。
+          apksigner_bin="$(command -v apksigner 2>/dev/null || true)"
+          if [ -z "$apksigner_bin" ]; then
+            # 按版本号从高到低找（`sort -V`），取第一个可执行的。
+            apksigner_bin="$(ls -1 "${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"/build-tools/*/apksigner 2>/dev/null \
+              | sort -V -r | head -1 || true)"
           fi
-          if [ -z "$signer" ]; then
-            # 兜底：直接从 APK 里 PEM 解证书（apksigner 不在 PATH 上时走这条）。
-            signer="$(python3 - "$apk_root/$apk0" <<'PY' 2>/dev/null || true
-          import base64, io, re, sys, zipfile
-          import hashlib
-          with zipfile.ZipFile(sys.argv[1]) as z:
-              name = next((n for n in z.namelist() if re.fullmatch(r'META-INF/[^/]+\.(RSA|DSA|EC)', n)), None)
-              if not name:
-                  raise SystemExit(0)
-              der = z.read(name)
-          # 从 DER 里取 SubjectPublicKeyInfo 不方便，这里只取整份证书的 SHA-256 ——
-          # 与 apksigner 的 `certificate SHA-256 digest` 同口径（对整张证书 DER 求摘要）。
-          print('Signer #1 certificate SHA-256 digest: ' + hashlib.sha256(der).hexdigest())
-          PY
-          )"
+          fingerprint=""
+          subject=""
+          if [ -n "$apk0" ] && [ -x "${apksigner_bin:-/nonexistent}" ]; then
+            echo "::notice title=apksigner::$apksigner_bin"
+            signer="$("$apksigner_bin" verify --print-certs "$apk_root/$apk0" 2>/dev/null | head -1 || true)"
+            fingerprint="$(printf '%s' "$signer" | sed -nE 's/.*SHA-256 digest:[[:space:]]*([0-9a-fA-F]+).*/\1/p' | head -1)"
+            subject="$(printf '%s' "$signer" | sed -nE 's/.*DN: *(.*)$/\1/p' | head -1)"
           fi
-          fingerprint="$(printf '%s' "$signer" | sed -nE 's/.*SHA-256 digest:[[:space:]]*([0-9a-fA-F]+).*/\1/p' | head -1)"
-          subject="$(printf '%s' "$signer" | sed -nE 's/.*DN: *(.*)$/\1/p' | head -1)"
+          if [ -z "$fingerprint" ] && [ -n "$apk0" ]; then
+            # 兜底：自己解 v2/v3 签名块（apksigner 确实不存在时才走这条）。
+            parsed="$(python3 "$GITHUB_WORKSPACE/.ai/tools/read_apk_signer.py" "$apk_root/$apk0" 2>/dev/null || true)"
+            fingerprint="${parsed%%|*}"
+            subject="${parsed#*|}"
+          fi
           if [ -n "$fingerprint" ]; then
             echo "signer_fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
             echo "signer_subject=${subject:-unknown}" >> "$GITHUB_OUTPUT"
             echo "::notice title=APK signer::SHA-256=$fingerprint DN=${subject:-unknown}"
           else
             echo "::warning title=APK signer unreadable::未能从 APK 读出签名证书，Release 页将显示「未能读取」"
-            echo "signer_fingerprint=" >> "$GITHUB_OUTPUT"            echo "signer_subject=unknown" >> "$GITHUB_OUTPUT"
+            echo "signer_fingerprint=" >> "$GITHUB_OUTPUT"
+            echo "signer_subject=unknown" >> "$GITHUB_OUTPUT"
           fi
 
           # 展示成「文件名 → 大小」的列表而不是 `> * \`路径\``：

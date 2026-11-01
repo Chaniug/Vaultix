@@ -697,3 +697,45 @@ Coil 内存缓存默认 = `memoryClass` 的 **20%**（≈51MB）；一张 120px 
 下一次 push 到 main 之后：Releases 里预览版标题应是 `Vaultix v0.10.4-dev+<7位> · Preview`；
 正文表格「签名」一行应有 SHA-256；把那个指纹与设备上已装包的 `apksigner verify --print-certs`
 对一下，即可判断能否覆盖安装。
+
+### 补记（同轮，CI #340 实测）· 门禁全绿但页面内容是错的（#218.3）
+
+第一次上线后，预览版页面**标题与表格都对了**（`Vaultix v0.10.4-dev-5ec3189 · Preview`），
+但「签名」那行印的是 `SHA-256 echo signer_subject=unknown` —— 两条 `echo` 被我写成了一行。
+
+`bash -n` 判合法、CI 全绿、APK 与 Release 都正常生成。**这是本项目第一次遇到
+「门禁全绿 + 产物正常 + 内容错」的组合。**
+
+已修，并补 `.ai/tools/check_workflow_shell.py` 接入 CI（反向验证：写回 bug 报 2 处，
+而 `bash -n` 仍说 OK）。
+
+⚠️ 顺带确认：**签名指纹本身仍未能读出**（`apksigner` 不在该 runner 的 PATH 上，
+`META-INF/*.RSA` 兜底也没取到 —— 因为 debug 包用的是 **v2 签名**，
+证书在 APK Signing Block 里，不是 `META-INF/*.RSA`）。这条下一轮要补：
+改用 `apksigner` 的绝对路径（`$ANDROID_SDK_ROOT/build-tools/<ver>/apksigner`）。
+
+---
+
+### 补记（同轮）· 「有兜底」不等于「兜底能兜住」（#218.4）
+
+修完 #218.3（语句吞行）之后，Release 页的「签名」行不再错乱，但**指纹仍是空的**。
+查下来：debug 包用 **v2 签名**，证书在 APK Signing Block 里，`META-INF/*.RSA` 根本不存在；
+而 `apksigner` 也不在 runner 的 PATH 上（在 `$ANDROID_SDK_ROOT/build-tools/<ver>/` 下）。
+两条路同时落空 —— **功能上线了，但没有任何实际作用**。
+
+写 v2 解析器时又静默错三次（每一次读出来都是垃圾而不是报错）：
+
+| # | 错在哪 | 后果 |
+|---|---|---|
+| 1 | `size` 从 `magic` **之后**读 | 块起点算飞 |
+| 2 | 少读 signers 序列的 `count` | 整体偏 4 字节，`signed_len` 读成 0 |
+| 3 | `digests`/`certificates` 当成 `LP(seq)` 而非 `count + LP(item)*` | 读出 536870922 这种荒谬长度 |
+
+**落地的修法**：
+- 解析器独立成 `.ai/tools/read_apk_signer.py`，**两个 workflow 共用同一份**（不再两份复制）。
+- 自检 `.ai/tools/tests/selftest_apk_signer.py` 接入 CI：`keytool` 现场生成证书 →
+  拼结构合法的 v2 APK → 断言指纹与证书 SHA-256 **逐字节相等**；未签名文件必须返回非零。
+- 变异测试 5 组，4 组判红；第 5 组（`size head == size foot` 自校验）**仍绿，如实标为未覆盖**。
+
+> 判据：**兜底路径必须在"兜底的场景"里被验证过**。
+> 每加一条兜底，就要加一个能让主路径失败的测试。

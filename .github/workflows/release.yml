@@ -321,26 +321,27 @@ jobs:
           # ⚠️ 取 `head -1`：多签名者时只报 #1，够用且不会把表格撑坏。
           apk0="$(printf '%s\n' "$apk_files" | sed '/^$/d' | head -1)"
           signer=""
-          if [ -n "$apk0" ] && command -v apksigner >/dev/null 2>&1; then
-            signer="$(apksigner verify --print-certs "$apk0" 2>/dev/null | head -1 || true)"
+          fingerprint=""
+          subject=""
+          # `apksigner` **不在 runner 的 PATH 上**（在 `$ANDROID_SDK_ROOT/build-tools/<ver>/` 下），
+          # 所以这里也按版本号找一次，找不到就走统一的 v2 解析器。
+          apksigner_bin="$(command -v apksigner 2>/dev/null || true)"
+          if [ -z "$apksigner_bin" ]; then
+            apksigner_bin="$(ls -1 "${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"/build-tools/*/apksigner 2>/dev/null \
+              | sort -V -r | head -1 || true)"
           fi
-          if [ -z "$signer" ]; then
-            # 兜底：apksigner 不在 PATH 上（不同 AGP/命令行工具的 bin 布局不一样）。
-            signer="$(python3 - "$apk0" <<'PY' 2>/dev/null || true
-          import hashlib, re, sys, zipfile
-          with zipfile.ZipFile(sys.argv[1]) as z:
-              name = next((n for n in z.namelist() if re.fullmatch(r'META-INF/[^/]+\.(RSA|DSA|EC)', n)), None)
-              if not name:
-                  raise SystemExit(0)
-              der = z.read(name)
-          # 整张证书 DER 的 SHA-256，与 apksigner 的 `certificate SHA-256 digest` 同口径
-          # （已验证：本机 keytool -printcert 的 SHA256 与它逐字节相同）。
-          print('Signer #1 certificate SHA-256 digest: ' + hashlib.sha256(der).hexdigest())
-          PY
-          )"
+          if [ -n "$apk0" ] && [ -x "${apksigner_bin:-/nonexistent}" ]; then
+            signer="$("$apksigner_bin" verify --print-certs "$apk0" 2>/dev/null | head -1 || true)"
+            fingerprint="$(printf '%s' "$signer" | sed -nE 's/.*SHA-256 digest:[[:space:]]*([0-9a-fA-F]+).*/\1/p' | head -1)"
+            subject="$(printf '%s' "$signer" | sed -nE 's/.*DN: *(.*)$/\1/p' | head -1)"
           fi
-          fingerprint="$(printf '%s' "$signer" | sed -nE 's/.*SHA-256 digest:[[:space:]]*([0-9a-fA-F]+).*/\1/p' | head -1)"
-          subject="$(printf '%s' "$signer" | sed -nE 's/.*DN: *(.*)$/\1/p' | head -1)"
+          if [ -z "$fingerprint" ] && [ -n "$apk0" ]; then
+            # 兜底：统一的 v2/v3 签名块解析器（与 ci-debug.yml 用的是同一份，不复制第二份实现）。
+            # 它自带自检 `.ai/tools/tests/selftest_apk_signer.py`。
+            parsed="$(python3 "$GITHUB_WORKSPACE/.ai/tools/read_apk_signer.py" "$apk0" 2>/dev/null || true)"
+            fingerprint="${parsed%%|*}"
+            subject="${parsed#*|}"
+          fi
           if [ -n "$fingerprint" ]; then
             echo "signer_fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
             echo "signer_subject=${subject:-unknown}" >> "$GITHUB_OUTPUT"
