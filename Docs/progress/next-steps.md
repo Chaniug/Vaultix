@@ -813,7 +813,7 @@ UI 只是薄壳：`选 BW JSON` → `文件密码` → `输出库主密码` → 
 
 > ## ⚡【2026-10-05 已落地 · 待 CI + 真机验】JSON⇄KDBX 无损互转 · W1（修现网数据毁 bug）
 >
-> 施工单 [`Docs/progress/json-kdbx-lossless-conversion.md`](../Docs/progress/json-kdbx-lossless-conversion.md)（W1–W6）。
+> 施工单 [`Docs/progress/json-kdbx-lossless-conversion.md`](./json-kdbx-lossless-conversion.md)（W1–W6）。
 > W1（自定义字段 `Title`/`Url` 覆盖标准键 + URL 白名单大小写 `"URL"`→`"Url"`）已落地：
 > 新增 `KdbxFieldKeys` 单一真源（`isReserved` 大小写折叠判区）+ `KdbxItemWriter.applyCustomFields` 写回前 R1 跳过
 > + `KdbxItemMapper.customFieldsOf` 改走 `KdbxFieldKeys.isReserved`。单测 `KdbxFieldKeysTest` / `KdbxReservedFieldTest` 落到 `:data:kdbx` test 源集。
@@ -840,7 +840,7 @@ UI 只是薄壳：`选 BW JSON` → `文件密码` → `输出库主密码` → 
 
 > ## ⚡【2026-09-30 凌晨 完成】批次 B1 —— KDBX 远端文件**本地缓存 + 条件回源**（解锁提速）
 >
-> **定稿**：[`.ai/decisions/多库锁模型-定稿.md`](../.ai/decisions/多库锁模型-定稿.md) §5「批次 B」（含**方案为何改版**的证据）
+> **定稿**：[`.ai/decisions/多库锁模型-定稿.md`](../../.ai/decisions/多库锁模型-定稿.md) §5「批次 B」（含**方案为何改版**的证据）
 > **改动**：`KdbxFileCache` / `FileKdbxFileCache`（带字节数校验，防半截文件）/ `CachedKdbxFileSource`（装饰器）
 > + 挂载在 `KdbxCloudSyncCoordinator.fileSourceFor`（唯一闸口 ⇒ 解锁/校验/keyfile/同步全覆盖）
 > + `noBackupFilesDir/kdbx_cache` 落盘 + `signOut`/`removeVault` 按 origin 清。
@@ -854,7 +854,7 @@ UI 只是薄壳：`选 BW JSON` → `文件密码` → `输出库主密码` → 
 
 > ## 🔒【2026-09-30 凌晨 完成】多库锁模型 **批次 A 第二片**（D3 + §3.2 档位侧）落地 ⇒ **批次 A 全部完成**
 >
-> **定稿**：[`.ai/decisions/多库锁模型-定稿.md`](../.ai/decisions/多库锁模型-定稿.md) §5「施工进度」
+> **定稿**：[`.ai/decisions/多库锁模型-定稿.md`](../../.ai/decisions/多库锁模型-定稿.md) §5「施工进度」
 > **本片内容**：D3 档位**每库一份**（`vault_timeout::<vaultId>`，**惰性迁移**——旧全局键永不删除，
 > 作为「未写过显式档位的库」的回退）+ §3.2 档位侧（`restore()` 只恢复 `Never` 档房间）。
 > 调用侧改齐：`VaultLockManagerImpl` / `AutoRestoreTrigger`（`anyVaultNever()` 按库聚合）/
@@ -866,7 +866,7 @@ UI 只是薄壳：`选 BW JSON` → `文件密码` → `输出库主密码` → 
 
 > ## 🔒【2026-09-29 深夜续 完成】多库锁模型 **批次 A 第一片**（D1 + D2 + D5 + §3.2）落地
 >
-> **定稿**：[`.ai/decisions/多库锁模型-定稿.md`](../.ai/decisions/多库锁模型-定稿.md) §5「施工进度」
+> **定稿**：[`.ai/decisions/多库锁模型-定稿.md`](../../.ai/decisions/多库锁模型-定稿.md) §5「施工进度」
 > **本片内容**：D1 每库「用户主动锁」标记（`lockVault` 去掉删全局信封的跨层副作用，改 `markUserLocked`；
 > `restore()` 逐库跳过；解锁成功钩子统一清标记）· D2 切后台给**每个已解锁库**各起计时器、回前台**撤全部** ·
 > D5 补开挪到**进程级 scope**（修 `Job was cancelled` ⇒ 多余第二次指纹）。
@@ -877,12 +877,12 @@ UI 只是薄壳：`选 BW JSON` → `文件密码` → `输出库主密码` → 
 
 > ## 🔒【2026-09-29 深夜 完成】多库锁模型定稿（D1–D7）+ 文档瘦身执行 —— 下一批 = 定稿批次 A
 >
-> **定稿（自包含施工单）**：[`.ai/decisions/多库锁模型-定稿.md`](../.ai/decisions/多库锁模型-定稿.md)
+> **定稿（自包含施工单）**：[`.ai/decisions/多库锁模型-定稿.md`](../../.ai/decisions/多库锁模型-定稿.md)
 > —— 一句话模型「一栋房子，一扇门，N 个房间；任何锁只动自己那一层」；施工批次 A（D1→D2→D3→D5）→ B（KDBX 信封提速）→ C（管理页 UI）。
 > **实测依据**：BW 33ms vs KDBX 3.58s（信封 payload 不对称）；秒切已证；「又要验证」真凶 = Honor `iAwareF` 杀后台（非锁屏钩子，Bitwarden 源码核证）。
 > **新坑**：#131–#134（04 篇 ×3 + 01 篇 ×1）。
 > **文档侧**：8.9 分篇约定开始执行 —— README 状态区 401→131 行；本文件为**最大存量欠账（198KB）**，
-> 已完结登记应逐轮下沉当日 SESSION（清单见 [8.9 §6](../.ai/conventions/8.9-文档分篇.md)）。
+> 已完结登记应逐轮下沉当日 SESSION（清单见 [8.9 §6](../../.ai/conventions/8.9-文档分篇.md)）。
 > **本轮零行为变更**（唯一代码改动：`VaultTimeout.kt` KDoc 纠错 + compile 验证）。
 
 > ## 🔒 【2026-09-29 完成】批次 5.0 收工 —— 软锁 + 前台门禁 + 解锁提速

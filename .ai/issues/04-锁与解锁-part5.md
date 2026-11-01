@@ -1,0 +1,215 @@
+# 04-锁与解锁 · 第 5 篇（#215 ~ #222）
+
+> 主篇索引：[`04-锁与解锁.md`](./04-锁与解锁.md)（含计数规则与重号警告）
+> 本篇 2 章 · 12.2KB · 覆盖 #215 ~ #222
+
+## 215. ✅ 「进 App 要验两次指纹」——认证是全局的，门禁标记却是按库的（2026-10-31，#214 的直接后续）
+
+### 现象与用户原话
+
+> 「进入 app 时候验证指纹怎么需要两次，两个密码库？两个密码库不应该是同一个指纹吗，
+> 指纹检验一次就够了啊」
+
+用户有两个密码库。熄屏后重新进 App：验证一次指纹 → 进第一个库 → **切到第二个库又弹一次指纹**。
+用户的判断完全正确，这不是"设计如此"，是 bug。
+
+### 真因：认证粒度 ≠ 门禁粒度
+
+#214 加的两层锁，第一层（密钥）是**全局**的（房子化后只有一把门锁 `HouseKeyStore`），
+第二层（界面门禁）的标记却是**按库**存的（`viewLockedIdsState: Set<String>`）。
+三处一串联就必然出这个症状：
+
+| 环节 | 行为 | 后果 |
+|---|---|---|
+| `AutoViewGate.gateUnlockedVaults()` | 熄屏时给**每个**已解锁的「从不」库各打一个 `automatic = true` 标记 | 两个库 ⇒ 两个标记 |
+| `RootNavViewModel` | 判据是「**任一**库带查看锁 ⇒ 收回解锁页」 | 只要有**一个**标记剩着，整个 UI 就停在解锁页 |
+| `UnlockViewModel.completeLocalUnlock(forViewLock = true)` | 只调 `clearViewLock(vaultId)` | **只清了当前库** ⇒ 另一个标记还在 ⇒ 再验一次 |
+
+所以"验几次"= 用户有几个库。库越多越离谱，这不是能用"多点一次"糊过去的量级问题。
+
+> **为什么 Bitwarden 没有这个 bug**：它的锁定态是**账号级**的（一个账号一次认证），
+> 「认证粒度」与「门禁粒度」天然一致。#214 把门禁细化到库、却没同步细化认证 —— 错位就出现了。
+
+### 修法：把认证粒度对齐到全局（不是把门禁粗化）
+
+新增 `VaultSessionManager.clearAutoViewLocks()`，**只从 `viewLockedIds` 里减去 `autoViewLockedIds` 子集**：
+
+```kotlin
+suspend fun clearAutoViewLocks() {
+    mutex.withLock {
+        viewLockedIdsState.value = viewLockedIdsState.value - autoViewLockedIdsState.value
+        autoViewLockedIdsState.value = emptySet()
+    }
+}
+```
+
+UI 侧只改一行：`clearViewLock(vaultId)` → `clearAutoViewLocks()`。
+`VaultSessionRepository` 加同名接口成员（零逻辑直通实现）。
+
+**"一次认证够全部库"的理由**：验的是"你是不是本人"，这件事与"哪个库"无关。
+按库的标记只是 UI 的**存储方式**，不该被升格成"每个库各验一次"的**语义**。
+
+### 刻意没选的两个修法（都会被写回来，所以在这里钉死）
+
+| 候选 | 为什么不选 |
+|---|---|
+| `clearAllViewLocks()` | 会把手动查看锁一起抹掉 —— 用户锁了 A，验个指纹 A 也开了，**安全语义倒退** |
+| UI 里 `for (id in ids) clearViewLock(id)` | 绕了一圈还是"逐库清"，且**漏掉之后才出现的库**；把粒度错位固化进 UI 层 |
+
+子集相减是**唯一同时满足两个方向**的写法：自动标记跨库全清、手动锁一个不动。
+
+### 测试：两层各钉一遍（缺一层会假绿）
+
+| 层 | 文件 | 钉的是什么 |
+|---|---|---|
+| 数据层 | `VaultSessionManagerTest.清自动门禁_跨库一次清干净_手动锁原样保留` | 集合代数：`bw` 自动 → 放行；`kdbx` 自动 + 手动 → 仍锁住；`anyManualViewLocked() == true` |
+| UI 层 | `ViewUnlockScopeTest`（新，2 条） | **UI 到底调了哪个方法**：`clearAutoViewLocks()` 恰好 1 次、`clearViewLock` 0 次、`clearAllViewLocks` 0 次；查看锁分支不碰密钥（`viewLock` 0 次） |
+
+⚠️ 只写数据层用例的话，**把 UI 改回 `clearViewLock(vaultId)` 依然全绿** —— 这个 bug 的现场就在
+UI 这一行，回归门禁必须钉在调用点上。
+
+### CI 结论（`a877736` ✅ 一次过）
+
+| 项 | 结果 |
+|---|---|
+| 编译 | ✅ `build_failed=false`（debug APK 出包并签名） |
+| 单测 | ✅ **1422 例，失败 0 例**（含本轮新增 3 例） |
+| detekt / 七个 `check_*.py` | ✅ 全过 |
+
+这一轮**一次就绿**，与 #214 连红两次形成对照。差别不在运气：
+本轮唯一的新增依赖是 `VaultSessionRepository.clearAutoViewLocks()`，加接口成员时**同一 grep 就把实现类和所有实现点收齐了**（`grep -rn "clearViewLock" ` 一次列出接口、Impl、调用点、测试），没有出现 #214 那种"我以为它在那个类里"。
+⇒ 判据：**加接口成员时先 `grep` 现有同类成员，把所有实现点一次看全**；
+这个动作 30 秒，能省掉一整轮 CI。
+
+### 判据
+
+1. **认证的粒度必须与门禁的粒度对齐**。要么门禁全局（#214 之前），要么认证全局（本轮）。
+   一个全局、一个按库 ⇒ 立刻退化成"每个库各验一次"。
+2. **"存储方式"不许升格成"语义"**。按库存标记是为了知道"锁哪几个库"，
+   不是为了让用户按库出认证。
+3. **收窄清除范围的功能，必须成对思考"扩大清除范围"的风险**。`clearAllViewLocks()` 顺手可取，
+   但它会连带手动锁 —— 所以正确解是**新增一个更精确的方法**，而不是放宽已有的那个。
+4. **子集标志的第二次回报**。#214 引入 `autoViewLockedIdsState` 时只是为了让自动填充
+   能"看穿自动门禁、仍尊重手动锁"；本轮它又正好是"只清自动、不动手动"的现成工具。
+   ⇒ 把一个"看起来多余"的区分做出来，往往在下一次改动里就还回来。
+
+### 发版：v0.10.4（2026-10-31）
+
+`#214` + `#215` 一起进 **v0.10.4**。流程沿用历史惯例：`main` bump `VERSION` → `rele` 快进 → push `rele`。
+
+| 项 | 结果 |
+|---|---|
+| 触发 | push `rele`（`ddcb113`）→ `release.yml`「Build & Publish Stable Release」`124521010885` |
+| 产物 | `app-full-release.apk` **7.24 MB** + `checksums-sha256.txt` |
+| Release | `v0.10.4`，`draft=false` / `prerelease=false` / `make_latest=true` |
+| SHA-256 | `55c768d3…3952f175` |
+
+⚠️ **没走 tag 触发**：`release.yml` 里「Remove existing release/tag for this version」那一步
+在 `tag` 事件下会先删掉刚推上去的 tag（幂等重跑用的逻辑，但对 tag 事件是自伤）。走 `rele` 分支没有这个风险。
+
+### 顺手修的流程问题：Release 说明对用户不友好
+
+自动生成的 changelog 是**提交列表**，里面有「修 CI 红」「补充文档」这类内部账。
+v0.10.4 第一次发布就是这样，用户点开 Release 看到的第一条是
+「AutoViewGate 从 VaultTimeoutPreferences 读产品开关（f7ac3d2 CI 红）」—— 看不懂，也没意义。
+
+而**改不掉**：`PATCH /releases/{id}` 需要 token，沙箱里只有 SSH key（`ssh -T` 认得出身份，
+但推不了 REST）。⇒ 事后修改这条路是死的。
+
+修法（向前兼容，不碰 v0.10.4 已有的 body）：
+- 新增 `Docs/release-notes/v<版本>.md`：**人工撰写**的更新内容，正文直接是内容
+  （不写标题、不写元说明 —— 多一层剥离逻辑只会多一处出错的地方）；
+- `release.yml` 的「Generate changelog」优先读它，**文件不存在时回退提交列表**
+  （否则某次忘了写文件就等于发布失败，这条路不能断）。
+
+判据：**自动生成的对外文案要留人工覆盖口，且覆盖必须可回退**。
+纯自动 = 内部噪音外泄；纯人工 = 忘写就发不出去。
+
+---
+
+## 222. 🔴 新增库「不会自动关联快速解锁」—— 三条根因叠加（2026-11-01）
+
+### 现象与用户原话
+
+> 「我添加一个新的 bitwarden 密码库，会发现它无法自动关联上快速解锁，
+> 需要我先关掉快速解锁，然后再重新关联上所有的。这样的操作很麻烦」
+
+关键线索就在**这个 workaround 本身**：关掉再打开百分百能修好。
+说明写入路径（启用时）能算出所有库的钥匙，**新增库这条路径没有触发同一次计算**。
+
+### 真因一：新增库从不建「房间信封」
+
+房子化之后，「库在快速解锁范围内」的**真源**是**每库一份的房间信封**
+（`HouseKeyStore.sealRoom`），`QUICK_UNLOCK_SCOPE` 只是 UI 的响应式镜像。
+
+而 `addBitwardenVault` / `addBitwardenVaultWithTwoFactor` 的收尾只有
+`doUnlock`（登录）+ `registerVaultRow`（写 `vaults` 行）—— **一次都没调
+`sealRoomsForVaults`**。新库没有信封，自然不在范围内。
+
+「关掉再打开」为什么灵：`startEnrollment` 里那句
+`val targets = snapshot.rows.map { it.vaultId }` 拿的是**当前所有库**，
+一次全量重算把新库补了进去。不是开关有魔法，是它重新收集了一次名单。
+
+### 真因二：横幅判定只问「第一个已解锁的库」
+
+```kotlin
+if (dismissed) null else vaults.firstOrNull { it.id in unlocked }
+```
+
+它挑的是**第一个已解锁的库**，再只问这一个 `fingerprintQuickUnlockAvailable`。
+若那个库早已启用（`available == true`）⇒ 返回 `null` ⇒ 排在后面的**新库永远查不到**。
+用户看到的就是"没有提示"。
+
+⚠️ 这是「聚合判据取错对象」的典型：要回答"是否**存在**未启用的库"，
+却只抽查了**一个**元素。抽样条件（已解锁）与被判定的属性（是否启用）不是同一件事。
+
+### 真因三：`QUICK_UNLOCK_PROMPT_DISMISSED` 是全局永久静音
+
+一次「以后再说」⇒ 未来**所有**新增库都不再提示。没有过期、没有按库维度。
+
+### 修法（三处，一次收口）
+
+| 优先级 | 改什么 | 落点 |
+|---|---|---|
+| P0 | 新库自动建房间信封 | `LocalUnlockEnrollment.autoEnrollNewVault`，由 `registerVaultRow` 调用 |
+| P1 | 候选改为「任一未启用的已解锁库」 | `VaultListViewModel.quickUnlockSuggest` |
+| P2 | 新库重置 dismissed | `registerVaultRow` 里 `setQuickUnlockPromptDismissed(false)` |
+
+**P0 为什么能全自动**：调用点是「刚 add 成功」—— 该库会话密钥已在内存
+（`sessions.keyOf` 非空），房间信封包的正是它；房钥匙若也在内存
+（`houseKeyStore.isUnlocked`），`sealRoom` 是纯软件 AES-GCM，**无任何系统认证**。
+⇒ 不问密码、不按指纹。
+
+**P0 的天花板（必须写清）**：冷启动后还没解锁任何库就新增库时，房钥匙不在内存
+（`isUnlocked == false`），物理上封不了。此时**静默跳过**，由 P1 修好后的横幅兜底
+（用户点一下、按一次指纹）。不在 data 层弹认证 —— 那是 UI 的职责。
+
+**P0 的三道守卫**（各自对应一种"不该动"的真实状态）：
+1. 房钥匙不在内存 ⇒ 没钥匙可封；
+2. 一把门锁都没装 ⇒ 快速解锁从未启用，不能借"新增库"擅自开启；
+3. 范围为**空集** ⇒ 空集在该键里有确定含义（"一个库都不要"），
+   用户手动取消全部勾选后不该被悄悄改回来。
+
+**为什么挂在 `registerVaultRow`**：`VaultRepositoryImpl` 的函数数已卡在
+detekt `TooManyFunctions`（≤40）上限，加不了私有函数；而它本来就是两条添加路径
+**唯一**的共同收尾，天然是「新库已就位」这个时刻的落点（后加第 N 条路径也不会漏）。
+
+**P1 为什么不能写成一次性读取**：`flatMapLatest` 里若用 `.first()` 逐个问，
+就丢掉了响应性 —— 库启用后横幅不会自动消失。必须继续用 Flow 组合
+（`combine(candidates.map { ... })`），测试里用 `MutableStateFlow` 钉住这一条。
+
+### 测试
+
+- `LocalUnlockEnrollmentAutoEnrollTest`（7 例）：三道守卫各一、成功路径
+  （含**范围并集**与**零认证**断言）、无密钥、封装抛异常、KDBX 不猜。
+- `VaultListViewModelQuickUnlockSuggestTest`（5 例）：**前一个库已启用仍发现新库**
+  （旧实现必红）、全部启用才不提示、未解锁不参与、dismissed 生效、启用后自动消失。
+
+### 判据
+
+1. **"关掉再打开就好了"要先怀疑"新对象没被纳入那次全量计算"**，而不是开关的读写逻辑
+   —— workaround 之所以稳定有效，通常因为它重跑了正确的那个集合。
+2. **问"是否存在满足条件的元素"时，不许只抽查第一个** ——
+   抽样条件与被判定属性不是同一件事时，必然漏。
+3. **"以后再说"是对象级的意愿，不是永久全局静音** —— 新对象出现时应重新征询一次。
+4. **自动化的天花板要写进 KDoc**：做不了的那一半，必须有一条能兜住的引导路径。

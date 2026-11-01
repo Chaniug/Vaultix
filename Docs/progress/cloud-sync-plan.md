@@ -362,7 +362,7 @@ WebDAV 的账号密码必须走 **`SecureCredentialStore`**（Keystore 包装）
 > 提交：`4301fb1`（本文档）→ `910b571`（特性，36 文件 / +4813 行）
 > → `e92e24b`（过 detekt 全量门禁）→ `272eff8`（补 `when` 穷尽分支）。
 > 验证：**155 条断言 / 0 失败**（明细见
-> [`../../.ai/SESSION-2026-09-17.md`](../../.ai/SESSION-2026-09-17.md) §10）。
+> [`../../.ai/archive/sessions-2026-09/SESSION-2026-09-17.md`](../../.ai/archive/sessions-2026-09/SESSION-2026-09-17.md) §10）。
 > ⚠️ **Q1–Q7 的拍板结果**：Q1 未新增 `data:remote` 模块（`KdbxFileSource` 落 `data:kdbx`，
 > OneDrive 实现落 `app`，WebDAV 实现落 `data:repository`）；Q2 新旧并存（已做）；
 > Q3 **只做方案 B**（拒写，方案 A 三方合并留到第二期）；Q4 WebDAV 与 OneDrive 都做了。

@@ -37,268 +37,40 @@
 
 ## 编号 → 分篇
 
+> ⚠️ **2026-11-01 瘦身**：各分类的逐条摘要**与正文重复**（8.9 §7.4「禁止复述另一篇」），
+> 已移出，只留「分类 → 主篇索引」。查某条：点分类 → 主篇「章节明细」（# → 标题 → 分篇）。
+> 本文件因此从 **84KB 降到 ~10KB**，可以整读 —— 这正是入口文件该有的样子。
+
 ### [01-构建与环境](./issues/01-构建与环境.md) — 工程 / 构建 / CI / 工具链 / 环境（60 条，缺 #3、#8、#15、#16、#20…：#3/15 归 04、#16 归 02、#20 归 06）
 
-| # | 标题 |
-|---|---|
-| 1 | Git Bash 与原生 git 的路径映射错位 |
-| 2 | AGP 9 迁移五连坑 |
-| 4 | 误用 `New-Item -Force` 覆盖已有文件 |
-| 5 | 本机 SDK 没有 android-36 |
-| 6 | PowerShell 生成含 `$` 的代码时的转义陷阱 |
-| 7 | 覆盖安装前提（记录，避免日后误改） |
-| 9 | KDoc 里写字面 `/**` → 注释嵌套直到 EOF |
-| 10 | KSP2 对 @Provides 签名里的具体新类解析失败 |
-| 11 | mockk：普通函数用 `every`，suspend 用 `coEvery` |
-| 12 | 测试 fixture 用占位字符串掩盖真实路径 |
-| 13 | Dagger 依赖环新形态：拦截器引入认证仓库 |
-| 14 | Gradle daemon 大任务批崩 |
-| 17 | Detekt 门禁常见三连 |
-| 18 | Kotlin 默认参数不能调用 suspend 函数 |
-| 39 | 沙箱无法推送 GitHub |
-| 40 | detekt 圈复杂度「越拆越高」——同文件 helper 被累加进调用方 |
-| 41 | CI 1 分钟就红 → 其实是 detekt 先于 compile 失败，掩盖了编译错误 |
-| 42 | 本机（Windows/WorkBuddy）与早前沙箱的环境差异 |
-| 44 | 沙箱构建环境三处修复 |
-| 45 | CI「Run unit tests (non-blocking)」长期报红 2 处 |
-| 100 | ⚠️ **带 `if: event != 'push'` 的 CI 步骤，push 绿 ≠ 它通过**（`Run lint` 在 push 链路恒为 `skipped`）；手动触发曾失败并 skip 掉真门禁 —— **100.1 更正：lint 本身可用，问题在 `Collect debug APK metadata` 的非 push 路径** |
-| 46 | Android 16+ `Settings.Secure` 对第三方 App 受限 → 状态检测恒报"未启用" |
-| 55 | `./gradlew` 在本机失效 + 本机 Gradle 发行版直调 |
-| 65 | KDoc 里写「星号 + 斜杠」→ 整个文件变语法错误 |
-| 74 | detekt 不会对 @Composable 网开一面 —— 抽块时参数必须 ≤8 |
-| 75 | 给函数加「带默认值的尾部参数」会吃掉调用点的尾随 lambda |
-| 102 | ⚠️ 交付前「资产存在」≠「能下下来」（2026-09-15 我自己的误判） |
-| 101 | 🔴 `import` 的**包路径**写错（符号名对、包名错）：detekt 与 `check_signature_types.py` **双双查不出**，只有 CI 编译能炸 —— 已修，并新增 `.ai/tools/check_import_packages.py` 守护 |
-| 129 | 🔴 单测挂 11 条（`Could not initialize class VaultTimeout`）—— `VaultTimeout` companion 的**急切 `val`** 造成**环形静态初始化**（底层是 `NullPointerException`）。**已修**（改 `by lazy`）。⚠️ 原判断"只全量跑才挂"**是错的**：**单跑该类同样必挂** |
-| 130 | 🔴 测试用**虚拟 `delay`** 去等 `Dispatchers.Default` 上的协程 ⇒ 断言"未发生"的用例**随机假绿**（变异验证时"6 条只红 2 条"即由此）。**已修**：改真实时间等待（`settle`/`awaitUntil`） |
-| 103 | 🔴 手改大文件时**整块复制**函数声明 → CI 报 `Conflicting overloads`（`VaultRepositoryImpl` 函数数顶格逼出"块级搬运"），**七道本地门禁全绿** —— 已修，并新增第 4 类门禁 `check_duplicate_declarations` |
-| 104 | 🔴 **写启发式探针必须配正反用例**：#103 的补救探针连坏两版（264 处 → 5 处误报，全在**扩展函数接收者**上）；且「探针报了我不可能引入的问题」= 探针坏了，不是源码坏了。永久回归集 `.ai/tools/tests/selftest_duplicate_declarations.py` |
-| 105 | 🔴 **沙箱「下不动 APK」是两层问题**：hosts 丢失（`198.18.0.x`）只是第一层；第二层是「整文件连续传输不可靠」。判别靠 **range 请求 `curl -r 0-0`（得 206）vs 整体下载（得 000）** 的对比实验。解法：**1MB 分块 + 5 重试 + `truncate` 回滚**。另：**别用 `file` 判断 APK 完整**（截断文件照样报 "Android package"），要用 `zipfile` |
-| 112 | 🔴 Windows 版 Python 写文件把 LF 变成 CRLF ⇒ 行式数据（id 列表）全部失效 —— 别吞 stderr |
-| 134 | 真机取证三坑：screenrecord 被 kill 丢 moov；logcat -b all 洪水；adb 在线 ≠ 没 suspend |
-| 115 | 🔴 CI 红的定位方法（blob 域名被解析到假 IP，需 DoH + 分块直链取日志）与 detekt `MatchingDeclarationName` 的两记坑 |
-| 116 | 🔴 本地验证「假绿」：只编译**代码片段**、stub 签名失真 ⇒ CI 才炸出 `ViewNode.id`(Int) 被当成 `AutofillId`。纪律：验证必须覆盖**消费点**，且**新 harness 先做变异测试** |
-| 124 | ⭐ 新增探针 `check_state_flattening.py`：抓「多态状态被压成二值开关」。**连坏两版都是假绿**（① 只扫当前文件的 sealed 声明 ⇒ 真 bug 在另一个文件里，报 0 ② 正则贪婪吃到倒数第二段 `QuickUnlockController.CapabilityState` ⇒ 仍报 0）。纪律：**探针的闭环证明是"把代码还原成出 bug 的版本，看它是否恰好报那几行"**，不是"自测全绿" |
-| 125 | `check_import_packages.py` 把 `Icons.Filled.Build` 误判成 `android.os.Build`（**未修**）。⚠️ 别顺手把 `Build` 加进豁免表 —— 那会把真的 `android.os.Build` 误用一起放行 |
-| 128 | 🔴 改完 SDK 的 `package.xml`，编译仍报 `Failed to find target with hash string 'android-37.0'` ⇒ **真凶是 Gradle daemon 里没失效的 SDK loader 缓存**（写 10 分钟 `Probe.java` 证伪 sdklib，再 `gradle --stop` + 删 `.gradle`/`daemon` 30 秒解决）。纪律：**改了 daemon 外部输入后门禁仍报同一行错，第一怀疑对象是 daemon 缓存** |
-| 137 | 🔴 **接力沙箱跑不了编译与单测**（无 Android SDK，`dl.google.com` 不可达、华为云镜像只到 platform-29 缺 API 37）⇒ **detekt 全绿 ≠ 代码能编译**（静态分析查不出签名笔误 / import 不存在）。纪律：这种环境下**提交信息禁止写「门禁全绿」**，且**detekt 全绿必须自证不是空跑**（压低阈值探针，确认扫到新文件与 test 源集） |
-| 138 | GitHub 在沙箱被劫持到 `198.18.0.x` 保留网段 ⇒ HTTPS/SSH 全不通。解法三步：阿里 DoH 查真实 IP → 写 `/etc/hosts` **和** `/root/.user_hosts` → ⚠️ **`~/.ssh/config` 的 `HostName` 必须写 IP**（写域名会绕过 hosts，等于白做） |
-| 146 | ⭐ mockk：stub 里**裸方法名会被 `MockKMatcherScope` 遮蔽**（`coEvery { get(any()) }` 的 `get` 解析到 `MockKMatcherScope.get`，报 `expected 'MockKMatcherScope.DynamicCall'`）。⇒ **stub 一律显式带 receiver**（`coEvery { dao.get(any()) }`）—— 既有测试全写 `vaultRepository.syncVault(…)` 就是这个原因，不是风格偏好。另：`coAnswers` / `firstArg` **都不需要 import**；要读实时值必须用 `coAnswers` 而非 `returns` |
-| 145 | 🔴 CI 的**单测步是 `continue-on-error: true`** ⇒ job 报 `success` **只代表命令跑完了**，不代表测试通过。实测：job 绿、日志里 `BUILD FAILED` + `:compileDebugUnitTestKotlin FAILED`（新测试 4 处编译错），沙箱完全看不到。纪律：**推完必须下载 job 日志逐行看**（日志域名 `productionresultssa2.blob.core.windows.net` 同样被劫持，要一并写 hosts）。另：单测**按模块显式登记**，`data:kdbx` 曾漏登记致用例从未执行。⚠️ 仓库挂着一个**既有失败** `AutoRestoreTriggerTest > 档位离开Never_删信封且不恢复`（与本次无关，未修） |
-| 160 | 🔴 **索引与正文第四次漂移**：四种形态（标题层级写错 ⇒ 从未被计入 / 题注用增量改法 / 数字与名单互不可证 / 跨表错位重复行）。⇒ 新增 `.ai/tools/check_issues_index.py` 全量重数 + `tests/selftest_issues_index.py`（6 例正反用例） |
-| 168 | ⭐ detekt 两个「顶格」类：给贴上限的类加分支前先腾位（CardWalletScreen 17 / ItemFormDialog 16 / QuickUnlockController 41 函数接连撞红 ⇒ 新分支一律抽文件级纯函数，天然可单测） |
-| 171 | 🔴 过期 test-results XML 误导核数：编译失败时旧 XML 残留 ⇒ 核数脚本数出幽灵失败（`Card条目_载荷守卫` FAIL 实为 22:47 变异验证残留）。判据：核数结论与当次日志矛盾时，先怀疑读到的数据不是这次的（先对 XML mtime） |
-| 173 | 🔴 **沙箱里"全绿"的 1155 例，推到 CI 却红在单测步**：本地 `~/.gradle` 里的 build-cache 命中会 `FROM-CACHE` 返回**旧 test-results** ⇒ `--rerun-tasks` 与"XML mtime 晚于启动"两条判据**同时失效**。用 A/B 实验隔离（移走改动⇒CI 绿 / 注入一条故意失败⇒CI 红且无 continue-on-error）。⚠️ `gh cache delete` 清 CI 缓存来"消毒"会把一次隔离实验变成两次未知 —— 别做。⚠️ 步骤名以 `[` 开头会被 YAML 当流序列 ⇒ workflow 解析失败、0 秒红、`jobs` 为空 |
-| 174 | 🔴 CI 单测那一条红的真相：`UnlockViewModelTest > candidateVaultsExcludeTheTargetItself` 报 `Dispatchers.Main was accessed when the platform dispatcher was absent`（`TestMainDispatcher.isDispatchNeeded`）。机理：`viewModelScope.launch { withContext(IO) {…} }` 的**续体回主线程**是真线程 resume，而 `@After resetMain()` 已把替身卸下 ⇒ **竞态**（同文件另两条同款代码没红）。⚠️ `runTest` 自带的 `TestMainDispatcher` 只护虚拟调度器，护不住真线程那条路。解法：VM 加 `testingScope` / `testingIoDispatcher` 两个 `internal var`（生产恒 null ⇒ `viewModelScope` / `Dispatchers.IO`）。🔴 四条"更标准"的路全不通：默认值里读 `this` 报 `Cannot access '<this>'`、注入 `@HiltViewModel` 报 `prohibited`、可空构造参数报 `CoroutineScope cannot be provided`。测试侧两坑：只换 scope 不够（IO 段仍在真线程）、`advanceUntilIdle` 会把 Channel 缓冲快进掉（改 `runCurrent` / `advanceTimeBy(1)`） |
-| 172 | 🔴 OneDrive 无基线写入 = **无条件覆盖**（`expectedVersion = null` 时一个条件头都不发）；且 `createUploadSession` 手拼 JSON **值漏引号** ⇒ 任何 > 2MiB 的库在 OneDrive 上**从来没存进去过**。解法：接口加独立参数 `failIfExists`（不靠 null 推断）+ OneDrive 补写后读回校验 + 请求体改 DTO。判据：**"实现方遵守契约"不能靠调用方自觉来兜**。附三个坑：`Uri.encode` 是 Android 桩方法（返回 null）、`runTest` 测不了真线程（改 `runBlocking`）、Hilt 不接受带默认值参数的 `@Inject constructor` |
-| 175 | 🔴 **`init { scope.launch { … collect … } }` 是单测随机假红的总闸**：①**构造期派发** —— `launch` 发生在构造期间，而 `testingIoDispatcher` 只能在构造后赋值 ⇒ 收集协程永久跑 `Dispatchers.Default`，虚拟时钟推不动；②**无界 `collect`** —— 永不结束，`runTest` 的 idle 判据被它搅乱 ⇒ **同一次构建里两条互斥断言同时红**（「不该锁」与「该锁」都红）、每次红的不同。判据：**互斥同时成立 ⇒ 先找无界协程，别调测试时序**。解法：启动从 `init` 移出（`VaultLockManagerImpl.startObservingVaults()` / `AutoLockController.startCollecting()`，均幂等，生产在 `VaultixApplication.onCreate` 调）。🔴 两条不通的路：`scope` 改 getter（`init` 构造期就取走了）、自定义 `CoroutineDispatcher` 包装（`delay` **永不恢复**：`timer started` 5 次 / `fired` 0 次）。虚拟时钟三条规则：`settle()` 建定时器不推钟 → `advanceTimeBy(N-1)`+`runCurrent()` 断「不该锁」→ `advanceTimeBy(N)`+`advanceUntilIdle()` 断「会锁」；**`advanceUntilIdle` 不能用来表达「时间过去了多少」** |
-| 176 | 🔴 **`StandardTestDispatcher` 跑测试任务时**不恢复拦截器** ⇒ 跨 `withContext(io)` 的续体照样踩 `Dispatchers.Main`**。#174 把 `io` 换成虚拟调度器只解决「时钟推得动」，**不解决「续体跳不跳线程」**——`StandardTestDispatcher.dispatch` 只把任务排进 `TestCoroutineScheduler`，跑任务时不恢复 `ContinuationInterceptor` ⇒ `withContext` 的续体恢复时上下文里既没拦截器也没 `Dispatchers.Main` ⇒ `TestMainDispatcher.isDispatchNeeded` 炸（堆栈 `DispatchedCoroutine.afterResume` ← `Dispatchers.IO` 的真线程 worker）。CI `39139391458` 上 `promptCarriesTheFilteredCandidateVaults` 复现，**本地全绿**。解法：第二个覆写口 `testingBlockableIoDispatcher`（语义是**拦截**不是替换）+ `ioContext`，测试传一个**非** `TestDispatcher` 子类的 `StandardTestDispatcher` ⇒ 不被 `runTest` 收编 ⇒ 内联执行且不改上下文。⚠️ 判据：**变量是时间（`advanceTimeBy`）还是线程（续体拦截）**，两者必须分开处理。 |
-| 186 | 🔴 `allowBackup` 默认 true ⇒ `shared_prefs/vaultix_secure.xml`（门锁 / KEK / 房间信封、WebDAV 凭据、Bitwarden token）被云备份与 device-transfer 搬走，而解封它的 **Keystore 密钥不参与备份** ⇒ 新机上一把「看着还在、实际打不开」的假锁。修法 = `allowBackup="false"` + **两份**规则资源（API 31+ 的 `dataExtractionRules` 与 API 30- 的 `fullBackupContent`，**保险丝**：将来谁改回 true 也搬不走） |<br>⚠️ `data_extraction_rules.xml` 的 `<cloud-backup>` 与 `<device-transfer>` **两段都要排**（换机迁移走后者）。<br>⚠️ `sharedpref` 的 `path` **不带 `.xml`**，写了会**静默不匹配**。<br>⚠️ XML 注释里不能出现连续两个短横线；`<exclude` 别跨行写（单测按字符串断言）。<br>判据：**加密材料与解密密钥分开存放时，备份策略按后者决定** |
-| 193 | 🔴 `release.yml` 仍写死 `gradle-version: 8.11.1`（wrapper 是 9.5.1）—— `ci-debug.yml` 2026-10-02 就修过，**release 这条路漏网**。后果：白下载 / 缓存分区无效 / **改 `./gradlew` 为 `gradle` 会静默掉版**。修法 = 删 `gradle-version:`（版本只有一个来源）+ 兜底从 properties 读 |<br>⚠️ sed 分隔符必须 `#`（`(bin|all)` 会让 `s` 提前结束）。<br>判据：**"两处写同一个事实"必然分叉**，修法不是"记得两边都改"，是**让事实只有一个来源** |
-| 201 | 🔴 **CI 全绿也照样发不了版**：`ci-debug.yml` 的 `Run lint` 带 `if: github.event_name != 'push'` ⇒ push 到 `main` 时**根本不跑 lint**（只有 PR 才跑）， 而 release 构建默认跑 `lintVital`、**fatal 直接中断构建** ⇒ 任何 lint fatal 都被推迟到**发版那一刻**才暴露。本次 v0.10.1 首发失败即 `:app:lintVitalFullRelease` 报 `Unexpected domain cache` ×3（`backup_rules.xml` / `data_extraction_rules.xml`）| <br>修法：删掉那三行 `<exclude domain="cache" path="." />` —— 合法 domain 只有 `file`/`database`/`sharedpref`/`external`/`root`（及 `device_*`），**没有 `cache`**；而 cache 目录本来就不参与备份，那三行既非法又多余（#186 写它是想"显式声明防将来改"）。<br>🔴 判据：**被跳过的步骤就是盲区** —— `if:` 让它消失的那一步，等于"只在发版那天跑一次"；写"门禁全绿"要说清绿的是哪几条。**`lintVital` 的 fatal ≠ 普通 lint 警告**（前者中断 release、debug 构建完全无感）。<br>⚠️ 资源 XML 的错误**不在 Kotlin 编译里** ⇒ 本次日志 `e:` 为 0 却 `BUILD FAILED`，失败信息只在 `What went wrong` 里。<br>🔁 删掉三行后调试 CI（run 40554694782）立刻红：`BackupPolicyConfigTest` 的期望表里把 `cache` 也列为"必须排除"，**同一个错误的两个副本只改了一处**。已补一条更值钱的断言：排除项的 domain 必须在白名单 `root/file/database/sharedpref/external` 内 —— 把"只有 lint 才知道的约束"搬进毫秒级 JVM 单测。<br>⚠️ 该断言扫**整份文件文本**，XML 注释里若写出可被解析的非法标签，会在"已改对"时误报 ⇒ **注释里写反例 = 给扫描器喂假阳性**。<br>建议（未做）：把 lint 加回 push 路径，或在 release 前单独跑一次 `:app:lintVitalFullRelease` |
-| 204 | 🟡 **发布说明里的校验和显示成 shell 命令原文**：v0.10.2 的 Release 页面「校验和」区块印的是 `$(cat "$GITHUB_WORKSPACE/checksums-sha256.txt" …)` 本身。根因 = `softprops/action-gh-release` 的 `with.body:` 是 **YAML 字符串**，不是 shell，`$( )` 不会展开。修法 = 文件内容做成 step output，body 用 `${{ steps.apk_meta.outputs.checksums }}` |<br>判据：**`run:` 是 shell，`with:` 是模板** —— `with:` 里出现 `$(`、反引号、`\&\&`、`||` 都是写错了地方；这类错误**不会让构建失败**（只是内容不对），只能靠**打开产物看一眼**发现 |
-| 207 | 「核对校验和」入口：镜像下载之后无处可验 |
-| 218 | 🟡 **预览包的"身份"全靠 commit SHA 与日志措辞** —— 标题只有 `dev-341be3a58…`（列表里被截断）、正文三处重复说"debug 构建产物"、**页面上没有签名指纹** ⇒ 用户报"签名不一致"时唯一的取证途径是翻要认证才能下载的 CI 日志。修法：标题带版本（`Vaultix v0.10.4-dev+341be3a · Preview`）+ 正文压成一张表 + **签名指纹如实取自产出的 APK**（两个 workflow 都印）；Stable 侧验不过 key 密码**直接红、不降级** |<br>**218.1 密钥密码错 ≠ 密钥不对**：原提示"key 密码与 store 密码不一致"把两种病说成一种 —— `-list` 过不了是 store 密码错；`-list` 过、`-certreq` 过不了才是 key 密码错；**两者都过却仍盖不上 = Secret 里根本不是那把钥匙**（改密码永远修不好，指纹是唯一硬证据）。<br>**218.2 `versionCode` 的第二份实现（awk）**：Kotlin 的 `toIntOrNull()` **接受 `+4`** 而 awk `^-?[0-9]+$` 不认；`${name%%-*}` 会把 `-1.0.0` 截成空串。⚠️ 后者是**测试抓出来的**，不是推演的；而第一版 14 条用例里有三种故意改坏**照样全绿**。<br>判据：① **能被用户验证的才叫发布物的身份**，只写 SHA 等于没写；② **诊断要区分病因，不是描述症状**；③ **正式版遇签名问题宁可红，不可降级**（红的代价是一天，降级的代价是所有人的数据）；④ **同一事实的两份实现必须配拿真源对账的测试**，且该测试**先被故意改坏验证过**，否则只是安慰剂 |<br>**218.3 语句被写成一行**：`echo "a=" >> $OUT` 后面又接了 `echo "b=" >> $OUT` ⇒ `bash -n` **判合法**、CI #340 **全绿**、APK 与 Release 都正常生成，只有页面那行印出 `SHA-256 echo signer_subject=unknown`。⇒ 新增 `check_workflow_shell.py`（反向验证：写回 bug 报 2 处，`bash -n` 仍 OK）。<br>**218.4 「有兜底」不等于「兜底能兜住」**：修完 218.3 后指纹仍空 —— debug 包用 **v2 签名**，证书在 APK Signing Block 里，`META-INF/*.RSA` 根本不存在；而 `apksigner` 也不在 runner PATH 上（在 `build-tools/<ver>/`）。两条路同时落空 ⇒ 功能上线但零作用。写 v2 解析器时又**静默错三处**：`size` 从 magic 之后读；少读 signers 序列的 `count`；`digests`/`certificates` 当成 `LP(seq)` 而非 `count + LP(item)*`（后者读出 536870922 这种荒谬长度）。修法：解析器独立成 `.ai/tools/read_apk_signer.py` **两个 workflow 共用一份**，自检 `selftest_apk_signer.py` 现场造 v2 APK 断言指纹与证书 SHA-256 逐字节相等；变异测试 5 组、4 组判红、**1 组（size head==foot 自校验）如实标为未覆盖**。<br>**218.5（🔴 诊断本身在说谎）**：`Build Debug APK` 步骤缺 `env:` ⇒ 步骤内 `${SIGNING_STORE_PASSWORD}` 恒空、全部回落 `android` ⇒ `keytool -certreq` 必然失败 ⇒ 打出**假的** `Keystore store password wrong`，而同一次 run 的上一步（有 env）却报「解码通过」—— 同一份文件里把 #218.1 刚修好的误诊又造了一遍。`bash -n` 通过、只有跨 step 比对才看得出来。修法：补三行 env + 告警带上「Secret 到底有没有配（已配置 N 字符 / 未配置）」+ 新增门禁 `check_workflow_secret_env.py`（反向验证：删掉 env → 报 3 处、退出码 1，`bash -n` 仍 OK）。<br>**218.6（🔴 测试是"自测自己"）**：v2 解析器的自检用手工拼的样本，而样本是按当时**错误**的理解拼的 ⇒ 解析器与样本同错，断言永远成立，一路绿（CI #341/#342 却一直读不出指纹）。换成 `apksigner sign` 的**真实产物**对账后，三处错误当场暴露：`size` 从 magic 之后读 / `head = magic-16-size` 偏 8 / `signed` 里按 `count` 读证书序列偏 4（读到**错误但合法**的证书，sha256 照样有结果，指纹看着完全正常）。正解 `head = magic + 8 - size`；且 APK v2 每层都是 **LP**，没有 `count + LP*` 序列。修法：自检只用真实 apksigner 产物；拿不到就 **SKIP**，绝不退回自造样本。变异测试 3 组判红、1 组等价变异体、1 组如实标为未覆盖。<br>判据：**测试的输入若与被测物由同一个理解生成，它只能证明"自己和自己一致"**；唯一可靠的验证是拿外部权威实现的产物对账，拿不到就 SKIP 并说明，而不是自己拼个样本给自己盖章<br>**218.7（🟡 paths 白名单漏 `.ai/tools/**`）**：提交 6bccb9d 只改了自检脚本，**等了十分钟一条 run 都没触发** —— 因为 `on.push.paths` 里没列 `.ai/tools/**`。「改门禁 → 门禁不跑 → 以为门禁通过」。修法：push 与 pull_request 两处 paths 都补上。<br>判据：**`paths` 白名单本身就是一张盲区地图** —— 凡是会改变 CI 行为的文件（脚本/配置/清单）必须在内，否则拿到的是**假绿灯**；假绿灯比没有绿灯更贵，因为人会据此宣布完成<br>判据：**诊断代码本身也会说谎** —— 凡是"推断病因并打印"的代码，必须能区分「输入确实是 A」和「输入根本没送到」，否则它输出的不是诊断，是猜测<br>**218.8（🔴 「签名不一致」的真正根因：两套变量名互不相认）**：workflow 用 `-Pandroid.injected.signing.*` + `SIGNING_*`，gradle 只认 `VAULTIX_*` ⇒ CI 上 `hasReleaseSigning == false` ⇒ debug 包用**一次性 debug key** 签 ⇒ 与本机 dev 包证书不同、盖不上。最要命的是**三句话全对**：`keytool -certreq` 校验真通过、构建真成功、"解码并校验通过"也是真的 —— 没有一句错话，缺的那一步（交给 gradle 之后到底用没用）**在日志里不留痕迹**；而 `build.gradle.kts` 里那句「没有则由 CI 通过 `-Pandroid.injected.signing.*` 注入」**本身就是错的注释**，写下来后再没人验证过。修法：gradle 侧 `firstEnv` 依次认 `VAULTIX_*` → `SIGNING_*` 并把**命中的变量名**打进 lifecycle 日志；workflow 侧把密钥**同时**以 env 下发（`-P` 保留），且只在解过 base64、验过密码之后以路径下发，**绝不从 Secret 原文现算密码**。门禁 `check_signing_var_names.py`（workflow 产出名 ∩ gradle 读取名 = ∅ 即红）+ 自检造「断链/接通」两个临时仓库。<br>⚠️ **门禁第一版自己就是假绿**：`shells` 集合混进了 `KS_OPTS`（值是 `-Pandroid.injected...`）⇒ 交集恒存在。抓出来的唯一方式是**先对着已知断链的真仓库跑**、看到它报 ✅。<br>判据：**「配置写下来了」不等于「配置被读走了」** —— 跨进程/跨工具协议（env 名、属性名、文件名）两端必须各有独立来源，并配一条**能对着已知坏状态判红**的检查；只在注释里写「由 X 注入」等于没有约定，而**注释会撒谎，且是最难识破的那种** |
-| 220 | 🔴 **测试接缝「构造后赋值」永远晚于 `init`** —— `UnlockViewModel` 的三个 `internal var` 接缝在 `.also { }` 里赋值，而 `init` 在**构造期间**就跑，`if (testingScope == null) startObservers()` **恒为真** ⇒ 观察协程永远挂在 `viewModelScope`（`Dispatchers.Main`），注入的 `TestScope` **一次都没生效**；`observersStarted` 的 CAS 又让测试那次 `startObservers()` **静默返回**。CI run 41279321669 上 `fingerprintEntryStaysHiddenWhen…` 报 `Dispatchers.Main was accessed`（`TestMainDispatcher.isDispatchNeeded` ← `DispatchedCoroutine.afterResume` ← **真线程池**），513 条只红 1 条、本地全绿 —— 因为 `prewarmCipher` 的 `withContext(IO)` 跨线程后 resume 时 `@After resetMain()` 已卸下替身，而这条续体属于**上一条**用例，异常记到当前正在跑的那条头上，所以受害者每次都换。<br>⚠️ #174 / #176 / 2026-10-28 三轮"修复"都没生效：它们改的都是 **getter**（`scope` / `ioContext`），而 `init` 那一刻读到的是 fallback（`viewModelScope` / `Dispatchers.IO`）。<br>修法 = 接缝改成**构造参数里的容器** `UnlockViewModelSeams`（`@Inject constructor()` 无参 ⇒ Dagger 直接绑定，生产全 null，行为不变），`init` 判断 `seams.scope == null`。<br>✅ 变异验证：把 `init` 改回无条件启动 ⇒ 只有 `overrideScopeIsActuallyUsedByTheViewModel` 一条红（正是新加的 `probeObserversStarted()` 断言）。<br>⚠️ 顺带发现 `probeOwnScope()` 是**空断言**：它返回 getter 的值，与注入值恒等。<br>判据：**接缝的赋值时机必须早于「用到它的第一个协程」** —— `init` 在构造期间跑，任何「构造后赋值」对它都等于没设，而这种失败不报错、不告警，还会让后续所有 `advanceUntilIdle()` 变成推一条没人用的时钟 |
-| 221 | 🔴 **预览包「发布成功」但一个附件都没有** —— `Publish Debug APK to preview Release` 结论绿、日志里**没有一句 `Uploading asset`**、`gh release view preview` 的 `assets=0`。根因：commit `261c6ee` 改文案时把 `files: \|` **粘在了 `body:` 末行末尾**（`…安装前请先导出备份。          files: \|`）——YAML **完全接受**（它只是一行更长的普通文本），于是 `with.files` 这个键**不存在**，`softprops/action-gh-release` 走「没有 files」的分支：建 release、不传文件、返回 0。<br>⚠️ 五道关卡全部看不出问题：`bash -n`/yamllint 合法（语法没错）；`Upload APK` 用的是 `actions/upload-artifact` 的 `path:`，**另一条独立路径**、一直正常；`Collect debug APK metadata` 自己 `find` 目录也正常（正文那行「35.8 MB」是真的）；Publish 退出码 0；Release 页**确实更新了**标题/正文/时间 —— 只有点进 Assets 才看得出是空的。<br>影响面：从 `261c6ee` 之后**每一个** preview Release 都是 0 附件，CI 一直报 success。<br>修法 = `files: \|` 拆回独立一行（与 `body:` 同级 10 空格）+ 两个 workflow 的 `action-gh-release` 都加 `fail_on_unmatched_files: true`（glob 空就当场红）+ 门禁 `check_release_assets.py`（结构：解得出的 `files` 非空；粘连：body 里不得出现「非空白 + 2 空格 + action 键名 + `:`」；兜底：必须带 fail 标记）+ 自检把**真实事故 YAML 原样复刻**成 `glued` 用例要求 rc=1。<br>**221.1（修完立刻暴露的第二层）**：`files` 修好后 `fail_on_unmatched_files` 当场报 `Pattern 'app/build/outputs/apk/*/debug/*.APK' does not match any files` —— runner 是 ext4 **区分大小写**，Gradle 产物恒为 `app-full-debug.apk`，`*.APK` **从来没匹配到过任何东西**；默认 `false` 时「匹配不到就跳过」，所以它安静躺了很久。三处同源残留（`Upload APK` 的 `path`、Publish 的 `files`、`find` 的 `-iname '*.apk' -o -iname '*.APK'`）一并清掉。门禁加第 ④ 条：`files` 里不得出现只差大小写的重复 pattern（自检 `uppercase_dup` 要求 rc=1；加这条时**它先抓到了我自己** —— `GOOD` 样例照抄原文件，也带着 `*.APK`）。<br>判据：**「命令成功」不等于「副作用发生」** —— 退出码 0 只说明程序没崩，不说明 release 里真有文件。凡有外部副作用的步骤（发 Release / 上传产物 / 推镜像），验收必须**去读副作用的结果**（`assets > 0`），而不是「这一步是绿的」。这是第 7 类不报错的错：**结构合法、语义丢失**（YAML 缩进吃掉一个键 / JSON 多一层嵌套让字段名变了 / protobuf 字段号被复用，同一族） |
-
+> 逐条明细（# → 标题 → 分篇）见 [`01-构建与环境.md`](./issues/01-构建与环境.md)。
 
 ### [02-自动填充](./issues/02-自动填充.md) — 自动填充（AutofillService 链路）
 
-| # | 标题 |
-|---|---|
-| 16 | 浏览器自动填充「静默失效」的三处缺口 |
-| 19 | 保存流程「永远不触发」：FillResponse 没挂 SaveInfo |
-| 23 | 「点填充却跳到 Vaultix 主页」：中转 Activity 先渲染了 UI |
-| 25 | 认证 Activity onCreate 同步 setResult+finish → 认证结果丢失 |
-| 47 | 用户名字段升格的两条硬约束 |
-| 48 | 误弹检测对齐 Bitwarden：**必须先有否定词，才能撤强度门槛** |
-| 50 | 「精准填充」不需要表单容器建模 —— 一次误读的更正 |
-| 51 | 浏览器 WebView 把**整棵 DOM** 建成可填节点 → 账号框被假 USERNAME 占位 |
-| 52 | 填充下拉图标：**40dp 彩色启动图标**在系统面板里又大又花 |
-| 54 | 填充辅助（Fill Assist）缺独立开关 |
-| 63 | 站点图标 URL 会把域名拼进路径 → 必须白名单过滤 |
-| 66 | 「**存在**锁定的库」被当成「**当前**库锁定」⇒ 浏览器里永远只剩「解锁 Vaultix」，且解不停 |
-| 72 | 填充下拉由系统用 RemoteViews 渲染 —— 能力边界与网络禁令 |
-| 78 | 系统填充下拉是 RemoteViews 渲染 —— 「Material」只能靠 App 侧模拟到哪一层算哪一层 |
-| 82 | 认证结果被系统丢弃：`NEW_TASK` 与 `taskAffinity` 是同一条死路的两个入口 |
-| 90 | `noHistory="true"` 打断「解锁即回填」—— #82 的**第三个**入口（照抄 Bitwarden 配置的陷阱） |
-| 113 | 容器重定向缺失 + 逐字段站点用全局单值 —— 「偶尔不弹条目 / 偶尔提示无匹配」的结构性根因 |
-| 114 | 一个 `firstOrNull()` 假设同时污染「匹配」与「填充」两侧 |
-| 187 | 🔴 自动填充「保存」链四处断裂：① **锁定态分支漏挂 `saveInfo`** ⇒ 第一次在锁态登录永远不提示保存（`onSaveRequest` 压根不会被调用）② `parse(::…)` 方法引用**丢实参**、字段取「第一个 USERNAME/PASSWORD」**不跳隐藏与空值** ③ `requestCode = id.hashCode()` + `FLAG_UPDATE_CURRENT` ⇒ **撞号就点哪行填同一条**（改 `RequestCodes.next()` 从 8000 起 CAS 自增）④ 明文密码进 `Intent` / `SavedStateHandle`（改 `PendingSaveStore` 一次性票据 + 60s TTL，取不到画「已过期」而非永转圈） |<br>⚠️ 票据 `consume` 必须**原子且一次性**（`SavedStateHandle` 进程重建会重放）。<br>⚠️ TTL 用 `elapsedRealtime` 不用 `currentTimeMillis`（改系统时间能复活票据）。<br>判据：**`PendingIntent` 的 requestCode 是身份，不能由内容哈希兼任**；**凭据不进 `Intent`** |
+> 逐条明细（# → 标题 → 分篇）见 [`02-自动填充.md`](./issues/02-自动填充.md)。
 
 ### [03-通行密钥与凭据提供商](./issues/03-通行密钥与凭据提供商.md) — 通行密钥 / Credential Provider / 凭据回灌（24 条；2026-10-29 新增 #208 excludeCredentials，2026-10-30 新增 #211 type 用官方常量）
 
-| # | 标题 |
-|---|---|
-| 24 | Credential Provider manifest action 漏 `service.` 段 → 系统从不发现 Provider |
-| 26 | CP 已启用但 Edge/Chrome 仍「什么都不弹」——androidx.credentials 版本停太旧 |
-| 27 | CP 密码条目不做来源过滤 → 列全库无关站点 |
-| 28 | provider.xml settingsActivity 指向 MainActivity |
-| 29 | `CallingAppInfo.getOrigin()` 在 1.6.0 需要 `privilegedAllowlist` 且必须签名命中 |
-| 30 | CI 门禁卡在 `getOrigin` 参数（本轮修复已闭环，2026-09-10） |
-| 32 | 通行密钥「验签失败」根因：authenticatorData 缺 BE/BS 标志位 |
-| 33 | **【更正 32】BE/BS 与「验签失败」无因果，且「必须重新注册」是错的** |
-| 34 | 通行密钥「候选列表为空」根因：解密残留填充 + 未 trim + rpId 未归一化 |
-| 35 | 通行密钥「Authentication failed」根因：浏览器流程回传了自造的 clientDataJSON |
-| 36 | 通行密钥「Authentication failed」第二根因：锁态竞态（Activity 把「库锁定」当成「找不到」） |
-| 37 | 锁态模型与凭据提供商链路按 Bitwarden 标准重写 |
-| 43 | 🔴🔴 通行密钥 `clientDataJSON` 回传空占位符 → GitHub 注册失败 |
-| 49 | `rawId` 形态判别的 **UUID 陷阱** |
-| 50 | ⚠️ **【03 篇 own #50，与 02 篇 #50 重号】**「通行密钥登录指纹弹了两次」—— 两次分属两个请求，其中一次去不掉（02 篇的 #50 是「精准填充」，引用时务必带分篇名） |
-| 108 | 🔴 注册「能保存、但网页端校验不出」根因：`attestationObject` 的 CBOR 键名写成 `attestationStatement`（规范要求 `attStmt`）—— **单测曾把错误键名锁为期望值** ⇒ 教训：协议结构断言必须升到字节级 + 反向锁 |
-| 109 | 🔴 注册响应被**浏览器整份拒收**：create 响应的 `response` 缺 `publicKeyAlgorithm`（Chromium 必读）—— **#108 曾把这条误排除**，因为没写清"在哪个解析层不是"（浏览器层 vs RP 层）|
-| 190 | 见 05 篇 #190（内容指纹全字段，含  11 字段） |
-| 190 | 见 05 篇 #190（内容指纹扩为全字段，`fido2Credentials` 11 个字段也进摘要） |
-| 163 | 🔴 Firefox Android 通行密钥「取不到」= **浏览器根本没发请求**：m_kato 原文「只在 `Discoverable Credential` required 时才走 Credential Manager」（Bugzilla 1862132，Android 13 及以下只走 GPM）⇒ **非本仓库缺陷，代码侧无从修** |
-| 195 | 🔴 ① `keyAlgorithm` 同一把密钥两个名字：`PasskeyCreateActivity` / `CipherMapper` 写 `"ECDSA"`，`KdbxPasskeyCodec` 写 `"ES256"` ⇒ 任何按算法名判断的地方在**一半数据上判错且不报错**。修法 = `core:model` 新增 `PasskeyKeyAlgorithm`，三处统一引 `ES256`（具体算法名，不是族名）。② 四处 `FLAG_MUTABLE`（解锁动作 / 密码候选 / 通行密钥候选 / 创建入口）—— `AutofillIntents.pending` 早就 IMMUTABLE，**同一条规则只执行了一半** ⇒ 统一改 IMMUTABLE（extras 带 `requestJson`/`credentialId`，可写 = 能让签名指向另一把密钥） |<br>⚠️ 不要加"两种算法名都认"的归一化：那会让"该写哪个"永远悬着。<br>判据：**同一条规则写在两处、只改一处，看起来就"已修"了**（同 #120 / #193） |
-| 196 | 🔴 创建通行密钥**完全不校验** origin 与 rpId 的从属关系：origin 推导顺序与 GET 侧相反，且末级是**凭空构造**的 `"https://$rpId"`（任何没带 origin 的请求都被判合法）⇒ 新建 `PasskeyOriginPolicy`（主机相等、或 rpId 为可注册后缀、且 rpId 不得宽于可注册域），删掉凭空构造的兜底，`Rejected` 直接 `fail`（**文案不含域名**，reason 只进日志） |<br>⚠️ **不能用 `UriMatcher.sameSite`**：那是 Cookie 口径（可注册域相等），会让 `a.example.com` 与 `b.example.com` 互相通过，而 WebAuthn 里两者互不通用。<br>顺带核实**不是漏洞**：`isSameRpId` 是精确匹配（合规）；`CallingAppOrigin` 已是自证式读取 |
-| 197 | 🔴 `authenticatorSelection.residentKey` 从不读，`discoverable` 硬编码 `true` ⇒ 库里所有通行密钥都自称可发现凭证，筛选 / 统计全错，条件发现流程会把 RP 声明为 `discouraged` 的凭证也列出来 ⇒ 新建 `PasskeyAuthenticatorSelection`，按 `required` / `preferred` / `discouraged` / 旧 `requireResidentKey` / 缺省 逐项判定 |<br>⚠️ 缺省记 `true` 是**有意偏离** WebAuthn L2 的 `discouraged` 默认（与 Bitwarden Android 一致），理由见类 KDoc。<br>🔴 本条顺带挖出**测试基建坑**：单测里的 `org.json` 是 mockable 空壳（连 `JSONObject(String)` 构造器都是空的）⇒ `testRuntimeOnly(libs.org.json)` + `UnitTestEnvironmentTest` 守卫，详见 03 篇 #197.4 |
-| 208 | 🔴 注册请求里的 `excludeCredentials` **从不读** ⇒ RP 明确声明「这些凭证我已经有了」时仍会建出第二把同 rpId 的通行密钥（WebAuthn §6.3 要求此时中止并回 `InvalidStateError`）。修法 = `PasskeyExcludePolicy`（解析失败落在**增益侧**不阻断，命中**必须**拦）+ `PasskeyCreateActivity.createPasskey()` 起协程**之前**判定 |<br>⚠️ 判定集合 = `loginCandidates`（通行密钥只挂在登录条目上，本流程写入目标也只有那里）。<br>判据：**规范里写死的语义，不实现就是洞**（哪怕不是安全缺口，后果直接落在体感上） |
-| 211 | 🟡 同上那条 `fail(...)` 的 `type` 写成了裸字面量 `"InvalidStateError"` ⇒ GMS 侧按字符串分派时落进"未知类型"，浏览器 `navigator.credentials.create()` 拿到的 reject 原因不是规范的 `InvalidStateError`，站点无法提示"已注册过"。改用库常量 `InvalidStateError.TYPE_CREATE_PUBLIC_KEY_CREDENTIAL_INVALID_STATE_ERROR`（= `androidx.credentials.TYPE_INVALID_STATE_ERROR`，已 `javap -constants` 核对） |<br>判据：**跨进程协议字段永远用对方的常量，不写字面量** —— 字面量本地测试恒绿，只在真机 + 真 RP 上暴露 |
-| 190 | 见 05 篇 #190（内容指纹全字段，含 `fido2Credentials` 11 字段） |
+> 逐条明细（# → 标题 → 分篇）见 [`03-通行密钥与凭据提供商.md`](./issues/03-通行密钥与凭据提供商.md)。
 
-### [04-锁与解锁](./issues/04-锁与解锁.md) — 锁态模型 / 解锁 / 生物识别 / 密钥（21 条；2026-10-30 新增 #210「从不」档认知澄清 + 开发者「保持不锁」、#212 开关命中框、#213 双重取反把开关钉死、#214 两层锁 + 「系统锁屏时」档；2026-10-31 #215 认证粒度对齐全局 ⇒ 一次指纹清所有库的自动门禁）
+### [04-锁与解锁](./issues/04-锁与解锁.md) — 锁态模型 / 解锁 / 生物识别 / 密钥（22 条；2026-10-30 新增 #210「从不」档认知澄清 + 开发者「保持不锁」、#212 开关命中框、#213 双重取反把开关钉死、#214 两层锁 + 「系统锁屏时」档；2026-10-31 #215 认证粒度对齐全局 ⇒ 一次指纹清所有库的自动门禁；2026-11-01 #222 新增库不自动纳入快速解锁 = 三条根因叠加）
 
-| # | 标题 |
-|---|---|
-| 3 | Argon2 黄金向量错误 |
-| 15 | 「永不锁定」档位被新规则静默覆盖 |
-| 53 | 快速解锁「覆盖安装 + 重启后不生效」= 三个独立缺陷叠加 |
-| 60 | 锁/解锁模型规范化——**接力必读** |
-| 61 | 查看锁 vs 真锁：两条成功分支必须分开写 |
-| 73 | 覆盖安装后首次解锁慢、指纹弹得晚 —— 密钥运算跑在主线程 |
-| 85 | KEK 健康判据：**探测要宽、失败判定要严** |
-| 88 | debug 包 → release 包**原地覆盖**后，快速解锁（指纹）失效，需重新启用才恢复 |
-| 131 | 多库「锁」的作用域不一致：四把锁四个答案 + 单库动作带全局副作用 |
-| 132 | KDBX 快速解锁比 Bitwarden 慢 100 倍：房间信封包「主密码」而非「派生密钥」 |
-| 133 | 「一次认证开多库」的补开被导航取消 ⇒ 用户被迫按第二次指纹 |
-| 161 | ✅ **已修（2026-10-14 B5）**「PIN 忘记后可在设置里重设」—— 文案承诺了功能，入口不存在（「修改 PIN」+「忘记 PIN」两条路都通；判据：有重设路径 ≠ 忘了凭据的人有重设路径） |
-| 194 | 🟡 附件解密后的**明文**留在 `cache/attachments/<itemId>/`，锁库不清 —— 系统只在"存储空间不足"时才回收，一台大容量手机可能几个月都不回收。修法 = 新增 `SensitiveCache` 统一归口（所有敏感缓存挂同一根 ⇒ `clearAll` 一次删净，**将来加第三种自动被清**）+ 锁库 `clearAll()` + 删条目 `invalidateFor()` |<br>⚠️ 与剪贴板不同：`cacheDir` 这几个子目录**只有本应用会写** ⇒ **无条件清**（少一层判断就少一次"判断错了于是没清"）。<br>⚠️ 别误伤 `cache/dev_logs/`（用户主动导出的日志），有反向锁定用例。<br>判据：**"临时文件"≠"安全文件"** —— 若"它什么时候消失"的答案是"系统缺空间的时候"，等于没有答案 |
-| 203 | 🔴 **`init { scope.launch }` 让测试接缝晚一步生效** ⇒ CI 偶发 `Dispatchers.Main was accessed`（`TestMainDispatcherJvm.kt:45`），本地同版本全绿。三接缝（`testingScope`/`testingIoDispatcher`/`testingBlockableIoDispatcher`）只能构造后赋值，而 `init` 在构造期间就跑、落到 `viewModelScope`；`@After resetMain()` 卸掉旧 Main 时仍在跑的任务就炸。修法 = 抽 `startObservers()`（`AtomicBoolean` 幂等）+ `init` 仅在 `testingScope == null` 自启 + 测试工厂设完接缝后手动调 |<br>判据：**接缝的生效范围必须覆盖"用到它的第一个协程"**，`init` 天然不满足。<br>⚠️ 不是"再 setMain 一次"能解决的：问题是有**两个** Main，不是 Main 被卸掉 |
-| 188 | 🟡 锁库**不清剪贴板**（密码留在里面任何 App 可粘）+ 复制**网址**被当敏感内容 30 秒后清空 ⇒ 新增 `VaultixClipboard.clearNow()`（只在确认是自己放的才清，读不到**什么都不做**；判据 `EXTRA_IS_SENSITIVE` 或 label）；`doCopy` 改 `sensitive = !isUri`。⚠️ `clipboardScope` 从 `Main.immediate` 改 `Default` —— 主线程 `delay` 会被 Doze / 界面忙整体推迟 |<br>判据：**「定时清理」必须配一个「立即清理」的触发点**，锁库这一刻正是最需要它的时候 |
-| 189 | 🟡 熄屏**不保证**触发 `onStop`（媒体播放 / 画中画 / `showWhenLocked` 下 Activity 仍 resumed）⇒ 「离开 5 分钟自动锁」熄屏一夜也不锁。修法 = 同时监听 `ACTION_SCREEN_OFF` 并复用 `onAppBackgrounded()` 分流（`Never`/`OnAppRestart` 档位不变）。⚠️ 单测里 `onScreenOff()` 后直接推时间是**假红**，要先 `settle(m)` |<br>判据：**「用户看不见了」至少有三条独立通路：熄屏 / 切后台 / 分屏** |
-| 210 | 🟡 「从不」档 ≠ 用户以为的「清后台/锁屏回来要验证」。`Never` 在任何触发源下都不锁、进程死亡后由信封免交互恢复；用户想要的那套行为其实是 **`OnAppRestart`（重启 App 时）** 档。真机若两版表现不同，先查**实际档位**（设置→锁与安全那行副标题）与**查看层锁/门锁待重装**，别先改锁模型。按用户要求补 **debug-only「保持不锁」开关**（设置→开发者，与日志同组）：偏好 `dev_relax_screen_lock`（默认 `true`），只在 `OnAppRestart` 分支生效，读失败按 `true`（锁） |<br>⚠️ `VaultixPreferences` 已顶格 40 函数 ⇒ 写口做成 `@set:JvmName` 的 write-only 属性。<br>⚠️ relaxed mock 的 `Boolean` 恒 `false` ⇒ 会让 `OnAppRestart` 用例静默变绿，必须显式 stub。<br>判据：**给"开发便利"开口子时，只拦那一档、且默认值必须是安全侧** |
-| 212 | 🔴 **#210 的开关「点了没反应」**（真机回归）。数据流没问题，问题在**命中框**：M3 `Switch` 画出来 52×32dp，`toggleable` 的命中框就是这 52×32dp，而 `SettingsRow` 这行没传 `onClick` ⇒ 行内唯一热区只有 32dp 高，拇指上下差 8dp 就落空。⚠️ 给 `Switch` 包 `Modifier.minimumInteractiveComponentSize()` **无效**：它只是**提供** `LocalMinimumInteractiveComponentSize`，`Switch` 的实现里**没读**（读它的是 `Checkbox`/`RadioButton`/`Slider`）。修法 = `SwitchWithTouchTarget` 让开关占 52×48dp 格子（`Switch` 仍居中画 32dp，视觉零变化），`SettingsSwitch` 内置 + `CapabilityToggle` 三分支共用；矮行（`DisplayOptionsSheet`）改 `Spacing.md` 刚好装下 |<br>⚠️ 别用 `Box.clickable` 扩热区：内外都收到点击 ⇒ 切两次弹回原样，症状同样是"没反应"。<br>判据：**"点了没反应"先量命中框，别先怀疑数据流** |
-| 213 | 🔴 **#212 之后仍然"点不动"**：双重取反把开关接成**恒等映射**。偏好第一版是反义（`true`=仍需验证），UI 又在 `onCheckedChange` 里取反一次；而 Compose `Switch` 的回调传进来**已经是新值**（`!checked`）⇒ 写入 `!(!checked)` = 当前值 ⇒ 每次点击都写回旧值、状态永远不变（用户："始终是打开状态"）。⚠️ 数据流单测全绿、detekt 也看不见 —— 写入是成功的，只是写的是同一个值。修法 = 语义翻正（`true`=保持不锁，默认 `false`）+ **换键 `dev_relax_screen_lock_v2`**（旧键存的是反义，复用会让老机器的 `true` 静默变"不锁"）+ UI `onCheckedChange = viewModel::setDevRelaxScreenLock` **不再取反**；`VaultLockManagerImpl` 改 `if (!…)`，读失败默认 `false` |<br>⚠️ 改名要问"`true` 时开关该是开还是关"，不同向就一定会有人补一个 `!`。<br>⚠️ 改语义必换键：旧数据在新语义下会被反向误读，且通常朝"放松安全"的方向。<br>判据：**"点了永远不动"先怀疑 `f(!x)=x`，别只怀疑命中框** |
-| 214 | 🟢 **「从不」档对齐 Bitwarden：两层锁**（密钥层不锁 / 界面层验指纹）+ 新增「系统锁屏时」档。原 `Never` 有两个洞：① `AutoRestoreTrigger` 用**免认证信封**恢复（清后台后静默开回来）② `VaultixApplication`/`AutoLockController` 对 `Never` 直接 return ⇒ 没有东西挡界面。⚠️ 不能按直觉"熄屏就锁库"：那会让填充重新认证、密钥清零，违反用户"填充不受影响、其他的不变"。修法 = 复用已有的 `viewLock`（#61，只挡界面不动密钥），新增 `AutoViewGate` 在**仅两个**时刻自动置位（`ACTION_SCREEN_OFF` / 信封恢复且 `opened>0`），自动标记存 `autoViewLockedIdsState` **子集** ⇒ `AutofillActivity` 看穿自动、仍尊重手动（`anyManualViewLocked`）。五个前置条件（已解锁库/开关/`Never`/**指纹可用**/开发者不锁）缺一即跳过；读失败 **fail-open**（挡界面属可用性，与 `devRelax` 的 fail-closed 相反）。另加 `VaultTimeout.OnSystemLock`（`-3`，用严格 `isDeviceLocked()` + 300ms 复查）|<br>⚠️ 把"密钥在不在内存"和"界面要不要验证"合成一个布尔，必然在"填充要认证"和"清后台能进"之间二选一。<br>⚠️ 自动置位的锁态必须是**可区分子集**，否则下游只能二选一，而"一律放行"是安全倒退。<br>⚠️ 门禁必须先问"退化路径"：没有指纹时门禁 = 每次回来输主密码，所以"指纹可用"是硬前置条件。<br>⚠️ `-3` 与"负数=旧键 Never"冲突：`fromLegacyMinutes(-3)` 仍返回 `Never`，用 `assertNotEquals` 钉死。<br>判据：**"锁"至少两层，先问锁哪一层；再问这层退化时长什么样** |
-| 215 | 🟢 **「进 App 要验两次指纹」—— 认证是全局的，门禁标记却是按库的**（#214 的直接后续）。用户：「进入 app 时候验证指纹怎么需要两次，两个密码库？两个密码库不应该是同一个指纹吗，指纹检验一次就够了啊」。真因是**粒度错位**：① `AutoViewGate` 熄屏时给**每个**已解锁的「从不」库各打一个 `automatic` 标记；② `RootNavViewModel` 判据是「**任一**库带查看锁 ⇒ 收回解锁页」；③ 认证成功只调 `clearViewLock(vaultId)` ⇒ 只清当前库 ⇒ 切下一个库再验一次，**验几次 = 用户有几个库**。⚠️ Bitwarden 没这个 bug 是因为它的锁定态是**账号级**，门禁与认证天然同粒度；#214 把门禁细化到库、却没同步细化认证。修法 = 把**认证**粒度对齐到全局（不是把门禁粗化）：新增 `clearAutoViewLocks()`，`viewLockedIds -= autoViewLockedIds` 子集相减；UI 一行 `clearViewLock(vaultId)` → `clearAutoViewLocks()`。⚠️ 刻意不用 `clearAllViewLocks()`（会连带抹掉**手动**锁 = 安全倒退），也不在 UI 里 for 循环 `clearViewLock`（仍是逐库，且漏掉之后才出现的库）。测试两层各钉一遍：`ViewUnlockScopeTest` 钉「UI 到底调了哪个方法」，`VaultSessionManagerTest` 钉集合代数（自动跨库全清 + 手动原样保留）—— 只测数据层的话，UI 改回去依然全绿 |<br>⚠️ 认证粒度必须与门禁粒度对齐：一个全局、一个按库，立刻退化成「每库各验一次」。<br>⚠️ 「存储方式」不许升格成「语义」：按库存标记是为了知道锁哪几个库，不是让用户按库出认证。<br>⚠️ 要扩大清除范围时，正确解往往是**新增一个更精确的方法**，而不是放宽已有的那个。<br>判据：**用户说「验一次就够了」时，先查认证粒度和门禁粒度是不是同一个粒度** |
+> 逐条明细（# → 标题 → 分篇）见 [`04-锁与解锁.md`](./issues/04-锁与解锁.md)。
 
 ### [05-KDBX本地库](./issues/05-KDBX本地库.md) — KDBX 本地库（24 条；2026-10-20 新增 #178 并发编辑静默丢一笔 / #179 writeLocks 只增不减；2026-11-01 新增 #219 转换载荷与文件夹读写两侧都没接）
+
+> 逐条明细（# → 标题 → 分篇）见 [`05-KDBX本地库.md`](./issues/05-KDBX本地库.md)。
 
 > ★ **「库选择 / 默认库 / 快速解锁」的完整逻辑定稿在
 > [`decisions/库选择与快速解锁-逻辑定稿.md`](./decisions/库选择与快速解锁-逻辑定稿.md)**
 > （用户 2026-09-14 逐条拍板，**已闭合，别重新论证**；含第一批任务清单）
 
-| # | 标题 |
-|---|---|
-| 59 | M2 KDBX 落地：引擎选型与「为什么没搬 Keyguard」 |
-| 64 | KDBX 集成：与 Bitwarden **不是同一套会话模型** |
-| 69 | KDBX 添加入口挂在**不可达路由**后面 ⇒ 集成交付了却用不到 |
-| 93 | 快速解锁（生物识别）对 KDBX **结构上不可实现** ⇒ 开关点了必然失败（**2026-09-14 已定方案：Keystore 包裹主密码 + keyfile**） |
-| 94 | 重复添加同一 KDBX 文件 = **完全静默**（解锁成功但零反馈） |
-| 95 | 库卡片把 SAF 原始 `content://` URI 裸露给用户 |
-| 96 | 【结构】多库并存时**没有「切换密码库」的正面入口** ⇒ KDBX「找不到、打不开」（96.1：冷启动重走解锁是**安全设计**，别当 bug 修） |
-| 98 | KDBX 启用**生物识别**快速解锁 = **必闪退**：KEK 是 auth-per-use，`wrap` 绝不能放在 BiometricPrompt **之前**（**2026-09-14 已修：两阶段 `prepare`/`commit`/`discard`**） |
-| 99 | 设置里点**未解锁**的库 ⇒ 条目页/验证码页**全白**（`orEmpty()` 抹掉了「锁着」这个唯一原因；**2026-09-15 已修：未解锁项点击改去解锁页 + 两页新增锁定空态**） |
-| 106 | ✅ **已修（2026-10-01 W2+W3）**：原来 —— 读路径分流了 KDBX、写路径没分流 ⇒ 在 KDBX 库**新建**条目静默丢失（写进 Room 孤儿行，读侧走 `Kdbx.contentOf` 永远看不到）、**编辑**条目报「条目不存在」（id 是 `itemIdOf(uuid)`，不在 Room）。**2026-09-17 排查 OneDrive 前置条件时发现，未修** |
-| 135 | 🔴 **kotpass 会原地改写你传进去的 keyfile 数组**（`EncryptedValue.fromBinary` 就地 XOR，而 `parseKeyfile(32 字节)` 又原样返回同一引用）⇒ 调用方那份字节用完就废。**真实受害点**：`LocalUnlockEnrollment` 先 `Kdbx.verify` 再拿同一份数组组信封 ⇒ **带 keyfile 的库启用快速解锁后，指纹再也开不了它**。**2026-09-30 写 W0 新建库单测时红出来，已修**（在唯一边界 `buildCredentialCandidates` copy；判据：交给第三方库前先 copy + 「同份密钥连用两次都要成功」用例） |
-| 136 | ⚠️ **kotpass 的 `getGroupBy` 会返回 null，即使谓词对根组恒真、且那个组确实是 `content.group.groups` 的直接子项**（同份数据用 `groups.any {}` 遍历就能找到）。上游源码与字节码看着都对 ⇒ **行为与源码不符**。**处置：不再用它做存在性判断，自己遍历**（`Group.containsGroup`）。★ 判据：第三方 API 行为与源码不一致时以行为为准，且**"找不到就返回 null"这种静默失败签名不能用于数据安全判断** —— 它会让调用方把"查不动"当成"不存在" |
-| 157 | 🔴 KDBX 软删除 / 永久删除**谎报成功** |
-| 158 | ⭐ KDBX **主写路径**绕过往返自检，而"保底"的 `Kdbx.save(File)` 是一条死路径 |
-| 164 | B6：KDBX 通行密钥「读得到、存不下」—— writer 早就写好了，仓储层一刀切拒绝（判据：下游能力就绪 ≠ 上游放行） |
-| 165 | A1：KDBX 收藏是静默 no-op —— 读写两头都没有（落 `VPX_FAVORITE` 工具区；用户可见的键用户就能改） |
-| 166 | A2：KDBX 文件夹 App 内完全不可见 —— mapper 早就映射好了，缺的只是消费方（映射好了 ≠ 用户看得见） |
-| 167 | A3：KDBX 库能建出「类型是卡、字段全空」的残骸 —— writer 静默丢字段 + 导入绕开表单 ⇒ 三层防线 |
-| 178 | 🔴 `mutate` 的读-改-写不原子 ⇒ 并发编辑**静默丢一笔**、两次都返回成功（`ConcurrentHashMap` 只保护单次操作） |
-| 179 | `writeLocks` 只增不减 —— 锁掉/删除的库仍握着一把活锁（`lock` 要一并 `remove`，且先 `close` 会话再丢锁） |
-| 190 | 🔴 `contentFingerprint` 只摘 5 个字段 ⇒ #185 写回基线防线对「改网址/改 TOTP/改卡片/改自定义字段/改收藏/换文件夹」**完全失效且静默**。修法 = 全字段 + `FIELD_SEPARATOR`（消除可构造碰撞）+ Map 按 hash 排序（顺序不稳=假阳性）+ `ABSENT/PRESENT` 区分 null 与空串。验证用**表驱动** `FIELD_MUTATORS`（21 字段逐个断言必变） |<br>纪律：**给 `VaultItem` 加字段必须往 `FIELD_MUTATORS` 里加一条**，否则「全字段」会随模型演进退化回「部分字段」 |
-| 169 | A4：KDBX 安全笔记类型往返翻转 —— 空笔记（备注可空）三字段全空 ⇒ 启发式判登录 ⇒ 存盘再读回**静默翻成登录**（落 `VPX_SECURE_NOTE` 工具区；读侧三态：marker 优先 / 缺失回落 / 显式假值信任标记；#121 三态压二值同款事故） |
-| 170 | A6：KDBX 标准字段「内存保护」属性被静默剥掉 —— Title/UserName/Notes 无条件写 Plain，第三方库受保护的用户名/备注落盘即丢 `Protected="True"`（丢的不是值，是值的属性；从序列化边界倒推坐实） |
-| 219 | 🔴 JSON→KDBX「无损」是空话：卡/身份/SSH/密码历史 **读写两侧都没接**（写侧不写、读侧不产出 ⇒ 只补一侧 = 写进文件读不回来），文件夹还被 `folderId = null` 主动丢弃。修法 = `VPX_CARD_*`/`VPX_IDENTITY_*`/`VPX_SSH_*`/`VPX_PW_HISTORY_n`/`VPX_REPROMPT` 五组专属键 + `createFolderPath` 按 `/` 逐级建组 + 类型判定顺序改「载荷 > 标记 > 启发式」 |<br>判据：**「支持某类条目」必须以往返为证**，领域模型有字段 / 写侧写了字段都不算 |
 
 ### [06-界面与交互](./issues/06-界面与交互.md) — 界面 / 布局 / 交互动效 / 空态（51 条，2026-09-26 起含 #120–#123、#126、#127；2026-10-01 起含 #142–#144；2026-10-04 起含 #162；2026-10-21 起含 #177；2026-10-22 新增 #181 详情页假"不存在"；2026-10-24 新增 #182 筛选面板边界与滚动后展开、#183 权限页行尾不齐与状态卡曲率、#184 首启 3 页引导；2026-10-27 新增 #198 底栏液态玻璃、#199 文件夹 CRUD；2026-10-28 新增 #200 液态玻璃整页变白、#205 底栏高度塌 0；2026-11-01 新增 #216 图标空帧与尺寸算错；#217 CI 连红 7 次的三个真因）
 
-| # | 标题 |
-|---|---|
-| 20 | Quick Settings 磁贴「加了不显示 / 空白」 |
-| 21 | Android 11+ 查不全已安装应用（「关联应用」列表很短） |
-| 31 | 设置页与 Bastion 的信息架构差距（本轮修复，2026-09-10，be8a5bf） |
-| 38 | 搜索框「乱跳」——三处顶栏写法不一致 |
-| 56 | 「整行点击 = 复制」与「按住后滑动删除」的手势冲突 |
-| 57 | 沉浸式顶栏：必须「浮在内容之上」才成立 |
-| 58 | 验证码页「统一进度条」与详情页「去动态验证码」 |
-| 62 | 点库名展开的筛选条必须「浮在内容之上」 |
-| 67 | 顶部 / 底部「让位」写在外层容器 padding 上 ⇒ 三个症状同一个根因 |
-| 68 | 手势有实现但**无可感知反馈** ⇒ 功能等于不存在 |
-| 70 | Tab 切换闪一下 —— 进出动画不同步造成的「双向半透明」漏光 |
-| 71 | 长按多选缺失 / 卡片按钮冗余 —— 对齐 Bastion 的「选择模式」规格 |
-| 76 | 沉浸式让位**必须写在滚动内容里**，写在滚动容器外的 padding 上就永远不沉浸 |
-| 77 | 手势要**分层**：长按只负责「进选择」，红底与位移只由手指产生 |
-| 80 | `PullToRefreshBox` 指示器默认贴容器顶 ⇒ 与「让位后的列表首条」之间露出空隙 |
-| 81 | 「手势返回时画面缩小 1~2 帧」= Android **预测式返回的预览**，与转场无关 |
-| 84 | 「空」有三种状态，塌进一个 `isEmpty()` 分支就出**假空态** |
-| 86 | 同形状的两层圆角矩形叠放，边缘**必漏一条缝** |
-| 87 | 转场动效的边界：**只允许 `translationX`**，且用户已明确"不要花哨动效" |
-| 89 | 应用图标：内层图形必须**等比缩放 + 质心对齐**，手工拼曲线会让它**漂移** |
-| 97 | SSH 密钥类型**只能看、不能填** —— 新建/编辑时专属字段无输入框（**2026-09-14 已实现：`SshKeyFields` + 指纹由公钥自动推导**） |
-| 103 | ⚠️ **回 ViewModel 读 `_state.value` 拿界面数据 = 漏订阅**：页面打开是空态、点一下搜索才出现（通行密钥页；验证码页早已踩过同一坑）—— **2026-09-15 已修** |
-| 107 | 全屏编辑壳上下两条栏在深色 / OLED 纯黑下呈"黑带" ⇒ **真根因是 `Dialog` 窗口背景（`TYPE_APPLICATION_PANEL` 不继承 Activity 的 edge-to-edge）+ `targetSdk 35` 起 `window.statusBarColor`/`navigationBarColor` 是 no-op**；定稿 = **满宽薄栏 + 与 `surface` 匹配的三档渐变保护层**（官方 edge-to-edge 的 Do）。⚠️ 中途曾误判为"形状问题"改悬浮胶囊，反而把黑带弄明显（第四轮用户否掉）。<br>⚠️ **2026-09-21 第六轮再修两处**：① 栏体 72 → **56dp**（`Spacing.md` → `Spacing.xs`，去掉 24dp 纯留白）② **渐隐段必须落在内容侧** —— 第五轮把渐隐钉在"层底 = inset 空白区"⇒ 渐变等于没做、按钮上沿仍是**硬边**。⚠️ 这个 bug **只看代码发现不了**（两种写法数学等价），必须逐像素模拟「alpha + 该处有无内容」。详情见 [06-界面与交互](./issues/06-界面与交互.md) #107「★ 第六轮更正」。 |
-| 117 | 隐藏字符 `•` → `*`：用户嫌圆点不好看，但**等宽字体下两者字形盒宽度不同** ⇒ 位数变化时遮罩串宽度会跳（观感问题，非功能问题）。纪律：用户推翻"有理由的设计"时**改实现但保留理由**（降级为"已知代价"留档） |
-| 118 | 设置页「网盘账号」：**主操作被做成 M3 最弱按钮**（登录与注销同款）；**做了错误分流却没让用户看见**（只进两秒 snackbar，而未连接是持续状态）；connected 回答不了「现在还能不能用」（账户在、静默刷新被掐断 = 唯一会悄悄坏掉的状态）；`forEach` 里的 `LaunchedEffect` 必须包 `key()`。⚠️ 自造 bug：写入用 `storedId`、删除用 `accountId`（差 `.utid`）⇒ 静默删不掉 |
-| 110 | 🔴 Compose Dialog 里系统栏逻辑整段静默失效：LocalView.current 取在了 Dialog 之外（判据：dumpsys window windows 看 apr=） |
-| 111 | 🔴 谎报成功：界面弹已复制下一个验证码，剪贴板里什么都没放（算了却没人用的死变量） |
-| 120 | ⭐ 「不猜状态」原则**只修了一半**：同一次改动里 3 个开关用占位、7 个用裸 `Switch`。根因在类型层：`StateFlow<Boolean>` 的 `initialValue = true` 把「偏好还没读出来」伪装成「明确开着」；泄漏点是 `FillBehaviorSection`（`Boolean?` 到了这一层又降回 `Boolean`）。**同一原则"改一半"比没改更危险 —— 它让"已修"看起来成立** |
-| 121 | ⭐ `checked = x is S.On` 把三态类型压成二值开关：`Partial`（「已开启但只覆盖一部分应用」）被渲染成**关着的开关**，用户点它是"打开"还是"补齐"无从判断。类型检查、detekt、`when` 穷尽性**全都查不出** —— 压扁发生在"类型 → 界面"的缝里 |
-| 122 | ⭐ 「注释里写清了语义」**不等于**「界面表达出来了」。判据：**当注释不得不解释"点这个按钮是 A 不是 B"时，错的是控件，不是注释**。解法是把它拆成 `Partial → "继续"按钮` / `On,Off → Switch` 两种控件，而不是继续给开关写解释 |
-| 123 | 设置行副标题不截断 ⇒ 长文案撑高整行，破坏"一组一行"的分组感。附带**更正 detekt 阈值误读**：`LongParameterList` 是**参数数 ≥ 8 就报**（"阈值"= 触发点，不是上限）—— 项目里 `FormValues.kt:42`、`TotpCodesScreen.kt:672` 两处注释写的「8 个刚好」是**错的** |
-| 126 | ⭐ 新增探针 `check_orphan_strings.py`：834 条字符串里 **126 条零引用**。定位是**报告器不是删除器** —— 删孤儿要逐条对着「被"搬走"的留，被"取代"的删」人工判，且留档的注释本身也零引用 ⇒ 这个数**不可能**归零，只能"只减不增"（基线 126 条）。方向性取舍：**宁可少报几条孤儿，也不能误删在用的**（误报编译期可见，误删运行时才炸） |
-| 127 | 🔴 **「以为没新增违例」**：删代码的副产品 —— 删 `passkeyCount` 后它唯一用途的 `itemRepository` 成了死代码（`UnusedPrivateProperty`），而提交信息写的是「无新增」。**净数会骗人：抵消（消 1 增 1）与真的没动在总数上完全一样。** 判据应改成**逐条集合差**（`git worktree` 开基线 + 掐掉行号归一化 + `comm -13` 输出必须为空） |
-| 142 | ⭐ 顶栏标题折两行：`softWrap = false` 会让整件事**静默不发生**（不报错、不崩、detekt 不报，只是算出的 `maxLines` 被下游忽略）。纪律：**凡"算出来的排版结论"，都要回头确认渲染端开关没被关掉**。附带：固定栏高下两行有字号预算（26sp 两行 = 78dp 超出 72dp ⇒ 压到 20sp）；**收起态 16sp 不折两行** |
-| 143 | 「分成两**栏**」在手机上落地应为**两行**：6 寸屏左右各占一半 ⇒ 两栏都变窄、两边都读不清。⚠️ **"分栏"与"分行"在本项目指向完全不同**的实现，下次先确认 |
-| 144 | ⭐ 布局里**「谁来吸收挤压」是一项显式设计，不是默认值**：状态行拆成两行后，第二行没有任何可压缩项 ⇒ 窄屏 + 长角标会溢出。解法：把压缩责任转给角标（`weight(1f, fill = false)`），条目数继续不压缩（锚点） |
-| 159 | 🔴 防截屏只覆盖了 1 个 Activity，另外 9 个**全裸** ⇒ 改成生命周期级统一挂载（"记得写一行"的模式必然漏） |
-| 162 | 🔴 Firefox Android「能看到填充提示但条目匹配不出来」⇒ **空串穿透**（`?:` 只对 null 短路）+ **GeckoView 兜底全落空**；修法 = 空白防御 + 无域名降级（对齐 Bitwarden 搜索兜底） |
-| 177 | 🔴 文档承诺四档响应式、代码只有一刀切两档 ⇒ **文档大于事实**；`Docs/08 §4` 已拆成「已实现 / 计划」，三档化 + 双栏 + 铰链避让逐项登记为待做 |
-| 181 | 🔴 详情页闪过 1 帧「条目不存在或已被删除」⇒ **「未知」借用了 `null` 表达**；修法 = `UiState.itemLoaded` + `loading && item == null` 才画转圈。⚠️ 中途误判为 Room 上游卡订阅（`.onStart{emit(null)}`），**探针实测证伪** |
-| 182 | 🟡 筛选 chip 行贴条目 + 往下滑后展开难看 ⇒ **两条边界都没有落点**；修法 = 下内边距 8→12dp + 让位另加 8dp 呼吸缝（高度改算式）、展开时「外壳下移 56dp + 逐项 `graphicsLayer` 反向补偿」把列表顶端接在面板下沿（**先让位再滚**，两帧） |<br>⚠️ **182.1 更正（当晚）**：「滚到顶端」被用户否决（「会直接返回最上面，这样设定不友好」）⇒ 改为偏好 `itemsFilterJumpToTop`（**默认关**），关闭时**完全不碰滚动位**；开关在「条目显示」浮层。判据：**「画面连续」≠「位置连续」**
-| 183 | 🟡 权限页行尾不齐 + 状态卡曲率打架 ⇒ **同一屏两套规格的两种形态（缩进 / 曲率）**；修法 = 抽 `TrailingSlot`（`min 112dp` + `CenterEnd` + `TouchTarget`）把状态与按钮装进同一外框，`TrailingLabel` 统一 `labelLarge`；两页状态卡 28dp → `VaultixCorner.Panel`(16dp) |<br>⚠️ 宽度必须**写死**：`wrapContent` 会让每行各贴各的，宽度不够则换行 ⇒ 行高 72→96dp。<br>⚠️ **必须两页同改**（`PermissionsScreen` + `AutofillSettingsScreen`），只改一页等于把问题挪个位置 |
-| 184 | 🟢 首次启动引导缺失（`Docs/08` 的 S2「3 页引导」从未实现，品牌空态页顶替了它）⇒ 新增 `OnboardingPreferences`（独立类）+ `RootNavViewModel.showOnboarding` + `ui/onboarding`（Pager 3 页 + Canvas 矢量插画） |<br>🔴 准入条件是「**无库**」且「**没看过**」，**不是**「第一次装 App」：只看前者 ⇒ 删光库的老用户反复被引导；只看后者 ⇒ 从旧版本升级的老用户被拦一次（键不存在读作 false）。<br>⚠️ 只在 `!routedOnce`（真冷启动）时落引导，否则「删掉最后一个库」会把人从设置页拽走。<br>⚠️ 第 2 页说「两个库地位一样」，插画里两块就**必须等大**。<br>⚠️ 测试桩别手写：`DataStore.edit{}` 内部也读 `data`，桩写错会造出产品里不存在的失败路径（本轮真踩） |
-| 191 | 🟡 搜索只比标题/用户名/uri ⇒ 备注与自定义字段里的信息「看得见却搜不到」（官方与 KeePassDX 都覆盖）。补 `notes` + `customFields(name/value)`；**明确不搜密码**并配反向测试 `passwordIsNotSearchable` |<br>判据：**界面上展示出来的字段都该可搜索**，例外必须写进注释 + 反向锁定 |
-| 198 | 🟢 底栏**液态玻璃**（用户需求：通透效果 + 设置「主题模式」组内开关）。Compose 没有"模糊背后像素"的 API ⇒ 唯一可行路径是 `graphicsLayer { renderEffect = RenderEffect.createBlurEffect(...) }`（作用于图层输入 = 背后已合成内容），**只有 API 31+**。新增 `ui/glass/LiquidGlass.kt` 作唯一实现点（参数集中常量），`VaultixBottomDock` 分支 + 抽 `DockRow` 共用布局，偏好链 DataStore→VM（初值 null）→SettingsScreen 开关→MainActivity→VaultixApp→MainShellScreen |<br>🔴 **三处静默失效**：① 模糊挂内层 / 先铺不透明 Surface 再模糊 ⇒ 糊的是自己，表现为"开关坏了"；② `fill.alpha == 1f` 把模糊结果整块盖掉；③ API 30 及以下静默降级 ⇒ 副标题须明说"不支持实时模糊"。<br>❌ **有意不做** iOS 26 的折射：需 AGSL 采样源或逐帧 `PixelCopy`，滚动时帧率打穿。<br>⚠️ 连报三次 `Unresolved reference` 的真因：实际调用点在私有函数 `vaultEntryGraph`，不在 `VaultixApp` 函数体 —— **加穿透参数先 grep 谁真正构造那个 Composable** |
-| 199 | 🟢 **文件夹 CRUD**（新建 / 重命名 / 删除）此前**整条写路径不存在**：`FolderRepository` 只有读、`FolderDao` 只有整体替换 ⇒ 用户看得见文件夹却建不了改不了删不了。用户选定三个决策点：**直连 API 失败当场报错** / **KDBX 分组一并支持** / 入口在 **⋮ 菜单「前往」组** |<br>🔴 **为什么不能照搬条目的「本地先行 + pending_ops」**：① `pending_ops` 主键是 `cipherId` + 五种 cipher 操作，装不进 folder；② **`pruneRemovedRows` 会把本地新行当已删清掉** ⇒ 刚建未推的文件夹被下次同步静默删除；③ `FolderDao` 无单行 upsert。⇒ 成功才写本地，失败一个字不改（代价：离线不能建）。<br>🔴 名字禁 `/` `\`：KDBX 的 `VaultFolder.name` 是**完整路径**，带分隔符则层级不可解析。<br>🔴 **两种库删除语义必须分文案**：Bitwarden 只脱标签（条目不删）/ KDBX 递归删整棵子树（不可撤销）。<br>⚠️ `AtomicWriteDao` 的文件夹方法故意**非 abstract**（Room `@Upsert` 已注册实体形态）⇒ 5 个手写测试子类零改动；改回 abstract 会让它们全部编译失败，**这个失败是想要的**。<br>⚠️ 删除代价「数法只能有一处」（`deletionCostOf`），UI 侧 KDBX 那支**刻意不显示条目数**（子组没算进去会系统性偏小，给偏小的数字比不给更危险） |
-| 200 | 🔴 **液态玻璃开启后整个页面变白**（用户原话）—— #198.1 那一轮把源写成「只 `record` 进 layer、**屏幕上不落像素**」，而浮层只覆盖底栏一小块 ⇒ 其余整屏没有绘制命令 ⇒ 露出窗口底色。修法 = `record` 之后 `drawLayer(contentLayer)` **画回屏幕**（与 Haze 一致，所谓"有意分歧"不成立）|<br>🔴 **派生约束**：内容一旦靠 `drawLayer(contentLayer)` 回屏，模糊就**不能**再挂 contentLayer（一块 layer 只有一个 renderEffect，会连屏幕那份一起糊）⇒ 必须挂**独立中转层 effectLayer**（`record(源尺寸){ drawLayer(contentLayer) }` → 挂模糊 → 画到浮层）。<br>⚠️ 采样偏移 `translate(offset.x, offset.y)` 用的是**同值**，不是它的相反数（上一轮写成 `-offset`，糊的是屏幕外一块空白；已抽 `backdropOffset` 纯函数 + 4 例单测）。<br>⚠️ `GraphicsLayer.record` 只有 `ContentDrawScope` 的成员扩展 ⇒ 浮层必须用 `drawWithContent`；且 `record` 不传 `size` 会按浮层尺寸裁内容 ⇒ 必须显式传源的 `IntSize`。<br>⚠️ 源只在 `开关 && isLiquidGlassBlurSupported()` 时登记（老设备别每帧白拷全屏）。<br>判据：**接管子树绘制到离屏 layer 时，必须先回答"屏幕上的像素由谁负责"** —— "没人画"在 Compose 里不是报错，是露底色 |
-| 205 | 🔴 **打开液态玻璃后整条底栏消失**：`LiquidGlassLayer` 的两个子节点都写 `matchParentSize()`，而它的语义是「跟随父尺寸、**不参与**父的尺寸计算」⇒ 父 `Box` 高度停在 `constraints.minHeight` = 0 ⇒ 子节点被 `Constraints(minHeight=0,maxHeight=0)` 测成 0 高 ⇒ `clip(shape)` 裁光。宽度没事是因为外层 `fillMaxWidth()` 给了 `minWidth=maxWidth`。修法 = 层 B 改 `fillMaxWidth()`（按内容测高），成为唯一参与父测量的子节点 |<br>判据：**`matchParentSize` 只能"盖在别人身上"，不能"撑起父容器"** —— 每写一个都要指出"谁在决定父尺寸"，指不出来就是 0。<br>⚠️ 藏了两轮才被发现：第二轮修完是"整页变白"，**屏幕一片白时看不出底栏没了** ⇒ 主诉症状缓解后要**重新完整过验收清单** |
-| 206 | 开发者日志：屏幕显示没有脱敏，`E/F` 兜底把白名单架空 |
-| 216 | ⭐ 图标「每次打开都重新加载、滑动时从空白长出来」——**三个根因**：① `ICON_REQUEST_PX = 96` 是死写的**像素**值（假设密度恒 2x），而 40dp/56dp 在 3x 屏要 120px/168px ⇒ 图标被**放大 1.25~1.75 倍**绘制，高密度机一律发虚（美观根因）；② `LazyColumn` 卡片滑回时**重建 composable**，`AsyncImage` 必过一次协程调度 ⇒ 第一帧必然空白（60Hz 16.7ms，肉眼可见「白圈闪一下」）；③ 旧 `onError` 把失败**永久化** ⇒ 一次 DNS 抖动让该条目本次浏览一直停在首字母。修法 = **组合期同步查 `memoryCache`**（O(1) LRU，命中直接 `BitmapPainter`，不建 request / 不启协程）+ `LocalDensity` 换算 px + 失败 30s 后重试 1 次 + 全局 `respectCacheHeaders(false)`。⚠️ 踩坑：**显式 `memoryCacheKey` 会整条替换 Coil 默认键**（`newCacheKey()` 第一句 `request.memoryCacheKey?.let { return it }`）⇒ `extras` 里的**尺寸丢了** ⇒ 40dp 与 56dp 共用一条缓存、`isCacheValueValid` 判不符 ⇒ 每进一次详情页白解码一轮（不崩不报，只是慢）⇒ 键必须自带尺寸 |<br>判据：**显式覆盖框架算好的键 / 哈希时，要先把「它原本算了什么」列出来并自己补回去**；**容量不是「在加载」的唯一解释**，先算量级再往源码里找 |
-| 217 | 🔴 CI 连红 7 次（#332–#338）才绿：**三个独立问题首尾相接**。① `assertThat(x).doesNotStartWith(...)` —— Truth 的 `StringSubject` **没有这个方法**（只有 `doesNotContain`），是**编译期**错误，报在 `compileFullDebugUnitTestKotlin`；② `SIGNING_KEY_PASSWORD` 与 store 密码不一致，而解码步骤用 `keytool -list` 验（**只验 store 密码**）所以打着"通过"；③ 汇总失败单测的 step 自己 exit 1，把「915 例 0 失败」报成了 CI 红。⚠️ 「0 失败 + exit 1」能并存，是因为 `src/test` 编译失败时一个测试都没跑、而 `test-results/` 里留着**上一轮**的 XML |<br>判据：**汇总结论不能反证"这一步成功"**；**诊断步骤的职责是提供信息、不是下判决**；**校验要覆盖下一步真正用到的每一个凭据**；`cmd \| tee; $?` 取的是 tee 的退出码 ⇒ 用 `PIPESTATUS[0]` |
+> 逐条明细（# → 标题 → 分篇）见 [`06-界面与交互.md`](./issues/06-界面与交互.md)。
 
 ### [07-数据与同步](./issues/07-数据与同步.md) — 数据模型 / 同步 / 会话（25 条；2026-10-01 起含 #147–#152；2026-10-20 新增 #180 下载窗口覆盖本地编辑；2026-10-25 新增 #185 写回基线盲区；2026-10-26 新增 #190 409 弃单、#192 空分组误删；2026-10-28 新增 #202 重复导入去重）
 
-| # | 标题 |
-|---|---|
-| 8 | 「登录易失效」三根因 |
-| 22 | Mapper 读写字段不对称 → 静默数据破坏 |
-| 79 | `PendingOp` 表可以当「未同步」判据，但**只能取条目级操作** |
-| 91 | 全量拉取无条件 `upsertAll` → 覆盖掉队列里的本地改动 |
-| 92 | 4xx 弃单只删队列行不删本地行 → 条目「凭空消失」 |
-| 119 | 三个「服务端有、领域模型没有」的字段被每次编辑静默抹掉 |
-| 139 | ⭐ 「现查」与「快照」**各写一个判据 ⇒ 必然漂移**（将来加状态只改一处，两边都不报错）。解法：判据**收敛到类型上**（`KdbxCloudSyncStatus.impliesLocalChanges`），两处都调它。⚠️ `CONFLICT` 也算"有本地改动"，漏了它 ⇒ 拉取会丢弃用户未上传的改动 |
-| 140 | 异步上传**失败不重试**但**必须落 `FAILED`**（角标能让用户看见；静默失败在密码管理器里最坏）。⚠️ 触发点必须排在 `markLocalEdited` **之后**（顺序反了 ⇒ 上传一份没标脏的状态，条件写会跳过）。并发用**每库一把** `Mutex`（全局锁会让"改 A 库"卡住"改 B 库"） |
-| 141 | 拉取**不要另写一条路径**：`pull()` 只做「`localChanged` 闸 + 复用 `resolveUsingRemote`」，字节处理一行都不自己写（两条路会漂）。⚠️ 闸必须在**拉取之前**，不能"拉完发现冲突再回滚" —— 覆盖了再"恢复"不是恢复 |
-| 147 | ⭐ 别留**恒定失败的占位实现**：它不会兜底，只会让"这条链是通的"在审查时**看起来成立**。本次 `RequiresUnlockSessionReplacer` 从未被注入（`@Inject constructor` 给的是具体类型不是接口），却把「免密重开需要主密码、而主密码只在 app 侧」这句**错误前提**写成了定论 —— 真相是**已解锁会话里就存着那组 `Credentials`** |
-| 148 | ⭐⭐ **同步基线只在"本机真跟上远端"之后才推进**。在「只有远端变」分支推进 `remoteVersionToken` ⇒ 本机改一笔后自动上传，条件写拿已推进的基线会通过 ⇒ **静默覆盖远端新内容**。⚠️ 自动上传接上之后这条链才从隐患变成真事故 |
-| 149 | `stat` 必须在 `read` **之前**：read 之后 stat 可能拿到更新的令牌而会话是旧一版 ⇒ 记成基线等于宣称"已跟上" ⇒ **静默漏改**。令牌偏旧=多拉一次（无害），偏新=漏改（有害且与 #148 同源） |
-| 150 | ★ 新建 KDBX 的两个 SAF 必做项：① `takePersistableUriPermission` 要 `READ \| WRITE`（打开态只要读；新建少 WRITE ⇒「改一条」在**下次启动后**失败）；② **`origin` 取 `stat().remoteId` 而不是请求时那个 URI**（部分 provider 给临时 URI ⇒「库在列表里却点不开」，且**只在那些 provider 上复现**） |
-| 151 | 新建库的落库顺序：**先建文件、后登记** `vaults` 行。反了的话失败会留下**一行打不开的库**，而列表里没有"删掉它"的入口；现顺序最坏只是"文件建了没登记"（用户能自己删）。两者可恢复性差一个数量级。⚠️ 但这不代表该步原子 —— 半截文件由写后读回校验发现 |
-| 152 | 表单校验文案**不要**塞进 `UnlockUiError.Detail`（它契约是"来源层已翻译好"、绕过资源系统）：会与 `strings.xml` 同类文案**分家**，且在**孤儿串检查里隐形**。⇒ 用 `UnlockUiError.Validation` + `ErrorText.validationTextRes`（纯函数可单测）。⚠️ 降圈复杂度时**提前 return 也算分支**（本次 `forKdbx` 那句 return 就是第 15 个） |
-| 153 | ⭐ **TOTP 算法名不做归一化** ⇒ KeePassXC 写的 `HMAC-SHA-256` 拼成 `HmacHMAC-SHA-256` ⇒ 抛异常被上层 `catch` 吞成**恒定的 `000000`** |
-| 154 | 🔴 `period=0` 是**能解析成功**的畸形输入 ⇒ Composable 里算倒计时的纯计算抛 `ArithmeticException` ⇒ 验证码页**整页崩溃** |
-| 155 | 🔴 `toStoredCipherDto` 只拷 14 个字段 ⇒ **每次编辑**都抹掉服务端有、请求体没有的字段（组织条目本地**降级为个人条目**） |
-| 156 | 🔴 离线「新建 → 编辑」再联网，那笔编辑被**静默丢弃**（内存列表与库里的队列行都缓存着废弃的临时 id） |
-| 180 | 🔴 「用远端覆盖/拉取」的**下载窗口**：`read` 要几秒，窗口内的编辑被 `replaceSession` 整体抹掉且记成 `IN_SYNC`（判据必须在 `read` **之前**再查一次） |
-| 185 | 🔴 写回基线盲区：令牌对得上 ≠ 内容来源对得上，远端改动会被静默覆盖（两道防线：编排器不提前推进 token + `KdbxBaseStore` 内容指纹基线；2026-10-26 由 #190 把指纹补成全字段） |
-| 190 | 🔴 **409 Conflict 被当「确定性失败」弃单**（`(400..499)` 一刀切）⇒ 删队列行不重试 ⇒ 远端那条改动**永久丢失**、无提示、无残留。修法 = `HTTP_CONFLICT` 从集合剔除 + `handleOperationFailure()`（409 走 `incrementRetry`）。⚠️ 拆方法是被 detekt 逼的（圈复杂度 16>14，且**提前 return 也算分支**）。⚠️ 测试 404 用例一开始**假红**：夹具 `payload="{}"` 缺 `CipherRequest.type`，请求还没发就抛 `MissingFieldException` 被归成网络类 |<br>判据：**4xx ≠ 可以扔**，401/408/409/429 都是「再试」类 |
-| 192 | 🔴 `pruneRemovedRows` 把「远端没返回分组」当「远端删了分组」⇒ 一次不完整响应能清空本地所有文件夹。修法 = 空分组 + 待删 ≥3 时只报警不删（1~2 个放行，日常删除照常通过） |<br>判据：**「远端没有」≠「远端删了」**，批量删除必须有数量熔断且熔断在保守侧 |
-| 202 | 🔴 **重复导入 = 每个条目两份**：`applyImportedVault` 一律逐条新建、从不合并 ⇒ 用户导两次，库里每条两份，**改了一份、自动填充撞另一份**。修法 = `ImportDuplicatePolicy`（判重键 **type+title+username**，trim+小写归一化）+ `previewImport` 预演「新建 N / 已存在 M」+ 预演没出来时「确认导入」点不动 |<br>判据：**批量且不可撤销的写，之前必须给出可核对的数字，且数字与实际写入一致**；**判重口径只能有一处**。不静默跳过 —— 悄悄跳过用户只会以为文件少了条 |
-| 209 | 改密码后：`passwordRevisionDate` 不更新、密码历史永不增长 |
+> 逐条明细（# → 标题 → 分篇）见 [`07-数据与同步.md`](./issues/07-数据与同步.md)。
+

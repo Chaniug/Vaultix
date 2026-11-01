@@ -1,35 +1,34 @@
 #!/usr/bin/env python3
 """
-ISSUES 索引一致性守护（2026-10-02 双库审计期间新增，见 issues/01 #160）。
+ISSUES 索引一致性守护（2026-10-02 新增，见 issues/01 #160；2026-11-01 适配分篇结构）。
 
 ## 它守的是什么
 
-`.ai/ISSUES.md` 是**索引**，各 `issues/*.md` 是**正文**。两者记的是同一件事
+`.ai/ISSUES.md` 是**索引**，`issues/*.md` 是**正文**。两者记的是同一件事
 （"这个编号是一条坑"），却各存一份 —— 这类"同一事实存两份"必然漂移，本项目已经
-漂移过三次（2026-09-21 / 09-26 / 10-02）。第三次尤其隐蔽：
+漂移过三次（2026-09-21 / 09-26 / 10-02）。
 
-- 01 篇四条独立条目（#102–#105）被写成 `###` 三级标题 ⇒ 按"只数 `## NN.`"的规则
-  **从未被计入**，视觉上还被埋在 #101 的层级里，看着像它的子条；
-- 06 篇题注用了**增量写法**（旧值 33 + 本次新增 1 = 34），于是**上一轮刚加的
-  #142–#144 从来没进过名单**；
-- 两张编号表里有重号与错位（#83 无正文、#88 归错篇、#128 重复两行）。
+## 2026-11-01 的结构变化（重要）
 
-⇒ 光靠"改哪篇顺手改哪个数字"已经被证伪三次。改由脚本全量重数。
+当天按 8.9 §7.1 把 7 个 issues 篇拆成了 **7 个索引 + 41 个 `-partN` 分篇**：
+
+- `0X-xxx.md` = **索引**：头部题注「共 **N** 条」+「章节明细」表（# → 标题 → part）；
+- `0X-xxx-partN.md` = **正文**：`## NN.` 条目在这里。
+
+⇒ 本脚本的统计口径随之改为"**同一分类的所有分篇合并后再数**"，
+并新增一条检查：**主篇「章节明细」表的行数** == 合并后的条数
+（这条替代了旧的「总表编号集合相等」—— 摘要表已按 §7.4 移出，不再有第二份编号名单）。
 
 ## 它查四处（任一不符即 exit 1）
 
-1. **编号集合相等**：某分篇正文里的 `## NN.` 集合 == `ISSUES.md` 该篇表格里的编号集合。
-2. **题注数字相等**：该分篇头部「共 **N** 条」 == 实际 `## NN.` 条数。
-   ⚠️ 两者**互不可证**：03 篇曾出现"写 18 条、只列 16 个号" —— 数字对了名单还是错的。
-3. **索引总表（）顶部的「条数」列** == 实测值。
-4. **分节标题行里的「（N 条）」** == 实测值。
-   ⚠️ **这处是 2026-10-02 补的第四处**，因为 #160 自称把索引校准了，探针却漏了它：
-   分节标题行 `### [01-…](…) — …（44 条…）` 里的数字**既不在总表、也不在分篇题注**，
-   是**同一事实的第四份拷贝**。三处都对、这处没动 ⇒ 探针假绿。
-   教训与 #145.1 同源：**新增"已经查过 N 处"时，要问"N+1 处里漏的是哪一处"**，
-   通常就是那个"看起来不像数据、像说明文字"的位置。
+1. **题注数字**：主篇头部「共 **N** 条」 == 该分类所有 part 的 `## NN.` 合计；
+2. **章节明细行数**：主篇「章节明细」表行数 == 同一合计；
+3. **分节标题**：`ISSUES.md` 分节标题行里的「（N 条）」 == 同一合计
+   （⚠️ 这处是 2026-10-02 补的第四份拷贝 —— 它"看起来像说明文字、不像数据"，
+   所以三次校准都漏了它；见 #160）；
+4. **篇内重号**：同一分类内 `## NN.` 不得重复（`NN.M` 更正子条不计）。
 
-只有**显式写了「（N 条）」**的分节标题行才参与校验（07 篇标题里就一个数都没有，
+只有**显式写了「（N 条）」**的分节标题行才参与校验（07 篇标题里一个数都没有，
 这是合法的 —— 不能反向要求所有标题都带数字）。
 
 外加一条**警告**（不置失败）：跨篇重号的编号列表 —— 它们存在且短期内不会改编号，
@@ -52,11 +51,13 @@ from pathlib import Path
 
 # 正式条目：`## NN.`（`NN.M` 更正子条不计）
 ENTRY_RE = re.compile(r"^## (\d+)\.(?!\d)")
-INDEX_LINE_RE = re.compile(r"^\| (\d+) \|")
-COUNT_ROW_RE = re.compile(r"^\| \[([^\]]+)\]\([^)]+\) \| [^|]+\| *(\d+) *\|")
 SUMMARY_RE = re.compile(r"共 \*\*(\d+)\*\* 条")
 # 分节标题行里的「（N 条，…）」或「（N 条）」——第四份拷贝，只在写了数字时才校验
 SECTION_COUNT_RE = re.compile(r"（(\d+)\s*条")
+# 主篇「章节明细」表：`| 12 | 标题 | [part](./01-…-part1.md) |`
+DETAIL_ROW_RE = re.compile(r"^\|\s*\d+\s*\|.*\[part\]\(")
+# 分篇文件名：`01-构建与环境-part2`
+PART_RE = re.compile(r"^(.*)-part\d+$")
 
 # 已知的历史重号（跨独立的两个坑共用一号）。列出它们是**为了不再困惑**，
 # 不是承认其合理 —— 改编号会让代码注释里的 `见 .ai/ISSUES.md #NN` 全部失真，
@@ -69,16 +70,22 @@ KNOWN_DUPLICATES = {
 
 
 def collect(p: Path) -> dict[str, list[int]]:
-    """各分篇的正文条目编号列表。"""
+    """按**分类**聚合条目编号：主篇 + 它的所有 `-partN` 一起数。"""
     out: dict[str, list[int]] = {}
     for f in sorted((p / ".ai" / "issues").glob("*.md")):
-        nums = [int(m.group(1)) for ln in f.read_text(encoding="utf-8").splitlines() if (m := ENTRY_RE.match(ln))]
-        out[f.stem] = nums
+        m = PART_RE.match(f.stem)
+        stem = m.group(1) if m else f.stem
+        nums = [
+            int(x.group(1))
+            for ln in f.read_text(encoding="utf-8").splitlines()
+            if (x := ENTRY_RE.match(ln))
+        ]
+        out.setdefault(stem, []).extend(nums)
     return out
 
 
 def split_index_blocks(idx: str) -> dict[str, str]:
-    """把 ISSUES.md 切成「篇名 → 该篇编号表区域」。"""
+    """把 ISSUES.md 切成「篇名 → 该篇分节区域」。"""
     blocks: dict[str, str] = {}
     for chunk in idx.split("### [")[1:]:
         name = chunk.split("]")[0]
@@ -99,48 +106,44 @@ def check(root: Path) -> tuple[list[str], list[str]]:
 
     for stem, nums in bodies.items():
         f = root / ".ai" / "issues" / f"{stem}.md"
-        head = next((ln for ln in f.read_text(encoding="utf-8").splitlines() if ln.lstrip("> ").startswith("索引：")), "")
+        if not f.exists():
+            errors.append(f"{stem}: 主篇索引不存在")
+            continue
+        text = f.read_text(encoding="utf-8")
+
+        # ① 题注数字
+        head = next(
+            (ln for ln in text.splitlines() if ln.lstrip("> ").startswith("索引：")), ""
+        )
         m = SUMMARY_RE.search(head)
         if not m:
             errors.append(f"{stem}: 头部题注缺失或没有『共 **N** 条』")
-            continue
-        claimed = int(m.group(1))
-        if claimed != len(nums):
-            errors.append(f"{stem}: 头部题注写 {claimed} 条，正文实测 {len(nums)} 条")
+        elif int(m.group(1)) != len(nums):
+            errors.append(f"{stem}: 头部题注写 {m.group(1)} 条，分篇合计 {len(nums)} 条")
 
-        blk = blocks.get(stem)
-        if blk is None:
-            errors.append(f"{stem}: 索引里没有这一篇的编号表")
-            continue
-        table_nums = [int(m.group(1)) for ln in blk.splitlines() if (m := INDEX_LINE_RE.match(ln))]
-        only_body = sorted(set(nums) - set(table_nums))
-        only_idx = sorted(set(table_nums) - set(nums))
-        if only_body:
-            errors.append(f"{stem}: 正文有、索引缺 → #{', #'.join(map(str, only_body))}")
-        if only_idx:
-            errors.append(f"{stem}: 索引有、正文缺 → #{', #'.join(map(str, only_idx))}")
+        # ② 章节明细表行数（替代已移出的「总表编号集合相等」）
+        detail = [ln for ln in text.splitlines() if DETAIL_ROW_RE.match(ln)]
+        if len(detail) != len(nums):
+            errors.append(
+                f"{stem}: 章节明细 {len(detail)} 行，分篇合计 {len(nums)} 条"
+            )
+
+        # ③ 篇内重号（合并后检查：跨 part 重复也算）
         dup = sorted({n for n in nums if nums.count(n) > 1})
         if dup:
             errors.append(f"{stem}: 篇内重号 → #{', #'.join(map(str, dup))}")
 
-        # 总表「条数」列
-        for line in idx_text.splitlines():
-            mm = COUNT_ROW_RE.match(line)
-            if mm and mm.group(1).startswith(stem):
-                if int(mm.group(2)) != len(nums):
-                    errors.append(f"总表条数列: {stem} 写 {mm.group(2)}，实测 {len(nums)}")
-                break
-        else:
-            errors.append(f"总表条数列没有 {stem} 这一行")
-
-        # 分节标题行里的「（N 条）」—— #160 漏掉的第四份拷贝。
-        # ⚠️ `split_index_blocks` 是按 `### [` 切的，**前缀已被切掉**，
-        #    所以这里必须取「首个非空行」而不是 `startswith("### [")` ——
-        #    写成后者会永远不匹配、校验静默失效（写完必须回跑探针确认它会红）。
+        # ④ 分节标题行里的「（N 条）」
+        blk = blocks.get(stem)
+        if blk is None:
+            errors.append(f"{stem}: ISSUES.md 里没有这一篇的分节")
+            continue
         head_line = next((ln for ln in blk.splitlines() if ln.strip()), "")
         ms = SECTION_COUNT_RE.search(head_line)
         if ms and int(ms.group(1)) != len(nums):
-            errors.append(f"分节标题行: {stem} 写「（{ms.group(1)} 条）」，实测 {len(nums)} 条")
+            errors.append(
+                f"{stem}: 分节标题行写「（{ms.group(1)} 条）」，分篇合计 {len(nums)} 条"
+            )
 
     # 跨篇重号
     where = defaultdict(list)
