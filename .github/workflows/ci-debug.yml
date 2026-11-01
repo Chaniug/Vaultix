@@ -256,6 +256,37 @@ jobs:
             exit "$BUILD_EXIT"
           fi
           echo "::notice title=Build gate diagnostics::build_failed=false"
+
+      # ★ 2026-11-01：**把编译错误的原文打到 annotation 上**。
+      #
+      # 事故：CI #332/#333/#334 三次连续红，而所有可见信息只有
+      #   「1 error … Process completed with exit code 1.」
+      # 加上一句 `Build gate diagnostics::build_failed=false` —— 后者看起来像
+      # 「编译没失败」，**实际编译失败了**（它只反映它自己那次 gradlew 的退出码，
+      # 而这一步失败发生在别处）。完整编译日志在 /tmp/build_log.txt，step 一结束就没了；
+      # artifact 里也没有它。⇒ 只能靠猜，猜了两次都没中。
+      #
+      # 这一步 `if: always()`，读那份日志并把 `e: ` / `error:` 打出来。
+      # 「日志只在 step 内存在」＝ 失败时等于没有日志，凡是失败诊断都必须是独立 step。
+      - name: Summarize build errors
+        if: always()
+        shell: bash
+        run: |
+          set -uo pipefail
+          LOG=/tmp/build_log.txt
+          if [ ! -s "$LOG" ]; then
+            echo "::notice title=build errors::未找到构建日志（构建步骤可能未执行）"
+            exit 0
+          fi
+          hits="$(grep -nE "^e: |^w: .*deprecat|error:|FAILURE:|What went wrong|Caused by:|Unresolved reference|Type mismatch" "$LOG" | head -60 || true)"
+          if [ -z "$hits" ]; then
+            echo "::notice title=build errors::日志里没有匹配的错误行"
+            exit 0
+          fi
+          echo "::notice title=build errors::命中 $(printf '%s\n' "$hits" | wc -l | tr -d ' ') 行（最多 60）"
+          printf '%s\n' "$hits" | while IFS= read -r line; do
+            echo "::notice title=compile_error::${line}"
+          done
         env:
           SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
           SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
