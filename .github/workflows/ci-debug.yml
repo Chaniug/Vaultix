@@ -507,9 +507,11 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: debug-apk
+          # ⚠️ 只写小写 `.apk`。runner 是 Ubuntu（ext4，**区分大小写**），Gradle 产出的
+          #    文件名恒为 `app-full-debug.apk`；`*.APK` 这个 pattern 从来匹配不到任何东西，
+          #    长期只是被静默跳过。一旦配上 `fail_on_unmatched_files` 就变成硬失败（#221.1）。
           path: |
             app/build/outputs/apk/*/debug/*.apk
-            app/build/outputs/apk/*/debug/*.APK
           if-no-files-found: error
           retention-days: 3
 
@@ -522,7 +524,9 @@ jobs:
           # 通配符会展开成多个目录导致 "cd: too many arguments"（现只出 full 单包，
           # 但保留这种写法，恢复 offline 时无需再改）。
           apk_root="app/build/outputs/apk"
-          apk_list="$(find "$apk_root" -type f \( -iname '*.apk' -o -iname '*.APK' \) -printf '%P\n' | sort)"
+          # `-iname` 本来就大小写不敏感，不必再写一个 `-o -iname '*.APK'`（那是冗余条件，
+          # 与上面删掉的两个大写 pattern 同源）。#221.1
+          apk_list="$(find "$apk_root" -type f -iname '*.apk' -printf '%P\n' | sort)"
           apk_count="$(printf '%s\n' "$apk_list" | sed '/^$/d' | wc -l | tr -d ' ')"
           if [ "$apk_count" = "0" ]; then
             echo "No debug APK found under $apk_root"
@@ -680,9 +684,10 @@ jobs:
           # ⚠️ `files` 必须与 `body` **同级**（10 空格），且绝不能粘在 body 最后一行末尾 ——
           #    粘上去 YAML 依然合法（只是正文多了几个字），但 `with.files` 这个键**不存在**，
           #    action 会安静地建一个 0 附件的 release 并返回成功（#221）。
+          # 同上：只列小写。`fail_on_unmatched_files` 要求**每一个** pattern 都命中，
+          # 多写一个大写变体就会让整步失败。
           files: |
             app/build/outputs/apk/*/debug/*.apk
-            app/build/outputs/apk/*/debug/*.APK
           # ★ #221：glob 匹配不到就当场红，别安静地发个 0 附件 Release。
           fail_on_unmatched_files: true
           draft: false

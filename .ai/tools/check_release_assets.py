@@ -119,6 +119,25 @@ def main(argv):
                     f'glob 匹配不到文件时 action 会安静地发一个 0 附件的 Release'
                 )
 
+            # ④ 只差大小写的重复 pattern（Windows 习惯的残留）
+            #
+            #    实测：`*.apk` 与 `*.APK` 并列时，runner 是 ext4（区分大小写），
+            #    `*.APK` **永远匹配不到**。没有 fail 标记时它被静默跳过、无害；
+            #    一旦配上 `fail_on_unmatched_files`，它会让整个发布步骤硬失败
+            #    —— 而报错只说"这个 pattern 没匹配到"，看起来像"APK 没生成"，
+            #    极易误导成构建问题（#221.1）。
+            pats = [p.strip() for p in str(files or '').splitlines() if p.strip()]
+            seen = {}
+            for pat in pats:
+                key = pat.lower()
+                if key in seen and seen[key] != pat:
+                    problems.append(
+                        f'{where}: `files` 里有只差大小写的重复 pattern —— '
+                        f'{seen[key]!r} 与 {pat!r}。Linux runner 区分大小写，'
+                        f'后者恒不命中；配上 `fail_on_unmatched_files` 会直接失败'
+                    )
+                seen.setdefault(key, pat)
+
     if checked == 0:
         print('::warning title=release assets::没有找到任何 action-gh-release 步骤（检查逻辑可能已失效）')
 

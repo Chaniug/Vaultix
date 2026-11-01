@@ -16,6 +16,7 @@
 | `missing` | 干脆没写 `files` | rc=1 |
 | `no_fail_flag` | `files` 正常，但没有 `fail_on_unmatched_files` | rc=1 |
 | `good` | 键齐全、缩进正确、带 fail 标记 | rc=0 |
+| `uppercase_dup` | `*.apk` 与 `*.APK` 并列（Linux 上后者恒不命中） | rc=1 |
 
 === 变异测试记录（故意改坏实现，看自检是否判红）===
 
@@ -108,11 +109,29 @@ jobs:
             > 安装前请先导出备份。
           files: |
             app/build/outputs/apk/*/debug/*.apk
-            app/build/outputs/apk/*/debug/*.APK
           fail_on_unmatched_files: true
           draft: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+"""
+
+UPPERCASE_DUP = """\
+name: demo
+on: [push]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: preview
+          body: |
+            正文正常。
+          files: |
+            app/build/outputs/apk/*/debug/*.apk
+            app/build/outputs/apk/*/debug/*.APK
+          fail_on_unmatched_files: true
 """
 
 
@@ -139,6 +158,8 @@ def main():
             ('no_fail_flag', NO_FAIL_FLAG, 1,
              '缺 fail_on_unmatched_files ⇒ 必须判红（否则 glob 空时安静发空包）'),
             ('good', GOOD, 0, '键齐全 ⇒ 必须判绿'),
+            ('uppercase_dup', UPPERCASE_DUP, 1,
+             'files 里有只差大小写的重复 pattern ⇒ 必须判红（Linux 恒不命中，配上 fail 就硬失败）'),
         ]
         for name, wf, want, why in cases:
             root = os.path.join(tmp, name)
@@ -157,7 +178,7 @@ def main():
                 print('  - ' + f)
             return 1
         print()
-        print('OK   4 个用例全部符合预期')
+        print('OK   5 个用例全部符合预期')
         return 0
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
