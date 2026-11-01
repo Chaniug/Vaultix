@@ -56,10 +56,19 @@ class SiteIconCacheKeyTest {
 
     @Test
     fun 键带命名空间前缀_不与其它Coil缓存撞车() {
-        // Coil 默认键就是 URL 字符串本身（`UriKeyer` 的产物）。我们的键若也长成 URL 形状，
+        // Coil 默认键就是 URL 字符串本身（`UriKeyer` 的产物）。我们的键若也**以 URL 开头**，
         // 将来若有别处用默认键请求同一张图，两条键会指向同一格缓存却语义不同。
-        assertThat(siteIconCacheKey(url, 120)).doesNotContain("://")
-        assertThat(siteIconCacheKey(url, 120)).startsWith("site-icon:")
+        //
+        // ⚠️ 这里**只能**断言前缀，不能断言「不含 `://`」：键里刻意保留了原始 URL
+        // （见下一个用例「尺寸段可读」），URL 本身就带 `://`。
+        // 本条最初写成了 `doesNotContain("://")` —— CI #332 立刻抓到
+        // （1428 例失败 1 例）。这不是实现错，是**断言与注释里写的意图不一致**：
+        // 想表达的是"不许冒充 URL"，写成了"不许出现 URL 的特征字符"。
+        val key = siteIconCacheKey(url, 120)
+        assertThat(key).startsWith("site-icon:")
+        assertThat(key).doesNotStartWith("http")
+        // 前缀里必须带尺寸段，且整条键**不能**等于裸 URL（否则真的会和默认键撞车）。
+        assertThat(key).isNotEqualTo(url)
     }
 
     @Test
