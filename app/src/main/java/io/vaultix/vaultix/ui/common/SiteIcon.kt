@@ -174,25 +174,38 @@ fun SiteIconByHost(
 
     val imageLoader = LocalContext.current.imageLoader
 
-    if (iconUrl == null) {
-        FallbackAvatar(fallbackText = fallbackText, size = size, modifier = modifier)
-    } else {
-        // ★ 组合期同步命中：卡片重建的第一帧就有图（见类 KDoc「为什么要在组合期同步查缓存」）。
-        val cachedBitmap = remember(iconUrl, targetPx) {
-            imageLoader.memoryCache?.get(MemoryCache.Key(siteIconCacheKey(iconUrl, targetPx)))?.bitmap
+    // ⚠️ 这里刻意**不用** `if (iconUrl == null) { ...; return }` 的提前返回写法。
+    //    Kotlin 的规则是「composable 函数若在某个分支提前 return，则它**之后**不能再有
+    //    composable 调用」—— 而下面 `RemoteSiteIcon(...)` 正是 composable 调用
+    //    （不要被 `::CachedSiteIcon` 那行引用混淆：判断看的是**调用点**，不是引用点）。
+    //    改成"表达式给值 + 单一出口"，结构上就不存在这个争议。
+    val content: @Composable () -> Unit = when {
+        iconUrl == null -> {
+            { FallbackAvatar(fallbackText = fallbackText, size = size, modifier = modifier) }
         }
-        if (cachedBitmap != null) {
-            CachedSiteIcon(bitmap = cachedBitmap, size = size, modifier = modifier)
-        } else {
-            RemoteSiteIcon(
-                iconUrl = iconUrl,
-                targetPx = targetPx,
-                fallbackText = fallbackText,
-                size = size,
-                modifier = modifier,
-            )
+        // ★ 组合期同步命中：卡片重建的第一帧就有图（见类 KDoc「为什么要在组合期同步查缓存」）。
+        else -> {
+            val cachedBitmap = remember(iconUrl, targetPx) {
+                imageLoader.memoryCache
+                    ?.get(MemoryCache.Key(siteIconCacheKey(iconUrl, targetPx)))
+                    ?.bitmap
+            }
+            if (cachedBitmap != null) {
+                { CachedSiteIcon(bitmap = cachedBitmap, size = size, modifier = modifier) }
+            } else {
+                {
+                    RemoteSiteIcon(
+                        iconUrl = iconUrl,
+                        targetPx = targetPx,
+                        fallbackText = fallbackText,
+                        size = size,
+                        modifier = modifier,
+                    )
+                }
+            }
         }
     }
+    content()
 }
 
 /**
