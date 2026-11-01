@@ -199,3 +199,70 @@
      哪天冒出新的降级字段要记得把它加回来，否则用户又看不到降级提示。
 - **判据**：**"支持某类条目"必须以往返为证** —— `Bitwarden → Item → KDBX → Item`
   全字段相等，才算支持。领域模型有字段、DTO 有字段、写侧写了字段，三者**都不算**。
+
+### 二次对账（2026-11-01，用户追问「完善了吗，参考 keepassXC 的那个」）
+
+第一版把字段**接齐了**，但**键名自造**、与 KeePassXC 互不认。逐行重读
+`BitwardenReader.cpp` 后发现 **3 个真缺口**：
+
+| 项 | 第一版 | 问题 |
+|---|---|---|
+| 卡 / 身份键名 | `VPX_CARD_*` / `VPX_IDENTITY_*` | 与 KeePassXC 的 `card_*` / `identity_*` **互不认**：它迁来的库本应用读不到卡，本应用转出的库在它里面也不像卡 |
+| 额外网址 | 只写 `VPX_URL_n` | 只读 `VPX_URL_n` ⇒ **用 KeePassXC 迁来的库只剩第一条网址** |
+| `identity_name` / `identity_address` | 未解析 | KeePassXC 额外写的两个**合并**字段 ⇒ 漏进自定义字段区，用户看到一行原文多行地址 |
+
+修法与新增条目 #223 的纪律：**判别标准是「这个键名别人也在用吗」** ——
+别人在用（`KPEX_PASSKEY_*` / `KP2A_URL_n` / `card_*` / `identity_*`）就照抄；
+只有本应用用的才加 `VPX_`。这与文件头「为什么不用 `KP2A_` 前缀」不矛盾：
+那条讲的是**自己的新字段**不该冒用别人标识，这条讲的是**别人已有的字段名**不该另起一个。
+
+读侧一律**双前缀兼容**（新键优先、旧 `VPX_CARD_*` 仍能读），写侧只写生态键名 ——
+老库不读丢，新库能互通。详见 #223。
+
+## 223. 🔴 键名自造 = 与生态互不认：「无损」只对本应用成立（2026-11-01，用户追问后逐行对账 KeePassXC）
+
+- **现象**：#219 把卡 / 身份 / SSH / 密码历史**两侧都接上了**，往返测试全绿。
+  但用户用 KeePassXC 导出的库迁过来，卡和身份仍然**认不出**；本应用转出的库在
+  KeePassXC 里也只是一堆普通条目。**测试全绿、互通全无。**
+- **根因**：#219 给新载荷起了 `VPX_CARD_*` / `VPX_IDENTITY_*` 前缀 —— 这符合
+  「私有字段加私有前缀」的纪律，但忽略了**这些字段名别人已经在用**。
+  KeePassXC `BitwardenReader.cpp` 的 `writeIdentity` / `writeCard` 写的就是
+  `card_*` / `identity_*`。同一份语义、两套键名 ⇒ 双向都不认。
+  同理额外网址：KeePassXC 用 `KP2A_URL_n`（`EntryAttributes::AdditionalUrlAttribute`），
+  本应用只扫 `VPX_URL_n` ⇒ 迁过来的多网址条目**只剩第一条**。
+- **修法**：
+  1. `CARD_PREFIX` / `IDENTITY_PREFIX` 改为 `card_` / `identity_`，旧的
+     `VPX_CARD_` / `VPX_IDENTITY_` 降级为 `LEGACY_*`（**只读不写**）；
+  2. `payloadOf` 改 `vararg prefixes`（先给者赢），读侧一律传「新键、旧键」两套；
+  3. 新增 `isCardPayloadKey` / `isIdentityPayloadKey` / `isAdditionalUrlKey`：
+     `card_` 无私有前缀，用户完全可能自建 `card_我的备注`，
+     **只认 6 + 18 个精确键名**，不做前缀整片匹配；
+  4. `isToolFieldName` 纳入这三类生态键 ⇒ 不会重复出现在自定义字段区；
+  5. `extras()` 同时扫 `VPX_URL_n` 与 `KP2A_URL_n`（同下标本应用优先）；
+  6. 读侧解析 KeePassXC 的两个**合并**字段 `identity_name` / `identity_address`，
+     摊回分段键；`identityOwnedKeys()` = 18 分段键 + 2 合并键，供写侧清理。
+- **验证**：`KdbxConversionTest` 新增 7 条互通用例（KeePassXC 键名的卡 / 身份能读回、
+  `KP2A_URL_n` → 多 URI、写侧产出 `card_*` 而非 `VPX_CARD_*`、用户自建的 `card_` 前缀
+  自定义字段既不当载荷也不被删、`identity_address` 摊回 7 个字段、`identity_name`
+  仅分段全空时兜底、身份改登录后合并键也被清掉）。kdbx 模块 224 例全绿。
+- **⚠️ 四个坑**：
+  1. **「测试全绿」不等于「生态互通」**。往返测试只证明「自己写得进、自己读得出」，
+     键名一旦自造，往返永远绿、互通永远不成立。**验收必须带外部产出物**
+     （这里是照着 KeePassXC 的键名手搓一个库再读）。
+  2. **无私有前缀的键必须按精确键名认**。`card_` 是公共命名空间，
+     按前缀整片删/整片收会把用户自己的 `card_xxx` 一起吞掉 —— 且**无声无息**。
+  3. **合并字段是不可逆的**。`identity_name` 是空格拼接，边界一去不回；
+     只能「分段为空时兜底」，绝不能拿它覆盖分段值（那是用有损盖无损）。
+  4. **局部下标 ≠ 全局下标**。`orderedValues` 给 18 项，`slice(4..10)` 后只有 7 项；
+     混用 `IDX_COUNTRY(10)` 去索引 7 元素列表 ⇒ 运行期 `IndexOutOfBoundsException`，
+     而且只在「有合并块」这条冷路径上炸。用 `ADDR_*` 一组局部常量隔开。
+- **判据**：**键名是数据格式的一部分，不是实现细节**。判断该不该自造前缀，
+  问的不是「这是不是我的私有字段」，而是「**这个键名别人也在用吗**」——
+  别人在用就照抄（`KPEX_PASSKEY_*` / `KP2A_URL_n` / `card_*` / `identity_*`），
+  只有自己用的才加 `VPX_`。
+- **仍存的有意差异**：卡片 `number` 本应用写**受保护**，KeePassXC 只保护 `code`。
+  不跟随它降级 —— 卡号明文落盘是不能接受的，这一项本应用更严。
+- **未做（已知缺口）**：附件写侧仍未落盘（`VaultItem.attachments` 有字段，
+  读侧只做"可见"，导出受 kotpass `Meta.binaries` 为 `@PublishedApi internal` 限制）。
+  密码历史也未迁到 KDBX 原生 `<History>`（领域模型只有「时间 + 密码」，
+  写原生 History 要编造整条快照，读回还得猜哪条对应哪个旧密码）。两项各自独立跟进。

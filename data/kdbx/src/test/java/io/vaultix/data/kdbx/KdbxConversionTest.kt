@@ -43,6 +43,7 @@ import com.google.common.truth.Truth.assertThat
 import com.google.common.truth.Truth.assertWithMessage
 import io.vaultix.common.OtpUriParser
 import io.vaultix.model.VaultCard
+import io.vaultix.model.VaultCustomField
 import io.vaultix.model.VaultFido2Credential
 import io.vaultix.model.VaultFolder
 import io.vaultix.model.VaultIdentity
@@ -52,6 +53,7 @@ import io.vaultix.model.VaultPasswordHistoryEntry
 import io.vaultix.model.VaultReprompt
 import io.vaultix.model.VaultSshKey
 import io.vaultix.model.VaultUri
+import java.util.LinkedHashMap
 import java.util.UUID
 import org.junit.Test
 
@@ -514,6 +516,238 @@ class KdbxConversionTest {
         assertThat(updated.database.toMappedContent().items.single().card).isNull()
     }
 
+    // ------------------------------------------- KeePassXC 键名互通（2026-11-01）
+
+    /**
+     * KeePassXC 的 `BitwardenReader.cpp` 写的是**无前缀**的 `card_*` / `identity_*`。
+     * 用它的库迁过来的用户，卡片/身份必须能被认出来，否则整类条目退化成普通登录。
+     */
+    @Test
+    fun `KeePassXC键名的库_卡能读回来且类型是Card`() {
+        val bytes = encodeRawEntry(
+            linkedMapOf(
+                "Title" to EntryValue.Plain("招行信用卡"),
+                "card_cardholderName" to EntryValue.Plain("ZHANG SAN"),
+                "card_brand" to EntryValue.Plain("Visa"),
+                "card_number" to EntryValue.Encrypted(EncryptedValue.fromString("6225")),
+                "card_expMonth" to EntryValue.Plain("12"),
+                "card_expYear" to EntryValue.Plain("2030"),
+                "card_code" to EntryValue.Encrypted(EncryptedValue.fromString("123")),
+            ),
+        )
+
+        val item = KdbxConversionEngine.read(bytes = bytes, password = password).getOrThrow().items.single()
+
+        assertWithMessage("类型").that(item.type).isEqualTo(VaultItemType.Card)
+        val card = item.card
+        assertWithMessage("card 载荷").that(card).isNotNull()
+        assertThat(card!!.cardholderName).isEqualTo("ZHANG SAN")
+        assertThat(card.brand).isEqualTo("Visa")
+        assertThat(card.number).isEqualTo("6225")
+        assertThat(card.code).isEqualTo("123")
+    }
+
+    /** 同上，身份：KeePassXC 拆的是 `identity_email` / `identity_ssn` 这套。 */
+    @Test
+    fun `KeePassXC键名的库_身份能读回来`() {
+        val bytes = encodeRawEntry(
+            linkedMapOf(
+                "Title" to EntryValue.Plain("我的身份"),
+                "identity_firstName" to EntryValue.Plain("三"),
+                "identity_lastName" to EntryValue.Plain("张"),
+                "identity_email" to EntryValue.Plain("zhang@example.com"),
+                "identity_ssn" to EntryValue.Encrypted(EncryptedValue.fromString("123-45-6789")),
+            ),
+        )
+
+        val item = KdbxConversionEngine.read(bytes = bytes, password = password).getOrThrow().items.single()
+
+        assertThat(item.type).isEqualTo(VaultItemType.Identity)
+        val identity = item.identity
+        assertThat(identity).isNotNull()
+        assertThat(identity!!.firstName).isEqualTo("三")
+        assertThat(identity.lastName).isEqualTo("张")
+        assertThat(identity.email).isEqualTo("zhang@example.com")
+        assertThat(identity.ssn).isEqualTo("123-45-6789")
+    }
+
+    /**
+     * KeePassXC 把第 2 条起的网址写成 `KP2A_URL_n`（`AdditionalUrlAttribute` 常量）。
+     *
+     * ⚠️ 标准字段的键名是 **`URL` 全大写**（`BasicField.Url`，已 `javap` 核实），
+     *   不是 `Url`。kotpass 的 `EntryFields.get` 就是普通 `Map.get`，
+     *   写错大小写 ⇒ 那条网址**静默消失**，而其余字段一切正常。
+     */
+    @Test
+    fun `KeePassXC的KP2A额外网址能被读成多条URI`() {
+        val bytes = encodeRawEntry(
+            linkedMapOf(
+                "Title" to EntryValue.Plain("多网址"),
+                "UserName" to EntryValue.Plain("alice"),
+                "URL" to EntryValue.Plain("https://a.example.com"),
+                "KP2A_URL_1" to EntryValue.Plain("https://b.example.com"),
+                "KP2A_URL_2" to EntryValue.Plain("https://c.example.com"),
+            ),
+        )
+
+        val item = KdbxConversionEngine.read(bytes = bytes, password = password).getOrThrow().items.single()
+
+        assertThat(item.uris.map { it.uri }).containsExactly(
+            "https://a.example.com",
+            "https://b.example.com",
+            "https://c.example.com",
+        ).inOrder()
+    }
+
+    /**
+     * KeePassXC 额外写的 `identity_address` 多行块要摊回 7 个地址字段，
+     * 并且**不能**剩下的漏到自定义字段区（用户在详情页会看到一行莫名其妙的原文）。
+     */
+    @Test
+    fun `KeePassXC的identity_address合并块能摊回地址字段`() {
+        val bytes = encodeRawEntry(
+            linkedMapOf(
+                "Title" to EntryValue.Plain("地址身份"),
+                "identity_firstName" to EntryValue.Plain("三"),
+                "identity_lastName" to EntryValue.Plain("张"),
+                // 行序对称 BitwardenReader.cpp：3 行地址 + 「城市, 州 邮编」+ 国家。
+                "identity_address" to EntryValue.Plain(
+                    "中山路 1 号\n2 单元\n3 楼\n北京, Beijing 100000\n中国",
+                ),
+            ),
+        )
+
+        val item = KdbxConversionEngine.read(bytes = bytes, password = password).getOrThrow().items.single()
+
+        assertThat(item.type).isEqualTo(VaultItemType.Identity)
+        val identity = requireNotNull(item.identity)
+        assertThat(identity.address1).isEqualTo("中山路 1 号")
+        assertThat(identity.address2).isEqualTo("2 单元")
+        assertThat(identity.address3).isEqualTo("3 楼")
+        assertThat(identity.city).isEqualTo("北京")
+        assertThat(identity.state).isEqualTo("Beijing")
+        assertThat(identity.postalCode).isEqualTo("100000")
+        assertThat(identity.country).isEqualTo("中国")
+        assertWithMessage("合并块不该漏进自定义字段")
+            .that(item.customFields.map { it.name })
+            .doesNotContain("identity_address")
+    }
+
+    /**
+     * 身份条目改成登录后，**KeePassXC 写进来的合并键**也必须一起清掉。
+     *
+     * ⚠️ 专测这一类：合并键（`identity_address` / `identity_name`）本应用从不写，
+     *   只可能由别的工具写进来。若清理表只覆盖 18 个分段键，它会留在原地，
+     *   而读侧又把它摊成身份 ⇒ 用户改成登录，读回来**类型又变回身份**。
+     */
+    @Test
+    fun `身份改成登录后KeePassXC的合并键也必须清掉`() {
+        val identityItem = sampleItem(title = "身份").copy(
+            type = VaultItemType.Identity,
+            identity = VaultIdentity(firstName = "三", lastName = "张"),
+        )
+        val credentials = KdbxCreator.credentialsFor(password, keyFileBytes = null)
+        var db = KdbxCreator.blankDatabase("Vaultix", credentials)
+        db = KdbxItemWriter.createEntry(db, folderId = null, item = identityItem).database
+
+        // 模拟"这个库曾被 KeePassXC 写过"：手工塞进两个合并键。
+        val entry = db.content.group.entries.single()
+        val patched = entry.copy(
+            fields = entry.fields +
+                ("identity_address" to EntryValue.Plain("中山路 1 号\n北京, Beijing 100000\n中国")),
+        )
+        db = db.modifyParentGroup { copy(entries = listOf(patched)) }
+        val before = db.toMappedContent().items.single()
+        assertWithMessage("前置条件：合并键已被读成身份地址")
+            .that(before.identity?.address1).isEqualTo("中山路 1 号")
+
+        val updated = KdbxItemWriter.updateEntry(
+            db,
+            before,
+            before.copy(type = VaultItemType.Login, identity = null),
+        )
+
+        val keys = updated.database.content.group.entries.single().fields.keys
+            .map { it.lowercase() }
+        assertWithMessage("合并键不该残留").that(keys).doesNotContain("identity_address")
+        assertWithMessage("读回来不能再复活成身份")
+            .that(updated.database.toMappedContent().items.single().identity)
+            .isNull()
+    }
+
+    /**
+     * 分段姓名全空时用 `identity_name` 兜底；**分段有值时一律以分段为准**
+     * （合并值是空格拼接的，边界不可逆，拿它覆盖等于用有损盖无损）。
+     */
+    @Test
+    fun `KeePassXC的identity_name只在分段姓名全空时兜底`() {
+        val onlyMerged = encodeRawEntry(
+            linkedMapOf(
+                "Title" to EntryValue.Plain("合并姓名"),
+                "identity_name" to EntryValue.Plain("三 张"),
+                "identity_email" to EntryValue.Plain("a@example.com"),
+            ),
+        )
+        val fallback = KdbxConversionEngine.read(bytes = onlyMerged, password = password)
+            .getOrThrow().items.single().identity
+        assertThat(fallback).isNotNull()
+        assertThat(fallback!!.firstName).isEqualTo("三")
+        assertThat(fallback.lastName).isEqualTo("张")
+
+        val both = encodeRawEntry(
+            linkedMapOf(
+                "Title" to EntryValue.Plain("分段优先"),
+                "identity_name" to EntryValue.Plain("错的 名字"),
+                "identity_firstName" to EntryValue.Plain("三"),
+                "identity_lastName" to EntryValue.Plain("张"),
+            ),
+        )
+        val segmented = KdbxConversionEngine.read(bytes = both, password = password)
+            .getOrThrow().items.single().identity
+        assertThat(segmented).isNotNull()
+        assertWithMessage("分段优先").that(segmented!!.firstName).isEqualTo("三")
+        assertThat(segmented.lastName).isEqualTo("张")
+    }
+
+    /**
+     * 写侧必须产出 `card_*`（KeePassXC 键名），而不是之前的 `VPX_CARD_*` ——
+     * 否则用 KeePassXC 打开本应用转出的库，字段名与它自己导入的对不上。
+     */
+    @Test
+    fun `写侧产出的是KeePassXC键名而不是VPX前缀`() {
+        val card = sampleItem(title = "卡").copy(
+            type = VaultItemType.Card,
+            card = VaultCard(cardholderName = "ZHANG SAN", number = "6225", code = "123"),
+        )
+
+        val bytes = KdbxConversionEngine.build("Vaultix", password, listOf(card)).getOrThrow()
+        val keys = openRaw(bytes).content.group.entries.single().fields.keys.map { it.lowercase() }
+
+        assertThat(keys).contains("card_number")
+        assertThat(keys).contains("card_code")
+        assertThat(keys).containsNoneIn(listOf("vpx_card_number", "vpx_card_code", "vpx_card_brand"))
+    }
+
+    /**
+     * `card_` 没有私有前缀 ⇒ 用户完全可能自建一个 `card_我的备注`。
+     * 它：① 不能被当成载荷（否则详情页看不见），② 不能被写侧的清理顺手删掉。
+     */
+    @Test
+    fun `用户的card前缀自定义字段既不当载荷也不被删除`() {
+        val item = sampleItem(title = "带自定义字段的卡").copy(
+            type = VaultItemType.Card,
+            card = VaultCard(number = "6225"),
+            customFields = listOf(VaultCustomField(name = "card_我的备注", value = "别删我")),
+        )
+
+        val read = buildAndRead(listOf(item)).items.single()
+
+        val custom = read.customFields.firstOrNull { it.name == "card_我的备注" }
+        assertWithMessage("用户字段必须仍在自定义字段里").that(custom).isNotNull()
+        assertWithMessage("值不能被改").that(custom!!.value).isEqualTo("别删我")
+        assertWithMessage("载荷只认已知的 6 个键").that(read.card?.number).isEqualTo("6225")
+    }
+
     // ---------------------------------------------------------------- helpers
 
     private fun buildAndRead(items: List<VaultItem>): KdbxConversionContent {
@@ -538,6 +772,25 @@ class KdbxConversionTest {
                     "Password" to EntryValue.Encrypted(EncryptedValue.fromString("pw")),
                 ),
             ),
+        )
+        val database = created.modifyParentGroup { copy(entries = entries + entry) }
+        return KdbxRoundTrip.verify(database, credentials).bytes
+    }
+
+    /** 直接造一条「字段随手给」的条目，模拟第三方工具（如 KeePassXC）写出的库。 */
+    /**
+     * 直接按「原始键名」造一条条目再编码。
+     *
+     * ⚠️ 五个标准字段的键名是 `Title` / `UserName` / `Password` / **`URL`** / `Notes`
+     *   （`BasicField`，已 `javap` 核实）。`URL` 是**全大写** —— 写成 `Url` 不会报错，
+     *   只会让那条网址读不到。这正是本组「互通测试」要防的那类静默丢失。
+     */
+    private fun encodeRawEntry(fields: LinkedHashMap<String, EntryValue>): ByteArray {
+        val credentials = Credentials.from(EncryptedValue.fromString(password))
+        val created = KdbxCreator.blankDatabase("Raw", credentials)
+        val entry = app.keemobile.kotpass.models.Entry(
+            uuid = UUID.randomUUID(),
+            fields = app.keemobile.kotpass.models.EntryFields(fields),
         )
         val database = created.modifyParentGroup { copy(entries = entries + entry) }
         return KdbxRoundTrip.verify(database, credentials).bytes

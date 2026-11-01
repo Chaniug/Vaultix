@@ -368,6 +368,8 @@ internal object KdbxItemWriter {
         result = replacePayload(
             fields = result,
             prefix = KdbxToolFields.CARD_PREFIX,
+            knownKeys = KdbxToolFields.cardKeys(),
+            legacyPrefix = KdbxToolFields.LEGACY_CARD_PREFIX,
             desired = item.card?.let { card ->
                 val values = listOf(
                     card.cardholderName, card.brand, card.number, card.expMonth, card.expYear, card.code,
@@ -379,6 +381,8 @@ internal object KdbxItemWriter {
         result = replacePayload(
             fields = result,
             prefix = KdbxToolFields.IDENTITY_PREFIX,
+            knownKeys = KdbxToolFields.identityOwnedKeys(),
+            legacyPrefix = KdbxToolFields.LEGACY_IDENTITY_PREFIX,
             desired = item.identity?.let { identity ->
                 val values = listOf(
                     identity.title, identity.firstName, identity.middleName, identity.lastName,
@@ -394,6 +398,8 @@ internal object KdbxItemWriter {
         result = replacePayload(
             fields = result,
             prefix = KdbxToolFields.SSH_PREFIX,
+            knownKeys = KdbxToolFields.sshKeys(),
+            legacyPrefix = null,
             desired = item.sshKey?.let { key ->
                 KdbxToolFields.sshKeys()
                     .zip(listOf(key.privateKey, key.publicKey, key.keyFingerprint))
@@ -425,24 +431,40 @@ internal object KdbxItemWriter {
     /**
      * 整片替换一个载荷前缀的字段。
      *
+     * @param knownKeys 该载荷的**全部合法字段名**（去前缀），如 [KdbxToolFields.cardKeys]。
+     * @param legacyPrefix 旧版键前缀（私有），有则清理时一并删除；无 legacy 传 null。
      * @param desired 本条目应有的「字段名（去前缀）→ 值」；null = 本条目没有这类载荷。
      * @param hadBefore 上一个状态是否有这类载荷；有而 now 为 null ⇒ 整片删。
      *
-     * ⚠️ 空值**不写字段**（`brand` 为空就不产出 `VPX_CARD_brand`）：KDBX 里
+     * ## ⚠️ 为什么清理必须按「已知键名」而不是「前缀」
+     *
+     * `card_` / `identity_` 是 **KeePassXC 的标准键名**（见 [KdbxToolFields.CARD_PREFIX]），
+     * 不带私有前缀 ⇒ 用户完全可以自己建一个叫 `card_我的备注` 的自定义字段。
+     * 若按 `startsWith("card_")` 整片删，用户那条字段会在一次保存里**无声消失**，
+     * 而它跟卡号毫无关系。
+     *
+     * 所以：新前缀只删 [knownKeys] 里那几条**完整键名**；旧前缀（`VPX_CARD_`）是私有
+     * 命名空间，整片删安全，顺便把上一次转换留下的旧键清干净。
+     *
+     * ⚠️ 空值**不写字段**（`brand` 为空就不产出 `card_brand`）：KDBX 里
      *    "字段存在但值为空"与"没有这个字段"在 UI 上一样，多写的空字段只会让
      *    文件变脏、并让别的工具以为"用户清空过这一项"。
      */
     private fun replacePayload(
         fields: EntryFields,
         prefix: String,
+        knownKeys: List<String>,
+        legacyPrefix: String?,
         desired: Map<String, String>?,
         hadBefore: Boolean,
     ): EntryFields {
+        fun owned(key: String): Boolean =
+            knownKeys.any { key.equals(prefix + it, ignoreCase = true) } ||
+                (legacyPrefix != null && key.startsWith(legacyPrefix, ignoreCase = true))
+
         if (desired == null) {
             if (!hadBefore) return fields
-            return fields.minus(
-                fields.keys.filter { it.startsWith(prefix, ignoreCase = true) },
-            )
+            return fields.minus(fields.keys.filter(::owned))
         }
         var result = fields
         desired.forEach { (name, value) ->

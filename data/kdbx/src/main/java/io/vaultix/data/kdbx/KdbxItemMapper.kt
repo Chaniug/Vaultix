@@ -229,7 +229,11 @@ private fun EntryFields.payloadTable(): Map<String, String> =
  *   持卡人姓名与品牌，卡号留给别处；那也是一条银行卡条目，不该被降级成笔记。
  */
 private fun Map<String, String>.toVaultCard(): VaultCard? {
-    val payload = KdbxToolFields.payloadOf(this, KdbxToolFields.CARD_PREFIX)
+    // ⚠️ 两套前缀都要认：`card_*` 是 KeePassXC 的 Bitwarden 导入器写的（生态标准），
+    //    `VPX_CARD_*` 是 2026-11-01 之前本应用写的（旧库不能读丢）。
+    val payload = KdbxToolFields.payloadOf(
+        this, KdbxToolFields.CARD_PREFIX, KdbxToolFields.LEGACY_CARD_PREFIX,
+    )
     if (payload.isEmpty()) return null
     val values = KdbxToolFields.orderedValues(payload, KdbxToolFields.cardKeys())
     if (values.all { it.isEmpty() }) return null
@@ -243,33 +247,165 @@ private fun Map<String, String>.toVaultCard(): VaultCard? {
     )
 }
 
-/** 载荷表 → [VaultIdentity]；判据同 [toVaultCard]。 */
+/**
+ * 载荷表 → [VaultIdentity]；判据同 [toVaultCard]。
+ *
+ * ⚠️ KeePassXC 的 Bitwarden 导入器会**额外**写两个合并字段（`BitwardenReader.cpp`
+ *   `writeIdentity` 段，本应用照抄成读侧兼容）：
+ *   - `identity_name` = `title + " " + firstName + " " + middleName + " " + lastName`
+ *     （空格拼接、跳过空段；**分段字段同时也写了**，所以这里只在分段全空时兜底）
+ *   - `identity_address` = 多行地址（`address1\naddress2\naddress3\n城市, 州 邮编\n国家`）
+ *   只认 18 个分段键的读法会让这两个字段**静默漏在自定义字段区**：用户从 KeePassXC
+ *   迁过来，看到一条「身份」条目下面挂着两行莫名其妙的 `identity_address`。
+ */
 private fun Map<String, String>.toVaultIdentity(): VaultIdentity? {
-    val payload = KdbxToolFields.payloadOf(this, KdbxToolFields.IDENTITY_PREFIX)
+    val payload = KdbxToolFields.payloadOf(
+        this, KdbxToolFields.IDENTITY_PREFIX, KdbxToolFields.LEGACY_IDENTITY_PREFIX,
+    )
     if (payload.isEmpty()) return null
     val values = KdbxToolFields.orderedValues(payload, KdbxToolFields.identityKeys())
     if (values.all { it.isEmpty() }) return null
+    val merged = mergeKeePassXcIdentityName(payload, values)
+    val address = kxCascadeAddress(payload, merged)
     return VaultIdentity(
-        title = values[0],
-        firstName = values[1],
-        middleName = values[2],
-        lastName = values[3],
-        address1 = values[4],
-        address2 = values[5],
-        address3 = values[6],
-        city = values[7],
-        state = values[8],
-        postalCode = values[9],
-        country = values[10],
-        company = values[11],
-        email = values[12],
-        phone = values[13],
-        ssn = values[14],
-        username = values[15],
-        passportNumber = values[16],
-        licenseNumber = values[17],
+        title = merged[0],
+        firstName = merged[1],
+        middleName = merged[2],
+        lastName = merged[3],
+        address1 = address[0],
+        address2 = address[1],
+        address3 = address[2],
+        city = address[3],
+        state = address[4],
+        postalCode = address[5],
+        country = address[6],
+        company = merged[11],
+        email = merged[12],
+        phone = merged[13],
+        ssn = merged[14],
+        username = merged[15],
+        passportNumber = merged[16],
+        licenseNumber = merged[17],
     )
 }
+
+/**
+ * 分段姓名全空时，把 `identity_name` 摊回 title / firstName / middleName / lastName。
+ *
+ * ⚠️ 只做**兜底**（分段有值就一律用分段）：`identity_name` 是空格拼接的，
+ *   各段边界在合并后就**不可逆**了 —— 拿它去覆盖分段值等于用有损数据盖掉无损数据。
+ *   摊不回去时（例如 `"Zhang San"`，分不清名/姓）整体塞进 `title`，**至少不丢字**。
+ */
+private fun mergeKeePassXcIdentityName(
+    payload: Map<String, String>,
+    values: List<String>,
+): List<String> {
+    if (values.slice(IDX_TITLE..IDX_LAST_NAME).any { it.isNotBlank() }) return values
+    val merged = payload.entries
+        .firstOrNull { (key, _) -> key.equals("name", ignoreCase = true) }
+        ?.value?.trim().orEmpty()
+    if (merged.isEmpty()) return values
+    val parts = merged.split(' ').filter { it.isNotBlank() }
+    val out = values.toMutableList()
+    // 词数 → 归属：1 词进 title（Bitwarden 的 title 是称谓、也可能是名字本身，不分更好）；
+    // 2 词最像「名 姓」；3 词最像「名 中间名 姓」；再多就分不清了，整体进 title（不丢字）。
+    when (parts.size) {
+        NAME_PARTS_GIVEN_ONLY -> out[IDX_TITLE] = merged
+        NAME_PARTS_GIVEN_FAMILY -> {
+            out[IDX_FIRST_NAME] = parts.readName(0)
+            out[IDX_LAST_NAME] = parts.readName(1)
+        }
+        NAME_PARTS_WITH_MIDDLE -> {
+            out[IDX_FIRST_NAME] = parts.readName(0)
+            out[IDX_MIDDLE_NAME] = parts.readName(1)
+            out[IDX_LAST_NAME] = parts.readName(2)
+        }
+        else -> out[IDX_TITLE] = merged
+    }
+    return out
+}
+
+/** 取第 [index] 段（缺失给空串，不抛异常）。 */
+private fun List<String>.readName(index: Int): String = getOrNull(index).orEmpty()
+
+/** `identity_name` 摊回时可能的词数（1 = 只有一个词，2 = 名+姓，3 = 名+中间名+姓）。 */
+private const val NAME_PARTS_GIVEN_ONLY = 1
+private const val NAME_PARTS_GIVEN_FAMILY = 2
+private const val NAME_PARTS_WITH_MIDDLE = 3
+
+/**
+ * 把 KeePassXC 的 `identity_address` 多行块摊回 address1..country（**仅在该段全空时**）。
+ *
+ * 行序按 `BitwardenReader.cpp` 的写侧对称：
+ * `address1` / `address2` / `address3` / `"城市, 州 邮编"` / `国家`（空行被跳过）。
+ * 行数对不上时**逐行塞进 address1..3 与 city** —— 宁可错位也不吞掉内容。
+ */
+private fun kxCascadeAddress(payload: Map<String, String>, values: List<String>): List<String> {
+    val address = values.slice(IDX_ADDRESS1..IDX_COUNTRY)
+    if (address.any { it.isNotBlank() }) return address
+    val block = payload.entries
+        .firstOrNull { (key, _) -> key.equals("address", ignoreCase = true) }
+        ?.value?.trim().orEmpty()
+    val lines = block.lines().map { it.trim() }.filter { it.isNotEmpty() }
+    if (lines.isEmpty()) return address
+    val out = address.toMutableList()
+    // 最后一行算「国家」的条件：至少 3 行地址 + 1 行城市 + 1 行国家。
+    val hasCountry = lines.size >= KX_ADDRESS_MIN_LINES_WITH_COUNTRY
+    if (hasCountry) out[ADDR_COUNTRY] = lines.last()
+    // 前 3 行进 address1..3；第 4 行起是「城市, 州 邮编」。
+    val body = if (hasCountry) lines.dropLast(1) else lines
+    body.take(KX_ADDRESS_STREET_LINES).forEachIndexed { index, line -> out[index] = line }
+    if (body.size > KX_ADDRESS_STREET_LINES) {
+        val overflow = body.drop(KX_ADDRESS_STREET_LINES)
+        val tokens = overflow.first().split(',').map { it.trim() }.filter { it.isNotEmpty() }
+        out[ADDR_CITY] = tokens.firstOrNull().orEmpty()
+        val rest = tokens.getOrNull(1).orEmpty().split(' ').filter { it.isNotBlank() }
+        // 「州 邮编」：最后一段是邮编，前面的是州（美国州名可能两词）。
+        out[ADDR_STATE] =
+            if (rest.size >= 2) rest.dropLast(1).joinToString(" ") else rest.joinToString(" ")
+        out[ADDR_POSTAL_CODE] = if (rest.size >= 2) rest.last() else ""
+        // 多出来的行接在 address3 后面（保留内容而不是丢弃）。
+        val extra = overflow.drop(1).joinToString("\n").trim()
+        if (extra.isNotEmpty()) {
+            out[ADDR_ADDRESS3] = listOf(out[ADDR_ADDRESS3], extra)
+                .filter { it.isNotBlank() }
+                .joinToString("\n")
+        }
+    }
+    return out
+}
+
+/**
+ * 地址段**局部**下标（0..6，对应 `address1`…`country`）。
+ *
+ * ⚠️ 与 [IDX_CITY] 等 18 键全局下标**不是一回事**：`slice(4..10)` 之后列表只有 7 项，
+ *   混用会在运行期 `IndexOutOfBoundsException` —— 而且只在"有 `identity_address` 合并块"
+ *   这条很少走的路径上炸，单测不覆盖就发不现。
+ */
+private const val ADDR_ADDRESS3 = 2
+private const val ADDR_CITY = 3
+private const val ADDR_STATE = 4
+private const val ADDR_POSTAL_CODE = 5
+private const val ADDR_COUNTRY = 6
+
+/** 身份 18 键里的下标（避免满屏魔法数字；顺序由 `IDENTITY_KEYS` 锁定）。 */
+private const val IDX_TITLE = 0
+private const val IDX_FIRST_NAME = 1
+private const val IDX_MIDDLE_NAME = 2
+private const val IDX_LAST_NAME = 3
+private const val IDX_ADDRESS1 = 4
+private const val IDX_ADDRESS2 = 5
+private const val IDX_ADDRESS3 = 6
+private const val IDX_CITY = 7
+private const val IDX_STATE = 8
+private const val IDX_POSTAL_CODE = 9
+private const val IDX_COUNTRY = 10
+
+/** `identity_address` 里最多几行是街道/门牌（对齐 `BitwardenReader.cpp` 的 address1..3）。 */
+private const val KX_ADDRESS_STREET_LINES = 3
+
+/** 行数达到这个值才把最后一行当国家（3 街道 + 1 城市 + 1 国家）。 */
+private const val KX_ADDRESS_MIN_LINES_WITH_COUNTRY = 5
 
 /** 载荷表 → [VaultSshKey]；判据同 [toVaultCard]。 */
 private fun Map<String, String>.toVaultSshKey(): VaultSshKey? {

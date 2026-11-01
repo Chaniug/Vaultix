@@ -48,27 +48,44 @@ import java.util.Locale
 /**
  * `VPX_` 工具字段：领域模型 ⇄ KDBX 字段的无损降级通道。
  *
- * ## 为什么只覆盖这三类
+ * ## 它管什么、不管什么（2026-11-01 起分成两个键区）
  *
- * 工具字段**只该承载「领域模型有、KDBX 装不下」的东西**。已逐项核过：
+ * 工具字段**只该承载「领域模型有、KDBX 装不下」的东西**。逐项核过：
  *
- * | 来源 | 领域模型 | KDBX 装得下吗 | 处置 |
+ * | 来源 | 领域模型 | KDBX 装得下吗 | 落法 |
  * |---|---|---|---|
- * | 多条 `login.uris` | [VaultItem.uris] 列表 | ❌ `Url` 只装一条 | ⇒ 本类 `VPX_URL_n` |
- * | Bitwarden 条目 `id` | [VaultItem.id] | 无标准键 | ⇒ 本类 `VPX_BW_ID` |
- * | Bitwarden 条目 `type` | [VaultItemType] | 无标准键 | ⇒ 本类 `VPX_BW_TYPE` |
- * | Bitwarden `passwordHistory` | **领域模型无此字段** | — | ⚠️ **不做**（见下） |
+ * | 多条 `login.uris` | [VaultItem.uris] 列表 | ❌ `Url` 只装一条 | `VPX_URL_n` + `VPX_MATCH_n` |
+ * | Bitwarden 条目 `id` | [VaultItem.id] | 无标准键 | `VPX_BW_ID` |
+ * | Bitwarden 条目 `type` | [VaultItemType] | 无标准键 | `VPX_BW_TYPE` |
+ * | 卡片 / 身份 / SSH | 载荷对象 | 无标准键，但**生态已有约定** | ⚠️ 见下 |
+ * | `passwordHistory` | [VaultItem.passwordHistory] | KDBX 有原生 History | `VPX_PW_HISTORY_n` |
  *
- * ### ⚠️ 为什么不做 `VPX_PW_HISTORY`（施工单 §2.2 曾列它）
+ * ### ⚠️ 卡 / 身份 / SSH 用的是**生态键名**，不是 `VPX_` 前缀
  *
- * `VaultItem` **没有** `passwordHistory` 字段 —— Bitwarden 侧的
- * `BitwardenExportModels` 注释也写着「Vaultix 领域模型暂不承载，恒为 `null`」。
- * 此刻加一个 `VPX_PW_HISTORY` 会造出「**写进去就再也读不出来**」的字段：
- * 它没有承载者，转换时写进去，下一次转换读出来无处安放 ⇒ 数据在往返中凭空消失，
- * 而用户完全看不到任何提示。
+ * `card_*` / `identity_*` 是 KeePassXC 的 Bitwarden 导入器（`BitwardenReader.cpp`）
+ * 已经写出去的键名。若本应用改用 `VPX_CARD_*`，双向都不通：
+ * 用 KeePassXC 迁过来的库读不到卡，本应用转出的库在 KeePassXC 里也不像卡。
  *
- * ⇒ **等`VaultItem` 真的建模了 `passwordHistory` 再补这个键。**
- *   届时的正确做法是在本文件加常量 + 在两侧接入，而不是现在写个空壳。
+ * ⇒ 判别标准是「**这个键名别人也在用吗**」：
+ *   - 别人在用（`KPEX_PASSKEY_*` / `KP2A_URL_n` / `card_*` / `identity_*`）⇒ **照抄，只读不写**或双向写；
+ *   - 只有本应用用（`VPX_*`）⇒ 私有约定，自己定才可逆。
+ *
+ * 这与「为什么不用 `KP2A_` 前缀」（见文件头）并不矛盾：那里说的是**自己的**新字段
+ * 不该冒用别人的标识；这里说的是**别人已有的**字段名不该另起一个。
+ *
+ * ### 密码历史用 `VPX_PW_HISTORY_n` 而不是 KDBX 原生 History
+ *
+ * `VaultItem.passwordHistory` 已在 #219 建模，格式 `epoch毫秒|密码`，按 `n` **数值**升序。
+ *
+ * KeePassXC 走的是原生 `<History>`（整条快照 + `lastUsedDate`，见 `BitwardenReader.cpp`），
+ * 那条路更"生态正确"，但它有两个**当前挡路**的事实：
+ * 1. 原生 History 存的是**整条条目快照**，不是「一个旧密码」——
+ *    本应用的领域模型只有「时间 + 密码」两项，写进 History 就得**编造**其余字段的快照值；
+ * 2. 读回来要判断"哪一条历史对应哪个旧密码"，只能靠 `Password` 字段差异去猜 —
+ *    用户在历史里改过备注、改过用户名，就会被误判成一条新密码。
+ *
+ * ⇒ 现在用私有键把**语义精确**地存下来；迁移到原生 History 是独立条目
+ *   （`.ai/issues`），届时可两者并存读取（先读 History，缺失再读 `VPX_PW_HISTORY_n`）。
  */
 internal object KdbxToolFields {
 
@@ -77,6 +94,19 @@ internal object KdbxToolFields {
 
     /** 多余 URI 的落法：`VPX_URL_1` / `VPX_URL_2` …（第 0 条进标准 `Url`）。 */
     const val URL_PREFIX = PREFIX + "URL_"
+
+    /**
+     * 额外网址的**生态键名**：`KP2A_URL_1` / `KP2A_URL_2` …（**只读不写**）。
+     *
+     * KeePassXC 的 `BitwardenReader.cpp` 把第 2 条起的网址写成
+     * `EntryAttributes::AdditionalUrlAttribute + "_" + n`，而那个常量正是 `KP2A_URL`。
+     * 于是所有"用 KeePassXC 从 Bitwarden 迁过来"的库，多出来的网址都躺在这个键名下。
+     *
+     * 本应用写的是 [URL_PREFIX]（私有前缀，因为要跟 `VPX_MATCH_n` 成对、且不冒认
+     * KeePass2Android 的归属）；但**读**必须同时认这一套，否则那批库的多网址
+     * 在 Vaultix 里只剩第一条。
+     */
+    const val LEGACY_URL_PREFIX = "KP2A_URL_"
 
     /**
      * Bitwarden 条目 id（保往返幂等 —— 转两次不会得到两个新条目）。
@@ -179,15 +209,33 @@ internal object KdbxToolFields {
     const val REPROMPT = PREFIX + "REPROMPT"
 
     /**
-     * 银行卡载荷前缀：`VPX_CARD_<字段名>`（如 `VPX_CARD_number`）。
+     * 银行卡载荷前缀：**`card_<字段名>`**（如 `card_number`）。
      *
      * ## 为什么是六个字段而不是一段 JSON
      *
-     * 一段 JSON 塞进一个字段，KeePassXC 里打开只看到 `{"cardholderName":"…"}` 一坨，
-     * 用户没法单独复制卡号、KeePassDX 的「复制银行卡号」等功能也认不出来。
-     * 拆成六个独立字段后：值本身**与 KeePassXC 的 `Card` 模板同名**（`number` /
-     * `expMonth` / `expYear` / `code` / `brand` / `cardholderName`），
-     * 用户在自己的 KDBX 客户端里看到的就是熟悉的那套卡字段。
+     * 一段 JSON 塞进一个字段，用户没法单独复制卡号，别的客户端也没法按名字取值。
+     * 拆成六个独立字段后，字段名与 KeePassXC 的 `Card` 模板逐字同名（`cardholderName` /
+     * `brand` / `number` / `expMonth` / `expYear` / `code`）。
+     *
+     * ## ⚠️ 为什么**不用** `VPX_` 前缀（2026-11-01 修正）
+     *
+     * 这里原先写的是 `VPX_CARD_number`，理由是本文件顶部那条「工具字段一律加 `VPX_`」。
+     * 那条纪律**用错了场合**：`VPX_` 的用途是标记「这是 Vaultix 转换器为了无损而造的、
+     * 用户不该看见的字段」，而 `card_*` 恰恰相反 —— 它是 **KeePassXC 的
+     * `BitwardenReader.cpp` 自己写的键名**（`entry->attributes()->set("card_" + attr, …)`），
+     * 属于**别人已经定好的标准**，和 `KPEX_PASSKEY_*` 同一性质。
+     *
+     * 本项目对 `KPEX_` 的处置是「照抄才能互通」（见文件头），`card_*` / `identity_*`
+     * 必须遵循同一条：
+     *
+     * | 方向 | 用 `VPX_CARD_` | 用 `card_` |
+     * |---|---|---|
+     * | KeePassXC 导入的库 → Vaultix | ❌ 读不到，卡片变普通条目 | ✅ 认得出 |
+     * | Vaultix 转出的库 → KeePassXC | 显示成 `VPX_CARD_number`（能看懂但不像卡） | ✅ 与它自己导入的完全一致 |
+     *
+     * 代价：`card_` 不带私有前缀，可能与用户自建的同名字段相撞。用两条纪律兜住 ——
+     * ① **读**只取 [cardKeys] 里那 6 个已知名字（`card_我自己的备注` 不受影响）；
+     * ② **写**只删这 6 个名字（[LEGACY_CARD_PREFIX] 的旧键另算），绝不按前缀整片清。
      *
      * ## 哪些受保护
      *
@@ -195,10 +243,21 @@ internal object KdbxToolFields {
      * 卡号与 CVV 在 Bitwarden 侧是加密载荷，落 KDBX 时转明文等于**主动降级**。
      * 姓名 / 品牌 / 有效期不敏感，写明文（让用户能直接在别的工具里看见）。
      */
-    const val CARD_PREFIX = PREFIX + "CARD_"
+    const val CARD_PREFIX = "card_"
 
-    /** 身份信息载荷前缀：`VPX_IDENTITY_<字段名>`（如 `VPX_IDENTITY_email`）。理由同 [CARD_PREFIX]。 */
-    const val IDENTITY_PREFIX = PREFIX + "IDENTITY_"
+    /** 身份信息载荷前缀：`identity_<字段名>`（如 `identity_email`）。理由见 [CARD_PREFIX]。 */
+    const val IDENTITY_PREFIX = "identity_"
+
+    /**
+     * 旧版银行卡前缀（`VPX_CARD_`），**只读不写**。
+     *
+     * 2026-11-01 之前转换出的库用的是它。写侧改键名后若不认旧键，用户上一次转好的
+     * 库再读一遍就**凭空丢卡**；写侧清理也要认它，否则改完类型的条目里会残留旧键。
+     */
+    const val LEGACY_CARD_PREFIX = PREFIX + "CARD_"
+
+    /** 旧版身份前缀（`VPX_IDENTITY_`），作用同 [LEGACY_CARD_PREFIX]。 */
+    const val LEGACY_IDENTITY_PREFIX = PREFIX + "IDENTITY_"
 
     /** SSH 密钥载荷前缀：`VPX_SSH_<字段名>`（`privateKey` / `publicKey` / `keyFingerprint`）。 */
     const val SSH_PREFIX = PREFIX + "SSH_"
@@ -247,11 +306,30 @@ internal object KdbxToolFields {
     /** SSH 密钥字段顺序。 */
     private val SSH_KEYS = listOf("privateKey", "publicKey", "keyFingerprint")
 
+    /**
+     * KeePassXC 的 Bitwarden 导入器**额外**写的两个合并字段（`BitwardenReader.cpp`）：
+     * `identity_name`（姓名空格拼接）与 `identity_address`（多行地址）。
+     *
+     * ⚠️ 它们是**只读**的：本应用写侧只写 18 个分段键（分段可逆，合并不可逆）。
+     *   列在这里只为「读回来 + 不再漏进自定义字段区」。
+     */
+    private val IDENTITY_MERGED_KEYS = listOf("name", "address")
+
     /** 银行卡键表（供写侧按域模型取值；读侧据此还原）。 */
     fun cardKeys(): List<String> = CARD_KEYS
 
-    /** 身份信息键表。 */
+    /** 身份信息键表（18 个**分段**键，写侧就是按它写的）。 */
     fun identityKeys(): List<String> = IDENTITY_KEYS
+
+    /**
+     * 身份信息在 KDBX 里**归本应用管**的全部键名 = 18 个分段键 + 2 个 KeePassXC 合并键。
+     *
+     * ⚠️ 为什么清理要单独一个表：合并键本应用**从不写**，但它由别的工具写进来后
+     *   已被读侧摊回分段（[isIdentityPayloadKey] 认它）——
+     *   若清理仍只认 18 个分段键，用户把"身份"改成"登录"之后，
+     *   `identity_address` 会**留在原地**，下一次读回来又被摊成身份 ⇒ **类型复活**。
+     */
+    fun identityOwnedKeys(): List<String> = IDENTITY_KEYS + IDENTITY_MERGED_KEYS
 
     /** SSH 键表。 */
     fun sshKeys(): List<String> = SSH_KEYS
@@ -265,12 +343,16 @@ internal object KdbxToolFields {
      * @param prefix [CARD_PREFIX] / [IDENTITY_PREFIX] / [SSH_PREFIX]。
      * @return 键为**去掉前缀后的原始大小写**（写侧就是按 [cardKeys] 的驼峰写的）。
      */
-    fun payloadOf(fields: Map<String, String>, prefix: String): Map<String, String> {
+    fun payloadOf(fields: Map<String, String>, vararg prefixes: String): Map<String, String> {
         val out = LinkedHashMap<String, String>()
-        fields.forEach { (key, value) ->
-            if (!key.startsWith(prefix, ignoreCase = true)) return@forEach
-            val name = key.substring(prefix.length)
-            if (name.isNotBlank()) out[name] = value
+        // ⚠️ 按参数顺序**逐个前缀**扫，`putIfAbsent` ⇒ 先给的前缀赢。
+        //    调用方一律「新键在前、旧键在后」，于是同一条目两套键都在时读新键。
+        prefixes.forEach { prefix ->
+            fields.forEach { (key, value) ->
+                if (!key.startsWith(prefix, ignoreCase = true)) return@forEach
+                val name = key.substring(prefix.length)
+                if (name.isNotBlank()) out.putIfAbsent(name, value)
+            }
         }
         return out
     }
@@ -307,10 +389,30 @@ internal object KdbxToolFields {
      * 写侧据此判断"哪些键是本条目产出的"以便清理。
      */
     fun isPayloadFieldName(name: String): Boolean =
-        name.startsWith(CARD_PREFIX, ignoreCase = true) ||
-            name.startsWith(IDENTITY_PREFIX, ignoreCase = true) ||
+        isCardPayloadKey(name) ||
+            isIdentityPayloadKey(name) ||
+            name.startsWith(LEGACY_CARD_PREFIX, ignoreCase = true) ||
+            name.startsWith(LEGACY_IDENTITY_PREFIX, ignoreCase = true) ||
             name.startsWith(SSH_PREFIX, ignoreCase = true) ||
             name.startsWith(PW_HISTORY_PREFIX, ignoreCase = true)
+
+    /**
+     * 是否**已知**的银行卡字段（`card_number` 等 6 个）。
+     *
+     * ⚠️ 必须按**完整键名**比，不能只看 `card_` 前缀：那个前缀同时可能落在用户自定义的
+     * `card_我的备注` 上，把它当载荷 ⇒ 详情页里看不见（被 [isToolFieldName] 排除）、
+     * 用户却还在别处能改到它 ⇒ **字段凭空消失**。
+     */
+    fun isCardPayloadKey(name: String): Boolean =
+        CARD_KEYS.any { name.equals(CARD_PREFIX + it, ignoreCase = true) }
+
+    /** 是否**已知**的身份字段（`identity_email` 等 18 个）；判据同 [isCardPayloadKey]。 */
+    fun isIdentityPayloadKey(name: String): Boolean =
+        IDENTITY_KEYS.any { name.equals(IDENTITY_PREFIX + it, ignoreCase = true) } ||
+            // ⚠️ KeePassXC 额外写的两个**合并**字段（见 KdbxItemMapper.toVaultIdentity）：
+            //    读侧会把它们摊回分段，所以必须在这里认成"已消费的载荷" ——
+            //    否则它们会**同时**出现在自定义字段区，用户看到一行原文多行地址。
+            IDENTITY_MERGED_KEYS.any { name.equals(IDENTITY_PREFIX + it, ignoreCase = true) }
 
     /**
      * 多余 URI 的匹配规则：`VPX_MATCH_n`（与 [URL_PREFIX] 同下标）。
@@ -465,14 +567,22 @@ internal object KdbxToolFields {
      *   在本库 `get` 得到 null、在 `startsWith` 也匹配不上 ⇒ 整条 URI 静默消失。
      *   这里不敏感，就能在别的工具改过大小写时仍然读回来。
      */
-    fun extras(toolFields: Map<String, String>): List<Pair<Int, String>> =
-        toolFields.entries
-            .mapNotNull { (key, value) ->
-                if (!key.startsWith(URL_PREFIX, ignoreCase = true)) return@mapNotNull null
-                val n = key.drop(URL_PREFIX.length).toIntOrNull() ?: return@mapNotNull null
-                value.trim().takeIf { it.isNotEmpty() }?.let { n to it }
-            }
-            .sortedBy { it.first }
+    fun extras(toolFields: Map<String, String>): List<Pair<Int, String>> {
+        val byIndex = LinkedHashMap<Int, String>()
+        // ⚠️ 两套前缀都要扫，**本应用产出的 `VPX_URL_n` 优先**（同一 n 两处都有值时取它）。
+        //    `KP2A_URL_n` 是 KeePassXC 从 Bitwarden 导入时写的，见 [LEGACY_URL_PREFIX]。
+        listOf(URL_PREFIX, LEGACY_URL_PREFIX).forEach { prefix ->
+            toolFields.entries
+                .mapNotNull { (key, value) ->
+                    if (!key.startsWith(prefix, ignoreCase = true)) return@mapNotNull null
+                    val n = key.drop(prefix.length).toIntOrNull() ?: return@mapNotNull null
+                    value.trim().takeIf { it.isNotEmpty() }?.let { n to it }
+                }
+                .sortedBy { it.first }
+                .forEach { (n, uri) -> byIndex.putIfAbsent(n, uri) }
+        }
+        return byIndex.entries.sortedBy { it.key }.map { it.key to it.value }
+    }
 
     /** `VPX_MATCH_n` → [UriMatch]；认不出时按 Bitwarden 默认（null = 基域匹配）。 */
     private fun matchOf(toolFields: Map<String, String>, n: Int): UriMatch? =
@@ -607,7 +717,17 @@ internal object KdbxToolFields {
     }
 
     /** 是否属于工具区（`VPX_` 前缀，大小写不敏感）。 */
-    fun isToolFieldName(name: String): Boolean = name.startsWith(PREFIX, ignoreCase = true)
+    fun isToolFieldName(name: String): Boolean =
+        name.startsWith(PREFIX, ignoreCase = true) ||
+            isCardPayloadKey(name) ||
+            isIdentityPayloadKey(name) ||
+            isAdditionalUrlKey(name)
+
+    /** 是否为 `KP2A_URL_n`（KeePassXC / KeePass2Android 约定的「第 n 条额外网址」）。 */
+    fun isAdditionalUrlKey(name: String): Boolean {
+        if (!name.startsWith(LEGACY_URL_PREFIX, ignoreCase = true)) return false
+        return name.drop(LEGACY_URL_PREFIX.length).toIntOrNull() != null
+    }
 
     /**
      * 宽松真值判定（`true` / `1` / `yes`，大小写不敏感）；认不出一律 false。
