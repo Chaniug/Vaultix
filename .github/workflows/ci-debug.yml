@@ -180,7 +180,11 @@ jobs:
           if [ -n "${{ secrets.SIGNING_KEYSTORE_BASE64 }}" ]; then
             printf '%s' "${{ secrets.SIGNING_KEYSTORE_BASE64 }}" | base64 -d > "$KS" 2>/tmp/b64.err || true
             if [ -s "$KS" ] && keytool -list -keystore "$KS" -storepass "${SIGNING_STORE_PASSWORD:-android}" -noprompt >/dev/null 2>&1; then
-              echo "::notice title=signing::固定密钥解码并校验通过，将用于签名。"
+              # ⚠️ 2026-11-01：「校验通过」这句**只说了一半** —— `keytool -list` 只验
+              #    store 密码，**不验 key 密码**。key 密码不一致时这里照样打"通过"，
+              #    而打包阶段会报 `keystore password was incorrect`。
+              #    真正的两样校验在 `Build Debug APK` 步骤的开头（`keytool -certreq`）。
+              echo "::notice title=signing::固定密钥解码通过（仅 store 密码；key 密码在打包步骤前再验）"
             else
               echo "::warning title=Keystore invalid::SIGNING_KEYSTORE_BASE64 无效，改用一次性密钥仅验证流水线。"
               rm -f "$KS"
@@ -230,7 +234,31 @@ jobs:
           # 固定密钥是否可用由**磁盘上是否存在 release.jks** 决定（解码步骤已保证它来自
           # 仓库 Secret），不再按事件名判断 —— 否则 workflow_dispatch 包会退回一次性密钥、
           # 无法覆盖安装（数据 + Keystore 全丢）。
+          #
+          # ★ 2026-11-01：先**真的验一次 key 密码**，验不过就退一次性密钥，**不要**带着坏密码去打包。
+          #
+          # 事故：CI #332/#333/#334/#335 连续四次红，报错落在
+          #   `:app:packageFullDebug` →
+          #   `KeytoolException: Failed to read key *** from store "release.jks":
+          #    keystore password was incorrect`。
+          # 而上面的「Decode signing keystore」明明打着
+          #   `固定密钥解码并校验通过，将用于签名。`
+          # —— 因为那句校验用的是 `keytool -list`，**它只验 store 密码，不验 key 密码**。
+          # 两种密码不一致时：解码步骤报"通过"、打包步骤报"密码错"，两句日志互相矛盾，
+          # 人被引去找代码问题（Compose 规则、编译错误），连查两轮都没中。
+          #
+          # ⇒ 校验必须覆盖打包真正用到的**两样**。`keytool -certreq` 会真的解一次私钥，
+          #   key 密码错时立刻失败 —— 这才是与打包等效的校验。
+          #   验不过就删掉固定密钥、走一次性密钥：宁可出一个"盖不上旧包"的预览包，
+          #   也不要一个**根本打不出来**的包。
           KS_FILE="$GITHUB_WORKSPACE/release.jks"
+          if [ -s "$KS_FILE" ] && ! keytool -certreq -keystore "$KS_FILE" \
+              -storepass "${SIGNING_STORE_PASSWORD:-android}" \
+              -alias "${SIGNING_KEY_ALIAS:-vaultix}" \
+              -keypass "${SIGNING_KEY_PASSWORD:-android}" >/dev/null 2>&1; then
+            echo "::warning title=Keystore key password invalid::固定密钥的 key 密码与 store 密码不一致（keytool -certreq 解不开私钥）。本次改用一次性密钥 —— 本包**无法覆盖安装**，请修正 SIGNING_KEY_PASSWORD。"
+            rm -f "$KS_FILE"
+          fi
           if [ ! -s "$KS_FILE" ]; then KS_FILE=""; fi
           KS_OPTS=""
           if [ -n "$KS_FILE" ]; then
