@@ -51,6 +51,29 @@ CASES = [
 ]
 
 
+# 「**不该**报错」的反向用例：(相对路径, 要临时插入的 import 行, 说明)。
+#
+# 🔴 2026-11-01 新增，起因是一次真实误报：
+#   `SiteIcon.kt` 引入 `import androidx.compose.foundation.Image`（组件，用来画图标）
+#   之后，`foundation.Image` 的票数从 1 变 2，于是规则 A 认定
+#   "Image 应当来自 foundation"，把 `DisplayOptionsSheet.kt` 里那句
+#   `import androidx.compose.material.icons.filled.Image`（**图标**）判成错误。
+#
+#   两者根本不是同一个符号：前者是 Composable，后者是 `ImageVector` 扩展属性。
+#   脚本按简单名比较，看不出这层区别 ⇒ 图标必须整体退出统计（见工具的 is_icon_import）。
+#
+# 这个用例把"图标不参与约定判定"钉住：插入 `Icons.Outlined.Image` 后
+# `Image` 的票数变成 foundation=2 / icons.outlined=1 —— 若图标豁免失效，
+# 脚本会立刻把它判成"偏离约定"而报错。
+NEGATIVE_CASES = [
+    (
+        "app/src/main/java/io/vaultix/vaultix/ui/common/AppPickerDialog.kt",
+        "import androidx.compose.material.icons.outlined.Image",
+        "图标与组件同名（Icons.Outlined.Image vs foundation.Image）",
+    ),
+]
+
+
 def run_tool() -> tuple[int, str]:
     proc = subprocess.run(
         [sys.executable, str(TOOL)], cwd=ROOT, capture_output=True, text=True
@@ -82,6 +105,26 @@ def main() -> int:
             else:
                 failures += 1
                 print(f"[FAIL] ② 写错 {symbol} 的包却没抓到（退出码 {code}）")
+                print(out)
+        finally:
+            path.write_text(original, encoding="utf-8")
+
+    for rel, extra_import, why in NEGATIVE_CASES:
+        path = ROOT / rel
+        original = path.read_text(encoding="utf-8")
+        try:
+            marker = "\nimport "
+            idx = original.find(marker)
+            assert idx >= 0, f"{rel} 里找不到 import 块"
+            mutated = original[: idx + 1] + extra_import + "\n" + original[idx + 1 :]
+            path.write_text(mutated, encoding="utf-8")
+
+            code, out = run_tool()
+            if code == 0:
+                print(f"[PASS] ②b 不误报：{why}")
+            else:
+                failures += 1
+                print(f"[FAIL] ②b 误报了：{why}（退出码 {code}）")
                 print(out)
         finally:
             path.write_text(original, encoding="utf-8")

@@ -3,6 +3,8 @@ package io.vaultix.vaultix
 import android.app.Application
 import android.util.Log
 import androidx.lifecycle.ProcessLifecycleOwner
+import coil.ImageLoader
+import coil.ImageLoaderFactory
 import dagger.hilt.android.HiltAndroidApp
 import io.vaultix.common.logging.LogLevel
 import io.vaultix.common.logging.VaultixLog
@@ -25,7 +27,7 @@ import javax.inject.Inject
  * 该档位的锁定中**豁免**，否则用户点一次通行密钥就会把库锁掉。
  */
 @HiltAndroidApp
-class VaultixApplication : Application() {
+class VaultixApplication : Application(), ImageLoaderFactory {
 
     @Inject
     lateinit var autoLockController: AutoLockController
@@ -125,4 +127,45 @@ class VaultixApplication : Application() {
             createdForAutofill = createdForAutofill,
         )
     }
+
+    /**
+     * 全局 Coil `ImageLoader`（2026-11-01，用户报「图标每次打开都重新加载」）。
+     *
+     * ## 为什么必须在这里配，而不是在各个 `ImageRequest` 里
+     *
+     * `respectCacheHeaders` 是 **loader 级**开关，`ImageRequest` 上没有对应的 per-request
+     * 选项。而它恰恰是「每次冷启动都要重新下载全部图标」最可能的成因：
+     *
+     * Coil 默认 `respectCacheHeaders = true` —— 服务端回什么 `Cache-Control` 就照办。
+     * 图标端点 `<base>/icons/<host>/icon.png` 一旦返回 `no-cache` / `max-age=0`
+     * （反向代理与 CDN 的默认行为并不统一），**磁盘缓存就完全不写**。
+     * 于是：冷启动 → 内存缓存空 → 磁盘缓存也空 → 一屏图标全部重新联网。
+     * 用户看到的正是「每次都重新加载」。
+     *
+     * ## 为什么关掉它是**正确**的（而不是拿安全换速度）
+     *
+     * 图标是「域名 → 一张小 PNG」的**准静态**资源，本地缓存优先是行业惯例
+     * （Bitwarden 自己的客户端也长期缓存图标）。关掉之后唯一的代价是：
+     * 站点换了 favicon，本地可能仍旧图，直到 LRU 淘汰或清缓存。
+     * 这个代价远小于「每次启动重下几十张图」。
+     *
+     * ⚠️ 本仓库目前**只有图标**走 Coil，所以这条全局策略不会误伤别的图片。
+     * 若将来引入"必须实时的图片"（如头像 / 分享图），**不要**改这里，
+     * 而是在那条 `ImageRequest` 上单独设 `respectCacheHeaders` —— 它确实有 per-request 版本。
+     *
+     * ## 其余保持默认
+     *
+     * 内存缓存（`memoryClass` 的 20%）与磁盘缓存（空闲空间 2%，限幅 10~250MB）都**不收紧**：
+     * 一张 40dp 图标在 3x 屏上是 120px ≈ 56KB，整库几百条也就几 MB ——
+     * 离上限差两个数量级，收紧只会降低命中率、把空帧放回来。
+     *
+     * 磁盘缓存目录必须保持 Coil 默认的 `cacheDir/image_cache`：`AutofillItemIcon`
+     * 直接按 URL 读这个目录做填充建议的图标，换目录等于把它废掉。
+     */
+    override fun newImageLoader(): ImageLoader = ImageLoader.Builder(this)
+        .respectCacheHeaders(false)
+        // 全局也关一次淡入：单条 request 已各自关掉，这里是兜底，
+        // 防止将来新增的图标调用点漏设而把「白圈闪一下」带回来。
+        .crossfade(false)
+        .build()
 }

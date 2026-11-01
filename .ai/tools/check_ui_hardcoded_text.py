@@ -113,6 +113,59 @@ def _strip_comments(lines: list[str]) -> list[tuple[int, str]]:
     return out
 
 
+def _paren_delta(code: str) -> int:
+    """该行贡献的圆括号深度变化（**先剥掉字符串字面量**再数）。
+
+    为什么剥：`"a (b"` 这种含半角括号的文案会让朴素计数偏 1，
+    进而把后面的无关行并进同一条语句 —— 那会把真文案一起放行（漏报）。
+    """
+    return LITERAL.sub('""', code).count("(") - LITERAL.sub('""', code).count(")")
+
+
+def _merge_call_lines(lines: list[tuple[int, str]]) -> list[tuple[int, str]]:
+    """把**跨行的调用**合并成一条"逻辑行"（行号取起始行）。
+
+    ## 为什么需要（2026-11-01，实测误报）
+
+    日志 / 内部断言的放行靠 `_ALLOW_HINTS` 匹配**行内文本**。但格式化后的调用是：
+
+    ```kotlin
+    Log.w(
+        TAG,
+        "开关热区只有 $maxHeight，低于 Material 的 $SWITCH_TOUCH_TARGET_MIN：" +
+            "行内边距太小，装不下 48dp。请检查该行的上下 padding。",
+    )
+    ```
+
+    `Log.` 在**第一行**，中文字面量在**第四行** ⇒ 逐行匹配时那两行都不含关键字，
+    于是被判成"UI 硬编码文案"。这条误报从 2026-10-30 那次提交起就一直红着，
+    只是因为跑检查时用 `| tail` 读输出（`$?` 取到的是 tail 的退出码）而没人发现。
+
+    ## 判据
+
+    语句是**跨行的**，那"这是不是日志"也只能按**整条语句**判断。
+    ⇒ 括号未闭合就继续累积，闭合后作为一条逻辑行交出去。
+    括号平衡的普通行（绝大多数）深度为 0，行为与原来完全一致。
+    """
+    out: list[tuple[int, str]] = []
+    buf: str | None = None
+    start_no = 0
+    depth = 0
+    for no, code in lines:
+        if buf is None:
+            buf, start_no = code, no
+            depth = _paren_delta(code)
+        else:
+            buf = f"{buf} {code}"
+            depth += _paren_delta(code)
+        if depth <= 0:
+            out.append((start_no, buf))
+            buf = None
+    if buf is not None:                       # 文件末尾仍未闭合：原样交出，不吞行
+        out.append((start_no, buf))
+    return out
+
+
 def _load_baseline() -> dict[str, set[str]]:
     """path -> 已登记的特征串集合。"""
     entries: dict[str, set[str]] = {}
@@ -140,7 +193,9 @@ def scan() -> list[tuple[str, int, str]]:
         if any(rel.startswith(d) for d in _EXEMPT_DIRS):
             continue
         allowed = baseline.get(rel, set())
-        for no, code in _strip_comments(path.read_text(encoding="utf-8").split("\n")):
+        stripped = _strip_comments(path.read_text(encoding="utf-8").split("\n"))
+        # ⚠️ 必须按"逻辑行"判断：跨行调用里关键字与文案不在同一行（见 _merge_call_lines）。
+        for no, code in _merge_call_lines(stripped):
             if any(h in code for h in _ALLOW_HINTS):
                 continue
             for m in LITERAL.finditer(code):
@@ -184,7 +239,42 @@ def selftest() -> int:
         ok = hit == should_hit
         print(f"  [{'PASS' if ok else 'FAIL'}] {label}")
         failures += 0 if ok else 1
-    total = len(cases) + 1
+    # ★ 2026-11-01 新增：跨行调用必须按**整条语句**判断。
+    #
+    # 这两条钉住的是 `_merge_call_lines`：格式化后的 `Log.w(...)` 里关键字在第一行、
+    # 中文在第四行，逐行判断必然误报（真实误报持续了整整两天没人发现）。
+    spread_log = _merge_call_lines([
+        (1, "Log.w("),
+        (2, "    TAG,"),
+        (3, '    "开关热区只有 $maxHeight：" +'),
+        (4, '        "装不下 48dp。",'),
+        (5, ")"),
+    ])
+    log_ok = (
+        len(spread_log) == 1
+        and spread_log[0][0] == 1
+        and any(h in spread_log[0][1] for h in _ALLOW_HINTS)
+    )
+    print(f"  [{'PASS' if log_ok else 'FAIL'}] 跨行 Log.w 应合并成一条并放行")
+    failures += 0 if log_ok else 1
+
+    # 反向：跨行的**真 UI 文案**不能被合并逻辑顺手放行。
+    spread_text = _merge_call_lines([
+        (1, "Text("),
+        (2, '    text = "确定要删除这条记录吗",'),
+        (3, ")"),
+    ])
+    text_ok = (
+        len(spread_text) == 1
+        and not any(h in spread_text[0][1] for h in _ALLOW_HINTS)
+        and any(
+            re.search(f"[{CJK}]", m.group(1)) for m in LITERAL.finditer(spread_text[0][1])
+        )
+    )
+    print(f"  [{'PASS' if text_ok else 'FAIL'}] 跨行 Text(...) 仍应被抓到")
+    failures += 0 if text_ok else 1
+
+    total = len(cases) + 3
     print(f"自检：{total - failures}/{total} 通过")
     return 0 if failures == 0 else 1
 

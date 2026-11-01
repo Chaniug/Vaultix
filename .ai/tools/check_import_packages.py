@@ -144,6 +144,37 @@ def package_of(path: str) -> str:
     return path.rsplit(".", 1)[0]
 
 
+#: Compose 图标的包前缀（`androidx.compose.material.icons.filled|outlined|...`）。
+_ICON_PACKAGE_PREFIX = "androidx.compose.material.icons."
+
+
+def is_icon_import(import_path: str) -> bool:
+    """这条 import 是不是**图标**（`Icons.Filled.Xxx`）？
+
+    ## 为什么图标必须整体退出"约定包"统计与检查（2026-11-01）
+
+    Compose 的图标是**数千个同名扩展属性**，名字与常用组件天然撞车：
+    `Image`、`Person`、`Check`、`Star`、`Menu`、`Add`、`Home`、`Lock`、`Search`……
+    几乎每个 UI 组件都有一个同名图标。
+
+    实录：`ui/common/SiteIcon.kt` 新增了 `import androidx.compose.foundation.Image`
+    （组件，用来画站点图标），使 `foundation.Image` 的票数变成 2 ——
+    而 `ui/items/DisplayOptionsSheet.kt` 里那处
+    `import androidx.compose.material.icons.filled.Image`（**图标**，`Icons.Filled.Image`）
+    票数为 1 ⇒ 被规则 A 判成"偏离约定"。
+
+    但两者根本不是同一个符号：前者是 Composable，后者是 `ImageVector` 扩展属性。
+    脚本按**简单名**比较，看不出这层区别。
+
+    ## 判据
+
+    "图标"不构成任何"包约定"的证据 —— `Icons.Filled.X` 与 `Icons.Outlined.X`
+    同时存在是**设计意图**（不同视觉风格），仓库同时用两者完全合法。
+    ⇒ 既不把它们计入约定表（`build_exclusive_map`），也不检查它们（`check_file`）。
+    """
+    return import_path.startswith(_ICON_PACKAGE_PREFIX)
+
+
 def rule_a_in_scope(import_path: str) -> bool:
     """规则 A 的**作用域**：只对 `androidx.*` / `io.vaultix.*` 生效。
 
@@ -230,6 +261,9 @@ def build_exclusive_map(files: list[Path]) -> dict[str, str]:
             #    反过来误伤合法的 `androidx.*` 导入（2026-09-28 实录：`Build`）。
             if not rule_a_in_scope(fp):
                 continue
+            # ⚠️ 图标退出统计：见 is_icon_import（名字与组件撞车，票数是噪音）。
+            if is_icon_import(fp):
+                continue
             tally[name][package_of(fp)] += 1
 
     exclusive: dict[str, str] = {}
@@ -275,6 +309,10 @@ def check_file(
         # 仅对 androidx.* / io.vaultix.* 生效，避免误伤第三方库的合法同名。
         # ⚠️ 与 build_exclusive_map 的统计口径共用 rule_a_in_scope（同一条事实）。
         if not rule_a_in_scope(fp):
+            continue
+        # ⚠️ 图标不参与本检查：见 is_icon_import（`Icons.Filled.Image` 与
+        #    `foundation.Image` 是两回事，按简单名比必然误报）。
+        if is_icon_import(fp):
             continue
         if name in _LEGIT_CROSS_PACKAGE:        # 两个包都真实存在，不算错
             continue

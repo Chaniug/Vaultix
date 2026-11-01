@@ -3,8 +3,8 @@
  * Copyright (C) 2026 Vaultix contributors
  *
  * Vaultix is free software: you can redistribute it and/or modify it under the terms of the
- * GNU General Public License as published by the Free Software Foundation, either version 3
- * of the License, or (at your option) any later version.
+ * GNU General Public License as published by the Free Software Foundation, either version 3 of
+ * the License, or (at your option) any later version.
  *
  * ---------------------------------------------------------------------------
  * 溯源声明（GPL-3.0 合规）
@@ -19,6 +19,9 @@
  */
 package io.vaultix.vaultix.ui.common
 
+import android.graphics.Bitmap
+import android.os.SystemClock
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -27,26 +30,67 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
-import coil.compose.AsyncImage
+import coil.compose.AsyncImagePainter
+import coil.compose.rememberAsyncImagePainter
+import coil.imageLoader
+import coil.memory.MemoryCache
 import coil.request.CachePolicy
 import coil.request.ImageRequest
 import io.vaultix.common.SiteIconUrl
 import io.vaultix.model.VaultItem
+import kotlinx.coroutines.delay
 
-/** 图标 PNG 通常接近正方形；统一按 2 倍密度请求，够清晰也不至于浪费流量。 */
-private const val ICON_REQUEST_PX = 96
+/**
+ * 图标内存缓存键的**唯一**构造点（`尺寸 + URL`）。
+ *
+ * ## 为什么键里必须带尺寸
+ *
+ * Coil 在显式设置 `memoryCacheKey` 时会**整条替换**它自己算的键 ——
+ * `MemoryCacheService.newCacheKey()` 第一行就是：
+ *
+ * ```kotlin
+ * request.memoryCacheKey?.let { return it }   // 快路径：不再追加 extras
+ * ```
+ *
+ * 而 Coil 默认的键是 `MemoryCache.Key(base, extras)`，`extras` 里才装着尺寸/变换等信息。
+ * 一旦我们显式给键，`extras` 就**空了** ⇒ 列表的 40dp 图标与详情页的 56dp 图标
+ * 会共用同一条缓存。后果不是"糊"，而是更隐蔽的**来回重解码**：
+ * 缓存里的尺寸与本次请求不符时 `isCacheValueValid` 判无效 → 重新解码 → 覆盖同一个键，
+ * 下次换个尺寸再判无效……每进一次详情页就是一轮白跑。
+ *
+ * ⇒ 把像素尺寸编进键里，两种尺寸各存一条，双方都走"尺寸精确匹配"的最快路径。
+ *
+ * @param url 图标 URL（[SiteIconUrl.forHost] 的产物，已归一化主机名）。
+ * @param px 请求的像素尺寸（**不是 dp**）。
+ */
+internal fun siteIconCacheKey(url: String, px: Int): String = "site-icon:$px:$url"
+
+/**
+ * 失败后等待多久再重试一次（毫秒）。
+ *
+ * 取 30s：短到用户滑一圈回来就能看到自愈，长到不会在断网时把每一行都变成轮询器。
+ */
+private const val ICON_RETRY_DELAY_MS = 30_000L
+
+/** 最多重试几次。1 次足够覆盖"网络抖动 / DNS 超时"，再多就是拿用户的电换运气。 */
+private const val ICON_MAX_RETRIES = 1
 
 /**
  * 条目左侧图标：**站点图标**，取不到就回退首字母头像。
@@ -57,8 +101,28 @@ private const val ICON_REQUEST_PX = 96
  * 条目根本没填网址、KDBX 库（origin 是 `content://`）。
  * 这些都不该让卡片显示一个破图或一片空白 —— 首字母头像始终是**可读的兜底信息**。
  *
- * ## 缓存
- * 内存 + 磁盘缓存都由 Coil 管理（这里显式写出，防将来被全局配置改掉）。
+ * ## 缓存（2026-11-01 重做）
+ *
+ * 内存 + 磁盘缓存都由 Coil 管理。**全局策略**（`respectCacheHeaders(false)`）见
+ * `VaultixApplication.newImageLoader()` 的 KDoc；本文件负责**渲染侧的命中率**：
+ *
+ * | 场景 | 行为 |
+ * |---|---|
+ * | 内存缓存已有图（绝大多数滚动场景） | **同步**取位图直接 `Image` 绘制，不建 `ImageRequest`、不发协程 |
+ * | 首次加载 / 缓存被回收 | 先画首字母（**不是空白**），加载成功后换成图标 |
+ * | 加载失败 | 首字母；[ICON_RETRY_DELAY_MS] 后自动重试一次 |
+ *
+ * ## 为什么要在**组合期**同步查缓存
+ *
+ * 这是"滑动时图标从空白再长出来"的根治点。`LazyColumn` 的卡片滑出可见区会被销毁、
+ * 滑回来时**重建 composable**；而 `AsyncImage` 无论如何都要先走一次协程调度
+ * （`RealImageLoader.execute` 通过 `Dispatchers.Main.immediate` 排程），
+ * 于是重建后的**第一帧必然是空的**。60Hz 下一帧 16.7ms，肉眼正好能捕捉到
+ * "白圈闪一下"。
+ *
+ * 同步查 `ImageLoader.memoryCache` 是 O(1) 的 LRU 查找，命中后第一帧就有图，
+ * 从根上消掉这个空帧 —— 而不是靠调短动画去掩盖它。
+ *
  * **刻意不带认证 / cookie**：图标端点按域名公开可访问；带上会话凭据会把一次
  * 「公开 CDN 取图」变成「已登录态的私密请求」，既无必要也扩大凭据暴露面。
  *
@@ -98,8 +162,99 @@ fun SiteIconByHost(
     val iconUrl = remember(domain, serverOrigin) {
         SiteIconUrl.forHost(serverOrigin, domain)
     }
-    var failed by remember(iconUrl) { mutableStateOf(false) }
-    val showFallback = iconUrl == null || failed
+    // dp → px 必须**按当前密度**换算（Coil 2.7 的 `size(Int)` 只收像素，没有 Dp 重载）。
+    //
+    // ⚠️ 旧实现死写 96px，等于假设密度恒为 2x：40dp 在 3x 屏需要 120px、56dp 的详情页
+    // 需要 168px ⇒ 图标被**放大 1.25~1.75 倍**绘制，高密度机上一律发虚。
+    // 这不是"不够清晰"，是解码尺寸从一开始就算错了。
+    val density = LocalDensity.current
+    val targetPx = remember(size, density) {
+        with(density) { size.roundToPx() }.coerceAtLeast(1)
+    }
+
+    val imageLoader = LocalContext.current.imageLoader
+
+    if (iconUrl == null) {
+        FallbackAvatar(fallbackText = fallbackText, size = size, modifier = modifier)
+    } else {
+        // ★ 组合期同步命中：卡片重建的第一帧就有图（见类 KDoc「为什么要在组合期同步查缓存」）。
+        val cachedBitmap = remember(iconUrl, targetPx) {
+            imageLoader.memoryCache?.get(MemoryCache.Key(siteIconCacheKey(iconUrl, targetPx)))?.bitmap
+        }
+        if (cachedBitmap != null) {
+            CachedSiteIcon(bitmap = cachedBitmap, size = size, modifier = modifier)
+        } else {
+            RemoteSiteIcon(
+                iconUrl = iconUrl,
+                targetPx = targetPx,
+                fallbackText = fallbackText,
+                size = size,
+                modifier = modifier,
+            )
+        }
+    }
+}
+
+/**
+ * 快路径：内存缓存已有位图。
+ *
+ * 这里的意义不只是"省一次请求"，而是**不构造 `ImageRequest`、不启动协程、不查询磁盘** ——
+ * 整条 `RealImageLoader.execute` 都被跳过。滚动时每张卡片都走这条路，
+ * 因此它必须尽可能短。
+ */
+@Composable
+private fun CachedSiteIcon(bitmap: Bitmap, size: Dp, modifier: Modifier) {
+    // `asImageBitmap()` 每次重组都会包一层新对象 ⇒ 必须 remember，否则 painter 每帧都换
+    // 实例，Compose 会当成"换了一张图"而重绘。
+    val painter = remember(bitmap) { BitmapPainter(bitmap.asImageBitmap()) }
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = modifier
+            .size(size)
+            .clip(CircleShape)
+            // 图标多为透明 PNG：给白底，避免深色主题下深色描边糊在深色卡面上
+            // （Bitwarden 同样给站点图标垫白底）。
+            .background(Color.White),
+    ) {
+        Image(
+            painter = painter,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxSize(),
+        )
+    }
+}
+
+/**
+ * 慢路径：缓存里没有，需要真的去取。
+ *
+ * ## 为什么先画首字母再叠图片
+ *
+ * 旧实现在"加载中"时 `AsyncImage` 什么都没画，底色又是白圆 ⇒ 用户看到的就是
+ * **一个白圈**，随后图标突然出现 —— 这正是「从空白再加载出来」的字面来源。
+ * 改成"首字母始终在底层、图标成功后再盖上去"之后，任何时刻都有可读内容。
+ *
+ * ## 失败重试
+ *
+ * 旧实现失败后把 `failed = true` 一路带到这张卡被回收为止：一屏里只要有一条
+ * 因为 DNS 抖动失败，它就**永远**停在首字母（除非用户滑到它被销毁再重建）。
+ * 现在记录失败时刻，[ICON_RETRY_DELAY_MS] 后清标志并重建请求，最多 [ICON_MAX_RETRIES] 次。
+ */
+@Composable
+private fun RemoteSiteIcon(
+    iconUrl: String,
+    targetPx: Int,
+    fallbackText: String,
+    size: Dp,
+    modifier: Modifier,
+) {
+    val context = LocalContext.current
+    // 失败时刻（0 = 未失败）。用时间戳而不是布尔：既能判"正在失败"，
+    // 又能作为 `LaunchedEffect` 的 key 让每次失败都重新计时。
+    var failedAt by remember(iconUrl) { mutableLongStateOf(0L) }
+    var retries by remember(iconUrl) { mutableIntStateOf(0) }
+
+    val cacheKey = remember(iconUrl, targetPx) { siteIconCacheKey(iconUrl, targetPx) }
     // ★★ 必须 `remember`：`ImageRequest.Builder(...).build()` 每次**重组**都会跑一遍，
     // 而它的成本并不低（构造 ImageRequest + SizeResolver + Scale + 缓存键…）。
     //
@@ -109,31 +264,49 @@ fun SiteIconByHost(
     // `Slow bitmap uploads: 0`、GPU 99th 仅 3ms），且 22 个慢帧的耗时集中在
     // **34~65ms**（= 丢 2~4 帧），与「十几次点击各产生一次卡顿」完全吻合。
     // 缓存命中与否都省不掉这次构造 —— 省掉的是**每帧每行**的重复构造。
-    val context = LocalContext.current
-    val request = remember(iconUrl, context) {
+    val request = remember(iconUrl, context, targetPx, retries) {
         ImageRequest.Builder(context)
             .data(iconUrl)
+            .size(targetPx)
+            // 显式键：见 [siteIconCacheKey] 的 KDoc（尺寸必须进键）。
+            .memoryCacheKey(cacheKey)
+            // 让 Coil 在"本帧还没有结果"时就用内存缓存里的同一张图兜底 —— 与上面的
+            // 同步预取互补：预取管"卡片重建"，这条管"同一张卡里的状态切换"。
+            .placeholderMemoryCacheKey(cacheKey)
             .memoryCachePolicy(CachePolicy.ENABLED)
             .diskCachePolicy(CachePolicy.ENABLED)
-            .size(ICON_REQUEST_PX)
             // ⚠️ 2026-10-04 用户反馈「往下滑动密码条目时，图标看起来一直在加载」——
-            //   取证结论：**并没有在下载**。`memoryCachePolicy`/`diskCachePolicy` 都开着，
-            //   `size` 也固定，缓存早已命中；发网络请求的只有 autofill 侧（那里只读磁盘缓存）。
-            //   看起来在"加载"的真凶是这个 `crossfade(true)`：
+            //   取证结论：**并没有在下载**。真凶是 `crossfade(true)`：
             //   `LazyColumn` 里卡片滑进/滑出可见区会**重建 composable**，
             //   而 `AsyncImage` 每次重建都把淡入动画**从头播一遍**（约 100ms 的 alpha 渐变）
             //   ⇒ 每张卡片进出场都白播一次动画，看着像在加载。
             //   代价是**实打实的每帧开销**（每张可见卡片一次 alpha 动画 + 一层重绘），
             //   与「滚动卡顿」直接相关 ⇒ 关掉。
             //
-            //   关闭后的观感代价：首次从磁盘缓存读出图标时是**瞬时出现**而非淡入。
-            //   这是可接受的 —— 卡片本身在滚动中进出，150ms 的淡入既看不清、
-            //   反而制造了「还在加载」的错觉（这正是本条要修的现象）。
             //   ⚠️ 若将来要"首次联网下载时淡入、缓存命中时瞬显"，
-            //   正确做法是分两套 ImageRequest（按 `memoryCachePolicy` 区分），**不要**把
+            //   正确做法是分两套 ImageRequest（按缓存命中与否区分），**不要**把
             //   crossfade 整体开回来 —— 那正是本条修掉的东西。
             .crossfade(false)
             .build()
+    }
+
+    val painter = rememberAsyncImagePainter(
+        model = request,
+        // ⚠️ 必须显式传 `imageLoader`：带 `onError` 的那个重载**没有**默认值，
+        //    漏掉它就会落到另一个只有 `onState` 的重载上而报"参数不存在"。
+        imageLoader = context.imageLoader,
+        onError = { failedAt = SystemClock.elapsedRealtime() },
+    )
+    val loaded = painter.state is AsyncImagePainter.State.Success
+
+    // 失败后延迟重试一次：清标志 + 递增 retries ⇒ request 的 `remember` key 变化 ⇒ 重新加载。
+    // ⚠️ 不用"失败即永久标记"：网络抖动不该让某个条目在本次浏览里一直显示首字母。
+    LaunchedEffect(failedAt) {
+        if (failedAt != 0L && retries < ICON_MAX_RETRIES) {
+            delay(ICON_RETRY_DELAY_MS)
+            retries += 1
+            failedAt = 0L
+        }
     }
 
     Box(
@@ -141,32 +314,52 @@ fun SiteIconByHost(
         modifier = modifier
             .size(size)
             .clip(CircleShape)
-            .background(
-                // 图标多为透明 PNG：给白底，避免深色主题下深色描边糊在深色卡面上
-                // （Bitwarden 同样给站点图标垫白底）。兜底态则用彩色头像，见下。
-                if (showFallback) fallbackAvatar(fallbackText) else Color.White,
-            ),
+            .background(if (loaded) Color.White else fallbackAvatar(fallbackText)),
     ) {
-        if (!showFallback) {
-            AsyncImage(
-                model = request,
+        if (loaded) {
+            Image(
+                painter = painter,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
-                // 任何失败（404 / 超时 / 非法图片）都切回首字母：调用方无需区分原因。
-                onError = { failed = true },
             )
         } else {
-            Text(
-                text = fallbackText.take(1).uppercase(),
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                // 底衬已换成饱和色（见 [fallbackAvatar]），字必须用**对白/对黑**，
-                // 不能再跟随主题的 onSurfaceVariant —— 那在彩色底上会读不清。
-                color = fallbackAvatarContentColor(),
-            )
+            // 加载中 / 失败 / 待重试：一律显示首字母。**任何时刻都不是空白**。
+            FallbackInitial(text = fallbackText)
         }
     }
+}
+
+/**
+ * 兜底：没有域名可拼 URL（KDBX 库、未填网址、非法域名）时的首字母头像。
+ *
+ * 与 [RemoteSiteIcon] 的"加载中"态共用 [FallbackInitial]，保证两者字形完全一致 ——
+ * 否则同一个条目在"有域名但没取到"和"根本没域名"两种情况下会显示成两种大小。
+ */
+@Composable
+private fun FallbackAvatar(fallbackText: String, size: Dp, modifier: Modifier) {
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = modifier
+            .size(size)
+            .clip(CircleShape)
+            .background(fallbackAvatar(fallbackText)),
+    ) {
+        FallbackInitial(text = fallbackText)
+    }
+}
+
+/** 首字母字形（彩色底衬之上）。底衬已换成饱和色，字必须固定用白。 */
+@Composable
+private fun FallbackInitial(text: String) {
+    Text(
+        text = text.take(1).uppercase(),
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.SemiBold,
+        // 底衬是饱和色（见 [fallbackAvatar]），字必须用**对白/对黑**，
+        // 不能再跟随主题的 onSurfaceVariant —— 那在彩色底上会读不清。
+        color = fallbackAvatarContentColor(),
+    )
 }
 
 /**
