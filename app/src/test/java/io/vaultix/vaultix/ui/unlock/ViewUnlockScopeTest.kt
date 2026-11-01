@@ -114,6 +114,12 @@ class ViewUnlockScopeTest {
         val prefs = mockk<VaultixPreferences>(relaxed = true)
         every { prefs.quickUnlockScope() } returns flowOf(emptySet())
 
+        // ★ #220：接缝必须作为**构造参数**传入（构造后赋值赶不上 `init`）。
+        val seams = UnlockViewModelSeams().apply {
+            scope = this@viewLockedViewModel
+            io = StandardTestDispatcher(testScheduler)
+            ioContextOverride = StandardTestDispatcher(testScheduler)
+        }
         return UnlockViewModel(
             SavedStateHandle(mapOf(UnlockViewModel.ARG_VAULT_ID to vaultId)),
             repository,
@@ -122,11 +128,8 @@ class ViewUnlockScopeTest {
             mockk<RoomResealRepository>(relaxed = true),
             prefs,
             textContext(),
-        ).also {
-            it.testingScope = this
-            it.testingIoDispatcher = StandardTestDispatcher(testScheduler)
-            it.startObservers()
-        }
+            seams,
+        ).also { it.startObservers() }
     }
 
     /**

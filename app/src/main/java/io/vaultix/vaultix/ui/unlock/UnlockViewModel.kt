@@ -96,42 +96,30 @@ class UnlockViewModel @Inject constructor(
      * ⇒ 本轮只把「文案存在哪里」修对（`strings.xml`），解析点仍在 ViewModel。
      */
     @ApplicationContext private val context: Context,
-) : ViewModel() {
 
     /**
-     * ★ #174：**只给单测用**的协程作用域覆写口。生产恒为 null ⇒ 落到 `viewModelScope`。
+     * ★ 测试接缝（生产由 Hilt 提供一个**全空**实例，行为与从前一字不差）。
      *
-     * ## 为什么需要它（真实事故）
+     * ## 为什么必须是构造参数（#174 / #176 / #220 三次返工的共同根因）
      *
-     * CI 上 `UnlockViewModelTest > candidateVaultsExcludeTheTargetItself` 稳定报
-     * `IllegalStateException: Dispatchers.Main was accessed when the platform dispatcher
-     * was absent…`（`TestMainDispatcher.isDispatchNeeded`）。机理：
-     * `startBiometricUnlock` 在 `withContext(Dispatchers.IO)` 之后**续体回主线程**，
-     * 而单测里 `Dispatchers.Main` 只是一具替身（`kotlinx-coroutines-android` 不在测试
-     * classpath 上），`@After resetMain()` 一执行它就没了 ⇒ 真线程恰好在那之后 resume
-     * 就炸。同一文件里另两条用例走同一段代码却没红 —— 是**竞态**，不是必现。
-     * （本地"全绿"是 build-cache 喂了旧结果，见 `.ai/issues` #173。）
+     * `init` 在**构造期间**执行。此前接缝是三个「构造后赋值」的 `var`，于是
+     * `init` 里那句「接缝为 null 才自启」**恒为真** ——
+     * 观察协程永远拿 `viewModelScope`（= `Dispatchers.Main`）当作用域，
+     * 测试注入的 `TestScope` 一次都没生效；而 `observersStarted` 的 CAS 守卫
+     * 又让测试工厂随后那次 `startObservers()` **静默返回**，连日志都没有。
      *
-     * 覆写之后测试注入自己的 `TestScope` + 虚拟 IO 调度器：等待变成**确定性的虚拟时间**，
-     * 全程不碰 `Dispatchers.Main`。断言一条没放宽。
+     * 症状就是 #174 修了三轮仍在 CI 偶发：`prewarmCipher` 里
+     * `withContext(Dispatchers.IO)` 真的跳了线程池，回到 `Dispatchers.Main` 时
+     * `@After resetMain()` 已把它卸下 ⇒ `TestMainDispatcher.isDispatchNeeded` 抛
+     * `Dispatchers.Main was accessed…`。异常归到**下一条**正在跑的用例头上，
+     * 所以每次都换受害者、看起来像"随机"。
      *
-     * ## ⚠️ 为什么是一个 `var` 而不是构造参数
-     *
-     * 本类是 `@HiltViewModel`，Dagger 对**构造签名里的每一个参数**都要求可满足的绑定。
-     * 四条路都试过：
-     *
-     * 1. 构造参数默认值里读 `viewModelScope` / `this`
-     *    ⇒ `Cannot access '<this>' before the instance has been initialized`
-     *    （默认值在实例初始化**前**求值；与基类无关，普通 class 同样复现）
-     * 2. 把 `viewModelScope` 做成 `@Provides` 注入（`Lazy` / `Provider` / `dagger.Lazy`）
-     *    ⇒ `Injection of an @HiltViewModel class is prohibited`（Hilt 硬校验）
-     * 3. `scopeOverride: CoroutineScope? = null` 当构造参数
-     *    ⇒ `CoroutineScope cannot be provided`（**可空 + 有默认值也照解析不误**）
-     * 4. **本字段（构造后赋值）** ⇒ ✅
-     *
-     * ⚠️ 必须在本 VM 发出任何协程**之前**赋值（测试里的工厂就是构造完立刻设）。
+     * ⇒ 接缝的赋值时机必须早于「用到它的第一个协程」，构造参数是唯一能保证
+     *   这一点的位置。（默认值不行、Hilt 注入 `CoroutineScope` 也不行，
+     *   四种失败尝试见 [UnlockViewModelSeams] 的 KDoc。）
      */
-    internal var testingScope: CoroutineScope? = null
+    private val seams: UnlockViewModelSeams = UnlockViewModelSeams(),
+) : ViewModel() {
 
     /**
      * 观察协程是否已启动（[startObservers] 的幂等守卫）。
@@ -140,57 +128,31 @@ class UnlockViewModel @Inject constructor(
      */
     private val observersStarted = java.util.concurrent.atomic.AtomicBoolean(false)
 
-    /** 本页所有"发起即返回"的协程都挂在这里。生产 = `viewModelScope`，测试 = [testingScope]。 */
-    private val scope: CoroutineScope get() = testingScope ?: viewModelScope
+    /** 本页所有"发起即返回"的协程都挂在这里。生产 = `viewModelScope`，测试 = [seams].scope。 */
+    private val scope: CoroutineScope get() = seams.scope ?: viewModelScope
+
+    /** 本页所有"后台活"用的调度器。生产 = `Dispatchers.IO`，测试 = [UnlockViewModelSeams.io]。 */
+    private val io: CoroutineDispatcher get() = seams.io ?: Dispatchers.IO
 
     /**
-     * ★ #174：**只给单测用**的后台调度器覆写口（生产恒为 null ⇒ 用 `Dispatchers.IO`）。
+     * 真正执行"后台活"的调度器。生产 = [io]；测试 = [UnlockViewModelSeams.ioContextOverride]。
      *
-     * ## 为什么需要它
+     * ## #176：为什么在 [io] 之外还要一个"拦截"口
      *
-     * 只把 [scope] 换成 `TestScope` 是**不够**的：本页大量 `withContext(io)` 仍会把
-     * 协程扔到**真实线程池**上，虚拟时钟推不动那一段 —— 修 #174 时实测到过：
-     * 只换 scope 之后仍有 6 条用例报"没有收到 PromptForUnlock 事件"。
+     * 把 [io] 换成 `StandardTestDispatcher(testScheduler)` 只让虚拟时钟推得动，
+     * **不等于"续体不跳线程"**：`StandardTestDispatcher` 跑任务时**不恢复**原协程的
+     * `ContinuationInterceptor` ⇒ 跨 `withContext(io)` 的续体恢复时，上下文里既没有
+     * 拦截器也没有 `Dispatchers.Main`，于是
+     * `DispatchedContinuation.resumeCancellableWith` → `TestMainDispatcher.isDispatchNeeded` → 炸。
      *
-     * 把后台调度器也参数化之后，IO 段也能在虚拟时间里跑完，测试不再赌真实线程时序。
+     * 测试里把它设成 `runTest` 自己的 `StandardTestDispatcher(testScheduler)`：
+     * 它**不是** `TestDispatcher` 子类，不会被 `runTest` 收编进虚拟时钟，
+     * 只是把任务**内联执行**且**不改变上下文** ⇒ 续体恢复时拦截器还在 ⇒ 永不碰 Main。
      *
-     * ⚠️ 生产行为一字不改：默认值就是 `Dispatchers.IO`（与从前每一处调用点完全相同）。
+     * ⚠️ 只设 [UnlockViewModelSeams.io] 而忘了设本字段 ⇒ 仍然会偶发踩 `Dispatchers.Main`。
      */
-    internal var testingIoDispatcher: CoroutineDispatcher? = null
-
-    /** 本页所有"后台活"用的调度器。生产 = `Dispatchers.IO`，测试 = [testingIoDispatcher]。 */
-    private val io: CoroutineDispatcher get() = testingIoDispatcher ?: Dispatchers.IO
-
-    /**
-     * ★ #176：**只给单测用**的"后台活"调度器**拦截**口（生产恒为 null ⇒ 直接跑在 [io] 上）。
-     *
-     * ## 为什么在 [testingIoDispatcher] 之外还要一个（#176，CI 事故现场）
-     *
-     * #174 把 [io] 换成了 `StandardTestDispatcher(testScheduler)`，虚拟时钟于是能推它。
-     * **但这不等于"续体不跳线程"**：`StandardTestDispatcher` 内部把任务丢给
-     * `TestCoroutineScheduler`，而它跑任务时**不恢复**原协程的 `ContinuationInterceptor`
-     * ⇒ 跨 `withContext(io)` 的续体恢复时，上下文里既没有拦截器也没有 `Dispatchers.Main`，
-     * 于是 `DispatchedContinuation.resumeCancellableWith` → `TestMainDispatcher.isDispatchNeeded`
-     * → 炸 `Dispatchers.Main was accessed …`。
-     *
-     * #174 之后同类故障换了个受害者继续出现：CI run `39139391458` 上
-     * `promptCarriesTheFilteredCandidateVaults` 仍报同一句，堆栈里是
-     * `DispatchedCoroutine.afterResume` ← `Dispatchers.IO` 那个真线程 worker。
-     *
-     * ⇒ 测试里把它设成 `runTest` 自己的 `StandardTestDispatcher(testScheduler)`：
-     * - 它不是 `TestDispatcher` 类，**不会**被 `runTest` 收编进虚拟时钟，
-     *   所以它只是把任务**内联执行**（等价于 `Dispatchers.Unconfined` 的跳法），
-     *   同时**不改变**协程上下文 ⇒ 续体恢复时拦截器还在 ⇒ 永不碰 `Dispatchers.Main`；
-     * - 它是可捕获的惰性调度器：真被 `delay` 推上来也只会内联跑掉，不会挂住。
-     *
-     * ⚠️ 只设 [testingIoDispatcher] 而忘了设本字段 ⇒ 仍然会偶发踩 `Dispatchers.Main`
-     *    （本地绿、CI 红）。测试工厂里两个必须一起设。
-     */
-    internal var testingBlockableIoDispatcher: CoroutineDispatcher? = null
-
-    /** 真正执行"后台活"的调度器：测试被拦截 ⇒ 内联，生产/默认 = [io]。 */
     private val ioContext: CoroutineContext
-        get() = (testingBlockableIoDispatcher ?: io) as CoroutineContext
+        get() = (seams.ioContextOverride ?: io) as CoroutineContext
 
     data class TwoFactorUi(
         val providers: List<Int>,
@@ -313,34 +275,30 @@ class UnlockViewModel @Inject constructor(
     /**
      * 启动各条观察协程。
      *
-     * ## ★ 为什么不是 `init { … }` 直接写（2026-10-28，CI run 40563967972）
+     * ## ★ 为什么拆成显式方法（#174 的第一层修法，保留）
      *
-     * 三个测试接缝（[testingScope] / [testingIoDispatcher] / [testingBlockableIoDispatcher]）
-     * 都是**构造之后**才赋值的 —— Hilt 不允许把 `viewModelScope` 注入构造（见 [testingScope] 的
-     * 四种失败尝试）。而 `init` 在构造**期间**就跑：那一刻 [scope] 还是 `viewModelScope`，
-     * 也就是 `Dispatchers.Main.immediate`。
+     * 生产由 `init` 调；测试工厂在**设完接缝之后**自己调。这样"何时启动"是可控的，
+     * 测试才有机会在协程跑起来之前把 [seams] 布置好。
      *
-     * 单测里 `Dispatchers.setMain` 把它换成了测试调度器，于是"构造期间"与"赋值之后"用的是
-     * **两个不同的调度器**：前者的协程还挂在旧的 `TestMainDispatcher` 上。等到 `@After`
-     * `resetMain()` 把它卸掉，那一刻恰好在跑的任务就炸 `Dispatchers.Main was accessed …`。
-     *
-     * 更糟的是它**偶发**：本地绿、CI 红（`fingerprintEntryStaysHiddenWhen…` 就是这样挂的），
-     * 而且换一条用例就换一个受害者 —— 典型的"竞态，不是必现"。
-     *
-     * ⇒ 把协程启动挪进一个显式方法，测试工厂在**设完接缝之后**调用它；生产由 `init` 调用
-     * （行为一字不改）。判据：**接缝的生效范围必须覆盖"用到它的第一个协程"**，
-     * 而 `init` 天然不满足这一点。
+     * ⚠️ **但光有这一层不够** —— 真正让它生效的是 [seams] 改为**构造参数**：
+     * 之前三个接缝是构造后才赋值的 `var`，`init` 那一刻恒为 null，守卫条件恒真，
+     * 于是 `init` 总是抢先启动（`observersStarted` 的 CAS 又让测试那次静默返回）。
+     * 详见 [seams] 的 KDoc。判据始终是同一句：
+     * **接缝的生效范围必须覆盖"用到它的第一个协程"**。
      */
     init {
-        // 生产路径照旧：构造完就开始观察（此时 viewModelScope 已经可用）。
-        // 单测不走这里 —— 见 [startObservers] 的说明。
-        if (testingScope == null) startObservers()
+        // 生产：seams.scope 恒 null ⇒ 构造完立刻开始观察（行为与从前一致）。
+        // 单测：seams 是**构造参数**，测试工厂传进来的实例已带 scope ⇒ 这里不启动，
+        // 由测试在设好全部接缝后自己调 [startObservers]（否则 init 会抢先一步用
+        // viewModelScope 起协程，注入的 scope 就永远轮不上 —— 见 [seams] 的 KDoc）。
+        if (seams.scope == null) startObservers()
     }
 
     /**
      * 启动观察协程（幂等：重复调用不会起第二份）。
      *
-     * 生产走 `init`；测试必须先设好 [testingScope] 等接缝再调 —— 详见 `init` 上的说明。
+     * 生产走 `init`；测试必须先构造好带 [UnlockViewModelSeams.scope] 的实例再调
+     * —— 详见 `init` 上的说明。
      */
     internal fun startObservers() {
         // 幂等守卫：测试工厂可能先构造、设完接缝再调一次，而 init 已经起过一份。
@@ -1036,16 +994,18 @@ class UnlockViewModel @Inject constructor(
      */
     internal suspend fun candidateVaultIdsForTest(target: String): List<String> = candidateVaultIds(target)
 
-    /**
-     * 把本 VM 实际使用的 [scope] 交出去（调用方用 Job 同一性判定）。
-     *
-     * 它钉的不是业务逻辑，而是"注入真的生效"这个前提：把 [scope] 改回硬编码
-     * `viewModelScope`，`UnlockViewModelTest.overrideScopeIsActuallyUsedByTheViewModel`
-     * 必红。没有它，所有"确定性等待"都是错觉 —— 测的可能是另一条作用域。
-     *
-     * ⚠️ 别在业务代码里用它。
-     */
+    /** 把本 VM 实际使用的 [scope] 交出去（调用方用 Job 同一性判定）。 */
     internal fun probeOwnScope(): CoroutineScope = scope
+
+    /**
+     * 观察协程是否已经启动 —— **构造刚完成、测试尚未调用 [startObservers] 时必须为 false**。
+     *
+     * 这是 #220 的正面判据：此前 `init` 无条件抢先启动，注入的 scope 从未生效，
+     * 而所有用例仍然"看起来绿"（因为它们用的是 `Dispatchers.setMain` 那个 unconfined 替身，
+     * 同步跑完就结束）。只有把「init 有没有抢跑」变成一条可断言的探针，
+     * 才能保证 `UnlockViewModelTest.overrideScopeIsActuallyUsedByTheViewModel` 不是空断言。
+     */
+    internal fun probeObserversStarted(): Boolean = observersStarted.get()
 
     companion object {
         const val ARG_VAULT_ID = "vaultId"
@@ -1070,3 +1030,42 @@ class UnlockViewModel @Inject constructor(
  */
 private fun lockMessageOf(detail: String): LocalUnlockMessage? =
     LocalUnlockMessage.entries.firstOrNull { it.name == detail }
+
+/**
+ * [UnlockViewModel] 的**测试接缝容器**：生产恒为空（Hilt 直接 new 一个全 null 的实例）。
+ *
+ * ## 为什么不能像从前那样用「构造后赋值的 var」
+ *
+ * `init` 在构造**期间**执行，构造后赋值永远赶不上。于是
+ * `if (scope == null) startObservers()` 在测试里恒为真 ⇒ 观察协程永远挂在
+ * `viewModelScope`（`Dispatchers.Main`）上，测试注入的 `TestScope` **从未生效**。
+ *
+ * 而 `observersStarted` 的 CAS 守卫又让测试工厂随后那次 `startObservers()` 直接返回，
+ * 连一行日志都不留 —— 这就是 #174 / #176 修了三次、CI 仍然偶发
+ * `Dispatchers.Main was accessed…` 的原因（异常还总是归到**下一条**用例头上）。
+ *
+ * ## 为什么不能用别的位置
+ *
+ * | 位置 | 结果 |
+ * |---|---|
+ * | 构造参数默认值里读 `viewModelScope` / `this` | `Cannot access '<this>' before …` |
+ * | Hilt `@Provides` 注入 `CoroutineScope` / `dagger.Lazy` | `Injection of an @HiltViewModel class is prohibited` |
+ * | `scopeOverride: CoroutineScope? = null` 当构造参数 | `CoroutineScope cannot be provided`（可空 + 默认值照解析不误） |
+ * | **本类（`@Inject constructor()` 空参，字段可写）** | ✅ Dagger 能直接绑定，且**构造参数在 `init` 之前就绪** |
+ *
+ * ⚠️ 三个字段必须由调用方**在构造 VM 之前**写好；构造之后再改对 `init` 无效。
+ */
+class UnlockViewModelSeams @Inject constructor() {
+    /** 生产 null ⇒ `viewModelScope`；测试传 `TestScope`（`runTest` 的 `this`）。 */
+    internal var scope: CoroutineScope? = null
+
+    /** 生产 null ⇒ `Dispatchers.IO`；测试传可推进虚拟时间的调度器。 */
+    internal var io: CoroutineDispatcher? = null
+
+    /**
+     * 生产 null ⇒ 直接用 [io]；测试传一个**可内联执行**的 `StandardTestDispatcher`。
+     *
+     * 详见 `UnlockViewModel.ioContext` 的 KDoc（#176：为什么只有 [io] 还不够）。
+     */
+    internal var ioContextOverride: CoroutineDispatcher? = null
+}

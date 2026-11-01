@@ -2,6 +2,7 @@ package io.vaultix.vaultix.ui.unlock
 
 import androidx.lifecycle.SavedStateHandle
 import com.google.common.truth.Truth.assertThat
+import com.google.common.truth.Truth.assertWithMessage
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
@@ -246,17 +247,24 @@ class UnlockViewModelTest {
 
     @Test
     fun overrideScopeIsActuallyUsedByTheViewModel() = runTest {
-        // ★ 结构门禁（#174）：本文件所有"确定性等待"都建立在
-        //   「VM 真的把协程挂在我注入的 scope 上」这个前提上。
-        //   把 VM 里的 `testingScope ?: viewModelScope` 改成直接用 `viewModelScope`
-        //   时，下面的断言必须红 —— 否则"注入成功"只是错觉，回归会静默通过。
-        // ⚠️ 不启动观察协程、也不 advanceUntilIdle：本用例只验 scope 注入，
-        //    让协程跑起来反而会把续体拖进已被卸下的 Dispatchers.Main（CI 偶发）。
+        // ★ 结构门禁（#220）：本文件所有"确定性等待"都建立在两个前提上 ——
+        //   ① `init` **没有**抢跑；② VM 真的把协程挂在我注入的 scope 上。
+        //   任一不成立，"确定性等待"就是错觉（此前三次修复都栽在这里）。
         val viewModel = unlockViewModel(startObservers = false) { flowOf(lockedVaults) }
 
-        val usedScope = viewModel.probeOwnScope()
-        // 判据 = **同一个 Job**：注入失败时 VM 拿到的是 `viewModelScope`，Job 不同。
-        assertThat(usedScope.coroutineContext[Job]).isSameInstanceAs(coroutineContext[Job])
+        // ① init 不得自启 —— 这是 #220 的正面判据。
+        //   若有人把 seams 改回"构造后赋值的 var"，init 会立刻启动，本条必红。
+        assertWithMessage("init 不得启动观察协程（接缝必须早于第一个协程）")
+            .that(viewModel.probeObserversStarted())
+            .isFalse()
+
+        // ② 注入的作用域就是本测试的 TestScope（同一个 Job）。
+        assertThat(viewModel.probeOwnScope().coroutineContext[Job])
+            .isSameInstanceAs(coroutineContext[Job])
+
+        // ③ 启动之后，guard 才置位。
+        viewModel.startObservers()
+        assertThat(viewModel.probeObserversStarted()).isTrue()
     }
 
     /**
@@ -336,8 +344,24 @@ class UnlockViewModelTest {
         val prefs = mockk<VaultixPreferences>(relaxed = true)
         every { prefs.quickUnlockScope() } returns flowOf(scope)
 
-        // ★ #174：把 VM 的协程钉在本测试的虚拟调度器上。必须是**构造后立刻**赋值，
-        //   否则 VM 已经用自己的（= Dispatchers.Main）作用域发出协程了。
+        // ★ #220：接缝必须**作为构造参数**传进去。
+        //
+        //   从前是构造后给 var 赋值，而 `init` 在**构造期间**就跑 ——
+        //   那一刻字段恒为 null ⇒ `init` 总是抢先用 `viewModelScope`（`Dispatchers.Main`）
+        //   启动观察协程，而 `observersStarted` 的 CAS 又让下面那次 `startObservers()`
+        //   静默返回。于是：注入从未生效，CI 偶发踩被卸下的 `Dispatchers.Main`。
+        //   详见 `UnlockViewModelSeams` 的 KDoc。
+        val seams = UnlockViewModelSeams().apply {
+            // ⚠️ 必须写 `this.scope`：外层函数有个同名参数 `scope: Set<String>`（候选库范围），
+            //    裸 `scope =` 会被解析成给那个 val 赋值 ⇒ 编译期 "val cannot be reassigned"。
+            this.scope = this@unlockViewModel
+            // 后台调度器：虚拟时钟要能推得动。
+            io = StandardTestDispatcher(testScheduler)
+            // IO 段拦截：`StandardTestDispatcher` 跑任务时不恢复拦截器 ⇒ 续体恢复时
+            // 会去问 `Dispatchers.Main`；传一个非 `TestDispatcher` 子类的实例让它
+            // **内联执行且不改上下文**，续体恢复时拦截器还在 ⇒ 全程不碰 Main（#176）。
+            ioContextOverride = StandardTestDispatcher(testScheduler)
+        }
         return UnlockViewModel(
             SavedStateHandle(),
             repository,
@@ -346,35 +370,9 @@ class UnlockViewModelTest {
             reseal,
             prefs,
             textContext(),
+            seams,
         ).also {
-            it.testingScope = this
-            // ★ #174 第二步：连后台调度器也换成本测试的虚拟调度器。
-            //   只换 scope 不够 —— `withContext(Dispatchers.IO)` 会真的跳到线程池，
-            //   虚拟时钟推不动它（实测：只换 scope 时 6 条用例报"没有收到事件"）。
-            it.testingIoDispatcher = StandardTestDispatcher(testScheduler)
-            // ★ #176 第三步（**必设**）：把 IO 段**拦截**掉，让续体不跳线程。
-            //
-            //   只做 #174 那两步时，CI（run `39139391458`）上
-            //   `promptCarriesTheFilteredCandidateVaults` 仍报
-            //   `Dispatchers.Main was accessed …`，堆栈是
-            //   `DispatchedCoroutine.afterResume` ← `Dispatchers.IO` 的真线程 worker。
-            //
-            //   机理：`StandardTestDispatcher` 跑任务时**不恢复**原协程的
-            //   `ContinuationInterceptor` ⇒ 跨 `withContext(io)` 的续体恢复时，
-            //   上下文里既没有拦截器也没有 `Dispatchers.Main` ⇒
-            //   `TestMainDispatcher.isDispatchNeeded` 炸。
-            //
-            //   传一个 `StandardTestDispatcher`（不是 `TestDispatcher` 子类）会有意思：
-            //   它**不会**被 `runTest` 收编进虚拟时钟 ⇒ 只是把任务内联执行，
-            //   且**不改变上下文** ⇒ 续体恢复时拦截器还在 ⇒ 全程不碰 `Dispatchers.Main`。
-            it.testingBlockableIoDispatcher = StandardTestDispatcher(testScheduler)
-            // ★ 2026-10-28：接缝全设好之后才启动观察协程（自己调，不靠 init）。
-            //
-            //   以前 `init` 里直接 `scope.launch` —— 那一刻 testingScope 还是 null ⇒
-            //   落在 `viewModelScope`（= `Dispatchers.Main.immediate`，被 `setMain` 换成了
-            //   **旧的**那个 TestMainDispatcher）上。`@After resetMain()` 卸掉它时，
-            //   正在跑的协程就炸 `Dispatchers.Main was accessed …`。
-            //   CI run 40563967972 的 `fingerprintEntryStaysHiddenWhen…` 即此（偶发）。
+            // 接缝已在构造期就绪 ⇒ init 不会自启，这里才是唯一的启动点。
             if (startObservers) it.startObservers()
         }
     }

@@ -127,8 +127,15 @@ class StaleRoomResealTest {
         val prefs = mockk<VaultixPreferences>(relaxed = true)
         every { prefs.quickUnlockScope() } returns flowOf(emptySet())
 
-        // ★ #174：把 VM 的协程钉在本测试的虚拟调度器上（构造后**立刻**赋值），
-        //   这样 `advanceUntilIdle()` 就能确定性地等到编排走完。
+        // ★ #220：接缝必须作为**构造参数**传入。
+        //   从前是构造后赋值 —— 而 `init` 在构造期间就跑，那一刻字段恒为 null，
+        //   `init` 总是抢先启动观察协程（用的是 `Dispatchers.Main`），
+        //   注入的 scope 从未生效。`advanceUntilIdle()` 于是只是在推一条没人用的时钟。
+        val seams = UnlockViewModelSeams().apply {
+            scope = this@viewModel
+            io = StandardTestDispatcher(testScheduler)
+            ioContextOverride = StandardTestDispatcher(testScheduler)
+        }
         val vm = UnlockViewModel(
             SavedStateHandle(mapOf(UnlockViewModel.ARG_VAULT_ID to vaultId)),
             repository,
@@ -137,17 +144,8 @@ class StaleRoomResealTest {
             reseal,
             prefs,
             textContext(),
-        ).also {
-            it.testingScope = this
-            // ★ #174 第二步：连后台调度器也换成本测试的虚拟调度器。
-            //   只换 scope 不够 —— `withContext(Dispatchers.IO)` 会真的跳到线程池，
-            //   虚拟时钟推不动它（实测：只换 scope 时 6 条用例报"没有收到事件"）。
-            it.testingIoDispatcher = StandardTestDispatcher(testScheduler)
-            // ★ 2026-10-28：接缝设完再启动观察协程（testingScope 非空时 init 不自启）。
-            //   否则 init 那一刻会用 viewModelScope（= Dispatchers.Main），
-            //   与 UnlockViewModelTest 同一个 CI 事故（run 40563967972）。
-            it.startObservers()
-        }
+            seams,
+        ).also { it.startObservers() }
         if (password != null) vm.onPasswordChange(password)
         return vm
     }
