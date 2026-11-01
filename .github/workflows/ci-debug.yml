@@ -160,6 +160,16 @@ jobs:
       - name: Check source encoding (UTF-8 / mojibake gate)
         run: python3 "$GITHUB_WORKSPACE/.github/scripts/check-encoding.py" "$GITHUB_WORKSPACE"
 
+      # ★ 2026-11-01：版本号口径自测（本文件里那段 awk vs Kotlin `versionCodeOf()`）。
+      #
+      # 为什么要在 CI 里跑：它校验的是**本文件自己**的那段 awk。改文案时顺手动了它、
+      # 本地却没跑 —— 结果只是 Release 页上写错一个数字，包本身完全正常，
+      # 没人会发现（除了几个月后拿着版本号对不上的人）。
+      # 它自带"找不到 Kotlin 编译器就 SKIP"的降级，不会因基础设施问题判红。
+      - name: Self-test version code parity (workflow awk vs Kotlin)
+        shell: bash
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/tests/selftest_version_code.py"
+
       # push 时注入仓库固定签名，使 preview(debug) 与 stable release 签名完全一致、可互相覆盖安装。
       # 注意：本步骤与 release.yml 使用同一套 SIGNING_* Secret，密码也复用 Secret（不再硬编码 android），
       # 这是“同一设备 debug/release 覆盖安装”的硬性前提（同 applicationId + 同签名证书）。
@@ -256,7 +266,27 @@ jobs:
               -storepass "${SIGNING_STORE_PASSWORD:-android}" \
               -alias "${SIGNING_KEY_ALIAS:-vaultix}" \
               -keypass "${SIGNING_KEY_PASSWORD:-android}" >/dev/null 2>&1; then
-            echo "::warning title=Keystore key password invalid::固定密钥的 key 密码与 store 密码不一致（keytool -certreq 解不开私钥）。本次改用一次性密钥 —— 本包**无法覆盖安装**，请修正 SIGNING_KEY_PASSWORD。"
+            # ★ 2026-11-01：**把失败原因分清楚**。此前只有一句「key 密码不一致」，而实际有两种
+            #   完全不同的病因，修法也不同：
+            #     ① key 密码与 store 密码不同（Java 9+ 允许 PKCS12 的 key/store 密码不同）
+            #        ⇒ 改 SIGNING_KEY_PASSWORD 即可；
+            #     ② **Secret 里的 keystore 根本不是"本机那把"**（换过密钥 / 传错文件）
+            #        ⇒ 改密码永远修不好，必须先认出这一点。
+            #   现场再验一次"仅 store 密码能否列出条目 + 证书指纹是什么"，就能区分：
+            #     · -list 也过不了 ⇒ store 密码错（连库都打不开）；
+            #     · -list 过了 ⇒ 库能开、指纹可读 ⇒ 只需对齐 key 密码。
+            #   指纹是判定 ② 的唯一硬证据：跟设备上已装包的证书指纹一比即知。
+            if keytool -list -keystore "$KS_FILE" -storepass "${SIGNING_STORE_PASSWORD:-android}" -noprompt >/dev/null 2>&1; then
+              # ⚠️ 必须 `[[:space:]]*` 而不是 ` *`：keytool 在 `SHA256:` 后跟的是**制表符**，
+              #    用 `tr -d ' '` 删不掉它 ⇒ 指纹会带着一个不可见前缀（本地实测踩到）。
+              ks_fp="$(keytool -list -v -keystore "$KS_FILE" \
+                  -storepass "${SIGNING_STORE_PASSWORD:-android}" \
+                  -alias "${SIGNING_KEY_ALIAS:-vaultix}" -noprompt 2>/dev/null \
+                | sed -nE 's/.*SHA256:[[:space:]]*//p' | head -1 | tr -d '[:space:]' | tr 'A-F' 'a-f')"
+              echo "::warning title=Keystore key password invalid::固定密钥库可打开（store 密码正确），但 key 密码解不开私钥 ⇒ 本包改用一次性密钥、**无法覆盖安装**。修法：把 SIGNING_KEY_PASSWORD 改成与 store 密码相同（或改成 key 的真实密码）。本次已解码密钥的证书指纹：${ks_fp:-<读取失败>}"
+            else
+              echo "::error title=Keystore store password wrong::固定密钥库连 store 密码都打不开 ⇒ SIGNING_STORE_PASSWORD 与 keystore 不符。本次改用一次性密钥（无法覆盖安装）。"
+            fi
             rm -f "$KS_FILE"
           fi
           if [ ! -s "$KS_FILE" ]; then KS_FILE=""; fi
@@ -272,9 +302,49 @@ jobs:
           # 基号取 VERSION（真源）；读不到就退 0.0.0 保证构建不中断。
           BASE_VERSION="$(tr -d '[:space:]' < "$GITHUB_WORKSPACE/VERSION" 2>/dev/null)"
           if [ -z "$BASE_VERSION" ]; then BASE_VERSION="0.0.0"; fi
-          echo "Debug versionName base: $BASE_VERSION"
+          # ★ 2026-11-01：把这次 build 的两个版本字段**落盘**（`$GITHUB_WORKSPACE`，不是 /tmp）。
+          #
+          # 为什么要落盘而不是让后面的步骤自己再算一遍：versionName 的拼法一旦出现两处，
+          # 迟早有一处没跟上（本仓库 #145.1「让版本只有一个来源」就是为此）。
+          # 落盘后，`Collect debug APK metadata` 只读不猜。
+          #
+          # versionCode 的口径必须与 `app/build.gradle.kts` 的 `versionCodeOf()` **逐字一致**：
+          #   `X.Y.Z[-后缀]` → X*1_000_000 + Y*1_000 + Z（给 minor/patch 各留三位）；
+          #   任一段不是非负整数 → 1（Kotlin 侧是 `toIntOrNull() ?: return 1`）。
+          #   两边不一致的后果很隐蔽 —— 只是 Release 页上写错一个数字，包本身没事。
+          #
+          # ⚠️ 这段 awk **不是照抄逻辑，是拿真编译器对过账的**（2026-11-01）：
+          #   `.ai/tools/tests/selftest_version_code.py` 把 `versionCodeOf()` 原样抽出来
+          #   真编译运行，与本 awk 逐例比对（当前 16 例，已接入 CI）。
+          #   写这条注释是因为它已经踩过两次：
+          #     • `${name%%-*}` 会把 `-1.0.0` 截成空串（负号被当后缀分隔符）⇒ awk 拿到空输入、无输出；
+          #     • `isnum` 写成 `^-?[0-9]+$`，而 Kotlin 的 `toIntOrNull()` **接受 `+4`**
+          #       ⇒ `0.10.+4` 两边算出 10000 / 10004。**这一条是测试抓出来的，不是读出来的。**
+          #   ⇒ 「口径一致」不能靠读代码确认，只能靠跑；而"跑了"还得先证明这个跑是有效的
+          #     （第一版 14 条用例里，三种故意改坏照样全绿）。
+          DEV_VERSION_NAME="${BASE_VERSION}-dev-$(echo ${GITHUB_SHA} | cut -c1-7)"
+          VC_BASE="${BASE_VERSION%%-[0-9A-Za-z]*}"
+          # 最短匹配会把 `-1.0.0` 整个吃掉 ⇒ 空则用原名，别让它变成空输入。
+          if [ -z "$VC_BASE" ]; then VC_BASE="$BASE_VERSION"; fi
+          DEV_VERSION_CODE="$(printf '%s' "$VC_BASE" | awk -F. '
+            function isnum(s) { return s ~ /^[+-]?[0-9]+$/ }
+            {
+              if (!isnum($1) || !isnum($2)) { print 1; exit }
+              maj = $1 + 0; min = $2 + 0
+              pat = (NF >= 3 && isnum($3)) ? $3 + 0 : 0
+              if (maj < 0 || min < 0 || pat < 0) { print 1; exit }
+              print maj * 1000000 + min * 1000 + pat
+            }')"
+          if [ -z "$DEV_VERSION_CODE" ]; then DEV_VERSION_CODE=1; fi
+          {
+            echo "version_name=$DEV_VERSION_NAME"
+            echo "version_code=$DEV_VERSION_CODE"
+            echo "base_version=$BASE_VERSION"
+            echo "short_sha=$(echo ${GITHUB_SHA} | cut -c1-7)"
+          } > "$GITHUB_WORKSPACE/dev-build-info.env"
+          echo "Debug versionName=$DEV_VERSION_NAME versionCode=$DEV_VERSION_CODE"
           ./gradlew :app:assembleFullDebug --stacktrace \
-            -PversionName="${BASE_VERSION}-dev-$(echo ${GITHUB_SHA} | cut -c1-7)" $KS_OPTS 2>&1 | tee /tmp/build_log.txt
+            -PversionName="$DEV_VERSION_NAME" $KS_OPTS 2>&1 | tee /tmp/build_log.txt
           BUILD_EXIT=${PIPESTATUS[0]}
           if [ "$BUILD_EXIT" -ne 0 ]; then
             echo "::notice title=Build gate diagnostics::build_failed=true"
@@ -351,7 +421,71 @@ jobs:
             find "$apk_root" -maxdepth 3 2>/dev/null || true
             exit 1
           fi
-          apk_markdown="$(printf '%s\n' "$apk_list" | sed '/^$/d' | sed 's/^/> *   `/; s/$/`/')"
+
+          # ---- 版本字段：只读构建步骤落盘的那份（口径见 Build Debug APK 步骤）----
+          info_env="$GITHUB_WORKSPACE/dev-build-info.env"
+          version_name=""; version_code=""; base_version=""; short_sha=""
+          if [ -f "$info_env" ]; then
+            # shellcheck disable=SC1090
+            . "$info_env"
+            version_name="${version_name:-}"; version_code="${version_code:-}"
+            base_version="${base_version:-}"; short_sha="${short_sha:-}"
+          fi
+          if [ -z "$version_name" ]; then
+            # 兜底：落盘文件没生成（理论上不该发生）。**不要**在这里重算一遍拼法 ——
+            # 重算 = 第二处来源，正是要避免的东西；只退化成一个明确"未知"的占位。
+            echo "::warning title=version unknown::$info_env 缺失，Release 标题里的版本号将显示为 unknown"
+            version_name="unknown"; base_version="0.0.0"
+            short_sha="$(echo "${GITHUB_SHA}" | cut -c1-7)"
+          fi
+          echo "version_name=$version_name" >> "$GITHUB_OUTPUT"
+          echo "version_code=$version_code" >> "$GITHUB_OUTPUT"
+          echo "base_version=$base_version" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$short_sha" >> "$GITHUB_OUTPUT"
+
+          # ---- 签名信息（**如实**取自产出的 APK，不取自 Secrets / 不取自日志措辞）----
+          # 这一段解决的是一类具体事故：CI 某次降级成一次性密钥，包里照旧写着
+          # `固定密钥解码通过`，用户装上却「盖不上上一版」。事后只能靠人去翻日志推理。
+          # ⇒ 把「这个包实际是谁签的」直接印在 Release 页上：一次 eye-check 即可判定。
+          apk0="$(printf '%s\n' "$apk_list" | sed '/^$/d' | head -1)"
+          signer=""
+          if [ -n "$apk0" ] && command -v apksigner >/dev/null 2>&1; then
+            signer="$(apksigner verify --print-certs "$apk_root/$apk0" 2>/dev/null | head -1 || true)"
+          fi
+          if [ -z "$signer" ]; then
+            # 兜底：直接从 APK 里 PEM 解证书（apksigner 不在 PATH 上时走这条）。
+            signer="$(python3 - "$apk_root/$apk0" <<'PY' 2>/dev/null || true
+          import base64, io, re, sys, zipfile
+          import hashlib
+          with zipfile.ZipFile(sys.argv[1]) as z:
+              name = next((n for n in z.namelist() if re.fullmatch(r'META-INF/[^/]+\.(RSA|DSA|EC)', n)), None)
+              if not name:
+                  raise SystemExit(0)
+              der = z.read(name)
+          # 从 DER 里取 SubjectPublicKeyInfo 不方便，这里只取整份证书的 SHA-256 ——
+          # 与 apksigner 的 `certificate SHA-256 digest` 同口径（对整张证书 DER 求摘要）。
+          print('Signer #1 certificate SHA-256 digest: ' + hashlib.sha256(der).hexdigest())
+          PY
+          )"
+          fi
+          fingerprint="$(printf '%s' "$signer" | sed -nE 's/.*SHA-256 digest:[[:space:]]*([0-9a-fA-F]+).*/\1/p' | head -1)"
+          subject="$(printf '%s' "$signer" | sed -nE 's/.*DN: *(.*)$/\1/p' | head -1)"
+          if [ -n "$fingerprint" ]; then
+            echo "signer_fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
+            echo "signer_subject=${subject:-unknown}" >> "$GITHUB_OUTPUT"
+            echo "::notice title=APK signer::SHA-256=$fingerprint DN=${subject:-unknown}"
+          else
+            echo "::warning title=APK signer unreadable::未能从 APK 读出签名证书，Release 页将显示「未能读取」"
+            echo "signer_fingerprint=" >> "$GITHUB_OUTPUT"            echo "signer_subject=unknown" >> "$GITHUB_OUTPUT"
+          fi
+
+          # 展示成「文件名 → 大小」的列表而不是 `> * \`路径\``：
+          #   · 路径前几段（`full/debug/`）对下载的人没有意义，反而把有用的文件名挤到后面；
+          #   · 给上体积，能一眼看出这次产物是不是正常大小（构建半残时常有明显偏差）。
+          apk_markdown="$(cd "$apk_root" && printf '%s\n' "$apk_list" | sed '/^$/d' | while IFS= read -r f; do
+            sz="$(stat -c%s "$f" 2>/dev/null || echo 0)"
+            printf -- '- `%s` — %s MB\n' "$(basename "$f")" "$(awk -v b="$sz" 'BEGIN{printf "%.1f", b/1048576}')"
+          done)"
           echo "apk_count=${apk_count}" >> "$GITHUB_OUTPUT"
           {
             echo "apk_list<<EOF"
@@ -376,25 +510,43 @@ jobs:
           gh api -X DELETE repos/${{ github.repository }}/git/refs/tags/preview 2>/dev/null || true
           echo "Cleanup done"
 
+      # ★ 2026-11-01：预览版文案重写。改动理由（用户 2026-11-01 反馈）：
+      #
+      #  ① 标题里是**一长串 commit SHA**：`⚠️ Development Preview (dev-341be3a58fb…)`，
+      #     在 Releases 列表里被截断，看不出是哪个版本 —— 而这是用户唯一能看到的身份。
+      #     ⇒ 换成 `Vaultix v0.10.4-dev+341be3a`：与包里 `versionName`、与设置页显示
+      #       三者同源（`.ai/ISSUES.md` #145.1 的承诺），SHA 只留 7 位可读形式。
+      #  ② 正文里「Debug APK」「debug 构建产物」「Generated APKs」三处说的是同一件事，
+      #     还挤在一段 blockquote 里。⇒ 压成：一行定位 + 一张构建信息表 + APK 清单。
+      #  ③ 新增**签名指纹**。这是本轮真实发生的事故：某次 CI 用一次性密钥签了包，
+      #     用户装上提示「与上一版签名不一致」，而页面上没有任何可自查的依据。
+      #     指纹印出来以后，这类问题不用再靠读 CI 日志推理。
+      #
+      # ⚠️ 标题前缀沿用 ⚠️ 是有意的：Releases 列表里 prerelease 的 `Pre-release`
+      #    徽标与 Stable 并排时不够显眼，而"这是能装的、但不是正式版"这件事
+      #    值得一个能在页面上立刻看到的位置。正文里不再重复第二遍。
       - name: Publish Debug APK to preview Release
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v3
         with:
           tag_name: preview
           target_commitish: ${{ github.sha }}
-          name: "⚠️ Development Preview (dev-${{ github.sha }})"
+          name: "Vaultix v${{ steps.apk_meta.outputs.version_name }} · Preview"
           body: |
-            > **⚠️ 开发预览版本 (Debug APK)**
-            >
-            > 此版本为 debug 构建产物，用于快速体验最新代码，可能包含未完成功能或 Bug。
-            > 正式使用请下载 Stable 版本（rele 分支发布）。
-            > ---
-            > **构建信息：**
-            > * **Build Type**: `debug`
-            > * **Commit SHA**: `${{ github.sha }}`
-            > * **Ref**: `${{ github.ref }}`
-            > **Generated APKs:**
+            **开发预览** · 每次 push 到 `main` 自动构建，用于抢先体验新功能。日常使用请装 [Stable 版本](https://github.com/${{ github.repository }}/releases/latest)。
+
+            | 项目 | 值 |
+            |---|---|
+            | 版本 | `${{ steps.apk_meta.outputs.version_name }}`（versionCode `${{ steps.apk_meta.outputs.version_code }}`） |
+            | 提交 | [`${{ steps.apk_meta.outputs.short_sha }}`](https://github.com/${{ github.repository }}/commit/${{ github.sha }}) |
+            | 构建 | `debug`（未混淆，可调试；性能与正式版不同） |
+            | 签名 | `${{ steps.apk_meta.outputs.signer_subject }}`<br/>SHA-256 `${{ steps.apk_meta.outputs.signer_fingerprint || '未能读取' }}` |
+
+            **下载**
+
             ${{ steps.apk_meta.outputs.apk_list }}
+
+            > 与上一个预览包**签名一致**时可直接覆盖安装（保留数据与指纹解锁）；若提示签名不一致，说明这次的签名密钥变了 —— 安装前请先导出备份。
           files: |
             app/build/outputs/apk/*/debug/*.apk
             app/build/outputs/apk/*/debug/*.APK

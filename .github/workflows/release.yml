@@ -145,7 +145,12 @@ jobs:
             echo "::notice title=signing::尝试使用仓库 SIGNING_KEYSTORE_BASE64 解码固定密钥。"
             printf '%s' "${{ secrets.SIGNING_KEYSTORE_BASE64 }}" | base64 -d > "$KS" 2>/tmp/b64.err || true
             if [ -s "$KS" ] && keytool -list -keystore "$KS" -storepass "${SIGNING_STORE_PASSWORD:-android}" -noprompt >/dev/null 2>&1; then
-              echo "::notice title=signing::固定密钥解码并校验通过，将用于签名。"
+              # ★ 2026-11-01：`keytool -list` **只验 store 密码，不验 key 密码**。
+              #   这句话此前写的是「解码并校验通过，将用于签名」—— 一旦 key 密码与 store
+              #   密码不一致，日志说"通过"、打包阶段却报 `keystore password was incorrect`，
+              #   两句互相矛盾（ci-debug.yml 上就是被这两句引着连查了四次）。
+              #   ⇒ 结论只在**真的验过 key 密码**之后才下，与打包等效（见下一条 Build 步骤）。
+              echo "::notice title=signing::固定密钥解码通过（store 密码正确；key 密码在打包步骤前再验）。"
             else
               echo "::warning title=Keystore invalid::SIGNING_KEYSTORE_BASE64 解码后不是有效 keystore（可能截断或密码不匹配），改用一次性密钥仅验证流水线。"
               rm -f "$KS"
@@ -243,6 +248,27 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
+          # ★ 2026-11-01：打包前**先真的验一次 key 密码**（与 ci-debug.yml 同一条处置）。
+          #
+          # 背景：`Decode / generate keystore` 用的 `keytool -list` 只验 store 密码；
+          # key 密码不一致时它报"通过"，打包阶段才报 `keystore password was incorrect`，
+          # 两句互相矛盾。`keytool -certreq` 会真的解一次私钥 —— 与打包等效的校验。
+          # ⚠️ 这里**不降级**：正式版绝不能发一个"用一次性密钥签的 Stable"—— 那会让所有人
+          #    下次更新时被要求卸载重装（连带丢失 Keystore 里的指纹解锁）。
+          #    宁可让这条流水线红，让人去修 Secret。
+          KS_FILE="$GITHUB_WORKSPACE/release.jks"
+          if ! keytool -certreq -keystore "$KS_FILE" \
+              -storepass "${SIGNING_STORE_PASSWORD:-android}" \
+              -alias "${SIGNING_KEY_ALIAS:-vaultix}" \
+              -keypass "${SIGNING_KEY_PASSWORD:-android}" >/dev/null 2>&1; then
+            if keytool -list -keystore "$KS_FILE" -storepass "${SIGNING_STORE_PASSWORD:-android}" -noprompt >/dev/null 2>&1; then
+              echo "::error title=Keystore key password invalid::固定密钥库可打开（store 密码正确），但 SIGNING_KEY_PASSWORD 解不开私钥 ⇒ 拒绝发布。修法：改成与 store 密码相同，或改成 key 的真实密码。"
+            else
+              echo "::error title=Keystore store password wrong::固定密钥库连 store 密码都打不开 ⇒ SIGNING_STORE_PASSWORD 与 keystore 不符 ⇒ 拒绝发布。"
+            fi
+            exit 1
+          fi
+          echo "::notice title=signing::store 密码与 key 密码均已验证通过，将用仓库固定密钥签名。"
           KS_OPTS="-Pandroid.injected.signing.store.file=$GITHUB_WORKSPACE/release.jks"
           KS_OPTS="$KS_OPTS -Pandroid.injected.signing.store.password=${SIGNING_STORE_PASSWORD:-android}"
           KS_OPTS="$KS_OPTS -Pandroid.injected.signing.key.alias=${SIGNING_KEY_ALIAS:-vaultix}"
@@ -286,12 +312,54 @@ jobs:
           fi
           echo "Detected release APKs:"
           printf '%s\n' "$apk_list" | sed 's/^/ - /'
+
+          # ---- 签名信息（如实取自产出的 APK，不取自 Secrets / 不取自日志措辞）----
+          # ★ 2026-11-01：起因是用户报「最新安装包与本机上一个 dev 包签名不一致」。
+          #   查下来是 CI 某次降级用了一次性密钥签的包，而**页面上没有任何可自查的依据**，
+          #   只能靠人去翻 CI 日志推理（而日志要认证才能下载）。
+          #   ⇒ 把「这个包实际是谁签的」直接印在 Release 页上，一次比对即可判定。
+          # ⚠️ 取 `head -1`：多签名者时只报 #1，够用且不会把表格撑坏。
+          apk0="$(printf '%s\n' "$apk_files" | sed '/^$/d' | head -1)"
+          signer=""
+          if [ -n "$apk0" ] && command -v apksigner >/dev/null 2>&1; then
+            signer="$(apksigner verify --print-certs "$apk0" 2>/dev/null | head -1 || true)"
+          fi
+          if [ -z "$signer" ]; then
+            # 兜底：apksigner 不在 PATH 上（不同 AGP/命令行工具的 bin 布局不一样）。
+            signer="$(python3 - "$apk0" <<'PY' 2>/dev/null || true
+          import hashlib, re, sys, zipfile
+          with zipfile.ZipFile(sys.argv[1]) as z:
+              name = next((n for n in z.namelist() if re.fullmatch(r'META-INF/[^/]+\.(RSA|DSA|EC)', n)), None)
+              if not name:
+                  raise SystemExit(0)
+              der = z.read(name)
+          # 整张证书 DER 的 SHA-256，与 apksigner 的 `certificate SHA-256 digest` 同口径
+          # （已验证：本机 keytool -printcert 的 SHA256 与它逐字节相同）。
+          print('Signer #1 certificate SHA-256 digest: ' + hashlib.sha256(der).hexdigest())
+          PY
+          )"
+          fi
+          fingerprint="$(printf '%s' "$signer" | sed -nE 's/.*SHA-256 digest:[[:space:]]*([0-9a-fA-F]+).*/\1/p' | head -1)"
+          subject="$(printf '%s' "$signer" | sed -nE 's/.*DN: *(.*)$/\1/p' | head -1)"
+          if [ -n "$fingerprint" ]; then
+            echo "signer_fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
+            echo "signer_subject=${subject:-unknown}" >> "$GITHUB_OUTPUT"
+            echo "::notice title=APK signer::SHA-256=$fingerprint DN=${subject:-unknown}"
+          else
+            echo "::warning title=APK signer unreadable::未能从 APK 读出签名证书，Release 页将显示「未能读取」"
+            echo "signer_fingerprint=" >> "$GITHUB_OUTPUT"
+            echo "signer_subject=unknown" >> "$GITHUB_OUTPUT"
+          fi
           # 生成 checksum 文件（写到工作区根，后续 Release 附件引用）
           sha256sum $apk_files > "$GITHUB_WORKSPACE/checksums-sha256.txt"
           echo "::notice title=checksums::$(cat "$GITHUB_WORKSPACE/checksums-sha256.txt" | tr '\n' ' ')"
           {
             echo "apk_list<<EOF"
-            printf '%s\n' "$apk_list" | sed 's/^/> *   `/; s/$/`/'
+            # 展示成「文件名 — 体积」：路径前缀对下载的人没意义，体积能一眼看出产物是否正常。
+            (cd app/build/outputs/apk && printf '%s\n' "$apk_list" | sed '/^$/d' | while IFS= read -r f; do
+              sz="$(stat -c%s "$f" 2>/dev/null || echo 0)"
+              printf -- '- `%s` — %s MB\n' "$(basename "$f")" "$(awk -v b="$sz" 'BEGIN{printf "%.1f", b/1048576}')"
+            done)
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
           # ★ 2026-10-28：把 checksums 内容也做成 output。
@@ -363,24 +431,27 @@ jobs:
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
           target_commitish: ${{ github.sha }}
-          name: "Vaultix v${{ steps.meta.outputs.version }} (Stable)"
+          name: "Vaultix v${{ steps.meta.outputs.version }}"
           body: |
-            > **✅ 正式稳定版 (Stable Release)**
-            >
-            > 本版本为正式发布版本，已开启代码混淆与资源压缩，建议使用此版本。
-            > 版本更新请通过「设置 → 检查更新」获取（指向本仓库 Release）。
-            > ---
-            > **构建信息：**
-            > * **Version**: `${{ steps.meta.outputs.version }}`
-            > * **Commit**: `${{ github.sha }}`
-            > * **Ref**: `${{ github.ref }}`
-            > **Generated APKs:**
+            **正式稳定版** · 已开启代码混淆与资源压缩。版本更新请通过「设置 → 检查更新」获取（指向本仓库 Release）。
+
+            | 项目 | 值 |
+            |---|---|
+            | 版本 | `${{ steps.meta.outputs.version }}` |
+            | 提交 | [`${{ github.sha }}`](https://github.com/${{ github.repository }}/commit/${{ github.sha }}) |
+            | 构建 | `release`（已混淆） |
+            | 签名 | `${{ steps.apk_meta.outputs.signer_subject }}`<br/>SHA-256 `${{ steps.apk_meta.outputs.signer_fingerprint || '未能读取' }}` |
+
+            **下载**
+
             ${{ steps.apk_meta.outputs.apk_list }}
 
-            ## 更新内容 (What's Changed)
+            ## 更新内容
+
             ${{ steps.changelog.outputs.notes }}
 
             ## 校验和 (SHA-256)
+
             ```
             ${{ steps.apk_meta.outputs.checksums }}
             ```

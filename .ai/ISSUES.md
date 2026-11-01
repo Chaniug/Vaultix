@@ -9,7 +9,7 @@
 
 | 分篇 | 主题 | 条数 |
 |---|---|---|
-| [01-构建与环境](./issues/01-构建与环境.md) | 工程 / 构建 / CI / 工具链 / 环境 | 57 |
+| [01-构建与环境](./issues/01-构建与环境.md) | 工程 / 构建 / CI / 工具链 / 环境 | 58 |
 | [02-自动填充](./issues/02-自动填充.md) | 自动填充（AutofillService 链路） | 19 |
 | [03-通行密钥与凭据提供商](./issues/03-通行密钥与凭据提供商.md) | 通行密钥 / Credential Provider / 凭据回灌 | 24 |
 | [04-锁与解锁](./issues/04-锁与解锁.md) | 锁态模型 / 解锁 / 生物识别 / 密钥 | 21 |
@@ -37,7 +37,7 @@
 
 ## 编号 → 分篇
 
-### [01-构建与环境](./issues/01-构建与环境.md) — 工程 / 构建 / CI / 工具链 / 环境（57 条，缺 #3、#8、#15、#16、#20…：#3/15 归 04、#16 归 02、#20 归 06）
+### [01-构建与环境](./issues/01-构建与环境.md) — 工程 / 构建 / CI / 工具链 / 环境（58 条，缺 #3、#8、#15、#16、#20…：#3/15 归 04、#16 归 02、#20 归 06）
 
 | # | 标题 |
 |---|---|
@@ -98,6 +98,7 @@
 | 201 | 🔴 **CI 全绿也照样发不了版**：`ci-debug.yml` 的 `Run lint` 带 `if: github.event_name != 'push'` ⇒ push 到 `main` 时**根本不跑 lint**（只有 PR 才跑）， 而 release 构建默认跑 `lintVital`、**fatal 直接中断构建** ⇒ 任何 lint fatal 都被推迟到**发版那一刻**才暴露。本次 v0.10.1 首发失败即 `:app:lintVitalFullRelease` 报 `Unexpected domain cache` ×3（`backup_rules.xml` / `data_extraction_rules.xml`）| <br>修法：删掉那三行 `<exclude domain="cache" path="." />` —— 合法 domain 只有 `file`/`database`/`sharedpref`/`external`/`root`（及 `device_*`），**没有 `cache`**；而 cache 目录本来就不参与备份，那三行既非法又多余（#186 写它是想"显式声明防将来改"）。<br>🔴 判据：**被跳过的步骤就是盲区** —— `if:` 让它消失的那一步，等于"只在发版那天跑一次"；写"门禁全绿"要说清绿的是哪几条。**`lintVital` 的 fatal ≠ 普通 lint 警告**（前者中断 release、debug 构建完全无感）。<br>⚠️ 资源 XML 的错误**不在 Kotlin 编译里** ⇒ 本次日志 `e:` 为 0 却 `BUILD FAILED`，失败信息只在 `What went wrong` 里。<br>🔁 删掉三行后调试 CI（run 40554694782）立刻红：`BackupPolicyConfigTest` 的期望表里把 `cache` 也列为"必须排除"，**同一个错误的两个副本只改了一处**。已补一条更值钱的断言：排除项的 domain 必须在白名单 `root/file/database/sharedpref/external` 内 —— 把"只有 lint 才知道的约束"搬进毫秒级 JVM 单测。<br>⚠️ 该断言扫**整份文件文本**，XML 注释里若写出可被解析的非法标签，会在"已改对"时误报 ⇒ **注释里写反例 = 给扫描器喂假阳性**。<br>建议（未做）：把 lint 加回 push 路径，或在 release 前单独跑一次 `:app:lintVitalFullRelease` |
 | 204 | 🟡 **发布说明里的校验和显示成 shell 命令原文**：v0.10.2 的 Release 页面「校验和」区块印的是 `$(cat "$GITHUB_WORKSPACE/checksums-sha256.txt" …)` 本身。根因 = `softprops/action-gh-release` 的 `with.body:` 是 **YAML 字符串**，不是 shell，`$( )` 不会展开。修法 = 文件内容做成 step output，body 用 `${{ steps.apk_meta.outputs.checksums }}` |<br>判据：**`run:` 是 shell，`with:` 是模板** —— `with:` 里出现 `$(`、反引号、`\&\&`、`||` 都是写错了地方；这类错误**不会让构建失败**（只是内容不对），只能靠**打开产物看一眼**发现 |
 | 207 | 「核对校验和」入口：镜像下载之后无处可验 |
+| 218 | 🟡 **预览包的"身份"全靠 commit SHA 与日志措辞** —— 标题只有 `dev-341be3a58…`（列表里被截断）、正文三处重复说"debug 构建产物"、**页面上没有签名指纹** ⇒ 用户报"签名不一致"时唯一的取证途径是翻要认证才能下载的 CI 日志。修法：标题带版本（`Vaultix v0.10.4-dev+341be3a · Preview`）+ 正文压成一张表 + **签名指纹如实取自产出的 APK**（两个 workflow 都印）；Stable 侧验不过 key 密码**直接红、不降级** |<br>**218.1 密钥密码错 ≠ 密钥不对**：原提示"key 密码与 store 密码不一致"把两种病说成一种 —— `-list` 过不了是 store 密码错；`-list` 过、`-certreq` 过不了才是 key 密码错；**两者都过却仍盖不上 = Secret 里根本不是那把钥匙**（改密码永远修不好，指纹是唯一硬证据）。<br>**218.2 `versionCode` 的第二份实现（awk）**：Kotlin 的 `toIntOrNull()` **接受 `+4`** 而 awk `^-?[0-9]+$` 不认；`${name%%-*}` 会把 `-1.0.0` 截成空串。⚠️ 后者是**测试抓出来的**，不是推演的；而第一版 14 条用例里有三种故意改坏**照样全绿**。<br>判据：① **能被用户验证的才叫发布物的身份**，只写 SHA 等于没写；② **诊断要区分病因，不是描述症状**；③ **正式版遇签名问题宁可红，不可降级**（红的代价是一天，降级的代价是所有人的数据）；④ **同一事实的两份实现必须配拿真源对账的测试**，且该测试**先被故意改坏验证过**，否则只是安慰剂 |
 
 ### [02-自动填充](./issues/02-自动填充.md) — 自动填充（AutofillService 链路）
 
