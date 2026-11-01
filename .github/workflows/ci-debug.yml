@@ -453,8 +453,12 @@ jobs:
           TEST_EXIT=${PIPESTATUS[0]}
           echo "::notice title=unit test exit::gradlew 退出码 = ${TEST_EXIT}"
           # 测试进程崩溃（不是断言失败）的典型痕迹：
-          grep -nE "OutOfMemoryError|Process 'Gradle Test Executor|Test worker.*crashed|Could not complete execution|There were failing tests|FAILED" \
-            /tmp/test_log.txt | head -20 | while IFS= read -r line; do
+          # ⚠️ 必须包含 `^e: `（Kotlin 编译错误）—— 2026-11-01 实测：那一次红的真因是
+          #   `> Task :app:compileFullDebugUnitTestKotlin FAILED`（**测试源码编译失败**），
+          #   而第一版 grep 只找了崩溃/OOM 关键词，把真正那行 `e:` 漏在外面，
+          #   还得再跑一轮才看到。**grep 的关键词表本身就是一种判据，漏一个 = 再猜一次。**
+          grep -nE "^e: |OutOfMemoryError|Process 'Gradle Test Executor|Test worker.*crashed|Could not complete execution|There were failing tests|FAILED" \
+            /tmp/test_log.txt | head -30 | while IFS= read -r line; do
               echo "::notice title=test_log::${line}"
             done
           exit "$TEST_EXIT"

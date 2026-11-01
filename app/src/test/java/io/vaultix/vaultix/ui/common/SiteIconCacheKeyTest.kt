@@ -66,7 +66,12 @@ class SiteIconCacheKeyTest {
         // 想表达的是"不许冒充 URL"，写成了"不许出现 URL 的特征字符"。
         val key = siteIconCacheKey(url, 120)
         assertThat(key).startsWith("site-icon:")
-        assertThat(key).doesNotStartWith("http")
+        // ⚠️ 这里**不能**写 `doesNotStartWith("http")` —— Truth 的 `StringSubject` **没有**
+        //    这个方法（只有 `doesNotContain` / `doesNotMatch`），写了就是**编译期**报错，
+        //    而 `testFullDebugUnitTest` 因此 `compileFullDebugUnitTestKotlin FAILED`，
+        //    CI 报出来的却只是一句「exit code 1」，看起来像测试挂了（2026-11-01 实测）。
+        //    用「按 `:` 切出的第一段」表达同一个意思，不依赖不存在的 API。
+        assertThat(key.substringBefore(':')).isEqualTo("site-icon")
         // 前缀里必须带尺寸段，且整条键**不能**等于裸 URL（否则真的会和默认键撞车）。
         assertThat(key).isNotEqualTo(url)
     }
