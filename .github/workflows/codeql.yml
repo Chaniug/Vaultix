@@ -60,10 +60,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
-      # 与 ci-debug.yml 略有不同：**故意不开 build cache**。
-      # 见下面 Build 步骤的注释 —— 缓存命中会让编译器不执行，CodeQL 提取到 0 个编译单元。
-      # 依赖下载缓存由 setup-gradle 负责，那部分照常命中，不会变慢。
-      GRADLE_OPTS: -Dorg.gradle.parallel=true
+      # ★ 必须整条禁掉 Gradle build cache —— 注意有两个入口，缺一不可：
+      #   ① 命令行 --no-build-cache（Build 步骤已带）；
+      #   ② 环境变量 GRADLE_USER_HOME 里的 gradle.properties（setup-gradle 会写）。
+      #   只做 ① 时，PR / 分支运行仍会命中缓存（首跑实测：PR 上 Analyze (Kotlin)
+      #   报 "could not process any code written in Java/Kotlin"，而 main 上是绿的）。
+      GRADLE_OPTS: -Dorg.gradle.parallel=true -Dorg.gradle.caching=false
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
     steps:
       - name: Checkout repository
@@ -113,6 +115,10 @@ jobs:
       #   这一步直接 FROM-CACHE 还原 ⇒ **编译器根本没执行** ⇒ 提取器拿不到任何编译单元。
       #   ⇒ 关掉 build cache（依赖下载缓存仍然保留，那才是慢的部分）。
       #   症状与「缺构建步骤」一模一样，但修法完全相反 —— 别往 build-mode 上想。
+      #   ⚠️ 第二次踩（2026-11-03 PR 上）：只加 `--no-build-cache` 不够 ——
+      #   setup-gradle 会往 GRADLE_USER_HOME/gradle.properties 写 caching=true，
+      #   PR / 分支运行照样命中 ⇒ 同一根因第二次出现。故 job env 里也置
+      #   `-Dorg.gradle.caching=false`，两处一起才彻底。
       - name: Build for CodeQL extraction
         run: ./gradlew :app:assembleFullDebug --no-daemon --no-build-cache -Dorg.gradle.caching=false --stacktrace
 
