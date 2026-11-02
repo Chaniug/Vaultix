@@ -35,7 +35,7 @@
 
 ---
 
-## 🕐 最新状态（**2026-11-03** · GitHub 安全门禁落地）
+## 🕐 同日另一条线（**2026-11-03** · GitHub 安全门禁落地）
 
 > **一句话**：Advanced Security 面板里与本仓库相关的 6 项落成文件并推上 main ——
 > CodeQL（Kotlin 手动构建 + `actions` 语言扫 workflow 本身）、Dependabot（只升 minor/patch）、
@@ -45,9 +45,11 @@
 > GitHub 静态解析不出来（版本构建期才定）⇒ 没有 `dependency-submission.yml` 提交快照，
 > alerts 与 `dependency-review` 都是**空转**。⚠️ 删掉它的后果不是「少一个 workflow」，
 > 是「第 2 项整体失效」，而面板会安静地显示为「没有漏洞」。
-> **而且更靠前还有一层**：本仓库的 `Dependency graph` 设置**当前是关闭的**
-> （首跑实测，`Dependency Submission` 直接报 `The Dependency graph is disabled`）——
-> 那是设置项，SSH 改不了，得人工打开。
+> **而且更靠前还有一层**：仓库的 `Dependency graph` 设置首轮是**关闭**的
+> （`Dependency Submission` 直接报 `The Dependency graph is disabled`）——
+> 那是设置项，SSH 改不了。**2026-11-03 已人工打开并重跑，全绿。**
+> 打开后依赖图 11 → 730 个包、alerts 0 → 55 条 —— 
+> **「面板显示没有漏洞」在开关未开时＝没有数据，不是安全。**
 >
 > **首跑踩到的坑（已修）**：CodeQL 报「构建成功但提取到 0 个编译单元」的真正原因是
 > **Gradle build cache 命中**、编译器根本没执行 ⇒ 必须 `--no-build-cache`。
@@ -56,11 +58,16 @@
 > **必须记住的口径**：CodeQL 对 Kotlin **不支持 `build-mode: none`** ⇒ 只能 manual；
 > 且 Default setup 一旦开着就会与 `codeql.yml` 抢同一次分析（跑两遍、告警重复）。设置页保持关闭。
 >
-> **下一步**：① 仓库设置里 6 个开关仍需**人工**点（SSH 只能推代码，改不了设置）；
-> ② CodeQL 首轮告警 triage（预期几十条，多为测试代码里的硬编码串）；
-> ③ 上一轮遗留 #222 真机验收。
+> **必须记住的读法**：55 条告警里**只有 3 个包真进 APK**，真正要修的只有 2 条
+> （`msal` 带来的 `httpcore5` high / `opentelemetry-api` medium；`bcprov` 的 4 条 critical
+> 打在构建期那份 1.79 上，应用锁的 1.85.2 不在告警区间）。
+> 依赖图快照**不区分 scope**，55 条的 `manifest_path` 全是 `settings.gradle.kts` ——
+> 要判「进不进包」只能回溯 SBOM 的 `DEPENDS_ON` 链到构建工具节点。
 >
-> 详见 [`SESSION-2026-11-03.md`](./SESSION-2026-11-03.md)。
+> **下一步**：① 给 `msal` 加 constraints 修那两条运行时漏洞；
+> ② 合并 6 个 Dependabot PR（Kotlin 组别拆散三件套）；③ CodeQL 告警 triage；④ 上一轮遗留 #222 真机验收。
+>
+> 详见 [`SESSION-2026-11-03.md`](./SESSION-2026-11-03.md) §十。
 
 ## 🕐 上一轮状态（2026-11-01 · #222 新增库自动纳入快速解锁）
 
