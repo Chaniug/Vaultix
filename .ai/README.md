@@ -12,7 +12,27 @@
 此前约定「两边保持同步」，结果是同一主题两处各有一份、必然漂移（AI 会看错位置）。
 **要改内容，只改这里。**
 
-## 🕐 最新状态（**2026-11-01** · #222 新增库自动纳入快速解锁）
+## 🕐 最新状态（**2026-11-03** · GitHub 安全门禁落地）
+
+> **一句话**：Advanced Security 面板里与本仓库相关的 6 项落成文件并推上 main ——
+> CodeQL（Kotlin 手动构建 + `actions` 语言扫 workflow 本身）、Dependabot（只升 minor/patch）、
+> 依赖图提交、依赖审查、`SECURITY.md`、发布包的 artifact attestation。
+>
+> **必须记住的前置关系**：Dependabot alerts 读的是**依赖图**，而 Gradle 的依赖图
+> GitHub 静态解析不出来（版本构建期才定）⇒ 没有 `dependency-submission.yml` 提交快照，
+> alerts 与 `dependency-review` 都是**空转**。⚠️ 删掉它的后果不是「少一个 workflow」，
+> 是「第 2 项整体失效」，而面板会安静地显示为「没有漏洞」。
+>
+> **必须记住的口径**：CodeQL 对 Kotlin **不支持 `build-mode: none`** ⇒ 只能 manual；
+> 且 Default setup 一旦开着就会与 `codeql.yml` 抢同一次分析（跑两遍、告警重复）。设置页保持关闭。
+>
+> **下一步**：① 仓库设置里 6 个开关仍需**人工**点（SSH 只能推代码，改不了设置）；
+> ② CodeQL 首轮告警 triage（预期几十条，多为测试代码里的硬编码串）；
+> ③ 上一轮遗留 #222 真机验收。
+>
+> 详见 [`SESSION-2026-11-03.md`](./SESSION-2026-11-03.md)。
+
+## 🕐 上一轮状态（2026-11-01 · #222 新增库自动纳入快速解锁）
 
 > **一句话**：新增 Bitwarden 库不再需要「先关掉快速解锁、再重新关联所有」——
 > `registerVaultRow` 收尾时若房钥匙在内存，就**零认证**为该库建房间信封（P0）；
@@ -45,7 +65,7 @@
 | `ISSUES.md` | **索引**：坑的「分类 → 主篇索引」（最新 **#222**）。⚠️ 逐条摘要**与正文重复**，已按 8.9 §7.4 移出 —— 查某条：点分类 → 主篇「章节明细」 | **6.7KB**（原 84KB） |
 | `issues/` | 坑的**正文**：7 个分类 = 7 个索引 + **41 个分篇**（`-partN`）。`## NN.` 锚点原样保留，代码注释里的 `#NN` 仍能 grep 到 | 每篇 ≤22KB |
 | `decisions/` | **逻辑定稿**（用户拍板的方向，非根因、非实现）：`快速解锁房子化-两级钥匙层级-定稿.md`（**快速解锁现行真源**，2026-09-28 起修订前两篇）、`库选择与快速解锁-逻辑定稿.md`、`快速解锁能力级重构-定稿.md`、`设置页信息架构-定稿.md`、`通行密钥UV豁免-定稿.md` | — |
-| `SESSION-YYYY-MM-DD.md` | 逐轮工作日志（append-only）。**2026-09 的 17 篇已按时间归档**到 `archive/sessions-2026-09/`（不拆内容 —— 历史日志没人整读，拆开只会让文件数翻倍） | 20 篇 ≈300KB |
+| `SESSION-YYYY-MM-DD.md` | 逐轮工作日志（append-only）。**2026-09 的 17 篇已按时间归档**到 `archive/sessions-2026-09/`（不拆内容 —— 历史日志没人整读，拆开只会让文件数翻倍） | 21 篇 ≈320KB |
 | `archive/` | **归档区**（只挪不删，均为历史，**不要当现状读**）：`MEMORY-9-历史状态-2026-09至11.md`、`README-状态块-2026-09至10.md`、`sessions-2026-09/` | ≈1MB |
 | `tools/` | **本地自检脚本**（不需 Android SDK，`python3` 直接跑）。覆盖「编译器才能发现、detekt 查不到」的缝：<br>`check_compile_smells.py` = 图标导入 / 顶层常量顺序 / `R.string` 悬空引用 / **重复声明**（第四个检查，见 #103；带 `--detekt-probe` 两级探针）；<br>`check_signature_types.py` = 签名里的类型名是否存在；<br>`check_import_packages.py` = `import` 的包路径对不对（#101 / #104）；<br>`check_experimental_optin.py` = 实验性 API 有没有 `@OptIn`（#101.2，带 `--selftest`）；<br>`check_issues_index.py` = **`ISSUES.md` 索引与分篇正文的一致**（#160：曾漂四次；查编号集合 / 题注数字 / 总表条数列三处相等，配套 `tests/selftest_issues_index.py` **6 例正反用例**）；<br>`check_orphan_strings.py` = `strings.xml` 里**零引用**的字符串（#126；⚠️ 是**报告器不是删除器** —— 「被搬走的留，被取代的删」需人判读；`--gate` 用基线做**只减不增**约束）；<br>`check_state_flattening.py` = **多态状态（sealed ≥3 分支）有没有被压成二值开关**（#124；`Switch(checked = x is S.On)` 会把 `Partial` 与 `Off` 合并 —— `is On` 是合法 Kotlin，类型检查与 detekt **双双查不出**）；<br>`check_orphan_state.py` = **Compose 状态变量是不是「只写不读」**（2026-09-30 真机实录：`var showX by remember…` + `onClick = { showX = true }` 都写了、**漏了 `if (showX) { XDialog() }`** ⇒ 点那行毫无反应；⚠️ 这一形状**五道门禁全盲**：Kotlin 对 `by` 委托的**局部**变量不报 unused、detekt 不查局部委托、孤儿串看不见。判据=「标识符只出现在声明与赋值左侧」；**零容忍**（无基线）。配套自测 `tests/selftest_orphan_state.py`）；<br>`fetch_release_asset.sh` = **分块断点续传下载 release 资产**（沙箱整文件下载不可靠，见 #105；自带 `zipfile` 完整性校验） |
 | `tools/tests/` | **门禁自己的自测**（改探针前必跑）：<br>`selftest_duplicate_declarations.py` = 7 个正反用例；<br>`selftest_import_packages.py` = **端到端**（真把 import 改错、跑脚本、看退出码、还原）；<br>`selftest_cross_file_private.py` = **端到端**（真把 `internal` 改回 `private`、验证报出两个调用方、还原）；<br>`selftest_orphan_strings.py` = 7 个用例（含**前缀撞名** `a_head`/`a_header` 的经典误判，以及"零引用被误删只在运行时才炸"的各种引用形态）；<br>`selftest_state_flattening.py` = 9 个正反用例。⚠️ 含**全限定名**形态（`Outer.Cap.On`）—— 少了它，探针会在真实代码上静默失效（见该文件开头） |

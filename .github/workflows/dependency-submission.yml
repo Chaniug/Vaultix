@@ -29,6 +29,9 @@ on:
       - 'gradle/wrapper/gradle-wrapper.properties'
       - 'settings.gradle.kts'
       - 'gradle.properties'
+      # ★ 把自己也列进来：否则「改了提交逻辑」这件事本身不会触发一次运行，
+      #   改完只能靠下一次构建脚本变动来验证 —— 与 #145.3「改了门禁、门禁不跑」同族。
+      - '.github/workflows/dependency-submission.yml'
   workflow_dispatch:
 
 # 提交快照要内容写权限（只写 dependency snapshot，不改仓库文件）。
