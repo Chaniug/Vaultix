@@ -60,9 +60,42 @@ data object OnboardingRoute
 @Serializable
 data object AddVaultRoute
 
-/** 添加本地 KDBX（KeePass）库：SAF 选文件 → 主密码（+ 可选 keyfile）→ 解锁入库。 */
+/**
+ * 添加本地 KDBX（KeePass）库：SAF 选文件 → 主密码（+ 可选 keyfile）→ 解锁入库。
+ *
+ * 从**外部**（文件管理器 / 其它 App 的「用…打开」）直接打开一个 `.kdbx`（2026-11-02 新增）。
+ *
+ * ## 为什么需要它
+ *
+ * 在这之前 Vaultix **只承认自己在应用内选中的文件**：用户在「文件」里点开一个
+ * `xxx.kdbx`、或在别的 App 里选「用 Vaultix 打开」，系统找不到任何能处理它的 Activity，
+ * 要么报「没有可打开此文件的应用」，要么路由到别的密码管理器 —— 而用户手里装的
+ * 就是这个 App。功能看起来"没做"，实际是**没挂入口**。
+ *
+ * ## 它**不等于**「直接解锁」
+ *
+ * 外部 URI 不等于"已经授权"：可能是 `content://`（系统给了临时读权限，**不是持久**的），
+ * 也可能是 `file://`（Android 7+ 直接抛 `FileUriExposedException`）。
+ * ⇒ 这里**不跳过任何一步校验**，只做一件事：把 URI 预填进添加页，
+ * 让用户确认并输主密码（**持久读授权也在那时才申请** —— 临时授权活不过进程重启，
+ * 见 `AddKdbxScreen` 的说明）。
+ *
+ * ⚠️ 它**不**自动判断"这个文件已经在库里，直接去解锁页"：`vaults.id` 是当初
+ * `takePersistableUriPermission` 拿到的那个 URI 字符串，与外部 intent 交付的
+ * 字符串**常常不是同一个**（`Uri.toString()` 的编码差异、provider 换了一次 grants）。
+ * 拿字符串相等去猜"是不是同一个库"，猜错的后果是把用户带到一个**解不开的库**上。
+ * 走添加页就没有猜错这回事：`addKdbxVault` 本来就按"已有同 id"处理重复添加。
+ */
 @Serializable
-data object AddKdbxRoute
+data class AddKdbxRoute(
+    /**
+     * 待导入的文件 URI；`null` = 正常从库列表点「添加」进来（自己选文件）。
+     *
+     * ⚠️ 必须是 `String` 而不是 `Uri`：`kotlinx.serialization` 不认识 `android.net.Uri`，
+     * 而导航参数是序列化的。
+     */
+    val externalUri: String? = null,
+)
 
 /**
  * 从**网盘**添加 KDBX 库（WebDAV / OneDrive）。

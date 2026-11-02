@@ -48,6 +48,30 @@ fun interface KdbxFileSourceResolver {
     fun fileSourceFor(origin: String): KdbxFileSource?
 
     /**
+     * 这个 origin 是不是**网盘**来源（本地 SAF 文件不算）。
+     *
+     * ## 为什么要有这个默认方法（2026-11-02 补）
+     *
+     * "本地 vs 网盘"这条判据此前被**抄了三份**：`KdbxCloudSyncCoordinator.hasCloudSource`、
+     * `KdbxCreateRepositoryImpl.isCloudOrigin`、以及 `VaultRepositoryImpl.addKdbxVault`
+     * 里需要它却又拿不到（于是那条路的 `syncStatus` 一直是 null）。
+     * 三份判据的失效方式一致且**没有任何报错**：某条路径认为"这个库没有云端" ⇒
+     * 不标同步状态、不触发上传，而用户以为它在同步。
+     *
+     * ⇒ 放在接口上，任何持有 [KdbxFileSourceResolver] 的调用点都能用；
+     *   默认实现写成"**不是** SAF 且**真的能解析出来源**"，与协调器那张表同义
+     *   （见 [KdbxCloudSyncCoordinator.hasCloudSource] —— 它现在直接复述这条判断）。
+     *
+     * ⚠️ 判据写成"不是 `content://`"的**补集**而不是"是 webdav: / onedrive:"的白名单：
+     * 将来再加一个网盘（S3 / FTP…）时，忘了登记的后果是"新来源被当成本地"，
+     * 而 `content://` 是 Android 定死的 scheme，不会增长。
+     * ⚠️ 还要求 [fileSourceFor] 能解析出来源：畸形 origin（如 `onedrive:` 缺路径）
+     * 不该被当成"有云端"，否则会留下一个永远传不上去的「待上传」。
+     */
+    fun isCloudOrigin(origin: String): Boolean =
+        !origin.startsWith(SAF_ORIGIN_PREFIX) && fileSourceFor(origin) != null
+
+    /**
      * 按 [uri] 读一个**附属文件**的字节（目前只用于 KDBX 的 keyfile）。
      *
      * ## 为什么放在这里而不是让调用方自己 `Uri.parse`
@@ -73,5 +97,16 @@ fun interface KdbxFileSourceResolver {
         val source = fileSourceFor(target) ?: return null
         // 读不到（授权失效 / 文件被删）：如实返回 null，让上面的取舍在调用方生效。
         return runCatching { source.read() }.getOrNull()
+    }
+
+    private companion object {
+        /**
+         * 本地 SAF 来源的 origin 前缀。
+         *
+         * ⚠️ 与 `KdbxCloudSyncCoordinator` 里的同名常量**必须保持同值**。
+         * 它是 Android 定死的 scheme（`content://`），不会变 —— 共享它要跨文件暴露
+         * 一个 `internal` 常量，收益不如直接写死一处。改这里时务必搜一遍 `content://`。
+         */
+        const val SAF_ORIGIN_PREFIX = "content://"
     }
 }

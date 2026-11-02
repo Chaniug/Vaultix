@@ -19,6 +19,20 @@
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
         </intent>
+        <!-- ★ 2026-11-02：外部「用 Vaultix 打开 xxx.kdbx」要真的能被"看见"。
+             Android 11 起的包可见性同样约束 **intent resolution**：不在这里声明，
+             部分 ROM 的文件管理器「打开方式」列表里根本不会出现本应用
+             ⇒ 用户点了 `.kdbx`、系统说"没有可打开此文件的应用"，而应用就装在机上。
+             ⚠️ 与下面 MainActivity 的 intent-filter 是**两件事**：这里决定"别处能不能
+             发现我们"，那里决定"系统把文件交给我们之后我们收不收"。两边都必须有。 -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="application/x-keepass2" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="application/octet-stream" />
+        </intent>
     </queries>
 
     <!-- ⚠️⚠️ android:enableOnBackInvokedCallback="false" —— 2026-09-13 第五轮才定案，别改回 true。
@@ -67,10 +81,41 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTop"
             android:theme="@style/Theme.Vaultix">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!-- ★★ 外部「用 Vaultix 打开 xxx.kdbx」（2026-11-02）。
+                 在这之前本应用**没有**任何能接收文件的入口：用户在「文件」里点开
+                 一个 `.kdbx`、或在别的 App 里选「用…打开」，系统只会提示
+                 「没有可打开此文件的应用」—— 功能不是没做，是**没挂入口**。
+
+                 ⚠️ 为什么用**浏览器**类别（`BROWSABLE`）：`content://` 的授权
+                 只在"经由系统 Intent 交付"时才会带上 `FLAG_GRANT_READ_URI_PERMISSION`。
+                 不写 BROWSABLE 时，部分 ROM 的「打开方式」不会把 URI 授权一并交付，
+                 我们拿到的 URI 读出来就是 `SecurityException`。
+
+                 ⚠️ MIME 为什么是两个都写：KDBX **没有注册过** MIME 类型，
+                 而各文件管理器说法不一 —— 多数报 `application/octet-stream`，
+                 少数报专有的 `application/x-keepass2`。两个都不写就有一半机型匹配不到。
+                 ⚠️ 范围**有意收窄**：不写 `*/*`。写通配会让本应用出现在**任何**文件的
+                 「打开方式」里（包括图片、APK），既是骚扰也会引来商店审核问题。
+                 ⚠️ 真正的类型判定在打开文件之后由引擎做（签名 + 版本双重识别，
+                    见 `KdbxFormat`）—— 这里只负责"把文件递进来"。
+
+                 ⚠️ `launchMode="singleTop"` **必须**：用户第二次从文件管理器点开另一个
+                 `.kdbx` 时，系统复用已有任务走 `onNewIntent`。没有它就会在栈上
+                 再叠一个 MainActivity —— 返回键要按两次，且两份 Compose 状态并存
+                 （库在一边被锁掉，另一边还显示着明文条目）。 -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:mimeType="application/x-keepass2" />
+                <data android:mimeType="application/octet-stream" />
             </intent-filter>
         </activity>
 

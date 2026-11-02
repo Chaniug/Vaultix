@@ -71,7 +71,7 @@ class OneDriveKdbxFileSource(
             sizeBytes = entry.sizeBytes,
             remoteId = entry.id,
             displayName = entry.name,
-            lastModified = parseGraphTimestamp(entry.lastModified),
+            lastModified = OneDriveGraphClient.parseGraphTimestamp(entry.lastModified),
         )
     }
 
@@ -97,6 +97,11 @@ class OneDriveKdbxFileSource(
      *    ⚠️ 代价是每次保存多一次下载；KDBX 库通常几百 KB，可接受。
      *    与 `SafKdbxFileSource` 的做法一致（那边是"SAF 没有 rename，写坏没有退路"，
      *    这边是"云端没有事务，写坏不可回滚"，理由同构）。
+     *
+     * ⚠️ 2026-11-02（#232）补充：第 2 道闸此前是**无条件**整份重下 —— 库在蜂窝网络上
+     *    2 MiB 就是每次保存多走 2 MiB。现在先用**元数据**（大小 / 最后修改时间）
+     *    判断能不能直接判死，判不了才下载；而"看起来对得上"**依然要下载**逐字节比。
+     *    判定本体在 `readBackPlan`（纯函数），本类只负责发请求与翻译异常。
      */
     override suspend fun write(
         bytes: ByteArray,
@@ -105,6 +110,10 @@ class OneDriveKdbxFileSource(
         failIfExists: Boolean,
     ): KdbxFileWriteResult {
         val token = token()
+        // ★ 记下"开始写之前"的本机时刻（#232）：读回校验要用它判断
+        //   "远端那份的最后修改时间是不是**明显早于**这次写入"（见 `readBackPlan`）。
+        //   ⚠️ 必须取在 upload 之前：取在之后会让秒级精度的服务端时间戳恒定地"早于"它。
+        val writeStartedAtMs = System.currentTimeMillis()
         val entry = try {
             graph.upload(
                 accessToken = token,
@@ -136,13 +145,13 @@ class OneDriveKdbxFileSource(
 
         // ★ 写后读回校验：**抛而不是返回失败**，因为上层只处理异常
         //   （`Kdbx.verifyWrite` / 同步状态机都是靠 catch 决定要不要记成功）。
-        verifyReadBack(bytes, entry, token)
+        verifyReadBack(bytes, entry, token, writeStartedAtMs)
 
         return KdbxFileWriteResult(
             versionToken = entry.versionToken,
             sizeBytes = entry.sizeBytes,
             remoteId = entry.id,
-            lastModified = parseGraphTimestamp(entry.lastModified),
+            lastModified = OneDriveGraphClient.parseGraphTimestamp(entry.lastModified),
         )
     }
 
@@ -156,19 +165,55 @@ class OneDriveKdbxFileSource(
      * ⚠️ 复用 write 里已经取到的 token，**不要**在这里再 `token()` 一次：
      * 那是又一次异步刷新（多一个网络往返），而且两次拿到的可能不是同一个
      * token（刚好过期刷新过），排查时会对不上。
+     *
+     * ## ★ 什么时候**不必**下载（#232）
+     *
+     * 判定全部交给 [readBackPlan]（纯函数，可脱网单测）：远端记录的**大小**或
+     * **最后修改时间**已经能证明"那份不是我们刚写下去的"，就当场报冲突，
+     * 省掉一次整库下载。
+     *
+     * ⚠️ 反过来**不成立**：大小一致、时间戳正常 ⇒ **仍然必须下载逐字节比对**。
+     * "长度对、内容坏"是这条路上最坏的形态（分片重发 / 传输截断都造得出来），
+     * 而元数据对它一无所知。⇒ `readBackPlan` 没有"证明一致"这一档，只有
+     * "证明不一致"与"证明不了、去下载"。
+     *
+     * ## ⚠️ 为什么拆成"先判定、再校验字节"两段（detekt `ThrowsCount`）
+     *
+     * 三类失败各要一个 `throw`（元数据已证不一致 / 读不回来 / 读回字节不一致），
+     * 而 `ThrowsCount` 上限是 2，且 `excludeGuardClauses` 只放行"第一条非声明语句
+     * 之前的 throw"—— 排在一次 suspend 调用之后就不再算守卫。
+     * ⇒ 按**结局的种类**拆，而不是按行数拆：本函数只负责"该不该下载"这一条判据
+     * （一个 throw），字节层面的两条留给 [verifyDownloadedBytes]。
+     * 两个函数各自只有一个判断对象，读起来也比三段挤在一起清楚。
      */
     private suspend fun verifyReadBack(
         bytes: ByteArray,
         entry: OneDriveEntry,
         accessToken: String,
+        writeStartedAtMs: Long,
     ) {
-        // 先用大小做一次廉价预筛：大小都不对就别浪费一次完整下载。
-        // ⚠️ 预筛**不能**直接写在这个函数里：detekt `ThrowsCount`(excludeGuardClauses=true)
-        //   只把"第一条非声明语句之前的 throw"当守卫子句放行，排在一次 suspend 调用之后
-        //   就不再算守卫 —— 实测预筛放这儿必报 3（上限 2）。挪进 [verifySize] 后，
-        //   本函数正好只剩两条 throw，而且两条各管一类失败（读不回 / 读回不一致），
-        //   语义上本来也不该和"大小预筛"挤在一起。
-        verifySize(bytes, entry)
+        val plan = readBackPlan(
+            writtenSize = bytes.size,
+            entry = entry,
+            writeStartedAtMs = writeStartedAtMs,
+        )
+        // 元数据已能证明不一致 ⇒ 当场报冲突，省掉一次整库下载。
+        if (!plan.requiresDownload) throw metadataMismatchOf(entry, plan.reason)
+        verifyDownloadedBytes(bytes, entry, accessToken, plan.suspiciousTimestamp)
+    }
+
+    /**
+     * 下载一次并逐字节比对（[verifyReadBack] 的第二段）。
+     *
+     * @param suspiciousTimestamp 只用于**给冲突文案加线索**，不参与结论 ——
+     *   见 `readBackPlan` 里「时间戳这一半为什么不算证明不一致」。
+     */
+    private suspend fun verifyDownloadedBytes(
+        bytes: ByteArray,
+        entry: OneDriveEntry,
+        accessToken: String,
+        suspiciousTimestamp: Boolean,
+    ) {
         val downloaded = runCatching { graph.download(accessToken, path) }
         val actual: ByteArray? = downloaded.getOrNull()
         if (actual == null) {
@@ -177,25 +222,20 @@ class OneDriveKdbxFileSource(
             throw readBackFailureOf(entry, failure)
         }
         if (!actual.contentEquals(bytes)) {
-            throw mismatchOf(entry, bytes.size, actual.size)
-        }
-    }
-
-    /** 远端记录的大小与刚写下去的对不上 ⇒ 立刻冲突，省掉一次完整下载。 */
-    private fun verifySize(bytes: ByteArray, entry: OneDriveEntry) {
-        val recorded = entry.sizeBytes ?: return
-        if (recorded != bytes.size.toLong()) {
-            throw sizeMismatchOf(entry, bytes.size)
+            throw mismatchOf(entry, bytes.size, actual.size, suspiciousTimestamp)
         }
     }
 
     /**
-     * 大小对不上 ⇒ 该抛的冲突（纯构造，自己不抛；理由同 [readBackFailureOf]）。
+     * 元数据已经证明"远端那份不是刚写下去的" ⇒ 该抛的冲突（纯构造，自己不抛）。
+     *
+     * ⚠️ `reason` 直接来自 [readBackPlan]：那里是唯一决定"哪一种不一致"的地方，
+     * 这里再拼一遍就会出现"判定说大小不对、文案说时间不对"这种自相矛盾的提示。
      */
-    private fun sizeMismatchOf(entry: OneDriveEntry, writtenSize: Int): KdbxFileConflictException =
+    private fun metadataMismatchOf(entry: OneDriveEntry, reason: String): KdbxFileConflictException =
         KdbxFileConflictException(
             currentVersion = entry.versionToken,
-            message = "写入后校验不一致（写入 $writtenSize 字节，远端记录 ${entry.sizeBytes} 字节），请重新同步",
+            message = "写入后校验不一致（$reason），请重新同步",
         )
 
     /**
@@ -217,9 +257,14 @@ class OneDriveKdbxFileSource(
         entry: OneDriveEntry,
         writtenSize: Int,
         actualSize: Int,
+        suspiciousTimestamp: Boolean,
     ): KdbxFileConflictException = KdbxFileConflictException(
         currentVersion = entry.versionToken,
-        message = "写入后读回校验不一致（写入 $writtenSize 字节，读回 $actualSize 字节），请重新同步",
+        message = buildString {
+            append("写入后读回校验不一致（写入 $writtenSize 字节，读回 $actualSize 字节），请重新同步")
+            // 只加一句线索，**不改结论**：结论永远来自字节比对。
+            if (suspiciousTimestamp) append("。另外，远端最后的修改时间早于本次写入")
+        },
     )
 
     override suspend fun listChildren(): List<KdbxFileEntry> {
@@ -230,7 +275,7 @@ class OneDriveKdbxFileSource(
                 id = entry.id,
                 isDirectory = entry.isDirectory,
                 versionToken = entry.versionToken,
-                lastModified = parseGraphTimestamp(entry.lastModified),
+                lastModified = OneDriveGraphClient.parseGraphTimestamp(entry.lastModified),
                 sizeBytes = entry.sizeBytes,
             )
         }
@@ -275,22 +320,6 @@ class OneDriveKdbxFileSource(
                 accountId = parsed.accountId,
                 path = parsed.path,
             )
-        }
-    }
-
-    private companion object {
-        /**
-         * Graph 的时间是 ISO-8601 字符串（如 `2026-09-17T12:34:56Z`）。
-         *
-         * ⚠️ 用 `runCatching` 兜住：时间戳**只用于展示**，解析失败不该让
-         * "读取文件"这个主要目的失败。返回 null 时 UI 就不显示时间。
-         */
-        fun parseGraphTimestamp(raw: String?): Long? {
-            val text = raw?.trim()?.takeIf { it.isNotEmpty() } ?: return null
-            return runCatching {
-                // API 26+ 才有 java.time；本项目 minSdk = 26，可直接用。
-                java.time.Instant.parse(text).toEpochMilli()
-            }.getOrNull()
         }
     }
 }

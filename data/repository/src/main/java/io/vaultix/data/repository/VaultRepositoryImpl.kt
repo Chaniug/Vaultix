@@ -12,6 +12,7 @@ import io.vaultix.data.kdbx.KdbxFailure
 import io.vaultix.data.kdbx.KdbxOpenError
 import io.vaultix.data.repository.kdbx.KdbxFileCache
 import io.vaultix.data.repository.kdbx.KdbxFileSourceResolver
+import io.vaultix.data.repository.kdbx.KdbxSyncTransitions
 import io.vaultix.database.dao.CipherDao
 import io.vaultix.database.dao.FolderDao
 import io.vaultix.database.dao.PendingOpDao
@@ -217,6 +218,35 @@ class VaultRepositoryImpl @Inject constructor(
         )
         if (!keyFileUri.isNullOrBlank()) {
             preferences.setKdbxKeyFileUri(sourceUri, keyFileUri)
+        }
+        // ★ 只为**从未有过同步状态**的库补一个初始值（2026-11-02 补）。
+        //
+        // ## 为什么需要（这一列原本一直是 null）
+        //
+        // `vaults.syncStatus` 的 null 语义是「该库**不适用**网盘同步」。可「加入一个
+        // 网盘库」恰恰有云端待办：本机还没跟远端对过一次、也没有基线令牌。
+        // 写 null 的两个后果都不报错：① `VaultListScreen` 的
+        // `onSyncNow = if (vault.syncStatus != null)` 让「立即同步」入口消失；
+        // ② 用户真的在首次同步前改了东西时，`impliesLocalChanges` 判成 false ⇒ 漏推。
+        //
+        // ## 为什么**只补空白**、绝不覆盖
+        //
+        // ⚠️ 与 `KdbxCreateRepositoryImpl`（新建库）不同：那里可以重置状态，
+        //    因为这次确实又写了一遍文件。这里只是"再解锁一次并登记行"——
+        //    用户手上的库可能正处在 CONFLICT / PENDING_UPLOAD_WITH_LOCAL_CHANGES，
+        //    把它重置成 PENDING_UPLOAD 会**盖掉一个要用户拍板的结论**。
+        //    唯一的例外是 null：那本来就不是状态，补一个比留着空白更安全。
+        if (existing?.syncStatus == null) {
+            val hasCloud = runCatching { kdbxFileSources.isCloudOrigin(sourceUri) }.getOrDefault(false)
+            KdbxSyncTransitions.forNewlyRegisteredVault(hasCloudSource = hasCloud)?.let { initial ->
+                vaultDao.updateSyncState(
+                    id = sourceUri,
+                    status = initial.name,
+                    // 这两列必须原样带回来（DAO 是 `SET col = :v`，传 null 就是清空）。
+                    versionToken = existing?.remoteVersionToken,
+                    syncedAt = existing?.lastSyncedAt,
+                )
+            }
         }
         // 首次接入顺手设为默认库（**仅当默认库为空**，用户 2026-09-14 拍板）。
         // ⚠️ 只在 Added 时做：Updated 是「重复添加同一文件」，不是接入新库，

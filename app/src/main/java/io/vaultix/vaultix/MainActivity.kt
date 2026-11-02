@@ -45,10 +45,25 @@ class MainActivity : FragmentActivity() {
      */
     private val exitAfterUnlock = mutableStateOf(false)
 
+    /**
+     * 外部「用 Vaultix 打开 xxx.kdbx」带进来的 URI（2026-11-02）。
+     *
+     * ## 为什么是 Compose 状态而不是直接读 `intent`
+     *
+     * 与 [exitAfterUnlock] **完全同一个坑**：`FLAG_ACTIVITY_CLEAR_TOP` /
+     * `singleTop` 复用已有 Activity 时走 [onNewIntent]，而 composition 里读
+     * `intent` 拿到的是**旧对象** ⇒ 用户在文件管理器里第二次点开另一个 `.kdbx` 时，
+     * App 只会若无其事地停在上一个页面（表现：点了没反应）。
+     *
+     * `null` = 这次不是由外部文件意图拉起的。
+     */
+    private val externalKdbxUri = mutableStateOf<String?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         exitAfterUnlock.value = hasMainUnlockExit(intent)
+        externalKdbxUri.value = externalKdbxUriOf(intent)
         setContent {
             // 外观 / 安全偏好驱动主题与防截屏（设置页可实时开关）
             val themeMode by preferences.themeMode
@@ -80,7 +95,15 @@ class MainActivity : FragmentActivity() {
                 LaunchedEffect(exitAfterUnlockNow, unlockedIds) {
                     if (exitAfterUnlockNow && unlockedIds.isNotEmpty()) finish()
                 }
-                VaultixApp(liquidGlassDock = liquidGlassDock)
+                val externalUri by externalKdbxUri
+                VaultixApp(
+                    liquidGlassDock = liquidGlassDock,
+                    externalKdbxUri = externalUri,
+                    // ★ 消费即清：否则用户从添加页返回、或导航到别处之后再返回，
+                    //   这条 URI 会**反复**把人拽回添加页（一个自己打不开的循环）。
+                    //   清空发生在 NavHost 处理完这次导航之后（见 VaultixApp 的 LaunchedEffect）。
+                    onExternalKdbxConsumed = { externalKdbxUri.value = null },
+                )
             }
         }
     }
@@ -91,6 +114,33 @@ class MainActivity : FragmentActivity() {
         // 复用时（FLAG_ACTIVITY_CLEAR_TOP）必须同步刷新标记，否则这次「解锁即回填」的
         // 收尾条件永远不成立 —— 用户就会停在 Vaultix 主界面上，填充悄无声息地失败。
         exitAfterUnlock.value = hasMainUnlockExit(intent)
+        // 同上：第二次「用 Vaultix 打开」必须能被看见（见 externalKdbxUri 的 KDoc）。
+        externalKdbxUri.value = externalKdbxUriOf(intent)
+    }
+
+    /**
+     * 从外部 intent 里取出那个 `.kdbx` 的 URI（没有则 `null`）。
+     *
+     * ## 只看 `ACTION_VIEW` 的 `data`，**不看** `ACTION_SEND` 的 `EXTRA_STREAM`
+     *
+     * | intent | 为什么这么处理 |
+     * |---|---|
+     * | `ACTION_VIEW` + `data` | 文件管理器「打开方式」走的就是它 ⇒ 支持 |
+     * | `ACTION_SEND` + `EXTRA_STREAM` | 分享面板的「发送到」在部分机型上**只带临时授权、不带 MIME**，
+     *   且同一份文件常被当图片/文本流打开 ⇒ 支持它要额外一套校验，收益不明显 |
+     *
+     * ## 为什么还要判 `content:` scheme
+     *
+     * `file://` 从 Android 7 起就不该出现在跨应用 intent 里（`FileUriExposedException`），
+     * 而 `content://` 才是 SAF / 各文件管理器给的东西。别的 scheme（`http:` 之类）
+     * 更不该被当成"本地文件"去 `openInputStream` —— 那会变成一次没有任何用户可见提示的联网。
+     * ⇒ 只接受 `content:`，其余一律当"没有外部文件"（App 正常打开库列表）。
+     */
+    private fun externalKdbxUriOf(intent: Intent?): String? {
+        if (intent?.action != Intent.ACTION_VIEW) return null
+        val uri = intent.data ?: return null
+        if (uri.scheme?.lowercase() != "content") return null
+        return uri.toString().takeIf { it.isNotBlank() }
     }
 
     /** 是否由「自动填充的解锁桥」（[io.vaultix.vaultix.autofill.AutofillActivity]）拉起。 */

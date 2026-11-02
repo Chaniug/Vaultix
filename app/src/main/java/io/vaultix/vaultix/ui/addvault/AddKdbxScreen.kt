@@ -70,6 +70,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -98,6 +101,41 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
+ * 处理「从外部打开一个 `.kdbx`」（2026-11-02）。
+ *
+ * @param externalUri 外部 intent 带来的 URI；`null` = 不是外部进入（什么都不做）。
+ *
+ * ## 三件事，顺序不能换
+ *
+ * 1. **去重**：同一个 URI 只处理一次。Activity 重建（旋转 / 切深色）会重跑组合，
+ *    没有这道去重就会**反复申请权限、反复覆盖用户已填的表单**。
+ * 2. **切到「打开」态**：外部意图的语义就是"打开一个已有文件"，停在「新建」是错的。
+ * 3. **先试持久授权，再预填**：
+ *    - 拿得到 ⇒ 用户这次"用 Vaultix 打开"顺带完成了长期授权（最顺的一条路）；
+ *    - 拿不到**也不算失败**：系统给的临时授权足以完成本次添加。只是下次冷启动
+ *      可能要求重新选文件 —— 那条提示由 `SafKdbxFileSource` 在真正读不到时抛出，
+ *      此处**不要**自己编一句"授权失败"（用户会以为添加不了，其实能）。
+ */
+@Composable
+private fun ApplyExternalKdbxUri(
+    externalUri: String?,
+    viewModel: AddKdbxViewModel,
+    context: Context,
+) {
+    // `rememberSaveable`：配置变更后重建不会重复处理同一个 URI。
+    var handled by rememberSaveable { mutableStateOf<String?>(null) }
+    LaunchedEffect(externalUri) {
+        val raw = externalUri ?: return@LaunchedEffect
+        if (handled == raw) return@LaunchedEffect
+        handled = raw
+        viewModel.onModeChange(AddKdbxViewModel.Mode.Open)
+        val uri = runCatching { Uri.parse(raw) }.getOrNull()
+        if (uri != null) persistReadPermission(context, uri)
+        viewModel.onDatabasePicked(context, uri)
+    }
+}
+
+/**
  * MIME 过滤：KDBX 没有注册 MIME 类型，故按通配 MIME（星号斜杠星号）打开并靠引擎判格式
  * （见 `KdbxFormat`，签名 + 版本双重识别）。
  *
@@ -122,12 +160,29 @@ private const val DEFAULT_KDBX_FILE_NAME = "vault.kdbx"
 fun AddKdbxScreen(
     onBack: () -> Unit,
     onAdded: () -> Unit,
+    /**
+     * 从**外部**「用 Vaultix 打开 xxx.kdbx」带进来的 URI（2026-11-02）。
+     *
+     * `null` = 正常从库列表点「添加」，用户自己选文件。
+     *
+     * ⚠️ 它的作用**只是预填文件名并顺手要一次读权限**，绝不等于"已经授权、可以直接解锁"：
+     * 外部 intent 给的是**临时**读授权（活不过进程重启），所以后续每一次解锁仍要靠
+     * `takePersistableUriPermission` 换来的持久授权 —— 拿不到就如实提示用户重新选文件，
+     * 而不是在这里"先让它能读一次"然后下次打开时静默失败。
+     */
+    externalUri: String? = null,
     viewModel: AddKdbxViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
+
+    // ★ 外部进入：把 URI 预填进"打开"那一态（2026-11-02）。
+    //   逻辑抽在外面的 [ApplyExternalKdbxUri] —— detekt 的
+    //   `CyclomaticComplexMethod` 是本页最紧的一条（这个 Composable 本来就长），
+    //   再塞两个 `return@LaunchedEffect` 就超一个点。抽出去之后每一半都能单独读懂。
+    ApplyExternalKdbxUri(externalUri = externalUri, viewModel = viewModel, context = context)
     // 文案先取好：LaunchedEffect 里不能直接 stringResource
     val addedText = stringResource(R.string.add_kdbx_added)
     val updatedText = stringResource(R.string.add_kdbx_updated)

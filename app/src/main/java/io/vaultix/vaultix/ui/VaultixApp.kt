@@ -88,6 +88,15 @@ fun VaultixApp(
      * （与 `VaultixTheme` 的 themeMode / dynamicColor 同一取向：观感偏好只有一个真源）。
      */
     liquidGlassDock: Boolean = false,
+    /**
+     * 外部「用 Vaultix 打开 xxx.kdbx」带进来的 URI（2026-11-02）。
+     *
+     * `null` = 不是外部文件意图拉起的（绝大多数启动都是这样）。
+     * 见 [AddKdbxRoute] 的 KDoc：它**不跳过**任何校验，只是把文件预填进添加页。
+     */
+    externalKdbxUri: String? = null,
+    /** 这条 URI 已经被消费（导航过一次）—— 调用方据此清空它，见 [MainActivity]。 */
+    onExternalKdbxConsumed: () -> Unit = {},
 ) {
     val navController = rememberNavController()
     val rootNavViewModel: RootNavViewModel = hiltViewModel()
@@ -132,6 +141,28 @@ fun VaultixApp(
             }
         }
         routedOnce = true
+    }
+
+    // ★ 外部「用 Vaultix 打开 xxx.kdbx」（2026-11-02）。
+    //
+    // ## 为什么**等** `routedOnce` 之后才导航
+    //
+    // 启动早期 `rootNavState` 还是 `Splash`：此时若直接 `navigate(AddKdbxRoute)`，
+    // 紧接着上面那个 `LaunchedEffect(rootNavState)` 会做一次 `navigateToRoot(...)`，
+    // 把添加页**弹掉**（用户点了「用 Vaultix 打开」，结果看到的是库列表 —— 又一次"点了没反应"）。
+    // ⇒ 必须等根路由落定之后再追加这一跳。
+    //
+    // ⚠️ 键里带 `externalKdbxUri`：用户第二次从文件管理器点开另一个文件时（走 onNewIntent），
+    //    URI 变了 ⇒ 这个效果重新跑 ⇒ 才会真的再跳一次添加页。
+    LaunchedEffect(externalKdbxUri, routedOnce) {
+        val uri = externalKdbxUri ?: return@LaunchedEffect
+        if (!routedOnce) return@LaunchedEffect
+        // 已经在这一页了（用户连点两次「打开」）就不叠第二份。
+        navController.navigate(AddKdbxRoute(externalUri = uri)) {
+            // 只保留一份添加页：否则返回键要按多次才回得到库列表。
+            launchSingleTop = true
+        }
+        onExternalKdbxConsumed()
     }
 
     NavHost(
@@ -434,8 +465,11 @@ private fun NavGraphBuilder.settingsGraph(navController: NavHostController) {
         )
     }
     // 添加本地 KDBX 库：成功后回到库列表（新库已解锁，可直接点进去）
-    composable<AddKdbxRoute> {
+    composable<AddKdbxRoute> { entry ->
         AddKdbxScreen(
+            // ★ 外部「用 Vaultix 打开 xxx.kdbx」带进来的 URI（2026-11-02）。
+            //   null = 正常从库列表点「添加」进来，让用户自己选文件。
+            externalUri = entry.toRoute<AddKdbxRoute>().externalUri,
             onBack = { navController.popBackStack() },
             onAdded = { navController.popBackStack() },
         )

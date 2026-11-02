@@ -69,6 +69,35 @@ internal class CachedKdbxFileSource(
      *   等于退化成"裸奔"，所以调用方**应当**尽量传进来（见 `withRemoteCache`）。
      */
     private val onRemoteChanged: (suspend () -> Unit)? = null,
+    /**
+     * **上传成功**之后的回调（#233）：把"这份字节对应哪一版"这件事一起告诉上层。
+     *
+     * @param bytes 刚写上去的字节。
+     * @param newVersion 服务端给的新版本令牌。
+     *
+     * ⚠️ 与 [onRemoteChanged] 是**两个方向**，不能合并：
+     * 前者是"远端被别人改了"（要提醒用户），这里是"我把远端改了"（要收敛基线）。
+     * 合并的话，一次成功上传会被报成"远端有更新"，用户看到一个假角标。
+     */
+    private val onUploaded: (suspend (ByteArray, String?) -> Unit)? = null,
+    /**
+     * **跨实例共享**的新鲜度容器（#233 修完 #232 之后补的，2026-11-02）。
+     *
+     * ## 为什么新鲜度不能住在实例里
+     *
+     * `KdbxCloudSyncCoordinator.fileSourceFor` **每次调用都新建**一个本类实例
+     * （它的 KDoc 早就写明"本地 SAF 不缓存"，远端则每次现装一个装饰器）。
+     * 而上传成功后的收敛是由**另一个**实例做的（编排器自己按 origin 又解析了一次）。
+     * 于是"刚上传成功 ⇒ 缓存与远端一致"这个结论被写进了那个临时实例的
+     * `_freshness`，随它一起被回收 —— 用户下一次解锁看到的仍是 `UNVERIFIED`，
+     * 那条"内容可能不是最新的"提示因此永远不消失。
+     *
+     * ⚠️ 这不是可选的优雅改动：新鲜度是**关于这个 cacheKey 的事实**，
+     * 不是"关于某个装饰器对象的状态"。同一把 key 的所有实例必须看到同一个值。
+     *
+     * @param freshHolder 由持有者（协调器）按 cacheKey 提供；默认自建一个（供直接构造用）。
+     */
+    private val freshHolder: FreshnessHolder = FreshnessHolder(),
 ) : KdbxFileSource {
 
     // ⚠️ 声明必须**在 read() 之前**：Kotlin 按声明顺序初始化，
@@ -84,10 +113,8 @@ internal class CachedKdbxFileSource(
      */
     enum class Freshness { VERIFIED, STALE, UNVERIFIED }
 
-    private val _freshness = MutableStateFlow(Freshness.UNVERIFIED)
-
-    /** 当前新鲜度（初始 [Freshness.UNVERIFIED] = 还没校验过）。 */
-    val freshness: StateFlow<Freshness> = _freshness.asStateFlow()
+    /** 当前新鲜度（初始 [Freshness.UNVERIFIED] = 还没校验过）。跨实例共享，见 [freshHolder]。 */
+    val freshness: StateFlow<Freshness> = freshHolder.state
 
     /** 防止同一轮里并发触发多次后台校验（`read()` 可能在解锁流程里被调多次）。 */
     private val recheckStarted = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -182,14 +209,14 @@ internal class CachedKdbxFileSource(
             when {
                 // 校验失败 / 来源不给令牌 ⇒ 保持现状，但要能被 UI 看到"没校验成"。
                 remoteToken == null || current == null -> {
-                    _freshness.value = Freshness.UNVERIFIED
+                    freshHolder.set(Freshness.UNVERIFIED)
                 }
                 // 远端变了 ⇒ 换新缓存，并如实标成"已过期"（UI 提示用）。
                 remoteToken != current.versionToken -> {
                     runCatching { delegate.read() }
                         .onSuccess { fresh ->
                             runCatching { cache.save(cacheKey, CachedKdbxFile(fresh, remoteToken)) }
-                            _freshness.value = Freshness.STALE
+                            freshHolder.set(Freshness.STALE)
                             // ⚠️ 换掉缓存**之后**才上报：先让字节就位，
                             //   否则 UI 可能在状态已变、缓存还是旧的瞬间点同步而拉到旧内容。
                             runCatching { onRemoteChanged?.invoke() }
@@ -197,10 +224,10 @@ internal class CachedKdbxFileSource(
                                 "后台校验：远端已变（${fresh.size}B），已换新缓存；当前会话仍是旧内容"
                             }
                         }
-                        .onFailure { _freshness.value = Freshness.UNVERIFIED }
+                        .onFailure { freshHolder.set(Freshness.UNVERIFIED) }
                 }
                 else -> {
-                    _freshness.value = Freshness.VERIFIED
+                    freshHolder.set(Freshness.VERIFIED)
                     VaultixLog.d(TAG) { "后台校验：缓存与远端一致" }
                 }
             }
@@ -232,7 +259,66 @@ internal class CachedKdbxFileSource(
         //    而被装饰的远端来源正是最需要那根保险丝的地方（ISSUES #172）。
         val result = delegate.write(bytes, expectedVersion, force, failIfExists)
         runCatching { cache.save(cacheKey, CachedKdbxFile(bytes, result.versionToken)) }
+        // ★ 通知上层：`vaults.remoteVersionToken` 与缓存里的令牌在这一刻**必须**收敛（#233）。
+        //   ⚠️ 失败不影响本次写入的结论（already 落盘了），但必须留痕。
+        onUploaded?.let { callback ->
+            runCatching { callback(bytes, result.versionToken) }
+                .onFailure { error ->
+                    VaultixLog.w(TAG) { "上传成功后的收敛回调失败（不影响本次上传）：${error.message}" }
+                }
+        }
         return result
+    }
+
+    /**
+     * **上传成功之后**，把缓存里的版本令牌与新鲜度一起刷新（#233）。
+     *
+     * ## 为什么必须有这一步（一条已经发生过的"假角标"链）
+     *
+     * 条目保存走的是 `KdbxItemRepository.persist`：它把新字节写进缓存时**刻意沿用旧令牌**
+     * （那是下一次条件写的基线），然后标 `PENDING_UPLOAD`、自动上传器立刻跑一轮。
+     * 那一轮真的推上去了，`KdbxSyncOrchestrator` 也把 `vaults.remoteVersionToken`
+     * 更新成了服务端给的新 eTag —— 但**缓存里那个令牌没动**。
+     *
+     * 于是下一次解锁：`read()` 有缓存就直接用，而后台校验拿"远端新 eTag"去比
+     * "缓存里那个旧令牌" ⇒ **永远不等** ⇒ 重下一次内容完全相同的整库、
+     * 把 `freshness` 置成 `STALE`、调 `onRemoteChanged` ⇒ 状态变成 `REMOTE_CHANGED`。
+     *
+     * 用户什么都没改，界面却一直挂着「远端有更新」（那是**要人处理**的角标），
+     * 而且每次解锁都白下一次。根因是**同一件事存了两份、只更新一份**。
+     *
+     * ## 为什么可以直接置 [Freshness.VERIFIED]（这不是猜）
+     *
+     * 刚刚写上去的就是 [bytes]，服务端回的新令牌就是它对应的版本 ⇒ 缓存现在装的
+     * **正是**远端那一版。"缓存与远端一致"在这一刻是**已知事实**，不是推断。
+     * 再去 `stat()` 一次只会多一个网络往返，还会把"刚上传成功"降级成"待校验"。
+     *
+     * ## ⚠️ 为什么是 `launch` 而不是 `suspend`
+     *
+     * 调用方是 [KdbxSyncOrchestrator] —— 纯决策层，它的 `sync` 保持同步签名
+     * （无 suspend）是那条路径可单测的前提。一次本地缓存写不该把它拖成挂起函数。
+     * 代价：刷新与"记状态"之间有极小窗口，此时若正好解锁可能仍读到旧缓存 ——
+     * 后台校验会**如实**判成 `STALE` 并重下一次，属于"多跑一次"而不是"报错状态"。
+     *
+     * ## ⚠️ 缓存写失败不影响任何结论
+     *
+     * 缓存是**优化**，不是正确性前提；但失败必须留日志 ——
+     * 静默吞掉会让"缓存永远不更新"这类问题再也查不出来。
+     *
+     * @param newVersionTag 上传成功后服务端给的**新** `versionToken`。
+     */
+    fun recordUploaded(bytes: ByteArray, newVersionTag: String?) {
+        scope.launch {
+            runCatching { cache.save(cacheKey, CachedKdbxFile(bytes, newVersionTag)) }
+                .onFailure { error ->
+                    VaultixLog.w(TAG) { "上传成功后刷新缓存失败（不影响本次上传）：${error.message}" }
+                }
+            // ⚠️ 无论缓存写没写成：这份字节就是远端那一版，新鲜度是**事实**。
+            freshHolder.set(Freshness.VERIFIED)
+            VaultixLog.d(TAG) {
+                "上传成功，缓存令牌已刷新为 ${newVersionTag.tag()}"
+            }
+        }
     }
 
     override suspend fun listChildren(): List<KdbxFileEntry> = delegate.listChildren()
@@ -241,5 +327,25 @@ internal class CachedKdbxFileSource(
 
     private companion object {
         const val TAG = "VaultixKdbxCache"
+    }
+}
+
+/**
+ * 按 `cacheKey` 共享的新鲜度容器（#233）。
+ *
+ * 为什么需要它：见 [CachedKdbxFileSource] 的 `freshHolder` 参数 ——
+ * 装饰器是**每次解析都新建**的，而新鲜度是关于"这份缓存"的事实。
+ * 放在实例里 ⇒ 收敛写进去的值随实例一起消失，UI 永远看到 `UNVERIFIED`。
+ *
+ * ⚠️ 它是**可变的单格状态**，只应在装饰器持有者（协调器）里作为 map 的值存在；
+ * 别把它当全局单例 —— 不同 cacheKey 的库必须互不影响。
+ */
+internal class FreshnessHolder {
+    private val _state = MutableStateFlow(CachedKdbxFileSource.Freshness.UNVERIFIED)
+
+    val state: StateFlow<CachedKdbxFileSource.Freshness> = _state.asStateFlow()
+
+    fun set(value: CachedKdbxFileSource.Freshness) {
+        _state.value = value
     }
 }

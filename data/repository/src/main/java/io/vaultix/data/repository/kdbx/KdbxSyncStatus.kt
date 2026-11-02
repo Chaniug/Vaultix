@@ -131,6 +131,42 @@ object KdbxSyncTransitions {
     fun markDownloaded(): KdbxSyncStatus = KdbxSyncStatus.IN_SYNC
 
     /**
+     * ★ **刚登记进库表的那一行**该带什么同步状态（2026-11-02 补）。
+     *
+     * ## 为什么不是 `null`（这是本轮修掉的一个真 bug）
+     *
+     * `null` 在 `vaults.syncStatus` 上的语义是「**该库不适用网盘同步**」
+     * （见 `KdbxSyncStatus` 的类 KDoc 与 `VaultixEntities` 的字段注释）——
+     * Bitwarden / 本地 SAF 库才用 null。而一条新登记**网盘**库确实有云端，
+     * 只是还一次都没同步过。
+     *
+     * 更实际的后果在 UI 侧：`VaultListScreen` 有
+     * `onSyncNow = if (vault.syncStatus != null)` —— 写成 null 会让新建的网盘库
+     * **没有「立即同步」入口**，用户只能退出重进（或等自动同步）才等得到它。
+     *
+     * ## 为什么落 [PENDING_UPLOAD] 而不是 [IN_SYNC]
+     *
+     * [IN_SYNC] 是**结论**："本地与远端一致，且基线令牌可用"。刚建/刚加入的库
+     * 恰恰两样都没有：`remoteVersionToken` 为空、本机内容还没跟远端对过一次。
+     * 标成 IN_SYNC 就是一句没有依据的断言，而且会让 `impliesLocalChanges` 返回 false ——
+     * 万一用户在第一次同步前就编辑过，那笔改动会被判成"没改"。
+     *
+     * [PENDING_UPLOAD] 是**事实**："本机有条件推上去，但还推过"。它同时满足：
+     *  - `needsAnotherRound = true` ⇒ 自动上传会来跑一次（跑的结果可能是
+     *    `AlreadyInSync` / `Uploaded` / 冲突，三种都由编排器自己判）。
+     *    ⚠️ 首次同步时 `remoteVersionToken` 为空 ⇒ `remoteChanged` 为真，
+     *    而 `localChanged` 也为真 ⇒ 会判成**冲突**。这是**正确**的结局而不是误报：
+     *    远端确实有一份我们没看过的内容，必须由人拍板（绝不能让"条件是空的"
+     *    变成"允许覆盖"）；
+     *  - `impliesLocalChanges = true` ⇒ 即使首次同步前用户改了东西也不会被漏推。
+     *
+     * @param hasCloudSource 该 origin 是不是**网盘**来源。本地 SAF / Bitwarden 一律 `null`
+     *   （"不适用"），否则 UI 会在一个根本没有云端的库上渲染「待上传」角标。
+     */
+    fun forNewlyRegisteredVault(hasCloudSource: Boolean): KdbxSyncStatus? =
+        if (hasCloudSource) KdbxSyncStatus.PENDING_UPLOAD else null
+
+    /**
      * 两边都改了 ⇒ 冲突，需要用户拍板。
      *
      * ⚠️ 与 [markSyncFailure] 分开：冲突**不是失败**，重试解决不了它。

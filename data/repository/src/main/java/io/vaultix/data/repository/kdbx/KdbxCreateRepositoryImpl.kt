@@ -99,10 +99,28 @@ class KdbxCreateRepositoryImpl @Inject constructor(
         // ★ 先问一次"这个文件实际是谁" —— 见文件头关于 origin 回写的说明。
         //   ⚠️ 这里**允许失败**（有些 provider 刚创建的文件 stat 不到）：
         //   失败只是让我们退回 targetUri，不影响建库本身。
-        val resolvedOrigin = runCatching { source.stat().remoteId }
-            .getOrNull()
-            ?.takeIf { it.isNotBlank() }
-            ?: targetUri
+        //
+        // ★★ 但"允许失败"**不等于**"可以拿任何非空值当 origin"（2026-11-02 修）。
+        //   `stat().remoteId` 的语义**按来源不同**：
+        //
+        //   | 来源 | remoteId 是什么 | 能不能当 origin |
+        //   |---|---|---|
+        //   | SAF（`content://`） | 该 provider 下文件最终的真实 URI | ✅ 要的就是它（见上段） |
+        //   | 网盘（`onedrive:` / `webdav:`） | OneDrive 的 **itemId** / WebDAV 的完整 URL | ❌ **不是** origin |
+        //
+        //   网盘那两格拿它当 origin 的后果是**静默且不可恢复**的：
+        //   `vaults.id` / `vaults.origin` 会变成一个孤立的 itemId，
+        //   而 `fileSourceFor(origin)` 只认 `webdav:` / `onedrive:` 前缀 ⇒
+        //   建库"成功"、下次解锁却报"这个库还没有可用的文件来源"，
+        //   而且列表里没有任何入口能把它改回来。⇒ 网盘一律用 targetUri（它本来就是 origin）。
+        val resolvedOrigin = if (isCloudOrigin(targetUri)) {
+            targetUri
+        } else {
+            runCatching { source.stat().remoteId }
+                .getOrNull()
+                ?.takeIf { it.isNotBlank() }
+                ?: targetUri
+        }
 
         // ② 造库 + 落盘 + 登记会话（凭据一致性的唯一责任方，见 data:kdbx 的 KDoc）。
         val created = Kdbx.createVault(
@@ -138,6 +156,38 @@ class KdbxCreateRepositoryImpl @Inject constructor(
             ),
         )
 
+        // ③b ★ 同步状态用**单列更新**写，不走上面的 upsert（2026-11-02 补）。
+        //
+        // ## 修的是什么
+        //
+        // 旧代码根本不写 `syncStatus`，于是新建的网盘库在这一列上是 `null` ——
+        // 而 null 的语义是「该库**不适用**网盘同步」（见 `VaultixEntities` 的字段
+        // 注释）。两个后果都不报错：① `VaultListScreen` 的
+        // `onSyncNow = if (vault.syncStatus != null)` 让「立即同步」入口凭空消失；
+        // ② 语义上说"这个库没有云端"，而它明明有。
+        //
+        // ## 为什么不用 upsert 一起写
+        //
+        // `upsert` 是"整行替换"：重复创建同一路径时，要把旧行的
+        // `remoteVersionToken` / `lastSyncedAt` **原样读回来再写下去**（我们并不想动它们）。
+        // 那需要在前面的 `existing` 上逐个字段抄一遍 —— 漏抄一个就是静默清空一列
+        // （`updateSyncState` 的 KDoc 里已经为同一个理由写过一次）。
+        // 单列更新不可能漏。
+        //
+        // ⚠️ 重复创建同一路径时**也**把状态写成"待上传"：这次 `createVault` 又写了一遍文件，
+        //    说"待上传"是诚实的；基线令牌不动，编排器下次会自己比。
+        vaultDao.updateSyncState(
+            id = resolvedOrigin,
+            status = KdbxSyncTransitions.forNewlyRegisteredVault(
+                hasCloudSource = isCloudOrigin(resolvedOrigin),
+            )?.name,
+            // ⚠️ null = 保留旧值（DAO 里 `SET remoteVersionToken = :versionToken`，
+            //    这里必须显式传旧值，否则会被写成 null —— 那等于抹掉基线，
+            //    下一轮同步会给一个从没拉过的库报"远端变了"，把用户直接推去冲突对话框）。
+            versionToken = existing?.remoteVersionToken,
+            syncedAt = existing?.lastSyncedAt,
+        )
+
         // 与 addKdbxVault 同一套收尾（两条路落成同样的行，见类的 KDoc）：
         // 「首个库设为默认」只在**真的新增**时做，重复创建同一路径不该有副作用。
         if (existing == null) {
@@ -148,6 +198,21 @@ class KdbxCreateRepositoryImpl @Inject constructor(
 
         return NewKdbxVaultOutcome.Created(vaultId = resolvedOrigin, origin = resolvedOrigin)
     }
+
+    /**
+     * `targetUri` 是不是**网盘**来源的 origin。
+     *
+     * ⚠️ 2026-11-02：判据下沉到 [KdbxFileSourceResolver.isCloudOrigin]（接口默认方法）。
+     * 原先这里是本文件自己写的一份"不是 `content://`"，与协调器那份**语义相同但各写一遍** ——
+     * 而两份判据不一致时的表现是"建库把它当网盘、同步却当成本地"（或反过来），
+     * 且**没有任何报错**。现在只剩一份。
+     *
+     * ⚠️ 注意判据里还有"真的能解析出来源"这一半：判断用的是**将要落库**的 origin。
+     * `isCloudOrigin(targetUri)` 传的是 URI 而不是解析后的 origin —— 两者在网盘场景下
+     * 相同（见上面 [resolvedOrigin] 的推导：网盘来源原样保留），所以这一步成立。
+     */
+    private fun isCloudOrigin(targetUri: String): Boolean =
+        fileSourceResolver.isCloudOrigin(targetUri)
 
     private companion object {
         /** 与 `VaultRepositoryImpl.DEFAULT_DISPLAY_NAME_KDBX` 同值（两处各一份是刻意的：

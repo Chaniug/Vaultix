@@ -335,17 +335,54 @@ class WebDavKdbxFileSource(
         result
     }
 
-    /** 写后读回校验（见 [writeConditionally] 的说明）。不一致就抛冲突。 */
+    /**
+     * 写后读回校验（见 [writeConditionally] 的说明）。
+     *
+     * ## ★ 三种结局，两种都算失败
+     *
+     * | 读回结果 | 判定 |
+     * |---|---|
+     * | 读回来了、字节一致 | 成功 |
+     * | 读回来了、字节不一致 | **冲突**：我们的写已被别人覆盖 |
+     * | **根本没读回来** | **冲突**：不能当成"写成功了" |
+     *
+     * ⚠️ 第三行是本函数在 2026-11 修掉的 bug：旧实现是
+     * `if (readBack.isSuccess && !…contentEquals…) throw …` ——
+     * `isSuccess` 为假时**直接返回**，即"读不回来"被静默当成"写成功了"。
+     * 那正是 `OneDriveKdbxFileSource` 的 KDoc 里点名的场景：
+     * **用户以为存好了，其实没有**。写后读不回来，说明这次 PUT 的落地状态
+     * 不可信（网络断了 / 服务器回了 5xx / 中间设备截断），必须让用户知道。
+     *
+     * 形状：两条 `throw`，各自抛的异常由 [conflictOf] 这个**纯构造**函数生成 ——
+     * 理由同 [writeFailureOf]（detekt `ThrowsCount` 上限 2，且"该抛什么"可脱离 HTTP 单测）。
+     */
     private suspend fun verifyReadBack(expected: ByteArray) {
         val readBack = runCatching { read() }
-        if (readBack.isSuccess && !readBack.getOrThrow().contentEquals(expected)) {
-            val current = runCatching { stat().versionToken }.getOrNull()
-            throw KdbxFileConflictException(
-                current,
-                "写入后读回校验不一致：文件可能已被其他设备覆盖，请重新同步",
+        val actual = readBack.getOrNull()
+        if (actual == null) {
+            val failure = readBack.exceptionOrNull() ?: IllegalStateException("下载返回了空结果")
+            throw conflictOf("写入后无法读回校验：${failure.message.orEmpty()}", failure)
+        }
+        if (!actual.contentEquals(expected)) {
+            throw conflictOf(
+                "写入后读回校验不一致（写入 ${expected.size} 字节，读回 ${actual.size} 字节），" +
+                    "文件可能已被其他设备覆盖，请重新同步",
             )
         }
     }
+
+    /**
+     * 构造一条冲突（**纯构造，自己不抛**），顺带拉一次当前版本令牌。
+     *
+     * ⚠️ 为什么顺带 `stat`：用户接下来很可能选"用远端覆盖本地"，那时手上必须有
+     * **冲突之后**的版本令牌才能写成功。拉失败不影响主流程（传 null，上层会自己 stat）。
+     */
+    private suspend fun conflictOf(message: String, cause: Throwable? = null): KdbxFileConflictException =
+        KdbxFileConflictException(
+            runCatching { stat().versionToken }.getOrNull(),
+            message,
+            cause,
+        )
 
     /**
      * 列所在目录的子项（`PROPFIND`，`Depth: 1`）。

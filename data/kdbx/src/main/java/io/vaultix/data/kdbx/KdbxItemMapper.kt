@@ -102,6 +102,7 @@ internal fun KeePassDatabase.toMappedContent(): KdbxMappedContent {
         trashItems = trash,
         groupPaths = groupPaths,
         binaryNames = binaryNames,
+        rootGroupUuid = root.uuid,
     )
 }
 

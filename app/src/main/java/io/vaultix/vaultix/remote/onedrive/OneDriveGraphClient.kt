@@ -23,12 +23,59 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
 import java.util.concurrent.TimeUnit
+
+/**
+ * 一片 PUT 的成果。
+ *
+ * 把"响应体里的 driveItem"与"响应体里的 `nextExpectedRanges`"一起带出来：
+ * 后者是**这一片到底有没有被收下**的唯一一手证据（202 也可能带）。
+ * 用命名类而不是 `Pair`，避免调用点读反两个字段 —— 读反的后果是把字节发到错误的偏移上。
+ */
+private class ChunkAck(
+    val dto: OneDriveDriveItemDto,
+    val nextExpectedRanges: List<String>?,
+)
+
+/**
+ * **这一片没有传上去**（重试入环已用尽）—— 专供 [OneDriveGraphClient.chunkedUpload] 的续传层识别。
+ *
+ * ## 为什么不能继续用 `IOException`
+ *
+ * 续传层要区分两类失败，而它们对 `IOException` 来说**长得一样**：
+ *
+ * | 失败 | 该怎么做 |
+ * |---|---|
+ * | 这一片没上去（网络抖动 / 服务端 5xx） | 问服务端缺哪段，**续传** |
+ * | 条件写失败（412）/ 会话失效 | **停下**，让用户拍板或整次重来 |
+ *
+ * 把前者也当 `IOException` 抛出去，上层只能"整次重来"；把后者吞进续传，
+ * 又会绕过"远端已变 ⇒ 让用户拍板"这条最重要的语义。
+ */
+/**
+ * 单次分片 PUT 的失败。带 HTTP 状态码，因为"值不值得重试"完全由它决定
+ * （4xx 里只有 408/429 值得；5xx 值得；412 连重试都不允许）。
+ */
+private enum class ChunkFailureKind { Retry, Resume, Fatal }
+
+private class ChunkPutException(
+    val code: Int,
+    message: String,
+) : IOException(message)
+
+internal class ChunkNotAcceptedException(
+    message: String,
+    cause: Throwable? = null,
+) : IOException(message, cause)
 
 /** 网盘上的一个条目（目录或文件）。 */
 data class OneDriveEntry(
@@ -42,6 +89,20 @@ data class OneDriveEntry(
 ) {
     /** 是否是 KeePass 数据库文件（大小写不敏感 —— OneDrive 上两种写法都常见）。 */
     val isKdbx: Boolean get() = !isDirectory && name.endsWith(".kdbx", ignoreCase = true)
+
+    /**
+     * [lastModified] 解析成毫秒时间戳（解析不了 ⇒ `null`）。
+     *
+     * ⚠️ 放在这里而不是让调用方各自 `Instant.parse`：**只有一种解析口径**
+     * 才谈得上"两处比得起来"。`null` 必须保住"不知道"这个语义 ——
+     * 解析失败绝不能返回 0（那会让 `0 < 任何时刻` 恒成立，凭空造出"远端是旧版本"）。
+     *
+     * 解析实现放在 companion 里（`parseGraphTimestamp`），与 `OneDriveKdbxFileSource`
+     * 共用同一个函数 —— 那条**只用于展示**的路径与这条**参与判定**的路径
+     * 若各写一份，迟早一份改了一份没改。
+     */
+    val lastModifiedMillis: Long?
+        get() = OneDriveGraphClient.parseGraphTimestamp(lastModified)
 }
 
 /**
@@ -311,16 +372,72 @@ open class OneDriveGraphClient(
             failIfExists,
         )
 
-        var offset = 0
+        // ★★ 整次上传的**断点续传**（#236）
+        //
+        // 旧行为：某一片重试 [CHUNK_RETRY_COUNT] 次仍失败 ⇒ 抛 IOException ⇒
+        // 上层只好整次重来 —— 80 MiB 的库在 90% 处断一次，前面全白传。
+        // （rclone / OneDrive 官方 SDK 都是读 `nextExpectedRanges` 从断点继续。）
+        //
+        // 现在的循环只在两种情况下离开：
+        // ① `confirmed` 走到文件尾；
+        // ② [judgeResume] 判 GiveUp / Restart。
+        // `confirmed` 是**我们已确认写进服务端**的位置，按判据推进或**回退到缺口**；
+        // 服务端报的缺口一律夹回它，**绝不越过**（见 `OneDriveUploadResumePolicy` 的 KDoc）。
+        var confirmed = 0L
         var lastDto = OneDriveDriveItemDto()
-        while (offset < bytes.size) {
-            val end = minOf(offset + CHUNK_SIZE_BYTES, bytes.size)
-            val chunk = bytes.copyOfRange(offset, end)
-            val dto = putChunkWithRetry(uploadUrl, chunk, offset, bytes.size)
-            if (dto.id.isNotBlank()) lastDto = dto
-            offset = end
+        var stalls = 0
+        while (confirmed < bytes.size) {
+            val start = confirmed.toInt()
+            val end = minOf(start + CHUNK_SIZE_BYTES, bytes.size)
+            val chunk = bytes.copyOfRange(start, end)
+            val outcome = runCatching { putChunkWithRetry(uploadUrl, accessToken, chunk, start, bytes.size) }
+            val ack = outcome.getOrNull()
+            // ★ 只有"这一片没传上去"才谈得上续传（#236）。
+            //   其余失败必须**原样抛穿**，尤其 412（远端已变）——
+            //   把它也当成"这一片丢了"会让续传循环一路重试到成功，
+            //   那等于**绕过"远端已变 ⇒ 让用户拍板"**，静默覆盖别人的改动。
+            val failure = outcome.exceptionOrNull()
+            if (ack == null && failure !is ChunkNotAcceptedException) {
+                throw failure ?: IllegalStateException("分片上传失败但没有异常")
+            }
+            if (ack != null) {
+                if (ack.dto.id.isNotBlank()) lastDto = ack.dto
+                // ★ 用**这次 PUT 的响应体**里的区间，不再额外发一次 GET（#236）。
+                //
+                // 旧写法在这里补了一次 `GET <uploadUrl>` 来问进度 —— 每传一片就多一个
+                // round trip，80 MiB 的库要多打十几次请求，弱网下每次都要等一个 RTT。
+                // 而 Graph 的 PUT 响应体本来就带 `nextExpectedRanges`（202 带、200 也带）。
+                // 响应体没带时**信任 2xx 的语义**（这一片收下了）`confirmedAfterAccepted`
+                // 在 ranges 为 null 时返回片尾，正是这个意思。
+                val next = confirmedAfterAccepted(
+                    ranges = ack.nextExpectedRanges,
+                    chunkStart = start.toLong(),
+                    chunkEndExclusive = end.toLong(),
+                ).coerceIn(confirmed, end.toLong())
+                val progressed = next > confirmed
+                confirmed = next
+                stalls = if (progressed) 0 else stalls + 1
+                if (!progressed) {
+                    // ★ 2xx 却说"这一片还没收下"（`nextExpectedRanges` 仍指向本片起点）。
+                    //   不设上限的话这里是**死循环**：同样的 offset 无限重发，
+                    //   内存与流量一路涨到 OOM（2026-11-03 实测：测试里直接 `Java heap space`）。
+                    //   真机上用户看到的是"同步一直转、手机发热、电量狂掉"。
+                    VaultixLog.w(TAG) { "服务端收下响应但未推进进度 $stalls/$MAX_STALLS（起止 $start-$end）" }
+                    if (stalls > MAX_STALLS) {
+                        throw IOException("OneDrive 上传无进展：服务端连续 $stalls 次没有推进进度（停在 $confirmed）")
+                    }
+                    Thread.sleep(CHUNK_RETRY_DELAY_MS)
+                }
+                continue
+            }
+            // 这一片彻底失败（重试也没救）⇒ 问服务端缺哪一段，再决定下一步。
+            val ranges = runCatching { nextExpectedRanges(uploadUrl, accessToken) }.getOrNull()
+            val next = resumeStep(ranges, confirmed, stalls, outcome.exceptionOrNull())
+            confirmed = next.confirmed
+            stalls = next.stalls
         }
-        VaultixLog.d(TAG) { "OneDrive 分片上传完成：path=$path bytes=${bytes.size}" }
+        val chunkCount = (bytes.size + CHUNK_SIZE_BYTES - 1) / CHUNK_SIZE_BYTES
+        VaultixLog.d(TAG) { "OneDrive 分片上传完成：path=$path bytes=${bytes.size} chunks=$chunkCount" }
         // 最后一次片的响应体就是最终的 driveItem（带新 eTag）；
         // 若服务端只回了 202 的中间响应，则只有 uploadSession 本身能反映结果 ——
         // 这时补一次 stat 拿到真实 eTag，**不要**返回空（会让上层把令牌丢了）。
@@ -418,43 +535,319 @@ open class OneDriveGraphClient(
             )
         }
 
-    /** 单片上传 + 重试 [CHUNK_RETRY_COUNT] 次 —— 移动网络下单片失败很常见，不重试等于白传。 */
+    /**
+     * 单片上传 + 重试 [CHUNK_RETRY_COUNT] 次 —— 移动网络下单片失败很常见，不重试等于白传。
+     *
+     * ## ★★ 重试之前必须先把会话的进度**对齐到本片之前**（2026-11-02 修）
+     *
+     * Graph 的 uploadSession 记住"已经收到多少字节"。一次 PUT 的三种结局对会话进度的影响
+     * **完全不同**，而**客户端看不到**是哪一种：
+     *
+     * | 结局 | 服务端收到的字节 | 直接重发同一片会怎样 |
+     * |---|---|---|
+     * | 请求没到（DNS / 连接失败） | 0 | `416`（与预期偏移不符）或重复数据 |
+     * | 请求到了、响应丢了 | 整片 | `416` 或**同一片写两遍** ⇒ 文件长度对得上、内容是坏的 |
+     * | 服务端中途断开 | 部分 | `416` / `400` |
+     *
+     * 而 **[chunkedUpload] 的循环是把 `offset = end` 无条件推进的**：只要这里最终"返回成功"，
+     * 上层就会带着缺失 / 重复的片继续往后传，最后拿到 200 和新的 eTag ——
+     * 一个**长度正确、内容损坏**的 kdbx 被当作"上传成功"记进基线，下一次保存开始就写在一个坏库上。
+     *
+     * ⇒ 重试前先 `GET <uploadUrl>` 查会话真实的 `nextExpectedRanges`，把本片**裁**成
+     * 「服务端还缺的那一段」再发：
+     * - 缺的部分为空（服务端已收全）⇒ 不再发，直接算这片成功；
+     * - 服务端进度落后于本片起点（说明整片没到）⇒ 原样重发；
+     * - 只缺后半段 ⇒ 只发后半段（`Content-Range` 与内容都跟着裁）。
+     *
+     * 查询本身失败（网络断得彻底）时**不猜**：原样重发（与旧行为等价），
+     * 真正的兜底是 [OneDriveKdbxFileSource.write] 的写后读回校验 —— 但那要整份下载
+     * （#232 之后只在这条"元数据证明不了"的路径上才下载），
+     * 所以这里先尽力把"不损坏"做到发送侧。
+     */
     private fun putChunkWithRetry(
         uploadUrl: String,
+        accessToken: String,
         chunk: ByteArray,
         offset: Int,
         totalSize: Int,
-    ): OneDriveDriveItemDto {
+    ): ChunkAck {
         var lastError: Throwable? = null
+        var pending = chunk
+        var pendingOffset = offset
+        var alreadyComplete = false
         repeat(CHUNK_RETRY_COUNT) { attempt ->
-            val request = Request.Builder()
-                .url(uploadUrl)
-                .header("Content-Length", chunk.size.toString())
-                .header("Content-Range", "bytes $offset-${offset + chunk.size - 1}/$totalSize")
-                .put(chunk.toRequestBody(OCTET_STREAM_MEDIA_TYPE.toMediaType()))
-                .build()
-            val outcome = runCatching {
-                client.newCall(request).execute().use { response ->
-                    val body = response.body?.string().orEmpty()
-                    if (!response.isSuccessful) {
-                        throw IOException(body.ifBlank { "分片上传失败：HTTP ${response.code}" })
-                    }
-                    // 200/201 = 完成（响应体是 driveItem 且带 id）；202 = 中间片（多为空体）
-                    if (response.code in setOf(200, 201) && body.isNotBlank()) {
-                        json.decodeFromString<OneDriveDriveItemDto>(body)
-                    } else {
-                        OneDriveDriveItemDto()
-                    }
+            // 第一遍按原样发；后续每一遍都先问服务端"还缺哪一段"再裁。
+            if (attempt > 0) {
+                pending = alignToServerProgress(uploadUrl, accessToken, pending, pendingOffset, lastError)
+                if (pending.isNotEmpty()) {
+                    pendingOffset = currentExpectedOffset
+                } else {
+                    // 服务端已收全这一片（上一次的响应只是没回来）⇒ 不必再发。
+                    // ⚠️ 用标志位跳出，而不是在 `repeat` 的 lambda 里 `return`：
+                    //    后者会让整个函数返回 `Nothing`，编译错误说"expected OneDriveDriveItemDto"，
+                    //    看着像类型问题，其实是控制流写错。
+                    alreadyComplete = true
                 }
             }
-            outcome.getOrNull()?.let { return it }
-            outcome.exceptionOrNull()?.let { error ->
-                lastError = error
-                VaultixLog.w(TAG) { "分片重试 ${attempt + 1}/$CHUNK_RETRY_COUNT：${error.message}" }
-                Thread.sleep(CHUNK_RETRY_DELAY_MS)
+            if (!alreadyComplete) {
+                val outcome = runCatching {
+                    executeChunk(uploadUrl, pending, pendingOffset, totalSize)
+                }
+                outcome.getOrNull()?.let { return it }
+                outcome.exceptionOrNull()?.let { error ->
+                    lastError = error
+                    // ★ 有的失败**再试也不会变**：412（远端已变）、401/403（要重新登录）。
+                    //   在这里重试三次只是把用户多等三秒，然后仍然失败；而 412 被吞进
+                    //   续传逻辑的后果前面已经写了 —— 会静默覆盖别人的改动。
+                    handleChunkFailure(error)
+                    VaultixLog.w(TAG) { "分片重试 ${attempt + 1}/$CHUNK_RETRY_COUNT：${error.message}" }
+                    Thread.sleep(CHUNK_RETRY_DELAY_MS)
+                }
             }
         }
-        throw IOException(lastError?.message ?: "分片上传失败", lastError)
+        // 服务端已把这一片收全（只是上一次的响应没回来）⇒ 视为成功，
+        // 让循环往下一片走。**不能**在这里报错退出：那样会让一次网络抖动
+        // 变成"整份文件永远传不上去"。
+        if (alreadyComplete) return ChunkAck(OneDriveDriveItemDto(), null)
+        // ★ 入环用尽（#236）：**不在这里决定整次上传作废**。
+        //
+        // 旧行为是这里 `throw IOException` ⇒ [chunkedUpload] 整次失败 ⇒ 上层从 0 重传，
+        // 前面传过的片全白费。现在抛一个**专供续传层识别**的类型，
+        // 让 `chunkedUpload` 去问服务端缺哪一段、从确认位继续 ——
+        // 这正是"断点续传"与"整次重来"的分界：前者只丢一片的进度，后者丢一整个库。
+        throw ChunkNotAcceptedException(lastError?.message ?: "分片上传失败", lastError)
+    }
+
+    /**
+     * 发一片，并把响应翻译成 [ChunkAck]。
+     *
+     * ⚠️ 失败分两类，**类型必须不同**（否则上层无法判断能不能续传）：
+     * - [OneDrivePreconditionFailedException]：远端已变，**绝对不能**重试也**不能**续传；
+     * - [ChunkPutException]：这一片没上去，按 [ChunkPutException.code] 判断值不值得重试。
+     */
+    private fun executeChunk(
+        uploadUrl: String,
+        pending: ByteArray,
+        pendingOffset: Int,
+        totalSize: Int,
+    ): ChunkAck {
+        val request = Request.Builder()
+            .url(uploadUrl)
+            .header("Content-Length", pending.size.toString())
+            .header(
+                "Content-Range",
+                "bytes $pendingOffset-${pendingOffset + pending.size - 1}/$totalSize",
+            )
+            .put(pending.toRequestBody(OCTET_STREAM_MEDIA_TYPE.toMediaType()))
+            .build()
+        return client.newCall(request).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (response.code == HTTP_PRECONDITION_FAILED) {
+                throw OneDrivePreconditionFailedException(
+                    "OneDrive 上的文件已被其他设备修改（HTTP 412），为避免覆盖已取消写入",
+                )
+            }
+            if (!response.isSuccessful) {
+                throw ChunkPutException(response.code, body.ifBlank { "分片上传失败：HTTP ${response.code}" })
+            }
+            // 200/201 = 完成（响应体是 driveItem 且带 id）；202 = 中间片。
+            // 两者都可能带 `nextExpectedRanges`（Graph 用同一个 schema），
+            // 能读就读 —— 它是"这一片到底收下没有"的唯一一手证据。
+            ChunkAck(
+                dto = if (response.code in setOf(HTTP_OK, HTTP_CREATED) && body.isNotBlank()) {
+                    runCatching { json.decodeFromString<OneDriveDriveItemDto>(body) }
+                        .getOrDefault(OneDriveDriveItemDto())
+                } else {
+                    OneDriveDriveItemDto()
+                },
+                nextExpectedRanges = parseNextExpectedRanges(body),
+            )
+        }
+    }
+
+    /**
+     * 按 [classifyChunkFailure] 的结论**当场**处置一次分片失败；正常返回即表示"可以再试"。
+     *
+     * 抽成独立函数有两个原因：① `putChunkWithRetry` 的 `ThrowsCount` 会超（这里两条
+     * `throw` 各自对应完全不同的结局）；② "哪一种失败该上抛"这条判断集中在一处，
+     * 比散在重试循环里更难写错。
+     */
+    private fun handleChunkFailure(error: Throwable) {
+        when (classifyChunkFailure(error)) {
+            ChunkFailureKind.Fatal -> throw error
+            // 会话级失败（404/410）：重试同一个地址没有意义，但**续传层**能读懂它
+            // （它会去查进度，看到缺口 0 就判 Restart）。所以包成"这一片没上去"，
+            // 让 `chunkedUpload` 走 [resumeStep] 而不是把裸 body 甩给用户。
+            ChunkFailureKind.Resume ->
+                throw ChunkNotAcceptedException(error.message ?: "分片上传失败", error)
+            ChunkFailureKind.Retry -> Unit
+        }
+    }
+
+    /**
+     * 一次分片失败该怎么处置 —— 三态，缺一档就会把某种失败塞进错误的桶里。
+     *
+     * | 值 | 含义 | 例子 |
+     * |---|---|---|
+     * | [ChunkFailureKind.Retry] | 再试一次可能成功 | 5xx、408、429、连接断开 |
+     * | [ChunkFailureKind.Resume] | 重试同一个地址没用，但**续传层能读懂** | 404 / 410（会话没了） |
+     * | [ChunkFailureKind.Fatal] | 必须原样上抛，让上层做业务决定 | **412（远端已变）**、401/403 |
+     *
+     * ⚠️ 412 必须在 [ChunkFailureKind.Fatal]：它意味着"远端不是你以为的那一版"，
+     * 重试多少次都不会变；一旦因为别处又改动而条件重新成立，续传就会**静默覆盖**别人的改动。
+     */
+    private fun classifyChunkFailure(error: Throwable): ChunkFailureKind = when (error) {
+        is OneDrivePreconditionFailedException -> ChunkFailureKind.Fatal
+        is ChunkPutException -> when {
+            error.code == HTTP_REQUEST_TIMEOUT || error.code == HTTP_TOO_MANY_REQUESTS ->
+                ChunkFailureKind.Retry
+            error.code >= HTTP_SERVER_ERROR -> ChunkFailureKind.Retry
+            error.code == HTTP_NOT_FOUND || error.code == HTTP_GONE -> ChunkFailureKind.Resume
+            else -> ChunkFailureKind.Fatal
+        }
+        else -> ChunkFailureKind.Retry // 网络层异常（连接断开 / 超时 / DNS）
+    }
+
+    /**
+     * 上一次 [alignToServerProgress] 问出来的"服务端还缺的起点"。
+     *
+     * ⚠️ 单独一个字段而不是把 `Pair` 从函数里透出来：`Pair<ByteArray, Int>` 在调用点上
+     * 极容易被读反（先取 offset 还是先取字节），而读反的后果是把字节发到错误的偏移上 ——
+     * 又是一个"不报错但文件坏了"的形状。这里让"字节"作返回值、"偏移"作状态，只有一种读法。
+     */
+    private var currentExpectedOffset: Int = 0
+
+    /**
+     * 把 [pending]（本片剩余内容，起点 [offset]）裁成"服务端**还缺**的那一段"。
+     *
+     * @return 要重发的内容（空 = 服务端已收全，不用再发）。同时把
+     *   [currentExpectedOffset] 置成这一段的起点。
+     *
+     * 查询失败时**原样返回**（起点仍是 [offset]）：那是"不知道"，而不是"不用发"。
+     */
+    private fun alignToServerProgress(
+        uploadUrl: String,
+        accessToken: String,
+        pending: ByteArray,
+        offset: Int,
+        cause: Throwable?,
+    ): ByteArray {
+        currentExpectedOffset = offset
+        val expected = runCatching { nextExpectedRangeStart(uploadUrl, accessToken) }.getOrElse { error ->
+            VaultixLog.w(TAG) { "查询上传进度失败（按原样重发）：${error.message}" }
+            return pending
+        }
+        // 拿不到进度（会话已过期 / 非 2xx）⇒ 原样重发，让下一次 HTTP 给出真实错误。
+        if (expected == null) return pending
+        val end = offset + pending.size
+        val (start, resume) = when {
+            expected >= end -> return ByteArray(0)
+            expected <= offset -> offset to pending
+            else -> expected to pending.copyOfRange(expected - offset, pending.size)
+        }
+        currentExpectedOffset = start
+        VaultixLog.d(TAG) {
+            "上传进度对齐：服务端期望 $expected，本片 [$offset,$end) ⇒ 重发 ${resume.size}B" +
+                cause?.message?.let { msg -> "（上次失败：$msg）" }.orEmpty()
+        }
+        return resume
+    }
+
+    /**
+     * 问 uploadSession：下一片应该从哪个字节开始（`nextExpectedRanges` 的第一段起点）。
+     *
+     * @return null = 服务端没给可用信息（此时调用方按"不知道"处理）。
+     */
+    private fun nextExpectedRangeStart(uploadUrl: String, accessToken: String): Int? {
+        val ranges = nextExpectedRanges(uploadUrl, accessToken) ?: return null
+        return ranges.firstOrNull()?.substringBefore('-')?.trim()?.toIntOrNull()
+    }
+
+    /** [resumeStep] 的产物：新的确认位 + 新的连续无进展计数。 */
+    private class ResumeStep(val confirmed: Long, val stalls: Int)
+
+    /**
+     * 一片彻底失败之后该做什么 —— 把 [judgeResume] 的结论翻译成"下一步的循环变量"。
+     *
+     * ## 为什么单独抽出来（而不是写在循环里）
+     *
+     * 抽出来才满足 detekt `ThrowsCount`（上限 2）：循环里只剩 `while` + 一次赋值，
+     * 而这里的两条 `throw` 各自对应一种**完全不同的结局**（会话失效让她重新上传 /
+     * 反复失败要告诉用户），本来就不该混在控制流里。
+     *
+     * ## `offset < confirmed` 时把确认位**回退**
+     *
+     * 服务端把我们已确认的部分又算成缺失 ⇒ 那几片确实丢了（不是"我们记多了"）。
+     * 回退后重发是幂等的；不回退就会在那段留一个永久缺口。
+     */
+    private fun resumeStep(
+        ranges: List<String>?,
+        confirmed: Long,
+        stalls: Int,
+        cause: Throwable?,
+    ): ResumeStep {
+        return when (val verdict = judgeResume(ranges, confirmed, stalls)) {
+            is ChunkResumeVerdict.Continue -> {
+                val noProgress = if (verdict.progressed) 0 else stalls + 1
+                if (!verdict.progressed) {
+                    VaultixLog.w(TAG) { "续传无进展 $noProgress/$MAX_STALLS：${verdict.reason}" }
+                    if (noProgress > 0) Thread.sleep(CHUNK_RETRY_DELAY_MS)
+                }
+                ResumeStep(confirmed = verdict.offset, stalls = noProgress)
+            }
+            // **重建会话**（= 从头来）是上层的事：如果在这里自己重建，会把
+            // "条件写失败（412）"也吞进重来逻辑里 —— 那会绕过
+            // "远端已变 ⇒ 让用户拍板"这条最重要的语义。
+            is ChunkResumeVerdict.Restart ->
+                throw IOException("OneDrive 上传会话已失效，续传无法继续（${verdict.reason}）", cause)
+            is ChunkResumeVerdict.GiveUp ->
+                throw IOException("OneDrive 上传反复失败：${verdict.reason}", cause)
+        }
+    }
+
+    /**
+     * 问 uploadSession 的**原始** `nextExpectedRanges`（#236）。
+     *
+     * 与 [nextExpectedRangeStart] 的区别：那个把"区间"折算成一个 `Int`，
+     * 丢掉了"字段缺失"与"给了个空值"的区别 —— 而那正是 [judgeResume] 需要的输入。
+     * ⚠️ 返回 `null` = 这次查询本身失败（HTTP 非 2xx / 解析不了）**或**字段缺失；
+     *    `emptyList()` = 服务端明确回了空数组。两者在续传判定里的处理**不同**。
+     *
+     * ## DTO 里为什么要把"缺失"和"空数组"分开
+     *
+     * `OneDriveUploadSessionStatusDto.nextExpectedRanges` 的默认值是 `emptyList()`，
+     * 于是"字段不存在"和"字段是空数组"在解码后**长得一模一样**。
+     * ⇒ 这里用 `JsonElement` 看原始 JSON 有没有这个键，才能把它们分开。
+     */
+    private fun nextExpectedRanges(uploadUrl: String, accessToken: String): List<String>? {
+        // ⚠️ 必须带 token —— Graph 的 uploadSession URL 是**预签名的完整地址**（cdn 域），
+        //    正常情况下不带也行；但测试/代理会把会话挂在 graph 域下，那时 401 会被
+        //    [nextExpectedRangeStart] 当成"没有进度" ⇒ 整条续传逻辑静默失效（不报错，只是白做）。
+        //    带上 Authorization 对预签名地址无害（CDN 忽略它，见 client 拦截器里的摘头规则）。
+        val request = Request.Builder()
+            .url(uploadUrl)
+            .header("Authorization", "Bearer $accessToken")
+            .get()
+            .build()
+        return client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) return null
+            parseNextExpectedRanges(response.body?.string().orEmpty())
+        }
+    }
+
+    /**
+     * 从任意一段 Graph 响应体里读 `nextExpectedRanges`（#236）。
+     *
+     * ⚠️ 返回 `null` = **字段缺失**（或整段不可解析）；`emptyList()` = 服务端明确回了空数组。
+     * 两者在 [judgeResume] 里的处置**不同**（前者按"不知道"原地重发，后者判重启），
+     * 所以这里不能把"缺失"折算成空列表 —— 那正是
+     * `OneDriveUploadSessionStatusDto` 的默认值会把两件事混成一件的地方。
+     */
+    private fun parseNextExpectedRanges(body: String): List<String>? {
+        if (body.isBlank()) return null
+        val root = runCatching { json.parseToJsonElement(body) }.getOrNull() as? JsonObject ?: return null
+        val array = root[NEXT_EXPECTED_RANGES] as? JsonArray ?: return null
+        return array.mapNotNull { element -> (element as? JsonPrimitive)?.contentOrNull }
     }
 
     private fun downloadBytes(relativeUrl: String, accessToken: String, context: String): ByteArray {
@@ -625,6 +1018,28 @@ open class OneDriveGraphClient(
 
     companion object {
         const val TAG = "OneDriveGraph"
+
+        /**
+         * Graph 的时间是 ISO-8601 字符串（如 `2026-09-17T12:34:56Z`）。
+         *
+         * ## 为什么放在 companion 而不是实例方法（2026-11-02，#232）
+         *
+         * 它有两个使用者：[OneDriveKdbxFileSource] 填 `KdbxFileStat.lastModified`（仅展示），
+         * 以及 [OneDriveEntry.lastModifiedMillis] → `readBackPlan`（**参与判定**）。
+         * 而后者是纯数据类，拿不到客户端实例。放在这里两种调用都成立，
+         * 解析口径因此只有一份 —— 展示与判定用两套解析，迟早一套改了一套没改。
+         *
+         * ⚠️ 用 `runCatching` 兜住：展示场景下解析失败不该让"读取文件"这个主要目的失败。
+         * 参与判定时 `null` 的语义是**"不知道"**，调用方据此跳过时间戳那条判据，
+         * 绝不退化成"没改过"。
+         */
+        internal fun parseGraphTimestamp(raw: String?): Long? {
+            val text = raw?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+            return runCatching {
+                // API 26+ 才有 java.time；本项目 minSdk = 26，可直接用。
+                java.time.Instant.parse(text).toEpochMilli()
+            }.getOrNull()
+        }
         const val GRAPH_BASE_URL = "https://graph.microsoft.com/v1.0"
         const val KDBX_MIME_TYPE = "application/x-keepass2"
         const val JSON_MEDIA_TYPE = "application/json"
@@ -639,6 +1054,9 @@ open class OneDriveGraphClient(
         const val CHUNK_RETRY_COUNT = 3
         const val CHUNK_RETRY_DELAY_MS = 500L
 
+        /** Graph 进度响应里的字段名（只在 [nextExpectedRanges] 读原始 JSON 时用）。 */
+        const val NEXT_EXPECTED_RANGES = "nextExpectedRanges"
+
         /**
          * 用到的 HTTP 状态码。
          *
@@ -648,10 +1066,16 @@ open class OneDriveGraphClient(
          */
         const val HTTP_UNAUTHORIZED = 401
         const val HTTP_FORBIDDEN = 403
+        const val HTTP_OK = 200
+        const val HTTP_CREATED = 201
         const val HTTP_NOT_FOUND = 404
+        const val HTTP_REQUEST_TIMEOUT = 408
+        const val HTTP_GONE = 410
         /** 条件写失败（`If-Match` 不匹配 / `If-None-Match: *` 命中已存在的文件）。 */
         const val HTTP_PRECONDITION_FAILED = 412
+        const val HTTP_TOO_MANY_REQUESTS = 429
         /** OneDrive 配额耗尽。 */
+        const val HTTP_SERVER_ERROR = 500
         const val HTTP_INSUFFICIENT_STORAGE = 507
 
         /**

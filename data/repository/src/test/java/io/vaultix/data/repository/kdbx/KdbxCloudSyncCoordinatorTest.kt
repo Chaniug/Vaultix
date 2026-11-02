@@ -18,8 +18,10 @@ import io.vaultix.data.kdbx.KdbxFileStat
 import io.vaultix.model.KdbxCloudSyncStatus
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -93,6 +95,104 @@ class KdbxCloudSyncCoordinatorTest {
         assertEquals(KdbxSyncResult.Downloaded, result)
     }
 
+    /**
+     * ★ **上传成功必须把收敛回调接上**（#233）。
+     *
+     * ## 为什么这条必须存在，以及它第一版为什么是假绿
+     *
+     * #233 的修复横跨三处：缓存装饰器的 `recordUploaded`、编排器的 `recordUploaded`、
+     * 以及**协调器里那一行接线**。前两处都绿、这一行漏掉时整条链是断的 ——
+     * 而它的表现不是报错，是"一切正常，只是每次解锁白下一次、角标一直亮着"。
+     *
+     * ⚠️ 第一版用例走了一次真实的 `write` 然后断言"缓存令牌变成了新值" ——
+     * **假绿**：`CachedKdbxFileSource.write` **自己**就会用写入结果刷新缓存
+     * （那是 #172 时代就有的行为），所以有没有 `onUploaded` 这条断言都成立。
+     * 变异验证当场抓到了它（删掉接线，用例仍然绿）。
+     *
+     * ⇒ 现在断言的是**只有接线才能办到的那件事**：上传成功之后，新鲜度被直接置成
+     * `VERIFIED`。`write` 路径不碰新鲜度（它初始是 `UNVERIFIED`），
+     * 所以这一条只可能由 `recordUploaded` 做出来。
+     */
+    @Test
+    fun `上传成功后_协调器必须把收敛回调接上`() = runTest {
+        val dao = mockk<VaultDao>(relaxed = true)
+        coEvery { dao.get(VAULT_ID) } returns VaultEntity(
+            id = VAULT_ID,
+            kind = "KDBX",
+            displayName = "库",
+            origin = SAF_ORIGIN,
+            createdAt = 0L,
+        )
+        val cache = RecordingCache()
+        // ⚠️ 编排器的工厂必须**与协调器同源**（生产里 `KdbxCloudSyncModule` 就是这么接的：
+        //    `fileSourceFactory = { origin -> coordinator.get().fileSourceFor(origin) }`）。
+        //    第一版这里写的是 `{ null }` ⇒ 收敛路径在编排器里就安静地 return 了，
+        //    用例因此红在"新鲜度没变"，看起来像接线断了，实际是装置没搭成生产的形状。
+        lateinit var coordinatorRef: KdbxCloudSyncCoordinator
+        val orchestrator = KdbxSyncOrchestrator(
+            vaultDao = dao,
+            fileSourceFactory = { origin -> coordinatorRef.fileSourceFor(origin) },
+        )
+        val coordinator = KdbxCloudSyncCoordinator(
+            vaultDao = dao,
+            orchestrator = orchestrator,
+            safFactory = { null },
+            sessionReplacer = mockk(relaxed = true),
+            okHttp = { null },
+            webDavCredentials = mockk(relaxed = true),
+            fileCache = cache,
+            appScope = this,
+        )
+
+        val remote = mockk<KdbxFileSource>(relaxed = true)
+        coEvery { remote.stat() } returns KdbxFileStat(versionToken = OLD_TOKEN)
+        coEvery { remote.write(any(), any(), any(), any()) } returns
+            io.vaultix.data.kdbx.KdbxFileWriteResult(versionToken = NEW_TOKEN)
+        coordinatorRef = coordinator
+        coordinator.registerFactory { origin -> remote.takeIf { origin == EXTRA_ORIGIN } }
+        // ⚠️ 别猜前缀：WebDAV 的 `webdav:` 会先被 WebDAV 分支吃掉 ⇒ 用例会安静地测到
+        //    另一个来源上。用协调器自己的判据问一次。
+        assertTrue(
+            "装置错了：$EXTRA_ORIGIN 没走到额外工厂，这条用例测的就不是它",
+            coordinator.isExtraFactoryOrigin(EXTRA_ORIGIN),
+        )
+
+        val source = requireNotNull(coordinator.fileSourceFor(EXTRA_ORIGIN)) as CachedKdbxFileSource
+        assertEquals(
+            "前置条件：写之前一定是未校验（否则下面那条断言说明不了任何事）",
+            CachedKdbxFileSource.Freshness.UNVERIFIED,
+            source.freshness.value,
+        )
+
+        source.write(ByteArray(8) { it.toByte() }, expectedVersion = OLD_TOKEN)
+        runCurrent()
+
+        assertEquals(
+            "上传成功 ⇒ 缓存内容就是远端那一版，新鲜度必须直接是 VERIFIED；" +
+                "停在 UNVERIFIED 说明协调器根本没把收敛回调接进来",
+            CachedKdbxFileSource.Freshness.VERIFIED,
+            source.freshness.value,
+        )
+        assertEquals(NEW_TOKEN, cache.load(EXTRA_ORIGIN)?.versionToken)
+        assertEquals(NEW_TOKEN, cache.load(EXTRA_ORIGIN)?.versionToken)
+    }
+
+    /** 只记录最后一次 `save` 的缓存替身（断言"收敛是否真的落到缓存上"）。 */
+    private class RecordingCache : KdbxFileCache {
+        private val map = mutableMapOf<String, CachedKdbxFile>()
+
+        override suspend fun load(key: String): CachedKdbxFile? = map[key]
+
+        override suspend fun save(key: String, file: CachedKdbxFile) {
+            map[key] = file
+        }
+
+        override suspend fun remove(key: String) {
+            map.remove(key)
+        }
+
+    }
+
     // ---------------------------------------------------------------- 装置
 
     private fun coordinator(
@@ -133,5 +233,9 @@ class KdbxCloudSyncCoordinatorTest {
     private companion object {
         const val VAULT_ID = "vault-coordinator-1"
         const val SAF_ORIGIN = "content://com.android.providers.downloads.documents/document/9"
+        /** 一个**不会**被 SAF / WebDAV 分支吃掉的 origin：模拟 OneDrive 这类额外工厂。 */
+        const val EXTRA_ORIGIN = "onedrive:acc-1:Vaultix%2Fvault.kdbx"
+        const val OLD_TOKEN = "etag-old"
+        const val NEW_TOKEN = "etag-new"
     }
 }

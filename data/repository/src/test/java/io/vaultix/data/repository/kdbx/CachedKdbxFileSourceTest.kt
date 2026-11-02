@@ -224,6 +224,86 @@ class CachedKdbxFileSourceTest {
         assertEquals("没有缓存时不能静默返回空字节", 0, delegate.readCount)
     }
 
+    // ---- 6. 上传成功后的收敛（#233）----
+
+    @Test
+    fun `上传成功后回调必须把新令牌一起带出去`() = runTest {
+        val cache = FakeCache()
+        cache.save(key, CachedKdbxFile("old".toByteArray(), "etag-1"))
+        val delegate = source("remote".toByteArray(), token = "etag-1")
+        val reported = mutableListOf<Pair<String, String?>>()
+        val sut = CachedKdbxFileSource(
+            delegate = delegate,
+            cache = cache,
+            cacheKey = key,
+            scope = backgroundScope,
+            onUploaded = { bytes, newVersion -> reported += String(bytes) to newVersion },
+        )
+
+        sut.write("new".toByteArray(), expectedVersion = "etag-1")
+
+        assertEquals(
+            "上传成功必须正好上报一次（多一次就是重复收敛）",
+            1,
+            reported.size,
+        )
+        assertEquals("new", reported.single().first)
+        assertEquals(FakeSource.WRITE_TOKEN, reported.single().second)
+    }
+
+    @Test
+    fun `上传失败不得触发收敛回调`() = runTest {
+        val cache = FakeCache()
+        val delegate = object : KdbxFileSource by source("remote".toByteArray(), token = "etag-1") {
+            override suspend fun write(
+                bytes: ByteArray,
+                expectedVersion: String?,
+                force: Boolean,
+                failIfExists: Boolean,
+            ): KdbxFileWriteResult = throw io.vaultix.data.kdbx.KdbxFileConflictException(
+                currentVersion = "etag-other",
+                message = "远端已被改",
+            )
+        }
+        var reported = 0
+        val sut = CachedKdbxFileSource(
+            delegate = delegate,
+            cache = cache,
+            cacheKey = key,
+            scope = backgroundScope,
+            onUploaded = { _, _ -> reported++ },
+        )
+
+        runCatching { sut.write("new".toByteArray(), expectedVersion = "etag-1") }
+
+        assertEquals(
+            "冲突就是没推上去 —— 收敛回调会把'本机==远端'这个假事实写进缓存",
+            0,
+            reported,
+        )
+    }
+
+    @Test
+    fun `收敛回调抛错不得让写成功变成失败`() = runTest {
+        val cache = FakeCache()
+        val delegate = source("remote".toByteArray(), token = "etag-1")
+        val sut = CachedKdbxFileSource(
+            delegate = delegate,
+            cache = cache,
+            cacheKey = key,
+            scope = backgroundScope,
+            onUploaded = { _, _ -> throw IllegalStateException("上层炸了") },
+        )
+
+        val result = sut.write("new".toByteArray(), expectedVersion = "etag-1")
+
+        assertEquals(
+            "字节已经上去了，收敛是**优化** —— 让它把成功翻成失败，会诱导用户再传一次",
+            FakeSource.WRITE_TOKEN,
+            result.versionToken,
+        )
+    }
+
     // ---- 5. 写后刷新缓存 ----
 
     @Test

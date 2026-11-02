@@ -46,6 +46,7 @@ import io.vaultix.model.VaultSshKey
 import io.vaultix.model.VaultUri
 import java.io.ByteArrayOutputStream
 import java.security.MessageDigest
+import java.util.UUID
 
 /**
  * 把 [database] 编码成 KDBX 字节。
@@ -134,6 +135,8 @@ internal object KdbxEncoder {
             digest.update(folder.id.toByteArray(Charsets.UTF_8))
             digest.update(folder.name.toByteArray(Charsets.UTF_8))
         }
+        // ★ 分组树（#235）：光算 [content.folders] 不够 —— 见 [fingerprintGroupTree] 的 KDoc。
+        fingerprintGroupTree(digest, content.groupPaths, content.rootGroupUuid)
         digest.update(content.recycleBinCount.toString().toByteArray(Charsets.UTF_8))
         // 附件的"有哪些、叫什么"也是内容：远端新增/删掉一个附件同样是内容变化。
         // 按 hash 排序消除 Map 迭代顺序带来的不确定性（HashMap 顺序不保证稳定，
@@ -162,6 +165,60 @@ internal object KdbxEncoder {
             digest.update(FIELD_SEPARATOR)
             digest.update(value.toByteArray(Charsets.UTF_8))
         }
+    }
+
+    /**
+     * ★ 分组树的指纹（#235）。
+     *
+     * ## 只哈希 `content.folders` 为什么不够
+     *
+     * 那份列表由 `KdbxItemMapper.walk` **递归遍历**生成，于是：
+     * - 它带着"遍历顺序"，却**不带父子关系**。把子组 A 从"父 P 下"挪到"父 Q 下"，
+     *   路径字符串会变（`P/A` → `Q/A`）⇒ 能看出来 ✅；
+     * - 但**同一个父组下的顺序**（`[A, B]` → `[B, A]`）在 `folders` 里看不出来 ——
+     *   两条记录的 `id` / `name` 都没变，只是顺序不同 ⇒ 指纹不变 ⇒ **假阴性**；
+     * - 更糟的是"**把分组整体上移一层**"：`["A", "A/B"]` → `["A/B"]` 时，
+     *   `A/B` 的路径从 `A/B` 变成 `B` —— 这个会变 ✅。但 `["A"]` → `["A"]`（名字没变、
+     *   却在树里换了位置）这种，**路径字符串相同** ⇒ 完全看不出来 ❌。
+     *
+     * ⇒ 指纹必须直接算"**树**"：每个节点的 `uuid` + **完整路径**
+     *   （路径里含所有祖先的名字，所以祖先改名也会被捕获）。
+     *
+     * ## ⚠️ 能捕获什么、捕获不了什么（如实写清，别夸大）
+     *
+     * | 变化 | 捕获？ | 为什么 |
+     * |---|---|---|
+     * | 新建 / 删除分组 | ✅ | 路径集合变了 |
+     * | 分组改名 | ✅ | 路径里含名字 |
+     * | 分组换父级 | ✅ | 完整路径变了 |
+     * | **同父下重新排序** | ❌ | 路径集合完全相同 |
+     *
+     * 排序捕获不了是**有意的取舍**：`groupPaths` 里没有"同级第几个"这个信息，
+     * 硬从遍历顺序里推一个 index 出来，会在子树存在时算错（遍历顺序 ≠ 同级顺序），
+     * 那比"漏报"更糟 —— 它会产生**假阳性**，每次同步都报"远端变了"。
+     * ⇒ 排序变化交给**写回基线**那条更精确的路去兜（#185 的 `baselineAligned`：
+     *   改完能对得上就推进基线，对不上就停下），**不**靠指纹猜。
+     *
+     * ## 为什么按 uuid 排序遍历
+     *
+     * `groupPaths` 是 `Map`，迭代顺序不可依赖；key（uuid）唯一 ⇒ 排序只决定"先喂谁"，
+     * 不改变"每个元素是什么"。**这里排序的是 map 的遍历顺序，不是树的结构顺序** ——
+     * 两者别混。
+     */
+    private fun fingerprintGroupTree(
+        digest: MessageDigest,
+        groupPaths: Map<UUID, String>,
+        rootGroupUuid: UUID?,
+    ) {
+        // ★ 跳过根分组：它的 uuid 由引擎**随机生成**（见 `KdbxMappedContent.rootGroupUuid`），
+        //   算进去会让"同一份内容建两次"的库指纹不同 ⇒ 写回基线每次保存都误判"内容过期"。
+        //   ⚠️ 这个错法在本函数单测里**看不出来**：单测用的是同一份 `groupPaths`。
+        //      它是被 `KdbxWriteBaselineTest`（跨两次建库）抓出来的（2026-11-03 实测）。
+        val nodes = groupPaths.filterKeys { it != rootGroupUuid }
+        digest.update(nodes.size.toString().toByteArray(Charsets.UTF_8))
+        nodes.entries
+            .sortedBy { it.key.toString() }
+            .forEach { (uuid, path) -> update(digest, uuid.toString(), path) }
     }
 
     /** 网址：`uri` + 匹配规则。规则不同 = 填充行为不同，必须算内容。 */

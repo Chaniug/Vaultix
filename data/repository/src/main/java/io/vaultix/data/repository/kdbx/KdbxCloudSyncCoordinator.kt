@@ -37,7 +37,9 @@
 package io.vaultix.data.repository.kdbx
 
 import io.vaultix.data.kdbx.Kdbx
+import io.vaultix.data.kdbx.KdbxFileStat
 import io.vaultix.data.kdbx.KdbxFileSource
+import io.vaultix.data.kdbx.KdbxFileWriteResult
 import io.vaultix.data.kdbx.KdbxWriteFailure
 import io.vaultix.database.dao.VaultDao
 import io.vaultix.model.KdbxCloudSyncStatus
@@ -124,9 +126,10 @@ class KdbxCloudSyncCoordinator(
      * @return null = 这个库没有可同步的网盘来源（UI 据此隐藏同步入口）。
      */
     override fun fileSourceFor(origin: String): KdbxFileSource? = when {
-        // 本地 SAF：**不缓存** —— 它的 `versionToken` 是内容 SHA-256，
-        // 算它本身就要读整份文件 ⇒ 缓存只会多做一次读。
-        origin.startsWith(SAF_ORIGIN_PREFIX) -> safFactory(origin)
+        // 本地 SAF：**不缓存字节** —— 它的 `versionToken` 是内容 SHA-256，
+        // 存一份字节换不来任何一次 IO。但**必须复用同一个实例**（见下方 `safSources`）。
+        origin.startsWith(SAF_ORIGIN_PREFIX) ->
+            safSources.getOrPut(origin) { safFactory(origin) ?: NullSource }.takeUnless { it === NullSource }
 
         WebDavVaultOrigin.matches(origin) -> {
             val parsed = WebDavVaultOrigin.parse(origin) ?: return null
@@ -160,9 +163,29 @@ class KdbxCloudSyncCoordinator(
      * 不新加 `sourceType` 列 —— 两处真相必然漂移（这条纪律在本文件里已写过一次）。
      * 并且额外要求"**真的能解析出来源**"：畸形 origin（如 `onedrive:` 缺路径）不该被
      * 当成"有云端" —— 那会留下一个永远传不上去的「待上传」。
+     *
+     * ⚠️ 2026-11-02：判据本身下沉到 [KdbxFileSourceResolver.isCloudOrigin]（接口默认方法）。
+     * 此前 `KdbxCreateRepositoryImpl` 与 `VaultRepositoryImpl` 各自抄了一份，
+     * 而"哪条路径认为这个库没有云端"这件事**失效时不报错**。这里保留同名方法只为
+     * 让类内调用点读起来顺，实现改为直接委托 —— 判据仍然只有一份。
      */
-    fun hasCloudSource(origin: String): Boolean =
-        !origin.startsWith(SAF_ORIGIN_PREFIX) && fileSourceFor(origin) != null
+    fun hasCloudSource(origin: String): Boolean = isCloudOrigin(origin)
+
+    /**
+     * 这个 origin 是否由 [registerFactory] 注册的额外工厂接管（#233）？
+     *
+     * ## 为什么需要它
+     *
+     * [fileSourceFor] 用 `when` 依次试 SAF / WebDAV / 额外工厂，而 `registerFactory`
+     * 只有**一个**槽位 —— 想验证"某条路径确实走到那个槽"，光看前缀不够：
+     * `webdav:` 会先被 WebDAV 分支吃掉，用例于是安静地测到**另一个来源**上
+     * （最糟的一种"绿"）。
+     * ⇒ 把"这条路径归额外工厂"变成可以**问**的判据，而不是让调用方去背 `when` 的顺序。
+     */
+    fun isExtraFactoryOrigin(origin: String): Boolean =
+        !origin.startsWith(SAF_ORIGIN_PREFIX) &&
+            !WebDavVaultOrigin.matches(origin) &&
+            extraFactory != null
 
     /**
      * **本地内容改过**（条目写回成功后由仓储调用）。
@@ -187,6 +210,57 @@ class KdbxCloudSyncCoordinator(
         KdbxCloudSyncStatus.fromName(vaultDao.get(vaultId)?.syncStatus)
 
     /**
+     * 每个 origin 一份**新鲜度容器**（#233）。
+     *
+     * ## 为什么它必须住在协调器里
+     *
+     * [withRemoteCache] 每次调用都新建一个 `CachedKdbxFileSource`。若新鲜度住在那个临时
+     * 实例里，"上传成功 ⇒ 与远端一致"这条结论写进去就随实例消失了 ——
+     * 下一次解锁拿到的仍是 `UNVERIFIED`，提示永远不消失。
+     *
+     * ⚠️ 用 `ConcurrentHashMap`（而不是普通 map）：协调器是**单例**，
+     * `fileSourceFor` 会在解锁线程、同步协程、后台校验协程里**并发**调用。
+     *
+     * ⚠️ 不做淘汰：键是 origin（＝库 id），数量等于用户拥有的远端库数量，
+     * 量级是个位数到几十；为它加一层 LRU 只会多一个"淘汰了还在用"的失效面。
+     * （删库时容器留下一个 `UNVERIFIED` 值，无副作用。）
+     */
+    private val freshnessHolders = java.util.concurrent.ConcurrentHashMap<String, FreshnessHolder>()
+
+    /**
+     * 本地 SAF 来源**按 origin 复用同一个实例**（2026-11-02，#234）。
+     *
+     * ## 为什么非复用不可
+     *
+     * `SafKdbxFileSource` 的 `stat()` 现在有一条快速路径：记住上一次整份读的摘要与读区间，
+     * 下次只查元数据就能证明"内容没变"。而这条路径依赖**实例内部的两份状态**：
+     * 读缓存（摘要 + 区间）和库变更序号（本进程写过几次）。
+     *
+     * 每次 `fileSourceFor` 新建一个实例 ⇒ 序号恒为 0、缓存在构造时就没了 ⇒
+     * 快速路径**永远不会命中**（不会出错，只是完全白做）。这与 #233 里
+     * "`FreshnessHolder` 写在临时实例上、UI 永远 `UNVERIFIED`" 是**同一个坑**：
+     * **把状态挂在短命对象上，等于没挂。**
+     *
+     * ⚠️ 用 `ConcurrentHashMap.getOrPut` 而不是 `computeIfAbsent`：后者会在 map 的锁里
+     * 调用 `safFactory`（它会 `Uri.parse`），多库并发解锁时容易变成热点。
+     * 代价是极端并发下可能造出两个实例、只留一个 —— 与"每次新建"等价，不会更糟。
+     */
+    private val safSources = java.util.concurrent.ConcurrentHashMap<String, KdbxFileSource>()
+
+    /** `safFactory` 返回 null 时占位，避免每次都重新构造一遍（`computeIfAbsent` 不支持存 null）。 */
+    private object NullSource : KdbxFileSource {
+        override suspend fun stat(): KdbxFileStat = error("占位对象，不应被使用")
+        override suspend fun read(): ByteArray = error("占位对象，不应被使用")
+        override suspend fun write(
+            bytes: ByteArray,
+            expectedVersion: String?,
+            force: Boolean,
+            failIfExists: Boolean,
+        ): KdbxFileWriteResult = error("占位对象，不应被使用")
+        override suspend fun testConnection(): Result<Unit> = error("占位对象，不应被使用")
+    }
+
+    /**
      * 给**远端**来源套本地缓存（批次 B1，2026-09-30）。
      *
      * 只此一处套：`fileSourceFor` 是「origin ⇒ 来源」的唯一判据表，解锁 / 校验 /
@@ -198,12 +272,18 @@ class KdbxCloudSyncCoordinator(
             delegate = source,
             cache = fileCache,
             cacheKey = origin,
+            // ★ 同一 origin 的所有装饰器实例共享同一个新鲜度（#233）。
+            freshHolder = freshnessHolders.getOrPut(origin) { FreshnessHolder() },
             scope = appScope,
             // ⚠️ `origin` 就是 vaultId：KDBX 库的 `VaultEntity.id` 与 `origin` 同值
             //   （见 `KdbxCreateRepositoryImpl` 建库时 `id = resolvedOrigin`），
             //   所以这里不需要再查一次表 —— 查不到时 `markRemoteChanged` 自己会 `return`
             //   （`vaultDao.get(vaultId) ?: return`），不存在的库不会写出坏状态。
             onRemoteChanged = { orchestrator.markRemoteChanged(origin) },
+            // ★ 上传成功后把缓存里的版本令牌一起刷新（#233）。
+            //   ⚠️ 少了这一句：`vaults.remoteVersionToken` 已经是新 eTag，而缓存里还是旧的
+            //   ⇒ 每次解锁都判"远端已变"、白下一次整库，并挂一个**假的**「远端有更新」角标。
+            onUploaded = { bytes, newVersion -> orchestrator.recordUploaded(origin, bytes, newVersion) },
         )
 
     /**

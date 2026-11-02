@@ -42,6 +42,26 @@ import org.junit.Test
  * ⇒ 配了 [创建成功_落一行且 origin 正确] 作为反证：同一套装置下，成功路径**确实**
  * 落了一行。两条一起读才知道"没落行"是真的没落，而不是装置坏了。
  */
+/**
+ * 一个形状正确的 OneDrive origin（`onedrive:<accountId>:<base64url 路径>`）。
+ *
+ * ⚠️ 用 `OneDriveVaultOrigin` 现算而不是手抄字面量：`data:repository` 不认识那个类
+ * （它在 app 层），但**测试**认的是"前缀对得上、路径能解回来"这两件事 ——
+ * 手抄一个字面量的话，将来 origin 编解码一改，这条用例就会在**与它无关的地方**变红。
+ * 这里的 accountId / 路径都是假的，不含任何凭据。
+ */
+private object OneDriveOriginFixture {
+    val origin: String = buildString {
+        append("onedrive:")
+        append("acc-fixture")
+        append(':')
+        append(
+            java.util.Base64.getUrlEncoder().withoutPadding()
+                .encodeToString("Vaultix/vault.kdbx".toByteArray(Charsets.UTF_8)),
+        )
+    }
+}
+
 class KdbxCreateRepositoryTest {
 
     @After
@@ -184,8 +204,111 @@ class KdbxCreateRepositoryTest {
         }
     }
 
-    /** 来源解析不出来 ⇒ 失败，且**一行都不落**（还没碰过任何文件，安全）。 */
+    /**
+     * ★★ **网盘来源的 origin 必须原样保留，不能被 `remoteId` 顶掉**（2026-11-02 修）。
+     *
+     * ## 这个 bug 长什么样
+     *
+     * `stat().remoteId` 的语义按来源不同：SAF 给的是"provider 下文件的真实 URI"（要用它），
+     * 而 OneDrive 给的是 **itemId**（形如 `01ABCDEF…`）。旧代码一视同仁地拿它当 origin ⇒
+     * `vaults.id` 变成一个光秃秃的 itemId，而 `fileSourceFor(origin)` 只认
+     * `onedrive:` / `webdav:` 前缀 ⇒ 建库"成功"、**下次解锁报"没有可用的文件来源"**，
+     * 而且列表里没有任何入口能改回来（不可恢复）。
+     *
+     * ⇒ 断言的很直白：网盘 origin 建库后，落库的 `origin` 与 `id` **仍然等于 targetUri**。
+     */
     @Test
+    fun `网盘来源建库_origin必须原样保留而不是用itemId`() = runTest {
+        val dao = RecordingVaultDao()
+        val cloudOrigin = OneDriveOriginFixture.origin
+        // 来源报的 remoteId 是 itemId —— 它**不是** origin。
+        val repo = repositoryWith(dao = dao, source = fakeSource("01ABCDEF-item-id"))
+
+        val outcome = repo.createVault(
+            targetUri = cloudOrigin,
+            displayName = "云库",
+            masterPassword = PASSWORD,
+        )
+
+        assertTrue("应当成功，实际：$outcome", outcome is NewKdbxVaultOutcome.Created)
+        val row = dao.saved.single()
+        assertEquals("网盘的 origin 必须保持 targetUri 原样", cloudOrigin, row.origin)
+        assertEquals(cloudOrigin, row.id)
+        // 反证：remoteId 确实与 origin 不同 —— 否则上面两条在"根本没校对"时也会通过。
+        assertNotEquals("01ABCDEF-item-id", cloudOrigin)
+    }
+
+    // -------------------------------------------------- 同步状态的初始值
+
+    /**
+     * ★ 新建的**网盘**库必须带上"待上传"，不能留 null（2026-11-02 修）。
+     *
+     * ## 留 null 会发生什么（两件，都不报错）
+     *
+     * 1. `vaults.syncStatus` 的 null 语义是「该库**不适用**网盘同步」；
+     * 2. `VaultListScreen` 有 `onSyncNow = if (vault.syncStatus != null)` ⇒
+     *    新建的云库**没有「立即同步」入口**，用户只能退出重进才等得到自动同步。
+     */
+    @Test
+    fun `新建网盘库_同步状态必须是待上传而不是null`() = runTest {
+        val dao = RecordingVaultDao()
+        val repo = repositoryWith(dao = dao, source = fakeSource("01ABCDEF-item-id"))
+
+        repo.createVault(
+            targetUri = OneDriveOriginFixture.origin,
+            displayName = "云库",
+            masterPassword = PASSWORD,
+        )
+
+        val update = dao.syncUpdates.single()
+        assertEquals("新建的云库必须有初始同步状态", "PENDING_UPLOAD", update.status)
+        assertEquals("状态必须挂在这个库上", OneDriveOriginFixture.origin, update.id)
+        // ⚠️ 新库没有基线：令牌与时间戳都得是 null（不是"0"、也不是随手给个时间）。
+        assertEquals("新库不该凭空有基线令牌", null, update.versionToken)
+        assertEquals("新库不该凭空有同步时间", null, update.syncedAt)
+    }
+
+    /**
+     * 反证：**本地 SAF** 库必须留 null。
+     *
+     * 给它标 `PENDING_UPLOAD` 会让 UI 在一个根本没有云端的库上渲染「待上传」角标，
+     * 而且自动上传会为一个连网盘来源都没有的库空转。
+     */
+    @Test
+    fun `新建本地SAF库_同步状态必须留null`() = runTest {
+        val dao = RecordingVaultDao()
+        val repo = repositoryWith(dao = dao, source = fakeSource(RESOLVED_URI))
+
+        repo.createVault(targetUri = VAULT_URI, displayName = "本地库", masterPassword = PASSWORD)
+
+        assertEquals("本地库不该有同步状态", null, dao.syncUpdates.single().status)
+    }
+
+    /**
+     * 重复创建同一路径时，**不许**把已有的基线令牌抹掉。
+     *
+     * ⚠️ 这条是"顺手用 upsert 一起写"会踩的坑：`upsert` 是整行替换，漏抄一列就是清空一列。
+     * 基线被清空 ⇒ 下一轮同步会给一个从没拉过的库报"远端变了"，把用户直接推向冲突对话框。
+     */
+    @Test
+    fun `重复创建同一路径_不得抹掉已有基线令牌`() = runTest {
+        val existingToken = "existing-etag"
+        val dao = RecordingVaultDao(existing = RESOLVED_URI).apply {
+            // ⚠️ 旧行**必须真的带令牌**：装置默认那条（EXISTING_ROW）令牌是 null，
+            //    拿它来测"不许抹掉"会在实现改成 `versionToken = null` 时照样绿 ——
+            //    一条永远绿的用例比没有更糟（它让人以为守住了）。
+            existingRow = EXISTING_ROW.copy(remoteVersionToken = existingToken, lastSyncedAt = 111L)
+        }
+        val repo = repositoryWith(dao = dao, source = fakeSource(RESOLVED_URI))
+
+        repo.createVault(targetUri = VAULT_URI, displayName = "本地库", masterPassword = PASSWORD)
+
+        val update = dao.syncUpdates.single()
+        assertEquals("已有基线令牌必须原样带回（漏抄一列 = 静默清空一列）", existingToken, update.versionToken)
+        assertEquals("已有同步时间同样要带回", 111L, update.syncedAt)
+    }
+
+    /** 来源解析不出来 ⇒ 失败，且**一行都不落**（还没碰过任何文件，安全）。 */    @Test
     fun `来源解析不出来_失败且不落行`() = runTest {
         val dao = RecordingVaultDao()
         // resolver 返回 null（origin 没有可用来源）。
@@ -259,8 +382,20 @@ class KdbxCreateRepositoryTest {
     private class RecordingVaultDao(private val existing: String? = null) : VaultDao {
         val saved = mutableListOf<VaultEntity>()
 
+        /**
+         * 每一次 `updateSyncState` 的入参。
+         *
+         * ⚠️ 之所以要单独记：同步状态**不走** `upsert`（那会把不归本次管的列一起替换掉），
+         * 所以只盯 `saved` 是看不见它的 —— 而这正是"建库后 syncStatus 是 null"这个
+         * bug 能被漏掉整整一轮的原因。
+         */
+        val syncUpdates = mutableListOf<SyncUpdate>()
+
+        /** 可替换的旧行：测"不许抹掉基线"那条时必须让旧行**真的带令牌**。 */
+        var existingRow: VaultEntity? = EXISTING_ROW.takeIf { existing != null }
+
         override suspend fun get(id: String): VaultEntity? =
-            if (id == existing) EXISTING_ROW else null
+            if (id == existing) existingRow else null
 
         override suspend fun upsert(vault: VaultEntity) {
             saved += vault
@@ -275,10 +410,20 @@ class KdbxCreateRepositoryTest {
             status: String?,
             versionToken: String?,
             syncedAt: Long?,
-        ) = Unit
+        ) {
+            syncUpdates += SyncUpdate(id, status, versionToken, syncedAt)
+        }
 
         override suspend fun delete(id: String) = Unit
     }
+
+    /** 一次 `updateSyncState` 的入参快照。 */
+    private data class SyncUpdate(
+        val id: String,
+        val status: String?,
+        val versionToken: String?,
+        val syncedAt: Long?,
+    )
 
     private companion object {
         const val VAULT_URI = "content://com.android.providers.downloads/req-1"

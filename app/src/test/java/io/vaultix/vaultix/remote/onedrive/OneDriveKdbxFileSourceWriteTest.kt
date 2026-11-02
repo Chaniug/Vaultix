@@ -18,7 +18,7 @@ import org.junit.Assert.fail
 import org.junit.Test
 
 /**
- * [OneDriveKdbxFileSource] 的**契约层**行为（ISSUES #172 的第二道闸）。
+ * [OneDriveKdbxFileSource] 的**契约层**行为（ISSUES #172 的第二道闸；#232 之后仍不许省）。
  *
  * ## 守的是什么
  *
@@ -47,6 +47,7 @@ import org.junit.Test
  * | 删掉 `write` 末尾的 `verifyReadBack(...)` 调用 | 写成功后必须读回校验，内容不一致要抛冲突 |
  * | 把 `!actual.contentEquals(bytes)` 改成 `false`（永不报） | 同上 |
  * | 把读回失败那一支改成 `return`（当成功） | 读回失败必须抛冲突而不是当成功 |
+ * | 把 `readBackPlan` 的 `requiresDownload` 改成恒 false（永不下载） | 大小相符时必须照旧下载一次并逐字节比 / 写成功后读回内容不一致必须抛冲突 |
  */
 class OneDriveKdbxFileSourceWriteTest {
 
@@ -62,13 +63,17 @@ class OneDriveKdbxFileSourceWriteTest {
         )
     }
 
-    private fun entry(sizeBytes: Long?, etag: String? = ETAG_V2) = OneDriveEntry(
+    private fun entry(
+        sizeBytes: Long?,
+        etag: String? = ETAG_V2,
+        lastModified: String? = "2026-10-17T10:00:00Z",
+    ) = OneDriveEntry(
         id = "item-1",
         name = "vault.kdbx",
         isDirectory = false,
         versionToken = etag,
         sizeBytes = sizeBytes,
-        lastModified = "2026-10-17T10:00:00Z",
+        lastModified = lastModified,
     )
 
     private fun sourceWith(graph: OneDriveGraphClient) = OneDriveKdbxFileSource(
@@ -115,6 +120,31 @@ class OneDriveKdbxFileSourceWriteTest {
         } catch (expected: KdbxFileConflictException) {
             assertArrayEquals(written, written)
         }
+    }
+
+    // ───────────────────── 大小相符时**必须**照旧下载（#232 不许省的地方） ─────────────────────
+
+    @Test
+    fun `大小相符时必须照旧下载一次并逐字节比`() = runBlocking {
+        val graph = mockk<OneDriveGraphClient>()
+        var downloadCount = 0
+        // 元数据一切正常（大小对、时间戳是刚才）—— 但对"长度对、内容坏"它一无所知，
+        // 所以这里**必须**仍然下载。省掉这一步就是 #232 最危险的写法。
+        coEvery {
+            graph.upload(any(), any(), any(), any(), any(), any())
+        } returns entry(sizeBytes = written.size.toLong(), lastModified = "2999-01-01T00:00:00Z")
+        coEvery { graph.download(any(), any()) } coAnswers {
+            downloadCount++
+            written
+        }
+
+        sourceWith(graph).write(bytes = written, expectedVersion = null)
+
+        assertEquals(
+            "元数据只能证明'不一致'，永远证明不了'一致' —— 大小相同仍须读回逐字节比",
+            1,
+            downloadCount,
+        )
     }
 
     @Test

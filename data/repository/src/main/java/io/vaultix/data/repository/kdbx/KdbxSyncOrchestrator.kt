@@ -255,6 +255,39 @@ class KdbxSyncOrchestrator(
     }
 
     /**
+     * **上传成功后收敛缓存里的版本令牌**（#233）。
+     *
+     * ## 为什么必须有这一步
+     *
+     * 同一个事实被存了两份：`vaults.remoteVersionToken`（服务端最新版）与
+     * 远端缓存的 `CachedKdbxFile.versionToken`（这份字节对应哪一版）。
+     * 条目保存那次缓存写**刻意沿用旧令牌**（那是条件写的基线），随后自动上传把字节推上去、
+     * 本方法以外的路径只更新了 `vaults` 那一列 ⇒ 两份**永久漂移**。
+     *
+     * 漂移的表现不是报错，而是：每次解锁都判"远端已变" ⇒ 白下一次整库 +
+     * 挂一个用户什么都没做就出现的「远端有更新」角标。
+     *
+     * @param origin 持久化的来源标识（`onedrive:…` / `webdav:…`）。**不是 vaultId** ——
+     *   两者在生产里同值（`KdbxCreateRepositoryImpl` 建库时 `id = resolvedOrigin`），
+     *   但那是**巧合**，不是契约：拿 vaultId 去查表取其 origin，会在
+     *   "表里还没这行 / 行被删了" 时**安静地 return**（什么都不做）。
+     *   调用点本来就有 origin（它刚从 `vaultDao.get(vaultId)` 拿到），直接传来即可。
+     * @param bytes 刚写上去的字节。
+     * @param newVersion 服务端给的新版本令牌。
+     */
+    suspend fun recordUploaded(origin: String, bytes: ByteArray, newVersion: String?) {
+        // ⚠️ 重新解析一次来源，而不是把 `source` 传进来：解析是**幂等**的（同一 origin 同一张表），
+        //    而把 source 透传出去会让本方法依赖"调用方手上那个恰好是缓存装饰器"这一偶然事实 ——
+        //    换成裸来源时 `recordUploaded` 会被静默跳过，正是本轮要修的那类"不报错的失效"。
+        val source = fileSourceFactory(origin) ?: return
+        if (source !is CachedKdbxFileSource) {
+            // 非远端缓存来源（本地 SAF 直连）：没有"缓存令牌"这回事，什么都不用做。
+            return
+        }
+        source.recordUploaded(bytes, newVersion)
+    }
+
+    /**
      * 冲突**已经被用户解决**（拉下来替换了会话，或强写推上去了）之后登记结果。
      *
      * @param remoteVersion 解决之后远端的版本令牌（下次条件写的基线）。
@@ -300,7 +333,14 @@ class KdbxSyncOrchestrator(
      */
     suspend fun markLocalEdited(vaultId: String) {
         val current = vaultDao.get(vaultId) ?: return
-        if (current.syncStatus == KdbxSyncStatus.CONFLICT.name) return
+        // ⚠️ 两个"有待办"的状态都不许降级，理由与 [markRemoteChanged] 那边完全一致：
+        //  - CONFLICT：表达"要用户拍板"，覆盖成 PENDING_UPLOAD 会让冲突对话框失去依据；
+        //  - PENDING_UPLOAD_WITH_LOCAL_CHANGES：表达"已上传一份，本地又攒了改动"。
+        //    它同样是 PENDING_UPLOAD 的**上位状态**（信息更多），降级只会丢掉
+        //    "上一份已经上去了"这条事实。2026-11-02 前这里只拦了 CONFLICT，
+        //    与 [markRemoteChanged] 不对称 —— 同一个语义在两条路径上有两种行为，
+        //    将来读代码的人必然会踩。
+        if (current.syncStatus in NON_DOWNGRADABLE) return
         markStatus(vaultId, KdbxSyncTransitions.markLocalChanges())
     }
 
@@ -324,9 +364,7 @@ class KdbxSyncOrchestrator(
      */
     suspend fun markRemoteChanged(vaultId: String) {
         val current = vaultDao.get(vaultId) ?: return
-        if (current.syncStatus == KdbxSyncStatus.CONFLICT.name) return
-        if (current.syncStatus == KdbxSyncStatus.PENDING_UPLOAD.name) return
-        if (current.syncStatus == KdbxSyncStatus.PENDING_UPLOAD_WITH_LOCAL_CHANGES.name) return
+        if (current.syncStatus in NON_DOWNGRADABLE_FROM_REMOTE) return
         markStatus(vaultId, KdbxSyncTransitions.markRemoteChanges())
     }
 
@@ -387,5 +425,32 @@ class KdbxSyncOrchestrator(
     private companion object {
         /** logcat 里按它过滤（`adb logcat -s VaultixKdbxSync`）。 */
         const val TAG = "VaultixKdbxSync"
+
+        /**
+         * 任何"降级标记"都**不许**覆盖的状态：它们都在表达"有事要用户处理"。
+         *
+         * ⚠️ 刻意做成一个集合而不是到处写 `if (x == A) return; if (x == B) return`：
+         * 两个入口（[markLocalEdited] / [markRemoteChanged]）此前各自漏了不同的状态，
+         * 同一个语义在两条路径上有两种行为。集中一处之后，"要不要拦"这件事只有一份答案。
+         */
+        val NON_DOWNGRADABLE = setOf(
+            KdbxSyncStatus.CONFLICT.name,
+            KdbxSyncStatus.PENDING_UPLOAD_WITH_LOCAL_CHANGES.name,
+        )
+
+        /**
+         * [markRemoteChanged] 额外还要拦 [KdbxSyncStatus.PENDING_UPLOAD]。
+         *
+         * ## 为什么这一条**只**给远端路径
+         *
+         * `PENDING_UPLOAD` = "本地有东西没推上去"。此时若报"远端也变了"，会**盖掉**
+         * 更需要提示的那件事（推不上去比"远端有更新"更紧急）。但这不构成"不许写"，
+         * 它只是"先别说远端" ⇒ 只拦远端方向的标记。
+         *
+         * ⚠️ 反过来（本地编辑了而状态是 REMOTE_CHANGED）**必须**允许降级成
+         * `PENDING_UPLOAD`：那时（远端有更新 + 本地也改了）就是冲突的成因，
+         * 交给下一次 sync 去判 CONFLICT 才是正解。
+         */
+        val NON_DOWNGRADABLE_FROM_REMOTE = NON_DOWNGRADABLE + KdbxSyncStatus.PENDING_UPLOAD.name
     }
 }
