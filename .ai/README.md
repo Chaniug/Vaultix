@@ -22,6 +22,13 @@
 > GitHub 静态解析不出来（版本构建期才定）⇒ 没有 `dependency-submission.yml` 提交快照，
 > alerts 与 `dependency-review` 都是**空转**。⚠️ 删掉它的后果不是「少一个 workflow」，
 > 是「第 2 项整体失效」，而面板会安静地显示为「没有漏洞」。
+> **而且更靠前还有一层**：本仓库的 `Dependency graph` 设置**当前是关闭的**
+> （首跑实测，`Dependency Submission` 直接报 `The Dependency graph is disabled`）——
+> 那是设置项，SSH 改不了，得人工打开。
+>
+> **首跑踩到的坑（已修）**：CodeQL 报「构建成功但提取到 0 个编译单元」的真正原因是
+> **Gradle build cache 命中**、编译器根本没执行 ⇒ 必须 `--no-build-cache`。
+> 判据：「Build 绿 + 提取为空」几乎必然是缓存，别往 `build-mode` 上想。
 >
 > **必须记住的口径**：CodeQL 对 Kotlin **不支持 `build-mode: none`** ⇒ 只能 manual；
 > 且 Default setup 一旦开着就会与 `codeql.yml` 抢同一次分析（跑两遍、告警重复）。设置页保持关闭。
