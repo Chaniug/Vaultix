@@ -366,10 +366,17 @@ jobs:
           {
             echo "apk_list<<EOF"
             # 展示成「文件名 — 体积」：路径前缀对下载的人没意义，体积能一眼看出产物是否正常。
-            (cd app/build/outputs/apk && printf '%s\n' "$apk_list" | sed '/^$/d' | while IFS= read -r f; do
+            # ⚠️ 这里**不要再 cd 一次**（2026-11-02 修复）：本步骤开头已经
+            #   `cd app/build/outputs/apk`，而 #218 为了加签名信息在这一行又套了一层
+            #   `(cd app/build/outputs/apk && ...)` ⇒ 从 apk 目录再往下找同名子目录，
+            #   `cd` 必然失败。在 `shell: bash -e` 下失败即退出，heredoc 的 EOF 没写完，
+            #   于是报的是 `Invalid value. Matching delimiter not found 'EOF'` ——
+            #   **一句与真实原因（路径不存在）毫无关系的错**，而 APK 其实已经打好了。
+            #   代价是 v0.11.0 首发在「构建成功、签名正确」之后卡在这一步，白跑 5 分钟。
+            printf '%s\n' "$apk_list" | sed '/^$/d' | while IFS= read -r f; do
               sz="$(stat -c%s "$f" 2>/dev/null || echo 0)"
               printf -- '- `%s` — %s MB\n' "$(basename "$f")" "$(awk -v b="$sz" 'BEGIN{printf "%.1f", b/1048576}')"
-            done)
+            done
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
           # ★ 2026-10-28：把 checksums 内容也做成 output。
