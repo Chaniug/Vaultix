@@ -60,8 +60,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
-      # 与 ci-debug.yml 保持一致：缓存 + 并行，缩短重复构建
-      GRADLE_OPTS: -Dorg.gradle.caching=true -Dorg.gradle.parallel=true
+      # 与 ci-debug.yml 略有不同：**故意不开 build cache**。
+      # 见下面 Build 步骤的注释 —— 缓存命中会让编译器不执行，CodeQL 提取到 0 个编译单元。
+      # 依赖下载缓存由 setup-gradle 负责，那部分照常命中，不会变慢。
+      GRADLE_OPTS: -Dorg.gradle.parallel=true
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
     steps:
       - name: Checkout repository
@@ -102,8 +104,17 @@ jobs:
 
       # 只为提取，产物丢弃。不跑 lint / test：
       # 那些步骤失败会让「安全扫描」看起来是红的，而它其实只是想编译一下。
+      #
+      # ⚠️★ 必须 `--no-build-cache`（2026-11-03 首跑实测踩到）：
+      #   第一次跑出来是 `ERROR: CodeQL detected code written in Java/Kotlin but this run
+      #   didn't build any of it` —— 而**上一步 Build 明明是 success**。
+      #   原因不是构建失败，是**构建被缓存命中**：同 commit 的 ci-debug 刚跑过一轮，
+      #   把 `:app:compileFullDebugKotlin` 等任务的产物暖进了 Gradle build cache，
+      #   这一步直接 FROM-CACHE 还原 ⇒ **编译器根本没执行** ⇒ 提取器拿不到任何编译单元。
+      #   ⇒ 关掉 build cache（依赖下载缓存仍然保留，那才是慢的部分）。
+      #   症状与「缺构建步骤」一模一样，但修法完全相反 —— 别往 build-mode 上想。
       - name: Build for CodeQL extraction
-        run: ./gradlew :app:assembleFullDebug --no-daemon --stacktrace
+        run: ./gradlew :app:assembleFullDebug --no-daemon --no-build-cache -Dorg.gradle.caching=false --stacktrace
 
       - name: Stop Gradle Daemon
         if: always()
