@@ -1,0 +1,76 @@
+name: Dependency Submission
+
+# 把**解析后**的依赖图提交给 GitHub。
+#
+# 为什么非有这一步不可：
+#   Gradle 的依赖版本在构建期才最终确定（BOM、版本冲突决议、plugins、多模块），
+#   GitHub 无法静态解析 `build.gradle.kts` 得出真实依赖树 —— 官方明确说 Gradle / sbt
+#   这类「构建期才定版本」的生态要靠 Dependency Submission API 补。
+#   没有这一步，本仓库在 Insights → Dependency graph 里基本是空的，
+#   于是 **Dependabot alerts 也就基本没东西可报**（alerts 读的就是这张图），
+#   `dependency-review.yml` 能比对的东西同样只剩零星几条。
+#   ⇒ 想让「Dependabot 必开」这件事在这仓库真正生效，这个 workflow 是前置条件。
+#
+# 只在构建脚本变动时跑：依赖图不会因为改 Kotlin 源码而变，
+# 每次 push 都解析一遍（2~4 分钟）没有收益。
+#
+# 与 Dependabot version updates 的分工：
+#   - 本文件 → 让 GitHub 知道「现在装了什么」（图 + alerts 的数据源）
+#   - dependabot.yml → 让 Dependabot 定期来「提议升到哪个版本」
+#   两者互不替代，缺一个都只有半条链路。
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '**/*.gradle.kts'
+      - '**/*.gradle'
+      - 'gradle/libs.versions.toml'
+      - 'gradle/wrapper/gradle-wrapper.properties'
+      - 'settings.gradle.kts'
+      - 'gradle.properties'
+  workflow_dispatch:
+
+# 提交快照要内容写权限（只写 dependency snapshot，不改仓库文件）。
+permissions:
+  contents: write
+
+concurrency:
+  group: dependency-submission
+  cancel-in-progress: true
+
+jobs:
+  submit:
+    name: Resolve and submit dependency graph
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-read-only: true
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      # 解析依赖需要**配置阶段成功**，而 AGP 在配置期就要 Android SDK 平台包。
+      # 缺了它，报错会是「Failed to find Platform SDK」，和「依赖解析失败」看起来一模一样。
+      - name: Install Android SDK platform 37
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/ensure-android-sdk.sh"
+
+      - name: Generate and submit dependency graph
+        uses: gradle/actions/dependency-submission@v6
