@@ -25,21 +25,21 @@ composeBom = "2026.03.00"
 # ExposedDropdownMenu 引用失效），属业务代码改造而非版本切换，需单独立项。
 material3 = "1.5.0-alpha16"
 
-coreKtx = "1.19.0"
+coreKtx = "1.19.1"
 lifecycle = "2.11.0"
 activityCompose = "1.13.0"
-navigationCompose = "2.10.0"
+navigationCompose = "2.10.2"
 # FragmentActivity：androidx.biometric 的 BiometricPrompt 宿主要求
-fragment = "1.8.6"
+fragment = "1.9.1"
 # ⚠️ Hilt 与 Kotlin 强绑定：Hilt 内置的 kotlin-metadata-jvm 决定了能解析的 metadata 版本。
 #    官方对应：Kotlin 2.4.10 → Hilt 2.60.1（KSP 2.3.10）；Kotlin 2.3.21 → Hilt 2.59.2。
 #    实测：Kotlin 2.4.10 + Hilt 2.59 会报
 #    "[Hilt] Provided Metadata instance has version 2.4.0, while maximum supported version is 2.3.0"。
 #    另：Hilt < 2.59 在 AGP 9 下会抛 "Android BaseExtension not found"（旧 DSL 已被 newDsl 移除）。
 hilt = "2.60.1"
-hiltNavigationCompose = "1.2.0"
-room = "2.8.4"
-datastore = "1.2.1"
+hiltNavigationCompose = "1.4.0"
+room = "2.8.5"
+datastore = "1.3.0"
 securityCrypto = "1.1.0"
 coroutines = "1.11.0"
 collectionsImmutable = "0.3.8"
@@ -47,7 +47,7 @@ kotlinxSerializationJson = "1.11.0"
 kotlinxDatetime = "0.6.2"
 coil = "2.7.0"
 # 稳定版 1.1.0 比 alpha 线更旧；alpha 线跨 2 个 minor 风险不划算（Bastion 同策略）
-biometric = "1.2.0-alpha05"
+biometric = "1.4.0-alpha07"
 # 对齐 Bitwarden（1.6.0）。曾锁 1.3.0 的理由已失效：
 #  - 「1.6.0 把 callingAppInfo.origin 收紧为 internal」→ 1.6.0 提供官方替代
 #    `CallingAppInfo.isOriginPopulated()` + `getOrigin()`（见 OriginCompat.kt），
@@ -63,7 +63,7 @@ credential = "1.6.0"
 # ②它的 KDBX 能力本来就来自 kotpass，且那份 vendored 副本被改成了依赖 Keyguard 自己的
 # util:foundation/util:crypto；③MIT 与项目 GPL-3.0 兼容，只需保留署名。
 kotpass = "0.13.0"
-workManager = "2.11.2"
+workManager = "2.12.0"
 
 # ---- 网络层（data:bitwarden）----
 # Retrofit 与 OkHttp 成对维护，避免 converter 与 OkHttp 主版本不匹配。
