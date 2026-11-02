@@ -361,7 +361,22 @@ jobs:
             echo "signer_subject=unknown" >> "$GITHUB_OUTPUT"
           fi
           # 生成 checksum 文件（写到工作区根，后续 Release 附件引用）
-          sha256sum $apk_files > "$GITHUB_WORKSPACE/checksums-sha256.txt"
+          #
+          # ★ 2026-11-02：**只写文件名，不写目录前缀**。
+          #   原来是 `sha256sum $apk_files`，而 `$apk_files` 是 `./full/release/xxx.apk`
+          #   （`find .` 的产物）⇒ 校验和文件里落的是 `./full/release/app-full-release.apk`。
+          #   用户把 `checksums-sha256.txt` 和 `app-full-release.apk` 下到**同一目录**后
+          #   执行 `sha256sum -c`，会报 `No such file or directory` ——
+          #   **给了校验和却验不了**，等于没有（v0.11.0 实测）。
+          #   ⇒ 用 `basename` 重写成扁平文件名。release 产物本来就在同一层，
+          #     且当前只出 full 一个包，不存在重名。
+          # ⚠️ 循环变量**不能叫 `path`**：zsh 里 `path` 是 `PATH` 的数组别名，
+          #   给它赋值等于把 PATH 覆盖成 APK 路径，之后连 `basename`/`cat` 都找不到
+          #   （2026-11-02 本地验证时实测，报 `command not found: basename`）。
+          #   CI 用的是 bash 所以不会炸，但这类"本地跑一次就中招"的写法不该留。
+          sha256sum $apk_files | while read -r hash apk_path; do
+            printf '%s  %s\n' "$hash" "$(basename "$apk_path")"
+          done > "$GITHUB_WORKSPACE/checksums-sha256.txt"
           echo "::notice title=checksums::$(cat "$GITHUB_WORKSPACE/checksums-sha256.txt" | tr '\n' ' ')"
           {
             echo "apk_list<<EOF"
