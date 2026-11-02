@@ -64,10 +64,18 @@
 > 依赖图快照**不区分 scope**，55 条的 `manifest_path` 全是 `settings.gradle.kts` ——
 > 要判「进不进包」只能回溯 SBOM 的 `DEPENDS_ON` 链到构建工具节点。
 >
-> **下一步**：① 给 `msal` 加 constraints 修那两条运行时漏洞；
-> ② 合并 6 个 Dependabot PR（Kotlin 组别拆散三件套）；③ CodeQL 告警 triage；④ 上一轮遗留 #222 真机验收。
+> **已完成**：CodeQL 14 条逐条看过代码后**12 条带理由 dismiss**（协议强制 5 / 固定目标与硬编码参数 4 /
+> CodeQL 未识别 `BiometricPrompt` 3）—— 剩下 2 条 `insecure-local-key-gen` 是「从不」档的
+> **设计取舍**，不是误报，等产品拍板（A 记录 / B 加引导 / C 硬件绑定，见 SESSION §11.1）。
+> 顺手修掉一个真 bug：`--no-build-cache` 只关了一半，PR 上仍命中缓存 ⇒ `Analyze (Kotlin)` 红，
+> **main 绿 / PR 红先怀疑环境差异**。PR #3 #4 已合。
 >
-> 详见 [`SESSION-2026-11-03.md`](./SESSION-2026-11-03.md) §十。
+> **下一步**：① #2 → #1 → #5 逐个合（每个一次 CI）；② **#6 不整包合** ——
+> 里面有 AGP 9.5.0 + Gradle wrapper 9.8.2 + gradlew 脚本，要拆成「库版本」和「工具链」两个 PR；
+> ③ 合 msal 8.6.0 能消掉 `httpcore5` 那条 high，但 `opentelemetry-api` 仍需单独 constraint 到 1.67.0；
+> ④ 上一轮遗留 #222 真机验收。
+>
+> 详见 [`SESSION-2026-11-03.md`](./SESSION-2026-11-03.md) §十、§十一。
 
 ## 🕐 上一轮状态（2026-11-01 · #222 新增库自动纳入快速解锁）
 
