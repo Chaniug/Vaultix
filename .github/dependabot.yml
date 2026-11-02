@@ -1,0 +1,74 @@
+version: 2
+
+# 依赖更新策略（2026-11-03 引入）
+#
+# 为什么是这个形状：
+#   - 本仓库只有 Gradle（版本目录 `gradle/libs.versions.toml`，115 条）与 GitHub Actions
+#     两类依赖，没有 npm/pip 清单 ⇒ 只开两个 ecosystem，多开只会报 "no dependency files"。
+#   - **只自动升 minor / patch**：`com.android.*`（AGP）、`org.jetbrains.kotlin*`、Gradle
+#     wrapper 的大版本在本项目是「硬约束」级别的东西（见 `.ai/conventions/8.6-工程质量.md`：
+#     版本只有一个来源，升级要连带动 compileSdk / AGP / KSP 一起走）。让机器人直接开
+#     major PR，等于让一个不看文档的提交者改构建体系 —— 那些 PR 只会堆积然后被关闭。
+#     ⇒ `ignore` 掉全部 major，major 由人按 8.7 的验证链手动做。
+#   - **安全更新不受影响**：Dependabot alerts 是**独立通道**，它直接读依赖图 +
+#     Advisory 数据库，跟本文件里的 `ignore` 无关 ⇒ 真有 CVE 时 Security 页照样亮红，
+#     你会知道要升。（只是「自动开 PR」这一步可能被 major 规则挡住 ——
+#     那种情况就手动升，顺便按 8.7 复核一遍。）
+#   - 分组（groups）是为了压噪音：androidx 一个人有十几个包，不分组会一次开十几个 PR，
+#     而它们本来就该一起升。
+
+updates:
+  # ---- GitHub Actions ----
+  #
+  # 本仓库的 workflow 里有大量手写 shell（release.yml 的 changelog 生成、APK 收集），
+  # action 版本落后不会报错，只会悄悄用旧行为 ⇒ 这条必须开。
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Shanghai"
+    commit-message:
+      prefix: "ci"
+    groups:
+      actions-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    open-pull-requests-limit: 3
+    labels: ["dependencies", "ci"]
+
+  # ---- Gradle（含 gradle/libs.versions.toml）----
+  - package-ecosystem: "gradle"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Shanghai"
+    commit-message:
+      prefix: "chore(deps)"
+    open-pull-requests-limit: 5
+    labels: ["dependencies"]
+    groups:
+      # 同一个 BOM 下的包必须同步升，否则 Compose 版本分裂会直接编译失败
+      compose:
+        patterns: ["*compose*", "androidx.compose*"]
+        update-types: ["minor", "patch"]
+      androidx:
+        patterns: ["androidx.*"]
+        update-types: ["minor", "patch"]
+      kotlin:
+        patterns: ["org.jetbrains.kotlin*", "com.google.devtools.ksp*"]
+        update-types: ["minor", "patch"]
+      # 兜底组：上面没命中的（okhttp / 序列化 / detekt / detekt 插件等）
+      other:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    ignore:
+      # 大版本一律人工处理。理由见文件头。
+      # ⚠️ 升级 AGP / Kotlin / Gradle 三件套时，务必按 `.ai/conventions/8.7-环境.md`
+      #    的顺序：先改 wrapper properties，再改 AGP，再改 compileSdk，
+      #    最后跑 `:app:compileFullDebugKotlin` 与 `detekt`。
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]

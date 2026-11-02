@@ -37,6 +37,13 @@ on:
 
 permissions:
   contents: write
+  # ★ 2026-11-03：构建来源证明（artifact attestation）。
+  #   `id-token: write` 用于向 GitHub 的 OIDC 换取一次性签名凭证，
+  #   `attestations: write` 用于把证明写进仓库。
+  #   两个都是**只在发布作业里需要**的权限 —— 别复制到 ci-debug.yml，
+  #   那边不出正式包，多给一个能签名的身份没有收益。
+  id-token: write
+  attestations: write
 
 concurrency:
   group: android-stable-release
@@ -405,6 +412,24 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Attest APK build provenance
+        # ★ 2026-11-03：给下载的人一个**可离线核验**的依据 ——
+        #   校验和只能证明「文件没被改」，签名指纹只能证明「谁签的」，
+        #   都证明不了「这个包真的是这份源码、在这个流水线里打出来的」。
+        #   attestation 补的正是这一环：`gh attestation verify <apk> --repo Chaniug/Vaultix`
+        #   会用 Sigstore 的透明日志核对「构建者 = 本仓库的 release.yml @ 这个 commit」。
+        #   公开仓库免费。
+        # ⚠️ 必须放在 Publish 之前：证明要覆盖的就是**即将发布的那几个字节**。
+        #    放在发布之后也行，但那时 Release 已经可下载、页面还没有核验条目，
+        #    中间有一段时间是「发出了但验不了」。
+        uses: actions/attest-build-provenance@v4
+        with:
+          # 与 Publish 步骤的 files 保持同一组：只证明真正会发出去的产物。
+          # checksums-sha256.txt 也一起证明 —— 它是校验链的入口，被篡改同样致命。
+          subject-path: |
+            app/build/outputs/apk/**/release/*.apk
+            checksums-sha256.txt
+
       - name: Remove existing release/tag for this version (idempotent re-run)
         shell: bash
         env:
@@ -487,6 +512,16 @@ jobs:
             ```
             ${{ steps.apk_meta.outputs.checksums }}
             ```
+
+            ## 来源证明
+
+            本包由本仓库的发布流水线构建，可用 GitHub CLI 核验「这个二进制确实出自这份源码」：
+
+            ```bash
+            gh attestation verify *.apk --repo ${{ github.repository }}
+            ```
+
+            详见 [`SECURITY.md`](https://github.com/${{ github.repository }}/blob/main/SECURITY.md)。
           files: |
             app/build/outputs/apk/**/release/*.apk
             ${{ github.workspace }}/checksums-sha256.txt

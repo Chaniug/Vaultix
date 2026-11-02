@@ -1,0 +1,41 @@
+name: Dependency Review
+
+# PR 级的依赖审查。与 Dependabot alerts 的分工：
+#   - Dependabot alerts = 「仓库里现在有哪些已知漏洞」，事后、在默认分支上算；
+#   - 本工作流 = 「这个 PR 新引入的依赖有没有洞 / 许可证是否可接受」，**合并前**拦。
+#
+# 目前主要消费者是 Dependabot 开的依赖 PR（本项目日常直接 push main，不走 PR）。
+# 公开仓库免费，无需 GHAS 席位。
+#
+# 前置条件：仓库的 Dependency graph 必须是开启状态（公开仓库默认开）。
+
+on:
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+  pull-requests: write   # 在 PR 上贴摘要评论需要
+
+jobs:
+  dependency-review:
+    name: Review dependency changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Dependency Review
+        uses: actions/dependency-review-action@v5
+        with:
+          # 只拦 high / critical。medium 及以下只出现在 job summary 里，不红。
+          # 理由：Gradle 依赖树里 medium 常年有几条，设成 fail-on 会把门禁变成噪音，
+          # 「天天红的门禁」等于没有门禁。
+          fail-on-severity: high
+          # 只在失败时评论，成功不刷屏
+          comment-summary-in-pr: on-failure
+          # 许可证：本项目是 GPL-3.0，暂不设白名单。
+          # 真要设时注意 GPL-3.0 与 Apache-2.0 / MIT 双向兼容，但 AGPL / SSPL 不行。

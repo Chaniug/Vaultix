@@ -1,0 +1,142 @@
+name: CodeQL
+
+# 静态安全分析（SAST）。公开仓库免费，不需要 GitHub Advanced Security 付费席位。
+#
+# 为什么是「手写 advanced setup」而不是 Settings 里的 Default setup：
+#   - 本项目是 Kotlin + Android。CodeQL 对 Kotlin **不支持 `build-mode: none`**
+#     （官方文档：Java 支持 none/autobuild/manual，Kotlin 只有 autobuild/manual），
+#     而 Default setup 一旦检测到 Kotlin 就会切到 autobuild。
+#   - autobuild 在 Android 项目上会去跑 `./gradlew build`，既可能因为缺 Android SDK
+#     平台包失败，又会顺带跑 lint / test ⇒ 分析链会因为**无关原因**变红，
+#     「红了」和「代码有问题」这两件事就分不开了。
+#   - 所以这里手动 `:app:assembleFullDebug`：只为让 java-kotlin 提取器挂上编译过程，
+#     拿到完整的类型/数据流模型。产物没人用，纯为提取。
+#
+# 触发策略（本项目没有 PR 流程，日常直接 push main，见 8.6.0）：
+#   - push main：每次改动都扫，安全类项目不该等一周才知道引入了一个洞；
+#     公开仓库 Actions 分钟数不计费，代价只是 10 分钟排队。
+#   - pull_request：给 Dependabot 开的 PR 也扫一遍（那些 PR 会改依赖版本）。
+#   - schedule：每周一兜底，覆盖「没人 push 但 CodeQL 本体升级了」的情况。
+#   - workflow_dispatch：随时手动。
+#
+# ⚠️ schedule 只在**默认分支**上生效，其它分支的 cron 会被静默忽略。
+#    本仓库默认分支是 main，与实际开发主线一致，无需额外处理。
+
+on:
+  push:
+    branches: [ main ]
+    # 纯文档提交不扫：本仓库有大量 `.ai/**` 的接力文档提交，
+    # 每次都拖 10 分钟编译去分析「没变的代码」纯属浪费队列。
+    # 注意语义是「**所有**改动文件都被忽略才跳过」⇒ 代码 + 文档混提仍然会扫。
+    paths-ignore:
+      - '**.md'
+      - 'Docs/**'
+      - '.ai/**'
+  pull_request:
+    branches: [ main ]
+    paths-ignore:
+      - '**.md'
+      - 'Docs/**'
+      - '.ai/**'
+  schedule:
+    # 每周一 03:27 UTC（北京时间 11:27），与参考项目的时段错开
+    - cron: '27 3 * * 1'
+  workflow_dispatch:
+
+# 最小权限：分析只需要写 security-events（上传 SARIF），其余只读。
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---- Kotlin / Java 源码 ----
+  analyze-kotlin:
+    name: Analyze (Kotlin)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      # 与 ci-debug.yml 保持一致：缓存 + 并行，缩短重复构建
+      GRADLE_OPTS: -Dorg.gradle.caching=true -Dorg.gradle.parallel=true
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          # 分析链不写缓存（只读），避免与 ci-debug 的缓存条目互相覆盖
+          cache-read-only: true
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      # compileSdk=37 的平台准备，与 ci-debug / release 共用同一份脚本。
+      # 放在 Initialize 之前：构建挂掉 = 提取不到模型 = 扫描挂掉，
+      # 而这个失败原因（缺平台包）和「代码有漏洞」必须能一眼分开。
+      - name: Install Android SDK platform 37
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/ensure-android-sdk.sh"
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: java-kotlin
+          build-mode: manual
+          # security-extended：在默认查询集之外加上更多安全查询。
+          # 密码管理器这种威胁模型下值得多这点误报 —— 弱加密、硬编码密钥、
+          # 不安全的随机数、隐式 Intent、外部存储写入等都在扩展集里。
+          queries: security-extended
+
+      # 只为提取，产物丢弃。不跑 lint / test：
+      # 那些步骤失败会让「安全扫描」看起来是红的，而它其实只是想编译一下。
+      - name: Build for CodeQL extraction
+        run: ./gradlew :app:assembleFullDebug --no-daemon --stacktrace
+
+      - name: Stop Gradle Daemon
+        if: always()
+        run: ./gradlew --stop || true
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:java-kotlin"
+
+  # ---- workflow 文件本身 ----
+  #
+  # 本仓库的 workflow 里有大量手写 shell（heredoc、find、awk、base64 解码密钥），
+  # 这一类代码没有任何编译期检查 —— 2026-11-01 就出过「两条 echo 写成一行、
+  # `bash -n` 判合法、页面照常生成只是少一行」的事故（见 SESSION-2026-11-02）。
+  # CodeQL 的 actions 查询集专门覆盖：脚本注入（未信任的 ${{ }} 拼进 run:）、
+  # 过宽权限、未固定版本的 action 引用。
+  analyze-actions:
+    name: Analyze (Actions)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: actions
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:actions"
