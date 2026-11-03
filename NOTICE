@@ -1,0 +1,40 @@
+Vaultix — 第三方资源声明
+==========================
+
+本仓库的 Android 客户端在 `app/src/main/res/drawable/brand_*.xml` 中内嵌了一批
+**单色品牌图形**，用于在**离线**状态下显示登录站点的图标。它们来自以下项目：
+
+1. simple-icons
+   - 版本：16.36.0（生成时固定该版本，见 `tools/brand-icons/generate.py`）
+   - 许可：CC0 1.0 Universal（公共领域贡献）
+     https://creativecommons.org/publicdomain/zero/1.0/
+   - 主页：https://simpleicons.org
+   - 修改：仅把 SVG 的 `<path d>` 数据转写为 Android VectorDrawable
+     （24×24 视口、单一填充色）；路径数据本身未改动。
+
+2. Font Awesome Free 6（brands）
+   - 许可：CC BY 4.0
+     https://creativecommons.org/licenses/by/4.0/
+   - 主页：https://fontawesome.com
+   - 修改：同上；并按 24×24 视口做等比缩放与居中。
+   - 用途：补齐 simple-icons 因商标原因不再收录的品牌
+     （Microsoft / Amazon / LinkedIn / Twitter / Slack / Java / Go / Weibo / Yandex 等）。
+
+商标声明
+--------
+
+上述图形所涉及的品牌名称、标志均为其各自所有者的商标或注册商标。
+Vaultix 仅在用户**自己保存的条目**上显示对应标志，用于帮助用户识别登录站点
+（性质与浏览器显示站点 favicon 相同），不代表任何隶属、赞助或背书关系。
+
+如权利人认为某项使用不当，请通过仓库 issue 联系，我们会移除对应图形。
+
+生成与维护
+----------
+
+图标清单：`tools/brand-icons/slugs.txt`
+品牌色表：`tools/brand-icons/colors.json`
+生成脚本：`tools/brand-icons/generate.py`
+
+仓库只入库**精选子集**（约 229 个常用站点，源码约 350 KB），而不是全量图标集 ——
+目的是在"离线可见常用图标"与"不显著增大 APK"之间取平衡。

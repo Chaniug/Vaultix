@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 品牌图标：见 tools/brand-icons/generate.py 与 NOTICE。不要手改。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <group android:translateX="1.5000" android:translateY="0.0000"
+        android:scaleX="0.046875" android:scaleY="0.046875">
+        <path android:fillColor="#FFFFFFFF" android:pathData="m0 93.7l183.6-25.3v177.4H0zm0 324.6l183.6 25.3V268.4H0zm203.8 28L448 480V268.4H203.8zm0-380.6v180.1H448V32z" />
+    </group>
+</vector>

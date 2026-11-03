@@ -40,11 +40,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import coil.compose.AsyncImagePainter
@@ -93,12 +95,25 @@ private const val ICON_RETRY_DELAY_MS = 30_000L
 private const val ICON_MAX_RETRIES = 1
 
 /**
- * 条目左侧图标：**站点图标**，取不到就回退首字母头像。
+ * 条目左侧图标：**离线品牌图标 → 站点图标 → 首字母头像**，三级兜底。
+ *
+ * ## 三级优先级（2026-11-03 加入第一级）
+ *
+ * | 级 | 来源 | 是否联网 | 命中条件 |
+ * |---|---|---|---|
+ * | ① | 包内品牌图标（[BrandIconCatalog]） | **否** | 域名能对上表里的品牌（[brandSlugForHost]） |
+ * | ② | 服务器图标 `<base>/icons/<host>/icon.png` | 是 | 仅在 ① 未命中、且库有可用 origin 时 |
+ * | ③ | 首字母头像 | 否 | 其余全部情况 |
+ *
+ * 用户明确要求「本地优先，本地没有的才用 Bitwarden 服务器上的图标」⇒ ① 必须在 ② 之前，
+ * **而不是**"先联网取，失败再本地" —— 后者在离线/弱网下每次都白等一次超时。
+ * 顺带解决 KDBX：它的 origin 是 `content://`，②永远是 null，加 ① 之前
+ * **所有 KDBX 条目都只会显示首字母**。
  *
  * ## 为什么必须有回退（而不是「加载中 / 加载失败」占位）
  * 站点图标来自网络（`<服务器>/icons/<域名>/icon.png`），下面每一种情况都会真的发生：
  * 自建 Vaultwarden 未开启图标代理、局域网地址、站点未被图标服务收录、
- * 条目根本没填网址、KDBX 库（origin 是 `content://`）。
+ * 条目根本没填网址、域名不在品牌包内。
  * 这些都不该让卡片显示一个破图或一片空白 —— 首字母头像始终是**可读的兜底信息**。
  *
  * ## 缓存（2026-11-01 重做）
@@ -128,7 +143,7 @@ private const val ICON_MAX_RETRIES = 1
  *
  * @param item 条目（域名取 [VaultItem.uris]，标题用于首字母兜底）。
  * @param serverOrigin 库的服务器地址（Bitwarden 库即其 origin；KDBX 的 `content://` 会
- *   被 [SiteIconUrl] 判为不可用 → 直接走首字母）。
+ *   被 [SiteIconUrl] 判为不可用 ⇒ 降到"离线品牌图标 / 首字母"这两级）。
  */
 @Composable
 fun SiteIcon(
@@ -162,6 +177,10 @@ fun SiteIconByHost(
     val iconUrl = remember(domain, serverOrigin) {
         SiteIconUrl.forHost(serverOrigin, domain)
     }
+    // ★ 离线品牌图标包**优先**（2026-11-03，用户明确要求：本地有就用本地，
+    //   本地没有的才去问服务器）。它在**组合期同步**返回，不建请求、不发协程，
+    //   所以命中时连"首字母闪一下"都不会发生。
+    val brandIcon = remember(domain) { brandSlugForHost(domain)?.let(BrandIconCatalog::of) }
     // dp → px 必须**按当前密度**换算（Coil 2.7 的 `size(Int)` 只收像素，没有 Dp 重载）。
     //
     // ⚠️ 旧实现死写 96px，等于假设密度恒为 2x：40dp 在 3x 屏需要 120px、56dp 的详情页
@@ -180,6 +199,10 @@ fun SiteIconByHost(
     //    （不要被 `::CachedSiteIcon` 那行引用混淆：判断看的是**调用点**，不是引用点）。
     //    改成"表达式给值 + 单一出口"，结构上就不存在这个争议。
     val content: @Composable () -> Unit = when {
+        // ★ 第一优先：离线品牌图标（有就有，零网络开销）。
+        brandIcon != null -> {
+            { BrandIconAvatar(icon = brandIcon, size = size, modifier = modifier) }
+        }
         iconUrl == null -> {
             { FallbackAvatar(fallbackText = fallbackText, size = size, modifier = modifier) }
         }
@@ -361,6 +384,94 @@ private fun FallbackAvatar(fallbackText: String, size: Dp, modifier: Modifier) {
         FallbackInitial(text = fallbackText)
     }
 }
+
+/**
+ * 离线品牌图标：**品牌色圆底 + 白色图形**（2026-11-03）。
+ *
+ * ## 为什么是"色底 + 白图形"而不是直接用彩色 logo
+ *
+ * 包里存的是**单色路径**（simple-icons / Font Awesome 都是这个形态）。单色路径
+ * 有两个好处：同一个文件既能印在白底上，也能染成白色放在品牌色底上；体积也远小于
+ * 彩色多图层 SVG。用户要的是"离线能认出来"，而**底色就是最强的识别信号**
+ * （Gmail 的红、Spotify 的绿、GitHub 的黑），图形只负责区分同色系。
+ *
+ * ## 为什么图形要按底色亮度选黑/白
+ *
+ * 品牌色跨度极大：`yandex` 是亮黄（#FC3F1D 偏红但 `skype` 是 #00AFF0 很亮），
+ * 一律用白图形会在浅色底上**糊成一团**。所以按感知亮度切换前景色 ——
+ * 这与 [AVATAR_LIGHTNESS] 那段"白字要求对比度"是同一条纪律。
+ *
+ * @param icon 来自 [BrandIconCatalog]（调用方已确认存在）。
+ */
+@Composable
+private fun BrandIconAvatar(icon: BrandIcon, size: Dp, modifier: Modifier) {
+    val background = remember(icon) { Color(icon.color) }
+    val foreground = remember(icon) {
+        if (isLightBrandColor(icon.color)) BRAND_DARK_GLYPH_COLOR else Color.White
+    }
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = modifier
+            .size(size)
+            .clip(CircleShape)
+            .background(background),
+    ) {
+        Image(
+            painter = painterResource(icon.drawableRes),
+            contentDescription = null,
+            // 图形占圆的 58%：再大就贴边（品牌图形本身带留白，视觉上已接近 3/4）。
+            colorFilter = ColorFilter.tint(foreground),
+            modifier = Modifier.fillMaxSize(BRAND_GLYPH_SCALE),
+        )
+    }
+}
+
+/** 品牌图形在圆底上的占比（见 [BrandIconAvatar]）。 */
+private const val BRAND_GLYPH_SCALE = 0.58f
+
+/**
+ * 浅色品牌底上用的深色图形色。
+ *
+ * 不用纯黑：`#1F1F1F` 在亮黄/亮青底上柔和一点，且与 Material 的 `onSurface` 观感一致；
+ * 纯黑会显得"贴纸感"很重。
+ */
+private val BRAND_DARK_GLYPH_COLOR = Color(0xFF1F1F1F)
+
+/**
+ * 这个品牌色算不算"浅色"（决定图形用深色还是白色）。
+ *
+ * 用 sRGB 的**感知亮度近似**（0.299R + 0.587G + 0.114B）而不是 WCAG 相对亮度：
+ * 这里只做一次二选一，不需要精确比值；而后者要线性化每通道，代码更长、收益为零。
+ *
+ * @param argb `0xAARRGGBB`（[BrandIcon.color]）。
+ */
+internal fun isLightBrandColor(argb: Long): Boolean {
+    val r = ((argb shr BRAND_RED_SHIFT) and BRAND_COLOR_MASK) / BRAND_CHANNEL_MAX
+    val g = ((argb shr BRAND_GREEN_SHIFT) and BRAND_COLOR_MASK) / BRAND_CHANNEL_MAX
+    val b = (argb and BRAND_COLOR_MASK) / BRAND_CHANNEL_MAX
+    return LUMINANCE_RED * r + LUMINANCE_GREEN * g + LUMINANCE_BLUE * b > BRAND_LIGHT_THRESHOLD
+}
+
+/** ARGB 拆通道用的位移与掩码（[isLightBrandColor] 专用，命名只为避开 MagicNumber 门禁）。 */
+private const val BRAND_RED_SHIFT = 16
+private const val BRAND_GREEN_SHIFT = 8
+private const val BRAND_COLOR_MASK = 0xFFL
+private const val BRAND_CHANNEL_MAX = 255f
+
+/** sRGB 感知亮度的三个权重（ITU-R BT.601，够做"黑字还是白字"这种二选一）。 */
+private const val LUMINANCE_RED = 0.299f
+private const val LUMINANCE_GREEN = 0.587f
+private const val LUMINANCE_BLUE = 0.114f
+
+/**
+ * 亮度阈值：0.62。
+ *
+ * 实测：`#FF9900`(Amazon, 0.66) 用深色图形清楚，`#00AFF0`(Skype, 0.66) 也是；
+ * 而 `#4A154B`(Slack, 0.17) 必须用白。0.62 落在两者之间的空档里，
+ * 且偏向"多用白"这一侧 —— 白图形在中等亮度底上只是对比弱一点，深色图形在深底上
+ * 则完全看不见。**拿不准时用白**是更安全的默认。
+ */
+private const val BRAND_LIGHT_THRESHOLD = 0.62f
 
 /** 首字母字形（彩色底衬之上）。底衬已换成饱和色，字必须固定用白。 */
 @Composable

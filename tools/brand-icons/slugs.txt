@@ -1,0 +1,25 @@
+google gmail googledrive googlecloud googlegemini googlechrome googleplay googlemaps googlecalendar googledocs googlesheets googleanalytics
+microsoft microsoftazure microsoftedge microsoftoffice microsoftteams microsoftoutlook microsoftword microsoftexcel microsoftpowerpoint microsoftsharepoint windows windows11 xbox onedrive skype bing
+apple icloud applemusic appletv appstore applepay macos safari
+amazon amazonaws amazonprime audible alexa
+meta facebook instagram whatsapp messenger threads
+x twitter linkedin reddit pinterest snapchat tiktok telegram discord slack signal viber line kakaotalk wechat tencentqq weibo zhihu douyin bilibili youku iqiyi
+netflix youtube spotify soundcloud twitch disneyplus hulu applemusic deezer tidal vimeo dailymotion
+github gitlab bitbucket gitea sourceforge docker kubernetes podman terraform ansible nginx apache apachetomcat caddy
+postgresql mysql mariadb redis mongodb sqlite elasticsearch rabbitmq kafka grafana prometheus
+python nodedotjs typescript javascript react vue angular svelte kotlin java golang rust php ruby swift flutter dart android linux ubuntu debian archlinux centos fedora redhat opensuse
+visualstudiocode jetbrains intellijidea pycharm webstorm androidstudio eclipse vim neovim sublime
+cloudflare vercel netlify heroku digitalocean linode vultr openstack vmware virtualbox proxmox synology truenas openwrt ubiquiti raspberrypi arduino
+notion evernote obsidian trello asana clickup todoist mondaydotcom airtable dropbox box mega nextcloud owncloud files
+paypal stripe visa mastercard americanexpress alipay wechatpay binance coinbase kraken metamask okx bybit uniswap
+shopify woocommerce ebay etsy aliexpress alibaba alibabacloud taobao tmall jd pinduoduo shein temu walmart target ikea nike adidas uniqlo
+airbnb bookingdotcom expedia tripadvisor skyscanner uber lyft didi
+steam epicgames ubisoft ea riotgames battledotnet gogdotcom playstation nintendo
+openai anthropic huggingface perplexity midjourney stabilityai ollama
+wikipedia medium substack quora patreon mastodon tumblr wordpress blogger wix squarespace
+xiaomi huawei oppo vivo samsung sony lenovo asus acer dell hp intel amd nvidia qualcomm mediatek
+tencent alibaba baidu netease jd
+protonmail zoho yahoo yandex maildotru tutanota
+zoom webex gotomeeting
+adobe figma canva sketch autodesk blender
+1password bitwarden lastpass dashlane keeper
