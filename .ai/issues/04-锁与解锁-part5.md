@@ -388,6 +388,22 @@ detekt `TooManyFunctions`（≤40）上限，加不了私有函数；而它本�
 > **判据**：「解锁慢」先数**KDF 跑了几次**，而不是先去调参数。这个项目里 KDF 出现在三个
 > 地方（主解锁 / 房间信封备料 / 每次改动后的保存），任何一处多做一次，用户感知就是"翻倍"。
 
-- **验证**：`:data:repository` 276 例（`已经有房间信封_直接短路_不再烧一次KDF` 覆盖），0 失败。
-- **待做（需要真机日志才能定位，不猜）**：`adb logcat -s VaultixKdbxSync VaultixUnlock` 记录
-  ① 点下到开库的耗时；② `Kdbx.unlock` 与远端下载各占多少；③ 是否每次都重新下载整库。
+### 第二批：网络往返（2026-11-04 续）
+
+KDF 次数压下去之后，剩下的慢点只剩**网络**。静态排查锁定两处白付的开销：
+
+| 位置 | 问题 | 修法 |
+|---|---|---|
+| `OneDriveGraphClient.stat` | 请求 `/me/drive/root:/path` **不挂 `$select`** ⇒ Graph 返回整个 driveItem（几十个 facet、权限、缩略图…），服务端现拼。而 `stat()` 只读 5 个字段，且 2026-10-05 实测它就是瓶颈（`read=2837ms` 而缓存命中、`open` 只用 334ms） | 新增 `buildStatRelativeUrl`，`%24select=cTag,eTag,size,lastModifiedDateTime,folder` |
+| `KdbxCloudSyncCoordinator.withRemoteCache` | **每次解析都新建**装饰器 ⇒ 每个实例各一个 `freshness` StateFlow。UI 订的是"解析那一刻"那个实例的流，别处（上传成功 / 后台校验）更新后**永不再发值** ⇒ 角标一直不变（#233 的 `FreshnessHolder` 只共享了"值"，没共享"流"） | 按 origin 复用装饰器实例（与 `safSources` 同款做法） |
+
+⚠️ **`$select` 的 `$` 必须写成 `%24`**：OkHttp 的 `HttpUrl` 会把 query 参数名里的裸 `$`
+**静默丢掉**，实际发出的是 `?cTag,eTag,…`（无参数名的怪查询，Graph 400）。而
+`url.contains("select=")` 这种断言恰好还能匹配到它 —— 是典型的"永远绿的假测试"。
+⇒ 用例断言的是 `%24select=`，含变异验证记录。
+
+- **验证**：`:data:repository` 277 例（新增 `同一个远端库两次解析来源必须拿到同一个实例`）、
+  `:app` OneDrive 48 例（新增 `stat 必须只请求版本令牌那几个字段` / `下载与上传 URL 不得带 select`），0 失败。
+- **仍待真机日志（不猜）**：`adb logcat -s VaultixKdbxCache VaultixKdbx VaultixUnlock` 记录
+  ① 点下到开库的耗时；② `read=` 与 `open(KDF+解析)=` 各占多少；③ 是否每次都重新下载整库
+  （日志里"无缓存（首次解锁 / 已被清理）⇒ 下载"这行出现几次）。

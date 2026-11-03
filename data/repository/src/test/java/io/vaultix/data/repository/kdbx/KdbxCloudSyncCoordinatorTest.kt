@@ -219,6 +219,61 @@ class KdbxCloudSyncCoordinatorTest {
         assertEquals(NEW_TOKEN, cache.load(EXTRA_ORIGIN)?.versionToken)
     }
 
+    /**
+     * ★ 远端来源**按 origin 复用实例**（#246）。
+     *
+     * ## 这条钉的是一类"值共享了、流却没共享"的缺陷
+     *
+     * 装饰器每次新建时，`freshness` 是**每个实例各一个** StateFlow。
+     * UI 订阅的是"解析那一刻"那个实例上的流 —— 之后上传成功 / 后台校验把结论
+     * 写进别的实例，UI 那个流**再也不会发值**。用户看到的就是
+     * 「同步成功了，角标一直不变」。
+     *
+     * ⚠️ #233 的 `FreshnessHolder` 只解决了"值"（容器跨实例共享），
+     * 容器**本身**仍然是每个实例 `state = asStateFlow()` 各自包一层 ——
+     * 所以同一个 `FreshnessHolder.value` 变了，只有**那个**实例的流会发。
+     * 实测确认：`MutableStateFlow.asStateFlow()` 每次返回新的包装对象，两者不共享订阅。
+     *
+     * ⇒ 判据只能是"同一个 origin 拿到的是不是同一个实例"。
+     */
+    @Test
+    fun `同一个远端库两次解析来源必须拿到同一个实例`() = runTest {
+        val dao = mockk<VaultDao>(relaxed = true)
+        coEvery { dao.get(any()) } returns VaultEntity(
+            id = VAULT_ID,
+            kind = "KDBX",
+            displayName = "库",
+            origin = EXTRA_ORIGIN,
+            createdAt = 0L,
+        )
+        val coordinator = KdbxCloudSyncCoordinator(
+            vaultDao = dao,
+            orchestrator = KdbxSyncOrchestrator(vaultDao = dao, fileSourceFactory = { null }),
+            safFactory = { null },
+            sessionReplacer = mockk(relaxed = true),
+            okHttp = { null },
+            webDavCredentials = mockk(relaxed = true),
+            fileCache = RecordingCache(),
+            appScope = this,
+        )
+        coordinator.registerFactory { origin ->
+            mockk<KdbxFileSource>(relaxed = true).takeIf { origin == EXTRA_ORIGIN }
+        }
+
+        val first = coordinator.fileSourceFor(EXTRA_ORIGIN)
+        val second = coordinator.fileSourceFor(EXTRA_ORIGIN)
+
+        assertTrue("装置错了：没解析出远端来源，这条用例什么都没测", first != null)
+        assertTrue(
+            "同一个 origin 必须复用同一个装饰器实例 —— 否则 UI 订到的那条 freshness 流" +
+                "在别处更新后永远不再发值（角标不刷新）",
+            first === second,
+        )
+        // ⚠️ 不同 origin 绝不能串：这是"按 key 复用"而不是"全局单例"。
+        val other = coordinator.fileSourceFor("onedrive:acc-2:Vaultix%2Fother.kdbx")
+        assertTrue("不同 origin 不得共享同一个装饰器", other !== first || other == null)
+    }
+
     /** 只记录最后一次 `save` 的缓存替身（断言"收敛是否真的落到缓存上"）。 */
     private class RecordingCache : KdbxFileCache {
         private val map = mutableMapOf<String, CachedKdbxFile>()

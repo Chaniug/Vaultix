@@ -306,6 +306,68 @@ class OneDriveGraphClientWriteTest {
         }
     }
 
+    // ───────────────────────── stat 的 $select（#246）─────────────────────────
+
+    /**
+     * ★ 为什么这条要单测：`$select` 漏字段**不会报错**，只会让功能悄悄降级。
+     *
+     * | 漏掉的字段 | 后果 |
+     * |---|---|
+     * | `eTag` | cTag 缺失的账号令牌恒为 null ⇒ **每次解锁都重下整库** |
+     * | `folder` | 「这路径其实是文件夹」那道检查永远不触发，用户看到的是下载失败 |
+     * | `size` / `lastModifiedDateTime` | 写后读回的预判拿不到依据，退回无条件整份重下 |
+     *
+     * 而且它同时钉住一件容易踩的事：`$select` 只该挂在 **stat** 上 ——
+     * `:/content` 与 `:/createUploadSession` 带它是无效参数（Graph 400）。
+     */
+    @Test
+    fun `stat 必须只请求版本令牌那几个字段`() = runBlocking {
+        val server = FakeGraphServer()
+        val graph = clientWith(server)
+
+        runCatching { graph.stat(TOKEN, DB_PATH) }
+
+        val url = server.last().url.toString()
+        // ⚠️ 断言的是 **`%24select=`**（$ 必须被编码），不是 `select=`：OkHttp 的
+        //    HttpUrl 会把 query 参数名里的裸 `$` **静默丢掉**，请求于是变成
+        //    `?cTag,eTag,…`（没有参数名的怪查询，Graph 400），而 `select=` 这几个字
+        //    恰好还能在这串里匹配到 —— 那会是一条永远绿的假测试（真踩过一次）。
+        assertTrue("stat 必须带 %24select=，否则会拉回整个 driveItem：$url", url.contains("%24select="))
+        // 逐个断言而不是比整串：新增字段是允许的，**丢掉**其中一个才不行。
+        listOf("cTag", "eTag", "size", "lastModifiedDateTime", "folder").forEach { field ->
+            assertTrue("stat 的 \$select 漏了 $field，实际 URL：$url", url.contains(field))
+        }
+        assertTrue("stat 不得下载内容：$url", !url.contains("/content"))
+    }
+
+    @Test
+    fun `下载与上传 URL 不得带 select`() = runBlocking {
+        val server = FakeGraphServer()
+        val graph = clientWith(server)
+
+        // 下载
+        runCatching { graph.download(TOKEN, DB_PATH) }
+        assertTrue(
+            "下载 URL 带 \$select 会被 Graph 拒绝：${server.last().url}",
+            !server.last().url.toString().contains("select="),
+        )
+        // 上传（简单上传走 :/content）
+        runCatching {
+            graph.upload(
+                accessToken = TOKEN,
+                path = DB_PATH,
+                bytes = SMALL_BYTES,
+                expectedETag = null,
+                forceReplace = false,
+                failIfExists = false,
+            )
+        }
+        assertTrue(
+            "上传 URL 带 \$select 会被 Graph 拒绝：${server.last().url}",
+            !server.last().url.toString().contains("select="),
+        )
+    }
+
     // ───────────────────────── 小工具 ─────────────────────────
 
     private fun Request.bodyText(): String {

@@ -227,7 +227,7 @@ open class OneDriveGraphClient(
      * @param path 相对根目录的路径（如 `Vaultix/vault.kdbx`）。
      */
     suspend fun stat(accessToken: String, path: String): OneDriveEntry = withContext(Dispatchers.IO) {
-        val payload = executeJsonRequest(buildItemRelativeUrl(path), accessToken)
+        val payload = executeJsonRequest(buildStatRelativeUrl(path), accessToken)
         json.decodeFromString<OneDriveDriveItemDto>(payload).toEntry().also { entry ->
             if (entry.isDirectory) throw IOException("OneDrive 上该路径是一个文件夹，不是文件：$path")
         }
@@ -942,6 +942,38 @@ open class OneDriveGraphClient(
     private fun buildItemRelativeUrl(path: String): String =
         "/me/drive/root:/${encodePath(path.trim().trim('/'))}"
 
+    /**
+     * [stat] 专用的相对 URL：在路径后挂 `?$select=`，**只要**版本令牌与大小那几列。
+     *
+     * ## 为什么要挂（#246，2026-11-04 真机「解锁很慢很慢」）
+     *
+     * Graph 的 `/me/drive/root:/path` 默认返回**整个 driveItem**（几十个字段：各种 facet、
+     * 权限继承、缩略图、分享信息……）。服务端要现拼这些字段，这是实打实的往返时间。
+     * 而 [stat] 的**唯一**用途是给「缓存还是不是最新」一个判据 —— 它只读
+     * `cTag` / `eTag` / `size` / `lastModifiedDateTime`。
+     *
+     * 2026-10-05 的实测已经把 `stat()` 钉成瓶颈（`read=2837ms` 而缓存命中、
+     * `open` 只用 334ms ⇒ 95% 时间在判定前的这一次往返上）。当时只是把它挪到后台
+     * （见 `CachedKdbxFileSource.read`），**往返本身一点没变短** —— 首次无缓存时
+     * 它仍在解锁的同步路径上。`$select` 是唯一能让这笔往返真的变便宜的办法。
+     *
+     * ## ⚠️ 为什么不能只选 cTag / eTag
+     *
+     * `versionTokenOf` 的实现是 **cTag 优先、eTag 兜底**。只请求 cTag 的话，
+     * 在 cTag 缺失的那些账号上令牌会变成 null ⇒ 上层按「远端版本未知」处理 ⇒
+     * **每次解锁都重新下载整库**（比慢更糟：费流量、且更慢）。
+     * 同样必须带 `size` / `lastModifiedDateTime`：`stat()` 的返回值里这两项
+     * 是 `KdbxFileStat` 的公开字段，别的调用方（写后读回的预判）在读它们。
+     *
+     * ## ⚠️ 为什么只给 stat 用，不给读字节 / 写用
+     *
+     * `:/content`、`:/createUploadSession` 都从 [buildItemRelativeUrl] 拼出来，
+     * 给那些 URL 挂 `$select` 是**无效参数**（Graph 会 400）。所以另开一个函数，
+     * 而不是改 [buildItemRelativeUrl] 本身。
+     */
+    private fun buildStatRelativeUrl(path: String): String =
+        "${buildItemRelativeUrl(path)}?%24select=${SELECT_FIELDS.joinToString(",")}"
+
     private fun buildContentRelativeUrl(path: String): String =
         "${buildItemRelativeUrl(path)}:/content"
 
@@ -1099,6 +1131,23 @@ open class OneDriveGraphClient(
 
         /** Graph 进度响应里的字段名（只在 [nextExpectedRanges] 读原始 JSON 时用）。 */
         const val NEXT_EXPECTED_RANGES = "nextExpectedRanges"
+
+        /**
+         * [stat] 的 `$select` 字段清单（#246）。
+         *
+         * ⚠️ **必须**同时含 `cTag` 与 `eTag` —— 令牌是 cTag 优先、eTag 兜底，
+         *   漏掉兜底那个会让一部分账号的令牌变 null ⇒ 每次解锁都重下整库。
+         * ⚠️ `folder` 也要带：`stat` 用它判断"这路径其实是文件夹"并如实报错。
+         *   不带的话该字段恒为 null，那道检查会静默失效（用户看到的会是
+         *   "下载失败"而不是"你选的是文件夹"）。
+         *
+         * ⚠️ 拼 URL 时参数名要写成 `%24select`，**不能**直接写 `$select`：
+         *   OkHttp 的 `HttpUrl` 只认"合法 query 参数名"，`$` 会被它**静默丢掉**，
+         *   实际发出的请求变成 `?cTag,eTag,…` —— 那是一个没有参数名的怪查询，
+         *   Graph 直接 400。这是真机上一次"只看日志完全看不出问题"的坑，
+         *   单测里断言 `url.contains("select=")` 也拦不住它（`%24select=` 恰好包含）。
+         */
+        private val SELECT_FIELDS = listOf("cTag", "eTag", "size", "lastModifiedDateTime", "folder")
 
         /**
          * 用到的 HTTP 状态码。

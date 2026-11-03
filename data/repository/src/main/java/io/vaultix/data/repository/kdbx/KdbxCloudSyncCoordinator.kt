@@ -266,14 +266,53 @@ class KdbxCloudSyncCoordinator(
      * 只此一处套：`fileSourceFor` 是「origin ⇒ 来源」的唯一判据表，解锁 / 校验 /
      * keyfile / 同步四条路径都从这里取来源 ⇒ 挂在这里即全覆盖（`KdbxFileSourceResolver`
      * 的 KDoc：「判据只能有一份」）。
+     *
+     * ## ★ 为什么装饰器现在**按 origin 复用**（#246，2026-11-04）
+     *
+     * ⚠️ 以前是"每次现装一个"。后果不在解锁路径（那两个字段 `read()` 每次都从缓存
+     * 文件重新读），而在**订阅侧**：本类每个实例各有一个 `freshness` StateFlow，
+     * 而 UI 拿到的是**解析那一刻**那个实例上的流 —— 上传成功 / 后台校验把结论写进
+     * **别的**实例后，UI 那个流**永远不会再发一个值**。用户看到的就是
+     * 「同步成功了，但角标一直不改」。
+     *
+     * `FreshnessHolder`（#233）解决了"值"的共享，但这个流本身仍是每个实例一份。
+     * ⇒ 复用实例是唯一不需要改 UI 侧签名（`fileSourceFor` 的返回类型是
+     * `KdbxFileSource`，上面没有 `freshness`）的修法。
+     *
+     * ⚠️ 复用是**安全**的：装饰器自身除 `recheckStarted` 外无状态，而那个
+     *   `AtomicBoolean` 的语义恰好是"同一个库同时只跑一轮后台校验" —— 复用它
+     *   与该语义完全一致（以前是"每个实例各许一轮"，反而更松）。
      */
     private fun withRemoteCache(origin: String, source: KdbxFileSource): KdbxFileSource =
+        remoteSources.getOrPut(origin) {
+            newRemoteCache(
+                origin = origin,
+                source = source,
+                holder = freshnessHolders.getOrPut(origin) { FreshnessHolder() },
+            )
+        }
+
+    /** 远端来源实例表（见 [withRemoteCache] 的 KDoc）。键是 origin ⇒ 数量 = 远端库数量。 */
+    private val remoteSources = java.util.concurrent.ConcurrentHashMap<String, KdbxFileSource>()
+
+    /**
+     * 真正构造装饰器的地方（从 [withRemoteCache] 拆出来，只为让那个方法的
+     * `getOrPut` 读起来不嵌套三层）。
+     *
+     * ⚠️ `delegate` 仍是**每次调用都新造**的（`WebDavKdbxFileSource` / OneDrive 来源
+     * 都是无状态、按参数构造的薄适配层）；被复用并持有的只有装饰器本身。
+     */
+    private fun newRemoteCache(
+        origin: String,
+        source: KdbxFileSource,
+        holder: FreshnessHolder,
+    ): KdbxFileSource =
         CachedKdbxFileSource(
             delegate = source,
             cache = fileCache,
             cacheKey = origin,
             // ★ 同一 origin 的所有装饰器实例共享同一个新鲜度（#233）。
-            freshHolder = freshnessHolders.getOrPut(origin) { FreshnessHolder() },
+            freshHolder = holder,
             scope = appScope,
             // ⚠️ `origin` 就是 vaultId：KDBX 库的 `VaultEntity.id` 与 `origin` 同值
             //   （见 `KdbxCreateRepositoryImpl` 建库时 `id = resolvedOrigin`），
