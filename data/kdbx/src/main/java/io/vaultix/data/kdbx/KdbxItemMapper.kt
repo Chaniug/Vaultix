@@ -61,6 +61,10 @@ internal fun KeePassDatabase.toMappedContent(): KdbxMappedContent {
     // 这里收集"hash -> 名字"只为**展示**；字节在导出时按 hash 现取（见 Kdbx.binaryOf）。
     val binaryNames = linkedMapOf<String, String>()
 
+    // 自定义图标的字节按 UUID 存一份（条目只带 id）：同一定义常被多条共用，
+    // 放进 `VaultItem` 就是 N 份副本。见 `KdbxCustomIconStore`。
+    meta.customIcons.forEach { (uuid, icon) -> KdbxCustomIconStore.put(uuid.toString(), icon.data) }
+
     fun walk(group: Group, parentPath: String, inRecycleBin: Boolean) {
         val isRoot = group.uuid == root.uuid
         // 根分组是**数据库根**、不是用户建的文件夹：根的直属子分组才是顶层文件夹，
@@ -218,6 +222,10 @@ private fun Entry.toVaultItem(
                 source = VaultAttachmentSource.Kdbx,
             )
         },
+        // 自定义图标（2026-11-03）：**只带 UUID**，字节在 `KdbxCustomIconStore` 里。
+        // ⚠️ `customIconUuid` 为 null 表示"没设"，与预定义图标（`entry.icon`）是两回事：
+        //    前者是用户上传的 PNG，后者是 KeePass 的 69 个内置图标。两条都保留语义。
+        customIconId = customIconUuid?.toString(),
     )
 }
 

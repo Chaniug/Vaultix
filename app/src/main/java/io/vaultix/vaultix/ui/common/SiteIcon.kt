@@ -20,7 +20,9 @@
 package io.vaultix.vaultix.ui.common
 
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.os.SystemClock
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -41,6 +43,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.layout.ContentScale
@@ -49,6 +53,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import coil.compose.AsyncImagePainter
 import coil.compose.rememberAsyncImagePainter
 import coil.imageLoader
@@ -56,7 +62,9 @@ import coil.memory.MemoryCache
 import coil.request.CachePolicy
 import coil.request.ImageRequest
 import io.vaultix.common.SiteIconUrl
+import io.vaultix.data.kdbx.Kdbx
 import io.vaultix.model.VaultItem
+import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 
 /**
@@ -97,10 +105,11 @@ private const val ICON_MAX_RETRIES = 1
 /**
  * 条目左侧图标：**离线品牌图标 → 站点图标 → 首字母头像**，三级兜底。
  *
- * ## 三级优先级（2026-11-03 加入第一级）
+ * ## 四级优先级（2026-11-03 加入前两级）
  *
  * | 级 | 来源 | 是否联网 | 命中条件 |
  * |---|---|---|---|
+ * | ⓪ | KDBX **自定义图标**（库内 PNG） | **否** | 条目带 `customIconId`（用户在 KeePassXC 里设过） |
  * | ① | 包内品牌图标（[BrandIconCatalog]） | **否** | 域名能对上表里的品牌（[brandSlugForHost]） |
  * | ② | 服务器图标 `<base>/icons/<host>/icon.png` | 是 | 仅在 ① 未命中、且库有可用 origin 时 |
  * | ③ | 首字母头像 | 否 | 其余全部情况 |
@@ -152,10 +161,14 @@ fun SiteIcon(
     size: Dp = EntryCardIconSize,
     modifier: Modifier = Modifier,
 ) {
+    // ★ 自定义图标是**用户在 KeePassXC 里明确选过的**，优先级最高（2026-11-03）。
+    //   取字节是一次 HashMap 查找：解锁解析时就已放进内存（见 `Kdbx.customIconPng`）。
+    val customIconPng = remember(item.customIconId) { Kdbx.customIconPng(item.customIconId) }
     SiteIconByHost(
         domain = remember(item.uris) { SiteIconUrl.hostOfItemUris(item.uris.map { it.uri }) },
         fallbackText = item.title,
         serverOrigin = serverOrigin,
+        customIconPng = customIconPng,
         size = size,
         modifier = modifier,
     )
@@ -173,6 +186,8 @@ fun SiteIconByHost(
     serverOrigin: String?,
     size: Dp = EntryCardIconSize,
     modifier: Modifier = Modifier,
+    /** 自定义图标 PNG 原始字节（KDBX）；null = 没有。见 [CustomIconAvatar]。 */
+    customIconPng: ByteArray? = null,
 ) {
     val iconUrl = remember(domain, serverOrigin) {
         SiteIconUrl.forHost(serverOrigin, domain)
@@ -191,6 +206,15 @@ fun SiteIconByHost(
         with(density) { size.roundToPx() }.coerceAtLeast(1)
     }
 
+    // 自定义图标要先解码；解不开就当没有（不许因为一张图崩掉整个列表）。
+    //
+    // ⚠️ 解码在主线程的组合期做：KeePass 的自定义图标是 16×16 ~ 64×64 的 PNG（几百字节），
+    //    解码耗时在微秒级。**不要**把它改成异步 —— 那会让"滚回去再出现"的图标闪一下白圈，
+    //    正是本文件在 favicon 上反复修过的那个问题。
+    val customBitmap = remember(customIconPng) {
+        customIconPng?.let { decodeIconBitmap(it) }
+    }
+
     val imageLoader = LocalContext.current.imageLoader
 
     // ⚠️ 这里刻意**不用** `if (iconUrl == null) { ...; return }` 的提前返回写法。
@@ -199,7 +223,11 @@ fun SiteIconByHost(
     //    （不要被 `::CachedSiteIcon` 那行引用混淆：判断看的是**调用点**，不是引用点）。
     //    改成"表达式给值 + 单一出口"，结构上就不存在这个争议。
     val content: @Composable () -> Unit = when {
-        // ★ 第一优先：离线品牌图标（有就有，零网络开销）。
+        // ★ 第一优先：用户在 KeePassXC 里自己设的图标（明确意图，压过域名推断）。
+        customBitmap != null -> {
+            { CustomIconAvatar(bitmap = customBitmap, size = size, modifier = modifier) }
+        }
+        // 第二优先：离线品牌图标（有就有，零网络开销）。
         brandIcon != null -> {
             { BrandIconAvatar(icon = brandIcon, size = size, modifier = modifier) }
         }
@@ -384,6 +412,61 @@ private fun FallbackAvatar(fallbackText: String, size: Dp, modifier: Modifier) {
         FallbackInitial(text = fallbackText)
     }
 }
+
+/**
+ * **KDBX 自定义图标**：用户在 KeePassXC 里上传的那张 PNG。
+ *
+ * ## 为什么它排在最前
+ *
+ * 这是**用户唯一的显式选择**：桌面端给某个条目挑了图标，手机端却按域名显示别的东西，
+ * 等于把人的操作当没看见。所以优先级是 自定义图标 > 离线品牌包 > 服务器图标 > 首字母。
+ *
+ * ## 白底 + 等比缩放（不是 Crop）
+ *
+ * 自定义图标多是 16×16 的透明 PNG（KeePass 的尺寸上限也小），铺满圆会在边缘糊掉；
+ * 白底与站点图标那条路径一致（Bitwarden 也用白底），避免深色主题下图标"陷进"卡面。
+ * `FilterQuality.Medium` 是给这种**小图放大**用的：`Low` 会出锯齿，`High` 对 16px 源
+ * 没有额外收益，只会更慢。
+ */
+@Composable
+private fun CustomIconAvatar(bitmap: ImageBitmap, size: Dp, modifier: Modifier) {
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = modifier
+            .size(size)
+            .clip(CircleShape)
+            .background(Color.White),
+    ) {
+        Canvas(Modifier.fillMaxSize(CUSTOM_GLYPH_SCALE)) {
+            // 等比缩放 + 居中：第三方工具写进来的图标不保证方形。
+            val scale = minOf(this.size.width / bitmap.width, this.size.height / bitmap.height)
+            val w = (bitmap.width * scale).roundToInt().coerceAtLeast(1)
+            val h = (bitmap.height * scale).roundToInt().coerceAtLeast(1)
+            drawImage(
+                image = bitmap,
+                dstOffset = IntOffset(
+                    ((this.size.width - w) / 2).roundToInt(),
+                    ((this.size.height - h) / 2).roundToInt(),
+                ),
+                dstSize = IntSize(w, h),
+                filterQuality = FilterQuality.Medium,
+            )
+        }
+    }
+}
+
+/** 自定义图标在圆底上的占比：留白比品牌图形多（图标本身通常已带一圈透明边）。 */
+private const val CUSTOM_GLYPH_SCALE = 0.72f
+
+/**
+ * 解码自定义图标；失败返回 null（**退回下一级，不许崩**）。
+ *
+ * 失败在现实中确实会发生：不是 PNG、字节被截断、超大图 OOM。
+ * 这些都是"这条图标显示不出来"，而不是"整个列表打不开"。
+ */
+private fun decodeIconBitmap(bytes: ByteArray): ImageBitmap? = runCatching {
+    BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+}.getOrNull()
 
 /**
  * 离线品牌图标：**品牌色圆底 + 白色图形**（2026-11-03）。

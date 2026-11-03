@@ -940,8 +940,24 @@ object Kdbx {
     fun lockAll() {
         KdbxSessionStore.closeAll()
         KdbxBaseStore.clearAll()
+        // 自定义图标的字节也随库一起丢：它们是**库内容**，全量锁定之后本机不该再留着。
+        // （单个库 lock 不清 —— 见 `KdbxCustomIconStore` 的生命周期说明。）
+        KdbxCustomIconStore.clear()
         writeLocks.clear()
     }
+
+    /**
+     * 取某条目的**自定义图标 PNG**（`VaultItem.customIconId` → 字节）。
+     *
+     * @return null = 这条没有自定义图标、或该图标尚未被解析进内存（库没解锁）。
+     *
+     * ## 为什么是同步取值
+     *
+     * 密码列表一屏几十行，每行都异步查一次图标会引入"先空白再长出来"的闪动，
+     * 而这正是本项目在 favicon 上已经吃过一次的亏（见 `SiteIcon` 的 KDoc）。
+     * 图标在**解锁解析时**就已经放进内存（几百字节到几 KB），这里的开销是一次 HashMap 查找。
+     */
+    fun customIconPng(id: String?): ByteArray? = KdbxCustomIconStore.get(id)
 
     /**
      * 把 [vaultId] 的会话编码并**经 [source] 写入**（阶段 B × 网盘）。

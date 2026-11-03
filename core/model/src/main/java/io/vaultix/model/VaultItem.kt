@@ -144,6 +144,18 @@ data class VaultItem(
     val organizationId: String? = null,
     /** 所属集合 id 列表（组织条目才有；个人条目 / KDBX 恒为空）。 */
     val collectionIds: List<String> = emptyList(),
+    /**
+     * KDBX **自定义图标**的标识（不是字节）。
+     *
+     * 取值来自 `Entry.customIconUuid`（KDBX 4 的 `<CustomIconUUID>`）；null = 该条目没有自定义图标。
+     * Bitwarden 条目恒为 null —— 它的图标来自站点 favicon，不走这条。
+     *
+     * ⚠️ 与 [attachments] 同一条纪律：**只存"是哪一个"，不存字节**。
+     *   字节在库文件里（`meta.customIcons`），按 id 从已解锁会话取（见 `Kdbx.customIconPng`）。
+     *   把 PNG 塞进本模型会让"同一个图标被 20 个条目共用"变成 20 份内存副本，
+     *   而且 `ByteArray` 会让本 data class 失去 Compose 稳定性（整列表多一次重组）。
+     */
+    val customIconId: String? = null,
 )
 
 /**
