@@ -70,10 +70,18 @@
 > 顺手修掉一个真 bug：`--no-build-cache` 只关了一半，PR 上仍命中缓存 ⇒ `Analyze (Kotlin)` 红，
 > **main 绿 / PR 红先怀疑环境差异**。PR #3 #4 已合。
 >
-> **下一步**：① #2 → #1 → #5 逐个合（每个一次 CI）；② **#6 不整包合** ——
-> 里面有 AGP 9.5.0 + Gradle wrapper 9.8.2 + gradlew 脚本，要拆成「库版本」和「工具链」两个 PR；
-> ③ 合 msal 8.6.0 能消掉 `httpcore5` 那条 high，但 `opentelemetry-api` 仍需单独 constraint 到 1.67.0；
-> ④ 上一轮遗留 #222 真机验收。
+> **依赖已收口（2026-11-03 上午）**：6 个 Dependabot PR 全部处理完 ——
+> #2 androidx / #1 compose-bom / #5 kotlin 2.4.21 / #7 库版本 / #8 AGP 9.5.0 + Gradle 9.8.2 全绿合入，
+> #6 因「库 + 工具链混在一个 PR」拆开后关闭。**告警 55 → 0**：45 条随升级消失，
+> 10 条构建期传递依赖带理由 dismiss（来源链与复查时机见 SESSION §12.3）。
+>
+> **必须记住的判据**：① 合并前先 rebase 到含最新大版本的 main 再跑一次 CI ——
+> 「各自绿 + 组合没验过」是这次唯一的真风险（Kotlin 2.4.21 × AGP 9.5 × Gradle 9.8）；
+> ② 「升级上游」≠「顶传递依赖」：msal 8.6.0 的 POM 改没改决定用哪种手段，别凭直觉；
+> ③ Dependabot 的 `other` 组**必然**混进 AGP / wrapper，下次还会这样。
+>
+> **下一步**：① 真机回归（OneDrive 登录 + 解锁链路，CI 绿证明不了运行时）；
+> ② CodeQL 剩 2 条 `insecure-local-key-gen` 等产品拍板；③ 上一轮遗留 #222 真机验收。
 >
 > 详见 [`SESSION-2026-11-03.md`](./SESSION-2026-11-03.md) §十、§十一。
 
