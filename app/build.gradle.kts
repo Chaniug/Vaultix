@@ -311,6 +311,13 @@ dependencies {
 
     // OneDrive / Microsoft Graph —— KDBX 网盘同步的鉴权层（MSAL public client + PKCE）。
     implementation(libs.msal)
+    // ⚠️ **只顶版本、不加新依赖**：MSAL → com.microsoft.identity:common:25.0.0 的 POM
+    // 仍写 `opentelemetry-api 1.62.0`，而 1.62.0 落在 GHSA-ccrj-gw8r-854m 的受影响区间
+    // （<= 1.66.0）。它只被 MSAL 的遥测链使用，1.x 内向后兼容 ⇒ 用 constraint 顶到修复版。
+    // 不改成 `exclude` + 手写依赖树：那等于接管上游的依赖决议，下次升 MSAL 必炸。
+    constraints {
+        implementation("io.opentelemetry:opentelemetry-api:${libs.versions.opentelemetry.get()}")
+    }
 
     // 平台能力
     implementation(libs.androidx.biometric)
