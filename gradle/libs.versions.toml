@@ -1,7 +1,7 @@
 [versions]
 # ===== 构建工具链：与 Bastion 对齐 =====
 # AGP 9.3.2 要求最低 Gradle 9.5.0（见 gradle-wrapper.properties，取 9.5.1）。
-agp = "9.3.2"
+agp = "9.5.0"
 # Kotlin 停在 2.3.21。升 2.4.x 会被 KSP 阻塞：KSP 至今只发到 2.3.11，
 # 没有 2.4.x，Room 编译器跑不起来。待 KSP 2.4 发布后再动。
 # Kotlin 2.4.10（当前最新稳定版）。
