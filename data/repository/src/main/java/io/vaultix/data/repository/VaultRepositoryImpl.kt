@@ -384,6 +384,23 @@ class VaultRepositoryImpl @Inject constructor(
                 // 并自增代次让 `observeUnlockedVaultIds` / `observeVaults` 重发。
                 sessions.clearViewLock(vaultId)
                 kdbxSessions.bump()
+                // ★ #243：主密码解锁成功后**顺手**把这个库纳入快速解锁。
+                //
+                // ## 为什么用 `enrollJustAuthenticated`（带房钥匙守卫）而不是裸的
+                //    `autoEnrollUnlocked`
+                //
+                // 两种时序都要覆盖，而它们的差别只有一个：**房钥匙在不在内存**。
+                //
+                // - 冷启动后第一次输这个库的主密码：房钥匙**必然不在**（这一页之前
+                //   没有任何门锁被开过）。此时封房间物理上不可能（`sealRoom` 会抛），
+                //   而 KDBX 备料要先烧一次完整 KDF（64 MiB / 46 轮）—— 白等。
+                //   ⇒ 如实跳过。**这不是放弃**：用户接下来按指纹时，`LocalUnlockFanout`
+                //   会用本次记下的主密码补建（见 `UnlockViewModel.rememberPassword`）。
+                // - 本轮已经按过指纹 / 输过 PIN（房钥匙在内存），这时才真正落信封。
+                //
+                // ⚠️ 必须 `runCatching`：纳入是**增强**，它的任何异常都不许把
+                //   「库已经解开」变成失败（那会让用户在主密码正确的情况下被拦住）。
+                runCatching { localUnlockEnrollment.enrollJustAuthenticated(vaultId) { password } }
                 UnlockResult.Success
             },
             onFailure = { error -> classifyKdbxError(error) },
@@ -484,7 +501,7 @@ class VaultRepositoryImpl @Inject constructor(
         // 1b) KDBX 的 keyfile 授权记录：属本地凭据，一并清（下次重新选文件）
         runCatching { preferences.setKdbxKeyFileUri(vaultId, null) }
         // 2) 该库的房间信封与范围镜像（房子化：两把门锁是全局的，退出单个库只清它的房间）
-        runCatching { removeRoomEnvelope(vaultId) }
+        runCatching { localUnlockEnrollment.removeRoom(vaultId) }
         // 3) 认证凭据与 host→server 登记清除（远端会话不受影响；重登即重新换 token）
         authRepository.logout(vaultId)
         // 4) 待推送队列：属「本地缓存」的一部分，必须清 —— 否则下次登录同一服务器时
@@ -511,7 +528,7 @@ class VaultRepositoryImpl @Inject constructor(
         Kdbx.lock(vaultId)
         kdbxSessions.bump()
         // 2) 该库的房间信封与范围镜像（同 signOut 第 2 步：门锁是全局的，不动）
-        runCatching { removeRoomEnvelope(vaultId) }
+        runCatching { localUnlockEnrollment.removeRoom(vaultId) }
         // 3) 认证凭据与 host→server 登记清除（服务端会话保留，属正常）
         authRepository.logout(vaultId)
         // 4) 待推送队列显式清空（该表无外键，须先清，防止同服务器重加账号后
@@ -546,11 +563,49 @@ class VaultRepositoryImpl @Inject constructor(
     /**
      * 该库是否可用指纹快解（指纹门锁在 && 该库在生效范围）。
      * 范围真源是房间信封（`house_room::`），偏好键只是响应式镜像。
+     *
+     * ⚠️ **入口可见性请用 [quickUnlockEntryAvailable]，不要用本方法**（#243）：
+     * 本方法的答案决定「能不能**直接**开」，而"能不能**补建后再开**"是另一件事。
+     * 用它当入口判据，会让「有门锁、但该库还没封房间」的库永远看不到指纹入口。
      */
     override fun fingerprintQuickUnlockAvailable(vaultId: String): Flow<Boolean> =
         combine(fingerprintLockAvailable(), preferences.quickUnlockScope()) { lockAvailable, scope ->
             lockAvailable && vaultId in scope
         }
+
+    /**
+     * ★ **快速解锁入口是否该给**（#243，2026-11-04）。判据 = 装过**任意一把**门锁。
+     *
+     * ## 为什么不再要求「该库已在范围里」
+     *
+     * 旧判据是 [fingerprintQuickUnlockAvailable]（= 在范围里）。而房间信封是唯一
+     * 可能被缺失的一环，且它**能在认证那一刻补建**（`RoomEnroller`）：
+     *
+     * ```
+     * 用户装着指纹、库也解过 —— 只是"封房间"那一步还没轮到它
+     *   ⇒ 旧判据：入口不显示、自动弹出也不触发
+     *   ⇒ 用户只能一直输主密码，而且**永远**看不到那个能修好它的按钮
+     * ```
+     *
+     * 这就是用户报的「该库未纳入快速解锁」：不是结论，而是**入口根本没给**。
+     *
+     * ## 为什么补建天生安全
+     *
+     * 补建信封必须用房钥匙，而房钥匙只能由**刚刚通过门的这个人**用指纹/PIN 打开；
+     * 而他能通过门锁，就说明他就是这台设备的主人（门锁本来就是全局的、与库无关）。
+     * ⇒ 不存在"替别人开库"的问题，缺的只是那一下封装。
+     *
+     * ⚠️ 与 `pinLockAvailable` 取**或**：PIN 也是门锁（房子化后门锁统一包同一把
+     * 房钥匙），有 PIN 同样能补建。只看指纹会让「只用 PIN」的用户彻底没有入口。
+     * ⚠️ 这里**不**判断页面是否找得到密码源（KDBX 需要主密码）：那是可补齐的
+     * 次要项，缺了它只会「这次开不成」，而不是「永远没入口」。
+     */
+    override fun quickUnlockEntryAvailable(): Flow<Boolean> =
+        combine(preferences.fingerprintLockEnrolled, preferences.pinLockEnrolled) { fp, pin ->
+            // ⚠️ 指纹那条还要乘上 KEK 可用性（与 `fingerprintLockAvailable` 同式）：
+            //   否则「指纹信封在、但 KEK 永久失效」会给一个按了也开不了的入口。
+            (fp && localUnlockKeyStore.keyAvailable) || pin
+        }.flowOn(Dispatchers.IO)
 
     /** 开指纹门锁第一步：备授权 cipher（KEK 门禁的既有入口，行为不变）。 */
     override suspend fun prepareFingerprintEnroll(): Cipher? =
@@ -581,6 +636,33 @@ class VaultRepositoryImpl @Inject constructor(
      */
     override suspend fun completeFingerprintUnlock(cipher: Cipher): Boolean =
         houseKeyStore.completeFingerprintUnlock(cipher)
+
+    /**
+     * ★ **刚接受过认证的库**：门锁已开（房钥匙在内存）之后补建该库的房间信封（#243）。
+     *
+     * ## 为什么需要它（真机 2026-11-04 报障）
+     *
+     * 冷启动后第一次解锁的完整时序是**三段**，而旧实现只在第 1 段之后尝试纳入：
+     *
+     * ```
+     * ① 主密码解开库      → autoEnrollNewVault（房钥匙还没进内存 ⇒ 静默 false）
+     * ② 用户按指纹开锁    → 房钥匙进内存，但**没人再来封房间**
+     * ③ 解锁页：该库不在范围 ⇒ 指纹入口不渲染
+     * ⇒ 每次都回到主密码
+     * ```
+     *
+     * 本方法补上第 ② 段之后那一次。它**不做任何认证**（对"刚通过认证的人"再要一次
+     * 生物识别是多余的），也不猜密码 —— KDBX 主密码由调用方按库提供。
+     *
+     * ⚠️ 纯转发：守卫与落盘都在 `LocalUnlockEnrollment.enrollJustAuthenticated`
+     *   （本类函数数卡在 detekt 上限 40，且那边本来就有全部所需依赖）。
+     *
+     * @param masterPasswordOf 见 [VaultRepository.enrollVaultAfterFingerprintUnlock]。
+     */
+    override suspend fun enrollVaultAfterFingerprintUnlock(
+        vaultId: String,
+        masterPasswordOf: suspend (String) -> String?,
+    ): Boolean = localUnlockEnrollment.enrollJustAuthenticated(vaultId, masterPasswordOf)
 
     /** 关指纹门锁（全局；信封删除 + 镜像同步，孤儿房间由 HouseKeyStore 连带清理）。 */
     override suspend fun disableFingerprintLock() {
@@ -648,21 +730,7 @@ class VaultRepositoryImpl @Inject constructor(
     ): Map<String, LocalUnlockEnrollOutcome> =
         localUnlockEnrollment.sealRoomsForVaults(prepared)
 
-    /**
-     * 删某库房间信封并从范围镜像剔除（`signOut` / `removeVault` 共用）。
-     *
-     * ⚠️ 2026-10-04：这里曾有一个 `override removeVaultFromScope`（「取消勾选某库」）
-     *   同样转调本方法。因「范围勾选」向导已整段删除、范围恒等于全部库，
-     *   该动作不可能再被用户触发 ⇒ 连同接口方法一起删除，**本私有方法保留**
-     *   （`signOut` 第 2 步与 `removeVault` 第 2 步都还在用）。
-     */
-    private suspend fun removeRoomEnvelope(vaultId: String) {
-        houseKeyStore.removeRoom(vaultId)
-        val scope = preferences.quickUnlockScope().first()
-        if (vaultId in scope) {
-            preferences.setQuickUnlockScope(scope - vaultId)
-        }
-    }
+
 
     /**
      * 全部库的「生效范围候选」：返回**全部**库 id（含 KDBX），由 UI 决定勾选谁。
@@ -671,9 +739,7 @@ class VaultRepositoryImpl @Inject constructor(
      * 过滤掉会让用户以为 KDBX 不支持快速解锁 —— 那是**假状态**。
      */
     override suspend fun quickUnlockCandidateVaultIds(): List<String> =
-        withContext(Dispatchers.IO) {
-            vaultDao.observeAll().first().map { it.id }
-        }
+        localUnlockEnrollment.candidateVaultIds()
 
     // ---- 解锁扇出（1 次门锁 + N 次软件）----
 
@@ -909,16 +975,12 @@ class VaultRepositoryImpl @Inject constructor(
         return id
     }
 
-    private fun deviceName(): String =
-        "${Build.MANUFACTURER} ${Build.MODEL}".trim().ifBlank { DEFAULT_DEVICE_NAME }
-
     private companion object {
         const val DISPLAY_NAME_BITWARDEN = "Bitwarden"
         const val DEFAULT_DISPLAY_NAME_KDBX = "KeePass 数据库"
         const val HTTP_UNAUTHORIZED = 401
         const val HTTP_NOT_FOUND = 404
         const val KEY_DEVICE_ID = "device_id"
-        const val DEFAULT_DEVICE_NAME = "Vaultix Device"
     }
 }
 
@@ -933,6 +995,16 @@ private data class TwoFactorAttempt(val provider: Int, val code: String)
  * [classifyKdbxError] / [buildFullKey] 的先例）。同类 `deviceName` 仍留在类内
  * （读 `Build` 常量，与类语境耦合更深，暂不动）。
  */
+/**
+ * 设备名（登录 Bitwarden 时上报用）。
+ *
+ * ⚠️ 放在**文件级**而不是类里：`VaultRepositoryImpl` 的函数数顶在 detekt
+ * `TooManyFunctions` 的 40 上限上（每加一个 override 就要挪走一个私有函数）。
+ * 本函数是纯的（只读 [Build]），没有理由占类里的名额。
+ */
+private fun deviceName(): String =
+    "${Build.MANUFACTURER} ${Build.MODEL}".trim().ifBlank { "Vaultix Device" }
+
 private fun normalizeServer(server: String): String {
     val trimmed = server.trim().trimEnd('/')
     require(trimmed.startsWith("http://") || trimmed.startsWith("https://")) {

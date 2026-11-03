@@ -411,6 +411,78 @@ class LocalUnlockFanoutTest {
         coVerify(exactly = 0) { recovery.degradeFingerprintLock() }
     }
 
+    // ---- #243：房间信封缺失时就地补建，并**重试一次** ----
+
+    @Test
+    fun `首库未纳入快速解锁时_补建信封后当场重试开库`() = runTest {
+        // 真机 2026-11-04：冷启动后该库还没有房间信封 ⇒ 第一次开库必然 `NotEnrolled`。
+        // 门锁**已经开了**（房钥匙在内存），所以此刻补建是最便宜的时刻。
+        // ⚠️ 只补建不重试的话，用户会看到"已纳入快速解锁"却仍然没进库。
+        val roomCalls = mutableListOf<String>()
+        var enrolled = false
+        val repository = repository(roomCalls = roomCalls) { _ ->
+            if (enrolled) RoomUnlockOutcome.Opened else RoomUnlockOutcome.Unavailable(NOT_ENROLLED)
+        }
+
+        val result = LocalUnlockFanout.unlockAll(
+            repository = repository,
+            first = "a",
+            rest = emptyList(),
+            cipher = cipher,
+            roomEnroller = { id, outcome ->
+                // 只有「信封不在」才补 —— 这一条也被本用例钉住。
+                assertThat(outcome).isInstanceOf(RoomUnlockOutcome.Unavailable::class.java)
+                enrolled = true
+                id == "a"
+            },
+        )
+
+        assertThat(result.first).isEqualTo(RoomUnlockOutcome.Opened)
+        // 恰好两次：补建前的失败 + 补建后的重试（不多开、也不少开）。
+        assertThat(roomCalls).containsExactly("a", "a").inOrder()
+    }
+
+    @Test
+    fun `补建失败时_如实返回未纳入而不是假装打开`() = runTest {
+        // 反向门禁：补建没成功（比如 KDBX 拿不到主密码）就必须保持原结论 ——
+        // 否则用户会以为进去了，实际仍是锁定态（假状态）。
+        val roomCalls = mutableListOf<String>()
+        val repository = repository(roomCalls = roomCalls) {
+            RoomUnlockOutcome.Unavailable(NOT_ENROLLED)
+        }
+
+        val result = LocalUnlockFanout.unlockAll(
+            repository = repository,
+            first = "a",
+            rest = emptyList(),
+            cipher = cipher,
+            roomEnroller = { _, _ -> false },
+        )
+
+        assertThat(result.first).isEqualTo(RoomUnlockOutcome.Unavailable(NOT_ENROLLED))
+        // 没有补建成功 ⇒ 不该有第二次尝试（白跑一次还会多刷一行误导日志）。
+        assertThat(roomCalls).containsExactly("a")
+    }
+
+    @Test
+    fun `首库已打开时_不去补建信封`() = runTest {
+        // 正常路径不该有多余副作用：信封本来就在，补建纯属白跑（KDBX 还会多一次 KDF）。
+        var enrolledCalled = false
+
+        LocalUnlockFanout.unlockAll(
+            repository = repository(),
+            first = "a",
+            rest = emptyList(),
+            cipher = cipher,
+            roomEnroller = { _, _ ->
+                enrolledCalled = true
+                true
+            },
+        )
+
+        assertThat(enrolledCalled).isFalse()
+    }
+
     /**
      * 取 fanout 给出的「门锁失败局面」。
      *
@@ -423,4 +495,8 @@ class LocalUnlockFanoutTest {
         return LocalUnlockMessage.entries.firstOrNull { it.name == detail }
     }
 
+    private companion object {
+        /** `RoomOpen.NotEnrolled` 的对外文案（`HouseKeyStore.toRoomFailure`）。 */
+        const val NOT_ENROLLED = "该库未纳入快速解锁"
+    }
 }

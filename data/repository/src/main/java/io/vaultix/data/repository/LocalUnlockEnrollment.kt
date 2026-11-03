@@ -225,6 +225,9 @@ class LocalUnlockEnrollment @Inject constructor(
     suspend fun sealRoomsForVaults(
         prepared: List<LocalUnlockPreparedEnrollment>,
     ): Map<String, LocalUnlockEnrollOutcome> = withContext(Dispatchers.IO) {
+        // ⚠️ 房钥匙守卫留在**公开入口**（这是契约的最后一道防线：任何调用点都别想
+        //    在没钥匙时封出孤儿信封）。内部路径走 [sealPrepared] —— 它已由调用方
+        //    验过前置（`autoEnrollUnlocked` 的调用点知道刚有没有解开门锁）。
         if (!houseKeyStore.isUnlocked) {
             // 全部如实失败 + 备料明文统一擦除（KDBX 那些含主密码字节）。
             prepared.forEach { it.close() }
@@ -232,6 +235,19 @@ class LocalUnlockEnrollment @Inject constructor(
                 it.vaultId to LocalUnlockEnrollOutcome.Failed("请先开启并解锁一把门锁（指纹或 PIN）")
             }
         }
+        sealPrepared(prepared)
+    }
+
+    /**
+     * 真正落盘的那一半（**不查房钥匙**）。
+     *
+     * ⚠️ 只有两种调用者：公开入口 [sealRoomsForVaults]（查过房钥匙才进来）、
+     * 以及 [autoEnrollUnlocked]（前置由调用方保证 —— 主密码解锁那一刻房钥匙
+     * **必然**不在内存，再查一次等于把 #243 的时序倒回去）。
+     */
+    private suspend fun sealPrepared(
+        prepared: List<LocalUnlockPreparedEnrollment>,
+    ): Map<String, LocalUnlockEnrollOutcome> {
         val outcomes = prepared.associate { unit ->
             val outcome = try {
                 // 🔴 强转而非 `when`：接口非 sealed（跨模块无法构成 sealed 层级），
@@ -246,7 +262,7 @@ class LocalUnlockEnrollment @Inject constructor(
             unit.vaultId to outcome
         }
         syncScopeMirror(outcomes)
-        outcomes
+        return outcomes
     }
 
     /** 单个库的软封装落盘。 */
@@ -317,8 +333,63 @@ class LocalUnlockEnrollment @Inject constructor(
         masterPasswordOf: suspend (String) -> String? = { null },
     ): Boolean = withContext(Dispatchers.IO) {
         if (!houseKeyStore.isUnlocked) return@withContext false
+        autoEnrollUnlocked(vaultId, masterPasswordOf)
+    }
+
+    /**
+     * ★ **[autoEnrollNewVault] 的「房钥匙已在内存」版本**（#243，2026-11-04）。
+     *
+     * ## 为什么要把这一半拆出来
+     *
+     * 冷启动后第一次进解锁页时，房钥匙**必然**不在内存（没有任何门锁被开过）。
+     * 而用户在这一页输入的主密码 / 按下的指纹，**恰恰就是**"房钥匙该进内存"的
+     * 那一次认证 —— 但在 [autoEnrollNewVault] 的旧形态里，操作**顺序**是反的：
+     *
+     * ```
+     * 主密码解锁成功 → autoEnrollNewVault（房钥匙还没有 ⇒ 直接 return false）
+     *                → 用户点指纹 → 门锁开了、房钥匙进内存 → **但已经没人再来封房间了**
+     * ⇒ 该库永远不在范围里 ⇒ 指纹入口不渲染 ⇒ 每次都回到主密码（真机 2026-11-04 报障）
+     * ```
+     *
+     * 解锁路径现在是：**先**开门锁（指纹）/ 拿主密码后补封 → **再**调本方法。
+     * 「房钥匙在不在」这个前置由**调用方**保证（它有那个时序知识），本方法只做
+     * 纯软件的两件事：备料 + 软封装。
+     *
+     * ⚠️ 三道守卫里只剩两道（门锁存在 / 范围非空）—— 房钥匙那条搬到了调用方，
+     * 因为只有它知道刚刚有没有真的解开门锁。**不要**在这里再判一次
+     * `isUnlocked`：那会重新把顺序倒回去（主密码路径下房钥匙仍是没封门锁的）。
+     *
+     * @param masterPasswordOf 见 [autoEnrollNewVault]。
+     * @param force `true` = 即使已有信封也重封（自愈 `Damaged` / 凭据已轮换的那些）。
+     * @return true = 已为 [vaultId] 建好房间信封（并同步了范围镜像）。
+     */
+    suspend fun autoEnrollUnlocked(
+        vaultId: String,
+        masterPasswordOf: suspend (String) -> String? = { null },
+        force: Boolean = false,
+    ): Boolean = withContext(Dispatchers.IO) {
         if (!houseKeyStore.hasAnyLock()) return@withContext false
-        if (preferences.quickUnlockScope().first().isEmpty()) return@withContext false
+        // ★ 幂等短路：信封已经在了 ⇒ 本次无事可做。
+        //
+        // ⚠️ 这条**不是**优化，是必需的：本方法现在会在「每次主密码解锁成功后」被调用
+        //   （#243），而 KDBX 的备料要先跑一次 `Kdbx.verify` —— 那是一次**完整的 KDF**
+        //   （真机设置 64 MiB / 46 轮）。没有短路的话，用户每输一次主密码都要再烧
+        //   一遍同样量级的 Argon2，解锁时间凭空翻倍，而这正是用户最在意的"打开很慢"。
+        //
+        // ⚠️ `force = true` 只给 [enrollJustAuthenticated] 用：那条路径的**前提**就是
+        //   "刚刚开门失败了"（`NotEnrolled` / `Damaged`），此时"有信封"不代表"能用"，
+        //   重封一次才是自愈。
+        if (!force && houseKeyStore.hasRoom(vaultId)) return@withContext true
+        // 空集有**两种**含义（见 `VaultixPreferences.QUICK_UNLOCK_SCOPE_CONFIRMED`）：
+        //   - 未确认过 ⇒ 语义是「全部库都在范围内」（向导默认全勾）⇒ 该封；
+        //   - 已确认过 ⇒ 用户明确说「一个库都不要」⇒ 不许替他改回来。
+        // 旧写法只看「是否空集」，把未配置的单库用户永久挡在门外：他没有别的库
+        // 可用，范围就永远是空集，于是这个库**永远**纳不进来（#243 的第二道死锁）。
+        if (preferences.quickUnlockScope().first().isEmpty() &&
+            preferences.isQuickUnlockScopeConfirmed().first()
+        ) {
+            return@withContext false
+        }
 
         val prepared = prepareForVaults(listOf(vaultId), masterPasswordOf)
             .values
@@ -328,6 +399,64 @@ class LocalUnlockEnrollment @Inject constructor(
         // 不拿一个空信封糊过去（那正是「假成功」）。
         if (prepared.isEmpty()) return@withContext false
 
-        sealRoomsForVaults(prepared).values.any { it == LocalUnlockEnrollOutcome.Enrolled }
+        sealPrepared(prepared).values.any { it == LocalUnlockEnrollOutcome.Enrolled }
+    }
+
+    /**
+     * 全部库的「生效范围候选」：返回**全部**库 id（含 KDBX），由 UI 决定勾选谁。
+     *
+     * ⚠️ 不在这里过滤"可纳入的"：KDBX 库并非不可纳入（只是要多输一次主密码），
+     *   过滤掉会让用户以为 KDBX 不支持快速解锁 —— 那是**假状态**。
+     */
+    suspend fun candidateVaultIds(): List<String> = withContext(Dispatchers.IO) {
+        vaultDao.observeAll().first().map { it.id }
+    }
+
+    /**
+     * 删某库房间信封并从范围镜像剔除（`signOut` / `removeVault` 共用）。
+     *
+     * ⚠️ 2026-10-04：`VaultRepository` 曾有一个 `removeVaultFromScope`（「取消勾选某库」）
+     *   同样转调同一段逻辑。因「范围勾选」向导已整段删除、范围恒等于全部库，
+     *   该动作不可能再被用户触发 ⇒ 连同接口方法一起删除，**本方法保留**
+     *   （`signOut` 与 `removeVault` 都还在用）。
+     *
+     * ⚠️ 为什么住在本类：它是纯"房间信封 + 范围镜像"的操作，两个依赖
+     *   （`houseKeyStore` / `preferences`）本来就在本类；放在 `VaultRepositoryImpl`
+     *   会让那个类的函数数顶破 detekt 上限（见那里的说明）。
+     */
+    suspend fun removeRoom(vaultId: String) {
+        houseKeyStore.removeRoom(vaultId)
+        val scope = preferences.quickUnlockScope().first()
+        if (vaultId in scope) {
+            preferences.setQuickUnlockScope(scope - vaultId)
+        }
+    }
+
+    /**
+     * ★ **刚刚通过门锁的人**：补建该库的房间信封（#243）。
+     *
+     * 与 [autoEnrollUnlocked] 的唯一差别是**多一道房钥匙守卫** —— 它属于那些
+     * "门锁可能还没开"的调用点（主密码路径）。已经过了门锁的调用点直接走
+     * [autoEnrollUnlocked] 即可。
+     *
+     * ⚠️ 为什么放在这里而不是 `VaultRepositoryImpl`：那个类的函数数**正好卡在**
+     * detekt `TooManyFunctions` 的 40 上限（见其 KDoc）。这项逻辑本来也只用到
+     * 本类已有的三个依赖（`houseKeyStore` / `preferences` / `vaultDao`），
+     * 放在本类是自然的归属，不是"为了躲 lint 塞过来"。
+     *
+     * @param masterPasswordOf 见 [autoEnrollNewVault]。
+     * @return true = 本次真的建好了房间信封。
+     */
+    suspend fun enrollJustAuthenticated(
+        vaultId: String,
+        masterPasswordOf: suspend (String) -> String?,
+    ): Boolean = withContext(Dispatchers.IO) {
+        // 房钥匙不在内存 ⇒ 物理上封不了（别落一个谁也解不开的孤儿信封）。
+        // ⚠️ 先判它再备料：KDBX 的备料要跑一次完整 KDF，没有房钥匙时那条路
+        //   必然在 `sealRoom` 抛异常 —— 白烧一次 Argon2 再失败，用户白等。
+        if (!houseKeyStore.isUnlocked) return@withContext false
+        // 走到这里说明**刚开门失败过**（`NotEnrolled` / `Damaged`）⇒ 有信封不代表能用，
+        // 重封一次才算自愈。
+        autoEnrollUnlocked(vaultId, masterPasswordOf, force = true)
     }
 }

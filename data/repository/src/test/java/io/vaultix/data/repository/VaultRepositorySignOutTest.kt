@@ -116,7 +116,9 @@ class VaultRepositorySignOutTest {
         // 1b) 查看层标记一并失效：密钥都没了，标记留着会让界面停在「只需认证」的死角
         assertFalse(sessions.isViewLocked(vaultId))
         // 1c) 该库的房间信封删除（房子化：门锁是全局的，退出单库不动门锁）
-        coVerify(exactly = 1) { houseKeyStore.removeRoom(vaultId) }
+        // ⚠️ 信封删除已下沉到 `LocalUnlockEnrollment.removeRoom`（本测试里是 mock）；
+        //    `houseKeyStore` 那一步由 `LocalUnlockEnrollmentTest` 单独守。
+        coVerify(exactly = 1) { localUnlockEnrollment.removeRoom(vaultId) }
         // 2) 认证凭据清除（token / refresh / protected key / host→server 登记）
         verify(exactly = 1) { authRepository.logout(vaultId) }
         // 3) 本地缓存四件套：待推送队列 / 密文条目 / 文件夹 / 同步基线

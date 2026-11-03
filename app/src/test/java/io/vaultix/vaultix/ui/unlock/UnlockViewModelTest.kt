@@ -126,14 +126,36 @@ class UnlockViewModelTest {
     }
 
     @Test
-    fun fingerprintEntryStaysHiddenWhenLocalUnlockIsNotEnabledForTheVault() = runTest {
-        // 反向门禁：用户没为这个库开启快速解锁时，入口**必须**不出现 ——
+    fun fingerprintEntryStaysHiddenWhenNoLockIsEnrolled() = runTest {
+        // 反向门禁：一把门锁都没装（快速解锁从未启用）时，入口**必须**不出现 ——
         // 修竞态不能让"本来就不该有"变成"总有"。
+        //
+        // ★ #243 改变了这里的**条件**（从"该库不在范围"变成"没装门锁"）：
+        //   入口现在只由门锁决定（信封可在认证那一刻补建），但"没装门锁"这一条
+        //   依旧是硬边界 —— 没有门锁 = 没有房钥匙 = 谁也补不出信封。
         val viewModel = unlockViewModel(available = false) { flowOf(lockedVaults) }
 
         advanceUntilIdle()
 
         assertThat(viewModel.state.value.localUnlockAvailable).isFalse()
+    }
+
+    @Test
+    fun fingerprintEntryMustStillAppearWhenTheVaultHasNoRoomEnvelopeYet() = runTest {
+        // ★ #243 的回归门禁（真机 2026-11-04）。
+        //
+        // 用户装着指纹、库也解开过，只是"封房间"那一步还没轮到它：
+        // `fingerprintQuickUnlockAvailable` 会是 false（不在范围里），但入口**必须**给 ——
+        // 否则用户永远按不到那个能补建信封的按钮（症状原文：「该库未纳入快速解锁」）。
+        val viewModel = unlockViewModel(
+            available = true,
+            // 范围里一个库都没有 = 该库尚无房间信封。
+            scope = emptySet(),
+        ) { flowOf(lockedVaults) }
+
+        advanceUntilIdle()
+
+        assertThat(viewModel.state.value.localUnlockAvailable).isTrue()
     }
 
     // ---- 候选库筛选（2026-09-29 提速修复，方案 C）----
@@ -320,6 +342,10 @@ class UnlockViewModelTest {
         val repository = mockk<VaultRepository>()
         every { repository.observeVaults() } answers { vaultFlow() }
         every { repository.fingerprintQuickUnlockAvailable(any()) } returns flowOf(available)
+        // ★ #243：**入口判据**换成了 `quickUnlockEntryAvailable`（= 装过任意一把门锁），
+        //   不再要求"该库已在范围里"（理由见 `VaultRepository.quickUnlockEntryAvailable`）。
+        //   本文件里 `available` 这个参数现在代表"门锁装没装"。
+        every { repository.quickUnlockEntryAvailable() } returns flowOf(available)
         // PIN 入口是**另一条独立**的可用性流：本文件测的是指纹入口，
         // 所以这里恒为 false（PIN 入口不渲染，不干扰断言）。要测 PIN 请另开用例。
         // 房子化后门锁是全局的（不再按库），无参。

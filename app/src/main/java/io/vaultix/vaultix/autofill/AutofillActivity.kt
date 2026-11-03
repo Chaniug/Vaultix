@@ -758,6 +758,14 @@ class AutofillActivity : FragmentActivity() {
             first = pending.first,
             rest = pending.rest,
             cipher = cipher,
+            // ★ #243：自动填充路径同样要补建（否则这个库在这里永远只能用主密码）。
+            //   Bitwarden 库的凭据就是内存里的会话密钥，`masterPasswordOf` 给 null 即可；
+            //   KDBX 库没有可用主密码 ⇒ 本次不纳入（`prepareKdbx` 会如实报 Skipped），
+            //   与解锁页的取向一致：**不猜密码**。
+            //   ⚠️ 「只在信封缺失时才调」由 `LocalUnlockFanout` 判（它拿着开库结论）。
+            roomEnroller = { id, _ ->
+                vaultRepository.enrollVaultAfterFingerprintUnlock(id) { null }
+            },
         )
     }
 

@@ -174,6 +174,14 @@ class UnlockViewModel @Inject constructor(
         val submitting: Boolean = false,
         val error: UnlockUiError? = null,
         val twoFactor: TwoFactorUi? = null,
+        /**
+         * 快速解锁入口是否可见（指纹图标 / 自动弹认证 / PIN 按钮）。
+         *
+         * ★ #243 起判据 = **装过任意一把门锁**（`quickUnlockEntryAvailable`），
+         * **不再**要求"该库已在快速解锁范围里"。原因：房间信封能在认证那一刻补建，
+         * 而拿"在不在范围里"当入口判据，会让还没封房间的库永远没有入口 ⇒
+         * 永远补不上（真机 2026-11-04 报障：「该库未纳入快速解锁」）。
+         */
         val localUnlockAvailable: Boolean = false,
         /**
          * **自动弹出被系统侧终止**的累计次数。
@@ -273,6 +281,44 @@ class UnlockViewModel @Inject constructor(
     private var pinBuffer: String = ""
 
     /**
+     * ★ 「本次会话里用户为**哪个库**输过主密码」+ 那个密码（#243）。
+     *
+     * ## 为什么需要留一个副本（而不是继续读 [UiState.password]）
+     *
+     * 两条路径的**时序**决定读 state 靠不住：
+     *
+     * - `submit()` 成功后会立刻 `password = ""`（正确：不该让它多活一秒）；
+     * - 而补建房间信封发生在**指纹/房间解锁失败之后** —— 那时 state 里早就是空串了。
+     *
+     * ⇒ 成功那一刻**抢在清空之前**记下来，只保留到下一次认证；[vaultId] 相同才认，
+     * 绝不拿"某个库的密码"去试另一个库。
+     *
+     * ⚠️ 内存里多留一份明文是该有的代价吗？—— 是，且是**有界**的：只留最近一个库、
+     * 下一次提交/认证即覆盖，进程死亡随内存消失。KDBX 的房间信封本来就必须
+     * 存这份主密码（加密后落盘），否则快速解锁对 KDBX 无从成立。
+     */
+    private var lastPasswordVaultId: String? = null
+    private var lastPassword: String = ""
+
+    /** 记下「刚刚为 [id] 输对的那份密码」，并清掉上一次（只留最近一个库）。 */
+    private fun rememberPassword(id: String, password: String) {
+        lastPasswordVaultId = id
+        lastPassword = password
+    }
+
+    /**
+     * 忘掉暂存的主密码（信封建好 / 换库 / 解锁失败之后都要调）。
+     *
+     * ⚠️ `String` 无法原地擦除（不可变），这里只能**断开引用**让 GC 回收 ——
+     *   所以判据是"能不留就不留"，而不是"擦得干净"。真正的保护是**不缓存**：
+     *   它只活到「为用户刚输的那一次认证补建房间信封」为止。
+     */
+    private fun forgetPassword() {
+        lastPasswordVaultId = null
+        lastPassword = ""
+    }
+
+    /**
      * 启动各条观察协程。
      *
      * ## ★ 为什么拆成显式方法（#174 的第一层修法，保留）
@@ -340,8 +386,18 @@ class UnlockViewModel @Inject constructor(
                 .collectLatest { id ->
                     // 目标库确定后再校正一次查看锁（标记流可能先于选库到达）。
                     _state.update { it.copy(viewLocked = sessionRepository.isViewLocked(id)) }
-                    // 房子化（2026-09-28）：入口可见性 = 全局指纹门锁 && 该库房间信封在。
-                    vaultRepository.fingerprintQuickUnlockAvailable(id).collect { available ->
+                    // 房子化（2026-09-28）：入口可见性曾 = 全局指纹门锁 && 该库房间信封在。
+                    //
+                    // ★ #243（2026-11-04）：后半句去掉了 —— 入口只由**门锁**决定。
+                    //   理由见 `VaultRepository.quickUnlockEntryAvailable` 的 KDoc：
+                    //   房间信封可以在按指纹那一刻补建（`LocalUnlockFanout.RoomEnroller`），
+                    //   而用它当入口判据
+                    //   会让「还没封房间」的库**永远**没有入口 ⇒ 永远补不上 ⇒ 用户只能
+                    //   一直输主密码（真机报障原文：「该库未纳入快速解锁」，而他连按指纹
+                    //   的地方都看不到）。
+                    //   ⚠️ 流与具体库**无关**了，但仍留在 `collectLatest` 里：
+                    //   目标库一变就重订一次拿当前值，少一次状态滞后的可能。
+                    vaultRepository.quickUnlockEntryAvailable().collect { available ->
                         _state.update { it.copy(localUnlockAvailable = available) }
                         if (available) prewarmCipher()
                     }
@@ -420,7 +476,10 @@ class UnlockViewModel @Inject constructor(
         _state.update { it.copy(pinSubmitting = true, pinError = null) }
         val outcome = withContext(ioContext) {
             when (val house = vaultRepository.openHouseWithPin(pin)) {
-                PinUnlockOutcome.Opened -> vaultRepository.unlockVaultFromRoom(id).toPinOutcome()
+                // ★ #243：门锁（PIN）已开 ⇒ 若这个库还没有房间信封，同一套「补建 + 重试」
+                //   在这里也必须成立 —— 否则「只用 PIN、不用指纹」的用户走房间信封的路
+                //   一样会卡在「该库未纳入快速解锁」，而他的入口（PIN 圆点）明明就在眼前。
+                PinUnlockOutcome.Opened -> openRoomWithEnrollFallback(id).toPinOutcome()
                 // WrongPin / LockedOut / Unavailable 原样透传（文案四态各不相同）。
                 else -> house
             }
@@ -447,6 +506,36 @@ class UnlockViewModel @Inject constructor(
         RoomUnlockOutcome.Opened -> PinUnlockOutcome.Opened
         RoomUnlockOutcome.StaleCredentials -> PinUnlockOutcome.StaleCredentials
         is RoomUnlockOutcome.Unavailable -> PinUnlockOutcome.Unavailable(detail)
+    }
+
+    /**
+     * ★ **门锁已开**之后开目标库，信封缺失时补建并重试一次（#243）。
+     *
+     * 与 `LocalUnlockFanout` 里那段同源（那里服务于「一次认证开多库」的扇出，
+     * 这里服务于「单库 + PIN」），三步完全一致：
+     *
+     * 1. `unlockVaultFromRoom(id)`；
+     * 2. 若结论是 `Unavailable`（`NotEnrolled` / `Damaged` 都归这里）⇒ 补建房间信封
+     *    ——房子化后这一步**纯软件**，房钥匙就在内存里，不需要第二次认证；
+     * 3. 补建成功就**再开一次**（凭据就是刚验过的那一份，不会再失败）。
+     *
+     * ⚠️ 不抽到 repository 里当"自动补建"：那是**策略**（什么时候值得补、用谁的主密码），
+     * 而 repository 只该提供能力（`enrollVaultAfterFingerprintUnlock`）。
+     * 把它藏进 `unlockVaultFromRoom` 会让"开库"这个方法意外产生副作用（写盘），
+     * 也让 `StaleCredentials` 那条自愈路径与它纠缠不清。
+     */
+    private suspend fun openRoomWithEnrollFallback(id: String): RoomUnlockOutcome {
+        val first = runCatching { vaultRepository.unlockVaultFromRoom(id) }
+            .getOrElse { RoomUnlockOutcome.Unavailable(it.message ?: "无法打开该库") }
+        if (first !is RoomUnlockOutcome.Unavailable) return first
+        val enrolled = runCatching {
+            vaultRepository.enrollVaultAfterFingerprintUnlock(id) { target ->
+                if (target == lastPasswordVaultId) lastPassword else null
+            }
+        }.getOrDefault(false)
+        if (!enrolled) return first
+        return runCatching { vaultRepository.unlockVaultFromRoom(id) }
+            .getOrElse { RoomUnlockOutcome.Unavailable(it.message ?: "无法打开该库") }
     }
 
     /**
@@ -670,6 +759,24 @@ class UnlockViewModel @Inject constructor(
                     // 门锁解不开时的分叉（rearm / 降级）在 fanout 里，
                     // 判据 = 房钥匙在不在内存（定稿 §6，批次 4）。
                     recovery = unlockRecovery,
+                    // ★ #243：门锁刚开（房钥匙在内存）⇒ 顺手给「信封不在 / 坏了」的
+                    //   目标库补建房间信封。不补的话解锁页永远不渲染指纹入口，
+                    //   每次都回主密码（用户 2026-11-04 报障）。
+                    //   ⚠️ 「只在信封缺失时才调」由 `LocalUnlockFanout` 判断
+                    //   （它拿着开库结论），这里不再重复一遍，避免两处判据漂移。
+                    roomEnroller = { target, _ ->
+                        // 只认「用户刚刚在本次会话里为这个库输过的那一个」
+                        // （[lastPasswordVaultId] 判库 id，不是拿别人的密码去试）。
+                        // Bitwarden 库凭据是会话密钥，[masterPasswordOf] 给 null 即可。
+                        val enrolled = vaultRepository.enrollVaultAfterFingerprintUnlock(target) { id ->
+                            if (id == lastPasswordVaultId) lastPassword else null
+                        }
+                        // ★ 封好就把明文忘掉：这份密码的唯一用途就是建这个信封，
+                        //   信封建好后它再没有任何读者 —— 留在 ViewModel 字段里
+                        //   只是给内存转储多一个窗口（项目里"明文不过夜"的同一条纪律）。
+                        if (enrolled) forgetPassword()
+                        enrolled
+                    },
                 )
             }
             when (val result = fanout.first) {
@@ -928,6 +1035,12 @@ class UnlockViewModel @Inject constructor(
     private suspend fun handleSubmitResult(result: UnlockResult, submitTwoFactor: Boolean) {
         when (result) {
             UnlockResult.Success -> {
+                // ★ #243：**必须**在下面那次 `password = ""` 之前记 —— 之后就读不到了。
+                //   详见 [rememberPassword] 的 KDoc。空串不记：那说明本次没输密码
+                //   （KDBX 走的是房间/其它路径），不能伪装成"验过"。
+                _state.value.password.takeIf { it.isNotBlank() && vaultId.isNotBlank() }?.let {
+                    rememberPassword(vaultId, it)
+                }
                 // 成功解锁 = 密钥已在内存 → 查看锁标记失去意义（真锁 / 退出数据库后
                 // 残留的标记若不清，根导航会立刻把用户弹回解锁页）。
                 sessionRepository.clearViewLock(vaultId)

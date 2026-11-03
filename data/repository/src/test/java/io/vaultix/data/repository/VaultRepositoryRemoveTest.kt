@@ -94,8 +94,11 @@ class VaultRepositoryRemoveTest {
 
         // 内存会话已清零：移除后任何解密入口都拿不到密钥
         assertNull(sessions.keyOf(vaultId))
-        // 该库的房间信封删除（房子化：门锁是全局的，移除单库不动门锁）
-        coVerify(exactly = 1) { houseKeyStore.removeRoom(vaultId) }
+        // 该库的房间信封删除（房子化：门锁是全局的，移除单库不动门锁）。
+        // ⚠️ 验证的是**转发目标**而不是 `houseKeyStore`：信封与范围镜像的删除
+        //   已下沉到 `LocalUnlockEnrollment.removeRoom`（本测试里它是 mock），
+        //   `houseKeyStore` 那一步在 `LocalUnlockEnrollmentTest` 里单独守。
+        coVerify(exactly = 1) { localUnlockEnrollment.removeRoom(vaultId) }
         // 凭据与 host→server 登记一并清除（防残留会话被后续请求复用）
         io.mockk.verify(exactly = 1) { authRepository.logout(vaultId) }
         // 队列清理先于删行（同服务器重加账号时不允许残留旧离线改动）

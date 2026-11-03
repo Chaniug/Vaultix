@@ -44,9 +44,37 @@ import kotlinx.coroutines.flow.first
  */
 internal object LocalUnlockFanout {
 
+    /**
+     * 「门锁刚开、顺手补建房间信封」这个动作的可注入形态（#243）。
+     *
+     * ⚠️ 用**函数式接口**而不是直接调仓库：本类的单测全靠假仓库（`LocalUnlockFanoutTest`），
+     * 加一个 `suspend` 方法到 `VaultRepository` 会让那些假实现全部要补桩；
+     * 而这件事与「开库」正交，独立成一个接缝更清楚。
+     */
+    fun interface RoomEnroller {
+
+        /**
+         * @param vaultId 用户点的那一个库。
+         * @param outcome 本次开库的结论 —— 只有「信封不在 / 坏了」才值得补建
+         *   （`Opened` 说明信封本来就在；`StaleCredentials` 是另一条自愈路径）。
+         * @return true = 本次真的建好了信封（调用方据此**重试一次**开库）。
+         */
+        suspend fun enrollIfNeeded(vaultId: String, outcome: RoomUnlockOutcome): Boolean
+
+        companion object {
+            /** 不修（默认值）：行为与加本接缝之前逐字相同。 */
+            val None: RoomEnroller = RoomEnroller { _, _ -> false }
+        }
+    }
+
     /** 一次 fanout 的结论。 */
     data class Result(
-        /** 首个库（用户点指纹要开的那个）的结论。 */
+        /**
+         * 首个库（用户点指纹要开的那个）的**最终**结论。
+         *
+         * ⚠️ #243 之后它可能是「补建房间信封 → 重试」的结果，而不是第一次
+         * `unlockVaultFromRoom` 的结论。调用方只看这个即可。
+         */
         val first: RoomUnlockOutcome,
         /** 其余库里成功打开的数量。 */
         val restOpened: Int,
@@ -109,6 +137,14 @@ internal object LocalUnlockFanout {
         rest: List<String>,
         cipher: Cipher,
         recovery: UnlockRecoveryRepository? = null,
+        /**
+         * ★ 门锁刚开、但 [first] 不在快速解锁范围内时，补建它的房间信封（#243）。
+         *
+         * 空实现 = 不修（行为与加本参数之前逐字相同）。生产调用点传的是
+         * `repository.enrollVaultAfterFingerprintUnlock(...)` —— 见 `UnlockViewModel`
+         * 的 `roomEnroller`。
+         */
+        roomEnroller: RoomEnroller = RoomEnroller.None,
     ): Result {
         // ★ 诊断埋点（2026-09-17 补、房子化后保留）：排「指纹过了却又让人解锁」
         //   必须能量化到"哪个库、哪种结论"，否则只能猜。
@@ -131,6 +167,25 @@ internal object LocalUnlockFanout {
         val firstResult = runCatching { repository.unlockVaultFromRoom(first) }
             .getOrElse { RoomUnlockOutcome.Unavailable(it.message ?: OPEN_FAILED) }
         AutofillLogger.d("fanout first=$first → ${describe(firstResult)}")
+        // ★ #243：门锁已经开了（房钥匙在内存），此刻补建房间信封是**纯软件**的。
+        //
+        //   为什么必须在这里、而不是"等用户下次进设置页"：`NotEnrolled` 说明这个库
+        //   压根没有房间信封 —— 而用户刚刚通过了一次认证，这正是补它最便宜的时刻
+        //   （不需要第二次认证、主密码由调用方按库提供）。不补的后果是解锁页永远
+        //   不显示指纹入口（用户 2026-11-04 报障的原文）。
+        //
+        //   ⚠️ 只补 [first]：其余库本来就不在范围内，补它们等于替用户扩大范围。
+        //   ★ 补建成功后**原地重试一次**：信封里的凭据就是刚才那次认证对应的
+        //     主密码（KDBX）/ 会话密钥（Bitwarden），它必然能开库 —— 不重试的话
+        //     用户会看到「已纳入快速解锁」却仍然开不了库，下一次还得再输密码
+        //     （那正是 #243 的第二个症状）。
+        // ⚠️ 只在「信封不在 / 坏了」时才叫补建 —— `Opened` 说明本来就没事，
+        //   `StaleCredentials` 是另一条自愈路径（重包，见 `RoomResealRepository`）。
+        //   漏了这道判断会让每次成功解锁都白跑一次备料（KDBX 还多一次 Argon2）。
+        val needsEnroll = firstResult is RoomUnlockOutcome.Unavailable
+        val enrolledNow = needsEnroll &&
+            runCatching { roomEnroller.enrollIfNeeded(first, firstResult) }.getOrDefault(false)
+        val finalFirstResult = if (enrolledNow) retryAfterEnroll(repository, first) else firstResult
         var opened = 0
         var failed = 0
         for (id in rest) {
@@ -140,14 +195,33 @@ internal object LocalUnlockFanout {
             AutofillLogger.d("fanout rest=$id → ${describe(outcome)}")
         }
         AutofillLogger.d(
-            "fanout done first=${describe(firstResult)} opened=$opened failed=$failed",
+            "fanout done first=${describe(finalFirstResult)} opened=$opened failed=$failed",
         )
         return Result(
-            first = firstResult,
+            first = finalFirstResult,
             restOpened = opened,
             restFailed = failed,
             lockOpened = true,
         )
+    }
+
+    /**
+     * 房间信封刚补建好之后，**立刻**再开一次 [first]（#243）。
+     *
+     * 补建时用的凭据就是本次认证已经验过的那一份（`prepareKdbx` 里 `Kdbx.verify`
+     * 过、或会话密钥本来就在内存），所以这次重试**不会**再要一次密码、也不该失败；
+     * 真失败就如实返回那次的新结论（不硬编 `Opened`）。
+     *
+     * @return 重试后的结论 —— 调用方应以它为准（而不是补建前那个 `NotEnrolled`）。
+     */
+    private suspend fun retryAfterEnroll(
+        repository: VaultRepository,
+        vaultId: String,
+    ): RoomUnlockOutcome {
+        val retried = runCatching { repository.unlockVaultFromRoom(vaultId) }
+            .getOrElse { RoomUnlockOutcome.Unavailable(it.message ?: OPEN_FAILED) }
+        AutofillLogger.d("fanout first=$vaultId → 补建信封后重试 ${describe(retried)}")
+        return retried
     }
 
     /**

@@ -139,8 +139,33 @@ interface VaultRepository {
     fun pinLockAvailable(): Flow<Boolean>
 
     /**
-     * 该库是否可用指纹快解（指纹门锁在 && 该库房间信封在）。
-     * 解锁页指纹入口的可见性 = 本方法 —— 组合了「全局门锁」与「该库房间」两个事实。
+     * ★ **快速解锁入口是否该给**（#243，2026-11-04 真机报障）—— 判据 = 装过**任意一把**门锁。
+     *
+     * ## 与 [fingerprintQuickUnlockAvailable] 的分工（两个不同的问题）
+     *
+     * | 问题 | 方法 |
+     * |---|---|
+     * | 「能不能**直接**用房间信封开」 | [fingerprintQuickUnlockAvailable]（= 在范围里） |
+     * | 「**该不该把入口给用户**」 | 本方法（= 有门锁就行） |
+     *
+     * 用前者当后者，会让「装了门锁、但该库的房间信封还没封」的库永远看不到指纹入口 ——
+     * 而那个信封**恰恰只能从那个入口补建**。用户看到的就是「该库未纳入快速解锁」
+     * （`RoomOpen.NotEnrolled` 的原文），一个**没有任何出路**的死结。
+     *
+     * ## 为什么补建不构成越权
+     *
+     * 房间信封要用房钥匙封，而房钥匙只能由通过门锁的人打开；门锁是**全局**的
+     * （与哪个库无关），能过门锁的人本来就是这台设备的主人。缺的只是那一下封装。
+     *
+     * @return Flow，`true` = 解锁页 / 自动填充应给出快速解锁入口（指纹或 PIN）。
+     */
+    fun quickUnlockEntryAvailable(): Flow<Boolean>
+
+    /**
+     * 该库**此刻**是否可直接用房间信封开（指纹门锁在 && 该库房间信封在）。
+     *
+     * ⚠️ 「能不能直接开」，**不是**「该不该给入口」—— 后者见 [quickUnlockEntryAvailable]
+     * （#243 踩的正是这个坑：拿本方法当入口判据 ⇒ 未封房间的库永远没有入口）。
      */
     fun fingerprintQuickUnlockAvailable(vaultId: String): Flow<Boolean>
 
@@ -267,6 +292,39 @@ interface VaultRepository {
     suspend fun sealRoomsForVaults(
         prepared: List<LocalUnlockPreparedEnrollment>,
     ): Map<String, LocalUnlockEnrollOutcome>
+
+    /**
+     * ★ **刚接受过认证的库**：门锁已开（房钥匙在内存）之后，补建该库的房间信封
+     * （#243，2026-11-04 真机报障）。
+     *
+     * ## 为什么需要这个入口（它不是"锦上添花"）
+     *
+     * 冷启动后第一次进解锁页时，房钥匙**必然**不在内存（没有任何门锁被开过）。
+     * 而用户按下的指纹，**恰恰就是**"房钥匙该进内存"的那一次认证 —— 但纳入那一步
+     * 发生在**认证之前**（`autoEnrollNewVault` 见房钥匙不在 ⇒ 静默 false），
+     * 于是顺序反了：
+     *
+     * ```
+     * 主密码开库 → autoEnrollNewVault（房钥匙还没进内存 ⇒ false）
+     *            → 用户按指纹 → 门锁开了、房钥匙进内存 → **但没人再来封房间了**
+     * ⇒ 该库永远不在范围 ⇒ 指纹入口不渲染 ⇒ 每次都回到主密码
+     * ```
+     *
+     * ⇒ 本方法补上"认证之后"那一次。它**不做任何认证**（对刚通过门锁的人再要一次
+     * 生物识别是多余的），也不猜密码 —— KDBX 的主密码由调用方按库提供。
+     *
+     * ⚠️ 重复调用是幂等的（同一库重封一次，结果相同），不必在调用点做去重。
+     *
+     * @param vaultId 本次认证要打开的库。
+     * @param masterPasswordOf KDBX 主密码来源（`null` = 没有可用密码 ⇒ 这次不纳入）。
+     *   **只接受用户此刻真的输过 / 验过的值**，不得缓存、不得猜。
+     *   Bitwarden 走会话密钥，传 `{ null }` 即可。
+     * @return true = 本次真的建好了房间信封。
+     */
+    suspend fun enrollVaultAfterFingerprintUnlock(
+        vaultId: String,
+        masterPasswordOf: suspend (String) -> String?,
+    ): Boolean
 
     // ⚠️ 这里曾有过 `removeVaultFromScope(vaultId)`（「取消勾选某库」=删房间信封
     //   + 范围镜像剔除），**2026-10-04 删除**：

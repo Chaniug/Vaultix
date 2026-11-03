@@ -61,11 +61,18 @@ class LocalUnlockEnrollmentAutoEnrollTest {
         kdbxFileSources = sources,
     )
 
-    /** 让三道守卫全部通过，进入「真去封信封」的分支。 */
+    /**
+     * 让全部门禁通过，进入「真去封信封」的分支。
+     *
+     * `hasRoom = false` 是默认前提（"还没封过"）—— 已有信封时本方法会短路，
+     * 那条单独有用例守。
+     */
     private fun givenGuardPassed() {
         every { house.isUnlocked } returns true
         coEvery { house.hasAnyLock() } returns true
+        coEvery { house.hasRoom(any()) } returns false
         every { preferences.quickUnlockScope() } returns flowOf(existingScope)
+        every { preferences.isQuickUnlockScopeConfirmed() } returns flowOf(false)
     }
 
     private fun bitwardenRow() = VaultEntity(
@@ -106,16 +113,58 @@ class LocalUnlockEnrollmentAutoEnrollTest {
     }
 
     @Test
-    fun `范围为空集_尊重用户一个都不要`() = runTest {
-        // 空集在 QUICK_UNLOCK_SCOPE 里有确定含义（不是"未配置"）——
-        // 用户手动取消全部勾选后，不该被一次新增库悄悄改回来。
+    fun `范围为空集且已确认_尊重用户一个都不要`() = runTest {
+        // ★ 空集有**两**种含义，这一条守的是「已确认」的那一种：
+        //   用户手动取消全部勾选后，不该被一次新增库悄悄改回来。
+        //   （未确认的空集 = 默认全部库，见下面那一条 —— 两者必须分开守。）
         every { house.isUnlocked } returns true
         coEvery { house.hasAnyLock() } returns true
+        coEvery { house.hasRoom(any()) } returns false
         every { preferences.quickUnlockScope() } returns flowOf(emptySet())
+        every { preferences.isQuickUnlockScopeConfirmed() } returns flowOf(true)
 
         assertFalse(enrollment().autoEnrollNewVault(vaultId))
 
         coVerify(exactly = 0) { vaultDao.get(any()) }
+        coVerify(exactly = 0) { preferences.setQuickUnlockScope(any()) }
+    }
+
+    @Test
+    fun `范围为空集但从未确认过_默认全部库_该封`() = runTest {
+        // ★ #243 的第二道死锁：只看「范围是不是空集」会把**只有这一个库**的用户
+        //   永久挡在门外 —— 他没有别的库可纳入，范围就永远是空集。
+        //   语义真源：未确认 ⇒ 向导默认全勾 ⇒ "全部库都在范围内"（该封）；
+        //   已确认 + 空集 ⇒ "一个都不要"（不封，见上一条）。
+        every { house.isUnlocked } returns true
+        coEvery { house.hasAnyLock() } returns true
+        coEvery { house.hasRoom(any()) } returns false
+        every { preferences.quickUnlockScope() } returns flowOf(emptySet())
+        every { preferences.isQuickUnlockScopeConfirmed() } returns flowOf(false)
+        coEvery { vaultDao.get(vaultId) } returns bitwardenRow()
+        coEvery { sessions.keyOf(vaultId) } returns freshKey()
+        coEvery { house.sealRoom(any(), any()) } just Runs
+        coEvery { preferences.setQuickUnlockScope(any()) } just Runs
+
+        assertTrue(enrollment().autoEnrollNewVault(vaultId))
+
+        coVerify(exactly = 1) { house.sealRoom(vaultId, any()) }
+        coVerify(exactly = 1) { preferences.setQuickUnlockScope(setOf(vaultId)) }
+    }
+
+    @Test
+    fun `已经有房间信封_直接短路_不再烧一次KDF`() = runTest {
+        // ★ #243 的必需项（不是优化）：本方法会在**每次主密码解锁成功后**被调用，
+        //   而 KDBX 备料要先跑一次完整 KDF（真机 64 MiB / 46 轮）。没有短路的话，
+        //   用户每输一次主密码都要再烧一遍同样量级的 Argon2 —— 解锁时间凭空翻倍。
+        every { house.isUnlocked } returns true
+        coEvery { house.hasAnyLock() } returns true
+        coEvery { house.hasRoom(vaultId) } returns true
+
+        assertTrue(enrollment().autoEnrollUnlocked(vaultId))
+
+        // 连库都不读，更不备料 / 不重封。
+        coVerify(exactly = 0) { vaultDao.get(any()) }
+        coVerify(exactly = 0) { house.sealRoom(any(), any()) }
         coVerify(exactly = 0) { preferences.setQuickUnlockScope(any()) }
     }
 
@@ -195,6 +244,66 @@ class LocalUnlockEnrollmentAutoEnrollTest {
         assertFalse(enrollment().autoEnrollNewVault(vaultId) { "master-pw" })
 
         coVerify(exactly = 0) { house.sealRoom(any(), any()) }
+    }
+
+    // ---- #243：门锁刚开之后补建（autoEnrollUnlocked / enrollJustAuthenticated） ----
+
+    @Test
+    fun `autoEnrollUnlocked_不要求房钥匙_只留门锁与范围两道守卫`() = runTest {
+        // ★ #243 的核心：旧 `autoEnrollNewVault` 见 `isUnlocked == false` 就静默返回，
+        //   而冷启动主密码解锁那一刻房钥匙**必然**不在内存 ⇒ 库永远进不了范围。
+        //   `autoEnrollUnlocked` 把这条守卫交还调用方（只有它知道刚有没有解开门锁）。
+        every { house.isUnlocked } returns false
+        coEvery { house.hasAnyLock() } returns true
+        coEvery { house.hasRoom(any()) } returns false
+        every { preferences.quickUnlockScope() } returns flowOf(existingScope)
+        every { preferences.isQuickUnlockScopeConfirmed() } returns flowOf(false)
+        coEvery { vaultDao.get(vaultId) } returns bitwardenRow()
+        coEvery { sessions.keyOf(vaultId) } returns freshKey()
+        coEvery { house.sealRoom(any(), any()) } just Runs
+        coEvery { preferences.setQuickUnlockScope(any()) } just Runs
+
+        assertTrue(enrollment().autoEnrollUnlocked(vaultId))
+
+        // 镜像必须是**并集**（不能把老库挤出去）。
+        coVerify(exactly = 1) { preferences.setQuickUnlockScope(existingScope + vaultId) }
+    }
+
+    @Test
+    fun `enrollJustAuthenticated_房钥匙不在内存就不封`() = runTest {
+        // 反向门禁：这道入口是「门锁**应该**刚开」的调用点用的，
+        // 房钥匙真不在时**不能**去封 —— 那会落一个谁也解不开的孤儿信封。
+        every { house.isUnlocked } returns false
+
+        assertFalse(enrollment().enrollJustAuthenticated(vaultId) { null })
+
+        coVerify(exactly = 0) { house.sealRoom(any(), any()) }
+    }
+
+    @Test
+    fun `removeRoom_删信封并从范围镜像剔除`() = runTest {
+        // 2026-11-04 从 `VaultRepositoryImpl` 下沉过来（那里函数数顶在 detekt 上限）。
+        // 两件事必须**同时**发生：真源（房间信封）与镜像（范围键）不能只剩一边。
+        every { preferences.quickUnlockScope() } returns flowOf(existingScope + vaultId)
+        coEvery { house.removeRoom(vaultId) } just Runs
+        coEvery { preferences.setQuickUnlockScope(any()) } just Runs
+
+        enrollment().removeRoom(vaultId)
+
+        coVerify(exactly = 1) { house.removeRoom(vaultId) }
+        coVerify(exactly = 1) { preferences.setQuickUnlockScope(existingScope) }
+    }
+
+    @Test
+    fun `removeRoom_不在范围里就不写镜像`() = runTest {
+        // 幂等：重复删 / 删一个本来没纳入的库，不该产生一次无意义的写入。
+        every { preferences.quickUnlockScope() } returns flowOf(existingScope)
+        coEvery { house.removeRoom(vaultId) } just Runs
+
+        enrollment().removeRoom(vaultId)
+
+        coVerify(exactly = 1) { house.removeRoom(vaultId) }
+        coVerify(exactly = 0) { preferences.setQuickUnlockScope(any()) }
     }
 
     private fun kdbxRow() = VaultEntity(
