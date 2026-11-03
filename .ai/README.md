@@ -12,25 +12,36 @@
 此前约定「两边保持同步」，结果是同一主题两处各有一份、必然漂移（AI 会看错位置）。
 **要改内容，只改这里。**
 
-## 🕐 最新状态（**2026-11-03 深夜** · 真机闪退修复 #238）
+## 🕐 最新状态（**2026-11-03 深夜** · 一次报障 = 三个独立崩溃 #238/#239/#240）
 
-> **一句话**：用户报「从 OneDrive 添加 KDBX 库 → 点登录 → 闪退」。
-> 真机日志直指 **Compose `OutlinedTextField` 测量时子节点已不在**（`fastFirst` 抛
-> `NoSuchElementException`），**与 MSAL / R8 无关**。
+> **一句话**：用户报「点添加密码库就闪退，清数据也一样」。拿真机日志后确认：
+> **同一晚崩了三次，三个完全不同的原因**，只是都长在「添加库」这条路上。
 >
-> **两条必须记住的取舍**：
-> ① **切来源前必须先 `focusClear()`** —— WebDAV 有 3 个输入框、OneDrive 一个都没有，
-> 切换时那组节点被直接移除而焦点仍留在上面 ⇒ 下一帧重测量就崩。
-> 判据是**不对称即漏做**：同文件的 `ProbeButton` 本来就先清焦点了，chip 漏了。
-> ② **堆栈行号不能跨 M3 版本硬套** —— 本轮我据 `OutlinedTextField.kt:1509` 下过结论，
-> 但 alpha16 该文件只有 1454 行（1.2/1.3 → 1155、1.4 → 1437），1509 属于别的版本。
-> ⇒ **先查文件总行数，再谈行号**。
+> | # | 触发 | 异常 | 性质 |
+> |---|---|---|---|
+> | **239** | 进「添加账号」表单 | `AbstractMethodError: CustomStyle.applyStyle` | **依赖二进制不兼容** |
+> | **240** | 添加库 → 本地 KDBX | `SerializationException: Serializer for class 'Companion'` | **代码笔误（漏括号）** |
+> | **238** | 切 OneDrive → 点登录 | `NoSuchElementException` at `OutlinedTextFieldMeasurePolicy` | Compose 测量期 |
 >
-> **验证**：`:app:compileFullDebugKotlin` 通过、`detekt` 全模块通过、8 个脚本门禁全绿。
-> ⚠️ **Compose 测量期行为在 JVM 单测里不执行** ⇒ **真机验收仍是必须项**。
+> **三条必须记住的判据**：
+> ① **`AbstractMethodError` / `NoSuchMethodError` = 版本错配**，别读业务代码，
+> 直接 `dependencyInsight`。本次真凶是 `markdown-renderer 0.46.0` 把
+> `org.jetbrains.compose.foundation:1.12.1` 带了进来，**只回退 `composeBom` 完全无效**
+> （bom 请求 1.11.4，仲裁仍取 1.12.1）。**依赖对齐是"解析结果"的属性，不是"声明"的属性。**
+> ② **`navigate(AddKdbxRoute)` 少一对括号**：`@Serializable` 给 `data class` 补了 `Companion`，
+> Kotlin 把类名解析成伴生对象 ⇒ **编译通过**，运行期 `route::class` 是 `Companion` ⇒ 必崩。
+> `data object` 用 `navigate(X)`，`data class` 必须 `navigate(X(..))`。
+> ③ **同一个 App 可以有多个不相关的闪退**。用户说"都是点添加库崩的"，
+> 实际是这条路上有两处独立的坑 —— **每份日志都要独立读第一行**。
 >
-> 详见 [`SESSION-2026-11-03.md`](./SESSION-2026-11-03.md) §十三 与
-> [`issues/06-界面与交互-part10.md`](./issues/06-界面与交互-part10.md) **#238**。
+> **验证**：`:app:compileFullDebugKotlin` 通过、`detekt` 全 10 模块通过、9 个脚本门禁 + 文档门禁全绿。
+> 依赖实测：`foundation/ui/runtime = 1.11.4`（与 alpha16 的 `1.11.0-beta02` 同 minor），
+> `org.jetbrains.compose` 残留 **0**。
+> ⚠️ **三条路径都要真机验**：① 添加库→本地 KDBX ② 进网盘表单 ③ 点 WebDAV 输入框→切 OneDrive→点登录。
+>
+> 详见 [`SESSION-2026-11-03.md`](./SESSION-2026-11-03.md) §十三（#238）、§十四（#239/#240），
+> 以及 [`issues/01-构建与环境-part13.md`](./issues/01-构建与环境-part13.md) **#239**、
+> [`issues/06-界面与交互-part10.md`](./issues/06-界面与交互-part10.md) **#238 / #240**。
 
 ---
 

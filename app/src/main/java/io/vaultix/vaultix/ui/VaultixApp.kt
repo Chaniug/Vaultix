@@ -314,7 +314,14 @@ private fun NavGraphBuilder.vaultEntryGraph(
     composable<VaultListRoute> {
         VaultListScreen(
             onAddVault = { navController.navigate(AddVaultRoute) },
-            onAddKdbx = { navController.navigate(AddKdbxRoute) },
+            // ⚠️ 必须写 `AddKdbxRoute()`：它是 data class，`@Serializable` 会为它生成
+            // `Companion`，写成 `navigate(AddKdbxRoute)` 时该名字在表达式位置解析成
+            // **伴生对象本身**（编译通过，因为 Companion 也是 Any），运行时
+            // `route::class` = `AddKdbxRoute.Companion::class` ⇒
+            // `SerializationException: Serializer for class 'Companion' is not found`（#239）。
+            // 与之相对，`AddVaultRoute` / `AddCloudVaultRoute` 是 `data object`，
+            // 名字本身就是唯一实例，`navigate(XxxRoute)` 才是正确写法。
+            onAddKdbx = { navController.navigate(AddKdbxRoute()) },
             onAddCloud = { navController.navigate(AddCloudVaultRoute) },
             onOpenVault = { vault ->
                 if (vault.unlocked) {
@@ -426,7 +433,7 @@ private fun NavGraphBuilder.settingsGraph(navController: NavHostController) {
         VaultManagementScreen(
             onBack = { navController.popBackStack() },
             onAddBitwardenVault = { navController.navigate(AddVaultRoute) },
-            onAddKdbxVault = { navController.navigate(AddKdbxRoute) },
+            onAddKdbxVault = { navController.navigate(AddKdbxRoute()) },
             onAddCloudVault = { navController.navigate(AddCloudVaultRoute) },
             onOpenCloudAccounts = { navController.navigate(CloudAccountsRoute) },
             // 点未解锁的库 → 去解锁页（2026-09-15 修的空白页 bug，语义不能退化）。

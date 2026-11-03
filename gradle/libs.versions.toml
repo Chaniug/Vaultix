@@ -14,13 +14,43 @@ ksp = "2.3.13"
 
 # ===== Compose =====
 # ⚠️ composeBom 与 material3 是【硬绑定】，禁止只升级其中一个。
-# 版本依赖链（Bastion 实测）：
-#   bom 2026.03.00 锁 runtime/foundation/ui = 1.10.5
-#   material3 1.5.0-alpha16 依赖               1.11.0-beta02
-# 若只升 bom 而 material3 留在 alpha16，解析结果会是 1.12.0，而 alpha16 的字节码
-# 是针对 1.11.0-beta02 编译的 —— 跨 minor 属二进制不兼容（NoSuchMethodError 风险）。
-# 二者组合直接对齐 Bastion，便于后续搬运其 Compose 组件。
-composeBom = "2026.09.00"
+#
+# 🔴 2026-11-03 晚（#239）：**真机闪退，根因是「依赖跨 minor」，而且不止 bom 一个推手。**
+#
+#   加害链（用 `dependencyInsight` 实测，不是读注释猜的）：
+#     ① 11-03 上午 Dependabot 把 `composeBom` 从 2026.03.00 升到 2026.09.00，
+#        `material3` 留在 1.5.0-alpha16 —— 正是本注释一直警告的做法；
+#     ② 但**只把 bom 退回来并不够**：`markdown-renderer 0.46.0` 带进来
+#        `org.jetbrains.compose.foundation:foundation:1.12.1`，经冲突仲裁把 AndroidX 的
+#        `androidx.compose.foundation` 一起顶到 1.12.1 —— bom 的约束被一个 UI 库顶掉了。
+#
+#   实测各 bom 给出的基础库版本（直读 `compose-bom-<v>.pom`）：
+#     bom 2026.03.00 -> foundation/ui 1.10.5
+#     bom 2026.06.00 -> foundation     1.11.3
+#     bom 2026.06.01 -> foundation     1.11.4   ← **当前采用**
+#     bom 2026.08.00 -> foundation     1.12.0   ← 从这里开始跨 minor
+#     bom 2026.09.00 -> foundation     1.12.1   ← 崩的那个组合
+#   而 `material3-android:1.5.0-alpha16` 的 POM 声明的是 **1.11.0-beta02** 全家桶
+#   （foundation / ui / runtime / animation-core 全部）。
+#
+#   症状（真机 荣耀 BKQ-AN00 / SDK 37，**一进含 OutlinedTextField 的页面即崩**，
+#   清 App 数据无效 ⇒ 与用户状态无关）：
+#     java.lang.AbstractMethodError: abstract method
+#       "void androidx.compose.foundation.style.CustomStyle.applyStyle(CustomStyleScope)"
+#       on receiver Class<OutlinedTextFieldDefaults$$ExternalSyntheticLambda0>
+#       at androidx.compose.foundation.style.ResolvedStyle.build(ResolvedStyle.kt:109)
+#   ⇒ 运行期 foundation 1.12.1 把 `CustomStyle.applyStyle` 定为**抽象方法**，
+#     而 alpha16 的字节码编译于 1.11.0-beta02（那会儿根本没有 `CustomStyle` 这个类：
+#     `grep -rl CustomStyle` 扫 alpha16 的 classes.jar 是 **0 命中**）⇒ invokeinterface 落空。
+#
+#   ⚠️ **判据**：
+#     1. `AbstractMethodError` / `NoSuchMethodError` / `NoClassDefFoundError` = **版本错配**，
+#        不要读业务代码，直接 `dependencyInsight --dependency <组:工件>`；
+#     2. 看 `Selection reasons`：出现 `By conflict resolution` 就说明**有人在你背后改版本**；
+#     3. `bom` 只是约束，**不是命令**。任何传递依赖都能顶上去 ⇒
+#        **依赖对齐是「解析结果」的属性，不是「声明」的属性**。
+#     4. 能解析 ≠ 二进制兼容；能编译 ≠ 运行时安全。
+composeBom = "2026.06.01"
 # 刻意保留 alpha16：alpha27 会引发 70 处编译失败（menuAnchor() 无参重载被移除、
 # ExposedDropdownMenu 引用失效），属业务代码改造而非版本切换，需单独立项。
 material3 = "1.5.0-alpha16"
@@ -128,7 +158,18 @@ zxing = "3.5.4"
 #
 # ⚠️ 版本对齐：core 与 -m3 **必须同版本**（-m3 针对性编译于对应 core 之上，
 #   跨版本可能 NoSuchMethodError）—— 与 composeBom/material3 同一纪律。
-markdownRenderer = "0.46.0"
+# ⚠️ **0.46.0 是分界线**：它把传递依赖换成了 `org.jetbrains.compose.foundation:foundation:1.12.1`，
+#   经 Gradle 冲突仲裁会把 AndroidX 的 `androidx.compose.foundation` 一起顶到 **1.12.1**
+#   —— 而本项目的 `material3 1.5.0-alpha16` 是针对 **1.11.0-beta02** 编译的。
+#   跨 minor 的后果是运行时 `AbstractMethodError`（不是编译错），实测崩溃点：
+#     java.lang.AbstractMethodError: abstract method
+#       "void androidx.compose.foundation.style.CustomStyle.applyStyle(CustomStyleScope)"
+#       on receiver androidx.compose.material3.OutlinedTextFieldDefaults$$ExternalSyntheticLambda0
+#       at androidx.compose.foundation.style.ResolvedStyle.build(ResolvedStyle.kt:109)
+#   ⇒ **一进含 OutlinedTextField 的页面就闪退**（#239）。
+#   0.45.0 及以前只依赖 androidx.compose（不再引入 jetbrains.compose 1.12.1），故锁 0.45.0。
+#   升级此库时必须同时确认：它的 foundation 传递依赖是否仍在 material3 的 minor 内。
+markdownRenderer = "0.45.0"
 
 # ===== core:crypto 依赖版本 =====
 # Argon2id native 实现。锁 1.6.0（与 Bastion 完全一致）：
