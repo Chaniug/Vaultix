@@ -133,7 +133,7 @@ jobs:
             gradle wrapper --gradle-version "$gwv"
           fi
 
-      - name: Install Android SDK platform 36
+      - name: Install Android SDK platform 37
         run: bash "$GITHUB_WORKSPACE/.github/scripts/ensure-android-sdk.sh"
 
       - name: Run lint
@@ -243,32 +243,6 @@ jobs:
       - name: Self-test release assets checker
         shell: bash
         run: python3 "$GITHUB_WORKSPACE/.ai/tools/tests/selftest_release_assets.py"
-
-      # ★ 2026-11-01：文档索引 / 相对链接的一致性（拆篇之后才出现的一类静默错）。
-      #
-      # 当天按 8.9 §7.1 把 7 个 issues 篇拆成 7 个索引 + 41 个分篇、并把 17 篇 SESSION
-      # 移进 `archive/sessions-2026-09/`。于是多出两处"只有人点进去才发现"的缝：
-      #   ① `ISSUES.md` 条数 / 主篇题注 / 章节明细 三者对不上 —— 同一事实的多份拷贝
-      #      必然漂移，本项目已漂过四次（#160）；其中"数量恰好蒙对、名单是错的"最难发现。
-      #   ② 文件搬家后相对链接少一层 ⇒ 点进去 404；而"点进去"往往发生在最需要那条判据的时刻。
-      #
-      # 两者都**不会**让 compile / test / detekt 任何一个变红 —— 所以必须各自配门禁，
-      # 并且各配一条自测（探针自己判错会制造假红，假红几次之后就没人看它了）。
-      - name: Check issues index (index vs parts)
-        shell: bash
-        run: python3 "$GITHUB_WORKSPACE/.ai/tools/check_issues_index.py" "$GITHUB_WORKSPACE"
-
-      - name: Self-test issues index checker
-        shell: bash
-        run: python3 "$GITHUB_WORKSPACE/.ai/tools/tests/selftest_issues_index.py"
-
-      - name: Check markdown links (relative paths exist)
-        shell: bash
-        run: python3 "$GITHUB_WORKSPACE/.ai/tools/check_md_links.py" "$GITHUB_WORKSPACE"
-
-      - name: Self-test markdown link checker
-        shell: bash
-        run: python3 "$GITHUB_WORKSPACE/.ai/tools/tests/selftest_md_links.py"
 
       # push 时注入仓库固定签名，使 preview(debug) 与 stable release 签名完全一致、可互相覆盖安装。
       # 注意：本步骤与 release.yml 使用同一套 SIGNING_* Secret，密码也复用 Secret（不再硬编码 android），
@@ -526,6 +500,183 @@ jobs:
           SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
           SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
 
+      # ★★ 2026-11-03：单测**排在编译之后、出包之前**（原先排在 `Upload APK` /
+      #   `Publish Debug APK to preview Release` **之后**）。
+      #
+      # 为什么必须挪：原顺序 = 编译 → 上传 APK → 发 preview Release → 单测。
+      #   ⇒ 那个「硬门禁」实际上**没拦住任何东西**：单测红了的时候，
+      #   APK 早已作为 preview Release 发出去、用户早就下载安装了。
+      #   **门禁排在门后面 = 没有门禁。**
+      #
+      # 为什么放在编译**之后**、而不是提到最前面（这是刻意的取舍）：
+      #   · 编译失败由 `Build Debug APK` 那一步自己报出来，根因一目了然；
+      #     若把单测提到编译之前，编译错误会先表现为「单测失败」，
+      #     反而把根因糊掉 —— 本项目反复强调的「红了」与「代码有问题」必须能分开。
+      #   · 单测复用 build 已产出的编译产物 ⇒ 不额外花时间。
+      #
+      # 挪完之后的语义：单测失败 ⇒ 不上传 ⇒ **preview Release 不更新**，
+      #   线上留存的永远是「过了单测的那一份」。
+      # ★ 2026-10-10：从「报告模式」升为**真门禁**（去掉 `continue-on-error`）。
+      #
+      # 为什么现在敢去掉：本步骤此前长期 `continue-on-error: true` ⇒ **单测失败 CI 仍绿**。
+      # 配合上一条 upload 步骤的路径错配（只收集了 data:kdbx 的报告），出现过这样的状态：
+      # 「顶层结论绿 · 日志里躺着 30 条 Unresolved reference · 实际跑了什么没人知道」。
+      # 那正是"CI 绿 ≠ 单测通过"的完整成因，也是本轮一批修复能潜伏至今的土壤。
+      #
+      # 现在按「单测是硬门禁」的常规做法取值：**失败即红**。
+      # ⚠️ 若是因为基础设施（Gradle 下载失败 / 缓存损坏）而非断言失败导致红，
+      #    请修基础设施本身，**不要**把这个 `continue-on-error` 加回来 ——
+      #    那等于重新把门禁关上（加回时请一并说明理由与恢复计划，同下方 lint 的处置方式）。
+      - name: Run unit tests (hard gate)
+        id: unit_tests
+        # 同 lint：多 flavor 下 `testDebugUnitTest` 亦有歧义，需显式指定 variant。
+        # 纳入全部含单测的模块：core:crypto（172 例，Kover 门禁 ≥80%）、
+        # core:common（TOTP/密码强度等纯算法 16 例）、core:model（关联字段
+        # linkedId 分段编码锁定 5 例）、data:repository（会话/条目写路径）、
+        # data:bitwarden（CipherMapper 载荷保真/类型守恒 28 例）、
+        # data:kdbx（★ 2026-09-17 补：KDBX 读/写路径往返保真 + KPEX_* 字段，
+        #   含 KdbxWritePathTest 的 9 例。**此前漏登记 ⇒ 这些用例从未真正执行过**）。
+        # ★ 2026-10-10 补 core:datastore（VaultTimeout 档位模型 + 旧档位迁移映射，
+        #   VaultTimeoutTest / VaultTimeoutScopeTest 共 18 例）—— 与 data:kdbx 同一种漏法：
+        #   模块有 `test` 源码集、`build.gradle.kts` 也有 junit+truth 依赖，
+        #   只是没人把它写进这条命令，于是**从未在 CI 跑过**。
+        # ★ 2026-10-27 补 :domain（#199 起该模块有了第一个测试：FolderNamePolicyTest 6 例）。
+        #   与 data:kdbx / core:datastore 同一种漏法 —— 模块新增 `src/test` 时最容易忘的就是这里。
+        #   查漏方法（别再靠眼睛扫）：把各模块 `src/test` 的文件数与这条命令对一遍。
+        # 此前只跑 :app 与部分模块，新模块的测试等于从未在 CI 真正执行（盲区）。
+        # ⚠️ 新增带单测的模块时，**必须同时加进这里**，否则测试等于不存在。
+        # ★ 2026-11-01：**把退出码打出来再判**。
+        #
+        # 事故：CI #336/#337 的结论是「共 915 例，失败 0 例」，但整条 CI 仍是红的，
+        # 锚点却落在报告步骤上。这里有一个**没人能回答的问题**：
+        # 「`testDebugUnitTest` 到底返回了什么？」
+        # 之前无法回答，是因为 Gradle 的退出码只在 runner 里存在，日志要认证才能下载。
+        # ⇒ 用 `PIPESTATUS` 抓真实退出码，并同时 grep 出测试 JVM 崩溃 / OOM 的痕迹。
+        #   这样下一次红的时候，"是断言挂还是进程挂"一眼可判。
+        shell: bash
+        run: |
+          set +e
+          ./gradlew :core:crypto:testDebugUnitTest :core:common:testDebugUnitTest \
+            :core:model:testDebugUnitTest :core:datastore:testDebugUnitTest \
+            :app:testFullDebugUnitTest :data:repository:testDebugUnitTest \
+            :data:bitwarden:testDebugUnitTest :data:kdbx:testDebugUnitTest \
+            :domain:testDebugUnitTest \
+            --continue --stacktrace 2>&1 | tee /tmp/test_log.txt
+          TEST_EXIT=${PIPESTATUS[0]}
+          echo "::notice title=unit test exit::gradlew 退出码 = ${TEST_EXIT}"
+          # 测试进程崩溃（不是断言失败）的典型痕迹：
+          # ⚠️ 必须包含 `^e: `（Kotlin 编译错误）—— 2026-11-01 实测：那一次红的真因是
+          #   `> Task :app:compileFullDebugUnitTestKotlin FAILED`（**测试源码编译失败**），
+          #   而第一版 grep 只找了崩溃/OOM 关键词，把真正那行 `e:` 漏在外面，
+          #   还得再跑一轮才看到。**grep 的关键词表本身就是一种判据，漏一个 = 再猜一次。**
+          grep -nE "^e: |OutOfMemoryError|Process 'Gradle Test Executor|Test worker.*crashed|Could not complete execution|There were failing tests|FAILED" \
+            /tmp/test_log.txt | head -30 | while IFS= read -r line; do
+              echo "::notice title=test_log::${line}"
+            done
+          exit "$TEST_EXIT"
+
+      # 失败用例名转 annotation（2026-10-30 加）。
+      #
+      # ⚠️ 为什么需要这一步：`Run unit tests` 挂了之后，**顶层 annotation 只有一句
+      #    "Process completed with exit code 1."** —— 失败用例名、断言差异、异常栈
+      #    全在 artifact 的 XML 里，而 artifact 下载**需要认证**（匿名 401）。
+      #    结果是：CI 红了但任何人在本地都拿不到"哪个用例红了"，只能靠猜着改。
+      #    这不是第一次 —— #199/#203 那几轮也是靠反复 push 试探。
+      #
+      # 把 `<testcase>` 里带 `<failure>` 的项直接打成 notice，日志页一眼能看到
+      # 「类名.用例名 + 第一行错误」。只取前 40 条：Gradle 一次挂几十个用例时，
+      # 后面的基本都是同一个根因的连带失败，读前 40 条足够定位。
+      - name: Summarize failed unit tests
+        if: always()
+        shell: bash
+        # ⚠️ 2026-11-01：本步骤**只做报告，不允许失败**。
+        #    事故：CI #336 里它把 `Process completed with exit code 1` 挂在了自己身上，
+        #    而它报的内容是「共 915 例，失败 0 例」—— 一个纯读取步骤，硬是把整条 CI 判红。
+        #    本地按同样脚本复现（无 XML / 有 XML）都 exit 0，说明成因在 runner 侧的
+        #    输出处理（`::notice::` 逐行输出 + 内容里的特殊字符）。
+        #    ⇒ 诊断步骤的职责是**提供信息**，不是**下判决**。它一旦能失败，
+        #      就会把"真正的失败"替换成"诊断器自己坏了"，这正是这一轮连环红的最后一段。
+        #    真正的门禁是上一步 `Run unit tests (hard gate)`，那一步该红就红。
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          python3 - <<'PY' || true
+          import glob, sys, xml.etree.ElementTree as ET
+
+          files = glob.glob('**/build/test-results/**/TEST-*.xml', recursive=True)
+          if not files:
+              print('::notice title=unit tests::未找到 test-results XML')
+              sys.exit(0)
+
+          failed = []
+          total = 0
+          for path in files:
+              try:
+                  root = ET.parse(path).getroot()
+              except Exception as exc:          # noqa: BLE001 - 报告损坏不该让门禁崩
+                  print(f'::notice title=unit tests::无法解析 {path}: {exc}')
+                  continue
+              for case in root.iter('testcase'):
+                  total += 1
+                  node = case.find('failure')
+                  if node is None:
+                      node = case.find('error')
+                  if node is None:
+                      continue
+                  cls = case.get('classname') or ''
+                  name = case.get('name') or ''
+                  head = (node.get('message') or node.text or '').strip().splitlines()
+                  first = head[0][:220] if head else '(无消息)'
+                  failed.append(f'{cls}.{name} → {first}')
+
+          print(f'::notice title=unit tests::共 {total} 例，失败 {len(failed)} 例')
+          for line in failed[:40]:
+              # notice 的消息里不能有裸换行，压成一行。
+              print('::notice title=failed test::' + line.replace('\n', ' '))
+          if len(failed) > 40:
+              print(f'::notice title=unit tests::其余 {len(failed) - 40} 例省略（多为同一根因）')
+          PY
+
+      - name: Upload unit test reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: debug-unit-test-reports
+          # ⚠️ 2026-10-05 修正两处长期错配（此前**只有 data:kdbx 的报告被上传过**）：
+          #   ① app 有 `full` / `offline` 两个 flavor，跑的是 `testFullDebugUnitTest`，
+          #      而路径写的是 `testDebugUnitTest` ⇒ app 的 35 个测试类（含
+          #      VaultixBrandColorTest / AvatarHueTest）的报告**从未被收集过**。
+          #      同文件上方的 `lint` 步骤早就踩过这个坑并改成了 `lintFullDebug`，
+          #      唯独这里漏了。
+          #   ② core:* / data:repository / data:bitwarden 同样在跑测试，但路径里没有它们。
+          # ⇒ 后果是"CI 绿"完全不能代表单测通过。核对单测必须看本产物，不能只看顶层结论。
+          #    同 lint 的理由：`testDebugUnitTest` 在多 flavor 下有歧义，需显式指定 variant。
+          #
+          # ⚠️ 2026-10-10：又补了 core:datastore。**这条路径清单必须与上面的测试命令逐项对齐** ——
+          #    两处不一致时，缺的那一项就是"在跑但报告没人收"，核对时会看着像没跑过。
+          #    改上面命令时，请一并改这里。
+          path: |
+            app/build/reports/tests/testFullDebugUnitTest
+            app/build/test-results/testFullDebugUnitTest
+            core/crypto/build/reports/tests/testDebugUnitTest
+            core/crypto/build/test-results/testDebugUnitTest
+            core/common/build/reports/tests/testDebugUnitTest
+            core/common/build/test-results/testDebugUnitTest
+            core/model/build/reports/tests/testDebugUnitTest
+            core/model/build/test-results/testDebugUnitTest
+            core/datastore/build/reports/tests/testDebugUnitTest
+            core/datastore/build/test-results/testDebugUnitTest
+            data/repository/build/reports/tests/testDebugUnitTest
+            data/repository/build/test-results/testDebugUnitTest
+            data/bitwarden/build/reports/tests/testDebugUnitTest
+            data/bitwarden/build/test-results/testDebugUnitTest
+            data/kdbx/build/reports/tests/testDebugUnitTest
+            data/kdbx/build/test-results/testDebugUnitTest
+            domain/build/reports/tests/testDebugUnitTest
+            domain/build/test-results/testDebugUnitTest
+          if-no-files-found: ignore
+          retention-days: 3
+
       - name: List debug APK outputs
         run: find app/build/outputs/apk/*/debug -maxdepth 1 -type f -print || true
 
@@ -722,163 +873,3 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # ★ 2026-10-10：从「报告模式」升为**真门禁**（去掉 `continue-on-error`）。
-      #
-      # 为什么现在敢去掉：本步骤此前长期 `continue-on-error: true` ⇒ **单测失败 CI 仍绿**。
-      # 配合上一条 upload 步骤的路径错配（只收集了 data:kdbx 的报告），出现过这样的状态：
-      # 「顶层结论绿 · 日志里躺着 30 条 Unresolved reference · 实际跑了什么没人知道」。
-      # 那正是"CI 绿 ≠ 单测通过"的完整成因，也是本轮一批修复能潜伏至今的土壤。
-      #
-      # 现在按「单测是硬门禁」的常规做法取值：**失败即红**。
-      # ⚠️ 若是因为基础设施（Gradle 下载失败 / 缓存损坏）而非断言失败导致红，
-      #    请修基础设施本身，**不要**把这个 `continue-on-error` 加回来 ——
-      #    那等于重新把门禁关上（加回时请一并说明理由与恢复计划，同下方 lint 的处置方式）。
-      - name: Run unit tests (hard gate)
-        id: unit_tests
-        # 同 lint：多 flavor 下 `testDebugUnitTest` 亦有歧义，需显式指定 variant。
-        # 纳入全部含单测的模块：core:crypto（172 例，Kover 门禁 ≥80%）、
-        # core:common（TOTP/密码强度等纯算法 16 例）、core:model（关联字段
-        # linkedId 分段编码锁定 5 例）、data:repository（会话/条目写路径）、
-        # data:bitwarden（CipherMapper 载荷保真/类型守恒 28 例）、
-        # data:kdbx（★ 2026-09-17 补：KDBX 读/写路径往返保真 + KPEX_* 字段，
-        #   含 KdbxWritePathTest 的 9 例。**此前漏登记 ⇒ 这些用例从未真正执行过**）。
-        # ★ 2026-10-10 补 core:datastore（VaultTimeout 档位模型 + 旧档位迁移映射，
-        #   VaultTimeoutTest / VaultTimeoutScopeTest 共 18 例）—— 与 data:kdbx 同一种漏法：
-        #   模块有 `test` 源码集、`build.gradle.kts` 也有 junit+truth 依赖，
-        #   只是没人把它写进这条命令，于是**从未在 CI 跑过**。
-        # ★ 2026-10-27 补 :domain（#199 起该模块有了第一个测试：FolderNamePolicyTest 6 例）。
-        #   与 data:kdbx / core:datastore 同一种漏法 —— 模块新增 `src/test` 时最容易忘的就是这里。
-        #   查漏方法（别再靠眼睛扫）：把各模块 `src/test` 的文件数与这条命令对一遍。
-        # 此前只跑 :app 与部分模块，新模块的测试等于从未在 CI 真正执行（盲区）。
-        # ⚠️ 新增带单测的模块时，**必须同时加进这里**，否则测试等于不存在。
-        # ★ 2026-11-01：**把退出码打出来再判**。
-        #
-        # 事故：CI #336/#337 的结论是「共 915 例，失败 0 例」，但整条 CI 仍是红的，
-        # 锚点却落在报告步骤上。这里有一个**没人能回答的问题**：
-        # 「`testDebugUnitTest` 到底返回了什么？」
-        # 之前无法回答，是因为 Gradle 的退出码只在 runner 里存在，日志要认证才能下载。
-        # ⇒ 用 `PIPESTATUS` 抓真实退出码，并同时 grep 出测试 JVM 崩溃 / OOM 的痕迹。
-        #   这样下一次红的时候，"是断言挂还是进程挂"一眼可判。
-        shell: bash
-        run: |
-          set +e
-          ./gradlew :core:crypto:testDebugUnitTest :core:common:testDebugUnitTest \
-            :core:model:testDebugUnitTest :core:datastore:testDebugUnitTest \
-            :app:testFullDebugUnitTest :data:repository:testDebugUnitTest \
-            :data:bitwarden:testDebugUnitTest :data:kdbx:testDebugUnitTest \
-            :domain:testDebugUnitTest \
-            --continue --stacktrace 2>&1 | tee /tmp/test_log.txt
-          TEST_EXIT=${PIPESTATUS[0]}
-          echo "::notice title=unit test exit::gradlew 退出码 = ${TEST_EXIT}"
-          # 测试进程崩溃（不是断言失败）的典型痕迹：
-          # ⚠️ 必须包含 `^e: `（Kotlin 编译错误）—— 2026-11-01 实测：那一次红的真因是
-          #   `> Task :app:compileFullDebugUnitTestKotlin FAILED`（**测试源码编译失败**），
-          #   而第一版 grep 只找了崩溃/OOM 关键词，把真正那行 `e:` 漏在外面，
-          #   还得再跑一轮才看到。**grep 的关键词表本身就是一种判据，漏一个 = 再猜一次。**
-          grep -nE "^e: |OutOfMemoryError|Process 'Gradle Test Executor|Test worker.*crashed|Could not complete execution|There were failing tests|FAILED" \
-            /tmp/test_log.txt | head -30 | while IFS= read -r line; do
-              echo "::notice title=test_log::${line}"
-            done
-          exit "$TEST_EXIT"
-
-      # 失败用例名转 annotation（2026-10-30 加）。
-      #
-      # ⚠️ 为什么需要这一步：`Run unit tests` 挂了之后，**顶层 annotation 只有一句
-      #    "Process completed with exit code 1."** —— 失败用例名、断言差异、异常栈
-      #    全在 artifact 的 XML 里，而 artifact 下载**需要认证**（匿名 401）。
-      #    结果是：CI 红了但任何人在本地都拿不到"哪个用例红了"，只能靠猜着改。
-      #    这不是第一次 —— #199/#203 那几轮也是靠反复 push 试探。
-      #
-      # 把 `<testcase>` 里带 `<failure>` 的项直接打成 notice，日志页一眼能看到
-      # 「类名.用例名 + 第一行错误」。只取前 40 条：Gradle 一次挂几十个用例时，
-      # 后面的基本都是同一个根因的连带失败，读前 40 条足够定位。
-      - name: Summarize failed unit tests
-        if: always()
-        shell: bash
-        # ⚠️ 2026-11-01：本步骤**只做报告，不允许失败**。
-        #    事故：CI #336 里它把 `Process completed with exit code 1` 挂在了自己身上，
-        #    而它报的内容是「共 915 例，失败 0 例」—— 一个纯读取步骤，硬是把整条 CI 判红。
-        #    本地按同样脚本复现（无 XML / 有 XML）都 exit 0，说明成因在 runner 侧的
-        #    输出处理（`::notice::` 逐行输出 + 内容里的特殊字符）。
-        #    ⇒ 诊断步骤的职责是**提供信息**，不是**下判决**。它一旦能失败，
-        #      就会把"真正的失败"替换成"诊断器自己坏了"，这正是这一轮连环红的最后一段。
-        #    真正的门禁是上一步 `Run unit tests (hard gate)`，那一步该红就红。
-        continue-on-error: true
-        run: |
-          set -uo pipefail
-          python3 - <<'PY' || true
-          import glob, sys, xml.etree.ElementTree as ET
-
-          files = glob.glob('**/build/test-results/**/TEST-*.xml', recursive=True)
-          if not files:
-              print('::notice title=unit tests::未找到 test-results XML')
-              sys.exit(0)
-
-          failed = []
-          total = 0
-          for path in files:
-              try:
-                  root = ET.parse(path).getroot()
-              except Exception as exc:          # noqa: BLE001 - 报告损坏不该让门禁崩
-                  print(f'::notice title=unit tests::无法解析 {path}: {exc}')
-                  continue
-              for case in root.iter('testcase'):
-                  total += 1
-                  node = case.find('failure')
-                  if node is None:
-                      node = case.find('error')
-                  if node is None:
-                      continue
-                  cls = case.get('classname') or ''
-                  name = case.get('name') or ''
-                  head = (node.get('message') or node.text or '').strip().splitlines()
-                  first = head[0][:220] if head else '(无消息)'
-                  failed.append(f'{cls}.{name} → {first}')
-
-          print(f'::notice title=unit tests::共 {total} 例，失败 {len(failed)} 例')
-          for line in failed[:40]:
-              # notice 的消息里不能有裸换行，压成一行。
-              print('::notice title=failed test::' + line.replace('\n', ' '))
-          if len(failed) > 40:
-              print(f'::notice title=unit tests::其余 {len(failed) - 40} 例省略（多为同一根因）')
-          PY
-
-      - name: Upload unit test reports
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: debug-unit-test-reports
-          # ⚠️ 2026-10-05 修正两处长期错配（此前**只有 data:kdbx 的报告被上传过**）：
-          #   ① app 有 `full` / `offline` 两个 flavor，跑的是 `testFullDebugUnitTest`，
-          #      而路径写的是 `testDebugUnitTest` ⇒ app 的 35 个测试类（含
-          #      VaultixBrandColorTest / AvatarHueTest）的报告**从未被收集过**。
-          #      同文件上方的 `lint` 步骤早就踩过这个坑并改成了 `lintFullDebug`，
-          #      唯独这里漏了。
-          #   ② core:* / data:repository / data:bitwarden 同样在跑测试，但路径里没有它们。
-          # ⇒ 后果是"CI 绿"完全不能代表单测通过。核对单测必须看本产物，不能只看顶层结论。
-          #    同 lint 的理由：`testDebugUnitTest` 在多 flavor 下有歧义，需显式指定 variant。
-          #
-          # ⚠️ 2026-10-10：又补了 core:datastore。**这条路径清单必须与上面的测试命令逐项对齐** ——
-          #    两处不一致时，缺的那一项就是"在跑但报告没人收"，核对时会看着像没跑过。
-          #    改上面命令时，请一并改这里。
-          path: |
-            app/build/reports/tests/testFullDebugUnitTest
-            app/build/test-results/testFullDebugUnitTest
-            core/crypto/build/reports/tests/testDebugUnitTest
-            core/crypto/build/test-results/testDebugUnitTest
-            core/common/build/reports/tests/testDebugUnitTest
-            core/common/build/test-results/testDebugUnitTest
-            core/model/build/reports/tests/testDebugUnitTest
-            core/model/build/test-results/testDebugUnitTest
-            core/datastore/build/reports/tests/testDebugUnitTest
-            core/datastore/build/test-results/testDebugUnitTest
-            data/repository/build/reports/tests/testDebugUnitTest
-            data/repository/build/test-results/testDebugUnitTest
-            data/bitwarden/build/reports/tests/testDebugUnitTest
-            data/bitwarden/build/test-results/testDebugUnitTest
-            data/kdbx/build/reports/tests/testDebugUnitTest
-            data/kdbx/build/test-results/testDebugUnitTest
-            domain/build/reports/tests/testDebugUnitTest
-            domain/build/test-results/testDebugUnitTest
-          if-no-files-found: ignore
-          retention-days: 3

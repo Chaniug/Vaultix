@@ -23,15 +23,19 @@ name: CodeQL
 #    本仓库默认分支是 main，与实际开发主线一致，无需额外处理。
 
 on:
-  push:
-    branches: [ main ]
-    # 纯文档提交不扫：本仓库有大量 `.ai/**` 的接力文档提交，
-    # 每次都拖 10 分钟编译去分析「没变的代码」纯属浪费队列。
-    # 注意语义是「**所有**改动文件都被忽略才跳过」⇒ 代码 + 文档混提仍然会扫。
-    paths-ignore:
-      - '**.md'
-      - 'Docs/**'
-      - '.ai/**'
+  # ★ 2026-11-03：移除 `push: main` 触发。
+  #
+  # 理由：CodeQL 的产出是**告警**，不是门禁 —— 它不 block 编译、不 block 出包、
+  #   也不 block 合并。而本项目日常直接 push main（不走 PR），
+  #   ⇒ push 上跑出来的结果**没有任何人会去看**（去 Security 页逐条点开、
+  #   判断是不是误报、再 dismiss）—— 每次提交拖 9 分钟编译，产出的是没人读的告警。
+  #   ⇒ 真正有消费者的场景只有两个，都保留：
+  #      · pull_request：提交者能在合并前看到告警；
+  #      · schedule：兜底，覆盖「没人提交但 CodeQL 本体升级了」。
+  #
+  # ⚠️ 代价：main 分支上的漏洞发现从「每次提交」变成「每周一次 + PR」。
+  #   因为它本来就不拦门，这个代价≈0。真正拦门的出包把关在 release.yml 那边：
+  #   签名校验 + SHA-256 + build provenance attestation —— 那三步是硬门禁。
   pull_request:
     branches: [ main ]
     paths-ignore:

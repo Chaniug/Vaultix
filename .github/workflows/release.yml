@@ -108,7 +108,7 @@ jobs:
             gradle wrapper --gradle-version "$gwv"
           fi
 
-      - name: Install Android SDK platform 36
+      - name: Install Android SDK platform 37
         run: bash "$GITHUB_WORKSPACE/.github/scripts/ensure-android-sdk.sh"
 
       - name: Validate signing secrets

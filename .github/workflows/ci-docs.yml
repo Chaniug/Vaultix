@@ -1,0 +1,72 @@
+name: AI docs consistency
+
+# 本文件是**文档门禁**，与 APK 出包链路无关。
+#
+# 为什么从 ci-debug.yml 拆出来（2026-11-03）：
+#   这 4 个检查验的是 `.ai/` 接力文档与 markdown 的内部一致性
+#   （索引 = 题注 = 正文、相对链接存在）—— 它们**不进入 APK**，
+#   却原来占着出包链路的前置位置：改一行 Kotlin 也要先跑一遍文档校验，
+#   而且它们红了会**挡住出包**。
+#   ⇒ 拆出来之后：
+#     - 改代码时：本 workflow 根本不触发（paths 过滤）⇒ 出包链路零等待、零噪音；
+#     - 改文档时：它自己跑、自己红 —— 门禁语义**不变**，只是不再连累出包。
+#
+# 门禁强度不变：仍由这 4 个脚本判定（探针自己判错会制造假红，假红几次之后就没人看它了，
+# 故各配一条自测）。
+#
+# paths 覆盖前提：两个检查器的检查对象分别落在 `.ai/**`（索引与分篇）
+# 与全仓 markdown（`check_md_links.py` 扫 .md 相对链接）⇒ 上面的 paths 已全覆盖。
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.ai/**'
+      - 'Docs/**'
+      - '**/*.md'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - '.ai/**'
+      - 'Docs/**'
+      - '**/*.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  docs-checks:
+    name: Docs consistency
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      # ★ 2026-11-01：文档索引 / 相对链接的一致性（拆篇之后才出现的一类静默错）。
+      #
+      # 当天按 8.9 §7.1 把 7 个 issues 篇拆成 7 个索引 + 41 个分篇、并把 17 篇 SESSION
+      # 移进 `archive/sessions-2026-09/`。于是多出两处"只有人点进去才发现"的缝：
+      #   ① `ISSUES.md` 条数 / 主篇题注 / 章节明细 三者对不上 —— 同一事实的多份拷贝
+      #      必然漂移，本项目已漂过四次（#160）；其中"数量恰好蒙对、名单是错的"最难发现。
+      #   ② 文件搬家后相对链接少一层 ⇒ 点进去 404；而"点进去"往往发生在最需要那条判据的时刻。
+      #
+      # 两者都**不会**让 compile / test / detekt 任何一个变红 —— 所以必须各自配门禁，
+      # 并且各配一条自测（探针自己判错会制造假红，假红几次之后就没人看它了）。
+      - name: Check issues index (index vs parts)
+        shell: bash
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/check_issues_index.py" "$GITHUB_WORKSPACE"
+
+      - name: Self-test issues index checker
+        shell: bash
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/tests/selftest_issues_index.py"
+
+      - name: Check markdown links (relative paths exist)
+        shell: bash
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/check_md_links.py" "$GITHUB_WORKSPACE"
+
+      - name: Self-test markdown link checker
+        shell: bash
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/tests/selftest_md_links.py"
