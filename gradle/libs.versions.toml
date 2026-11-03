@@ -20,7 +20,7 @@ ksp = "2.3.11"
 # 若只升 bom 而 material3 留在 alpha16，解析结果会是 1.12.0，而 alpha16 的字节码
 # 是针对 1.11.0-beta02 编译的 —— 跨 minor 属二进制不兼容（NoSuchMethodError 风险）。
 # 二者组合直接对齐 Bastion，便于后续搬运其 Compose 组件。
-composeBom = "2026.03.00"
+composeBom = "2026.09.00"
 # 刻意保留 alpha16：alpha27 会引发 70 处编译失败（menuAnchor() 无参重载被移除、
 # ExposedDropdownMenu 引用失效），属业务代码改造而非版本切换，需单独立项。
 material3 = "1.5.0-alpha16"
