@@ -225,6 +225,9 @@ internal class CachedKdbxFileSource(
         } catch (cancellation: CancellationException) {
             throw cancellation
         } catch (error: Exception) {
+            // 拿不到令牌不影响读字节；但**必须留痕** —— 静默吞掉会让"缓存令牌老是 null、
+            // 每次解锁都白下一次"这类问题再也查不出来（只记原因，不记内容）。
+            VaultixLog.d(TAG) { "远端令牌取不到（缓存记 null，下次校验会重下）：${error.message}" }
             null
         }
         val bytes = delegate.read()
