@@ -1,7 +1,7 @@
 [versions]
 # ===== 构建工具链：与 Bastion 对齐 =====
 # AGP 9.3.2 要求最低 Gradle 9.5.0（见 gradle-wrapper.properties，取 9.5.1）。
-agp = "9.3.2"
+agp = "9.5.0"
 # Kotlin 停在 2.3.21。升 2.4.x 会被 KSP 阻塞：KSP 至今只发到 2.3.11，
 # 没有 2.4.x，Room 编译器跑不起来。待 KSP 2.4 发布后再动。
 # Kotlin 2.4.10（当前最新稳定版）。
@@ -67,21 +67,21 @@ workManager = "2.11.2"
 
 # ---- 网络层（data:bitwarden）----
 # Retrofit 与 OkHttp 成对维护，避免 converter 与 OkHttp 主版本不匹配。
-retrofit = "2.11.0"
-okhttp = "4.12.0"
+retrofit = "2.12.0"
+okhttp = "4.12.1"
 retrofitSerialization = "1.0.0"
 
 # okio 单列（而不是靠 okhttp 传递）：data:repository 要在**不引入 okhttp** 的前提下
 # 声明“okhttp 的同代人”这一约束。传递依赖拿不到版本目录里的名字，只能硬编码版本串，
 # 那会在升 okhttp 时静默漂移。单列后 `libs.okio` 与 `libs.okhttp` 成对维护。
-okio = "3.9.0"
+okio = "3.18.2"
 
 # ---- OneDrive / Microsoft Graph（app 模块：KDBX 网盘同步）----
 # MSAL（Microsoft Authentication Library）走 **public client + PKCE**，**不配 client secret** ——
 # 移动端存不住 secret，配了才是错的做法（上游 Bastion 同样没配，可对照）。
 # 版本与 Bastion 对齐（8.4.2），便于排查两边行为差异。
 # ⚠️ 它会传递带入 androidx.appcompat / browser / constraintlayout / gson / nimbus-jose-jwt。
-msal = "8.4.2"
+msal = "8.6.0"
 
 # ---- 扫码（TOTP 相机扫码，app 模块）----
 # 相机层用 CameraX（Google 现行推荐，生命周期感知）；解码用 ZXing core。
@@ -90,7 +90,7 @@ msal = "8.4.2"
 # ③ ZXing 是 Google Play 扫码类 SDK 集成率第一（60%+），QR 为 ISO 固定标准，
 #    解码内核成熟，不依赖 ML 模型更新。
 cameraX = "1.5.2"
-zxing = "3.5.3"
+zxing = "3.5.4"
 
 # ---- Markdown 渲染（更新日志展示，app 模块）----
 # 用途**只有一个**：设置 →「版本」→ 检查更新对话框里展示 GitHub Release 的
@@ -121,7 +121,7 @@ zxing = "3.5.3"
 #
 # ⚠️ 版本对齐：core 与 -m3 **必须同版本**（-m3 针对性编译于对应 core 之上，
 #   跨版本可能 NoSuchMethodError）—— 与 composeBom/material3 同一纪律。
-markdownRenderer = "0.43.0"
+markdownRenderer = "0.46.0"
 
 # ===== core:crypto 依赖版本 =====
 # Argon2id native 实现。锁 1.6.0（与 Bastion 完全一致）：
@@ -135,11 +135,11 @@ argon2kt = "1.6.0"
 #   - 需要它做两件事：PBKDF2-SHA256（PKCS5S2ParametersGenerator 直接吃原始字节 seed，
 #     绕开 JCE PBEKeySpec 必须 char[] 的限制 —— MasterKey 是任意二进制，不能转 char[]），
 #     以及 Argon2id 的 JVM 回退（Argon2BytesGenerator）。
-bcprov = "1.85.2"
+bcprov = "1.86"
 
 junit = "4.13.2"
-truth = "1.4.4"
-turbine = "1.2.0"
+truth = "1.4.5"
+turbine = "1.2.1"
 mockk = "1.14.11"
 # org.json：**仅供 JVM 单测**使用的真实实现。
 #
