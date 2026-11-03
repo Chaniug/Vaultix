@@ -455,48 +455,87 @@ private fun AddAccountForm(
         CloudAccountKind.entries.forEach { kind ->
             FilterChip(
                 selected = kind == state.kind,
-                onClick = { viewModel.onKindChange(kind) },
+                // ★ 2026-11-03（#238）：**切来源前必须先让输入框失去焦点**。
+                //
+                // 两条分支的输入框形态完全不同 —— WebDAV 有 3 个 `OutlinedTextField`，
+                // OneDrive 一个都没有。切换时 WebDAV 那组节点被直接从组合里移除，
+                // 而焦点仍留在已被移除的节点上 ⇒ 那一帧的重测量队列里出现了一个
+                // 「已被移除、子节点已清空」的 OutlinedTextField ⇒
+                // `OutlinedTextFieldMeasurePolicy` 里
+                // `measurables.fastFirst { it.layoutId == TextFieldId }` 找不到子节点，
+                // 抛 `NoSuchElementException: Collection contains no element matching the predicate`
+                // ⇒ 主线程未捕获异常 ⇒ **闪退**（2026-11-03 真机日志实证，荣耀 BKQ-AN00 / SDK 37）。
+                //
+                // ⚠️ 判据的不对称正说明这是漏做：同一个文件里 WebDAV 的【测试连接】
+                // 按钮**本来就**先 `focusClear()` 再干活，chip 这里却直接改状态。
+                // ⇒ 别把 `focusClear()` 当成"顺手加的"，它与 `ProbeButton` 是同一条纪律。
+                onClick = {
+                    focusClear()
+                    viewModel.onKindChange(kind)
+                },
                 label = { Text(stringResource(kind.subtitleRes())) },
             )
         }
     }
     Spacer(Modifier.height(Spacing.md))
 
+    // ★ `key()` 按来源绑定子树身份：不让 Compose 在「3 个输入框」与「纯文字+按钮」
+    //   这两条形态完全不同的分支之间复用节点。清焦点治的是"当前这一帧"，
+    //   `key` 治的是"节点身份错位"—— 两者是**不同层**的防护，别只留一个。
     if (state.kind == CloudAccountKind.WEBDAV) {
-        WebDavFields(state = state, viewModel = viewModel)
-        Spacer(Modifier.height(Spacing.md))
-        ProbeButton(state = state, onClick = {
-            focusClear()
-            viewModel.probeWebDav()
-        })
-        Spacer(Modifier.height(Spacing.sm))
-        ProbeStatusCard(state = state)
+        key(CloudAccountKind.WEBDAV) {
+            WebDavFields(state = state, viewModel = viewModel)
+            Spacer(Modifier.height(Spacing.md))
+            ProbeButton(state = state, onClick = {
+                focusClear()
+                viewModel.probeWebDav()
+            })
+            Spacer(Modifier.height(Spacing.sm))
+            ProbeStatusCard(state = state)
+        }
     } else {
-        Text(
-            text = stringResource(R.string.cloud_accounts_onedrive_hint),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.height(Spacing.md))
-        // ★ 与 WebDAV 的【测试连接】保持同一形态：强按钮 + 图标 + **进行中显式可见**。
-        //
-        // 改前这里是"登录中"唯一的反馈只有 `busy` 把按钮置灰 —— 而 MSAL 要拉起系统
-        // 授权页、再等用户选账户，中间可能好几秒。**一个灰按钮和一个正在跑的按钮长得一样**，
-        // 用户会以为自己没点上而反复点。
-        // （WebDAV 那侧本来就做对了：`ProbeButton` 在 PROBING 时显进度圈。）
-        PrimaryActionButton(
-            text = stringResource(R.string.cloud_accounts_onedrive_signin),
-            onClick = { onSignIn(false) },
-            busy = state.busy,
-            icon = Icons.Filled.Cloud,
-            toned = true,
-        )
+        key(CloudAccountKind.ONEDRIVE) {
+            OneDriveSignInBlock(state = state, onSignIn = onSignIn)
+        }
     }
 
     Spacer(Modifier.height(Spacing.sm))
     TextButton(onClick = viewModel::hideAddForm, modifier = Modifier.fillMaxWidth()) {
         Text(stringResource(R.string.action_cancel))
     }
+}
+
+/**
+ * OneDrive 来源的内容块：一句说明 + 【登录 Microsoft 账号】。
+ *
+ * 抽成独立函数是为了让上面 `key(...)` 里只剩"给定来源渲染什么"这一件事 ——
+ * 不抽的话，`else` 分支里嵌 `key { }` 会再多两层缩进，
+ * 而 `AddAccountForm` 已经在 detekt 的复杂度上限边缘（见 `CloudAccountsScreen` 的旧注释）。
+ */
+@Composable
+private fun OneDriveSignInBlock(
+    state: CloudAccountsViewModel.UiState,
+    onSignIn: (forceAccountChooser: Boolean) -> Unit,
+) {
+    Text(
+        text = stringResource(R.string.cloud_accounts_onedrive_hint),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Spacer(Modifier.height(Spacing.md))
+    // ★ 与 WebDAV 的【测试连接】保持同一形态：强按钮 + 图标 + **进行中显式可见**。
+    //
+    // 改前这里是"登录中"唯一的反馈只有 `busy` 把按钮置灰 —— 而 MSAL 要拉起系统
+    // 授权页、再等用户选账户，中间可能好几秒。**一个灰按钮和一个正在跑的按钮长得一样**，
+    // 用户会以为自己没点上而反复点。
+    // （WebDAV 那侧本来就做对了：`ProbeButton` 在 PROBING 时显进度圈。）
+    PrimaryActionButton(
+        text = stringResource(R.string.cloud_accounts_onedrive_signin),
+        onClick = { onSignIn(false) },
+        busy = state.busy,
+        icon = Icons.Filled.Cloud,
+        toned = true,
+    )
 }
 
 @Composable
