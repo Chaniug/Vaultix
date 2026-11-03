@@ -213,3 +213,64 @@ detekt `TooManyFunctions`（≤40）上限，加不了私有函数；而它本�
    抽样条件与被判定属性不是同一件事时，必然漏。
 3. **"以后再说"是对象级的意愿，不是永久全局静音** —— 新对象出现时应重新征询一次。
 4. **自动化的天花板要写进 KDoc**：做不了的那一半，必须有一条能兜住的引导路径。
+
+## 241. 🔴 新加的 KDBX 库永远不进快速解锁 —— #222 只修了 Bitwarden 这一条路径（2026-11-03 晚，用户报告）
+
+- **现象**：新添加库后（尤其 OneDrive 上的 KDBX），
+  ① 库不纳入快速解锁，**每次都要输 KDBX 主密码**；
+  ② 在设置里配快速解锁、输完 KDBX 密码点「继续」，**好像点不动**。
+- **根因一（主因）**：`autoEnrollNewVault`（#222 的成果）全仓库**只有一个调用点** ——
+  `VaultRepositoryImpl.registerVaultRow`，而那是 **Bitwarden 专用收尾**
+  （写的是 `VaultKind.BITWARDEN`）。KDBX 的两条添加路径都没有挂：
+
+  | 路径 | 是否自动纳入 |
+  |---|---|
+  | Bitwarden（`registerVaultRow`） | ✅ |
+  | KDBX 打开文件 / 网盘 KDBX（`addKdbxVault`） | ❌ |
+  | KDBX 新建库（`KdbxCreateRepositoryImpl`） | ❌ |
+
+  而解锁侧 `UnlockViewModel.candidateVaultIds` 的判据是
+  `vaults.filter { it.id != target && !it.unlocked && it.id in scope }` ——
+  **只看 `quickUnlockScope`**。新库不在 scope 里 ⇒ 快速解锁结构性地碰不到它。
+  ⇒ #222 修的是"Bitwarden 新库不自动关联"，**同类问题在 KDBX 上一直躺着**。
+
+- **根因二（结构性的，比少调一行更值得记）**：旧签名是
+  `autoEnrollNewVault(vaultId: String)`，内部写死 `prepareForVaults(listOf(id)) { _ -> null }`。
+  而 `prepareOne` 对 KDBX 走 `prepareKdbx(...)`，**第一件事就是拿主密码去 `Kdbx.verify`** ——
+  密码恒为 `null` ⇒ `Skipped` ⇒ 永远封不成。
+  ⇒ **这个签名从设计上就排除了所有 KDBX 库**，不是"漏调用"，是"调了也没用"。
+  更糟的是当时有一条单测把这个缺陷**写成了预期行为**（`不是Bitwarden库_不猜也不封`），
+  等于给 bug 上了一把锁。
+
+- **修法**：
+  1. 签名加一个密码源：
+     `autoEnrollNewVault(vaultId, masterPasswordOf: suspend (String) -> String? = { null })`；
+     Bitwarden 走会话密钥、不需要它（默认值保持不变，旧调用点零改动）。
+  2. 两条 KDBX 路径在**添加成功后**调用，并把**本次添加用的那个主密码**交进去
+     （它就在函数参数里，不需要再问用户）。
+  3. `submitPassword` 的两处裸 `?: return` 改成带错误文案的返回
+     （`quick_unlock_session_expired` / `quick_unlock_no_pending_vault`）。
+
+- **★ 用户决策（2026-11-03）**：选择**静默纳入**，不弹确认框。原话：
+  「因为我认为指纹解锁和PIN码是 vaultix 的最高优先级的」。
+  即：新 KDBX 库添加成功后，若房钥匙在内存且门锁已装，**直接用刚输入的主密码封房间信封**，
+  不问用户。⚠️ 这个决定的实质是"允许在用户未逐库确认的情况下把主密码加密存盘"，
+  与 Bitwarden 的既有行为一致；三道守卫（房钥匙不在内存 / 一把门锁都没装 / 范围为空集）
+  仍然生效，**快速解锁从没启用过的人不会被悄悄开启**。
+
+- **判据**：
+  1. **"某个能力加到了 A 类对象上，B 类对象是否也有"必须逐个路径数**。
+     #222 当时只盯着 Bitwarden，因为报障的人用的是 Bitwarden ——
+     **报障渠道决定了视野**，这是最容易留下的盲区。
+  2. **形参里少一个参数，等于在类型层面排除一整类对象**。`{ _ -> null }` 这种
+     "占位默认值"看着无害，实际是"这个分支永远走不通"的声明。
+     写它的时候要问：**谁会走到这个默认值上？**
+  3. **单测把这个缺陷写成断言时，bug 就被固化了**。`不是Bitwarden库_不猜也不封`
+     的字面意思是"KDBX 不该被封" —— 而真实需求恰恰相反。
+     **测试名里的"不"字要能对应到一条产品决策，否则它锁住的是历史而非契约。**
+
+- **验证**：`:data:repository` 265 例、`:app` 565 例，0 失败；detekt 全模块通过；
+  9 个脚本门禁 + 文档门禁全绿。
+- **真机验收**：添加一个 OneDrive KDBX → 回库列表看它是否显示「已启用快速解锁」
+  → 杀进程重开 → 指纹应能直接打开它（不再要主密码）。
+  ⚠️ 前提：添加时**至少一把门锁已装**、且范围非空集 —— 否则按设计会静默跳过。

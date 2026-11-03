@@ -167,20 +167,41 @@ class LocalUnlockEnrollmentAutoEnrollTest {
     }
 
     @Test
-    fun `不是Bitwarden库_不猜也不封`() = runTest {
-        // 自动路径没有密码可问（传 null）。KDBX 必须如实跳过，不能假装封好 ——
-        // 否则信封里躺的是一组解不开的凭据。
+    fun `KDBX库_没有可用主密码时不猜也不封`() = runTest {
+        // 默认参数 `masterPasswordOf = { null }` 的含义：调用方**没给**密码。
+        // 此时必须如实跳过 —— 不能拿空口令去试，更不能假装封好
+        // （否则信封里躺的是一组解不开的凭据）。
         givenGuardPassed()
-        coEvery { vaultDao.get(vaultId) } returns VaultEntity(
-            id = vaultId,
-            kind = VaultKind.KDBX.name,
-            displayName = "本地库",
-            origin = vaultId,
-            createdAt = 0L,
-        )
+        coEvery { vaultDao.get(vaultId) } returns kdbxRow()
 
         assertFalse(enrollment().autoEnrollNewVault(vaultId))
 
         coVerify(exactly = 0) { house.sealRoom(any(), any()) }
     }
+
+    @Test
+    fun `KDBX库_给了主密码就封房间_这是241的核心用例`() = runTest {
+        // ★ #241：KDBX 的两条添加路径过去从不传密码（旧签名写死 `{ _ -> null }`），
+        //   于是新加的 KDBX 库永远进不了 scope ⇒ 每次解锁都要输主密码。
+        //   现在把「本次添加用的主密码」交进来，走与 Bitwarden 同一套房间机制。
+        givenGuardPassed()
+        coEvery { vaultDao.get(vaultId) } returns kdbxRow()
+        // ⚠️ 不要 `coEvery { sources.fileSourceFor(any()) } returns null`：
+        //    `sources` 是 `fun interface` 的 lambda 实现（第 51 行），不是 mockk ——
+        //    MockK 在这里只会报 "Failed matching mocking signature"。它本来就返回 null。
+
+        // 文件来源不可用 ⇒ prepareKdbx 如实报 SourceUnavailable ⇒ 不封。
+        // 这一条同时钉住"没有来源时绝不降级成仅主密码"的老纪律。
+        assertFalse(enrollment().autoEnrollNewVault(vaultId) { "master-pw" })
+
+        coVerify(exactly = 0) { house.sealRoom(any(), any()) }
+    }
+
+    private fun kdbxRow() = VaultEntity(
+        id = vaultId,
+        kind = VaultKind.KDBX.name,
+        displayName = "本地库",
+        origin = vaultId,
+        createdAt = 0L,
+    )
 }

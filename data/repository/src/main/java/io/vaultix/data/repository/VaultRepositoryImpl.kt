@@ -254,6 +254,35 @@ class VaultRepositoryImpl @Inject constructor(
         if (outcome is KdbxAddOutcome.Added) {
             preferences.trySetDefaultVaultIfAbsent(sourceUri)
         }
+        // ★ 新增即静默纳入快速解锁（#241，2026-11-03 用户拍板）。
+        //
+        // ## 为什么必须在这里补（这是 KDBX 的**主路径**：本地 SAF 选文件 / 网盘 KDBX）
+        //
+        // 2026-11-01 的 #222 只给 Bitwarden 的 `registerVaultRow` 挂了自动纳入，
+        // KDBX 两条添加路径**都没有**挂 ⇒ 新加的 KDBX 库永远不在 `quickUnlockScope` 里，
+        // 而解锁侧 `UnlockViewModel.candidateVaultIds` 的判据正是 `id in scope`
+        // ⇒ **加了几个库就得输几次主密码**，快速解锁对它形同不存在。
+        //
+        // ## 为什么 `masterPassword` 可以直接用
+        //
+        // 它就在本次调用的参数里（刚刚用它解开了库）。KDBX 的房间信封包的是
+        // 「主密码 + keyfile 字节」，没有它就没法封 —— 这也是旧签名
+        // `autoEnrollNewVault(id)` 内写死 `{ _ -> null }` 时 KDBX 必然失败的原因。
+        //
+        // ## 什么情况下什么也不做（都是**正常**的，不是bug）
+        //
+        // 房钥匙不在内存（冷启动后还没解锁过任何库）/ 一把门锁都没装（快速解锁从未启用）
+        // / 范围为空集（用户明确"一个都不要"）—— 三道守卫在 autoEnrollNewVault 里。
+        // `runCatching`：纳入是**增强**，失败不该把"库已经加成功"变成失败。
+        //
+        // ⚠️ 只在 `Added` 时做：`Updated` 是「重复添加同一文件」，
+        //   那时若已有信封，`syncScopeMirror` 会重封一遍（幂等无害但白算一次 KDF）；
+        //   若当初被用户跳过，也不该借"再添加一次"强行纳入。
+        if (outcome is KdbxAddOutcome.Added) {
+            runCatching {
+                localUnlockEnrollment.autoEnrollNewVault(sourceUri) { masterPassword }
+            }
+        }
         return outcome
     }
 

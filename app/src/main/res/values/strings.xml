@@ -679,6 +679,15 @@
          看到三种说法，却要执行同一个动作。 -->
     <string name="quick_unlock_need_unlock_first">请先用指纹或 PIN 解锁一次，再继续</string>
 
+    <!-- ===== 2026-11-03 #241：主密码弹窗「点了继续没反应」的两条出口提示 =====
+         ⚠️ 这两句存在的唯一理由：`QuickUnlockController.submitPassword` 里原本有两处
+         `?: return` —— 会话失效 / 找不到待问的库时**静默吞掉点击**，用户看到的是
+         "输了密码、点了继续、什么也没发生"，只能反复点。静默失败在这里等同于 bug。
+         ⚠️ 别把这两条合并成一句"操作失败"：它们要求用户做的事完全不同
+         （一条是重新配一次，一条是先去把库打开）。 -->
+    <string name="quick_unlock_session_expired">配置流程已中断，请返回设置页重新开启</string>
+    <string name="quick_unlock_no_pending_vault">当前没有需要输入主密码的库，请重新开启配置</string>
+
     <!-- ===== 2026-09-17「一次流程 + 默认全勾」新增 =====
          ⚠️ 本节注释里**不要放 markdown 表格**：表格分隔行由连续短横线组成，
          会让 aapt2 直接报 "Failed to parse XML file '(...).xml'"，而报错信息

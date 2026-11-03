@@ -12,36 +12,45 @@
 此前约定「两边保持同步」，结果是同一主题两处各有一份、必然漂移（AI 会看错位置）。
 **要改内容，只改这里。**
 
-## 🕐 最新状态（**2026-11-03 深夜** · 一次报障 = 三个独立崩溃 #238/#239/#240）
+## 🕐 最新状态（**2026-11-03 深夜** · 三个闪退全灭 + KDBX 快速解锁补齐）
 
-> **一句话**：用户报「点添加密码库就闪退，清数据也一样」。拿真机日志后确认：
-> **同一晚崩了三次，三个完全不同的原因**，只是都长在「添加库」这条路上。
+> **一句话**：用户报「点添加密码库就闪退」→ 查出**三个互不相关的崩溃**；
+> 紧接着报「新加的 KDBX 库每次都要输主密码」→ 查出 **#222 只修了 Bitwarden 那一半**。
+> 四件事一起收口，均已推送 main。
 >
-> | # | 触发 | 异常 | 性质 |
-> |---|---|---|---|
-> | **239** | 进「添加账号」表单 | `AbstractMethodError: CustomStyle.applyStyle` | **依赖二进制不兼容** |
-> | **240** | 添加库 → 本地 KDBX | `SerializationException: Serializer for class 'Companion'` | **代码笔误（漏括号）** |
-> | **238** | 切 OneDrive → 点登录 | `NoSuchElementException` at `OutlinedTextFieldMeasurePolicy` | Compose 测量期 |
+> | # | 现象 | 真正原因 |
+> |---|---|---|
+> | **239** | 进「添加账号」表单闪退 | `AbstractMethodError: CustomStyle.applyStyle` —— **依赖跨 minor**（markdown-renderer 0.46.0 把 foundation 顶到 1.12.1） |
+> | **240** | 添加库 → 本地 KDBX 闪退 | `navigate(AddKdbxRoute)` **少一对括号**，`@Serializable` 生成的 `Companion` 被当成了路由 |
+> | **238** | 切 OneDrive → 点登录闪退 | `OutlinedTextField` 测量期子节点已不在（切来源前未 `focusClear`） |
+> | **241** | KDBX 库不进快速解锁 | `autoEnrollNewVault` 只有 Bitwarden 调用点；且签名写死 `{ _ -> null }` 在类型层面排除了 KDBX |
 >
-> **三条必须记住的判据**：
+> **四条必须记住的判据**：
 > ① **`AbstractMethodError` / `NoSuchMethodError` = 版本错配**，别读业务代码，
-> 直接 `dependencyInsight`。本次真凶是 `markdown-renderer 0.46.0` 把
-> `org.jetbrains.compose.foundation:1.12.1` 带了进来，**只回退 `composeBom` 完全无效**
-> （bom 请求 1.11.4，仲裁仍取 1.12.1）。**依赖对齐是"解析结果"的属性，不是"声明"的属性。**
-> ② **`navigate(AddKdbxRoute)` 少一对括号**：`@Serializable` 给 `data class` 补了 `Companion`，
-> Kotlin 把类名解析成伴生对象 ⇒ **编译通过**，运行期 `route::class` 是 `Companion` ⇒ 必崩。
-> `data object` 用 `navigate(X)`，`data class` 必须 `navigate(X(..))`。
-> ③ **同一个 App 可以有多个不相关的闪退**。用户说"都是点添加库崩的"，
-> 实际是这条路上有两处独立的坑 —— **每份日志都要独立读第一行**。
+> 直接 `dependencyInsight`。**依赖对齐是「解析结果」的属性，不是「声明」的属性** ——
+> 回退 `composeBom` 无效，因为 `markdown-renderer 0.46.0` 的传递依赖仍会顶上 1.12.1。
+> ② **`data object` 用 `navigate(X)`，`data class` 必须 `navigate(X(..))`**。
+> 漏括号能编译通过（`Companion` 也是 `Any`），运行期才炸。
+> ③ **同一个 App 可以有多个不相关的闪退**，**每份日志都要独立读第一行**。
+> ④ **能力加在 A 类对象上时，逐个路径数一遍 B 类对象**。#222 只盯 Bitwarden，
+> 因为报障的人用的是 Bitwarden —— **报障渠道决定了视野**。
 >
-> **验证**：`:app:compileFullDebugKotlin` 通过、`detekt` 全 10 模块通过、9 个脚本门禁 + 文档门禁全绿。
-> 依赖实测：`foundation/ui/runtime = 1.11.4`（与 alpha16 的 `1.11.0-beta02` 同 minor），
+> **#241 的产品决策（用户 2026-11-03 拍板）**：**静默纳入**，不弹确认框。
+> 原话「指纹解锁和 PIN 码是 vaultix 最高优先级的」。
+> ⇒ 新 KDBX 库添加成功后，用**刚输入的主密码**直接封房间信封。
+> ⚠️ 实质是「允许在未逐库确认的情况下把主密码加密存盘」；三道守卫仍生效
+> （房钥匙不在内存 / 一把门锁都没装 / 范围为空集）⇒ **没启用过快速解锁的人不会被悄悄开启**。
+>
+> **验证**：`:data:repository` 265 例 + `:app` 565 例 **0 失败**；detekt 全 10 模块通过；
+> 9 个脚本门禁 + 文档门禁全绿。依赖实测 `foundation/ui/runtime = 1.11.4`，
 > `org.jetbrains.compose` 残留 **0**。
-> ⚠️ **三条路径都要真机验**：① 添加库→本地 KDBX ② 进网盘表单 ③ 点 WebDAV 输入框→切 OneDrive→点登录。
+> ⚠️ **仍需真机验**：① 添加库→本地 KDBX ② 进网盘表单 ③ 点 WebDAV 输入框→切 OneDrive→点登录
+> ④ 加 OneDrive KDBX → 杀进程重开 → 指纹应能直接打开。
 >
-> 详见 [`SESSION-2026-11-03.md`](./SESSION-2026-11-03.md) §十三（#238）、§十四（#239/#240），
-> 以及 [`issues/01-构建与环境-part13.md`](./issues/01-构建与环境-part13.md) **#239**、
-> [`issues/06-界面与交互-part10.md`](./issues/06-界面与交互-part10.md) **#238 / #240**。
+> 详见 [`SESSION-2026-11-03.md`](./SESSION-2026-11-03.md) §十三～§十五；
+> [`issues/01-构建与环境-part13.md`](./issues/01-构建与环境-part13.md) **#239**、
+> [`issues/06-界面与交互-part10.md`](./issues/06-界面与交互-part10.md) **#238/#240**、
+> [`issues/04-锁与解锁-part5.md`](./issues/04-锁与解锁-part5.md) **#241**。
 
 ---
 

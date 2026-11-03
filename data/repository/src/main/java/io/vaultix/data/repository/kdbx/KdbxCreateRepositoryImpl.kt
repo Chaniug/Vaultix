@@ -46,6 +46,7 @@ package io.vaultix.data.repository.kdbx
 
 import io.vaultix.data.kdbx.Kdbx
 import io.vaultix.data.repository.KdbxSessionFlow
+import io.vaultix.data.repository.LocalUnlockEnrollment
 import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.database.dao.VaultDao
 import io.vaultix.database.entity.VaultEntity
@@ -75,6 +76,7 @@ class KdbxCreateRepositoryImpl @Inject constructor(
     private val fileSourceResolver: KdbxFileSourceResolver,
     private val preferences: VaultixPreferences,
     private val kdbxSessions: KdbxSessionFlow,
+    private val localUnlockEnrollment: LocalUnlockEnrollment,
 ) : KdbxCreateRepository {
 
     override suspend fun createVault(
@@ -195,6 +197,14 @@ class KdbxCreateRepositoryImpl @Inject constructor(
         }
         // 会话已登记（createVault 内），这里只负责让界面重读。
         kdbxSessions.bump()
+
+        // ★ 新建即静默纳入快速解锁（#241，2026-11-03 用户拍板）。
+        //   此刻主密码就在手上（本次建库刚用它），房钥匙在内存时纯软件即可封房间信封。
+        //   放在 bump 之后：界面先看到库，再后台补信封，顺序对用户无感。
+        //   runCatching：纳入是**增强**，失败不该把"库已建成"变成失败。
+        runCatching {
+            localUnlockEnrollment.autoEnrollNewVault(resolvedOrigin) { masterPassword }
+        }
 
         return NewKdbxVaultOutcome.Created(vaultId = resolvedOrigin, origin = resolvedOrigin)
     }

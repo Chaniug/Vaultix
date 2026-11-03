@@ -317,6 +317,7 @@ class KdbxCreateRepositoryTest {
             fileSourceResolver = { null },
             preferences = mockk(relaxed = true),
             kdbxSessions = mockk(relaxed = true),
+            localUnlockEnrollment = mockk(relaxed = true),
         )
 
         val outcome = repo.createVault(
@@ -368,6 +369,9 @@ class KdbxCreateRepositoryTest {
         fileSourceResolver = { source },
         preferences = preferences,
         kdbxSessions = mockk(relaxed = true),
+        // #241：新建库后静默纳入快速解锁。relaxed mock ⇒ autoEnrollNewVault 返回 false，
+        // 对既有断言（只关心 dao / 文件读写）零影响。
+        localUnlockEnrollment = mockk(relaxed = true),
     )
 
     /**

@@ -304,14 +304,23 @@ class LocalUnlockEnrollment @Inject constructor(
      *    见 `VaultixPreferences.QUICK_UNLOCK_SCOPE` 的 KDoc），不是"未配置"。
      *    用户手动取消全部勾选后，不该被一次新增库悄悄改回来。
      *
+     * @param masterPasswordOf KDBX 库的主密码来源（`null` = 没有可用密码 ⇒ 该库这次不纳入）。
+     *   Bitwarden 走会话密钥，不需要它。**为什么 KDBX 必须单独给**：
+     *   [prepareOne] 对 KDBX 走 [prepareKdbx]，要的就是主密码 + keyfile；
+     *   而 Bitwarden 要的是内存里的会话密钥 —— 两者不是同一个东西，
+     *   旧签名把密码源写死成 `{ _ -> null }`，等于**结构性排除了所有 KDBX 库**（#241）。
+     *
      * @return true = 已为 [vaultId] 建好房间信封（并同步了范围镜像）。
      */
-    suspend fun autoEnrollNewVault(vaultId: String): Boolean = withContext(Dispatchers.IO) {
+    suspend fun autoEnrollNewVault(
+        vaultId: String,
+        masterPasswordOf: suspend (String) -> String? = { null },
+    ): Boolean = withContext(Dispatchers.IO) {
         if (!houseKeyStore.isUnlocked) return@withContext false
         if (!houseKeyStore.hasAnyLock()) return@withContext false
         if (preferences.quickUnlockScope().first().isEmpty()) return@withContext false
 
-        val prepared = prepareForVaults(listOf(vaultId)) { _ -> null }
+        val prepared = prepareForVaults(listOf(vaultId), masterPasswordOf)
             .values
             .filterIsInstance<LocalUnlockPrepareOutcome.Ready>()
             .map { it.prepared }

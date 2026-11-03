@@ -796,8 +796,19 @@ class QuickUnlockController(
             _dialog.value = current.copy(error = text(R.string.quick_unlock_master_password_required))
             return
         }
-        val sessionNow = session ?: return
-        val target = sessionNow.currentTarget() ?: return
+        // ⚠️ 2026-11-03 #241：这两处原先是裸 `?: return` —— 会话失效或找不到待问的库时
+        //   **点击被静默吞掉**，用户看到"输了密码、点继续、什么都没发生"，只能反复点。
+        //   静默失败在这里与 bug 无异，必须给出口。
+        val sessionNow = session
+        if (sessionNow == null) {
+            _dialog.value = current.copy(error = text(R.string.quick_unlock_session_expired))
+            return
+        }
+        val target = sessionNow.currentTarget()
+        if (target == null) {
+            _dialog.value = current.copy(error = text(R.string.quick_unlock_no_pending_vault))
+            return
+        }
         sessionNow.passwords[target] = current.password
         advanceToPasswordOrExecute()
     }
