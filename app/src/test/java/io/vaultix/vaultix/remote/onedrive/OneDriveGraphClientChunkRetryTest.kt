@@ -233,7 +233,10 @@ class OneDriveGraphClientChunkRetryTest {
         )
         // 最终文件必须是**逐字节正确**的：重复/空洞都会在这里露馅。
         assertTrue("服务端收下的内容必须与原文件逐字节相同", receivedMatches(server))
-        assertEquals("上传成功后必须带回新的版本令牌", FINAL_ETAG, entry.versionToken)
+        // ★ #244：令牌现在带**来源前缀**（`etag:` / `ctag:`），因为上层要拿它判断
+        //   "远端**内容**变了没有"—— 而 eTag 覆盖元数据，不能与 cTag 混为一谈。
+        //   这里造的服务端只回 eTag ⇒ 期望 `etag:` 前缀。
+        assertEquals("上传成功后必须带回新的版本令牌", "etag:$FINAL_ETAG", entry.versionToken)
     }
 
     // ───────────────────────── 场景 2：只收了半片 ─────────────────────────

@@ -78,6 +78,23 @@ class OneDriveKdbxFileSource(
     override suspend fun read(): ByteArray = graph.download(token(), path)
 
     /**
+     * 把内部令牌还原成**服务端认的条件写值**（#244）。
+     *
+     * 内部令牌带来源前缀（`ctag:` / `etag:`），那是给"两个字段别混着比"用的；
+     * HTTP 条件头只认字段原值。两点必须同时成立才不 412：
+     *
+     * 1. **剥掉前缀**；
+     * 2. **别剥引号**：Graph 的 eTag/cTag 返回时自带双引号，`If-Match` 要的就是
+     *    带引号的强校验形态。`normalizeVersionToken` 会把引号去掉，所以这里
+     *    **不能**复用它（那样反而会把好好的请求改成 412）。
+     *
+     * ⚠️ 不带前缀的旧令牌原样返回：迁移期里老数据就是裸 eTag，行为与从前一致。
+     */
+    private fun rawConditionalTagOf(token: String): String = token
+        .removePrefix(io.vaultix.data.kdbx.TAG_PREFIX_CTAG)
+        .removePrefix(io.vaultix.data.kdbx.TAG_PREFIX_ETAG)
+
+    /**
      * 写入 OneDrive 上的库文件。
      *
      * ## ★ 为什么这里必须有「写后读回校验」（2026-10-17，ISSUES #172）
@@ -122,7 +139,13 @@ class OneDriveKdbxFileSource(
                 // ⚠️ force = true ⇒ 显式**不带** eTag 条件。带了必然 412
                 //   （远端确实变了 —— 这正是用户要覆盖的那次改动），
                 //   于是用户点了「用本地覆盖远端」却什么也没发生，只能反复点。
-                expectedETag = expectedVersion.takeUnless { force },
+                //
+                // ★ #244（2026-11-04）：令牌现在带 `ctag:` / `etag:` **来源前缀**
+                //   （见 `OneDriveGraphClient.versionTokenOf` 的理由），而 `If-Match`
+                //   要的是字段**原值**。不剥前缀会把 `ctag:xxx` 原样发出去，
+                //   服务端认不出 ⇒ **每次条件写都 412** ⇒ 保存全部失败。
+                //   ⇒ 这里统一过 [rawConditionalTagOf]。
+                expectedETag = expectedVersion.takeUnless { force }?.let(::rawConditionalTagOf),
                 // ⚠️ force 会覆盖一切条件，所以只在非 force 时才声明"只创建"。
                 failIfExists = failIfExists && !force,
             )

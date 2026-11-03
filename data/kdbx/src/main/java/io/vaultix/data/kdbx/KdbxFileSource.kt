@@ -268,6 +268,12 @@ class KdbxStaleBaselineException(
  * ⇒ 统一剥掉 `W/` 前缀与包裹的双引号，只留核心值与来源比较。
  *   ⚠️ 归一化后**弱校验的语义确实变弱了**（原本允许内容等价即通过），
  *   但 WebDAV 场景下我们只拿它做"和服务端说同一句话"，这个取舍是稳的。
+ *
+ * ## ★ `ctag:` / `etag:` 来源前缀（#244）
+ *
+ * 前缀必须在**剥引号之前**摘掉，否则 `ctag:"abc"` 会被当成一个整体，
+ * `removeSurrounding("\"")` 从两端都匹配不上，剥出一半引号（`ctag:"abc`）——
+ * 比不剥更糟：它既不等于旧值也不等于新值，**每次同步都判"远端变了"**。
  */
 fun normalizeVersionToken(raw: String?): String? {
     val trimmed = raw?.trim()?.takeIf { it.isNotEmpty() } ?: return null
@@ -275,7 +281,70 @@ fun normalizeVersionToken(raw: String?): String? {
         .removePrefix("W/")
         .removePrefix("w/")
         .trim()
+        // ⚠️ 顺序不能与下面两行的剥引号调换 —— 见上面 KDoc 的 `ctag:"abc"` 例子。
+        .removePrefix(TAG_PREFIX_CTAG)
+        .removePrefix(TAG_PREFIX_ETAG)
+        .trim()
         .removeSurrounding("\"")
         .trim()
         .takeIf { it.isNotEmpty() }
 }
+
+/**
+ * 「这两个令牌是不是**同一版**」—— 归一化 + 跨格式兼容的**唯一**判据。
+ *
+ * ## 为什么不直接用 `normalizeVersionToken(a) != normalizeVersionToken(b)`
+ *
+ * 令牌的**来源字段**在 2026-11-04（#244）改过：OneDrive 从"裸 eTag" 换成
+ * "`ctag:` 前缀 + cTag"（理由见 `OneDriveGraphClient.versionTokenOf`）。
+ * 直接字符串比较会让**每一个已存在的库**在升级后第一次同步就判成"远端变了"
+ * —— 用户看到的就是"我什么都没改，它说云端有更新/冲突"。
+ *
+ * ## 兼容规则（只做**减法**，绝不做"看起来差不多就算一样"的猜测）
+ *
+ * 1. 两边归一化后完全相同 ⇒ 同一版（常规路径）。
+ * 2. 只有一边带 `ctag:` / `etag:` 前缀 ⇒ 去掉前缀再比。
+ *    这是**格式迁移**，不是"内容等价"：裸值时代存的就是 cTag（`eTag ?: cTag`
+ *    在 OneDrive 上传响应里 eTag 总是有的，所以实际写进去的是 eTag —— 见下）。
+ *    ⇒ 只有 `ctag:`/`etag:` **同类前缀**才允许去掉后比较，且仅在旧值无前缀时生效。
+ * 3. 两边前缀**不同**（`ctag:` vs `etag:`）⇒ **不同版**。它们是两个不同字段，
+ *    把它们当同一版等于凭空宣布"内容没变"，那正是要避免的假阴性。
+ *
+ * ⚠️ 规则 2 的代价：迁移后的**第一次**比较，旧库的裸 eTag 与新 cTag 在内容没变时
+ * 仍可能不相等（eTag ≠ cTag）。那一次会走到 `KdbxSyncOrchestrator` 的
+ * **内容对账**兜底（字节相同 ⇒ 不算冲突，并顺手把基线换成新格式），
+ * 于是只多下载一次、不会多弹一次冲突。
+ */
+fun isSameVersionToken(a: String?, b: String?): Boolean {
+    val leftTag = tagPrefixOf(a)
+    val rightTag = tagPrefixOf(b)
+    val left = normalizeVersionToken(a)
+    val right = normalizeVersionToken(b)
+    // 两边都为空 = 都"没有版本"，视为同一状态（首次同步前的典型形态）。
+    if (left == null || right == null) return left == null && right == null
+    // 前缀不同（两个都带前缀但字段不同）⇒ 保守判为不同版。
+    if (leftTag != null && rightTag != null && leftTag != rightTag) return false
+    return left == right
+}
+
+/**
+ * 令牌的**来源字段前缀**（`ctag:` / `etag:`），没有则 null。
+ *
+ * ⚠️ 必须读**原始值**：`normalizeVersionToken` 会把前缀剥掉（那是为了与服务端
+ * 说同一句话），所以归一化之后就看不出"这是哪个字段"了 —— 而"cTag 与 eTag
+ * 能不能互相顶替"恰好取决于这一点。
+ */
+fun tagPrefixOf(raw: String?): String? {
+    val trimmed = raw?.trim() ?: return null
+    return when {
+        trimmed.startsWith(TAG_PREFIX_CTAG) -> TAG_PREFIX_CTAG
+        trimmed.startsWith(TAG_PREFIX_ETAG) -> TAG_PREFIX_ETAG
+        else -> null
+    }
+}
+
+/** OneDrive 的**内容**版本（cTag）令牌前缀；写在通用位置供来源与比较共用。 */
+const val TAG_PREFIX_CTAG: String = "ctag:"
+
+/** OneDrive 的**整个 item**（元数据 + 内容）版本（eTag）令牌前缀 —— 仅作兜底。 */
+const val TAG_PREFIX_ETAG: String = "etag:"

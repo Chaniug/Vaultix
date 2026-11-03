@@ -135,12 +135,11 @@ class KdbxSyncOrchestrator(
         //    下次给 `"x"` —— 不归一化会把"同一版"误判成"变了"，于是**凭空报冲突**
         //    （用户看到一个根本不存在的冲突，然后开始怀疑数据）。
         //    ⚠️ OneDrive 的 eTag 不带 W/，归一化对它无害（只是原样返回）。
-        val remoteChanged = normalizeToken(remoteNow) != normalizeToken(lastKnownVersion)
+        val remoteChanged = !io.vaultix.data.kdbx.isSameVersionToken(remoteNow, lastKnownVersion)
 
         // ③ 三态决策
         if (KdbxSyncTransitions.isConflict(localChangedSinceLastSync, remoteChanged)) {
-            markStatus(vaultId, KdbxSyncTransitions.markConflict())
-            return SyncOutcome.NeedsUserDecision(currentRemoteVersion = remoteNow)
+            return resolveConflictByContent(vaultId, source, remoteNow)
         }
 
         if (!localChangedSinceLastSync && !remoteChanged) {
@@ -393,6 +392,7 @@ class KdbxSyncOrchestrator(
      * ⚠️ 任何读取/解码失败一律返回 `false`：对账失败要**退回保守判定**，
      *   绝不能因为"读不到"就假定"一样"（那正是静默覆盖的入口）。
      */
+
     private suspend fun adoptRemoteIfSameContent(
         vaultId: String,
         source: KdbxFileSource,
@@ -402,6 +402,51 @@ class KdbxSyncOrchestrator(
         // 只记原因类别，不记内容（VaultixLog 铁律）。
         error.message?.let { reason -> VaultixLog.d(TAG) { "对账失败（按未对齐处理）：$vaultId $reason" } }
         false
+    }
+
+    /**
+     * ★★ 两边的"改过"标记都为真时，**先用内容验一遍**再决定要不要报冲突
+     * （#244，2026-11-04 真机报障）。
+     *
+     * ## 修的是什么
+     *
+     * 用户原话：「打开 onedrive 上的 kdbx 就是冲突，实际上我根本没有新建条目和修改条目」。
+     * 两个布尔都判成 true，可至少有一个是**假的**：
+     *
+     * - `remoteChanged` 假阳性：OneDrive 的 `eTag` 是**整个 item**（元数据 + 内容）的
+     *   版本，改权限、服务端处理、甚至一次元数据更新都会让它变，而内容一个字节没动；
+     * - `localChanged` 假阳性：`PENDING_UPLOAD` 只表达"本地有东西没推上去"
+     *   （新接库、上一次上传没跑完），但只要本机内容**已经等于**远端那一版，
+     *   就没有任何东西需要用户拍板。
+     *
+     * ⇒ 令牌只回答"有没有动过"，回答不了"内容是不是同一份"。冲突是**要求用户做
+     * 有损决策**的强结论，落它之前必须用内容把两个布尔各验一遍 —— 而
+     * [adoptRemoteIfSameContent] 此前只在 `localChanged == false` 那条分支里跑，
+     * 于是"两边都判 true"时**从来没人验过**（真机就是卡在这里）。
+     *
+     * ## 为什么这样做不丢数据
+     *
+     * 对账只认一个事实：**本机内容与远端当前字节逐字节相同**。相同 ⇒ 没有任何一方
+     * "多了东西"，对齐基线即可；不同（或读不到 / 解不开）⇒ 原样报冲突，一个字都不写。
+     * 也就是说它只会**消掉假冲突**，不会把真冲突判成没事。
+     *
+     * ⚠️ 代价：真冲突时多下载一次整库（对账读的就是远端当前字节）。换掉的是
+     *   "用户明明没改却被拦下来赌自己删过什么"，这个交换明显划算。
+     *   想彻底省掉这一次，得把 `remoteChanged` 本身算准（cTag / 哈希），那是同方向的另一半。
+     */
+    private suspend fun resolveConflictByContent(
+        vaultId: String,
+        source: KdbxFileSource,
+        remoteNow: String?,
+    ): SyncOutcome {
+        if (adoptRemoteIfSameContent(vaultId, source)) {
+            // 内容本来就一致 ⇒ "两边都改了"不成立。状态回到干净，基线采成远端当前版本。
+            markStatus(vaultId, KdbxSyncStatus.IN_SYNC, remoteNow)
+            VaultixLog.d(TAG) { "对账通过：本机内容 == 远端内容，冲突不成立（$vaultId）" }
+            return SyncOutcome.AlreadyInSync
+        }
+        markStatus(vaultId, KdbxSyncTransitions.markConflict())
+        return SyncOutcome.NeedsUserDecision(currentRemoteVersion = remoteNow)
     }
 
     private suspend fun markStatus(
@@ -423,9 +468,6 @@ class KdbxSyncOrchestrator(
             },
         )
     }
-
-    private fun normalizeToken(raw: String?): String? =
-        io.vaultix.data.kdbx.normalizeVersionToken(raw)
 
     private companion object {
         /** logcat 里按它过滤（`adb logcat -s VaultixKdbxSync`）。 */

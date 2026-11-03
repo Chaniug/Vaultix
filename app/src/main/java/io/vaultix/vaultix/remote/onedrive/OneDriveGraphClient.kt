@@ -882,10 +882,53 @@ open class OneDriveGraphClient(
         id = id,
         name = name,
         isDirectory = folder != null,
-        versionToken = eTag ?: cTag,
+        versionToken = versionTokenOf(),
         sizeBytes = size,
         lastModified = lastModifiedDateTime,
     )
+
+    /**
+     * ★ 版本令牌的选择：**优先 cTag，绝不拿 eTag 顶替**（#244，2026-11-04）。
+     *
+     * ## 为什么不是 `eTag ?: cTag`（旧写法）
+     *
+     * 两者的语义在 Graph 里被明确定义过，且**完全不同**：
+     *
+     * | 字段 | 覆盖范围 | 什么时候变 |
+     * |---|---|---|
+     * | `eTag` | 整个 item（**元数据 + 内容**） | 任何属性变化（改权限、服务端处理…） |
+     * | `cTag` | **只有内容** | 内容变了（文档是这么说的） |
+     *
+     * 上层拿这个令牌回答的是「**远端内容**变了没有」，所以正确答案是 cTag。
+     * 拿 eTag 顶替，等于把"元数据动了一下"读成"别人改了密码库" ⇒ 用户什么都没做
+     * 就看到「冲突」，随后还要在两个都对的选项里赌一把（真机报障的原文）。
+     *
+     * ## 为什么不是 `cTag ?: eTag`（简单的顺序调换也不行）
+     *
+     * 条件写（`If-Match`）里放的是**服务端认的那个值**，而它来自我们上次拿到的令牌；
+     * 只要"取令牌"与"用令牌"用的是同一个字段，服务端就自洽。真正的问题只有一个：
+     * **同一个字段必须在所有路径上一致**。所以这里定死 cTag 优先、eTag 只在
+     * cTag 缺失时兜底，并且把"这次用的是哪个字段"编码进前缀 ——
+     * 否则一次 `stat` 拿到 cTag、一次拿到 eTag，两者永不相等 ⇒ 每次都判"远端变了"。
+     *
+     * ## ⚠️ cTag 并不严格（已知局限，但不改变本决策）
+     *
+     * 实测反馈显示 SharePoint / OneDrive for Business 上重命名、移动也会让 cTag 变。
+     * 那会让 `remoteChanged` 出现**假阳性**（说"远端变了"而内容没变），
+     * 属于"多拉一次"的代价；而 eTag 的假阳性会让用户被拦下来做**有损选择**。
+     * 两者代价不对称 ⇒ 仍取 cTag。真正的收敛靠 `KdbxSyncOrchestrator` 里的
+     * **内容对账**（字节相同就不算冲突），本方法只负责别再主动制造假阳性。
+     *
+     * @return 形如 `ctag:{值}` / `etag:{值}`；两者都没有时返回 null（上层按"远端
+     *   版本未知"处理 —— 那比编一个值出来诚实）。
+     */
+    private fun OneDriveDriveItemDto.versionTokenOf(): String? {
+        cTag?.trim()?.takeIf { it.isNotEmpty() }
+            ?.let { return io.vaultix.data.kdbx.TAG_PREFIX_CTAG + it }
+        eTag?.trim()?.takeIf { it.isNotEmpty() }
+            ?.let { return io.vaultix.data.kdbx.TAG_PREFIX_ETAG + it }
+        return null
+    }
 
     private fun buildChildrenRelativeUrl(directoryPath: String?): String {
         val normalized = directoryPath?.trim()?.trim('/')?.takeIf { it.isNotEmpty() }

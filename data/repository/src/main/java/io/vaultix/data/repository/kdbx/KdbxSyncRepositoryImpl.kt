@@ -19,6 +19,15 @@
  *
  * ⚠️ 这一层**只有翻译**，没有任何决策 —— 决策在协调器与编排器里（都可单测）。
  * 放在这里是为了让 `VaultRepositoryImpl` 不用再加第 41 个函数（见领域接口的说明）。
+ *
+ * ## ★ 为什么每个方法都自己 `withContext(Dispatchers.IO)`（#244，2026-11-04）
+ *
+ * 同步/覆盖**都是秒级 IO**（`stat` + 上传/下载整库 + AES 编解码），而本接口的调用点
+ * 全部是 `viewModelScope.launch { … }` —— 那默认跑在 **Main** 上。于是"点同步"和
+ * "点覆盖"会把主线程钉住几秒（真机表现：对话框消失、页面不动，用户以为卡死）。
+ *
+ * ⇒ 调度器归**知道自己在做 IO 的那一层**：本类。调用点不需要（也不该）各自记得
+ *   套 `Dispatchers.IO` —— 那正是"一处漏了就是一次卡死"的形状。
  * ---------------------------------------------------------------------------
  */
 package io.vaultix.data.repository.kdbx
@@ -28,8 +37,10 @@ import io.vaultix.domain.KdbxSyncRepository
 import io.vaultix.database.dao.VaultDao
 import io.vaultix.data.repository.KdbxSessionFlow
 import io.vaultix.model.KdbxCloudSyncStatus
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -47,7 +58,9 @@ class KdbxSyncRepositoryImpl @Inject constructor(
 ) : KdbxSyncRepository {
 
     override suspend fun sync(vaultId: String, localChangedSinceLastSync: Boolean): KdbxSyncReport =
-        coordinator.sync(vaultId, localChangedSinceLastSync).toReport()
+        withContext(Dispatchers.IO) {
+            coordinator.sync(vaultId, localChangedSinceLastSync).toReport()
+        }
 
     /**
      * 冲突对话框的拍板：用户**明确选择**「用云端覆盖本地」。
@@ -84,11 +97,12 @@ class KdbxSyncRepositoryImpl @Inject constructor(
      * ⚠️ bump 不能少：「拉取成功」而列表**还是旧内容** ⇒ 用户以为拉坏了，
      * 更糟的是他可能就此再保存一次，把旧内容推回远端。
      */
-    private suspend fun pullFromRemote(vaultId: String, discardLocalChanges: Boolean): KdbxSyncReport {
-        val result = coordinator.resolveUsingRemote(vaultId, discardLocalChanges)
-        if (result is KdbxSyncResult.Downloaded) kdbxSessions.bump()
-        return result.toReport()
-    }
+    private suspend fun pullFromRemote(vaultId: String, discardLocalChanges: Boolean): KdbxSyncReport =
+        withContext(Dispatchers.IO) {
+            val result = coordinator.resolveUsingRemote(vaultId, discardLocalChanges)
+            if (result is KdbxSyncResult.Downloaded) kdbxSessions.bump()
+            result.toReport()
+        }
 
     /**
      * 现查本地有没有改动（施工单 S3）。
@@ -97,12 +111,14 @@ class KdbxSyncRepositoryImpl @Inject constructor(
      * 这里只负责"现查"——读的是库里**此刻**的 `syncStatus`，不是 UI 传进来的快照。
      */
     override suspend fun localChangedSinceLastSync(vaultId: String): Boolean =
-        KdbxCloudSyncStatus.fromName(vaultDao.get(vaultId)?.syncStatus)?.impliesLocalChanges == true
+        withContext(Dispatchers.IO) {
+            KdbxCloudSyncStatus.fromName(vaultDao.get(vaultId)?.syncStatus)?.impliesLocalChanges == true
+        }
 
     override suspend fun resolveUsingLocal(vaultId: String): KdbxSyncReport =
-        coordinator.resolveUsingLocal(vaultId).toReport()
+        withContext(Dispatchers.IO) { coordinator.resolveUsingLocal(vaultId).toReport() }
 
-    override suspend fun defer(vaultId: String) = coordinator.defer(vaultId)
+    override suspend fun defer(vaultId: String) = withContext(Dispatchers.IO) { coordinator.defer(vaultId) }
 
     /**
      * ⚠️ 用 `flow { … }` 而不是 `flowOf(…)`：判断要读一次 DB（挂起），
@@ -119,7 +135,8 @@ class KdbxSyncRepositoryImpl @Inject constructor(
     }
 
     override suspend fun markLocalEdited(vaultId: String) {
-        coordinator.markLocalEdited(vaultId)
+        // 一次 DB 写；调用点常在"保存条目"的路径上（Main）⇒ 同样由本层切 IO。
+        withContext(Dispatchers.IO) { coordinator.markLocalEdited(vaultId) }
     }
 
     override suspend fun notifyLocalChangedDuringUpload(vaultId: String) {

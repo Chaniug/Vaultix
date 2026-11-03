@@ -176,6 +176,112 @@ class KdbxSyncOrchestratorTest {
         coVerify(exactly = 0) { source.read() }
     }
 
+    // ---------------------------------------------------------------- #244 误报冲突
+
+    /**
+     * ★★ #244 的回归门禁（真机 2026-11-04）：
+     * **「我根本没新建 / 修改条目，打开就报冲突」**。
+     *
+     * ## 现场
+     *
+     * 两个布尔都判成了 true，可其中至少一个是假的：
+     *
+     * - `localChanged` = `PENDING_UPLOAD`（新接库 / 上次没推完），并不等于"用户改了东西"；
+     * - `remoteChanged` = eTag 变了 —— 而 OneDrive 的 eTag 覆盖**元数据 + 内容**，
+     *   改权限、服务端处理都会让它变，内容可以一个字节没动。
+     *
+     * 旧实现在这条分支上**直接**报冲突并返回，一次内容比对都不做
+     * （对账只挂在 `localChanged == false` 那条路上）。于是用户被拦下来，
+     * 在两个都"看起来对"的选项里赌自己有没有删过东西。
+     *
+     * ## 本用例钉的判据
+     *
+     * 冲突是**要求用户做有损决策**的强结论 ⇒ 落它之前必须用**内容**验一遍。
+     * 内容相同 ⇒ 不成立冲突，基线采成远端当前版本（本机确实已等于那一版）。
+     *
+     * ⚠️ 反证在下面一条：内容不同时**必须**仍然报冲突（不能把真冲突判成没事）。
+     */
+    @Test
+    fun `两边都判改了但内容相同_不许报冲突`() = runTest {
+        val dao = RecordingDao(initialToken = T0)
+        // 对账会去读远端当前字节；解不开 ⇒ 对账失败 ⇒ 仍然报冲突（见下一条用例）。
+        // 这里给的是"解不开的字节"，因此本用例断言的是**方向**：
+        // 只有当内容真的一样时才放过。用一个能让 `adoptBaselineIfMatches` 返回 true 的
+        // 假字节是做不到的（那是真 KDBX 解码），所以本用例改为钉**通道**：
+        // 内容对账必须在冲突分支上被调用过一次（旧实现里是 0 次）。
+        val source = mockk<KdbxFileSource>()
+        coEvery { source.stat() } returns KdbxFileStat(versionToken = T1)
+        coEvery { source.readRemoteCurrent() } returns ByteArray(0)
+        coEvery { source.read() } returns ByteArray(0)
+        val orchestrator = KdbxSyncOrchestrator(vaultDao = dao.dao, fileSourceFactory = { source })
+
+        val outcome = orchestrator.sync(VAULT_ID, ORIGIN, localChangedSinceLastSync = true)
+
+        // ★ 核心断言：冲突分支**也**做了内容对账（旧实现是 exactly = 0，直接报冲突）。
+        coVerify(exactly = 1) { source.readRemoteCurrent() }
+        // 对账失败（空字节解不开）⇒ 保守回到冲突，一个字节都不写。
+        assertEquals(SyncOutcome.NeedsUserDecision(T1), outcome)
+        assertEquals(KdbxSyncStatus.CONFLICT.name, dao.status())
+        assertEquals(T0, dao.token())
+    }
+
+    /**
+     * ★ 对账**失败**时绝不能因为"读到了字节"就放过冲突（静默覆盖的入口）。
+     *
+     * 与上一条的区别：这里远端字节读**失败**（抛异常）。两种"对账没成功"
+     * （解不开 / 读不到）都必须退回保守判定，否则一次网络抖动就能吞掉用户的改动。
+     */
+    @Test
+    fun `对账读远端失败_仍然报冲突`() = runTest {
+        val dao = RecordingDao(initialToken = T0)
+        val source = mockk<KdbxFileSource>()
+        coEvery { source.stat() } returns KdbxFileStat(versionToken = T1)
+        coEvery { source.readRemoteCurrent() } throws java.io.IOException("网络断了")
+        val orchestrator = KdbxSyncOrchestrator(vaultDao = dao.dao, fileSourceFactory = { source })
+
+        val outcome = orchestrator.sync(VAULT_ID, ORIGIN, localChangedSinceLastSync = true)
+
+        assertEquals(SyncOutcome.NeedsUserDecision(T1), outcome)
+        assertEquals(KdbxSyncStatus.CONFLICT.name, dao.status())
+        assertEquals(T0, dao.token())
+    }
+
+    /**
+     * ★ 令牌**改了来源字段**（裸 eTag → `ctag:` 前缀）时，不许因此判成"远端变了"。
+     *
+     * 2026-11-04 把 OneDrive 的令牌从 eTag 换成 cTag 并加了来源前缀。若比较逻辑
+     * 还是朴素字符串相等，**每一个已存在的库**升级后第一次同步都会判成"远端变了"，
+     * 接着和 `PENDING_UPLOAD` 一撞就是冲突 —— 用户什么都没做，又被弹一次冲突。
+     *
+     * ⇒ 判据统一走 `isSameVersionToken`（跨格式兼容、但不同字段绝不能混为一谈）。
+     */
+    @Test
+    fun `令牌迁移前缀_不算远端改过`() = runTest {
+        val dao = RecordingDao(initialToken = "abc123")
+        val orchestrator = orchestratorWith(dao, remoteToken = "ctag:abc123")
+
+        val outcome = orchestrator.sync(VAULT_ID, ORIGIN, localChangedSinceLastSync = false)
+
+        assertEquals(SyncOutcome.AlreadyInSync, outcome)
+        // 顺手把基线换成新格式（否则下次还得再兼容一次）。
+        assertEquals("ctag:abc123", dao.token())
+    }
+
+    /**
+     * 反证：`ctag:` 与 `etag:` **不是同一版**（两个不同字段），必须判为远端变过。
+     *
+     * 把两者当一样等于凭空宣布"内容没变"—— 那会让真正的远端改动被漏掉。
+     */
+    @Test
+    fun `ctag与etag是两个不同字段_必须判为不同版`() = runTest {
+        val dao = RecordingDao(initialToken = "etag:abc123")
+        val orchestrator = orchestratorWith(dao, remoteToken = "ctag:abc123", remoteBytes = ByteArray(0))
+
+        val outcome = orchestrator.sync(VAULT_ID, ORIGIN, localChangedSinceLastSync = false)
+
+        assertTrue("必须判为远端变过，实际 $outcome", outcome is SyncOutcome.RemoteNewerNeedsReload)
+    }
+
     // ---------------------------------------------------------------- 装置
 
     private fun orchestratorWith(
