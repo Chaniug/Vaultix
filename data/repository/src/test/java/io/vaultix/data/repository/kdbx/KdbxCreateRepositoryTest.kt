@@ -241,16 +241,24 @@ class KdbxCreateRepositoryTest {
     // -------------------------------------------------- 同步状态的初始值
 
     /**
-     * ★ 新建的**网盘**库必须带上"待上传"，不能留 null（2026-11-02 修）。
+     * ★ 新建的**网盘**库必须带上同步状态，不能留 null（2026-11-02 修；2026-11-03 #242 改判据）。
      *
      * ## 留 null 会发生什么（两件，都不报错）
      *
      * 1. `vaults.syncStatus` 的 null 语义是「该库**不适用**网盘同步」；
      * 2. `VaultListScreen` 有 `onSyncNow = if (vault.syncStatus != null)` ⇒
      *    新建的云库**没有「立即同步」入口**，用户只能退出重进才等得到自动同步。
+     *
+     * ## 为什么状态是 `IN_SYNC` 而**不再**是 `PENDING_UPLOAD`（#242）
+     *
+     * `PENDING_UPLOAD` 的语义是"本地有东西没推上去"。可刚建完的库是**本次刚写上去的**，
+     * 远端此刻就是这一版 —— 说"待上传"既不是事实，还会触发自动上传。
+     * 更要命的是它同时带着 `impliesLocalChanges = true` 而**基线令牌为空**（旧行为），
+     * 编排器于是判 `isConflict(true, true)` ⇒ **用户什么都没改就被报冲突**。
+     * ⇒ 现在建完立刻 stat，把刚写上去那一版的令牌记成基线，状态落 `IN_SYNC`。
      */
     @Test
-    fun `新建网盘库_同步状态必须是待上传而不是null`() = runTest {
+    fun `新建网盘库_同步状态必须与远端对齐而不是null`() = runTest {
         val dao = RecordingVaultDao()
         val repo = repositoryWith(dao = dao, source = fakeSource("01ABCDEF-item-id"))
 
@@ -261,11 +269,33 @@ class KdbxCreateRepositoryTest {
         )
 
         val update = dao.syncUpdates.single()
-        assertEquals("新建的云库必须有初始同步状态", "PENDING_UPLOAD", update.status)
+        assertEquals("刚建完的云库与远端就是同一版", "IN_SYNC", update.status)
         assertEquals("状态必须挂在这个库上", OneDriveOriginFixture.origin, update.id)
-        // ⚠️ 新库没有基线：令牌与时间戳都得是 null（不是"0"、也不是随手给个时间）。
-        assertEquals("新库不该凭空有基线令牌", null, update.versionToken)
-        assertEquals("新库不该凭空有同步时间", null, update.syncedAt)
+        // ★ 基线必须真的写进去：留空 ⇒ 下一次同步 `remoteChanged` 恒真 ⇒ 误报冲突。
+        assertEquals("建库后必须带上基线令牌", "token", update.versionToken)
+    }
+
+    /**
+     * 反证：**拿不到令牌**时不许假装对齐 ⇒ 退回"待上传 + 令牌留空"（保守，报一次冲突）。
+     *
+     * ⚠️ 这条守的是"别把 #242 修成另一种静默错误"：为了让用户不看到冲突而
+     * 无条件写 `IN_SYNC` 是**没有依据的断言**（我们压根不知道远端是哪一版）。
+     * 唯一的例外是内容对账过且一致 —— 这里 `readRemoteCurrent` 抛异常，走不到那一步。
+     */
+    @Test
+    fun `网盘库拿不到令牌_退回待上传而不是假装对齐`() = runTest {
+        val dao = RecordingVaultDao()
+        val repo = repositoryWith(dao = dao, source = noTokenSource())
+
+        repo.createVault(
+            targetUri = OneDriveOriginFixture.origin,
+            displayName = "云库",
+            masterPassword = PASSWORD,
+        )
+
+        val update = dao.syncUpdates.single()
+        assertEquals("判不出来时必须保守", "PENDING_UPLOAD", update.status)
+        assertEquals("不该凭空造一个令牌", null, update.versionToken)
     }
 
     /**
@@ -308,7 +338,8 @@ class KdbxCreateRepositoryTest {
         assertEquals("已有同步时间同样要带回", 111L, update.syncedAt)
     }
 
-    /** 来源解析不出来 ⇒ 失败，且**一行都不落**（还没碰过任何文件，安全）。 */    @Test
+    /** 来源解析不出来 ⇒ 失败，且**一行都不落**（还没碰过任何文件，安全）。 */
+    @Test
     fun `来源解析不出来_失败且不落行`() = runTest {
         val dao = RecordingVaultDao()
         // resolver 返回 null（origin 没有可用来源）。
@@ -358,6 +389,26 @@ class KdbxCreateRepositoryTest {
         )
         coEvery { write(bytes = any(), expectedVersion = any(), force = any(), failIfExists = any()) } throws
             IllegalStateException("写入后读回校验不一致")
+    }
+
+    /**
+     * 建库能成功、但 **`stat()` 不给版本令牌**、远端也读不回来（离线 / 凭据过期）。
+     *
+     * ⚠️ 专门用来验"判不出来时保守"：`adoptRemoteBaseline` 走到 Unknown ⇒
+     * 调用方必须退回 `PENDING_UPLOAD`，而**不是**写 `IN_SYNC`。
+     * `readRemoteCurrent()` 抛异常是刻意的：它让内容对账这条退路也失效
+     * （对账要求"读得到远端"），正是真机上 Offline 的样子。
+     */
+    private fun noTokenSource(): KdbxFileSource = mockk {
+        coEvery { stat() } returns KdbxFileStat(
+            versionToken = null,
+            sizeBytes = 0,
+            remoteId = null,
+            displayName = "vault.kdbx",
+        )
+        coEvery { write(bytes = any(), expectedVersion = any(), force = any(), failIfExists = any()) } returns
+            KdbxFileWriteResult(versionToken = null, sizeBytes = 0, remoteId = null)
+        coEvery { readRemoteCurrent() } throws java.io.IOException("offline")
     }
 
     private fun repositoryWith(

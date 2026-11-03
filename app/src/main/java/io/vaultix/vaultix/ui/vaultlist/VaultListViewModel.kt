@@ -272,23 +272,48 @@ class VaultListViewModel @Inject constructor(
      */
     fun resolveKdbxConflict(vaultId: String, choice: KdbxConflictChoice) {
         viewModelScope.launch {
-            when (choice) {
-                KdbxConflictChoice.KeepLocalUpload ->
-                    emitResolve(
-                        kdbxSyncRepository.resolveUsingLocal(vaultId),
-                        SyncNotice.Res(R.string.kdbx_sync_kept_local),
-                    )
+            // ★ #242：整个解决过程必须兜住异常。
+            //
+            //   此前这里没有任何 try/catch：`resolveUsingLocal` 内部虽然把 IO 失败
+            //   收成了 `Result`，但**会话/编码/DAO 任一环节抛出**（例如 KDF 级别的
+            //   编码失败、`markResolved` 的数据库写失败）就会让这个协程直接死掉 ——
+            //   `launch` 的异常默认抛给 `CoroutineExceptionHandler`，在 ViewModel
+            //   scope 里表现为**静默终止**：没有任何提示，`pendingConflict` 已被 UI 清空，
+            //   用户看到的就是「点了覆盖 → 对话框没了 → 页面卡在那个库上，什么也没发生」。
+            //
+            //   ⚠️ 兜住之后**必须**把状态从 SYNCING 拉回一个有意义的终态，
+            //   否则界面是一个永远转不完的圈（与 `markDeferred` 的 KDoc 同一个理由）。
+            runCatching {
+                when (choice) {
+                    KdbxConflictChoice.KeepLocalUpload ->
+                        emitResolve(
+                            kdbxSyncRepository.resolveUsingLocal(vaultId),
+                            SyncNotice.Res(R.string.kdbx_sync_kept_local),
+                        )
 
-                KdbxConflictChoice.KeepRemoteDownload ->
-                    emitResolve(
-                        kdbxSyncRepository.resolveUsingRemote(vaultId),
-                        SyncNotice.Res(R.string.kdbx_sync_kept_remote),
-                    )
+                    KdbxConflictChoice.KeepRemoteDownload ->
+                        emitResolve(
+                            kdbxSyncRepository.resolveUsingRemote(vaultId),
+                            SyncNotice.Res(R.string.kdbx_sync_kept_remote),
+                        )
 
-                KdbxConflictChoice.DecideLater -> {
-                    kdbxSyncRepository.defer(vaultId)
-                    // 不提示：用户明确选了"稍后"，弹一句"已稍后处理"是噪音。
+                    KdbxConflictChoice.DecideLater -> {
+                        kdbxSyncRepository.defer(vaultId)
+                        // 不提示：用户明确选了"稍后"，弹一句"已稍后处理"是噪音。
+                    }
                 }
+            }.onFailure { error ->
+                // 异常兜底：先尽力把状态拉回 CONFLICT（可再次触发），再如实报错。
+                // ⚠️ defer 本身也可能失败（数据库写不进去），它失败就真的只能报错了 ——
+                //   两层 runCatching 是刻意的：**不许**因为兜底动作失败而再吞掉一次错误。
+                runCatching { kdbxSyncRepository.defer(vaultId) }
+                _events.emit(
+                    Event.KdbxSyncFailed(
+                        SyncNotice.Detail(
+                            error.message?.takeIf { it.isNotBlank() } ?: "处理同步冲突时出错，请重试",
+                        ),
+                    ),
+                )
             }
         }
     }

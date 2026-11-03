@@ -104,3 +104,57 @@
 > 沿用是**手段**（别整条重写），不是**目的**（保持原样）；
 > ② **一次改动留下两笔账**（生效时间 + 被替换者的停用时间）是官方语义，缺一笔就是假状态；
 > ③ **拿不到旧值就不要编一条历史**（空密码历史比没有历史更糟）。、#209
+
+---
+
+## 242. 🔴 新接入的网盘库「基线为空 + 待上传」⇒ **一个字节没改也报冲突**（2026-11-03，真机）
+
+**现象**（用户原话）："打开 onedrive 上的 kdbx 就是冲突，点击同步说选择覆盖，覆盖点完
+就会卡死在页面，然后 bitwarden 切换到 kdbx，发现 kdbx 还是需要密码，然后提示没有纳入快速解锁。"
+
+三个现象**同源**：
+
+```
+刚添加 OneDrive KDBX → syncStatus = PENDING_UPLOAD（impliesLocalChanges = true）
+                     → remoteVersionToken = null（新行）
+                     → 编排器 remoteChanged = (远端令牌 != 基线) = true（恒真）
+                     → isConflict(true, true) = true ⇒ **每次都报冲突**
+冲突未解决 ⇒ 库始终不在 quickUnlockScope ⇒ 快速解锁碰不到它 ⇒「仍要密码 / 未纳入」
+```
+
+**根因**：`forNewlyRegisteredVault(hasCloudSource = true)` 返回 `PENDING_UPLOAD` 而
+**基线令牌留空**。它当时是被当成"正确但严格"写进 KDoc 的（首版文档里明写
+"会判成冲突。这是**正确**的结局而不是误报"）——**那句是错的**：
+用户刚刚用主密码解开这个文件、确认这就是他要的那一版，**远端此刻的内容就是他的基线**。
+把"手里没有基线"当成"远端一定变了"，等于让用户替一个我们没记录的事实买单。
+
+**修法**：新增 `KdbxSyncTransitions.adoptRemoteBaseline(vaultId, source, vaultDao, …)`，
+两条接入路径（`VaultRepositoryImpl.addKdbxVault` / `KdbxCreateRepositoryImpl.createVault`）
+在建完行之后立刻调一次，结局三选一：
+
+| stat 令牌 | 本地可比字节 | 内容 | 结局 |
+|---|---|---|---|
+| 有 | — | 不比 | `IN_SYNC` + 写入令牌 |
+| 无 | 无 | 不知道 | `Unknown` ⇒ 保持调用方的保守默认值（旧行为） |
+| 无 | 有 | 一致 | `IN_SYNC`（令牌留空，下次同步由内容对账补上） |
+| 无 | 有 | 不同 / 读不出 | ★ `REMOTE_CHANGED` |
+
+**为什么不能"为了不报冲突"一律写 `IN_SYNC`**：那是在**没有依据**的情况下断言对齐。
+从网盘添加时，用户输的那次主密码开的可能只是**远端当前文件**，引擎侧根本不会写本地缓存
+（见 `CachedKdbxFileSource` 的 KDoc）⇒ 本机没有一段能称作"我这一版"的字节。
+此时若标 `PENDING_UPLOAD` / `LOCAL_ONLY`，自动上传会拿**旧缓存或别的库**去条件写，
+**远端那份被静默覆盖**。⇒ 判不出来就只能保守（`PENDING_UPLOAD` + 空令牌，报一次冲突），
+判出来"不一样"就必须 `REMOTE_CHANGED`（只读、绝不自动推）。
+
+**顺带修的第二处**：`VaultListViewModel.resolveKdbxConflict` 此前整体没有异常兜底。
+`resolveUsingLocal` / `resolveUsingRemote` 内部虽然把 IO 失败收成了 `Result`，
+但会话/编码/DAO 任一环节抛出（KDF 编码失败、`markResolved` 写库失败）就会让协程
+静默终止：对话框已被 UI 清空、没有任何提示 ⇒ 用户看到的就是**"点覆盖之后卡死"**。
+现在 `runCatching` 兜住，`onFailure` 里先尽力 `defer(vaultId)` 把状态拉回 `CONFLICT`
+（否则界面是个永远转不完的圈），再如实报错。
+
+> **判据**：① **"手里没有基线"不等于"远端变了"** —— 没记录的事实要**去问**（stat /
+> 内容对账），不能默认成最坏值推给用户；② 但**"问不到"更不等于"对齐了"** ——
+> 两种失败模式里，只有"多报一次冲突"是可接受的，静默覆盖不是；
+> ③ **凡是用户点了有后果的动作（覆盖/放弃/删除），都必须有异常出口** ——
+> 无兜底的 `launch` 等于把"崩了"呈现成"没反应"，这比报错难查十倍。

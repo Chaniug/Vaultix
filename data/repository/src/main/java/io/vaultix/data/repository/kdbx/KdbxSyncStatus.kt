@@ -28,6 +28,9 @@
  */
 package io.vaultix.data.repository.kdbx
 
+import io.vaultix.data.kdbx.KdbxFileSource
+import io.vaultix.database.dao.VaultDao
+
 /** KDBX 网盘库的同步状态。 */
 enum class KdbxSyncStatus {
     /**
@@ -190,4 +193,121 @@ object KdbxSyncTransitions {
      */
     fun isConflict(localChanged: Boolean, remoteChanged: Boolean): Boolean =
         localChanged && remoteChanged
+}
+
+/**
+ * 把一个**刚接入**的 KDBX 网盘库（新添加 / 新建）记录成三种结局之一。
+ *
+ * ## 为什么需要它（#242，2026-11-03 真机实测）
+ *
+ * 旧行为是：新登记 ⇒ `PENDING_UPLOAD` + **基线令牌留空**。而编排器的三态判据是
+ * `remoteChanged = (远端令牌 != 基线令牌)` —— 基线为空时**恒为真**，于是：
+ *
+ * ```
+ * 添加 OneDrive KDBX → 状态 PENDING_UPLOAD（impliesLocalChanges = true）
+ *                   → 基线 null ⇒ remoteChanged = true
+ *                   → isConflict(true, true) = true ⇒ **每次都报冲突**
+ * ```
+ *
+ * 用户看到的就是「打开 OneDrive 上的 kdbx 就是冲突」——
+ * 而实际上他**一个字节都没改过**。这不是"正确但严格"，是**基线错了**：
+ * 「用户刚确认过的这一版远端内容」就该是基线。
+ *
+ * ## 三种结局（由**远端事实**决定，不由愿望决定）
+ *
+ * ## 判据：令牌优先，令牌拿不到才用内容对账
+ *
+ * 「远端那一版的字节，与本机刚接入的这份是否同源」——用的是与编排器
+ * 已有的内容对账（`adoptRemoteIfSameContent`）**同一类**证据，不是新造一套：
+ *
+ * | stat 令牌 | 本地有可比字节 | 内容 | 结局 |
+ * |---|---|---|---|
+ * | 有 | — | 不比 | [AdoptBaselineOutcome.Token]，状态 `IN_SYNC` |
+ * | 无 | 无 | 不知道 | [AdoptBaselineOutcome.Unknown]（**保持**调用方的保守默认值） |
+ * | 无 | 有 | 一致 | [AdoptBaselineOutcome.Token]（令牌留空、状态 `IN_SYNC`） |
+ * | 无 | 有 | 不同 / 读不出来 | ★ [AdoptBaselineOutcome.RemoteIsNewer]，`REMOTE_CHANGED` | *
+ * ★ 第四行是**数据安全的分界**。添加时用户输的那次主密码，开的可能只是
+ * **远端当前文件**（典型：从网盘添加、本机还没有缓存），而那种"打开"在引擎侧
+ * 根本不会写入本地缓存 ⇒ 本机没有一段可以称作"我这一版"的字节。
+ * 此时若写成 `LOCAL_ONLY` / `PENDING_UPLOAD`，自动上传会拿**别的库 / 旧缓存**去条件写，
+ * 远端那份被静默覆盖。⇒ 必须 `REMOTE_CHANGED`：只读、不推，等一次正常拉取对齐。
+ *
+ * [AdoptBaselineOutcome.Unknown] 与 [AdoptBaselineOutcome.RemoteIsNewer] 是同一个
+ * 保守原则的两面：「读不到」不许升级成「已经对齐」（那是静默覆盖的入口）；
+ * 「读到了不一样」更不许升级。唯一允许写 `IN_SYNC` 的情形是
+ * 「令牌拿到了」或「字节比过了且一致」。
+ *
+ * ⚠️ **本地 SAF 库不适用**：它的令牌是内容 SHA-256，`stat` 恒等于本地文件本身，
+ * 补基线没有意义（也没有"远端"可对齐），调用方应跳过。
+ *
+ * @param localBytes 本机刚接入的那份字节。**必须是"用户这次真正打开的那一份"**，
+ *   不能随手拿缓存里的字节充数（缓存可能属于同一库的旧版本）。传 `null` 表示
+ *   "本机没有可信的本地版本"，那就只剩 stat 一条路（多数情况够用）。
+ * @param contentMatchesRemote ★ 内容对账的具体实现，由调用方注入（见 `localBytes`）。
+ *   默认实现一律返回 `false` —— **fail-closed**：没有对账能力时宁可少写一个
+ *   `IN_SYNC`，也不能因为没有异议就推定一致（那正是静默覆盖的入口）。
+ *   生产的唯一实现是 `Kdbx.adoptBaselineIfMatches`（在 `data:repository` 里装配）。
+ * @return 实际写下的结局。
+ */
+suspend fun KdbxSyncTransitions.adoptRemoteBaseline(
+    vaultId: String,
+    source: KdbxFileSource,
+    vaultDao: VaultDao,
+    localBytes: ByteArray? = null,
+    contentMatchesRemote: suspend (vaultId: String, localBytes: ByteArray) -> Boolean =
+        { _, _ -> false },
+): AdoptBaselineOutcome {
+    // ① 有令牌 ⇒ 这就是"远端当前是哪一版"的直接答案，不需要下载整份来比。
+    val remoteVersion = runCatching { source.stat().versionToken }.getOrNull()
+    if (!remoteVersion.isNullOrBlank()) {
+        vaultDao.updateSyncState(
+            id = vaultId,
+            status = KdbxSyncStatus.IN_SYNC.name,
+            versionToken = remoteVersion,
+            syncedAt = System.currentTimeMillis(),
+        )
+        return AdoptBaselineOutcome.Token
+    }
+
+    // ② 没令牌 ⇒ 只能用内容对账。没有任何一侧的内容可比 ⇒ 不许断言对齐。
+    if (localBytes == null) return AdoptBaselineOutcome.Unknown
+    val remoteIsSame = runCatching { contentMatchesRemote(vaultId, localBytes) }.getOrDefault(false)
+    if (!remoteIsSame) {
+        // ★ 远端是另一版（或读不出来）⇒ 只读状态：本地内容**不上传**。
+        val previous = vaultDao.get(vaultId)
+        vaultDao.updateSyncState(
+            id = vaultId,
+            status = KdbxSyncStatus.REMOTE_CHANGED.name,
+            // ⚠️ 令牌原样带回：DAO 是 `SET col = :v`，这里没有新令牌可写，
+            //    传 null 会抹掉可能存在的旧基线（虽然此刻它通常是空的）。
+            versionToken = previous?.remoteVersionToken,
+            syncedAt = previous?.lastSyncedAt,
+        )
+        return AdoptBaselineOutcome.RemoteIsNewer
+    }
+
+    // ③ 内容一致但令牌拿不到 ⇒ 状态可以是 IN_SYNC（内容确实是同一版），基线留空。
+    //    代价是**下一次同步**会判一次 `remoteChanged = true`（null != 令牌）⇒
+    //    走一次 `REMOTE_CHANGED` 分支，由编排器的内容对账降级回 `IN_SYNC`
+    //    并顺手补上令牌 —— 那一次是**只读**的，不会覆盖任何东西。
+    val previousToken = vaultDao.get(vaultId)?.remoteVersionToken
+    vaultDao.updateSyncState(
+        id = vaultId,
+        status = KdbxSyncStatus.IN_SYNC.name,
+        versionToken = previousToken,
+        syncedAt = System.currentTimeMillis(),
+    )
+    return AdoptBaselineOutcome.Token
+}
+
+/** [adoptRemoteBaseline] 的结局。 */
+enum class AdoptBaselineOutcome {
+    /** 已经与远端对齐（令牌拿到，或内容比过一致）⇒ 状态 `IN_SYNC`。 */
+    Token,
+
+    /** 远端是**另一版** ⇒ 状态 `REMOTE_CHANGED`（只读，绝不自动上传）。 */
+    RemoteIsNewer,
+
+    /** 什么都判不出来（离线 / 凭据过期 / 本机无内容）⇒ 状态保持调用方的保守默认值。 */
+    Unknown,
 }

@@ -10,9 +10,11 @@ import io.vaultix.data.bitwarden.sync.SyncOutcome
 import io.vaultix.data.kdbx.Kdbx
 import io.vaultix.data.kdbx.KdbxFailure
 import io.vaultix.data.kdbx.KdbxOpenError
+import io.vaultix.data.repository.kdbx.AdoptBaselineOutcome
 import io.vaultix.data.repository.kdbx.KdbxFileCache
 import io.vaultix.data.repository.kdbx.KdbxFileSourceResolver
 import io.vaultix.data.repository.kdbx.KdbxSyncTransitions
+import io.vaultix.data.repository.kdbx.adoptRemoteBaseline
 import io.vaultix.database.dao.CipherDao
 import io.vaultix.database.dao.FolderDao
 import io.vaultix.database.dao.PendingOpDao
@@ -238,14 +240,49 @@ class VaultRepositoryImpl @Inject constructor(
         //    唯一的例外是 null：那本来就不是状态，补一个比留着空白更安全。
         if (existing?.syncStatus == null) {
             val hasCloud = runCatching { kdbxFileSources.isCloudOrigin(sourceUri) }.getOrDefault(false)
-            KdbxSyncTransitions.forNewlyRegisteredVault(hasCloudSource = hasCloud)?.let { initial ->
-                vaultDao.updateSyncState(
-                    id = sourceUri,
-                    status = initial.name,
-                    // 这两列必须原样带回来（DAO 是 `SET col = :v`，传 null 就是清空）。
-                    versionToken = existing?.remoteVersionToken,
-                    syncedAt = existing?.lastSyncedAt,
-                )
+            val initial = KdbxSyncTransitions.forNewlyRegisteredVault(hasCloudSource = hasCloud)
+            // ★ #242：网盘库**必须**连基线令牌一起补，否则首次同步必定误报冲突。
+            //
+            //   旧行为：写 `PENDING_UPLOAD`（impliesLocalChanges = true）但令牌留空
+            //   ⇒ 编排器 `remoteChanged = (远端令牌 != null)` 恒为真
+            //   ⇒ `isConflict(true, true)` 恒为真 ⇒ **用户一个字节没改也报冲突**。
+            //
+            //   用户刚刚用主密码解开这个文件、确认了这就是他想要的那一版 ⇒
+            //   「远端当前内容」本来就是他认可的基线。stat 一次拿到令牌写进去，
+            //   状态一并落成 IN_SYNC（"与远端一致"才是事实，而不是"待上传"）。
+            //
+            //   ⚠️ 但**不能只信 stat**：拿不到令牌时（OneDrive 的部分响应、离线、
+            //   凭据过期）必须退回内容对账，而不是一律"保守地写 PENDING_UPLOAD"——
+            //   PENDING_UPLOAD 会触发自动上传，而本机此刻的字节可能根本不是这个库的
+            //   那一版（从网盘添加时本机连缓存都还没有）⇒ **静默覆盖远端**。
+            //   三种结局见 `adoptRemoteBaseline` 的 KDoc。
+            val adopted = if (initial != null) {
+                runCatching {
+                    kdbxFileSources.fileSourceFor(sourceUri)?.let { src ->
+                        KdbxSyncTransitions.adoptRemoteBaseline(
+                            vaultId = sourceUri,
+                            source = src,
+                            vaultDao = vaultDao,
+                            // ⚠️ 这里**不传** localBytes：本次"打开"不保证落了本地缓存
+                            //    （从网盘添加时引擎可能只开了远端那一份），拿缓存顶替
+                            //    等于用一个可能属于旧版本的字节去比"是否同源"。
+                            //    只剩 stat 一条路 ⇒ 拿不到令牌就落 Unknown，保持保守默认值。
+                        )
+                    }
+                }.getOrNull()
+            } else {
+                null
+            }
+            if (adopted == null || adopted == AdoptBaselineOutcome.Unknown) {
+                initial?.let { status ->
+                    vaultDao.updateSyncState(
+                        id = sourceUri,
+                        status = status.name,
+                        // 这两列必须原样带回来（DAO 是 `SET col = :v`，传 null 就是清空）。
+                        versionToken = existing?.remoteVersionToken,
+                        syncedAt = existing?.lastSyncedAt,
+                    )
+                }
             }
         }
         // 首次接入顺手设为默认库（**仅当默认库为空**，用户 2026-09-14 拍板）。

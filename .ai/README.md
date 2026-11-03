@@ -24,6 +24,7 @@
 > | **240** | 添加库 → 本地 KDBX 闪退 | `navigate(AddKdbxRoute)` **少一对括号**，`@Serializable` 生成的 `Companion` 被当成了路由 |
 > | **238** | 切 OneDrive → 点登录闪退 | `OutlinedTextField` 测量期子节点已不在（切来源前未 `focusClear`） |
 > | **241** | KDBX 库不进快速解锁 | `autoEnrollNewVault` 只有 Bitwarden 调用点；且签名写死 `{ _ -> null }` 在类型层面排除了 KDBX |
+> | **242** | 打开 OneDrive KDBX **恒报冲突**、点覆盖后卡死 | 新接入库写 `PENDING_UPLOAD` 而**基线令牌留空** ⇒ `remoteChanged` 恒真；`resolveKdbxConflict` 无异常兜底 |
 >
 > **四条必须记住的判据**：
 > ① **`AbstractMethodError` / `NoSuchMethodError` = 版本错配**，别读业务代码，
@@ -34,6 +35,10 @@
 > ③ **同一个 App 可以有多个不相关的闪退**，**每份日志都要独立读第一行**。
 > ④ **能力加在 A 类对象上时，逐个路径数一遍 B 类对象**。#222 只盯 Bitwarden，
 > 因为报障的人用的是 Bitwarden —— **报障渠道决定了视野**。
+> ⑤ **「没有基线」≠「远端变了」**，但**「问不到」也 ≠「对齐了」**。#242：新接入先去
+> stat 一次把远端当前版本记成基线；问不到才退回保守值。**"保守"不能用来给"不问就下结论"背书**。
+> ⑥ **有后果的用户动作（覆盖/放弃/删除）必须有异常出口** —— 无兜底的 `launch`
+> 把"崩了"呈现成"没反应"，比报错难查十倍。
 >
 > **#241 的产品决策（用户 2026-11-03 拍板）**：**静默纳入**，不弹确认框。
 > 原话「指纹解锁和 PIN 码是 vaultix 最高优先级的」。
@@ -41,16 +46,22 @@
 > ⚠️ 实质是「允许在未逐库确认的情况下把主密码加密存盘」；三道守卫仍生效
 > （房钥匙不在内存 / 一把门锁都没装 / 范围为空集）⇒ **没启用过快速解锁的人不会被悄悄开启**。
 >
-> **验证**：`:data:repository` 265 例 + `:app` 565 例 **0 失败**；detekt 全 10 模块通过；
+> **验证**：`:data:repository` 266 例 + `:app` 565 例 **0 失败**；detekt 全 10 模块通过；
 > 9 个脚本门禁 + 文档门禁全绿。依赖实测 `foundation/ui/runtime = 1.11.4`，
 > `org.jetbrains.compose` 残留 **0**。
 > ⚠️ **仍需真机验**：① 添加库→本地 KDBX ② 进网盘表单 ③ 点 WebDAV 输入框→切 OneDrive→点登录
 > ④ 加 OneDrive KDBX → 杀进程重开 → 指纹应能直接打开。
 >
-> 详见 [`SESSION-2026-11-03.md`](./SESSION-2026-11-03.md) §十三～§十五；
+> **#242 的修法**：新增 `adoptRemoteBaseline`，建完行立刻判三选一（有令牌 ⇒ `IN_SYNC`；
+> 无令牌且内容一致 ⇒ `IN_SYNC`；无令牌且内容不同/读不出 ⇒ `REMOTE_CHANGED`，**只读不推**）。
+> ⚠️ 不能"为了不报冲突"一律写 `IN_SYNC` —— 从网盘添加时本机可能连缓存都没有，
+> 拿别的字节去条件写就是**静默覆盖远端**。
+>
+> 详见 [`SESSION-2026-11-03.md`](./SESSION-2026-11-03.md) §十三～§十六；
 > [`issues/01-构建与环境-part13.md`](./issues/01-构建与环境-part13.md) **#239**、
 > [`issues/06-界面与交互-part10.md`](./issues/06-界面与交互-part10.md) **#238/#240**、
-> [`issues/04-锁与解锁-part5.md`](./issues/04-锁与解锁-part5.md) **#241**。
+> [`issues/04-锁与解锁-part5.md`](./issues/04-锁与解锁-part5.md) **#241**、
+> [`issues/07-数据与同步-part3.md`](./issues/07-数据与同步-part3.md) **#242**。
 
 ---
 

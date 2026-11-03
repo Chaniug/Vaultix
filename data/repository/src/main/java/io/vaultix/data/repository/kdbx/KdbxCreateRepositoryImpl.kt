@@ -176,19 +176,48 @@ class KdbxCreateRepositoryImpl @Inject constructor(
         // （`updateSyncState` 的 KDoc 里已经为同一个理由写过一次）。
         // 单列更新不可能漏。
         //
-        // ⚠️ 重复创建同一路径时**也**把状态写成"待上传"：这次 `createVault` 又写了一遍文件，
-        //    说"待上传"是诚实的；基线令牌不动，编排器下次会自己比。
-        vaultDao.updateSyncState(
-            id = resolvedOrigin,
-            status = KdbxSyncTransitions.forNewlyRegisteredVault(
-                hasCloudSource = isCloudOrigin(resolvedOrigin),
-            )?.name,
-            // ⚠️ null = 保留旧值（DAO 里 `SET remoteVersionToken = :versionToken`，
-            //    这里必须显式传旧值，否则会被写成 null —— 那等于抹掉基线，
-            //    下一轮同步会给一个从没拉过的库报"远端变了"，把用户直接推去冲突对话框）。
-            versionToken = existing?.remoteVersionToken,
-            syncedAt = existing?.lastSyncedAt,
-        )
+        // ⚠️ 重复创建同一路径时**也**重算一次同步状态：这次 `createVault` 又写了一遍文件，
+        //    状态必须反映"刚写完"这件事，而不是沿用上一次的结论。
+        // ★ #242：网盘库建完后**立刻**把基线令牌写成刚写上去那一版。
+        //
+        //   旧行为：状态写 PENDING_UPLOAD（impliesLocalChanges = true）而令牌留空
+        //   ⇒ 编排器 `remoteChanged` 恒真 ⇒ `isConflict(true, true)` 恒真
+        //   ⇒ **用户刚建完库、什么都没改就被报冲突**。
+        //
+        //   这里比 addKdbxVault 更有把握：文件就是**本次刚写上去的**，
+        //   stat 拿到的就是"我们自己那一版"，不存在"用户没看过远端"的问题。
+        //   拿不到令牌时退回内容对账（比对基准是刚建好的那个库，会话就在内存里），
+        //   仍然只读、不会覆盖。两者都判不出来（离线 + 无内容可读）⇒
+        //   退回旧行为（令牌留空 + 待上传），届时会报一次冲突 —— 保守但诚实。
+        if (isCloudOrigin(resolvedOrigin)) {
+            KdbxSyncTransitions.adoptRemoteBaseline(
+                vaultId = resolvedOrigin,
+                source = source,
+                vaultDao = vaultDao,
+                contentMatchesRemote = { id, _ ->
+                    Kdbx.adoptBaselineIfMatches(id, source.readRemoteCurrent())
+                },
+            ).takeIf { it == AdoptBaselineOutcome.Unknown }?.let {
+                vaultDao.updateSyncState(
+                    id = resolvedOrigin,
+                    status = KdbxSyncTransitions.forNewlyRegisteredVault(hasCloudSource = true)?.name,
+                    // ⚠️ null = 保留旧值（DAO 里 `SET remoteVersionToken = :versionToken`，
+                    //    这里必须显式传旧值，否则会被写成 null —— 那等于抹掉基线，
+                    //    下一轮同步会给一个从没拉过的库报"远端变了"，把用户直接推去冲突对话框）。
+                    versionToken = existing?.remoteVersionToken,
+                    syncedAt = existing?.lastSyncedAt,
+                )
+            }
+        } else {
+            // 本地 SAF：`forNewlyRegisteredVault(false)` 返回 null ⇒ 写 null = **不适用**
+            // （不是"待上传"）。这条必须写：旧行可能带着上一次的网盘状态。
+            vaultDao.updateSyncState(
+                id = resolvedOrigin,
+                status = null,
+                versionToken = existing?.remoteVersionToken,
+                syncedAt = existing?.lastSyncedAt,
+            )
+        }
 
         // 与 addKdbxVault 同一套收尾（两条路落成同样的行，见类的 KDoc）：
         // 「首个库设为默认」只在**真的新增**时做，重复创建同一路径不该有副作用。
