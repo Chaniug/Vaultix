@@ -368,18 +368,25 @@ class LocalUnlockEnrollment @Inject constructor(
         masterPasswordOf: suspend (String) -> String? = { null },
         force: Boolean = false,
     ): Boolean = withContext(Dispatchers.IO) {
-        if (!houseKeyStore.hasAnyLock()) return@withContext false
-        // ★ 幂等短路：信封已经在了 ⇒ 本次无事可做。
+        // ★ 第一道：**还没有房间信封才需要做任何事**（#246，2026-11-04 真机「解锁很慢」）。
         //
-        // ⚠️ 这条**不是**优化，是必需的：本方法现在会在「每次主密码解锁成功后」被调用
-        //   （#243），而 KDBX 的备料要先跑一次 `Kdbx.verify` —— 那是一次**完整的 KDF**
-        //   （真机设置 64 MiB / 46 轮）。没有短路的话，用户每输一次主密码都要再烧
-        //   一遍同样量级的 Argon2，解锁时间凭空翻倍，而这正是用户最在意的"打开很慢"。
+        // ⚠️ 这一步必须在**所有**其它判断之前 —— 现在有三条路径（新增库 / 主密码解锁成功 /
+        //   指纹补建）都会走到本方法，而它们每次都紧随一次用户认证之后。若先做
+        //   `hasAnyLock()`（一次 Keystore 往返）、`quickUnlockScope().first()`
+        //   （一次 DataStore 读，冷启动可达数百毫秒），那么"信封早就有了"这个
+        //   绝大多数情况仍要白付这两笔开销 ⇒ 用户感知就是"每次解锁都慢一下"。
+        //   而 `hasRoom` 只查一次凭据存储，是三者里最便宜、且**唯一真正必要**的前置。
+        //
+        // 这条短路的必要性：本方法会在「每次主密码解锁成功后」被调用（#243），
+        // 而 KDBX 的备料要先跑一次 `Kdbx.verify` —— 那是一次**完整的 KDF**
+        // （真机 64 MiB / 46 轮）。没有短路，用户每输一次主密码都要再烧一遍
+        // 同样量级的 Argon2，解锁时间凭空翻倍。
         //
         // ⚠️ `force = true` 只给 [enrollJustAuthenticated] 用：那条路径的**前提**就是
         //   "刚刚开门失败了"（`NotEnrolled` / `Damaged`），此时"有信封"不代表"能用"，
         //   重封一次才是自愈。
         if (!force && houseKeyStore.hasRoom(vaultId)) return@withContext true
+        if (!houseKeyStore.hasAnyLock()) return@withContext false
         // 空集有**两种**含义（见 `VaultixPreferences.QUICK_UNLOCK_SCOPE_CONFIRMED`）：
         //   - 未确认过 ⇒ 语义是「全部库都在范围内」（向导默认全勾）⇒ 该封；
         //   - 已确认过 ⇒ 用户明确说「一个库都不要」⇒ 不许替他改回来。

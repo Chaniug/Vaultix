@@ -358,6 +358,10 @@ class UnlockViewModelTest {
         val sessions = mockk<VaultSessionRepository>()
         every { sessions.observeViewLockedVaultIds() } returns flowOf(emptySet())
         every { sessions.isViewLocked(any()) } returns false
+        // ★ #245：`viewLockAuto` 与 `viewLocked` 在**同一次**状态更新里写入，
+        //   所以即使本文件测的是真锁分支，这条也必须给桩（否则 MockK 抛
+        //   "no answer found" —— 它不是"多写了"，而是这条路径必经）。
+        every { sessions.isAutoViewLocked(any()) } returns false
 
         // 失效善后：本文件测的是「指纹入口显不显示」，一次都没走到门锁失败分支，
         // 故给 relaxed mock —— 真要测 rearm/降级分叉请用 `LocalUnlockFanoutTest`。

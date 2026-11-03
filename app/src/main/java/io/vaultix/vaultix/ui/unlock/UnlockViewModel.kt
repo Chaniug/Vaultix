@@ -201,6 +201,16 @@ class UnlockViewModel @Inject constructor(
          * 认证通过即 `clearViewLock` 回主界面。
          */
         val viewLocked: Boolean = false,
+        /**
+         * ★ 这次查看层锁是**系统自动给的**（熄屏 / 冷启动恢复，`AutoViewGate` 打的标记）。
+         *
+         * 为什么必须与手动查看锁分开（#245，2026-11-04 真机）：
+         * 手动查看锁是用户的一次**显式指令**，被系统取消后不该自己消失；
+         * 自动门禁则是"离开设备后回来确认一次身份"——用户主动取消（去拿眼镜 / 手湿）
+         * 完全合理，而且用户的真实诉求是**自己按指纹的那一刻**才认证，而不是一进页面
+         * 就被系统弹窗拦一道。两者用同一个 `viewLocked` 渲染，但退出策略不同。
+         */
+        val viewLockAuto: Boolean = false,
         /** 本次生物识别是为查看层锁发起的（成功分支据此只清标记、不重建会话）。 */
         val viewUnlockStarted: Boolean = false,
         /** 应用内 PIN 入口是否可见（按库）。取向同 [localUnlockAvailable]：只看持久化开关。 */
@@ -260,6 +270,11 @@ class UnlockViewModel @Inject constructor(
     private val _state = MutableStateFlow(
         UiState(
             viewLocked = vaultId.isNotBlank() && sessionRepository.isViewLocked(vaultId),
+            // ⚠️ **构造期恒 false**：这里不知道"是系统自动给的标记还是用户手动锁的"，
+            //   猜错两个方向都坏事（猜自动 ⇒ 用户的手动锁被一次取消抹掉；
+            //   猜手动 ⇒ 自动门禁又变成"一进来就弹窗"）。由 [observersStarted] 之后
+            //   的第一帧按 `isAutoViewLocked` 如实补上（见 `refreshViewLockOf`）。
+            viewLockAuto = false,
         ),
     )
     val state: StateFlow<UiState> = _state.asStateFlow()
@@ -358,6 +373,9 @@ class UnlockViewModel @Inject constructor(
                     it.copy(
                         vault = target,
                         viewLocked = target != null && sessionRepository.isViewLocked(target.id),
+                        // ★ 必须与 viewLocked **同一次**更新：两者分开写会出现一帧
+                        //   "锁着但不知是自动还是手动"的中间态，而自动弹认证正好读它（#245）。
+                        viewLockAuto = target != null && sessionRepository.isAutoViewLocked(target.id),
                         // 首帧未到（vaults 尚未发射）时不会走到这里，故此处可判定为"确认无库"
                         noVaultToUnlock = target == null,
                     )
@@ -385,7 +403,12 @@ class UnlockViewModel @Inject constructor(
                 .distinctUntilChanged()
                 .collectLatest { id ->
                     // 目标库确定后再校正一次查看锁（标记流可能先于选库到达）。
-                    _state.update { it.copy(viewLocked = sessionRepository.isViewLocked(id)) }
+                    _state.update {
+                        it.copy(
+                            viewLocked = sessionRepository.isViewLocked(id),
+                            viewLockAuto = sessionRepository.isAutoViewLocked(id),
+                        )
+                    }
                     // 房子化（2026-09-28）：入口可见性曾 = 全局指纹门锁 && 该库房间信封在。
                     //
                     // ★ #243（2026-11-04）：后半句去掉了 —— 入口只由**门锁**决定。
@@ -971,6 +994,32 @@ class UnlockViewModel @Inject constructor(
                 error = if (cancelled) it.error else UnlockUiError.Unknown(message),
                 autoPromptAborts = if (systemAbort) it.autoPromptAborts + 1 else it.autoPromptAborts,
             )
+        }
+        // ★ #245：**系统自动**打的查看锁，用户主动取消 ⇒ 标记就此消失，回到库列表。
+        //
+        //   为什么：自动门禁的语义是「离开设备后回来确认一次身份」，而用户取消
+        //   （去拿眼镜 / 手湿 / 只想先看看）本身就是一个合法选择 —— 把他钉在
+        //   「只有生物识别按钮」的这一页上，等于逼他为一次"不想验证"付一次验证的代价。
+        //   真锁（密钥已清）不会因此失守：这个标记只管**界面**，密钥从没被它保护过。
+        //
+        //   ⚠️ 手动查看锁（用户自己在主页按的锁）**不动** —— 那是一次显式指令。
+        //   ⚠️ 系统侧终止（`systemAbort`，压根没弹成）**不动** —— 那不算用户的选择。
+        if (cancelled && !systemAbort) clearAutoViewLockIfAny()
+    }
+
+    /**
+     * 若当前是**自动**查看锁，清掉它并回到主界面（#245）。
+     *
+     * 复用 [completeLocalUnlock] 那条放行路径里"清所有库的自动门禁"的同一判据
+     * （一次身份确认是全局的），避免只清当前库、别的库还带着标记 ⇒ 根导航又判一次锁。
+     */
+    private fun clearAutoViewLockIfAny() {
+        if (!_state.value.viewLockAuto) return
+        scope.launch {
+            sessionRepository.clearAutoViewLocks()
+            // ⚠️ 根导航此刻已不在"锁着"的状态 ⇒ 交回主界面。走同一个 [Event.Unlocked]：
+            //   解锁页对它的处理只有 `onUnlocked()`，与正常认证成功完全一致。
+            _events.send(Event.Unlocked)
         }
     }
 

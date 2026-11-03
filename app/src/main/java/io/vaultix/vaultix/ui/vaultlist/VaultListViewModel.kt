@@ -272,8 +272,7 @@ class VaultListViewModel @Inject constructor(
      */
     fun resolveKdbxConflict(vaultId: String, choice: KdbxConflictChoice) {
         viewModelScope.launch {
-            // ★ #242：整个解决过程必须兜住异常。
-            //
+            // ★ #242：整个解决过程必须兜住异常。            //
             //   此前这里没有任何 try/catch：`resolveUsingLocal` 内部虽然把 IO 失败
             //   收成了 `Result`，但**会话/编码/DAO 任一环节抛出**（例如 KDF 级别的
             //   编码失败、`markResolved` 的数据库写失败）就会让这个协程直接死掉 ——

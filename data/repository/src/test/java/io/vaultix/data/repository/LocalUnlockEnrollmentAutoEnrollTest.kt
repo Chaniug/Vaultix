@@ -104,7 +104,12 @@ class LocalUnlockEnrollmentAutoEnrollTest {
     @Test
     fun `一把门锁都没装_不替用户擅自启用`() = runTest {
         // 快速解锁从未启用时，新增库不该把它"顺手开起来"。
+        //
+        // ⚠️ `hasRoom = false` 是**必须**的前置（#246：没有信封才需要往下判）——
+        //   少了它本方法会在第一步就短路返回 true，这条用例会静默变成"假通过"，
+        //   而它的意义正是"一把锁都没有时绝不替用户开启"。
         every { house.isUnlocked } returns true
+        coEvery { house.hasRoom(any()) } returns false
         coEvery { house.hasAnyLock() } returns false
 
         assertFalse(enrollment().autoEnrollNewVault(vaultId))

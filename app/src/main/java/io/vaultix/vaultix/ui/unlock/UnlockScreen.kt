@@ -157,6 +157,7 @@ fun UnlockScreen(
     AutoPromptQuickUnlock(
         localUnlockAvailable = state.localUnlockAvailable,
         viewLocked = state.viewLocked,
+        viewLockAuto = state.viewLockAuto,
         hasTwoFactor = state.twoFactor != null,
         submitting = state.submitting,
         autoPromptAborts = state.autoPromptAborts,
@@ -300,7 +301,9 @@ private fun ViewLockedContent(
                 strokeWidth = UiSize.InlineProgressStroke,
             )
             Text(
-                text = stringResource(R.string.add_vault_working),
+                // ★ #245：这里**不做派生**（密钥已在内存），只等一次生物识别。
+                //   复用「正在派生密钥并解锁…（约需 1–3 秒）」会让用户以为卡在运算上。
+                text = stringResource(R.string.unlock_view_lock_verifying),
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(start = Spacing.sm),
             )
@@ -918,6 +921,12 @@ private fun AutoPromptQuickUnlock(
     viewLocked: Boolean,
     hasTwoFactor: Boolean,
     submitting: Boolean,
+    /**
+     * ★ 这次查看层锁是不是**系统自动**给的（熄屏 / 冷启动恢复）。
+     *
+     * 见 [UnlockViewModel.UiState.viewLockAuto] 与下面 [eligible] 的说明。
+     */
+    viewLockAuto: Boolean,
     /** 系统侧终止的累计次数（见 [UnlockViewModel.UiState.autoPromptAborts]）。 */
     autoPromptAborts: Int,
     onPrompt: () -> Unit,
@@ -927,16 +936,23 @@ private fun AutoPromptQuickUnlock(
     var attempts by remember { mutableIntStateOf(0) }
     var handledAborts by remember { mutableIntStateOf(0) }
     val lifecycleOwner = LocalLifecycleOwner.current
+    // ★ #245：**系统自动**打的查看锁不自动弹（用户 2026-11-04 真机："锁屏回来弹不出指纹，
+    //   就在那里转"）。自动门禁是「回来确认一次身份」，而"确认"应当由用户主动发起
+    //   （按下那一页唯一的主按钮）—— 抢在他前面弹窗只剩代价：cipher 要现备
+    //   （一次 Keystore 往返）、宿主还要等 RESUMED，用户看到的就只有转圈。
+    //   ⚠️ 手动查看锁**仍然**自动弹：那是用户刚刚自己按下的锁，意图明确。
     // 条件刻意控制在 3 项以内（detekt ComplexCondition 上限为 3）。
-    // 查看层锁：只要标记在就该弹（密钥已在内存，认证一次即可回来，不依赖快速解锁是否启用）。
-    val eligible = (viewLocked || localUnlockAvailable) && !hasTwoFactor && !submitting
+    val eligible = ((viewLocked && !viewLockAuto) || localUnlockAvailable) &&
+        !hasTwoFactor &&
+        !submitting
     LaunchedEffect(eligible, autoPromptAborts) {
+        if (!eligible) return@LaunchedEffect
         // 系统侧终止 ⇒ 归还这一次机会（次数封顶，硬件持续不可用时不至于无限重试）。
         if (autoPromptAborts > handledAborts) {
             handledAborts = autoPromptAborts
             if (attempts < MAX_AUTO_PROMPT_ATTEMPTS) prompted.value = false
         }
-        if (prompted.value || !eligible) return@LaunchedEffect
+        if (prompted.value) return@LaunchedEffect
         // ⚠️ 必须等宿主 RESUMED 之后再发起认证：进程冷启动（尤其设备重启后首次进入）时
         // BiometricPrompt 若在 Activity 尚未 RESUMED 时发起，会被系统立刻以
         // ERROR_CANCELED / ERROR_HW_UNAVAILABLE 结束 —— 这既是「重启后指纹解锁

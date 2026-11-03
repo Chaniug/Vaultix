@@ -96,6 +96,13 @@ class ViewUnlockScopeTest {
     /** 造一个「已解锁但被查看锁挡住」的解锁页 VM（真锁字段一律不参与本文件）。 */
     private fun TestScope.viewLockedViewModel(
         sessions: VaultSessionRepository,
+        /**
+         * 查看锁**是不是自动门禁打上的**（决定 `viewLockAuto` 这一层分支）。
+         *
+         * ⚠️ 默认 `true`：本文件的主体（2026-10-31 那两条）针对的正是自动门禁场景。
+         * #245 的"手动锁"用例显式传 `false`。
+         */
+        auto: Boolean = true,
     ): UnlockViewModel {
         val repository = mockk<VaultRepository>(relaxed = true)
         every { repository.observeVaults() } returns flowOf(listOf(vault))
@@ -108,7 +115,7 @@ class ViewUnlockScopeTest {
         // 当前库处于查看锁：构造期会同步读到（`_state` 的初值就靠这一句）。
         every { sessions.observeViewLockedVaultIds() } returns flowOf(setOf(vaultId))
         every { sessions.isViewLocked(any()) } returns true
-        every { sessions.isAutoViewLocked(any()) } returns true
+        every { sessions.isAutoViewLocked(any()) } returns auto
         coEvery { sessions.clearAutoViewLocks() } returns Unit
 
         val prefs = mockk<VaultixPreferences>(relaxed = true)
@@ -179,5 +186,68 @@ class ViewUnlockScopeTest {
         advanceUntilIdle()
 
         coVerify(exactly = 0) { sessions.viewLock(any(), any()) }
+    }
+
+    // ------------------------------------------------------------ #245（2026-11-04）
+
+    /**
+     * 用户取消**自动**门禁的弹窗 ⇒ 标记消失、回到库列表（不再被钉在认证页）。
+     *
+     * ⚠️ 为什么这条不是"放松安全"：自动门禁只管**界面**，密钥从没被它保护过；
+     * 用户取消是一次合法选择（去拿眼镜 / 手湿）。把他钉在"只有生物识别按钮"的
+     * 页面上，等于逼他为一次"不想验证"付一次验证的代价 —— 而真锁（密钥已清）
+     * 走的是另一条路径，完全不受影响。
+     */
+    @Test
+    fun `自动门禁被用户取消_清标记并放行_而不是钉在认证页`() = runTest {
+        val sessions = mockk<VaultSessionRepository>(relaxed = true)
+        val vm = viewLockedViewModel(sessions)
+        advanceUntilIdle()
+        org.junit.Assert.assertTrue("前置：构造后应识别为自动门禁", vm.state.value.viewLockAuto)
+
+        vm.onBiometricPromptError(message = "用户取消", cancelled = true, systemAbort = false)
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { sessions.clearAutoViewLocks() }
+        // 不许顺手撤销"手动查看锁"（那是用户对单库的显式指令）。
+        coVerify(exactly = 0) { sessions.clearViewLock(any()) }
+    }
+
+    /**
+     * **手动**查看锁被取消 ⇒ 保持锁定（标记不许自己消失）。
+     *
+     * 与上一条方向相反：手动锁是用户刚按下的显式指令，系统弹窗被他取消
+     * 不等于"我要解锁"，把它悄悄清掉就是**谎报状态**（页面显示已解锁、实际他刚锁上）。
+     */
+    @Test
+    fun `手动查看锁被用户取消_保持锁定`() = runTest {
+        val sessions = mockk<VaultSessionRepository>(relaxed = true)
+        // 手动锁：标记在，但不属于自动门禁子集。
+        val vm = viewLockedViewModel(sessions, auto = false)
+        advanceUntilIdle()
+        org.junit.Assert.assertFalse("前置：手动锁不该被当成自动门禁", vm.state.value.viewLockAuto)
+
+        vm.onBiometricPromptError(message = "用户取消", cancelled = true, systemAbort = false)
+        advanceUntilIdle()
+
+        coVerify(exactly = 0) { sessions.clearAutoViewLocks() }
+    }
+
+    /**
+     * 系统侧终止（压根没弹成）**不算**用户的选择 ⇒ 自动门禁标记必须留着。
+     *
+     * 否则冷启动首帧那次"弹窗被系统以 ERROR_CANCELED 结束"会顺手把门禁解除 ——
+     * 用户什么都没做，却绕过了"回来确认一次身份"。
+     */
+    @Test
+    fun `系统侧终止不算用户取消_自动门禁保持`() = runTest {
+        val sessions = mockk<VaultSessionRepository>(relaxed = true)
+        val vm = viewLockedViewModel(sessions)
+        advanceUntilIdle()
+
+        vm.onBiometricPromptError(message = "硬件不可用", cancelled = true, systemAbort = true)
+        advanceUntilIdle()
+
+        coVerify(exactly = 0) { sessions.clearAutoViewLocks() }
     }
 }
