@@ -7,6 +7,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 /**
@@ -25,7 +26,10 @@ import org.junit.Test
  *
  * 1. **有缓存时不等待 `stat()`** —— 由 [HangingStatSource] 把这条钉死（回归即超时）；
  * 2. **后台发现远端变了 ⇒ 换新缓存 + 上报**（否则用户手里的旧内容没有任何提示）；
- * 3. **没有缓存时 `stat()` 失败 ⇒ 如实抛**（没有可回退的东西，不能静默返回空字节）。
+ * 3. **没有缓存时 `stat()` 失败 ⇒ 如实抛**（没有可回退的东西，不能静默返回空字节）；
+ * 4. ★ **`readRemoteCurrent()` 必须绕过缓存**（2026-11-03 修）：`read()` 允许由缓存
+ *    答复，而"远端现在是什么"必须问远端 —— 否则对账/拉取都会拿到旧字节，
+ *    表现为"提示已同步/已下载，条目还是旧的"（见下方第 4 组用例的说明）。
  *
  * ⚠️ 原 B1 的「令牌相同 ⇒ 一次都不下载」不再是**同步**契约：令牌比较已挪进后台校验。
  *   现在的契约是「有缓存 ⇒ 这一次的 `read()` 不等网络」。
@@ -48,13 +52,18 @@ class CachedKdbxFileSourceTest {
         var statCount = 0
             private set
 
+        /** 调用**顺序**（`"stat"` / `"read"`）—— 顺序本身是有契约的，见 `readRemoteCurrent` 的用例。 */
+        val calls = mutableListOf<String>()
+
         override suspend fun stat(): KdbxFileStat {
+            calls += "stat"
             statCount++
             if (statFails) throw IllegalStateException("网络不可用")
             return KdbxFileStat(versionToken = token)
         }
 
         override suspend fun read(): ByteArray {
+            calls += "read"
             readCount++
             return bytes
         }
@@ -77,7 +86,8 @@ class CachedKdbxFileSourceTest {
     }
 
     /** 内存缓存（接口本来就是为"可测"而拆出来的）。 */
-    private class FakeCache : KdbxFileCache {        private val map = mutableMapOf<String, CachedKdbxFile>()
+    private class FakeCache : KdbxFileCache {
+        private val map = mutableMapOf<String, CachedKdbxFile>()
 
         override suspend fun load(key: String): CachedKdbxFile? = map[key]
 
@@ -222,6 +232,85 @@ class CachedKdbxFileSourceTest {
 
         assertEquals(IllegalStateException::class.java, error?.javaClass)
         assertEquals("没有缓存时不能静默返回空字节", 0, delegate.readCount)
+    }
+
+    // ---- 4. 远端当前字节：必须绕过缓存（2026-11-03 修）----
+    //
+    // ## 这组用例防的是什么（真机表现：点同步提示"已下载/已同步"，条目还是旧的）
+    //
+    // 父接口给 `readRemoteCurrent()` 的默认实现是 `read()`，而本类的 `read()`
+    // **有缓存就 return 缓存**。于是"远端现在是什么"这个问题被缓存答了：
+    //  - 内容对账拿旧字节跟旧会话比 ⇒ 必然相同 ⇒ 判「已同步」并把基线推进到新令牌
+    //    ⇒ 远端那版再也不会被拉；
+    //  - 拉取路径拉回旧字节 ⇒ 会话没变、基线却记成新令牌 ⇒ 永远判不出远端有更新。
+    //
+    // ⇒ 必须覆写：**绕开缓存 + 回写缓存 + 先取令牌再读字节**。三者缺一都不行，
+    //   所以断言也分三条，且都咬在"可观测的值"上（返回的字节 / 缓存 / 调用顺序）。
+
+    @Test
+    fun `readRemoteCurrent必须绕过缓存`() = runTest {
+        val cache = FakeCache()
+        cache.save(key, CachedKdbxFile("stale".toByteArray(), "etag-1"))
+        val delegate = source("fresh".toByteArray(), token = "etag-2")
+
+        val bytes = CachedKdbxFileSource(delegate, cache, key, backgroundScope).readRemoteCurrent()
+
+        assertArrayEquals(
+            "问的是『远端现在是什么』，缓存不能替它回答",
+            "fresh".toByteArray(),
+            bytes,
+        )
+        assertEquals("必须真的下载一次", 1, delegate.readCount)
+    }
+
+    @Test
+    fun `readRemoteCurrent必须把缓存换成这一版`() = runTest {
+        val cache = FakeCache()
+        cache.save(key, CachedKdbxFile("stale".toByteArray(), "etag-1"))
+        val delegate = source("fresh".toByteArray(), token = "etag-2")
+
+        CachedKdbxFileSource(delegate, cache, key, backgroundScope).readRemoteCurrent()
+
+        assertEquals(
+            "不回写的话：拉取成功后会话是新的、缓存还是旧的 ⇒ 下次解锁又读回旧内容",
+            "fresh",
+            String(cache.peek(key)!!.bytes),
+        )
+        assertEquals("etag-2", cache.peek(key)?.versionToken)
+    }
+
+    @Test
+    fun `readRemoteCurrent先取令牌再读字节`() = runTest {
+        val cache = FakeCache()
+        val delegate = source("fresh".toByteArray(), token = "etag-2")
+
+        CachedKdbxFileSource(delegate, cache, key, backgroundScope).readRemoteCurrent()
+
+        assertEquals(
+            "令牌必须**先于**字节取：反过来的话，读到字节之后远端又变了一版，" +
+                "就会拿更新的令牌配旧字节写进缓存 —— 那一版从此再也拉不下来。" +
+                "偏旧只是多拉一次，偏新是静默丢改动。",
+            listOf("stat", "read"),
+            delegate.calls,
+        )
+    }
+
+    @Test
+    fun `readRemoteCurrent取不到令牌也必须把字节读回来`() = runTest {
+        val cache = FakeCache()
+        val delegate = source("fresh".toByteArray(), token = "etag-2", statFails = true)
+
+        val bytes = CachedKdbxFileSource(delegate, cache, key, backgroundScope).readRemoteCurrent()
+
+        assertArrayEquals(
+            "stat 只是给缓存配对令牌，拿不到不该连字节一起放弃",
+            "fresh".toByteArray(),
+            bytes,
+        )
+        assertNull(
+            "令牌拿不到时缓存令牌为 null（下次后台校验会重下一次，安全）",
+            cache.peek(key)?.versionToken,
+        )
     }
 
     // ---- 6. 上传成功后的收敛（#233）----

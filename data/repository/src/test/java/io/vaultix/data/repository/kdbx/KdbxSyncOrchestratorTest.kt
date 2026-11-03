@@ -4,6 +4,7 @@ package io.vaultix.data.repository.kdbx
 //    它们是 `MockKAnswerScope` 的成员函数（不是顶层函数），
 //    写了 `import io.mockk.coAnswers` 反而 `Unresolved reference`（CI 上炸过）。
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.mockk
 import io.vaultix.data.kdbx.KdbxFileSource
 import io.vaultix.data.kdbx.KdbxFileStat
@@ -144,6 +145,35 @@ class KdbxSyncOrchestratorTest {
         assertEquals(KdbxSyncStatus.REMOTE_CHANGED.name, dao.status())
         // ★ 对账没成功 ⇒ 基线一点都不能动（动了就等于承认"本机已是远端那一版"）。
         assertEquals(T0, dao.token())
+    }
+
+    /**
+     * ★★ 内容对账必须问**远端当前字节**，不能拿 `read()` 的回答（2026-11-03 修）。
+     *
+     * ## 复现的缺陷（真机：点同步提示"已同步"，条目还是旧的）
+     *
+     * 生产里远端来源都套了缓存装饰器，而 `read()` **有缓存就返回缓存字节、不发请求**。
+     * 对账于是拿"旧缓存"跟"旧会话"比 ⇒ 必然相同 ⇒ 返回 `AlreadyInSync`
+     * 并把基线推进到**新**令牌 ⇒ 远端那版再也不会被拉；更糟的是此后本地一改，
+     * 就会用"旧内容 + 新改动"覆盖远端（此时条件写的基线正好对得上，服务端会放行）。
+     *
+     * ⇒ 这里钉的是"**用哪个通道读**"：`readRemoteCurrent()` 恰好 1 次、`read()` 0 次。
+     *   ⚠️ 用 `coVerify(exactly = 0)` 而不是"断言返回了 NeedsReload"：后者在对账
+     *   **失败**时也成立（空字节解不开），会假绿。
+     */
+    @Test
+    fun `内容对账必须问远端当前字节而不是缓存`() = runTest {
+        val dao = RecordingDao(initialToken = T0)
+        val source = mockk<KdbxFileSource>()
+        coEvery { source.stat() } returns KdbxFileStat(versionToken = T1)
+        coEvery { source.read() } returns ByteArray(0)
+        coEvery { source.readRemoteCurrent() } returns ByteArray(0)
+        val orchestrator = KdbxSyncOrchestrator(vaultDao = dao.dao, fileSourceFactory = { source })
+
+        orchestrator.sync(VAULT_ID, ORIGIN, localChangedSinceLastSync = false)
+
+        coVerify(exactly = 1) { source.readRemoteCurrent() }
+        coVerify(exactly = 0) { source.read() }
     }
 
     // ---------------------------------------------------------------- 装置
@@ -333,6 +363,9 @@ class KdbxSyncOrchestratorTest {
         val source = mockk<KdbxFileSource>()
         coEvery { source.stat() } returns KdbxFileStat(versionToken = remoteToken)
         coEvery { source.read() } returns (remoteBytes ?: ByteArray(0))
+        // ⚠️ 必须单独打桩：`readRemoteCurrent()` 是接口的**默认方法**，
+        //    mockk 不会替我们把默认实现调通（不桩就是"未打桩调用"直接炸）。
+        coEvery { source.readRemoteCurrent() } returns (remoteBytes ?: ByteArray(0))
         return source
     }
 

@@ -56,7 +56,7 @@ class KdbxCloudSyncCoordinatorTest {
         val status = AtomicReference(KdbxCloudSyncStatus.PENDING_UPLOAD.name)
         val source = mockk<KdbxFileSource>(relaxed = true)
         coEvery { source.stat() } returns KdbxFileStat(versionToken = "v2")
-        coEvery { source.read() } returns ByteArray(0)
+        coEvery { source.readRemoteCurrent() } returns ByteArray(0)
 
         val replacer = mockk<KdbxSessionReplacer>(relaxed = true)
         coEvery { replacer.replace(VAULT_ID, any()) } returns Result.success(Unit)
@@ -66,6 +66,7 @@ class KdbxCloudSyncCoordinatorTest {
 
         // ① 一个字节都不许读（读就等于承认"可以覆盖"，而覆盖是不可逆的）。
         coVerify(exactly = 0) { source.read() }
+        coVerify(exactly = 0) { source.readRemoteCurrent() }
         // ② 会话绝不能被替换。
         coVerify(exactly = 0) { replacer.replace(any(), any()) }
         // ③ 必须报冲突（交用户拍板），而不是"失败"或"成功"。
@@ -82,7 +83,8 @@ class KdbxCloudSyncCoordinatorTest {
         val status = AtomicReference(KdbxCloudSyncStatus.REMOTE_CHANGED.name)
         val source = mockk<KdbxFileSource>(relaxed = true)
         coEvery { source.stat() } returns KdbxFileStat(versionToken = "v2")
-        coEvery { source.read() } returns ByteArray(4) { 1 }
+        val remote = ByteArray(4) { 1 }
+        coEvery { source.readRemoteCurrent() } returns remote
 
         val replacer = mockk<KdbxSessionReplacer>(relaxed = true)
         coEvery { replacer.replace(VAULT_ID, any()) } returns Result.success(Unit)
@@ -90,7 +92,47 @@ class KdbxCloudSyncCoordinatorTest {
         val coordinator = coordinator(status, source, replacer, this@runTest)
         val result = coordinator.resolveUsingRemote(VAULT_ID)
 
-        coVerify(exactly = 1) { source.read() }
+        // ★ 2026-11-03：必须走"远端当前字节"这条通道。用 `read()` 的话，生产里的
+        //   缓存装饰器会直接返回旧缓存 ⇒ 会话被旧内容替换、基线却记成新令牌
+        //   ⇒ 提示「已下载」而条目没变，且此后永远判不出远端有更新。
+        coVerify(exactly = 1) { source.readRemoteCurrent() }
+        coVerify(exactly = 0) { source.read() }
+        coVerify(exactly = 1) { replacer.replace(VAULT_ID, any()) }
+        assertEquals(KdbxSyncResult.Downloaded, result)
+    }
+
+    /**
+     * ★ 冲突对话框「用云端覆盖本地」必须**真的拉下来**（2026-11-03 修的死按钮）。
+     *
+     * ## 修的是什么
+     *
+     * 协调器内部有一道"本地有未上传改动就不许拉"的闸门（防自动拉取静默吞编辑），
+     * 而它的判据 `impliesLocalChanges` 把 `CONFLICT` 也算成"有本地改动"
+     * （那是给编排器判"两边都改"用的）。于是冲突对话框上点「用云端覆盖本地」时：
+     *
+     * ```
+     * 状态 = CONFLICT → 闸门判定"本地有改动" → 直接返回 Conflict
+     *   → UI 弹「云端又有了新改动，请重新同步」，而实际上一个字节都没动
+     * ```
+     *
+     * ⇒ 除了这里，**没有任何一条用例**会以 `CONFLICT` 为初始状态走进这个入口，
+     *   所以那个按钮坏了很久都没被测试发现。
+     */
+    @Test
+    fun `用户选云端覆盖本地_状态是冲突也必须真的下载`() = runTest {
+        val status = AtomicReference(KdbxCloudSyncStatus.CONFLICT.name)
+        val source = mockk<KdbxFileSource>(relaxed = true)
+        coEvery { source.stat() } returns KdbxFileStat(versionToken = "v2")
+        val remote = ByteArray(3) { 7 }
+        coEvery { source.readRemoteCurrent() } returns remote
+
+        val replacer = mockk<KdbxSessionReplacer>(relaxed = true)
+        coEvery { replacer.replace(VAULT_ID, any()) } returns Result.success(Unit)
+
+        val coordinator = coordinator(status, source, replacer, this@runTest)
+        val result = coordinator.resolveUsingRemote(VAULT_ID, discardLocalChanges = true)
+
+        coVerify(exactly = 1) { source.readRemoteCurrent() }
         coVerify(exactly = 1) { replacer.replace(VAULT_ID, any()) }
         assertEquals(KdbxSyncResult.Downloaded, result)
     }

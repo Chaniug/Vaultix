@@ -192,6 +192,55 @@ internal class CachedKdbxFileSource(
     }
 
     /**
+     * ★ 读**远端此刻**的字节：绕过缓存，并把这一版登记为新的缓存基线（2026-11-03）。
+     *
+     * ## 为什么必须覆写（父接口有默认实现）
+     *
+     * 默认实现是 `read()` —— 而本类的 `read()` **有缓存就直接 return 缓存字节**。
+     * 于是"要远端现在是什么"的调用方拿到的是旧内容，具体后果见
+     * [KdbxFileSource.readRemoteCurrent] 的 KDoc（对账误判"已同步"、拉取拉到旧版）。
+     *
+     * ## 三件事的顺序都是有理由的
+     *
+     * 1. **先 `stat()` 后 `read()`**：读到字节之后远端可能又被人改了一版，那时再 stat
+     *    拿到的是**更新的**令牌，而字节是旧的 —— 把新令牌配旧字节写进缓存，就等于宣称
+     *    "这份旧的已经是那一版"，那一版从此**再也不会被拉**。
+     *    反过来令牌偏旧是安全的：下次同步只会再报一次"远端有更新"，多拉一次而已。
+     * 2. **读失败如实抛**：这里没有"回退缓存"这条退路 —— 调用方问的就是远端。
+     *    给旧字节等于把它们重新带回上面那个缺陷。
+     * 3. **回写缓存**：不回写的话，拉取成功后会话是新的、缓存还是旧的 ⇒
+     *    **下一次解锁又是旧内容**（用户会以为"同步没生效"，然后再改一笔把旧内容推回去）。
+     *
+     * ⚠️ 故意**不碰** [freshness]：它回答的是"用户此刻看到的内容是否最新"，
+     *   而本方法只管缓存；会话有没有换成这一版由调用方负责（拉取路径会
+     *   `replaceSession` 并 `bump`）。在这里置 `VERIFIED` 会在"对账读了远端、
+     *   但会话仍是旧的"那一瞬说谎。
+     */
+    @Suppress("TooGenericExceptionCaught")
+    override suspend fun readRemoteCurrent(): ByteArray {
+        // stat 只为给缓存配对令牌；拿不到就以 null 落缓存（下次后台校验会重下一次，安全）。
+        // ⚠️ 取消必须**原样抛**：它表示"这次不要了"，不是"读不到"（同 `Kdbx.unlock` 的取向）。
+        val token = try {
+            delegate.stat().versionToken
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (error: Exception) {
+            null
+        }
+        val bytes = delegate.read()
+        runCatching { cache.save(cacheKey, CachedKdbxFile(bytes, token)) }
+            .onSuccess {
+                VaultixLog.d(TAG) {
+                    "已用远端当前字节换缓存（${bytes.size}B, token=${token.tag()}）"
+                }
+            }
+            .onFailure { error ->
+                VaultixLog.w(TAG) { "换缓存失败（不影响本次读到的字节）：${error.message}" }
+            }
+        return bytes
+    }
+
+    /**
      * 后台校验：拿缓存解密之后**异步**做一次 `stat()`，令牌变了就换新缓存。
      *
      * 为什么**只换缓存、不动已解密的内容**：此刻用户正在看这个库，

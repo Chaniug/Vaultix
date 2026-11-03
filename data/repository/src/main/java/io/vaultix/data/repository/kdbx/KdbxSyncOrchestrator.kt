@@ -385,6 +385,11 @@ class KdbxSyncOrchestrator(
      * ⚠️ 读远端是**整份下载**的代价，所以只在"令牌变了"这一支才会走到 ——
      *   那是原本就要用户手动拉一次的情形，多读一次不改变量级；而**省掉的是**
      *   "本机明明就是最新版却要用户点一次同步"（真机上最容易让人怀疑数据的一步）。
+     * ⚠️ ★★ 必须用 [KdbxFileSource.readRemoteCurrent] 而**不是** `read()`（2026-11-03 修）：
+     *   `read()` 的契约只是"把这个库给我"，生产里远端来源套了缓存装饰器，有缓存时
+     *   它**一个网络请求都不发**。拿缓存字节当"远端当前字节"会得到必然相同的结论 ⇒
+     *   误判「已同步」并把基线推进到新令牌 ⇒ 远端那版**再也不会被拉**（还会被旧内容盖回去）。
+     *   这个缺陷的表现是"点同步提示已同步，条目还是旧的"，不报错、不崩，极难自查。
      * ⚠️ 任何读取/解码失败一律返回 `false`：对账失败要**退回保守判定**，
      *   绝不能因为"读不到"就假定"一样"（那正是静默覆盖的入口）。
      */
@@ -392,7 +397,7 @@ class KdbxSyncOrchestrator(
         vaultId: String,
         source: KdbxFileSource,
     ): Boolean = runCatching {
-        Kdbx.adoptBaselineIfMatches(vaultId, source.read())
+        Kdbx.adoptBaselineIfMatches(vaultId, source.readRemoteCurrent())
     }.getOrElse { error ->
         // 只记原因类别，不记内容（VaultixLog 铁律）。
         error.message?.let { reason -> VaultixLog.d(TAG) { "对账失败（按未对齐处理）：$vaultId $reason" } }

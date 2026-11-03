@@ -49,11 +49,17 @@ class KdbxSyncRepositoryImpl @Inject constructor(
     override suspend fun sync(vaultId: String, localChangedSinceLastSync: Boolean): KdbxSyncReport =
         coordinator.sync(vaultId, localChangedSinceLastSync).toReport()
 
-    override suspend fun resolveUsingRemote(vaultId: String): KdbxSyncReport {
-        val result = coordinator.resolveUsingRemote(vaultId)
-        if (result is KdbxSyncResult.Downloaded) kdbxSessions.bump()
-        return result.toReport()
-    }
+    /**
+     * 冲突对话框的拍板：用户**明确选择**「用云端覆盖本地」。
+     *
+     * ⚠️ `discardLocalChanges = true`：本地那份改动正是用户要丢的东西。
+     *   不带这个标记的话，协调器内部那道"本地有未上传改动就不许拉"的闸门会拦下它
+     *   （判据 `impliesLocalChanges` 把 `CONFLICT` 也算成"有本地改动"）——
+     *   结果是 UI 弹一句「云端又有了新改动，请重新同步」，而实际上**一个字节都没动**，
+     *   再点一次还是同一句。2026-11-03 修。
+     */
+    override suspend fun resolveUsingRemote(vaultId: String): KdbxSyncReport =
+        pullFromRemote(vaultId, discardLocalChanges = true)
 
     /**
      * 拉取远端更新（施工单 S2）：复用 [KdbxCloudSyncCoordinator.resolveUsingRemote]
@@ -61,12 +67,27 @@ class KdbxSyncRepositoryImpl @Inject constructor(
      * 两条路必然漂移，而漂移在这里的代价是"一边拉了、一边没拉"的静默不一致。
      *
      * 多出来的只有两件事：① 前置的"本地没改"检查；② 成功后 bump 让界面重读。
+     *
+     * ⚠️ 这里的"本地没改"检查与协调器内部那道是**两道**（同一判据、两个时机）：
+     * 这里拦"一开始就不该拉"，协调器拦"下载那几秒里用户又改了"。
      */
     override suspend fun pull(vaultId: String): KdbxSyncReport {
         // ⚠️ 本地有未上传的改动 ⇒ 拉下来会**永久丢掉**那笔改动，且没有任何报错。
         //    ⇒ 转冲突，让用户在「用远端 / 用本地」之间拍板（绝不自动替他选）。
         if (localChangedSinceLastSync(vaultId)) return KdbxSyncReport.Conflict(currentRemoteVersion = null)
-        return resolveUsingRemote(vaultId)
+        return pullFromRemote(vaultId, discardLocalChanges = false)
+    }
+
+    /**
+     * 拉取并登记结果（两个入口共用的收口点）。
+     *
+     * ⚠️ bump 不能少：「拉取成功」而列表**还是旧内容** ⇒ 用户以为拉坏了，
+     * 更糟的是他可能就此再保存一次，把旧内容推回远端。
+     */
+    private suspend fun pullFromRemote(vaultId: String, discardLocalChanges: Boolean): KdbxSyncReport {
+        val result = coordinator.resolveUsingRemote(vaultId, discardLocalChanges)
+        if (result is KdbxSyncResult.Downloaded) kdbxSessions.bump()
+        return result.toReport()
     }
 
     /**

@@ -317,8 +317,27 @@ class KdbxCloudSyncCoordinator(
      * 那正好违反用户的硬要求（「同步不丢」）。
      *
      * ⇒ 顺序是：拉字节 → 替换会话 → **才**记状态。任一步失败都不记"成功"。
+     *
+     * @param discardLocalChanges ★ 调用方是否**已经取得用户明确同意**丢弃本地改动
+     *   （冲突对话框「用云端覆盖本地」= true；`pull` 的自动拉取 = false）。
+     *
+     *   ## 为什么需要这个开关（2026-11-03 修掉的一个死按钮）
+     *
+     * 下面那道"本地有未上传改动就不许拉"的闸门，本意是**防止自动拉取静默吞掉编辑**。
+     * 但它是用 `localChangedSinceLastSync` 判的，而该判据把 `CONFLICT` 也算成
+     * "有本地改动"（那是给编排器判"两边都改"用的）。于是出现一个自锁：
+     *
+     * ```
+     * 状态 = CONFLICT（用户在冲突对话框上）→ 选「用云端覆盖本地」
+     *   → 闸门判定"本地有改动" → 直接返回 Conflict
+     *   → UI 弹"云端又有了新改动，请重新同步"（而实际上一个字节都没动）
+     *   → 再点一次，还是这一句。远端那份**永远拉不下来**。
+     * ```
+     *
+     * ⇒ 用户**明确选择丢弃**时，这道闸门不该再拦（要丢的就是它拦的东西）。
+     *   默认 `false`：不表态就是不许丢。
      */
-    suspend fun resolveUsingRemote(vaultId: String): KdbxSyncResult {
+    suspend fun resolveUsingRemote(vaultId: String, discardLocalChanges: Boolean = false): KdbxSyncResult {
         val row = vaultDao.get(vaultId) ?: return KdbxSyncResult.Failed("找不到该密码库")
         val source = fileSourceFor(row.origin) ?: return KdbxSyncResult.NoCloudSource
 
@@ -336,7 +355,7 @@ class KdbxCloudSyncCoordinator(
         //
         // ## 为什么必须在 read 之前
         //
-        // `source.read()` 是一次真实网络下载（真机 1–10 s）。调用方（`pull` / 冲突对话框
+        // `readRemoteCurrent()` 是一次真实网络下载（真机 1–10 s）。调用方（`pull` / 冲突对话框
         // 「用远端覆盖」）在**开始前**判过一次"本地没改"，但那个判断在这几秒里会过期：
         // 用户完全可以在下载过程中再编辑一笔。而 `replaceSession` 是**整体替换**会话 ⇒
         // 那笔编辑被静默抹掉，且当前状态马上被记成 `IN_SYNC`（"已同步"）——
@@ -349,7 +368,7 @@ class KdbxCloudSyncCoordinator(
         //    要彻底消掉得把"编辑"也纳入同一把锁，而那是 UI 线程会等的锁 —— 不值。
         //    这里选择"宁可多报一次冲突，也不静默覆盖"：报冲突最坏是多点一下，
         //    覆盖的代价是**用户那一笔永远没了**。
-        if (localChangedSinceLastSync(vaultId)) {
+        if (!discardLocalChanges && localChangedSinceLastSync(vaultId)) {
             // ⚠️ **不要**用 `markDeferred`：它只在状态已是 CONFLICT 时生效（它的语义是
             //    "用户点了稍后"），用在这里等于什么都不做，状态会停在 `SYNCING`。
             //    也不要把本地改动改写成 CONFLICT —— 那会伪报"两边都改了"，
@@ -359,7 +378,22 @@ class KdbxCloudSyncCoordinator(
             return KdbxSyncResult.Conflict(currentRemoteVersion = remoteToken)
         }
 
-        val bytes = runCatching { source.read() }.getOrElse { error ->
+        // ★★ 必须 [KdbxFileSource.readRemoteCurrent]，**不能**用 `read()`（2026-11-03 修）。
+        //
+        // ## 修的是什么（真机可复现，表现是"提示已下载，条目还是旧的"）
+        //
+        // `read()` 的契约只是"把这个库给我"：远端来源套了缓存装饰器（解锁提速），
+        // 有缓存时它**不发任何网络请求**，直接返回上一版字节。于是这里拉下来的
+        // "远端"其实是缓存里的旧版 —— 会话被旧内容替换，而下面 `markResolved`
+        // 记的却是**远端新令牌**。两者一配就对不上了：
+        // 此后再同步恒判 `remoteChanged = false` ⇒ 远端那版**永远拉不下来**；
+        // 而会话里是旧内容 ⇒ 用户改一笔就把旧内容推回去，覆盖别人的改动。
+        //
+        // ⇒ `readRemoteCurrent()` 保证是远端此刻的字节，并顺手把缓存也换成这一版
+        //   （否则下次解锁又读回旧缓存，用户会以为"同步没生效"）。
+        // ⚠️ 代价是**两次元数据往返**：这里一次（给基线），装饰器内部再一次（给缓存配对）。
+        //    比"多一次整库下载"便宜得多，而且两次都偏旧 ⇒ 只会多拉一次，不会漏拉。
+        val bytes = runCatching { source.readRemoteCurrent() }.getOrElse { error ->
             return KdbxSyncResult.Failed(error.message?.takeIf { it.isNotBlank() } ?: "无法读取远端文件")
         }
         sessionReplacer.replace(vaultId, bytes).exceptionOrNull()?.let { error ->
