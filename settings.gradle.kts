@@ -23,7 +23,7 @@ dependencyResolutionManagement {
         mavenCentral()
         // ★ OneDrive 鉴权（MSAL）**必须**要这个 feed（2026-09-17）。
         //
-        // 依赖链：msal:8.4.2 → com.microsoft.identity:common:24.6.0 →
+        // 依赖链：msal:8.6.0 → com.microsoft.identity:common:25.0.0 →
         //         com.microsoft.device.display:display-mask:0.3.0
         // 而 display-mask **只在微软 Surface Duo SDK 的公共 feed 上**，
         // Google Maven 与 Maven Central 都没有 ⇒ 不加这一行，构建会在
