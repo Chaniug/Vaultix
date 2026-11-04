@@ -452,7 +452,7 @@ class LocalUnlockEnrollment @Inject constructor(
      *
      * | 调用点 | 前置事实 | 正确动作 |
      * |---|---|---|
-     * | `LocalUnlockFanout` 的补建（经 `enrollVaultAfterFingerprintUnlock`） | 刚刚开门**失败过**（`NotEnrolled` / `Damaged`）⇒ 有信封≠能用 | `force = true` 重封 |
+     * | 门锁补建（`LocalUnlockFanout`） | 刚开门失败过（`NotEnrolled` / `Damaged`） | `force = true` 重封 |
      * | `unlockKdbxInternal` 解锁成功后（#243） | 刚刚**成功**开库，信封多半本来就是好的 | `force = false` 有信封就短路 |
      *
      * 旧实现把 `force` 写死成 `true`，于是第二个调用点——那条**每次主密码解锁都会走**
