@@ -243,13 +243,14 @@ internal class CachedKdbxFileSource(
         //    `read()` 无条件拿缓存冒充远端，把基线推进到新令牌却换了旧会话。
         //    令牌取不到（null）同样不许短路，fail-closed。
         val cached = runCatching { cache.load(cacheKey) }.getOrNull()
-        if (cached != null && cached.bytes.isNotEmpty() && token != null &&
-            isSameVersionToken(token, cached.versionToken)
-        ) {
+        val cachedBytes = cached?.bytes?.takeIf { it.isNotEmpty() }
+        // 拆成两个两条件判断：合起来 4 个条件会顶破 detekt ComplexCondition（上限 3）。
+        val tokenMatches = token != null && isSameVersionToken(token, cached?.versionToken)
+        if (cachedBytes != null && tokenMatches) {
             VaultixLog.d(TAG) {
-                "缓存已是远端当前版本（${cached.bytes.size}B）⇒ 跳过整份下载"
+                "缓存已是远端当前版本（${cachedBytes.size}B）⇒ 跳过整份下载"
             }
-            return cached.bytes
+            return cachedBytes
         }
 
         val bytes = delegate.read()

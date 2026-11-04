@@ -248,6 +248,7 @@ fun syncStatusDotDescription(dot: SyncStatusDot): String = stringResource(
  * ⚠️ 琥珀/绿用固定中深色：MD3 没有 success/warning 语义色，亮黄在浅底几乎看不见。
  *    状态词与圆点同色且始终成对出现，即使圆点对比度不足也能读到状态。
  */
+@Suppress("MagicNumber") // 两个 ARGB 颜色字面量本身就是语义常量，抽成命名常量反而更难读
 @Composable
 fun syncStatusDotColor(dot: SyncStatusDot): Color = when (dot) {
     SyncStatusDot.FAILED -> MaterialTheme.colorScheme.error

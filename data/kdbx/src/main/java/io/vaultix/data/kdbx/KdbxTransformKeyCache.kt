@@ -419,23 +419,36 @@ internal object KdbxTransformKeyCache {
         return null
     }
 
+    /** 版本字段中 major（第 2 个 Short，小端）的起始偏移：minor 在 8..9，major 在 10..11。 */
+    private const val VERSION_MAJOR_OFFSET = 10
+
+    /** 本判据只适用于 KDBX 4；其它版本一律回退全文件哈希。 */
+    private const val KDBX_MAJOR_VERSION = 4
+
+    /** uint32 由 4 字节组成，每字节 8 位。 */
+    private const val UINT32_BYTE_COUNT = 4
+
+    private const val BITS_PER_BYTE = 8
+
     /** 只认 KDBX 4（major=4）；签名不对或版本不是 4 都返回 false。 */
     private fun isKdbx4(bytes: ByteArray): Boolean {
         if (bytes.size < HEADER_TLV_START) return false
         for (index in KDBX_SIGNATURE.indices) {
             if ((bytes[index].toInt() and BYTE_MASK) != KDBX_SIGNATURE[index]) return false
         }
-        // major 是第 2 个 Short（小端），位于 10..11。
-        return bytes[10] == 4.toByte() && bytes[11] == 0.toByte()
+        return bytes[VERSION_MAJOR_OFFSET] == KDBX_MAJOR_VERSION.toByte() &&
+            bytes[VERSION_MAJOR_OFFSET + 1] == 0.toByte()
     }
 
     /** 4B 小端无符号长度；用 Long 承载，避免符号扩展把大长度读成负数绕过边界检查。 */
     private fun readUInt32Le(bytes: ByteArray, at: Int): Long? {
-        if (at + 4 > bytes.size) return null
-        return (bytes[at].toLong() and 0xffL) +
-            ((bytes[at + 1].toLong() and 0xffL) shl 8) +
-            ((bytes[at + 2].toLong() and 0xffL) shl 16) +
-            ((bytes[at + 3].toLong() and 0xffL) shl 24)
+        if (at + UINT32_BYTE_COUNT > bytes.size) return null
+        val mask = BYTE_MASK.toLong()
+        var value = 0L
+        for (index in 0 until UINT32_BYTE_COUNT) {
+            value += (bytes[at + index].toLong() and mask) shl (index * BITS_PER_BYTE)
+        }
+        return value
     }
 
     private fun digest(input: ByteArray): ByteArray =
