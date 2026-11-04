@@ -475,6 +475,98 @@ KDF 次数压下去之后，剩下的慢点只剩**网络**。静态排查锁定
 - **仍未做（明确否决过的方向）**：把「N 分钟」档也降级成软锁。那会让用户选的
   "5 分钟后锁定"变成"5 分钟后遮屏"，是**安全语义降级**，不能用一次性能优化顺手改掉。
   真要做必须新增独立档位 + 显式开关。
-- **kotpass 的限制仍在**：`Credentials` 只收 passphrase + keyfile，
-  `KeyTransform.transformedKey(...)` 是唯一入口 ⇒「信封直接存派生密钥、彻底跳过 KDF」
-  走不通，除非 fork。所以**冷启动那一次 KDF 无法省掉**。
+- ~~**kotpass 的限制仍在**：`Credentials` 只收 passphrase + keyfile ⇒ 存派生密钥
+  走不通，除非 fork。~~ ← **这句在第五批被推翻**：只看了 `Credentials` 和
+  `KeyTransform`，漏看了 `decode` 的 `kdfProvider` 参数。见下。
+
+### 第五批：缓存 KDF 派生结果 —— 锁定之后也能跳过 Argon2（2026-11-04）
+
+用户第五句：「kdbx 的解锁速度还是很慢，有能做到秒解的做法吗」。
+
+#### 5.1 先纠正上一批的错误结论
+
+第四批末尾写「`Credentials` 只收 passphrase + keyfile，`KeyTransform.transformedKey(...)`
+是唯一入口 ⇒ 存派生密钥走不通，除非 fork」。**这个结论是错的**：它只翻了
+`Credentials` 与 `KeyTransform` 两个类，没看 `KeePassDatabase.decode` 的签名。
+
+```
+fun KeePassDatabase.Companion.decode(
+    ..., kdfProvider: KdfProvider = BaseKdfProvider, ...
+)
+interface KdfProvider {
+    fun transformKey(parameters: KdfParameters, compositeKey: ByteArray): ByteArray
+}
+```
+
+⇒ 根本不用 fork、不用改文件格式、不用动用户的 KDF 参数：
+**注入一个记忆化 provider**，把「(这一版文件, 这一组凭据) ⇒ transformedKey」记下来，
+第二次解码同一份字节就直接复用，**KDF 归零**，只剩 AES 解密 + XML 解析。
+
+> **判据**：说「做不到」之前，先读完被调用方的**完整签名**。
+> 上一批是拿「两个类里没有这个口子」推导出「整个库没有这个口子」。
+
+#### 5.2 另一个一直没说破的前提：默认档不是「从不」
+
+`VaultTimeout.DEFAULT = FiveMinutes`（`core/datastore/VaultTimeout.kt:185`）。
+第四批加的「会话仍在内存就短路」**只在 `Never` 档生效** —— 用户没改档位的话，
+5 分钟 / 超时 / 切库后 `Kdbx.lock()` 真的销毁会话 ⇒ 每次重新跑一遍完整 Argon2。
+这是「装了新包还是慢」最直接的解释，也说明**只靠让用户改配置不解决问题**。
+
+#### 5.3 实现
+
+| 位置 | 改动 |
+|---|---|
+| `KdbxTransformKeyCache`（新） | LRU 16 条；key = `SHA256(SHA256(整份文件字节) + SHA256(compositeKey))`；value = 32 字节派生结果；`@Volatile enabled` 开关 + `clear()` |
+| `KdbxOpener.open` / `reopen` / `KdbxRoundTrip.verifyEncoded` | 三处 `decode` 都传 `kdfProvider = providerFor(bytes)` |
+| `Kdbx.lock(单库)` | **故意不清**缓存 —— 清了等于没做，用户抱怨的正是「锁定之后再解锁慢」 |
+| `Kdbx.lockAll` / `signOut` / `removeVault` | 彻底忘记的时机 ⇒ `forgetDerivedKeys()` |
+
+**缓存 key 为什么取整份字节**：`transformedKey = KDF(文件头的 KDF 参数, compositeKey)`，
+逐字段读 `KdfParameters` 既脆（kotpass 内部类型带 name mangling）又容易漏字段 ——
+漏一个就会拿旧密钥去解新文件，表现是「密码明明对却说密码错」，比慢更难查。
+整份字节的哈希是最保守的等价判据：文件变了（同步换新版本 / 保存后
+`regenerateVectors` 换 KDF 种子）必然 miss ⇒ 老实重算。30 KB 做一次 SHA-256 是微秒级。
+
+**kotpass 的 internal 坑**：默认实现 `BaseKdfProvider` 是 `internal object`，
+Kotlin 源码直接引用会 `INVISIBLE_REFERENCE`。用 `KotpassKdfBridge.java` 编译期绑定
+（JVM 层面它是 `public final class` + `public static final INSTANCE`）；
+**不用反射** —— `Class.forName("…")` 在 R8 混淆后的 release 包会静默失效。
+
+#### 5.4 ★ 安全取舍（默认开启，但必须摆到台面上）
+
+缓存**不随单库 `lock()` 清除**，代价是：锁库之后这 32 字节派生密钥仍在进程内存，
+拿到它 + 缓存的密文字节就能解开库。也就是把
+「锁库 = 密钥彻底不可达」放宽成「锁库 = 丢掉整库明文，但留一条派生结果」。
+
+它与本项目既有取舍同量级（`Never` 档房钥匙本来就常驻内存，`AutoViewGate` 的 KDoc
+写明用户已接受「系统锁屏是防线」），但**确实是放宽**，所以：
+
+- 只活在内存、绝不落盘、进程死亡即消失；
+- `KdbxTransformKeyCache.enabled` 是出口：置 `false` 即恢复严格语义，
+  后续接一个设置项也只是把它绑到偏好上；
+- **待用户拍板**：要不要给这个开关一个 UI 入口 / 改成默认关。
+
+#### 5.5 能覆盖什么、覆盖不了什么
+
+| 场景 | 缓存前 | 缓存后 |
+|---|---|---|
+| 切库 / 退后台 / 超时锁定后重新解锁 | 1 次完整 Argon2 | **命中，0 次** |
+| 一次解锁里 `verify` + `unlock` | 2 次 | 1 次 |
+| fanout 顺带开多个库 | 每库 1 次 | 每库首次 1 次 |
+| **冷启动**（进程被杀） | 1 次 | 仍是 1 次（内存缓存消失，省不掉） |
+| **每次重新下载整库** | 不受影响 | 不受影响 —— 要靠日志定位 |
+
+⇒ 冷启动那一次 KDF 是 KDBX 格式决定的，谁也省不掉；要连它也省就得把派生密钥
+**落盘**（Keystore 加密），安全代价大得多，**没做**。
+
+- **验证**：`:data:kdbx` **254 例**（新增 `KdbxTransformKeyCacheTest` 7 条，含
+  `真实KDBX连续解锁两次_第二次命中派生密钥缓存` 守「provider 真的接上了」）、
+  `:data:repository` 288 例、`:app` 574 例，0 失败；detekt `--rerun-tasks` 绿；
+  16 个脚本门禁全绿。
+- **detekt 又被抓到一次**：`0xff` 触发 `MagicNumber` ⇒ 提 `BYTE_MASK` 常量。
+  更值得记的是 `gradle detekt | tail -30; echo $?` 里的 `$?` 取的是 **tail** 的返回码，
+  会把红灯显示成 `rc=0`。**绿灯必须能证明它检查过**：`--rerun-tasks` + 正确捕获退出码
+  （重定向到文件后取 gradle 的 `$?`），两条缺一不可。
+- **仍待真机日志（不猜）**：`adb logcat -s VaultixKdbx`，看
+  `unlock 耗时分解：read=?ms + open(KDF+解析)=?ms；本次 KDF 缓存命中 N 次`。
+  若 `open` 已掉到几十毫秒、但 `read` 仍是秒级 ⇒ 剩下的慢在缓存/网络，不在 KDF。
