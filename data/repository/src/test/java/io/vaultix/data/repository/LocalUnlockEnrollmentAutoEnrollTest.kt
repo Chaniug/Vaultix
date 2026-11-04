@@ -173,6 +173,54 @@ class LocalUnlockEnrollmentAutoEnrollTest {
         coVerify(exactly = 0) { preferences.setQuickUnlockScope(any()) }
     }
 
+    /**
+     * ★ **主密码解锁成功后那条路径（`enrollJustAuthenticated` 默认 force=false）
+     * 也必须有这条短路**（#246，2026-11-04）。
+     *
+     * 这条缺陷的形状：`enrollJustAuthenticated` 曾把 `force` 写死成 `true`，
+     * 而它唯一的"成功路径"调用点是 `unlockKdbxInternal` —— 一次主密码解锁**必然**
+     * 走一遍 `prepareKdbx` → `Kdbx.verify` → 完整 Argon2，才能发现"信封本来就在"。
+     * 用户原话：「我输入了密码，依然很慢很慢」。
+     *
+     * ⚠️ 上面那条 `autoEnrollUnlocked` 的短路用例**挡不住**这个回归：两个方法名不同，
+     * 把 `force=true` 写回去时它照样绿。必须单独钉住 `enrollJustAuthenticated`。
+     *
+     * ⚠️ 变异验证：给 `enrollJustAuthenticated` 的 `force` 改回写死 `true`，
+     * 本用例必须在 `vaultDao.get` 那次断言上报红（说明它真的去备料了）。
+     */
+    @Test
+    fun `刚认证过_信封已在_不得再备料烧一遍KDF`() = runTest {
+        every { house.isUnlocked } returns true
+        coEvery { house.hasAnyLock() } returns true
+        coEvery { house.hasRoom(vaultId) } returns true
+
+        assertTrue(enrollment().enrollJustAuthenticated(vaultId) { "master" })
+
+        coVerify(exactly = 0) { vaultDao.get(any()) }
+        coVerify(exactly = 0) { house.sealRoom(any(), any()) }
+    }
+
+    /**
+     * 反面：`force = true` 是**补建**路径（`LocalUnlockFanout` 只在开门失败时叫它），
+     * 信封"存在"不代表"能用"，必须真的重封一次。
+     *
+     * ⚠️ 与上一条成对：少了它，"把 force 一律改成 false"会让 `Damaged` 信封永远修不好，
+     * 而所有用例仍然绿。
+     */
+    @Test
+    fun `force为true_信封坏了也要重封_这是自愈路径`() = runTest {
+        givenGuardPassed()
+        coEvery { house.hasRoom(vaultId) } returns true
+        coEvery { vaultDao.get(vaultId) } returns bitwardenRow()
+        coEvery { sessions.keyOf(vaultId) } returns freshKey()
+        coEvery { house.sealRoom(vaultId, any()) } just Runs
+        coEvery { preferences.setQuickUnlockScope(any()) } just Runs
+
+        assertTrue(enrollment().enrollJustAuthenticated(vaultId, force = true) { "master" })
+
+        coVerify(exactly = 1) { house.sealRoom(vaultId, any()) }
+    }
+
     @Test
     fun `密钥在_自动建信封并同步范围镜像_且不碰任何门锁`() = runTest {
         // ★ 本类最重要的一条：这就是用户要的"自动关联"。

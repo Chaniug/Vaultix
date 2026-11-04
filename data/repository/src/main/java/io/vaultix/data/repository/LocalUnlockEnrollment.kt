@@ -446,24 +446,44 @@ class LocalUnlockEnrollment @Inject constructor(
      * "门锁可能还没开"的调用点（主密码路径）。已经过了门锁的调用点直接走
      * [autoEnrollUnlocked] 即可。
      *
+     * ## ★ [force] 为什么必须由调用方显式指定（2026-11-04，#246）
+     *
+     * 本方法有**两个语义完全不同**的调用点，而它们对"已有信封"的处置正好相反：
+     *
+     * | 调用点 | 前置事实 | 正确动作 |
+     * |---|---|---|
+     * | `LocalUnlockFanout` 的补建（经 `enrollVaultAfterFingerprintUnlock`） | 刚刚开门**失败过**（`NotEnrolled` / `Damaged`）⇒ 有信封≠能用 | `force = true` 重封 |
+     * | `unlockKdbxInternal` 解锁成功后（#243） | 刚刚**成功**开库，信封多半本来就是好的 | `force = false` 有信封就短路 |
+     *
+     * 旧实现把 `force` 写死成 `true`，于是第二个调用点——那条**每次主密码解锁都会走**
+     * 的路径——每次都要 `prepareKdbx` → `Kdbx.verify` → **一次完整 Argon2**
+     * （真机 64 MiB / 46 轮）才能发现"原来信封早就有了"。
+     * 用户的原话就是「我输入了密码，依然很慢很慢」。
+     *
+     * ⚠️ 代价是"改了主密码后，信封里那份是旧的"要等**下次指纹解锁**才发现
+     * （`StaleCredentials` → `resealStaleRoomIfPossible` 自愈）。
+     * 这个取舍是有意的：把一次 KDF 摊在**每一次**解锁上，换一次性的自愈延迟，不划算。
+     *
      * ⚠️ 为什么放在这里而不是 `VaultRepositoryImpl`：那个类的函数数**正好卡在**
      * detekt `TooManyFunctions` 的 40 上限（见其 KDoc）。这项逻辑本来也只用到
      * 本类已有的三个依赖（`houseKeyStore` / `preferences` / `vaultDao`），
      * 放在本类是自然的归属，不是"为了躲 lint 塞过来"。
      *
+     * @param force 见上表。默认 `false`：绝大多数调用点是"刚成功解锁"，不该白烧 KDF。
+     *   ⚠️ 刻意放在 [masterPasswordOf] **之前**：后者是 lambda，必须留在最后一位
+     *   才能继续被当 trailing lambda 用（既有调用点都是 `enrollJustAuthenticated(id) { … }`）。
      * @param masterPasswordOf 见 [autoEnrollNewVault]。
-     * @return true = 本次真的建好了房间信封。
+     * @return true = 信封已就位（本次新建的，或本来就有）。
      */
     suspend fun enrollJustAuthenticated(
         vaultId: String,
+        force: Boolean = false,
         masterPasswordOf: suspend (String) -> String?,
     ): Boolean = withContext(Dispatchers.IO) {
         // 房钥匙不在内存 ⇒ 物理上封不了（别落一个谁也解不开的孤儿信封）。
         // ⚠️ 先判它再备料：KDBX 的备料要跑一次完整 KDF，没有房钥匙时那条路
         //   必然在 `sealRoom` 抛异常 —— 白烧一次 Argon2 再失败，用户白等。
         if (!houseKeyStore.isUnlocked) return@withContext false
-        // 走到这里说明**刚开门失败过**（`NotEnrolled` / `Damaged`）⇒ 有信封不代表能用，
-        // 重封一次才算自愈。
-        autoEnrollUnlocked(vaultId, masterPasswordOf, force = true)
+        autoEnrollUnlocked(vaultId, masterPasswordOf, force = force)
     }
 }

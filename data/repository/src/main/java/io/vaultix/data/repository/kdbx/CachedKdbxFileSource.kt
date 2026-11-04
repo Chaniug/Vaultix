@@ -15,6 +15,7 @@ import io.vaultix.data.kdbx.KdbxFileEntry
 import io.vaultix.data.kdbx.KdbxFileSource
 import io.vaultix.data.kdbx.KdbxFileStat
 import io.vaultix.data.kdbx.KdbxFileWriteResult
+import io.vaultix.data.kdbx.isSameVersionToken
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -255,35 +256,55 @@ internal class CachedKdbxFileSource(
     private fun markStalePending() {
         if (!recheckStarted.compareAndSet(false, true)) return
         scope.launch {
-            val remote = runCatching { delegate.stat() }.getOrNull()
-            val remoteToken = remote?.versionToken
-            val current = runCatching { cache.load(cacheKey) }.getOrNull()
-            when {
-                // 校验失败 / 来源不给令牌 ⇒ 保持现状，但要能被 UI 看到"没校验成"。
-                remoteToken == null || current == null -> {
-                    freshHolder.set(Freshness.UNVERIFIED)
-                }
-                // 远端变了 ⇒ 换新缓存，并如实标成"已过期"（UI 提示用）。
-                remoteToken != current.versionToken -> {
-                    runCatching { delegate.read() }
-                        .onSuccess { fresh ->
-                            runCatching { cache.save(cacheKey, CachedKdbxFile(fresh, remoteToken)) }
-                            freshHolder.set(Freshness.STALE)
-                            // ⚠️ 换掉缓存**之后**才上报：先让字节就位，
-                            //   否则 UI 可能在状态已变、缓存还是旧的瞬间点同步而拉到旧内容。
-                            runCatching { onRemoteChanged?.invoke() }
-                            VaultixLog.d(TAG) {
-                                "后台校验：远端已变（${fresh.size}B），已换新缓存；当前会话仍是旧内容"
+            // ★ `finally` 复位而不是在末尾平铺一句（2026-11-04）。
+            //
+            // 这个 `AtomicBoolean` 是**一次性闸门**：置 true 后若没被复位，后台校验
+            // 从此再也不跑（`compareAndSet` 永远失败）。而 2026-11-04 起本类实例
+            // 按 origin **复用**（见 `KdbxCloudSyncCoordinator.withRemoteCache`）——
+            // 以前"每次新建实例"会顺带把闸门重置，这个缺陷是隐形的；复用之后
+            // 一次粘住就是**永久粘住**，"内容可能不是最新"的判定从此彻底停摆。
+            //
+            // 会让它粘住的路径不止"抛异常"：协程被取消（作用域销毁）同样跳过后面的语句，
+            // 而取消是**正常事件**，不是错误。⇒ 只有 `finally` 能覆盖全部出口。
+            try {
+                val remote = runCatching { delegate.stat() }.getOrNull()
+                val remoteToken = remote?.versionToken
+                val current = runCatching { cache.load(cacheKey) }.getOrNull()
+                when {
+                    // 校验失败 / 来源不给令牌 ⇒ 保持现状，但要能被 UI 看到"没校验成"。
+                    remoteToken == null || current == null -> {
+                        freshHolder.set(Freshness.UNVERIFIED)
+                    }
+                    // 远端变了 ⇒ 换新缓存，并如实标成"已过期"（UI 提示用）。
+                    //
+                    // ⚠️ 必须走 `isSameVersionToken` 而不是 `!=` 裸比较（2026-11-04 修）。
+                    //   令牌有**三种写法**：`ctag:…` / `etag:…` / 无前缀的裸值（迁移前的老缓存），
+                    //   且 OneDrive 的返回值自带引号。裸比较只要有一处写法差一个字，
+                    //   就会判成"远端变了" ⇒ **每次解锁都白下一次整库**、
+                    //   还会把一个**根本不存在的**「云端有更新」角标挂上去。
+                    //   `isSameVersionToken` 就是 #244 为这件事写的（剥前缀 + 剥引号 + 前缀冲突保守判异）。
+                    !isSameVersionToken(remoteToken, current.versionToken) -> {
+                        runCatching { delegate.read() }
+                            .onSuccess { fresh ->
+                                runCatching { cache.save(cacheKey, CachedKdbxFile(fresh, remoteToken)) }
+                                freshHolder.set(Freshness.STALE)
+                                // ⚠️ 换掉缓存**之后**才上报：先让字节就位，
+                                //   否则 UI 可能在状态已变、缓存还是旧的瞬间点同步而拉到旧内容。
+                                runCatching { onRemoteChanged?.invoke() }
+                                VaultixLog.d(TAG) {
+                                    "后台校验：远端已变（${fresh.size}B），已换新缓存；当前会话仍是旧内容"
+                                }
                             }
-                        }
-                        .onFailure { freshHolder.set(Freshness.UNVERIFIED) }
+                            .onFailure { freshHolder.set(Freshness.UNVERIFIED) }
+                    }
+                    else -> {
+                        freshHolder.set(Freshness.VERIFIED)
+                        VaultixLog.d(TAG) { "后台校验：缓存与远端一致" }
+                    }
                 }
-                else -> {
-                    freshHolder.set(Freshness.VERIFIED)
-                    VaultixLog.d(TAG) { "后台校验：缓存与远端一致" }
-                }
+            } finally {
+                recheckStarted.set(false)
             }
-            recheckStarted.set(false)
         }
     }
 

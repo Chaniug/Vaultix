@@ -55,10 +55,15 @@ interface VaultRepository {
     suspend fun unlockKdbxVault(vaultId: String, masterPassword: String): UnlockResult
 
     /**
-     * 切换活跃库时**锁定所有非 [keepVaultId] 的 KDBX 库**（内存只留一把密钥）。
+     * 切换活跃库时**锁定其它 KDBX 库**（内存只留一把密钥）。
      *
      * 为什么要主动锁：KDBX 的会话持有的是**整库明文**（比 Bitwarden 的一把对称密钥重得多），
      * 多库同时解锁会让「同时只能进一个库」的产品约束在内存层面失效。
+     *
+     * ⚠️ **只在 [keepVaultId] 自己也是 KDBX 库时才动作**（2026-11-04 修）：切到
+     * Bitwarden 库并不让任何 KDBX 明文多出一份，锁它只换来"切回来重跑一次 KDF"。
+     * 契约写在实现侧（`VaultRepositoryImpl.lockOtherKdbxVaults` 的 KDoc），
+     * 这里说明是为了让调用方知道**可以放心在每次进库时调用**，不必自己判断库类型。
      */
     suspend fun lockOtherKdbxVaults(keepVaultId: String)
 

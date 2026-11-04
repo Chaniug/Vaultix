@@ -337,7 +337,39 @@ class VaultRepositoryImpl @Inject constructor(
         )
     }
 
+    /**
+     * 切换活跃库时锁定其它 KDBX 库。
+     *
+     * ## ★ 判据是「**进的是不是 KDBX 库**」，不是「进的是不是别的库」（2026-11-04 修）
+     *
+     * 旧实现只有一句 `Kdbx.unlockedIds().filter { it != keepVaultId }` ——
+     * 它按「id 不相等」筛，于是**任何**一次进入条目页都会命中：
+     *
+     * ```
+     * 用户从 KDBX 库切到 Bitwarden 库 → keepVaultId = Bitwarden 的 id
+     *   → 所有 KDBX 库的 id 都不等于它 → 全部 Kdbx.lock()
+     * 再切回 KDBX → 会话已销毁 → 重跑一次完整 KDF（真机 64 MiB / 46 轮）
+     * ```
+     *
+     * 用户 2026-11-04 报的「切换密码库后 kdbx 就会锁定，每次解锁都很慢」就是这条。
+     *
+     * ## 为什么「进 Bitwarden 库」根本不需要锁 KDBX
+     *
+     * 锁 KDBX 的理由写在接口 KDoc 里：KDBX 会话握的是**整库明文**，多库同时解锁会
+     * 突破「同时只能进一个库」的约束。而进 Bitwarden 库时，那份 KDBX 明文并没有
+     * **多出来**一份 —— 它只是安静地待在内存里，用户的注意力在另一个库上。
+     * 锁掉它换来零安全收益，付出的是一次完整的 Argon2 派生。
+     *
+     * ⇒ 只有 `keepVaultId` **本身也是 KDBX** 时，「两个整库明文同时常驻」才成立，
+     *   这时锁其它 KDBX 才是原本要防的那件事。
+     *
+     * ⚠️ 取不到该行（库已被删）时**不锁**：没有"当前库"就无从判断是否多库常驻，
+     *   而误锁的代价（每个 KDBX 库重跑一次 KDF）远大于少锁一次。真正的清理由
+     *   `removeVault` / `signOut` 负责，不靠这条兜底。
+     */
     override suspend fun lockOtherKdbxVaults(keepVaultId: String) {
+        val keepKind = VaultKind.fromName(vaultDao.get(keepVaultId)?.kind)
+        if (!shouldLockOtherKdbx(keepKind)) return
         val toLock = Kdbx.unlockedIds().filter { it != keepVaultId }
         if (toLock.isEmpty()) return
         toLock.forEach { Kdbx.lock(it) }
@@ -400,7 +432,15 @@ class VaultRepositoryImpl @Inject constructor(
                 //
                 // ⚠️ 必须 `runCatching`：纳入是**增强**，它的任何异常都不许把
                 //   「库已经解开」变成失败（那会让用户在主密码正确的情况下被拦住）。
-                runCatching { localUnlockEnrollment.enrollJustAuthenticated(vaultId) { password } }
+                //
+                // ★ `force = false`（2026-11-04，#246）：这条路径是**每次**主密码解锁
+                //   都会走的，而信封绝大多数时候本来就在。`force = true` 会跳过
+                //   `hasRoom` 短路 ⇒ 每次都要 `Kdbx.verify` 再烧一遍完整 Argon2
+                //   （真机 64 MiB / 46 轮）—— 用户报的「输入了密码依然很慢很慢」就是它。
+                //   信封真的坏了的那条路走 `LocalUnlockFanout` 的补建（那边才是 force=true）。
+                runCatching {
+                    localUnlockEnrollment.enrollJustAuthenticated(vaultId, force = false) { password }
+                }
                 UnlockResult.Success
             },
             onFailure = { error -> classifyKdbxError(error) },
@@ -657,12 +697,23 @@ class VaultRepositoryImpl @Inject constructor(
      * ⚠️ 纯转发：守卫与落盘都在 `LocalUnlockEnrollment.enrollJustAuthenticated`
      *   （本类函数数卡在 detekt 上限 40，且那边本来就有全部所需依赖）。
      *
+     * ★ `force = true`（2026-11-04 明确化）：本方法是**补建**路径，调用方
+     *   （`LocalUnlockFanout`）只在开库结论是 `Unavailable` 时才叫它 ——
+     *   那时"有信封"不代表"能用"（`NotEnrolled` / `Damaged`），重封才是自愈。
+     *   ⚠️ 这与 `unlockKdbxInternal` 那条"刚成功解锁"的路径**必须**不同，
+     *   两者共用 [LocalUnlockEnrollment.enrollJustAuthenticated] 的同一份实现，
+     *   差别只在这个参数（见那边的 KDoc 表）。
+     *
      * @param masterPasswordOf 见 [VaultRepository.enrollVaultAfterFingerprintUnlock]。
      */
     override suspend fun enrollVaultAfterFingerprintUnlock(
         vaultId: String,
         masterPasswordOf: suspend (String) -> String?,
-    ): Boolean = localUnlockEnrollment.enrollJustAuthenticated(vaultId, masterPasswordOf)
+    ): Boolean = localUnlockEnrollment.enrollJustAuthenticated(
+        vaultId = vaultId,
+        force = true,
+        masterPasswordOf = masterPasswordOf,
+    )
 
     /** 关指纹门锁（全局；信封删除 + 镜像同步，孤儿房间由 HouseKeyStore 连带清理）。 */
     override suspend fun disableFingerprintLock() {
@@ -1089,6 +1140,35 @@ private fun classifyKdbxError(error: Throwable): UnlockResult {
         is KdbxOpenError.Unknown -> UnlockResult.Unknown(kind.detail)
     }
 }
+
+/**
+ * 「进入 [keepKind] 这个库」是否**需要**锁掉其它 KDBX 库（#246，2026-11-04）。
+ *
+ * ## 为什么这是一个有名字的判据，而不是内联在调用点
+ *
+ * 旧实现的判据是隐含的 —— 它根本不存在，只有一句 `filter { it != keepVaultId }`。
+ * 于是"进 Bitwarden 库"被读成了"要锁掉所有 KDBX"。这个错误**不报错、不崩溃**，
+ * 只在用户每次切回来时多付一次完整 Argon2（真机 64 MiB / 46 轮），
+ * 表现成「切换密码库后 kdbx 就锁定，每次解锁都很慢」——
+ * 一条要用户忍受很久、而代码上完全静默的缺陷。
+ *
+ * 给它一个名字，就让"什么情况下该锁"变成可以**问**、可以**测**的一件事
+ * （与 `KdbxCloudSyncCoordinator.isExtraFactoryOrigin` 同一取向）。
+ *
+ * ## 判据为什么是「进的是 KDBX 库」
+ *
+ * 锁 KDBX 的理由只有一个：KDBX 会话握着**整库明文**，两个 KDBX 同时解锁会让
+ * 「同一时刻只进一个库」的约束在内存层面失效。
+ * 进 Bitwarden 库时并没有多出任何一份 KDBX 明文 ⇒ 锁它换不来安全收益，
+ * 只换来一次 KDF。
+ *
+ * ⚠️ `null`（库行取不到 / 库类型未知）判 **false**：没有"当前库"就无从判断
+ * 是否多库常驻，而误锁的代价远大于少锁一次。真正的清理由
+ * `removeVault` / `signOut` 负责。
+ *
+ * @param keepKind 即将进入的那个库的类型。
+ */
+internal fun shouldLockOtherKdbx(keepKind: VaultKind?): Boolean = keepKind == VaultKind.KDBX
 
 /**
  * 清某库**远端 kdbx 的本地缓存**（批次 B1，2026-09-30）。
