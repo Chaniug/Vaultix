@@ -661,11 +661,7 @@ fun ItemsScreen(
     // 「这个库在哪 · 有多少条」（2026-09-30 用户要求）：在本层算一次，供 ⋮ 菜单卡片与
     // 列表状态行**共用**（各算各的迟早出现"卡片 42 条、列表 41 条"）。
     // ⚠️ 未解锁时 countText 为 null：条目数不可知 ≠ 0。
-    val vaultCard = state.vault?.let { vault ->
-        // 状态点由 ViewModel 统一聚合（网盘库看持久状态，Bitwarden 库看编排器运行时状态），
-        // vaultCardInfoOf 里的那份只作兜底；不覆盖的话切到 Bitwarden 库就永远没有点。
-        vaultCardInfoOf(vault, state.items.size).copy(syncDot = state.syncDot)
-    }
+    val vaultCard = state.vault?.let { v -> vaultCardInfoOf(v, state.items.size).copy(syncDot = state.syncDot) }
     // 搜索关闭动作（点 × 与系统返回共用）：退出搜索态 + 清空输入。
     val closeSearch: () -> Unit = { searchActive = false; viewModel.setQuery("") }
     SearchBackHandler(enabled = searchActive, onClose = closeSearch)
