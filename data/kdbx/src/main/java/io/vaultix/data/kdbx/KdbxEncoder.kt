@@ -67,12 +67,39 @@ import java.util.UUID
  */
 internal object KdbxEncoder {
 
+    /**
+     * 编码并**把这一遍 KDF 的结果送进派生密钥缓存**（#248）。
+     *
+     * ## 为什么现在必须显式传 kdfProvider
+     *
+     * 早先这里写的是「其余参数用 kotpass 默认值，显式传反而会引入两处装配漂移」——
+     * 那条判断在**只读**时代成立，接了缓存之后就不成立了：
+     *
+     * - `encode` 内部 `regenerateVectors` 换掉 KDF 种子 → `KeyTransform.transformedKey`
+     *   跑一遍 Argon2（真机 ≈30 秒）；
+     * - 紧接着 `KdbxRoundTrip.verifyEncoded` 解码这份**新字节**时，
+     *   `providerFor(bytes)` 查不到条目 ⇒ 又跑一遍（再 30 秒）。
+     *   ⇒ 一次保存 = 60 秒，用户体感就是「点完覆盖卡在页面不动」。
+     *
+     * 传进去的 `CapturedKdf` 委托给 `BaseKdfProvider.INSTANCE`
+     * （**正是 kotpass `encode$default` 的缺省值**，已用 javap 核对），
+     * 所以加密行为一字未改，只是把派生结果记下来；产完字节立刻
+     * `commitCaptured` 按新字节写入缓存，往返自检与下次打开（含冷启动）都直接命中。
+     *
+     * ⚠️ 捕获错了**不会**写坏库：`verifyEncoded` 会用这份缓存去解自己刚写的字节，
+     *   密钥不对就解不开 ⇒ `isSafeToWrite = false`，一个字节都不会落盘。
+     */
     fun encode(database: KeePassDatabase): ByteArray {
         val out = ByteArrayOutputStream()
-        // 只传 cipherProviders：其余参数（XmlContentParser / KdfProvider / SecureRandom）
-        // 用 kotpass 的默认值 —— 它们不依赖调用方，显式传反而会引入"两处装配漂移"的风险。
-        database.encode(outputStream = out, cipherProviders = KDBX_CIPHER_PROVIDERS)
-        return out.toByteArray()
+        val capture = KdbxTransformKeyCache.captureProvider()
+        database.encode(
+            outputStream = out,
+            cipherProviders = KDBX_CIPHER_PROVIDERS,
+            kdfProvider = capture,
+        )
+        val bytes = out.toByteArray()
+        KdbxTransformKeyCache.commitCaptured(capture, bytes)
+        return bytes
     }
 
     /**

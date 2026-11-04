@@ -36,6 +36,21 @@
  * | fanout 顺带开多个库 | 每库 1 次 | 每库首次 1 次，之后 0 次 |
  * | **同 key 并发**（autoRestore × fanout） | 两条各跑一遍 30 秒 | single-flight 合并，只跑一遍 |
  * | 进程冷启动 | 1 次 | **落盘缓存命中，0 次**（见 [DerivedKeyDiskCache]） |
+ * | **编辑 / 保存**（encode + 往返自检） | 2 遍（真机各 ≈30 秒） | 1 遍：encode 的派生结果入缓存，decode 命中 |
+ * | 保存后（含冷启动）打开这一新版本 | 1 次 | 命中，0 次 |
+ *
+ * ## 为什么保存路径要单独接一根线（#248）
+ *
+ * [providerFor] 要求**先有完整文件字节**，可 `encode` 那一侧恰恰是「字节还没产出」：
+ * 它先 `regenerateVectors` 换掉 KDF 种子，再调 `transformKey` 派生一遍，最后才写出字节。
+ * 于是 encode 这一遍 KDF 既查不了缓存、结果也没人收；紧接着
+ * `KdbxRoundTrip.verifyEncoded` 解码这份新字节时又派生第二遍 —— 真机一次保存就是 **60 秒**。
+ *
+ * ⇒ [captureProvider] 包装的仍是同一个 `BaseKdfProvider.INSTANCE`（与 decode 侧同源），
+ *   只多记一份 `(compositeKey, transformedKey)`；产完字节由 [commitCaptured] 按
+ *   **新字节**算出 key 写进缓存，随后的往返自检与下次打开都直接命中。
+ *   ⚠️ 捕获错了不会写坏库：`verifyEncoded` 用这份缓存解不开自己刚写的字节，
+ *   会当场判 `isSafeToWrite = false`。
  *
  * ## 为什么还需要 single-flight（用户真机日志的判据）
  *
@@ -148,6 +163,29 @@ internal object KdbxTransformKeyCache {
     /** 给**这一份文件字节**配一个 KDF provider（每个 decode 调用点各取一个）。 */
     fun providerFor(bytes: ByteArray): KdfProvider = CachingProvider(digest(bytes))
 
+    /**
+     * 给 **encode** 配的 provider：此时新文件字节还没产出，查不了缓存（而且
+     * `regenerateVectors` 换了 KDF 种子，查了也必然 miss）。
+     * 它只把这一遍真实派生用的凭据与结果记下来，等 [commitCaptured] 拿到字节再入缓存。
+     */
+    internal fun captureProvider(): CapturedKdf = CapturedKdf()
+
+    /**
+     * encode 产完字节后，把捕获的 `transformedKey` 按「新文件字节 + compositeKey」写缓存。
+     *
+     * 只认**恰好一次**派生：零次（没跑到 KDF）/ 多次（kotpass 换了内部实现）都放弃提交 ——
+     * 写错一条缓存的代价是「密码明明对却说密码错」，比多跑一次 KDF 难查得多。
+     */
+    internal fun commitCaptured(capture: CapturedKdf, bytes: ByteArray) {
+        if (!enabled || bytes.isEmpty()) return
+        val (compositeKey, derivedKey) = capture.snapshot() ?: return
+        val key = keyOf(digest(bytes), compositeKey)
+        synchronized(entries) { entries[key] = derivedKey.copyOf() }
+        // 与 computeJoined 同一口径：写盘失败只是少一次优化，不能让保存失败。
+        runCatching { disk?.save(key, derivedKey) }
+        VaultixLog.d(TAG) { "派生密钥写入缓存（保存路径）⇒ 往返自检与下次打开跳过 KDF" }
+    }
+
     /** 安装 / 卸载落盘缓存（app 启动时调用一次；传 null 即退回纯内存语义）。 */
     internal fun attachDisk(cache: DerivedKeyDiskCache?) {
         disk = cache
@@ -187,7 +225,8 @@ internal object KdbxTransformKeyCache {
             return compute()
         }
         // 两段哈希拼起来再哈希：任何一段变了都会得到完全不同的 key。
-        val key = digest(contentDigest + digest(compositeKey)).toHex()
+        // ★ 公式只此一处：[commitCaptured] 也走 [keyOf]，避免两处装配漂移。
+        val key = keyOf(contentDigest, compositeKey)
         memoryOf(key)?.let { cached ->
             hits.incrementAndGet()
             VaultixLog.d(TAG) { "派生密钥内存缓存命中 ⇒ 本次解码跳过 KDF" }
@@ -270,6 +309,54 @@ internal object KdbxTransformKeyCache {
                 KotpassKdfBridge.defaultProvider().transformKey(parameters, compositeKey)
             }
     }
+
+    /**
+     * encode 侧的捕获型 provider（#248）。
+     *
+     * ⚠️ 刻意**不做缓存查找**：encode 时新字节尚未产出，且 `regenerateVectors` 换了
+     *    KDF 种子，旧条目本来就不适用（拿旧 transformedKey 去加密新文件 = 写坏库）。
+     *    这里只记结果，由 [commitCaptured] 在拿到字节后按正确的 key 入缓存。
+     *
+     * 委托对象与 decode 的默认实现同源（`KotpassKdfBridge.defaultProvider()`），
+     * ⇒ 传它进 `encode` 不改变任何加密行为，只是多了一次记账。
+     */
+    internal class CapturedKdf : KdfProvider {
+        private val guard = Any()
+        private var callCount = 0
+        private var composite: ByteArray? = null
+        private var derived: ByteArray? = null
+
+        override fun transformKey(parameters: KdfParameters, compositeKey: ByteArray): ByteArray {
+            val result = KotpassKdfBridge.defaultProvider().transformKey(parameters, compositeKey)
+            record(compositeKey, result)
+            return result
+        }
+
+        /**
+         * 记一次派生。单测可**直接喂**数据 —— `KdfParameters` 是 kotpass 的抽象类，
+         * 纯 JVM 测试里造不出实例，把「记账」与「真跑 KDF」拆开才能测。
+         */
+        internal fun record(compositeKey: ByteArray, derivedKey: ByteArray) {
+            synchronized(guard) {
+                callCount++
+                composite = compositeKey.copyOf()
+                derived = derivedKey.copyOf()
+            }
+        }
+
+        /** 恰好一次派生才可信；空结果也一律不提交。 */
+        internal fun snapshot(): Pair<ByteArray, ByteArray>? = synchronized(guard) {
+            val c = composite
+            val d = derived
+            if (c == null || d == null) return@synchronized null
+            // 拆成两段判据：写在一起会是 4 个条件，顶过 detekt ComplexCondition（上限 3）。
+            if (callCount != 1 || d.isEmpty()) null else c.copyOf() to d.copyOf()
+        }
+    }
+
+    /** 缓存 key 的**唯一**公式：内容摘要 + 凭据摘要，再整体哈希。 */
+    private fun keyOf(contentDigest: ByteArray, compositeKey: ByteArray): String =
+        digest(contentDigest + digest(compositeKey)).toHex()
 
     private fun digest(input: ByteArray): ByteArray =
         MessageDigest.getInstance("SHA-256").digest(input)

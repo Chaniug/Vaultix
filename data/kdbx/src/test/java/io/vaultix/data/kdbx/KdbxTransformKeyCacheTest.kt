@@ -14,6 +14,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import java.security.MessageDigest
 import java.util.concurrent.Callable
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -258,6 +259,113 @@ class KdbxTransformKeyCacheTest {
             failures.all { it != null },
         )
     }
+
+    // ------------------------------------------------------------ #248 第七批：保存路径
+
+    @Test
+    fun `保存路径捕获_按新字节命中_往返自检不再跑KDF`() {
+        val bytes = byteArrayOf(10, 20, 30, 40)
+        val capture = KdbxTransformKeyCache.captureProvider()
+        capture.record(credentialDigest, byteArrayOf(42, 43))
+        KdbxTransformKeyCache.commitCaptured(capture, bytes)
+
+        var computed = 0
+        val restored = KdbxTransformKeyCache.getOrCompute(sha256(bytes), credentialDigest) {
+            computed++
+            byteArrayOf(99)
+        }
+
+        assertEquals("encode 那一遍的结果必须被随后的 decode 直接复用", 0, computed)
+        assertArrayEquals(byteArrayOf(42, 43), restored)
+    }
+
+    @Test
+    fun `保存捕获同时写盘_冷启动打开新版本仍秒开`() {
+        val disk = FakeDiskCache()
+        KdbxTransformKeyCache.attachDisk(disk)
+        val bytes = byteArrayOf(1, 3, 5, 7)
+        val capture = KdbxTransformKeyCache.captureProvider()
+        capture.record(credentialDigest, byteArrayOf(7, 7))
+        KdbxTransformKeyCache.commitCaptured(capture, bytes)
+        assertTrue("保存结果必须落盘，否则冷启动又变 30 秒", disk.store.isNotEmpty())
+
+        KdbxTransformKeyCache.clear() // 进程重启：内存没了，盘还在
+        var computed = 0
+        val restored = KdbxTransformKeyCache.getOrCompute(sha256(bytes), credentialDigest) {
+            computed++
+            byteArrayOf(1)
+        }
+        assertEquals(0, computed)
+        assertArrayEquals(byteArrayOf(7, 7), restored)
+    }
+
+    @Test
+    fun `捕获零次或多于一次_都不写缓存`() {
+        val bytes = byteArrayOf(2, 4, 6)
+        val never = KdbxTransformKeyCache.captureProvider()
+        KdbxTransformKeyCache.commitCaptured(never, bytes)
+        val twice = KdbxTransformKeyCache.captureProvider()
+        twice.record(credentialDigest, byteArrayOf(1))
+        twice.record(credentialDigest, byteArrayOf(2))
+        KdbxTransformKeyCache.commitCaptured(twice, bytes)
+
+        var computed = 0
+        KdbxTransformKeyCache.getOrCompute(sha256(bytes), credentialDigest) {
+            computed++
+            byteArrayOf(3)
+        }
+        assertEquals("不确定该信哪一次派生时，宁可老实重算", 1, computed)
+    }
+
+    @Test
+    fun `开关关闭_保存不写缓存`() {
+        val bytes = byteArrayOf(3, 6, 9)
+        KdbxTransformKeyCache.enabled = false
+        val capture = KdbxTransformKeyCache.captureProvider()
+        capture.record(credentialDigest, byteArrayOf(5))
+        KdbxTransformKeyCache.commitCaptured(capture, bytes)
+        KdbxTransformKeyCache.enabled = true
+
+        var computed = 0
+        KdbxTransformKeyCache.getOrCompute(sha256(bytes), credentialDigest) {
+            computed++
+            byteArrayOf(6)
+        }
+        assertEquals("全局开关关掉时缓存必须完全不参与", 1, computed)
+    }
+
+    @Test
+    fun `空字节_保存不写缓存`() {
+        val capture = KdbxTransformKeyCache.captureProvider()
+        capture.record(credentialDigest, byteArrayOf(5))
+        KdbxTransformKeyCache.commitCaptured(capture, byteArrayOf())
+
+        var computed = 0
+        KdbxTransformKeyCache.getOrCompute(sha256(byteArrayOf()), credentialDigest) {
+            computed++
+            byteArrayOf(6)
+        }
+        assertEquals(1, computed)
+    }
+
+    @Test
+    fun `保存后旧版本字节_不误命中新版本缓存`() {
+        val newBytes = byteArrayOf(7, 7, 7)
+        val capture = KdbxTransformKeyCache.captureProvider()
+        capture.record(credentialDigest, byteArrayOf(8, 8))
+        KdbxTransformKeyCache.commitCaptured(capture, newBytes)
+
+        var computed = 0
+        KdbxTransformKeyCache.getOrCompute(sha256(byteArrayOf(7, 7, 8)), credentialDigest) {
+            computed++
+            byteArrayOf(9)
+        }
+        assertEquals("文件字节变了就不该复用", 1, computed)
+    }
+
+    /** 与 `providerFor(bytes)` 里的 `digest(bytes)` 同一个公式，用来验证 key 没漂移。 */
+    private fun sha256(bytes: ByteArray): ByteArray =
+        MessageDigest.getInstance("SHA-256").digest(bytes)
 
     /**
      * 纯内存的假落盘缓存：单测不碰 Android Keystore / `android.util.Base64`

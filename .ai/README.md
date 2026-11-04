@@ -67,6 +67,19 @@
 > ⚠️ 新包**首次**解锁仍要付一次 30 秒（那一刻才写盘），之后含冷启动都是秒开。
 > 安全取舍与开关见 [`issues/04-锁与解锁-part6.md`](./issues/04-锁与解锁-part6.md) **#247 §2.5**、
 > [`SESSION-2026-11-04.md`](./SESSION-2026-11-04.md) §十一。
+>
+> **同日追加（#248）**：用户「继续完成修复」→ 收掉 #247 的两条待办。
+> 🔴 **先更正 #247 的一处错账**：`verifyEncoded` 本来就用 `providerFor(bytes)`
+> 把保存后的新版本派生结果写进了缓存，所以「保存后要重算一次」不成立；
+> 真正的问题是 **encode 自己那一遍 KDF 白跑** —— 一次保存 = 2×30 秒 = 60 秒。
+> 修法：`CapturedKdf`（与默认 `BaseKdfProvider.INSTANCE` 同源，只记账不查缓存）+
+> `commitCaptured(bytes)` 按新字节写内存 + 盘，key 公式收成唯一 `keyOf()` ⇒
+> 保存从 2 遍 KDF 降到 1 遍，往返自检与下次打开（含冷启动）都命中。
+> 另把 `auto_lock_never_warning` 改成与 `VaultTimeout.Never -> return`
+> （不锁、密钥常驻内存直到进程结束）一致 —— 旧文案说反了。
+> ⚠️ encode 那一遍 KDF **省不掉**（换 KDF 种子必须重派生），别承诺「保存零 KDF」。
+> 详见 [`issues/04-锁与解锁-part7.md`](./issues/04-锁与解锁-part7.md) **#248**、
+> [`SESSION-2026-11-04.md`](./SESSION-2026-11-04.md) §十二。
 
 ---
 
