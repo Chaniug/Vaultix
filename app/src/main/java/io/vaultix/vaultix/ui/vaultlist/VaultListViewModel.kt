@@ -306,11 +306,14 @@ class VaultListViewModel @Inject constructor(
                 // ⚠️ defer 本身也可能失败（数据库写不进去），它失败就真的只能报错了 ——
                 //   两层 runCatching 是刻意的：**不许**因为兜底动作失败而再吞掉一次错误。
                 runCatching { kdbxSyncRepository.defer(vaultId) }
+                // ⚠️ 兜底那句是我们自己写的 ⇒ 走 `Res`，**不进 Kotlin**（审计 §3.4）。
+                //   有 `error.message` 时仍原样展示（那是能定位问题的信息），
+                //   它是来源层翻译好的一句话，`Detail` 的语义正好是"原样展示"。
+                val detail = error.message?.takeIf { it.isNotBlank() }
                 _events.emit(
                     Event.KdbxSyncFailed(
-                        SyncNotice.Detail(
-                            error.message?.takeIf { it.isNotBlank() } ?: "处理同步冲突时出错，请重试",
-                        ),
+                        detail?.let(SyncNotice::Detail)
+                            ?: SyncNotice.Res(R.string.kdbx_sync_resolve_failed),
                     ),
                 )
             }

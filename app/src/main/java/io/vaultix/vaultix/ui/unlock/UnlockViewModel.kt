@@ -549,7 +549,7 @@ class UnlockViewModel @Inject constructor(
      */
     private suspend fun openRoomWithEnrollFallback(id: String): RoomUnlockOutcome {
         val first = runCatching { vaultRepository.unlockVaultFromRoom(id) }
-            .getOrElse { RoomUnlockOutcome.Unavailable(it.message ?: "无法打开该库") }
+            .getOrElse { RoomUnlockOutcome.Unavailable(openFailedText(it)) }
         if (first !is RoomUnlockOutcome.Unavailable) return first
         val enrolled = runCatching {
             vaultRepository.enrollVaultAfterFingerprintUnlock(id) { target ->
@@ -558,8 +558,20 @@ class UnlockViewModel @Inject constructor(
         }.getOrDefault(false)
         if (!enrolled) return first
         return runCatching { vaultRepository.unlockVaultFromRoom(id) }
-            .getOrElse { RoomUnlockOutcome.Unavailable(it.message ?: "无法打开该库") }
+            .getOrElse { RoomUnlockOutcome.Unavailable(openFailedText(it)) }
     }
+
+    /**
+     * 「开库抛异常」时该给用户看的那一句。
+     *
+     * ⚠️ 兜底文案**不进 Kotlin**（审计 §3.4：我们自己写的字必须能翻、能被孤儿串检查看见）。
+     * 拿到异常消息时仍原样用它 —— 那是能定位问题的信息，套一句通用话反而把它盖住。
+     * 这个 `detail` 最终会经 `lockMessageOf(...)` 认一次标识、认不出就当成话来展示，
+     * 所以这里返回人话是对的（返回资源名会变成一句英文标识上屏）。
+     */
+    private fun openFailedText(error: Throwable): String =
+        error.message?.takeIf { it.isNotBlank() }
+            ?: context.getString(R.string.local_unlock_room_open_failed)
 
     /**
      * PIN 失败的文案。
