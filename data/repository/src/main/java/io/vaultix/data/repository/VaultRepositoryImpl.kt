@@ -841,11 +841,35 @@ class VaultRepositoryImpl @Inject constructor(
      *
      * `StaleCredentials` = 凭据开不了库（主密码在别处改过，D3）：门锁不动，
      * 引导输新密码后重包该房间的**软件信封**即可自愈 —— 房子化后重包不再碰指纹。
+     *
+     * ## ★ 会话还在内存时**直接复用**，不重跑 KDF（2026-11-04，#246 第四批）
+     *
+     * 这是「查看锁 / 界面门禁」场景的必付开销：`AutoViewGate` 熄屏时只打
+     * `viewLock` 标记、**不动会话**（`VaultSessionManager` 的 KDoc 写明这是
+     * "挡住屏幕而非销毁会话"的语义）。但解锁侧此前**无条件**走到 `Kdbx.unlock`，
+     * 于是每次熄屏回来都要把整库重新 Argon2 一遍 —— 明明明文就在内存里。
+     *
+     * 用户对照 KeePass2Android 说的"它解锁是瞬时的"，差的就是这一步。
+     *
+     * ⚠️ **短路点在 [houseKeyStore.openRoom] 之后，不能提前**：
+     *    那一步才是"认证已通过"的证明（门锁解开了房间信封）。
+     *    提到前面等于让任何调用方不认证就能拿到已解锁状态。
+     *
+     * ⚠️ 复用期间内容可能是旧的（熄屏时缓存被后台校验换过）：这与
+     *    `CachedKdbxFileSource` 的既有语义一致 —— 会话反映的是"打开那一刻的那一版"，
+     *    同步/保存会走 `KdbxBaseStore` 的基线判定，不会把旧内容直接盖到远端。
      */
     private suspend fun openKdbxFromRoom(vaultId: String, originUri: String): RoomUnlockOutcome {
         val opened = houseKeyStore.openRoom(vaultId)
         if (opened !is RoomOpen.Opened) {
             return opened.toRoomFailure()
+        }
+        if (Kdbx.isUnlocked(vaultId)) {
+            // 信封字节用不到，但仍然要擦：里面是主密码明文。
+            opened.payload.fill(0)
+            sessions.clearViewLock(vaultId)
+            kdbxSessions.bump()
+            return RoomUnlockOutcome.Opened
         }
         val decoded = KdbxUnlockPayload.decode(opened.payload)
         opened.payload.fill(0)
