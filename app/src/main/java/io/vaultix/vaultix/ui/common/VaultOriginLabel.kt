@@ -40,6 +40,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.graphics.Color
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.res.stringResource
+import io.vaultix.domain.VaultSyncStatus
 import io.vaultix.model.KdbxCloudSyncStatus
 import io.vaultix.model.VaultKind
 import io.vaultix.model.VaultSummary
@@ -218,6 +219,36 @@ enum class SyncStatusDot {
             KdbxCloudSyncStatus.IN_SYNC -> SUCCESS
             else -> null
         }
+    }
+}
+
+/**
+ * 两类库的两套同步状态，合成菜单里那一个点（2026-11-04 用户反馈「零星显示」后补）。
+ *
+ * | 库 | 数据源 | 含义 |
+ * |---|---|---|
+ * | KDBX 网盘 | `vaults.syncStatus`（[KdbxCloudSyncStatus]） | **持久**的本地/远端差距 |
+ * | Bitwarden | `VaultSyncStatus`（编排器运行时） | **本次**同步到哪一步 |
+ * | KDBX 本地 SAF | 无 | 没有云端同步这回事 ⇒ 不显示 |
+ *
+ * ⚠️ 两套状态刻意不互串：持久差距不能靠一次刷新「变好」，
+ *    瞬态进度也不能当成「云端还是旧的」（`VaultSummary` 类 KDoc 的同一条告诫）。
+ *
+ * ★ 常态也返回 [SyncStatusDot.SUCCESS]：用户实测反馈绿点闪一下就消失，
+ *    看起来像功能时有时无；既然菜单是**主动点开才看得到**的低频区域，
+ *    常驻绿点不会像列表角标那样变成滚动噪音。
+ */
+fun resolveSyncDot(vault: VaultSummary?, status: VaultSyncStatus?): SyncStatusDot? {
+    if (vault == null) return null
+    val kdbxStatus = vault.syncStatus
+    if (kdbxStatus != null) return SyncStatusDot.of(kdbxStatus)
+    if (vault.kind != VaultKind.BITWARDEN) return null
+    val s = status ?: return SyncStatusDot.SUCCESS
+    return when {
+        s.isRunning -> SyncStatusDot.SYNCING
+        (s.lastErrorAt ?: Long.MIN_VALUE) > (s.lastSuccessAt ?: Long.MIN_VALUE) ->
+            SyncStatusDot.FAILED
+        else -> SyncStatusDot.SUCCESS
     }
 }
 

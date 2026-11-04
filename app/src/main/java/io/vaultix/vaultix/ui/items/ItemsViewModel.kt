@@ -19,6 +19,8 @@ import io.vaultix.model.VaultFolder
 import io.vaultix.model.VaultOrganization
 import io.vaultix.model.VaultSummary
 import io.vaultix.vaultix.ui.common.ItemFilter
+import io.vaultix.vaultix.ui.common.SyncStatusDot
+import io.vaultix.vaultix.ui.common.resolveSyncDot
 import io.vaultix.vaultix.session.ActiveVaultStore
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.Channel
@@ -119,6 +121,8 @@ class ItemsViewModel @Inject constructor(
         /** 按组织筛选（`null` = 不限）；与 [quickFilter] 互斥，见 [setOrganizationFilter]。 */
         val organizationFilter: String? = null,
         val syncNote: SyncNote? = null,
+        /** ⋮ 菜单「同步」项的常态状态点：网盘库用持久状态，Bitwarden 库用编排器运行时状态。 */
+        val syncDot: SyncStatusDot? = null,
         val saving: Boolean = false,
         /**
          * 条目 id → 是否已同步上云（列表行尾小云图标的数据源）。
@@ -170,6 +174,16 @@ class ItemsViewModel @Inject constructor(
             combine(vaultIdState, syncOrchestrator.statusByVault) { id, statuses ->
                 toSyncNote(statuses[id])
             }.collect { note -> _state.update { it.copy(syncNote = note) } }
+        }
+        // 同步状态 → ⋮ 菜单的四色状态点。
+        // ⚠️ 与提示条**分开收集**：提示条是「一次性结果，成功就消失」，
+        //    状态点是「菜单里随时可见的常态」。合并会让绿点跟着提示条一起闪没，
+        //    用户实测反馈就是「零星显示」。
+        viewModelScope.launch {
+            combine(vaultIdState, vaultRepository.observeVaults(), syncOrchestrator.statusByVault) {
+                    id, vaults, statuses ->
+                resolveSyncDot(vaults.firstOrNull { v -> v.id == id }, statuses[id])
+            }.collect { dot -> _state.update { it.copy(syncDot = dot) } }
         }
         // 2026-09-08（用户反馈）：进入页面**不再自动同步**——自动同步只随本地
         // 修改（保存/删除 → flush 推送）触发；拉取统一走 retrySync()（顶栏按钮 /

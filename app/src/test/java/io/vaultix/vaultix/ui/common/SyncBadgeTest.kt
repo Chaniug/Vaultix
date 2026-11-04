@@ -9,7 +9,10 @@
 package io.vaultix.vaultix.ui.common
 
 import com.google.common.truth.Truth.assertThat
+import io.vaultix.domain.VaultSyncStatus
 import io.vaultix.model.KdbxCloudSyncStatus
+import io.vaultix.model.VaultKind
+import io.vaultix.model.VaultSummary
 import org.junit.Test
 
 /**
@@ -68,5 +71,51 @@ class SyncBadgeTest {
         assertThat(SyncStatusDot.of(KdbxCloudSyncStatus.PENDING_UPLOAD_WITH_LOCAL_CHANGES)).isNull()
         assertThat(SyncStatusDot.of(KdbxCloudSyncStatus.LOCAL_ONLY)).isNull()
         assertThat(SyncStatusDot.of(null)).isNull()
+    }
+
+    @Test
+    fun `Bitwarden 库用编排器运行时状态给状态点（不再恒为空）`() {
+        // syncStatus 为 null 正是之前「切到 Bitwarden 库就没点」的原因。
+        val vault = VaultSummary(
+            id = "bw-1",
+            kind = VaultKind.BITWARDEN,
+            name = "Bitwarden",
+            origin = "https://vault.example.com",
+        )
+        assertThat(resolveSyncDot(vault, null)).isEqualTo(SyncStatusDot.SUCCESS)
+        assertThat(resolveSyncDot(vault, VaultSyncStatus(isRunning = true)))
+            .isEqualTo(SyncStatusDot.SYNCING)
+        assertThat(
+            resolveSyncDot(vault, VaultSyncStatus(lastSuccessAt = 100L, lastErrorAt = 200L)),
+        ).isEqualTo(SyncStatusDot.FAILED)
+        assertThat(
+            resolveSyncDot(vault, VaultSyncStatus(lastSuccessAt = 200L, lastErrorAt = 100L)),
+        ).isEqualTo(SyncStatusDot.SUCCESS)
+    }
+
+    @Test
+    fun `网盘库以持久状态为准，本地 SAF 库不显示状态点`() {
+        fun kdbx(status: KdbxCloudSyncStatus?) = VaultSummary(
+            id = "kdbx-1",
+            kind = VaultKind.KDBX,
+            name = "valk.kdbx",
+            origin = "onedrive:account:valk.kdbx",
+            syncStatus = status,
+        )
+
+        assertThat(resolveSyncDot(kdbx(KdbxCloudSyncStatus.CONFLICT), null))
+            .isEqualTo(SyncStatusDot.CONFLICT)
+        assertThat(resolveSyncDot(kdbx(KdbxCloudSyncStatus.IN_SYNC), null))
+            .isEqualTo(SyncStatusDot.SUCCESS)
+        // 两类状态不互串：Bitwarden 的「成功」不能把网盘库的冲突抹掉。
+        assertThat(
+            resolveSyncDot(
+                kdbx(KdbxCloudSyncStatus.FAILED),
+                VaultSyncStatus(lastSuccessAt = 999L),
+            ),
+        ).isEqualTo(SyncStatusDot.FAILED)
+        // 本地 SAF 库没有云端同步这回事，不该给一个会误导的绿点。
+        assertThat(resolveSyncDot(kdbx(null), null)).isNull()
+        assertThat(resolveSyncDot(null, null)).isNull()
     }
 }
