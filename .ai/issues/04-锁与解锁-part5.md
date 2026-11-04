@@ -402,9 +402,50 @@ KDF 次数压下去之后，剩下的慢点只剩**网络**。静态排查锁定
 `url.contains("select=")` 这种断言恰好还能匹配到它 —— 是典型的"永远绿的假测试"。
 ⇒ 用例断言的是 `%24select=`，含变异验证记录。
 
-- **验证**：`:data:repository` 277 例（新增 `同一个远端库两次解析来源必须拿到同一个实例`）、
-  `:app` 574 例（OneDrive 48 例，新增 `stat 必须只请求版本令牌那几个字段` /
-  `下载与上传 URL 不得带 select`）、`:data:kdbx` 247 例，0 失败；detekt 与 16 个脚本门禁全绿。
+### 第三批：用户补的两条现象 → 三个真根因（2026-11-04）
+
+用户补充：「**切换密码库后**，或者 **Vaultix 退出后台后**，kdbx 就会锁定，虽然可以
+指纹解锁打开，但是每次解锁都很慢。」
+
+这两句把方向从"网络往返"改到了"**会话被无谓地销毁**"。三个根因，全部**静默**
+（不报错、不崩溃，只让用户多等）：
+
+| # | 位置 | 缺陷 | 修法 |
+|---|---|---|---|
+| ① | `lockOtherKdbxVaults` | 判据是 `filter { it != keepVaultId }` —— 按「id 不相等」筛。**进 Bitwarden 库**时，所有 KDBX 的 id 都不等于它 ⇒ 全部 `Kdbx.lock()`。而 `ItemsViewModel.init` **每次进任意库的条目页**都会调它 ⇒ 「切一下库，KDBX 就锁了」 | 抽出 `shouldLockOtherKdbx(keepKind)`：只有**进的也是 KDBX** 才锁 |
+| ② | `enrollJustAuthenticated` | `force` 写死 `true` ⇒ 跳过 `hasRoom` 短路。而它唯一的"成功路径"调用点（`unlockKdbxInternal`）是**每次主密码解锁必走**的 ⇒ 每次都要 `Kdbx.verify` 再烧一遍 Argon2（64 MiB / 46 轮）才发现信封本来就在。用户原话「我输入了密码，依然很慢很慢」 | `force` 由调用方显式给：解锁成功 `false`、补建路径 `true` |
+| ③ | `FileKdbxFileCache` | 内容与令牌**分两个文件**写（`rename(数据) → writeText(meta)`）。中间被杀（Honor 锁屏后杀进程是常态）⇒ 新内容配旧尺寸 ⇒ 判成"半截文件" ⇒ **把一份完好的缓存删掉** ⇒ 重下整库。所以"锁屏回来特别慢"且**时好时坏** | 改**单文件**（`magic + tagLen + payloadLen + 令牌 + 内容`），一次 `rename` 原子完成 |
+
+> **判据**：②③ 是同一个病的两面 —— **该省的 KDF 没省，不该丢的缓存丢了**。
+> 而 ① 属于 #215 那一族：**判据按"不是这个"筛，而不是按"是那个"筛**，
+> 结果把所有"无关的情况"都算进了目标集合。
+
+⚠️ `payloadLen` **不是冗余**：单文件里"剩余字节就是内容"会让**尾部截断无法发现**
+（砍 3 个字节照样解析出更短的 payload，交给 KDBX 就是"文件损坏 / 密码错"）。
+这条是 `文件被截断_当作未命中并清掉` 当场抓出来的（第一版没有它，测试直接报红）。
+
+顺带修两处同源问题：
+
+- `CachedKdbxFileSource` 的令牌比较改走 `isSameVersionToken`（裸 `!=` 会因
+  `ctag:` / `etag:` 前缀或 OneDrive 自带引号而误判"远端已变" ⇒ **每次解锁白下一次整库**
+  + 挂一个根本不存在的「云端有更新」角标）。#244 就是为这件事写的，这一处漏了。
+- `markStalePending` 的 `recheckStarted` 改用 `finally` 复位（本类实例 2026-11-04 起
+  按 origin 复用，一次粘住就**永久停摆**；以前每次新建实例会顺带重置，缺陷是隐形的）。
+
+**为什么"缓存到本地"这个直觉不成立**：Vaultix 早就有 `CachedKdbxFileSource`，命中时
+`read()` 直接返回字节、`stat()` 丢后台，比 KeePass2Android 还激进。真正缺的是
+"**别把它误删**"（③）与"**别多跑一次 KDF**"（②）。参照数据：用户自己那份日志里
+`open(KDF+解析)=334ms` 而 `read=2837ms` ⇒ 慢 8.5 倍的一直是网络，不是缓存、也不是 KDF。
+
+- **验证**：`:data:repository` **286 例**（新增 `ShouldLockOtherKdbxTest` 3 条、
+  `刚认证过_信封已在_不得再备料烧一遍KDF`、`force为true_信封坏了也要重封_这是自愈路径`、
+  缓存 4 条单文件/截断用例）、`:app` 574 例（OneDrive 48 例）、`:data:kdbx` 247 例，
+  0 失败；detekt 与 16 个脚本门禁全绿。
 - **仍待真机日志（不猜）**：`adb logcat -s VaultixKdbxCache VaultixKdbx VaultixUnlock` 记录
   ① 点下到开库的耗时；② `read=` 与 `open(KDF+解析)=` 各占多少；③ 是否每次都重新下载整库
   （日志里"无缓存（首次解锁 / 已被清理）⇒ 下载"这行出现几次）。
+- **未做（需用户拍板）**：锁屏/退后台**不销毁 KDBX 会话**（对齐 KeePass2Android 的
+  QuickLock：只锁 UI、数据库对象留内存）。解锁会变成瞬时，代价是锁屏期间整库明文
+  留在内存里。kotpass 的 `Credentials` 只收 passphrase + keyfile，
+  `KeyTransform.transformedKey(...)` 是唯一入口 ⇒「直接存派生密钥跳过 KDF」走不通，
+  除非 fork。
