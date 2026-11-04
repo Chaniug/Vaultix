@@ -91,7 +91,7 @@ class KdbxConversionTest {
 
         val back = buildAndRead(listOf(item)).items.single()
 
-        // KDBX 的 `Url` 只装一条，其余走 `VPX_URL_n`（W4）—— 少一条就是静默丢数据。
+        // KDBX 的 `Url` 只装一条，其余走 `KP2A_URL_n`（生态键）—— 少一条就是静默丢数据。
         assertThat(back.uris.map { it.uri }).containsExactly(
             "https://one.example.com",
             "https://two.example.com",

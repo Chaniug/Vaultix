@@ -87,7 +87,7 @@ class KdbxToolFieldsRoundTripTest {
     }
 
     @Test
-    fun `多出的 URI 落在 VPX_URL_n，且第 0 条进标准 Url`() {
+    fun `多出的 URI 落在 KP2A_URL_n 生态键，且第 0 条进标准 Url`() {
         val uris = listOf(
             VaultUri(uri = "https://a.example"),
             VaultUri(uri = "https://b.example"),
@@ -98,18 +98,23 @@ class KdbxToolFieldsRoundTripTest {
 
         // 第 0 条走标准键，这是"KeePassXC 原生库"的读法，不能被工具字段抢走。
         assertThat(fields[BasicField.Url.key]?.content).isEqualTo("https://a.example")
-        assertThat(fields["VPX_URL_1"]?.content).isEqualTo("https://b.example")
-        assertThat(fields["VPX_URL_2"]?.content).isEqualTo("https://c.example")
+        // ★ 写侧唯一出口是生态键：KeePassXC 的「浏览器集成 → 附加 URL」与
+        //   KeePass2Android 都只认这一套，浏览器填充才会把多余网址一起匹配上。
+        assertThat(fields["KP2A_URL_1"]?.content).isEqualTo("https://b.example")
+        assertThat(fields["KP2A_URL_2"]?.content).isEqualTo("https://c.example")
         // 不该凭空多出下标 3。
-        assertThat(fields["VPX_URL_3"]).isNull()
+        assertThat(fields["KP2A_URL_3"]).isNull()
+        // 同时不再产出私有 URL 键（老格式由读侧兼容，写侧不迁移）。
+        assertThat(fields.keys.filter { it.startsWith("VPX_URL_") }).isEmpty()
     }
 
     @Test
-    fun `只有 1 条 URI 时不产出任何工具字段`() {
+    fun `只有 1 条 URI 时不产出任何额外网址字段`() {
         val fields = writeFields(itemWithUris(listOf(VaultUri(uri = "https://only.example"))))
 
         assertThat(fields[BasicField.Url.key]?.content).isEqualTo("https://only.example")
         // 单条不该有"第 2 条起"的落法。
+        assertThat(fields.keys.filter { it.startsWith("KP2A_URL_") }).isEmpty()
         assertThat(fields.keys.filter { it.startsWith("VPX_URL_") }).isEmpty()
     }
 
@@ -245,12 +250,12 @@ class KdbxToolFieldsRoundTripTest {
      * > 若改成「全部塞进 `VPX_URL_n`」，那些 `androidapp://` 会被 KeePassXC 当域名匹配
      *
      * 核实过（`KdbxXmlReader.cpp` / `KeePass2.cpp` 全文搜 `AdditionalUrlAttribute`）：
-     * **KeePassXC 的读取器里没有任何额外 URL 键的引用**，也**没有**"遍历全部字段找 URL"
-     * 的逻辑 —— `KP2A_URL_n` 只出现在它的 Bitwarden/ProtonPass **导入器**（写方向）。
-     * 而 `VPX_` 是本应用的私有前缀，第三方工具根本不看。
-     * ⇒ 那条理由不成立，代价却是**真的丢数据**（第 2 个应用 URI 整条消失）。
+     * KeePassXC 的 XML 读取器不扫额外 URL 键；但条目编辑 →「浏览器集成 → 附加 URL」
+     * 与 KeePassXC-Browser 扩展**会**读写 `KP2A_URL_n`（2026-11-04 官方文档核实）。
+     * ⇒ 应用 URI 仍不该进标准 `Url`（会被当域名匹配），但放进 `KP2A_URL_n`
+     *   只是多一条匹配不上的 URL，无害；而"只保留第一个"是**真的丢数据**。
      *
-     * 现在的落法：全部 URI（含应用 URI）按原始下标进 `VPX_URL_n`，
+     * 现在的落法：全部 URI（含应用 URI）按原始下标进 `KP2A_URL_n`（写侧唯一出口），
      * 同时仍写 `App Package Name` 给 KeePassDX 认。
      */
     @Test
@@ -414,8 +419,10 @@ class KdbxToolFieldsRoundTripTest {
 
         val entry = updated.database.getEntry { it.uuid == created.entryUuid }?.second
         assertThat(entry).isNotNull()
-        // 残留的 `VPX_URL_1` 会指向一个用户已经删掉的网址 —— 详情页仍显示它，
+        // 残留的额外网址键会指向一个用户已经删掉的网址 —— 详情页仍显示它，
         // 用户会以为"我明明删了"；自动填充也还会拿它去匹配。
+        // 两套都要清：新写侧产出的 KP2A_URL_n + 历史库可能遗留的 VPX_URL_n。
+        assertThat(entry!!.fields["KP2A_URL_1"]).isNull()
         assertThat(entry!!.fields["VPX_URL_1"]).isNull()
         assertThat(rereadUrls(entry!!.fields)).isEmpty()
     }
@@ -431,8 +438,13 @@ class KdbxToolFieldsRoundTripTest {
         )
 
         // ⚠️ 若混进自定义字段：详情页同一个网址出现两次（网址区 + 自定义字段区），
-        //    且两条写通道抢`VPX_URL_1` 这个键，后跑的会用错误的类型覆盖前一个。
-        assertThat(after.customFields.map { it.name }.filter { it.startsWith("VPX_") }).isEmpty()
+        //    且两条写通道抢同一个键，后跑的会用错误的类型覆盖前一个。
+        //    `isToolFieldName` 必须同时认私有键与生态键（后者是现在的写侧出口）。
+        assertThat(
+            after.customFields.map { it.name }.filter {
+                it.startsWith("VPX_") || it.startsWith("KP2A_URL_")
+            },
+        ).isEmpty()
         assertThat(after.uris).hasSize(2)
     }
 
@@ -458,10 +470,51 @@ class KdbxToolFieldsRoundTripTest {
     }
 
     @Test
-    fun `VPX_ 前缀判定大小写不敏感`() {
+    fun `两套额外网址键的前缀判定都大小写不敏感`() {
         assertThat(KdbxToolFields.isToolFieldName("VPX_URL_1")).isTrue()
         assertThat(KdbxToolFields.isToolFieldName("vpx_url_1")).isTrue()
+        // 现在写侧只产这一套；不认它，额外的网址会在详情页以自定义字段重复出现。
+        assertThat(KdbxToolFields.isToolFieldName("KP2A_URL_1")).isTrue()
+        assertThat(KdbxToolFields.isToolFieldName("kp2a_url_1")).isTrue()
         assertThat(KdbxToolFields.isToolFieldName("Url2")).isFalse()
+    }
+
+    @Test
+    fun `legacyUrlKeys 覆盖历史写侧的全部下标（清理时一个都不能漏）`() {
+        val web = listOf(
+            VaultUri(uri = "https://a.example"),
+            VaultUri(uri = "https://b.example"),
+            VaultUri(uri = "https://c.example"),
+        )
+        // 纯 web：第 0 条在标准 Url，历史键只有 _1、_2。
+        assertThat(KdbxToolFields.legacyUrlKeys(web))
+            .containsExactly("VPX_URL_1", "VPX_URL_2")
+
+        // 含应用 URI：历史口径写的是完整列表 _0..n，漏掉 _0 就会残留旧值盖掉新值。
+        val withApp = listOf(
+            VaultUri(uri = "https://a.example"),
+            VaultUri(uri = "androidapp://com.example.app"),
+            VaultUri(uri = "https://c.example"),
+        )
+        assertThat(KdbxToolFields.legacyUrlKeys(withApp))
+            .containsExactly("VPX_URL_0", "VPX_URL_1", "VPX_URL_2")
+
+        assertThat(KdbxToolFields.legacyUrlKeys(emptyList())).isEmpty()
+    }
+
+    @Test
+    fun `写侧只产生态键，读侧仍认历史键（老库不迁移也不丢数据）`() {
+        val fields = writeFields(
+            itemWithUris(
+                listOf(VaultUri(uri = "https://a.example"), VaultUri(uri = "https://b.example")),
+            ),
+        )
+
+        assertThat(fields["KP2A_URL_1"]?.content).isEqualTo("https://b.example")
+        assertThat(fields.keys.filter { it.startsWith("VPX_URL_") }).isEmpty()
+        // 读侧保留识别是零成本的：历史库里的多余网址不会凭空消失。
+        assertThat(KdbxToolFields.extras(mapOf("VPX_URL_1" to "https://b.example")))
+            .containsExactly(1 to "https://b.example")
     }
 
     // ---------------------------------------------------------------- 类型码（曾整段错位一位）

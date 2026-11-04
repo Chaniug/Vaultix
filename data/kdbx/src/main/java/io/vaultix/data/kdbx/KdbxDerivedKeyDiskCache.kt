@@ -27,8 +27,10 @@
  *
  * 只落 `transformedKey`（32 字节，**不是主密码、不是 keyfile、不是明文条目**），
  * 且用 Android Keystore 里一把**不可导出**的 AES-256-GCM 密钥包裹后才写盘。
- * 索引仍是 `SHA256(文件字节哈希 + compositeKey 哈希)`：
- * - 文件变了（同步拉到新版本 / 保存后换了 KDF 种子）⇒ key 变 ⇒ 老实重算；
+ * 索引仍是 `SHA256(判据摘要 + compositeKey 哈希)`，判据由 `KdbxTransformKeyCache.kdfDigest`
+ * 统一给出（2026-11-04 起取 **KDBX4 header 的 KdfParameters TLV 段**，取不到才回退整份文件）：
+ * - **条目内容变了**（同步拉到新版本）⇒ 判据不变 ⇒ **命中，冷启动也秒开**；
+ * - KDF 参数变了（改 KDF 设置 / 保存时换种子）⇒ key 变 ⇒ 老实重算；
  * - 密码或 keyfile 变了 ⇒ compositeKey 变 ⇒ 老实重算；
  * - 密文坏了 / Keystore 密钥丢了 ⇒ 解不开 ⇒ 老实重算并覆盖。
  *

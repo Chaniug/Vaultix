@@ -231,6 +231,27 @@ internal class CachedKdbxFileSource(
             VaultixLog.d(TAG) { "远端令牌取不到（缓存记 null，下次校验会重下）：${error.message}" }
             null
         }
+
+        // ★ 短路：后台校验（[markStalePending]）发现远端变了时，已经把那一版字节
+        //   连同令牌写进缓存。只要本次 `stat()` 的令牌与缓存令牌一致，就**证明**
+        //   缓存即远端此刻的字节，不必再整份下载。
+        //   真机 2026-11-04 18:08：同一份 35014B 被下了 3 次（后台校验 / 点同步 / 解码），
+        //   其中至少两次是纯代码造成的重复，与网络波动无关。
+        //
+        // ⚠️ 判据必须是「令牌一致」而不是「有缓存」：缓存是旧版时老老实实下载，
+        //    否则会重演 #172「提示已下载 / 已同步，条目还是旧的」——那次正是
+        //    `read()` 无条件拿缓存冒充远端，把基线推进到新令牌却换了旧会话。
+        //    令牌取不到（null）同样不许短路，fail-closed。
+        val cached = runCatching { cache.load(cacheKey) }.getOrNull()
+        if (cached != null && cached.bytes.isNotEmpty() && token != null &&
+            isSameVersionToken(token, cached.versionToken)
+        ) {
+            VaultixLog.d(TAG) {
+                "缓存已是远端当前版本（${cached.bytes.size}B）⇒ 跳过整份下载"
+            }
+            return cached.bytes
+        }
+
         val bytes = delegate.read()
         runCatching { cache.save(cacheKey, CachedKdbxFile(bytes, token)) }
             .onSuccess {

@@ -264,6 +264,33 @@ class CachedKdbxFileSourceTest {
     }
 
     @Test
+    fun `缓存已是远端当前版本时跳过整份下载`() = runTest {
+        // 后台校验已经把新版本字节连同令牌写进缓存；点同步时令牌仍一致
+        // ⇒ 缓存就是「远端此刻」，再下一次纯属浪费（真机一次同步下了 3 遍）。
+        val cache = FakeCache()
+        cache.save(key, CachedKdbxFile("fresh".toByteArray(), "etag-2"))
+        val delegate = source("fresh".toByteArray(), token = "etag-2")
+
+        val bytes = CachedKdbxFileSource(delegate, cache, key, backgroundScope).readRemoteCurrent()
+
+        assertArrayEquals("令牌一致 ⇒ 缓存可当作远端当前字节", "fresh".toByteArray(), bytes)
+        assertEquals("不该再下载一次", 0, delegate.readCount)
+    }
+
+    @Test
+    fun `缓存令牌为空时不许短路，必须真去远端读`() = runTest {
+        // fail-closed：令牌是唯一能证明「缓存 == 远端」的证据，没有证据就不能省下载。
+        val cache = FakeCache()
+        cache.save(key, CachedKdbxFile("fresh".toByteArray(), null))
+        val delegate = source("fresh".toByteArray(), token = "etag-2")
+
+        val bytes = CachedKdbxFileSource(delegate, cache, key, backgroundScope).readRemoteCurrent()
+
+        assertArrayEquals("fresh".toByteArray(), bytes)
+        assertEquals(1, delegate.readCount)
+    }
+
+    @Test
     fun `readRemoteCurrent必须把缓存换成这一版`() = runTest {
         val cache = FakeCache()
         cache.save(key, CachedKdbxFile("stale".toByteArray(), "etag-1"))

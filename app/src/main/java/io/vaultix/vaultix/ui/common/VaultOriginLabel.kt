@@ -101,6 +101,15 @@ data class VaultCardInfo(
      * **没有任何地方告诉他**。这正是本项目最忌讳的那种"静默"。
      */
     val syncBadge: SyncBadge? = null,
+
+    /**
+     * ⋮ 菜单「同步」项旁的四色状态点（null = 常态，不显示）。
+     *
+     * 挂在 [VaultCardInfo] 上是为了不改调用链：⋮ 下拉菜单本来就收它。
+     * 与 [syncBadge] 的分工：角标回答「云端现在什么情况」，状态点回答
+     * 「我点下去会发生什么」——所以状态点用的是同一份持久状态，但配色与文案独立。
+     */
+    val syncDot: SyncStatusDot? = null,
 )
 
 /**
@@ -159,6 +168,7 @@ fun vaultCardInfoOf(vault: VaultSummary, itemCount: Int): VaultCardInfo = VaultC
         null
     },
     syncBadge = SyncBadge.of(vault.syncStatus),
+    syncDot = SyncStatusDot.of(vault.syncStatus),
 )
 
 @Composable
@@ -178,9 +188,72 @@ fun syncBadgeLabel(badge: SyncBadge): String = stringResource(
  */
 @Composable
 fun syncBadgeColor(badge: SyncBadge): Color = when (badge) {
-    SyncBadge.FAILED, SyncBadge.CONFLICT -> MaterialTheme.colorScheme.error
+    SyncBadge.FAILED -> MaterialTheme.colorScheme.error
+    // ★ 冲突与失败分开染色（2026-11-04）：两者要用户做的事不同 ——
+    //   失败是「重试」，冲突是「选保留哪一版」。染成同一个红等于抹掉这条信息。
+    SyncBadge.CONFLICT -> MaterialTheme.colorScheme.primary
     SyncBadge.REMOTE_CHANGED -> MaterialTheme.colorScheme.primary
     SyncBadge.PENDING -> MaterialTheme.colorScheme.onSurfaceVariant
+}
+
+/**
+ * ⋮ 菜单「同步」项旁的四色状态点（2026-11-04）。
+ *
+ * 与 [SyncBadge] 刻意分开：角标是「常态告知」，状态点是「动作旁的状态」。
+ * 数据源同是 `vaults.syncStatus`，但配色、文案与读屏描述独立。
+ */
+enum class SyncStatusDot {
+    FAILED,
+    SUCCESS,
+    SYNCING,
+    CONFLICT,
+    ;
+
+    companion object {
+        /** 纯函数映射，可 JVM 单测。常态 `IN_SYNC` 由 UI 决定短暂显示，不常驻。 */
+        fun of(status: KdbxCloudSyncStatus?): SyncStatusDot? = when (status) {
+            KdbxCloudSyncStatus.CONFLICT -> CONFLICT
+            KdbxCloudSyncStatus.FAILED -> FAILED
+            KdbxCloudSyncStatus.SYNCING -> SYNCING
+            KdbxCloudSyncStatus.IN_SYNC -> SUCCESS
+            else -> null
+        }
+    }
+}
+
+@Composable
+fun syncStatusDotLabel(dot: SyncStatusDot): String = stringResource(
+    when (dot) {
+        SyncStatusDot.FAILED -> R.string.sync_dot_failed
+        SyncStatusDot.SUCCESS -> R.string.sync_dot_success
+        SyncStatusDot.SYNCING -> R.string.sync_dot_syncing
+        SyncStatusDot.CONFLICT -> R.string.sync_dot_conflict
+    },
+)
+
+/** 读屏描述：只靠颜色区分状态，色盲与读屏用户拿不到状态，必须配文案。 */
+@Composable
+fun syncStatusDotDescription(dot: SyncStatusDot): String = stringResource(
+    when (dot) {
+        SyncStatusDot.FAILED -> R.string.sync_dot_cd_failed
+        SyncStatusDot.SUCCESS -> R.string.sync_dot_cd_success
+        SyncStatusDot.SYNCING -> R.string.sync_dot_cd_syncing
+        SyncStatusDot.CONFLICT -> R.string.sync_dot_cd_conflict
+    },
+)
+
+/**
+ * 红=失败、绿=成功、黄=同步中、蓝=冲突。
+ *
+ * ⚠️ 琥珀/绿用固定中深色：MD3 没有 success/warning 语义色，亮黄在浅底几乎看不见。
+ *    状态词与圆点同色且始终成对出现，即使圆点对比度不足也能读到状态。
+ */
+@Composable
+fun syncStatusDotColor(dot: SyncStatusDot): Color = when (dot) {
+    SyncStatusDot.FAILED -> MaterialTheme.colorScheme.error
+    SyncStatusDot.CONFLICT -> MaterialTheme.colorScheme.primary
+    SyncStatusDot.SYNCING -> Color(0xFFB26A00)
+    SyncStatusDot.SUCCESS -> Color(0xFF2E7D32)
 }
 
 /** KDBX 的来源分类（解析结果；供 UI 与单测共用）。 */

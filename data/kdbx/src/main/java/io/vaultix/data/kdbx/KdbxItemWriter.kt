@@ -606,15 +606,20 @@ internal object KdbxItemWriter {
     }
 
     /**
-     * 上一轮（`before`）会产出的全部工具区键名（`VPX_URL_n` / `VPX_MATCH_n` / 应用字段对）。
+     * 上一轮（`before`）会产出的全部工具区键名（`KP2A_URL_n` / `VPX_MATCH_n` / 应用字段对），
+     * **外加历史口径的 `VPX_URL_n`**（只清不写，见 [KdbxToolFields.legacyUrlKeys]）。
      *
-     * 全部走 [KdbxToolFields] 的两个产出函数重算一遍 —— **不另抄一份键名清单**，
-     * 抄一份就会与写侧漂移（那正是 W1 立`KdbxFieldKeys` 单一真源要治的病）。
+     * 全部走 [KdbxToolFields] 的产出函数重算一遍 —— **不另抄一份键名清单**，
+     * 抄一份就会与写侧漂移（那正是 W1 立 `KdbxFieldKeys` 单一真源要治的病）。
+     *
+     * ⚠️ 不清理历史键的后果不是"多几个字段"：[KdbxToolFields.extras] 对同一 n
+     *    是历史前缀优先，残留的 `VPX_URL_2` 会把新写下的 `KP2A_URL_2` 盖掉。
      */
     private fun previousToolKeys(before: VaultItem?): List<String> {
         if (before == null) return emptyList()
         return LinkedHashSet<String>().apply {
             addAll(KdbxToolFields.fromUris(before.uris).keys)
+            addAll(KdbxToolFields.legacyUrlKeys(before.uris))
             addAll(KdbxToolFields.appFieldsOf(before.uris).keys)
         }.toList()
     }

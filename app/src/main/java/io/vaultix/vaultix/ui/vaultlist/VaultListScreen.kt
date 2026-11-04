@@ -635,11 +635,13 @@ private fun KdbxSyncStatusLine(status: KdbxCloudSyncStatus?) {
             R.string.kdbx_sync_pending_upload to MaterialTheme.colorScheme.onSurfaceVariant
         KdbxCloudSyncStatus.REMOTE_CHANGED ->
             R.string.kdbx_sync_remote_changed to MaterialTheme.colorScheme.onSurfaceVariant
-        // 下面三个都是"需要用户处理" ⇒ 用 error 色跳出来（与 CloudSyncIcon 同一约定）。
+        // 下面三个都是"需要用户处理"：失败/待再传用 error 跳出来；
+        // ★ 冲突用 primary（蓝）—— 与列表角标、⋮ 菜单状态点同一套配色，
+        //   把「重试」和「选保留哪一版」区分开（2026-11-04 全项目统一）。
         KdbxCloudSyncStatus.PENDING_UPLOAD_WITH_LOCAL_CHANGES ->
             R.string.kdbx_sync_pending_upload_local_changes to MaterialTheme.colorScheme.error
         KdbxCloudSyncStatus.CONFLICT ->
-            R.string.kdbx_sync_conflict to MaterialTheme.colorScheme.error
+            R.string.kdbx_sync_conflict to MaterialTheme.colorScheme.primary
         KdbxCloudSyncStatus.FAILED ->
             R.string.kdbx_sync_failed to MaterialTheme.colorScheme.error
         // 「仅本地」= 还没配网盘。用次要色：它是个中性事实，不是问题。

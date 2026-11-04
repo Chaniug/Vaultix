@@ -55,4 +55,18 @@ class SyncBadgeTest {
         // null：**本地 SAF 库**（或从未同步）—— 它根本没有云端这回事。
         assertThat(SyncBadge.of(null)).isNull()
     }
+
+    @Test
+    fun `菜单同步项的四色状态点逐态映射`() {
+        assertThat(SyncStatusDot.of(KdbxCloudSyncStatus.FAILED)).isEqualTo(SyncStatusDot.FAILED)
+        assertThat(SyncStatusDot.of(KdbxCloudSyncStatus.CONFLICT)).isEqualTo(SyncStatusDot.CONFLICT)
+        assertThat(SyncStatusDot.of(KdbxCloudSyncStatus.SYNCING)).isEqualTo(SyncStatusDot.SYNCING)
+        // 成功是常态：映射出来，但由 UI 决定只短暂显示，不常驻。
+        assertThat(SyncStatusDot.of(KdbxCloudSyncStatus.IN_SYNC)).isEqualTo(SyncStatusDot.SUCCESS)
+        // 待上传 / 仅本地 / 非网盘库 ⇒ 菜单安静，不给状态点。
+        assertThat(SyncStatusDot.of(KdbxCloudSyncStatus.PENDING_UPLOAD)).isNull()
+        assertThat(SyncStatusDot.of(KdbxCloudSyncStatus.PENDING_UPLOAD_WITH_LOCAL_CHANGES)).isNull()
+        assertThat(SyncStatusDot.of(KdbxCloudSyncStatus.LOCAL_ONLY)).isNull()
+        assertThat(SyncStatusDot.of(null)).isNull()
+    }
 }

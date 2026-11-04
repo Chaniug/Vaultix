@@ -47,6 +47,7 @@ import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.QrCode2
+import androidx.compose.material.icons.filled.Circle
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
@@ -123,7 +124,11 @@ import io.vaultix.vaultix.ui.common.EntryCardTitleLineHeight
 import io.vaultix.vaultix.ui.common.ItemFormDialog
 import io.vaultix.vaultix.ui.common.PressAndSwipeToDelete
 import io.vaultix.vaultix.ui.common.SelectionActionBar
+import io.vaultix.vaultix.ui.common.SyncStatusDot
 import io.vaultix.vaultix.ui.common.SiteIcon
+import io.vaultix.vaultix.ui.common.syncStatusDotColor
+import io.vaultix.vaultix.ui.common.syncStatusDotDescription
+import io.vaultix.vaultix.ui.common.syncStatusDotLabel
 import io.vaultix.vaultix.ui.common.TopBarTitle
 import io.vaultix.vaultix.ui.common.VaultixExpressiveTopBar
 import io.vaultix.vaultix.ui.common.VaultixSearchTopAppBar
@@ -1270,6 +1275,19 @@ private fun ItemsMoreMenu(
     onLock: () -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
+    // 绿点（同步成功）只在状态刚变成 IN_SYNC 后短暂显示：成功是常态，
+    // 常驻的绿点两周后就会被用户当成背景噪音忽略掉（与 SyncNoteBanner 的 2s 同一口径）。
+    var successVisible by remember { mutableStateOf(false) }
+    LaunchedEffect(vaultCard?.syncDot) {
+        successVisible = vaultCard?.syncDot == SyncStatusDot.SUCCESS
+        if (successVisible) {
+            kotlinx.coroutines.delay(NOTE_DISMISS_DELAY_MS)
+            successVisible = false
+        }
+    }
+    val menuSyncDot = vaultCard?.syncDot?.takeIf {
+        it != SyncStatusDot.SUCCESS || successVisible
+    }
     Box {
         IconButton(onClick = { expanded = true }) {
             Icon(
@@ -1307,7 +1325,11 @@ private fun ItemsMoreMenu(
                 onOpenFolders()
             }
             MenuGroupTitle(R.string.items_menu_group_actions)
-            MenuAction(Icons.Filled.Refresh, R.string.items_sync) {
+            MenuAction(
+                icon = Icons.Filled.Refresh,
+                labelRes = R.string.items_sync,
+                trailing = { SyncDotIndicator(menuSyncDot) },
+            ) {
                 expanded = false
                 onRetrySync()
             }
@@ -1413,6 +1435,8 @@ private fun MenuAction(
     icon: ImageVector,
     @StringRes labelRes: Int,
     destructive: Boolean = false,
+    /** 行尾状态（同步状态点）。null 时整块不渲染，保持菜单安静。 */
+    trailing: @Composable (() -> Unit)? = null,
     onClick: () -> Unit,
 ) {
     DropdownMenuItem(
@@ -1437,8 +1461,36 @@ private fun MenuAction(
                 },
             )
         },
+        trailingIcon = trailing,
         onClick = onClick,
     )
+}
+
+/**
+ * 「同步」项行尾的四色状态点：**圆点 + 状态词 + 读屏描述**三者成对。
+ *
+ * ⚠️ 只给颜色是不够的：色盲用户与读屏用户拿不到状态，所以 `Icon` 的
+ *    `contentDescription` 用的是完整一句（含「点按重试」这类可行动指引），
+ *    而不是把状态词再念一遍。
+ */
+@Composable
+private fun SyncDotIndicator(dot: SyncStatusDot?) {
+    if (dot == null) return
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            text = syncStatusDotLabel(dot),
+            style = MaterialTheme.typography.labelSmall,
+            color = syncStatusDotColor(dot),
+            maxLines = 1,
+        )
+        Spacer(Modifier.width(Spacing.xs))
+        Icon(
+            imageVector = Icons.Filled.Circle,
+            contentDescription = syncStatusDotDescription(dot),
+            tint = syncStatusDotColor(dot),
+            modifier = Modifier.size(UiSize.MicroIcon),
+        )
+    }
 }
 
 /**
@@ -1843,7 +1895,20 @@ private fun SyncNoteBanner(
     ) {
         when (note) {
             ItemsViewModel.SyncNote.InProgress -> {
-                VaultixWavyProgressBar(modifier = Modifier.fillMaxWidth())
+                // 此前这里只有一条波浪进度条、零文字：真机 18:08 那次「提示有更新
+                // → 条目出现」中间空了 36 秒，界面全程没说在等什么。
+                Column {
+                    VaultixWavyProgressBar(modifier = Modifier.fillMaxWidth())
+                    Text(
+                        text = stringResource(R.string.items_sync_in_progress),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(
+                            horizontal = Spacing.lg,
+                            vertical = UiSize.TightGap,
+                        ),
+                    )
+                }
             }
             is ItemsViewModel.SyncNote.Warning -> {
                 Row(

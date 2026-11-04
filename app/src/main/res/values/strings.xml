@@ -164,6 +164,20 @@
     <string name="vault_sync_badge_failed">上传失败</string>
     <string name="vault_sync_badge_conflict">有冲突</string>
     <string name="vault_sync_badge_remote_changed">云端有更新</string>
+    <!-- 菜单「同步」项的四色状态点（2026-11-04）：圆点 + 状态词 + 读屏描述。
+         ⚠️ 成功态只在完成后短暂显示，不常驻 —— 常驻的绿点会变成被忽略的背景噪音。
+         颜色与状态词必须成对出现：只靠颜色区分，色盲与读屏用户拿不到状态。 -->
+    <string name="sync_dot_failed">同步失败</string>
+    <string name="sync_dot_success">同步成功</string>
+    <string name="sync_dot_syncing">正在同步</string>
+    <string name="sync_dot_conflict">同步冲突</string>
+    <string name="sync_dot_cd_failed">同步失败，点按重试</string>
+    <string name="sync_dot_cd_success">同步成功</string>
+    <string name="sync_dot_cd_syncing">正在同步，请稍候</string>
+    <string name="sync_dot_cd_conflict">同步冲突，需要选择保留哪一版</string>
+    <!-- 同步进行中：此前 InProgress 横幅只有一条波浪进度条、零文字，
+         等待全程没有交代（真机 18:08 那次「提示有更新 → 条目出现」中间空了 36 秒）。 -->
+    <string name="items_sync_in_progress">正在加载云端版本，解密可能需要几秒…</string>
     <string name="vault_item_count_only">%1$d 个条目</string>
     <!-- ⋮ 菜单的动作分组标题（2026-09-30 方案 B）：把"去哪"与"做什么"分开。
          「锁定」不归任何一组，单独用分隔线隔开（破坏性动作不挨着常用动作）。 -->

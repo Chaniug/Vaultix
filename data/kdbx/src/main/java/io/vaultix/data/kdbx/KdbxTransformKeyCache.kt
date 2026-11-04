@@ -63,17 +63,24 @@
  * 两条 30 秒 Argon2 抢内存带宽，谁都慢一倍。光有 LRU 挡不住这个窗口，
  * 必须让「同一个 key 正在算」这件事对后来者可见。
  *
- * ## 缓存 key 为什么是「整份文件的哈希 + compositeKey 的哈希」
+ * ## 缓存 key 为什么是「KDF 参数段 + compositeKey」（2026-11-04 改）
  *
- * `transformedKey = KDF(文件头里的 KDF 参数, compositeKey)`。要判「能不能复用」，
- * 就得判这两样有没有变。逐字段读 `KdfParameters` 既脆（kotpass 内部类型，
- * 带 name mangling）又容易漏字段 —— 漏一个就会拿旧密钥去解新文件，
- * 表现是「密码明明对却说密码错」，比慢更难查。
+ * `transformedKey = KDF(文件头里的 KDF 参数, compositeKey)` —— **只依赖这两样，
+ * 与条目内容无关**。旧实现取整份文件字节的 SHA-256，把两种「文件变了」混为一谈：
+ * ① KeePassXC 改了一个条目同步下来（KDF 参数没变，本可复用）；
+ * ② 保存时 `regenerateVectors` 换了 KDF 种子（必须重算）。
+ * 后果是**每次跨设备同步都白跑一遍 Argon2**，而真机最慢的库要 30 秒。
+ * 用户原话：「手机打开和电脑同样处于 OneDrive 的数据时候，也能够快速解锁」。
  *
- * 取**整份字节的 SHA-256** 是最保守的等价判据：文件变了（同步拉到新版本、
- * 保存后 `regenerateVectors` 换了 KDF 种子）必然 miss ⇒ 老实重算；
- * 文件没变必然可以复用。30 KB 做一次 SHA-256 是微秒级，
- * 与真机 Argon2 的 **30 秒**不在一个量级。
+ * KDBX 4 的 header 是明文 TLV（sig1 4B + sig2 4B + version 2B 之后开始），
+ * id=11 就是 KdfParameters。取**整段原始 TLV 字节**（含 id / size / data）做判据：
+ * 不解析 VariantDictionary 内部结构 ⇒ 不存在「逐字段读漏一个」的风险，
+ * 任何一个参数字节变化都必然得到不同的 key；条目内容变化则完全不影响 key。
+ * 这同时回答了旧注释的顾虑：不用碰 kotpass 的 `KdfParameters` 内部类。
+ *
+ * ⚠️ 提取失败（非 KDBX4 / 文件损坏 / 头部异常）一律**回退整份文件哈希**：
+ *    最坏只是多跑一次 KDF，绝不会拿不确定的判据去复用密钥。
+ *    [enabled] = false 仍是完整的逃生开关。
  *
  * ⚠️ 只记**派生结果**（32 字节），不记主密码、不记 keyfile、不记明文条目。
  *    内存一份（进程级 LRU），磁盘一份（Keystore 加密，见 [DerivedKeyDiskCache]）。
@@ -115,6 +122,20 @@ internal object KdbxTransformKeyCache {
 
     /** `Byte.toInt()` 会符号扩展，转十六进制前必须先掩掉高位的 1。 */
     private const val BYTE_MASK = 0xff
+
+    /** KDBX 固定头长度：`Signature` 8B + `FormatVersion` 4B，之后是 TLV 区。 */
+    private const val HEADER_TLV_START = 12
+
+    /** KDBX 4 每个 TLV 项的头：1B id + 4B 小端长度。 */
+    private const val TLV_HEAD_SIZE = 5
+
+    private const val TLV_END_OF_HEADER = 0
+
+    /** `KdfParameters`（VariantDictionary）在 KDBX 4 header 中的字段 id。 */
+    private const val TLV_KDF_PARAMETERS = 11
+
+    /** KDBX 文件签名 `03 D9 A2 9A 67 FB 4B B5`（存成 Int 便于逐字节无符号比对）。 */
+    private val KDBX_SIGNATURE = intArrayOf(0x03, 0xD9, 0xA2, 0x9A, 0x67, 0xFB, 0x4B, 0xB5)
 
     /**
      * 全局开关（安全取舍的出口，见文件头 KDoc）。
@@ -160,8 +181,13 @@ internal object KdbxTransformKeyCache {
      */
     private val inFlight = ConcurrentHashMap<String, CompletableFuture<ByteArray>>()
 
-    /** 给**这一份文件字节**配一个 KDF provider（每个 decode 调用点各取一个）。 */
-    fun providerFor(bytes: ByteArray): KdfProvider = CachingProvider(digest(bytes))
+    /**
+     * 给这一份文件配一个 KDF provider（每个 decode 调用点各取一个）。
+     *
+     * 判据只取 [kdfDigest]：KeePassXC 改条目不会改变 KDF 参数段，因此同步下来的
+     * 新版本仍命中同一条缓存 —— 这正是「跨设备同步后不用重跑 Argon2」的落点。
+     */
+    fun providerFor(bytes: ByteArray): KdfProvider = CachingProvider(kdfDigest(bytes))
 
     /**
      * 给 **encode** 配的 provider：此时新文件字节还没产出，查不了缓存（而且
@@ -171,7 +197,7 @@ internal object KdbxTransformKeyCache {
     internal fun captureProvider(): CapturedKdf = CapturedKdf()
 
     /**
-     * encode 产完字节后，把捕获的 `transformedKey` 按「新文件字节 + compositeKey」写缓存。
+     * encode 产完字节后，把捕获的 `transformedKey` 按「新文件 KDF 参数段 + compositeKey」写缓存。
      *
      * 只认**恰好一次**派生：零次（没跑到 KDF）/ 多次（kotpass 换了内部实现）都放弃提交 ——
      * 写错一条缓存的代价是「密码明明对却说密码错」，比多跑一次 KDF 难查得多。
@@ -179,7 +205,7 @@ internal object KdbxTransformKeyCache {
     internal fun commitCaptured(capture: CapturedKdf, bytes: ByteArray) {
         if (!enabled || bytes.isEmpty()) return
         val (compositeKey, derivedKey) = capture.snapshot() ?: return
-        val key = keyOf(digest(bytes), compositeKey)
+        val key = keyOf(kdfDigest(bytes), compositeKey)
         synchronized(entries) { entries[key] = derivedKey.copyOf() }
         // 与 computeJoined 同一口径：写盘失败只是少一次优化，不能让保存失败。
         runCatching { disk?.save(key, derivedKey) }
@@ -211,7 +237,7 @@ internal object KdbxTransformKeyCache {
      * 查找顺序刻意固定为「**内存 → 落盘 → 并发占位 → 真跑 KDF**」：
      * 先查最便宜的，最后才让一条线程去付那 30 秒。
      *
-     * @param contentDigest 整份文件字节的 SHA-256。
+     * @param contentDigest [kdfDigest] 的结果（KDF 参数段摘要；提取失败时为整份文件摘要）。
      * @param compositeKey kotpass 算出的 composite key（**不是**主密码明文）。
      * @param compute 真正跑 KDF 的动作；只在未命中时调用。
      */
@@ -354,9 +380,63 @@ internal object KdbxTransformKeyCache {
         }
     }
 
-    /** 缓存 key 的**唯一**公式：内容摘要 + 凭据摘要，再整体哈希。 */
+    /** 缓存 key 的**唯一**公式：判据摘要 + 凭据摘要，再整体哈希。 */
     private fun keyOf(contentDigest: ByteArray, compositeKey: ByteArray): String =
         digest(contentDigest + digest(compositeKey)).toHex()
+
+    /**
+     * 判据摘要：只取决定 `transformedKey` 的 KDF 参数段；取不到就回退整份文件。
+     *
+     * 回退是 **fail-closed** 的：非 KDBX4 / 头部损坏 / 截断，一律按最保守的
+     * 全文件哈希处理（多跑一次 KDF），绝不拿不确定的判据去复用密钥。
+     */
+    private fun kdfDigest(bytes: ByteArray): ByteArray =
+        digest(kdfParametersBlock(bytes) ?: bytes)
+
+    /**
+     * 从 KDBX 4 明文 header 里取 id=11 `KdfParameters` 的**整段原始 TLV 字节**
+     * （含 id / 长度 / VariantDictionary 数据）。
+     *
+     * 布局核实自 kotpass `DatabaseHeader.readHeaderValue`（`D:/Vaultix-refs/kotpass`）：
+     * `Signature` 8B + `FormatVersion` 4B（`minor:Short` + `major:Short`）⇒ TLV 从 12 起；
+     * major ≥ 4 时长度字段是 4B 小端。不解析 VariantDictionary 内部结构，
+     * 因此任何一个 KDF 参数字节变化都会改变判据，且不存在「逐字段读漏一个」的风险。
+     */
+    private fun kdfParametersBlock(bytes: ByteArray): ByteArray? {
+        if (!isKdbx4(bytes)) return null
+        var offset = HEADER_TLV_START
+        while (offset + TLV_HEAD_SIZE <= bytes.size) {
+            val id = bytes[offset].toInt() and BYTE_MASK
+            val size = readUInt32Le(bytes, offset + 1) ?: return null
+            val endLong = offset.toLong() + TLV_HEAD_SIZE + size
+            if (endLong > bytes.size) return null
+            val end = endLong.toInt()
+            // EndOfHeader 之前没找到 KDF 参数 ⇒ 不是可判定的头，回退全文件哈希。
+            if (id == TLV_END_OF_HEADER) return null
+            if (id == TLV_KDF_PARAMETERS) return bytes.copyOfRange(offset, end)
+            offset = end
+        }
+        return null
+    }
+
+    /** 只认 KDBX 4（major=4）；签名不对或版本不是 4 都返回 false。 */
+    private fun isKdbx4(bytes: ByteArray): Boolean {
+        if (bytes.size < HEADER_TLV_START) return false
+        for (index in KDBX_SIGNATURE.indices) {
+            if ((bytes[index].toInt() and BYTE_MASK) != KDBX_SIGNATURE[index]) return false
+        }
+        // major 是第 2 个 Short（小端），位于 10..11。
+        return bytes[10] == 4.toByte() && bytes[11] == 0.toByte()
+    }
+
+    /** 4B 小端无符号长度；用 Long 承载，避免符号扩展把大长度读成负数绕过边界检查。 */
+    private fun readUInt32Le(bytes: ByteArray, at: Int): Long? {
+        if (at + 4 > bytes.size) return null
+        return (bytes[at].toLong() and 0xffL) +
+            ((bytes[at + 1].toLong() and 0xffL) shl 8) +
+            ((bytes[at + 2].toLong() and 0xffL) shl 16) +
+            ((bytes[at + 3].toLong() and 0xffL) shl 24)
+    }
 
     private fun digest(input: ByteArray): ByteArray =
         MessageDigest.getInstance("SHA-256").digest(input)

@@ -93,21 +93,31 @@ internal object KdbxToolFields {
     /** 工具字段前缀（与 [KdbxFieldKeys.TOOL_PREFIX] 同源，此处为码本自留常量）。 */
     const val PREFIX = "VPX_"
 
-    /** 多余 URI 的落法：`VPX_URL_1` / `VPX_URL_2` …（第 0 条进标准 `Url`）。 */
+    /**
+     * 旧写侧口径 `VPX_URL_n`：**只用于识别与清理历史字段，不再产出**。
+     *
+     * 用户明确「只支持最新版、老库不迁移」，所以写侧不再产出它、也不为它做迁移；
+     * 但读侧保留识别是零成本的，且能防"老库里的多余网址在 Vaultix 里凭空消失"。
+     * 写出时由 data:repository 的 `previousToolKeys` 按双前缀口径清掉，收敛成单套。
+     */
     const val URL_PREFIX = PREFIX + "URL_"
 
     /**
-     * 额外网址的**生态键名**：`KP2A_URL_1` / `KP2A_URL_2` …（**只读不写**）。
+     * 额外网址的**生态键名**，也是本应用写侧的**唯一出口**：`KP2A_URL_1` / `KP2A_URL_2` …
      *
      * KeePassXC 的 `BitwardenReader.cpp` 把第 2 条起的网址写成
-     * `EntryAttributes::AdditionalUrlAttribute + "_" + n`，而那个常量正是 `KP2A_URL`。
-     * 于是所有"用 KeePassXC 从 Bitwarden 迁过来"的库，多出来的网址都躺在这个键名下。
+     * `EntryAttributes::AdditionalUrlAttribute + "_" + n`，而那个常量正是 `KP2A_URL`；
+     * 条目编辑 →「浏览器集成 → 附加 URL」UI 读写的也是这一套。KeePass2Android 同名，
+     * ⇒ 收敛到它 = 一次改动同时通 KeePassXC 与 KP2A 两家。
      *
-     * 本应用写的是 [URL_PREFIX]（私有前缀，因为要跟 `VPX_MATCH_n` 成对、且不冒认
-     * KeePass2Android 的归属）；但**读**必须同时认这一套，否则那批库的多网址
-     * 在 Vaultix 里只剩第一条。
+     * ⚠️ 私有字段只留生态里没有对应物的部分：`VPX_MATCH_n`（Bitwarden 的 match 档位）、
+     *    `VPX_BW_ID/TYPE/ORG/COLLECTIONS`、`VPX_PW_HISTORY_n`、`VPX_TIME_MS`。
+     *    这些是「Bitwarden 往返无损」的旁路信息，KeePassXC 不认也无所谓，绝不能为兼容而清掉。
      */
-    const val LEGACY_URL_PREFIX = "KP2A_URL_"
+    const val ECO_URL_PREFIX = "KP2A_URL_"
+
+    /** 读侧沿用的名字（`isAdditionalUrlKey` / `extras`），与 [ECO_URL_PREFIX] 同值。 */
+    const val LEGACY_URL_PREFIX = ECO_URL_PREFIX
 
     /**
      * Bitwarden 条目 id（保往返幂等 —— 转两次不会得到两个新条目）。
@@ -570,7 +580,8 @@ internal object KdbxToolFields {
             IDENTITY_MERGED_KEYS.any { name.equals(IDENTITY_PREFIX + it, ignoreCase = true) }
 
     /**
-     * 多余 URI 的匹配规则：`VPX_MATCH_n`（与 [URL_PREFIX] 同下标）。
+     * 多余 URI 的匹配规则：`VPX_MATCH_n`（与 [ECO_URL_PREFIX] 同下标）。
+     * KeePass 生态没有「每条 URI 各自的匹配档位」这个概念，只能私有携带。
      *
      * ⚠️ 为什么连匹配规则也要存：Bitwarden 每条 URI 都带 `match`（0–5），
      * 丢了它自动填充的匹配档位就会**退回默认「基域匹配」** —— 用户会突然发现
@@ -665,15 +676,16 @@ internal object KdbxToolFields {
      *
      * 纯 web 列表时，旧口径产出的 `n` **恰好等于原始下标**（"第 0 条进 `Url`、
      * 其余从 1 起"与"原始下标"是同一个数），两种口径完全等价。
-     * ⇒ 没必要为了统一而给每条登录都镶一个 `VPX_URL_0`：那是**纯冗余**，
+     * ⇒ 没必要为了统一而给每条登录都镶一个 `KP2A_URL_0`：那是**纯冗余**，
      *   还会让老库/新库在同一份数据上产出不同的字节（破坏"值没变就一个字都不动"）。
      *
-     * ## 兼容：`VPX_URL_0` 的存在即"新格式"标记
+     * ## 兼容：`KP2A_URL_0` 的存在即"新格式"标记
      *
-     * 旧格式从不写 `VPX_URL_0`（第 0 条进标准 `Url`）。读侧见到它就按新口径
-     * 重建整个列表（并忽略标准 `Url`，避免第一条重复），见不到就走旧口径。
+     * 纯 web 列表从不写 `KP2A_URL_0`（第 0 条进标准 `Url`）。含应用 URI 时才按
+     * 完整列表写下 `_0..n`；读侧见到 `_0` 就重建整个列表并忽略标准 `Url`，
+     * 避免第一条重复。键名换成生态键后这个判据原样成立，不需要额外标记字段。
      *
-     * @return 键值对；`VPX_URL_n` 与 `VPX_MATCH_n` 按同一 `n` 成对产出。
+     * @return 键值对；[ECO_URL_PREFIX] 与 [MATCH_PREFIX] 按同一 `n` 成对产出。
      */
     fun fromUris(uris: List<VaultUri>): Map<String, String> {
         val usable = uris.filter { it.uri.trim().isNotEmpty() }
@@ -682,7 +694,7 @@ internal object KdbxToolFields {
         // 触发条件只有"含应用 URI"：只有它无法用旧口径表达（旧口径会把它整条滤掉）。
         if (usable.any { isAndroidAppUri(it.uri) }) {
             usable.forEachIndexed { index, uri ->
-                out["$URL_PREFIX$index"] = uri.uri
+                out["$ECO_URL_PREFIX$index"] = uri.uri
                 uri.match?.let { match -> out["$MATCH_PREFIX$index"] = match.name }
             }
             return out
@@ -690,11 +702,31 @@ internal object KdbxToolFields {
         // 旧口径：第 0 条归标准 `Url`，只把它的 match 存下来（`Url` 装不下匹配规则）。
         usable.drop(1).forEachIndexed { offset, uri ->
             val n = offset + 1
-            out["$URL_PREFIX$n"] = uri.uri
+            out["$ECO_URL_PREFIX$n"] = uri.uri
             uri.match?.let { match -> out["$MATCH_PREFIX$n"] = match.name }
         }
         usable.first().match?.let { match -> out["${MATCH_PREFIX}0"] = match.name }
         return out
+    }
+
+    /**
+     * 历史写侧口径会产出的 URL 键名（`VPX_URL_0..n`）——**只用于清理，不再产出**。
+     *
+     * ## 为什么不能省（2026-11-04 收敛到生态键时定位的坑）
+     *
+     * 写侧改成 [ECO_URL_PREFIX] 后，若 `previousToolKeys` 只重算新键名，
+     * 历史库里的 `VPX_URL_n` **不会被删**；而 [extras] 对同一 n 是历史前缀优先
+     * ⇒ 残留的旧网址会把刚写下的新网址**盖掉**，且界面毫无异常。
+     * 清理不是"支持老库"，是"写出时不留下会咬人的旧值"。
+     *
+     * 下标规则必须与旧版 [fromUris] 完全一致：含应用 URI ⇒ 完整列表 `_0..size-1`；
+     * 纯 web ⇒ 第 0 条在标准 `Url`，只有 `_1..size-1`。
+     */
+    fun legacyUrlKeys(uris: List<VaultUri>): Set<String> {
+        val usable = uris.filter { it.uri.trim().isNotEmpty() }
+        if (usable.isEmpty()) return emptySet()
+        val start = if (usable.any { isAndroidAppUri(it.uri) }) 0 else 1
+        return (start until usable.size).mapTo(LinkedHashSet()) { "$URL_PREFIX$it" }
     }
 
     // ---------------------------------------------------------------- 读方向
@@ -704,11 +736,11 @@ internal object KdbxToolFields {
      *
      * ## 两种口径，靠 `VPX_URL_0` 是否存在分流（2026-11-01）
      *
-     * - **新格式**（本应用 2026-11-01 起写的库）：`VPX_URL_0..n` 是**完整列表**，
-     *   按下标排序即原顺序。此时**忽略标准 `Url`** —— 它只是一份给外部工具看的
+     * - **完整列表**（含应用 URI 时写出）：`KP2A_URL_0..n`（历史库可能是 `VPX_URL_0..n`）
+     *   是完整列表，按下标排序即原顺序。此时**忽略标准 `Url`** —— 它只是一份给外部工具看的
      *   冗余副本，重复计入会让第一条网址出现两次。
-     * - **旧格式 / 第三方库**：没有 `VPX_URL_0`。标准 `Url` 是第 0 条，
-     *   `VPX_URL_1..n` 是其余的，`KP2A_URL_n`（KeePassXC）也在这个分支里被收进来。
+     * - **常规 / 第三方库**：没有 `_0`。标准 `Url` 是第 0 条，
+     *   `KP2A_URL_1..n`（KeePassXC 与本应用写侧）以及历史 `VPX_URL_1..n` 是其余的。
      *
      * @param standardUrl 标准 `Url` 字段的值（可能为空）。
      * @param toolFields 其余全部字段的键值对（调用方负责先剥掉 OTP / 通行密钥区）。
@@ -716,7 +748,7 @@ internal object KdbxToolFields {
      */
     fun toUris(standardUrl: String, toolFields: Map<String, String>): List<VaultUri> {
         val extra = extras(toolFields)
-        // 新格式判据：`VPX_URL_0` 存在（旧格式从不写它）。
+        // 完整列表判据：`_0` 存在（常规写法从不写它，第 0 条在标准 `Url` 里）。
         if (extra.any { (n, _) -> n == 0 }) {
             return extra.map { (n, uri) -> VaultUri(uri = uri, match = matchOf(toolFields, n)) }
         }
@@ -733,7 +765,7 @@ internal object KdbxToolFields {
     }
 
     /**
-     * 工具字段表 → 额外 URI 列表（`VPX_URL_n` → 归一化键名，**已按 n 升序**）。
+     * 工具字段表 → 额外 URI 列表（两套 URL 键 → 归一化键名，**已按 n 升序**）。
      *
      * 单独暴露是因为写侧也要用同一套下标规则（`fromUris` 与本函数必须成对）。
      *
@@ -745,8 +777,10 @@ internal object KdbxToolFields {
      */
     fun extras(toolFields: Map<String, String>): List<Pair<Int, String>> {
         val byIndex = LinkedHashMap<Int, String>()
-        // ⚠️ 两套前缀都要扫，**本应用产出的 `VPX_URL_n` 优先**（同一 n 两处都有值时取它）。
-        //    `KP2A_URL_n` 是 KeePassXC 从 Bitwarden 导入时写的，见 [LEGACY_URL_PREFIX]。
+        // ⚠️ 两套前缀都要扫：写侧只产 [ECO_URL_PREFIX]，`VPX_URL_n` 仅历史库遗留。
+        //    同一 n 两处都有时取历史键优先 —— 老库首次读到的就是它自己的完整列表，
+        //    写出时由 previousToolKeys 清掉历史键，下次便收敛成单套生态键。
+        //    `KP2A_URL_n` 同时是 KeePassXC 从 Bitwarden 导入时写的键，见 [LEGACY_URL_PREFIX]。
         listOf(URL_PREFIX, LEGACY_URL_PREFIX).forEach { prefix ->
             toolFields.entries
                 .mapNotNull { (key, value) ->
