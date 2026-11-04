@@ -25,7 +25,6 @@ import androidx.compose.material.icons.filled.Pin
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -285,30 +284,15 @@ private fun ViewLockedContent(
     //   「指纹 → 输主密码 → 两步验证」三段里的按钮高度从此一致（审计 §2.3）。
     PrimaryActionButton(
         text = stringResource(R.string.quick_unlock_biometric_button),
+        // ★ #247：忙碌态的解释文案放按钮里，页面不再另画一个转圈 ——
+        //   `busy` 本身就会在按钮内渲染一个圈，再加一个就是「两个圈」。
+        busyText = stringResource(R.string.unlock_view_lock_verifying),
         onClick = onAuthenticate,
         enabled = !submitting,
         busy = submitting,
         icon = Icons.Filled.Fingerprint,
         toned = true,
     )
-    if (submitting) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(top = Spacing.lg),
-        ) {
-            CircularProgressIndicator(
-                modifier = Modifier.size(UiSize.InlineProgress),
-                strokeWidth = UiSize.InlineProgressStroke,
-            )
-            Text(
-                // ★ #245：这里**不做派生**（密钥已在内存），只等一次生物识别。
-                //   复用「正在派生密钥并解锁…（约需 1–3 秒）」会让用户以为卡在运算上。
-                text = stringResource(R.string.unlock_view_lock_verifying),
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(start = Spacing.sm),
-            )
-        }
-    }
     unlockErrorText(error)?.let { message ->
         Text(
             text = message,
@@ -463,18 +447,12 @@ private fun PasswordForm(
         )
     }
 
-    if (state.submitting) {
-        // ⚠️ 2026-09-13 用户反馈：冷启动自动走指纹时，这一页还挂着
-        // 「正在派生密钥并解锁…（约需 1–3 秒）」那串小字，很影响观感。
-        // 现在只留一个转圈：主密码派生确实要等，但**不需要一句解释**；而走本地
-        // 快速解锁（指纹）时压根没有"派生密钥"这回事，那句文案更是误导。
-        CircularProgressIndicator(
-            modifier = Modifier
-                .padding(top = Spacing.sm)
-                .size(UiSize.InlineProgress),
-            strokeWidth = UiSize.InlineProgressStroke,
-        )
-    }
+    // ★ #247：**不再在这里另画一个转圈**。主按钮的 `busy = state.submitting`
+    //   已经在按钮内渲染了一个圈（并顺带禁用 + 给读屏播「正在处理」），
+    //   再叠一个独立圈就是用户真机截图里的「两个加载圈」。
+    //   解释文案也不补回来：主密码派生要等，但一句「约需 1–3 秒」在真机
+    //   30 秒 KDF 面前是误导；走指纹快速解锁时更压根没有「派生密钥」这回事。
+    //   ⇒ 全页唯一的忙碌指示 = 主按钮里那一个圈。
 
     // ⚠️ 间距取 12dp 而不是原来的 24dp：指纹图标自己带 8dp 垂直留白，
     // 再叠 24dp 会让「密码框 → 指纹 → 解锁按钮」这一段松散成三截。

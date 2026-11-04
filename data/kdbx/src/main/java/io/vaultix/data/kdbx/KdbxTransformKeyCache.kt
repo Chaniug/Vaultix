@@ -34,7 +34,19 @@
  * | 切库 / 退后台 / 超时锁定后重新解锁 | 1 次完整 Argon2 | 命中，0 次 |
  * | 一次解锁里 `verify` + `unlock` | 2 次 | 1 次 |
  * | fanout 顺带开多个库 | 每库 1 次 | 每库首次 1 次，之后 0 次 |
- * | 进程冷启动 | 1 次 | 仍是 1 次（内存缓存随进程消失，省不掉） |
+ * | **同 key 并发**（autoRestore × fanout） | 两条各跑一遍 30 秒 | single-flight 合并，只跑一遍 |
+ * | 进程冷启动 | 1 次 | **落盘缓存命中，0 次**（见 [DerivedKeyDiskCache]） |
+ *
+ * ## 为什么还需要 single-flight（用户真机日志的判据）
+ *
+ * ```
+ * 15:38:38.578 unlock ... open=32000ms 累计命中 0 / 未命中 2
+ * 15:38:41.466 unlock ... open=30381ms
+ * ```
+ *
+ * 两条解锁几乎同时起步，都在对方把结果写进缓存之前查了一次 ⇒ 双双 miss，
+ * 两条 30 秒 Argon2 抢内存带宽，谁都慢一倍。光有 LRU 挡不住这个窗口，
+ * 必须让「同一个 key 正在算」这件事对后来者可见。
  *
  * ## 缓存 key 为什么是「整份文件的哈希 + compositeKey 的哈希」
  *
@@ -46,25 +58,24 @@
  * 取**整份字节的 SHA-256** 是最保守的等价判据：文件变了（同步拉到新版本、
  * 保存后 `regenerateVectors` 换了 KDF 种子）必然 miss ⇒ 老实重算；
  * 文件没变必然可以复用。30 KB 做一次 SHA-256 是微秒级，
- * 与 Argon2 的几百毫秒不在一个量级。
+ * 与真机 Argon2 的 **30 秒**不在一个量级。
  *
- * ⚠️ 只记**派生结果**（32 字节），不记主密码、不记 keyfile、不记明文条目，
- *    且**只活在内存、绝不落盘**。进程一死全部消失。
+ * ⚠️ 只记**派生结果**（32 字节），不记主密码、不记 keyfile、不记明文条目。
+ *    内存一份（进程级 LRU），磁盘一份（Keystore 加密，见 [DerivedKeyDiskCache]）。
  *
  * ## ★ 安全取舍（必须让用户知道，不能悄悄做）
  *
  * 缓存**不随 `Kdbx.lock()` 清除** —— 清了就等于没做，用户抱怨的正是
- * 「锁定之后再解锁很慢」。代价是：锁库之后，这 32 字节派生密钥仍留在进程内存里，
+ * 「锁定之后再解锁很慢」。代价是：锁库之后，这 32 字节派生密钥仍能被取回，
  * 拿到它 + 库字节就能解开库。
  *
- * 这与本项目已有的取舍同量级：`Never` 档下房钥匙本来就常驻内存，
- * 且 `AutoViewGate` 的 KDoc 写明用户已接受「密钥只在内存、系统锁屏是防线」。
- * 差别只是把「锁库 = 密钥彻底不可达」放宽成「锁库 = 清掉整库明文，
- * 但保留一条 32 字节的派生密钥」。
+ * 落盘那一份的暴露面与 `AutoUnlockKeyStore`（「从不」档自动恢复）同级，
+ * 且**不比已有的快速解锁房间信封更弱** —— 后者落盘的是主密码本身。
+ * 完整对照与开关见 [installKdbxDerivedKeyDiskCache] 的文件头 KDoc。
  *
- * ⇒ 提供 [enabled] 全局开关：要恢复严格语义，置 false 即可（一行代码，
- *    后续接设置项也只是把它绑到一个偏好上）。[clear] 供登出 / 删除库 /
- *    主密码变更这类「应当彻底忘记」的时机调用。
+ * ⇒ [enabled] 是全局开关（置 false 连落盘一起禁）；[attachDisk] 决定落不落盘。
+ *    [clear] 默认**只清内存**（超时全锁走它，不能连盘一起删，否则又变 30 秒）；
+ *    `clear(includeDisk = true)` 供退出数据库 / 删除库这类「彻底忘记」的时机调用。
  * ---------------------------------------------------------------------------
  */
 package io.vaultix.data.kdbx
@@ -75,6 +86,9 @@ import io.vaultix.common.logging.VaultixLog
 import java.security.MessageDigest
 import java.util.Collections
 import java.util.LinkedHashMap
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ExecutionException
 import java.util.concurrent.atomic.AtomicLong
 
 internal object KdbxTransformKeyCache {
@@ -114,17 +128,50 @@ internal object KdbxTransformKeyCache {
         },
     )
 
+    /**
+     * 落盘缓存（进程启动时由 [installKdbxDerivedKeyDiskCache] 安装；纯 JVM 单测为 null）。
+     *
+     * ⚠️ `@Volatile`：安装发生在 `Application.onCreate`（主线程），读取在 IO 线程。
+     */
+    @Volatile
+    private var disk: DerivedKeyDiskCache? = null
+
+    /**
+     * 「这个 key 正在被谁算」—— single-flight 的占位表。
+     *
+     * 值是一个**尚未完成**的 Future：抢到 `putIfAbsent` 的线程负责跑 KDF，
+     * 后来者阻塞在 `get()` 上复用同一份结果。算完（成功或异常）立即 `remove`，
+     * 之后的调用走正常的内存 / 落盘命中路径。
+     */
+    private val inFlight = ConcurrentHashMap<String, CompletableFuture<ByteArray>>()
+
     /** 给**这一份文件字节**配一个 KDF provider（每个 decode 调用点各取一个）。 */
     fun providerFor(bytes: ByteArray): KdfProvider = CachingProvider(digest(bytes))
 
-    /** 彻底忘记（登出 / 删除库 / 改主密码）。 */
-    fun clear() {
+    /** 安装 / 卸载落盘缓存（app 启动时调用一次；传 null 即退回纯内存语义）。 */
+    internal fun attachDisk(cache: DerivedKeyDiskCache?) {
+        disk = cache
+    }
+
+    /**
+     * 清空内存 LRU 与并发占位。
+     *
+     * ⚠️ 默认**不动落盘缓存**：`Kdbx.lockAll()`（超时全锁 / 用户全锁）走这里，
+     *    连盘一起删的话，用户下一次解锁又要等 30 秒 Argon2 —— 正是要修的毛病。
+     *    `includeDisk = true` 只由 `Kdbx.forgetDerivedKeys()`（退出数据库 / 删库）使用。
+     */
+    fun clear(includeDisk: Boolean = false) {
         synchronized(entries) { entries.clear() }
+        inFlight.clear()
+        if (includeDisk) disk?.clear()
     }
 
     /**
      * 缓存的核心判据，抽出来是为了**脱离 `KdfParameters` 也能单测**
      * （那个类型是 kotpass 的抽象类，测试里造不出实例）。
+     *
+     * 查找顺序刻意固定为「**内存 → 落盘 → 并发占位 → 真跑 KDF**」：
+     * 先查最便宜的，最后才让一条线程去付那 30 秒。
      *
      * @param contentDigest 整份文件字节的 SHA-256。
      * @param compositeKey kotpass 算出的 composite key（**不是**主密码明文）。
@@ -141,17 +188,78 @@ internal object KdbxTransformKeyCache {
         }
         // 两段哈希拼起来再哈希：任何一段变了都会得到完全不同的 key。
         val key = digest(contentDigest + digest(compositeKey)).toHex()
-        val cached = synchronized(entries) { entries[key]?.copyOf() }
-        if (cached != null) {
+        memoryOf(key)?.let { cached ->
             hits.incrementAndGet()
-            VaultixLog.d(TAG) { "派生密钥缓存命中 ⇒ 本次解码跳过 KDF" }
+            VaultixLog.d(TAG) { "派生密钥内存缓存命中 ⇒ 本次解码跳过 KDF" }
             return cached
         }
-        val computed = compute()
+        disk?.load(key)?.takeIf { it.isNotEmpty() }?.let { fromDisk ->
+            hits.incrementAndGet()
+            synchronized(entries) { entries[key] = fromDisk.copyOf() }
+            VaultixLog.d(TAG) { "派生密钥落盘缓存命中 ⇒ 冷启动跳过 KDF" }
+            return fromDisk
+        }
+        // 空结果 / 解不开的密文一律当作「没有」：宁可再付一次 KDF，
+        // 也绝不把一段可疑字节当成 transformedKey 交给 kotpass。
+        return computeJoined(key, compute)
+    }
+
+    private fun memoryOf(key: String): ByteArray? =
+        synchronized(entries) { entries[key]?.copyOf() }
+
+    /**
+     * single-flight：同 key 只有一条线程真去跑 KDF，其余等它。
+     *
+     * ⚠️ 不用 `ConcurrentHashMap.computeIfAbsent` 直接在 mapping 里算：
+     *    那会**持着 bin 锁跑 30 秒**，不同 key 撞到同一 bin 时会被无辜拖住，
+     *    resize 期间还有死锁风险。改成「抢占位 → 抢到的人算 → 其余 get()」，
+     *    占位本身是 O(1) 且立刻返回。
+     *
+     * ⚠️ `transformKey` 是 kotpass 的**同步**接口，这里不能 `await`；
+     *    阻塞调用线程是唯一选择（它本来也要等这 30 秒，且跑在 IO 调度器上）。
+     */
+    @Suppress("TooGenericExceptionCaught") // 连 Error 也要 completeExceptionally，否则等待者永远挂住
+    private fun computeJoined(key: String, compute: () -> ByteArray): ByteArray {
+        val mine = CompletableFuture<ByteArray>()
+        val owner = inFlight.putIfAbsent(key, mine)
+        if (owner != null) {
+            val joined = awaitOwner(owner)
+            hits.incrementAndGet()
+            VaultixLog.d(TAG) { "派生密钥并发合并 ⇒ 复用同一次 KDF" }
+            return joined.copyOf()
+        }
+        val computed = try {
+            compute()
+        } catch (error: Throwable) {
+            mine.completeExceptionally(error)
+            inFlight.remove(key, mine)
+            throw error
+        }
         synchronized(entries) { entries[key] = computed.copyOf() }
+        // 写盘失败绝不能把「解锁成功」翻成「解锁失败」：缓存只是优化，不是前置条件。
+        // 实现内部已吞异常，这里再兜一层，防将来换实现时漏掉。
+        runCatching { disk?.save(key, computed) }
         misses.incrementAndGet()
         VaultixLog.d(TAG) { "派生密钥缓存未命中 ⇒ 执行 KDF（缓存 ${entries.size}/$MAX_ENTRIES 条）" }
+        mine.complete(computed.copyOf())
+        inFlight.remove(key, mine)
         return computed
+    }
+
+    /**
+     * 等待另一位线程算完；把 `Future` 的检查异常还原成**原始**异常。
+     *
+     * 单独成函数是为了不把 `computeJoined` 顶过 detekt `ThrowsCount`（上限 2）：
+     * 这里两个 throw、那边一个，各自都在限内；更重要的是「等待者怎么失败」
+     * 本来就是与「负责者怎么算」无关的一件事。
+     */
+    private fun awaitOwner(owner: CompletableFuture<ByteArray>): ByteArray = try {
+        owner.get()
+    } catch (error: ExecutionException) {
+        throw error.cause ?: error
+    } catch (error: InterruptedException) {
+        Thread.currentThread().interrupt()
+        throw error
     }
 
     private class CachingProvider(private val contentDigest: ByteArray) : KdfProvider {

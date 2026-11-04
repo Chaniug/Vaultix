@@ -8,11 +8,13 @@ import coil.ImageLoaderFactory
 import dagger.hilt.android.HiltAndroidApp
 import io.vaultix.common.logging.LogLevel
 import io.vaultix.common.logging.VaultixLog
+import io.vaultix.data.kdbx.installKdbxDerivedKeyDiskCache
 import io.vaultix.vaultix.di.KdbxCloudSyncInitializer
 import io.vaultix.vaultix.security.AutoLockController
 import io.vaultix.vaultix.security.AutoRestoreTrigger
 import io.vaultix.vaultix.security.ScreenSecurityGuard
 import io.vaultix.vaultix.security.VaultLockManager
+import java.io.File
 import javax.inject.Inject
 
 /**
@@ -112,6 +114,12 @@ class VaultixApplication : Application(), ImageLoaderFactory {
                 LogLevel.ERROR -> Log.e(tag, message, throwable)
             }
         }
+        // ★ #247 派生密钥落盘缓存（冷启动秒解，见 KdbxDerivedKeyDiskCache.kt 的取舍说明）。
+        //   ⚠️ 必须在**任何解锁动作之前**装好：AutoRestoreTrigger / autofill fanout
+        //   在进程启动后几毫秒就开始 decode，晚一步它们就只能实跑一遍 30 秒 Argon2。
+        //   目录在 app 私有 filesDir 下；密文由 Keystore 里不可导出的 AES 密钥包裹。
+        //   传 enabled = false 即可整条关掉，退回「派生密钥只在内存」的旧语义。
+        installKdbxDerivedKeyDiskCache(File(filesDir, "kdf_derived"))
         // 自动锁定：进程前台/后台事件（Docs/10 §4）
         ProcessLifecycleOwner.get().lifecycle.addObserver(autoLockController)
         // 锁定事件 → 导航回根代次。**必须显式启动**（2026-10-18：原来是 init 里自启，

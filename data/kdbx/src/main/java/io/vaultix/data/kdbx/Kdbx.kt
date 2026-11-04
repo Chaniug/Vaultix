@@ -945,14 +945,21 @@ object Kdbx {
         writeLocks.remove(vaultId)
     }
 
-    /** 彻底忘记所有派生密钥（退出数据库 / 删除库 / 主密码变更）。 */
-    fun forgetDerivedKeys() = KdbxTransformKeyCache.clear()
+    /**
+     * 彻底忘记所有派生密钥（退出数据库 / 删除库 / 主密码变更）。
+     *
+     * ⚠️ 与 [lockAll] 的关键差别：这里**连落盘缓存一起删**。
+     *    用户说"退出数据库"时，语义就是本机不再留任何能解开这个库的东西；
+     *    而超时全锁只是"这一会儿不让看"，盘上那条还得留着，否则下次又是 30 秒。
+     */
+    fun forgetDerivedKeys() = KdbxTransformKeyCache.clear(includeDisk = true)
 
     /** 锁定全部（退出数据库 / 全量锁定）。幂等。 */
     fun lockAll() {
         KdbxSessionStore.closeAll()
         KdbxBaseStore.clearAll()
-        // 全量锁定是「彻底忘记」的时机，派生密钥也不留（单库 lock 不清，见上方 KDoc）。
+        // 全量锁定只清**内存**派生密钥：落盘那份是加密的，且用户马上就会重新解锁，
+        // 删掉它就等于把 #247 的冷启动秒解又作废（见 KdbxTransformKeyCache.clear KDoc）。
         KdbxTransformKeyCache.clear()
         // 自定义图标的字节也随库一起丢：它们是**库内容**，全量锁定之后本机不该再留着。
         // （单个库 lock 不清 —— 见 `KdbxCustomIconStore` 的生命周期说明。）
