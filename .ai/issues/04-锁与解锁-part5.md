@@ -403,7 +403,8 @@ KDF 次数压下去之后，剩下的慢点只剩**网络**。静态排查锁定
 ⇒ 用例断言的是 `%24select=`，含变异验证记录。
 
 - **验证**：`:data:repository` 277 例（新增 `同一个远端库两次解析来源必须拿到同一个实例`）、
-  `:app` OneDrive 48 例（新增 `stat 必须只请求版本令牌那几个字段` / `下载与上传 URL 不得带 select`），0 失败。
+  `:app` 574 例（OneDrive 48 例，新增 `stat 必须只请求版本令牌那几个字段` /
+  `下载与上传 URL 不得带 select`）、`:data:kdbx` 247 例，0 失败；detekt 与 16 个脚本门禁全绿。
 - **仍待真机日志（不猜）**：`adb logcat -s VaultixKdbxCache VaultixKdbx VaultixUnlock` 记录
   ① 点下到开库的耗时；② `read=` 与 `open(KDF+解析)=` 各占多少；③ 是否每次都重新下载整库
   （日志里"无缓存（首次解锁 / 已被清理）⇒ 下载"这行出现几次）。
