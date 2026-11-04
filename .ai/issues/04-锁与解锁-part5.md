@@ -444,8 +444,37 @@ KDF 次数压下去之后，剩下的慢点只剩**网络**。静态排查锁定
 - **仍待真机日志（不猜）**：`adb logcat -s VaultixKdbxCache VaultixKdbx VaultixUnlock` 记录
   ① 点下到开库的耗时；② `read=` 与 `open(KDF+解析)=` 各占多少；③ 是否每次都重新下载整库
   （日志里"无缓存（首次解锁 / 已被清理）⇒ 下载"这行出现几次）。
-- **未做（需用户拍板）**：锁屏/退后台**不销毁 KDBX 会话**（对齐 KeePass2Android 的
-  QuickLock：只锁 UI、数据库对象留内存）。解锁会变成瞬时，代价是锁屏期间整库明文
-  留在内存里。kotpass 的 `Credentials` 只收 passphrase + keyfile，
-  `KeyTransform.transformedKey(...)` 是唯一入口 ⇒「直接存派生密钥跳过 KDF」走不通，
-  除非 fork。
+### 第四批：`Never` 档**本来就是** QuickLock，是解锁侧把 KDF 又跑了一遍
+
+用户第四句：「我也想拥有 keepass2android 那种解锁速度。」
+
+查下来**不需要新造机制**，而是发现既有机制被一处无条件的开库抹掉了：
+
+| 环节 | 现状 |
+|---|---|
+| `Never` 档熄屏 | `AutoViewGate.gateUnlockedVaults()` 只打 `viewLock` 标记，**不动会话**（`VaultSessionManager` 的 KDoc：「挡住屏幕而非销毁会话」）—— 这就是 KeePass2Android 的 `QuickLock` |
+| 解锁侧 | `openKdbxFromRoom` **无条件** `Kdbx.unlock(...)` ⇒ 明明明文在内存里，每次熄屏回来仍把整库重新 Argon2 一遍 |
+
+⇒ 加一条短路：`houseKeyStore.openRoom` 成功**之后**，若 `Kdbx.isUnlocked(vaultId)`，
+直接返回 `RoomUnlockOutcome.Opened`。
+
+⚠️ **短路点必须在 `openRoom` 之后**：那一步才是"认证已通过"的唯一证明
+（它解开了该库的房间信封）。提到前面等于让任何调用方**不认证**就能拿到已解锁状态
+—— 那不是优化，是认证绕过。`会话不在内存_仍然真的走开库路径` 用例守的就是这条。
+
+⚠️ 复用期间内容可能是旧的（熄屏时缓存被后台校验换过）：这与 `CachedKdbxFileSource`
+的既有语义一致 —— 会话反映"打开那一刻的那一版"，同步/保存走 `KdbxBaseStore` 的
+基线判定，不会拿旧内容直接盖远端。
+
+**给用户的配置结论**：把 KDBX 库的「自动锁定」设为 **从不**（`VaultTimeout.Never`，
+每库一份），即可得到 KeePass2Android 的体验 —— 熄屏只要求一次指纹、回来瞬开；
+切后台不挡；冷启动仍走 `AutoViewGate` 门禁 + 一次 KDF（进程被杀，无法避免）。
+
+- **验证**：`:data:repository` **288 例**（新增 `VaultRepositoryRoomUnlockFastPathTest`
+  2 条）、`:app` 574 例、`:data:kdbx` 247 例，0 失败。
+- **仍未做（明确否决过的方向）**：把「N 分钟」档也降级成软锁。那会让用户选的
+  "5 分钟后锁定"变成"5 分钟后遮屏"，是**安全语义降级**，不能用一次性能优化顺手改掉。
+  真要做必须新增独立档位 + 显式开关。
+- **kotpass 的限制仍在**：`Credentials` 只收 passphrase + keyfile，
+  `KeyTransform.transformedKey(...)` 是唯一入口 ⇒「信封直接存派生密钥、彻底跳过 KDF」
+  走不通，除非 fork。所以**冷启动那一次 KDF 无法省掉**。
