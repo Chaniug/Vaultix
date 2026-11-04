@@ -144,6 +144,7 @@ internal object KdbxRoundTrip {
                     inputStream = input,
                     credentials = credentials,
                     cipherProviders = KDBX_CIPHER_PROVIDERS,
+                    kdfProvider = KdbxTransformKeyCache.providerFor(bytes),
                 )
             }
         }.getOrElse { error ->

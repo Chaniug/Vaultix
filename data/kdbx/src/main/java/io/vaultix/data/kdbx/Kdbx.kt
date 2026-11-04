@@ -257,10 +257,14 @@ object Kdbx {
         val readMs = System.currentTimeMillis() - readStartMs
 
         val openStartMs = System.currentTimeMillis()
+        val hitsBefore = KdbxTransformKeyCache.hits()
         val opened = KdbxOpener.open(bytes = bytes, password = password, keyFileBytes = keyFileBytes)
         val openMs = System.currentTimeMillis() - openStartMs
         VaultixLog.d(TAG) {
-            "unlock 耗时分解：read=${readMs}ms（${bytes.size}B）+ open(KDF+解析)=${openMs}ms"
+            "unlock 耗时分解：read=${readMs}ms（${bytes.size}B）+ " +
+                "open(KDF+解析)=${openMs}ms；" +
+                "本次 KDF 缓存命中 ${KdbxTransformKeyCache.hits() - hitsBefore} 次" +
+                "（累计命中 ${KdbxTransformKeyCache.hits()} / 未命中 ${KdbxTransformKeyCache.misses()}）"
         }
         val session = opened.getOrElse { error ->
             return Result.failure(
@@ -922,6 +926,11 @@ object Kdbx {
     /**
      * 锁定单个库（丢弃明文与它的写锁）。幂等。
      *
+     * ⚠️ **不清派生密钥缓存**：那是 #246 第五批「秒解」的关键 —— 清了就等于没做，
+     *    用户抱怨的正是「锁定之后再解锁很慢」。锁库丢掉的是**整库明文**，
+     *    留下的是一条 32 字节的派生结果（只活在内存，见 [KdbxTransformKeyCache]）。
+     *    真要「彻底忘记」走 [lockAll] 或 [forgetDerivedKeys]。
+     *
      * ⚠️ 两步的顺序**不能反**：先 `close` 会话，再丢锁。反过来的话，在两个动作之间
      * 挤进来的写会先 `getOrPut` 造一把**新锁**，而它刚拿到的会话马上就没了 ——
      * 结果是一把没人认领的锁留在 map 里（就是要修的那个泄漏）。按现在的顺序，
@@ -936,10 +945,15 @@ object Kdbx {
         writeLocks.remove(vaultId)
     }
 
+    /** 彻底忘记所有派生密钥（退出数据库 / 删除库 / 主密码变更）。 */
+    fun forgetDerivedKeys() = KdbxTransformKeyCache.clear()
+
     /** 锁定全部（退出数据库 / 全量锁定）。幂等。 */
     fun lockAll() {
         KdbxSessionStore.closeAll()
         KdbxBaseStore.clearAll()
+        // 全量锁定是「彻底忘记」的时机，派生密钥也不留（单库 lock 不清，见上方 KDoc）。
+        KdbxTransformKeyCache.clear()
         // 自定义图标的字节也随库一起丢：它们是**库内容**，全量锁定之后本机不该再留着。
         // （单个库 lock 不清 —— 见 `KdbxCustomIconStore` 的生命周期说明。）
         KdbxCustomIconStore.clear()

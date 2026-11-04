@@ -85,6 +85,10 @@ internal object KdbxOpener {
         formatFailure(bytes)?.let { return Result.failure(it) }
 
         val candidates = buildCredentialCandidates(password = password, keyFileBytes = keyFileBytes)
+        // ★ #246 第五批：同一份文件字节 + 同一组凭据的 KDF 结果可以复用。
+        //   必须在 forEach **外面**建一次：每个候选凭据都试同一个 provider，
+        //   它们的 compositeKey 不同 ⇒ 各自独立命中/未命中（见缓存类 KDoc）。
+        val kdfProvider = KdbxTransformKeyCache.providerFor(bytes)
         val attempted = mutableListOf<String>()
         var lastError: Throwable? = null
         candidates.forEach { candidate ->
@@ -95,6 +99,7 @@ internal object KdbxOpener {
                         inputStream = input,
                         credentials = candidate.credentials,
                         cipherProviders = KDBX_CIPHER_PROVIDERS,
+                        kdfProvider = kdfProvider,
                     )
                 }
             }
@@ -156,6 +161,7 @@ internal object KdbxOpener {
                     inputStream = input,
                     credentials = credentials,
                     cipherProviders = KDBX_CIPHER_PROVIDERS,
+                    kdfProvider = KdbxTransformKeyCache.providerFor(bytes),
                 )
             }
         }.fold(

@@ -537,6 +537,9 @@ class VaultRepositoryImpl @Inject constructor(
         // 1) 内存会话清零（此后 keyOf 为 null，条目列表立刻变空）
         sessions.lock(vaultId)
         Kdbx.lock(vaultId)
+        // 退出数据库是「彻底忘记」的时机：派生密钥缓存也一并清（#246 第五批）。
+        // 全局清会连带其它库，代价只是它们下次解锁多跑一次 KDF，正确性无损。
+        Kdbx.forgetDerivedKeys()
         kdbxSessions.bump()
         // 1b) KDBX 的 keyfile 授权记录：属本地凭据，一并清（下次重新选文件）
         runCatching { preferences.setKdbxKeyFileUri(vaultId, null) }
@@ -566,6 +569,8 @@ class VaultRepositoryImpl @Inject constructor(
         // 1) 内存会话清零（幂等；随后 keyOf 即 null，UI 观察的 unlocked 状态随之消失）
         sessions.lock(vaultId)
         Kdbx.lock(vaultId)
+        // 库都删了，不该再留着能解开它的派生密钥（#246 第五批）。
+        Kdbx.forgetDerivedKeys()
         kdbxSessions.bump()
         // 2) 该库的房间信封与范围镜像（同 signOut 第 2 步：门锁是全局的，不动）
         runCatching { localUnlockEnrollment.removeRoom(vaultId) }
