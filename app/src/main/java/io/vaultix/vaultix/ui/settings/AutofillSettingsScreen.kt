@@ -245,7 +245,7 @@ fun AutofillSettingsScreen(
             text = { Text(stringResource(R.string.setting_manual_fill_tile_hint)) },
             confirmButton = {
                 TextButton(onClick = { tileUnsupported = false }) {
-                    Text(stringResource(R.string.action_done))
+                    Text(stringResource(R.string.action_close))
                 }
             },
         )

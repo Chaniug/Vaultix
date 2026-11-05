@@ -151,7 +151,7 @@ private fun RailItem(
         onClick = { onSelect(item) },
         icon = { Icon(item.icon, contentDescription = label) },
         label = {
-            Text(text = label, maxLines = 2, overflow = TextOverflow.Clip)
+            Text(text = label, maxLines = 1, overflow = TextOverflow.Ellipsis)
         },
         alwaysShowLabel = true,
         // 与悬浮胶囊的选中样式保持一致：关闭漂浮放大 indicator。

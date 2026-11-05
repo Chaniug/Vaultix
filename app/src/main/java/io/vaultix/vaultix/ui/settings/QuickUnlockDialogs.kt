@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.Password
 import androidx.compose.material.icons.filled.Upgrade
 import androidx.compose.material3.BasicAlertDialog
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -55,6 +56,7 @@ import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.BiometricPrompter
 import io.vaultix.vaultix.ui.common.DialogActions
 import io.vaultix.vaultix.ui.common.DialogBackButton
+import io.vaultix.vaultix.ui.common.DialogCloseButton
 import io.vaultix.vaultix.ui.common.DialogEmptyBody
 import io.vaultix.vaultix.ui.common.DialogHeader
 import io.vaultix.vaultix.ui.common.DialogSectionTitle
@@ -436,7 +438,7 @@ private fun PinChangeDoneDialog(controller: QuickUnlockController) {
             )
             Spacer(Modifier.height(Spacing.sm))
             DialogActions {
-                DialogBackButton(controller::dismiss)
+                DialogCloseButton(controller::dismiss)
             }
         }
     }
@@ -643,6 +645,9 @@ private fun AuthenticatingDialog() {
             DialogSectionTitle(
                 title = stringResource(R.string.quick_unlock_authenticating),
                 hint = stringResource(R.string.quick_unlock_authenticating_hint),
+            )
+            CircularProgressIndicator(
+                modifier = Modifier.padding(start = Spacing.xl, top = Spacing.sm),
             )
             Spacer(Modifier.height(Spacing.sm))
         }

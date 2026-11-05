@@ -19,18 +19,14 @@
 package io.vaultix.vaultix.ui.common
 
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.unit.dp
 import io.vaultix.vaultix.ui.theme.UiSize
-
-/** 徽标圆角（小圆角，比胶囊更"标签"；与文字行高匹配）。 */
-private const val BADGE_CORNER_DP = 6
+import io.vaultix.vaultix.ui.theme.VaultixCorner
 
 /**
  * 能力徽标：小圆角 + 容器色低饱和底 + 短文案（通常 2–4 字）。
@@ -43,7 +39,7 @@ fun TypeBadge(text: String, tone: BadgeTone, modifier: Modifier = Modifier) {
     val (container, content) = badgeColors(tone)
     Surface(
         color = container,
-        shape = RoundedCornerShape(BADGE_CORNER_DP.dp),
+        shape = VaultixCorner.Small,
         modifier = modifier,
     ) {
         Text(

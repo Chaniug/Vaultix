@@ -33,7 +33,23 @@
    同族补齐：关闭 PIN 确认、确认导入、防截屏关闭态后果文案。
    详见 [`.ai/SESSION-2026-11-05.md`](../../.ai/SESSION-2026-11-05.md) §6。
 
-**再下一批（未做）**：删除类动作的结果反馈（Snackbar + busy 防连点）、
+**同日第三批：✅ 纯视觉 BUG 13 处已修（用户「还有肉眼可见的 BUG 吗」）**
+五类 `AlertDialog.text` 槽补 `verticalScroll`、`AddVaultTypeDialog` 同色叠 alpha 改
+`surfaceContainerLow`、徽标圆角统一 `VaultixCorner.Small`、Divider 缩进 / 省略号对齐、
+rail 标签统一 1 行 + Ellipsis、认证框补进度圈、失败结果框「完成」→「关闭」、
+三处只读框「返回 / 完成」→「关闭」。详见
+[`.ai/SESSION-2026-11-05.md`](../../.ai/SESSION-2026-11-05.md) §7.1–7.2。
+
+**🔴 再下一批（未做，需动 ViewModel 契约，按收益排序）**：
+1. `VaultListViewModel/Screen` 库列表首帧首启品牌页（全 App 落地页，老用户每次冷启动都撞见）；
+2. `ItemsViewModel/Screen` 密码 Tab 首帧「还没有保存的密码」；
+3. `CardWalletViewModel` 新建/删除零反馈 + `_saving` 无 `finally`（下次打开表单永久转圈）；
+4. `SettingsViewModel` 非可空偏好导致首帧假「开」/ 单选框勾错项；
+5. `Trash` / `CardWallet` 空态塌缩、`Autofill` 磁贴结果回调空实现、
+   `MainActivity` 冷启动主题闪、`SiteIcon` 深色死白圆盘。
+   完整证据见 §7.3。
+
+**更往后**：删除类动作的结果反馈（Snackbar + busy 防连点）、
 滑动删除确认框补条目名、审计里余下的 P2 文案统一。
 
 ---

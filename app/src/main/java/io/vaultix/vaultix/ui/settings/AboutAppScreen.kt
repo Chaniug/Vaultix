@@ -204,7 +204,7 @@ fun AboutAppScreen(
             text = { Text(stringResource(R.string.about_license_body)) },
             confirmButton = {
                 TextButton(onClick = { showLicense = false }) {
-                    Text(stringResource(R.string.action_back))
+                    Text(stringResource(R.string.action_close))
                 }
             },
         )

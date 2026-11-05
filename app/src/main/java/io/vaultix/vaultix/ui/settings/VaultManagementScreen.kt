@@ -471,6 +471,7 @@ private fun VaultActionDialogs(
         )
         is VaultActionsController.Dialog.Result -> VaultActionResultDialog(
             text = actionResultText(dialog.outcome, dialog.vaultName),
+            isSuccess = isSuccessOutcome(dialog.outcome),
             onDismiss = controller::dismiss,
         )
         null -> Unit
@@ -528,16 +529,41 @@ private fun VaultRemoveDialog(
 }
 
 @Composable
-private fun VaultActionResultDialog(text: String, onDismiss: () -> Unit) {
+private fun VaultActionResultDialog(text: String, isSuccess: Boolean, onDismiss: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
         text = { Text(text) },
         confirmButton = {
             TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.action_done))
+                Text(stringResource(if (isSuccess) R.string.action_done else R.string.action_close))
             }
         },
     )
+}
+
+/**
+ * 结果对话框按钮文案的分流：成功类用「完成」，失败类一律「关闭」。
+ *
+ * ⚠️ 这个对话框只**报告结果**（动作已经跑完、没有可取消的东西），按 `DialogShell.kt`
+ * 的纪律：失败结果写「完成」会误导成"事情做成了"。分类以 `VaultActionsController.Outcome`
+ * 实际枚举为准 —— 失败类 = `Failed` / `SyncFailed` / `SyncUnsupported` /
+ * `SyncNeedsUnlock` / `SyncLocked` / `SyncStaleBaseline`（正文都是「失败 / 不支持 /
+ * 需先解锁 / 已暂停」这类），其余为成功或中性的「已… / 一致」。
+ */
+private fun isSuccessOutcome(outcome: VaultActionsController.Outcome): Boolean = when (outcome) {
+    // 全用 `is` 分支：sealed interface 的穷尽性检查在「is 与等值条件混写」时
+    // 偶尔判不出来，本机又跑不了编译 ⇒ 统一写法最稳。data object 也支持 is。
+    is VaultActionsController.Outcome.SyncFailed,
+    is VaultActionsController.Outcome.Failed,
+    is VaultActionsController.Outcome.SyncUnsupported,
+    is VaultActionsController.Outcome.SyncNeedsUnlock,
+    is VaultActionsController.Outcome.SyncLocked,
+    is VaultActionsController.Outcome.SyncStaleBaseline -> false
+    is VaultActionsController.Outcome.Locked,
+    is VaultActionsController.Outcome.SignedOut,
+    is VaultActionsController.Outcome.Removed,
+    is VaultActionsController.Outcome.SyncUnchanged,
+    is VaultActionsController.Outcome.Synced -> true
 }
 
 /** 结果 → 文案（成功与失败都给得出一句话，见 `VaultActionsController.Outcome`）。 */

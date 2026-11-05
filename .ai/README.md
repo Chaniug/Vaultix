@@ -40,8 +40,18 @@
 > `finish()` 全成功时跳过结果页。判据与文件清单见
 > [`SESSION-2026-11-05.md`](./SESSION-2026-11-05.md) §6。
 >
-> **再下一批（未做）**：删除类动作的结果反馈（Snackbar + busy 防连点）、
-> `PressAndSwipeToDelete` 确认框补条目名、以及审计里余下的 P2 文案统一。
+> **同日第三批（已完成）**：13 处纯视觉 BUG —— 五类 `AlertDialog.text` 槽补滚动、
+> `AddVaultTypeDialog` 同色叠 alpha 改换档、徽标圆角统一、Divider/省略号对齐、
+> 认证框补进度、失败结果框「完成」→「关闭」等。详见
+> [`SESSION-2026-11-05.md`](./SESSION-2026-11-05.md) §7.1–7.2。
+>
+> 🔴 **再下一批（未做，需动 ViewModel 契约）**：`VaultList` / `Items` / `Trash` /
+> `CardWallet` 的**首帧假空态**（老用户冷启动先看到「还没有库 / 还没有密码」）、
+> `SettingsViewModel` 非可空偏好导致的首帧假开/勾错项、卡包保存零反馈且
+> `_saving` 无 `finally`、`Autofill` 磁贴结果回调空实现。清单见 §7.3。
+>
+> **更往后**：删除类动作的结果反馈（Snackbar + busy 防连点）、
+> `PressAndSwipeToDelete` 确认框补条目名、审计里余下的 P2 文案统一。
 
 ---
 

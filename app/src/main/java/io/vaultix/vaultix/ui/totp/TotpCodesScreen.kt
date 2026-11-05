@@ -21,9 +21,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
@@ -106,6 +107,7 @@ import io.vaultix.vaultix.ui.common.rememberScrollCollapseFraction
 import io.vaultix.vaultix.ui.common.toggleSelection
 import io.vaultix.vaultix.ui.common.VaultixWavyProgress
 import io.vaultix.vaultix.ui.theme.UiSize
+import io.vaultix.vaultix.ui.theme.VaultixCorner
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import io.vaultix.vaultix.ui.theme.Spacing
@@ -1210,7 +1212,7 @@ private fun TotpRowMenu(
 private fun Badge(bound: Boolean) {
     val text = if (bound) R.string.totp_badge_bound else R.string.totp_badge_standalone
     val color = if (bound) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.tertiary
-    Surface(color = color.copy(alpha = 0.14f), shape = RoundedCornerShape(6.dp)) {
+    Surface(color = color.copy(alpha = 0.14f), shape = VaultixCorner.Small) {
         Text(
             text = stringResource(text),
             style = MaterialTheme.typography.labelSmall,
@@ -1662,7 +1664,7 @@ private fun ImportDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.totp_import_title)) },
         text = {
-            Column {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 Text(
                     text = stringResource(R.string.totp_import_hint),
                     style = MaterialTheme.typography.bodySmall,

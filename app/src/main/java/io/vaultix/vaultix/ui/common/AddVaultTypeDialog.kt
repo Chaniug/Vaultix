@@ -79,7 +79,7 @@ private val VAULT_TYPE_ICON_BOX = 28.dp
  * 且没有"这是一个可点的选项"的视觉暗示（只能靠文字猜）。
  *
  * 现改为**可选卡片**（与设置页 `SettingsRow` 同一套规格：20dp 圆角 +
- * `surfaceContainerHigh` 底 + 28dp 图标槽 + primary 图标 + 右侧箭头），
+ * `surfaceContainerLow` 底 + 28dp 图标槽 + primary 图标 + 右侧箭头），
  * 并套用 `ui/common/DialogShell.kt` 的统一面板。
  *
  * ## 2026-09-17 加第三个入口：从网盘添加
@@ -164,7 +164,7 @@ private fun VaultTypeCard(
             .clickable(onClick = onClick, role = Role.Button),
         shape = VaultixCorner.Panel,
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.55f),
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
         ),
     ) {
         Row(

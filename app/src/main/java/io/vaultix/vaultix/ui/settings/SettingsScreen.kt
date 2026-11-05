@@ -1119,7 +1119,7 @@ private fun ThemeModeDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.setting_theme_mode)) },
         text = {
-            Column {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 ThemeMode.entries.forEach { mode ->
                     SingleChoiceRow(
                         label = themeModeLabel(mode),
@@ -1155,7 +1155,7 @@ private fun ClipboardClearDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.setting_clipboard_clear)) },
         text = {
-            Column {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 SettingsViewModel.CLIPBOARD_PRESETS_MS.forEach { ms ->
                     SingleChoiceRow(
                         label = clipboardClearLabel(ms),
