@@ -126,9 +126,9 @@ internal fun QuickUnlockSettingsRows(
      * （定稿 §8 不写兼容层），不给这句话，用户看到的就是"升级之后快速解锁莫名不能用了"。
      */
     legacyRemains: Boolean,
-    /** 拨「指纹」开关（**点整行等价**）。 */
+    /** 拨「指纹」开关（**只有开关可点**，2026-11-05 起整行不再响应）。 */
     onToggleBiometric: () -> Unit,
-    /** 拨「PIN」开关。 */
+    /** 拨「PIN」开关（同上，只有开关可点）。 */
     onTogglePin: () -> Unit,
     /**
      * 点「修改 PIN」（**只有 PIN 已启用时那一行为可点**）。
@@ -137,8 +137,9 @@ internal fun QuickUnlockSettingsRows(
      * 而设置里只有开关两态，拨一下是**关掉** PIN，重设无处可去。
      *
      * ⚠️ 为什么是**这一行**而不是把开关变成「改」：开关那一路的"开 / 关"语义
-     * 是 2026-09-30 用户拍板过的（"只需要一个打开的按钮"），把它改掉会同时
-     * 推翻下面那段「点整行 = 拨开关」的历史约定；在它旁开一行更省事也更稳。
+     * 是 2026-09-30 用户拍板过的（"只需要一个打开的按钮"），把它改掉会推翻那次约定；
+     * 在它旁开一行更省事也更稳。（2026-11-05 又进一步把「点整行 = 拨开关」去掉，
+     * 现在这一行是开关之外唯一能启动流程的入口。）
      */
     onStartChangePin: () -> Unit,
     /**
@@ -168,10 +169,11 @@ internal fun QuickUnlockSettingsRows(
         //    一样都是猜测，而这一行的副标题恰恰在说"开没开"。
         subtitle = if (state.loaded) biometricSummary(state, canAuthenticate) else null,
         enabled = canAuthenticate,
-        // ★ 2026-09-30 晚（用户要求"只需要一个打开的按钮"）：**整行 = 拨开关**。
-        //   向导删掉之后，"点行"不再有第二种含义，于是整行就是那个按钮
-        //   （热区比开关本身大得多，避免"点了没反应"）。
-        onClick = if (canAuthenticate) onToggleBiometric else null,
+        // ★ 2026-11-05（用户「只需要开关，不需要弹框」）：**整行不再可点**。
+        //   拨开关会启动登记流程（输 PIN / KDBX 主密码 / 系统指纹认证）；
+        //   让整行也响应，等于把一次误触直接变成一串对话框。
+        //   与 SettingsComponents 里「改锁的开关不该点哪都生效」是同一条纪律；
+        //   开关本身已有 48dp 触控目标（SwitchWithTouchTarget），热区不会变小。
         trailing = {
             CapabilityToggle(
                 capability = state.biometric,
@@ -187,7 +189,6 @@ internal fun QuickUnlockSettingsRows(
         icon = { Icon(Icons.Filled.Password, contentDescription = null) },
         title = stringResource(R.string.pin_section_title),
         subtitle = if (state.loaded) pinSummary(state) else null,
-        onClick = onTogglePin,
         trailing = {
             CapabilityToggle(
                 capability = state.pin,
@@ -206,14 +207,16 @@ internal fun QuickUnlockSettingsRows(
         is QuickUnlockController.CapabilityState.On -> true
         is QuickUnlockController.CapabilityState.Off -> false
     }
-    // ⚠️ 这根分隔线是 2026-10-14 补的：加「修改 PIN」行时只补了它**后面**那根，
-    //   PIN 开关行与它之间是光秃秃贴着的 —— [SettingsGroupCard] 的契约是
-    //   "行间用 [SettingsDivider] 分隔"，两行粘成一行读起来像一行两个动作。
-    SettingsDivider()
+    // ⚠️ 分隔线只画到**倒数第二行**为止：末尾那根归调用方
+    //   （UnlockMethodScreen 在本函数之后紧接着画了一根，两边都画会叠成一条粗线）。
+    //   [SettingsGroupCard] 的契约 = 相邻两行之间恰好一根，不多不少。
+    // 两行副标题（2026-11-05）：点开之前就该知道后果，尤其「忘记 PIN？」是破坏性动作。
     if (state.loaded && pinEnabled) {
+        SettingsDivider()
         SettingsRow(
             icon = { Icon(Icons.Filled.Edit, contentDescription = null) },
             title = stringResource(R.string.pin_change),
+            subtitle = stringResource(R.string.pin_change_desc),
             onClick = onStartChangePin,
         )
         SettingsDivider()
@@ -223,9 +226,9 @@ internal fun QuickUnlockSettingsRows(
         SettingsRow(
             icon = { Icon(Icons.Filled.LockReset, contentDescription = null) },
             title = stringResource(R.string.pin_forgot),
+            subtitle = stringResource(R.string.pin_forgot_desc),
             onClick = onForgetPin,
         )
-        SettingsDivider()
     }
 }
 
@@ -242,8 +245,8 @@ internal fun QuickUnlockSettingsRows(
  * ⇒ 修法与那边一致：**不认识就什么都不说**。占位**特意不可点**（而 `SettingsSwitch`
  * 的占位是可点的），因为两者的"点一下"代价不同：那个只是写一个布尔（幂等），
  * 这里的开关是 `toggle` —— 若真实值是 `On`，占位期的一下点击会**把已启用的锁关掉**，
- * 正是要避免的那个方向。占位期的点击**落到整行**（进向导），既没吞掉点击、
- * 也不会误关。
+ * 正是要避免的那个方向。2026-11-05 起整行也**不可点**，
+ * 于是占位期这一下既不会误关、也不会启动流程；数据到达后开关自然可点。
  *
  * ⚠️ 门禁（2026-09-26 #121 的教训，别再犯）：`checked` 必须是 `when` 分派出来的
  * **常量**，不能写成 `capability is CapabilityState.On` —— 后者把多态状态压成二值，

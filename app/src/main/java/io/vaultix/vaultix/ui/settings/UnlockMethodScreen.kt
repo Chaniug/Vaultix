@@ -115,7 +115,7 @@ fun UnlockMethodScreen(
                     state = quickUnlockState,
                     canAuthenticate = deviceCanAuthenticate(context),
                     legacyRemains = legacyRemains,
-                    // 点整行与拨开关等效（向导已删，见 QuickUnlockSettingsRows 的 KDoc）。
+                    // 只有开关能拨（2026-11-05 起整行不再响应，避免误触启动一串对话框）。
                     onToggleBiometric = viewModel.quickUnlock::toggleBiometric,
                     onTogglePin = viewModel.quickUnlock::togglePin,
                     // 「修改 PIN」（#161）：只在 PIN 已启用时才会出现，见 QuickUnlockSettingsRows。

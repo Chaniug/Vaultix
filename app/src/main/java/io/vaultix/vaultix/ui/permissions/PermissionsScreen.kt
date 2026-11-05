@@ -25,15 +25,19 @@ package io.vaultix.vaultix.ui.permissions
 import android.content.Context
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -50,12 +54,13 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -67,6 +72,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -75,7 +82,6 @@ import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.settings.SettingsDivider
 import io.vaultix.vaultix.ui.settings.SettingsGroupCard
 import io.vaultix.vaultix.ui.settings.SettingsGroupTitle
-import io.vaultix.vaultix.ui.settings.SettingsRow
 import io.vaultix.vaultix.ui.theme.Spacing
 import io.vaultix.vaultix.ui.theme.UiSize
 import io.vaultix.vaultix.ui.theme.VaultixCorner
@@ -84,11 +90,23 @@ import io.vaultix.vaultix.util.SystemSettingsIntents
 /**
  * 行尾框的最小宽度（112dp）。
  *
- * 依据：「去设置」= 4 个汉字（`labelLarge` 14sp）+ `TextButton` 左右各 24dp ≈ 104dp，
- * 再留 8dp 余量。之所以写死而不是 `wrapContentWidth`：**它要的是"四行右侧同一条
- * 右边线"**，`wrapContent` 会让每行各贴各的。
+ * 依据：「去设置」= 3 个汉字（`labelLarge` 14sp）+ 左右各 12dp 内边距 ≈ 76dp，
+ * 再留余量给「设备不支持」5 字。之所以写死而不是 `wrapContentWidth`：**它要的是
+ * "四行右侧同一条右边线"**，`wrapContent` 会让每行各贴各的。
  */
 private val TRAILING_MIN_WIDTH = 112.dp
+
+/**
+ * 行内水平内边距 / 图标格 / 图标间距。
+ *
+ * ⚠️ 三个值必须与 `SettingsComponents.kt` 的 `SETTINGS_ROW_PADDING_H`(20dp)、
+ * `SETTINGS_ICON_BOX`(28dp)、`SETTINGS_ICON_GAP`(`UiSize.InlineIcon`) 逐字一致：
+ * [SettingsDivider] 的缩进就是按这三者算的，差 1dp 分隔线就会与文字左缘错开。
+ * 本页自绘行布局是为了让「状态与标题同行」，但**不另起一套尺寸规格**。
+ */
+private val PERMISSION_ROW_PADDING_H = 20.dp
+private val PERMISSION_ICON_BOX = 28.dp
+private val PERMISSION_ICON_GAP = UiSize.InlineIcon
 
 /**
  * 权限引导二级页（设置首页「关于 → 权限管理」进入）。
@@ -132,7 +150,13 @@ fun PermissionsScreen(onBack: () -> Unit) {
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
+    // ★ 2026-11-05：状态卡改成三态 —— ① Denied = 用户能补的「待允许」；
+    //   ② Unavailable = 硬件决定、补不了；③ 两者都为 0 才是「一切就绪」。
+    //   ⚠️ 不能把 ② 混进 ①（单测 `待办计数只数 Denied 不数 Unavailable` 的口径）：
+    //   那会让没有指纹的设备永远显示「有 1 项待允许」、永远到不了「一切就绪」。
+    //   但只数 Denied 又会让「一切就绪」和一行「设备不支持」同屏 ⇒ 拆成两个计数。
     val pendingCount = entries.count { it.state == PermissionState.Denied }
+    val unsupportedCount = entries.count { it.state == PermissionState.Unavailable }
 
     Scaffold(
         topBar = {
@@ -157,7 +181,10 @@ fun PermissionsScreen(onBack: () -> Unit) {
                 .padding(bottom = Spacing.xxl),
         ) {
             // 上下各 `Spacing.md`：与 `AutofillStatusCard` 同一份边距，卡上方不再贴顶栏。
-            PermissionStatusCard(pendingCount = pendingCount)
+            PermissionStatusCard(
+                pendingCount = pendingCount,
+                unsupportedCount = unsupportedCount,
+            )
 
             SettingsGroupTitle(stringResource(R.string.permission_group_needed))
             SettingsGroupCard {
@@ -195,8 +222,9 @@ fun PermissionsScreen(onBack: () -> Unit) {
  * 这次只是把"卡上方 12dp"对齐自动填充页（原本是 0，卡贴着顶栏）。
  */
 @Composable
-private fun PermissionStatusCard(pendingCount: Int) {
-    val allGood = pendingCount == 0
+private fun PermissionStatusCard(pendingCount: Int, unsupportedCount: Int) {
+    val allGood = pendingCount == 0 && unsupportedCount == 0
+    val hasPending = pendingCount > 0
     val container = if (allGood) {
         MaterialTheme.colorScheme.primaryContainer
     } else {
@@ -231,24 +259,35 @@ private fun PermissionStatusCard(pendingCount: Int) {
                     contentDescription = null,
                     tint = content,
                 )
+                // ⚠️ 早先标题用带 %1$d 的字符串却没传实参，权限没开时原样显示
+                //    「有 %1$d 项待允许」（用户看到的"乱码"），而实参反倒错传给了
+                //    不需要参数的副标题。现在两者各归各位。
+                val titleRes = when {
+                    allGood -> R.string.permission_status_all_good
+                    hasPending -> R.string.permission_status_pending
+                    else -> R.string.permission_status_unsupported
+                }
                 Text(
-                    text = stringResource(
-                        if (allGood) {
-                            R.string.permission_status_all_good
-                        } else {
-                            R.string.permission_status_pending
-                        },
-                    ),
+                    text = if (allGood) {
+                        stringResource(titleRes)
+                    } else {
+                        stringResource(
+                            titleRes,
+                            if (hasPending) pendingCount else unsupportedCount,
+                        )
+                    },
                     style = MaterialTheme.typography.titleMedium,
                     color = content,
                 )
             }
             Text(
-                text = if (allGood) {
-                    stringResource(R.string.permission_status_all_good_desc)
-                } else {
-                    stringResource(R.string.permission_status_pending_desc, pendingCount)
-                },
+                text = stringResource(
+                    when {
+                        allGood -> R.string.permission_status_all_good_desc
+                        hasPending -> R.string.permission_status_pending_desc
+                        else -> R.string.permission_status_unsupported_desc
+                    },
+                ),
                 style = MaterialTheme.typography.bodySmall,
                 color = content.copy(alpha = 0.9f),
             )
@@ -259,15 +298,25 @@ private fun PermissionStatusCard(pendingCount: Int) {
 /**
  * 单个权限行：图标 + 标题 + 用途 + 右侧状态/动作。
  *
- * 右侧**按状态与能力分三种**，不让用户猜：
- * - `Granted` 且恒为授予（网络）→ 只给一个「已允许」文本（**陈述**，不给按钮）；
- * - `Granted` → 同样是「已允许」，因为"关掉它"属于极低频操作，不值得在每行放一个
- *   通向系统设置的箭头（Bastion 同处理）；
- * - `Denied` → 给动作按钮：能就地弹系统授权框的写「授予」，否则写「去设置」；
- * - `Unavailable` → 写「设备不支持」，**不给任何按钮**（点了也没用的按钮比没有更糟）。
+ * ## 2026-11-05 重做「设置字符没对齐」
  *
- * 用 [SettingsRow] 的 `trailing` 槽承载右侧，从而与设置页其它行**共用同一套行高与
- * 缩进**（不另起一套规格）。
+ * 之前复用 `SettingsRow` 的 `trailing` 槽，而那个槽**垂直居中于整行**：
+ * 左列是「标题 + 两行副标题」，右列状态因此落在两行之间，看起来比标题低一截；
+ * 再叠加 `TextButton` 自带 24dp 内边距 vs 裸 `Text` 贴边，两种行尾又各贴各的左缘。
+ *
+ * ⇒ 改成 **状态与标题同一行、用途说明在下一行**，右侧所有形态共用一个外框。
+ * 状态于是与标题共享基线，四行的右列必然落在同一条竖线上。
+ *
+ * 三个尺寸常量刻意与 `SettingsRow` 取同值（见常量区 KDoc），好让 [SettingsDivider]
+ * 的缩进正好落在文字左缘 —— 自绘行布局是为了改**对齐关系**，不是另起一套规格。
+ *
+ * 用途说明**不再截断成省略号**：它是这一页存在的理由，用两行半换一个「不…」不划算；
+ * 页面本来就可滚动，四行高度不齐才是真的乱。
+ *
+ * 右侧**按状态与能力分三种**，不让用户猜：
+ * - `Granted`（通知除外）→ 「已允许」陈述；通知项仍给「去设置」（总开关在系统里）；
+ * - `Denied` → 可点动作：能就地弹系统授权框的写「授予」，否则写「去设置」；
+ * - `Unavailable` → 「设备不支持」，**不给任何按钮**（点了也没用的按钮比没有更糟）。
  */
 @Composable
 private fun PermissionRow(
@@ -275,18 +324,52 @@ private fun PermissionRow(
     onRequest: (String) -> Unit,
 ) {
     val context = LocalContext.current
-    SettingsRow(
-        icon = { Icon(iconFor(entry.id), contentDescription = null) },
-        title = stringResource(entry.titleRes),
-        subtitle = stringResource(entry.purposeRes),
-        trailing = {
-            PermissionTrailing(
-                entry = entry,
-                onRequest = onRequest,
-                onOpenSettings = { openSystemPageFor(context, entry.id) },
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = PERMISSION_ROW_PADDING_H, vertical = Spacing.md),
+        verticalAlignment = Alignment.Top,
+    ) {
+        CompositionLocalProvider(
+            LocalContentColor provides MaterialTheme.colorScheme.primary,
+        ) {
+            // 容器与标题行同高（48dp），图标在其中居中 ⇒ 图标与标题文字共享中线。
+            Box(
+                modifier = Modifier
+                    .width(PERMISSION_ICON_BOX)
+                    .height(UiSize.TouchTarget),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = iconFor(entry.id),
+                    contentDescription = null,
+                    modifier = Modifier.size(PERMISSION_ICON_BOX),
+                )
+            }
+        }
+        Spacer(Modifier.width(PERMISSION_ICON_GAP))
+        Column(modifier = Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = stringResource(entry.titleRes),
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.weight(1f),
+                )
+                PermissionTrailing(
+                    entry = entry,
+                    onRequest = onRequest,
+                    onOpenSettings = { openSystemPageFor(context, entry.id) },
+                )
+            }
+            Text(
+                text = stringResource(entry.purposeRes),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = Spacing.xs, end = Spacing.sm),
             )
-        },
-    )
+        }
+    }
 }
 
 /**
@@ -296,18 +379,15 @@ private fun PermissionRow(
  * 也仍然给一个「去设置」入口 —— 只有那里能看到总开关是否被关掉
  * （权限是 GRANTED 但通知发不出来，是最容易让人困惑的一种状态）。
  *
- * ## ⚠️ 2026-10-24 用户反馈「权限管理部分好像还没有对齐」
+ * ## ⚠️ 2026-11-05 二次修「没对齐」
  *
- * 真机截图里四行的右侧**左边缘参差不齐**：`已允许` / `设备不支持` 是裸 `Text`，
- * 直接贴卡片右边；`去设置` 是 `TextButton`，自带 `ButtonHorizontalPadding`（24dp）
- * ⇒ 文字被推左 24dp。同一列里两种缩进 = 一眼就看出"没对齐"（8.4：一屏两套规格
- * 是廉价感的首要来源）。
+ * 2026-10-24 那轮把行尾装进同一个 `TrailingSlot`，但**保留**了 `TextButton`：
+ * 它自带 24dp 内边距，而裸 `Text` 没有 ⇒ 两种行尾的文字左边缘仍差一截，
+ * 整行垂直居中又让状态比标题低一截。真机截图里红框圈出的正是这一列。
  *
- * 修法：**所有行尾内容都装进同一个 `TrailingSlot`** —— 固定最小宽度 + `End` 对齐。
- * 固定宽度的作用是让"已允许"这类短标签也停在同一条右边线上，而不是各自贴边
- * （只做 `End` 对齐仍会因为按钮自带内边距而左边缘错开）。
- * `minimumInteractiveComponentSize` 保住 48dp 触控目标（TextButton 自己满足，
- * 这里只是让两种形态的外框一致）。
+ * ⇒ 这次彻底统一：**不再用 `TextButton`**，可点项改成 `Box + clickable`，
+ * 与纯文本标签共用同一套 `labelLarge`、同一条右边线、同一个 48dp 触控框。
+ * 配合 [PermissionRow] 把状态提到标题行，水平与垂直两条轴线一起对齐。
  */
 @Composable
 private fun PermissionTrailing(
@@ -319,9 +399,10 @@ private fun PermissionTrailing(
         when (entry.state) {
             PermissionState.Granted -> if (entry.id == PermissionIds.NOTIFICATIONS) {
                 // 唯一需要"去看总开关"的已授予项。
-                TextButton(onClick = onOpenSettings) {
-                    Text(stringResource(R.string.permission_action_settings))
-                }
+                TrailingAction(
+                    text = stringResource(R.string.permission_action_settings),
+                    onClick = onOpenSettings,
+                )
             } else {
                 TrailingLabel(
                     text = stringResource(R.string.permission_state_granted),
@@ -329,22 +410,19 @@ private fun PermissionTrailing(
                 )
             }
 
-            PermissionState.Denied -> TextButton(
+            PermissionState.Denied -> TrailingAction(
+                text = stringResource(
+                    if (entry.canRequestInApp) {
+                        R.string.permission_action_grant
+                    } else {
+                        R.string.permission_action_settings
+                    },
+                ),
                 onClick = {
                     val permission = entry.runtimePermission
                     if (permission != null) onRequest(permission) else onOpenSettings()
                 },
-            ) {
-                Text(
-                    stringResource(
-                        if (entry.canRequestInApp) {
-                            R.string.permission_action_grant
-                        } else {
-                            R.string.permission_action_settings
-                        },
-                    ),
-                )
-            }
+            )
 
             PermissionState.Unavailable -> TrailingLabel(
                 text = stringResource(R.string.permission_state_unavailable),
@@ -355,27 +433,44 @@ private fun PermissionTrailing(
 }
 
 /**
- * 行尾内容的统一外框：**固定最小宽度 + 右对齐 + 垂直居中**。
+ * 行尾内容的统一外框：**固定最小宽度 + 48dp 触控高 + 右对齐 + 统一内边距**。
  *
- * 宽度取「去设置」四个字在 `labelLarge` 下的实测宽（含 `TextButton` 的 24dp 内边距）
- * 再留一点余量，让最长的那个标签也不会被压缩换行；短标签则在框内靠右。
- *
- * ⚠️ 这是**布局契约**，不是"随便给个宽度"：换行的后果是行高从 72dp 跳到 96dp，
- * 四行高度不一致比左边缘不齐更难看出原因。
+ * ⚠️ 这是**布局契约**：内边距由外框统一给，两种形态（纯文本 / 可点）的文字右边缘
+ * 因此落在同一条竖线上；`widthIn` 让「已允许」这类短标签也不会各自贴边。
  */
 @Composable
 private fun TrailingSlot(content: @Composable () -> Unit) {
     Box(
         modifier = Modifier
             .widthIn(min = TRAILING_MIN_WIDTH)
-            .heightIn(min = UiSize.TouchTarget),
+            .heightIn(min = UiSize.TouchTarget)
+            .padding(horizontal = Spacing.md),
         contentAlignment = Alignment.CenterEnd,
     ) {
         content()
     }
 }
 
-/** 与按钮同一套字号/字重的纯文本状态（`TextButton` 的 label 就是 `labelLarge`）。 */
+/** 可点的行尾动作：与 [TrailingLabel] 同一套字号，热区覆盖整个外框。 */
+@Composable
+private fun TrailingAction(text: String, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = UiSize.TouchTarget)
+            .clickable(role = Role.Button, onClick = onClick),
+        contentAlignment = Alignment.CenterEnd,
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary,
+            maxLines = 1,
+        )
+    }
+}
+
+/** 纯文本状态（与可点动作同一套字号/字重，避免一屏两种规格）。 */
 @Composable
 private fun TrailingLabel(text: String, color: Color) {
     Text(

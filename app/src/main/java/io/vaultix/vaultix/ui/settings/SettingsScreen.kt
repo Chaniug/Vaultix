@@ -1123,7 +1123,7 @@ private fun ThemeModeDialog(
         },
         confirmButton = {
             TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.action_cancel))
+                Text(stringResource(R.string.action_close))
             }
         },
     )
@@ -1159,7 +1159,7 @@ private fun ClipboardClearDialog(
         },
         confirmButton = {
             TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.action_cancel))
+                Text(stringResource(R.string.action_close))
             }
         },
     )

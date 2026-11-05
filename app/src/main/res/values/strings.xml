@@ -229,7 +229,7 @@
 
     <!-- 添加库 S4 -->
     <string name="add_vault_title">连接 Bitwarden</string>
-    <string name="add_vault_subtitle">输入你的 Bitwarden 账号（自托管可选）</string>
+    <string name="add_vault_subtitle">登录 Bitwarden 账号以解锁云端密码库；自托管服务器也可以连接。</string>
     <string name="add_vault_server">服务器地址</string>
     <string name="add_vault_server_hint">https://vault.bitwarden.com</string>
     <!--
@@ -237,9 +237,13 @@
       美国区 / 欧盟区是**彼此独立的两套环境**（账号不通用），故文案里点明地区。
     -->
     <string name="add_vault_region">服务器区域</string>
-    <string name="add_vault_region_us">美国 · 官方</string>
-    <string name="add_vault_region_eu">欧盟 · 官方</string>
+    <!-- 2026-11-05：三枚 chip 平分屏宽，四字以上标签会折行、行高不齐 ⇒ 收到两字；
+         「官方」由下方地址卡徽标与区域说明承担，信息不丢。 -->
+    <string name="add_vault_region_us">美国</string>
+    <string name="add_vault_region_eu">欧盟</string>
     <string name="add_vault_region_self">自托管</string>
+    <string name="add_vault_region_note">美国与欧盟为 Bitwarden 官方区域，两边账号不通用；自托管请填写自己的服务器地址。</string>
+    <string name="add_vault_account_section">账号</string>
     <string name="add_vault_official_badge">官方</string>
     <string name="add_vault_official_hint">官方云端地址固定，无需修改</string>
     <string name="add_vault_self_hint">https://你的域名</string>
@@ -248,6 +252,7 @@
     <string name="add_vault_password_visible">显示密码</string>
     <string name="add_vault_password_hidden">隐藏密码</string>
     <string name="add_vault_submit">连接并解锁</string>
+    <string name="add_vault_server_note">请确认服务器地址可信；账号凭据只会发送给你选择的服务器。</string>
     <string name="add_vault_working">正在派生密钥并解锁…（约需 1–3 秒）</string>
 
     <!-- 解锁 S6 -->
@@ -364,7 +369,11 @@
     <string name="permission_status_all_good_desc">需要用到的权限都已允许。相机权限只在扫码时用到，可随时在这页查看。</string>
     <!-- 状态卡：还缺几项 -->
     <string name="permission_status_pending">有 %1$d 项待允许</string>
-    <string name="permission_status_pending_desc">下面标了「授予 / 去设置」的项，开启后对应功能才能用。其余功能不受影响。</string>
+    <!-- 2026-11-05：只有「设备不支持」时的第三种状态卡文案。不能混进"待允许"——
+         设备硬件决定的项用户无论怎么做都消不掉；但也不能判成"一切就绪"（页面会自相矛盾）。 -->
+    <string name="permission_status_unsupported">有 %1$d 项设备不支持</string>
+    <string name="permission_status_unsupported_desc">这些能力由设备硬件决定，无法在这页开启；对应功能会保持不可用。</string>
+    <string name="permission_status_pending_desc">下面标了「授予 / 去设置」的项，开启后对应功能才能用；标「设备不支持」的项由设备硬件决定，无法在此开启。</string>
 
     <!-- 相机 -->
     <string name="permission_camera_title">相机</string>
@@ -843,6 +852,7 @@
          确认框正文要把"接下来怎么办"说全 —— 用户此刻证明不了自己是谁，
          清除后唯一的重设路径就是：主密码开门 → 开关拨回 On。 -->
     <string name="pin_forgot">忘记 PIN？</string>
+    <string name="pin_forgot_desc">清除已保存的 PIN；密码库数据不受影响</string>
     <string name="pin_forgot_body">清除后，请用主密码解锁（同时开启指纹则用指纹），再打开「PIN」开关即可设置新的 PIN。已保存的数据不受影响。</string>
     <string name="pin_forgot_confirm">清除 PIN</string>
     <!-- ⚠️ 自 2026-09-15 二次重做起**暂无代码引用**（副标题改说 pin_enabled_digits）。
@@ -887,6 +897,7 @@
          pin_section_hint 向用户承诺「忘记后可在设置里重设」，而设置里只有开关两态，
          拨一下是**关掉** PIN —— 这条串就是那个未兑现的承诺备下的料，如今落了地。 -->
     <string name="pin_change">修改 PIN</string>
+    <string name="pin_change_desc">验证当前 PIN 后设置新 PIN</string>
     <string name="pin_change_done">PIN 已修改，下次解锁请用新 PIN</string>
     <string name="pin_kdbx_title">确认主密码</string>
     <!-- 2026-09-16「一个 PIN 打开全部库」后，这一次输入会被拿去逐个校验**所有** KDBX 库，

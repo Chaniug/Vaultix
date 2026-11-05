@@ -53,6 +53,8 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material3.AlertDialog
@@ -501,8 +503,17 @@ internal fun SingleChoiceRow(label: String, selected: Boolean, onClick: () -> Un
  */
 @Suppress("MagicNumber")
 internal object AutoLockPresets {
-    /** 单选候选（顺序即 UI 顺序）。 */
+    /**
+     * 单选候选（顺序即 UI 顺序）。
+     *
+     * ★ 2026-11-05 用户反馈「从不怎么放到最下面了」：**「从不」提到第一位**。
+     *   它回答的是「要不要自动锁定」这个第一层决策，不是"空闲多久"序列的末端；
+     *   放在十个档位之后，还得先滚到底才看得见，而它恰恰是唯一有安全后果的选项。
+     *   ⇒ 提到最前，用一张 errorContainer 风险卡与下面的时长档位在视觉上分开。
+     *   其余档位仍按「从严到松」排列（照 Bitwarden 菜单）。
+     */
     val VALUES: List<VaultTimeout> = listOf(
+        VaultTimeout.Never,
         VaultTimeout.Immediately,
         VaultTimeout.OneMinute,
         VaultTimeout.FiveMinutes,
@@ -510,11 +521,8 @@ internal object AutoLockPresets {
         VaultTimeout.ThirtyMinutes,
         VaultTimeout.OneHour,
         VaultTimeout.FourHours,
-        // ★ 2026-10-30：顺序照 Bitwarden 的菜单（系统锁屏 → App 重启 → 从不）。
-        //   从严到松，用户从上往下读就是"越来越宽松"。
         VaultTimeout.OnSystemLock,
         VaultTimeout.OnAppRestart,
-        VaultTimeout.Never,
     )
 
     const val MINUTES_PER_HOUR = 60
@@ -648,48 +656,34 @@ internal fun AutoLockDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.setting_auto_lock)) },
         text = {
-            Column {
+            // ⚠️ AlertDialog 的 text 槽**自身不滚动**（SettingsScreen 里已踩过一次）。
+            //    10 个档位 + 2 张说明卡，小屏上不挂 verticalScroll 会被裁掉尾部。
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 AutoLockPresets.VALUES.forEach { timeout ->
                     SingleChoiceRow(
                         label = vaultTimeoutLabel(timeout),
                         selected = timeout == current,
                         onClick = { onSelect(timeout) },
                     )
-                    // ★ 「从不」档的风险提示（2026-09-29）。
-                    //
-                    // 对齐 Bitwarden 官方对 Never 档的 warning。Vaultix 的落地比
-                    // Bitwarden 更保守（离场仍软锁、信封经 Keystore 包裹），但用户仍需知道
-                    // **这个档位的真实含义**：手机解锁着就等于密码库可进。
-                    //
-                    // 只在这一档下显示 —— 它是唯一「回来不需要用户交互」的档位。
-                    // ★ 「系统锁屏时」的说明（2026-10-30）。
-                    //
-                    //   必须写出来，因为这一档**有一个静默失效的场景**：手机没设锁屏密码时
-                    //   系统层面从未"上锁"，本档永远不会触发。不说明，用户就会得到
-                    //   一个"选了但永远没效果"的档位 —— 与 #93「谎报状态的开关」同族。
-                    //   同时也点明它**不防切后台**，避免用户把它当"立即"的替代品。
-                    if (timeout == VaultTimeout.OnSystemLock) {
-                        Text(
-                            text = stringResource(R.string.auto_lock_on_system_lock_note),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(
-                                start = Spacing.xs,
-                                end = Spacing.xs,
-                                bottom = Spacing.xs,
-                            ),
-                        )
-                    }
+                    // ★ 「从不」档的风险提示（2026-09-29 加，2026-11-05 收进卡片）。
+                    //   对齐 Bitwarden 官方对 Never 档的 warning；Vaultix 落地更保守
+                    //   （离场仍软锁、信封经 Keystore 包裹），但用户仍需知道真实含义。
+                    //   裸 Text 直接堆在单选行之间，是这一屏"风格不统一"的来源。
                     if (timeout == VaultTimeout.Never) {
-                        Text(
+                        AutoLockHintCard(
                             text = stringResource(R.string.auto_lock_never_warning),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(
-                                start = Spacing.xs,
-                                end = Spacing.xs,
-                                bottom = Spacing.xs,
-                            ),
+                            warning = true,
+                        )
+                        // 两段之间用留白分段，不用分隔线：它们是「两个段落」而非并列项
+                        //（8.4：分隔线的取舍看两侧是什么关系）。
+                        Spacer(Modifier.height(Spacing.sm))
+                    }
+                    // 「系统锁屏时」有静默失效场景（没设锁屏密码），必须写出来；
+                    //   它是说明而非警告，故用中性底与上面的风险卡区分。
+                    if (timeout == VaultTimeout.OnSystemLock) {
+                        AutoLockHintCard(
+                            text = stringResource(R.string.auto_lock_on_system_lock_note),
+                            warning = false,
                         )
                     }
                 }
@@ -701,9 +695,45 @@ internal fun AutoLockDialog(
             }
         },
         confirmButton = {
+            // 点档位即选中并关闭，没有「可取消的操作」——按定稿口径该叫「关闭」。
             TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.action_cancel))
+                Text(stringResource(R.string.action_close))
             }
         },
     )
+}
+
+/**
+ * 档位说明卡：风险提示用 `errorContainer`，普通说明用 `surfaceContainerLow`。
+ *
+ * 两种底都是 M3 的容器色阶，相对对话框面板（surfaceContainerHigh）**换档**而不是
+ * 同色叠 alpha（8.4）；圆角取 [VaultixCorner.Panel]，与设置页分组卡同一规格。
+ * 左缩进 24dp 加上 text 槽自带的 24dp，卡片左缘正好对齐单选行的文字。
+ */
+@Composable
+private fun AutoLockHintCard(text: String, warning: Boolean) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = Spacing.xl, bottom = Spacing.sm),
+        shape = VaultixCorner.Panel,
+        colors = CardDefaults.cardColors(
+            containerColor = if (warning) {
+                MaterialTheme.colorScheme.errorContainer
+            } else {
+                MaterialTheme.colorScheme.surfaceContainerLow
+            },
+        ),
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodySmall,
+            color = if (warning) {
+                MaterialTheme.colorScheme.onErrorContainer
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
+            modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.sm),
+        )
+    }
 }
