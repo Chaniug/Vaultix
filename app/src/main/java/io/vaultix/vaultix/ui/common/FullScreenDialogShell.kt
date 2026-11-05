@@ -38,6 +38,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.BottomAppBarDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -53,6 +54,9 @@ import androidx.compose.runtime.SideEffect
 // ⚠️ `val barAlpha by animateFloatAsState(...)` 的 `by` 需要这个扩展运算符才能解包 `State<Float>`；
 // 少它 ⇒ 编译器报 `Type 'State<Float>' has no method 'getValue(...)'`（看着像类型错，其实是缺 import）。
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
@@ -151,6 +155,76 @@ import io.vaultix.vaultix.ui.theme.Spacing
 // material3 1.5.0-alpha16 里**还没有** stable 替代品。
 // 选择"显式 OptIn 到具体 API"而不是给整个文件/模块加开关 —— 后者会让以后新引入的实验性
 // API 静默通过门禁。`.ai/tools/check_experimental_optin.py` 会校验这个作用域是否覆盖。
+/**
+ * 「放弃未保存修改？」确认框（两个全屏表单共用）。
+ *
+ * ## 2026-11-05：为什么这道闸门要放在**调用点**而不是壳里
+ *
+ * [FullScreenDialogShell] 的 `onDismiss` 同时服务顶部 ✕、系统返回、点外部和底部「取消」，
+ * 四条路径此前全部直通 —— 填了一屏字段后按返回，输入立即消失。
+ * 但壳**不知道表单有没有被改过**（参数已有 7 个，正卡在 detekt `LongParameterList`
+ * 的上限，不能再加一个 `dirty`）。⇒ 由两个调用点各自判脏、共用这一个确认框。
+ *
+ * 判据是「壳不拦、调用方拦」：不要在这里接 `BackHandler`，否则会和 `Dialog` 自己的
+ * `onDismissRequest` 抢事件。
+ */
+@Composable
+fun DiscardChangesDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.discard_changes_title)) },
+        text = { Text(stringResource(R.string.discard_changes_message)) },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text(
+                    text = stringResource(R.string.discard_changes_confirm),
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.action_continue_edit))
+            }
+        },
+    )
+}
+
+/**
+ * 「关闭前先判脏」的**统一闸门**，返回可直接交给 [FullScreenDialogShell.onDismiss] 的回调。
+ *
+ * 抽出来有两个理由：
+ * ① 两个全屏表单（条目编辑 / 验证码编辑）不该各写一份，否则文案与判据必然漂移；
+ * ② [ItemFormDialog] 贴着 detekt `LongMethod ≤150`，把状态与确认框放在这里，
+ *    调用点只多一行 `rememberDiscardGate(...)`（命名按 Compose 惯例用 remember 前缀，
+ *    因为它返回一个会随组合存活的回调）。
+ *
+ * @param saving 保存中一律不许关（沿用调用方原有的守卫）。
+ * @param isDirty 每次点击时现算，不在组合期缓存快照 —— 表单状态每帧都可能变。
+ */
+@Composable
+fun rememberDiscardGate(
+    saving: Boolean = false,
+    isDirty: () -> Boolean,
+    onDismiss: () -> Unit,
+): () -> Unit {
+    var showConfirm by rememberSaveable { mutableStateOf(false) }
+    if (showConfirm) {
+        DiscardChangesDialog(
+            onConfirm = {
+                showConfirm = false
+                onDismiss()
+            },
+            onDismiss = { showConfirm = false },
+        )
+    }
+    return {
+        if (!saving) {
+            if (isDirty()) showConfirm = true else onDismiss()
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FullScreenDialogShell(

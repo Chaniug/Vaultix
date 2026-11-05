@@ -38,6 +38,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -486,6 +489,33 @@ private fun PinEntryDialog(
         QuickUnlockController.PinMode.Enroll -> R.string.pin_section_title
         QuickUnlockController.PinMode.Change -> R.string.pin_change
     }
+    // ★ 2026-11-05：「修改 PIN」框里的「关闭 PIN 解锁」删的是门锁本身（不可逆），
+    //   此前只靠左置防误触、没有任何确认；而同一个动作的另一个入口（忘记 PIN）
+    //   却有完整的 [PinForgotConfirmDialog]。⇒ 两条入口补齐同一道闸门。
+    var showDisableConfirm by remember { mutableStateOf(false) }
+    if (showDisableConfirm) {
+        BasicAlertDialog(onDismissRequest = { showDisableConfirm = false }) {
+            DialogSurface {
+                DialogHeader(title = stringResource(R.string.pin_disable_confirm_title))
+                DialogSectionTitle(title = stringResource(R.string.pin_disable_confirm_body))
+                Spacer(Modifier.height(Spacing.sm))
+                DialogActions {
+                    Spacer(Modifier.weight(1f))
+                    TextButton(onClick = {
+                        showDisableConfirm = false
+                        controller.disablePinFromChange()
+                    }) {
+                        Text(
+                            text = stringResource(R.string.pin_disable),
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    Spacer(Modifier.width(Spacing.sm))
+                    DialogBackButton { showDisableConfirm = false }
+                }
+            }
+        }
+    }
     BasicAlertDialog(onDismissRequest = controller::dismiss) {
         DialogSurface {
             DialogHeader(title = stringResource(headerRes))
@@ -533,7 +563,7 @@ private fun PinEntryDialog(
                 //   （`DialogActions` 的 content 是 `RowScope`，故这里能直接用 weight。）
                 if (isChange) {
                     Spacer(Modifier.weight(1f))
-                    TextButton(onClick = controller::disablePinFromChange) {
+                    TextButton(onClick = { showDisableConfirm = true }) {
                         Text(
                             text = stringResource(R.string.pin_disable),
                             color = MaterialTheme.colorScheme.error,

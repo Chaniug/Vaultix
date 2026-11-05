@@ -11,6 +11,10 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -19,17 +23,30 @@ import io.vaultix.vaultix.ui.theme.Spacing
 
 /**
  * 回收站自动清理档位（对齐 Bastion TrashSettingsSheet）：0 = 从不，其余 = 保留 N 天。
- * 回收站页顶栏与设置页「数据」组共用同一组件与偏好键（即选即存）。
+ * 回收站页顶栏与设置页「数据」组共用同一组件与偏好键。
  */
 val TRASH_AUTO_DELETE_PRESETS: List<Int> = listOf(0, 7, 30, 90)
 
-/** 自动清理档位设置对话框（radio 单选，即选即存）。 */
+/**
+ * 自动清理档位设置对话框（radio 单选）。
+ *
+ * ## 2026-11-05：从「即选即存」改成「暂存 + 保存才提交」
+ *
+ * 这一项看起来只是调个档位，实际是**唯一会批量永久删除回收站内容**的入口
+ * （`TrashViewModel.init` 会在进回收站时按档位清理）。旧实现点一下 radio 就落库：
+ * ① 用户以为「完成 / 取消」是提交与放弃，其实点过就已经生效；
+ * ② 从「从不」改到「7 天」，下次进回收站超期条目就没了，且**无法恢复**。
+ *
+ * ⇒ 现在 radio 只改 [pendingDays]，点「保存」才回调 [onSelect]；点外部 / 返回 /
+ * 「取消」一律丢弃。hint 也如实写明「永久删除、无法恢复、缩短天数会立即清掉已超期的」。
+ */
 @Composable
 fun TrashAutoDeleteDialog(
     currentDays: Int,
     onSelect: (Int) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    var pendingDays by rememberSaveable(currentDays) { mutableIntStateOf(currentDays) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.trash_auto_delete_title)) },
@@ -39,23 +56,36 @@ fun TrashAutoDeleteDialog(
                     text = stringResource(R.string.trash_auto_delete_hint),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = Spacing.sm),
                 )
                 TRASH_AUTO_DELETE_PRESETS.forEach { days ->
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { onSelect(days) }
+                            .clickable { pendingDays = days }
                             .padding(vertical = Spacing.xs),
                     ) {
-                        RadioButton(selected = days == currentDays, onClick = { onSelect(days) })
-                        Text(text = trashAutoDeleteLabel(days), style = MaterialTheme.typography.bodyMedium)
+                        RadioButton(
+                            selected = days == pendingDays,
+                            onClick = { pendingDays = days },
+                        )
+                        Text(
+                            text = trashAutoDeleteLabel(days),
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
                     }
                 }
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_done)) }
+            TextButton(onClick = {
+                onSelect(pendingDays)
+                onDismiss()
+            }) { Text(stringResource(R.string.action_save)) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
         },
     )
 }

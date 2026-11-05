@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -35,6 +36,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -88,6 +93,34 @@ fun SelectionActionBar(
     onDelete: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    // ★ 2026-11-05：此前批量删除是四个列表里**唯一绕过三重闸门**的路径 ——
+    //   单条删除要「长按选中 → 左滑 → 确认框」，多选底栏却一点就删掉 N 条并立刻清选中。
+    //   确认层放在**共用组件内**而不是四个调用点：一处改动覆盖密码 / 验证码 / 通行密钥 / 卡包，
+    //   也不会出现「某个列表忘了接确认」的漂移。
+    var showConfirm by rememberSaveable { mutableStateOf(false) }
+    if (showConfirm) {
+        AlertDialog(
+            onDismissRequest = { showConfirm = false },
+            title = { Text(stringResource(R.string.batch_delete_title, selectedCount)) },
+            text = { Text(stringResource(R.string.batch_delete_message)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    showConfirm = false
+                    onDelete()
+                }) {
+                    Text(
+                        text = stringResource(R.string.action_delete),
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showConfirm = false }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
+        )
+    }
     Surface(
         modifier = modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.surfaceContainer,
@@ -121,7 +154,7 @@ fun SelectionActionBar(
             )
             Spacer(Modifier.weight(1f))
             TextButton(
-                onClick = onDelete,
+                onClick = { showConfirm = true },
                 colors = ButtonDefaults.textButtonColors(
                     contentColor = MaterialTheme.colorScheme.error,
                 ),

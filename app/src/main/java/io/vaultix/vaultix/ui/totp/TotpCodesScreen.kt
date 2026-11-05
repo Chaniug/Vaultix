@@ -100,6 +100,7 @@ import io.vaultix.vaultix.ui.shell.BottomDockOccupiedHeight
 import io.vaultix.vaultix.ui.common.FormGroupCard
 import io.vaultix.vaultix.ui.common.FullScreenDialogShell
 import io.vaultix.vaultix.ui.common.VaultixSearchTopAppBar
+import io.vaultix.vaultix.ui.common.rememberDiscardGate
 import io.vaultix.vaultix.ui.common.rememberImmersiveBarPadding
 import io.vaultix.vaultix.ui.common.rememberScrollCollapseFraction
 import io.vaultix.vaultix.ui.common.toggleSelection
@@ -947,6 +948,7 @@ private fun TotpRowHeader(
             Checkbox(checked = isSelected, onCheckedChange = { onToggleSelect() })
         } else {
             TotpRowMenu(
+                bound = entry.bound,
                 onEdit = onEdit,
                 onDelete = onDelete,
                 onBind = if (entry.bound) null else onBind,
@@ -1111,15 +1113,42 @@ private fun NextCodePreview(code: String) {
  */
 @Composable
 private fun TotpRowMenu(
+    bound: Boolean,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
     onBind: (() -> Unit)?,
 ) {
-    // 图标**贴右**：用户反馈「三个点太靠中间，需要往右边移一点」。
-    // `IconButton` 默认 48dp 触控区、图标居中 ⇒ 图标右缘到卡片内缘还留着 12dp，
-    // 叠上卡片 16dp 内边距 ≈ 28dp 的视觉空隙，读起来就像「缩在中间」。
-    // 触控区压到 36dp、图标缩到 20dp ⇒ 视觉空隙收到 ~16dp；行内 36dp 仍够点。
+    // ★ 2026-11-05：⋮ 里的「移除」此前也是一点就删，是编辑表单之外**第二条**绕过确认
+    //   的入口。文案按 bound 分支（清配置 / 删整条），与 TotpEditDialog 用同一套字符串，
+    //   不另起一套口径。
     var expanded by remember { mutableStateOf(false) }
+    var showRemoveConfirm by remember { mutableStateOf(false) }
+    val removeLabel = stringResource(
+        if (bound) R.string.totp_remove_bound else R.string.totp_remove_entry,
+    )
+    val removeMessage = stringResource(
+        if (bound) R.string.totp_remove_confirm_bound else R.string.totp_remove_confirm_entry,
+    )
+    if (showRemoveConfirm) {
+        AlertDialog(
+            onDismissRequest = { showRemoveConfirm = false },
+            title = { Text(stringResource(R.string.totp_remove_confirm_title)) },
+            text = { Text(removeMessage) },
+            confirmButton = {
+                TextButton(onClick = {
+                    showRemoveConfirm = false
+                    onDelete()
+                }) {
+                    Text(text = removeLabel, color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRemoveConfirm = false }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
+        )
+    }
     Box {
         // ★ 2026-10-19：**视觉 36dp，触摸目标 48dp**。
         //
@@ -1163,7 +1192,7 @@ private fun TotpRowMenu(
                 text = { Text(stringResource(R.string.totp_remove_action)) },
                 onClick = {
                     expanded = false
-                    onDelete()
+                    showRemoveConfirm = true
                 },
                 leadingIcon = {
                     Icon(
@@ -1320,6 +1349,58 @@ private fun TotpEditDialog(
     var counter by remember { mutableStateOf(entry.counter.toString()) }
     var pin by remember { mutableStateOf(entry.pin) }
     var showError by remember { mutableStateOf(false) }
+    var showRemoveConfirm by remember { mutableStateOf(false) }
+
+    // 与 ItemFormDialog 同一条纪律：壳不知道脏不脏，由调用点判。
+    // 这里字段少且都是值类型，直接与进入时的 entry 比即可（新增时是一张空白模板，
+    // 什么都不填就退出 ⇒ isDirty = false，不会被拦）。
+    val isDirty = issuer != entry.issuer ||
+        account != entry.account ||
+        secret != entry.secret ||
+        type != entry.type ||
+        period != entry.period.toString() ||
+        digits != entry.digits.toString() ||
+        algorithm != entry.algorithm ||
+        counter != entry.counter.toString() ||
+        pin != entry.pin
+    val requestClose = rememberDiscardGate(
+        isDirty = { isDirty },
+        onDismiss = onDismiss,
+    )
+
+    // ★ 2026-11-05：同一个「移除」此前会随数据变后果 —— 绑定在登录条目上只清 TOTP 配置，
+    //   独立条目则整条删除。用户点之前无从知道，还和「取消 / 保存」挤在同一条底栏。
+    //   ⇒ 文案与确认正文都按 bound 分支如实说明，落锤前再确认一次。
+    val removeLabel = stringResource(
+        if (entry.bound) R.string.totp_remove_bound else R.string.totp_remove_entry,
+    )
+    val removeMessage = stringResource(
+        if (entry.bound) {
+            R.string.totp_remove_confirm_bound
+        } else {
+            R.string.totp_remove_confirm_entry
+        },
+    )
+    if (showRemoveConfirm && onDelete != null) {
+        AlertDialog(
+            onDismissRequest = { showRemoveConfirm = false },
+            title = { Text(stringResource(R.string.totp_remove_confirm_title)) },
+            text = { Text(removeMessage) },
+            confirmButton = {
+                TextButton(onClick = {
+                    showRemoveConfirm = false
+                    onDelete()
+                }) {
+                    Text(text = removeLabel, color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRemoveConfirm = false }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
+        )
+    }
 
     // ⚠️ 2026-09-13 第二轮用户反馈：「编辑条目，验证码条目不是全屏显示，看起来不舒服。」
     // ⇒ 与条目编辑一致，改成整页（见 [FullScreenDialogShell]）：
@@ -1328,18 +1409,15 @@ private fun TotpEditDialog(
         title = stringResource(
             if (entry.totpRaw.isEmpty()) R.string.totp_add_title else R.string.totp_edit_title,
         ),
-        onDismiss = onDismiss,
+        onDismiss = requestClose,
         confirmEnabled = true,
         confirmLabel = stringResource(R.string.action_save),
         destructive = if (onDelete == null) {
             null
         } else {
             {
-                TextButton(onClick = onDelete) {
-                    Text(
-                        stringResource(R.string.totp_remove_action),
-                        color = MaterialTheme.colorScheme.error,
-                    )
+                TextButton(onClick = { showRemoveConfirm = true }) {
+                    Text(removeLabel, color = MaterialTheme.colorScheme.error)
                 }
             }
         },

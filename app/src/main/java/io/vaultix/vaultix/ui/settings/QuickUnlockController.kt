@@ -1095,7 +1095,21 @@ class QuickUnlockController(
         ) {
             rollbackLocks(vaultRepository, session.locksToOpen)
         }
-        _dialog.value = buildReport(session, committed, extraFailures)
+        val report = buildReport(session, committed, extraFailures)
+        // ★ 2026-11-05（用户「只需要开关，不需要弹框」）：**全成功时不再弹结果页**。
+        //   开关自己变成 On、副标题显示「已对 N 个库生效」，已经是明确反馈；
+        //   再弹一张「启用完成」只是多一次点击。
+        //
+        //   ⚠️ 但有四类结论必须留着报告页，吞掉就是「沉默的分支」：
+        //   ① 任何失败 ② 有跳过 ③ scopeOnly（只改范围）④ lockOnly（只装门锁）——
+        //   后两者两个数字都是 0，不给一句话用户会以为开关拨了却没生效。
+        //   PIN 输入 / KDBX 主密码 / 系统指纹认证是安全链条，仍保留（#243）。
+        val silent = report.failed.isEmpty() &&
+            report.skippedCount == 0 &&
+            !report.scopeOnly &&
+            !report.lockOnly &&
+            report.enrolledCount > 0
+        _dialog.value = if (silent) Dialog.Idle else report
         clearSession()
         if (anyRoomSealed(committed)) {
             withContext(Dispatchers.IO) { cleanup.clearLegacyRemains() }

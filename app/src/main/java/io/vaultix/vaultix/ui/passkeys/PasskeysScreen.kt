@@ -491,6 +491,33 @@ private fun BoxScope.PasskeysOverlayTopBar(
 private fun PasskeyDetailDialog(row: PasskeyRow, onDismiss: () -> Unit, onDelete: () -> Unit) {
     val c = row.credential
     val clipboard = LocalClipboardManager.current
+    // ★ 2026-11-05：此前「详情」框右下角唯一主按钮就是删除，文案还是从验证码页借来的
+    //   「移除」——用户点开是为了看信息，却把最危险的动作放在唯一的主位上。
+    //   ⇒ 详情框只留「关闭」，删除改成左侧 error 色按钮 + 二次确认（写明不可撤销）。
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text(stringResource(R.string.passkey_delete_title)) },
+            text = { Text(stringResource(R.string.passkey_delete_message)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    showDeleteConfirm = false
+                    onDelete()
+                }) {
+                    Text(
+                        text = stringResource(R.string.action_delete),
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirm = false }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
+        )
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
@@ -538,10 +565,15 @@ private fun PasskeyDetailDialog(row: PasskeyRow, onDismiss: () -> Unit, onDelete
             }
         },
         confirmButton = {
-            TextButton(onClick = onDelete) { Text(stringResource(R.string.totp_remove_action)) }
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_close)) }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
+            TextButton(onClick = { showDeleteConfirm = true }) {
+                Text(
+                    text = stringResource(R.string.passkey_delete_action),
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
         },
     )
 }

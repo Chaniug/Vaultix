@@ -706,7 +706,15 @@ private fun VaultUnlockSection(
         SettingsRow(
             icon = { Icon(Icons.Filled.Shield, contentDescription = null) },
             title = stringResource(R.string.setting_screen_security),
-            subtitle = stringResource(R.string.setting_screen_security_desc),
+            // 2026-11-05：唯一一个「降低安全性却零后果说明」的开关。
+            // 关闭态换成后果文案；null（还没读出来）不猜，仍显示常态说明。
+            subtitle = stringResource(
+                if (state.screenSecurity == false) {
+                    R.string.setting_screen_security_desc_off
+                } else {
+                    R.string.setting_screen_security_desc
+                },
+            ),
             trailing = {
                 SettingsSwitch(
                     value = state.screenSecurity,

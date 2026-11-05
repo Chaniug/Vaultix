@@ -369,6 +369,28 @@ private fun ImportSection(
     onApply: () -> Unit,
     onClearPreview: () -> Unit,
 ) {
+    // ★ 2026-11-05：导入是**不可撤销的批量写**（注释自己承认了），此前却只有一张
+    //   预览卡 + 一个按钮；预览滚出视口后点「确认导入」，用户看不到将发生什么。
+    //   ⇒ 落锤前再弹一次，正文复述后果。导出那一侧早就有完整确认框，这里补齐对称。
+    var showApplyConfirm by rememberSaveable { mutableStateOf(false) }
+    if (showApplyConfirm) {
+        AlertDialog(
+            onDismissRequest = { showApplyConfirm = false },
+            title = { Text(stringResource(R.string.import_confirm_title)) },
+            text = { Text(stringResource(R.string.import_confirm_body)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    showApplyConfirm = false
+                    onApply()
+                }) { Text(stringResource(R.string.import_confirm)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showApplyConfirm = false }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
+        )
+    }
     SettingsGroupTitle(stringResource(R.string.import_title))
     Text(
         text = stringResource(R.string.import_subtitle),
@@ -423,7 +445,7 @@ private fun ImportSection(
             enabled = state.canApply,
             busy = state.importing,
             busyText = stringResource(R.string.import_in_progress),
-            onClick = onApply,
+            onClick = { showApplyConfirm = true },
         )
         OutlinedButton(
             onClick = onClearPreview,

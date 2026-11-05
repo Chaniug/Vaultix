@@ -165,42 +165,52 @@ fun ItemFormDialog(
     var scanning by rememberSaveable { mutableStateOf(false) }
     var showAppPicker by rememberSaveable { mutableStateOf(false) }
 
+    // ★ 2026-11-05：判脏与保存**共用同一个快照构造**。
+    //   分开写两套判据必然漂移 —— 会出现「明明没改却拦着不让走」或「改了却不拦」。
+    //   buildSnapshot 会做字段 trim / 过滤，用它比较等价于问「保存后会变成什么样」。
+    val snapshot: () -> VaultItem = {
+        buildSnapshot(
+            initial = initial,
+            type = type,
+            values = FormValues(
+                name = name,
+                username = username,
+                password = password,
+                notes = notes,
+                totp = totp,
+                uris = uris.toList(),
+                cardValues = cardValues.toList(),
+                identityValues = identityValues.toList(),
+            ),
+            meta = ItemMeta(
+                folderId = folderId,
+                favorite = favorite,
+                reprompt = reprompt,
+                customFields = customFields.toList(),
+            ),
+            ssh = sshValues.toList(),
+        )
+    }
+    val requestClose = rememberDiscardGate(
+        saving = saving,
+        isDirty = { snapshot() != initial },
+        onDismiss = onDismiss,
+    )
+
     // ⚠️ 2026-09-13 第二轮用户反馈：「编辑条目不是全屏显示，看起来不舒服。」
     // ⇒ 由 `AlertDialog`（居中卡片、宽度被平台限制在 ~280dp）改成**整页编辑**
     // （[FullScreenDialogShell]：顶部标题行 + 可滚动正文 + 底部固定操作条）。
     // 原 `text` 槽里的那段滚动 Column 也一并收进壳里，正文因此少了一层缩进。
     FullScreenDialogShell(
         title = title,
-        onDismiss = { if (!saving) onDismiss() },
+        onDismiss = requestClose,
         confirmEnabled = !saving,
         confirmLabel = stringResource(R.string.action_save),
         onConfirm = {
             if (name.isBlank()) {
                 showNameError = true
             } else {
-                onSave(
-                    buildSnapshot(
-                        initial = initial,
-                        type = type,
-                        values = FormValues(
-                            name = name,
-                            username = username,
-                            password = password,
-                            notes = notes,
-                            totp = totp,
-                            uris = uris.toList(),
-                            cardValues = cardValues.toList(),
-                            identityValues = identityValues.toList(),
-                        ),
-                        meta = ItemMeta(
-                            folderId = folderId,
-                            favorite = favorite,
-                            reprompt = reprompt,
-                            customFields = customFields.toList(),
-                        ),
-                        ssh = sshValues.toList(),
-                    ),
-                )
+                onSave(snapshot())
             }
         },
     ) {

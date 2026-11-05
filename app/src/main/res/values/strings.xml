@@ -1302,7 +1302,7 @@
 
     <!-- 回收站自动清理（批次③，对齐 Bastion TrashSettings.autoDeleteDays） -->
     <string name="trash_auto_delete_title">自动清理</string>
-    <string name="trash_auto_delete_hint">到期条目在进入回收站时自动从本地与云端删除</string>
+    <string name="trash_auto_delete_hint">到期条目会永久删除，无法恢复。缩短保留天数时，已超期的条目会在下次进入回收站时被清除。</string>
     <string name="trash_auto_delete_never">从不自动清空</string>
     <string name="trash_auto_delete_after_days">保留 %1$d 天后自动清空</string>
     <string name="trash_row_expires_in">%1$d 天后自动清理</string>
@@ -1652,4 +1652,32 @@
     <string name="onboarding_body_fill">在系统设置里把 Vaultix 选为自动填充服务，之后登录网页就不用再翻 App 抄密码了。这一步现在可以跳过，之后在「设置 → 自动填充」里随时打开。</string>
     <string name="onboarding_fill_setup">去开启自动填充</string>
     <string name="onboarding_fill_setup_done">已前往系统设置，回来后可在此确认</string>
+
+    <!-- ===== 2026-11-05 防误操作批次：有后果的动作，落锤前再用内容确认一次 =====
+         纪律：确认框的正文要写「会发生什么 + 能不能恢复」，不要只写「确定吗」。 -->
+    <string name="batch_delete_title">删除所选的 %1$d 项？</string>
+    <string name="batch_delete_message">所选条目会立即被删除。部分条目可在回收站恢复，通行密钥等绑定信息无法恢复。请确认没有多选或选错。</string>
+
+    <string name="passkey_delete_action">删除密钥</string>
+    <string name="passkey_delete_title">删除这把通行密钥？</string>
+    <string name="passkey_delete_message">删除后它无法再用于登录，此操作不可撤销。密码库里的其它数据不受影响。</string>
+
+    <string name="totp_remove_bound">清空验证码</string>
+    <string name="totp_remove_entry">删除条目</string>
+    <string name="totp_remove_confirm_title">移除这条验证码？</string>
+    <string name="totp_remove_confirm_bound">会清除这条登录条目里保存的验证码配置，条目本身保留。</string>
+    <string name="totp_remove_confirm_entry">会删除这条独立的验证码条目，可在回收站恢复。</string>
+
+    <string name="discard_changes_title">放弃这次修改？</string>
+    <string name="discard_changes_message">填写的内容还没有保存，关闭后会全部丢失。</string>
+    <string name="discard_changes_confirm">放弃修改</string>
+    <string name="action_continue_edit">继续编辑</string>
+
+    <string name="pin_disable_confirm_title">关闭 PIN 解锁？</string>
+    <string name="pin_disable_confirm_body">会删除已保存的 PIN。密码库数据不受影响，之后需要用主密码或指纹解锁。</string>
+
+    <string name="import_confirm_title">确认导入？</string>
+    <string name="import_confirm_body">将按上方预览写入新条目，已存在的会被跳过。导入无法撤销。</string>
+
+    <string name="setting_screen_security_desc_off">已关闭：其他应用可以截取本应用画面，最近任务里也可能显示密码内容</string>
 </resources>
