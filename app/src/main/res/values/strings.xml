@@ -35,9 +35,9 @@
       中性说法只能到这一层（「本地 KDBX 文件」），**两个动作的区分留给页内的两段式切换**。
     -->
     <string name="vault_open_kdbx">本地 KDBX 文件</string>
-    <string name="vault_add_type_hint">选择库类型：云端同步（Bitwarden）或本地文件（KeePass KDBX）</string>
-    <string name="vault_add_bitwarden_desc">登录账号，跨设备同步（需网络）</string>
-    <string name="vault_add_kdbx_desc">打开已有的 .kdbx，或新建一个空白库；全程离线、不经服务器</string>
+    <string name="vault_add_type_hint">选择要添加的库</string>
+    <string name="vault_add_bitwarden_desc">账号登录 · 跨设备同步</string>
+    <string name="vault_add_kdbx_desc">支持新建 · 全程离线</string>
     <string name="vault_kdbx_coming_soon">KDBX 本地库将在 M2 里程碑支持</string>
 
     <!-- 本地 KDBX 库（打开 / 新建两态；M2 阶段 A 只读 → 阶段 B 可写） -->
@@ -94,7 +94,7 @@
 
     <!-- 从网盘添加 KDBX 库（WebDAV / OneDrive，方案 §16.3 / §16.4） -->
     <string name="vault_add_cloud">从网盘添加</string>
-    <string name="vault_add_cloud_desc">打开 NAS（WebDAV）或 OneDrive 上已有的 .kdbx 文件</string>
+    <string name="vault_add_cloud_desc">WebDAV · OneDrive</string>
     <!-- ===== 2026-10-21 §3.4：浏览 / 选中阶段的失败提示（原先硬编码在 ViewModel 里）=====
          这一组都是**我们自己的指引**，不是来源层返回的消息 —— 所以必须在这里，
          而不是走 `UnlockUiError.Detail` 原样上屏。

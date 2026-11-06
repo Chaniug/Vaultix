@@ -64,7 +64,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -316,7 +316,7 @@ private fun AutofillStatusCard(
                 color = content.copy(alpha = 0.9f),
             )
             if (!status.systemEnabled) {
-                TextButton(onClick = onGoToSettings) {
+                OutlinedButton(onClick = onGoToSettings) {
                     Text(stringResource(R.string.autofill_status_go_to_settings))
                 }
             }

@@ -70,7 +70,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -278,7 +278,7 @@ private fun DeleteConfirmDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
         title = { Text(stringResource(R.string.delete_swipe_title)) },
         text = { Text(stringResource(R.string.delete_swipe_message)) },
         confirmButton = {
-            TextButton(onClick = onConfirm) {
+            OutlinedButton(onClick = onConfirm) {
                 Text(
                     text = stringResource(R.string.action_delete),
                     color = MaterialTheme.colorScheme.error,
@@ -286,7 +286,7 @@ private fun DeleteConfirmDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
+            OutlinedButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
         },
     )
 }

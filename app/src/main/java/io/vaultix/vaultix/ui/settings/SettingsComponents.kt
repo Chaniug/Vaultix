@@ -68,7 +68,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
@@ -632,7 +632,7 @@ internal fun AutoLockDialog(
                 )
             },
             confirmButton = {
-                TextButton(onClick = {
+                OutlinedButton(onClick = {
                     val value = customText.toIntOrNull()
                     if (value == null || value < 1 || value > AutoLockPresets.MAX_CUSTOM_MINUTES) {
                         customInvalid = true
@@ -644,7 +644,7 @@ internal fun AutoLockDialog(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { customOpen = false; customInvalid = false }) {
+                OutlinedButton(onClick = { customOpen = false; customInvalid = false }) {
                     Text(stringResource(R.string.action_cancel))
                 }
             },
@@ -696,7 +696,7 @@ internal fun AutoLockDialog(
         },
         confirmButton = {
             // 点档位即选中并关闭，没有「可取消的操作」——按定稿口径该叫「关闭」。
-            TextButton(onClick = onDismiss) {
+            OutlinedButton(onClick = onDismiss) {
                 Text(stringResource(R.string.action_close))
             }
         },
@@ -775,7 +775,7 @@ internal fun LongTextInfoDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) {
+            OutlinedButton(onClick = onDismiss) {
                 Text(stringResource(R.string.action_close))
             }
         },

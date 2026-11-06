@@ -85,7 +85,6 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -272,7 +271,7 @@ fun CloudAccountsScreen(
                 )
             },
             confirmButton = {
-                TextButton(onClick = viewModel::confirmRemoval) {
+                OutlinedButton(onClick = viewModel::confirmRemoval) {
                     Text(
                         stringResource(R.string.cloud_accounts_remove_confirm),
                         color = MaterialTheme.colorScheme.error,
@@ -280,7 +279,7 @@ fun CloudAccountsScreen(
                 }
             },
             dismissButton = {
-                TextButton(onClick = viewModel::dismissRemoval) {
+                OutlinedButton(onClick = viewModel::dismissRemoval) {
                     Text(stringResource(R.string.action_cancel))
                 }
             },
@@ -332,7 +331,7 @@ private fun CloudAccountCard(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = Spacing.xl, end = Spacing.lg, bottom = Spacing.sm),
+                    .padding(bottom = Spacing.sm),
                 horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -353,7 +352,7 @@ private fun CloudAccountCard(
                     fillMaxWidth = false,
                 )
                 Spacer(Modifier.weight(1f))
-                TextButton(onClick = onRemove, enabled = !busy) {
+                OutlinedButton(onClick = onRemove, enabled = !busy) {
                     Text(
                         stringResource(R.string.cloud_accounts_remove),
                         color = MaterialTheme.colorScheme.error,
@@ -364,19 +363,19 @@ private fun CloudAccountCard(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = Spacing.xl, end = Spacing.lg, bottom = Spacing.sm),
+                    .padding(bottom = Spacing.sm),
                 horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 // WebDAV：改密码是最常见的故障 ⇒ 给一条"重填密码"的路，
                 // 而不是逼用户注销再重加（那会连账号名一起丢掉）。
                 if (!account.connected) {
-                    TextButton(onClick = onReconfigure, enabled = !busy) {
+                    OutlinedButton(onClick = onReconfigure, enabled = !busy) {
                         Text(stringResource(R.string.cloud_accounts_reconfigure))
                     }
                 }
                 Spacer(Modifier.weight(1f))
-                TextButton(onClick = onRemove, enabled = !busy) {
+                OutlinedButton(onClick = onRemove, enabled = !busy) {
                     Text(
                         stringResource(R.string.cloud_accounts_remove),
                         color = MaterialTheme.colorScheme.error,
@@ -392,7 +391,7 @@ private fun CloudAccountCard(
     //   只有"未连接"三个字时，用户既不知道该重登还是该等一等 —— 而这两件事
     //   的动作完全不同（见 `OneDriveAuthTemporarilyUnavailableException` 的 KDoc）。
     //   改前这个原因只出现在**一闪而过的 snackbar** 里，隔天再回来看就没了。
-    Column(modifier = Modifier.padding(start = Spacing.xl, top = Spacing.xs, bottom = Spacing.sm)) {
+    Column(modifier = Modifier.padding(top = Spacing.xs, bottom = Spacing.sm)) {
         Text(
             text = stringResource(
                 if (account.connected) {
@@ -500,7 +499,7 @@ private fun AddAccountForm(
     }
 
     Spacer(Modifier.height(Spacing.sm))
-    TextButton(onClick = viewModel::hideAddForm, modifier = Modifier.fillMaxWidth()) {
+    OutlinedButton(onClick = viewModel::hideAddForm, modifier = Modifier.fillMaxWidth()) {
         Text(stringResource(R.string.action_cancel))
     }
 }

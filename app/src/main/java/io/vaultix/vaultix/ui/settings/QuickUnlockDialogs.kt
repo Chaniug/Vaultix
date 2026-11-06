@@ -463,8 +463,9 @@ private fun PinChangeDoneDialog(controller: QuickUnlockController) {
  * 忘了的人永久挡在门外。清完无损数据：用主密码解锁（同时开着指纹则用指纹），
  * 再把「PIN」开关拨回 On 就是重设。
  *
- * ⚠️ 破坏性动作**左置**（同 [PinEntryDialog] 里「关闭 PIN 解锁」的站位）：
- * 右边只留返回，用户在"想退出"与"想清除"之间不会误触。
+ * ⚠️ 破坏性动作**排在最前 + danger 色**（同 [PinEntryDialog] 的「关闭 PIN 解锁」）：
+ * 与主操作分开，用户在"想退出"与"想清除"之间不会误触。
+ * 2026-11-06 起动作区是可换行的 FlowRow，放不下时它自己换到上一行。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -475,7 +476,6 @@ private fun PinForgotConfirmDialog(controller: QuickUnlockController) {
             DialogSectionTitle(title = stringResource(R.string.pin_forgot_body))
             Spacer(Modifier.height(Spacing.sm))
             DialogActions {
-                Spacer(Modifier.weight(1f))
                 DialogDangerButton(
                     text = stringResource(R.string.pin_forgot_confirm),
                     onClick = controller::onForgetPin,
@@ -511,8 +511,7 @@ private fun PinEntryDialog(
                 DialogSectionTitle(title = stringResource(R.string.pin_disable_confirm_body))
                 Spacer(Modifier.height(Spacing.sm))
                 DialogActions {
-                    Spacer(Modifier.weight(1f))
-                    DialogDangerButton(
+                        DialogDangerButton(
                         text = stringResource(R.string.pin_disable),
                         onClick = {
                             showDisableConfirm = false
@@ -565,14 +564,13 @@ private fun PinEntryDialog(
             state.error?.let { DialogErrorText(it) }
             Spacer(Modifier.height(Spacing.sm))
             DialogActions {
-                // ⚠️ 2026-10-04 排版：破坏性动作与主操作**必须分开站位**（8.4「动作区两端对齐」）。
-                //   「关闭 PIN 解锁」删掉的是门锁本身（不可逆），此前它与「返回」「继续」
-                //   一起右对齐、彼此紧挨 —— 用户在"想退出"与"想继续"之间极易误触。
-                //   ⇒ 塞一个 `weight(1f)` 的空隙把它推到最左，右边只留返回/继续。
-                //   （`DialogActions` 的 content 是 `RowScope`，故这里能直接用 weight。）
+                // ⚠️ 破坏性动作与主操作**必须分开站位**（8.4「动作区两端对齐」）。
+                //   2026-11-06：动作区已从 Row 改成可换行的 FlowRow —— 三按钮挤在
+                //   单 Row 里会把主按钮裁成屏幕边一条竖条（真机截图）。`weight` 空隙
+                //   随之去掉；「关闭 PIN 解锁」排在最前 + danger 色，换行时自成一行，
+                //   仍与返回 / 继续分开，不误触。
                 if (isChange) {
-                    Spacer(Modifier.weight(1f))
-                    DialogDangerButton(
+                        DialogDangerButton(
                         text = stringResource(R.string.pin_disable),
                         onClick = { showDisableConfirm = true },
                     )

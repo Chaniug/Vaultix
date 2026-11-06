@@ -47,7 +47,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.SideEffect
@@ -175,7 +175,7 @@ fun DiscardChangesDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
         title = { Text(stringResource(R.string.discard_changes_title)) },
         text = { Text(stringResource(R.string.discard_changes_message)) },
         confirmButton = {
-            TextButton(onClick = onConfirm) {
+            OutlinedButton(onClick = onConfirm) {
                 Text(
                     text = stringResource(R.string.discard_changes_confirm),
                     color = MaterialTheme.colorScheme.error,
@@ -183,7 +183,7 @@ fun DiscardChangesDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
+            OutlinedButton(onClick = onDismiss) {
                 Text(stringResource(R.string.action_continue_edit))
             }
         },
@@ -589,7 +589,7 @@ private fun BoxScope.ActionBar(
                 destructive()
                 Spacer(Modifier.width(Spacing.sm))
             }
-            TextButton(onClick = onDismiss) {
+            OutlinedButton(onClick = onDismiss) {
                 Text(stringResource(R.string.action_cancel))
             }
             Spacer(Modifier.width(Spacing.sm))

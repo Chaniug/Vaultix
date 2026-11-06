@@ -41,7 +41,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -489,12 +489,12 @@ private fun VaultSignOutDialog(
         title = { Text(stringResource(R.string.vault_action_signout)) },
         text = { Text(stringResource(R.string.vault_signout_confirm, vaultName)) },
         confirmButton = {
-            TextButton(onClick = onConfirm) {
+            OutlinedButton(onClick = onConfirm) {
                 Text(stringResource(R.string.vault_signout_action))
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
+            OutlinedButton(onClick = onDismiss) {
                 Text(stringResource(R.string.action_cancel))
             }
         },
@@ -513,7 +513,7 @@ private fun VaultRemoveDialog(
         text = { Text(stringResource(R.string.vault_remove_message, vaultName)) },
         confirmButton = {
             // 破坏性确认用 error 色：它与"确定"這種中性动作不是同一类。
-            TextButton(onClick = onConfirm) {
+            OutlinedButton(onClick = onConfirm) {
                 Text(
                     stringResource(R.string.vault_remove_confirm),
                     color = MaterialTheme.colorScheme.error,
@@ -521,7 +521,7 @@ private fun VaultRemoveDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
+            OutlinedButton(onClick = onDismiss) {
                 Text(stringResource(R.string.action_cancel))
             }
         },
@@ -534,7 +534,7 @@ private fun VaultActionResultDialog(text: String, isSuccess: Boolean, onDismiss:
         onDismissRequest = onDismiss,
         text = { Text(text) },
         confirmButton = {
-            TextButton(onClick = onDismiss) {
+            OutlinedButton(onClick = onDismiss) {
                 Text(stringResource(if (isSuccess) R.string.action_done else R.string.action_close))
             }
         },

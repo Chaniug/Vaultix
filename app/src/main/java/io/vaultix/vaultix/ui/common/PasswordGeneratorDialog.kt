@@ -29,7 +29,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -108,7 +108,7 @@ fun PasswordGeneratorDialog(
             }
         },
         confirmButton = {
-            TextButton(
+            OutlinedButton(
                 onClick = {
                     onUse(preview)
                     onDismiss()
@@ -116,7 +116,7 @@ fun PasswordGeneratorDialog(
             ) { Text(stringResource(R.string.gen_use)) }
         },
         dismissButton = {
-            TextButton(
+            OutlinedButton(
                 onClick = {
                     preview = generate(
                         length, uppercase, lowercase, numbers, symbols, excludeSimilar, excludeAmbiguous,

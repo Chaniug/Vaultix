@@ -23,7 +23,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -169,7 +169,7 @@ fun DeveloperLogsDialog(onDismiss: () -> Unit) {
             }
         },
         confirmButton = {
-            TextButton(
+            OutlinedButton(
                 onClick = { scope.launch { shareLogs(context, buildExportText(context, entries)) } },
                 enabled = entries.isNotEmpty(),
             ) {
@@ -180,7 +180,7 @@ fun DeveloperLogsDialog(onDismiss: () -> Unit) {
             Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
                 // ★ 清空（2026-09-21 用户要求）：先尽力把系统缓冲也清掉，再把时间下界推到"现在"
                 //   ⇒ 之后刷新只看到新日志，便于"复现一次、只看这一次"。
-                TextButton(
+                OutlinedButton(
                     onClick = {
                         scope.launch {
                             withContext(Dispatchers.IO) { tryClearLogcatBuffer() }
@@ -190,10 +190,10 @@ fun DeveloperLogsDialog(onDismiss: () -> Unit) {
                 ) {
                     Text(stringResource(R.string.developer_logs_clear))
                 }
-                TextButton(onClick = { refreshTick++ }) {
+                OutlinedButton(onClick = { refreshTick++ }) {
                     Text(stringResource(R.string.developer_logs_refresh))
                 }
-                TextButton(onClick = onDismiss) {
+                OutlinedButton(onClick = onDismiss) {
                     Text(stringResource(R.string.action_close))
                 }
             }

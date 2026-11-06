@@ -54,7 +54,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -473,7 +473,7 @@ private fun UpdateCheckDialog(
             //    - 检查失败 / 无法确定 → 同上，不诱导用户去下载。
             //    （M3：对话框动作应如实反映当前状态下**可做**的事。）
             if (updated != null) {
-                TextButton(
+                OutlinedButton(
                     onClick = {
                         // ⚠️ 镜像开关已移出对话框（见本函数 KDoc）：点击那一刻才读**当前**偏好，
                         //    而不是拿对话框打开时的快照 —— 开关是持久设置，随时可能被改。
@@ -498,7 +498,7 @@ private fun UpdateCheckDialog(
             Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
                 val checksumsUrl = updated?.checksumsUrl
                 if (checksumsUrl != null) {
-                    TextButton(onClick = { onOpenRelease(checksumsUrl) }) {
+                    OutlinedButton(onClick = { onOpenRelease(checksumsUrl) }) {
                         Text(stringResource(R.string.update_check_verify))
                     }
                 }
@@ -1130,7 +1130,7 @@ private fun ThemeModeDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) {
+            OutlinedButton(onClick = onDismiss) {
                 Text(stringResource(R.string.action_close))
             }
         },
@@ -1166,7 +1166,7 @@ private fun ClipboardClearDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) {
+            OutlinedButton(onClick = onDismiss) {
                 Text(stringResource(R.string.action_close))
             }
         },

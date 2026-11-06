@@ -53,7 +53,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -199,7 +198,7 @@ fun ImportExportScreen(
             title = { Text(stringResource(R.string.export_confirm_title)) },
             text = { Text(stringResource(R.string.export_confirm_body)) },
             confirmButton = {
-                TextButton(onClick = {
+                OutlinedButton(onClick = {
                     showExportConfirm = false
                     viewModel.export()
                 }) {
@@ -207,7 +206,7 @@ fun ImportExportScreen(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showExportConfirm = false }) {
+                OutlinedButton(onClick = { showExportConfirm = false }) {
                     Text(stringResource(R.string.action_cancel))
                 }
             },
@@ -379,13 +378,13 @@ private fun ImportSection(
             title = { Text(stringResource(R.string.import_confirm_title)) },
             text = { Text(stringResource(R.string.import_confirm_body)) },
             confirmButton = {
-                TextButton(onClick = {
+                OutlinedButton(onClick = {
                     showApplyConfirm = false
                     onApply()
                 }) { Text(stringResource(R.string.import_confirm)) }
             },
             dismissButton = {
-                TextButton(onClick = { showApplyConfirm = false }) {
+                OutlinedButton(onClick = { showApplyConfirm = false }) {
                     Text(stringResource(R.string.action_cancel))
                 }
             },

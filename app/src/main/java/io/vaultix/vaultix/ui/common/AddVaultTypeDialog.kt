@@ -24,6 +24,7 @@
  */
 package io.vaultix.vaultix.ui.common
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -51,23 +52,28 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.AppFlavor
 import io.vaultix.vaultix.ui.theme.Spacing
 import io.vaultix.vaultix.ui.theme.VaultixCorner
 
-/** 类型选择卡片的圆角：**大面**（卡片最小高 76dp）⇒ 走 [VaultixCorner.Panel]。 */
+/** 类型选择卡片的圆角：**大面** ⇒ 走 [VaultixCorner.Panel]。 */
 
-/** 类型选择卡片最小高度。 */
-private val VAULT_TYPE_CARD_MIN_HEIGHT = 76.dp
+/** 类型选择卡片最小高度（2026-11-06 由 76dp 收至 56dp）。 */
+private val VAULT_TYPE_CARD_MIN_HEIGHT = 56.dp
 
-/** 图标槽（28dp，与设置页 `SettingsRow` 一致）。 */
+/** 图标槽：28dp 带底色的圆角小方块，颜色承担「区分类型」的职责。 */
 private val VAULT_TYPE_ICON_BOX = 28.dp
+
+/** 槽内图标尺寸（比槽小一圈，留出呼吸）。 */
+private val VAULT_TYPE_ICON_SIZE = 18.dp
 
 /**
  * 添加库的类型选择（Bitwarden 云端 / 本地 KDBX 文件 / 网盘上的 KDBX）。
@@ -94,6 +100,19 @@ private val VAULT_TYPE_ICON_BOX = 28.dp
  *
  * ⚠️ **行为零变化**：原有两个选项的接线、`AppFlavor.supportsBitwarden` 条件判断
  * 完全保留。本对话框被设置页与库列表页**两处共用**（见文件头说明）。
+ *
+ * ## 2026-11-06 第四批：真机截图「窗口很拥挤、第三项被裁」
+ *
+ * 1. **裁切是真 bug**：滚动区 `heightIn(max = 320.dp)` 小于「提示 + 三张各 76dp 起跳、
+ *    副标题 2~3 行」的总高 ⇒ 第三张卡尾部被截，且没有任何可滚的视觉暗示。
+ * 2. **先做减法**（8.4「改观感先做减法」）：提示句不再复述三个选项的分类；
+ *    副标题压到一行短语；卡片 76→56dp、上下内边距 12→8dp、卡间距 4→3dp。
+ *    缩完三卡总高远小于上界，裁切自然消失；上界保留是因为 `verticalScroll`
+ *    必须拿到有界高度，去掉会在 measure 阶段抛异常。
+ * 3. **再做加法**：用户提议「用不同颜色区分」。颜色只落在 **28dp 图标槽**
+ *    （primary / secondary / tertiary 三档 container），卡片底仍统一
+ *    `surfaceContainerLow` —— 整卡换色会变成三块彩色积木，也破坏 8.4
+ *    「嵌套容器必须换档」的色阶纪律。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -110,6 +129,8 @@ fun AddVaultTypeDialog(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    // ⚠️ 上界必须留着：verticalScroll 拿无界高度会在 measure 阶段崩。
+                    //    卡片收小后三张总高远小于 320dp，正常情况下不会触发滚动。
                     .heightIn(max = 320.dp)
                     .verticalScroll(rememberScrollState())
                     .padding(horizontal = Spacing.lg),
@@ -120,6 +141,8 @@ fun AddVaultTypeDialog(
                         icon = Icons.Filled.Cloud,
                         title = stringResource(R.string.vault_connect_bitwarden),
                         subtitle = stringResource(R.string.vault_add_bitwarden_desc),
+                        iconContainer = MaterialTheme.colorScheme.primaryContainer,
+                        iconTint = MaterialTheme.colorScheme.onPrimaryContainer,
                         onClick = onConnectBitwarden,
                     )
                 }
@@ -127,12 +150,16 @@ fun AddVaultTypeDialog(
                     icon = Icons.Filled.Description,
                     title = stringResource(R.string.vault_open_kdbx),
                     subtitle = stringResource(R.string.vault_add_kdbx_desc),
+                    iconContainer = MaterialTheme.colorScheme.secondaryContainer,
+                    iconTint = MaterialTheme.colorScheme.onSecondaryContainer,
                     onClick = onOpenKdbx,
                 )
                 VaultTypeCard(
                     icon = Icons.Filled.CloudSync,
                     title = stringResource(R.string.vault_add_cloud),
                     subtitle = stringResource(R.string.vault_add_cloud_desc),
+                    iconContainer = MaterialTheme.colorScheme.tertiaryContainer,
+                    iconTint = MaterialTheme.colorScheme.onTertiaryContainer,
                     onClick = onAddCloudKdbx,
                 )
             }
@@ -145,22 +172,29 @@ fun AddVaultTypeDialog(
 }
 
 /**
- * 一个库类型的可选卡片（图标 + 标题 + 副标题 + 右侧箭头）。
+ * 一个库类型的可选卡片（彩色图标槽 + 标题 + 一行副标题 + 右侧箭头）。
  *
- * 抽出来是因为两个选项的规格必须**逐字一致** —— 内联两遍很容易在一处调了间距、
+ * 抽出来是因为三个选项的规格必须**逐字一致** —— 内联三遍很容易在一处调了间距、
  * 另一处忘了，正是「两个选项看起来不一样高」这类问题的来源。
+ *
+ * ⚠️ 区分类型靠 [iconContainer] / [iconTint]，**不靠卡片底色**：
+ *    卡片底统一 `surfaceContainerLow`，图标槽才用对应 container 色。
+ *    标题与副标题都限一行 —— 2.0x 字号下宁可省略号，也不能把卡片撑高、
+ *    重新把第三项挤出滚动上界（本批修的那个裁切 bug）。
  */
 @Composable
 private fun VaultTypeCard(
     icon: ImageVector,
     title: String,
     subtitle: String,
+    iconContainer: Color,
+    iconTint: Color,
     onClick: () -> Unit,
 ) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp)
+            .padding(vertical = 3.dp)
             .clickable(onClick = onClick, role = Role.Button),
         shape = VaultixCorner.Panel,
         colors = CardDefaults.cardColors(
@@ -171,36 +205,44 @@ private fun VaultTypeCard(
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(min = VAULT_TYPE_CARD_MIN_HEIGHT)
-                .padding(horizontal = Spacing.lg, vertical = Spacing.md),
+                .padding(horizontal = Spacing.md, vertical = Spacing.sm),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
-                modifier = Modifier.size(VAULT_TYPE_ICON_BOX),
+                modifier = Modifier
+                    .size(VAULT_TYPE_ICON_BOX)
+                    .background(color = iconContainer, shape = VaultixCorner.Small),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
                     imageVector = icon,
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
+                    tint = iconTint,
+                    modifier = Modifier.size(VAULT_TYPE_ICON_SIZE),
                 )
             }
-            Spacer(Modifier.width(Spacing.lg))
+            Spacer(Modifier.width(Spacing.md))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = title,
                     style = MaterialTheme.typography.bodyLarge,
                     fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
                 Text(
                     text = subtitle,
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
             Icon(
                 imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(VAULT_TYPE_ICON_SIZE),
             )
         }
     }

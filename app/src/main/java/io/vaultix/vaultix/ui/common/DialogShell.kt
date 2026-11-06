@@ -37,8 +37,11 @@ package io.vaultix.vaultix.ui.common
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.FlowRowScope
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -144,10 +147,22 @@ fun DialogEmptyBody(text: String) {
     )
 }
 
-/** 底部动作区（右对齐，上下各留一口气，按钮不再贴着面板边）。 */
+/** 统一的按钮内边距：比 M3 默认 24dp 收一档，避免三按钮弹窗被挤出可见区。 */
+private val DIALOG_BUTTON_PADDING = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+
+/**
+ * 底部动作区：右对齐、自动换行、上下各留一口气。
+ *
+ * ⚠️ 2026-11-06 真机截图：原为单 `Row`，「修改 PIN」里「关闭 PIN 解锁 / 返回 / 继续」
+ * 三个按钮加 `weight` 空隙超出可用宽度 ⇒ 主按钮被裁成屏幕边一条竖条。
+ * 改 `FlowRow` 后放不下就换行，任何字号 / 任意按钮数都不会再裁内容。
+ * ⚠️ 代价：`DialogActions` 调用点里的 `Spacer(Modifier.weight(1f))` 已去掉（FlowRow 无 weight），
+ *    破坏性动作仍靠「排在最前 + danger 色」与主操作区分。
+ */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun DialogActions(content: @Composable RowScope.() -> Unit) {
-    Row(
+fun DialogActions(content: @Composable FlowRowScope.() -> Unit) {
+    FlowRow(
         modifier = Modifier
             .fillMaxWidth()
             .padding(
@@ -156,8 +171,8 @@ fun DialogActions(content: @Composable RowScope.() -> Unit) {
                 top = Spacing.md,
                 bottom = Spacing.sm,
             ),
-        horizontalArrangement = Arrangement.End,
-        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Spacing.sm, Alignment.End),
+        verticalArrangement = Arrangement.spacedBy(Spacing.xs),
         content = content,
     )
 }
@@ -169,7 +184,11 @@ fun DialogPrimaryButton(
     onClick: () -> Unit,
     enabled: Boolean = true,
 ) {
-    Button(onClick = onClick, enabled = enabled) {
+    Button(
+        onClick = onClick,
+        enabled = enabled,
+        contentPadding = DIALOG_BUTTON_PADDING,
+    ) {
         Text(text)
     }
 }
@@ -181,7 +200,11 @@ fun DialogSecondaryButton(
     onClick: () -> Unit,
     enabled: Boolean = true,
 ) {
-    OutlinedButton(onClick = onClick, enabled = enabled) {
+    OutlinedButton(
+        onClick = onClick,
+        enabled = enabled,
+        contentPadding = DIALOG_BUTTON_PADDING,
+    ) {
         Text(text)
     }
 }
@@ -191,6 +214,7 @@ fun DialogSecondaryButton(
 fun DialogDangerButton(text: String, onClick: () -> Unit) {
     OutlinedButton(
         onClick = onClick,
+        contentPadding = DIALOG_BUTTON_PADDING,
         colors = ButtonDefaults.outlinedButtonColors(
             contentColor = MaterialTheme.colorScheme.error,
         ),
@@ -202,7 +226,7 @@ fun DialogDangerButton(text: String, onClick: () -> Unit) {
 /** 次级动作按钮（「取消」）。 */
 @Composable
 fun DialogDismissButton(onClick: () -> Unit) {
-    OutlinedButton(onClick = onClick) {
+    OutlinedButton(onClick = onClick, contentPadding = DIALOG_BUTTON_PADDING) {
         Text(stringResource(R.string.action_cancel))
     }
 }
@@ -210,7 +234,7 @@ fun DialogDismissButton(onClick: () -> Unit) {
 /** 次级动作按钮（「返回」）——语义上比「取消」更贴合二级流程。 */
 @Composable
 fun DialogBackButton(onClick: () -> Unit) {
-    OutlinedButton(onClick = onClick) {
+    OutlinedButton(onClick = onClick, contentPadding = DIALOG_BUTTON_PADDING) {
         Text(stringResource(R.string.action_back))
     }
 }
@@ -227,7 +251,7 @@ fun DialogBackButton(onClick: () -> Unit) {
  */
 @Composable
 fun DialogCloseButton(onClick: () -> Unit) {
-    OutlinedButton(onClick = onClick) {
+    OutlinedButton(onClick = onClick, contentPadding = DIALOG_BUTTON_PADDING) {
         Text(stringResource(R.string.action_close))
     }
 }
@@ -262,7 +286,9 @@ fun DialogSectionTitle(
             }
             Text(
                 text = title,
-                style = MaterialTheme.typography.labelLarge,
+                // ⚠️ 原 labelLarge(14sp) 比输入框 label 的 bodyMedium(16sp) 还小，
+                //    一屏里「小标题 < 字段名」层级倒挂 ⇒ 提到 titleSmall(16sp)。
+                style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.primary,
             )
         }

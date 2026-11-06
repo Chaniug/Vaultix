@@ -36,7 +36,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -183,7 +183,7 @@ private fun AppList(
             }
         }
     }
-    TextButton(onClick = onManual, modifier = Modifier.fillMaxWidth()) {
+    OutlinedButton(onClick = onManual, modifier = Modifier.fillMaxWidth()) {
         Text(stringResource(R.string.app_picker_manual))
     }
 }
@@ -263,8 +263,8 @@ private fun ManualInput(
         )
         Row(modifier = Modifier.fillMaxWidth()) {
             Spacer(Modifier.weight(1f))
-            TextButton(onClick = onCancel) { Text(stringResource(R.string.action_cancel)) }
-            TextButton(onClick = onConfirm) { Text(stringResource(R.string.action_done)) }
+            OutlinedButton(onClick = onCancel) { Text(stringResource(R.string.action_cancel)) }
+            OutlinedButton(onClick = onConfirm) { Text(stringResource(R.string.action_done)) }
         }
     }
 }
