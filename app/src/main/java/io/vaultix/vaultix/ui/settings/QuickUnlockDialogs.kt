@@ -11,6 +11,7 @@ package io.vaultix.vaultix.ui.settings
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -22,6 +23,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.LockReset
 import androidx.compose.material.icons.filled.Password
@@ -35,7 +37,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -46,6 +47,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -54,6 +56,9 @@ import io.vaultix.domain.PIN_MAX_ATTEMPTS
 import io.vaultix.domain.PIN_MIN_LENGTH
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.BiometricPrompter
+import io.vaultix.vaultix.ui.common.DialogDangerButton
+import io.vaultix.vaultix.ui.common.DialogPrimaryButton
+import io.vaultix.vaultix.ui.common.DialogSecondaryButton
 import io.vaultix.vaultix.ui.common.DialogActions
 import io.vaultix.vaultix.ui.common.DialogBackButton
 import io.vaultix.vaultix.ui.common.DialogCloseButton
@@ -432,6 +437,12 @@ private fun PinChangeDoneDialog(controller: QuickUnlockController) {
             DialogHeader(title = stringResource(R.string.pin_change))
             DialogSectionTitle(
                 title = stringResource(R.string.pin_change_done),
+                // ★ 2026-11-06：结果页原先只有两行字，与前后那些"在做事"的弹窗
+                //   长得一模一样，读不出「这件事已经完成了」。给一个静态成功图标
+                //   （走 DialogSectionTitle 的 icon 槽，自动取 primary 色），不动效。
+                icon = {
+                    Icon(Icons.Filled.CheckCircle, contentDescription = null)
+                },
                 // 「忘记不影响数据、用主密码解锁后可重设」：改 PIN 之后这句话依然成立，
                 // 顺带把 #161 那条承诺的落点再点一遍（它现在是真的了）。
                 hint = stringResource(R.string.pin_section_hint),
@@ -465,12 +476,10 @@ private fun PinForgotConfirmDialog(controller: QuickUnlockController) {
             Spacer(Modifier.height(Spacing.sm))
             DialogActions {
                 Spacer(Modifier.weight(1f))
-                TextButton(onClick = controller::onForgetPin) {
-                    Text(
-                        text = stringResource(R.string.pin_forgot_confirm),
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
+                DialogDangerButton(
+                    text = stringResource(R.string.pin_forgot_confirm),
+                    onClick = controller::onForgetPin,
+                )
                 Spacer(Modifier.width(Spacing.sm))
                 DialogBackButton(controller::dismiss)
             }
@@ -503,15 +512,13 @@ private fun PinEntryDialog(
                 Spacer(Modifier.height(Spacing.sm))
                 DialogActions {
                     Spacer(Modifier.weight(1f))
-                    TextButton(onClick = {
-                        showDisableConfirm = false
-                        controller.disablePinFromChange()
-                    }) {
-                        Text(
-                            text = stringResource(R.string.pin_disable),
-                            color = MaterialTheme.colorScheme.error,
-                        )
-                    }
+                    DialogDangerButton(
+                        text = stringResource(R.string.pin_disable),
+                        onClick = {
+                            showDisableConfirm = false
+                            controller.disablePinFromChange()
+                        },
+                    )
                     Spacer(Modifier.width(Spacing.sm))
                     DialogBackButton { showDisableConfirm = false }
                 }
@@ -565,20 +572,18 @@ private fun PinEntryDialog(
                 //   （`DialogActions` 的 content 是 `RowScope`，故这里能直接用 weight。）
                 if (isChange) {
                     Spacer(Modifier.weight(1f))
-                    TextButton(onClick = { showDisableConfirm = true }) {
-                        Text(
-                            text = stringResource(R.string.pin_disable),
-                            color = MaterialTheme.colorScheme.error,
-                        )
-                    }
+                    DialogDangerButton(
+                        text = stringResource(R.string.pin_disable),
+                        onClick = { showDisableConfirm = true },
+                    )
                     Spacer(Modifier.width(Spacing.sm))
                 }
                 DialogBackButton(controller::dismiss)
-                TextButton(
+                Spacer(Modifier.width(Spacing.sm))
+                DialogPrimaryButton(
+                    text = stringResource(R.string.action_continue),
                     onClick = if (isChange) controller::submitChangePin else controller::submitPin,
-                ) {
-                    Text(stringResource(R.string.action_continue))
-                }
+                )
             }
         }
     }
@@ -625,12 +630,15 @@ private fun KdbxPasswordDialog(
             state.error?.let { DialogErrorText(it) }
             Spacer(Modifier.height(Spacing.sm))
             DialogActions {
-                TextButton(onClick = controller::skipCurrentVault) {
-                    Text(stringResource(R.string.quick_unlock_kdbx_skip))
-                }
-                TextButton(onClick = controller::submitPassword) {
-                    Text(stringResource(R.string.action_continue))
-                }
+                DialogSecondaryButton(
+                    text = stringResource(R.string.quick_unlock_kdbx_skip),
+                    onClick = controller::skipCurrentVault,
+                )
+                Spacer(Modifier.width(Spacing.sm))
+                DialogPrimaryButton(
+                    text = stringResource(R.string.action_continue),
+                    onClick = controller::submitPassword,
+                )
             }
         }
     }
@@ -681,7 +689,7 @@ private fun ReportDialog(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(1f, fill = false)
+                    .heightIn(max = 240.dp)
                     .verticalScroll(rememberScrollState()),
             ) {
                 if (state.scopeOnly) {

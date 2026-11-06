@@ -110,7 +110,7 @@ fun AddVaultTypeDialog(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(1f, fill = false)
+                    .heightIn(max = 320.dp)
                     .verticalScroll(rememberScrollState())
                     .padding(horizontal = Spacing.lg),
             ) {

@@ -84,6 +84,29 @@
 > preview 更新为 `v0.11.1-dev-22e56c0`。
 > ⚠️ AGSL 字符串只在**运行时**编译，CI 的编译门禁覆盖不到它 ⇒ 仍需真机验收这一层；
 > 失败时自动退回「仅模糊 + 静态装饰」，不会崩、也不会退回实色。
+>
+> 🕐 **同日第三批（设置页开关 bug + 弹窗规格统一）**：用户真机确认「液态玻璃效果有了，
+> 但点击时没有液态玻璃的感觉」，**明确要求动效以后再说、玻璃改动暂时搁置**
+> ⇒ 本批**一行玻璃代码都没动**，后续接力不要擅自给它加按压 / lens / 弹性动效。
+>
+> - **开关闪一下才停（bug）**：「锁与安全 → 进入 App 时仍需验证」有两处叠加成因。
+>   ① `SettingsViewModel.autoViewGateOnNever` 用 `stateIn(initialValue = true)` ⇒
+>   实际为「关」时首帧假开再跳变；② 写入走 `writeScope.launch` 异步，而 `Switch` 是
+>   **受控组件**，落盘前 `checked` 仍是旧值 ⇒ thumb 先回弹一次。
+>   修法：改 `StateFlow<Boolean?>` + `initialValue = null`（未读出由 `SettingsSwitch`
+>   画同尺寸占位，不猜），写入前发**乐观值**、落盘回流后撤销，3 秒超时兜底、
+>   连点取消旧任务；副标题同步改为「不确定就不显示」。
+> - **弹窗又大又简陋**：`DialogSurface` 原写死 `fillMaxHeight(0.8f)`，KDoc 还把
+>   「内容少也是大面板」当成一致性优点 ⇒ 改为 `wrapContentHeight` + `heightIn(max=520.dp)`；
+>   `AddVaultTypeDialog` / `ReportDialog` 两处 `weight(1f, fill=false)` 随之改为
+>   `heightIn(max)` + `verticalScroll`（顺序不能反，见 `UpdateNotesBox` 的教训）。
+> - **按钮没边框**：三个语义按钮从裸 `TextButton` 换 `OutlinedButton`，新增
+>   `DialogPrimaryButton`(filled) / `DialogSecondaryButton` / `DialogDangerButton`；
+>   PIN 修改、关闭 PIN、忘记 PIN、逐库主密码、文件夹保存、添加库类型等弹窗统一套用。
+>   标题 `titleLarge` → `headlineSmall`，动作区补下边距；「修改 PIN 完成」补静态成功图标。
+> - **判据**：① 受控开关 + 异步落盘 ⇒ 必须乐观更新，否则"点了回弹"是必然而非偶发；
+>   ② 「一致性」不能凌驾于内容比例，写死大面板会让短弹窗显得空；
+>   ③ 用户说"搁置"就是搁置，别把上一批的成就感带进下一批。
 
 ---
 

@@ -157,13 +157,17 @@ fun UnlockMethodScreen(
                     SettingsRow(
                         icon = { Icon(Icons.Filled.Fingerprint, contentDescription = null) },
                         title = stringResource(R.string.auto_view_gate_title),
-                        subtitle = stringResource(
-                            if (autoGate) {
-                                R.string.auto_view_gate_desc_on
-                            } else {
-                                R.string.auto_view_gate_desc_off
-                            },
-                        ),
+                        // ⚠️ 数据还没读出时不写副标题 —— 拿「开」的文案冒充当前状态，
+                        //    就是首帧假开的另一半。与上方 globalTimeout 那行同一口径。
+                        subtitle = autoGate?.let { enabled ->
+                            stringResource(
+                                if (enabled) {
+                                    R.string.auto_view_gate_desc_on
+                                } else {
+                                    R.string.auto_view_gate_desc_off
+                                },
+                            )
+                        },
                         trailing = {
                             SettingsSwitch(
                                 value = autoGate,

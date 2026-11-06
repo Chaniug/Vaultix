@@ -18,7 +18,6 @@ import androidx.compose.material3.BasicAlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -34,6 +33,7 @@ import androidx.compose.ui.text.input.ImeAction
 import io.vaultix.domain.FolderNamePolicy
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.DialogActions
+import io.vaultix.vaultix.ui.common.DialogPrimaryButton
 import io.vaultix.vaultix.ui.common.DialogDismissButton
 import io.vaultix.vaultix.ui.common.DialogFootnote
 import io.vaultix.vaultix.ui.common.DialogHeader
@@ -114,15 +114,14 @@ fun FolderNameDialog(
             DialogFootnote(text = stringResource(R.string.folder_name_footnote))
             DialogActions {
                 DialogDismissButton(onClick = { if (!busy) onDismiss() })
-                TextButton(
+                DialogPrimaryButton(
+                    text = stringResource(R.string.action_save),
                     enabled = canConfirm,
                     onClick = {
                         // 只有 Ok 才可能按住 enter（canConfirm 已保证），这里再取一次是给编译器看。
                         (verdict as? FolderNamePolicy.Verdict.Ok)?.let { onConfirm(it.name) }
                     },
-                ) {
-                    Text(stringResource(R.string.action_save))
-                }
+                )
             }
         }
     }

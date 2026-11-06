@@ -17,12 +17,14 @@ import io.vaultix.vaultix.security.AutoLockController
 import io.vaultix.vaultix.session.ActiveVaultStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import io.vaultix.vaultix.ui.items.ItemsCardDisplayMode
@@ -31,7 +33,11 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
+
+/** 乐观开关写入的兜底超时：DataStore 一般几十毫秒，3 秒还没回流就按失败处理。 */
+private const val AUTO_VIEW_GATE_WRITE_TIMEOUT_MS = 3_000L
 
 /**
  * 设置页（最小版）。偏好值全部来自 [VaultixPreferences]（DataStore，非敏感），
@@ -128,11 +134,29 @@ class SettingsViewModel @Inject constructor(
      * 本开关只管「界面要不要挡」。自动填充在两种取值下都直通
      * （用户原话「填充并不会受影响」）。
      */
-    val autoViewGateOnNever: StateFlow<Boolean> = vaultTimeoutPrefs.autoViewGateOnNever
+    /**
+     * 乐观写入的暂存值。
+     *
+     * 落盘是 `writeScope.launch` 的异步活儿，而 `Switch` 是**受控组件**：
+     * 写入完成前 `checked` 还是旧值，thumb 会先回弹一次再滑回来 —— 用户看到的
+     * 「从开到关闪一下才停下来」有一半来自这里。点下时先发新值，落盘回流后再撤。
+     */
+    private val autoViewGatePending = MutableStateFlow<Boolean?>(null)
+
+    /** 上一次写入任务；连点开关时取消旧任务，避免它的收尾把新的乐观值提前清掉。 */
+    private var autoViewGateWriteJob: Job? = null
+
+    val autoViewGateOnNever: StateFlow<Boolean?> = combine<Boolean, Boolean?, Boolean?>(
+        vaultTimeoutPrefs.autoViewGateOnNever,
+        autoViewGatePending,
+    ) { stored, pending -> pending ?: stored }
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5_000),
-            initialValue = true,
+            // ⚠️ 必须是 null：写 true 会让「实际为关」的开关在首帧假开、读出来再跳变，
+            //    这是同一处闪烁的另一半。`SettingsSwitch` 收到 null 会画同尺寸占位，
+            //    不猜、也不跳（三态契约见 [UiState] 的 KDoc）。
+            initialValue = null,
         )
 
     /**
@@ -462,7 +486,17 @@ class SettingsViewModel @Inject constructor(
      * `f(!x) = x` 的恒等映射 —— 症状是"开关永远不动"（`.ai/ISSUES.md` #213）。
      */
     fun setAutoViewGateOnNever(enabled: Boolean) {
-        vaultTimeoutPrefs.writeAutoViewGateOnNever = enabled
+        autoViewGatePending.value = enabled
+        autoViewGateWriteJob?.cancel()
+        autoViewGateWriteJob = viewModelScope.launch {
+            vaultTimeoutPrefs.writeAutoViewGateOnNever = enabled
+            // 等落盘值从 DataStore 回流，再撤乐观值 ⇒ UI 全程只看到一次变化。
+            // 写入异常 / ROM 卡住时超时也撤，让界面回到真实值，绝不长期谎报状态。
+            withTimeoutOrNull(AUTO_VIEW_GATE_WRITE_TIMEOUT_MS) {
+                vaultTimeoutPrefs.autoViewGateOnNever.first { it == enabled }
+            }
+            autoViewGatePending.value = null
+        }
     }
 
     fun setClipboardClearMs(ms: Long) {
