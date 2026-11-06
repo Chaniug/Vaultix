@@ -1356,15 +1356,11 @@ private fun TotpEditDialog(
     // 与 ItemFormDialog 同一条纪律：壳不知道脏不脏，由调用点判。
     // 这里字段少且都是值类型，直接与进入时的 entry 比即可（新增时是一张空白模板，
     // 什么都不填就退出 ⇒ isDirty = false，不会被拦）。
-    val isDirty = issuer != entry.issuer ||
-        account != entry.account ||
-        secret != entry.secret ||
-        type != entry.type ||
-        period != entry.period.toString() ||
-        digits != entry.digits.toString() ||
-        algorithm != entry.algorithm ||
-        counter != entry.counter.toString() ||
-        pin != entry.pin
+    // ⚠️ 2026-11-06：九个字段的 `||` 曾全堆在本函数里，一处就贡献 8 点圈复杂度
+    //   （detekt CyclomaticComplexMethod 判 22 > 14，CI 连红两次）。拆成两个纯函数，
+    //   比较项与顺序逐项保持不变 —— 只挪位置，不改判定口径。
+    val isDirty = isIdentityDirty(entry, issuer, account, secret, type) ||
+        isParamsDirty(entry, period, digits, algorithm, counter, pin)
     val requestClose = rememberDiscardGate(
         isDirty = { isDirty },
         onDismiss = onDismiss,
@@ -1376,30 +1372,14 @@ private fun TotpEditDialog(
     val removeLabel = stringResource(
         if (entry.bound) R.string.totp_remove_bound else R.string.totp_remove_entry,
     )
-    val removeMessage = stringResource(
-        if (entry.bound) {
-            R.string.totp_remove_confirm_bound
-        } else {
-            R.string.totp_remove_confirm_entry
-        },
-    )
     if (showRemoveConfirm && onDelete != null) {
-        AlertDialog(
-            onDismissRequest = { showRemoveConfirm = false },
-            title = { Text(stringResource(R.string.totp_remove_confirm_title)) },
-            text = { Text(removeMessage) },
-            confirmButton = {
-                TextButton(onClick = {
-                    showRemoveConfirm = false
-                    onDelete()
-                }) {
-                    Text(text = removeLabel, color = MaterialTheme.colorScheme.error)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showRemoveConfirm = false }) {
-                    Text(stringResource(R.string.action_cancel))
-                }
+        TotpRemoveConfirmDialog(
+            bound = entry.bound,
+            removeLabel = removeLabel,
+            onDismiss = { showRemoveConfirm = false },
+            onConfirm = {
+                showRemoveConfirm = false
+                onDelete()
             },
         )
     }
@@ -1468,39 +1448,128 @@ private fun TotpEditDialog(
             )
         }
         // 参数卡：按类型出对应的可调参数（Steam 无可调参数 ⇒ 不出卡）。
-        if (type != OtpType.STEAM) {
-            Spacer(Modifier.height(Spacing.md))
-            FormGroupCard {
-                when (type) {
-                    OtpType.MOTP -> TotpMotpFields(pin, onPinChange = { pin = it })
-                    OtpType.STEAM -> Unit
-                    OtpType.HOTP -> TotpHotpFields(
-                        counter = counter,
-                        onCounterChange = { counter = it },
-                        digits = digits,
-                        onDigitsChange = { digits = it },
-                        algorithm = algorithm,
-                        onAlgorithmChange = { algorithm = it },
-                    )
-                    OtpType.TOTP, OtpType.YANDEX -> TotpTimedFields(
-                        period = period,
-                        onPeriodChange = { period = it },
-                        digits = digits,
-                        onDigitsChange = { digits = it },
-                        algorithm = algorithm,
-                        onAlgorithmChange = { algorithm = it },
-                    )
-                }
+        // ⚠️ 2026-11-06：类型分支与错误提示整块挪进 [TotpTypeParamsCard]，
+        //   顺序仍是「参数卡 → 错误提示」，只是不再由本函数亲自持有这些分支。
+        TotpTypeParamsCard(
+            type = type,
+            values = TotpParamValues(period, digits, algorithm, counter, pin),
+            onPeriodChange = { period = it },
+            onDigitsChange = { digits = it },
+            onAlgorithmChange = { algorithm = it },
+            onCounterChange = { counter = it },
+            onPinChange = { pin = it },
+            showError = showError,
+        )
+    }
+}
+
+/** 脏判定的「身份」四字段：与进入时 [TotpEntry] 的值逐项比。 */
+private fun isIdentityDirty(
+    entry: TotpEntry,
+    issuer: String,
+    account: String,
+    secret: String,
+    type: OtpType,
+): Boolean = issuer != entry.issuer ||
+    account != entry.account ||
+    secret != entry.secret ||
+    type != entry.type
+
+/** 脏判定的「参数」五字段：数值字段按原口径转成字符串再比。 */
+private fun isParamsDirty(
+    entry: TotpEntry,
+    period: String,
+    digits: String,
+    algorithm: String,
+    counter: String,
+    pin: String,
+): Boolean = period != entry.period.toString() ||
+    digits != entry.digits.toString() ||
+    algorithm != entry.algorithm ||
+    counter != entry.counter.toString() ||
+    pin != entry.pin
+
+/** 参数卡只传值：五个 setter 精确回写各自字段，不整包覆盖同帧内的其它输入。 */
+private data class TotpParamValues(
+    val period: String,
+    val digits: String,
+    val algorithm: String,
+    val counter: String,
+    val pin: String,
+)
+
+/** 移除确认框：文案按 bound 分支，底栏按钮共用同一个 removeLabel。 */
+@Composable
+private fun TotpRemoveConfirmDialog(
+    bound: Boolean,
+    removeLabel: String,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    val removeMessage = stringResource(
+        if (bound) R.string.totp_remove_confirm_bound else R.string.totp_remove_confirm_entry,
+    )
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.totp_remove_confirm_title)) },
+        text = { Text(removeMessage) },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text(text = removeLabel, color = MaterialTheme.colorScheme.error)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.action_cancel))
+            }
+        },
+    )
+}
+
+/** 参数卡 + 错误提示：类型分支与两处条件原本都堆在 [TotpEditDialog] 内。 */
+@Composable
+private fun TotpTypeParamsCard(
+    type: OtpType,
+    values: TotpParamValues,
+    onPeriodChange: (String) -> Unit,
+    onDigitsChange: (String) -> Unit,
+    onAlgorithmChange: (String) -> Unit,
+    onCounterChange: (String) -> Unit,
+    onPinChange: (String) -> Unit,
+    showError: Boolean,
+) {
+    if (type != OtpType.STEAM) {
+        Spacer(Modifier.height(Spacing.md))
+        FormGroupCard {
+            when (type) {
+                OtpType.MOTP -> TotpMotpFields(values.pin, onPinChange = onPinChange)
+                OtpType.STEAM -> Unit
+                OtpType.HOTP -> TotpHotpFields(
+                    counter = values.counter,
+                    onCounterChange = onCounterChange,
+                    digits = values.digits,
+                    onDigitsChange = onDigitsChange,
+                    algorithm = values.algorithm,
+                    onAlgorithmChange = onAlgorithmChange,
+                )
+                OtpType.TOTP, OtpType.YANDEX -> TotpTimedFields(
+                    period = values.period,
+                    onPeriodChange = onPeriodChange,
+                    digits = values.digits,
+                    onDigitsChange = onDigitsChange,
+                    algorithm = values.algorithm,
+                    onAlgorithmChange = onAlgorithmChange,
+                )
             }
         }
-        if (showError) {
-            Spacer(Modifier.height(Spacing.sm))
-            Text(
-                stringResource(R.string.totp_invalid_secret),
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodySmall,
-            )
-        }
+    }
+    if (showError) {
+        Spacer(Modifier.height(Spacing.sm))
+        Text(
+            stringResource(R.string.totp_invalid_secret),
+            color = MaterialTheme.colorScheme.error,
+            style = MaterialTheme.typography.bodySmall,
+        )
     }
 }
 
