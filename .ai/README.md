@@ -12,11 +12,21 @@
 此前约定「两边保持同步」，结果是同一主题两处各有一份、必然漂移（AI 会看错位置）。
 **要改内容，只改这里。**
 
-## 🕐 最新状态（**2026-11-05** · 三页 UI 细节轮：权限页 / 锁与安全 / 连接 Bitwarden）
+## 🕐 最新状态（**2026-11-06** · 四批收口）
+
+> **一句话**：状态核对 → detekt 修复 → 液态玻璃光学层 → 设置页开关与弹窗规格，
+> 四批全部 CI 转绿（单测 1637 例 0 失败），preview `v0.11.1-dev-7c1428d`，
+> 本地 ↔ 远程 `0 / 0`。**玻璃点击动效按用户要求搁置**，本批之后一行玻璃代码未动。
+> 逐批根因 / 做法 / 验证 / 判据 / 未验收项 → [`SESSION-2026-11-06.md`](./SESSION-2026-11-06.md)。
+> 真机待验：开关不再闪、PIN 弹窗窄屏按钮不挤、AGSL 折射生效与滚动帧率。
+
+---
+
+## 🕐 上一轮状态（**2026-11-05** · 三页 UI 细节轮：权限页 / 锁与安全 / 连接 Bitwarden）
 
 > **一句话**：用户给三张真机截图，指出「权限页字符没对齐 + 权限没开时顶部有乱码」、
 > 「锁与安全只需开关不该弹框、自动锁定『从不』不该排最后且风格不统一」、
-> 「连接 Bitwarden 页面简陋」。三页一起收口，**已推 main**；CI 的真实结论与后续处理见本节末的 11-06 追记。
+> 「连接 Bitwarden 页面简陋」。三页一起收口，**已推 main**；CI 结论见上方 11-06 状态块与 `SESSION-2026-11-06.md`。
 >
 > | # | 现象 | 真正原因 |
 > |---|---|---|
@@ -47,70 +57,19 @@
 >
 > 🔴 **再下一批（未做，需动 ViewModel 契约）**：`VaultList` / `Items` / `Trash` /
 > `CardWallet` 的**首帧假空态**（老用户冷启动先看到「还没有库 / 还没有密码」）、
-> `SettingsViewModel` 非可空偏好导致的首帧假开/勾错项、卡包保存零反馈且
-> `_saving` 无 `finally`、`Autofill` 磁贴结果回调空实现。清单见 §7.3。
+> `SettingsViewModel` 非可空偏好导致的首帧假开/勾错项（`autoViewGateOnNever` 已于
+> 11-06 修，见 `SESSION-2026-11-06.md` §3）、卡包保存零反馈且 `_saving` 无 `finally`、
+> `Autofill` 磁贴结果回调空实现。清单见 §7.3。
 >
 > **更往后**：删除类动作的结果反馈（Snackbar + busy 防连点）、
 > `PressAndSwipeToDelete` 确认框补条目名、审计里余下的 P2 文案统一。
 >
-> **🕐 2026-11-06 追记（本地 ↔ 远程进度对齐）**：上述「待 CI」是**会过期的状态** ——
-> 11-05 后两次 `Android CI (Debug)` 实际**都红了**，唯一 finding 是
-> `TotpCodesScreen.kt` 里 `TotpEditDialog` 触犯 `CyclomaticComplexMethod`（22 > 14）。
-> detekt 排在编译之前 ⇒ lint / 编码 / 构建 / 单测 / 上传 APK 全部 skipped，
-> `preview` 因此停在 `v0.11.1-dev-eb98670`（只含第一批，后两批没有可下载的包）。
-> 本轮把九项 `||` 脏判定、`when(type)` 参数卡、移除确认框拆成两个纯函数 +
-> 一个值对象 + 两个子 Composable，**判定口径与 UI 顺序逐项不变、不加 `@Suppress`**；
-> 静态核对（括号差值 / 行宽 / 参数 ≤8 / 函数数 <60 / 粗算复杂度 9 ≤14）通过，
-> 真编译与 detekt 交 CI 复验。
-> **两条判据**：①「待 CI」会过期，写进文档前先问远端有没有结论；
-> ② 前置门禁一红，后面所有「没跑」的步骤一律不算通过（§8.6.0 的现场复现）。
+> **11-06 四批明细**：见 [`SESSION-2026-11-06.md`](./SESSION-2026-11-06.md)
+> （状态核对 / detekt 修复 / 玻璃光学层 / 设置页开关与弹窗规格；含验证与未验收项）。
 >
-> **🕐 同日第二批（液态玻璃光学层 + 设置页收敛）**：参考 FlClash /
-> `chen08209/prism_ui` 的液态玻璃底栏，但**只搬光学层、不搬交互**
-> （lens 拖动 / jelly 弹簧 / goo 融合与本项目「不要花哨动画」的纪律冲突）。
-> 新增 `ui/glass/LiquidGlassOptics.kt`：`createRuntimeShaderEffect` 让 AGSL 直接
-> 采样 RenderNode 内容，与模糊合成 `createChainEffect` —— **零 GPU→CPU 回读**，
-> 修正 `LiquidGlass.kt` 旧 KDoc「折射必须每帧 `toImageBitmap()`」的结论。
-> 三档：≥33 折射 / 分色 / rim，31–32 仅模糊，<31 实色；shader 创建失败**钉住降级**
-> （否则每帧重试抛异常）。另补所有版本生效的静态装饰：上沿 1dp 折边、下沿 rim 暗线。
-> 设置页把两处「点设置弹一整段说明」收敛为 `LongTextInfoDialog`
-> （限高 + 自带滚动 + `bodyMedium` / `onSurfaceVariant` + 单一「关闭」），
-> 修掉 `AlertDialog.text` 槽不滚动导致大字号 / 小屏截尾的老坑。
-> **刻意未动**：设置页分组结构（遵循 `decisions/设置页信息架构-定稿.md`）、
-> `VaultActionResultDialog` 的「完成 / 关闭」分流（有意设计：失败结果不写「完成」）。
-> **CI 结论**：`e5a77947` 首次 detekt 红（`rect[3]` 触发 `MagicNumber`），改传 `Rect`
-> 后 `22e56c09` **全链路转绿**：`Android CI (Debug)` run `42201071033`（4m16s，
-> 单测 1637 例 0 失败、编译通过），`AI docs consistency` 亦绿；
-> preview 更新为 `v0.11.1-dev-22e56c0`。
-> ⚠️ AGSL 字符串只在**运行时**编译，CI 的编译门禁覆盖不到它 ⇒ 仍需真机验收这一层；
-> 失败时自动退回「仅模糊 + 静态装饰」，不会崩、也不会退回实色。
->
-> 🕐 **同日第三批（设置页开关 bug + 弹窗规格统一）**：用户真机确认「液态玻璃效果有了，
-> 但点击时没有液态玻璃的感觉」，**明确要求动效以后再说、玻璃改动暂时搁置**
-> ⇒ 本批**一行玻璃代码都没动**，后续接力不要擅自给它加按压 / lens / 弹性动效。
->
-> - **开关闪一下才停（bug）**：「锁与安全 → 进入 App 时仍需验证」有两处叠加成因。
->   ① `SettingsViewModel.autoViewGateOnNever` 用 `stateIn(initialValue = true)` ⇒
->   实际为「关」时首帧假开再跳变；② 写入走 `writeScope.launch` 异步，而 `Switch` 是
->   **受控组件**，落盘前 `checked` 仍是旧值 ⇒ thumb 先回弹一次。
->   修法：改 `StateFlow<Boolean?>` + `initialValue = null`（未读出由 `SettingsSwitch`
->   画同尺寸占位，不猜），写入前发**乐观值**、落盘回流后撤销，3 秒超时兜底、
->   连点取消旧任务；副标题同步改为「不确定就不显示」。
-> - **弹窗又大又简陋**：`DialogSurface` 原写死 `fillMaxHeight(0.8f)`，KDoc 还把
->   「内容少也是大面板」当成一致性优点 ⇒ 改为 `wrapContentHeight` + `heightIn(max=520.dp)`；
->   `AddVaultTypeDialog` / `ReportDialog` 两处 `weight(1f, fill=false)` 随之改为
->   `heightIn(max)` + `verticalScroll`（顺序不能反，见 `UpdateNotesBox` 的教训）。
-> - **按钮没边框**：三个语义按钮从裸 `TextButton` 换 `OutlinedButton`，新增
->   `DialogPrimaryButton`(filled) / `DialogSecondaryButton` / `DialogDangerButton`；
->   PIN 修改、关闭 PIN、忘记 PIN、逐库主密码、文件夹保存、添加库类型等弹窗统一套用。
->   标题 `titleLarge` → `headlineSmall`，动作区补下边距；「修改 PIN 完成」补静态成功图标。
-> - **判据**：① 受控开关 + 异步落盘 ⇒ 必须乐观更新，否则"点了回弹"是必然而非偶发；
->   ② 「一致性」不能凌驾于内容比例，写死大面板会让短弹窗显得空；
->   ③ 用户说"搁置"就是搁置，别把上一批的成就感带进下一批。
-
 ---
 
-## 🕐 上一轮状态（**2026-11-04** · 快速解锁「自锁」+ 同步「假冲突」+ 冷启动 30 秒 / 解锁页双圈）
+## 🕐 历史状态（**2026-11-04** · 快速解锁「自锁」+ 同步「假冲突」+ 冷启动 30 秒 / 解锁页双圈）
 
 > **一句话**：用户第三轮报「还是存在问题」，截图是解锁页那句 **「出错了：该库未纳入快速解锁」**；
 > 同时另一条线是「打开 OneDrive 上的 kdbx 老是显示冲突，我根本没改」。两条都收口了，已推 main。

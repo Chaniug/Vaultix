@@ -6,7 +6,7 @@
 
 用户给三张真机截图，逐条收口「设置字符没对齐 + 权限没开时顶部有乱码」、
 「锁与安全只需开关、自动锁定『从不』排最后且风格不统一」、「连接 Bitwarden 页面简陋」。
-**代码已改、7 个静态门禁全绿**；CI 结论见本节末 11-06 追记（曾因 detekt 连红两次，本轮修复后交 CI 复验）。
+**代码已改、7 个静态门禁全绿**；detekt 曾连红两次，已修复并复验转绿（见下方 11-06 段落）。
 
 | # | 现象 | 真正原因 |
 |---|---|---|
@@ -44,7 +44,8 @@ rail 标签统一 1 行 + Ellipsis、认证框补进度圈、失败结果框「�
 1. `VaultListViewModel/Screen` 库列表首帧首启品牌页（全 App 落地页，老用户每次冷启动都撞见）；
 2. `ItemsViewModel/Screen` 密码 Tab 首帧「还没有保存的密码」；
 3. `CardWalletViewModel` 新建/删除零反馈 + `_saving` 无 `finally`（下次打开表单永久转圈）；
-4. `SettingsViewModel` 非可空偏好导致首帧假「开」/ 单选框勾错项；
+4. `SettingsViewModel` 非可空偏好导致首帧假「开」/ 单选框勾错项
+   （`autoViewGateOnNever` 一项已于 11-06 修，见 `SESSION-2026-11-06.md` §3）；
 5. `Trash` / `CardWallet` 空态塌缩、`Autofill` 磁贴结果回调空实现、
    `MainActivity` 冷启动主题闪、`SiteIcon` 深色死白圆盘。
    完整证据见 §7.3。
@@ -52,24 +53,10 @@ rail 标签统一 1 行 + Ellipsis、认证框补进度圈、失败结果框「�
 **更往后**：删除类动作的结果反馈（Snackbar + busy 防连点）、
 滑动删除确认框补条目名、审计里余下的 P2 文案统一。
 
-**🕐 2026-11-06 追记（进度对齐）**：11-05 后两次 `Android CI (Debug)` 均红在
-`Run detekt (quality gate)`，唯一 finding 为 `TotpEditDialog` 的
-`CyclomaticComplexMethod`（22 > 14）；因 detekt 前置，lint / 编码 / 构建 / 单测 / 出包
-全部 skipped，`preview` 停在 `v0.11.1-dev-eb98670`（只含第一批）。
-本轮已把该函数的九项 `||` 脏判定、`when(type)` 参数卡与移除确认框拆为
-两个纯函数 + 一个值对象 + 两个子 Composable，行为等价、不加 `@Suppress`；
-**CI 已复验转绿**（`42193982930`，单测 1637 例 0 失败），preview 更新为
-`v0.11.1-dev-4bc1968`。判据见 [`.ai/README.md`](../../.ai/README.md) 的 11-06 追记。
-
-**同日第二批（✅ 已完成，CI 转绿）**：液态玻璃补光学层（AGSL 折射 / 分色 / rim，
-零回读、三档降级）+ 设置页长文本弹框收敛为 `LongTextInfoDialog`。
-`22e56c09` 全链路绿（4m16s、单测 1637 例 0 失败），preview `v0.11.1-dev-22e56c0`；
-AGSL 层需真机验收。详见 [`.ai/README.md`](../../.ai/README.md) 同日第二批追记。
-
-**同日第三批（设置页 bug + 弹窗规格）**：用户确认玻璃效果已生效，但**动效以后再说、
-玻璃改动暂时搁置**。本批修「进入 App 时仍需验证」开关闪烁（`initialValue` 假开 +
-受控开关异步落盘回弹），并把 `DialogSurface` 从写死 0.8 屏高改为自适应、按钮统一为
-filled / outlined M3 规格。详见 [`.ai/README.md`](../../.ai/README.md) 同日第三批追记。
+**🕐 2026-11-06（四批全部完成，CI 全绿）**：状态核对 / detekt 修复 / 液态玻璃光学层 /
+设置页开关与弹窗规格，单测 1637 例 0 失败，preview `v0.11.1-dev-7c1428d`。
+玻璃点击动效按用户要求**搁置**。逐批根因与判据见
+[`.ai/SESSION-2026-11-06.md`](../../.ai/SESSION-2026-11-06.md)。
 
 ---
 
