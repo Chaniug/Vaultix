@@ -61,9 +61,10 @@ rail 标签统一 1 行 + Ellipsis、认证框补进度圈、失败结果框「�
 **CI 已复验转绿**（`42193982930`，单测 1637 例 0 失败），preview 更新为
 `v0.11.1-dev-4bc1968`。判据见 [`.ai/README.md`](../../.ai/README.md) 的 11-06 追记。
 
-**同日第二批（进行中）**：液态玻璃补光学层（AGSL 折射 / 分色 / rim，零回读、
-三档降级）+ 设置页长文本弹框收敛为 `LongTextInfoDialog`。详见
-[`.ai/README.md`](../../.ai/README.md) 同日第二批追记。
+**同日第二批（✅ 已完成，CI 转绿）**：液态玻璃补光学层（AGSL 折射 / 分色 / rim，
+零回读、三档降级）+ 设置页长文本弹框收敛为 `LongTextInfoDialog`。
+`22e56c09` 全链路绿（4m16s、单测 1637 例 0 失败），preview `v0.11.1-dev-22e56c0`；
+AGSL 层需真机验收。详见 [`.ai/README.md`](../../.ai/README.md) 同日第二批追记。
 
 ---
 
