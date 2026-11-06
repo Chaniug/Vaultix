@@ -8,8 +8,6 @@
  */
 package io.vaultix.vaultix.ui.glass
 
-import android.graphics.RenderEffect
-import android.graphics.Shader
 import android.os.Build
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -25,9 +23,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.RenderEffect as ComposeRenderEffect
 import androidx.compose.ui.graphics.Shape
-import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.luminance
@@ -73,12 +69,15 @@ import androidx.compose.ui.unit.dp
  * "塑料板"的观感分界）。所以视觉装饰一律画在**上层（层 B）的 `drawBehind`**：
  * 它盖在模糊结果之上，是清晰的。
  *
- * ## 为什么没有做 iOS 26 那种"折射"
+ * ## 2026-11-06：折射补上了，但没有走回读那条路
  *
- * 折射需要把背景当**纹理**喂给 AGSL `RuntimeShader` 做位移采样。现在源已经是
- * 一块 `GraphicsLayer` 了，理论上可以 `toImageBitmap()` 拿到纹理 —— 但那是**每帧
- * 一次 GPU→CPU→GPU 回读**，列表滚动时帧率直接打穿。⇒ **本实现是"模糊 + 上沿高光 +
- * 内描边"的液态玻璃观感，不是折射模拟。** 这是有意的取舍，不是漏做。
+ * 上面那段旧结论成立于「把背景 `toImageBitmap()` 再喂给 Paint.shader」的写法。
+ * 现在 [glassRenderEffect] 用 `createRuntimeShaderEffect` 让 AGSL 直接采样
+ * RenderNode 自己的内容，与模糊合成一条 RenderEffect 链 —— 全程留在 GPU，
+ * 不需要每帧回读。细节与三档降级见 `LiquidGlassOptics.kt` 文件头。
+ *
+ * ⇒ 当前观感 = 模糊 + AGSL 边缘折射/分色（API 33+） + 上沿高光 / 下沿暗线 /
+ *   内描边（所有版本）。低版本或 shader 创建失败时自动退回「仅模糊 + 静态光学装饰」。
  */
 
 /** 模糊半径（dp）。Haze 的 `HazeMaterials` 默认值就是 24dp，与它对齐便于横向对照。 */
@@ -127,6 +126,15 @@ object LiquidGlass {
 
     /** 阴影高度：玻璃态比实心态更需要它把胶囊"抬"离内容，否则边界读不出来。 */
     val ShadowElevation = 8.dp
+
+    /** 上沿那道 1dp 折边：渐隐高光带负责"厚度"，这条亮线负责"边界"。 */
+    const val TOP_LINE_ALPHA = 0.34f
+
+    /** 下沿 rim 暗线占整体高度的比例 —— 真实玻璃的底边会把背景压暗一线。 */
+    const val RIM_LINE_FRACTION = 0.10f
+
+    /** 暗线颜色：固定黑叠 alpha，不随主题反色（玻璃的暗边在两个主题里都是暗的）。 */
+    val RimLineColor = Color.Black.copy(alpha = 0.16f)
 }
 
 /**
@@ -187,16 +195,11 @@ fun liquidGlassStyle(
     )
 }
 
-/** 一个 `RenderEffect` 模糊。API < 31 与创建失败都返回 null（调用方按降级处理）。 */
-internal fun blurEffect(radiusPx: Float): ComposeRenderEffect? {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return null
-    // ⚠️ 某些 ROM / 软件渲染路径上创建 RenderEffect 会抛 —— 那应当降级成实色，
-    //    而不是让整个主界面崩掉。
-    return runCatching {
-        RenderEffect.createBlurEffect(radiusPx, radiusPx, Shader.TileMode.CLAMP)
-            .asComposeRenderEffect()
-    }.getOrNull()
-}
+/**
+ * 原生模糊的创建已收进 `LiquidGlassOptics.androidBlurEffect`：那里还要把它作为
+ * AGSL 链的内层复用，两处各写一遍会出现「模糊半径改了一处、另一处没改」的漂移。
+ * 本文件的 `drawGlass` 只负责**不依赖平台**的静态光学装饰。
+ */
 
 /**
  * 液态玻璃图层（= 上面结构图里的"浮层"）。
@@ -304,7 +307,8 @@ private fun DrawScope.drawGlass(
         },
     )
 
-    // 上沿高光：只盖顶部一小段，迅速淡出（真实玻璃的受光边永远在上沿）。
+    // 上沿高光：渐隐带给"厚度"，再压一条 1dp 亮线给"折边"。
+    // 两者都画在层 B 的 drawBehind 上，不会被层 A 的 renderEffect 糊掉（见文件头）。
     val band = (size.height * LiquidGlass.EDGE_HIGHLIGHT_FRACTION).coerceAtLeast(1f)
     drawRect(
         brush = Brush.verticalGradient(
@@ -314,9 +318,30 @@ private fun DrawScope.drawGlass(
         ),
         size = Size(size.width, band),
     )
+    val w = with(density) { 1.dp.toPx() }
+    // 降级档填充已是不透明实色，再压亮线/暗线只会像给塑料板描了两道边 ⇒ 只在真模糊档画。
+    if (blurAvailable) {
+        drawRect(
+            color = style.sheen.copy(alpha = LiquidGlass.TOP_LINE_ALPHA),
+            size = Size(size.width, w),
+        )
+
+        // ★ 2026-11-06：下沿 rim 暗线。FlClash 的 shader 里这道线宽约 0.67dp，
+        //   这里用一段渐变近似（不依赖 AGSL），把胶囊从背景上"切"出来。
+        //   ⚠️ brush 坐标相对本次 drawRect 的 topLeft，故 startY 从 0 起，不是屏幕绝对坐标。
+        val rim = (size.height * LiquidGlass.RIM_LINE_FRACTION).coerceAtLeast(1f)
+        drawRect(
+            brush = Brush.verticalGradient(
+                colors = listOf(Color.Transparent, LiquidGlass.RimLineColor),
+                startY = 0f,
+                endY = rim,
+            ),
+            topLeft = Offset(0f, size.height - rim),
+            size = Size(size.width, rim),
+        )
+    }
 
     // 内描边：1px，让玻璃与背后内容有边界。
-    val w = with(density) { 1.dp.toPx() }
     drawRect(
         color = style.stroke,
         topLeft = Offset(w / 2f, w / 2f),

@@ -58,8 +58,12 @@ rail 标签统一 1 行 + Ellipsis、认证框补进度圈、失败结果框「�
 全部 skipped，`preview` 停在 `v0.11.1-dev-eb98670`（只含第一批）。
 本轮已把该函数的九项 `||` 脏判定、`when(type)` 参数卡与移除确认框拆为
 两个纯函数 + 一个值对象 + 两个子 Composable，行为等价、不加 `@Suppress`；
-静态核对通过，编译与 detekt 交 CI 复验。判据见
-[`.ai/README.md`](../../.ai/README.md) 的 11-06 追记。
+**CI 已复验转绿**（`42193982930`，单测 1637 例 0 失败），preview 更新为
+`v0.11.1-dev-4bc1968`。判据见 [`.ai/README.md`](../../.ai/README.md) 的 11-06 追记。
+
+**同日第二批（进行中）**：液态玻璃补光学层（AGSL 折射 / 分色 / rim，零回读、
+三档降级）+ 设置页长文本弹框收敛为 `LongTextInfoDialog`。详见
+[`.ai/README.md`](../../.ai/README.md) 同日第二批追记。
 
 ---
 

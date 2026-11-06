@@ -20,14 +20,12 @@ import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.History
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -198,15 +196,10 @@ fun AboutAppScreen(
     }
 
     if (showLicense) {
-        AlertDialog(
-            onDismissRequest = { showLicense = false },
-            title = { Text(stringResource(R.string.about_license)) },
-            text = { Text(stringResource(R.string.about_license_body)) },
-            confirmButton = {
-                TextButton(onClick = { showLicense = false }) {
-                    Text(stringResource(R.string.action_close))
-                }
-            },
+        LongTextInfoDialog(
+            title = stringResource(R.string.about_license),
+            body = stringResource(R.string.about_license_body),
+            onDismiss = { showLicense = false },
         )
     }
 }

@@ -56,7 +56,6 @@ import androidx.compose.material.icons.filled.Password
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Shield
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -239,15 +238,10 @@ fun AutofillSettingsScreen(
     }
 
     if (tileUnsupported) {
-        AlertDialog(
-            onDismissRequest = { tileUnsupported = false },
-            title = { Text(stringResource(R.string.setting_manual_fill_tile)) },
-            text = { Text(stringResource(R.string.setting_manual_fill_tile_hint)) },
-            confirmButton = {
-                TextButton(onClick = { tileUnsupported = false }) {
-                    Text(stringResource(R.string.action_close))
-                }
-            },
+        LongTextInfoDialog(
+            title = stringResource(R.string.setting_manual_fill_tile),
+            body = stringResource(R.string.setting_manual_fill_tile_hint),
+            onDismiss = { tileUnsupported = false },
         )
     }
 }

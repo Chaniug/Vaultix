@@ -21,6 +21,7 @@ import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.dp
 
 /**
  * 液态玻璃的**背景源**（2026-10-27 第二轮：用户真机反馈后重做；2026-10-28 第三轮修"整页变白"）。
@@ -202,10 +203,9 @@ fun Modifier.liquidGlassBackdrop(
     //    是 ContentDrawScope 的成员扩展，只有这里的 receiver 才调得到。
     val srcSize = source.size
     // ⚠️ IntSize 没有 `minDimension`（那是 Size 的），只能逐分量判 —— 写错一个字就编译不过。
-    val blur = blurEffect(radiusPx)
     // ⚠️ detekt `ComplexCondition` 阈值是 3：这里先折成两个判定，别写成四项 `||`。
     val hasSource = srcSize.width > 0 && srcSize.height > 0
-    if (!hasSource || size.minDimension < 1f || blur == null) {
+    if (!hasSource || size.minDimension < 1f) {
         // 🔴 提前返回时**必须**把子树画出来。
         //   `drawWithContent` 不调 `drawContent()` 的写法等于"条件一不满足就把这一层吞掉"：
         //   现在层 A 是空 Box、看不出后果，但这是**同一类"静默消失"**的写法
@@ -214,6 +214,29 @@ fun Modifier.liquidGlassBackdrop(
         drawContent()
         return@drawWithContent
     }
+
+    // ★ 2026-11-06：把「模糊 + AGSL 光学」合成一条链再挂到中转层。
+    //   boundsInLayer 是**胶囊在源坐标系里的矩形**：effectLayer 录的是整块 Tab 区域，
+    //   比胶囊大得多，shader 不能用图层尺寸算圆角。`offset` = 源左上 − 浮层左上，
+    //   故浮层左上在源坐标系里就是 −offset（与 backdropOffset 的符号口径一致）。
+    val boundsInLayer = Rect(
+        left = -offset.x,
+        top = -offset.y,
+        right = -offset.x + size.width,
+        bottom = -offset.y + size.height,
+    )
+    val effect = glassRenderEffect(
+        blurRadiusPx = radiusPx,
+        boundsInLayer = boundsInLayer,
+        cornerRadiusPx = size.height / 2f,
+        depthPx = 3.dp.toPx(),
+        partPx = 1.dp.toPx(),
+    )
+    if (effect == null) {
+        drawContent()
+        return@drawWithContent
+    }
+
     drawIntoCanvas { canvas ->
         canvas.save()
         // 把 layer 挪到"源本来该在的位置"：layer 的坐标系原点是源的左上角，
@@ -223,8 +246,10 @@ fun Modifier.liquidGlassBackdrop(
         source.effectLayer.record(size = srcSize) {
             drawLayer(source.contentLayer)
         }
-        // ② 模糊只挂在中转层上 —— contentLayer 保持干净（它还要原样回屏）。
-        source.effectLayer.renderEffect = blur
+        // ② 效果只挂在中转层上 —— contentLayer 保持干净（它还要原样回屏）。
+        //    链的内层是模糊、外层是 AGSL 折射；API < 33 或 shader 创建失败时
+        //    [glassRenderEffect] 已自动退回「仅模糊」。
+        source.effectLayer.renderEffect = effect
         source.effectLayer.alpha = 1f
         drawLayer(source.effectLayer)
         canvas.restore()

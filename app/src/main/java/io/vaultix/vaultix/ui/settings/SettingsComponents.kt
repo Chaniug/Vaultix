@@ -737,3 +737,50 @@ private fun AutoLockHintCard(text: String, warning: Boolean) {
         )
     }
 }
+
+/**
+ * 「点了一下设置、弹出来一整段说明」的统一外壳（2026-11-06 归纳）。
+ *
+ * 此前「关于 → 开源许可」与「自动填充 → 手动填充磁贴」各写了一个
+ * `AlertDialog(text = { Text(长文案) })`：M3 的 `AlertDialog.text` 槽**自身不滚动**
+ * （本仓已踩过两次，见 `AutoLockDialog` 与 `UpdateNotesBox` 的注释），小屏或 2.0x
+ * 字号下尾部会被直接裁掉；两处的字号、行色、按钮文案也各自为政。
+ *
+ * 统一口径：限高 + 自带滚动、正文 `bodyMedium` / `onSurfaceVariant`、
+ * 单一「关闭」动作（这里没有可取消的操作，见 `UpdateCheckDialog` 的定稿说明）。
+ *
+ * ⚠️ `heightIn(max)` 必须排在 `verticalScroll` **之前**：反过来滚动容器会拿到
+ *    无界高度约束，measure 阶段直接抛异常（`UpdateNotesBox` 的同一条教训）。
+ */
+@Composable
+internal fun LongTextInfoDialog(
+    title: String,
+    body: String,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column(
+                modifier = Modifier
+                    .heightIn(max = INFO_DIALOG_MAX_HEIGHT)
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                Text(
+                    text = body,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.action_close))
+            }
+        },
+    )
+}
+
+/** 长说明弹框的正文上界：与开发者日志弹框的 320.dp 同档。 */
+private val INFO_DIALOG_MAX_HEIGHT = 320.dp

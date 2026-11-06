@@ -64,6 +64,22 @@
 > 真编译与 detekt 交 CI 复验。
 > **两条判据**：①「待 CI」会过期，写进文档前先问远端有没有结论；
 > ② 前置门禁一红，后面所有「没跑」的步骤一律不算通过（§8.6.0 的现场复现）。
+>
+> **🕐 同日第二批（液态玻璃光学层 + 设置页收敛）**：参考 FlClash /
+> `chen08209/prism_ui` 的液态玻璃底栏，但**只搬光学层、不搬交互**
+> （lens 拖动 / jelly 弹簧 / goo 融合与本项目「不要花哨动画」的纪律冲突）。
+> 新增 `ui/glass/LiquidGlassOptics.kt`：`createRuntimeShaderEffect` 让 AGSL 直接
+> 采样 RenderNode 内容，与模糊合成 `createChainEffect` —— **零 GPU→CPU 回读**，
+> 修正 `LiquidGlass.kt` 旧 KDoc「折射必须每帧 `toImageBitmap()`」的结论。
+> 三档：≥33 折射 / 分色 / rim，31–32 仅模糊，<31 实色；shader 创建失败**钉住降级**
+> （否则每帧重试抛异常）。另补所有版本生效的静态装饰：上沿 1dp 折边、下沿 rim 暗线。
+> 设置页把两处「点设置弹一整段说明」收敛为 `LongTextInfoDialog`
+> （限高 + 自带滚动 + `bodyMedium` / `onSurfaceVariant` + 单一「关闭」），
+> 修掉 `AlertDialog.text` 槽不滚动导致大字号 / 小屏截尾的老坑。
+> **刻意未动**：设置页分组结构（遵循 `decisions/设置页信息架构-定稿.md`）、
+> `VaultActionResultDialog` 的「完成 / 关闭」分流（有意设计：失败结果不写「完成」）。
+> ⚠️ AGSL 字符串只在**真机 / CI 之外**编译，本机无法验证 ⇒ 必须真机验收这一层；
+> 失败时自动退回「仅模糊 + 静态装饰」，不会崩、也不会退回实色。
 
 ---
 
