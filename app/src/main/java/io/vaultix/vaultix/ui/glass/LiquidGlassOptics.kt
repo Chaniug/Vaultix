@@ -111,13 +111,13 @@ half4 main(float2 coord) {
     /** 每帧调用：只更新 uniform，shader 与 RenderEffect 链都复用首次创建的对象。 */
     fun effect(
         blur: RenderEffect,
-        rect: FloatArray,
+        rect: Rect,
         radius: Float,
         depth: Float,
         part: Float,
     ): ComposeRenderEffect {
         val current = shader ?: RuntimeShader(SOURCE).also { shader = it }
-        current.setFloatUniform("uRect", rect[0], rect[1], rect[2], rect[3])
+        current.setFloatUniform("uRect", rect.left, rect.top, rect.right, rect.bottom)
         current.setFloatUniform("uRadius", radius)
         current.setFloatUniform("uDepth", depth)
         current.setFloatUniform("uPart", part)
@@ -170,12 +170,7 @@ internal fun glassRenderEffect(
     return runCatching {
         OpticsShader.effect(
             blur = blur,
-            rect = floatArrayOf(
-                boundsInLayer.left,
-                boundsInLayer.top,
-                boundsInLayer.right,
-                boundsInLayer.bottom,
-            ),
+            rect = boundsInLayer,
             radius = cornerRadiusPx,
             depth = depthPx,
             part = partPx,
