@@ -140,24 +140,27 @@ class FoldersViewModel @Inject constructor(
      *    （而不是返回 `Result.failure`），会穿出 `viewModelScope.launch` 成为未捕获异常
      *    ⇒ 整个进程被杀，用户看不到任何提示。注释说「意外不该把页面卡在忙碌态」，
      *    但 `finally` 只清了 busy，没拦住异常本身。
-     *    ⇒ 补 `catch` 把意外转成 `UiEvent.Failed`（Snackbar 可见，也方便定位根因）；
-     *      取消必须原样抛出，否则协程取消会被误吞、页面状态再也对不上。
+     *    ⇒ 用 `runCatching` 把意外转成 `UiEvent.Failed`（Snackbar 可见，也方便定位
+     *      根因）。⚠️ 不用 catch(Exception)：detekt 的 TooGenericExceptionCaught
+     *      连 Exception 都判过宽，而这里要兜的正是「任何意外都别让进程死」。
+     *      取消必须原样抛出（runCatching 默认会吞掉它）。
      */
     private fun launchWrite(what: Done, block: suspend () -> Result<Unit>) {
         if (busy.value) return
         busy.value = true
         viewModelScope.launch {
             try {
-                _event.value = block().fold(
+                val guarded = runCatching { block() }.getOrElse { error ->
+                    // 取消是协程的正常收尾，不是「写操作失败」，必须原样抛出。
+                    if (error is CancellationException) throw error
+                    Result.failure(error)
+                }
+                _event.value = guarded.fold(
                     onSuccess = { UiEvent.Succeeded(what) },
                     // message 允许为 null，**不在这里填兜底文案** —— 理由同
                     // `ItemDetailViewModel.UiEvent.SaveFailed`：兜底措辞属于展示层。
                     onFailure = { UiEvent.Failed(it.message) },
                 )
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: Exception) {
-                _event.value = UiEvent.Failed(error.message)
             } finally {
                 busy.value = false
             }
