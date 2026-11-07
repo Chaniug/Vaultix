@@ -19,22 +19,23 @@ package io.vaultix.vaultix.ui.common
 import io.vaultix.model.VaultItemType
 import io.vaultix.model.VaultKind
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ItemTypePolicyTest {
 
     /**
-     * KDBX 只给两种，且**顺序固定**（登录在前）——顺序即表单里的展示顺序，
-     * 也是"当前类型不在表内"时的兜底顺序（见 [selectableItemTypes] 的 KDoc）。
+     * ★ 11-07：KDBX 与 Bitwarden 一样五种全给。
+     *
+     * 数据层 `KdbxItemWriter.applyPayloads` / `KdbxItemMapper.toVaultCard` 等已对
+     * Card / Identity / SSH 双向保真（见 `KdbxToolFields.CARD_PREFIX` 的 KDoc），
+     * 旧 A3 闸门只剩 UI 侧、且会挡住卡包新建 ⇒ 解除。
      */
     @Test
-    fun `KDBX 库只给登录与安全笔记_顺序固定`() {
-        assertEquals(
-            listOf(VaultItemType.Login, VaultItemType.SecureNote),
-            selectableItemTypes(VaultKind.KDBX),
-        )
+    fun `KDBX 库五种全给_载荷已双向保真`() {
+        assertEquals(VaultItemType.entries.toList(), selectableItemTypes(VaultKind.KDBX))
+        assertTrue("KDBX 库必须能新建银行卡，否则卡包「+」是死入口",
+            supportsCardEntries(VaultKind.KDBX))
     }
 
     /** Bitwarden 侧五类全给（云端五类都有对应载荷，裁剪没有任何收益）。 */
@@ -61,6 +62,6 @@ class ItemTypePolicyTest {
     fun `卡入口判定与可选集同源`() {
         assertTrue(supportsCardEntries(VaultKind.BITWARDEN))
         assertTrue(supportsCardEntries(null))
-        assertFalse(supportsCardEntries(VaultKind.KDBX))
+        assertTrue(supportsCardEntries(VaultKind.KDBX))
     }
 }

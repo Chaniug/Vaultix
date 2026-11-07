@@ -401,10 +401,7 @@ private fun DetailHeader(
             Row(
                 horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
                 verticalAlignment = Alignment.CenterVertically,
-                // 撑满整行，weight 才能把同步状态推到最右（否则 Spacer 分到 0 宽度）。
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = Spacing.sm),
+                modifier = Modifier.padding(top = Spacing.sm),
             ) {
                 TypeBadge(stringResource(itemTypeLabelRes(item.type)), BadgeTone.NEUTRAL)
                 // 能力用「小图标」而不是文字胶囊（对齐列表行尾，见 [CapabilityIcon]）。
@@ -422,9 +419,8 @@ private fun DetailHeader(
                         contentDescription = stringResource(R.string.items_filter_passkey),
                     )
                 }
-                // ★ 11-07：同步状态挪到类型徽标这一行的最右。用户：顶栏太远，
-                //    「登录 / 验证码 / 通行密钥」这块有空位，状态就该跟着内容走。
-                Spacer(Modifier.weight(1f))
+                // ★ 11-07 第三轮：紧跟类型徽标/能力图标，与「登录 / 验证码 /
+                //    通行密钥」同一基线对齐（用户：推到最右太远、不好看）。
                 DetailSyncIndicator(status = syncStatus)
             }
             if (isSyncUploading(syncStatus)) {

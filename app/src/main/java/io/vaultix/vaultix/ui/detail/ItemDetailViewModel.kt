@@ -18,6 +18,7 @@ import io.vaultix.model.VaultAttachment
 import io.vaultix.model.KdbxCloudSyncStatus
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultFolder
+import io.vaultix.vaultix.ui.common.isSyncUploading
 import io.vaultix.vaultix.util.SensitiveCache
 import io.vaultix.vaultix.util.VaultixClipboard
 import java.io.File
@@ -166,14 +167,47 @@ class ItemDetailViewModel @Inject constructor(
                     it.copy(
                         vaultName = vault?.name.orEmpty(),
                         serverOrigin = vault?.origin,
-                        syncStatus = vault?.syncStatus,
                     )
                 }
+                publishSyncStatus(vault?.syncStatus)
             }
         }
         viewModelScope.launch {
             prefs.clipboardClearMs.collect { ms -> clipboardClearMs = ms }
         }
+    }
+
+    /**
+     * 上传态的**最短可见窗口**（11-07 第三轮）。
+     *
+     * 真机：`PENDING_UPLOAD → SYNCING → IN_SYNC` 三次写库常在几十毫秒内完成，
+     * Room 的失效通知会合并成一次 ⇒ 详情页一帧「转动」都收不到，用户读作
+     * 「压根没上传、直接显示小云」。
+     *
+     * ⇒ 一旦观察到上传态就记下时间，切回非上传态时补足 [MIN_UPLOAD_VISIBLE_MS]
+     *   才放行。只**延长展示**，不编造状态：数据层的真实状态没有被改写，
+     *   且期间若又进入上传态，[statusJob] 会被取消、重新计时。
+     */
+    private var uploadingSince = 0L
+    private var statusJob: kotlinx.coroutines.Job? = null
+
+    private fun publishSyncStatus(next: KdbxCloudSyncStatus?) {
+        val shownUploading = isSyncUploading(_state.value.syncStatus)
+        val nextUploading = isSyncUploading(next)
+        statusJob?.cancel()
+        if (shownUploading && !nextUploading && uploadingSince > 0L) {
+            val remaining = MIN_UPLOAD_VISIBLE_MS - (System.currentTimeMillis() - uploadingSince)
+            if (remaining > 0L) {
+                statusJob = viewModelScope.launch {
+                    kotlinx.coroutines.delay(remaining)
+                    _state.update { it.copy(syncStatus = next) }
+                }
+                return
+            }
+        }
+        if (nextUploading && !shownUploading) uploadingSince = System.currentTimeMillis()
+        if (!nextUploading) uploadingSince = 0L
+        _state.update { it.copy(syncStatus = next) }
     }
 
     fun copyUsername() {
@@ -356,3 +390,6 @@ class ItemDetailViewModel @Inject constructor(
         const val DEFAULT_CLIPBOARD_CLEAR_MS = 30_000L
     }
 }
+
+/** 上传态最短展示时长：足以被看见，又不至于让「已完成」显得卡住。 */
+private const val MIN_UPLOAD_VISIBLE_MS = 1_200L

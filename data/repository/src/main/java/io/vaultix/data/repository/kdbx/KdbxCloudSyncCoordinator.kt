@@ -341,12 +341,23 @@ class KdbxCloudSyncCoordinator(
         //
         // ⇒ 只要缓存还带 pendingLocalEdits，无论持久化状态说什么，都按"本地改过"处理。
         //   标记在 `write()` 上传成功后才清，不会造成重复上传的空转。
-        val cachedEdits = runCatching {
+        return orchestrator
+            .sync(vaultId, row.origin, localChangedSinceLastSync || hasCachedLocalEdits(vaultId))
+            .toResult()
+    }
+
+    /**
+     * 缓存里是否还有「本地改过、没推上远端」的字节（11-07）。
+     *
+     * `KdbxAutoUploader` 用它当第二个真源：DB 的 `syncStatus` 会被并发同步
+     * 洗成 `SYNCING/IN_SYNC`，但这个标记只在 `write()` 上传成功后才清。
+     * ⚠️ 读缓存失败按「没有」处理：保守，不会凭空触发上传。
+     */
+    suspend fun hasCachedLocalEdits(vaultId: String): Boolean {
+        val row = vaultDao.get(vaultId) ?: return false
+        return runCatching {
             fileCache.load(row.origin)?.pendingLocalEdits == true
         }.getOrDefault(false)
-        return orchestrator
-            .sync(vaultId, row.origin, localChangedSinceLastSync || cachedEdits)
-            .toResult()
     }
 
     /**

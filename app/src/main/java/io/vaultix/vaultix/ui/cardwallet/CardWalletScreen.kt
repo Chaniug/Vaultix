@@ -99,17 +99,21 @@ fun CardWalletScreen(
     val cardCreationSupported by viewModel.cardCreationSupported.collectAsStateWithLifecycle()
     val saving by viewModel.saving.collectAsStateWithLifecycle()
     var creating by remember { mutableStateOf<VaultItem?>(null) }
+    /** 「+」被库类型闸门挡下时用一条提示说明原因，不再静默无反应。 */
+    var creationBlocked by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val collapse = rememberScrollCollapseFraction(listState)
     val barPadding = rememberImmersiveBarPadding(collapse)
 
     LaunchedEffect(addRequest) {
         if (addRequest > 0) {
-            // A3：KDBX 库建不了银行卡（mapper 只产登录/安全笔记，writer 对卡字段静默丢弃，
-            // 见 ui/common/ItemTypePolicy）⇒ 只把请求消费掉、不弹表单。
             // ⚠️ 不能不消费：宿主按「计数非零」触发，不清的话下次重组还会再进这里。
+            // 11-07：KDBX 已放行银行卡；若将来某类库确实不支持，也**不要静默吞掉** ——
+            // 点「+」却什么都没发生是最难自查的反馈，宁可提示原因。
             if (cardCreationSupported) {
                 creating = VaultItem(id = "", title = "", type = VaultItemType.Card)
+            } else {
+                creationBlocked = true
             }
             onAddConsumed()
         }
@@ -161,8 +165,7 @@ fun CardWalletScreen(
         floatingActionButton = {
             // ⚠️ 选中态下隐藏 FAB：此时用户的意图是"对这张卡做点什么"（左滑删除），
             // 一个"新建"按钮悬在那里与当前语义冲突，也容易误点。
-            // ⚠️ A3：KDBX 库不支持银行卡（见 ItemTypePolicy）⇒ 「+」也不给——
-            // 给了也是打开一个"存进去只剩空壳"的表单。
+            // ⚠️ 库类型不支持时隐藏「+」；宿主发来的新建请求由提示条解释原因。
             // 三个条件收成文件级纯函数：主 composable 贴着 detekt 复杂度上限，
             // 且"什么时候不该出现 +"这条判据值得被单测直接钉（见 cardWalletFabVisible）。
             if (cardWalletFabVisible(
@@ -260,6 +263,19 @@ fun CardWalletScreen(
         }
     }
 
+    if (creationBlocked) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { creationBlocked = false },
+            title = { Text(stringResource(R.string.card_wallet_creation_blocked_title)) },
+            text = { Text(stringResource(R.string.card_wallet_creation_blocked_body)) },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = { creationBlocked = false }) {
+                    Text(stringResource(R.string.action_close))
+                }
+            },
+        )
+    }
+
     val draft = creating
     if (draft != null) {
         ItemFormDialog(
@@ -284,8 +300,8 @@ private val CARD_GAP = Spacing.sm
  * 三条各管一件事，缺一条都会出一种坏味道：
  * 1. `embedded`（主界面 Tab 内嵌）——「+」由底部导航条统一承载，页内再放一个是双入口；
  * 2. `selectionActive`（长按选中态）—— 此时用户意图是"对这张卡做点什么"，悬一个新建按钮易误点；
- * 3. `creationSupported`（KDBX 库建不了银行卡，见 [io.vaultix.vaultix.ui.common.supportsCardEntries]）
- *    —— 给了也是打开一个"存进去只剩空壳"的表单。
+ * 3. `creationSupported`（库类型闸门，见 [io.vaultix.vaultix.ui.common.supportsCardEntries]）
+ *    —— 11-07 起 KDBX 已支持银行卡；这里仍保留判据，供未来新增库类型时统一收口。
  *
  * 抽成文件级纯函数：主 composable 贴着 detekt `CyclomaticComplexMethod` 上限
  * （同 [rememberCardSelection] 被抽成 holder 的理由），且这条判据值得被单测直接钉。
@@ -301,8 +317,9 @@ private fun cardWalletFabVisible(
  *
  * - 有卡但被搜索词滤空 ⇒「没有匹配的卡片」；
  * - 没卡且建得成 ⇒「还没有银行卡。按 + 添加一张。」；
- * - 没卡且**建不成**（KDBX 库）⇒ 说明这个库只支持登录与安全笔记 ——
+ * - 没卡且**建不成**（未来新增的受限库类型）⇒ 说明这个库不支持卡片 ——
  *   此时界面上根本没有「+」，文案不能再教用户去按一个不存在的按钮。
+ *   ⚠️ 11-07 起 KDBX 已支持银行卡，正常不会走到这一支。
  */
 private fun cardEmptyStateRes(hasCards: Boolean, creationSupported: Boolean): Int = when {
     hasCards -> R.string.card_wallet_no_match_body

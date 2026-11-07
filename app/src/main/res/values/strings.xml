@@ -956,7 +956,7 @@
     <string name="item_type_ssh_key">SSH 密钥</string>
     <!-- A3：KDBX 库只支持前两种（见 ItemTypePolicy）。表单裁剪后补一行说明，
          否则用户只看到两枚筹码会以为"功能没做完"，而不是"这个库就这两种" -->
-    <string name="item_type_kdbx_hint">KDBX 密码库只支持登录与安全笔记两种条目</string>
+    <string name="item_type_kdbx_hint">卡、身份与 SSH 信息会存为条目的自定义字段，在电脑上可于「高级」中查看</string>
 
     <!-- 条目列表 S7 -->
     <!-- 2026-09-15：库未解锁时的空态。**不能说「还没有保存的密码」**——条目都在，
@@ -1437,11 +1437,13 @@
          `*_title` / `*_body` 取代并删除（按「被取代的删」纪律）。 -->
     <string name="card_wallet_empty_title">还没有银行卡</string>
     <string name="card_wallet_empty_body">按「+」添加一张，卡号可以安全地存在这里。</string>
+    <string name="card_wallet_creation_blocked_title">无法新建卡片</string>
+    <string name="card_wallet_creation_blocked_body">当前密码库不支持这种条目类型，请切换到支持它的库后再试。</string>
     <string name="card_wallet_empty_kdbx_title">这个库不支持银行卡</string>
     <string name="card_wallet_empty_kdbx_body">当前是 KDBX 密码库，只能保存登录与安全笔记。</string>
     <string name="card_wallet_no_match_title">没有匹配的卡片</string>
     <string name="card_wallet_no_match_body">换个关键词试试，或清空搜索框。</string>
-    <!-- A3：KDBX 库不支持银行卡，卡包的「+」随之隐藏 ⇒ 空态不能再教用户按「+」 -->
+    <!-- 保留一套"库不支持卡"的空态文案，供未来新增库类型复用（11-07 起 KDBX 已支持） -->
     <!-- 卡包搜索（2026-09-13 用户反馈「卡包里面没有搜索按钮」） -->
     <string name="card_wallet_search_hint">搜索卡片</string>
     <string name="card_wallet_search_close">关闭搜索</string>

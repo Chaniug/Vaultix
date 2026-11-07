@@ -42,6 +42,7 @@
  */
 package io.vaultix.data.repository.kdbx
 
+import io.vaultix.common.logging.VaultixLog
 import io.vaultix.database.dao.VaultDao
 import io.vaultix.model.KdbxCloudSyncStatus
 import kotlinx.coroutines.CoroutineScope
@@ -87,7 +88,12 @@ class KdbxAutoUploader @Inject constructor(
     fun enqueue(vaultId: String): Job = scope.launch {
         // ⚠️ 异常在这里就地吸收：逸出到 scope 会取消 SupervisorJob 的这个子协程，
         // 而我们要的是"这次失败留下 FAILED 状态，下次还能再试"。
+        // ⚠️ 11-07：但**不能静默吞** —— 真机上「保存后有时没上传」查了很久，
+        //    就是因为这个 runCatching 把原因吃得一点不剩。至少留一条可过滤的日志。
         runCatching { drain(vaultId) }
+            .onFailure { error ->
+                VaultixLog.w(TAG) { "自动上传异常退出（$vaultId）：${error.message}" }
+            }
     }
 
     /**
@@ -102,7 +108,12 @@ class KdbxAutoUploader @Inject constructor(
 
         locks.getOrPut(vaultId) { Mutex() }.withLock {
             var rounds = 0
-            while (rounds < MAX_ROUNDS && hasPendingUpload(vaultId)) {
+            // ★★ 11-07：DB 状态不是「有没有活」的唯一真源。
+            //    `sync` 一开头就 markStatus(SYNCING) 冲掉 PENDING_UPLOAD，而
+            //    impliesLocalChanges(SYNCING)=false；并发/紧随的另一次同步再把它
+            //    洗成 IN_SYNC 时，这里 while 条件直接为假 ⇒ **整轮上传根本不跑**。
+            //    缓存里的 pendingLocalEdits 只在 write() 成功后才清，是更稳的真源。
+            while (rounds < MAX_ROUNDS && hasWork(vaultId)) {
                 rounds++
                 val result = coordinator.sync(vaultId, localChangedSinceLastSync = true)
                 // 失败 / 冲突 / 远端有更新 / 无云端 ⇒ 收工：状态已由编排器记下，
@@ -111,6 +122,10 @@ class KdbxAutoUploader @Inject constructor(
             }
         }
     }
+
+    /** DB 状态 + 缓存脏标记，任一为真就还有活要干。 */
+    private suspend fun hasWork(vaultId: String): Boolean =
+        hasPendingUpload(vaultId) || coordinator.hasCachedLocalEdits(vaultId)
 
     private suspend fun hasPendingUpload(vaultId: String): Boolean =
         KdbxCloudSyncStatus.fromName(vaultDao.get(vaultId)?.syncStatus)?.hasPendingUpload == true
@@ -132,4 +147,6 @@ class KdbxAutoUploader @Inject constructor(
  * "上传期间用户又改了"这种真竞态；再多就没有新信息了 —— 那说明写入方在持续改动，
  * 交给下一次保存去触发更合适，而不是让上传器一直转。
  */
+private const val TAG = "VaultixKdbxUpload"
+
 private const val MAX_ROUNDS = 3

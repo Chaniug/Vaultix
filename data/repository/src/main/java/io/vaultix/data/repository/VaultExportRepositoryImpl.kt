@@ -103,6 +103,8 @@ class VaultExportRepositoryImpl @Inject constructor(
         var failed = 0
         var firstFailure: Throwable? = null
         duplicatePlan.newItems.forEach { item ->
+            // 11-07：KDBX_SUPPORTED_TYPES 已是全量，此分支恒不触发；
+            // 保留判据是为了将来若新增受限库类型，导入不会静默塞进不支持的条目。
             if (!supportsAllTypes && item.type !in KDBX_SUPPORTED_TYPES) {
                 unsupported++
                 return@forEach

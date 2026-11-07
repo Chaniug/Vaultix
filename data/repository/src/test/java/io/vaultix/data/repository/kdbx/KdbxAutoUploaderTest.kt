@@ -47,6 +47,8 @@ class KdbxAutoUploaderTest {
         val status = statusOf(KdbxCloudSyncStatus.PENDING_UPLOAD)
         val dao = daoFor(CLOUD_ORIGIN, status)
         val coordinator = mockk<KdbxCloudSyncCoordinator> {
+            // 11-07：drain 会问缓存脏标记；测试里没有真实缓存 ⇒ 恒 false。
+            coEvery { hasCachedLocalEdits(any()) } returns false
             every { hasCloudSource(CLOUD_ORIGIN) } returns true
             coEvery { sync(VAULT_ID, true) } coAnswers {
                 status.set(KdbxCloudSyncStatus.IN_SYNC.name)
@@ -64,6 +66,8 @@ class KdbxAutoUploaderTest {
         val status = statusOf(KdbxCloudSyncStatus.PENDING_UPLOAD)
         val dao = daoFor(SAF_ORIGIN, status)
         val coordinator = mockk<KdbxCloudSyncCoordinator> {
+            // 11-07：drain 会问缓存脏标记；测试里没有真实缓存 ⇒ 恒 false。
+            coEvery { hasCachedLocalEdits(any()) } returns false
             every { hasCloudSource(SAF_ORIGIN) } returns false
             coEvery { sync(any(), any()) } returns KdbxSyncResult.Uploaded("v2")
         }
@@ -81,6 +85,8 @@ class KdbxAutoUploaderTest {
         val status = statusOf(KdbxCloudSyncStatus.PENDING_UPLOAD)
         val dao = daoFor(CLOUD_ORIGIN, status)
         val coordinator = mockk<KdbxCloudSyncCoordinator> {
+            // 11-07：drain 会问缓存脏标记；测试里没有真实缓存 ⇒ 恒 false。
+            coEvery { hasCachedLocalEdits(any()) } returns false
             every { hasCloudSource(CLOUD_ORIGIN) } returns true
             // 离线：每一轮都失败，且状态**保持** PENDING ⇒ 若实现会重试，就会跑满 MAX_ROUNDS 次。
             coEvery { sync(VAULT_ID, true) } returns KdbxSyncResult.Failed("离线")
@@ -100,6 +106,8 @@ class KdbxAutoUploaderTest {
         val running = AtomicInteger(0)
         val maxConcurrent = AtomicInteger(0)
         val coordinator = mockk<KdbxCloudSyncCoordinator> {
+            // 11-07：drain 会问缓存脏标记；测试里没有真实缓存 ⇒ 恒 false。
+            coEvery { hasCachedLocalEdits(any()) } returns false
             every { hasCloudSource(CLOUD_ORIGIN) } returns true
             // ⚠️ 刻意**不改状态**：让它跑满 MAX_ROUNDS，制造最长的交叠窗口。
             coEvery { sync(VAULT_ID, true) } coAnswers {
@@ -144,6 +152,8 @@ class KdbxAutoUploaderTest {
         val running = AtomicInteger(0)
         val maxConcurrent = AtomicInteger(0)
         val coordinator = mockk<KdbxCloudSyncCoordinator> {
+            // 11-07：drain 会问缓存脏标记；测试里没有真实缓存 ⇒ 恒 false。
+            coEvery { hasCachedLocalEdits(any()) } returns false
             every { hasCloudSource(CLOUD_ORIGIN) } returns true
             coEvery { sync(any(), true) } coAnswers {
                 val now = running.incrementAndGet()
@@ -197,6 +207,8 @@ class KdbxAutoUploaderTest {
         val dao = daoFor(CLOUD_ORIGIN, status)
         val uploads = AtomicInteger(0)
         val coordinator = mockk<KdbxCloudSyncCoordinator> {
+            // 11-07：drain 会问缓存脏标记；测试里没有真实缓存 ⇒ 恒 false。
+            coEvery { hasCachedLocalEdits(any()) } returns false
             every { hasCloudSource(CLOUD_ORIGIN) } returns true
             coEvery { sync(VAULT_ID, true) } coAnswers {
                 uploads.incrementAndGet()
@@ -227,6 +239,26 @@ class KdbxAutoUploaderTest {
         //    否则"状态被上传消费掉"这件事测不出来（那样会跑满 MAX_ROUNDS）。
         coEvery { dao.get(VAULT_ID) } coAnswers { row(origin, status.get(), VAULT_ID) }
         return dao
+    }
+
+    /**
+     * ★ 11-07 真机事故：状态被并发同步洗成 IN_SYNC，但缓存仍带脏标记
+     * ⇒ 旧实现 while 条件为假、整轮上传不跑，用户的改动永远推不上云端。
+     * 本例把 DB 状态设为 IN_SYNC、只让脏标记为真，必须仍触发一次上传。
+     */
+    @Test
+    fun `状态被洗成已同步但缓存仍脏_仍要触发上传`() = runTest {
+        val status = statusOf(KdbxCloudSyncStatus.IN_SYNC)
+        val dao = daoFor(CLOUD_ORIGIN, status)
+        val coordinator = mockk<KdbxCloudSyncCoordinator> {
+            every { hasCloudSource(CLOUD_ORIGIN) } returns true
+            coEvery { hasCachedLocalEdits(VAULT_ID) } returns true
+            coEvery { sync(VAULT_ID, true) } returns KdbxSyncResult.Uploaded("v2")
+        }
+
+        KdbxAutoUploader(dao, coordinator).enqueue(VAULT_ID).join()
+
+        coVerify(exactly = 1) { coordinator.sync(VAULT_ID, true) }
     }
 
     private fun row(origin: String, status: String?, id: String): VaultEntity = VaultEntity(

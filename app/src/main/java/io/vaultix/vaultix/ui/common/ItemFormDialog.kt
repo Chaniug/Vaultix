@@ -748,7 +748,7 @@ private fun FolderPicker(
 /**
  * 新建条目的类型选择：一行可选筹码，选中态即当前类型。
  *
- * @param types 该库可选集（A3；KDBX 只有登录 / 安全笔记两种，见 [selectableItemTypes]）。
+ * @param types 该库可选集（11-07 起 KDBX 也是全量，见 [selectableItemTypes]）。
  */
 @Composable
 private fun TypePicker(

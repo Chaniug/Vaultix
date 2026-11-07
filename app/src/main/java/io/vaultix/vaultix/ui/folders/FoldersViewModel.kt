@@ -63,6 +63,13 @@ class FoldersViewModel @Inject constructor(
         val rows: List<FolderRowUi> = emptyList(),
         /** 库类型：决定删除确认文案（Bitwarden 只脱标签 / KDBX 递归删子树）。 */
         val kind: VaultKind? = null,
+        /**
+         * 回收站条目数（11-07）。KDBX 的回收站是 `meta.recycleBinUuid` 指向的特殊
+         * 分组，`KdbxItemMapper` 有意不把它放进 [rows]（对齐 Bitwarden 软删语义，
+         * 且 `guardedGroupUuid` 禁止删/改名回收站组）⇒ UI 画一条**只读**行：
+         * 让 XC 里建的那个分组可见，又不给破坏入口。null = 不适用 / 读不到。
+         */
+        val recycleBinCount: Int? = null,
         val loading: Boolean = true,
         val busy: Boolean = false,
     )
@@ -95,9 +102,11 @@ class FoldersViewModel @Inject constructor(
     val state: StateFlow<UiState> = combine(
         folderRepository.observeFolders(vaultId),
         vaultRepository.observeVaults(),
+        itemRepository.observeTrash(vaultId),
         itemCounts,
         busy,
-    ) { folders, vaults, counts, isBusy ->
+    ) { folders, vaults, trash, counts, isBusy ->
+        val isKdbx = vaults.firstOrNull { it.id == vaultId }?.kind == VaultKind.KDBX
         UiState(
             rows = folders
                 .map { FolderRowUi(folder = it, itemCount = counts[it.id] ?: 0) }
@@ -105,6 +114,7 @@ class FoldersViewModel @Inject constructor(
                 // （表单下拉框、分组视图）共用，那边要保持库内原始顺序。
                 .sortedBy { it.folder.name.lowercase() },
             kind = vaults.firstOrNull { it.id == vaultId }?.kind,
+            recycleBinCount = if (isKdbx) trash.size else null,
             loading = false,
             busy = isBusy,
         )

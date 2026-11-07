@@ -186,27 +186,20 @@ class KdbxItemRepository @Inject constructor(
         }
 
     /**
-     * A3：**类型硬闸** —— KDBX 库只收 [VaultItemType.Login] / [VaultItemType.SecureNote]。
+     * 写动作入口的**类型校验**（11-07 解除 A3 硬闸后只剩兜底）。
      *
-     * ## 为什么表单裁过了，这里还要再拦一道
+     * A3 当初拦 Card / Identity / SSH，理由是 writer 会把这三类静默丢成空壳。
+     * 但 11-01 起 `KdbxItemWriter.applyPayloads` 已把它们写成自定义字段载荷，
+     * `KdbxItemMapper.toVaultCard/Identity/SshKey` 双向读回（卡号 / CVV 还用
+     * `EntryValue.Encrypted` 保护）；`card_*` 更是 KeePassXC 的 Bitwarden 导入器
+     * 用的生态标准键名 ⇒ 再拦就等于"数据层能存、仓储偏不让存"。
      *
-     * 表单的裁剪（`ItemTypePolicy`）只覆盖「用户手点」这一条路。而
-     * `VaultExportRepositoryImpl` 的**导入**同样汇入 [create]：一份 Bitwarden
-     * 加密 JSON 里若有银行卡/身份/SSH 条目，导入目标是 KDBX 库时就会绕开表单。
-     * 而 KDBX 的 writer 对这三类**没有对应字段区，也不报错**（静默丢弃）——
-     * 结果是导入报告"成功"，库里多出一批"类型是卡、字段全空"的残骸。
-     *
-     * ⇒ 在写动作的入口拦：类型不对就整体拒绝，会话与文件都不碰。
-     *
-     * ## 判据与 UI 同源
-     *
-     * 支持集 = `KdbxItemMapper.toVaultItem` 的**产出集**（读得出来才配存进去），
-     * 也正是 `ui/common/ItemTypePolicy.kt` 给表单看的那个集合。两处若漂移，
-     * 会出现"表单让建、仓储拒收"（用户白填一场）—— 由各自的单测钉住。
+     * ⇒ 现在只挡**领域模型里根本不存在的类型**（枚举外的非法值走不到这里，
+     *   保留是为了导入路径拿到损坏数据时不会静默写进库）。
      */
     private fun requireSupportedType(item: VaultItem) {
         require(item.type in KDBX_SUPPORTED_TYPES) {
-            "KDBX 密码库只支持登录与安全笔记条目，不能保存${item.type.displayName()}（未做任何改动）"
+            "KDBX 密码库不支持${item.type.displayName()}条目（未做任何改动）"
         }
     }
 
@@ -317,12 +310,13 @@ class KdbxItemRepository @Inject constructor(
 }
 
 /**
- * KDBX 库**支持**的条目类型（A3 硬闸的判据）。
+ * KDBX 库**支持**的条目类型（11-07：五类全开）。
  *
  * 与 `KdbxItemMapper.toVaultItem` 的产出集、`ui/common/ItemTypePolicy.kt` 的
- * 表单裁剪集三处同源 —— 各自有单测钉住，改一处必须同步另两处。
+ * 表单可选集三处同源。用 `entries.toSet()` 而不是手写名单：新增类型时不会
+ * 出现"mapper 能读、仓储拒收"的漂移（A3 时代正是手写名单漏了三类）。
  */
-internal val KDBX_SUPPORTED_TYPES = setOf(VaultItemType.Login, VaultItemType.SecureNote)
+internal val KDBX_SUPPORTED_TYPES: Set<VaultItemType> = VaultItemType.entries.toSet()
 
 /**
  * 类型的中文名（只给 [requireSupportedType] 的拒绝文案用）。

@@ -159,6 +159,15 @@ fun FoldersScreen(
                     verticalArrangement = Arrangement.spacedBy(Spacing.sm),
                     modifier = Modifier.fillMaxSize(),
                 ) {
+                    // ★ 11-07：KDBX 的回收站是真实分组，但 mapper 有意不把它放进
+                    //    folders（对齐 Bitwarden 软删语义），且 writer 禁止删/改名它。
+                    //    ⇒ 画一条只读行：用户在 XC 里看到的「回收站」在这里也可见，
+                    //      但不给菜单，避免"能点删除、点了却静默不生效"。
+                    state.recycleBinCount?.let { count ->
+                        item(key = "recycle-bin") {
+                            RecycleBinRow(count = count)
+                        }
+                    }
                     items(state.rows, key = { it.folder.id }) { row ->
                         FolderRow(
                             row = row,
@@ -366,6 +375,47 @@ private fun DeleteFolderDialog(
 
 /** 一行：文件夹图标 + 名字 + 条目数 + 溢出菜单（重命名 / 删除）。 */
 @Composable
+/**
+ * 只读的回收站行（11-07）。
+ *
+ * ⚠️ 不进 [FolderRow]：它没有重命名/删除菜单。`guardedGroupUuid` 明确拒绝
+ *    对 `meta.recycleBinUuid` 做写操作，给菜单等于给用户一个按下去没反应的按钮。
+ */
+@Composable
+private fun RecycleBinRow(count: Int) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+        ),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.lg, vertical = Spacing.md),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Delete,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.width(Spacing.md))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(R.string.trash_title),
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+                Text(
+                    text = stringResource(R.string.folders_item_count, count),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
 private fun FolderRow(
     row: FoldersViewModel.FolderRowUi,
     busy: Boolean,

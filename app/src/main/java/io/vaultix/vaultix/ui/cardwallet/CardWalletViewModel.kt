@@ -67,8 +67,9 @@ class CardWalletViewModel @Inject constructor(
      * 当前活跃库**能不能建银行卡**（A3 · 2026-10-13）。
      *
      * KDBX 的 mapper 只产 Login / SecureNote，写回对 Card 字段静默丢弃
-     * ⇒ 在 KDBX 库里"新建银行卡"得到的是一个类型是卡、字段全空的残骸
-     * （看起来保存成功，详情页一片空白）。⇒ 卡包的新建入口据此显隐。
+     * ★ 11-07：KDBX 侧已解除限制 —— writer/mapper 对 Card 载荷双向保真，
+     *    见 [supportsCardEntries]。这里保留 StateFlow 是为了库类型尚未解析时
+     *    仍能有一致的显隐口径，不再承担"拦截空壳条目"的职责。
      *
      * 初始值 `true`（加载中不闪避）：库摘要流首发很快，FAB 不会可见地跳变。
      */
