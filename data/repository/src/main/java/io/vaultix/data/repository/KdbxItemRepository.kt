@@ -248,7 +248,13 @@ class KdbxItemRepository @Inject constructor(
         //       基线永远不会登记，判它等于把所有本地保存全线拦掉 —— 实测就是这个后果）。
         //    ⚠️ 传 `null` 给 `saveVia` 的调用方（同步编排器）是另一回事：它推的是
         //        "会话里的全部改动"，本来就该让条件写去判，见那里的说明。
-        if (cloudSync.hasCloudSource(origin) && !write.baselineAligned) {
+        // ⚠️ 11-07 真机事故：这里原先只要 `!baselineAligned` 就拒写，
+        //    而「基线没登记（冷启动 / 锁库后）」同样会得到 false ⇒
+        //    显示「已同步」的云端库第一次保存必被拦，同步也解不开（见编排器）。
+        //    `KdbxBaseStore` 文件头早已定下契约：不知道 ⇒ 放行，交给版本令牌兜底。
+        //    ⇒ 只有「确实登记过基线、且对不上」才拦；那才是远端真变过。
+        // ⚠️ 放行不等于放松：条件写仍带 DB 里的旧令牌，远端被别的设备改过会 412 → 冲突。
+        if (cloudSync.hasCloudSource(origin) && write.baselineKnown && !write.baselineAligned) {
             throw KdbxWriteFailure.StaleBaseline().toUserFacing()
         }
 

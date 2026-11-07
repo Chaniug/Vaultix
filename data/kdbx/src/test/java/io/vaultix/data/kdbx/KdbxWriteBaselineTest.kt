@@ -83,6 +83,9 @@ class KdbxWriteBaselineTest {
         )
 
         assertThat(write.baselineAligned).isFalse()
+        // ★ 安全底线：这条是「登记过基线但对不上」⇒ 必须仍然拒写。
+        //   11-07 的修复只放行「没登记过」，绝不放行这一条。
+        assertThat(write.baselineKnown).isTrue()
         assertThat(result.isFailure).isTrue()
         assertThat(result.exceptionOrNull()).isInstanceOf(KdbxWriteFailure.StaleBaseline::class.java)
         // ★ 核心断言：**网络与文件一个字都没动**（不是"失败了但已经写了一半"）。
@@ -111,6 +114,7 @@ class KdbxWriteBaselineTest {
         )
 
         assertThat(write.baselineAligned).isTrue()
+        assertThat(write.baselineKnown).isTrue()
         assertThat(result.isSuccess).isTrue()
         assertThat(source.writes).hasSize(1)
         assertThat(source.writes.single().expectedVersion).isEqualTo("v1")
@@ -198,6 +202,9 @@ class KdbxWriteBaselineTest {
         //   所以这里**必须**由上层显式表态 `true`（"我确实不知道基线，交给令牌兜底"）。
         //   这条用例钉住的正是那个语义：**没记录 ≠ 有问题**。
         assertThat(write.baselineAligned).isFalse()
+        // ★ 11-07 真机事故的关键断言：`false` 在这里的含义是「不知道」而不是「过期」。
+        //   上层必须能据此放行（见 KdbxItemRepository 的写回闸门）。
+        assertThat(write.baselineKnown).isFalse()
         val result = Kdbx.saveVia(
             VAULT_ID,
             source,
@@ -208,6 +215,18 @@ class KdbxWriteBaselineTest {
 
         assertThat(result.isSuccess).isTrue()
         assertThat(source.writes).hasSize(1)
+    }
+
+    @Test
+    fun `hasBaseline 门面只回答是否登记过_不猜内容`() {
+        registerSession(entryTitle = "本机 v1")
+        KdbxBaseStore.clear(VAULT_ID)
+        assertThat(Kdbx.hasBaseline(VAULT_ID)).isFalse()
+
+        // 哪怕登记的内容与会话不同，也仍然「有基线」⇒ 写回闸门该拦，
+        // 同步编排器也不必再花一次整份下载去补。
+        KdbxBaseStore.record(VAULT_ID, mappedContentOf(databaseWith(entryTitle = "远端 v2")))
+        assertThat(Kdbx.hasBaseline(VAULT_ID)).isTrue()
     }
 
     @Test
@@ -326,6 +345,7 @@ class KdbxWriteBaselineTest {
         ).getOrThrow()
 
         assertThat(write.baselineAligned).isFalse()
+        assertThat(write.baselineKnown).isTrue()
         // ★ 基线没被推进 ⇒ 下一次仍然被拦（防线不会因为一次失败就自己松手）。
         assertThat(KdbxBaseStore.current(VAULT_ID)).isNotEqualTo(write.newFingerprint)
     }

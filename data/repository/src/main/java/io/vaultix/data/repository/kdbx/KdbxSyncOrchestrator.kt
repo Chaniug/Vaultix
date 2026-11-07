@@ -145,6 +145,21 @@ class KdbxSyncOrchestrator(
         if (!localChangedSinceLastSync && !remoteChanged) {
             // 两边一致 ⇒ 把远端当前版本记为新的基线（下次条件写要用它）。
             markStatus(vaultId, KdbxSyncStatus.IN_SYNC, remoteNow)
+            // ★ 11-07：补内容基线，解开「保存被拦 → 点同步 → 仍被拦」的死锁。
+            //
+            // 版本令牌是持久化的，而写回基线（内容指纹）是**内存态**：冷启动 / 锁库后
+            // 令牌还在、基线已丢。此前沿这条捷径直接返回，基线永远补不回来，
+            // 于是主写路径每次都把「不知道」读成「过期」，用户反复同步也无解。
+            //
+            // ⚠️ 两个条件都是刻意的：
+            //    · 会话不在时不跑 —— `adoptBaselineIfMatches` 未解锁必然返回 false，
+            //      白下载一整份；也让编排器单测（无真实会话）行为完全不变。
+            //    · 基线已在时不跑 —— 内容对账要整份下载，不该每次同步都来一次。
+            // ⚠️ 对账结果不改变本分支结论：令牌层已判「两边都没改」，
+            //    内容若碰巧不同，保守起见仍由写回闸门 + 条件写去处理，不在这里逼用户拉。
+            if (Kdbx.isUnlocked(vaultId) && !Kdbx.hasBaseline(vaultId)) {
+                adoptRemoteIfSameContent(vaultId, source)
+            }
             return SyncOutcome.AlreadyInSync
         }
 

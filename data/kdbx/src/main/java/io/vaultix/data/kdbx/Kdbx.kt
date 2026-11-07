@@ -560,6 +560,19 @@ object Kdbx {
          * 交给同步的对账去补（见 `adoptBaselineIfMatches`）。
          */
         val baselineAligned: Boolean,
+        /**
+         * 改动那一刻**是否登记过**写回基线（11-07）。
+         *
+         * ⚠️ 为什么必须有第三态：`baselineAligned = false` 同时表达了两件不同的事 ——
+         *    「基线对不上（远端变过，必须拒写）」和「压根没基线（冷启动 / 锁库后，
+         *    信息不足，按 KdbxBaseStore 文件头契约应当放行，交给版本令牌兜底）」。
+         *    上层只有前一件该拦；把两件混成一个 false，就是本次真机事故：
+         *    显示「已同步」却永远保存不了，同步也解不开（同步捷径不重建基线）。
+         *
+         * 与 [baselineAligned] 在**同一写锁、同一时刻**算出，是快照而非事后查询，
+         * 避免「mutate 时没基线、persist 时刚好被登记」这类竞态误判。
+         */
+        val baselineKnown: Boolean,
     )
 
     /**
@@ -709,7 +722,9 @@ object Kdbx {
         //    ⚠️ 这里绝不能改成 `KdbxEncoder.encode(...)`：编码每次换 IV/随机流，字节必然不同
         //       ⇒ 指纹永远对不上 ⇒ 所有正常保存都被判成"内容过期"。详见 `contentFingerprint`。
         val baseFingerprint = KdbxEncoder.contentFingerprint(session.content)
-        val baselineAligned = KdbxBaseStore.current(vaultId) == baseFingerprint
+        val baseline = KdbxBaseStore.current(vaultId)
+        val baselineKnown = baseline != null
+        val baselineAligned = baseline == baseFingerprint
 
         val result = mutator(session.database)
         if (!result.applied) {
@@ -738,6 +753,7 @@ object Kdbx {
                 entryUuid = result.entryUuid,
                 baseFingerprint = baseFingerprint,
                 baselineAligned = baselineAligned,
+                baselineKnown = baselineKnown,
                 // 改完之后的指纹：上层"写回基线该不该跟着推进"要用它（#185）。
                 newFingerprint = KdbxEncoder.contentFingerprint(content),
             ),
@@ -776,6 +792,14 @@ object Kdbx {
 
     /** 该库是否已解锁（内存里有会话）。 */
     fun isUnlocked(vaultId: String): Boolean = KdbxSessionStore.get(vaultId) != null
+
+    /**
+     * 是否登记过写回基线（11-07，供同步编排器用）。
+     *
+     * 基线是进程级内存态，锁库 / 冷启动即丢；同步在「两边都没改」这条捷径上
+     * 若发现它丢了，应补一次内容对账，否则用户会陷进「保存被拦 → 同步 → 仍被拦」。
+     */
+    fun hasBaseline(vaultId: String): Boolean = KdbxBaseStore.current(vaultId) != null
 
     /** 全部已解锁的 KDBX 库 id（供仓储合并进「已解锁库」集合）。 */
     fun unlockedIds(): Set<String> = KdbxSessionStore.unlockedIds()

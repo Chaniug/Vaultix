@@ -121,6 +121,28 @@ class KdbxItemRepositoryTest {
         assertEquals("周三站会", items.last().notes)
     }
 
+    /**
+     * ★ 11-07 真机事故（电脑 KeePassXC 与手机连同一个 OneDrive KDBX）：
+     * 手机显示「已同步」，改一个条目保存却被提示「云端有更新，请先同步」，
+     * 同步后再改还是一样 —— 因为写回基线是内存态，冷启动 / 锁库后为空，
+     * 旧闸门把 `baselineAligned = false`（其实是「不知道」）读成了「确定过期」。
+     *
+     * 这条钉住端到端结论：**没基线不是错误，正常保存必须走通**。
+     * 反证在同一文件的 [KDBX 库拒收银行卡...] 等用例（该拦的仍会拦），
+     * 而「远端真变过」的拒写由 `KdbxWriteBaselineTest` 的基线用例守着。
+     */
+    @Test
+    fun `云端库冷启动没有写回基线时_保存照常放行`() = runTest {
+        val harness = Harness(cloud = true)
+        harness.seedLoginItem()
+        val before = Kdbx.contentOf(VAULT_ID)!!.items.single()
+
+        val result = harness.repository.update(VAULT_ID, before.copy(title = "改过的标题"))
+
+        assertTrue("没有基线 ≠ 内容过期，保存不该被拦：$result", result.isSuccess)
+        assertEquals("改过的标题", Kdbx.contentOf(VAULT_ID)!!.items.single().title)
+    }
+
     // ------------------------------------------------------------ 装置
 
     private fun bankCard() = VaultItem(
@@ -143,7 +165,7 @@ class KdbxItemRepositoryTest {
      * 五个依赖全部 stub 到「本地文件库」这一档（`hasCloudSource = false`）：
      * 网盘分支的缓存/上传调度由 `KdbxSyncOrchestratorTest` 等文件覆盖，这里不重复。
      */
-    private class Harness {
+    private class Harness(cloud: Boolean = false) {
         val source = RecordingSource()
         private val vaultDao = mockk<VaultDao>()
         private val cloudSync = mockk<KdbxCloudSyncCoordinator>()
@@ -153,8 +175,14 @@ class KdbxItemRepositoryTest {
             // ⚠️ stub 里必须显式写 receiver（`.ai/ISSUES.md` #146）：裸 `get(...)` 会被
             //    `MockKMatcherScope` 的同名成员遮蔽，stub 到匹配器上去。
             coEvery { vaultDao.get(VAULT_ID) } returns kdbxVaultRow()
-            every { cloudSync.hasCloudSource(VAULT_ID) } returns false
+            every { cloudSync.hasCloudSource(VAULT_ID) } returns cloud
             every { cloudSync.fileSourceFor(VAULT_ID) } returns source
+            if (cloud) {
+                // 网盘分支会走「写缓存 → 标记待上传 → 排自动上传」，
+                // 这三个 suspend 在非 relaxed mock 上不 stub 会直接抛。
+                coEvery { cloudSync.currentSyncStatus(VAULT_ID) } returns KdbxCloudSyncStatus.IN_SYNC
+                coEvery { cloudSync.markLocalEdited(VAULT_ID) } returns true
+            }
             repository = KdbxItemRepository(
                 vaultDao = vaultDao,
                 cloudSync = cloudSync,
