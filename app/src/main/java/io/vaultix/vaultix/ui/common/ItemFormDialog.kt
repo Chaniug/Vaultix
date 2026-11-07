@@ -390,7 +390,9 @@ private fun SectionLabel(text: String, icon: ImageVector) {
             imageVector = icon,
             contentDescription = null,
             modifier = Modifier.size(Spacing.lg),
-            tint = MaterialTheme.colorScheme.primary,
+            // 11-07：小面积图标换 tertiary，给偏灰蓝的表单加一点活力；
+            // 不改字号 / 间距 / 主色，8.4 §74 的层级判定不受影响。
+            tint = MaterialTheme.colorScheme.tertiary,
         )
         Text(
             text = text,
@@ -420,6 +422,19 @@ private fun SectionLabel(text: String, icon: ImageVector) {
  * @param labelRes 字段名文案资源。
  * @param required 是否必填。为 `true` 时在文案后加一枚 `*`（见 `item_field_name`）。
  */
+/**
+ * 表单字段名的**共用落点**（11-07）：条目表单与验证码表单都要 14sp。
+ *
+ * ⚠️ 只设 `style` 不设 `color`：M3 会按状态把 label 染成 primary（有焦点）/
+ *    onSurfaceVariant（常态）/ error（出错），写死颜色会把这套提示全弄丢。
+ * 收 [String] 而不是资源 id，是因为 TOTP 页的 label 有 `secretLabel(type)`
+ * 这类动态来源；`FormFieldLabel(labelRes)` 走资源 id 的那条路仍保留。
+ */
+@Composable
+internal fun FormFieldText(text: String) {
+    Text(text = text, style = MaterialTheme.typography.bodyMedium)
+}
+
 @Composable
 private fun FormFieldLabel(labelRes: Int, required: Boolean = false) {
     if (required) {
@@ -446,18 +461,18 @@ private fun FormFieldLabel(labelRes: Int, required: Boolean = false) {
  *    8.4 明令禁止「同色叠 alpha」，那种写法在 `surfaceContainerHighest` 卡片上会糊掉边界。
  */
 @Composable
-private fun FieldIcon(icon: ImageVector) {
+internal fun FieldIcon(icon: ImageVector) {
     Box(
         modifier = Modifier
             .size(FIELD_ICON_BOX)
             .clip(VaultixCorner.Small)
-            .background(MaterialTheme.colorScheme.primaryContainer),
+            .background(MaterialTheme.colorScheme.tertiaryContainer),
         contentAlignment = Alignment.Center,
     ) {
         Icon(
             imageVector = icon,
             contentDescription = null,
-            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+            tint = MaterialTheme.colorScheme.onTertiaryContainer,
             modifier = Modifier.size(UiSize.InlineIcon),
         )
     }
@@ -477,10 +492,13 @@ private val FIELD_ICON_BOX = 28.dp
  * 淡底是唯一能做到"一眼看见、但不改变结构"的手段。
  *
  * ⚠️ **必须换色档，不能同色叠 alpha**：卡片底是 `surfaceContainerHighest`，
- *    这里用 `primaryContainer`（M3 里与前三档 surface 不同色相）再压 alpha。
+ *    这里用 `tertiaryContainer`（M3 里与 surface 系列不同色相的具名档）。
  *    若用 `surfaceContainerHighest.copy(alpha = …)`，那正是 8.4 明令禁止的
  *    「同色叠 alpha」—— 边界会糊掉，等于没做。
- * ⚠️ alpha 只取 0.30 左右：这是**背景提示**，一旦过深就会与上面的分区标题抢注意力。
+ * ⚠️ 2026-11-07：原先是 `primaryContainer.copy(alpha = 0.30f)`，半透明叠在卡片上
+ *    在深色 / 动态取色下形成一圈发闷的硬边界（用户：「深色一点的边框，很生硬」）。
+ *    改成**不透明具名色档**后边界干净；顺带把 tertiary 绿引进来补「缺少活力」。
+ *    大面积表面色与 primary 主色一律不动 —— 10-05 那轮降饱和有 WCAG 实测撑着。
  */
 @Composable
 private fun EmphasisBlock(content: @Composable ColumnScope.() -> Unit) {
@@ -488,7 +506,7 @@ private fun EmphasisBlock(content: @Composable ColumnScope.() -> Unit) {
         modifier = Modifier
             .fillMaxWidth()
             .clip(VaultixCorner.Small)
-            .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.30f))
+            .background(MaterialTheme.colorScheme.tertiaryContainer)
             .padding(Spacing.md),
         content = content,
     )
@@ -540,7 +558,8 @@ internal fun FormGroupCard(content: @Composable ColumnScope.() -> Unit) {
         ),
     ) {
         Column(
-            modifier = Modifier.fillMaxWidth().padding(Spacing.lg),
+            modifier = Modifier.fillMaxWidth()
+                .padding(horizontal = Spacing.lg, vertical = 20.dp),
             content = content,
         )
     }

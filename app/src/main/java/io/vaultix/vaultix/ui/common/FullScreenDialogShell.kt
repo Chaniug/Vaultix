@@ -528,6 +528,10 @@ private fun BoxScope.TitleBar(
 /**
  * 底部操作条：**满宽细栏，随滚动变透明**，且随滚动自动隐藏 / 出现。
  *
+ * ⚠️ 11-07 只改「左右对齐 16→24dp」与「按钮分列」，**刻意保留隐身**：
+ *    09-20 用户反馈「滑动不透明、上下栏遮住内容」后才改成滚动后 alpha 0，
+ *    关掉会把那个真机验证过的修复一起推翻。
+ *
  * ## 滚动隐藏
  *
  * 用 M3 官方的 [BottomAppBarDefaults.exitAlwaysScrollBehavior] 状态机，把它的
@@ -576,21 +580,26 @@ private fun BoxScope.ActionBar(
             // ⚠️ 背景在 nav-bar padding **之前**绘制 → 覆盖到手势条区域。
             .background(surface.copy(alpha = backgroundAlpha))
             .padding(bottom = navBarInset)
-            .padding(horizontal = Spacing.lg, vertical = BAR_VERTICAL_PADDING),
+            .padding(horizontal = Spacing.xl, vertical = BAR_VERTICAL_PADDING),
     ) {
         Row(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth(),
-            horizontalArrangement = Arrangement.End,
+            // 11-07：改前三个按钮全挤在 Arrangement.End 右侧，左半条栏空着，
+            // 且左右边距 16dp 与正文 24dp 不同 ⇒ 按钮与表单永远对不齐。
+            // 现在「移除 / 取消」成组靠左、「保存」独自靠右，主次与位置都稳定。
+            horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (destructive != null) {
-                destructive()
-                Spacer(Modifier.width(Spacing.sm))
-            }
-            OutlinedButton(onClick = onDismiss) {
-                Text(stringResource(R.string.action_cancel))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (destructive != null) {
+                    destructive()
+                    Spacer(Modifier.width(Spacing.xs))
+                }
+                OutlinedButton(onClick = onDismiss) {
+                    Text(stringResource(R.string.action_cancel))
+                }
             }
             Spacer(Modifier.width(Spacing.sm))
             // ⚠️ 2026-10-04 观感：主操作由 `TextButton` 改为 **filled `Button`**。

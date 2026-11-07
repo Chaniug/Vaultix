@@ -28,6 +28,11 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Category
+import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
@@ -99,6 +104,8 @@ import io.vaultix.vaultix.ui.common.TopBarTitle
 import io.vaultix.vaultix.ui.common.VaultixExpressiveTopBar
 import io.vaultix.vaultix.ui.shell.BottomDockOccupiedHeight
 import io.vaultix.vaultix.ui.common.FormGroupCard
+import io.vaultix.vaultix.ui.common.FieldIcon
+import io.vaultix.vaultix.ui.common.FormFieldText
 import io.vaultix.vaultix.ui.common.FullScreenDialogShell
 import io.vaultix.vaultix.ui.common.VaultixSearchTopAppBar
 import io.vaultix.vaultix.ui.common.rememberDiscardGate
@@ -1420,29 +1427,35 @@ private fun TotpEditDialog(
         // 没有分组卡片 ⇒ 滚动时输入框的描边直接切在标题栏/底部条下面，
         // 看起来就是"被遮住"。与条目编辑统一成卡片（[FormGroupCard]），
         // 卡片底色 `surfaceContainerHighest` 明显区别于栏的 `surface`，穿越才看得出来。
+        // 11-07：与 ItemFormDialog 统一 —— 字段名 14sp、前置语义徽章、
+        // 字段间距 12dp（8.4 §74 阶梯第 2 档）。此前是裸 16sp + 8dp，
+        // 两页并排看完全像两套设计。
         FormGroupCard {
             TypeDropdown(type) { type = it }
-            Spacer(Modifier.height(Spacing.sm))
+            Spacer(Modifier.height(Spacing.md))
             OutlinedTextField(
                 value = issuer,
                 onValueChange = { issuer = it },
-                label = { Text(stringResource(R.string.totp_field_issuer)) },
+                label = { FormFieldText(stringResource(R.string.totp_field_issuer)) },
+                leadingIcon = { FieldIcon(Icons.Filled.Language) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
-            Spacer(Modifier.height(Spacing.sm))
+            Spacer(Modifier.height(Spacing.md))
             OutlinedTextField(
                 value = account,
                 onValueChange = { account = it },
-                label = { Text(stringResource(R.string.totp_field_account)) },
+                label = { FormFieldText(stringResource(R.string.totp_field_account)) },
+                leadingIcon = { FieldIcon(Icons.Filled.Person) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
-            Spacer(Modifier.height(Spacing.sm))
+            Spacer(Modifier.height(Spacing.md))
             OutlinedTextField(
                 value = secret,
                 onValueChange = { secret = it },
-                label = { Text(secretLabel(type)) },
+                label = { FormFieldText(secretLabel(type)) },
+                leadingIcon = { FieldIcon(Icons.Filled.Key) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -1460,6 +1473,44 @@ private fun TotpEditDialog(
             onPinChange = { pin = it },
             showError = showError,
         )
+        // 11-07：TOTP 只有两张卡，内容不到半屏 ⇒ 用户反馈「没铺满、靠上」。
+        // 补一张只读配置预览（全部复用已有字符串，不新增文案），
+        // 既是有信息量的内容，也把视觉重心往下压一点。
+        Spacer(Modifier.height(Spacing.xl))
+        val issuerFallback = stringResource(R.string.totp_field_issuer)
+        val accountFallback = stringResource(R.string.totp_field_account)
+        FormGroupCard {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Filled.Timer,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.tertiary,
+                    modifier = Modifier.size(32.dp),
+                )
+                Spacer(Modifier.width(Spacing.md))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = issuer.ifBlank { issuerFallback },
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = account.ifBlank { accountFallback },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            Spacer(Modifier.height(Spacing.md))
+            Text(
+                text = typeLabel(type),
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.tertiary,
+            )
+        }
     }
 }
 
@@ -1770,7 +1821,8 @@ private fun TypeDropdown(value: OtpType, onSelected: (OtpType) -> Unit) {
             value = typeLabel(value),
             onValueChange = {},
             readOnly = true,
-            label = { Text(stringResource(R.string.totp_field_type)) },
+            label = { FormFieldText(stringResource(R.string.totp_field_type)) },
+            leadingIcon = { FieldIcon(Icons.Filled.Category) },
             modifier = Modifier.menuAnchor().fillMaxWidth(),
         )
         ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
