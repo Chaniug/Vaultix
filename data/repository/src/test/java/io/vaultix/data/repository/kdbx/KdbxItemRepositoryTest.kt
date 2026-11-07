@@ -127,7 +127,7 @@ class KdbxItemRepositoryTest {
      * 旧闸门把 `baselineAligned = false`（其实是「不知道」）读成了「确定过期」。
      *
      * 这条钉住端到端结论：**没基线不是错误，正常保存必须走通**。
-     * 反证在同一文件的 [KDBX 库拒收银行卡...] 等用例（该拦的仍会拦），
+     * 反证在同一文件的 [KDBX 库放行银行卡_六个字段往返保真] 等用例，
      * 而「远端真变过」的拒写由 `KdbxWriteBaselineTest` 的基线用例守着。
      */
     @Test
