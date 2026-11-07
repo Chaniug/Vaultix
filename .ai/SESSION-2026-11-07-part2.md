@@ -163,3 +163,81 @@
   判据已让它能正确把本地改动推上去；用户不必依赖条目页那个按钮。
 - **C**：一次远端拉取约两次整库下载 + 两次 KDF（对账读完丢弃、`pull` 再读一遍），
   是「同步偏慢」的根因，需单独一批加真机计时。
+
+
+---
+
+## §11 第十一批：上传可靠性、KDBX 银行卡放行、回收站可见（20:05–20:40）
+
+**回答「十条真机反馈里哪些是 bug、哪些是设计，各自怎么落」**
+
+### 先纠正 §2
+
+§2 写「删文件夹闪退：止血，根因未定」。§10 已用 crash buffer 完整堆栈定位：
+`MissingFormatArgumentException: Format specifier '%2$d'` @ `FoldersScreen.kt:338`
+（两条 `folder_delete_*_message` 都要两个参数、代码只传一个），并已根治。
+§2 的「止血」记录保留作历史，结论以 §10 为准。
+
+### 上传链路：从"通了"到"每次都通"
+
+- 真机装 `0.11.2-dev-9809620` 后，`20:10:24.580` 出现
+  「上传成功，缓存令牌已刷新为 #31751fc1」，令牌 `#31751fa2 → #31751fc1`，
+  用户在 XC 端看到了改动 ⇒ §10 的修复生效。
+- 但 `20:05:47` 保存后到 `20:10:24` 才上传成功，中间 4 分半；WAL 里
+  `PENDING_UPLOAD → SYNCING → IN_SYNC` 反复出现 ⇒ **有时不上传**。
+
+**根因**：`KdbxAutoUploader.drain()` 的 while 条件只看 DB 的
+`hasPendingUpload(status)`；`sync` 一开头 `markStatus(SYNCING)` 会冲掉
+`PENDING_UPLOAD`，并发/紧随的另一次同步再把它洗成 `IN_SYNC` 时，
+整轮上传根本不跑。而 `runCatching { drain }` 把异常吃得一点不剩。
+
+**修法**：`hasWork = hasPendingUpload || coordinator.hasCachedLocalEdits`；
+缓存脏标记只在 `write()` 成功后才清，是更稳的真源。`enqueue` 失败留
+`VaultixKdbxUpload` 日志。补反证单测「状态已 IN_SYNC 但缓存脏 ⇒ 仍触发上传」。
+
+### 「有时不显示上传」与「慢」
+
+- 三次 Room 写库常在几十毫秒内合并成一次失效通知 ⇒ 详情页一帧转动都收不到。
+  ⇒ `ItemDetailViewModel.publishSyncStatus` 给上传态加 **1200ms 最短可见窗口**：
+  只延长展示、不改写数据层状态；期间重新进入上传态会取消旧 job 重新计时。
+- 「慢」拆两半：① `20:05` 的 `read=8035ms` / `5574ms` 是缓存线格式
+  `VKC1 → VKC2` 升级导致旧缓存一次性失效、且两个 room 各下一次，**一次性**；
+  ② `20:10:21 → 20:10:24` 的 3.3s 是 `stat()` + 整库条件写，OneDrive 固有成本。
+  ⇒ 不为了"感觉慢"去动同步核心，先做可观测与状态可见。
+
+### KDBX 银行卡：闸门过时，已解除
+
+用户问「XC 高级里有很多属性，能否作为内容接入 KDBX；XC 支持银行卡吗」。
+
+- **XC 没有原生银行卡条目类型**，但「高级」页就是任意自定义字符串字段，
+  社区常用 `card_*` 这类字段承载卡号/有效期/CVV。
+- 查代码发现 `KdbxItemWriter.applyPayloads` 早在 11-01 就把 Card / Identity /
+  SSH 写成自定义字段载荷（`card_*` 正是 **KeePassXC 的 Bitwarden 导入器
+  用的生态标准键名**），`KdbxItemMapper.toVaultCard/Identity/SshKey` 双向读回，
+  卡号与 CVV 按 `EntryValue.Encrypted` 保护。
+- ⇒ A3 时代的「KDBX 只能建登录/安全笔记」是**纯 UI 层的历史限制**，共三处：
+  `ItemTypePolicy.selectableItemTypes`、`KdbxItemRepository.KDBX_SUPPORTED_TYPES`
+  （仓储硬闸，不解除则 UI 放开也保存不了）、`cardWalletFabVisible` 的 KDoc。
+  三处一起解除，白名单改成 `VaultItemType.entries.toSet()` 防再次漂移；
+  同步改 UI 文案、单测与导入路径注释。
+- 卡包页「+」被挡时不再静默消费请求，改为明确提示原因。
+
+### 回收站：设计决策，按只读行展示
+
+`KdbxItemMapper.toMappedContent` 有意把回收站整棵子树排除出 `folders`
+（对齐 Bitwarden 软删语义，且 `guardedGroupUuid` 禁止删/改名回收站组）。
+
+⇒ **不改数据流**（放开会让用户能点删除却被静默拒绝），而是在
+`FoldersScreen` 用 `observeTrash(vaultId).size` 画一条**只读**行：
+XC 里那个分组在手机上可见，但不给菜单。这是"看得见"与"不能破坏"的折中。
+
+### 判据（可复用）
+
+1. UI 闸门放开前，必须沿写入链查到**最后一道**校验；只改 UI 常白做
+   （本批差点漏掉仓储 `requireSupportedType`）。
+2. 「状态流 + 缓存」双真源时，判定"还有没有活"要以**只在成功后清除**的
+   那个为准；DB 状态会被并发覆盖。
+3. 真机"有时不显示"先看**状态窗口是否被合并**，别先改数据源；最短可见
+   窗口只延长展示、不编造状态。
+4. 平台能力问题先查自家代码再查外部：本项目数据层早已支持卡字段，
+   限制只活在上层策略与注释里。
