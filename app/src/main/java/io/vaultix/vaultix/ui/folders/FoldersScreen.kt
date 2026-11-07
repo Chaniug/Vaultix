@@ -373,8 +373,6 @@ private fun DeleteFolderDialog(
     )
 }
 
-/** 一行：文件夹图标 + 名字 + 条目数 + 溢出菜单（重命名 / 删除）。 */
-@Composable
 /**
  * 只读的回收站行（11-07）。
  *
@@ -416,6 +414,8 @@ private fun recycleBinRow(count: Int) {
     }
 }
 
+/** 一行：文件夹图标 + 名字 + 条目数 + 溢出菜单（重命名 / 删除）。 */
+@Composable
 private fun FolderRow(
     row: FoldersViewModel.FolderRowUi,
     busy: Boolean,
