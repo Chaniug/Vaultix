@@ -207,6 +207,8 @@ enum class SyncStatusDot {
     FAILED,
     SUCCESS,
     SYNCING,
+    /** 本地改动已落盘、正在后台上传（11-07）。与 SYNCING 分开：那是「正在跑一次同步」。 */
+    UPLOADING,
     CONFLICT,
     ;
 
@@ -216,6 +218,12 @@ enum class SyncStatusDot {
             KdbxCloudSyncStatus.CONFLICT -> CONFLICT
             KdbxCloudSyncStatus.FAILED -> FAILED
             KdbxCloudSyncStatus.SYNCING -> SYNCING
+            // ★ 11-07：此前两个「待上传」状态落到 else -> null ⇒ 保存后到上传成功
+            //   这一两秒里 ⋮ 菜单的点整个消失，用户看不到后台在干活。
+            //   SyncBadge.of 早就把它们映射成 PENDING 角标了，这里补上同源映射。
+            KdbxCloudSyncStatus.PENDING_UPLOAD,
+            KdbxCloudSyncStatus.PENDING_UPLOAD_WITH_LOCAL_CHANGES,
+            -> UPLOADING
             KdbxCloudSyncStatus.IN_SYNC -> SUCCESS
             else -> null
         }
@@ -258,6 +266,7 @@ fun syncStatusDotLabel(dot: SyncStatusDot): String = stringResource(
         SyncStatusDot.FAILED -> R.string.sync_dot_failed
         SyncStatusDot.SUCCESS -> R.string.sync_dot_success
         SyncStatusDot.SYNCING -> R.string.sync_dot_syncing
+        SyncStatusDot.UPLOADING -> R.string.sync_dot_uploading
         SyncStatusDot.CONFLICT -> R.string.sync_dot_conflict
     },
 )
@@ -269,6 +278,7 @@ fun syncStatusDotDescription(dot: SyncStatusDot): String = stringResource(
         SyncStatusDot.FAILED -> R.string.sync_dot_cd_failed
         SyncStatusDot.SUCCESS -> R.string.sync_dot_cd_success
         SyncStatusDot.SYNCING -> R.string.sync_dot_cd_syncing
+        SyncStatusDot.UPLOADING -> R.string.sync_dot_cd_uploading
         SyncStatusDot.CONFLICT -> R.string.sync_dot_cd_conflict
     },
 )
@@ -284,7 +294,9 @@ fun syncStatusDotDescription(dot: SyncStatusDot): String = stringResource(
 fun syncStatusDotColor(dot: SyncStatusDot): Color = when (dot) {
     SyncStatusDot.FAILED -> MaterialTheme.colorScheme.error
     SyncStatusDot.CONFLICT -> MaterialTheme.colorScheme.primary
-    SyncStatusDot.SYNCING -> Color(0xFFB26A00)
+    SyncStatusDot.SYNCING,
+    SyncStatusDot.UPLOADING,
+    -> Color(0xFFB26A00)
     SyncStatusDot.SUCCESS -> Color(0xFF2E7D32)
 }
 

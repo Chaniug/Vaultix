@@ -107,6 +107,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import io.vaultix.vaultix.ui.common.Capability
 import io.vaultix.vaultix.ui.common.CapabilityIcon
+import io.vaultix.vaultix.ui.common.DetailSyncIndicator
 import io.vaultix.vaultix.ui.common.capabilityTint
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.layout.WindowInsets
@@ -223,7 +224,16 @@ private class DetailActions(
 @Composable
 private fun DetailBodyContent(
     modifier: Modifier,
-    busy: Boolean,
+    /**
+     * 删除中：页面马上要消失，才允许整页转圈。
+     *
+     * ⚠️ 11-07：**保存中刻意不遮**。Kdbx.mutateLocked 在写锁里就把会话换成新内容，
+     *    persist 末尾 bump 一下界面就能看到 —— `saving` 等的是本地 KDF 编码 /
+     *    往返自检 / 写缓存，**不是网络**。此前 `busy = saving || deleting` 把整页换成
+     *    WavyProgress，等于把「本地已经改完的结果」藏起来一两秒，用户读作「加载保存」。
+     *    云端进度由 ⋮ 菜单的同步状态点与列表角标表达，不该由本页遮罩承担。
+     */
+    deleting: Boolean,
     /** 条目流是否已发射过（false = 还不知道有没有这条，见 `ItemDetailViewModel.UiState.itemLoaded`）。 */
     loading: Boolean,
     item: VaultItem?,
@@ -237,7 +247,7 @@ private fun DetailBodyContent(
         when {
             // 加载中：画转圈而不是"不存在"（见本函数 KDoc）。
             loading && item == null -> VaultixWavyProgress(modifier = Modifier.align(Alignment.Center))
-            busy -> VaultixWavyProgress(modifier = Modifier.align(Alignment.Center))
+            deleting -> VaultixWavyProgress(modifier = Modifier.align(Alignment.Center))
             item == null -> Text(
                 text = stringResource(R.string.detail_missing),
                 style = MaterialTheme.typography.bodyMedium,
@@ -502,7 +512,7 @@ fun ItemDetailScreen(
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             DetailBodyContent(
                 modifier = Modifier.fillMaxSize(),
-                busy = state.saving || state.deleting,
+                deleting = state.deleting,
                 loading = !state.itemLoaded,
                 item = item,
                 serverOrigin = state.serverOrigin,
@@ -522,6 +532,9 @@ fun ItemDetailScreen(
                     // （详情页是二级路由，栈里有上一层，`BackHandler` 由导航库自己接管）。
                     // 去掉后标题左移到 16dp 起始位，长标题能多显示约一个字符位。
                     actions = {
+                        // 11-07：库级同步状态放在动作区最左 —— 固定可见、不随内容滚动，
+                        // 保存后「转动 → 小云」在这里收敛，不必进 ⋮ 菜单找。
+                        DetailSyncIndicator(status = state.syncStatus)
                         // 2026-10-01 起 KDBX 也能编辑 / 删除（阶段 B 写回上线），
                         //   不再有"只读库不画入口"这一支 —— 那是 #106 时代的诚实拒绝，现在换成了真支持。
                         IconButton(onClick = { editOpen = true }) {

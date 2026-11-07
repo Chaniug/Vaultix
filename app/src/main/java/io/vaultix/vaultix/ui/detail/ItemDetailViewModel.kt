@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.map
 import io.vaultix.domain.VaultRepository
 import io.vaultix.domain.VaultSaveOutcome
 import io.vaultix.model.VaultAttachment
+import io.vaultix.model.KdbxCloudSyncStatus
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultFolder
 import io.vaultix.vaultix.util.SensitiveCache
@@ -127,6 +128,11 @@ class ItemDetailViewModel @Inject constructor(
         val serverOrigin: String? = null,
         val saving: Boolean = false,
         val deleting: Boolean = false,
+        /**
+         * 库级云同步状态（11-07）：详情页顶栏指示器的唯一数据源。
+         * 与 `observeVaults()` 同源，`null` = 本地库 / 还没读到 ⇒ 不画。
+         */
+        val syncStatus: KdbxCloudSyncStatus? = null,
         /** 正在下载附件（同一时刻只允许一个，UI 据此禁用其它附件的下载按钮）。 */
         val downloadingAttachment: Boolean = false,
     )
@@ -160,6 +166,7 @@ class ItemDetailViewModel @Inject constructor(
                     it.copy(
                         vaultName = vault?.name.orEmpty(),
                         serverOrigin = vault?.origin,
+                        syncStatus = vault?.syncStatus,
                     )
                 }
             }

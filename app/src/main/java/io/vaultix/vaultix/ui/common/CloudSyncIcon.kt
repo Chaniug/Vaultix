@@ -14,10 +14,12 @@
  */
 package io.vaultix.vaultix.ui.common
 
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
@@ -25,6 +27,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.dp
+import io.vaultix.model.KdbxCloudSyncStatus
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.theme.Spacing
 
@@ -56,6 +62,71 @@ fun CloudSyncIcon(synced: Boolean, modifier: Modifier = Modifier) {
         icon = Icons.Filled.CloudOff
         tint = MaterialTheme.colorScheme.error
         descriptionRes = R.string.sync_state_pending
+    }
+    Icon(
+        imageVector = icon,
+        contentDescription = stringResource(descriptionRes),
+        tint = tint,
+        modifier = modifier.size(CLOUD_ICON_SIZE),
+    )
+}
+
+/**
+ * 详情页顶栏的**库级**云同步状态（11-07）。
+ *
+ * ## 与 [CloudSyncIcon] 的区别（别混用）
+ *
+ * | | CloudSyncIcon | 本组件 |
+ * |---|---|---|
+ * | 粒度 | 条目级（Bitwarden `pending_ops`） | 库级（`vaults.syncStatus`） |
+ * | 适用 | 仅 Bitwarden | **仅 KDBX 网盘库** |
+ * | 状态 | 已推 / 没推 | 待上传→同步中→已同步 / 失败 / 冲突 |
+ *
+ * ⚠️ KDBX 是**整文件**同步，没有「某一条上云了」的概念；
+ *    `observeSyncStates` 对 KDBX 恒返回空 map，条目级云图标在这里画不出来。
+ *
+ * 形态（用户指定）：上传中 = M3 内置 [CircularProgressIndicator] 转动；
+ * 成功 = [Icons.Filled.CloudDone] 小云弱化色；失败/冲突 = `CloudOff` + error。
+ * 本地 SAF 库（`null` / `LOCAL_ONLY` / `REMOTE_CHANGED`）不画 —— 不编造不存在的云端状态。
+ *
+ * 文案**全部复用已有资源**，不新增字符串：读屏描述与视觉状态成对。
+ */
+@Composable
+fun DetailSyncIndicator(status: KdbxCloudSyncStatus?, modifier: Modifier = Modifier) {
+    val uploading = status == KdbxCloudSyncStatus.PENDING_UPLOAD ||
+        status == KdbxCloudSyncStatus.PENDING_UPLOAD_WITH_LOCAL_CHANGES ||
+        status == KdbxCloudSyncStatus.SYNCING
+    if (uploading) {
+        val label = stringResource(R.string.sync_dot_uploading)
+        CircularProgressIndicator(
+            modifier = modifier
+                .size(CLOUD_ICON_SIZE)
+                .padding(2.dp)
+                .semantics { contentDescription = label },
+            strokeWidth = 2.dp,
+        )
+        return
+    }
+    val icon: ImageVector
+    val tint: Color
+    val descriptionRes: Int
+    when (status) {
+        KdbxCloudSyncStatus.IN_SYNC -> {
+            icon = Icons.Filled.CloudDone
+            tint = MaterialTheme.colorScheme.onSurfaceVariant
+            descriptionRes = R.string.sync_state_synced
+        }
+        KdbxCloudSyncStatus.FAILED -> {
+            icon = Icons.Filled.CloudOff
+            tint = MaterialTheme.colorScheme.error
+            descriptionRes = R.string.sync_dot_failed
+        }
+        KdbxCloudSyncStatus.CONFLICT -> {
+            icon = Icons.Filled.CloudOff
+            tint = MaterialTheme.colorScheme.error
+            descriptionRes = R.string.sync_dot_conflict
+        }
+        else -> return
     }
     Icon(
         imageVector = icon,

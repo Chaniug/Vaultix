@@ -170,10 +170,12 @@
     <string name="sync_dot_failed">同步失败</string>
     <string name="sync_dot_success">同步成功</string>
     <string name="sync_dot_syncing">正在同步</string>
+    <string name="sync_dot_uploading">正在上传改动</string>
     <string name="sync_dot_conflict">同步冲突</string>
     <string name="sync_dot_cd_failed">同步失败，点按重试</string>
     <string name="sync_dot_cd_success">同步成功</string>
     <string name="sync_dot_cd_syncing">正在同步，请稍候</string>
+    <string name="sync_dot_cd_uploading">正在上传改动，请稍候</string>
     <string name="sync_dot_cd_conflict">同步冲突，需要选择保留哪一版</string>
     <!-- 同步进行中：此前 InProgress 横幅只有一条波浪进度条、零文字，
          等待全程没有交代（真机 18:08 那次「提示有更新 → 条目出现」中间空了 36 秒）。 -->
