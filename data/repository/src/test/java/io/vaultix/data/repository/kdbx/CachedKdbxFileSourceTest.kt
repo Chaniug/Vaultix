@@ -277,6 +277,29 @@ class CachedKdbxFileSourceTest {
         assertEquals("不该再下载一次", 0, delegate.readCount)
     }
 
+    /**
+     * ★★ 11-07 真机事故：手机改了条目、云端一个字节没变，却直接显示"已同步"。
+     *
+     * `persist` 把**本地新字节**写进缓存、沿用旧令牌；令牌一致时旧逻辑短路返回缓存，
+     * 内容对账于是拿"本地改动"冒充"远端当前" ⇒ 恒等 ⇒ 状态洗成 IN_SYNC ⇒ 上传被跳过。
+     *
+     * ⇒ 带 `pendingLocalEdits` 的缓存：不许短路、必须真读远端、且不许回写缓存
+     *   （回写会用远端旧字节盖掉用户刚改的内容）。
+     */
+    @Test
+    fun `缓存含本地未上传改动时不许短路_必须真读远端且不覆盖缓存`() = runTest {
+        val cache = FakeCache()
+        cache.save(key, CachedKdbxFile("local-edit".toByteArray(), "etag-1", pendingLocalEdits = true))
+        val delegate = source("real-remote".toByteArray(), token = "etag-1")
+
+        val bytes = CachedKdbxFileSource(delegate, cache, key, backgroundScope).readRemoteCurrent()
+
+        assertArrayEquals("必须拿到真远端字节，不能是本地改动", "real-remote".toByteArray(), bytes)
+        assertEquals("必须真的下载一次", 1, delegate.readCount)
+        assertArrayEquals("缓存里的本地改动不能被远端旧字节覆盖", "local-edit".toByteArray(), cache.peek(key)!!.bytes)
+        assertEquals(true, cache.peek(key)!!.pendingLocalEdits)
+    }
+
     @Test
     fun `缓存令牌为空时不许短路，必须真去远端读`() = runTest {
         // fail-closed：令牌是唯一能证明「缓存 == 远端」的证据，没有证据就不能省下载。

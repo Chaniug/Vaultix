@@ -207,7 +207,7 @@
     <string name="folder_delete_bitwarden_title">删除文件夹？</string>
     <string name="folder_delete_bitwarden_message">「%1$s」这个文件夹会被删除。里面的 %2$d 个条目不会被删，只是变成「无文件夹」。</string>
     <string name="folder_delete_kdbx_title">删除分组？</string>
-    <string name="folder_delete_kdbx_message">「%1$s」会连同里面的 %2$d 个条目一起删除，不能撤销。</string>
+    <string name="folder_delete_kdbx_message">「%1$s」会连同里面的所有条目一起删除，不能撤销。</string>
 
     <string name="folder_created">文件夹已新建</string>
     <string name="folder_renamed">文件夹已重命名</string>

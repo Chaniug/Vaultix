@@ -25,9 +25,10 @@ import kotlinx.coroutines.withContext
  *
  * ```
  * <root>/<sha256(key)>.kdbx
- *   [int  magic     ]  固定 [MAGIC]（"VKC1"）
+ *   [int  magic     ]  固定 [MAGIC]（"VKC2"）
  *   [int  tagLen    ]  versionToken 的 UTF-8 字节数；-1 = 无令牌
  *   [int  payloadLen]  KDBX 文件字节数
+ *   [byte flags     ]  bit0 = [CachedKdbxFile.pendingLocalEdits]（11-07）
  *   [byte ...       ]  versionToken 字节（tagLen >= 0 时）
  *   [byte ...       ]  KDBX 文件字节（密文）
  * ```
@@ -111,6 +112,7 @@ class FileKdbxFileCache(private val root: File) : KdbxFileCache {
             stream.writeInt(MAGIC)
             stream.writeInt(tagBytes?.size ?: NO_TOKEN)
             stream.writeInt(file.bytes.size)
+            stream.writeByte(if (file.pendingLocalEdits) FLAG_PENDING_LOCAL_EDITS else 0)
             tagBytes?.let { stream.write(it) }
             stream.write(file.bytes)
         }
@@ -128,6 +130,7 @@ class FileKdbxFileCache(private val root: File) : KdbxFileCache {
         if (buffer.int != MAGIC) return null
         val tagLength = buffer.int
         val payloadLength = buffer.int
+        val flags = buffer.get().toInt() and 0xFF
         // 令牌段长度非法（比剩余字节还多 / 负数且不是哨兵）⇒ 截断或损坏。
         if (tagLength < NO_TOKEN || tagLength > buffer.remaining()) return null
         val versionToken = if (tagLength == NO_TOKEN) {
@@ -143,7 +146,11 @@ class FileKdbxFileCache(private val root: File) : KdbxFileCache {
         if (payloadLength <= 0 || payloadLength != buffer.remaining()) return null
         val payload = ByteArray(payloadLength)
         buffer.get(payload)
-        return CachedKdbxFile(payload, versionToken)
+        return CachedKdbxFile(
+            bytes = payload,
+            versionToken = versionToken,
+            pendingLocalEdits = flags and FLAG_PENDING_LOCAL_EDITS != 0,
+        )
     }
 
     private fun clear(file: File) {
@@ -158,13 +165,22 @@ class FileKdbxFileCache(private val root: File) : KdbxFileCache {
             .joinToString("") { "%02x".format(it) }
 
     private companion object {
-        /** "VKC1"：缓存格式标识。KDBX 密文的头四字节是签名，不会撞上这个值。 */
-        const val MAGIC = 0x564B4331
+        /**
+         * "VKC2"：缓存格式标识。KDBX 密文的头四字节是签名，不会撞上这个值。
+         *
+         * ⚠️ VKC1 → VKC2 是为了把 `pendingLocalEdits` 落盘。旧格式 magic 不匹配 ⇒
+         *    自动判未命中并清掉（见类 KDoc「旧格式怎么办」）：缓存是优化，
+         *    丢一次只等于多下一次库，不需要迁移逻辑。
+         */
+        const val MAGIC = 0x564B4332
 
         /** 无令牌的哨兵（用 -1 而不是 0：0 长度令牌与"没有令牌"语义不同）。 */
         const val NO_TOKEN = -1
 
-        /** magic + tagLen + payloadLen 三个 int。 */
-        const val HEADER_BYTES = Int.SIZE_BYTES * 3
+        /** flags 的 bit0：这份缓存含本地未上传改动。 */
+        const val FLAG_PENDING_LOCAL_EDITS = 0x01
+
+        /** magic + tagLen + payloadLen 三个 int，外加一个 flags 字节。 */
+        const val HEADER_BYTES = Int.SIZE_BYTES * 3 + 1
     }
 }

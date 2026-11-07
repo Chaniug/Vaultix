@@ -206,6 +206,7 @@ fun FoldersScreen(
     if (deleting != null) {
         DeleteFolderDialog(
             name = deleting.folder.name,
+            itemCount = deleting.itemCount,
             kind = state.kind,
             busy = state.busy,
             onDismiss = { pendingDelete = null },
@@ -308,10 +309,15 @@ private val FolderDialogSaver = listSaver<FolderDialogState?, String>(
  * 给一个偏小的数字比不给更危险（用户会想"才 2 条，删吧"），而算准它需要重走整棵树
  * ——那是 `KdbxItemWriter.deletionCostOf` 的活，为一个确认框去跑一次文件解析不划算。
  * ⇒ KDBX 只说"连同里面的条目一起删"，Bitwarden 侧照常给数（那边是扁平统计，准确）。
+ *
+ * ⚠️ 11-07 真机崩溃：两条文案都含 `%2$d`，但 `text` 槽只传了 `name` ⇒
+ *    `MissingFormatArgumentException: Format specifier '%2$d'`，删除确认框一组合就崩。
+ *    KDBX 文案已去掉数字占位符；Bitwarden 文案保留，必须传 `itemCount`。
  */
 @Composable
 private fun DeleteFolderDialog(
     name: String,
+    itemCount: Int,
     kind: VaultKind?,
     busy: Boolean,
     onDismiss: () -> Unit,
@@ -334,10 +340,11 @@ private fun DeleteFolderDialog(
         text = {
             Text(
                 if (isKdbx) {
-                    // 只有一个占位符（名字）；`String.format` 多传参数不会崩，但没法表达"不算数"。
+                    // KDBX 文案只含 `%1$s`：子组条目数不准，宁可不给数（见 KDoc）。
                     stringResource(R.string.folder_delete_kdbx_message, name)
                 } else {
-                    stringResource(R.string.folder_delete_bitwarden_message, name)
+                    // ⚠️ Bitwarden 文案含 `%2$d`，少传一个参数会在组合期直接崩。
+                    stringResource(R.string.folder_delete_bitwarden_message, name, itemCount)
                 },
             )
         },

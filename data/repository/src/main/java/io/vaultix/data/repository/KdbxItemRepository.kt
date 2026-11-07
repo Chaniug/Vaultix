@@ -264,7 +264,13 @@ class KdbxItemRepository @Inject constructor(
             val previousToken = runCatching { fileCache.load(origin) }.getOrNull()?.versionToken
             // ⚠️ 状态必须在写缓存**之前**读：下面 `markLocalEdited` 会把它改成 PENDING_UPLOAD。
             val statusBeforeWrite = cloudSync.currentSyncStatus(vaultId)
-            fileCache.save(origin, CachedKdbxFile(bytes, previousToken))
+            // ★ 11-07：标记「这份缓存含本地未上传改动」。少了这一步，
+            //    readRemoteCurrent() 的令牌短路会把它当成远端字节做内容对账，
+            //    对账恒"相等" ⇒ 状态洗成 IN_SYNC ⇒ 自动上传被跳过（真机：改动上不了云）。
+            fileCache.save(
+                origin,
+                CachedKdbxFile(bytes, previousToken, pendingLocalEdits = true),
+            )
             // 再标记待上传。**这一步不能省**：同步的"本地改过没有"是从持久化的
             // `vaults.syncStatus` 读出来的，不标记的话下一次同步会判"两边都没变"，
             // 那笔改动永远推不上去（见 KdbxSyncOrchestrator.markLocalEdited 的 KDoc）。

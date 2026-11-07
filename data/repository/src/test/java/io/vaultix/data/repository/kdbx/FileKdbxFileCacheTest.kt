@@ -117,6 +117,27 @@ class FileKdbxFileCacheTest {
         assertNull("没有 magic 的文件一律不可信（旧格式 / 被改过）", cache.load(key))
     }
 
+    /** 11-07：脏标记必须落盘，否则进程重启后又会把本地改动冒充远端字节。 */
+    @Test
+    fun `本地未上传标记_存取往返不丢`() = runTest {
+        val cache = FileKdbxFileCache(root)
+        cache.save(key, CachedKdbxFile("edited".toByteArray(), "etag-1", pendingLocalEdits = true))
+
+        val loaded = cache.load(key)
+
+        assertNotNull(loaded)
+        assertArrayEquals("edited".toByteArray(), loaded?.bytes)
+        assertEquals(true, loaded?.pendingLocalEdits)
+    }
+
+    @Test
+    fun `干净缓存的标记恒为false`() = runTest {
+        val cache = FileKdbxFileCache(root)
+        cache.save(key, CachedKdbxFile("payload".toByteArray(), "etag-1"))
+
+        assertEquals(false, cache.load(key)?.pendingLocalEdits)
+    }
+
     @Test
     fun `删除后读不到`() = runTest {
         val cache = FileKdbxFileCache(root)

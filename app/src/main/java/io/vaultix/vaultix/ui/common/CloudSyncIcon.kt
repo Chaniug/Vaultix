@@ -14,6 +14,8 @@
  */
 package io.vaultix.vaultix.ui.common
 
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
@@ -21,8 +23,10 @@ import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -32,6 +36,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import io.vaultix.model.KdbxCloudSyncStatus
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.theme.VaultixCorner
 import io.vaultix.vaultix.ui.theme.Spacing
 
 /** 云同步图标的尺寸（与收藏星标、能力徽标同一视觉重量）。 */
@@ -91,11 +96,33 @@ fun CloudSyncIcon(synced: Boolean, modifier: Modifier = Modifier) {
  *
  * 文案**全部复用已有资源**，不新增字符串：读屏描述与视觉状态成对。
  */
-@Composable
-fun DetailSyncIndicator(status: KdbxCloudSyncStatus?, modifier: Modifier = Modifier) {
-    val uploading = status == KdbxCloudSyncStatus.PENDING_UPLOAD ||
+/** 是否处于「本地改动正在推上云」的阶段（图标与进度条共用同一判据）。 */
+fun isSyncUploading(status: KdbxCloudSyncStatus?): Boolean =
+    status == KdbxCloudSyncStatus.PENDING_UPLOAD ||
         status == KdbxCloudSyncStatus.PENDING_UPLOAD_WITH_LOCAL_CHANGES ||
         status == KdbxCloudSyncStatus.SYNCING
+
+/**
+ * 上传中的**不确定进度条**（M3 内置 [LinearProgressIndicator]）。
+ *
+ * 一次 KDBX 上传是「整文件条件写」，拿不到可信的百分比 ⇒ 用不确定进度而不是虚构数字。
+ * 与 [DetailSyncIndicator] 成对：上传中 = 转动 + 细进度条；完成 = 只剩小云。
+ */
+@Composable
+fun DetailSyncProgress(modifier: Modifier = Modifier) {
+    LinearProgressIndicator(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(PROGRESS_HEIGHT)
+            .clip(VaultixCorner.Pill),
+        color = MaterialTheme.colorScheme.primary,
+        trackColor = MaterialTheme.colorScheme.surfaceVariant,
+    )
+}
+
+@Composable
+fun DetailSyncIndicator(status: KdbxCloudSyncStatus?, modifier: Modifier = Modifier) {
+    val uploading = isSyncUploading(status)
     if (uploading) {
         val label = stringResource(R.string.sync_dot_uploading)
         CircularProgressIndicator(
@@ -135,3 +162,6 @@ fun DetailSyncIndicator(status: KdbxCloudSyncStatus?, modifier: Modifier = Modif
         modifier = modifier.size(CLOUD_ICON_SIZE),
     )
 }
+
+/** 上传进度条的厚度：细到不抢标题，又能被一眼看见。 */
+private val PROGRESS_HEIGHT = 3.dp

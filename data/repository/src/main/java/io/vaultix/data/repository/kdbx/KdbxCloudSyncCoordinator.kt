@@ -332,7 +332,21 @@ class KdbxCloudSyncCoordinator(
      */
     suspend fun sync(vaultId: String, localChangedSinceLastSync: Boolean): KdbxSyncResult {
         val row = vaultDao.get(vaultId) ?: return KdbxSyncResult.Failed("找不到该密码库")
-        return orchestrator.sync(vaultId, row.origin, localChangedSinceLastSync).toResult()
+        // ★★ 11-07：缓存里的脏标记是「本地有改动」的**第二个真源**。
+        //
+        // `sync` 一开头就 markStatus(SYNCING)，把 PENDING_UPLOAD 冲成 SYNCING；
+        // 而 `impliesLocalChanges(SYNCING) = false`。于是并发/紧随的另一次同步
+        // 现查状态时得到 false ⇒ 编排器走「两边都没变」捷径 ⇒ 状态洗成 IN_SYNC，
+        // 那笔改动就再也不会被推上去（真机：手机改了、云端一个字节没变、直接显示小云）。
+        //
+        // ⇒ 只要缓存还带 pendingLocalEdits，无论持久化状态说什么，都按"本地改过"处理。
+        //   标记在 `write()` 上传成功后才清，不会造成重复上传的空转。
+        val cachedEdits = runCatching {
+            fileCache.load(row.origin)?.pendingLocalEdits == true
+        }.getOrDefault(false)
+        return orchestrator
+            .sync(vaultId, row.origin, localChangedSinceLastSync || cachedEdits)
+            .toResult()
     }
 
     /**
@@ -445,6 +459,11 @@ class KdbxCloudSyncCoordinator(
         // ⚠️ 写回基线（#185）由 `Kdbx.replaceSession` 一并建立 —— 会话换成了远端那一版，
         //    "本机内容来自哪一版"这个问题从这一刻起有了确定答案。
         orchestrator.markResolved(vaultId, remoteToken)
+        // ★ 11-07：会话已经是远端那一版 ⇒ 缓存必须同步收敛，并**清掉脏标记**。
+        //   `readRemoteCurrent()` 在缓存带 pendingLocalEdits 时故意不回写（保住本地改动），
+        //   但走到这里说明用户已明确选「用远端覆盖」（或本地确实没改动），
+        //   留着脏缓存会让下次解锁又读回被丢弃的本地内容。
+        runCatching { fileCache.save(row.origin, CachedKdbxFile(bytes, remoteToken)) }
         return KdbxSyncResult.Downloaded
     }
 

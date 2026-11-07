@@ -107,6 +107,9 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import io.vaultix.vaultix.ui.common.Capability
 import io.vaultix.vaultix.ui.common.CapabilityIcon
+import io.vaultix.model.KdbxCloudSyncStatus
+import io.vaultix.vaultix.ui.common.DetailSyncProgress
+import io.vaultix.vaultix.ui.common.isSyncUploading
 import io.vaultix.vaultix.ui.common.DetailSyncIndicator
 import io.vaultix.vaultix.ui.common.capabilityTint
 import androidx.compose.foundation.ScrollState
@@ -212,6 +215,8 @@ private class DetailActions(
      * 做成 getter 而不是常量：组织名随解密流异步到达，条目先到时会短暂为 null。
      */
     val organizationNameOf: (String) -> String? = { null },
+    /** 库级同步状态（11-07 第二批：图标从顶栏移到类型徽标行）。 */
+    val syncStatus: KdbxCloudSyncStatus? = null,
 )
 
 /**
@@ -291,7 +296,11 @@ private fun DetailSections(
         Spacer(Modifier.height(barPadding))
         // 顶部头部：站点图标 + 一行摘要（网址数 / 2FA / 通行密钥）+ 用户名 + 类型徽标。
         // 标题**只在顶栏出现一次**，头部不再重复（见 [DetailHeader] 的 KDoc）。
-        DetailHeader(item = item, serverOrigin = serverOrigin)
+        DetailHeader(
+            item = item,
+            serverOrigin = serverOrigin,
+            syncStatus = actions.syncStatus,
+        )
         Spacer(Modifier.height(20.dp))
         if (item.username.isNotBlank() || item.password.isNotBlank()) {
             LoginSection(
@@ -360,7 +369,11 @@ private fun DetailSections(
  *    此前必须滚下去逐个分区看。
  */
 @Composable
-private fun DetailHeader(item: VaultItem, serverOrigin: String?) {
+private fun DetailHeader(
+    item: VaultItem,
+    serverOrigin: String?,
+    syncStatus: KdbxCloudSyncStatus?,
+) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         SiteIcon(item = item, serverOrigin = serverOrigin, size = DETAIL_HEADER_ICON)
         Spacer(Modifier.width(Spacing.lg))
@@ -388,7 +401,10 @@ private fun DetailHeader(item: VaultItem, serverOrigin: String?) {
             Row(
                 horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(top = Spacing.sm),
+                // 撑满整行，weight 才能把同步状态推到最右（否则 Spacer 分到 0 宽度）。
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = Spacing.sm),
             ) {
                 TypeBadge(stringResource(itemTypeLabelRes(item.type)), BadgeTone.NEUTRAL)
                 // 能力用「小图标」而不是文字胶囊（对齐列表行尾，见 [CapabilityIcon]）。
@@ -406,6 +422,14 @@ private fun DetailHeader(item: VaultItem, serverOrigin: String?) {
                         contentDescription = stringResource(R.string.items_filter_passkey),
                     )
                 }
+                // ★ 11-07：同步状态挪到类型徽标这一行的最右。用户：顶栏太远，
+                //    「登录 / 验证码 / 通行密钥」这块有空位，状态就该跟着内容走。
+                Spacer(Modifier.weight(1f))
+                DetailSyncIndicator(status = syncStatus)
+            }
+            if (isSyncUploading(syncStatus)) {
+                Spacer(Modifier.height(Spacing.xs))
+                DetailSyncProgress()
             }
         }
     }
@@ -489,7 +513,15 @@ fun ItemDetailScreen(
         // 顶栏不再由 Scaffold 预留高度（沉浸式），状态栏内边距由顶栏自己处理。
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
     ) { padding ->
-    val actions = remember(viewModel, state.downloadingAttachment, organizationNames) {
+    // ⚠️ 11-07：syncStatus 必须进 key —— 它是云端状态的唯一来源，
+    //    漏了它，保存后 PENDING_UPLOAD → IN_SYNC 的变化不会重算 actions，
+    //    图标会永远停在第一次组合时的那一帧（真机「压根不转，直接显示小云」）。
+    val actions = remember(
+        viewModel,
+        state.downloadingAttachment,
+        state.syncStatus,
+        organizationNames,
+    ) {
         DetailActions(
             onCopyUsername = viewModel::copyUsername,
             onCopyPassword = viewModel::copyPassword,
@@ -500,6 +532,7 @@ fun ItemDetailScreen(
             onDownloadAttachment = viewModel::downloadAttachment,
             isDownloadingAttachment = state.downloadingAttachment,
             organizationNameOf = { orgId -> organizationNames[orgId] },
+            syncStatus = state.syncStatus,
         )
     }
         // ⚠️ 2026-09-13 第二轮用户反馈：「密码详情页，标题距离上边还存在一些间隙不好看，
@@ -532,9 +565,6 @@ fun ItemDetailScreen(
                     // （详情页是二级路由，栈里有上一层，`BackHandler` 由导航库自己接管）。
                     // 去掉后标题左移到 16dp 起始位，长标题能多显示约一个字符位。
                     actions = {
-                        // 11-07：库级同步状态放在动作区最左 —— 固定可见、不随内容滚动，
-                        // 保存后「转动 → 小云」在这里收敛，不必进 ⋮ 菜单找。
-                        DetailSyncIndicator(status = state.syncStatus)
                         // 2026-10-01 起 KDBX 也能编辑 / 删除（阶段 B 写回上线），
                         //   不再有"只读库不画入口"这一支 —— 那是 #106 时代的诚实拒绝，现在换成了真支持。
                         IconButton(onClick = { editOpen = true }) {

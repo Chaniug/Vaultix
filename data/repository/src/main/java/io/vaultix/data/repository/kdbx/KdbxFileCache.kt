@@ -17,8 +17,22 @@ package io.vaultix.data.repository.kdbx
  *   [KdbxFileCache] 的 KDoc）。
  * @property versionToken 取这份字节时服务端给的 `versionToken`；`null` = 该来源
  *   不提供版本信息（此时**无法**判定缓存是否仍是最新，见 [CachedKdbxFileSource]）。
+ * @property pendingLocalEdits ★ 这份字节**含本地改过、还没推上远端的改动**（11-07）。
+ *
+ *   `KdbxItemRepository.persist` 写缓存时**刻意沿用旧令牌**（那是下一次条件写的基线），
+ *   于是「令牌一致」不再能证明「缓存 == 远端那一版」。`readRemoteCurrent()` 的短路
+ *   若不看这个标记，就会把本地新字节冒充远端字节交给内容对账 ⇒ 对账必然"相等" ⇒
+ *   状态被洗成 `IN_SYNC` ⇒ 自动上传被判定为不需要，用户的改动永远上不了云。
+ *
+ *   ⇒ 带此标记时：① `readRemoteCurrent()` 不许短路、必须真读远端；
+ *   ② 读到的远端字节**不许回写缓存**（会覆盖用户改动）。
+ *   上传成功的 `write()` / 收敛回调写回缓存时恢复 `false`。
  */
-class CachedKdbxFile(val bytes: ByteArray, val versionToken: String?)
+class CachedKdbxFile(
+    val bytes: ByteArray,
+    val versionToken: String?,
+    val pendingLocalEdits: Boolean = false,
+)
 
 /**
  * KDBX 远端文件的**本地缓存**（多库锁模型定稿 **批次 B1**，2026-09-30）。

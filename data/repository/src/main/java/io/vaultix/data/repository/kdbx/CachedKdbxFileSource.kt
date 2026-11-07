@@ -246,7 +246,12 @@ internal class CachedKdbxFileSource(
         val cachedBytes = cached?.bytes?.takeIf { it.isNotEmpty() }
         // 拆成两个两条件判断：合起来 4 个条件会顶破 detekt ComplexCondition（上限 3）。
         val tokenMatches = token != null && isSameVersionToken(token, cached?.versionToken)
-        if (cachedBytes != null && tokenMatches) {
+        // ★★ 11-07 真机事故：令牌一致**不能**证明缓存就是远端那一版。
+        //    `persist` 写缓存时沿用旧令牌，于是「远端没变 + 本地刚改过」也会 tokenMatches。
+        //    此时若短路返回缓存，内容对账拿到的其实是本地改动字节 ⇒ 对账恒等 ⇒
+        //    真冲突被判成「已同步」，改动永远推不上去。
+        val hasLocalEdits = cached?.pendingLocalEdits == true
+        if (cachedBytes != null && tokenMatches && !hasLocalEdits) {
             VaultixLog.d(TAG) {
                 "缓存已是远端当前版本（${cachedBytes.size}B）⇒ 跳过整份下载"
             }
@@ -254,15 +259,21 @@ internal class CachedKdbxFileSource(
         }
 
         val bytes = delegate.read()
-        runCatching { cache.save(cacheKey, CachedKdbxFile(bytes, token)) }
-            .onSuccess {
-                VaultixLog.d(TAG) {
-                    "已用远端当前字节换缓存（${bytes.size}B, token=${token.tag()}）"
+        // ⚠️ 本地有未上传改动时**绝不回写缓存**：那会用远端旧字节盖掉用户刚编辑的内容。
+        //    缓存保持 dirty，直到自动上传成功由 `write()` 写回干净版本。
+        if (!hasLocalEdits) {
+            runCatching { cache.save(cacheKey, CachedKdbxFile(bytes, token)) }
+                .onSuccess {
+                    VaultixLog.d(TAG) {
+                        "已用远端当前字节换缓存（${bytes.size}B, token=${token.tag()}）"
+                    }
                 }
-            }
-            .onFailure { error ->
-                VaultixLog.w(TAG) { "换缓存失败（不影响本次读到的字节）：${error.message}" }
-            }
+                .onFailure { error ->
+                    VaultixLog.w(TAG) { "换缓存失败（不影响本次读到的字节）：${error.message}" }
+                }
+        } else {
+            VaultixLog.d(TAG) { "缓存含本地未上传改动 ⇒ 真读远端，且不覆盖缓存" }
+        }
         return bytes
     }
 
@@ -308,13 +319,21 @@ internal class CachedKdbxFileSource(
                     !isSameVersionToken(remoteToken, current.versionToken) -> {
                         runCatching { delegate.read() }
                             .onSuccess { fresh ->
-                                runCatching { cache.save(cacheKey, CachedKdbxFile(fresh, remoteToken)) }
+                                // ⚠️ 本地有未上传改动时不许换缓存（会静默抹掉用户编辑）；
+                                //    只如实上报"远端变了"，由同步流程去报冲突。
+                                if (!current.pendingLocalEdits) {
+                                    runCatching { cache.save(cacheKey, CachedKdbxFile(fresh, remoteToken)) }
+                                }
                                 freshHolder.set(Freshness.STALE)
                                 // ⚠️ 换掉缓存**之后**才上报：先让字节就位，
                                 //   否则 UI 可能在状态已变、缓存还是旧的瞬间点同步而拉到旧内容。
                                 runCatching { onRemoteChanged?.invoke() }
                                 VaultixLog.d(TAG) {
-                                    "后台校验：远端已变（${fresh.size}B），已换新缓存；当前会话仍是旧内容"
+                                    if (current.pendingLocalEdits) {
+                                        "后台校验：远端已变（${fresh.size}B），缓存含本地改动 ⇒ 保留缓存并上报"
+                                    } else {
+                                        "后台校验：远端已变（${fresh.size}B），已换新缓存；当前会话仍是旧内容"
+                                    }
                                 }
                             }
                             .onFailure { freshHolder.set(Freshness.UNVERIFIED) }
