@@ -35,6 +35,7 @@ import io.vaultix.data.kdbx.KdbxFileWriteResult
 import io.vaultix.database.dao.VaultDao
 import io.vaultix.database.entity.VaultEntity
 import io.vaultix.data.repository.KdbxItemRepository
+import io.vaultix.model.KdbxCloudSyncStatus
 import io.vaultix.model.VaultCard
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
