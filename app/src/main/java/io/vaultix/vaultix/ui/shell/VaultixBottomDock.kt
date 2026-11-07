@@ -24,9 +24,12 @@
  */
 package io.vaultix.vaultix.ui.shell
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -52,6 +55,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -59,6 +63,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -81,6 +86,12 @@ import io.vaultix.vaultix.ui.theme.Spacing
 
 /** 悬浮胶囊底栏固定高度（对齐 Bastion：胶囊 60dp + 留白 6/20 = 86dp 视觉占位）。 */
 private val DockBarHeight = 60.dp
+
+/** 按压时整项的缩放：只压一点点，读得出「按下去了」但不像按钮弹跳。 */
+private const val DOCK_PRESS_SCALE = 0.94f
+
+/** 按压反馈时长（ms）：比一次点击短，松手即回，不与页面转场抢注意力。 */
+private const val DOCK_PRESS_DURATION_MS = 90
 
 /**
  * 悬浮胶囊底栏的**总视觉占位高度**（胶囊 60 + 上留白 6 + 下留白 20 = 86dp）。
@@ -316,6 +327,17 @@ private fun AddButton(
  * 与「旧 pill 渐隐」两个动画并行 200ms，期间两个 pill 同时处于中间色，用户感知
  * 就是「**点一个、旁边那个也跟着闪**」。且下方 contentTint 本就是瞬间切换，
  * 背景若走渐变会与文字色不同步、更显抖动。改为瞬切后选中态与文字色严格同步。
+ *
+ * ## 11-07：按压反馈 ≠ 选中态渐变
+ * 上面禁的是「**跨 tab、200ms、两个 pill 并行**」的选中色动画；而用户反馈
+ * 「点击没什么区别，尤其液态玻璃下」指的是「**单个 tab 按下期间**」没有即时反馈。
+ * 这两件事可以同时成立：选中色仍瞬切、不变；press 只改**被按的那一个** item 的
+ * 自身底色与缩放，松手即回。因 `key(item)` 保证组合槽稳定，press 不会扩散到兄弟节点，
+ * 故不会重现「旁边跟着闪」。这是组件内按压反馈，不违反 #87「不要花哨页面转场」。
+ *
+ * ⚠️ 玻璃态下 ripple 会被半透明层吃掉 ⇒ 这里**不用** `indication`，而是用
+ *    `surfaceContainerHigh` / `primaryContainer` 这类**具名实色档**画瞬时 pill，
+ *    在模糊背景上依然看得见。
  */
 @Composable
 private fun DockTabItem(
@@ -325,11 +347,19 @@ private fun DockTabItem(
     modifier: Modifier = Modifier,
 ) {
     val label = stringResource(item.labelRes)
-    // 选中色块包住「图标+文字」整体（酷安样式，圆角矩形非细长条）。瞬切，无动画 —— 见 KDoc。
-    val pillColor = if (isSelected) {
-        MaterialTheme.colorScheme.secondaryContainer
-    } else {
-        Color.Transparent
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
+    val pressScale by animateFloatAsState(
+        targetValue = if (pressed) DOCK_PRESS_SCALE else 1f,
+        animationSpec = tween(DOCK_PRESS_DURATION_MS),
+    )
+    // 选中色块包住「图标+文字」整体（酷安样式，圆角矩形非细长条）。
+    // ⚠️ 选中态仍**瞬切**（见 KDoc）；press 时换到相邻色档，让玻璃上也能看见按下。
+    val pillColor = when {
+        isSelected && pressed -> MaterialTheme.colorScheme.primaryContainer
+        isSelected -> MaterialTheme.colorScheme.secondaryContainer
+        pressed -> MaterialTheme.colorScheme.surfaceContainerHigh
+        else -> Color.Transparent
     }
     val contentTint = if (isSelected) {
         MaterialTheme.colorScheme.primary
@@ -339,9 +369,13 @@ private fun DockTabItem(
     Box(
         modifier = modifier
             .fillMaxHeight()
+            .graphicsLayer {
+                scaleX = pressScale
+                scaleY = pressScale
+            }
             .clip(VaultixCorner.Panel)
             .clickable(
-                interactionSource = remember { MutableInteractionSource() },
+                interactionSource = interactionSource,
                 indication = null,
                 // ★ 2026-10-19：自绘 tab 必须**自己声明语义**。
                 //   这是导航不是按钮 —— 读屏要报「密码，标签页，已选中」

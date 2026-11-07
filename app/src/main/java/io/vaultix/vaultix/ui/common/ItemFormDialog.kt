@@ -2,6 +2,7 @@ package io.vaultix.vaultix.ui.common
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.FlowRow
@@ -319,6 +320,7 @@ private fun ItemFormTail(
             value = notes,
             onValueChange = onNotesChange,
             label = { FormFieldLabel(R.string.item_field_notes) },
+            leadingIcon = { FieldIcon(Icons.Filled.Notes) },
             minLines = 2,
             modifier = Modifier.fillMaxWidth(),
         )
@@ -428,6 +430,41 @@ private fun FormFieldLabel(labelRes: Int, required: Boolean = false) {
         Text(text = stringResource(labelRes), style = MaterialTheme.typography.bodyMedium)
     }
 }
+
+/**
+ * 输入框前置的**语义徽章**（11-07 第六批）。
+ *
+ * 背景：全表单 16 个输入框原本都是同一种 `OutlinedTextField` + 一行灰字 label，
+ * 除了密码有一层淡底，二十来个参数在视觉上完全同类 —— 用户反馈「表现形式单调」。
+ * 给每个框配一枚主色容器小徽章后，扫视时能按图标定位字段，且不同类型有不同落点。
+ *
+ * ⚠️ 刻意不改输入框本身的 `shape` / `colors` / 字号：`Docs/07` §5 与 8.4 §74
+ *    已把「4dp 顶角」「字段名 14sp」「四级间距阶梯」定稿，动它们会推翻真机验证过的结论。
+ *    徽章只占 `leadingIcon` 槽，是**增量**，不重排任何已有结构。
+ *
+ * ⚠️ 用 `primaryContainer`（具名色档）而不是 `surface` 叠 alpha：
+ *    8.4 明令禁止「同色叠 alpha」，那种写法在 `surfaceContainerHighest` 卡片上会糊掉边界。
+ */
+@Composable
+private fun FieldIcon(icon: ImageVector) {
+    Box(
+        modifier = Modifier
+            .size(FIELD_ICON_BOX)
+            .clip(VaultixCorner.Small)
+            .background(MaterialTheme.colorScheme.primaryContainer),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+            modifier = Modifier.size(UiSize.InlineIcon),
+        )
+    }
+}
+
+/** 输入框徽章外框：比 M3 `leadingIcon` 默认的 24dp 略大，但仍在 56dp 输入框内。 */
+private val FIELD_ICON_BOX = 28.dp
 
 /**
  * 关键字段的强调块：一层极淡的主色底 + 小圆角，把该字段圈出来。
@@ -590,6 +627,7 @@ private fun NameField(
             value = name,
             onValueChange = onNameChange,
             label = { FormFieldLabel(R.string.item_field_name, required = true) },
+            leadingIcon = { FieldIcon(Icons.Filled.Badge) },
             singleLine = true,
             isError = showError,
             supportingText = if (showError) {
@@ -661,6 +699,7 @@ private fun FolderPicker(
             onValueChange = {},
             readOnly = true,
             label = { FormFieldLabel(R.string.item_folder) },
+            leadingIcon = { FieldIcon(Icons.Filled.Folder) },
             modifier = Modifier.menuAnchor().fillMaxWidth(),
         )
         ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
@@ -729,6 +768,7 @@ private fun LoginFields(
         value = username,
         onValueChange = onUsernameChange,
         label = { FormFieldLabel(R.string.item_field_username) },
+        leadingIcon = { FieldIcon(Icons.Filled.Person) },
         singleLine = true,
         modifier = Modifier.fillMaxWidth(),
     )
@@ -747,6 +787,7 @@ private fun LoginFields(
             value = password,
             onValueChange = onPasswordChange,
             label = { FormFieldLabel(R.string.item_field_password) },
+            leadingIcon = { FieldIcon(Icons.Filled.Key) },
             singleLine = true,
             visualTransformation = if (revealPassword) {
                 VisualTransformation.None
@@ -811,6 +852,7 @@ private fun LoginFields(
             value = totp,
             onValueChange = onTotpChange,
             label = { FormFieldLabel(R.string.section_totp) },
+            leadingIcon = { FieldIcon(Icons.Filled.Timer) },
             placeholder = { Text(stringResource(R.string.item_totp_hint)) },
             singleLine = true,
             modifier = Modifier.weight(1f),
@@ -840,6 +882,7 @@ private fun LabeledFields(labels: List<Int>, values: SnapshotStateList<String>) 
                 value = values[index],
                 onValueChange = { values[index] = it },
                 label = { FormFieldLabel(labelRes) },
+                leadingIcon = { FieldIcon(Icons.Filled.Tune) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -912,6 +955,7 @@ private fun SshKeyFields(values: SnapshotStateList<String>) {
         value = values[SSH_PRIVATE_KEY_INDEX],
         onValueChange = { values[SSH_PRIVATE_KEY_INDEX] = it },
         label = { FormFieldLabel(R.string.ssh_private_key) },
+        leadingIcon = { FieldIcon(Icons.Filled.Key) },
         minLines = SSH_KEY_MIN_LINES,
         maxLines = SSH_KEY_MAX_LINES,
         textStyle = monospace,
@@ -922,6 +966,7 @@ private fun SshKeyFields(values: SnapshotStateList<String>) {
         value = values[SSH_PUBLIC_KEY_INDEX],
         onValueChange = { applyPublicKeyChange(values, it) },
         label = { FormFieldLabel(R.string.ssh_public_key) },
+        leadingIcon = { FieldIcon(Icons.Filled.Key) },
         minLines = SSH_KEY_MIN_LINES,
         maxLines = SSH_KEY_MAX_LINES,
         textStyle = monospace,
@@ -932,6 +977,7 @@ private fun SshKeyFields(values: SnapshotStateList<String>) {
         value = values[SSH_FINGERPRINT_INDEX],
         onValueChange = { values[SSH_FINGERPRINT_INDEX] = it },
         label = { FormFieldLabel(R.string.ssh_fingerprint) },
+        leadingIcon = { FieldIcon(Icons.Filled.Badge) },
         supportingText = { Text(stringResource(R.string.ssh_fingerprint_hint)) },
         singleLine = true,
         textStyle = monospace,
@@ -1009,16 +1055,17 @@ private fun UriListEditor(
                     value = uri,
                     onValueChange = { uris[index] = it },
                     label = {
-                        Text(
-                            stringResource(
-                                if (uri.startsWith(UriFormat.ANDROID_APP_SCHEME, ignoreCase = true)) {
-                                    R.string.item_field_app_package
-                                } else {
-                                    R.string.item_field_uri
-                                },
-                            ),
+                        // 11-07：原先直接 Text(...) 走默认 16sp，是 8.4 §74
+                        // 「全表字段名 14sp」漏掉的一处层级倒挂，一并补齐。
+                        FormFieldLabel(
+                            if (uri.startsWith(UriFormat.ANDROID_APP_SCHEME, ignoreCase = true)) {
+                                R.string.item_field_app_package
+                            } else {
+                                R.string.item_field_uri
+                            },
                         )
                     },
+                    leadingIcon = { FieldIcon(Icons.Filled.Language) },
                     singleLine = true,
                     modifier = Modifier
                         .weight(1f)
@@ -1094,6 +1141,7 @@ private fun CustomFieldRow(
                 value = field.name,
                 onValueChange = { onFieldChange(field.copy(name = it)) },
                 label = { FormFieldLabel(R.string.item_field_name) },
+                leadingIcon = { FieldIcon(Icons.Filled.Badge) },
                 singleLine = true,
                 modifier = Modifier.weight(1f),
             )
@@ -1119,6 +1167,7 @@ private fun CustomFieldRow(
                 onValueChange = {},
                 readOnly = true,
                 label = { FormFieldLabel(R.string.item_field_type) },
+                leadingIcon = { FieldIcon(Icons.Filled.Category) },
                 modifier = Modifier.menuAnchor().fillMaxWidth(),
             )
             ExposedDropdownMenu(expanded = typeExpanded, onDismissRequest = { typeExpanded = false }) {
@@ -1164,6 +1213,7 @@ private fun FieldValueInput(
                 value = field.value,
                 onValueChange = { onFieldChange(field.copy(value = it)) },
                 label = { FormFieldLabel(R.string.item_field_value) },
+                leadingIcon = { FieldIcon(Icons.Filled.Tune) },
                 singleLine = true,
                 visualTransformation = if (revealHidden) {
                     VisualTransformation.None
@@ -1185,6 +1235,7 @@ private fun FieldValueInput(
             value = field.value,
             onValueChange = { onFieldChange(field.copy(value = it)) },
             label = { FormFieldLabel(R.string.item_field_value) },
+            leadingIcon = { FieldIcon(Icons.Filled.Tune) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
@@ -1207,6 +1258,7 @@ private fun LinkedValueInput(
             onValueChange = {},
             readOnly = true,
             label = { FormFieldLabel(R.string.item_field_value) },
+            leadingIcon = { FieldIcon(Icons.Filled.Category) },
             modifier = Modifier.menuAnchor().fillMaxWidth(),
         )
         ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {

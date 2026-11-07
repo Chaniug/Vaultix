@@ -817,8 +817,11 @@ private fun DetailFieldRow(
         Column(modifier = Modifier.weight(1f).padding(end = Spacing.xs)) {
             Text(
                 text = label,
-                style = MaterialTheme.typography.labelMedium,
+                // 11-07：labelMedium(12sp) 压在 16sp 正文上方太轻，升到 14sp 并补 4dp
+                // 与值的间距；分区标题仍是 titleMedium(16sp)，层级不倒挂（8.4 §74）。
+                style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(bottom = Spacing.xs),
             )
             Text(
                 text = value,
@@ -833,6 +836,7 @@ private fun DetailFieldRow(
             Icon(
                 Icons.Filled.ContentCopy,
                 contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.size(UiSize.InlineIcon),
             )
         }
@@ -926,6 +930,7 @@ private fun UriRow(kind: UriKind, canOpen: Boolean, onCopy: () -> Unit, onOpen: 
             Icon(
                 Icons.Filled.ContentCopy,
                 contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.size(UiSize.InlineIcon),
             )
         }
@@ -1178,7 +1183,12 @@ private fun CustomFieldRow(field: VaultCustomField, onCopy: () -> Unit) {
             }
         }
         IconButton(onClick = onCopy) {
-            Icon(Icons.Filled.ContentCopy, contentDescription = null, modifier = Modifier.size(UiSize.InlineIcon))
+            Icon(
+                Icons.Filled.ContentCopy,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(UiSize.InlineIcon),
+            )
         }
     }
 }
@@ -1380,6 +1390,7 @@ private fun PasswordHistoryRow(entry: VaultPasswordHistoryEntry, onCopy: () -> U
             Icon(
                 Icons.Filled.ContentCopy,
                 contentDescription = stringResource(R.string.password_history_copy),
+                tint = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.size(UiSize.InlineIcon),
             )
         }
