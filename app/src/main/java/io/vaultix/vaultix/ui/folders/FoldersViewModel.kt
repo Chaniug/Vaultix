@@ -156,7 +156,7 @@ class FoldersViewModel @Inject constructor(
                 )
             } catch (error: CancellationException) {
                 throw error
-            } catch (error: Throwable) {
+            } catch (error: Exception) {
                 _event.value = UiEvent.Failed(error.message)
             } finally {
                 busy.value = false
