@@ -264,16 +264,7 @@ fun CardWalletScreen(
     }
 
     if (creationBlocked) {
-        androidx.compose.material3.AlertDialog(
-            onDismissRequest = { creationBlocked = false },
-            title = { Text(stringResource(R.string.card_wallet_creation_blocked_title)) },
-            text = { Text(stringResource(R.string.card_wallet_creation_blocked_body)) },
-            confirmButton = {
-                androidx.compose.material3.TextButton(onClick = { creationBlocked = false }) {
-                    Text(stringResource(R.string.action_close))
-                }
-            },
-        )
+        CardCreationBlockedDialog(onDismiss = { creationBlocked = false })
     }
 
     val draft = creating
@@ -290,6 +281,26 @@ fun CardWalletScreen(
             },
         )
     }
+}
+
+/**
+ * 「+」被库类型闸门挡下时的说明弹框（11-07）。
+ *
+ * 抽成独立 Composable 有两个原因：主函数贴着 detekt `LongMethod` 上限 150；
+ * 且「点新建却什么都没发生」必须有明确反馈，这条判据值得被单独看见。
+ */
+@Composable
+private fun CardCreationBlockedDialog(onDismiss: () -> Unit) {
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.card_wallet_creation_blocked_title)) },
+        text = { Text(stringResource(R.string.card_wallet_creation_blocked_body)) },
+        confirmButton = {
+            androidx.compose.material3.TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.action_close))
+            }
+        },
+    )
 }
 
 private val CARD_GAP = Spacing.sm

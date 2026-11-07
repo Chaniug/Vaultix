@@ -165,7 +165,7 @@ fun FoldersScreen(
                     //      但不给菜单，避免"能点删除、点了却静默不生效"。
                     state.recycleBinCount?.let { count ->
                         item(key = "recycle-bin") {
-                            RecycleBinRow(count = count)
+                            recycleBinRow(count = count)
                         }
                     }
                     items(state.rows, key = { it.folder.id }) { row ->
@@ -382,7 +382,7 @@ private fun DeleteFolderDialog(
  *    对 `meta.recycleBinUuid` 做写操作，给菜单等于给用户一个按下去没反应的按钮。
  */
 @Composable
-private fun RecycleBinRow(count: Int) {
+private fun recycleBinRow(count: Int) {
     Card(
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainerLow,

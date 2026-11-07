@@ -43,7 +43,7 @@ import io.vaultix.model.VaultKind
  *   按**不缩小**处理（返回全量）—— 与"未知类型不映射到 Login"同向：
  *   宁可多给一个选项，也不在信息不足时替用户做缩小决定。
  */
-fun selectableItemTypes(kind: VaultKind?): List<VaultItemType> =
+fun selectableItemTypes(kind: VaultKind?): List<VaultItemType> = when (kind) {
     // ★ 11-07：KDBX 侧的类型闸门已解除。
     //    A3 当初裁掉 Card/Identity/SSH 是因为 mapper 只映射登录字段；但 11-01 之后
     //    `KdbxItemWriter.applyPayloads` 已把这三类载荷写成 `card_*` / `identity_*` /
@@ -53,7 +53,8 @@ fun selectableItemTypes(kind: VaultKind?): List<VaultItemType> =
     //    ⇒ 再裁就是在数据层已经保真的前提下，白白不让用户建卡。
     //    KeePassXC 没有原生「银行卡」类型，这些字段会显示在条目的「高级」页 ——
     //    形式不同但数据不丢，符合用户「手机上打通即可，电脑上不管形式」的要求。
-    VaultItemType.entries.toList()
+    VaultKind.KDBX, VaultKind.BITWARDEN, null -> VaultItemType.entries.toList()
+}
 
 /**
  * 该库是否支持**银行卡**条目（卡包 Tab 的新建入口据此显隐）。
