@@ -7,20 +7,19 @@
  * of the License, or (at your option) any later version.
  *
  * ---------------------------------------------------------------------------
- * [KdbxItemRepository] 的 **A3 类型硬闸**：KDBX 库只收 Login / SecureNote。
+ * [KdbxItemRepository] 的条目写回与类型口径。
  *
- * ## 为什么仓储层也要拦（表单已经裁过了）
+ * ## 11-07：A3 硬闸已解除
  *
- * 表单裁剪（`ui/common/ItemTypePolicy`）只覆盖「用户手点」。而导入
- * （`VaultExportRepositoryImpl.applyImportedVault → ItemRepositoryImpl.createItem → 本类`）
- * 同样汇入 #create：一份含银行卡的 Bitwarden JSON 导进 KDBX 库时会**绕开表单**，
- * 而 KDBX 的 writer 对卡字段静默丢弃 ⇒ 导入报"成功"、库里多出空壳残骸。
+ * 旧的「KDBX 只收 Login / SecureNote」是因为当时 writer 会把卡字段静默丢成空壳。
+ * 现在 `KdbxItemWriter.applyPayloads` 把 Card / Identity / SSH 写成自定义字段载荷
+ * （`card_*` 是 KeePassXC 的 Bitwarden 导入器生态键名），mapper 双向读回。
+ * ⇒ 本文件改成钉住**放行之余数据真的保真**，而不只是"没报错"。
  *
  * ## 弱断言与反证
  *
- * 「什么都没写」是断言"没发生"——它可能因为"整条路径压根没跑"而假绿。
- * ⇒ 配了 [登录与安全笔记照常放行并落盘] 作反证：同一套装置下，放行的路径
- * 确实写了文件（`writes.size == 1`）。两条一起读才知道"没写"是真的没写。
+ * 断言"成功"也可能因为整条路径没跑而假绿 ⇒ 每条都同时断言
+ * `writes.size == 1`（真落盘）与会话里能读回卡字段（真往返）。
  * ---------------------------------------------------------------------------
  */
 package io.vaultix.data.repository.kdbx
@@ -55,33 +54,35 @@ class KdbxItemRepositoryTest {
     }
 
     /**
-     * 拒收银行卡：人话报错 + **会话与文件都不碰**。
+     * ★ 11-07：KDBX 库**放行银行卡**，且六个卡字段读写往返不丢。
      *
-     * 两个"不碰"各钉一类故障：会话里多一条 = 残骸进去了；文件被写 = 坏数据落盘了。
+     * 只断言"没报错"会假绿（整条路径没跑也过）⇒ 同时钉住：真落盘一次、
+     * 会话里多出一条、且类型与卡号/持卡人/CVV 都读得回来。
      */
     @Test
-    fun `KDBX 库拒收银行卡_人话报错_会话与文件都不碰`() = runTest {
+    fun `KDBX 库放行银行卡_六个字段往返保真`() = runTest {
         val harness = Harness()
         harness.seedLoginItem()
 
         val result = harness.repository.create(VAULT_ID, bankCard())
 
-        assertTrue("应当失败，实际：$result", result.isFailure)
-        val message = result.exceptionOrNull()?.message.orEmpty()
-        assertTrue("要说清是哪类不被支持：$message", message.contains("银行卡"))
-        assertTrue("要说清只支持哪两类：$message", message.contains("安全笔记"))
-        // ① 会话里没有残骸（还是播种的那一条登录）
-        assertEquals(1, Kdbx.contentOf(VAULT_ID)!!.items.size)
-        // ② 文件一个字节都没写
-        assertEquals(0, harness.source.writes.size)
+        assertTrue("应当成功，实际：$result", result.isSuccess)
+        assertEquals("必须真的写了一次文件", 1, harness.source.writes.size)
+        val items = Kdbx.contentOf(VAULT_ID)!!.items
+        assertEquals(2, items.size)
+        val saved = items.first { it.type == VaultItemType.Card }
+        assertEquals("4111111111111111", saved.card?.number)
+        assertEquals("张三", saved.card?.cardholderName)
+        assertEquals("CMB", saved.card?.brand)
+        assertEquals("737", saved.card?.code)
     }
 
     /**
-     * 拒收「把已有登录条目改写成银行卡」——类型漂移同样会产生残骸
-     * （标题还在、卡字段全空），且会覆盖掉原来的用户名/密码。
+     * ★ 11-07：把已有登录条目改写成银行卡**允许**，且 id 与卡载荷都保真。
+     * 旧断言钉的是"拒收 + 原条目毫发无损"；数据层既然已支持，就该钉"真的改成卡了"。
      */
     @Test
-    fun `KDBX 库拒收把登录条目改写成银行卡_原条目毫发无损`() = runTest {
+    fun `KDBX 库允许把登录条目改写成银行卡_载荷落盘`() = runTest {
         val harness = Harness()
         val loginId = harness.seedLoginItem()
         val before = Kdbx.contentOf(VAULT_ID)!!.items.single()
@@ -91,15 +92,12 @@ class KdbxItemRepositoryTest {
             before.copy(type = VaultItemType.Card, card = VaultCard(number = "4111111111111111")),
         )
 
-        assertTrue("应当失败，实际：$result", result.isFailure)
-        assertTrue(
-            "拒绝文案要说明白是哪种类型不支持：${result.exceptionOrNull()?.message}",
-            result.exceptionOrNull()?.message?.contains("银行卡") == true,
-        )
-        assertEquals(0, harness.source.writes.size)
+        assertTrue("应当成功，实际：$result", result.isSuccess)
+        assertEquals(1, harness.source.writes.size)
         val after = Kdbx.contentOf(VAULT_ID)!!.items.single()
         assertEquals(loginId, after.id)
-        assertEquals(VaultItemType.Login, after.type)
+        assertEquals(VaultItemType.Card, after.type)
+        assertEquals("4111111111111111", after.card?.number)
     }
 
     /**

@@ -147,7 +147,7 @@ class VaultExportRepositoryImplTest {
     }
 
     @Test
-    fun `KDBX目标跳过不支持的类型并计数`() = runTest {
+    fun `KDBX目标不再跳过银行卡_两类都写入`() = runTest {
         val fixture = Fixture(existing = emptyList())
         fixture.sessions.unlock(vaultId, SymmetricCryptoKey.random())
         coEvery { fixture.vaultDao.get(any()) } returns mockk<VaultEntity> {
@@ -161,11 +161,12 @@ class VaultExportRepositoryImplTest {
         val plan = fixture.repo.previewImport(vaultId, imported)
         val result = fixture.repo.applyImportedVault(vaultId, imported)
 
-        assertThat(plan.newItemCount).isEqualTo(1)
-        assertThat(plan.unsupportedCount).isEqualTo(1)
-        assertThat(result.written).isEqualTo(1)
-        assertThat(result.unsupported).isEqualTo(1)
-        coVerify(exactly = 1) { fixture.itemRepository.createItem(any(), any()) }
+        // 11-07：KDBX 已支持卡载荷 ⇒ 导入不该再悄悄丢掉银行卡。
+        assertThat(plan.newItemCount).isEqualTo(2)
+        assertThat(plan.unsupportedCount).isEqualTo(0)
+        assertThat(result.written).isEqualTo(2)
+        assertThat(result.unsupported).isEqualTo(0)
+        coVerify(exactly = 2) { fixture.itemRepository.createItem(any(), any()) }
     }
 
     @Test

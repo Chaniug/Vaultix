@@ -250,10 +250,16 @@ class KdbxAutoUploaderTest {
     fun `状态被洗成已同步但缓存仍脏_仍要触发上传`() = runTest {
         val status = statusOf(KdbxCloudSyncStatus.IN_SYNC)
         val dao = daoFor(CLOUD_ORIGIN, status)
+        // 生产里 write() 上传成功会清掉缓存脏标记 ⇒ mock 也要在首轮后变 false，
+        // 否则恒 true 会跑满 MAX_ROUNDS，测的就不是"该不该起步"了。
+        val dirty = AtomicReference(true)
         val coordinator = mockk<KdbxCloudSyncCoordinator> {
             every { hasCloudSource(CLOUD_ORIGIN) } returns true
-            coEvery { hasCachedLocalEdits(VAULT_ID) } returns true
-            coEvery { sync(VAULT_ID, true) } returns KdbxSyncResult.Uploaded("v2")
+            coEvery { hasCachedLocalEdits(VAULT_ID) } coAnswers { dirty.get() }
+            coEvery { sync(VAULT_ID, true) } coAnswers {
+                dirty.set(false)
+                KdbxSyncResult.Uploaded("v2")
+            }
         }
 
         KdbxAutoUploader(dao, coordinator).enqueue(VAULT_ID).join()
