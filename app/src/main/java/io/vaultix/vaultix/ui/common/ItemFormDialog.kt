@@ -495,9 +495,12 @@ private val FIELD_ICON_BOX = 28.dp
  *    这里用 `tertiaryContainer`（M3 里与 surface 系列不同色相的具名档）。
  *    若用 `surfaceContainerHighest.copy(alpha = …)`，那正是 8.4 明令禁止的
  *    「同色叠 alpha」—— 边界会糊掉，等于没做。
- * ⚠️ 2026-11-07：原先是 `primaryContainer.copy(alpha = 0.30f)`，半透明叠在卡片上
- *    在深色 / 动态取色下形成一圈发闷的硬边界（用户：「深色一点的边框，很生硬」）。
- *    改成**不透明具名色档**后边界干净；顺带把 tertiary 绿引进来补「缺少活力」。
+ * ⚠️ 2026-11-07 两轮修正：原先 `primaryContainer.copy(alpha = 0.30f)` 半透明叠在
+ *    卡片上，深色 / 动态取色下形成发闷硬边界（用户：「深色一点的边框，很生硬」）。
+ *    第一次改成**不透明** `tertiaryContainer` 更糟：动态取色的 tertiaryContainer
+ *    在深色主题下可能是亮粉紫，整块高亮直接糊成一坨刺眼色块（真机截图「灾难」）。
+ *    ⇒ 最终用 `tertiaryContainer.copy(alpha = 0.10f)`：仍是**不同色相**（不是 8.4 禁止的
+ *    同色叠 alpha），但压到与卡片几乎同明度，只留一层可辨的暖调，不再抢输入框。
  *    大面积表面色与 primary 主色一律不动 —— 10-05 那轮降饱和有 WCAG 实测撑着。
  */
 @Composable
@@ -506,7 +509,7 @@ private fun EmphasisBlock(content: @Composable ColumnScope.() -> Unit) {
         modifier = Modifier
             .fillMaxWidth()
             .clip(VaultixCorner.Small)
-            .background(MaterialTheme.colorScheme.tertiaryContainer)
+            .background(MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.10f))
             .padding(Spacing.md),
         content = content,
     )

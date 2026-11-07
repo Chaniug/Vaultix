@@ -24,6 +24,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -134,8 +135,13 @@ class FoldersViewModel @Inject constructor(
     /**
      * 三个写操作的公共外壳：置忙 → 执行 → 清忙 → 发事件。
      *
-     * `busy` 用 `try/finally` 兜底：`Result` 返回路径本身不会抛，但取消以外的意外
-     * 不该把页面永久卡在忙碌态（那时所有按钮都是灰的，用户只能杀进程）。
+     * ⚠️ 11-07 真机：KDBX 文件夹删除 100% 闪退（18:46:18 `app died`）。
+     *    此前这里只有 `try/finally`：**没有 catch**。`block()` 若直接抛异常
+     *    （而不是返回 `Result.failure`），会穿出 `viewModelScope.launch` 成为未捕获异常
+     *    ⇒ 整个进程被杀，用户看不到任何提示。注释说「意外不该把页面卡在忙碌态」，
+     *    但 `finally` 只清了 busy，没拦住异常本身。
+     *    ⇒ 补 `catch` 把意外转成 `UiEvent.Failed`（Snackbar 可见，也方便定位根因）；
+     *      取消必须原样抛出，否则协程取消会被误吞、页面状态再也对不上。
      */
     private fun launchWrite(what: Done, block: suspend () -> Result<Unit>) {
         if (busy.value) return
@@ -148,6 +154,10 @@ class FoldersViewModel @Inject constructor(
                     // `ItemDetailViewModel.UiEvent.SaveFailed`：兜底措辞属于展示层。
                     onFailure = { UiEvent.Failed(it.message) },
                 )
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                _event.value = UiEvent.Failed(error.message)
             } finally {
                 busy.value = false
             }

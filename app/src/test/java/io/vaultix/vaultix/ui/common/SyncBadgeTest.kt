@@ -66,9 +66,12 @@ class SyncBadgeTest {
         assertThat(SyncStatusDot.of(KdbxCloudSyncStatus.SYNCING)).isEqualTo(SyncStatusDot.SYNCING)
         // 成功是常态：映射出来，但由 UI 决定只短暂显示，不常驻。
         assertThat(SyncStatusDot.of(KdbxCloudSyncStatus.IN_SYNC)).isEqualTo(SyncStatusDot.SUCCESS)
-        // 待上传 / 仅本地 / 非网盘库 ⇒ 菜单安静，不给状态点。
-        assertThat(SyncStatusDot.of(KdbxCloudSyncStatus.PENDING_UPLOAD)).isNull()
-        assertThat(SyncStatusDot.of(KdbxCloudSyncStatus.PENDING_UPLOAD_WITH_LOCAL_CHANGES)).isNull()
+        // 11-07：待上传不再「菜单安静」—— 本地已落盘、后台正在上传，
+        // 状态点必须显示「正在上传改动」，否则用户以为保存卡住了。
+        assertThat(SyncStatusDot.of(KdbxCloudSyncStatus.PENDING_UPLOAD))
+            .isEqualTo(SyncStatusDot.UPLOADING)
+        assertThat(SyncStatusDot.of(KdbxCloudSyncStatus.PENDING_UPLOAD_WITH_LOCAL_CHANGES))
+            .isEqualTo(SyncStatusDot.UPLOADING)
         assertThat(SyncStatusDot.of(KdbxCloudSyncStatus.LOCAL_ONLY)).isNull()
         assertThat(SyncStatusDot.of(null)).isNull()
     }
