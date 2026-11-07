@@ -86,6 +86,7 @@ class KdbxAutoUploader @Inject constructor(
      * @return 发起的 [Job] —— 单测靠 `join()` 等它跑完（没有它，测试只能靠 `sleep` 赌时序）。
      */
     fun enqueue(vaultId: String): Job = scope.launch {
+        VaultixLog.d(TAG) { "自动上传排队（$vaultId）" }
         // ⚠️ 异常在这里就地吸收：逸出到 scope 会取消 SupervisorJob 的这个子协程，
         // 而我们要的是"这次失败留下 FAILED 状态，下次还能再试"。
         // ⚠️ 11-07：但**不能静默吞** —— 真机上「保存后有时没上传」查了很久，
@@ -115,7 +116,11 @@ class KdbxAutoUploader @Inject constructor(
             //    缓存里的 pendingLocalEdits 只在 write() 成功后才清，是更稳的真源。
             while (rounds < MAX_ROUNDS && hasWork(vaultId)) {
                 rounds++
+                VaultixLog.d(TAG) { "自动上传起跑：第 $rounds 轮" }
                 val result = coordinator.sync(vaultId, localChangedSinceLastSync = true)
+                // ★ 11-07：结果只记「可否继续」，不记类型名 / 令牌 / 内容。
+                //   配合 persist 的「已排队」与这里的「起跑」，能直接量出排队等待时长。
+                VaultixLog.d(TAG) { "第 $rounds 轮结束：可继续=${result.canContinueDraining()}" }
                 // 失败 / 冲突 / 远端有更新 / 无云端 ⇒ 收工：状态已由编排器记下，
                 // 用户能从角标看见，重试解决不了它们（要点 4）。
                 if (!result.canContinueDraining()) break

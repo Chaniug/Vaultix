@@ -32,6 +32,7 @@
 package io.vaultix.data.repository
 
 import io.vaultix.database.dao.VaultDao
+import io.vaultix.common.logging.VaultixLog
 import io.vaultix.data.kdbx.Kdbx
 import io.vaultix.data.kdbx.KdbxFailure
 import io.vaultix.data.kdbx.KdbxWriteFailure
@@ -248,6 +249,10 @@ class KdbxItemRepository @Inject constructor(
         //    ⇒ 只有「确实登记过基线、且对不上」才拦；那才是远端真变过。
         // ⚠️ 放行不等于放松：条件写仍带 DB 里的旧令牌，远端被别的设备改过会 412 → 冲突。
         if (cloudSync.hasCloudSource(origin) && write.baselineKnown && !write.baselineAligned) {
+            // ★ 11-07 未解现象的诊断点：真机曾出现「replaceSession 之后连续四次保存
+            //    零上传，进程重启（基线是纯内存）后全部恢复」。若真被这道闸门拦下，
+            //    以前没有任何日志可证 —— 只记两个布尔，不记指纹 / 内容。
+            VaultixLog.w(TAG) { "写回被基线闸门拦下（已登记但与改动前内容不符）" }
             throw KdbxWriteFailure.StaleBaseline().toUserFacing()
         }
 
@@ -264,6 +269,13 @@ class KdbxItemRepository @Inject constructor(
                 origin,
                 CachedKdbxFile(bytes, previousToken, pendingLocalEdits = true),
             )
+            // ★ 11-07：四个时间点里的第一个。此前从「保存」到「上传成功」之间全黑，
+            //    真机「保存后没反应」只能靠 WAL 反推；有了这条就能直接量出
+            //    是没落缓存、没排队、还是排队后没起跑。只记字节数，不记任何内容。
+            VaultixLog.d(TAG) {
+                "保存落缓存：${bytes.size}B，待上传脏标记已置，" +
+                    "基线 known=${write.baselineKnown}/aligned=${write.baselineAligned}"
+            }
             // 再标记待上传。**这一步不能省**：同步的"本地改过没有"是从持久化的
             // `vaults.syncStatus` 读出来的，不标记的话下一次同步会判"两边都没变"，
             // 那笔改动永远推不上去（见 KdbxSyncOrchestrator.markLocalEdited 的 KDoc）。
@@ -284,6 +296,7 @@ class KdbxItemRepository @Inject constructor(
             // 标记之后**立即**排一次上传：不然"改完必须手动点同步"，
             // 而用户以为保存即同步（施工单 S1 的第一条用户反馈）。
             // ⚠️ 顺序不能反：先落 PENDING_UPLOAD，上传器才会认为"有活要干"。
+            VaultixLog.d(TAG) { "已排入自动上传队列" }
             autoUploader.enqueue(vaultId)
         } else {
             // 本地文件库：文件即存储 ⇒ 直接写文件（本地 IO，毫秒级）。
@@ -332,3 +345,6 @@ private fun VaultItemType.displayName(): String = when (this) {
     VaultItemType.Identity -> "身份信息"
     VaultItemType.SshKey -> "SSH 密钥"
 }
+
+/** 写回链路日志（11-07）：只记字节数与阶段名，绝不记条目内容。 */
+private const val TAG = "VaultixKdbxWrite"

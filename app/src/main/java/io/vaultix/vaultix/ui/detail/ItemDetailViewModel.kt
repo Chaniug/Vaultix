@@ -349,6 +349,14 @@ class ItemDetailViewModel @Inject constructor(
             _events.send(
                 outcome.fold(
                     onSuccess = { saved ->
+                        // ★ 11-07：保存成功即把上传态**乐观上屏**，不等 Room 失效通知。
+                        //   真机：点保存到进度条出现有几秒空窗，被读作「没触发同步」。
+                        //   ⚠️ 只改展示层：仅云端 KDBX 库（syncStatus 非空）且结果是 Queued 时置；
+                        //      真实状态随后由 observeVaults() 接管，publishSyncStatus 的
+                        //      最短可见窗口保证不会一闪而过；保存失败不置。
+                        if (saved == VaultSaveOutcome.Queued && _state.value.syncStatus != null) {
+                            publishSyncStatus(KdbxCloudSyncStatus.PENDING_UPLOAD)
+                        }
                         when (saved) {
                             VaultSaveOutcome.Synced -> UiEvent.SaveSynced
                             VaultSaveOutcome.Queued -> UiEvent.SaveQueued
