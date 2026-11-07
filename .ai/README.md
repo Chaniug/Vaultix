@@ -42,6 +42,13 @@
 > `SyncBadgeTest` 过期断言、KDBX 删文件夹闪退的异常防线（止血，根因待真机堆栈）；
 > `0d0540af` 全链路绿，preview `v0.11.2-dev-0d0540a`。
 > 详见 [`SESSION-2026-11-07-part2.md`](./SESSION-2026-11-07-part2.md)。
+>
+> **第十批（19:02 起，真机驱动）**：抓到删文件夹闪退堆栈
+> （`stringResource` 少传 `%2$d` 参数）并修复；定位「手机改动永远传不上 OneDrive」
+> 根因是缓存沿用旧令牌导致 `readRemoteCurrent()` 把本地改动冒充远端字节、
+> 真冲突被静默洗成 `IN_SYNC`。修法为落盘脏标记 + 同步判据补第二真源。
+> 云图标移到类型徽标行并加 M3 不确定进度条，`remember` key 补 `syncStatus`。
+> 根因链、回归单测与判据见 [`SESSION-2026-11-07-part2.md`](./SESSION-2026-11-07-part2.md) §10。
 
 ---
 

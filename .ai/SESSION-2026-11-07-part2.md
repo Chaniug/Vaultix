@@ -81,3 +81,85 @@
   若变成 Snackbar 请把那句错误文案告诉我。
 - 仍未修（主篇 §9）：B 条目页 ⋮ 同步按钮只接 Bitwarden 编排器导致 KDBX 空转；
   C 一次远端拉取约两次整库下载 + 两次 KDF 导致偏慢。两者都需单独一批。
+
+
+---
+
+## §10 第十批：手机改动永远传不上 OneDrive（19:02–19:40）
+
+**回答「真机看到『本地已保存、直接显示小云、电脑端没有改动』，根因在哪、怎么修」**
+
+### 取证链（实证，非推断）
+
+- 设备装 `0.11.2-dev-0d0540a`，`dumpsys package` 确认 19:02:57 安装、37.3MB debug 包。
+- crash buffer 拉到完整 Java 堆栈：`FATAL EXCEPTION: main` /
+  `java.util.MissingFormatArgumentException: Format specifier '%2$d'`，栈顶
+  `FoldersScreenKt.DeleteFolderDialog$lambda$4(FoldersScreen.kt:338)`。
+- 设备 DB + **WAL 原始帧**（不交给 sqlite，避免 checkpoint 抹掉历史）显示状态迁移
+  `PENDING_UPLOAD → SYNCING → IN_SYNC`，而 `remoteVersionToken` 始终是
+  `ctag:"c:{77DB...},33"`、`lastSyncedAt` 没变。
+- 整段 logcat **零条**「上传成功，缓存令牌已刷新」，却有
+  19:06:59「缓存已是远端当前版本（58182B）⇒ 跳过整份下载」+「派生密钥内存缓存命中
+  ⇒ 本次解码跳过 KDF」—— 这是 `adoptRemoteIfSameContent` 的特征。
+- 对照 11-07 上午成功那次（18:22:45 / 18:23:11）有两条上传成功、令牌哈希变化。
+
+### 根因（一句话）
+
+`KdbxItemRepository.persist` 把**本地新字节**写进缓存却**沿用旧 versionToken**
+（注释说那是下一次条件写的基线），于是 `CachedKdbxFileSource.readRemoteCurrent()`
+的「令牌一致 ⇒ 缓存即远端」短路把**本地改动**当成远端当前字节返回。
+
+内容对账 `Kdbx.adoptBaselineIfMatches` 一比当然相等 ⇒ 状态洗成 `IN_SYNC`、
+自动上传被判定为不需要 ⇒ OneDrive 一个字节没写，用户只看到「直接显示小云」。
+
+⚠️ 这比「上传失败」更危险：**真冲突（XC 改过 + 手机也改过）被静默洗白**，
+本该弹三选项让用户拍板，却被判成「已同步」。
+
+### 修法（缓存脏标记，落盘）
+
+- `CachedKdbxFile` 加 `pendingLocalEdits: Boolean = false`；
+  `FileKdbxFileCache` 线格式 `VKC1 → VKC2`（header 加 1 byte flags），
+  旧格式 magic 不匹配自动判未命中并清掉（缓存是优化，丢一次只多下一次库）。
+- `persist` 写缓存时置 `true`；`write()` 上传成功后写回干净版本（默认 false）。
+- `readRemoteCurrent()`：脏缓存**不许短路**（真 `delegate.read()`）、
+  **不许回写缓存**（否则用远端旧字节盖掉用户编辑）。
+- 后台校验 `markStalePending` 远端变时同样不覆盖脏缓存，只如实上报。
+- `KdbxCloudSyncCoordinator.sync()` 把 `cachedEdits` 并入
+  `localChangedSinceLastSync`：`sync` 开头 `markStatus(SYNCING)` 会冲掉
+  `PENDING_UPLOAD`，而 `impliesLocalChanges(SYNCING) = false` ⇒ 手动点同步
+  曾被判「两边都没变」直接洗白。脏标记是第二个真源，堵住这条路。
+- `resolveUsingRemote` 成功后显式写回干净缓存（会话已是远端那一版，
+  留着脏缓存会让下次解锁读回被丢弃的本地内容）。
+- 回归单测：`CachedKdbxFileSourceTest`「脏缓存不许短路、真读远端、不覆盖缓存」；
+  `FileKdbxFileCacheTest` 两条脏标记往返。
+
+### 同批修掉的另两件
+
+- **删文件夹 100% 闪退**：两条 `folder_delete_*_message` 都含 `%2$d`，
+  `text` 槽却只传 `name`。KDBX 文案去掉数字占位符（本就因「子组条目没算进去」
+  而不该给偏小的数）；Bitwarden 侧补 `itemCount`（`FolderRowUi` 本来就有）。
+- **云图标移位 + 进度**：从顶栏 `actions` 移到 `DetailHeader` 类型徽标行最右
+  （Spacer.weight 推右，Row 补 `fillMaxWidth`）；上传中在徽标行下加
+  M3 `LinearProgressIndicator` 不确定进度细条，完成只剩 `CloudDone`。
+  ⚠️ **`remember` 的 key 必须带 `state.syncStatus`** —— 漏了它图标永远停在
+  第一次组合那一帧，这正是「压根不转、直接显示小云」的 UI 侧一半原因。
+
+### 判据（可复用）
+
+1. 「本地已保存 + 直接显示已同步 + 远端没变」优先查**状态是不是被洗白**，
+   别先查网络；看 WAL 状态帧比看 Room 最终值信息量大。
+2. 缓存短路的前提是「令牌一致 ⇒ 内容等于远端」。只要存在「写新字节沿用旧令牌」
+   的路径，这个前提就破了，必须有显式脏标记。
+3. 从 `crash` buffer 拉堆栈比从 main buffer grep 可靠；WAL 要用 `exec-out` 原始字节读，
+   交给 sqlite 会 checkpoint 掉历史帧。
+4. UI 状态不刷新先查 `remember` 的 key，再查数据源。
+
+### 仍未修（下一批）
+
+- **B**：条目页 ⋮ 同步按钮 `ItemsViewModel.retrySync()` 只调
+  `BitwardenSyncOrchestrator`，KDBX 空转。修它要给已 9 个参数的构造再加依赖
+  （detekt 标称上限 8），本批不与缓存格式升级混在一起。
+  ⚠️ 首页「密码库」页 ⋮ 同步走 `syncKdbxVault`，本批加的 `cachedEdits`
+  判据已让它能正确把本地改动推上去；用户不必依赖条目页那个按钮。
+- **C**：一次远端拉取约两次整库下载 + 两次 KDF（对账读完丢弃、`pull` 再读一遍），
+  是「同步偏慢」的根因，需单独一批加真机计时。
