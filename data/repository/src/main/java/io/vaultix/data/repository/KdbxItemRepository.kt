@@ -49,6 +49,8 @@ import io.vaultix.model.VaultItemType
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /** KDBX 条目的增删改（写回）。五个动作与 [io.vaultix.domain.ItemRepository] 的写方法一一对应。 */
@@ -73,14 +75,30 @@ class KdbxItemRepository @Inject constructor(
     private val autoUploader: KdbxAutoUploader,
 ) {
 
-    // ⚠️⚠️ 五个写动作一律 `withContext(Dispatchers.IO)`：它们内部都要经过
+    /**
+     * 一次完整写回（**mutate → persist**）的串行闸门。
+     *
+     * ⚠️ 2026-11-08：UI 改成「点完即走」之后，用户能在上一笔还在落盘时就发起下一笔。
+     *    `Kdbx.mutate` 内部虽有一把按库的 `Mutex`，它只保护**内存会话**；
+     *    [persist] 的往返自检 / 落缓存 / 条件写都在那把锁**外面**。两笔并发时
+     *    旧字节可能后落盘，把刚写进去的新内容盖回去（静默回退，且日志全绿）。
+     *    ⇒ 这里把整笔写回串起来；单锁足够（KDBX 一次只编辑一个库，不同库最多排队）。
+     *
+     * 它同时承担切到 IO 的职责 —— 见下面那条注释，避免每个写动作各写一遍。
+     */
+    private val writeGate = Mutex()
+
+    private suspend fun <T> serialWrite(block: suspend () -> T): T =
+        writeGate.withLock { withContext(Dispatchers.IO) { block() } }
+
+    // ⚠️⚠️ 八个写动作一律走 [serialWrite]（内含 `withContext(Dispatchers.IO)`）：它们都要经过
     //     `Kdbx.mutate`，而 `mutate` 的 KDoc 明确写着「编码代价与一次 KDF 相当，
     //     调用方应当切到 IO/Default」。ViewModel 却在 `viewModelScope`（主线程）里调用它们，
     //     结果是**每次保存都同步跑一遍 Argon2/AES-KDF** —— 表现为"保存时界面卡几百毫秒"
     //     （「打开库的流畅性」这条诉求里最容易被感知的一处）。
     //     ⇒ 调度责任收在本类的 public 层（一次做完），而不是指望每个调用点各自记得切。
     suspend fun create(vaultId: String, item: VaultItem): Result<VaultSaveOutcome> =
-        withContext(Dispatchers.IO) {
+        serialWrite {
             runCatching {
                 assertWritable(vaultId)
                 requireSupportedType(item)
@@ -98,7 +116,7 @@ class KdbxItemRepository @Inject constructor(
      * 拿不到（会话里没有这条）⇒ 报"条目不存在"，而不是拿一个空壳当 before 去覆盖。
      */
     suspend fun update(vaultId: String, item: VaultItem): Result<VaultSaveOutcome> =
-        withContext(Dispatchers.IO) {
+        serialWrite {
             runCatching {
                 assertWritable(vaultId)
                 // 同 #create：类型不对就连"改动前那一份"都不必取（取它只为写回比对）。
@@ -112,7 +130,7 @@ class KdbxItemRepository @Inject constructor(
         }
 
     suspend fun softDelete(vaultId: String, itemId: String): Result<VaultSaveOutcome> =
-        withContext(Dispatchers.IO) {
+        serialWrite {
             runCatching {
                 assertWritable(vaultId)
                 val write = Kdbx.moveItemToRecycleBin(vaultId, itemId).getOrElse { throw it.toUserFacing() }
@@ -121,7 +139,7 @@ class KdbxItemRepository @Inject constructor(
         }
 
     suspend fun restore(vaultId: String, itemId: String): Result<VaultSaveOutcome> =
-        withContext(Dispatchers.IO) {
+        serialWrite {
             runCatching {
                 assertWritable(vaultId)
                 val write = Kdbx.restoreItemFromRecycleBin(vaultId, itemId)
@@ -131,7 +149,7 @@ class KdbxItemRepository @Inject constructor(
         }
 
     suspend fun permanentDelete(vaultId: String, itemId: String): Result<VaultSaveOutcome> =
-        withContext(Dispatchers.IO) {
+        serialWrite {
             runCatching {
                 assertWritable(vaultId)
                 val write = Kdbx.purgeItem(vaultId, itemId).getOrElse { throw it.toUserFacing() }
@@ -152,7 +170,7 @@ class KdbxItemRepository @Inject constructor(
         vaultId: String,
         parentFolderId: String?,
         name: String,
-    ): Result<VaultFolder> = withContext(Dispatchers.IO) {
+    ): Result<VaultFolder> = serialWrite {
         runCatching {
             assertWritable(vaultId)
             val write = Kdbx.createFolder(vaultId, parentFolderId = parentFolderId, name = name)
@@ -170,7 +188,7 @@ class KdbxItemRepository @Inject constructor(
         vaultId: String,
         folderId: String,
         name: String,
-    ): Result<VaultSaveOutcome> = withContext(Dispatchers.IO) {
+    ): Result<VaultSaveOutcome> = serialWrite {
         runCatching {
             assertWritable(vaultId)
             val write = Kdbx.renameFolder(vaultId, folderId = folderId, name = name)
@@ -186,7 +204,7 @@ class KdbxItemRepository @Inject constructor(
      * 这里不重复计算（数法只有 `KdbxItemWriter` 一处）。
      */
     suspend fun deleteFolder(vaultId: String, folderId: String): Result<VaultSaveOutcome> =
-        withContext(Dispatchers.IO) {
+        serialWrite {
             runCatching {
                 assertWritable(vaultId)
                 val write = Kdbx.deleteFolder(vaultId, folderId).getOrElse { throw it.toUserFacing() }

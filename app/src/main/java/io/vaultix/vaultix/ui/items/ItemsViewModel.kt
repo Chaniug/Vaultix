@@ -412,13 +412,10 @@ class ItemsViewModel @Inject constructor(
      */
     private fun retrySyncKdbx() {
         if (_kdbxManualRunning.value) return
-        if (_state.value.vault?.unlocked != true) {
-            _manualSyncNote.value = SyncNote.Notice(
-                resId = R.string.kdbx_sync_needs_reload,
-                warning = true,
-            )
-            return
-        }
+        // ⚠️ 2026-11-08：这里原先有 `if (_state.value.vault?.unlocked != true)` 守卫，
+        //    只弹「需要重新解锁后再试」就 return。那份 unlocked 是 **UI 快照**，
+        //    与 KDBX 会话是否可用并不同源 ⇒ 用户点多少次重试都被同一句挡回来。
+        //    是否真的要解锁，交给下面的 sync/pull 结果说话，别在入口猜。
         viewModelScope.launch {
             _kdbxManualRunning.value = true
             // ★ 11-08：此前无条件写 Uploading ⇒ 用户点「同步」第一眼就是
@@ -429,8 +426,19 @@ class ItemsViewModel @Inject constructor(
                 val changed = kdbxSyncRepository.localChangedSinceLastSync(vaultId)
                 kdbxSyncRepository.sync(vaultId, localChangedSinceLastSync = changed)
             }.getOrElse { KdbxSyncReport.Failed(it.message.orEmpty()) }
+            // ★ 2026-11-08 真机：NeedsReload 以前**只提示**、没人真的去拉远端，
+            //    于是红色横幅点多少次「重试」都不收敛；只有切到「密码库」页点
+            //    「立即同步」才好 —— 那里对同一结果调的是 `pull()`（见 VaultListViewModel）。
+            //    ⇒ 这里补上同一个动作。`pull()` 自带「本地有未上传改动 ⇒ 返回 Conflict」
+            //    的前置检查，不会把用户没传上去的改动盖掉。
+            val settled = if (report is KdbxSyncReport.NeedsReload) {
+                runCatching { kdbxSyncRepository.pull(vaultId) }
+                    .getOrElse { KdbxSyncReport.Failed(it.message.orEmpty()) }
+            } else {
+                report
+            }
             _kdbxManualRunning.value = false
-            _manualSyncNote.value = when (report) {
+            _manualSyncNote.value = when (settled) {
                 is KdbxSyncReport.InSync -> SyncNote.Notice(R.string.kdbx_sync_in_sync)
                 is KdbxSyncReport.Uploaded -> SyncNote.Notice(R.string.kdbx_sync_uploaded)
                 is KdbxSyncReport.Downloaded -> SyncNote.Notice(R.string.kdbx_sync_downloaded)

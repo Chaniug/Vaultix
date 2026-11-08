@@ -374,25 +374,26 @@ class ItemDetailViewModel @Inject constructor(
         val current = _state.value
         if (current.deleting) return
         _state.update { it.copy(deleting = true) }
-        viewModelScope.launch {
+        // ★ 2026-11-08 真机：以前把 `Deleted` 挂在 `softDeleteItem` **之后**，
+        //    而 DetailBodyContent 在 deleting 期间渲染空白 ⇒ 用户看到"点了没反应"
+        //    的空白页停 2~3 秒才返回。本地写回虽只有几十毫秒，但会话锁 / KDF /
+        //    前台调度不可控，**UI 不该被它绑住** ⇒ 点下即发导航，页面立刻走。
+        _events.trySend(UiEvent.Deleted)
+        // ⚠️ 页面返回会取消 viewModelScope ⇒ 整笔写回必须 NonCancellable，
+        //    否则用户"看着删了"而删除协程被取消，改动根本没落盘。
+        //    失败时 persist 已回滚会话（三视图同源），条目仍会出现在列表里，
+        //    不会出现"看着删了其实没删"；这里只补一次失败事件（页面已返回，可能无人收集）。
+        viewModelScope.launch(NonCancellable) {
             val outcome = itemRepository.softDeleteItem(vaultId, itemId)
             outcome.fold(
                 onSuccess = {
-                    // ★ 先把返回事件投出去，别把导航压在附件明文清理后面。
-                    //    deleting 保持 true，页面不会闪「条目不存在或已被删除」。
-                    _events.trySend(UiEvent.Deleted)
                     // ★ 条目删了就把它解密出来的附件明文一起清掉（#193）。
-                    //    挂在"删除成功之后"而不是之前：删除可能失败，缓存还得继续用。
-                    //    NonCancellable：页面返回会取消 viewModelScope，但明文必须清干净。
+                    //    挂在"删除成功之后"：删除可能失败，失败时缓存还得继续用。
                     withContext(NonCancellable) {
                         runCatching { sensitiveCache.invalidateFor(itemId) }
                     }
                 },
-                onFailure = { error ->
-                    // 只有失败才解除，让用户能留在页面重试。
-                    _state.update { it.copy(deleting = false) }
-                    _events.send(UiEvent.SaveFailed(error.message))
-                },
+                onFailure = { error -> _events.trySend(UiEvent.SaveFailed(error.message)) },
             )
         }
     }

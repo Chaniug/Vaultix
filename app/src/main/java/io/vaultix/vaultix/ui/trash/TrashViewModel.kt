@@ -68,6 +68,15 @@ class TrashViewModel @Inject constructor(
     data class UiState(
         val busy: Boolean = false,
         val activeItemId: String? = null,
+        /**
+         * **乐观移除**：点下就从回收站列表消失，不等整笔写回。
+         *
+         * ★ 2026-11-08 真机：以前列表只认 `observeTrash` + `bump()`，而 bump 在
+         * `persist` 末尾 ⇒ 点恢复后原地等好几秒才看到条目移出。现在点击瞬间过滤；
+         * 写成功时 `bump()` 已让 `observeTrash` 不含该条目，清掉标记不会闪回；
+         * 写失败时清掉标记 ⇒ 条目重新出现，用户看得见失败。
+         */
+        val pendingItemIds: Set<String> = emptySet(),
     )
 
     /**
@@ -96,14 +105,17 @@ class TrashViewModel @Inject constructor(
     val trashRows: StateFlow<List<TrashRowUi>> = combine(
         itemRepository.observeTrash(vaultId),
         preferences.trashAutoDeleteDays,
-    ) { entries, autoDeleteDays ->
+        _state,
+    ) { entries, autoDeleteDays, state ->
         val now = System.currentTimeMillis()
-        entries.map { entry ->
-            TrashRowUi(
-                item = entry.item,
-                remainingDays = TrashCleanupPolicy.remainingDays(entry.deletedDate, now, autoDeleteDays),
-            )
-        }
+        entries
+            .filterNot { it.item.id in state.pendingItemIds }
+            .map { entry ->
+                TrashRowUi(
+                    item = entry.item,
+                    remainingDays = TrashCleanupPolicy.remainingDays(entry.deletedDate, now, autoDeleteDays),
+                )
+            }
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000L),
@@ -123,20 +135,44 @@ class TrashViewModel @Inject constructor(
 
     fun restore(itemId: String) {
         if (_state.value.busy) return
-        _state.update { it.copy(busy = true, activeItemId = itemId) }
+        _state.update {
+            it.copy(
+                busy = true,
+                activeItemId = itemId,
+                pendingItemIds = it.pendingItemIds + itemId,
+            )
+        }
         viewModelScope.launch {
             val result = itemRepository.restoreItem(vaultId, itemId)
-            _state.update { it.copy(busy = false, activeItemId = null) }
+            _state.update {
+                it.copy(
+                    busy = false,
+                    activeItemId = null,
+                    pendingItemIds = it.pendingItemIds - itemId,
+                )
+            }
             sendOutcome(result) { synced -> UiEvent.Restored(synced) }
         }
     }
 
     fun deleteForever(itemId: String) {
         if (_state.value.busy) return
-        _state.update { it.copy(busy = true, activeItemId = itemId) }
+        _state.update {
+            it.copy(
+                busy = true,
+                activeItemId = itemId,
+                pendingItemIds = it.pendingItemIds + itemId,
+            )
+        }
         viewModelScope.launch {
             val result = itemRepository.permanentDeleteItem(vaultId, itemId)
-            _state.update { it.copy(busy = false, activeItemId = null) }
+            _state.update {
+                it.copy(
+                    busy = false,
+                    activeItemId = null,
+                    pendingItemIds = it.pendingItemIds - itemId,
+                )
+            }
             sendOutcome(result) { synced -> UiEvent.DeletedForever(synced) }
         }
     }
