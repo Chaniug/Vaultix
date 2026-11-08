@@ -180,6 +180,11 @@
     <!-- 同步进行中：此前 InProgress 横幅只有一条波浪进度条、零文字，
          等待全程没有交代（真机 18:08 那次「提示有更新 → 条目出现」中间空了 36 秒）。 -->
     <string name="items_sync_in_progress">正在加载云端版本，解密可能需要几秒…</string>
+    <!-- 2026-11-08：KDBX 库级上传态。保存落盘那一刻就要说"正在上传"，
+         别等详情页的状态通知（整文件上传 5–60s，期间列表页原本全程无反馈）。 -->
+    <string name="items_sync_uploading">正在上传改动到云端…</string>
+    <!-- 列表页没有冲突三选项对话框：如实引导到「密码库」页，不编造"已同步"。 -->
+    <string name="items_sync_conflict_go_to_vaults">同步冲突，请到「密码库」页选择保留哪一版</string>
     <string name="vault_item_count_only">%1$d 个条目</string>
     <!-- ⋮ 菜单的动作分组标题（2026-09-30 方案 B）：把"去哪"与"做什么"分开。
          「锁定」不归任何一组，单独用分隔线隔开（破坏性动作不挨着常用动作）。 -->
@@ -1042,7 +1047,9 @@
     <string name="password_strength_strong">强</string>
     <string name="password_strength_very_strong">非常强</string>
     <string name="item_saved_synced">已保存并同步到云端</string>
-    <string name="item_saved_queued">已保存到本地</string>
+    <!-- ⚠️ 2026-11-08 从「已保存到本地」改：Queued 意味着本地已落盘、上传刚入队，
+         只说前半句会让用户以为"完事了"，然后在页面上干等那几秒。 -->
+    <string name="item_saved_queued">已保存到本地 · 正在同步到云端</string>
     <string name="item_save_failed">保存失败：%1$s</string>
 
     <!-- 条目详情 S9 / 编辑 -->

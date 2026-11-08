@@ -104,6 +104,8 @@ EXPERIMENTAL_SYMBOLS: dict[str, str] = {
     "ExposedDropdownMenuBox": "ExperimentalMaterial3Api",
     "CircularWavyProgressIndicator": "ExperimentalMaterial3ExpressiveApi",
     "LinearWavyProgressIndicator": "ExperimentalMaterial3ExpressiveApi",
+    "ContainedLoadingIndicator": "ExperimentalMaterial3ExpressiveApi",
+    "LoadingIndicator": "ExperimentalMaterial3ExpressiveApi",
     "ButtonGroup": "ExperimentalMaterial3ExpressiveApi",
     "ToggleButton": "ExperimentalMaterial3ExpressiveApi",
 }

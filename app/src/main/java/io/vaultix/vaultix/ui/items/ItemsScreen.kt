@@ -85,7 +85,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -93,7 +92,6 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -117,6 +115,7 @@ import io.vaultix.vaultix.ui.common.capabilityTint
 import io.vaultix.vaultix.ui.common.CloudSyncIcon
 import io.vaultix.vaultix.ui.common.EntryCard
 import io.vaultix.vaultix.ui.common.EntryCardIconSize
+import io.vaultix.vaultix.ui.common.VaultixMorphingProgress
 import io.vaultix.vaultix.ui.common.selectableItemTypes
 import io.vaultix.vaultix.ui.common.EntryCardIconSpacing
 import io.vaultix.vaultix.ui.common.EntryCardTextSpacing
@@ -147,7 +146,6 @@ import io.vaultix.vaultix.ui.shell.BottomDockOccupiedHeight
 import io.vaultix.vaultix.ui.theme.Spacing
 import io.vaultix.vaultix.ui.theme.UiSize
 import kotlinx.coroutines.launch
-import kotlin.math.roundToInt
 
 /**
  * 条目列表（Docs/08 S7 最小版）+ 新建条目对话框（S10 最小版）。
@@ -425,56 +423,34 @@ private fun itemsTopInset(
 }
 
 /**
- * 列表**及其外壳**要整体让开的高度（2026-10-24）。
+ * ⚠️ 2026-11-08：这里原有的「外壳下移 + 列表让位 + 逐项绘制补偿 + 滚动锚点」
+ * 四件套**已整条拆除**（#182 补偿链，见 `.ai` 11-08 part3）。
  *
- * ⚠️ 这与 [itemsTopInset]（只喂 `LazyColumn.contentPadding`）是**两件事**，别合并：
+ * 它诞生于「展开筛选时偷偷把列表滚回顶部、但画面一像素不跳」。当晚用户否决了
+ * 「偷偷回顶部」并加了「展开筛选时回到列表顶部」开关 —— 开关打开就等于**明确要求
+ * 位置改变**，「画面不跳」这个目标本身不再成立，补偿链只剩负债：
  *
- * | 量 | 喂给谁 | 为什么 |
- * |---|---|---|
- * | [itemsTopInset] | 列表的 `contentPadding.top` | 让内容能滑到顶栏之下（沉浸） |
- * | 本函数 | 列表的**外壳容器** `padding(top)` | 让**展开面板时可见的那一帧**有东西可看 |
+ * - 切筛选时两个 `LaunchedEffect` 都写 `listState`，锚点 `scrollToItem(0, 56)` 会被
+ *   清成 0，首项净下沉 56dp ⇒ chips 与第一张卡片之间凭空多出一条空白（第 2 次起必现）；
+ * - `holding` 判据拿 `filter == All` 冒充「列表在顶部」，开关一开就被永久锁死；
+ * - 更根本的是 foundation 明确保证 `scrollToItem` 的 offset **不保证生效**：条目不够
+ *   填满视口时会走 `toScrollBack` 把 offset 钳回 0 ⇒ SSH 这类短列表**补不回来**；
+ * - 空态吃含 reveal 的 `topInset` 却没有 `compensate()`，额外再沉 56dp。
  *
- * ## 为什么外壳也要让位（用户反馈：「往下滑动的时候点击筛选，显示效果很不好看」）
- *
- * 这是 2026-09-13「让位只走 contentPadding」那条纪律的**例外，且只在这一一种情况下成立**：
- * 面板自上而下展开，只能画出**已滚到顶栏之下**的那部分内容。列表在顶部时首条本来就在
- * 顶栏之下 ⇒ 每一帧都有卡片接住面板底边；列表滚下去之后，顶栏之下是一片**空白**，
- * 于是用户看到的是「面板往空处展开」，chip 行像是悬在半空 —— 这正是"不好看"的来源。
- *
- * ⇒ 外壳按 [QUICK_FILTER_TOP_ANCHOR] 下移，把列表**顶端**（而不是随手滚到某处的中间）
- * 露在面板下方；同时 `ItemsList` 会反向补偿滚动偏移，让可见内容**一像素都不跳**。
- * 收起面板时该项归零，一行代码的路径都与以前完全一致（沉浸式顶栏不受影响）。
- *
- * @param panelReveal 面板让列表外壳下移的量（[itemsFilterPanelReveal]）。
+ * 现在的口径：**让位只走 [itemsTopInset] → `LazyColumn.contentPadding.top`**（72dp），
+ * 首项天然落在 chips 下方 8dp；滚动位置只在 [rememberFilterBarCollapse] **一处**写，
+ * 且必须过偏好开关门控。位置类状态不再绑成「需要运行时凑齐的等式」。
  */
-private fun itemsShellTopInset(
-    searchActive: Boolean,
-    shellTopInset: Dp,
-    panelReveal: Dp,
-): Dp = if (searchActive) 0.dp else shellTopInset + panelReveal
-
-/**
- * 面板展开时，列表外壳（列表视口的顶边）要下移多少 —— 即"面板下方至少露出多少列表"。
- *
- * 取 56dp 的理由：条目卡片视觉高约 [ENTRY_CARD_ESTIMATED_HEIGHT]（两行文字 + 16dp 上下
- * 内边距 ≈ 76dp），露出 56dp 恰好是**半张卡的上半部**（图标 + 标题）。
- * - 少于它（例如 40dp）只能露出卡片顶部圆角，读不出"下面有内容"；
- * - 多于它就要从列表里抢走一截视口，而面板本身已经占了 ~64dp。
- *
- * ⚠️ 它只在「面板展开 **且** 列表已滚离顶部」时生效，见 [rememberFilterBarCollapse]
- *   与 [rememberListEdgeHolder]：**没滚的时候不需要**（首条本来就在顶栏之下）。
- */
-private val QUICK_FILTER_TOP_ANCHOR = 56.dp
-
-/** 条目卡片的估算视觉高（两行文字 + `EntryCard` 的 16dp 上下内边距）。仅用于锚点取值推导。 */
-private val ENTRY_CARD_ESTIMATED_HEIGHT = 76.dp
 
 /**
  * 顶栏收起度 —— 把两条**与"筛选"耦合**的规则收在这里（主函数才能守住 detekt `LongMethod`）。
  *
- * **规则一：切换快筛 = 换了一份数据视图 ⇒ 列表回到顶部。**
- * 不重置的话，旧滚动位会被新数据集继承（而顶部内边距会把它"藏"起来，肉眼看不出已位移）：
- * 既让顶栏误判收起，也让每次切筛选白多一次重新布局。
+ * **规则一：切换快筛 = 换了一份数据视图 ⇒ 列表回到顶部（但受偏好开关门控）。**
+ * 2026-10-24 用户反馈「往下滑的时候点筛选会直接返回最上面，不友好」⇒ 默认**不回顶部**。
+ * 只有用户在「显示选项」里打开「展开筛选时回到列表顶部」、且面板确实展开时才回。
+ * ⚠️ **本函数是全页唯一允许写 `listState` 滚动位置的地方**（2026-11-08 收口）：
+ * 此前另有 `rememberListEdgeHolder` 也在写，两处互相抢滚动位，是筛选区空白的根因之一。
+ * 新增任何「回顶部 / 滚动到某处」的需求都请加在这里，不要再开第二个 `LaunchedEffect`。
  *
  * **规则二：筛选面板展开期间，收起度冻结为「展开」。**
  * 2026-09-15 用户实测：点开面板后连续切筛选（全部→验证码→通行密钥→SSH→**再点回全部**），
@@ -484,109 +460,26 @@ private val ENTRY_CARD_ESTIMATED_HEIGHT = 76.dp
  * ⇒ 面板一展开，顶部内边距变大，LazyColumn 把这份位移记进
  * `firstVisibleItemScrollOffset`：**视觉上列表还在顶部，判据 `offset > 8dp` 却已经成立**。
  * 面板展开时顶栏本来就该是展开的（标题刚被点过）⇒ 直接冻结，把回路切断。
+ *
+ * @param jumpToTop 「展开筛选时回到列表顶部」偏好；false 时**完全不碰**滚动位置。
  */
 @Composable
 private fun rememberFilterBarCollapse(
     listState: LazyListState,
     panelExpanded: Boolean,
     filter: ItemsQuickFilter,
+    jumpToTop: Boolean,
 ): Float {
-    // 只在**换了一份数据视图**时回到顶部（规则一）；面板开关靠 [rememberListEdgeHolder] 处理。
-    LaunchedEffect(filter) { listState.scrollToItem(0) }
+    // 唯一滚动位写入点：开关关闭 ⇒ 一个字节都不碰；打开 ⇒ 展开面板 / 换分类时直接回顶。
+    // 不传 scrollOffset：拆掉补偿链后不再需要「首项向上滚出 56dp」这个不可靠的锚点
+    // （短列表会被 foundation 钳回 0，见上方拆除说明）。
+    LaunchedEffect(panelExpanded, filter, jumpToTop) {
+        if (jumpToTop && panelExpanded) listState.scrollToItem(0)
+    }
     val scrollCollapse = rememberScrollCollapseFraction(listState)
     return if (panelExpanded) 0f else scrollCollapse
 }
 
-/**
- * 「面板展开 ⇒ 列表顶端露在面板下方」的主动滚动态（2026-10-24）。
- *
- * ## 它解决什么
- *
- * 用户原话：「在往下滑动的时候点击筛选，显示效果很不好看」。往下滑之后再点库名，
- * 顶栏之下没有任何内容，面板就往空白里展开（见 [itemsShellTopInset] 的说明）。
- * 这里把列表**滚到顶端**，让 first = 第 0 项、offset = [QUICK_FILTER_TOP_ANCHOR]
- * —— 也就是 `contentPadding.top` **正好**把内容压到面板下沿，然后由外壳再下移同一个值
- * ⇒ 可见内容**一像素都不跳**，只是"面板下面接的是列表的头"而不是任意处。
- *
- * ## 为什么必须"先让位、再滚"
- *
- * ⚠️ **顺序是硬性的**：`scrollToItem(0, anchor)` 的上限是
- * `contentPadding.top - viewport`，而让位（外壳 `padding` 与列表 `contentPadding`）要
- * **下一帧**才生效。若先滚，那一刻 `padding.top` 还是 0 ⇒ 锚点被夹到 0 ⇒ 滚了等于没滚
- * （`scrollToItem` 只记录"目标位"，不会在让位生效后自己修正）。所以这里用两帧：
- * 第 ① 帧只把让位打上去，第 ② 帧才滚。
- *
- * ## 与规则一（切筛选回顶部）的分工
- *
- * "切筛选 ⇒ 回第 0 项"仍然成立且**优先**：换的是数据视图，不能把旧滚动位带过去。
- * 面板已展开时用户是"在看面板期间切 chip"，那一次直接 `scrollToItem(0)`，
- * `firstVisibleItemScrollOffset` 归零 ⇒ [rememberScrollCollapseFraction] 自然读成"未收起"，
- * 顶栏不会在切换时缩一下（2026-09-15 用户报的那个毛病不再出现），
- * 也就不需要再靠"冻结收起度"压着它。
- *
- * ## ⚠️ 2026-10-24 当晚：这个行为**默认关闭**了（用户反馈）
- *
- * 用户原话：「现在往下滑动的时候，发现点击筛选，会直接返回最上面。这样设定不友好」。
- * 补偿只保证"不跳"，没保证"不换位置" —— **位置连续性本身**才是用户的诉求：
- * 他正看到第 30 条，点个筛选是为了在**这个上下文里**换一维，不是从头再看一遍。
- *
- * ⇒ 改成偏好项 [ItemsViewModel.filterJumpToTop]，默认 `false`（= 本函数整条不生效，
- *   `holding` 恒为 false，`reveal` 恒为 0，回到 #182 之前的滚动行为）。
- *   想要"展开即回到顶部"的人在「显示选项」里自己打开。
- *
- * ⚠️ 关掉之后的代价（如实记）：往下滑再展开面板时，顶栏之下仍是空白 —— 那正是 #182
- *   想解决的"难看"。这是**用户选的取舍**，不是我们又替他猜了一次。
- *
- * @param jumpToTop 偏好开关（false = 完全不插手滚动位置）。
- * @return 终态是否为「列表顶端卡在面板下方」。调用方据此决定外壳要不要下移
- *   （见 [itemsFilterPanelReveal]）。
- */
-@Composable
-private fun rememberListEdgeHolder(
-    listState: LazyListState,
-    panelExpanded: Boolean,
-    filter: ItemsQuickFilter,
-    jumpToTop: Boolean,
-): Boolean {
-    var holding by remember { mutableStateOf(false) }
-    // 当前卡点值：从状态里读会给组合期引入一次快照读（`firstVisibleItemScrollOffset`），
-    // 滚一下重组一次；而本函数每帧的结果只取决于"第 ① 项 + 是否已展开"。
-    val anchorPx = with(LocalDensity.current) { QUICK_FILTER_TOP_ANCHOR.toPx().roundToInt() }
-    LaunchedEffect(panelExpanded, filter, jumpToTop) {
-        // 偏好关闭（默认）：**一个字节都不碰滚动位置** —— 不只是"不滚到卡点"，
-        // 连"切 chip 回第 0 项"也不做（那条规则属于 #182 配套的一部分，
-        // 用户要的是"保持原位"，不是"换一种方式回顶部"）。
-        if (!panelExpanded || !jumpToTop) {
-            holding = false
-            return@LaunchedEffect
-        }
-        val atTop = filter == ItemsQuickFilter.All &&
-            listState.firstVisibleItemIndex == 0 &&
-            listState.firstVisibleItemScrollOffset <= anchorPx
-        if (atTop) {
-            // 列表本就在顶部：让位（contentPadding）已经把内容推到面板下方，滚动位原样保留。
-            holding = false
-        } else if (!holding) {
-            holding = true
-            // ① 打让位（下一帧生效）→ ② 再滚到锚点。
-            withFrameNanos { }
-            listState.scrollToItem(0, anchorPx)
-        } else {
-            // 已经在卡点态：切 chip 只换数据视图，回到第 0 项的默认位置（不留半截滚动位）。
-            listState.scrollToItem(0)
-        }
-    }
-    return holding
-}
-
-/**
- * 外壳要不要下移：**只在「面板展开 + 列表处于卡点态」时**。
- *
- * 其余情况一律 0.dp —— 特别是"列表在顶部，点开面板"这条最高频的路径，
- * 外壳一行都不动（与 2026-10-24 之前完全一致）。
- */
-private fun itemsFilterPanelReveal(expanded: Boolean, holding: Boolean): Dp =
-    if (expanded && holding) QUICK_FILTER_TOP_ANCHOR else 0.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -647,17 +540,18 @@ fun ItemsScreen(
     // 走 rememberSaveable：切 Tab 回来仍保持展开（用户刚点开就切走再回来，不该又收起来）。
     var quickFiltersExpanded by rememberSaveable { mutableStateOf(false) }
     val listState = rememberLazyListState()
-    val collapse = rememberFilterBarCollapse(listState, quickFiltersExpanded, state.quickFilter)
+    val collapse = rememberFilterBarCollapse(
+        listState,
+        quickFiltersExpanded,
+        state.quickFilter,
+        jumpToTop,
+    )
     val barPadding = rememberImmersiveBarPadding(collapse)
     // ⚠️ 挤在一行是有意的：主 composable 贴着 detekt `LongMethod ≤150` 的门禁线
     // （2026-09-13 这一批加了「让位走 contentPadding」后曾到 152 行，靠压这行回到 147）。
     val filterRowInset = rememberQuickFilterRowInset(quickFiltersExpanded, organizations.isNotEmpty())
+    // 让位只走 contentPadding（见 [itemsTopInset]）：不再有外壳下移 / 反向补偿这一层。
     val listTopInset = itemsTopInset(searchActive, barPadding, filterRowInset, state.syncNote != null)
-    // 2026-10-24：面板展开**且列表已滚离顶部**时，外壳下移一截并反向补偿滚动偏移
-    // （见 [itemsShellTopInset]）。偏好默认关 ⇒ reveal 恒为 0，同改动前完全一致。
-    val holdingEdge = rememberListEdgeHolder(listState, quickFiltersExpanded, state.quickFilter, jumpToTop)
-    val reveal = itemsFilterPanelReveal(quickFiltersExpanded, holdingEdge)
-    val shellTopInset = itemsShellTopInset(searchActive, listTopInset, reveal)
     // 「这个库在哪 · 有多少条」（2026-09-30 用户要求）：在本层算一次，供 ⋮ 菜单卡片与
     // 列表状态行**共用**（各算各的迟早出现"卡片 42 条、列表 41 条"）。
     // ⚠️ 未解锁时 countText 为 null：条目数不可知 ≠ 0。
@@ -733,12 +627,9 @@ fun ItemsScreen(
                     onDismiss = viewModel::dismissSyncNote,
                     onRetry = viewModel::retrySync,
                 )
-                // 下拉伸手区；`padding(top = reveal)` 是**唯一**的外层让位，只在「面板展开 +
-                // 列表已滚离顶部」时非零（见 [itemsShellTopInset]），`ItemsList` 反向补偿滚动。
                 ItemsPullToRefresh(
                     syncing = syncing,
                     onRefresh = viewModel::retrySync,
-                    modifier = Modifier.padding(top = reveal),
                 ) {
                     // 空态与列表的分流抽到 [ItemsBody]：本函数已贴着 detekt 的
                     // LongMethod ≤150（内联分支会直接顶破），且这里的参数传递本就很长。
@@ -752,8 +643,7 @@ fun ItemsScreen(
                         displayMode = cardDisplayMode,
                         showIcon = showIcon,
                         selectedIds = selectedIds,
-                        listTopInset = shellTopInset,
-                        scrollCompensation = -reveal,
+                        listTopInset = listTopInset,
                         bottomInset = bottomInset,
                         onUnlockVault = onUnlockVault,
                         onOpenItem = onOpenItem,
@@ -914,20 +804,8 @@ private fun ItemsBody(
     displayMode: ItemsCardDisplayMode,
     showIcon: Boolean,
     selectedIds: Set<String>,
-    /**
-     * 列表要留出的顶部让位（**已含**面板展开时的锚点让位，见 [itemsShellTopInset]）。
-     *
-     * ⚠️ 名字沿用 `listTopInset`，但它现在喂的是"外壳下移之后的可用高度"——
-     * 与外壳那层 `padding(top = reveal)` 是同一个量的两半，任何一半单独改都会让内容跳。
-     */
+    /** 列表顶部让位，直接喂 `LazyColumn.contentPadding.top`（见 [itemsTopInset]）。 */
     listTopInset: Dp,
-    /**
-     * 逐项绘制偏移（px，负值 = 往上画），用于抵消外壳 `padding(top)` 造成的位移。
-     *
-     * 只在「面板展开 + 列表已滚离顶部」时非零（= `-QUICK_FILTER_TOP_ANCHOR`）；
-     * 空态不需要它（那里本来就没有"内容不该跳"这回事），所以只往 [ItemsList] 传。
-     */
-    scrollCompensation: Dp = 0.dp,
     bottomInset: Dp,
     onUnlockVault: () -> Unit,
     onOpenItem: (VaultItem) -> Unit,
@@ -960,7 +838,6 @@ private fun ItemsBody(
         showIcon = showIcon,
         serverOrigin = state.vault?.origin,
         topInset = listTopInset,
-        scrollCompensation = scrollCompensation,
         bottomInset = bottomInset,
         onToggleGroup = onToggleGroup,
         selectedIds = selectedIds,
@@ -1112,7 +989,7 @@ private fun DisplayOptionsHost(
     groupMode: ItemsGroupMode,
     cardDisplayMode: ItemsCardDisplayMode,
     showIcon: Boolean,
-    /** 展开筛选时是否把列表拉回顶端（默认关；见 [rememberListEdgeHolder] 的 KDoc）。 */
+    /** 展开筛选时是否把列表拉回顶端（默认关；见 [rememberFilterBarCollapse] 的门控）。 */
     filterJumpToTop: Boolean = false,
     onDismiss: () -> Unit,
     onGroupMode: (ItemsGroupMode) -> Unit,
@@ -1727,8 +1604,6 @@ private fun ItemsList(
     showIcon: Boolean,
     serverOrigin: String?,
     topInset: Dp,
-    /** 逐项绘制偏移（px 换算后，负值 = 往上画），抵消外壳 `padding(top)` 的位移；见 [ItemsBody]。 */
-    scrollCompensation: Dp = 0.dp,
     bottomInset: Dp,
     onToggleGroup: (String) -> Unit,
     /** 多选：当前勾选的条目 id 集合（非空即处于多选态）。 */
@@ -1747,15 +1622,6 @@ private fun ItemsList(
      */
     vaultCard: VaultCardInfo? = null,
 ) {
-    // ⚠️ 反向补偿（2026-10-24）：外壳 `padding(top = reveal)` 会把整个列表挪下去，
-    // 而 `contentPadding.top` 只负责"第一项从哪开始画"。两者在**滚动容器内部**是同一笔，
-    // ⇒ 若只加外壳，内容会跟着往下跳一截（"点筛选，列表整体下沉了"）；把这份位移在
-    // 绘制期减回去，可见内容就**一像素都不动** —— 用户看到的只有「面板盖住了上面几行」。
-    // 用 `graphicsLayer` 而不是改 `contentPadding`：后者会挪动真实布局位置，
-    // 连第一项的位置也跟着变（那就白补偿了）。
-    val compensationPx = with(LocalDensity.current) { scrollCompensation.toPx() }
-    fun Modifier.compensate(): Modifier =
-        if (compensationPx == 0f) this else this.graphicsLayer { translationY = compensationPx }
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize(),
@@ -1778,7 +1644,7 @@ private fun ItemsList(
         // 只读提示排在它下面 —— 那是"为什么按钮少了"的解释，属于对**内容**的补充。
         if (vaultCard != null) {
             item(key = "vault-status", contentType = ItemsContentType.HEADER) {
-                VaultStatusRow(card = vaultCard, modifier = Modifier.compensate())
+                VaultStatusRow(card = vaultCard)
             }
         }
         groups.forEach { group ->
@@ -1789,7 +1655,6 @@ private fun ItemsList(
                         count = group.items.size,
                         expanded = group.key !in collapsedGroups,
                         onToggle = { onToggleGroup(group.key) },
-                        modifier = Modifier.compensate(),
                     )
                 }
             }
@@ -1805,7 +1670,6 @@ private fun ItemsList(
                     PressAndSwipeToDelete(
                         onDelete = { onDelete(item) },
                         selectable = item.id in selectedIds,
-                        modifier = Modifier.compensate(),
                     ) {
                         ItemRow(
                             item = item,
@@ -1854,7 +1718,13 @@ private fun CreateItemDialog(
 
 /** 顶栏动作已收敛为「胶囊里的 🔍 + ⋮」（见 [ItemsMoreMenu]）。 */
 
-/** 同步状态提示条：进行中 = 细进度条；成功/跳过 = 短暂提示后自动消失；警告 = 常驻到下次同步。 */
+/**
+ * 同步状态提示条：进行中 = 细进度条；成功/跳过 = 短暂提示后自动消失；警告 = 常驻到下次同步。
+ *
+ * ⚠️ 2026-11-08 补两类 KDBX 专用态：[ItemsViewModel.SyncNote.Uploading] 是**库级上传**
+ * （保存落盘后那 5–60s 的空窗），[ItemsViewModel.SyncNote.Notice] 是手动同步的一次性结果。
+ * 此前本横幅只跟 Bitwarden 编排器走，KDBX 全程不出 ⇒ 用户以为「点了没反应」。
+ */
 @Composable
 private fun SyncNoteBanner(
     note: ItemsViewModel.SyncNote?,
@@ -1863,7 +1733,10 @@ private fun SyncNoteBanner(
     onRetry: () -> Unit,
 ) {
     LaunchedEffect(note) {
-        if (note is ItemsViewModel.SyncNote.Success || note is ItemsViewModel.SyncNote.Skipped) {
+        val transient = note is ItemsViewModel.SyncNote.Success ||
+            note is ItemsViewModel.SyncNote.Skipped ||
+            (note is ItemsViewModel.SyncNote.Notice && !note.warning)
+        if (transient) {
             kotlinx.coroutines.delay(NOTE_DISMISS_DELAY_MS)
             onDismiss()
         }
@@ -1873,9 +1746,13 @@ private fun SyncNoteBanner(
     if (note == null) return
 
     Surface(
-        color = when (note) {
-            is ItemsViewModel.SyncNote.Warning -> MaterialTheme.colorScheme.errorContainer
-            else -> MaterialTheme.colorScheme.surfaceContainerHigh
+        color = if (
+            note is ItemsViewModel.SyncNote.Warning ||
+            (note is ItemsViewModel.SyncNote.Notice && note.warning)
+        ) {
+            MaterialTheme.colorScheme.errorContainer
+        } else {
+            MaterialTheme.colorScheme.surfaceContainerHigh
         },
         // padding 放在 Surface **外面**：让横幅整体落在顶栏之下，而不是色块被顶栏压住。
         modifier = Modifier.fillMaxWidth().padding(top = topPadding),
@@ -1897,6 +1774,8 @@ private fun SyncNoteBanner(
                     )
                 }
             }
+            ItemsViewModel.SyncNote.Uploading -> SyncUploadingRow()
+            is ItemsViewModel.SyncNote.Notice -> SyncNoticeRow(note, onRetry)
             is ItemsViewModel.SyncNote.Warning -> {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -1956,6 +1835,63 @@ private fun SyncNoteBanner(
                         modifier = Modifier.padding(start = Spacing.sm),
                     )
                 }
+            }
+        }
+    }
+}
+
+/** KDBX 库级上传态：变形圆点 + 一句「正在上传」，补上保存落盘后那几秒的反馈空窗。 */
+@Composable
+private fun SyncUploadingRow() {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.padding(horizontal = Spacing.lg, vertical = UiSize.TightGap),
+    ) {
+        // 变形圆点比 3dp 直线显眼，且与详情页 DetailSyncIndicator 是同一枚组件。
+        VaultixMorphingProgress(indicatorSize = 32.dp)
+        Text(
+            text = stringResource(R.string.items_sync_uploading),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(start = Spacing.sm),
+        )
+    }
+}
+
+/** KDBX 手动同步的一次性结果（成功自动消失 / 警告常驻并给「重试」）。 */
+@Composable
+private fun SyncNoticeRow(note: ItemsViewModel.SyncNote.Notice, onRetry: () -> Unit) {
+    // ⚠️ fallback 无条件取一次：Elvis 右侧调 @Composable 会让组合树分支不稳定。
+    val fallback = stringResource(note.resId)
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.padding(horizontal = Spacing.lg, vertical = UiSize.TightGap),
+    ) {
+        Icon(
+            imageVector = if (note.warning) Icons.Filled.Warning else Icons.Filled.Check,
+            contentDescription = null,
+            tint = if (note.warning) {
+                MaterialTheme.colorScheme.onErrorContainer
+            } else {
+                MaterialTheme.colorScheme.primary
+            },
+            modifier = Modifier.size(Spacing.lg),
+        )
+        Text(
+            text = note.detail ?: fallback,
+            style = MaterialTheme.typography.bodySmall,
+            color = if (note.warning) {
+                MaterialTheme.colorScheme.onErrorContainer
+            } else {
+                MaterialTheme.colorScheme.onSurface
+            },
+            modifier = Modifier
+                .weight(1f)
+                .padding(horizontal = Spacing.sm),
+        )
+        if (note.warning) {
+            TextButton(onClick = onRetry) {
+                Text(stringResource(R.string.action_retry))
             }
         }
     }

@@ -15,28 +15,21 @@
 package io.vaultix.vaultix.ui.common
 
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.CloudOff
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.unit.dp
 import io.vaultix.model.KdbxCloudSyncStatus
 import io.vaultix.vaultix.R
-import io.vaultix.vaultix.ui.theme.VaultixCorner
 import io.vaultix.vaultix.ui.theme.Spacing
 
 /** 云同步图标的尺寸（与收藏星标、能力徽标同一视觉重量）。 */
@@ -90,7 +83,7 @@ fun CloudSyncIcon(synced: Boolean, modifier: Modifier = Modifier) {
  * ⚠️ KDBX 是**整文件**同步，没有「某一条上云了」的概念；
  *    `observeSyncStates` 对 KDBX 恒返回空 map，条目级云图标在这里画不出来。
  *
- * 形态（用户指定）：上传中 = M3 内置 [CircularProgressIndicator] 转动；
+ * 形态（2026-11-08 更新）：上传中 = [VaultixMorphingProgress] 变形圆点；
  * 成功 = [Icons.Filled.CloudDone] 小云弱化色；失败/冲突 = `CloudOff` + error。
  * 本地 SAF 库（`null` / `LOCAL_ONLY` / `REMOTE_CHANGED`）不画 —— 不编造不存在的云端状态。
  *
@@ -103,21 +96,15 @@ fun isSyncUploading(status: KdbxCloudSyncStatus?): Boolean =
         status == KdbxCloudSyncStatus.SYNCING
 
 /**
- * 上传中的**不确定进度条**（M3 内置 [LinearProgressIndicator]）。
+ * 上传中的**不确定进度条**：委托给 [VaultixMorphingProgressBar]（胶囊扫光）。
  *
  * 一次 KDBX 上传是「整文件条件写」，拿不到可信的百分比 ⇒ 用不确定进度而不是虚构数字。
- * 与 [DetailSyncIndicator] 成对：上传中 = 转动 + 细进度条；完成 = 只剩小云。
+ * 2026-11-08 换掉 3dp 老式直线（用户原话「很老实，不够新颖」），尺寸规格收进
+ * `ExpressiveProgress.kt` 唯一封装点；本函数保留是让详情页调用处一行不用改。
  */
 @Composable
 fun DetailSyncProgress(modifier: Modifier = Modifier) {
-    LinearProgressIndicator(
-        modifier = modifier
-            .fillMaxWidth()
-            .height(PROGRESS_HEIGHT)
-            .clip(VaultixCorner.Pill),
-        color = MaterialTheme.colorScheme.primary,
-        trackColor = MaterialTheme.colorScheme.surfaceVariant,
-    )
+    VaultixMorphingProgressBar(modifier = modifier.fillMaxWidth())
 }
 
 @Composable
@@ -125,12 +112,11 @@ fun DetailSyncIndicator(status: KdbxCloudSyncStatus?, modifier: Modifier = Modif
     val uploading = isSyncUploading(status)
     if (uploading) {
         val label = stringResource(R.string.sync_dot_uploading)
-        CircularProgressIndicator(
-            modifier = modifier
-                .size(CLOUD_ICON_SIZE)
-                .padding(2.dp)
-                .semantics { contentDescription = label },
-            strokeWidth = 2.dp,
+        // 官方变形组件内部写死 48dp；封装里靠 wrapContentSize + graphicsLayer 缩到 24dp，
+        // 才不会把「类型徽标 / 能力图标 / 云状态」这一行挤开。
+        VaultixMorphingProgress(
+            indicatorSize = CLOUD_ICON_SIZE,
+            modifier = modifier.semantics { contentDescription = label },
         )
         return
     }
@@ -162,6 +148,3 @@ fun DetailSyncIndicator(status: KdbxCloudSyncStatus?, modifier: Modifier = Modif
         modifier = modifier.size(CLOUD_ICON_SIZE),
     )
 }
-
-/** 上传进度条的厚度：细到不抢标题，又能被一眼看见。 */
-private val PROGRESS_HEIGHT = 3.dp

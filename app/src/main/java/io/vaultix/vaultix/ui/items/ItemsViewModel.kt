@@ -1,5 +1,6 @@
 package io.vaultix.vaultix.ui.items
 
+import androidx.annotation.StringRes
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -8,18 +9,23 @@ import io.vaultix.data.repository.BitwardenSyncOrchestrator
 import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.domain.FolderRepository
 import io.vaultix.domain.ItemRepository
+import io.vaultix.domain.KdbxSyncReport
+import io.vaultix.domain.KdbxSyncRepository
+import io.vaultix.domain.OrganizationRepository
 import io.vaultix.domain.SyncTrigger
 import io.vaultix.domain.VaultRepository
 import io.vaultix.domain.VaultSaveOutcome
 import io.vaultix.domain.VaultSessionRepository
 import io.vaultix.domain.VaultSyncStatus
-import io.vaultix.model.VaultItem
-import io.vaultix.domain.OrganizationRepository
 import io.vaultix.model.VaultFolder
+import io.vaultix.model.VaultItem
+import io.vaultix.model.VaultKind
 import io.vaultix.model.VaultOrganization
 import io.vaultix.model.VaultSummary
+import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.ItemFilter
 import io.vaultix.vaultix.ui.common.SyncStatusDot
+import io.vaultix.vaultix.ui.common.isSyncUploading
 import io.vaultix.vaultix.ui.common.resolveSyncDot
 import io.vaultix.vaultix.session.ActiveVaultStore
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -42,11 +48,12 @@ import javax.inject.Inject
 /**
  * 条目列表（S7）。
  *
- * - 同步统一走 [BitwardenSyncOrchestrator]：进页**不再自动同步**（2026-09-08 用户反馈，
- *   见 `init` 末尾注释）；拉取走顶栏按钮 / 下拉刷新（MANUAL，force，失败自动指数退避重试），
- *   本地修改随保存/删除 flush 推送；
- * - 提示条由 orchestrator 的 per-vault 状态派生：仅非静默结果（成功/跳过）与
- *   运行/错误展示；静默自动同步成功不打扰（Bastion 语义）；
+ * - 手动同步**按库类型分派**（2026-11-08）：Bitwarden 走 [BitwardenSyncOrchestrator]，
+ *   网盘 KDBX 走 [KdbxSyncRepository]。此前一律丢给编排器，而 `syncVault` 对 KDBX 直接
+ *   返回 `Unsupported`、编排器对 Unsupported 只把 `isRunning` 置回 false ⇒ 点「同步」
+ *   三个反馈通道同时沉默（`.ai` 已知未修项 B）。进页仍**不自动同步**（2026-09-08）。
+ * - 提示条按优先级合成三源：KDBX 手动同步结果 → KDBX 库级上传态（保存后那几秒）→
+ *   Bitwarden 编排器状态。静默自动同步成功不打扰（Bastion 语义）。
  * - 新建走 [ItemRepository.createItem]：本地密文行 + dirty 队列 + 轻量推送。
  */
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -57,6 +64,8 @@ class ItemsViewModel @Inject constructor(
     private val sessionRepository: VaultSessionRepository,
     private val itemRepository: ItemRepository,
     private val syncOrchestrator: BitwardenSyncOrchestrator,
+    /** 网盘 KDBX 同步：与 [syncOrchestrator] 两套，冲突语义不同，见类 KDoc。 */
+    private val kdbxSyncRepository: KdbxSyncRepository,
     private val folderRepository: FolderRepository,
     /** 组织 / 集合（只读，2026-10-21）：供筛选条与条目归属展示。 */
     private val organizationRepository: OrganizationRepository,
@@ -94,7 +103,22 @@ class ItemsViewModel @Inject constructor(
         data class Success(val cipherCount: Int) : SyncNote
         data object Skipped : SyncNote
         data object InProgress : SyncNote
+        /** 库级上传中（**仅 KDBX**）：列表页也要看得见，不等详情页的状态通知。 */
+        data object Uploading : SyncNote
         data class Warning(val message: String) : SyncNote
+        /**
+         * KDBX 手动同步的一次性结果。
+         *
+         * ⚠️ 文案走 `@StringRes` 而不是 `String`：ViewModel 不该持 Context，中文也不该
+         *   抄进 Kotlin（审计 §3.4）。[detail] 是底层已翻译好的失败原因，原样展示。
+         *
+         * @param warning true = 失败 / 需用户处理，横幅常驻并给「重试」；false = 自动消失。
+         */
+        data class Notice(
+            @StringRes val resId: Int,
+            val detail: String? = null,
+            val warning: Boolean = false,
+        ) : SyncNote
     }
 
     sealed interface SaveEvent {
@@ -136,6 +160,11 @@ class ItemsViewModel @Inject constructor(
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
 
+    /** KDBX 手动同步运行态（Bitwarden 的运行态由编排器自己驱动）。 */
+    private val _kdbxManualRunning = MutableStateFlow(false)
+    /** KDBX 手动同步的一次性结果；null = 交回三源合成。 */
+    private val _manualSyncNote = MutableStateFlow<SyncNote?>(null)
+
     private val _saveEvents = Channel<SaveEvent>(Channel.BUFFERED)
     val saveEvents = _saveEvents.receiveAsFlow()
 
@@ -169,10 +198,23 @@ class ItemsViewModel @Inject constructor(
                 .flatMapLatest { id -> itemRepository.observeSyncStates(id) }
                 .collect { states -> _state.update { it.copy(syncStates = states) } }
         }
-        // 同步状态 → 页内提示条（Bastion 语义：静默结果不打扰）
+        // 同步状态 → 页内提示条（Bastion 语义：静默结果不打扰）。
+        // ⚠️ 2026-11-08 三源按优先级合成，补上 KDBX 保存后 / 手动同步期间的反馈空窗：
+        //   ① 手动同步的一次性结果 ② KDBX 库级上传态 ③ Bitwarden 编排器。
+        //   `observeVaults()` 是库级状态的唯一真源；`isSyncUploading` 与详情页共用判据。
         viewModelScope.launch {
-            combine(vaultIdState, syncOrchestrator.statusByVault) { id, statuses ->
-                toSyncNote(statuses[id])
+            combine(
+                vaultIdState,
+                vaultRepository.observeVaults(),
+                syncOrchestrator.statusByVault,
+                _manualSyncNote,
+            ) { id, vaults, statuses, manual ->
+                val uploadStatus = vaults.firstOrNull { v -> v.id == id }?.syncStatus
+                when {
+                    manual != null -> manual
+                    isSyncUploading(uploadStatus) -> SyncNote.Uploading
+                    else -> toSyncNote(statuses[id])
+                }
             }.collect { note -> _state.update { it.copy(syncNote = note) } }
         }
         // 同步状态 → ⋮ 菜单的四色状态点。
@@ -200,10 +242,11 @@ class ItemsViewModel @Inject constructor(
         .flatMapLatest { id -> organizationRepository.observeOrganizations(id) }
         .stateIn(scope = viewModelScope, started = SharingStarted.Eagerly, initialValue = emptyList())
 
-    /** 同步进行中（下拉刷新指示器用；手动触发后 Orchestrator 状态流转驱动）。 */
+    /** 同步进行中（下拉刷新指示器用）：Bitwarden 编排器 ∪ KDBX 手动同步。 */
     val isSyncing: StateFlow<Boolean> =
-        combine(vaultIdState, syncOrchestrator.statusByVault) { id, statuses ->
-            statuses[id]?.isRunning == true
+        combine(vaultIdState, syncOrchestrator.statusByVault, _kdbxManualRunning) {
+                id, statuses, kdbxRunning ->
+            statuses[id]?.isRunning == true || kdbxRunning
         }.stateIn(
             scope = viewModelScope,
             started = SharingStarted.Eagerly,
@@ -345,13 +388,71 @@ class ItemsViewModel @Inject constructor(
             initialValue = emptyList(),
         )
 
+    /**
+     * 手动同步：**按库类型分派**（2026-11-08）。
+     *
+     * 此前无论什么库都丢给 [syncOrchestrator]；`VaultRepositoryImpl.syncVault` 对非
+     * Bitwarden 库返回 `Unsupported`，编排器对 Unsupported 只 `isRunning = false`，
+     * **不写成功、不写失败、不写错误** ⇒ 提示条 / 下拉指示器 / 菜单状态点三个通道
+     * 同时沉默，用户觉得「点了没反应」。
+     */
     fun retrySync() {
-        // 手动同步：force 跳过节流；运行中请求会按优先级合并
-        syncOrchestrator.requestSync(vaultId, SyncTrigger.MANUAL, force = true)
+        if (_state.value.vault?.kind == VaultKind.KDBX) {
+            retrySyncKdbx()
+        } else {
+            // 手动同步：force 跳过节流；运行中请求会按优先级合并
+            syncOrchestrator.requestSync(vaultId, SyncTrigger.MANUAL, force = true)
+        }
     }
 
-    /** 提示条已展示（或已超时）后清除。 */
+    /**
+     * 网盘 KDBX 的手动同步：判据**现查**（不能用 UI 快照，见 `KdbxSyncRepository` KDoc），
+     * 结果一律映射成可见的 [SyncNote]。
+     *
+     * ⚠️ 冲突在这里**不收敛**：列表页没有三选项对话框，强行收敛会静默丢改动。
+     *   如实提示并引导到「密码库」页拍板（那条路有完整对话框），不编造「已同步」。
+     */
+    private fun retrySyncKdbx() {
+        if (_kdbxManualRunning.value) return
+        if (_state.value.vault?.unlocked != true) {
+            _manualSyncNote.value = SyncNote.Notice(
+                resId = R.string.kdbx_sync_needs_reload,
+                warning = true,
+            )
+            return
+        }
+        viewModelScope.launch {
+            _kdbxManualRunning.value = true
+            _manualSyncNote.value = SyncNote.Uploading
+            val report = runCatching {
+                val changed = kdbxSyncRepository.localChangedSinceLastSync(vaultId)
+                kdbxSyncRepository.sync(vaultId, localChangedSinceLastSync = changed)
+            }.getOrElse { KdbxSyncReport.Failed(it.message.orEmpty()) }
+            _kdbxManualRunning.value = false
+            _manualSyncNote.value = when (report) {
+                is KdbxSyncReport.InSync -> SyncNote.Notice(R.string.kdbx_sync_in_sync)
+                is KdbxSyncReport.Uploaded -> SyncNote.Notice(R.string.kdbx_sync_uploaded)
+                is KdbxSyncReport.Downloaded -> SyncNote.Notice(R.string.kdbx_sync_downloaded)
+                is KdbxSyncReport.NeedsReload ->
+                    SyncNote.Notice(R.string.kdbx_sync_needs_reload, warning = true)
+                is KdbxSyncReport.NoCloudSource ->
+                    SyncNote.Notice(R.string.kdbx_sync_no_cloud_source, warning = true)
+                is KdbxSyncReport.StaleBaseline ->
+                    SyncNote.Notice(R.string.kdbx_sync_stale_baseline, warning = true)
+                is KdbxSyncReport.Conflict ->
+                    SyncNote.Notice(R.string.items_sync_conflict_go_to_vaults, warning = true)
+                is KdbxSyncReport.Failed -> SyncNote.Notice(
+                    resId = R.string.kdbx_sync_failed,
+                    detail = report.reason,
+                    warning = true,
+                )
+            }
+        }
+    }
+
+    /** 提示条已展示（或已超时）后清除：同时清掉手动同步结果，否则会被三源合成立刻重放。 */
     fun dismissSyncNote() {
+        _manualSyncNote.value = null
         _state.update { it.copy(syncNote = null) }
     }
 
