@@ -151,13 +151,18 @@ class KdbxSyncOrchestrator(
             // 令牌还在、基线已丢。此前沿这条捷径直接返回，基线永远补不回来，
             // 于是主写路径每次都把「不知道」读成「过期」，用户反复同步也无解。
             //
-            // ⚠️ 两个条件都是刻意的：
-            //    · 会话不在时不跑 —— `adoptBaselineIfMatches` 未解锁必然返回 false，
-            //      白下载一整份；也让编排器单测（无真实会话）行为完全不变。
-            //    · 基线已在时不跑 —— 内容对账要整份下载，不该每次同步都来一次。
+            // ★★ 11-08：条件从「没登记」放宽到「没对齐」。此前只要基线**登记过**，
+            //    哪怕它已经落后于本机会话（连续编辑时基线没跟着推进）就再也不补对账，
+            //    于是真机出现「已登记但与改动前内容不符」+ 状态绿色 + 同步毫无动作，
+            //    只能靠锁库/冷启动清掉内存基线。现在只要不对齐就跑一次内容对账：
+            //    远端内容与会话一致 ⇒ 采纳基线，死锁当场解开。
+            //
+            // ⚠️ 会话不在时不跑 —— `adoptBaselineIfMatches` 未解锁必然返回 false，
+            //    白下载一整份；也让编排器单测（无真实会话）行为完全不变。
             // ⚠️ 对账结果不改变本分支结论：令牌层已判「两边都没改」，
-            //    内容若碰巧不同，保守起见仍由写回闸门 + 条件写去处理，不在这里逼用户拉。
-            if (Kdbx.isUnlocked(vaultId) && !Kdbx.hasBaseline(vaultId)) {
+            //    内容若碰巧不同，保守起见仍由条件写（412 → CONFLICT）去处理。
+            val baseline = Kdbx.baselineStateOf(vaultId)
+            if (baseline != null && !baseline.aligned) {
                 adoptRemoteIfSameContent(vaultId, source)
             }
             return SyncOutcome.AlreadyInSync

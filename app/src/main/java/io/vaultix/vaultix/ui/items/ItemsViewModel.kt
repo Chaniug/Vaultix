@@ -242,11 +242,18 @@ class ItemsViewModel @Inject constructor(
         .flatMapLatest { id -> organizationRepository.observeOrganizations(id) }
         .stateIn(scope = viewModelScope, started = SharingStarted.Eagerly, initialValue = emptyList())
 
-    /** 同步进行中（下拉刷新指示器用）：Bitwarden 编排器 ∪ KDBX 手动同步。 */
+    /** 同步进行中（下拉刷新指示器用）：Bitwarden 编排器 ∪ KDBX 手动同步 ∪ KDBX 库级上传。 */
     val isSyncing: StateFlow<Boolean> =
-        combine(vaultIdState, syncOrchestrator.statusByVault, _kdbxManualRunning) {
-                id, statuses, kdbxRunning ->
-            statuses[id]?.isRunning == true || kdbxRunning
+        combine(
+            vaultIdState,
+            vaultRepository.observeVaults(),
+            syncOrchestrator.statusByVault,
+            _kdbxManualRunning,
+        ) { id, vaults, statuses, kdbxRunning ->
+            // ★ 11-08：整文件上传 5–60s，此前既不在 Bitwarden 编排器状态里，
+            //    也不算"手动同步"⇒ 下拉刷新全程转不起来，用户以为点了没反应。
+            val uploadStatus = vaults.firstOrNull { v -> v.id == id }?.syncStatus
+            statuses[id]?.isRunning == true || kdbxRunning || isSyncUploading(uploadStatus)
         }.stateIn(
             scope = viewModelScope,
             started = SharingStarted.Eagerly,
@@ -423,7 +430,10 @@ class ItemsViewModel @Inject constructor(
         }
         viewModelScope.launch {
             _kdbxManualRunning.value = true
-            _manualSyncNote.value = SyncNote.Uploading
+            // ★ 11-08：此前无条件写 Uploading ⇒ 用户点「同步」第一眼就是
+            //    「正在上传改动到云端…」，可这一步其实只是**检查**，方向要等结果才知道。
+            //    复用中性的 InProgress（波浪进度条 + 说明），由结果 Notice 说出真实方向。
+            _manualSyncNote.value = SyncNote.InProgress
             val report = runCatching {
                 val changed = kdbxSyncRepository.localChangedSinceLastSync(vaultId)
                 kdbxSyncRepository.sync(vaultId, localChangedSinceLastSync = changed)

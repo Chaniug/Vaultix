@@ -178,8 +178,10 @@
     <string name="sync_dot_cd_uploading">正在上传改动，请稍候</string>
     <string name="sync_dot_cd_conflict">同步冲突，需要选择保留哪一版</string>
     <!-- 同步进行中：此前 InProgress 横幅只有一条波浪进度条、零文字，
-         等待全程没有交代（真机 18:08 那次「提示有更新 → 条目出现」中间空了 36 秒）。 -->
-    <string name="items_sync_in_progress">正在加载云端版本，解密可能需要几秒…</string>
+         等待全程没有交代（真机 18:08 那次「提示有更新 → 条目出现」中间空了 36 秒）。
+         ⚠️ 11-08 改为**中性**文案：手动同步一开始只是「检查」，拉还是推要等结果，
+         原先「正在加载云端版本」和 ⋮ 菜单里的「正在上传改动」都把方向提前说死了。 -->
+    <string name="items_sync_in_progress">正在检查云端与本地的改动，可能需要几秒…</string>
     <!-- 2026-11-08：KDBX 库级上传态。保存落盘那一刻就要说"正在上传"，
          别等详情页的状态通知（整文件上传 5–60s，期间列表页原本全程无反馈）。 -->
     <string name="items_sync_uploading">正在上传改动到云端…</string>

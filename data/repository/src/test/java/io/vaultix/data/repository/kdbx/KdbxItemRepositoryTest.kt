@@ -36,6 +36,7 @@ import io.vaultix.database.entity.VaultEntity
 import io.vaultix.data.repository.KdbxItemRepository
 import io.vaultix.model.KdbxCloudSyncStatus
 import io.vaultix.model.VaultCard
+import io.vaultix.model.VaultFolder
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
 import kotlinx.coroutines.test.runTest
@@ -142,6 +143,85 @@ class KdbxItemRepositoryTest {
         assertEquals("改过的标题", Kdbx.contentOf(VAULT_ID)!!.items.single().title)
     }
 
+    // ------------------------------------------------ 11-08 真机死锁回归
+
+    /**
+     * ★ 真机主线：连续第二笔编辑在 `PENDING_UPLOAD` 期间**必须放行**。
+     *
+     * 旧闸门只看 `baselineKnown && !baselineAligned`，而基线只在「`aligned` 且
+     * `IN_SYNC`」时才推进 ⇒ 第一笔写完后状态是 PENDING_UPLOAD，基线就此停住；
+     * 第二笔必然 `!aligned` 被拦，同步又判「两边都没变」显示绿色 ⇒ 死锁。
+     */
+    @Test
+    fun `待上传期间连续第二笔编辑照常放行`() = runTest {
+        val harness = Harness(cloud = true, syncStatus = KdbxCloudSyncStatus.PENDING_UPLOAD)
+        harness.seedLoginItem()
+        // 登记一份与当前会话一致的基线，才能复现「第二笔起对不上」。
+        Kdbx.rebaseBaselineOnSession(VAULT_ID)
+
+        val first = harness.repository.create(VAULT_ID, note(title = "第一笔"))
+        val second = harness.repository.create(VAULT_ID, note(title = "第二笔"))
+
+        assertTrue("第一笔应当成功：$first", first.isSuccess)
+        assertTrue("第二笔不该被基线闸门拦下：$second", second.isSuccess)
+        assertEquals(3, Kdbx.contentOf(VAULT_ID)!!.items.size)
+    }
+
+    /**
+     * ★ 三份真相：拒写时**会话一个字节都不能动**。
+     *
+     * 旧闸门长在 `persist` 里，而 `mutateLocked` 在那之前已换掉会话 ⇒ 拒写后
+     * 「列表旧快照 / 详情说不存在 / 回收站看得到」同时出现。现在写前就判。
+     */
+    @Test
+    fun `远端真变过时拒写且会话保持原样`() = runTest {
+        val harness = Harness(cloud = true, syncStatus = KdbxCloudSyncStatus.REMOTE_CHANGED)
+        harness.seedLoginItem()
+        // 造出「基线已登记但对不上」：先登记当前内容，再绕过 persist 直接改会话。
+        Kdbx.rebaseBaselineOnSession(VAULT_ID)
+        Kdbx.createItem(VAULT_ID, folderId = null, item = note(title = "只改内存")).getOrThrow()
+        val before = Kdbx.contentOf(VAULT_ID)!!.items.map { it.title }.toSet()
+
+        val result = harness.repository.create(VAULT_ID, note(title = "不该出现"))
+
+        assertTrue("远端已变应拒写，实际：$result", result.isFailure)
+        assertEquals(
+            "拒写必须发生在 mutate 之前，会话不得留下半成品",
+            before,
+            Kdbx.contentOf(VAULT_ID)!!.items.map { it.title }.toSet(),
+        )
+    }
+
+    /**
+     * ★ 换文件夹：KDBX 的分组归属是结构，不是字段。
+     *
+     * 旧 writer 只改 `fields`，保存成功却还在原组 ⇒ 电脑 KeePassXC 里看不到移动。
+     */
+    @Test
+    fun `改 folderId 会把条目搬到目标分组`() = runTest {
+        val harness = Harness()
+        val itemId = harness.seedLoginItem()
+        val target: VaultFolder = harness.repository
+            .createFolder(VAULT_ID, parentFolderId = null, name = "目标组")
+            .getOrThrow()
+        val before = Kdbx.contentOf(VAULT_ID)!!.items.single { it.id == itemId }
+        val writesBefore = harness.source.writes.size
+
+        val result = harness.repository.update(VAULT_ID, before.copy(folderId = target.id))
+
+        assertTrue("移动应当成功：$result", result.isSuccess)
+        val after = Kdbx.contentOf(VAULT_ID)!!.items.single { it.id == itemId }
+        assertEquals(target.id, after.folderId)
+        assertEquals("必须真的落了一次盘", writesBefore + 1, harness.source.writes.size)
+    }
+
+    private fun note(title: String) = VaultItem(
+        id = "",
+        title = title,
+        type = VaultItemType.SecureNote,
+        notes = "备注",
+    )
+
     // ------------------------------------------------------------ 装置
 
     private fun bankCard() = VaultItem(
@@ -164,7 +244,10 @@ class KdbxItemRepositoryTest {
      * 五个依赖全部 stub 到「本地文件库」这一档（`hasCloudSource = false`）：
      * 网盘分支的缓存/上传调度由 `KdbxSyncOrchestratorTest` 等文件覆盖，这里不重复。
      */
-    private class Harness(cloud: Boolean = false) {
+    private class Harness(
+        cloud: Boolean = false,
+        syncStatus: KdbxCloudSyncStatus = KdbxCloudSyncStatus.IN_SYNC,
+    ) {
         val source = RecordingSource()
         private val vaultDao = mockk<VaultDao>()
         private val cloudSync = mockk<KdbxCloudSyncCoordinator>()
@@ -179,7 +262,7 @@ class KdbxItemRepositoryTest {
             if (cloud) {
                 // 网盘分支会走「写缓存 → 标记待上传 → 排自动上传」，
                 // 这三个 suspend 在非 relaxed mock 上不 stub 会直接抛。
-                coEvery { cloudSync.currentSyncStatus(VAULT_ID) } returns KdbxCloudSyncStatus.IN_SYNC
+                coEvery { cloudSync.currentSyncStatus(VAULT_ID) } returns syncStatus
                 coEvery { cloudSync.markLocalEdited(VAULT_ID) } returns true
             }
             repository = KdbxItemRepository(

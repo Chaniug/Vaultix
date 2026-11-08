@@ -178,7 +178,11 @@ internal object KdbxItemWriter {
         //   ⚠️ 把目标 uuid 存成局部变量：接收者 lambda 里 `uuid` 会被解析成 `Entry.uuid`（`this.uuid`），
         //   恰好是"看起来对、其实取的是当前条目"的那类隐蔽写法，显式命名避免歧义。
         val targetUuid = uuid
-        val withMillis = updated.modifyEntries {
+        // 先搬分组、再补毫秒余数：`moveEntry` 会刷新 `locationChanged` 等时间戳，
+        // 余数必须按**最终**那个 `Entry.times` 计算，否则落盘后会出现
+        // 「秒是新的、毫秒余数是旧的」这类自相矛盾的时间戳。
+        val relocated = relocate(updated, uuid, before, after)
+        val withMillis = relocated.modifyEntries {
             if (uuid != targetUuid) {
                 this
             } else {
@@ -196,6 +200,28 @@ internal object KdbxItemWriter {
             }
         }
         return KdbxWriteResult(withMillis, uuid)
+    }
+
+    /**
+     * ★ **换文件夹**：KDBX 的分组归属是**结构**（条目挂在 `Group.entries` 下），
+     * 不是某个字段。[applyDomainFields] 只改 `fields`，改不到它 —— 此前 UI 里选了
+     * 新文件夹、保存也成功，条目却还留在原组（电脑上 KeePassXC 里看得一清二楚）。
+     *
+     * ⚠️ `moveEntry` 是"先删后加"：目标组不存在时条目会**消失**。所以目标一律先经
+     *    [existingGroupUuid] 确认在库里；`null`（移到根）/ 目标组已被删 ⇒ 退回**根组**，
+     *    与 [createEntry] 的口径一致（文件头第 2 条）。
+     * ⚠️ 调用点把它放在 `withHistory` 字段改写**之后**、毫秒余数补写**之前**：
+     *    `withHistory` 快照要留在原条目上，而毫秒余数要按搬完之后的最终时间戳算。
+     */
+    private fun relocate(
+        database: KeePassDatabase,
+        uuid: UUID,
+        before: VaultItem,
+        after: VaultItem,
+    ): KeePassDatabase {
+        if (before.folderId == after.folderId) return database
+        val target = existingGroupUuid(database, after.folderId) ?: database.content.group.uuid
+        return database.moveEntry(uuid, target)
     }
 
     /**

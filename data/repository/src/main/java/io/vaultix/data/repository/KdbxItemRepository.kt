@@ -82,6 +82,7 @@ class KdbxItemRepository @Inject constructor(
     suspend fun create(vaultId: String, item: VaultItem): Result<VaultSaveOutcome> =
         withContext(Dispatchers.IO) {
             runCatching {
+                assertWritable(vaultId)
                 requireSupportedType(item)
                 val write = Kdbx.createItem(vaultId, folderId = item.folderId, item = item)
                     .getOrElse { throw it.toUserFacing() }
@@ -99,6 +100,7 @@ class KdbxItemRepository @Inject constructor(
     suspend fun update(vaultId: String, item: VaultItem): Result<VaultSaveOutcome> =
         withContext(Dispatchers.IO) {
             runCatching {
+                assertWritable(vaultId)
                 // 同 #create：类型不对就连"改动前那一份"都不必取（取它只为写回比对）。
                 requireSupportedType(item)
                 val before = Kdbx.contentOf(vaultId)?.items?.firstOrNull { it.id == item.id }
@@ -112,6 +114,7 @@ class KdbxItemRepository @Inject constructor(
     suspend fun softDelete(vaultId: String, itemId: String): Result<VaultSaveOutcome> =
         withContext(Dispatchers.IO) {
             runCatching {
+                assertWritable(vaultId)
                 val write = Kdbx.moveItemToRecycleBin(vaultId, itemId).getOrElse { throw it.toUserFacing() }
                 persist(vaultId, write)
             }
@@ -120,6 +123,7 @@ class KdbxItemRepository @Inject constructor(
     suspend fun restore(vaultId: String, itemId: String): Result<VaultSaveOutcome> =
         withContext(Dispatchers.IO) {
             runCatching {
+                assertWritable(vaultId)
                 val write = Kdbx.restoreItemFromRecycleBin(vaultId, itemId)
                     .getOrElse { throw it.toUserFacing() }
                 persist(vaultId, write)
@@ -129,6 +133,7 @@ class KdbxItemRepository @Inject constructor(
     suspend fun permanentDelete(vaultId: String, itemId: String): Result<VaultSaveOutcome> =
         withContext(Dispatchers.IO) {
             runCatching {
+                assertWritable(vaultId)
                 val write = Kdbx.purgeItem(vaultId, itemId).getOrElse { throw it.toUserFacing() }
                 persist(vaultId, write)
             }
@@ -149,6 +154,7 @@ class KdbxItemRepository @Inject constructor(
         name: String,
     ): Result<VaultFolder> = withContext(Dispatchers.IO) {
         runCatching {
+            assertWritable(vaultId)
             val write = Kdbx.createFolder(vaultId, parentFolderId = parentFolderId, name = name)
                 .getOrElse { throw it.toUserFacing() }
             // entryUuid 位放的是新组 uuid（见 KdbxItemWriter.createGroup 的 KDoc）。
@@ -166,6 +172,7 @@ class KdbxItemRepository @Inject constructor(
         name: String,
     ): Result<VaultSaveOutcome> = withContext(Dispatchers.IO) {
         runCatching {
+            assertWritable(vaultId)
             val write = Kdbx.renameFolder(vaultId, folderId = folderId, name = name)
                 .getOrElse { throw it.toUserFacing() }
             persist(vaultId, write)
@@ -181,6 +188,7 @@ class KdbxItemRepository @Inject constructor(
     suspend fun deleteFolder(vaultId: String, folderId: String): Result<VaultSaveOutcome> =
         withContext(Dispatchers.IO) {
             runCatching {
+                assertWritable(vaultId)
                 val write = Kdbx.deleteFolder(vaultId, folderId).getOrElse { throw it.toUserFacing() }
                 persist(vaultId, write)
             }
@@ -205,6 +213,50 @@ class KdbxItemRepository @Inject constructor(
     }
 
     /**
+     * 写动作**之前**的闸门（#185，2026-11-08 真机死锁修复）。
+     *
+     * ## 为什么必须放在 mutate 之前
+     *
+     * 旧闸门长在 [persist] 里，而 `Kdbx.mutateLocked` 在那之前就已经把新会话
+     * `KdbxSessionStore.put` 进内存了 ⇒ 拒写时"内存已删、磁盘没动"，列表还持有删除前
+     * 的旧快照，详情/回收站却读到新会话 —— 用户看到三份互相矛盾的真相。判据本身是
+     * 只读的（[Kdbx.baselineStateOf]），完全可以在动手**之前**判。
+     *
+     * ## `!aligned` 的两种成因必须分开
+     *
+     * - 远端真变过（同步状态 `REMOTE_CHANGED` / `CONFLICT`）⇒ 拒写，#185 防线原样保留；
+     * - 本机自己连续编辑、基线没跟着推进 ⇒ 就地重对齐后放行。
+     *
+     * 旧实现把两者一律当成"远端变过"：于是「保存被拦 → 同步判两边都没变 → 仍被拦」
+     * 成环；同步状态被洗成绿色 `IN_SYNC` 后编排器的补对账又不跑（基线已登记），
+     * 死锁只能靠锁库 / 冷启动清掉内存基线才解开 —— 真机现象完全一致。
+     *
+     * ⚠️ 远端是否变过最终仍由条件写（`If-Match` → 412 → `CONFLICT`）兜底；
+     *    内容指纹只是"本机这份内容来自哪一版"的辅助判据，不是唯一防线。
+     */
+    private suspend fun assertWritable(vaultId: String) {
+        val origin = vaultDao.get(vaultId)?.origin ?: return
+        if (!cloudSync.hasCloudSource(origin)) return
+        // 会话不在 ⇒ 把 NotUnlocked 交给 mutate 自己报，别在这里另造一份错误。
+        val state = Kdbx.baselineStateOf(vaultId) ?: return
+        if (!state.known || state.aligned) return
+        val status = cloudSync.currentSyncStatus(vaultId)
+        if (status == KdbxCloudSyncStatus.REMOTE_CHANGED ||
+            status == KdbxCloudSyncStatus.CONFLICT
+        ) {
+            VaultixLog.w(TAG) {
+                "写前闸门拒写：远端已变（状态=$status，会话=${state.sessionFingerprint.take(8)}，" +
+                    "基线=${state.baselineFingerprint?.take(8)}），会话未做任何改动"
+            }
+            throw KdbxWriteFailure.StaleBaseline().toUserFacing()
+        }
+        VaultixLog.d(TAG) {
+            "写前闸门：基线落后于会话（状态=$status，本机自己的编辑）⇒ 就地重对齐后放行"
+        }
+        Kdbx.rebaseBaselineOnSession(vaultId)
+    }
+
+    /**
      * 把**已经写好**的字节送到它该去的地方，并让界面能看见这次改动。
      *
      * @param write `mutate` 的产物。`bytes` 落盘、`baseFingerprint`/`newFingerprint` 用于
@@ -217,98 +269,54 @@ class KdbxItemRepository @Inject constructor(
         val bytes = write.bytes
         val origin = vaultDao.get(vaultId)?.origin
             ?: error("这个库里没有对应记录，无法保存：$vaultId")
+        val hasCloud = cloudSync.hasCloudSource(origin)
+        // ⚠️ 无论成功失败都要 bump：`mutateLocked` 已经换过会话，任何 throw 之后不 bump
+        //    都会让列表停在旧快照、详情/回收站读到新会话（三份真相）。
+        try {
+            // ★★ 写回前的往返自检（2026-10-02 审计修复）：只解码不重编码，一次 KDF 量级。
+            //    放在这里让九个写动作共用同一个咽点；失败必须抛出 —— 落盘一份坏库不可逆。
+            Kdbx.verifyWrite(vaultId, bytes).getOrElse { throw it.toUserFacing() }
 
-        // ★★ 写回前的往返自检（2026-10-02 审计修复）
-        //
-        //   此前这里**完全没做**自检 —— 字节出了 `Kdbx.mutate` 就直接奔向文件/缓存。
-        //   而 `Kdbx.save(File)`（唯一自带自检的入口）在生产代码里零调用点，
-        //   于是「kotpass 对未知 XML 标签静默丢弃」这类编码损坏一路无人拦截：
-        //   本地库要等下次打开才发现，网盘库更糟 —— 坏字节会被上传上去，
-        //   把别的设备上的好副本一起覆盖。
-        //
-        //   ⚠️ 检查开销：只解码不重编码（见 `KdbxRoundTrip.verifyEncoded` 的说明），
-        //      一次 KDF 的量级。放在这里而不是 `#create/#update/...` 各自写一遍，
-        //      是为了让"五个写动作"共用同一个咽点 —— 散着写迟早漏一个。
-        //
-        //   ⚠️ 失败必须**抛出**而不是记日志继续：落盘一份坏库的代价远高于
-        //      "这次保存失败，用户的改动没进去"。后者用户会重试，前者不可逆。
-        Kdbx.verifyWrite(vaultId, bytes).getOrElse { throw it.toUserFacing() }
-
-        // ★★ 写回基线闸门（#185）：这是**唯一**会"带着旧令牌写"的路径 ——
-        //    编辑走的 `saveVia(expectedVersion = 缓存里的旧令牌)` 天生不满足
-        //    "内容与令牌配套"：远端变过而没拉时服务端会放行 ⇒ 静默覆盖别人的改动。
-        //
-        //    ⚠️ 只在**有云端来源**时判（本地 SAF 库没有"远端那一版"这个概念，
-        //       基线永远不会登记，判它等于把所有本地保存全线拦掉 —— 实测就是这个后果）。
-        //    ⚠️ 传 `null` 给 `saveVia` 的调用方（同步编排器）是另一回事：它推的是
-        //        "会话里的全部改动"，本来就该让条件写去判，见那里的说明。
-        // ⚠️ 11-07 真机事故：这里原先只要 `!baselineAligned` 就拒写，
-        //    而「基线没登记（冷启动 / 锁库后）」同样会得到 false ⇒
-        //    显示「已同步」的云端库第一次保存必被拦，同步也解不开（见编排器）。
-        //    `KdbxBaseStore` 文件头早已定下契约：不知道 ⇒ 放行，交给版本令牌兜底。
-        //    ⇒ 只有「确实登记过基线、且对不上」才拦；那才是远端真变过。
-        // ⚠️ 放行不等于放松：条件写仍带 DB 里的旧令牌，远端被别的设备改过会 412 → 冲突。
-        if (cloudSync.hasCloudSource(origin) && write.baselineKnown && !write.baselineAligned) {
-            // ★ 11-07 未解现象的诊断点：真机曾出现「replaceSession 之后连续四次保存
-            //    零上传，进程重启（基线是纯内存）后全部恢复」。若真被这道闸门拦下，
-            //    以前没有任何日志可证 —— 只记两个布尔，不记指纹 / 内容。
-            VaultixLog.w(TAG) { "写回被基线闸门拦下（已登记但与改动前内容不符）" }
-            throw KdbxWriteFailure.StaleBaseline().toUserFacing()
-        }
-
-        if (cloudSync.hasCloudSource(origin)) {
-            // 网盘：先落本地缓存（立即生效）。
-            // ⚠️ 沿用旧令牌 —— 它是下一次条件写的基线，换成新值就再也检测不到"远端变过"。
-            val previousToken = runCatching { fileCache.load(origin) }.getOrNull()?.versionToken
-            // ⚠️ 状态必须在写缓存**之前**读：下面 `markLocalEdited` 会把它改成 PENDING_UPLOAD。
-            val statusBeforeWrite = cloudSync.currentSyncStatus(vaultId)
-            // ★ 11-07：标记「这份缓存含本地未上传改动」。少了这一步，
-            //    readRemoteCurrent() 的令牌短路会把它当成远端字节做内容对账，
-            //    对账恒"相等" ⇒ 状态洗成 IN_SYNC ⇒ 自动上传被跳过（真机：改动上不了云）。
-            fileCache.save(
-                origin,
-                CachedKdbxFile(bytes, previousToken, pendingLocalEdits = true),
-            )
-            // ★ 11-07：四个时间点里的第一个。此前从「保存」到「上传成功」之间全黑，
-            //    真机「保存后没反应」只能靠 WAL 反推；有了这条就能直接量出
-            //    是没落缓存、没排队、还是排队后没起跑。只记字节数，不记任何内容。
-            VaultixLog.d(TAG) {
-                "保存落缓存：${bytes.size}B，待上传脏标记已置，" +
-                    "基线 known=${write.baselineKnown}/aligned=${write.baselineAligned}"
+            // 拒写闸门已前移到 [assertWritable]（mutate 之前）。走到这里的 `!aligned`
+            // 一定是"本机自己的编辑"造成的，且已在写前就地重对齐。
+            if (hasCloud && write.baselineKnown && !write.baselineAligned) {
+                VaultixLog.d(TAG) { "写回放行：基线落后由本机编辑造成，已在写前重对齐" }
             }
-            // 再标记待上传。**这一步不能省**：同步的"本地改过没有"是从持久化的
-            // `vaults.syncStatus` 读出来的，不标记的话下一次同步会判"两边都没变"，
-            // 那笔改动永远推不上去（见 KdbxSyncOrchestrator.markLocalEdited 的 KDoc）。
-            cloudSync.markLocalEdited(vaultId)
-            // ★★ 写回基线（#185）：**只在"出发时内容 == 远端那一版"且"出发时是同步干净的"时推进**。
-            //
-            //   同步未完成时（PENDING_UPLOAD / REMOTE_CHANGED / CONFLICT）基线**必须留在原处**，
-            //   它正是"本机内容不是远端那一版"这件事的唯一载体 —— 一旦推进，
-            //   `Kdbx.saveVia` 那道最后防线就再也拦不住"基于旧内容的编辑覆盖远端新改动"。
-            //
-            //   ⚠️ 两个条件缺一不可：只看内容一致会漏掉"上传成功但幂等没推上去"的混合态
-            //      （内容已对齐远端，可那笔改动还没落地）；只看状态干净则会放过
-            //      "基线根本没记录"的情形（那种情形由对账补，不该在这里瞎猜）。
-            if (write.baselineAligned && statusBeforeWrite == KdbxCloudSyncStatus.IN_SYNC) {
-                // 基线推进由引擎门面做（它握着指纹，上层不碰）：见 `Kdbx.advanceBaseline`。
-                Kdbx.advanceBaseline(vaultId, write)
-            }
-            // 标记之后**立即**排一次上传：不然"改完必须手动点同步"，
-            // 而用户以为保存即同步（施工单 S1 的第一条用户反馈）。
-            // ⚠️ 顺序不能反：先落 PENDING_UPLOAD，上传器才会认为"有活要干"。
-            VaultixLog.d(TAG) { "已排入自动上传队列" }
-            autoUploader.enqueue(vaultId)
-        } else {
-            // 本地文件库：文件即存储 ⇒ 直接写文件（本地 IO，毫秒级）。
-            val source = cloudSync.fileSourceFor(origin)
-                ?: error("这个库还没有可用的文件来源，请重新选择该 .kdbx 文件")
-            source.write(bytes)
-        }
 
-        // ⚠️ 会话内容变了 ⇒ 必须 bump：条目列表/详情观察的是 `KdbxSessionFlow` 的信号
-        //    （`ItemRepositoryImpl.kdbxItems`），不 bump 界面就不会刷新。
-        kdbxSessions.bump()
-        return VaultSaveOutcome.Queued
+            if (hasCloud) {
+                // ⚠️ 沿用旧令牌 —— 它是下一次条件写（If-Match）的基线，换成新值就再也
+                //    检测不到"远端变过"。
+                val previousToken = runCatching { fileCache.load(origin) }.getOrNull()?.versionToken
+                // ⚠️ 状态必须在写缓存之前读：下面 markLocalEdited 会把它改成 PENDING_UPLOAD。
+                val statusBeforeWrite = cloudSync.currentSyncStatus(vaultId)
+                fileCache.save(
+                    origin,
+                    CachedKdbxFile(bytes, previousToken, pendingLocalEdits = true),
+                )
+                VaultixLog.d(TAG) {
+                    "保存落缓存：${bytes.size}B，待上传脏标记已置，状态=$statusBeforeWrite，" +
+                        "基线 known=${write.baselineKnown}/aligned=${write.baselineAligned}"
+                }
+                cloudSync.markLocalEdited(vaultId)
+                // ★★ 只要"出发时基线对齐"就推进，不再要求改动前是 IN_SYNC。
+                //    连续编辑时每一笔都基于上一笔的产物：基线不跟着走，第三笔就会被
+                //    自己造成的 `!aligned` 拦住（真机：删除/移动反复失败、必须先等同步）。
+                //    版本令牌仍沿用缓存里的 previousToken，条件写 412 兜底不受影响。
+                if (write.baselineAligned) {
+                    Kdbx.advanceBaseline(vaultId, write)
+                }
+                VaultixLog.d(TAG) { "已排入自动上传队列" }
+                autoUploader.enqueue(vaultId)
+            } else {
+                // 本地文件库：文件即存储 ⇒ 直接写文件（本地 IO，毫秒级）。
+                val source = cloudSync.fileSourceFor(origin)
+                    ?: error("这个库还没有可用的文件来源，请重新选择该 .kdbx 文件")
+                source.write(bytes)
+            }
+            return VaultSaveOutcome.Queued
+        } finally {
+            kdbxSessions.bump()
+        }
     }
 
     /**

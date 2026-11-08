@@ -801,6 +801,49 @@ object Kdbx {
      */
     fun hasBaseline(vaultId: String): Boolean = KdbxBaseStore.current(vaultId) != null
 
+    /**
+     * 写回基线相对**当前会话内容**的只读快照（2026-11-08 真机死锁修复）。
+     *
+     * ## 为什么必须能在「不改会话」的前提下读
+     *
+     * 旧闸门长在 `KdbxItemRepository.persist` 里，而 `mutateLocked` **在那之前**
+     * 就已经把新会话换进内存了 ⇒ 拒写时"内存已删、磁盘没动"，列表/详情/回收站
+     * 读到三份不同的真相。要拒绝就得在 `mutate` **之前**判，判据因此要能只读地取。
+     *
+     * 指纹是内容摘要（非条目内容），允许进诊断日志；`data:kdbx` 之外只用到两个布尔。
+     */
+    data class BaselineState(
+        val known: Boolean,
+        val aligned: Boolean,
+        val sessionFingerprint: String,
+        val baselineFingerprint: String?,
+    )
+
+    /** 会话不在时返回 null —— 调用方据此把 `NotUnlocked` 交给 `mutate` 自己报。 */
+    fun baselineStateOf(vaultId: String): BaselineState? {
+        val session = KdbxSessionStore.get(vaultId) ?: return null
+        val fingerprint = KdbxEncoder.contentFingerprint(session.content)
+        val baseline = KdbxBaseStore.current(vaultId)
+        return BaselineState(
+            known = baseline != null,
+            aligned = baseline == fingerprint,
+            sessionFingerprint = fingerprint,
+            baselineFingerprint = baseline,
+        )
+    }
+
+    /**
+     * ★ 把写回基线**重新对齐到当前会话内容**。
+     *
+     * ⚠️ 只允许在已判定"漂移来自本机自己的编辑"时调用：远端真变过时调用，
+     *    等于抹掉"本机这份不是远端那一版"这条证据（#185）。远端是否变过由
+     *    版本令牌的条件写（412 → CONFLICT）与同步的内容对账判定，不靠内容指纹。
+     */
+    fun rebaseBaselineOnSession(vaultId: String) {
+        val session = KdbxSessionStore.get(vaultId) ?: return
+        KdbxBaseStore.record(vaultId, session.content)
+    }
+
     /** 全部已解锁的 KDBX 库 id（供仓储合并进「已解锁库」集合）。 */
     fun unlockedIds(): Set<String> = KdbxSessionStore.unlockedIds()
 

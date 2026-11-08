@@ -72,7 +72,6 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
-import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -922,13 +921,25 @@ private fun ItemsPullToRefresh(
         onRefresh = onRefresh,
         modifier = modifier.fillMaxSize(),
         state = pullState,
-        // ⚠️ 2026-09-13 第二轮用户反馈：「下拉刷新的时候，密码条目左边有一个刷新按钮但是
-        // 没显示出来是白色的，可以移除了吧，不好看。」
-        // 那枚指示器的底色是 `surfaceContainerHigh`，浅色主题下几乎与页面同色 —— 看起来
-        // 就是"一块白"；而且它落在首条卡片左侧，正压着站点图标。
-        // 这里**不再画指示器**：下拉手势与同步逻辑原样保留（静默触发），手动同步入口仍在
-        // 顶栏 ⋮ 菜单里 —— 不靠一枚看不清的圆点来提示。因此 `topInset` 参数也随之取消。
-        indicator = {},
+        // ⚠️ 2026-09-13 用户嫌默认指示器"一块白、压着站点图标"，当时直接置空 ⇒
+        //    下拉手势还在，却**全程零反馈**（2026-11-08 真机复现：用户不知道同步跑没跑）。
+        //    ⇒ 恢复指示器，但换掉那块白：用 `primaryContainer` 作底、`onPrimaryContainer`
+        //    作进度色，并固定在容器顶部居中（不再压在首条卡片左侧）。
+        //    只在 `syncing` 时绘制，静止时一个节点都不渲染，不占列表空间。
+        indicator = {
+            if (syncing) {
+                Surface(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = Spacing.sm),
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                ) {
+                    VaultixMorphingProgress(indicatorSize = 32.dp)
+                }
+            }
+        },
         content = content,
     )
 }
