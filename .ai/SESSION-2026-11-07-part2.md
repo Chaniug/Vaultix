@@ -79,8 +79,9 @@
   ② 保存后本地立刻出结果、详情页顶栏「转动 → 小云」；
   ③ ⋮ 菜单「正在上传改动」；④ **KDBX 文件夹删除**是否还闪退，
   若变成 Snackbar 请把那句错误文案告诉我。
-- 仍未修（主篇 §9）：B 条目页 ⋮ 同步按钮只接 Bitwarden 编排器导致 KDBX 空转；
-  C 一次远端拉取约两次整库下载 + 两次 KDF 导致偏慢。两者都需单独一批。
+- 仍未修（主篇 §9）：~~B 条目页 ⋮ 同步按钮 KDBX 空转~~ **B 已于 2026-11-08 修复**
+  （见 [`SESSION-2026-11-08-part4.md`](./SESSION-2026-11-08-part4.md) §2.2）；
+  C 一次远端拉取约两次整库下载 + 两次 KDF 导致偏慢，仍需单独一批。
 
 
 ---
@@ -156,11 +157,12 @@
 
 ### 仍未修（下一批）
 
-- **B**：条目页 ⋮ 同步按钮 `ItemsViewModel.retrySync()` 只调
-  `BitwardenSyncOrchestrator`，KDBX 空转。修它要给已 9 个参数的构造再加依赖
-  （detekt 标称上限 8），本批不与缓存格式升级混在一起。
-  ⚠️ 首页「密码库」页 ⋮ 同步走 `syncKdbxVault`，本批加的 `cachedEdits`
-  判据已让它能正确把本地改动推上去；用户不必依赖条目页那个按钮。
+- ~~**B**：条目页 ⋮ 同步按钮 `ItemsViewModel.retrySync()` 只调
+  `BitwardenSyncOrchestrator`，KDBX 空转~~ ⇒ **✅ 2026-11-08 已修**：
+  `ItemsViewModel` 注入 `KdbxSyncRepository` 并按 `vault.kind` 分派，
+  同时把库级上传态做成列表页可见的横幅。当初「构造已 9 参数、怕撞 detekt 上限 8」
+  的顾虑实证不成立（`VaultListViewModel` 参数更多且长期绿）。
+  详见 [`SESSION-2026-11-08-part4.md`](./SESSION-2026-11-08-part4.md) §2.2 / §3 批次 B。
 - **C**：一次远端拉取约两次整库下载 + 两次 KDF（对账读完丢弃、`pull` 再读一遍），
   是「同步偏慢」的根因，需单独一批加真机计时。
 
