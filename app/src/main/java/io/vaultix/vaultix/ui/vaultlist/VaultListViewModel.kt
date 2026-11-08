@@ -125,12 +125,30 @@ class VaultListViewModel @Inject constructor(
         )
     }
 
-    /** 库列表；WhileSubscribed(5s)：切后台停止收集后保留最近值。 */
-    val vaults: StateFlow<List<VaultSummary>> = vaultRepository.observeVaults()
+    /**
+     * 库列表；WhileSubscribed(5s)：切后台停止收集后保留最近值。
+     *
+     * ## ⚠️ 类型是可空的，`null` = **还不知道**（2026-11-09，用户真机反馈闪帧）
+     *
+     * 原类型 `List<VaultSummary>`、初值 `emptyList()` ⇒ 页面把"查询还没回来"读成
+     * "一个库都没有"，于是每次**清栈重建**进入本页（「切换密码库」走
+     * `navigateToRoot(VaultListRoute)`）都会先画 1–3 帧**品牌首启页**
+     * （「连接 Bitwarden / 本地 KDBX 文件」），再跳成列表。
+     *
+     * 这正是 `.ai/issues/06` #84 的判据第二次被违反：
+     * **「空」有三种状态（加载中 / 真的空 / 查无结果），塌进一个 `isEmpty()` 就出假空态。**
+     * ⇒ 用可空类型把"未知"建出来，让它在类型上无法被当成"空"。
+     *   `null` 只表示"查询尚未返回"，一旦返回就永不再造 `null`（`observeVaults` 不发射 null）。
+     *
+     * ⚠️ 不接受"初值给 emptyList + 界面加一个 loading 布尔"的写法：两个字段能组合出
+     *   `loading = false && empty`（= 已知且为空）与 `loading = true && empty` 等四种组合，
+     *   其中两种无意义。可空类型只有两种状态，**不可能配错**（同 8.11 §多态压成二值开关）。
+     */
+    val vaults: StateFlow<List<VaultSummary>?> = vaultRepository.observeVaults()
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
-            initialValue = emptyList(),
+            initialValue = null,
         )
 
     /** 各库同步状态（编排器 per-vault；空 map = 从未同步过，不显示）。 */

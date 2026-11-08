@@ -96,6 +96,7 @@ fun VaultListScreen(
     onOpenSettings: () -> Unit,
     viewModel: VaultListViewModel = hiltViewModel(),
 ) {
+    // ⚠️ 可空：`null` = 库列表查询还没返回（**不是**"没有库"）。见 [VaultListViewModel.vaults]。
     val vaults by viewModel.vaults.collectAsStateWithLifecycle()
     val syncStatuses by viewModel.syncStatuses.collectAsStateWithLifecycle()
     val quickUnlockSuggest by viewModel.quickUnlockSuggest.collectAsStateWithLifecycle()
@@ -166,7 +167,9 @@ fun VaultListScreen(
             // ⚠️ **空态时不显示**（2026-09-14 用户反馈「加号按钮有点多余吧」）：
             // 空库时页面上正中央就是两个接入按钮，右下角再来一个「+」既重复又把
             // 首启页面的仪式感打散（底部浮着一个圆钮，像没做完的页面）。
-            if (vaults.isNotEmpty()) {
+            // ⚠️ `null`（还不知道）时也不画：那一帧要么马上变成列表（按钮会突然冒出来），
+            //    要么变成空态（按钮会闪一下又消失）。两种都是"凭空出现又消失的控件"。
+            if (vaults?.isNotEmpty() == true) {
                 FloatingActionButton(onClick = { showAddDialog = true }) {
                     Icon(Icons.Filled.Add, contentDescription = stringResource(R.string.vault_add_fab))
                 }
@@ -178,56 +181,65 @@ fun VaultListScreen(
                 .fillMaxSize()
                 .padding(padding),
         ) {
-            if (vaults.isEmpty()) {
-                EmptyVaultState(onConnectBitwarden = onAddVault, onOpenKdbx = onAddKdbx)
-            } else {
-                Column(modifier = Modifier.fillMaxSize()) {
-                    // 快速解锁启用引导（设备支持时显示；enroll 后自动消失）
-                    val suggest = quickUnlockSuggest
-                    if (suggest != null && deviceCanAuthenticate(LocalContext.current)) {
-                        QuickUnlockBanner(
-                            // 横幅「启用」= 把这个库纳入生效范围 + 立刻配指纹（与设置页同一控制器）。
-                            onEnable = { viewModel.quickUnlock.enableForVault(suggest.id) },
-                            onDismiss = viewModel::dismissQuickUnlockPrompt,
-                        )
+            when (val list = vaults) {
+                // ① 还不知道：**什么都不画**（只有顶栏）。
+                //    这一支就是修闪烁的地方 —— 以前这里直接落到 ②，整屏画品牌首启页，
+                //    十几毫秒后再跳成列表，人眼看到的就是"闪了一下连接密码库的页面"。
+                //    ⚠️ 刻意不画转圈 / 骨架屏：空窗只有 15~40ms（Room 内存缓存），
+                //       画任何东西都会变成"闪一下别的东西"；空白本身不误导。
+                null -> Unit
+                // ② 真的没有库：品牌首启页。
+                emptyList<VaultSummary>() ->
+                    EmptyVaultState(onConnectBitwarden = onAddVault, onOpenKdbx = onAddKdbx)
+                else -> {
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        // 快速解锁启用引导（设备支持时显示；enroll 后自动消失）
+                        val suggest = quickUnlockSuggest
+                        if (suggest != null && deviceCanAuthenticate(LocalContext.current)) {
+                            QuickUnlockBanner(
+                                // 横幅「启用」= 把这个库纳入生效范围 + 立刻配指纹（与设置页同一控制器）。
+                                onEnable = { viewModel.quickUnlock.enableForVault(suggest.id) },
+                                onDismiss = viewModel::dismissQuickUnlockPrompt,
+                            )
+                        }
+                        LazyColumn(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .nestedScroll(scrollBehavior.nestedScrollConnection),
+                            contentPadding = PaddingValues(
+                                start = Spacing.lg,
+                                end = Spacing.lg,
+                                top = Spacing.sm,
+                                // ⚠️ 2026-10-19：原为字面量 `96.dp`，**小于**真实需要的高度。
+                                //    本页不在主壳的 Tab 里（`VaultListRoute`），但它自己的 Scaffold
+                                //    下面压着悬浮胶囊底栏的同一套占位 —— 胶囊 60 + 上留白 6 + 下留白 20
+                                //    = 86dp，**还要再加系统手势条**（4 键手势机约 32dp）⇒ 真实 ≈118dp。
+                                //    写死 96 的后果：最后一张库卡片永远被胶囊压住一截、点不到
+                                //    （本页是全 App 的落地页，`onSwitchVault` 也回这里）。
+                                //    ⇒ 一律调 [rememberBottomDockInset]，**别再写字面量**：
+                                //      手势条高度随机型 / 横竖屏变化，任何固定值都会在别的机型上再错一次。
+                                bottom = Spacing.sm + rememberBottomDockInset(),
+                            ),
+                            verticalArrangement = Arrangement.spacedBy(Spacing.md),
+                        ) {
+                            items(list, key = { it.id }) { vault ->
+                                VaultCard(
+                                    vault = vault,
+                                    syncStatus = syncStatuses[vault.id],
+                                    onClick = { onOpenVault(vault) },
+                                    onRemove = { vaultToRemove = vault },
+                                    // ⚠️ 只在"该库确实是网盘库"时给同步入口（syncStatus 非 null）。
+                                    //    给 Bitwarden / 本地 SAF 库也画一个「立即同步」是错的方向：
+                                    //    前者走自己的同步链、后者根本没有远端。
+                                    onSyncNow = if (vault.syncStatus != null) {
+                                        { viewModel.syncKdbxVault(vault.id) }
+                                    } else {
+                                        null
+                                    },
+                                )
+                            }
+                        }
                     }
-                    LazyColumn(
-                        modifier = Modifier
-                            .fillMaxSize()
-                        .nestedScroll(scrollBehavior.nestedScrollConnection),
-                    contentPadding = PaddingValues(
-                        start = Spacing.lg,
-                        end = Spacing.lg,
-                        top = Spacing.sm,
-                        // ⚠️ 2026-10-19：原为字面量 `96.dp`，**小于**真实需要的高度。
-                        //    本页不在主壳的 Tab 里（`VaultListRoute`），但它自己的 Scaffold
-                        //    下面压着悬浮胶囊底栏的同一套占位 —— 胶囊 60 + 上留白 6 + 下留白 20
-                        //    = 86dp，**还要再加系统手势条**（4 键手势机约 32dp）⇒ 真实 ≈118dp。
-                        //    写死 96 的后果：最后一张库卡片永远被胶囊压住一截、点不到
-                        //    （本页是全 App 的落地页，`onSwitchVault` 也回这里）。
-                        //    ⇒ 一律调 [rememberBottomDockInset]，**别再写字面量**：
-                        //      手势条高度随机型 / 横竖屏变化，任何固定值都会在别的机型上再错一次。
-                        bottom = Spacing.sm + rememberBottomDockInset(),
-                    ),
-                    verticalArrangement = Arrangement.spacedBy(Spacing.md),
-                ) {
-                    items(vaults, key = { it.id }) { vault ->
-                        VaultCard(
-                            vault = vault,
-                            syncStatus = syncStatuses[vault.id],
-                            onClick = { onOpenVault(vault) },
-                            onRemove = { vaultToRemove = vault },
-                            // ⚠️ 只在"该库确实是网盘库"时给同步入口（syncStatus 非 null）。
-                            //    给 Bitwarden / 本地 SAF 库也画一个「立即同步」是错的方向：
-                            //    前者走自己的同步链、后者根本没有远端。
-                            onSyncNow = if (vault.syncStatus != null) {
-                                { viewModel.syncKdbxVault(vault.id) }
-                            } else {
-                                null
-                            },
-                        )
-                    }
-                }
                 }
             }
         }
