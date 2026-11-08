@@ -452,7 +452,7 @@ class ItemsViewModel @Inject constructor(
                     SyncNote.Notice(R.string.items_sync_conflict_go_to_vaults, warning = true)
                 is KdbxSyncReport.Failed -> SyncNote.Notice(
                     resId = R.string.kdbx_sync_failed,
-                    detail = report.reason,
+                    detail = settled.reason,
                     warning = true,
                 )
             }
