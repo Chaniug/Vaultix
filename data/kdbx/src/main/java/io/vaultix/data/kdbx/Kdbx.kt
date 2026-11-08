@@ -573,6 +573,15 @@ object Kdbx {
          * 避免「mutate 时没基线、persist 时刚好被登记」这类竞态误判。
          */
         val baselineKnown: Boolean,
+        /**
+         * 落盘失败时用来把会话**恢复成 mutate 之前**的令牌（2026-11-08）。
+         *
+         * `mutateLocked` 会先把新会话放进内存，再由上层的 `persist` 写文件；
+         * 两步之间任何异常都会留下「界面以为删了、文件其实没动」的中间态。
+         * 引擎类型不外泄（#64），所以这里只递一个不透明令牌，由
+         * [rollbackMutation] / [commitMutation] 消费。
+         */
+        val rollbackToken: Long,
     )
 
     /**
@@ -728,6 +737,11 @@ object Kdbx {
 
         val result = mutator(session.database)
         if (!result.applied) {
+            // ★ 2026-11-08 真机：这一支以前**完全静默**（异常被上层 runCatching 吞掉），
+            //    用户只看到"删不掉"，日志里却一条线索都没有。带上 uuid 便于对照条目 id。
+            VaultixLog.w(TAG) {
+                "写动作未生效：目标条目或分组不存在（会话未改动），uuid=${result.entryUuid}"
+            }
             return Result.failure(
                 KdbxFailure(KdbxOpenError.Unknown("目标条目或分组不存在，未做任何改动")),
             )
@@ -737,6 +751,8 @@ object Kdbx {
         val bytes = KdbxEncoder.encode(result.database)
         // ⚠️ 会话必须换成**新的**那一份：后续读（`contentOf`）与下一次写都基于它，
         //    漏掉这一步的表现是"改完界面没变、再改一次又回到老值"（读到的还是旧库）。
+        // ★ 先留旧会话快照：落盘在更外层的 persist，那里失败时要把内存恢复原状。
+        val previousSessionToken = KdbxSessionStore.rememberForRollback(vaultId, session)
         KdbxSessionStore.put(
             vaultId,
             KdbxSession(
@@ -756,9 +772,23 @@ object Kdbx {
                 baselineKnown = baselineKnown,
                 // 改完之后的指纹：上层"写回基线该不该跟着推进"要用它（#185）。
                 newFingerprint = KdbxEncoder.contentFingerprint(content),
+                rollbackToken = previousSessionToken,
             ),
         )
     }
+
+    /**
+     * 落盘失败 ⇒ 把内存会话恢复成这次 mutate 之前（2026-11-08 真机「三份真相」修复）。
+     *
+     * ⚠️ 只回滚**会话**，不动写回基线：`assertWritable` 的 rebase 记的就是
+     *    「mutate 前的内容」，回滚后两者重新对齐，不会把基线带偏。
+     */
+    fun rollbackMutation(vaultId: String, write: KdbxPendingWrite): Boolean =
+        KdbxSessionStore.rollback(write.rollbackToken, vaultId)
+
+    /** 落盘成功 ⇒ 丢掉旧会话快照，明文不额外常驻。 */
+    fun commitMutation(write: KdbxPendingWrite) =
+        KdbxSessionStore.discardRollback(write.rollbackToken)
 
     /**
      * 把「来源读不到」翻译成一句**用户能照着做**的话。

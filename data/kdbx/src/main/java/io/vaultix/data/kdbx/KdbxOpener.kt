@@ -24,6 +24,7 @@ import app.keemobile.kotpass.database.KeePassDatabase
 import app.keemobile.kotpass.database.decode
 import java.io.ByteArrayInputStream
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 
 /** 一次成功打开的会话（内存态；**绝不外泄**，见 [Kdbx] 门面的说明）。 */
 internal class KdbxSession(
@@ -51,18 +52,70 @@ internal class KdbxSession(
 internal object KdbxSessionStore {
     private val sessions = ConcurrentHashMap<String, KdbxSession>()
 
+    /**
+     * ★ 一次 mutate 提交新会话**之前**的旧会话（2026-11-08 真机「三份真相」修复）。
+     *
+     * `mutateLocked` 编码完就把新会话放进 [sessions]，但落盘在更外层的
+     * `KdbxItemRepository.persist`：后者任一步抛异常，都会留下
+     * 「内存里删了、磁盘/云端没动」的中间态 —— 列表停在旧快照、详情说不存在、
+     * 回收站看得到、电脑上 KeePassXC 里条目还在。
+     *
+     * ⇒ 令牌随 `KdbxPendingWrite` 上浮：只有持有本次令牌的 `persist` 能回滚，
+     *   不会把会话误退到更早的一版；每个库只留最新一个未消费快照，
+     *   落盘成功即丢弃，明文不额外常驻。
+     */
+    private val rollbackSnapshots = ConcurrentHashMap<Long, RollbackSnapshot>()
+    private val snapshotIds = AtomicLong(0)
+
+    private class RollbackSnapshot(
+        val vaultId: String,
+        val session: KdbxSession,
+    )
+
     fun put(vaultId: String, session: KdbxSession) {
         sessions[vaultId] = session
     }
 
     fun get(vaultId: String): KdbxSession? = sessions[vaultId]
 
+    /** 记下 mutate 之前的会话，返回可交给上层的回滚令牌。 */
+    fun rememberForRollback(vaultId: String, session: KdbxSession): Long {
+        // ⚠️ 每个库只保留**最新一个**未消费快照：正常链路是 mutate → persist 紧邻，
+        //    persist 成功/失败都会消费掉它。若有路径绕过 persist 直接 mutate（导入、
+        //    单测夹具），不清旧快照就会让整库明文一直挂在内存里。
+        rollbackSnapshots.entries
+            .filter { it.value.vaultId == vaultId }
+            .map { it.key }
+            .forEach { token -> rollbackSnapshots.remove(token) }
+        val token = snapshotIds.incrementAndGet()
+        rollbackSnapshots[token] = RollbackSnapshot(vaultId, session)
+        return token
+    }
+
+    /** 落盘失败 ⇒ 恢复旧会话；令牌用过即失效，绝不重复回滚。 */
+    fun rollback(token: Long, vaultId: String): Boolean {
+        val snapshot = rollbackSnapshots.remove(token) ?: return false
+        if (snapshot.vaultId != vaultId) return false
+        sessions[vaultId] = snapshot.session
+        return true
+    }
+
+    /** 落盘成功 ⇒ 丢弃旧会话引用。 */
+    fun discardRollback(token: Long) {
+        rollbackSnapshots.remove(token)
+    }
+
     fun close(vaultId: String) {
         sessions.remove(vaultId)
+        rollbackSnapshots.entries
+            .filter { it.value.vaultId == vaultId }
+            .map { it.key }
+            .forEach { token -> rollbackSnapshots.remove(token) }
     }
 
     fun closeAll() {
         sessions.clear()
+        rollbackSnapshots.clear()
     }
 
     fun unlockedIds(): Set<String> = sessions.keys.toSet()

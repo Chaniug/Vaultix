@@ -267,14 +267,16 @@ class KdbxItemRepository @Inject constructor(
      *   （见该枚举的 KDoc：本地库写进文件、网盘库写进缓存待上传），
      *   两种情形对用户都是"保存好了"，区别在于云端状态由 `VaultSummary.syncStatus` 表达。
      */
+    @Suppress("TooGenericExceptionCaught") // 落盘链路异常族无法穷举，且此处必须一律回滚
     private suspend fun persist(vaultId: String, write: Kdbx.KdbxPendingWrite): VaultSaveOutcome {
-        val bytes = write.bytes
-        val origin = vaultDao.get(vaultId)?.origin
-            ?: error("这个库里没有对应记录，无法保存：$vaultId")
-        val hasCloud = cloudSync.hasCloudSource(origin)
-        // ⚠️ 无论成功失败都要 bump：`mutateLocked` 已经换过会话，任何 throw 之后不 bump
-        //    都会让列表停在旧快照、详情/回收站读到新会话（三份真相）。
+        // ⚠️ try 必须**覆盖整个函数体**：这三行原先在 try 之外，一旦
+        //    `vaultDao.get` / `hasCloudSource` 抛异常，finally 的 bump 就不会执行 ⇒
+        //    列表停在旧快照、详情/回收站却读到新会话（真机「三份真相」）。
         try {
+            val bytes = write.bytes
+            val origin = vaultDao.get(vaultId)?.origin
+                ?: error("这个库里没有对应记录，无法保存：$vaultId")
+            val hasCloud = cloudSync.hasCloudSource(origin)
             // ★★ 写回前的往返自检（2026-10-02 审计修复）：只解码不重编码，一次 KDF 量级。
             //    放在这里让九个写动作共用同一个咽点；失败必须抛出 —— 落盘一份坏库不可逆。
             Kdbx.verifyWrite(vaultId, bytes).getOrElse { throw it.toUserFacing() }
@@ -315,8 +317,20 @@ class KdbxItemRepository @Inject constructor(
                     ?: error("这个库还没有可用的文件来源，请重新选择该 .kdbx 文件")
                 source.write(bytes)
             }
+            // ★ 落盘全链路成功 ⇒ 旧会话快照不再需要，明文不额外常驻。
+            Kdbx.commitMutation(write)
             return VaultSaveOutcome.Queued
+        } catch (error: Exception) {
+            // ★ 2026-11-08 真机：这一支以前完全静默（异常被写动作的 runCatching 吞掉），
+            //    logcat 里分不清是「目标不存在」「往返自检失败」还是「落盘 IO 失败」。
+            VaultixLog.e(TAG, error) {
+                "保存失败，已回滚会话：${error.javaClass.simpleName}: ${error.message}"
+            }
+            Kdbx.rollbackMutation(vaultId, write)
+            throw error
         } finally {
+            // ⚠️ 无论成功失败都要 bump：会话要么已提交、要么已回滚，
+            //    列表 / 详情 / 回收站必须读同一份内容。
             kdbxSessions.bump()
         }
     }

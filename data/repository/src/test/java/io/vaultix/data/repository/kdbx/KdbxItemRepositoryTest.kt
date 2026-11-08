@@ -215,6 +215,38 @@ class KdbxItemRepositoryTest {
         assertEquals("必须真的落了一次盘", writesBefore + 1, harness.source.writes.size)
     }
 
+    /**
+     * ★ 落盘失败必须回滚会话（2026-11-08 真机「三份真相」）。
+     *
+     * 旧实现里 `mutateLocked` 先把新会话放进内存，persist 任一步抛异常都会留下
+     * 「列表旧快照 / 详情说不存在 / 回收站看得到 / 电脑上 XC 条目还在」。
+     * 这里同时验证回滚后**还能继续写**（会话里的 database 没坏）。
+     */
+    @Test
+    fun `落盘失败时会话回滚且回收站不残留`() = runTest {
+        val harness = Harness()
+        val itemId = harness.seedLoginItem()
+        val before = Kdbx.contentOf(VAULT_ID)!!.items.map { it.id }.toSet()
+        harness.source.failNextWrite = true
+
+        val deleted = harness.repository.softDelete(VAULT_ID, itemId)
+
+        assertTrue("落盘失败必须向上抛，实际：$deleted", deleted.isFailure)
+        assertEquals(
+            "会话必须回滚：条目仍在主列表",
+            before,
+            Kdbx.contentOf(VAULT_ID)!!.items.map { it.id }.toSet(),
+        )
+        assertTrue("回收站不得残留半成品", Kdbx.contentOf(VAULT_ID)!!.trashItems.isEmpty())
+
+        val retry = harness.repository.create(VAULT_ID, note(title = "回滚后仍能写"))
+        assertTrue("回滚后必须还能正常保存：$retry", retry.isSuccess)
+        assertTrue(
+            "那笔删除不该在后续写入里偷偷生效",
+            itemId in Kdbx.contentOf(VAULT_ID)!!.items.map { it.id },
+        )
+    }
+
     private fun note(title: String) = VaultItem(
         id = "",
         title = title,
@@ -302,6 +334,8 @@ class KdbxItemRepositoryTest {
     /** 记录写入次数；`read` / `testConnection` 不该被写路径调用（调了就让用例红）。 */
     private class RecordingSource : KdbxFileSource {
         val writes = mutableListOf<ByteArray>()
+        /** 让下一次 `write` 抛错，模拟落盘 IO 失败。 */
+        var failNextWrite = false
 
         override suspend fun stat(): KdbxFileStat = KdbxFileStat(
             versionToken = "token",
@@ -321,6 +355,10 @@ class KdbxItemRepositoryTest {
             force: Boolean,
             failIfExists: Boolean,
         ): KdbxFileWriteResult {
+            if (failNextWrite) {
+                failNextWrite = false
+                throw IllegalStateException("模拟落盘失败")
+            }
             writes += bytes
             return KdbxFileWriteResult(versionToken = "token", sizeBytes = bytes.size.toLong(), remoteId = VAULT_ID)
         }
