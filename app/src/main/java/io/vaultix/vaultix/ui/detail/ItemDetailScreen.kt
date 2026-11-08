@@ -230,13 +230,13 @@ private class DetailActions(
 private fun DetailBodyContent(
     modifier: Modifier,
     /**
-     * 删除中：页面马上要消失，才允许整页转圈。
+     * 删除中：**只用来压住「条目不存在」那一帧，不再整页转圈**（2026-11-08 用户反馈）。
      *
-     * ⚠️ 11-07：**保存中刻意不遮**。Kdbx.mutateLocked 在写锁里就把会话换成新内容，
-     *    persist 末尾 bump 一下界面就能看到 —— `saving` 等的是本地 KDF 编码 /
-     *    往返自检 / 写缓存，**不是网络**。此前 `busy = saving || deleting` 把整页换成
-     *    WavyProgress，等于把「本地已经改完的结果」藏起来一两秒，用户读作「加载保存」。
-     *    云端进度由 ⋮ 菜单的同步状态点与列表角标表达，不该由本页遮罩承担。
+     * 点垃圾桶后 `softDelete` 只做本地编码 / 往返自检 / 落缓存（百毫秒级，不等网络），
+     * 完成后立刻发 `UiEvent.Deleted` 返回列表。以前这里把整页换成 WavyProgress，
+     * 反而把「本地已经删完了」做成一段看得见的等待；且 bump 后条目流变 null，
+     * 会先闪一帧「条目不存在或已被删除」再返回，观感更差。
+     * ⇒ 删除期间保持内容，条目流变空时静默等导航，不做任何遮挡。
      */
     deleting: Boolean,
     /** 条目流是否已发射过（false = 还不知道有没有这条，见 `ItemDetailViewModel.UiState.itemLoaded`）。 */
@@ -252,7 +252,8 @@ private fun DetailBodyContent(
         when {
             // 加载中：画转圈而不是"不存在"（见本函数 KDoc）。
             loading && item == null -> VaultixWavyProgress(modifier = Modifier.align(Alignment.Center))
-            deleting -> VaultixWavyProgress(modifier = Modifier.align(Alignment.Center))
+            // ★ 删除已生效、条目流变空：静默等导航返回，绝不闪「条目不存在或已被删除」。
+            deleting && item == null -> Unit
             item == null -> Text(
                 text = stringResource(R.string.detail_missing),
                 style = MaterialTheme.typography.bodyMedium,

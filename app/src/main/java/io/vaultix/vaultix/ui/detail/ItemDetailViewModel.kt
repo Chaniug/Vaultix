@@ -374,7 +374,6 @@ class ItemDetailViewModel @Inject constructor(
         _state.update { it.copy(deleting = true) }
         viewModelScope.launch {
             val outcome = itemRepository.softDeleteItem(vaultId, itemId)
-            _state.update { it.copy(deleting = false) }
             outcome.fold(
                 onSuccess = {
                     // ★ 条目删了就把它解密出来的附件明文一起清掉（#193）。
@@ -383,9 +382,13 @@ class ItemDetailViewModel @Inject constructor(
                     runCatching {
                         sensitiveCache.invalidateFor(itemId)
                     }
+                    // ⚠️ 成功路径**不解除 deleting**：页面马上随 Deleted 事件返回。
+                    //    提前置 false 会让已空的条目流闪一帧「条目不存在或已被删除」。
                     _events.send(UiEvent.Deleted)
                 },
                 onFailure = { error ->
+                    // 只有失败才解除，让用户能留在页面重试。
+                    _state.update { it.copy(deleting = false) }
                     _events.send(UiEvent.SaveFailed(error.message))
                 },
             )
