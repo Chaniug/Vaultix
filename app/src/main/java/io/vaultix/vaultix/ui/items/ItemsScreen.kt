@@ -1719,6 +1719,29 @@ private fun CreateItemDialog(
 /** 顶栏动作已收敛为「胶囊里的 🔍 + ⋮」（见 [ItemsMoreMenu]）。 */
 
 /**
+ * 结果型提示条是否**自动消失**（成功 / 跳过 / 非警告的 KDBX 结果）。
+ *
+ * ⚠️ 抽成扩展属性而不是写在 [SyncNoteBanner] 里：本函数的分支数已贴近 detekt
+ *   `CyclomaticComplexMethod ≤14`（2026-11-08 首轮 CI 实测 15 被挡），判据外移后
+ *   横幅主体只留「要不要画 / 画哪种」两件事。
+ */
+private val ItemsViewModel.SyncNote.isTransientResult: Boolean
+    get() = when (this) {
+        is ItemsViewModel.SyncNote.Success,
+        is ItemsViewModel.SyncNote.Skipped -> true
+        is ItemsViewModel.SyncNote.Notice -> !warning
+        else -> false
+    }
+
+/** 需要 errorContainer 底色的警告态（含 KDBX 结果的 warning 分支）。 */
+private val ItemsViewModel.SyncNote.isWarningLike: Boolean
+    get() = when (this) {
+        is ItemsViewModel.SyncNote.Warning -> true
+        is ItemsViewModel.SyncNote.Notice -> warning
+        else -> false
+    }
+
+/**
  * 同步状态提示条：进行中 = 细进度条；成功/跳过 = 短暂提示后自动消失；警告 = 常驻到下次同步。
  *
  * ⚠️ 2026-11-08 补两类 KDBX 专用态：[ItemsViewModel.SyncNote.Uploading] 是**库级上传**
@@ -1733,10 +1756,7 @@ private fun SyncNoteBanner(
     onRetry: () -> Unit,
 ) {
     LaunchedEffect(note) {
-        val transient = note is ItemsViewModel.SyncNote.Success ||
-            note is ItemsViewModel.SyncNote.Skipped ||
-            (note is ItemsViewModel.SyncNote.Notice && !note.warning)
-        if (transient) {
+        if (note?.isTransientResult == true) {
             kotlinx.coroutines.delay(NOTE_DISMISS_DELAY_MS)
             onDismiss()
         }
@@ -1746,10 +1766,7 @@ private fun SyncNoteBanner(
     if (note == null) return
 
     Surface(
-        color = if (
-            note is ItemsViewModel.SyncNote.Warning ||
-            (note is ItemsViewModel.SyncNote.Notice && note.warning)
-        ) {
+        color = if (note.isWarningLike) {
             MaterialTheme.colorScheme.errorContainer
         } else {
             MaterialTheme.colorScheme.surfaceContainerHigh
