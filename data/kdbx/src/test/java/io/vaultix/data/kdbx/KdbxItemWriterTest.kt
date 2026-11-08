@@ -12,6 +12,7 @@ import app.keemobile.kotpass.constants.BasicField
 import app.keemobile.kotpass.cryptography.EncryptedValue
 import app.keemobile.kotpass.database.Credentials
 import app.keemobile.kotpass.database.KeePassDatabase
+import app.keemobile.kotpass.database.decode
 import app.keemobile.kotpass.database.getEntry
 import app.keemobile.kotpass.database.getGroupBy
 import app.keemobile.kotpass.database.modifiers.modifyGroup
@@ -28,6 +29,7 @@ import io.vaultix.model.CustomFieldType
 import io.vaultix.model.VaultCustomField
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
+import java.io.ByteArrayInputStream
 import java.time.Instant
 import java.util.UUID
 import org.junit.Test
@@ -660,6 +662,35 @@ class KdbxItemWriterTest {
         val workGroup = restored.content.group.groups.single { it.uuid == group.uuid }
         val back = workGroup.entries
         assertThat(back.map { it.uuid }).contains(uuid)
+    }
+
+    /**
+     * ★ 2026-11-08 真机「恢复好像有问题」：恢复前经历过冷启动，会话是**从文件解码**
+     *   出来的。上面两条恢复用例都在同一份内存 `database` 上跑，覆盖不到编码往返；
+     *   若 `Entry.previousParentGroup` 没被写进 KDBX，恢复就会悄悄退回根组。
+     */
+    @Test
+    fun `落盘重载后恢复仍回原分组`() {
+        val group = Group(uuid = UUID.randomUUID(), name = "工作")
+        val uuid = UUID.randomUUID()
+        val db = databaseWith(groups = listOf(group)).modifyGroup(group.uuid) {
+            copy(entries = entries + entry(uuid = uuid, title = "在分组里"))
+        }
+        val item = db.toMappedContent().items.single()
+        val inBin = KdbxItemWriter.moveToRecycleBin(db, item.id).database
+
+        // 真机等价过程：落盘 → 冷启动解锁（重新解码）。
+        val reopened = ByteArrayInputStream(KdbxEncoder.encode(inBin)).use { input ->
+            KeePassDatabase.decode(
+                inputStream = input,
+                credentials = CREDENTIALS,
+                cipherProviders = KDBX_CIPHER_PROVIDERS,
+            )
+        }
+        val restored = KdbxItemWriter.restoreFromRecycleBin(reopened, item.id).database
+
+        val workGroup = restored.content.group.groups.single { it.uuid == group.uuid }
+        assertThat(workGroup.entries.map { it.uuid }).contains(uuid)
     }
 
     @Test

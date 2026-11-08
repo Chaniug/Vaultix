@@ -49,6 +49,7 @@ import app.keemobile.kotpass.models.EntryFields
 import app.keemobile.kotpass.models.EntryValue
 import app.keemobile.kotpass.models.Group
 import app.keemobile.kotpass.models.TimeData
+import io.vaultix.common.logging.VaultixLog
 import io.vaultix.model.CustomFieldType
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
@@ -259,10 +260,17 @@ internal object KdbxItemWriter {
         //    两者只差一个 `Get`/`By` 后缀，混用会直接编译不过（本项目实测过两次）。
         val entry = database.getEntry { it.uuid == uuid }?.second
             ?: return KdbxWriteResult(database, uuid, applied = false)
-        val target = entry.previousParentGroup
+        val previousGroup = entry.previousParentGroup
+        val target = previousGroup
             // 同样不用 `getGroupBy`（见 [existingGroupUuid] 的说明）。
             ?.takeIf { previous -> database.content.group.containsGroup(previous) }
             ?: database.content.group.uuid
+        // ★ 2026-11-08 真机「恢复好像有问题」：writer 层以前一行日志都没有，
+        //    看不出恢复是回原组、还是因 previousParentGroup 丢失被退回根组。
+        val outcome = if (previousGroup == null || target != previousGroup) "未回原组" else "回原组"
+        VaultixLog.d(TAG) {
+            "回收站恢复：uuid=$uuid，记录的父组=$previousGroup，目标组=$target（$outcome）"
+        }
         return KdbxWriteResult(database.moveEntry(uuid, target), uuid)
     }
 
@@ -947,5 +955,6 @@ internal fun groupUuidOf(folderId: String?): UUID? =
 internal fun entryUuidOf(itemId: String): UUID? =
     itemId.removePrefix(ENTRY_ID_PREFIX).let { runCatching { UUID.fromString(it) }.getOrNull() }
 
+private const val TAG = "VaultixKdbxWrite"
 private const val FOLDER_ID_PREFIX = "kdbx-group:"
 private const val ENTRY_ID_PREFIX = "kdbx-entry:"
