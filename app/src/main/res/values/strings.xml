@@ -979,7 +979,9 @@
     <string name="items_sync_skipped">已是最新</string>
     <string name="items_sync_blocked">同步被安全机制暂停：%1$s</string>
     <string name="items_sync_fatal">同步失败：%1$s</string>
-    <string name="items_lock">锁定（仅挡界面，密钥不清）</string>
+    <!-- 2026-11-08：菜单底部已缩成图标按钮，这句括号说明既占宽度又没人读；
+         语义（只锁查看层、不清密钥）留在 .ai/ISSUES.md #60 与设置页说明里。 -->
+    <string name="items_lock">锁定</string>
     <string name="items_more_actions">更多操作</string>
     <!-- 切换密码库（issue #96）：多库并存时唯一语义正确的换库入口。 -->
     <string name="items_switch_vault">切换密码库</string>

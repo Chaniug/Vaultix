@@ -1140,7 +1140,7 @@ private fun BoxScope.ItemsTopBar(
  *   分组标题给的是"这几项是同一类事"这条信息 —— 那是平铺列表里**读不出来的东西**。
  *
  * ⚠️ 菜单项顺序 = 使用频率（2026-09-14 用户指定的重排）：回收站 → 同步 → 锁定。
- * 「锁定」不归任何一组，单独用分隔线隔开（破坏性动作不挨着常用动作，对齐 M3 建议）。
+ * 2026-11-08 起同步与锁定合成底部一栏（[MenuSyncLockFooter]），不再用分隔线隔开。
  *
  * ⚠️ 「切换密码库」放在**最上面**（2026-09-14，issue #96）：多库并存时这是
  * 「我要换个库看」的**唯一正确语义入口**。此前用户能碰到的只有「锁定」
@@ -1200,26 +1200,25 @@ private fun ItemsMoreMenu(
                 onOpenFolders()
             }
             MenuGroupTitle(R.string.items_menu_group_actions)
-            MenuAction(
-                icon = Icons.Filled.Refresh,
-                labelRes = R.string.items_sync,
-                trailing = { SyncDotIndicator(vaultCard?.syncDot) },
-            ) {
-                expanded = false
-                onRetrySync()
-            }
-            HorizontalDivider()
-            // 「锁定」= 锁查看层（不清密钥，一次生物识别即回来），见 ISSUES #60 1b
-            MenuAction(Icons.Filled.Lock, R.string.items_lock, destructive = true) {
-                expanded = false
-                onLock()
-            }
+            // ★ 2026-11-08：同步 + 锁定合成一栏（原来各占一行还夹一条分隔线）。
+            //   状态灯跟着同步走，锁定缩成最右侧的图标按钮，不再带那句括号说明。
+            MenuSyncLockFooter(
+                card = vaultCard,
+                onRetrySync = {
+                    expanded = false
+                    onRetrySync()
+                },
+                onLock = {
+                    expanded = false
+                    onLock()
+                },
+            )
         }
     }
 }
 
 /**
- * 菜单顶部的**当前库卡片**：库名 + 来源 · 条目数。
+ * 菜单顶部的**当前库卡片**：库名 · 条目数（同一行）/ 来源（下一行）。
  *
  * ## ⚠️ 宽度必须**固定**（2026-10-04 用户真机对照后发现）
  *
@@ -1247,35 +1246,34 @@ private fun MenuVaultCard(card: VaultCardInfo) {
             .width(MENU_CARD_WIDTH)
             .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
     ) {
+        // ★ 2026-11-08：条目数紧跟库名，副标题只留来源。此前拼成
+        //   「来源 · 条目数」压在路径末尾，KDBX 长路径会把它一起省略掉。
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = card.name,
+                style = MaterialTheme.typography.titleSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            card.countText?.let { count ->
+                Spacer(Modifier.width(Spacing.sm))
+                Text(
+                    text = count,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                )
+            }
+        }
         Text(
-            text = card.name,
-            style = MaterialTheme.typography.titleSmall,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        // 来源与条目数拼成一行：分号（`·`）分隔，条目数缺失（未解锁）时只剩来源。
-        val subtitle = listOfNotNull(card.origin, card.countText).joinToString(separator = " · ")
-        Text(
-            text = subtitle,
+            text = card.origin,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            // ⚠️ 固定宽度后**必须回到单行中间省略**（此前是 `maxLines = 2`）。
-            // 宽度恒定了，"给全"就不成立：KDBX 的 `OneDrive · Keepass/valkjin.kdbx · 217 个条目`
-            // 在 280dp 里放不下两行，第二行会把下面的分隔线顶开、菜单高度随内容跳。
-            // ⇒ 保头保尾折成一行（`MiddleEllipsizedText`），高度与切库无关。
+            // ⚠️ 固定宽度后**必须单行中间省略**：两行会把分隔线顶开、菜单高度随内容跳。
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
-        // 同步状态**单独一行**（卡片有空间）：它与"在哪 / 多少条"是不同性质的信息，
-        // 挤进副标题会既丢颜色、又让长路径把它推到看不见。
-        if (card.syncBadge != null) {
-            Text(
-                text = syncBadgeLabel(card.syncBadge),
-                style = MaterialTheme.typography.labelMedium,
-                color = syncBadgeColor(card.syncBadge),
-                maxLines = 1,
-            )
-        }
     }
 }
 
@@ -1297,46 +1295,40 @@ private fun MenuGroupTitle(@StringRes labelRes: Int) {
  * **只有下限**，实际宽度由内容撑开 ⇒ 切库时浮层宽度会跳：
  * Bitwarden 库（短）贴到下限，KDBX 库（长）被撑宽 ⇒ 「很不协调」。
  *
- * 取 280.dp 的理由：能容下 KDBX 最常见的
- * `OneDrive · Keepass/valkjin.kdbx · 217 个条目`（约 40 字符，bodySmall 下 ≈ 250dp），
- * 且在窄屏（≥320dp）上仍留得住边距。固定后长文本走**中间省略**（保头保尾，
- * 尾段的条目数与文件名是用户最想确认的），高度与切库无关。
+ * 取 280.dp 的理由：能容下 KDBX 常见的 `OneDrive · Keepass/valkjin.kdbx`
+ * （bodySmall 下 ≈ 220dp）并给行尾状态灯留位，窄屏（≥320dp）仍留得住边距。
+ * 条目数已移到库名后（2026-11-08），长路径走**中间省略**（保头保尾，
+ * 尾段的文件名是用户最想确认的），高度与切库无关。
  */
 private val MENU_CARD_WIDTH = 280.dp
 
-/** 菜单项（图标 + 文案；[destructive] 用 error 色标出不可逆 / 中断性动作）。 */
+/**
+ * 菜单项（图标 + 文案）。
+ *
+ * ⚠️ 2026-11-08 清掉了 `destructive` / `trailing` 两个参数：同步与锁定合成
+ *    [MenuSyncLockFooter] 后已无调用点使用非默认值，留着只会让人以为还能标红。
+ *    锁定那枚图标自己在 footer 里用 error 色。
+ */
 @Composable
 private fun MenuAction(
     icon: ImageVector,
     @StringRes labelRes: Int,
-    destructive: Boolean = false,
-    /** 行尾状态（同步状态点）。null 时整块不渲染，保持菜单安静。 */
-    trailing: @Composable (() -> Unit)? = null,
     onClick: () -> Unit,
 ) {
     DropdownMenuItem(
         text = {
             Text(
                 text = stringResource(labelRes),
-                color = if (destructive) {
-                    MaterialTheme.colorScheme.error
-                } else {
-                    MaterialTheme.colorScheme.onSurface
-                },
+                color = MaterialTheme.colorScheme.onSurface,
             )
         },
         leadingIcon = {
             Icon(
                 imageVector = icon,
                 contentDescription = null,
-                tint = if (destructive) {
-                    MaterialTheme.colorScheme.error
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                },
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         },
-        trailingIcon = trailing,
         onClick = onClick,
     )
 }
@@ -1365,6 +1357,62 @@ private fun SyncDotIndicator(dot: SyncStatusDot?) {
             tint = syncStatusDotColor(dot),
             modifier = Modifier.size(UiSize.MicroIcon),
         )
+    }
+}
+
+/**
+ * 菜单底部「**同步 · 锁定**」同栏（2026-11-08 用户反馈）。
+ *
+ * 原来同步占一行、锁定占一行，中间还夹一条分隔线；括号里的
+ * 「仅挡界面，密钥不清」又把整行撑满。两者其实是同一类"对当前库做一次动作"，
+ * 合成一栏后：左边整块可点=同步（状态灯跟着它），右边只留一枚锁图标。
+ *
+ * ⚠️ 状态优先用 [SyncDotIndicator]（回答"点下去会发生什么"）；没有状态点时
+ *    退回角标文案（回答"云端现在什么情况"），两者都不显示时菜单保持安静。
+ *    两条通路共用 [VaultCardInfo]，Bitwarden / KDBX 是同一套 UI，不按库类型分叉。
+ */
+@Composable
+private fun MenuSyncLockFooter(
+    card: VaultCardInfo?,
+    onRetrySync: () -> Unit,
+    onLock: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.width(MENU_CARD_WIDTH),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        DropdownMenuItem(
+            text = { Text(stringResource(R.string.items_sync)) },
+            leadingIcon = {
+                Icon(
+                    Icons.Filled.Refresh,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            },
+            trailingIcon = {
+                val dot = card?.syncDot
+                val badge = card?.syncBadge
+                when {
+                    dot != null -> SyncDotIndicator(dot)
+                    badge != null -> Text(
+                        text = syncBadgeLabel(badge),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = syncBadgeColor(badge),
+                        maxLines = 1,
+                    )
+                }
+            },
+            onClick = onRetrySync,
+            modifier = Modifier.weight(1f),
+        )
+        IconButton(onClick = onLock) {
+            Icon(
+                Icons.Filled.Lock,
+                contentDescription = stringResource(R.string.items_lock),
+                tint = MaterialTheme.colorScheme.error,
+            )
+        }
     }
 }
 
