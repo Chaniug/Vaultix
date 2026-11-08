@@ -29,6 +29,7 @@ import java.io.File
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -719,6 +720,7 @@ object Kdbx {
      * ⚠️ 拆出来是为了让"加锁"这件事只有一个入口 —— 直接在本函数里 `withLock` 会让
      *    [saveVia] / 未来的写路径各写一遍，迟早漏一个，而漏的那次就是丢改动。
      */
+    @Suppress("TooGenericExceptionCaught") // 编码异常族无法穷举，且失败时必须就地恢复会话
     private suspend fun mutateLocked(
         vaultId: String,
         mutator: (KeePassDatabase) -> KdbxWriteResult,
@@ -748,9 +750,11 @@ object Kdbx {
         }
 
         val content = result.database.toMappedContent()
-        val bytes = KdbxEncoder.encode(result.database)
         // ⚠️ 会话必须换成**新的**那一份：后续读（`contentOf`）与下一次写都基于它，
         //    漏掉这一步的表现是"改完界面没变、再改一次又回到老值"（读到的还是旧库）。
+        // ★ 2026-11-08：**先提交会话，再编码**。整库编码是一次 KDF 量级的耗时操作，
+        //    而会话在 mutator 跑完时其实已经定稿。提前提交让 `sessionRevision`
+        //    立刻推给 UI（列表/回收站瞬时刷新），不必等编码 / 自检 / 落盘 / 上传。
         // ★ 先留旧会话快照：落盘在更外层的 persist，那里失败时要把内存恢复原状。
         val previousSessionToken = KdbxSessionStore.rememberForRollback(vaultId, session)
         KdbxSessionStore.put(
@@ -762,6 +766,17 @@ object Kdbx {
                 credentials = session.credentials,
             ),
         )
+        // ⚠️ 会话已先行提交 ⇒ 编码失败时 **persist 还没被调用**，没人会替我们回滚。
+        //    必须就地退回旧会话并丢掉快照，否则又变成「内存删了、文件没动」。
+        val bytes = try {
+            KdbxEncoder.encode(result.database)
+        } catch (error: Exception) {
+            KdbxSessionStore.put(vaultId, session)
+            KdbxSessionStore.discardRollback(previousSessionToken)
+            return Result.failure(
+                KdbxFailure(KdbxOpenError.Unknown("编码失败（${error.javaClass.simpleName}），已恢复原会话")),
+            )
+        }
         return Result.success(
             KdbxPendingWrite(
                 content = content,
@@ -876,6 +891,16 @@ object Kdbx {
 
     /** 全部已解锁的 KDBX 库 id（供仓储合并进「已解锁库」集合）。 */
     fun unlockedIds(): Set<String> = KdbxSessionStore.unlockedIds()
+
+    /**
+     * 会话集合的代次流（**只有一个整数，不含任何明文**）。
+     *
+     * ★ 2026-11-08：`KdbxSessionFlow` 用它把「会话已换」直接推给 UI。
+     *    此前 UI 只认仓储在 `persist` 末尾手动 `bump()`，于是要等整库编码 /
+     *    往返自检 / 落缓存跑完才刷新 —— 真机上就是「点删除等 1~2 秒」。
+     *    有了这条流，`mutateLocked` 提交会话的那一瞬间列表/回收站就能重读。
+     */
+    fun sessionRevision(): Flow<Int> = KdbxSessionStore.revisions
 
     /**
      * 把 [vaultId] 的会话**编码并安全落盘**到 [target]（阶段 B：写回）。

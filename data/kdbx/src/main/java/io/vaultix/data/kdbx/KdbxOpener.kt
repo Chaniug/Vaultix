@@ -25,6 +25,10 @@ import app.keemobile.kotpass.database.decode
 import java.io.ByteArrayInputStream
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 
 /** 一次成功打开的会话（内存态；**绝不外泄**，见 [Kdbx] 门面的说明）。 */
 internal class KdbxSession(
@@ -53,6 +57,22 @@ internal object KdbxSessionStore {
     private val sessions = ConcurrentHashMap<String, KdbxSession>()
 
     /**
+     * 会话集合的**代次计数**（只带一个整数，绝不携带明文）。
+     *
+     * ★ 2026-11-08 真机「点删除要等 1~2 秒 / 回收站要等 2~5 秒」：
+     *   UI 的读流原先只认 `KdbxSessionFlow.bump()`，而它挂在 `persist` 末尾
+     *   —— 要等整库编码、往返自检、落缓存全部跑完。会话其实在 `mutateLocked`
+     *   里就已经换好了。⇒ 会话一换就自增本计数，订阅方立即重读，
+     *   不必等网络、也不必等编码（见 [Kdbx] 门面的 `sessionRevision`）。
+     */
+    private val revision = MutableStateFlow(0)
+    val revisions: Flow<Int> = revision.asStateFlow()
+
+    private fun notifyChanged() {
+        revision.update { it + 1 }
+    }
+
+    /**
      * ★ 一次 mutate 提交新会话**之前**的旧会话（2026-11-08 真机「三份真相」修复）。
      *
      * `mutateLocked` 编码完就把新会话放进 [sessions]，但落盘在更外层的
@@ -74,6 +94,7 @@ internal object KdbxSessionStore {
 
     fun put(vaultId: String, session: KdbxSession) {
         sessions[vaultId] = session
+        notifyChanged()
     }
 
     fun get(vaultId: String): KdbxSession? = sessions[vaultId]
@@ -97,6 +118,7 @@ internal object KdbxSessionStore {
         val snapshot = rollbackSnapshots.remove(token) ?: return false
         if (snapshot.vaultId != vaultId) return false
         sessions[vaultId] = snapshot.session
+        notifyChanged()
         return true
     }
 
@@ -111,11 +133,13 @@ internal object KdbxSessionStore {
             .filter { it.value.vaultId == vaultId }
             .map { it.key }
             .forEach { token -> rollbackSnapshots.remove(token) }
+        notifyChanged()
     }
 
     fun closeAll() {
         sessions.clear()
         rollbackSnapshots.clear()
+        notifyChanged()
     }
 
     fun unlockedIds(): Set<String> = sessions.keys.toSet()

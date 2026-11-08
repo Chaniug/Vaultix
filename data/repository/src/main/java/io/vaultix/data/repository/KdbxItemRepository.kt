@@ -287,8 +287,14 @@ class KdbxItemRepository @Inject constructor(
      */
     @Suppress("TooGenericExceptionCaught") // 落盘链路异常族无法穷举，且此处必须一律回滚
     private suspend fun persist(vaultId: String, write: Kdbx.KdbxPendingWrite): VaultSaveOutcome {
-        // ⚠️ try 必须**覆盖整个函数体**：这三行原先在 try 之外，一旦
-        //    `vaultDao.get` / `hasCloudSource` 抛异常，finally 的 bump 就不会执行 ⇒
+        // ★ 2026-11-08 真机「点删除要等 1~2 秒 / 进回收站要等 2~5 秒」：
+        //   `Kdbx.mutateLocked` 返回时会话**已经换好**（新条目/回收站都在里面），
+        //   可 bump 原先压在 finally —— 也就是整笔往返自检 / 落缓存 / 状态写入
+        //   / 排队上传之后，UI 必须等完才刷新。⇒ 一进来就 bump，界面立刻读新会话。
+        //   失败时 catch 里回滚后再 bump 一次，三视图仍同源（见下方）。
+        kdbxSessions.bump()
+        // ⚠️ try 必须**覆盖整个函数体**（bump 之外）：`vaultDao.get` /
+        //    `hasCloudSource` 任一抛异常都要走回滚 + 再 bump，否则
         //    列表停在旧快照、详情/回收站却读到新会话（真机「三份真相」）。
         try {
             val bytes = write.bytes
@@ -345,11 +351,10 @@ class KdbxItemRepository @Inject constructor(
                 "保存失败，已回滚会话：${error.javaClass.simpleName}: ${error.message}"
             }
             Kdbx.rollbackMutation(vaultId, write)
-            throw error
-        } finally {
-            // ⚠️ 无论成功失败都要 bump：会话要么已提交、要么已回滚，
-            //    列表 / 详情 / 回收站必须读同一份内容。
+            // ★ 回滚后必须再 bump：开头那次让 UI 看到了新会话，失败要收回来，
+            //    否则界面停在"已删除"而磁盘根本没动（三份真相）。
             kdbxSessions.bump()
+            throw error
         }
     }
 

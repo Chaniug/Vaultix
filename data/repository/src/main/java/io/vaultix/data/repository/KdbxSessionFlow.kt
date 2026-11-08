@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.update
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -43,8 +44,19 @@ class KdbxSessionFlow @Inject constructor() {
     /** 会话集合每变一次自增一次（初始 0；UI 不该依赖具体数值，只依赖「变了」）。 */
     val revisionFlow: Flow<Int> = revision.asStateFlow()
 
-    /** 供 `combine` 用的轻量信号（值本身无意义，仅表示「KDBX 会话集合可能变了」）。 */
-    fun asSignal(): Flow<Unit> = revision.map { }
+    /**
+     * 供 `combine` 用的轻量信号（值本身无意义，仅表示「KDBX 会话集合可能变了」）。
+     *
+     * ★ 2026-11-08：合并**两个**来源 —— ① 本类的 [bump]（解锁 / 锁定 / 移除库等
+     *    生命周期事件）；② `Kdbx.sessionRevision()`（会话内容在 `mutateLocked`
+     *    里一提交就自增）。只靠 ① 时，写操作要等 `persist` 末尾手动 bump，
+     *    真机上就是「点删除等 1~2 秒、回收站等 2~5 秒」。
+     *    两条流都只带计数、不带明文。
+     */
+    fun asSignal(): Flow<Unit> = merge(
+        revision.map { },
+        Kdbx.sessionRevision().map { },
+    )
 
     /** 会话集合发生变化（解锁 / 锁定 / 移除 / 切换库）。 */
     fun bump() {

@@ -172,7 +172,12 @@ class ItemRepositoryImpl @Inject constructor(
                     )
                 }
             }
-            .flowOn(cryptoDispatcher)
+            // ⚠️ 2026-11-08 真机：这里只读**已映射好的内存会话**，不做任何加解密，
+            //    却原先挂在 @CryptoDispatcher（Dispatchers.Default.limitedParallelism(2)，
+            //    专供 Argon2id）上。写回编码 / 往返自检 / 后台上传解码一占满那 2 个槽，
+            //    列表与回收站的读就排队 2~5 秒 ⇒ 「点删除后要等」「回收站要等」。
+            //    ⇒ 改用不限并发的 Default，KDF 槽留给真正需要它的人。
+            .flowOn(Dispatchers.Default)
 
     /**
      * KDBX 库的条目流。
@@ -184,7 +189,8 @@ class ItemRepositoryImpl @Inject constructor(
     private fun kdbxItems(vaultId: String): Flow<List<VaultItem>> =
         kdbxSessions.asSignal()
             .map { Kdbx.contentOf(vaultId)?.items.orEmpty() }
-            .flowOn(cryptoDispatcher)
+            // 同 [kdbxTrash]：纯内存映射不该与 KDF 抢 limitedParallelism(2) 的槽位。
+            .flowOn(Dispatchers.Default)
 
     override fun observeTrash(vaultId: String): Flow<List<TrashEntry>> =
         vaultDao.observeAll()
