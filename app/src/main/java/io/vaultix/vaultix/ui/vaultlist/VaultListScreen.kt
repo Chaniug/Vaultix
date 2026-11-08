@@ -567,7 +567,15 @@ private fun vaultSubtitle(vault: VaultSummary): String = when (vault.kind) {
     VaultKind.BITWARDEN -> vault.account ?: vault.origin
 }
 
-/** 卡片更多菜单：立即同步（仅网盘库）/ 移除库（破坏性动作；确认对话框在列表层）。 */
+/**
+ * 卡片更多菜单：同步（仅网盘库）/ 移除库（破坏性动作；确认对话框在列表层）。
+ *
+ * ⚠️ 同步为什么留在这里、而不像「密码库管理」那样露在行尾（2026-11-08）：
+ * 两页的任务不同。本页的任务是**挑一个库进去**，卡片整体是一个导航目标，
+ * 右上一个 ×2 的热区会把「进入」这件事挤小；而管理页的任务就是**维护每个库**，
+ * 同步在那里才是主操作。同一个动作在两页暴露程度不同是 M3 允许的，
+ * 但**名字必须一致** —— 所以这里用 `vault_action_sync`（同步），不再叫「立即同步」。
+ */
 @Composable
 private fun VaultCardMenu(onRemove: () -> Unit, onSyncNow: (() -> Unit)? = null) {
     var menuOpen by remember { mutableStateOf(false) }
@@ -581,7 +589,7 @@ private fun VaultCardMenu(onRemove: () -> Unit, onSyncNow: (() -> Unit)? = null)
         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
             if (onSyncNow != null) {
                 DropdownMenuItem(
-                    text = { Text(stringResource(R.string.kdbx_sync_now)) },
+                    text = { Text(stringResource(R.string.vault_action_sync)) },
                     leadingIcon = {
                         Icon(Icons.Filled.Sync, contentDescription = null)
                     },

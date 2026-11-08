@@ -24,7 +24,6 @@ import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Sync
@@ -101,7 +100,7 @@ import io.vaultix.vaultix.ui.theme.UiSize
  *   后者是**全局**动作、**范围不可见** ⇒ 误点一次就以为数据丢了（定稿 §11.10）。
  *   现在锁定 / 同步 / 退出 / 移除都在**每个库自己的 ⋮** 里，范围写在被点的那一行上。
  * - ★ **2026-09-30 批次 C（多库锁模型定稿 §8）**：选库从「当前库」行的弹窗改为
- *   **列表行内直选**（点行切浏览目标 / 去解锁；星标 = 默认库；状态写进每行副标题）。
+ *   **列表行内直选**（点行切浏览目标 / 去解锁；**默认库写进副标题**；行尾同步 + ⋮）。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -150,7 +149,7 @@ fun VaultManagementScreen(
                 .verticalScroll(rememberScrollState())
                 .padding(bottom = Spacing.xxl),
         ) {
-            // ---- 全部密码库（§8：行内单选浏览 + 星标默认 + 状态 + ⋮）----
+            // ---- 全部密码库（§8：行内单选浏览 + 默认标记 + 状态 + 同步 + ⋮）----
             // ⚠️ 库一个都没有时不画这一组（"空组 + 空态文案"是两种空，这里直接不出现更诚实：
             //    没有库时下面的「添加密码库」才是用户该看的东西）。
             if (switchable.isNotEmpty()) {
@@ -173,7 +172,7 @@ fun VaultManagementScreen(
                                         onOpenLockedVault(vault.id)
                                     }
                                 },
-                                // 星标只管冷启动先开谁，**不要求当下解锁**（既有决策）；
+                                // 设为默认只管冷启动先开谁，**不要求当下解锁**（既有决策）；
                                 // 已解锁时顺带切过去，避免「活跃 A / 默认 B」的不一致观感。
                                 onSetDefault = {
                                     if (vault.unlocked) viewModel.selectVault(vault.id)
@@ -263,7 +262,11 @@ fun VaultManagementScreen(
 private class VaultRowActions(
     /** 点整行：已解锁 → 切浏览目标；未解锁 → 去解锁页（§8 点按语义）。 */
     val onSelect: () -> Unit,
-    /** 点星标：设为默认库（冷启动先开谁，独立于浏览与解锁状态）。 */
+    /**
+     * 设为默认库（冷启动先开谁，独立于浏览与解锁状态）。
+     *
+     * ★ 2026-11-08：入口从行尾星标移进 ⋮ 菜单 —— 它是一次性设置，不该占行内最高频的位置。
+     */
     val onSetDefault: () -> Unit,
     val onLock: () -> Unit,
     val onSync: () -> Unit,
@@ -272,15 +275,30 @@ private class VaultRowActions(
 )
 
 /**
- * 一个库 = 一行（§8 形态）：库名 + 状态/档位副标题 + 右侧**星标 + ⋮**。
+ * 一个库 = 一行（§8 形态）：库名 + 状态/默认标记副标题 + 右侧**同步 + ⋮**。
  *
  * ★ 2026-09-30 批次 C：从「每行一个 ⋮」升级为**行内单选浏览**——
  * - 图标槽：当前浏览的库给 `Check`（显式单选，同旧库选择器的选中语义）；
  *   未解锁的库**永不画 Check**（「已选中但内容空白」的观感，2026-09-15 的教训）。
- * - 点整行 = 切浏览目标 / 去解锁；星标 = 默认库；⋮ = 逐库动作 + 档位。
+ * - 点整行 = 切浏览目标 / 去解锁。
+ *
+ * ★ 2026-11-08：行尾从「**星标 + ⋮**」改成「**同步 + ⋮**」。
+ *
+ * 起因：用户反馈「同步要点击库后面的 3 个点才展开，有点麻烦」。按 M3 的
+ * `ListItem` 分层——`trailing` 只承诺放**一个高频动作**，其余进 overflow——
+ * 这一行原来的排布正好是反的：
+ * - 星标（设为默认库）是**一次性设置**，却占着最高频的位置；
+ * - 同步是「改完就想点」的高频动作，却藏在 ⋮ 的第二层。
+ *
+ * ⇒ 星标降级成副标题里的「默认库」三个字（"哪个是默认"本来就是**状态**，
+ *   不是动作），「设为默认库」移进 ⋮；行尾腾出来的位置给同步。
+ *   条目页 ⋮ 菜单里的同步同理（见 `ItemsScreen` 的 `MenuSyncAction`）。
+ *
+ * ⚠️ 同步按钮**只在 [canSyncToRemote] 时出现**：本地 KDBX（`content://`）
+ *    的真相就是那个文件，没有"另一端"，给它画同步按钮是假的。
  *
  * ★ 菜单项**按能力显示**，不是全列出来再禁用：
- * - 本地 KDBX（`content://`）没有「同步」—— 它的真相就是那个文件，没有"另一端"；
+ * - 本地 KDBX 没有「同步」—— 同上；
  * - KDBX 没有「退出」—— 它没有账号、没有 token，退出与锁定是同一件事。
  *
  * 「状态放副标题」是 §11.10 明确要求的：真正要"看得见"的信息是**状态**，
@@ -307,31 +325,22 @@ private fun VaultActionRow(
             }
         },
         title = vault.name,
-        subtitle = vaultStatusSubtitle(vault),
+        subtitle = vaultStatusSubtitle(vault = vault, isDefault = isDefault),
         onClick = actions.onSelect,
         trailing = {
-            // 星标（默认库）—— 与浏览状态无关，只管冷启动先开谁（§8：三者正交）。
-            IconButton(onClick = actions.onSetDefault, enabled = !isDefault) {
-                Icon(
-                    imageVector = if (isDefault) Icons.Filled.Star else Icons.Filled.StarBorder,
-                    contentDescription = stringResource(
-                        if (isDefault) {
-                            R.string.settings_vault_default_badge
-                        } else {
-                            R.string.settings_vault_set_default
-                        },
-                    ),
-                    tint = if (isDefault) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                )
-            }
             if (busy) {
-                // 忙碌时不给 ⋮：一次只该跑一个动作，避免连点出两个相互打架的结果。
+                // 忙碌时两个按钮都不给：一次只该跑一个动作，避免连点出两个相互打架的结果。
                 CircularProgressIndicator(modifier = Modifier.size(UiSize.InlineProgress))
             } else {
+                // 同步 = 本行唯一的高频动作，直接露出（1 步可达，不再经 ⋮）。
+                if (vault.canSyncToRemote()) {
+                    IconButton(onClick = actions.onSync) {
+                        Icon(
+                            Icons.Filled.Sync,
+                            contentDescription = stringResource(R.string.vault_action_sync),
+                        )
+                    }
+                }
                 Box {
                     IconButton(onClick = { menuExpanded = true }) {
                         Icon(
@@ -342,6 +351,7 @@ private fun VaultActionRow(
                     VaultActionMenu(
                         expanded = menuExpanded,
                         vault = vault,
+                        isDefault = isDefault,
                         onDismiss = { menuExpanded = false },
                         actions = actions,
                     )
@@ -351,15 +361,34 @@ private fun VaultActionRow(
     )
 }
 
-/** ⋮ 菜单（按能力出现，见 [VaultActionRow]；破坏性动作置底且标红 —— 定稿 §2①）。 */
+/**
+ * ⋮ 菜单（按能力出现，见 [VaultActionRow]；破坏性动作置底且标红 —— 定稿 §2①）。
+ *
+ * ⚠️ 「同步」**不在**这里（2026-11-08）：它已经露在行尾。同一个动作既在行内
+ *    又在菜单里，只会让菜单变长、让用户犹豫点哪个 —— M3 的 overflow 只收
+ *    「行内没位置放的低频动作」。
+ */
 @Composable
 private fun VaultActionMenu(
     expanded: Boolean,
     vault: VaultSummary,
+    isDefault: Boolean,
     onDismiss: () -> Unit,
     actions: VaultRowActions,
 ) {
     DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
+        // ★ 2026-11-08：星标降级后，「设为默认库」落到这里；已经是默认库时整项不显示
+        //   （显示一个点了没反应的项，比不显示更让人困惑）。
+        if (!isDefault) {
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.settings_vault_set_default)) },
+                leadingIcon = { Icon(Icons.Filled.StarBorder, contentDescription = null) },
+                onClick = {
+                    onDismiss()
+                    actions.onSetDefault()
+                },
+            )
+        }
         DropdownMenuItem(
             text = { Text(stringResource(R.string.vault_action_lock)) },
             leadingIcon = { Icon(Icons.Filled.Lock, contentDescription = null) },
@@ -368,16 +397,6 @@ private fun VaultActionMenu(
                 actions.onLock()
             },
         )
-        if (vault.canSyncToRemote()) {
-            DropdownMenuItem(
-                text = { Text(stringResource(R.string.vault_action_sync)) },
-                leadingIcon = { Icon(Icons.Filled.Sync, contentDescription = null) },
-                onClick = {
-                    onDismiss()
-                    actions.onSync()
-                },
-            )
-        }
         if (vault.canSignOutOfDevice()) {
             DropdownMenuItem(
                 text = { Text(stringResource(R.string.vault_action_signout)) },
@@ -388,7 +407,7 @@ private fun VaultActionMenu(
                 },
             )
         }
-        // 破坏性动作**置底且标红**（定稿 §2①），与上面四项隔一层视觉分区。
+        // 破坏性动作**置底且标红**（定稿 §2①），与上面各项隔一层视觉分区。
         CompositionLocalProvider(
             LocalContentColor provides MaterialTheme.colorScheme.error,
         ) {
@@ -405,19 +424,24 @@ private fun VaultActionMenu(
 }
 
 /**
- * 状态副标题：解锁态（+ 网盘同步态）。
+ * 状态副标题：默认标记（+ 解锁态 + 网盘同步态）。
+ *
+ * ★ 2026-11-08：「默认库」从行尾星标降级成这里的**文字**。它本来就是状态
+ *    （"冷启动先开哪个"），做成可点按钮等于用最高频的位置放最低频的动作。
+ *    放在第一段是因为它决定"这个库有多重要"，比解锁态更该被先看到。
  *
  * ⚠️ 2026-09-30 晚：**档位段已删**。它随「每库自动锁定入口」一起进来（§8/D3），
  * 而那个入口用户已要求移除 ⇒ 每行再重复一遍同一个全局档位只是噪音
  * （所有库的档位现在必然相同）。档位只在设置首页那一行说一次。
  */
 @Composable
-private fun vaultStatusSubtitle(vault: VaultSummary): String {
+private fun vaultStatusSubtitle(vault: VaultSummary, isDefault: Boolean): String {
+    val default = if (isDefault) stringResource(R.string.settings_vault_default_badge) else null
     val unlocked = stringResource(
         if (vault.unlocked) R.string.vault_status_unlocked else R.string.vault_status_locked,
     )
     val sync = vault.syncStatus?.let { syncStatusText(it) }
-    return listOfNotNull(unlocked, sync).joinToString(" · ")
+    return listOfNotNull(default, unlocked, sync).joinToString(" · ")
 }
 
 /** 网盘同步状态文案（复用库列表角标那套说法，避免两处各写一遍）。 */

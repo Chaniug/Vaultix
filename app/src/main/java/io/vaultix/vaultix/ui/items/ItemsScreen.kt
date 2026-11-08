@@ -48,11 +48,11 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Circle
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.SwapHoriz
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.ViewAgenda
 import androidx.compose.material.icons.filled.Warning
@@ -1140,7 +1140,12 @@ private fun BoxScope.ItemsTopBar(
  *   分组标题给的是"这几项是同一类事"这条信息 —— 那是平铺列表里**读不出来的东西**。
  *
  * ⚠️ 菜单项顺序 = 使用频率（2026-09-14 用户指定的重排）：回收站 → 同步 → 锁定。
- * 2026-11-08 起同步与锁定合成底部一栏（[MenuSyncLockFooter]），不再用分隔线隔开。
+ *
+ * ⚠️ 「同步」与「锁定」**必须各占一行**（2026-11-08 二次调整，撤回同日早些时候的
+ *    "合成一栏"）：合起来只省 48dp 高度，代价是两个热区零间隙相接，用户真机反馈
+ *    "挤、怕误触"。M3 的菜单模型是**一个 item = 一个动作**，行内 `trailingIcon`
+ *    只允许放非交互内容 —— 把第二个按钮拼进同一行等于绕开 item 边界。
+ *    详见 [MenuSyncAction] 的 KDoc。
  *
  * ⚠️ 「切换密码库」放在**最上面**（2026-09-14，issue #96）：多库并存时这是
  * 「我要换个库看」的**唯一正确语义入口**。此前用户能碰到的只有「锁定」
@@ -1200,19 +1205,19 @@ private fun ItemsMoreMenu(
                 onOpenFolders()
             }
             MenuGroupTitle(R.string.items_menu_group_actions)
-            // ★ 2026-11-08：同步 + 锁定合成一栏（原来各占一行还夹一条分隔线）。
-            //   状态灯跟着同步走，锁定缩成最右侧的图标按钮，不再带那句括号说明。
-            MenuSyncLockFooter(
-                card = vaultCard,
-                onRetrySync = {
-                    expanded = false
-                    onRetrySync()
-                },
-                onLock = {
-                    expanded = false
-                    onLock()
-                },
-            )
+            // ★ 2026-11-08 二次：同步与锁定**各占一行**，撤回同日的"合成一栏"。
+            //   合起来省了 48dp 高度，代价是两者热区零间隙 —— 用户反馈"挤、怕误触"，
+            //   且违反 M3「一个 menu item = 一个动作」的模型。状态灯挂在同步项的
+            //   trailingIcon 位（非交互），锁定是普通菜单项，不再染 error 红
+            //   （锁库可恢复，不是破坏性动作；红留给删库/清空这类真不可逆的）。
+            MenuSyncAction(card = vaultCard) {
+                expanded = false
+                onRetrySync()
+            }
+            MenuAction(Icons.Filled.Lock, R.string.items_lock) {
+                expanded = false
+                onLock()
+            }
         }
     }
 }
@@ -1303,11 +1308,11 @@ private fun MenuGroupTitle(@StringRes labelRes: Int) {
 private val MENU_CARD_WIDTH = 280.dp
 
 /**
- * 菜单项（图标 + 文案）。
+ * 菜单项（图标 + 文案），**一个 item 一个动作**。
  *
- * ⚠️ 2026-11-08 清掉了 `destructive` / `trailing` 两个参数：同步与锁定合成
- *    [MenuSyncLockFooter] 后已无调用点使用非默认值，留着只会让人以为还能标红。
- *    锁定那枚图标自己在 footer 里用 error 色。
+ * ⚠️ 2026-11-08 清掉了 `destructive` / `trailing` 两个参数：已无调用点使用非默认值，
+ *    留着只会让人以为还能标红。锁定现在是普通菜单项 —— 锁库可恢复（重新输主密码），
+ *    不属破坏性动作，`error` 色留给删库/清空这类真正不可逆的入口。
  */
 @Composable
 private fun MenuAction(
@@ -1334,23 +1339,32 @@ private fun MenuAction(
 }
 
 /**
- * 「同步」项行尾的四色状态点：**圆点 + 状态词 + 读屏描述**三者成对。
+ * 「同步」项行尾的状态点：**圆点 + 状态词 + 读屏描述**（2026-11-08 二次调整）。
  *
  * ⚠️ 只给颜色是不够的：色盲用户与读屏用户拿不到状态，所以 `Icon` 的
  *    `contentDescription` 用的是完整一句（含「点按重试」这类可行动指引），
  *    而不是把状态词再念一遍。
+ *
+ * ★ **quiet default**（M3）：[SyncStatusDot.SUCCESS] 是常态，只留圆点不写文字 ——
+ *    常态喊「同步成功」既占宽度又制造噪音（此前右端 60dp 全被「已同步 ●」吃掉，
+ *    紧邻的锁定按钮因此显得拥挤）。异常态（失败 / 冲突 / 同步中 / 待上传）
+ *    才把状态词写出来，因为这些正是"我该不该管"的唯一线索。
+ *    ⚠️ 圆点本身**必须常驻**：用户此前实测反馈"绿点闪一下就消失，像功能时有时无"，
+ *    所以这里只是收掉文字，不是把 SUCCESS 变成不显示。
  */
 @Composable
 private fun SyncDotIndicator(dot: SyncStatusDot?) {
     if (dot == null) return
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            text = syncStatusDotLabel(dot),
-            style = MaterialTheme.typography.labelSmall,
-            color = syncStatusDotColor(dot),
-            maxLines = 1,
-        )
-        Spacer(Modifier.width(Spacing.xs))
+        if (dot != SyncStatusDot.SUCCESS) {
+            Text(
+                text = syncStatusDotLabel(dot),
+                style = MaterialTheme.typography.labelSmall,
+                color = syncStatusDotColor(dot),
+                maxLines = 1,
+            )
+            Spacer(Modifier.width(Spacing.xs))
+        }
         Icon(
             imageVector = Icons.Filled.Circle,
             contentDescription = syncStatusDotDescription(dot),
@@ -1361,59 +1375,57 @@ private fun SyncDotIndicator(dot: SyncStatusDot?) {
 }
 
 /**
- * 菜单底部「**同步 · 锁定**」同栏（2026-11-08 用户反馈）。
+ * 菜单里的「同步」项：左文字、右侧挂状态（2026-11-08 二次调整）。
  *
- * 原来同步占一行、锁定占一行，中间还夹一条分隔线；括号里的
- * 「仅挡界面，密钥不清」又把整行撑满。两者其实是同一类"对当前库做一次动作"，
- * 合成一栏后：左边整块可点=同步（状态灯跟着它），右边只留一枚锁图标。
+ * ## 为什么从「同步 · 锁定同栏」拆回来
  *
- * ⚠️ 状态优先用 [SyncDotIndicator]（回答"点下去会发生什么"）；没有状态点时
- *    退回角标文案（回答"云端现在什么情况"），两者都不显示时菜单保持安静。
- *    两条通路共用 [VaultCardInfo]，Bitwarden / KDBX 是同一套 UI，不按库类型分叉。
+ * 同日早些时候把同步与锁定合成一栏（[Row] + `weight(1f)` + 尾随 `IconButton`），
+ * 用户真机反馈「挤、怕误触」。原因不在间距，而在**结构**：
+ * M3 的菜单模型里**一个 menu item 就是一个动作**，整行独占，行内 `trailingIcon`
+ * 只允许放**非交互**内容（状态点正是这一类）。把第二个可点区域拼进同一行，
+ * 等于绕开 item 边界 ⇒ 两个热区必然零间隙相接（WCAG 2.2 SC 2.5.8 的间隔要求也过不去）。
+ * ⇒ 同步、锁定各回一行，靠 item 边界天然隔离，不需要手写间距或竖线。
+ *
+ * ## 状态优先级
+ *
+ * 优先 [SyncDotIndicator]（回答"点下去会发生什么"）；没有状态点时退回角标文案
+ * （回答"云端现在什么情况"），两者都没有时这一行保持安静。
+ * 两条通路共用 [VaultCardInfo]，Bitwarden / KDBX 是同一套 UI，不按库类型分叉。
  */
 @Composable
-private fun MenuSyncLockFooter(
+private fun MenuSyncAction(
     card: VaultCardInfo?,
-    onRetrySync: () -> Unit,
-    onLock: () -> Unit,
+    onClick: () -> Unit,
 ) {
-    Row(
-        modifier = Modifier.width(MENU_CARD_WIDTH),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        DropdownMenuItem(
-            text = { Text(stringResource(R.string.items_sync)) },
-            leadingIcon = {
-                Icon(
-                    Icons.Filled.Refresh,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            },
-            trailingIcon = {
-                val dot = card?.syncDot
-                val badge = card?.syncBadge
-                when {
-                    dot != null -> SyncDotIndicator(dot)
-                    badge != null -> Text(
-                        text = syncBadgeLabel(badge),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = syncBadgeColor(badge),
-                        maxLines = 1,
-                    )
-                }
-            },
-            onClick = onRetrySync,
-            modifier = Modifier.weight(1f),
-        )
-        IconButton(onClick = onLock) {
-            Icon(
-                Icons.Filled.Lock,
-                contentDescription = stringResource(R.string.items_lock),
-                tint = MaterialTheme.colorScheme.error,
+    DropdownMenuItem(
+        text = {
+            Text(
+                text = stringResource(R.string.items_sync),
+                color = MaterialTheme.colorScheme.onSurface,
             )
-        }
-    }
+        },
+        leadingIcon = {
+            Icon(
+                imageVector = Icons.Filled.Sync,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        },
+        trailingIcon = {
+            val dot = card?.syncDot
+            val badge = card?.syncBadge
+            when {
+                dot != null -> SyncDotIndicator(dot)
+                badge != null -> Text(
+                    text = syncBadgeLabel(badge),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = syncBadgeColor(badge),
+                    maxLines = 1,
+                )
+            }
+        },
+        onClick = onClick,
+    )
 }
 
 /**

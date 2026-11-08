@@ -979,9 +979,10 @@
     <string name="items_sync_skipped">已是最新</string>
     <string name="items_sync_blocked">同步被安全机制暂停：%1$s</string>
     <string name="items_sync_fatal">同步失败：%1$s</string>
-    <!-- 2026-11-08：菜单底部已缩成图标按钮，这句括号说明既占宽度又没人读；
-         语义（只锁查看层、不清密钥）留在 .ai/ISSUES.md #60 与设置页说明里。 -->
-    <string name="items_lock">锁定</string>
+    <!-- 2026-11-08 二次：锁定回到**独立菜单项**后，文案要动词+宾语（M3 菜单项写法）；
+         「锁定」两字单看不知道锁什么。语义（只锁查看层、不清密钥）不再写进标签，
+         留在 .ai/ISSUES.md #60 与设置页说明里。 -->
+    <string name="items_lock">锁定密码库</string>
     <string name="items_more_actions">更多操作</string>
     <!-- 切换密码库（issue #96）：多库并存时唯一语义正确的换库入口。 -->
     <string name="items_switch_vault">切换密码库</string>
@@ -1097,7 +1098,10 @@
     <string name="kdbx_conflict_resolve_failed">处理冲突失败：%1$s</string>
 
     <!-- KDBX 网盘同步状态（库列表角标与副标题） -->
-    <string name="kdbx_sync_now">立即同步</string>
+    <!-- ⚠️ 2026-11-08：原来这里还有一条 `kdbx_sync_now = 立即同步`，已删。
+         同一个动作在三处（条目页 ⋮ / 库列表 ⋮ / 库管理行尾）叫了三个名字会让人以为是
+         三件不同的事 ⇒ 统一用 `vault_action_sync`（同步）。加回来之前先想清楚为什么
+         这个动作需要另一个名字。 -->
     <string name="kdbx_sync_in_sync">已同步</string>
     <string name="kdbx_sync_syncing">同步中…</string>
     <string name="kdbx_sync_pending_upload">有改动待上传</string>
