@@ -34,7 +34,6 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.shareIn
 import kotlinx.serialization.json.Json
 import java.time.Instant
@@ -217,24 +216,33 @@ class ItemRepositoryImpl @Inject constructor(
     /**
      * 单条目流（详情页）。
      *
-     * ## ⚠️ 首帧不能是 null（2026-10-22，用户反馈「入页闪过 1 帧『条目不存在或已被删除』」）
+     * ## 首帧不能是 null 这条约束的历史（2026-10-22 → 2026-11-09 修订）
      *
-     * 这里的 `vaultDao.observeAll()` 是**上游的前置条件**（`flatMapLatest` 要先知道库类型）：
-     * Room 流本身要跑一次首次查询才发值，而在这之前**下游连 `cipherDao.observe()` 都不会订阅**。
-     * 详情页的 `UiState.item` 初始值是 null ⇒ 这段"还不知道"的窗口被当成"确认不存在"渲染。
+     * `vaultDao.observeAll()` 是**上游的前置条件**（`flatMapLatest` 要先知道库类型）：
+     * Room 流要跑一次首次查询才发值，在这之前下游连条目行流都不会订阅。
      *
-     * ⇒ 两个修法缺一不可：
-     * 1. **本方法**：`.onStart { emit(null) }` 让下游**立刻**开始订阅条目行流（真实数据先到，
-     *    库类型随后到达时 `kind == null` 与 Bitwarden 走同一条分支，不会多翻转一次）；
-     * 2. **消费方**：UI 必须能区分"还不知道"与"确认不存在"（见 `ItemDetailViewModel.UiState.itemLoaded`）。
+     * 2026-10-22 为此加过 `.onStart { emit(null) }`，让下游立刻订阅 —— 对
+     * **Bitwarden 库**确实有效（`kind == null` 与 Bitwarden 走同一条分支，
+     * 行流提前订阅，真实数据先到）。
      *
-     * 为什么用 `onStart { emit(null) }` 而不是 `flowOf(null) + 真流`：后者多一次**真实解码**
-     * （整条 DTO 解密跑两遍），而前者只让订阅提前，不改变任何数据的来源。
+     * ⚠️ 但它对 **KDBX 库是有害的**：`null != KDBX` ⇒ 首帧掉进 Bitwarden 分支
+     * （`cipherDao.observe` + `observeState` 各跑一遍），几十毫秒后才知道真实
+     * 类型、切回来重跑。真机表现就是「点进 KDBX 条目先闪一帧转圈」
+     * （用户 2026-11-09 录屏慢放抓到的那一帧）。
+     * 它还让 `.first()` 的调用方（`PasskeyGetActivity` / `PasswordGetActivity`）
+     * 拿到**人造的 null**，被读成「条目不存在」。
+     *
+     * ⇒ 2026-11-09 删掉 `onStart`：让流在拿到真实 kind 前**不发射**。
+     *   代价是 Bitwarden 详情页多等一次 Room 首帧（约 15ms）；
+     *   收益是 KDBX 不再走错分支，且不再有假 null。
+     *   配合消费方的 `itemLoaded`（区分"还不知道"与"确认不存在"），
+     *   以及 UI 侧 120ms 的转圈延迟（`DETAIL_PROGRESS_DELAY_MS`），
+     *   这段窗口在视觉上不再可见。
      */
     override fun observeItem(vaultId: String, itemId: String): Flow<VaultItem?> =
         vaultDao.observeAll()
             .map { vaults -> VaultKind.fromName(vaults.firstOrNull { it.id == vaultId }?.kind) }
-            .onStart { emit(null) }
+            // ★ 2026-11-09：原来这里有一行 `.onStart { emit(null) }`，**已删**，理由见上方 KDoc。
             .distinctUntilChanged()
             .flatMapLatest { kind ->
                 if (kind == VaultKind.KDBX) {
