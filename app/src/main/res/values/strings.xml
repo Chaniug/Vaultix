@@ -184,14 +184,12 @@
     <string name="items_sync_in_progress">正在检查云端与本地的改动，可能需要几秒…</string>
     <!-- 2026-11-08：KDBX 库级上传态。保存落盘那一刻就要说"正在上传"，
          别等详情页的状态通知（整文件上传 5–60s，期间列表页原本全程无反馈）。 -->
-    <string name="items_sync_uploading">正在上传改动到云端…</string>
     <!-- 列表页没有冲突三选项对话框：如实引导到「密码库」页，不编造"已同步"。 -->
     <string name="items_sync_conflict_go_to_vaults">同步冲突，请到「密码库」页选择保留哪一版</string>
     <string name="vault_item_count_only">%1$d 个条目</string>
     <!-- ⋮ 菜单的动作分组标题（2026-09-30 方案 B）：把"去哪"与"做什么"分开。
          「锁定」不归任何一组，单独用分隔线隔开（破坏性动作不挨着常用动作）。 -->
     <string name="items_menu_group_navigate">前往</string>
-    <string name="items_menu_group_actions">操作</string>
 
     <!-- ===== 文件夹管理（#199）=====
          入口 = 条目页 ⋮ 菜单「前往」组。是一整页而不是弹窗：新建 / 改名 / 删除
