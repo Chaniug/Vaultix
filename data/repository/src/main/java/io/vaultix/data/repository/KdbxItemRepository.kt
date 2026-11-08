@@ -245,8 +245,10 @@ class KdbxItemRepository @Inject constructor(
             status == KdbxCloudSyncStatus.CONFLICT
         ) {
             VaultixLog.w(TAG) {
-                "写前闸门拒写：远端已变（状态=$status，会话=${state.sessionFingerprint.take(8)}，" +
-                    "基线=${state.baselineFingerprint?.take(8)}），会话未做任何改动"
+                "写前闸门拒写：远端已变（状态=$status，" +
+                    "会话=${state.sessionFingerprint.take(FINGERPRINT_PREVIEW_LENGTH)}，" +
+                    "基线=${state.baselineFingerprint?.take(FINGERPRINT_PREVIEW_LENGTH)}），" +
+                    "会话未做任何改动"
             }
             throw KdbxWriteFailure.StaleBaseline().toUserFacing()
         }
@@ -356,3 +358,6 @@ private fun VaultItemType.displayName(): String = when (this) {
 
 /** 写回链路日志（11-07）：只记字节数与阶段名，绝不记条目内容。 */
 private const val TAG = "VaultixKdbxWrite"
+
+/** 诊断日志里的指纹前缀长度：取前 8 位足以区分版本，又不把整枚哈希写进日志。 */
+private const val FINGERPRINT_PREVIEW_LENGTH = 8
