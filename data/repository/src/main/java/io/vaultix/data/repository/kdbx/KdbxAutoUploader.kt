@@ -24,8 +24,11 @@
  *    要么报冲突、要么盖掉前一次）；不同库互不阻塞（[locks] 按 vaultId 分）。
  * 3. **本地 SAF 库不触发**：[KdbxCloudSyncCoordinator.hasCloudSource] 为假 ⇒ 直接收工。
  *    它的文件就是存储本身，没有"上传"这回事（标了会留下一个永远传不上去的「待上传」）。
- * 4. **失败不重试**：一次失败就收工，状态留给编排器记 `FAILED`（角标已能显示）。
- *    离线时反复重试没有意义，只会把 CPU 和电量烧在一个必然失败的请求上。
+ * 4. **失败后台有限重试**：网络/IO 失败（`KdbxSyncResult.Failed`）按退避重试，
+ *    最多 [MAX_RETRIES] 次；冲突 / 远端有更新这类需要用户决策的终态仍然一次收工。
+ *    ★ 2026-11-08 真机：一次 72s 超时后状态停在 `FAILED`，而 `enqueue` 只在
+ *    `persist` 里调用 ⇒ 用户必须再编辑一次或手动点同步才能把改动推上去。
+ *    重试全程在后台、不阻塞任何界面；有上限，离线时不会无限空转。
  * 5. **异常不许逸出**：`SupervisorJob` + `runCatching` 双保险 —— 一个库上传炸了
  *    不能带塌整个上传器（否则后续所有库的自动上传都静默失效）。
  *
@@ -49,6 +52,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -102,13 +106,14 @@ class KdbxAutoUploader @Inject constructor(
      *
      * ⚠️ 这是 `suspend` 而不是 `fun`：单测要能直接调它并断言"跑完之后状态是什么"。
      */
-    suspend fun drain(vaultId: String) {
+    suspend fun drain(vaultId: String, retryDelaysMs: LongArray = RETRY_DELAYS_MS) {
         val row = vaultDao.get(vaultId) ?: return
         // 本地 SAF 库：文件即存储，没有"上传"这回事（要点 3）。
         if (!coordinator.hasCloudSource(row.origin)) return
 
         locks.getOrPut(vaultId) { Mutex() }.withLock {
             var rounds = 0
+            var failures = 0
             // ★★ 11-07：DB 状态不是「有没有活」的唯一真源。
             //    `sync` 一开头就 markStatus(SYNCING) 冲掉 PENDING_UPLOAD，而
             //    impliesLocalChanges(SYNCING)=false；并发/紧随的另一次同步再把它
@@ -118,11 +123,31 @@ class KdbxAutoUploader @Inject constructor(
                 rounds++
                 VaultixLog.d(TAG) { "自动上传起跑：第 $rounds 轮" }
                 val result = coordinator.sync(vaultId, localChangedSinceLastSync = true)
-                // ★ 11-07：结果只记「可否继续」，不记类型名 / 令牌 / 内容。
-                //   配合 persist 的「已排队」与这里的「起跑」，能直接量出排队等待时长。
-                VaultixLog.d(TAG) { "第 $rounds 轮结束：可继续=${result.canContinueDraining()}" }
-                // 失败 / 冲突 / 远端有更新 / 无云端 ⇒ 收工：状态已由编排器记下，
-                // 用户能从角标看见，重试解决不了它们（要点 4）。
+                // ★ 2026-11-08：以前只记「可否继续」，把 Failed(reason) / Conflict 全吞了，
+                //    真机 72s 超时后日志里查不出任何原因。现在记结果类型与失败原因。
+                VaultixLog.d(TAG) {
+                    "第 $rounds 轮结果=${result.describe()}，可继续=${result.canContinueDraining()}"
+                }
+                if (result is KdbxSyncResult.Failed) {
+                    failures++
+                    if (failures > MAX_RETRIES || !hasWork(vaultId)) {
+                        VaultixLog.w(TAG) {
+                            "自动上传收工：连续失败 $failures 次，状态留在 FAILED 由角标提示"
+                        }
+                        break
+                    }
+                    // ⚠️ 退避在后台协程里等，界面一行都不等；测试可传零延迟避免真实等待。
+                    val waitMs = if (failures <= retryDelaysMs.size) {
+                        retryDelaysMs[failures - 1]
+                    } else {
+                        RETRY_DELAY_THIRD_MS
+                    }
+                    VaultixLog.d(TAG) { "后台重试：第 $failures 次，${waitMs}ms 后再推" }
+                    delay(waitMs)
+                    continue
+                }
+                failures = 0
+                // 冲突 / 远端有更新 / 无云端 ⇒ 收工：这些需要用户决策，重试解决不了。
                 if (!result.canContinueDraining()) break
             }
         }
@@ -143,15 +168,43 @@ class KdbxAutoUploader @Inject constructor(
 
         else -> false
     }
+
+    /** 结果类型 + 失败原因（只记原因的前一段，绝不把整条异常栈刷进 logcat）。 */
+    private fun KdbxSyncResult.describe(): String = when (this) {
+        is KdbxSyncResult.Uploaded -> "Uploaded"
+        is KdbxSyncResult.InSync -> "InSync"
+        is KdbxSyncResult.Downloaded -> "Downloaded"
+        is KdbxSyncResult.Conflict -> "Conflict"
+        is KdbxSyncResult.StaleBaseline -> "StaleBaseline"
+        is KdbxSyncResult.NeedsReload -> "NeedsReload"
+        is KdbxSyncResult.NoCloudSource -> "NoCloudSource"
+        is KdbxSyncResult.Failed -> "Failed(${reason.take(MAX_REASON_LENGTH)})"
+    }
 }
 
-/**
- * 一次 [KdbxAutoUploader.enqueue] 最多跑几轮上传。
- *
- * 取 3：正常情况 1 轮就收敛（状态回到 `IN_SYNC`），多出来的两轮只服务
- * "上传期间用户又改了"这种真竞态；再多就没有新信息了 —— 那说明写入方在持续改动，
- * 交给下一次保存去触发更合适，而不是让上传器一直转。
- */
 private const val TAG = "VaultixKdbxUpload"
 
-private const val MAX_ROUNDS = 3
+/**
+ * 一次 [KdbxAutoUploader.enqueue] 最多跑几轮 `sync`。
+ *
+ * 取 6：正常 1 轮就收敛；额外轮次服务两件事 —— 上传期间用户又改了一笔，
+ * 以及网络失败后的最多 [MAX_RETRIES] 次后台重试。再多就没有新信息了，
+ * 交给下一次保存去触发更合适，而不是让上传器一直转。
+ */
+private const val MAX_ROUNDS = 6
+
+/** 网络 / IO 失败后的后台重试次数上限（不含首次尝试）。 */
+private const val MAX_RETRIES = 3
+
+private const val RETRY_DELAY_FIRST_MS = 3_000L
+private const val RETRY_DELAY_SECOND_MS = 8_000L
+private const val RETRY_DELAY_THIRD_MS = 20_000L
+
+/** 退避：3s → 8s → 20s，全程在后台，用户无感。 */
+private val RETRY_DELAYS_MS = longArrayOf(
+    RETRY_DELAY_FIRST_MS,
+    RETRY_DELAY_SECOND_MS,
+    RETRY_DELAY_THIRD_MS,
+)
+
+private const val MAX_REASON_LENGTH = 120

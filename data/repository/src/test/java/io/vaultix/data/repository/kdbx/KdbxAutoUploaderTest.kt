@@ -25,7 +25,7 @@ import java.util.concurrent.atomic.AtomicReference
  *
  * "保存后自动上传"听起来是一行 `launch { sync() }`，但它有四个**看不见**
  * 却会咬人的性质：该不该触发（本地库不该）、会不会交叠（同一库要串行）、
- * 失败后会不会空转（不该重试）、以及不同库会不会被同一把锁堵住。
+ * 失败后会不会无限空转（只允许有限次后台重试）、以及不同库会不会被同一把锁堵住。
  * 这四条在真机上都要"碰巧遇到"才看得出来（离线 / 手快连点两下 / 改完立刻再改），
  * 单测把它们钉死在这里。
  *
@@ -80,23 +80,54 @@ class KdbxAutoUploaderTest {
         assertEquals(KdbxCloudSyncStatus.PENDING_UPLOAD.name, status.get())
     }
 
+    /**
+     * ★ 2026-11-08 真机：一次 72s 超时后状态停在 FAILED，而 `enqueue` 只在
+     * `persist` 里调用 ⇒ 用户必须再编辑一次或手动点同步才能把改动推上去。
+     * 现在失败后由上传器自己后台退避重试，但**有上限**：持续离线时
+     * 1 + [MAX_RETRIES_IN_TEST] 次后收工，不无限空转。
+     */
     @Test
-    fun `上传失败_不重试`() = runTest {
+    fun `上传失败_后台有限重试后收工`() = runTest {
         val status = statusOf(KdbxCloudSyncStatus.PENDING_UPLOAD)
         val dao = daoFor(CLOUD_ORIGIN, status)
         val coordinator = mockk<KdbxCloudSyncCoordinator> {
             // 11-07：drain 会问缓存脏标记；测试里没有真实缓存 ⇒ 恒 false。
             coEvery { hasCachedLocalEdits(any()) } returns false
             every { hasCloudSource(CLOUD_ORIGIN) } returns true
-            // 离线：每一轮都失败，且状态**保持** PENDING ⇒ 若实现会重试，就会跑满 MAX_ROUNDS 次。
             coEvery { sync(VAULT_ID, true) } returns KdbxSyncResult.Failed("离线")
         }
+        val uploader = KdbxAutoUploader(dao, coordinator)
 
-        KdbxAutoUploader(dao, coordinator).enqueue(VAULT_ID).join()
+        // ⚠️ 直接调 drain 并传零延迟：enqueue 用的是应用级 Dispatchers.IO，
+        //    runTest 的虚拟时间管不到它，真实退避会让这条用例跑 31 秒。
+        uploader.drain(VAULT_ID, noDelayRetries())
 
-        // ⚠️ 期望 1 次而不是 3 次：离线时重试没有意义（只会白烧电量与请求配额），
-        //    状态留在 FAILED 上、用户看得见就够了（详见 KdbxAutoUploader 要点 4）。
-        coVerify(exactly = 1) { coordinator.sync(VAULT_ID, true) }
+        coVerify(exactly = 1 + MAX_RETRIES_IN_TEST) { coordinator.sync(VAULT_ID, true) }
+    }
+
+    /** 偶发网络失败（真机 20:23 那次）应当自己重试到成功，不用用户手动点同步。 */
+    @Test
+    fun `偶发上传失败_后台重试后自动成功`() = runTest {
+        val status = statusOf(KdbxCloudSyncStatus.PENDING_UPLOAD)
+        val dao = daoFor(CLOUD_ORIGIN, status)
+        val attempts = AtomicInteger(0)
+        val coordinator = mockk<KdbxCloudSyncCoordinator> {
+            coEvery { hasCachedLocalEdits(any()) } returns false
+            every { hasCloudSource(CLOUD_ORIGIN) } returns true
+            coEvery { sync(VAULT_ID, true) } coAnswers {
+                if (attempts.incrementAndGet() < SUCCESS_ON_ATTEMPT) {
+                    KdbxSyncResult.Failed("超时")
+                } else {
+                    status.set(KdbxCloudSyncStatus.IN_SYNC.name)
+                    KdbxSyncResult.Uploaded("v2")
+                }
+            }
+        }
+
+        KdbxAutoUploader(dao, coordinator).drain(VAULT_ID, noDelayRetries())
+
+        assertEquals("失败两次后第三次应成功收敛", SUCCESS_ON_ATTEMPT, attempts.get())
+        assertEquals(KdbxCloudSyncStatus.IN_SYNC.name, status.get())
     }
 
     @Test
@@ -282,5 +313,17 @@ class KdbxAutoUploaderTest {
         const val CLOUD_ORIGIN = "onedrive:acc:/vault.kdbx"
         const val SAF_ORIGIN = "content://com.android.providers.downloads.documents/document/1"
         const val SYNC_DURATION_MS = 50L
+
+        /** 与生产 `MAX_RETRIES` 对齐：1 次首试 + 3 次后台重试。 */
+        const val MAX_RETRIES_IN_TEST = 3
+        const val SUCCESS_ON_ATTEMPT = 3
+        const val ZERO_DELAY_MS = 0L
+
+        /** 测试里把退避压成 0，避免 enqueue 的应用级 IO scope 真的等 31 秒。 */
+        fun noDelayRetries(): LongArray = longArrayOf(
+            ZERO_DELAY_MS,
+            ZERO_DELAY_MS,
+            ZERO_DELAY_MS,
+        )
     }
 }

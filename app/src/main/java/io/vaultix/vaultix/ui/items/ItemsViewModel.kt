@@ -25,7 +25,6 @@ import io.vaultix.model.VaultSummary
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.ItemFilter
 import io.vaultix.vaultix.ui.common.SyncStatusDot
-import io.vaultix.vaultix.ui.common.isSyncUploading
 import io.vaultix.vaultix.ui.common.resolveSyncDot
 import io.vaultix.vaultix.session.ActiveVaultStore
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -103,8 +102,6 @@ class ItemsViewModel @Inject constructor(
         data class Success(val cipherCount: Int) : SyncNote
         data object Skipped : SyncNote
         data object InProgress : SyncNote
-        /** 库级上传中（**仅 KDBX**）：列表页也要看得见，不等详情页的状态通知。 */
-        data object Uploading : SyncNote
         data class Warning(val message: String) : SyncNote
         /**
          * KDBX 手动同步的一次性结果。
@@ -199,22 +196,17 @@ class ItemsViewModel @Inject constructor(
                 .collect { states -> _state.update { it.copy(syncStates = states) } }
         }
         // 同步状态 → 页内提示条（Bastion 语义：静默结果不打扰）。
-        // ⚠️ 2026-11-08 三源按优先级合成，补上 KDBX 保存后 / 手动同步期间的反馈空窗：
-        //   ① 手动同步的一次性结果 ② KDBX 库级上传态 ③ Bitwarden 编排器。
-        //   `observeVaults()` 是库级状态的唯一真源；`isSyncUploading` 与详情页共用判据。
+        // ★ 2026-11-08：后台自动上传**不再挂横幅**。它以前由库级 syncStatus 派生，
+        //    会一直显示「正在上传改动到云端…」直到 30~70s 的网络请求结束，
+        //    用户因此觉得「删除还没完成、要等」。现在本地落缓存即算完成
+        //    （写动作的 Snackbar 已经提示），上传状态只由 ⋮ 状态点 / 详情页角标表达。
         viewModelScope.launch {
             combine(
                 vaultIdState,
-                vaultRepository.observeVaults(),
                 syncOrchestrator.statusByVault,
                 _manualSyncNote,
-            ) { id, vaults, statuses, manual ->
-                val uploadStatus = vaults.firstOrNull { v -> v.id == id }?.syncStatus
-                when {
-                    manual != null -> manual
-                    isSyncUploading(uploadStatus) -> SyncNote.Uploading
-                    else -> toSyncNote(statuses[id])
-                }
+            ) { id, statuses, manual ->
+                manual ?: toSyncNote(statuses[id])
             }.collect { note -> _state.update { it.copy(syncNote = note) } }
         }
         // 同步状态 → ⋮ 菜单的四色状态点。
@@ -242,18 +234,17 @@ class ItemsViewModel @Inject constructor(
         .flatMapLatest { id -> organizationRepository.observeOrganizations(id) }
         .stateIn(scope = viewModelScope, started = SharingStarted.Eagerly, initialValue = emptyList())
 
-    /** 同步进行中（下拉刷新指示器用）：Bitwarden 编排器 ∪ KDBX 手动同步 ∪ KDBX 库级上传。 */
+    /** 同步进行中（下拉刷新指示器用）：Bitwarden 编排器 ∪ KDBX 手动同步。 */
     val isSyncing: StateFlow<Boolean> =
         combine(
             vaultIdState,
-            vaultRepository.observeVaults(),
             syncOrchestrator.statusByVault,
             _kdbxManualRunning,
-        ) { id, vaults, statuses, kdbxRunning ->
-            // ★ 11-08：整文件上传 5–60s，此前既不在 Bitwarden 编排器状态里，
-            //    也不算"手动同步"⇒ 下拉刷新全程转不起来，用户以为点了没反应。
-            val uploadStatus = vaults.firstOrNull { v -> v.id == id }?.syncStatus
-            statuses[id]?.isRunning == true || kdbxRunning || isSyncUploading(uploadStatus)
+        ) { id, statuses, kdbxRunning ->
+            // ★ 2026-11-08：把「库级后台上传」从指示器里拿掉 —— 它是 30~70s 的
+            //    网络请求，让下拉刷新一直转只会把「本地已完成」误报成「还在等」。
+            //    后台上传由角标表达；只有用户主动同步 / Bitwarden 编排器才转指示器。
+            statuses[id]?.isRunning == true || kdbxRunning
         }.stateIn(
             scope = viewModelScope,
             started = SharingStarted.Eagerly,

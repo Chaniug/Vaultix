@@ -1755,9 +1755,11 @@ private val ItemsViewModel.SyncNote.isWarningLike: Boolean
 /**
  * 同步状态提示条：进行中 = 细进度条；成功/跳过 = 短暂提示后自动消失；警告 = 常驻到下次同步。
  *
- * ⚠️ 2026-11-08 补两类 KDBX 专用态：[ItemsViewModel.SyncNote.Uploading] 是**库级上传**
- * （保存落盘后那 5–60s 的空窗），[ItemsViewModel.SyncNote.Notice] 是手动同步的一次性结果。
- * 此前本横幅只跟 Bitwarden 编排器走，KDBX 全程不出 ⇒ 用户以为「点了没反应」。
+ * 手动同步的一次性结果走 [ItemsViewModel.SyncNote.Notice]；Bitwarden 编排器走其余态。
+ *
+ * ★ 2026-11-08：库级**后台上传故意不进横幅** —— 那是 30~70s 的网络请求，
+ *   挂一条常驻横幅会让用户把「本地已保存」误读成「删除还在卡着」。
+ *   上传状态由 ⋮ 状态点与详情页角标表达，失败时角标给重试入口。
  */
 @Composable
 private fun SyncNoteBanner(
@@ -1802,7 +1804,6 @@ private fun SyncNoteBanner(
                     )
                 }
             }
-            ItemsViewModel.SyncNote.Uploading -> SyncUploadingRow()
             is ItemsViewModel.SyncNote.Notice -> SyncNoticeRow(note, onRetry)
             is ItemsViewModel.SyncNote.Warning -> {
                 Row(
@@ -1865,24 +1866,6 @@ private fun SyncNoteBanner(
                 }
             }
         }
-    }
-}
-
-/** KDBX 库级上传态：变形圆点 + 一句「正在上传」，补上保存落盘后那几秒的反馈空窗。 */
-@Composable
-private fun SyncUploadingRow() {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.padding(horizontal = Spacing.lg, vertical = UiSize.TightGap),
-    ) {
-        // 变形圆点比 3dp 直线显眼，且与详情页 DetailSyncIndicator 是同一枚组件。
-        VaultixMorphingProgress(indicatorSize = 32.dp)
-        Text(
-            text = stringResource(R.string.items_sync_uploading),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(start = Spacing.sm),
-        )
     }
 }
 
