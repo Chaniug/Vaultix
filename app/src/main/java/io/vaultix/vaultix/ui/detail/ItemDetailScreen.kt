@@ -100,6 +100,9 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.CreditCard
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.filled.Notes
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Tune
@@ -180,6 +183,15 @@ private fun detailEventMessage(context: Context, event: ItemDetailViewModel.UiEv
 private const val MAX_MASK_LENGTH = 24
 
 /**
+ * 「还不知道有没有这条」时的转圈延迟（2026-11-09）。
+ *
+ * 取 120ms：低于此值的读取**根本不显示加载态**（人眼对 <100ms 的空白感知为"直接出现"，
+ * 而对一闪而过的 spinner 反而会注意到"刚才卡了一下"）。条目首帧来自 Room 内存缓存，
+ * 绝大多数情况在 50ms 内就到 —— 所以正常情况下这个 spinner 一次都不会出现。
+ */
+private const val DETAIL_PROGRESS_DELAY_MS = 120L
+
+/**
  * 详情页头部站点图标尺寸。
  *
  * 2026-09-16：48dp → **56dp**。头部是整页唯一的"视觉锚点"，而详情页下方全是
@@ -246,10 +258,27 @@ private fun DetailBodyContent(
     scrollState: ScrollState,
     actions: DetailActions,
 ) {
+    // ★ 2026-11-09：转圈**延迟 [DETAIL_PROGRESS_DELAY_MS] 再画**。
+    //   用户反馈「点击条目的时候，会有一帧的圈形加载才进条目详情」——
+    //   条目数据来自 Room 的内存缓存，通常几十毫秒就到；立刻画圈等于给一次
+    //   几乎瞬间完成的读取配了一个"正在加载"的闪帧。
+    //   ⇒ 120ms 内到达 ⇒ 转圈**从未出现**；真慢（冷读盘 / 大库）才显示，
+    //     那时用户确实需要知道在等。这是"防闪烁"的常规做法，不是掩盖慢。
+    //   ⚠️ `LaunchedEffect` 在数据到达时会重启（key 含 item）⇒ 自动走 else 分支清掉。
+    var showProgress by remember { mutableStateOf(false) }
+    LaunchedEffect(loading, item) {
+        if (loading && item == null) {
+            delay(DETAIL_PROGRESS_DELAY_MS)
+            showProgress = true
+        } else {
+            showProgress = false
+        }
+    }
     Box(modifier = modifier) {
         when {
-            // 加载中：画转圈而不是"不存在"（见本函数 KDoc）。
-            loading && item == null -> VaultixWavyProgress(modifier = Modifier.align(Alignment.Center))
+            // 加载中：画转圈而不是"不存在"（见本函数 KDoc），但只在真的慢时。
+            showProgress && item == null ->
+                VaultixWavyProgress(modifier = Modifier.align(Alignment.Center))
             // ★ 点删除后**立刻清空内容**：本地写回只有百毫秒，页面不该继续显示
             //    旧条目让人读成「点了没反应」；更绝不闪「条目不存在或已被删除」。
             deleting -> Unit
@@ -347,12 +376,10 @@ private fun DetailSections(
         // 历史与附件放在备注之后、时间之前：都是"这条目还带了什么"的延伸信息，
         // 但比创建/修改时间更值得被看到（时间放最后的理由见下方 2026-09-30 注释）。
         HistoryAndAttachments(item = item, actions = actions)
-        // 时间放**最后**（2026-09-30 用户要求）：它是"核对条目"时的次要信息，
-        // 每次打开都看得到但不需要第一眼看到；放最前面会把登录字段挤下去。
-        if (item.createdAt != null || item.updatedAt != null) {
-            Spacer(Modifier.height(Spacing.md))
-            TimestampsSection(createdAt = item.createdAt, updatedAt = item.updatedAt)
-        }
+        // 时间放**最后**（2026-09-30 用户要求），且于 2026-11-09 **降级成一行小字**：
+        // 它是"核对条目"时的次要信息，不该占一张卡片和一个分区标题的重量 ——
+        // 用户原话「不用这么显眼，把这个位置留给更加需要展示的内容」。
+        TimestampsFooter(createdAt = item.createdAt, updatedAt = item.updatedAt)
         Spacer(Modifier.height(Spacing.xl))
     }
 }
@@ -729,9 +756,19 @@ private fun LoginSection(
 }
 
 /**
- * 「记录」分区：条目的**创建时间 / 最近修改时间**（2026-09-30 用户要求）。
+ * 页脚时间戳：**创建于 X · 修改于 Y**（2026-11-09 从「分区卡片」降级）。
  *
- * ## 为什么两行都可以**不显示**（而不是兜一个默认值）
+ * ## 为什么不再是卡片
+ *
+ * 它原先是一整张 `DetailCard` + 一个 `SectionTitle`（History 图标 + 「记录」），
+ * 视觉重量和「网址」「备注」完全一样 —— 而它是整页**信息价值最低**的内容：
+ * 核对条目时偶尔瞄一眼，日常打开根本不看。
+ * 用户原话：「记录条目的创建时间与修改时间的内容，是否不用这么显眼，
+ * 把这个位置留给更加需要展示的内容呢」。
+ * ⇒ 降到 `labelSmall` + `onSurfaceVariant` 的一行小字，不加卡片、不给分区标题。
+ *   位置仍在**最底部**（2026-09-30 的结论不变），只是不再抢视觉。
+ *
+ * ## 为什么两段都可以**不显示**（而不是兜一个默认值）
  *
  * null 的含义是「**这个来源没给**」—— 领域模型里两个字段都可空，来源有三类：
  * - KDBX：老库 / 第三方工具写的条目可能没有 `<CreationTime>`；
@@ -742,51 +779,34 @@ private fun LoginSection(
  *   用户会据此判断"这条是不是我昨天改的"。**宁可少一行，不给假信息**。
  *   （与「空有三态」同一条纪律：把"不知道"说成"某个值"就是塌缩。）
  *
- * ## 为什么两行都不给「复制」按钮
- *
- * 页面里别的字段行都有复制 —— 但复制一个时间戳没有实际用途，
- * 为一致性硬加一个按钮反而让人以为"这里能复制出什么有用的东西"。
+ * ⚠️ 不给「复制」按钮：复制一个时间戳没有实际用途，为一致性硬加一个
+ *    反而让人以为"这里能复制出什么有用的东西"。
  */
 @Composable
-private fun TimestampsSection(createdAt: Long?, updatedAt: Long?) {
-    Column {
-        SectionTitle(text = stringResource(R.string.section_timestamps), icon = Icons.Filled.History)
-        DetailCard {
-            Column {
-                if (createdAt != null) {
-                    TimestampRow(label = stringResource(R.string.item_field_created_at), epochMillis = createdAt)
-                }
-                if (createdAt != null && updatedAt != null) {
-                    HorizontalDivider(
-                        modifier = Modifier.padding(start = Spacing.lg),
-                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
-                    )
-                }
-                if (updatedAt != null) {
-                    TimestampRow(label = stringResource(R.string.item_field_updated_at), epochMillis = updatedAt)
-                }
-            }
-        }
+private fun TimestampsFooter(createdAt: Long?, updatedAt: Long?) {
+    // 格式化只与时间戳本身有关 ⇒ 各记一次，滚动重组时不必重算。
+    val createdText = remember(createdAt) { createdAt?.let { formatTimestamp(it) } }
+    val updatedText = remember(updatedAt) { updatedAt?.let { formatTimestamp(it) } }
+    val created = if (createdText != null) {
+        stringResource(R.string.detail_created_on, createdText)
+    } else {
+        null
     }
-}
-
-/** 时间行：与 [DetailFieldRow] 同款竖排两行式（标签在上、值在下），只是没有复制动作。 */
-@Composable
-private fun TimestampRow(label: String, epochMillis: Long) {
-    // 格式化结果只与这个时间戳有关 ⇒ 记一次即可，别每次重组都算（滚动时重组很频繁）。
-    val formatted = remember(epochMillis) { formatTimestamp(epochMillis) }
-    Column(
+    val updated = if (updatedText != null) {
+        stringResource(R.string.detail_updated_on, updatedText)
+    } else {
+        null
+    }
+    val line = listOfNotNull(created, updated).joinToString(" · ")
+    if (line.isEmpty()) return
+    Text(
+        text = line,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Text(text = formatted, style = MaterialTheme.typography.bodyLarge)
-    }
+    )
 }
 
 /**
@@ -881,14 +901,36 @@ private fun DetailFieldRow(
     }
 }
 
+/** 折叠态下默认显示几条网址（2026-11-09）。 */
+private const val URIS_VISIBLE_COLLAPSED = 3
+
+/**
+ * 网址分区（2026-11-09 加折叠）。
+ *
+ * ## 为什么折叠
+ *
+ * 用户反馈「某一个条目写了很多的网址，全部铺开一屏都装不下」。此前是
+ * `item.uris.forEachIndexed` 无条件全列，10 条网址 ≈ 10 × 56dp，直接把
+ * 2FA / 备注挤到两屏之外 —— 而那些才是"打开条目要办事"时真正要看的。
+ *
+ * ⇒ **渐进披露**：默认只列前 [URIS_VISIBLE_COLLAPSED] 条（绝大多数条目
+ *   1~2 条，不受影响），多余的收进一行「另外 N 个网址」。展开状态用
+ *   `rememberSaveable` 保持 —— 转屏 / 切出去再回来不会又缩回去。
+ *
+ * ⚠️ 不按域名去重、不排序：顺序是用户自己排的（第一条是"主站"），
+ *    自作主张重排会让"上次点的那个"找不到。
+ */
 @Composable
 private fun UrisSection(item: VaultItem, onCopyUri: (String) -> Unit) {
     val context = LocalContext.current
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    val visible = if (expanded) item.uris else item.uris.take(URIS_VISIBLE_COLLAPSED)
+    val hidden = item.uris.size - visible.size
     Column {
         SectionTitle(text = stringResource(R.string.section_uris), icon = Icons.Filled.Language)
         DetailCard {
             Column {
-                item.uris.forEachIndexed { index, v ->
+                visible.forEachIndexed { index, v ->
                     if (index > 0) {
                         HorizontalDivider(
                             modifier = Modifier.padding(start = Spacing.lg),
@@ -914,8 +956,54 @@ private fun UrisSection(item: VaultItem, onCopyUri: (String) -> Unit) {
                         },
                     )
                 }
+                // 只有真的藏了东西（或正在展开）才画这一行：1~3 条的条目
+                // 不该多出一个"收起"按钮。
+                if (hidden > 0 || expanded) {
+                    HorizontalDivider(
+                        modifier = Modifier.padding(start = Spacing.lg),
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                    )
+                    UriExpandRow(
+                        hidden = hidden,
+                        expanded = expanded,
+                        onToggle = { expanded = !expanded },
+                    )
+                }
             }
         }
+    }
+}
+
+/**
+ * 「另外 N 个网址 / 收起」行。
+ *
+ * ⚠️ 整行可点（`clickable`），不是只有文字可点：行高按 48dp 触摸目标给，
+ *    手指落在空白处也算 —— 这是"展开更多"这种低风险动作该有的宽容度。
+ */
+@Composable
+private fun UriExpandRow(hidden: Int, expanded: Boolean, onToggle: () -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onToggle)
+            .padding(horizontal = Spacing.lg, vertical = Spacing.md),
+    ) {
+        Text(
+            text = if (expanded) {
+                stringResource(R.string.detail_uris_collapse)
+            } else {
+                stringResource(R.string.detail_uris_expand, hidden)
+            },
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.weight(1f),
+        )
+        Icon(
+            imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+        )
     }
 }
 

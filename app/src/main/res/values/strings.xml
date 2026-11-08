@@ -1153,9 +1153,16 @@
     <string name="section_notes">备注</string>
     <!-- 条目时间（2026-09-30 用户要求）：两个库都能给（Bitwarden 的 creationDate/revisionDate；
          KDBX 的 <Times>），此前只是领域模型没接。⚠️ 取不到时**不显示该行**，不要兜默认值。 -->
-    <string name="section_timestamps">记录</string>
-    <string name="item_field_created_at">创建时间</string>
-    <string name="item_field_updated_at">最近修改</string>
+    <!-- ★ 2026-11-09：时间戳从「分区卡片」降级成页脚一行小字 —— 字段保留（仍然可核对），
+         但不再占一张卡片 + 一个分区标题的视觉重量。
+         ⚠️ 原 `section_timestamps`（记录）/ `item_field_created_at` / `item_field_updated_at`
+            已于同日删除：降级后没有调用点，留着是死资源。要恢复"记录"分区时
+            从 git 历史里取，别就着这两个新句子硬拼。 -->
+    <string name="detail_created_on">创建于 %1$s</string>
+    <string name="detail_updated_on">修改于 %1$s</string>
+    <!-- ★ 2026-11-09：网址超过 3 条时折叠，展开行说"还剩多少"，收起说"收起"。 -->
+    <string name="detail_uris_expand">另外 %1$d 个网址</string>
+    <string name="detail_uris_collapse">收起</string>
     <string name="copy_username">已复制用户名</string>
     <string name="copy_username_clears">已复制用户名（%1$d 秒后自动清除）</string>
     <string name="copy_password">已复制密码</string>
