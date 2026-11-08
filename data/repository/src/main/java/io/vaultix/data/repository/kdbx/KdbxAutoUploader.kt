@@ -128,15 +128,13 @@ class KdbxAutoUploader @Inject constructor(
                 VaultixLog.d(TAG) {
                     "第 $rounds 轮结果=${result.describe()}，可继续=${result.canContinueDraining()}"
                 }
-                if (result is KdbxSyncResult.Failed) {
-                    failures++
-                    if (failures > MAX_RETRIES || !hasWork(vaultId)) {
-                        VaultixLog.w(TAG) {
-                            "自动上传收工：连续失败 $failures 次，状态留在 FAILED 由角标提示"
-                        }
-                        break
-                    }
-                    // ⚠️ 退避在后台协程里等，界面一行都不等；测试可传零延迟避免真实等待。
+                val failed = result is KdbxSyncResult.Failed
+                failures = if (failed) failures + 1 else 0
+                // ⚠️ 循环里只允许一个 break（detekt LoopWithTooManyJumpStatements）：
+                //    把「要不要再试一轮」算成布尔，最后统一决定收工。
+                val retry = failed && failures <= MAX_RETRIES && hasWork(vaultId)
+                if (retry) {
+                    // 退避在后台协程里等，界面一行都不等；测试可传零延迟避免真实等待。
                     val waitMs = if (failures <= retryDelaysMs.size) {
                         retryDelaysMs[failures - 1]
                     } else {
@@ -144,11 +142,14 @@ class KdbxAutoUploader @Inject constructor(
                     }
                     VaultixLog.d(TAG) { "后台重试：第 $failures 次，${waitMs}ms 后再推" }
                     delay(waitMs)
-                    continue
                 }
-                failures = 0
-                // 冲突 / 远端有更新 / 无云端 ⇒ 收工：这些需要用户决策，重试解决不了。
-                if (!result.canContinueDraining()) break
+                // 冲突 / 远端有更新 / 重试到上限 ⇒ 收工：这些需要用户决策，重试解决不了。
+                if (!retry && !result.canContinueDraining()) {
+                    VaultixLog.w(TAG) {
+                        "自动上传收工：${result.describe()}，连续失败 $failures 次"
+                    }
+                    break
+                }
             }
         }
     }
