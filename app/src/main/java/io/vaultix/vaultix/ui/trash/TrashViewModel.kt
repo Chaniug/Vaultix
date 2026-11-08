@@ -58,8 +58,17 @@ class TrashViewModel @Inject constructor(
         data class Failed(val message: String?) : UiEvent
     }
 
-    /** busy = 恢复/永久删除请求进行中（行按钮禁用防连点）。 */
-    data class UiState(val busy: Boolean = false)
+    /**
+     * busy = 有恢复/永久删除请求进行中（全局防连点）；
+     * [activeItemId] = **正在操作的那一行**。
+     *
+     * ★ 2026-11-08 真机：以前只把 `busy` 传给每一行，点一条恢复时整页按钮
+     *    一起变灰，看起来像"所有条目都在恢复"。现在只让被点的那行禁用。
+     */
+    data class UiState(
+        val busy: Boolean = false,
+        val activeItemId: String? = null,
+    )
 
     /**
      * 行 UI 模型：[remainingDays] 为 null 表示未启用自动清理
@@ -114,20 +123,20 @@ class TrashViewModel @Inject constructor(
 
     fun restore(itemId: String) {
         if (_state.value.busy) return
-        _state.update { it.copy(busy = true) }
+        _state.update { it.copy(busy = true, activeItemId = itemId) }
         viewModelScope.launch {
             val result = itemRepository.restoreItem(vaultId, itemId)
-            _state.update { it.copy(busy = false) }
+            _state.update { it.copy(busy = false, activeItemId = null) }
             sendOutcome(result) { synced -> UiEvent.Restored(synced) }
         }
     }
 
     fun deleteForever(itemId: String) {
         if (_state.value.busy) return
-        _state.update { it.copy(busy = true) }
+        _state.update { it.copy(busy = true, activeItemId = itemId) }
         viewModelScope.launch {
             val result = itemRepository.permanentDeleteItem(vaultId, itemId)
-            _state.update { it.copy(busy = false) }
+            _state.update { it.copy(busy = false, activeItemId = null) }
             sendOutcome(result) { synced -> UiEvent.DeletedForever(synced) }
         }
     }

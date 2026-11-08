@@ -129,7 +129,8 @@ fun TrashScreen(
                     items(trashRows, key = { it.item.id }) { row ->
                         TrashRow(
                             row = row,
-                            busy = state.busy,
+                            // 只让被操作的那一行禁用按钮，别把整页一起变灰。
+                            busy = state.busy && state.activeItemId == row.item.id,
                             onRestore = { viewModel.restore(row.item.id) },
                             onDeleteForever = { pendingForeverDelete = row.item.id },
                         )

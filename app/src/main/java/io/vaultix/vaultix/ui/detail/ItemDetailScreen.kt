@@ -108,8 +108,6 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import io.vaultix.vaultix.ui.common.Capability
 import io.vaultix.vaultix.ui.common.CapabilityIcon
 import io.vaultix.model.KdbxCloudSyncStatus
-import io.vaultix.vaultix.ui.common.DetailSyncProgress
-import io.vaultix.vaultix.ui.common.isSyncUploading
 import io.vaultix.vaultix.ui.common.DetailSyncIndicator
 import io.vaultix.vaultix.ui.common.capabilityTint
 import androidx.compose.foundation.ScrollState
@@ -236,7 +234,7 @@ private fun DetailBodyContent(
      * 完成后立刻发 `UiEvent.Deleted` 返回列表。以前这里把整页换成 WavyProgress，
      * 反而把「本地已经删完了」做成一段看得见的等待；且 bump 后条目流变 null，
      * 会先闪一帧「条目不存在或已被删除」再返回，观感更差。
-     * ⇒ 删除期间保持内容，条目流变空时静默等导航，不做任何遮挡。
+     * ⇒ 点删除后立刻清空内容（视觉上立即生效），静默等导航返回，不做任何遮挡。
      */
     deleting: Boolean,
     /** 条目流是否已发射过（false = 还不知道有没有这条，见 `ItemDetailViewModel.UiState.itemLoaded`）。 */
@@ -252,8 +250,9 @@ private fun DetailBodyContent(
         when {
             // 加载中：画转圈而不是"不存在"（见本函数 KDoc）。
             loading && item == null -> VaultixWavyProgress(modifier = Modifier.align(Alignment.Center))
-            // ★ 删除已生效、条目流变空：静默等导航返回，绝不闪「条目不存在或已被删除」。
-            deleting && item == null -> Unit
+            // ★ 点删除后**立刻清空内容**：本地写回只有百毫秒，页面不该继续显示
+            //    旧条目让人读成「点了没反应」；更绝不闪「条目不存在或已被删除」。
+            deleting -> Unit
             item == null -> Text(
                 text = stringResource(R.string.detail_missing),
                 style = MaterialTheme.typography.bodyMedium,
@@ -424,10 +423,9 @@ private fun DetailHeader(
                 //    通行密钥」同一基线对齐（用户：推到最右太远、不好看）。
                 DetailSyncIndicator(status = syncStatus)
             }
-            if (isSyncUploading(syncStatus)) {
-                Spacer(Modifier.height(Spacing.xs))
-                DetailSyncProgress()
-            }
+            // ★ 2026-11-08：上传进度条不该挂在详情页。上传是后台行为，
+            //    角标（DetailSyncIndicator）足以表达状态；画一条进度条会把
+            //    「本地已经完成」读成「页面还在等同步」。
         }
     }
 }

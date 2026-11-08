@@ -22,6 +22,7 @@ import io.vaultix.vaultix.ui.common.isSyncUploading
 import io.vaultix.vaultix.util.SensitiveCache
 import io.vaultix.vaultix.util.VaultixClipboard
 import java.io.File
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -31,6 +32,7 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
 /**
@@ -376,15 +378,15 @@ class ItemDetailViewModel @Inject constructor(
             val outcome = itemRepository.softDeleteItem(vaultId, itemId)
             outcome.fold(
                 onSuccess = {
+                    // ★ 先把返回事件投出去，别把导航压在附件明文清理后面。
+                    //    deleting 保持 true，页面不会闪「条目不存在或已被删除」。
+                    _events.trySend(UiEvent.Deleted)
                     // ★ 条目删了就把它解密出来的附件明文一起清掉（#193）。
-                    //   挂在"删除成功之后"而不是之前：删除可能失败（KDBX 写回冲突等），
-                    //   失败时条目还在，缓存还得继续用。
-                    runCatching {
-                        sensitiveCache.invalidateFor(itemId)
+                    //    挂在"删除成功之后"而不是之前：删除可能失败，缓存还得继续用。
+                    //    NonCancellable：页面返回会取消 viewModelScope，但明文必须清干净。
+                    withContext(NonCancellable) {
+                        runCatching { sensitiveCache.invalidateFor(itemId) }
                     }
-                    // ⚠️ 成功路径**不解除 deleting**：页面马上随 Deleted 事件返回。
-                    //    提前置 false 会让已空的条目流闪一帧「条目不存在或已被删除」。
-                    _events.send(UiEvent.Deleted)
                 },
                 onFailure = { error ->
                     // 只有失败才解除，让用户能留在页面重试。
