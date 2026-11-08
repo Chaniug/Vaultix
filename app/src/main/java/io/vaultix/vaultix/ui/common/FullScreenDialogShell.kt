@@ -36,14 +36,10 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.BottomAppBarDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -88,7 +84,8 @@ import io.vaultix.vaultix.ui.theme.Spacing
  *
  * ## 布局契约（三个区域）
  *
- * - **顶部** [TitleBar]：标题 + 关闭（关闭 = 取消，语义与「返回」一致）。满宽、常驻不隐藏。
+ * - **顶部** [TitleBar]：仅标题（2026-11-08 起不再画 ✕；关闭交给系统返回 / 点外部 /
+ *   底栏「取消」，三条路径都走 [onDismiss]）。满宽、常驻不隐藏。
  * - **中部**：`weight(1f)` + `verticalScroll` —— 表单再长也不会把按钮顶出屏幕，
  *   且 `imePadding()` 在壳上统一处理，键盘弹出时输入框不会被遮；
  *   **两侧让位由 [contentClearance] 按实测 insets 算出**，正文首/末元素因此不会钻到栏底下。
@@ -143,7 +140,7 @@ import io.vaultix.vaultix.ui.theme.Spacing
  * - 试图用 `Modifier.blur` 做保护层 ⟹ minSdk 26 上 API 31- 是 no-op、离屏渲染掉帧、OLED 下模糊纯黑仍是纯黑。
  *
  * @param title 顶栏标题。
- * @param onDismiss 关闭（顶部 ✕ / 系统返回 / 点外部）——调用方需自行处理「保存中不许关」。
+ * @param onDismiss 关闭（系统返回 / 点外部 / 底栏「取消」）——调用方需自行处理「保存中不许关」。
  * @param onConfirm 底部主操作；[confirmEnabled] 为 `false` 时置灰（例如保存中）。
  * @param confirmLabel 底部主操作文案。
  * @param confirmEnabled 主操作是否可用。
@@ -160,8 +157,9 @@ import io.vaultix.vaultix.ui.theme.Spacing
  *
  * ## 2026-11-05：为什么这道闸门要放在**调用点**而不是壳里
  *
- * [FullScreenDialogShell] 的 `onDismiss` 同时服务顶部 ✕、系统返回、点外部和底部「取消」，
- * 四条路径此前全部直通 —— 填了一屏字段后按返回，输入立即消失。
+ * [FullScreenDialogShell] 的 `onDismiss` 同时服务系统返回、点外部和底部「取消」
+ * （2026-11-08 前另有顶部 ✕，共四条），这些路径此前全部直通 —— 填了一屏字段后按
+ * 返回，输入立即消失。✕ 移除后闸门逻辑不变：三条路径仍共用这一个 `onDismiss`。
  * 但壳**不知道表单有没有被改过**（参数已有 7 个，正卡在 detekt `LongParameterList`
  * 的上限，不能再加一个 `dirty`）。⇒ 由两个调用点各自判脏、共用这一个确认框。
  *
@@ -441,7 +439,6 @@ fun FullScreenDialogShell(
 
                 TitleBar(
                     title = title,
-                    onDismiss = onDismiss,
                     statusBarInset = statusBar,
                     backgroundAlpha = barAlpha,
                 )
@@ -485,7 +482,6 @@ fun FullScreenDialogShell(
 @Composable
 private fun BoxScope.TitleBar(
     title: String,
-    onDismiss: () -> Unit,
     statusBarInset: Dp,
     backgroundAlpha: Float,
 ) {
@@ -507,19 +503,15 @@ private fun BoxScope.TitleBar(
     ) {
         Row(
             modifier = Modifier
-                .fillMaxWidth(),
+                .fillMaxWidth()
+                // 2026-11-08 起顶部不再画 ✕（系统返回 / 点外部 / 底栏「取消」已覆盖）。
+                // 标题起点对齐正文卡片与底栏按钮的 24dp 边线，避免删掉 ✕ 后标题贴屏幕边。
+                .padding(horizontal = Spacing.xl),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(onClick = onDismiss) {
-                Icon(
-                    imageVector = Icons.Filled.Close,
-                    contentDescription = stringResource(R.string.action_cancel),
-                )
-            }
             Text(
                 text = title,
                 style = MaterialTheme.typography.titleLarge,
-                modifier = Modifier.padding(start = Spacing.sm),
             )
         }
     }
@@ -732,7 +724,15 @@ private val BUTTON_MIN_HEIGHT = 48.dp
 private val BAR_VERTICAL_PADDING = Spacing.xs
 
 /**
- * 顶部栏体高（**不含**状态栏内边距）= `IconButton` 48dp + [BAR_VERTICAL_PADDING] ×2 = **56dp**。
+ * 顶部栏体高（**不含**状态栏内边距）= [BUTTON_MIN_HEIGHT] 48dp + [BAR_VERTICAL_PADDING] ×2 = **56dp**。
+ *
+ * ⚠️ **2026-11-08 删掉顶部 ✕ 后，这个高度刻意保持不变**：原来 48dp 来自 `IconButton`
+ * 的触摸目标，现在顶栏只剩一行 [Text]，但 56dp 仍要保留，理由有三：
+ * ① 与底部 [ACTION_BAR_HEIGHT] 同档（一屏两套栏高 = `8.4` 说的观感廉价首要来源）；
+ * ② 它是 [contentClearance] 让位公式的入参，改了就会让正文首元素钻到栏底下
+ *    （第一轮那个"内容被遮住"的 bug）；
+ * ③ 标题在 [TitleBar] 的 `Row` 里靠 `verticalAlignment = CenterVertically` 居中，
+ *    56dp 给了它稳定的垂直节奏，不需要也不该缩到贴文字。
  *
  * ⚠️ 必须与 [TitleBar] 里 `Row` 的 `padding(vertical = BAR_VERTICAL_PADDING)` **严格对齐**：
  * 两处若不同步，正文让位就会偏，退化成第一轮那个"内容被遮住"的 bug。
