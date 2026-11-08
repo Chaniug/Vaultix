@@ -1,7 +1,7 @@
 # 06-界面与交互 · 第 7 篇（#162 ~ #183）
 
 > 主篇索引：[`06-界面与交互.md`](./06-界面与交互.md)（含计数规则与重号警告）
-> 本篇 5 章 · 16.5KB · 覆盖 #162 ~ #183
+> 本篇 6 章 · 28KB · 覆盖 #162 ~ #183、#249、#254
 
 ## 162. 🔴 Firefox Android：「能看到填充提示，但密码条目匹配不出来」（2026-10-04，用户真机日志定案）
 
@@ -246,3 +246,43 @@
   ③ **真正不存在的条目仍显示该文案**（语义未被削弱，只是不再被误用）。
 - **反向注意**：占位高度 220dp 是经验值，详情页头部若改版（图标 56dp 变大）要跟着调。
 
+
+## 254. 「未知」建出来了，但没在**条件里**用上 —— 切换库闪 1~3 帧品牌首启页（2026-11-09，载入 #84 / #249）
+
+- **现象**：点「切换密码库」（`onSwitchVault`）后，先闪 **1~3 帧**「连接 Bitwarden /
+  打开本地 KDBX 文件」的品牌首启页，然后才跳成库列表。两位库类型都复现，
+  因为是**落地页**的问题，与库类型无关。
+- **根因**：`VaultListViewModel.vaults` 类型 `StateFlow<List<VaultSummary>>`、
+  `initialValue = emptyList()`；`observeVaults()` 背后是 Room 的 `vaultDao.observeAll()`，
+  **首次发射必须过一次跨线程查询**（实测 15~40ms）。这段时间 `vaults.isEmpty()` 为真，
+  界面就把「查询还没回来」读成「一个库都没有」⇒ 整屏画空态。
+  「切换密码库」走 `navigateToRoot(VaultListRoute)`（`popUpTo(0) { inclusive = true }`），
+  每次都是全新 Composable，所以**每次都能稳定复现**（这也正是"1~3 帧"帧数稳定的原因）。
+- **这条是 #84 判据的第二次被违反**，而且形态更隐蔽：这次不是"忘了判 loading"，
+  而是**类型上根本没有"未知"这个值可用**——`List` 只有"有内容"和"空"两种取值，
+  想表达"还没来"只能靠额外的 `loading` 布尔，而那个布尔一旦没被加进 `when` 就重演 #249。
+- **修法**（把"未知"建进类型，而不是建在布尔上）：
+  1. `vaults` 改 `StateFlow<List<VaultSummary>?>`，`initialValue = null`。
+     `null` **只**表示"查询尚未返回"；`observeVaults()` 不发射 null ⇒ 一旦已知，永不再回未知。
+  2. `VaultListScreen` 把 `if / else` 改成三支 `when (val list = vaults)`：
+     `null -> Unit`（**什么都不画**，只剩顶栏）/ `emptyList() -> EmptyVaultState(...)` /
+     `else -> 列表`。`items(list, …)` 直接用 `val list`，`else` 支里 `list` 已非空。
+  3. FAB 条件 `vaults?.isNotEmpty() == true`：`null` 时列表版与空态版**两个都不画**。
+- **⚠️ 为什么不画转圈 / 骨架屏**：空窗只有 15~40ms（Room 内存缓存命中）。
+  在这个窗口里画任何东西，都会变成"闪一下**别的东西**"——从闪错内容换成闪 spinner，
+  人眼一样捕捉得到。**空白本身不误导，假空态才误导**。
+  若将来某天首查真的变慢（>200ms），正确做法是给占位**加延迟**（同 #249 的 120ms），
+  而不是现在就把 spinner 挂上去。
+- **⚠️ 为什么不接受「初值 emptyList + 界面加 loading 布尔」**：两个字段能组合出四种状态，
+  其中两种无意义（`loading=false && empty` 与 `loading=true && 非空`），
+  而**真正会出事的正是那个无意义的组合没人去断言**。可空类型只有两种取值，
+  `when` 用穷尽分支，编译器替你守门（同 8.11「多态压成二值开关」）。
+- **影响面**：`navigateToRoot(VaultListRoute)` 共两处（条目页 `onSwitchVault`、解锁页返回），
+  本修法对两者同时生效；`VaultListScreen` 的 `onSwitchVault` 形参签名 `() -> Unit` 未变。
+- **验证**：CI `42504265352`；真机待验 ① 切换库连点 5 次无品牌页闪帧；
+  ② 真的一个库都没有时（全新安装）品牌页**正常显示**且 FAB 不出现；
+  ③ 从条目页返回库列表不闪。
+- **同类形状未修（#84 已警告）**：`CardWalletScreen` 的 `cards`（`initialValue = emptyList()`
+  + `if (visibleCards.isEmpty()) EmptyState(...)`）、`ItemsScreen` 的
+  `if (visibleItems.isEmpty())`（约 818 行）。**这两处尚未复发，是因为它们的入口都还在主壳内、
+  ViewModel 存活**；一旦某天加了"清栈直达"的入口，就会原样闪一遍。
