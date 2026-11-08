@@ -55,6 +55,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -183,13 +184,26 @@ private fun detailEventMessage(context: Context, event: ItemDetailViewModel.UiEv
 private const val MAX_MASK_LENGTH = 24
 
 /**
- * 「还不知道有没有这条」时的转圈延迟（2026-11-09）。
+ * 「还不知道有没有这条」时的转圈延迟（2026-11-09 第二轮）。
  *
  * 取 120ms：低于此值的读取**根本不显示加载态**（人眼对 <100ms 的空白感知为"直接出现"，
  * 而对一闪而过的 spinner 反而会注意到"刚才卡了一下"）。条目首帧来自 Room 内存缓存，
  * 绝大多数情况在 50ms 内就到 —— 所以正常情况下这个 spinner 一次都不会出现。
+ *
+ * ⚠️ **延迟只许加在"转圈"上，不许加在"未知态"上**：未知态本身必须从**第 0 帧**起
+ * 就占住内容位（空白），否则页面就落进"确认不存在"分支 —— 那正是用户抓到的那帧
+ * 「此条目不存在或已删除」。见 [DetailUnknownPlaceholder] 的 KDoc。
  */
 private const val DETAIL_PROGRESS_DELAY_MS = 120L
+
+/**
+ * 未知态占位的高度下限（≈4 行正文）。
+ *
+ * 理由不是"好看"，而是**量级一致**：真实内容首帧立刻替换掉占位，占位若比内容矮
+ * 一截，就会出现一次「先缩后撑」的跳变；给一个不低于常见字段卡的高度，
+ * 60ms 内的替换在视觉上就是"内容直接出现"。
+ */
+private val DETAIL_UNKNOWN_MIN_HEIGHT = 220.dp
 
 /**
  * 详情页头部站点图标尺寸。
@@ -230,17 +244,36 @@ private class DetailActions(
 )
 
 /**
- * 详情内容区：忙碌转圈 / 缺失提示 / 分区卡片（独立以便控制主 Composable 圈复杂度）。
+ * 详情内容区：**未知 / 确认缺失 / 删除中 / 就绪** 四态。
  *
- * ⚠️ [loading] 与 `item == null` 是**两件事**（2026-10-22）：前者 = "还不知道有没有"，
- * 后者 = "确认没有"。两者同时成立时只能画转圈 —— 画"条目不存在"就是
- * 用户点进条目时闪过的那一帧提示。
+ * 独立成函数是为了控制主 Composable 的圈复杂度。
+ *
+ * ⚠️ 「是否已知」与 `item == null` 是**两件事**（2026-10-22 定判据）：
+ * 前者 = "还不知道有没有"，后者 = "确认没有"。两者同时成立时**只能画占位** ——
+ * 画"条目不存在"就是用户点进条目时闪过的那一帧提示。
+ *
+ * ## 2026-11-09 第二轮：判据对了，代码却没照着判据写
+ *
+ * 用户第二次抓到同一帧。
+ *
+ * 上一轮把 `loading` 接进这个函数却没用它做分支条件 —— `when` 的第一支写的是
+ * `showProgress && item == null`，而 `showProgress` 要等 [DETAIL_PROGRESS_DELAY_MS]
+ * 才置真、`loading` 根本没参与 ⇒ **前 120ms 里没有任何一支接住"未知"**，
+ * 直接落到 `item == null` 的"条目不存在"。两种库都会中：`itemLoaded` 的初值是 false。
+ *
+ * ⇒ 现在分支条件改成 `!loaded && item == null`，由 [DetailUnknownPlaceholder] 渲染空白占位：
+ *   ① **从第 0 帧起**就成立，不依赖任何延迟；
+ *   ② 转圈只在 `showProgress` 之后才叠加（120ms 内到达 ⇒ 一次都不出现）；
+ *   ③ 占位保住内容位高度，真实内容到达时不会出现「先缩后撑」。
+ * 真实缺失（`loaded == true && item == null`）仍走原来的文案，语义没有被削弱。
  */
 @Composable
+@Suppress("LongParameterList")
 private fun DetailBodyContent(
     modifier: Modifier,
     /**
-     * 删除中：**只用来压住「条目不存在」那一帧，不再整页转圈**（2026-11-08 用户反馈）。
+     * 删除中：**只用来压住「条目不存在」那一帧，不再整页转圈**
+     * （2026-11-08 用户反馈）。
      *
      * 点垃圾桶后 `softDelete` 只做本地编码 / 往返自检 / 落缓存（百毫秒级，不等网络），
      * 完成后立刻发 `UiEvent.Deleted` 返回列表。以前这里把整页换成 WavyProgress，
@@ -249,8 +282,13 @@ private fun DetailBodyContent(
      * ⇒ 点删除后立刻清空内容（视觉上立即生效），静默等导航返回，不做任何遮挡。
      */
     deleting: Boolean,
-    /** 条目流是否已发射过（false = 还不知道有没有这条，见 `ItemDetailViewModel.UiState.itemLoaded`）。 */
-    loading: Boolean,
+    /**
+     * 条目流是否**已经发射过一次**（false = 还不知道有没有这条）。
+     *
+     * 注意语义方向：界面上的「未知」= `!loaded && item == null`；
+     * 「确认缺失」= `loaded && item == null`。
+     */
+    loaded: Boolean,
     item: VaultItem?,
     serverOrigin: String?,
     showPassword: Boolean,
@@ -264,10 +302,13 @@ private fun DetailBodyContent(
     //   几乎瞬间完成的读取配了一个"正在加载"的闪帧。
     //   ⇒ 120ms 内到达 ⇒ 转圈**从未出现**；真慢（冷读盘 / 大库）才显示，
     //     那时用户确实需要知道在等。这是"防闪烁"的常规做法，不是掩盖慢。
-    //   ⚠️ `LaunchedEffect` 在数据到达时会重启（key 含 item）⇒ 自动走 else 分支清掉。
+    //   ⚠️ key 只有 [unknown] ⇒ 数据到达时自动重启，走 else 分支清掉。
     var showProgress by remember { mutableStateOf(false) }
-    LaunchedEffect(loading, item) {
-        if (loading && item == null) {
+    val unknown = item == null && !loaded
+    LaunchedEffect(unknown) {
+        // key 只留 unknown：条目**内容**变了不该重启延迟（那样每次编辑后都要重等）。
+        // 一旦离开未知态就永远走 else ⇒ 转圈不会残留。
+        if (unknown) {
             delay(DETAIL_PROGRESS_DELAY_MS)
             showProgress = true
         } else {
@@ -276,12 +317,19 @@ private fun DetailBodyContent(
     }
     Box(modifier = modifier) {
         when {
-            // 加载中：画转圈而不是"不存在"（见本函数 KDoc），但只在真的慢时。
-            showProgress && item == null ->
-                VaultixWavyProgress(modifier = Modifier.align(Alignment.Center))
-            // ★ 点删除后**立刻清空内容**：本地写回只有百毫秒，页面不该继续显示
+            // ① 未知：**必须最先判**，且不吃延迟（见函数 KDoc 与常量的 ⚠️）。
+            //    转圈只是延迟叠加的视觉信号，占位本身从第 0 帧就在。
+            unknown -> DetailUnknownPlaceholder(
+                showProgress = showProgress,
+                barPadding = rememberImmersiveBarPadding(
+                    rememberScrollCollapseFraction(scrollState),
+                ),
+                modifier = Modifier.fillMaxSize(),
+            )
+            // ② 点删除后**立刻清空内容**：本地写回只有百毫秒，页面不该继续显示
             //    旧条目让人读成「点了没反应」；更绝不闪「条目不存在或已被删除」。
             deleting -> Unit
+            // ③ 确认缺失：流已发射过且确实没有 ⇒ 这句文案现在是真的。
             item == null -> Text(
                 text = stringResource(R.string.detail_missing),
                 style = MaterialTheme.typography.bodyMedium,
@@ -299,6 +347,36 @@ private fun DetailBodyContent(
                 scrollState = scrollState,
                 actions = actions,
             )
+        }
+    }
+}
+
+/**
+ * 「还不知道有没有这条」的占位（2026-11-09）。
+ *
+ * 有意**不画任何文字**：
+ * - 画「加载中」= 把一次 50ms 的缓存读取说成"正在加载"，比闪一帧更吵；
+ * - 画骨架屏需要知道条目长什么样（类型 / 字段数），而我们恰恰还不知道。
+ *
+ * ⇒ 只做两件事：**占住内容位**（[DETAIL_UNKNOWN_MIN_HEIGHT]，避免内容到达时的高度跳变）、
+ *   把顶部让位与真实内容对齐（[barPadding] 让后续 [DetailSections] 的首帧位置与它一致）。
+ * 真慢时才在中央叠一个波浪转圈。
+ */
+@Composable
+private fun DetailUnknownPlaceholder(
+    showProgress: Boolean,
+    barPadding: Dp,
+    modifier: Modifier = Modifier,
+) {
+    Box(modifier = modifier) {
+        // 顶部让位：与 DetailSections 里那个可滚动的 Spacer 同高，切换时不位移。
+        Spacer(
+            modifier = Modifier
+                .padding(top = barPadding)
+                .height(DETAIL_UNKNOWN_MIN_HEIGHT),
+        )
+        if (showProgress) {
+            VaultixWavyProgress(modifier = Modifier.align(Alignment.Center))
         }
     }
 }
@@ -568,7 +646,7 @@ fun ItemDetailScreen(
             DetailBodyContent(
                 modifier = Modifier.fillMaxSize(),
                 deleting = state.deleting,
-                loading = !state.itemLoaded,
+                loaded = state.itemLoaded,
                 item = item,
                 serverOrigin = state.serverOrigin,
                 showPassword = showPassword,
