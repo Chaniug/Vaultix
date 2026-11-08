@@ -37,9 +37,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.BottomAppBarDefaults
 import androidx.compose.material3.Button
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -55,10 +53,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
@@ -89,7 +85,8 @@ import io.vaultix.vaultix.ui.theme.Spacing
  * - **中部**：`weight(1f)` + `verticalScroll` —— 表单再长也不会把按钮顶出屏幕，
  *   且 `imePadding()` 在壳上统一处理，键盘弹出时输入框不会被遮；
  *   **两侧让位由 [contentClearance] 按实测 insets 算出**，正文首/末元素因此不会钻到栏底下。
- * - **底部** [ActionBar]：取消 / 确认。满宽，随滚动自动隐藏 / 出现（**不改变正文让位**）。
+ * - **底部** [ActionBar]：取消 / 确认。满宽、**常驻不随滚动位移**（仅背景随滚动淡出），
+ *   **不改变正文让位**（见下节「为什么不做滚动隐藏」）。
  *
  * ## ⚠️ 上下两条栏的形态演进（七轮返工，别重走）
  *
@@ -125,12 +122,24 @@ import io.vaultix.vaultix.ui.theme.Spacing
  * - **Do**：小顶栏不吸顶时，加**与背景匹配的**保护层 —— 本壳用 `surface` 同色实体底代替渐变；
  * - **Don't**：叠加多层保护层 ⟹ 只有一层不透明底色，**不加** scrim、不加第二层色块。
  *
- * ## 滚动隐藏
+ * ## 为什么不做滚动隐藏（2026-11-08 第八轮，别再加回来）
  *
- * 底栏用 M3 官方 [BottomAppBarDefaults.exitAlwaysScrollBehavior] 状态机 —— 但**只借**
- * 它的 `nestedScrollConnection` + `heightOffset`，**不用** `BottomAppBar` 组件本体
- * （其默认 `containerColor = surfaceContainer` 与壳的 `surface` 不匹配、自带 `windowInsets`
- * 会与壳的让位体系双重叠加）。详见 [ActionBar]。
+ * 此前底栏借 `BottomAppBarDefaults.exitAlwaysScrollBehavior` 的 `heightOffset` 做收起，
+ * 用户报「内容长、滑动时下方取消/保存两个按钮跟着滑动错位」。三条根因叠加：
+ *
+ * 1. **语义用反**：M3 官方 `BottomAppBarLayout` 把负值 `heightOffset` **加到布局高度**
+ *    （`placeable.height + offset`）让栏从底部裁剪，`place(0, 0)` 不动；本壳却直接当
+ *    `translationY` ⇒ 负值变成**整条栏向上平移**，飘进正文。
+ * 2. **下界没设**：官方在 `layout` 里设 `heightOffsetLimit = -栏高`；本壳既没用组件本体、
+ *    也没自己设，`rememberBottomAppBarState()` 默认 `-Float.MAX_VALUE` ⇒ 长表单滚动量
+ *    无限累积，滚上千 px 栏就被拖上千 px —— 这正是「内容比较长」才复现的原因。
+ * 3. **按钮与背景分离**：`backgroundAlpha` 只作用于 `.background(...)`，按钮不受影响
+ *    ⇒ 滚动后底色透明、只剩两个按钮在飘，看起来就是「按钮跟着滑」。
+ *
+ * 决策：**砍掉整套位移隐藏，底栏常驻不动**，保留 9-21 定稿的 alpha 硬切。
+ * 保存是这张表单唯一的出口，本就不该随滚动跑掉；用户 9-21 也明确「不要这些效果」。
+ * 若将来确要恢复，必须同时补齐 `heightOffsetLimit`、改用**高度收缩**而非平移、
+ * 并让按钮随整条栏一起收起 —— 三者缺一就会重现本 bug。
  *
  * ## 常见改动误区
  *
@@ -147,11 +156,6 @@ import io.vaultix.vaultix.ui.theme.Spacing
  * @param destructive 破坏性操作（如验证码编辑里的「移除」）；为 `null` 时不画，排在「取消」左侧。
  * @param content 表单正文（[ColumnScope]，纵向排列；需要横排时内部自己套 `Row`）。
  */
-// ⚠️ `@OptIn` 必须在 `@Composable` **之前**（两者都是注解，顺序无强制，但放一起更清楚）：
-// `BottomAppBarDefaults.exitAlwaysScrollBehavior()` 是 `@ExperimentalMaterial3Api` 的，
-// material3 1.5.0-alpha16 里**还没有** stable 替代品。
-// 选择"显式 OptIn 到具体 API"而不是给整个文件/模块加开关 —— 后者会让以后新引入的实验性
-// API 静默通过门禁。`.ai/tools/check_experimental_optin.py` 会校验这个作用域是否覆盖。
 /**
  * 「放弃未保存修改？」确认框（两个全屏表单共用）。
  *
@@ -223,7 +227,6 @@ fun rememberDiscardGate(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FullScreenDialogShell(
     title: String,
@@ -253,13 +256,8 @@ fun FullScreenDialogShell(
     val surfaceArgb = surface.toArgb()
     val lightSurface = surface.luminance() > 0.5f
 
-    // 底部栏的滚动隐藏：借用 M3 官方 `BottomAppBar` 的滚动行为状态机。
-    //
-    // ⚠️ 只借它的 `nestedScrollConnection` + `heightOffset`，**不用** `BottomAppBar` 组件
-    // 本体 —— 组件自带的 `containerColor`（`surfaceContainer`，与壳的 `surface` 不匹配）
-    // 和 `windowInsets` 处理（会与壳的让位体系双重叠加）都与本方案冲突，see KDoc 的官方 Don't。
-    // 语义：内容向上拉（要看后面的内容）⇒ 底栏立刻收起；向下拉 ⇒ 立刻出现。
-    val bottomBarScrollBehavior = BottomAppBarDefaults.exitAlwaysScrollBehavior()
+    // 底栏常驻不动（2026-11-08 第八轮）：滚动只让两条栏的**背景**淡出，不位移。
+    // 曾经借 M3 `heightOffset` 做收起，长表单里按钮会跟着飘 —— 见文件头「为什么不做滚动隐藏」。
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -422,11 +420,6 @@ fun FullScreenDialogShell(
                     modifier = Modifier
                         .fillMaxSize()
                         .verticalScroll(scrollState)
-                        // ⚠️ `nestedScroll` 挂在**滚动容器自身**（不是外层 Box）—— 与
-                        // `VaultListScreen.kt` 挂在 `LazyColumn` 上的既有口径一致。
-                        // 它是**纯 Compose 机制**（走 modifier 链的 NestedScrollDispatcher），
-                        // 与宿主是 Activity 还是 Dialog **无关**，故在 Dialog 里同样有效。
-                        .nestedScroll(bottomBarScrollBehavior.nestedScrollConnection)
                         .padding(horizontal = Spacing.xl)
                         .padding(
                             // ⚠️ `+ CONTENT_BAR_GAP`：让位只保证"不被栏遮住"，
@@ -450,11 +443,6 @@ fun FullScreenDialogShell(
                     destructive = destructive,
                     navBarInset = navBar,
                     backgroundAlpha = barAlpha,
-                    // ⚠️ `heightOffset` 挂在 `behavior.**state**` 上，不在 behavior 上：
-                    // `BottomAppBarScrollBehavior` 只有 `state` / `nestedScrollConnection` /
-                    // `isPinned` / `*AnimationSpec` 五个成员，offset 是 `BottomAppBarState` 的。
-                    // 同理 `collapsedFraction` 也在 state 上（若哪天要按收起比例淡出，用它）。
-                    scrollOffset = { bottomBarScrollBehavior.state.heightOffset },
                 )
             }
         }
@@ -518,34 +506,32 @@ private fun BoxScope.TitleBar(
 }
 
 /**
- * 底部操作条：**满宽细栏，随滚动变透明**，且随滚动自动隐藏 / 出现。
+ * 底部操作条：**满宽细栏，随滚动变透明**，**常驻不随滚动位移**。
  *
- * ⚠️ 11-07 只改「左右对齐 16→24dp」与「按钮分列」，**刻意保留隐身**：
+ * ⚠️ 11-07 只改「左右对齐 16→24dp」与「按钮分列」，**刻意保留背景淡出**：
  *    09-20 用户反馈「滑动不透明、上下栏遮住内容」后才改成滚动后 alpha 0，
  *    关掉会把那个真机验证过的修复一起推翻。
  *
- * ## 滚动隐藏
+ * ## 2026-11-08 第八轮：移除滚动位移隐藏
  *
- * 用 M3 官方的 [BottomAppBarDefaults.exitAlwaysScrollBehavior] 状态机，把它的
- * `heightOffset` 映射到本栏的 `translationY`。语义（官方定义）：
- * 内容向上拉 ⇒ 立刻收起；向下拉 ⇒ 立刻出现。
- *
- * ⚠️ 隐藏**不改变正文让位**（[ACTION_BAR_HEIGHT] 恒定计入 `contentPadding`）：
- * 让位是静态 padding、无法随滚动变；两个方向的错误代价不对称 ——
- * 多让最多是末尾略带留白（且滚到底时底栏会自动展开把留白填上），
- * 少让则末元素被不透明栏盖住（= 用户已报过的老 bug）。`exitAlways` 保证用户
- * 真要读末尾内容时底栏是**在的**，故按「底栏可见」让位恰好正确。
+ * 此前借 M3 `BottomAppBarState.heightOffset` 做收起，长表单里「取消 / 保存」会跟着
+ * 内容飘（语义用反 + 未设 `heightOffsetLimit` + 按钮不随背景淡出，三条叠加）。
+ * 现在底栏固定在底部：保存是本表单唯一出口，不该随滚动跑掉。完整根因与
+ * 「若将来要恢复必须同时补哪三件事」见文件头「为什么不做滚动隐藏」。
  *
  * ## ⚠️ 2026-09-21 第七轮：同样把「渐变保护层」换成「alpha 硬切」
  *
  * 与 [TitleBar] 同语义：栏底色 = `surface`，按 [backgroundAlpha] 在「不透明 ↔ 全透明」间切换。
- * [backgroundAlpha] 由外壳按**内容滚动**算（与底栏自身的隐藏动画独立）；
- * 即：内容往上推（看后面的内容）时栏隐身、内容从下方穿过，与列表页 / 验证码页一致。
+ * [backgroundAlpha] 由外壳按**内容滚动**算，**不叠加任何位移动画**；
+ * 即：内容往上推（看后面的内容）时底色隐身、内容从下方穿过，与列表页 / 验证码页一致。
+ * 按钮始终留在原位可点 —— 底色透明不等于整条栏消失。
+ *
+ * ⚠️ **不改变正文让位**：[ACTION_BAR_HEIGHT] 恒定计入 `contentPadding`。让位是静态
+ * padding、无法随滚动变；少让则末元素被栏盖住（= 用户已报过的老 bug），多让最多
+ * 是末尾略带留白。
  *
  * @param navBarInset 手势条内边距（实测值，与正文让位同一份）。
- * @param backgroundAlpha 栏整体透明度：未滚动 = 1f，滚动后 = 0f。
- * @param scrollOffset 取当前滚动引起的位移（像素）。用 lambda 传而不是直接传值，
- *   是为了不在每次滚动重组时都重新组合本栏 —— 只有 `graphicsLayer` 的绘制阶段会读它。
+ * @param backgroundAlpha 栏**背景**透明度：未滚动 = 1f，滚动后 = 0f（按钮不受影响）。
  */
 @Composable
 private fun BoxScope.ActionBar(
@@ -556,7 +542,6 @@ private fun BoxScope.ActionBar(
     destructive: (@Composable () -> Unit)?,
     navBarInset: Dp,
     backgroundAlpha: Float,
-    scrollOffset: () -> Float,
 ) {
     // ⚠️ 用 `MaterialTheme.colorScheme.surface` 而**不是** `LocalContentColor`：
     // 壳里包着一层 `Surface`，本栏是其内容，画出来的底色才是栏该匹配的东西。
@@ -567,7 +552,6 @@ private fun BoxScope.ActionBar(
         modifier = Modifier
             .align(Alignment.BottomCenter)
             .fillMaxWidth()
-            .graphicsLayer { translationY = scrollOffset() }
             .height(barHeight)
             // ⚠️ 背景在 nav-bar padding **之前**绘制 → 覆盖到手势条区域。
             .background(surface.copy(alpha = backgroundAlpha))
