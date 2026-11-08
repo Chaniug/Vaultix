@@ -125,11 +125,9 @@ import io.vaultix.vaultix.ui.common.ItemFormDialog
 import io.vaultix.vaultix.ui.common.PressAndSwipeToDelete
 import io.vaultix.vaultix.ui.common.SelectionActionBar
 import io.vaultix.vaultix.ui.common.SyncStatusDot
-import io.vaultix.vaultix.ui.common.SyncBadge
 import io.vaultix.vaultix.ui.common.SiteIcon
 import io.vaultix.vaultix.ui.common.syncStatusDotColor
 import io.vaultix.vaultix.ui.common.syncStatusDotDescription
-import io.vaultix.vaultix.ui.common.syncStatusDotLabel
 import io.vaultix.vaultix.ui.common.TopBarTitle
 import io.vaultix.vaultix.ui.common.VaultixExpressiveTopBar
 import io.vaultix.vaultix.ui.common.VaultixSearchTopAppBar
@@ -1136,23 +1134,25 @@ private fun BoxScope.ItemsTopBar(
  * |---|---|
  * | 切换密码库 | **换上下文**（我在看哪个库） |
  * | 验证码 / 回收站 | **去另一个页面**（不改数据） |
- * | 同步 | 对当前库**做动作**（只在需要动手时出现） |
- * | 锁定 | **安全动作**，低频 ⇒ 置底、靠右、缩成一枚图标 |
+ * | 同步 / 锁定 | **对当前库做动作** ⇒ 固定在底部一行，只给图标不给文字（见 [MenuSyncLockRow]） |
  *
  * ⇒ 顶上一张卡片先回答"我在哪、有多少条"，下面按**前往 / 操作**分组。
  *   分组标题给的是"这几项是同一类事"这条信息 —— 那是平铺列表里**读不出来的东西**。
  *
  * ⚠️ 菜单项顺序 = 使用频率（2026-09-14 用户指定的重排）：回收站 → 同步 → 锁定。
  *
- * ⚠️ 「同步」与「锁定」的关系经过 2026-11-08 一天三轮调整，当前定稿：
- * 1. 早上**合成一栏**（同步整行 + 尾部锁图标）→ 用户反馈"挤、怕误触"，
+ * ⚠️ 「同步」与「锁定」的关系在 2026-11-08~09 改了**四轮**，当前定稿是第 4 轮：
+ * 1. 合成一栏（同步整行 + 尾部锁图标）→ 用户反馈"挤、怕误触"，
  *    两个热区零间隙相接，也违反 M3「一个 menu item = 一个动作」；
- * 2. 中午**各占一行** → 锁定仍是最底部整行可点，拇指从下往上扫容易擦到；
- * 3. 晚上定稿：**同步只在需要动手时出现**（失败/冲突/云端有新版本，见
- *    [needsSyncAttention]），**锁定缩成右下角一枚图标按钮**（见 [MenuLockAction]）。
- *    正常态菜单里没有同步项 —— 下拉刷新与它调的是同一个 `retrySync`，重复；
- *    锁定靠右后左边那段空白不可点，误触概率随之下降。
- * 详见 [MenuSyncAction] 与 [MenuLockAction] 的 KDoc。
+ * 2. 各占一行 → 锁定仍是最底部整行可点，拇指从下往上扫容易擦到；
+ * 3. 同步改为「只在需要动手时出现」+ 锁定缩成右下角图标 →
+ *    正常态菜单里只剩一把锁，用户反馈"孤零零的，也没有颜色灯"；
+ * 4. **定稿**：底部固定一行 `[灯] [同步] ←weight→ [锁定]`，
+ *    全部不写字 —— 灯给颜色、同步可点、锁定靠右（见 [MenuSyncLockRow]）。
+ *    状态词交给列表顶部的常驻横幅，菜单里不再复述。
+ *
+ * ⇒ 这一处反复了四轮，教训是：**"删掉元素"能解决拥挤，但会制造空旷**；
+ *   真正该做的是"元素保留、文字去掉"。下次改这里前先读 [MenuSyncLockRow] 的 KDoc。
  *
  * ⚠️ 「切换密码库」放在**最上面**（2026-09-14，issue #96）：多库并存时这是
  * 「我要换个库看」的**唯一正确语义入口**。此前用户能碰到的只有「锁定」
@@ -1226,72 +1226,84 @@ private fun ItemsMoreMenu(
                 expanded = false
                 onOpenFolders()
             }
-            // ★ 2026-11-08 三次调整，两条规则同时生效：
-            //
-            // 1. **同步项只在需要用户动手时出现**。正常态（已同步）菜单里根本没有它 ——
-            //    下拉刷新与它调的是**同一个** `retrySync`，同一屏两个按钮干一件事，
-            //    用户每次都要先判断"这俩有区别吗"。异常态（失败 / 冲突 / 云端有新版本）
-            //    才出现，且文案说的是"下一步做什么"，不是又一个同步按钮。
-            //
-            // 2. **锁定贴右下角，不占整行**。用户原话「锁定密码库的按钮靠右边吧，
-            //    平常不常用的。免得靠左边误触」—— 它是菜单最后一项、紧贴屏幕底边，
-            //    拇指从下往上扫最容易擦到；整行可点让"点左半边也会锁"。
-            //    ⇒ 缩成一枚 48dp 的图标按钮靠右，左边那段空白不可点。
-            //    ⚠️ 这**不违反**"一个 item 一个动作"：它自己就是一个动作，
-            //    右手边没有相邻热区，不存在目标间距问题。
-            if (vaultCard.needsSyncAttention()) {
-                MenuGroupTitle(R.string.items_menu_group_actions)
-                MenuSyncAction(card = vaultCard) {
+            // ★ 2026-11-09 四次调整（用户真机反馈「没有颜色灯显示同步状态，
+            //   感觉锁按钮那一块孤零零的」）。此前为了"同步只在异常时出现"，
+            //   把常态那颗绿点一起藏了 —— 菜单底部只剩一把锁，是设计上的漏。
+            //   ⇒ 底部固定一行三元素：**灯 / 同步 / 锁定**，全部不写字。
+            //     · 灯只给颜色（异常原因由顶部横幅说，这里不复述）；
+            //     · 同步常驻可点，两个动作之间用 weight 撑开，不是零间隙相接；
+            //     · 锁定仍在最右（低风险在左、高风险在右）。
+            HorizontalDivider()
+            MenuSyncLockRow(
+                card = vaultCard,
+                onSync = {
                     expanded = false
                     onRetrySync()
-                }
-            }
-            HorizontalDivider()
-            MenuLockAction {
-                expanded = false
-                onLock()
-            }
+                },
+                onLock = {
+                    expanded = false
+                    onLock()
+                },
+            )
         }
     }
 }
 
 /**
- * 「这个库的同步状态是否在等用户动手」—— 菜单同步项 / 横幅 / 顶栏角标共用的判据。
+ * 菜单底部固定的一行：**状态灯 / 同步 / 锁定**（2026-11-09 四次调整）。
  *
- * 只认三种：**失败 / 冲突 / 云端有新版本**。
- * - `UPLOADING` / `SYNCING`（正在传）不算：用户此刻无事可做，把入口推到他面前只会被点乱；
- * - `SUCCESS` / null（正常）不算：这时"下拉"就是唯一且够用的入口。
- */
-private fun VaultCardInfo?.needsSyncAttention(): Boolean {
-    val dot = this?.syncDot
-    val badge = this?.syncBadge
-    // ⚠️ 拆成两个布尔再合并：detekt `ComplexCondition` 的阈值是 4，
-    //    单条 if 里堆 5 个 || 会直接红掉 CI。
-    val dotNeeds = dot == SyncStatusDot.FAILED || dot == SyncStatusDot.CONFLICT
-    val badgeNeeds = badge == SyncBadge.FAILED ||
-        badge == SyncBadge.CONFLICT ||
-        badge == SyncBadge.REMOTE_CHANGED
-    return dotNeeds || badgeNeeds
-}
-
-/**
- * 菜单底部的「锁定」：**右对齐的一枚图标按钮**，不是整行菜单项（2026-11-08 三次调整）。
+ * ## 为什么是这三个元素挤一行
  *
- * 用户原话：「锁定密码库的按钮靠右边吧，平常不常用的。免得靠左边误触」。
- * 它落在菜单最底部、紧贴屏幕底边，整行可点意味着"点左半边也会锁库"；
- * 缩成右侧 48dp 之后，左边那段空白**不可点**，误触概率随之下降。
+ * 用户真机反馈两件事，方向相反、必须同时满足：
+ * 1. 「没有颜色灯显示同步状态，感觉锁按钮那一块孤零零的」—— 常态下也要看得见状态；
+ * 2. 「文案不要这么多」—— 但不能靠"把状态词写一行"来实现可见性。
  *
- * ⚠️ 不染 `error` 红：锁库可恢复（重新输一次主密码），不是不可逆动作。
+ * ⇒ 灯只给**颜色**（6dp 圆点，状态词交给顶部横幅），同步与锁定只给**图标**。
+ *   一行三个不写字的元素，宽度绰绰有余，也不再复述状态。
+ *
+ * ## 布局：低风险在左、高风险在右
+ *
+ * `[●] [⟳] ←———— weight ————→ [🔒]`
+ * - 同步在左：它可重复、无副作用，误触成本接近零；
+ * - 锁定在最右：锁了要重新输主密码，物理上离拇指扫动路径最远的位置留给它。
+ * - 两者之间是 `weight` 撑出来的**真实空白**（不是相邻热区），
+ *   所以不存在"两个动作零间隙"那个老问题。
+ *
+ * ⚠️ 锁定**不染 error 红**：锁库可恢复，不是不可逆动作。
  */
 @Composable
-private fun MenuLockAction(onClick: () -> Unit) {
+private fun MenuSyncLockRow(
+    card: VaultCardInfo?,
+    onSync: () -> Unit,
+    onLock: () -> Unit,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
-        horizontalArrangement = Arrangement.End,
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        IconButton(onClick = onClick) {
+        val dot = card?.syncDot
+        if (dot != null) {
+            Icon(
+                imageVector = Icons.Filled.Circle,
+                // 灯不带文字，但读屏仍要能拿到状态 —— 用完整一句，不是状态词的复述。
+                contentDescription = syncStatusDotDescription(dot),
+                tint = syncStatusDotColor(dot),
+                modifier = Modifier
+                    .padding(horizontal = Spacing.md)
+                    .size(UiSize.MicroIcon),
+            )
+        }
+        IconButton(onClick = onSync) {
+            Icon(
+                imageVector = Icons.Filled.Sync,
+                contentDescription = stringResource(R.string.items_sync),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Spacer(Modifier.weight(1f))
+        IconButton(onClick = onLock) {
             Icon(
                 imageVector = Icons.Filled.Lock,
                 contentDescription = stringResource(R.string.items_lock),
@@ -1417,95 +1429,6 @@ private fun MenuAction(
     )
 }
 
-/**
- * 「同步」项行尾的状态点：**圆点 + 状态词 + 读屏描述**（2026-11-08 二次调整）。
- *
- * ⚠️ 只给颜色是不够的：色盲用户与读屏用户拿不到状态，所以 `Icon` 的
- *    `contentDescription` 用的是完整一句（含「点按重试」这类可行动指引），
- *    而不是把状态词再念一遍。
- *
- * ★ **quiet default**（M3）：[SyncStatusDot.SUCCESS] 是常态，只留圆点不写文字 ——
- *    常态喊「同步成功」既占宽度又制造噪音（此前右端 60dp 全被「已同步 ●」吃掉，
- *    紧邻的锁定按钮因此显得拥挤）。异常态（失败 / 冲突 / 同步中 / 待上传）
- *    才把状态词写出来，因为这些正是"我该不该管"的唯一线索。
- *    ⚠️ 圆点本身**必须常驻**：用户此前实测反馈"绿点闪一下就消失，像功能时有时无"，
- *    所以这里只是收掉文字，不是把 SUCCESS 变成不显示。
- */
-@Composable
-private fun SyncDotIndicator(dot: SyncStatusDot?) {
-    if (dot == null) return
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        if (dot != SyncStatusDot.SUCCESS) {
-            Text(
-                text = syncStatusDotLabel(dot),
-                style = MaterialTheme.typography.labelSmall,
-                color = syncStatusDotColor(dot),
-                maxLines = 1,
-            )
-            Spacer(Modifier.width(Spacing.xs))
-        }
-        Icon(
-            imageVector = Icons.Filled.Circle,
-            contentDescription = syncStatusDotDescription(dot),
-            tint = syncStatusDotColor(dot),
-            modifier = Modifier.size(UiSize.MicroIcon),
-        )
-    }
-}
-
-/**
- * 菜单里的「同步」项：左文字、右侧挂状态（2026-11-08 二次调整）。
- *
- * ## 为什么从「同步 · 锁定同栏」拆回来
- *
- * 同日早些时候把同步与锁定合成一栏（[Row] + `weight(1f)` + 尾随 `IconButton`），
- * 用户真机反馈「挤、怕误触」。原因不在间距，而在**结构**：
- * M3 的菜单模型里**一个 menu item 就是一个动作**，整行独占，行内 `trailingIcon`
- * 只允许放**非交互**内容（状态点正是这一类）。把第二个可点区域拼进同一行，
- * 等于绕开 item 边界 ⇒ 两个热区必然零间隙相接（WCAG 2.2 SC 2.5.8 的间隔要求也过不去）。
- * ⇒ 同步、锁定各回一行，靠 item 边界天然隔离，不需要手写间距或竖线。
- *
- * ## 状态优先级
- *
- * 优先 [SyncDotIndicator]（回答"点下去会发生什么"）；没有状态点时退回角标文案
- * （回答"云端现在什么情况"），两者都没有时这一行保持安静。
- * 两条通路共用 [VaultCardInfo]，Bitwarden / KDBX 是同一套 UI，不按库类型分叉。
- */
-@Composable
-private fun MenuSyncAction(
-    card: VaultCardInfo?,
-    onClick: () -> Unit,
-) {
-    DropdownMenuItem(
-        text = {
-            Text(
-                text = stringResource(R.string.items_sync),
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-        },
-        leadingIcon = {
-            Icon(
-                imageVector = Icons.Filled.Sync,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        },
-        trailingIcon = {
-            val dot = card?.syncDot
-            val badge = card?.syncBadge
-            when {
-                dot != null -> SyncDotIndicator(dot)
-                badge != null -> Text(
-                    text = syncBadgeLabel(badge),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = syncBadgeColor(badge),
-                    maxLines = 1,
-                )
-            }
-        },
-        onClick = onClick,
-    )
-}
 
 /**
  * 快捷筛选面板：顶栏下方的一排 chip（验证码 / 通行密钥 / SSH / 笔记 / 收藏 …）。
