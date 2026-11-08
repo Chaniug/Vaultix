@@ -56,6 +56,8 @@ import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.ViewAgenda
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -123,6 +125,7 @@ import io.vaultix.vaultix.ui.common.ItemFormDialog
 import io.vaultix.vaultix.ui.common.PressAndSwipeToDelete
 import io.vaultix.vaultix.ui.common.SelectionActionBar
 import io.vaultix.vaultix.ui.common.SyncStatusDot
+import io.vaultix.vaultix.ui.common.SyncBadge
 import io.vaultix.vaultix.ui.common.SiteIcon
 import io.vaultix.vaultix.ui.common.syncStatusDotColor
 import io.vaultix.vaultix.ui.common.syncStatusDotDescription
@@ -1133,19 +1136,23 @@ private fun BoxScope.ItemsTopBar(
  * |---|---|
  * | 切换密码库 | **换上下文**（我在看哪个库） |
  * | 验证码 / 回收站 | **去另一个页面**（不改数据） |
- * | 同步 | 对当前库**做动作** |
- * | 锁定 | **破坏性动作** |
+ * | 同步 | 对当前库**做动作**（只在需要动手时出现） |
+ * | 锁定 | **安全动作**，低频 ⇒ 置底、靠右、缩成一枚图标 |
  *
  * ⇒ 顶上一张卡片先回答"我在哪、有多少条"，下面按**前往 / 操作**分组。
  *   分组标题给的是"这几项是同一类事"这条信息 —— 那是平铺列表里**读不出来的东西**。
  *
  * ⚠️ 菜单项顺序 = 使用频率（2026-09-14 用户指定的重排）：回收站 → 同步 → 锁定。
  *
- * ⚠️ 「同步」与「锁定」**必须各占一行**（2026-11-08 二次调整，撤回同日早些时候的
- *    "合成一栏"）：合起来只省 48dp 高度，代价是两个热区零间隙相接，用户真机反馈
- *    "挤、怕误触"。M3 的菜单模型是**一个 item = 一个动作**，行内 `trailingIcon`
- *    只允许放非交互内容 —— 把第二个按钮拼进同一行等于绕开 item 边界。
- *    详见 [MenuSyncAction] 的 KDoc。
+ * ⚠️ 「同步」与「锁定」的关系经过 2026-11-08 一天三轮调整，当前定稿：
+ * 1. 早上**合成一栏**（同步整行 + 尾部锁图标）→ 用户反馈"挤、怕误触"，
+ *    两个热区零间隙相接，也违反 M3「一个 menu item = 一个动作」；
+ * 2. 中午**各占一行** → 锁定仍是最底部整行可点，拇指从下往上扫容易擦到；
+ * 3. 晚上定稿：**同步只在需要动手时出现**（失败/冲突/云端有新版本，见
+ *    [needsSyncAttention]），**锁定缩成右下角一枚图标按钮**（见 [MenuLockAction]）。
+ *    正常态菜单里没有同步项 —— 下拉刷新与它调的是同一个 `retrySync`，重复；
+ *    锁定靠右后左边那段空白不可点，误触概率随之下降。
+ * 详见 [MenuSyncAction] 与 [MenuLockAction] 的 KDoc。
  *
  * ⚠️ 「切换密码库」放在**最上面**（2026-09-14，issue #96）：多库并存时这是
  * 「我要换个库看」的**唯一正确语义入口**。此前用户能碰到的只有「锁定」
@@ -1169,11 +1176,26 @@ private fun ItemsMoreMenu(
 ) {
     var expanded by remember { mutableStateOf(false) }
     Box {
+        // ★ 2026-11-08 三次调整：⋮ 上挂一枚状态角标（M3 `Badge`）。
+        //   起因：后台上传与失败原先只由**菜单里**的状态点表达，菜单不展开就等于没有 ——
+        //   用户原话「上传和失败总也要一点提示才对」。
+        //   ⇒ 用 badge 而不是横幅：不占布局、不需要用户确认，收起菜单时也看得到。
+        //   颜色沿用 [syncStatusDotColor]：琥珀=上传中、红=失败、蓝=冲突/有新版本；
+        //   `SUCCESS` 不挂（常态不喧哗，那是 quiet default 的一半）。
         IconButton(onClick = { expanded = true }) {
-            Icon(
-                Icons.Filled.MoreVert,
-                contentDescription = stringResource(R.string.items_more_actions),
-            )
+            BadgedBox(
+                badge = {
+                    val dot = vaultCard?.syncDot
+                    if (dot != null && dot != SyncStatusDot.SUCCESS) {
+                        Badge(containerColor = syncStatusDotColor(dot))
+                    }
+                },
+            ) {
+                Icon(
+                    Icons.Filled.MoreVert,
+                    contentDescription = stringResource(R.string.items_more_actions),
+                )
+            }
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             if (vaultCard != null) {
@@ -1204,20 +1226,77 @@ private fun ItemsMoreMenu(
                 expanded = false
                 onOpenFolders()
             }
-            MenuGroupTitle(R.string.items_menu_group_actions)
-            // ★ 2026-11-08 二次：同步与锁定**各占一行**，撤回同日的"合成一栏"。
-            //   合起来省了 48dp 高度，代价是两者热区零间隙 —— 用户反馈"挤、怕误触"，
-            //   且违反 M3「一个 menu item = 一个动作」的模型。状态灯挂在同步项的
-            //   trailingIcon 位（非交互），锁定是普通菜单项，不再染 error 红
-            //   （锁库可恢复，不是破坏性动作；红留给删库/清空这类真不可逆的）。
-            MenuSyncAction(card = vaultCard) {
-                expanded = false
-                onRetrySync()
+            // ★ 2026-11-08 三次调整，两条规则同时生效：
+            //
+            // 1. **同步项只在需要用户动手时出现**。正常态（已同步）菜单里根本没有它 ——
+            //    下拉刷新与它调的是**同一个** `retrySync`，同一屏两个按钮干一件事，
+            //    用户每次都要先判断"这俩有区别吗"。异常态（失败 / 冲突 / 云端有新版本）
+            //    才出现，且文案说的是"下一步做什么"，不是又一个同步按钮。
+            //
+            // 2. **锁定贴右下角，不占整行**。用户原话「锁定密码库的按钮靠右边吧，
+            //    平常不常用的。免得靠左边误触」—— 它是菜单最后一项、紧贴屏幕底边，
+            //    拇指从下往上扫最容易擦到；整行可点让"点左半边也会锁"。
+            //    ⇒ 缩成一枚 48dp 的图标按钮靠右，左边那段空白不可点。
+            //    ⚠️ 这**不违反**"一个 item 一个动作"：它自己就是一个动作，
+            //    右手边没有相邻热区，不存在目标间距问题。
+            if (vaultCard.needsSyncAttention()) {
+                MenuGroupTitle(R.string.items_menu_group_actions)
+                MenuSyncAction(card = vaultCard) {
+                    expanded = false
+                    onRetrySync()
+                }
             }
-            MenuAction(Icons.Filled.Lock, R.string.items_lock) {
+            HorizontalDivider()
+            MenuLockAction {
                 expanded = false
                 onLock()
             }
+        }
+    }
+}
+
+/**
+ * 「这个库的同步状态是否在等用户动手」—— 菜单同步项 / 横幅 / 顶栏角标共用的判据。
+ *
+ * 只认三种：**失败 / 冲突 / 云端有新版本**。
+ * - `UPLOADING` / `SYNCING`（正在传）不算：用户此刻无事可做，把入口推到他面前只会被点乱；
+ * - `SUCCESS` / null（正常）不算：这时"下拉"就是唯一且够用的入口。
+ */
+private fun VaultCardInfo?.needsSyncAttention(): Boolean {
+    val dot = this?.syncDot
+    val badge = this?.syncBadge
+    // ⚠️ 拆成两个布尔再合并：detekt `ComplexCondition` 的阈值是 4，
+    //    单条 if 里堆 5 个 || 会直接红掉 CI。
+    val dotNeeds = dot == SyncStatusDot.FAILED || dot == SyncStatusDot.CONFLICT
+    val badgeNeeds = badge == SyncBadge.FAILED ||
+        badge == SyncBadge.CONFLICT ||
+        badge == SyncBadge.REMOTE_CHANGED
+    return dotNeeds || badgeNeeds
+}
+
+/**
+ * 菜单底部的「锁定」：**右对齐的一枚图标按钮**，不是整行菜单项（2026-11-08 三次调整）。
+ *
+ * 用户原话：「锁定密码库的按钮靠右边吧，平常不常用的。免得靠左边误触」。
+ * 它落在菜单最底部、紧贴屏幕底边，整行可点意味着"点左半边也会锁库"；
+ * 缩成右侧 48dp 之后，左边那段空白**不可点**，误触概率随之下降。
+ *
+ * ⚠️ 不染 `error` 红：锁库可恢复（重新输一次主密码），不是不可逆动作。
+ */
+@Composable
+private fun MenuLockAction(onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
+        horizontalArrangement = Arrangement.End,
+    ) {
+        IconButton(onClick = onClick) {
+            Icon(
+                imageVector = Icons.Filled.Lock,
+                contentDescription = stringResource(R.string.items_lock),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }

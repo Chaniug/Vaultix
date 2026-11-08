@@ -19,11 +19,13 @@ import io.vaultix.domain.VaultSessionRepository
 import io.vaultix.domain.VaultSyncStatus
 import io.vaultix.model.VaultFolder
 import io.vaultix.model.VaultItem
+import io.vaultix.model.KdbxCloudSyncStatus
 import io.vaultix.model.VaultKind
 import io.vaultix.model.VaultOrganization
 import io.vaultix.model.VaultSummary
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.ItemFilter
+import io.vaultix.vaultix.ui.common.SyncBadge
 import io.vaultix.vaultix.ui.common.SyncStatusDot
 import io.vaultix.vaultix.ui.common.resolveSyncDot
 import io.vaultix.vaultix.session.ActiveVaultStore
@@ -162,6 +164,25 @@ class ItemsViewModel @Inject constructor(
     /** KDBX 手动同步的一次性结果；null = 交回三源合成。 */
     private val _manualSyncNote = MutableStateFlow<SyncNote?>(null)
 
+    /**
+     * KDBX **持久**同步状态的异常态 → 常驻横幅（2026-11-08 晚，用户反馈驱动）。
+     *
+     * ## 为什么必须单独有一条通路
+     *
+     * 同日早些时候把「后台上传」的横幅整个去掉了（见 init 里那段注释）：它由库级
+     * `syncStatus` 派生，会一直显示「正在上传改动到云端…」直到 30~70s 的网络请求结束，
+     * 用户因此觉得「删除还没完成」。**但那次把失败提示也一起砍掉了** ——
+     * 上传失败只剩 ⋮ 菜单里一个 6dp 的红点，菜单不展开就完全看不见。
+     *
+     * ⇒ 拆成两件事：
+     * - **上传中**（PENDING_UPLOAD / SYNCING）**不挂横幅**（不打扰，也不假装"还在等"）；
+     * - **需要用户动手**（失败 / 冲突 / 云端有新版本）挂**常驻**横幅，带「重试」。
+     *
+     * ⚠️ `PENDING` 不在其中：它是"正在自动传"，用户无需动作，挂横幅就是把
+     *    "本地已完成"重新说成"还在等"。
+     */
+    private val _kdbxAttentionNote = MutableStateFlow<SyncNote?>(null)
+
     private val _saveEvents = Channel<SaveEvent>(Channel.BUFFERED)
     val saveEvents = _saveEvents.receiveAsFlow()
 
@@ -196,18 +217,32 @@ class ItemsViewModel @Inject constructor(
                 .collect { states -> _state.update { it.copy(syncStates = states) } }
         }
         // 同步状态 → 页内提示条（Bastion 语义：静默结果不打扰）。
-        // ★ 2026-11-08：后台自动上传**不再挂横幅**。它以前由库级 syncStatus 派生，
+        // ★ 2026-11-08：后台自动上传**不再挂「上传中」横幅**。它以前由库级 syncStatus 派生，
         //    会一直显示「正在上传改动到云端…」直到 30~70s 的网络请求结束，
         //    用户因此觉得「删除还没完成、要等」。现在本地落缓存即算完成
         //    （写动作的 Snackbar 已经提示），上传状态只由 ⋮ 状态点 / 详情页角标表达。
+        // ★ 2026-11-08 晚：**但失败必须说话** —— 见 [_kdbxAttentionNote]。
+        //    三源优先级：手动同步的一次性结果 > KDBX 持久异常 > Bitwarden 编排器状态。
         viewModelScope.launch {
             combine(
                 vaultIdState,
                 syncOrchestrator.statusByVault,
                 _manualSyncNote,
-            ) { id, statuses, manual ->
-                manual ?: toSyncNote(statuses[id])
+                _kdbxAttentionNote,
+            ) { id, statuses, manual, kdbxAttention ->
+                manual ?: kdbxAttention ?: toSyncNote(statuses[id])
             }.collect { note -> _state.update { it.copy(syncNote = note) } }
+        }
+        // KDBX 持久异常态（失败 / 冲突 / 云端有新版本）→ 常驻横幅。
+        // ⚠️ 与上面那条**分开收集**：这条只看持久状态，不看本次手动同步跑到哪一步，
+        //    两者混在一个 combine 里会让「手动结果的优先级」被持久态反复顶回来。
+        viewModelScope.launch {
+            vaultIdState
+                .flatMapLatest { id ->
+                    vaultRepository.observeVaults()
+                        .map { vaults -> vaults.firstOrNull { v -> v.id == id }?.syncStatus }
+                }
+                .collect { status -> _kdbxAttentionNote.value = kdbxAttentionNoteOf(status) }
         }
         // 同步状态 → ⋮ 菜单的四色状态点。
         // ⚠️ 与提示条**分开收集**：提示条是「一次性结果，成功就消失」，
@@ -508,6 +543,28 @@ class ItemsViewModel @Inject constructor(
         }
         return null
     }
+
+    /**
+     * KDBX **持久**同步状态 → 常驻横幅：**只取需要用户动手的三种**。
+     *
+     * 纯函数（可 JVM 单测）。`PENDING`（正在自动传）与正常态一律 `null`：
+     * 给上传中挂横幅会把「本地已完成」重新说成「还在等」—— 正是 11-08 早先
+     * 被用户否掉的那个行为，不能因为补失败提示又把它捡回来。
+     *
+     * 三种文案各说"下一步做什么"，而不是复述状态：
+     * - 失败 → 改动只在本机（暗示远端还是旧的，这句才是用户真正要知道的）；
+     * - 冲突 → 去能拍板的那一页（列表页没有三选项对话框，强行收敛会丢改动）；
+     * - 云端有新版本 → 点重试拉取（不用重新解锁）。
+     */
+    private fun kdbxAttentionNoteOf(status: KdbxCloudSyncStatus?): SyncNote? =
+        when (SyncBadge.of(status)) {
+            SyncBadge.FAILED -> SyncNote.Notice(R.string.kdbx_upload_failed_banner, warning = true)
+            SyncBadge.CONFLICT ->
+                SyncNote.Notice(R.string.items_sync_conflict_go_to_vaults, warning = true)
+            SyncBadge.REMOTE_CHANGED ->
+                SyncNote.Notice(R.string.kdbx_remote_changed_banner, warning = true)
+            SyncBadge.PENDING, null -> null
+        }
 
     /**
      * 新建条目：名称必填；成功后经 [saveEvents] 提示落点。

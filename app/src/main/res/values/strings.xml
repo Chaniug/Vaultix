@@ -1122,6 +1122,13 @@
     <string name="kdbx_sync_pending_upload_local_changes">上传期间又有改动，待续传</string>
     <string name="kdbx_sync_conflict">同步冲突，需处理</string>
     <string name="kdbx_sync_failed">同步失败</string>
+    <!-- ★ 2026-11-08 晚：条目页**常驻横幅**的文案（需要用户动手时才出现）。
+         与角标那组的分工：角标是「现在是什么状态」，横幅是「你该做什么」——
+         所以这里写后果和下一步，不复述状态词。
+         ⚠️ 上传中的横幅**不存在**，别照着这里补一条：那会让"本地已完成"
+            重新读成"还在等"，是 11-08 早先被否掉的行为。 -->
+    <string name="kdbx_upload_failed_banner">上传失败，改动还只在本机</string>
+    <string name="kdbx_remote_changed_banner">云端有新版本，点重试拉取</string>
     <!-- ===== 2026-10-21 §3.4：手动同步的结果提示（原先是 Kotlin 里的硬编码中文）=====
          ⚠️ 与上面 kdbx_sync_* 那组**不是一回事**：上面是**状态角标**（卡片上常驻、现在时），
            这里是**一次性 snackbar**（刚做完那件事的**完成时**）。两者措辞必须区分开，
