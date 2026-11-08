@@ -362,13 +362,23 @@
     <string name="settings_unlock_state_off">未启用</string>
     <!-- 2026-09-16：设置首页「密码库」组只剩一个入口行（密码库管理），独占一个组标题太浪费，
          且与「解锁与隐私」的自动锁定 / 防截屏 / 剪贴板清除同属「库怎么开、开了怎么锁」一件事
-         ⇒ 合并为一组「密码库与解锁」（原 group_vaults / group_security 两个组名合并）。
+         ⇒ 合并为一组（原 group_vaults / group_security 两个组名合并）。
+         ★ 2026-11-08 改名「密码库与解锁」→「密码库与安全」：组内实际是
+         库管理 / 锁与安全 / 防截屏 / 剪贴板自动清除 / 权限管理五项，
+         后三项是**安全与隐私**，不是"解锁"——旧名只覆盖了前两项。
          ⚠️ group_vaults 仍被密码库管理二级页用作顶栏标题，故保留。 -->
-    <string name="group_vault_unlock">密码库与解锁</string>
-    <string name="group_appearance">显示与填充</string>
+    <string name="group_vault_unlock">密码库与安全</string>
+    <!-- ★ 2026-11-08「显示与填充」→「外观与填充」：组内是主题/取色/纯黑/底栏/条目显示
+         这类**外观**选项，加一个"自动填充设置"入口。"显示"在这里是动词，容易读成
+         "显示与填充（文字）"，改成"外观"后与内容一一对应。 -->
+    <string name="group_appearance">外观与填充</string>
     <string name="group_data">数据</string>
     <string name="permission_management_title">权限管理</string>
-    <string name="permission_management_subtitle">看看这个应用要什么权限、拿去做什么</string>
+    <!-- ★ 2026-11-08：原文「看看这个应用要什么权限、拿去做什么」——
+         ① "这个应用"在应用自己的设置页里是多余的自称，且口气像旁观者；
+         ② "拿去做什么"过于口语，且 21 字会在窄屏折成两行。
+         ⇒ 换成陈述式 15 字，一行放得下。 -->
+    <string name="permission_management_subtitle">Vaultix 用了哪些权限、各自做什么</string>
     <!-- ===== 权限引导页（2026-09-18）===== -->
     <!-- 分组标题。刻意不叫「权限」——因为它同时含"设备能力"（指纹）、"网络"这类
          非运行时权限项，叫「权限」会让人以为每一项都能在这里开关。 -->
@@ -427,7 +437,10 @@
     <string name="developer_relax_lock_desc_normal">当前与正式版一致：熄屏或清掉后台后，回来要指纹 / 主密码</string>
     <string name="developer_relax_lock_desc_relaxed">已关闭自动验证：熄屏、清后台后进来都不用再验证。正式版没有这一项</string>
     <string name="setting_auto_lock">自动锁定</string>
-    <string name="setting_clipboard_clear">剪贴板清除</string>
+    <!-- ★ 2026-11-08：加「自动」二字。原来的「剪贴板清除」读起来像**手动**清一次
+         （点一下就清），实际副标题显示的是「30 秒」—— 那是个倒计时，不是一次性动作。
+         同一行的对话框标题也用它，加上"自动"后两处语义一致。 -->
+    <string name="setting_clipboard_clear">剪贴板自动清除</string>
     <string name="setting_screen_security">防截屏</string>
     <string name="setting_screen_security_desc">阻止截屏与最近任务缩略图</string>
     <string name="setting_dynamic_color">动态取色</string>
@@ -1698,5 +1711,9 @@
     <string name="import_confirm_title">确认导入？</string>
     <string name="import_confirm_body">将按上方预览写入新条目，已存在的会被跳过。导入无法撤销。</string>
 
-    <string name="setting_screen_security_desc_off">已关闭：其他应用可以截取本应用画面，最近任务里也可能显示密码内容</string>
+    <!-- ★ 2026-11-08：原文 33 字「已关闭：其他应用可以截取本应用画面，最近任务里也可能显示密码内容」
+         在 560dpi 真机的设置行里被截成「…最近任务里也可…」（副标题上限 2 行），
+         而这是**唯一**告诉用户"关掉它会怎样"的句子，截断等于把后果说明吃掉一半。
+         ⇒ 压到 25 字：「截屏」比「截取本应用画面」短且是同义常用词，信息不丢。 -->
+    <string name="setting_screen_security_desc_off">已关闭：其他应用可截屏，最近任务里可能露出密码</string>
 </resources>

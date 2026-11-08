@@ -95,8 +95,18 @@ import io.vaultix.vaultix.ui.theme.VaultixCorner
 /** 设置项最小高度（上游 72dp）。 */
 private val SETTINGS_ROW_MIN_HEIGHT = 72.dp
 
-/** 图标（28dp）与文字之间的间距（上游 18dp）。 */
-private val SETTINGS_ICON_GAP = UiSize.InlineIcon
+/**
+ * 图标（28dp 槽位）与文字之间的间距（上游 18dp）。
+ *
+ * ⚠️ 写成字面量而不是 `Spacing.*`：18 不在 8dp 标尺上，但它是**上游定稿的视觉重量**，
+ *    强行对齐到 16 会让图标贴字、对齐到 20 会让图标离家 —— 两种都是版式变更。
+ *    `Spacing` 纪律第 2 条「不在标尺上的值保持字面量」正是为这种情况写的。
+ *
+ * ⚠️ 更不要写成 `UiSize.InlineIcon`：那是**元件有多大**（18dp 的行内图标），
+ *    这里是**两个元素之间留多少**。值相同、语义不同，借用会让下一次调图标尺寸
+ *    的人无意间把行内间距一起改掉。
+ */
+private val SETTINGS_ICON_GAP = 18.dp
 
 /** 行内的水平内边距（上游 20dp）。 */
 private val SETTINGS_ROW_PADDING_H = 20.dp
@@ -193,14 +203,23 @@ internal fun SettingsRow(
     ) {
         // 图标直出（不套圆形底衬）：主色由 LocalContentColor 供给，
         // 调用点传 `Icon(vector, contentDescription = null)` 即自动上主色。
-        CompositionLocalProvider(
-            LocalContentColor provides MaterialTheme.colorScheme.primary.copy(
-                alpha = if (enabled) 1f else DISABLED_CONTENT_ALPHA,
-            ),
+        //
+        // ★ 2026-11-08：图标**顶对齐到标题行**，不再随整行居中。
+        //   真机对比：副标题一行的行（密码库管理）与副标题两行的行（防截屏）
+        //   并排时，居中会让图标在两行之间上下跳 —— 同一列图标看起来"没对齐"。
+        //   M3 的多行 list item 也是让 leading 元素对齐 primary text，而不是整行居中。
+        //   ⚠️ `CompositionLocalProvider` 不是 RowScope，必须把 Box 放在它**外面**
+        //   才能用 `Modifier.align`；反过来会编译不过。
+        Box(
+            modifier = Modifier
+                .size(SETTINGS_ICON_BOX)
+                .align(Alignment.Top),
+            contentAlignment = Alignment.Center,
         ) {
-            Box(
-                modifier = Modifier.size(SETTINGS_ICON_BOX),
-                contentAlignment = Alignment.Center,
+            CompositionLocalProvider(
+                LocalContentColor provides MaterialTheme.colorScheme.primary.copy(
+                    alpha = if (enabled) 1f else DISABLED_CONTENT_ALPHA,
+                ),
             ) {
                 icon()
             }
