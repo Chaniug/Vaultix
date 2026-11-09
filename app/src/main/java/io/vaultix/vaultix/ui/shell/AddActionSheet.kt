@@ -72,6 +72,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
@@ -149,13 +150,18 @@ fun AddActionSheet(
 
             // 8.4：同一屏只有一个 Filled 面 —— 主卡。它是当前 Tab 的默认新建动作，
             // 也是方案 A「1 步变 2 步」里那第二步的落点（拇指几乎在原处）。
-            val defaultLabel = when (currentTab.addTarget) {
-                VaultixAddTarget.Login -> R.string.dock_add_default_login
-                VaultixAddTarget.Totp -> R.string.dock_add_default_totp
-                VaultixAddTarget.Card -> R.string.dock_add_default_card
+            //
+            // [heroType] 只用于主卡右侧的剪影水印。验证码没有自己的 [VaultItemType]
+            // （它走 `totpAddRequest`），剪影沿用登录 —— 验证码本就是登录条目上的
+            // TOTP 字段，不为它硬造第六种剪影（那是给「一个系统」开第二个系统）。
+            val (defaultLabel, heroType) = when (currentTab.addTarget) {
+                VaultixAddTarget.Login -> R.string.dock_add_default_login to VaultItemType.Login
+                VaultixAddTarget.Totp -> R.string.dock_add_default_totp to VaultItemType.Login
+                VaultixAddTarget.Card -> R.string.dock_add_default_card to VaultItemType.Card
             }
             AddHeroCard(
                 label = stringResource(defaultLabel),
+                type = heroType,
                 onClick = { pick(onDefaultAction) },
             )
 
@@ -201,48 +207,85 @@ private fun standaloneTypes(currentTab: VaultixNavItem): List<VaultItemType> {
 @Composable
 private fun AddHeroCard(
     label: String,
+    type: VaultItemType,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val onPrimary = MaterialTheme.colorScheme.onPrimary
     Surface(
         onClick = onClick,
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = Spacing.xl)
-            .heightIn(min = 76.dp),
+            .heightIn(min = HERO_MIN_HEIGHT),
         shape = VaultixCorner.Panel,
         color = MaterialTheme.colorScheme.primary,
-        contentColor = MaterialTheme.colorScheme.onPrimary,
+        contentColor = onPrimary,
     ) {
-        Row(
-            modifier = Modifier.padding(Spacing.lg),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(
+        Box {
+            // 类型剪影水印（[TypeGlyph] 的第二处复用）：与网格卡**同一个形状本体**，
+            // 放大 [HERO_GLYPH_SCALE] 倍、贴右（缩放后靠 Surface 的 shape 裁出出血）、
+            // 整体压到 [HERO_GLYPH_ALPHA]。
+            //
+            // ⚠️ 必须写在 Row **之前**：后写的在上层，这样文字与「+」不会被水印盖住。
+            // ⚠️ [HERO_GLYPH_BOX] 必须 **≤ 卡片最小高度**：同在一个 Box 里会按最大
+            //    子元素测量，水印画布一旦更高就会把整张卡撑高（库列表的水印踩过同一个坑）。
+            TypeGlyph(
+                type = type,
+                accent = onPrimary,
+                line = onPrimary.copy(alpha = HERO_GLYPH_LINE_ALPHA),
                 modifier = Modifier
-                    .size(40.dp)
-                    .clip(VaultixCorner.Panel)
-                    .background(MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.18f)),
-                contentAlignment = Alignment.Center,
+                    .align(Alignment.CenterEnd)
+                    .size(HERO_GLYPH_BOX)
+                    .graphicsLayer {
+                        alpha = HERO_GLYPH_ALPHA
+                        scaleX = HERO_GLYPH_SCALE
+                        scaleY = HERO_GLYPH_SCALE
+                    },
+            )
+            Row(
+                modifier = Modifier.padding(Spacing.lg),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(
-                    imageVector = Icons.Filled.Add,
-                    contentDescription = null,
-                    modifier = Modifier.size(24.dp),
-                )
-            }
-            Spacer(Modifier.width(Spacing.md))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(text = label, style = MaterialTheme.typography.titleMedium)
-                Text(
-                    text = stringResource(R.string.dock_add_hero_subtitle),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.82f),
-                )
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(VaultixCorner.Panel)
+                        .background(onPrimary.copy(alpha = 0.18f)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Add,
+                        contentDescription = null,
+                        modifier = Modifier.size(24.dp),
+                    )
+                }
+                Spacer(Modifier.width(Spacing.md))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(text = label, style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        text = stringResource(R.string.dock_add_hero_subtitle),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = onPrimary.copy(alpha = 0.82f),
+                    )
+                }
             }
         }
     }
 }
+
+/**
+ * 主卡的尺寸与剪影水印参数。
+ *
+ * ⚠️ [HERO_GLYPH_BOX]（72dp）**小于** [HERO_MIN_HEIGHT]（76dp）是刻意的：
+ *    水印和内容同在一个 `Box` 里，Box 按最大子元素测量 —— 水印画布更高就会把卡撑高。
+ *    72dp 画布经 [HERO_GLYPH_SCALE] 放大后的**可见**尺寸约 104dp，已经足够铺满右侧。
+ */
+private val HERO_MIN_HEIGHT = 76.dp
+private val HERO_GLYPH_BOX = 72.dp
+private const val HERO_GLYPH_SCALE = 1.45f
+private const val HERO_GLYPH_ALPHA = 0.13f
+private const val HERO_GLYPH_LINE_ALPHA = 0.55f
 
 /** 2 列网格；末行只有一格时用 Spacer 补位，保持两列对齐。 */
 @Composable
@@ -370,6 +413,31 @@ private fun ItemFieldGlyph(
             .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
         contentAlignment = Alignment.Center,
     ) {
+        TypeGlyph(
+            type = type,
+            accent = accent,
+            line = line,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+/**
+ * 类型剪影的**形状本体**，不带任何容器。
+ *
+ * ⚠️ 两处复用：[ItemFieldGlyph]（网格卡的白色圆角卡）与 [AddHeroCard]（主卡的出血水印）。
+ *    同源是「搭配」的前提 —— 8.4 记着「一屏两套规格」是观感廉价的首要来源。
+ *    2026-11-10 00:18 用户反馈主卡「比较素，与下面的剪影卡片风格要能搭配」，
+ *    当时主卡只有一枚 Material「+」图标，与网格的抽象剪影是两套语言。
+ */
+@Composable
+private fun TypeGlyph(
+    type: VaultItemType,
+    accent: Color,
+    line: Color,
+    modifier: Modifier = Modifier,
+) {
+    Box(modifier = modifier, contentAlignment = Alignment.Center) {
         when (type) {
             VaultItemType.Login -> GlyphLogin(accent = accent, line = line)
             VaultItemType.SecureNote -> GlyphNote(line = line)
