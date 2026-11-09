@@ -28,6 +28,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
+import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.addvault.AddCloudVaultScreen
 import io.vaultix.vaultix.ui.addvault.AddKdbxScreen
 import io.vaultix.vaultix.ui.addvault.AddVaultScreen
