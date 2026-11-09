@@ -1,5 +1,10 @@
 package io.vaultix.vaultix.ui.vaultlist
 
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,12 +20,19 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.CloudSync
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Sync
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
+import kotlinx.coroutines.delay
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -86,6 +98,26 @@ import io.vaultix.vaultix.ui.theme.Spacing
  * 交互基线（Docs/16 §4）：LargeTopAppBar 大标题随列表滚动缩放收起，
  * 由滚动位置驱动（nestedScroll），非定时器。
  */
+/**
+ * 切库前置动画时长（ms）。
+ *
+ * 240ms 取自 M3E「与点击相连的动作 ≤300ms」的区间中部：短到不拖沓，
+ * 又足够让「徽章放大 + 色条亮满 + 其它卡退场」三件事被看见。
+ * ⚠️ 别为了「更有仪式感」加到 400ms 以上 —— 那会把切库变成等待。
+ */
+private const val SWITCH_PRELUDE_MS = 240L
+
+/**
+ * 切库动画的数值常量。
+ *
+ * ⚠️ 必须提成常量：detekt `MagicNumber` 的 `ignoreNamedArgument` 只放行命名参数，
+ *    `if (switching) 1.2f else 1f` 里的 `1.2f` 是裸字面量，会被判为魔法数
+ *    （上一批 `repeat(4)` 就是这么红的）。
+ */
+private const val SWITCH_BADGE_SCALE = 1.2f
+private const val BAR_ALPHA_IDLE = 0.4f
+private const val CARD_DIMMED_ALPHA = 0.42f
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun VaultListScreen(
@@ -105,6 +137,26 @@ fun VaultListScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     var vaultToRemove by remember { mutableStateOf<VaultSummary?>(null) }
     var showAddDialog by remember { mutableStateOf(false) }
+
+    /**
+     * 正在切入的库 id（null = 没有切换在进行）。
+     *
+     * P4-b「E 数据流」：点库卡不再立刻导航，先让这张卡播 240ms 前置动画
+     * （徽章放大 + 上沿色条亮满 + 其它卡退场），再调 [onOpenVault]。
+     *
+     * ⚠️ 只做**前置**动画，不做跨 NavHost 的共享元素：那需要 alpha 的
+     *    `SharedTransitionLayout`（8.8 §6① 不允许），且本项目返回转场翻过车
+     *    （`SizeTransform` 关成瞬时那条）。
+     * ⚠️ `remember` 而非 `rememberSaveable`：进程被杀后切换要么已完成、要么从未发生，
+     *    没有值得恢复的中间态。
+     */
+    var switchingVaultId by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(switchingVaultId) {
+        val id = switchingVaultId ?: return@LaunchedEffect
+        delay(SWITCH_PRELUDE_MS)
+        vaults?.firstOrNull { it.id == id }?.let(onOpenVault)
+    }
 
     /**
      * ★ 待用户拍板的冲突（null = 不显示对话框）。
@@ -226,7 +278,12 @@ fun VaultListScreen(
                                 VaultCard(
                                     vault = vault,
                                     syncStatus = syncStatuses[vault.id],
-                                    onClick = { onOpenVault(vault) },
+                                    switching = vault.id == switchingVaultId,
+                                    dimmed = switchingVaultId != null && vault.id != switchingVaultId,
+                                    // 前置动画期间不再接受新的点击，避免连点触发多次导航。
+                                    onClick = {
+                                        if (switchingVaultId == null) switchingVaultId = vault.id
+                                    },
                                     onRemove = { vaultToRemove = vault },
                                     // ⚠️ 只在"该库确实是网盘库"时给同步入口（syncStatus 非 null）。
                                     //    给 Bitwarden / 本地 SAF 库也画一个「立即同步」是错的方向：
@@ -522,42 +579,145 @@ private fun VaultCard(
     onRemove: () -> Unit,
     /** 「立即同步」；null = 这个库没有网盘来源 ⇒ 菜单里不显示该项。 */
     onSyncNow: (() -> Unit)? = null,
+    /** 正在切入这个库：播「数据流」前置动画（P4-b，2026-11-09 用户选 E 方案）。 */
+    switching: Boolean = false,
+    /** 别的库正在切入 ⇒ 这张退场让位。 */
+    dimmed: Boolean = false,
 ) {
+    val scheme = MaterialTheme.colorScheme
+    val badgeScale by animateFloatAsState(
+        targetValue = if (switching) SWITCH_BADGE_SCALE else 1f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessMedium,
+        ),
+        label = "vaultBadgeScale",
+    )
+    val barAlpha by animateFloatAsState(
+        targetValue = if (switching) 1f else BAR_ALPHA_IDLE,
+        animationSpec = tween(durationMillis = 220),
+        label = "vaultBarAlpha",
+    )
+    val cardAlpha by animateFloatAsState(
+        targetValue = if (dimmed) CARD_DIMMED_ALPHA else 1f,
+        animationSpec = tween(durationMillis = 160),
+        label = "vaultCardAlpha",
+    )
     Card(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
+        onClick = { if (!switching && !dimmed) onClick() },
+        modifier = Modifier
+            .fillMaxWidth()
+            .graphicsLayer { alpha = cardAlpha },
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+            containerColor = scheme.surfaceContainerLow,
         ),
     ) {
-        Row(
-            modifier = Modifier.padding(start = Spacing.lg, top = Spacing.lg, bottom = Spacing.lg, end = Spacing.xs),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(text = vault.name, style = MaterialTheme.typography.titleMedium)
-                Text(
-                    text = vaultSubtitle(vault),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                SyncStatusLine(syncStatus = syncStatus)
-                // KDBX 网盘库的**持久**同步状态（与上面那个"本次同步进行到哪"不同，
-                // 见 `KdbxCloudSyncStatus` 的说明）。null = 非网盘库，整行不渲染。
-                KdbxSyncStatusLine(vault.syncStatus)
+        Column {
+            // 上沿色条：切换时从 40% 亮到 100%，读作「数据正在灌进这个库」。
+            // ⚠️ 色条统一用 primary，不按库类型分色 —— 它表达的是「正在切换」，
+            //    按类型分色会让同一张卡出现两个颜色信号（8.4：一个元素说一件事）。
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(3.dp)
+                    .background(scheme.primary.copy(alpha = barAlpha)),
+            )
+            Row(
+                modifier = Modifier.padding(
+                    start = Spacing.lg,
+                    top = Spacing.md,
+                    bottom = Spacing.lg,
+                    end = Spacing.xs,
+                ),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                // 库身份徽章（P4-a）：动效的 hero。缩放只作用于徽章，不动整张卡。
+                Box(
+                    modifier = Modifier.graphicsLayer {
+                        scaleX = badgeScale
+                        scaleY = badgeScale
+                    },
+                ) {
+                    VaultIdentityBadge(vault = vault)
+                }
+                Spacer(Modifier.width(Spacing.md))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(text = vault.name, style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        text = vaultSubtitle(vault),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    SyncStatusLine(syncStatus = syncStatus)
+                    // KDBX 网盘库的**持久**同步状态（与上面那个"本次同步进行到哪"不同，
+                    // 见 `KdbxCloudSyncStatus` 的说明）。null = 非网盘库，整行不渲染。
+                    KdbxSyncStatusLine(vault.syncStatus)
+                }
+                if (!vault.unlocked) {
+                    Icon(
+                        imageVector = Icons.Filled.Lock,
+                        contentDescription = stringResource(R.string.vault_badge_locked),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(UiSize.InlineIcon),
+                    )
+                }
+                VaultCardMenu(onRemove = onRemove, onSyncNow = onSyncNow)
             }
-            if (!vault.unlocked) {
-                Icon(
-                    imageVector = Icons.Filled.Lock,
-                    contentDescription = stringResource(R.string.vault_badge_locked),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(UiSize.InlineIcon),
-                )
-            }
-            VaultCardMenu(onRemove = onRemove, onSyncNow = onSyncNow)
         }
+    }
+}
+
+/**
+ * 库身份徽章（P4-a，2026-11-09）。
+ *
+ * 图标 / 形状 / 颜色按**库类型**区分，全部取自 `colorScheme` 角色，不硬编码品牌色：
+ * - 网盘来源（`syncStatus != null`）→ 圆形 + `secondaryContainer` + 云同步图标；
+ * - 本地 KDBX → 圆角方 + `tertiaryContainer` + 文件图标；
+ * - 云端 Bitwarden → 大圆角 + `primaryContainer` + 云图标。
+ *
+ * ⚠️ 它同时是切库动效的 hero（[VaultCard] 里的 `badgeScale`）：没有这枚徽章，
+ *    E 方案的「徽章先亮 → 数据流入」就没有可联动的对象，只能退回整屏淡入。
+ */
+@Composable
+private fun VaultIdentityBadge(vault: VaultSummary, modifier: Modifier = Modifier) {
+    val scheme = MaterialTheme.colorScheme
+    val cloudSynced = vault.syncStatus != null
+    val localKdbx = vault.kind == VaultKind.KDBX
+    Box(
+        modifier = modifier
+            .size(UiSize.TouchTarget)
+            .clip(
+                when {
+                    cloudSynced -> RoundedCornerShape(percent = 50)
+                    localKdbx -> RoundedCornerShape(14.dp)
+                    else -> RoundedCornerShape(18.dp)
+                },
+            )
+            .background(
+                when {
+                    cloudSynced -> scheme.secondaryContainer
+                    localKdbx -> scheme.tertiaryContainer
+                    else -> scheme.primaryContainer
+                },
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = when {
+                cloudSynced -> Icons.Filled.CloudSync
+                localKdbx -> Icons.Filled.Description
+                else -> Icons.Filled.Cloud
+            },
+            contentDescription = null,
+            tint = when {
+                cloudSynced -> scheme.secondary
+                localKdbx -> scheme.tertiary
+                else -> scheme.primary
+            },
+            modifier = Modifier.size(24.dp),
+        )
     }
 }
 
