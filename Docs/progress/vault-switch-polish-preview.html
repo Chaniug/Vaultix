@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Vaultix · 切库动效与库列表精装修 · 探索</title>
+<style>
+  :root{
+    --bg:#F6F7FB;--panel:#FFFFFF;--ink:#1C2230;--muted:#5C6577;--line:#DDE2EC;
+    --primary:#3B5BC4;--onprimary:#FFFFFF;--tonal:#E7EBFA;--tonal2:#E6F0EC;
+    --tonal3:#F3E9F6;--surface:#ECEFF7;--card:#FFFFFF;--accent:#2A4291;
+  }
+  body.dark{--bg:#12151D;--panel:#1B202B;--ink:#EDF0F7;--muted:#A6AFC2;--line:#333B4C;
+    --primary:#A9BDF5;--onprimary:#1B2B63;--tonal:#2A3350;--tonal2:#243A38;
+    --tonal3:#332A42;--surface:#1A2030;--card:#242B3A;--accent:#C9D2EC;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:14px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;transition:background .25s,color .25s}
+  .wrap{max-width:1400px;margin:0 auto;padding:28px 24px 60px}
+  h1{font-size:25px;margin:0 0 6px;letter-spacing:-.02em}
+  .lead{color:var(--muted);margin:0 0 20px;max-width:920px}
+  h2{font-size:17px;margin:32px 0 6px;display:flex;align-items:center;gap:9px}
+  h2 .num{display:inline-flex;width:23px;height:23px;border-radius:7px;background:var(--primary);
+    color:var(--onprimary);align-items:center;justify-content:center;font-size:12px;font-weight:700}
+  .sub{color:var(--muted);font-size:13px;margin:0 0 14px}
+  .ctlbar{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;background:var(--panel);
+    border:1px solid var(--line);border-radius:14px;padding:13px 16px;position:sticky;top:0;z-index:30}
+  .ctl{display:flex;align-items:center;gap:8px}
+  .ctl>span{color:var(--muted);font-size:12px}
+  .seg{display:flex;gap:3px;background:var(--bg);border:1px solid var(--line);border-radius:9px;padding:3px}
+  .seg button{border:0;background:transparent;color:var(--muted);padding:5px 10px;border-radius:6px;
+    font-size:12px;cursor:pointer}
+  .seg button.on{background:var(--primary);color:var(--onprimary);font-weight:600}
+  .btn{border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:7px 12px;
+    border-radius:9px;font-size:12px;cursor:pointer}
+  .grid{display:grid;gap:16px;margin-top:14px}
+  .grid.g4{grid-template-columns:repeat(4,minmax(0,1fr))}
+  @media(max-width:1050px){.grid.g4{grid-template-columns:repeat(2,minmax(0,1fr))}}
+  @media(max-width:560px){.grid.g4{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:14px;
+    display:flex;flex-direction:column;align-items:center;gap:9px}
+  .card.rec{border-color:var(--primary);box-shadow:0 0 0 2px rgba(59,91,196,.13)}
+  .tag{font-size:11px;padding:2px 8px;border-radius:20px;font-weight:700}
+  .tag.b{background:var(--tonal);color:var(--accent)}
+  .tag.g{background:var(--tonal2);color:#1E6B52}
+  .tag.n{background:var(--bg);color:var(--muted)}
+  .tag.w{background:#FBEEE0;color:#9A5B12}
+  .ttl{font-size:14px;font-weight:700;text-align:center;margin:2px 0 0}
+  .desc{font-size:12px;color:var(--muted);text-align:center;min-height:50px}
+  .ft{font-size:11px;color:var(--muted);text-align:center;border-top:1px dashed var(--line);
+    padding-top:8px;width:100%}
+
+  .phone{width:100%;max-width:250px;aspect-ratio:250/480;border-radius:26px;background:var(--surface);
+    border:5px solid #2B3140;position:relative;overflow:hidden;box-shadow:0 10px 24px rgba(20,28,50,.16)}
+  body.dark .phone{border-color:#0C0F16}
+  .status{height:24px;display:flex;justify-content:space-between;align-items:center;padding:0 13px;
+    font-size:9px;color:var(--muted)}
+  .fab{position:absolute;right:14px;bottom:22px;width:48px;height:48px;border-radius:16px;
+    background:var(--tonal);color:var(--accent);display:flex;align-items:center;justify-content:center;
+    font-size:24px;font-weight:300;box-shadow:0 5px 12px rgba(30,45,90,.16)}
+  .fab.ext{width:auto;height:44px;padding:0 14px;gap:7px;border-radius:22px;font-size:12px;font-weight:600}
+
+  /* 库列表 · 基线 */
+  .vtitle{font-size:20px;font-weight:600;padding:22px 16px 16px}
+  .vault{background:var(--card);border-radius:14px;margin:0 13px 10px;padding:13px 12px;
+    display:flex;align-items:center;gap:10px;border:1px solid rgba(120,135,170,.10);position:relative;overflow:hidden}
+  .vault b{display:block;font-size:12px}
+  .vault small{display:block;font-size:9px;color:var(--muted)}
+  .dots{margin-left:auto;color:var(--muted);font-size:13px}
+  /* 身份卡 */
+  .badge{width:40px;height:40px;flex:none;border-radius:14px;display:flex;align-items:center;
+    justify-content:center;font-size:15px;font-weight:700;color:#fff}
+  .badge.sq{border-radius:12px}.badge.rd{border-radius:50%}
+  .badge.b1{background:#3B5BC4}.badge.b2{background:#6E9B84}.badge.b3{background:#9A7BC4}
+  body.dark .badge.b1{background:#7C93DE}body.dark .badge.b2{background:#5E9B83}body.dark .badge.b3{background:#9B7FC4}
+  .vault.identity::before{content:"";position:absolute;left:0;right:0;top:0;height:3px;background:var(--primary);opacity:.7}
+  .statuschip{display:inline-flex;align-items:center;gap:3px;font-size:8px;color:var(--muted);margin-top:2px}
+  .statuschip i{width:5px;height:5px;border-radius:50%;background:#4CAF80;display:inline-block}
+  .summary{margin:12px 13px 14px;padding:11px;border-radius:14px;background:var(--tonal);
+    display:flex;justify-content:space-between;align-items:center;font-size:10px}
+  .summary b{font-size:14px;display:block}
+  .ring{width:34px;height:34px;border-radius:50%;border:4px solid var(--primary);
+    display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700}
+  .statrow{display:flex;gap:6px;margin-top:5px}
+  .statrow span{background:var(--card);border-radius:6px;padding:2px 5px;font-size:8px;color:var(--muted)}
+  .watermark{position:absolute;width:150px;height:150px;border-radius:42% 58% 62% 38%/45% 40% 60% 55%;
+    background:var(--tonal);opacity:.55;top:52px;right:-52px;pointer-events:none}
+  .vibrantTitle{font-size:24px;font-weight:800;letter-spacing:-.03em;padding:20px 16px 12px}
+
+  /* 切库动效舞台 */
+  .stage{width:100%;max-width:250px;aspect-ratio:250/330;border-radius:18px;background:var(--surface);
+    position:relative;overflow:hidden;border:1px solid var(--line);cursor:pointer}
+  .stage .layer{position:absolute;inset:0}
+  .stage .old{background:var(--surface);display:flex;flex-direction:column;padding:18px 14px;gap:9px}
+  .stage .old .vault{margin:0}
+  .stage .new{background:var(--tonal);display:flex;flex-direction:column;align-items:center;
+    justify-content:center;gap:8px;opacity:0;transform:scale(1)}
+  .stage .new b{font-size:16px}.stage .new small{font-size:10px;color:var(--muted)}
+  .stage.fxD .new{opacity:1}
+  .stage.fxD .old{opacity:0}
+  .stage:not(.fxA) .tilecard{display:none}
+  .stage .tilecard{position:absolute;left:16px;right:16px;top:120px;height:70px;border-radius:14px;
+    background:var(--card);border:1px solid var(--line);display:flex;align-items:center;gap:9px;padding:10px;
+    transform-origin:center center}
+  .stage .tilecard .badge{width:30px;height:30px;font-size:11px;border-radius:10px}
+  .stage .tilecard b{font-size:11px}
+  .hintline{font-size:11px;color:var(--muted);text-align:center;margin-top:8px}
+
+  .stage.fxA.play .tilecard{animation:grow .26s cubic-bezier(.2,.8,.2,1) forwards}
+  @keyframes grow{to{left:-40px;right:-40px;top:-40px;height:410px;border-radius:0;background:var(--tonal)}}
+  .stage.fxB .new{opacity:1;clip-path:circle(0% at 50% 78%)}
+  .stage.fxB.play .new{animation:reveal .28s ease-out forwards}
+  @keyframes reveal{to{clip-path:circle(150% at 50% 78%)}}
+  .stage.fxC.play .old{animation:outz .24s ease-in forwards}
+  .stage.fxC.play .new{animation:inz .26s ease-out forwards}
+  @keyframes outz{to{opacity:0;transform:scale(.92)}}
+  @keyframes inz{0%{opacity:0;transform:scale(1.05)}100%{opacity:1;transform:scale(1)}}
+  .curtain{position:absolute;inset:0;display:flex;pointer-events:none}
+  .curtain i{flex:1;background:var(--card);transform-origin:top;transform:scaleY(1)}
+  .stage.fxD.play .curtain i{animation:blind .26s ease-in forwards}
+  .stage.fxD.play .curtain i:nth-child(2){animation-delay:.04s}
+  .stage.fxD.play .curtain i:nth-child(3){animation-delay:.08s}
+  .stage.fxD.play .curtain i:nth-child(4){animation-delay:.12s}
+  @keyframes blind{to{transform:scaleY(0)}}
+  .stage.slow *{animation-duration:.9s!important}
+  .stage.slow .curtain i{animation-delay:.12s!important}
+  .stage.slow .curtain i:nth-child(2){animation-delay:.24s!important}
+  .stage.slow .curtain i:nth-child(3){animation-delay:.36s!important}
+  .stage.slow .curtain i:nth-child(4){animation-delay:.48s!important}
+
+  .notes{margin-top:34px;background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:20px 22px}
+  .notes h3{margin:0 0 10px;font-size:16px}
+  .notes p{color:var(--muted);font-size:13px;margin:8px 0}
+  .notes b{color:var(--ink)}
+  table{width:100%;border-collapse:collapse;font-size:12px;margin-top:12px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-weight:600}
+  code{background:var(--bg);padding:1px 5px;border-radius:4px;font-size:11px}
+  .warnbox{border-left:3px solid #D08A2C;background:rgba(208,138,44,.08);padding:10px 14px;
+    border-radius:0 8px 8px 0;margin:14px 0;font-size:13px;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>切库仪式感 × 库列表精装修</h1>
+  <p class="lead">M3 Expressive 2026 给了两条线：<b>motion physics</b>（弹簧 + container transform / shared axis）
+    与 <b>shape library + vibrant color</b>（约 35 种形状、tonal 角色配色、emphasized 排印）。
+    下面 A 区可点播四种切库动效（默认 200–280ms），B 区并排四种库列表外观。</p>
+
+  <div class="ctlbar">
+    <div class="ctl"><span>主题</span><div class="seg" id="theme">
+      <button data-v="light" class="on">浅色</button><button data-v="dark">深色</button></div></div>
+    <div class="ctl"><span>动效</span><div class="seg" id="speed">
+      <button data-v="normal" class="on">正常速度</button><button data-v="slow">慢放逐帧</button></div></div>
+    <button class="btn" id="playAll">全部播放一次</button>
+    <span class="hint" style="font-size:12px;color:var(--muted)">也可以单独点每个舞台</span>
+  </div>
+
+  <h2><span class="num">A</span>切库动效 · 四种候选</h2>
+  <p class="sub">点任意一张卡播放。A 是 M3 官方 container transform，C 是 shared axis Z；
+    B/D 是自绘的幕布效果，最贴你说的「电影幕布」但规范上没有对应组件。</p>
+  <div class="grid g4" id="fxGrid"></div>
+
+  <h2><span class="num">B</span>库列表 · 四种外观</h2>
+  <p class="sub">① 是你截图里的现状；② 是推荐的「库身份卡」；③ 加统计信息；④ 是最大胆的全 M3E vibrant。</p>
+  <div class="grid g4" id="listGrid"></div>
+
+  <div class="notes">
+    <h3>为什么推荐 A（容器展开）+ ②（库身份卡）</h3>
+    <p><b>动效</b>：container transform 把「切库」的因果画出来了——点的是那张卡，展开的也是那张卡，
+      而不是一个与点击无关的整屏淡入。200–260ms，比 M3E 的 400ms 中档更短，不拖慢切库。
+      C（纵深换层）是最稳的备选：只改透明度与缩放，不动布局尺寸。</p>
+    <p><b>库列表</b>：现在的问题是大片空白 + 两张同色灰卡 + 一个孤零零的 FAB，没有视觉锚点。
+      ② 给每个库一个 48dp 形状徽章，颜色全部取自 <code>colorScheme</code> 的 tonal 角色
+      （<b>不硬编码品牌色</b>，动态取色安全），形状按库类型区分：云端 squircle / 本地圆角方 / 云盘圆形。
+      空白区改成一张「当前活跃库」摘要卡，填空白的同时给的是真信息，比装饰插画耐看。</p>
+
+    <div class="warnbox"><b>三条不能忘的历史证据：</b>
+      ① <code>MainShellScreen</code> 的 Tab <code>AnimatedContent</code> 把
+      <code>SizeTransform</code> 关成瞬时，因为返回时重进组合会重放转场、把详情页裁小 1–2 帧；
+      ② <code>skipFirstTransition</code> 挡的是「重新进入组合」的重放，切库是另一个事件，状态要独立；
+      ③ 新库页若让内容从顶栏下滑过，底色必须 <code>surfaceContainerHighest</code>（亮度比 1.232），
+      用 Low 会与栏同色。⇒ <b>动效做在「库列表 → 主界面」这条导航上，不碰主界面内部的 Tab 转场。</b></div>
+
+    <table>
+      <tr><th>批</th><th>内容</th><th>风险</th></tr>
+      <tr><td>P4-a</td><td>库身份卡 + 活跃库摘要卡</td><td>低，纯 UI</td></tr>
+      <tr><td>P4-b</td><td>切库 container transform（200–250ms）</td><td>中，需录屏逐帧验返回不重放、不叠影</td></tr>
+      <tr><td>P4-c</td><td>形状 morph / 统计环 / emphasized 排印</td><td>高，alpha API；不做也能交付完整体验</td></tr>
+    </table>
+
+    <p style="margin-top:14px">本页与 <code>vault-switch-polish-plan.md</code> 都是<b>方案</b>，未改任何 Kotlin / XML。
+      同一批已施工的是另外四件事（玻璃默认生效、面板去标题 + 生成器长条卡 + 彩色剪影、
+      卡包容纳身份条目），交 CI 出包中。</p>
+  </div>
+</div>
+
+<script>
+const FX = [
+  {k:'fxA',tag:'g',tagText:'★ 推荐',name:'A 容器展开',
+   desc:'被点的库卡圆角与尺寸连续扩成整屏，像「打开这个库」。M3 官方 container transform。',
+   ft:'200–260ms · 因果最清楚 · 不碰主界面 Tab 转场'},
+  {k:'fxB',tag:'b',tagText:'幕布',name:'B 圆形幕布',
+   desc:'从触点圆形揭开新库页面，最像你说的「电影幕布」。',
+   ft:'280ms · Compose 无官方组件，需自绘 clip 圆路径'},
+  {k:'fxC',tag:'g',tagText:'最稳',name:'C 纵深换层',
+   desc:'旧库缩小淡出、新库从稍大处淡入，Z 轴语义。M3 shared axis Z。',
+   ft:'240ms · 不动布局尺寸，最不容易翻车'},
+  {k:'fxD',tag:'w',tagText:'探索',name:'D 百叶幕布',
+   desc:'数条纵带依次滑开，最戏剧化，也最容易显得花哨。',
+   ft:'260ms + 40ms stagger · 无官方对应'},
+];
+
+function stageHtml(f){
+  return `<div class="card ${f.k==='fxA'?'rec':''}">
+    <span class="tag ${f.tag}">${f.tagText}</span>
+    <p class="ttl">${f.name}</p><p class="desc">${f.desc}</p>
+    <div class="stage ${f.k}" data-fx="${f.k}">
+      <div class="layer old">
+        <div style="font-size:13px;font-weight:600;margin-bottom:6px">我的密码库</div>
+        <div class="vault"><span class="badge b1">B</span><div><b>Bitwarden</b><small>valkjin@outlook.com</small></div></div>
+        <div class="vault"><span class="badge sq b2">K</span><div><b>valk.kdbx</b><small>本地文件 · valk.kdbx</small></div></div>
+      </div>
+      <div class="layer new"><b>valk.kdbx</b><small>已切换 · 12 个条目</small></div>
+      <div class="tilecard"><span class="badge sq b2">K</span><div><b>valk.kdbx</b></div></div>
+      <div class="curtain"><i></i><i></i><i></i><i></i></div>
+    </div>
+    <div class="hintline">点这里播放</div>
+    <div class="ft">${f.ft}</div>
+  </div>`;
+}
+
+const LISTS = [
+  {k:'v1',tag:'n',tagText:'装机现状',name:'① 灰卡基线',
+   desc:'大标题 + 两张同色灰卡 + 右下角 FAB，大片空白，没有身份感。',
+   ft:'你的截图就是这一版'},
+  {k:'v2',tag:'g',tagText:'★ 推荐',name:'② 库身份卡',
+   desc:'每张卡一个形状徽章 + 类型色，卡片上沿一条细色条；空白区换成「当前活跃库」摘要卡。',
+   ft:'颜色全取 colorScheme 角色 · 形状按库类型区分 · 零新依赖'},
+  {k:'v3',tag:'b',tagText:'信息密度',name:'③ 统计型',
+   desc:'② 之上加条目数环与最近同步状态，把空白变成有用的信息。',
+   ft:'需与库摘要加载时序同步，成本中等'},
+  {k:'v4',tag:'w',tagText:'最大胆',name:'④ 全 M3E vibrant',
+   desc:'emphasized 大标题 + 装饰形状水印 + 不同卡角 + Extended FAB。',
+   ft:'最「高级」，也最容易一屏两套规格'},
+];
+
+function badgeCls(k,i){return i===0?'b1':i===1?'sq b2':'rd b3';}
+function badgeChar(k,i){return ['B','K','C'][i];}
+function listHtml(v){
+  const names=['Bitwarden','valk.kdbx','云盘同步'];
+  const subs=['valkjin@outlook.com','本地文件 · valk.kdbx','WebDAV · 已同步'];
+  const vibrant=v.k==='v4';
+  const ident=v.k!=='v1';
+  const stat=v.k==='v3';
+  return `<div class="card ${v.k==='v2'?'rec':''}">
+    <span class="tag ${v.tag}">${v.tagText}</span>
+    <p class="ttl">${v.name}</p><p class="desc">${v.desc}</p>
+    <div class="phone">
+      ${vibrant?'<div class="watermark"></div>':''}
+      <div class="status"><span>9:41</span><span>●●● ▮</span></div>
+      <div class="${vibrant?'vibrantTitle':'vtitle'}">我的密码库</div>
+      ${ident?`<div class="summary">
+        <div><small style="color:var(--muted)">当前活跃库</small><b>valk.kdbx</b>
+          <div class="statrow"><span>12 个条目</span><span>已同步</span></div></div>
+        ${stat?'<div class="ring">12</div>':''}</div>`:''}
+      ${names.slice(0,2).map((n,i)=>`<div class="vault ${ident?'identity':''}">
+        ${ident?`<span class="badge ${badgeCls(v.k,i)}">${badgeChar(v.k,i)}</span>`:''}
+        <div><b>${n}</b><small>${subs[i]}</small>
+          ${ident?`<div class="statuschip"><i></i>${i===0?'云端 · 已同步':'本地 · 已同步'}</div>`:''}</div>
+        <span class="dots">⋮</span></div>`).join('')}
+      <div class="fab ${vibrant?'ext':''}">${vibrant?'＋ 添加库':'+'}</div>
+    </div>
+    <div class="ft">${v.ft}</div>
+  </div>`;
+}
+
+const state={theme:'light',speed:'normal'};
+function render(){
+  document.body.classList.toggle('dark',state.theme==='dark');
+  document.getElementById('fxGrid').innerHTML=FX.map(stageHtml).join('');
+  document.getElementById('listGrid').innerHTML=LISTS.map(listHtml).join('');
+  document.querySelectorAll('.stage').forEach(s=>{
+    if(state.speed==='slow') s.classList.add('slow');
+    s.addEventListener('click',()=>play(s));
+  });
+}
+function play(s){
+  s.classList.remove('play');
+  void s.offsetWidth;
+  s.classList.add('play');
+  setTimeout(()=>s.classList.remove('play'),state.speed==='slow'?1400:600);
+}
+['theme','speed'].forEach(k=>{
+  document.getElementById(k).addEventListener('click',e=>{
+    const b=e.target.closest('button');if(!b)return;
+    state[k]=b.dataset.v;
+    [...e.currentTarget.children].forEach(x=>x.classList.toggle('on',x===b));
+    render();
+  });
+});
+document.getElementById('playAll').addEventListener('click',()=>{
+  document.querySelectorAll('.stage').forEach((s,i)=>setTimeout(()=>play(s),i*120));
+});
+render();
+</script>
+</body>
+</html>
