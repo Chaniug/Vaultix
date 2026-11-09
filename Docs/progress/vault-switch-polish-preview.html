@@ -114,8 +114,9 @@
   .stage.fxA.play .new{z-index:3;animation:showNew .2s .14s ease-out forwards}
   @keyframes grow{to{left:-40px;right:-40px;top:-40px;height:410px;border-radius:0;background:var(--tonal)}}
   @keyframes showNew{to{opacity:1}}
-  .stage.fxB .new{opacity:1;clip-path:circle(0% at 50% 78%)}
-  .stage.fxB.play .new{animation:reveal .28s ease-out forwards}
+  .stage.fxB .new{opacity:0;clip-path:circle(0% at 50% 78%)}
+  /* 双动画：clip-path 负责圆形揭开，opacity 兜底（部分渲染环境不推进 clip-path 动画）。 */
+  .stage.fxB.play .new{animation:reveal .28s ease-out forwards, showNew .18s .08s ease-out forwards}
   @keyframes reveal{to{clip-path:circle(150% at 50% 78%)}}
   .stage.fxC.play .old{animation:outz .24s ease-in forwards}
   .stage.fxC.play .new{animation:inz .26s ease-out forwards}
@@ -133,6 +134,67 @@
   .stage.slow .curtain i:nth-child(2){animation-delay:.24s!important}
   .stage.slow .curtain i:nth-child(3){animation-delay:.36s!important}
   .stage.slow .curtain i:nth-child(4){animation-delay:.48s!important}
+
+  /* A2 联动型：库卡 / 徽章 / 条目占位 / 计数都在同一条时间线上，不用整屏覆盖层 */
+  .stage.linked{padding:15px 12px;display:flex;flex-direction:column;gap:6px}
+  .stage.linked .ltitle{font-size:12px;font-weight:600;margin-bottom:2px}
+  .vcard{background:var(--card);border:1px solid var(--line);border-radius:11px;
+    padding:6px 8px;display:flex;align-items:center;gap:7px}
+  .vcard.sel{border-color:var(--primary);box-shadow:0 0 0 2px rgba(59,91,196,.14)}
+  .vcard .badge{width:22px;height:22px;font-size:9px;border-radius:8px}
+  .vcard b{font-size:10px;display:block}.vcard small{font-size:8px;color:var(--muted);display:block}
+  .vcard .cnt{margin-left:auto;font-size:9px;color:var(--muted)}
+  .stream{display:flex;flex-direction:column;gap:5px;margin-top:4px}
+  .srow{height:12px;border-radius:6px;background:var(--card);width:100%;position:relative;overflow:hidden}
+  .srow::before{content:"";position:absolute;left:6px;top:4px;height:4px;width:34%;border-radius:3px;background:var(--line)}
+  .srow::after{content:"";position:absolute;right:6px;top:4px;height:4px;width:16%;border-radius:3px;background:var(--line)}
+  .switchlabel{font-size:10px;color:var(--accent);text-align:center;margin-top:auto;opacity:0}
+  @keyframes uniformOut{to{opacity:0;transform:translateX(10px)}}
+  @keyframes heroPulse{50%{transform:scale(1.22)}100%{transform:scale(1)}}
+  @keyframes flowIn{to{transform:translateX(0);opacity:1}}
+  @keyframes cascadeIn{to{transform:translateY(0) scale(1);opacity:1}}
+  @keyframes showLabel{to{opacity:1}}
+  @keyframes reel{to{transform:translateY(-6px)}}
+  @keyframes gear{to{transform:rotate(45deg)}}
+  @keyframes shapeMorph{to{border-radius:50%}}
+  @keyframes cardMorph{to{border-radius:22px}}
+  @keyframes widthSync{0%{width:70%}100%{width:100%}}
+  /* E 数据流：徽章先亮（Hero-First）→ 条目行 40ms stagger 流入 → 计数落定 */
+  .stage.fxE.play .vcard:not(.sel){animation:uniformOut .16s ease-in forwards}
+  .stage.fxE.play .vcard.sel .badge{animation:heroPulse .2s ease-out}
+  .stage.fxE.play .srow{transform:translateX(-14px);opacity:0;animation:flowIn .22s cubic-bezier(.2,.8,.2,1) forwards}
+  .stage.fxE.play .srow:nth-child(2){animation-delay:.04s}
+  .stage.fxE.play .srow:nth-child(3){animation-delay:.08s}
+  .stage.fxE.play .srow:nth-child(4){animation-delay:.12s}
+  .stage.fxE.play .switchlabel{animation:showLabel .2s .18s ease-out forwards}
+  /* F 齿轮滚动：卡片像滚轮位移，徽章只转 45 度（不转满圈，克制） */
+  .stage.fxF.play .vcard{animation:reel .3s cubic-bezier(.2,.8,.2,1) forwards}
+  .stage.fxF.play .vcard:nth-child(3){animation-delay:.02s}
+  .stage.fxF.play .vcard:nth-child(4){animation-delay:.04s}
+  .stage.fxF.play .vcard.sel .badge{animation:gear .3s cubic-bezier(.2,.8,.2,1) forwards}
+  .stage.fxF.play .srow{transform:translateX(-10px);opacity:0;animation:flowIn .2s .14s ease-out forwards}
+  .stage.fxF.play .switchlabel{animation:showLabel .2s .22s ease-out forwards}
+  /* G 级联流入：官方 sequential reveal，40ms stagger、总 stagger ≤300ms */
+  .stage.fxG.play .vcard.sel{animation:heroPulse .2s ease-out}
+  .stage.fxG.play .srow{transform:translateY(12px) scale(.94);opacity:0;animation:cascadeIn .24s ease-out forwards}
+  .stage.fxG.play .srow:nth-child(1){animation-delay:.06s}
+  .stage.fxG.play .srow:nth-child(2){animation-delay:.10s}
+  .stage.fxG.play .srow:nth-child(3){animation-delay:.14s}
+  .stage.fxG.play .srow:nth-child(4){animation-delay:.18s}
+  .stage.fxG.play .switchlabel{animation:showLabel .2s .24s ease-out forwards}
+  /* H 形状联动：徽章 morph + 卡片圆角 + 条目行宽度同一条时间线 */
+  .stage.fxH.play .vcard.sel{animation:cardMorph .26s ease-out forwards}
+  .stage.fxH.play .vcard.sel .badge{animation:shapeMorph .26s ease-out forwards}
+  .stage.fxH.play .srow{animation:widthSync .26s ease-out forwards}
+  .stage.fxH.play .switchlabel{animation:showLabel .2s .2s ease-out forwards}
+  .stage.slow .srow{animation-delay:.12s!important}
+  .stage.slow .srow:nth-child(2){animation-delay:.24s!important}
+  .stage.slow .srow:nth-child(3){animation-delay:.36s!important}
+  .stage.slow .srow:nth-child(4){animation-delay:.48s!important}
+  /* 终态兜底：不依赖 animation-fill-mode，播放结束后由 JS 加 done。
+     这样即使某个环境没推进 clip-path / transform 动画，画面也不会停在半路。 */
+  .stage.linked.done .srow{opacity:1;transform:none}
+  .stage.linked.done .switchlabel{opacity:1}
 
   .notes{margin-top:34px;background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:20px 22px}
   .notes h3{margin:0 0 10px;font-size:16px}
@@ -167,6 +229,13 @@
   <p class="sub">点任意一张卡播放。A 是 M3 官方 container transform，C 是 shared axis Z；
     B/D 是自绘的幕布效果，最贴你说的「电影幕布」但规范上没有对应组件。</p>
   <div class="grid g4" id="fxGrid"></div>
+
+  <h2><span class="num">A2</span>联动型切库 · 库列表元素一起参与</h2>
+  <p class="sub">A 区四种都是「整屏换页」，库列表只是被动消失。这一组让<b>库卡、徽章、条目占位、计数</b>
+    在同一条时间线上动：E 数据流、F 齿轮滚动、G 级联流入、H 形状联动。
+    依据 M3E 的 Hero-First（焦点先动）、Sequential Reveal（20–50ms stagger、总 ≤300ms）、
+    Shared motion 与 Shape morph；同屏同时动画控制在 3 个以内，不夸张。</p>
+  <div class="grid g4" id="fx2Grid"></div>
 
   <h2><span class="num">B</span>库列表 · 四种外观</h2>
   <p class="sub">① 是你截图里的现状；② 是推荐的「库身份卡」；③ 加统计信息；④ 是最大胆的全 M3E vibrant。</p>
@@ -237,6 +306,45 @@ function stageHtml(f){
   </div>`;
 }
 
+/* A2：联动型。每个候选都明确写出「哪些列表元素参与」，不是整屏换页。 */
+const FX2 = [
+  {k:'fxE',tag:'g',tagText:'★ 数据流',name:'E 数据流',
+   desc:'选中库的徽章先亮，条目化作一行行色块从徽章流入下方列表，其余库卡统一退场。',
+   ft:'280ms · Hero-First + 40ms stagger · 联动：徽章/条目行/其他库卡/计数'},
+  {k:'fxF',tag:'b',tagText:'机械感',name:'F 齿轮滚动',
+   desc:'三张库卡像滚轮一起位移，选中卡升到顶部定格，徽章只转 45° 不转满圈。',
+   ft:'300ms · 联动：三张卡位置/徽章转角/条目行 · 克制版机械感'},
+  {k:'fxG',tag:'g',tagText:'最规范',name:'G 级联流入',
+   desc:'官方 sequential reveal：库卡高亮后，条目行 40ms 间隔依次上滑淡入。',
+   ft:'240ms + 4×40ms · 联动：库卡高亮/条目行/计数'},
+  {k:'fxH',tag:'w',tagText:'形状派',name:'H 形状联动',
+   desc:'徽章从圆角方 morph 成圆，卡片圆角与条目行宽度在同一条时间线上一起变。',
+   ft:'260ms · M3E shape morph · 联动：徽章/卡片/条目行'},
+];
+
+function stage2Html(f){
+  const cards=[['B','Bitwarden','valkjin@outlook.com','34'],
+               ['K','valk.kdbx','本地文件 · valk.kdbx','12'],
+               ['C','云盘同步','WebDAV · 已同步','8']];
+  return `<div class="card ${f.k==='fxE'?'rec':''}">
+    <span class="tag ${f.tag}">${f.tagText}</span>
+    <p class="ttl">${f.name}</p><p class="desc">${f.desc}</p>
+    <div class="stage linked ${f.k}" data-fx="${f.k}">
+      <div class="ltitle">我的密码库</div>
+      ${cards.map((c,i)=>`<div class="vcard ${i===1?'sel':''}">
+        <span class="badge ${i===0?'b1':i===1?'sq b2':'rd b3'}">${c[0]}</span>
+        <div><b>${c[1]}</b><small>${c[2]}</small></div>
+        <span class="cnt">${c[3]}</span></div>`).join('')}
+      <div class="stream">
+        <div class="srow"></div><div class="srow"></div><div class="srow"></div><div class="srow"></div>
+      </div>
+      <div class="switchlabel">已切换 · valk.kdbx · 12 个条目</div>
+    </div>
+    <div class="hintline">点这里播放</div>
+    <div class="ft">${f.ft}</div>
+  </div>`;
+}
+
 const LISTS = [
   {k:'v1',tag:'n',tagText:'装机现状',name:'① 灰卡基线',
    desc:'大标题 + 两张同色灰卡 + 右下角 FAB，大片空白，没有身份感。',
@@ -286,6 +394,7 @@ const state={theme:'light',speed:'normal'};
 function render(){
   document.body.classList.toggle('dark',state.theme==='dark');
   document.getElementById('fxGrid').innerHTML=FX.map(stageHtml).join('');
+  document.getElementById('fx2Grid').innerHTML=FX2.map(stage2Html).join('');
   document.getElementById('listGrid').innerHTML=LISTS.map(listHtml).join('');
   document.querySelectorAll('.stage').forEach(s=>{
     if(state.speed==='slow') s.classList.add('slow');
@@ -293,12 +402,15 @@ function render(){
   });
 }
 function play(s){
-  s.classList.remove('play');
+  s.classList.remove('play','done');
   void s.offsetWidth;
   // 播完**保持终态**（新库画面），不再自动跳回初始态。
   // 之前 600ms 后 remove('play') 会让 forwards 动画瞬间复位，260ms 的动画
   // 根本来不及看清 —— 这就是「有几个效果看不出来」的直接原因。
   s.classList.add('play');
+  // 动画跑完后再钉一次终态，不依赖 animation-fill-mode 是否被渲染环境保留。
+  clearTimeout(s._doneTimer);
+  s._doneTimer=setTimeout(()=>s.classList.add('done'), state.speed==='slow'?1600:700);
 }
 ['theme','speed'].forEach(k=>{
   document.getElementById(k).addEventListener('click',e=>{
@@ -312,9 +424,18 @@ document.getElementById('playAll').addEventListener('click',()=>{
   document.querySelectorAll('.stage').forEach((s,i)=>setTimeout(()=>play(s),i*120));
 });
 document.getElementById('resetAll').addEventListener('click',()=>{
-  document.querySelectorAll('.stage').forEach(s=>s.classList.remove('play'));
+  document.querySelectorAll('.stage').forEach(s=>{
+    clearTimeout(s._doneTimer);
+    s.classList.remove('play','done');
+  });
 });
 render();
+// 无头浏览器截图复核用：?auto=1 自动把所有舞台播到终态。
+// 普通打开不自动播放，交互仍由用户点「全部播放一次」或单个舞台触发。
+if(new URLSearchParams(location.search).has('auto')){
+  setTimeout(()=>document.querySelectorAll('.stage').forEach((s,i)=>
+    setTimeout(()=>play(s), i*80)), 300);
+}
 </script>
 </body>
 </html>
