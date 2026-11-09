@@ -24,3 +24,12 @@ app/src/main/java/io/vaultix/vaultix/ui/vaultlist/VaultListViewModel.kt	该密�
 app/src/main/java/io/vaultix/vaultix/ui/onboarding/OnboardingPreview.kt	插画对照 · 浅 / 深	Compose Preview 的**预览名与分栏标注**，只出现在 IDE 设计预览面板里，永远不上屏；进 strings.xml 会白多一条永不使用的资源（翻译平台也会白翻）。同 ui/preview/ 的豁免理由
 app/src/main/java/io/vaultix/vaultix/ui/onboarding/OnboardingPreview.kt	浅色	同上：预览画布里给\"这一行是浅色主题\"打的标注，不是界面文案
 app/src/main/java/io/vaultix/vaultix/ui/onboarding/OnboardingPreview.kt	深色	同上：预览画布里给\"这一行是深色主题\"打的标注，不是界面文案
+
+# ---- 写进文件 / 数据库、**不上屏**（2026-11-10：KdbxOpenError.EmptyFile 的文案）----
+# ⚠️ 这一条是**刻意误报**，不是"暂时写死"：
+#    这两句只作为 `KdbxFailure` 的 Exception.message 与 `UnlockResult.Unknown(detail)`
+#    的 detail 出现 —— 而 detail 的契约就是"数据层已翻译好的话"，UI 原样显示。
+#    真正上屏的那一句走的是 `UnlockUiError.Unknown(detail)` → `unlockErrorText`，
+#    **它显示的就是这里的原文**。⇒ 若将来要让这句可翻译，改的是
+#    `KdbxOpenError.EmptyFile` 的类型（加资源 id），而不是把这句话挪进 strings.xml。
+data/kdbx/src/main/java/io/vaultix/data/kdbx/Kdbx.kt	这个文件是空的	KdbxOpenError.EmptyFile.guidance —— 数据层错误文案，经 UnlockResult.Unknown(detail) 原样上屏；翻译它要改错误类型，不是挪进 strings.xml

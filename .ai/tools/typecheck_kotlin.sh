@@ -66,6 +66,7 @@
 # | `mockk()` 参数形态（CI 踩过的坑都在这列） | KSP/Hilt **代码生成**（只做类型检查，不生成实现） |
 # | 项目自身类型错误（自动带齐传递闭包） | detekt 规则、编码检查 |
 # | **运行期行为**：竞态、flaky、虚拟时间陷阱 | **依赖 Android SDK 空注解**的写法（见下） |
+# | 混编 **.java** 的符号引用（`KotpassKdfBridge`）+ 产出字节码（2026-11-10 补） | **Compose 组件的签名检查**：`ui/*` 的 `@Composable` 参数类型要 Compose 插件 |
 #
 # ⚠️ **已知盲区（实测确认，别拿本地绿灯当证据）**：
 #   `android-all.jar` 字节码**没有 `@NonNull`** ⇒ Kotlin 把这些参数当**平台类型**
@@ -96,6 +97,11 @@
 #     VAULTIX_RUN_TESTS=0 bash .ai/tools/typecheck_kotlin.sh --all           # 只编译
 #
 # 首次运行下载约 200MB 依赖到 ~/.cache/vaultix-typecheck/，之后走缓存。
+#
+# **沙箱 / 没跑过 gradle 的机器**（本来 $KGP 为空 ⇒ 脚本直接退出，2026-11-10 修）：
+#     bash .ai/tools/typecheck_kotlin.sh --fetch-compiler   # 一次性，约 58MB
+#   之后照常用。编译器与它的四个运行期依赖（trove4j / daemon / script-runtime / reflect）
+#   都从 $LIBS 取；同包 .java 源码（如 KotpassKdfBridge.java）也会一并纳入闭包。
 #
 # ## 自身也做过变异测试（2026-10-03）
 #
@@ -149,6 +155,31 @@ GMAVEN="${GOOGLE_MAVEN:-https://dl.google.com/dl/android/maven2}"
 
 BATCH=0
 MODULE_ARGS=()
+# ★ 2026-11-10 新增：--fetch-compiler
+#   沙箱（或任何没跑过 gradle 的机器）首次使用前先执行一次，把 kotlin 编译器本体
+#   与它的四个运行期依赖拉进 $LIBS。约 58MB，之后永久走缓存。
+#   ⚠️ 之所以必须显式做这一步：编译器**不在** $LIBS 的常规依赖清单里
+#      （它是工具，不是被测代码的依赖），而沙箱又跑不了 gradle 去产生它的缓存。
+if [ "${1:-}" = "--fetch-compiler" ]; then
+  KV="${VAULTIX_KOTLIN_VER:-2.1.20}"
+  mkdir -p "$LIBS"
+  fetch() { # gav path-name
+    local out="$LIBS/$2"
+    [ -s "$out" ] && { echo "  = $2（已缓存）"; return 0; }
+    echo "  ↓ $2"
+    curl -fsSL -o "$out" "$1" || { echo "    下载失败：$1" >&2; rm -f "$out"; return 1; }
+  }
+  fetch "$M2/org/jetbrains/kotlin/kotlin-compiler-embeddable/$KV/kotlin-compiler-embeddable-$KV.jar" \
+        "org-jetbrains-kotlin-kotlin-compiler-embeddable-${KV//./-}.jar"
+  fetch "$M2/org/jetbrains/kotlin/kotlin-daemon-embeddable/$KV/kotlin-daemon-embeddable-$KV.jar" \
+        "org-jetbrains-kotlin-kotlin-daemon-embeddable-${KV//./-}.jar"
+  fetch "$M2/org/jetbrains/kotlin/kotlin-script-runtime/$KV/kotlin-script-runtime-$KV.jar" \
+        "org-jetbrains-kotlin-kotlin-script-runtime-${KV//./-}.jar"
+  fetch "$M2/org/jetbrains/intellij/deps/trove4j/1.0.20200330/trove4j-1.0.20200330.jar" \
+        "org-jetbrains-intellij-deps-trove4j-1-0-20200330.jar"
+  echo "完成。kotlin-compiler-embeddable $KV 已就绪（$LIBS）"
+  exit 0
+fi
 if [ "${1:-}" = "--all" ]; then
   BATCH=1; shift
   MODULE_ARGS=("$@")
@@ -325,12 +356,41 @@ CP="${CP#:}"
 
 # ---- Kotlin 编译器（embeddable jar，自带 CLI；沙箱无 sdkman/kotlinc）----
 KGP="$HOME/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlin"
-COMPILER="$(find "$KGP" -name 'kotlin-compiler-embeddable-*.jar' 2>/dev/null | sort | tail -1)"
-[ -n "$COMPILER" ] || { echo "找不到 kotlin-compiler-embeddable，请先跑一次 gradle" >&2; exit 2; }
+# ⚠️ 2026-11-10 修：**沙箱不会自己跑 gradle**，`$KGP` 永远是空的
+#    ⇒ 这个脚本在沙箱里从来没跑起来过（报"请先跑一次 gradle"，而沙箱跑不了 gradle）。
+#    这正是它最该发挥作用的场景恰好失效的原因：写错一个字仍然只能等 CI。
+#
+# 现在的取法（三级，从上往下取第一个命中的）：
+#   ① `VAULTIX_KOTLINC_JAR` 环境变量（显式指定，便于换版本/换机器）；
+#   ② gradle 缓存（本机跑过 CI 同款 gradle 的话最省事，版本天然对得上）；
+#   ③ **$LIBS 缓存里的那份**（由 `--fetch-compiler` 拉到，见下）。
+# ⚠️ 版本必须与 `kotlin-serialization-compiler-plugin-embeddable` **一致**：
+#    插件按编译器 ABI 加载，不匹配时**静默不生效**（编译全绿、运行期才炸）。
+VAULTIX_KOTLIN_VER="${VAULTIX_KOTLIN_VER:-2.1.20}"
+COMPILER="${VAULTIX_KOTLINC_JAR:-}"
+if [ -z "$COMPILER" ] && [ -d "$KGP" ]; then
+  COMPILER="$(find "$KGP" -name 'kotlin-compiler-embeddable-*.jar' 2>/dev/null | sort | tail -1)"
+fi
+if [ -z "$COMPILER" ]; then
+  COMPILER="$(ls "$LIBS"/org-jetbrains-kotlin-kotlin-compiler-embeddable-*.jar 2>/dev/null | sort | tail -1)"
+fi
+[ -n "$COMPILER" ] || {
+  echo "找不到 kotlin-compiler-embeddable。" >&2
+  echo "  本机跑过 gradle ⇒ 应该已在缓存里；沙箱/新机器 ⇒ 先执行：" >&2
+  echo "    bash .ai/tools/typecheck_kotlin.sh --fetch-compiler" >&2
+  exit 2
+}
 COMPILER_VER="${COMPILER##*kotlin-compiler-embeddable-}"
 COMPILER_VER="${COMPILER_VER%.jar}"
+COMPILER_VER="${COMPILER_VER//-/.}"
 
 KCP="$COMPILER"
+# ⚠️ 编译器自身的运行期依赖**在沙箱里同样不在 gradle 缓存**（2026-11-10 实测）：
+#   trove4j（路径计算）/ daemon-embeddable / script-runtime / reflect。
+#   缺 reflect 不会启动期报错，而是**跑到参数解析才炸**
+#   （NoClassDefFoundError: kotlin/reflect/jvm/ReflectJvmMapping），极具迷惑性。
+#   ⇒ 统一按「gradle 缓存 → $LIBS」二级回退，而不是只看 gradle 缓存。
+#
 # ⚠️ 四个 pattern **必须整串加引号**：写成 'kotlin-script-runtime-"*.jar'（引号内一段 + 引号外 *.jar）
 #    的话，bash 会把引号外的 * 拿去匹配**当前目录**的 jar（仓库根就有 gradle-wrapper.jar）
 #    ⇒ find 静默搜不到、f 为空 ⇒ 该 jar 被跳过（2026-10-04 实测）
@@ -338,9 +398,17 @@ KCP="$COMPILER"
 #
 # ⚠️ 另外：这段注释里**不能出现反引号**，bash 即使在 # 注释里也会做命令替换，
 #    会把反引号里的字符串当命令执行（实测炸出一屏 command not found）。
-for pat in "kotlin-stdlib-${COMPILER_VER}.jar" "kotlin-script-runtime-${COMPILER_VER}.jar" \
-           "kotlin-daemon-embeddable-${COMPILER_VER}.jar" "kotlin-reflect-${COMPILER_VER}.jar"; do
-  f="$(find "$KGP" -name "$pat" 2>/dev/null | sort | tail -1)"
+# ⚠️ 2026-11-10：沙箱没有 gradle 缓存 ⇒ 回退到 $LIBS。
+#   文件名是「点换横杠」的**缓存名**：`kotlin-stdlib-2.1.20.jar` → `...kotlin-stdlib-2-1-20.jar`。
+#   ⚠️ 别直接把 $pat 拼进去（那是 gav 原始名，带点，找不到）——
+#      踩过的症状：补了回退却不生效，仍然 `NoClassDefFoundError: kotlin/jvm/internal/Intrinsics`。
+for pat in "kotlin-stdlib" "kotlin-script-runtime" \
+           "kotlin-daemon-embeddable" "kotlin-reflect"; do
+  f="$(find "$KGP" -name "${pat}-${COMPILER_VER}.jar" 2>/dev/null | sort | tail -1)"
+  if [ -z "$f" ]; then
+    f="$LIBS/org-jetbrains-kotlin-${pat}-${COMPILER_VER//./-}.jar"
+    [ -s "$f" ] || f=""
+  fi
   [ -n "$f" ] && KCP="$KCP:$f"
 done
 # embeddable 编译器的运行期依赖（少任何一个都会在启动时 NoClassDefFoundError）：
@@ -353,6 +421,8 @@ done
 #     栈在 ArgumentUtilsKt.getArgumentAnnotation ⇒ 极具迷惑性，别只盯着 compiler/stdlib）。
 TROVE="$(find "$HOME/.gradle/caches/modules-2/files-2.1/org.jetbrains.intellij.deps/trove4j" \
           -name 'trove4j-*.jar' 2>/dev/null | sort | tail -1)"
+# ⚠️ 2026-11-10：沙箱的 gradle 缓存里**没有** trove4j，回退到 $LIBS 那份。
+[ -n "$TROVE" ] || TROVE="$(ls "$LIBS"/org-jetbrains-intellij-deps-trove4j-*.jar 2>/dev/null | sort | tail -1)"
 # ⚠️ trove4j 目录为空时 $TROVE 会是空串，直接拼会产生 `-cp a.jar::b.jar` 的**空条目**
 #    （Java 把它解释成当前目录，且容易掩盖真正的依赖缺失）。故只在非空时才拼。
 [ -n "$TROVE" ] && KCP="$KCP:$TROVE"
@@ -540,9 +610,10 @@ compile_and_report() { # outdir sources...
   # ⚠️ 插件版本**必须**与 COMPILER_VER 一致（2.4.10 编译器 + 2.1.20 插件 ⇒
   #   运行期 AbstractMethodError: SerializationComponentRegistrar does not define ...
   #   getPluginId() —— 报错指向插件自身，极易误判成业务代码问题，2026-10-04 实测）。
-  #   ⇒ 先从 gradle 缓存按版本精确取，取不到才退回 $LIBS 里那个（可能过旧的）全局 jar。
+  #   ⇒ 先从 gradle 缓存按版本精确取，取不到才退回 $LIBS（沙箱只有 $LIBS，2026-11-10）。
   serplug="$(find "$KGP" -name "kotlin-serialization-compiler-plugin-embeddable-${COMPILER_VER}.jar" 2>/dev/null | sort | tail -1)"
-  [ -s "$serplug" ] || serplug="$(ls "$LIBS"/*kotlin-serialization-compiler-plugin-embeddable-*.jar 2>/dev/null | head -1)"
+  [ -s "$serplug" ] || serplug="$LIBS/org-jetbrains-kotlin-kotlin-serialization-compiler-plugin-embeddable-${COMPILER_VER//./-}.jar"
+  [ -s "$serplug" ] || serplug=""
   if [ -n "$serplug" ] && [ -s "$serplug" ]; then
     plugarg=(-Xplugin="$serplug")
   else
@@ -564,6 +635,21 @@ compile_and_report() { # outdir sources...
   if [ "$CLASSES" -eq 0 ]; then
     echo "$log" | tail -20 >&2
     return 1
+  fi
+  # ★ 2026-11-10：kotlinc 只**读** .java 的符号，不产出字节码
+  #   ⇒ `KotpassKdfBridge` 这类混编 Java 在运行期会 `ClassNotFoundException`。
+  #   症状极具迷惑性：**编译全绿、6 条用例红在运行期**，看起来像逻辑写错。
+  #   ⇒ 这里对纳入的 .java 补一次 javac（用 kotlinc 刚产出的 class 当 classpath）。
+  #   ⚠️ javac 只编译它需要的那一份；失败时**不阻断**（仍返回 kotlinc 的结果），
+  #      但会如实打印 —— 因为有些 Java 依赖 android.jar，本工具拿不到。
+  local javas=()
+  for s in "${sources[@]}"; do
+    case "$s" in *.java) javas+=("$s");; esac
+  done
+  if [ "${#javas[@]}" -gt 0 ] && command -v javac >/dev/null 2>&1; then
+    javac -nowarn -source 17 -target 17 -encoding UTF-8 \
+      -classpath "$outdir:$CP" -d "$outdir" "${javas[@]}" 2>&1 \
+      | grep -E "error:" | head -5 >&2
   fi
   return 0
 }
@@ -652,6 +738,15 @@ if [ "$BATCH" = 1 ]; then
       if [ "$ok" != 1 ]; then
         FAILED_MODS+=("$m/$pkg (源文件缺失)"); PKG_FAIL=$((PKG_FAIL+1)); continue
       fi
+      # ★ 2026-11-10：与单文件模式同一件事 —— 同包的 **.java** 也要纳入（Kotlin/Java 混编）。
+      #   批量模式原先只用 expand_closure（只看 .kt），于是 `KotpassKdfBridge.java`
+      #   被漏掉 ⇒ 整个 data/kdbx 包 22 个测试文件全部编不过。
+      for s in "${all[@]}"; do
+        case "$s" in */*.kt) d="${s%/*}";; *) continue;; esac
+        for j in "$d"/*.java; do
+          [ -s "$j" ] && all+=("${j#"$REPO_ROOT"/}")
+        done
+      done
       if ! compile_and_report "$OUT/${m}__$(echo "$pkg" | tr '/' '_')" "${all[@]}"; then
         echo "   ❌ [$pkg] 编译失败（${#tsrc[@]} 测试 + ${#extra[@]} 主源码）"
         FAILED_MODS+=("$m/$pkg (编译)"); PKG_FAIL=$((PKG_FAIL+1)); continue
@@ -719,6 +814,18 @@ done
 mapfile -t extra < <(expand_closure "$@" | sed '/^$/d')
 SOURCES=("$@")
 [ "${#extra[@]}" -gt 0 ] && SOURCES+=("${extra[@]}")
+# ★ 2026-11-10：同包 / 同模块的 **Java** 源码也要进来（Kotlin 与 Java 混编）。
+#   反例：`data/kdbx/.../KotpassKdfBridge.java` 被 `KdbxTransformKeyCache.kt` 直接引用，
+#   只收 .kt 的话 ⇒ 满屏 `unresolved reference: KotpassKdfBridge` ——
+#   看着像业务代码写错，其实是工具没收这个文件。
+#   ⚠️ kotlinc 命令行收 .java 不是"编译它们"，而是**从源码里读符号**（两边混编）。
+for src in "${SOURCES[@]}"; do
+  d="$(dirname "$src")"
+  case "$d" in */src/main/java/*|*/src/test/java/*) ;; *) continue ;; esac
+  for j in "$d"/*.java; do
+    [ -s "$j" ] && SOURCES+=("${j#"$REPO_ROOT"/}")
+  done
+done
 
 if [ -n "$UNRESOLVED" ]; then
   echo "❌ 闭包未覆盖的项目内符号：$UNRESOLVED" >&2

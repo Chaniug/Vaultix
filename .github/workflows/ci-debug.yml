@@ -72,6 +72,73 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # ─────────────────────────────────────────────────────────────────────────────
+  # 沙箱同款单测（2026-11-10 新增）
+  #
+  # ## 为什么单独开一个 job，而不是并进下面那个
+  #
+  # 下面那个 `android-ci` 是**串起来**的：lint → detekt → Build → unit tests，
+  # 前面红了后面直接 skip。于是"某个**测试**写错了"要排在 lint/detekt/build 之后
+  # 才能看到结果 —— 而那正是沙箱里最想提前知道的那类错误。
+  #
+  # 模块清单与 `settings.gradle.kts` 对齐（没有 core/util）；
+# `data:bitwarden` / `core:database` / `core:datastore` 暂未纳入 —— 它们依赖的
+# Room / DataStore 生成物不在本工具的依赖清单里，纳入会直接编译失败（不是代码错）。
+#
+# 这个 job 用的是 `.ai/tools/typecheck_kotlin.sh`，也就是沙箱里跑**同一份脚本**
+  # ⇒ 本地和 CI 的判定标准完全一致，不会出现"沙箱绿、CI 红"的意外。
+  #
+  # ## 为什么不在 CI 里跑 `--all app`
+  #
+  # app 是一个单一 source set，没有 Compose 插件就整包编不过（实测 6 分 21 秒后红在
+  # MainActivity 的 androidx.compose.*）。⇒ 只跑**纯逻辑**模块，app 交给下面那个真 gradle。
+  #
+  # ⚠️ 与下面的单元测试**有重叠**（同一批用例跑了两次）。这是刻意的：
+  #   重叠的部分约 3 分钟，换来的是"测试错误 3 分钟可见"而不是"要等 build 完"。
+  #   哪天觉得慢，删的是下面 `Run unit tests`，不是这里 —— 因为这里同时覆盖了
+  #   JVM 单测 + 混编 Java，而那边还要等一次完整 Android 构建。
+  # ─────────────────────────────────────────────────────────────────────────────
+  sandbox-tests:
+    name: Sandbox unit tests (Kotlin/Java, no SDK)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      # ⚠️ 缓存 key 必须带**依赖清单的哈希** —— 那份清单写在脚本里（DEPS 数组）。
+      #   只按脚本整文件哈希的话，改一句注释就全量重下 200MB。
+      - name: Cache typecheck libs
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/vaultix-typecheck
+          key: typecheck-libs-${{ runner.os }}-${{ hashFiles('.ai/tools/typecheck_kotlin.sh') }}-v1
+          restore-keys: |
+            typecheck-libs-${{ runner.os }}-
+
+      # 与沙箱里完全同一条命令（沙箱首次也是先跑这个）。
+      # ⚠️ 不要写成 `cd .ai/tools && bash typecheck_kotlin.sh` —— 脚本用 BASH_SOURCE
+      #   推 REPO_ROOT，位置无关，但**工作目录**必须留在仓库根（它按相对路径收源码）。
+      - name: Fetch Kotlin compiler
+        run: bash .ai/tools/typecheck_kotlin.sh --fetch-compiler
+
+      # 模块清单与 settings.gradle.kts 对齐；data:bitwarden / core:database / core:datastore
+      # 暂未纳入（Room / DataStore 生成物不在本工具依赖清单里，纳入会直接编不过）。
+      #
+      # ⚠️ 命令写成**一行**：YAML 的 `|` 块标量里写 `\` 续行时，解析出来的字符串
+      #   会**保留反斜杠**（实测 `--all \\n  core/crypto`），shell 收到后会把它当成
+      #   "反斜杠 + 换行"原样传给 shell，与在终端里写续行**不等价**，
+      #   排查时表现为"模块名被拆成两个怪参数"。
+      - name: Typecheck + run unit tests (pure-logic modules)
+        run: bash .ai/tools/typecheck_kotlin.sh --all core/crypto core/common core/model domain data/kdbx data/repository
+
   android-ci:
     name: Lint, test diagnostics, and debug build
     runs-on: ubuntu-latest

@@ -11,6 +11,19 @@
 `.workbuddy/memory/MEMORY.md` 只是**入口指针 + 3 条保命规则**，**不再镜像正文** ——
 此前约定「两边保持同步」，结果是同一主题两处各有一份、必然漂移（AI 会看错位置）。
 **要改内容，只改这里。**
+## 🔧 沙箱能力（2026-11-10 打通 · 别再"写错一个字赔一轮 CI"）
+
+> 详见 [`.ai/tools/SANDBOX-CAPABILITIES.md`](./tools/SANDBOX-CAPABILITIES.md)。
+
+- **能**：真编译 + 真跑单测（core / domain / data 六个模块 **940 条用例 ≈ 3–4 分钟**）、
+  类型错误 / 未解析引用 / 混编 Java、全套 `check_*.py` 静态门禁。
+- **不能**：APK、lint/detekt、`app` 的 Compose 签名（单一 source set，没插件整包编不过）。
+- **首次**：`bash .ai/tools/typecheck_kotlin.sh --fetch-compiler`（约 58MB）。
+- ⚠️ 这套工具**此前在沙箱里从未真正跑起来**（它找 gradle 缓存里的编译器，而沙箱不跑 gradle）。
+  本轮修了四处才通：stdlib 回退、`.java` 进闭包、`javac` 补字节码、批量模式同款。
+- 已接进 CI：`ci-debug.yml` 的 `sandbox-tests` job 用**同一份脚本**，与 `android-ci` 并行
+  ⇒ 本地绿 ⇒ CI 不会红在同一件事上。
+
 ## 🕐 最新状态（2026-11-10 晚 · 用户报的四个真机 bug）
 
 > **一句话**：四条里三条是**判据判错了对象**，只有一条是"功能没写"。
