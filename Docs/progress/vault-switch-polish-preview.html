@@ -153,7 +153,8 @@
     <div class="ctl"><span>动效</span><div class="seg" id="speed">
       <button data-v="normal" class="on">正常速度</button><button data-v="slow">慢放逐帧</button></div></div>
     <button class="btn" id="playAll">全部播放一次</button>
-    <span class="hint" style="font-size:12px;color:var(--muted)">也可以单独点每个舞台</span>
+    <button class="btn" id="resetAll">重置舞台</button>
+    <span class="hint" style="font-size:12px;color:var(--muted)">点任意舞台播放；播完会停在新库画面，慢放逐帧可看清过程</span>
   </div>
 
   <h2><span class="num">A</span>切库动效 · 四种候选</h2>
@@ -288,8 +289,10 @@ function render(){
 function play(s){
   s.classList.remove('play');
   void s.offsetWidth;
+  // 播完**保持终态**（新库画面），不再自动跳回初始态。
+  // 之前 600ms 后 remove('play') 会让 forwards 动画瞬间复位，260ms 的动画
+  // 根本来不及看清 —— 这就是「有几个效果看不出来」的直接原因。
   s.classList.add('play');
-  setTimeout(()=>s.classList.remove('play'),state.speed==='slow'?1400:600);
 }
 ['theme','speed'].forEach(k=>{
   document.getElementById(k).addEventListener('click',e=>{
@@ -301,6 +304,9 @@ function play(s){
 });
 document.getElementById('playAll').addEventListener('click',()=>{
   document.querySelectorAll('.stage').forEach((s,i)=>setTimeout(()=>play(s),i*120));
+});
+document.getElementById('resetAll').addEventListener('click',()=>{
+  document.querySelectorAll('.stage').forEach(s=>s.classList.remove('play'));
 });
 render();
 </script>
