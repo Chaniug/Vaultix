@@ -1,8 +1,10 @@
 # 切库仪式感 & 库列表精装修 · 探索方案
 
-> 2026-11-09 23:20 · 状态：**用户选 E 数据流；P4-a 库身份卡 + P4-b 前置动画已施工出包**。
-> 提交 `e392354f` → `12ee7606`（后者修 detekt 圈复杂度 17>14）；Android CI `42643142615` 全绿，
-> `app-full-debug.apk` 已发布。首启页（选接入哪个库）与 P4-c 仍待拍板。
+> 2026-11-09 23:25 · 状态：**E 数据流已真机验收通过（用户「可以接受」）**，参数量取默认不再微调。
+> 提交 `e392354f` → `12ee7606` → `9fc0bb08`；Android CI `42643142615` 全绿，
+> `app-full-debug.apk` 已发布。
+> ✅ 已验收：徽章 `SWITCH_BADGE_SCALE=1.2` / 前置 `SWITCH_PRELUDE_MS=240` / 变暗 `CARD_DIMMED_ALPHA=0.42`。
+> ❌ 剩余：P4-c 形状 morph、P4-d 首启页、卡包页类型筛选 chip、便签在卡包页的入口。
 > 可交互对照：[`vault-switch-polish-preview.html`](./vault-switch-polish-preview.html)
 > 上游：[`dock-glass-and-sheet-plan.md`](./dock-glass-and-sheet-plan.md)、
 > [`ui-polish-plan.md`](./ui-polish-plan.md)
