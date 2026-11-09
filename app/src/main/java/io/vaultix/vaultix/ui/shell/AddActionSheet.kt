@@ -319,13 +319,15 @@ private fun AddGeneratorTile(onClick: () -> Unit, modifier: Modifier = Modifier)
             .padding(horizontal = Spacing.xl)
             .heightIn(min = 84.dp),
         shape = VaultixCorner.Panel,
-        color = scheme.tertiaryContainer.copy(alpha = 0.42f),
+        // 22:37 深色模式反馈：0.42 的底色太透，压不住下面那行小字。
+        // 提到 0.58 后卡片仍是 tonal 面，但文字有了稳定的对比基底。
+        color = scheme.tertiaryContainer.copy(alpha = 0.58f),
         contentColor = scheme.onTertiaryContainer,
     ) {
         Column(modifier = Modifier.padding(Spacing.md)) {
             GlyphGenerator(
                 accent = scheme.tertiary.copy(alpha = 0.85f),
-                line = scheme.onSurfaceVariant.copy(alpha = 0.30f),
+                line = scheme.onSurfaceVariant.copy(alpha = 0.38f),
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(24.dp),
@@ -338,7 +340,10 @@ private fun AddGeneratorTile(onClick: () -> Unit, modifier: Modifier = Modifier)
             Text(
                 text = stringResource(R.string.dock_add_tool_subtitle),
                 style = MaterialTheme.typography.bodySmall,
-                color = scheme.onSurfaceVariant,
+                // ⚠️ 不用 onSurfaceVariant：它相对 surface 校准，叠在半透明
+                //    tertiaryContainer 上（尤其深色）会糊成一片。改跟卡片的
+                //    contentColor 同族，并把 alpha 拉到 0.92 保住小字可读性。
+                color = scheme.onTertiaryContainer.copy(alpha = 0.92f),
             )
         }
     }

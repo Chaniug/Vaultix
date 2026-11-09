@@ -988,10 +988,12 @@ private fun DisplaySection(
         SettingsRow(
             icon = { Icon(Icons.Filled.BlurOn, contentDescription = null) },
             title = stringResource(R.string.setting_liquid_glass),
-            subtitle = if (blurSupported) {
-                stringResource(R.string.setting_liquid_glass_desc)
-            } else {
-                stringResource(R.string.setting_liquid_glass_unsupported)
+            // 22:37 用户反馈「看不出玻璃效果」：先让状态**一眼可自证**。
+            // 三态分开写，别让用户猜「是开关关了 / 系统不支持 / 还是背后没内容」。
+            subtitle = when {
+                !blurSupported -> stringResource(R.string.setting_liquid_glass_unsupported)
+                liquidGlassDock == false -> stringResource(R.string.setting_liquid_glass_off)
+                else -> stringResource(R.string.setting_liquid_glass_desc)
             },
             trailing = {
                 SettingsSwitch(

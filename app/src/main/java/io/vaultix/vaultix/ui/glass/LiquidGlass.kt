@@ -143,18 +143,25 @@ object LiquidGlass {
     /** 上沿高光带高（占整体高度的比例）。 */
     const val EDGE_HIGHLIGHT_FRACTION = 0.16f
 
-    /** 上沿高光透明度（0.55 → 0.32）：它仍是"玻璃"与"塑料边框"的分界，只是不再抢眼。 */
-    const val TOP_SHEEN_ALPHA = 0.32f
+    /**
+     * 上沿高光透明度（0.55 → 0.32 → **0.42**）。
+     *
+     * 22:37 用户反馈「玻璃效果看不出来」：填充已经很透，但当列表条目不足一屏、
+     * 或静止时胶囊后面恰好是空白，透出来的就是**纯背景** —— 此时唯一能证明
+     * 「这是一块玻璃而不是实色板」的，只剩上沿高光与内描边。
+     * ⇒ 适度回提装饰，但不回到 0.55 那种塑料感；填充透明度保持不变。
+     */
+    const val TOP_SHEEN_ALPHA = 0.42f
 
     /** 内描边透明度（深色下白描边要更淡；单测钉住 dark < light）。 */
-    const val STROKE_ALPHA_LIGHT = 0.34f
+    const val STROKE_ALPHA_LIGHT = 0.42f
     const val STROKE_ALPHA_DARK = 0.28f
 
     /** 阴影高度（8 → 6dp）：玻璃更淡了，重阴影会把边界重新压成一块塑料板。 */
     val ShadowElevation = 6.dp
 
     /** 上沿那道 1dp 折边：渐隐高光带负责"厚度"，这条亮线负责"边界"。 */
-    const val TOP_LINE_ALPHA = 0.20f
+    const val TOP_LINE_ALPHA = 0.28f
 
     /** 下沿 rim 暗线占整体高度的比例 —— 真实玻璃的底边会把背景压暗一线。 */
     const val RIM_LINE_FRACTION = 0.10f
