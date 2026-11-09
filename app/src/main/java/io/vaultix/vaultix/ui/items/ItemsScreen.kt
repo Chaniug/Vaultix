@@ -705,6 +705,7 @@ fun ItemsScreen(
             viewModel.createItem(it)
             showCreateDialog = false
         },
+        onCreateFolder = viewModel::createFolder,
     )
 }
 
@@ -724,6 +725,7 @@ private fun NewItemDialogHost(
     saving: Boolean,
     onDismiss: () -> Unit,
     onCreate: (VaultItem) -> Unit,
+    onCreateFolder: (name: String, onCreated: (String) -> Unit) -> Unit,
 ) {
     if (!visible) return
     CreateItemDialog(
@@ -732,6 +734,7 @@ private fun NewItemDialogHost(
         saving = saving,
         onDismiss = onDismiss,
         onSave = onCreate,
+        onCreateFolder = onCreateFolder,
     )
 }
 
@@ -1771,6 +1774,7 @@ private fun CreateItemDialog(
     saving: Boolean,
     onDismiss: () -> Unit,
     onSave: (VaultItem) -> Unit,
+    onCreateFolder: (name: String, onCreated: (String) -> Unit) -> Unit,
 ) {
     val blankItem = remember { VaultItem(id = "", title = "") }
     ItemFormDialog(
@@ -1784,6 +1788,7 @@ private fun CreateItemDialog(
         // A3：KDBX 库只放行登录 / 安全笔记（mapper 只产这两种，写回对其余三种
         // 静默丢字段 ⇒ 放行等于让用户存一个"字段全空"的残骸）。
         selectableTypes = selectableItemTypes(vaultKind),
+        onCreateFolder = onCreateFolder,
         onDismiss = onDismiss,
         onSave = onSave,
     )

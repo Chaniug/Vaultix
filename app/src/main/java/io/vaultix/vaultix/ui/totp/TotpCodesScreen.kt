@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenuItem
@@ -84,6 +85,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.lerp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.vaultix.common.OtpType
@@ -113,6 +116,7 @@ import io.vaultix.vaultix.ui.common.rememberImmersiveBarPadding
 import io.vaultix.vaultix.ui.common.rememberScrollCollapseFraction
 import io.vaultix.vaultix.ui.common.toggleSelection
 import io.vaultix.vaultix.ui.common.VaultixWavyProgress
+import io.vaultix.vaultix.ui.qr.QrScannerContent
 import io.vaultix.vaultix.ui.theme.UiSize
 import io.vaultix.vaultix.ui.theme.VaultixCorner
 import kotlinx.coroutines.delay
@@ -1359,6 +1363,8 @@ private fun TotpEditDialog(
     var pin by remember { mutableStateOf(entry.pin) }
     var showError by remember { mutableStateOf(false) }
     var showRemoveConfirm by remember { mutableStateOf(false) }
+    // 扫码覆盖层（2026-11-09）：全屏 Dialog 内嵌相机，结果直接回填 secret。
+    var scanning by remember { mutableStateOf(false) }
 
     // 与 ItemFormDialog 同一条纪律：壳不知道脏不脏，由调用点判。
     // 这里字段少且都是值类型，直接与进入时的 entry 比即可（新增时是一张空白模板，
@@ -1456,6 +1462,19 @@ private fun TotpEditDialog(
                 onValueChange = { secret = it },
                 label = { FormFieldText(secretLabel(type)) },
                 leadingIcon = { FieldIcon(Icons.Filled.Key) },
+                // ★ 2026-11-09（用户反馈第 2 条）：此前本页**只能手打密钥**，
+                //   而扫码能力早就做完了（`QrScannerContent`，登录条目的 TOTP 字段一直在用）。
+                //   验证码页是「专门录验证码」的地方，反而没有扫的入口 —— 说不通。
+                //   与登录条目那边**同一个组件、同一种交互**（全屏 Dialog 内嵌相机，
+                //   结果直接回填），不另写一套。
+                trailingIcon = {
+                    IconButton(onClick = { scanning = true }) {
+                        Icon(
+                            imageVector = Icons.Filled.QrCodeScanner,
+                            contentDescription = stringResource(R.string.item_scan_totp),
+                        )
+                    }
+                },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -1509,6 +1528,26 @@ private fun TotpEditDialog(
                 text = typeLabel(type),
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.tertiary,
+            )
+        }
+    }
+
+    // 扫码覆盖层：与登录条目的 TOTP 字段**同一个组件、同一种交互**
+    // （全屏 Dialog 内嵌相机，结果直接回填），不另写一套。
+    if (scanning) {
+        Dialog(
+            onDismissRequest = { scanning = false },
+            properties = DialogProperties(
+                usePlatformDefaultWidth = false,
+                decorFitsSystemWindows = false,
+            ),
+        ) {
+            QrScannerContent(
+                onResult = { text ->
+                    secret = text
+                    scanning = false
+                },
+                onBack = { scanning = false },
             )
         }
     }

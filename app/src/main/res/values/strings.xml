@@ -214,6 +214,9 @@
     <string name="folder_delete_kdbx_title">删除分组？</string>
     <string name="folder_delete_kdbx_message">「%1$s」会连同里面的所有条目一起删除，不能撤销。</string>
 
+    <!-- 条目表单里的文件夹下拉底部入口：不必先离开表单去文件夹页新建再回来。 -->
+    <string name="folder_create_new">新建文件夹</string>
+
     <string name="folder_created">文件夹已新建</string>
     <string name="folder_renamed">文件夹已重命名</string>
     <string name="folder_deleted">文件夹已删除</string>
@@ -1441,6 +1444,9 @@
     <string name="passkey_field_created">创建时间</string>
     <string name="passkey_bound_to_login">绑定于「%1$s」</string>
     <string name="passkey_select_login">选择密码条目</string>
+    <!-- 条目一多就得翻半天，下拉里带一个搜索框按标题 / 用户名过滤。 -->
+    <string name="passkey_search_login">搜索标题或用户名</string>
+    <string name="passkey_search_empty">没有匹配的条目</string>
     <string name="passkey_removed">已删除通行密钥</string>
     <string name="passkey_saved">已保存通行密钥</string>
     <string name="passkey_save_failed">保存失败：%1$s</string>

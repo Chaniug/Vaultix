@@ -264,6 +264,27 @@ class ItemsViewModel @Inject constructor(
         .flatMapLatest { id -> folderRepository.observeFolders(id) }
         .stateIn(scope = viewModelScope, started = SharingStarted.Eagerly, initialValue = emptyList())
 
+    /**
+     * 新建文件夹并回调新 id（2026-11-09，用户反馈「新建条目时选不到新建文件夹」）。
+     *
+     * 为什么放在这里而不是让表单自己去调仓储：表单是纯 Composable，没有仓储依赖，
+     * 也不该有（它要被三个页面复用）。写能力由调用方的 ViewModel 提供 ——
+     * 表单只声明"我要一个建文件夹的入口"，具体走哪条仓储是宿主的事。
+     *
+     * ⚠️ 失败**不回调**：`onCreated` 只在真的建成功时触发。建失败时表单会停在
+     *    「无文件夹」，用户能看出没成功；若失败也回调一个空 id，就会悄悄把条目
+     *    归到根组，用户还以为建好了。
+     */
+    fun createFolder(name: String, onCreated: (String) -> Unit) {
+        viewModelScope.launch {
+            val id = vaultIdState.value
+            folderRepository.createFolder(id, name)
+                .onSuccess { folder -> onCreated(folder.id) }
+                // 失败复用既有的保存事件通道（Snackbar），不新开一套提示。
+                .onFailure { error -> _saveEvents.send(SaveEvent.Failed(error.message)) }
+        }
+    }
+
     /** 该库所属组织列表（未解锁 / 无组织时为空 —— UI 据此整块隐藏筛选区）。 */
     val organizations: StateFlow<List<VaultOrganization>> = vaultIdState
         .flatMapLatest { id -> organizationRepository.observeOrganizations(id) }

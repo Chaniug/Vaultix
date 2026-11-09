@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Notes
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Star
@@ -91,6 +92,7 @@ import io.vaultix.vaultix.ui.qr.QrScannerContent
 import io.vaultix.vaultix.ui.theme.Spacing
 import io.vaultix.vaultix.ui.theme.UiSize
 import io.vaultix.vaultix.ui.theme.VaultixCorner
+import io.vaultix.vaultix.ui.folders.FolderNameDialog
 
 /**
  * 条目表单对话框（新建 / 编辑共用，Docs/08 S10）。
@@ -123,6 +125,14 @@ fun ItemFormDialog(
     saving: Boolean = false,
     typeEditable: Boolean = false,
     selectableTypes: List<VaultItemType> = VaultItemType.entries.toList(),
+    /**
+     * 下拉里的「新建文件夹」（2026-11-09）。null = 本场景没有写能力，不显示该入口。
+     *
+     * 签名是 `(name, onCreated) -> Unit` 而不是 `suspend`：建库名要走仓储的挂起写，
+     * 但 Compose 的菜单回调不是挂起上下文。把 `onCreated(新id)` 交给调用方，
+     * 由它在协程里建完再回调 —— 这样本组件完全不碰协程与仓储。
+     */
+    onCreateFolder: ((name: String, onCreated: (String) -> Unit) -> Unit)? = null,
     onDismiss: () -> Unit,
     onSave: (VaultItem) -> Unit,
 ) {
@@ -221,6 +231,7 @@ fun ItemFormDialog(
                 folders = folders,
                 folderId = folderId,
                 onFolderSelect = { folderId = it },
+                onCreateFolder = onCreateFolder,
                 typeEditable = typeEditable,
                 type = type,
                 selectableTypes = selectableTypes,
@@ -602,6 +613,7 @@ private fun FormHeader(
     folders: List<VaultFolder>,
     folderId: String?,
     onFolderSelect: (String?) -> Unit,
+    onCreateFolder: ((name: String, onCreated: (String) -> Unit) -> Unit)?,
     typeEditable: Boolean,
     type: VaultItemType,
     selectableTypes: List<VaultItemType>,
@@ -610,7 +622,12 @@ private fun FormHeader(
     if (folders.isNotEmpty()) {
         SectionLabel(text = stringResource(R.string.item_folder), icon = Icons.Filled.Folder)
         Spacer(Modifier.height(Spacing.sm))
-        FolderPicker(folders = folders, selectedId = folderId, onSelect = onFolderSelect)
+        FolderPicker(
+            folders = folders,
+            selectedId = folderId,
+            onSelect = onFolderSelect,
+            onCreateFolder = onCreateFolder,
+        )
         Spacer(Modifier.height(Spacing.md))
     }
     if (typeEditable) {
@@ -705,6 +722,19 @@ private fun RepromptToggle(
  *
  * 只在 [folders] 非空时由调用方渲染——未解锁 / 库还没有文件夹时隐藏，
  * 不显示一个「永远无选项」的下拉。
+ *
+ * ## 2026-11-09：补「新建文件夹」入口（用户反馈第 1 条）
+ *
+ * 此前这里**只能从既有文件夹里挑**，用户想在新建条目的同时建一个新分类，
+ * 只能先退出表单 → 去文件夹页建 → 再回来重填。而文件夹创建能力早就有了
+ * （`FolderRepository.createFolder` + [io.vaultix.vaultix.ui.folders.FolderNameDialog]），
+ * 纯粹是这个下拉没接上 —— 与 #255「资源存在但没接线」同一种失败。
+ *
+ * ⚠️ 新建成功后**自动选中**新文件夹：用户点「新建文件夹」的意图就是"我想把这条
+ *    放进那个还不存在的分类里"，建完停在"无文件夹"等于让他再点一次。
+ *
+ * @param onCreateFolder 非空才显示「新建文件夹」那一项；为 null 表示调用方
+ *   没有写能力（读-only 场景），此时下拉退化成纯选择器。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -712,8 +742,10 @@ private fun FolderPicker(
     folders: List<VaultFolder>,
     selectedId: String?,
     onSelect: (String?) -> Unit,
+    onCreateFolder: ((name: String, onCreated: (String) -> Unit) -> Unit)? = null,
 ) {
     var expanded by remember { mutableStateOf(false) }
+    var creating by remember { mutableStateOf(false) }
     val selected = folders.firstOrNull { it.id == selectedId }
     ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
         OutlinedTextField(
@@ -741,7 +773,43 @@ private fun FolderPicker(
                     },
                 )
             }
+            if (onCreateFolder != null) {
+                // 与上面几项用一条分隔线隔开：它是**动作**，不是**选项**。
+                // 混成一排的话，用户扫列表时会把"新建文件夹"当成一个叫这名字的文件夹。
+                HorizontalDivider()
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            text = stringResource(R.string.folder_create_new),
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.Filled.CreateNewFolder,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    },
+                    onClick = {
+                        expanded = false
+                        creating = true
+                    },
+                )
+            }
         }
+    }
+    if (creating && onCreateFolder != null) {
+        FolderNameDialog(
+            title = stringResource(R.string.folder_create_new),
+            initialName = "",
+            busy = false,
+            onDismiss = { creating = false },
+            onConfirm = { name ->
+                creating = false
+                onCreateFolder(name) { newId -> onSelect(newId) }
+            },
+        )
     }
 }
 
