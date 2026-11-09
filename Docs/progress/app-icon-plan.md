@@ -2,7 +2,8 @@
 
 > 2026-11-09 · 范围：**仅 App 启动图标**（用户在总单 §6 批注选定）
 > 不含：站点品牌包 / 条目图标渲染 / 底部功能栏 / 页面精装修。
-> 状态：**现状取证完成，已出重设计提案，待用户拍板方案**。本单不是设计稿。
+> 状态：**已施工完成**（方案 ⑤ 折纸 V + 现行低饱和蓝，提交 `e6391e92`）。
+> 本单不是设计稿；设计推导见下，几何真源已入库到 `tools/icon/generate_launcher_icon.py`。
 > 总单：[`ui-polish-plan.md`](./ui-polish-plan.md)
 > **设计提案**：[`app-icon-design-proposal.md`](./app-icon-design-proposal.md)
 > **交互预览**：[`app-icon-design-preview.html`](./app-icon-design-preview.html)

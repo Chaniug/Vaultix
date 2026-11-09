@@ -1,6 +1,11 @@
 # Vaultix App 图标 · 重设计提案（2026）
 
-> 2026-11-09 · 状态：**设计提案，待拍板**。⚠️ **未修改任何 `res/` 文件**。
+> 2026-11-09 · 状态：**已拍板并施工完成**（方案 ⑤ 折纸 V + 现行低饱和蓝）。
+> 施工提交 `e6391e92`，已推 `main`。**CI run `42606855882` 全绿**
+> （detekt / 图标几何门禁 / assembleFullDebug / 单测 / preview 发包），
+> 文档 CI `42606855845` 亦全绿；`preview` 已产出 `app-full-debug.apk` 供真机验收。
+> ⚠️ 本文保留设计推导作为**决策记录**；当前几何的唯一真源是
+> `tools/icon/generate_launcher_icon.py`，改几何请改脚本并重跑它的 check 模式。
 > 交互预览：[`app-icon-design-preview.html`](./app-icon-design-preview.html)（切遮罩 / 尺寸 / 主题图标）
 > 施工单：[`app-icon-plan.md`](./app-icon-plan.md) · 总单：[`ui-polish-plan.md`](./ui-polish-plan.md)
 
@@ -239,20 +244,26 @@ V 的笔画因此能到 8–10dp，24px 下仍透气。
 
 ---
 
-## 6. 实施与验收
+## 6. 实施与验收（施工记录 2026-11-09）
 
-| 步 | 内容 | 判据 |
-|---|---|---|
-| 1 | 用户选定方案（② 或 ① / ③） | 拍板记录进 `app-icon-plan.md` |
-| 2 | 重建几何生成脚本，参数入库 | `verify()` 四条校验全过 |
-| 3 | 改 4 个 XML（含 colors） | `git diff` 只含 `res/` |
-| 4 | 用预览页逐项过 | 圆 / 圆角方 / squircle / 方；96 / 48 / **24px**；彩色 + 主题图标；浅 / 深桌面 |
-| 5 | CI | `assembleFullDebug`（aapt / 资源引用）+ `detekt` + `test`，**分开单跑** |
-| 6 | 真机 | 两家 launcher 各一张；Android 13+ 开主题图标换浅 / 深壁纸 |
-| 7 | 商店图 | 512×512 不透明 PNG 同步 |
+| 步 | 内容 | 判据 | 状态 |
+|---|---|---|---|
+| 1 | 用户拍板方案 ⑤ + 现行低饱和蓝 | 拍板记录进本文档 §0 / §3.4 / §4.1 | ✅ |
+| 2 | 重建几何生成脚本，参数入库 | 四条校验全过 | ✅ `tools/icon/generate_launcher_icon.py` |
+| 3 | 改 4 个 XML（含 colors） | `git diff` 只含 `res/` | ✅ 4 个文件 |
+| 4 | 用预览页逐项过 | 四种遮罩 / 96·48·24px / 彩色 + 主题图标 / 浅深桌面 | ✅ 预览页可切 |
+| 5 | CI | `assembleFullDebug` + `detekt` + `test` | ✅ run `42606855882` 全绿；preview 已发 `app-full-debug.apk` |
+| 6 | 真机 | 两家 launcher；Android 13+ 主题图标换浅 / 深壁纸 | ⏳ **待用户装机** |
+| 7 | 商店图 | 512×512 不透明 PNG 同步 | ⏳ 未做，已登记 |
 
-⚠️ 本机不能编译（AGP 9.5.0 缺缓存）⇒ 步骤 4 的 HTML 预览是**开工前必须有的**东西，
-否则改完看不到、只能靠想象。
+**本地已跑通的门禁**：生成脚本 check 模式（四条几何校验 + XML 逐字符一致 +
+无 evenOdd + 颜色引用 + XML 注释合法性）全 PASS；
+`ET.parse` 五个 XML 良构；编码 / workflow shell / workflow secret / md 链接 / YAML 语法 /
+`git diff --check` 全绿。
+
+⚠️ 本机不能编译（AGP 9.5.0 缺缓存）⇒ aapt 对 `strokeLineJoin` 与 `@color` 的解析、
+detekt、单测全部交 CI。`strokeLineJoin` 已核对为 VectorDrawable API 21+ 官方属性。
+⚠️ CI 里 detekt 跑在编译之前；detekt 红则后面一个都不跑，别被「没编译」误导。
 
 ---
 
@@ -260,7 +271,7 @@ V 的笔画因此能到 8–10dp，24px 下仍透气。
 
 - 不动 `VaultixBrandColor` 色值（WCAG 单测）；不换品牌色相。
 - 不改 `viewportWidth/Height = 108`；不手动内缩背景层。
-- 彩色层与 monochrome 的内场 path **必须逐字符一致**。
+- 彩色层与 monochrome 的两半 V path **必须逐字符一致**（单色层不画墨阱，已由门禁钉住）。
 - 不为图标引入动效（8.8 §5：形状变形 / 夸张动效全部不采纳）。
 - 不引入位图 mipmap（minSdk 26，三层矢量已够）。
-- 本提案**未改任何 `res/` 文件**；施工需单独一批。
+- 施工已完成于提交 `e6391e92`；此后改几何**只能改生成脚本并重跑 check 模式**。
