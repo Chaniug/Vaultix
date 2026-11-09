@@ -1,13 +1,13 @@
 package io.vaultix.vaultix.ui
 
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -15,7 +15,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.res.painterResource
@@ -61,7 +61,9 @@ import io.vaultix.vaultix.ui.vaultlist.VaultListScreen
 import io.vaultix.vaultix.util.SystemSettingsIntents
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -215,56 +217,85 @@ fun VaultixApp(
 /**
  * 启动占位屏：库列表首帧到达前的唯一内容。
  *
- * ## 2026-11-09 23:33 用户反馈：划掉后台再点图标，会闪一帧「白底 + 灰转圈」
+ * ## 为什么它必须存在
  *
- * 两处都不对，且各有独立的因：
- * 1. **白底**：窗口主题 `Theme.Vaultix` 继承 `android:Theme.Material.Light.NoActionBar`，
- *    深色模式下窗口底色仍是白的。已改为 `windowBackground` 按 `values` / `values-night`
- *    分开取值（见 `res/values/themes.xml`），冷启动不再白闪。
- * 2. **转圈**：`VaultixWavyProgress` 在暗示「正在等一个不知道要多久的东西」，
- *    而这一步正常只有几十毫秒 —— 实际观感是"闪了一下"，比空白更像卡住。
+ * `RootNavState.Splash` 期间**不能提前落路由**：首帧永远是锁定态，
+ * 提前判断会让全新安装永久停在解锁页、而解锁页无库可解。所以占位屏不是 bug，
+ * 问题只在于「它长什么样」。
  *
- * ⇒ 改成**品牌标记**：品牌蓝圆角方块 + 折纸 V，和 Android 12+ 系统 splash
- *   （`windowBackground` + 应用图标）同一套视觉，两段衔接成一段。
+ * ## 两轮用户反馈的演化
  *
- * ⚠️ **不播动画、不循环**：它随时会被真实路由替换掉，动起来只会打断自己的退场。
+ * | 时间 | 反馈 | 当时的样子 | 改法 |
+ * |---|---|---|---|
+ * | 11-09 23:33 | 「闪一帧白底 + 灰转圈」 | `VaultixWavyProgress` 居中 | 白底 → `windowBackground` 分亮暗；转圈 → 品牌标记 |
+ * | 11-10 00:13 | 「能看到蓝色 V，但有点显眼」 | 96dp 品牌蓝圆角方块 + 折纸 V | 去掉方块，只留**单色层的 V 剪影** |
+ *
+ * 为什么去掉方块有效：方块本身是一整块高饱和色，在白底上的「重量」远大于笔画。
+ * 单色层的 V 与桌面「折纸 V」同形（pathData 由生成脚本保证逐字符一致），
+ * 但没有硬边容器 —— 视觉重量只剩笔画本身。
+ *
  * ⚠️ 用固定品牌蓝而不是 `colorScheme.primary`：动态取色下 primary 可能是绿 / 紫，
- *    而折纸 V 的白色受光面与淡蓝背光面是为蓝底设计的（见 `ic_launcher_foreground.xml`）。
+ *    V 是品牌符号，不该跟着壁纸变色（8.8 §6② 允许品牌色出现在图标类元素上）。
+ * ⚠️ 动画**只播一次**（180ms 淡入 + 94%→100% 缩放），绝不循环：
+ *    这块随时会被真实路由替换掉，循环动画会打断自己的退场。
  */
 @Composable
 private fun SplashScreen() {
+    // 淡入 + 轻微放大：从「什么都没有」到「V 停稳」，180ms 一条曲线。
+    // ⚠️ 只播一次、不循环 —— 这块随时会被真实路由替换掉，动起来只会打断自己的退场。
+    val reveal = remember { Animatable(0f) }
+    LaunchedEffect(Unit) {
+        reveal.animateTo(
+            targetValue = 1f,
+            animationSpec = tween(
+                durationMillis = SPLASH_REVEAL_MS,
+                easing = LinearOutSlowInEasing,
+            ),
+        )
+    }
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.surface),
         contentAlignment = Alignment.Center,
     ) {
-        Box(
+        // 只用**单色层的 V 剪影**，不加方块底。
+        //
+        // 2026-11-10 00:13 用户反馈「能看到蓝色 V，但标记还是有点显眼」——
+        // 上一版是 96dp 的品牌蓝圆角方块 + 前景层，方块本身是一整块高饱和色，
+        // 在白底上比重很大。单色层的 V 与桌面「折纸 V」同形，但**没有硬边容器**，
+        // 视觉重量只剩笔画本身，观感上更「无缝」。
+        Icon(
+            painter = painterResource(R.drawable.ic_launcher_monochrome),
+            contentDescription = null,
+            tint = colorResource(R.color.ic_launcher_background),
             modifier = Modifier
-                .size(SPLASH_BADGE_SIZE)
-                .clip(RoundedCornerShape(SPLASH_BADGE_CORNER))
-                .background(colorResource(R.color.ic_launcher_background)),
-            contentAlignment = Alignment.Center,
-        ) {
-            // 直接复用启动图标的前景层：V 的几何与桌面图标逐字符一致，
-            // 不会出现「启动画面一个 V、桌面上另一个 V」。
-            Image(
-                painter = painterResource(R.drawable.ic_launcher_foreground),
-                contentDescription = null,
-                modifier = Modifier.fillMaxSize(),
-            )
-        }
+                .size(SPLASH_MARK_BOX)
+                .graphicsLayer {
+                    alpha = reveal.value
+                    val scale = SPLASH_MARK_START_SCALE +
+                        (1f - SPLASH_MARK_START_SCALE) * reveal.value
+                    scaleX = scale
+                    scaleY = scale
+                },
+        )
     }
 }
 
 /**
- * 启动标记的尺寸与圆角。
+ * 启动标记的**画布**尺寸（不是 V 的可见尺寸）。
  *
- * 96dp：自适应图标的前景图形只占画布 61%（108 画布里的 66 安全圈），
- * 96dp 下 V 实际约 58dp —— 居中时既不像一枚小图标，也不会顶到屏幕边。
+ * 单色层里 V 只占 108 画布的 31%（x 37–71 / y 40–74），所以 196dp 画布上
+ * V 实际约 61dp —— 与上一版蓝方块方案里 58dp 的 V 视觉大小相当，
+ * 但去掉了 96dp 的实色方块，白底上的压迫感小得多。
  */
-private val SPLASH_BADGE_SIZE = 96.dp
-private val SPLASH_BADGE_CORNER = 26.dp
+private val SPLASH_MARK_BOX = 196.dp
+
+/** 淡入时长：短到不觉得在等，又足够让 V「落」下来而不是硬闪。 */
+private const val SPLASH_REVEAL_MS = 180
+
+/** 起始缩放：从 94% 放大到 100%，幅度小到不会读成「弹跳」，只读成「落定」。 */
+private const val SPLASH_MARK_START_SCALE = 0.94f
 
 /**
  * 二级路由转场：**Shared Axis X**（Material motion 的标准「前进 / 返回」动效）。

@@ -140,9 +140,14 @@ private const val CARD_DIMMED_ALPHA = 0.42f
  *    无同步状态行时卡片自然高度约 79dp（色条 3 + 上下内边距 28 + 徽章 48），
  *    所以取 84dp：既比 48dp 徽章明显大一档，又只在有状态行时才可能略微撑高。
  *
+ * ⚠️ [CARD_TINT_ALPHA] 的取值有个**物理下限**：M3 的 `*Container` 色本身明度就很高
+ *    （浅色主题下 primaryContainer ≈ 88% 亮度），而卡片底 `surfaceContainerLow` ≈ 96%。
+ *    两者只差 8% 明度，10% 混合后差异不足 1% —— 肉眼根本分不出（2026-11-10 00:13
+ *    用户实测「差别看不出来」）。要看出色相至少需要 20% 以上，这里取 22%。
+ *
  * ⚠️ 四个值都是观感旋钮：嫌花就降 [WATERMARK_ALPHA]，嫌淡就升 [CARD_TINT_ALPHA]。
  */
-private const val CARD_TINT_ALPHA = 0.10f
+private const val CARD_TINT_ALPHA = 0.22f
 private val WATERMARK_SIZE = 84.dp
 private const val WATERMARK_ALPHA = 0.07f
 private val WATERMARK_OFFSET_X = 30.dp
