@@ -96,9 +96,12 @@
   .stage .new{background:var(--tonal);display:flex;flex-direction:column;align-items:center;
     justify-content:center;gap:8px;opacity:0;transform:scale(1)}
   .stage .new b{font-size:16px}.stage .new small{font-size:10px;color:var(--muted)}
-  .stage.fxD .new{opacity:1}
-  .stage.fxD .old{opacity:0}
+  /* D 初始与其他三格一样显示库列表；播放时幕布合上再拉开，露出新库画面。 */
+  .stage.fxD.play .new{animation:showNew .18s .14s ease-out forwards}
   .stage:not(.fxA) .tilecard{display:none}
+  /* 百叶幕布只属于 fxD：其余三个舞台若不隐藏它，四条白色纵带会把整个舞台盖成空白。
+     22:47 用户反馈「展示效果有问题」的真因 —— A 区四格全白。 */
+  .stage:not(.fxD) .curtain{display:none}
   .stage .tilecard{position:absolute;left:16px;right:16px;top:120px;height:70px;border-radius:14px;
     background:var(--card);border:1px solid var(--line);display:flex;align-items:center;gap:9px;padding:10px;
     transform-origin:center center}
@@ -106,8 +109,11 @@
   .stage .tilecard b{font-size:11px}
   .hintline{font-size:11px;color:var(--muted);text-align:center;margin-top:8px}
 
-  .stage.fxA.play .tilecard{animation:grow .26s cubic-bezier(.2,.8,.2,1) forwards}
+  .stage.fxA.play .tilecard{z-index:2;animation:grow .26s cubic-bezier(.2,.8,.2,1) forwards}
+  /* 展开后让「已切换」的新库画面浮到最上层，否则终态只是一块纯色，看不出发生了什么。 */
+  .stage.fxA.play .new{z-index:3;animation:showNew .2s .14s ease-out forwards}
   @keyframes grow{to{left:-40px;right:-40px;top:-40px;height:410px;border-radius:0;background:var(--tonal)}}
+  @keyframes showNew{to{opacity:1}}
   .stage.fxB .new{opacity:1;clip-path:circle(0% at 50% 78%)}
   .stage.fxB.play .new{animation:reveal .28s ease-out forwards}
   @keyframes reveal{to{clip-path:circle(150% at 50% 78%)}}
@@ -116,12 +122,12 @@
   @keyframes outz{to{opacity:0;transform:scale(.92)}}
   @keyframes inz{0%{opacity:0;transform:scale(1.05)}100%{opacity:1;transform:scale(1)}}
   .curtain{position:absolute;inset:0;display:flex;pointer-events:none}
-  .curtain i{flex:1;background:var(--card);transform-origin:top;transform:scaleY(1)}
+  .curtain i{flex:1;background:var(--card);transform-origin:top;transform:scaleY(0)}
   .stage.fxD.play .curtain i{animation:blind .26s ease-in forwards}
   .stage.fxD.play .curtain i:nth-child(2){animation-delay:.04s}
   .stage.fxD.play .curtain i:nth-child(3){animation-delay:.08s}
   .stage.fxD.play .curtain i:nth-child(4){animation-delay:.12s}
-  @keyframes blind{to{transform:scaleY(0)}}
+  @keyframes blind{0%{transform:scaleY(0)}35%{transform:scaleY(1)}100%{transform:scaleY(0)}}
   .stage.slow *{animation-duration:.9s!important}
   .stage.slow .curtain i{animation-delay:.12s!important}
   .stage.slow .curtain i:nth-child(2){animation-delay:.24s!important}
