@@ -14,6 +14,7 @@ import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.domain.VaultRepository
 import io.vaultix.vaultix.autofill.AutofillIntents
 import io.vaultix.vaultix.ui.VaultixApp
+import io.vaultix.vaultix.ui.glass.isLiquidGlassBlurSupported
 import io.vaultix.vaultix.ui.theme.ScreenSecurityEffect
 import io.vaultix.vaultix.ui.theme.ThemeMode
 import io.vaultix.vaultix.ui.theme.VaultixTheme
@@ -74,8 +75,11 @@ class MainActivity : FragmentActivity() {
                 .collectAsStateWithLifecycle(initialValue = false)
             // 底栏液态玻璃：与 themeMode / dynamicColor 同一取向 —— 观感偏好只在
             // 组合顶层收一次，再往下传给主壳（避免两处各读一份偏好）。
+            // ⚠️ 2026-11-09 默认开：首帧占位值必须跟 DataStore 的新默认值一致，
+            //    否则会「第一帧实色、第二帧玻璃」闪一下。低版本不支持真模糊 ⇒
+            //    首帧仍走实色分支，与随后降级档的实色观感一致，也不会闪。
             val liquidGlassDock by preferences.liquidGlassDock
-                .collectAsStateWithLifecycle(initialValue = false)
+                .collectAsStateWithLifecycle(initialValue = isLiquidGlassBlurSupported())
             val screenSecure by preferences.screenSecurity
                 .collectAsStateWithLifecycle(initialValue = true)
 

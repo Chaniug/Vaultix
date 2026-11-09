@@ -293,11 +293,22 @@ class VaultixPreferences @Inject constructor(
      * 底栏「液态玻璃」开关（2026-10-27 用户需求）。
      *
      * 开启后悬浮胶囊底栏改为**半透明 + 实时模糊其后的内容**（真模糊，不是假磨砂贴图）。
-     * 默认**关**：模糊在低端机上是一笔真实的 GPU 开销，且它是观感选项而非安全选项，
-     * 应该由用户主动打开（对齐 iOS 26 Liquid Glass 的"用户可关"取向）。
+     *
+     * ⚠️ 2026-11-09 精装修：**默认改为开启**。用户装机后明确希望「透过底栏淡淡看到
+     * 下方条目」，因此把它从「需要主动去设置里找的观感选项」变成默认观感。
+     * 安全网由 UI 层负责，本层不需要判断系统版本：
+     * - `MainShellScreen.glassSourceActive = liquidGlassDock && isLiquidGlassBlurSupported()`
+     *   ⇒ API 30 及以下不录背景源；
+     * - `liquidGlassStyle(blurAvailable = false)` ⇒ 降级档 `FALLBACK_ALPHA = 1f`
+     *   **直接画全不透明实色**，不会出现「文字穿过底栏」；
+     * - 设置页副标题在低版本会改成「将使用实色底栏」，不静默降级。
+     * ⇒ 「默认开」在低版本的效果 = 原本的实色底栏，观感不回退。
+     *
+     * 用户**显式关过**（DataStore 里已有 false）则以用户选择为准，不会被新版翻回开。
+     * GPU 开销仍是真实成本，所以开关保留在 设置 → 主题模式，随时可关。
      */
     val liquidGlassDock: Flow<Boolean> =
-        safeData.map { it[LIQUID_GLASS_DOCK] ?: false }
+        safeData.map { it[LIQUID_GLASS_DOCK] ?: true }
 
     /**
      * 自动填充保存提示（对齐 Bitwarden `isAutofillSavePromptDisabled` 的反向开关）：

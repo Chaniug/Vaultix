@@ -80,14 +80,34 @@ import androidx.compose.ui.unit.dp
  *   内描边（所有版本）。低版本或 shader 创建失败时自动退回「仅模糊 + 静态光学装饰」。
  */
 
-/** 模糊半径（dp）。Haze 的 `HazeMaterials` 默认值就是 24dp，与它对齐便于横向对照。 */
-private val BlurRadius = 24.dp
+/**
+ * 模糊半径（dp）。
+ *
+ * 2026-11-09 精装修：24dp → **18dp**。24 是 Haze `HazeMaterials` 的默认值，
+ * 但配上下面调淡后的填充，24 会把背后的条目糊得完全没有形状，
+ * 用户想要的是「稍微看得出下面有东西」而不是一片雾。18dp 保留轮廓、去掉文字可读性。
+ * ⚠️ 只影响观感；`liquidGlassBackdrop` 的采样与层级结构一行未动。
+ */
+private val BlurRadius = 18.dp
 
-/** 液态玻璃的视觉参数（集中一处，避免各处拼参数导致观感漂移）。 */
+/**
+ * 液态玻璃的视觉参数（集中一处，避免各处拼参数导致观感漂移）。
+ *
+ * ## 2026-11-09 精装修：从 thin 调淡到 ultraThin 与 thin 之间
+ *
+ * 用户装机后要的是「透过底栏**淡淡**看到下方密码条目」，而原来的 thin 档偏实。
+ * 这一轮把填充与三层装饰一起压淡，但**不动任何结构**：
+ * 源→消费分离、`drawGlass` 的绘制顺序、降级档全不透明、采样偏移，一行未改。
+ *
+ * ⚠️ 硬边界（`8.4-UI·观感-part3.md` + `LiquidGlassTest` 反向锁定）：
+ * 1. 填充 alpha 必须 `< 1f` 且 **深色 > 浅色**（深色背景糊完接近黑，太薄会分不清边界）；
+ * 2. `FALLBACK_ALPHA` **保持 1f** —— API 30 及以下没有真模糊，半透明会让列表文字穿栏；
+ *    本轮调淡只对「真模糊档」生效，降级档仍是实色底栏；
+ * 3. 不在 `ui/glass/` 之外另叠半透明蒙层假装磨砂（会和真模糊打架）。
+ */
 object LiquidGlass {
     /**
-     * 填充不透明度 —— **直接取自 chrisbanes/Haze 的 `HazeMaterials`**（Apache-2.0，
-     * 数值可对照其 `haze-materials/…/HazeMaterials.kt`）：
+     * 填充不透明度 —— 基准取自 chrisbanes/Haze 的 `HazeMaterials`（Apache-2.0）：
      *
      * | 档位 | light | dark |
      * |---|---|---|
@@ -97,13 +117,16 @@ object LiquidGlass {
      * | thick | 0.83 | 0.90 |
      * | ultraThick | 0.92 | 0.97 |
      *
-     * 第一版取的 0.62 / 0.48（**深色比浅色更透**）是拍脑袋定的，而且方向反了：
-     * 深色主题下背景本身更暗、模糊结果更接近黑，填充再薄就分不清"玻璃"与"背景"，
-     * 图标反而更难看清。Haze 五档**全部是深色更实**。
-     * ⇒ 取 **thin**（0.60 / 0.65）：仍能看出后面的内容在动，同时保住图标对比度。
+     * 第一版取的 0.62 / 0.48（**深色比浅色更透**）是拍脑袋定的，方向反了：
+     * 深色主题下背景本身更暗、模糊结果更接近黑，填充再薄就分不清"玻璃"与"背景"。
+     * Haze 五档**全部是深色更实**。
+     *
+     * ⇒ 旧值取 **thin**（0.60 / 0.65）；本轮取 **0.40 / 0.55**：
+     * 浅色贴近 ultraThin，深色保守地停在 ultraThin 的 dark 值，
+     * 既让背后条目的色块透出来，又保住图标对比度与「深色更实」的规律。
      */
-    const val FILL_ALPHA_LIGHT = 0.60f
-    const val FILL_ALPHA_DARK = 0.65f
+    const val FILL_ALPHA_LIGHT = 0.40f
+    const val FILL_ALPHA_DARK = 0.55f
 
     /**
      * 降级（无模糊硬件能力）时**直接画实色**，而不是"半透明 + 一点补偿"。
@@ -111,30 +134,31 @@ object LiquidGlass {
      * Haze 的做法同样是降级成 flat scrim（`fallbackColorEffect`），而不是留半透明糊弄：
      * 半透明的底栏浮在滚动内容上，文字会**穿过**底栏（读不清），那才是真正不可用的状态。
      * ⇒ 无模糊 = 主题色 `surfaceContainerHigh` **全不透明**，观感等同第一版的实心底栏。
+     * ⚠️ 本轮「默认开」在低版本走的就是这一档，所以默认开不会造成可用性回退。
      */
     const val FALLBACK_ALPHA = 1f
 
     /** 上沿高光带高（占整体高度的比例）。 */
     const val EDGE_HIGHLIGHT_FRACTION = 0.16f
 
-    /** 上沿高光透明度 —— 它才是"玻璃"与"塑料边框"的观感分界。 */
-    const val TOP_SHEEN_ALPHA = 0.55f
+    /** 上沿高光透明度（0.55 → 0.32）：它仍是"玻璃"与"塑料边框"的分界，只是不再抢眼。 */
+    const val TOP_SHEEN_ALPHA = 0.32f
 
-    /** 内描边透明度（深色下白描边要更淡）。 */
-    const val STROKE_ALPHA_LIGHT = 0.55f
+    /** 内描边透明度（深色下白描边要更淡；单测钉住 dark < light）。 */
+    const val STROKE_ALPHA_LIGHT = 0.34f
     const val STROKE_ALPHA_DARK = 0.28f
 
-    /** 阴影高度：玻璃态比实心态更需要它把胶囊"抬"离内容，否则边界读不出来。 */
-    val ShadowElevation = 8.dp
+    /** 阴影高度（8 → 6dp）：玻璃更淡了，重阴影会把边界重新压成一块塑料板。 */
+    val ShadowElevation = 6.dp
 
     /** 上沿那道 1dp 折边：渐隐高光带负责"厚度"，这条亮线负责"边界"。 */
-    const val TOP_LINE_ALPHA = 0.34f
+    const val TOP_LINE_ALPHA = 0.20f
 
     /** 下沿 rim 暗线占整体高度的比例 —— 真实玻璃的底边会把背景压暗一线。 */
     const val RIM_LINE_FRACTION = 0.10f
 
     /** 暗线颜色：固定黑叠 alpha，不随主题反色（玻璃的暗边在两个主题里都是暗的）。 */
-    val RimLineColor = Color.Black.copy(alpha = 0.16f)
+    val RimLineColor = Color.Black.copy(alpha = 0.10f)
 }
 
 /**

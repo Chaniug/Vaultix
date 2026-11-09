@@ -104,11 +104,20 @@ private const val ICON_BOUNCE_START = 0.76f
 
 /**
  * 是否叠加 M3 pressed state layer（10%，官方 StateTokens.PressedStateLayerOpacity）。
- * 默认关：玻璃态下半透明层会被模糊吃掉，项目自绘实色 pill 更可靠（见 [DockTabItem] KDoc）。
+ * 默认关：玻璃态下半透明层会被模糊吃掉，项目自绘 pill 更可靠（见 [DockTabItem] KDoc）。
  * 想对比 M3 合规手感时改成 true 即可，其余逻辑不用动 —— 施工单里「可单独开关」的那一项。
  */
 private const val USE_M3_STATE_LAYER = false
 private const val M3_PRESSED_LAYER_ALPHA = 0.10f
+
+/**
+ * 玻璃态下选中 / 按压 pill 的不透明度（2026-11-09 精装修）。
+ *
+ * 原来 pill 是**实色** `secondaryContainer` / `primaryContainer`，浮在半透明玻璃上
+ * 像贴了一块塑料。带 alpha 后读作「玻璃里一块更浓的玻璃」，材质才贯通。
+ * ⚠️ 只改 alpha，**颜色仍瞬切**（[DockTabItem] KDoc 的老 bug 不复发）。
+ */
+private const val DOCK_GLASS_PILL_ALPHA = 0.55f
 
 /** spring 参数集中一处，tab / 加号 / 图标共用同一套物理手感。 */
 private val DockSpring = spring<Float>(
@@ -234,7 +243,13 @@ fun VaultixBottomDock(
                     .fillMaxWidth()
                     .shadow(elevation = LiquidGlass.ShadowElevation, shape = VaultixCorner.Pill),
             ) {
-                DockRow(tabs = tabs, selected = selected, onSelect = onSelect, onAdd = onAdd)
+                DockRow(
+                    tabs = tabs,
+                    selected = selected,
+                    onSelect = onSelect,
+                    onAdd = onAdd,
+                    glass = true,
+                )
             }
         } else {
             Surface(
@@ -263,6 +278,8 @@ private fun DockRow(
     selected: VaultixNavItem,
     onSelect: (VaultixNavItem) -> Unit,
     onAdd: (VaultixNavItem) -> Unit,
+    /** 玻璃态下选中 / 按压 pill 带 alpha，让材质贯通；实心态默认 false 不受影响。 */
+    glass: Boolean = false,
 ) {
     Row(
         modifier = Modifier
@@ -281,6 +298,7 @@ private fun DockRow(
                     isSelected = item == selected,
                     onClick = { onSelect(item) },
                     modifier = Modifier.weight(1f),
+                    glass = glass,
                 )
             }
         }
@@ -303,6 +321,7 @@ private fun DockRow(
                     isSelected = item == selected,
                     onClick = { onSelect(item) },
                     modifier = Modifier.weight(1f),
+                    glass = glass,
                 )
             }
         }
@@ -385,9 +404,10 @@ private fun AddButton(
  * 自身底色与缩放，松手即回。因 `key(item)` 保证组合槽稳定，press 不会扩散到兄弟节点，
  * 故不会重现「旁边跟着闪」。这是组件内按压反馈，不违反 #87「不要花哨页面转场」。
  *
- * ⚠️ 玻璃态下 ripple 会被半透明层吃掉 ⇒ 这里**不用** `indication`，而是用
- *    `surfaceContainerHigh` / `primaryContainer` 这类**具名实色档**画瞬时 pill，
- *    在模糊背景上依然看得见。
+ * ⚠️ 玻璃态下 ripple 会被半透明层吃掉 ⇒ 这里**不用** `indication`，而是自绘瞬时 pill。
+ *    实心态用 `surfaceContainerHigh` / `primaryContainer` 等**具名实色档**；
+ *    玻璃态由 [DOCK_GLASS_PILL_ALPHA] 给同一批颜色叠 alpha，让材质贯通。
+ *    两者都只改「被按的那一个」item，选中色仍瞬切。
  *
  * ## 2026-11-09 方案 ③：弹簧、选中形变、图标 one-shot
  * - **弹簧**：`tween(90)` → `DockSpring`，按压吸入、松手回弹（T1 那段原来空白）。
@@ -405,6 +425,8 @@ private fun DockTabItem(
     isSelected: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    /** 见 [DOCK_GLASS_PILL_ALPHA]：只影响 pill 的 alpha，颜色仍瞬切。 */
+    glass: Boolean = false,
 ) {
     val label = stringResource(item.labelRes)
     val interactionSource = remember { MutableInteractionSource() }
@@ -442,6 +464,13 @@ private fun DockTabItem(
         isSelected -> MaterialTheme.colorScheme.secondaryContainer
         pressed -> MaterialTheme.colorScheme.surfaceContainerHigh
         else -> Color.Transparent
+    }
+    // 玻璃态：pill 带 alpha ⇒ 读作「玻璃里一块更浓的玻璃」而不是贴了一块塑料。
+    // ⚠️ 只改 alpha，颜色仍由上面的 when 瞬切（不引入任何颜色动画）。
+    val effectivePillColor = if (glass && pillColor != Color.Transparent) {
+        pillColor.copy(alpha = DOCK_GLASS_PILL_ALPHA)
+    } else {
+        pillColor
     }
     val contentTint = if (isSelected) {
         MaterialTheme.colorScheme.primary
@@ -494,7 +523,7 @@ private fun DockTabItem(
                 //    也不能让 tab 文字被裁成半个字（见 .ai/conventions/8.4 §字体缩放）。
                 .heightIn(min = 48.dp)
                 .clip(pillShape)
-                .background(pillColor, pillShape),
+                .background(effectivePillColor, pillShape),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {

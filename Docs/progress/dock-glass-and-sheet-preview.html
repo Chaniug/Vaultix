@@ -1,0 +1,449 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Vaultix · 底栏材质与「+」面板 · 精装修探索</title>
+<style>
+  :root{
+    --bg:#F6F7FB; --panel:#FFFFFF; --ink:#1C2230; --muted:#5C6577; --line:#DDE2EC;
+    --primary:#3B5BC4; --onprimary:#FFFFFF; --tonal:#E7EBFA; --tonal2:#E6F0EC;
+    --surface:#ECEFF7; --card:#FFFFFF; --accent:#2A4291;
+  }
+  body.dark{
+    --bg:#12151D; --panel:#1B202B; --ink:#EDF0F7; --muted:#A6AFC2; --line:#333B4C;
+    --primary:#A9BDF5; --onprimary:#1B2B63; --tonal:#2A3350; --tonal2:#243A38;
+    --surface:#1A2030; --card:#242B3A; --accent:#C9D2EC;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:14px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;
+    transition:background .25s,color .25s}
+  .wrap{max-width:1500px;margin:0 auto;padding:28px 24px 60px}
+  h1{font-size:25px;margin:0 0 6px;letter-spacing:-.02em}
+  .lead{color:var(--muted);margin:0 0 20px;max-width:900px}
+  h2{font-size:17px;margin:34px 0 6px;display:flex;align-items:center;gap:9px}
+  h2 .num{display:inline-flex;width:23px;height:23px;border-radius:7px;background:var(--primary);
+    color:var(--onprimary);align-items:center;justify-content:center;font-size:12px;font-weight:700}
+  .sub{color:var(--muted);font-size:13px;margin:0 0 16px}
+  .ctlbar{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;
+    background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:13px 16px;
+    position:sticky;top:0;z-index:30;box-shadow:0 4px 18px rgba(30,40,70,.06)}
+  .ctl{display:flex;align-items:center;gap:8px}
+  .ctl>span{color:var(--muted);font-size:12px;white-space:nowrap}
+  .seg{display:flex;gap:3px;background:var(--bg);border:1px solid var(--line);border-radius:9px;padding:3px}
+  .seg button{border:0;background:transparent;color:var(--muted);padding:5px 10px;border-radius:6px;
+    font-size:12px;cursor:pointer;white-space:nowrap;transition:.15s}
+  .seg button:hover{color:var(--ink)}
+  .seg button.on{background:var(--primary);color:var(--onprimary);font-weight:600}
+  .btn{border:1px solid var(--line);background:var(--panel);color:var(--ink);
+    padding:7px 12px;border-radius:9px;font-size:12px;cursor:pointer}
+  .btn:hover{border-color:var(--primary)}
+  .grid{display:grid;gap:16px;margin-top:14px}
+  .grid.g4{grid-template-columns:repeat(4,minmax(0,1fr))}
+  .grid.g5{grid-template-columns:repeat(5,minmax(0,1fr))}
+  @media(max-width:1250px){.grid.g5{grid-template-columns:repeat(3,minmax(0,1fr))}}
+  @media(max-width:900px){.grid.g4,.grid.g5{grid-template-columns:repeat(2,minmax(0,1fr))}}
+  @media(max-width:560px){.grid.g4,.grid.g5{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:14px;
+    display:flex;flex-direction:column;align-items:center;gap:10px}
+  .card.rec{border-color:var(--primary);box-shadow:0 0 0 2px rgba(59,91,196,.13)}
+  .tag{font-size:11px;padding:2px 8px;border-radius:20px;font-weight:700;letter-spacing:.02em}
+  .tag.blue{background:var(--tonal);color:var(--accent)}
+  .tag.green{background:var(--tonal2);color:#1E6B52}
+  .tag.grey{background:var(--bg);color:var(--muted)}
+  .tag.warn{background:#FBEEE0;color:#9A5B12}
+  .ttl{font-size:14px;font-weight:700;text-align:center}
+  .desc{font-size:12px;color:var(--muted);text-align:center;min-height:48px}
+  .ft{font-size:11px;color:var(--muted);text-align:center;border-top:1px dashed var(--line);
+    padding-top:8px;width:100%;line-height:1.5}
+
+  /* ── 手机舞台 ───────────────────────────────── */
+  .phone{width:100%;max-width:250px;aspect-ratio:250/500;border-radius:26px;
+    background:var(--surface);border:5px solid #2B3140;position:relative;overflow:hidden;
+    box-shadow:0 10px 24px rgba(20,28,50,.16)}
+  body.dark .phone{border-color:#0C0F16}
+  .status{height:26px;display:flex;justify-content:space-between;align-items:center;
+    padding:0 13px;font-size:9px;color:var(--muted);flex:none}
+  .topbar{padding:5px 12px 10px;flex:none}
+  .topbar b{font-size:15px;display:block}
+  .topbar small{font-size:10px;color:var(--muted)}
+  .screen{position:absolute;inset:0;overflow-y:auto;overflow-x:hidden;scrollbar-width:none}
+  .screen::-webkit-scrollbar{display:none}
+  .list{padding:0 10px 120px}
+  .vaultline{font-size:10px;color:var(--muted);margin:8px 2px 9px}
+  .item{display:flex;align-items:center;gap:9px;background:var(--card);border-radius:12px;
+    padding:9px 10px;margin-bottom:7px;border:1px solid rgba(120,135,170,.10)}
+  .fav{width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;
+    justify-content:center;color:#fff;font-weight:800;font-size:13px}
+  .itxt{min-width:0;flex:1}
+  .itxt b{display:block;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .itxt small{display:block;font-size:9px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .dots{color:var(--muted);font-size:13px}
+
+  /* ── 底栏 ───────────────────────────────────── */
+  .dock{position:absolute;left:9px;right:9px;bottom:16px;height:56px;border-radius:30px;
+    display:flex;align-items:center;padding:0 4px;z-index:5;overflow:hidden;
+    box-shadow:0 6px 18px rgba(20,30,60,.18);transition:background .3s,backdrop-filter .3s}
+  .glass .dock{-webkit-backdrop-filter:blur(20px) saturate(1.5);backdrop-filter:blur(20px) saturate(1.5)}
+  .dock::before{content:"";position:absolute;left:0;right:0;top:0;height:22%;pointer-events:none;
+    background:linear-gradient(to bottom,rgba(255,255,255,.55),transparent)}
+  .dock::after{content:"";position:absolute;inset:0;pointer-events:none;border-radius:30px;
+    border:1px solid rgba(255,255,255,.5)}
+  .glass.min .dock::before,.glass.min .dock::after{opacity:.35}
+  .glass.min .dock{box-shadow:0 3px 10px rgba(20,30,60,.10)}
+  .tab{flex:1;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    gap:2px;position:relative;z-index:1;color:var(--muted);font-size:9px;cursor:pointer;
+    transition:transform .18s cubic-bezier(.2,1.5,.4,1)}
+  .tab:active{transform:scale(.89)}
+  .tab .ico{width:16px;height:16px;border:2px solid currentColor;border-radius:5px;opacity:.85}
+  .tab.sel{color:var(--accent)}
+  .tab .pill{position:absolute;inset:7px 3px;border-radius:14px;z-index:-1;background:transparent}
+  .tab.sel .pill{background:var(--tonal);border-radius:18px}
+  .glass.min .tab.sel .pill{background:rgba(140,165,235,.22)}
+  .add{flex:0 0 46px;height:44px;border-radius:14px;background:var(--primary);color:var(--onprimary);
+    display:flex;align-items:center;justify-content:center;font-size:23px;font-weight:300;
+    margin:0 2px;cursor:pointer;transition:transform .22s cubic-bezier(.2,1.6,.4,1)}
+  .add:active{transform:scale(.90)}
+
+  /* ── 面板 ───────────────────────────────────── */
+  .scrim{position:absolute;inset:0;background:rgba(10,16,32,.42);z-index:8}
+  .sheet{position:absolute;left:0;right:0;bottom:0;z-index:9;background:var(--panel);
+    border-radius:24px 24px 0 0;padding:14px 12px 16px;max-height:82%;overflow-y:auto;
+    box-shadow:0 -8px 26px rgba(10,18,40,.22);scrollbar-width:none}
+  .sheet::-webkit-scrollbar{display:none}
+  .sheet.glassy{background:rgba(246,248,255,.62);
+    -webkit-backdrop-filter:blur(24px) saturate(1.5);backdrop-filter:blur(24px) saturate(1.5)}
+  body.dark .sheet.glassy{background:rgba(27,32,43,.68)}
+  .sheet.glassy::before{content:"";position:absolute;left:0;right:0;top:0;height:16px;
+    background:linear-gradient(to bottom,rgba(255,255,255,.55),transparent);border-radius:24px 24px 0 0}
+  /* ⑤ 容器变换：面板从「+」上方长出来，底栏保持在最上层，
+     这样「同一块材质、从 + 展开」才看得见，而不是被 modal sheet 盖掉。 */
+  .phone.transform .sheet{left:9px;right:9px;bottom:74px;max-height:64%;
+    border-radius:22px;padding-bottom:12px}
+  .phone.transform .dock{z-index:12;background:rgba(236,239,247,.40)}
+  body.dark .phone.transform .dock{background:rgba(26,32,48,.52)}
+  .phone.transform .scrim{background:rgba(10,16,32,.34)}
+  .transformlink{position:absolute;left:50%;bottom:66px;width:2px;height:10px;z-index:13;
+    background:linear-gradient(to bottom,rgba(120,145,210,.15),rgba(120,145,210,.75));
+    transform:translateX(-50%);border-radius:2px}
+  .handle{width:32px;height:4px;border-radius:4px;background:var(--line);margin:0 auto 10px}
+  .stitle{font-size:13px;font-weight:700;margin:0 0 10px}
+  .slabel{font-size:10px;color:var(--muted);margin:10px 0 6px}
+  .rowitem{display:flex;align-items:center;gap:9px;padding:8px 4px;font-size:11px;
+    border-bottom:1px solid var(--line);cursor:pointer}
+  .rowitem:last-child{border-bottom:0}
+  .rowitem:hover{background:var(--bg)}
+  .ri{width:17px;height:17px;border-radius:5px;background:var(--tonal);flex:none}
+  .filled{background:var(--primary);color:var(--onprimary);border:0;border-radius:22px;
+    padding:9px 10px;width:100%;font-size:11px;font-weight:700;cursor:pointer;text-align:center}
+  .tiles{display:grid;grid-template-columns:repeat(2,1fr);gap:7px}
+  .tile{background:var(--tonal);border-radius:14px;padding:9px;min-height:62px;cursor:pointer;
+    display:flex;flex-direction:column;justify-content:space-between;transition:transform .18s}
+  .tile:hover{transform:translateY(-2px)}
+  .tile.a{background:var(--tonal2)}
+  .tile .tn{font-size:10px;font-weight:700}
+  .tile .th{font-size:8px;color:var(--muted);line-height:1.3}
+  .tile .ti{width:18px;height:18px;border-radius:6px;background:rgba(120,145,210,.30)}
+  .hero{background:var(--primary);color:var(--onprimary);border-radius:18px;padding:12px;
+    display:flex;align-items:center;gap:10px;margin-bottom:11px;cursor:pointer;
+    position:relative;overflow:hidden}
+  .hero::after{content:"";position:absolute;right:-16px;top:-20px;width:70px;height:70px;
+    border-radius:50%;background:rgba(255,255,255,.10)}
+  .hero .hplus{width:30px;height:30px;border-radius:10px;background:rgba(255,255,255,.22);
+    display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:300;flex:none}
+  .hero b{font-size:12px;display:block}
+  .hero small{font-size:9px;opacity:.82}
+  .chip{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line);
+    border-radius:20px;padding:6px 10px;font-size:10px;cursor:pointer;margin-top:10px;background:transparent;color:var(--ink)}
+  .minipreview{width:100%;height:30px;border-radius:7px;background:rgba(255,255,255,.62);
+    padding:5px;display:flex;flex-direction:column;gap:3px;justify-content:center}
+  body.dark .minipreview{background:rgba(255,255,255,.10)}
+  .ml{height:3px;border-radius:3px;background:rgba(90,110,160,.38)}
+  .ml.s{width:58%}.ml.m{width:78%}.ml.l{width:92%}
+  .mcard{height:24px;border-radius:5px;background:rgba(90,110,160,.30);position:relative;padding:4px}
+  .mcard::before{content:"";position:absolute;left:0;right:0;top:4px;height:5px;background:rgba(50,70,120,.55)}
+  .mcard::after{content:"••••";position:absolute;left:5px;bottom:2px;font-size:6px;letter-spacing:2px;color:rgba(50,70,120,.7)}
+  .mavatar{width:14px;height:14px;border-radius:50%;background:rgba(90,110,160,.38);align-self:center}
+  .minirow{display:flex;align-items:center;gap:4px}
+  .minirow .ml{flex:1}
+  .toolstrip{display:flex;align-items:center;justify-content:space-between;gap:8px;
+    border-top:1px solid var(--line);padding-top:9px;margin-top:11px;font-size:10px;cursor:pointer}
+  .notecap{font-size:9px;color:var(--muted);margin-top:8px;text-align:center}
+
+  /* ── 说明区 ─────────────────────────────────── */
+  .notes{margin-top:36px;background:var(--panel);border:1px solid var(--line);
+    border-radius:16px;padding:20px 22px}
+  .notes h3{margin:0 0 10px;font-size:16px}
+  .notes p{color:var(--muted);font-size:13px;margin:8px 0}
+  .notes b{color:var(--ink)}
+  .warnbox{border-left:3px solid #D08A2C;background:rgba(208,138,44,.08);
+    padding:10px 14px;border-radius:0 8px 8px 0;margin:14px 0;font-size:13px;color:var(--muted)}
+  table{width:100%;border-collapse:collapse;font-size:12px;margin-top:12px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-weight:600}
+  code{background:var(--bg);padding:1px 5px;border-radius:4px;font-size:11px}
+  .hint{font-size:12px;color:var(--muted);margin:10px 0 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>底栏材质 × 「+」面板 · 精装修探索</h1>
+  <p class="lead">两件事其实是同一个问题：<b>让「玻璃」从底栏一直贯穿到从它长出来的面板</b>。
+    下面每格都能点、每屏列表都能滚动——拖动列表看条目从底栏下面穿过，才看得出玻璃是不是真的透。</p>
+
+  <div class="ctlbar">
+    <div class="ctl"><span>主题</span><div class="seg" id="theme">
+      <button data-v="light" class="on">浅色</button><button data-v="dark">深色</button></div></div>
+    <div class="ctl"><span>玻璃装饰</span><div class="seg" id="deco">
+      <button data-v="full" class="on">现状（高光+描边）</button><button data-v="min">减到最淡</button></div></div>
+    <div class="ctl"><span>选中 pill</span><div class="seg" id="pill">
+      <button data-v="solid" class="on">实色</button><button data-v="alpha">半透明贯通</button></div></div>
+    <div class="ctl"><span>面板</span><div class="seg" id="open">
+      <button data-v="on" class="on">展开</button><button data-v="off">收起看底栏</button></div></div>
+    <button class="btn" id="scrollBtn">一起滚动列表 ↓</button>
+  </div>
+
+  <h2><span class="num">A</span>底栏材质 · 四档对比</h2>
+  <p class="sub">① 是现在装机的默认外观；② 是设置里那个开关打开后的效果；③④ 是这次要讨论的「更淡」。
+    四格共享同一份列表，滚动位置一致，差别只在底栏那一层。</p>
+  <div class="grid g4" id="glassGrid"></div>
+
+  <h2><span class="num">B</span>「+」面板 · 五种布局</h2>
+  <p class="sub">① 是这版装机包的现状（7 行线性列表，小屏要滚动）。②–⑤ 是候选。点每张小卡会有按压反馈。</p>
+  <div class="grid g5" id="sheetGrid"></div>
+
+  <div class="notes">
+    <h3>把话说清楚：半透明不是「还没做」，是「已经做了但默认关」</h3>
+    <p>项目里有完整的液态玻璃实现：<code>ui/glass/</code> 四个文件，源→消费分离、AGSL 边缘折射、
+      上沿高光 / rim 暗线 / 内描边、三档降级，2026-10-27 起经过四轮真机返工。
+      开关在 <b>设置 → 主题模式 → 液态玻璃底栏</b>，<b>默认关闭</b>（当时用户明确指定）。
+      所以第一件事不是新建，是先打开它看现状。</p>
+    <p>内容侧的前置条件也<b>已经具备</b>：<code>AdaptiveMainScaffold</code> 在窄屏用叠层
+      <code>Box</code>，内容一路铺到屏幕底，底栏浮在其上；各页只给列表末尾留
+      <code>bottomInset</code>。<b>滚动过程中条目本来就会从胶囊后面穿过</b>——只是滚到底时
+      胶囊后面是空白。这正是「淡淡看到下方条目」能成立的地方。</p>
+
+    <div class="warnbox"><b>一条被拍过的定案，这次要重新拍：</b>
+      <code>8.4-UI·观感-part3.md</code> §四处静默失效明确写着——API 30 及以下没有
+      <code>RenderEffect</code>，降级必须画<b>全不透明实色</b>，理由是「半透明底栏浮在滚动列表上，
+      条目会从图标之间透出来 ⇒ 读不清，那是不可用不是不好看」。
+      现在用户要的恰好是「透出来」，且明确说「淡淡的」。
+      ⇒ 要么在 <b>API 31+</b> 单独调淡（推荐），要么连降级档一起重开（需真机验对比度）。
+      这不是审美分歧，是有实测记录支撑的可用性取舍，别顺手改。</div>
+
+    <h3>「+」面板：M3 给了什么，没给什么</h3>
+    <table>
+      <tr><th>路径</th><th>官方说法</th><th>本项目的判断</th></tr>
+      <tr><td><code>ModalBottomSheet</code></td><td>只规定容器与行为，<b>不规定内容布局</b>；
+        Google 自家 Drive / Photos 的创建面板用磁贴网格</td><td>✅ 网格、主卡、工具条都在规范内，零 alpha API</td></tr>
+      <tr><td>M3E <code>FAB Menu</code></td><td>2–6 个相关动作，弹簧展开，
+        触发按钮 morph 成关闭</td><td>⚠️ 项目锁 alpha16，8.8 §6① 要求 alpha 只用于叶子组件；
+        且「+ 变 ×」正撞你上一轮否决的判据（动作按钮不能让人以为变成了别的功能）。
+        <b>只借「从原位展开」的运动语义，不借组件</b></td></tr>
+      <tr><td>M3E <code>ButtonGroup</code></td><td>表达单选 / 分段，connected 组会做相邻形变</td><td>❌ 动作集合不是选择态，语义不符</td></tr>
+      <tr><td>M3E <code>FloatingToolbar</code></td><td>横向悬浮动作条</td><td>❌ 与底栏胶囊抢同一块空间</td></tr>
+      <tr><td>M3 <code>state layer</code> / 一个 Filled</td><td>一屏只该有一个 Filled 主按钮</td><td>✅ 网格里全部用 tonal / outlined，主卡独享主色</td></tr>
+    </table>
+
+    <h3>我自己的三条大胆建议</h3>
+    <p><b>1 · 类型卡画「字段剪影」，不画抽象图标。</b>登录画两行 + 锁、银行卡画磁条 + 四位点、
+      笔记画三行文本、身份画头像 + 两行、SSH 画等宽字符。用户扫一眼就知道要建的是哪种，
+      比读文字快；而且这是密码管理器独有的表达，别家抄不走。也是刚做的折纸 V 那套
+      「一个不单调的单一符号」思路的延续。</p>
+    <p><b>2 · 面板与底栏同一块材质。</b>面板从「+」原位展开（container transform：
+      圆角 16dp → 28dp、位置从胶囊中央 → 全宽），顶部沿用同一道玻璃高光。
+      这样两个问题合成一个答案：底栏不是「一块贴上去的玻璃」，面板是它长出来的一块。</p>
+    <p><b>3 · 生成器不排第 7 项。</b>它是动作不是条目类型，放进 2×3 网格会污染分类。
+      单独做成底部工具条或 chip，和「新建什么」拉开层级。</p>
+
+    <p class="hint">本页是设计探索稿（A 区四档 / B 区五方案），JS 已校验。
+      2026-11-09 21:20 已按「③ 主卡 + ④ 字段剪影卡」与 A 区第 ③ 档落地施工，
+      实际代码见 <code>AddActionSheet.kt</code> / <code>LiquidGlass.kt</code>；
+      <b>⑤ 玻璃连续与 container transform 本轮未做</b>。
+      浏览器用 <code>backdrop-filter</code> 模拟 Android 的 <code>RenderEffect</code> 模糊，
+      观感接近但<b>不等于</b>真机——尤其 AGSL 折射与低版本降级在网页里无法复现，最终必须装机看。</p>
+  </div>
+</div>
+
+<script>
+const TYPES = [
+  {n:'登录',h:'网站 / 应用账号',i:'P',c:'#5B7BF0'},
+  {n:'安全笔记',h:'文本 / 隐私信息',i:'N',c:'#6E9B84'},
+  {n:'银行卡',h:'卡号 / 有效期',i:'C',c:'#C08B4A'},
+  {n:'身份',h:'地址 / 证件',i:'I',c:'#9A7BC4'},
+  {n:'SSH 密钥',h:'公钥 / 私钥',i:'S',c:'#4E8AA8'},
+];
+const ITEMS = [
+  {n:'GitHub',u:'chaniug@…',i:'G',c:'#24292F'},
+  {n:'Google',u:'valkjin@…',i:'G',c:'#4285F4'},
+  {n:'微信',u:'138****6621',i:'微',c:'#07C160'},
+  {n:'Amazon',u:'chaniug@…',i:'a',c:'#FF9900'},
+  {n:'Notion',u:'valkjin@…',i:'N',c:'#111111'},
+  {n:'Cloudflare',u:'admin@…',i:'C',c:'#F38020'},
+  {n:'中国银行',u:'card_8821',i:'中',c:'#C8102E'},
+  {n:'Steam',u:'valkjin',i:'S',c:'#1B2838'},
+  {n:'阿里云',u:'ram_user',i:'阿',c:'#FF6A00'},
+];
+const TABS = ['密码','验证码','+','卡包','设置'];
+
+function dockHtml(sel){
+  return `<div class="dock">${TABS.map((t,i)=> t==='+'
+    ? `<div class="add" data-add="1">+</div>`
+    : `<div class="tab ${i===sel?'sel':''}"><span class="pill"></span>
+         <span class="ico"></span><span>${t}</span></div>`).join('')}</div>`;
+}
+function listHtml(){
+  return `<div class="status"><span>9:41</span><span>●●● ▮</span></div>
+    <div class="topbar"><b>密码库</b><small>个人库 · 12 个条目</small></div>
+    <div class="list"><div class="vaultline">全部条目 · 按最近使用</div>
+      ${ITEMS.map(x=>`<div class="item"><div class="fav" style="background:${x.c}">${x.i}</div>
+        <div class="itxt"><b>${x.n}</b><small>${x.u}</small></div><span class="dots">⋮</span></div>`).join('')}
+    </div>`;
+}
+
+/* ── A 区：四档玻璃 ───────────────────────────── */
+const GLASSES = [
+  {k:'solid',tag:'grey',tagText:'装机默认',name:'① 实色底栏',fill:'var(--surface)',
+   desc:'surfaceContainerHigh 全不透明 + 6dp 阴影。今天装机看到的就是它。',
+   ft:'没有半透明，也没有模糊。条目滚到底栏后面就完全消失。'},
+  {k:'thin',tag:'blue',tagText:'开关已实现',name:'② 现状玻璃 thin',alpha:.60,
+   desc:'设置 → 主题模式 → 液态玻璃底栏。模糊 24dp + 填充 60%（浅）/ 65%（深）。',
+   ft:'Haze thin 档：能看出后面在动，但偏实，「淡」的观感还没到。'},
+  {k:'ultra',tag:'green',tagText:'建议试',name:'③ 更透 ultraThin',alpha:.38,
+   desc:'填充降到 38% / 52%，模糊半径略收，条目轮廓隐约可见。',
+   ft:'最接近「淡淡的模糊」。代价：图标对比度下降，深色下要更保守。'},
+  {k:'min',tag:'warn',tagText:'最淡',name:'④ 更透 + 减装饰',alpha:.34,
+   desc:'③ 之上把上沿高光、rim 暗线、内描边压到 35%，选中 pill 改半透明。',
+   ft:'视觉最轻、最「一体化」；也最容易在小屏上丢掉边界，需真机验。'},
+];
+
+function glassCard(g,state){
+  const isGlass = g.k!=='solid';
+  const cls = isGlass ? (state.deco==='min'||g.k==='min' ? 'glass min':'glass') : '';
+  const bg = isGlass
+    ? (state.theme==='dark' ? `rgba(26,32,48,${g.alpha+.06})` : `rgba(236,239,247,${g.alpha})`)
+    : 'var(--surface)';
+  const pill = (state.pill==='alpha' && isGlass) ? 'pillalpha':'';
+  return `<div class="card ${g.k==='ultra'?'rec':''}">
+    <div class="hd"><span class="tag ${g.tag}">${g.tagText}</span>
+      <p class="ttl" style="margin:6px 0 2px">${g.name}</p>
+      <p class="desc">${g.desc}</p></div>
+    <div class="phone ${cls} ${pill}" data-g="${g.k}">
+      <div class="screen">${listHtml()}</div>
+      ${dockHtml(0)}
+      <style>.phone[data-g="${g.k}"] .dock{background:${bg}}
+        ${pill?`.phone[data-g="${g.k}"] .tab.sel .pill{background:rgba(140,165,235,.24)}`:''}</style>
+    </div>
+    <div class="ft">${g.ft}</div>
+  </div>`;
+}
+
+/* ── B 区：五种面板布局 ───────────────────────── */
+function miniArt(k){
+  if(k==='card') return `<div class="minipreview"><div class="mcard"></div></div>`;
+  if(k==='identity') return `<div class="minipreview"><div class="minirow">
+    <div class="mavatar"></div><div class="ml m"></div></div><div class="ml s"></div></div>`;
+  if(k==='ssh') return `<div class="minipreview" style="align-items:flex-start">
+    <div class="ml s"></div><div class="ml m"></div></div>`;
+  if(k==='note') return `<div class="minipreview"><div class="ml l"></div><div class="ml m"></div><div class="ml s"></div></div>`;
+  return `<div class="minipreview"><div class="minirow"><div class="ml m"></div></div>
+    <div class="minirow"><div class="ml s"></div></div></div>`;
+}
+const ARTKEY = {'登录':'login','安全笔记':'note','银行卡':'card','身份':'identity','SSH 密钥':'ssh'};
+
+function tile(t,mini,idx){
+  return `<div class="tile ${idx%2?'a':''}" tabindex="0">
+    ${mini ? miniArt(ARTKEY[t.n]) : `<div class="ti"></div>`}
+    <div><div class="tn">${t.n}</div>${mini?'':`<div class="th">${t.h}</div>`}</div>
+  </div>`;
+}
+function tilesHtml(mini){
+  return `<div class="tiles">${TYPES.map((t,i)=>tile(t,mini,i)).join('')}
+    <div class="tile a" tabindex="0"><div class="ti"></div>
+      <div><div class="tn">生成密码</div><div class="th">工具 · 不创建条目</div></div></div></div>`;
+}
+const SHEETS = [
+  {k:'list',tag:'grey',tagText:'装机现状',name:'① 线性列表',rec:false,
+   desc:'标题 + 1 个 Filled + 分区标签 + 5 行 ListItem + 分隔线 + 生成器。',
+   ft:'最稳，但 7 个可点项竖排 ≈ 500dp，小屏必须滚动；全是灰图标，没有视觉焦点。',
+   body:()=>`<div class="stitle">新建</div>
+     <button class="filled">＋ 新建登录</button>
+     <div class="slabel">其他类型</div>
+     ${TYPES.map(t=>`<div class="rowitem"><span class="ri"></span>${t.n}</div>`).join('')}
+     <div class="rowitem" style="margin-top:6px;border-top:1px solid var(--line)">
+       <span class="ri"></span>生成密码</div>`},
+  {k:'tiles',tag:'blue',tagText:'M3 常见',name:'② 磁贴网格',rec:false,
+   desc:'2×3 tonal 小卡，一屏看完；图标 + 名称 + 一句说明。',
+   ft:'零 alpha API，纯 M3 色板角色。从 7 行压到约 260dp，不用滚动。',
+   body:()=>`<div class="stitle">新建</div>${tilesHtml(false)}`},
+  {k:'hero',tag:'green',tagText:'★ 推荐',name:'③ 主卡 + 网格',rec:true,
+   desc:'当前 Tab 的默认动作升成一张主色大卡，下面 2×2 网格放其余类型，生成器独立成 chip。',
+   ft:'保住「在验证码页按 + 就是新建验证码」；一屏一个 Filled 不破；层级最清楚。',
+   body:()=>`<div class="stitle">新建</div>
+     <div class="hero"><div class="hplus">＋</div><div><b>新建登录</b><small>当前：密码库 · 最常用</small></div></div>
+     <div class="tiles">${TYPES.slice(1).map((t,i)=>tile(t,false,i)).join('')}</div>
+     <button class="chip">⌁ 生成密码（工具）</button>`},
+  {k:'mini',tag:'green',tagText:'★ 我的大胆建议',name:'④ 字段剪影卡',rec:true,
+   desc:'网格里不画抽象图标，画每种条目的字段剪影：磁条、文本行、头像、等宽字符。',
+   ft:'看得懂 > 读文字，且是密码管理器独有的表达。建议与 ③ 的主卡组合落地。',
+   body:()=>`<div class="stitle">新建</div>${tilesHtml(true)}`},
+  {k:'glass',tag:'warn',tagText:'材质收束',name:'⑤ 玻璃连续',rec:false,
+   desc:'面板沿用底栏同一块玻璃：同填充、同上沿高光；从「+」原位展开（container transform）。',
+   ft:'把两个问题合成一个答案。动效约束这轮已放开，但仅 API 31+ 有真模糊，低版本仍需实色。',
+   body:()=>`<div class="stitle">新建</div>
+     <div class="hero" style="background:rgba(120,145,210,.24);color:var(--ink)">
+       <div class="hplus" style="background:rgba(255,255,255,.35)">＋</div>
+       <div><b>新建登录</b><small>面板与底栏同一块玻璃</small></div></div>
+     <div class="tiles">${TYPES.slice(1).map((t,i)=>tile(t,false,i)).join('')}</div>
+     <div class="notecap">↑ 面板由「+」原位展开 · 圆角 16 → 28dp</div>`},
+];
+
+function sheetCard(s,state){
+  const open = state.open==='on';
+  return `<div class="card ${s.rec?'rec':''}">
+    <span class="tag ${s.tag}">${s.tagText}</span>
+    <p class="ttl" style="margin:2px 0 0">${s.name}</p>
+    <p class="desc">${s.desc}</p>
+    <div class="phone ${s.k==='glass'?'transform glass min':''}" data-s="${s.k}">
+      <div class="screen">${listHtml()}</div>
+      ${open?`<div class="scrim"></div>
+        <div class="sheet ${s.k==='glass'?'glassy':''}" id="sheet-${s.k}">
+          <div class="handle"></div>${s.body()}</div>` : ''}
+      ${dockHtml(0)}
+      ${open && s.k==='glass' ? '<div class="transformlink"></div>' : ''}
+    </div>
+    <div class="ft">${s.ft}</div>
+  </div>`;
+}
+
+const state = {theme:'light',deco:'full',pill:'solid',open:'on'};
+function render(){
+  document.body.classList.toggle('dark',state.theme==='dark');
+  document.getElementById('glassGrid').innerHTML = GLASSES.map(g=>glassCard(g,state)).join('');
+  document.getElementById('sheetGrid').innerHTML = SHEETS.map(s=>sheetCard(s,state)).join('');
+  // 面板里的卡给一点按压反馈（只做观感，不改符号）
+  document.querySelectorAll('.tile,.hero,.rowitem,.chip').forEach(el=>{
+    el.addEventListener('pointerdown',()=>{el.style.transform='scale(.96)'});
+    el.addEventListener('pointerup',()=>{el.style.transform=''});
+    el.addEventListener('pointerleave',()=>{el.style.transform=''});
+  });
+}
+['theme','deco','pill','open'].forEach(k=>{
+  document.getElementById(k).addEventListener('click',e=>{
+    const b=e.target.closest('button'); if(!b)return;
+    state[k]=b.dataset.v;
+    [...e.currentTarget.children].forEach(x=>x.classList.toggle('on',x===b));
+    render();
+  });
+});
+document.getElementById('scrollBtn').addEventListener('click',()=>{
+  let atTop=true;
+  const screens=document.querySelectorAll('.phone .screen');
+  atTop=[...screens].every(s=>s.scrollTop<20);
+  screens.forEach(s=>s.scrollTo({top:atTop?170:0,behavior:'smooth'}));
+});
+render();
+</script>
+</body>
+</html>

@@ -1753,4 +1753,6 @@
     <string name="dock_add_other_types">其他类型</string>
     <string name="dock_add_generate_password">生成密码（工具）</string>
     <string name="dock_add_password_copied">已复制生成的密码到剪贴板</string>
+    <string name="dock_add_hero_subtitle">当前页面的默认新建动作</string>
+    <string name="dock_add_tool_subtitle">只生成并复制，不创建条目</string>
 </resources>
