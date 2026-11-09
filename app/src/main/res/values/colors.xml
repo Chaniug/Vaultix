@@ -32,4 +32,20 @@
       深色面板对应值见 values-night/colors.xml（那一侧要用低 alpha 的**白**）。
     -->
     <color name="autofill_item_surface">#0F000000</color>
+    <!--
+      窗口底色（冷启动到 Compose 首帧之间可见）。
+
+      ⚠️ 2026-11-09 23:33 用户反馈：划掉后台再点图标，会闪一帧**白底 + 灰转圈**。
+      白底来自 `Theme.Vaultix` 继承的 `android:Theme.Material.Light`——那是**恒浅色**
+      的平台主题，深色模式下窗口底色依然是白的。这里按 values / values-night 分开取
+      回退色板的 `surface`（`VaultixBrandColor.Light.surface` / `.Dark.surface`），
+      让冷启动第一帧就与 Compose 主题同色。
+
+      ⚠️ 不用品牌蓝：NavHost 转场是 fadeIn（alpha < 1），窗口底色会在过渡期透出来，
+         蓝色会闪。窗口底色必须接近 `surface`，品牌只由 [SplashScreen] 的徽章表达。
+      ⚠️ 动态取色下真实 `surface` 由壁纸派生，与这里的回退值可能有几个色阶差异 ——
+         但两者都接近纯白 / 纯黑，肉眼不可分；精确跟随需要运行时 `setBackgroundDrawable`，
+         不值得为几十毫秒引入那个复杂度。
+    -->
+    <color name="window_background">#FDFCFB</color>
 </resources>

@@ -2,11 +2,17 @@
 <!--
   深色模式下的资源覆盖（values-night）。
 
-  目前只有一项：自动填充下拉行的底色。
+  目前两项：自动填充下拉行的底色、窗口底色。
   深色面板上要用**低 alpha 的白**把面板底色「提亮一档」（浅色描边/低 alpha 黑在深色底上会消失）；
   对应浅色值见 values/colors.xml。系统填充面板的明暗由系统配置决定，
   故这里用 night 限定符而不是 App 主题判断。
+
+  ⚠️ [window_background] 只跟随**系统**深色模式。App 内强制深色
+  （设置 → 外观 → 深色）而系统仍是浅色时，冷启动第一帧仍会是浅底 ——
+  这是资源限定符的固有边界，要抹平得在 onCreate 里运行时改窗口背景。
 -->
 <resources>
     <color name="autofill_item_surface">#1FFFFFFF</color>
+    <!-- 回退色板的 dark surface（`VaultixBrandColor.Dark.surface` = #111110）。 -->
+    <color name="window_background">#111110</color>
 </resources>

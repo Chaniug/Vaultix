@@ -133,6 +133,62 @@ H 的 shape morph 要引 M3E 的 shape API（8.8 §6① 只允许 alpha API 用�
 ⚠️ 8.4 的「一屏两套规格」纪律：徽章与卡片必须共用 `VaultixCorner` 三档，
 不要为每个库类型各写一套圆角。装饰形状**不承载语义**，只作底纹，不能抢标题。
 
+### 2.1 装饰施工（2026-11-09 23:35）
+
+用户 23:31 澄清：**装饰可以是 Material 的图标图形，不一定非得是数据**。
+这一句直接砍掉了原方案里成本最高的一块 ——「当前活跃库」摘要卡要注入 `ItemRepository`
+查条目数；也让 ③「统计型」整条路线作废（它唯一的价值就是那个条目数）。
+
+实际落地的是「**一个系统、三处复用**」：
+
+| 层级 | 元素 | 关键参数 |
+|---|---|---|
+| 身份定义 | `VaultIdentity(icon / accent / container / shape)` + `vaultIdentityOf()` | 一次定义，三处消费 |
+| 徽章 | 48dp 实色容器 + 24dp 图标（新增 `UiSize.BadgeIcon`） | 原有，改为消费 identity |
+| **卡片水印** | 同图标放大到 104dp、向右出血 32dp、`alpha 0.07` | 新增 |
+| **卡片色调底** | `container.copy(alpha = 0.10f).compositeOver(surfaceContainerLow)` | 新增，三张卡不再是同色灰板 |
+
+另外三处结构补强：
+
+| 改动 | 为什么 |
+|---|---|
+| `BorderStroke(1dp, outlineVariant @ 0.55)` | 卡片原来是 `surfaceContainerLow` 贴在近同色背景上，没有边界 |
+| **库概览行** `2 个密码库 · 1 个已锁定` | 大标题到第一张卡之间没有任何过渡；纯派生自 `vaults`，零新数据源 |
+| 圆 FAB → `ExtendedFloatingActionButton`「添加密码库」 | 圆形「+」是个孤立的圆点，带文字的胶囊才说明动作、并收住右下角空白 |
+
+**刻意没做的两件**（避免「为了填满而填满」）：
+- **「当前活跃库」摘要卡**：会在列表里把同一个库显示两次，且小屏上占掉半屏。
+  真要表达「你现在在哪个库」，正确做法是给那张卡加一个「当前」标记，不是复制一张卡。
+- **页面级大图案**：卡片水印已经是「图案」，再叠一层背景大图就成了两套装饰语言。
+
+---
+
+## 2.2 冷启动首帧：白底 + 转圈（23:33 用户反馈）
+
+用户截图：划掉后台再点图标，会闪一帧「白底 + 居中灰转圈」，之后才进库列表。
+
+| 现象 | 真因 |
+|---|---|
+| **白底** | `Theme.Vaultix` 继承 `android:Theme.Material.Light.NoActionBar` —— **恒浅色**的平台主题，深色模式下窗口底色依然是白的 |
+| **转圈** | `VaultixApp` 的 `SplashScreen()` 内容就是 `VaultixWavyProgress()` |
+
+它存在**不是 bug**：`RootNavState.Splash` 期间绝对不能提前落路由
+（首帧永远是锁定态，提前判断会让全新安装永久停在解锁页、且解锁页无库可解）。
+所以占位屏必须存在，问题只是「它长什么样」。
+
+改法两步：
+
+1. `values` / `values-night` 各加一条 `window_background`（回退色板的 surface：
+   `#FDFCFB` / `#111110`），`themes.xml` 指向它。
+   ⚠️ **不用品牌蓝**：NavHost 转场是 `fadeIn`，窗口底色会在 alpha < 1 时透出来。
+2. `SplashScreen()` 从转圈改成**品牌标记**：品牌蓝圆角方块 + `ic_launcher_foreground`
+   的折纸 V。与 Android 12+ 系统 splash（`windowBackground` + 应用图标）同一套视觉，
+   两段衔接成一段。**不播动画、不循环** —— 它随时会被真实路由替换掉。
+
+⚠️ 已知边界：`window_background` 只跟随**系统**深色模式。App 内强制深色而系统是浅色时，
+冷启动第一帧仍是浅底。抹平它要在 `onCreate` 里运行时 `setBackgroundDrawable`，
+为一个几十毫秒的帧引这个复杂度不划算。
+
 ---
 
 ## 3. 施工分批（都不动数据层）

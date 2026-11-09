@@ -1,7 +1,12 @@
 package io.vaultix.vaultix.ui
 
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -10,7 +15,11 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.colorResource
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavGraphBuilder
@@ -49,7 +58,6 @@ import io.vaultix.vaultix.ui.unlock.UnlockScreen
 import io.vaultix.vaultix.ui.unlock.UnlockViewModel
 import io.vaultix.vaultix.ui.vaultlist.VaultListScreen
 import io.vaultix.vaultix.util.SystemSettingsIntents
-import io.vaultix.vaultix.ui.common.VaultixWavyProgress
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.CubicBezierEasing
@@ -206,15 +214,56 @@ fun VaultixApp(
 /**
  * 启动占位屏：库列表首帧到达前的唯一内容。
  *
- * 与解锁页里的 loading 的区别：这个 loading **一定会结束**（首帧一到就被
- * 真实路由替换掉），解锁页那个是"等一个永远不会来的库"。
+ * ## 2026-11-09 23:33 用户反馈：划掉后台再点图标，会闪一帧「白底 + 灰转圈」
+ *
+ * 两处都不对，且各有独立的因：
+ * 1. **白底**：窗口主题 `Theme.Vaultix` 继承 `android:Theme.Material.Light.NoActionBar`，
+ *    深色模式下窗口底色仍是白的。已改为 `windowBackground` 按 `values` / `values-night`
+ *    分开取值（见 `res/values/themes.xml`），冷启动不再白闪。
+ * 2. **转圈**：`VaultixWavyProgress` 在暗示「正在等一个不知道要多久的东西」，
+ *    而这一步正常只有几十毫秒 —— 实际观感是"闪了一下"，比空白更像卡住。
+ *
+ * ⇒ 改成**品牌标记**：品牌蓝圆角方块 + 折纸 V，和 Android 12+ 系统 splash
+ *   （`windowBackground` + 应用图标）同一套视觉，两段衔接成一段。
+ *
+ * ⚠️ **不播动画、不循环**：它随时会被真实路由替换掉，动起来只会打断自己的退场。
+ * ⚠️ 用固定品牌蓝而不是 `colorScheme.primary`：动态取色下 primary 可能是绿 / 紫，
+ *    而折纸 V 的白色受光面与淡蓝背光面是为蓝底设计的（见 `ic_launcher_foreground.xml`）。
  */
 @Composable
 private fun SplashScreen() {
-    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        VaultixWavyProgress()
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.surface),
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(SPLASH_BADGE_SIZE)
+                .clip(RoundedCornerShape(SPLASH_BADGE_CORNER))
+                .background(colorResource(R.color.ic_launcher_background)),
+            contentAlignment = Alignment.Center,
+        ) {
+            // 直接复用启动图标的前景层：V 的几何与桌面图标逐字符一致，
+            // 不会出现「启动画面一个 V、桌面上另一个 V」。
+            Image(
+                painter = painterResource(R.drawable.ic_launcher_foreground),
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
     }
 }
+
+/**
+ * 启动标记的尺寸与圆角。
+ *
+ * 96dp：自适应图标的前景图形只占画布 61%（108 画布里的 66 安全圈），
+ * 96dp 下 V 实际约 58dp —— 居中时既不像一枚小图标，也不会顶到屏幕边。
+ */
+private val SPLASH_BADGE_SIZE = 96.dp
+private val SPLASH_BADGE_CORNER = 26.dp
 
 /**
  * 二级路由转场：**Shared Axis X**（Material motion 的标准「前进 / 返回」动效）。
