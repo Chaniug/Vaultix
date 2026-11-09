@@ -519,6 +519,12 @@ fun ItemsScreen(
     /** 外部「+」请求计数：非零即打开新建表单（宿主在消费后清零，避免重复弹出）。 */
     addRequest: Int = 0,
     onAddConsumed: () -> Unit = {},
+    /**
+     * 动作面板选中的新建类型（架构方案 A）。默认 Login，其他调用点不用改。
+     * 只影响 `CreateItemDialog` 的 blankItem.type；`ItemFormDialog` 的
+     * `fallbackFormType` 会按库类型兜底（KDBX 只收 Login / SecureNote）。
+     */
+    initialNewItemType: VaultItemType = VaultItemType.Login,
     /** 底部叠层悬浮栏占用的高度（宿主给；非内嵌时为 0）——列表要留出它，否则末条被压住。 */
     bottomInset: Dp = 0.dp,
     viewModel: ItemsViewModel = hiltViewModel(),
@@ -692,6 +698,7 @@ fun ItemsScreen(
         visible = showCreateDialog,
         folders = folders,
         vaultKind = state.vault?.kind,
+        initialType = initialNewItemType,
         saving = state.saving,
         onDismiss = { showCreateDialog = false },
         onSave = { item ->
@@ -722,6 +729,7 @@ private fun NewItemDialogHost(
     visible: Boolean,
     folders: List<VaultFolder>,
     vaultKind: VaultKind?,
+    initialType: VaultItemType,
     saving: Boolean,
     onDismiss: () -> Unit,
     onSave: (VaultItem) -> Unit,
@@ -731,6 +739,7 @@ private fun NewItemDialogHost(
     CreateItemDialog(
         folders = folders,
         vaultKind = vaultKind,
+        initialType = initialType,
         saving = saving,
         onDismiss = onDismiss,
         onSave = onSave,
@@ -1839,12 +1848,17 @@ private fun ItemsList(
 private fun CreateItemDialog(
     folders: List<VaultFolder>,
     vaultKind: VaultKind?,
+    initialType: VaultItemType,
     saving: Boolean,
     onDismiss: () -> Unit,
     onSave: (VaultItem) -> Unit,
     onCreateFolder: (name: String, onCreated: (String) -> Unit) -> Unit,
 ) {
-    val blankItem = remember { VaultItem(id = "", title = "") }
+    // 把动作面板选中的类型交给表单：`ItemFormDialog` 从 initial.type 读初始筹码，
+    // 且 fallbackFormType 会把它兜到该库支持的第一种，KDBX 不会存出「字段全空」的残骸。
+    val blankItem = remember(initialType) {
+        VaultItem(id = "", title = "", type = initialType)
+    }
     ItemFormDialog(
         title = stringResource(R.string.items_new_item),
         initial = blankItem,

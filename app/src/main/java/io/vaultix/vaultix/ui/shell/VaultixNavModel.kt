@@ -12,8 +12,11 @@
  * 结构参考 Bastion 项目（GPL-3.0，Copyright 2025 JoyinJoester）的
  * ui/main/navigation/BottomNavModel.kt，按 Vaultix 架构裁剪重写：
  *   - Bastion 的 9 项（含 VaultV2/CardWallet/Notes/Send/Generator/Passkey）裁剪为
- *     Vaultix 的 4 项 —— 通行密钥不占 Tab，走验证码页内入口（与 Bastion 一致）；
- *     Send/Notes/Generator 为 Vaultix 暂不具备的能力。
+ *     Vaultix 的 4 项 —— 通行密钥不占 Tab，走验证码页内入口（与 Bastion 一致）。
+ *     ⚠️ 2026-11-09 更正：原写「Notes/Generator 暂不具备」**已过时** ——
+ *     安全笔记是 `VaultItemType.SecureNote`（密码页已有 `ItemsQuickFilter.Note` 筛选），
+ *     生成器是 `PasswordGeneratorDialog`（条目表单里已在用）。
+ *     二者按架构方案 A 从「+」动作面板进入，**仍不占 Tab**（见 `AddActionSheet.kt` 文件头）。
  *   - **不搬** Bastion 的「用户自定义排序」与「可见性开关」
  *     （`BottomNavContentTab.DEFAULT_ORDER` / `sanitizeOrder` / `BottomNavVisibility`）：
  *     固定 4 项顺序即可，骨架稳定后再评估。

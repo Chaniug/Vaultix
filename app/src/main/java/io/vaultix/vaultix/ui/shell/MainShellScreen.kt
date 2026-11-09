@@ -39,6 +39,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import io.vaultix.model.VaultItem
+import io.vaultix.model.VaultItemType
 import io.vaultix.vaultix.ui.cardwallet.CardWalletScreen
 import io.vaultix.vaultix.ui.glass.isLiquidGlassBlurSupported
 import io.vaultix.vaultix.ui.glass.rememberLiquidGlassSource
@@ -130,6 +131,12 @@ fun MainShellScreen(
     var passwordsAddRequest by rememberSaveable { mutableIntStateOf(0) }
     var totpAddRequest by rememberSaveable { mutableIntStateOf(0) }
     var cardAddRequest by rememberSaveable { mutableIntStateOf(0) }
+    // 架构方案 A（2026-11-09）：「+」先开动作面板，选中后再分发。
+    // ⚠️ 三个计数器、Tab 枚举、currentTab / SaveableStateProvider / contentKey 全部不变 ——
+    //    这正是「不扩 Tab」方案的核心收益：导航状态契约一行没动。
+    var showAddSheet by rememberSaveable { mutableStateOf(false) }
+    var showGenerator by rememberSaveable { mutableStateOf(false) }
+    var pendingNewType by rememberSaveable { mutableStateOf(VaultItemType.Login) }
     // Tab 离开组合时保存其 rememberSaveable 状态（滚动位置 / 搜索词…），切回来原样恢复。
     val tabStateHolder = rememberSaveableStateHolder()
 
@@ -152,9 +159,9 @@ fun MainShellScreen(
     //   不在这一层挡掉的话，老设备上每帧白拷一次全屏。
     val glassSourceActive = liquidGlassDock && isLiquidGlassBlurSupported()
 
-    // 「+」分发：按当前 Tab 决定新建什么（Bastion `when(currentTab)` 语义）。
-    // 设置 Tab 回退为「新建密码」（Bastion `else -> handlePasswordAddOpen()`）。
-    val dispatchAdd: (VaultixNavItem) -> Unit = { tab ->
+    // 默认动作执行器：保住「在验证码页按 + 就是新建验证码」这条既有高频路径。
+    // 面板的 Filled 主按钮调它，其余类型走 runTypedAdd。
+    val runDefaultAdd: (VaultixNavItem) -> Unit = { tab ->
         when (tab.addTarget) {
             VaultixAddTarget.Login -> {
                 currentTab = VaultixNavItem.Passwords
@@ -173,18 +180,30 @@ fun MainShellScreen(
         }
     }
 
+    // 用户从面板选了具体类型：切到密码 Tab，把类型透传给新建表单。
+    // `ItemFormDialog` 的 `fallbackFormType` 会按库类型兜底（KDBX 只收 Login/SecureNote），
+    // 所以这里不需要、也不该再维护一份库类型过滤。
+    fun runTypedAdd(type: VaultItemType) {
+        pendingNewType = type
+        currentTab = VaultixNavItem.Passwords
+        passwordsAddRequest++
+    }
+
+    // 「+」的新语义：先打开动作面板，不再直接分发。
+    val openAddSheet: (VaultixNavItem) -> Unit = { _ -> showAddSheet = true }
+
     AdaptiveMainScaffold(
         isCompactWidth = isCompactWidth,
         tabs = tabs,
         current = currentTab,
         onSelect = { currentTab = it },
-        onAdd = dispatchAdd,
+        onAdd = openAddSheet,
         bottomBar = {
             VaultixBottomDock(
                 tabs = tabs,
                 selected = currentTab,
                 onSelect = { currentTab = it },
-                onAdd = dispatchAdd,
+                onAdd = openAddSheet,
                 liquidGlass = liquidGlassDock,
                 glassSource = glassSource,
             )
@@ -256,6 +275,8 @@ fun MainShellScreen(
                             embedded = true,
                             addRequest = passwordsAddRequest,
                             onAddConsumed = { passwordsAddRequest = 0 },
+                            // 动作面板选中的类型；默认 Login。表单侧已有 fallbackFormType 按库兜底。
+                            initialNewItemType = pendingNewType,
                             onBack = {},
                             onLocked = onLocked,
                             onOpenTrash = onOpenTrash,
@@ -304,5 +325,21 @@ fun MainShellScreen(
                 }
             }
         }
+    }
+
+    // 动作面板与独立生成器放在 Scaffold **之外**、与 Tab 内容同级：
+    // 二者都是窗口级浮层，不参与 AnimatedContent 的 Tab 转场（8.4 #87 纪律）。
+    // ⚠️ 生成器必须由宿主渲染：面板收起后自己就退出组合，状态留不住（见 AddActionSheet 文件头）。
+    if (showAddSheet) {
+        AddActionSheet(
+            currentTab = currentTab,
+            onDefaultAction = { runDefaultAdd(currentTab) },
+            onPickType = { type -> runTypedAdd(type) },
+            onGeneratePassword = { showGenerator = true },
+            onDismiss = { showAddSheet = false },
+        )
+    }
+    if (showGenerator) {
+        StandalonePasswordGeneratorDialog(onDismiss = { showGenerator = false })
     }
 }

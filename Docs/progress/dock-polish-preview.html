@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vaultix 底栏 · 点击效果探索对照</title>
+<style>
+  :root{
+    --bg:#F7F8FA;--card:#fff;--line:#E3E6EC;--ink:#1C2330;--muted:#5F6775;
+    --accent:#3B5BC4;--accent-soft:#E8ECF9;--pill:#E4E7F2;--onpill:#0F1B3D;
+    --dur:90ms;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+  .wrap{max-width:1180px;margin:0 auto;padding:28px 22px 60px}
+  h1{font-size:21px;font-weight:600;margin:0 0 4px}
+  .sub{color:var(--muted);font-size:13px;margin:0 0 18px}
+  h2{font-size:15px;font-weight:600;margin:28px 0 10px}
+  .bar{display:flex;flex-wrap:wrap;gap:18px;align-items:center;background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .ctl{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)}
+  .seg{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+  .seg button{border:0;background:#fff;color:var(--ink);padding:6px 11px;font-size:12px;cursor:pointer;border-right:1px solid var(--line);font-family:inherit}
+  .seg button:last-child{border-right:0}
+  .seg button.on{background:var(--accent);color:#fff}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:14px;margin-top:16px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  .card.pick{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)}
+  .hd{padding:12px 14px 8px}
+  .tag{display:inline-block;font-size:11px;padding:2px 8px;border-radius:20px;background:var(--accent-soft);color:var(--accent)}
+  .tag.base{background:#EEF0F4;color:var(--muted)}
+  .name{font-size:14px;font-weight:600;margin:6px 0 2px}
+  .desc{font-size:12px;color:var(--muted);margin:0;min-height:38px}
+  .stage{padding:18px 12px 22px;background:linear-gradient(160deg,#EDF0F6,#DDE3EE);position:relative;min-height:132px;display:flex;align-items:flex-end;justify-content:center}
+  body.darkdesk .stage{background:linear-gradient(160deg,#222838,#141824)}
+  .dock{display:flex;align-items:center;gap:2px;width:100%;max-width:330px;height:60px;padding:0 6px;border-radius:30px;background:#E9EAF0;border:1px solid rgba(255,255,255,.7);position:relative;transition:background 150ms}
+  .dock.glass{background:rgba(232,236,247,.55);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);border-color:rgba(255,255,255,.55)}
+  .dock.glass::before{content:"";position:absolute;left:8px;right:8px;top:2px;height:2px;border-radius:2px;background:rgba(255,255,255,.75);transition:background var(--dur),height var(--dur)}
+  .dock.glass.pulse::before{background:#fff;height:4px}
+  .dock.glass.pulse{backdrop-filter:blur(26px);-webkit-backdrop-filter:blur(26px)}
+  .tab{flex:1;height:48px;min-width:0;border:0;background:transparent;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;border-radius:16px;color:var(--muted);font:inherit;font-size:11px;position:relative;transition:transform var(--dur) ease,background var(--dur) ease,border-radius var(--dur) ease,color var(--dur) ease;user-select:none}
+  .tab .glyph{width:16px;height:16px;border:2px solid currentColor;border-radius:5px;opacity:.85}
+  .tab .glyph.round{border-radius:50%}
+  .tab .glyph.diamond{rotate:45deg;border-radius:2px}
+  .tab.add{flex:0 0 48px;height:46px;border-radius:14px;background:var(--accent);color:#fff;border:0;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:transform var(--dur) ease,filter var(--dur) ease,box-shadow var(--dur) ease}
+  /* + 用两条独立笔画画，才能做「笔画伸缩」而不把符号变成别的东西 */
+  .tab.add .plus{position:relative;width:18px;height:18px;display:block;transition:transform 320ms cubic-bezier(.2,1.5,.4,1)}
+  .tab.add .plus i{position:absolute;background:#fff;border-radius:2px;transition:transform 320ms cubic-bezier(.2,1.5,.4,1)}
+  .tab.add .plus i:first-child{left:0;right:0;top:8px;height:2px}
+  .tab.add .plus i:last-child{top:0;bottom:0;left:8px;width:2px}
+  .tab.selected{color:var(--accent)}
+  .tab.selected .glyph{border-color:var(--accent);background:rgba(59,91,196,.18)}
+  .ft{padding:9px 14px 13px;font-size:11px;color:var(--muted);border-top:1px solid var(--line)}
+
+  /* 方案 1 现状：0.94 缩放 + 实色 pill，90ms 补间 */
+  .v1 .tab.pressed{transform:scale(.94);background:var(--pill)}
+  .v1 .tab.selected{background:#DCE2F5}
+  /* 方案 2 M3 state layer：只叠 10% 层，不缩放、不扩散 */
+  .v2 .tab::after{content:"";position:absolute;inset:0;border-radius:16px;background:var(--accent);opacity:0;pointer-events:none;transition:opacity var(--dur) ease}
+  .v2 .tab.pressed::after{opacity:.10}
+  .v2 .tab.selected::after{opacity:.08}
+  .v2 .tab.selected{color:var(--accent)}
+  /* 方案 3 弹簧 + 选中形变 */
+  .v3 .tab{transition:transform 320ms cubic-bezier(.2,1.5,.4,1),background 220ms,border-radius 260ms cubic-bezier(.3,1.3,.5,1)}
+  .v3 .tab.pressed{transform:scale(.88)}
+  .v3 .tab.selected{background:#DCE2F5;border-radius:28px}
+  .v3 .tab.add{transition:transform 320ms cubic-bezier(.2,1.6,.4,1),filter var(--dur) ease,box-shadow 260ms ease}
+  /* 加号只表达「我按下了」，绝不旋转（+ 转 90 度终态无变化、中途却变成 ×，语义反了） */
+  .dock.v3.addfx-press .tab.add.pressed{transform:scale(.9)}
+  .dock.v3.addfx-press .tab.add.pressed .plus{transform:scale(.84)}
+  .dock.v3.addfx-stroke .tab.add.pressed .plus i:first-child{transform:scaleX(.58)}
+  .dock.v3.addfx-stroke .tab.add.pressed .plus i:last-child{transform:scaleY(.58)}
+  .dock.v3.addfx-glow .tab.add.pressed{filter:brightness(1.14);box-shadow:0 3px 12px rgba(59,91,196,.38)}
+  .dock.v3.addfx-glow .tab.add.pressed .plus{transform:translateY(2px) scale(.96)}
+  .dock.v3.addfx-expand .tab.add.pressed{box-shadow:0 0 0 7px rgba(59,91,196,.16)}
+  .dock.v3.addfx-expand .tab.add.pressed .plus{transform:scale(1.12)}
+  /* 方案 4 相邻联动：被按项放大，邻居轻缩 */
+  .v4 .tab.pressed{transform:scale(1.08);background:var(--pill)}
+  .v4 .tab.neighbor{transform:scale(.96)}
+  .v4 .tab.selected{background:#DCE2F5}
+  /* 方案 5 玻璃专属：高光 + 折射感（用 blur 提升模拟） */
+  .v5 .tab.pressed{background:rgba(255,255,255,.34);transform:scale(.96)}
+  .v5 .tab.selected{background:rgba(255,255,255,.22)}
+  .v5 .tab.add.pressed{filter:brightness(1.18)}
+
+  table{width:100%;border-collapse:collapse;font-size:13px;background:#fff;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{font-size:12px;color:var(--muted);font-weight:500}
+  .note{background:var(--accent-soft);border-left:3px solid var(--accent);padding:11px 14px;border-radius:0 8px 8px 0;font-size:13px;margin-top:12px}
+  .hint{font-size:12px;color:var(--muted);margin-top:10px}
+  code{background:#EEF0F4;padding:1px 5px;border-radius:4px;font-size:12px}
+  .lab{max-width:520px;margin:14px auto 0}
+  .labbar{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;margin-bottom:12px}
+  .lab .dock{max-width:360px}
+  .lab .tab .glyph{position:relative}
+  .lab .tab .part{position:absolute;left:3px;top:-5px;width:10px;height:7px;border:2px solid currentColor;border-bottom:0;border-radius:6px 6px 0 0;opacity:0;transition:opacity 120ms}
+  .dock.fx-parts .tab .part{opacity:.85}
+  @keyframes iconBounce{0%{transform:scale(1)}28%{transform:scale(.76)}62%{transform:scale(1.17)}100%{transform:scale(1)}}
+  @keyframes iconRotate{0%{transform:rotate(0)}38%{transform:rotate(-15deg)}72%{transform:rotate(9deg)}100%{transform:rotate(0)}}
+  @keyframes iconFill{0%{transform:scale(.86);opacity:.45}55%{transform:scale(1.14);opacity:1}100%{transform:scale(1);opacity:1}}
+  @keyframes iconPart{0%{transform:translateY(0) rotate(0)}45%{transform:translateY(-4px) rotate(-24deg)}100%{transform:translateY(0) rotate(0)}}
+  .dock.fx-bounce .tab.firing .glyph{animation:iconBounce var(--anim) cubic-bezier(.25,.9,.35,1) both}
+  .dock.fx-rotate .tab.firing .glyph{animation:iconRotate var(--anim) cubic-bezier(.25,.9,.35,1) both}
+  .dock.fx-fill .tab.firing .glyph{animation:iconFill var(--anim) cubic-bezier(.25,.9,.35,1) both}
+  .dock.fx-parts .tab.firing .part{animation:iconPart var(--anim) cubic-bezier(.25,.9,.35,1) both}
+  .dock.fx-fill .tab.selected .glyph{background:rgba(59,91,196,.22);border-color:var(--accent)}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;justify-content:center;font-size:12px;color:var(--muted);margin-top:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Vaultix 底栏 · 点击效果探索对照</h1>
+  <p class="sub">真的点一下每个 tab，看 T0 按下 / T1 松手 / T2 选中驻留 三个时刻的差别。本阶段不设动效红线，先挑手感。</p>
+
+  <div class="bar">
+    <div class="ctl"><span>玻璃底栏</span><div class="seg" id="glass"><button data-v="off" class="on">关（实色）</button><button data-v="on">开</button></div></div>
+    <div class="ctl"><span>播放速度</span><div class="seg" id="speed"><button data-v="1" class="on">原速</button><button data-v="3">慢放 3×</button></div></div>
+    <div class="ctl"><span>桌面</span><div class="seg" id="desk"><button data-v="light" class="on">浅色</button><button data-v="dark">深色</button></div></div>
+    <div class="ctl"><span>③ 的加号</span><div class="seg" id="addfx">
+      <button data-v="press" class="on">压缩回弹</button><button data-v="stroke">笔画伸缩</button>
+      <button data-v="glow">底色下压</button><button data-v="expand">外扩光晕</button></div></div>
+    <span class="hint">慢放 3× 最容易看清「松手那一拍」有没有反馈。加号四个候选都不会把它变成 ×。</span>
+  </div>
+
+  <div class="grid" id="grid"></div>
+
+  <h2>三个时刻：M3 只管第一拍</h2>
+  <table>
+    <thead><tr><th>时刻</th><th>时间</th><th>M3 规范</th><th>项目现状</th></tr></thead>
+    <tbody>
+      <tr><td>T0 按下</td><td>0–90ms</td><td>state layer 0.10 + ripple；<code>PressConfiguration.Opacity</code> 可只叠层不扩散</td><td>有，但自绘实色 pill + 0.94 缩放，<code>indication = null</code></td></tr>
+      <tr><td>T1 松手确认</td><td>90–250ms</td><td>未规定（M3E 的 spring / shape morph 可用）</td><td><b>空白</b> —— 点完直接切状态，手感发木</td></tr>
+      <tr><td>T2 选中驻留</td><td>&gt;250ms</td><td>navigation item 的 selected 态</td><td>只有一个 <code>secondaryContainer</code> pill，图标始终是同一支</td></tr>
+    </tbody>
+  </table>
+  <div class="note"><b>思路主线</b>：不是「把 ripple 加回来」，而是把 T1 与 T2 补上。
+    方案 2 是 M3 合规化的底线；方案 3 / 4 / 5 是放开形变与动效后可以探索的方向。
+    方案 4（相邻联动）最出彩，也最接近历史上「点一个、旁边跟着闪」的高危区 —— 差别在于那次是跨 tab 双色渐变并行 200ms，这次是几何位移、被按项主导。</div>
+  <div class="note" style="margin-top:10px"><b>加号为什么不该旋转（用户 19:32 指出后修正）</b>：
+    ① <b>「+」有四次对称，旋转 90° 的终态和初始态一模一样</b> —— 松手后看不到任何结果，
+    反倒是过渡过程中它变成了「×」，而 × 在界面语义里是「关闭 / 取消」，与「新建」正好相反；
+    ② 两侧的 tab 是<b>导航项</b>（有选中态），中央「+」是<b>动作按钮</b>（没有选中态），
+    两者的形状变化说的是不同的事，不该套同一套形变语言；
+    ③ 因此加号的反馈只表达「我按下了」：压缩回弹 / 笔画伸缩 / 底色下压 / 外扩光晕，
+    四种都保持符号恒为「+」。<b>判据：动作按钮的形状变化不能让用户以为它变成了另一个功能。</b></div>
+  <h2>图标 one-shot 动效：点一下播一段，播完停住</h2>
+  <div class="lab">
+    <div class="labbar">
+      <div class="ctl"><span>图标效果</span><div class="seg" id="iconfx">
+        <button data-v="bounce" class="on">弹跳回弹</button><button data-v="rotate">微旋转</button>
+        <button data-v="fill">描边转实心</button><button data-v="parts">部件动</button></div></div>
+      <div class="ctl"><span>时长</span><div class="seg" id="animdur">
+        <button data-v="320" class="on">原速 320ms</button><button data-v="900">慢放 900ms</button></div></div>
+    </div>
+    <div class="card"><div class="stage">
+      <div class="dock fx-bounce" id="iconlab">
+        <button class="tab selected" data-i="0"><span class="glyph"><i class="part"></i></span><span>密码</span></button>
+        <button class="tab" data-i="1"><span class="glyph round"><i class="part"></i></span><span>验证码</span></button>
+        <button class="tab add" data-i="2"><span class="plus"><i></i><i></i></span></button>
+        <button class="tab" data-i="3"><span class="glyph diamond"><i class="part"></i></span><span>卡包</span></button>
+        <button class="tab" data-i="4"><span class="glyph"><i class="part"></i></span><span>设置</span></button>
+      </div>
+    </div></div>
+    <div class="legend">
+      <span>播完停在选中态，不循环</span><span>只作用于被点的那一个</span><span>无障碍语义不变</span>
+    </div>
+  </div>
+  <div class="note" style="margin-top:12px"><b>技术上行得通，且第一版零新增依赖</b>：
+    官方三条路径是 AVD（<code>animation-graphics</code>）、<code>ImageVector</code> + Compose 动画 API、Lottie。
+    本项目目前只有静态 <code>Icons.Default.*</code>，没有 animation-graphics 也没有 Lottie。
+    ⇒ 「弹跳 / 旋转 / 描边转实心」直接用 <code>Animatable</code> + <code>LaunchedEffect(点击)</code> 即可，
+    零新依赖零新资源；「部件动」才需要为四个图标自绘分层矢量（或引入 AVD）。
+    三条硬提醒：动画状态必须放在 <code>key(item)</code> 稳定的组合槽里（否则重现「点一个、旁边跟着闪」）；
+    只做 one-shot 不循环（循环会持续重组，滚动时掉帧）；选中 pill 的颜色仍须瞬切。</div>
+  <p class="hint">本页是思路探索，未修改任何 Kotlin / XML。方案取舍与分批见 <code>dock-polish-plan.md</code>；施工前需按 8.8 的方式解 material3 sources jar 核对 alpha API 签名。</p>
+</div>
+
+<script>
+const VARIANTS = [
+  {v:'v1',tag:'base',tagText:'现状基线',name:'① 现状：自绘实色 pill',desc:'0.94 缩放 + 实色 pill + 90ms 补间。T1 与 T2 都没有额外表达。',ft:'历史依据：玻璃态下 ripple 会被半透明层吃掉，故 indication = null。'},
+  {v:'v2',tag:'',tagText:'M3 合规',name:'② M3 state layer',desc:'只叠 10% 状态层，无缩放、无扩散涟漪；选中态 8% 常驻。',ft:'对应 PressConfiguration.Opacity：要 M3 语义，但不要扩散动画。'},
+  {v:'v3',tag:'',tagText:'放开形变',name:'③ 弹簧 + 选中形变',desc:'按压吸入、松手回弹；选中 pill 从 16dp 圆角 morph 成胶囊。加号只压缩回弹，保持「新建」符号不变。',ft:'补上 T1 与 T2；用到 M3E spring 与 shape morph。加号用顶部「③ 的加号」切换四种候选。'},
+  {v:'v4',tag:'',tagText:'最胆大',name:'④ 相邻联动（bump）',desc:'被按项放大 1.08，左右邻居轻缩到 0.96，一排按钮互相让位。',ft:'对应 M3E ButtonGroup 的 bump 语义；需真机逐帧确认无第二处在动。'},
+  {v:'v5',tag:'',tagText:'玻璃专属',name:'⑤ 玻璃态专属反馈',desc:'按压时上沿高光变亮、模糊半径微增，做出「按压处聚焦」。',ft:'只调 LiquidGlassOptics 参数，禁止每帧重建 RenderEffect。'}
+];
+const TABS = [
+  {label:'密码',g:''},{label:'验证码',g:'round'},
+  {label:'+',add:true},
+  {label:'卡包',g:'diamond'},{label:'设置',g:''}
+];
+const state = {glass:'off',speed:1,desk:'light',addfx:'press',iconfx:'bounce',animdur:320};
+
+function render(){
+  document.body.classList.toggle('darkdesk',state.desk==='dark');
+  document.getElementById('grid').innerHTML = VARIANTS.map(x=>`
+    <div class="card ${x.v==='v3'?'pick':''}">
+      <div class="hd">
+        <span class="tag ${x.tag}">${x.tagText}</span>
+        <p class="name">${x.name}</p>
+        <p class="desc">${x.desc}</p>
+      </div>
+      <div class="stage">
+        <div class="dock ${x.v} ${state.glass==='on'?'glass':''} ${x.v==='v3'?'addfx-'+state.addfx:''}" data-v="${x.v}">
+          ${TABS.map((t,i)=>`<button class="tab ${t.add?'add':''} ${i===0?'selected':''}" data-i="${i}">
+            ${t.add?'<span class="plus"><i></i><i></i></span>':`<span class="glyph ${t.g}"></span><span>${t.label}</span>`}
+          </button>`).join('')}
+        </div>
+      </div>
+      <div class="ft">${x.ft}</div>
+    </div>`).join('');
+  document.querySelectorAll('#grid .dock').forEach(bind);
+}
+
+function syncIconLab(){
+  const lab=document.getElementById('iconlab');
+  lab.className='dock fx-'+state.iconfx+(state.glass==='on'?' glass':'');
+  lab.style.setProperty('--anim',(state.animdur*state.speed)+'ms');
+}
+function bindIconLab(){
+  const lab=document.getElementById('iconlab');
+  const tabs=[...lab.querySelectorAll('.tab')];
+  tabs.forEach(tab=>{
+    tab.addEventListener('pointerdown',()=>{
+      if(!tab.classList.contains('add')){
+        tabs.forEach(t=>{if(!t.classList.contains('add'))t.classList.remove('selected')});
+        tab.classList.add('selected');
+      }
+      tab.classList.remove('firing');
+      void tab.offsetWidth;
+      tab.classList.add('firing');
+    });
+  });
+  lab.addEventListener('animationend',e=>{
+    const tab=e.target.closest('.tab'); if(tab)tab.classList.remove('firing');
+  });
+}
+
+function bind(dock){
+  const tabs=[...dock.querySelectorAll('.tab')];
+  const dur = () => (90*state.speed)+'ms';
+  dock.style.setProperty('--dur',dur());
+  tabs.forEach(tab=>{
+    tab.addEventListener('pointerdown',()=>{
+      tab.classList.add('pressed');
+      if(dock.classList.contains('v4')){
+        const i=tabs.indexOf(tab);
+        [i-1,i+1].forEach(j=>{if(j>=0&&j<tabs.length)tabs[j].classList.add('neighbor')});
+      }
+      if(dock.classList.contains('v5')&&dock.classList.contains('glass'))dock.classList.add('pulse');
+    });
+    const release=()=>{
+      setTimeout(()=>{
+        tab.classList.remove('pressed');
+        tabs.forEach(t=>t.classList.remove('neighbor'));
+        dock.classList.remove('pulse');
+      },160*state.speed);
+      if(!tab.classList.contains('add')){
+        tabs.forEach(t=>{if(!t.classList.contains('add'))t.classList.remove('selected')});
+        tab.classList.add('selected');
+      }
+    };
+    tab.addEventListener('pointerup',release);
+    tab.addEventListener('pointerleave',()=>{tab.classList.remove('pressed');tabs.forEach(t=>t.classList.remove('neighbor'));dock.classList.remove('pulse')});
+    tab.addEventListener('pointercancel',release);
+  });
+}
+
+['glass','speed','desk','addfx','iconfx','animdur'].forEach(k=>{
+  document.getElementById(k).addEventListener('click',e=>{
+    const b=e.target.closest('button'); if(!b)return;
+    const raw=b.dataset.v;
+    state[k]=/^\d+$/.test(raw)?Number(raw):raw;
+    [...e.currentTarget.children].forEach(x=>x.classList.toggle('on',x===b));
+    render();
+    syncIconLab();
+  });
+});
+render();
+syncIconLab();
+bindIconLab();
+</script>
+</body>
+</html>

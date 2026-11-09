@@ -24,11 +24,14 @@
  */
 package io.vaultix.vaultix.ui.shell
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -38,7 +41,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -55,6 +57,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
@@ -87,11 +90,31 @@ import io.vaultix.vaultix.ui.theme.Spacing
 /** 悬浮胶囊底栏固定高度（对齐 Bastion：胶囊 60dp + 留白 6/20 = 86dp 视觉占位）。 */
 private val DockBarHeight = 60.dp
 
-/** 按压时整项的缩放：只压一点点，读得出「按下去了」但不像按钮弹跳。 */
-private const val DOCK_PRESS_SCALE = 0.94f
+/**
+ * 按压时整项的缩放（2026-11-09 方案 ③）：比旧值 0.94 更深一点，
+ * 配合 spring 做出「吸入 → 松手回弹」。只作用于被按的那一个 item。
+ */
+private const val DOCK_PRESS_SCALE = 0.88f
 
-/** 按压反馈时长（ms）：比一次点击短，松手即回，不与页面转场抢注意力。 */
-private const val DOCK_PRESS_DURATION_MS = 90
+/** 加号的按压缩放：比 tab 更克制，且绝不改变「+」符号本身。 */
+private const val ADD_PRESS_SCALE = 0.90f
+
+/** 图标 one-shot 弹跳的起点：0.76 → 1.0，spring 过冲后停在 1.0。 */
+private const val ICON_BOUNCE_START = 0.76f
+
+/**
+ * 是否叠加 M3 pressed state layer（10%，官方 StateTokens.PressedStateLayerOpacity）。
+ * 默认关：玻璃态下半透明层会被模糊吃掉，项目自绘实色 pill 更可靠（见 [DockTabItem] KDoc）。
+ * 想对比 M3 合规手感时改成 true 即可，其余逻辑不用动 —— 施工单里「可单独开关」的那一项。
+ */
+private const val USE_M3_STATE_LAYER = false
+private const val M3_PRESSED_LAYER_ALPHA = 0.10f
+
+/** spring 参数集中一处，tab / 加号 / 图标共用同一套物理手感。 */
+private val DockSpring = spring<Float>(
+    dampingRatio = Spring.DampingRatioMediumBouncy,
+    stiffness = Spring.StiffnessMedium,
+)
 
 /**
  * 悬浮胶囊底栏的**总视觉占位高度**（胶囊 60 + 上留白 6 + 下留白 20 = 86dp）。
@@ -287,29 +310,56 @@ private fun DockRow(
     }
 }
 
-/** 中央「+」：主色圆角方形（52×48dp，圆角 16dp，图标 26dp）。 */
+/**
+ * 中央「+」：主色圆角方形（52×48dp，圆角 16dp，图标 26dp）。
+ *
+ * ## ⚠️ 不许旋转（2026-11-09 用户在预览页当场否决）
+ * 「+」有四次对称，旋转 90° 的终态与初始态完全相同 ⇒ 松手后看不到任何结果；
+ * 而过渡过程中它会变成「×」，× 在界面语义里是「关闭 / 取消」，与「新建」相反。
+ * ⇒ 这里只做压缩回弹，符号恒为「+」。
+ * 判据：**动作按钮的形状变化，不能让用户以为它变成了另一个功能。**
+ *
+ * 用自绘 Box + clickable（与 [DockTabItem] 同一模式），不用 Surface 的默认 ripple：
+ * 玻璃态下 ripple 会被半透明层吃掉（见 [DockTabItem] KDoc）。
+ */
 @Composable
 private fun AddButton(
     currentTab: VaultixNavItem,
     onAdd: (VaultixNavItem) -> Unit,
 ) {
     val addLabel = stringResource(R.string.nav_add)
-    Surface(
-        onClick = { onAdd(currentTab) },
-        shape = VaultixCorner.Panel,
-        color = MaterialTheme.colorScheme.primary,
-        contentColor = MaterialTheme.colorScheme.onPrimary,
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (pressed) ADD_PRESS_SCALE else 1f,
+        animationSpec = DockSpring,
+    )
+    Box(
         modifier = Modifier
             .width(52.dp)
-            .height(48.dp),
-    ) {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Icon(
-                imageVector = Icons.Default.Add,
-                contentDescription = addLabel,
-                modifier = Modifier.size(26.dp),
+            .height(48.dp)
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .clip(VaultixCorner.Panel)
+            .background(MaterialTheme.colorScheme.primary)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                role = Role.Button,
+                onClick = { onAdd(currentTab) },
             )
-        }
+            .semantics { contentDescription = addLabel },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = Icons.Default.Add,
+            // 整项已在 Box 层声明名字，图标不重复播报。
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onPrimary,
+            modifier = Modifier.size(26.dp),
+        )
     }
 }
 
@@ -338,6 +388,16 @@ private fun AddButton(
  * ⚠️ 玻璃态下 ripple 会被半透明层吃掉 ⇒ 这里**不用** `indication`，而是用
  *    `surfaceContainerHigh` / `primaryContainer` 这类**具名实色档**画瞬时 pill，
  *    在模糊背景上依然看得见。
+ *
+ * ## 2026-11-09 方案 ③：弹簧、选中形变、图标 one-shot
+ * - **弹簧**：`tween(90)` → `DockSpring`，按压吸入、松手回弹（T1 那段原来空白）。
+ * - **选中形变**：pill 圆角 33%(≈16dp) → 50%(胶囊)，用同一条 spring 连续变化；
+ *   **颜色仍瞬切**（下面的 `pillColor` 还是 `when` 表达式）—— 形变与颜色解耦，
+ *   才不会重现「跨 tab、200ms、两个 pill 并行渐变」那个老 bug。
+ * - **图标 one-shot**：`Animatable` 只在 `PressInteraction.Release` 时播一次，
+ *   0.76 → 1.0（spring 过冲后停住），**绝不循环**；循环会持续重组、滚动掉帧。
+ *   ⚠️ 它依赖 [key] 保证的组合槽稳定，否则会重现「点一个、旁边跟着闪」。
+ * - **M3 state layer** 由 [USE_M3_STATE_LAYER] 单独开关，默认关（玻璃态可靠性优先）。
  */
 @Composable
 private fun DockTabItem(
@@ -351,8 +411,30 @@ private fun DockTabItem(
     val pressed by interactionSource.collectIsPressedAsState()
     val pressScale by animateFloatAsState(
         targetValue = if (pressed) DOCK_PRESS_SCALE else 1f,
-        animationSpec = tween(DOCK_PRESS_DURATION_MS),
+        animationSpec = DockSpring,
     )
+
+    // 图标 one-shot：只在「松手」时播一次，spring 过冲后停在 1.0。
+    // 用 Animatable 而不是 animateXxxAsState —— 后者表达的是「状态」，
+    // 表达不了「一次性事件播完即停」。key(item) 保证组合槽稳定，动画不会扩散到兄弟节点。
+    val iconBounce = remember { Animatable(1f) }
+    LaunchedEffect(interactionSource) {
+        interactionSource.interactions.collect { interaction ->
+            if (interaction is PressInteraction.Release || interaction is PressInteraction.Cancel) {
+                iconBounce.snapTo(ICON_BOUNCE_START)
+                iconBounce.animateTo(1f, DockSpring)
+            }
+        }
+    }
+
+    // 选中 pill 的形状形变：33%(≈16dp / 48dp) → 50%(全圆角胶囊)。
+    // 用 percent 而不是 dp，「16dp 圆角」与「全圆角」才能落在同一条连续曲线上。
+    val cornerPercent by animateFloatAsState(
+        targetValue = if (isSelected) 50f else 33f,
+        animationSpec = DockSpring,
+    )
+    val pillShape = RoundedCornerShape(percent = cornerPercent.toInt())
+
     // 选中色块包住「图标+文字」整体（酷安样式，圆角矩形非细长条）。
     // ⚠️ 选中态仍**瞬切**（见 KDoc）；press 时换到相邻色档，让玻璃上也能看见按下。
     val pillColor = when {
@@ -366,6 +448,12 @@ private fun DockTabItem(
     } else {
         MaterialTheme.colorScheme.onSurfaceVariant
     }
+    // M3 pressed state layer（官方 0.10）。默认关；开关见文件头常量。
+    val stateLayer = if (USE_M3_STATE_LAYER && pressed) {
+        MaterialTheme.colorScheme.onSurface.copy(alpha = M3_PRESSED_LAYER_ALPHA)
+    } else {
+        Color.Transparent
+    }
     Box(
         modifier = modifier
             .fillMaxHeight()
@@ -373,7 +461,8 @@ private fun DockTabItem(
                 scaleX = pressScale
                 scaleY = pressScale
             }
-            .clip(VaultixCorner.Panel)
+            .clip(pillShape)
+            .background(stateLayer)
             .clickable(
                 interactionSource = interactionSource,
                 indication = null,
@@ -404,8 +493,8 @@ private fun DockTabItem(
                 //    代价是 60dp 的胶囊可能被撑高 —— 这是**对的**取舍：宁可底栏变高，
                 //    也不能让 tab 文字被裁成半个字（见 .ai/conventions/8.4 §字体缩放）。
                 .heightIn(min = 48.dp)
-                .clip(VaultixCorner.Panel)
-                .background(pillColor),
+                .clip(pillShape)
+                .background(pillColor, pillShape),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
@@ -414,7 +503,14 @@ private fun DockTabItem(
                 // 名字已在 Box 层声明，图标不再重复播报。
                 contentDescription = null,
                 tint = contentTint,
-                modifier = Modifier.size(22.dp),
+                modifier = Modifier
+                    .size(22.dp)
+                    // graphicsLayer 在绘制阶段读 Animatable，只重绘不重组；
+                    // 播完停在 1.0，不会持续消耗帧。
+                    .graphicsLayer {
+                        scaleX = iconBounce.value
+                        scaleY = iconBounce.value
+                    },
             )
             Text(
                 text = label,
