@@ -1,25 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!--
-      应用图标的品牌基色。**这是全项目唯一的品牌色定义处** ——
-      此前只有这一个值、且只被旧的占位背景层引用；图标改造后它是渐变的中段色，
-      同时作为「取不到渐变的兜底」保留（旧值未变，避免任何外部引用失配）。
+      应用图标的品牌基色。**这是全项目唯一的品牌色定义处**。
+      ⚠️ 应用 UI 本身**不走固定品牌色** —— `Theme.kt` 优先 Material You 动态取色
+      （跟随壁纸），回退 `VaultixBrandColor`。所以图标是全项目唯一「品牌露出」的地方
+      （8.8 §6②），配色改动只影响这里。
 
-      ⚠️ 注意：应用 UI 本身**不走固定品牌色** —— `Theme.kt` 优先用 Material You
-      动态取色（跟随壁纸），回退是 M3 默认色板。所以图标是全项目唯一"品牌露出"的地方，
-      配色改动只影响这里。
+      2026-11-09：对齐现行 `primary #3B5BC4`（饱和度 53.7%）。
+      旧值 `#3B5BDB`（69%）是 10-08 用户反馈「太亮」后 App 内已降饱和、
+      但图标没跟着改的遗留色。这一改**不是更随大流，反而拉开与竞品的距离**：
+      1Password `#145FE4`(84%)、Bitwarden `#175DDC`(81%) 都是高饱和荧光蓝。
     -->
-    <color name="ic_launcher_background">#3B5BDB</color>
-    <!-- 自适应图标背景层渐变：**三档对角**（左上亮 → 中 → 右下深），做出纵深。
-         angle=315 在 shape 渐变里表示"左上 → 右下"（0=左→右，90=下→上） -->
-    <color name="ic_launcher_bg_top">#5B7BF0</color>
-    <color name="ic_launcher_bg_mid">#3B5BDB</color>
-    <color name="ic_launcher_bg_bottom">#1E2C8C</color>
-    <!-- 盾内 V 带的颜色（蓝金 = 保险库/黄铜的经典搭配；也是全图标唯一的第二色相）。
-         V 带用**双色线性渐变**（左下深金 → 右上亮金）模拟金属反光；
-         `ic_launcher_accent` 是渐变亮端，同时也是「取不到渐变时的兜底色」。 -->
-    <color name="ic_launcher_accent">#F5C563</color>
-    <color name="ic_launcher_accent_dark">#C8892A</color>
+    <color name="ic_launcher_background">#3B5BC4</color>
+    <!--
+      折纸 V 的**受光面**：必须是全图最高明度。
+      折纸层次靠「白 > 淡蓝 > 蓝底」三档明度成立；换成浅底图标会让这一档融进背景。
+    -->
+    <color name="ic_launcher_foreground_light">#FFFFFF</color>
+    <!--
+      折纸 V 的**背光面**：同色相淡蓝，明度介于底与白之间。
+      旧的金色第二色相（`ic_launcher_accent` / `_dark`）与三档渐变
+      （`ic_launcher_bg_top/mid/bottom`）已随旧图形一并移除。
+    -->
+    <color name="ic_launcher_foreground_shade">#B9C6F0</color>
     <!--
       自动填充下拉行的**底色**（浅色面板）。
 

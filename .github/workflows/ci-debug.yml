@@ -36,6 +36,9 @@ on:
       #   **没有触发任何 run**，等了十分钟才发现 —— 而这几个脚本本身是 CI 的门禁。
       #   「改门禁 → 门禁不跑 → 以为门禁通过」比门禁缺失更危险：它给的是**假的绿灯**。
       - '.ai/tools/**'
+      # ★ 2026-11-09：折纸 V 图标的生成 / 校验脚本。改了几何却没触发 CI = 假绿灯，
+      #   与上面 .ai/tools 那段是同一类盲区（门禁自身改动必须能触发门禁）。
+      - 'tools/icon/**'
   pull_request:
     branches: [ main ]
     paths:
@@ -57,6 +60,7 @@ on:
       #   **没有触发任何 run**，等了十分钟才发现 —— 而这几个脚本本身是 CI 的门禁。
       #   「改门禁 → 门禁不跑 → 以为门禁通过」比门禁缺失更危险：它给的是**假的绿灯**。
       - '.ai/tools/**'
+      - 'tools/icon/**'
   workflow_dispatch:
 
 permissions:
@@ -169,6 +173,18 @@ jobs:
       # 脚本判据经过校准，不会把「为」「状态」「值」等正常中文误判为乱码。
       - name: Check source encoding (UTF-8 / mojibake gate)
         run: python3 "$GITHUB_WORKSPACE/.github/scripts/check-encoding.py" "$GITHUB_WORKSPACE"
+
+      # ★ 2026-11-09：折纸 V 应用图标的几何与 XML 一致性门禁。
+      #
+      # 为什么单列一关：旧图标的几何由 build/sign/v5_*.py 生成，那两个脚本不在 git 且已丢失，
+      # 于是「想调比例就重跑脚本」成了死链，下一代只能手改 pathData —— 而手改顶点
+      # 正是 #89 明令禁止的（会破坏左右对称与质心）。aapt / 编译 / detekt / 单测
+      # **全部**查不出「pathData 被手改到与生成源不一致」或「图形超出 66dp 安全圈」。
+      # 本关跑四条几何校验（安全圈 / 面积质心 / 左右留白 / 越界采样）+
+      # XML 逐字符一致性 + evenOdd 回归 + 颜色引用 + XML 注释合法性。
+      - name: Check launcher icon geometry (adaptive icon gate)
+        shell: bash
+        run: python3 "$GITHUB_WORKSPACE/tools/icon/generate_launcher_icon.py" --check
 
       # ★ 2026-11-01：版本号口径自测（本文件里那段 awk vs Kotlin `versionCodeOf()`）。
       #

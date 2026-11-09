@@ -2,22 +2,19 @@
 <!--
   Vaultix 应用图标 · 背景层（自适应图标的 `background`）
 
-  ── 为什么是"满幅矩形 + 渐变" ──────────────────────────────────────────────
-  自适应图标的背景层会被系统当作**无限延伸的底板**：不同 OEM 的遮罩（圆 / 方 /
-  圆角方 / squircle / 水滴…）只决定**裁哪儿**，而背景必须保证"裁到哪儿都有颜色"。
-  所以背景一律画满 108×108、不做任何内缩 —— 缩了就可能在某些遮罩下露出白边。
+  满幅 108x108 **纯色**，不做任何内缩：自适应图标的背景层被系统当作无限延伸的底板，
+  各家 OEM 遮罩（圆 / 圆角方 / squircle / 水滴）只决定裁哪儿，内缩会在某些遮罩下露白边。
 
-  ── 颜色 ────────────────────────────────────────────────────────────────
-  三档**对角**渐变（左上亮 → 中 → 右下深），给纯色底以纵深；小尺寸下也不会显脏。
-  `angle=315` = 左上 → 右下（shape 渐变角度制：0 向右、90 向上、270 向下）。
-  ⚠️ 三档要用 `centerColor`，只给 start/end 会退化成两档、丢掉中间过渡。
+  2026-11-09：三档对角渐变（`angle=315`）改为纯色 `#3B5BC4`。两条理由：
+  ① 「渐变底 + 白符号」是 2022 起的主流，2026 已品类饱和；
+     且官方要求移除自己烘焙的渐变与高光，交给系统的主题图标去表现。
+  ② 纯色让折纸 V 的三档明度（白受光 / 淡蓝背光 / 蓝底）成为画面里**唯一**的层次来源，
+     不再与背景渐变争夺注意力。
+
+  ⚠️ 旧文件头关于「三档必须用 centerColor」的说明已随渐变一起退役；
+     归档见 Docs/progress/app-icon-geometry-history.md。
 -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="rectangle">
-    <gradient
-        android:angle="315"
-        android:centerColor="@color/ic_launcher_bg_mid"
-        android:endColor="@color/ic_launcher_bg_bottom"
-        android:startColor="@color/ic_launcher_bg_top"
-        android:type="linear" />
+    <solid android:color="@color/ic_launcher_background" />
 </shape>

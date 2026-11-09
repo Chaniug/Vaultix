@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vaultix · App 图标设计方案对比（2026）</title>
+<style>
+  :root{
+    --bg:#F7F8FA; --card:#FFFFFF; --line:#E3E6EC; --ink:#1C2330;
+    --muted:#5F6775; --accent:#3B5BC4; --accent-soft:#E8ECF9;
+    --warn:#A6631B; --warn-soft:#FBF0E0; --good:#1B6B4A; --good-soft:#E6F3EC;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    font-size:14px;line-height:1.65}
+  .wrap{max-width:1240px;margin:0 auto;padding:32px 24px 64px}
+  h1{font-size:22px;font-weight:600;margin:0 0 6px}
+  .sub{color:var(--muted);margin:0 0 24px;font-size:13px}
+  h2{font-size:16px;font-weight:600;margin:36px 0 12px}
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px}
+  .controls{display:flex;flex-wrap:wrap;gap:20px;align-items:flex-end}
+  .ctl{display:flex;flex-direction:column;gap:6px}
+  .ctl label{font-size:12px;color:var(--muted)}
+  .seg{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+  .seg button{border:0;background:#fff;color:var(--ink);padding:7px 12px;font-size:12px;
+    cursor:pointer;border-right:1px solid var(--line);font-family:inherit}
+  .seg button:last-child{border-right:0}
+  .seg button.on{background:var(--accent);color:#fff}
+  .seg button:hover:not(.on){background:var(--accent-soft)}
+  .hint{font-size:12px;color:var(--muted);margin-top:12px}
+  .grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:14px;margin-top:18px}
+  @media(max-width:1100px){.grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+  @media(max-width:760px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+  @media(max-width:560px){.grid{grid-template-columns:1fr}}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  .card.rec{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)}
+  .stage{display:flex;align-items:center;justify-content:center;padding:24px 12px;
+    background:#EFF1F5;min-height:172px;transition:background .15s}
+  body.darkdesk .stage{background:#20242E}
+  .iconbox{position:relative;overflow:hidden;flex:none;background:#fff}
+  .iconbox svg{display:block;width:100%;height:100%}
+  .safe{position:absolute;inset:0;pointer-events:none}
+  .card-body{padding:14px}
+  .tag{display:inline-block;font-size:11px;padding:2px 8px;border-radius:20px;margin-bottom:8px}
+  .tag.rec{background:var(--accent-soft);color:var(--accent)}
+  .tag.keep{background:var(--good-soft);color:var(--good)}
+  .tag.risk{background:var(--warn-soft);color:var(--warn)}
+  .tag.base{background:#EEF0F4;color:var(--muted)}
+  .name{font-size:14px;font-weight:600;margin:0 0 4px}
+  .desc{font-size:12px;color:var(--muted);margin:0;min-height:54px}
+  .stars{font-size:12px;color:var(--accent);margin-top:10px;letter-spacing:1px}
+  .stars span{color:var(--muted);letter-spacing:0}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-weight:500;font-size:12px}
+  td:first-child{font-weight:500;white-space:nowrap}
+  .swatches{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
+  .sw{width:112px;border:1px solid var(--line);border-radius:8px;overflow:hidden;font-size:11px}
+  .sw i{display:block;height:44px}
+  .sw span{display:block;padding:6px 8px;color:var(--muted);font-family:ui-monospace,Consolas,monospace}
+  .note{background:var(--accent-soft);border-left:3px solid var(--accent);padding:12px 14px;
+    border-radius:0 8px 8px 0;font-size:13px;margin-top:14px}
+  .warnbox{background:var(--warn-soft);border-left:3px solid var(--warn);padding:12px 14px;
+    border-radius:0 8px 8px 0;font-size:13px;margin-top:14px}
+  ul{margin:8px 0 0;padding-left:20px}li{margin:5px 0}
+  code{background:#EEF0F4;padding:1px 5px;border-radius:4px;font-size:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Vaultix · App 图标设计方案对比</h1>
+  <p class="sub">2026-11-09 · 依据 Android 自适应图标规范（2026-10-19 更新）、Apple iOS 26/27 Liquid Glass 图标规范、2026 主流风格走势。纯静态预览，不依赖 Android SDK。</p>
+
+  <div class="panel">
+    <div class="controls">
+      <div class="ctl"><label>OEM 遮罩</label><div class="seg" id="mask">
+        <button data-v="squircle" class="on">圆角方</button><button data-v="circle">圆形</button>
+        <button data-v="round">方形圆角</button><button data-v="square">直角方</button>
+        <button data-v="none">完整 108 层</button></div></div>
+      <div class="ctl"><label>显示尺寸</label><div class="seg" id="size">
+        <button data-v="96" class="on">96px</button><button data-v="48">48px</button>
+        <button data-v="24">24px</button></div></div>
+      <div class="ctl"><label>渲染模式</label><div class="seg" id="mode">
+        <button data-v="color" class="on">彩色</button><button data-v="mono">主题图标</button></div></div>
+      <div class="ctl"><label>桌面背景</label><div class="seg" id="desk">
+        <button data-v="light" class="on">浅色</button><button data-v="dark">深色</button></div></div>
+      <div class="ctl"><label>辅助线</label><div class="seg" id="guide">
+        <button data-v="off" class="on">关</button><button data-v="on">66dp 安全圈</button></div></div>
+      <div class="ctl"><label>配色方案</label><div class="seg" id="tone">
+        <button data-v="current" class="on">现行低饱和蓝</button><button data-v="deep">深蓝底</button>
+        <button data-v="light">浅底反转</button><button data-v="old">旧蓝（对照）</button></div></div>
+    </div>
+    <div class="hint">遮罩由系统裁切；「完整 108 层」是开发者视角。切到 <b>24px</b> 最能看出谁会糊；
+      「主题图标」模拟系统取色。「配色方案」只作用于 ①–④，现状固定为对照基线。</div>
+    <div class="grid" id="grid"></div>
+  </div>
+
+  <h2>规范对照：现状为什么需要改</h2>
+  <div class="panel">
+    <table>
+      <thead><tr><th>2026 规范要求</th><th>现状（盾 + 金 V）</th><th>结论</th></tr></thead>
+      <tbody>
+        <tr><td>clean edges，轮廓周围不加遮罩/阴影</td><td>白描边盾 + 留缝 + 白内场 = 三层轮廓</td><td>❌ 违反</td></tr>
+        <tr><td>一个焦点符号、2–3 色上限</td><td>盾 + 缝 + 内场 + 渐变金 V，蓝/白/金 3 色含 2 色相</td><td>❌ 过载</td></tr>
+        <tr><td>粗实心形状；细线在小尺寸消失</td><td>V 臂宽约 2.83dp@48 ⇒ 约 1.4dp@24</td><td>❌ 24dp 会糊</td></tr>
+        <tr><td>用独立实心形状，别用带洞的复合路径</td><td>单色层用 <code>evenOdd</code> 把 V 挖成洞</td><td>❌ 与 Apple 建议相反</td></tr>
+        <tr><td>不要烘焙渐变/高光/阴影，交给系统</td><td>三档对角渐变底 + V 带金属渐变</td><td>❌ 两层烘焙</td></tr>
+        <tr><td>渐变底 + 白色图形</td><td>正是这个组合</td><td>⚠️ 2022 起主流，2026 已品类饱和</td></tr>
+        <tr><td>Android 16 QPR 2 起，无单色层者系统自动主题化</td><td>有单色层，但 V 是挖洞、动态范围低</td><td>⚠️ 层在，质量不够</td></tr>
+        <tr><td>与品类主导形象拉开差异</td><td>Bitwarden = 蓝盾；本品类普遍蓝 + 盾 / 锁 / 钥匙孔</td><td>⚠️ 撞车，最难被记住</td></tr>
+        <tr><td>logo 在 48–66dp 之间</td><td>外盾最远点 26.05dp（含描边），余量 6.95dp</td><td>✅ 这项合格，且是既有资产</td></tr>
+      </tbody>
+    </table>
+    <div class="note"><b>一句话</b>：几何精度不是问题，<b>信息密度</b>才是。这枚图标把「徽章 / 珐琅 / 金属反光」这套 2010 年代的层次感带到了 2026，而新规范要的是「一个能在一秒内读完的符号」。</div>
+  </div>
+
+  <h2>配色建议</h2>
+  <div class="panel">
+    <p style="margin:0;color:var(--muted);font-size:13px">只改图标自己的 <code>ic_launcher_*</code>，<b>不动</b> <code>VaultixBrandColor</code>（有 WCAG 单测钉着）。核心是把被否决的旧高饱和蓝换回现行品牌蓝，并去掉金色第二色相。</p>
+    <div class="swatches">
+      <div class="sw"><i style="background:#3B5BC4"></i><span>#3B5BC4 现行 primary</span></div>
+      <div class="sw"><i style="background:#2A4291"></i><span>#2A4291 同色相深档</span></div>
+      <div class="sw"><i style="background:#E3E6F2"></i><span>#E3E6F2 primaryContainer</span></div>
+      <div class="sw"><i style="background:#FFFFFF;border-bottom:1px solid #E3E6EC"></i><span>#FFFFFF 图形</span></div>
+      <div class="sw"><i style="background:#3B5BDB"></i><span>#3B5BDB 旧色（弃）</span></div>
+      <div class="sw"><i style="background:#F5C563"></i><span>#F5C563 金色（弃）</span></div>
+    </div>
+    <div class="warnbox"><b>一条要克制的建议</b>：趋势文章会劝你「和竞品反着来，别用蓝色」。但本项目品牌蓝被单测、动态取色与 8.8 §6② 三重约束钉死，换色相的代价远大于收益。⇒ <b>差异化做在形状上，不做在色相上</b>。</div>
+    <div class="note" style="margin-top:12px"><b>★ 我的推荐：「现行低饱和蓝底」</b>（上面「配色方案」的默认档）。
+      三个理由：① <b>品牌一致性是第一权重</b>——图标与 App 内回退色板、首启按钮用同一个蓝，
+      桌面点进去是连续的；深蓝底会制造「桌面一个色、打开另一个色」的割裂。② <b>与竞品的区分已经够用</b>——
+      54% 对 81–84% 的饱和度差在真机上很明显（它们荧光、你是雾蓝），不必再压明度；
+      再压成深蓝，反而可能让人以为「这不是那个 Vaultix」。③ 折纸 V 的<b>受光面必须是最高明度</b>——
+      折纸的层次靠「白 &gt; 淡蓝 &gt; 蓝底」三档明度成立；浅底档下白色受光面会融进浅底，折叠感塌掉。
+      所以浅底反转我不推荐，深蓝底是「想更沉稳」的可选，现行蓝是默认。</div>
+  </div>
+
+  <h2>我的建议清单（按优先级）</h2>
+  <div class="panel">
+    <ul>
+      <li><b>① 去金色</b>：它是全图标唯一第二色相，与低饱和蓝品牌冲突，且金属渐变属于「烘焙效果」。</li>
+      <li><b>② 减层</b>：白描边 + 缝 + 内场 → 单层实心符号。三层轮廓在 48dp 下读成「毛边」。</li>
+      <li><b>③ 加粗笔画</b>：V 臂从约 3dp 提到 8–10dp（108 画布口径），保证 24dp 可读。</li>
+      <li><b>④ 单色层改实心形状</b>：不再 <code>evenOdd</code> 挖洞，与彩色层同几何、独立实心路径。</li>
+      <li><b>⑤ 背景降档</b>：三档对角渐变 → 纯色或两档同色相渐变；渐变交给系统主题图标去表现。</li>
+      <li><b>⑥ 换掉「盾」</b>：与 Bitwarden 撞形象。用 <b>V</b>（Vaultix / Vault）作唯一符号，既独特又延续现有元素。</li>
+      <li><b>⑦ 补齐商店图标</b>：Google Play 512×512 不透明方图目前没有独立管理，应与 launcher 图标同步更新。</li>
+      <li><b>⑧ 重建生成脚本</b>：<code>build/sign/v5_*.py</code> 已丢失且不在 git；新几何的参数要入库，否则下一代又断。</li>
+    </ul>
+  </div>
+
+  <h2>三个追问的答复（2026-11-09 补充调研）</h2>
+
+  <div class="panel">
+    <h3 style="margin:0 0 8px;font-size:14px">A · 纯 V 会不会太单调 → 加工在笔画内部，不是加装饰</h3>
+    <p style="margin:0;color:var(--muted);font-size:13px">2026 把 lettermark 的加工收敛到了「字形本身」：一个 clever idea，而不是三个装饰。
+      下面每条都有规范或排印学依据，且<b>都不增加元素数量</b>。预览里的 ③ 已应用前三条。</p>
+    <table style="margin-top:12px">
+      <thead><tr><th>手法</th><th>对 V 具体做什么</th><th>依据</th></tr></thead>
+      <tbody>
+        <tr><td>功能性墨阱 ink traps</td><td>在 V 内角交汇处切一个几何缺口，把负空间「拉尖」；小尺寸下笔画不糊成一坨</td><td>2026 monogram 趋势第 3 条，明确说切口同时是品牌签名与 16px 可读性保障</td></tr>
+        <tr><td>斜笔画光学减重</td><td><b>V/W/A/M 全斜线</b>，同宽度下比竖线显重 1–3% ⇒ 两臂统一略收细</td><td>排印学 optical correction；本项目「左右对称」纪律下不能做不等宽</td></tr>
+        <tr><td>端点风格统一</td><td>flat / angled / rounded / ball 选一种用到底；延续现有 V 的圆角端点</td><td>字形构造规范；也是与旧图标的血统连接</td></tr>
+        <tr><td>负空间当设计对象</td><td>V 两臂之间的三角可塑成钥匙孔 / 盾尖，让一个符号兼有「安全」语义</td><td>counterform 图底关系（FedEx 箭头范式）</td></tr>
+        <tr><td>光学尺寸家族</td><td>展示版 + 24px 加厚版（笔画更粗、缝隙更大、圆角更大）两套几何，而非一个文件硬缩</td><td>optical sizing：24px 下笔画须占画布 6–8%，缝隙主动拉大</td></tr>
+        <tr><td>竞品混排盲测</td><td>把图标插进同类 App 网格，1 秒扫视抓不住就继续精简</td><td>微缩可读性工作流；比「单独看顺不顺眼」有效得多</td></tr>
+      </tbody>
+    </table>
+    <div class="note" style="margin-top:12px"><b>所以「单调」和「过载」不是二选一</b>：③ 的 V⁺ 仍然只有一个符号、两种颜色，
+      但笔画里有墨阱、有光学修正、有负空间主张 —— 这正是 2026 说的「极简继续加强，但加强的是克制，不是空白」。</div>
+  </div>
+
+  <div class="panel" style="margin-top:14px">
+    <h3 style="margin:0 0 8px;font-size:14px">B · 液态玻璃被否定了吗 → 没有，是上一版被我误分类了</h3>
+    <ul style="margin:0">
+      <li><b>被否的是「把实时材质烘焙成静态图层」</b>，不是玻璃这套语言。Android adaptive icon 是静态 VectorDrawable，
+        系统不会替它跑 <code>RenderEffect</code> / AGSL；且官方要求 clean edges、不要烘焙高光与阴影。</li>
+      <li><b>项目里它本来就是资产</b>：<code>ui/glass/LiquidGlass.kt</code> 有 Haze 式「源→消费分离」、
+        AGSL 边缘折射（API 33+）、三档降级，设置页还有开关。图标向它借语汇，反而是<b>品牌一致性加分</b>。</li>
+      <li><b>连 Apple 都在往「更实」退</b>：WWDC 2026 明确 iOS 27 降低半透明度以提升图标清晰度，
+        并说「Liquid Glass 是强符号的渲染材质，不是符号的替代品」。</li>
+      <li>⇒ ④ 已从「探索 / 不建议落地」改成「<b>玻璃语汇 · 静态化</b>」：两档实心明度分层 +
+        一条 1dp 浅色上沿内边（转译项目里的「上沿高光」），<b>无模糊、无半透明、无投影</b>。评分 ★★ → ★★★★。</li>
+    </ul>
+  </div>
+
+  <div class="panel" style="margin-top:14px">
+    <h3 style="margin:0 0 8px;font-size:14px">C · 蓝色是否与竞品趋同 → 色相确实趋同，但饱和度已经拉开了</h3>
+    <table>
+      <thead><tr><th>品牌</th><th>HEX</th><th>色相 H</th><th>饱和度 S</th><th>明度 L</th><th>观感</th></tr></thead>
+      <tbody>
+        <tr><td>1Password</td><td><code>#145FE4</code></td><td>218°</td><td><b>84%</b></td><td>49%</td><td>电光蓝</td></tr>
+        <tr><td>Bitwarden</td><td><code>#175DDC</code></td><td>219°</td><td><b>81%</b></td><td>48%</td><td>电光蓝</td></tr>
+        <tr><td>Vaultix 图标（现状旧色）</td><td><code>#3B5BDB</code></td><td>228°</td><td>69%</td><td>55%</td><td>偏亮，最接近竞品</td></tr>
+        <tr><td>Vaultix App 内现行 primary</td><td><code>#3B5BC4</code></td><td>226°</td><td><b>54%</b></td><td>50%</td><td>雾蓝 / 灰蓝</td></tr>
+      </tbody>
+    </table>
+    <div class="note" style="margin-top:12px"><b>反直觉的结论</b>：色相只差 8–10°，肉眼在 48dp 上几乎分不出；
+      但饱和度差了 15–30 个百分点，这才是真正能分开「谁是谁」的维度。
+      ⇒ <b>把图标从旧色 <code>#3B5BDB</code> 对齐到现行 <code>#3B5BC4</code>，不是「更随大流」，反而是在拉开与竞品的距离。</b>
+      上一轮我只说「对齐品牌色」，没把这条讲透。</div>
+    <p style="margin:12px 0 0;font-size:13px;color:var(--muted)">若还想再拉开，<b>不必换色相</b>（WCAG 单测 + 8.8 §6② 钉死），改<b>明度结构</b>即可 ——
+      竞品清一色「亮蓝底 + 白符号」，用上面的「配色方案」切到 <b>深蓝底</b> 或 <b>浅底反转</b> 就能反向。
+      浅底反转最不趋同，代价是深色桌面上会显得比旁边图标亮，建议两版都在真机上看过再定。</p>
+  </div>
+
+  <p class="hint" style="margin-top:28px">本页是设计提案预览，未修改任何 <code>res/</code> 文件。详细依据、验收与红线见 <code>app-icon-design-proposal.md</code> 与 <code>app-icon-plan.md</code>。</p>
+</div>
+
+<script>
+const P = {
+  shield:'M41.0640,35.1261 L66.9360,35.1261 Q72.4800,35.1261 72.4800,40.8733 L72.4800,55.6521 C72.4800,66.3256 65.0880,73.7149 54.0000,78.6412 C42.9120,73.7149 35.5200,66.3256 35.5200,55.6521 L35.5200,40.8733 Q35.5200,35.1261 41.0640,35.1261 Z',
+  inner:'M43.8166,39.1587 L64.1834,39.1587 Q68.5478,39.1587 68.5478,43.6870 L68.5478,55.3210 C68.5478,63.7194 62.7287,69.5404 54.0000,73.4184 C45.2713,69.5404 39.4523,63.7194 39.4523,55.3210 L39.4523,43.6870 Q39.4523,39.1587 43.8166,39.1587 Z',
+  vband:'M44.6288,45.5269 L47.8417,45.5269 Q48.9128,45.5269 49.9838,46.4785 L52.8219,59.6273 Q54.0000,60.6741 55.1781,59.6273 L58.0162,46.4785 Q59.0872,45.5269 60.1583,45.5269 L63.3712,45.5269 Q64.4423,45.5269 64.4423,46.4785 L55.0264,66.5744 Q54.0000,67.4944 52.9736,66.5744 L43.5577,46.4785 Q43.5577,45.5269 44.6288,45.5269 Z',
+  boldShield:'M39,36 L69,36 Q74,36 74,41 L74,56 C74,67 66,75 54,80 C42,75 34,67 34,56 L34,41 Q34,36 39,36 Z',
+  boldV:'M40,42 L48,42 L54,62 L60,42 L68,42 L56,71 Q54,73.5 52,71 Z',
+  markV:'M36,40 L47,40 L54,62 L61,40 L72,40 L57,74 Q54,77 51,74 Z',
+  vPlus:'M37,40 L47.5,40 L54,61 L60.5,40 L71,40 L56.5,73 Q54,76 51.5,73 Z',
+  inkTrap:'M50.8,55 L57.2,55 L54,66 Z',
+  doorV:'M40,44 L46,44 L54,62 L62,44 L68,44 L56,68 Q54,70 52,68 Z',
+  foldedL:'M37,40 L47.5,40 L55,61 L55,74 L51.5,74 Z',
+  foldedR:'M71,40 L60.5,40 L53,61 L53,74 L56.5,74 Z'
+};
+
+const INK='#2F3A4C', MONOBG='#DCE3F2';
+const TONES = {
+  current:{BG:'#3B5BC4',DEEP:'#2A4291',FG:'#FFFFFF',V:'#3B5BC4',LIGHT:'#E3E6F2',FG1:'#FFFFFF',FG2:'#B9C6F0'},
+  deep:   {BG:'#1B2B63',DEEP:'#14204A',FG:'#FFFFFF',V:'#1B2B63',LIGHT:'#C9D2EC',FG1:'#FFFFFF',FG2:'#7E9AE8'},
+  light:  {BG:'#E3E6F2',DEEP:'#2A4291',FG:'#2A4291',V:'#E3E6F2',LIGHT:'#FFFFFF',FG1:'#2A4291',FG2:'#1B2B63'},
+  old:    {BG:'#3B5BDB',DEEP:'#1E2C8C',FG:'#FFFFFF',V:'#3B5BDB',LIGHT:'#E3E6F2',FG1:'#FFFFFF',FG2:'#B9C6F0'}
+};
+
+const ICONS = [
+  { id:'s0', name:'现状 · 徽章盾 + 金 V', tag:'base', tagText:'对照基线', stars:2,
+    desc:'三层轮廓 + 双色相 + 金属渐变。几何经过五轮精算，但信息密度是 2026 规范的反面。',
+    bg:`<defs><linearGradient id="g0" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#5B7BF0"/><stop offset=".5" stop-color="#3B5BDB"/><stop offset="1" stop-color="#1E2C8C"/></linearGradient><linearGradient id="gv" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#C8892A"/><stop offset="1" stop-color="#F5C563"/></linearGradient></defs><rect width="108" height="108" fill="url(#g0)"/>`,
+    fg:`<path d="${P.shield}" fill="none" stroke="#FFFFFF" stroke-width="2.82"/><path d="${P.inner}" fill="#FFFFFF"/><path d="${P.vband}" fill="url(#gv)"/>`,
+    mono:`<path d="${P.shield}" fill="none" stroke="${INK}" stroke-width="2.82"/><path d="${P.inner}" fill="${INK}"/><path d="${P.vband}" fill="${MONOBG}"/>` },
+
+  { id:'e', name:'⑤ 折纸 V · Folded V', tag:'rec', tagText:'★ 我的选择', stars:5,
+    desc:'把②③④收拢成一个答案：③ 的几何（纯 V 无容器）+ ④ 的层次（折纸两档明度，不是半透明）+ ③ 的笔画加工（墨阱/光学减重/圆角）。一个符号、单色相、克制的深度。',
+    bg:`<rect width="108" height="108" fill="{BG}"/>`,
+    fg:`<path d="${P.foldedL}" fill="{FG1}" stroke="{FG1}" stroke-width="1.5" stroke-linejoin="round"/><path d="${P.foldedR}" fill="{FG2}" stroke="{FG2}" stroke-width="1.5" stroke-linejoin="round"/><path d="${P.inkTrap}" fill="{BG}"/>`,
+    mono:`<path d="${P.foldedL}" fill="${INK}" stroke="${INK}" stroke-width="1.5" stroke-linejoin="round"/><path d="${P.foldedR}" fill="${INK}" stroke="${INK}" stroke-width="1.5" stroke-linejoin="round"/><path d="${P.inkTrap}" fill="${MONOBG}"/>` },
+
+  { id:'a', name:'① 现代徽章', tag:'keep', tagText:'保守', stars:3,
+    desc:'保留盾 + V 的识别资产，去掉描边、缝、金色；V 改成与底同色的独立实心形状。',
+    bg:`<defs><linearGradient id="ga" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="{BG}"/><stop offset="1" stop-color="{DEEP}"/></linearGradient></defs><rect width="108" height="108" fill="url(#ga)"/>`,
+    fg:`<path d="${P.boldShield}" fill="{FG}" stroke="{FG}" stroke-width="2" stroke-linejoin="round"/><path d="${P.boldV}" fill="{V}" stroke="{V}" stroke-width="2" stroke-linejoin="round"/>`,
+    mono:`<path d="${P.boldShield}" fill="${INK}" stroke="${INK}" stroke-width="2" stroke-linejoin="round"/><path d="${P.boldV}" fill="${MONOBG}" stroke="${MONOBG}" stroke-width="2" stroke-linejoin="round"/>` },
+
+  { id:'b', name:'② V 库门', tag:'keep', tagText:'容器派备选', stars:5,
+    desc:'白色圆角方「库门」+ 蓝色粗 V。若你坚持要一个「容器」的安全感，这是与⑤等价的另一条路；我的判断是容器在 24dp 下是负担。',
+    bg:`<rect width="108" height="108" fill="{BG}"/>`,
+    fg:`<rect x="34" y="34" width="40" height="40" rx="11" fill="{FG}"/><path d="${P.doorV}" fill="{V}" stroke="{V}" stroke-width="1.5" stroke-linejoin="round"/>`,
+    mono:`<rect x="34" y="34" width="40" height="40" rx="11" fill="${INK}"/><path d="${P.doorV}" fill="${MONOBG}" stroke="${MONOBG}" stroke-width="1.5" stroke-linejoin="round"/>` },
+
+  { id:'c', name:'③ V⁺ 字标（加工版）', tag:'keep', tagText:'最大胆 · 已加工', stars:4,
+    desc:'不是「光秃秃一个 V」：斜笔画光学减重 + 内角功能性墨阱 + 圆角端点。加工全在笔画内部，不添任何元素。',
+    bg:`<rect width="108" height="108" fill="{BG}"/>`,
+    fg:`<path d="${P.vPlus}" fill="{FG}" stroke="{FG}" stroke-width="2" stroke-linejoin="round"/><path d="${P.inkTrap}" fill="{BG}"/>`,
+    mono:`<path d="${P.vPlus}" fill="${INK}" stroke="${INK}" stroke-width="2" stroke-linejoin="round"/><path d="${P.inkTrap}" fill="${MONOBG}"/>` },
+
+  { id:'d', name:'④ 玻璃语汇 · 静态化', tag:'risk', tagText:'已可落地', stars:4,
+    desc:'把项目已有的液态玻璃「上沿高光 + 分层」转译成两档实心明度 + 一条细内边；无模糊、无半透明、无投影。',
+    bg:`<rect width="108" height="108" fill="{BG}"/>`,
+    fg:`<rect x="34" y="34" width="40" height="40" rx="11" fill="{DEEP}"/><path d="M41,35.6 Q54,33.4 67,35.6" fill="none" stroke="{LIGHT}" stroke-width="1.1" stroke-linecap="round"/><path d="${P.doorV}" fill="{FG}" stroke="{FG}" stroke-width="1.2" stroke-linejoin="round"/>`,
+    mono:`<rect x="34" y="34" width="40" height="40" rx="11" fill="${INK}"/><path d="${P.doorV}" fill="${MONOBG}" stroke="${MONOBG}" stroke-width="1.2" stroke-linejoin="round"/>` }
+];
+
+const state={mask:'squircle',size:96,mode:'color',desk:'light',guide:'off',tone:'current'};
+const radius={squircle:'30%',circle:'50%',round:'18%',square:'2%',none:'0%'};
+
+function toneFill(s){
+  const t=TONES[state.tone];
+  return Object.keys(t).reduce((a,k)=>a.replace(new RegExp('\\{'+k+'\\}','g'),t[k]),s);
+}
+
+function svgFor(ic){
+  let body=ic.bg + (state.mode==='mono'?ic.mono:ic.fg);
+  if(state.mode==='color' && ic.id!=='s0') body=toneFill(body);
+  const base=state.mode==='mono'?MONOBG:TONES[state.tone].BG;
+  return `<svg viewBox="0 0 108 108" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="${ic.name}"><rect width="108" height="108" fill="${base}"/>${body}</svg>`;
+}
+
+function render(){
+  document.body.classList.toggle('darkdesk',state.desk==='dark');
+  const g=document.getElementById('grid');
+  g.innerHTML=ICONS.map(ic=>{
+    const safe=state.guide==='on'
+      ? `<svg class="safe" viewBox="0 0 108 108"><circle cx="54" cy="54" r="33" fill="none" stroke="#E24B4A" stroke-width=".8" stroke-dasharray="3 3"/></svg>`:'';
+    const stars='★'.repeat(ic.stars)+'☆'.repeat(5-ic.stars);
+    return `<div class="card ${ic.tag==='rec'?'rec':''}">
+      <div class="stage"><div class="iconbox" style="width:${state.size}px;height:${state.size}px;border-radius:${radius[state.mask]}">${svgFor(ic)}${safe}</div></div>
+      <div class="card-body">
+        <span class="tag ${ic.tag}">${ic.tagText}</span>
+        <p class="name">${ic.name}</p>
+        <p class="desc">${ic.desc}</p>
+        <div class="stars">${stars} <span>· 规范符合度</span></div>
+      </div></div>`;
+  }).join('');
+}
+
+['mask','size','mode','desk','guide','tone'].forEach(k=>{
+  document.getElementById(k).addEventListener('click',e=>{
+    const b=e.target.closest('button'); if(!b)return;
+    state[k]=b.dataset.v;
+    [...e.currentTarget.children].forEach(x=>x.classList.toggle('on',x===b));
+    render();
+  });
+});
+render();
+</script>
+</body>
+</html>
