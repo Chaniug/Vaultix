@@ -658,36 +658,28 @@ fun ItemsScreen(
                 }
             }
             if (!searchActive) {
-                QuickFilterPanel(
-                    visible = quickFiltersExpanded,
-                    selected = state.quickFilter,
-                    topPadding = barPadding,
-                    onSelect = viewModel::setQuickFilter,
-                    onDismiss = { quickFiltersExpanded = false },
+                // 顶栏 + 筛选层抽成 [ItemsTopLayer]（2026-11-09，#256）：
+                // 这 30 行是纯接线，与主 Composable 的逻辑无耦合，
+                // 但把 LongMethod 顶到 151 —— 第三次撞同一道线，说明该拆的是它。
+                ItemsTopLayer(
+                    state = state,
                     organizations = organizations,
-                    selectedOrganizationId = state.organizationFilter,
-                    onSelectOrganization = viewModel::setOrganizationFilter,
-                )
-                ItemsTopBar(
-                    title = itemsTitle(
-                        vaultName = state.vault?.name.orEmpty(),
-                        filter = state.quickFilter,
-                        filterLabel = stringResource(quickFilterLabelRes(state.quickFilter)),
-                    ),
-                    collapseFraction = collapse,
                     embedded = embedded,
-                    titleExpanded = quickFiltersExpanded,
-                    onTitleClick = { quickFiltersExpanded = !quickFiltersExpanded },
-                    onBack = onBack,
+                    collapse = collapse,
+                    barPadding = barPadding,
+                    vaultCard = vaultCard,
+                    quickFiltersExpanded = quickFiltersExpanded,
+                    onToggleFilters = { quickFiltersExpanded = !quickFiltersExpanded },
+                    onDismissFilters = { quickFiltersExpanded = false },
                     onDisplayOptions = { displayOptionsOpen = true },
                     onToggleSearch = { searchActive = true },
+                    onBack = onBack,
                     onOpenTotp = onOpenTotp,
                     onOpenTrash = onOpenTrash,
                     onOpenFolders = onOpenFolders,
-                    onRetrySync = viewModel::retrySync,
-                    onLock = { viewModel.lockNow(onLocked) },
+                    onLocked = onLocked,
                     onSwitchVault = onSwitchVault,
-                    vaultCard = vaultCard,
+                    viewModel = viewModel,
                 )
             }
         }
@@ -695,16 +687,15 @@ fun ItemsScreen(
 
     ItemDisplayOptionsHost(viewModel, displayOptionsOpen, onDismiss = { displayOptionsOpen = false })
 
-    // 新建条目对话框的完整接线：开关状态 + 表单依赖 + 两个动作（保存 / 建文件夹）。
-    // 2026-11-09 再抽一次：加 `onCreateFolder` 后主 Composable 到 151，第二次撞同一道线。
+    // 新建条目对话框的完整接线（2026-11-09 把保存 lambda 也收进宿主，见其 KDoc）。
     NewItemDialogHost(
         visible = showCreateDialog,
         folders = folders,
         vaultKind = state.vault?.kind,
         saving = state.saving,
         onDismiss = { showCreateDialog = false },
-        onSave = {
-            viewModel.createItem(it)
+        onSave = { item ->
+            viewModel.createItem(item)
             showCreateDialog = false
         },
         onCreateFolder = viewModel::createFolder,
@@ -1050,6 +1041,74 @@ private fun ItemsSearchBar(
         onClose = onClose,
         clearIconContentDescription = stringResource(R.string.items_search_clear),
         scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior(),
+    )
+}
+
+/**
+ * 顶栏层：筛选面板 + 沉浸式顶栏，以及它们需要的那一整套回调接线（2026-11-09，#256）。
+ *
+ * ## 为什么要单独一层
+ *
+ * 这 30 行本身不含任何逻辑 —— 全是「从 `state` 取几个值、把几个回调往下传」。
+ * 但它把 `ItemsScreen` 顶到了 detekt `LongMethod` 的 151 行。
+ * **这是同一道线的第三次**（前两次见 `ItemDisplayOptionsHost` / `NewItemDialogHost`），
+ * 说明该拆的从来不是"随便一段"，而是这块**纯接线区**。
+ *
+ * 传 `viewModel` 而不是把 5 个回调逐个拆开：这一层的职责就是"把 ViewModel 接到顶栏上"，
+ * 拆成 5 个 lambda 只是把 30 行变成 40 行，没有换来任何解耦。
+ * 需要替换数据源时，替换的是这一层，不是这里。
+ */
+@Composable
+private fun BoxScope.ItemsTopLayer(
+    state: ItemsViewModel.UiState,
+    organizations: List<VaultOrganization>,
+    embedded: Boolean,
+    collapse: Float,
+    barPadding: Dp,
+    vaultCard: VaultCardInfo?,
+    quickFiltersExpanded: Boolean,
+    onToggleFilters: () -> Unit,
+    onDismissFilters: () -> Unit,
+    onDisplayOptions: () -> Unit,
+    onToggleSearch: () -> Unit,
+    onBack: () -> Unit,
+    onOpenTotp: (() -> Unit)?,
+    onOpenTrash: () -> Unit,
+    onOpenFolders: () -> Unit,
+    onLocked: () -> Unit,
+    onSwitchVault: (() -> Unit)?,
+    viewModel: ItemsViewModel,
+) {
+    QuickFilterPanel(
+        visible = quickFiltersExpanded,
+        selected = state.quickFilter,
+        topPadding = barPadding,
+        onSelect = viewModel::setQuickFilter,
+        onDismiss = onDismissFilters,
+        organizations = organizations,
+        selectedOrganizationId = state.organizationFilter,
+        onSelectOrganization = viewModel::setOrganizationFilter,
+    )
+    ItemsTopBar(
+        title = itemsTitle(
+            vaultName = state.vault?.name.orEmpty(),
+            filter = state.quickFilter,
+            filterLabel = stringResource(quickFilterLabelRes(state.quickFilter)),
+        ),
+        collapseFraction = collapse,
+        embedded = embedded,
+        titleExpanded = quickFiltersExpanded,
+        onTitleClick = onToggleFilters,
+        onBack = onBack,
+        onDisplayOptions = onDisplayOptions,
+        onToggleSearch = onToggleSearch,
+        onOpenTotp = onOpenTotp,
+        onOpenTrash = onOpenTrash,
+        onOpenFolders = onOpenFolders,
+        onRetrySync = viewModel::retrySync,
+        onLock = { viewModel.lockNow(onLocked) },
+        onSwitchVault = onSwitchVault,
+        vaultCard = vaultCard,
     )
 }
 
