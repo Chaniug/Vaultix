@@ -136,7 +136,8 @@
 
 3. **按本次要动的模块**，只开 `conventions/` 里对应的一篇（例：动填充 → `8.1-自动填充`）
 4. **按本次要碰的模块**，只开 `issues/` 里对应的一篇（例：动填充 → `02-自动填充`）
-5. 读 `Docs/progress/next-steps.md`（**待办唯一真源**，最新在顶部）与 `current-status.md`
+5. 读 `Docs/progress/next-steps.md`（**待办唯一真源**；已完成的历史已按时间段归档，
+   见文件末尾的归档索引，**勿通读**）与 `current-status.md`
 6. 完成后**更新上述文件**：新坑 → 写进对应 `issues/*.md` 并在 `ISSUES.md` 索引表补一行；
    新约定 → 写进对应 `conventions/*.md`。**别把正文堆回索引。**
 
