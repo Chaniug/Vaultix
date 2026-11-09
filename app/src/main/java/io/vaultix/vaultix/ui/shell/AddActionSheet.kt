@@ -424,7 +424,8 @@ private fun GlyphCard(accent: Color, line: Color) {
                 .background(accent),
         )
         Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-            repeat(4) {
+            // 命名参数：detekt MagicNumber 只对未命名位置参数报错（见 config/detekt/detekt.yml）。
+            repeat(times = 4) {
                 Box(
                     modifier = Modifier
                         .size(4.dp)

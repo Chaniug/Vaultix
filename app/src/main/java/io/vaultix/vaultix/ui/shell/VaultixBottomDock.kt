@@ -119,6 +119,19 @@ private const val M3_PRESSED_LAYER_ALPHA = 0.10f
  */
 private const val DOCK_GLASS_PILL_ALPHA = 0.55f
 
+/**
+ * 玻璃态下给 pill 叠 alpha；透明色保持透明。
+ *
+ * 抽成**纯函数**而不是内联在 [DockTabItem] 里：那个函数本来贴着 detekt
+ * `CyclomaticComplexMethod ≤14` 的上限，内联一个 `if + &&` 会把它推到 15。
+ */
+private fun glassPillColor(color: Color, glass: Boolean): Color =
+    if (glass && color != Color.Transparent) {
+        color.copy(alpha = DOCK_GLASS_PILL_ALPHA)
+    } else {
+        color
+    }
+
 /** spring 参数集中一处，tab / 加号 / 图标共用同一套物理手感。 */
 private val DockSpring = spring<Float>(
     dampingRatio = Spring.DampingRatioMediumBouncy,
@@ -467,11 +480,7 @@ private fun DockTabItem(
     }
     // 玻璃态：pill 带 alpha ⇒ 读作「玻璃里一块更浓的玻璃」而不是贴了一块塑料。
     // ⚠️ 只改 alpha，颜色仍由上面的 when 瞬切（不引入任何颜色动画）。
-    val effectivePillColor = if (glass && pillColor != Color.Transparent) {
-        pillColor.copy(alpha = DOCK_GLASS_PILL_ALPHA)
-    } else {
-        pillColor
-    }
+    val effectivePillColor = glassPillColor(pillColor, glass)
     val contentTint = if (isSelected) {
         MaterialTheme.colorScheme.primary
     } else {
