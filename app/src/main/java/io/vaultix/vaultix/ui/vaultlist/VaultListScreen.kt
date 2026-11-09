@@ -57,6 +57,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -118,6 +119,41 @@ private const val SWITCH_BADGE_SCALE = 1.2f
 private const val BAR_ALPHA_IDLE = 0.4f
 private const val CARD_DIMMED_ALPHA = 0.42f
 
+/**
+ * 切库状态 + 「E 数据流」前置动画（P4-b，2026-11-09）。
+ *
+ * 点库卡后先让这张卡播 240ms 前置动画（徽章放大 + 上沿色条亮满 + 其它卡退场），
+ * 再由这里的 `LaunchedEffect` 调 [onOpen] 导航。
+ *
+ * ⚠️ 只做**前置**动画，不做跨 NavHost 的共享元素：那需要 alpha 的
+ *    `SharedTransitionLayout`（8.8 §6① 不允许），且本项目返回转场翻过车
+ *    （`SizeTransform` 关成瞬时那条）。
+ * ⚠️ 抽成独立函数是为了不把 `if` / `?.let` 加进 [VaultListScreen] 的圈复杂度
+ *    —— 它本来就管着「加载中 / 真的没有 / 有库」三支，上限 14。
+ * ⚠️ `remember` 而非 `rememberSaveable`：进程被杀后切换要么已完成、要么从未发生，
+ *    没有值得恢复的中间态。
+ *
+ * @return 当前正在切入的库 id；null = 没有切换在进行。
+ */
+@Composable
+private fun rememberSwitchingVault(
+    vaults: List<VaultSummary>?,
+    onOpen: (VaultSummary) -> Unit,
+): MutableState<String?> {
+    val switching = remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(switching.value) {
+        val id = switching.value ?: return@LaunchedEffect
+        delay(SWITCH_PRELUDE_MS)
+        vaults?.firstOrNull { it.id == id }?.let(onOpen)
+    }
+    return switching
+}
+
+/** 开始切换：已有切换在进行时忽略后续点击（防连点触发多次导航）。 */
+private fun startVaultSwitch(state: MutableState<String?>, vaultId: String) {
+    if (state.value == null) state.value = vaultId
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun VaultListScreen(
@@ -138,25 +174,9 @@ fun VaultListScreen(
     var vaultToRemove by remember { mutableStateOf<VaultSummary?>(null) }
     var showAddDialog by remember { mutableStateOf(false) }
 
-    /**
-     * 正在切入的库 id（null = 没有切换在进行）。
-     *
-     * P4-b「E 数据流」：点库卡不再立刻导航，先让这张卡播 240ms 前置动画
-     * （徽章放大 + 上沿色条亮满 + 其它卡退场），再调 [onOpenVault]。
-     *
-     * ⚠️ 只做**前置**动画，不做跨 NavHost 的共享元素：那需要 alpha 的
-     *    `SharedTransitionLayout`（8.8 §6① 不允许），且本项目返回转场翻过车
-     *    （`SizeTransform` 关成瞬时那条）。
-     * ⚠️ `remember` 而非 `rememberSaveable`：进程被杀后切换要么已完成、要么从未发生，
-     *    没有值得恢复的中间态。
-     */
-    var switchingVaultId by remember { mutableStateOf<String?>(null) }
-
-    LaunchedEffect(switchingVaultId) {
-        val id = switchingVaultId ?: return@LaunchedEffect
-        delay(SWITCH_PRELUDE_MS)
-        vaults?.firstOrNull { it.id == id }?.let(onOpenVault)
-    }
+    // 切库状态与 240ms 前置动画：抽成独立 composable（[rememberSwitchingVault]），
+    // 避免主函数圈复杂度越界 —— 它本来就管着「加载中 / 真的没有 / 有库」三支。
+    val switchingVault = rememberSwitchingVault(vaults = vaults, onOpen = onOpenVault)
 
     /**
      * ★ 待用户拍板的冲突（null = 不显示对话框）。
@@ -275,24 +295,14 @@ fun VaultListScreen(
                             verticalArrangement = Arrangement.spacedBy(Spacing.md),
                         ) {
                             items(list, key = { it.id }) { vault ->
-                                VaultCard(
+                                VaultRow(
                                     vault = vault,
                                     syncStatus = syncStatuses[vault.id],
-                                    switching = vault.id == switchingVaultId,
-                                    dimmed = switchingVaultId != null && vault.id != switchingVaultId,
-                                    // 前置动画期间不再接受新的点击，避免连点触发多次导航。
-                                    onClick = {
-                                        if (switchingVaultId == null) switchingVaultId = vault.id
-                                    },
+                                    switchingId = switchingVault.value,
+                                    onStartSwitch = { startVaultSwitch(switchingVault, it) },
                                     onRemove = { vaultToRemove = vault },
-                                    // ⚠️ 只在"该库确实是网盘库"时给同步入口（syncStatus 非 null）。
-                                    //    给 Bitwarden / 本地 SAF 库也画一个「立即同步」是错的方向：
-                                    //    前者走自己的同步链、后者根本没有远端。
-                                    onSyncNow = if (vault.syncStatus != null) {
-                                        { viewModel.syncKdbxVault(vault.id) }
-                                    } else {
-                                        null
-                                    },
+                                    onSync = { viewModel.syncKdbxVault(vault.id) },
+                                    syncEnabled = vault.syncStatus != null,
                                 )
                             }
                         }
@@ -667,6 +677,36 @@ private fun VaultCard(
             }
         }
     }
+}
+
+/**
+ * 列表里的一行库卡：把「切换态 / 同步入口」这些条件从 `items` 的 lambda 里搬出来。
+ *
+ * ⚠️ 抽它是为了 [VaultListScreen] 的圈复杂度：lambda 里只要出现 `&&` / `if` / `?.`，
+ *    detekt 都会算进**外层函数**。列表页本来就有「加载中 / 真的没有 / 有库」三支，
+ *    再塞条件就会像上一版那样直接报到 17（上限 14）。
+ */
+@Composable
+private fun VaultRow(
+    vault: VaultSummary,
+    syncStatus: VaultSyncStatus?,
+    switchingId: String?,
+    onStartSwitch: (String) -> Unit,
+    onRemove: (VaultSummary) -> Unit,
+    onSync: () -> Unit,
+    syncEnabled: Boolean,
+) {
+    VaultCard(
+        vault = vault,
+        syncStatus = syncStatus,
+        switching = vault.id == switchingId,
+        dimmed = switchingId != null && vault.id != switchingId,
+        onClick = { onStartSwitch(vault.id) },
+        onRemove = { onRemove(vault) },
+        // ⚠️ 只在"该库确实是网盘库"时给同步入口。给 Bitwarden / 本地 SAF 库也画一个
+        //    「立即同步」是错的方向：前者走自己的同步链、后者根本没有远端。
+        onSyncNow = if (syncEnabled) onSync else null,
+    )
 }
 
 /**
