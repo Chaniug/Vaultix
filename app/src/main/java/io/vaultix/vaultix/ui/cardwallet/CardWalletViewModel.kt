@@ -51,12 +51,24 @@ class CardWalletViewModel @Inject constructor(
     private val vaultRepository: VaultRepository,
 ) : ViewModel() {
 
-    /** 卡包内容 = 活跃库内的全部 `type=Card` 条目。 */
+    /**
+     * 卡包内容 = 活跃库内的银行卡 + 身份 / 个人信息条目（2026-11-09 22:20 用户反馈）。
+     *
+     * 改前只筛 [VaultItemType.Card]，于是 Bitwarden 的 `TYPE_IDENTITY` 与 KDBX
+     * `KdbxItemMapper.toVaultIdentity` 产出的身份条目**都被这一行挡在卡包外**，
+     * 只能混在密码条目页里看到，用户报「卡包里看不到个人信息」。
+     *
+     * ⚠️ 这是**纯客户端展示归置**：不改任何条目类型、不搬数据、不碰
+     * Bitwarden / KDBX 的 mapper 与远程同步（用户 21:14 明确划的边界）。
+     * 密码页仍是这些条目的数据源，两边都能看到，不是互斥。
+     */
     val cards: StateFlow<List<VaultItem>> = activeVaultStore.activeVaultId
         .flatMapLatest { vaultId ->
             if (vaultId.isNullOrBlank()) emptyFlow() else itemRepository.observeItems(vaultId)
         }
-        .map { items -> items.filter { it.type == VaultItemType.Card } }
+        .map { items ->
+            items.filter { it.type == VaultItemType.Card || it.type == VaultItemType.Identity }
+        }
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5_000),

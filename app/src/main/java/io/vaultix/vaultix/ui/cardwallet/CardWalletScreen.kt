@@ -44,6 +44,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.activity.compose.BackHandler
+import androidx.compose.material.icons.filled.Badge
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ScaffoldDefaults
@@ -460,8 +461,22 @@ private fun CardWalletRow(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(modifier = Modifier.size(width = 44.dp, height = 30.dp)) {
-                CardBrandIcon(brand = brand, modifier = Modifier.fillMaxSize())
+            Box(
+                modifier = Modifier.size(width = 44.dp, height = 30.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                // 身份 / 个人信息条目没有卡号与品牌，给它一个身份图标而不是
+                // 一张「无品牌」的空白卡图（22:20 起卡包会同时容纳两类条目）。
+                if (item.type == VaultItemType.Identity) {
+                    Icon(
+                        imageVector = Icons.Filled.Badge,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(28.dp),
+                    )
+                } else {
+                    CardBrandIcon(brand = brand, modifier = Modifier.fillMaxSize())
+                }
             }
             Column(
                 modifier = Modifier.weight(1f).padding(start = EntryCardIconSpacing),
@@ -476,24 +491,15 @@ private fun CardWalletRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                val number = card?.number.orEmpty()
-                if (number.isNotBlank()) {
+                val subtitle = walletSubtitle(item)
+                if (subtitle.isNotBlank()) {
                     Text(
-                        text = maskCardNumber(formatCardNumberGrouped(number)),
+                        text = subtitle,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
-                } else {
-                    card?.cardholderName?.takeIf { it.isNotBlank() }?.let { holder ->
-                        Text(
-                            text = holder,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
                 }
             }
             val expiry = listOf(card?.expMonth, card?.expYear)
@@ -508,6 +514,28 @@ private fun CardWalletRow(
             }
         }
     }
+}
+
+/**
+ * 卡包行的副标题：银行卡显示打码卡号 / 持卡人，身份条目显示姓名或用户名。
+ *
+ * 2026-11-09：卡包同时容纳 [VaultItemType.Card] 与 [VaultItemType.Identity]，
+ * 身份条目没有 `card` 载荷，走原来的分支会显示一行空白。
+ * ⚠️ 抽成纯函数，不把这一串类型判断加进 [CardWalletRow] 的圈复杂度。
+ */
+private fun walletSubtitle(item: VaultItem): String {
+    val card = item.card
+    val number = card?.number.orEmpty()
+    if (number.isNotBlank()) return maskCardNumber(formatCardNumberGrouped(number))
+    card?.cardholderName?.takeIf { it.isNotBlank() }?.let { return it }
+    if (item.type == VaultItemType.Identity) {
+        val name = listOf(item.identity?.firstName, item.identity?.lastName)
+            .filter { !it.isNullOrBlank() }
+            .joinToString(" ")
+        if (name.isNotBlank()) return name
+        if (item.username.isNotBlank()) return item.username
+    }
+    return ""
 }
 
 /**

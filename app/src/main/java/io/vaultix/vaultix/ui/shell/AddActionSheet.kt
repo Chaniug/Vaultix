@@ -15,30 +15,24 @@
  * ⇒ 卡包位置与身份完全不动，`currentTab` / `SaveableStateProvider` / `contentKey`
  *   一行不改；新增能力全部从「+」的动作面板进入。
  *
- * ## 2026-11-09 第二轮精装修（本文件布局重写）
+ * ## 2026-11-09 第三轮（22:20 用户真机反馈）
  *
- * - **主卡**：仍是当前 Tab 的默认新建动作，走 [VaultixNavItem.addTarget] 的原分发。
- *   「密码页 → 新建登录 / 验证码页 → 新建验证码 / 卡包页 → 新建银行卡」**一条未改**，
- *   只是从一条 Button 升成一张主色卡，作为面板里唯一的视觉焦点与唯一的 Filled。
- * - **网格**：其余条目类型改成 2 列 tonal 小卡，每格画该类型的**字段剪影**
- *   （磁条 / 文本行 / 头像 / 等宽字符），不是抽象图标。M3 对
- *   `ModalBottomSheet` 的内容布局没有规定，网格在规范内且零 alpha API。
- * - **工具条**：生成器从「第 7 个列表项」独立成底部胶囊 —— 它是动作不是条目类型。
+ * - **删掉「新建」标题**：它和下面的主卡说的是同一件事，白占一行高度。
+ *   面板顶部改留一段空白，主卡自己就是焦点。
+ * - **删掉生成器前的分隔线**：卡片之间本来就有间距，再画一条线是第二个分组信号。
+ * - **生成器改成通栏长条卡**：与类型卡同构（剪影在上、文字在下），
+ *   只是剪影形状是长条 —— 用形状区分「工具」而不是靠一条分隔线。
+ * - **剪影加颜色点缀**：每个类型取一组 M3 色板角色（primary / secondary /
+ *   tertiary 的 container 与 accent），不再全是灰蓝。⚠️ 全部走 `colorScheme`
+ *   角色，**不硬编码品牌色**，动态取色与 8.8 §6② 都不受影响。
  *
  * ⚠️ 用稳定的 `ModalBottomSheet`，不用 M3E 的 `FloatingActionButtonMenu`
  *    （8.8 §6①：alpha API 只用于叶子组件，不承载导航级动作）。
- * ⚠️ 面板里放 `Surface` 卡片，不是 Popup / DropdownMenu 选择器，
- *    不违反 8.4「Dialog / BottomSheet 里不做 Popup 选择器」。
+ * ⚠️ 面板里放 `Surface` 卡片，不是 Popup / DropdownMenu 选择器。
  * ⚠️ 独立生成器对话框由**宿主**渲染（[StandalonePasswordGeneratorDialog]）：
  *    若把开关留在本 composable 里，收起面板后它随组合一起销毁，对话框根本弹不出来。
- * ⚠️ 每个视觉块都抽成顶层 private composable：`AddActionSheet()` 本身要留足
- *    detekt `LongMethod ≤150` 的余量，且字段剪影各分支独立才不会互相改坏。
- *
- * ## 下一批（本轮明确不做）
- * 用户 21:11 拍板：身份 / 个人信息（以及将来的证照）条目以后要**在卡包页看得到**，
- * 卡包页原有内容不动、密码页仍是数据源、远程与 KDBX/Bitwarden 映射一概不动
- * ⇒ 纯客户端展示筛选（`CardWalletScreen` 从只筛 Card 放宽到 Card + Identity）
- * + 卡包页补类型筛选 chip。**本面板不做组合卡**，银行卡与身份仍是两个独立直达项。
+ * ⚠️ 每个视觉块都抽成顶层 private composable：`AddActionSheet()` 要留足
+ *    detekt `LongMethod ≤150` 与 `CyclomaticComplexMethod ≤14` 的余量。
  * ---------------------------------------------------------------------------
  */
 package io.vaultix.vaultix.ui.shell
@@ -65,9 +59,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Casino
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -89,9 +81,24 @@ import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.PasswordGeneratorDialog
 import io.vaultix.vaultix.ui.common.itemTypeLabelRes
 import io.vaultix.vaultix.ui.theme.Spacing
-import io.vaultix.vaultix.ui.theme.UiSize
 import io.vaultix.vaultix.ui.theme.VaultixCorner
 import kotlinx.coroutines.launch
+
+/** 一类条目的剪影配色：accent 画重点形状，tint 作卡片底色。 */
+private data class GlyphPalette(val accent: Color, val tint: Color)
+
+/** 全部取自 `colorScheme` 角色 —— 深浅主题 / 动态取色自动跟随，不写死色值。 */
+@Composable
+private fun glyphPalette(type: VaultItemType): GlyphPalette {
+    val scheme = MaterialTheme.colorScheme
+    return when (type) {
+        VaultItemType.Login -> GlyphPalette(scheme.primary, scheme.primaryContainer)
+        VaultItemType.SecureNote -> GlyphPalette(scheme.secondary, scheme.secondaryContainer)
+        VaultItemType.Card -> GlyphPalette(scheme.tertiary, scheme.tertiaryContainer)
+        VaultItemType.Identity -> GlyphPalette(scheme.primary, scheme.tertiaryContainer)
+        VaultItemType.SshKey -> GlyphPalette(scheme.secondary, scheme.primaryContainer)
+    }
+}
 
 /**
  * 「+」动作面板。
@@ -137,11 +144,8 @@ fun AddActionSheet(
                 .padding(bottom = Spacing.xl)
                 .navigationBarsPadding(),
         ) {
-            Text(
-                text = stringResource(R.string.dock_add_sheet_title),
-                style = MaterialTheme.typography.titleLarge,
-                modifier = Modifier.padding(horizontal = Spacing.xl, vertical = Spacing.lg),
-            )
+            // 22:20：删掉「新建」标题 —— 它与主卡重复，还占掉一整行。
+            Spacer(Modifier.height(Spacing.lg))
 
             // 8.4：同一屏只有一个 Filled 面 —— 主卡。它是当前 Tab 的默认新建动作，
             // 也是方案 A「1 步变 2 步」里那第二步的落点（拇指几乎在原处）。
@@ -166,10 +170,9 @@ fun AddActionSheet(
                 onPick = { type -> pick { onPickType(type) } },
             )
 
-            HorizontalDivider(
-                modifier = Modifier.padding(horizontal = Spacing.xl, vertical = Spacing.lg),
-            )
-            AddToolRow(onClick = { pick(onGeneratePassword) })
+            // 22:20：去掉分隔线，生成器自己成为一张通栏长条卡。
+            Spacer(Modifier.height(Spacing.sm))
+            AddGeneratorTile(onClick = { pick(onGeneratePassword) })
         }
     }
 }
@@ -177,17 +180,13 @@ fun AddActionSheet(
 /**
  * 网格里要显示的条目类型：**所有 Tab 恒定 4 个**。
  *
- * 规则：主卡已经表达了「当前 Tab 最常新建的类型」，网格里不再重复它。
+ * ⚠️ 验证码页的 [VaultixAddTarget.Totp] **没有**对应的 [VaultItemType]
+ *    （验证码不是条目类型，走 `totpAddRequest`），早期版本因此返回 null、
+ *    一格都不排除 ⇒ 用户反馈「验证码页 5 格、其余页 4 格」。
+ *    ⇒ 三个分支各排除一个，Totp 排除 [VaultItemType.Login]（登录在密码页有主卡直达）。
  *
- * ⚠️ 2026-11-09 用户反馈修复：验证码页的 [VaultixAddTarget.Totp] **没有**对应的
- *    [VaultItemType]（验证码不是条目类型，走 `totpAddRequest` 独立分发），
- *    早期版本因此返回 null、一格都不排除 ⇒ 验证码页 5 格、其余页 4 格。
- *    ⇒ 现在给 Totp 也排除 [VaultItemType.Login]：登录条目在密码页有主卡直达，
- *    是可达性损失最小的那一格。三个分支各排除一个 ⇒ 5 - 1 = 4，数量恒定。
- *
- * ⚠️ 不在面板里按库类型过滤：`ItemFormDialog` 已有 `fallbackFormType`
- * （把不在 selectableTypes 里的初始类型兜到该库支持的第一种），
- * 面板过滤反而要与库摘要加载时序做同步，是多余的第二个真源。
+ * ⚠️ 不在面板里按库类型过滤：`ItemFormDialog` 已有 `fallbackFormType`，
+ *    面板过滤反而要与库摘要加载时序做同步，是多余的第二个真源。
  */
 private fun standaloneTypes(currentTab: VaultixNavItem): List<VaultItemType> {
     val excluded = when (currentTab.addTarget) {
@@ -245,7 +244,7 @@ private fun AddHeroCard(
     }
 }
 
-/** 2 列网格；末行只有一格时用 Spacer 补位，保持两列对齐而不拉出一张突兀的宽卡。 */
+/** 2 列网格；末行只有一格时用 Spacer 补位，保持两列对齐。 */
 @Composable
 private fun AddTypeGrid(
     types: List<VaultItemType>,
@@ -274,23 +273,25 @@ private fun AddTypeGrid(
     }
 }
 
-/** 单个类型卡：字段剪影 + 类型名。颜色走 tonal 档，不抢主卡的焦点。 */
+/** 单个类型卡：彩色字段剪影 + 类型名，底色取该类型的 tonal 角色。 */
 @Composable
 private fun AddTypeTile(
     type: VaultItemType,
     onPick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val palette = glyphPalette(type)
     Surface(
         onClick = onPick,
         modifier = modifier.heightIn(min = 104.dp),
         shape = VaultixCorner.Panel,
-        color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.48f),
-        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        color = palette.tint.copy(alpha = 0.45f),
+        contentColor = MaterialTheme.colorScheme.onSurface,
     ) {
         Column(modifier = Modifier.padding(Spacing.md)) {
             ItemFieldGlyph(
                 type = type,
+                palette = palette,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(38.dp),
@@ -304,40 +305,41 @@ private fun AddTypeTile(
     }
 }
 
-/** 生成器：独立胶囊工具条，与「新建什么」拉开层级。 */
+/**
+ * 生成器：与类型卡**同构**的通栏卡（剪影在上、文字在下），
+ * 只是剪影是长条状 —— 靠形状而不是分隔线区分「工具」层级。
+ */
 @Composable
-private fun AddToolRow(onClick: () -> Unit, modifier: Modifier = Modifier) {
+private fun AddGeneratorTile(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val scheme = MaterialTheme.colorScheme
     Surface(
         onClick = onClick,
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = Spacing.xl)
-            .heightIn(min = 52.dp),
-        shape = VaultixCorner.Pill,
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        contentColor = MaterialTheme.colorScheme.onSurface,
+            .heightIn(min = 84.dp),
+        shape = VaultixCorner.Panel,
+        color = scheme.tertiaryContainer.copy(alpha = 0.42f),
+        contentColor = scheme.onTertiaryContainer,
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.md),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                imageVector = Icons.Filled.Casino,
-                contentDescription = null,
-                modifier = Modifier.size(UiSize.InlineIcon),
+        Column(modifier = Modifier.padding(Spacing.md)) {
+            GlyphGenerator(
+                accent = scheme.tertiary.copy(alpha = 0.85f),
+                line = scheme.onSurfaceVariant.copy(alpha = 0.30f),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(24.dp),
             )
-            Spacer(Modifier.width(Spacing.md))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = stringResource(R.string.dock_add_generate_password),
-                    style = MaterialTheme.typography.labelLarge,
-                )
-                Text(
-                    text = stringResource(R.string.dock_add_tool_subtitle),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+            Spacer(Modifier.height(Spacing.sm))
+            Text(
+                text = stringResource(R.string.dock_add_generate_password),
+                style = MaterialTheme.typography.labelLarge,
+            )
+            Text(
+                text = stringResource(R.string.dock_add_tool_subtitle),
+                style = MaterialTheme.typography.bodySmall,
+                color = scheme.onSurfaceVariant,
+            )
         }
     }
 }
@@ -346,17 +348,20 @@ private fun AddToolRow(onClick: () -> Unit, modifier: Modifier = Modifier) {
  * 条目类型的**字段剪影**：不画抽象图标，画这一类型条目长什么样。
  *
  * 银行卡画磁条 + 四位点、安全笔画三行文本、身份画头像 + 两行、SSH 画等宽字符块、
- * 登录画站点块 + 两行。扫一眼就知道要建的是哪种，比读文字快，也是密码管理器
- * 独有的表达。全部用 Compose 基础形状绘制，**不新增任何 vector 资源**。
+ * 登录画站点块 + 两行。全部用 Compose 基础形状绘制，**不新增任何 vector 资源**。
  */
 @Composable
-private fun ItemFieldGlyph(type: VaultItemType, modifier: Modifier = Modifier) {
-    val line = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.36f)
-    val accent = MaterialTheme.colorScheme.primary.copy(alpha = 0.58f)
+private fun ItemFieldGlyph(
+    type: VaultItemType,
+    palette: GlyphPalette,
+    modifier: Modifier = Modifier,
+) {
+    val line = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.34f)
+    val accent = palette.accent.copy(alpha = 0.82f)
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(9.dp))
-            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.72f))
+            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.78f))
             .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
         contentAlignment = Alignment.Center,
     ) {
@@ -380,6 +385,35 @@ private fun GlyphLine(width: Dp, color: Color) {
             .clip(RoundedCornerShape(2.dp))
             .background(color),
     )
+}
+
+/** 生成器剪影：一排等宽字符块，读作「刚生成的一串密码」。 */
+@Composable
+private fun GlyphGenerator(accent: Color, line: Color, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(accent.copy(alpha = 0.14f))
+            .padding(horizontal = Spacing.sm),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(3.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // 命名参数：detekt MagicNumber 只对未命名位置参数报错。
+            repeat(times = 12) {
+                Box(
+                    modifier = Modifier
+                        .width(6.dp)
+                        .height(10.dp)
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(accent),
+                )
+            }
+            GlyphLine(width = 14.dp, color = line)
+        }
+    }
 }
 
 @Composable
@@ -431,7 +465,6 @@ private fun GlyphCard(accent: Color, line: Color) {
                 .background(accent),
         )
         Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-            // 命名参数：detekt MagicNumber 只对未命名位置参数报错（见 config/detekt/detekt.yml）。
             repeat(times = 4) {
                 Box(
                     modifier = Modifier

@@ -83,9 +83,9 @@ import androidx.compose.ui.unit.dp
 /**
  * 模糊半径（dp）。
  *
- * 2026-11-09 精装修：24dp → **18dp**。24 是 Haze `HazeMaterials` 的默认值，
- * 但配上下面调淡后的填充，24 会把背后的条目糊得完全没有形状，
- * 用户想要的是「稍微看得出下面有东西」而不是一片雾。18dp 保留轮廓、去掉文字可读性。
+ * 2026-11-09 精装修：24dp → **16dp**。24 是 Haze `HazeMaterials` 的默认值，
+ * 但配上调淡后的填充，24 会把背后的条目糊得完全没有形状，
+ * 用户想要的是「稍微看得出下面有东西」而不是一片雾。16dp 保留轮廓、去掉文字可读性。
  * ⚠️ 只影响观感；`liquidGlassBackdrop` 的采样与层级结构一行未动。
  */
 private val BlurRadius = 18.dp
@@ -121,12 +121,14 @@ object LiquidGlass {
      * 深色主题下背景本身更暗、模糊结果更接近黑，填充再薄就分不清"玻璃"与"背景"。
      * Haze 五档**全部是深色更实**。
      *
-     * ⇒ 旧值取 **thin**（0.60 / 0.65）；本轮取 **0.40 / 0.55**：
-     * 浅色贴近 ultraThin，深色保守地停在 ultraThin 的 dark 值，
-     * 既让背后条目的色块透出来，又保住图标对比度与「深色更实」的规律。
+     * ⇒ 旧值取 **thin**（0.60 / 0.65）；精装修先降到 0.40 / 0.55，
+     *    22:20 用户真机反馈「常态还是看不到条目」后再降到 **0.38 / 0.52**
+     *    （对齐探索预览里 ③ ultraThin 档的浅色 0.38 / 深色 0.52）：
+     *    浅色贴近 ultraThin，深色保守地略低于 ultraThin 的 dark 值，
+     *    既让背后条目的色块透出来，又保住图标对比度与「深色更实」的规律。
      */
-    const val FILL_ALPHA_LIGHT = 0.40f
-    const val FILL_ALPHA_DARK = 0.55f
+    const val FILL_ALPHA_LIGHT = 0.38f
+    const val FILL_ALPHA_DARK = 0.52f
 
     /**
      * 降级（无模糊硬件能力）时**直接画实色**，而不是"半透明 + 一点补偿"。
@@ -325,7 +327,7 @@ private fun DrawScope.drawGlass(
     // 降级档不加 —— 不透明色再做渐变就是两块塑料，反而更廉价。
     drawRect(
         brush = if (blurAvailable) {
-            Brush.verticalGradient(listOf(fill, fill.copy(alpha = fill.alpha * 0.88f)))
+            Brush.verticalGradient(listOf(fill, fill.copy(alpha = fill.alpha * 0.94f)))
         } else {
             Brush.verticalGradient(listOf(fill, fill))
         },

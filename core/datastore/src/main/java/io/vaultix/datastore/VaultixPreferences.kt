@@ -173,7 +173,13 @@ class VaultixPreferences @Inject constructor(
         val TRASH_AUTO_DELETE_DAYS = intPreferencesKey("trash_auto_delete_days")
         val THEME_MODE = stringPreferencesKey("theme_mode")
         val OLED_PURE_BLACK = booleanPreferencesKey("oled_pure_black")
-        val LIQUID_GLASS_DOCK = booleanPreferencesKey("liquid_glass_dock")
+        // 2026-11-09 22:20：换 key，让「默认开」真正生效。
+        // 旧 key 里可能存着早期版本用户点过开关留下的 false，而旧版默认本来就是 false，
+        // 于是「从未主动选择」和「主动关过」在 DataStore 里无法区分 —— 用户装机后反馈
+        // 「常态下底栏仍不是半透明」正是这个存量值把新默认值挡住了。
+        // ⇒ 新 key 从「默认开」重新开始；之后用户显式关掉仍写这个 key，照常生效。
+        // ⚠️ 副作用：曾主动关过玻璃的用户会被重置一次为开，设置页里关一次即可。
+        val LIQUID_GLASS_DOCK = booleanPreferencesKey("liquid_glass_dock_v2")
         val AUTOFILL_SAVE_PROMPT = booleanPreferencesKey("autofill_save_prompt")
         val AUTO_COPY_TOTP = booleanPreferencesKey("auto_copy_totp")
         val AUTOFILL_BASE_DOMAIN_MATCH = booleanPreferencesKey("autofill_base_domain_match")
