@@ -40,10 +40,11 @@
 > 正确性依赖 `applyFolder` 是另一条独立路径；哪天有人把改文件夹塞进它，
 > 「只改位置、TOTP 不变」就会被整条跳过、静默失效。
 >
-> **CI 首轮就红**：`42562233722` 报两处 `LongMethod`（ItemsScreen 151、TotpEditDialog 163）。
-> 两处都没"再抽个新函数凑行数" —— 见提交 `66aa5c12` 的说明。
+> **CI 连红两轮**：`42562233722` 报两处 `LongMethod`（ItemsScreen 151、TotpEditDialog 163）；
+> `42563807567` 后 ItemsScreen 仍 151。**`42565083627` 全绿**。
+> 三处都没"再抽个新函数凑行数" —— 见提交 `66aa5c12` / `b2ca222a` 的说明。
 >
-> 提交 `805b64cc` / `66aa5c12`，`main` 已推，`rele` 未动。
+> 提交 `805b64cc` / `66aa5c12` / `b2ca222a`，`main` 已推，`rele` 未动。
 > 根因、三条修法、Compose 两个陷阱、**两条遗留** →
 > [`issues/06-界面与交互-part11.md`](./issues/06-界面与交互-part11.md) **#256**。
 >
