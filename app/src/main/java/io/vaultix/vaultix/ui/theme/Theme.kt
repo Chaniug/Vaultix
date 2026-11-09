@@ -84,6 +84,10 @@ fun VaultixTheme(
     MaterialTheme(
         colorScheme = colorScheme,
         shapes = VaultixShapes,
+        // 字阶是本项目**自己**的一份（中文适配），不是 M3 默认值 —— 见 [VaultixTypography]
+        // 的 KDoc。这里不传的话会静默退回拉丁文那套，表现为"中文正文偏挤、字距漏风"，
+        // 而且没有任何编译或门禁会报错。
+        typography = VaultixTypography,
         content = content,
     )
 }

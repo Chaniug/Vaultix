@@ -39,9 +39,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.SideEffect
@@ -573,7 +574,12 @@ private fun BoxScope.ActionBar(
                     destructive()
                     Spacer(Modifier.width(Spacing.xs))
                 }
-                OutlinedButton(onClick = onDismiss) {
+                // ⚠️ 2026-11-09：`OutlinedButton` → `TextButton`。改前「取消」与「保存」
+                //    都有可见轮廓（一个描边、一个实心），并排时是**两个同强度的形状**，
+                //    主次全靠颜色单挑。M3 里次要动作就是无框文字按钮 ——
+                //    轮廓只留给"也需要被看见但不必强调"的那一档，不应该和主操作抢。
+                //    ⚠️ 不要为了"让它更醒目"加回边框或提高字重：那正是这次要去掉的东西。
+                TextButton(onClick = onDismiss) {
                     Text(stringResource(R.string.action_cancel))
                 }
             }

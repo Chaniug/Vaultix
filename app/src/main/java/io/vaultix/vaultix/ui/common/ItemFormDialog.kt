@@ -401,9 +401,12 @@ private fun SectionLabel(text: String, icon: ImageVector) {
             imageVector = icon,
             contentDescription = null,
             modifier = Modifier.size(Spacing.lg),
-            // 11-07：小面积图标换 tertiary，给偏灰蓝的表单加一点活力；
-            // 不改字号 / 间距 / 主色，8.4 §74 的层级判定不受影响。
-            tint = MaterialTheme.colorScheme.tertiary,
+            // ⚠️ 2026-11-09：**从 tertiary 改成 primary**。此前图标是第三色、文字是主色，
+            //    两者相距 4dp 却属于两个不同色相 —— 同一行出现了两个"重点"，
+            //    互相削弱（8.4「一个元素只该说一件事」）。整行统一到 primary 后，
+            //    分区标题才是一个整体，而不是"一个图标 + 一句标题"。
+            //    ⚠️ 别再改回 tertiary「加点活力」：活力该由内容承担，标题只负责分层。
+            tint = MaterialTheme.colorScheme.primary,
         )
         Text(
             text = text,
@@ -573,7 +576,10 @@ internal fun FormGroupCard(content: @Composable ColumnScope.() -> Unit) {
     ) {
         Column(
             modifier = Modifier.fillMaxWidth()
-                .padding(horizontal = Spacing.lg, vertical = 20.dp),
+                // ⚠️ 2026-11-09：20.dp → Spacing.lg(16)。20 是 `Spacing` 标尺上**没有**的档，
+                //    属于"手写值"：审查时看不出它和 16 / 24 谁该更大，也没法被 grep 统计。
+                //    16dp 同时也是 `EntryCard` 的内边距 —— 表单卡与内容卡从此同一个值。
+                .padding(Spacing.lg),
             content = content,
         )
     }
