@@ -230,6 +230,21 @@ SSH 画等宽字符。用户扫一眼就知道要建的是哪种，比读文字�
 
 ---
 
+## 5.0 真机反馈修复（21:45）
+
+| 反馈 | 根因 | 修复 |
+|---|---|---|
+| 验证码页「+」展开 **5 格**，其他页 4 格 | `standaloneTypes()` 按主卡排除一个 `VaultItemType`，但 `VaultixAddTarget.Totp` **没有对应类型**（验证码不是条目类型，走 `totpAddRequest`），旧实现返回 null ⇒ 一格都没排除 | 三个 `addTarget` 分支各排除一个；Totp 排除 `Login`（登录在密码页有主卡直达，可达性损失最小）⇒ 所有 Tab **恒定 4 格** |
+| 所有页面搜索放大镜展开后**左边有个 X** | `SearchTopAppBar` 的 `navigationIcon` 用 `Icons.Filled.Close`，与右侧「有输入才出现」的清除 X **同形不同义**；且左边复用了 `clearIconContentDescription`，读屏念「清除搜索」但实际行为是退出搜索 | 左边改 `Icons.AutoMirrored.Filled.ArrowBack` + `R.string.action_back`；右侧清除 X 保留。改一处、四个页面同时生效 |
+
+⚠️ 取证结论：四个调用点（`ItemsScreen` / `CardWalletScreen` / `TotpCodesScreen` / `PasskeysScreen`）
+**全都有** `BackHandler(enabled = searchActive)` 兜底 ⇒ 返回键一样能收起搜索，
+左边箭头是**可见入口**而不是唯一入口。
+⇒ 若用户要的是「左边完全不放图标」，去掉 `navigationIcon` 即可，退出路径不受影响；
+但 M3 搜索栏展开态的标准形态是左侧返回控件，故本轮保留可见入口、只换掉叉号。
+
+---
+
 ## 5.1 P3（下一批，**本轮明确不做**）：卡包页的展示归置
 
 用户 21:14 的精确需求，复述备查：

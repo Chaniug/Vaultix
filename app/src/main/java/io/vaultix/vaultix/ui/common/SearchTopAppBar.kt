@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -30,8 +31,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.theme.Spacing
 
 /**
@@ -78,6 +81,14 @@ private val SEARCH_BAR_CORNER = 28.dp
  * 「交互框架（AppBar / 搜索）等 beta/stable 再换」，这里用稳定的 [TextField]
  * 自绘同样的观感，零 alpha API 依赖。
  *
+ * **2026-11-09 用户反馈：左侧叉号改成返回箭头。** 改前左侧 `navigationIcon` 用
+ * [Icons.Filled.Close]，与右侧「有输入才出现」的清除 X **同形不同义**，
+ * 且左侧的无障碍描述也复用了 [clearIconContentDescription]（读屏会念「清除搜索」，
+ * 实际行为却是退出搜索）。现在按 M3 搜索栏展开态的标准形态：
+ * 左侧返回箭头（[R.string.action_back]）、右侧清除 X，两者语义分开。
+ * ⚠️ 四个调用点都有 `BackHandler(enabled = searchActive)` 兜底，
+ *    就算用户不走这个箭头，系统返回键一样能收起搜索 —— 箭头是**可见**入口，不是唯一入口。
+ *
  * 调用方只需在 `searchActive` 为真时**整体替换**普通顶栏，切勿叠加。
  *
  * @param searchTerm 当前搜索词（受控）。
@@ -110,8 +121,8 @@ fun VaultixSearchTopAppBar(
         navigationIcon = {
             IconButton(onClick = onClose) {
                 Icon(
-                    Icons.Filled.Close,
-                    contentDescription = clearIconContentDescription,
+                    Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = stringResource(R.string.action_back),
                 )
             }
         },

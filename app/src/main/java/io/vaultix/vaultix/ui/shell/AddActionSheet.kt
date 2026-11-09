@@ -175,20 +175,27 @@ fun AddActionSheet(
 }
 
 /**
- * 当前 Tab 的默认动作对应的条目类型；验证码没有 [VaultItemType] 对应项，
- * 返回 null 表示「主卡不占用网格里的任何一格」。
+ * 网格里要显示的条目类型：**所有 Tab 恒定 4 个**。
+ *
+ * 规则：主卡已经表达了「当前 Tab 最常新建的类型」，网格里不再重复它。
+ *
+ * ⚠️ 2026-11-09 用户反馈修复：验证码页的 [VaultixAddTarget.Totp] **没有**对应的
+ *    [VaultItemType]（验证码不是条目类型，走 `totpAddRequest` 独立分发），
+ *    早期版本因此返回 null、一格都不排除 ⇒ 验证码页 5 格、其余页 4 格。
+ *    ⇒ 现在给 Totp 也排除 [VaultItemType.Login]：登录条目在密码页有主卡直达，
+ *    是可达性损失最小的那一格。三个分支各排除一个 ⇒ 5 - 1 = 4，数量恒定。
  *
  * ⚠️ 不在面板里按库类型过滤：`ItemFormDialog` 已有 `fallbackFormType`
  * （把不在 selectableTypes 里的初始类型兜到该库支持的第一种），
  * 面板过滤反而要与库摘要加载时序做同步，是多余的第二个真源。
  */
 private fun standaloneTypes(currentTab: VaultixNavItem): List<VaultItemType> {
-    val mainType = when (currentTab.addTarget) {
+    val excluded = when (currentTab.addTarget) {
         VaultixAddTarget.Login -> VaultItemType.Login
         VaultixAddTarget.Card -> VaultItemType.Card
-        VaultixAddTarget.Totp -> null
+        VaultixAddTarget.Totp -> VaultItemType.Login
     }
-    return VaultItemType.entries.filter { it != mainType }
+    return VaultItemType.entries.filter { it != excluded }
 }
 
 /** 主卡：当前 Tab 的默认新建动作，全屏唯一的主色面。 */
