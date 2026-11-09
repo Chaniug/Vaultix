@@ -82,10 +82,10 @@ jobs:
   # 才能看到结果 —— 而那正是沙箱里最想提前知道的那类错误。
   #
   # 模块清单与 `settings.gradle.kts` 对齐（没有 core/util）；
-# `data:bitwarden` / `core:database` / `core:datastore` 暂未纳入 —— 它们依赖的
-# Room / DataStore 生成物不在本工具的依赖清单里，纳入会直接编译失败（不是代码错）。
-#
-# 这个 job 用的是 `.ai/tools/typecheck_kotlin.sh`，也就是沙箱里跑**同一份脚本**
+  # `data:bitwarden` / `core:database` / `core:datastore` 暂未纳入 —— 它们依赖的
+  # Room / DataStore 生成物不在本工具的依赖清单里，纳入会直接编译失败（不是代码错）。
+  #
+  # 这个 job 用的是 `.ai/tools/typecheck_kotlin.sh`，也就是沙箱里跑**同一份脚本**
   # ⇒ 本地和 CI 的判定标准完全一致，不会出现"沙箱绿、CI 红"的意外。
   #
   # ## 为什么不在 CI 里跑 `--all app`
