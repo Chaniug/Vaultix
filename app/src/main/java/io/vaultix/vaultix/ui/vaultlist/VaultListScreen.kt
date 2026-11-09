@@ -4,6 +4,7 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -31,7 +33,11 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import kotlinx.coroutines.delay
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
@@ -42,7 +48,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeTopAppBar
@@ -65,7 +71,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -118,6 +123,27 @@ private const val SWITCH_PRELUDE_MS = 240L
 private const val SWITCH_BADGE_SCALE = 1.2f
 private const val BAR_ALPHA_IDLE = 0.4f
 private const val CARD_DIMMED_ALPHA = 0.42f
+
+/**
+ * 库卡装饰参数（2026-11-09 23:32 用户「库列表缺少装饰、比较单调」）。
+ *
+ * 装饰只用 **Material 图标 + 同一套 tonal 颜色**，不引数据、不引位图：
+ * - [CARD_TINT_ALPHA]：卡片底色取该库类型的 `container` 色，压到极淡。
+ *   三张卡因此不是三块同色白板，而是「蓝 / 绿 / 紫」三档极浅的色块。
+ * - [WATERMARK_ALPHA]：卡片右侧那枚放大到 [WATERMARK_SIZE] 的类型图标。
+ *   它和徽章**同一个图标、同一个 accent 色**，只是尺寸与透明度不同 ——
+ *   这是「一个系统的三种尺寸」，不是第二套装饰语言。
+ * - [WATERMARK_OFFSET_X]：向右出血的距离，让图标被卡片圆角裁掉一部分，
+ *   读作「图案从边缘延伸出去」而不是「贴了一个大图标」。
+ *
+ * ⚠️ 三个值都是观感旋钮：嫌花就降 [WATERMARK_ALPHA]，嫌淡就升 [CARD_TINT_ALPHA]。
+ */
+private val CARD_TINT_ALPHA = 0.10f
+private val WATERMARK_SIZE = 104.dp
+private val WATERMARK_ALPHA = 0.07f
+private val WATERMARK_OFFSET_X = 32.dp
+private val CARD_BORDER_WIDTH = 1.dp
+private val CARD_BORDER_ALPHA = 0.55f
 
 /**
  * 切库状态 + 「E 数据流」前置动画（P4-b，2026-11-09）。
@@ -242,9 +268,14 @@ fun VaultListScreen(
             // ⚠️ `null`（还不知道）时也不画：那一帧要么马上变成列表（按钮会突然冒出来），
             //    要么变成空态（按钮会闪一下又消失）。两种都是"凭空出现又消失的控件"。
             if (vaults?.isNotEmpty() == true) {
-                FloatingActionButton(onClick = { showAddDialog = true }) {
-                    Icon(Icons.Filled.Add, contentDescription = stringResource(R.string.vault_add_fab))
-                }
+                // 2026-11-09 23:32 用户「库列表缺少装饰、比较单调」⇒ 圆钮改 Extended FAB。
+                // 圆形「+」在这页里只是个孤零零的圆点（空态时还刻意不画），
+                // 带文字的胶囊既说明动作，也给出一个视觉锚点，把右下角那片空白收住。
+                ExtendedFloatingActionButton(
+                    onClick = { showAddDialog = true },
+                    icon = { Icon(Icons.Filled.Add, contentDescription = null) },
+                    text = { Text(stringResource(R.string.vault_add_fab)) },
+                )
             }
         },
     ) { padding ->
@@ -294,6 +325,12 @@ fun VaultListScreen(
                             ),
                             verticalArrangement = Arrangement.spacedBy(Spacing.md),
                         ) {
+                            // 库概览行（2026-11-09 23:32）：给列表一个「一共几个库、
+                            // 几个还锁着」的锚点。它同时是「大标题 → 列表」之间的一段呼吸，
+                            // 没有这行时两张卡直接贴在大标题下面，页面读起来是"一张图 + 几个框"。
+                            item(key = "vault-list-overview") {
+                                VaultListOverview(vaults = list)
+                            }
                             items(list, key = { it.id }) { vault ->
                                 VaultRow(
                                     vault = vault,
@@ -613,70 +650,118 @@ private fun VaultCard(
         animationSpec = tween(durationMillis = 160),
         label = "vaultCardAlpha",
     )
+    // 库身份（图标 / 强调色 / 容器色 / 形状）：卡片的色调底、右侧水印与徽章**同源**。
+    val identity = vaultIdentityOf(vault)
     Card(
         onClick = { if (!switching && !dimmed) onClick() },
         modifier = Modifier
             .fillMaxWidth()
             .graphicsLayer { alpha = cardAlpha },
         colors = CardDefaults.cardColors(
-            containerColor = scheme.surfaceContainerLow,
+            // 容器色 = 主题的 surfaceContainerLow 上叠一层**该库类型**的 container 色。
+            // 三张卡因此不是三块同色灰板，而是「蓝 / 绿 / 紫」三档极浅的色块；
+            // 用 compositeOver 而不是半透明 containerColor，是为了保住原有的层次
+            // （直接给 alpha 会透出 Scaffold 背景，卡片与底的关系反而消失）。
+            containerColor = identity.container
+                .copy(alpha = CARD_TINT_ALPHA)
+                .compositeOver(scheme.surfaceContainerLow),
+        ),
+        border = BorderStroke(
+            width = CARD_BORDER_WIDTH,
+            color = scheme.outlineVariant.copy(alpha = CARD_BORDER_ALPHA),
         ),
     ) {
-        Column {
-            // 上沿色条：切换时从 40% 亮到 100%，读作「数据正在灌进这个库」。
-            // ⚠️ 色条统一用 primary，不按库类型分色 —— 它表达的是「正在切换」，
-            //    按类型分色会让同一张卡出现两个颜色信号（8.4：一个元素说一件事）。
-            Box(
+        Box {
+            // 库类型水印（「库身份」的第二处复用：同图标、同 accent，只换尺寸与透明度）。
+            // 向右出血 [WATERMARK_OFFSET_X]，被卡片圆角裁掉一部分 ——
+            // 读作「图案从边缘延伸出去」，而不是「贴了一个大图标」。
+            Icon(
+                imageVector = identity.icon,
+                contentDescription = null,
+                tint = identity.accent,
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .height(3.dp)
-                    .background(scheme.primary.copy(alpha = barAlpha)),
+                    .align(Alignment.CenterEnd)
+                    .offset(x = WATERMARK_OFFSET_X)
+                    .size(WATERMARK_SIZE)
+                    .graphicsLayer { alpha = WATERMARK_ALPHA },
             )
-            Row(
-                modifier = Modifier.padding(
-                    start = Spacing.lg,
-                    top = Spacing.md,
-                    bottom = Spacing.lg,
-                    end = Spacing.xs,
-                ),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                // 库身份徽章（P4-a）：动效的 hero。缩放只作用于徽章，不动整张卡。
+            Column {
+                // 上沿色条：切换时从 40% 亮到 100%，读作「数据正在灌进这个库」。
+                // ⚠️ 色条统一用 primary，不按库类型分色 —— 它表达的是「正在切换」，
+                //    按类型分色会让同一张卡出现两个颜色信号（8.4：一个元素说一件事）。
                 Box(
-                    modifier = Modifier.graphicsLayer {
-                        scaleX = badgeScale
-                        scaleY = badgeScale
-                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(3.dp)
+                        .background(scheme.primary.copy(alpha = barAlpha)),
+                )
+                Row(
+                    modifier = Modifier.padding(
+                        start = Spacing.lg,
+                        top = Spacing.md,
+                        bottom = Spacing.lg,
+                        end = Spacing.xs,
+                    ),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    VaultIdentityBadge(vault = vault)
+                    // 库身份徽章（P4-a）：动效的 hero。缩放只作用于徽章，不动整张卡。
+                    Box(
+                        modifier = Modifier.graphicsLayer {
+                            scaleX = badgeScale
+                            scaleY = badgeScale
+                        },
+                    ) {
+                        VaultIdentityBadge(vault = vault)
+                    }
+                    Spacer(Modifier.width(Spacing.md))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(text = vault.name, style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            text = vaultSubtitle(vault),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        SyncStatusLine(syncStatus = syncStatus)
+                        // KDBX 网盘库的**持久**同步状态（与上面那个"本次同步进行到哪"不同，
+                        // 见 `KdbxCloudSyncStatus` 的说明）。null = 非网盘库，整行不渲染。
+                        KdbxSyncStatusLine(vault.syncStatus)
+                    }
+                    if (!vault.unlocked) {
+                        Icon(
+                            imageVector = Icons.Filled.Lock,
+                            contentDescription = stringResource(R.string.vault_badge_locked),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(UiSize.InlineIcon),
+                        )
+                    }
+                    VaultCardMenu(onRemove = onRemove, onSyncNow = onSyncNow)
                 }
-                Spacer(Modifier.width(Spacing.md))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(text = vault.name, style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        text = vaultSubtitle(vault),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    SyncStatusLine(syncStatus = syncStatus)
-                    // KDBX 网盘库的**持久**同步状态（与上面那个"本次同步进行到哪"不同，
-                    // 见 `KdbxCloudSyncStatus` 的说明）。null = 非网盘库，整行不渲染。
-                    KdbxSyncStatusLine(vault.syncStatus)
-                }
-                if (!vault.unlocked) {
-                    Icon(
-                        imageVector = Icons.Filled.Lock,
-                        contentDescription = stringResource(R.string.vault_badge_locked),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(UiSize.InlineIcon),
-                    )
-                }
-                VaultCardMenu(onRemove = onRemove, onSyncNow = onSyncNow)
             }
         }
     }
+}
+
+/**
+ * 库概览行：`3 个密码库 · 2 个已锁定`。
+ *
+ * 纯派生自 [vaults]，不引新数据源、不加 ViewModel 依赖。
+ * 「全部已解锁」时只报库数量 —— 说一句「0 个已锁定」是噪音。
+ */
+@Composable
+private fun VaultListOverview(vaults: List<VaultSummary>) {
+    val lockedCount = vaults.count { !it.unlocked }
+    Text(
+        text = if (lockedCount > 0) {
+            stringResource(R.string.vault_list_overview_locked, vaults.size, lockedCount)
+        } else {
+            stringResource(R.string.vault_list_overview, vaults.size)
+        },
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(start = Spacing.xs),
+    )
 }
 
 /**
@@ -710,53 +795,76 @@ private fun VaultRow(
 }
 
 /**
- * 库身份徽章（P4-a，2026-11-09）。
+ * 库身份（P4-a，2026-11-09；同日晚收成**一份定义**）。
  *
  * 图标 / 形状 / 颜色按**库类型**区分，全部取自 `colorScheme` 角色，不硬编码品牌色：
  * - 网盘来源（`syncStatus != null`）→ 圆形 + `secondaryContainer` + 云同步图标；
  * - 本地 KDBX → 圆角方 + `tertiaryContainer` + 文件图标；
  * - 云端 Bitwarden → 大圆角 + `primaryContainer` + 云图标。
  *
+ * ⚠️ **一次定义、三处复用**：徽章、[VaultCard] 右侧的出血水印、卡片极淡的类型色调底。
+ *    三处同源才不会出现「同一个库在不同地方长得不一样」——8.4 记着
+ *    「一屏两套规格」是观感廉价的首要来源。
  * ⚠️ 它同时是切库动效的 hero（[VaultCard] 里的 `badgeScale`）：没有这枚徽章，
  *    E 方案的「徽章先亮 → 数据流入」就没有可联动的对象，只能退回整屏淡入。
  */
+private data class VaultIdentity(
+    val icon: ImageVector,
+    val accent: Color,
+    val container: Color,
+    val shape: Shape,
+)
+
+/** 三种库身份的容器形状（提到顶层：避免每次重组都新建 `Shape` 对象）。 */
+private val BadgeShapeCloudSynced = RoundedCornerShape(percent = 50)
+private val BadgeShapeLocalKdbx = RoundedCornerShape(14.dp)
+private val BadgeShapeCloud = RoundedCornerShape(18.dp)
+
 @Composable
-private fun VaultIdentityBadge(vault: VaultSummary, modifier: Modifier = Modifier) {
+private fun vaultIdentityOf(vault: VaultSummary): VaultIdentity {
     val scheme = MaterialTheme.colorScheme
     val cloudSynced = vault.syncStatus != null
     val localKdbx = vault.kind == VaultKind.KDBX
+    return when {
+        cloudSynced -> VaultIdentity(
+            icon = Icons.Filled.CloudSync,
+            accent = scheme.secondary,
+            container = scheme.secondaryContainer,
+            shape = BadgeShapeCloudSynced,
+        )
+
+        localKdbx -> VaultIdentity(
+            icon = Icons.Filled.Description,
+            accent = scheme.tertiary,
+            container = scheme.tertiaryContainer,
+            shape = BadgeShapeLocalKdbx,
+        )
+
+        else -> VaultIdentity(
+            icon = Icons.Filled.Cloud,
+            accent = scheme.primary,
+            container = scheme.primaryContainer,
+            shape = BadgeShapeCloud,
+        )
+    }
+}
+
+/** 库身份徽章：`VaultIdentity` 的第一处复用（48dp 实色容器 + 24dp 图标）。 */
+@Composable
+private fun VaultIdentityBadge(vault: VaultSummary, modifier: Modifier = Modifier) {
+    val identity = vaultIdentityOf(vault)
     Box(
         modifier = modifier
             .size(UiSize.TouchTarget)
-            .clip(
-                when {
-                    cloudSynced -> RoundedCornerShape(percent = 50)
-                    localKdbx -> RoundedCornerShape(14.dp)
-                    else -> RoundedCornerShape(18.dp)
-                },
-            )
-            .background(
-                when {
-                    cloudSynced -> scheme.secondaryContainer
-                    localKdbx -> scheme.tertiaryContainer
-                    else -> scheme.primaryContainer
-                },
-            ),
+            .clip(identity.shape)
+            .background(identity.container),
         contentAlignment = Alignment.Center,
     ) {
         Icon(
-            imageVector = when {
-                cloudSynced -> Icons.Filled.CloudSync
-                localKdbx -> Icons.Filled.Description
-                else -> Icons.Filled.Cloud
-            },
+            imageVector = identity.icon,
             contentDescription = null,
-            tint = when {
-                cloudSynced -> scheme.secondary
-                localKdbx -> scheme.tertiary
-                else -> scheme.primary
-            },
-            modifier = Modifier.size(24.dp),
+            tint = identity.accent,
+            modifier = Modifier.size(UiSize.BadgeIcon),
         )
     }
 }

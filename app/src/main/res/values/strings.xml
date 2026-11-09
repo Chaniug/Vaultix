@@ -20,6 +20,9 @@
 
     <!-- 库列表 S3 -->
     <string name="vault_list_title">我的密码库</string>
+    <!-- 库概览行（2026-11-09）：大标题与第一张卡之间的锚点。全解锁时不报「0 个已锁定」。 -->
+    <string name="vault_list_overview">%1$d 个密码库</string>
+    <string name="vault_list_overview_locked">%1$d 个密码库 · %2$d 个已锁定</string>
     <!--
       空态页（首次启动）：标题用**应用名**而不是「还没有密码库」——
       用户 2026-09-14 反馈「能不能换成软件的名字」：首次打开应该先亮明「这是谁」，
