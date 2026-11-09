@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -56,8 +57,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TextField
-import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -71,6 +70,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
@@ -790,14 +790,30 @@ private fun FormHeader(
  * `OutlinedTextField`，它在视觉上就与"用户名""密码"完全同类，读者只能靠
  * 位置和 label 判断谁是主标识 —— 那是让用户读结构，而不是让结构自己说话。
  *
- * ⇒ 改用无框 `TextField`（`BasicTextField` 的 M3 封装，自带下划线与光标）+ `headlineSmall`。
- *   下划线是 M3 里"可编辑但非表单字段"的标准表达（日期选择器的输入框同款），
- *   既保留了"这里能打字"的提示，又不给它一张输入框的框。
+ * ## 2026-11-09 第二轮：从「无框 TextField」再退一步到 `BasicTextField`
  *
- * ⚠️ 收藏星标留在同一行右侧：它与名称是**同一件事**（我怎么称呼/标记这条），
- *    分开会让它变成一行孤零零的图标。
- * ⚠️ 出错提示仍走 `supportingText` 语义（红字在下划线下方），
- *    必填星号仍由 [FormFieldLabel] 补 —— 校验反馈不变，只是外观变了。
+ * 上一版用了 M3 的无框 `TextField`（带下划线）。用户看到后反馈：
+ * 「这个填写名称是否太简陋啊」。确实简陋 —— 而且原因不是"不够花哨"，是**矛盾**：
+ *
+ * - 下划线在 M3 里确实表示"可编辑"，但它同时也是**未完成的表单字段**的外观
+ *   （Material 的下划线输入框就是"待填"的标准像）；
+ * - 而这里已经给了 `headlineSmall` 字号，是想表达"这是标题"。
+ *
+ * 一个元素同时说"我是标题"和"我是待填字段"，两种语义互相拆台，读起来就是"简陋"
+ * ——不是少画了装饰，是**没有一个明确的主张**。
+ *
+ * ⇒ 明确主张：**它是标题，不是表单字段**。于是：
+ * - 去掉下划线（那是表单字段的语法，标题不需要）；
+ * - 字段名独立成一行 `labelLarge` + `primary`，与表单里其它字段名同一档字号，
+ *   但用主色标记"这是主标识"；
+ * - 空值时用 `item_name_placeholder` 占位（"未命名条目"），而不是让用户面对一条空白下划线
+ *   —— **空标题也有话说**，这是"简陋"的另一半来源；
+ * - 光标用 `SolidColor(primary)`，即使没有下划线和框，聚焦时仍有明确的视觉反馈。
+ *
+ * ⚠️ 收藏星标留在同一行右侧、且 `Top` 对齐：它与名称是**同一件事**（我怎么称呼/标记这条），
+ *    分开会让它变成一行孤零零的图标；而居中对齐会在长标题换行时让它"飘"到中间。
+ * ⚠️ 出错提示改为字段名下的一行红字（原来走 `supportingText`，那只属于 TextField）。
+ *    校验时机没变：仍在点「保存」时检查，不是边打字边报错。
  */
 @Composable
 private fun ItemIdentityHeader(
@@ -807,28 +823,56 @@ private fun ItemIdentityHeader(
     onFavoriteChange: (Boolean) -> Unit,
     showError: Boolean,
 ) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
+    Row(
+        // `Top` 而不是 `CenterVertically`：名称一旦换成两行（长标题）或出现错误提示，
+        // 星标若跟着居中就会在视觉上"飘"到中间，脱离它所属的那一行文字。
+        verticalAlignment = Alignment.Top,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
         Column(modifier = Modifier.weight(1f)) {
-            TextField(
+            // 字段名走 labelLarge + primary，与表单里其余字段名的 14sp 同一档 ——
+            // 但**颜色**不同：这是本页的主标识，label 也该是 primary 而不是灰字。
+            Text(
+                text = stringResource(R.string.item_field_name) + "*",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(bottom = Spacing.xs),
+            )
+            // 名称输入：**不用 `TextField` 的下划线，也不套输入框**。
+            // 下划线在 M3 里确实表示"可编辑"，但它同时也是"未完成的表单字段"的外观；
+            // 页面级主标识不该长成"待填的表单"，而应该是一个**已经写着内容的大标题**。
+            // 空的名称因此显示占位文案（"未命名条目"），而不是让用户面对一条空白下划线。
+            BasicTextField(
                 value = name,
                 onValueChange = onNameChange,
-                label = { FormFieldLabel(R.string.item_field_name, required = true) },
-                textStyle = MaterialTheme.typography.headlineSmall,
-                singleLine = true,
-                isError = showError,
-                supportingText = if (showError) {
-                    { Text(stringResource(R.string.item_name_required)) }
-                } else {
-                    null
-                },
-                colors = TextFieldDefaults.colors(
-                    // 无框 ⇒ 容器一律透明，否则会出现一块比宿主更亮的矩形。
-                    focusedContainerColor = Color.Transparent,
-                    unfocusedContainerColor = Color.Transparent,
-                    errorContainerColor = Color.Transparent,
+                textStyle = MaterialTheme.typography.headlineSmall.copy(
+                    color = MaterialTheme.colorScheme.onSurface,
                 ),
+                singleLine = true,
+                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                decorationBox = { inner ->
+                    Box {
+                        // 占位：只在真的为空时出现，且颜色只用 onSurfaceVariant（不用 alpha 叠色）。
+                        if (name.isEmpty()) {
+                            Text(
+                                text = stringResource(R.string.item_name_placeholder),
+                                style = MaterialTheme.typography.headlineSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        inner()
+                    }
+                },
                 modifier = Modifier.fillMaxWidth(),
             )
+            if (showError) {
+                Text(
+                    text = stringResource(R.string.item_name_required),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(top = Spacing.xs),
+                )
+            }
         }
         IconButton(onClick = { onFavoriteChange(!favorite) }) {
             Icon(

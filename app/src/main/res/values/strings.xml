@@ -1064,6 +1064,7 @@
     <string name="item_remove_field">删除此字段</string>
     <string name="item_reveal_value">显示/隐藏值</string>
     <string name="item_name_required">名称不能为空</string>
+    <string name="item_name_placeholder">未命名条目</string>
     <!-- 密码强度（评分卡移植 Bastion，见 core:common PasswordStrength 溯源声明） -->
     <string name="password_strength_weak">弱</string>
     <string name="password_strength_fair">一般</string>
@@ -1314,7 +1315,10 @@
     <string name="custom_field_boolean_yes">是</string>
     <string name="custom_field_boolean_no">否</string>
     <string name="custom_field_linked_unknown">关联字段 #%1$d</string>
-    <string name="uri_type_android_app">应用</string>
+    <string name="section_apps">关联应用</string>
+    <string name="app_bound_installed">已安装 · 自动填充会匹配到此应用</string>
+    <string name="app_bound_not_installed">本机未安装该应用</string>
+    <string name="item_open_app">打开应用</string>
     <string name="linked_username">用户名</string>
     <string name="linked_password">密码</string>
     <string name="linked_uri">网址</string>

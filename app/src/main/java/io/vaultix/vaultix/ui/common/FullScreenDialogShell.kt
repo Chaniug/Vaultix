@@ -423,10 +423,11 @@ fun FullScreenDialogShell(
                         .verticalScroll(scrollState)
                         .padding(horizontal = Spacing.xl)
                         .padding(
-                            // ⚠️ `+ CONTENT_BAR_GAP`：让位只保证"不被栏遮住"，
-                            //    呼吸位另加（见该常量的 KDoc —— 顶部原本是零间距）。
-                            top = contentClearance(statusBar, TITLE_BAR_HEIGHT) + CONTENT_BAR_GAP,
-                            bottom = contentClearance(navBar, ACTION_BAR_HEIGHT) + CONTENT_BAR_GAP,
+                            // ⚠️ 让位只保证"不被栏遮住"，呼吸位另加；顶部与底部取值不同，
+                            //    理由见 CONTENT_BAR_GAP_TOP 的 KDoc（2026-11-09 实测 40dp）。
+                            top = contentClearance(statusBar, TITLE_BAR_HEIGHT) + CONTENT_BAR_GAP_TOP,
+                            bottom = contentClearance(navBar, ACTION_BAR_HEIGHT) +
+                                CONTENT_BAR_GAP_BOTTOM,
                         ),
                     content = content,
                 )
@@ -673,8 +674,34 @@ internal fun contentClearance(systemBarInset: Dp, barHeight: Dp): Dp =
  * 与顶部的问题同源。加完之后，滚到底时末元素与底部栏之间同样有 16dp。
  * ⚠️ 加间距**只增不减**让位，故"内容不钻到栏下"这条不变式**依然成立**
  * （见 [contentClearance] 的 KDoc）。
+ *
+ * ## 🔴 2026-11-09 第二轮：16dp 的"呼吸位"在表单页实际是 **40dp**
+ *
+ * 用户反馈：「新建条目的标题与下方内容区块好像也存在了一定的空隙留白」。
+ * 实物量下来确实是 40dp，不是 16dp —— 因为**两处叠加**：
+ *
+ * | 来源 | 高度 |
+ * |---|---|
+ * | 本常量（栏 → 正文） | 16dp |
+ * | 名称输入自身（`TextField` 的容器留白 + 基线） | ~24dp |
+ *
+ * 而表单里**卡片 ↔ 卡片**只要 `Spacing.xl`(24dp)。于是标题离正文比正文自己内部还远
+ * —— 间距阶梯倒挂：读者看到的是"标题与内容无关，卡片之间才是一伙的"。
+ *
+ * ⇒ 本常量降到 [Spacing.sm](8dp)：栏 → 身份区 ≈ 8 + 24 = **32dp**，
+ *   与"页大标题 ↔ 第一段内容"该有的量级相符（远小于之前的 40，仍明显大于 24）。
+ * ⚠️ 只降**顶部**：底部沿用 16dp，那里没有"自身留白"叠加，16dp 是真实值。
  */
-private val CONTENT_BAR_GAP = Spacing.lg
+private val CONTENT_BAR_GAP_TOP = Spacing.sm
+
+/**
+ * 正文与**底部**操作条之间的呼吸间距。
+ *
+ * 取 `Spacing.lg`(16dp) 的理由见 [CONTENT_BAR_GAP_TOP] 的 KDoc 上半段
+ * （与列表页 / 设置页的 16dp 节奏一致）。
+ * ⚠️ 底部**不收窄**：这里没有"元素自身留白"叠加，16dp 就是肉眼看到的 16dp。
+ */
+private val CONTENT_BAR_GAP_BOTTOM = Spacing.lg
 
 /**
  * M3 按钮的**最小触摸目标高度**（`ButtonDefaults.MinHeight` / `IconButton` 的 48dp 规范值）。

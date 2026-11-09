@@ -107,8 +107,10 @@ import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.foundation.clickable
+import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Notes
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -421,10 +423,11 @@ private fun DetailSections(
                 onCopyPassword = actions.onCopyPassword,
             )
         }
-        if (item.uris.isNotEmpty()) {
-            Spacer(Modifier.height(Spacing.md))
-            UrisSection(item = item, onCopyUri = actions.onCopyUri)
-        }
+        // 网址与应用分两区（2026-11-09）：同一张卡里混着 https:// 与 com.xxx 包名会看错。
+        // ⚠️ 各自内部判空（只含应用时网址区整块消失），这里不能再用 `item.uris.isNotEmpty()`
+        //    闸门 —— 那会让"只有应用"的条目渲染出一张空的网址卡。
+        UrisSection(item = item, onCopyUri = actions.onCopyUri)
+        AppsSection(item = item)
         if (item.totp != null) {
             Spacer(Modifier.height(Spacing.md))
             // 默认**不显示**验证码：点分区里的眼睛才显示（详情页不跑定时器，见 [TotpSection]）。
@@ -1034,8 +1037,13 @@ private const val URIS_VISIBLE_COLLAPSED = 3
 private fun UrisSection(item: VaultItem, onCopyUri: (String) -> Unit) {
     val context = LocalContext.current
     var expanded by rememberSaveable { mutableStateOf(false) }
-    val visible = if (expanded) item.uris else item.uris.take(URIS_VISIBLE_COLLAPSED)
-    val hidden = item.uris.size - visible.size
+    // ⚠️ 2026-11-09：只把**网址**放进这一区。此前应用（`androidapp://`）也混在里面，
+    //    同一个「网址」卡里既有 `https://…` 又有包名 —— 两类东西共用一张卡和一条分区标题，
+    //    用户扫过去只能靠"这一行长得像包名"自己分辨（见 [AppsSection]）。
+    val webUris = remember(item.uris) { item.uris.filter { UriFormat.classify(it.uri) !is UriKind.AndroidApp } }
+    if (webUris.isEmpty()) return
+    val visible = if (expanded) webUris else webUris.take(URIS_VISIBLE_COLLAPSED)
+    val hidden = webUris.size - visible.size
     Column {
         SectionTitle(text = stringResource(R.string.section_uris), icon = Icons.Filled.Language)
         DetailCard {
@@ -1048,22 +1056,11 @@ private fun UrisSection(item: VaultItem, onCopyUri: (String) -> Unit) {
                         )
                     }
                     val kind = UriFormat.classify(v.uri)
-                    val canOpen = when (kind) {
-                        is UriKind.Website -> true
-                        is UriKind.AndroidApp -> isAppInstalled(context, kind.packageName)
-                        is UriKind.Other -> false
-                    }
                     UriRow(
                         kind = kind,
-                        canOpen = canOpen,
+                        canOpen = kind is UriKind.Website,
                         onCopy = { onCopyUri(v.uri) },
-                        onOpen = {
-                            when (kind) {
-                                is UriKind.Website -> openUri(context, kind.raw)
-                                is UriKind.AndroidApp -> launchAndroidApp(context, kind.packageName)
-                                is UriKind.Other -> { }
-                            }
-                        },
+                        onOpen = { openUri(context, kind.raw) },
                     )
                 }
                 // 只有真的藏了东西（或正在展开）才画这一行：1~3 条的条目
@@ -1082,6 +1079,112 @@ private fun UrisSection(item: VaultItem, onCopyUri: (String) -> Unit) {
             }
         }
     }
+}
+
+/**
+ * 应用分区（2026-11-09 从 [UrisSection] 里拆出来）。
+ *
+ * ## 为什么必须独立成区
+ *
+ * 用户反馈：「展示的时候，关联的应用好像是和网址放在同一区域显示，容易看错吧。」
+ * 此前应用是 `item.uris` 里的一种（Bitwarden 用 `androidapp://<包名>` 表示应用绑定），
+ * 于是「网址」卡里同时出现 `https://xui.ptlogin2.qq.com/…` 和 `com.tencent.mobileqq`，
+ * 中间只隔一条分隔线、标题还叫「网址」—— 用户得靠"这行像不像域名"来分辨。
+ *
+ * 两者是**不同的东西**：网址是"去哪个地址"，应用是"这个条目归哪个 App 自动填充"。
+ * ⇒ 分卡 + 独立标题，一眼能分开。
+ *
+ * ## 为什么应用行**没有**复制按钮
+ *
+ * 用户原话：「为什么会有一个能复制的按钮」。答案很简单：**没人需要把包名粘贴到别处**。
+ * 复制按钮是给"要拿去用"的值准备的（用户名、密码、网址可以粘到登录框/浏览器），
+ * 而包名是内部标识 —— 用户能对它做的唯一动作是「打开这个 App」。
+ * ⇒ 应用行只留"打开"，不留"复制"。
+ *
+ * ⚠️ 未安装的 App 仍然保留一行（而不是隐藏）：用户需要知道"这条绑了一个 App，
+ *    只是我手机上没装"，否则自动填充为什么不生效就成了谜。
+ */
+@Composable
+private fun AppsSection(item: VaultItem) {
+    val context = LocalContext.current
+    val apps = remember(item.uris) {
+        item.uris.mapNotNull { UriFormat.classify(it.uri) as? UriKind.AndroidApp }
+    }
+    if (apps.isEmpty()) return
+    Spacer(Modifier.height(Spacing.md))
+    Column {
+        SectionTitle(text = stringResource(R.string.section_apps), icon = Icons.Filled.PhoneAndroid)
+        DetailCard {
+            Column {
+                apps.forEachIndexed { index, kind ->
+                    if (index > 0) {
+                        HorizontalDivider(
+                            modifier = Modifier.padding(start = Spacing.lg),
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                        )
+                    }
+                    AppRow(
+                        packageName = kind.packageName,
+                        installed = isAppInstalled(context, kind.packageName),
+                        onOpen = { launchAndroidApp(context, kind.packageName) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 一行"关联的应用"：应用名 + 包名（副标题）+ 打开按钮。
+ *
+ * ⚠️ 不做"应用名解析"：读另一个 App 的 label 要 `PackageManager.getApplicationInfo`，
+ *    未安装时抛异常、装了也可能因权限拿不到 —— 代价过高。包名本身就足够定位，
+ *    且与 Bitwarden 其它客户端一致。
+ */
+@Composable
+private fun AppRow(packageName: String, installed: Boolean, onOpen: () -> Unit) {
+    ListItem(
+        leadingContent = {
+            Icon(
+                imageVector = Icons.Filled.PhoneAndroid,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(UiSize.InlineIcon),
+            )
+        },
+        headlineContent = {
+            Text(
+                text = packageName,
+                style = MaterialTheme.typography.bodyLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        },
+        supportingContent = {
+            Text(
+                text = stringResource(
+                    if (installed) R.string.app_bound_installed else R.string.app_bound_not_installed,
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        },
+        trailingContent = if (installed) {
+            {
+                IconButton(onClick = onOpen) {
+                    Icon(
+                        Icons.Filled.OpenInNew,
+                        contentDescription = stringResource(R.string.item_open_app),
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(UiSize.InlineIcon),
+                    )
+                }
+            }
+        } else {
+            null
+        },
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+    )
 }
 
 /**
@@ -1118,10 +1221,12 @@ private fun UriExpandRow(hidden: Int, expanded: Boolean, onToggle: () -> Unit) {
 }
 
 /**
- * 单个 URI 行：[UriKind] 决定展示形态：
- * - [UriKind.AndroidApp]：显示「应用」标签 + 包名，已安装才出现打开按钮；
- * - [UriKind.Website]：显示原始网址，点击在浏览器打开；
- * - [UriKind.Other]：原样展示，无打开动作。
+ * 单个网址行：显示原始网址，[canOpen] 为真时多一个"在浏览器打开"。
+ *
+ * ⚠️ 2026-11-09：应用（`androidapp://`）**不再走这里**，已移到 [AppsSection]。
+ *    此前本行同时承担"网址"与"应用"两种形态（应用显示「应用」标签 + 包名），
+ *    结果是同一张卡里两种行长得差不多、只有一个 12sp 小标签区分 —— 用户会看错。
+ *    现在本行只剩网址与非网址 URI 两种，形态单一。
  */
 @Composable
 private fun UriRow(kind: UriKind, canOpen: Boolean, onCopy: () -> Unit, onOpen: () -> Unit) {
@@ -1132,26 +1237,12 @@ private fun UriRow(kind: UriKind, canOpen: Boolean, onCopy: () -> Unit, onOpen: 
             .padding(start = Spacing.lg, end = Spacing.sm, top = Spacing.xs, bottom = Spacing.xs),
     ) {
         Column(modifier = Modifier.weight(1f).padding(end = Spacing.xs)) {
-            if (kind is UriKind.AndroidApp) {
-                Text(
-                    text = stringResource(R.string.uri_type_android_app),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    text = kind.packageName,
-                    style = MaterialTheme.typography.bodyLarge,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            } else {
-                Text(
-                    text = kind.raw,
-                    style = MaterialTheme.typography.bodyLarge,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
+            Text(
+                text = kind.raw,
+                style = MaterialTheme.typography.bodyLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
         if (canOpen) {
             IconButton(onClick = onOpen) {
