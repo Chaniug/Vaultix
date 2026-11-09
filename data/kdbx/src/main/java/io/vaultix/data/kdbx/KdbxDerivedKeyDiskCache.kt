@@ -54,6 +54,22 @@
  *
  * ⇒ 提供 [installKdbxDerivedKeyDiskCache] 的 `enabled` 开关：置 false 即完全不落盘，
  *    退回 #246 第五批的纯内存语义。
+ *
+ * ## ⚠️ CodeQL #15 / #16 已评估并 dismiss（2026-11-10）
+ *
+ * 规则 `java/android/insecure-local-key-gen`（"Insecurely generated keys for local
+ * authentication"）在 [AndroidDerivedKeyDiskCache.obtainOrCreateKey] 的
+ * `setUserAuthenticationRequired(false)` 上报了两条。评估结论：**规则的模式匹配成立，
+ * 但它假设的威胁场景不适用** —— 规则标题的前提是「这把密钥用于本地认证」，而本缓存
+ * 的密钥只包裹 KDF 派生结果、不参与任何认证流程。
+ *
+ * GitHub 告警上挂的 dismiss 理由是：
+ * 「设计取舍非缺陷：密钥包裹 KDBX 的 32B transformedKey，不含主密码/明文，不用于
+ *   本地认证。落盘因真机 Argon2 单次约 30s，内存缓存盖不住冷启动。补偿：TEE 不可
+ *   导出密钥 + 沙箱 + 锁屏；与 AutoUnlockKeyStore（落主密码）同级，enabled=false 可关闭。」
+ *
+ * ⇒ **若未来把这把密钥改作任何认证用途，必须回来重新评估这两条** ——
+ *    那时「不用于本地认证」这个前提就不成立了。
  * ---------------------------------------------------------------------------
  */
 package io.vaultix.data.kdbx
