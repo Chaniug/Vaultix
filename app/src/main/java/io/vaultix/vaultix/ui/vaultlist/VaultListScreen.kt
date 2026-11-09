@@ -142,12 +142,12 @@ private const val CARD_DIMMED_ALPHA = 0.42f
  *
  * ⚠️ 四个值都是观感旋钮：嫌花就降 [WATERMARK_ALPHA]，嫌淡就升 [CARD_TINT_ALPHA]。
  */
-private val CARD_TINT_ALPHA = 0.10f
+private const val CARD_TINT_ALPHA = 0.10f
 private val WATERMARK_SIZE = 84.dp
-private val WATERMARK_ALPHA = 0.07f
+private const val WATERMARK_ALPHA = 0.07f
 private val WATERMARK_OFFSET_X = 30.dp
 private val CARD_BORDER_WIDTH = 1.dp
-private val CARD_BORDER_ALPHA = 0.55f
+private const val CARD_BORDER_ALPHA = 0.55f
 
 /**
  * 切库状态 + 「E 数据流」前置动画（P4-b，2026-11-09）。
