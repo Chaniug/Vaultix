@@ -417,6 +417,8 @@
     <string name="permission_footer">系统的权限开关始终以系统设置为准。这一页只是把「要什么、做什么用」摊开讲清楚。</string>
     <string name="group_about">关于</string>
     <string name="action_close">关闭</string>
+    <!-- 搜索框尾部的 ✕：清掉已经输入的关键字，不是关掉搜索框本身。 -->
+    <string name="action_clear">清除</string>
     <!-- 开发者模式（仅 debug 构建可见，2026-09-21）。
          ⚠️ 日志只含**本应用进程**的条目（Android 4.1+ 无 READ_LOGS 时只能读自己的），
          跨进程/系统组件的日志仍须用 adb —— 界面上那句 scope_hint 就是讲这件事。 -->

@@ -1,24 +1,28 @@
 package io.vaultix.vaultix.ui.common
 
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExposedDropdownMenuBox
-import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -29,8 +33,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
 import io.vaultix.model.VaultFido2Credential
 import io.vaultix.model.VaultItem
 import io.vaultix.vaultix.R
@@ -41,8 +49,13 @@ import io.vaultix.vaultix.ui.theme.Spacing
  *
  * 对齐 Bitwarden / Keyguard：通行密钥必须绑定到登录条目，不存在独立通行密钥条目。
  * 调用方负责在 onSave 中把凭证追加进目标登录条目的 fido2 列表。
+ *
+ * ## 两态对话框（2026-11-09 重构，修用户反馈的两个 bug）
+ *
+ * 表单态 ⇄ 选择态在**同一个 `AlertDialog` 内**切换，选择态不是弹层。
+ * 原因见 [PasskeyLoginPicker] 的 KDoc —— 上一版把搜索框塞进 `ExposedDropdownMenu`，
+ * 既打不了字，列表还会溢出对话框。
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SavePasskeyDialog(
     candidates: List<VaultItem>,
@@ -50,169 +63,258 @@ fun SavePasskeyDialog(
     onSave: (loginId: String, credential: VaultFido2Credential) -> Unit,
 ) {
     var selectedLogin by remember { mutableStateOf(candidates.firstOrNull()) }
-    var rpId by remember { mutableStateOf("") }
-    var rpName by remember { mutableStateOf("") }
-    var userName by remember { mutableStateOf("") }
-    var userDisplayName by remember { mutableStateOf("") }
-    var credentialId by remember { mutableStateOf("") }
-    var keyValue by remember { mutableStateOf("") }
-    var loginExpanded by remember { mutableStateOf(false) }
+    var pickingLogin by remember { mutableStateOf(false) }
     var errorRes by remember { mutableStateOf<Int?>(null) }
+    val draft = remember { PasskeyDraft() }
 
+    // 选择态按返回键 / 点外部 → 退回表单，而不是丢掉已经填好的字段。
     AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.passkeys_add_title)) },
+        onDismissRequest = { if (pickingLogin) pickingLogin = false else onDismiss() },
+        title = {
+            Text(
+                stringResource(
+                    if (pickingLogin) R.string.passkey_select_login else R.string.passkeys_add_title,
+                ),
+            )
+        },
         text = {
-            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                if (candidates.isEmpty()) {
-                    Text(
-                        stringResource(R.string.passkey_select_login),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                } else {
-                    PasskeyLoginPicker(
-                        candidates = candidates,
-                        selected = selectedLogin,
-                        expanded = loginExpanded,
-                        onExpandedChange = { loginExpanded = it },
-                        onSelect = { selectedLogin = it },
-                    )
-                    Spacer(Modifier.height(Spacing.sm))
-                }
-                OutlinedTextField(
-                    value = rpId,
-                    onValueChange = { rpId = it },
-                    label = { Text(stringResource(R.string.passkey_field_rp_id)) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
+            if (pickingLogin) {
+                PasskeyLoginPicker(
+                    candidates = candidates,
+                    selectedId = selectedLogin?.id,
+                    onSelect = { login ->
+                        selectedLogin = login
+                        pickingLogin = false
+                    },
                 )
-                Spacer(Modifier.height(Spacing.sm))
-                OutlinedTextField(
-                    value = rpName,
-                    onValueChange = { rpName = it },
-                    label = { Text(stringResource(R.string.passkey_field_rp_name)) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
+            } else {
+                SavePasskeyForm(
+                    draft = draft,
+                    selected = selectedLogin,
+                    canPick = candidates.isNotEmpty(),
+                    errorRes = errorRes,
+                    onPickLogin = { pickingLogin = true },
                 )
-                Spacer(Modifier.height(Spacing.sm))
-                OutlinedTextField(
-                    value = userName,
-                    onValueChange = { userName = it },
-                    label = { Text(stringResource(R.string.passkey_field_user)) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Spacer(Modifier.height(Spacing.sm))
-                OutlinedTextField(
-                    value = userDisplayName,
-                    onValueChange = { userDisplayName = it },
-                    label = { Text(stringResource(R.string.passkey_user)) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Spacer(Modifier.height(Spacing.sm))
-                OutlinedTextField(
-                    value = credentialId,
-                    onValueChange = { credentialId = it },
-                    label = { Text(stringResource(R.string.passkey_field_credential_id)) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Spacer(Modifier.height(Spacing.sm))
-                OutlinedTextField(
-                    value = keyValue,
-                    onValueChange = { keyValue = it },
-                    label = { Text(stringResource(R.string.passkey_field_key_value)) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                errorRes?.let {
-                    Text(
-                        stringResource(it),
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
             }
         },
         confirmButton = {
-            TextButton(onClick = {
-                val login = selectedLogin
-                if (login == null || rpId.isBlank() || credentialId.isBlank()) {
-                    errorRes = R.string.totp_invalid_secret
-                    return@TextButton
+            if (pickingLogin) {
+                TextButton(onClick = { pickingLogin = false }) {
+                    Text(stringResource(R.string.action_cancel))
                 }
-                // ⚠️ **私钥材料必填**（P0，2026-09-11）：没有 keyValue 的通行密钥「看得到、
-                // 点不动」—— 候选能列出来，签名时 parseEcPrivateKey 返回 null，浏览器侧报
-                // `Cannot parse passkey key`。真机上那条唯一缺 keyValue 的凭据正是这样来的。
-                // 参考实现里 keyValue 一律来自真实密钥对（Keyguard：
-                // `PasskeyBase64.encodeToString(keyMaterial.privateKeyPkcs8)`），
-                // **没有任何实现允许手工留空**。
-                if (keyValue.isBlank()) {
-                    errorRes = R.string.passkey_error_key_value_required
-                    return@TextButton
-                }
-                onSave(
-                    login.id,
-                    VaultFido2Credential(
-                        credentialId = credentialId.trim(),
-                        rpId = rpId.trim(),
-                        rpName = rpName.takeIf { it.isNotBlank() } ?: rpId.trim(),
-                        userName = userName.trim(),
-                        userDisplayName = userDisplayName.takeIf { it.isNotBlank() } ?: userName.trim(),
-                        keyValue = keyValue.trim(),
-                    ),
-                )
-            }) { Text(stringResource(R.string.action_save)) }
+            } else {
+                TextButton(onClick = {
+                    val login = selectedLogin
+                    if (login == null || draft.rpId.isBlank() || draft.credentialId.isBlank()) {
+                        errorRes = R.string.totp_invalid_secret
+                        return@TextButton
+                    }
+                    // ⚠️ **私钥材料必填**（P0，2026-09-11）：没有 keyValue 的通行密钥「看得到、
+                    // 点不动」—— 候选能列出来，签名时 parseEcPrivateKey 返回 null，浏览器侧报
+                    // `Cannot parse passkey key`。真机上那条唯一缺 keyValue 的凭据正是这样来的。
+                    // 参考实现里 keyValue 一律来自真实密钥对（Keyguard：
+                    // `PasskeyBase64.encodeToString(keyMaterial.privateKeyPkcs8)`），
+                    // **没有任何实现允许手工留空**。
+                    if (draft.keyValue.isBlank()) {
+                        errorRes = R.string.passkey_error_key_value_required
+                        return@TextButton
+                    }
+                    onSave(
+                        login.id,
+                        VaultFido2Credential(
+                            credentialId = draft.credentialId.trim(),
+                            rpId = draft.rpId.trim(),
+                            rpName = draft.rpName.takeIf { it.isNotBlank() } ?: draft.rpId.trim(),
+                            userName = draft.userName.trim(),
+                            userDisplayName = draft.userDisplayName.takeIf { it.isNotBlank() }
+                                ?: draft.userName.trim(),
+                            keyValue = draft.keyValue.trim(),
+                        ),
+                    )
+                }) { Text(stringResource(R.string.action_save)) }
+            }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
+            // 选择态的「取消」已经在 confirmButton 上（右下角单按钮），这里留空。
+            if (!pickingLogin) {
+                TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
+            }
         },
     )
 }
 
 /**
- * 通行密钥的「选择密码条目」选择器（2026-11-09，用户反馈第 3 条）。
+ * 手工录入通行密钥时的表单草稿。
  *
- * ## 为什么要加搜索
- *
- * 此前就是一个纯 `ExposedDropdownMenu`，候选多时只能一条条往下翻。用户描述的
- * 对比很到位：「通行密钥自己调用 Vaultix 添加的那个步骤已经有搜索条目并保存到条目中，
- * 但单独的添加通行密钥的部分没有」—— 同一个 App 里两个入口，一个能搜一个不能，
- * 这是不一致，不是缺功能。
- *
- * ## 搜索框放在菜单**里面**而不是外面
- *
- * 放在外面的话，表单会先多出一行输入框，用户以为要填什么东西；而实际它只在
- * 挑条目时才有意义。放进菜单里就是"展开 → 边打边筛 → 点一条收起"，
- * 与系统里所有带搜索的选择器一致。
- *
- * ⚠️ 搜索期间菜单**不能关**：`ExposedDropdownMenuBox` 的默认行为是点菜单项才收，
- *    输入框是菜单的子项 ⇒ 打字不会触发 `onDismissRequest`。但**不要**给搜索框加
- *    `menuAnchor()`，否则它会把这个菜单当成自己的锚点、抢掉外层输入框的位置。
- *
- * ⚠️ 搜索用 `title` + `username` 两个字段匹配：很多条目标题是「GitHub」而账号是
- *    邮箱，用户凭记忆输入的往往是**任一个**，只按标题筛会漏。
+ * 收进一个 state holder，而不是在 [SavePasskeyDialog] 里平铺 6 个 `var`：
+ * 后者要把 6 个值 + 6 个 setter 传给表单函数（12 个参数），
+ * 而它们本来就是同一份数据的 12 个面 —— 参数越多，漏传一个就越难发现
+ * （漏传不等于编译失败：会给一个默认空串，表现为"填了但保存后是空的"）。
  */
+private class PasskeyDraft {
+    var rpId by mutableStateOf("")
+    var rpName by mutableStateOf("")
+    var userName by mutableStateOf("")
+    var userDisplayName by mutableStateOf("")
+    var credentialId by mutableStateOf("")
+    var keyValue by mutableStateOf("")
+}
+
+/** 表单态：选择条目 + 6 个字段 + 错误提示。 */
 @OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SavePasskeyForm(
+    draft: PasskeyDraft,
+    selected: VaultItem?,
+    canPick: Boolean,
+    errorRes: Int?,
+    onPickLogin: () -> Unit,
+) {
+    Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+        // 先算成两个局部值再拼装：`selected` 可空，把 `?.` 串在 lambda 里
+        // 会让"这一行到底显示什么"需要读三遍才能确认。
+        val headline = selected?.let { it.title.ifBlank { it.username } }
+            ?: stringResource(R.string.passkey_select_login)
+        val supporting = selected?.let { item ->
+            item.username.takeIf { name -> name.isNotBlank() && name != item.title }
+        }
+        if (canPick) {
+            // 「选择器」用 ListItem 而不是只读 TextField（2026-11-09）：
+            // M3 里 out-lined text field 的语义是"这里可以打字"，只读字段会让用户
+            // 先点一下输入框、发现光标闪却打不出字，再去找箭头 —— 三步才明白。
+            // ListItem + 展开箭头是「点它挑一个」的通用造型。
+            OutlinedCard(onClick = onPickLogin, modifier = Modifier.fillMaxWidth()) {
+                ListItem(
+                    headlineContent = {
+                        Text(
+                            text = headline,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    },
+                    supportingContent = if (supporting != null) {
+                        {
+                            Text(
+                                text = supporting,
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    } else {
+                        null
+                    },
+                    trailingContent = {
+                        Icon(
+                            imageVector = Icons.Filled.ArrowDropDown,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    },
+                )
+            }
+            Spacer(Modifier.height(Spacing.sm))
+        } else {
+            Text(
+                stringResource(R.string.passkey_select_login),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        OutlinedTextField(
+            value = draft.rpId,
+            onValueChange = { draft.rpId = it },
+            label = { Text(stringResource(R.string.passkey_field_rp_id)) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(Spacing.sm))
+        OutlinedTextField(
+            value = draft.rpName,
+            onValueChange = { draft.rpName = it },
+            label = { Text(stringResource(R.string.passkey_field_rp_name)) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(Spacing.sm))
+        OutlinedTextField(
+            value = draft.userName,
+            onValueChange = { draft.userName = it },
+            label = { Text(stringResource(R.string.passkey_field_user)) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(Spacing.sm))
+        OutlinedTextField(
+            value = draft.userDisplayName,
+            onValueChange = { draft.userDisplayName = it },
+            label = { Text(stringResource(R.string.passkey_user)) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(Spacing.sm))
+        OutlinedTextField(
+            value = draft.credentialId,
+            onValueChange = { draft.credentialId = it },
+            label = { Text(stringResource(R.string.passkey_field_credential_id)) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(Spacing.sm))
+        OutlinedTextField(
+            value = draft.keyValue,
+            onValueChange = { draft.keyValue = it },
+            label = { Text(stringResource(R.string.passkey_field_key_value)) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        errorRes?.let {
+            Text(
+                stringResource(it),
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+    }
+}
+
+/**
+ * 通行密钥的「选择密码条目」页（2026-11-09 重写）。
+ *
+ * ## 上一版为什么坏了两件事
+ *
+ * 上一版把搜索框放进 `ExposedDropdownMenu` 的菜单体里，并靠 `ExposedDropdownMenuBox`
+ * 展开。真机上两个 bug：
+ *
+ * 1. **打不了字**。弹出菜单是**独立窗口**，它的焦点归菜单自己管；输入框虽然是菜单的
+ *    子项、也能显示光标，但 IME 的连接建立在外层 anchor 上。⇒ 手指点进搜索框，
+ *    键盘不弹、敲字无反应。
+ * 2. **列表溢出**。`ExposedDropdownMenu` 的可用高度是按**它的宿主窗口**边界算的。
+ *    宿主是 `AlertDialog`（又一个独立窗口），这层嵌套让边界计算失真 ⇒ 菜单一路画到
+ *    屏幕外，盖住对话框自己的下半部分（用户截图正是这样）。
+ *
+ * 两个 bug 同源：**在 Dialog 里再开一个 Popup**。所以修法不是调参数，是换载体。
+ *
+ * ## 现在的做法：Dialog 内的一页，不是弹层
+ *
+ * 搜索框与列表都是对话框内容的一部分（`AlertDialog` 的 `text` slot），
+ * 与 [io.vaultix.vaultix.ui.totp.LoginPickerDialog] 同一形状 —— 那处从 2026-09 起
+ * 一直正常，就是因为它没有用 Popup。列表用 `LazyColumn` + `heightIn(max)`：
+ * 高度有界、内部可滚，条目再多也不会顶出对话框。
+ *
+ * ⚠️ 别改回 `ExposedDropdownMenu` 「顺手一点」。它适合**短选项**（5 项以内、不用打字），
+ *    "几十个条目 + 搜索"这个组合在 Dialog 里就是上面两个 bug。
+ *
+ * ⚠️ 搜索匹配 `title` **+** `username`：很多条目标题是「GitHub」而账号是邮箱，
+ *    用户凭记忆输入的是任一个，只按标题筛会漏（与注册流程 `PasskeyCreateSheet` 一致）。
+ */
 @Composable
 private fun PasskeyLoginPicker(
     candidates: List<VaultItem>,
-    selected: VaultItem?,
-    expanded: Boolean,
-    onExpandedChange: (Boolean) -> Unit,
+    selectedId: String?,
     onSelect: (VaultItem) -> Unit,
 ) {
     var query by remember { mutableStateOf("") }
-    // 关掉菜单时清空搜索词：下次展开是一个干净的全量列表，
-    // 而不是上次筛剩下的几条（那不是用户此刻的意图）。
-    // 用 side-effect 而不是在组合里直接 `query = ""`：后者是在渲染期间写状态，
-    // 会让同一帧再跑一次组合，且 Compose 明确不建议。
-    LaunchedEffect(expanded) {
-        if (!expanded) query = ""
-    }
-
     val visible = remember(candidates, query) {
         val q = query.trim()
         if (q.isEmpty()) {
@@ -223,60 +325,83 @@ private fun PasskeyLoginPicker(
             }
         }
     }
+    // 打开即聚焦：这一页除了"搜一个、点一个"没别的事可做。
+    // 与 [io.vaultix.vaultix.ui.folders.FolderNameDialog] 同一条纪律。
+    val focusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) { focusRequester.requestFocus() }
 
-    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = onExpandedChange) {
+    Column {
         OutlinedTextField(
-            value = selected?.title.orEmpty(),
-            onValueChange = {},
-            readOnly = true,
-            label = { Text(stringResource(R.string.passkey_select_login)) },
-            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-            modifier = Modifier.menuAnchor().fillMaxWidth(),
+            value = query,
+            onValueChange = { query = it },
+            placeholder = { Text(stringResource(R.string.passkey_search_login)) },
+            leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+            trailingIcon = if (query.isEmpty()) {
+                null
+            } else {
+                {
+                    // 有内容才给清除：空框上的 ✕ 是个点了没反应的按钮。
+                    IconButton(onClick = { query = "" }) {
+                        Icon(
+                            imageVector = Icons.Filled.Close,
+                            contentDescription = stringResource(R.string.action_clear),
+                        )
+                    }
+                }
+            },
+            singleLine = true,
+            modifier = Modifier
+                .fillMaxWidth()
+                .focusRequester(focusRequester),
         )
-        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { onExpandedChange(false) }) {
-            // 菜单内的搜索框（`menuAnchor()` 不能加，见 KDoc）。
-            OutlinedTextField(
-                value = query,
-                onValueChange = { query = it },
-                label = { Text(stringResource(R.string.passkey_search_login)) },
-                leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
-                singleLine = true,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = Spacing.md, vertical = Spacing.sm),
+        Spacer(Modifier.height(Spacing.sm))
+        if (visible.isEmpty()) {
+            // 空结果也要说话：只剩一个搜索框时用户会以为卡住了。
+            Text(
+                text = stringResource(R.string.passkey_search_empty),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(vertical = Spacing.md),
             )
-            if (visible.isEmpty()) {
-                // 空结果也要给一句话：菜单只剩一个搜索框却不说话，用户会以为卡住了。
-                Text(
-                    text = stringResource(R.string.passkey_search_empty),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.sm),
-                )
-            }
-            visible.forEach { login ->
-                DropdownMenuItem(
-                    text = {
-                        // 标题为主、账号为副：标题可能重复（两个 GitHub），账号用来区分。
-                        Column {
-                            Text(login.title.ifBlank { login.username })
-                            if (login.title.isNotBlank() && login.username.isNotBlank()) {
+        } else {
+            LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 300.dp)) {
+                items(visible, key = { it.id }) { login ->
+                    ListItem(
+                        // 单选：读屏念「单选按钮」，且不带一个永远不变的 `selected` 状态
+                        // （同 AddCloudVaultScreen 的既有做法）。
+                        modifier = Modifier.clickable(role = Role.RadioButton) { onSelect(login) },
+                        headlineContent = {
+                            Text(
+                                text = login.title.ifBlank { login.username },
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        },
+                        supportingContent = if (login.username.isNotBlank() && login.username != login.title) {
+                            {
                                 Text(
                                     text = login.username,
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                 )
                             }
-                        }
-                    },
-                    onClick = {
-                        onSelect(login)
-                        // 选完就收：用户的目的已经达成，菜单留在屏幕上只会挡住下面的表单。
-                        onExpandedChange(false)
-                    },
-                )
+                        } else {
+                            null
+                        },
+                        trailingContent = if (login.id == selectedId) {
+                            {
+                                Icon(
+                                    imageVector = Icons.Filled.Check,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                        } else {
+                            null
+                        },
+                    )
+                }
             }
         }
     }
