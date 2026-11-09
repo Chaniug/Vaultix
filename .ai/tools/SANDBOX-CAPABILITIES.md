@@ -56,6 +56,60 @@ bash .ai/tools/typecheck_kotlin.sh --all data/kdbx
 好处不是"多跑一遍"，而是：**本地绿 ⇒ CI 不会红在同一件事上**，
 且测试错误 **3 分钟**可见，不必排在 lint → detekt → build 之后。
 
+### ⚠️ 接进 CI 时踩的坑：workflow 里**注释的缩进也算缩进**
+
+第一次推送后，整个 `ci-debug.yml` 被判成 "workflow file issue"，
+`total_count: 0`（**一个 job 都没创建**），连带着 `ci-docs.yml` 也一起红 ——
+后者这次根本没改过，所以别被"两个 workflow 同时失败"误导去查共同依赖。
+
+真因：我把 job 上方的说明注释块写成了 **0 缩进**，而 `jobs:` 的直接子级必须 ≥ 2。
+YAML 里块内注释与其后的键**同属一层**，缩进不一致即解析失败。
+`PyYAML` 照样能 `safe_load` 成功（它容错），所以**本地解析通过 ≠ GitHub 收**。
+
+排查手法（下次直接用）：
+
+```bash
+# 1) job 数为 0 ⇒ 文件级拒绝，不是构建失败
+gh api repos/<owner>/<repo>/actions/runs/<id>/jobs --jq '.total_count'
+# 2) 扫 jobs 段内所有缩进 < 2 的行（含注释）
+python3 - <<'EOF'
+lines=open('.github/workflows/ci-debug.yml',encoding='utf-8').read().split('\n')
+started=False
+for i,l in enumerate(lines,1):
+    if l.startswith('jobs:'): started=True; continue
+    if started and l.strip() and 0 < len(l)-len(l.lstrip()) < 2:
+        print(i, repr(l[:70]))
+EOF
+```
+
+判据：**`total_count == 0` 就是文件没被接受**，此时去翻步骤日志是白翻（没有步骤）。
+
+还有一种更阴的中间态：**`total_count == 1`（只有老 job，新 job 没创建）而 run 结论是 failure**。
+成因是推送瞬间 GitHub 抓到了改动前的快照 —— 文件本身已经是对的。
+判别手法：`gh workflow run ci-debug.yml --ref main` 手动触发一次，
+若这时 `total_count == 2` 且两个 job 都跑起来，就证明文件没问题，**别再去改它**。
+
+### CI 实测（`ae9bf97d`，run `42673103197`）
+
+```
+✅ 8 组全绿 / ❌ 0 组有问题 / ⚠️ 0 组本地查不了    耗时 3m29s
+```
+
+| 包 | 测试文件 | 用例 |
+|---|---:|---:|
+| `io/vaultix/crypto` | 9 | 195 |
+| `io/vaultix/common` | 12 | 144 |
+| `io/vaultix/common/logging` | 1 | 7 |
+| `io/vaultix/model` | 1 | 5 |
+| `io/vaultix/domain` | 2 | 14 |
+| `io/vaultix/data/kdbx` | 22 | 271 |
+| `io/vaultix/data/repository` | 20 | 191 |
+| `io/vaultix/data/repository/kdbx` | 12 | 113 |
+| **合计** | **79** | **940** |
+
+⇒ 与沙箱本地结果**逐项一致**（同一份脚本、同一份依赖清单），
+「沙箱绿 ⇒ CI 绿」这条现在是被验证过的，不再是推测。
+
 ## 下一步可以做的（都没做，先记着）
 
 1. **给 app 层加 Compose 编译器插件**：`app` 是单一 source set，
