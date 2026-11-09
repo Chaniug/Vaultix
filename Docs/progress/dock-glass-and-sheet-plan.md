@@ -1,7 +1,9 @@
 # 底栏半透明 & 「+」面板精装修 · 探索方案
 
-> 2026-11-09 21:20 · 状态：**用户已拍板，P2-a / P2-b 已施工**（玻璃调淡 + 面板重写），
-> 本机门禁全绿，交 CI 出包。P2-c（玻璃连续 / container transform）仍留待真机反馈。
+> 2026-11-09 21:33 · 状态：**P2-a / P2-b 已施工并出包，待真机验收**。
+> 提交 `3c570f36` → `78d5514f`；Android CI `42625904209` 全绿
+> （detekt / 编码 / 图标几何门禁 / assembleFullDebug / 单测 / preview 发包）。
+> `app-full-debug.apk` 已发布。P2-c（玻璃连续 / container transform）仍留待真机反馈。
 > 可交互对照：[`dock-glass-and-sheet-preview.html`](./dock-glass-and-sheet-preview.html)
 > 上游：[`dock-phase1-workorder.md`](./dock-phase1-workorder.md)（P1 已装机验收）、
 > [`ui-polish-plan.md`](./ui-polish-plan.md)、[`app-icon-design-proposal.md`](./app-icon-design-proposal.md)
