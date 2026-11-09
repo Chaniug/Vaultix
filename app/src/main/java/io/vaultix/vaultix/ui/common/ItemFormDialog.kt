@@ -715,9 +715,13 @@ internal fun FormGroupCard(content: @Composable ColumnScope.() -> Unit) {
  * ⚠️ 用分隔线而不是再加 24dp 留白：留白在**同一张卡里**表达不了层级，
  *    只会让人以为排版错了（卡内没有"这是另一张卡"的意思）。
  *    折线 + 上下各 16dp，正好是"卡内换了一个话题"的量级。
+ *
+ * ⚠️ 必须是 `ColumnScope` 的**扩展函数**：`content: @Composable ColumnScope.() -> Unit`
+ *    是带接收者的 lambda，只有处在 `ColumnScope` 里才能调用，也才能把该作用域
+ *    继续传给内部（否则 Compose 编译器会把它当成多出一个 `p1` 参数的普通 lambda）。
  */
 @Composable
-private fun TypeFieldsDivider(content: @Composable ColumnScope.() -> Unit) {
+private fun ColumnScope.TypeFieldsDivider(content: @Composable ColumnScope.() -> Unit) {
     Spacer(Modifier.height(Spacing.lg))
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
     Spacer(Modifier.height(Spacing.lg))
