@@ -1495,61 +1495,95 @@ private fun TotpEditDialog(
         // 11-07：TOTP 只有两张卡，内容不到半屏 ⇒ 用户反馈「没铺满、靠上」。
         // 补一张只读配置预览（全部复用已有字符串，不新增文案），
         // 既是有信息量的内容，也把视觉重心往下压一点。
+        // 2026-11-09 抽成 [TotpPreviewCard]（#256）：本函数加扫码按钮后过不了
+        // LongMethod ≤150；那张卡是纯展示、零状态，抽出去不牵连任何逻辑。
         Spacer(Modifier.height(Spacing.xl))
-        val issuerFallback = stringResource(R.string.totp_field_issuer)
-        val accountFallback = stringResource(R.string.totp_field_account)
-        FormGroupCard {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = Icons.Filled.Timer,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.tertiary,
-                    modifier = Modifier.size(32.dp),
-                )
-                Spacer(Modifier.width(Spacing.md))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = issuer.ifBlank { issuerFallback },
-                        style = MaterialTheme.typography.titleMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        text = account.ifBlank { accountFallback },
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
-            Spacer(Modifier.height(Spacing.md))
-            Text(
-                text = typeLabel(type),
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.tertiary,
-            )
-        }
+        TotpPreviewCard(issuer = issuer, account = account, type = type)
     }
 
-    // 扫码覆盖层：与登录条目的 TOTP 字段**同一个组件、同一种交互**
-    // （全屏 Dialog 内嵌相机，结果直接回填），不另写一套。
-    if (scanning) {
-        Dialog(
-            onDismissRequest = { scanning = false },
-            properties = DialogProperties(
-                usePlatformDefaultWidth = false,
-                decorFitsSystemWindows = false,
-            ),
-        ) {
-            QrScannerContent(
-                onResult = { text ->
-                    secret = text
-                    scanning = false
-                },
-                onBack = { scanning = false },
+    // 扫码覆盖层（2026-11-09 抽出，#256）：163 行的对话框再加这十几行就过
+    // detekt `LongMethod ≤150` 的线。抽出来的不是"为了过门禁的一段代码"——
+    // 它是一个**完整的覆盖层**（开关 + 全屏 Dialog + 结果回填），有自己的语义。
+    SecretScanOverlay(visible = scanning, onResult = { secret = it }, onVisibleChange = { scanning = it })
+}
+
+/**
+ * 编辑页底部的只读配置预览卡（2026-11-07 加，2026-11-09 从 `TotpEditDialog` 抽出，#256）。
+ *
+ * 存在的理由不是"信息量"（这些字段上面刚填过），而是**版式**：
+ * TOTP 只有两张卡、内容不到半屏，用户反馈「没铺满、靠上」。这张卡把视觉重心往下压。
+ *
+ * 纯展示、零状态 —— 抽出前后行为完全一致，也不新增任何字符串
+ * （空值回落到字段名本身）。
+ */
+@Composable
+private fun TotpPreviewCard(issuer: String, account: String, type: OtpType) {
+    val issuerFallback = stringResource(R.string.totp_field_issuer)
+    val accountFallback = stringResource(R.string.totp_field_account)
+    FormGroupCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                imageVector = Icons.Filled.Timer,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.tertiary,
+                modifier = Modifier.size(32.dp),
             )
+            Spacer(Modifier.width(Spacing.md))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = issuer.ifBlank { issuerFallback },
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = account.ifBlank { accountFallback },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
+        Spacer(Modifier.height(Spacing.md))
+        Text(
+            text = typeLabel(type),
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.tertiary,
+        )
+    }
+}
+
+/**
+ * 密钥扫码覆盖层（#256）。
+ *
+ * 与登录条目的 TOTP 字段**同一个组件、同一种交互**（全屏 Dialog 内嵌相机，
+ * 结果直接回填），不另写一套相机 / 权限逻辑。
+ *
+ * @param onResult 扫到的文本（`otpauth://` 导入串或裸密钥），由调用方决定怎么用。
+ * @param onVisibleChange 关掉时回调 false —— 相机与权限请求随之释放。
+ */
+@Composable
+private fun SecretScanOverlay(
+    visible: Boolean,
+    onResult: (String) -> Unit,
+    onVisibleChange: (Boolean) -> Unit,
+) {
+    if (!visible) return
+    Dialog(
+        onDismissRequest = { onVisibleChange(false) },
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false,
+        ),
+    ) {
+        QrScannerContent(
+            onResult = { text ->
+                onResult(text)
+                onVisibleChange(false)
+            },
+            onBack = { onVisibleChange(false) },
+        )
     }
 }
 

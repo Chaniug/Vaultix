@@ -695,13 +695,15 @@ fun ItemsScreen(
 
     ItemDisplayOptionsHost(viewModel, displayOptionsOpen, onDismiss = { displayOptionsOpen = false })
 
+    // 新建条目对话框的完整接线：开关状态 + 表单依赖 + 两个动作（保存 / 建文件夹）。
+    // 2026-11-09 再抽一次：加 `onCreateFolder` 后主 Composable 到 151，第二次撞同一道线。
     NewItemDialogHost(
         visible = showCreateDialog,
         folders = folders,
         vaultKind = state.vault?.kind,
         saving = state.saving,
         onDismiss = { showCreateDialog = false },
-        onCreate = {
+        onSave = {
             viewModel.createItem(it)
             showCreateDialog = false
         },
@@ -710,12 +712,19 @@ fun ItemsScreen(
 }
 
 /**
- * 新建条目对话框的宿主（2026-10-27 抽出，#199）。
+ * 新建条目对话框的宿主（2026-10-27 抽出，#199；2026-11-09 扩参 + 收拢 lambda，#256）。
  *
  * 抽出的原因与 [ItemDisplayOptionsHost] 完全相同：主 Composable 贴着 detekt
  * `LongMethod ≤150` 的门禁线，加「文件夹管理」菜单项后到 151。
- * 这 12 行是**一组完整的宿主接线**（把表单的开关 / 依赖数据 / 两个回调喂给对话框），
+ * 这十几行是**一组完整的宿主接线**（把表单的开关 / 依赖数据 / 动作喂给对话框），
  * 拆出来有独立含义 —— 比继续压注释可读得多。
+ *
+ * ⚠️ **2026-11-09 第二次撞同一道线**：给表单加 `onCreateFolder` 后主 Composable 又到 151。
+ * 这次的修法不是再抽一个新函数，而是把**原来留在主 Composable 里的那个 lambda 也搬进来**——
+ * 保存成功后"关对话框"是**宿主**的职责（对话框自己不该管谁把它关掉），
+ * 同一个语义单元的代码分居两处，才是这里反复超线的真正原因。
+ *
+ * @param onSave 保存条目。调用方负责"关掉对话框"，接线方不必知道这件事。
  */
 @Composable
 private fun NewItemDialogHost(
@@ -724,7 +733,7 @@ private fun NewItemDialogHost(
     vaultKind: VaultKind?,
     saving: Boolean,
     onDismiss: () -> Unit,
-    onCreate: (VaultItem) -> Unit,
+    onSave: (VaultItem) -> Unit,
     onCreateFolder: (name: String, onCreated: (String) -> Unit) -> Unit,
 ) {
     if (!visible) return
@@ -733,7 +742,7 @@ private fun NewItemDialogHost(
         vaultKind = vaultKind,
         saving = saving,
         onDismiss = onDismiss,
-        onSave = onCreate,
+        onSave = onSave,
         onCreateFolder = onCreateFolder,
     )
 }
