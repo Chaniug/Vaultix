@@ -269,6 +269,7 @@ internal object KdbxOpener {
      */
     private fun formatFailure(bytes: ByteArray): KdbxFailure? = when (val format = inspectKdbxFormat(bytes)) {
         is KdbxFormat.NotKdbx -> KdbxFailure(KdbxOpenError.NotKdbxFile)
+        is KdbxFormat.Empty -> KdbxFailure(KdbxOpenError.EmptyFile)
         is KdbxFormat.UnsupportedVersion ->
             KdbxFailure(KdbxOpenError.UnsupportedVersion(format.version))
 

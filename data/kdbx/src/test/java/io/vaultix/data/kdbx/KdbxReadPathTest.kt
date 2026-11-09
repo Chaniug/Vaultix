@@ -130,6 +130,23 @@ class KdbxReadPathTest {
         assertThat(error).isEqualTo(KdbxOpenError.NotKdbxFile)
     }
 
+    /**
+     * 0 字节文件必须是 **EmptyFile**，不是 NotKdbxFile（2026-11-10 用户真机）。
+     *
+     * 两句话的用户动作不同：前者「删掉它重新建」，后者「重新选一个文件」。
+     * 并成一句就把用户堵死在「不是 KDBX 数据库」这个没有下一步的结论上。
+     */
+    @Test
+    fun `empty file is reported as empty rather than not a kdbx file`() {
+        assertThat(inspectKdbxFormat(ByteArray(0))).isEqualTo(KdbxFormat.Empty)
+
+        val result = KdbxOpener.open(ByteArray(0), PASSWORD, null)
+        val error = (result.exceptionOrNull() as KdbxFailure).error
+        assertThat(error).isEqualTo(KdbxOpenError.EmptyFile)
+        // 必须带「下一步」—— 只说"空的"等于让人自己猜该怎么办。
+        assertThat((error as KdbxOpenError.EmptyFile).guidance).contains("重新新建")
+    }
+
     @Test
     fun `format inspector reports kdbx version from header`() {
         val bytes = buildDatabase()

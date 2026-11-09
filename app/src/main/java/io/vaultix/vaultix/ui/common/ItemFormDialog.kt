@@ -205,9 +205,32 @@ fun ItemFormDialog(
             ssh = sshValues.toList(),
         )
     }
+    // ★ 2026-11-10：判脏的基线是「**打开这一份表单时**的快照」，不是 `initial` 本身。
+    //
+    // ## 为什么不能直接比 `initial`（这是用户报的「新建银行卡返回必弹放弃」的根因）
+    //
+    // 表单在初始化时会做一些**补全**，补全结果**不在 initial 里**。于是用户什么都没动、
+    // 一按返回就被判成「有未保存修改」：
+    //
+    // | 补全 | 表现 |
+    // |---|---|
+    // | Card / Identity / SshKey 段由 `null` 变成**空对象**（`buildSnapshot` 无条件构造） | **新建**这三类条目时必定弹确认 |
+    // | SSH 指纹由公钥推导补上（见上方 `sshValues` 的初始化） | 编辑一个缺指纹的条目，一开一关就弹 |
+    //
+    // 基线取「首帧快照」后，上述补全自动被算进基线 ⇒ 只有**用户真的动过**才算脏。
+    // 这比"逐个字段去和 initial 对齐"可靠：任何将来新增的初始化推导都自动免疫。
+    //
+    // ⚠️ 必须 `remember(initial)`，不能在每次重组时重算 —— 后者会把用户每一次输入
+    //    都吸收进基线，判脏就永远为 false（比误报更糟：真丢数据且没有任何提示）。
+    // ⚠️ 顺序：本行在全部字段 state 之后，首帧读到的就是"刚打开时的值"。
+    val baseline = remember(initial) { snapshot() }
+
     val requestClose = rememberDiscardGate(
         saving = saving,
-        isDirty = { snapshot() != initial },
+        // 新建（没有 id）= 本来就没有"已保存的内容"可保护 ⇒ 返回即丢弃，不二次确认
+        // （用户 2026-11-10 明确要求：「返回就取消保存即可，无需二次确认询问」）。
+        // 编辑态仍保留闸门：那里一旦误关，丢掉的是**库中已有的数据**。
+        isDirty = { initial.id.isNotBlank() && snapshot() != baseline },
         onDismiss = onDismiss,
     )
 

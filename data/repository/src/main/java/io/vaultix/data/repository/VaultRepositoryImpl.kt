@@ -1152,6 +1152,9 @@ private fun classifyKdbxError(error: Throwable): UnlockResult {
         // 文件读不到：不是凭据问题，提示重新选择文件
         is KdbxOpenError.SourceUnavailable -> UnlockResult.Unknown(kind.detail)
         is KdbxOpenError.NotKdbxFile -> UnlockResult.Unknown("该文件不是 KDBX 数据库")
+        // 空文件（0 字节）：与「选错文件」分开说 —— 它的下一步是「重建」，不是「重选」。
+        // 文案取错误类型上的唯一一份（`EmptyFile.guidance`），别在这里另写一句。
+        is KdbxOpenError.EmptyFile -> UnlockResult.Unknown(kind.guidance)
         is KdbxOpenError.UnsupportedVersion ->
             // ⚠️ 用错误类型上的**唯一一份**文案（`guidance`），别在这里另写一句 ——
             //    此前这里写的是"请用 KeePass 另存为 3.1 / 4.x"，而 3.1 自 2026-09-30 起

@@ -261,14 +261,12 @@ private fun AddHeroCard(
                     )
                 }
                 Spacer(Modifier.width(Spacing.md))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(text = label, style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        text = stringResource(R.string.dock_add_hero_subtitle),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = onPrimary.copy(alpha = 0.82f),
-                    )
-                }
+                // 2026-11-10：删掉副标题「当前页面的默认新建动作」。
+                // ① 它是**解释功能**的话，不是内容 —— 用户看一眼卡片就知道是"新建登录"；
+                // ② 它让主卡比下面每张类型卡都高，一屏里出现两套高度节奏。
+                // 删字后主卡收到 [HERO_MIN_HEIGHT]（= 图标 40 + 上下各 16），
+                // 与末尾的生成器卡同高，形成「72 / 104×2 / 72」的对称节奏。
+                Text(text = label, style = MaterialTheme.typography.titleMedium)
             }
         }
     }
@@ -277,11 +275,14 @@ private fun AddHeroCard(
 /**
  * 主卡的尺寸与剪影水印参数。
  *
- * ⚠️ [HERO_GLYPH_BOX]（72dp）**小于** [HERO_MIN_HEIGHT]（76dp）是刻意的：
+ * ⚠️ [HERO_GLYPH_BOX]（72dp）**等于** [HERO_MIN_HEIGHT]（72dp）是刻意的：
  *    水印和内容同在一个 `Box` 里，Box 按最大子元素测量 —— 水印画布更高就会把卡撑高。
  *    72dp 画布经 [HERO_GLYPH_SCALE] 放大后的**可见**尺寸约 104dp，已经足够铺满右侧。
+ *
+ * 📐 2026-11-10：删除副标题后 76 → **72**（= 图标 40 + `Spacing.lg` ×2）。
+ *    与末尾的生成器卡同高，一屏里因此只有两种高度：通栏动作卡 72 / 类型网格卡 104。
  */
-private val HERO_MIN_HEIGHT = 76.dp
+private val HERO_MIN_HEIGHT = 72.dp
 private val HERO_GLYPH_BOX = 72.dp
 private const val HERO_GLYPH_SCALE = 1.45f
 private const val HERO_GLYPH_ALPHA = 0.13f
@@ -351,6 +352,10 @@ private fun AddTypeTile(
 /**
  * 生成器：与类型卡**同构**的通栏卡（剪影在上、文字在下），
  * 只是剪影是长条状 —— 靠形状而不是分隔线区分「工具」层级。
+ *
+ * 📐 2026-11-10：删掉副标题「只生成并复制，不创建条目」后高度收到 [GENERATOR_MIN_HEIGHT]
+ *    （= 剪影 20 + `Spacing.sm` + 标签 20 + `Spacing.md` ×2）。剪影同步 24 → 20，
+ *    让它与主卡**同高**：一屏只有「通栏动作 72 / 类型网格 104」两档。
  */
 @Composable
 private fun AddGeneratorTile(onClick: () -> Unit, modifier: Modifier = Modifier) {
@@ -360,10 +365,11 @@ private fun AddGeneratorTile(onClick: () -> Unit, modifier: Modifier = Modifier)
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = Spacing.xl)
-            .heightIn(min = 84.dp),
+            .heightIn(min = GENERATOR_MIN_HEIGHT),
         shape = VaultixCorner.Panel,
         // 22:37 深色模式反馈：0.42 的底色太透，压不住下面那行小字。
-        // 提到 0.58 后卡片仍是 tonal 面，但文字有了稳定的对比基底。
+        // 提到 0.58 后卡片仍是 tonal 面；副标题删掉后对比度要求降低，
+        // 但底色**保持不动** —— 它是这一层的身份色，不是为了文字才有的。
         color = scheme.tertiaryContainer.copy(alpha = 0.58f),
         contentColor = scheme.onTertiaryContainer,
     ) {
@@ -373,24 +379,37 @@ private fun AddGeneratorTile(onClick: () -> Unit, modifier: Modifier = Modifier)
                 line = scheme.onSurfaceVariant.copy(alpha = 0.38f),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(24.dp),
+                    .height(GENERATOR_GLYPH_HEIGHT),
             )
             Spacer(Modifier.height(Spacing.sm))
             Text(
                 text = stringResource(R.string.dock_add_generate_password),
                 style = MaterialTheme.typography.labelLarge,
             )
-            Text(
-                text = stringResource(R.string.dock_add_tool_subtitle),
-                style = MaterialTheme.typography.bodySmall,
-                // ⚠️ 不用 onSurfaceVariant：它相对 surface 校准，叠在半透明
-                //    tertiaryContainer 上（尤其深色）会糊成一片。改跟卡片的
-                //    contentColor 同族，并把 alpha 拉到 0.92 保住小字可读性。
-                color = scheme.onTertiaryContainer.copy(alpha = 0.92f),
-            )
         }
     }
 }
+
+/**
+ * 生成器卡的高度与剪影高度。
+ *
+ * 两者必须**一起改**：`GENERATOR_MIN_HEIGHT` = 剪影 + `Spacing.sm` + 一行 `labelLarge`
+ * + 上下 `Spacing.md` ×2。只改剪影不改高度会在卡底留一条看不见的空白（`heightIn`
+ * 不会自动收紧），只改高度不改剪影则内容会顶出裁切。
+ *
+ * ⚠️ 为什么不跟类型卡一样取 104dp：类型卡里画的是"整张条目长什么样"（需要高度），
+ *    这里画的是一串字符块（不需要）；强行拉齐只会让底部多出一块空。
+ *
+ * ⚠️ 声明顺序受 `.ai/tools/check_compile_smells.py` 的规则 B 约束：
+ *    [LABEL_LINE_HEIGHT] / [GENERATOR_GLYPH_HEIGHT] 必须在 [GENERATOR_MIN_HEIGHT] 之前。
+ */
+private val GENERATOR_GLYPH_HEIGHT = 20.dp
+
+/** 一行 `labelLarge` 的行高（M3 规范：14sp 字号 / 20sp 行高）。 */
+private val LABEL_LINE_HEIGHT = 20.dp
+
+private val GENERATOR_MIN_HEIGHT =
+    GENERATOR_GLYPH_HEIGHT + Spacing.sm + LABEL_LINE_HEIGHT + Spacing.md * 2
 
 /**
  * 条目类型的**字段剪影**：不画抽象图标，画这一类型条目长什么样。

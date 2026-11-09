@@ -183,6 +183,10 @@ class VaultConverterRepositoryImpl @Inject constructor(
     private fun KdbxFailure.fromKdbxFailure(): VaultConversionException =
         when (val error = this.error) {
             is KdbxOpenError.NotKdbxFile -> VaultConversionException.NotKdbxFile()
+            // 空文件归到「不是 KDBX 格式」这一档（转换路径里没有"重建"这个动作，
+            // 用户能做的只有换一个文件）—— 但它必须**显式列出来**，否则会掉进
+            // 下面的 `else` 变成一条带原始 message 的 Generic，反而更含糊。
+            is KdbxOpenError.EmptyFile -> VaultConversionException.NotKdbxFile()
             is KdbxOpenError.UnsupportedVersion -> VaultConversionException.UnsupportedKdbxVersion(error.version)
             is KdbxOpenError.InvalidCredentials -> VaultConversionException.WrongPassword()
             is KdbxOpenError.Unknown -> VaultConversionException.Generic(error.detail)

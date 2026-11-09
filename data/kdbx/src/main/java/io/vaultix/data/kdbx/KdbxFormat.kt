@@ -27,6 +27,16 @@ internal sealed interface KdbxFormat {
     /** KDBX 家族但版本不受支持（如 3.1 的 0x00030001、2.x 的 0x00020000）。 */
     data class UnsupportedVersion(val version: String) : KdbxFormat
 
+    /**
+     * **0 字节**文件（连文件头都不存在）。
+     *
+     * 单独成一支而不是并进 [NotKdbx]（2026-11-10，用户真机"刚建的库打不开"）：
+     * 两者的用户动作完全不同 —— 选错文件要**重新选**，空文件要**重新建**
+     * （它通常正是上一次新建失败留下的残骸）。并成一句「不是 KDBX 数据库」，
+     * 用户只能得到一个把人堵死的结论。
+     */
+    data object Empty : KdbxFormat
+
     /** 根本不是 KDBX 文件。 */
     data object NotKdbx : KdbxFormat
 }
@@ -38,6 +48,9 @@ private val KDBX_SIGNATURE = byteArrayOf(
 )
 
 internal fun inspectKdbxFormat(bytes: ByteArray): KdbxFormat {
+    // ⚠️ 空文件必须先判：`size < HEADER_MIN_BYTES` 也会落到 NotKdbx，但那句
+    //    「不是 KDBX 文件」对"0 字节"是误导（它压根没有格式，不是格式不对）。
+    if (bytes.isEmpty()) return KdbxFormat.Empty
     if (bytes.size < HEADER_MIN_BYTES) return KdbxFormat.NotKdbx
     if (!bytes.copyOfRange(0, KDBX_SIGNATURE.size).contentEquals(KDBX_SIGNATURE)) return KdbxFormat.NotKdbx
     // 版本 4 字节小端：低 16 位 = minor，高 16 位 = major。

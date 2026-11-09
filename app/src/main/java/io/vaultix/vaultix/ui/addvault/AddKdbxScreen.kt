@@ -223,7 +223,10 @@ fun AddKdbxScreen(
         viewModel.onKeyFilePicked(context, uri)
     }
 
-    // ★ `CreateDocument`：用户在系统面板里**输入新文件名**，返回一个**不存在**的新文件。
+    // ★ `CreateDocument`：用户在系统面板里**输入新文件名**，返回的 URI 指向一个
+    //   **已被系统创建好的空文件**（0 字节占位）。
+    //   ⚠️ 不是"返回一个还不存在的位置" —— 早期注释这么写，导致来源层按"文件不应存在"
+    //      去校验 `failIfExists`，本地新建因此 100% 报「已存在同名文件」（2026-11-10 修）。
     //   与 `OpenDocument`（选一个已存在的）是两个不同的契约，不能互换 ——
     //   用 `OpenDocument` 建不出文件，用 `CreateDocument` 打不开已有文件。
     val createTargetPicker = rememberLauncherForActivityResult(

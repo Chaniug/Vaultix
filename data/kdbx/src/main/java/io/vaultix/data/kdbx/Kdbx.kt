@@ -39,6 +39,31 @@ sealed interface KdbxOpenError {
     data object NotKdbxFile : KdbxOpenError
 
     /**
+     * 文件是**空的**（0 字节）—— 里面连文件头都没有。
+     *
+     * ## 为什么单独一支（2026-11-10）
+     *
+     * 用户真机：新建本地库 → 创建失败（见 `SafKdbxFileSource.write` 的冲突误报）→
+     * 回头打开那个文件 → 界面报「该文件不是 KDBX 数据库」。**两句话都不算错，
+     * 但没有一句说中"这个文件是上次失败的残骸"**，用户只能反复重试。
+     *
+     * 它的用户动作与 [NotKdbxFile] 不同：不是"重新选一个文件"，而是
+     * "删掉它、重新新建"（甚至可能什么都不用做，重建会原地覆盖这个空壳）。
+     *
+     * ## 文案挂在类型上
+     *
+     * 沿用 [UnsupportedVersion.guidance] 的取向：本条错误有多个消费点
+     * （`KdbxFailure` 的 message、`classifyKdbxError`、转换路径），
+     * 各写一句必然漂移。**只留这一份**，谁要谁取。
+     */
+    data object EmptyFile : KdbxOpenError {
+        /** 给用户的**下一步**：说明它是什么、该怎么办。 */
+        val guidance: String
+            get() = "这个文件是空的（0 字节），里面没有任何内容。" +
+                "通常是上次新建没有完成留下的，直接删掉它、重新新建一个即可。"
+    }
+
+    /**
      * KDBX 版本不受支持。
      *
      * ⚠️ **2026-09-30 起这不再是"罕见的老文件"**：用户拍板本应用**只支持 KDBX 4.x**，
@@ -427,9 +452,12 @@ object Kdbx {
      * ## 写入约定
      *
      * - **`failIfExists = true`**：这是**新建**，语义就是"只创建"。
-     *   目标已存在时一律失败，**绝不覆盖** —— 那是别人的库（也可能是用户上一个自己的库）。
+     *   目标**已有内容**时一律失败，**绝不覆盖** —— 那是别人的库（也可能是用户上一个自己的库）。
      *   ⚠️ 2026-10-17 之前这里只传了默认参数，靠调用方先 `stat` 兜着（ISSUES #172）；
      *   把意图写进参数后，来源层自己就能守住，不再依赖调用方的自觉。
+     *   ⚠️ **"已有内容"不是"文件存在"**（2026-11-10 修）：本地走 `CreateDocument`，
+     *   系统在返回 URI 前就建好了一个 0 字节占位文件。若来源层把"存在"当冲突，
+     *   每次新建都会失败。判据落点是"有没有字节"，详见 `SafKdbxFileSource.write`。
      * - `expectedVersion = null`：新建**没有**基线可比，这是正确的传法
      *   （但它的含义是"我没有基线"，不等于"可以随便覆盖"，见 [KdbxFileSource.write]）。
      * - `force` 保持 `false`：新建不需要绕过任何检查。
@@ -1246,6 +1274,7 @@ object Kdbx {
 class KdbxFailure(val error: KdbxOpenError, cause: Throwable? = null) : Exception(
     when (error) {
         is KdbxOpenError.NotKdbxFile -> "不是 KDBX 文件"
+        is KdbxOpenError.EmptyFile -> error.guidance
         is KdbxOpenError.UnsupportedVersion -> error.guidance
         is KdbxOpenError.InvalidCredentials -> invalidCredentialMessage(error.attempted)
         is KdbxOpenError.SourceUnavailable -> error.detail

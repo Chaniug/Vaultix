@@ -210,7 +210,7 @@ class SafKdbxFileSource(
      *   这是 SAF 的固有限制 —— 在本地单机场景下影响极小（同一时刻只有一个 App 写），
      *   但要如实写清楚，**不能假装有和 WebDAV 一样的保障**。
      * @param failIfExists 只创建。⚠️ 本地同样"只能预检"：SAF 没有 `If-None-Match`，
-     *   所以做法是"先问文件在不在，在就拒写"。
+     *   所以做法是"先问文件在不在，**有内容**就拒写"。
      */
     override suspend fun write(
         bytes: ByteArray,
@@ -222,15 +222,33 @@ class SafKdbxFileSource(
             // 记录写入开始时刻：写成功后要用它当"可疑区间"的起点（#234）。
             val writeStartedAt = System.currentTimeMillis()
 
-            // ⓪ 只创建：目标已存在 ⇒ 直接拒写，**一个字节都不碰**。
+            // ⓪ 只创建：目标**已有内容** ⇒ 直接拒写，**一个字节都不碰**。
             //
             //   ⚠️ 这一步必须排在 ② 的 `openOutputStream` **之前** ——
             //      `"wt"` 一打开就已经把文件截断了，那时再检查等于已经毁了别人的库。
             //   ⚠️ 判据用 `readBytesOrThrow()` 而不是 `DocumentFile.exists()`：
             //      同一份实现里只留一种"文件在不在"的判据（读了有字节就是在，抛了就是不在）。
+            //
+            //   🔴🔴 2026-11-10 修：**空文件不算冲突**（用户真机「新建库必失败」）。
+            //
+            //   原先的判据是 `existing != null`，即"文件存在"就冲突。这在本地**恒为真**：
+            //   新建走的是 `CreateDocument`，而它在**返回 URI 之前就已经把文件建好了**
+            //   （0 字节占位）。于是每一次"新建空白库"都在第一步被自己刚创建的空文件挡住，
+            //   报「该位置已存在同名文件，已取消创建以免覆盖」—— 用户看到的是
+            //   "明明是我的新文件，却说我重复"。
+            //   ⚠️ 网盘侧没有这个坑（PUT 到一个不存在的路径不会先建空文件），
+            //      所以只有本地新建 100% 复现，也是它一直没在别的路径上暴露的原因。
+            //
+            //   为什么敢把"空文件"放过：`failIfExists` 要保护的是**用户的库内容**，
+            //   而 0 字节没有任何内容可毁；相反，把 0 字节当冲突会让新建路径永远走不通。
+            //   若那个空文件是上次失败的残骸，覆盖它正好是用户想要的（也更省事：
+            //   不必先去文件管理器删一次）。真正有内容的同名库仍然一律拒写。
             if (failIfExists) {
                 val existing = runCatching { readBytesOrThrow() }.getOrNull()
-                if (existing != null) {
+                // 判据收在 [blocksCreate] 里（纯函数，可单测）：**空文件不算冲突**。
+                // ⚠️ 外面的 `existing != null` 只为了让 `sha256Hex` 拿到非空类型，
+                //    判据本身仍然只在 [blocksCreate] 里 —— 别把它挪到这里。
+                if (existing != null && blocksCreate(existing)) {
                     throw KdbxFileConflictException(
                         currentVersion = sha256Hex(existing),
                         message = "该位置已存在同名文件，已取消创建以免覆盖",

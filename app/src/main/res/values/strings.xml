@@ -1750,13 +1750,10 @@
 
     <!-- 2026-11-09 架构方案 A：中央「+」的动作面板。
          默认按钮文案按当前 Tab 的 addTarget 变，保住「在验证码页按 + 就是新建验证码」。 -->
-    <string name="dock_add_sheet_title">新建</string>
     <string name="dock_add_default_login">新建登录</string>
     <string name="dock_add_default_totp">新建验证码</string>
     <string name="dock_add_default_card">新建银行卡</string>
     <string name="dock_add_other_types">其他类型</string>
     <string name="dock_add_generate_password">生成密码（工具）</string>
     <string name="dock_add_password_copied">已复制生成的密码到剪贴板</string>
-    <string name="dock_add_hero_subtitle">当前页面的默认新建动作</string>
-    <string name="dock_add_tool_subtitle">只生成并复制，不创建条目</string>
 </resources>

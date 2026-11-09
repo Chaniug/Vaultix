@@ -170,6 +170,17 @@ import io.vaultix.vaultix.ui.theme.Spacing
  *
  * 判据是「壳不拦、调用方拦」：不要在这里接 `BackHandler`，否则会和 `Dialog` 自己的
  * `onDismissRequest` 抢事件。
+ *
+ * ## ⚠️ 这道闸门只该拦「会丢掉**已保存内容**」的关闭（2026-11-10 用户拍板）
+ *
+ * 用户原话：「新建银行卡条目返回时会提醒是否放弃修改，其他条目创建的时候返回并不会提示，
+ * 这个也不要提示，返回就取消保存即可，无需二次确认询问。」
+ *
+ * ⇒ **新建**（条目还没有 id）一律直通：用户点「取消」的语义本来就是"不要了"，
+ *   再问一次是在质疑他自己刚做的决定。**编辑**才拦 —— 那里误关丢的是库里已有的数据。
+ *   调用点用 `initial.id.isNotBlank()` 区分这两态，见 `ItemFormDialog`。
+ * ⚠️ 另有一条同类误报已一并修掉：判脏基线取「打开表单时的快照」而非 `initial`。
+ *   否则表单初始化时的补全（空的卡/身份/SSH 段、自动推导的 SSH 指纹）会被算成"用户改动"。
  */
 @Composable
 fun DiscardChangesDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
