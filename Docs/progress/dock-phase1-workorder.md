@@ -1,6 +1,8 @@
 # 底栏 P1 施工单 · 方案 ③ + 方案 A 合并
 
-> 2026-11-09 · 状态：**已施工并推 `main`（`3fd27fe6`），CI 出包中**。
+> 2026-11-09 · 状态：**已施工、CI 全绿、preview 已发包，待用户实机反馈**。
+> 主提交 `3fd27fe6` + 修复 `2a2551a5`（`ExperimentalMaterial3Api` 的 `@OptIn`）；
+> CI run `42615850489` 全绿，`preview` 于 12:21 UTC 产出 `app-full-debug.apk`。
 > 用户 19:54：「先按目前的方案改，我实机看一下效果」⇒ 开工令。
 > 用户 19:47：「按照你的推荐来」⇒ 采纳架构方案 A（不扩 Tab、卡包不动）。
 > 前置文档：[`dock-polish-plan.md`](./dock-polish-plan.md)（思路）·
@@ -138,7 +140,17 @@
 
 **本地门禁全绿**：`check_compile_smells`（519 文件）/ 编码 / md 链接 / workflow shell / secret /
 `git diff --check` / 大括号平衡 / 新增 7 条 `R.string` 引用核对。
-本机不编译，`assembleFullDebug` / `detekt` / `test` 由 CI run `42615108355` 验证。
+本机不编译，`assembleFullDebug` / `detekt` / `test` 交 CI。
+
+⚠️ **一轮 CI 返工**：首个 run `42615108355` 在 `Build Debug APK` 挂了，
+5 处报错全是 `This material API is experimental` —— `ModalBottomSheet` /
+`rememberModalBottomSheetState` 需要 `@OptIn(ExperimentalMaterial3Api::class)`。
+项目本来就有 `check_experimental_optin.py` 能提前抓到，本地漏跑了这一关；
+补上 OptIn（照 `DisplayOptionsSheet` 写法）后 `2a2551a5` 重推，
+run `42615850489` **detekt / 图标几何门禁 / assemble / 单测 / preview 发包全绿**，
+`preview` 于 12:21 UTC 产出 `app-full-debug.apk`。
+⇒ 教训：新增 material3 组件时，`check_experimental_optin.py` 必须进本地检查清单
+（detekt 与其余自检都查不出这类错误，只在编译期炸）。
 
 ⏳ **待用户实机反馈**：动效强度（弹簧是否过弹、形变是否太慢）、图标弹跳是否讨喜、
 「新建登录 1 步 → 2 步」的手感是否可接受。反馈后逐项调，不必重做架构。
