@@ -1,9 +1,12 @@
 # 切库仪式感 & 库列表精装修 · 探索方案
 
-> 2026-11-09 23:25 · 状态：**E 数据流已真机验收通过（用户「可以接受」）**，参数量取默认不再微调。
-> 提交 `e392354f` → `12ee7606` → `9fc0bb08`；Android CI `42643142615` 全绿，
-> `app-full-debug.apk` 已发布。
+> 2026-11-09 23:51 · 状态：**E 数据流已验收；库列表装饰与冷启动首帧已施工出包**。
 > ✅ 已验收：徽章 `SWITCH_BADGE_SCALE=1.2` / 前置 `SWITCH_PRELUDE_MS=240` / 变暗 `CARD_DIMMED_ALPHA=0.42`。
+> 🆕 23:28–23:33 用户两条追加：库列表缺装饰（且明说「装饰可以是 Material 图标、不必是数据」）、
+> 冷启动闪一帧白底转圈 ⇒ 见 §2.1 / §2.2。
+> 提交 `e392354f` → `12ee7606` → `9fc0bb08`（E 数据流）、
+> `f1f69c83` → `c8b40f06` → `cb5d414a` → `9091184a` → `c188c590`（装饰 + 首帧）；
+> Android CI `42643142615` / `42648334962` 全绿，`app-full-debug.apk` 23:51 已发布。
 > ❌ 剩余：P4-c 形状 morph、P4-d 首启页、卡包页类型筛选 chip、便签在卡包页的入口。
 > 可交互对照：[`vault-switch-polish-preview.html`](./vault-switch-polish-preview.html)
 > 上游：[`dock-glass-and-sheet-plan.md`](./dock-glass-and-sheet-plan.md)、
