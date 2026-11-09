@@ -228,76 +228,41 @@ fun ItemFormDialog(
             }
         },
     ) {
-        // 身份区（P1 第 5 条，2026-11-09）：名称 + 收藏星标**移出卡片**，直接铺在面板上。
-        // ⚠️ 此前名称排在卡 1 最下面，和「文件夹」「类型」同级同字号 —— 而它是主标识，
-        //    用户打开表单第一眼看的是"这条叫什么"，却要先扫过两个下拉框才找到它。
-        //    Bitwarden / 1Password 的编辑页都是同一结构：身份在上、不进表单分组。
-        ItemIdentityHeader(
-            name = name,
-            onNameChange = { name = it; showNameError = false },
-            favorite = favorite,
-            onFavoriteChange = { favorite = it },
-            showError = showNameError,
-        )
-        Spacer(Modifier.height(Spacing.lg))
-        // 卡片 1：归属（文件夹 / 类型）+ 该类型的专属字段。
-        // ⚠️ 两块**合并成一张卡**：文件夹与类型都是"这条目属于哪"的元信息，
-        //    分成两张会多出一次 24dp 卡间距 + 一张没有标题的卡（见 [FormHeader]）。
-        FormGroupCard {
-            FormHeader(
-                folders = folders,
-                folderId = folderId,
-                onFolderSelect = { folderId = it },
-                onCreateFolder = onCreateFolder,
-                typeEditable = typeEditable,
+        ItemFormBody(
+            fields = FormBodyFields(
+                name = name,
+                onNameChange = { name = it; showNameError = false },
+                showNameError = showNameError,
+                favorite = favorite,
+                onFavoriteChange = { favorite = it },
                 type = type,
-                selectableTypes = selectableTypes,
-                onTypeSelect = { type = it },
-            )
-            // 类型专属字段。
-            // ⚠️ 安全笔记**没有**专属字段 ⇒ 该分支不出任何内容（否则会留一段空白）。
-            // ⚠️ 刻意写成 `when` 而不是「先 `if` 再 `when`」：`ItemFormDialog` 的圈复杂度
-            //    本就顶在 detekt 上限 14，多一个分支就会红 —— 用 `when` 保持分支数不变。
-            when (type) {
-                VaultItemType.SecureNote -> Unit
-                VaultItemType.Login -> TypeFieldsDivider {
-                    LoginFields(
-                        username = username,
-                        onUsernameChange = { username = it },
-                        password = password,
-                        onPasswordChange = { password = it },
-                        uris = uris,
-                        totp = totp,
-                        onTotpChange = { totp = it },
-                        onScanTotp = { scanning = true },
-                        onPickApp = { showAppPicker = true },
-                    )
-                }
-                VaultItemType.Card -> TypeFieldsDivider {
-                    SectionLabel(
-                        text = stringResource(R.string.section_card),
-                        icon = Icons.Filled.CreditCard,
-                    )
-                    Spacer(Modifier.height(Spacing.sm))
-                    LabeledFields(CARD_LABELS, cardValues)
-                }
-                VaultItemType.Identity -> TypeFieldsDivider {
-                    SectionLabel(
-                        text = stringResource(R.string.section_identity),
-                        icon = Icons.Filled.Badge,
-                    )
-                    Spacer(Modifier.height(Spacing.sm))
-                    LabeledFields(IDENTITY_LABELS, identityValues)
-                }
-                VaultItemType.SshKey -> TypeFieldsDivider { SshKeyFields(sshValues) }
-            }
-        }
-        ItemFormTail(
-            customFields = customFields,
-            notes = notes,
-            onNotesChange = { notes = it },
-            reprompt = reprompt,
-            onRepromptChange = { reprompt = it },
+                onTypeChange = { type = it },
+                username = username,
+                onUsernameChange = { username = it },
+                password = password,
+                onPasswordChange = { password = it },
+                uris = uris,
+                totp = totp,
+                onTotpChange = { totp = it },
+                notes = notes,
+                onNotesChange = { notes = it },
+                reprompt = reprompt,
+                onRepromptChange = { reprompt = it },
+            ),
+            lists = FormBodyLists(
+                cardValues = cardValues,
+                identityValues = identityValues,
+                sshValues = sshValues,
+                customFields = customFields,
+            ),
+            folders = folders,
+            folderId = folderId,
+            onFolderSelect = { folderId = it },
+            onCreateFolder = onCreateFolder,
+            typeEditable = typeEditable,
+            selectableTypes = selectableTypes,
+            onScanTotp = { scanning = true },
+            onPickApp = { showAppPicker = true },
         )
     }
 
@@ -315,6 +280,145 @@ fun ItemFormDialog(
         onDismiss = { showAppPicker = false },
     )
 }
+
+/**
+ * 表单正文的三个区块：**身份区 → 卡 1（归属 + 类型专属字段）→ 尾段（附加内容 / 安全选项）**。
+ *
+ * ## 为什么抽出来（2026-11-09，第三次撞 `LongMethod`）
+ *
+ * 给 [ItemFormDialog] 加身份区后它到 151/150。抽法不是"随便挪一段短代码"：
+ * 这三个区块**本来就是正文的全部**，抽走后主函数只剩"状态定义 → 快照 → 套壳"，
+ * 职责边界反而更清楚。此前的抽法都是把某一段从中间挖走，主函数依旧是
+ * "一堆状态 + 半截 UI"，所以每加一个字段就再撞一次线。
+ *
+ * ## 为什么用两个参数容器而不是平铺 25 个参数
+ *
+ * 平铺 25 个参数时，调用点会出现 25 行等长的 `xxx = xxx`，
+ * 读的人无法判断"哪些是值、哪些是回写、哪些是列表"。
+ * [FormBodyFields]（可编辑的值）与 [FormBodyLists]（快照列表）分开后，
+ * 前者一眼看出"每个值都配了一个 onXxxChange"，后者一眼看出"这些是原地修改的列表"。
+ */
+@Composable
+private fun ItemFormBody(
+    fields: FormBodyFields,
+    lists: FormBodyLists,
+    folders: List<VaultFolder>,
+    folderId: String?,
+    onFolderSelect: (String?) -> Unit,
+    onCreateFolder: ((name: String, onCreated: (String) -> Unit) -> Unit)?,
+    typeEditable: Boolean,
+    selectableTypes: List<VaultItemType>,
+    onScanTotp: () -> Unit,
+    onPickApp: () -> Unit,
+) {
+    // 身份区（P1 第 5 条，2026-11-09）：名称 + 收藏星标**移出卡片**，直接铺在面板上。
+    // ⚠️ 此前名称排在卡 1 最下面，和「文件夹」「类型」同级同字号 —— 而它是主标识，
+    //    用户打开表单第一眼看的是"这条叫什么"，却要先扫过两个下拉框才找到它。
+    //    Bitwarden / 1Password 的编辑页都是同一结构：身份在上、不进表单分组。
+    ItemIdentityHeader(
+        name = fields.name,
+        onNameChange = fields.onNameChange,
+        favorite = fields.favorite,
+        onFavoriteChange = fields.onFavoriteChange,
+        showError = fields.showNameError,
+    )
+    Spacer(Modifier.height(Spacing.lg))
+    // 卡片 1：归属（文件夹 / 类型）+ 该类型的专属字段。
+    // ⚠️ 两块**合并成一张卡**：文件夹与类型都是"这条目属于哪"的元信息，
+    //    分成两张会多出一次 24dp 卡间距 + 一张没有标题的卡（见 [FormHeader]）。
+    FormGroupCard {
+        FormHeader(
+            folders = folders,
+            folderId = folderId,
+            onFolderSelect = onFolderSelect,
+            onCreateFolder = onCreateFolder,
+            typeEditable = typeEditable,
+            type = fields.type,
+            selectableTypes = selectableTypes,
+            onTypeSelect = fields.onTypeChange,
+        )
+        // 类型专属字段。
+        // ⚠️ 安全笔记**没有**专属字段 ⇒ 该分支不出任何内容（否则会留一段空白）。
+        // ⚠️ 刻意写成 `when` 而不是「先 `if` 再 `when`」：本函数圈复杂度已顶在
+        //    detekt 上限 14，多一个分支就会红 —— 用 `when` 保持分支数不变。
+        when (fields.type) {
+            VaultItemType.SecureNote -> Unit
+            VaultItemType.Login -> TypeFieldsDivider {
+                LoginFields(
+                    username = fields.username,
+                    onUsernameChange = fields.onUsernameChange,
+                    password = fields.password,
+                    onPasswordChange = fields.onPasswordChange,
+                    uris = fields.uris,
+                    totp = fields.totp,
+                    onTotpChange = fields.onTotpChange,
+                    onScanTotp = onScanTotp,
+                    onPickApp = onPickApp,
+                )
+            }
+            VaultItemType.Card -> TypeFieldsDivider {
+                SectionLabel(
+                    text = stringResource(R.string.section_card),
+                    icon = Icons.Filled.CreditCard,
+                )
+                Spacer(Modifier.height(Spacing.sm))
+                LabeledFields(CARD_LABELS, lists.cardValues)
+            }
+            VaultItemType.Identity -> TypeFieldsDivider {
+                SectionLabel(
+                    text = stringResource(R.string.section_identity),
+                    icon = Icons.Filled.Badge,
+                )
+                Spacer(Modifier.height(Spacing.sm))
+                LabeledFields(IDENTITY_LABELS, lists.identityValues)
+            }
+            VaultItemType.SshKey -> TypeFieldsDivider { SshKeyFields(lists.sshValues) }
+        }
+    }
+    ItemFormTail(
+        customFields = lists.customFields,
+        notes = fields.notes,
+        onNotesChange = fields.onNotesChange,
+        reprompt = fields.reprompt,
+        onRepromptChange = fields.onRepromptChange,
+    )
+}
+
+/**
+ * 表单里**可编辑的值**（每个都配一个 `onXxxChange`）。
+ *
+ * 刻意用普通类而不是 `data class`：它只在组合期被构造一次、不参与相等比较，
+ * 用 `data class` 会白白生成 `equals` / `copy`，还会诱导人拿它做状态比较
+ * （真正的比较基准是 [ItemFormDialog] 里那个 `snapshot()`）。
+ */
+private class FormBodyFields(
+    val name: String,
+    val onNameChange: (String) -> Unit,
+    val showNameError: Boolean,
+    val favorite: Boolean,
+    val onFavoriteChange: (Boolean) -> Unit,
+    val type: VaultItemType,
+    val onTypeChange: (VaultItemType) -> Unit,
+    val username: String,
+    val onUsernameChange: (String) -> Unit,
+    val password: String,
+    val onPasswordChange: (String) -> Unit,
+    val uris: SnapshotStateList<String>,
+    val totp: String,
+    val onTotpChange: (String) -> Unit,
+    val notes: String,
+    val onNotesChange: (String) -> Unit,
+    val reprompt: VaultReprompt,
+    val onRepromptChange: (VaultReprompt) -> Unit,
+)
+
+/** 表单里**原地修改的列表**（卡片 / 身份 / SSH / 自定义字段）—— 没有 onChange，只有引用。 */
+private class FormBodyLists(
+    val cardValues: SnapshotStateList<String>,
+    val identityValues: SnapshotStateList<String>,
+    val sshValues: SnapshotStateList<String>,
+    val customFields: SnapshotStateList<VaultCustomField>,
+)
 
 /**
  * 表单尾段：自定义字段 → 备注 → 附加选项（主密码二次验证）。
