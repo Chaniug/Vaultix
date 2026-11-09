@@ -61,9 +61,17 @@
   卡片与高亮之间不会打架（高亮是整行变亮），但**不要**再加描边 / 阴影 / 渐层 ——
   那些在 RemoteViews 里做不真，叠上去只会显得脏。
 
-  ⚠️ **总高刻意保持不变**：卡片 `minHeight` 由 52 改 48，加上 wrapper 上下各 2dp 行距，
-  总高仍是 52dp。也就是说本轮**只改了"层次"，没改"密度"** —— 上一轮刚因为"偏大"缩过一次，
-  这里再动尺寸会把那次调优推翻。以后想改密度，请单独一轮、单独论证。
+  ⚠️ **第六改时总高刻意保持不变**：卡片 `minHeight` 由 52 改 48，加上 wrapper 上下各 2dp，
+  总高仍是 52dp —— 只改"层次"，没改"密度"（上一轮刚因"偏大"缩过一次）。
+
+  ── 2026-11-09 第七改（用户真机：「宽度稍微差一点，显得有点窄；文案和图标占了一点空间」）──
+  ⚠️ **面板宽度改不了**：系统 `FillUi.DropdownPopup` 用 `wrap_content` 包一层，
+  宽度由**最宽的那一行**决定，我们撑不开那个弹窗。
+  ⇒ 只能把**行内横向占位**让给文字，四刀合计让出 **12dp**（240dp 面板上约 5% 宽度）：
+  卡片左右内边距 10 → **8dp**；图标 26 → **24dp**；图标到文字 10 → **8dp**；
+  副标题与标题的同色不同级不变（仍靠字号 + 色阶分层，不靠留白）。
+  ⚠️ 纵向一律不动（48dp 卡片 / 2dp 行距 / 15sp + 13sp）——
+     那几项是 09-16「偏大」那轮定的，本轮反馈的是"横向"，别顺手一起改。
 
   ⚠️ 本注释**不得出现连续两个短横线**（markdown 表格分隔行会让 aapt2 报
      "Failed to parse XML file"，且报错完全不提注释，极难定位）。
@@ -87,16 +95,17 @@
         android:background="@drawable/autofill_item_frame"
         android:gravity="center_vertical"
         android:orientation="horizontal"
-        android:paddingStart="10dp"
-        android:paddingEnd="10dp">
+        android:paddingStart="8dp"
+        android:paddingEnd="8dp">
 
-        <!-- 图标：26dp 位图本身就是完整圆形（字母头像画满、站点图标 circular 裁圆），
-             所以**不再套容器底**（2026-11-09 第六改，去掉双重圆底）。 -->
+        <!-- 图标：24dp 位图本身就是完整圆形（字母头像画满、站点图标 circular 裁圆），
+             所以**不套容器底**（2026-11-09，去掉双重圆底）。
+             ⚠️ 尺寸必须与 AutofillItemIcon.ICON_DP 同步，否则降采样发虚。 -->
         <ImageView
             android:id="@+id/autofill_item_icon"
-            android:layout_width="26dp"
-            android:layout_height="26dp"
-            android:layout_marginEnd="10dp"
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:layout_marginEnd="8dp"
             android:contentDescription="@null"
             android:scaleType="centerCrop" />
 

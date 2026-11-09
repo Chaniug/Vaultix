@@ -3,7 +3,7 @@
   自动填充面板的**品牌头**（`FillResponse.Builder.setHeader`，API 26+）。
 
   ── 为什么要有它（2026-11-09）──────────────────────────────────────────────
-  面板里那三行「QQ / 1067165656」长得和任何一家密码管理器都一样，
+  面板里那几行「QQ / 337626002」长得和任何一家密码管理器都一样，
   用户没有任何线索能确认"这是 Vaultix 给的、不是某个野鸡输入法"。
   加一条极轻的品牌行，解决的是**归属**，不是好看 ——
   好看的收益已经在行卡片那边拿到了，这里再加装饰只会变成噪音。
@@ -15,13 +15,25 @@
   - `setHeader` 只能在**不带整表认证**的 FillResponse 上用（我方认证是 dataset 级，
     故可用）；且必须至少有一个 dataset，否则 `build()` 抛 IllegalStateException。
   - `Space` **不在 RemoteViews 的 View 白名单**里（会直接抛
-    `InflateException: Class not allowed`）。靠右对齐只能把标题设成 `weight=1` 撑开，
+    `InflateException: Class not allowed`）。靠右对齐只能设 `weight=1` 撑开，
     不能用 Space 占位 —— 这一条踩过才知道，写在这里省下一次。
   - 头里的字同样**不能硬编码**（`check_ui_hardcoded_text.py` 会拦），一律走 strings.xml。
 
-  ── 规格 ────────────────────────────────────────────────────────────────
-  总高约 30dp，比条目行（48dp）明显矮 —— 它是"标签"不是"行"，
-  高度差本身就是层级。文字一律 secondary 色 + 12sp/11sp，不抢条目的注意力。
+  ── 2026-11-09 第二轮（用户真机：「文案和图标占了一点可用空间」）──────────────
+  上一版头是 8dp+12sp+4dp ≈ **30dp**，在 240dp 宽的面板里相当于**半行**位置被吃掉。
+  用户只看到三行半条目（滚动条已经出现了）。
+
+  ⚠️ **面板宽度改不了**：系统 `FillUi.DropdownPopup` 用 `wrap_content` 包一层，
+  宽度由**最宽的那一行**决定 —— 我们无论把头做多宽，都撑不开那个弹窗。
+  所以"显得窄"只能从**纵向**补：把头压低，多在面板里塞一整行。
+
+  ⇒ 本轮把头压成**一行内联**：总高 30 → **24dp**，文字 12/11 → **11/10sp**，
+  图标 14 → **12dp**，间距 6 → 4dp，顶部留白 8 → **6dp**。
+  四件东西（盾牌 · Vaultix · 剩余弹性 · 共 N 条）仍在同一行，
+  所以**不需要**再单独占一行。
+
+  ⚠️ 头高不能压到 20dp 以下：低于这个值，11sp 的中文已经贴到上下边缘，
+     在部分 ROM 上会被 `TextView` 的 font padding 顶出裁切。
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/autofill_header_root"
@@ -29,16 +41,16 @@
     android:layout_height="wrap_content"
     android:gravity="center_vertical"
     android:orientation="horizontal"
-    android:paddingStart="10dp"
-    android:paddingTop="8dp"
-    android:paddingEnd="10dp"
-    android:paddingBottom="4dp">
+    android:paddingStart="8dp"
+    android:paddingTop="6dp"
+    android:paddingEnd="8dp"
+    android:paddingBottom="2dp">
 
     <ImageView
         android:id="@+id/autofill_header_icon"
-        android:layout_width="14dp"
-        android:layout_height="14dp"
-        android:layout_marginEnd="6dp"
+        android:layout_width="12dp"
+        android:layout_height="12dp"
+        android:layout_marginEnd="4dp"
         android:contentDescription="@null"
         android:scaleType="fitCenter"
         android:src="@drawable/ic_autofill_vaultix" />
@@ -51,16 +63,18 @@
         android:layout_weight="1"
         android:ellipsize="end"
         android:fontFamily="sans-serif-medium"
+        android:includeFontPadding="false"
         android:maxLines="1"
         android:text="@string/autofill_header_brand"
         android:textColor="?android:attr/textColorSecondary"
-        android:textSize="12sp" />
+        android:textSize="11sp" />
 
     <TextView
         android:id="@+id/autofill_header_count"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
+        android:includeFontPadding="false"
         android:maxLines="1"
         android:textColor="?android:attr/textColorSecondary"
-        android:textSize="11sp" />
+        android:textSize="10sp" />
 </LinearLayout>
