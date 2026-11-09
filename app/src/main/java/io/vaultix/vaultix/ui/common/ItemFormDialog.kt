@@ -46,6 +46,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -53,9 +54,10 @@ import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -68,6 +70,7 @@ import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
@@ -225,7 +228,21 @@ fun ItemFormDialog(
             }
         },
     ) {
-        // 卡片 1：基本信息（文件夹 / 类型 / 名称）
+        // 身份区（P1 第 5 条，2026-11-09）：名称 + 收藏星标**移出卡片**，直接铺在面板上。
+        // ⚠️ 此前名称排在卡 1 最下面，和「文件夹」「类型」同级同字号 —— 而它是主标识，
+        //    用户打开表单第一眼看的是"这条叫什么"，却要先扫过两个下拉框才找到它。
+        //    Bitwarden / 1Password 的编辑页都是同一结构：身份在上、不进表单分组。
+        ItemIdentityHeader(
+            name = name,
+            onNameChange = { name = it; showNameError = false },
+            favorite = favorite,
+            onFavoriteChange = { favorite = it },
+            showError = showNameError,
+        )
+        Spacer(Modifier.height(Spacing.lg))
+        // 卡片 1：归属（文件夹 / 类型）+ 该类型的专属字段。
+        // ⚠️ 两块**合并成一张卡**：文件夹与类型都是"这条目属于哪"的元信息，
+        //    分成两张会多出一次 24dp 卡间距 + 一张没有标题的卡（见 [FormHeader]）。
         FormGroupCard {
             FormHeader(
                 folders = folders,
@@ -237,44 +254,43 @@ fun ItemFormDialog(
                 selectableTypes = selectableTypes,
                 onTypeSelect = { type = it },
             )
-            NameField(
-                name = name,
-                onNameChange = { name = it; showNameError = false },
-                favorite = favorite,
-                onFavoriteChange = { favorite = it },
-                showError = showNameError,
-            )
-        }
-        // 卡片 2：类型专属字段。
-        // ⚠️ 安全笔记**没有**专属字段 ⇒ 该分支不出卡（否则会留一张空卡）。
-        // ⚠️ 刻意写成 `when` 而不是「先 `if` 再 `when`」：`ItemFormDialog` 的圈复杂度
-        //    本就顶在 detekt 上限 14，多一个分支就会红 —— 用 `when` 保持分支数不变。
-        when (type) {
-            VaultItemType.SecureNote -> Unit
-            VaultItemType.Login -> GroupedTypeFields {
-                LoginFields(
-                    username = username,
-                    onUsernameChange = { username = it },
-                    password = password,
-                    onPasswordChange = { password = it },
-                    uris = uris,
-                    totp = totp,
-                    onTotpChange = { totp = it },
-                    onScanTotp = { scanning = true },
-                    onPickApp = { showAppPicker = true },
-                )
+            // 类型专属字段。
+            // ⚠️ 安全笔记**没有**专属字段 ⇒ 该分支不出任何内容（否则会留一段空白）。
+            // ⚠️ 刻意写成 `when` 而不是「先 `if` 再 `when`」：`ItemFormDialog` 的圈复杂度
+            //    本就顶在 detekt 上限 14，多一个分支就会红 —— 用 `when` 保持分支数不变。
+            when (type) {
+                VaultItemType.SecureNote -> Unit
+                VaultItemType.Login -> TypeFieldsDivider {
+                    LoginFields(
+                        username = username,
+                        onUsernameChange = { username = it },
+                        password = password,
+                        onPasswordChange = { password = it },
+                        uris = uris,
+                        totp = totp,
+                        onTotpChange = { totp = it },
+                        onScanTotp = { scanning = true },
+                        onPickApp = { showAppPicker = true },
+                    )
+                }
+                VaultItemType.Card -> TypeFieldsDivider {
+                    SectionLabel(
+                        text = stringResource(R.string.section_card),
+                        icon = Icons.Filled.CreditCard,
+                    )
+                    Spacer(Modifier.height(Spacing.sm))
+                    LabeledFields(CARD_LABELS, cardValues)
+                }
+                VaultItemType.Identity -> TypeFieldsDivider {
+                    SectionLabel(
+                        text = stringResource(R.string.section_identity),
+                        icon = Icons.Filled.Badge,
+                    )
+                    Spacer(Modifier.height(Spacing.sm))
+                    LabeledFields(IDENTITY_LABELS, identityValues)
+                }
+                VaultItemType.SshKey -> TypeFieldsDivider { SshKeyFields(sshValues) }
             }
-            VaultItemType.Card -> GroupedTypeFields {
-                SectionLabel(text = stringResource(R.string.section_card), icon = Icons.Filled.CreditCard)
-                Spacer(Modifier.height(Spacing.sm))
-                LabeledFields(CARD_LABELS, cardValues)
-            }
-            VaultItemType.Identity -> GroupedTypeFields {
-                SectionLabel(text = stringResource(R.string.section_identity), icon = Icons.Filled.Badge)
-                Spacer(Modifier.height(Spacing.sm))
-                LabeledFields(IDENTITY_LABELS, identityValues)
-            }
-            VaultItemType.SshKey -> GroupedTypeFields { SshKeyFields(sshValues) }
         }
         ItemFormTail(
             customFields = customFields,
@@ -314,9 +330,9 @@ private fun ItemFormTail(
     reprompt: VaultReprompt,
     onRepromptChange: (VaultReprompt) -> Unit,
 ) {
-    // 2026-10-04 观感：卡片↔卡片 12dp → 24dp（理由见 [GroupedTypeFields]）。
+    // 2026-10-04 观感：卡片↔卡片 12dp → 24dp（理由见 [FormGroupCard] 的间距阶梯）。
     Spacer(Modifier.height(Spacing.xl))
-    // 卡片 3：附加内容（自定义字段 + 备注）
+    // 卡片 2：附加内容（自定义字段 + 备注）
     FormGroupCard {
         SectionLabel(
             text = stringResource(R.string.section_custom_fields),
@@ -336,10 +352,10 @@ private fun ItemFormTail(
             modifier = Modifier.fillMaxWidth(),
         )
     }
-    // 卡片 4 之前同样提到 24dp：这张卡与上一张卡原本也是 12dp，
-    // 于是「卡片 3 ↔ 卡片 4」和「卡内小节 ↔ 小节」一样紧。
+    // 卡片 3 之前同样提到 24dp：这张卡与上一张卡原本也是 12dp，
+    // 于是「卡片 2 ↔ 卡片 3」和「卡内小节 ↔ 小节」一样紧。
     Spacer(Modifier.height(Spacing.xl))
-    // 卡片 4：安全选项（主密码二次验证，对齐 Bitwarden「附加选项」）。
+    // 卡片 3：安全选项（主密码二次验证，对齐 Bitwarden「附加选项」）。
     // ⚠️ 单独成卡而不是并进附加内容：它回答的是「这个条目**怎么被保护**」，
     //    与上面「填了什么内容」不是一回事，混在一起会让这张卡的标题失去意义。
     FormGroupCard {
@@ -586,22 +602,22 @@ internal fun FormGroupCard(content: @Composable ColumnScope.() -> Unit) {
 }
 
 /**
- * 类型专属字段的**统一外壳**：卡片间留白 + [FormGroupCard]。
+ * 卡 1 内部「归属 → 类型专属字段」之间的**分界**。
  *
- * 抽出来只为让主函数的 `when` 每个分支保持一行 —— 那里已经顶着 detekt
- * `CyclomaticComplexMethod` 的上限，多写两行就会连带把复杂度顶破。
+ * 2026-11-09（P1 第 5 条）之前，这两块是**两张独立的卡**，中间隔 24dp。
+ * 合并成一张后需要一条视觉分界，否则「文件夹下拉框」和它下面的「用户名输入框」
+ * 会贴在一起、被当成一件事（8.4：卡内小节之间 16dp，但这里语义跨度更大）。
  *
- * ⚠️ 2026-10-04 观感：留白由 `Spacing.md`(12dp) 提到 `Spacing.xl`(24dp)。
- *    原先「卡片↔卡片」与「卡内字段↔字段」「卡内小节↔小节」**同为 12dp**
- *    ⇒ 三种层级一个值 = **层级坍塌**，肉眼看过去就是一长条均质灰块，
- *    完全没有"这是四张卡片"的呼吸感。
- *    ⇒ 现四档（`.ai/conventions/8.4` 阶梯）：
- *    分区标题↔首字段 8 · 字段↔字段 12 · 卡内小节↔小节 16 · **卡片↔卡片 24**。
+ * ⚠️ 用分隔线而不是再加 24dp 留白：留白在**同一张卡里**表达不了层级，
+ *    只会让人以为排版错了（卡内没有"这是另一张卡"的意思）。
+ *    折线 + 上下各 16dp，正好是"卡内换了一个话题"的量级。
  */
 @Composable
-private fun GroupedTypeFields(content: @Composable ColumnScope.() -> Unit) {
-    Spacer(Modifier.height(Spacing.xl))
-    FormGroupCard(content)
+private fun TypeFieldsDivider(content: @Composable ColumnScope.() -> Unit) {
+    Spacer(Modifier.height(Spacing.lg))
+    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+    Spacer(Modifier.height(Spacing.lg))
+    content()
 }
 
 /**
@@ -654,13 +670,29 @@ private fun FormHeader(
 }
 
 /**
- * 名称输入 + 收藏星标（对齐 Bitwarden：收藏在标题行右侧）。
+ * 表单的**身份区**：条目名称（大字号、无外框）+ 收藏星标。
  *
- * ⚠️ 2026-10-04：名称是本表单**唯一必填**字段，label 常态带 `*`。
- *    此前只有保存失败后才出红字 + 「名称不能为空」，用户已经白填了整张表。
+ * ## 为什么移出卡片、为什么不用 `OutlinedTextField`
+ *
+ * 2026-11-09（P1 第 5 条）。名称是**这条目是什么**，其余字段是**它装了什么**。
+ * 此前名称排在「文件夹」「类型」两个下拉框下面，三者同字号同类外观 ——
+ * 用户打开表单要找"这条叫什么"，得先扫过两个不属于它的控件。
+ *
+ * M3 的判据：**页面级的主标识不该画成表单字段的样式**。一旦套上
+ * `OutlinedTextField`，它在视觉上就与"用户名""密码"完全同类，读者只能靠
+ * 位置和 label 判断谁是主标识 —— 那是让用户读结构，而不是让结构自己说话。
+ *
+ * ⇒ 改用无框 `TextField`（`BasicTextField` 的 M3 封装，自带下划线与光标）+ `headlineSmall`。
+ *   下划线是 M3 里"可编辑但非表单字段"的标准表达（日期选择器的输入框同款），
+ *   既保留了"这里能打字"的提示，又不给它一张输入框的框。
+ *
+ * ⚠️ 收藏星标留在同一行右侧：它与名称是**同一件事**（我怎么称呼/标记这条），
+ *    分开会让它变成一行孤零零的图标。
+ * ⚠️ 出错提示仍走 `supportingText` 语义（红字在下划线下方），
+ *    必填星号仍由 [FormFieldLabel] 补 —— 校验反馈不变，只是外观变了。
  */
 @Composable
-private fun NameField(
+private fun ItemIdentityHeader(
     name: String,
     onNameChange: (String) -> Unit,
     favorite: Boolean,
@@ -668,20 +700,28 @@ private fun NameField(
     showError: Boolean,
 ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        OutlinedTextField(
-            value = name,
-            onValueChange = onNameChange,
-            label = { FormFieldLabel(R.string.item_field_name, required = true) },
-            leadingIcon = { FieldIcon(Icons.Filled.Badge) },
-            singleLine = true,
-            isError = showError,
-            supportingText = if (showError) {
-                { Text(stringResource(R.string.item_name_required)) }
-            } else {
-                null
-            },
-            modifier = Modifier.weight(1f),
-        )
+        Column(modifier = Modifier.weight(1f)) {
+            TextField(
+                value = name,
+                onValueChange = onNameChange,
+                label = { FormFieldLabel(R.string.item_field_name, required = true) },
+                textStyle = MaterialTheme.typography.headlineSmall,
+                singleLine = true,
+                isError = showError,
+                supportingText = if (showError) {
+                    { Text(stringResource(R.string.item_name_required)) }
+                } else {
+                    null
+                },
+                colors = TextFieldDefaults.colors(
+                    // 无框 ⇒ 容器一律透明，否则会出现一块比宿主更亮的矩形。
+                    focusedContainerColor = Color.Transparent,
+                    unfocusedContainerColor = Color.Transparent,
+                    errorContainerColor = Color.Transparent,
+                ),
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
         IconButton(onClick = { onFavoriteChange(!favorite) }) {
             Icon(
                 imageVector = if (favorite) Icons.Filled.Star else Icons.Filled.StarBorder,

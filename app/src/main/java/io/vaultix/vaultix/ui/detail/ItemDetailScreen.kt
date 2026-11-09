@@ -34,6 +34,8 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeTopAppBar
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -51,6 +53,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -759,10 +762,22 @@ private val DETAIL_CARD_SHAPE = VaultixCorner.Panel
 /**
  * 分区小标题（登录信息 / 网址 / 2FA / 通行密钥 …）。
  *
- * ⚠️ 2026-09-13 用户反馈「登录信息、网址这些小标题是否要稍微大一点，优化一下排版」：
- * `labelLarge` → **`titleMedium`(16sp)**，并用 `primary` 主色 —— 分区之间的分界
- * 一眼可见，整页读起来有层次（此前 14sp + `onSurfaceVariant` 灰字，和正文几乎同级）。
- * 下内边距 6dp → 8dp：标题与它自己的卡片贴紧，与上一张卡片拉开。
+ * ## 2026-11-09（P2 第 9 条）：16sp 主色 → 14sp 灰字
+ *
+ * ⚠️ 这与 2026-09-13 的反馈**方向相反**，是用户在看过证据后重新拍的：
+ * 当时那轮把 `labelLarge`+`onSurfaceVariant` 提成 `titleMedium`+`primary`，
+ * 理由是「分区分界一眼可见」。但一条目最多能出 **9 张卡片**，于是 9 个
+ * 16sp 主色标题同时喊"看我" —— 互相稀释之后，**整页等于没有重点**，
+ * 用户扫视时先看到的是九个彩色标题，而不是他要的用户名与密码。
+ *
+ * ⇒ 降回 `titleSmall`(14sp) + `onSurfaceVariant`。标题的职责是**分层**，
+ *   不是**强调**；强调留给内容（值的 `bodyLarge` 现在比标题大两号）。
+ *   14sp 仍高于字段名同档（`labelLarge` 也是 14sp）—— 靠字重与位置区分层级，
+ *   不再靠字号和颜色两个维度同时加码。
+ *
+ * ⚠️ 图标保持 `primary`：它是**唯一的彩色锚点**，去掉后整页只剩灰阶，
+ *    分区边界会彻底消失（卡片描边是 0.5dp 的 `outlineVariant`，很淡）。
+ *    「一个元素只该说一件事」在这里的落点是：**一页只有标题的图标是彩色**。
  */
 @Composable
 private fun SectionTitle(text: String, icon: ImageVector) {
@@ -779,8 +794,8 @@ private fun SectionTitle(text: String, icon: ImageVector) {
         )
         Text(
             text = text,
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.primary,
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }
@@ -934,6 +949,22 @@ private const val PLAIN_MAX_LINES = 1
  * 值居右」的横排，卡片 / SSH / 身份是竖排。同一页两种排版，读起来像两个页面拼的。
  * 统一成竖排两行式（M3 list item 的 headline + supporting text 形态）：
  * 长值（网址 / 私钥 / 备注）有自己的一整行，不会被 64dp 的标签列挤成省略号。
+ *
+ * ## 2026-11-09（P1 第 7 条）：自绘 `Row` → M3 `ListItem`
+ *
+ * 上面那段"形态对了"是 2026-09-16 就定了的，但当时是**手写 Row 模仿** list item：
+ * 行高、水波纹范围、读屏语义三样全要自己维护。换成正牌 `ListItem` 后：
+ * - `overlineContent` 就是字段名、`headlineContent` 就是值 —— 与 M3 的语义完全对应；
+ * - 行高由组件按内容算（单行 56dp 起），不用再手调；
+ * - 读屏会把 overline 与 headline 念成「用户名，user@example.com」，
+ *   而手写 Row 是四个独立 `Text`，念出来是一串没有关系的词。
+ *
+ * ⚠️ **必须显式 override 三处样式**，否则这次迁移会静默改变观感：
+ * - `overline` 默认 11sp（`labelSmall`）—— 2026-11-07 已把字段名定在 14sp（`labelLarge`），
+ *   退回去等于推翻真机验证过的结论；
+ * - `headline` 默认 `bodyLarge` 但带一个**内容色**，这里要保持默认 `onSurface`（不设色）；
+ * - 容器色必须透明 —— `ListItem` 默认是 `surface`，卡片底是 `surfaceContainerLow`，
+ *   不 override 每个字段行都会变成一块"贴了色纸的白条"。
  */
 @Composable
 private fun DetailFieldRow(
@@ -944,21 +975,15 @@ private fun DetailFieldRow(
     monospace: Boolean = false,
     maxLines: Int = if (monospace) MONOSPACE_MAX_LINES else PLAIN_MAX_LINES,
 ) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(start = Spacing.lg, end = Spacing.sm, top = Spacing.sm, bottom = Spacing.sm),
-    ) {
-        Column(modifier = Modifier.weight(1f).padding(end = Spacing.xs)) {
+    ListItem(
+        overlineContent = {
             Text(
                 text = label,
-                // 11-07：labelMedium(12sp) 压在 16sp 正文上方太轻，升到 14sp 并补 4dp
-                // 与值的间距；分区标题仍是 titleMedium(16sp)，层级不倒挂（8.4 §74）。
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(bottom = Spacing.xs),
             )
+        },
+        headlineContent = {
             Text(
                 text = value,
                 style = MaterialTheme.typography.bodyLarge,
@@ -966,17 +991,24 @@ private fun DetailFieldRow(
                 maxLines = maxLines,
                 overflow = TextOverflow.Ellipsis,
             )
-        }
-        extraAction?.invoke()
-        IconButton(onClick = onCopy) {
-            Icon(
-                Icons.Filled.ContentCopy,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(UiSize.InlineIcon),
-            )
-        }
-    }
+        },
+        trailingContent = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                extraAction?.invoke()
+                IconButton(onClick = onCopy) {
+                    Icon(
+                        Icons.Filled.ContentCopy,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(UiSize.InlineIcon),
+                    )
+                }
+            }
+        },
+        // 行内左右留白交给 ListItem 自己的 16dp（与卡片内边距同值），只补竖向 ——
+        // 原来手写的 top/bottom 8dp 会让两行文字贴到卡片边缘。
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+    )
 }
 
 /** 折叠态下默认显示几条网址（2026-11-09）。 */
