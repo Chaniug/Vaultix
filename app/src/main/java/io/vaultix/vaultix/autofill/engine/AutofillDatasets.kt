@@ -72,8 +72,10 @@ object AutofillDatasets {
         }
         // 无障碍：整行是一块可点区域，读屏需要一句完整描述（对齐上游
         // `BitwardenRemoteViews` 给 container 设 contentDescription 的做法）。
+        // ⚠️ 挂在 **wrapper** 上而不是圆角卡片上：2026-11-09 起卡片外面还有一层
+        //    透明 padding（行距），系统把整行当一个可聚焦项，描述必须覆盖整行。
         setContentDescription(
-            R.id.autofill_item_root,
+            R.id.autofill_item_wrapper,
             listOf(title, subtitle).filter { it.isNotBlank() }.joinToString("，"),
         )
     }
@@ -95,8 +97,10 @@ object AutofillDatasets {
         setTextViewText(R.id.autofill_item_subtitle, subtitle)
         // 无障碍：整行是一块可点区域，读屏需要一句完整描述（对齐上游
         // `BitwardenRemoteViews` 给 container 设 contentDescription 的做法）。
+        // ⚠️ 挂在 **wrapper** 上而不是圆角卡片上：2026-11-09 起卡片外面还有一层
+        //    透明 padding（行距），系统把整行当一个可聚焦项，描述必须覆盖整行。
         setContentDescription(
-            R.id.autofill_item_root,
+            R.id.autofill_item_wrapper,
             listOf(title, subtitle).filter { it.isNotBlank() }.joinToString("，"),
         )
     }
@@ -116,6 +120,29 @@ object AutofillDatasets {
             DARK_ICON_TINT.toInt()
         } else {
             LIGHT_ICON_TINT.toInt()
+        }
+    }
+
+    /**
+     * 填充面板顶部的**品牌头**（`FillResponse.Builder.setHeader`）。
+     *
+     * 只做一件事：让用户确认"这些条目是 Vaultix 给的"。面板里每一行都是
+     * 「图标 + 标题 + 副标题」的通用造型，十几家密码管理器长得一模一样，
+     * 没有品牌头时用户无从分辨来源（尤其在国产 ROM 的纯黑面板上，外人看着
+     * 就像输入法自带的东西）。
+     *
+     * ⚠️ **不可点击**（`setHeader` 的 RemoteViews 文档明确写 dead）：
+     * 所以这里没有「管理 / 打开 App」入口。想给入口只能另加一个 dataset，
+     * 而 dataset 一旦被点就会尝试填充 —— 会在密码框里填进脏值，不做。
+     *
+     * @param count 本次面板里的建议条数；<= 0 时返回 null（不画头）。
+     */
+    fun header(context: Context, count: Int): RemoteViews? {
+        if (count <= 0) return null
+        return RemoteViews(context.packageName, R.layout.autofill_header).apply {
+            setTextViewText(R.id.autofill_header_count, context.getString(R.string.autofill_header_count, count))
+            // 品牌矢量是纯黑 paths，必须上色才看得见；用与副标题同档的前景色。
+            setInt(R.id.autofill_header_icon, "setColorFilter", iconTint(context))
         }
     }
 

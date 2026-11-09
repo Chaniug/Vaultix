@@ -11,6 +11,11 @@
   - 不能做：MaterialCardView 的完整阴影形态、`android:foreground` 水波纹、
     非系统字体族、Material You 动态色。
 
+  ⚠️ 面板**外框**不归我们管：那个弹窗是系统 `FillUi` 的 `PopupWindow`，
+  它的背景 / 圆角 / 阴影 / 宽度 / 行分隔 / 按压高亮**全部由系统或 ROM 决定**。
+  同一份本布局在 Pixel 上是浅色圆角卡片，在部分国产 ROM 上是纯黑方角。
+  所以「本文件能改的」只有行**内部**：背景块、间距、字号、图标。别指望改这里能改外框。
+
   ── 2026-09-13 第二轮（用户：「确实紧凑了，但是风格和最新的 material 有点差距」）──
   在 RemoteViews 边界内把规格对齐 **M3 list item**：
   - 行高 **56dp** 且**不设 minHeight 之外的额外垂直内边距**：M3 两行 list item 的
@@ -19,11 +24,12 @@
   - 图标 **24dp 位图落在 40dp 圆形 tonal 容器**上（M3 list item 的 icon container 规格）：
     站点图标与字母头像于是拥有完全相同的尺寸与形状，整列的视觉重量整齐；
     容器色按 uiMode 取 `surfaceContainerHighest` 等效值（见 drawable(-night)/autofill_item_icon_bg）。
-  - 图标容器与文字间距 **16dp**（M3 list item 的 `leading → label` 间距）。
+  - 图标容器与文字间距 **16dp**（M3 list item 的 `leading 到 label` 间距）。
   - 水平内边距 **16dp**（与 Vaultix 列表卡片、M3 list item 一致）。
   - 标题 16sp / 副标题 14sp（M3 `bodyLarge` / `bodyMedium`），层次由**字号 + 色阶**给出，
     不靠加粗；标题用 `sans-serif-medium` 仅作轻微强调。
   - 副标题单行省略 + 标题单行省略：面板宽度有限，宁可截断也不要换行把行撑高。
+
   ── 2026-09-16 第五改（用户：「密码条目显示效果不太好，偏大了」）──────────────
   上一轮（2026-09-13）是**往大改**的：为了对齐 M3 list item，把行高 48→56、图标 24→34。
   但那个规格的前提不成立 —— **M3 的 40dp icon container 是为 360dp 以上的全宽列表设计的**，
@@ -36,61 +42,96 @@
 
   ⚠️ 位图尺寸必须与 `AutofillItemIcon.ICON_DP` **同步改**（两处不同步会出现缩放模糊）。
   ⚠️ 这仍是**有意偏离** M3 list item 规格 —— 理由就是上面那条"窄面板"。
+
+  ── 2026-11-09 第六改（用户：「这个密码列表还能做的好看一点吗」）──────────────
+  前两轮不管怎么调字号，面板看起来都是**一坨黑块**。查下来不是比例问题，是**层次缺失**：
+  ① 每行**没有背景**（`autofill_item_frame` 这个 12dp 圆角 resources 存在但**全仓库零引用**，
+     等于常年没接线）⇒ 三行字直接糊在面板底色上，行与行之间没有任何边界；
+  ② 图标**双重圆底**：字母头像自己 `drawCircle(满半径)` 画了一整个彩圆，外层又套了一层
+     32dp 的 `autofill_item_icon_bg`（夜间 `#49454F`）⇒ 深色面板上是一圈"脏边"，
+     浅色面板上是一圈灰环。
+  ⇒ 本轮只做两件事，不加任何新花样：
+  - 外层加一层**透明 wrapper**（4dp 水平 / 2dp 垂直内边距），内层才是**圆角卡片**
+    （`autofill_item_frame`，12dp 圆角 + 12% 白 / 6% 黑的面）。行距由此产生，
+    不再依赖 `layout_margin`（RemoteViews 塞进系统列表后，root 的 margin 会被
+    `AbsListView.LayoutParams` 吃掉，不可靠 —— 用 padding 换行距才是稳的）。
+  - 去掉 FrameLayout 的容器底（图标位图自己就是完整圆，不需要再托一层）。
+
+  为什么不贪多：系统的**按压高亮画在行容器上、是方角的**，我们的圆角卡片只是静息态。
+  卡片与高亮之间不会打架（高亮是整行变亮），但**不要**再加描边 / 阴影 / 渐层 ——
+  那些在 RemoteViews 里做不真，叠上去只会显得脏。
+
+  ⚠️ **总高刻意保持不变**：卡片 `minHeight` 由 52 改 48，加上 wrapper 上下各 2dp 行距，
+  总高仍是 52dp。也就是说本轮**只改了"层次"，没改"密度"** —— 上一轮刚因为"偏大"缩过一次，
+  这里再动尺寸会把那次调优推翻。以后想改密度，请单独一轮、单独论证。
+
   ⚠️ 本注释**不得出现连续两个短横线**（markdown 表格分隔行会让 aapt2 报
      "Failed to parse XML file"，且报错完全不提注释，极难定位）。
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:id="@+id/autofill_item_root"
+    android:id="@+id/autofill_item_wrapper"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:minHeight="52dp"
-    android:gravity="center_vertical"
-    android:orientation="horizontal"
-    android:paddingStart="12dp"
-    android:paddingEnd="12dp">
+    android:orientation="vertical"
+    android:paddingStart="4dp"
+    android:paddingTop="2dp"
+    android:paddingEnd="4dp"
+    android:paddingBottom="2dp">
 
-    <!-- 图标：32dp 圆形容器 + 26dp 居中位图（窄面板下的比例，见文件头）。 -->
-    <FrameLayout
-        android:layout_width="32dp"
-        android:layout_height="32dp"
-        android:layout_marginEnd="12dp"
-        android:background="@drawable/autofill_item_icon_bg">
+    <LinearLayout
+        android:id="@+id/autofill_item_root"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:minHeight="48dp"
+        android:background="@drawable/autofill_item_frame"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="10dp"
+        android:paddingEnd="10dp">
 
+        <!-- 图标：26dp 位图本身就是完整圆形（字母头像画满、站点图标 circular 裁圆），
+             所以**不再套容器底**（2026-11-09 第六改，去掉双重圆底）。 -->
         <ImageView
             android:id="@+id/autofill_item_icon"
             android:layout_width="26dp"
             android:layout_height="26dp"
-            android:layout_gravity="center"
+            android:layout_marginEnd="10dp"
             android:contentDescription="@null"
             android:scaleType="centerCrop" />
-    </FrameLayout>
 
-    <LinearLayout
-        android:layout_width="0dp"
-        android:layout_height="wrap_content"
-        android:layout_weight="1"
-        android:orientation="vertical"
-        android:paddingTop="4dp"
-        android:paddingBottom="4dp">
-
-        <TextView
-            android:id="@+id/autofill_item_title"
-            android:layout_width="match_parent"
+        <LinearLayout
+            android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:ellipsize="end"
-            android:fontFamily="sans-serif-medium"
-            android:maxLines="1"
-            android:textColor="?android:attr/textColorPrimary"
-            android:textSize="15sp" />
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:paddingTop="4dp"
+            android:paddingBottom="4dp">
 
-        <TextView
-            android:id="@+id/autofill_item_subtitle"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:ellipsize="end"
-            android:includeFontPadding="false"
-            android:maxLines="1"
-            android:textColor="?android:attr/textColorSecondary"
-            android:textSize="13sp" />
+            <TextView
+                android:id="@+id/autofill_item_title"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:fontFamily="sans-serif-medium"
+                android:maxLines="1"
+                android:textColor="?android:attr/textColorPrimary"
+                android:textSize="15sp" />
+
+            <!-- 副标题：账号多为手机号 / 一长串数字，`tnum` 让逐行的数字**等宽对齐**，
+                 三行扫下来是整齐的柱状，不会因为 6/1 的字符宽度差而参差。
+                 ⚠️ 值必须写成 CSS 语法 `'tnum'`（**带单引号**）——
+                    `android:fontFeatureSettings` 收的是 font-feature-settings 串，
+                    裸写 `tnum` 不报错也不生效，只会静默地什么都不做。 -->
+            <TextView
+                android:id="@+id/autofill_item_subtitle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:fontFeatureSettings="'tnum'"
+                android:includeFontPadding="false"
+                android:maxLines="1"
+                android:textColor="?android:attr/textColorSecondary"
+                android:textSize="13sp" />
+        </LinearLayout>
     </LinearLayout>
 </LinearLayout>

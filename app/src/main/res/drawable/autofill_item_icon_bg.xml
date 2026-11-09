@@ -9,6 +9,12 @@
 
   颜色取 `surfaceContainerHighest` 的等效值：面板由系统渲染、拿不到动态取色，
   按 uiMode 各给一档固定色（见 drawable-night 的同名资源）。
+
+  ⚠️ **2026-11-09 起本 drawable 不再被引用**：字母头像自己画满半径彩圆、
+  站点图标也已被 `circular()` 裁成完整圆，位图本身就是圆形，再托一层只会
+  在深色面板上多出一圈 `#49454F` 的"脏边"、浅色面板上多一圈灰环。
+  ⇒ `autofill_dataset_item.xml` 已去掉这里的 `android:background`。
+  **保留文件只为回滚**（浅色面板若实测图标发飘可加回），不要在别处引用。
 -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="oval">

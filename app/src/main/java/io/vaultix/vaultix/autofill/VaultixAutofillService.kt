@@ -353,7 +353,17 @@ class VaultixAutofillService : AutofillService() {
                 "unlocked=${unlocked.size} candidates=${vault.credentials.size} " +
                 "matched=${matched.size} datasets=$added",
         )
-        if (added > 0) return builder.build()
+        if (added > 0) {
+            // 品牌头（2026-11-09）：面板里每行都是「图标 + 两行字」的通用造型，
+            // 十几家密码管理器长得一模一样，没有头用户分不清是谁给的。
+            //
+            // ⚠️ 包在 `runCatching` 里是**故意的**：`setHeader` 有两个会抛的入口
+            //   （FillResponse 上已挂整表认证 / 一个 dataset 都没有），我方两条都不满足，
+            //   但厂商 ROM 的 framework 实现未必一致。头是锦上添花，
+            //   **绝不能因为它让整次填充失败** —— 用户要的是密码能填进去。
+            runCatching { AutofillDatasets.header(this, added)?.let { builder.setHeader(it) } }
+            return builder.build()
+        }
 
         AutofillLogger.d("noMatch domain=$webDomain → search fallback")
         return AutofillDatasets.buildFallback(

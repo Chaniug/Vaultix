@@ -542,6 +542,9 @@
     <string name="autofill_no_match_title">没有匹配的密码</string>
     <string name="autofill_no_match_subtitle">点此在 Vaultix 中搜索</string>
     <string name="autofill_locked_title">Vaultix 已锁定</string>
+    <!-- 填充面板品牌头（不可点击，只做归属感；见 layout/autofill_header.xml） -->
+    <string name="autofill_header_brand">Vaultix</string>
+    <string name="autofill_header_count">共 %1$d 条</string>
 
     <!-- 自动填充·快捷入口（磁贴 / 手动填充 / 智能复制接力，不依赖无障碍） -->
     <string name="tile_manual_fill">快速填充</string>

@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  自动填充面板的**品牌头**（`FillResponse.Builder.setHeader`，API 26+）。
+
+  ── 为什么要有它（2026-11-09）──────────────────────────────────────────────
+  面板里那三行「QQ / 1067165656」长得和任何一家密码管理器都一样，
+  用户没有任何线索能确认"这是 Vaultix 给的、不是某个野鸡输入法"。
+  加一条极轻的品牌行，解决的是**归属**，不是好看 ——
+  好看的收益已经在行卡片那边拿到了，这里再加装饰只会变成噪音。
+
+  ── 能力边界（写之前先看，别踩）─────────────────────────────────────────
+  - `setHeader` 的 RemoteViews **不可点击**：文档原文 "This presentation is not
+    clickable, calling setOnClickPendingIntent would have no effect"。
+    所以这里**不做**「管理 / 打开 App」入口 —— 想做也做不成，别浪费时间。
+  - `setHeader` 只能在**不带整表认证**的 FillResponse 上用（我方认证是 dataset 级，
+    故可用）；且必须至少有一个 dataset，否则 `build()` 抛 IllegalStateException。
+  - `Space` **不在 RemoteViews 的 View 白名单**里（会直接抛
+    `InflateException: Class not allowed`）。靠右对齐只能把标题设成 `weight=1` 撑开，
+    不能用 Space 占位 —— 这一条踩过才知道，写在这里省下一次。
+  - 头里的字同样**不能硬编码**（`check_ui_hardcoded_text.py` 会拦），一律走 strings.xml。
+
+  ── 规格 ────────────────────────────────────────────────────────────────
+  总高约 30dp，比条目行（48dp）明显矮 —— 它是"标签"不是"行"，
+  高度差本身就是层级。文字一律 secondary 色 + 12sp/11sp，不抢条目的注意力。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/autofill_header_root"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:paddingStart="10dp"
+    android:paddingTop="8dp"
+    android:paddingEnd="10dp"
+    android:paddingBottom="4dp">
+
+    <ImageView
+        android:id="@+id/autofill_header_icon"
+        android:layout_width="14dp"
+        android:layout_height="14dp"
+        android:layout_marginEnd="6dp"
+        android:contentDescription="@null"
+        android:scaleType="fitCenter"
+        android:src="@drawable/ic_autofill_vaultix" />
+
+    <!-- weight=1 把剩余宽度吃掉，数量才会被推到最右（见文件头：不能用 Space）。 -->
+    <TextView
+        android:id="@+id/autofill_header_title"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:ellipsize="end"
+        android:fontFamily="sans-serif-medium"
+        android:maxLines="1"
+        android:text="@string/autofill_header_brand"
+        android:textColor="?android:attr/textColorSecondary"
+        android:textSize="12sp" />
+
+    <TextView
+        android:id="@+id/autofill_header_count"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:maxLines="1"
+        android:textColor="?android:attr/textColorSecondary"
+        android:textSize="11sp" />
+</LinearLayout>

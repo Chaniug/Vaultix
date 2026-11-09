@@ -23,6 +23,7 @@
 package io.vaultix.vaultix.autofill.engine
 
 import android.content.Context
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
@@ -46,14 +47,26 @@ import kotlin.math.roundToInt
  * 2026-09-16：随布局回落至 **26dp** —— 系统填充面板只有约 240dp 宽，
  *   40dp 的 icon container 是为 360dp+ 全宽列表设计的，在窄面板里占掉近四成宽度，
  *   用户反馈"密码条目偏大"。容器 → 32dp，位图同步回到 26dp。
+ * 2026-11-09：容器**整个去掉**（位图自身就是完整圆，再托一层会出"脏边"），
+ *   ImageView 直接按 26dp 排版 ⇒ 位图与显示尺寸从此是 1:1，不存在上采样发虚。
  */
 private const val ICON_DP = 26f
 
 /** 字母头像的字号占比（相对直径）。 */
 private const val LETTER_SCALE = 0.46f
 
-/** 站点图标多为透明 PNG：垫白底，避免深色面板下深色描边糊成一团（同 Bitwarden）。 */
-private const val ICON_BACKDROP = Color.WHITE
+/**
+ * 站点图标多为透明 PNG：垫一层中性底，避免深色面板下深色描边糊成一团
+ * （同 Bitwarden）。
+ *
+ * ⚠️ **必须按 uiMode 分开**（2026-11-09）：原先是固定 `WHITE`。浅色面板没问题，
+ * 但在深色面板（近黑底）上，一枚「白圆 + 浅色 logo」是整屏最亮的东西 ——
+ * 十条一模一样地把视线全抢走，而且和旁边自己画彩圆的字母头像
+ * **完全不是一套语言**。
+ * 深色值取 M3 `surfaceContainerHighest` 的等效色，与图标圆底同一档，托得住又不刺眼。
+ */
+private const val ICON_BACKDROP_LIGHT: Int = 0xFFFFFFFF.toInt()
+private const val ICON_BACKDROP_DARK: Int = 0xFF49454F.toInt()
 
 /**
  * 字母头像的底色池（M3 tonal palette 的中低明度色，白字均能保证对比度）。
@@ -92,10 +105,16 @@ fun createAutofillItemIcon(
     val size = (ICON_DP * context.resources.displayMetrics.density).roundToInt().coerceAtLeast(1)
     val cached = iconUrl?.let { readCachedIcon(context, it) }
     return if (cached != null) {
-        circular(cached, size)
+        circular(cached, size, backdropColor(context))
     } else {
         letterAvatar(title, category, size)
     }
+}
+
+/** 面板明暗由系统配置决定，不是 App 主题（见 `autofill_dataset_item.xml` 文件头）。 */
+private fun backdropColor(context: Context): Int {
+    val night = context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
+    return if (night == Configuration.UI_MODE_NIGHT_YES) ICON_BACKDROP_DARK else ICON_BACKDROP_LIGHT
 }
 
 /**
@@ -108,13 +127,13 @@ private fun readCachedIcon(context: Context, url: String): Bitmap? = runCatching
     snapshot.use { BitmapFactory.decodeFile(it.data.toFile().absolutePath) }
 }.getOrNull()
 
-/** 把任意尺寸图标裁成圆形（居中裁剪，垫 [ICON_BACKDROP] 底）。 */
-private fun circular(src: Bitmap, size: Int): Bitmap {
+/** 把任意尺寸图标裁成圆形（居中裁剪，垫 [backdrop] 底）。 */
+private fun circular(src: Bitmap, size: Int, backdrop: Int): Bitmap {
     val out = createBitmap(size, size)
     val canvas = Canvas(out)
     val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     val radius = size / 2f
-    paint.color = ICON_BACKDROP
+    paint.color = backdrop
     canvas.drawCircle(radius, radius, radius, paint)
 
     val path = Path().apply { addOval(RectF(0f, 0f, size.toFloat(), size.toFloat()), Path.Direction.CW) }
