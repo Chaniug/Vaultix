@@ -1,6 +1,7 @@
 # 底栏 P1 施工单 · 方案 ③ + 方案 A 合并
 
-> 2026-11-09 · 状态：**全部拍板完毕，施工单可直接执行；未改任何 Kotlin / XML。**
+> 2026-11-09 · 状态：**已施工并推 `main`（`3fd27fe6`），CI 出包中**。
+> 用户 19:54：「先按目前的方案改，我实机看一下效果」⇒ 开工令。
 > 用户 19:47：「按照你的推荐来」⇒ 采纳架构方案 A（不扩 Tab、卡包不动）。
 > 前置文档：[`dock-polish-plan.md`](./dock-polish-plan.md)（思路）·
 > [`dock-slot-proposal.md`](./dock-slot-proposal.md)（架构评估）·
@@ -119,19 +120,28 @@
 
 ---
 
-## 5. 状态：已拍板，施工单可直接执行
+## 5. 施工记录（2026-11-09，提交 `3fd27fe6`）
 
-「新建登录 1 步 → 2 步」这一代价在方案 A 的推荐里已写明，用户 19:47 采纳推荐时
-即已知情接受，**无需再问一次**。
+三批已全部落地，改动 10 个文件（+1208 / −33）。实际实现与本文的差异，逐条如实记录：
 
-⚠️ 本单没有顺手改代码，理由是两条工程纪律：
+| 项 | 计划 | 实际 |
+|---|---|---|
+| 弹簧 / 形变 / 图标 one-shot / 加号压缩回弹 | P1-a | ✅ 全在 `VaultixBottomDock.kt`；`USE_M3_STATE_LAYER` 默认关，改一个布尔即可对比 M3 手感 |
+| 选中 pill 形变 | 16dp → 胶囊 | ✅ 用 `RoundedCornerShape(percent)` 33% → 50% 连续 spring；颜色仍 `when` 瞬切 |
+| 动作面板 | P1-b | ✅ 新增 `AddActionSheet.kt`；`ModalBottomSheet` + 唯一 Filled 主按钮 + 5 个类型 ListItem + 生成器入口 |
+| 默认动作 | 保住原分发 | ✅ `runDefaultAdd` 原样保留 `when (addTarget)` 三个计数器；面板主按钮按当前 Tab 变文案 |
+| 库类型过滤 | 面板按库过滤 | ⚠️ **改在表单侧**：`ItemFormDialog` 已有 `fallbackFormType`，会把不在 `selectableTypes` 里的初始类型兜到该库支持的第一种。面板再过滤就成了第二个真源、还要和库摘要加载时序同步 —— 已写进 `AddActionSheet.kt` 注释 |
+| 生成器独立入口 | `onUse` 复制剪贴板 | ✅ `StandalonePasswordGeneratorDialog` 用 Android 原生 ClipboardManager + Toast，零 Compose alpha API |
+| 便签 ⋮ 直达项 | P1-c | ⏸ **本批未做**。动作面板里的「安全笔记」新建项已是显眼入口，查看已有便签仍用 `QuickFilterPanel` 里本来就有的 `ItemsQuickFilter.Note`；⋮ 菜单要穿 4 层签名，且 `ItemsScreen` 贴 detekt `LongMethod ≤150`，留到真机反馈后再决定值不值 |
+| `VaultixNavModel` 文件头 | 更正过时说明 | ✅ 已改 |
+| 导航状态契约 | 一行不改 | ✅ `currentTab` / `SaveableStateProvider` / `contentKey` / Tab 枚举 / `addTarget` 全部原样 |
 
-1. **P1-a 与 P1-b 都改 `AddButton`**，夹在讨论里草率落地会互相覆盖；
-2. `ItemsScreen.kt` 贴着 detekt `LongMethod ≤150` 上限（`.ai/MEMORY.md` 明确「别加行，
-   说明写到别处」），动作菜单接线必须**抽函数**而不是往里塞逻辑，需要独立一轮认真做。
+**本地门禁全绿**：`check_compile_smells`（519 文件）/ 编码 / md 链接 / workflow shell / secret /
+`git diff --check` / 大括号平衡 / 新增 7 条 `R.string` 引用核对。
+本机不编译，`assembleFullDebug` / `detekt` / `test` 由 CI run `42615108355` 验证。
 
-⇒ 下一步就是按 P1-a → P1-b → P1-c 施工，本机不编译，push `main` 交 CI。
-其余议题全部拍板完毕，不再需要讨论。源码至今未改。
+⏳ **待用户实机反馈**：动效强度（弹簧是否过弹、形变是否太慢）、图标弹跳是否讨喜、
+「新建登录 1 步 → 2 步」的手感是否可接受。反馈后逐项调，不必重做架构。
 
 ---
 

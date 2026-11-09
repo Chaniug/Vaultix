@@ -49,6 +49,7 @@ import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Password
 import androidx.compose.material3.Button
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
@@ -79,6 +80,7 @@ import kotlinx.coroutines.launch
  * @param onPickType 新建指定类型的条目；宿主切到密码 Tab 并把类型透传给表单。
  * @param onGeneratePassword 打开独立生成器（由宿主渲染，见文件头）。
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AddActionSheet(
     currentTab: VaultixNavItem,
