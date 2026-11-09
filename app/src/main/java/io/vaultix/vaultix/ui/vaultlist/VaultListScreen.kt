@@ -130,18 +130,22 @@ private const val CARD_DIMMED_ALPHA = 0.42f
  * 装饰只用 **Material 图标 + 同一套 tonal 颜色**，不引数据、不引位图：
  * - [CARD_TINT_ALPHA]：卡片底色取该库类型的 `container` 色，压到极淡。
  *   三张卡因此不是三块同色白板，而是「蓝 / 绿 / 紫」三档极浅的色块。
- * - [WATERMARK_ALPHA]：卡片右侧那枚放大到 [WATERMARK_SIZE] 的类型图标。
- *   它和徽章**同一个图标、同一个 accent 色**，只是尺寸与透明度不同 ——
- *   这是「一个系统的三种尺寸」，不是第二套装饰语言。
+ * - [WATERMARK_ALPHA]：卡片右侧那枚类型图标。它和徽章**同一个图标、同一个 accent 色**，
+ *   只是尺寸与透明度不同 —— 这是「一个系统的三种尺寸」，不是第二套装饰语言。
  * - [WATERMARK_OFFSET_X]：向右出血的距离，让图标被卡片圆角裁掉一部分，
  *   读作「图案从边缘延伸出去」而不是「贴了一个大图标」。
  *
- * ⚠️ 三个值都是观感旋钮：嫌花就降 [WATERMARK_ALPHA]，嫌淡就升 [CARD_TINT_ALPHA]。
+ * ⚠️ [WATERMARK_SIZE] **不能超过卡片的自然高度**：水印和内容同在一个 `Box` 里，
+ *    `Box` 按最大的子元素测量 ⇒ 水印一旦比内容高，卡片会被它**撑高**。
+ *    无同步状态行时卡片自然高度约 79dp（色条 3 + 上下内边距 28 + 徽章 48），
+ *    所以取 84dp：既比 48dp 徽章明显大一档，又只在有状态行时才可能略微撑高。
+ *
+ * ⚠️ 四个值都是观感旋钮：嫌花就降 [WATERMARK_ALPHA]，嫌淡就升 [CARD_TINT_ALPHA]。
  */
 private val CARD_TINT_ALPHA = 0.10f
-private val WATERMARK_SIZE = 104.dp
+private val WATERMARK_SIZE = 84.dp
 private val WATERMARK_ALPHA = 0.07f
-private val WATERMARK_OFFSET_X = 32.dp
+private val WATERMARK_OFFSET_X = 30.dp
 private val CARD_BORDER_WIDTH = 1.dp
 private val CARD_BORDER_ALPHA = 0.55f
 
