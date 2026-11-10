@@ -24,6 +24,33 @@
 - 已接进 CI：`ci-debug.yml` 的 `sandbox-tests` job 用**同一份脚本**，与 `android-ci` 并行
   ⇒ 本地绿 ⇒ CI 不会红在同一件事上。
 
+## 🕐 最新状态（2026-11-10 深夜 · 液态玻璃底栏第四轮：边界沿轮廓 / 补饱和度 / 按压联动）
+
+> **一句话**：用户「点击效果和玻璃效果都没做完善，注意边界和大小」—— 三个症状三种根因，
+> 第四点是**约束**：前两处的改法全程不许改变底栏的边界与大小。承接 #198/#200/#205 架构，不重开链路。
+
+| # | 用户看到 | 根因 / 处理 |
+|---|---|---|
+| [#277](./issues/06-界面与交互-part17.md) | 边界断在圆角、像「上下有边、左右没边」 | 高光 / 描边用 `drawRect` 画，被 `.clip(Pill)` 裁掉两端半圆 ⇒ 改 `Shape.createOutline` + `drawOutline` **沿轮廓**画五层（填充 / 高光带 / 镜面 rim / 焦点高光 / 内描边），圆角连续；降级档只画填充 + 内描边 |
+| [#277](./issues/06-界面与交互-part17.md) | 玻璃后方糊成一片灰雾 | 只 `blur` 会把彩色条目洗成中性灰 ⇒ 模糊后串 `setSaturation(1.38)` 的 ColorFilter 链（Haze vibrancy / LiquidGlassBar 1.5× 同款），**31-32 也拿到**；AGSL 源码一行不改（运行时编译、CI 覆盖不到） |
+| [#277](./issues/06-界面与交互-part17.md) | 点击时玻璃毫无反应 | 按压只发生在被按 item 内部 ⇒ 折算成 `GlassPress(intensity, focusX)` 两个**纯绘制参数**：镜面增亮 / AGSL 折射变深 / 焦点光晕落在被按 tab 上沿 + 松手 `ContextClick` 触觉 |
+| [#277](./issues/06-界面与交互-part17.md) | 「注意底栏的边界和大小」 | `GlassPress` 不碰任何 `size/height/width/padding`；两态共用 `DockRow`/`VaultixCorner.Pill`，玻璃层不写死高度（#205 硬边界）。收 `State<GlassPress>` 只在**绘制阶段**读 ⇒ spring 期间零重组 |
+
+### 三条判据
+
+1. **沿轮廓 vs 矩形**：`clip(Shape)` 会裁掉矩形装饰在圆角处的部分 —— 边界要连续，几何就必须
+   用同一个 `Outline` 画，不能先画矩形再靠 clip 补。
+2. **饱和度是「玻璃能不能透出内容」的关键，不是装饰**：`createChainEffect(outer, inner)` 的
+   outer 作用于 inner 结果，饱和度链别写反；链创建失败要原样返回 blur。
+3. **观感状态不许参与测量**：动画值在组合期读会每帧重组整条底栏 ⇒ 收 `State`、绘制阶段读；
+   按压只调 alpha / shader uniform / 渐变中心，尺寸一个像素都不动。
+
+> 实证：CI 同款 9 模块单测 **1751 例 / 0 失败**（上轮 1741 + 10）+ detekt + 15 个静态门禁全绿；
+> 两次变异验证（`drawOutline`→`drawRect`、`SATURATION`→`1f`）均精确变红后恢复。
+> 静态对照预览 `/workspace/vaultix-glass-dock-preview.html`（仓库外）。
+> ⚠️ 8.4-part3「iOS 26 透镜折射 ❌ 不做」否的是**可拖动放大镜 + PixelCopy 逐帧回读**；
+> 本项目既有 `OpticsShader` 用 `createRuntimeShaderEffect` 直接采样 RenderNode，做的是固定边缘折射，不冲突。
+
 ## 🕐 最新状态（2026-11-10 夜 · 卡包第二轮：颜色按银行走 + 名片重排）
 
 > **一句话**：#275 只做到「形状像」，这轮补上**颜色有语义**、**名片有层次**。
