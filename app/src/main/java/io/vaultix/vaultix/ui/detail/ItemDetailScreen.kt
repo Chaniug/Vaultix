@@ -90,6 +90,7 @@ import io.vaultix.vaultix.ui.theme.UiSize
 import io.vaultix.vaultix.ui.theme.VaultixCorner
 import kotlinx.coroutines.delay
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.common.DialogTextButton
 import io.vaultix.vaultix.ui.common.BadgeTone
 import io.vaultix.vaultix.ui.common.ItemFormDialog
 import io.vaultix.vaultix.ui.common.LINKED_FIELD_LABELS
@@ -707,22 +708,20 @@ fun ItemDetailScreen(
             title = { Text(stringResource(R.string.delete_item_title)) },
             text = { Text(stringResource(R.string.delete_item_message, item.title)) },
             confirmButton = {
-                TextButton(
+                DialogTextButton(
+                    text = stringResource(R.string.delete_item_confirm),
+                    contentColor = MaterialTheme.colorScheme.error,
                     onClick = {
                         deleteConfirmOpen = false
                         viewModel.deleteItem()
                     },
-                ) {
-                    Text(
-                        text = stringResource(R.string.delete_item_confirm),
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
+                )
             },
             dismissButton = {
-                TextButton(onClick = { deleteConfirmOpen = false }) {
-                    Text(stringResource(R.string.action_cancel))
-                }
+                DialogTextButton(
+                    text = stringResource(R.string.action_cancel),
+                    onClick = { deleteConfirmOpen = false },
+                )
             },
         )
     }

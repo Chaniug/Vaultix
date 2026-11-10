@@ -57,6 +57,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.vaultix.model.VaultKind
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.common.DialogTextButton
 import io.vaultix.vaultix.ui.common.EmptyState
 import io.vaultix.vaultix.ui.common.TopBarTitle
 import io.vaultix.vaultix.ui.common.VaultixWavyProgress
@@ -358,17 +359,19 @@ private fun DeleteFolderDialog(
             )
         },
         confirmButton = {
-            TextButton(enabled = !busy, onClick = onConfirm) {
-                Text(
-                    text = stringResource(R.string.action_delete),
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
+            DialogTextButton(
+                text = stringResource(R.string.action_delete),
+                contentColor = MaterialTheme.colorScheme.error,
+                enabled = !busy,
+                onClick = onConfirm,
+            )
         },
         dismissButton = {
-            TextButton(enabled = !busy, onClick = onDismiss) {
-                Text(stringResource(R.string.action_cancel))
-            }
+            DialogTextButton(
+                text = stringResource(R.string.action_cancel),
+                enabled = !busy,
+                onClick = onDismiss,
+            )
         },
     )
 }

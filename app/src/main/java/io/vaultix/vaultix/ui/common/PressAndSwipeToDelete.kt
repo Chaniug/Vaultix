@@ -278,15 +278,17 @@ private fun DeleteConfirmDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
         title = { Text(stringResource(R.string.delete_swipe_title)) },
         text = { Text(stringResource(R.string.delete_swipe_message)) },
         confirmButton = {
-            OutlinedButton(onClick = onConfirm) {
-                Text(
-                    text = stringResource(R.string.action_delete),
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
+            DialogOutlinedActionButton(
+                text = stringResource(R.string.action_delete),
+                onClick = onConfirm,
+                contentColor = MaterialTheme.colorScheme.error,
+            )
         },
         dismissButton = {
-            OutlinedButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
+            DialogOutlinedActionButton(
+                text = stringResource(R.string.action_cancel),
+                onClick = onDismiss,
+            )
         },
     )
 }

@@ -65,6 +65,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.common.DialogTextButton
 import io.vaultix.vaultix.ui.common.EmptyState
 import io.vaultix.vaultix.ui.common.EntryCard
 import io.vaultix.vaultix.ui.common.EntryCardIconSpacing
@@ -503,20 +504,20 @@ private fun PasskeyDetailDialog(row: PasskeyRow, onDismiss: () -> Unit, onDelete
             title = { Text(stringResource(R.string.passkey_delete_title)) },
             text = { Text(stringResource(R.string.passkey_delete_message)) },
             confirmButton = {
-                TextButton(onClick = {
-                    showDeleteConfirm = false
-                    onDelete()
-                }) {
-                    Text(
-                        text = stringResource(R.string.action_delete),
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
+                DialogTextButton(
+                    text = stringResource(R.string.action_delete),
+                    contentColor = MaterialTheme.colorScheme.error,
+                    onClick = {
+                        showDeleteConfirm = false
+                        onDelete()
+                    },
+                )
             },
             dismissButton = {
-                TextButton(onClick = { showDeleteConfirm = false }) {
-                    Text(stringResource(R.string.action_cancel))
-                }
+                DialogTextButton(
+                    text = stringResource(R.string.action_cancel),
+                    onClick = { showDeleteConfirm = false },
+                )
             },
         )
     }
@@ -567,15 +568,17 @@ private fun PasskeyDetailDialog(row: PasskeyRow, onDismiss: () -> Unit, onDelete
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_close)) }
+            DialogTextButton(
+                text = stringResource(R.string.action_close),
+                onClick = onDismiss,
+            )
         },
         dismissButton = {
-            TextButton(onClick = { showDeleteConfirm = true }) {
-                Text(
-                    text = stringResource(R.string.passkey_delete_action),
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
+            DialogTextButton(
+                text = stringResource(R.string.passkey_delete_action),
+                contentColor = MaterialTheme.colorScheme.error,
+                onClick = { showDeleteConfirm = true },
+            )
         },
     )
 }

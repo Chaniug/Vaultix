@@ -62,6 +62,7 @@ import io.vaultix.vaultix.BuildConfig
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.deviceCanAuthenticate
 import io.vaultix.vaultix.ui.common.DialogCloseButton
+import io.vaultix.vaultix.ui.common.DialogOutlinedActionButton
 import io.vaultix.vaultix.ui.items.DisplayOptionsSheet
 import io.vaultix.vaultix.ui.common.TopBarTitle
 import io.vaultix.vaultix.ui.common.VaultixExpressiveTopBar
@@ -463,7 +464,10 @@ private fun UpdateCheckDialog(
             //    - 检查失败 / 无法确定 → 同上，不诱导用户去下载。
             //    （M3：对话框动作应如实反映当前状态下**可做**的事。）
             if (updated != null) {
-                OutlinedButton(
+                // ★ 2026-11-10：改用 DialogOutlinedActionButton（裸按钮在对话框动作槽里
+                //   会被 intrinsic 缩进撑宽，两个字会被逐字摞起来，见该组件文件头）。
+                DialogOutlinedActionButton(
+                    text = stringResource(R.string.update_check_go),
                     onClick = {
                         // ⚠️ 镜像开关已移出对话框（见本函数 KDoc）：点击那一刻才读**当前**偏好，
                         //    而不是拿对话框打开时的快照 —— 开关是持久设置，随时可能被改。
@@ -471,9 +475,7 @@ private fun UpdateCheckDialog(
                             UpdateChecker.mirrorUrl(updated.releaseUrl, isMirrorEnabled()),
                         )
                     },
-                ) {
-                    Text(stringResource(R.string.update_check_go))
-                }
+                )
             }
         },
         // ⚠️ 用「关闭」而不是「取消」：这里没有可取消的操作（检查已跑完），
@@ -488,9 +490,10 @@ private fun UpdateCheckDialog(
             Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
                 val checksumsUrl = updated?.checksumsUrl
                 if (checksumsUrl != null) {
-                    OutlinedButton(onClick = { onOpenRelease(checksumsUrl) }) {
-                        Text(stringResource(R.string.update_check_verify))
-                    }
+                    DialogOutlinedActionButton(
+                        text = stringResource(R.string.update_check_verify),
+                        onClick = { onOpenRelease(checksumsUrl) },
+                    )
                 }
                 DialogCloseButton(onClick = onDismiss)
             }
@@ -1147,9 +1150,12 @@ private fun ThemeModeDialog(
             }
         },
         confirmButton = {
-            OutlinedButton(onClick = onDismiss) {
-                Text(stringResource(R.string.action_close))
-            }
+            // ★ 2026-11-10：改用 DialogOutlinedActionButton —— 裸 OutlinedButton 在对话框
+            //   动作槽里会被 intrinsic 缩进撑成 58dp 宽再逐字分配（见该组件文件头）。
+            DialogOutlinedActionButton(
+                text = stringResource(R.string.action_close),
+                onClick = onDismiss,
+            )
         },
     )
 }
@@ -1183,9 +1189,12 @@ private fun ClipboardClearDialog(
             }
         },
         confirmButton = {
-            OutlinedButton(onClick = onDismiss) {
-                Text(stringResource(R.string.action_close))
-            }
+            // ★ 2026-11-10：改用 DialogOutlinedActionButton —— 裸 OutlinedButton 在对话框
+            //   动作槽里会被 intrinsic 缩进撑成 58dp 宽再逐字分配（见该组件文件头）。
+            DialogOutlinedActionButton(
+                text = stringResource(R.string.action_close),
+                onClick = onDismiss,
+            )
         },
     )
 }

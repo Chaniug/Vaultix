@@ -25,7 +25,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -99,45 +98,52 @@ fun SavePasskeyDialog(
         },
         confirmButton = {
             if (pickingLogin) {
-                TextButton(onClick = { pickingLogin = false }) {
-                    Text(stringResource(R.string.action_cancel))
-                }
+                DialogTextButton(
+                    text = stringResource(R.string.action_cancel),
+                    onClick = { pickingLogin = false },
+                )
             } else {
-                TextButton(onClick = {
-                    val login = selectedLogin
-                    if (login == null || draft.rpId.isBlank() || draft.credentialId.isBlank()) {
-                        errorRes = R.string.totp_invalid_secret
-                        return@TextButton
-                    }
-                    // ⚠️ **私钥材料必填**（P0，2026-09-11）：没有 keyValue 的通行密钥「看得到、
-                    // 点不动」—— 候选能列出来，签名时 parseEcPrivateKey 返回 null，浏览器侧报
-                    // `Cannot parse passkey key`。真机上那条唯一缺 keyValue 的凭据正是这样来的。
-                    // 参考实现里 keyValue 一律来自真实密钥对（Keyguard：
-                    // `PasskeyBase64.encodeToString(keyMaterial.privateKeyPkcs8)`），
-                    // **没有任何实现允许手工留空**。
-                    if (draft.keyValue.isBlank()) {
-                        errorRes = R.string.passkey_error_key_value_required
-                        return@TextButton
-                    }
-                    onSave(
-                        login.id,
-                        VaultFido2Credential(
-                            credentialId = draft.credentialId.trim(),
-                            rpId = draft.rpId.trim(),
-                            rpName = draft.rpName.takeIf { it.isNotBlank() } ?: draft.rpId.trim(),
-                            userName = draft.userName.trim(),
-                            userDisplayName = draft.userDisplayName.takeIf { it.isNotBlank() }
-                                ?: draft.userName.trim(),
-                            keyValue = draft.keyValue.trim(),
-                        ),
-                    )
-                }) { Text(stringResource(R.string.action_save)) }
+                DialogTextButton(
+                    text = stringResource(R.string.action_save),
+                    onClick = {
+                        val login = selectedLogin
+                        if (login == null || draft.rpId.isBlank() || draft.credentialId.isBlank()) {
+                            errorRes = R.string.totp_invalid_secret
+                            return@DialogTextButton
+                        }
+                        // ⚠️ **私钥材料必填**（P0，2026-09-11）：没有 keyValue 的通行密钥「看得到、
+                        // 点不动」—— 候选能列出来，签名时 parseEcPrivateKey 返回 null，浏览器侧报
+                        // `Cannot parse passkey key`。真机上那条唯一缺 keyValue 的凭据正是这样来的。
+                        // 参考实现里 keyValue 一律来自真实密钥对（Keyguard：
+                        // `PasskeyBase64.encodeToString(keyMaterial.privateKeyPkcs8)`），
+                        // **没有任何实现允许手工留空**。
+                        if (draft.keyValue.isBlank()) {
+                            errorRes = R.string.passkey_error_key_value_required
+                            return@DialogTextButton
+                        }
+                        onSave(
+                            login.id,
+                            VaultFido2Credential(
+                                credentialId = draft.credentialId.trim(),
+                                rpId = draft.rpId.trim(),
+                                rpName = draft.rpName.takeIf { it.isNotBlank() } ?: draft.rpId.trim(),
+                                userName = draft.userName.trim(),
+                                userDisplayName = draft.userDisplayName.takeIf { it.isNotBlank() }
+                                    ?: draft.userName.trim(),
+                                keyValue = draft.keyValue.trim(),
+                            ),
+                        )
+                    },
+                )
             }
         },
         dismissButton = {
             // 选择态的「取消」已经在 confirmButton 上（右下角单按钮），这里留空。
             if (!pickingLogin) {
-                TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
+                DialogTextButton(
+                    text = stringResource(R.string.action_cancel),
+                    onClick = onDismiss,
+                )
             }
         },
     )

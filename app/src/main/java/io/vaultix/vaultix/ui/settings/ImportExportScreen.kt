@@ -72,6 +72,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.vaultix.domain.ImportPlan
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.common.DialogOutlinedActionButton
 import io.vaultix.vaultix.ui.common.readAllBytes
 import io.vaultix.vaultix.ui.common.writeBytes
 import kotlinx.coroutines.Dispatchers
@@ -147,6 +148,14 @@ fun ImportExportScreen(
                 .imePadding()
                 .padding(bottom = Spacing.xxl),
         ) {
+            // ⚠️ 2026-11-10：这一行 `Spacing.sm` 是**必需**的，不是凑数。
+            //   二级页的 Scaffold 已消费掉顶栏让出的 inset，内容是贴顶栏下沿开始画的；
+            //   而本页首元素要么是不带外边距的 SettingsGroupCard，要么是裸 Text
+            //   ⇒ 少这一行就有 0dp 上留白，与「自动填充」「权限管理」两页的 8dp 对不齐，
+            //   同一层级的页面换一页就"顶上去一截"。自动填充 / 权限两页靠
+            //   AutofillStatusCard / PermissionStatusCard 自带的 vertical = md 撑出边距，
+            //   本页没有那张卡，只能自己补。
+            Spacer(Modifier.height(Spacing.sm))
             // 页首入口：格式转换（JSON ⇄ KDBX）。放在最前是因为它是「换格式」
             // （与任何库无关），而下面的导入 / 导出都作用于当前活跃库 ——
             // 两类操作的先验条件不同，混排会让用户拿错文件。
@@ -197,18 +206,22 @@ fun ImportExportScreen(
             icon = { Icon(Icons.Filled.Upload, contentDescription = null) },
             title = { Text(stringResource(R.string.export_confirm_title)) },
             text = { Text(stringResource(R.string.export_confirm_body)) },
+            // ★ 2026-11-10：改用 DialogOutlinedActionButton（裸按钮在对话框动作槽里会被
+            //   intrinsic 缩进撑宽，两个字会被逐字摞起来，见该组件文件头）。
             confirmButton = {
-                OutlinedButton(onClick = {
-                    showExportConfirm = false
-                    viewModel.export()
-                }) {
-                    Text(stringResource(R.string.export_button))
-                }
+                DialogOutlinedActionButton(
+                    text = stringResource(R.string.export_button),
+                    onClick = {
+                        showExportConfirm = false
+                        viewModel.export()
+                    },
+                )
             },
             dismissButton = {
-                OutlinedButton(onClick = { showExportConfirm = false }) {
-                    Text(stringResource(R.string.action_cancel))
-                }
+                DialogOutlinedActionButton(
+                    text = stringResource(R.string.action_cancel),
+                    onClick = { showExportConfirm = false },
+                )
             },
         )
     }
@@ -378,15 +391,19 @@ private fun ImportSection(
             title = { Text(stringResource(R.string.import_confirm_title)) },
             text = { Text(stringResource(R.string.import_confirm_body)) },
             confirmButton = {
-                OutlinedButton(onClick = {
-                    showApplyConfirm = false
-                    onApply()
-                }) { Text(stringResource(R.string.import_confirm)) }
+                DialogOutlinedActionButton(
+                    text = stringResource(R.string.import_confirm),
+                    onClick = {
+                        showApplyConfirm = false
+                        onApply()
+                    },
+                )
             },
             dismissButton = {
-                OutlinedButton(onClick = { showApplyConfirm = false }) {
-                    Text(stringResource(R.string.action_cancel))
-                }
+                DialogOutlinedActionButton(
+                    text = stringResource(R.string.action_cancel),
+                    onClick = { showApplyConfirm = false },
+                )
             },
         )
     }

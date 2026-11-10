@@ -87,6 +87,7 @@ import io.vaultix.model.KdbxCloudSyncStatus
 import io.vaultix.model.VaultKind
 import io.vaultix.model.VaultSummary
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.common.DialogTextButton
 import io.vaultix.vaultix.ui.AppFlavor
 import io.vaultix.vaultix.ui.common.AddVaultTypeDialog
 import io.vaultix.vaultix.ui.common.KdbxConflictChoice
@@ -423,17 +424,17 @@ private fun VaultListDialogs(
             title = { Text(stringResource(R.string.vault_remove_title)) },
             text = { Text(stringResource(R.string.vault_remove_message, vaultToRemove.name)) },
             confirmButton = {
-                TextButton(onClick = { onConfirmRemove(vaultToRemove.id) }) {
-                    Text(
-                        text = stringResource(R.string.vault_remove_confirm),
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
+                DialogTextButton(
+                    text = stringResource(R.string.vault_remove_confirm),
+                    contentColor = MaterialTheme.colorScheme.error,
+                    onClick = { onConfirmRemove(vaultToRemove.id) },
+                )
             },
             dismissButton = {
-                TextButton(onClick = onDismissRemove) {
-                    Text(stringResource(R.string.action_cancel))
-                }
+                DialogTextButton(
+                    text = stringResource(R.string.action_cancel),
+                    onClick = onDismissRemove,
+                )
             },
         )
     }

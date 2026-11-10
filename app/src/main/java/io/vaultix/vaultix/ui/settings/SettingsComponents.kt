@@ -88,6 +88,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.vaultix.datastore.VaultTimeout
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.common.DialogOutlinedActionButton
 import io.vaultix.vaultix.ui.theme.Spacing
 import io.vaultix.vaultix.ui.theme.UiSize
 import io.vaultix.vaultix.ui.theme.VaultixCorner
@@ -650,22 +651,28 @@ internal fun AutoLockDialog(
                     },
                 )
             },
+            // ★ 2026-11-10：动作按钮改用 DialogOutlinedActionButton（见该组件文件头：
+            //   裸按钮放进对话框动作槽会被 intrinsic 缩进撑宽，两个字会被逐字摞起来）。
             confirmButton = {
-                OutlinedButton(onClick = {
-                    val value = customText.toIntOrNull()
-                    if (value == null || value < 1 || value > AutoLockPresets.MAX_CUSTOM_MINUTES) {
-                        customInvalid = true
-                    } else {
-                        onSelect(VaultTimeout.Custom(value))
-                    }
-                }) {
-                    Text(stringResource(R.string.action_save))
-                }
+                DialogOutlinedActionButton(
+                    text = stringResource(R.string.action_save),
+                    onClick = {
+                        val value = customText.toIntOrNull()
+                        if (value == null || value < 1 ||
+                            value > AutoLockPresets.MAX_CUSTOM_MINUTES
+                        ) {
+                            customInvalid = true
+                        } else {
+                            onSelect(VaultTimeout.Custom(value))
+                        }
+                    },
+                )
             },
             dismissButton = {
-                OutlinedButton(onClick = { customOpen = false; customInvalid = false }) {
-                    Text(stringResource(R.string.action_cancel))
-                }
+                DialogOutlinedActionButton(
+                    text = stringResource(R.string.action_cancel),
+                    onClick = { customOpen = false; customInvalid = false },
+                )
             },
         )
         return
@@ -715,9 +722,10 @@ internal fun AutoLockDialog(
         },
         confirmButton = {
             // 点档位即选中并关闭，没有「可取消的操作」——按定稿口径该叫「关闭」。
-            OutlinedButton(onClick = onDismiss) {
-                Text(stringResource(R.string.action_close))
-            }
+            DialogOutlinedActionButton(
+                text = stringResource(R.string.action_close),
+                onClick = onDismiss,
+            )
         },
     )
 }
@@ -794,9 +802,10 @@ internal fun LongTextInfoDialog(
             }
         },
         confirmButton = {
-            OutlinedButton(onClick = onDismiss) {
-                Text(stringResource(R.string.action_close))
-            }
+            DialogOutlinedActionButton(
+                text = stringResource(R.string.action_close),
+                onClick = onDismiss,
+            )
         },
     )
 }

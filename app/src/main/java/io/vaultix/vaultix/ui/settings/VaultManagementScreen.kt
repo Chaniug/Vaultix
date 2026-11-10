@@ -11,6 +11,8 @@ package io.vaultix.vaultix.ui.settings
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -59,6 +61,7 @@ import io.vaultix.datastore.VaultTimeout
 import io.vaultix.model.VaultKind
 import io.vaultix.model.VaultSummary
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.common.DialogOutlinedActionButton
 import io.vaultix.vaultix.ui.vaultlist.SyncNotice
 import io.vaultix.vaultix.ui.common.AddVaultTypeDialog
 import io.vaultix.vaultix.ui.common.KdbxConflictChoice
@@ -152,6 +155,14 @@ fun VaultManagementScreen(
                 .verticalScroll(rememberScrollState())
                 .padding(bottom = Spacing.xxl),
         ) {
+            // ⚠️ 2026-11-10：这一行 `Spacing.sm` 是**必需**的，不是凑数。
+            //   二级页的 Scaffold 已消费掉顶栏让出的 inset，内容是贴顶栏下沿开始画的；
+            //   而本页首元素要么是不带外边距的 SettingsGroupCard，要么是裸 Text
+            //   ⇒ 少这一行就有 0dp 上留白，与「自动填充」「权限管理」两页的 8dp 对不齐，
+            //   同一层级的页面换一页就"顶上去一截"。自动填充 / 权限两页靠
+            //   AutofillStatusCard / PermissionStatusCard 自带的 vertical = md 撑出边距，
+            //   本页没有那张卡，只能自己补。
+            Spacer(Modifier.height(Spacing.sm))
             // ---- 全部密码库（§8：行内单选浏览 + 默认标记 + 状态 + 同步 + ⋮）----
             // ⚠️ 库一个都没有时不画这一组（"空组 + 空态文案"是两种空，这里直接不出现更诚实：
             //    没有库时下面的「添加密码库」才是用户该看的东西）。
@@ -524,15 +535,19 @@ private fun VaultSignOutDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.vault_action_signout)) },
         text = { Text(stringResource(R.string.vault_signout_confirm, vaultName)) },
+        // ★ 2026-11-10：改用 DialogOutlinedActionButton（裸按钮在对话框动作槽里会被
+        //   intrinsic 缩进撑宽，两个字会被逐字摞起来，见该组件文件头）。
         confirmButton = {
-            OutlinedButton(onClick = onConfirm) {
-                Text(stringResource(R.string.vault_signout_action))
-            }
+            DialogOutlinedActionButton(
+                text = stringResource(R.string.vault_signout_action),
+                onClick = onConfirm,
+            )
         },
         dismissButton = {
-            OutlinedButton(onClick = onDismiss) {
-                Text(stringResource(R.string.action_cancel))
-            }
+            DialogOutlinedActionButton(
+                text = stringResource(R.string.action_cancel),
+                onClick = onDismiss,
+            )
         },
     )
 }
@@ -549,17 +564,17 @@ private fun VaultRemoveDialog(
         text = { Text(stringResource(R.string.vault_remove_message, vaultName)) },
         confirmButton = {
             // 破坏性确认用 error 色：它与"确定"這種中性动作不是同一类。
-            OutlinedButton(onClick = onConfirm) {
-                Text(
-                    stringResource(R.string.vault_remove_confirm),
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
+            DialogOutlinedActionButton(
+                text = stringResource(R.string.vault_remove_confirm),
+                onClick = onConfirm,
+                contentColor = MaterialTheme.colorScheme.error,
+            )
         },
         dismissButton = {
-            OutlinedButton(onClick = onDismiss) {
-                Text(stringResource(R.string.action_cancel))
-            }
+            DialogOutlinedActionButton(
+                text = stringResource(R.string.action_cancel),
+                onClick = onDismiss,
+            )
         },
     )
 }
@@ -570,9 +585,10 @@ private fun VaultActionResultDialog(text: String, isSuccess: Boolean, onDismiss:
         onDismissRequest = onDismiss,
         text = { Text(text) },
         confirmButton = {
-            OutlinedButton(onClick = onDismiss) {
-                Text(stringResource(if (isSuccess) R.string.action_done else R.string.action_close))
-            }
+            DialogOutlinedActionButton(
+                text = stringResource(if (isSuccess) R.string.action_done else R.string.action_close),
+                onClick = onDismiss,
+            )
         },
     )
 }

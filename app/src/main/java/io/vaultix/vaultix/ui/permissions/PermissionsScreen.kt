@@ -39,6 +39,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -74,6 +75,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -88,13 +90,15 @@ import io.vaultix.vaultix.ui.theme.VaultixCorner
 import io.vaultix.vaultix.util.SystemSettingsIntents
 
 /**
- * 行尾框的最小宽度（112dp）。
+ * 标题列的最小宽度（约 4 个汉字 @ `bodyLarge` 16sp）。
  *
- * 依据：「去设置」= 3 个汉字（`labelLarge` 14sp）+ 左右各 12dp 内边距 ≈ 76dp，
- * 再留余量给「设备不支持」5 字。之所以写死而不是 `wrapContentWidth`：**它要的是
- * "四行右侧同一条右边线"**，`wrapContent` 会让每行各贴各的。
+ * 只用来兜住"标题被行尾挤成竖排"这一个底：正常宽度下行尾取宽不过 40dp 上下，
+ * 这个下限永远碰不到；一旦真碰到（窄屏 + 2.0x 字号），宁可让行尾换到下一行。
  */
-private val TRAILING_MIN_WIDTH = 112.dp
+private val PERMISSION_TITLE_MIN_WIDTH = 88.dp
+
+/** 用途说明的最大行数：与 `SettingsRow` 的副标题同口径（两行 + 省略号）。 */
+private const val PERMISSION_PURPOSE_MAX_LINES = 2
 
 /**
  * 行内水平内边距 / 图标格 / 图标间距。
@@ -354,7 +358,14 @@ private fun PermissionRow(
                     text = stringResource(entry.titleRes),
                     style = MaterialTheme.typography.bodyLarge,
                     fontWeight = FontWeight.Medium,
-                    modifier = Modifier.weight(1f),
+                    // ⚠️ 2026-11-10：`widthIn(min = …)` 是防"竖排"的最后一道保险。
+                    //   标题列理论上还有 weight(1f) 的剩余宽度，但行尾宽度会随**文案**
+                    //   变化（「去设置」3 字 / 「设备不支持」5 字），窄屏 + 大字号下
+                    //   仍可能被压到 1 字/行。给一个约 4 个汉字的宽度下限，宁可让行尾
+                    //   换到下一行，也不要标题竖着写。
+                    modifier = Modifier
+                        .weight(1f)
+                        .widthIn(min = PERMISSION_TITLE_MIN_WIDTH),
                 )
                 PermissionTrailing(
                     entry = entry,
@@ -366,6 +377,11 @@ private fun PermissionRow(
                 text = stringResource(entry.purposeRes),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                // ⚠️ 2026-11-10：与 SettingsRow 的副标题同口径（两行 + 省略号）。
+                //   不限行数时，「网络访问」那条 34 字的说明会在这张卡里独占三行，
+                //   四行的高度差到 60dp，分组感被拉散。
+                maxLines = PERMISSION_PURPOSE_MAX_LINES,
+                overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.padding(top = Spacing.xs, end = Spacing.sm),
             )
         }
@@ -433,16 +449,35 @@ private fun PermissionTrailing(
 }
 
 /**
- * 行尾内容的统一外框：**固定最小宽度 + 48dp 触控高 + 右对齐 + 统一内边距**。
+ * 行尾内容的统一外框：**48dp 触控高 + 右对齐 + 统一内边距 + 按内容取宽**。
  *
- * ⚠️ 这是**布局契约**：内边距由外框统一给，两种形态（纯文本 / 可点）的文字右边缘
- * 因此落在同一条竖线上；`widthIn` 让「已允许」这类短标签也不会各自贴边。
+ * ## ⚠️ 2026-11-10 去掉了「固定最小宽度 112dp」（用户报告：「通知」二字竖排）
+ *
+ * 旧实现给外框写死 `widthIn(min = TRAILING_MIN_WIDTH)`(112dp)，本意是让四行的行尾
+ * 落在同一条右边线上。但**行尾是硬约束、标题是软约束**：一行里放不下时，Compose
+ * 会先压缩 `weight(1f)` 的那一列（标题 + 副标题），而不是撑宽卡片。于是：
+ *
+ * | 行 | 标题 | 行尾 | 中间剩给标题的宽度 |
+ * |---|---|---|---|
+ * | 相机 | 相机（2 字） | 已允许 | 约 185dp，够 |
+ * | **通知** | **通知（2 字）** | **去设置** | **112 + 内边距把 2 个字挤到 1 字/行** |
+ * | 指纹 / 设备密码 | 8 字 | 设备不支持 | 已经折成 2 行，看不出是"被挤的" |
+ *
+ * 也就是说 112dp 对一个 2 字标题来说**占了整行宽度的三分之一**，而它的收益
+ * 只是"右边线齐"这件在灰度上根本看不出来的事。**为了对齐而牺牲可读性，是本末倒置。**
+ *
+ * ⇒ 改为 `wrapContentWidth(Alignment.End)`：行尾按自己的文字取宽（「已允许」30dp、
+ *    「去设置」42dp），右边线仍然靠 `contentAlignment = End` 对齐到卡片内边距，
+ *    "齐"的效果不变，标题却凭空多出 70dp。
+ *
+ * ⚠️ 别再用 `widthIn(min = …)` 把它加回来，也**不要**改成 `fillMaxWidth` ——
+ *    后者会把 `TrailingAction` 的点击热区扩满整行宽度，点标题也会误触「去设置」。
  */
 @Composable
 private fun TrailingSlot(content: @Composable () -> Unit) {
     Box(
         modifier = Modifier
-            .widthIn(min = TRAILING_MIN_WIDTH)
+            .wrapContentWidth(Alignment.End)
             .heightIn(min = UiSize.TouchTarget)
             .padding(horizontal = Spacing.md),
         contentAlignment = Alignment.CenterEnd,
@@ -451,12 +486,18 @@ private fun TrailingSlot(content: @Composable () -> Unit) {
     }
 }
 
-/** 可点的行尾动作：与 [TrailingLabel] 同一套字号，热区覆盖整个外框。 */
+/**
+ * 可点的行尾动作：与 [TrailingLabel] 同一套字号。
+ *
+ * ⚠️ 2026-11-10：**不要**加 `fillMaxWidth()`。旧版有它，于是「去设置」的热区横跨
+ * 整行剩余宽度 —— 点标题那一侧也会触发跳转；外框去掉固定宽度之后，这个副作用的
+ * 面积只会更大。热区由文字 + 外框内边距构成，48dp 高由 [TrailingSlot] 保证。
+ */
 @Composable
 private fun TrailingAction(text: String, onClick: () -> Unit) {
     Box(
         modifier = Modifier
-            .fillMaxWidth()
+            .wrapContentWidth()
             .heightIn(min = UiSize.TouchTarget)
             .clickable(role = Role.Button, onClick = onClick),
         contentAlignment = Alignment.CenterEnd,

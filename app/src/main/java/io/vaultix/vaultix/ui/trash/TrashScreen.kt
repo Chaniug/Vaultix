@@ -44,6 +44,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.common.DialogTextButton
 import io.vaultix.vaultix.ui.common.EmptyState
 import io.vaultix.vaultix.ui.common.TrashAutoDeleteDialog
 import io.vaultix.vaultix.ui.common.itemTypeLabelRes
@@ -149,23 +150,21 @@ fun TrashScreen(
                 Text(stringResource(R.string.trash_delete_forever_message, deletingItem.item.title))
             },
             confirmButton = {
-                TextButton(
+                DialogTextButton(
+                    text = stringResource(R.string.trash_delete_forever_confirm),
+                    contentColor = MaterialTheme.colorScheme.error,
                     enabled = !state.busy,
                     onClick = {
                         pendingForeverDelete = null
                         viewModel.deleteForever(deletingItem.item.id)
                     },
-                ) {
-                    Text(
-                        text = stringResource(R.string.trash_delete_forever_confirm),
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
+                )
             },
             dismissButton = {
-                TextButton(onClick = { pendingForeverDelete = null }) {
-                    Text(stringResource(R.string.action_cancel))
-                }
+                DialogTextButton(
+                    text = stringResource(R.string.action_cancel),
+                    onClick = { pendingForeverDelete = null },
+                )
             },
         )
     }

@@ -10,6 +10,8 @@ package io.vaultix.vaultix.ui.settings
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -91,6 +93,14 @@ fun KdbxCloudGuideScreen(
                 .verticalScroll(rememberScrollState())
                 .padding(bottom = Spacing.xxl),
         ) {
+            // ⚠️ 2026-11-10：这一行 `Spacing.sm` 是**必需**的，不是凑数。
+            //   二级页的 Scaffold 已消费掉顶栏让出的 inset，内容是贴顶栏下沿开始画的；
+            //   而本页首元素要么是不带外边距的 SettingsGroupCard，要么是裸 Text
+            //   ⇒ 少这一行就有 0dp 上留白，与「自动填充」「权限管理」两页的 8dp 对不齐，
+            //   同一层级的页面换一页就"顶上去一截"。自动填充 / 权限两页靠
+            //   AutofillStatusCard / PermissionStatusCard 自带的 vertical = md 撑出边距，
+            //   本页没有那张卡，只能自己补。
+            Spacer(Modifier.height(Spacing.sm))
             // 开场先把结论说完：本地文件 → 上传 → 从网盘添加。
             // ⚠️ 用 bodyMedium 而不是标题：页面上真正要读的是三步，开场只是"为什么点进来"。
             Text(

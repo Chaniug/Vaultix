@@ -94,6 +94,7 @@ import io.vaultix.common.TotpConfig
 import io.vaultix.common.TotpGenerator
 import io.vaultix.model.VaultItem
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.common.DialogTextButton
 import io.vaultix.vaultix.ui.common.CloudSyncIcon
 import io.vaultix.vaultix.ui.common.EmptyState
 import io.vaultix.vaultix.ui.common.EntryCard
@@ -1148,17 +1149,20 @@ private fun TotpRowMenu(
             title = { Text(stringResource(R.string.totp_remove_confirm_title)) },
             text = { Text(removeMessage) },
             confirmButton = {
-                TextButton(onClick = {
-                    showRemoveConfirm = false
-                    onDelete()
-                }) {
-                    Text(text = removeLabel, color = MaterialTheme.colorScheme.error)
-                }
+                DialogTextButton(
+                    text = removeLabel,
+                    contentColor = MaterialTheme.colorScheme.error,
+                    onClick = {
+                        showRemoveConfirm = false
+                        onDelete()
+                    },
+                )
             },
             dismissButton = {
-                TextButton(onClick = { showRemoveConfirm = false }) {
-                    Text(stringResource(R.string.action_cancel))
-                }
+                DialogTextButton(
+                    text = stringResource(R.string.action_cancel),
+                    onClick = { showRemoveConfirm = false },
+                )
             },
         )
     }
@@ -1638,14 +1642,17 @@ private fun TotpRemoveConfirmDialog(
         title = { Text(stringResource(R.string.totp_remove_confirm_title)) },
         text = { Text(removeMessage) },
         confirmButton = {
-            TextButton(onClick = onConfirm) {
-                Text(text = removeLabel, color = MaterialTheme.colorScheme.error)
-            }
+            DialogTextButton(
+                text = removeLabel,
+                contentColor = MaterialTheme.colorScheme.error,
+                onClick = onConfirm,
+            )
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.action_cancel))
-            }
+            DialogTextButton(
+                text = stringResource(R.string.action_cancel),
+                onClick = onDismiss,
+            )
         },
     )
 }
@@ -1874,13 +1881,17 @@ private fun ImportDialog(
             }
         },
         confirmButton = {
-            TextButton(
+            DialogTextButton(
+                text = stringResource(R.string.totp_import_action),
                 onClick = { onImport(text) },
                 enabled = text.isNotBlank(),
-            ) { Text(stringResource(R.string.totp_import_action)) }
+            )
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
+            DialogTextButton(
+                text = stringResource(R.string.action_cancel),
+                onClick = onDismiss,
+            )
         },
     )
 }
@@ -1975,7 +1986,10 @@ private fun LoginPickerDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
+            DialogTextButton(
+                text = stringResource(R.string.action_cancel),
+                onClick = onDismiss,
+            )
         },
         dismissButton = { },
     )

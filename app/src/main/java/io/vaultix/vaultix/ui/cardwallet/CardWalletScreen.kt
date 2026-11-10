@@ -63,6 +63,7 @@ import io.vaultix.common.formatCardNumberGrouped
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.common.DialogTextButton
 import io.vaultix.vaultix.ui.common.EntryCard
 import io.vaultix.vaultix.ui.common.EntryCardIconSpacing
 import io.vaultix.vaultix.ui.common.EntryCardTextSpacing
@@ -297,9 +298,10 @@ private fun CardCreationBlockedDialog(onDismiss: () -> Unit) {
         title = { Text(stringResource(R.string.card_wallet_creation_blocked_title)) },
         text = { Text(stringResource(R.string.card_wallet_creation_blocked_body)) },
         confirmButton = {
-            androidx.compose.material3.TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.action_close))
-            }
+            DialogTextButton(
+                text = stringResource(R.string.action_close),
+                onClick = onDismiss,
+            )
         },
     )
 }

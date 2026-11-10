@@ -103,6 +103,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.common.DialogOutlinedActionButton
 import io.vaultix.vaultix.remote.CloudAccount
 import io.vaultix.vaultix.remote.CloudAccountKind
 import io.vaultix.vaultix.ui.common.PrimaryActionButton
@@ -270,18 +271,20 @@ fun CloudAccountsScreen(
                     },
                 )
             },
+            // ★ 2026-11-10：改用 DialogOutlinedActionButton（裸按钮在对话框动作槽里会被
+            //   intrinsic 缩进撑宽，两个字会被逐字摞起来，见该组件文件头）。
             confirmButton = {
-                OutlinedButton(onClick = viewModel::confirmRemoval) {
-                    Text(
-                        stringResource(R.string.cloud_accounts_remove_confirm),
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
+                DialogOutlinedActionButton(
+                    text = stringResource(R.string.cloud_accounts_remove_confirm),
+                    onClick = viewModel::confirmRemoval,
+                    contentColor = MaterialTheme.colorScheme.error,
+                )
             },
             dismissButton = {
-                OutlinedButton(onClick = viewModel::dismissRemoval) {
-                    Text(stringResource(R.string.action_cancel))
-                }
+                DialogOutlinedActionButton(
+                    text = stringResource(R.string.action_cancel),
+                    onClick = viewModel::dismissRemoval,
+                )
             },
         )
     }

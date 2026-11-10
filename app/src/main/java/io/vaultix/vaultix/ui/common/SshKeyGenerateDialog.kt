@@ -110,35 +110,44 @@ internal fun SshKeyGenerateDialog(
         },
         confirmButton = {
             when {
-                working -> TextButton(onClick = {}, enabled = false) {
-                    Text(stringResource(R.string.ssh_generate_action))
-                }
-                done != null -> TextButton(onClick = { onGenerated(done) }) {
-                    Text(stringResource(R.string.ssh_generate_ack))
-                }
-                else -> TextButton(onClick = {
-                    failure = null
-                    working = true
-                    scope.launch {
-                        // 见文件头注释：RSA-3072 不能在主线程生成。
-                        val outcome = runCatching {
-                            withContext(Dispatchers.Default) { SshKeyGenerator.generate(algorithm) }
+                working -> DialogTextButton(
+                    text = stringResource(R.string.ssh_generate_action),
+                    onClick = {},
+                    enabled = false,
+                )
+                done != null -> DialogTextButton(
+                    text = stringResource(R.string.ssh_generate_ack),
+                    onClick = { onGenerated(done) },
+                )
+                else -> DialogTextButton(
+                    text = stringResource(R.string.ssh_generate_action),
+                    onClick = {
+                        failure = null
+                        working = true
+                        scope.launch {
+                            // 见文件头注释：RSA-3072 不能在主线程生成。
+                            val outcome = runCatching {
+                                withContext(Dispatchers.Default) {
+                                    SshKeyGenerator.generate(algorithm)
+                                }
+                            }
+                            working = false
+                            outcome
+                                .onSuccess { result = it }
+                                // ★ 失败必须说出来（§0-10）：吞掉会让用户反复点一个永远
+                                //   不成功的按钮
+                                .onFailure { failure = it.message ?: it.javaClass.simpleName }
                         }
-                        working = false
-                        outcome
-                            .onSuccess { result = it }
-                            // ★ 失败必须说出来（§0-10）：吞掉会让用户反复点一个永远不成功的按钮
-                            .onFailure { failure = it.message ?: it.javaClass.simpleName }
-                    }
-                }) {
-                    Text(stringResource(R.string.ssh_generate_action))
-                }
+                    },
+                )
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !working) {
-                Text(stringResource(R.string.action_cancel))
-            }
+            DialogTextButton(
+                text = stringResource(R.string.action_cancel),
+                onClick = onDismiss,
+                enabled = !working,
+            )
         },
     )
 }
@@ -260,12 +269,16 @@ internal fun SshOverwriteConfirmDialog(
         title = { Text(stringResource(R.string.ssh_overwrite_title)) },
         text = { Text(stringResource(R.string.ssh_overwrite_message)) },
         confirmButton = {
-            TextButton(onClick = onConfirm) {
-                Text(stringResource(R.string.ssh_overwrite_confirm))
-            }
+            DialogTextButton(
+                text = stringResource(R.string.ssh_overwrite_confirm),
+                onClick = onConfirm,
+            )
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
+            DialogTextButton(
+                text = stringResource(R.string.action_cancel),
+                onClick = onDismiss,
+            )
         },
     )
 }

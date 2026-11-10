@@ -104,20 +104,20 @@ fun SelectionActionBar(
             title = { Text(stringResource(R.string.batch_delete_title, selectedCount)) },
             text = { Text(stringResource(R.string.batch_delete_message)) },
             confirmButton = {
-                TextButton(onClick = {
-                    showConfirm = false
-                    onDelete()
-                }) {
-                    Text(
-                        text = stringResource(R.string.action_delete),
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
+                DialogTextButton(
+                    text = stringResource(R.string.action_delete),
+                    contentColor = MaterialTheme.colorScheme.error,
+                    onClick = {
+                        showConfirm = false
+                        onDelete()
+                    },
+                )
             },
             dismissButton = {
-                TextButton(onClick = { showConfirm = false }) {
-                    Text(stringResource(R.string.action_cancel))
-                }
+                DialogTextButton(
+                    text = stringResource(R.string.action_cancel),
+                    onClick = { showConfirm = false },
+                )
             },
         )
     }

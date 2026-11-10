@@ -120,7 +120,10 @@ fun KdbxConflictDialog(
         // ⚠️ 不设 confirmButton：三个选项本身就是动作，再放一个"确定"会让用户
         //    以为要先选再确定（多一步、且容易选完忘了点）。
         confirmButton = {
-            OutlinedButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
+            DialogOutlinedActionButton(
+                text = stringResource(R.string.action_cancel),
+                onClick = onDismiss,
+            )
         },
     )
 }

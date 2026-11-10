@@ -39,7 +39,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -188,18 +187,20 @@ fun DiscardChangesDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.discard_changes_title)) },
         text = { Text(stringResource(R.string.discard_changes_message)) },
+        // ★ 2026-11-10：改用 DialogOutlinedActionButton（裸按钮在对话框动作槽里会被
+        //   intrinsic 缩进撑宽，两个字会被逐字摞起来，见该组件文件头）。
         confirmButton = {
-            OutlinedButton(onClick = onConfirm) {
-                Text(
-                    text = stringResource(R.string.discard_changes_confirm),
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
+            DialogOutlinedActionButton(
+                text = stringResource(R.string.discard_changes_confirm),
+                onClick = onConfirm,
+                contentColor = MaterialTheme.colorScheme.error,
+            )
         },
         dismissButton = {
-            OutlinedButton(onClick = onDismiss) {
-                Text(stringResource(R.string.action_continue_edit))
-            }
+            DialogOutlinedActionButton(
+                text = stringResource(R.string.action_continue_edit),
+                onClick = onDismiss,
+            )
         },
     )
 }

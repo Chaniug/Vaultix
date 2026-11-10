@@ -39,6 +39,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import io.vaultix.vaultix.BuildConfig
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.common.DialogOutlinedActionButton
 import io.vaultix.vaultix.ui.theme.Spacing
 import java.io.File
 import java.text.SimpleDateFormat
@@ -168,35 +169,37 @@ fun DeveloperLogsDialog(onDismiss: () -> Unit) {
                 }
             }
         },
+        // ★ 2026-11-10：三个按钮改用 DialogOutlinedActionButton（裸按钮在对话框动作槽里
+        //   会被 intrinsic 缩进撑宽，两个字会被逐字摞起来，见该组件文件头），
+        //   同时去掉那个 `Row(Arrangement.spacedBy)` —— M3 的 AlertDialogFlowRow 自带
+        //   8dp 主轴间距，再套一层只会让这一组按钮的间距与别处不一致。
         confirmButton = {
-            OutlinedButton(
+            DialogOutlinedActionButton(
+                text = stringResource(R.string.developer_logs_export),
                 onClick = { scope.launch { shareLogs(context, buildExportText(context, entries)) } },
                 enabled = entries.isNotEmpty(),
-            ) {
-                Text(stringResource(R.string.developer_logs_export))
-            }
+            )
         },
         dismissButton = {
-            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                // ★ 清空（2026-09-21 用户要求）：先尽力把系统缓冲也清掉，再把时间下界推到"现在"
-                //   ⇒ 之后刷新只看到新日志，便于"复现一次、只看这一次"。
-                OutlinedButton(
-                    onClick = {
-                        scope.launch {
-                            withContext(Dispatchers.IO) { tryClearLogcatBuffer() }
-                            clearedAt = System.currentTimeMillis() / MILLIS_PER_SECOND
-                        }
-                    },
-                ) {
-                    Text(stringResource(R.string.developer_logs_clear))
-                }
-                OutlinedButton(onClick = { refreshTick++ }) {
-                    Text(stringResource(R.string.developer_logs_refresh))
-                }
-                OutlinedButton(onClick = onDismiss) {
-                    Text(stringResource(R.string.action_close))
-                }
-            }
+            // ★ 清空（2026-09-21 用户要求）：先尽力把系统缓冲也清掉，再把时间下界推到"现在"
+            //   ⇒ 之后刷新只看到新日志，便于"复现一次、只看这一次"。
+            DialogOutlinedActionButton(
+                text = stringResource(R.string.developer_logs_clear),
+                onClick = {
+                    scope.launch {
+                        withContext(Dispatchers.IO) { tryClearLogcatBuffer() }
+                        clearedAt = System.currentTimeMillis() / MILLIS_PER_SECOND
+                    }
+                },
+            )
+            DialogOutlinedActionButton(
+                text = stringResource(R.string.developer_logs_refresh),
+                onClick = { refreshTick++ },
+            )
+            DialogOutlinedActionButton(
+                text = stringResource(R.string.action_close),
+                onClick = onDismiss,
+            )
         },
     )
 }
