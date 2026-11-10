@@ -43,7 +43,9 @@ import io.vaultix.data.kdbx.KdbxFileWriteResult
 import io.vaultix.data.kdbx.KdbxWriteFailure
 import io.vaultix.database.dao.VaultDao
 import io.vaultix.model.KdbxCloudSyncStatus
+import io.vaultix.model.VaultKind
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.first
 import okhttp3.OkHttpClient
 
 /**
@@ -208,6 +210,65 @@ class KdbxCloudSyncCoordinator(
      */
     suspend fun currentSyncStatus(vaultId: String): KdbxCloudSyncStatus? =
         KdbxCloudSyncStatus.fromName(vaultDao.get(vaultId)?.syncStatus)
+
+    /**
+     * ★★ 把「其实是网盘库、却被标成本地」的行改回 `PENDING_UPLOAD`（2026-11-10 深夜）。
+     *
+     * ## 修的是什么
+     *
+     * `CachedKdbxFileSource` 曾漏转发 `isRemote`（接口默认 `false`），而 [fileSourceFor]
+     * 对**所有**远端来源都套这一层 ⇒ 同步入口的闸门
+     * （`KdbxSyncOrchestrator.localOnlyGate`）把每个网盘库都判成"本地文件"，并把
+     * `vaults.syncStatus` 写成 `LOCAL_ONLY`。而 `LOCAL_ONLY` 在 UI 侧是**不显示**：
+     *
+     * | 用户看到 | 真因 |
+     * |---|---|
+     * | 点同步 →「这是本地文件，没有需要同步的云端副本」 | 闸门走了 `LOCAL` 分支 |
+     * | ⋮ 菜单里没有绿灯、卡片没有「已同步」那一行 | 状态被写成 `LOCAL_ONLY` |
+     * | 之后一直不亮 | 除非用户再编辑一次，没有任何路径会改写它 |
+     *
+     * 修好转发只保住**今后**，已经被写歪的行不会自己好。
+     *
+     * ## 为什么补成 `PENDING_UPLOAD` 而不是 `IN_SYNC`
+     *
+     * `IN_SYNC` 是**结论**，要有基线令牌或内容对账作依据；凭空写它会让下一次同步走
+     * 「两边都没变」的捷径，把真正的差异永久盖住。
+     * `PENDING_UPLOAD`（= "有云端，但还没跟它对过一次"）才是事实，而且它
+     * `impliesLocalChanges = true` ⇒ 下一次同步一定会真的去问远端，最坏结果是
+     * 一次冲突（用户拍板），不是静默覆盖。
+     *
+     * ## 判据只有一份
+     *
+     * 用 [isCloudOrigin]（= `!content://` 且**真的解析得出来源**）——与
+     * `addKdbxVault` / `markLocalEdited` 同一张表。`origin` 畸形（如 `onedrive:` 缺路径）
+     * 不算"有云端"：那种库补了状态只会得到一个永远传不上去的「待上传」。
+     *
+     * ⚠️ `null` 与 `LOCAL_ONLY` 在这里是**同一件事**："这行没有可用的同步状态"。
+     *   `null` 的另一条来路是 `addKdbxVault` 的 `@Upsert` 整行覆盖（那边已一并修掉）。
+     *
+     * @return 实际改了几行（仅供日志，不参与任何判断）。
+     */
+    suspend fun repairVaultsMarkedLocalOnly(): Int {
+        // 用 `observeAll().first()` 而不是新加一个 DAO 查询：`vaults.syncStatus` 只会被写成
+        // `LOCAL_ONLY` 或 null，本来就是**个位数行**的配置态，扫一遍全表比多一个
+        // "只在这个场景用一次"的 SQL 更容易长期维护（少一处要跟着实体改的地方）。
+        val rows = vaultDao.observeAll().first()
+        val broken = rows.filter { row ->
+            row.kind == VaultKind.KDBX.name &&
+                (row.syncStatus == null || row.syncStatus == KdbxSyncStatus.LOCAL_ONLY.name) &&
+                isCloudOrigin(row.origin)
+        }
+        broken.forEach { row ->
+            vaultDao.updateSyncState(
+                id = row.id,
+                status = KdbxSyncStatus.PENDING_UPLOAD.name,
+                // ⚠️ 两列原样带回：DAO 是 `SET col = :v`，传 null 就是**清空**基线。
+                versionToken = row.remoteVersionToken,
+                syncedAt = row.lastSyncedAt,
+            )
+        }
+        return broken.size
+    }
 
     /**
      * 每个 origin 一份**新鲜度容器**（#233）。

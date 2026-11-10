@@ -125,9 +125,12 @@ interface KdbxFileSource {
      *   新写的来源忘了覆写 → 被当成"本地" → 同步入口挡下并提示，
      *   比反过来（把本地文件当云端，凭空写出"已同步"）安全得多。
      *
-     * ⚠️ 覆写者：`WebDavKdbxFileSource` / `OneDriveKdbxFileSource`；
-     *   ⚠️ **不要**在 `CachedKdbxFileSource` 里覆写 —— 它只是装饰器，语义要随被装饰者走
-     *   （写 `true` 会让"缓存包了本地文件"这种组合说谎）。
+     * ⚠️ 覆写者：`WebDavKdbxFileSource` / `OneDriveKdbxFileSource`（写 `true`）。
+     * ⚠️ **装饰器（`CachedKdbxFileSource`）必须原样转发 `delegate.isRemote`**：
+     *   写死 `true` 会让"缓存包了本地文件"这种组合说谎；**什么都不写**则会落到
+     *   本接口的默认值 `false` —— 那会把网盘来源判成本地文件。
+     *   2026-11-10 的回归正是后者：OneDrive 库点同步显示「这是本地文件」、
+     *   绿灯消失。转发是唯一同时满足两边的写法。
      */
     val isRemote: Boolean get() = false
 

@@ -8,6 +8,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -45,6 +46,13 @@ class CachedKdbxFileSourceTest {
         private val bytes: ByteArray,
         private var token: String?,
         private val statFails: Boolean = false,
+        /**
+         * 被装饰者**自述**是否远端（默认 false，与 [KdbxFileSource.isRemote] 的默认值一致）。
+         *
+         * ⚠️ 这个参数是 2026-11-10 那条回归的专用夹具：装饰器当时没有转发它，
+         *   于是所有网盘来源在同步入口都被判成"本地文件"。
+         */
+        override val isRemote: Boolean = false,
     ) : KdbxFileSource {
 
         var readCount = 0
@@ -139,6 +147,53 @@ class CachedKdbxFileSourceTest {
         token: String?,
         statFails: Boolean = false,
     ) = FakeSource(bytes, token, statFails)
+
+    // ---- 0. 身份转发：装饰器不许改变"这是不是远端"（2026-11-10 回归） ----
+
+    /**
+     * ★★ 装饰器必须**原样转发** `isRemote`。
+     *
+     * ## 这条钉的是一次真实故障（真机：OneDrive 库「不能同步」+ 绿灯消失）
+     *
+     * `KdbxFileSource.isRemote` 是接口的默认属性，值写死 `false`。装饰器原本只逐个
+     * 实现了方法（没有 `by delegate`），于是**每一个套了缓存的来源都自称本地**。
+     * 而 `fileSourceFor` 对所有远端来源都套这一层 ⇒ 同步入口的闸门
+     * （`KdbxSyncOrchestrator.localOnlyGate`）把它们全部判成"本地文件"：
+     *
+     * - 点同步 → 「这是本地文件，没有需要同步的云端副本」；
+     * - 顺带把 `vaults.syncStatus` 写成 `LOCAL_ONLY` ⇒ UI 上绿灯与「已同步」那行**同时消失**。
+     *
+     * ⚠️ 断言必须**两个方向都测**：只测 `true` 的话，"写死 true"这种改法也能通过，
+     *    而那会让"缓存包住本地文件"的组合说谎。转发才两个都对。
+     */
+    @Test
+    fun `装饰器必须原样转发isRemote_不许写死也不许丢掉`() = runTest {
+        val cache = FakeCache()
+
+        val wrappedRemote = CachedKdbxFileSource(
+            delegate = FakeSource(ByteArray(0), token = "etag-1", isRemote = true),
+            cache = cache,
+            cacheKey = key,
+            scope = backgroundScope,
+        )
+        val wrappedLocal = CachedKdbxFileSource(
+            delegate = FakeSource(ByteArray(0), token = "etag-1", isRemote = false),
+            cache = cache,
+            cacheKey = "$key.local",
+            scope = backgroundScope,
+        )
+
+        assertTrue(
+            "装饰器把远端来源报成了本地：同步入口会拒绝它（「这是本地文件」），" +
+                "并把状态写成 LOCAL_ONLY（绿灯消失）—— 2026-11-10 的真机故障即此",
+            wrappedRemote.isRemote,
+        )
+        assertTrue(
+            "装饰器把本地来源报成了远端：会让一个没有云端的库凭空出现「待上传」，" +
+                "甚至尝试条件写 —— 比上一个方向更危险",
+            !wrappedLocal.isRemote,
+        )
+    }
 
     // ---- 1. 命中：先用缓存，stat 丢后台（2026-10-05 折中）----
 

@@ -222,6 +222,23 @@ class VaultRepositoryImpl @Inject constructor(
         // 读起来就是「点了一点反应都没有」（`.ai/ISSUES.md` #94）。
         val existing = vaultDao.get(sourceUri)
         val outcome = if (existing == null) KdbxAddOutcome.Added else KdbxAddOutcome.Updated
+        // ★★ 2026-11-10 深夜：这三行**不是**可选的"顺手带一下"，漏掉就是一次数据丢失。
+        //
+        // `vaultDao.upsert` 是 Room 的 `@Upsert`：**先 INSERT，冲突则 UPDATE 全列**
+        // （生成代码见 `VaultDao_Impl` 里的
+        //  `UPDATE vaults SET id=?,kind=?,displayName=?,origin=?,account=?,revisionDate=?,
+        //   createdAt=?,syncStatus=?,remoteVersionToken=?,lastSyncedAt=?`）。
+        // ⇒ 构造实体时没写的字段，会被**覆盖成默认值 null**，而不是"保持原值"。
+        //
+        // 此前的后果（真机：OneDrive 库「不能同步」+ 绿灯消失）：
+        //   用户第二次打开同一个库（走本方法）⇒ `syncStatus` / `remoteVersionToken` /
+        //   `lastSyncedAt` 全被抹成 null ⇒ 绿灯与「已同步」那一行同时消失；
+        //   而下面补初始值那段判的是 `existing?.syncStatus == null`（**覆盖前**的快照）
+        //   ⇒ 覆盖前有值时不补 ⇒ **这一行永久停在 null**，只有再编辑一次才可能活过来。
+        //
+        // ⚠️ 补字段时别只看这三列：将来 `VaultEntity` 再加列，这里同样要带回来。
+        //    更稳的写法是"只 UPDATE 该改的列"，但那要新增 DAO 方法且失去 upsert 的
+        //    "不存在则插入"语义 —— 现阶段把列补齐 + 这条注释比那种改法风险小。
         vaultDao.upsert(
             VaultEntity(
                 id = sourceUri,
@@ -231,6 +248,9 @@ class VaultRepositoryImpl @Inject constructor(
                 account = null,
                 revisionDate = existing?.revisionDate,
                 createdAt = existing?.createdAt ?: now,
+                syncStatus = existing?.syncStatus,
+                remoteVersionToken = existing?.remoteVersionToken,
+                lastSyncedAt = existing?.lastSyncedAt,
             ),
         )
         if (!keyFileUri.isNullOrBlank()) {

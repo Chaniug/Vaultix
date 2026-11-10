@@ -10,6 +10,7 @@ package io.vaultix.data.repository.kdbx
 
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.every
 import io.mockk.mockk
 import io.vaultix.database.dao.VaultDao
 import io.vaultix.database.entity.VaultEntity
@@ -288,6 +289,53 @@ class KdbxCloudSyncCoordinatorTest {
             map.remove(key)
         }
 
+    }
+
+    /**
+     * ★★ 网盘来源经 [KdbxCloudSyncCoordinator.fileSourceFor] 之后必须**仍然自认远端**。
+     *
+     * ## 为什么这条必须在协调器层再测一遍（装饰器层已经有一条）
+     *
+     * 故障的完整形状是**两处组合**才成立的：
+     * 1. `fileSourceFor` 对所有远端来源都套 `CachedKdbxFileSource`（这是刻意的，缓存省下载）；
+     * 2. 那个装饰器当时没有转发 `isRemote`（接口默认值 `false`）。
+     *
+     * 单独看任何一处都"没问题"，合起来才是真机上的
+     * 「OneDrive 库点同步 → 这是本地文件，没有需要同步的云端副本」+ 绿灯消失。
+     * 装饰器层那条钉的是 ②；这条钉的是 **①+② 的组合**——将来若有人把装饰器换成
+     * 另一个包装类、或在 `fileSourceFor` 里新加一层，这条会第一时间红。
+     *
+     * ⚠️ 断言里**不要**写成 `assertTrue(source is CachedKdbxFileSource && source.isRemote)`：
+     *    那是把实现细节写进结论。这里只问契约——"它是不是远端"。
+     */
+    @Test
+    fun `网盘来源经协调器解析后仍然自认远端`() = runTest {
+        val dao = mockk<VaultDao>(relaxed = true)
+        val coordinator = KdbxCloudSyncCoordinator(
+            vaultDao = dao,
+            orchestrator = KdbxSyncOrchestrator(vaultDao = dao, fileSourceFactory = { null }),
+            safFactory = { null },
+            sessionReplacer = mockk(relaxed = true),
+            okHttp = { null },
+            webDavCredentials = mockk(relaxed = true),
+            fileCache = RecordingCache(),
+            appScope = this,
+        )
+        val remote = mockk<KdbxFileSource>(relaxed = true)
+        every { remote.isRemote } returns true
+        coordinator.registerFactory { origin -> remote.takeIf { origin == EXTRA_ORIGIN } }
+        assertTrue(
+            "装置错了：$EXTRA_ORIGIN 没走到额外工厂，这条用例什么都没测",
+            coordinator.isExtraFactoryOrigin(EXTRA_ORIGIN),
+        )
+
+        val source = requireNotNull(coordinator.fileSourceFor(EXTRA_ORIGIN)) { "没解析出来源" }
+
+        assertTrue(
+            "解析出来的来源自述是本地 —— 同步入口会拒绝它（「这是本地文件」），" +
+                "并把状态写成 LOCAL_ONLY（绿灯消失）。2026-11-10 的真机故障即此",
+            source.isRemote,
+        )
     }
 
     // ---------------------------------------------------------------- 装置

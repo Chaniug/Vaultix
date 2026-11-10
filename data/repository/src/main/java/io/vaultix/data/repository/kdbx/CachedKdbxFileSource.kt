@@ -120,6 +120,31 @@ internal class CachedKdbxFileSource(
     /** 防止同一轮里并发触发多次后台校验（`read()` 可能在解锁流程里被调多次）。 */
     private val recheckStarted = java.util.concurrent.atomic.AtomicBoolean(false)
 
+    /**
+     * ★★ **必须原样转发给 [delegate]**（2026-11-10 深夜修复）。
+     *
+     * ## 漏掉这一行的后果（真机：OneDrive 库「不能同步」+ 绿灯消失）
+     *
+     * `KdbxFileSource.isRemote` 是接口的**默认属性**，值写死 `false`（保守：
+     * 新来源忘了覆写时宁可被当成"本地"）。而本类**没有 `by delegate`**，
+     * 只逐个实现了方法 —— 于是**每一个套了缓存的来源都自称本地**。
+     *
+     * 而 `fileSourceFor` 对**所有**远端来源都套这一层（OneDrive / WebDAV 都走
+     * `withRemoteCache`）⇒ 同步入口那道「有没有另一端」的闸门
+     * （`KdbxSyncOrchestrator.localOnlyGate`）把它们**全部判成本地文件**：
+     *
+     * | 用户看到 | 真因 |
+     * |---|---|
+     * | 点同步 →「这是本地文件，没有需要同步的云端副本」 | 闸门走了 `LOCAL` 分支 |
+     * | ⋮ 菜单里没有绿灯、卡片没有「已同步」那行 | 同一分支顺手把状态写成 `LOCAL_ONLY`，而 `LOCAL_ONLY` 在 UI 侧是"不显示" |
+     * | 之后一直不亮 | 状态已是 `LOCAL_ONLY`，没有编辑动作就不会再被改写 |
+     *
+     * ⚠️ 这条**不能写死 `true`**：本类也可能包住本地来源（虽然当前唯一挂载点只包远端），
+     *    写死会让"缓存包了本地文件"这种组合说谎。**转发**才是"语义随被装饰者走"。
+     * ⚠️ 也别改成 `delegate.isRemote && true` 之类 —— 那是同一个错误换了个写法。
+     */
+    override val isRemote: Boolean get() = delegate.isRemote
+
     /** 元数据请求照旧直连（它本来就不下载内容）；也保证 `write` 前拿到的令牌是真的。 */
     override suspend fun stat(): KdbxFileStat = delegate.stat()
 

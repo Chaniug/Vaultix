@@ -43,6 +43,10 @@ import io.vaultix.vaultix.remote.onedrive.OneDriveKdbxFileSource
 import io.vaultix.vaultix.remote.webdav.WebDavCredentialStore
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 @Module
 @InstallIn(SingletonComponent::class)
@@ -141,7 +145,7 @@ class OneDriveSourceFactory(
 }
 
 /**
- * 启动时把 OneDrive 工厂注册进协调器。
+ * 启动时把 OneDrive 工厂注册进协调器，并**顺手纠正一类被写歪的同步状态**。
  *
  * ## 为什么需要一个 `@Singleton` 的初始化器
  *
@@ -153,13 +157,41 @@ class OneDriveSourceFactory(
  * 里 `@Inject` 一个字段（见该文件的 `kdbxCloudSyncInitializer`）——
  * **不要**改成"第一次同步时懒注册"：那会让第一次同步报"没有云端来源"、
  * 第二次却正常，是最难查的时序 bug。
+ *
+ * ## ★ 为什么还要在启动时跑一次「状态纠偏」（2026-11-10 深夜补）
+ *
+ * `CachedKdbxFileSource` 漏转发 `isRemote` 的那段时间里（commit `52a1765a`），
+ * 每个网盘库点一次同步都会被 `localOnlyGate` 判成「本地文件」，并把
+ * `vaults.syncStatus` 写成 `LOCAL_ONLY`。修好转发只保住**今后**，已经被写歪的行
+ * 不会自己好：`LOCAL_ONLY` 在 UI 侧是"不显示"，用户看到的就是**绿灯消失**，
+ * 而且他没有任何理由再去点一次同步。
+ *
+ * ⇒ 启动时扫一遍：**origin 能解析出网盘来源，状态却是 `LOCAL_ONLY` / `null`** 的行
+ *   一律补成 `PENDING_UPLOAD`（"有云端，但还没跟它对过一次"——这本来就是事实）。
+ *
+ * ⚠️ 为什么不补成 `IN_SYNC`：那是**结论**，需要基线令牌或内容对账作依据。
+ *   凭空写 `IN_SYNC` 会让下一次同步走"两边都没变"的捷径，把真正的差异永久盖住。
+ * ⚠️ 同一条判据**不写第二份**：这里调用的是 `KdbxFileSourceResolver.isCloudOrigin`
+ *   ——与 `addKdbxVault` / `markLocalEdited` 用的是同一张表。
  */
 @Singleton
 class KdbxCloudSyncInitializer @Inject constructor(
-    coordinator: KdbxCloudSyncCoordinator,
+    private val coordinator: KdbxCloudSyncCoordinator,
     oneDriveFactory: OneDriveSourceFactory,
 ) {
+    /**
+     * ⚠️ 必须声明在 `init` **之前**：Kotlin 按声明顺序初始化，`init` 里引用
+     *    后面才声明的属性会读到 `null`（编译期就报 must be initialized）。
+     */
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     init {
         coordinator.registerFactory(oneDriveFactory::create)
+        // 纠偏失败绝不影响启动：这是个"尽力而为"的数据修复，不该把 App 拉不起来。
+        //
+        // ⚠️ 纠偏逻辑放在**协调器**里而不是这里：它要读 `vaults` 表并复用
+        //   `isCloudOrigin` 那张判据表，而那两样都在 `data:repository`。
+        //   在 app 层再写一遍 = 同一判据的第二份真相（本项目反复被咬的那条）。
+        scope.launch { runCatching { coordinator.repairVaultsMarkedLocalOnly() } }
     }
 }
