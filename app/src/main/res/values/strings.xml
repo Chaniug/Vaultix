@@ -78,7 +78,7 @@
     <string name="add_kdbx_mode_create">新建空白</string>
     <string name="add_kdbx_create_name">密码库名称</string>
     <string name="add_kdbx_create_name_hint">例如：我的密码库</string>
-    <string name="add_kdbx_create_name_helper">这个名称会同时作为根组名写进文件，在 KeePassXC / KeePassDX 里显示的也是它。</string>
+    <string name="add_kdbx_create_name_helper">这个名称会同时用作文件名和文件内的根组名，在 KeePassXC / KeePassDX 里显示的也是它。</string>
     <!--
       ⚠️ 二次输入声明"没有找回途径"是**刻意**的：KDBX 的主密码丢失 = 库永久打不开，
       这不是我们可以在后面补救的事，只能在这里说清楚。

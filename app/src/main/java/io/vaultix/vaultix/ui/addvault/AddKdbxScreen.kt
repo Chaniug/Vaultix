@@ -145,9 +145,6 @@ private fun ApplyExternalKdbxUri(
  */
 private const val ANY_MIME = "*/*"
 
-/** 新建时的默认文件名（系统面板里预填；用户可改）。 */
-private const val DEFAULT_KDBX_FILE_NAME = "vault.kdbx"
-
 /**
  * 本地 KDBX 库（打开 / 新建两态）。
  *
@@ -309,7 +306,18 @@ fun AddKdbxScreen(
                         // ⚠️ 先校验、**后**弹面板：面板一旦确认，系统就真的建了一个空文件，
                         //   表单填错时它就成了磁盘上的孤儿（见 ViewModel 的文件头说明）。
                         if (viewModel.requestSaveLocation()) {
-                            createTargetPicker.launch(DEFAULT_KDBX_FILE_NAME)
+                            // 预填文件名跟着**库名**走（见 KdbxFileName.kt）。
+                            // 原先传固定名 ⇒ 同目录第二个库就撞名、变成 vaultix(1).kdbx，
+                            // 用户在建了多个库之后无法从文件名分辨。
+                            // 面板里这个输入框可编辑，用户想改名仍然可以改。
+                            //
+                            // ⚠️ 读 `viewModel.state.value` 而不是捕获的 `state`：
+                            //    `requestSaveLocation()` 校验的也是 `_state.value`，
+                            //    两处必须读**同一个源**。各读各的就会出现
+                            //    「校验的是 A、命名的是 B」——这类错在真机上极难复现。
+                            createTargetPicker.launch(
+                                suggestedKdbxFileName(viewModel.state.value.vaultName),
+                            )
                         }
                     },
                 )
