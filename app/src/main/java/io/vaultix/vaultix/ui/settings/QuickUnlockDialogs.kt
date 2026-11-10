@@ -335,7 +335,7 @@ private fun biometricSummary(
             if (state.biometricRearmPending) {
                 stringResource(R.string.quick_unlock_summary_rearm_pending)
             } else {
-                stringResource(R.string.quick_unlock_summary_on, readyCount(state, biometric = true))
+                coverageSummary(state, biometric = true)
             }
         QuickUnlockController.CapabilityState.Off ->
             stringResource(R.string.quick_unlock_option_biometric_summary)
@@ -355,7 +355,7 @@ private fun biometricSummary(
 private fun pinSummary(state: QuickUnlockController.UiState): String =
     when (state.pin) {
         is QuickUnlockController.CapabilityState.On ->
-            stringResource(R.string.quick_unlock_summary_on, readyCount(state, biometric = false))
+            coverageSummary(state, biometric = false)
         QuickUnlockController.CapabilityState.Off ->
             stringResource(
                 R.string.quick_unlock_option_pin_summary,
@@ -365,11 +365,40 @@ private fun pinSummary(state: QuickUnlockController.UiState): String =
     }
 
 /**
- * 副标题里那个数字：范围内**已生效**的库数。
+ * 开关副标题里的「覆盖情况」（2026-11-10 用户反馈后改写）。
+ *
+ * ## 为什么不再一律写「已对 N 个库生效」
+ *
+ * 用户原话：「已对 x 个库生效的文案是否要移除，目前我的想法就是要对所有库都生效」。
+ *
+ * 范围早就固定成「全部库」（2026-09-30 拿掉了逐库勾选），所以 N 小于总数**不代表**
+ * 有几个库被排除在外 —— 它只表示"那几个库还没被主密码解锁过一次"
+ * （房间信封要在解锁时顺手封，见 `LocalUnlockEnrollment.enrollJustAuthenticated`）。
+ * 而旧文案把这种**暂时状态**说成了**配置结果**，用户唯一能读到的是"我有库漏了"。
+ *
+ * ⇒ 分两句：
+ * - 全覆盖 → [R.string.quick_unlock_summary_all]（确认他真正关心的事）
+ * - 有缺口 → [R.string.quick_unlock_summary_partial]（**带分母**，缺口大小可判断）
+ *
+ * ⚠️ 分母用 `rows.size`（全部库）而不是"范围内可纳入的库"：用户数的是自己的库，
+ * 不是我们的候选集。任何过滤都会让分母变小、缺口凭空消失。
  *
  * ⚠️ 必须与 [QuickUnlockController.CapabilityState] 的推导口径一致（都只看 `inScope` 的行）——
  * 两处口径不一致，就会出现"开关说已启用 3 个、数字写着 5 个"这种自相矛盾。
  */
+@Composable
+private fun coverageSummary(state: QuickUnlockController.UiState, biometric: Boolean): String {
+    val ready = readyCount(state, biometric)
+    // 一个库都没有时不能说「已对所有密码库生效」（vacuous truth 也是一种谎）。
+    // 这种情况开关本就该是关的，走不到这里；留着是为了让分支本身无懈可击。
+    return if (state.rows.isNotEmpty() && ready >= state.rows.size) {
+        stringResource(R.string.quick_unlock_summary_all)
+    } else {
+        stringResource(R.string.quick_unlock_summary_partial, ready, state.rows.size)
+    }
+}
+
+/** [coverageSummary] 用的数字：范围内**已生效**的库数。 */
 private fun readyCount(state: QuickUnlockController.UiState, biometric: Boolean): Int =
     state.rows.count { row ->
         row.inScope && if (biometric) row.biometricReady else row.pinReady

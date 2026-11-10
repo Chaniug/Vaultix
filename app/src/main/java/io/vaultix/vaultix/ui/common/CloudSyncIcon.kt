@@ -17,6 +17,7 @@ package io.vaultix.vaultix.ui.common
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material3.Icon
@@ -65,6 +66,49 @@ fun CloudSyncIcon(synced: Boolean, modifier: Modifier = Modifier) {
         imageVector = icon,
         contentDescription = stringResource(descriptionRes),
         tint = tint,
+        modifier = modifier.size(CLOUD_ICON_SIZE),
+    )
+}
+
+/**
+ * 条目行尾的**库来源**云图标：这个库存在云端（OneDrive / WebDAV），不是本地文件。
+ *
+ * ## 为什么它必须与 [CloudSyncIcon] 分开（2026-11-10 真机反馈）
+ *
+ * 用户原话：
+ *
+ * > onedrive 上的 kdbx 条目，居然没有小云图标，这样和本地的 kdbx 条目看起来没有区别啊。
+ * > onedrive 上的 kdbx 是必有小云图标，因为它来自云，而本地文件没有云图标，
+ * > 它是来自本地的，这样的才对。
+ *
+ * 上一轮修掉了「**本地** KDBX 挂上已同步的云」（#263），但修法是
+ * 「KDBX 一律不画」—— 把用户真正需要的那一朵也一起删掉了。这属于**过度修正**：
+ * 判据从「这个库有没有云」退化成「这个库是不是 KDBX」，而后者与问题无关。
+ *
+ * ## 语义边界（三者**不能**共用一个图标）
+ *
+ * | 图标 | 形状 | 回答的问题 | 数据源 |
+ * |---|---|---|---|
+ * | [CloudSyncIcon] true | 云 + 对勾 | 「这一条推上云了吗」 | Bitwarden `pending_ops` |
+ * | [CloudSyncIcon] false | 云 + 斜杠（error） | 「这一条还没推上去」 | 同上 |
+ * | 本组件 | **裸云**（无对勾） | 「这个库本身在云上吗」 | `VaultSummary.origin` |
+ *
+ * ⇒ **裸云 = 地点，云+对勾 = 状态。** 两者混用就会出现「本地库显示已同步」
+ *   （上一轮的 #263）或「云端库看起来像本地文件」（本轮）。
+ *
+ * ⚠️ 刻意不画**对勾**：KDBX 是整文件同步，条目级没有"这一条上了云"这回事。
+ *    画了对勾就是在复用 Bitwarden 的状态语义，而那个状态在这里不存在。
+ *
+ * ⚠️ 弱化色（`onSurfaceVariant`）：它是**常态**（库一直在云上），不该抢眼；
+ *    真正需要用户注意的「待上传 / 失败」由库级 `DetailSyncIndicator` 与
+ *    `SyncBadge` 承担。
+ */
+@Composable
+fun VaultSourceCloudIcon(modifier: Modifier = Modifier) {
+    Icon(
+        imageVector = Icons.Filled.Cloud,
+        contentDescription = stringResource(R.string.sync_state_cloud_vault),
+        tint = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = modifier.size(CLOUD_ICON_SIZE),
     )
 }

@@ -648,7 +648,8 @@
     <string name="action_later">以后再说</string>
     <string name="settings_quick_unlock">快速解锁</string>
     <!-- ⚠️ 自 2026-09-29 起**暂无代码引用**（「快速解锁」的行副标题已换成
-         quick_unlock_summary_on / quick_unlock_option_biometric_summary / quick_unlock_option_pin_summary，
+         quick_unlock_summary_all / quick_unlock_summary_partial / quick_unlock_option_biometric_summary /
+         quick_unlock_option_pin_summary，
          原「管理解锁方式」第三行及其副标题已删，真机反馈三行冗余）。
          **刻意保留**，别当僵尸字符串删掉：它是 .ai/decisions/设置页信息架构-定稿.md §5.2
          里逐条改过文案的产物，且「快速解锁」若日后重新出现在设置首页（例如做成开关而不是
@@ -698,7 +699,10 @@
     <!-- ⚠️ 2026-09-17 §1 **已删除两条**：quick_unlock_option_pin_on（已用 N 位 PIN 保护）与
          quick_unlock_option_biometric_on（已开启，免输主密码与两步验证）。
          两条都描述"**不带数量**的已开启"，已被 quick_unlock_summary_on（已对 N 个库生效）取代 ——
-         而 §11.11 明确要的就是那个数量。**被"取代"的口径不留**（要恢复请查 git 历史）。 -->
+         而 §11.11 明确要的就是那个数量。**被"取代"的口径不留**（要恢复请查 git 历史）。
+         ⚠️ 2026-11-10 再次改写：那个"数量"只在**有缺口时**才该出现（`summary_partial`），
+            全覆盖时说 `summary_all`。理由见那两条的注释 —— 用户把「已对 3 个库生效」
+            读成了"还有两个坏了"，而真相是"那两个还没被主密码解锁过一次"。 -->
     <string name="quick_unlock_kdbx_password_title">输入该库的主密码</string>
     <string name="quick_unlock_kdbx_password_hint">KDBX 的密码不会留在会话里，需要你提供一次。后面还有 %1$d 个库待输入。</string>
     <string name="quick_unlock_kdbx_password_label">主密码</string>
@@ -752,7 +756,15 @@
          会让 aapt2 直接报 "Failed to parse XML file '(...).xml'"，而报错信息
          完全不提注释，极难猜（这个坑踩过一次，记在 .workbuddy/memory）。
          ⚠️ 「管理解锁方式」取代了旧的「逐库勾选范围」整块，是逐库勾选的**唯一**去处。 -->
-    <string name="quick_unlock_summary_on">已对 %1$d 个库生效</string>
+    <!-- ⚠️ 2026-11-10：口径从「已对 %1$d 个库生效」改成**两句话**（用户反馈）。
+         旧文案的问题不是"数量错了"，而是**它把目标状态说成了进行中状态**：
+         用户看到「已对 3 个库生效」会想「那另外两个呢？是不是坏了？」——
+         而范围早已是「全部库」，3 个只是"还有库没被主密码解锁过一次"。
+         ⇒ 全覆盖时说「已对所有密码库生效」（确认他关心的事），
+           有缺口时才报数字，且**把总数一起给出**（分母让缺口可判断）。
+         ⚠️ 别把这两句合并成「已对 %1$d 个库生效」：那是这条反馈的原点。 -->
+    <string name="quick_unlock_summary_all">已对所有密码库生效</string>
+    <string name="quick_unlock_summary_partial">已对 %1$d/%2$d 个库生效</string>
     <!-- ===== 2026-09-29 批次 4：失效矩阵的「待重装」文案（定稿 §6）=====
          ⚠️ 必须同时说清**三件事**，少一件就是一个坑：
            ① 现状（需要重新启用，不是"已失效"—— 钥匙还在手上，能修好）；
@@ -1100,6 +1112,10 @@
     <!-- 条目云同步状态（行尾小云图标，见 .ai/ISSUES.md #76） -->
     <string name="sync_state_synced">已同步到云端</string>
     <string name="sync_state_pending">本地有改动待同步</string>
+    <!-- ⚠️ 这三个图标**必须**读起来不一样（2026-11-10，见 #266）：
+         「已同步到云端」说的是**这一条**的状态，「来自云端密码库」说的是**这个库在哪**。
+         都读成"云"的话，读屏用户永远分不清"我的改动推上去了吗"和"这个库存在哪"。 -->
+    <string name="sync_state_cloud_vault">来自云端密码库</string>
 
     <!--
         KDBX 网盘同步冲突（方案 §8 方案 B 的三选项）。
