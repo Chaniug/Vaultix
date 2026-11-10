@@ -109,6 +109,7 @@ import io.vaultix.model.VaultItemType
 import io.vaultix.model.VaultKind
 import io.vaultix.model.VaultOrganization
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.common.AppLabel
 import io.vaultix.vaultix.ui.common.Capability
 import io.vaultix.vaultix.ui.common.CapabilityIcon
 import io.vaultix.vaultix.ui.common.EmptyState
@@ -983,6 +984,16 @@ private fun rememberGroupedItems(
             typeLabel = { context.getString(itemTypeLabelRes(it.type)) },
             unnamedLabel = context.getString(R.string.items_item_unnamed),
             noFolderLabel = context.getString(R.string.items_group_no_folder),
+            ungroupedLabel = context.getString(R.string.items_group_ungrouped),
+            // 应用键翻中文走 AppLabel（customFields 别名优先，装了再 PackageManager），
+            // 翻不出来兜底显示包名本身 —— 与详情页「关联应用」的显示口径一致。
+            siteLabel = { key, isApp ->
+                if (isApp) {
+                    AppLabel.installedLabel(context, key) ?: key
+                } else {
+                    key
+                }
+            },
         )
     }
 }

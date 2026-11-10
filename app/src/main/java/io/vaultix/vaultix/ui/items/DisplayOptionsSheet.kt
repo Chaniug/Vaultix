@@ -32,6 +32,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Dashboard
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Person
@@ -267,8 +268,9 @@ private fun OptionRow(
 private fun iconOf(mode: ItemsGroupMode): ImageVector = when (mode) {
     ItemsGroupMode.None -> Icons.Filled.Dashboard
     ItemsGroupMode.Type -> Icons.Filled.Dashboard
-    ItemsGroupMode.Folder -> Icons.Filled.Language
+    ItemsGroupMode.Folder -> Icons.Filled.Folder
     ItemsGroupMode.Initial -> Icons.Filled.Title
+    ItemsGroupMode.Site -> Icons.Filled.Language
 }
 
 private fun iconOf(mode: ItemsCardDisplayMode): ImageVector = when (mode) {

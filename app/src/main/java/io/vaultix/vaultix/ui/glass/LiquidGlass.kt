@@ -206,6 +206,23 @@ object LiquidGlass {
     /** 焦点高光比镜面 rim 略宽，才能读作"光晕扫过"而不是"又一条边"。 */
     const val FOCUS_WIDTH_FACTOR = 1.5f
 
+    // ── 2026-11-10 第五轮（#278 玻璃精修，参考 FlClash / prism_ui）──────────
+    //
+    // FlClash 的底栏玻璃（plugins/prism_ui，liquid_glass.frag + navigation_dock.dart）
+    // 在触摸时做三件事，本轮搬的是其中最"值钱"的一件：
+    // ① 触摸光晕：`uGlow(center, strength, reach)`，径向高斯，加在被按位置而**不是槽中心**
+    //   （"UIKit lights the bar from the finger"）；strength = peak * press²（压得越深越亮），
+    //   亮起 120ms / 熄灭 360ms 非对称。② 透镜位移带：折射沿法线在 rim 附近的一条带内最强。
+    //   ③ 色散沿法线镜像方向分开红蓝。②③ 上一轮已有对应物（uDepth/uPart），本轮只补 ①。
+    //
+    // ⚠️ 光晕是纯 shader uniform：底栏边界、大小、内容测量全程不变 —— 与第四轮同一条硬边界。
+
+    /** 触摸光晕峰值（径向高斯的中心强度，会再乘 intensity²）。FlClash 用 0.06+wash，本项目的底栏更窄，取大些。 */
+    const val TOUCH_GLOW_PEAK = 0.32f
+
+    /** 触摸光晕半径 = 胶囊高度 × 该系数。FlClash 取 height/√2 起步、松手放大 3 倍；按下时窄而亮更"聚"。 */
+    const val TOUCH_GLOW_REACH_FACTOR = 0.9f
+
     /** 暗线颜色：固定黑叠 alpha，不随主题反色（玻璃的暗边在两个主题里都是暗的）。 */
     val RimLineColor = Color.Black.copy(alpha = 0.10f)
 }
@@ -219,11 +236,14 @@ object LiquidGlass {
  * 这是 #205「底栏高度塌 0」之后定下的边界：**观感状态不许参与测量**。
  *
  * @param intensity 0（松手）→ 1（按住），由 spring 驱动。
- * @param focusX 被按 tab 的水平位置，0（最左）→ 1（最右）；松手时回 0.5（居中）。
+ * @param focusX 光源水平位置，0（最左）→ 1（最右）；#278 起是**手指的精确位置**，
+ *   松手时回 0.5（居中）—— 之前是槽中心，FlClash 口径是"光跟着手指"。
+ * @param focusY 光源垂直位置，0（顶沿）→ 1（底沿）；手指在胶囊内的高度，松手回 0.5。
  */
 data class GlassPress(
     val intensity: Float = 0f,
     val focusX: Float = 0.5f,
+    val focusY: Float = 0.5f,
 )
 
 /**
@@ -521,7 +541,8 @@ private fun DrawScope.drawFocusSheen(
                 style.sheen.copy(alpha = LiquidGlass.FOCUS_SHEEN_ALPHA * press.intensity),
                 Color.Transparent,
             ),
-            center = Offset(size.width * press.focusX, 0f),
+            // #278：焦点随手指（focusX/focusY 都是精确触控位置），不再是"上沿的槽中心"。
+            center = Offset(size.width * press.focusX, size.height * press.focusY),
             radius = size.width * LiquidGlass.FOCUS_RADIUS_FRACTION,
         ),
         style = Stroke(width = width),

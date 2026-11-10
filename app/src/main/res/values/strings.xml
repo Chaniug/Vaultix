@@ -1074,6 +1074,8 @@
     <string name="items_group_folder">按文件夹</string>
     <string name="items_group_initial">按首字母</string>
     <string name="items_group_no_folder">无文件夹</string>
+    <string name="items_group_site">按站点</string>
+    <string name="items_group_ungrouped">未分组</string>
     <string name="items_deleted_to_trash">「%1$s」已移入回收站</string>
     <string name="items_search_clear">清除搜索</string>
     <string name="item_field_type">类型</string>

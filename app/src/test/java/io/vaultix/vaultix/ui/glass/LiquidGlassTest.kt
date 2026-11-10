@@ -223,4 +223,13 @@ class LiquidGlassTest {
             assertThat(dockSlotFocus(slot)).isEqualTo((slot + 0.5f) / 5f)
         }
     }
+
+    /** #278 触摸光晕：强度落在 (0,1)、半径为正，且默认按压位置的 focusY 也是正中。 */
+    @Test
+    fun `触摸光晕规格合法且默认位置居中`() {
+        assertThat(LiquidGlass.TOUCH_GLOW_PEAK).isGreaterThan(0f)
+        assertThat(LiquidGlass.TOUCH_GLOW_PEAK).isLessThan(1f)
+        assertThat(LiquidGlass.TOUCH_GLOW_REACH_FACTOR).isGreaterThan(0f)
+        assertThat(GlassPress().focusY).isEqualTo(0.5f)
+    }
 }

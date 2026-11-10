@@ -233,12 +233,23 @@ fun Modifier.liquidGlassBackdrop(
         right = -offset.x + size.width,
         bottom = -offset.y + size.height,
     )
+    // ★ 2026-11-10 第五轮：触摸光晕的 uniform。光心跟手指（GlassPress 的精确触控位置），
+    //   不是槽中心 —— FlClash 的口径是 "UIKit lights the bar from the finger"。
+    //   强度取 intensity²：轻碰只是微亮、压实了才亮起来（FlClash 同款平方曲线）。
+    //   ⚠️ 只算 uniform，不碰任何尺寸。
+    val pressValue = press.value
+    val glowCx = boundsInLayer.left + size.width * pressValue.focusX
+    val glowCy = boundsInLayer.top + size.height * pressValue.focusY
     val effect = glassRenderEffect(
         blurRadiusPx = radiusPx,
         boundsInLayer = boundsInLayer,
         cornerRadiusPx = size.height / 2f,
-        depthPx = depthPx * (1f + LiquidGlass.PRESS_REFRACTION_GAIN * press.value.intensity),
+        depthPx = depthPx * (1f + LiquidGlass.PRESS_REFRACTION_GAIN * pressValue.intensity),
         partPx = partPx,
+        glowCx = glowCx,
+        glowCy = glowCy,
+        glowStrength = LiquidGlass.TOUCH_GLOW_PEAK * pressValue.intensity * pressValue.intensity,
+        glowReach = size.height * LiquidGlass.TOUCH_GLOW_REACH_FACTOR,
     )
     if (effect == null) {
         drawContent()

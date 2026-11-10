@@ -77,6 +77,10 @@ uniform float uDepth;
 uniform float uPart;
 uniform float uLine;
 uniform float uShine;
+// 触摸光晕（#278 玻璃精修，对齐 FlClash / prism_ui 的 uGlow）：
+// xy = 光心在 effectLayer 坐标系里的位置（跟手指，不跟槽中心），z = 强度，
+// w = 高斯半径（像素）。
+uniform float4 uGlow;
 
 float sdRoundBox(float2 p, float2 b, float r) {
     float2 q = abs(p) - b + float2(r, r);
@@ -106,6 +110,14 @@ half4 main(float2 coord) {
     base.r = base.r + (1.0 - base.r) * shine;
     base.g = base.g + (1.0 - base.g) * shine;
     base.b = base.b + (1.0 - base.b) * shine;
+    // 触摸光晕：径向高斯，往白里"滤"（screen），压得越深（强度是 intensity²）越亮。
+    // FlClash 的写法是 `glass += strength * exp(-d²/reach)`；这里用 screen 形式，
+    // 因为底栏本身已有填充与 rim，直接加法会把暗线洗白。
+    float2 toGlow = coord - uGlow.xy;
+    float glow = uGlow.z * exp(-dot(toGlow, toGlow) / max(uGlow.w, 1.0));
+    base.r = base.r + (1.0 - base.r) * glow;
+    base.g = base.g + (1.0 - base.g) * glow;
+    base.b = base.b + (1.0 - base.b) * glow;
     return base;
 }
 """
@@ -123,6 +135,10 @@ half4 main(float2 coord) {
         radius: Float,
         depth: Float,
         part: Float,
+        glowX: Float,
+        glowY: Float,
+        glowStrength: Float,
+        glowReach: Float,
     ): ComposeRenderEffect {
         val current = shader ?: RuntimeShader(SOURCE).also { shader = it }
         current.setFloatUniform("uRect", rect.left, rect.top, rect.right, rect.bottom)
@@ -131,6 +147,7 @@ half4 main(float2 coord) {
         current.setFloatUniform("uPart", part)
         current.setFloatUniform("uLine", LINE)
         current.setFloatUniform("uShine", SHINE)
+        current.setFloatUniform("uGlow", glowX, glowY, glowStrength, glowReach)
         return chain ?: RenderEffect.createChainEffect(
             RenderEffect.createRuntimeShaderEffect(current, "content"),
             blur,
@@ -179,6 +196,9 @@ private var opticsDisabled = false
  * @param cornerRadiusPx 药丸圆角，通常取胶囊高度的一半。
  * @param depthPx 边缘折射位移深度，像素。
  * @param partPx 边缘 RGB 分色幅度，像素。
+ * @param glowCx / @param glowCy 触摸光晕中心（effectLayer 坐标系，像素）。
+ * @param glowStrength 光晕强度（0 = 无按压）。
+ * @param glowReach 光晕高斯半径，像素。
  */
 internal fun glassRenderEffect(
     blurRadiusPx: Float,
@@ -186,6 +206,10 @@ internal fun glassRenderEffect(
     cornerRadiusPx: Float,
     depthPx: Float,
     partPx: Float,
+    glowCx: Float,
+    glowCy: Float,
+    glowStrength: Float,
+    glowReach: Float,
 ): ComposeRenderEffect? {
     val blur = androidBlurEffect(blurRadiusPx) ?: return null
     // ★ 31+ 一律先补饱和度，再决定要不要叠 AGSL。31-32 因此也有 vibrancy。
@@ -202,6 +226,10 @@ internal fun glassRenderEffect(
             radius = cornerRadiusPx,
             depth = depthPx,
             part = partPx,
+            glowX = glowCx,
+            glowY = glowCy,
+            glowStrength = glowStrength,
+            glowReach = glowReach,
         )
     }.onFailure { opticsDisabled = true }.getOrNull() ?: plain
 }

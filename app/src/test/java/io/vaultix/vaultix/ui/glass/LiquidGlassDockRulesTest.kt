@@ -188,6 +188,29 @@ class LiquidGlassDockRulesTest {
         )
     }
 
+    // ------------------------------------------------------------------ 规则 7
+
+    /**
+     * **触摸光晕（#278）只进 shader uniform 与绘制，不许参与测量。**
+     *
+     * FlClash 的 "lights the bar from the finger" 依赖**精确触控位置**。位置只能
+     * 折算成 `uGlow` 的 xy/strength/reach；谁把它接进尺寸 modifier，底栏就会
+     * 跟着手指变大变小。这条钉三个事实：shader 里有 `uGlow` uniform、
+     * backdrop 把 `focusX/focusY` 折算成光心、峰值常量走 [LiquidGlass.TOUCH_GLOW_PEAK]。
+     */
+    @Test
+    fun `触摸光晕只进uniform_不许参与测量`() {
+        val optics = glassSource("LiquidGlassOptics.kt")
+        val backdrop = glassSource("LiquidGlassSource.kt")
+        val missing = buildList {
+            if (!optics.contains("uniform float4 uGlow")) add("shader 缺 uGlow uniform")
+            if (!backdrop.contains("pressValue.focusX")) add("backdrop 没把 focusX 折算成光心")
+            if (!backdrop.contains("pressValue.focusY")) add("backdrop 没把 focusY 折算成光心")
+            if (!backdrop.contains("LiquidGlass.TOUCH_GLOW_PEAK")) add("强度没走常量")
+        }
+        assertTrue("触摸光晕接线不完整：\n" + missing.joinToString("\n"), missing.isEmpty())
+    }
+
     // ----------------------------------------------------------------- helpers
 
     /** 取一个顶层 / DrawScope 扩展函数的**函数体**（大括号配平，跳过字符串里的括号）。 */
