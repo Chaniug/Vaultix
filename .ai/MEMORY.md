@@ -138,7 +138,7 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 | [8.1 自动填充](./conventions/8.1-自动填充.md) | 自动填充 | 16 |
 | [8.2 锁与解锁](./conventions/8.2-锁与解锁.md) | 锁与解锁 | 6 |
 | [8.3 M2KDBX](./conventions/8.3-M2KDBX.md) | M2KDBX | 12 |
-| [8.4 UI·观感](./conventions/8.4-UI·观感.md) | UI·观感（含**三张尺寸表分工** + **中文文案哨兵**） | 14 |
+| [8.4 UI·观感](./conventions/8.4-UI·观感.md) | UI·观感（含**三张尺寸表分工** + **中文文案哨兵** + **对话框动作槽的 intrinsic 坑 / 右侧固定宽度 = 左侧固定损失**） | 15 |
 | [8.5 通行密钥](./conventions/8.5-通行密钥.md) | 通行密钥 | 12 |
 | [8.6 工程质量](./conventions/8.6-工程质量.md) | 工程质量 | 12 |
 | [8.7 环境](./conventions/8.7-环境.md) | 环境（含**沙箱内真编译 + 真跑单测**，`--all` 可批量巡检全仓，无 SDK 也能跑） | 10 |
