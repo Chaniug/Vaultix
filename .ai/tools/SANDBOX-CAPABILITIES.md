@@ -2,8 +2,12 @@
 
 > 起因：用户问「本地可以做 CI 吗，沙箱环境除了不出 APK 还能提效什么」。
 > 本文只写**跑过、有数字**的部分；未验证的一律标注「未测」。
+>
+> ⚠️ **本文上半部分已过时**。装好 Android SDK 之后，「不能出 APK / 不能 lint」
+> 全部翻转，详见下面的 [§ 装了 Gradle + SDK 之后](#装了-gradle--sdk-之后2026-11-10-下半场)。
+> 保留原文是因为：手工 kotlinc 那条路**仍然有用**（比 gradle 快一个数量级，见对比表）。
 
-## 结论先放这
+## 结论先放这（**旧**：只有 kotlinc 时）
 
 | 能 | 不能 |
 |---|---|
@@ -118,3 +122,100 @@ EOF
    但收益最大：**UI 层签名错误**（比如上一轮的带接收者 lambda）从此不必等 CI。
 2. `data:bitwarden` / `core:database` / `core:datastore`：缺 Room / DataStore 的生成物，
    要么加 KSP 预生成，要么手工桩 —— 先把它们从 CI 白名单里排除（现状）。
+
+---
+
+# 装了 Gradle + SDK 之后（2026-11-10 下半场）
+
+用户问「可以装 gradle 吗」。结论：**gradle 本来就在（sdkman 9.3.0），但它跑不了这个项目**；
+真正缺的是 SDK 和 JDK 21。补齐之后沙箱能做的事**和 CI 完全一致**。
+
+## 实测（逐项跑过，不是推测）
+
+| 命令 | 结果 | 耗时 |
+|---|---|---|
+| `./gradlew projects` | ✅ 13 个模块全部 configure，AGP 9.5.0 加载 | 1m 20s |
+| `:core:crypto:compileDebugKotlin` + `:data:kdbx:compileDebugKotlin` | ✅（连带 KSP + Room + DataStore） | 1m 46s |
+| **`:app:compileFullDebugKotlin`** | ✅ **含 Compose / Hilt / KSP 全链路** | **2m 07s** |
+| `detekt` | ✅ 10 个任务全过 | 1m 12s |
+| `testFullDebugUnitTest` | ✅ 全模块单测通过 | 58s |
+| **`:app:assembleFullDebug`** | ✅ **产出 36MB APK** | **1m 59s** |
+| `:app:lintFullDebug` | ⚠️ 跑通，但**报 39 error / 268 warning** | 5m 04s |
+
+热缓存下第二遍会快很多（`testFullDebugUnitTest` 58s 就是复用编译产物后的数字）。
+
+## 三个坑（都不是项目的问题，是环境）
+
+### 1. gradle 版本：不要装，用 wrapper
+
+sdkman 装的是 **9.3.0**，AGP 9.5.0 最低要 **9.5.0** ⇒ 直接拒绝构建。
+但**正确的修法不是升级 gradle**，而是 `./gradlew` —— 项目 wrapper 已经是 9.8.2。
+版本管理交给 wrapper，环境里装什么 gradle 都无所谓。
+
+### 2. `platforms;android-37` 不存在
+
+```
+Warning: Failed to find package 'platforms;android-37'
+```
+
+**要带小版本号：`platforms;android-37.0`**。同理 build-tools 用 `37.0.0`。
+查法：`sdkmanager --list | grep 'platforms;android-3'`。
+
+### 3. `/root/.gradle/init.gradle` 是坏的（沙箱镜像预置）
+
+任何 gradle 调用都在**初始化阶段**就失败：
+
+```
+Groovy DSL script compilation problem
+  initialization script '/root/.gradle/init.gradle': 1: Unexpected input: '{' @ line 1, column 13
+     allprojects {
+```
+
+⚠️ **行号骗人**：它指 line 1，真实错误在 line 3–4：
+
+```groovy
+maven { url https://mirrors.tencent.com/... }   // url 后缺 `=`
+mavelCentral()                                  // 应为 mavenCentral（拼错）
+```
+
+修好之后还有第二道坎：项目在 `settings.gradle.kts` 里设了
+`repositoriesMode = FAIL_ON_PROJECT_REPOS`，**在 project 层加仓库会让构建失败**。
+必须挂到 `settingsEvaluated` 的 `dependencyResolutionManagement` 上。
+现已改成正确版本（保留腾讯/阿里镜像，末尾仍留 `google()`/`mavenCentral()` 兜底）。
+
+## 现在推荐的分工
+
+| 场景 | 用什么 | 理由 |
+|---|---|---|
+| 改了一个纯逻辑文件，想秒级反馈 | `typecheck_kotlin.sh <file>` | **3–40 秒**，比 gradle 快一个数量级（gradle 配置阶段就要 20s+） |
+| 改了 `ui/*` / 动了 Compose 或 Hilt | `./gradlew :app:compileFullDebugKotlin` | 只有它能查 Compose 签名与 Hilt 生成物 |
+| 提交前 | `./gradlew detekt testFullDebugUnitTest` | 与 CI 同一条链路，绿了 CI 必绿 |
+| 想看真实 APK 行为 | `./gradlew :app:assembleFullDebug` | 2 分钟出包；但**出包仍以 CI 为准**（签名/发布流程在 CI） |
+
+## lint：39 个 error 是**真问题**，只是 CI 一直吞掉
+
+CI 里 `Run lint` 步骤同时具备两个「看不见」的属性：
+
+1. `continue-on-error: true`（`.ai/ISSUES.md` #100 的止血措施）
+2. `if: github.event_name != 'push'` —— 而本仓库 50+ 次运行**全是 push**
+
+⇒ 这条门禁**至今没有被真正验证过**。沙箱第一次跑就红了，39 个 error 里典型几类：
+
+| 类型 | 例子 | 性质 |
+|---|---|---|
+| `NewApi` | `markUserPreVerified` 要 API 34、`SigningInfo#hasMultipleSigners` 要 28，minSdk 26 | **可能真崩**（缺 `@RequiresApi` 或版本分支） |
+| `MissingPermission` | `SmartCopyNotifier` 调用需权限的 API 未检查 | **可能真崩** |
+| `ContextCastToActivity` | 3 处 `LocalContext as Activity` | 新 lint 规则，官方建议用 `LocalActivity` |
+| `StartActivityAndCollapseDeprecated` | `AutofillTileService` | 仅过时 |
+
+处置建议（**未执行，需你定**）：先只看 `NewApi` + `MissingPermission` 这两类
+（`grep -E "\[NewApi\]|\[MissingPermission\]"`），它们是崩溃风险；
+其余归入「规则升级噪音」，可在 `lint.xml` 里按需 baseline，而不是关掉整条门禁。
+
+## 复现这套环境
+
+```bash
+bash .ai/tools/setup_android_sandbox.sh   # ~6 分钟、~1.5GB
+source /opt/vaultix-android-env.sh        # 每个新 shell 都要
+./gradlew :app:compileFullDebugKotlin
+```
