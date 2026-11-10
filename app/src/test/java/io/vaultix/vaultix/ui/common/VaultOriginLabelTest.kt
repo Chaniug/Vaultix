@@ -80,4 +80,32 @@ class VaultOriginLabelTest {
         assertThat(kdbxSourceTargetOf("onedrive:")).isEqualTo(KdbxSourceTarget.LocalFile)
         assertThat(kdbxSourceTargetOf("webdav:cred:")).isEqualTo(KdbxSourceTarget.LocalFile)
     }
+
+    // ---------------------------------------------------------------- 回归：#264 网盘库被判成本地
+
+    @Test
+    fun `onedrive 库绝不能被判成本地文件（2026-11-10 真机 #264 回归钉）`() {
+        // 用户报：OneDrive 上的 KDBX 库，在**库列表**里显示「本地文件 · uit」。
+        // 真因是列表页自己又判了一遍来源，没走 vaultOriginLabel。
+        // 这条钉子锁住**判据这一层**：只要 origin 是 onedrive: 开头且可解析，
+        // 就必须落到 OneDrive 分支，而不是 LocalFile。
+        //
+        // ⚠️ 断言**同时**否定 LocalFile —— 只写 isEqualTo(OneDrive(...)) 在
+        //    实现退化成 LocalFile 时也会红，但红的信息不如这样直白。
+        for (path in listOf("uit.kdbx", "Keepass/uit.kdbx", "/Keepass/uit.kdbx", "我的 密码库/库.kdbx")) {
+            val origin = OneDriveVaultOrigin.build("acc-1", path)
+            val target = kdbxSourceTargetOf(origin)
+
+            assertThat(target).isNotEqualTo(KdbxSourceTarget.LocalFile)
+            assertThat(target).isInstanceOf(KdbxSourceTarget.OneDrive::class.java)
+        }
+    }
+
+    @Test
+    fun `onedrive 路径里的中文与空格编码往返后原样还原`() {
+        val origin = OneDriveVaultOrigin.build("acc-1", "/我的 密码库/库.kdbx")
+        // build 会 trim('/')，故期望值不带前导斜杠
+        assertThat(kdbxSourceTargetOf(origin))
+            .isEqualTo(KdbxSourceTarget.OneDrive("我的 密码库/库.kdbx"))
+    }
 }

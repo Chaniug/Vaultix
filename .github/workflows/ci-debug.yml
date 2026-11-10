@@ -241,6 +241,20 @@ jobs:
       - name: Check source encoding (UTF-8 / mojibake gate)
         run: python3 "$GITHUB_WORKSPACE/.github/scripts/check-encoding.py" "$GITHUB_WORKSPACE"
 
+      # ★ 2026-11-10：KDBX 来源标签唯一真值源门禁。
+      #
+      # 真机反馈 #264：OneDrive 上的 KDBX 库在**库列表**里显示「本地文件 · uit」，
+      # 而密码页的库状态行显示「OneDrive · …」——同一份数据两个页面两个名字。
+      # 真因是 `VaultListScreen.vaultSubtitle()` 在 `VaultKind.KDBX ->` 分支里
+      # 自己写了一遍判据，没用 `vaultOriginLabel()`。
+      #
+      # 这类错没有任何现成门禁查得到：编译过、单测过（那个函数是 private @Composable）、
+      # 资源也没少用。只有**真机在 OneDrive 库上**才看得见 —— 而绝大多数测试都在本地库上做。
+      # ⇒ 静态扫描：除 `VaultOriginLabel.kt` 外，`VaultKind.KDBX ->` 分支体内
+      #   不得出现 `vault_card_kdbx_subtitle` / `vault_origin_onedrive` / `vault_origin_webdav`。
+      - name: Check KDBX origin single source
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/check_kdbx_origin_single_source.py"
+
       # ★ 2026-11-09：折纸 V 应用图标的几何与 XML 一致性门禁。
       #
       # 为什么单列一关：旧图标的几何由 build/sign/v5_*.py 生成，那两个脚本不在 git 且已丢失，

@@ -92,6 +92,7 @@ import io.vaultix.vaultix.ui.common.AddVaultTypeDialog
 import io.vaultix.vaultix.ui.common.KdbxConflictChoice
 import io.vaultix.vaultix.ui.common.KdbxConflictDialog
 import io.vaultix.vaultix.ui.common.deviceCanAuthenticate
+import io.vaultix.vaultix.ui.common.vaultOriginLabel
 import io.vaultix.vaultix.ui.settings.QuickUnlockHost
 import io.vaultix.vaultix.ui.shell.rememberBottomDockInset
 import io.vaultix.vaultix.ui.theme.UiSize
@@ -882,17 +883,30 @@ private fun VaultIdentityBadge(vault: VaultSummary, modifier: Modifier = Modifie
  * 卡片副标题：**给用户看的字段必须是用户语义的**（`.ai/issues/05-KDBX本地库.md` #95）。
  *
  * - Bitwarden：`account`（邮箱）→ 退化到 `origin`（`https://...`，本身可读）；
- * - KDBX：`account` 恒为 null，而 `origin`/`id` **就是** SAF 的 `content://` URI
+ * - KDBX：`account` 恒为 null，而 `origin`/`id` 对**本地** SAF 库**就是** `content://` URI
  *   （`addKdbxVault` 用 `vaultId = sourceUri`）⇒ 直接渲染会露出
  *   `content://com.android.externalstorage.documents/document/primary%3A...` 这种
  *   给系统看的、URL 编码过的字符串。
  *
- * ⇒ KDBX 一律取**文件名**（`name` 就是添加时从 SAF 取的显示名），并标注「本地文件」
- * 让用户一眼知道它不在云端。
+ * ## ⚠️ KDBX 分支**不能**在这里自己判来源（2026-11-10 真机反馈修正）
+ *
+ * 此前这里写的是 `KDBX -> stringResource(vault_card_kdbx_subtitle, vault.name)`，
+ * 即**无条件**「本地文件 · 库名」。于是 OneDrive / WebDAV 上的 KDBX 库卡片也显示
+ * 「本地文件」—— 用户原话：
+ *
+ * > 库列表，这两个显示是对的，但是处于 onedrive 上的 kdbx，在这里也会显示出本地文件，这样不对吧
+ *
+ * 而 `ui/common/VaultOriginLabel.kt` 里**早就有一份**会区分
+ * `本地文件 / OneDrive / WebDAV` 的实现（`vaultOriginLabel`），
+ * 密码页的库状态行用的就是它。两处各判各的 ⇒ 同一份数据在两个页面叫两个名字。
+ *
+ * ⇒ 现在统一走 [vaultOriginLabel]。这个函数只保留 Bitwarden 那一支的
+ * 「account 优先」差异（库状态行显示的是服务器地址，卡片这里显示账号邮箱）。
  */
 @Composable
 private fun vaultSubtitle(vault: VaultSummary): String = when (vault.kind) {
-    VaultKind.KDBX -> stringResource(R.string.vault_card_kdbx_subtitle, vault.name)
+    // ★ 本地 / OneDrive / WebDAV 三种来源都在 vaultOriginLabel 里分好，这里不再重复判断。
+    VaultKind.KDBX -> vaultOriginLabel(vault)
     VaultKind.BITWARDEN -> vault.account ?: vault.origin
 }
 
