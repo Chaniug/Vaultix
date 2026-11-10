@@ -8,6 +8,8 @@
  */
 package io.vaultix.vaultix.ui.glass
 
+import android.graphics.ColorMatrix
+import android.graphics.ColorMatrixColorFilter
 import android.graphics.RenderEffect
 import android.graphics.RuntimeShader
 import android.graphics.Shader
@@ -35,9 +37,15 @@ import androidx.compose.ui.graphics.asComposeRenderEffect
  *
  * | 系统 | 链路 |
  * |---|---|
- * | ≥ 33 | 模糊 → AGSL 折射 / 分色 / rim 暗线 / 高光 |
- * | 31–32 | 仅模糊（原行为，观感由 `drawGlass` 的静态光学装饰补足） |
+ * | ≥ 33 | 模糊 → **饱和度增强** → AGSL 折射 / 分色 / rim 暗线 / 高光 |
+ * | 31–32 | 模糊 → **饱和度增强**（观感由 `drawGlass` 的沿轮廓镜面 rim 补足） |
  * | < 31 | 无模糊，`liquidGlassStyle` 已给不透明实色 |
+ *
+ * ⚠️ **2026-11-10 第四轮补的饱和度不是装饰，是玻璃能不能"透出内容"的关键**：
+ * 只做模糊时，背后彩色的条目会被糊成一片中性灰 —— 看起来像蒙了层雾而不是玻璃。
+ * Haze 的 vibrancy / PrismalAGSL 的 saturation / LiquidGlassBar 的 1.5× 都做同一件事。
+ * 用 `createColorFilterEffect` 串在模糊之后，好处是 **31-32 也拿得到**，且 AGSL 源码一行不改
+ * （AGSL 是运行时编译、CI 覆盖不到，改它的风险与收益不对等）。
  *
  * ⚠️ shader 创建失败（AGSL 编译错误、软件渲染路径、ROM 缺陷）一律回落成**仅模糊**，
  * 绝不让主界面崩。这条与 `blurEffect` 的 `runCatching` 是同一条纪律。
@@ -139,6 +147,24 @@ internal fun androidBlurEffect(radiusPx: Float): RenderEffect? {
 }
 
 /**
+ * 模糊 → 饱和度增强（vibrancy）。
+ *
+ * `ColorMatrix.setSaturation(>1)` 会把颜色往"离灰度更远"推：模糊把彩色条目洗成灰，
+ * 这一层把洗掉的那点色相还回来，玻璃才读作"透出内容"而不是"蒙了雾"。
+ *
+ * ⚠️ 失败时**原样返回模糊**：饱和度是增益不是前提，链创建不了不能让底栏不糊。
+ * ⚠️ 用 `createChainEffect(saturation, blur)` —— outer 先算还是后算，Compose/RenderEffect
+ *    的口径是 **outer 作用于 inner 的结果**，所以饱和度必须放第一个参数。
+ */
+private fun saturatedBlur(blur: RenderEffect): RenderEffect = runCatching {
+    val matrix = ColorMatrix().apply { setSaturation(LiquidGlass.SATURATION) }
+    RenderEffect.createChainEffect(
+        RenderEffect.createColorFilterEffect(ColorMatrixColorFilter(matrix)),
+        blur,
+    )
+}.getOrNull() ?: blur
+
+/**
  * 一次失败后钉住降级。
  *
  * AGSL 编译失败通常是设备 / ROM 级别的，重试不会变好；若每帧都走一遍
@@ -162,14 +188,16 @@ internal fun glassRenderEffect(
     partPx: Float,
 ): ComposeRenderEffect? {
     val blur = androidBlurEffect(blurRadiusPx) ?: return null
-    val plain = blur.asComposeRenderEffect()
+    // ★ 31+ 一律先补饱和度，再决定要不要叠 AGSL。31-32 因此也有 vibrancy。
+    val saturated = saturatedBlur(blur)
+    val plain = saturated.asComposeRenderEffect()
     // ⚠️ 这行必须写成 `Build.VERSION.SDK_INT` 的裸比较：lint 靠它识别 NewApi 守卫，
     //    包进自定义函数就推断不出来（与 blurEffect 里 API 31 的写法同一条纪律）。
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return plain
     if (opticsDisabled) return plain
     return runCatching {
         OpticsShader.effect(
-            blur = blur,
+            blur = saturated,
             rect = boundsInLayer,
             radius = cornerRadiusPx,
             depth = depthPx,

@@ -11,6 +11,8 @@ package io.vaultix.vaultix.ui.glass
 import android.os.Build
 import androidx.compose.ui.graphics.Color
 import com.google.common.truth.Truth.assertThat
+import io.vaultix.vaultix.ui.shell.dockIdleFocus
+import io.vaultix.vaultix.ui.shell.dockSlotFocus
 import org.junit.Test
 
 /**
@@ -169,5 +171,56 @@ class LiquidGlassTest {
         assertThat(isDarkSurface(Color(0xFF000000))).isTrue()
         assertThat(isDarkSurface(Color(0xFFFDFCFF))).isFalse()
         assertThat(isDarkSurface(Color.White)).isFalse()
+    }
+
+    // ── 2026-11-10 第四轮：沿轮廓光学 + 按压联动的数值判据 ──────────────
+
+    /**
+     * 饱和度是「玻璃能不能透出内容」的关键：只模糊会把彩色条目洗成中性灰。
+     * 上界 1.6 是防「为了显色把颜色推到过曝」（Haze vibrancy / Prismal 常用 1.3~1.5）。
+     */
+    @Test
+    fun `饱和度增益大于原图且不过曝`() {
+        assertThat(LiquidGlass.SATURATION).isGreaterThan(1f)
+        assertThat(LiquidGlass.SATURATION).isAtMost(1.6f)
+    }
+
+    /** 上沿受光 > 侧沿；镜面 rim > 内描边；折射深度 > 色散幅度。层次反了会像塑料板。 */
+    @Test
+    fun `镜面高光与折射规格层次正确`() {
+        assertThat(LiquidGlass.SPECULAR_ALPHA).isGreaterThan(LiquidGlass.SPECULAR_TAIL_ALPHA)
+        assertThat(LiquidGlass.SpecularWidth.value)
+            .isGreaterThan(LiquidGlass.InnerStrokeWidth.value)
+        assertThat(LiquidGlass.RefractionDepth.value)
+            .isGreaterThan(LiquidGlass.ChromaticAberration.value)
+        assertThat(LiquidGlass.FOCUS_SHEEN_ALPHA).isGreaterThan(0f)
+    }
+
+    /** 按压增益必须为正（只增强不反向），且默认态等于「完全没按」。 */
+    @Test
+    fun `按压增益只增强不反向且默认态是无按压`() {
+        assertThat(LiquidGlass.PRESS_REFRACTION_GAIN).isGreaterThan(0f)
+        assertThat(LiquidGlass.PRESS_SHEEN_GAIN).isGreaterThan(0f)
+        val idle = GlassPress()
+        assertThat(idle.intensity).isEqualTo(0f)
+        assertThat(idle.focusX).isEqualTo(0.5f)
+        assertThat(NoGlassPress.value).isEqualTo(idle)
+    }
+
+    /**
+     * 5 个等分槽的焦点必须落在 (0,1) 内且严格递增，松手回到正中。
+     * 这条钉住的是「焦点高光落在被按 tab 上沿」——写反或写成槽左边缘都会偏一整格。
+     */
+    @Test
+    fun `槽位焦点覆盖整条底栏且松手回正中`() {
+        val first = dockSlotFocus(0)
+        val last = dockSlotFocus(4)
+        assertThat(first).isGreaterThan(0f)
+        assertThat(last).isLessThan(1f)
+        assertThat(last).isGreaterThan(first)
+        assertThat(dockIdleFocus()).isEqualTo(0.5f)
+        (0..4).forEach { slot ->
+            assertThat(dockSlotFocus(slot)).isEqualTo((slot + 0.5f) / 5f)
+        }
     }
 }

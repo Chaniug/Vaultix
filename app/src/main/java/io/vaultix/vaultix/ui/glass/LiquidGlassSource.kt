@@ -9,6 +9,7 @@
 package io.vaultix.vaultix.ui.glass
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
@@ -21,7 +22,6 @@ import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.unit.IntSize
-import androidx.compose.ui.unit.dp
 
 /**
  * 液态玻璃的**背景源**（2026-10-27 第二轮：用户真机反馈后重做；2026-10-28 第三轮修"整页变白"）。
@@ -193,11 +193,19 @@ internal fun backdropOffset(sourceBounds: Rect, layerBounds: Rect): Offset =
  * @param offset 浮层左上角 − 源左上角（根坐标系），见 [backdropOffset]。
  *               底栏贴屏幕底、源自上而下铺满 ⇒ y 通常为负。
  * @param radiusPx 模糊半径（像素）。
+ * @param depthPx 边缘折射深度（像素），由 [LiquidGlassLayer] 按 [LiquidGlass.RefractionDepth]
+ *                与按压强度算出 —— 这里只消费，不再自己写死 dp 字面量。
+ * @param partPx 边缘 RGB 分色幅度（像素）。
+ * @param press 按压强度（State，绘制阶段读）：按住时把折射深度调深，玻璃像"被按厚"，
+ *              而不改变胶囊的边界与大小；收 State 是为了动画期间不重组。
  */
 fun Modifier.liquidGlassBackdrop(
     source: LiquidGlassSource,
     offset: Offset,
     radiusPx: Float,
+    depthPx: Float,
+    partPx: Float,
+    press: State<GlassPress>,
 ): Modifier = drawWithContent {
     // ⚠️ 用 drawWithContent（而不是 drawBehind / drawWithCache）：`GraphicsLayer.record`
     //    是 ContentDrawScope 的成员扩展，只有这里的 receiver 才调得到。
@@ -229,8 +237,8 @@ fun Modifier.liquidGlassBackdrop(
         blurRadiusPx = radiusPx,
         boundsInLayer = boundsInLayer,
         cornerRadiusPx = size.height / 2f,
-        depthPx = 3.dp.toPx(),
-        partPx = 1.dp.toPx(),
+        depthPx = depthPx * (1f + LiquidGlass.PRESS_REFRACTION_GAIN * press.value.intensity),
+        partPx = partPx,
     )
     if (effect == null) {
         drawContent()

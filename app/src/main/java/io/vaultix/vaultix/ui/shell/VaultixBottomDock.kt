@@ -58,15 +58,20 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -77,6 +82,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.glass.GlassPress
 import io.vaultix.vaultix.ui.glass.LiquidGlass
 import io.vaultix.vaultix.ui.glass.LiquidGlassLayer
 import io.vaultix.vaultix.ui.glass.LiquidGlassSource
@@ -89,6 +95,31 @@ import io.vaultix.vaultix.ui.theme.Spacing
 
 /** 悬浮胶囊底栏固定高度（对齐 Bastion：胶囊 60dp + 留白 6/20 = 86dp 视觉占位）。 */
 private val DockBarHeight = 60.dp
+
+// ── 2026-11-10 第四轮：按压联动的槽位几何 ────────────────────────────────
+//
+// DockRow 恒为 5 个等分 weight(1f)（左 2 + 中「+」+ 右 2，不足用 Spacer 补齐），
+// 所以「被按的是第几个槽」可以直接换成 0~1 的水平位置，供玻璃的焦点高光使用。
+// ⚠️ 这些常量只参与**绘制**，不参与测量：胶囊的宽/高/圆角/留白在按压全程不变。
+
+/** 等分槽数。 */
+private const val DOCK_SLOTS = 5
+
+/** 中央「+」与右侧首槽的槽号。 */
+private const val DOCK_ADD_SLOT = 2
+private const val DOCK_RIGHT_FIRST_SLOT = 3
+
+/** 取槽中心而不是槽左边缘。 */
+private const val DOCK_SLOT_CENTER = 0.5f
+
+/** 松手哨兵：负值 = 当前没有任何槽被按住。 */
+private const val DOCK_NO_PRESS = -1f
+
+/** 第 [slot] 个等分槽的中心，0（最左）→ 1（最右）。抽成纯函数便于单测钉住。 */
+internal fun dockSlotFocus(slot: Int): Float = (slot + DOCK_SLOT_CENTER) / DOCK_SLOTS
+
+/** 松手后光源回到正中（正好是中央「+」的槽中心）。 */
+internal fun dockIdleFocus(): Float = dockSlotFocus(DOCK_ADD_SLOT)
 
 /**
  * 按压时整项的缩放（2026-11-09 方案 ③）：比旧值 0.94 更深一点，
@@ -220,6 +251,41 @@ fun VaultixBottomDock(
      */
     glassSource: LiquidGlassSource? = null,
 ) {
+    // ★ 2026-11-10 第四轮：按压状态提升到这里，玻璃本体才能跟着"被按厚"。
+    //
+    // 之前按压缩放 / 图标弹跳 / pill 换色都只发生在**被按的那一个 item 内部**，
+    // 玻璃层对此一无所知 ⇒ 按下时"玻璃"毫无反应，用户说点击效果没做完善。
+    // 现在把「有没有在按、按在哪个槽」折算成 [GlassPress] 的两个绘制参数：
+    //   intensity → 镜面 rim 增亮、AGSL 折射变深；focusX → 焦点高光落在被按 tab 上沿。
+    // ⚠️ 两者都**只进 drawBehind / shader uniform**，绝不进任何 Modifier 的尺寸参数。
+    //    底栏的边界与大小在按压全程恒定（#205「高度塌 0」之后定下的硬边界）。
+    var pressedFocus by remember { mutableFloatStateOf(DOCK_NO_PRESS) }
+    // ⚠️ 刻意**不用 `by`**：动画值一旦在组合期读，spring 每帧都会重组整条底栏。
+    //   收成 State 再交给玻璃层，由 `drawBehind` / `drawWithContent` 在绘制阶段读
+    //   ⇒ 动画期间零重组，手感才稳（见 [NoGlassPress] 的说明）。
+    val pressIntensity = animateFloatAsState(
+        targetValue = if (pressedFocus >= 0f) 1f else 0f,
+        animationSpec = DockSpring,
+    )
+    val focusX = animateFloatAsState(
+        targetValue = if (pressedFocus >= 0f) pressedFocus else dockIdleFocus(),
+        animationSpec = DockSpring,
+    )
+    val glassPress = remember {
+        derivedStateOf { GlassPress(pressIntensity.value, focusX.value) }
+    }
+    val haptic = LocalHapticFeedback.current
+    // 触觉放在**松手确认**时（clickable 的 onClick），与选中色瞬切同一刻；
+    // 不在 Press 时给，否则长按后取消也会震一下。系统关闭触感时 Compose 自动不响。
+    val handleSelect: (VaultixNavItem) -> Unit = { item ->
+        haptic.performHapticFeedback(HapticFeedbackType.ContextClick)
+        onSelect(item)
+    }
+    val handleAdd: (VaultixNavItem) -> Unit = { tab ->
+        haptic.performHapticFeedback(HapticFeedbackType.ContextClick)
+        onAdd(tab)
+    }
+
     // 外层留白：bottom 20dp 让胶囊明显抬离系统手势条，底部透出内容（酷安观感）。
     Box(
         modifier = modifier
@@ -252,6 +318,7 @@ fun VaultixBottomDock(
                     onSurface = MaterialTheme.colorScheme.onSurface,
                     blurAvailable = blurAvailable,
                 ),
+                press = glassPress,
                 modifier = Modifier
                     .fillMaxWidth()
                     .shadow(elevation = LiquidGlass.ShadowElevation, shape = VaultixCorner.Pill),
@@ -259,9 +326,10 @@ fun VaultixBottomDock(
                 DockRow(
                     tabs = tabs,
                     selected = selected,
-                    onSelect = onSelect,
-                    onAdd = onAdd,
+                    onSelect = handleSelect,
+                    onAdd = handleAdd,
                     glass = true,
+                    onPressSlot = { pressedFocus = it },
                 )
             }
         } else {
@@ -272,7 +340,13 @@ fun VaultixBottomDock(
                 tonalElevation = 3.dp,
                 shadowElevation = 6.dp,
             ) {
-                DockRow(tabs = tabs, selected = selected, onSelect = onSelect, onAdd = onAdd)
+                DockRow(
+                    tabs = tabs,
+                    selected = selected,
+                    onSelect = handleSelect,
+                    onAdd = handleAdd,
+                    onPressSlot = { pressedFocus = it },
+                )
             }
         }
     }
@@ -293,6 +367,11 @@ private fun DockRow(
     onAdd: (VaultixNavItem) -> Unit,
     /** 玻璃态下选中 / 按压 pill 带 alpha，让材质贯通；实心态默认 false 不受影响。 */
     glass: Boolean = false,
+    /**
+     * 上报「被按槽的中心位置」；松手传 [DOCK_NO_PRESS]。
+     * 宿主只把它折算成 [GlassPress] 的绘制参数，**不参与本行的测量**。
+     */
+    onPressSlot: (Float) -> Unit = {},
 ) {
     Row(
         modifier = Modifier
@@ -304,7 +383,8 @@ private fun DockRow(
         val leftTabs = tabs.take(2)
         val rightTabs = tabs.drop(2).take(2)
 
-        leftTabs.forEach { item ->
+        leftTabs.forEachIndexed { index, item ->
+            val slotFocus = dockSlotFocus(index)
             key(item) {
                 DockTabItem(
                     item = item,
@@ -312,6 +392,9 @@ private fun DockRow(
                     onClick = { onSelect(item) },
                     modifier = Modifier.weight(1f),
                     glass = glass,
+                    onPress = { pressed ->
+                        onPressSlot(if (pressed) slotFocus else DOCK_NO_PRESS)
+                    },
                 )
             }
         }
@@ -324,10 +407,17 @@ private fun DockRow(
                 .fillMaxHeight(),
             contentAlignment = Alignment.Center,
         ) {
-            AddButton(currentTab = selected, onAdd = onAdd)
+            AddButton(
+                currentTab = selected,
+                onAdd = onAdd,
+                onPress = { pressed ->
+                    onPressSlot(if (pressed) dockIdleFocus() else DOCK_NO_PRESS)
+                },
+            )
         }
 
-        rightTabs.forEach { item ->
+        rightTabs.forEachIndexed { index, item ->
+            val slotFocus = dockSlotFocus(DOCK_RIGHT_FIRST_SLOT + index)
             key(item) {
                 DockTabItem(
                     item = item,
@@ -335,6 +425,9 @@ private fun DockRow(
                     onClick = { onSelect(item) },
                     modifier = Modifier.weight(1f),
                     glass = glass,
+                    onPress = { pressed ->
+                        onPressSlot(if (pressed) slotFocus else DOCK_NO_PRESS)
+                    },
                 )
             }
         }
@@ -358,6 +451,8 @@ private fun DockRow(
 private fun AddButton(
     currentTab: VaultixNavItem,
     onAdd: (VaultixNavItem) -> Unit,
+    /** 与 tab 一样上报按压，让按「+」时玻璃也有焦点高光（中央槽）。 */
+    onPress: (Boolean) -> Unit = {},
 ) {
     val addLabel = stringResource(R.string.nav_add)
     val interactionSource = remember { MutableInteractionSource() }
@@ -366,6 +461,15 @@ private fun AddButton(
         targetValue = if (pressed) ADD_PRESS_SCALE else 1f,
         animationSpec = DockSpring,
     )
+    LaunchedEffect(interactionSource) {
+        interactionSource.interactions.collect { interaction ->
+            when (interaction) {
+                is PressInteraction.Press -> onPress(true)
+                is PressInteraction.Release, is PressInteraction.Cancel -> onPress(false)
+                else -> Unit
+            }
+        }
+    }
     Box(
         modifier = Modifier
             .width(52.dp)
@@ -440,6 +544,12 @@ private fun DockTabItem(
     modifier: Modifier = Modifier,
     /** 见 [DOCK_GLASS_PILL_ALPHA]：只影响 pill 的 alpha，颜色仍瞬切。 */
     glass: Boolean = false,
+    /**
+     * 2026-11-10 第四轮：把「按下 / 松手」上报给宿主，玻璃层据此调镜面高光与折射。
+     * ⚠️ 仍然只改**被按的那一个** item 自身；`key(item)` 保证 press 不扩散到兄弟节点，
+     *    选中色也仍然瞬切 —— 11-07 定下的「旁边跟着闪」防线一条都没松。
+     */
+    onPress: (Boolean) -> Unit = {},
 ) {
     val label = stringResource(item.labelRes)
     val interactionSource = remember { MutableInteractionSource() }
@@ -452,12 +562,18 @@ private fun DockTabItem(
     // 图标 one-shot：只在「松手」时播一次，spring 过冲后停在 1.0。
     // 用 Animatable 而不是 animateXxxAsState —— 后者表达的是「状态」，
     // 表达不了「一次性事件播完即停」。key(item) 保证组合槽稳定，动画不会扩散到兄弟节点。
+    // Press 分支顺带上报给玻璃层（同一条 interaction 流，不新开监听）。
     val iconBounce = remember { Animatable(1f) }
     LaunchedEffect(interactionSource) {
         interactionSource.interactions.collect { interaction ->
-            if (interaction is PressInteraction.Release || interaction is PressInteraction.Cancel) {
-                iconBounce.snapTo(ICON_BOUNCE_START)
-                iconBounce.animateTo(1f, DockSpring)
+            when (interaction) {
+                is PressInteraction.Press -> onPress(true)
+                is PressInteraction.Release, is PressInteraction.Cancel -> {
+                    onPress(false)
+                    iconBounce.snapTo(ICON_BOUNCE_START)
+                    iconBounce.animateTo(1f, DockSpring)
+                }
+                else -> Unit
             }
         }
     }

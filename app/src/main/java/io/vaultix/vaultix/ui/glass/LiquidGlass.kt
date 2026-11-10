@@ -12,6 +12,7 @@ import android.os.Build
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -20,10 +21,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.drawOutline
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.luminance
@@ -160,15 +162,80 @@ object LiquidGlass {
     /** 阴影高度（8 → 6dp）：玻璃更淡了，重阴影会把边界重新压成一块塑料板。 */
     val ShadowElevation = 6.dp
 
-    /** 上沿那道 1dp 折边：渐隐高光带负责"厚度"，这条亮线负责"边界"。 */
-    const val TOP_LINE_ALPHA = 0.28f
+    // ── 2026-11-10 第四轮：沿轮廓的光学规格 ──────────────────────────────
+    //
+    // 旧实现用 `drawRect` 画「顶部 1dp 亮线 + 矩形内描边 + 底部矩形暗线」，
+    // 外层 `.clip(Pill)` 之后，药丸**两端半圆既没有高光也没有描边** ⇒ 玻璃看起来
+    // 像「上下有边、左右没边」的一块板。真实液态玻璃的边界靠**沿轮廓**的
+    // specular rim 定义（iOS 26 HIG / PrismalAGSL / LiquidGlassBar 口径一致）。
+    // ⇒ 现在填充 / 高光带 / 镜面 rim / 内描边一律按 [Shape] 的 Outline 画。
 
-    /** 下沿 rim 暗线占整体高度的比例 —— 真实玻璃的底边会把背景压暗一线。 */
-    const val RIM_LINE_FRACTION = 0.10f
+    /** 背景饱和度增益。1 = 原样；Haze vibrancy / Prismal saturation 常用 1.3~1.5。 */
+    const val SATURATION = 1.38f
+
+    /** 镜面 rim 线宽。比旧 1dp 亮线略粗，才有"玻璃有厚度"而不是"画了条边"。 */
+    val SpecularWidth = 1.6.dp
+
+    /** 镜面 rim 上沿强度（垂直渐变起点）。 */
+    const val SPECULAR_ALPHA = 0.52f
+
+    /** 镜面 rim 侧沿强度（渐变中段，明显弱于上沿，形成方向感）。 */
+    const val SPECULAR_TAIL_ALPHA = 0.10f
+
+    /** 内描边宽度：与镜面 rim 分工 —— 后者给"光"，前者给"与背景的分界"。 */
+    val InnerStrokeWidth = 1.dp
+
+    /** 边缘折射位移深度（喂给 AGSL 的 `uDepth`）。 */
+    val RefractionDepth = 5.dp
+
+    /** 边缘 RGB 分色幅度（喂给 AGSL 的 `uPart`）。 */
+    val ChromaticAberration = 1.2.dp
+
+    /** 按压时折射深度的增量比例：玻璃被"按厚"，而不改变胶囊尺寸。 */
+    const val PRESS_REFRACTION_GAIN = 0.35f
+
+    /** 按压时镜面 rim 的增亮比例。 */
+    const val PRESS_SHEEN_GAIN = 0.45f
+
+    /** 按压焦点高光峰值：光源落在被按 tab 的上沿。 */
+    const val FOCUS_SHEEN_ALPHA = 0.62f
+
+    /** 焦点高光半径占胶囊宽度的比例。 */
+    const val FOCUS_RADIUS_FRACTION = 0.60f
+
+    /** 焦点高光比镜面 rim 略宽，才能读作"光晕扫过"而不是"又一条边"。 */
+    const val FOCUS_WIDTH_FACTOR = 1.5f
 
     /** 暗线颜色：固定黑叠 alpha，不随主题反色（玻璃的暗边在两个主题里都是暗的）。 */
     val RimLineColor = Color.Black.copy(alpha = 0.10f)
 }
+
+/**
+ * 按压联动参数（2026-11-10 第四轮）。
+ *
+ * ⚠️ **纯绘制参数，绝不含任何尺寸**：`drawGlass` 只拿它调高光强度与光源位置，
+ * `liquidGlassBackdrop` 只拿 [intensity] 调折射深度。两者都不碰 `Modifier.size/height/
+ * width/padding` —— 底栏的高度、留白、圆角**不随按压变化**。
+ * 这是 #205「底栏高度塌 0」之后定下的边界：**观感状态不许参与测量**。
+ *
+ * @param intensity 0（松手）→ 1（按住），由 spring 驱动。
+ * @param focusX 被按 tab 的水平位置，0（最左）→ 1（最右）；松手时回 0.5（居中）。
+ */
+data class GlassPress(
+    val intensity: Float = 0f,
+    val focusX: Float = 0.5f,
+)
+
+/**
+ * 无按压时的常量 State。
+ *
+ * ⚠️ [LiquidGlassLayer] 收的是 `State<GlassPress>` 而不是裸值：按压是 spring 动画，
+ * 若把值传进来，`VaultixBottomDock` 每帧都会在**组合期**读它 ⇒ 整条底栏（5 个 tab、
+ * 各自的 `animateFloatAsState`）每帧重组，按压那 200ms 最容易掉帧。
+ * 收 State 后只在 `drawBehind` / `drawWithContent` 的**绘制阶段**读 `.value`，
+ * Compose 只 invalidate 绘制、不重组 content —— 动画期间零重组。
+ */
+internal val NoGlassPress: State<GlassPress> = mutableStateOf(GlassPress())
 
 /**
  * 系统是否支持**真模糊**。
@@ -261,11 +328,17 @@ fun LiquidGlassLayer(
     style: LiquidGlassStyle,
     modifier: Modifier = Modifier,
     source: LiquidGlassSource? = null,
+    /** 按压联动。收 State 是为了在绘制阶段读值，动画期间不重组（见 [NoGlassPress]）。 */
+    press: State<GlassPress> = NoGlassPress,
     content: @Composable () -> Unit,
 ) {
     val density = LocalDensity.current
     val blur = shouldApplyBlur(requested = enabled)
     val radiusPx = with(density) { BlurRadius.toPx() }
+    // 折射的基础参数集中在这里算，避免 `liquidGlassBackdrop` 里再写一份 dp 字面量。
+    // 按压增量在绘制阶段叠加（见 [Modifier.liquidGlassBackdrop]），胶囊尺寸一个像素都不动。
+    val depthPx = with(density) { LiquidGlass.RefractionDepth.toPx() }
+    val partPx = with(density) { LiquidGlass.ChromaticAberration.toPx() }
     // 浮层相对源的偏移。**必须是 state**：坐标系每帧都可能变（旋转、手势条、字号），
     // 而 `drawWithCache` 只在 key 变化时重建 —— 用普通字段会停在首帧的偏移上（底栏错位一截）。
     var offset by remember { mutableStateOf(Offset.Zero) }
@@ -292,7 +365,14 @@ fun LiquidGlassLayer(
                         val next = backdropOffset(sourceBounds = src, layerBounds = own)
                         if (next != offset) offset = next
                     }
-                    .liquidGlassBackdrop(source = source, offset = offset, radiusPx = radiusPx),
+                    .liquidGlassBackdrop(
+                        source = source,
+                        offset = offset,
+                        radiusPx = radiusPx,
+                        depthPx = depthPx,
+                        partPx = partPx,
+                        press = press,
+                    ),
             )
         }
         // ★ 层 B：视觉装饰 + 内容。装饰画在 `drawBehind`，因此永远是清晰的。
@@ -312,7 +392,19 @@ fun LiquidGlassLayer(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(shape)
-                .drawBehind { if (enabled) drawGlass(style = style, density = density, blurAvailable = blur) },
+                .drawBehind {
+                    if (enabled) {
+                        drawGlass(
+                            style = style,
+                            density = density,
+                            shape = shape,
+                            // ★ 绘制阶段读 State：按压 spring 每帧只 invalidate 绘制，
+                            //   不会把 5 个 tab 拖进重组。
+                            press = press.value,
+                            blurAvailable = blur,
+                        )
+                    }
+                },
         ) {
             content()
         }
@@ -320,19 +412,37 @@ fun LiquidGlassLayer(
 }
 
 /**
- * 填充 + 上沿高光 + 内描边。**画在浮层的上层**（层 B 的 `drawBehind`）。
+ * 填充 + 上沿高光带 + 沿轮廓镜面 rim + 内描边。**画在浮层的上层**（层 B 的 `drawBehind`）。
  *
- * 真模糊与降级只差"填充的不透明度"：降级时 style 已经是全不透明（见 [liquidGlassStyle]）。
+ * ## 2026-11-10 第四轮：所有几何一律按 [Shape] 的 Outline 画
+ *
+ * 旧版全部用 `drawRect`：填充是矩形、上沿高光是矩形横带、亮线是矩形顶边、
+ * 内描边是矩形四边。层 B 外面虽然 `.clip(Pill)`，但**被裁掉的正是药丸两端的半圆**
+ * ⇒ 圆角处既没有高光也没有描边，玻璃读起来像「上下有边、左右没边」的一块板。
+ * 用户这轮的「注意底栏的边界」指的就是它。
+ *
+ * 现在 [drawOutline] 用同一个 `shape.createOutline(...)` 画四层，圆角连续：
+ * ① 填充（含上亮下暗的厚度渐变）；② 上沿渐隐高光带；③ 沿轮廓的镜面 rim
+ * （垂直渐变：上亮 → 侧淡 → 下沿暗线）；④ 按压焦点高光；⑤ 一圈弱内描边。
+ *
+ * ⚠️ 降级档（`blurAvailable = false`）填充已是不透明实色，只画 ① 与 ⑤：
+ * 给实色板叠镜面/暗线会变成两道塑料描边（旧版就靠那个 `if` 挡住）。
+ *
+ * ⚠️ **本函数只读 `size`，从不写任何尺寸**；[press] 只改颜色 alpha 与折射深度，
+ * 因此按压不会改变底栏的边界与大小（#205 的教训）。
  */
 private fun DrawScope.drawGlass(
     style: LiquidGlassStyle,
     density: Density,
+    shape: Shape,
+    press: GlassPress,
     blurAvailable: Boolean,
 ) {
+    val outline = shape.createOutline(size, layoutDirection, density)
     val fill = style.fill
-    // 真模糊档再叠一道极轻的竖向渐变，让玻璃"上亮下暗"有厚度感；
-    // 降级档不加 —— 不透明色再做渐变就是两块塑料，反而更廉价。
-    drawRect(
+    // ① 填充：真模糊档叠一道极轻的竖向渐变做"厚度"；降级档不加（不透明色做渐变=两块塑料）。
+    drawOutline(
+        outline = outline,
         brush = if (blurAvailable) {
             Brush.verticalGradient(listOf(fill, fill.copy(alpha = fill.alpha * 0.94f)))
         } else {
@@ -340,46 +450,81 @@ private fun DrawScope.drawGlass(
         },
     )
 
-    // 上沿高光：渐隐带给"厚度"，再压一条 1dp 亮线给"折边"。
-    // 两者都画在层 B 的 drawBehind 上，不会被层 A 的 renderEffect 糊掉（见文件头）。
+    // ② 上沿渐隐高光带：仍按轮廓填充，靠 gradient 自己衰减，不需要 clipRect。
     val band = (size.height * LiquidGlass.EDGE_HIGHLIGHT_FRACTION).coerceAtLeast(1f)
-    drawRect(
+    drawOutline(
+        outline = outline,
         brush = Brush.verticalGradient(
             colors = listOf(style.sheen.copy(alpha = LiquidGlass.TOP_SHEEN_ALPHA), Color.Transparent),
             startY = 0f,
             endY = band,
         ),
-        size = Size(size.width, band),
     )
-    val w = with(density) { 1.dp.toPx() }
-    // 降级档填充已是不透明实色，再压亮线/暗线只会像给塑料板描了两道边 ⇒ 只在真模糊档画。
-    if (blurAvailable) {
-        drawRect(
-            color = style.sheen.copy(alpha = LiquidGlass.TOP_LINE_ALPHA),
-            size = Size(size.width, w),
-        )
 
-        // ★ 2026-11-06：下沿 rim 暗线。FlClash 的 shader 里这道线宽约 0.67dp，
-        //   这里用一段渐变近似（不依赖 AGSL），把胶囊从背景上"切"出来。
-        //   ⚠️ brush 坐标相对本次 drawRect 的 topLeft，故 startY 从 0 起，不是屏幕绝对坐标。
-        val rim = (size.height * LiquidGlass.RIM_LINE_FRACTION).coerceAtLeast(1f)
-        drawRect(
-            brush = Brush.verticalGradient(
-                colors = listOf(Color.Transparent, LiquidGlass.RimLineColor),
-                startY = 0f,
-                endY = rim,
-            ),
-            topLeft = Offset(0f, size.height - rim),
-            size = Size(size.width, rim),
-        )
+    val strokeWidth = with(density) { LiquidGlass.InnerStrokeWidth.toPx() }
+    if (!blurAvailable) {
+        drawOutline(outline = outline, color = style.stroke, style = Stroke(width = strokeWidth))
+        return
     }
 
-    // 内描边：1px，让玻璃与背后内容有边界。
-    drawRect(
-        color = style.stroke,
-        topLeft = Offset(w / 2f, w / 2f),
-        size = Size((size.width - w).coerceAtLeast(0f), (size.height - w).coerceAtLeast(0f)),
-        style = Stroke(width = w),
+    // ③ 镜面 rim：整圈沿轮廓，垂直渐变让"上沿受光、侧沿弱、下沿压暗"。
+    //    旧版的 1dp 亮线 + 底部矩形暗线合并进这一笔，圆角不再断。
+    drawSpecularRim(style = style, outline = outline, density = density, press = press)
+
+    // ④ 焦点高光：只在按住时画，光源落在被按 tab 的上沿。
+    if (press.intensity > 0f) {
+        drawFocusSheen(style = style, outline = outline, density = density, press = press)
+    }
+
+    // ⑤ 内描边：比镜面 rim 更淡，职责是"与背后内容分界"，不是"打光"。
+    drawOutline(outline = outline, color = style.stroke, style = Stroke(width = strokeWidth))
+}
+
+/** 沿轮廓的镜面 rim（拆出来是为了让 `drawGlass` 不贴 detekt 复杂度上限）。 */
+private fun DrawScope.drawSpecularRim(
+    style: LiquidGlassStyle,
+    outline: Outline,
+    density: Density,
+    press: GlassPress,
+) {
+    val width = with(density) { LiquidGlass.SpecularWidth.toPx() }
+    val peak = (LiquidGlass.SPECULAR_ALPHA *
+        (1f + LiquidGlass.PRESS_SHEEN_GAIN * press.intensity)).coerceAtMost(1f)
+    drawOutline(
+        outline = outline,
+        brush = Brush.verticalGradient(
+            colors = listOf(
+                style.sheen.copy(alpha = peak),
+                style.sheen.copy(alpha = LiquidGlass.SPECULAR_TAIL_ALPHA),
+                LiquidGlass.RimLineColor,
+            ),
+            startY = 0f,
+            endY = size.height,
+        ),
+        style = Stroke(width = width),
+    )
+}
+
+/** 按压时的焦点高光：径向渐隐，沿轮廓描一遍，读作"光晕扫到被按的位置"。 */
+private fun DrawScope.drawFocusSheen(
+    style: LiquidGlassStyle,
+    outline: Outline,
+    density: Density,
+    press: GlassPress,
+) {
+    val width = with(density) { LiquidGlass.SpecularWidth.toPx() } *
+        LiquidGlass.FOCUS_WIDTH_FACTOR
+    drawOutline(
+        outline = outline,
+        brush = Brush.radialGradient(
+            colors = listOf(
+                style.sheen.copy(alpha = LiquidGlass.FOCUS_SHEEN_ALPHA * press.intensity),
+                Color.Transparent,
+            ),
+            center = Offset(size.width * press.focusX, 0f),
+            radius = size.width * LiquidGlass.FOCUS_RADIUS_FRACTION,
+        ),
+        style = Stroke(width = width),
     )
 }
 
