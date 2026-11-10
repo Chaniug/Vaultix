@@ -45,6 +45,9 @@
 4. **mock 不会跑接口的默认实现。** 给 `KdbxFileSource` 加 `isRemote`（默认 `false`）后，
    10 条既有用例全红在 `no answer found for ... isRemote()` —— 与 `readRemoteCurrent` 同一个坑。
 
+> 实证：`52a1765a`，CI run `42770711485` 两个 job 全 success；
+> 本地全量 1708 条单测 + detekt + 15 个静态门禁全绿。
+
 ## 🕐 2026-11-10 夜 · KDBX 改「跟随锁定」+ 回来自动弹指纹
 
 > **一句话**：两处都是**把上一轮的结论推翻**，而且推翻的理由值得记住 ——
