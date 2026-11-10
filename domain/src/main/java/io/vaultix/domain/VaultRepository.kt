@@ -55,54 +55,34 @@ interface VaultRepository {
     suspend fun unlockKdbxVault(vaultId: String, masterPassword: String): UnlockResult
 
     /**
-     * 切换活跃库时，**为其它 KDBX 库安排锁定**（内存只留一把密钥）。
+     * 进入某个库时登记「它现在在用」，并**按上限驱逐最久未用的 KDBX 库**。
      *
-     * 为什么要主动锁：KDBX 的会话持有的是**整库明文**（比 Bitwarden 的一把对称密钥重得多），
-     * 多库同时解锁会让「同时只能进一个库」的产品约束在内存层面失效。
+     * ## 它不锁任何东西（除非超上限）
      *
-     * ⚠️ **只在 [keepVaultId] 自己也是 KDBX 库时才动作**（2026-11-04 修）：切到
-     * Bitwarden 库并不让任何 KDBX 明文多出一份，锁它只换来"切回来重跑一次 KDF"。
-     * 契约写在实现侧（`VaultRepositoryImpl.lockOtherKdbxVaults` 的 KDoc），
-     * 这里说明是为了让调用方知道**可以放心在每次进库时调用**，不必自己判断库类型。
+     * 2026-11-10 定稿："**跟随锁定**"—— 切库不再锁掉其它 KDBX 库。
+     * 明文份数由**解锁组上限**（`KdbxUnlockGroup.DEFAULT_MAX_UNLOCKED` = 3）兜住，
+     * 而不是由"切库"这个动作兜住。
      *
-     * ## ★ 2026-11-10：不再"立刻锁"，改为 60 秒宽限期
+     * ## 为什么可以放心在每次进库时调用（调用方不必判库类型）
      *
-     * 真机反馈「打开 C 时 B 锁定、打开 B 时 C 锁定，而且 OneDrive 库的指纹解锁很慢」。
-     * 立刻锁 = 丢会话 ⇒ 切回来要重付 `Kdbx.unlock` 全流程
-     * （OneDrive `stat` 往返 + Argon2 + 整库解析），而「来回对比两个库」会把这份代价
-     * 反复收一遍。宽限期把「库数量」上的硬约束换到**时间维度**：
-     * 60 秒内允许最近两个库短暂并存，超时必锁；手动锁 / 退出 / 删库仍然立即生效。
+     * - 进的是 **Bitwarden** ⇒ 直接返回（Bitwarden 不进 KDBX 解锁组）；
+     * - 进的是 **KDBX** ⇒ 只更新 LRU 顺序，**不锁任何库**；仅当同时解锁数超过上限时
+     *   才锁掉最久没用的那几个，并返回它们的 id。
      *
-     * ⇒ **本方法的返回值不再代表"已经锁完了"**。调用方若需要「立刻锁」，
-     *   走 [lockVault]（它会撤销该库的倒计时），不要依赖本方法。
+     * ⇒ 本方法**幂等**、**无副作用**（除极端超限），切成高频调用也不会误锁。
+     *
+     * ## ⚠️ 与 [lockVault] / [lockAll] 的分工（这是本模型的核心）
+     *
+     * | 动作 | 效果 |
+     * |---|---|
+     * | 进入库 X（切库） | 不锁 |
+     * | [lockVault] 锁 KDBX 库 X | **锁掉全部 KDBX**（见其 KDoc：内存会话是"一组"） |
+     * | [lockAll] / 超时锁定 | 锁全部 |
+     * | [signOut] / [removeVault] | 只把该库移出组（它是"忘记这个库"，不是"锁一下"） |
+     *
+     * @param vaultId 刚刚进入的库
      */
-    suspend fun lockOtherKdbxVaults(keepVaultId: String)
-
-    /**
-     * 立刻结束宽限期：把 [lockOtherKdbxVaults] 排上的那些倒计时**当场执行**（= 立即真锁）。
-     *
-     * ## 为什么需要它（2026-11-10 补）
-     *
-     * 宽限期的前提是"用户还在用 App，随时可能切回去"。一旦进后台 / 熄屏，这个前提
-     * 就没了 —— 剩下的只有"多留 60 秒整库明文在内存里"。所以**宽限期只属于前台**。
-     *
-     * 与相邻入口的边界（别混用）：
-     *
-     * | 入口 | 范围 | 语义 |
-     * |---|---|---|
-     * | [lockOtherKdbxVaults] | 除当前库外的 KDBX | **排期**，不立即发生 |
-     * | 本方法 | **只在排期中的** KDBX | 把 [lockOtherKdbxVaults] 的排期**提前执行** |
-     * | [lockVault] | 指定库 | 用户显式锁这一个（顺带撤销它的排期） |
-     * | [lockAll] | 全部库 | 用户显式锁全部 |
-     *
-     * ⇒ 本方法**不碰**当前正在用的库。后台该不该连它一起锁，是"自动锁定档位"
-     *   （`VaultLockManager`）的事，不是这里的事。
-     *
-     * 默认空实现：只为不逼测试替身写样板。
-     */
-    suspend fun flushPendingKdbxLocks() {
-        // 默认无操作（非 KDBX 实现无需关心）。
-    }
+    suspend fun markKdbxActive(vaultId: String)
 
     /** 该库当前是否已（在内存中）解锁 —— 含 KDBX 会话，供 UI 的解锁徽标使用。 */
     fun isVaultUnlocked(vaultId: String): Boolean

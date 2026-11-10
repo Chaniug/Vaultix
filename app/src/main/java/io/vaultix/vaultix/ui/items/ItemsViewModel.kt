@@ -191,12 +191,17 @@ class ItemsViewModel @Inject constructor(
         // Credential Provider 后续读到的是同一个「当前库」（单一活跃库语义）。
         routedVaultId?.let(activeVaultStore::select)
         viewModelScope.launch {
-            // ★ 切库即锁旧库（`.ai/ISSUES.md` #60 第 4 批）：KDBX 的「密钥」是内存里的
-            // **整库明文**，多库同时解锁会让「同时只能进一个库」的产品约束在内存层面失效。
-            // 放在这里而不是 `ActiveVaultStore`：切换由路由/设置页两处触发，而**真正进入
-            // 某个库**必然经过本页初始化 —— 在这里做，「切过去才生效」与「切过去才读盘」
+            // ★ 登记「这个库现在在用」（`.ai/ISSUES.md` #60 第 4 批 → 2026-11-10「跟随锁定」）。
+            //
+            // ⚠️ **它不再锁任何库**。切库锁旧库是 2026-11-10 上午之前的行为，会让
+            //    「来回对比两个库」每次切回都重付一次 `Kdbx.unlock`（OneDrive 库还要
+            //    多一次整库下载）。现在由解锁组上限（3）兜住明文份数，只有真按下锁
+            //    才整组失效 —— 见 `KdbxUnlockGroup` 的文件头。
+            //
+            // 放在这里而不是 `ActiveVaultStore`：切换由路由 / 设置页两处触发，而**真正进入
+            // 某个库**必然经过本页初始化 —— 在这里做，「切过去才登记」与「切过去才读盘」
             // 的懒打开语义自然一致。
-            runCatching { vaultRepository.lockOtherKdbxVaults(vaultId) }
+            runCatching { vaultRepository.markKdbxActive(vaultId) }
         }
         viewModelScope.launch {
             combine(vaultIdState, vaultRepository.observeVaults()) { id, vaults ->

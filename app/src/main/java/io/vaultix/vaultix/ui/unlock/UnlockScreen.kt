@@ -156,7 +156,6 @@ fun UnlockScreen(
     AutoPromptQuickUnlock(
         localUnlockAvailable = state.localUnlockAvailable,
         viewLocked = state.viewLocked,
-        viewLockAuto = state.viewLockAuto,
         hasTwoFactor = state.twoFactor != null,
         submitting = state.submitting,
         autoPromptAborts = state.autoPromptAborts,
@@ -899,12 +898,6 @@ private fun AutoPromptQuickUnlock(
     viewLocked: Boolean,
     hasTwoFactor: Boolean,
     submitting: Boolean,
-    /**
-     * ★ 这次查看层锁是不是**系统自动**给的（熄屏 / 冷启动恢复）。
-     *
-     * 见 [UnlockViewModel.UiState.viewLockAuto] 与下面 [eligible] 的说明。
-     */
-    viewLockAuto: Boolean,
     /** 系统侧终止的累计次数（见 [UnlockViewModel.UiState.autoPromptAborts]）。 */
     autoPromptAborts: Int,
     onPrompt: () -> Unit,
@@ -914,13 +907,24 @@ private fun AutoPromptQuickUnlock(
     var attempts by remember { mutableIntStateOf(0) }
     var handledAborts by remember { mutableIntStateOf(0) }
     val lifecycleOwner = LocalLifecycleOwner.current
-    // ★ #245：**系统自动**打的查看锁不自动弹（用户 2026-11-04 真机："锁屏回来弹不出指纹，
-    //   就在那里转"）。自动门禁是「回来确认一次身份」，而"确认"应当由用户主动发起
-    //   （按下那一页唯一的主按钮）—— 抢在他前面弹窗只剩代价：cipher 要现备
-    //   （一次 Keystore 往返）、宿主还要等 RESUMED，用户看到的就只有转圈。
-    //   ⚠️ 手动查看锁**仍然**自动弹：那是用户刚刚自己按下的锁，意图明确。
+    // 什么时候自动弹：**只要能弹，就弹**。
+    //
+    // ## 2026-11-10 晚：撤销 #245 的「自动查看锁不弹」
+    //
+    // #245（2026-11-04 真机"锁屏回来弹不出指纹，就在那里转"）当时的结论是
+    // 「自动门禁不抢在用户前面弹，让他自己按主按钮」。那个结论**是针对当时那个
+    // 根因的过拟合**：转圈的真正原因是 `prewarmCipher` 还不存在 —— cipher 要等
+    // 首帧、现备一次 Keystore 往返、再等 RESUMED，三件事串起来才有那段空白。
+    //
+    // 现在三件事都解决了（见 `UnlockViewModel.prewarmCipher` 与下面的 `withResumed`），
+    // 「不弹」就只剩下代价：用户从口袋掏出手机、看到一页"验证身份"、还得点一下 ——
+    // 而 Bitwarden 在这一步是**直接弹**的。用户 2026-11-10 明确要求对齐。
+    //
+    // ⚠️ 安全性没变：自动门禁打的是**查看锁**（密钥从没被它保护过），
+    //    用户取消认证时 `clearAutoViewLockIfAny` 仍会放行 —— 那是 #245 的另一半，
+    //    与本改动不冲突。
     // 条件刻意控制在 3 项以内（detekt ComplexCondition 上限为 3）。
-    val eligible = ((viewLocked && !viewLockAuto) || localUnlockAvailable) &&
+    val eligible = (viewLocked || localUnlockAvailable) &&
         !hasTwoFactor &&
         !submitting
     LaunchedEffect(eligible, autoPromptAborts) {
