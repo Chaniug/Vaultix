@@ -91,6 +91,7 @@ import io.vaultix.vaultix.ui.theme.VaultixCorner
 import kotlinx.coroutines.delay
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.DialogTextButton
+import io.vaultix.vaultix.ui.common.AppLabel
 import io.vaultix.vaultix.ui.common.BadgeTone
 import io.vaultix.vaultix.ui.common.ItemFormDialog
 import io.vaultix.vaultix.ui.common.LINKED_FIELD_LABELS
@@ -1106,8 +1107,21 @@ private fun UrisSection(item: VaultItem, onCopyUri: (String) -> Unit) {
 @Composable
 private fun AppsSection(item: VaultItem) {
     val context = LocalContext.current
-    val apps = remember(item.uris) {
+    // ⚠️ 名字解析与「装没装」一次性算完，**不要放进 forEach 里逐个 remember**：
+    //    Compose 的 remember 按「调用位置」分组，循环里同一处调用会共用同一个 slot，
+    //    多条应用 URI 时后面的会把前面的显示名覆盖掉。放在稳定的调用点算整张表就没有
+    //    这个问题（与本项目反复踩到的「状态挂在短命对象上」是同一类）。
+    val apps = remember(item.uris, item.customFields, context) {
         item.uris.mapNotNull { UriFormat.classify(it.uri) as? UriKind.AndroidApp }
+            .map { kind ->
+                AppDisplay(
+                    appName = AppLabel.fromCustomFields(item.customFields, kind.packageName)
+                        ?: AppLabel.installedLabel(context, kind.packageName)
+                        ?: kind.packageName,
+                    packageName = kind.packageName,
+                    installed = isAppInstalled(context, kind.packageName),
+                )
+            }
     }
     if (apps.isEmpty()) return
     Spacer(Modifier.height(Spacing.md))
@@ -1115,7 +1129,7 @@ private fun AppsSection(item: VaultItem) {
         SectionTitle(text = stringResource(R.string.section_apps), icon = Icons.Filled.PhoneAndroid)
         DetailCard {
             Column {
-                apps.forEachIndexed { index, kind ->
+                apps.forEachIndexed { index, app ->
                     if (index > 0) {
                         HorizontalDivider(
                             modifier = Modifier.padding(start = Spacing.lg),
@@ -1123,9 +1137,10 @@ private fun AppsSection(item: VaultItem) {
                         )
                     }
                     AppRow(
-                        packageName = kind.packageName,
-                        installed = isAppInstalled(context, kind.packageName),
-                        onOpen = { launchAndroidApp(context, kind.packageName) },
+                        appName = app.appName,
+                        packageName = app.packageName,
+                        installed = app.installed,
+                        onOpen = { launchAndroidApp(context, app.packageName) },
                     )
                 }
             }
@@ -1133,15 +1148,36 @@ private fun AppsSection(item: VaultItem) {
     }
 }
 
+/** 一行「关联应用」的展示数据（名字解析只算一次，见 [AppsSection] 的 KDoc）。 */
+private data class AppDisplay(
+    val appName: String,
+    val packageName: String,
+    val installed: Boolean,
+)
+
 /**
- * 一行"关联的应用"：应用名 + 包名（副标题）+ 打开按钮。
+ * 一行「关联的应用」：**中文应用名当标题**，包名降级成副标题 + 打开按钮。
  *
- * ⚠️ 不做"应用名解析"：读另一个 App 的 label 要 `PackageManager.getApplicationInfo`，
- *    未安装时抛异常、装了也可能因权限拿不到 —— 代价过高。包名本身就足够定位，
- *    且与 Bitwarden 其它客户端一致。
+ * ## 2026-11-10 改了什么（真机截图：`com.tdx.AndroidNew`）
+ *
+ * 旧实现把包名直接放进 `headlineContent`，副标题再写一句很长的
+ * 「已安装 · 自动填充会匹配到此应用」去解释它 —— 结果是**主标题看不懂、副标题啰嗦**，
+ * 而条目里其实早就有 `appName = 通达信`（KDBX 迁移带过来的自定义字段）。
+ *
+ * ⇒ 现在按 [AppLabel.fromCustomFields] → `PackageManager` label → 包名的顺序取名；
+ *    包名不再消失，但退到副标题（技术细节归技术细节的位置）。
+ *
+ * ⚠️ 旧注释断言「读另一个 App 的 label 代价过高，包名本身就足够定位」——
+ *    这条结论只考虑了「能不能唯一定位」，没考虑「人能不能读懂」。已被真机反馈推翻。
+ *    [AppLabel.installedLabel] 用 `runCatching` 兜住 Android 11+ 包可见性，代价可控。
  */
 @Composable
-private fun AppRow(packageName: String, installed: Boolean, onOpen: () -> Unit) {
+private fun AppRow(
+    appName: String,
+    packageName: String,
+    installed: Boolean,
+    onOpen: () -> Unit,
+) {
     ListItem(
         leadingContent = {
             Icon(
@@ -1153,7 +1189,7 @@ private fun AppRow(packageName: String, installed: Boolean, onOpen: () -> Unit) 
         },
         headlineContent = {
             Text(
-                text = packageName,
+                text = appName,
                 style = MaterialTheme.typography.bodyLarge,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -1161,11 +1197,21 @@ private fun AppRow(packageName: String, installed: Boolean, onOpen: () -> Unit) 
         },
         supportingContent = {
             Text(
-                text = stringResource(
-                    if (installed) R.string.app_bound_installed else R.string.app_bound_not_installed,
-                ),
+                text = if (appName == packageName) {
+                    stringResource(
+                        if (installed) R.string.app_bound_installed else R.string.app_bound_not_installed,
+                    )
+                } else {
+                    stringResource(
+                        if (installed) R.string.app_bound_installed_with_package
+                        else R.string.app_bound_not_installed_with_package,
+                        packageName,
+                    )
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
         },
         trailingContent = if (installed) {

@@ -18,12 +18,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -44,7 +42,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.activity.compose.BackHandler
-import androidx.compose.material.icons.filled.Badge
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ScaffoldDefaults
@@ -52,22 +49,15 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import io.vaultix.vaultix.ui.common.EmptyState
 import io.vaultix.vaultix.ui.common.VaultixSearchTopAppBar
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.vaultix.common.CardBrandDetector
-import io.vaultix.common.formatCardNumberGrouped
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.DialogTextButton
-import io.vaultix.vaultix.ui.common.EntryCard
-import io.vaultix.vaultix.ui.common.EntryCardIconSpacing
-import io.vaultix.vaultix.ui.common.EntryCardTextSpacing
-import io.vaultix.vaultix.ui.common.EntryCardTitleLineHeight
 import io.vaultix.vaultix.ui.common.ItemFormDialog
 import io.vaultix.vaultix.ui.common.PressAndSwipeToDelete
 import io.vaultix.vaultix.ui.common.TopBarTitle
@@ -297,6 +287,7 @@ private fun CardCreationBlockedDialog(onDismiss: () -> Unit) {
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.card_wallet_creation_blocked_title)) },
         text = { Text(stringResource(R.string.card_wallet_creation_blocked_body)) },
+        // 纯展示 ⇒ 低强调 TextButton + 「关闭」（见 DialogTextButton 的 KDoc）。
         confirmButton = {
             DialogTextButton(
                 text = stringResource(R.string.action_close),
@@ -437,15 +428,14 @@ private class CardSelectionState(
 }
 
 /**
- * 单张卡：品牌图标 + 名称 + 分组卡号（末四位外打码）。
+ * 卡包条目：**按条目类型分发到两种造型**，不再共用一条列表行模板。
  *
- * ⚠️ 必须**可点击**：此前漏了 `clickable`，导致卡包里的条目点不进详情（用户反馈）。
- * 外框改用 [EntryCard]（与密码 / 验证码列表同一套卡片规格）——此前这里是一个**裸 Row**，
- * 连外框都没有，是三个列表里观感最不一致的一处。
+ * 详见 [BankCardFace] / [IdentityCardFace] 的文件头：银行卡要做成实体卡，
+ * 身份条目要做成名片。这两者刻意不统一 —— 旧版强行套同一个 `EntryCard` 行模板，
+ * 结果是「一张银行卡看起来和一条密码记录一样」，用户认不出手里有什么。
  *
- * @param isSelected 是否处于「已选中」态（选中后才允许左滑删除，见 [PressAndSwipeToDelete]）。
- *   选中态由 [EntryCard] 的 `selected` 参数高亮（与密码列表同一套选中视觉）。
- * @param onLongClick 长按 = 选中 / 取消选中（卡包页的删除前置门槛）。
+ * ⚠️ 三个交互契约原样透传，换造型不动语义：
+ *   整卡点击开详情 / 长按选中 / 选中态有可见描边（左滑删除的前置门槛）。
  */
 @Composable
 private fun CardWalletRow(
@@ -454,108 +444,24 @@ private fun CardWalletRow(
     onClick: () -> Unit,
     onLongClick: () -> Unit,
 ) {
+    if (item.type == VaultItemType.Identity) {
+        IdentityCardFace(
+            item = item,
+            selected = isSelected,
+            onClick = onClick,
+            onLongClick = onLongClick,
+        )
+        return
+    }
     val card = item.card
     val brand = remember(card?.number, card?.brand) {
         CardBrandDetector.detect(card?.number.orEmpty(), card?.brand.orEmpty())
     }
-    EntryCard(onClick = onClick, onLongClick = onLongClick, selected = isSelected) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(
-                modifier = Modifier.size(width = 44.dp, height = 30.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                // 身份 / 个人信息条目没有卡号与品牌，给它一个身份图标而不是
-                // 一张「无品牌」的空白卡图（22:20 起卡包会同时容纳两类条目）。
-                if (item.type == VaultItemType.Identity) {
-                    Icon(
-                        imageVector = Icons.Filled.Badge,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(28.dp),
-                    )
-                } else {
-                    CardBrandIcon(brand = brand, modifier = Modifier.fillMaxSize())
-                }
-            }
-            Column(
-                modifier = Modifier.weight(1f).padding(start = EntryCardIconSpacing),
-                verticalArrangement = Arrangement.spacedBy(EntryCardTextSpacing),
-            ) {
-                Text(
-                    text = item.title,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    // 与条目卡统一收窄行高（见 [EntryCardTitleLineHeight] 的 KDoc）。
-                    lineHeight = EntryCardTitleLineHeight,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                val subtitle = walletSubtitle(item)
-                if (subtitle.isNotBlank()) {
-                    Text(
-                        text = subtitle,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
-            val expiry = listOf(card?.expMonth, card?.expYear)
-                .map { it.orEmpty() }
-                .filter { it.isNotBlank() }
-            if (expiry.size == 2) {
-                Text(
-                    text = expiry.joinToString("/"),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-    }
-}
-
-/**
- * 卡包行的副标题：银行卡显示打码卡号 / 持卡人，身份条目显示姓名或用户名。
- *
- * 2026-11-09：卡包同时容纳 [VaultItemType.Card] 与 [VaultItemType.Identity]，
- * 身份条目没有 `card` 载荷，走原来的分支会显示一行空白。
- * ⚠️ 抽成纯函数，不把这一串类型判断加进 [CardWalletRow] 的圈复杂度。
- */
-private fun walletSubtitle(item: VaultItem): String {
-    val card = item.card
-    val number = card?.number.orEmpty()
-    if (number.isNotBlank()) return maskCardNumber(formatCardNumberGrouped(number))
-    card?.cardholderName?.takeIf { it.isNotBlank() }?.let { return it }
-    if (item.type == VaultItemType.Identity) {
-        val name = listOf(item.identity?.firstName, item.identity?.lastName)
-            .filter { !it.isNullOrBlank() }
-            .joinToString(" ")
-        if (name.isNotBlank()) return name
-        if (item.username.isNotBlank()) return item.username
-    }
-    return ""
-}
-
-/**
- * 卡号打码：保留末 4 位，其余替换为「•」（对齐 Bastion 卡包列表观感）。
- *
- * ⚠️ 分组格式化后的分隔符保留，避免把「1234 5678」压成一串难以辨认的圆点。
- */
-private fun maskCardNumber(grouped: String): String {
-    if (grouped.isBlank()) return ""
-    val totalDigits = grouped.count { it.isDigit() }
-    var index = 0
-    return grouped.map { char ->
-        if (!char.isDigit()) {
-            char
-        } else {
-            val keep = index >= totalDigits - 4
-            index++
-            if (keep) char else '•'
-        }
-    }.joinToString("")
+    BankCardFace(
+        item = item,
+        brand = brand,
+        selected = isSelected,
+        onClick = onClick,
+        onLongClick = onLongClick,
+    )
 }

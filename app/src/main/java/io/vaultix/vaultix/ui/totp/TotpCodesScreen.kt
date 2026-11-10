@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -30,6 +31,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Timer
@@ -72,6 +74,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
@@ -119,7 +122,6 @@ import io.vaultix.vaultix.ui.common.toggleSelection
 import io.vaultix.vaultix.ui.common.VaultixWavyProgress
 import io.vaultix.vaultix.ui.qr.QrScannerContent
 import io.vaultix.vaultix.ui.theme.UiSize
-import io.vaultix.vaultix.ui.theme.VaultixCorner
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import io.vaultix.vaultix.ui.theme.Spacing
@@ -1223,19 +1225,51 @@ private fun TotpRowMenu(
     }
 }
 
+/**
+ * 绑定态徽标：**只画图标，不再写「已绑定 / 独立」两个字**。
+ *
+ * ## 2026-11-10 改了什么（用户：节约空间又提升美观度）
+ *
+ * 旧版是一个带文字的 `Surface` chip（「已绑定」约 48dp 宽）。标题行里同时挤着
+ * 站点图标、标题、`Badge`、`CloudSyncIcon`、⋮ 菜单 —— 每多一个色块，标题可用的
+ * `weight(1f)` 就少一截，长站点名会被截掉。而且**每张卡都写着「已绑定」**，
+ * 这行字已经不携带区分信息了，只是在重复占地方。
+ *
+ * ⇒ 换成 26dp 的圆形图标徽标（省约 22dp），两态用「链接 / 计时器」区分：
+ *   已绑定 = `Link`（它关联到某个登录条目），独立 = `Timer`（纯验证码）。
+ *
+ * ⚠️ 文字没有丢：`stringResource` 原样进 `Icon.contentDescription`，
+ *    读屏与 UI 测试仍能拿到「已绑定 / 独立」。这是把**视觉**让给空间，不是删语义。
+ * ⚠️ 不用 `IconButton`：这里不是可点动作，挂点击语义会骗用户（且抢 ⋮ 的触摸区）。
+ */
 @Composable
 private fun Badge(bound: Boolean) {
-    val text = if (bound) R.string.totp_badge_bound else R.string.totp_badge_standalone
+    val description = stringResource(
+        if (bound) R.string.totp_badge_bound else R.string.totp_badge_standalone,
+    )
+    val image = if (bound) Icons.Filled.Link else Icons.Filled.Timer
     val color = if (bound) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.tertiary
-    Surface(color = color.copy(alpha = 0.14f), shape = VaultixCorner.Small) {
-        Text(
-            text = stringResource(text),
-            style = MaterialTheme.typography.labelSmall,
-            color = color,
-            modifier = Modifier.padding(horizontal = Spacing.sm, vertical = UiSize.HairGap),
-        )
+    Surface(
+        color = color.copy(alpha = 0.14f),
+        shape = CircleShape,
+        modifier = Modifier.size(BOUND_BADGE_SIZE),
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Icon(
+                imageVector = image,
+                contentDescription = description,
+                tint = color,
+                modifier = Modifier.size(BOUND_BADGE_ICON_SIZE),
+            )
+        }
     }
 }
+
+/** 圆形徽标直径：比「已绑定」三个字的 chip 窄一半，但仍是 24dp 以上的可见落点。 */
+private val BOUND_BADGE_SIZE = 26.dp
+
+/** 徽标内图标：留出 6dp 环形呼吸，不顶到圆边。 */
+private val BOUND_BADGE_ICON_SIZE = 14.dp
 
 /**
  * 整页统一倒计时进度条 + 「通行密钥」入口，**随列表滚动收起**。
@@ -1971,7 +2005,9 @@ private fun LoginPickerDialog(
                 if (candidates.isEmpty()) {
                     Text(stringResource(R.string.passkey_select_login), style = MaterialTheme.typography.bodyMedium)
                 } else {
-                    LazyColumn(modifier = Modifier.fillMaxWidth().height(240.dp)) {
+                    // ⚠️ heightIn(max) 而不是 height(240.dp)：只有 1~2 个候选时，
+                    //    固定高度会在弹窗里留一大块黑空白（用户报「弹窗大小不对」）。
+                    LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 240.dp)) {
                         items(candidates, key = { it.id }) { login ->
                             TextButton(onClick = { onPick(login) }, modifier = Modifier.fillMaxWidth()) {
                                 Text(
@@ -1985,13 +2021,15 @@ private fun LoginPickerDialog(
                 }
             }
         },
+        // confirmButton 是 M3 AlertDialog 的**必需参数**（不是"主操作"的语义声明）：
+        // 只给 dismissButton 会解析到 content 重载而编译失败。旧版为此塞了一个空的
+        // dismissButton = { } 占位，那是纯粹的噪音，删掉即可。
         confirmButton = {
             DialogTextButton(
                 text = stringResource(R.string.action_cancel),
                 onClick = onDismiss,
             )
         },
-        dismissButton = { },
     )
 }
 

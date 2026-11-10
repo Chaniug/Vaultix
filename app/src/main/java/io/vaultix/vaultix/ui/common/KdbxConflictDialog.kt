@@ -117,10 +117,12 @@ fun KdbxConflictDialog(
                 )
             }
         },
-        // ⚠️ 不设 confirmButton：三个选项本身就是动作，再放一个"确定"会让用户
-        //    以为要先选再确定（多一步、且容易选完忘了点）。
+        // ⚠️ 旧注释写「不设 confirmButton」，代码却设了 —— 注释是错的（2026-11-10 纠正）。
+        //    三个选项本身就是动作，所以这里**没有"确定"**，只有「取消」（放弃这次打开）；
+        //    confirmButton 槽是 M3 `AlertDialog` 的必需参数，改不掉。
+        //    强调级别统一降到 TextButton：退出动作不该比三个决策选项还显眼。
         confirmButton = {
-            DialogOutlinedActionButton(
+            DialogTextButton(
                 text = stringResource(R.string.action_cancel),
                 onClick = onDismiss,
             )

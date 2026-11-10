@@ -63,6 +63,7 @@ import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.deviceCanAuthenticate
 import io.vaultix.vaultix.ui.common.DialogCloseButton
 import io.vaultix.vaultix.ui.common.DialogOutlinedActionButton
+import io.vaultix.vaultix.ui.common.DialogTextButton
 import io.vaultix.vaultix.ui.items.DisplayOptionsSheet
 import io.vaultix.vaultix.ui.common.TopBarTitle
 import io.vaultix.vaultix.ui.common.VaultixExpressiveTopBar
@@ -1149,11 +1150,23 @@ private fun ThemeModeDialog(
                 }
             }
         },
+        // ★★ 2026-11-10 深夜：用户报「主题模式里的关闭按钮不符合标准」。
+        //
+        // 旧版唯一的动作是 `DialogOutlinedActionButton`（OutlinedButton，**中强调**）。
+        // M3 对 dialog 动作的默认强调级别是 **TextButton** —— `AlertDialog` 会把
+        // `ActionLabelTextColor` / `ActionLabelTextFont` 传给动作槽，`DialogTextButton`
+        // 的 KDoc 也写明了这一条；OutlinedButton 是页面级动作，留给 `DialogShell`。
+        // ⇒ 一个「看完就走」的读操作配带边框的按钮，会被读成「确定」，还平白多一圈描边。
+        //
+        // ⚠️ `confirmButton` 这个**槽位改不了**：它是 M3 `AlertDialog` 该重载的必需参数
+        //    （只给 dismissButton 会解析到 `content` 重载，编译直接失败）。
+        //    真正"无动作区"的单选 dialog 要用 `BasicAlertDialog` 自己排版；本次不为一个
+        //    槽位引入空的 `{}` 占位 —— 那只会把问题从"看得见"变成"藏在代码里"。
+        // 文案：点档位即生效并关闭，按钮只在「什么都没选就退出」时用到 ⇒ 叫「取消」。
+        //    （项目口径见 `DialogShell`：「关闭」= 收起看过的内容；「取消」= 放弃这次操作。）
         confirmButton = {
-            // ★ 2026-11-10：改用 DialogOutlinedActionButton —— 裸 OutlinedButton 在对话框
-            //   动作槽里会被 intrinsic 缩进撑成 58dp 宽再逐字分配（见该组件文件头）。
-            DialogOutlinedActionButton(
-                text = stringResource(R.string.action_close),
+            DialogTextButton(
+                text = stringResource(R.string.action_cancel),
                 onClick = onDismiss,
             )
         },
@@ -1188,11 +1201,10 @@ private fun ClipboardClearDialog(
                 }
             }
         },
+        // 与 [ThemeModeDialog] 同一条规范：即选即存 ⇒ 低强调 TextButton + 「取消」。
         confirmButton = {
-            // ★ 2026-11-10：改用 DialogOutlinedActionButton —— 裸 OutlinedButton 在对话框
-            //   动作槽里会被 intrinsic 缩进撑成 58dp 宽再逐字分配（见该组件文件头）。
-            DialogOutlinedActionButton(
-                text = stringResource(R.string.action_close),
+            DialogTextButton(
+                text = stringResource(R.string.action_cancel),
                 onClick = onDismiss,
             )
         },

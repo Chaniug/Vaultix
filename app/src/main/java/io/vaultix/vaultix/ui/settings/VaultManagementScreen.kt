@@ -62,6 +62,7 @@ import io.vaultix.model.VaultKind
 import io.vaultix.model.VaultSummary
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.DialogOutlinedActionButton
+import io.vaultix.vaultix.ui.common.DialogTextButton
 import io.vaultix.vaultix.ui.vaultlist.SyncNotice
 import io.vaultix.vaultix.ui.common.AddVaultTypeDialog
 import io.vaultix.vaultix.ui.common.KdbxConflictChoice
@@ -584,8 +585,9 @@ private fun VaultActionResultDialog(text: String, isSuccess: Boolean, onDismiss:
     AlertDialog(
         onDismissRequest = onDismiss,
         text = { Text(text) },
+        // 结果已经发生，没有可确认或可放弃的动作 ⇒ 低强调 TextButton + 「完成 / 关闭」。
         confirmButton = {
-            DialogOutlinedActionButton(
+            DialogTextButton(
                 text = stringResource(if (isSuccess) R.string.action_done else R.string.action_close),
                 onClick = onDismiss,
             )

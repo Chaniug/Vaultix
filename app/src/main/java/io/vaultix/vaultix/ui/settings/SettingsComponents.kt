@@ -89,6 +89,7 @@ import androidx.compose.ui.unit.dp
 import io.vaultix.datastore.VaultTimeout
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.DialogOutlinedActionButton
+import io.vaultix.vaultix.ui.common.DialogTextButton
 import io.vaultix.vaultix.ui.theme.Spacing
 import io.vaultix.vaultix.ui.theme.UiSize
 import io.vaultix.vaultix.ui.theme.VaultixCorner
@@ -720,10 +721,11 @@ internal fun AutoLockDialog(
                 )
             }
         },
+        // 与设置页的主题模式 / 剪贴板对话框同一条规范：点档位即生效并关闭，
+        // 「什么都没选就退出」不是主操作 ⇒ 低强调 TextButton + 「取消」。
         confirmButton = {
-            // 点档位即选中并关闭，没有「可取消的操作」——按定稿口径该叫「关闭」。
-            DialogOutlinedActionButton(
-                text = stringResource(R.string.action_close),
+            DialogTextButton(
+                text = stringResource(R.string.action_cancel),
                 onClick = onDismiss,
             )
         },
@@ -801,8 +803,9 @@ internal fun LongTextInfoDialog(
                 )
             }
         },
+        // 纯展示：没有可确认的操作 ⇒ 低强调 TextButton + 「关闭」（见 DialogShell 口径）。
         confirmButton = {
-            DialogOutlinedActionButton(
+            DialogTextButton(
                 text = stringResource(R.string.action_close),
                 onClick = onDismiss,
             )

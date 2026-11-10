@@ -567,17 +567,21 @@ private fun PasskeyDetailDialog(row: PasskeyRow, onDismiss: () -> Unit, onDelete
                 )
             }
         },
+        // 2026-11-10：两个槽位原本是反的 —— 「关闭」占了主操作位（confirmButton），
+        // 真正的主操作「删除」却挤在 dismissButton。M3 里 confirmButton 在右、是主操作，
+        // dismissButton 在左、是退出。删除仍有二次确认 + error 色 + TextButton 低强调，
+        // 槽位归位不会让它变得更容易误触。
         confirmButton = {
-            DialogTextButton(
-                text = stringResource(R.string.action_close),
-                onClick = onDismiss,
-            )
-        },
-        dismissButton = {
             DialogTextButton(
                 text = stringResource(R.string.passkey_delete_action),
                 contentColor = MaterialTheme.colorScheme.error,
                 onClick = { showDeleteConfirm = true },
+            )
+        },
+        dismissButton = {
+            DialogTextButton(
+                text = stringResource(R.string.action_close),
+                onClick = onDismiss,
             )
         },
     )
