@@ -1548,6 +1548,7 @@
     <string name="card_face_cardholder">持卡人</string>
     <string name="card_face_valid_thru">有效期</string>
     <string name="card_face_no_number">•••• •••• •••• ••••</string>
+    <string name="card_face_identity_label">个人信息</string>
 
     <!-- 导入与导出（对齐 Bitwarden 官方加密导出/导入；入口在设置首页「数据」组） -->
     <string name="import_export_entry">导入与导出</string>
