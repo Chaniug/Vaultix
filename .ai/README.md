@@ -24,6 +24,29 @@
 - 已接进 CI：`ci-debug.yml` 的 `sandbox-tests` job 用**同一份脚本**，与 `android-ci` 并行
   ⇒ 本地绿 ⇒ CI 不会红在同一件事上。
 
+## 🕐 最新状态（2026-11-10 深夜 · #278 按站点分组 + #279 触摸光晕）
+
+> **一句话**：两件事一起交付 —— ① 密码条目新增「按站点」分组（用户确认只要显示层归纳，
+> 不增加开销、不破坏数据与 UI）；② 液态玻璃照 FlClash 精修：克隆其子模块 `prism_ui`
+> 调研后，确认透镜带 / 色散 #277 已有对应物，**只补「跟随手指的触摸光晕」**。
+
+| # | 用户要的 | 处理 |
+|---|---|---|
+| [#278](./issues/06-界面与交互-part18.md) | 同域名 / 同软件的条目归一组，更清晰 | `ItemsGroupMode.Site("site")`：主 URI 归一化（`androidapp://` 包名优先 → 网站取 `PublicSuffixList.baseDomain` eTLD+1），**≥2 条才成组**；单条站点与无 URI 归尾部「未分组」；组标题经 `AppLabel` 翻中文（调用方注入 lambda）。数据 / 同步 / 自动填充零改动 |
+| [#279](./issues/06-界面与交互-part18.md) | FlClash 那种触摸时光照反射 | shader 新增 `uGlow` uniform：光心 = 手指精确位置（`DockRow` 行级 `pointerInput` 观察**不消费事件**），强度 `TOUCH_GLOW_PEAK × intensity²`，screen 叠加在 rim 之后；`GlassPress` 增 `focusY` |
+
+### 判据
+
+1. **「整理归纳」只做展示层**：不改数据、不改自动填充、不破坏现有 UI 结构 —— 分组是
+   `groupItems` 的第 5 个枚举分支，列表结构 / 折叠语义全部复用。
+2. **无站点键的条目必须仍出现在列表里**：`siteKeyOf` 返回 null 时收集进兜底组，
+   直接 `return@forEach` 会把条目整组丢掉（静态门禁查不出「列表少了几条」）。
+3. **光晕只进 uniform 与渐变中心**：位置可以跟手指，尺寸一个像素都不许动
+   （`LiquidGlassDockRulesTest` 第 7 条规则钉住三处接线）。
+
+> 实证：CI 同款 9 模块单测全绿（新增 `ItemsGroupingSiteTest` 7 条、glass 新增 2 条测试与
+> 1 条规则门禁）+ CI 口径 `detekt` 全绿 + 15 个静态门禁 `PASS=15 FAIL=0`。
+
 ## 🕐 最新状态（2026-11-10 深夜 · 液态玻璃底栏第四轮：边界沿轮廓 / 补饱和度 / 按压联动）
 
 > **一句话**：用户「点击效果和玻璃效果都没做完善，注意边界和大小」—— 三个症状三种根因，
