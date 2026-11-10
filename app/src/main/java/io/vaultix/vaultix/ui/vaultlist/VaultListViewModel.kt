@@ -264,9 +264,10 @@ class VaultListViewModel @Inject constructor(
                 is KdbxSyncReport.NeedsReload -> pullRemote(vaultId)
 
                 is KdbxSyncReport.NoCloudSource ->
-                    _events.emit(
-                        Event.KdbxSyncFailed(SyncNotice.Res(R.string.kdbx_sync_no_cloud_source)),
-                    )
+                    // ★ 2026-11-10 晚：本地 KDBX 点同步会走到这里（编排器直接挡下）。
+                    //   原文案「还没有配置云端来源」读起来像用户漏配了一项 ——
+                    //   对本地文件应该说的是"它本来就不需要云端"，所以这里不是失败。
+                    _events.emit(Event.KdbxSynced(SyncNotice.Res(R.string.kdbx_sync_local_only)))
 
                 is KdbxSyncReport.Failed ->
                     _events.emit(Event.KdbxSyncFailed(SyncNotice.Detail(report.reason)))

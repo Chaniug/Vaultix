@@ -525,6 +525,8 @@ class KdbxCloudSyncCoordinator(
         is SyncOutcome.Uploaded -> KdbxSyncResult.Uploaded(newVersionToken)
         is SyncOutcome.NeedsUserDecision -> KdbxSyncResult.Conflict(currentRemoteVersion)
         is SyncOutcome.RemoteNewerNeedsReload -> KdbxSyncResult.NeedsReload
+        // ★ 2026-11-10 晚：本地 SAF 库没有远端 ⇒ 这个库不该有"同步"结果。
+        is SyncOutcome.NoCloudSource -> KdbxSyncResult.NoCloudSource
         is SyncOutcome.Failed -> KdbxSyncResult.Failed(reason)
     }
 }

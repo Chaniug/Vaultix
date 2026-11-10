@@ -111,6 +111,17 @@ data class VaultCardInfo(
      * 「我点下去会发生什么」——所以状态点用的是同一份持久状态，但配色与文案独立。
      */
     val syncDot: SyncStatusDot? = null,
+
+    /**
+     * 浮层卡片第三行：**同步状态的一句话**（`null` = 不该显示，见 [vaultSyncLineResOf]）。
+     *
+     * 与 [syncBadge] / [syncDot] 的区别是**给谁看**：后两者是"要用户注意时才出现"的
+     * 缩小信号（角标、彩点），本字段是"用户主动展开菜单时"读的那一行**完整的话**。
+     *
+     * ⚠️ 本地 KDBX 恒为 `null` —— 那是这一轮（2026-11-10 晚）修的核心：
+     *    本地文件没有"另一端"，写「已同步」就是在一句话里编造了一个不存在的远端。
+     */
+    val syncLine: Int? = null,
 )
 
 /**
@@ -170,7 +181,103 @@ fun vaultCardInfoOf(vault: VaultSummary, itemCount: Int): VaultCardInfo = VaultC
     },
     syncBadge = SyncBadge.of(vault.syncStatus),
     syncDot = SyncStatusDot.of(vault.syncStatus),
+    // ★ 2026-11-10 第三轮：浮层卡片的**第三行**。判据只此一份 ——
+    //   与「库列表卡片」共用下面那个纯函数，别在页面里再拼一遍。
+    syncLine = vaultSyncLineResOf(vault.kind, vault.origin, vault.syncStatus),
 )
+
+/**
+ * 浮层卡片（条目页 ⋮ 菜单顶部）的第三行文案资源 —— **纯函数，可 JVM 单测**。
+ *
+ * ## 为什么要有这一行（2026-11-10 真机反馈）
+ *
+ * 用户原话：
+ *
+ * > 本地 kdbx 打开后，随便新建一个条目，然后点击一下同步。居然变成了已同步的本地文件，
+ * > 这样合理吗，虽然条目没有云图标，但是在密码库列表里外观效果和 onedrive 上的库的列表外观好像一样的。
+ *
+ * 他说的是**外观一样**，而根源正是这一行：浮层底部原本写着「已同步」，
+ * 而「已同步」在**网盘库**上是一句真实的话（与远端对齐），在**本地文件**上却是假的
+ * —— 那个文件根本没有"另一端"。两根卡片并排看，一行「已同步」把最大的差别抹平了。
+ *
+ * ## 判据：先问「有没有远端」，再问「对不对得上」
+ *
+ * | 库 | 第三行 | 读作 |
+ * |---|---|---|
+ * | KDBX · 本地 SAF（含畸形 origin） | `null` | 来源行已经说了「本地文件 · x」，再说一句都是废话 |
+ * | KDBX · 网盘 + `LOCAL_ONLY` | `null` | 有网盘凭据但库还没搬上去，没有"同步"可言 |
+ * | KDBX · 网盘 + 其余 | 「已同步 / 有改动待上传 / …」 | 这才是同步状态的正确用武之地 |
+ * | Bitwarden | `null` | 它有自己的 [SyncStatusLine]（本次同步进度），别串 |
+ *
+ * ⚠️ **本地 KDBX 的「已同步」是个假结论**：`addKdbxVault` 只给**网盘**库补初始状态
+ *    （`KdbxSyncTransitions.forNewlyRegisteredVault(hasCloudSource = false) = null`），
+ *    所以本地库的这一列正常情况下本来就是 null。真机上看到「已同步」有两种来路：
+ *    ① Room 里那一列被写成了某个值（迁移 / 旧版本 / 别的写入点）；
+ *    ② 界面**兜底**成了「已同步」（`KdbxSyncStatusLine` / `VaultManagementScreen`
+ *       `syncStatusText` 都把 `LOCAL_ONLY` 映射成 `kdbx_sync_in_sync`）。
+ *    ⇒ 这条判据挂在**展示侧**：哪怕数据层写歪了，本地库也不会在界面上说谎。
+ *    这是刻意的纵深防御，不是"数据层来修就够了" —— 修数据层只保住**今天**的数据。
+ */
+internal fun vaultSyncLineResOf(
+    kind: VaultKind,
+    origin: String,
+    status: KdbxCloudSyncStatus?,
+): Int? = when (kind) {
+    // Bitwarden 的同步进度走 `SyncStatusLine`（`VaultSyncStatus`），与这里不是一套数据。
+    VaultKind.BITWARDEN -> null
+
+    VaultKind.KDBX -> when {
+        // ① 没有远端 ⇒ 没有"同步"这回事。
+        kdbxSourceTargetOf(origin) == KdbxSourceTarget.LocalFile -> null
+        // ② 有远端但库还不在上面 ⇒ 同上。
+        status == null || status == KdbxCloudSyncStatus.LOCAL_ONLY -> null
+        else -> kdbxSyncLineRes(status)
+    }
+}
+
+/**
+ * 网盘 KDBX 的同步状态 → 那一行文案（`null` = 这条状态不该出现在这里）。
+ *
+ * ⚠️ `IN_SYNC` **是**要显示的：「与云端对齐」是网盘库**能给出的、有信息量的一句**，
+ *    也正是本地文件永远给不出的那句 —— 两者的差别就靠它体现。
+ * ⚠️ `SYNCING` 也显示：它是瞬时的，但用户点完同步就盯着这一行看，
+ *    此刻静默会让人以为没反应。
+ *
+ * ⚠️ 刻意**不新增**「已与云端一致」这种近义串：`kdbx_sync_in_sync = 已同步` 已经是
+ *    全项目对这件事的唯一说法（库列表卡片第三行也用同一条资源）——
+ *    同一状态两处两种措辞，正是本项目反复踩过的「同一事实存两份」。
+ */
+internal fun kdbxSyncLineRes(status: KdbxCloudSyncStatus): Int? = when (status) {
+    KdbxCloudSyncStatus.IN_SYNC -> R.string.kdbx_sync_in_sync
+    KdbxCloudSyncStatus.SYNCING -> R.string.kdbx_sync_syncing
+    KdbxCloudSyncStatus.PENDING_UPLOAD -> R.string.kdbx_sync_pending_upload
+    KdbxCloudSyncStatus.REMOTE_CHANGED -> R.string.kdbx_sync_remote_changed
+    KdbxCloudSyncStatus.PENDING_UPLOAD_WITH_LOCAL_CHANGES ->
+        R.string.kdbx_sync_pending_upload_local_changes
+    KdbxCloudSyncStatus.CONFLICT -> R.string.kdbx_sync_conflict
+    KdbxCloudSyncStatus.FAILED -> R.string.kdbx_sync_failed
+    // 本地库 / 未接入：不该走到这里（`vaultSyncLineResOf` 已经拦掉），留着是为了穷尽性。
+    KdbxCloudSyncStatus.LOCAL_ONLY -> null
+}
+
+/**
+ * 那一行的颜色 —— 与库列表卡片（`VaultListScreen.KdbxSyncStatusLine`）**同源**。
+ *
+ * ⚠️ 抽到这里是为了让两处配色不可能漂移：同一个状态在「库列表」与「⋮ 浮层」里
+ *    染成两种色，用户会读成两个不同的状态。规则本身沿用 2026-11-04 定稿：
+ *    失败 / 待续传 = error，冲突 = primary（要人拍板，不是"出错"），其余次要色。
+ */
+@Composable
+fun syncLineToneOf(textRes: Int): Color = when (textRes) {
+    R.string.kdbx_sync_pending_upload_local_changes,
+    R.string.kdbx_sync_failed,
+    -> MaterialTheme.colorScheme.error
+
+    R.string.kdbx_sync_conflict -> MaterialTheme.colorScheme.primary
+    R.string.kdbx_sync_syncing -> MaterialTheme.colorScheme.primary
+    // 已同步 / 待上传 / 云端有更新：常态或"等一会儿就好"，不抢眼。
+    else -> MaterialTheme.colorScheme.onSurfaceVariant
+}
 
 @Composable
 fun syncBadgeLabel(badge: SyncBadge): String = stringResource(

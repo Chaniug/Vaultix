@@ -117,6 +117,8 @@ import io.vaultix.vaultix.ui.common.CloudSyncIcon
 import io.vaultix.vaultix.ui.common.KdbxSourceTarget
 import io.vaultix.vaultix.ui.common.VaultSourceCloudIcon
 import io.vaultix.vaultix.ui.common.kdbxSourceTargetOf
+import io.vaultix.vaultix.ui.common.kdbxSyncLineRes
+import io.vaultix.vaultix.ui.common.syncLineToneOf
 import io.vaultix.vaultix.ui.common.EntryCard
 import io.vaultix.vaultix.ui.common.EntryCardIconSize
 import io.vaultix.vaultix.ui.common.VaultixMorphingProgress
@@ -852,6 +854,7 @@ private fun ItemsBody(
         displayMode = displayMode,
         showIcon = showIcon,
         serverOrigin = state.vault?.origin,
+        vaultOrigin = state.vault?.origin,
         topInset = listTopInset,
         bottomInset = bottomInset,
         onToggleGroup = onToggleGroup,
@@ -859,7 +862,9 @@ private fun ItemsBody(
         onToggleSelect = onToggleSelect,
         onOpenItem = onOpenItem,
         syncStates = state.syncStates,
-        // KDBX 库不画行尾云图标（见 [cloudSyncBadgeOrNull]）。
+        // ★ 2026-11-10 第三轮：这里原本只传 `kind`，把「库在不在云上」这件事丢掉了 ——
+        //   判据在 [cloudSyncBadgeOrNull] 里，它需要 origin 才能分出
+        //   「OneDrive 上的 KDBX」（裸云）与「本地文件」（不画）。
         vaultKind = state.vault?.kind,
         onDelete = onDelete,
         vaultCard = vaultCard,
@@ -1455,6 +1460,20 @@ private fun MenuVaultCard(card: VaultCardInfo) {
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
+        // ★ 第三行：同步状态（2026-11-10 真机反馈）。
+        //
+        // 此前这里**没有**这一行，而真机上却出现了「已同步」—— 那是错位来源：
+        // 它原本挂在库列表卡片的 `KdbxSyncStatusLine` 上，用户在**条目页**看到的那句
+        // 其实是别处的渲染。现在两处用**同一个纯函数**（`vaultSyncLineResOf`）：
+        // 本地 KDBX 拿到 null ⇒ 两处都不写，网盘 KDBX 两处都写同一句。
+        card.syncLine?.let { lineRes ->
+            Text(
+                text = stringResource(lineRes),
+                style = MaterialTheme.typography.labelSmall,
+                color = syncLineToneOf(lineRes),
+                maxLines = 1,
+            )
+        }
     }
 }
 
@@ -1761,6 +1780,8 @@ private fun ItemsList(
     displayMode: ItemsCardDisplayMode,
     showIcon: Boolean,
     serverOrigin: String?,
+    /** 当前库的 `origin`（**判「库在不在云上」只认它**，见 [cloudSyncBadgeOrNull]）。 */
+    vaultOrigin: String?,
     topInset: Dp,
     bottomInset: Dp,
     onToggleGroup: (String) -> Unit,
@@ -1775,8 +1796,9 @@ private fun ItemsList(
     /**
      * 当前库类型（null = 还没加载出来）。
      *
-     * ⚠️ 只为了一件事：**KDBX 库不该有行尾云图标**（它没有"某一条上云"这回事）。
-     * 判据在 [cloudSyncBadgeOrNull] 里，本函数只负责把它传下去。
+     * ⚠️ 只为了一件事：行尾那朵云画成什么（见 [cloudSyncBadgeOrNull]）。
+     * 判据在那个纯函数里，本函数只负责把它传下去；而「在不在云上」要的是
+     * 下面的 [vaultOrigin]，不是本参数 —— 两轮真机反馈都把这两件事混成过一件。
      */
     vaultKind: VaultKind? = null,
     /**
@@ -1847,9 +1869,12 @@ private fun ItemsList(
                             // KDBX 的「在不在云上」由 origin 判，见 [cloudSyncBadgeOrNull]。
                             cloud = cloudSyncBadgeOrNull(
                                 vaultKind = vaultKind,
-                                // 这里复用的 `serverOrigin` 就是 `state.vault?.origin` ——
-                                // favicon 拼 URL 与来源徽章问的是同一个字段，不必再传一份。
-                                vaultOrigin = serverOrigin,
+                                // ★ 必须用**调用方传进来的 `vaultOrigin`**，不能图省事复用
+                                //   `serverOrigin`（favicon 用的那个）。
+                                //   两者此刻恰好同源（都来自 `state.vault?.origin`），但语义不同：
+                                //   favicon 那条一旦为别的库换算法（例如按条目定位站点），
+                                //   徽章就会跟着漂 —— 而"库在哪"只有一个真源。
+                                vaultOrigin = vaultOrigin,
                                 syncedInVault = syncStates[item.id],
                             ),
                             onToggleSelect = { onToggleSelect(item) },

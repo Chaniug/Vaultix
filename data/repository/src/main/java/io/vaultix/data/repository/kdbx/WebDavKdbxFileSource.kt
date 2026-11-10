@@ -81,6 +81,9 @@ class WebDavKdbxFileSource(
     private val credentialProvider: suspend () -> WebDavCredentials,
 ) : KdbxFileSource {
 
+    /** 网盘来源：有远端那一份（见 `KdbxFileSource.isRemote`）。 */
+    override val isRemote: Boolean = true
+
     override suspend fun stat(): KdbxFileStat = withContext(Dispatchers.IO) {
         val response = execute(
             Request.Builder().url(fileUrl).head().build(),

@@ -506,7 +506,9 @@ class ItemsViewModel @Inject constructor(
                 is KdbxSyncReport.NeedsReload ->
                     SyncNote.Notice(R.string.kdbx_sync_needs_reload, warning = true)
                 is KdbxSyncReport.NoCloudSource ->
-                    SyncNote.Notice(R.string.kdbx_sync_no_cloud_source, warning = true)
+                    // ★ 2026-11-10 晚：文案改说人话 —— 「还没有配置云端来源」读起来像
+                    //   用户漏配了一项，而本地文件的**真相是**"它不需要云端"。
+                    SyncNote.Notice(R.string.kdbx_sync_local_only, warning = false)
                 is KdbxSyncReport.StaleBaseline ->
                     SyncNote.Notice(R.string.kdbx_sync_stale_baseline, warning = true)
                 is KdbxSyncReport.Conflict ->

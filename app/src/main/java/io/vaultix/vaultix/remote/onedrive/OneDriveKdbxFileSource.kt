@@ -62,6 +62,9 @@ class OneDriveKdbxFileSource(
     private val path: String,
 ) : KdbxFileSource {
 
+    /** 网盘来源：有远端那一份（见 `KdbxFileSource.isRemote`）。 */
+    override val isRemote: Boolean = true
+
     override suspend fun stat(): KdbxFileStat {
         val entry = graph.stat(token(), path)
         return KdbxFileStat(

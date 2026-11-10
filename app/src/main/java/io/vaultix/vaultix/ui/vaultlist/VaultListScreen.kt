@@ -92,7 +92,11 @@ import io.vaultix.vaultix.ui.common.AddVaultTypeDialog
 import io.vaultix.vaultix.ui.common.KdbxConflictChoice
 import io.vaultix.vaultix.ui.common.KdbxConflictDialog
 import io.vaultix.vaultix.ui.common.deviceCanAuthenticate
+import io.vaultix.vaultix.ui.common.KdbxSourceTarget
+import io.vaultix.vaultix.ui.common.kdbxSourceTargetOf
+import io.vaultix.vaultix.ui.common.syncLineToneOf
 import io.vaultix.vaultix.ui.common.vaultOriginLabel
+import io.vaultix.vaultix.ui.common.vaultSyncLineResOf
 import io.vaultix.vaultix.ui.settings.QuickUnlockHost
 import io.vaultix.vaultix.ui.shell.rememberBottomDockInset
 import io.vaultix.vaultix.ui.theme.UiSize
@@ -736,7 +740,7 @@ private fun VaultCard(
                         SyncStatusLine(syncStatus = syncStatus)
                         // KDBX 网盘库的**持久**同步状态（与上面那个"本次同步进行到哪"不同，
                         // 见 `KdbxCloudSyncStatus` 的说明）。null = 非网盘库，整行不渲染。
-                        KdbxSyncStatusLine(vault.syncStatus)
+                        KdbxSyncStatusLine(vault)
                     }
                     if (!vault.unlocked) {
                         Icon(
@@ -805,12 +809,26 @@ private fun VaultRow(
 }
 
 /**
- * 库身份（P4-a，2026-11-09；同日晚收成**一份定义**）。
+ * 库身份（P4-a，2026-11-09；同日晚收成**一份定义**，2026-11-10 补「本地 vs 网盘」的判别）。
  *
- * 图标 / 形状 / 颜色按**库类型**区分，全部取自 `colorScheme` 角色，不硬编码品牌色：
- * - 网盘来源（`syncStatus != null`）→ 圆形 + `secondaryContainer` + 云同步图标；
- * - 本地 KDBX → 圆角方 + `tertiaryContainer` + 文件图标；
+ * 图标 / 形状 / 颜色按**来源**区分，全部取自 `colorScheme` 角色，不硬编码品牌色：
+ * - KDBX · **网盘**（OneDrive / WebDAV）→ 圆形 + `secondaryContainer` + 云同步图标；
+ * - KDBX · **本地文件** → 圆角方 + `tertiaryContainer` + 文件图标；
  * - 云端 Bitwarden → 大圆角 + `primaryContainer` + 云图标。
+ *
+ * ⚠️ ★★ **判据是"来源"，不是"有没有 syncStatus"**（2026-11-10 晚真机反馈修）。
+ *
+ * 此前这一行写的是 `vault.syncStatus != null`。正常数据下两者同义（补初始状态的那段
+ * 代码只给网盘库补）—— 可是**本地库的这一列一旦被写成某个值**（旧版本 / 迁移 /
+ * 别的写入点），这张卡就立刻换上圆形云徽章，和 OneDrive 上的库长得一模一样。
+ * 用户原话：
+ *
+ * > 本地 kdbx……点击一下同步。居然变成了已同步的本地文件，这样合理吗，虽然条目没有云图标，
+ * > 但是在密码库列表里外观效果和 onedrive 上的库的列表外观好像一样的。
+ *
+ * 「外观一样」的根源就在这里：一个**数据列有没有值**被拿来回答了
+ * 「**这个文件存在哪**」。后者只有 `origin` 知道（`kdbxSourceTargetOf`，唯一真源）。
+ * ⇒ 判据换成来源；`syncStatus` 只决定**第三行写什么**，不再决定"长什么样"。
  *
  * ⚠️ **一次定义、三处复用**：徽章、[VaultCard] 右侧的出血水印、卡片极淡的类型色调底。
  *    三处同源才不会出现「同一个库在不同地方长得不一样」——8.4 记着
@@ -830,13 +848,26 @@ private val BadgeShapeCloudSynced = RoundedCornerShape(percent = 50)
 private val BadgeShapeLocalKdbx = RoundedCornerShape(14.dp)
 private val BadgeShapeCloud = RoundedCornerShape(18.dp)
 
+/**
+ * 这张卡是不是「网盘上的库」 —— **只认 `origin`**。
+ *
+ * Bitwarden 恒为 true（它本来就在服务器上）；KDBX 按 `kdbxSourceTargetOf` 判，
+ * 畸形 / 未知来源一律按本地处理（`LocalFile` 的退化行为，与条目页云徽章同一个函数）。
+ */
+internal fun isRemoteBackedVault(kind: VaultKind, origin: String): Boolean = when (kind) {
+    VaultKind.BITWARDEN -> true
+    VaultKind.KDBX -> kdbxSourceTargetOf(origin) != KdbxSourceTarget.LocalFile
+}
+
 @Composable
 private fun vaultIdentityOf(vault: VaultSummary): VaultIdentity {
     val scheme = MaterialTheme.colorScheme
-    val cloudSynced = vault.syncStatus != null
-    val localKdbx = vault.kind == VaultKind.KDBX
+    val remote = isRemoteBackedVault(vault.kind, vault.origin)
+    // ⚠️ 只看"是不是网盘"与"是不是 KDBX"，**不看 syncStatus**（理由见 [VaultIdentity] 的 KDoc）。
+    val remoteKdbx = remote && vault.kind == VaultKind.KDBX
+    val localKdbx = !remote && vault.kind == VaultKind.KDBX
     return when {
-        cloudSynced -> VaultIdentity(
+        remoteKdbx -> VaultIdentity(
             icon = Icons.Filled.CloudSync,
             accent = scheme.secondary,
             container = scheme.secondaryContainer,
@@ -902,11 +933,28 @@ private fun VaultIdentityBadge(vault: VaultSummary, modifier: Modifier = Modifie
  *
  * ⇒ 现在统一走 [vaultOriginLabel]。这个函数只保留 Bitwarden 那一支的
  * 「account 优先」差异（库状态行显示的是服务器地址，卡片这里显示账号邮箱）。
+ *
+ * ## ★ 2026-11-10 晚：**本地** KDBX 不再复述文件名
+ *
+ * 本地库原来的第二行是「本地文件 · new.kdbx」，而这一行**正上方**的标题就是
+ * `new.kdbx` —— 同一个文件名连着出现两次，一个有信息量的字段（库有多大 / 几条）
+ * 却被挤出了卡片。来源本身（"是不是本地"）已经由**徽章形状**（圆角方 vs 圆形）
+ * 和 `vault_suffix` 承担，第二行不必再说一遍。
+ *
+ * 网盘库仍然保留「OneDrive · 路径」：那条路径是**用户认库的依据**（同名文件在
+ * 不同目录很常见），不能省。
  */
 @Composable
 private fun vaultSubtitle(vault: VaultSummary): String = when (vault.kind) {
-    // ★ 本地 / OneDrive / WebDAV 三种来源都在 vaultOriginLabel 里分好，这里不再重复判断。
-    VaultKind.KDBX -> vaultOriginLabel(vault)
+    VaultKind.KDBX ->
+        // ★ 本地 / OneDrive / WebDAV 三种来源都在 vaultOriginLabel 里分好，
+        //   这里只做**本地那一支**的省略（见上面 KDoc），不重复判断来源。
+        if (isRemoteBackedVault(vault.kind, vault.origin)) {
+            vaultOriginLabel(vault)
+        } else {
+            stringResource(R.string.vault_suffix)
+        }
+
     VaultKind.BITWARDEN -> vault.account ?: vault.origin
 }
 
@@ -959,6 +1007,18 @@ private fun VaultCardMenu(onRemove: () -> Unit, onSyncNow: (() -> Unit)? = null)
 }
 
 /**
+ * KDBX 同步状态的**一句话**（库列表卡片第三行 / 管理页同一句）。
+ *
+ * 判据只此一份（`ui/common/VaultOriginLabel.kt` 的 `vaultSyncLineResOf`），
+ * 两页各抄一份是"同一状态两种措辞"的老路。
+ *
+ * @return `null` = 这一行不该出现。
+ */
+@Composable
+internal fun kdbxSyncLineText(vault: VaultSummary): String? =
+    vaultSyncLineResOf(vault.kind, vault.origin, vault.syncStatus)?.let { stringResource(it) }
+
+/**
  * KDBX 网盘库的**持久**同步状态行（`vaults.syncStatus`）。
  *
  * ## 与 [SyncStatusLine] 的分工（别合并）
@@ -972,39 +1032,18 @@ private fun VaultCardMenu(onRemove: () -> Unit, onSyncNow: (() -> Unit)? = null)
  * ⚠️ 关键差异在最后一行：本状态**不该静默**。它代表"本地有改动还没上云"
  * 或"云端有更新还没拉" —— 不显示等于让用户以为一切都好。
  *
- * 传 `null`（非网盘库）时整行不渲染 —— **不要**兜底成 [KdbxCloudSyncStatus.LOCAL_ONLY]，
- * 那会给 Bitwarden 库画一个"仅本地"角标。
+ * ⚠️ ★ **本地 KDBX 永不显示**（2026-11-10 晚）：判据在 [vaultSyncLineResOf]，
+ *    本函数不再自己 `when (status)`。此前 `LOCAL_ONLY` 被兜成「已同步」，
+ *    于是「本地文件 · new.kdbx / 已同步」—— 那个文件根本没有"另一端"，
+ *    「已同步」是**凭空造出来的结论**，也正是「本地库和 OneDrive 库外观一样」的来源。
  */
 @Composable
-private fun KdbxSyncStatusLine(status: KdbxCloudSyncStatus?) {
-    if (status == null) return
-    val (textRes, color) = when (status) {
-        // 「已同步」用次要色：一致是常态，不该抢眼。
-        KdbxCloudSyncStatus.IN_SYNC ->
-            R.string.kdbx_sync_in_sync to MaterialTheme.colorScheme.onSurfaceVariant
-        KdbxCloudSyncStatus.SYNCING ->
-            R.string.kdbx_sync_syncing to MaterialTheme.colorScheme.primary
-        KdbxCloudSyncStatus.PENDING_UPLOAD ->
-            R.string.kdbx_sync_pending_upload to MaterialTheme.colorScheme.onSurfaceVariant
-        KdbxCloudSyncStatus.REMOTE_CHANGED ->
-            R.string.kdbx_sync_remote_changed to MaterialTheme.colorScheme.onSurfaceVariant
-        // 下面三个都是"需要用户处理"：失败/待再传用 error 跳出来；
-        // ★ 冲突用 primary（蓝）—— 与列表角标、⋮ 菜单状态点同一套配色，
-        //   把「重试」和「选保留哪一版」区分开（2026-11-04 全项目统一）。
-        KdbxCloudSyncStatus.PENDING_UPLOAD_WITH_LOCAL_CHANGES ->
-            R.string.kdbx_sync_pending_upload_local_changes to MaterialTheme.colorScheme.error
-        KdbxCloudSyncStatus.CONFLICT ->
-            R.string.kdbx_sync_conflict to MaterialTheme.colorScheme.primary
-        KdbxCloudSyncStatus.FAILED ->
-            R.string.kdbx_sync_failed to MaterialTheme.colorScheme.error
-        // 「仅本地」= 还没配网盘。用次要色：它是个中性事实，不是问题。
-        KdbxCloudSyncStatus.LOCAL_ONLY ->
-            R.string.kdbx_sync_in_sync to MaterialTheme.colorScheme.onSurfaceVariant
-    }
+private fun KdbxSyncStatusLine(vault: VaultSummary) {
+    val res = vaultSyncLineResOf(vault.kind, vault.origin, vault.syncStatus) ?: return
     Text(
-        text = stringResource(textRes),
+        text = stringResource(res),
         style = MaterialTheme.typography.labelSmall,
-        color = color,
+        color = syncLineToneOf(res),
         maxLines = 1,
     )
 }

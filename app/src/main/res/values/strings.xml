@@ -154,6 +154,13 @@
          真机反馈「kdbx 增删改查都没用」= 一个尚未实现的功能被体验成三个 bug。 -->
     <!-- 库卡片副标题（KDBX）：显示文件名 + 「本地文件」标注，绝不显示 SAF 的 content:// URI。 -->
     <string name="vault_card_kdbx_subtitle">本地文件 · %1$s</string>
+    <!-- ★ 2026-11-10 晚：库列表卡片里**本地** KDBX 的第二行。
+         ⚠️ 不要改回复述文件名（原来那句是「本地文件 · new.kdbx」）：
+            卡片标题**就是**库名，同一个文件名连着出现两次，一个有用的位置被浪费了。
+            "本地"这件事已经由徽章形状（圆角方 vs 圆形）说清楚。
+         ⚠️ 也没有复用 `vault_kind_kdbx`（「KDBX 本地密码库」）：那一串是**类别名**，
+            出现在"选择库类型"的地方；这里是具体某一个库的副标题，用体量小一级的说法。 -->
+    <string name="vault_suffix">本地密码库</string>
     <!-- 条目页顶部的「密码库状态」行（2026-09-30 用户要求）：来源 + 条目数。
          Bitwarden 只给域名（不带 https、不带路径），KDBX 给来源与路径。 -->
     <string name="vault_origin_onedrive">OneDrive · %1$s</string>
@@ -1166,7 +1173,14 @@
     <string name="kdbx_sync_downloaded">已从云端更新</string>
     <string name="kdbx_sync_kept_local">已用本地覆盖云端</string>
     <string name="kdbx_sync_kept_remote">已用云端覆盖本地</string>
+    <!-- ⚠️ 2026-11-10 晚：这条**只**留给"云端库的来源解析不出来"（畸形 origin）。
+         本地 KDBX 点同步不再用它 —— 那时它读起来像"用户漏配了一项"，
+         而真相是"这个文件本来就不需要云端"。那种情况用 `kdbx_sync_local_only`。 -->
     <string name="kdbx_sync_no_cloud_source">这个库还没有配置云端来源</string>
+    <!-- 本地 KDBX 点「同步」的结果提示（2026-11-10 真机反馈）。
+         ⚠️ 这不是一句**报错**，是一句**说明**：措辞要让用户明白"不用管它"，
+            而不是"哪里坏了/哪项没配"（原 `kdbx_sync_no_cloud_source` 就误导了这个方向）。 -->
+    <string name="kdbx_sync_local_only">这是本地文件，没有需要同步的云端副本</string>
     <string name="kdbx_sync_pull_failed">未能拉取云端更新</string>
     <string name="kdbx_sync_remote_changed_again">云端又有了新改动，请重新同步</string>
     <string name="kdbx_sync_needs_reload">需要重新解锁后再试</string>

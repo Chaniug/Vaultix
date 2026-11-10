@@ -55,13 +55,13 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.vaultix.datastore.VaultTimeout
-import io.vaultix.model.KdbxCloudSyncStatus
 import io.vaultix.model.VaultKind
 import io.vaultix.model.VaultSummary
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.vaultlist.SyncNotice
 import io.vaultix.vaultix.ui.common.AddVaultTypeDialog
 import io.vaultix.vaultix.ui.common.KdbxConflictChoice
+import io.vaultix.vaultix.ui.vaultlist.kdbxSyncLineText
 import io.vaultix.vaultix.ui.common.KdbxConflictDialog
 import io.vaultix.vaultix.ui.theme.Spacing
 import io.vaultix.vaultix.ui.theme.UiSize
@@ -440,25 +440,13 @@ private fun vaultStatusSubtitle(vault: VaultSummary, isDefault: Boolean): String
     val unlocked = stringResource(
         if (vault.unlocked) R.string.vault_status_unlocked else R.string.vault_status_locked,
     )
-    val sync = vault.syncStatus?.let { syncStatusText(it) }
+    // ★ 2026-11-10 晚：判据改走**全项目唯一**那句（`vaultSyncLineResOf`）。
+    //   此前这里自带一份 `when`，且把 `LOCAL_ONLY` 映射成「已同步」——
+    //   本地文件被说成"已同步"，正是用户这轮反馈的来源之一。
+    //   本地 KDBX 现在恒为 null（本页因此不再出现那一段）。
+    val sync = kdbxSyncLineText(vault)
     return listOfNotNull(default, unlocked, sync).joinToString(" · ")
 }
-
-/** 网盘同步状态文案（复用库列表角标那套说法，避免两处各写一遍）。 */
-@Composable
-private fun syncStatusText(status: KdbxCloudSyncStatus): String = stringResource(
-    when (status) {
-        KdbxCloudSyncStatus.LOCAL_ONLY -> R.string.kdbx_sync_in_sync
-        KdbxCloudSyncStatus.IN_SYNC -> R.string.kdbx_sync_in_sync
-        KdbxCloudSyncStatus.SYNCING -> R.string.kdbx_sync_syncing
-        KdbxCloudSyncStatus.PENDING_UPLOAD -> R.string.kdbx_sync_pending_upload
-        KdbxCloudSyncStatus.REMOTE_CHANGED -> R.string.kdbx_sync_remote_changed
-        KdbxCloudSyncStatus.PENDING_UPLOAD_WITH_LOCAL_CHANGES ->
-            R.string.kdbx_sync_pending_upload_local_changes
-        KdbxCloudSyncStatus.CONFLICT -> R.string.kdbx_sync_conflict
-        KdbxCloudSyncStatus.FAILED -> R.string.kdbx_sync_failed
-    },
-)
 
 /** 逐库动作的三种对话框：确认（退出 / 移除）· 冲突拍板 · 结果。 */
 @Composable

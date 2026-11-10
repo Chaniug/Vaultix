@@ -71,6 +71,15 @@ sealed interface SyncOutcome {
     data class NeedsUserDecision(val currentRemoteVersion: String?) : SyncOutcome
 
     /**
+     * 这个库**只有本地那一份**（SAF 文件），没有可同步的远端。
+     *
+     * ⚠️ 与 [Failed] 刻意分开：它不是错误，是**配置事实**。
+     *   混进 `Failed` 会让 UI 弹一句"同步失败"，而用户手里什么都没坏。
+     * ⚠️ 编排器走到这里时**没有做任何 IO**（见 `sync` 开头的闸门）。
+     */
+    data object NoCloudSource : SyncOutcome
+
+    /**
      * 远端更新、本地未改 —— **该拉一次**（调用方接着调 `pullRemote` 即可）。
      *
      * 这不是失败（网络与凭据都好），也不是"功能没做完"：拉取路径本身是通的。
@@ -97,6 +106,45 @@ class KdbxSyncOrchestrator(
     private val fileSourceFactory: (origin: String) -> KdbxFileSource?,
 ) {
 
+    /** [localOnlyGate] 的三种结局。 */
+    enum class LocalOnlyGate(val outcome: SyncOutcome) {
+        /** 只有本地那一份 ⇒ 没有"同步"可言。 */
+        LOCAL(SyncOutcome.NoCloudSource),
+
+        /** 来源解析不出来 ⇒ 这是**配置问题**，如实说，不要当成"本地库"糊过去。 */
+        NO_SOURCE(SyncOutcome.Failed("这个库还没有配置网盘来源")),
+    }
+
+    /**
+     * 同步入口的第一道闸：**这个库有没有"另一端"**？
+     *
+     * 抽成方法不只是为了 de-tekt 的圈复杂度，而是因为这两条判据（前缀兜底 + 来源自述）
+     * 在语义上是**同一个问题**，和后面"远端变了吗 / 本地改了吗"不是一类。
+     *
+     * @return `null` = 可以往下走（此时 [source] 必然非空且 `isRemote`）。
+     */
+    private fun localOnlyGate(origin: String, source: KdbxFileSource?): LocalOnlyGate? = when {
+        // ① 前缀兜底：即使来源解析不出来，`content://` 也已经说明了这是本地文件。
+        isLocalOnlyOrigin(origin) -> LocalOnlyGate.LOCAL
+        // ② 来源自述：`WebDav` / `OneDrive` 覆写为 true，其余默认 false（见 `KdbxFileSource.isRemote`）。
+        source == null -> LocalOnlyGate.NO_SOURCE
+        !source.isRemote -> LocalOnlyGate.LOCAL
+        else -> null
+    }
+
+    /**
+     * 这个 origin 是不是**只有本地那一份**（没有远端）。
+     *
+     * 判据只有一条：SAF 的 `content://`。**不**采用"工厂解析得出来就算有远端" ——
+     * 本地文件的工厂**恰恰解析得出来**（就是文件自己），那正是这一轮 bug 的来源。
+     *
+     * ⚠️ 前缀常量与 `KdbxCloudSyncCoordinator` / `KdbxFileSourceResolver` 同值，
+     *    它是 Android 定死的 scheme，不会增长；真正的白名单式判据在协调器里
+     *    （`isCloudOrigin`），此处只需要"本地"这一支的反向判断。
+     */
+    private fun isLocalOnlyOrigin(origin: String): Boolean =
+        origin.startsWith(SAF_ORIGIN_PREFIX)
+
     /**
      * 跑一次同步。
      *
@@ -115,8 +163,39 @@ class KdbxSyncOrchestrator(
             ?: return SyncOutcome.Failed("找不到该密码库")
         val lastKnownVersion = vault.remoteVersionToken
 
-        val source = fileSourceFactory(origin)
-            ?: return SyncOutcome.Failed("这个库还没有配置网盘来源")
+        // ★★ 2026-11-10 晚：**本地 SAF 库没有"同步"这件事**，在这里就说清楚，别继续往下走。
+        //
+        // ## 修的是什么（真机可复现）
+        //
+        // 「本地 kdbx 打开 → 新建一个条目 → 点一下同步」⇒ 界面上出现「已同步」。
+        // 而那个文件根本没有远端：`fileSourceFactory("content://…")` 会返回一个
+        // **能 stat / 能 read 的本地来源**（= 文件自己），于是往下走一遍：
+        //
+        //   ① `remoteNow` = 文件当前内容的哈希（`SafKdbxFileSource.stat`）；
+        //   ② `remoteChanged` = `remoteNow != 基线` —— 刚写的条目让文件变了 ⇒ true；
+        //   ③ `localChanged` = true（`markLocalEdited` 已置 PENDING_UPLOAD）；
+        //   ④ 两边都"变" ⇒ 走冲突判定 ⇒ 内容对账发现一致 ⇒ **写 IN_SYNC**。
+        //
+        // 于是「一个新库刚建的条目」被记成"与远端一致"，并在 UI 上显示「已同步」。
+        // 这不是同步算错了，是**这个问题对它没有意义** —— 拿文件跟文件自己做条件写。
+        //
+        // ⇒ 在入口挡住，并**顺手纠正**已被写歪的状态（见 [KdbxSyncTransitions.markLocalOnly]）。
+        //   只挡不纠的话，上一轮已经写进 Room 的 IN_SYNC 会一直在界面上说谎
+        //   （展示侧也有一道闸，但那是纵深防御，不是"数据可以不修"的理由）。
+        //
+        // ⚠️ 放在 `markStatus(SYNCING)` **之前**：本地库连一瞬间的「同步中」都不该有。
+        //
+        // ⚠️ 判据问的是**来源自己**（`isRemote`），不是"工厂解析得出来" ——
+        //   本地文件的工厂**恰恰解析得出来**（就是文件自己），那正是这一轮 bug 的来源。
+        //   前缀 `content://` 作为**兜底**保留：来源解析不出来时也要挡。
+        val gate = localOnlyGate(origin, fileSourceFactory(origin))
+        if (gate != null) {
+            // 本地库：先纠正持久化状态（旧数据可能已被写成 IN_SYNC），再如实上报。
+            if (gate == LocalOnlyGate.LOCAL) markStatus(vaultId, KdbxSyncTransitions.markLocalOnly())
+            return gate.outcome
+        }
+        // gate 为 null ⇒ 来源必然解析成功且自认是远端（见 [localOnlyGate]）。
+        val source = fileSourceFactory(origin)!!
 
         markStatus(vaultId, KdbxSyncTransitions.markSyncing())
 
@@ -519,5 +598,8 @@ class KdbxSyncOrchestrator(
          * 交给下一次 sync 去判 CONFLICT 才是正解。
          */
         val NON_DOWNGRADABLE_FROM_REMOTE = NON_DOWNGRADABLE + KdbxSyncStatus.PENDING_UPLOAD.name
+
+        /** 本地 SAF 来源的 origin 前缀（见 [isLocalOnlyOrigin] 的说明：与协调器同值）。 */
+        const val SAF_ORIGIN_PREFIX = "content://"
     }
 }

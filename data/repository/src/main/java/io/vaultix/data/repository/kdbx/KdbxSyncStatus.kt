@@ -114,6 +114,23 @@ object KdbxSyncTransitions {
     fun markSyncing(): KdbxSyncStatus = KdbxSyncStatus.SYNCING
 
     /**
+     * ★ **本地 SAF 库没有远端** ⇒ 状态就应该是 [KdbxSyncStatus.LOCAL_ONLY]。
+     *
+     * ## 为什么需要这条（2026-11-10 晚，真机反馈）
+     *
+     * 「本地 kdbx → 新建条目 → 点同步」⇒ 界面显示「已同步」。
+     * 根因是编排器把本地文件当成了"远端"（`SafKdbxFileSource` 能 stat/read 自己），
+     * 走完三态判定后写进了 [KdbxSyncStatus.IN_SYNC]。
+     *
+     * ⇒ 编排器现在在入口就挡住（不产生任何 IO），并把**已经被写歪的那一行**纠回来。
+     *   只挡不纠的话，旧数据会一直在界面上说谎。
+     *
+     * ⚠️ 这是**唯一的**"把状态写回 LOCAL_ONLY"的入口：别的转移都不该产生它
+     *   （"没有远端"是配置事实，不是同步的结果）。
+     */
+    fun markLocalOnly(): KdbxSyncStatus = KdbxSyncStatus.LOCAL_ONLY
+
+    /**
      * ★ 上传成功之后该落到哪个状态。
      *
      * @param localChangedDuringUpload **上传期间本地是否又改了**。

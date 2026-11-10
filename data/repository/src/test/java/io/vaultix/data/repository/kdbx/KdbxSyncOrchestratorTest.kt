@@ -5,6 +5,7 @@ package io.vaultix.data.repository.kdbx
 //    写了 `import io.mockk.coAnswers` 反而 `Unresolved reference`（CI 上炸过）。
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.every
 import io.mockk.mockk
 import io.vaultix.data.kdbx.KdbxFileSource
 import io.vaultix.data.kdbx.KdbxFileStat
@@ -165,6 +166,8 @@ class KdbxSyncOrchestratorTest {
     fun `内容对账必须问远端当前字节而不是缓存`() = runTest {
         val dao = RecordingDao(initialToken = T0)
         val source = mockk<KdbxFileSource>()
+        // 网盘来源（见 `KdbxFileSource.isRemote`）：编排器入口会先问这一句。
+        every { source.isRemote } returns true
         coEvery { source.stat() } returns KdbxFileStat(versionToken = T1)
         coEvery { source.read() } returns ByteArray(0)
         coEvery { source.readRemoteCurrent() } returns ByteArray(0)
@@ -210,6 +213,8 @@ class KdbxSyncOrchestratorTest {
         // 假字节是做不到的（那是真 KDBX 解码），所以本用例改为钉**通道**：
         // 内容对账必须在冲突分支上被调用过一次（旧实现里是 0 次）。
         val source = mockk<KdbxFileSource>()
+        // 网盘来源（见 `KdbxFileSource.isRemote`）：编排器入口会先问这一句。
+        every { source.isRemote } returns true
         coEvery { source.stat() } returns KdbxFileStat(versionToken = T1)
         coEvery { source.readRemoteCurrent() } returns ByteArray(0)
         coEvery { source.read() } returns ByteArray(0)
@@ -235,6 +240,8 @@ class KdbxSyncOrchestratorTest {
     fun `对账读远端失败_仍然报冲突`() = runTest {
         val dao = RecordingDao(initialToken = T0)
         val source = mockk<KdbxFileSource>()
+        // 网盘来源（见 `KdbxFileSource.isRemote`）：编排器入口会先问这一句。
+        every { source.isRemote } returns true
         coEvery { source.stat() } returns KdbxFileStat(versionToken = T1)
         coEvery { source.readRemoteCurrent() } throws java.io.IOException("网络断了")
         val orchestrator = KdbxSyncOrchestrator(vaultDao = dao.dao, fileSourceFactory = { source })
@@ -467,6 +474,10 @@ class KdbxSyncOrchestratorTest {
      */
     private fun sourceStub(remoteToken: String?, remoteBytes: ByteArray? = null): KdbxFileSource {
         val source = mockk<KdbxFileSource>()
+        // ★ 2026-11-10 晚：编排器入口现在先问 `isRemote`（本地 SAF 库没有"同步"这回事，
+        //   见 `KdbxSyncOrchestrator.sync`）。mockk 的默认方法**不会**自动跑默认实现，
+        //   不打桩就是"未打桩调用直接炸" —— 这里显式声明"这是网盘来源"。
+        every { source.isRemote } returns true
         coEvery { source.stat() } returns KdbxFileStat(versionToken = remoteToken)
         coEvery { source.read() } returns (remoteBytes ?: ByteArray(0))
         // ⚠️ 必须单独打桩：`readRemoteCurrent()` 是接口的**默认方法**，
@@ -518,7 +529,68 @@ class KdbxSyncOrchestratorTest {
         }
     }
 
+    // ───────────── 2026-11-10 晚：本地库没有"同步"这回事 ─────────────
+
+    /**
+     * 真机反馈：「本地 kdbx 新建一个条目 → 点同步 → 变成已同步」。
+     *
+     * ## 为什么它曾经会"成功"
+     *
+     * 本地 SAF 库的来源**就是那个文件**：能 stat、能 read。编排器照常跑了三态判定 ——
+     * 刚写的条目让文件哈希变了（"远端变了"）、本地也标了 PENDING_UPLOAD（"本地改了"）
+     * ⇒ 冲突 → 内容对账（自己跟自己比）必然一致 ⇒ **写 IN_SYNC**。
+     *
+     * ⇒ 现在入口就挡，**不做任何 IO**，并顺手把已被写歪的状态纠回 `LOCAL_ONLY`。
+     */
+    @Test
+    fun `本地 SAF 库不跑同步_并纠正被写歪的状态`() = runTest {
+        val dao = RecordingDao(initialToken = null)
+        // 故意给一个"看起来能同步"的来源：能 stat、能 read —— 正是 bug 的形状。
+        val localSource = sourceStub(remoteToken = T1)
+        every { localSource.isRemote } returns false
+        val orchestrator = KdbxSyncOrchestrator(vaultDao = dao.dao, fileSourceFactory = { localSource })
+
+        val outcome = orchestrator.sync(LOCAL_ORIGIN, LOCAL_ORIGIN, localChangedSinceLastSync = true)
+
+        assertEquals(SyncOutcome.NoCloudSource, outcome)
+        // ① 状态被纠回 LOCAL_ONLY（旧数据里的 IN_SYNC 不能一直说谎）。
+        assertEquals(KdbxSyncStatus.LOCAL_ONLY.name, dao.status())
+        // ② 一个网络/文件读都没发生：三条 IO 路径全都不许被调用。
+        coVerify(exactly = 0) { localSource.stat() }
+        coVerify(exactly = 0) { localSource.read() }
+        coVerify(exactly = 0) { localSource.readRemoteCurrent() }
+    }
+
+    @Test
+    fun `即使在 content 前缀下来源谎称 isRemote_也按本地处理`() = runTest {
+        // 纵深防御的第二层：前缀是 Android 定死的 `content://`，比任何实现自述都硬。
+        val liar = sourceStub(remoteToken = T1)
+        every { liar.isRemote } returns true
+        val dao = RecordingDao(initialToken = null)
+        val orchestrator = KdbxSyncOrchestrator(vaultDao = dao.dao, fileSourceFactory = { liar })
+
+        val outcome = orchestrator.sync(LOCAL_ORIGIN, LOCAL_ORIGIN, localChangedSinceLastSync = false)
+
+        assertEquals(SyncOutcome.NoCloudSource, outcome)
+        assertEquals(KdbxSyncStatus.LOCAL_ONLY.name, dao.status())
+    }
+
+    @Test
+    fun `来源解析不出来_如实报配置问题而不是当成本地库`() = runTest {
+        // `onedrive:` 前缀但库来源解析失败 ⇒ 这是配置坏了，不该悄悄写成 LOCAL_ONLY
+        // （那会让"云端库"看起来像"本地文件"，把真正的问题藏起来）。
+        val dao = RecordingDao(initialToken = T1)
+        val orchestrator = KdbxSyncOrchestrator(vaultDao = dao.dao, fileSourceFactory = { null })
+
+        val outcome = orchestrator.sync(VAULT_ID, ORIGIN, localChangedSinceLastSync = false)
+
+        assertTrue(outcome is SyncOutcome.Failed)
+        assertEquals(KdbxSyncStatus.IN_SYNC.name, dao.status())
+    }
+
     private companion object {
+        const val LOCAL_ORIGIN =
+            "content://com.android.externalstorage.documents/document/primary%3ADownload%2Fnew.kdbx"
         const val VAULT_ID = "vault-orchestrator-test"
         const val ORIGIN = "onedrive:acc:/vault.kdbx"
         const val T0 = "etag-0"
