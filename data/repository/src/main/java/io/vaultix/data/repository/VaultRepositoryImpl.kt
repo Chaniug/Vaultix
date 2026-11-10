@@ -420,6 +420,25 @@ class VaultRepositoryImpl @Inject constructor(
         graceLocks.keep(keepVaultId, Kdbx.unlockedIds())
     }
 
+    /**
+     * 立即结束宽限期：把所有还在倒计时的 KDBX 库**现在就锁掉**。
+     *
+     * 调用方：`AutoLockController.onStop`（App 进后台）。产品口径是「前台才有宽限期」，
+     * 后台没有"秒切回去"的场景，只剩"多留 60 秒明文"这个坏处。
+     *
+     * ## ⚠️ 刻意只有一行委托 —— `VaultRepositoryImpl` 卡在 detekt 的 40 函数上限
+     *
+     * 这个类**没有**任何余量（上一轮扩充时就爆过 `TooManyFunctions`），所以：
+     *
+     * - **判断**（该不该锁）留在 `shouldLockOtherKdbx`（独立顶层函数，自己有单测）；
+     * - **时序**（什么时候真锁）全在 [KdbxGraceLocks]（能在虚拟时钟上验）；
+     * - 本类只负责把两者**接上线**，一行。
+     *
+     * ⇒ 想往这里加分支的人：先问"这是不是在替 `KdbxGraceLocks` 做它已经做过的事"。
+     *   多数时候答案是"是"。
+     */
+    override suspend fun flushPendingKdbxLocks() = graceLocks.flushNow()
+
     override fun isVaultUnlocked(vaultId: String): Boolean =
         sessions.isUnlocked(vaultId) || Kdbx.isUnlocked(vaultId)
 
@@ -1079,20 +1098,6 @@ class VaultRepositoryImpl @Inject constructor(
         if (existing == null) runCatching { preferences.setQuickUnlockPromptDismissed(false) }
     }
 
-    private fun classifyLoginError(error: Throwable): UnlockResult = when (error) {
-        is TwoFactorRequiredException -> UnlockResult.TwoFactorRequired(error.providers)
-        is TwoFactorInvalidException -> UnlockResult.TwoFactorInvalid
-        is HttpException -> when {
-            error.code() == HTTP_UNAUTHORIZED -> UnlockResult.InvalidCredentials
-            // 官方 Bitwarden：prelogin 对未注册邮箱返回 404（Vaultwarden 不区分账号）
-            error.code() == HTTP_NOT_FOUND -> UnlockResult.AccountNotFound
-            // 400 invalid_grant（主密码错误）与其它 4xx 一律按凭据错误提示
-            else -> UnlockResult.InvalidCredentials
-        }
-        is IOException -> UnlockResult.Network
-        else -> UnlockResult.Unknown(error.message)
-    }
-
     @Synchronized
     private fun obtainDeviceId(): String {
         credentials.getString(KEY_DEVICE_ID)?.let { return it }
@@ -1104,8 +1109,6 @@ class VaultRepositoryImpl @Inject constructor(
     private companion object {
         const val DISPLAY_NAME_BITWARDEN = "Bitwarden"
         const val DEFAULT_DISPLAY_NAME_KDBX = "KeePass 数据库"
-        const val HTTP_UNAUTHORIZED = 401
-        const val HTTP_NOT_FOUND = 404
         const val KEY_DEVICE_ID = "device_id"
     }
 }
@@ -1168,6 +1171,33 @@ internal fun buildFullKey(key: SymmetricCryptoKey): ByteArray {
     val enc = key.encKey.useBytes { it.copyOf() }
     val mac = key.macKey.useBytes { it.copyOf() }
     return enc + mac
+}
+
+/**
+ * 登录失败 → [UnlockResult] 分类。
+ *
+ * ⚠️ 文件级纯函数（2026-11-10 从类内移出）：`VaultRepositoryImpl` 的函数数**顶死在**
+ * detekt `TooManyFunctions` 的 40 上限上，而这一轮必须新增
+ * `flushPendingKdbxLocks()`（接口强制），于是挪走一个**不读任何实例状态**的纯函数。
+ * 挑中它的理由：只对入参做 `when`，搬出来语义完全不变。
+ *
+ * ⇒ **下次再要加方法**，别改阈值、也别把逻辑塞进别的类，优先在这里找纯函数挪出去。
+ */
+private const val HTTP_UNAUTHORIZED = 401
+private const val HTTP_NOT_FOUND = 404
+
+private fun classifyLoginError(error: Throwable): UnlockResult = when (error) {
+    is TwoFactorRequiredException -> UnlockResult.TwoFactorRequired(error.providers)
+    is TwoFactorInvalidException -> UnlockResult.TwoFactorInvalid
+    is HttpException -> when {
+        error.code() == HTTP_UNAUTHORIZED -> UnlockResult.InvalidCredentials
+        // 官方 Bitwarden：prelogin 对未注册邮箱返回 404（Vaultwarden 不区分账号）
+        error.code() == HTTP_NOT_FOUND -> UnlockResult.AccountNotFound
+        // 400 invalid_grant（主密码错误）与其它 4xx 一律按凭据错误提示
+        else -> UnlockResult.InvalidCredentials
+    }
+    is IOException -> UnlockResult.Network
+    else -> UnlockResult.Unknown(error.message)
 }
 
 /**

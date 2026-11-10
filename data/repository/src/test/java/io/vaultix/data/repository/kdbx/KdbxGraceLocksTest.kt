@@ -161,4 +161,82 @@ class KdbxGraceLocksTest {
         // 也会让诊断输出误导人。
         assertThat(locks.pendingIds()).isEmpty()
     }
+
+    // ---- flushNow：App 进后台 / 熄屏时提前结束宽限期（2026-11-10） ----
+
+    @Test
+    fun `flushNow 当场锁掉排期中的库_不等宽限期`() = runTest {
+        val locks = KdbxGraceLocks(scope = this, onExpire = { expired += it })
+
+        locks.keep(keepVaultId = "C", unlocked = listOf("B", "C"))
+        advanceTimeBy(10_000)
+        runCurrent()
+
+        locks.flushNow()
+
+        // ★ 没有任何 advanceTimeBy：若实现是"再排一个 0 延迟的任务"，这里照样能过；
+        //   真正要守的是下面的 `pendingIds` 已经空了（不会在 60 秒后再锁一次）。
+        assertThat(expired).containsExactly("B")
+        assertThat(locks.pendingIds())
+            .isEmpty()
+    }
+
+    @Test
+    fun `flushNow 不碰当前在用的库`() = runTest {
+        // 后台该不该连当前库一起锁，是"自动锁定档位"的事（VaultLockManager），
+        // 不是宽限期的事。这里越权会让「从不」档在每次切后台时都被真锁 ——
+        // 而那正是用户明确要求**不要**发生的行为。
+        val locks = KdbxGraceLocks(scope = this, onExpire = { expired += it })
+
+        locks.keep(keepVaultId = "C", unlocked = listOf("B", "C"))
+        locks.flushNow()
+
+        assertThat(expired).doesNotContain("C")
+        assertThat(expired).containsExactly("B")
+    }
+
+    @Test
+    fun `flushNow 单个库失败_不影响其它库`() = runTest {
+        // 锁库要落一次磁盘（`markUserLocked`）。一个库写失败就把整批打断，
+        // 等于让"一处异常"变成"全部保持解锁" —— 安全机制最不该有的失败模式（fail-open）。
+        val locks = KdbxGraceLocks(
+            scope = this,
+            onExpire = { vaultId ->
+                if (vaultId == "bad") error("模拟磁盘写失败") else expired += vaultId
+            },
+        )
+
+        locks.keep(keepVaultId = "keep", unlocked = listOf("bad", "ok1", "ok2", "keep"))
+        locks.flushNow()
+
+        assertThat(expired).containsExactly("ok1", "ok2")
+    }
+
+    @Test
+    fun `flushNow 时没有排期_什么都不做`() = runTest {
+        val locks = KdbxGraceLocks(scope = this, onExpire = { expired += it })
+
+        locks.flushNow()
+
+        assertThat(expired).isEmpty()
+    }
+
+    @Test
+    fun `flushNow 之后重新排期_照常按新的起点计时`() = runTest {
+        // flush 是"提前执行"，不是"关掉宽限期"。若实现顺手把某个"已 flush"标记留着，
+        // 之后切库就再也不排期了 ⇒ 宽限期静默失效（回到"永不锁"）。
+        val locks = KdbxGraceLocks(scope = this, onExpire = { expired += it })
+
+        locks.keep(keepVaultId = "C", unlocked = listOf("B", "C"))
+        locks.flushNow()
+        assertThat(expired).containsExactly("B")
+
+        // 用户回前台，重新把 B / C 都打开，再切到 C。
+        locks.keep(keepVaultId = "C", unlocked = listOf("B", "C"))
+        assertThat(locks.pendingIds()).containsExactly("B")
+
+        advanceTimeBy(KdbxGraceLocks.DEFAULT_GRACE_MS)
+        runCurrent()
+        assertThat(expired).containsExactly("B", "B")
+    }
 }

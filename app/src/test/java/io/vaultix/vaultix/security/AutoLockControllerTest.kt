@@ -1,9 +1,11 @@
 package io.vaultix.vaultix.security
 
 import androidx.lifecycle.LifecycleOwner
+import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
+import io.vaultix.domain.VaultRepository
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -66,12 +68,15 @@ import org.junit.Test
  * | `onStop` 不调 `onAppBackgrounded` | `onStop_切后台_翻前台标记并通知管理器` |
  * | `Locked` 分支写成 `_lockEvents.value = 1`（覆盖而非累加） | `多条Locked事件_代次累加而不是覆盖` |
  * | `if (event is Locked)` 的判据去掉（Unlocked 也自增） | `收到Unlocked事件_锁定代次不动` |
+ * | `onStop` 不调 `flushPendingKdbxLocks`（宽限期在后台继续走） | `onStop_切后台_立即结束KDBX宽限期` |
+ * | `onStart` 也调 `flushPendingKdbxLocks`（回前台却把别的库锁了） | `onStart_回前台_不去动KDBX宽限期` |
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class AutoLockControllerTest {
 
     private class Fixture {
         val lockManager = mockk<VaultLockManager>(relaxed = true)
+        val vaultRepository = mockk<VaultRepository>(relaxed = true)
         val events = MutableSharedFlow<VaultStateEvent>(extraBufferCapacity = 16)
     }
 
@@ -85,7 +90,7 @@ class AutoLockControllerTest {
     private fun TestScope.controller(): Pair<AutoLockController, Fixture> {
         val f = Fixture()
         every { f.lockManager.vaultStateEventFlow } returns f.events
-        val c = AutoLockController(f.lockManager)
+        val c = AutoLockController(f.lockManager, f.vaultRepository)
         // ★ 必须在 `runCurrent()` 之前设：`scope` 是 getter，第一次 `launch` 才落到这个调度器上。
         // ★ 顺序是关键：**先**注入调度器，**再**启动收集。
         //   （本类不再在 `init` 里自启收集 —— 那样会在注入之前就派发到 `Dispatchers.Default`。）
@@ -135,6 +140,38 @@ class AutoLockControllerTest {
         verify(exactly = 1) { f.lockManager.onAppBackgrounded() }
         // 回前台那次**不该**被连带重复调用（防止有人把两个回调抄混）。
         verify(exactly = 1) { f.lockManager.onAppForegrounded() }
+    }
+
+    // ---- KDBX 宽限期只属于前台（2026-11-10） ----
+
+    @Test
+    fun `onStop_切后台_立即结束KDBX宽限期`() = runTest {
+        // 宽限期的前提是"用户还在前台、随时可能切回去"。进后台后这个前提没了，
+        // 剩下的只有"多留 60 秒整库明文" ⇒ 必须当场锁掉排期中的库。
+        val (c, f) = controller()
+
+        c.onStop(mockk<LifecycleOwner>(relaxed = true))
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { f.vaultRepository.flushPendingKdbxLocks() }
+    }
+
+    @Test
+    fun `onStart_回前台_不去动KDBX宽限期`() = runTest {
+        // 反向门禁：回前台时**不该**调它。若有人把两个回调写成对称的一对，
+        // 每次回前台都会把"刚才切走的库"立刻锁掉 —— 正是用户抱怨的那个 bug 复发。
+        //
+        // ⚠️ 先走一遍 onStop 把链路炒热（证明这条 spray 调用确实能被打到），
+        //    否则"没调用"可能只是"协程没跑"。
+        val (c, f) = controller()
+        c.onStop(mockk<LifecycleOwner>(relaxed = true))
+        advanceUntilIdle()
+        coVerify(exactly = 1) { f.vaultRepository.flushPendingKdbxLocks() }
+
+        c.onStart(mockk<LifecycleOwner>(relaxed = true))
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { f.vaultRepository.flushPendingKdbxLocks() }
     }
 
     // ---- 锁定代次（导航回根的唯一信号） ----

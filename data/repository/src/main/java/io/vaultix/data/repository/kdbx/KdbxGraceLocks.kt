@@ -9,6 +9,7 @@
 
 package io.vaultix.data.repository.kdbx
 
+import io.vaultix.common.logging.VaultixLog
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -69,9 +70,19 @@ import kotlinx.coroutines.launch
  * 2. 这里的核心是「到期才执行」的时序，必须能用**虚拟时钟**验证 ——
  *    而 `VaultRepositoryImpl` 拖着 Android / Room / Keystore，纯 JVM 测不了时序。
  *
- * ⚠️ 本类**不做**「App 进后台立即锁」：那需要把 `flush` 再穿过接口一层，
- * 而收益只是「后台少留 60 秒明文」。**60 秒后必然锁**，边界已经收住；
- * 真要更保守，改 [DEFAULT_GRACE_MS] 一处即可。
+ * ⚠️ 本类**自己不听**「App 进后台立即锁」：它没有生命周期概念。该语义由调用方
+ * 在 `onStop` / 熄屏时调 [flushNow] 实现（2026-11-10 补齐 —— 见下）。
+ *
+ * ## 2026-11-10 补记：为什么最终**还是**接了「进后台立即结束宽限期」
+ *
+ * 第一版没做，理由是「收益只是后台少留 60 秒明文，而要多穿一层接口」。实测下来
+ * 这个理由站不住：真正省掉的不是"60 秒"，而是**后台那 60 秒里随时可能出现的
+ * 定时任务、自动备份、云同步扫描**——它们读到的是**明文对象图**，而不只是一把密钥。
+ * 而成本比预估的低得多：[flushNow] 复用同一个 `onExpire`，`AutoLockController.onStop`
+ * 里加一行即可（那里本来就是「离开 App」的唯一处理点）。
+ *
+ * ⇒ 现在的行为与产品选项的原文完全一致：「60 秒内切回免解锁；超过 60 秒、
+ *   或 App 进后台/熄屏，立即锁」。**前台**才享受宽限期。
  */
 internal class KdbxGraceLocks(
     /**
@@ -144,8 +155,50 @@ internal class KdbxGraceLocks(
         }
     }
 
+    /**
+     * **全部到点**（立刻结束宽限期，不等 `delay` 走完）。
+     *
+     * 与 [cancelAll] 的区别是**结果不同**：
+     *
+     * | | 到点之后 |
+     * |---|---|
+     * | [cancelAll] | 不锁（倒计时作废，库保持解锁） |
+     * | [flushNow] | **照常锁**（只是提前） |
+     *
+     * 用在「App 进入后台 / 熄屏」：用户已经看不到了，没有"秒切回去"的场景，
+     * 宽限期在这里只剩一个坏处 —— 后台多留 60 秒明文。
+     *
+     * ## ⚠️ 为什么 `onExpire` 是**顺序**执行而不是并发
+     *
+     * 每个 `onExpire` 都要落一次 `markUserLocked`（磁盘写）。并发起来是 N 个协程
+     * 抢同一个 Room 写锁，而库的数量本来就是个位数 —— 顺序做的总耗时更短，
+     * 也更好在读日志时对上顺序。
+     *
+     * 单个库失败**不影响**其它库：`runCatching` 逐个兜住。锁库失败的后果是"这个库
+     * 多留一会儿明文"，但绝不能因此让后面几个库也锁不上 —— 那是把一处失败放大成全部。
+     *
+     * ## ⚠️ 调用方必须用**应用级 scope** 调起它
+     *
+     * 本方法自己 `suspend`（要顺序等 `onExpire`），但**触发点**是 `onStop` 这种
+     * 同步回调 —— 那里只能 `scope.launch { flushNow() }`。若那个 scope 挂的是
+     * Activity / ViewModel，进程在后台被回收时这次 flush 会被连带取消。
+     * `AutoLockController` 的 scope 是 `SupervisorJob` 单例，符合要求。
+     */
+    suspend fun flushNow() {
+        // 先整批摘下来再逐个执行：执行期间若有人 `keep()` 新排期，那一份不受影响。
+        val expiring = pending.keys.toList()
+        expiring.forEach { pending.remove(it)?.cancel() }
+        expiring.forEach { vaultId ->
+            runCatching { onExpire(vaultId) }.onFailure { error ->
+                VaultixLog.w(TAG) { "宽限期提前结束失败（库 $vaultId 保持解锁）：${error.message}" }
+            }
+        }
+    }
+
     companion object {
         /** 宽限期：60 秒（见文件头的取值理由）。 */
         const val DEFAULT_GRACE_MS: Long = 60_000L
+
+        private const val TAG = "VaultixKdbxGrace"
     }
 }

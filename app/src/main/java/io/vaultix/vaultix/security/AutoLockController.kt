@@ -31,6 +31,7 @@ package io.vaultix.vaultix.security
 
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
+import io.vaultix.domain.VaultRepository
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -42,6 +43,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -62,6 +64,14 @@ import javax.inject.Singleton
 @Singleton
 class AutoLockController @Inject constructor(
     private val lockManager: VaultLockManager,
+    /**
+     * 只为 [onStop] 那一行「结束 KDBX 宽限期」而引入（2026-11-10）。
+     *
+     * ⚠️ 本类**不要**变成第二个锁定决策点：它已经因为"自己算时间差"被重写成薄适配器了
+     * （见文件头）。这里调的是**仓储的一次性清扫**，不是一个判定 —— 档位判定仍然只在
+     * [VaultLockManager] 里。
+     */
+    private val vaultRepository: VaultRepository,
 ) : DefaultLifecycleObserver {
 
     private val supervisorJob = SupervisorJob()
@@ -169,6 +179,12 @@ class AutoLockController @Inject constructor(
 
     override fun onStop(owner: LifecycleOwner) {
         _isForeground.value = false
+        // ★ 2026-11-10：宽限期**只属于前台**。进后台后没有"秒切回去"的场景，
+        //   剩下的只有"多留 60 秒整库明文"。放在 onAppBackgrounded 之前：
+        //   那一步可能立刻锁掉某个库（超时为 0 的档位），先把宽限期里的排期清干净，
+        //   两处动作才不会对同一个库各锁一次。
+        //   用本类的应用级 scope 调起 —— `onStop` 是同步回调，等不了 suspend。
+        scope.launch { runCatching { vaultRepository.flushPendingKdbxLocks() } }
         lockManager.onAppBackgrounded()
     }
 

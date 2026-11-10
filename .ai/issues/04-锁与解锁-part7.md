@@ -274,10 +274,4 @@ if (Kdbx.isUnlocked(vaultId)) { …; return RoomUnlockOutcome.Opened }   // 不�
 - **不改判据**：`shouldLockOtherKdbx` 一个字没动，`ShouldLockOtherKdbxTest` 三条仍绿；
 - **不改接口语义之外的行为**：`lockOtherKdbxVaults` 的返回值**不再代表「已经锁完了」**，
   已在接口 KDoc 写明；需要立刻锁的调用方走 `lockVault`；
-- **未做「进后台立即 flush」**：收益只是后台少留 60 秒明文，而要多穿一层接口。
-  真要更保守，改 `KdbxGraceLocks.DEFAULT_GRACE_MS` 一处即可。
-
-### 测试
-
-`KdbxGraceLocksTest`，7 条：到点才锁 / 切回撤销 / **重复进入不续期** /
-cancel / cancelAll / 多库独立计时 / 到点后不残留。
+- ~~**未做「进后台立即 flush」**~~ → **2026-11-10 下午已补齐**，见 [`04-锁与解锁-part8.md`](./04-锁与解锁-part8.md)。

@@ -78,6 +78,32 @@ interface VaultRepository {
      */
     suspend fun lockOtherKdbxVaults(keepVaultId: String)
 
+    /**
+     * 立刻结束宽限期：把 [lockOtherKdbxVaults] 排上的那些倒计时**当场执行**（= 立即真锁）。
+     *
+     * ## 为什么需要它（2026-11-10 补）
+     *
+     * 宽限期的前提是"用户还在用 App，随时可能切回去"。一旦进后台 / 熄屏，这个前提
+     * 就没了 —— 剩下的只有"多留 60 秒整库明文在内存里"。所以**宽限期只属于前台**。
+     *
+     * 与相邻入口的边界（别混用）：
+     *
+     * | 入口 | 范围 | 语义 |
+     * |---|---|---|
+     * | [lockOtherKdbxVaults] | 除当前库外的 KDBX | **排期**，不立即发生 |
+     * | 本方法 | **只在排期中的** KDBX | 把 [lockOtherKdbxVaults] 的排期**提前执行** |
+     * | [lockVault] | 指定库 | 用户显式锁这一个（顺带撤销它的排期） |
+     * | [lockAll] | 全部库 | 用户显式锁全部 |
+     *
+     * ⇒ 本方法**不碰**当前正在用的库。后台该不该连它一起锁，是"自动锁定档位"
+     *   （`VaultLockManager`）的事，不是这里的事。
+     *
+     * 默认空实现：只为不逼测试替身写样板。
+     */
+    suspend fun flushPendingKdbxLocks() {
+        // 默认无操作（非 KDBX 实现无需关心）。
+    }
+
     /** 该库当前是否已（在内存中）解锁 —— 含 KDBX 会话，供 UI 的解锁徽标使用。 */
     fun isVaultUnlocked(vaultId: String): Boolean
 
