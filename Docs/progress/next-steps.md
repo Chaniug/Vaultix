@@ -17,6 +17,7 @@
 | 版本 | **v0.12.0**（Latest · 混淆包 6.5 MB · versionCode 12000） |
 | 上一轮 | UI 精装修：图标 / 底栏玻璃 / 「+」面板 / 卡包 / 库列表切库 / 启动帧 |
 | 门禁 | detekt · 编码 · 图标几何 · assembleFullDebug · 单测 · preview 全绿 |
+| 整体排查 | 2026-11-11 · [报告](audit/project-audit-2026-11-11.md)：43 个依赖坐标中 **29 项已最新**、3 项禁单独升、3 类真违规、3 项质量基建缺失 |
 
 ## 待真机验收（v0.12.0）
 
@@ -33,8 +34,17 @@
 
 ### P1 · 质量基础设施
 
-- [ ] Baseline Profile；Gradle 配置缓存；ViewModel 单测；`:app` 单测用例
-      ⚠️ 2026-11-10 未逐项核对是否已完成 —— 下轮先核，再排期。
+> **2026-11-11 整体排查已核实**（[报告](audit/project-audit-2026-11-11.md) §3 / 附录 C）：
+> Baseline Profile **确认缺失**（全仓零命中）、Gradle 配置缓存 **确认未启用**
+> （CI 每条 gradle 命令都带 `--no-configuration-cache`）、Kover **只在根 `apply false`、未接 CI**。
+> 旧注释「未逐项核对是否已完成」就此前三项**已作废**；ViewModel 单测仍待核。
+
+- [ ] **依赖解析结果纳入 CI 门禁**（最高优先，先于任何升级）：施工单见报告附录 C · S1
+- [ ] Baseline Profile：生成 `baseline-prof.txt`，覆盖冷启动 / 解锁 / 列表 / 详情 + autofill
+- [ ] Gradle 配置缓存：先验 `detekt --configuration-cache`，可用再开
+- [ ] Kover 覆盖率基线接入 CI（阈值先取实测值，不一步设 80%）
+- [ ] release 下 6 处绕过 `VaultixLog` 的直接 `Log`、生产 3 处 `!!` 清零（报告 §2.2）
+- [ ] `ViewModel 单测` / `:app` 单测用例补强 —— **本轮未核对，保留待核**
 
 ### P2 · 自动化（WorkManager 周期同步）
 
