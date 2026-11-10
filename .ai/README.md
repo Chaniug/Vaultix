@@ -24,6 +24,39 @@
 - 已接进 CI：`ci-debug.yml` 的 `sandbox-tests` job 用**同一份脚本**，与 `android-ci` 并行
   ⇒ 本地绿 ⇒ CI 不会红在同一件事上。
 
+## 🕐 最新状态（2026-11-10 深夜 · OneDrive 库「不能同步」+ 绿灯消失）
+
+> **一句话**：两个症状是**两个互不相干的缺陷**，都只打网盘库 —— 本地库全程正常，
+> 所以它们能一直藏着。
+
+| # | 症状 | 真根因 |
+|---|---|---|
+| [#274](./issues/07-数据与同步-part3.md) | 点同步 →「这是本地文件，没有需要同步的云端副本」 | `KdbxFileSource.isRemote` 是接口**默认属性**（写死 `false`，保守设计）；`CachedKdbxFileSource` 逐个 `override fun`、**没有 `by delegate`** ⇒ 继承了默认值 ⇒ 每个套了缓存的来源都自称本地。而 `fileSourceFor` 对**所有**远端来源都套这一层 |
+| [#274](./issues/07-数据与同步-part3.md) | ⋮ 菜单里没有绿灯、卡片没有「已同步」那行 | 同一道闸（`localOnlyGate`）顺手 `markStatus(markLocalOnly())` ⇒ `syncStatus = LOCAL_ONLY`，而 `LOCAL_ONLY` 在 `SyncStatusDot.of()` / `SyncBadge.of()` 里都是 `null` ⇒ **两者都不显示** |
+| [#274](./issues/07-数据与同步-part3.md) | 修好代码后绿灯还是不亮（存量数据） | `addKdbxVault` 的 `@Upsert` 是 **UPDATE 全列**，构造实体时漏带 `syncStatus`/`remoteVersionToken`/`lastSyncedAt` ⇒ 用户**再打开一次同一个库**就把它们抹成 `null`；而补初始值那段判的是覆盖**前**的快照 ⇒ 这一行再也活不过来 |
+
+### 修法
+
+1. `CachedKdbxFileSource` 加 `override val isRemote: Boolean get() = delegate.isRemote`
+   —— 不能写死 `true`（缓存包住本地文件时要说谎），也不能什么都不写（＝这次事故）。
+2. `addKdbxVault` 把三列从 `existing` 带回来。
+3. 启动时 `repairVaultsMarkedLocalOnly()`：origin 解析得出网盘来源、状态却是
+   `LOCAL_ONLY`/`null` ⇒ 补成 **`PENDING_UPLOAD`**（不是 `IN_SYNC`）。
+
+### 判据
+
+1. **装饰器必须转发每一个语义属性。** 接口默认值是为"忘了写"兜底的，但它兜不住装饰器 ——
+   装饰器的"忘了写"等于**主动断言反面**。加属性时先问：这个装饰器要不要转发？
+2. **`@Upsert` 不是部分更新。** 它先 INSERT、冲突则 UPDATE **全列**。每加一列都要问
+   一次"这行已存在时它会被写成什么"；写成 `null` 就是一次静默数据丢失。
+3. **修完根因还要修存量。** 用户看到的绿灯消失不会因为代码改对而自己亮回来，
+   而他没有任何理由再去点一次同步。
+4. **补状态只能补"事实"，不能补"结论"。** `PENDING_UPLOAD`（有云端但没对过账）✓；
+   `IN_SYNC`（对过账、一致）✗ —— 凭空写会让下次同步走"两边都没变"的捷径、永久盖住差异。
+
+> 实证：`aba3a58a`；本地全量 **1721** 条单测 0 失败（新增 2 条）+ detekt + 15 个静态门禁全绿。
+> 已做变异验证：临时删掉 `override val isRemote` ⇒ 恰好新增那 2 条红、其余 22 条绿。
+
 ## 🕐 最新状态（2026-11-10 深夜 · 两处「宽度算错」导致的竖排）
 
 > **一句话**：两个症状（对话框「取消」竖着摞、权限页「通知」竖排）**同一个病因** ——

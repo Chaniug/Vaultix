@@ -205,3 +205,73 @@
   9 个脚本门禁 + 文档门禁全绿。
 - **真机验收**：不改任何条目，进 KDBX → 点同步 → 应显示「已同步」而不是冲突；
   若远端确实被别人改过，仍必须弹冲突（对账只能消假、不能消真）。
+
+---
+
+## 274. 🔴 OneDrive 库「不能同步」+ 绿灯消失 —— 装饰器漏转发 `isRemote`，外加 `@Upsert` 整行覆盖（2026-11-10 深夜，真机）
+
+**现象**（用户原话）：「我这个库是 onedrive 的，怎么不能同步啊。而且同步按钮旁边的
+绿灯也没有」。两个症状，**两个互不相干的缺陷**，都只打网盘库 —— 本地库全程正常，
+这正是它们能藏这么久的原因。
+
+**根因 ①（装饰器丢了语义）**
+
+`KdbxFileSource.isRemote` 是接口的**默认属性**，值写死 `false` —— 这是个刻意的保守设计：
+新写的来源忘了覆写时，宁可被当成"本地"（同步入口挡下并提示），也不能反过来把本地文件
+当云端、凭空写出"已同步"。
+
+`CachedKdbxFileSource` 用逐个 `override fun` 实现方法、**没有 `by delegate`** ⇒
+它继承了那个默认值 ⇒ **每一个套了缓存的来源都自称本地**。而
+`KdbxCloudSyncCoordinator.fileSourceFor` 对**所有**远端来源都套这一层（OneDrive / WebDAV
+都走 `withRemoteCache`）⇒ 同步入口第一道闸 `KdbxSyncOrchestrator.localOnlyGate`
+把它们**全部**判成"本地文件"：
+
+| 用户看到 | 真因 |
+|---|---|
+| 点同步 →「这是本地文件，没有需要同步的云端副本」 | 闸门走了 `LOCAL` 分支 |
+| ⋮ 菜单里没有绿灯、卡片没有「已同步」那行 | 同一分支顺手 `markStatus(markLocalOnly())` ⇒ `syncStatus = LOCAL_ONLY`，而 `LOCAL_ONLY` 在 `SyncStatusDot.of()` / `SyncBadge.of()` 里都是 `null` |
+| 之后一直不亮 | 状态已是 `LOCAL_ONLY`，没有编辑动作就再没有路径改写它 |
+
+**根因 ②（`@Upsert` 覆盖全列）**
+
+Room 的 `@Upsert` = 先 INSERT、冲突则 **UPDATE 全列**（生成代码里就是
+`UPDATE vaults SET id=?,…,syncStatus=?,remoteVersionToken=?,lastSyncedAt=?`）。
+`VaultRepositoryImpl.addKdbxVault` 构造实体时没写这三列 ⇒ 用户**第二次打开同一个库**
+就把它们抹成 `null` ⇒ 绿灯永久消失。而下面补初始值那段判的是
+`existing?.syncStatus == null`（覆盖**前**的快照）⇒ 覆盖前有值时不补 ⇒
+这一行再也活不过来，只有再编辑一次才可能。
+
+> **要点**：`@Upsert` 的"保持原值"是**不存在**的语义。没写的列 = 写成默认值。
+
+**修法**
+
+1. `CachedKdbxFileSource` 加 `override val isRemote: Boolean get() = delegate.isRemote`。
+   不能写死 `true`（缓存包住本地文件时要说谎），也不能什么都不写（落到默认 `false`，
+   就是这次事故）。
+2. `addKdbxVault` 把三列从 `existing` 带回来。
+3. **存量纠偏** `KdbxCloudSyncCoordinator.repairVaultsMarkedLocalOnly()`，启动时由
+   `KdbxCloudSyncInitializer` 跑一次：origin 解析得出网盘来源、状态却是
+   `LOCAL_ONLY`/`null` 的行 ⇒ 补成 `PENDING_UPLOAD`。
+   - **不补 `IN_SYNC`**：那是**结论**，凭空写会让下次同步走"两边都没变"的捷径、
+     把真实差异永久盖住。`PENDING_UPLOAD`（"有云端，但还没跟它对过一次"）才是事实，
+     且它 `impliesLocalChanges = true` ⇒ 下次同步一定真去问远端，最坏是一次冲突。
+   - 判据复用 `isCloudOrigin`，**不写第二份**。纠偏逻辑落在协调器（那里才有
+     `vaultDao` 与那张判据表），初始化器只 `scope.launch { runCatching { … } }` ——
+     纠偏失败不该把 App 拉不起来。
+   - 两列原样带回：`updateSyncState` 是 `SET col = :v`，传 `null` 就是**清空**基线。
+
+> **判据**：① **装饰器必须转发每一个语义属性** —— 接口默认值是为"忘了写"兜底的，
+> 但它兜不住装饰器，装饰器的"忘了写"等于主动断言反面；② **`@Upsert` 不是部分更新**，
+> 每个新列都要问一次"这行已存在时它会被写成什么"；③ **修完根因还要修存量** ——
+> 用户看到的绿灯消失不会因为代码改对而自己亮回来，而他没有任何理由再点一次同步；
+> ④ **补状态只能补"事实"，不能补"结论"**（`PENDING_UPLOAD` ✓ / `IN_SYNC` ✗）。
+
+- **验证**：新增 `CachedKdbxFileSourceTest.装饰器必须原样转发isRemote_不许写死也不许丢掉`
+  （**两个方向都断言**：包远端 ⇒ `true`、包本地 ⇒ `false` —— 只测 `true` 的话
+  "写死 true"也能通过）、`KdbxCloudSyncCoordinatorTest.网盘来源经协调器解析后仍然自认远端`
+  （钉 `fileSourceFor` 套装饰器 + 装饰器转发这个**组合**）。
+  已做变异验证：临时删掉那行 `override` ⇒ 恰好这 2 条红、其余 22 条绿。
+  全量单测 **1721 条 / 0 失败**（基线 1719 + 新增 2）；detekt 通过；15 个
+  `.ai/tools/check_*.py` 全 PASS。
+- **真机验收**：冷启动 → 打开 OneDrive 库 → ⋮ 菜单应出现绿灯 +「已同步」；
+  点同步不再出现「这是本地文件」；WebDAV 库同理（同一个装饰器）。
