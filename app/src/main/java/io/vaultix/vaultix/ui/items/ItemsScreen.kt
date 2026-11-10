@@ -856,6 +856,8 @@ private fun ItemsBody(
         onToggleSelect = onToggleSelect,
         onOpenItem = onOpenItem,
         syncStates = state.syncStates,
+        // KDBX 库不画行尾云图标（见 [cloudSyncBadgeOrNull]）。
+        vaultKind = state.vault?.kind,
         onDelete = onDelete,
         vaultCard = vaultCard,
     )
@@ -1768,6 +1770,13 @@ private fun ItemsList(
     /** 条目 id → 是否已同步上云（行尾云图标，缺省视为已同步）。 */
     syncStates: Map<String, Boolean> = emptyMap(),
     /**
+     * 当前库类型（null = 还没加载出来）。
+     *
+     * ⚠️ 只为了一件事：**KDBX 库不该有行尾云图标**（它没有"某一条上云"这回事）。
+     * 判据在 [cloudSyncBadgeOrNull] 里，本函数只负责把它传下去。
+     */
+    vaultKind: VaultKind? = null,
+    /**
      * 「这个库在哪 · 有多少条」（null = 库未知，整行不画）。
      *
      * 由 [ItemsBody] 经 `vaultCardInfoOf` 组装（那里才有 [io.vaultix.model.VaultSummary]
@@ -1832,7 +1841,11 @@ private fun ItemsList(
                             isSelectionMode = selectedIds.isNotEmpty(),
                             isSelected = item.id in selectedIds,
                             // 缺省 true：新建刚可见、还没入队的那一瞬间不该闪一下「未同步」。
-                            synced = syncStates[item.id] ?: true,
+                            // KDBX 库传 null（不画云图标）—— 见 [cloudSyncBadgeOrNull]。
+                            synced = cloudSyncBadgeOrNull(
+                                vaultKind = vaultKind,
+                                syncedInVault = syncStates[item.id],
+                            ),
                             onToggleSelect = { onToggleSelect(item) },
                             onClick = { onOpenItem(item) },
                         )
@@ -2152,8 +2165,13 @@ private fun ItemRow(
     showIcon: Boolean,
     isSelectionMode: Boolean,
     isSelected: Boolean,
-    /** 该条目是否已同步上云（true = 云端最新，false = 本地待推送）。 */
-    synced: Boolean,
+    /**
+     * 该条目是否已同步上云（true = 云端最新，false = 本地待推送）。
+     *
+     * ⚠️ **只在 Bitwarden 库有意义**。KDBX 库请传 `null`（见 [cloudSyncBadgeOrNull]）——
+     * 它没有「云端待推送」这个概念，传 `true` 会被画成「已同步」的云朵，是编造状态。
+     */
+    synced: Boolean?,
     onToggleSelect: () -> Unit,
     onClick: () -> Unit,
 ) {
@@ -2214,6 +2232,45 @@ private fun ItemRow(
 }
 
 /**
+ * 条目行尾那朵云到底该不该画 —— 纯函数，可 JVM 单测。
+ *
+ * ## 起因（2026-11-10 真机反馈）
+ *
+ * > 本地 kdbx，没有上传云端。怎么条目显示上也有小云图标。这样不对。本地和云端应该有所区别。
+ *
+ * 根因是一条**默认值**串起来的三段：
+ *
+ * 1. `ItemRepository.observeSyncStates` 对 KDBX 恒返回空 map（**这是对的**，文件即存储）；
+ * 2. 读侧写的是 `syncStates[item.id] ?: true` —— 空 map 查不到任何 id ⇒ 每条都是 `true`；
+ * 3. 行尾**无条件**画 `CloudSyncIcon(synced = true)` ⇒ 一朵「已同步」的实心云。
+ *
+ * 而 `CloudSyncIcon` 自己的 KDoc 早就写着「⚠️ KDBX 库调用方**不要**渲染本组件」。
+ * 三处单看都对，串起来就编造了一个不存在的状态 —— 这正是本项目最忌讳的「静默欺骗」：
+ * 显示「已同步」比显示「未同步」更糟，因为**用户会据此认为已经备份好了**。
+ *
+ * ## 判据
+ *
+ * **「没有云同步这回事」必须用 `null` 表达，不能用 `true`。**
+ * `true` 是「有云、且是最新的」；`null` 是「没有云这个概念」。
+ * 两者在 UI 上都是「不报警」，但在语义上一个是"确认过"，一个是"不适用" ——
+ * 一旦把它们合并成一个布尔，KDBX 就必然被画上云。
+ *
+ * | 库类型 | 条目在 `syncStates` 里 | 返回 | 行尾 |
+ * |---|---|---|---|
+ * | KDBX（本地 / 网盘都是） | 永远查不到（空 map） | `null` | 不画 |
+ * | Bitwarden | `false`（待推送） | `false` | 云加斜杠（error 色） |
+ * | Bitwarden | `true` / 查不到（刚建、还没入队） | `true` | 实心云（弱化色） |
+ *
+ * ⚠️ KDBX **网盘库**同样不画：KDBX 是**整文件**同步，没有「某一条上云了」的概念，
+ *    库级状态由 `DetailSyncIndicator` 表达。条目级云图标在这里画出来一律是假的。
+ *
+ * @param vaultKind 当前库类型；`null`（还没加载出来）按 KDBX 处理 ——
+ *   宁可少画一个图标，也不要在加载瞬间闪一朵假云。
+ */
+internal fun cloudSyncBadgeOrNull(vaultKind: VaultKind?, syncedInVault: Boolean?): Boolean? =
+    if (vaultKind == VaultKind.BITWARDEN) syncedInVault ?: true else null
+
+/**
  * 条目卡片第二行（对齐 Bastion `PasswordCardDisplayMode`）：
  * TitleOnly 不显示；All 显示用户名、没用户名则显示类型徽标；TitleUsername 只显示用户名。
  */
@@ -2254,7 +2311,8 @@ private fun ItemRowTrailing(
     item: VaultItem,
     isSelectionMode: Boolean,
     isSelected: Boolean,
-    synced: Boolean,
+    /** null = 这个库没有云同步这回事 ⇒ 不画云图标（见 [ItemRow] 的说明）。 */
+    synced: Boolean?,
     onToggleSelect: () -> Unit,
 ) {
     if (isSelectionMode) {
@@ -2269,7 +2327,13 @@ private fun ItemRowTrailing(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         // 云端同步状态（待推送 = 云加斜杠，error 色跳出来）。
-        CloudSyncIcon(synced = synced)
+        //
+        // ⚠️ 2026-11-10 真机反馈「本地 kdbx 没有上传云端，条目上也有小云图标」：
+        //    此前这里是**无条件** `CloudSyncIcon(synced = synced)`，而 KDBX 库的
+        //    `syncStates` 恒为空 map（`observeSyncStates` 对 KDBX 直接返回 emptyMap），
+        //    读侧 default 到 true ⇒ 每条本地条目都挂了一朵「已同步」的云。
+        //    组件自己的 KDoc 早就写着「KDBX 调用方不要渲染本组件」，是调用处没守。
+        synced?.let { CloudSyncIcon(synced = it) }
         // 收藏星标（对齐 Bitwarden：收藏条目在行尾点一颗星，
         // 不必进详情也能一眼把常用项从整库里挑出来）。
         if (item.favorite) {
