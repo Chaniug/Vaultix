@@ -24,6 +24,34 @@
 - 已接进 CI：`ci-debug.yml` 的 `sandbox-tests` job 用**同一份脚本**，与 `android-ci` 并行
   ⇒ 本地绿 ⇒ CI 不会红在同一件事上。
 
+## 🕐 最新状态（2026-11-10 深夜 · 一轮 4 点观感整改：按钮强调 / 中文应用名 / 图标徽标 / 卡包造型）
+
+> **一句话**：用户凭观感点名的「主题模式关闭按钮不对」，根因是**强调级别用反**；
+> 顺着「顺带查一下」查出 7 处同类 + 1 处槽位反了 + 1 处弹窗固定高度；
+> 另三点分别是「名字本来就有，只是没人读」「状态不必写字」「两类语义别共用一张卡」。
+
+| # | 用户看到 | 根因 / 处理 |
+|---|---|---|
+| [#275](./issues/06-界面与交互-part16.md) | 主题模式「关闭」按钮不对 | M3 动作区 `TextButton < OutlinedButton < Button`，收起动作却用了带框的中等强调 ⇒ 全仓 7 处改 `DialogTextButton`；`PasskeysScreen` 的「删除 / 关闭」槽位纠正；`LoginPickerDialog` 固定 `height(240.dp)` 改 `heightIn(max)` |
+| [#275](./issues/06-界面与交互-part16.md) | 关联应用显示 `com.tdx.AndroidNew` | 库里本来就有 `appName=通达信`，只是没人读 ⇒ 新增 `AppLabel`：自定义字段 → `PackageManager` label → 包名 三级兜底；有包名字段时**必须与当前包名一致**才用名字（防多应用串名） |
+| [#275](./issues/06-界面与交互-part16.md) | 「已绑定」占标题行 | 文字 chip ⇒ `26.dp` 圆形 `Link` / `Timer` 图标徽标；保留 `contentDescription`、不挂 `IconButton`（会抢 ⋮ 菜单触摸区） |
+| [#275](./issues/06-界面与交互-part16.md) | 银行卡 / 个人信息都只是列表行 | ⇒ 银行卡 `aspectRatio(1.7f)` 深色实体卡（渐变按 id 稳定挑选、不跟随主题）、个人信息 `2.45f` 浅色名片；**语义不同不共用 `EntryCard`** |
+
+### 三条判据
+
+1. **控件的视觉权重必须匹配语义权重**：`confirmButton` 是 M3 该重载的**必需参数**（只给
+   `dismissButton` 会解析到 `content` 重载、编译失败）；想降观感改 `TextButton`，别挪槽位。
+   真正无动作区要 `BasicAlertDialog`，不是留一个空的 `dismissButton = { }`。
+2. **语义不同就不共用容器 / 造型**（8.4 已有判据的反向应用）：卡与名片、应用与网址同理。
+3. **省像素不能省语义**：图标替文字必留 `contentDescription`；纯状态徽标不挂点击语义。
+   另：`remember` 按**调用位置**分组，循环里逐条 `remember` 会互相覆盖 —— 列表要一次性算好。
+
+> 实证：`f94efeb1`；全量 **1730** 条单测 0 失败（+9：`AppLabelTest` 6 + `DialogStyleRulesTest` 3）
+> + detekt + 15 个静态门禁 + `Android CI (Debug)` run `42819017944` 双 job 绿。
+> 变异验证：把主题模式按钮临时改回 `DialogOutlinedActionButton` ⇒ 对应门禁恰好变红。
+> 顺带校正了 06 主篇「分篇索引」表里 part15 的滞后值（原写 #271 / 1 条 / 5.1KB，
+> 实为 #271~#273 / 2 条 / 10.4KB）—— 又是「同一事实存两份」。
+
 ## 🕐 最新状态（2026-11-10 深夜 · OneDrive 库「不能同步」+ 绿灯消失）
 
 > **一句话**：两个症状是**两个互不相干的缺陷**，都只打网盘库 —— 本地库全程正常，
