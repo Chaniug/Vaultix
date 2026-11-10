@@ -21,6 +21,7 @@ import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreVert
@@ -114,6 +115,8 @@ fun VaultManagementScreen(
     onAddCloudVault: () -> Unit = {},
     /** 「网盘账号」（导航到 OneDrive / WebDAV 的账号与凭据管理，定稿 §11.7）。 */
     onOpenCloudAccounts: () -> Unit = {},
+    /** 本地 KDBX 的 ⋮ →「放到网盘」引导页（2026-11-10；只给方法，不代搬文件）。 */
+    onOpenKdbxCloudGuide: () -> Unit = {},
     /** 点一个**未解锁**的库时，去它的解锁页输主密码。 */
     onOpenLockedVault: (String) -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel(),
@@ -180,6 +183,7 @@ fun VaultManagementScreen(
                                 },
                                 onLock = { vaultActions.lock(vault) },
                                 onSync = { vaultActions.sync(vault) },
+                                onMoveToCloud = onOpenKdbxCloudGuide,
                                 onSignOut = { vaultActions.requestSignOut(vault) },
                                 onRemove = { vaultActions.requestRemove(vault) },
                             ),
@@ -270,6 +274,13 @@ private class VaultRowActions(
     val onSetDefault: () -> Unit,
     val onLock: () -> Unit,
     val onSync: () -> Unit,
+    /**
+     * 「放到网盘…」：打开引导页（2026-11-10）。
+     *
+     * ⚠️ 它**不是**一次迁移：只讲三步，不碰文件。命名用 `onMoveToCloud` 是为了
+     *    和菜单文案对应；真做迁移的那天，这个回调应该换成另一个名字（别再往里塞逻辑）。
+     */
+    val onMoveToCloud: () -> Unit,
     val onSignOut: () -> Unit,
     val onRemove: () -> Unit,
 )
@@ -397,6 +408,19 @@ private fun VaultActionMenu(
                 actions.onLock()
             },
         )
+        // ★ 2026-11-10：本地 KDBX 的「放到网盘…」—— 它进的是**说明页**，
+        //   不是"立即上传"（理由见 `KdbxCloudGuideScreen` 的 KDoc）。
+        //   放在「退出」之前：同属非破坏性动作，且比"移除"更常用。
+        if (vault.canMoveToCloud()) {
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.vault_action_move_to_cloud)) },
+                leadingIcon = { Icon(Icons.Filled.CloudUpload, contentDescription = null) },
+                onClick = {
+                    onDismiss()
+                    actions.onMoveToCloud()
+                },
+            )
+        }
         if (vault.canSignOutOfDevice()) {
             DropdownMenuItem(
                 text = { Text(stringResource(R.string.vault_action_signout)) },

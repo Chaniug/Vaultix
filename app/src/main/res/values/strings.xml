@@ -379,10 +379,11 @@
          后三项是**安全与隐私**，不是"解锁"——旧名只覆盖了前两项。
          ⚠️ group_vaults 仍被密码库管理二级页用作顶栏标题，故保留。 -->
     <string name="group_vault_unlock">密码库与安全</string>
-    <!-- ★ 2026-11-08「显示与填充」→「外观与填充」：组内是主题/取色/纯黑/底栏/条目显示
-         这类**外观**选项，加一个"自动填充设置"入口。"显示"在这里是动词，容易读成
-         "显示与填充（文字）"，改成"外观"后与内容一一对应。 -->
-    <string name="group_appearance">外观与填充</string>
+    <!-- ★ 2026-11-10「外观与填充」→「外观与自定义」：自动填充已移入「密码库与安全」组
+         （它是"库怎么用出去"，不是"界面长什么样"），组内只剩主题/取色/纯黑/底栏/条目显示
+         这类纯观感项。旧名里的"填充"是为了安置自动填充才加的兼职，现在不必再兼职。
+         沿革：「显示与填充」(2026-09-15) →「外观与填充」(2026-11-08) → 本名。 -->
+    <string name="group_appearance">外观与自定义</string>
     <string name="group_data">数据</string>
     <string name="permission_management_title">权限管理</string>
     <!-- ★ 2026-11-08：原文「看看这个应用要什么权限、拿去做什么」——
@@ -431,8 +432,9 @@
     <string name="action_clear">清除</string>
     <!-- 开发者模式（仅 debug 构建可见，2026-09-21）。
          ⚠️ 日志只含**本应用进程**的条目（Android 4.1+ 无 READ_LOGS 时只能读自己的），
-         跨进程/系统组件的日志仍须用 adb —— 界面上那句 scope_hint 就是讲这件事。 -->
-    <string name="group_developer">开发者</string>
+         跨进程/系统组件的日志仍须用 adb —— 界面上那句 scope_hint 就是讲这件事。
+         ⚠️ 2026-11-10：`group_developer`（「开发者」组标题）**已删除** ——
+            开发者两行并入「关于」卡，不再有独立组标题。不要因为"以前在"就加回来。 -->
     <string name="developer_logs_entry">查看与导出日志</string>
     <string name="developer_logs_entry_desc">排查问题时给开发者看（仅 debug 构建可见）</string>
     <string name="developer_logs_title">开发者日志</string>
@@ -574,7 +576,9 @@
     <string name="manual_fill_copy_username">复制用户名</string>
     <string name="manual_fill_copy_totp">复制验证码</string>
     <string name="manual_fill_copied_username">已复制「%1$s」的用户名</string>
-    <string name="about_version">版本</string>
+    <!-- ★ 2026-11-10「版本」→「版本与更新」：点击这一行**就是**检查更新，
+         旧标题只答了"看版本号"，用户找不到检查入口。 -->
+    <string name="about_version">版本与更新</string>
     <!-- ★ 2026-09-28 精简：原「权限管理」+「版本」+「检查更新」+「源码与反馈」+「开源许可」
          五行，压成两行 —— 版本行（点击即检查更新）+ 「关于 Vaultix」入口（二级页）。
          本批新增的字符串全部服务于这个新结构；被合并掉的旧串（about_source /
@@ -1702,6 +1706,33 @@
     <string name="vault_action_lock">锁定</string>
     <string name="vault_action_sync">同步</string>
     <string name="vault_action_signout">退出</string>
+    <!-- ★ 2026-11-10：本地 KDBX 的「放到网盘」入口（⋮ 菜单）。
+         ⚠️ 只出现在**本地** KDBX 上 —— 网盘库已经在那儿了，Bitwarden 库没有"文件"可搬。
+         省略号表示"打开一页说明"，不是立刻执行（本功能刻意不代搬文件）。 -->
+    <string name="vault_action_move_to_cloud">放到网盘…</string>
+
+    <!--
+       ================================================================
+       本地 KDBX → 网盘 引导页（2026-11-10）
+
+       用户问「本地的 kdbx 如何接入到 onedrive」。技术上能上传，但"搬库"要迁移
+       origin / 库 id / 加密信封 / 指纹与 PIN，风险大于省下的两步 ⇒ 只做引导页。
+       文案基调：**说明**，不是**催促**；不承诺任何自动动作。
+       ================================================================
+    -->
+    <string name="kdbx_cloud_guide_title">放到网盘</string>
+    <string name="kdbx_cloud_guide_intro">本地 .kdbx 只是一个文件，只有这台设备能打开。把它放到 OneDrive 或 WebDAV 上，多台设备就能共用同一份库。</string>
+    <string name="kdbx_cloud_guide_steps">三步</string>
+    <string name="kdbx_cloud_guide_step_upload_title">上传文件</string>
+    <string name="kdbx_cloud_guide_step_upload_desc">用 OneDrive 或 WebDAV 的客户端，把本机这个 .kdbx 传上去。</string>
+    <string name="kdbx_cloud_guide_step_add_title">从网盘添加</string>
+    <string name="kdbx_cloud_guide_step_add_desc">密码库管理 → 添加密码库 → 从网盘打开，选中刚上传的那份。</string>
+    <string name="kdbx_cloud_guide_step_unlock_title">输入同一个主密码</string>
+    <string name="kdbx_cloud_guide_step_unlock_desc">主密码与条目都不用重来；用了密钥文件的，新设备也要能选到它。</string>
+    <string name="kdbx_cloud_guide_why_title">为什么不自动搬</string>
+    <string name="kdbx_cloud_guide_why_body">库的身份、已经登记的指纹与 PIN 都绑在这个文件的位置上。自动搬会牵动解锁凭据，风险远大于省下的两步。所以这里只给方法，不替你动文件。</string>
+    <string name="kdbx_cloud_guide_actions">接下来</string>
+    <string name="kdbx_cloud_guide_footer">本机这份旧文件不会自动删除。确认新库能打开、条目都在之后，再自己处理它。</string>
     <string name="vault_status_locked">已锁定</string>
     <string name="vault_status_unlocked">已解锁</string>
     <!-- 退出：清本机缓存与凭据，远程不动。⚠️「需重新登录」必须写明 —— 那是用户最想知道的后果。 -->

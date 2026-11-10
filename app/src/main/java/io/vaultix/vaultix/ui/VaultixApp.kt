@@ -45,6 +45,7 @@ import io.vaultix.vaultix.ui.settings.AboutAppScreen
 import io.vaultix.vaultix.ui.settings.AutofillSettingsScreen
 import io.vaultix.vaultix.ui.settings.ConversionScreen
 import io.vaultix.vaultix.ui.settings.ImportExportScreen
+import io.vaultix.vaultix.ui.settings.KdbxCloudGuideScreen
 import io.vaultix.vaultix.ui.settings.SettingsScreen
 import io.vaultix.vaultix.ui.settings.UnlockMethodScreen
 import io.vaultix.vaultix.ui.settings.CloudAccountsScreen
@@ -517,8 +518,19 @@ private fun NavGraphBuilder.settingsGraph(navController: NavHostController) {
             onAddKdbxVault = { navController.navigate(AddKdbxRoute()) },
             onAddCloudVault = { navController.navigate(AddCloudVaultRoute) },
             onOpenCloudAccounts = { navController.navigate(CloudAccountsRoute) },
+            // 本地 KDBX 的 ⋮ →「放到网盘」引导页（2026-11-10）。只给方法，不代搬文件。
+            onOpenKdbxCloudGuide = { navController.navigate(KdbxCloudGuideRoute) },
             // 点未解锁的库 → 去解锁页（2026-09-15 修的空白页 bug，语义不能退化）。
             onOpenLockedVault = { vaultId -> navController.navigate(UnlockRoute(vaultId)) },
+        )
+    }
+    // 「把本地 KDBX 放到网盘」引导页（2026-11-10）：两步出口都复用现成路由 ——
+    // 本页不自己实现登录 / 选文件，避免第三套流程。
+    composable<KdbxCloudGuideRoute> {
+        KdbxCloudGuideScreen(
+            onBack = { navController.popBackStack() },
+            onOpenCloudAccounts = { navController.navigate(CloudAccountsRoute) },
+            onAddCloudVault = { navController.navigate(AddCloudVaultRoute) },
         )
     }
     composable<CloudAccountsRoute> {

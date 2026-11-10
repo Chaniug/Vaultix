@@ -83,7 +83,7 @@ private enum class LogLevelFilter(val labelRes: Int) {
 }
 
 /**
- * **开发者模式 · 日志查看与导出**（仅 debug 构建可达，入口见 `SettingsScreen` 的 `DeveloperSection`）。
+ * **开发者模式 · 日志查看与导出**（仅 debug 构建可达，入口见 `SettingsScreen` 的「关于」卡底部 `DeveloperRows`）。
  *
  * ## ⚠️ 能力边界（必须知道，否则会误判）
  *

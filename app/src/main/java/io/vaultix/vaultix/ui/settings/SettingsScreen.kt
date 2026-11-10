@@ -104,19 +104,29 @@ import io.vaultix.vaultix.util.UpdateChecker
  *
  * | 组 | 内容 |
  * |---|---|
- * | 密码库与安全 | 密码库管理 · 锁与安全 · 防截屏 · 剪贴板自动清除 · 权限管理 |
- * | 外观与填充 | 主题模式 · 动态取色 · 纯黑背景 · 条目显示 · 自动填充设置 |
- * | 数据 | 导入与导出 · 回收站清理 · **退出数据库**（error 色，置底） |
- * | 关于 | 权限管理 · 版本 · **检查更新** · 源码与反馈 · 开源许可 |
+ * | 密码库与安全 | 密码库管理 · 锁与安全 · 防截屏 · 剪贴板自动清除 · 自动填充 · 权限管理 |
+ * | 外观与自定义 | 主题模式 · 动态取色 · 纯黑背景 · 液态玻璃底栏 · 条目显示选项 |
+ * | 数据 | 导入与导出 · 回收站清理 |
+ * | 关于 | 版本与更新 · 关于 Vaultix ·（**仅 debug**）日志 · 保持不锁 |
  *
  * 组内顺序原则：入口类在前、开关类居中、**破坏性动作置底**。
- * 结构与文案的来龙去脉见 `.ai/decisions/设置页信息架构-定稿.md`（**别重新设计分组**）。
+ * 结构与文案的来龙去脉见 `.ai/decisions/设置页信息架构-定稿.md`
+ * （**别按自己的审美重新分组**；2026-11-10 的第六轮修订见该文档 §14）。
  *
- * 2026-09-16 的两处改动（详见各组的 KDoc）：
- * 1. 原「密码库」只剩一个入口行却独占组标题 ⇒ 并入「解锁与隐私」成「**密码库与安全**」；
- * 2. 从 Bastion 搬来「**检查更新**」（[UpdateChecker]）：查 GitHub Releases 并给发布页链接。
+ * ## 2026-11-10 第六轮（用户真机反馈：「有哪些设置是零散在各处的」）
  *
- * 行与选择器交互范式参考 Bastion 设置页。
+ * | 改动 | 理由 |
+ * |---|---|
+ * | 「自动填充」从外观组移入本组 | 它是**库怎么用出去**，不是"界面长什么样"。旧组名「外观与填充」是为了把这个错位说圆才起的名字 |
+ * | 「外观与填充」→「**外观与自定义**」 | 组内回到纯观感项，名字不再需要兼职 |
+ * | 「开发者」组并入「关于」卡 | 两组都只剩 2 行、又都答"这个 App 是什么 / 出问题怎么办"，两个组标题只是把页尾切碎 |
+ * | 「版本」→「**版本与更新**」 | 点击这一行**就是**检查更新，旧标题让人以为只是看版本号（可发现性） |
+ *
+ * ⚠️ **没有**做的两件事（不是漏掉）：
+ * - 「防截屏」「剪贴板」**不**下沉进「锁与安全」页：它们是隐私承诺的**可见证据**，
+ *   放在首页比藏一层更能让人放心；
+ * - 「条目显示」「回收站清理」在条目页 / 回收站页**各有一个入口**：那是同一份偏好的
+ *   就地快捷方式（同一个弹层 / 同一个对话框），不是第二套实装。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -231,7 +241,7 @@ fun SettingsScreen(
             // 顶栏下方留一条死区（「不沉浸」）；Spacer 会随内容一起滚走。
             Spacer(modifier = Modifier.height(barPadding))
             // ---- 密码库与安全（活跃库 = 全局单一真源，详见 VaultUnlockSection 的 KDoc）----
-            // 本组现在是**入口区**：库管理 / 锁与安全（门锁 + 自动锁定）/ 防截屏 / 剪贴板 / 权限。
+            // 本组现在是**入口区**：库管理 / 锁与安全（门锁 + 自动锁定）/ 自动填充 / 防截屏 / 剪贴板 / 权限。
             // ⚠️ 2026-09-30 晚：「自动锁定」**搬进「锁与安全」页**（它是锁的超时），
             //    本页相应少一行 —— 见 [UnlockMethodScreen] 的 KDoc。
             VaultUnlockSection(
@@ -240,18 +250,19 @@ fun SettingsScreen(
                 onOpenVaultManagement = onOpenVaultManagement,
                 onOpenUnlockMethod = onOpenUnlockMethod,
                 onClipboardClear = { showClipboardDialog = true },
+                // ★ 2026-11-10：自动填充从「外观与填充」移入本组（见类 KDoc 的改动表）。
+                onOpenAutofillSettings = onOpenAutofillSettings,
                 // ★ 2026-09-28：权限管理从「关于」移入本组（见 VaultUnlockSection 的注释）。
                 onOpenPermissions = onOpenPermissions,
             )
 
-            // ---- 外观与填充（自动填充入口已并入，原单行组）----
+            // ---- 外观与自定义（2026-11-10：自动填充已移出，组内只剩纯观感项）----
             DisplaySection(
                 viewModel = viewModel,
                 dynamicColor = state.dynamicColor,
-                onOpenAutofillSettings = onOpenAutofillSettings,
             )
 
-            // ---- 数据（导入导出 / 回收站清理 / 退出数据库）----
+            // ---- 数据（导入导出 / 回收站清理）----
             DataSection(
                 viewModel = viewModel,
                 onOpenImportExport = onOpenImportExport,
@@ -282,12 +293,11 @@ fun SettingsScreen(
                     updateError = null
                     showUpdateDialog = true
                 },
+                // ★ 2026-11-10：开发者两行并入「关于」卡（用户要求「关于与开发者放一块」）。
+                //   release 包由 AboutSection 内部按 BuildConfig.DEBUG 拦掉，连分隔线都不画。
+                viewModel = viewModel,
+                onOpenLogs = { showDeveloperLogs = true },
             )
-            // ★ 2026-09-21：开发者模式入口，**仅 debug 构建渲染**。
-            // release 包连入口都不出现 —— 不误导用户，也不多一条可达路径。
-            if (BuildConfig.DEBUG) {
-                DeveloperSection(viewModel = viewModel, onOpenLogs = { showDeveloperLogs = true })
-            }
             Spacer(Modifier.height(Spacing.xxl))
             // 底部留出叠层悬浮底栏的高度（顶部的让位见上方 Spacer(barPadding)）：
             // 底栏改成叠层后内容铺到屏幕底，最后一项不再被胶囊压住。
@@ -672,6 +682,8 @@ private fun VaultUnlockSection(
     /** ★ 2026-09-30 晚：「锁与安全」已是**独立页**（此前与库管理页同址）。 */
     onOpenUnlockMethod: () -> Unit,
     onClipboardClear: () -> Unit,
+    /** ★ 2026-11-10：自动填充入口移入本组（原先在外观组，见 [SettingsScreen] 类 KDoc）。 */
+    onOpenAutofillSettings: () -> Unit,
     onOpenPermissions: () -> Unit,
 ) {
     val active by viewModel.activeVault.collectAsStateWithLifecycle()
@@ -728,6 +740,16 @@ private fun VaultUnlockSection(
             title = stringResource(R.string.setting_clipboard_clear),
             subtitle = clipboardClearLabel(state.clipboardClearMs),
             onClick = onClipboardClear,
+        )
+        SettingsDivider()
+        // ★ 2026-11-10：从「外观与填充」移入本组。自动填充是**库怎么用出去**，
+        //   与主题 / 取色 / 纯黑不是一类；旧组名「外观与填充」正是为了迁就它才起的。
+        //   放在剪贴板之后：两者都是"数据离开 App 的方式"（复制 / 填写）。
+        SettingsRow(
+            icon = { Icon(Icons.Filled.Password, contentDescription = null) },
+            title = stringResource(R.string.autofill_settings_entry),
+            subtitle = stringResource(R.string.autofill_settings_entry_desc),
+            onClick = onOpenAutofillSettings,
         )
         SettingsDivider()
         // ★ 2026-09-28：从「关于」组移入本组（用户拍板）。
@@ -805,6 +827,20 @@ private fun unlockMethodSubtitle(
  * ⚠️ 参数里**没有** `onShowLicense` / `context`（2026-09-28 删）：许可对话框已随
  * 「源码与反馈 + 开源许可 → 关于一行」的合并搬进 [AboutAppScreen]。它们留在这里
  * 就是两个**无人使用**的参数，detekt `UnusedParameter` 会拦。
+ *
+ * ## ★ 2026-11-10 第六轮：开发者两行**并入本卡**
+ *
+ * 用户原话：「关于与开发者设置这些放一块」。此前是「关于」2 行 +「开发者」2 行、
+ * 两个组标题并排在页尾 —— 在 debug 包（正是天天在用的那个）里，两个标题只是把
+ * 本来就不长的页尾切得更碎。合并后 debug 是 4 行一张卡，release 仍是 2 行（整段不渲染）。
+ *
+ * ⚠️ 这**推翻**了「开发者」当初"语义不同就该分开"的理由。理由本身没消失，
+ * 只是被更强的理由盖过：**两个 2 行组并排**比"语义纯度"更伤扫读。真要让它们分开，
+ * 得先让任一组长到 ≥4 行 —— 现在没有。
+ *
+ * ⚠️ 版本行标题 2026-11-10 从「版本」改为「**版本与更新**」：这一行点击**就是**检查更新，
+ * 旧标题只答了"看版本号"，用户找不到检查入口（`AboutAppScreen` 的 KDoc 里也记着
+ * "检查更新是高频动作"——高频动作更不该藏）。
  */
 @Composable
 private fun AboutSection(
@@ -812,6 +848,8 @@ private fun AboutSection(
     buildNumber: Int,
     onOpenAbout: () -> Unit,
     onCheckUpdate: () -> Unit,
+    viewModel: SettingsViewModel,
+    onOpenLogs: () -> Unit,
 ) {
     SettingsGroupTitle(stringResource(R.string.group_about))
     SettingsGroupCard {
@@ -853,16 +891,22 @@ private fun AboutSection(
             subtitle = stringResource(R.string.about_entry_desc),
             onClick = onOpenAbout,
         )
+        // ★ 2026-11-10：开发者两行并入同一张卡（见上方 KDoc）。
+        // ⚠️ release 包连分隔线都不画 —— `BuildConfig.DEBUG` 是编译期常量，
+        //    R8 会把整段裁掉，不存在"多一条可达路径"。
+        if (BuildConfig.DEBUG) {
+            SettingsDivider()
+            DeveloperRows(viewModel = viewModel, onOpenLogs = onOpenLogs)
+        }
     }
 }
 
 /**
- * 开发者组（**仅 debug 构建**渲染，2026-09-21）。
+ * 「关于」卡底部的**开发者行**（**仅 debug 构建**渲染，2026-09-21；2026-11-10 并入关于卡）。
  *
- * 为什么单独成组、不并进「关于」：两者回答的是不同的问题 ——
- * 「关于」答"这个 App 是什么"，「开发者」答"出问题时怎么办"。
- * 混在一起会让"关于"里出现一个与元信息无关的可点项，且 release 包整组都会消失，
- * 语义上分开更干净。
+ * 原先是独立的一组（带自己的组标题与卡片）。合并理由见 [AboutSection] 的 KDoc：
+ * 用户要求「关于与开发者放一块」，而两个 2 行组并排只会把页尾切碎。
+ * 本函数现在只负责**行**，标题与外壳由 [AboutSection] 提供。
  *
  * ## 2026-10-30：收纳「开发时别老弹指纹」这件事
  *
@@ -879,54 +923,51 @@ private fun AboutSection(
  * 副标题直接写明"正式版没有这一行"，避免被当成产品档位。
  */
 @Composable
-private fun DeveloperSection(
+private fun DeveloperRows(
     viewModel: SettingsViewModel,
     onOpenLogs: () -> Unit,
 ) {
     val relaxScreenLock by viewModel.devRelaxScreenLock.collectAsStateWithLifecycle()
-    SettingsGroupTitle(stringResource(R.string.group_developer))
-    SettingsGroupCard {
-        SettingsRow(
-            icon = { Icon(Icons.Filled.Build, contentDescription = null) },
-            title = stringResource(R.string.developer_logs_entry),
-            subtitle = stringResource(R.string.developer_logs_entry_desc),
-            onClick = onOpenLogs,
-        )
-        SettingsDivider()
-        SettingsRow(
-            icon = { Icon(Icons.Filled.LockOpen, contentDescription = null) },
-            title = stringResource(R.string.developer_relax_lock_title),
-            // 副标题随开关变化 —— 说清"现在到底是什么行为"，而不是只描述开关本身。
-            // ⚠️ `== true` 而不是 `!= false`：`null`（偏好还没读出来）时按"与正式版一致"说，
-            //    与下面开关的占位态一致 —— 占位期点击等于"打开"，文案不该先说"已关闭验证"。
-            subtitle = if (relaxScreenLock == true) {
-                stringResource(R.string.developer_relax_lock_desc_relaxed)
-            } else {
-                stringResource(R.string.developer_relax_lock_desc_normal)
-            },
-            trailing = {
-                SettingsSwitch(
-                    value = relaxScreenLock,
-                    // ★ 2026-10-30 修正（#213）：**不要再取反**。
-                    //   `Switch` 回调传进来的已经是"新值"（即 `!checked`），
-                    //   这里若写成 `setDevRelaxScreenLock(!relax)`，语义上又把偏好
-                    //   当成"是否要验证"，两个负号相消 ⇒ 每次点击都写回**旧值**，
-                    //   开关永远停在原位（用户报的"始终是打开状态"就是这么来的）。
-                    //   现在偏好与开关同向（true = 保持不锁），直接透传即可。
-                    onCheckedChange = viewModel::setDevRelaxScreenLock,
-                )
-            },
-        )
-    }
+    SettingsRow(
+        icon = { Icon(Icons.Filled.Build, contentDescription = null) },
+        title = stringResource(R.string.developer_logs_entry),
+        subtitle = stringResource(R.string.developer_logs_entry_desc),
+        onClick = onOpenLogs,
+    )
+    SettingsDivider()
+    SettingsRow(
+        icon = { Icon(Icons.Filled.LockOpen, contentDescription = null) },
+        title = stringResource(R.string.developer_relax_lock_title),
+        // 副标题随开关变化 —— 说清"现在到底是什么行为"，而不是只描述开关本身。
+        // ⚠️ `== true` 而不是 `!= false`：`null`（偏好还没读出来）时按"与正式版一致"说，
+        //    与下面开关的占位态一致 —— 占位期点击等于"打开"，文案不该先说"已关闭验证"。
+        subtitle = if (relaxScreenLock == true) {
+            stringResource(R.string.developer_relax_lock_desc_relaxed)
+        } else {
+            stringResource(R.string.developer_relax_lock_desc_normal)
+        },
+        trailing = {
+            SettingsSwitch(
+                value = relaxScreenLock,
+                // ★ 2026-10-30 修正（#213）：**不要再取反**。
+                //   `Switch` 回调传进来的已经是"新值"（即 `!checked`），
+                //   这里若写成 `setDevRelaxScreenLock(!relax)`，语义上又把偏好
+                //   当成"是否要验证"，两个负号相消 ⇒ 每次点击都写回**旧值**，
+                //   开关永远停在原位（用户报的"始终是打开状态"就是这么来的）。
+                //   现在偏好与开关同向（true = 保持不锁），直接透传即可。
+                onCheckedChange = viewModel::setDevRelaxScreenLock,
+            )
+        },
+    )
 }
 
 /**
- * 外观与填充组（原「外观」+ 原「自动填充」入口，批次④对齐 Bastion 主题能力）：
- * 主题模式三态 + 动态取色 + 纯黑背景 + 条目显示 + 自动填充设置入口。
+ * 外观与自定义组（2026-11-10 由「外观与填充」改名，自动填充已移入安全组）：
+ * 主题模式三态 + 动态取色 + 纯黑背景 + 液态玻璃底栏 + 条目显示入口。
  *
- * 合并理由：这两类都是「**界面怎么呈现 / 怎么替你填**」，而「自动填充」原先只有
- * 一个二级页入口却独占一个组标题 —— 合并后每组 ≥2 行，消灭了两个语义重叠的小组
- * （定稿 §2③ / §3）。
+ * 组名理由：组内每一项都只回答「**界面长什么样**」—— 自己选的颜色、自己的背景、
+ * 自己列表的密度。旧名「外观与填充」里的"填充"是为了安置自动填充才加上的兼职，
+ * 它搬走之后组名也就不必再兼职（用户 2026-11-10 原话：「外观一些自定义什么的放一块」）。
  *
  * 状态在 ViewModel 单独流上（不进 [SettingsViewModel.UiState]，避免六流 combine 的
  * Array 转型噪音）；切换主题立即生效（MainActivity 收集）。
@@ -936,7 +977,6 @@ private fun DisplaySection(
     viewModel: SettingsViewModel,
     /** null = 偏好尚未读出（见 [SettingsViewModel.UiState.dynamicColor]）。 */
     dynamicColor: Boolean?,
-    onOpenAutofillSettings: () -> Unit,
 ) {
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
     val oledPureBlack by viewModel.oledPureBlack.collectAsStateWithLifecycle()
@@ -1010,14 +1050,6 @@ private fun DisplaySection(
             title = stringResource(R.string.items_display_options),
             subtitle = stringResource(R.string.setting_display_options_desc),
             onClick = { showDisplayOptions = true },
-        )
-        SettingsDivider()
-        // 自动填充入口（二级页）—— 原先是只有一行的独立分组，现并入本组末尾。
-        SettingsRow(
-            icon = { Icon(Icons.Filled.Password, contentDescription = null) },
-            title = stringResource(R.string.autofill_settings_entry),
-            subtitle = stringResource(R.string.autofill_settings_entry_desc),
-            onClick = onOpenAutofillSettings,
         )
     }
 

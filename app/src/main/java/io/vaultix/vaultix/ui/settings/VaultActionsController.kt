@@ -13,6 +13,8 @@ import io.vaultix.domain.KdbxSyncRepository
 import io.vaultix.domain.VaultRepository
 import io.vaultix.domain.VaultSyncReport
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.common.KdbxSourceTarget
+import io.vaultix.vaultix.ui.common.kdbxSourceTargetOf
 import io.vaultix.vaultix.ui.vaultlist.SyncNotice
 import io.vaultix.model.VaultKind
 import io.vaultix.model.VaultSummary
@@ -319,6 +321,24 @@ internal fun VaultSummary.canSyncToRemote(): Boolean = !origin.startsWith(CONTEN
  * 给出两个名字只会让人以为它们是不同的操作。
  */
 internal fun VaultSummary.canSignOutOfDevice(): Boolean = kind == VaultKind.BITWARDEN
+
+/**
+ * 这个库有没有「放到网盘」这回事（2026-11-10）。
+ *
+ * | 库 | 有吗 | 为什么 |
+ * |---|---|---|
+ * | 本地 KDBX（`content://` / 畸形 origin） | ✅ | 它是唯一"只在本地"的形态 |
+ * | 网盘 KDBX（`onedrive:` / `webdav:`） | ❌ | 已经在上面了，菜单里再给一项是废话 |
+ * | Bitwarden | ❌ | 没有"文件"这个对象 |
+ *
+ * ⚠️ 判据用 [kdbxSourceTargetOf] 而不是 `origin.startsWith("content://")`：
+ *    后者是一个**只认识 content 的闭集** —— 将来加 `s3:` / `gdrive:` 之类来源时，
+ *    它会把那些已经在云上的库也判成"本地"（菜单里冒出"放到网盘"）。而
+ *    `kdbxSourceTargetOf` 是 origin 的唯一判别表，加新来源时只改那一处。
+ * ⚠️ 先判 `kind`：Bitwarden 的 origin 是服务器 URL，同样会落到 `LocalFile`。
+ */
+internal fun VaultSummary.canMoveToCloud(): Boolean =
+    kind == VaultKind.KDBX && kdbxSourceTargetOf(origin) == KdbxSourceTarget.LocalFile
 
 /** 本地 SAF 库 origin 的前缀（与 `KdbxFileSourceResolver` 的判别表一致）。 */
 private const val CONTENT_SCHEME = "content://"
