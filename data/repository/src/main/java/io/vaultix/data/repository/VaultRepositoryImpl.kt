@@ -13,6 +13,7 @@ import io.vaultix.data.kdbx.KdbxOpenError
 import io.vaultix.data.repository.kdbx.AdoptBaselineOutcome
 import io.vaultix.data.repository.kdbx.KdbxFileCache
 import io.vaultix.data.repository.kdbx.KdbxFileSourceResolver
+import io.vaultix.data.repository.kdbx.KdbxGraceLocks
 import io.vaultix.data.repository.kdbx.KdbxSyncTransitions
 import io.vaultix.data.repository.kdbx.adoptRemoteBaseline
 import io.vaultix.database.dao.CipherDao
@@ -36,7 +37,9 @@ import io.vaultix.domain.VaultSyncReport
 import io.vaultix.model.VaultKind
 import io.vaultix.model.VaultSummary
 import io.vaultix.model.KdbxCloudSyncStatus
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
@@ -123,6 +126,35 @@ class VaultRepositoryImpl @Inject constructor(
      */
     private val kdbxFileCache: KdbxFileCache,
 ) : VaultRepository {
+
+    /**
+     * 倒计时所在的 scope —— **应用级**，不是页面 / ViewModel 作用域。
+     *
+     * ⚠️ 用短生命周期 scope 会让倒计时在「切库 → 原页面销毁」的瞬间被取消
+     * ⇒ 其它 KDBX 库**永远不会被锁**，而且是静默的。这比「锁得太早」危险得多
+     * （锁早了只是慢，不锁是内存里的整库明文一直留着）。
+     */
+    @Suppress("InjectDispatcher")
+    private val kdbxLockScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    /**
+     * 切库后其它 KDBX 库的**宽限期**（2026-11-10，用户报「B/C 互锁 + 指纹解锁很慢」）。
+     *
+     * 判据没变（进的是 KDBX 才参与），变的只是**什么时候真的锁** —— 详见
+     * [KdbxGraceLocks] 的文件头：立刻锁会让「来回对比两个库」反复付一次
+     * OneDrive `stat` 往返 + Argon2 + 整库解析。
+     */
+    private val graceLocks = KdbxGraceLocks(
+        scope = kdbxLockScope,
+        onExpire = { vaultId ->
+            Kdbx.lock(vaultId)
+            // 与 `VaultSessionManager.lock` 同款收尾：密钥没了，查看锁标记也就失去意义。
+            // ⚠️ 只清**这一个库**。曾用 `clearAllViewLocks()`，会顺手抹掉其它库
+            //   （含 Bitwarden）的标记，表现是「刚锁上的库，切个库回来自己变成未锁了」。
+            sessions.clearViewLock(vaultId)
+            kdbxSessions.bump()
+        },
+    )
 
     override fun observeVaults(): Flow<List<VaultSummary>> =
         combine(vaultDao.observeAll(), sessions.unlockedIds, kdbxSessions.revisionFlow) { rows, unlocked, _ ->
@@ -366,19 +398,26 @@ class VaultRepositoryImpl @Inject constructor(
      * ⚠️ 取不到该行（库已被删）时**不锁**：没有"当前库"就无从判断是否多库常驻，
      *   而误锁的代价（每个 KDBX 库重跑一次 KDF）远大于少锁一次。真正的清理由
      *   `removeVault` / `signOut` 负责，不靠这条兜底。
+     *
+     * ## ★ 2026-11-10：执行时机改为**60 秒宽限期**
+     *
+     * 判据一个字没动，只是不再"立刻锁"。真机反馈：
+     *
+     * > 打开 C 的时候 B 会锁定，打开 B 的时候 C 会锁定……
+     * > OneDrive 上的库在被锁起来的时候，需要验证指纹解锁，速度就很慢。
+     *
+     * 因为立刻锁 = 丢会话 ⇒ 切回来要重付 `Kdbx.unlock` 全流程
+     * （OneDrive `stat` 往返 + Argon2 + 整库解析）。而「来回对比两个库」时
+     * 这个代价会被反复支付。宽限期把「库数量」上的硬约束换成了**时间维度**：
+     * 60 秒内允许最近两个库短暂并存，超时必锁。
+     * 详见 [KdbxGraceLocks] 的文件头。
      */
     override suspend fun lockOtherKdbxVaults(keepVaultId: String) {
         val keepKind = VaultKind.fromName(vaultDao.get(keepVaultId)?.kind)
         if (!shouldLockOtherKdbx(keepKind)) return
-        val toLock = Kdbx.unlockedIds().filter { it != keepVaultId }
-        if (toLock.isEmpty()) return
-        toLock.forEach { Kdbx.lock(it) }
-        kdbxSessions.bump()
-        // 与 VaultSessionManager.lock 同款收尾：密钥没了，查看锁标记也就失去意义。
-        // ⚠️ 只清**本次真正锁掉的那几个库**。原先是 `sessions.clearAllViewLocks()`，
-        // 会顺手抹掉其它库（例如 Bitwarden）的查看锁标记 —— 越权清理的表现是
-        // 「我明明刚把某个库锁上，切个库回来它自己变成未锁了」。
-        toLock.forEach { sessions.clearViewLock(it) }
+        // 撤销它自己的倒计时（宽限期内切回 ⇒ 会话还在 ⇒ 解锁瞬时），
+        // 给其余已解锁的 KDBX 排期。真正的锁定在 `graceLocks.onExpire` 里。
+        graceLocks.keep(keepVaultId, Kdbx.unlockedIds())
     }
 
     override fun isVaultUnlocked(vaultId: String): Boolean =
@@ -495,6 +534,9 @@ class VaultRepositoryImpl @Inject constructor(
         // 但那会阻塞 UI 线程做密钥清零；现在由调用方在自己的协程里挂起等待，
         // 语义更清晰（挂起点之后密钥必然已不可用），也不再有阻塞。
         sessions.lock(vaultId)
+        // 手动锁 / 超时锁 ⇒ 撤销可能存在的宽限期倒计时：此刻之后它就该是锁的，
+        // 不能等 60 秒后再来一遍（幂等，但会多一次无谓的 bump）。
+        graceLocks.cancel(vaultId)
         // KDBX 库的「密钥」是内存里的整库明文，锁库即丢弃（两条会话模型必须同时收）。
         Kdbx.lock(vaultId)
         kdbxSessions.bump()
@@ -515,6 +557,8 @@ class VaultRepositoryImpl @Inject constructor(
         // 之后任何「再想用快解开库」的路径都必须重新过一次门锁。
         houseKeyStore.lock()
         sessions.lockAll()
+        // 全锁 ⇒ 一切宽限期倒计时作废（它们到点要做的事已经做完了）。
+        graceLocks.cancelAll()
         Kdbx.lockAll()
         kdbxSessions.bump()
         // 同 lockVault：主动全锁 ⇒ 自动恢复信封删除（真锁定）。
@@ -536,6 +580,7 @@ class VaultRepositoryImpl @Inject constructor(
     override suspend fun signOut(vaultId: String) {
         // 1) 内存会话清零（此后 keyOf 为 null，条目列表立刻变空）
         sessions.lock(vaultId)
+        graceLocks.cancel(vaultId)
         Kdbx.lock(vaultId)
         // 退出数据库是「彻底忘记」的时机：派生密钥缓存也一并清（#246 第五批）。
         // 全局清会连带其它库，代价只是它们下次解锁多跑一次 KDF，正确性无损。
@@ -568,6 +613,7 @@ class VaultRepositoryImpl @Inject constructor(
     override suspend fun removeVault(vaultId: String) {
         // 1) 内存会话清零（幂等；随后 keyOf 即 null，UI 观察的 unlocked 状态随之消失）
         sessions.lock(vaultId)
+        graceLocks.cancel(vaultId)
         Kdbx.lock(vaultId)
         // 库都删了，不该再留着能解开它的派生密钥（#246 第五批）。
         Kdbx.forgetDerivedKeys()

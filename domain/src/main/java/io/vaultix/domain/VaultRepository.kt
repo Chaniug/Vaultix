@@ -55,7 +55,7 @@ interface VaultRepository {
     suspend fun unlockKdbxVault(vaultId: String, masterPassword: String): UnlockResult
 
     /**
-     * 切换活跃库时**锁定其它 KDBX 库**（内存只留一把密钥）。
+     * 切换活跃库时，**为其它 KDBX 库安排锁定**（内存只留一把密钥）。
      *
      * 为什么要主动锁：KDBX 的会话持有的是**整库明文**（比 Bitwarden 的一把对称密钥重得多），
      * 多库同时解锁会让「同时只能进一个库」的产品约束在内存层面失效。
@@ -64,6 +64,17 @@ interface VaultRepository {
      * Bitwarden 库并不让任何 KDBX 明文多出一份，锁它只换来"切回来重跑一次 KDF"。
      * 契约写在实现侧（`VaultRepositoryImpl.lockOtherKdbxVaults` 的 KDoc），
      * 这里说明是为了让调用方知道**可以放心在每次进库时调用**，不必自己判断库类型。
+     *
+     * ## ★ 2026-11-10：不再"立刻锁"，改为 60 秒宽限期
+     *
+     * 真机反馈「打开 C 时 B 锁定、打开 B 时 C 锁定，而且 OneDrive 库的指纹解锁很慢」。
+     * 立刻锁 = 丢会话 ⇒ 切回来要重付 `Kdbx.unlock` 全流程
+     * （OneDrive `stat` 往返 + Argon2 + 整库解析），而「来回对比两个库」会把这份代价
+     * 反复收一遍。宽限期把「库数量」上的硬约束换到**时间维度**：
+     * 60 秒内允许最近两个库短暂并存，超时必锁；手动锁 / 退出 / 删库仍然立即生效。
+     *
+     * ⇒ **本方法的返回值不再代表"已经锁完了"**。调用方若需要「立刻锁」，
+     *   走 [lockVault]（它会撤销该库的倒计时），不要依赖本方法。
      */
     suspend fun lockOtherKdbxVaults(keepVaultId: String)
 
