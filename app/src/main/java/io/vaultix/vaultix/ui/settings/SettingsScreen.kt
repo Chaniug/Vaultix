@@ -1,28 +1,19 @@
 package io.vaultix.vaultix.ui.settings
 
-import androidx.annotation.StringRes
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -35,24 +26,19 @@ import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.ViewAgenda
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.NewReleases
-import androidx.compose.material.icons.filled.Numbers
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Password
 import androidx.compose.material.icons.filled.Policy
-import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.Text
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.runtime.Composable
@@ -66,21 +52,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import com.mikepenz.markdown.m3.Markdown
-import io.vaultix.domain.PIN_MIN_LENGTH
 import io.vaultix.vaultix.BuildConfig
 import io.vaultix.vaultix.R
-import io.vaultix.vaultix.ui.common.BiometricPrompter
 import io.vaultix.vaultix.ui.common.deviceCanAuthenticate
 import io.vaultix.vaultix.ui.common.DialogCloseButton
 import io.vaultix.vaultix.ui.items.DisplayOptionsSheet
@@ -89,7 +68,6 @@ import io.vaultix.vaultix.ui.common.VaultixExpressiveTopBar
 import io.vaultix.vaultix.ui.common.rememberImmersiveBarPadding
 import io.vaultix.vaultix.ui.common.rememberScrollCollapseFraction
 import io.vaultix.vaultix.ui.common.TrashAutoDeleteDialog
-import io.vaultix.vaultix.ui.common.rememberFragmentActivity
 import io.vaultix.vaultix.ui.common.trashAutoDeleteLabel
 import io.vaultix.vaultix.ui.glass.isLiquidGlassBlurSupported
 import io.vaultix.vaultix.ui.theme.ThemeMode
@@ -241,9 +219,11 @@ fun SettingsScreen(
             // 顶栏下方留一条死区（「不沉浸」）；Spacer 会随内容一起滚走。
             Spacer(modifier = Modifier.height(barPadding))
             // ---- 密码库与安全（活跃库 = 全局单一真源，详见 VaultUnlockSection 的 KDoc）----
-            // 本组现在是**入口区**：库管理 / 锁与安全（门锁 + 自动锁定）/ 自动填充 / 防截屏 / 剪贴板 / 权限。
+            // 本组现在是**入口区**：库管理 / 锁与安全 / 防截屏 / 剪贴板 / 自动填充 / 权限。
             // ⚠️ 2026-09-30 晚：「自动锁定」**搬进「锁与安全」页**（它是锁的超时），
             //    本页相应少一行 —— 见 [UnlockMethodScreen] 的 KDoc。
+            // ⚠️ 组内顺序以 [VaultUnlockSection] 的 KDoc 为准，这里**不再复述一遍**：
+            //    同一份清单存两处，2026-11-10 移入自动填充时这两行就差点没跟上。
             VaultUnlockSection(
                 viewModel = viewModel,
                 state = state,
@@ -268,7 +248,7 @@ fun SettingsScreen(
                 onOpenImportExport = onOpenImportExport,
             )
 
-            // ---- 关于（权限管理已移入「密码库与安全」；2026-09-28 精简为 2 行）----
+            // ---- 关于（权限管理已移入「密码库与安全」；2026-11-10 起含 debug 专有的开发者两行）----
             AboutSection(
                 // ⚠️ **版本号这一行只放 versionName；内部版本号另起一行。**（2026-09-21 修订）
                 //
