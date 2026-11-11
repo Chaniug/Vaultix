@@ -41,10 +41,16 @@ import androidx.compose.ui.graphics.asComposeRenderEffect
  * | 31–32 | 模糊 → **饱和度增强** + `drawGlass` 的**绘制层**通透厚度 / 表面流光 / 镜面 rim |
  * | < 31 | 无模糊，`liquidGlassStyle` 已给不透明实色 |
  *
+ * ⚠️ **2026-11-11 第七轮（#281）：材质分档，AGSL 只属于液态玻璃**。
+ * 常态磨砂（[DockMaterial.Frosted]）走 [frostedRenderEffect]：只要「更大半径的模糊 +
+ * 饱和度」，**不编译、不挂 AGSL**，也没有按压 uniform 每帧更新。两档共用同一条
+ * 源→效果层链路，只是末端效果不同 —— 别在 `ui/shell` 另起一套采样。
+ *
  * ⚠️ **2026-11-11 第六轮：绘制层与 shader 分工，别再往 AGSL 里塞"表面反射"**。
  * #277/#278 把折射、色散、光晕全放进 33+ 的 AGSL，结果 31-32 点按时玻璃毫无反应，
  * 而光晕画在层 A（模糊背景）上还会被层 B 的实色填充盖掉一层。现在：
- * `drawOpticalBody` / `drawSurfaceSweep` 画在层 B，**31+ 全档可见**；
+ * `drawOpticalBody` / `drawSurfaceSweep` 画在层 B，**液态玻璃档 31+ 全档可见**
+ * （#281 起磨砂档刻意不画这两层，要的是均匀雾面）；
  * AGSL 只负责"透出来的内容"该怎么被折射、推开、分色、照亮。两层一表一里，不是重复。
  *
  * ⚠️ **2026-11-10 第四轮补的饱和度不是装饰，是玻璃能不能"透出内容"的关键**：
@@ -237,7 +243,21 @@ private fun saturatedBlur(blur: RenderEffect): RenderEffect = runCatching {
 private var opticsDisabled = false
 
 /**
- * 供 `liquidGlassBackdrop` 每帧取用的最终效果。
+ * 常态**磨砂**档的效果：只有「模糊 + 饱和度」，没有 AGSL（#281）。
+ *
+ * 与 [glassRenderEffect] 的前半段完全同构，刻意不抽成一个带布尔参数的函数：
+ * 后者已有 9 个实参，再加一个就撞 detekt `LongParameterList ≤8`。
+ * 抽成两个入口还顺带把「磨砂永不走 AGSL」变成编译期事实，不靠运行期分支。
+ *
+ * ⚠️ 饱和度仍然要：只模糊会把彩色条目洗成中性灰，磨砂就成了脏雾。
+ */
+internal fun frostedRenderEffect(blurRadiusPx: Float): ComposeRenderEffect? {
+    val blur = androidBlurEffect(blurRadiusPx) ?: return null
+    return saturatedBlur(blur).asComposeRenderEffect()
+}
+
+/**
+ * 供 `liquidGlassBackdrop` 每帧取用的最终效果（**液态玻璃专用**）。
  *
  * @param boundsInLayer 胶囊在 effectLayer 坐标系（= 源坐标系）里的矩形，像素。
  * @param cornerRadiusPx 药丸圆角，通常取胶囊高度的一半。

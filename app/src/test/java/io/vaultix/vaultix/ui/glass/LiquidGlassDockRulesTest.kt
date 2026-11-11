@@ -13,7 +13,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * 液态玻璃底栏的**九条可机检规范**（2026-11-10 第四轮建 1–6，#278 补 7，#280 补 8–9）。
+ * 液态玻璃底栏的**十条可机检规范**（第四轮建 1–6，#278 补 7，#280 补 8–9，#281 补 10）。
  *
  * 用户这轮反馈「点击效果和玻璃的效果都没有做完善，注意底栏的边界和大小」。
  * 对应的三类缺陷都是「编译过、detekt 查不到、真机上才看得出来」：
@@ -55,6 +55,8 @@ class LiquidGlassDockRulesTest {
             // #280 新增的两层「填充类」光学也必须沿 Outline，否则药丸两端会缺光。
             "drawOpticalBody",
             "drawSurfaceSweep",
+            // #281 沿轮廓的内阴影同理：用 drawRect 会让圆角两端缺暗部。
+            "drawInsetShadow",
         )
             .mapNotNull { name ->
                 val body = functionBody(source, name)
@@ -77,12 +79,13 @@ class LiquidGlassDockRulesTest {
     // ------------------------------------------------------------------ 规则 2
 
     /**
-     * **两种外观必须共用同一套形状与行布局。**
+     * **三档外观必须共用同一套形状与行布局。**
      *
      * #120 / #193 / #195 栽过三次「同一规则写两处、只改一处」：实色 `Surface` 与
-     * 玻璃 `LiquidGlassLayer` 若各自写 shape / 高度，改一处就会静默分叉。
+     * 两条 `LiquidGlassLayer` 分支（#281 的磨砂 / 液态玻璃）若各自写 shape / 高度，
+     * 改一处就会静默分叉。
      * `VaultixCorner.Pill` 至少 3 处（layer shape / shadow shape / Surface shape），
-     * `DockRow(` 至少 3 处（定义 + 两条分支各一次调用）。
+     * `DockRow(` 至少 3 处（定义 + 三条分支各一次调用）。
      */
     @Test
     fun `两种外观共用形状与行布局`() {
@@ -291,6 +294,60 @@ class LiquidGlassDockRulesTest {
         }
         assertTrue(
             "跟手 / 时序接线不完整：\n" + missing.joinToString("\n"),
+            missing.isEmpty(),
+        )
+    }
+
+    // ------------------------------------------------------------------ 规则 10
+
+    /**
+     * **常态磨砂必须与液态玻璃共用同一条采样链路，且跳过 AGSL。**
+     *
+     * #281 用户要「不开液态玻璃时，平常状态的底栏也能通透磨砂、隐约看到下方内容」。
+     * 三个最容易静默出错、编译与 detekt 都查不到的点：
+     *
+     * 1. 源层仍写成 `liquidGlassDock && isLiquidGlassBlurSupported()` ⇒ 关开关时
+     *    `contentLayer` 没登记，磨砂糊到的是**空背景**，真机表现为"底栏变灰了一块"；
+     * 2. 在 `ui/shell` 另起一套采样 / 另画半透明蒙层 ⇒ 与真模糊打架，
+     *    也重演 #120/#193/#195「同一规则写两处」；
+     * 3. 磨砂也走 [glassRenderEffect] ⇒ 每帧编译/更新 AGSL uniform，
+     *    而常态本该安静且零额外开销。
+     *
+     * 同时钉住 API < 31 的实色降级仍在 —— 半透明 + 无模糊 = 列表文字穿栏。
+     */
+    @Test
+    fun `常态磨砂共用采样链路且跳过AGSL`() {
+        val glass = glassSource("LiquidGlass.kt")
+        val optics = glassSource("LiquidGlassOptics.kt")
+        val source = glassSource("LiquidGlassSource.kt")
+        val dock = dockSource()
+        val shell = stripComments(File(uiDir, "shell/MainShellScreen.kt").readText())
+        val missing = buildList {
+            if (!glass.contains("enum class DockMaterial")) add("没定义两档材质")
+            if (!glass.contains("val opticsEnabled = material == DockMaterial.Liquid")) {
+                add("LiquidGlassLayer 没按材质决定是否走 AGSL")
+            }
+            if (!functionBody(glass, "drawGlass").contains("drawInsetShadow(")) {
+                add("drawGlass 没接 #281 的内阴影")
+            }
+            if (!dock.contains("dockMaterialOf(liquidGlass)")) add("底栏没按开关选材质")
+            if (!dock.contains("material == DockMaterial.Liquid")) add("液态玻璃分支没接上")
+            if (!dock.contains("material = DockMaterial.Frosted")) add("磨砂分支没接上")
+            if (!dock.contains("Surface(")) add("API<31 的实色降级分支丢了")
+            if (!optics.contains("frostedRenderEffect")) add("磨砂没有独立效果入口")
+            if (!source.contains("if (!opticsEnabled)")) add("backdrop 没按材质切效果")
+            if (!source.contains("frostedRenderEffect(blurRadiusPx = radiusPx)")) {
+                add("backdrop 没接磨砂效果")
+            }
+            if (!shell.contains("val glassSourceActive = isLiquidGlassBlurSupported()")) {
+                add("源层没对两档材质统一开启")
+            }
+            if (shell.contains("glassSourceActive = liquidGlassDock")) {
+                add("源层仍乘开关，关掉液态玻璃时磨砂会糊到空背景")
+            }
+        }
+        assertTrue(
+            "常态磨砂链路不完整：\n" + missing.joinToString("\n"),
             missing.isEmpty(),
         )
     }

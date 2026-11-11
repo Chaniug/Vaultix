@@ -24,6 +24,29 @@
 - 已接进 CI：`ci-debug.yml` 的 `sandbox-tests` job 用**同一份脚本**，与 `android-ci` 并行
   ⇒ 本地绿 ⇒ CI 不会红在同一件事上。
 
+## 🕐 最新状态（2026-11-11 中午 · 底栏材质分档：常态磨砂 + 液态玻璃质感回提）
+
+> **一句话**：用户要「不开液态玻璃时平常状态也通透磨砂」，并判 #280 后玻璃仍「薄、效果不强」。
+> 复核查到 11-09 起一路**调淡**的历史 —— 玻璃是被调得没有「自己」了，不是不够透。
+> 本轮**改了生产代码**：材质分档 + 质感回提（[`#281` 接力记录](./issues/06-界面与交互-part19.md)）。
+
+1. **玻璃感 = 对比，不是透明度**：透出的内容与玻璃自身要拉开层次；只加透明度会越改越薄。
+   加大模糊（透出色块而非可辨文字）才有余量回提填充，再补内阴影 / rim / 阴影做厚度。
+2. **「有没有模糊」≠「哪种材质」**：开关关掉不等于停用整条采样链路。
+   `DockMaterial{Frosted,Liquid}` 共用 `LiquidGlassLayer`，磨砂只跳过 AGSL 与动态光学。
+3. ⚠️ **源层别乘开关**：`glassSourceActive` 只看 `isLiquidGlassBlurSupported()`；
+   乘 `liquidGlassDock` 会让常态磨砂糊到空背景（真机表现为「底栏变灰一块」）。
+4. **降级不可省**：半透明 + 无模糊 = 列表文字穿栏。API < 31 仍走实色 `Surface`；
+   `liquidGlassStyle(blurAvailable = false)` 两档都返回 `alpha = 1f`。
+5. **观感不要靠猜**：连续两轮「不达标」却给不出具体档位 ⇒ 这轮把模糊 / 填充 /
+   内阴影 / rim 四个量做成交互预览滑杆（`/workspace/vaultix-dock-material-preview.html`），
+   下一轮按数值固化。HTML 的 `backdrop-filter` 只近似 `RenderEffect`，真机观感仍待采集。
+6. ⚠️ **detekt `LongParameterList ≤ 8`**：`glassRenderEffect` 已有 9 个实参，
+   再加布尔就撞门禁 ⇒ 拆成 `frostedRenderEffect` / 液态玻璃两个入口，编译期就分档。
+
+> 验证：detekt + 玻璃单测 **38 条**全绿（新增 6 数值规格 + 规则 10）；
+> 真机磨砂观感 / 滚动帧率代价 / 液态玻璃是否仍薄**未验证**，见 `Docs/progress/next-steps.md`。
+
 ## 🕐 最新状态（2026-11-11 上午 · 液态玻璃第六轮：通透 / 流光 / 折射）
 
 > **一句话**：用户说「通透没做好、点击的流光和折射细节没完善」。复核后**不是调参问题，

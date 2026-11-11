@@ -157,7 +157,12 @@ fun MainShellScreen(
     // ⚠️ 源**只在真的会挂模糊时**才登记：录一帧源 = 一次整屏离屏拷贝，
     //   而 API < 31 根本没有 RenderEffect（底栏走实色分支，见 VaultixBottomDock）。
     //   不在这一层挡掉的话，老设备上每帧白拷一次全屏。
-    val glassSourceActive = liquidGlassDock && isLiquidGlassBlurSupported()
+    //
+    // #281：两档材质（常态磨砂 / 液态玻璃）都要模糊 ⇒ 门槛只剩**系统能力**，
+    //   不再乘 `liquidGlassDock`。开关下放到底栏决定材质，不再决定「要不要录源」。
+    //   ⚠️ 性能口径：静止时 Compose 不重绘 ⇒ 无离屏拷贝；滚动时每帧一次。
+    //      这是「默认态也磨砂」的代价，真机帧率验收见 Docs/progress/next-steps.md。
+    val glassSourceActive = isLiquidGlassBlurSupported()
 
     // 默认动作执行器：保住「在验证码页按 + 就是新建验证码」这条既有高频路径。
     // 面板的 Filled 主按钮调它，其余类型走 runTypedAdd。

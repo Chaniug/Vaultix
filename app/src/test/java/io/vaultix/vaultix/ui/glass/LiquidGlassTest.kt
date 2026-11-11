@@ -281,4 +281,122 @@ class LiquidGlassTest {
         assertThat(LiquidGlass.SWEEP_TILT_FRACTION).isGreaterThan(0f)
         assertThat(LiquidGlass.LENS_STRENGTH).isGreaterThan(0f)
     }
+
+    // ── 2026-11-11 第七轮（#281）：常态磨砂 + 液态玻璃质感回提 ──────────
+
+    /**
+     * 开关关闭 ≠ 实色。用户要的是「不开液态玻璃时也能隐约看到下方内容」，
+     * 所以 false 必须映射到 [DockMaterial.Frosted]，而不是回到旧的 `Surface` 分支。
+     * 只有 **API < 31 没有 RenderEffect** 才允许降级实色（见 `无模糊能力时磨砂也降级为实色`）。
+     */
+    @Test
+    fun `开关关闭映射为常态磨砂而非实色`() {
+        assertThat(dockMaterialOf(false)).isEqualTo(DockMaterial.Frosted)
+        assertThat(dockMaterialOf(true)).isEqualTo(DockMaterial.Liquid)
+        assertThat(DockMaterial.entries).containsExactly(
+            DockMaterial.Frosted,
+            DockMaterial.Liquid,
+        ).inOrder()
+    }
+
+    /**
+     * 两档必须一眼分得出：磨砂更实（Haze regular）、液态玻璃更透。
+     * 若两者 alpha 相等，设置开关就成了一个"什么都不改的开关"。
+     */
+    @Test
+    fun `磨砂比液态玻璃更实且两档都保持半透明`() {
+        listOf(
+            LiquidGlass.FILL_ALPHA_LIGHT,
+            LiquidGlass.FILL_ALPHA_DARK,
+            LiquidGlass.FROSTED_FILL_ALPHA_LIGHT,
+            LiquidGlass.FROSTED_FILL_ALPHA_DARK,
+        ).forEach { alpha ->
+            assertThat(alpha).isGreaterThan(0f)
+            assertThat(alpha).isLessThan(1f)
+        }
+        assertThat(LiquidGlass.FROSTED_FILL_ALPHA_LIGHT)
+            .isGreaterThan(LiquidGlass.FILL_ALPHA_LIGHT)
+        assertThat(LiquidGlass.FROSTED_FILL_ALPHA_DARK)
+            .isGreaterThan(LiquidGlass.FILL_ALPHA_DARK)
+
+        val surface = Color(0xFF1A1C1E)
+        val frosted = liquidGlassStyle(
+            darkTheme = false,
+            surface = surface,
+            onSurface = Color.Black,
+            material = DockMaterial.Frosted,
+        )
+        val liquid = liquidGlassStyle(
+            darkTheme = false,
+            surface = surface,
+            onSurface = Color.Black,
+            material = DockMaterial.Liquid,
+        )
+        assertThat(frosted.fill.alpha).isGreaterThan(liquid.fill.alpha)
+        // 磨砂填充更实 ⇒ 描边反而要更淡，否则整圈发白。
+        assertThat(frosted.stroke.alpha).isLessThan(liquid.stroke.alpha)
+    }
+
+    /**
+     * #281 的核心反向修正：11-09 那轮把模糊降到 18dp、填充降到 0.38，
+     * 用户反馈「质感和通透感很薄、整体效果不强」。这里把那两档钉成**不可回退的区间**。
+     */
+    @Test
+    fun `模糊与填充不再停在过薄档且磨砂更雾`() {
+        assertThat(LiquidGlass.FrostedBlurRadius.value)
+            .isGreaterThan(LiquidGlass.LiquidBlurRadius.value)
+        assertThat(LiquidGlass.LiquidBlurRadius.value).isAtLeast(20f)
+        assertThat(LiquidGlass.FrostedBlurRadius.value).isAtMost(40f)
+        assertThat(LiquidGlass.FILL_ALPHA_LIGHT).isAtLeast(0.45f)
+        assertThat(LiquidGlass.FILL_ALPHA_LIGHT).isAtMost(0.65f)
+        assertThat(LiquidGlass.SPECULAR_ALPHA).isAtLeast(0.55f)
+    }
+
+    /** 内阴影是 #281 新补的"厚度"：液态玻璃更厚，上沿只留一小部分暗度。 */
+    @Test
+    fun `内阴影规格合法且液态玻璃比磨砂更厚`() {
+        assertThat(LiquidGlass.INNER_SHADOW_ALPHA)
+            .isGreaterThan(LiquidGlass.FROSTED_INNER_SHADOW_ALPHA)
+        assertThat(LiquidGlass.INNER_SHADOW_ALPHA).isGreaterThan(0f)
+        assertThat(LiquidGlass.INNER_SHADOW_ALPHA).isLessThan(0.4f)
+        assertThat(LiquidGlass.INNER_SHADOW_TOP_FACTOR).isGreaterThan(0f)
+        assertThat(LiquidGlass.INNER_SHADOW_TOP_FACTOR).isLessThan(1f)
+        assertThat(LiquidGlass.InnerShadowWidth.value)
+            .isGreaterThan(LiquidGlass.SpecularWidth.value)
+    }
+
+    /** 默认材质仍是液态玻璃：老调用点（含既有 14 条配色用例）行为不变。 */
+    @Test
+    fun `默认材质保持液态玻璃`() {
+        val surface = Color(0xFF202020)
+        val default = liquidGlassStyle(
+            darkTheme = true,
+            surface = surface,
+            onSurface = Color.White,
+        )
+        val explicit = liquidGlassStyle(
+            darkTheme = true,
+            surface = surface,
+            onSurface = Color.White,
+            material = DockMaterial.Liquid,
+        )
+        assertThat(default).isEqualTo(explicit)
+    }
+
+    /** 半透明 + 无模糊 = 列表文字穿过底栏，两档材质都必须降级成实色。 */
+    @Test
+    fun `无模糊能力时磨砂也降级为实色`() {
+        listOf(DockMaterial.Frosted, DockMaterial.Liquid).forEach { material ->
+            listOf(true, false).forEach { dark ->
+                val style = liquidGlassStyle(
+                    darkTheme = dark,
+                    surface = Color(0xFF101010),
+                    onSurface = Color.White,
+                    blurAvailable = false,
+                    material = material,
+                )
+                assertThat(style.fill.alpha).isEqualTo(1f)
+            }
+        }
+    }
 }

@@ -206,6 +206,12 @@ fun Modifier.liquidGlassBackdrop(
     depthPx: Float,
     partPx: Float,
     press: State<GlassPress>,
+    /**
+     * #281：材质是否走 AGSL 光学。`false` = 常态磨砂，只挂 [frostedRenderEffect]
+     * （更大半径的模糊 + 饱和度，无 shader、无按压 uniform 每帧更新）。
+     * 默认 true 保证老调用点仍是液态玻璃。
+     */
+    opticsEnabled: Boolean = true,
 ): Modifier = drawWithContent {
     // ⚠️ 用 drawWithContent（而不是 drawBehind / drawWithCache）：`GraphicsLayer.record`
     //    是 ContentDrawScope 的成员扩展，只有这里的 receiver 才调得到。
@@ -239,21 +245,27 @@ fun Modifier.liquidGlassBackdrop(
     //   ⚠️ 只算 uniform，不碰任何尺寸。
     // ★ 2026-11-11 第六轮：glowReach 是**半径**，shader 按 exp(-d²/w²) 用（#278 误当方差，
     //   光晕缩成 √w ≈12px 几乎看不见）；同一个 falloff 还驱动按压局部透镜与色散增强。
-    //   「玻璃表面」的流光不在这里 —— 它在层 B 的 drawSurfaceSweep，31+ 全档可见。
-    val pressValue = press.value
-    val glowCx = boundsInLayer.left + size.width * pressValue.focusX
-    val glowCy = boundsInLayer.top + size.height * pressValue.focusY
-    val effect = glassRenderEffect(
-        blurRadiusPx = radiusPx,
-        boundsInLayer = boundsInLayer,
-        cornerRadiusPx = size.height / 2f,
-        depthPx = depthPx * (1f + LiquidGlass.PRESS_REFRACTION_GAIN * pressValue.intensity),
-        partPx = partPx,
-        glowCx = glowCx,
-        glowCy = glowCy,
-        glowStrength = LiquidGlass.TOUCH_GLOW_PEAK * pressValue.intensity * pressValue.intensity,
-        glowReach = size.height * LiquidGlass.TOUCH_GLOW_REACH_FACTOR,
-    )
+    //   「玻璃表面」的流光不在这里 —— 它在层 B 的 drawSurfaceSweep，
+    //   液态玻璃档 31+ 全档可见（#281 起磨砂档两样都不挂）。
+    // #281：磨砂档连 uniform 都不算 —— 常态静止时不该为 AGSL 做每帧准备工作。
+    val effect = if (!opticsEnabled) {
+        frostedRenderEffect(blurRadiusPx = radiusPx)
+    } else {
+        val pressValue = press.value
+        val glowCx = boundsInLayer.left + size.width * pressValue.focusX
+        val glowCy = boundsInLayer.top + size.height * pressValue.focusY
+        glassRenderEffect(
+            blurRadiusPx = radiusPx,
+            boundsInLayer = boundsInLayer,
+            cornerRadiusPx = size.height / 2f,
+            depthPx = depthPx * (1f + LiquidGlass.PRESS_REFRACTION_GAIN * pressValue.intensity),
+            partPx = partPx,
+            glowCx = glowCx,
+            glowCy = glowCy,
+            glowStrength = LiquidGlass.TOUCH_GLOW_PEAK * pressValue.intensity * pressValue.intensity,
+            glowReach = size.height * LiquidGlass.TOUCH_GLOW_REACH_FACTOR,
+        )
+    }
     if (effect == null) {
         drawContent()
         return@drawWithContent

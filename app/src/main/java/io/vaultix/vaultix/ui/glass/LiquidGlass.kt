@@ -80,17 +80,49 @@ import androidx.compose.ui.unit.dp
  *
  * ⇒ 当前观感 = 模糊 + AGSL 边缘折射/分色（API 33+） + 上沿高光 / 下沿暗线 /
  *   内描边（所有版本）。低版本或 shader 创建失败时自动退回「仅模糊 + 静态光学装饰」。
+ *
+ * ## 2026-11-11 第七轮（#281）：常态磨砂与液态玻璃**共用这条链路**
+ *
+ * 原来「关液态玻璃」= 一块不透明 `Surface`，用户要「平常状态也能隐约看到下方内容」。
+ * 本轮把开关语义从「有没有模糊」改成「哪种材质」：[DockMaterial.Frosted] 用更大半径的
+ * 模糊 + 更实的填充、不挂 AGSL；[DockMaterial.Liquid] 保持全套光学。
+ * ⚠️ 两档的层 A / 层 B / 坐标偏移 / 测量结果**完全一致**，只是效果链末端与绘制层数不同。
  */
 
 /**
- * 模糊半径（dp）。
+ * 2026-11-11 第七轮（#281）：底栏材质**分档**。
  *
- * 2026-11-09 精装修：24dp → **16dp**。24 是 Haze `HazeMaterials` 的默认值，
- * 但配上调淡后的填充，24 会把背后的条目糊得完全没有形状，
- * 用户想要的是「稍微看得出下面有东西」而不是一片雾。16dp 保留轮廓、去掉文字可读性。
- * ⚠️ 只影响观感；`liquidGlassBackdrop` 的采样与层级结构一行未动。
+ * 11-09 那轮为了「淡淡看到下方条目」把模糊 24→18dp、填充 0.40→0.38/0.52、
+ * 阴影 8→6dp 一路调淡；#280 又只补了动态光学。用户这轮反馈「质感和通透感还很薄、
+ * 整体效果不强」—— 根因不是**不够透**，是**透得没有玻璃的自我**：一大片 0.38 的
+ * 半透明盖在 18dp 模糊上，背后的条目形状还读得出来，和图标抢视觉，边界又薄，
+ * 结果既不像玻璃也不像板。
+ *
+ * ⇒ 本轮反向修正：模糊加大（透出来的是**色块**而不是可辨文字），填充才有余量回提；
+ *   再补沿轮廓的**内阴影**做厚度。两件事分开：
+ *
+ * | 材质 | 开关 | 模糊 | 填充 | 光学 |
+ * |---|---|---|---|---|
+ * | [DockMaterial.Frosted] | 关（默认） | 30dp | 0.74 / 0.80 | 静态磨砂，无 AGSL / 无流光 |
+ * | [DockMaterial.Liquid] | 开 | 24dp | 0.50 / 0.62 | AGSL 折射 / 分色 / 跟手流光 |
+ *
+ * ⚠️ 两档**共用同一条**「源 → 效果层 → 消费」链路与同一个 [LiquidGlassLayer]，
+ *    不另起一套采样 —— 本项目已因「同一规则写两处」栽过三次（#120/#193/#195）。
+ * ⚠️ 只改观感；采样、层级、坐标偏移、底栏边界与大小一行未动。
  */
-private val BlurRadius = 18.dp
+
+/**
+ * 底栏材质档位。
+ *
+ * @property Frosted 常态磨砂：更实的填充 + 更大的模糊，隐约透出下方内容的色块，
+ *   不折射、不流光、不跟手 —— 「平常状态」应当安静。
+ * @property Liquid 液态玻璃：更透、有边缘折射 / 色散 / 按压流光 / 跟随手指的高光。
+ */
+enum class DockMaterial { Frosted, Liquid }
+
+/** 设置开关 → 材质。抽成纯函数是为了 JVM 单测能钉住「开关关 = 磨砂而不是实色」。 */
+internal fun dockMaterialOf(liquidGlass: Boolean): DockMaterial =
+    if (liquidGlass) DockMaterial.Liquid else DockMaterial.Frosted
 
 /**
  * 液态玻璃的视觉参数（集中一处，避免各处拼参数导致观感漂移）。
@@ -123,14 +155,31 @@ object LiquidGlass {
      * 深色主题下背景本身更暗、模糊结果更接近黑，填充再薄就分不清"玻璃"与"背景"。
      * Haze 五档**全部是深色更实**。
      *
-     * ⇒ 旧值取 **thin**（0.60 / 0.65）；精装修先降到 0.40 / 0.55，
-     *    22:20 用户真机反馈「常态还是看不到条目」后再降到 **0.38 / 0.52**
-     *    （对齐探索预览里 ③ ultraThin 档的浅色 0.38 / 深色 0.52）：
-     *    浅色贴近 ultraThin，深色保守地略低于 ultraThin 的 dark 值，
-     *    既让背后条目的色块透出来，又保住图标对比度与「深色更实」的规律。
-     */
-    const val FILL_ALPHA_LIGHT = 0.38f
-    const val FILL_ALPHA_DARK = 0.52f
+ * ⇒ 旧值取 **thin**（0.60 / 0.65）；精装修先降到 0.40 / 0.55，
+ *    22:20 用户真机反馈「常态还是看不到条目」后再降到 0.38 / 0.52。
+ *
+ * ⚠️ **2026-11-11 #281 反向修正**：连续两轮调淡之后，用户反馈「质感和通透感还很薄、
+ *    整体效果不强」。玻璃感来自「透出的内容」与「玻璃自身」的**对比**，不是越透越好：
+ *    0.38 的填充几乎没有自我，只剩一层雾。本轮回提到 **0.50 / 0.62**
+ *    （仍在 ultraThin 与 thin 之间），同时把模糊从 18dp 提到 24dp ——
+ *    模糊更充分 ⇒ 透出来的是柔和色块而非可辨文字 ⇒ 填充回提也不会挡内容。
+ */
+const val FILL_ALPHA_LIGHT = 0.50f
+const val FILL_ALPHA_DARK = 0.62f
+
+/**
+ * 常态**磨砂**档的填充不透明度（#281 新增）。
+ *
+ * 取 Haze `regular`（0.73 / 0.80）口径：用户要的是「隐约看到下方内容」，
+ * 不是「透过底栏读列表」。比液态玻璃明显更实，两档一眼能分出来，开关才有意义。
+ * 30dp 模糊 + 0.74/0.80 填充 ⇒ 只剩色块轮廓，文字完全不可读，图标对比度也稳。
+ */
+const val FROSTED_FILL_ALPHA_LIGHT = 0.74f
+const val FROSTED_FILL_ALPHA_DARK = 0.80f
+
+/** 两档模糊半径：磨砂比液态玻璃更"雾"，符合「磨砂」而非「清玻璃」的语义。 */
+val LiquidBlurRadius = 24.dp
+val FrostedBlurRadius = 30.dp
 
     /**
      * 降级（无模糊硬件能力）时**直接画实色**，而不是"半透明 + 一点补偿"。
@@ -142,8 +191,8 @@ object LiquidGlass {
      */
     const val FALLBACK_ALPHA = 1f
 
-    /** 上沿高光带高（占整体高度的比例）。 */
-    const val EDGE_HIGHLIGHT_FRACTION = 0.16f
+    /** 上沿高光带高（占整体高度的比例）。#281：0.16 → 0.20，边界受光面更可读。 */
+    const val EDGE_HIGHLIGHT_FRACTION = 0.20f
 
     /**
      * 上沿高光透明度（0.55 → 0.32 → **0.42**）。
@@ -153,14 +202,26 @@ object LiquidGlass {
      * 「这是一块玻璃而不是实色板」的，只剩上沿高光与内描边。
      * ⇒ 适度回提装饰，但不回到 0.55 那种塑料感；填充透明度保持不变。
      */
-    const val TOP_SHEEN_ALPHA = 0.42f
+    const val TOP_SHEEN_ALPHA = 0.48f
+
+    /** 磨砂档上沿高光：刻意比液态玻璃淡，保持「平常状态」的安静。 */
+    const val FROSTED_TOP_SHEEN_ALPHA = 0.18f
 
     /** 内描边透明度（深色下白描边要更淡；单测钉住 dark < light）。 */
     const val STROKE_ALPHA_LIGHT = 0.42f
     const val STROKE_ALPHA_DARK = 0.28f
 
-    /** 阴影高度（8 → 6dp）：玻璃更淡了，重阴影会把边界重新压成一块塑料板。 */
-    val ShadowElevation = 6.dp
+    /** 磨砂档内描边：填充已经很实，描边再重会变成塑料圈。 */
+    const val FROSTED_STROKE_ALPHA_LIGHT = 0.26f
+    const val FROSTED_STROKE_ALPHA_DARK = 0.16f
+
+    /**
+     * 阴影高度（8 → 6 → **8dp**）。
+     *
+     * 11-09 因「玻璃调淡」把它降到 6dp；#281 填充回提、又补了内阴影，
+     * 8dp 才把半透明胶囊从滚动内容里托起来，不会重新压成塑料板。
+     */
+    val ShadowElevation = 8.dp
 
     // ── 2026-11-10 第四轮：沿轮廓的光学规格 ──────────────────────────────
     //
@@ -173,11 +234,34 @@ object LiquidGlass {
     /** 背景饱和度增益。1 = 原样；Haze vibrancy / Prismal saturation 常用 1.3~1.5。 */
     const val SATURATION = 1.38f
 
-    /** 镜面 rim 线宽。比旧 1dp 亮线略粗，才有"玻璃有厚度"而不是"画了条边"。 */
-    val SpecularWidth = 1.6.dp
+    /** 镜面 rim 线宽。#281：1.6 → 2dp，边界才有"玻璃有厚度"而不是"画了条边"。 */
+    val SpecularWidth = 2.dp
 
-    /** 镜面 rim 上沿强度（垂直渐变起点）。 */
-    const val SPECULAR_ALPHA = 0.52f
+    /** 镜面 rim 上沿强度（垂直渐变起点）。#281：0.52 → 0.62，配合回提的填充拉开层次。 */
+    const val SPECULAR_ALPHA = 0.62f
+
+    /** 磨砂档镜面 rim：只留一条极弱受光边，不与液态玻璃抢"玻璃感"。 */
+    const val FROSTED_SPECULAR_ALPHA = 0.24f
+
+    // ── 2026-11-11 第七轮（#281）：沿轮廓的**内阴影** ──────────────────
+    //
+    // 之前只有「上沿高光 + 一圈内描边」，边缘缺少暗部 ⇒ 玻璃像是"贴"在内容上，
+    // 没有厚度、也不浮起。真实玻璃的厚边来自全内反射：上沿受光、下沿偏暗，
+    // 侧沿介于两者之间。这里沿 Outline 描一圈带垂直渐变的 Stroke，中心透明、
+    // 下沿最暗；层 B 已 `.clip(shape)`，描边外侧那一半会被裁掉 ⇒ 正好是内阴影。
+    // ⚠️ 与其余装饰同口径：只画颜色、不碰尺寸，圆角两端连续不断。
+
+    /** 液态玻璃内阴影峰值（下沿）。 */
+    const val INNER_SHADOW_ALPHA = 0.26f
+
+    /** 磨砂档内阴影峰值：填充更实，暗边要更轻，否则整圈发灰。 */
+    const val FROSTED_INNER_SHADOW_ALPHA = 0.12f
+
+    /** 内阴影上沿保留的暗度比例（上沿主要受光，不该和下沿一样暗）。 */
+    const val INNER_SHADOW_TOP_FACTOR = 0.15f
+
+    /** 内阴影沿轮廓的描边宽度。比镜面 rim 宽，读作"厚度"而不是"又一条亮线"。 */
+    val InnerShadowWidth = 3.dp
 
     /** 镜面 rim 侧沿强度（渐变中段，明显弱于上沿，形成方向感）。 */
     const val SPECULAR_TAIL_ALPHA = 0.10f
@@ -293,8 +377,11 @@ object LiquidGlass {
     /** 扫光带半宽系数：把"全宽比例"折成单侧半宽。 */
     const val SWEEP_HALF_FACTOR = 0.5f
 
-    /** 暗线颜色：固定黑叠 alpha，不随主题反色（玻璃的暗边在两个主题里都是暗的）。 */
-    val RimLineColor = Color.Black.copy(alpha = 0.10f)
+    /**
+     * 暗线颜色：固定黑叠 alpha，不随主题反色（玻璃的暗边在两个主题里都是暗的）。
+     * #281：0.10 → 0.18，原来那条下沿暗线几乎看不见，玻璃读不出"压在内容上"。
+     */
+    val RimLineColor = Color.Black.copy(alpha = 0.18f)
 }
 
 /**
@@ -364,23 +451,32 @@ data class LiquidGlassStyle(
  *
  * @param blurAvailable 有没有真模糊。**没有时填充直接拉到不透明**（见 [LiquidGlass.FALLBACK_ALPHA]）：
  *   这是"降级成实心底栏"，不是"半透明凑合"。
+ * @param material #281 的两档材质。默认值 [DockMaterial.Liquid] 保证老调用点行为不变。
  */
 fun liquidGlassStyle(
     darkTheme: Boolean,
     surface: Color,
     onSurface: Color,
     blurAvailable: Boolean = true,
+    material: DockMaterial = DockMaterial.Liquid,
 ): LiquidGlassStyle {
+    val frosted = material == DockMaterial.Frosted
     val alpha = when {
         !blurAvailable -> LiquidGlass.FALLBACK_ALPHA
+        frosted && darkTheme -> LiquidGlass.FROSTED_FILL_ALPHA_DARK
+        frosted -> LiquidGlass.FROSTED_FILL_ALPHA_LIGHT
         darkTheme -> LiquidGlass.FILL_ALPHA_DARK
         else -> LiquidGlass.FILL_ALPHA_LIGHT
     }
+    val strokeAlpha = when {
+        frosted && darkTheme -> LiquidGlass.FROSTED_STROKE_ALPHA_DARK
+        frosted -> LiquidGlass.FROSTED_STROKE_ALPHA_LIGHT
+        darkTheme -> LiquidGlass.STROKE_ALPHA_DARK
+        else -> LiquidGlass.STROKE_ALPHA_LIGHT
+    }
     return LiquidGlassStyle(
         fill = surface.copy(alpha = alpha),
-        stroke = onSurface.copy(
-            alpha = if (darkTheme) LiquidGlass.STROKE_ALPHA_DARK else LiquidGlass.STROKE_ALPHA_LIGHT,
-        ),
+        stroke = onSurface.copy(alpha = strokeAlpha),
         sheen = Color.White,
     )
 }
@@ -407,9 +503,12 @@ fun liquidGlassStyle(
  * `renderEffect` 就会连层 B 一起糊。要验证有没有写错，看**图标清不清晰**就够了。
  *
  * @param shape 外轮廓（底栏是药丸形）。
- * @param enabled 用户开关（设置页「主题模式」组里的「液态玻璃底栏」）。
+ * @param enabled 是否挂模糊链路。#281 起两档材质都传 true —— 开关决定的是
+ *   [material]（磨砂 / 液态玻璃），不是"有没有模糊"。API < 31 时由 [shouldApplyBlur] 降级。
  * @param source 背景源；null 时等同一块纯色背景（预览 / 无源的场合）。
  * @param style 填充 / 描边 / 高光配色。
+ * @param material #281 材质档位：只换模糊半径、是否走 AGSL、绘制哪几层光学装饰，
+ *   **不换层级结构**。默认值保证老调用点仍是液态玻璃。
  */
 @Composable
 fun LiquidGlassLayer(
@@ -418,13 +517,20 @@ fun LiquidGlassLayer(
     style: LiquidGlassStyle,
     modifier: Modifier = Modifier,
     source: LiquidGlassSource? = null,
+    material: DockMaterial = DockMaterial.Liquid,
     /** 按压联动。收 State 是为了在绘制阶段读值，动画期间不重组（见 [NoGlassPress]）。 */
     press: State<GlassPress> = NoGlassPress,
     content: @Composable () -> Unit,
 ) {
     val density = LocalDensity.current
     val blur = shouldApplyBlur(requested = enabled)
-    val radiusPx = with(density) { BlurRadius.toPx() }
+    // #281：两档共用同一条链路，只换半径与"要不要走 AGSL"。
+    val radius = when (material) {
+        DockMaterial.Frosted -> LiquidGlass.FrostedBlurRadius
+        DockMaterial.Liquid -> LiquidGlass.LiquidBlurRadius
+    }
+    val radiusPx = with(density) { radius.toPx() }
+    val opticsEnabled = material == DockMaterial.Liquid
     // 折射的基础参数集中在这里算，避免 `liquidGlassBackdrop` 里再写一份 dp 字面量。
     // 按压增量在绘制阶段叠加（见 [Modifier.liquidGlassBackdrop]），胶囊尺寸一个像素都不动。
     val depthPx = with(density) { LiquidGlass.RefractionDepth.toPx() }
@@ -462,6 +568,7 @@ fun LiquidGlassLayer(
                         depthPx = depthPx,
                         partPx = partPx,
                         press = press,
+                        opticsEnabled = opticsEnabled,
                     ),
             )
         }
@@ -492,6 +599,7 @@ fun LiquidGlassLayer(
                             //   不会把 5 个 tab 拖进重组。
                             press = press.value,
                             blurAvailable = blur,
+                            material = material,
                         )
                     }
                 },
@@ -511,14 +619,16 @@ fun LiquidGlassLayer(
  * ⇒ 圆角处既没有高光也没有描边，玻璃读起来像「上下有边、左右没边」的一块板。
  * 用户这轮的「注意底栏的边界」指的就是它。
  *
- * 现在 [drawOutline] 用同一个 `shape.createOutline(...)` 画七层，圆角连续：
- * ① 填充（含上亮下暗的厚度渐变）；② 上沿渐隐高光带；③ 内部通透厚度（第六轮，静态）；
- * ④ 按压表面流光（第六轮，光斑 + 斜扫光带）；⑤ 沿轮廓的镜面 rim
- * （垂直渐变：上亮 → 侧淡 → 下沿暗线）；⑥ 按压焦点 rim 高光；⑦ 一圈弱内描边。
- * ③④ 是**填充类**且画在层 B 的 drawBehind，所以覆盖 API 31+ 所有真模糊档，
+ * 现在 [drawOutline] 用同一个 `shape.createOutline(...)` 画，圆角连续。
+ * **液态玻璃档八层**：① 填充（含上亮下暗的厚度渐变）；② 上沿渐隐高光带；
+ * ③ 沿轮廓内阴影（#281，上淡下暗的厚度）；④ 内部通透厚度（#280 静态）；
+ * ⑤ 按压表面流光（#280 光斑 + 斜扫光带）；⑥ 沿轮廓镜面 rim（上亮 → 侧淡 → 下沿暗线）；
+ * ⑦ 按压焦点 rim 高光；⑧ 一圈弱内描边。
+ * **磨砂档（#281）五层**：①② 同上但高光更淡 → ③ 更弱的内阴影 → 一条极弱受光 rim → ⑧ 内描边。
+ * ④⑤ 是**填充类**且画在层 B 的 drawBehind，覆盖 API 31+ 所有真模糊档，
  * 不依赖 API 33 的 AGSL —— 见 `LiquidGlassOptics.kt` 与 #280 的施工记录。
  *
- * ⚠️ 降级档（`blurAvailable = false`）填充已是不透明实色，只画 ① 与 ⑤：
+ * ⚠️ 降级档（`blurAvailable = false`）填充已是不透明实色，只画 ① 与内描边：
  * 给实色板叠镜面/暗线会变成两道塑料描边（旧版就靠那个 `if` 挡住）。
  *
  * ⚠️ **本函数只读 `size`，从不写任何尺寸**；[press] 只改颜色 alpha 与折射深度，
@@ -530,7 +640,9 @@ private fun DrawScope.drawGlass(
     shape: Shape,
     press: GlassPress,
     blurAvailable: Boolean,
+    material: DockMaterial,
 ) {
+    val frosted = material == DockMaterial.Frosted
     val outline = shape.createOutline(size, layoutDirection, density)
     val fill = style.fill
     // ① 填充：真模糊档叠一道极轻的竖向渐变做"厚度"；降级档不加（不透明色做渐变=两块塑料）。
@@ -544,11 +656,17 @@ private fun DrawScope.drawGlass(
     )
 
     // ② 上沿渐隐高光带：仍按轮廓填充，靠 gradient 自己衰减，不需要 clipRect。
+    //    #281 磨砂档更淡（"平常状态"不抢眼），液态玻璃回提到 0.48。
     val band = (size.height * LiquidGlass.EDGE_HIGHLIGHT_FRACTION).coerceAtLeast(1f)
+    val sheenAlpha = if (frosted) {
+        LiquidGlass.FROSTED_TOP_SHEEN_ALPHA
+    } else {
+        LiquidGlass.TOP_SHEEN_ALPHA
+    }
     drawOutline(
         outline = outline,
         brush = Brush.verticalGradient(
-            colors = listOf(style.sheen.copy(alpha = LiquidGlass.TOP_SHEEN_ALPHA), Color.Transparent),
+            colors = listOf(style.sheen.copy(alpha = sheenAlpha), Color.Transparent),
             startY = 0f,
             endY = band,
         ),
@@ -560,35 +678,93 @@ private fun DrawScope.drawGlass(
         return
     }
 
-    // ③ 通透厚度（静态，31+ 全档）：中心提亮 + 下沿渐晕。
-    //    只模糊时中心区零光学变化，读作"蒙了雾的板"；这里给它一层"玻璃有厚度"的调子。
-    drawOpticalBody(style = style, outline = outline)
+    // ③ 内阴影（#281，两档共有）：沿轮廓描一圈"上淡下暗"的透明渐变，
+    //    层 B 的 clip 会裁掉描边外侧那一半 ⇒ 读作玻璃的厚边而不是又一条亮线。
+    drawInsetShadow(
+        outline = outline,
+        density = density,
+        alpha = if (frosted) {
+            LiquidGlass.FROSTED_INNER_SHADOW_ALPHA
+        } else {
+            LiquidGlass.INNER_SHADOW_ALPHA
+        },
+    )
 
-    // ④ 表面流光（按压，31+ 全档）：填充类，画在 rim 之前才不会盖住边缘高光。
-    //    ⚠️ 这是本轮把"点击流光"从 API 33 专属 shader 搬回绘制层的关键一步。
-    drawSurfaceSweep(style = style, outline = outline, press = press)
+    if (frosted) {
+        // 磨砂档：只留一条极弱受光 rim。**不画**中心提亮 / 表面流光 / 焦点高光 ——
+        // 那些是液态玻璃的身份特征；常态磨砂应当安静，且不与图标抢注意力。
+        drawOutline(
+            outline = outline,
+            brush = Brush.verticalGradient(
+                colors = listOf(
+                    style.sheen.copy(alpha = LiquidGlass.FROSTED_SPECULAR_ALPHA),
+                    Color.Transparent,
+                ),
+                startY = 0f,
+                endY = size.height,
+            ),
+            style = Stroke(width = with(density) { LiquidGlass.SpecularWidth.toPx() }),
+        )
+    } else {
+        // ④ 通透厚度（静态，液态玻璃档 31+ 全档）：中心提亮 + 下沿渐晕。
+        drawOpticalBody(style = style, outline = outline)
 
-    // ⑤ 镜面 rim：整圈沿轮廓，垂直渐变让"上沿受光、侧沿弱、下沿压暗"。
-    //    旧版的 1dp 亮线 + 底部矩形暗线合并进这一笔，圆角不再断。
-    drawSpecularRim(style = style, outline = outline, density = density, press = press)
+        // ⑤ 表面流光（按压，液态玻璃档 31+ 全档）：画在 rim 之前才不会盖住边缘高光。
+        drawSurfaceSweep(style = style, outline = outline, press = press)
 
-    // ⑥ 焦点 rim 高光：只在按住时画，光源跟随手指（函数内自己挡 intensity=0）。
-    drawFocusSheen(style = style, outline = outline, density = density, press = press)
+        // ⑥ 镜面 rim：垂直渐变让"上沿受光、侧沿弱、下沿压暗"，圆角不断。
+        drawSpecularRim(style = style, outline = outline, density = density, press = press)
 
-    // ⑦ 内描边：比镜面 rim 更淡，职责是"与背后内容分界"，不是"打光"。
+        // ⑦ 焦点 rim 高光：只在按住时画，光源跟随手指（函数内自己挡 intensity=0）。
+        drawFocusSheen(style = style, outline = outline, density = density, press = press)
+    }
+
+    // ⑧ 内描边：比镜面 rim 更淡，职责是"与背后内容分界"，不是"打光"。两档共有。
     drawOutline(outline = outline, color = style.stroke, style = Stroke(width = strokeWidth))
 }
 
 /**
- * 玻璃内部的「通透厚度」（第六轮，静态，31+ 全档）。
+ * 沿轮廓的**内阴影**（#281）：上沿只留极淡暗度，中段透明，下沿最暗。
+ *
+ * 之前玻璃只有「上沿高光 + 一圈内描边」，边缘缺暗部 ⇒ 像是"贴"在内容上，
+ * 既没厚度也不浮起。真实玻璃的厚边来自全内反射，上受光、下偏暗。
+ *
+ * ⚠️ 用 [drawOutline] + [Stroke]：描边中心落在轮廓线上，层 B 的 `.clip(shape)`
+ *    正好把外侧那半裁掉 ⇒ 留下的就是内阴影，圆角两端连续不断（规则 1）。
+ * ⚠️ 只画颜色，不碰任何尺寸。
+ */
+private fun DrawScope.drawInsetShadow(
+    outline: Outline,
+    density: Density,
+    alpha: Float,
+) {
+    val top = alpha * LiquidGlass.INNER_SHADOW_TOP_FACTOR
+    drawOutline(
+        outline = outline,
+        brush = Brush.verticalGradient(
+            colors = listOf(
+                Color.Black.copy(alpha = top),
+                Color.Transparent,
+                Color.Black.copy(alpha = alpha),
+            ),
+            startY = 0f,
+            endY = size.height,
+        ),
+        style = Stroke(width = with(density) { LiquidGlass.InnerShadowWidth.toPx() }),
+    )
+}
+
+/**
+ * 玻璃内部的「通透厚度」（第六轮，静态；液态玻璃档 31+ 全档）。
  *
  * 只做模糊 + 饱和度时，胶囊中心离边缘 >`uDepth × 3`（≈39px）的区域是**零光学变化**
  * 的一块模糊底图，再叠一层 0.38/0.52 填充 ⇒ 读作"蒙了雾的板"，而不是透亮的玻璃。
  * 这里沿 [Outline] 补两层极淡的填充：横向的「中心亮、两端淡」提亮 + 下沿渐晕，
  * 做出「上透下压」。两层都刻意不用径向渐变（见 [LiquidGlass.INNER_VIGNETTE_START_FRACTION]）。
  *
- * ⚠️ 画在层 B 的 `drawBehind`，**覆盖 API 31+ 所有真模糊档**，不依赖 AGSL；
+ * ⚠️ 画在层 B 的 `drawBehind`，**液态玻璃档覆盖 API 31+ 所有真模糊档**，不依赖 AGSL；
  *    33+ 的 shader 另有 [LiquidGlass.SHADER_CLARITY] 负责照亮"透出来的内容"，两者分工。
+ *    #281 起磨砂档刻意不画：它要的是均匀雾面，不是"中心透亮"的清玻璃。
  * ⚠️ 降级档不画（[drawGlass] 已提前 return）—— 实色板做厚度渐变等于两块塑料。
  */
 private fun DrawScope.drawOpticalBody(style: LiquidGlassStyle, outline: Outline) {
@@ -622,7 +798,7 @@ private fun DrawScope.drawOpticalBody(style: LiquidGlassStyle, outline: Outline)
  *
  * #278 的触摸光晕只存在于 API 33+ 的 AGSL 里，且画在层 A（模糊背景）上，
  * 又被层 B 的实色填充盖掉一层 ⇒ 31-32 完全没有点击光学反馈，33+ 也淡到看不见。
- * 这里把"玻璃表面该有的反射"画在层 B、填充之上：**31+ 全档可见**。
+ * 这里把"玻璃表面该有的反射"画在层 B、填充之上：**液态玻璃档 31+ 全档可见**。
  *
  * ① 光斑：径向渐隐，中心是手指精确位置，强度乘 `intensity²`（轻碰微亮、压实才亮）；
  * ② 扫光带：斜向线性渐变，横向随手指移动，读作"一道光扫过玻璃"而不是一个亮点。

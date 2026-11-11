@@ -87,10 +87,12 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import io.vaultix.vaultix.R
+import io.vaultix.vaultix.ui.glass.DockMaterial
 import io.vaultix.vaultix.ui.glass.GlassPress
 import io.vaultix.vaultix.ui.glass.LiquidGlass
 import io.vaultix.vaultix.ui.glass.LiquidGlassLayer
 import io.vaultix.vaultix.ui.glass.LiquidGlassSource
+import io.vaultix.vaultix.ui.glass.dockMaterialOf
 import io.vaultix.vaultix.ui.glass.isDarkSurface
 import io.vaultix.vaultix.ui.glass.liquidGlassStyle
 import io.vaultix.vaultix.ui.glass.shouldApplyBlur
@@ -269,7 +271,12 @@ fun VaultixBottomDock(
     /**
      * 液态玻璃底栏（设置页「主题模式 → 液态玻璃底栏」，默认关）。
      *
-     * 开启后胶囊改为**半透明 + 实时模糊其后的内容**，而不是 `surfaceContainerHigh` 实色。
+     * #281 起开关不再决定「有没有模糊」，而是决定**材质档位**：
+     * - `true` → [DockMaterial.Liquid]：更透 + AGSL 折射 / 分色 / 跟手流光；
+     * - `false` → [DockMaterial.Frosted]：常态磨砂，更实的填充 + 更大的模糊，
+     *   隐约透出下方内容，但不折射、不流光（用户 2026-11-11 反馈）。
+     *
+     * 两档都走同一条 `LiquidGlassLayer` 链路；API < 31 统一降级为实色 `Surface`。
      * 参数放在末尾且给默认值，是为了让既有调用点与预览一行都不改。
      */
     liquidGlass: Boolean = false,
@@ -333,63 +340,100 @@ fun VaultixBottomDock(
             .fillMaxWidth()
             .padding(start = Spacing.md, end = Spacing.md, top = UiSize.TightGap, bottom = UiSize.SecondaryIcon)
     ) {
-        if (liquidGlass) {
-            // ★ 液态玻璃分支（2026-10-27 第二轮重做）。
-            //
-            // 🔴 第一版错在哪：把 `graphicsLayer { renderEffect = 模糊 }` 直接挂在本层，
-            //    RenderEffect 会糊掉**本图层的一切**，包括 [DockRow] 里的图标与文字
-            //    ⇒ 真机上整条胶囊连同按钮一起变成灰雾（用户截图）。
-            //    现在模糊只作用于"采样 [glassSource] 的那一层"，DockRow 在**另一层**。
-            // ⚠️ 这里**不能**继续用 Surface：会给胶囊铺一层不透明底色，
-            //    模糊就被那块纯色盖掉了（见 ui/glass/LiquidGlass.kt 的顺序说明）。
-            //    阴影只能靠外层 modifiers —— Surface 的 shadowElevation 会随实色一起丢掉。
-            // ⚠️ 判深浅**不能看 `isSystemInDarkTheme()`** —— 本 App 有自己的「主题模式」
-            //   （浅色 / 深色 / 跟随系统 + 动态取色 + OLED 纯黑）。App 设成深色、系统是浅色时，
-            //   按系统判会把填充取成"浅色档"（更实），玻璃就不再透。
-            //   取实际渲染出来的底色亮度最可靠（与 `FullScreenDialogShell` 的做法一致）。
-            val surface = MaterialTheme.colorScheme.surfaceContainerHigh
-            val blurAvailable = shouldApplyBlur(requested = true)
-            LiquidGlassLayer(
-                shape = VaultixCorner.Pill,
-                enabled = true,
-                source = glassSource,
-                style = liquidGlassStyle(
-                    darkTheme = isDarkSurface(surface),
-                    surface = surface,
-                    onSurface = MaterialTheme.colorScheme.onSurface,
-                    blurAvailable = blurAvailable,
-                ),
-                press = glassPress,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .shadow(elevation = LiquidGlass.ShadowElevation, shape = VaultixCorner.Pill),
-            ) {
-                DockRow(
-                    tabs = tabs,
-                    selected = selected,
-                    onSelect = handleSelect,
-                    onAdd = handleAdd,
-                    glass = true,
-                    onPress = { x, y ->
-                        pressedFocus = x
-                        pressedFocusY = y
-                    },
-                )
+        // ★ 2026-11-11 第七轮（#281）：由「实色 / 液态玻璃」两态改为**三档**。
+        //
+        // 用户原话：「不开液态玻璃的话，平常状态下的底栏，能做一下通透磨砂，
+        // 能隐约看到下方内容的效果吗」—— 原来 else 分支是 `surfaceContainerHigh`
+        // **全不透明**，底下铺了内容也一点看不见。#281 让常态走 [DockMaterial.Frosted]：
+        // 更实的填充 + 更大的模糊，隐约透出条目色块，但不折射 / 不流光 / 不跟手。
+        //
+        // 🔴 第一版错在哪（2026-10-27 第二轮，仍然有效）：把
+        //    `graphicsLayer { renderEffect = 模糊 }` 直接挂在本层，会糊掉本图层的一切，
+        //    包括 [DockRow] 的图标与文字 ⇒ 真机上整条胶囊变成灰雾（用户截图）。
+        //    ⇒ 模糊只能作用于"采样 [glassSource] 的那一层"，DockRow 必须在另一层。
+        // ⚠️ 真模糊档**不能**再套 Surface：不透明底色会把模糊结果整块盖掉
+        //    （见 ui/glass/LiquidGlass.kt 的顺序说明）；阴影改走外层 `.shadow(...)`。
+        // ⚠️ 判深浅**不能看 `isSystemInDarkTheme()`** —— 本 App 有自己的「主题模式」
+        //   （浅色 / 深色 / 跟随系统 + 动态取色 + OLED 纯黑）。取实际底色亮度最可靠。
+        //
+        // ⚠️ 三路分支刻意**不抽公共 lambda**：规则 2 钉住「三档共用 DockRow /
+        //    VaultixCorner.Pill」，把调用点收成一处后，将来改间距/中央「+」会静默漏两处
+        //    （#120/#193/#195 已栽过三次）。只把 style / modifier 收成局部变量。
+        val surface = MaterialTheme.colorScheme.surfaceContainerHigh
+        val blurAvailable = shouldApplyBlur(requested = true)
+        val material = dockMaterialOf(liquidGlass)
+        val glassStyle = liquidGlassStyle(
+            darkTheme = isDarkSurface(surface),
+            surface = surface,
+            onSurface = MaterialTheme.colorScheme.onSurface,
+            blurAvailable = blurAvailable,
+            material = material,
+        )
+        val glassModifier = Modifier
+            .fillMaxWidth()
+            .shadow(elevation = LiquidGlass.ShadowElevation, shape = VaultixCorner.Pill)
+
+        when {
+            !blurAvailable -> {
+                // API < 31：没有 RenderEffect，半透明会让列表文字穿过底栏 ⇒ 保持原实色。
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = VaultixCorner.Pill,
+                    color = surface,
+                    tonalElevation = 3.dp,
+                    shadowElevation = 6.dp,
+                ) {
+                    DockRow(
+                        tabs = tabs,
+                        selected = selected,
+                        onSelect = handleSelect,
+                        onAdd = handleAdd,
+                    )
+                }
             }
-        } else {
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                shape = VaultixCorner.Pill,
-                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                tonalElevation = 3.dp,
-                shadowElevation = 6.dp,
-            ) {
-                DockRow(
-                    tabs = tabs,
-                    selected = selected,
-                    onSelect = handleSelect,
-                    onAdd = handleAdd,
-                )
+
+            material == DockMaterial.Liquid -> {
+                LiquidGlassLayer(
+                    shape = VaultixCorner.Pill,
+                    enabled = true,
+                    source = glassSource,
+                    style = glassStyle,
+                    material = DockMaterial.Liquid,
+                    press = glassPress,
+                    modifier = glassModifier,
+                ) {
+                    DockRow(
+                        tabs = tabs,
+                        selected = selected,
+                        onSelect = handleSelect,
+                        onAdd = handleAdd,
+                        glass = true,
+                        onPress = { x, y ->
+                            pressedFocus = x
+                            pressedFocusY = y
+                        },
+                    )
+                }
+            }
+
+            else -> {
+                // 常态磨砂：不传 press（用 NoGlassPress），也不给 DockRow 上报位置 ⇒
+                // 静止与滚动期间都不写状态，零重组；选中 pill 保持实色。
+                LiquidGlassLayer(
+                    shape = VaultixCorner.Pill,
+                    enabled = true,
+                    source = glassSource,
+                    style = glassStyle,
+                    material = DockMaterial.Frosted,
+                    modifier = glassModifier,
+                ) {
+                    DockRow(
+                        tabs = tabs,
+                        selected = selected,
+                        onSelect = handleSelect,
+                        onAdd = handleAdd,
+                    )
+                }
             }
         }
     }
