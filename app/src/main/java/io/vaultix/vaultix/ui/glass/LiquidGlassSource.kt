@@ -237,6 +237,9 @@ fun Modifier.liquidGlassBackdrop(
     //   不是槽中心 —— FlClash 的口径是 "UIKit lights the bar from the finger"。
     //   强度取 intensity²：轻碰只是微亮、压实了才亮起来（FlClash 同款平方曲线）。
     //   ⚠️ 只算 uniform，不碰任何尺寸。
+    // ★ 2026-11-11 第六轮：glowReach 是**半径**，shader 按 exp(-d²/w²) 用（#278 误当方差，
+    //   光晕缩成 √w ≈12px 几乎看不见）；同一个 falloff 还驱动按压局部透镜与色散增强。
+    //   「玻璃表面」的流光不在这里 —— 它在层 B 的 drawSurfaceSweep，31+ 全档可见。
     val pressValue = press.value
     val glowCx = boundsInLayer.left + size.width * pressValue.focusX
     val glowCy = boundsInLayer.top + size.height * pressValue.focusY

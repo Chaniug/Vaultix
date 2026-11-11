@@ -25,9 +25,11 @@
 package io.vaultix.vaultix.ui.shell
 
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -95,6 +97,7 @@ import io.vaultix.vaultix.ui.glass.shouldApplyBlur
 import io.vaultix.vaultix.ui.theme.UiSize
 import io.vaultix.vaultix.ui.theme.VaultixCorner
 import io.vaultix.vaultix.ui.theme.Spacing
+import kotlin.math.abs
 
 /** 悬浮胶囊底栏固定高度（对齐 Bastion：胶囊 60dp + 留白 6/20 = 86dp 视觉占位）。 */
 private val DockBarHeight = 60.dp
@@ -170,6 +173,32 @@ private val DockSpring = spring<Float>(
     dampingRatio = Spring.DampingRatioMediumBouncy,
     stiffness = Spring.StiffnessMedium,
 )
+
+/**
+ * 玻璃按压**光强**的非对称时序（FlClash 口径：亮 120ms / 灭 360ms）。
+ *
+ * 🔴 #279 的记录写了「亮起 120ms / 熄灭 360ms 非对称」，但代码一直让 `DockSpring`
+ * 一条 spring 同时管按下和松手 —— 文档与实现不符，本轮补上。
+ * 快亮慢灭是"灯被点亮"的手感：按下立刻有反馈，松手留一点余辉扫过玻璃。
+ *
+ * ⚠️ 只换 `animationSpec`（组合期的一个普通值），不把动画值提到组合期读 ——
+ *    #277 那条「动画期间零重组」的纪律原样保留。
+ * ⚠️ focusX/focusY 仍走 [DockSpring]：位置是连续跟随，用 tween 会在每次移动时重启，
+ *    反而追不上手指。
+ */
+private val GlassPressInSpec = tween<Float>(durationMillis = 120, easing = FastOutSlowInEasing)
+private val GlassPressOutSpec = tween<Float>(durationMillis = 360, easing = FastOutSlowInEasing)
+
+/**
+ * 手指位置上报的量化步长（占胶囊宽 / 高的比例）。
+ *
+ * #278 只在 `awaitFirstDown` 报一次，注释写着「期间手指移动不跟随」—— 这跟
+ * 「跟随手指的触摸光晕」是相悖的。本轮改成持续上报，但**量化到 1/50 才写一次 state**：
+ * 写 `pressedFocus` 会让 `VaultixBottomDock` 重组一次，若每个 move 事件都写，
+ * 就把 #277 花大力气消掉的「手势期间重组」又请回来了。
+ * 0.02 ≈ 窄屏胶囊 7px，肉眼看是连续的（后面还有 spring 平滑），重组却稀疏。
+ */
+private const val DOCK_TRACKING_QUANTUM = 0.02f
 
 /**
  * 悬浮胶囊底栏的**总视觉占位高度**（胶囊 60 + 上留白 6 + 下留白 20 = 86dp）。
@@ -260,7 +289,8 @@ fun VaultixBottomDock(
     // 现在把「有没有在按、按在哪个槽」折算成 [GlassPress] 的两个绘制参数：
     //   intensity → 镜面 rim 增亮、AGSL 折射变深；focusX/focusY → 光晕落在手指上。
     //   #278 第五轮：focus 从「槽中心」升级为**手指的精确位置**（FlClash 口径
-    //   "lights the bar from the finger"），由 DockRow 的 pointerInput 上报。
+    //   "lights the bar from the finger"），由 DockRow 的 pointerInput 上报；
+    //   #280 第六轮：移动期间持续跟手 + 光强亮 120 / 灭 360 非对称时序。
     // ⚠️ 三者都**只进 drawBehind / shader uniform**，绝不进任何 Modifier 的尺寸参数。
     //    底栏的边界与大小在按压全程恒定（#205「高度塌 0」之后定下的硬边界）。
     var pressedFocus by remember { mutableFloatStateOf(DOCK_NO_PRESS) }
@@ -268,16 +298,18 @@ fun VaultixBottomDock(
     // ⚠️ 刻意**不用 `by`**：动画值一旦在组合期读，spring 每帧都会重组整条底栏。
     //   收成 State 再交给玻璃层，由 `drawBehind` / `drawWithContent` 在绘制阶段读
     //   ⇒ 动画期间零重组，手感才稳（见 [NoGlassPress] 的说明）。
+    val pressing = pressedFocus >= 0f
     val pressIntensity = animateFloatAsState(
-        targetValue = if (pressedFocus >= 0f) 1f else 0f,
-        animationSpec = DockSpring,
+        targetValue = if (pressing) 1f else 0f,
+        // #280：按方向切亮 120 / 灭 360，兑现 #279 写了却没做的非对称时序。
+        animationSpec = if (pressing) GlassPressInSpec else GlassPressOutSpec,
     )
     val focusX = animateFloatAsState(
-        targetValue = if (pressedFocus >= 0f) pressedFocus else dockIdleFocus(),
+        targetValue = if (pressing) pressedFocus else dockIdleFocus(),
         animationSpec = DockSpring,
     )
     val focusY = animateFloatAsState(
-        targetValue = if (pressedFocus >= 0f) pressedFocusY else DOCK_SLOT_CENTER,
+        targetValue = if (pressing) pressedFocusY else DOCK_SLOT_CENTER,
         animationSpec = DockSpring,
     )
     val glassPress = remember {
@@ -370,11 +402,15 @@ fun VaultixBottomDock(
  * 否则以后调 tab 间距 / 中央「+」尺寸时只会改一处，
  * 而另一条分支会静默停在旧规格（本项目已因"同一规则写两处"栽过三次，#120/#193/#195）。
  *
- * ## #278 第五轮：触摸光晕的位置来源
+ * ## #278 第五轮 / #280 第六轮：触摸光晕的位置来源
  * 行级 `pointerInput` 观察手势，上报**手指的精确位置**（0~1 分数）；
  * 松手 / 取消上报 [DOCK_NO_PRESS]。⚠️ 观察**不消费**任何事件 —— clickable 的
  * 点击、长按、无障碍语义全部原样保留；`requireUnconsumed = false` 是为了
  * 即使子项先消费了移动事件也照样能看到按下位置。
+ *
+ * #278 只在按下那一瞬报一次，光其实钉死在按下点；
+ * #280 改为**移动期间持续上报**，并用 [DOCK_TRACKING_QUANTUM] 量化，避免每个 move
+ * 事件都写 state 把整条底栏拖进重组。位置仍由 spring 平滑，不会逐帧抖。
  */
 @Composable
 private fun DockRow(
@@ -398,14 +434,27 @@ private fun DockRow(
             .pointerInput(Unit) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
-                    onPress(down.position.x / size.width, down.position.y / size.height)
-                    // 等松手或取消（移出边界也算）再熄灯；期间手指移动不跟随 ——
-                    // 底栏 tab 没有拖动语义，光晕落在按下点即可，避免每帧 uniform 抖动。
+                    var lastX = (down.position.x / size.width).coerceIn(0f, 1f)
+                    var lastY = (down.position.y / size.height).coerceIn(0f, 1f)
+                    onPress(lastX, lastY)
+                    // #280：移动期间持续上报，光晕与扫光带真的跟手（#278 是钉在按下点）。
+                    // ⚠️ 量化后才写 state：onPress 会触发一次组合，逐事件写会重现
+                    //    #277 消掉的「按压期间每帧重组」；spring 会把量化台阶抹平。
                     // ⚠️ 本项目 Compose 版本的 `waitForUpOrCancellation` 没有
                     //    `requireUnconsumed` 参数：手动等到全部指针抬起即可。
                     while (true) {
                         val event = awaitPointerEvent()
-                        if (event.changes.all { !it.pressed }) break
+                        val change = event.changes.firstOrNull { it.pressed }
+                        if (change == null) break
+                        val nx = (change.position.x / size.width).coerceIn(0f, 1f)
+                        val ny = (change.position.y / size.height).coerceIn(0f, 1f)
+                        val moved = abs(nx - lastX) >= DOCK_TRACKING_QUANTUM ||
+                            abs(ny - lastY) >= DOCK_TRACKING_QUANTUM
+                        if (moved) {
+                            lastX = nx
+                            lastY = ny
+                            onPress(nx, ny)
+                        }
                     }
                     onPress(DOCK_NO_PRESS, DOCK_SLOT_CENTER)
                 }

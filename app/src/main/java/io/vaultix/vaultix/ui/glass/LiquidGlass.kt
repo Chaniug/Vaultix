@@ -220,8 +220,78 @@ object LiquidGlass {
     /** 触摸光晕峰值（径向高斯的中心强度，会再乘 intensity²）。FlClash 用 0.06+wash，本项目的底栏更窄，取大些。 */
     const val TOUCH_GLOW_PEAK = 0.32f
 
-    /** 触摸光晕半径 = 胶囊高度 × 该系数。FlClash 取 height/√2 起步、松手放大 3 倍；按下时窄而亮更"聚"。 */
-    const val TOUCH_GLOW_REACH_FACTOR = 0.9f
+    /**
+     * 触摸光晕**半径** = 胶囊高度 × 该系数。
+     *
+     * 🔴 2026-11-11 第六轮：从 0.9 改为 **0.42**。旧值不是"太大"的问题，是**量纲错了**：
+     * #278 的 shader 写 `exp(-d² / uGlow.w)`，数学上把 w 当**方差**用，而这里传的是**半径**
+     * ⇒ 实际可见半径只有 `√w`。以 60dp 胶囊 ≈156px 算，旧值 w≈140px 时光晕只有 ≈12px，
+     * 真机上几乎看不见 —— 用户说的「点击的那种流光没做出来」就是它。
+     * 现在 shader 改成 `exp(-d² / w²)`，w 才是真半径；0.42 × 156 ≈ 65px，
+     * 光晕覆盖约大半个胶囊高度，读作"从手指亮开"而不是一个白点。
+     */
+    const val TOUCH_GLOW_REACH_FACTOR = 0.42f
+
+    // ── 2026-11-11 第六轮：通透厚度 + 表面流光 + 按压透镜 ──────────────
+    //
+    // #277 把折射/色散/光晕全放进 API 33+ 的 AGSL，#278 又只补了 shader 内的光晕。
+    // 后果有两个：① Android 12/12L（31-32）只能看到模糊 + 静态 rim，点按时玻璃毫无光学反应；
+    // ② 光晕画在层 A（模糊背景）上，又被层 B 的 0.38/0.52 实色填充盖掉一层 ⇒ 双重衰减。
+    //
+    // ⇒ 本轮把「玻璃表面」的活搬回层 B 的 drawBehind：厚度感（静态）与流光（按压）
+    //   一律沿 Outline 填充，画在填充之上、图标之下，**覆盖 31+ 所有真模糊档**，
+    //   不依赖 AGSL。shader 只保留"透出来的内容"该有的折射 / 透镜 / 分色。
+    // ⚠️ 与第四/第五轮同一条硬边界：全部只改颜色与渐变中心，不碰任何尺寸。
+
+    /**
+     * 玻璃中心「通透」提亮峰值（静态，沿轮廓填充的**横向三段渐变**）。抵消模糊后的灰雾感。
+     *
+     * ⚠️ 刻意不用径向渐变：胶囊宽高比 ≈6:1，按宽度取半径会在高度方向铺满整条底栏，
+     *    「中心亮、两端淡」完全读不出来 —— 见 [INNER_VIGNETTE_START_FRACTION]。
+     */
+    const val INNER_CLARITY_ALPHA = 0.10f
+
+    /** 下沿渐晕峰值：与中心提亮配对，做出上透下压的厚度，而不是一块平板。 */
+    const val INNER_VIGNETTE_ALPHA = 0.09f
+
+    /**
+     * 表面流光内部光斑峰值（再乘 intensity²）。
+     *
+     * 关键在**画在哪**：它在层 B 的 drawBehind、填充之上，所以不会被填充吃掉；
+     * 与 shader 里那个照亮模糊背景的 `uGlow` 是两层，一内一表，才有玻璃的层次。
+     */
+    const val SURFACE_GLOW_ALPHA = 0.30f
+
+    /** 表面光斑半径 = 胶囊宽度 × 该系数（比 shader 光晕宽，读作"表面反射"）。 */
+    const val SURFACE_GLOW_RADIUS_FRACTION = 0.34f
+
+    /** 斜向扫光带峰值（乘 intensity）：一条随手指横向移动的高光带，不是又一个斑点。 */
+    const val SWEEP_ALPHA = 0.16f
+
+    /** 扫光带宽度占胶囊宽度的比例。 */
+    const val SWEEP_WIDTH_FRACTION = 0.42f
+
+    /** 扫光带倾斜量（终点相对起点的竖直偏移，占胶囊高度比例）。 */
+    const val SWEEP_TILT_FRACTION = 0.85f
+
+    /** 按压透镜：手指下内容被径向推开的强度（乘 uGlow.z 与 uDepth，喂给 AGSL）。 */
+    const val LENS_STRENGTH = 2.0f
+
+    /** shader 内玻璃中心提亮（33+ 档与 31-32 的 [INNER_CLARITY_ALPHA] 同职责）。 */
+    const val SHADER_CLARITY = 0.055f
+
+    // 几何比例也进参数表：detekt `MagicNumber` 会钉住 `Brush` 实参里的裸浮点，
+    // 且「参数集中一处」本来就是本文件的纪律。
+    /**
+     * 下沿渐晕起点（占胶囊高度比例）：之上完全不压暗，保住中心通透。
+     *
+     * ⚠️ 通透提亮刻意**不用** `Brush.radialGradient`：胶囊宽高比 ≈6:1，按宽度取半径
+     * 会在高度方向铺满整条底栏，「中心亮、两端淡」完全读不出来。改用横向三段线性渐变。
+     */
+    const val INNER_VIGNETTE_START_FRACTION = 0.52f
+
+    /** 扫光带半宽系数：把"全宽比例"折成单侧半宽。 */
+    const val SWEEP_HALF_FACTOR = 0.5f
 
     /** 暗线颜色：固定黑叠 alpha，不随主题反色（玻璃的暗边在两个主题里都是暗的）。 */
     val RimLineColor = Color.Black.copy(alpha = 0.10f)
@@ -441,9 +511,12 @@ fun LiquidGlassLayer(
  * ⇒ 圆角处既没有高光也没有描边，玻璃读起来像「上下有边、左右没边」的一块板。
  * 用户这轮的「注意底栏的边界」指的就是它。
  *
- * 现在 [drawOutline] 用同一个 `shape.createOutline(...)` 画四层，圆角连续：
- * ① 填充（含上亮下暗的厚度渐变）；② 上沿渐隐高光带；③ 沿轮廓的镜面 rim
- * （垂直渐变：上亮 → 侧淡 → 下沿暗线）；④ 按压焦点高光；⑤ 一圈弱内描边。
+ * 现在 [drawOutline] 用同一个 `shape.createOutline(...)` 画七层，圆角连续：
+ * ① 填充（含上亮下暗的厚度渐变）；② 上沿渐隐高光带；③ 内部通透厚度（第六轮，静态）；
+ * ④ 按压表面流光（第六轮，光斑 + 斜扫光带）；⑤ 沿轮廓的镜面 rim
+ * （垂直渐变：上亮 → 侧淡 → 下沿暗线）；⑥ 按压焦点 rim 高光；⑦ 一圈弱内描边。
+ * ③④ 是**填充类**且画在层 B 的 drawBehind，所以覆盖 API 31+ 所有真模糊档，
+ * 不依赖 API 33 的 AGSL —— 见 `LiquidGlassOptics.kt` 与 #280 的施工记录。
  *
  * ⚠️ 降级档（`blurAvailable = false`）填充已是不透明实色，只画 ① 与 ⑤：
  * 给实色板叠镜面/暗线会变成两道塑料描边（旧版就靠那个 `if` 挡住）。
@@ -487,17 +560,110 @@ private fun DrawScope.drawGlass(
         return
     }
 
-    // ③ 镜面 rim：整圈沿轮廓，垂直渐变让"上沿受光、侧沿弱、下沿压暗"。
+    // ③ 通透厚度（静态，31+ 全档）：中心提亮 + 下沿渐晕。
+    //    只模糊时中心区零光学变化，读作"蒙了雾的板"；这里给它一层"玻璃有厚度"的调子。
+    drawOpticalBody(style = style, outline = outline)
+
+    // ④ 表面流光（按压，31+ 全档）：填充类，画在 rim 之前才不会盖住边缘高光。
+    //    ⚠️ 这是本轮把"点击流光"从 API 33 专属 shader 搬回绘制层的关键一步。
+    drawSurfaceSweep(style = style, outline = outline, press = press)
+
+    // ⑤ 镜面 rim：整圈沿轮廓，垂直渐变让"上沿受光、侧沿弱、下沿压暗"。
     //    旧版的 1dp 亮线 + 底部矩形暗线合并进这一笔，圆角不再断。
     drawSpecularRim(style = style, outline = outline, density = density, press = press)
 
-    // ④ 焦点高光：只在按住时画，光源落在被按 tab 的上沿。
-    if (press.intensity > 0f) {
-        drawFocusSheen(style = style, outline = outline, density = density, press = press)
-    }
+    // ⑥ 焦点 rim 高光：只在按住时画，光源跟随手指（函数内自己挡 intensity=0）。
+    drawFocusSheen(style = style, outline = outline, density = density, press = press)
 
-    // ⑤ 内描边：比镜面 rim 更淡，职责是"与背后内容分界"，不是"打光"。
+    // ⑦ 内描边：比镜面 rim 更淡，职责是"与背后内容分界"，不是"打光"。
     drawOutline(outline = outline, color = style.stroke, style = Stroke(width = strokeWidth))
+}
+
+/**
+ * 玻璃内部的「通透厚度」（第六轮，静态，31+ 全档）。
+ *
+ * 只做模糊 + 饱和度时，胶囊中心离边缘 >`uDepth × 3`（≈39px）的区域是**零光学变化**
+ * 的一块模糊底图，再叠一层 0.38/0.52 填充 ⇒ 读作"蒙了雾的板"，而不是透亮的玻璃。
+ * 这里沿 [Outline] 补两层极淡的填充：横向的「中心亮、两端淡」提亮 + 下沿渐晕，
+ * 做出「上透下压」。两层都刻意不用径向渐变（见 [LiquidGlass.INNER_VIGNETTE_START_FRACTION]）。
+ *
+ * ⚠️ 画在层 B 的 `drawBehind`，**覆盖 API 31+ 所有真模糊档**，不依赖 AGSL；
+ *    33+ 的 shader 另有 [LiquidGlass.SHADER_CLARITY] 负责照亮"透出来的内容"，两者分工。
+ * ⚠️ 降级档不画（[drawGlass] 已提前 return）—— 实色板做厚度渐变等于两块塑料。
+ */
+private fun DrawScope.drawOpticalBody(style: LiquidGlassStyle, outline: Outline) {
+    drawOutline(
+        outline = outline,
+        brush = Brush.horizontalGradient(
+            colors = listOf(
+                Color.Transparent,
+                style.sheen.copy(alpha = LiquidGlass.INNER_CLARITY_ALPHA),
+                Color.Transparent,
+            ),
+            startX = 0f,
+            endX = size.width,
+        ),
+    )
+    drawOutline(
+        outline = outline,
+        brush = Brush.verticalGradient(
+            colors = listOf(
+                Color.Transparent,
+                Color.Black.copy(alpha = LiquidGlass.INNER_VIGNETTE_ALPHA),
+            ),
+            startY = size.height * LiquidGlass.INNER_VIGNETTE_START_FRACTION,
+            endY = size.height,
+        ),
+    )
+}
+
+/**
+ * 按压时的**表面流光**（第六轮）：内部光斑 + 斜向扫光带。
+ *
+ * #278 的触摸光晕只存在于 API 33+ 的 AGSL 里，且画在层 A（模糊背景）上，
+ * 又被层 B 的实色填充盖掉一层 ⇒ 31-32 完全没有点击光学反馈，33+ 也淡到看不见。
+ * 这里把"玻璃表面该有的反射"画在层 B、填充之上：**31+ 全档可见**。
+ *
+ * ① 光斑：径向渐隐，中心是手指精确位置，强度乘 `intensity²`（轻碰微亮、压实才亮）；
+ * ② 扫光带：斜向线性渐变，横向随手指移动，读作"一道光扫过玻璃"而不是一个亮点。
+ *
+ * ⚠️ 两次都走 [drawOutline]（规则 1 钉住），不碰任何尺寸（规则 4 钉住）；
+ *    与 shader 内照亮模糊背景的 `uGlow` 是**一表一里**两层，不是重复实现。
+ */
+private fun DrawScope.drawSurfaceSweep(
+    style: LiquidGlassStyle,
+    outline: Outline,
+    press: GlassPress,
+) {
+    if (press.intensity <= 0f) return
+    val strength = press.intensity
+    val cx = size.width * press.focusX
+    val cy = size.height * press.focusY
+    drawOutline(
+        outline = outline,
+        brush = Brush.radialGradient(
+            colors = listOf(
+                style.sheen.copy(alpha = LiquidGlass.SURFACE_GLOW_ALPHA * strength * strength),
+                Color.Transparent,
+            ),
+            center = Offset(cx, cy),
+            radius = size.width * LiquidGlass.SURFACE_GLOW_RADIUS_FRACTION,
+        ),
+    )
+    val halfWidth = size.width * LiquidGlass.SWEEP_WIDTH_FRACTION * LiquidGlass.SWEEP_HALF_FACTOR
+    val tilt = size.height * LiquidGlass.SWEEP_TILT_FRACTION
+    drawOutline(
+        outline = outline,
+        brush = Brush.linearGradient(
+            colors = listOf(
+                Color.Transparent,
+                style.sheen.copy(alpha = LiquidGlass.SWEEP_ALPHA * strength),
+                Color.Transparent,
+            ),
+            start = Offset(cx - halfWidth, -tilt),
+            end = Offset(cx + halfWidth, size.height + tilt),
+        ),
+    )
 }
 
 /** 沿轮廓的镜面 rim（拆出来是为了让 `drawGlass` 不贴 detekt 复杂度上限）。 */
@@ -525,13 +691,19 @@ private fun DrawScope.drawSpecularRim(
     )
 }
 
-/** 按压时的焦点高光：径向渐隐，沿轮廓描一遍，读作"光晕扫到被按的位置"。 */
+/**
+ * 按压时的焦点 rim 高光：径向渐隐，沿轮廓描一遍，读作"光晕扫到被按的位置"。
+ *
+ * 第六轮起自己挡 `intensity = 0`（[drawGlass] 不再包 `if`），与 [drawSurfaceSweep] 同口径：
+ * 松手后不留任何残余高光，也不让绘制层在常态多做一次判断分支外的计算。
+ */
 private fun DrawScope.drawFocusSheen(
     style: LiquidGlassStyle,
     outline: Outline,
     density: Density,
     press: GlassPress,
 ) {
+    if (press.intensity <= 0f) return
     val width = with(density) { LiquidGlass.SpecularWidth.toPx() } *
         LiquidGlass.FOCUS_WIDTH_FACTOR
     drawOutline(

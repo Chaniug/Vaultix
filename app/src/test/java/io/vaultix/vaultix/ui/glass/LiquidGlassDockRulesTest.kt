@@ -13,7 +13,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * 液态玻璃底栏的**六条可机检规范**（2026-11-10 第四轮）。
+ * 液态玻璃底栏的**九条可机检规范**（2026-11-10 第四轮建 1–6，#278 补 7，#280 补 8–9）。
  *
  * 用户这轮反馈「点击效果和玻璃的效果都没有做完善，注意底栏的边界和大小」。
  * 对应的三类缺陷都是「编译过、detekt 查不到、真机上才看得出来」：
@@ -48,7 +48,14 @@ class LiquidGlassDockRulesTest {
     @Test
     fun `玻璃装饰一律按轮廓绘制_不许退回矩形`() {
         val source = glassSource("LiquidGlass.kt")
-        val offenders = listOf("drawGlass", "drawSpecularRim", "drawFocusSheen")
+        val offenders = listOf(
+            "drawGlass",
+            "drawSpecularRim",
+            "drawFocusSheen",
+            // #280 新增的两层「填充类」光学也必须沿 Outline，否则药丸两端会缺光。
+            "drawOpticalBody",
+            "drawSurfaceSweep",
+        )
             .mapNotNull { name ->
                 val body = functionBody(source, name)
                 when {
@@ -209,6 +216,83 @@ class LiquidGlassDockRulesTest {
             if (!backdrop.contains("LiquidGlass.TOUCH_GLOW_PEAK")) add("强度没走常量")
         }
         assertTrue("触摸光晕接线不完整：\n" + missing.joinToString("\n"), missing.isEmpty())
+    }
+
+    // ------------------------------------------------------------------ 规则 8
+
+    /**
+     * **光晕量纲按半径，且「表面流光」必须走绘制层。**
+     *
+     * 两条都是 #280 修的「编译过、detekt 查不到、真机才看得出来」：
+     *
+     * 1. #278 的 shader 写 `exp(-d² / uGlow.w)`，把**半径**当方差 ⇒ 有效半径缩成
+     *    `√w ≈12px`；必须改成 `uGlow.w * uGlow.w`。AGSL 是运行时编译、CI 覆盖不到，
+     *    只能扫源码把这条钉住，否则下一位"顺手简化"就退回去了。
+     * 2. #277/#278 把折射 / 色散 / 光晕全放进 API 33+ 的 AGSL ⇒ 31-32 点按时玻璃
+     *    毫无光学反应，且层 A 的光晕还被层 B 的实色填充盖掉一层。现在
+     *    `drawOpticalBody` / `drawSurfaceSweep` 画在层 B，31+ 全档可见。
+     */
+    @Test
+    fun `光晕量纲按半径且表面流光走绘制层`() {
+        val glass = glassSource("LiquidGlass.kt")
+        val optics = glassSource("LiquidGlassOptics.kt")
+        val missing = buildList {
+            if (!optics.contains("uGlow.w * uGlow.w")) {
+                add("shader 没按 w² 衰减，光晕会缩成 √w")
+            }
+            if (!optics.contains("sdfNormal")) add("折射法线没走 SDF 梯度")
+            if (!optics.contains("uClarity")) add("缺中心通透提亮 uniform")
+            if (!optics.contains("uLens")) add("缺按压透镜 uniform")
+            val body = functionBody(glass, "drawGlass")
+            if (body.isEmpty()) add("drawGlass 函数体没找到")
+            if (!body.contains("drawOpticalBody(")) add("drawGlass 没接通透厚度")
+            if (!body.contains("drawSurfaceSweep(")) add("drawGlass 没接表面流光")
+            val sweep = functionBody(glass, "drawSurfaceSweep")
+            if (!sweep.contains("press.focusX")) add("表面光斑没跟随手指 X")
+            if (!sweep.contains("press.focusY")) add("表面光斑没跟随手指 Y")
+            // 新绘制层不许自带 API 门槛；门槛只在 Optics 里，否则 31-32 又丢效果。
+            listOf("drawOpticalBody", "drawSurfaceSweep").forEach { name ->
+                if (functionBody(glass, name).contains("SDK_INT")) {
+                    add("$name 里有 SDK_INT 门槛，31-32 会丢效果")
+                }
+            }
+        }
+        assertTrue(
+            "光晕量纲 / 绘制层接线不完整：\n" + missing.joinToString("\n"),
+            missing.isEmpty(),
+        )
+    }
+
+    // ------------------------------------------------------------------ 规则 9
+
+    /**
+     * **按压要真的跟手，且亮灭时序非对称。**
+     *
+     * #279 的记录写「亮 120ms / 灭 360ms 非对称」，代码却让同一条 spring 管两个方向；
+     * `DockRow` 也只在 down 上报一次位置，名字叫「跟随手指」其实钉在按下点。
+     * 本轮两处都补上，同时用量化上报守住 #277 那条「动画期间零重组」。
+     */
+    @Test
+    fun `按压持续跟手且亮灭时序非对称`() {
+        val dock = dockSource()
+        val missing = buildList {
+            if (!dock.contains("DOCK_TRACKING_QUANTUM")) {
+                add("位置上报没量化，逐事件写 state 会重现按压期重组")
+            }
+            if (!dock.contains("event.changes.firstOrNull { it.pressed }")) {
+                add("手势循环没持续读取手指位置（还钉在按下点）")
+            }
+            if (!dock.contains("onPress(nx, ny)")) add("移动位置没回传宿主")
+            if (!dock.contains("if (pressing) GlassPressInSpec else GlassPressOutSpec")) {
+                add("intensity 没按方向切 spec，非对称时序没接上")
+            }
+            if (!dock.contains("durationMillis = 120")) add("亮起不是 120ms")
+            if (!dock.contains("durationMillis = 360")) add("熄灭不是 360ms")
+        }
+        assertTrue(
+            "跟手 / 时序接线不完整：\n" + missing.joinToString("\n"),
+            missing.isEmpty(),
+        )
     }
 
     // ----------------------------------------------------------------- helpers

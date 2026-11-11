@@ -232,4 +232,53 @@ class LiquidGlassTest {
         assertThat(LiquidGlass.TOUCH_GLOW_REACH_FACTOR).isGreaterThan(0f)
         assertThat(GlassPress().focusY).isEqualTo(0.5f)
     }
+
+    // ── 2026-11-11 第六轮（#280）：通透厚度 / 表面流光 / 透镜的数值判据 ──
+
+    /**
+     * 触摸光晕半径必须按「**半径**」口径定标。
+     *
+     * #278 传的是 `height × 0.9`，shader 却按 `exp(-d² / w)` 衰减（w 被当方差），
+     * 有效半径缩成 `√w` ≈12px，真机上几乎看不见。本轮 shader 改成 `/ w²`，
+     * 系数同步降到 0.42 ⇒ 60dp 胶囊 ≈156px × 0.42 ≈65px。
+     * 上界 0.6 防有人改回「方差口径的大值」，下界 0.2 防光晕又缩成一个白点。
+     */
+    @Test
+    fun `触摸光晕半径按半径口径定标`() {
+        assertThat(LiquidGlass.TOUCH_GLOW_REACH_FACTOR).isGreaterThan(0.2f)
+        assertThat(LiquidGlass.TOUCH_GLOW_REACH_FACTOR).isAtMost(0.6f)
+    }
+
+    /**
+     * 厚度与表面流光都是「极淡的增益」，不是往玻璃上糊一层白。
+     *
+     * 表面光斑要比扫光带更亮（一个是点光源、一个是掠过的反射），
+     * 绘制层的中心提亮要比 shader 内的更明显（前者在填充之上、后者在模糊内容里）。
+     */
+    @Test
+    fun `通透厚度与表面流光强度克制`() {
+        listOf(
+            LiquidGlass.INNER_CLARITY_ALPHA,
+            LiquidGlass.INNER_VIGNETTE_ALPHA,
+            LiquidGlass.SURFACE_GLOW_ALPHA,
+            LiquidGlass.SWEEP_ALPHA,
+            LiquidGlass.SHADER_CLARITY,
+        ).forEach { alpha ->
+            assertThat(alpha).isGreaterThan(0f)
+            assertThat(alpha).isLessThan(0.4f)
+        }
+        assertThat(LiquidGlass.SURFACE_GLOW_ALPHA).isGreaterThan(LiquidGlass.SWEEP_ALPHA)
+        assertThat(LiquidGlass.INNER_CLARITY_ALPHA).isGreaterThan(LiquidGlass.SHADER_CLARITY)
+    }
+
+    /** 表面层几何规格：光斑 / 扫光带占比都在 (0,1)，倾斜量与透镜强度为正。 */
+    @Test
+    fun `表面层几何与透镜规格合法`() {
+        assertThat(LiquidGlass.SURFACE_GLOW_RADIUS_FRACTION).isGreaterThan(0f)
+        assertThat(LiquidGlass.SURFACE_GLOW_RADIUS_FRACTION).isLessThan(1f)
+        assertThat(LiquidGlass.SWEEP_WIDTH_FRACTION).isGreaterThan(0f)
+        assertThat(LiquidGlass.SWEEP_WIDTH_FRACTION).isLessThan(1f)
+        assertThat(LiquidGlass.SWEEP_TILT_FRACTION).isGreaterThan(0f)
+        assertThat(LiquidGlass.LENS_STRENGTH).isGreaterThan(0f)
+    }
 }
