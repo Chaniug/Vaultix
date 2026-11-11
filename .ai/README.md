@@ -35,7 +35,8 @@
    `AlertDialogFlowRow` 就是纯 `FlowRow`、Dialog 全家零 `IntrinsicSize`；`git show d8559668`
    证明依赖版本与 #273 时相同 ⇒ #273「`indentChar` + `IntrinsicSize.Max` 测成 0 宽」的
    根因本就是猜的。`width(IntrinsicSize.Min)` 会把宽度**固定**成 `minIntrinsicWidth`，
-   #283 的 `widthIn(min=MinWidth)` 只是把小方块托到 64dp ⇒ 59 个动作槽全是固定方块，
+   #283 的 `widthIn(min=MinWidth)` 只是把小方块托到 64dp ⇒ 63 处动作槽调用（21 个使用文件）
+   全是固定方块，
    而「其他正常按钮」（`DialogShell` 家族用 `FlowRow` + 原生 M3 按钮）是 wrap-content
    ⇒ 两套规格并排。修法：删 intrinsic / 固定宽度，**只留** `widthIn(min = MinWidth)` 下限 +
    显式 `contentPadding`；#282 的「取消必须有边框」**不反转**。
