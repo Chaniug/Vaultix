@@ -63,6 +63,16 @@
 规则 3 反转后圈复杂度 15 > 14（拆 helper）。⚠️ **管道吞退出码**：`gradlew | tail`
 让 shell 显示 exit 0 而实际 `EXIT=1`，判 rc 一律 `cmd > log 2>&1; rc=$?; exit $rc`。
 
+**提交 / CI**：`e12fb13a feat(ui): #285 六组 UI / 主题 / KDBX 整改` 已推送 `main`；
+`AI docs consistency` success（9s）、`Android CI (Debug)` success（5m11s，
+`Lint, test diagnostics, and debug build` + `Sandbox unit tests` 两个 job 全绿）。
+本轮本地按项目约束只跑 detekt / 编译 / 九模块单测（`BUILD SUCCESSFUL in 2m 29s`），
+出包与 lint 交给 CI；preview Release 由 CI 自动更新为
+`Vaultix v0.12.0-dev-e12fb13 · Preview`（资产 `app-full-debug.apk`）。
+⚠️ 复核时踩到沙箱恢复后 `ANDROID_HOME` / `local.properties` 丢失（`SDK location not found`），
+先 `source /opt/vaultix-android-env.sh` 即可；后台任务在沙箱休眠时会被中断，
+长验证一律前台跑并 `cmd > log 2>&1; rc=$?; exit $rc`。
+
 ## 🕐 上一轮状态（2026-11-12 · #284 取消按钮规格统一 + KDBX 通行密钥排查）
 
 > **一句话**：用户两组反馈（设置页「取消」大小 / 形态与正常按钮不一致 + KDBX 能否存通行密钥 /
