@@ -5,7 +5,9 @@
 > `Docs/progress/next-steps.md`（待办唯一真源；历史按时间段归档，见文末索引）→ `Docs/progress/current-status.md`（进度快照）
 > → `.ai/SESSION-YYYY-MM-DD.md`（逐轮流水，需要细节才翻）。
 >
-> 最后更新：2026-11-11（**项目整体排查**：43 个坐标中 29 项已最新；`composeBom` / `material3` / `markdownRenderer` 三项禁单独升；「依赖解析结果 > 声明」实证；报告见 `Docs/progress/audit/project-audit-2026-11-11.md`）；2026-11-02（**v0.11.0 发版**：JSON→KDBX 做到逐字段无损 #219/#223/#224；发布流水线嵌套 `cd` 回归 #226 —— 报错文案与真实原因无关，查这类红要从第一条 `##[error]` 往上读）；2026-11-01（**#223 键名自造 ⇒ 与 KeePassXC 互不认：`card_*` / `identity_*` / `KP2A_URL_n` 改为照抄生态键名，旧 `VPX_*` 只读兼容**；此前 **#221 预览包 0 附件：`files:` 被粘进 `body:`，YAML 合法但键不存在**；此前 **#220 测试接缝赋值时机修复：CI 那条偶发红其实是「注入从未生效」**；此前 **JSON→KDBX 无损转换补齐 #219：卡/身份/SSH/密码历史/文件夹 读写两侧成对接上**；更早 **预览包身份 #218（含 218.4：APK v2 签名块解析器 + 自检 + 变异测试）**；更早 **两层锁 #214 = 「从不」档界面门禁 `AutoViewGate` + 新档位 `OnSystemLock`**；更早 开关双重取反 ⇒ 恒等映射 #213；命中框 52×32→52×48 #212；锁语义澄清 + 开发者「保持不锁」#210 / 通行密钥 type 串 #211；§9 顶部才是真源）。**本文件已压缩重写**：逐轮叙事折叠进
+> 最后更新：2026-11-11（**「不需要修」判定方案**：52 条分级登记 + 三问判定法 + 触发转修条件 +
+> 自动门禁；订正日志门面 P0→P1、分支≠buildType；登记表见
+> `Docs/progress/audit/evidence/no-fix-entries-2026-11-11.md`）；2026-11-11（**项目整体排查**：43 个坐标中 29 项已最新；`composeBom` / `material3` / `markdownRenderer` 三项禁单独升；「依赖解析结果 > 声明」实证；报告见 `Docs/progress/audit/project-audit-2026-11-11.md`）；2026-11-02（**v0.11.0 发版**：JSON→KDBX 做到逐字段无损 #219/#223/#224；发布流水线嵌套 `cd` 回归 #226 —— 报错文案与真实原因无关，查这类红要从第一条 `##[error]` 往上读）；2026-11-01（**#223 键名自造 ⇒ 与 KeePassXC 互不认：`card_*` / `identity_*` / `KP2A_URL_n` 改为照抄生态键名，旧 `VPX_*` 只读兼容**；此前 **#221 预览包 0 附件：`files:` 被粘进 `body:`，YAML 合法但键不存在**；此前 **#220 测试接缝赋值时机修复：CI 那条偶发红其实是「注入从未生效」**；此前 **JSON→KDBX 无损转换补齐 #219：卡/身份/SSH/密码历史/文件夹 读写两侧成对接上**；更早 **预览包身份 #218（含 218.4：APK v2 签名块解析器 + 自检 + 变异测试）**；更早 **两层锁 #214 = 「从不」档界面门禁 `AutoViewGate` + 新档位 `OnSystemLock`**；更早 开关双重取反 ⇒ 恒等映射 #213；命中框 52×32→52×48 #212；锁语义澄清 + 开发者「保持不锁」#210 / 通行密钥 type 串 #211；§9 顶部才是真源）。**本文件已压缩重写**：逐轮叙事折叠进
 > 第 9 节「当前状态」与第 10 节「历史轮次索引」，只留「不知道就会写错、且错了不报错」的内容。
 >
 > ⚠️ **2026-09-26 起 §9 顶部才是"最近几轮"的唯一真源**；§10 的索引止于 2026-09-13，
@@ -43,7 +45,12 @@
 | M4 / M5 | 发布准备 / 1.0 | ⬜ TODO |
 
 ## 4. 技术栈与硬约束
-Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk 37 / JDK 17
+Gradle 9.8.2 / AGP 9.5.0 / Kotlin 2.4.21 / KSP 2.3.13 / Hilt 2.60.1 / compileSdk 37 / JDK 17
+
+> ⚠️ **2026-11-11 按 `libs.versions.toml` + wrapper 订正**：旧口径
+> `9.5.1 / 9.3.2 / 2.4.10 / 2.3.11` 曾长期留在本节，是整体排查报告 §1.4 版本漂移的**第 5 处**
+> （在 AI 必读文档里，危害比版本目录注释更大）。
+> **版本类事实只信版本目录与 wrapper，不信记忆正文**；正文只记约束与 why。
 
 - **Hilt 与 Kotlin 强绑定**：Kotlin 2.4.x → Hilt **2.60.1**；AGP 9 要求 Hilt ≥ 2.59
 - AGP 9 **禁止** apply `kotlin-android`（内置 Kotlin 冲突）
@@ -52,7 +59,9 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 - 本机 SDK 在 `C:\AndroidSDK`，**无 android-36** ⇒ compileSdk **必须 ≥ 37**
 - **daemon 堆各 4g**（`org.gradle.jvmargs` 与 `kotlin.daemon.jvmargs`），**禁止回退 2g**
   （含多 Compose 模块 + Bitwarden 全载荷映射，分析大型 composable 时易 OOM）
-- **detekt `2.0.0-alpha.6`**（精确对齐 Kotlin 2.4.10/AGP 9.3/Gradle 9.5，1.23.x 不可用）
+- **detekt `2.0.0-alpha.6`**（1.23.x 不可用）。⚠️ 官方兼容表写 Kotlin 2.4.10 / AGP 9.3.1 /
+  Gradle 9.6.1，**已过期**：本项目 2.4.21 / 9.5.0 / 9.8.2 下 CI `detekt` 绿。
+  升 Gradle 9.9.1 前先单独试 `detekt --configuration-cache`，别整条 CI 一起推
   - 阈值 = `Docs/16` 硬上限：`LongMethod ≤ 150` / `LargeClass ≤ 1200` / 参数 ≤ 8 / 单文件 ≤ 60 函数
   - **行长上限 120**，按 Kotlin `String.length`（UTF-16）算 —— CJK 按**字符**，别用字节数
   - **`ComplexCondition` 阈值 3**（比默认 4 严）
@@ -157,6 +166,9 @@ Gradle 9.5.1 / AGP 9.3.2 / Kotlin 2.4.10 / KSP 2.3.11 / Hilt 2.60.1 / compileSdk
 > - **判据沉淀**：[8.11 七类「不报错的错」](./conventions/8.11-七类不报错的错.md)；
 > - **项目整体排查（2026-11-11）**：[`Docs/progress/audit/project-audit-2026-11-11.md`](../Docs/progress/audit/project-audit-2026-11-11.md)
 >   —— 依赖矩阵 / 规范符合性 / 稳定性与性能方案；**只出报告，未改生产代码**；
+> - **⚠️ 排查 / 整改开工前必读**：[「不需要修」登记表（52 条）](../Docs/progress/audit/evidence/no-fix-entries-2026-11-11.md)
+>   与[判定方案](../Docs/progress/audit/no-fix-register-2026-11-11.md) —— 产出的待修项先与登记 ID 比对，
+>   命中即引用登记，不要重写理由、更不要重新列成待办（有 `check_no_fix_register.py` 门禁）；
 > - **历史轮次状态块**（2026-09 ~ 2026-11，原 §9 正文）：
 >   [`archive/MEMORY-9-历史状态-2026-09至11.md`](./archive/MEMORY-9-历史状态-2026-09至11.md)
 >   —— **是历史，不要当现状读。**

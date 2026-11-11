@@ -11,11 +11,16 @@ name: AI docs consistency
 #     - 改代码时：本 workflow 根本不触发（paths 过滤）⇒ 出包链路零等待、零噪音；
 #     - 改文档时：它自己跑、自己红 —— 门禁语义**不变**，只是不再连累出包。
 #
-# 门禁强度不变：仍由这 4 个脚本判定（探针自己判错会制造假红，假红几次之后就没人看它了，
+# 门禁强度不变：3 个检查器 + 3 条自测（探针自己判错会制造假红，假红几次之后就没人看它了，
 # 故各配一条自测）。
 #
-# paths 覆盖前提：两个检查器的检查对象分别落在 `.ai/**`（索引与分篇）
-# 与全仓 markdown（`check_md_links.py` 扫 .md 相对链接）⇒ 上面的 paths 已全覆盖。
+# paths 覆盖前提：检查对象分别落在 `.ai/**`（索引与分篇）、全仓 markdown
+# （`check_md_links.py` 扫 .md 相对链接）与 `Docs/**` 登记表。
+# ★ 2026-11-11 起 `check_no_fix_register.py` 还会校验登记表锚点指向的**配置文件**
+#   （版本目录 / wrapper / build.gradle.kts / Manifest / proguard / detekt 配置），
+#   故下面 paths 补了这几类 —— 否则「有人改了 allowBackup 却没更新登记」不会触发本 workflow。
+#   少数锚点落在 `.kt` 上（Coil / Room / OkHttp / @Suppress），由本地全量门禁兜底：
+#   为覆盖它们而把 `app/src/main/**` 塞进 paths，会让当初「改代码不触发文档门禁」的拆分失效。
 
 on:
   push:
@@ -24,12 +29,24 @@ on:
       - '.ai/**'
       - 'Docs/**'
       - '**/*.md'
+      - 'gradle/**'
+      - 'gradle.properties'
+      - 'app/build.gradle.kts'
+      - 'app/src/main/AndroidManifest.xml'
+      - 'app/proguard-rules.pro'
+      - 'config/detekt/**'
   pull_request:
     branches: [ main ]
     paths:
       - '.ai/**'
       - 'Docs/**'
       - '**/*.md'
+      - 'gradle/**'
+      - 'gradle.properties'
+      - 'app/build.gradle.kts'
+      - 'app/src/main/AndroidManifest.xml'
+      - 'app/proguard-rules.pro'
+      - 'config/detekt/**'
   workflow_dispatch:
 
 permissions:
@@ -70,3 +87,22 @@ jobs:
       - name: Self-test markdown link checker
         shell: bash
         run: python3 "$GITHUB_WORKSPACE/.ai/tools/tests/selftest_md_links.py"
+
+      # ★ 2026-11-11：「不需要修」登记表 —— 把「凭什么判定不修」变成机器可校验的状态。
+      #
+      # 为什么需要：散落在 `.ai/decisions/` 各篇里的「不做 / 被否」段是**人读文字**，
+      # 扫描器不会因为读过它们就少吐一行。于是 159 条「注释缺空格」、52 条「硬编码密钥」、
+      # 131 个「超长方法」每轮整体排查都会被重新列成待办；被拍板冻结的 Compose 三项
+      # 也挡不住 Dependabot。本关以 `Docs/progress/audit/evidence/no-fix-entries-2026-11-11.md`
+      # 的表格为唯一真源，校验：① 登记完整性 ② 锚点仍存在（配置被回退 / 冻结版本被改）
+      # ③ 待办里没有重新列入已判不修的事。
+      #
+      # 首次运行实测就抓到一处真矛盾：`next-steps.md` 仍把已判推迟的 WorkManager
+      # 周期同步挂在 `- [ ]` 上 —— 已同步订正为「已判推迟（不是待办）」。
+      - name: Check no-fix register (anchors + no stale todos)
+        shell: bash
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/check_no_fix_register.py"
+
+      - name: Self-test no-fix register checker
+        shell: bash
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/tests/selftest_no_fix_register.py"

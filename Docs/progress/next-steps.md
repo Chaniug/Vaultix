@@ -17,7 +17,8 @@
 | 版本 | **v0.12.0**（Latest · 混淆包 6.5 MB · versionCode 12000） |
 | 上一轮 | UI 精装修：图标 / 底栏玻璃 / 「+」面板 / 卡包 / 库列表切库 / 启动帧 |
 | 门禁 | detekt · 编码 · 图标几何 · assembleFullDebug · 单测 · preview 全绿 |
-| 整体排查 | 2026-11-11 · [报告](audit/project-audit-2026-11-11.md)：43 个依赖坐标中 **29 项已最新**、3 项禁单独升、3 类真违规、3 项质量基建缺失 |
+| 整体排查 | 2026-11-11 · [报告](audit/project-audit-2026-11-11.md)：43 个依赖坐标中 **29 项已最新**、3 项禁单独升、**2 类**真违规（订正后）、3 项质量基建缺失（属「要建」） |
+| 不需要修 | 2026-11-11 · [判定方案](audit/no-fix-register-2026-11-11.md) + [52 条登记](audit/evidence/no-fix-entries-2026-11-11.md)；门禁 `check_no_fix_register.py` 已接 `ci-docs.yml` |
 
 ## 待真机验收（v0.12.0）
 
@@ -39,20 +40,29 @@
 > （CI 每条 gradle 命令都带 `--no-configuration-cache`）、Kover **只在根 `apply false`、未接 CI**。
 > 旧注释「未逐项核对是否已完成」就此前三项**已作废**；ViewModel 单测仍待核。
 
+> ⚠️ **2026-11-11 补**：任何整体排查 / 依赖升级 / 规范整改**开工前先读**
+> [「不需要修」登记表](audit/evidence/no-fix-entries-2026-11-11.md)（52 条，判据见
+> [no-fix-register](audit/no-fix-register-2026-11-11.md)）。产出的每条待修项先与登记 ID 比对，
+> 命中即引用登记，不要重写理由、更不要重新列成待办（有 `check_no_fix_register.py` 门禁）。
+
 - [ ] **依赖解析结果纳入 CI 门禁**（最高优先，先于任何升级）：施工单见报告附录 C · S1
+- [ ] **生产 3 处 `!!` 清零**（P1，会 NPE 崩溃，排在日志之前）：报告 §2.2 / §4 · S3
+- [ ] **release 下 6 处绕过 `VaultixLog` 的直接 `Log` 收敛**（P1，由 P0 下调：不崩溃、
+      不丢数据，属日志红线与信息泄露风险；`BuildConfig.DEBUG` 由 buildType 决定，不由分支决定）：
+      报告 §2.2 / §6 订正
 - [ ] Baseline Profile：生成 `baseline-prof.txt`，覆盖冷启动 / 解锁 / 列表 / 详情 + autofill
 - [ ] Gradle 配置缓存：先验 `detekt --configuration-cache`，可用再开
 - [ ] Kover 覆盖率基线接入 CI（阈值先取实测值，不一步设 80%）
-- [ ] release 下 6 处绕过 `VaultixLog` 的直接 `Log`、生产 3 处 `!!` 清零（报告 §2.2）
 - [ ] `ViewModel 单测` / `:app` 单测用例补强 —— **本轮未核对，保留待核**
 
-### P2 · 自动化（WorkManager 周期同步）
+### P2 · 已判推迟（不是待办，勿重新排期）
 
-- [ ] WorkManager 周期同步 + 网络约束
-      **已判推迟**（`decisions` 的「周期同步 M1 判推迟」）：进程存活时
-      APP_RESUME / PAGE_ENTER 已覆盖「打开即最新」；进程被杀后会话密钥在内存
-      （重启必锁），周期任务无可同步内容 ⇒ 收益≈0。编排器 PERIODIC 已预留，
-      与本地 KDBX 队列推送一并设计时再启用（`Docs/17` §3.3：禁止常驻轮询）。
+> **WorkManager 周期同步 + 网络约束 —— 已判推迟，收益≈0**
+> （[`decisions.md`](decisions.md)「周期同步 M1 判推迟」；登记为 [C01](audit/evidence/no-fix-entries-2026-11-11.md)）：
+> 进程存活时 APP_RESUME / PAGE_ENTER 已覆盖「打开即最新」；进程被杀后会话密钥在内存
+> （重启必锁），周期任务无可同步内容。编排器 PERIODIC 已预留，
+> **触发转修条件**：引入本地 KDBX 离线写队列（有可同步内容），或用户要求后台自动同步。
+> `Docs/17` §3.3：禁止常驻轮询。
 
 ### 已知未决（接力者注意）
 
