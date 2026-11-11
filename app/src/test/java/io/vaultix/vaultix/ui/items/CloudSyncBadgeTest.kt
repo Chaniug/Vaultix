@@ -30,6 +30,14 @@ import org.junit.Test
  * ⚠️ 这里刻意**不测 Compose**，只测那个把语义决定下来的纯函数。
  * 用截图回归测它太贵（要起 instrumentation），而错误的形态又是"多一个 / 少一个图标"——
  * 正是肉眼最容易漏掉的那类。纯函数一条断言就锁死了。
+ *
+ * ## 2026-11-12 第八轮（#282）：形状统一，本文件的判据一个不改
+ *
+ * 用户要求「kdbx 的小云图标和 bitwarden 的云同步图标一样，都要带对勾」。
+ * 改的是 `VaultSourceCloudIcon` 的**图标形状**（`Cloud` → `CloudDone`），
+ * 不是 [cloudSyncBadgeOrNull] 的**语义**：`CLOUD_VAULT` 仍是独立枚举值，
+ * 本地 KDBX 仍不画云、KDBX 仍不产出 `SYNCED/PENDING`。
+ * ⇒ 下面全部断言保留，它们是「形状统一后不把语义一起合并」的护栏。
  */
 class CloudSyncBadgeTest {
 
@@ -55,7 +63,7 @@ class CloudSyncBadgeTest {
         assertThat(cloudSyncBadgeOrNull(VaultKind.KDBX, LOCAL_SAF, false)).isNull()
     }
 
-    // ── KDBX·云端：画**裸云**（第二轮 bug 的守卫） ────────────────────────────────
+    // ── KDBX·云端：画云端库徽标（第二轮 bug 的守卫） ─────────────────────────────
 
     @Test
     fun `kdbx on onedrive shows the cloud vault badge`() {

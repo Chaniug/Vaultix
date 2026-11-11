@@ -17,7 +17,6 @@ package io.vaultix.vaultix.ui.common
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material3.Icon
@@ -45,8 +44,9 @@ private val CLOUD_ICON_SIZE = Spacing.lg
  * - [synced] = false → 云加斜杠（`CloudOff`），`error` 色 —— 这是**需要用户注意**的状态
  *   （本地改动还没推上云），必须跳出来。
  *
- * ⚠️ KDBX 库调用方**不要**渲染本组件：KDBX 的文件即存储，没有「云端」这一层，
- * 画出来是在编造一个不存在的状态。
+ * ⚠️ KDBX 云端库**不要**用本组件回答「库在哪」：那是 [VaultSourceCloudIcon] 的职责，
+ *    判据是 `VaultSummary.origin`。本组件只服务 Bitwarden 的条目级 `pending_ops`。
+ *    #282 起两者形状一致（都是 `CloudDone`），但调用方与数据源仍严格分开。
  */
 @Composable
 fun CloudSyncIcon(synced: Boolean, modifier: Modifier = Modifier) {
@@ -73,40 +73,37 @@ fun CloudSyncIcon(synced: Boolean, modifier: Modifier = Modifier) {
 /**
  * 条目行尾的**库来源**云图标：这个库存在云端（OneDrive / WebDAV），不是本地文件。
  *
- * ## 为什么它必须与 [CloudSyncIcon] 分开（2026-11-10 真机反馈）
+ * ## 前两轮（2026-11-10）：先多画、后少画
  *
- * 用户原话：
+ * #263 修掉「**本地** KDBX 挂上已同步的云」时，改成了「KDBX 一律不画」——
+ * 把用户真正需要的那一朵也删了（过度修正）。#266 据用户反馈拆成三态，
+ * 让 `VaultSummary.origin` 回答「这个库在不在云上」、Bitwarden `pending_ops`
+ * 回答「这一条推上去了吗」，本地 KDBX 仍不画。这两轮的**判据本轮一个不动**。
  *
- * > onedrive 上的 kdbx 条目，居然没有小云图标，这样和本地的 kdbx 条目看起来没有区别啊。
- * > onedrive 上的 kdbx 是必有小云图标，因为它来自云，而本地文件没有云图标，
- * > 它是来自本地的，这样的才对。
+ * ## 2026-11-12 第八轮（#282）：形状统一，但语义不合并
  *
- * 上一轮修掉了「**本地** KDBX 挂上已同步的云」（#263），但修法是
- * 「KDBX 一律不画」—— 把用户真正需要的那一朵也一起删掉了。这属于**过度修正**：
- * 判据从「这个库有没有云」退化成「这个库是不是 KDBX」，而后者与问题无关。
+ * 用户反馈：「kdbx 的小云图标和 bitwarden 的云同步的图标不一样，不是带对勾的云图标。」
+ * 前两轮刻意用**裸云**（地点）与**云+对勾**（状态）区分语义，但真机上两朵不同的云
+ * 并排出现时，用户读到的是「这个不一样 / 是不是没同步」，而不是设计者想表达的
+ * 「一个答地点、一个答状态」。⇒ 用户最新反馈优先：本组件改用 [Icons.Filled.CloudDone]，
+ * 与 [CloudSyncIcon] 的「已同步」**同形同色**（`onSurfaceVariant` 弱化）。
  *
- * ## 语义边界（三者**不能**共用一个图标）
+ * ⚠️ **形状统一 ≠ 语义合并**，下面三条底线本轮一个没动，由 `CloudSyncBadgeTest` 钉住：
+ *    1. **本地 KDBX 仍然不画云** —— `cloudSyncBadgeOrNull` 对 LocalFile 返回 null，
+ *       「有没有云」的判据始终是 `VaultSummary.origin`，不因形状改了就给本地库补一朵；
+ *    2. KDBX **不产出条目级同步态** —— 整文件同步没有「这一条上云了」，
+ *       `CLOUD_VAULT` 与 `SYNCED` 仍是两个不同的枚举值，读屏文案也不同
+ *       （`sync_state_cloud_vault` = 「来自云端密码库」 vs `sync_state_synced` = 「已同步到云端」）；
+ *    3. 「待上传 / 失败」仍由库级 `DetailSyncIndicator` / `SyncBadge` 用 `CloudOff` + error 承担。
  *
- * | 图标 | 形状 | 回答的问题 | 数据源 |
- * |---|---|---|---|
- * | [CloudSyncIcon] true | 云 + 对勾 | 「这一条推上云了吗」 | Bitwarden `pending_ops` |
- * | [CloudSyncIcon] false | 云 + 斜杠（error） | 「这一条还没推上去」 | 同上 |
- * | 本组件 | **裸云**（无对勾） | 「这个库本身在云上吗」 | `VaultSummary.origin` |
- *
- * ⇒ **裸云 = 地点，云+对勾 = 状态。** 两者混用就会出现「本地库显示已同步」
- *   （上一轮的 #263）或「云端库看起来像本地文件」（本轮）。
- *
- * ⚠️ 刻意不画**对勾**：KDBX 是整文件同步，条目级没有"这一条上了云"这回事。
- *    画了对勾就是在复用 Bitwarden 的状态语义，而那个状态在这里不存在。
- *
- * ⚠️ 弱化色（`onSurfaceVariant`）：它是**常态**（库一直在云上），不该抢眼；
- *    真正需要用户注意的「待上传 / 失败」由库级 `DetailSyncIndicator` 与
- *    `SyncBadge` 承担。
+ * ⚠️ 弱化色（`onSurfaceVariant`）：它是**常态**（库一直在云上），不该抢眼。
+ * ⚠️ 原 KDoc 的「裸云 = 地点，云+对勾 = 状态」「刻意不画对勾」即日起**作废**，
+ *    历史理由留存在 `.ai/issues/06-界面与交互-part14.md`，不要在别处再引用。
  */
 @Composable
 fun VaultSourceCloudIcon(modifier: Modifier = Modifier) {
     Icon(
-        imageVector = Icons.Filled.Cloud,
+        imageVector = Icons.Filled.CloudDone,
         contentDescription = stringResource(R.string.sync_state_cloud_vault),
         tint = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = modifier.size(CLOUD_ICON_SIZE),

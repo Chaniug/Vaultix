@@ -509,7 +509,6 @@ private fun PinForgotConfirmDialog(controller: QuickUnlockController) {
                     text = stringResource(R.string.pin_forgot_confirm),
                     onClick = controller::onForgetPin,
                 )
-                Spacer(Modifier.width(Spacing.sm))
                 DialogBackButton(controller::dismiss)
             }
         }
@@ -547,7 +546,6 @@ private fun PinEntryDialog(
                             controller.disablePinFromChange()
                         },
                     )
-                    Spacer(Modifier.width(Spacing.sm))
                     DialogBackButton { showDisableConfirm = false }
                 }
             }
@@ -598,15 +596,18 @@ private fun PinEntryDialog(
                 //   单 Row 里会把主按钮裁成屏幕边一条竖条（真机截图）。`weight` 空隙
                 //   随之去掉；「关闭 PIN 解锁」排在最前 + danger 色，换行时自成一行，
                 //   仍与返回 / 继续分开，不误触。
+                //   ⚠️ 2026-11-12 #282：FlowRow 自带 `spacedBy(Spacing.sm)`，里面手写的
+                //      `Spacer(Modifier.width(Spacing.sm))` 是第二份间距 —— 不只把间隔翻倍，
+                //      Spacer 还作为独立 item 参与换行，把「继续」挤得与「返回」错位。
+                //      本文件 4 个 DialogActions 里的 5 处横向 Spacer 全部删掉，
+                //      按钮间距只由 FlowRow 一处管（用户反馈「继续按钮和另外的按钮错位」）。
                 if (isChange) {
                         DialogDangerButton(
                         text = stringResource(R.string.pin_disable),
                         onClick = { showDisableConfirm = true },
                     )
-                    Spacer(Modifier.width(Spacing.sm))
                 }
                 DialogBackButton(controller::dismiss)
-                Spacer(Modifier.width(Spacing.sm))
                 DialogPrimaryButton(
                     text = stringResource(R.string.action_continue),
                     onClick = if (isChange) controller::submitChangePin else controller::submitPin,
@@ -661,7 +662,6 @@ private fun KdbxPasswordDialog(
                     text = stringResource(R.string.quick_unlock_kdbx_skip),
                     onClick = controller::skipCurrentVault,
                 )
-                Spacer(Modifier.width(Spacing.sm))
                 DialogPrimaryButton(
                     text = stringResource(R.string.action_continue),
                     onClick = controller::submitPassword,

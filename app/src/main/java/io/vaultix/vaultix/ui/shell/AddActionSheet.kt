@@ -26,6 +26,14 @@
  *   tertiary 的 container 与 accent），不再全是灰蓝。⚠️ 全部走 `colorScheme`
  *   角色，**不硬编码品牌色**，动态取色与 8.8 §6② 都不受影响。
  *
+ * ## 2026-11-12 第八轮（#282）：剪影卡片配色活泼化
+ *
+ * 用户反馈「剪影卡片的颜色偏单调，能稍微多加一两个色系的配色吗」。本轮只动
+ * [glyphPalette] 与两处绘制参数：三色系在「卡底 / 剪影底 / 重点形状」交叉铺开、
+ * 卡底 alpha 0.45 → 0.68、便签补一枚 accent 色块。**不新增任何 vector、不写死色值、
+ * 不引入额外重组**（`glyphPalette` 仍是一次 `colorScheme` 读取的纯函数）。
+ * 详见 [GlyphPalette] 的 KDoc：为什么不硬造第 4 个色相。
+ *
  * ⚠️ 用稳定的 `ModalBottomSheet`，不用 M3E 的 `FloatingActionButtonMenu`
  *    （8.8 §6①：alpha API 只用于叶子组件，不承载导航级动作）。
  * ⚠️ 面板里放 `Surface` 卡片，不是 Popup / DropdownMenu 选择器。
@@ -85,19 +93,54 @@ import io.vaultix.vaultix.ui.theme.Spacing
 import io.vaultix.vaultix.ui.theme.VaultixCorner
 import kotlinx.coroutines.launch
 
-/** 一类条目的剪影配色：accent 画重点形状，tint 作卡片底色。 */
-private data class GlyphPalette(val accent: Color, val tint: Color)
+/**
+ * 一类条目的剪影配色。
+ *
+ * @property accent 剪影里的重点形状（站点块 / 磁条 / 头像 / 字符块）。
+ * @property tint 整张类型卡的底色。
+ * @property wash 剪影内层小卡的背景（#282 新增）：**刻意与 [tint] 不同色系**，
+ *   让一张卡里出现两个色系，而不是整张卡一片同色。
+ */
+private data class GlyphPalette(val accent: Color, val tint: Color, val wash: Color)
 
-/** 全部取自 `colorScheme` 角色 —— 深浅主题 / 动态取色自动跟随，不写死色值。 */
+/**
+ * 全部取自 `colorScheme` 角色 —— 深浅主题 / 动态取色自动跟随，不写死色值。
+ *
+ * ## 2026-11-12 第八轮（#282）：颜色偏单调 ⇒ 三色系交叉铺开
+ *
+ * 用户反馈「新建条目页面的剪影卡片的颜色偏单调，能稍微多加一两个色系的配色吗」。
+ * 原来 5 个类型只用到 3 个 accent，且 Login=Identity=primary、SecureNote=SshKey=
+ * secondary；卡底又被 `alpha=0.45` 洗淡、内层再盖一层 `surface 0.78` 白卡 ⇒
+ * 三张卡看上去几乎是同一个灰蓝色，`GlyphNote` 更是一点彩色都没有。
+ *
+ * ⇒ 本轮**不硬造第 4 个色相**：M3 动态取色只保证 primary/secondary/tertiary
+ *   三个强调色相（error 是「错误」语义，不能拿来当类型标识），自己算色相会破坏动态取色。
+ *   改让这三个色系在「卡底 / 剪影底 / 重点形状」三个位置**交叉搭配**：
+ *   [GlyphPalette.wash] 与 [GlyphPalette.tint] 一律不同色系，5 张卡因此各有 2–3 个色系；
+ *   再把卡底 alpha 从 0.45 提到 0.68、给便签补一枚 accent 色块。
+ *   ⚠️ 仍是纯 `colorScheme` 角色，动态取色 / 深浅主题 / 8.8 §6② 全部不受影响。
+ */
 @Composable
 private fun glyphPalette(type: VaultItemType): GlyphPalette {
     val scheme = MaterialTheme.colorScheme
+    // 交叉表：tint（卡底）与 wash（剪影底）刻意错开一个色系，accent 再取第三种或
+    // 配对的 on-container 深色 ⇒ 相邻网格卡不会撞成同一片颜色。
     return when (type) {
-        VaultItemType.Login -> GlyphPalette(scheme.primary, scheme.primaryContainer)
-        VaultItemType.SecureNote -> GlyphPalette(scheme.secondary, scheme.secondaryContainer)
-        VaultItemType.Card -> GlyphPalette(scheme.tertiary, scheme.tertiaryContainer)
-        VaultItemType.Identity -> GlyphPalette(scheme.primary, scheme.tertiaryContainer)
-        VaultItemType.SshKey -> GlyphPalette(scheme.secondary, scheme.primaryContainer)
+        VaultItemType.Login -> GlyphPalette(
+            scheme.primary, scheme.primaryContainer, scheme.secondaryContainer,
+        )
+        VaultItemType.SecureNote -> GlyphPalette(
+            scheme.secondary, scheme.secondaryContainer, scheme.tertiaryContainer,
+        )
+        VaultItemType.Card -> GlyphPalette(
+            scheme.tertiary, scheme.tertiaryContainer, scheme.primaryContainer,
+        )
+        VaultItemType.Identity -> GlyphPalette(
+            scheme.onTertiaryContainer, scheme.tertiaryContainer, scheme.secondaryContainer,
+        )
+        VaultItemType.SshKey -> GlyphPalette(
+            scheme.onSecondaryContainer, scheme.secondaryContainer, scheme.primaryContainer,
+        )
     }
 }
 
@@ -329,7 +372,10 @@ private fun AddTypeTile(
         onClick = onPick,
         modifier = modifier.heightIn(min = 104.dp),
         shape = VaultixCorner.Panel,
-        color = palette.tint.copy(alpha = 0.45f),
+        // #282：0.45 → 0.68。原来把三个 container 全洗成近乎同色，是「偏单调」的
+        // 主因之一；提到 0.68 后 primary/secondary/tertiary 的色相差一眼可见，
+        // 仍是半透明 tonal 面（生成器卡同款「别太透」口径，见下方 0.58）。
+        color = palette.tint.copy(alpha = 0.68f),
         contentColor = MaterialTheme.colorScheme.onSurface,
     ) {
         Column(modifier = Modifier.padding(Spacing.md)) {
@@ -428,7 +474,9 @@ private fun ItemFieldGlyph(
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(9.dp))
-            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.78f))
+            // #282：原来是 `surface 0.78` 白卡，把刚上的类型色又洗掉一层。
+            // 换成与卡底**不同色系**的 wash，剪影小卡本身也带颜色 ⇒ 一张卡两个色系。
+            .background(palette.wash.copy(alpha = 0.62f))
             .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
         contentAlignment = Alignment.Center,
     ) {
@@ -459,7 +507,7 @@ private fun TypeGlyph(
     Box(modifier = modifier, contentAlignment = Alignment.Center) {
         when (type) {
             VaultItemType.Login -> GlyphLogin(accent = accent, line = line)
-            VaultItemType.SecureNote -> GlyphNote(line = line)
+            VaultItemType.SecureNote -> GlyphNote(accent = accent, line = line)
             VaultItemType.Card -> GlyphCard(accent = accent, line = line)
             VaultItemType.Identity -> GlyphIdentity(accent = accent, line = line)
             VaultItemType.SshKey -> GlyphSsh(accent = accent, line = line)
@@ -528,13 +576,17 @@ private fun GlyphLogin(accent: Color, line: Color) {
     }
 }
 
+/**
+ * 安全便签：三行文本剪影。**#282 起第一行用 accent 画一枚短色块**（便签标签），
+ * 之前三行全是灰线，这整张卡一点彩色都没有，是「偏单调」最明显的一格。
+ */
 @Composable
-private fun GlyphNote(line: Color) {
+private fun GlyphNote(accent: Color, line: Color) {
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(Spacing.xs),
     ) {
-        GlyphLine(width = 64.dp, color = line)
+        GlyphLine(width = 20.dp, color = accent)
         GlyphLine(width = 52.dp, color = line)
         GlyphLine(width = 38.dp, color = line)
     }

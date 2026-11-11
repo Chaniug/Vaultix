@@ -87,6 +87,18 @@ import androidx.compose.ui.unit.dp
  * 本轮把开关语义从「有没有模糊」改成「哪种材质」：[DockMaterial.Frosted] 用更大半径的
  * 模糊 + 更实的填充、不挂 AGSL；[DockMaterial.Liquid] 保持全套光学。
  * ⚠️ 两档的层 A / 层 B / 坐标偏移 / 测量结果**完全一致**，只是效果链末端与绘制层数不同。
+ *
+ * ## 2026-11-12 第八轮（#282）：去掉细边线 + 中心更透、边缘更立
+ *
+ * 用户两条反馈：① 两档底栏外框都有一圈「很小很小的边线」，视觉效果不好；
+ * ② 开液态玻璃后「透明效果还是不够」。根因分别是旧第 ⑧ 层那圈 1dp 整圈内描边
+ * （两档共有）与 #281 回提后的 0.50/0.62 填充。
+ *
+ * ⚠️ 这不是把 #281 的「回提防薄」推翻重来：#281 补的**边缘厚度**（镜面 rim 0.62 /
+ *   内阴影 0.26 / 上沿高光 0.48 / 8dp 阴影）本轮**一个不动**，玻璃的「自我」由边缘提供，
+ *   不再依赖中心填充的浓度。所以本轮只把中心填充降到 0.44/0.56、去掉那圈细线，
+ *   并提中心 clarity / 降下沿渐晕 ⇒ **中心更透、边缘更立**，既回应「不够透」又不会变薄。
+ *   模糊半径（24dp / 30dp）也保持 #281 口径不动，避免「越改越糊 / 越改越薄」来回摇摆。
  */
 
 /**
@@ -104,11 +116,13 @@ import androidx.compose.ui.unit.dp
  * | 材质 | 开关 | 模糊 | 填充 | 光学 |
  * |---|---|---|---|---|
  * | [DockMaterial.Frosted] | 关（默认） | 30dp | 0.74 / 0.80 | 静态磨砂，无 AGSL / 无流光 |
- * | [DockMaterial.Liquid] | 开 | 24dp | 0.50 / 0.62 | AGSL 折射 / 分色 / 跟手流光 |
+ * | [DockMaterial.Liquid] | 开 | 24dp | 0.44 / 0.56 | AGSL 折射 / 分色 / 跟手流光 |
  *
  * ⚠️ 两档**共用同一条**「源 → 效果层 → 消费」链路与同一个 [LiquidGlassLayer]，
  *    不另起一套采样 —— 本项目已因「同一规则写两处」栽过三次（#120/#193/#195）。
  * ⚠️ 只改观感；采样、层级、坐标偏移、底栏边界与大小一行未动。
+ * ⚠️ #282 把 Liquid 填充从 0.50/0.62 再降到 0.44/0.56（用户「透明效果不够」），
+ *    Frosted 保持 0.74/0.80 不动；两档边界仍靠 rim / 内阴影，不靠填充浓度。
  */
 
 /**
@@ -163,9 +177,15 @@ object LiquidGlass {
  *    0.38 的填充几乎没有自我，只剩一层雾。本轮回提到 **0.50 / 0.62**
  *    （仍在 ultraThin 与 thin 之间），同时把模糊从 18dp 提到 24dp ——
  *    模糊更充分 ⇒ 透出来的是柔和色块而非可辨文字 ⇒ 填充回提也不会挡内容。
+ *
+ * ⚠️ **2026-11-12 #282 再降到 0.44 / 0.56**：用户这轮反馈「开液态玻璃后透明效果
+ *    还是不够」。与 #281 的「薄」不矛盾 —— 那轮缺的是**玻璃的自我**，已由 rim / 内阴影 /
+ *    高光 / 阴影这圈**边缘厚度**补齐；这轮要的是**中心能看到更多下方内容**，
+ *    所以只降中心填充、保留全部边缘。0.44 仍高于 #280 之前的 0.38 薄档，
+ *    不会退回「一大片雾」。⚠️ `LiquidGlassTest` 的 0.45 下界同步作废为 0.42（留痕）。
  */
-const val FILL_ALPHA_LIGHT = 0.50f
-const val FILL_ALPHA_DARK = 0.62f
+const val FILL_ALPHA_LIGHT = 0.44f
+const val FILL_ALPHA_DARK = 0.56f
 
 /**
  * 常态**磨砂**档的填充不透明度（#281 新增）。
@@ -332,11 +352,13 @@ val FrostedBlurRadius = 30.dp
      *
      * ⚠️ 刻意不用径向渐变：胶囊宽高比 ≈6:1，按宽度取半径会在高度方向铺满整条底栏，
      *    「中心亮、两端淡」完全读不出来 —— 见 [INNER_VIGNETTE_START_FRACTION]。
+     * ⚠️ #282：0.10 → **0.13**，配合更低的填充让中心读作「亮而清的玻璃」而不是「灰雾」；
+     *    仍是极淡增益（单测上界 0.4），不是往玻璃上糊白。
      */
-    const val INNER_CLARITY_ALPHA = 0.10f
+    const val INNER_CLARITY_ALPHA = 0.13f
 
-    /** 下沿渐晕峰值：与中心提亮配对，做出上透下压的厚度，而不是一块平板。 */
-    const val INNER_VIGNETTE_ALPHA = 0.09f
+    /** 下沿渐晕峰值：与中心提亮配对，做出上透下压的厚度，而不是一块平板。#282：0.09 → 0.06，别把下沿压太暗。 */
+    const val INNER_VIGNETTE_ALPHA = 0.06f
 
     /**
      * 表面流光内部光斑峰值（再乘 intensity²）。
@@ -361,8 +383,8 @@ val FrostedBlurRadius = 30.dp
     /** 按压透镜：手指下内容被径向推开的强度（乘 uGlow.z 与 uDepth，喂给 AGSL）。 */
     const val LENS_STRENGTH = 2.0f
 
-    /** shader 内玻璃中心提亮（33+ 档与 31-32 的 [INNER_CLARITY_ALPHA] 同职责）。 */
-    const val SHADER_CLARITY = 0.055f
+    /** shader 内玻璃中心提亮（33+ 档与 31-32 的 [INNER_CLARITY_ALPHA] 同职责）。#282：0.055 → 0.075，透出的内容更清。 */
+    const val SHADER_CLARITY = 0.075f
 
     // 几何比例也进参数表：detekt `MagicNumber` 会钉住 `Brush` 实参里的裸浮点，
     // 且「参数集中一处」本来就是本文件的纪律。
@@ -437,7 +459,7 @@ internal fun shouldApplyBlur(requested: Boolean, sdkInt: Int = Build.VERSION.SDK
  * 液态玻璃的绘制参数（由调用方从主题取，本文件不读 `MaterialTheme`）。
  *
  * @param fill **必须带 alpha**（真模糊档）：不透明的填充会把模糊结果整块盖掉。
- * @param stroke 内描边色。
+ * @param stroke 仅降级实色档用的分界描边色（#282 起真模糊两档不画这圈细线）。
  * @param sheen 上沿高光色（固定白，深色下仍成立）。
  */
 data class LiquidGlassStyle(
@@ -620,13 +642,18 @@ fun LiquidGlassLayer(
  * 用户这轮的「注意底栏的边界」指的就是它。
  *
  * 现在 [drawOutline] 用同一个 `shape.createOutline(...)` 画，圆角连续。
- * **液态玻璃档八层**：① 填充（含上亮下暗的厚度渐变）；② 上沿渐隐高光带；
+ * **液态玻璃档七层**：① 填充（含上亮下暗的厚度渐变）；② 上沿渐隐高光带；
  * ③ 沿轮廓内阴影（#281，上淡下暗的厚度）；④ 内部通透厚度（#280 静态）；
  * ⑤ 按压表面流光（#280 光斑 + 斜扫光带）；⑥ 沿轮廓镜面 rim（上亮 → 侧淡 → 下沿暗线）；
- * ⑦ 按压焦点 rim 高光；⑧ 一圈弱内描边。
- * **磨砂档（#281）五层**：①② 同上但高光更淡 → ③ 更弱的内阴影 → 一条极弱受光 rim → ⑧ 内描边。
+ * ⑦ 按压焦点 rim 高光。
+ * **磨砂档（#281）四层**：①② 同上但高光更淡 → ③ 更弱的内阴影 → 一条极弱受光 rim。
  * ④⑤ 是**填充类**且画在层 B 的 drawBehind，覆盖 API 31+ 所有真模糊档，
  * 不依赖 API 33 的 AGSL —— 见 `LiquidGlassOptics.kt` 与 #280 的施工记录。
+ *
+ * ⚠️ **#282 删掉了原第 ⑧ 层「一圈 1dp 整圈内描边」**：用户反馈两档外框都有「很小很小的
+ *    边线、视觉效果不好」。边界改由 ③ 内阴影（3dp 厚边）与 ⑥ 镜面 rim 立住 —— 它们是
+ *    「有厚度的受光 / 暗部」，不是一条细线。降级实色档仍保留一圈分界（见 `if (!blurAvailable)`），
+ *    那是给不透明板收边，与真模糊两档无关；`细描边不回潮` 由 `LiquidGlassDockRulesTest` 规则 11 钉住。
  *
  * ⚠️ 降级档（`blurAvailable = false`）填充已是不透明实色，只画 ① 与内描边：
  * 给实色板叠镜面/暗线会变成两道塑料描边（旧版就靠那个 `if` 挡住）。
@@ -719,8 +746,9 @@ private fun DrawScope.drawGlass(
         drawFocusSheen(style = style, outline = outline, density = density, press = press)
     }
 
-    // ⑧ 内描边：比镜面 rim 更淡，职责是"与背后内容分界"，不是"打光"。两档共有。
-    drawOutline(outline = outline, color = style.stroke, style = Stroke(width = strokeWidth))
+    // #282：真模糊两档**不再画那圈 1dp 整圈细描边** —— 用户反馈「外框有很小很小的
+    // 边线、视觉效果不好」。边界改由 ③ 内阴影（3dp 厚边）与 ⑥ 镜面 rim 立住：
+    // 它们是「有厚度的受光 / 暗部」，不是一条细线；降级实色档那一圈在上方 return 前保留。
 }
 
 /**

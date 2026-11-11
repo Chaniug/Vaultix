@@ -721,10 +721,10 @@ internal fun AutoLockDialog(
                 )
             }
         },
-        // 与设置页的主题模式 / 剪贴板对话框同一条规范：点档位即生效并关闭，
-        // 「什么都没选就退出」不是主操作 ⇒ 低强调 TextButton + 「取消」。
+        // 与设置页的主题模式 / 剪贴板对话框同一条 #282 规范：点档位即生效并关闭，
+        // 唯一的「取消」统一用有边框按钮（无边框时看不出可点），见 `DialogStyleRulesTest` 规则 1。
         confirmButton = {
-            DialogTextButton(
+            DialogOutlinedActionButton(
                 text = stringResource(R.string.action_cancel),
                 onClick = onDismiss,
             )

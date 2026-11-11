@@ -138,6 +138,8 @@ import io.vaultix.vaultix.ui.common.TopBarTitle
 import io.vaultix.vaultix.ui.common.VaultixExpressiveTopBar
 import io.vaultix.vaultix.ui.common.VaultixSearchTopAppBar
 import io.vaultix.vaultix.ui.common.itemTypeLabelRes
+import io.vaultix.vaultix.ui.common.BadgeTone
+import io.vaultix.vaultix.ui.common.TypeBadge
 import io.vaultix.vaultix.ui.common.rememberImmersiveBarPadding
 import io.vaultix.vaultix.ui.common.rememberScrollCollapseFraction
 import io.vaultix.vaultix.ui.common.MiddleEllipsizedText
@@ -865,7 +867,7 @@ private fun ItemsBody(
         syncStates = state.syncStates,
         // ★ 2026-11-10 第三轮：这里原本只传 `kind`，把「库在不在云上」这件事丢掉了 ——
         //   判据在 [cloudSyncBadgeOrNull] 里，它需要 origin 才能分出
-        //   「OneDrive 上的 KDBX」（裸云）与「本地文件」（不画）。
+        //   「OneDrive 上的 KDBX」（云端库徽标）与「本地文件」（不画）。
         vaultKind = state.vault?.kind,
         onDelete = onDelete,
         vaultCard = vaultCard,
@@ -2144,6 +2146,22 @@ private fun NoSearchResultState() {
  * 观感对齐 Bastion `PasswordMenuSection`：小标题 + 数量 + 箭头，箭头随展开态旋转 0°↔180°
  * （200ms 补间）。`stickyHeader` 不用：本列表是 Collapsible section 语义（可整个收起），
  * 粘性头会与「收起后整组消失」的预期冲突。
+ *
+ * ## 2026-11-12 第八轮（#282 第 5 项）：分组头「成块」
+ *
+ * 用户反馈「按域名分组还不错，但 UI 可以稍微做得好看一点」。此前这条头是**透明 Row**：
+ * 一行 `primary` 小字加一串灰色数字飘在背景上，与下面有描边的 [EntryCard] 之间没有
+ * 层次，读起来像列表里混进了一行正文。本轮三处低开销调整（全在绘制阶段，无新增状态）：
+ *
+ * 1. 整条铺一层 `surfaceContainerLow` 低档容器底 ⇒ 头与卡片同为「面」，但它是**分节**；
+ * 2. 计数从紧跟标题的灰字改成右对齐的 `tertiaryContainer` 小胶囊 ⇒ 标题占 `weight(1f)`
+ *    把数字推到行尾，一眼扫得到「这组几条」；
+ * 3. 标题色 `primary → onSurface`、箭头保留 `primary` ⇒ 整屏不再到处是主色，
+ *    唯一的强调留给「可点」的箭头（配色语义见 `CapabilityIcon` 的结论：不是颜色不够，
+ *    是颜色没有语义）。
+ *
+ * ⚠️ 箭头旋转动画是**既有**的、且分组头数量远少于条目数，不构成「每行开销」，本轮保留；
+ *    新施工点（副标题 / 行尾）一律不引入任何动画或状态。
  */
 @Composable
 private fun GroupHeader(
@@ -2164,6 +2182,11 @@ private fun GroupHeader(
     Row(
         modifier = modifier
             .fillMaxWidth()
+            // #282：低档容器底让分组头与卡片同属「面」，但读成分节而不是一行正文。
+            .background(
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                shape = RoundedCornerShape(Spacing.sm),
+            )
             .clip(RoundedCornerShape(Spacing.sm))
             .clickable(onClick = onToggle)
             // ★ 2026-10-19：展开态**只有箭头方向**在表达，箭头 `contentDescription = null`
@@ -2173,7 +2196,7 @@ private fun GroupHeader(
             .semantics {
                 stateDescription = expandedStateText
             }
-            .padding(horizontal = Spacing.sm, vertical = Spacing.sm),
+            .padding(horizontal = Spacing.md, vertical = Spacing.sm),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
@@ -2185,14 +2208,24 @@ private fun GroupHeader(
         Text(
             text = title,
             style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.padding(start = UiSize.TightGap),
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier
+                .padding(start = UiSize.TightGap)
+                .weight(1f),
         )
+        // #282：计数收进 tonal 小胶囊，与「类型徽标」同一套标记语言。
         Text(
             text = count.toString(),
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(start = UiSize.TightGap),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onTertiaryContainer,
+            modifier = Modifier
+                .background(
+                    color = MaterialTheme.colorScheme.tertiaryContainer,
+                    shape = CircleShape,
+                )
+                .padding(horizontal = UiSize.TightGap, vertical = UiSize.HairGap),
         )
     }
 }
@@ -2306,11 +2339,13 @@ private fun ItemRow(
  * | 库 | 行尾 | 回答的是 |
  * |---|---|---|
  * | Bitwarden | [ItemCloudBadge.SYNCED] / [PENDING] | 第二问（这一条推了吗） |
- * | KDBX·OneDrive / WebDAV | [ItemCloudBadge.CLOUD_VAULT]（裸云） | 第一问（库在云上） |
+ * | KDBX·OneDrive / WebDAV | [ItemCloudBadge.CLOUD_VAULT]（带勾云，#282） | 第一问（库在云上） |
  * | KDBX·本地 SAF | `null`（不画） | 哪儿都不在，没什么可说的 |
  *
- * ⚠️ **「在云上」不等于「已同步」**：裸云没有对勾。带对勾会让用户以为 KDBX 也有
- * 条目级推送状态 —— 而那是整文件同步，不存在。
+ * ⚠️ **形状相同不代表语义相同（#282）**：KDBX 云端库与 Bitwarden「已同步」现在都画
+ * 带勾云（用户要求统一），但 [ItemCloudBadge.CLOUD_VAULT] 与 [ItemCloudBadge.SYNCED]
+ * 仍是两个枚举值、两套读屏文案、两个数据源。KDBX 依旧**不产出**条目级同步态，
+ * 本地 KDBX 依旧**不画云** —— 这三条由 `CloudSyncBadgeTest` 钉住，别因为形状统一就合并。
  *
  * ⚠️ `vaultKind` 未知（还没加载出来）按**不画**处理：宁可少一个图标，
  * 也不要在加载瞬间闪一朵错的云。
@@ -2349,13 +2384,29 @@ internal enum class ItemCloudBadge {
     /** Bitwarden：本地有改动还没推上去。云 + 斜杠，error 色（要跳出来）。 */
     PENDING,
 
-    /** KDBX 网盘库：整个库在云端。**裸云**，弱化色（常态，不抢眼）。 */
+    /** KDBX 网盘库：整个库在云端。#282 起用**带勾云**（与 [SYNCED] 同形），弱化色；语义仍不同，见 [cloudSyncBadgeOrNull]。 */
     CLOUD_VAULT,
 }
 
 /**
  * 条目卡片第二行（对齐 Bastion `PasswordCardDisplayMode`）：
  * TitleOnly 不显示；All 显示用户名、没用户名则显示类型徽标；TitleUsername 只显示用户名。
+ *
+ * ## 2026-11-12 第八轮（#282 第 5 项）：显示效果与类型徽标
+ *
+ * 两处「编译过、但真机才看得出来」的问题：
+ *
+ * 1. **没有截断**。用户名是用户自由输入，长邮箱 / 长 URL 会把卡片撑成两行，
+ *    一屏能看到的条目数跟着变 —— 与标题已有的 `maxLines = 1` 不对称。
+ *    两处用户名 `Text` 全部补 `maxLines = 1` + `Ellipsis`，行高恒定。
+ * 2. **类型用纯文字 `primary` 色**，与详情页 `ItemDetailScreen` 的
+ *    [TypeBadge]（`BadgeTone.NEUTRAL` 胶囊）不是一套语言。列表改用同一个组件、
+ *    同一个 tone，两页的类型标识从此一致 —— 正是 8.4 点名的「同一规格在不同页
+ *    长得不一样」这个头号廉价感来源。
+ *
+ * ⚠️ 刻意**不改字号、不改字重**：[TypeBadge] 用 `labelSmall`（比原来的 `bodySmall`
+ *    还轻一档），方向是「更轻」；项目 8.8 §5 明确不采纳更大的 display 字号 / 更重的字重。
+ *    质感来自 tonal 容器底与统一的组件，不是把字放大。
  */
 @Composable
 private fun ItemRowSubtitle(item: VaultItem, displayMode: ItemsCardDisplayMode) {
@@ -2364,12 +2415,13 @@ private fun ItemRowSubtitle(item: VaultItem, displayMode: ItemsCardDisplayMode) 
             text = item.username,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
     } else if (displayMode == ItemsCardDisplayMode.All && item.type != VaultItemType.Login) {
-        Text(
+        TypeBadge(
             text = stringResource(itemTypeLabelRes(item.type)),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.primary,
+            tone = BadgeTone.NEUTRAL,
         )
     } else if (
         displayMode == ItemsCardDisplayMode.TitleUsername &&
@@ -2380,14 +2432,46 @@ private fun ItemRowSubtitle(item: VaultItem, displayMode: ItemsCardDisplayMode) 
             text = item.username,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
     }
 }
 
 /**
+ * 行尾是否**有任何**点缀（#282 第 5 项）。
+ *
+ * 整组图标现在装在一个 tonal 胶囊里；没有点缀时那个胶囊必须**完全不画**，
+ * 否则本地 KDBX 的普通条目每行都会多一颗空灰点。抽成纯函数是为了把
+ * 「什么时候画容器」与「画什么」分开，也方便门禁扫源码钉住早退。
+ */
+private fun hasRowTrailing(item: VaultItem, cloud: ItemCloudBadge?): Boolean =
+    cloud != null ||
+        item.favorite ||
+        !item.totp.isNullOrBlank() ||
+        item.fido2Credentials.isNotEmpty()
+
+/**
  * 条目卡片行尾：多选态是勾选框，常态是能力徽标。
  *
  * 对齐 Bastion：选择态 `Checkbox` 顶掉菜单/徽标位；非选择态才展示条目自身的标签。
+ *
+ * ## 2026-11-12 第八轮（#282 第 5 项）：点缀成组
+ *
+ * 用户点名「条目上的同步、验证码、通行密钥之类的小点缀上下点功夫」。此前四枚
+ * 16dp 裸图标以 4dp 间距散在行尾、没有任何容器 ⇒ 既没有「一组」的读感，
+ * 也与卡片里其他有 tonal 底的元素（[TypeBadge]）语言不一致。
+ *
+ * 做法是给**整组**一个 `surfaceContainerHigh` 胶囊底，而不是给每枚图标各包一个圆底：
+ *
+ * - 一个 `Modifier.background` = 一次绘制，零新增 composable 层级、零状态、零动画；
+ * - 四枚圆点排成一串是视觉噪声，且会与 `CapabilityIcon` 的「刻意克制」结论打架；
+ * - 图标的语义色（验证码 `primary` / 通行密钥 `tertiary` / 待同步 `error`）
+ *   **一个不动**，tonal 底只负责把它们归到一组，不抢语义。
+ *
+ * ⚠️ `CapabilityIcon` / `CloudSyncIcon` / `VaultSourceCloudIcon` 都是**共享组件**
+ *    （详情页、库列表也在用），本轮只在列表这一层包容器，不改它们本身。
+ * ⚠️ 没有点缀时靠 [hasRowTrailing] 早退，绝不画空胶囊。
  */
 @Composable
 private fun ItemRowTrailing(
@@ -2402,19 +2486,28 @@ private fun ItemRowTrailing(
         Checkbox(checked = isSelected, onCheckedChange = { onToggleSelect() })
         return
     }
+    if (!hasRowTrailing(item, cloud)) return
     // 能力徽标：一眼看出这条有没有 2FA 验证码、有没有绑通行密钥。
     // 两者可**同时**存在（一条登录条目既带 TOTP 又绑了 passkey），故不是 if/else。
     // 文案复用筛选维度的短词，避免另造一串近义词。
     Row(
+        modifier = Modifier
+            .background(
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                shape = CircleShape,
+            )
+            .padding(horizontal = UiSize.TightGap, vertical = Spacing.xs),
         horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // 行尾那朵云：**地点**与**状态**是两件事，形状必须不同（见 [ItemCloudBadge]）。
+        // 行尾那朵云：**地点**与**状态**仍是两件事，只是 #282 起统一了「已上云」的形状。
         //
-        // ⚠️ 三轮演进的收敛点，别再退回任何一轮：
+        // ⚠️ 四轮演进的收敛点，别再退回任何一轮：
         //    ① 无条件画 `CloudSyncIcon(true)` ⇒ 本地 KDBX 也挂「已同步」（#263）；
-        //    ② 「KDBX 一律不画」 ⇒ OneDrive 库与本地库长得一样（#266 本轮反馈）。
-        //    正解是问**两个问题**：库在云上吗（裸云）+ 这条推上去了吗（对勾/斜杠）。
+        //    ② 「KDBX 一律不画」 ⇒ OneDrive 库与本地库长得一样（#266）；
+        //    ③ 裸云（地点）/ 对勾云（状态）分开 ⇒ 用户觉得两朵云不一致（#282 本轮反馈）。
+        //    正解：判据继续问**两个问题**（库在云上吗 / 这条推上去了吗），
+        //    但「已上云」的两种答案共用带勾云；本地库依旧不画。
         when (cloud) {
             ItemCloudBadge.SYNCED -> CloudSyncIcon(synced = true)
             ItemCloudBadge.PENDING -> CloudSyncIcon(synced = false)

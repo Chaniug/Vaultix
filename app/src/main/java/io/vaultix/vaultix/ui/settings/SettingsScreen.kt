@@ -63,7 +63,6 @@ import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.deviceCanAuthenticate
 import io.vaultix.vaultix.ui.common.DialogCloseButton
 import io.vaultix.vaultix.ui.common.DialogOutlinedActionButton
-import io.vaultix.vaultix.ui.common.DialogTextButton
 import io.vaultix.vaultix.ui.items.DisplayOptionsSheet
 import io.vaultix.vaultix.ui.common.TopBarTitle
 import io.vaultix.vaultix.ui.common.VaultixExpressiveTopBar
@@ -1150,22 +1149,20 @@ private fun ThemeModeDialog(
                 }
             }
         },
-        // ★★ 2026-11-10 深夜：用户报「主题模式里的关闭按钮不符合标准」。
+        // ★★ 2026-11-12 #282 反转：用户反馈「剪切板自动清除设置里，取消按钮没有
+        // 边框效果」。2026-11-10 曾据「主题模式关闭按钮不符合标准」把这里从 Outlined
+        // 改成 TextButton，理由是 M3 dialog 动作默认低强调 —— 但三个「点档位即生效」
+        // 的单选对话框（主题 / 剪贴板 / 自动锁定）共用一个无边框「取消」后，真机上
+        // 既看不出是可点按钮，也和同页有边框的动作不一致。
         //
-        // 旧版唯一的动作是 `DialogOutlinedActionButton`（OutlinedButton，**中强调**）。
-        // M3 对 dialog 动作的默认强调级别是 **TextButton** —— `AlertDialog` 会把
-        // `ActionLabelTextColor` / `ActionLabelTextFont` 传给动作槽，`DialogTextButton`
-        // 的 KDoc 也写明了这一条；OutlinedButton 是页面级动作，留给 `DialogShell`。
-        // ⇒ 一个「看完就走」的读操作配带边框的按钮，会被读成「确定」，还平白多一圈描边。
-        //
-        // ⚠️ `confirmButton` 这个**槽位改不了**：它是 M3 `AlertDialog` 该重载的必需参数
-        //    （只给 dismissButton 会解析到 `content` 重载，编译直接失败）。
-        //    真正"无动作区"的单选 dialog 要用 `BasicAlertDialog` 自己排版；本次不为一个
-        //    槽位引入空的 `{}` 占位 —— 那只会把问题从"看得见"变成"藏在代码里"。
-        // 文案：点档位即生效并关闭，按钮只在「什么都没选就退出」时用到 ⇒ 叫「取消」。
+        // ⇒ 用户最新反馈优先：本页两个 + 自动锁定共三处统一改回
+        //   `DialogOutlinedActionButton`；旧「退出动作一律 TextButton」规则作废，
+        //   见 `DialogStyleRulesTest` 规则 1 的反转留痕。
+        // ⚠️ `confirmButton` 槽位仍是 M3 `AlertDialog` 该重载的必需参数，不能用空
+        //    `{}` 占位消掉；文案仍叫「取消」（点档位即生效，按钮只用于什么都没选就退出）。
         //    （项目口径见 `DialogShell`：「关闭」= 收起看过的内容；「取消」= 放弃这次操作。）
         confirmButton = {
-            DialogTextButton(
+            DialogOutlinedActionButton(
                 text = stringResource(R.string.action_cancel),
                 onClick = onDismiss,
             )
@@ -1201,9 +1198,9 @@ private fun ClipboardClearDialog(
                 }
             }
         },
-        // 与 [ThemeModeDialog] 同一条规范：即选即存 ⇒ 低强调 TextButton + 「取消」。
+        // 与 [ThemeModeDialog] 同一条 #282 规范：即选即存 ⇒ 有边框的「取消」按钮。
         confirmButton = {
-            DialogTextButton(
+            DialogOutlinedActionButton(
                 text = stringResource(R.string.action_cancel),
                 onClick = onDismiss,
             )

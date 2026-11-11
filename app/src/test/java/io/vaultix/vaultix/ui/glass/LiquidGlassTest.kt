@@ -340,6 +340,11 @@ class LiquidGlassTest {
     /**
      * #281 的核心反向修正：11-09 那轮把模糊降到 18dp、填充降到 0.38，
      * 用户反馈「质感和通透感很薄、整体效果不强」。这里把那两档钉成**不可回退的区间**。
+     *
+     * ⚠️ **#282 修订下界 0.45 → 0.42**：用户这轮反馈「开液态玻璃后透明效果还是不够」，
+     *    填充降到 0.44。#281 的 0.45 下界是当时「防继续变薄」的一次调参，不是架构底线；
+     *    真正的底线由**边缘厚度**（SPECULAR_ALPHA / 内阴影 / 模糊半径下界）钉住，本轮一个没动。
+     *    ⚠️ 0.42 仍留着：防止有人借「更透」一路退回 0.38 那档「一大片雾」。
      */
     @Test
     fun `模糊与填充不再停在过薄档且磨砂更雾`() {
@@ -347,7 +352,7 @@ class LiquidGlassTest {
             .isGreaterThan(LiquidGlass.LiquidBlurRadius.value)
         assertThat(LiquidGlass.LiquidBlurRadius.value).isAtLeast(20f)
         assertThat(LiquidGlass.FrostedBlurRadius.value).isAtMost(40f)
-        assertThat(LiquidGlass.FILL_ALPHA_LIGHT).isAtLeast(0.45f)
+        assertThat(LiquidGlass.FILL_ALPHA_LIGHT).isAtLeast(0.42f)
         assertThat(LiquidGlass.FILL_ALPHA_LIGHT).isAtMost(0.65f)
         assertThat(LiquidGlass.SPECULAR_ALPHA).isAtLeast(0.55f)
     }

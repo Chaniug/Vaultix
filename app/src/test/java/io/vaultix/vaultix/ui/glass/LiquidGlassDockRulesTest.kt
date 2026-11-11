@@ -13,7 +13,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * 液态玻璃底栏的**十条可机检规范**（第四轮建 1–6，#278 补 7，#280 补 8–9，#281 补 10）。
+ * 液态玻璃底栏的**十一条可机检规范**（第四轮建 1–6，#278 补 7，#280 补 8–9，#281 补 10，#282 补 11）。
  *
  * 用户这轮反馈「点击效果和玻璃的效果都没有做完善，注意底栏的边界和大小」。
  * 对应的三类缺陷都是「编译过、detekt 查不到、真机上才看得出来」：
@@ -349,6 +349,32 @@ class LiquidGlassDockRulesTest {
         assertTrue(
             "常态磨砂链路不完整：\n" + missing.joinToString("\n"),
             missing.isEmpty(),
+        )
+    }
+
+    // ----------------------------------------------------------------- 规则 11
+
+    /**
+     * **真模糊两档不许再画整圈细描边（#282）。**
+     *
+     * 用户反馈「通常模式和液态玻璃下，底栏外框都有很小很小的一圈边线，视觉效果不好」。
+     * 根因是旧第 ⑧ 层：沿 Outline 用 `style.stroke` 描一圈 1dp 线，两档共有。
+     * 现在边界交给 ③ 内阴影（3dp 厚边）与 ⑥ 镜面 rim —— 「有厚度的受光/暗部」，
+     * 不是一条细线。降级实色档（`drawGlass` 里 `if (!blurAvailable)` 提前 return 之前）
+     * 仍允许画一圈给不透明板收边；那句在 `return` **之前**。
+     *
+     * ⇒ 钉法：取 `drawGlass` 函数体，第一个 `return`（降级档）之后不许再出现
+     *    `style.stroke`。谁把那圈细线加回真模糊路径，这条立刻红。
+     */
+    @Test
+    fun `真模糊两档不画整圈细描边`() {
+        val body = functionBody(glassSource("LiquidGlass.kt"), "drawGlass")
+        assertTrue("drawGlass 函数体没找到", body.isNotEmpty())
+        val afterFallbackReturn = body.substringAfter("return", "")
+        assertTrue(
+            "#282：真模糊两档不画 1dp 整圈 `style.stroke` 细描边；" +
+                "降级实色档那一圈必须在 `if (!blurAvailable) { … return }` 之前。",
+            !afterFallbackReturn.contains("style.stroke"),
         )
     }
 

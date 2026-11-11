@@ -19,6 +19,11 @@ import org.junit.Test
  * 顺带排查发现同一类问题散在 7 处对话框里。这些都是「编译过、detekt 查不到、
  * 真机上才看得出来」的观感缺陷，只能扫源文件文本钉住。
  *
+ * ⚠️ **2026-11-12（#282）规则 1 已被用户最新反馈反转**：用户报「剪切板自动清除
+ *    设置里面，取消按钮没有边框效果」，于是「即选即存的单选项对话框」退出按钮
+ *    从「禁止 Outlined」改成「必须有边框」。旧判据作废理由写在规则 1 的 KDoc 里，
+ *    历史结论留存在 `.ai/issues/06-界面与交互-part20.md`，别再引用旧说法。
+ *
  * ⚠️ 为什么用文本扫描而不是 Compose UI 测试：`AlertDialog` 是窗口级弹层，
  *    CI 无 SDK 时跑不了 instrumented test；而这几条全是**源码写法**问题。
  */
@@ -30,27 +35,34 @@ class DialogStyleRulesTest {
     // ------------------------------------------------------------------ 规则 1
 
     /**
-     * **单个退出动作的对话框，必须用低强调 TextButton。**
+     * **即选即存的单选项对话框，退出按钮必须有边框（#282 反转）。**
      *
-     * M3 给 dialog 动作槽传的是 `ActionLabelTextColor` / `ActionLabelTextFont`，
-     * 默认强调级别就是 TextButton（`DialogTextButton` 的 KDoc 写得很清楚）。
-     * `DialogOutlinedActionButton` 是页面级动作，放进「关闭 / 取消 / 完成」这种
-     * 退出动作上会多一圈描边，读起来像「确定」—— 用户报的就是这个。
+     * 2026-11-10 定的旧规则是「单动作退出按钮一律低强调 TextButton」，依据是 M3
+     * 对 dialog 动作槽的默认强调级别。2026-11-12 用户反馈「剪切板自动清除设置里面，
+     * 取消按钮没有边框效果」—— 三个「点档位即生效」的单选对话框（主题模式 /
+     * 剪贴板清除 / 自动锁定）共用一个无边框「取消」，真机上既看不出是可点按钮，
+     * 也与同页其它有边框的对话框动作不一致。
      *
-     * 判据：只有 `confirmButton`、没有 `dismissButton`（＝单动作），
-     * 且文案是退出类 ⇒ 不许出现 Outlined 封装。
+     * ⇒ 用户最新反馈优先：这三处的退出按钮统一改用 [DialogOutlinedActionButton]，
+     *    旧规则 1 作废。判据用 `SingleChoiceRow` 圈定「即选即存的单选项对话框」，
+     *    不靠文件名 / 行号，也不会误伤纯展示的 `LongTextInfoDialog`（无选项行）
+     *    与双动作的自定义时长对话框（有 `dismissButton`）。
+     *
+     * ⚠️ 反转后仍是**有约束力的正向门禁**：谁把三兄弟改回无边框，这条立刻红。
      */
     @Test
-    fun `单动作对话框的退出按钮不许用 Outlined 强调`() {
+    fun `单选项对话框的退出按钮必须有边框`() {
         val offenders = dialogBlocks().filter { (_, block) ->
             val single = block.contains("confirmButton") && !block.contains("dismissButton")
+            val choiceList = block.contains("SingleChoiceRow(")
             val exit = Regex("""action_(close|cancel|done)""").containsMatchIn(block)
-            single && exit && block.contains("DialogOutlinedActionButton")
+            single && choiceList && exit &&
+                !block.contains("DialogOutlinedActionButton")
         }.map { it.first }
 
         assertTrue(
-            "这些对话框只有「关闭 / 取消 / 完成」一个动作，却用了中强调的 " +
-                "DialogOutlinedActionButton（应改为 DialogTextButton）：\n" +
+            "即选即存的单选项对话框（主题 / 剪贴板 / 自动锁定）退出按钮必须有边框：\n" +
+                "请改用 DialogOutlinedActionButton（#282 用户反馈）：\n" +
                 offenders.joinToString("\n"),
             offenders.isEmpty(),
         )

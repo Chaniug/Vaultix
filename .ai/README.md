@@ -24,6 +24,63 @@
 - 已接进 CI：`ci-debug.yml` 的 `sandbox-tests` job 用**同一份脚本**，与 `android-ci` 并行
   ⇒ 本地绿 ⇒ CI 不会红在同一件事上。
 
+## 🕐 最新状态（2026-11-12 · #282 第五批界面 / 设置 / 条目 UI 整改）
+
+> **一句话**：用户一次给 5 组反馈（底栏细边线 + 透明度、云图标、剪影配色、设置三处、
+> 条目 M3 质感）。**五组全改了生产代码**，并**反转三处旧判据**。
+> 接力正文：[`#282`](./issues/06-界面与交互-part20.md)。
+
+1. **「中心更透、边缘更立」**：不是回退 #281 的质感回提。删掉两档共有的一圈 1dp
+   `style.stroke` 细描边（用户说的「很小很小的外框边线」），边界交给 3dp 内阴影 + 镜面 rim；
+   Liquid 填充 `0.50/0.62 → 0.44/0.56`、`INNER_CLARITY 0.10→0.13`、
+   `INNER_VIGNETTE 0.09→0.06`、`SHADER_CLARITY 0.055→0.075`，**模糊与阴影不动**。
+   `LiquidGlassDockRulesTest` 新增规则 11：降级 `return` 之后不许再出现 `style.stroke`。
+2. ⚠️ **形状统一 ≠ 语义合并**：KDBX 云端库云图标改用 `CloudDone`（用户最新反馈覆盖
+   #266 的「裸云 = 地点」形状判据），但**本地 KDBX 仍不画云**、KDBX **仍不产出条目级
+   同步态**、三态枚举与三条读屏文案一个不动（`CloudSyncBadgeTest` 钉住）。
+3. **判据不是誓言**：剪切板「取消」要边框，与 #275 定的规则 1 冲突 ⇒ **反转门禁**为
+   「单选项对话框退出按钮必须有边框」，而不是偷偷改代码让旧规则继续绿；
+   `DialogActionButtons.kt` KDoc 同步反转留痕。同理 #281 的填充下界 `0.45 → 0.42`
+   是调参留痕、不是架构底线，边缘厚度判据（模糊 / rim / 内阴影）不动。
+4. **低开销 M3 质感**：条目列表只在绘制 / 布局阶段动 —— 分组头成块 + 计数 tonal 胶囊、
+   副标题恒定一行且类型徽标**对齐详情页已有的 `TypeBadge(NEUTRAL)`**、行尾四枚点缀
+   整组装进**一个** `surfaceContainerHigh` 胶囊（零新增 State / 动画 / 层级），
+   无点缀靠 `hasRowTrailing()` 早退。不改字号字重、不动 `SiteIcon` 缓存链、
+   不动 `EntryCard` 描边、不动 `ItemsGrouping.kt`。⚠️ 其中**标题补 `maxLines = 1` 是本轮唯一的
+   显示行为变更**（密码页长标题原先折行，其余三个列表共用的 `EntryCard` 早已单行）⇒ 单列
+   第 5 条门禁钉住；规则 1 KDoc 曾误写成「标题早就如此」，已订正。新增 `ItemsRowStyleTest`
+   5 条文本门禁。
+5. ⚠️ **删除 Spacer 时别吞换行**：`replace_all` 连前导 `\n` 一起吃，会让相邻 composable
+   挤到同一行；已逐处恢复并静态确认「同行两语句残留 = 0」。
+6. ⚠️ **两条孤儿门禁不吃位置参数**（`check_orphan_state.py` / `check_orphan_strings.py`
+   用 argparse），批量循环统一传根会 `rc=2` —— 那是**用错命令**不是代码红。
+7. ⚠️ **本地全量验证的三个环境坑，别记成代码红**：
+   - 后台 shell 不继承 `ANDROID_HOME` ⇒ `lintFullDebug` / `assembleFullDebug` 在**任务图阶段**
+     就报 `SDK location not found`；同一条命令里 `export ANDROID_HOME=/opt/android-sdk` 即可
+     （SDK 实际在 `/opt/android-sdk/platforms/android-37.0`，目录名带 `.0`）；
+   - `lintFullDebug` 分析全项目时撞沙箱 **8 GiB cgroup** 上限：`memory.events` 显示
+     `oom_kill=1`、`memory.peak≈8GiB`，表现为 `Gradle build daemon disappeared unexpectedly`
+     —— **不是 lint 报错**，是 JVM 被容器杀掉。清场（`./gradlew --stop` + 停 Kotlin daemon）
+     再跑，lint 能真正跑完；
+   - 清场后 lint 报 **42 errors / 268 warnings / 3 hints**，但**全是既有问题、不是 #282 回归**：
+     `ItemsScreen.kt` 那 9 条 `LocalContextGetResourceValueCall` 落在 986–1025 行（#278 分组
+     逻辑），本轮 diff 只碰 141 / 870 / 2149+ 行；`LiquidGlassOptics.kt` 的 2 条 `NewApi`
+     本轮根本没改。⚠️ CI 的 `Run lint` 是 `if: event != 'push'`（push 链路跳过）+
+     `continue-on-error: true`（PR 只报告不阻断），workflow 注释明写「取证完成前不要删这个
+     `if`、不要放宽 lint 规则」⇒ **别把既有 lint 红算成本轮回归，也别顺手去动那条门禁**；
+   - `pkill -f KotlinCompileDaemon` 会连**执行它的 shell 自己**一起杀（模式串出现在命令行里），
+     要用 `jps -l` 取 PID 精确 kill。
+   另：文档里写死的「17 个 `check_*.py` / 14 条 `selftest_*.py`」实测是 **16 / 13**，
+   已改为不写死的表述（数量以 `.ai/tools/` 实测为准）。
+
+> 验证：`:app:compileFullDebugKotlin` 1m5s 绿、`detekt` 绿、`:app:assembleFullDebug` 34s 绿
+> （APK 已产出）、CI 同款全量单测 **1778 例 0 失败**（`ItemsRowStyleTest` 5 /
+> `LiquidGlassDockRulesTest` 11 / `DialogStyleRulesTest` 3 均确实执行）、全套静态门禁 +
+> 全部自测 + CI 文档门禁 6 步 + 编码 + 图标几何 12 项全绿。`lintFullDebug` 本地红在
+> **42 条既有问题**（见第 7 条），与本轮无关且 CI 不阻断。
+> **未验证（真机）**：去细边线后边界、更透后的图标对比度、行尾胶囊拥挤度、动态取色下
+> 剪影配色、PIN 按钮在 2.0x 字号下是否齐平 —— 见 `Docs/progress/next-steps.md`。
+
 ## 🕐 最新状态（2026-11-11 中午 · 底栏材质分档：常态磨砂 + 液态玻璃质感回提）
 
 > **一句话**：用户要「不开液态玻璃时平常状态也通透磨砂」，并判 #280 后玻璃仍「薄、效果不强」。
@@ -384,9 +441,15 @@
 
 ### 判据
 
-1. **一个图标只能回答一个问题** —— 地点（库在云上吗）用**裸云**，状态（这条推了吗）用**云+对勾**。
+1. **一个图标只能回答一个问题**（语义层判据，#282 仍成立）—— 地点（库在云上吗）由
+   `VaultSummary.origin` 决定，状态（这条推了吗）由 Bitwarden `pending_ops` 决定。
    两次修复各朝一个方向错（多画 / 少画）时，别找"哪个分支写错了"，
    先问「这个位置该由几个问题共同决定」。
+   ⚠️ **形状层已于 #282 反转**：用户反馈两朵不同的云并排出现反而像「没同步」，
+   故「已上云」的两种答案统一用**带勾云**（`CloudDone`），原「地点=裸云 / 状态=带勾云」
+   作废。但**语义不合并**：本地 KDBX 仍不画云、KDBX 仍不产出条目级同步态，
+   `CLOUD_VAULT` 与 `SYNCED` 仍是两个枚举值（`CloudSyncBadgeTest` 钉住）。
+   详见 `.ai/issues/06-界面与交互-part20.md`。
 2. **给用户看的数字必须可判断** —— 孤立分子（3）不可判断；`3/5` 可判断；「所有」也可判断。
 
 ## 🕐 2026-11-10 下午 · #265 补齐「进后台立即结束宽限期」

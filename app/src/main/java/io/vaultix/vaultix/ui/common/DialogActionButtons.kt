@@ -59,6 +59,11 @@ import androidx.compose.ui.graphics.Shape
  * `ActionLabelTextColor` / `ActionLabelTextFont` 给按钮槽）。需要"看得见边框"的
  * 流程页请改用 `DialogShell` 的 `DialogPrimaryButton` / `DialogSecondaryButton`。
  *
+ * ⚠️ **#282 例外（2026-11-12）**：「即选即存的单选项对话框」的退出按钮
+ *    （主题模式 / 剪贴板清除 / 自动锁定）按用户反馈改用 [DialogOutlinedActionButton]，
+ *    不再走本组件 —— 单选项列表需要一个看得见的落点，`DialogStyleRulesTest` 规则 1
+ *    已随本次反馈反转。本组件仍是**纯展示 / 双动作次要动作**的默认选择。
+ *
  * @param text 动作文案。**不要**传带前后空格的字符串 —— 空格会一并计入固有宽度。
  */
 @Composable
@@ -96,6 +101,10 @@ fun DialogTextButton(
  * 对话框里的**中强调动作按钮**（outlined）：边框可见、强调级别低于 filled 主操作。
  *
  * 用于「保存 / 取消」这类需要明确落点、但又不是整屏唯一主操作的场合。
+ *
+ * ⚠️ **#282 起也是「单选项对话框退出按钮」的正规用法**：主题模式 / 剪贴板清除 /
+ *    自动锁定三个「点档位即生效」的对话框，唯一的「取消」用它 —— 用户反馈无边框时
+ *    看不出是可点按钮。旧规则「退出动作一律 TextButton」同步作废。
  */
 @Composable
 fun DialogOutlinedActionButton(

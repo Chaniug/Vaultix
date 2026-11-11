@@ -124,7 +124,7 @@ class VaultSyncLineTest {
     fun `畸形网盘 origin 按本地处理（与条目云徽章同一个退化）`() {
         // `onedrive:` 缺账号/路径 ⇒ `kdbxSourceTargetOf` 退化成 LocalFile。
         // 两处判据共用同一个函数，所以这里必须与 `CloudSyncBadgeTest` 的结论一致：
-        // 坏 origin 的库既不该有裸云徽章，也不该有同步行。
+        // 坏 origin 的库既不该有云端库徽章，也不该有同步行。
         listOf("onedrive:", "onedrive:acct-1:", "webdav:cred-1:").forEach { bad ->
             assertThat(vaultSyncLineResOf(VaultKind.KDBX, bad, KdbxCloudSyncStatus.IN_SYNC))
                 .isNull()
