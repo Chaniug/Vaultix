@@ -166,10 +166,15 @@ private val TITLE_SUBTITLE_SPACING = UiSize.HairGap
  *
  * @property text 主标题（库名 / 页面名），渲染为 26sp。
  * @property subtitle 副标题（当前筛选名），渲染为 14sp 独立一行；null = 不渲染第二行。
+ * @property singleLine ⚠️ **详情页长标题专用**（#285 第 3 项）：`true` 时禁止折两行，
+ *   只走「缩字号 → 省略号」。条目名常是 `accounts.spotify.com` 这类长域名，按字符贪心
+ *   折两行会折出 `accounts.spotify.` / `com` 这种孤字行，与右侧编辑 / 删除图标也不对齐。
+ *   库名（列表页）保持 `false`：那里「我在哪个库」比排版整洁更重要，仍允许两行。
  */
 data class TopBarTitle(
     val text: String,
     val subtitle: String? = null,
+    val singleLine: Boolean = false,
 )
 
 /**
@@ -397,7 +402,9 @@ private fun TitleBlock(
                 availablePx = constraints.maxWidth - reservePx,
                 fontSp = titleFontSize,
                 // ⚠️ 有副标题时第二行已被占用 ⇒ 库名**绝不折行**，只缩字号。
-                allowTwoLines = title.subtitle == null,
+                //    #285：详情页条目名再补一条 —— 长域名折两行会出现孤字行，
+                //    也不与右侧动作图标对齐，故显式要求单行（缩字号 / 省略号兜底）。
+                allowTwoLines = title.subtitle == null && !title.singleLine,
             )
         }
         Column(verticalArrangement = Arrangement.spacedBy(TITLE_SUBTITLE_SPACING)) {

@@ -40,6 +40,22 @@
  *
  * [CloudAccountInventory] —— **已保存的凭据/登录会话** ∪ **库的 origin**（见该文件头
  * 2026-09-18 的修正）。第二个来源提供"被哪些库在用"与"从哪个目录开始浏览"。
+ *
+ * ## 2026-11-12 第十一轮（#285 第 1 项）：账号卡精修
+ *
+ * 用户反馈「网盘卡片大小、颜色、UI 要更精美好看、与页面和谐一致」。真机截图三个硬伤：
+ * ① 卡片套的是设置页「**一组多行**」的 `SettingsGroupCard` + `SettingsRow`（72dp 行 +
+ *    20dp 行内距 + 一整行按钮）⇒ 一个账号占掉一大块又高又空的深灰板；
+ * ② 「已连接」被放在**卡片外**单独一行，落在卡片与「添加账号」之间，读起来像第三段正文；
+ * ③ 主操作走 `PrimaryActionButton`（48dp 满宽 FilledTonal 胶囊），「注销」却是
+ *    40dp 的 `OutlinedButton`，中间还被 `Spacer(weight(1f))` 推到屏幕两端 ⇒ 两枚按钮
+ *    一个大一个小、一重一轻。
+ *
+ * ⇒ 改为**一个账号 = 一张自洽的紧凑卡**：外壳仍是 `surfaceContainerLow` +
+ *   `VaultixCorner.Panel`（与设置页同一套表面语言，**不另起色相**），内部自己排版；
+ *   连接状态做成行尾徽标收进卡内；动作区两枚同规格 M3 按钮（`FilledTonalButton`
+ *   主操作 + `OutlinedButton` 破坏性），主次靠填充而非尺寸区分。「添加账号」改用
+ *   与卡片同款圆角。⚠️ 详见 [CloudAccountCard] 的 KDoc。
  * ---------------------------------------------------------------------------
  */
 package io.vaultix.vaultix.ui.settings
@@ -71,6 +87,7 @@ import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -93,12 +110,14 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -231,6 +250,8 @@ fun CloudAccountsScreen(
                 OutlinedButton(
                     onClick = viewModel::showAddForm,
                     modifier = Modifier.fillMaxWidth(),
+                    // #285：与账号卡同款圆角 —— 改前全宽 pill 和上方卡片是两套形状语言。
+                    shape = VaultixCorner.Panel,
                 ) {
                     Icon(
                         Icons.Filled.Add,
@@ -292,6 +313,27 @@ fun CloudAccountsScreen(
 
 // ---------------------------------------------------------------- 账号卡
 
+/**
+ * 单个账号卡（#285 第 1 项）：**一个账号 = 一张自洽的紧凑卡片**。
+ *
+ * 改前套 [SettingsGroupCard] + [SettingsRow] —— 那是设置页「一组多行」的壳，
+ * 用到「一个账号一张卡」上会带来 72dp 行高 + 20dp 行内距 + 一整行按钮，真机上是
+ * 一块又高又空的深灰板；连接状态还被放到**卡片外**单独一行，「已连接」三个字飘在
+ * 卡片与「添加账号」之间，读起来像另一段正文。
+ *
+ * ⇒ 本轮改为专用紧凑卡：
+ * - 外壳仍是 `surfaceContainerLow` + [VaultixCorner.Panel]（与设置页**同一套表面语言**，
+ *   不另起色相；OLED 纯黑下这套色阶已由 #285 第 5 项压到中性灰，不再浮出脏灰块）；
+ * - 顶部一行：来源图标 + 账号名（单行省略）+ 「来源 · N 个库在用」+ 行尾**状态徽标**；
+ * - 断开原因（[issue]）收进卡内、贴着表头；
+ * - 动作区两枚**同规格** M3 按钮：主操作 `FilledTonalButton` 占剩余宽，破坏性
+ *   `OutlinedButton` 收在右端。不再用 [PrimaryActionButton]（48dp 满宽主 CTA 与
+ *   40dp outlined「注销」并排时一个又宽又重、一个又窄又轻），也不再
+ *   `Spacer(weight(1f))` 把两枚按钮推到屏幕两端。
+ *
+ * ⚠️ 状态**会变**（token 过期 / 凭据被清 / 静默刷新被掐断），所以做成行尾徽标而不是
+ *    塞进副标题 —— 副标题只说稳定事实（来源 + 被谁在用），与改前那条纪律一致。
+ */
 @Composable
 private fun CloudAccountCard(
     account: CloudAccount,
@@ -303,44 +345,137 @@ private fun CloudAccountCard(
     onSignIn: (forceAccountChooser: Boolean) -> Unit,
 ) {
     val isOneDrive = account.kind == CloudAccountKind.ONEDRIVE
-    SettingsGroupCard {
-        SettingsRow(
-            icon = {
-                Icon(
-                    imageVector = if (isOneDrive) Icons.Filled.Cloud else Icons.Filled.Storage,
-                    contentDescription = null,
-                )
-            },
-            title = account.label,
-            // ⚠️ 副标题只说**稳定的**事实（来源 + 被谁在用）。
-            //    「连接状态」会变，另起一行单独说 —— 混进来会让人以为它是账号的固有属性。
-            subtitle = stringResource(account.kind.subtitleRes()) + " · " +
-                stringResource(R.string.cloud_accounts_used_by, account.vaultCount),
-        )
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = VaultixCorner.Panel,
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+    ) {
+        Column(modifier = Modifier.padding(Spacing.md)) {
+            AccountCardHeader(account = account, isOneDrive = isOneDrive)
+            if (issue != null) {
+                AccountIssueLine(issue)
+            }
+            Spacer(Modifier.height(Spacing.md))
+            AccountCardActions(
+                account = account,
+                isOneDrive = isOneDrive,
+                busy = busy,
+                onRemove = onRemove,
+                onReconfigure = onReconfigure,
+                onSignIn = onSignIn,
+            )
+        }
+    }
+}
 
-        // ★ OneDrive 的**主操作**必须在这里，且要比「注销」强。
-        //
-        // 改前的形态是三个平级的 `TextButton`（登录 / 重填 / 注销），问题有两层：
-        // ① 「登录 Microsoft 账号」是本页**最核心、最难成功、最需要被看见**的动作，
-        //    却和「注销」长得一样；用户扫一眼分不出哪个是主路。
-        // ② 未连接时它承载的是**恢复路径**（"我该怎么把它弄回来"），
-        //    而 `TextButton` 是所有按钮里最弱的样式 —— 主路被做成了看起来最不重要的东西。
-        //
-        // 现在按下述层级重排（与 `VaultManagementScreen` / `AddAccountForm` 一致）：
-        //   主操作 = `FilledTonalButton`（登录 / 切换账号）
-        //   次操作 = `TextButton`（重新填写，仅 WebDAV）
-        //   破坏性 = `TextButton` + error 色（注销），且**永远置底**
-        if (isOneDrive) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = Spacing.sm),
-                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
-                verticalAlignment = Alignment.CenterVertically,
+/** 卡片表头：来源图标 + 稳定事实 + **会变**的连接状态（行尾徽标）。 */
+@Composable
+private fun AccountCardHeader(account: CloudAccount, isOneDrive: Boolean) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(
+            imageVector = if (isOneDrive) Icons.Filled.Cloud else Icons.Filled.Storage,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(UiSize.SecondaryIcon),
+        )
+        Spacer(Modifier.width(Spacing.md))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = account.label,
+                style = MaterialTheme.typography.titleSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = stringResource(account.kind.subtitleRes()) + " · " +
+                    stringResource(R.string.cloud_accounts_used_by, account.vaultCount),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Spacer(Modifier.width(Spacing.sm))
+        ConnectionBadge(connected = account.connected)
+    }
+}
+
+/**
+ * 连接状态徽标：M3 标准 container / on-container 配对。
+ *
+ * 已连接用 `secondaryContainer`（比 primary 更中性的强调色），未连接用 `errorContainer`；
+ * 两者都随主题翻转是**预期**的（状态色不是「不随主题翻转的身份色」，与 #285 第 4 项
+ * 剪影卡用 fixed roles 的场景不同），且饱和度由 `VaultixBrandColorTest` 钉住上限。
+ */
+@Composable
+private fun ConnectionBadge(connected: Boolean) {
+    Surface(
+        shape = VaultixCorner.Pill,
+        color = if (connected) {
+            MaterialTheme.colorScheme.secondaryContainer
+        } else {
+            MaterialTheme.colorScheme.errorContainer
+        },
+        contentColor = if (connected) {
+            MaterialTheme.colorScheme.onSecondaryContainer
+        } else {
+            MaterialTheme.colorScheme.onErrorContainer
+        },
+    ) {
+        Text(
+            text = stringResource(
+                if (connected) {
+                    R.string.cloud_accounts_connected
+                } else {
+                    R.string.cloud_accounts_disconnected
+                },
+            ),
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(horizontal = Spacing.sm, vertical = Spacing.xs),
+        )
+    }
+}
+
+/** 断开原因：贴着表头、收在卡内，不再是一闪而过的 snackbar。 */
+@Composable
+private fun AccountIssueLine(issue: String) {
+    Text(
+        text = issue,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.error,
+        modifier = Modifier.padding(top = Spacing.sm),
+    )
+}
+
+/**
+ * 动作区：两枚**同规格** M3 按钮（都是 40dp 原生高度）。
+ *
+ * 主次靠 `FilledTonal` / `Outlined` 的填充区分，不靠尺寸；破坏性动作统一 `error`
+ * 内容色（连边框一起，而不是只给 [Text] 上色）。WebDAV 已连接时没有主操作，
+ * 用一个 `weight(1f)` 的占位把「移除」仍收在右端，避免按钮跑到左边。
+ */
+@Composable
+private fun AccountCardActions(
+    account: CloudAccount,
+    isOneDrive: Boolean,
+    busy: Boolean,
+    onRemove: () -> Unit,
+    onReconfigure: () -> Unit,
+    onSignIn: (forceAccountChooser: Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        val mainModifier = Modifier.weight(1f)
+        when {
+            isOneDrive -> FilledTonalButton(
+                onClick = { onSignIn(account.connected) },
+                enabled = !busy,
+                modifier = mainModifier,
             ) {
-                // 这一枚在 `Row` 里、不占满宽（右侧还有「移除」文字按钮），
-                // 故 `fillMaxWidth = false`。尺寸规格仍走同一个组件（审计 §2.3）。
-                PrimaryActionButton(
+                AccountActionContent(
+                    busy = busy,
+                    icon = Icons.Filled.Cloud,
                     text = stringResource(
                         if (account.connected) {
                             R.string.cloud_accounts_onedrive_switch
@@ -348,80 +483,57 @@ private fun CloudAccountCard(
                             R.string.cloud_accounts_onedrive_signin
                         },
                     ),
-                    onClick = { onSignIn(account.connected) },
-                    busy = busy,
-                    icon = Icons.Filled.Cloud,
-                    toned = true,
-                    fillMaxWidth = false,
                 )
-                Spacer(Modifier.weight(1f))
-                OutlinedButton(onClick = onRemove, enabled = !busy) {
-                    Text(
-                        stringResource(R.string.cloud_accounts_remove),
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
             }
-        } else {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = Spacing.sm),
-                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
-                verticalAlignment = Alignment.CenterVertically,
+            !account.connected -> FilledTonalButton(
+                onClick = onReconfigure,
+                enabled = !busy,
+                modifier = mainModifier,
             ) {
-                // WebDAV：改密码是最常见的故障 ⇒ 给一条"重填密码"的路，
-                // 而不是逼用户注销再重加（那会连账号名一起丢掉）。
-                if (!account.connected) {
-                    OutlinedButton(onClick = onReconfigure, enabled = !busy) {
-                        Text(stringResource(R.string.cloud_accounts_reconfigure))
-                    }
-                }
-                Spacer(Modifier.weight(1f))
-                OutlinedButton(onClick = onRemove, enabled = !busy) {
-                    Text(
-                        stringResource(R.string.cloud_accounts_remove),
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
+                AccountActionContent(
+                    busy = false,
+                    icon = null,
+                    text = stringResource(R.string.cloud_accounts_reconfigure),
+                )
             }
+            else -> Spacer(mainModifier)
         }
-    }
-    // 连接状态**单独一行**：它**会变**（token 过期 / 凭据被清 / 库被移除），
-    // 混进副标题会让人以为它是账号的固有属性。
-    //
-    // ★ OneDrive 还要往下再说一层「**为什么**断了」：
-    //   只有"未连接"三个字时，用户既不知道该重登还是该等一等 —— 而这两件事
-    //   的动作完全不同（见 `OneDriveAuthTemporarilyUnavailableException` 的 KDoc）。
-    //   改前这个原因只出现在**一闪而过的 snackbar** 里，隔天再回来看就没了。
-    Column(modifier = Modifier.padding(top = Spacing.xs, bottom = Spacing.sm)) {
-        Text(
-            text = stringResource(
-                if (account.connected) {
-                    R.string.cloud_accounts_connected
-                } else {
-                    R.string.cloud_accounts_disconnected
-                },
+        OutlinedButton(
+            onClick = onRemove,
+            enabled = !busy,
+            colors = ButtonDefaults.outlinedButtonColors(
+                contentColor = MaterialTheme.colorScheme.error,
             ),
-            style = MaterialTheme.typography.bodySmall,
-            color = if (account.connected) {
-                MaterialTheme.colorScheme.primary
-            } else {
-                MaterialTheme.colorScheme.error
-            },
-        )
-        // 「已连接 + 有 issue」= 账户还在但静默刷新被掐断，属于**要提醒**的情形
-        // （用户以为一切正常，去读库才发现打不开）。颜色用 error 而非 primary：
-        // 此时此刻它**确实用不了**，只是账户还没被清掉而已。
-        issue?.let {
-            Text(
-                text = it,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.padding(top = Spacing.xs),
-            )
+        ) {
+            Text(stringResource(R.string.cloud_accounts_remove))
         }
     }
+}
+
+/**
+ * 主操作按钮内容：进行中显转圈而不是只把按钮置灰。
+ *
+ * MSAL 拉系统授权页要等好几秒，**灰按钮和正在跑的按钮长得一样**会被反复点
+ * （与 `OneDriveSignInBlock` / `ProbeButton` 同一条纪律）。`icon == null` 时不加
+ * 前置 Spacer，让纯文字按钮的文字不无故偏右。
+ */
+@Composable
+private fun AccountActionContent(busy: Boolean, icon: ImageVector?, text: String) {
+    if (busy) {
+        CircularProgressIndicator(
+            modifier = Modifier.size(UiSize.InlineProgress),
+            strokeWidth = UiSize.InlineProgressStroke,
+        )
+        Spacer(Modifier.width(Spacing.sm))
+    } else if (icon != null) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            modifier = Modifier.size(UiSize.InlineIcon),
+        )
+        Spacer(Modifier.width(Spacing.sm))
+    }
+    Text(text)
 }
 
 @Composable
@@ -502,7 +614,12 @@ private fun AddAccountForm(
     }
 
     Spacer(Modifier.height(Spacing.sm))
-    OutlinedButton(onClick = viewModel::hideAddForm, modifier = Modifier.fillMaxWidth()) {
+    OutlinedButton(
+        onClick = viewModel::hideAddForm,
+        modifier = Modifier.fillMaxWidth(),
+        // #285：与「添加账号」同款圆角，展开 / 收起时形状不跳。
+        shape = VaultixCorner.Panel,
+    ) {
         Text(stringResource(R.string.action_cancel))
     }
 }

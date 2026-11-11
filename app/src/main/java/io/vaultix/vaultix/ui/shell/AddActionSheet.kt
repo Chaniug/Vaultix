@@ -34,6 +34,37 @@
  * 不引入额外重组**（`glyphPalette` 仍是一次 `colorScheme` 读取的纯函数）。
  * 详见 [GlyphPalette] 的 KDoc：为什么不硬造第 4 个色相。
  *
+ * ## 2026-11-12 第十轮（#285）：★ 判据反转 —— 改用 M3 fixed accent roles
+ *
+ * 用户反馈「按安卓最新设计规范重新配色，不要奇怪颜色，浅色 / 深色都兼顾，同时每张卡
+ * 有视觉记忆点」。**「奇怪颜色」正是 #282/#283 那套做法本身**：三色系 `xxxContainer`
+ * 交叉铺开，再叠「卡底 0.68 / 剪影底 0.62」两层半透明（深色档还各提到 0.94 / 0.92），
+ * 在近黑 `surface` 上五个色相被洗成浑浊灰 —— #283 已经补过一次「画纯 + onContainer
+ * 配对」，但只要还靠 `xxxContainer`（它**随主题翻转**：浅色是浅色、深色变暗色）+ alpha
+ * 分档，深浅两档就永远要各调一遍，治标不治本。
+ *
+ * ⇒ 换 **M3 fixed accent roles**（2023 起引入，2025 Color System 已成 26+ roles）：
+ *   `primaryFixed` / `secondaryFixed` / `tertiaryFixed` 及各自的 `Dim` / `onXxxFixed` /
+ *   `onXxxFixedVariant`。它们的设计契约就是**浅色与深色主题下保持同一固定色值**，
+ *   专供「不随主题翻转身份」的强调面（固定徽标、剪影卡、widget）。
+ *   - 「浅深都兼顾」⇒ 不再需要 `isDarkSurface` 判档、不再需要任何 alpha 常量：
+ *     卡底直接画纯 fixed 色，浅色下是一层柔和 tonal 面，深色下是一块明亮粉彩卡，
+ *     两者都是 M3 预期形态；
+ *   - 「不要奇怪颜色」⇒ 三色系取蓝 225° / 青 195° / 绿 145°、饱和度压到 22%~35.5%
+ *     （见 `VaultixBrandColor` §五，有单测逐项钉住），不再交叉叠色；
+ *   - 「每张卡有记忆点」⇒ 3 色相 × fixed / fixedDim 两档，5 种类型各有组合，
+ *     加上各自的字段剪影形状，颜色与形状双重区分；
+ *   - 文案 / 线条一律用配对的 `onXxxFixed` / `onXxxFixedVariant`（实测 6~12:1，
+ *     过 WCAG AA），不拿 `onSurface` 顶替 —— #283 这条教训保留。
+ *
+ * ⚠️ 动态取色路径同样成立：`dynamicLightColorScheme` 会把 fixed 角色映射成壁纸派生
+ *    的 tonal palette，颜色仍随壁纸走；静态色板这边 #285 也补齐了 12 个 fixed 角色，
+ *    所以「开 / 关动态取色」两档不再跳色（见 `VaultixBrandColor` §五）。
+ *
+ * ⚠️ **不硬造第 4 个色相**：M3 只保证 primary/secondary/tertiary 三个强调色相，
+ *    自己算色相会破坏动态取色（#282 的同一条结论）。`error` 是危险语义色，不能拿来
+ *    当类型标识。
+ *
  * ⚠️ 用稳定的 `ModalBottomSheet`，不用 M3E 的 `FloatingActionButtonMenu`
  *    （8.8 §6①：alpha API 只用于叶子组件，不承载导航级动作）。
  * ⚠️ 面板里放 `Surface` 卡片，不是 Popup / DropdownMenu 选择器。
@@ -89,107 +120,88 @@ import io.vaultix.model.VaultItemType
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.PasswordGeneratorDialog
 import io.vaultix.vaultix.ui.common.itemTypeLabelRes
-import io.vaultix.vaultix.ui.glass.isDarkSurface
 import io.vaultix.vaultix.ui.theme.Spacing
 import io.vaultix.vaultix.ui.theme.VaultixCorner
 import kotlinx.coroutines.launch
 
 /**
- * 一类条目的剪影配色。
+ * 一类条目的剪影配色（#285：全部取自 M3 **fixed accent roles**）。
  *
- * @property accent 剪影里的重点形状（站点块 / 磁条 / 头像 / 字符块）。
- * @property tint 整张类型卡的底色（M3 `xxxContainer` 角色）。
- * @property wash 剪影内层小卡的背景（#282 新增）：**刻意与 [tint] 不同色系**，
- *   让一张卡里出现两个色系，而不是整张卡一片同色。
- * @property onTint [tint] 配对的前景（#283）：M3 规定容器底必须配 `onXxxContainer`，
- *   不能拿 `onSurface` 顶替 —— 深色下二者亮度差很大，是「文案不清晰」的主因之一。
- * @property onWash [wash] 配对的前景（#283）：深色下剪影线条改用它取色，保证可读。
+ * 四个字段是**同一色相家族**里的四档，浅色 / 深色主题下拿到的是同一组固定色值
+ * （这正是 fixed roles 的设计契约），所以卡片身份不随主题翻转，也不需要判深浅档：
+ *
+ * | 字段 | 角色 | 用途 |
+ * |---|---|---|
+ * | [container] | `xxxFixed` / `xxxFixedDim` | 整张类型卡的底色（**纯色**，不叠 alpha） |
+ * | [wash] | 同家族另一档 | 剪影内层小卡背景，与卡底拉开一档明暗 |
+ * | [onContainer] | `onXxxFixed` | 类型名 + 剪影重点形状（最高对比） |
+ * | [onContainerVariant] | `onXxxFixedVariant` | 剪影次要线条（柔和但仍可达） |
+ *
+ * ⚠️ 与 #282/#283 的交叉表不同：[wash] **刻意与 [container] 同色系** ——「一张卡里
+ *    塞两个色系」正是用户说的「奇怪颜色」；层次改由 Fixed / FixedDim 两档明暗表达。
+ * ⚠️ 前景一律 `onXxxFixed` / `onXxxFixedVariant`，不拿 `onSurface` / `onSurfaceVariant`
+ *    顶替（#283 的教训保留：容器底必须配 on-container）。
  */
 private data class GlyphPalette(
-    val accent: Color,
-    val tint: Color,
+    val container: Color,
     val wash: Color,
-    val onTint: Color,
-    val onWash: Color,
+    val onContainer: Color,
+    val onContainerVariant: Color,
 )
 
 /**
- * 卡片底 / 剪影底的叠色强度。**深色更实**，否则 `xxxContainer` 叠在近黑 `surface` 上
- * 会被洗成一片低饱和灰，五个类型彼此分不开（用户说的「色彩搭配有点怪」）。
+ * 五种类型各取一组 fixed accent roles，**全部来自 [MaterialTheme.colorScheme]**，
+ * 不写死任何色值 ⇒ 动态取色 / 静态品牌板 / 深浅主题都自动成立。
  *
- * M3 深色规范：层次靠**表面色阶**表达，不是靠半透明叠色；这里把 container 角色尽量
- * 画纯，色相才读得出来。浅色档沿用 #282 的 0.68 / 0.62。
- */
-private const val TILE_ALPHA_LIGHT = 0.68f
-private const val TILE_ALPHA_DARK = 0.94f
-private const val WASH_ALPHA_LIGHT = 0.62f
-private const val WASH_ALPHA_DARK = 0.92f
-
-/** 剪影线条：深色下改从 `onWash` 取色并抬高 alpha，避免 `onSurfaceVariant × 0.34` 糊在深底上看不见。 */
-private const val GLYPH_LINE_ALPHA_LIGHT = 0.34f
-private const val GLYPH_LINE_ALPHA_DARK = 0.62f
-
-/** 生成器卡浅色档沿用 #282 的 0.58；深色档与类型卡共用 [TILE_ALPHA_DARK]。 */
-private const val GENERATOR_ALPHA_LIGHT = 0.58f
-
-/**
- * 全部取自 `colorScheme` 角色 —— 深浅主题 / 动态取色自动跟随，不写死色值。
+ * ## 2026-11-12 第十轮（#285）：判据反转 —— 废弃 `xxxContainer` + alpha 分档
  *
- * ## 2026-11-12 第八轮（#282）：颜色偏单调 ⇒ 三色系交叉铺开
+ * #282 把三色系 `primaryContainer` / `secondaryContainer` / `tertiaryContainer` 在
+ * 「卡底 / 剪影底 / 重点形状」交叉铺开，#283 又补了 `onXxxContainer` 配对与深浅两档
+ * alpha（深色 0.94 / 0.92，浅色 0.68 / 0.62）。但 `xxxContainer` **随主题翻转**
+ * （浅色是浅色、深色变暗色），只要还靠它 + 半透明分档，深浅两档就得各调一遍，
+ * 近黑 `surface` 上几个色相仍被洗成浑浊灰 —— 这就是用户说的「奇怪颜色」。
  *
- * 用户反馈「新建条目页面的剪影卡片的颜色偏单调，能稍微多加一两个色系的配色吗」。
- * 原来 5 个类型只用到 3 个 accent，且 Login=Identity=primary、SecureNote=SshKey=
- * secondary；卡底又被 `alpha=0.45` 洗淡、内层再盖一层 `surface 0.78` 白卡 ⇒
- * 三张卡看上去几乎是同一个灰蓝色，`GlyphNote` 更是一点彩色都没有。
+ * ⇒ 换 fixed accent roles：卡底直接画**纯** `xxxFixed` / `xxxFixedDim`，文案与线条用
+ *   配对的 `onXxxFixed` / `onXxxFixedVariant`。浅色下是一层柔和 tonal 面、深色下是
+ *   一块明亮粉彩卡，两者都是 M3 预期形态，**一行深浅判定、一个 alpha 常量都不需要**。
  *
- * ⇒ 本轮**不硬造第 4 个色相**：M3 动态取色只保证 primary/secondary/tertiary
- *   三个强调色相（error 是「错误」语义，不能拿来当类型标识），自己算色相会破坏动态取色。
- *   改让这三个色系在「卡底 / 剪影底 / 重点形状」三个位置**交叉搭配**：
- *   [GlyphPalette.wash] 与 [GlyphPalette.tint] 一律不同色系，5 张卡因此各有 2–3 个色系；
- *   再把卡底 alpha 从 0.45 提到 0.68、给便签补一枚 accent 色块。
- *   ⚠️ 仍是纯 `colorScheme` 角色，动态取色 / 深浅主题 / 8.8 §6② 全部不受影响。
+ * ### 交叉表（3 色相 × Fixed / FixedDim 两档，5 种类型互不撞色）
  *
- * ## 2026-11-12 第九轮（#283）：深色下补齐 `onContainer` 配对与对比度
+ * | 类型 | 色相 | 卡底 [GlyphPalette.container] | [GlyphPalette.wash] |
+ * |---|---|---|---|
+ * | Login | primary 蓝 225° | `primaryFixed` | `primaryFixedDim` |
+ * | SecureNote | secondary 青 195° | `secondaryFixed` | `secondaryFixedDim` |
+ * | Card | tertiary 绿 145° | `tertiaryFixed` | `tertiaryFixedDim` |
+ * | Identity | primary 蓝 225° | `primaryFixedDim` | `primaryFixed` |
+ * | SshKey | secondary 青 195° | `secondaryFixedDim` | `secondaryFixed` |
  *
- * 用户反馈「深色模式下……添加条目里面的剪影卡片显示效果不太好，色彩搭配有点怪，
- * 很多文案都显示不清晰，按深色模式的规范进行优化」。三条根因：
- * 1. [AddTypeTile] 用 `palette.tint`（`xxxContainer`）作底，`contentColor` 却是
- *    `onSurface` —— M3 要求 `onXxxContainer` 配对；
- * 2. 卡底 0.68 + 剪影底 0.62 两层半透明叠在深色 `surface` 上 ⇒ 三个暗色混成浑浊灰，
- *    五个色系全糊掉；
- * 3. 剪影线条 `onSurfaceVariant × 0.34` 在深色 wash 底上对比不足。
- *
- * ⇒ `GlyphPalette` 补 [GlyphPalette.onTint] / [GlyphPalette.onWash]；深/浅两档叠色强度
- *    与线条 alpha 分开取；判深浅复用 `isDarkSurface`（按**实际底色亮度**，不用
- *    `isSystemInDarkTheme()`，这样 App 自定义主题 / OLED 纯黑 / 动态取色全部成立）。
- *    **不硬编码任何色值**。
+ * ⚠️ Identity / SshKey 用 Dim 档作卡底、Fixed 档作 wash：与前三张**同色相但明暗反了一档**，
+ *    配合各自的字段剪影形状足以区分，又不硬造第 4 个色相（见文件头）。
+ * ⚠️ 色值本身的饱和度 / 对比度 / 浅深同值由 `VaultixBrandColorTest` 逐项钉住，这里只接线。
  */
 @Composable
 private fun glyphPalette(type: VaultItemType): GlyphPalette {
     val scheme = MaterialTheme.colorScheme
-    // 交叉表：tint（卡底）与 wash（剪影底）刻意错开一个色系，accent 再取第三种或
-    // 配对的 on-container 深色 ⇒ 相邻网格卡不会撞成同一片颜色。
-    // #283：后两列是各自 container 的 on-color，供文字 / 线条取前景色。
     return when (type) {
         VaultItemType.Login -> GlyphPalette(
-            scheme.primary, scheme.primaryContainer, scheme.secondaryContainer,
-            scheme.onPrimaryContainer, scheme.onSecondaryContainer,
+            scheme.primaryFixed, scheme.primaryFixedDim,
+            scheme.onPrimaryFixed, scheme.onPrimaryFixedVariant,
         )
         VaultItemType.SecureNote -> GlyphPalette(
-            scheme.secondary, scheme.secondaryContainer, scheme.tertiaryContainer,
-            scheme.onSecondaryContainer, scheme.onTertiaryContainer,
+            scheme.secondaryFixed, scheme.secondaryFixedDim,
+            scheme.onSecondaryFixed, scheme.onSecondaryFixedVariant,
         )
         VaultItemType.Card -> GlyphPalette(
-            scheme.tertiary, scheme.tertiaryContainer, scheme.primaryContainer,
-            scheme.onTertiaryContainer, scheme.onPrimaryContainer,
+            scheme.tertiaryFixed, scheme.tertiaryFixedDim,
+            scheme.onTertiaryFixed, scheme.onTertiaryFixedVariant,
         )
         VaultItemType.Identity -> GlyphPalette(
-            scheme.onTertiaryContainer, scheme.tertiaryContainer, scheme.secondaryContainer,
-            scheme.onTertiaryContainer, scheme.onSecondaryContainer,
+            scheme.primaryFixedDim, scheme.primaryFixed,
+            scheme.onPrimaryFixed, scheme.onPrimaryFixedVariant,
         )
         VaultItemType.SshKey -> GlyphPalette(
-            scheme.onSecondaryContainer, scheme.secondaryContainer, scheme.primaryContainer,
-            scheme.onSecondaryContainer, scheme.onPrimaryContainer,
+            scheme.secondaryFixedDim, scheme.secondaryFixed,
+            scheme.onSecondaryFixed, scheme.onSecondaryFixedVariant,
         )
     }
 }
@@ -411,11 +423,13 @@ private fun AddTypeGrid(
 }
 
 /**
- * 单个类型卡：彩色字段剪影 + 类型名，底色取该类型的 tonal 角色。
+ * 单个类型卡：彩色字段剪影 + 类型名。
  *
- * ⚠️ #283：**容器底配 `onContainer` 前景**。原先 `contentColor = onSurface` 在浅色
- *    勉强能用，深色下 `xxxContainer` 是暗色、`onSurface` 与 `onXxxContainer` 亮度
- *    分叉，卡上的类型名与剪影线条同时发灰 ⇒ 用户说的「很多文案都显示不清晰」。
+ * ⚠️ #285：卡底画**纯** [GlyphPalette.container]（fixed 角色，浅深同值），
+ *    `contentColor` 配 [GlyphPalette.onContainer]。不再 `isDarkSurface` 判档、
+ *    不再叠 `TILE_ALPHA_*` —— 那套正是「奇怪颜色」的来源（见文件头第十轮）。
+ * ⚠️ 保留 #283 的「容器底配 on-container 前景」结论，只是角色从 `xxxContainer` 换成
+ *    `xxxFixed`：拿 `onSurface` 顶替容器底依旧是错的。
  */
 @Composable
 private fun AddTypeTile(
@@ -424,23 +438,17 @@ private fun AddTypeTile(
     modifier: Modifier = Modifier,
 ) {
     val palette = glyphPalette(type)
-    val dark = isDarkSurface(MaterialTheme.colorScheme.surface)
     Surface(
         onClick = onPick,
         modifier = modifier.heightIn(min = 104.dp),
         shape = VaultixCorner.Panel,
-        // #282：0.45 → 0.68（浅色）。#283：深色提到 TILE_ALPHA_DARK，避免两层
-        // 半透明把 xxxContainer 洗成浑浊灰、五个色系糊成一片。
-        color = palette.tint.copy(
-            alpha = if (dark) TILE_ALPHA_DARK else TILE_ALPHA_LIGHT,
-        ),
-        contentColor = palette.onTint,
+        color = palette.container,
+        contentColor = palette.onContainer,
     ) {
         Column(modifier = Modifier.padding(Spacing.md)) {
             ItemFieldGlyph(
                 type = type,
                 palette = palette,
-                dark = dark,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(38.dp),
@@ -458,17 +466,16 @@ private fun AddTypeTile(
  * 生成器：与类型卡**同构**的通栏卡（剪影在上、文字在下），
  * 只是剪影是长条状 —— 靠形状而不是分隔线区分「工具」层级。
  *
- * 📐 2026-11-10：删掉副标题「只生成并复制，不创建条目」后高度收到 [GENERATOR_MIN_HEIGHT]
- *    （= 剪影 20 + `Spacing.sm` + 标签 20 + `Spacing.md` ×2）。剪影同步 24 → 20，
- *    让它与主卡**同高**：一屏只有「通栏动作 72 / 类型网格 104」两档。
+ * 📐 2026-11-10：删掉副标题后高度收到 [GENERATOR_MIN_HEIGHT]
+ *    （= 剪影 20 + `Spacing.sm` + 标签 20 + `Spacing.md` ×2），与主卡同高。
  *
- * ⚠️ #283：它本来就用 `onTertiaryContainer` 配对（#282 已合规），深色只需同类型卡
- *    一样把底色画纯、并让线条从 `onTertiaryContainer` 取色，别再用 `onSurfaceVariant × 0.38`。
+ * ⚠️ #285：类型卡走 `glyphPalette`，生成器是**单独一张**，直接取 tertiary fixed 家族
+ *    （`tertiaryFixed` 底 + `onTertiaryFixed` / `onTertiaryFixedVariant` 前景），
+ *    与类型卡的绿系呼应但不参与 5 型交叉表。同样不判深浅、不叠 alpha。
  */
 @Composable
 private fun AddGeneratorTile(onClick: () -> Unit, modifier: Modifier = Modifier) {
     val scheme = MaterialTheme.colorScheme
-    val dark = isDarkSurface(scheme.surface)
     Surface(
         onClick = onClick,
         modifier = modifier
@@ -476,22 +483,13 @@ private fun AddGeneratorTile(onClick: () -> Unit, modifier: Modifier = Modifier)
             .padding(horizontal = Spacing.xl)
             .heightIn(min = GENERATOR_MIN_HEIGHT),
         shape = VaultixCorner.Panel,
-        // 22:37 深色模式反馈：0.42 的底色太透，压不住下面那行小字。
-        // 提到 0.58 后卡片仍是 tonal 面（浅色档，#282 口径不动）；
-        // #283 深色档再提到 TILE_ALPHA_DARK，理由同 AddTypeTile。
-        color = scheme.tertiaryContainer.copy(
-            alpha = if (dark) TILE_ALPHA_DARK else GENERATOR_ALPHA_LIGHT,
-        ),
-        contentColor = scheme.onTertiaryContainer,
+        color = scheme.tertiaryFixed,
+        contentColor = scheme.onTertiaryFixed,
     ) {
         Column(modifier = Modifier.padding(Spacing.md)) {
             GlyphGenerator(
-                accent = scheme.tertiary.copy(alpha = 0.85f),
-                line = if (dark) {
-                    scheme.onTertiaryContainer.copy(alpha = GLYPH_LINE_ALPHA_DARK)
-                } else {
-                    scheme.onSurfaceVariant.copy(alpha = 0.38f)
-                },
+                accent = scheme.onTertiaryFixed,
+                line = scheme.onTertiaryFixedVariant,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(GENERATOR_GLYPH_HEIGHT),
@@ -532,40 +530,28 @@ private val GENERATOR_MIN_HEIGHT =
  * 银行卡画磁条 + 四位点、安全笔画三行文本、身份画头像 + 两行、SSH 画等宽字符块、
  * 登录画站点块 + 两行。全部用 Compose 基础形状绘制，**不新增任何 vector 资源**。
  *
- * ⚠️ #283：深色档由调用方传 [dark]，线条改从 `palette.onWash` 取色并抬高 alpha，
- *    wash 底色也画纯 —— 浅色档完全沿用 #282 的写法，一条数值没动。
+ * ⚠️ #285：内层小卡背景画**纯** [GlyphPalette.wash]（与卡底同色系的另一档 fixed），
+ *    重点形状用 [GlyphPalette.onContainer]、线条用 [GlyphPalette.onContainerVariant]。
+ *    不再接 `dark: Boolean`、不再 `onSurfaceVariant × 0.34` / `onWash × 0.62` 分深浅——
+ *    fixed 角色浅深同值，一套配对走到底。
  */
 @Composable
 private fun ItemFieldGlyph(
     type: VaultItemType,
     palette: GlyphPalette,
-    dark: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    // #283：深色下 onSurfaceVariant × 0.34 压在深色 wash 上几乎看不见。改从 wash
-    // 配对的 on-color 取色并抬高 alpha（M3 on-container 口径），浅色档保持 #282 原样。
-    val line = if (dark) {
-        palette.onWash.copy(alpha = GLYPH_LINE_ALPHA_DARK)
-    } else {
-        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = GLYPH_LINE_ALPHA_LIGHT)
-    }
-    val accent = palette.accent.copy(alpha = 0.82f)
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(9.dp))
-            // #282：原来是 `surface 0.78` 白卡，把刚上的类型色又洗掉一层。
-            // 换成与卡底**不同色系**的 wash，剪影小卡本身也带颜色 ⇒ 一张卡两个色系。
-            // #283：深色档把 wash 画纯，别再和卡底 / surface 混成浑浊灰。
-            .background(
-                palette.wash.copy(alpha = if (dark) WASH_ALPHA_DARK else WASH_ALPHA_LIGHT),
-            )
+            .background(palette.wash)
             .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
         contentAlignment = Alignment.Center,
     ) {
         TypeGlyph(
             type = type,
-            accent = accent,
-            line = line,
+            accent = palette.onContainer,
+            line = palette.onContainerVariant,
             modifier = Modifier.fillMaxWidth(),
         )
     }
@@ -574,10 +560,12 @@ private fun ItemFieldGlyph(
 /**
  * 类型剪影的**形状本体**，不带任何容器。
  *
- * ⚠️ 两处复用：[ItemFieldGlyph]（网格卡的白色圆角卡）与 [AddHeroCard]（主卡的出血水印）。
+ * ⚠️ 两处复用：[ItemFieldGlyph]（网格卡内的剪影小卡）与 [AddHeroCard]（主卡的出血水印）。
  *    同源是「搭配」的前提 —— 8.4 记着「一屏两套规格」是观感廉价的首要来源。
  *    2026-11-10 00:18 用户反馈主卡「比较素，与下面的剪影卡片风格要能搭配」，
  *    当时主卡只有一枚 Material「+」图标，与网格的抽象剪影是两套语言。
+ * ⚠️ #285：形状本体不关心颜色，[accent] / [line] 全由调用方给 —— 网格卡给 fixed
+ *    家族的 `onXxxFixed` / `onXxxFixedVariant`，主卡水印给 `onPrimary`。
  */
 @Composable
 private fun TypeGlyph(

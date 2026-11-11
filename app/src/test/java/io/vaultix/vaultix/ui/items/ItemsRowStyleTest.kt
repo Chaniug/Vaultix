@@ -13,7 +13,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * 条目列表「M3 质感」的**五条可机检规范**（2026-11-12 第八轮 / #282 第 5 项）。
+ * 条目列表「M3 质感」的**六条可机检规范**（2026-11-12 第八轮 / #282 第 5 项起）。
  *
  * 用户反馈：「按域名显示之类的分组还不错，但是 UI 之类的可以稍微做的好看一点吗……
  * 参考一下 material3 的设计风格，**在不增加太多性能开销的情况下**，提升条目的质感，
@@ -23,7 +23,10 @@ import org.junit.Test
  * 的写法问题 —— 副标题截断、列表/详情两页一致性、点缀是否成组、有没有每行开销。
  * CI 没有真机，也跑不了 instrumented test，只能扫源码把写法钉住。
  *
- * ⚠️ 本轮刻意**不动**的运行时判据（云状态三态、按域名分组）由
+ * ⚠️ 判据会随用户反馈**反转**，别把它当誓言：#283 推翻了「计数胶囊」，
+ *    #285 又推翻了 #282 的「分组头成块」（规则 3）并新增「组内紧 / 组间松」（规则 6）。
+ *
+ * ⚠️ 本文件刻意**不动**的运行时判据（云状态三态、按域名分组）由
  *    `CloudSyncBadgeTest` / `ItemsGroupingSiteTest` 负责；本文件只钉「显示层怎么写」。
  */
 class ItemsRowStyleTest {
@@ -107,42 +110,101 @@ class ItemsRowStyleTest {
     // ------------------------------------------------------------------ 规则 3
 
     /**
-     * **分组头成块，计数必须低调、不许有可点击暗示（#283 反转）。**
+     * **分组头是「无背景 section header」，计数低调、不许有可点击暗示（#285 反转 #282）。**
      *
-     * #282 曾把计数收进 `tertiaryContainer` + `CircleShape` 小胶囊，理由是「与类型徽标
-     * 同一套标记语言」。#283 用户反馈「这个数字的 UI 很不好看，给人一种要点击的感觉，
-     * 不要这么显眼」—— 高对比彩色圆点在 M3 里读起来就是 chip / badge，会制造第二个
-     * 假目标（整条 Row 才是唯一可点区域）。⇒ **反转判据**：计数只许是
-     * `onSurfaceVariant` 的纯文字，不许有容器底 / 形状 / 内边距。
+     * #282 把分组头做成 `surfaceContainerLow` 底 + 完整圆角的卡片，理由是「与卡片同属
+     * 一个面、读成分节」。#283 只推翻了计数胶囊：`tertiaryContainer` + `CircleShape` 的
+     * 高对比圆点在 M3 里读作 chip / badge，制造第二个假目标（整条 Row 才是唯一可点
+     * 区域）⇒ 计数只许 `onSurfaceVariant` 纯文字、无容器底 / 形状 / 内边距。
      *
-     * 整条分组头的低档容器底（恰好 1 个 `.background(`）保留：它与下面有描边的卡片
-     * 分层，是「分节」而不是「一行飘着的字」，这一条 #283 没有推翻。
-     * ⚠️ 标题的 `weight(1f)` 右对齐、`stateDescription` 读屏态、不放大字号字重，
-     *    这些既有约束继续钉住。
+     * #285 用户反馈「域名每条分组与所在分组里的条目感觉不太紧密，不像一个整体」「一条
+     * 一条的域名分组条，感觉让页面有一种分割的割裂感」⇒ **第 1 条的「成块」也被反转**：
+     * 分组头与下面的条目是两张同形状的「面」并排，头就读成插进列表的**分割条**。
+     * M3 的 section header 是**无背景**小标题；整体感交给间距（见 [规则 6]）。
+     *
+     * ⚠️ 折叠交互（`.clickable` + 箭头旋转）、`stateDescription` 读屏态、
+     *    `weight(1f)` 右对齐、不放大字号字重 —— 这些既有约束继续钉住，别顺手删。
      */
     @Test
-    fun `分组头成块且计数低调无点击暗示`() {
+    fun `分组头无背景成节且计数低调无点击暗示`() {
         val body = functionBody(itemsSource(), "GroupHeader")
         assertTrue("GroupHeader 函数体没找到", body.isNotEmpty())
         // 「count.toString()」之后就是计数 Text 的剩余参数与函数收尾，足够单独判定
         // 计数有没有被套进 chip 外壳。
         val countBlock = body.substringAfter("count.toString()", "")
         val missing = buildList {
-            if (Regex("""\.background\s*\(""").findAll(body).count() != 1) {
-                add("分组头应只有整条 1 个容器底（计数不许再有底）")
+            // ★ #285：整条头一个背景都不许有（#282 的「恰好 1 个」判据作废）。
+            if (Regex("""\.background\s*\(""").findAll(body).count() != 0) {
+                add("分组头不许有容器底（#285：带底 + 圆角会读成插进列表的分割条）")
             }
-            if (countBlock.contains("CircleShape") || countBlock.contains(".background(")) {
-                add("计数仍是胶囊 / 带底（#283 已作废，会读作可点击 chip）")
+            if (body.contains("RoundedCornerShape") || body.contains(".clip(")) {
+                add("分组头不该再有圆角 / 裁切（那是卡片的形状，不是 section header）")
             }
-            if (countBlock.contains(".padding(")) add("计数仍带内边距，会读成 chip")
-            if (body.contains("tertiaryContainer")) add("计数仍用 tertiary 高对比色")
-            if (!body.contains("colorScheme.onSurfaceVariant")) add("计数没降到次要文字色")
+            if (!body.contains(".clickable(onClick = onToggle)")) add("折叠交互丢了")
+            // 计数那组判据抽走：本函数原本 11 个 if，detekt 圈复杂度评到 15（上限 14）。
+            addAll(groupHeaderCountViolations(body, countBlock))
             if (!body.contains("colorScheme.onSurface")) add("标题没降到正文色")
             if (!body.contains("weight(1f)")) add("标题没占权重，计数不会右对齐")
             if (!body.contains("stateDescription")) add("读屏展开态丢了")
             if (body.contains("fontSize") || body.contains("fontWeight")) add("不许放大字号/加粗")
         }
         assertTrue("分组头规范：\n" + missing.joinToString("\n"), missing.isEmpty())
+    }
+
+    /** 计数「低调」的四条判据；拆出来只为让规则 3 守住 detekt `CyclomaticComplexMethod ≤14`。 */
+    private fun groupHeaderCountViolations(body: String, countBlock: String): List<String> = buildList {
+        if (countBlock.contains("CircleShape") || countBlock.contains(".background(")) {
+            add("计数仍是胶囊 / 带底（#283 已作废，会读作可点击 chip）")
+        }
+        if (countBlock.contains(".padding(")) add("计数仍带内边距，会读成 chip")
+        if (body.contains("tertiaryContainer")) add("计数仍用 tertiary 高对比色")
+        if (!body.contains("colorScheme.onSurfaceVariant")) add("计数没降到次要文字色")
+    }
+
+    // ------------------------------------------------------------------ 规则 6
+
+    /**
+     * **#285：组内紧 / 组间松 —— 用间距而不是背景把分组读成「一个整体」。**
+     *
+     * 用户反馈的割裂感有两个来源，缺一不可：① 分组头自己是一张卡片（见规则 3）；
+     * ② `LazyColumn` 统一 `Arrangement.spacedBy(8dp)` 让「分组头↔首条」「条↔条」
+     * 「上一组末条↔下一组头」三段**等距**，Gestalt 接近性完全失效。
+     *
+     * ⇒ 列表改为 `spacedBy(0.dp)`，由每个 item 自己给三档间距：
+     * 组间 [20dp] > 组内 [4dp] > 头与首条 [2dp]。非分组模式仍用 8dp 卡间距。
+     *
+     * ⚠️ 只钉**关系**（组间 > 组内 > 头间距）与「确实由 item 自己给」，不钉死具体
+     *    数值：观感数值留给真机微调，但「三段等距」这个病根不许回来。
+     */
+    @Test
+    fun `分组间距组内紧组间松且不再统一spacedBy`() {
+        val source = itemsSource()
+        val list = functionBody(source, "ItemsList")
+        assertTrue("ItemsList 函数体没找到", list.isNotEmpty())
+        val section = constDp("GROUP_SECTION_GAP")
+        val inner = constDp("GROUP_ITEM_GAP")
+        val header = constDp("GROUP_HEADER_GAP")
+        val missing = buildList {
+            if (list.contains("Arrangement.spacedBy(ITEM_CARD_GAP)")) {
+                add("列表仍在用统一 8dp spacedBy（三段等距正是割裂感来源）")
+            }
+            if (!list.contains("Arrangement.spacedBy(0.dp)")) add("列表没改成 spacedBy(0)")
+            if (section <= 0f || inner <= 0f || header <= 0f) add("三档间距常量缺失")
+            if (section <= inner) add("组间距($section) 必须大于组内间距($inner)")
+            if (inner <= header) add("组内间距($inner) 必须大于头与首条间距($header)")
+            // ITEM_CARD_GAP 用 Spacing.sm 定义（不是 .dp 字面量），只钉「仍存在且被非分组模式用」。
+            if (!source.contains("private val ITEM_CARD_GAP = Spacing.sm")) {
+                add("非分组模式的 ITEM_CARD_GAP 丢了")
+            }
+            if (!list.contains("ITEM_CARD_GAP")) add("非分组模式没继续用 ITEM_CARD_GAP")
+            // 三档都要真的被 item 用到，而不是只定义了常量。
+            listOf("GROUP_SECTION_GAP", "GROUP_ITEM_GAP", "GROUP_HEADER_GAP").forEach { name ->
+                if (!list.contains(name)) add("$name 定义了却没在 ItemsList 里用")
+            }
+            if (!list.contains("groupIndex == 0")) add("首组没单独收间距（会多出 20dp 空白）")
+            if (!list.contains("firstItemId")) add("组内首条没单独识别（头与首条贴不住）")
+        }
+        assertTrue("分组间距规范：\n" + missing.joinToString("\n"), missing.isEmpty())
     }
 
     // ------------------------------------------------------------------ 规则 4
@@ -217,6 +279,11 @@ class ItemsRowStyleTest {
     }
 
     // ----------------------------------------------------------------- helpers
+
+    /** 读一个私有 `val NAME = N.dp` 的数值；读不到返回 -1 让断言明确失败。 */
+    private fun constDp(name: String): Float =
+        Regex("""private val """ + Regex.escape(name) + """\s*=\s*([\d.]+)\.dp""")
+            .find(itemsSource())?.groupValues?.get(1)?.toFloatOrNull() ?: -1f
 
     /** 取顶层函数的**函数体**（大括号配平，跳过字符串里的括号）。 */
     private fun functionBody(text: String, name: String): String {

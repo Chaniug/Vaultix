@@ -74,6 +74,7 @@ import io.vaultix.vaultix.ui.glass.isLiquidGlassBlurSupported
 import io.vaultix.vaultix.ui.theme.ThemeMode
 import io.vaultix.vaultix.ui.theme.Spacing
 import io.vaultix.vaultix.ui.theme.VaultixCorner
+import io.vaultix.vaultix.ui.theme.supportsDynamicColor
 import io.vaultix.vaultix.util.SystemSettingsIntents
 import io.vaultix.vaultix.util.UpdateCheckResult
 import io.vaultix.vaultix.util.UpdateChecker
@@ -970,6 +971,10 @@ private fun DisplaySection(
     // 系统能不能做真模糊（API 31+）。设置页要说清楚 —— 打开了却看不到模糊，
     // 用户会以为开关坏了（静默降级是最难排查的一类"功能不存在"）。
     val blurSupported = remember { isLiquidGlassBlurSupported() }
+    // ⚠️ #285：动态取色同样是 S+ 能力。低版本把这个开关**禁用 + 说明**，而不是让它
+    //   点了没反应（Theme.kt 的门控会让偏好写进去却完全没有视觉效果）。版本判据与
+    //   取色分支共用 [supportsDynamicColor] 单一真源，别在这里另写一遍 SDK_INT 比较。
+    val dynamicColorSupported = remember { supportsDynamicColor() }
     var showThemeDialog by rememberSaveable { mutableStateOf(false) }
     var showDisplayOptions by rememberSaveable { mutableStateOf(false) }
 
@@ -985,11 +990,21 @@ private fun DisplaySection(
         SettingsRow(
             icon = { Icon(Icons.Filled.Palette, contentDescription = null) },
             title = stringResource(R.string.setting_dynamic_color),
-            subtitle = stringResource(R.string.setting_dynamic_color_desc),
+            // #285：低版本换成「为什么不可用」的说明，而不是照抄一句"跟随系统主题色"
+            // —— 那样用户拨不动开关时只会以为开关坏了。
+            subtitle = stringResource(
+                if (dynamicColorSupported) {
+                    R.string.setting_dynamic_color_desc
+                } else {
+                    R.string.setting_dynamic_color_unsupported
+                },
+            ),
+            enabled = dynamicColorSupported,
             trailing = {
                 SettingsSwitch(
                     value = dynamicColor,
                     onCheckedChange = viewModel::setDynamicColor,
+                    enabled = dynamicColorSupported,
                 )
             },
         )

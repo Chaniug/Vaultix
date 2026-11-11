@@ -83,6 +83,38 @@ import androidx.compose.ui.graphics.Color
  * Android 12+ 且「设置 → 显示与填充 → 动态取色」开启时走
  * [androidx.compose.material3.dynamicLightColorScheme]，本文件**完全不参与**。
  * 静态色板是**回退分支**。
+ *
+ * ## 五、★ 补齐 fixed accent roles（2026-11-12 #285，反编译取证）
+ *
+ * M3 2023 起引入 **12 个 fixed 角色**（primary/secondary/tertiary ×
+ * `xxxFixed` / `xxxFixedDim` / `onXxxFixed` / `onXxxFixedVariant`），2025 的
+ * Color System 已是 **26+ roles**。它们的设计契约是：**同一组固定色值在浅色与深色
+ * 主题下保持不变**，专供「不随主题翻转身份」的强调面（固定徽标、剪影卡、widget）。
+ *
+ * ⚠️ **不传的后果（字节码实证）**：`lightColorScheme()` 的这些参数有默认值，
+ *    `lightColorScheme-_VG5OTI$default` 会去读
+ *    `ColorLightTokens.getPrimaryFixed-0d7_KjU()`，而该 token 的静态初始化是
+ *    `PaletteTokens.Primary90` —— 即 **M3 基线紫**（`#D0BCFF` 一系）。
+ *    本对象此前 12 个角色**一个都没传** ⇒ 关掉动态取色时它们全是基线紫：
+ *    这正是用户反馈「默认的浅色配色有点不符合标准」的确切技术含义，
+ *    也会让任何使用 `primaryFixed` 的卡片（见 `AddActionSheet` 的 #285 剪影卡）
+ *    在固定色板下突然串紫。
+ *
+ * ⚠️ 动态取色路径**不受影响**：`dynamicLightColorScheme31/34` 内部显式把
+ *    fixed 角色映射成壁纸派生的 `TonalPalette.Primary90/80/10/30`。
+ *    ⇒ 补齐前「开动态取色 = 壁纸色、关 = 基线紫」两档跳变，补齐后两档都跟品牌色相。
+ *
+ * ⇒ [FIXED] 一组常量**同时**喂给 [Light] 与 [Dark]：fixed 的语义就是深浅同值，
+ *    若两边各写一份色值，反而违背规范、又制造第二个真源。
+ *
+ * ⚠️ **色值自己也要过饱和度纪律**（2026-11-12 收工前实测订正）：第一版 fixed 容器
+ *    实测饱和度高达 **48.9% / 41.7%**，越过了本类 `MAX_CONTAINER_SATURATION = 40%`
+ *    上限 —— fixed 是「一整张剪影卡」的面积，比 `primaryContainer` 更怕高饱和。
+ *    且第一版三色相挤在 226° / 230°，蓝与靛目视几乎同色，撑不起「每卡记忆点」。
+ *    ⇒ 重取蓝 225° / 青 195° / 绿 145° 三冷色系，饱和度压到 22%~35.5%、
+ *      G-R 全为正（+6~+26，不串紫），`on*Fixed` 前景对比度 6~12:1 全过 WCAG AA。
+ *    这五条量化判据由 [VaultixBrandColorTest] 的 fixed 家族用例逐项钉住，
+ *    **别再凭"看起来柔和"手挑色值** —— 上一版就是这么越界的。
  */
 internal object VaultixBrandColor {
 
@@ -95,6 +127,36 @@ internal object VaultixBrandColor {
     /** 更浅的大面积底（选中态等）：饱和度再压到 28.6%。 */
     private val BlueShell = Color(0xFFEDEFF5)
 
+    // ---- M3 Expressive fixed accent roles（#285：浅色 / 深色同值，不回退基线紫）----
+    // 三个**冷色系**蓝 225° / 青 195° / 绿 145°，色相间隔 30~50° —— 剪影卡要「每张
+    // 有视觉记忆点」，三色相挤在一起（上一版蓝 226 / 靛 230）目视几乎同色。
+    // ⚠️ 全部 G-R 为正（+6 ~ +26）：不串紫，与 surfaceFamily 的中性灰同一纪律。
+    // ⚠️ 饱和度 22%~35.5%，**全部 ≤ 40% 上限**：fixed 容器是「一整张卡」的面积，
+    //    和 largeAreaContainers 同样怕高饱和刺眼（上一版实测 48.9% 已越界，见 §五）。
+    // ⚠️ on*Fixed 是深色高对比前景（12:1），on*FixedVariant 是中深次要前景（6~8:1），
+    //    都过 WCAG AA 文本级 4.5；前景允许比容器饱和（要辨识度），不受 40% 上限约束。
+    // ⚠️ xxxFixed 亮于 xxxFixedDim（相对亮度 0.71~0.76 > 0.52~0.60），符合 M3 单调。
+    private val FixedPrimary = Color(0xFFD5DBEB)
+    private val FixedPrimaryDim = Color(0xFFB5BED9)
+    private val OnFixedPrimary = Color(0xFF101A37)
+    private val OnFixedPrimaryVariant = Color(0xFF2C3C6D)
+
+    private val FixedSecondary = Color(0xFFD4E3E8)
+    private val FixedSecondaryDim = Color(0xFFB4CDD5)
+    private val OnFixedSecondary = Color(0xFF0F2A33)
+    private val OnFixedSecondaryVariant = Color(0xFF285362)
+
+    private val FixedTertiary = Color(0xFFD6E6DD)
+    private val FixedTertiaryDim = Color(0xFFB7D1C2)
+    private val OnFixedTertiary = Color(0xFF112C1C)
+    private val OnFixedTertiaryVariant = Color(0xFF2A553C)
+
+    // 12 个色值只有上面这一份（单一真源）；Light / Dark 两个构造各自按名引用它们。
+    // ⚠️ 不抽 `ColorScheme.copy()` helper：本依赖里 copy 有 3 个历史重载
+    //    （`copy-_VG5OTI` 49 参 / `copy-C-Xl9yA` 37 参 / `copy-G1PFc-w` 29 参），
+    //    多一次重载解析就多一个编译期不确定；直接把命名参数传给
+    //    `lightColorScheme` / `darkColorScheme` 是官方签名，最稳。
+
     /**
      * 品牌浅色色板。
      *
@@ -102,6 +164,21 @@ internal object VaultixBrandColor {
      * 而 M3 基线是 `G-R = -3 ~ -6`（那正是"紫"的量化签名）。
      */
     val Light: ColorScheme = lightColorScheme(
+        // #285：12 个 fixed 角色必须显式传，否则默认参数回退到 M3 基线紫（见文件头 §五）。
+        // 深浅同值 —— fixed 的契约就是「不随主题翻转」，故与 Dark 引用同一组常量。
+        primaryFixed = FixedPrimary,
+        primaryFixedDim = FixedPrimaryDim,
+        onPrimaryFixed = OnFixedPrimary,
+        onPrimaryFixedVariant = OnFixedPrimaryVariant,
+        secondaryFixed = FixedSecondary,
+        secondaryFixedDim = FixedSecondaryDim,
+        onSecondaryFixed = OnFixedSecondary,
+        onSecondaryFixedVariant = OnFixedSecondaryVariant,
+        tertiaryFixed = FixedTertiary,
+        tertiaryFixedDim = FixedTertiaryDim,
+        onTertiaryFixed = OnFixedTertiary,
+        onTertiaryFixedVariant = OnFixedTertiaryVariant,
+
         primary = Blue8,
         onPrimary = Color(0xFFFFFFFF),
         primaryContainer = BlueContainer,
@@ -148,6 +225,20 @@ internal object VaultixBrandColor {
 
     /** 品牌深色色板（与 [Light] 同色相，饱和度同样压低）。 */
     val Dark: ColorScheme = darkColorScheme(
+        // #285：与 Light 完全同一组常量 —— fixed 角色在深浅主题下必须同值。
+        primaryFixed = FixedPrimary,
+        primaryFixedDim = FixedPrimaryDim,
+        onPrimaryFixed = OnFixedPrimary,
+        onPrimaryFixedVariant = OnFixedPrimaryVariant,
+        secondaryFixed = FixedSecondary,
+        secondaryFixedDim = FixedSecondaryDim,
+        onSecondaryFixed = OnFixedSecondary,
+        onSecondaryFixedVariant = OnFixedSecondaryVariant,
+        tertiaryFixed = FixedTertiary,
+        tertiaryFixedDim = FixedTertiaryDim,
+        onTertiaryFixed = OnFixedTertiary,
+        onTertiaryFixedVariant = OnFixedTertiaryVariant,
+
         primary = Color(0xFF9DAFD8),
         onPrimary = Color(0xFF1A2450),
         primaryContainer = Color(0xFF2E3A63),

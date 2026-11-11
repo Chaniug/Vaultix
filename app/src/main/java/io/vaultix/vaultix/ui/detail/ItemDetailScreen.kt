@@ -664,7 +664,13 @@ fun ItemDetailScreen(
             )
             if (item != null) {
                 VaultixExpressiveTopBar(
-                    title = TopBarTitle(item.title.ifBlank { stringResource(R.string.items_item_unnamed) }),
+                    // ⚠️ #285 第 3 项：条目名按单行显示（缩字号 → 省略号）。
+                    //    长域名如 accounts.spotify.com 折两行会变成「accounts.spotify. / com」
+                    //    的孤字行，且与右侧编辑 / 删除图标错位；库名顶栏仍允许两行。
+                    title = TopBarTitle(
+                        item.title.ifBlank { stringResource(R.string.items_item_unnamed) },
+                        singleLine = true,
+                    ),
                     collapseFraction = listCollapse,
                     modifier = Modifier.align(Alignment.TopCenter),
                     // ⚠️ 2026-09-13 第三轮用户要求：「左上角返回按钮可以取消了，现在都是手势返回，

@@ -24,7 +24,46 @@
 - 已接进 CI：`ci-debug.yml` 的 `sandbox-tests` job 用**同一份脚本**，与 `android-ci` 并行
   ⇒ 本地绿 ⇒ CI 不会红在同一件事上。
 
-## 🕐 最新状态（2026-11-12 · #284 取消按钮规格统一 + KDBX 通行密钥排查）
+## 🕐 最新状态（2026-11-12 · #285 六组 UI / 主题 / KDBX 反馈）
+
+> **一句话**：用户带 4 张真机截图提了六组观感 / 主题问题，**六组全改了生产代码**。
+> 接力正文：[`#285`](./issues/06-界面与交互-part23.md)。
+
+1. **网盘账号卡精修**：从「设置页一组多行」的 `SettingsGroupCard` + `SettingsRow`
+   （72dp 行 + 20dp 内距 + 一整行按钮 ⇒ 又高又空的深灰板）改为**一个账号一张紧凑卡**；
+   「已连接」从卡片外收成行尾徽标；主操作 48dp 满宽胶囊与 40dp outlined「注销」
+   统一为两枚同规格 M3 按钮（主次靠填充不靠尺寸）；全宽按钮与卡片同款圆角。
+2. **域名分组整体化**：**反转 #282「分组头成块」** —— 带底 + 圆角的头与同形状条目卡
+   并排，读成插进列表的分割条。改无背景 section header + 列表 `spacedBy(0)` 由 item
+   自给三档间距（**组间 20 > 组内 4 > 头与首条 2dp**），整体感交给 Gestalt 接近性。
+3. **详情页长标题**：`TopBarTitle` 加 `singleLine`，详情页传 `true` 只走「缩字号 →
+   省略号」，不再把 `accounts.spotify.com` 折成孤字行；库名顶栏仍允许两行。
+4. **「+」剪影卡配色**：**作废 #282/#283 的 `xxxContainer` 交叉 + 两层 alpha 分档**
+   （用户说的「奇怪颜色」正是这套做法本身，container 随主题翻转 ⇒ 深浅各调一遍仍浑浊），
+   改 **M3 fixed accent roles**：卡底画纯 `xxxFixed` / `xxxFixedDim`，文案 / 线条用
+   `onXxxFixed` / `onXxxFixedVariant`，删光 7 个 alpha 常量与 `isDarkSurface` 判档。
+   5 型靠「3 色相 × Fixed / FixedDim 两档」区分，不硬造第 4 个色相。
+5. **主题 / 动态取色**：反编译取证两个根因 —— 静态色板**一个 fixed role 都没传**
+   （关闭动态取色时回退 M3 基线紫，开则壁纸派生色，两档跳变）+ `dynamicColor` 默认
+   `true` 让首次启动绕过品牌浅色板。补齐 12 个 fixed 命名参数（色值 Python 实测
+   饱和度 22%~35.5%、前景对比 6~12:1）、三处默认值统一 `false`、新增
+   `supportsDynamicColor()` 单一真源让低版本开关**禁用 + 说明**、OLED 纯黑压整套
+   9 档 surface 家族。
+6. **KDBX 顶栏标题**：`VaultOriginLabel.vaultTopBarTitle()` 单一真源，KDBX 一律显示
+   `KDBX`；只改顶栏，列表状态行仍带文件名。
+
+**验证**：detekt + `:app:assembleFullDebug` + 十模块全量单测 `BUILD SUCCESSFUL in 44s`，
+**1806 例 0 失败**（177 份 XML，比 #284 多 15 例）；**33 项 Python 门禁全绿**。
+新建 `ThemeDefaultRulesTest`(4) / `TopBarTitleRulesTest`(3) / `CloudAccountCardStyleTest`(3)，
+`AddActionSheetStyleTest` 三条规则**整体反转**、`ItemsRowStyleTest` 反转规则 3 + 新增规则 6、
+`VaultixBrandColorTest` 补 fixed 家族 4 类。
+
+**本轮三处 detekt / 门禁坑**：`functionBody()` 不含参数签名（#283 同款，补
+`functionSignature()`）；裸 `Color(0xFF…)` 函数参数触发 `MagicNumber`（抽属性常量）；
+规则 3 反转后圈复杂度 15 > 14（拆 helper）。⚠️ **管道吞退出码**：`gradlew | tail`
+让 shell 显示 exit 0 而实际 `EXIT=1`，判 rc 一律 `cmd > log 2>&1; rc=$?; exit $rc`。
+
+## 🕐 上一轮状态（2026-11-12 · #284 取消按钮规格统一 + KDBX 通行密钥排查）
 
 > **一句话**：用户两组反馈（设置页「取消」大小 / 形态与正常按钮不一致 + KDBX 能否存通行密钥 /
 > 管理部分是否正常）。**都改了生产代码**：① 反编译取证推翻 #273/#283 的 intrinsic 修法；

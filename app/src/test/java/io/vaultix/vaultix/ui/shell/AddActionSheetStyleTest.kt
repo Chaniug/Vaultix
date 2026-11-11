@@ -13,18 +13,27 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * 「+」新建面板剪影卡片的**三条可机检规范**（2026-11-12，#283）。
+ * 「+」新建面板剪影卡片的**三条可机检规范**（2026-11-12 #285，整体反转 #283）。
  *
- * 用户反馈「深色模式下……添加条目里面的剪影卡片显示效果不太好，色彩搭配有点怪，
- * 很多文案都显示不清晰，按深色模式的规范进行优化」。根因是纯观感 / 源码写法问题，
- * CI 没有真机也跑不了 instrumented test ⇒ 与 `DialogStyleRulesTest`、
- * `LiquidGlassDockRulesTest` 同口径，扫源码钉住。
+ * 用户反馈「按安卓最新设计规范重新配色，不要奇怪颜色，浅色 / 深色都兼顾，同时每张卡
+ * 有视觉记忆点」。#283 那三条规则钉的**正是被淘汰的做法**：`xxxContainer` 交叉铺开 +
+ * `isDarkSurface` 判深浅 + 两档 alpha（浅 0.68/0.62、深 0.94/0.92）+ `onXxxContainer`。
+ * 只要还靠随主题翻转的 `xxxContainer` 配半透明分档，深浅两档就得各调一遍 —— 这正是
+ * 用户说的「奇怪颜色」的来源。
+ *
+ * ⇒ #285 换 **M3 fixed accent roles**：`xxxFixed` / `xxxFixedDim` / `onXxxFixed` /
+ *   `onXxxFixedVariant` 在浅色与深色主题下取到同一组固定色值，卡底直接画纯色，
+ *   一套配对走到底，不需要判档、不需要任何 alpha 常量。
+ *
+ * ⚠️ 判据会随用户反馈**反转**，别把它当誓言：#282 加交叉色系、#283 补深色档、
+ *    #285 把两者一起作废（同 `ItemsRowStyleTest` 那条「判据反转」留痕）。
+ * ⚠️ fixed 色值本身（饱和度 / 对比度 / 浅深同值）由 `VaultixBrandColorTest` 逐项钉住，
+ *    本文件只钉「接线关系」——用了哪些角色、有没有残留旧角色、5 型有没有铺开。
  *
  * 三条对应三个最容易「改一处漏一处」的点：
- * 1. M3 容器底必须配 `onXxxContainer` 前景，不能拿 `onSurface` 顶替；
- * 2. 深浅判定必须看**实际底色亮度**（本 App 有独立主题模式 + OLED 纯黑 + 动态取色），
- *    且深色档要把 container 画纯、线条从配对前景取色；
- * 3. 深色档叠色 / 线条强度必须强于浅色档，同时**浅色档沿用 #282 一个数值没动**。
+ * 1. 卡底 / 前景一律 fixed 家族，不许残留随主题翻转的 `xxxContainer`；
+ * 2. 浅深同值 ⇒ 不许判深浅档、不许配色分档 alpha 常量；
+ * 3. 5 种类型靠「3 色相 × Fixed / FixedDim 两档」区分，前景全用配对 `onXxxFixed`。
  */
 class AddActionSheetStyleTest {
 
@@ -37,112 +46,109 @@ class AddActionSheetStyleTest {
     // ------------------------------------------------------------------ 规则 1
 
     /**
-     * **容器底必须配 `onContainer` 前景。**
+     * **卡底 / 前景一律走 fixed 家族，不碰随主题翻转的 `xxxContainer`。**
      *
-     * #282 把卡底换成 `primaryContainer` / `secondaryContainer` / `tertiaryContainer`
-     * 让配色活泼，但 `contentColor` 仍是 `onSurface` —— M3 规定二者必须成对，
-     * 深色下两者亮度分叉最大，卡上的类型名与剪影线条同时发灰，正是用户说的「文案不清晰」。
+     * #282/#283 的 `primaryContainer` 等角色浅色是浅色、深色变暗色，配上 0.68/0.94
+     * 两档 alpha 后，近黑 surface 上几个色相被洗成浑浊灰。fixed 角色浅深同值，
+     * 卡底直接 `color = palette.container`（纯色）、`contentColor = palette.onContainer`。
      */
     @Test
-    fun `剪影卡片容器底配对onContainer前景`() {
+    fun `剪影卡一律走fixed角色不碰随主题翻转的container`() {
+        val palette = functionBody(source, "glyphPalette")
         val tile = functionBody(source, "AddTypeTile")
         val generator = functionBody(source, "AddGeneratorTile")
-        val palette = functionBody(source, "glyphPalette")
+        val cards = tile + generator + palette
         val missing = buildList {
-            if (tile.isEmpty()) add("AddTypeTile 函数体没找到")
-            if (generator.isEmpty()) add("AddGeneratorTile 函数体没找到")
-            if (!source.contains("val onTint: Color")) add("GlyphPalette 缺 onTint")
-            if (!source.contains("val onWash: Color")) add("GlyphPalette 缺 onWash")
-            if (!tile.contains("contentColor = palette.onTint")) {
-                add("类型卡 contentColor 没配 onTint（不能用 onSurface 顶替容器底）")
+            listOf("primaryFixed", "secondaryFixed", "tertiaryFixed").forEach { role ->
+                if (!palette.contains(role)) add("glyphPalette 没用 $role")
             }
-            if (tile.contains("contentColor = MaterialTheme.colorScheme.onSurface")) {
-                add("类型卡仍用 onSurface 配 xxxContainer 底")
+            listOf("onPrimaryFixed", "onSecondaryFixed", "onTertiaryFixed").forEach { role ->
+                if (!palette.contains(role)) add("glyphPalette 没用 $role 前景")
             }
-            if (!generator.contains("contentColor = scheme.onTertiaryContainer")) {
-                add("生成器卡丢了 onTertiaryContainer 配对")
+            listOf(
+                "primaryContainer", "secondaryContainer", "tertiaryContainer",
+                "onPrimaryContainer", "onSecondaryContainer", "onTertiaryContainer",
+            ).forEach { role ->
+                if (cards.contains(role)) add("卡片绘制里还残留 $role（#285 已废弃）")
             }
-            if (!palette.contains("onPrimaryContainer") ||
-                !palette.contains("onSecondaryContainer") ||
-                !palette.contains("onTertiaryContainer")
-            ) {
-                add("glyphPalette 没为每种类型给出配对的 on-color")
+            if (!tile.contains("color = palette.container")) add("类型卡卡底没画纯 fixed 色")
+            if (!tile.contains("contentColor = palette.onContainer")) add("类型卡没配 onXxxFixed 前景")
+            if (!generator.contains("color = scheme.tertiaryFixed")) add("生成器卡底没走 tertiaryFixed")
+            if (!generator.contains("contentColor = scheme.onTertiaryFixed")) {
+                add("生成器没配 onTertiaryFixed 前景")
             }
         }
-        assertTrue("剪影卡 container/onContainer 配对：\n" + missing.joinToString("\n"), missing.isEmpty())
+        assertTrue("剪影卡 fixed 角色接线：\n" + missing.joinToString("\n"), missing.isEmpty())
     }
 
     // ------------------------------------------------------------------ 规则 2
 
     /**
-     * **深浅取实际底色，深色档把 container 画纯、线条从配对前景取色。**
+     * **浅深同值 ⇒ 不判深浅档、不留配色分档 alpha 常量。**
      *
-     * ⚠️ 不许用 `isSystemInDarkTheme()`：App 设深色、系统浅色时会判错档。
-     * ⚠️ 深色下 0.68 + 0.62 两层半透明叠在近黑 surface 上会把三个色系洗成浑浊灰
-     *    （用户说的「色彩搭配有点怪」）；`onSurfaceVariant × 0.34` 的线条则几乎看不见。
+     * `isDarkSurface` / `dark: Boolean` / `TILE_ALPHA_*` / `WASH_ALPHA_*` 全是
+     * 「`xxxContainer` 随主题翻转」的补丁；换成 fixed 角色后一个都不该剩。
+     *
+     * ⚠️ 主卡水印的 `HERO_GLYPH_*_ALPHA` 是出血透明度、`GlyphCard` / `GlyphGenerator`
+     *    形状内部的 `copy(alpha)` 是绘图层次，都不属于配色分档，不在本规则禁列 ——
+     *    所以这里只精确点名 4 组旧常量，且 `.copy(alpha)` 只扫三处卡片绘制函数体。
      */
     @Test
-    fun `深浅按底色亮度判定且深色档画纯叠色`() {
+    fun `fixed浅深同值不再判深浅档也不再叠alpha分档`() {
         val tile = functionBody(source, "AddTypeTile")
         val glyph = functionBody(source, "ItemFieldGlyph")
         val glyphSignature = functionSignature(source, "ItemFieldGlyph")
         val generator = functionBody(source, "AddGeneratorTile")
         val missing = buildList {
-            if (!source.contains("isDarkSurface(")) add("没复用 isDarkSurface 按底色判深浅")
+            if (source.contains("isDarkSurface")) add("还在判深浅档（fixed 角色浅深同值）")
             if (source.contains("isSystemInDarkTheme")) add("用了系统主题判定，自定义主题下会错档")
-            if (!tile.contains("if (dark) TILE_ALPHA_DARK else TILE_ALPHA_LIGHT")) {
-                add("类型卡底色没分深浅档")
-            }
-            // ⚠️ 参数在签名里，不在函数体里 —— functionBody() 从 `{` 起，查不到。
-            if (!glyphSignature.contains("dark: Boolean")) add("ItemFieldGlyph 没接深浅档参数")
-            if (!tile.contains("dark = dark")) add("类型卡没把深浅档传给剪影")
-            if (!glyph.contains("palette.onWash")) add("深色剪影线条没从 onWash 取色")
-            if (!glyph.contains("if (dark) WASH_ALPHA_DARK else WASH_ALPHA_LIGHT")) {
-                add("剪影小卡底色没分深浅档")
-            }
-            if (!generator.contains("onTertiaryContainer.copy")) {
-                add("生成器卡深色线条没从 onTertiaryContainer 取色")
+            listOf("TILE_ALPHA_", "WASH_ALPHA_", "GLYPH_LINE_ALPHA_", "GENERATOR_ALPHA_")
+                .forEach { prefix ->
+                    if (source.contains(prefix)) add("还残留配色分档常量 $prefix（卡底应画纯色）")
+                }
+            if (glyphSignature.contains("dark: Boolean")) add("ItemFieldGlyph 还接 dark 参数")
+            if (tile.contains("dark")) add("类型卡还残留深浅档接线")
+            if (glyph.contains("onSurfaceVariant")) add("剪影线条还在用 onSurfaceVariant 顶替")
+            if (!glyph.contains(".background(palette.wash)")) add("剪影小卡没画纯 wash 色")
+            if (Regex("""\.copy\s*\(\s*alpha""").containsMatchIn(tile + glyph + generator)) {
+                add("卡底 / 剪影还在叠 alpha")
             }
         }
-        assertTrue("深色剪影卡配色：\n" + missing.joinToString("\n"), missing.isEmpty())
+        assertTrue("fixed 浅深同值：\n" + missing.joinToString("\n"), missing.isEmpty())
     }
 
     // ------------------------------------------------------------------ 规则 3
 
     /**
-     * **深色档强度更大，浅色档保持 #282 原值不动。**
+     * **5 种类型各有记忆点，且前景一律用 fixed 配对。**
      *
-     * 这一条防的是「为了修深色顺手把浅色也调了」—— #282 刚按用户反馈把浅色调活泼，
-     * 本轮只处理深色，浅色的 0.68 / 0.62 / 0.34 / 0.58 一个都不该变。
+     * 3 色相 × Fixed / FixedDim 两档铺满 5 型；`wash` 与 `container` 同色系（不再交叉
+     * 色系）。前景保留 #283「容器底配 on-container」的结论，只是换成 `onXxxFixed` 家族：
+     * 拿 `onSurface` / `onSurfaceVariant` 顶替依旧是错的。
      */
     @Test
-    fun `深色叠色强于浅色且浅色档保持282原值`() {
-        val tileLight = constFloat("TILE_ALPHA_LIGHT")
-        val tileDark = constFloat("TILE_ALPHA_DARK")
-        val washLight = constFloat("WASH_ALPHA_LIGHT")
-        val washDark = constFloat("WASH_ALPHA_DARK")
-        val lineLight = constFloat("GLYPH_LINE_ALPHA_LIGHT")
-        val lineDark = constFloat("GLYPH_LINE_ALPHA_DARK")
-        val generatorLight = constFloat("GENERATOR_ALPHA_LIGHT")
-
-        assertTrue("深色卡底应比浅色更实（$tileDark > $tileLight）", tileDark > tileLight)
-        assertTrue("深色剪影底应比浅色更实（$washDark > $washLight）", washDark > washLight)
-        assertTrue("深色线条应比浅色更清晰（$lineDark > $lineLight）", lineDark > lineLight)
-        assertTrue("深色档仍是半透明，不许直接画成不透明板", tileDark < 1f && washDark < 1f)
-        assertTrue(
-            "浅色档沿用 #282：0.68 / 0.62 / 0.34 / 0.58（实得 $tileLight / $washLight / " +
-                "$lineLight / $generatorLight）",
-            tileLight == 0.68f && washLight == 0.62f &&
-                lineLight == 0.34f && generatorLight == 0.58f,
-        )
+    fun `五型各有记忆点且前景一律用fixed配对`() {
+        val palette = functionBody(source, "glyphPalette")
+        val glyph = functionBody(source, "ItemFieldGlyph")
+        val missing = buildList {
+            listOf("container", "wash", "onContainer", "onContainerVariant").forEach { field ->
+                if (!source.contains("val $field: Color")) add("GlyphPalette 缺 $field 字段")
+            }
+            val branches = Regex("""GlyphPalette\s*\(""").findAll(palette).count()
+            if (branches != 5) add("glyphPalette 应有 5 个类型分支，实际 $branches")
+            val dims = Regex("""FixedDim""").findAll(palette).count()
+            if (dims < 5) add("FixedDim 两档没铺开（实际 $dims 次），卡片会撞色")
+            if (!glyph.contains("accent = palette.onContainer")) add("重点形状没用 onXxxFixed")
+            if (!glyph.contains("line = palette.onContainerVariant")) add("线条没用 onXxxFixedVariant")
+            if (source.contains("val onTint: Color") || source.contains("val onWash: Color")) {
+                add("旧交叉表字段 onTint / onWash 又回来了")
+            }
+            if (!source.contains("onTertiaryFixedVariant")) add("生成器线条没用 onTertiaryFixedVariant")
+        }
+        assertTrue("五型 fixed 配对：\n" + missing.joinToString("\n"), missing.isEmpty())
     }
 
     // ----------------------------------------------------------------- helpers
-
-    /** 读一个私有 `const val … = 0.xxf` 的数值；读不到返回 -1 让断言明确失败。 */
-    private fun constFloat(name: String): Float =
-        Regex("""private const val """ + Regex.escape(name) + """\s*=\s*([\d.]+)f""")
-            .find(source)?.groupValues?.get(1)?.toFloatOrNull() ?: -1f
 
     /** 取一个顶层 / Composable 函数的**函数体**（大括号配平，跳过字符串里的括号）。 */
     private fun functionBody(text: String, name: String): String {
@@ -184,7 +190,7 @@ class AddActionSheetStyleTest {
      * 去掉行注释与块注释，**保留换行**（行号才不会错位）。
      *
      * 与 `DialogStyleRulesTest.stripComments` 同一套写法：KDoc 里常写
-     * `` `onSurface` `` 举反例，不剥掉会把说明文字当成真实调用。
+     * `` `onSurface` `` 举反例，也会复述被淘汰的旧做法，不剥掉会把说明文字当成真实调用。
      * 拆成小函数是为了过 detekt `CyclomaticComplexMethod ≤14`。
      */
     private fun stripComments(text: String): String {

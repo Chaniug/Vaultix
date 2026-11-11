@@ -351,11 +351,21 @@ internal fun SettingsDivider() {
 internal fun SettingsSwitch(
     value: Boolean?,
     onCheckedChange: (Boolean) -> Unit,
+    /**
+     * 能力不可用时的**关态**（#285：动态取色在 Android 12 以下无效）。
+     *
+     * ⚠️ 与 [SettingsRow.enabled] 是两件事：那只让图标 / 文字变淡，管不到 `trailing`
+     *    槽里的开关 —— 不给本参数传 `false`，低版本用户照样能拨动那个开关，
+     *    却什么都不会发生（静默降级，见 DisplaySection 的 #285 段）。
+     * ⚠️ 关态下**占位也不接收点击**：否则「数据未到达 + 能力不可用」时点一下仍会
+     *    写偏好，等于绕过禁用。`enabled = true` 时三态行为与 #84 定稿完全一致。
+     */
+    enabled: Boolean = true,
 ) {
     // ★ 2026-10-30：热区 48dp 外壳内置在这里（三态共用），调用点无需关心。
     SwitchWithTouchTarget {
         if (value != null) {
-            Switch(checked = value, onCheckedChange = onCheckedChange)
+            Switch(checked = value, onCheckedChange = onCheckedChange, enabled = enabled)
         } else {
             // 占位：尺寸对齐 M3 Switch 的视觉（track 52×32dp），避免数据到达时整行跳动。
             // 刻意**不用禁用态开关** —— 那个会被读成「关」，正是要避免的那个假答案。
@@ -363,7 +373,7 @@ internal fun SettingsSwitch(
             Box(
                 modifier = Modifier
                     .size(SWITCH_VISUAL_WIDTH, SWITCH_VISUAL_HEIGHT)
-                    .clickable { onCheckedChange(true) },
+                    .then(if (enabled) Modifier.clickable { onCheckedChange(true) } else Modifier),
             )
         }
     }

@@ -30,6 +30,14 @@ import kotlin.math.pow
  * 饱和度 **100%**（一个完全饱和的色），大面积铺开时最晃眼。
  * 本版把它压到 36.6%，同时把 WCAG 对比度守在门槛之上。
  *
+ * ## 缺陷三：fixed 角色回退基线紫（2026-11-12 #285，用户反馈「默认浅色配色不标准」）
+ *
+ * M3 的 12 个 `xxxFixed` 角色有默认参数，不显式传就回退到 `PaletteTokens.Primary90`
+ * 一系的**基线紫**；而动态取色路径会显式映射成壁纸派生色 ⇒ 「开=壁纸色、关=紫」两档跳变。
+ * 补齐静态色板后，还要钉住**补齐进去的色值本身**：第一版手挑的 fixed 容器实测
+ * 饱和度 48.9%（越过 40% 上限）、三色相挤到几乎同色。⇒ [fixedRolesAreIdenticalAcrossThemes]
+ * 等五条用例把「浅深同值 / 不串紫 / 低饱和 / 前景对比度 / 亮度单调」逐项量化。
+ *
  * ## 这类缺陷为什么**必须**有单测
  *
  * 配色 bug 有三个特性，让它特别容易复发：
@@ -455,6 +463,132 @@ class VaultixBrandColorTest {
             ).that(hue).isAtMost(MAX_BLUE_HUE)
         }
     }
+
+    // ------------------------------------------------------------------
+    // 判据 6：★ M3 fixed accent roles（2026-11-12 #285）
+    // ------------------------------------------------------------------
+
+    /**
+     * **fixed 的契约就是「浅色 / 深色同值」** —— 这是它与 `xxxContainer` 最根本的区别。
+     *
+     * 若 [VaultixBrandColor.Light] / [VaultixBrandColor.Dark] 各写一份色值（或某一版
+     * 只在浅色补了 fixed、深色漏补），剪影卡 / 固定徽标会在切主题时**跳色**，
+     * 正好违背 M3 引入 fixed 角色的初衷。12 个角色逐项比对，漏一个都会红。
+     */
+    @Test
+    fun fixedRolesAreIdenticalAcrossThemes() {
+        val light = VaultixBrandColor.Light.fixedRoles()
+        val dark = VaultixBrandColor.Dark.fixedRoles()
+        val mismatches = buildList {
+            light.forEachIndexed { i, (name, l) ->
+                val (_, d) = dark[i]
+                // ⚠️ assertWithMessage 只认 %s（见 [accentSlotsStayBelowSaturationCeiling]）。
+                if (l.container != d.container) add("%s container 浅深不同".format(name))
+                if (l.containerDim != d.containerDim) add("%s containerDim 浅深不同".format(name))
+                if (l.onContainer != d.onContainer) add("%s onContainer 浅深不同".format(name))
+                if (l.onContainerVariant != d.onContainerVariant) {
+                    add("%s onContainerVariant 浅深不同".format(name))
+                }
+            }
+        }
+        assertWithMessage("fixed 角色必须浅深同值：%s", mismatches.joinToString("; "))
+            .that(mismatches).isEmpty()
+    }
+
+    /**
+     * **fixed 容器不串紫、不越饱和上限。**
+     *
+     * 这两条直接复用判据 1 / 5 的口径：fixed 容器是「一整张剪影卡」的面积，
+     * 比 `primaryContainer` 更怕高饱和刺眼；绿通道凹陷则是基线紫的量化签名。
+     * ⚠️ 第一版手挑色值在这里实测 48.9% / 41.7%（越 40% 上限），本轮据此重取色。
+     */
+    @Test
+    fun fixedContainersStayMutedAndNeutral() {
+        val problems = buildList {
+            for ((name, roles) in VaultixBrandColor.Light.fixedRoles()) {
+                for ((slot, color) in listOf("container" to roles.container, "dim" to roles.containerDim)) {
+                    val gMinusR = channel8(color.green) - channel8(color.red)
+                    if (gMinusR < NEUTRAL_COLD_TOLERANCE) {
+                        add("%s/%s G-R=%s 带紫调".format(name, slot, gMinusR))
+                    }
+                    val saturation = saturationPercent(color)
+                    if (saturation > MAX_CONTAINER_SATURATION) {
+                        add("%s/%s 饱和度 %s 超过上限 %s".format(
+                            name, slot, saturation, MAX_CONTAINER_SATURATION,
+                        ))
+                    }
+                }
+            }
+        }
+        assertWithMessage("fixed 容器低饱和不串紫：%s", problems.joinToString("; "))
+            .that(problems).isEmpty()
+    }
+
+    /**
+     * **`onXxxFixed` 前景在 fixed 容器上必须过 WCAG AA 文本级。**
+     *
+     * #283 的教训：容器底换了角色、文案却拿 `onSurface` 顶替 ⇒ 深色下「文案不清晰」。
+     * fixed 角色同样自带配对前景，剪影卡的类型名 / 线条必须用它们。
+     * 主前景（12:1 档）与次要前景 variant（6~8:1 档）都按 4.5 门槛验。
+     */
+    @Test
+    fun fixedForegroundsMeetTextContrast() {
+        val problems = buildList {
+            for ((name, roles) in VaultixBrandColor.Light.fixedRoles()) {
+                listOf("onContainer" to roles.onContainer, "onContainerVariant" to roles.onContainerVariant)
+                    .forEach { (slot, foreground) ->
+                        val ratio = contrast(foreground, roles.container)
+                        if (ratio < MIN_TEXT_CONTRAST) {
+                            add("%s/%s = %s 低于 %s".format(name, slot, ratio, MIN_TEXT_CONTRAST))
+                        }
+                    }
+            }
+        }
+        assertWithMessage("fixed 前景对比度：%s", problems.joinToString("; "))
+            .that(problems).isEmpty()
+    }
+
+    /**
+     * **`xxxFixed` 必须亮于 `xxxFixedDim`**（M3 定义：Dim 是更暗的一档）。
+     *
+     * 剪影卡用这两档叠出「卡底 / 内层剪影」两层，若亮度反了，浅卡上会出现一块
+     * 更亮的补丁，层次倒挂。浅深同值已由 [fixedRolesAreIdenticalAcrossThemes] 保证，
+     * 这里只验浅色一份即可。
+     */
+    @Test
+    fun fixedIsBrighterThanFixedDim() {
+        val problems = buildList {
+            for ((name, roles) in VaultixBrandColor.Light.fixedRoles()) {
+                if (relativeLuminance(roles.container) <= relativeLuminance(roles.containerDim)) {
+                    add("%s 的 Fixed(%s) 未亮于 FixedDim(%s)".format(
+                        name, roles.container.toHex(), roles.containerDim.toHex(),
+                    ))
+                }
+            }
+        }
+        assertWithMessage("fixed / fixedDim 亮度单调：%s", problems.joinToString("; "))
+            .that(problems).isEmpty()
+    }
+
+    /** 一组 fixed 角色的四个色值（容器 / 暗档 / 主前景 / 次要前景）。 */
+    private data class FixedRoles(
+        val container: Color,
+        val containerDim: Color,
+        val onContainer: Color,
+        val onContainerVariant: Color,
+    )
+
+    private fun ColorScheme.fixedRoles(): List<Pair<String, FixedRoles>> = listOf(
+        "primaryFixed" to FixedRoles(
+            primaryFixed, primaryFixedDim, onPrimaryFixed, onPrimaryFixedVariant,
+        ),
+        "secondaryFixed" to FixedRoles(
+            secondaryFixed, secondaryFixedDim, onSecondaryFixed, onSecondaryFixedVariant,
+        ),
+        "tertiaryFixed" to FixedRoles(
+            tertiaryFixed, tertiaryFixedDim, onTertiaryFixed, onTertiaryFixedVariant,
+        ),
+    )
 
     private fun schemes(): List<Pair<String, ColorScheme>> =
         listOf("浅色" to VaultixBrandColor.Light, "深色" to VaultixBrandColor.Dark)

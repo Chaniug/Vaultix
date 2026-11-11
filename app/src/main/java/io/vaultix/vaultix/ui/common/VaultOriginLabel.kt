@@ -60,6 +60,26 @@ fun vaultOriginLabel(vault: VaultSummary): String = when (vault.kind) {
 }
 
 /**
+ * **条目页顶栏标题**（2026-11-12 #285 第 6 项）。
+ *
+ * 用户原话：「密码库KDBX，密码条目页左上角显示，也统一规范显示KDBX，不用显示
+ * xxx.kdbx，这样视觉传达效果会更好」。⇒ KDBX 一律显示格式名，Bitwarden 仍显示库名。
+ *
+ * ⚠️ **判据必须放在本文件**：它是「KDBX 该怎么称呼」的单一真源，与 [vaultOriginLabel]
+ * 同处一份（后者回答「库在哪」，本函数回答「这是什么库」）。若散到 `ItemsScreen` 里，
+ * 迟早会和 `VaultListScreen.vaultSubtitle()` 各判一遍 —— #263 / #264 两轮真机反馈
+ * 都是这么来的，`check_kdbx_origin_single_source.py` 守的正是这条纪律。
+ *
+ * ⚠️ **只改顶栏**：列表里的 `VaultStatusRow` 副标题仍带文件名（`vaultCardInfoOf`），
+ * 那是用户核对「我打开的是哪个文件」的地方，两处语义不同，别一起抹掉。
+ */
+@Composable
+fun vaultTopBarTitle(vault: VaultSummary?): String = when (vault?.kind) {
+    VaultKind.KDBX -> stringResource(R.string.vault_title_kdbx)
+    else -> vault?.name.orEmpty()
+}
+
+/**
  * Bitwarden 的服务器地址 → **域名（含端口，不含 scheme 与路径）**。
  *
  * 保留端口是有意的：自建实例常见 `nas.local:8443` 这种非标准端口，

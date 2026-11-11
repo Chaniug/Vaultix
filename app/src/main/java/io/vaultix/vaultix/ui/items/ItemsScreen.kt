@@ -34,7 +34,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
@@ -88,7 +87,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -148,6 +146,7 @@ import io.vaultix.vaultix.ui.common.VaultCardInfo
 import io.vaultix.vaultix.ui.common.syncBadgeColor
 import io.vaultix.vaultix.ui.common.syncBadgeLabel
 import io.vaultix.vaultix.ui.common.vaultCardInfoOf
+import io.vaultix.vaultix.ui.common.vaultTopBarTitle
 import io.vaultix.vaultix.ui.common.vaultOriginLabel
 import io.vaultix.vaultix.ui.common.VaultixWavyProgressBar
 import io.vaultix.vaultix.ui.shell.BottomDockOccupiedHeight
@@ -168,6 +167,34 @@ private const val NOTE_DISMISS_DELAY_MS = 2_000L
 
 /** 卡片之间的纵向间距（8dp；水平留白由 LazyColumn 的 contentPadding 统一给）。 */
 private val ITEM_CARD_GAP = Spacing.sm
+
+/**
+ * #285 第 2 项：**分组的 Gestalt 接近性**（组内紧 / 组间松）。
+ *
+ * 此前 `LazyColumn` 用统一的 `Arrangement.spacedBy(ITEM_CARD_GAP)`，于是
+ * 「分组头 ↔ 首条」「条 ↔ 条」「上一组末条 ↔ 下一组分组头」三段间距**全相等**。
+ * 分组头自己又是一张带底、带完整圆角的卡片 ⇒ 它读起来不是"这一组的标题"，
+ * 而是插在列表里的一条**分割条**，用户原话「让页面有一种分割的割裂感」。
+ *
+ * ⇒ 间距改由每个 item 自己给（列表 `spacedBy(0)`），三档拉开：
+ *
+ * | 位置 | 间距 | 语义 |
+ * |---|---|---|
+ * | 组与组之间 | [GROUP_SECTION_GAP] 20dp | 「这是另一组」 |
+ * | 组内条目之间 | [GROUP_ITEM_GAP] 4dp | 「这些是同一组」 |
+ * | 分组头 ↔ 首条 | [GROUP_HEADER_GAP] 2dp + 头自身的 4dp 下内边距 | 标题贴着内容 |
+ *
+ * 同时把分组头的独立卡底去掉（见 [GroupHeader] 的 #285 段）：M3 的 section header
+ * 是**无背景**的小标题，有背景有圆角的是卡片 —— 两张同形状的卡并排正是割裂感的来源。
+ * ⚠️ 非分组模式仍用 [ITEM_CARD_GAP]，行为不变。
+ */
+private val GROUP_SECTION_GAP = 20.dp
+
+/** 组内条目间距：明显小于组间距，靠「近」读成整体。 */
+private val GROUP_ITEM_GAP = 4.dp
+
+/** 分组头与首条之间的额外间距（头自身还有 `Spacing.xs` 的下内边距）。 */
+private val GROUP_HEADER_GAP = 2.dp
 
 /** 分组折叠/展开的箭头动画时长（对齐 Bastion 的 200ms 补间）。 */
 private const val GROUP_ANIM_MS = 200
@@ -1123,7 +1150,9 @@ private fun BoxScope.ItemsTopLayer(
     )
     ItemsTopBar(
         title = itemsTitle(
-            vaultName = state.vault?.name.orEmpty(),
+            // ⚠️ #285 第 6 项：KDBX 库统一显示「KDBX」而不是 valk.kdbx。
+            //    判据在 VaultOriginLabel.vaultTopBarTitle（单一真源），别在这里再判一次 kind。
+            vaultName = vaultTopBarTitle(state.vault),
             filter = state.quickFilter,
             filterLabel = stringResource(quickFilterLabelRes(state.quickFilter)),
         ),
@@ -1837,17 +1866,30 @@ private fun ItemsList(
             end = Spacing.lg,
             bottom = Spacing.sm + bottomInset,
         ),
-        verticalArrangement = Arrangement.spacedBy(ITEM_CARD_GAP),
+        // ⚠️ #285：统一 spacedBy 会让「组内 / 组间 / 头与首条」三段等距，
+        //    分组头因此读成一条插入的分割条。改由每个 item 自己给间距，
+        //    见 GROUP_SECTION_GAP / GROUP_ITEM_GAP / GROUP_HEADER_GAP 的 KDoc。
+        verticalArrangement = Arrangement.spacedBy(0.dp),
     ) {
         // 「这个库在哪 · 有多少条」放**最上面**（2026-09-30 用户要求）：它是列表的
         // "表头"（我在哪个库、里面有多少东西），先有上下文再看内容。
         // 只读提示排在它下面 —— 那是"为什么按钮少了"的解释，属于对**内容**的补充。
         if (vaultCard != null) {
             item(key = "vault-status", contentType = ItemsContentType.HEADER) {
-                VaultStatusRow(card = vaultCard)
+                // 分组模式的组间距由 GroupHeader 的 top 给；非分组模式这里补一档卡间距，
+                // 让状态行与首条之间保持原来的 8dp，不多不少。
+                Box(
+                    modifier = if (grouped) {
+                        Modifier
+                    } else {
+                        Modifier.padding(bottom = ITEM_CARD_GAP)
+                    },
+                ) {
+                    VaultStatusRow(card = vaultCard)
+                }
             }
         }
-        groups.forEach { group ->
+        groups.forEachIndexed { groupIndex, group ->
             if (grouped) {
                 item(key = "header:${group.key}", contentType = ItemsContentType.HEADER) {
                     GroupHeader(
@@ -1855,44 +1897,59 @@ private fun ItemsList(
                         count = group.items.size,
                         expanded = group.key !in collapsedGroups,
                         onToggle = { onToggleGroup(group.key) },
+                        // 首组只留一档小间距，后续组用 20dp 拉开「这是另一组」。
+                        modifier = Modifier.padding(
+                            top = if (groupIndex == 0) Spacing.sm else GROUP_SECTION_GAP,
+                        ),
                     )
                 }
             }
             if (group.key !in collapsedGroups) {
+                val firstItemId = group.items.firstOrNull()?.id
                 items(group.items, key = { it.id }, contentType = { ItemsContentType.ITEM }) { item ->
-                    // 「长按选中 → 左滑 → 松手过半 → 二次确认」删除
-                    // （软删除进回收站，见 ItemsViewModel.deleteItem）。
-                    // 长按**选中**由内部 [ItemRow]/[EntryCard] 的 `onLongClick` 独占；本容器
-                    // 只负责滑动删除信号（见 [PressAndSwipeToDelete]），不再回调选中，
-                    // 避免一次长按触发两次 toggle（进不了多选）。
-                    // ⚠️ 2026-09-16：**必须已选中才允许左滑**（用户反馈「直接滑动就删除」
-                    // 误触太多）—— 未选中时组件完全不挂手势，横向滑动彻底不存在。
-                    PressAndSwipeToDelete(
-                        onDelete = { onDelete(item) },
-                        selectable = item.id in selectedIds,
-                    ) {
-                        ItemRow(
-                            item = item,
-                            serverOrigin = serverOrigin,
-                            displayMode = displayMode,
-                            showIcon = showIcon,
-                            isSelectionMode = selectedIds.isNotEmpty(),
-                            isSelected = item.id in selectedIds,
-                            // 缺省 true：新建刚可见、还没入队的那一瞬间不该闪一下「未同步」。
-                            // KDBX 的「在不在云上」由 origin 判，见 [cloudSyncBadgeOrNull]。
-                            cloud = cloudSyncBadgeOrNull(
-                                vaultKind = vaultKind,
-                                // ★ 必须用**调用方传进来的 `vaultOrigin`**，不能图省事复用
-                                //   `serverOrigin`（favicon 用的那个）。
-                                //   两者此刻恰好同源（都来自 `state.vault?.origin`），但语义不同：
-                                //   favicon 那条一旦为别的库换算法（例如按条目定位站点），
-                                //   徽章就会跟着漂 —— 而"库在哪"只有一个真源。
-                                vaultOrigin = vaultOrigin,
-                                syncedInVault = syncStates[item.id],
-                            ),
-                            onToggleSelect = { onToggleSelect(item) },
-                            onClick = { onOpenItem(item) },
-                        )
+                    // #285：组内首条贴着分组头，其余 4dp；非分组模式维持 8dp。
+                    // 组间距 20dp 由 GroupHeader 自己给 ⇒ 「组内紧 / 组间松」。
+                    val topGap = when {
+                        // 非分组模式复刻 spacedBy 的行为：首条不额外留白。
+                        !grouped -> if (item.id == firstItemId) 0.dp else ITEM_CARD_GAP
+                        item.id == firstItemId -> GROUP_HEADER_GAP
+                        else -> GROUP_ITEM_GAP
+                    }
+                    Box(modifier = Modifier.padding(top = topGap)) {
+                        // 「长按选中 → 左滑 → 松手过半 → 二次确认」删除
+                        // （软删除进回收站，见 ItemsViewModel.deleteItem）。
+                        // 长按**选中**由内部 [ItemRow]/[EntryCard] 的 `onLongClick` 独占；本容器
+                        // 只负责滑动删除信号（见 [PressAndSwipeToDelete]），不再回调选中，
+                        // 避免一次长按触发两次 toggle（进不了多选）。
+                        // ⚠️ 2026-09-16：**必须已选中才允许左滑**（用户反馈「直接滑动就删除」
+                        // 误触太多）—— 未选中时组件完全不挂手势，横向滑动彻底不存在。
+                        PressAndSwipeToDelete(
+                            onDelete = { onDelete(item) },
+                            selectable = item.id in selectedIds,
+                        ) {
+                            ItemRow(
+                                item = item,
+                                serverOrigin = serverOrigin,
+                                displayMode = displayMode,
+                                showIcon = showIcon,
+                                isSelectionMode = selectedIds.isNotEmpty(),
+                                isSelected = item.id in selectedIds,
+                                // 缺省 true：新建刚可见、还没入队的那一瞬间不该闪一下「未同步」。
+                                // KDBX 的「在不在云上」由 origin 判，见 [cloudSyncBadgeOrNull]。
+                                cloud = cloudSyncBadgeOrNull(
+                                    vaultKind = vaultKind,
+                                    // ★ 必须用**调用方传进来的 `vaultOrigin`**，不能图省事复用
+                                    //   `serverOrigin`（favicon 用的那个）。
+                                    //   两者此刻恰好同源（都来自 `state.vault?.origin`），但语义不同：
+                                    //   favicon 那条一旦为别的库换算法（例如按条目定位站点），
+                                    //   徽章就会跟着漂 —— 而"库在哪"只有一个真源。
+                                    vaultOrigin = vaultOrigin,
+                                    syncedInVault = syncStates[item.id],
+                                ),
+                                onToggleSelect = { onToggleSelect(item) },
+                                onClick = { onOpenItem(item) },
+                            )
+                        }
                     }
                 }
             }
@@ -2172,8 +2229,21 @@ private fun NoSearchResultState() {
  *    判据同步反转：`ItemsRowStyleTest` 规则 3 现在**禁止**计数出现 `.background(` /
  *    `CircleShape` / `tertiaryContainer`。
  *
+ * ## ⚠️ 2026-11-12 第十轮（#285）：第 1 条的「成块」也被反转作废
+ *
+ * 用户反馈「域名每条分组与所在分组里的条目感觉不太紧密，不像一个整体」「一条一条的
+ * 域名分组条，感觉让页面有一种分割的割裂感」。根因不在颜色而在**形状与间距**：
+ * 分组头自己是一张 `surfaceContainerLow` 底 + 完整圆角的卡片，下面的条目也是一张
+ * 同形状的卡片，两张「面」并排 ⇒ 分组头读成插进列表的**分割条**，不是这一组的标题；
+ * 再加上 `LazyColumn.spacedBy(8dp)` 让「组内 / 组间 / 头与首条」三段等距，
+ * 接近性（Gestalt proximity）完全失效。
+ *
+ * ⇒ #285 两处一起改：① 分组头**去掉独立容器底与圆角**，退回 M3 的无背景 section
+ *    header；② 间距改由各 item 自己给，组内 4dp / 组间 20dp / 头与首条 2dp
+ *    （见 [GROUP_SECTION_GAP]）。计数低调（#283）、箭头动画、读屏态全部保留。
+ *
  * ⚠️ 箭头旋转动画是**既有**的、且分组头数量远少于条目数，不构成「每行开销」，保留；
- *    新施工点一律不引入任何动画或状态。整条容器底（第 1 条）本轮**没有**被推翻。
+ *    新施工点一律不引入任何动画或状态。
  */
 @Composable
 private fun GroupHeader(
@@ -2194,12 +2264,9 @@ private fun GroupHeader(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            // #282：低档容器底让分组头与卡片同属「面」，但读成分节而不是一行正文。
-            .background(
-                color = MaterialTheme.colorScheme.surfaceContainerLow,
-                shape = RoundedCornerShape(Spacing.sm),
-            )
-            .clip(RoundedCornerShape(Spacing.sm))
+            // ⚠️ #285 反转 #282 的「分组头成块」：带底 + 完整圆角的头与下面同形状的
+            //    条目卡并排，正是「一条一条分割条」的割裂感来源。M3 的 section header
+            //    是**无背景**的小标题；整体感交给间距（组内 4dp / 组间 20dp）。
             .clickable(onClick = onToggle)
             // ★ 2026-10-19：展开态**只有箭头方向**在表达，箭头 `contentDescription = null`
             //   且只是旋转 —— 读屏完全不知道这组现在是展开还是收起。
@@ -2208,7 +2275,7 @@ private fun GroupHeader(
             .semantics {
                 stateDescription = expandedStateText
             }
-            .padding(horizontal = Spacing.md, vertical = Spacing.sm),
+            .padding(horizontal = Spacing.md, vertical = Spacing.xs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(

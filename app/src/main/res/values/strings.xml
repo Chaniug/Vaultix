@@ -38,6 +38,8 @@
       中性说法只能到这一层（「本地 KDBX 文件」），**两个动作的区分留给页内的两段式切换**。
     -->
     <string name="vault_open_kdbx">本地 KDBX 文件</string>
+    <!-- #285：条目页顶栏对 KDBX 库统一显示格式名，不显示 xxx.kdbx（判据见 VaultOriginLabel.vaultTopBarTitle）。 -->
+    <string name="vault_title_kdbx">KDBX</string>
     <string name="vault_add_type_hint">选择要添加的库</string>
     <string name="vault_add_bitwarden_desc">账号登录 · 跨设备同步</string>
     <string name="vault_add_kdbx_desc">支持新建 · 全程离线</string>
@@ -460,6 +462,8 @@
     <string name="setting_screen_security_desc">阻止截屏与最近任务缩略图</string>
     <string name="setting_dynamic_color">动态取色</string>
     <string name="setting_dynamic_color_desc">跟随系统主题色（Android 12+）</string>
+    <!-- #285：低版本静态色板已补齐 fixed 角色，这里如实说明动态取色为何不可用（禁用态副标题）。 -->
+    <string name="setting_dynamic_color_unsupported">当前系统版本不支持动态取色（需 Android 12+）</string>
     <string name="setting_theme_mode">主题模式</string>
     <string name="theme_mode_system">跟随系统</string>
     <string name="theme_mode_light">浅色</string>

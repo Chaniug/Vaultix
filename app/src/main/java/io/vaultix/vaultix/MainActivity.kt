@@ -69,8 +69,12 @@ class MainActivity : FragmentActivity() {
             // 外观 / 安全偏好驱动主题与防截屏（设置页可实时开关）
             val themeMode by preferences.themeMode
                 .collectAsStateWithLifecycle(initialValue = "system")
+            // ⚠️ 2026-11-12 #285 首帧占位值改 false：必须与
+            //    VaultixPreferences.dynamicColor 的 `?: false`、VaultixTheme 的
+            //    `dynamicColor: Boolean = false` 三处一致，否则冷启动第一帧会先吃
+            //    壁纸派生色、第二帧才回品牌浅色板（闪一下色）。理由见 VaultixBrandColor §五。
             val dynamicColor by preferences.dynamicColor
-                .collectAsStateWithLifecycle(initialValue = true)
+                .collectAsStateWithLifecycle(initialValue = false)
             val oledPureBlack by preferences.oledPureBlack
                 .collectAsStateWithLifecycle(initialValue = false)
             // 底栏液态玻璃：与 themeMode / dynamicColor 同一取向 —— 观感偏好只在

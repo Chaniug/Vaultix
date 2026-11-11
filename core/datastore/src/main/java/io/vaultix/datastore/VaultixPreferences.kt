@@ -242,8 +242,22 @@ class VaultixPreferences @Inject constructor(
     val clipboardClearMs: Flow<Long> =
         safeData.map { it[CLIPBOARD_CLEAR_MS] ?: DEFAULT_CLIPBOARD_CLEAR_MS }
 
+    /**
+     * Material You 动态取色（Android 12+）。
+     *
+     * ⚠️ 2026-11-12 #285 **默认由 `true` 改为 `false`**：用户反馈「默认的浅色配色有点
+     * 不符合标准」。`true` 会让首次启动直接吃壁纸派生色，绕过 [VaultixBrandColor]
+     * 里两轮调校（去紫 / 降饱和 / WCAG 实测）的品牌浅色板，且让「开/关动态取色」
+     * 两档的 M3 fixed 角色色系跳变（详见 `Theme.kt` / `VaultixBrandColor` 的 KDoc）。
+     *
+     * ⚠️ 只影响**从未动过这个开关**的用户：DataStore 里已有显式值（true / false）
+     *    的一律以用户选择为准，不会被这次改默认翻掉。这与 `LIQUID_GLASS_DOCK`
+     *    换 key 那次不同 —— 那里是要把存量 `false` 也重置，这里不需要。
+     * ⚠️ 三处默认值必须一致：`VaultixTheme(dynamicColor = false)`、
+     *    `MainActivity` 的 `collectAsStateWithLifecycle(initialValue = false)`、本处。
+     */
     val dynamicColor: Flow<Boolean> =
-        safeData.map { it[DYNAMIC_COLOR] ?: true }
+        safeData.map { it[DYNAMIC_COLOR] ?: false }
 
     /** 是否开启 FLAG_SECURE（防截屏 / 防最近任务缩略图）。 */
     val screenSecurity: Flow<Boolean> =
