@@ -2154,14 +2154,26 @@ private fun NoSearchResultState() {
  * 层次，读起来像列表里混进了一行正文。本轮三处低开销调整（全在绘制阶段，无新增状态）：
  *
  * 1. 整条铺一层 `surfaceContainerLow` 低档容器底 ⇒ 头与卡片同为「面」，但它是**分节**；
- * 2. 计数从紧跟标题的灰字改成右对齐的 `tertiaryContainer` 小胶囊 ⇒ 标题占 `weight(1f)`
- *    把数字推到行尾，一眼扫得到「这组几条」；
+ * 2. 标题占 `weight(1f)` 把计数推到行尾 ⇒ 一眼扫得到「这组几条」；
  * 3. 标题色 `primary → onSurface`、箭头保留 `primary` ⇒ 整屏不再到处是主色，
  *    唯一的强调留给「可点」的箭头（配色语义见 `CapabilityIcon` 的结论：不是颜色不够，
  *    是颜色没有语义）。
  *
- * ⚠️ 箭头旋转动画是**既有**的、且分组头数量远少于条目数，不构成「每行开销」，本轮保留；
- *    新施工点（副标题 / 行尾）一律不引入任何动画或状态。
+ * ## ⚠️ 2026-11-12 第九轮（#283）：第 2 条的「计数胶囊」已反转作废
+ *
+ * 用户反馈「站点分类后面有个数字点，比如 baidu.com 有 2 条后面就是数字 2，这个
+ * 数字的 UI 很不好看，给人一种要点击的感觉，强迫症受不了，不要这么显眼」。
+ * #282 把计数做成了 `tertiaryContainer` + `CircleShape` + `padding` 的高对比小圆点 ——
+ * 在 M3 里这套视觉语言就是 chip / badge，天然带**可点击暗示**，而分组头唯一的点击
+ * 目标是整条 Row（箭头与 `stateDescription` 已表达）。等于凭空造了第二个假目标。
+ *
+ * ⇒ 计数退回 `onSurfaceVariant` 的纯文字：**无容器底、无形状、无内边距**；
+ *    `weight(1f)` 的右对齐保留，扫读「这组几条」的能力不变，视觉噪音归零。
+ *    判据同步反转：`ItemsRowStyleTest` 规则 3 现在**禁止**计数出现 `.background(` /
+ *    `CircleShape` / `tertiaryContainer`。
+ *
+ * ⚠️ 箭头旋转动画是**既有**的、且分组头数量远少于条目数，不构成「每行开销」，保留；
+ *    新施工点一律不引入任何动画或状态。整条容器底（第 1 条）本轮**没有**被推翻。
  */
 @Composable
 private fun GroupHeader(
@@ -2215,17 +2227,15 @@ private fun GroupHeader(
                 .padding(start = UiSize.TightGap)
                 .weight(1f),
         )
-        // #282：计数收进 tonal 小胶囊，与「类型徽标」同一套标记语言。
+        // #283：计数退回「一行低调的次要文字」，不要胶囊。
+        // #282 的 tertiaryContainer + CircleShape + padding 把它做成高对比彩色圆点，
+        // 用户原话「给人一种要点击的感觉」—— 它长得像 chip / badge，而这里既不可点
+        // 也不需要被强调；整条 Row 才是唯一点击目标。⇒ 去掉底 / 形状 / 内边距，
+        // 只留 onSurfaceVariant 小字，右对齐靠标题的 weight(1f)，扫读能力不变。
         Text(
             text = count.toString(),
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onTertiaryContainer,
-            modifier = Modifier
-                .background(
-                    color = MaterialTheme.colorScheme.tertiaryContainer,
-                    shape = CircleShape,
-                )
-                .padding(horizontal = UiSize.TightGap, vertical = UiSize.HairGap),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }

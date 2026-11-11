@@ -36,12 +36,29 @@
  *
  * ⚠️ `IntrinsicSize` 与自身内容里的 `weight()` 冲突，所以只能用在按钮这类
  *    「内容不参与分配的容器」上，别往整行 Row 上套。
+ *
+ * ## 2026-11-12 第九轮（#283）：只修 intrinsic 还不够，按钮被压成了「贴字小胶囊」
+ *
+ * 用户反馈「主题模式里面的取消按钮的大小和 ui 与 material3 风格不匹配，同款的
+ * 取消按钮在其他位置好像也存在问题」。复核发现 #273 的修法**只解决了撑宽 / 竖排**，
+ * 没解决「太窄」：`width(IntrinsicSize.Min)` 把按钮宽压到 `minIntrinsicWidth`
+ * （中文按单字断行 ⇒ 只够一个字 + 内边距），M3 按钮的 `ButtonDefaults.MinWidth`
+ * 下限在这条链里被 `fixedWidth` 约束吃掉 ⇒ 孤零零一个「取消」读起来不像 M3 按钮。
+ *
+ * ⇒ 在 `IntrinsicSize.Min` **之前**补 `widthIn(min = ButtonDefaults.MinWidth)`：
+ *    顺序不能反 —— `IntrinsicSizeModifier` 会把算出的宽度 `coerceIn(minWidth, maxWidth)`，
+ *    只有让父约束先带上下限，`width(IntrinsicSize.Min)` 才会被托到 M3 标准宽度，
+ *    同时它提供的 intrinsic 实现（#273 的真正修复）一点没丢。
+ * ⚠️ 这是**共用组件**：全项目 20+ 个 `AlertDialog` 动作槽都走它（设置 / 全屏编辑壳 /
+ *    丢弃确认框 / 库管理 / 导入导出 …），改这一处即全部生效，别去各调用点打补丁。
+ *    `DialogShell` 家族走 `FlowRow`、不吃动作槽的 intrinsic 缩进，规格独立、不动。
  * ---------------------------------------------------------------------------
  */
 package io.vaultix.vaultix.ui.common
 
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -81,6 +98,7 @@ fun DialogTextButton(
             modifier = modifier.dialogActionWidth(),
             enabled = enabled,
             shape = shape,
+            contentPadding = ButtonDefaults.TextButtonContentPadding,
         ) {
             Text(text)
         }
@@ -90,6 +108,7 @@ fun DialogTextButton(
             modifier = modifier.dialogActionWidth(),
             enabled = enabled,
             shape = shape,
+            contentPadding = ButtonDefaults.TextButtonContentPadding,
             colors = ButtonDefaults.textButtonColors(contentColor = contentColor),
         ) {
             Text(text)
@@ -105,6 +124,8 @@ fun DialogTextButton(
  * ⚠️ **#282 起也是「单选项对话框退出按钮」的正规用法**：主题模式 / 剪贴板清除 /
  *    自动锁定三个「点档位即生效」的对话框，唯一的「取消」用它 —— 用户反馈无边框时
  *    看不出是可点按钮。旧规则「退出动作一律 TextButton」同步作废。
+ * ⚠️ **#283 补 M3 规格**：边框判据不动（用户没说不要边框，只说大小 / UI 不匹配），
+ *    改的是 `dialogActionWidth()` 的最小宽度与这里显式声明的 M3 内边距。
  */
 @Composable
 fun DialogOutlinedActionButton(
@@ -119,6 +140,7 @@ fun DialogOutlinedActionButton(
             onClick = onClick,
             modifier = modifier.dialogActionWidth(),
             enabled = enabled,
+            contentPadding = ButtonDefaults.ContentPadding,
         ) {
             Text(text)
         }
@@ -127,6 +149,7 @@ fun DialogOutlinedActionButton(
             onClick = onClick,
             modifier = modifier.dialogActionWidth(),
             enabled = enabled,
+            contentPadding = ButtonDefaults.ContentPadding,
             colors = ButtonDefaults.outlinedButtonColors(contentColor = contentColor),
         ) {
             Text(text)
@@ -135,12 +158,21 @@ fun DialogOutlinedActionButton(
 }
 
 /**
- * 按钮的宽度：**按自身内容收紧**，不吃对话框槽位传下来的 intrinsic 缩进。
+ * 按钮宽度：**按自身内容收紧，但不窄于 M3 标准按钮**。
  *
- * 见文件头 KDoc 的来龙去脉。`width(IntrinsicSize.Min)` 与调用方可能已经加的
- * `fillMaxWidth()` / `weight()` 之外没有别的写法能表达"我要的宽度就是文字宽度"。
+ * 两段顺序**不能反**：
+ * 1. `widthIn(min = ButtonDefaults.MinWidth)`（#283）—— 先把父约束的下限抬到 M3
+ *    标准 64dp；
+ * 2. `width(IntrinsicSize.Min)`（#273）—— 提供 intrinsic 实现，让动作槽查询不再
+ *    退化成 0；它测量时会把固有宽度 `coerceIn(minWidth, maxWidth)`，因此第 1 步的
+ *    下限在这里生效，按钮既不会竖排、也不会缩成贴字小胶囊。
+ *
+ * 若反过来写，`width(IntrinsicSize.Min)` 产生的 `fixedWidth` 会把后面的 `widthIn`
+ * 钳掉，最小宽度形同虚设。见文件头 KDoc 的来龙去脉。
  */
-private fun Modifier.dialogActionWidth(): Modifier = this.width(IntrinsicSize.Min)
+private fun Modifier.dialogActionWidth(): Modifier =
+    this.widthIn(min = ButtonDefaults.MinWidth)
+        .width(IntrinsicSize.Min)
 
 /**
  * 动作文案的排版样式由 M3 槽位供给（`DialogTokens.ActionLabelTextFont`），

@@ -13,7 +13,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * 液态玻璃底栏的**十一条可机检规范**（第四轮建 1–6，#278 补 7，#280 补 8–9，#281 补 10，#282 补 11）。
+ * 液态玻璃底栏的**十二条可机检规范**（第四轮建 1–6，#278 补 7，#280 补 8–9，#281 补 10，#282 补 11，#283 补 12）。
  *
  * 用户这轮反馈「点击效果和玻璃的效果都没有做完善，注意底栏的边界和大小」。
  * 对应的三类缺陷都是「编译过、detekt 查不到、真机上才看得出来」：
@@ -376,6 +376,83 @@ class LiquidGlassDockRulesTest {
                 "降级实色档那一圈必须在 `if (!blurAvailable) { … return }` 之前。",
             !afterFallbackReturn.contains("style.stroke"),
         )
+    }
+
+    // ----------------------------------------------------------------- 规则 12
+
+    /**
+     * **深色光照档必须一处定义、全链路生效（#283）。**
+     *
+     * 用户反馈深色底栏「外围有点脏脏的、周围光照与深色模式对比有问题」。根因是
+     * 白高光 + 黑内阴影 + 8dp 黑外影三者全开满，而三者散落在 6 个绘制函数与布局层里。
+     * 这类改动最容易出现「改了 7 处、漏了第 8 处」—— 漏掉的那处会继续用满强度，
+     * 在深色下重新长出一道刺眼白边或一圈脏黑晕，编译、detekt、既有单测全查不出来。
+     *
+     * ⇒ 钉三件事：
+     * 1. 绘制层不许出现任何绕开缩放的 `style.sheen.copy(` / `Color.Black.copy(` /
+     *    已作废的 `RimLineColor`，白色一律走 `sheenAt`、黑色一律走 `shadeAt`；
+     * 2. 三个档位由 `glassLighting(darkTheme)` **一处定义**并全链路接进 style
+     *    （散成三个 `if` 既容易漏改，也会撞 detekt 的复杂度上限），style 自己提供入口函数；
+     * 3. 布局层 `.shadow(...)` 读 `glassStyle.shadowElevation`，不许写死 8dp 常量
+     *    （Material 深色规范：elevation 靠表面色阶，不靠自定义 drop shadow）。
+     */
+    @Test
+    fun `深色光照全链路走统一入口且阴影由style携带`() {
+        val glass = glassSource("LiquidGlass.kt")
+        val dock = dockSource()
+        val drawn = listOf(
+            "drawGlass",
+            "drawInsetShadow",
+            "drawOpticalBody",
+            "drawSurfaceSweep",
+            "drawSpecularRim",
+            "drawFocusSheen",
+        ).joinToString("\n") { name -> functionBody(glass, name) }
+        // ⚠️ 拆成两个小函数：detekt `CyclomaticComplexMethod ≤14`，一条条堆 if 会把
+        //    **用例本身**判红（本轮实测 18），与本文件 stripComments 拆小函数同理。
+        val missing = lightingDrawIssues(drawn) + lightingWiringIssues(glass, dock)
+        assertTrue(
+            "深色光照档接线不完整：\n" + missing.joinToString("\n"),
+            missing.isEmpty(),
+        )
+    }
+
+    /** 规则 12 上半：绘制层不许留任何绕开深色缩放的写法。 */
+    private fun lightingDrawIssues(drawn: String): List<String> = buildList {
+        listOf(
+            "style.sheen.copy(" to "仍有白色高光直接 style.sheen.copy，深色档不会收敛",
+            "Color.Black.copy(" to "仍有黑色暗部直接 Color.Black.copy，深色档不会收敛",
+            "RimLineColor" to "还在引用已作废的 RimLineColor",
+        ).forEach { (needle, reason) ->
+            if (drawn.contains(needle)) add(reason)
+        }
+        listOf("style.sheenAt(", "style.shadeAt(").forEach { entry ->
+            if (!drawn.contains(entry)) add("绘制层没走 $entry")
+        }
+    }
+
+    /** 规则 12 下半：三档一处定义、全链路接进 style，底栏阴影读 style 不写死。 */
+    private fun lightingWiringIssues(glass: String, dock: String): List<String> = buildList {
+        listOf(
+            "fun sheenAt(" to "LiquidGlassStyle 没提供 sheenAt 统一入口",
+            "fun shadeAt(" to "LiquidGlassStyle 没提供 shadeAt 统一入口",
+            "fun glassLighting(darkTheme: Boolean)" to "缺深色光照档的单一定义点",
+            "val lighting = glassLighting(darkTheme)" to "liquidGlassStyle 没取光照档",
+            "lighting.sheenScale" to "sheenScale 没接进 style",
+            "lighting.shadeScale" to "shadeScale 没接进 style",
+            "lighting.shadowElevation" to "shadowElevation 没接进 style",
+            "LiquidGlass.DARK_SHEEN_SCALE" to "深色档没引用 DARK_SHEEN_SCALE",
+            "LiquidGlass.DARK_SHADE_SCALE" to "深色档没引用 DARK_SHADE_SCALE",
+            "LiquidGlass.DarkShadowElevation" to "深色档没引用 DarkShadowElevation",
+        ).forEach { (needle, reason) ->
+            if (!glass.contains(needle)) add(reason)
+        }
+        if (!dock.contains(".shadow(elevation = glassStyle.shadowElevation")) {
+            add("底栏阴影没读 style 的档位值")
+        }
+        if (dock.contains(".shadow(elevation = LiquidGlass.ShadowElevation")) {
+            add("底栏阴影仍写死浅色档 8dp，深色下会重现脏边")
+        }
     }
 
     // ----------------------------------------------------------------- helpers

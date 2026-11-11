@@ -404,4 +404,69 @@ class LiquidGlassTest {
             }
         }
     }
+
+    // ── 2026-11-12 第九轮（#283）：深色光照档 ──────────────────────────
+
+    /**
+     * 深色档只收敛**光照强度**，不改色相、不动边缘厚度。
+     *
+     * 用户反馈深色底栏「外围有点脏脏的」，根因是白高光 0.48/0.62 + 黑内阴影 +
+     * 8dp 黑外影三者全开满。修法不是把白边改成灰、或把黑影换成浅色 glow
+     * （Material 明确 "Don't use light glows in place of dark shadows"，且会丢掉
+     * 受光/背光的方向感），而是由 style 统一按强度缩放。
+     *
+     * ⚠️ 这条钉住「浅色档一个数值没动」：深色收敛不能顺手把浅色也调淡。
+     */
+    @Test
+    fun `深色光照档收敛强度但保持受光色相`() {
+        val surface = Color(0xFF1A1C1E)
+        val light = liquidGlassStyle(darkTheme = false, surface = surface, onSurface = Color.Black)
+        val dark = liquidGlassStyle(darkTheme = true, surface = surface, onSurface = Color.White)
+
+        // 色相：受光边恒为白、暗部恒为黑（既有 `描边深色更淡且高光为白` 继续钉 sheen）
+        assertThat(light.sheen).isEqualTo(Color.White)
+        assertThat(dark.sheen).isEqualTo(Color.White)
+        assertThat(light.sheenAt(0.5f).red).isEqualTo(1f)
+        assertThat(dark.sheenAt(0.5f).red).isEqualTo(1f)
+        assertThat(light.shadeAt(0.5f).red).isEqualTo(0f)
+        assertThat(dark.shadeAt(0.5f).red).isEqualTo(0f)
+
+        // 强度：浅色档 scale 恒 1，深色一律更弱
+        assertThat(light.sheenScale).isEqualTo(1f)
+        assertThat(light.shadeScale).isEqualTo(1f)
+        assertThat(dark.sheenScale).isLessThan(light.sheenScale)
+        assertThat(dark.shadeScale).isLessThan(light.shadeScale)
+        assertThat(dark.sheenAt(LiquidGlass.TOP_SHEEN_ALPHA).alpha)
+            .isLessThan(light.sheenAt(LiquidGlass.TOP_SHEEN_ALPHA).alpha)
+        assertThat(dark.shadeAt(LiquidGlass.INNER_SHADOW_ALPHA).alpha)
+            .isLessThan(light.shadeAt(LiquidGlass.INNER_SHADOW_ALPHA).alpha)
+    }
+
+    /**
+     * 深色档的绝对数值落进调研到的规范区间，且外圈阴影明显小于浅色。
+     *
+     * Apple 深色玻璃 specular 建议从 0.1–0.2 起步、阴影 keep mild（≈0.12）；
+     * 0.62 × 0.35 = 0.217 落在区间内，0.18 × 0.45 = 0.081 的黑线不再压出脏边。
+     * 8dp → 2dp 对应 Material「深色 elevation 靠表面色阶，不靠自定义 drop shadow」。
+     */
+    @Test
+    fun `深色档高光与阴影落在规范区间`() {
+        assertThat(LiquidGlass.DARK_SHEEN_SCALE).isGreaterThan(0f)
+        assertThat(LiquidGlass.DARK_SHEEN_SCALE).isLessThan(1f)
+        assertThat(LiquidGlass.DARK_SHADE_SCALE).isGreaterThan(0f)
+        assertThat(LiquidGlass.DARK_SHADE_SCALE).isLessThan(1f)
+        val darkSpecularPeak = LiquidGlass.SPECULAR_ALPHA * LiquidGlass.DARK_SHEEN_SCALE
+        assertThat(darkSpecularPeak).isAtLeast(0.10f)
+        assertThat(darkSpecularPeak).isAtMost(0.30f)
+        assertThat(LiquidGlass.RIM_LINE_ALPHA * LiquidGlass.DARK_SHADE_SCALE)
+            .isLessThan(0.10f)
+
+        val surface = Color(0xFF1A1C1E)
+        val light = liquidGlassStyle(darkTheme = false, surface = surface, onSurface = Color.Black)
+        val dark = liquidGlassStyle(darkTheme = true, surface = surface, onSurface = Color.White)
+        assertThat(light.shadowElevation).isEqualTo(LiquidGlass.ShadowElevation)
+        assertThat(dark.shadowElevation).isEqualTo(LiquidGlass.DarkShadowElevation)
+        assertThat(dark.shadowElevation.value).isLessThan(light.shadowElevation.value)
+        assertThat(dark.shadowElevation.value).isAtLeast(0f)
+    }
 }

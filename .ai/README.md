@@ -24,6 +24,47 @@
 - 已接进 CI：`ci-debug.yml` 的 `sandbox-tests` job 用**同一份脚本**，与 `android-ci` 并行
   ⇒ 本地绿 ⇒ CI 不会红在同一件事上。
 
+## 🕐 最新状态（2026-11-12 · #283 深色模式光照重构 + 三组 M3 观感整改）
+
+> **一句话**：用户 3 组反馈（取消按钮 M3 规格 / 分组计数太显眼 / 深色剪影卡与底栏）。
+> **全改了生产代码**，并按用户要求先做「优秀项目怎么处理深色玻璃」的规范取证。
+> 接力正文：[`#283`](./issues/06-界面与交互-part21.md)。
+
+1. **取消按钮**：#273 的 `width(IntrinsicSize.Min)` 只治了「逐字竖排」，没治「被压成贴字
+   小胶囊」。⇒ 在它**之前**补 `widthIn(min = ButtonDefaults.MinWidth)`（顺序反了会被
+   `fixedWidth` 钳掉），两个组件再显式声明 M3 `contentPadding`。全项目 Grep 确认
+   **22 个文件 60+ 处** `AlertDialog` 动作槽**全部**走共用组件、零裸按钮漏网 ⇒ 改一处
+   即全量生效。`DialogShell` 走 `FlowRow`、用原生 M3 按钮（自带 MinWidth），其 16dp
+   padding 是 11-06 真机「三按钮被裁」后刻意收的一档，**不动**。
+2. ⚠️ **判据反转**：#282 把站点计数做成 `tertiaryContainer` + `CircleShape` 胶囊，用户说
+   「给人一种要点击的感觉」—— 高对比圆点在 M3 里就是 chip / badge，会造第二个假目标。
+   ⇒ 退回 `onSurfaceVariant` 纯文字（无底 / 无形状 / 无 padding），`weight(1f)` 右对齐保留；
+   `ItemsRowStyleTest` 规则 3 同步反转、写明旧判据作废。
+3. **深色剪影卡**：`xxxContainer` 底配 `onSurface` 前景（M3 应配 `onXxxContainer`）+ 两层
+   半透明把三个色系洗成浑浊灰 + `onSurfaceVariant × 0.34` 线条对比不足 ⇒ `GlyphPalette`
+   补 `onTint` / `onWash`，深色叠色 `0.68→0.94` / `0.62→0.92`、线条 `0.34→0.62`，
+   判深浅复用 `isDarkSurface`（按实际底色，不用 `isSystemInDarkTheme()`）。
+   **浅色档 4 个数值一个没动**。
+4. **深色底栏「外围脏」= 三者全开满**：白高光 0.48/0.62 + 黑内阴影 + 8dp 黑外影，且
+   三种装饰是 `Frosted` / `Liquid` **两档共用**（所以用户说常态化与液态玻璃都脏）。
+   取证 Material Dark theme（elevation 靠表面色阶 / 别用浅色 glow 冒充暗影 / 自定义
+   `shadow(8dp)` 是反模式）、Apple Liquid Glass（specular 从 0.1–0.2 起、阴影 mild、
+   全开满 ⇒ muddy gray）、玻璃拟态（面板白 5%–12%）⇒ 新增 `glassLighting()` **一处定义**
+   三档：`sheenScale 0.35` / `shadeScale 0.45` / `shadowElevation 8→2dp`；8 处白高光走
+   `style.sheenAt()`、3 处黑暗部走 `style.shadeAt()`，`sheen` 色相仍恒为白（收敛**强度**
+   不改色相），#281 边缘厚度与 #282 去细边线**一个不动**。
+5. ⚠️ **门禁代码自己也要过门禁**：detekt `CyclomaticComplexMethod ≤14` 本轮撞两次
+   （生产 `liquidGlassStyle` 15、测试规则 12 的 `buildList` 18），都靠拆小函数解决；
+   另两个坑：`functionBody()` 从 `{` 起、**不含参数列表**（新门禁自己写错，已补
+   `functionSignature()`）；`… | tail` 会**吞掉 Gradle 退出码**（一律 `set -o pipefail`）。
+
+> 验证：`:app:compileFullDebugKotlin` / `detekt` / `:app:assembleFullDebug` 绿、CI 同款全量
+> 单测 **1785 例 0 失败**（`LiquidGlassDockRulesTest` 12 / `DialogStyleRulesTest` 4 /
+> `ItemsRowStyleTest` 5 / `LiquidGlassTest` 26 / 新建 `AddActionSheetStyleTest` 3 均确实执行）、
+> 17 项静态门禁 + 13 项自测全绿。**未验证（真机）**：深色两档底栏外围是否还有脏晕、
+> 玻璃边缘有没有被削薄、深色剪影卡文案对比度、2.0x 字号下取消按钮对齐
+> —— 见 `Docs/progress/next-steps.md`。
+
 ## 🕐 最新状态（2026-11-12 · #282 第五批界面 / 设置 / 条目 UI 整改）
 
 > **一句话**：用户一次给 5 组反馈（底栏细边线 + 透明度、云图标、剪影配色、设置三处、

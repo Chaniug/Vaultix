@@ -33,6 +33,7 @@ import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
 /**
@@ -99,6 +100,34 @@ import androidx.compose.ui.unit.dp
  *   不再依赖中心填充的浓度。所以本轮只把中心填充降到 0.44/0.56、去掉那圈细线，
  *   并提中心 clarity / 降下沿渐晕 ⇒ **中心更透、边缘更立**，既回应「不够透」又不会变薄。
  *   模糊半径（24dp / 30dp）也保持 #281 口径不动，避免「越改越糊 / 越改越薄」来回摇摆。
+ *
+ * ## 2026-11-12 第九轮（#283）：深色档「外围脏」= 白高光 + 黑内阴影 + 黑外影全开满
+ *
+ * 用户反馈「深色模式下，常态化底栏和开启液态玻璃后，底栏外围有点脏脏的，
+ * 周围的光照与深色模式对比存在问题」，并要求「仔细看看优秀的项目是如何处理的」。
+ * 取证三条规范：
+ * 1. Material 官方深色规范：深色下 elevation 靠**表面色阶**（越高越亮）表达，
+ *    并明确 "Don't use light glows in place of dark shadows"；M3 elevation 规则把
+ *    自定义 `Modifier.shadow(8.dp)` 列为反模式（`Surface(tonalElevation)` 才是正解）。
+ * 2. iOS 26 / Apple 设计资源：深色玻璃 tint/stroke 用 `white 0.10`、specular 高光
+ *    **从 0.1–0.2 起步**、阴影只留 mild（`shadowOpacity 0.12`）；并直接警告
+ *    「blur + tint + gloss + shadow + stroke 全开满 ⇒ card turns into muddy gray」。
+ * 3. 玻璃拟态深色口径：面板白仅 5%–12%，玻璃自身保持中性、亮度来自背后内容。
+ *
+ * 本文件此前恰好三者全开满：`sheen = Color.White` 配 0.48/0.62 高光、
+ * `Color.Black` 3dp 内阴影与下沿渐晕、外层 8dp 黑 elevation 阴影 ⇒ 近黑底上
+ * 白边刺眼、黑影与黑内阴影糊成一圈灰黑脏晕。
+ *
+ * ⇒ 引入**深色光照档**（`glassLighting()` 一处定义、全链路一致）：[LiquidGlassStyle.sheenScale] /
+ *    [LiquidGlassStyle.shadeScale] / [LiquidGlassStyle.shadowElevation]。所有白色高光
+ *    走 `style.sheenAt(...)`、所有黑色暗部走 `style.shadeAt(...)`，深色下分别按
+ *    [LiquidGlass.DARK_SHEEN_SCALE] / [LiquidGlass.DARK_SHADE_SCALE] 收敛，
+ *    外圈阴影降到 [LiquidGlass.DarkShadowElevation]；**浅色档一个数值没动**。
+ * ⚠️ `style.sheen` 仍是 `Color.White`（受光边不随主题变色，既有单测继续钉住），
+ *    收敛的是**强度**不是色相 —— 所以 #281 的边缘厚度判据（rim / 内阴影宽度 /
+ *    模糊半径 / 填充）全部保留，本轮不改透明度、不回退 #282 的去细边线。
+ * ⚠️ AGSL 里的 `SHADER_CLARITY` 不动：它照亮的是「透出来的内容」而非玻璃表面，
+ *    0.075 本就极淡，且深色下模糊内容偏暗正需要这点提亮。
  */
 
 /**
@@ -236,12 +265,48 @@ val FrostedBlurRadius = 30.dp
     const val FROSTED_STROKE_ALPHA_DARK = 0.16f
 
     /**
-     * 阴影高度（8 → 6 → **8dp**）。
+     * 阴影高度（8 → 6 → **8dp**，仅浅色档）。
      *
      * 11-09 因「玻璃调淡」把它降到 6dp；#281 填充回提、又补了内阴影，
      * 8dp 才把半透明胶囊从滚动内容里托起来，不会重新压成塑料板。
+     *
+     * ⚠️ #283：深色档不走这个值，改用 [DarkShadowElevation] —— 见其 KDoc。
      */
     val ShadowElevation = 8.dp
+
+    /**
+     * 深色档外圈阴影（#283）：8dp → **2dp**。
+     *
+     * Material 官方深色规范：深色下 elevation 靠**表面色阶**表达（越高越亮），
+     * 并明确 "Don't use light glows in place of dark shadows"；M3 elevation 规则也把
+     * 自定义 `Modifier.shadow(8.dp)` 列为反模式。本项目底栏已经用
+     * `surfaceContainerHigh` 这一档色角色表达层次，再叠一圈 8dp 黑影，在近黑底上
+     * 既托不起来、又和黑色内阴影连成一片灰黑脏晕 —— 正是用户说的「外围有点脏脏的」。
+     *
+     * ⇒ 深色只留极轻的一圈（对齐 Apple「Shadows: keep them mild」，
+     *    `shadowOpacity 0.12`）；浅色档 8dp 完全不动。
+     */
+    val DarkShadowElevation = 2.dp
+
+    /**
+     * 深色档**白色高光**强度缩放（#283）。
+     *
+     * Apple 深色玻璃的 specular 从 0.1–0.2 起步、tint 用 `white 0.10`；
+     * 玻璃拟态深色口径是面板白 5%–12%。本项目深色下仍用 `Color.White` 配
+     * 0.48 上沿高光 / 0.62 镜面 rim，等于把浅色档的光照强度原样搬到近黑底上 ⇒
+     * 白边刺眼、与黑内阴影叠出脏灰。0.35 把 0.48 → 0.17、0.62 → 0.22，
+     * 落在规范建议的区间；收敛的是**强度**，`sheen` 色相仍恒为白（既有单测钉住）。
+     */
+    const val DARK_SHEEN_SCALE = 0.35f
+
+    /**
+     * 深色档**黑色暗部**强度缩放（#283）。
+     *
+     * 3dp `Color.Black` 内阴影、下沿黑渐晕、`RIM_LINE_ALPHA` 黑线在浅色底上读作
+     * 「玻璃的厚度」；在深色底上是黑上加黑 —— 厚度读不出来，只糊成一圈污渍。
+     * 0.45 保留方向感（上淡下暗仍成立），但不再压出脏边。
+     */
+    const val DARK_SHADE_SCALE = 0.45f
 
     // ── 2026-11-10 第四轮：沿轮廓的光学规格 ──────────────────────────────
     //
@@ -400,10 +465,14 @@ val FrostedBlurRadius = 30.dp
     const val SWEEP_HALF_FACTOR = 0.5f
 
     /**
-     * 暗线颜色：固定黑叠 alpha，不随主题反色（玻璃的暗边在两个主题里都是暗的）。
+     * 下沿暗线的**基准 alpha**（#283 由 `Color` 常量改为标量）。
+     *
+     * 固定黑叠 alpha，不随主题反色（玻璃的暗边在两个主题里都是暗的）。
      * #281：0.10 → 0.18，原来那条下沿暗线几乎看不见，玻璃读不出"压在内容上"。
+     * ⚠️ #283：深色下由 `style.shadeAt(RIM_LINE_ALPHA)` 再乘 `shadeScale` —— 改成标量
+     *    才能让「同一个暗部口径」走统一的深色收敛，不再留一处绕开缩放的死常量。
      */
-    val RimLineColor = Color.Black.copy(alpha = 0.18f)
+    const val RIM_LINE_ALPHA = 0.18f
 }
 
 /**
@@ -461,12 +530,62 @@ internal fun shouldApplyBlur(requested: Boolean, sdkInt: Int = Build.VERSION.SDK
  * @param fill **必须带 alpha**（真模糊档）：不透明的填充会把模糊结果整块盖掉。
  * @param stroke 仅降级实色档用的分界描边色（#282 起真模糊两档不画这圈细线）。
  * @param sheen 上沿高光色（固定白，深色下仍成立）。
+ * @param sheenScale #283 白色受光的**强度档**：浅色 1f、深色 [LiquidGlass.DARK_SHEEN_SCALE]。
+ * @param shadeScale #283 黑色暗部的**强度档**：浅色 1f、深色 [LiquidGlass.DARK_SHADE_SCALE]。
+ * @param shadowElevation #283 外圈阴影：深色 [LiquidGlass.DarkShadowElevation]，浅色
+ *   [LiquidGlass.ShadowElevation]。由 style 携带，绘制层与布局层读的是**同一个值**。
+ *
+ * ## ⚠️ 为什么色相不变、只收敛强度
+ *
+ * 深色下把白高光改成灰、或把黑内阴影改成浅色，都会让玻璃失去「受光 / 背光」的方向感；
+ * Material 官方也明确 "Don't use light glows in place of dark shadows"。所以改的是**强度**：
+ * 所有白色走 [sheenAt]、所有黑色走 [shadeAt]，一处定义、全链路一致，
+ * 不留任何一处绕开缩放的死常量（#283 把 `RimLineColor` 改成标量正是为此）。
  */
 data class LiquidGlassStyle(
     val fill: Color,
     val stroke: Color,
     val sheen: Color,
+    val sheenScale: Float = 1f,
+    val shadeScale: Float = 1f,
+    val shadowElevation: Dp = LiquidGlass.ShadowElevation,
+) {
+    /** 白色受光的唯一出口：深色档按 [sheenScale] 收敛 alpha，色相仍是 [sheen]。 */
+    fun sheenAt(alpha: Float): Color =
+        sheen.copy(alpha = (alpha * sheenScale).coerceIn(0f, 1f))
+
+    /** 黑色暗部的唯一出口：固定黑叠 alpha，深色档按 [shadeScale] 收敛。 */
+    fun shadeAt(alpha: Float): Color =
+        Color.Black.copy(alpha = (alpha * shadeScale).coerceIn(0f, 1f))
+}
+
+/**
+ * #283 深色光照档的**单一定义点**。
+ *
+ * 抽成纯函数有两个理由：① `liquidGlassStyle` 已经有填充 / 描边两组 `when`，再塞三个
+ * `if (darkTheme)` 会撞 detekt `CyclomaticComplexMethod ≤14`；② 更重要 —— 三个档位
+ * （白高光 / 黑暗部 / 外圈阴影）本就该**一起**切换，散在三个 if 里将来极可能只改一处。
+ * 浅色档三个值恒为「原样 / 原样 / 8dp」，一个数值没动。
+ */
+private data class GlassLighting(
+    val sheenScale: Float,
+    val shadeScale: Float,
+    val shadowElevation: Dp,
 )
+
+private fun glassLighting(darkTheme: Boolean): GlassLighting = if (darkTheme) {
+    GlassLighting(
+        sheenScale = LiquidGlass.DARK_SHEEN_SCALE,
+        shadeScale = LiquidGlass.DARK_SHADE_SCALE,
+        shadowElevation = LiquidGlass.DarkShadowElevation,
+    )
+} else {
+    GlassLighting(
+        sheenScale = 1f,
+        shadeScale = 1f,
+        shadowElevation = LiquidGlass.ShadowElevation,
+    )
+}
 
 /**
  * 按深浅色取一套风格。
@@ -474,6 +593,9 @@ data class LiquidGlassStyle(
  * @param blurAvailable 有没有真模糊。**没有时填充直接拉到不透明**（见 [LiquidGlass.FALLBACK_ALPHA]）：
  *   这是"降级成实心底栏"，不是"半透明凑合"。
  * @param material #281 的两档材质。默认值 [DockMaterial.Liquid] 保证老调用点行为不变。
+ *
+ * ⚠️ #283：深色档额外带一套收敛后的光照强度与外圈阴影。填充 / 描边 / 模糊半径 /
+ *    内阴影宽度这些「边缘厚度」参数一个没动 —— 本轮只治「外围脏」，不动玻璃的通透与形状。
  */
 fun liquidGlassStyle(
     darkTheme: Boolean,
@@ -496,10 +618,14 @@ fun liquidGlassStyle(
         darkTheme -> LiquidGlass.STROKE_ALPHA_DARK
         else -> LiquidGlass.STROKE_ALPHA_LIGHT
     }
+    val lighting = glassLighting(darkTheme)
     return LiquidGlassStyle(
         fill = surface.copy(alpha = alpha),
         stroke = onSurface.copy(alpha = strokeAlpha),
         sheen = Color.White,
+        sheenScale = lighting.sheenScale,
+        shadeScale = lighting.shadeScale,
+        shadowElevation = lighting.shadowElevation,
     )
 }
 
@@ -693,7 +819,7 @@ private fun DrawScope.drawGlass(
     drawOutline(
         outline = outline,
         brush = Brush.verticalGradient(
-            colors = listOf(style.sheen.copy(alpha = sheenAlpha), Color.Transparent),
+            colors = listOf(style.sheenAt(sheenAlpha), Color.Transparent),
             startY = 0f,
             endY = band,
         ),
@@ -708,6 +834,7 @@ private fun DrawScope.drawGlass(
     // ③ 内阴影（#281，两档共有）：沿轮廓描一圈"上淡下暗"的透明渐变，
     //    层 B 的 clip 会裁掉描边外侧那一半 ⇒ 读作玻璃的厚边而不是又一条亮线。
     drawInsetShadow(
+        style = style,
         outline = outline,
         density = density,
         alpha = if (frosted) {
@@ -724,7 +851,7 @@ private fun DrawScope.drawGlass(
             outline = outline,
             brush = Brush.verticalGradient(
                 colors = listOf(
-                    style.sheen.copy(alpha = LiquidGlass.FROSTED_SPECULAR_ALPHA),
+                    style.sheenAt(LiquidGlass.FROSTED_SPECULAR_ALPHA),
                     Color.Transparent,
                 ),
                 startY = 0f,
@@ -762,6 +889,7 @@ private fun DrawScope.drawGlass(
  * ⚠️ 只画颜色，不碰任何尺寸。
  */
 private fun DrawScope.drawInsetShadow(
+    style: LiquidGlassStyle,
     outline: Outline,
     density: Density,
     alpha: Float,
@@ -771,9 +899,9 @@ private fun DrawScope.drawInsetShadow(
         outline = outline,
         brush = Brush.verticalGradient(
             colors = listOf(
-                Color.Black.copy(alpha = top),
+                style.shadeAt(top),
                 Color.Transparent,
-                Color.Black.copy(alpha = alpha),
+                style.shadeAt(alpha),
             ),
             startY = 0f,
             endY = size.height,
@@ -801,7 +929,7 @@ private fun DrawScope.drawOpticalBody(style: LiquidGlassStyle, outline: Outline)
         brush = Brush.horizontalGradient(
             colors = listOf(
                 Color.Transparent,
-                style.sheen.copy(alpha = LiquidGlass.INNER_CLARITY_ALPHA),
+                style.sheenAt(LiquidGlass.INNER_CLARITY_ALPHA),
                 Color.Transparent,
             ),
             startX = 0f,
@@ -813,7 +941,7 @@ private fun DrawScope.drawOpticalBody(style: LiquidGlassStyle, outline: Outline)
         brush = Brush.verticalGradient(
             colors = listOf(
                 Color.Transparent,
-                Color.Black.copy(alpha = LiquidGlass.INNER_VIGNETTE_ALPHA),
+                style.shadeAt(LiquidGlass.INNER_VIGNETTE_ALPHA),
             ),
             startY = size.height * LiquidGlass.INNER_VIGNETTE_START_FRACTION,
             endY = size.height,
@@ -847,7 +975,7 @@ private fun DrawScope.drawSurfaceSweep(
         outline = outline,
         brush = Brush.radialGradient(
             colors = listOf(
-                style.sheen.copy(alpha = LiquidGlass.SURFACE_GLOW_ALPHA * strength * strength),
+                style.sheenAt(LiquidGlass.SURFACE_GLOW_ALPHA * strength * strength),
                 Color.Transparent,
             ),
             center = Offset(cx, cy),
@@ -861,7 +989,7 @@ private fun DrawScope.drawSurfaceSweep(
         brush = Brush.linearGradient(
             colors = listOf(
                 Color.Transparent,
-                style.sheen.copy(alpha = LiquidGlass.SWEEP_ALPHA * strength),
+                style.sheenAt(LiquidGlass.SWEEP_ALPHA * strength),
                 Color.Transparent,
             ),
             start = Offset(cx - halfWidth, -tilt),
@@ -884,9 +1012,9 @@ private fun DrawScope.drawSpecularRim(
         outline = outline,
         brush = Brush.verticalGradient(
             colors = listOf(
-                style.sheen.copy(alpha = peak),
-                style.sheen.copy(alpha = LiquidGlass.SPECULAR_TAIL_ALPHA),
-                LiquidGlass.RimLineColor,
+                style.sheenAt(peak),
+                style.sheenAt(LiquidGlass.SPECULAR_TAIL_ALPHA),
+                style.shadeAt(LiquidGlass.RIM_LINE_ALPHA),
             ),
             startY = 0f,
             endY = size.height,
@@ -914,7 +1042,7 @@ private fun DrawScope.drawFocusSheen(
         outline = outline,
         brush = Brush.radialGradient(
             colors = listOf(
-                style.sheen.copy(alpha = LiquidGlass.FOCUS_SHEEN_ALPHA * press.intensity),
+                style.sheenAt(LiquidGlass.FOCUS_SHEEN_ALPHA * press.intensity),
                 Color.Transparent,
             ),
             // #278：焦点随手指（focusX/focusY 都是精确触控位置），不再是"上沿的槽中心"。

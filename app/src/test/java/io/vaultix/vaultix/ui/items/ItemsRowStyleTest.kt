@@ -107,25 +107,36 @@ class ItemsRowStyleTest {
     // ------------------------------------------------------------------ 规则 3
 
     /**
-     * **分组头成块，且计数与标题分工明确。**
+     * **分组头成块，计数必须低调、不许有可点击暗示（#283 反转）。**
      *
-     * 此前是透明 Row + 满屏 `primary` 小字，与下面有描边的卡片之间没有层次。
-     * 现在整条一层低档容器底、计数收进 `tertiaryContainer` 小胶囊、标题占 `weight(1f)`
-     * 把数字推到行尾、标题降为 `onSurface`。钉住这些，防止「顺手改回一行飘着的字」。
+     * #282 曾把计数收进 `tertiaryContainer` + `CircleShape` 小胶囊，理由是「与类型徽标
+     * 同一套标记语言」。#283 用户反馈「这个数字的 UI 很不好看，给人一种要点击的感觉，
+     * 不要这么显眼」—— 高对比彩色圆点在 M3 里读起来就是 chip / badge，会制造第二个
+     * 假目标（整条 Row 才是唯一可点区域）。⇒ **反转判据**：计数只许是
+     * `onSurfaceVariant` 的纯文字，不许有容器底 / 形状 / 内边距。
      *
-     * ⚠️ 箭头旋转动画与 `stateDescription` 是既有的，分组头数量远少于条目数，
-     *    不构成「每行开销」；本条**不**禁止 `graphicsLayer`。
+     * 整条分组头的低档容器底（恰好 1 个 `.background(`）保留：它与下面有描边的卡片
+     * 分层，是「分节」而不是「一行飘着的字」，这一条 #283 没有推翻。
+     * ⚠️ 标题的 `weight(1f)` 右对齐、`stateDescription` 读屏态、不放大字号字重，
+     *    这些既有约束继续钉住。
      */
     @Test
-    fun `分组头成块且计数收进tonal胶囊`() {
+    fun `分组头成块且计数低调无点击暗示`() {
         val body = functionBody(itemsSource(), "GroupHeader")
         assertTrue("GroupHeader 函数体没找到", body.isNotEmpty())
+        // 「count.toString()」之后就是计数 Text 的剩余参数与函数收尾，足够单独判定
+        // 计数有没有被套进 chip 外壳。
+        val countBlock = body.substringAfter("count.toString()", "")
         val missing = buildList {
-            if (Regex("""\.background\s*\(""").findAll(body).count() < 2) {
-                add("缺整条容器底或计数胶囊底")
+            if (Regex("""\.background\s*\(""").findAll(body).count() != 1) {
+                add("分组头应只有整条 1 个容器底（计数不许再有底）")
             }
-            if (!body.contains("CircleShape")) add("计数不是胶囊")
-            if (!body.contains("tertiaryContainer")) add("计数胶囊没用 tertiary 色系")
+            if (countBlock.contains("CircleShape") || countBlock.contains(".background(")) {
+                add("计数仍是胶囊 / 带底（#283 已作废，会读作可点击 chip）")
+            }
+            if (countBlock.contains(".padding(")) add("计数仍带内边距，会读成 chip")
+            if (body.contains("tertiaryContainer")) add("计数仍用 tertiary 高对比色")
+            if (!body.contains("colorScheme.onSurfaceVariant")) add("计数没降到次要文字色")
             if (!body.contains("colorScheme.onSurface")) add("标题没降到正文色")
             if (!body.contains("weight(1f)")) add("标题没占权重，计数不会右对齐")
             if (!body.contains("stateDescription")) add("读屏展开态丢了")

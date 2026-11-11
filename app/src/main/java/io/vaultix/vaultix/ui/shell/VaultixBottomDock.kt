@@ -89,7 +89,6 @@ import androidx.compose.ui.unit.dp
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.glass.DockMaterial
 import io.vaultix.vaultix.ui.glass.GlassPress
-import io.vaultix.vaultix.ui.glass.LiquidGlass
 import io.vaultix.vaultix.ui.glass.LiquidGlassLayer
 import io.vaultix.vaultix.ui.glass.LiquidGlassSource
 import io.vaultix.vaultix.ui.glass.dockMaterialOf
@@ -369,9 +368,12 @@ fun VaultixBottomDock(
             blurAvailable = blurAvailable,
             material = material,
         )
+        // #283：外圈阴影由 style 携带（深色 2dp / 浅色 8dp）。深色下 8dp 黑影在近黑底
+        // 上托不起玻璃，反而与 3dp 黑内阴影连成一圈灰黑脏晕 —— Material 深色规范明确
+        // elevation 应靠表面色阶表达，本项目已用 surfaceContainerHigh。别在这里写死常量。
         val glassModifier = Modifier
             .fillMaxWidth()
-            .shadow(elevation = LiquidGlass.ShadowElevation, shape = VaultixCorner.Pill)
+            .shadow(elevation = glassStyle.shadowElevation, shape = VaultixCorner.Pill)
 
         when {
             !blurAvailable -> {
