@@ -169,8 +169,8 @@ fun DeveloperLogsDialog(onDismiss: () -> Unit) {
                 }
             }
         },
-        // ★ 2026-11-10：三个按钮改用 DialogOutlinedActionButton（裸按钮在对话框动作槽里
-        //   会被 intrinsic 缩进撑宽，两个字会被逐字摞起来，见该组件文件头），
+        // ★ 2026-11-10：三个按钮走共用组件（#284 订正：规格单点真源；
+        //   旧「intrinsic 缩进撑宽 / 逐字竖排」归因已被反编译证伪）。
         //   同时去掉那个 `Row(Arrangement.spacedBy)` —— M3 的 AlertDialogFlowRow 自带
         //   8dp 主轴间距，再套一层只会让这一组按钮的间距与别处不一致。
         confirmButton = {

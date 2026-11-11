@@ -1,11 +1,24 @@
 # Vaultix 项目长期笔记
 
 > **接力顺序（先读这四份，再动手）**：
-> 本文件（约定 / 硬约束 / 决策）→ `.ai/ISSUES.md`（坑：现象-根因-解法，最新 **#283**）→
+> 本文件（约定 / 硬约束 / 决策）→ `.ai/ISSUES.md`（坑：现象-根因-解法，最新 **#284**）→
 > `Docs/progress/next-steps.md`（待办唯一真源；历史按时间段归档，见文末索引）→ `Docs/progress/current-status.md`（进度快照）
 > → `.ai/SESSION-YYYY-MM-DD.md`（逐轮流水，需要细节才翻）。
 >
-> 最后更新：2026-11-12（**#283 深色模式光照重构 + 三组 M3 观感整改**：按用户要求先取证
+> 最后更新：2026-11-12（**#284 取消按钮规格统一 + KDBX 通行密钥排查**：用户指出设置页多处
+> 「取消」大小 / 形态与正常按钮不一致 ⇒ 解包 material3 1.5.0-alpha16 反编译取证
+> （`AlertDialogFlowRow` 就是 `FlowRow`、Dialog 全家零 `IntrinsicSize`），**推翻 #273 / #283
+> 的 intrinsic 根因**：`width(IntrinsicSize.Min)` 把宽度钉死成最小固有宽度，#283 的
+> `widthIn(min=MinWidth)` 只是把小方块托到 64dp，而 `DialogShell` 家族是原生 wrap-content
+> ⇒ 两套规格并排。删固定宽度、只留宽度下限与显式 `contentPadding`，**反转 #283 规则 4**
+> （禁止 `IntrinsicSize` / `width` / `height`），#282「取消必须有边框」不动；7 处旧注释订正。
+> 另：KDBX **能**存通行密钥（codec → writer 加密字段 → mapper 读回、仓储已放行），
+> 管理页结构完整，但 `toCredential()` 五项必填而 `SavePasskeyDialog` 不产出 `userHandle` /
+> 允许 `userName` 留空 ⇒ **写入成功、重开库静默丢失**；修法 `WebAuthn.randomUserHandle()`
+> 仅在没有真实 `user.id` 时兜底 + 补齐元数据 + 删诱导复用半成品的死代码，三层测试闭环。
+> ⚠️ 两条长期教训：**观感问题也要先取证再改宽度**、**源码门禁要扫构造块而非整文件**。
+> 详情见 `issues/06-界面与交互-part22.md`；
+> 上一轮 **#283 深色模式光照重构 + 三组 M3 观感整改**：按用户要求先取证
 > Material Dark theme / Apple Liquid Glass / 玻璃拟态三路深色规范，再把「白高光 + 黑内阴影
 > + 8dp 黑外影全开满」收敛为 `glassLighting()` **一处定义的三档**（收敛**强度**不改色相，
 > #281 边缘厚度与 #282 去细边线一个不动）；取消按钮补 M3 `MinWidth` 与显式 padding

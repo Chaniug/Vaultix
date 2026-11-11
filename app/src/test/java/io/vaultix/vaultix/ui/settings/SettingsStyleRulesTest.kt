@@ -102,14 +102,22 @@ class SettingsStyleRulesTest {
     /**
      * **对话框动作按钮不要裸用** —— 必须走 `DialogTextButton` / `DialogOutlinedActionButton`。
      *
-     * 裸按钮放进 `AlertDialog` 的 `confirmButton` / `dismissButton` 槽位时，会继承 M3
-     * 传下来的 `indentChar`（"horizontal"），而这个缩进同时参与两件事：`Text` 的换行
-     * **和** `Modifier.width(IntrinsicSize.Max)` 的测得宽度。按钮是 `Row`（不实现
-     * intrinsic），测得宽度退化成 0 ⇒ 被 `widthIn(min = 58dp)` 兜成 58dp ⇒
-     * 「取消」两个字被平均分到 29dp 一格，**一个字一行摞起来**。
+     * ⚠️ **2026-11-12 #284 勘误**：下面 #273 那段「`indentChar` + `IntrinsicSize.Max`
+     *    测得 0 宽」的归因**已被反编译证伪** —— 本仓 `material3 1.5.0-alpha16` 的
+     *    `AlertDialogFlowRow` 是纯 `FlowRow`、全部 Dialog 类无 `IntrinsicSize`，且
+     *    #273 提交时 BOM 与现在完全相同（不是版本变了）。
+     *    **规则本身仍然有效**，理由换成：动作槽必须走同一个共用组件，规格（宽度
+     *    下限 / M3 内边距 / #282 边框判据）才只有一处真源；裸按钮各自拿 M3 默认值，
+     *    共用组件一按用户反馈调整（#282 → #283 → #284）这些点就会悄悄掉队，
+     *    重新出现「和其它按钮不一样」。
      *
-     * 这条在真机上出现过两次（设置页的「关闭」、自动锁定的「取消 / 保存」），
-     * 所以用文本扫描守住：凡是在 `confirmButton` / `dismissButton` 里直接写
+     * 历史（原文保留，仅用于追溯当时怎么想歪的）：曾认为裸按钮放进动作槽会继承
+     * `indentChar`（"horizontal"）并参与 `width(IntrinsicSize.Max)` 测量，`Row` 不实现
+     * intrinsic ⇒ 测得 0 ⇒ 被 `widthIn(58dp)` 兜住 ⇒ 两字各占 29dp 逐字竖排。
+     * 现象出现过，但归因不成立；那个"修复" `width(IntrinsicSize.Min)` 本身在 #284
+     * 被移除 —— 它把 59 个按钮全钉成固定 64dp 小方块，正是用户第三次反馈的点。
+     *
+     * 扫描守住：凡是在 `confirmButton` / `dismissButton` 里直接写
      * `TextButton(` / `OutlinedButton(` 的，一律报出来。
      */
     @Test
@@ -137,7 +145,7 @@ class SettingsStyleRulesTest {
 
         assertTrue(
             "这些对话框动作按钮没走 DialogTextButton / DialogOutlinedActionButton，" +
-                "两个字会被逐字摞起来：\n" + offenders.joinToString("\n"),
+                "会脱离共用组件的 M3 规格（#284）：\n" + offenders.joinToString("\n"),
             offenders.isEmpty(),
         )
     }

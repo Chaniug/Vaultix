@@ -503,5 +503,19 @@ class WebAuthnTest {
         assertThat(WebAuthn.rawIdFromStored("   ")).isEmpty()
     }
 
+    /**
+     * #284：兜底 `user.id` 必须是合法的 WebAuthn 不透明标识 —— 32 字节随机值、
+     * base64url 无填充、非空、两次不重复（不能拿常量冒充随机数）。
+     */
+    @Test
+    fun `randomUserHandle is a valid opaque user id`() {
+        val first = WebAuthn.randomUserHandle()
+        val second = WebAuthn.randomUserHandle()
+        assertThat(first).isNotEmpty()
+        assertThat(first).isNotEqualTo(second)
+        assertThat(first).doesNotContain("=")
+        assertThat(java.util.Base64.getUrlDecoder().decode(first).size).isEqualTo(32)
+    }
+
     private fun toBigInt(b: ByteArray): BigInteger = BigInteger(1, b)
 }

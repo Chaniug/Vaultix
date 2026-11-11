@@ -38,10 +38,13 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import io.vaultix.common.WebAuthn
+import io.vaultix.model.PasskeyKeyAlgorithm
 import io.vaultix.model.VaultFido2Credential
 import io.vaultix.model.VaultItem
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.theme.Spacing
+import java.time.Instant
 
 /**
  * 保存（绑定）一个通行密钥到所选密码条目。
@@ -54,6 +57,20 @@ import io.vaultix.vaultix.ui.theme.Spacing
  * 表单态 ⇄ 选择态在**同一个 `AlertDialog` 内**切换，选择态不是弹层。
  * 原因见 [PasskeyLoginPicker] 的 KDoc —— 上一版把搜索框塞进 `ExposedDropdownMenu`，
  * 既打不了字，列表还会溢出对话框。
+ *
+ * ## 2026-11-12 #284：手工录入的凭证必须是**完整**的
+ *
+ * `KdbxPasskeyCodec.toCredential` 把 `rpId / credentialId / privateKey / userName /
+ * userHandle` 五项列为必填，缺一个就返回 `null`（宁可当普通条目，也不给半截凭证）。
+ * 但本对话框此前**只校验了 `rpId / credentialId / keyValue`**，构造出的
+ * `VaultFido2Credential` 既没有 `userHandle`（模型默认 `null`），也允许 `userName`
+ * 留空 ⇒ 写进 KDBX 后读不回来：内存会话里当下还看得到，**重开库就静默消失**。
+ * Bitwarden 库不受影响（读侧不要求这两个字段），所以这个坑只打在 KDBX 上。
+ *
+ * ⇒ 现在 `userName` 必填校验；`userHandle` 选填、留空时由
+ *    [WebAuthn.randomUserHandle] 生成合法值；并补齐 `keyAlgorithm` / `keyType` /
+ *    `keyCurve` / `creationDate` 等元数据，与系统注册流程
+ *    `PasskeyCreateActivity` 的产出同形。`SavePasskeyDialogRulesTest` 扫源码钉住。
  */
 @Composable
 fun SavePasskeyDialog(
@@ -121,6 +138,14 @@ fun SavePasskeyDialog(
                             errorRes = R.string.passkey_error_key_value_required
                             return@DialogTextButton
                         }
+                        // ⚠️ #284：`userName` / `userHandle` 是 KDBX 读侧的两个必填字段
+                        //   （`KdbxPasskeyCodec.toCredential` 缺一即返回 null）。前者空了
+                        //   直接拦下 —— 别让用户"保存成功、重开库却什么都没有"；
+                        //   后者选填，留空生成合法值，见 [WebAuthn.randomUserHandle]。
+                        if (draft.userName.isBlank()) {
+                            errorRes = R.string.passkey_error_user_name_required
+                            return@DialogTextButton
+                        }
                         onSave(
                             login.id,
                             VaultFido2Credential(
@@ -130,7 +155,17 @@ fun SavePasskeyDialog(
                                 userName = draft.userName.trim(),
                                 userDisplayName = draft.userDisplayName.takeIf { it.isNotBlank() }
                                     ?: draft.userName.trim(),
+                                userHandle = draft.userHandle.trim()
+                                    .ifBlank { WebAuthn.randomUserHandle() },
                                 keyValue = draft.keyValue.trim(),
+                                // 与系统注册流程 PasskeyCreateActivity 同形：手工录入的
+                                // 凭证也必须带齐元数据，否则详情页 / 断言各读各的默认值。
+                                keyAlgorithm = PasskeyKeyAlgorithm.DEFAULT,
+                                keyType = "public-key",
+                                keyCurve = "P-256",
+                                creationDate = Instant.now().toString(),
+                                counter = 0,
+                                discoverable = true,
                             ),
                         )
                     },
@@ -164,6 +199,8 @@ private class PasskeyDraft {
     var userDisplayName by mutableStateOf("")
     var credentialId by mutableStateOf("")
     var keyValue by mutableStateOf("")
+    /** 选填；留空时由 `WebAuthn.randomUserHandle()` 生成（KDBX 读侧必填，见 #284）。 */
+    var userHandle by mutableStateOf("")
 }
 
 /** 表单态：选择条目 + 6 个字段 + 错误提示。 */
@@ -263,6 +300,16 @@ private fun SavePasskeyForm(
             value = draft.credentialId,
             onValueChange = { draft.credentialId = it },
             label = { Text(stringResource(R.string.passkey_field_credential_id)) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(Spacing.sm))
+        // #284：userHandle 是 KDBX 读侧必填项。做成选填输入框 —— 有真实值就用真实值
+        //（导入第三方库的凭证时 RP 的 user.id 不能丢），留空则由保存逻辑生成合法兜底值。
+        OutlinedTextField(
+            value = draft.userHandle,
+            onValueChange = { draft.userHandle = it },
+            label = { Text(stringResource(R.string.passkey_field_user_handle_optional)) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )

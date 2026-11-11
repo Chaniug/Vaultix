@@ -15,7 +15,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import java.time.Instant
 import javax.inject.Inject
 
 /**
@@ -172,20 +171,7 @@ fun List<VaultItem>.toPasskeyRows(): List<PasskeyRow> = flatMap { item ->
     }
 }
 
-/** 构造一个待保存的通行密钥（默认值对齐 Bitwarden；时间戳不加密）。 */
-fun newPasskeyCredential(
-    credentialId: String,
-    rpId: String,
-    rpName: String,
-    userName: String,
-    userDisplayName: String,
-    keyValue: String = "",
-): VaultFido2Credential = VaultFido2Credential(
-    credentialId = credentialId,
-    rpId = rpId,
-    rpName = rpName,
-    userName = userName,
-    userDisplayName = userDisplayName,
-    keyValue = keyValue.ifBlank { null },
-    creationDate = Instant.now().toString(),
-)
+// ⚠️ 2026-11-12 #284 删除 `newPasskeyCredential()`：它是零引用的死代码，且构造出的
+//    凭证缺 `userHandle`（KDBX 读侧必填）—— 留着会诱导下一位复用一份"存了读不回来"
+//    的半成品。凭证构造现在只有两处真源：系统注册 `PasskeyCreateActivity` 与管理页
+//    手工录入 `SavePasskeyDialog`，两者都走 `WebAuthn.randomUserHandle()` 兜底。

@@ -138,6 +138,44 @@ class KdbxPasskeyWritebackTest {
         assertThat(result["KPEX_PASSKEY_USERNAME_1"]).isNull()
     }
 
+    /**
+     * #284 契约：写入侧造出**完整**凭证（含 userHandle）时，KDBX 往返不丢。
+     *
+     * 管理页 `SavePasskeyDialog` 手工录入现在由 `WebAuthn.randomUserHandle()` 兜底，
+     * 正是为了让这条链路成立；本用例把「读侧为什么要那个字段」固化成测试。
+     */
+    @Test
+    fun `credential with userHandle survives KDBX round trip`() {
+        val manual = credential().copy(userHandle = "Z2VuZXJhdGVkLXVzZXItaGFuZGxl")
+        val written = KdbxPasskeyCodec.fromCredential(manual, 0)
+        assertThat(written).containsKey(KdbxPasskeyCodec.FIELD_USER_HANDLE)
+        val read = KdbxPasskeyCodec.toCredential(
+            KdbxPasskeyCodec.fromFieldMap(written),
+            title = "Example",
+        )
+        assertThat(read).isNotNull()
+        assertThat(read!!.userHandle).isEqualTo(manual.userHandle)
+        assertThat(read.userName).isEqualTo("alice@example.com")
+    }
+
+    /**
+     * #284 反例（**故意钉住失败形态**）：写入侧漏带 userHandle 时，
+     * `fromCredential` 不写该键，`toCredential` 必然返回 null。
+     *
+     * 这就是「手工录入保存成功、重开 KDBX 库后通行密钥静默消失」的根因。
+     * 别把这条断言当成待修 bug 去"放宽 toCredential"—— 缺字段的凭证在
+     * 断言流程里本就是半截数据，正确做法是让**写入侧**产出完整凭证。
+     */
+    @Test
+    fun `missing userHandle is silently dropped on KDBX read`() {
+        val incomplete = credential().copy(userHandle = null)
+        val written = KdbxPasskeyCodec.fromCredential(incomplete, 0)
+        assertThat(written).doesNotContainKey(KdbxPasskeyCodec.FIELD_USER_HANDLE)
+        assertThat(
+            KdbxPasskeyCodec.toCredential(KdbxPasskeyCodec.fromFieldMap(written)),
+        ).isNull()
+    }
+
     private fun itemWith(credentials: List<VaultFido2Credential>) = VaultItem(
         id = "kdbx-entry:00000000-0000-0000-0000-000000000001",
         title = "Example",

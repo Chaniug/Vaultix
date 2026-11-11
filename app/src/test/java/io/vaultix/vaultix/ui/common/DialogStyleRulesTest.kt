@@ -13,7 +13,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * 对话框动作与尺寸的**四条可机检规范**（2026-11-10 建 1–3，#283 补 4）。
+ * 对话框动作与尺寸的**四条可机检规范**（2026-11-10 建 1–3，#283 补 4，#284 反转 4）。
  *
  * 起因：用户报「设置 → 外观与自定义 → 主题模式的关闭按钮不符合标准」，
  * 顺带排查发现同一类问题散在 7 处对话框里。这些都是「编译过、detekt 查不到、
@@ -24,10 +24,15 @@ import org.junit.Test
  *    从「禁止 Outlined」改成「必须有边框」。旧判据作废理由写在规则 1 的 KDoc 里，
  *    历史结论留存在 `.ai/issues/06-界面与交互-part20.md`，别再引用旧说法。
  *
- * ⚠️ **2026-11-12（#283）规则 4 补按钮尺寸规格**：用户报「取消按钮的大小和 ui 与
- *    material3 风格不匹配，同款的取消按钮在其他位置也存在问题」。#282 的边框判据
- *    **没有被推翻**（规则 1 不动），本轮修的是共用组件 `DialogActionButtons.kt`
- *    被 `width(IntrinsicSize.Min)` 压掉的 M3 最小宽度与内边距规格。
+ * ⚠️ **2026-11-12（#284）规则 4 已被用户最新反馈反转**：用户第三次报「设置里
+ *    好几个地方的取消按钮大小和形态和其他正常按钮都不一样」（主题模式 / 锁与安全 /
+ *    自动锁定）。反编译 `material3-android:1.5.0-alpha16` 证明 #273 的
+ *    「动作槽 intrinsic 测量」推断**不成立**（`AlertDialogFlowRow` = 纯 `FlowRow`，
+ *    全部 Dialog 类里无 `IntrinsicSize`），而 #283 补的 `widthIn` 只是把
+ *    `width(IntrinsicSize.Min)` 造成的**固定小方块**托到 64dp —— 症状没消失。
+ *    ⇒ 规则 4 从「必须同时有 widthIn + IntrinsicSize.Min + 显式 padding」反转为
+ *    「**禁止**任何固定宽度 / intrinsic modifier，只留宽度下限 + 显式 padding」。
+ *    #282 的边框判据（规则 1）**不动**。
  *
  * ⚠️ 为什么用文本扫描而不是 Compose UI 测试：`AlertDialog` 是窗口级弹层，
  *    CI 无 SDK 时跑不了 instrumented test；而这几条全是**源码写法**问题。
@@ -127,33 +132,42 @@ class DialogStyleRulesTest {
     // ------------------------------------------------------------------ 规则 4
 
     /**
-     * **对话框动作按钮必须显式声明 M3 标准规格（#283）。**
+     * **对话框动作按钮必须回归原生 M3 wrap-content 规格（#284 反转 #283）。**
      *
-     * 用户反馈「主题模式里面的取消按钮的大小和 ui 与 material3 风格不匹配，同款的
-     * 取消按钮在其他位置好像也存在问题」。根因不是缺边框（#282 已补、本轮**不动**规则 1），
-     * 而是 `DialogActionButtons.kt` 的按钮在 `AlertDialog` 动作槽里被
-     * `width(IntrinsicSize.Min)` 压到内容最小固有宽度，丢掉了 M3 的 `MinWidth` 下限，
-     * 内边距规格也全靠默认值、没有显式声明。
+     * 用户第三次反馈「设置里好几个地方的取消按钮大小和形态和其他正常按钮都不一样」。
+     * 根因不是缺边框（#282 已补、规则 1 **不动**），而是 `DialogActionButtons.kt`
+     * 里的 `width(IntrinsicSize.Min)`：**它把按钮宽度固定成 `minIntrinsicWidth`**
+     * （中文按单字断行 ⇒ 只够一个字 + 内边距），#283 的 `widthIn(64dp)` 只是把这个
+     * 小方块托到 64dp。59 个动作槽按钮因此全是同一个 64dp 方块，不随文案 / 字号
+     * 伸缩，而 `DialogShell` 家族是 wrap-content 的原生 M3 按钮 ⇒ 两套规格并排。
      *
-     * 三件事必须同时成立，缺一条就会退回「贴字小胶囊」或「逐字竖排」：
-     * 1. `widthIn(min = ButtonDefaults.MinWidth)` 在 `width(IntrinsicSize.Min)` **之前**
-     *    （顺序反了会被 `fixedWidth` 钳掉，见该文件 `dialogActionWidth` 的 KDoc）；
-     * 2. `width(IntrinsicSize.Min)` 保留 —— #273 修「两个字摞起来」的真正修复，不能删；
-     * 3. 两个组件都显式给各自的 M3 `contentPadding`。
+     * ⚠️ #273 当初加 intrinsic 的理由（M3 动作槽 `indentChar` + `IntrinsicSize.Max`
+     *    测得 0 宽）经反编译证伪：本仓 `material3 1.5.0-alpha16` 的
+     *    `AlertDialogFlowRow` 是**纯 `FlowRow`**，全部 Dialog 类无 `IntrinsicSize`，
+     *    且 #273 提交时 BOM 版本与现在完全相同 ⇒ 不是版本变了，是推断从一开始就错。
      *
-     * ⚠️ 扫的是**共用组件源码**，不是逐个调用点：全项目 20+ 处动作槽都走它，
-     *    改一处即全部生效；谁去调用点单独打补丁，这条门禁照样守着组件本身。
+     * 四件事必须同时成立：
+     * 1. **禁止** `IntrinsicSize` / 固定 `width(...)` / 固定 `height(...)`；
+     * 2. `widthIn(min = ButtonDefaults.MinWidth)` 保留（纯下限，不固定宽度）；
+     * 3. 两个组件都显式给各自的 M3 `contentPadding`（跟着 M3 换档，不写死数值）；
+     * 4. 扫的是**共用组件源码**，不是逐个调用点 —— 全项目 59 处动作槽都走它。
      */
     @Test
-    fun `对话框动作按钮显式声明M3宽度与内边距规格`() {
+    fun `对话框动作按钮禁止固定宽度只允许原生wrap-content规格`() {
         val source = stripComments(File(uiDir, "common/DialogActionButtons.kt").readText())
-        val missing = buildList {
-            val minWidthAt = source.indexOf("widthIn(min = ButtonDefaults.MinWidth)")
-            val intrinsicAt = source.indexOf("width(IntrinsicSize.Min)")
-            if (minWidthAt < 0) add("缺 widthIn(min = ButtonDefaults.MinWidth)")
-            if (intrinsicAt < 0) add("丢了 #273 的 width(IntrinsicSize.Min)")
-            if (minWidthAt >= 0 && intrinsicAt >= 0 && minWidthAt > intrinsicAt) {
-                add("widthIn 必须写在 width(IntrinsicSize.Min) 之前，否则下限被 fixedWidth 钳掉")
+        val violations = buildList {
+            if (source.contains("IntrinsicSize")) {
+                add("出现 IntrinsicSize：#273 的 intrinsic 修法已被反编译证伪，" +
+                    "它把按钮钉成固定 minIntrinsicWidth（#284 修掉的 64dp 小方块）")
+            }
+            if (Regex("""\bwidth\s*\(""").containsMatchIn(source)) {
+                add("出现固定 width(...)：按钮必须 wrap-content，随文案 / 字号伸缩")
+            }
+            if (Regex("""\bheight\s*\(""").containsMatchIn(source)) {
+                add("出现固定 height(...)：M3 按钮高度由 ButtonDefaults 决定")
+            }
+            if (!source.contains("widthIn(min = ButtonDefaults.MinWidth)")) {
+                add("丢了 M3 标准宽度下限 widthIn(min = ButtonDefaults.MinWidth)")
             }
             if (!source.contains("contentPadding = ButtonDefaults.ContentPadding")) {
                 add("OutlinedButton 没显式声明 M3 内边距")
@@ -162,7 +176,7 @@ class DialogStyleRulesTest {
                 add("TextButton 没显式声明 M3 内边距")
             }
         }
-        assertTrue("对话框按钮 M3 规格：\n" + missing.joinToString("\n"), missing.isEmpty())
+        assertTrue("对话框按钮 M3 规格：\n" + violations.joinToString("\n"), violations.isEmpty())
     }
 
     // ----------------------------------------------------------------- helpers

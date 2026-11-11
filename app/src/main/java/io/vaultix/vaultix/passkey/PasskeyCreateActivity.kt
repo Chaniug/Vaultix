@@ -485,7 +485,11 @@ class PasskeyCreateActivity : FragmentActivity() {
                     rpName = rpName,
                     userName = userName,
                     userDisplayName = userDisplayName,
-                    userHandle = userId,
+                    // ⚠️ #284：userHandle 是 KDBX 读侧的必填字段（`toCredential` 缺一即
+                    //   返回 null）。WebAuthn 规范里 `user.id` 必填，但 RP 传空时不能让
+                    //   整条凭证在 KDBX 里"存了却读不回来" ⇒ 用合法随机值兜底，
+                    //   有真实值一律用真实值（别覆盖 RP 的记录）。
+                    userHandle = userId ?: WebAuthn.randomUserHandle(),
                     keyAlgorithm = PasskeyKeyAlgorithm.DEFAULT,
                     keyType = "public-key",
                     keyCurve = "P-256",

@@ -464,8 +464,8 @@ private fun UpdateCheckDialog(
             //    - 检查失败 / 无法确定 → 同上，不诱导用户去下载。
             //    （M3：对话框动作应如实反映当前状态下**可做**的事。）
             if (updated != null) {
-                // ★ 2026-11-10：改用 DialogOutlinedActionButton（裸按钮在对话框动作槽里
-                //   会被 intrinsic 缩进撑宽，两个字会被逐字摞起来，见该组件文件头）。
+                // ★ 2026-11-10：动作按钮统一走共用组件（#284 订正：规格单点真源；
+                //   旧「intrinsic 缩进撑宽 / 逐字竖排」归因已被反编译证伪）。
                 DialogOutlinedActionButton(
                     text = stringResource(R.string.update_check_go),
                     onClick = {

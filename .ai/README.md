@@ -24,6 +24,52 @@
 - 已接进 CI：`ci-debug.yml` 的 `sandbox-tests` job 用**同一份脚本**，与 `android-ci` 并行
   ⇒ 本地绿 ⇒ CI 不会红在同一件事上。
 
+## 🕐 最新状态（2026-11-12 · #284 取消按钮规格统一 + KDBX 通行密钥排查）
+
+> **一句话**：用户两组反馈（设置页「取消」大小 / 形态与正常按钮不一致 + KDBX 能否存通行密钥 /
+> 管理部分是否正常）。**都改了生产代码**：① 反编译取证推翻 #273/#283 的 intrinsic 修法；
+> ② 排查结论「KDBX **能**存」，但发现手工录入会产出半截凭证、写入后读回静默丢失。
+> 接力正文：[`#284`](./issues/06-界面与交互-part22.md)。
+
+1. **判据反转（#283 规则 4 作废）**：解包 `material3-android:1.5.0-alpha16` 反编译确认
+   `AlertDialogFlowRow` 就是纯 `FlowRow`、Dialog 全家零 `IntrinsicSize`；`git show d8559668`
+   证明依赖版本与 #273 时相同 ⇒ #273「`indentChar` + `IntrinsicSize.Max` 测成 0 宽」的
+   根因本就是猜的。`width(IntrinsicSize.Min)` 会把宽度**固定**成 `minIntrinsicWidth`，
+   #283 的 `widthIn(min=MinWidth)` 只是把小方块托到 64dp ⇒ 59 个动作槽全是固定方块，
+   而「其他正常按钮」（`DialogShell` 家族用 `FlowRow` + 原生 M3 按钮）是 wrap-content
+   ⇒ 两套规格并排。修法：删 intrinsic / 固定宽度，**只留** `widthIn(min = MinWidth)` 下限 +
+   显式 `contentPadding`；#282 的「取消必须有边框」**不反转**。
+   `DialogStyleRulesTest` 规则 4 反转为「禁止固定宽度」，`SettingsStyleRulesTest` 规则 2
+   保留但 KDoc 勘误（有效理由是「规格单点真源」，不是竖排）；7 处生产旧注释同步订正。
+2. **KDBX 能存通行密钥**：`KdbxPasskeyCodec` ↔ `KdbxItemWriter.applyPasskeys()`
+   （私钥 PEM / `credentialId` / `userHandle` 强制 `EntryValue.Encrypted`）↔
+   `KdbxItemMapper` 读回；`ItemRepositoryImpl.updateFido2Credentials()` 自 2026-10-13 起
+   对 KDBX 放行。管理页（`PasskeysViewModel` / `PasskeysScreen`）列表 / 搜索 / 删除 / 详情
+   均完整；通行密钥只绑 `VaultItemType.Login`，没有独立条目。
+3. **真缺陷：写入侧半截凭证 ⇒ 存了读不回来**：`toCredential()` 要求
+   `rpId / credentialId / keyValue / userName / userHandle` 五项非空，缺一返回 `null`；
+   而 `SavePasskeyDialog` 只校验前三项、不产出 `userHandle` 且允许 `userName` 留空，
+   `PasskeyCreateActivity` 在 RP 不给 `user.id` 时同样留空 ⇒ KDBX 里写入成功、重开库静默消失
+   （最容易被误判成「KDBX 不支持」）。修法：`WebAuthn.randomUserHandle()`
+   （32 字节 → base64url 无填充）只在**没有真实值时兜底**；手工录入 `userName` 必填、
+   `userHandle` 选填留空自动补、补齐 `keyAlgorithm` / `keyType` / `keyCurve` /
+   `creationDate` / `counter` / `discoverable`；删 `PasskeysViewModel` 里会诱导复用半成品的死代码。
+4. **三层测试闭环**：`WebAuthnTest` +1（合法性）、`KdbxPasskeyWritebackTest` +2
+   （正向往返 + **故意钉住失败形态**）、新建 `SavePasskeyDialogRulesTest` 3 条源码门禁
+   （构造块带齐必填字段 / `userName` 空白校验 / 系统注册路径的兜底表达式）。
+   ⚠️ 源码门禁用 `balancedCallEnd()` 只扫 `VaultFido2Credential(...)` 构造块 + `stripComments()`，
+   别整文件 `contains` 被注释骗过。
+5. **本轮环境坑**：`:core:common:test --tests "…"` 不是合法用法（该模块用模块级任务）；
+   zsh 下 `PIPESTATUS` 为空（打印 `EXIT=` 缺值），判 rc 用 `cmd > log 2>&1; rc=$?`。
+
+> 验证：`:app:compileFullDebugKotlin` 绿（仅既有 `hiltViewModel` deprecation 警告）、
+> `detekt` / `:app:assembleFullDebug` 绿、CI 同款全量单测 **1791 例 0 失败**
+> （`DialogStyleRulesTest` 4 / `SavePasskeyDialogRulesTest` 3 / `SettingsStyleRulesTest` 6 /
+> `KdbxPasskeyWritebackTest` 11 / `WebAuthnTest` 13 均确实执行）、
+> 16 个 `check_*.py` + 13 条 `selftest_*.py` + 编码 / 图标几何 / detekt 圈复杂度探针
+> 共 **32 项全绿**。**未验证（真机）**：所有「取消」在 2.0x 字号 / 窄屏下是否与同对话框
+> 其他按钮一致、KDBX 手工录入通行密钥关库重开是否还在 —— 见 `Docs/progress/next-steps.md`。
+
 ## 🕐 最新状态（2026-11-12 · #283 深色模式光照重构 + 三组 M3 观感整改）
 
 > **一句话**：用户 3 组反馈（取消按钮 M3 规格 / 分组计数太显眼 / 深色剪影卡与底栏）。

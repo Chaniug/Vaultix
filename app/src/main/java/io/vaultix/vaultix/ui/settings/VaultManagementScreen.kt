@@ -536,8 +536,8 @@ private fun VaultSignOutDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.vault_action_signout)) },
         text = { Text(stringResource(R.string.vault_signout_confirm, vaultName)) },
-        // ★ 2026-11-10：改用 DialogOutlinedActionButton（裸按钮在对话框动作槽里会被
-        //   intrinsic 缩进撑宽，两个字会被逐字摞起来，见该组件文件头）。
+        // ★ 2026-11-10：动作按钮统一走共用组件（#284 订正：规格单点真源；
+        //   旧「intrinsic 缩进撑宽 / 逐字竖排」归因已被反编译证伪）。
         confirmButton = {
             DialogOutlinedActionButton(
                 text = stringResource(R.string.vault_signout_action),

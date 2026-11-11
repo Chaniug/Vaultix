@@ -652,8 +652,8 @@ internal fun AutoLockDialog(
                     },
                 )
             },
-            // ★ 2026-11-10：动作按钮改用 DialogOutlinedActionButton（见该组件文件头：
-            //   裸按钮放进对话框动作槽会被 intrinsic 缩进撑宽，两个字会被逐字摞起来）。
+            // ★ 2026-11-10：动作按钮统一走共用组件（#284 订正：规格单点真源；
+            //   旧「intrinsic 缩进撑宽 / 逐字竖排」归因已被反编译证伪）。
             confirmButton = {
                 DialogOutlinedActionButton(
                     text = stringResource(R.string.action_save),

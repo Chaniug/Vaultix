@@ -59,6 +59,8 @@ object WebAuthn {
     private const val AAGUID_BYTES = 16
     /** UUID 文本承载的 credentialId 固定 16 字节（Bitwarden / Keyguard 的存储形态）。 */
     private const val UUID_BYTE_SIZE = 16
+    /** 兜底生成的 `user.id`（userHandle）字节数；WebAuthn 规范上限 64 字节。 */
+    private const val USER_HANDLE_BYTES = 32
 
     // authenticatorData 标志位（WebAuthn §6.1）
     private const val FLAG_USER_PRESENT = 0x01
@@ -98,6 +100,27 @@ object WebAuthn {
     /** 把 [bytes] 编码为 URL-safe Base64（无 padding），WebAuthn 字段统一形态。 */
     fun base64Url(bytes: ByteArray): String =
         Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
+
+    /**
+     * 生成兜底的 `user.id`（userHandle）：32 字节随机值 → base64url 无填充。
+     *
+     * WebAuthn 里 `user.id` 由 RP 生成、是**最多 64 字节的不透明标识**，authenticator
+     * 原样存、断言时原样回传。本项目两条「创建凭证」的路径都必须带上非空 userHandle：
+     * `KdbxPasskeyCodec.toCredential` 把它列为 5 个必填字段之一，空值会让整条凭证
+     * 读不回来 —— **写入成功、重开库后静默消失**（#284 排查结论）。
+     *
+     * 用途仅限「RP 没给 / 手工录入留空」时补一个合法值：
+     * 1. 系统注册流程 `PasskeyCreateActivity`：`user.id` 理论上必填，缺失时兜底；
+     * 2. 管理页手工录入 `SavePasskeyDialog`：表单选填，留空时兜底。
+     *
+     * ⚠️ **不许拿它覆盖已有值**：随机 userHandle 与 RP 记录不一致会让断言回传的
+     *    `userHandle` 校验失败。有真实值一律用真实值。
+     */
+    fun randomUserHandle(): String {
+        val bytes = ByteArray(USER_HANDLE_BYTES)
+        secureRandom.nextBytes(bytes)
+        return base64Url(bytes)
+    }
 
     /** 容错解码：先试 URL-safe，再试标准 Base64（Bitwarden 库里两种都存在）。 */
     fun decodeBase64UrlOrStandard(text: String): ByteArray = runCatching {
