@@ -44,6 +44,12 @@
  * | 退出缓动 | `emphasizedAccelerate` = cubic-bezier(0.3, 0, 0.8, 0.15) | 同上 |
  * | 方向 | 进入 `SlideDirection.Start`、返回 `SlideDirection.End` | Start/End 而非 Left/Right ⇒ RTL 语言自动镜像 |
  *
+ * ⚠️ **`slideIntoContainer` / `slideOutOfContainer` 是 `AnimatedContentTransitionScope` 的
+ *   接口成员函数，不是 `androidx.compose.animation` 的顶层扩展。**
+ *   ⇒ 不要给它们写 `import androidx.compose.animation.slideIntoContainer`：
+ *     加了会 `Unresolved reference`，且**连带把调用点一起带崩**
+ *     （2026-11-12 实测，`4b28e4d5` 就是这么红的）。成员函数靠 receiver 解析，不需要 import。
+ *
  * ## 为什么完全不做 alpha（这条最容易被"优化"回去，务必保留）
  *
  * 项目历史上的深色模式闪烁，全部来自**两页同时半透明**时漏出背景：
@@ -70,8 +76,6 @@ import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.slideIntoContainer
-import androidx.compose.animation.slideOutOfContainer
 import androidx.navigation.NavBackStackEntry
 
 /** 进入时长：Material 3 Shared Axis 的 medium2（300ms）。 */
