@@ -93,24 +93,38 @@ class SettingsTransitionRulesTest {
     // ------------------------------------------------------------------ 规则 4
 
     /**
-     * **动效必须留在「轻」的边界内**：alpha 下限不低于 0.9（避免全屏淡入漏背景 / 掉帧），
-     * 位移不超过 1/16 屏宽（避免回到被用户否掉的「整屏滑走」）。
+     * **必须走官方 `slideIntoContainer` / `slideOutOfContainer`，并且不做 alpha。**
+     *
+     * 这条规则是 2026-11-12 两轮返工换来的：
+     * v1 自创「180ms + 1/16 位移 + alpha 0.92」→ 真机一帧 74ms，用户报卡顿；
+     * v2 为了省性能改成「让位 60ms / 进入 130ms」→ 不对称导致视觉撕裂，用户报
+     * 「和常见项目完全不对」。两版的共同错误是**自创参数**，而 Material 3 的
+     * Shared Axis X 本来就有官方取值，Navigation 也有官方 API。
+     *
+     * 另外**禁止引入 `fadeIn` / `fadeOut`**：两页同时半透明会漏出背景
+     * （`(1-a)(1-b)`，a=b=0.5 时 25%），深色模式下就是历史那个「闪一下」。
+     * 本文件靠纯位移建立层次，不需要也不会叠 alpha。
      */
     @Test
-    fun `设置转场不得退回全屏淡入或整屏滑动`() {
+    fun `设置转场必须走官方 Shared Axis_且不做 alpha`() {
         val source = transitionsSource()
-        assertTrue(
-            "alpha 下限被调低到 0.9 以下，会退回全屏淡入",
-            Regex("""SETTINGS_ALPHA_FLOOR\s*=\s*0\.(9\d+|9)f""").containsMatchIn(source),
+        listOf(
+            "slideIntoContainer(",
+            "slideOutOfContainer(",
+            "AnimatedContentTransitionScope.SlideDirection.Start",
+            "AnimatedContentTransitionScope.SlideDirection.End",
+        ).forEach { assertTrue("转场缺少官方 API 或方向：$it", source.contains(it)) }
+        assertFalse(
+            "不要引入 fadeIn：两页半透明会漏背景（见 TabTransitions 的推导）",
+            Regex("""\bfadeIn\(""").containsMatchIn(source),
         )
-        assertTrue(
-            "位移除数小于 16，会接近整屏滑走",
-            Regex("""ENTER_SLIDE_DIVISOR\s*=\s*(1[6-9]|[2-9]\d+)""").containsMatchIn(source),
+        assertFalse(
+            "不要引入 fadeOut：同上",
+            Regex("""\bfadeOut\(""").containsMatchIn(source),
         )
-        assertTrue("必须四个方向都定义", listOf(
-            "fun settingsEnter()", "fun settingsExit()",
-            "fun settingsPopEnter()", "fun settingsPopExit()",
-        ).all { source.contains(it) })
-        assertTrue("push/pop 必须互为镜像", source.contains("-it / EXIT_SLIDE_DIVISOR"))
+        val durations = Regex("""SETTINGS_(?:ENTER|EXIT)_MS\s*=\s*(\d+)""")
+            .findAll(source).map { it.groupValues[1].toInt() }.toList()
+        assertTrue("必须同时定义进入与退出时长", durations.size == 2)
+        assertTrue("时长超过 350ms 已偏离 M3 Standard：$durations", durations.all { it <= 350 })
     }
 }
