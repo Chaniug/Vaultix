@@ -286,7 +286,8 @@ base64 -w0 vaultix-release.jks
 
 - ✅ 多库并存、通行密钥、验证码（含自动复制下一个）、卡包、权限管理页、网盘账号页
 - 🚧 进行中：性能专项优化、KDBX 库内 SSH 字段映射
-- 🔄 待真机：**W6 互操作验收** —— 用 KeePassXC / KeePassDX 打开 Vaultix 写出的库，核对条目 / TOTP / 通行密钥 / 多 URL（自动化环境跑不了，这是 M2 唯一的遗留项）
+- ✅ JSON⇄KDBX 互转：W1–W5 已落地（端到端往返比对，CI 1142 例零失败）
+- ⏭ **W6 真机互操作**（KeePassXC / KeePassDX 打开**转换产物**）：按 2026-11-12 决定不单独执行。属互转验收链，**不是 M2 引擎的遗留项**；清单见 [json-kdbx-lossless-conversion.md](./Docs/progress/json-kdbx-lossless-conversion.md)
 - 📋 计划：性能优化见 [Docs/progress/perf-plan.md](./Docs/progress/perf-plan.md)
 
 里程碑与验收标准见 [Docs/13-路线图与里程碑.md](./Docs/13-路线图与里程碑.md)。
