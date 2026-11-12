@@ -68,8 +68,12 @@
 `if (error !is CancellationException)` 区分；行为测试用 `runBlocking` 真实时间而非
 `runTest`（虚拟时间会在切 `Dispatchers.IO` 后立刻推进到超时）；行为测试必须做反证。
 
-**提交 / CI**：待推送后回填（本段随代码同批提交，CI 结论与 preview Release 版本
-在观察完成后补记，与 #286 的 `68665533` + `5748f5a7` 两提交惯例一致）。
+**提交 / CI**：`7fc7cbc5 fix(sync): #287 改完 KDBX 条目立刻返回不再丢改动`
+已推送 `main`；`AI docs consistency` success（12s）、`Android CI (Debug)` success
+（4m22s，`Lint, test diagnostics, and debug build` 与 `Sandbox unit tests` 两个 job 全绿）；
+preview Release 自动更新为 `Vaultix v0.12.0-dev-7fc7cbc · Preview`
+（`app-full-debug.apk`，37,558,886 B ≈ 37.6MB）。
+CI 结论与 Release 版本按 #286 `68665533` + `5748f5a7` 的两提交惯例补记。
 
 **待真机验收**：改完点保存**立刻返回**再点同步（主路径）；连改 3 笔立刻返回；
 保存后立刻杀进程 / 立刻开飞行模式；冲突对话框「用云端覆盖本地」仍不自锁；
