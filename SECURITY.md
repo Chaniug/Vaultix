@@ -79,7 +79,7 @@ sha256sum -c checksums-sha256.txt
 Release 页面写了签名证书的 SHA-256 与 DN，与包内实际签名比对：
 
 ```bash
-apksigner verify --print-certs app-full-release.apk
+apksigner verify --print-certs Vaultix-v0.12.0.apk   # 换成你下载到的实际文件名
 ```
 
 指纹必须与 Release 页一致。**不一致 = 这个包不是我们发的，不要安装。**
@@ -89,7 +89,7 @@ apksigner verify --print-certs app-full-release.apk
 正式版由 GitHub Actions 构建并生成签名证明，可以离线核验「这个二进制确实出自本仓库的发布流水线」：
 
 ```bash
-gh attestation verify app-full-release.apk --repo Chaniug/Vaultix
+gh attestation verify Vaultix-v0.12.0.apk --repo Chaniug/Vaultix   # 换成实际文件名
 ```
 
 > 三条都对得上，才说明你拿到的是「本仓库源码 + 本仓库密钥」的产物。

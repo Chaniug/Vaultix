@@ -829,6 +829,32 @@ jobs:
           echo "base_version=$base_version" >> "$GITHUB_OUTPUT"
           echo "short_sha=$short_sha" >> "$GITHUB_OUTPUT"
 
+          # ---- 产物改名：`app-full-debug.apk` → `Vaultix-v<version>-preview.apk` ----
+          # 2026-11-12：与 stable 同一处置（见 release.yml 的同名段落）。Gradle 的
+          #   「flavor + buildType」文件名对下载的人没有意义，Release 页该看到
+          #   「产品名 + 版本号 + 渠道」。
+          # ⚠️ 位置是这段代码唯一的难点：必须在 `version_name` 解析**之后**（否则拼不出
+          #   名字），又必须在下面所有 `apk_list` 消费点**之前**（签名解析 :836、
+          #   附件清单 :890、输出 :896）。所以这里改完**就地重算** `apk_list` /
+          #   `apk_count` —— 重算而不是各改三处，是不让四处口径分叉的唯一做法。
+          # ℹ️ 上面 `Upload APK` 的 artifact 内仍是 Gradle 原名：那是 3 天保留期的
+          #   内部产物（名字 `debug-apk`），不是给用户下载的东西，不必跟着改。
+          # ⚠️ 同样只在恰好 1 个 APK 时改：多 flavor 并存时同名会互相覆盖。
+          _apks="$(find "$apk_root" -type f -iname '*.apk' | sort)"
+          _apk_total="$(printf '%s\n' "$_apks" | sed '/^$/d' | wc -l | tr -d ' ')"
+          if [ "$_apk_total" = "1" ]; then
+            _src="$(printf '%s\n' "$_apks" | sed -n '1p')"
+            _dst="$(dirname "$_src")/Vaultix-v${version_name}-preview.apk"
+            if [ "$_src" != "$_dst" ]; then
+              mv -f "$_src" "$_dst"
+              echo "::notice title=APK renamed::$(basename "$_src") → $(basename "$_dst")"
+              apk_list="$(find "$apk_root" -type f -iname '*.apk' -printf '%P\n' | sort)"
+              apk_count="$(printf '%s\n' "$apk_list" | sed '/^$/d' | wc -l | tr -d ' ')"
+            fi
+          elif [ "$_apk_total" != "0" ]; then
+            echo "::warning title=APK rename skipped::检测到 ${_apk_total} 个 APK（多 flavor），保持 Gradle 原名以免互相覆盖"
+          fi
+
           # ---- 签名信息（**如实**取自产出的 APK，不取自 Secrets / 不取自日志措辞）----
           # 这一段解决的是一类具体事故：CI 某次降级成一次性密钥，包里照旧写着
           # `固定密钥解码通过`，用户装上却「盖不上上一版」。事后只能靠人去翻日志推理。

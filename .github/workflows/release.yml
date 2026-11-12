@@ -319,6 +319,29 @@ jobs:
         shell: bash
         run: |
           cd app/build/outputs/apk
+
+          # ---- 产物改名：`app-full-release.apk` → `Vaultix-v<version>.apk` ----
+          # 2026-11-12：Gradle 给的文件名是「flavor + buildType」的组合（full/release），
+          #   对下载的人毫无意义 —— Release 页上应该看到「产品名 + 版本号」。
+          # ⚠️ 改名**必须放在收集之前**：下面的 checksums、apk_list、attestation、
+          #   Release 附件四条链路全部从这里的 `find` 派生（后两者走 `*.apk` 通配），
+          #   于是它们会自动跟随新名，不需要各改一遍 —— 只改一处才是唯一不会脱节的改法。
+          # ⚠️ 只在**恰好 1 个** APK 时改：多 flavor 并存时同名会互相覆盖。
+          #   现在是单 full 包；将来若恢复 offline，这里会打印警告并退回 Gradle 原名，
+          #   宁可名字难看，也不接受「某次发版少了一个包」。
+          _apks="$(find . -type f -iname '*.apk' | sort)"
+          _apk_total="$(printf '%s\n' "$_apks" | sed '/^$/d' | wc -l | tr -d ' ')"
+          if [ "$_apk_total" = "1" ]; then
+            _src="$(printf '%s\n' "$_apks" | sed -n '1p')"
+            _dst="$(dirname "$_src")/Vaultix-v${{ steps.meta.outputs.version }}.apk"
+            if [ "$_src" != "$_dst" ]; then
+              mv -f "$_src" "$_dst"
+              echo "::notice title=APK renamed::$(basename "$_src") → $(basename "$_dst")"
+            fi
+          elif [ "$_apk_total" != "0" ]; then
+            echo "::warning title=APK rename skipped::检测到 ${_apk_total} 个 APK（多 flavor），保持 Gradle 原名以免互相覆盖"
+          fi
+
           # 产物目录随分发数变化（曾为 full/offline 两个 flavor），递归收集保持兼容
           apk_files="$(find . -type f -iname '*.apk' | sort)"
           apk_list="$(printf '%s\n' "$apk_files" | sed 's|^\./||')"
