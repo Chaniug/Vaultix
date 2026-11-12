@@ -24,7 +24,58 @@
 - 已接进 CI：`ci-debug.yml` 的 `sandbox-tests` job 用**同一份脚本**，与 `android-ci` 并行
   ⇒ 本地绿 ⇒ CI 不会红在同一件事上。
 
-## 🕐 最新状态（2026-11-12 · #286 OneDrive KDBX 改动被刷新覆盖）
+## 🕐 最新状态（2026-11-12 · #287 改完 KDBX 条目立刻返回等于没保存）
+
+> **一句话**：用户补充时序「点保存后停 5 秒看到『已保存到本地 · 正在同步到云端』
+> 才生效，但大部分人点完就返回」——**判据第三次反转**：#286 修的同步闸门没坏，
+> 坏的是更前面的一段：写回协程跑在 `viewModelScope` 里，页面返回把它取消在
+> `Kdbx.verifyWrite()` 的 KDF 几秒窗口内。属**协程取消 / 写回持久性**缺陷。
+> 接力正文：[`#287`](./issues/06-界面与交互-part25.md)。
+
+1. **根因**：`Kdbx.mutateLocked` 先把新会话换进内存（所以改完立刻能看到改动），
+   `persist()` 旧顺序却是**先** `Kdbx.verifyWrite()`（KDF 往返自检，真机 1~5 s）
+   **再**写带 `pendingLocalEdits` 的脏缓存。用户在这几秒返回 ⇒ `onCleared()` 取消
+   `viewModelScope` ⇒ `fileCache.save` / `cloudSync.markLocalEdited` /
+   `autoUploader.enqueue` 全没跑 ⇒ DB 仍是 `IN_SYNC`、缓存没有脏标记。此时 #286 的
+   双真源判据（DB 状态 + 缓存脏标记）**两个都干净**，点同步就放行拉远端旧字节
+   `replaceSession()` ⇒ 改动彻底消失。停留 5 秒只是让协程跑完、提示出现、上传排队。
+   ⇒ **先保证「写回必须跑完」，再谈「同步闸门别覆盖」**，两道防线串联不是并联。
+2. **四道防线**：① 八个写动作共用的 `serialWrite` 改
+   `withContext(Dispatchers.IO + NonCancellable) { writeGate.withLock { block() } }`
+   （⚠️ `withContext` 在 `withLock` **外面**，等锁期间也不许取消；一处收口，不靠每个
+   ViewModel 各自记得）；② `persist` 把脏缓存**提到几秒自检之前**先落，本地 IO 毫秒级，
+   把盲窗压到最小；③ 新增 `cacheRestore` 快照，自检 / 落盘失败时恢复缓存
+   （原本无缓存则 `fileCache.remove`）+ 回滚会话，`CancellationException` **只**重抛、
+   不记 ERROR、不跑回滚链；④ `ItemDetailViewModel.updateItem()` / `deleteItem()` 统一
+   `viewModelScope.launch { withContext(NonCancellable) { … } }`，让 `saving=false`
+   与成功提示也能收口。`deleteItem` 早在 11-08 就用 `launch(NonCancellable)` 修过同一个
+   坑，编辑没跟上 ⇒ 这次把防线放到**共享咽喉**。
+3. **⚠️ 取舍**：点完保存立刻锁库 / 切后台时写回仍会跑完（几秒）。这是对的 —— 取消一次
+   半途的落盘只会制造「会话 / 缓存 / DB 状态」三份互相矛盾的真相。
+
+**验证**：`detekt` + `:app:assembleFullDebug` + 九模块全量单测 `BUILD SUCCESSFUL in 19s`
+（大量 UP-TO-DATE，输入未变即结果有效），**1827 例 0 失败**（179 份 XML，比 #286
+多 6 例）；**33 项 Python 门禁全绿**。新建 `KdbxWriteDurabilityRulesTest`(5 条源码门禁)，
+`KdbxItemRepositoryTest` +1 条行为测试；相关三测试类 20 例 0 失败。
+**反证**：临时撤掉 `serialWrite` 的 `NonCancellable`，行为用例立刻变红
+（`9 tests completed, 1 failed`），证明测的正是「返回即取消」这条真机链路，源码已恢复。
+
+**本轮 6 条坑**：`launch(NonCancellable)` 已 deprecated（破坏结构化并发）⇒ 统一
+`launch { withContext(NonCancellable) { } }`；`functionBody()` 必须从**签名起点**截，
+不能从第一个 `{` 截（`serialWrite` 是表达式体，第一个 `{` 属于 `withContext` lambda，
+从那里截会漏判要检查的 `withContext` 本身）；取消不是失败（取消态下每个挂起点立刻再抛，
+回滚链跑不完）；detekt `ThrowsCount` 上限 2 ⇒ 合并两个 catch 用
+`if (error !is CancellationException)` 区分；行为测试用 `runBlocking` 真实时间而非
+`runTest`（虚拟时间会在切 `Dispatchers.IO` 后立刻推进到超时）；行为测试必须做反证。
+
+**提交 / CI**：待推送后回填（本段随代码同批提交，CI 结论与 preview Release 版本
+在观察完成后补记，与 #286 的 `68665533` + `5748f5a7` 两提交惯例一致）。
+
+**待真机验收**：改完点保存**立刻返回**再点同步（主路径）；连改 3 笔立刻返回；
+保存后立刻杀进程 / 立刻开飞行模式；冲突对话框「用云端覆盖本地」仍不自锁；
+另七个写动作（删除 / 新建 / 建文件夹等）立刻返回也不丢。
+
+## 🕐 上一轮状态（2026-11-12 · #286 OneDrive KDBX 改动被刷新覆盖）
 
 > **一句话**：用户报「onedrive 上的 kdbx 改完条目，同步中途返回 / 断网后刷新，
 > 直接被云端旧内容覆盖，等于修改并未成功」——定性为**数据完整性 / 同步状态机**

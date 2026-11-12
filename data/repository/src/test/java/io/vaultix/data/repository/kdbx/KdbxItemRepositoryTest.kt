@@ -39,7 +39,12 @@ import io.vaultix.model.VaultCard
 import io.vaultix.model.VaultFolder
 import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -52,6 +57,51 @@ class KdbxItemRepositoryTest {
         // `Kdbx.createVault` 把会话登记进进程级单例 ⇒ 用例之间必须清干净，
         // 否则下一个用例会看到这一个的残留（KdbxCreateRepositoryTest 同款纪律）。
         Kdbx.lock(VAULT_ID)
+    }
+
+    /**
+     * ★★ #287（2026-11-12）：**页面返回取消调用方协程后，写回仍必须完整落盘**。
+     *
+     * 真机：改完条目立刻返回 ⇒ `viewModelScope` 被取消，写回断在 `Kdbx.verifyWrite()`
+     * 的那几秒里；会话已换（本地看得到改动）而脏缓存 / 状态 / 上传队列全没跑，
+     * 接着点同步就被云端旧版盖回来。停 5 秒则协程跑完、提示出现 ⇒ 「等一下就正常」。
+     *
+     * ## 反证强度
+     *
+     * 把 `serialWrite` 的 `NonCancellable` 去掉后，[RecordingSource.onWrite] 里的
+     * `release.await()` 会在取消瞬间抛 `CancellationException`，`done` 永不完成
+     * ⇒ `withTimeout` 把本用例判红。不是「装置压根没跑」的假绿。
+     *
+     * ⚠️ 用 `runBlocking`（真实时间）而不是 `runTest`：`serialWrite` 强制切
+     *    `Dispatchers.IO`，虚拟时间调度器会在 test 协程挂起时**立刻推进到超时**，
+     *    制造与真实线程调度的假竞态。
+     */
+    @Test
+    fun `页面返回取消写回协程_落盘仍完整完成`() = runBlocking {
+        val harness = Harness()
+        harness.seedLoginItem()
+        val before = Kdbx.contentOf(VAULT_ID)!!.items.single()
+
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val done = CompletableDeferred<Unit>()
+        harness.source.onWrite = {
+            entered.complete(Unit)
+            release.await()
+            done.complete(Unit)
+        }
+
+        val job = launch(Dispatchers.IO) {
+            harness.repository.update(VAULT_ID, before.copy(title = "改过的标题"))
+        }
+        // 等写回确实走到「写文件」这一步（前面的 KDF / 往返自检已跑完）⇒ 时序确定，不靠 sleep。
+        withTimeout(10_000) { entered.await() }
+        // 模拟用户返回：取消调用方协程。
+        job.cancel()
+        release.complete(Unit)
+        withTimeout(10_000) { done.await() }
+
+        assertEquals("取消后仍必须真的写一次文件", 1, harness.source.writes.size)
     }
 
     /**
@@ -337,6 +387,9 @@ class KdbxItemRepositoryTest {
         /** 让下一次 `write` 抛错，模拟落盘 IO 失败。 */
         var failNextWrite = false
 
+        /** #287：在写文件这一步停住，用于构造「调用方协程被取消」的确定时序。 */
+        var onWrite: (suspend () -> Unit)? = null
+
         override suspend fun stat(): KdbxFileStat = KdbxFileStat(
             versionToken = "token",
             sizeBytes = 0,
@@ -360,6 +413,8 @@ class KdbxItemRepositoryTest {
                 throw IllegalStateException("模拟落盘失败")
             }
             writes += bytes
+            // ⚠️ 放在 writes 之后：屏障放行时断言方一定能看到这次写入。
+            onWrite?.invoke()
             return KdbxFileWriteResult(versionToken = "token", sizeBytes = bytes.size.toLong(), remoteId = VAULT_ID)
         }
 

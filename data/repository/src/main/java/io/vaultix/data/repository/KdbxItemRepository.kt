@@ -48,7 +48,9 @@ import io.vaultix.model.VaultItem
 import io.vaultix.model.VaultItemType
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -85,11 +87,34 @@ class KdbxItemRepository @Inject constructor(
      *    ⇒ 这里把整笔写回串起来；单锁足够（KDBX 一次只编辑一个库，不同库最多排队）。
      *
      * 它同时承担切到 IO 的职责 —— 见下面那条注释，避免每个写动作各写一遍。
+     *
+     * ## ★★ #287（2026-11-12）：整笔写回必须**不可取消**
+     *
+     * 真机可复现：改完条目立刻返回 ⇒ `ItemDetailViewModel` 的 `viewModelScope`
+     * 被 `onCleared()` 取消 ⇒ 写回断在 [persist] 的 `Kdbx.verifyWrite()`
+     * （一次 KDF 往返自检，真机 1~5 s）。而 `Kdbx.mutateLocked` **在那之前就已经把
+     * 新会话换进内存**（所以本地立刻看得到改动），可 `fileCache.save` /
+     * `markLocalEdited` / `autoUploader.enqueue` 一行都没跑到 ⇒ DB 状态仍是
+     * `IN_SYNC`、缓存没有脏标记。用户接着点同步 ⇒ #286 的双真源判据两个都干净
+     * ⇒ 闸门放行、拉远端旧字节 `replaceSession` ⇒ 改动彻底消失。停留 5 秒则协程跑完、
+     * 「已保存到本地 · 正在同步到云端」出现、上传也排上队 ⇒ 「等一下就正常」。
+     *
+     * ⇒ 会话一旦换好，落盘就是**必须做完的原子动作**，不是能随页面生命周期撤销的
+     *   UI 工作。八个写动作全过这里 ⇒ 一处收口，不靠每个 ViewModel 各自记得。
+     *   （`ItemDetailViewModel.deleteItem` 早在 11-08 就用 `launch(NonCancellable)`
+     *    修过同一个坑，编辑 / 新建没跟上 ⇒ 这次把防线放到共享咽喉。）
+     *
+     * ⚠️ `withContext` 包在 `withLock` **外面**：等锁期间也不许被取消 —— 第二笔写回
+     *    若在锁前消失，而第一笔已经换了会话，同样是「UI 说改了、磁盘没改」。
+     * ⚠️ 代价是「点完保存立刻锁库 / 切后台」时写回仍会跑完（几秒）。这是对的：
+     *    取消一次半途的落盘只会制造三份互相矛盾的真相（见 [persist] 的 catch）。
      */
     private val writeGate = Mutex()
 
     private suspend fun <T> serialWrite(block: suspend () -> T): T =
-        writeGate.withLock { withContext(Dispatchers.IO) { block() } }
+        withContext(Dispatchers.IO + NonCancellable) {
+            writeGate.withLock { block() }
+        }
 
     // ⚠️⚠️ 八个写动作一律走 [serialWrite]（内含 `withContext(Dispatchers.IO)`）：它们都要经过
     //     `Kdbx.mutate`，而 `mutate` 的 KDoc 明确写着「编码代价与一次 KDF 相当，
@@ -293,6 +318,9 @@ class KdbxItemRepository @Inject constructor(
         //   / 排队上传之后，UI 必须等完才刷新。⇒ 一进来就 bump，界面立刻读新会话。
         //   失败时 catch 里回滚后再 bump 一次，三视图仍同源（见下方）。
         kdbxSessions.bump()
+        // ★ #287：失败回滚用的缓存快照。声明在 try 外，catch 才拿得到；
+        //   只有「已经写过脏缓存」之后才赋值，避免把一次没动过缓存的失败也回滚一遍。
+        var cacheRestore: (suspend () -> Unit)? = null
         // ⚠️ try 必须**覆盖整个函数体**（bump 之外）：`vaultDao.get` /
         //    `hasCloudSource` 任一抛异常都要走回滚 + 再 bump，否则
         //    列表停在旧快照、详情/回收站却读到新会话（真机「三份真相」）。
@@ -301,8 +329,36 @@ class KdbxItemRepository @Inject constructor(
             val origin = vaultDao.get(vaultId)?.origin
                 ?: error("这个库里没有对应记录，无法保存：$vaultId")
             val hasCloud = cloudSync.hasCloudSource(origin)
+
+            // ★★ #287（2026-11-12）：会话此刻已经换好（UI 立刻看得到改动），
+            //   先把「本地有未上传改动」落成**持久事实**，再做几秒的往返自检。
+            //   旧顺序是 `verifyWrite`(KDF 1~5s) → 写脏缓存：用户在这几秒返回会
+            //   取消 `viewModelScope`，落盘链断在自检里 ⇒ DB 还是 IN_SYNC、缓存没脏
+            //   标记，#286 的双真源判据两个都干净 ⇒ 点同步拉云端旧版覆盖，改动消失。
+            //   ⇒ 脏缓存先落（本地文件 IO，毫秒级）把盲窗压到最小；失败由 catch 恢复。
+            if (hasCloud) {
+                // ⚠️ 沿用旧令牌 —— 它是下一次条件写（If-Match）的基线，换成新值就再也
+                //    检测不到"远端变过"。
+                val previous = runCatching { fileCache.load(origin) }.getOrNull()
+                // ⚠️ 状态必须在写缓存之前读：下面 markLocalEdited 会把它改成 PENDING_UPLOAD。
+                val statusBeforeWrite = cloudSync.currentSyncStatus(vaultId)
+                fileCache.save(
+                    origin,
+                    CachedKdbxFile(bytes, previous?.versionToken, pendingLocalEdits = true),
+                )
+                cacheRestore = {
+                    if (previous == null) fileCache.remove(origin) else fileCache.save(origin, previous)
+                }
+                VaultixLog.d(TAG) {
+                    "保存先落脏缓存：${bytes.size}B，待上传脏标记已置，状态=$statusBeforeWrite，" +
+                        "基线 known=${write.baselineKnown}/aligned=${write.baselineAligned}"
+                }
+            }
+
             // ★★ 写回前的往返自检（2026-10-02 审计修复）：只解码不重编码，一次 KDF 量级。
-            //    放在这里让九个写动作共用同一个咽点；失败必须抛出 —— 落盘一份坏库不可逆。
+            //    放在**脏缓存之后**：它才是 #287 里被页面返回取消的那几秒。
+            //    八个写动作共用这一个咽点；失败必须抛出 —— 落盘一份坏库不可逆，
+            //    catch 会恢复刚写的脏缓存 + 回滚会话（见下方）。
             Kdbx.verifyWrite(vaultId, bytes).getOrElse { throw it.toUserFacing() }
 
             // 拒写闸门已前移到 [assertWritable]（mutate 之前）。走到这里的 `!aligned`
@@ -312,19 +368,6 @@ class KdbxItemRepository @Inject constructor(
             }
 
             if (hasCloud) {
-                // ⚠️ 沿用旧令牌 —— 它是下一次条件写（If-Match）的基线，换成新值就再也
-                //    检测不到"远端变过"。
-                val previousToken = runCatching { fileCache.load(origin) }.getOrNull()?.versionToken
-                // ⚠️ 状态必须在写缓存之前读：下面 markLocalEdited 会把它改成 PENDING_UPLOAD。
-                val statusBeforeWrite = cloudSync.currentSyncStatus(vaultId)
-                fileCache.save(
-                    origin,
-                    CachedKdbxFile(bytes, previousToken, pendingLocalEdits = true),
-                )
-                VaultixLog.d(TAG) {
-                    "保存落缓存：${bytes.size}B，待上传脏标记已置，状态=$statusBeforeWrite，" +
-                        "基线 known=${write.baselineKnown}/aligned=${write.baselineAligned}"
-                }
                 cloudSync.markLocalEdited(vaultId)
                 // ★★ 只要"出发时基线对齐"就推进，不再要求改动前是 IN_SYNC。
                 //    连续编辑时每一笔都基于上一笔的产物：基线不跟着走，第三笔就会被
@@ -345,15 +388,30 @@ class KdbxItemRepository @Inject constructor(
             Kdbx.commitMutation(write)
             return VaultSaveOutcome.Queued
         } catch (error: Exception) {
-            // ★ 2026-11-08 真机：这一支以前完全静默（异常被写动作的 runCatching 吞掉），
-            //    logcat 里分不清是「目标不存在」「往返自检失败」还是「落盘 IO 失败」。
-            VaultixLog.e(TAG, error) {
-                "保存失败，已回滚会话：${error.javaClass.simpleName}: ${error.message}"
+            // ★ #287：取消**不是**「保存失败」，必须原样重抛且**只**重抛。
+            //   `serialWrite` 已保证写回不可取消，正常情况下到不了这一支；万一到了，
+            //   下面的回滚链也不能跑 —— 协程已取消时每个挂起点都会立刻再抛，
+            //   回滚会半途而废，还可能把会话换了一半（与 CachedKdbxFileSource 同款分界）。
+            //   ⇒ 不记 ERROR、不动缓存、不动会话。合并进一个 catch 也是为了
+            //     detekt ThrowsCount（上限 2：自检的 `throw it.toUserFacing()` + 这里）。
+            if (error !is CancellationException) {
+                // ★ 2026-11-08 真机：这一支以前完全静默（异常被写动作的 runCatching 吞掉），
+                //    logcat 里分不清是「目标不存在」「往返自检失败」还是「落盘 IO 失败」。
+                VaultixLog.e(TAG, error) {
+                    "保存失败，已回滚会话：${error.javaClass.simpleName}: ${error.message}"
+                }
+                // ★ #287：自检 / 落盘失败时，刚写的脏缓存必须收回 —— 否则一份**没通过
+                //   往返自检**的字节会留在缓存里，下次解锁直接拿它解密（坏库）或把它
+                //   当成「本地有改动」推上远端。恢复失败只留痕，不掩盖原始错误。
+                runCatching { cacheRestore?.invoke() }
+                    .onFailure { restoreError ->
+                        VaultixLog.w(TAG) { "恢复缓存快照失败：${restoreError.message}" }
+                    }
+                Kdbx.rollbackMutation(vaultId, write)
+                // ★ 回滚后必须再 bump：开头那次让 UI 看到了新会话，失败要收回来，
+                //    否则界面停在"已删除"而磁盘根本没动（三份真相）。
+                kdbxSessions.bump()
             }
-            Kdbx.rollbackMutation(vaultId, write)
-            // ★ 回滚后必须再 bump：开头那次让 UI 看到了新会话，失败要收回来，
-            //    否则界面停在"已删除"而磁盘根本没动（三份真相）。
-            kdbxSessions.bump()
             throw error
         }
     }

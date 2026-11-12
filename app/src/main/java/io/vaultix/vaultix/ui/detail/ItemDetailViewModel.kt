@@ -345,28 +345,42 @@ class ItemDetailViewModel @Inject constructor(
         val current = _state.value
         if (current.saving) return
         _state.update { it.copy(saving = true) }
+        // ★★ #287（2026-11-12）：整笔写回必须**不可取消** —— 用户点完保存常立刻返回，
+        //   `viewModelScope` 在 `onCleared()` 被取消；而 KDBX 写回里的
+        //   `Kdbx.verifyWrite()` 是一次 KDF 往返自检（真机 1~5 s）。取消落在那几秒
+        //   ⇒ 会话已换（本地看得到改动）但落缓存 / `markLocalEdited` / 排自动上传
+        //   全没跑 ⇒ 接着点同步就被云端旧版覆盖。真机原话：「改完立刻返回就丢，
+        //   停 5 秒看到『已保存到本地 · 正在同步到云端』才生效」。
+        //   `deleteItem()` 早在 11-08 就用 NonCancellable 修过同一个坑，编辑没跟上。
+        // ⚠️ 用 `withContext(NonCancellable)` 而不是 `launch(NonCancellable)`：
+        //    后者在较新的协程版本已 deprecated（破坏结构化并发，未来会变成编译错误）。
+        //    语义相同：页面返回取消的是外层 launch，块内写回与状态收口照跑完。
+        // ⚠️ data 层 `KdbxItemRepository.serialWrite` 已统一兜底（八个写动作全覆盖），
+        //    这里是第二层：让 `saving=false` 与成功提示也能正常收口，而非只保住数据。
         viewModelScope.launch {
-            val outcome = itemRepository.updateItem(vaultId = vaultId, item = item)
-            _state.update { it.copy(saving = false) }
-            _events.send(
-                outcome.fold(
-                    onSuccess = { saved ->
-                        // ★ 11-07：保存成功即把上传态**乐观上屏**，不等 Room 失效通知。
-                        //   真机：点保存到进度条出现有几秒空窗，被读作「没触发同步」。
-                        //   ⚠️ 只改展示层：仅云端 KDBX 库（syncStatus 非空）且结果是 Queued 时置；
-                        //      真实状态随后由 observeVaults() 接管，publishSyncStatus 的
-                        //      最短可见窗口保证不会一闪而过；保存失败不置。
-                        if (saved == VaultSaveOutcome.Queued && _state.value.syncStatus != null) {
-                            publishSyncStatus(KdbxCloudSyncStatus.PENDING_UPLOAD)
-                        }
-                        when (saved) {
-                            VaultSaveOutcome.Synced -> UiEvent.SaveSynced
-                            VaultSaveOutcome.Queued -> UiEvent.SaveQueued
-                        }
-                    },
-                    onFailure = { error -> UiEvent.SaveFailed(error.message) },
-                ),
-            )
+            withContext(NonCancellable) {
+                val outcome = itemRepository.updateItem(vaultId = vaultId, item = item)
+                _state.update { it.copy(saving = false) }
+                _events.send(
+                    outcome.fold(
+                        onSuccess = { saved ->
+                            // ★ 11-07：保存成功即把上传态**乐观上屏**，不等 Room 失效通知。
+                            //   真机：点保存到进度条出现有几秒空窗，被读作「没触发同步」。
+                            //   ⚠️ 只改展示层：仅云端 KDBX 库（syncStatus 非空）且结果是 Queued 时置；
+                            //      真实状态随后由 observeVaults() 接管，publishSyncStatus 的
+                            //      最短可见窗口保证不会一闪而过；保存失败不置。
+                            if (saved == VaultSaveOutcome.Queued && _state.value.syncStatus != null) {
+                                publishSyncStatus(KdbxCloudSyncStatus.PENDING_UPLOAD)
+                            }
+                            when (saved) {
+                                VaultSaveOutcome.Synced -> UiEvent.SaveSynced
+                                VaultSaveOutcome.Queued -> UiEvent.SaveQueued
+                            }
+                        },
+                        onFailure = { error -> UiEvent.SaveFailed(error.message) },
+                    ),
+                )
+            }
         }
     }
 
@@ -383,18 +397,21 @@ class ItemDetailViewModel @Inject constructor(
         //    否则用户"看着删了"而删除协程被取消，改动根本没落盘。
         //    失败时 persist 已回滚会话（三视图同源），条目仍会出现在列表里，
         //    不会出现"看着删了其实没删"；这里只补一次失败事件（页面已返回，可能无人收集）。
-        viewModelScope.launch(NonCancellable) {
-            val outcome = itemRepository.softDeleteItem(vaultId, itemId)
-            outcome.fold(
-                onSuccess = {
-                    // ★ 条目删了就把它解密出来的附件明文一起清掉（#193）。
-                    //    挂在"删除成功之后"：删除可能失败，失败时缓存还得继续用。
-                    withContext(NonCancellable) {
+        // ⚠️ #287：与 updateItem 统一改用 `withContext(NonCancellable)` ——
+        //    `launch(NonCancellable)` 已 deprecated，语义相同且少一条编译警告。
+        viewModelScope.launch {
+            withContext(NonCancellable) {
+                val outcome = itemRepository.softDeleteItem(vaultId, itemId)
+                outcome.fold(
+                    onSuccess = {
+                        // ★ 条目删了就把它解密出来的附件明文一起清掉（#193）。
+                        //    挂在"删除成功之后"：删除可能失败，失败时缓存还得继续用。
+                        //    ⚠️ 外层已在 NonCancellable 下，不必再套一层 withContext。
                         runCatching { sensitiveCache.invalidateFor(itemId) }
-                    }
-                },
-                onFailure = { error -> _events.trySend(UiEvent.SaveFailed(error.message)) },
-            )
+                    },
+                    onFailure = { error -> _events.trySend(UiEvent.SaveFailed(error.message)) },
+                )
+            }
         }
     }
 

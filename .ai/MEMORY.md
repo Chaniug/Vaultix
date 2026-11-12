@@ -1,11 +1,31 @@
 # Vaultix 项目长期笔记
 
 > **接力顺序（先读这四份，再动手）**：
-> 本文件（约定 / 硬约束 / 决策）→ `.ai/ISSUES.md`（坑：现象-根因-解法，最新 **#285**）→
+> 本文件（约定 / 硬约束 / 决策）→ `.ai/ISSUES.md`（坑：现象-根因-解法，最新 **#287**）→
 > `Docs/progress/next-steps.md`（待办唯一真源；历史按时间段归档，见文末索引）→ `Docs/progress/current-status.md`（进度快照）
 > → `.ai/SESSION-YYYY-MM-DD.md`（逐轮流水，需要细节才翻）。
 >
-> 最后更新：2026-11-12（**#285 六组 UI / 主题 / KDBX 反馈**：网盘账号卡精修、域名分组
+> 最后更新：2026-11-12（**#287 改完 KDBX 条目立刻返回等于没保存**（协程取消 / 写回持久性）：
+> 用户补充「点保存后停 5 秒才生效、大部分人点完就返回」⇒ **判据第三次反转** —— 不是 #286
+> 的同步闸门，而是写回协程跑在 `viewModelScope` 里被页面返回取消在 `Kdbx.verifyWrite()`
+> 的 KDF 1~5 s 窗口内：`mutateLocked` 已换内存会话（本地立刻可见），脏缓存 /
+> `markLocalEdited` / `enqueue` 全没跑 ⇒ #286 的双真源判据两个都干净 ⇒ 拉云端旧版覆盖。
+> 修法四道防线（`serialWrite` 收口 `NonCancellable`、脏缓存提到自检前、`cacheRestore`
+> 失败恢复、UI 层 `withContext(NonCancellable)`）。⚠️ 长期教训：
+> **「先保证写回跑完，再谈同步闸门别覆盖」是串联不是并联** —— 上一轮的完成口径会被
+> 下一轮真机反馈反转，越是「局部全绿」越要回查**调用链更早的那一段**；
+> **数据落盘是原子动作，不该挂在页面生命周期上**（`deleteItem` 11-08 已中过同一坑，
+> 防线要放共享咽喉而非逐个 ViewModel 打补丁）；**取消不是失败**（`CancellationException`
+> 只重抛，取消态下跑回滚链会半途而废）；**`launch(NonCancellable)` 已 deprecated**，
+> 统一 `launch { withContext(NonCancellable) { } }`；**`functionBody()` 要从签名起点截**
+> （表达式体 `= withContext(...) { }` 的第一个 `{` 属于 lambda，从那里截会漏判）；
+> **行为测试必须做反证**（撤掉 `NonCancellable` 后用例必须变红）。
+> 详情见 `issues/06-界面与交互-part25.md`；
+> 上一轮 **#286 OneDrive KDBX 改动被刷新覆盖**（数据完整性 / 同步状态机）：
+> `hasUnsyncedLocalEdits()` 双真源唯一判据 + 下载前后两道刷新闸门 + `readRemoteCurrent`
+> 回写前现查脏标记 + 冷启动 / 解锁补传，含「启动扫一次在锁态空转」的第二轮补正；
+> 核心纪律 **DB 状态是展示快照、缓存脏标记才是事实**，详见 `issues/06-界面与交互-part24.md`；
+> 上一轮 **#285 六组 UI / 主题 / KDBX 反馈**：网盘账号卡精修、域名分组
 > 整体化、详情页长标题单行、「+」剪影卡改 M3 fixed accent roles、主题默认色与动态取色
 > 修复、KDBX 顶栏统一显示 `KDBX`，六组全改生产代码。反编译取证两个主题根因：静态色板
 > 一个 fixed role 都没传（关动态取色回退基线紫 / 开则壁纸色，两档跳变）+ `dynamicColor`
@@ -217,6 +237,14 @@ Gradle 9.8.2 / AGP 9.5.0 / Kotlin 2.4.21 / KSP 2.3.13 / Hilt 2.60.1 / compileSdk
 > - **判据沉淀**：[8.11 七类「不报错的错」](./conventions/8.11-七类不报错的错.md)；
 > - **项目整体排查（2026-11-11）**：[`Docs/progress/audit/project-audit-2026-11-11.md`](../Docs/progress/audit/project-audit-2026-11-11.md)
 >   —— 依赖矩阵 / 规范符合性 / 稳定性与性能方案；**只出报告，未改生产代码**；
+> - **改完 KDBX 条目立刻返回等于没保存（2026-11-12）**：[`#287` 接力记录](./issues/06-界面与交互-part25.md)
+>   —— **不是 #286 的同步闸门，是更前面的写回持久性**；`viewModelScope` 被页面返回取消
+>   在 `Kdbx.verifyWrite()` 的 KDF 几秒窗口里，会话已换而脏标记没落 ⇒ 双真源两个都干净。
+>   核心纪律：**先保证写回跑完，再谈同步闸门别覆盖**（串联不是并联）；
+>   **落盘是原子动作，防线放在共享咽喉 `serialWrite`，别逐个 ViewModel 补**；
+>   **取消不是失败**（取消态跑回滚链必半途而废）；
+>   `launch(NonCancellable)` 已 deprecated ⇒ 用 `withContext(NonCancellable)`；
+>   源码门禁判表达式体函数要从**签名起点**配平括号；
 > - **OneDrive KDBX 改动被刷新覆盖（2026-11-12）**：[`#286` 接力记录](./issues/06-界面与交互-part24.md)
 >   —— **不是 UI 观感，是数据完整性**；两个叠加根因：① 刷新闸门只读 DB 状态，
 >   而自动上传把 `PENDING_UPLOAD` 洗成 `SYNCING`/`FAILED`，`impliesLocalChanges` 不认
