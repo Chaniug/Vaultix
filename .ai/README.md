@@ -55,6 +55,10 @@
 `KdbxCloudSyncCoordinatorTest` +4 / `CachedKdbxFileSourceTest` +1 /
 `KdbxAutoUploaderTest` +4；相关四测试类 47 例 0 失败。
 
+**提交 / CI**：`68665533` 已推送 `main`，`AI docs consistency` success（9s）、
+`Android CI (Debug)` success（4m51s，两个 job 全绿）；preview Release 自动更新为
+`Vaultix v0.12.0-dev-6866553 · Preview`（`app-full-debug.apk`，37.6MB）。
+
 **待真机验收**：上传中途返回 / 断网后刷新必须弹冲突而非变回旧内容；杀进程冷启动、
 解锁后改动自动补传（不必再点同步）；下载那 1–10 s 内再编辑，会话与缓存都不被盖。
 
