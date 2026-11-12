@@ -1,7 +1,7 @@
 <div align="center">
 
 <h1 align="center">
-  <img src="./Docs/assets/vaultix-banner.webp" alt="Vaultix —— Android 开源密码管理器，同时支持 Bitwarden 云端库与 KeePass KDBX 本地库" width="600" />
+  <img src="./Docs/assets/vaultix-banner.webp" alt="Vaultix —— Android 开源密码管理器，同时支持 Bitwarden 云端库与 KeePass KDBX 本地库" width="640" />
 </h1>
 
 **Android 开源密码管理器 —— 同时支持 Bitwarden 云端库与 KeePass KDBX 本地库**
@@ -12,6 +12,8 @@
 [![Platform](https://img.shields.io/badge/Android-8.0%2B%20(API%2026)-3DDC84?logo=android&logoColor=white)](https://developer.android.com)
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.4-7F52FF?logo=kotlin&logoColor=white)](https://kotlinlang.org)
 [![Compose](https://img.shields.io/badge/Jetpack%20Compose-Material%203-4285F4?logo=jetpackcompose&logoColor=white)](https://developer.android.com/jetpack/compose)
+
+[**官网**](https://vaultix.valk.ccwu.cc) · [**下载 APK**](https://github.com/Chaniug/Vaultix/releases/latest) · [**预览版**](https://github.com/Chaniug/Vaultix/releases/tag/preview)
 
 </div>
 
@@ -32,6 +34,18 @@ Vaultix 是一个 Android 密码管理器。与多数同类不同的是，它**�
 网盘账号在**设置 → 网盘账号**里统一管理，与"添加库"解耦（详见 [Docs/18](./Docs/18-Bastion参考地图.md) 与设置页信息架构定稿）。
 
 > 名字来自 **Vault**（保险库）+ **-ix**（技术感后缀）。
+
+## 📱 界面
+
+<p align="center">
+  <img src="./Docs/assets/screenshots/vaults.webp" width="200" alt="密码条目：分组、收藏、回收站" />
+  &nbsp;
+  <img src="./Docs/assets/screenshots/totp.webp" width="200" alt="验证码：TOTP / HOTP / mOTP" />
+  &nbsp;
+  <img src="./Docs/assets/screenshots/wallet.webp" width="200" alt="卡包：支付卡与身份信息" />
+</p>
+
+<p align="center"><sub>密码条目 · 验证码 · 卡包 —— 更多界面见 <a href="https://vaultix.valk.ccwu.cc/#screens">官网</a>（截图中的个人数据已做模糊处理）</sub></p>
 
 ## ✨ 功能
 
