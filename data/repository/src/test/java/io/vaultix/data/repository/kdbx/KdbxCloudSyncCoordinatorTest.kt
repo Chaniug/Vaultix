@@ -139,6 +139,114 @@ class KdbxCloudSyncCoordinatorTest {
     }
 
     /**
+     * ★★ #286（2026-11-12）：**上传中途返回 / 断网之后刷新，改动不许被云端覆盖**。
+     *
+     * 真机可复现的链路：`persist` 写脏缓存 + `PENDING_UPLOAD` → `autoUploader` 起跑，
+     * `sync` 一开头 `markStatus(SYNCING)` → 用户返回 / 断网 ⇒ 状态停在 `SYNCING`。
+     * 旧闸门用 `impliesLocalChanges` 读 DB，而 `SYNCING` 不算「本地改过」 ⇒ 放行拉取，
+     * 用远端**旧字节**替换会话，末尾还 `fileCache.save` 把脏缓存一起盖掉 ⇒ 改动永久消失。
+     *
+     * ⇒ 判据改走 [KdbxCloudSyncCoordinator.hasUnsyncedLocalEdits]（DB 状态 **或** 脏标记）。
+     *   本例把 DB 摆成 `SYNCING`、只让缓存脏，旧实现必定失败。
+     */
+    @Test
+    fun `状态是同步中但缓存脏_刷新必须被拦下且不碰缓存`() = runTest {
+        val status = AtomicReference(KdbxCloudSyncStatus.SYNCING.name)
+        val source = mockk<KdbxFileSource>(relaxed = true)
+        coEvery { source.stat() } returns KdbxFileStat(versionToken = "v2")
+        coEvery { source.readRemoteCurrent() } returns ByteArray(4) { 9 }
+        val replacer = mockk<KdbxSessionReplacer>(relaxed = true)
+        coEvery { replacer.replace(VAULT_ID, any()) } returns Result.success(Unit)
+        val cache = mockk<KdbxFileCache>(relaxed = true)
+        coEvery { cache.load(any()) } returns CachedKdbxFile(
+            ByteArray(3) { 1 }, "v1", pendingLocalEdits = true,
+        )
+
+        val coordinator = coordinator(status, source, replacer, this@runTest, cache)
+        val result = coordinator.resolveUsingRemote(VAULT_ID)
+
+        assertEquals(KdbxSyncResult.Conflict("v2"), result)
+        coVerify(exactly = 0) { source.readRemoteCurrent() }
+        coVerify(exactly = 0) { replacer.replace(any(), any()) }
+        // ★ 脏缓存必须原样留着 —— 那笔改动还在里面，等下一次补传推上云端。
+        coVerify(exactly = 0) { cache.save(any(), any()) }
+    }
+
+    /** 失败态同样不算 `impliesLocalChanges`；脏标记是唯一还站得住的证据。 */
+    @Test
+    fun `状态是同步失败但缓存脏_判据仍认定有未上传改动`() = runTest {
+        val status = AtomicReference(KdbxCloudSyncStatus.FAILED.name)
+        val cache = mockk<KdbxFileCache>(relaxed = true)
+        coEvery { cache.load(any()) } returns CachedKdbxFile(
+            ByteArray(2), "v1", pendingLocalEdits = true,
+        )
+        val coordinator = coordinator(
+            status, mockk(relaxed = true), mockk(relaxed = true), this@runTest, cache,
+        )
+
+        assertTrue(
+            "FAILED 会被 impliesLocalChanges 判成「本地没改」，只剩缓存脏标记能兜住",
+            coordinator.hasUnsyncedLocalEdits(VAULT_ID),
+        )
+    }
+
+    /**
+     * ★ 下载那 1–10 s 里用户又编辑了一笔 ⇒ **第二道闸门**（`read` 之后）必须拦下。
+     *
+     * 旧代码只有 `read` 之前那一道，KDoc 却写着「长窗口已被覆盖」—— 实际上闸门在
+     * read 之前，覆盖不了下载期间。这一笔会被 `replaceSession` + `markResolved` +
+     * `fileCache.save` 三连抹掉。
+     */
+    @Test
+    fun `下载期间产生本地改动_第二道闸门拦下会话替换`() = runTest {
+        val status = AtomicReference(KdbxCloudSyncStatus.IN_SYNC.name)
+        val dirty = AtomicReference(false)
+        val source = mockk<KdbxFileSource>(relaxed = true)
+        coEvery { source.stat() } returns KdbxFileStat(versionToken = "v2")
+        val remote = ByteArray(4) { 9 }
+        // ⚠️ 用「副作用把脏标记翻真」而不是数 load 次数：装置里任何额外的缓存读
+        //    都不会把这条用例变成假绿/假红。
+        coEvery { source.readRemoteCurrent() } coAnswers {
+            dirty.set(true)
+            remote
+        }
+        val replacer = mockk<KdbxSessionReplacer>(relaxed = true)
+        coEvery { replacer.replace(VAULT_ID, any()) } returns Result.success(Unit)
+        val cache = mockk<KdbxFileCache>(relaxed = true)
+        coEvery { cache.load(any()) } coAnswers {
+            CachedKdbxFile(ByteArray(2), "v1", pendingLocalEdits = dirty.get())
+        }
+
+        val coordinator = coordinator(status, source, replacer, this@runTest, cache)
+        val result = coordinator.resolveUsingRemote(VAULT_ID)
+
+        assertEquals(KdbxSyncResult.Conflict("v2"), result)
+        coVerify(exactly = 1) { source.readRemoteCurrent() }
+        coVerify(exactly = 0) { replacer.replace(any(), any()) }
+        coVerify(exactly = 0) { cache.save(any(), any()) }
+    }
+
+    /**
+     * **反证**：双真源不是「永远返回 true」。DB 是 `SYNCING` 而缓存**干净**时，
+     * 拉取必须照常进行，否则正常同步会被新判据挡死。
+     */
+    @Test
+    fun `状态是同步中但缓存干净_反证_正常下载并替换会话`() = runTest {
+        val status = AtomicReference(KdbxCloudSyncStatus.SYNCING.name)
+        val source = mockk<KdbxFileSource>(relaxed = true)
+        coEvery { source.stat() } returns KdbxFileStat(versionToken = "v2")
+        coEvery { source.readRemoteCurrent() } returns ByteArray(4) { 3 }
+        val replacer = mockk<KdbxSessionReplacer>(relaxed = true)
+        coEvery { replacer.replace(VAULT_ID, any()) } returns Result.success(Unit)
+        val cache = mockk<KdbxFileCache>(relaxed = true)
+        coEvery { cache.load(any()) } returns CachedKdbxFile(ByteArray(2), "v1")
+
+        val coordinator = coordinator(status, source, replacer, this@runTest, cache)
+        assertEquals(KdbxSyncResult.Downloaded, coordinator.resolveUsingRemote(VAULT_ID))
+        coVerify(exactly = 1) { replacer.replace(VAULT_ID, any()) }
+    }
+
+    /**
      * ★ **上传成功必须把收敛回调接上**（#233）。
      *
      * ## 为什么这条必须存在，以及它第一版为什么是假绿
@@ -345,6 +453,8 @@ class KdbxCloudSyncCoordinatorTest {
         source: KdbxFileSource,
         replacer: KdbxSessionReplacer,
         scope: CoroutineScope,
+        /** ★ #286：可注入的缓存，用来摆出「DB 状态不脏、缓存脏」这一真机局面。 */
+        cache: KdbxFileCache = mockk(relaxed = true),
     ): KdbxCloudSyncCoordinator {
         // `relaxed = true` 只是为了让 `updateSyncState` 这类**与断言无关**的副作用
         // （协调器成功下载后会 `markResolved` 记 IN_SYNC）不用逐个打桩；
@@ -370,7 +480,7 @@ class KdbxCloudSyncCoordinatorTest {
             sessionReplacer = replacer,
             okHttp = { null },
             webDavCredentials = mockk(relaxed = true),
-            fileCache = mockk<KdbxFileCache>(relaxed = true),
+            fileCache = cache,
             appScope = scope,
         )
     }

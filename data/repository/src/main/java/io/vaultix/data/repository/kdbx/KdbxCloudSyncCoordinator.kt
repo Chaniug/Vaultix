@@ -422,14 +422,46 @@ class KdbxCloudSyncCoordinator(
     }
 
     /**
-     * **现查**本地有没有未上传的改动（读持久化的 `vaults.syncStatus`）。
+     * ★★ 本机是否存在「**还没推到远端**」的改动 —— **唯一判据**（#286，2026-11-12）。
+     *
+     * ## 为什么必须是「DB 状态 **或** 缓存脏标记」
+     *
+     * 用户可复现的丢改动链路（OneDrive 上的 kdbx）：
+     *
+     * ```
+     * 改条目 → persist 写缓存(pendingLocalEdits=true) + markLocalEdited(PENDING_UPLOAD)
+     *        → autoUploader 起跑，sync 一开头 markStatus(SYNCING)
+     *        → 用户返回 / 断网 ⇒ 状态停在 SYNCING 或写 FAILED
+     *        → 刷新（pull / resolveUsingRemote）：impliesLocalChanges(SYNCING|FAILED)=false
+     *        → 闸门放行 → 拉远端旧字节 → replaceSession 换掉会话
+     *        → fileCache.save(远端字节) 顺手清掉脏标记 ⇒ 那笔改动彻底消失
+     * ```
+     *
+     * `impliesLocalChanges` 只认 `PENDING_UPLOAD` / `PENDING_UPLOAD_WITH_LOCAL_CHANGES` /
+     * `CONFLICT`，**不认** `SYNCING` / `FAILED` / `IN_SYNC` / `REMOTE_CHANGED`；
+     * 而这些恰恰是「上传开始后、成功之前」的常态。缓存里的脏标记则**只在
+     * `write()` 上传成功后才清**（见 [CachedKdbxFileSource.write]），不会说谎。
+     *
+     * ⇒ 判「有没有未上传改动」一律走这里，不要各自读 DB 状态。这与
+     *   [KdbxAutoUploader.hasWork]、[sync] 的 11-07 修法是同一条纪律：
+     *   **DB 状态是展示用的瞬时快照，缓存脏标记才是「改动还在不在」的事实**。
+     *
+     * ⚠️ 读缓存失败按「没有」处理（保守，不凭空挡住拉取）；此时 DB 状态仍在，
+     *    正常保存路径下的 `PENDING_UPLOAD` 照样能被判出来。
+     */
+    suspend fun hasUnsyncedLocalEdits(vaultId: String): Boolean =
+        persistedStatusSaysLocalChanges(vaultId) || hasCachedLocalEdits(vaultId)
+
+    /**
+     * 只读持久化的 `vaults.syncStatus`（**不是**完整判据，别直接拿去挡拉取）。
      *
      * 判据只有一份：[KdbxCloudSyncStatus.impliesLocalChanges]。
-     * `KdbxSyncRepositoryImpl.localChangedSinceLastSync` 与这里同源 ——
-     * 在这个类里也留一份，是因为 [resolveUsingRemote] 需要在**下载之前**
-     * 自己再判一次（见那里的说明），而它拿不到仓储层。
+     * ⚠️ 2026-11-12 #286 起改名为「persisted…」并收成私有：旧名字让人以为它
+     *    回答了「本地有没有改动」，于是 `resolveUsingRemote` 拿它当唯一闸门，
+     *    漏掉 [hasCachedLocalEdits] ⇒ 上传中途返回 / 断网后刷新把改动覆盖掉。
+     *    要判这件事请走 [hasUnsyncedLocalEdits]。
      */
-    private suspend fun localChangedSinceLastSync(vaultId: String): Boolean =
+    private suspend fun persistedStatusSaysLocalChanges(vaultId: String): Boolean =
         KdbxCloudSyncStatus.fromName(vaultDao.get(vaultId)?.syncStatus)?.impliesLocalChanges == true
 
     /**
@@ -449,7 +481,7 @@ class KdbxCloudSyncCoordinator(
      *   ## 为什么需要这个开关（2026-11-03 修掉的一个死按钮）
      *
      * 下面那道"本地有未上传改动就不许拉"的闸门，本意是**防止自动拉取静默吞掉编辑**。
-     * 但它是用 `localChangedSinceLastSync` 判的，而该判据把 `CONFLICT` 也算成
+     * 但它是用「只读 DB 状态」的判据判的，而该判据把 `CONFLICT` 也算成
      * "有本地改动"（那是给编排器判"两边都改"用的）。于是出现一个自锁：
      *
      * ```
@@ -486,14 +518,17 @@ class KdbxCloudSyncCoordinator(
         // 那笔编辑被静默抹掉，且当前状态马上被记成 `IN_SYNC`（"已同步"）——
         // **没有任何地方会再提醒他**。
         //
-        // 判据用 `localChangedSinceLastSync`（读持久化的 `syncStatus`，只此一份），
-        // 它在 `persist` 里由 `markLocalEdited` 同步写入 ⇒ 编辑一落盘就能看见。
+        // ★ #286：判据从「只读 DB 状态」换成 [hasUnsyncedLocalEdits]（DB 状态 **或**
+        //   缓存脏标记）。只认 DB 状态时，`SYNCING` / `FAILED` 会被误读成"本地没改" ——
+        //   而这正是「上传中途返回 / 断网」后刷新把改动覆盖掉的真因。
         //
-        // ⚠️ 窗口的残留：判断与 read 之间仍有微秒级 gap，但真正长的窗口（下载）被覆盖了；
-        //    要彻底消掉得把"编辑"也纳入同一把锁，而那是 UI 线程会等的锁 —— 不值。
-        //    这里选择"宁可多报一次冲突，也不静默覆盖"：报冲突最坏是多点一下，
+        // ⚠️ 这道闸门只挡「判断之前发生的编辑」；下载那几秒里新产生的编辑由下面
+        //    `readRemoteCurrent()` 之后的**第二道检查**挡（#286 补）。两道都不做 IO 覆盖，
+        //    宁可多报一次冲突，也不静默覆盖：报冲突最坏是多点一下，
         //    覆盖的代价是**用户那一笔永远没了**。
-        if (!discardLocalChanges && localChangedSinceLastSync(vaultId)) {
+        //    ⚠️ 判断与 read 之间仍有微秒级 gap，要彻底消掉得把"编辑"也纳入同一把锁，
+        //       而那是 UI 线程会等的锁 —— 不值。
+        if (!discardLocalChanges && hasUnsyncedLocalEdits(vaultId)) {
             // ⚠️ **不要**用 `markDeferred`：它只在状态已是 CONFLICT 时生效（它的语义是
             //    "用户点了稍后"），用在这里等于什么都不做，状态会停在 `SYNCING`。
             //    也不要把本地改动改写成 CONFLICT —— 那会伪报"两边都改了"，
@@ -521,6 +556,25 @@ class KdbxCloudSyncCoordinator(
         val bytes = runCatching { source.readRemoteCurrent() }.getOrElse { error ->
             return KdbxSyncResult.Failed(error.message?.takeIf { it.isNotBlank() } ?: "无法读取远端文件")
         }
+
+        // ★★ 下载**之后**、替换会话**之前**再判一次（#286，2026-11-12）。
+        //
+        // ## 这才是真正覆盖「长窗口」的那道
+        //
+        // 上面那道闸门在 `readRemoteCurrent()` **之前**，而下载真机要 1–10 s。
+        // 用户完全可能在这几秒里又编辑一笔：`persist` 会写脏缓存 + `markLocalEdited`。
+        // 旧代码没有任何检查就一路 `replaceSession` → `markResolved` → `fileCache.save`
+        // ⇒ 会话换成远端旧版、状态记成「已同步」、脏缓存被远端字节盖掉，
+        //   **那笔编辑永久消失且无人提醒**。旧 KDoc 里「长窗口已被覆盖」的说法是错的：
+        //   闸门在 read 之前，覆盖不了 read 期间。
+        //
+        // ⇒ 这里用同一个 [hasUnsyncedLocalEdits] 现查：有改动就**原样保留**
+        //   （不替换会话、不记已同步、不动缓存），转冲突交用户拍板。
+        //   `discardLocalChanges = true` 是用户在冲突对话框里的明确选择，跳过本道。
+        if (!discardLocalChanges && hasUnsyncedLocalEdits(vaultId)) {
+            return KdbxSyncResult.Conflict(currentRemoteVersion = remoteToken)
+        }
+
         sessionReplacer.replace(vaultId, bytes).exceptionOrNull()?.let { error ->
             // ⚠️ 会话没换成功 ⇒ **不能**记"已同步"。留在 CONFLICT 上，让用户还能再选一次。
             orchestrator.markDeferred(vaultId)

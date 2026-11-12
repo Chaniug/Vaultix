@@ -284,9 +284,20 @@ internal class CachedKdbxFileSource(
         }
 
         val bytes = delegate.read()
+        // ★★ #286（2026-11-12）：[hasLocalEdits] 是**下载之前**读的快照，而
+        //   `delegate.read()` 真机要 1–10 s。下载期间用户完全可以编辑一笔，
+        //   `persist` 会写一份带 pendingLocalEdits 的脏缓存 —— 那个快照已经过期。
+        //   照旧回写就会用远端**旧字节**盖掉刚落盘的本地改动，且协调器那道
+        //   「下载之后」的闸门管不到装饰器内部的这次写（会话保住了，缓存没了）。
+        // ⇒ 回写前**现查一次**脏标记。⚠️ 读缓存失败也不写（fail-closed）：
+        //   「没有缓存」（首次下载，允许写）与「读失败」（不许写）必须分开，
+        //   所以不能用 `getOrNull()` 一个值把两者混掉。
+        val loadNow = runCatching { cache.load(cacheKey) }
+        val dirtyNow = loadNow.getOrNull()?.pendingLocalEdits == true
+        val loadFailed = loadNow.isFailure
         // ⚠️ 本地有未上传改动时**绝不回写缓存**：那会用远端旧字节盖掉用户刚编辑的内容。
         //    缓存保持 dirty，直到自动上传成功由 `write()` 写回干净版本。
-        if (!hasLocalEdits) {
+        if (!hasLocalEdits && !dirtyNow && !loadFailed) {
             runCatching { cache.save(cacheKey, CachedKdbxFile(bytes, token)) }
                 .onSuccess {
                     VaultixLog.d(TAG) {
@@ -297,7 +308,7 @@ internal class CachedKdbxFileSource(
                     VaultixLog.w(TAG) { "换缓存失败（不影响本次读到的字节）：${error.message}" }
                 }
         } else {
-            VaultixLog.d(TAG) { "缓存含本地未上传改动 ⇒ 真读远端，且不覆盖缓存" }
+            VaultixLog.d(TAG) { "缓存含本地未上传改动或读取失败 ⇒ 真读远端，且不覆盖缓存" }
         }
         return bytes
     }

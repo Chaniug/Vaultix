@@ -11,6 +11,7 @@ import io.vaultix.database.dao.VaultDao
 import io.vaultix.database.entity.VaultEntity
 import io.vaultix.model.KdbxCloudSyncStatus
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -260,6 +261,106 @@ class KdbxAutoUploaderTest {
     }
 
     /** 会变的 `syncStatus`（模拟编排器写回状态）。 */
+    /**
+     * ★★ #286（2026-11-12）：**断网 / 进程被杀后冷启动，改动必须被补传**。
+     *
+     * `enqueue` 只在 `persist`（保存那一刻）调用；上传失败重试到上限或进程被杀后，
+     * 没有人再排第二次队 ⇒ 改动以 `pendingLocalEdits` 一直躺在磁盘缓存里，
+     * 本地看得到、云端永远是旧内容。真机表现就是「同步过程中返回了 / 断网了，
+     * 相当于没同步」。
+     *
+     * ⚠️ DB 状态特意摆成 `FAILED`（`hasPendingUpload = false`）—— 模拟上传失败后
+     *    的真实状态。只有缓存脏标记能证明「还有活要干」。
+     */
+    @Test
+    fun `冷启动补传_状态失败但缓存脏_仍会重新排队上传`() = runTest {
+        val status = statusOf(KdbxCloudSyncStatus.FAILED)
+        val dao = mockk<VaultDao>()
+        every { dao.observeAll() } returns flowOf(listOf(row(CLOUD_ORIGIN, status.get(), VAULT_ID)))
+        coEvery { dao.get(VAULT_ID) } coAnswers { row(CLOUD_ORIGIN, status.get(), VAULT_ID) }
+        val dirty = AtomicReference(true)
+        val coordinator = mockk<KdbxCloudSyncCoordinator> {
+            every { hasCloudSource(CLOUD_ORIGIN) } returns true
+            coEvery { hasCachedLocalEdits(VAULT_ID) } coAnswers { dirty.get() }
+            coEvery { sync(VAULT_ID, true) } coAnswers {
+                dirty.set(false)
+                status.set(KdbxCloudSyncStatus.IN_SYNC.name)
+                KdbxSyncResult.Uploaded("v2")
+            }
+        }
+
+        // ⚠️ 显式注入会话判据：生产默认读 Kdbx.isUnlocked（进程里没有真实会话），
+        //    不注入会让这条用例被"锁态过滤"安静地跳过，变成假绿。
+        KdbxAutoUploader(dao, coordinator).resumePendingUploadsNow(sessionReady = { true })
+
+        coVerify(exactly = 1) { coordinator.sync(VAULT_ID, true) }
+    }
+
+    /**
+     * ★★ #286：**冷启动库还锁着时绝不发起同步**。
+     *
+     * 上传字节由 `Kdbx.saveVia` 从内存会话现编码，锁态下必然 `NotUnlocked` 失败；
+     * 不加过滤地扫全表 ⇒ 每个脏库写一条假 `FAILED` + 退避重试 3 次，全是空转，
+     * 而改动仍躺在脏缓存里。这类"补传等于没传"必须被单测钉死。
+     *
+     * ⚠️ 与上一条共用同一套装置（那条观测到 1 次），所以这里的 `exactly = 0`
+     *    是「会话判据真的生效」，不是「装置压根没跑」的假绿。
+     */
+    @Test
+    fun `冷启动补传_库仍锁着时不空转也不写失败状态`() = runTest {
+        val status = statusOf(KdbxCloudSyncStatus.FAILED)
+        val dao = mockk<VaultDao>()
+        every { dao.observeAll() } returns flowOf(listOf(row(CLOUD_ORIGIN, status.get(), VAULT_ID)))
+        coEvery { dao.get(VAULT_ID) } coAnswers { row(CLOUD_ORIGIN, status.get(), VAULT_ID) }
+        val coordinator = mockk<KdbxCloudSyncCoordinator> {
+            every { hasCloudSource(CLOUD_ORIGIN) } returns true
+            coEvery { hasCachedLocalEdits(VAULT_ID) } returns true
+            coEvery { sync(any(), any()) } returns KdbxSyncResult.Failed("离线")
+        }
+
+        KdbxAutoUploader(dao, coordinator).resumePendingUploadsNow(sessionReady = { false })
+
+        // 一次网络同步都不该发：改动由刷新闸门保住，等解锁事件来补传。
+        coVerify(exactly = 0) { coordinator.sync(any(), any()) }
+        assertEquals("锁态补传不许把状态洗成 FAILED", KdbxCloudSyncStatus.FAILED.name, status.get())
+    }
+
+    /** 只取"从无到有"的会话：普通编辑（集合不变）不该重扫全表。 */
+    @Test
+    fun `解锁观察器只补传新解锁的库`() {
+        val before = setOf("vault-a")
+        // 一次普通编辑：已解锁集合不变 ⇒ 差集为空。
+        assertEquals(emptySet<String>(), newlyUnlockedIds(before, setOf("vault-a")))
+        // 新解锁一个库 ⇒ 只补它一个。
+        assertEquals(setOf("vault-b"), newlyUnlockedIds(before, before + "vault-b"))
+        // 锁库再解锁会重新进差集 —— 那正是要补传的时刻。
+        assertEquals(setOf("vault-a"), newlyUnlockedIds(emptySet(), setOf("vault-a")))
+    }
+
+    /**
+     * **反证**：补传扫描不是「无条件给每个库发一次同步」。干净库必须由 `hasWork`
+     * 直接收工，否则每次冷启动都会平白多一轮网络往返。
+     *
+     * 与上一条共用同一套装置（上一条必须观测到 1 次），所以这里的 `exactly = 0`
+     * 不是「装置压根没跑」造成的假绿。
+     */
+    @Test
+    fun `冷启动补传_干净库不产生网络同步`() = runTest {
+        val status = statusOf(KdbxCloudSyncStatus.IN_SYNC)
+        val dao = mockk<VaultDao>()
+        every { dao.observeAll() } returns flowOf(listOf(row(CLOUD_ORIGIN, status.get(), VAULT_ID)))
+        coEvery { dao.get(VAULT_ID) } coAnswers { row(CLOUD_ORIGIN, status.get(), VAULT_ID) }
+        val coordinator = mockk<KdbxCloudSyncCoordinator> {
+            every { hasCloudSource(CLOUD_ORIGIN) } returns true
+            coEvery { hasCachedLocalEdits(any()) } returns false
+            coEvery { sync(any(), any()) } returns KdbxSyncResult.InSync
+        }
+
+        KdbxAutoUploader(dao, coordinator).resumePendingUploadsNow(sessionReady = { true })
+
+        coVerify(exactly = 0) { coordinator.sync(any(), any()) }
+    }
+
     private fun statusOf(initial: KdbxCloudSyncStatus): AtomicReference<String?> =
         AtomicReference(initial.name)
 

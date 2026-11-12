@@ -46,13 +46,16 @@
 package io.vaultix.data.repository.kdbx
 
 import io.vaultix.common.logging.VaultixLog
+import io.vaultix.data.kdbx.Kdbx
 import io.vaultix.database.dao.VaultDao
 import io.vaultix.model.KdbxCloudSyncStatus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -99,6 +102,113 @@ class KdbxAutoUploader @Inject constructor(
             .onFailure { error ->
                 VaultixLog.w(TAG) { "自动上传异常退出（$vaultId）：${error.message}" }
             }
+    }
+
+    /**
+     * ★★ 冷启动 / 恢复后**补传**所有还躺在缓存里的改动（#286，2026-11-12）。
+     *
+     * ## 为什么必须有它
+     *
+     * [enqueue] 的唯一调用点是 `KdbxItemRepository.persist`（保存那一刻）。
+     * 上传跑在应用级后台协程里，页面返回不会取消它，但**进程被杀**，或**断网后
+     * 后台重试到上限**，就再没有任何人排第二次队：改动以 `pendingLocalEdits`
+     * 一直留在缓存里，本地看得到、云端永远没有，直到用户再编辑一次或手动点同步。
+     * 真机表现正是用户说的「同步过程中返回了 / 断网了，相当于没同步」。
+     *
+     * ⇒ 进程创建时扫一次全部库。`drain` 内部的 `hasWork` 会自己判
+     *   「DB 状态 + 缓存脏标记」，干净库直接收工，不会多发一次网络请求。
+     *
+     * ⚠️ 只扫**有云端来源**的库：本地 SAF 的文件就是存储本身，没有"上传"这回事。
+     * ⚠️ 全程在应用级 scope、不阻塞启动；单个库失败只留痕，绝不影响其它库。
+     *
+     * ★★ #286 补正：**冷启动时库通常还锁着**，而上传链路
+     *   （`KdbxSyncOrchestrator.sync` → `Kdbx.saveVia`）要 `KdbxSessionStore` 里有会话，
+     *   没解锁必然返回 `NotUnlocked`。不加过滤地扫全表 ⇒ 每个脏库都空转一轮、
+     *   写一条假 `FAILED`、再退避重试 3 次，改动仍然一个字节没上去。
+     *   ⇒ [resumePendingUploadsNow] 只处理**已解锁**的库；锁着的库由
+     *     [startUnlockObserver] 在用户解锁成功的那一刻补传。
+     */
+    fun resumePendingUploads(): Job = scope.launch {
+        runCatching { resumePendingUploadsNow() }
+            .onFailure { error ->
+                VaultixLog.w(TAG) { "补传扫描异常退出：${error.message}" }
+            }
+    }
+
+    /**
+     * [resumePendingUploads] 的可单测本体。
+     *
+     * ⚠️ 用 [coroutineScope] 而不是逐个 `launch` 完就返回：前者让本挂起函数
+     *   等所有库的补传跑完，测试直接调一次就能断言全部结果；后者会在子协程
+     *   还在跑时就返回，测试只能靠 `sleep` 赌时序。
+     *
+     * @param sessionReady 「这个库此刻有没有可用会话」的判据。生产默认
+     *   [Kdbx.isUnlocked]；单测传 `{ true }` 才不会被进程里真实的锁态干扰。
+     *
+     * ## ★ 为什么必须过滤锁着的库（#286，2026-11-12）
+     *
+     * 上传字节由 `Kdbx.saveVia` 从**内存会话**现编码，会话是解锁才有的进程内明文。
+     * 冷启动时库还锁着 ⇒ 那次 `sync` 必然以 `NotUnlocked` 失败，编排器顺手写
+     * `FAILED`、本类再退避重试 [MAX_RETRIES] 次 —— 全是空转，而改动仍留在脏缓存里。
+     * ⇒ 锁态库**先跳过**，解锁事件到来时由 [startUnlockObserver] 精准补传。
+     * 这与「改动不丢」是两件事：刷新闸门（双真源）已经保证锁着期间不会被云端覆盖。
+     */
+    suspend fun resumePendingUploadsNow(sessionReady: (String) -> Boolean = Kdbx::isUnlocked) {
+        val rows = runCatching { vaultDao.observeAll().first() }
+            .onFailure { error -> VaultixLog.w(TAG) { "补传扫描读库表失败：${error.message}" } }
+            .getOrDefault(emptyList())
+        val ids = rows
+            .filter { coordinator.hasCloudSource(it.origin) }
+            .filter { sessionReady(it.id) }
+            .map { it.id }
+        VaultixLog.d(TAG) { "补传扫描：${ids.size} 个已解锁的网盘库待检查" }
+        coroutineScope {
+            ids.forEach { id ->
+                launch {
+                    runCatching { drain(id) }
+                        .onFailure { error ->
+                            VaultixLog.w(TAG) { "补传异常退出（$id）：${error.message}" }
+                        }
+                }
+            }
+        }
+    }
+
+    /**
+     * ★★ #286：订阅「会话解锁」，**新解锁的库立刻补传一次**。
+     *
+     * ## 为什么必须有它（补上冷启动补传的最后一段）
+     *
+     * [resumePendingUploads] 在 `Application.onCreate` 里跑，那时库通常是锁着的，
+     * 被 [resumePendingUploadsNow] 的会话判据过滤掉。而全仓的解锁路径
+     * （主密码 / 快速解锁 fanout / autofill / 「从不锁定」自动恢复）**都没有**
+     * 同步或补传钩子；`ItemsViewModel.init` 只登记活跃库，手动同步要点按钮。
+     * ⇒ 不订阅解锁事件，那笔改动就会一直躺在脏缓存里，直到用户再编辑一次。
+     *
+     * ⚠️ 不用「每次会话变化都扫全表」：`Kdbx.sessionRevision()` 在**每次条目编辑**
+     *    （`mutateLocked` 提交新会话）也会发值，全表扫描会无谓地重读所有库。
+     *    改成只取 [newlyUnlockedIds] 的差集 ⇒ 只有「从无到有」的会话才触发。
+     *    `drain` 内部仍有 `hasWork` / `hasCloudSource` 两道短路，干净库零网络请求。
+     *
+     * ⚠️ **显式启动而不是放进 `init`**：单测每次 `new KdbxAutoUploader(...)` 都会
+     *    挂一条常驻订阅到全局静态流上，别的用例解锁库时会意外打到它的 mock。
+     *    生产只在 app 层的 `VaultixApplication.onCreate()` 调一次。
+     * ⚠️ 应用级 scope 常驻是**预期**的：`Kdbx.sessionRevision()` 是 StateFlow，
+     *    `collect` 不完成，进程在就一直监听；单个库失败就地吸收。
+     */
+    fun startUnlockObserver(): Job = scope.launch {
+        var known = Kdbx.unlockedIds()
+        Kdbx.sessionRevision().collect {
+            val now = Kdbx.unlockedIds()
+            val newly = newlyUnlockedIds(known, now)
+            known = now
+            newly.forEach { id ->
+                runCatching { drain(id) }
+                    .onFailure { error ->
+                        VaultixLog.w(TAG) { "解锁补传异常退出（$id）：${error.message}" }
+                    }
+            }
+        }
     }
 
     /**
@@ -209,3 +319,12 @@ private val RETRY_DELAYS_MS = longArrayOf(
 )
 
 private const val MAX_REASON_LENGTH = 120
+
+/**
+ * [KdbxAutoUploader.startUnlockObserver] 的可单测纯判据：只取**这次新解锁**的库。
+ *
+ * ⚠️ 差集而不是"当前已解锁全集"：`sessionRevision` 在每次条目编辑时也会发值，
+ *    用全集会让一次普通的编辑把所有已解锁库全部重新排一次队。
+ *    锁库再解锁会重新出现在差集里 —— 那正是我们想补传的时刻。
+ */
+internal fun newlyUnlockedIds(before: Set<String>, after: Set<String>): Set<String> = after - before

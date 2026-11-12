@@ -53,6 +53,11 @@ class CachedKdbxFileSourceTest {
          *   于是所有网盘来源在同步入口都被判成"本地文件"。
          */
         override val isRemote: Boolean = false,
+        /**
+         * ★ #286：模拟「下载那几秒里用户又编辑了一笔」—— 在 `read()` 返回前把缓存
+         *   换成带 `pendingLocalEdits` 的脏版本，用来验证回写前的现查是否生效。
+         */
+        private val onRead: (suspend () -> Unit)? = null,
     ) : KdbxFileSource {
 
         var readCount = 0
@@ -73,6 +78,7 @@ class CachedKdbxFileSourceTest {
         override suspend fun read(): ByteArray {
             calls += "read"
             readCount++
+            onRead?.invoke()
             return bytes
         }
 
@@ -352,6 +358,40 @@ class CachedKdbxFileSourceTest {
         assertArrayEquals("必须拿到真远端字节，不能是本地改动", "real-remote".toByteArray(), bytes)
         assertEquals("必须真的下载一次", 1, delegate.readCount)
         assertArrayEquals("缓存里的本地改动不能被远端旧字节覆盖", "local-edit".toByteArray(), cache.peek(key)!!.bytes)
+        assertEquals(true, cache.peek(key)!!.pendingLocalEdits)
+    }
+
+    /**
+     * ★ #286（2026-11-12）：下载那 1–10 s 里用户又编辑了一笔。
+     *
+     * `readRemoteCurrent()` 开头读到的 `hasLocalEdits` 是**下载之前**的快照（干净），
+     * 于是旧实现在 `delegate.read()` 之后无条件 `cache.save(远端字节)` —— 正好把
+     * 下载期间 `persist` 刚落盘的脏缓存盖成远端旧内容。协调器那道「下载之后」的
+     * 闸门保得住会话，却管不到装饰器内部这次写 ⇒ 会话是新的、缓存里的改动没了。
+     *
+     * ⇒ 回写前必须**现查**脏标记。
+     */
+    @Test
+    fun `下载期间产生本地改动时不许把缓存盖成远端旧字节`() = runTest {
+        val cache = FakeCache()
+        cache.save(key, CachedKdbxFile("stale".toByteArray(), "etag-1"))
+        val delegate = FakeSource(
+            bytes = "real-remote".toByteArray(),
+            token = "etag-2",
+            onRead = {
+                // 模拟 persist：下载进行中把缓存换成「本地已编辑」的脏版本。
+                cache.save(key, CachedKdbxFile("local-edit".toByteArray(), "etag-1", pendingLocalEdits = true))
+            },
+        )
+
+        val bytes = CachedKdbxFileSource(delegate, cache, key, backgroundScope).readRemoteCurrent()
+
+        assertArrayEquals("必须拿到真远端字节", "real-remote".toByteArray(), bytes)
+        assertArrayEquals(
+            "刚落盘的本地改动不能被远端旧字节覆盖",
+            "local-edit".toByteArray(),
+            cache.peek(key)!!.bytes,
+        )
         assertEquals(true, cache.peek(key)!!.pendingLocalEdits)
     }
 

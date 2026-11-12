@@ -36,7 +36,6 @@ import io.vaultix.domain.KdbxSyncReport
 import io.vaultix.domain.KdbxSyncRepository
 import io.vaultix.database.dao.VaultDao
 import io.vaultix.data.repository.KdbxSessionFlow
-import io.vaultix.model.KdbxCloudSyncStatus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -105,15 +104,19 @@ class KdbxSyncRepositoryImpl @Inject constructor(
         }
 
     /**
-     * 现查本地有没有改动（施工单 S3）。
+     * 现查本地有没有未上传改动（施工单 S3）。
      *
-     * 判据在 `KdbxCloudSyncStatus.impliesLocalChanges`（**只此一份**），
-     * 这里只负责"现查"——读的是库里**此刻**的 `syncStatus`，不是 UI 传进来的快照。
+     * ★ #286（2026-11-12）：判据下放到 [KdbxCloudSyncCoordinator.hasUnsyncedLocalEdits]
+     *   —— **DB 状态 或 缓存脏标记**。此前这里直接读 `syncStatus` 的
+     *   `impliesLocalChanges`，而 `SYNCING` / `FAILED` 不算「本地改过」；于是
+     *   「上传中途返回 / 断网」之后，UI 拿到的答案是"没改过"，把一笔还躺在
+     *   脏缓存里的改动交给一次会覆盖它的同步 ⇒ 改动永久丢失。
+     *
+     * ⚠️ 判据只留一份，别在这里再读一次 DB —— 本项目为「同一事实存两份」
+     *    已经付过多次代价（#233 缓存令牌、#264 来源判据）。
      */
     override suspend fun localChangedSinceLastSync(vaultId: String): Boolean =
-        withContext(Dispatchers.IO) {
-            KdbxCloudSyncStatus.fromName(vaultDao.get(vaultId)?.syncStatus)?.impliesLocalChanges == true
-        }
+        withContext(Dispatchers.IO) { coordinator.hasUnsyncedLocalEdits(vaultId) }
 
     override suspend fun resolveUsingLocal(vaultId: String): KdbxSyncReport =
         withContext(Dispatchers.IO) { coordinator.resolveUsingLocal(vaultId).toReport() }

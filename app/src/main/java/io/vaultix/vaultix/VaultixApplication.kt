@@ -9,6 +9,7 @@ import dagger.hilt.android.HiltAndroidApp
 import io.vaultix.common.logging.LogLevel
 import io.vaultix.common.logging.VaultixLog
 import io.vaultix.data.kdbx.installKdbxDerivedKeyDiskCache
+import io.vaultix.data.repository.kdbx.KdbxAutoUploader
 import io.vaultix.vaultix.di.KdbxCloudSyncInitializer
 import io.vaultix.vaultix.security.AutoLockController
 import io.vaultix.vaultix.security.AutoRestoreTrigger
@@ -80,6 +81,25 @@ class VaultixApplication : Application(), ImageLoaderFactory {
     lateinit var screenSecurityGuard: ScreenSecurityGuard
 
     /**
+     * ★ KDBX 待上传改动的**冷启动补传**（#286，2026-11-12）。
+     *
+     * 条目改动会先以 `pendingLocalEdits` 落在磁盘缓存里，再由自动上传器推到云端；
+     * 而排队（`enqueue`）只发生在保存那一刻。断网重试到上限、或上传途中进程被杀，
+     * 就再没人排第二次队 ⇒ 本地看得到改动、云端永远是旧内容，直到用户再编辑一次。
+     *
+     * ⚠️ 与上面几个"价值全在 init 块"的同伴不同，这里必须在 [onCreate] 里**显式启动**
+     *    [KdbxAutoUploader.startUnlockObserver] 与 [KdbxAutoUploader.resumePendingUploads]：
+     *    前者要订阅全局会话流，后者要读库表，都得等字段注入完成。
+     *    两者都只 `launch`、立即返回，不阻塞启动。
+     *
+     * ★ 为什么要两条而不是一条：冷启动时库还锁着，`saveVia` 没有会话可编码，
+     *   此时扫全表只会给每个脏库写一条假 `FAILED` 并空转重试。⇒ 存量扫描只处理
+     *   **已解锁**的库；锁着的库等解锁成功时由会话订阅精准补传（#286）。
+     */
+    @Inject
+    lateinit var kdbxAutoUploader: KdbxAutoUploader
+
+    /**
      * 本进程是否为「为自动填充 / 凭据提供商而拉起」。
      *
      * 由 [MainActivity] / `AutofillActivity` / `CredentialProviderActivity` 在被系统
@@ -134,6 +154,16 @@ class VaultixApplication : Application(), ImageLoaderFactory {
             isFirstCreation = true,
             createdForAutofill = createdForAutofill,
         )
+        // ★ #286：把断网 / 上传途中被杀进程时没能推上去的 kdbx 改动补传一次。
+        //   ⚠️ 放在最后：此时 [kdbxCloudSyncInitializer] 已完成字段注入，
+        //      OneDrive 来源工厂才注册得上，补传才解析得出云端来源。
+        //   ⚠️ 两行顺序不能反：先订阅解锁事件（此刻会话集合作为基线），再扫一次存量。
+        //      反过来会在「订阅刚挂上、会话恰好恢复」这个窗口漏掉一个库；按此顺序，
+        //      订阅前已解锁的由存量扫描覆盖，之后解锁的由订阅覆盖，无窗口。
+        //   ⚠️ 只 launch、不等待；干净库 / 未解锁库分别由 drain 的 hasWork 与
+        //      resumePendingUploadsNow 的会话判据直接收工，绝不空转写 FAILED。
+        kdbxAutoUploader.startUnlockObserver()
+        kdbxAutoUploader.resumePendingUploads()
     }
 
     /**

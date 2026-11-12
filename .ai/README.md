@@ -24,7 +24,46 @@
 - 已接进 CI：`ci-debug.yml` 的 `sandbox-tests` job 用**同一份脚本**，与 `android-ci` 并行
   ⇒ 本地绿 ⇒ CI 不会红在同一件事上。
 
-## 🕐 最新状态（2026-11-12 · #285 六组 UI / 主题 / KDBX 反馈）
+## 🕐 最新状态（2026-11-12 · #286 OneDrive KDBX 改动被刷新覆盖）
+
+> **一句话**：用户报「onedrive 上的 kdbx 改完条目，同步中途返回 / 断网后刷新，
+> 直接被云端旧内容覆盖，等于修改并未成功」——定性为**数据完整性 / 同步状态机**
+> 缺陷（不是 UI 观感），两个叠加根因都修完并闭环。
+> 接力正文：[`#286`](./issues/06-界面与交互-part24.md)。
+
+1. **刷新覆盖**：`persist` 把改动写成带 `pendingLocalEdits` 的脏缓存并标
+   `PENDING_UPLOAD`，自动上传一跑就把 DB 状态洗成 `SYNCING`（失败则 `FAILED`）；
+   而闸门读 `impliesLocalChanges`，它**不认** `SYNCING` / `FAILED` ⇒ 误判「本地没改」
+   → 拉远端旧字节换会话 → `markResolved` 记已同步 → `fileCache.save` 清掉脏标记
+   ⇒ 改动永久消失。修法：`hasUnsyncedLocalEdits()` = **DB 状态 或 缓存脏标记**的
+   唯一判据；`resolveUsingRemote()` 下载**前 + 后**两道闸门都走它；
+   `localChangedSinceLastSync()` 委托协调器；`readRemoteCurrent()` 回写缓存前现查
+   脏标记（`dirtyNow` / `loadFailed`，读失败也 fail-closed）。
+2. **返回 / 断网等于没同步**：`enqueue` 只在 `persist` 那一刻调用。新增
+   `resumePendingUploadsNow()` 扫全表 + `startUnlockObserver()` 订阅
+   `Kdbx.sessionRevision()` 按 `newlyUnlockedIds` 差集补传；`Application.onCreate()`
+   **先订阅再扫存量**（无窗口）。
+3. **★ 本轮补正（第二轮）**：第一版只做「启动扫一次」是**空转** ——
+   `Kdbx.saveVia()` 要求 `KdbxSessionStore` 有会话，冷启动锁态必然 `NotUnlocked`，
+   会写假 `FAILED` 并退避 3 次；而全仓解锁路径都**没有**同步钩子。⇒ 补传只处理
+   **已解锁**的库（`sessionReady = Kdbx::isUnlocked`，可注入便于单测），锁着的库
+   等解锁事件精准补传。⚠️「改动不丢」由第 1 条保证，补传只负责自动收敛，两件事别混。
+
+**验证**：`detekt` + `:app:assembleFullDebug` + 九模块全量单测
+`BUILD SUCCESSFUL in 41s`，**1821 例 0 失败**（178 份 XML，比 #285 多 15 例）；
+**23 项 Python 门禁全绿**。新建 `KdbxPendingEditRulesTest`(6)，
+`KdbxCloudSyncCoordinatorTest` +4 / `CachedKdbxFileSourceTest` +1 /
+`KdbxAutoUploaderTest` +4；相关四测试类 47 例 0 失败。
+
+**待真机验收**：上传中途返回 / 断网后刷新必须弹冲突而非变回旧内容；杀进程冷启动、
+解锁后改动自动补传（不必再点同步）；下载那 1–10 s 内再编辑，会话与缓存都不被盖。
+
+**沙箱环境坑（本轮复现）**：`./gradlew` 前须 `source /opt/vaultix-android-env.sh`，
+否则 `SDK location not found`；长验证走前台并 `cmd > log 2>&1; rc=$?; tail; exit $rc`
+（后台任务会被沙箱休眠中断、管道会吞退出码）；zsh 不做变量单词分割，
+门禁命令别用变量拼整串。
+
+## 🕐 上一轮状态（2026-11-12 · #285 六组 UI / 主题 / KDBX 反馈）
 
 > **一句话**：用户带 4 张真机截图提了六组观感 / 主题问题，**六组全改了生产代码**。
 > 接力正文：[`#285`](./issues/06-界面与交互-part23.md)。
