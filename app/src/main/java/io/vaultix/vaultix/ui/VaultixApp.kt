@@ -22,6 +22,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
@@ -52,6 +53,10 @@ import io.vaultix.vaultix.ui.settings.CloudAccountsScreen
 import io.vaultix.vaultix.ui.settings.VaultManagementScreen
 import io.vaultix.vaultix.ui.shell.MainShellScreen
 import io.vaultix.vaultix.ui.shell.MainShellViewModel
+import io.vaultix.vaultix.ui.shell.settingsEnter
+import io.vaultix.vaultix.ui.shell.settingsExit
+import io.vaultix.vaultix.ui.shell.settingsPopEnter
+import io.vaultix.vaultix.ui.shell.settingsPopExit
 import io.vaultix.vaultix.ui.shell.tabSwitchEnter
 import io.vaultix.vaultix.ui.shell.tabSwitchExit
 import io.vaultix.vaultix.ui.totp.TotpCodesScreen
@@ -60,16 +65,12 @@ import io.vaultix.vaultix.ui.unlock.UnlockScreen
 import io.vaultix.vaultix.ui.unlock.UnlockViewModel
 import io.vaultix.vaultix.ui.vaultlist.VaultListScreen
 import io.vaultix.vaultix.util.SystemSettingsIntents
+import androidx.compose.animation.AnimatedContentScope
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
 
 /**
  * 应用导航（Docs/08 §1，M1 闭环）。
@@ -299,32 +300,17 @@ private const val SPLASH_REVEAL_MS = 180
 private const val SPLASH_MARK_START_SCALE = 0.94f
 
 /**
- * 二级路由转场：**Shared Axis X**（Material motion 的标准「前进 / 返回」动效）。
+ * 历史方案（2026-09-13，已废弃，仅留决策记录）。
  *
- * ⚠️ 2026-09-13 第二轮用户反馈：「返回的时候画面是一个缩小的，感觉不太舒服，
- * 找一个当前最流行最舒服的切换效果」。上一版是「140ms + 只推 1/12 屏宽 + 淡入淡出」——
- * 位移太小、时长太短，两页几乎在原地交叉淡化，观感就像**整页缩了一下**。
+ * 当时试过 Material Shared Axis X 整屏滑入（300ms + emphasized 缓动），
+ * 用户读作「快速右滑、多余」；随后退回「几乎没有动效」的 Tab 同款转场。
  *
- * 现在换成 Material 官方的 Shared Axis X：
- * - **进入**（push）：新页从**右侧整屏**滑入，旧页向左**轻微**让位（1/4 屏）；
- * - **返回**（pop）：正好相反 —— 旧页整屏右滑出去，被返回的页从左侧 1/4 屏处滑回原位。
- *
- * ⚠️ **不要加 fade**：整屏 alpha 合成要离屏渲染，两页同时在场时每帧多一次全屏合成 ⇒ 掉帧
- * （用户反馈"返回的时候动画有点卡顿"）。位移本身只是 `translationX`，几乎零成本。
- *
- * 为什么它"舒服"：方向与空间关系是**连续**的（前进 = 向右展开，返回 = 收回原处），
- * 用户不需要在脑中重建层级；这也是 Android 14 预测式返回的默认语言。
- * 全 App 的二级路由（详情 / 编辑 / 通行密钥 / 回收站 / 设置子页）共用这一套，
- * 不再有「某几页有动画、某几页硬切」的不一致。
+ * ⚠️ 2026-11-12 起转场分两套（不要再按本段理解当前行为）：
+ *   · Tab 切换 → `TabTransitions.kt`（140ms、高起步 alpha、零位移）；
+ *   · 设置组二级页 → `SettingsTransitions.kt`（180ms、1/16 屏宽轻位移），
+ *     由下面的 [settingsComposable] 一处收口。
+ *   真机帧统计证明旧的「过渡不自然」不是掉帧，而是整屏布局突变 + 几乎无过渡。
  */
-private const val NAV_ANIM_MS = 300
-
-// 注：这里曾有一个 `NAV_OUTGOING_DIVISOR`（让位页位移 = 屏宽 / 它，取 4）—— **已删除**。
-// 它就是"返回时画面缩一下"的元凶：让位页只挪 1/4 屏 ⇒ 过渡期间存在"两页各占一部分屏幕"的
-// 中间帧。现在的转场是「覆盖 / 揭开」，**没有让位页**。详见下方 NavHost 的注释。
-
-/** Material motion 的标准缓动（emphasized decelerate 的常用近似）。 */
-private val NAV_EASING = CubicBezierEasing(0.2f, 0f, 0f, 1f)
 
 /** 把导航栈整体替换为 [route]（清掉其上层所有界面，含启动占位）。 */
 private fun NavHostController.navigateToRoot(route: Any) {
@@ -491,10 +477,27 @@ private fun NavGraphBuilder.vaultEntryGraph(
 }
 
 /**
+ * 设置组所有目的地共用一套转场：**一处收口**，避免「某几页有动画、某几页硬切」。
+ *
+ * ⚠️ `sizeTransform = null` 必须与 NavHost 保持一致：导航库默认会补间容器尺寸，
+ *    两页测量尺寸差一档就会出现「整页缩小一帧」（见 NavHost 注释 204-209）。
+ */
+private inline fun <reified T : Any> NavGraphBuilder.settingsComposable(
+    noinline content: @Composable AnimatedContentScope.(NavBackStackEntry) -> Unit,
+) = composable<T>(
+    enterTransition = { settingsEnter() },
+    exitTransition = { settingsExit() },
+    popEnterTransition = { settingsPopEnter() },
+    popExitTransition = { settingsPopExit() },
+    sizeTransform = null,
+    content = content,
+)
+
+/**
  * 设置链路：设置首页 → 自动填充二级设置 / 密码库管理二级页 → 添加库。
  */
 private fun NavGraphBuilder.settingsGraph(navController: NavHostController) {
-    composable<SettingsRoute> {
+    settingsComposable<SettingsRoute> {
         SettingsScreen(
             onBack = { navController.popBackStack() },
             onOpenAutofillSettings = { navController.navigate(AutofillSettingsRoute) },
@@ -508,10 +511,10 @@ private fun NavGraphBuilder.settingsGraph(navController: NavHostController) {
             onOpenUnlockMethod = { navController.navigate(UnlockMethodRoute) },
         )
     }
-    composable<UnlockMethodRoute> {
+    settingsComposable<UnlockMethodRoute> {
         UnlockMethodScreen(onBack = { navController.popBackStack() })
     }
-    composable<VaultManagementRoute> {
+    settingsComposable<VaultManagementRoute> {
         VaultManagementScreen(
             onBack = { navController.popBackStack() },
             onAddBitwardenVault = { navController.navigate(AddVaultRoute) },
@@ -526,46 +529,46 @@ private fun NavGraphBuilder.settingsGraph(navController: NavHostController) {
     }
     // 「把本地 KDBX 放到网盘」引导页（2026-11-10）：两步出口都复用现成路由 ——
     // 本页不自己实现登录 / 选文件，避免第三套流程。
-    composable<KdbxCloudGuideRoute> {
+    settingsComposable<KdbxCloudGuideRoute> {
         KdbxCloudGuideScreen(
             onBack = { navController.popBackStack() },
             onOpenCloudAccounts = { navController.navigate(CloudAccountsRoute) },
             onAddCloudVault = { navController.navigate(AddCloudVaultRoute) },
         )
     }
-    composable<CloudAccountsRoute> {
+    settingsComposable<CloudAccountsRoute> {
         CloudAccountsScreen(onBack = { navController.popBackStack() })
     }
-    composable<AutofillSettingsRoute> {
+    settingsComposable<AutofillSettingsRoute> {
         AutofillSettingsScreen(onBack = { navController.popBackStack() })
     }
     // 权限引导页（2026-09-18）：从设置页「关于 → 权限管理」进入。
     // 无参数：内容全部来自系统实时状态，与库 / 条目无关。
-    composable<PermissionsRoute> {
+    settingsComposable<PermissionsRoute> {
         PermissionsScreen(onBack = { navController.popBackStack() })
     }
     // 「关于」二级页（2026-09-28）：源码仓库 / 问题反馈 / 更新日志 / 开源许可。
-    composable<AboutAppRoute> {
+    settingsComposable<AboutAppRoute> {
         AboutAppScreen(onBack = { navController.popBackStack() })
     }
-    composable<ImportExportRoute> {
+    settingsComposable<ImportExportRoute> {
         ImportExportScreen(
             onBack = { navController.popBackStack() },
             // 页首「格式转换」入口（W5）：与导入 / 导出语义正交，独立二级页。
             onOpenConversion = { navController.navigate(ConversionRoute) },
         )
     }
-    composable<ConversionRoute> {
+    settingsComposable<ConversionRoute> {
         ConversionScreen(onBack = { navController.popBackStack() })
     }
-    composable<AddVaultRoute> {
+    settingsComposable<AddVaultRoute> {
         AddVaultScreen(
             onBack = { navController.popBackStack() },
             onAdded = { navController.popBackStack() },
         )
     }
     // 添加本地 KDBX 库：成功后回到库列表（新库已解锁，可直接点进去）
-    composable<AddKdbxRoute> { entry ->
+    settingsComposable<AddKdbxRoute> { entry ->
         AddKdbxScreen(
             // ★ 外部「用 Vaultix 打开 xxx.kdbx」带进来的 URI（2026-11-02）。
             //   null = 正常从库列表点「添加」进来，让用户自己选文件。
@@ -575,7 +578,7 @@ private fun NavGraphBuilder.settingsGraph(navController: NavHostController) {
         )
     }
     // 从网盘添加 KDBX 库（WebDAV / OneDrive）：成功后的返回语义与本地路径一致。
-    composable<AddCloudVaultRoute> {
+    settingsComposable<AddCloudVaultRoute> {
         AddCloudVaultScreen(
             onBack = { navController.popBackStack() },
             onAdded = { navController.popBackStack() },

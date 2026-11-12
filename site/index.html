@@ -1,0 +1,569 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Vaultix — 一个 App，装下你全部的密码库</title>
+<meta name="description" content="开源 Android 密码管理器。Bitwarden / Vaultwarden 云端库与 KeePass KDBX 本地文件，共用一套界面与自动填充引擎。没有账号，没有服务器。" />
+<meta name="theme-color" content="#F7F6F3" />
+<meta property="og:type" content="website" />
+<meta property="og:url" content="https://vaultix.valk.ccwu.cc/" />
+<meta property="og:title" content="Vaultix — 一个 App，装下你全部的密码库" />
+<meta property="og:description" content="云端库与本地文件，第一次被当作同一件事。开源、无账号、无服务器。" />
+<meta property="og:image" content="https://vaultix.valk.ccwu.cc/assets/og.jpg" />
+<link rel="icon" type="image/svg+xml" href="assets/vaultix-icon.svg" />
+<style>
+  :root {
+    --paper: #f7f6f3;
+    --paper-2: #fffefb;
+    --ink: #12161f;
+    --ink-2: #3c4352;
+    --muted: #767d8b;
+    --brand: #3b5bc4;
+    --brand-deep: #2c459b;
+    --brand-soft: #e3e6f2;
+    --gold: #b99552;
+    --night: #101521;
+    --line: rgba(18, 22, 31, .11);
+    --line-soft: rgba(18, 22, 31, .06);
+    --line-night: rgba(255, 255, 255, .13);
+    --radius: 4px;
+    --max: 1160px;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font-family: "Inter", "SF Pro SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+                 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased; line-height: 1.8;
+  }
+  a { color: inherit; text-decoration: none; }
+  img { display: block; max-width: 100%; }
+  :focus-visible { outline: 2px solid var(--brand); outline-offset: 4px; }
+  ::selection { background: var(--brand-soft); color: var(--brand-deep); }
+
+  .wrap { width: min(calc(100% - 56px), var(--max)); margin-inline: auto; }
+  .num { font-variant-numeric: tabular-nums; }
+  h1, h2, h3 { margin: 0; font-weight: 700; letter-spacing: -.045em; line-height: 1.14; }
+  h1 { font-size: clamp(42px, 6vw, 76px); }
+  h2 { font-size: clamp(32px, 4.2vw, 54px); }
+  h3 { font-size: clamp(19px, 2vw, 24px); letter-spacing: -.03em; }
+  p { margin: 0; }
+  .lede { font-size: clamp(16px, 1.55vw, 19px); color: var(--ink-2); line-height: 1.85; }
+  .muted { color: var(--muted); }
+
+  /* ---------- progress + nav ---------- */
+  #progress { position: fixed; z-index: 60; top: 0; left: 0; height: 2px; width: 100%;
+              background: var(--brand); transform: scaleX(0); transform-origin: 0 50%; }
+  header { position: sticky; top: 0; z-index: 40; background: rgba(247, 246, 243, .82);
+           backdrop-filter: saturate(180%) blur(18px); -webkit-backdrop-filter: saturate(180%) blur(18px);
+           border-bottom: 1px solid transparent; transition: border-color .3s ease; }
+  header.scrolled { border-color: var(--line); }
+  .nav { height: 76px; display: flex; align-items: center; justify-content: space-between; gap: 28px; }
+  .brand { display: inline-flex; align-items: center; gap: 11px; font-size: 17px; font-weight: 700; letter-spacing: -.02em; }
+  .brand img { width: 30px; height: 30px; border-radius: 8px; }
+  .nav-links { display: flex; gap: 34px; font-size: 13.5px; color: var(--ink-2); }
+  .nav-links a { position: relative; padding: 6px 0; }
+  .nav-links a::after { content: ""; position: absolute; left: 0; bottom: 0; height: 1px; width: 0;
+                        background: var(--brand); transition: width .35s cubic-bezier(.2,0,0,1); }
+  .nav-links a:hover { color: var(--brand-deep); }
+  .nav-links a:hover::after { width: 100%; }
+  .nav-cta { display: inline-flex; align-items: center; gap: 9px; border: 1px solid var(--ink);
+             padding: 10px 20px; border-radius: 999px; font-size: 13.5px; font-weight: 620;
+             transition: background .3s ease, color .3s ease, transform .3s ease; }
+  .nav-cta:hover { background: var(--ink); color: #fff; transform: translateY(-2px); }
+  .nav-cta svg { width: 15px; height: 15px; }
+
+  /* ---------- chapter label ---------- */
+  .chapter { display: flex; align-items: center; gap: 18px; font-size: 11.5px; font-weight: 650;
+             letter-spacing: .2em; text-transform: uppercase; color: var(--brand-deep); }
+  .chapter .idx { font-variant-numeric: tabular-nums; }
+  .chapter .rule { flex: 1; height: 1px; background: var(--line); }
+  .chapter .en { color: var(--muted); font-weight: 500; letter-spacing: .16em; }
+  .chapter.on-night { color: #a9bcf6; }
+  .chapter.on-night .rule { background: var(--line-night); }
+  .chapter.on-night .en { color: #7f8aa3; }
+
+  /* ---------- hero ---------- */
+  .hero { position: relative; overflow: hidden; padding: 108px 0 116px; }
+  .hero::before {
+    content: ""; position: absolute; inset: -35% -10% auto auto; width: 900px; height: 900px; pointer-events: none;
+    background: radial-gradient(closest-side, rgba(59, 91, 196, .11), transparent 70%);
+    animation: drift 24s ease-in-out infinite alternate;
+  }
+  @keyframes drift { from { transform: translate3d(0,0,0); } to { transform: translate3d(-60px, 40px, 0); } }
+  .hero-grid { position: relative; display: grid; grid-template-columns: 1.08fr .92fr; gap: 72px; align-items: center; }
+  .hero h1 { margin: 30px 0 26px; }
+  .hero h1 em { font-style: normal; color: var(--brand); }
+  .hero .lede { max-width: 500px; }
+  .hero-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 42px; }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 10px;
+         padding: 15px 26px; border-radius: 3px; font-size: 14.5px; font-weight: 640;
+         border: 1px solid transparent; transition: transform .3s ease, background .3s ease,
+         color .3s ease, border-color .3s ease, box-shadow .3s ease; }
+  .btn svg { width: 17px; height: 17px; }
+  .btn-primary { background: var(--ink); color: #fff; }
+  .btn-primary:hover { background: var(--brand-deep); transform: translateY(-2px); box-shadow: 0 14px 30px rgba(44,69,155,.2); }
+  .btn-quiet { border-color: var(--line); color: var(--ink); background: transparent; }
+  .btn-quiet:hover { border-color: var(--ink); transform: translateY(-2px); }
+  .hero-meta { margin-top: 52px; display: flex; flex-wrap: wrap; gap: 10px 26px; font-size: 12px;
+               letter-spacing: .04em; color: var(--muted); }
+  .hero-meta span { display: inline-flex; align-items: center; gap: 8px; }
+  .hero-meta i { width: 3px; height: 3px; border-radius: 50%; background: var(--brand); display: inline-block; }
+
+  /* ---------- phone ---------- */
+  .phone-stage { display: flex; justify-content: center; perspective: 1200px; }
+  .phone { width: 286px; height: 578px; padding: 10px; border-radius: 44px;
+           background: linear-gradient(160deg, #2b3242, #0e1420 60%, #1c2433);
+           box-shadow: 0 44px 84px rgba(16,24,40,.22), 0 4px 12px rgba(16,24,40,.1);
+           transform: rotateY(-7deg) rotateX(2deg);
+           transition: transform .8s cubic-bezier(.2,0,0,1); animation: float 9s ease-in-out infinite; }
+  @keyframes float { 0%,100% { translate: 0 0; } 50% { translate: 0 -7px; } }
+  .phone-stage:hover .phone { transform: rotateY(-2deg) rotateX(0); }
+  .screen { position: relative; height: 100%; border-radius: 35px; overflow: hidden;
+            background: #f7f8fb; display: flex; flex-direction: column; }
+  .screen::before { content: ""; position: absolute; z-index: 5; top: 9px; left: 50%;
+                    transform: translateX(-50%); width: 76px; height: 19px; border-radius: 99px; background: #101828; }
+  .status { height: 38px; flex: none; display: flex; align-items: flex-end; justify-content: space-between;
+            padding: 0 20px 6px; font-size: 10px; color: #667085; font-weight: 600; }
+  .app-head { padding: 12px 18px 10px; display: flex; align-items: center; justify-content: space-between; }
+  .app-head strong { font-size: 17px; letter-spacing: -.03em; }
+  .app-head .avatar { width: 26px; height: 26px; border-radius: 9px; background: var(--brand-soft); }
+  .search { margin: 0 16px 12px; height: 33px; border-radius: 12px; background: #eceef4;
+            display: flex; align-items: center; gap: 8px; padding: 0 12px; font-size: 11px; color: #98a2b3; }
+  .search i { width: 10px; height: 10px; border: 1.5px solid #98a2b3; border-radius: 50%; display: inline-block; }
+  .rows { flex: 1; padding: 0 12px; overflow: hidden; }
+  .row { display: flex; align-items: center; gap: 11px; padding: 10px 8px; margin-bottom: 7px;
+         background: #fff; border: 1px solid rgba(16,24,40,.05); border-radius: 14px; }
+  .row .ic { width: 33px; height: 33px; border-radius: 50%; flex: none; display: grid; place-items: center; }
+  .row .ic svg { width: 18px; height: 18px; fill: #fff; display: block; }
+  .row .txt { flex: 1; min-width: 0; }
+  .row .txt b { display: block; font-size: 11.5px; font-weight: 650; white-space: nowrap; }
+  .row .txt small { display: block; font-size: 9.5px; color: #98a2b3; white-space: nowrap; }
+  .row .chev { width: 11px; height: 11px; border-right: 1.5px solid #d0d5dd; border-top: 1.5px solid #d0d5dd;
+               transform: rotate(45deg); flex: none; }
+  .dock { margin: auto 10px 10px; height: 56px; border-radius: 19px; flex: none;
+          background: rgba(255,255,255,.62); border: 1px solid rgba(255,255,255,.85);
+          backdrop-filter: blur(16px) saturate(160%); -webkit-backdrop-filter: blur(16px) saturate(160%);
+          box-shadow: 0 6px 20px rgba(16,24,40,.08);
+          display: flex; align-items: center; justify-content: space-around; padding: 0 8px; }
+  .dock i { width: 19px; height: 19px; border-radius: 7px; background: #cfd6e6; display: block; }
+  .dock i.on { background: var(--brand); }
+  .dock .plus { width: 33px; height: 33px; border-radius: 12px; background: var(--brand); color: #fff;
+                display: grid; place-items: center; font-size: 20px; font-style: normal; line-height: 1; }
+
+  /* ---------- origin ---------- */
+  .origin { padding: 108px 0 116px; border-top: 1px solid var(--line); }
+  .origin-grid { display: grid; grid-template-columns: .92fr 1.08fr; gap: 90px; align-items: start; margin-top: 46px; }
+  .origin h2 { margin-bottom: 26px; }
+  .quote { border-left: 2px solid var(--brand); padding: 4px 0 4px 26px; margin: 34px 0;
+           font-size: clamp(19px, 2vw, 24px); line-height: 1.65; letter-spacing: -.02em; color: var(--ink); }
+  .origin .lede { max-width: 430px; }
+  .duo { display: grid; gap: 0; border-top: 1px solid var(--line); }
+  .duo-row { display: grid; grid-template-columns: 40px 1fr; gap: 22px; padding: 26px 0;
+             border-bottom: 1px solid var(--line); }
+  .duo-row .k { font-size: 12px; font-weight: 700; color: var(--brand-deep); padding-top: 4px; }
+  .duo-row h3 { margin-bottom: 7px; }
+  .duo-row p { color: var(--ink-2); font-size: 14.5px; }
+  .origin-tail { margin-top: 30px; font-size: 14px; color: var(--muted); }
+
+  /* ---------- night / principles + teaser ---------- */
+  .night { background: var(--night); color: #f2f4f9; padding: 118px 0 126px; position: relative; overflow: hidden; }
+  .night::before { content: ""; position: absolute; inset: -50% -20% auto auto; width: 1000px; height: 1000px;
+                   background: radial-gradient(closest-side, rgba(59,91,196,.20), transparent 70%); pointer-events: none; }
+  .night .wrap { position: relative; }
+  .principles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0; margin: 58px 0 118px;
+                border-top: 1px solid var(--line-night); }
+  .principle { padding: 30px 34px 8px 0; border-right: 1px solid var(--line-night); }
+  .principle:last-child { border-right: 0; }
+  .principle:not(:first-child) { padding-left: 34px; }
+  .principle .pnum { font-size: 11px; letter-spacing: .18em; color: #8ea4ef; font-variant-numeric: tabular-nums; }
+  .principle h3 { color: #fff; margin: 20px 0 12px; }
+  .principle p { color: #a9b3c7; font-size: 14px; line-height: 1.8; }
+
+  .teaser-head { max-width: 620px; }
+  .teaser-head h2 { color: #fff; margin: 22px 0 18px; }
+  .teaser-head p { color: #a9b3c7; font-size: 16px; }
+  .teasers { margin-top: 62px; display: grid; gap: 0; border-top: 1px solid var(--line-night); }
+  .teaser { display: grid; grid-template-columns: 56px 1fr auto; gap: 26px; align-items: center;
+            padding: 30px 0; border-bottom: 1px solid var(--line-night); }
+  .teaser .tnum { font-size: 12px; color: #6f7d9c; font-variant-numeric: tabular-nums; }
+  .teaser h3 { color: #fff; font-size: clamp(19px, 2.1vw, 25px); font-weight: 600; letter-spacing: -.035em; }
+  .teaser p { color: #8d99b1; font-size: 13px; margin-top: 7px; }
+  .teaser .more { display: inline-flex; align-items: center; gap: 9px; white-space: nowrap;
+                  font-size: 13px; color: #a9bcf6; transition: gap .3s ease, color .3s ease; }
+  .teaser .more:hover { gap: 15px; color: #fff; }
+  .teaser .more svg { width: 15px; height: 15px; }
+  .teaser-tail { margin-top: 56px; display: flex; flex-wrap: wrap; align-items: center; gap: 20px 28px; }
+  .teaser-tail span { color: #7f8aa3; font-size: 14px; }
+  .btn-night { border: 1px solid rgba(255,255,255,.28); color: #fff; background: transparent; }
+  .btn-night:hover { border-color: #a9bcf6; color: #fff; transform: translateY(-2px); }
+
+  /* ---------- figures ---------- */
+  .figures { padding: 82px 0; border-bottom: 1px solid var(--line); }
+  .fig-grid { display: grid; grid-template-columns: repeat(4, 1fr); }
+  .fig { padding: 6px 30px; border-right: 1px solid var(--line); }
+  .fig:first-child { padding-left: 0; }
+  .fig:last-child { border-right: 0; }
+  .fig b { display: block; font-size: clamp(38px, 5vw, 62px); font-weight: 700; letter-spacing: -.06em;
+           line-height: 1; color: var(--ink); font-variant-numeric: tabular-nums; }
+  .fig b .unit { font-size: .42em; letter-spacing: -.02em; margin-left: 4px; color: var(--brand); }
+  .fig small { display: block; margin-top: 14px; font-size: 12.5px; color: var(--muted); letter-spacing: .04em; }
+
+  /* ---------- screenshots ---------- */
+  .shots-sec { padding: 112px 0 118px; }
+  .shots-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px;
+                flex-wrap: wrap; margin: 40px 0 48px; }
+  .shots-head h2 { max-width: 560px; }
+  .shots-hint { font-size: 12.5px; color: var(--muted); max-width: 250px; text-align: right; }
+  .shots-fade { position: relative; }
+  .shots-fade::after { content: ""; position: absolute; right: 0; top: 0; bottom: 28px; width: 80px;
+                       pointer-events: none; background: linear-gradient(90deg, transparent, var(--paper)); }
+  .shots { display: flex; gap: 20px; overflow-x: auto; padding: 12px 2px 28px;
+           scroll-snap-type: x mandatory; scrollbar-width: thin; -webkit-overflow-scrolling: touch; }
+  .shots::-webkit-scrollbar { height: 6px; }
+  .shots::-webkit-scrollbar-thumb { background: var(--line); border-radius: 99px; }
+  .shot { flex: 0 0 212px; margin: 0; scroll-snap-align: start; }
+  .shot .frame { padding: 5px; border-radius: 26px; background: linear-gradient(160deg,#2b3242,#0e1420 60%,#1c2433);
+                 box-shadow: 0 16px 36px rgba(16,24,40,.16);
+                 transition: transform .4s cubic-bezier(.2,0,0,1), box-shadow .4s ease; }
+  .shot:hover .frame { transform: translateY(-7px); box-shadow: 0 26px 50px rgba(16,24,40,.22); }
+  .shot img { width: 100%; border-radius: 21px; display: block; }
+  .shot .cap { margin-top: 15px; }
+  .shot .cap b { display: block; font-size: 13.5px; font-weight: 650; }
+  .shot .cap small { font-size: 11.5px; color: var(--muted); }
+  .shot .cap .sn { font-size: 10.5px; color: var(--brand); letter-spacing: .12em; margin-right: 7px; }
+
+  /* ---------- privacy ---------- */
+  .privacy { padding: 116px 0; border-top: 1px solid var(--line); background: var(--paper-2); }
+  .privacy-grid { display: grid; grid-template-columns: .9fr 1.1fr; gap: 90px; align-items: start; margin-top: 44px; }
+  .privacy h2 { margin-bottom: 24px; }
+  .privacy .lede { max-width: 420px; }
+  .p-list { border-top: 1px solid var(--line); }
+  .p-item { display: grid; grid-template-columns: 34px 1fr; gap: 18px; padding: 22px 0;
+            border-bottom: 1px solid var(--line); }
+  .p-item .pn { font-size: 11px; color: var(--brand-deep); font-variant-numeric: tabular-nums; padding-top: 5px; }
+  .p-item h3 { font-size: 17px; margin-bottom: 6px; }
+  .p-item p { font-size: 14px; color: var(--ink-2); }
+
+  /* ---------- download ---------- */
+  .download { padding: 112px 0 118px; border-top: 1px solid var(--line); }
+  .download-head { margin: 40px 0 54px; }
+  .download-head h2 { margin-bottom: 18px; }
+  .dl-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  .dl { border: 1px solid var(--line); padding: 30px 28px; display: flex; flex-direction: column;
+        transition: border-color .3s ease, transform .3s ease, background .3s ease; }
+  .dl:hover { border-color: var(--brand); transform: translateY(-4px); background: var(--paper-2); }
+  .dl.featured { border-color: rgba(59,91,196,.4); background: var(--paper-2); }
+  .dl .tag { font-size: 10.5px; letter-spacing: .16em; text-transform: uppercase; color: var(--brand-deep); }
+  .dl h3 { font-size: 21px; margin: 16px 0 6px; }
+  .dl .ver { font-size: 12.5px; color: var(--brand-deep); min-height: 20px; }
+  .dl p { font-size: 13.5px; color: var(--muted); margin: 16px 0 30px; flex: 1; line-height: 1.8; }
+  .dl-btn { display: inline-flex; align-items: center; justify-content: center; gap: 9px;
+            padding: 12px 18px; font-size: 13.5px; font-weight: 640; background: var(--ink); color: #fff;
+            transition: background .3s ease, transform .3s ease; }
+  .dl-btn:hover { background: var(--brand-deep); transform: translateY(-2px); }
+  .dl.featured .dl-btn { background: var(--brand); }
+  .dl-btn.secondary { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+  .dl-btn.secondary:hover { color: var(--brand-deep); border-color: var(--brand); background: transparent; }
+  .install { margin-top: 28px; font-size: 12.5px; color: var(--muted); }
+
+  /* ---------- cta ---------- */
+  .cta { background: var(--night); padding: 88px 0; }
+  .cta-inner { display: grid; grid-template-columns: .82fr 1.18fr; gap: 60px; align-items: center; }
+  .cta h2 { color: #fff; font-size: clamp(28px, 3.2vw, 42px); margin-bottom: 18px; }
+  .cta p { color: #a9b3c7; font-size: 15px; max-width: 380px; }
+  .cta .btn { margin-top: 30px; }
+  .cta img { width: 100%; border-radius: 3px; border: 1px solid rgba(255,255,255,.1); }
+
+  footer { padding: 46px 0 58px; border-top: 1px solid var(--line); }
+  .foot { display: flex; flex-wrap: wrap; gap: 24px; align-items: center; justify-content: space-between; }
+  .foot-links { display: flex; flex-wrap: wrap; gap: 28px; font-size: 13.5px; color: var(--ink-2); }
+  .foot-links a:hover { color: var(--brand); }
+  .foot small { font-size: 12px; color: var(--muted); }
+
+  /* ---------- reveal ---------- */
+  .reveal { opacity: 0; transform: translateY(22px);
+            transition: opacity .8s cubic-bezier(.2,0,0,1), transform .8s cubic-bezier(.2,0,0,1); }
+  .reveal.in { opacity: 1; transform: none; }
+
+  @media (max-width: 960px) {
+    .hero-grid, .origin-grid, .privacy-grid, .cta-inner { grid-template-columns: 1fr; gap: 48px; }
+    .hero { padding: 76px 0 84px; }
+    .phone-stage { order: 2; }
+    .principles { grid-template-columns: 1fr; margin-bottom: 80px; }
+    .principle { border-right: 0; border-bottom: 1px solid var(--line-night); padding: 26px 0; }
+    .principle:not(:first-child) { padding-left: 0; }
+    .fig-grid { grid-template-columns: repeat(2, 1fr); gap: 34px 0; }
+    .fig:nth-child(2) { border-right: 0; }
+    .dl-grid { grid-template-columns: repeat(2, 1fr); }
+  }
+  @media (max-width: 640px) {
+    .wrap { width: min(calc(100% - 32px), var(--max)); }
+    .nav-links { display: none; }
+    .hero, .origin, .night, .shots-sec, .privacy, .download { padding: 76px 0; }
+    .phone { transform: none; width: 262px; height: 532px; animation: none; }
+    .teaser { grid-template-columns: 34px 1fr; gap: 12px; }
+    .teaser .more { grid-column: 2; }
+    .shots-hint { text-align: left; }
+    .shot { flex-basis: 176px; }
+    .dl-grid { grid-template-columns: 1fr; }
+    .fig { padding: 0 18px; }
+    .hero-actions .btn { flex: 1 1 100%; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+    .reveal { opacity: 1; transform: none; }
+  }
+</style>
+</head>
+<body>
+<div id="progress" aria-hidden="true"></div>
+
+<header id="top">
+  <nav class="wrap nav" aria-label="主导航">
+    <a class="brand" href="#top"><img src="assets/vaultix-icon.svg" alt="" />Vaultix</a>
+    <div class="nav-links">
+      <a href="#origin">缘起</a>
+      <a href="#ideas">理念</a>
+      <a href="#screens">界面</a>
+      <a href="#download">下载</a>
+    </div>
+    <a class="nav-cta" href="#download">获取 APK
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+    </a>
+  </nav>
+</header>
+
+<main>
+  <section class="hero">
+    <div class="wrap hero-grid">
+      <div class="reveal">
+        <div class="chapter"><span class="idx">00</span><span class="rule"></span><span class="en">A quieter vault</span></div>
+        <h1>一个 App，<br />装下<em>你全部</em>的<br />密码库。</h1>
+        <p class="lede">云端库与本地文件，第一次被当作同一件事。没有账号，没有服务器，只有你自己的数据。</p>
+        <div class="hero-actions">
+          <a class="btn btn-primary" href="#download">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+            下载 Android APK
+          </a>
+          <a class="btn btn-quiet" href="https://github.com/Chaniug/Vaultix" target="_blank" rel="noopener">看看代码</a>
+        </div>
+        <div class="hero-meta">
+          <span><i></i>Android 8.0+</span><span><i></i>GPL-3.0</span>
+          <span><i></i>无账号</span><span><i></i>无追踪</span>
+        </div>
+      </div>
+
+      <div class="phone-stage reveal" aria-hidden="true">
+        <div class="phone"><div class="screen">
+          <div class="status"><span>9:41</span><span>Vaultix</span></div>
+          <div class="app-head"><strong>密码</strong><span class="avatar"></span></div>
+          <div class="search"><i></i>搜索条目、文件夹…</div>
+          <div class="rows">
+            <div class="row"><span class="ic" style="background:#181717"><svg viewBox="0 0 24 24"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg></span><span class="txt"><b>GitHub</b><small>github.com</small></span><span class="chev"></span></div>
+            <div class="row"><span class="ic" style="background:#1677FF"><svg viewBox="0 0 24 24"><path d="M19.695 15.07c3.426 1.158 4.203 1.22 4.203 1.22V3.846c0-2.124-1.705-3.845-3.81-3.845H3.914C1.808.001.102 1.722.102 3.846v16.31c0 2.123 1.706 3.845 3.813 3.845h16.173c2.105 0 3.81-1.722 3.81-3.845v-.157s-6.19-2.602-9.315-4.119c-2.096 2.602-4.8 4.181-7.607 4.181-4.75 0-6.361-4.19-4.112-6.949.49-.602 1.324-1.175 2.617-1.497 2.025-.502 5.247.313 8.266 1.317a16.796 16.796 0 0 0 1.341-3.302H5.781v-.952h4.799V6.975H4.77v-.953h5.81V3.591s0-.409.411-.409h2.347v2.84h5.744v.951h-5.744v1.704h4.69a19.453 19.453 0 0 1-1.986 5.06c1.424.52 2.702 1.011 3.654 1.333m-13.81-2.032c-.596.06-1.71.325-2.321.869-1.83 1.608-.735 4.55 2.968 4.55 2.151 0 4.301-1.388 5.99-3.61-2.403-1.182-4.438-2.028-6.637-1.809"/></svg></span><span class="txt"><b>支付宝</b><small>alipay.com</small></span><span class="chev"></span></div>
+            <div class="row"><span class="ic" style="background:#00A1D6"><svg viewBox="0 0 24 24"><path d="M17.813 4.653h.854c1.51.054 2.769.578 3.773 1.574 1.004.995 1.524 2.249 1.56 3.76v7.36c-.036 1.51-.556 2.769-1.56 3.773s-2.262 1.524-3.773 1.56H5.333c-1.51-.036-2.769-.556-3.773-1.56S.036 18.858 0 17.347v-7.36c.036-1.511.556-2.765 1.56-3.76 1.004-.996 2.262-1.52 3.773-1.574h.774l-1.174-1.12a1.234 1.234 0 0 1-.373-.906c0-.356.124-.658.373-.907l.027-.027c.267-.249.573-.373.92-.373.347 0 .653.124.92.373L9.653 4.44c.071.071.134.142.187.213h4.267a.836.836 0 0 1 .16-.213l2.853-2.747c.267-.249.573-.373.92-.373.347 0 .662.151.929.4.267.249.391.551.391.907 0 .355-.124.657-.373.906zM5.333 7.24c-.746.018-1.373.276-1.88.773-.506.498-.769 1.13-.786 1.894v7.52c.017.764.28 1.395.786 1.893.507.498 1.134.756 1.88.773h13.334c.746-.017 1.373-.275 1.88-.773.506-.498.769-1.129.786-1.893v-7.52c-.017-.765-.28-1.396-.786-1.894-.507-.497-1.134-.755-1.88-.773zM8 11.107c.373 0 .684.124.933.373.25.249.383.569.4.96v1.173c-.017.391-.15.711-.4.96-.249.25-.56.374-.933.374s-.684-.125-.933-.374c-.25-.249-.383-.569-.4-.96V12.44c0-.373.129-.689.386-.947.258-.257.574-.386.947-.386zm8 0c.373 0 .684.124.933.373.25.249.383.569.4.96v1.173c-.017.391-.15.711-.4.96-.249.25-.56.374-.933.374s-.684-.125-.933-.374c-.25-.249-.383-.569-.4-.96V12.44c.017-.391.15-.711.4-.96.249-.249.56-.373.933-.373Z"/></svg></span><span class="txt"><b>哔哩哔哩</b><small>bilibili.com</small></span><span class="chev"></span></div>
+            <div class="row"><span class="ic" style="background:#175DDC"><svg viewBox="0 0 24 24"><path d="M21.722.296A.964.964 0 0 0 21.018 0H2.982a.959.959 0 0 0-.703.296.96.96 0 0 0-.297.702v12c0 .895.174 1.783.523 2.665.349.88.783 1.66 1.3 2.345.517.68 1.132 1.346 1.848 1.993a21.807 21.807 0 0 0 1.98 1.609c.605.427 1.235.83 1.893 1.212.657.381 1.125.638 1.4.772.276.134.5.241.664.311a.916.916 0 0 0 .814 0c.168-.073.389-.177.667-.311.275-.134.743-.394 1.401-.772a25.305 25.305 0 0 0 1.894-1.212A21.891 21.891 0 0 0 18.348 20c.716-.647 1.33-1.31 1.847-1.993s.949-1.463 1.3-2.345c.35-.879.524-1.767.524-2.665V1.001a.95.95 0 0 0-.297-.705zm-2.325 12.815c0 4.344-7.397 8.087-7.397 8.087V2.57h7.397v10.54z"/></svg></span><span class="txt"><b>Vaultwarden</b><small>自建服务器</small></span><span class="chev"></span></div>
+            <div class="row"><span class="ic" style="background:#F38020"><svg viewBox="0 0 24 24"><path d="M16.5088 16.8447c.1475-.5068.0908-.9707-.1553-1.3154-.2246-.3164-.6045-.499-1.0615-.5205l-8.6592-.1123a.1559.1559 0 0 1-.1333-.0713c-.0283-.042-.0351-.0986-.021-.1553.0278-.084.1123-.1484.2036-.1562l8.7359-.1123c1.0351-.0489 2.1601-.8868 2.5537-1.9136l.499-1.3013c.0215-.0561.0293-.1128.0147-.168-.5625-2.5463-2.835-4.4453-5.5499-4.4453-2.5039 0-4.6284 1.6177-5.3876 3.8614-.4927-.3658-1.1187-.5625-1.794-.499-1.2026.119-2.1665 1.083-2.2861 2.2856-.0283.31-.0069.6128.0635.894C1.5683 13.171 0 14.7754 0 16.752c0 .1748.0142.3515.0352.5273.0141.083.0844.1475.1689.1475h15.9814c.0909 0 .1758-.0645.2032-.1553l.12-.4268zm2.7568-5.5634c-.0771 0-.1611 0-.2383.0112-.0566 0-.1054.0415-.127.0976l-.3378 1.1744c-.1475.5068-.0918.9707.1543 1.3164.2256.3164.6055.498 1.0625.5195l1.8437.1133c.0557 0 .1055.0263.1329.0703.0283.043.0351.1074.0214.1562-.0283.084-.1132.1485-.204.1553l-1.921.1123c-1.041.0488-2.1582.8867-2.5527 1.914l-.1406.3585c-.0283.0713.0215.1416.0986.1416h6.5977c.0771 0 .1474-.0489.169-.126.1122-.4082.1757-.837.1757-1.2803 0-2.6025-2.125-4.727-4.7344-4.727"/></svg></span><span class="txt"><b>Cloudflare</b><small>dash.cloudflare.com</small></span><span class="chev"></span></div>
+            <div class="row"><span class="ic" style="background:#3B66BC"><svg viewBox="0 0 24 24"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm0 2.4c5.302 0 9.6 4.298 9.6 9.6s-4.298 9.6-9.6 9.6-9.6-4.298-9.6-9.6S6.698 2.4 12 2.4zm0 2.4a1.2 1.2 0 0 0-1.2 1.2v5.4H6a1.2 1.2 0 0 0 0 2.4h4.8V19.2a1.2 1.2 0 0 0 2.4 0v-5.4H18a1.2 1.2 0 0 0 0-2.4h-4.8V6A1.2 1.2 0 0 0 12 4.8z"/></svg></span><span class="txt"><b>1Password</b><small>1password.com</small></span><span class="chev"></span></div>
+          </div>
+          <div class="dock"><i class="on"></i><i></i><span class="plus">+</span><i></i><i></i></div>
+        </div></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="origin" id="origin">
+    <div class="wrap">
+      <div class="chapter reveal"><span class="idx">01</span><span class="rule"></span><span class="en">Why it exists</span></div>
+      <div class="origin-grid">
+        <div class="reveal">
+          <h2>两套生态，<br />不该两个 App。</h2>
+          <div class="quote">「云端派要账号和服务器，本地派要手动搬文件。可真实的密码库，往往两者都有。」</div>
+          <p class="lede">Vaultix 把 Bitwarden / Vaultwarden 与 KeePass KDBX 放进同一个条目模型、同一套界面、同一个自动填充引擎。</p>
+          <p class="origin-tail">剩下的，交给它自己说。</p>
+        </div>
+        <div class="duo reveal">
+          <div class="duo-row"><span class="k num">A</span><div><h3>Bitwarden / Vaultwarden</h3><p>在线同步，走官方新版 API。支持自建服务器，地址由你决定。</p></div></div>
+          <div class="duo-row"><span class="k num">B</span><div><h3>KeePass KDBX</h3><p>本地文件，KDBX 4.x。不联网、无账号；也能放到 OneDrive / WebDAV，带冲突检测。</p></div></div>
+          <div class="duo-row"><span class="k num">+</span><div><h3>同一套体验</h3><p>自动填充、通行密钥、TOTP、站点图标、文件夹与回收站——两边都不少。</p></div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="night" id="ideas">
+    <div class="wrap">
+      <div class="chapter on-night reveal"><span class="idx">02</span><span class="rule"></span><span class="en">What we refuse</span></div>
+      <div class="principles">
+        <div class="principle reveal"><span class="pnum num">01</span><h3>没有服务器</h3><p>不注册、不托管、不备份。云端库直连你指定的实例，本地库只是设备上的一个文件。</p></div>
+        <div class="principle reveal"><span class="pnum num">02</span><h3>两边都一等</h3><p>不是「兼容模式」，不是把 KDBX 塞进云端的缝隙里。两套写路径各自完整。</p></div>
+        <div class="principle reveal"><span class="pnum num">03</span><h3>细节由真机定</h3><p>不靠清单打勾。一次卡顿、一帧闪烁，都会回到代码里被追到底。</p></div>
+      </div>
+
+      <div class="teaser-head reveal">
+        <h2>有些决定，<br />不写在这里。</h2>
+        <p>它们散落在代码注释与工程手记里。这里只留三句话，剩下的留给你自己翻。</p>
+      </div>
+      <div class="teasers">
+        <div class="teaser reveal"><span class="tnum num">01</span><div><h3>图标是挑出来的，不是抓来的。</h3><p>229 个矢量、358 KB、本地优先。</p></div><a class="more" href="https://github.com/Chaniug/Vaultix/tree/main/tools/brand-icons" target="_blank" rel="noopener">看清单 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a></div>
+        <div class="teaser reveal"><span class="tnum num">02</span><div><h3>转场是一层层减掉的，不是加出来的。</h3><p>整屏滑动被否掉之后，只留下刚好够用的那一点。</p></div><a class="more" href="https://github.com/Chaniug/Vaultix/blob/main/app/src/main/java/io/vaultix/vaultix/ui/shell/TabTransitions.kt" target="_blank" rel="noopener">读注释 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a></div>
+        <div class="teaser reveal"><span class="tnum num">03</span><div><h3>保存必须跑完，不是写完就算。</h3><p>一次真机反馈，改掉一整条写回链路。</p></div><a class="more" href="https://github.com/Chaniug/Vaultix/tree/main/.ai" target="_blank" rel="noopener">翻手记 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a></div>
+      </div>
+      <div class="teaser-tail reveal"><span>想知道为什么，去仓库里找答案。</span><a class="btn btn-night" href="https://github.com/Chaniug/Vaultix" target="_blank" rel="noopener">打开 GitHub</a></div>
+    </div>
+  </section>
+
+  <section class="figures">
+    <div class="wrap fig-grid">
+      <div class="fig reveal"><b class="num" data-count="229">0</b><small>内置品牌矢量图标</small></div>
+      <div class="fig reveal"><b class="num" data-count="1827">0</b><small>单元测试，0 失败</small></div>
+      <div class="fig reveal"><b class="num" data-count="33">0</b><small>静态门禁项</small></div>
+      <div class="fig reveal"><b class="num" data-count="0">0</b><small>我们运营的服务器</small></div>
+    </div>
+  </section>
+
+  <section class="shots-sec" id="screens">
+    <div class="wrap">
+      <div class="chapter reveal"><span class="idx">03</span><span class="rule"></span><span class="en">The surface</span></div>
+      <div class="shots-head reveal">
+        <h2>看得见的，<br />只是最外面一层。</h2>
+        <p class="shots-hint">实机截图 · 左右滑动<br />个人数据已做模糊处理</p>
+      </div>
+      <div class="shots-fade reveal"><div class="shots">
+        <figure class="shot"><div class="frame"><img src="assets/screenshots/01-vaults.webp" alt="密码条目列表界面" loading="lazy" /></div><figcaption class="cap"><b><span class="sn num">01</span>密码条目</b><small>分组 / 收藏 / 回收站</small></figcaption></figure>
+        <figure class="shot"><div class="frame"><img src="assets/screenshots/02-totp.webp" alt="验证码界面" loading="lazy" /></div><figcaption class="cap"><b><span class="sn num">02</span>验证码</b><small>TOTP / HOTP / mOTP</small></figcaption></figure>
+        <figure class="shot"><div class="frame"><img src="assets/screenshots/03-wallet.webp" alt="卡包界面" loading="lazy" /></div><figcaption class="cap"><b><span class="sn num">03</span>卡包</b><small>支付卡 / 身份信息</small></figcaption></figure>
+        <figure class="shot"><div class="frame"><img src="assets/screenshots/04-add.webp" alt="新建条目面板" loading="lazy" /></div><figcaption class="cap"><b><span class="sn num">04</span>新建条目</b><small>登录 / 笔记 / SSH 密钥</small></figcaption></figure>
+        <figure class="shot"><div class="frame"><img src="assets/screenshots/05-settings.webp" alt="设置界面" loading="lazy" /></div><figcaption class="cap"><b><span class="sn num">05</span>设置</b><small>主题 / 自动填充 / 权限</small></figcaption></figure>
+        <figure class="shot"><div class="frame"><img src="assets/screenshots/06-vault-management.webp" alt="密码库管理界面" loading="lazy" /></div><figcaption class="cap"><b><span class="sn num">06</span>密码库管理</b><small>云端库与本地 KDBX</small></figcaption></figure>
+      </div></div>
+    </div>
+  </section>
+
+  <section class="privacy" id="privacy">
+    <div class="wrap">
+      <div class="chapter reveal"><span class="idx">04</span><span class="rule"></span><span class="en">Yours, only</span></div>
+      <div class="privacy-grid">
+        <div class="reveal"><h2>你的数据，<br />不经过我们。</h2><p class="lede">没有账号体系，也没有后端。它只是一个客户端：连接你自己的服务器，或打开你自己的文件。</p></div>
+        <div class="p-list reveal">
+          <div class="p-item"><span class="pn num">01</span><div><h3>没有中间服务器</h3><p>云端库直连你指定的实例；本地库就是设备上的一个 .kdbx 文件。</p></div></div>
+          <div class="p-item"><span class="pn num">02</span><div><h3>加密发生在设备侧</h3><p>Bitwarden 库沿用官方端到端加密模型；KDBX 由主密码与 keyfile 保护。</p></div></div>
+          <div class="p-item"><span class="pn num">03</span><div><h3>可以逐行检查</h3><p>GPL-3.0，构建流程与 CI 结果全部公开。不放心，就自己从源码编一个。</p></div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="download" id="download">
+    <div class="wrap">
+      <div class="chapter reveal"><span class="idx">05</span><span class="rule"></span><span class="en">Take it</span></div>
+      <div class="download-head reveal"><h2>选一个版本开始用。</h2><p class="lede">全部由 GitHub Actions 从源码构建，发布页附校验值。</p></div>
+      <div class="dl-grid">
+        <article class="dl featured reveal"><span class="tag">Recommended · 稳定版</span><h3>正式发布</h3><div class="ver" id="stable-ver">正在读取最新版本…</div><p>面向日常使用，经过完整 CI 门禁：编译、detekt、单元测试。</p><a class="dl-btn" id="stable-btn" href="https://github.com/Chaniug/Vaultix/releases/latest" target="_blank" rel="noopener">前往发布页下载</a></article>
+        <article class="dl reveal"><span class="tag">Preview · 预览版</span><h3>开发预览</h3><div class="ver">v0.12.0-dev · preview</div><p>main 有改动就由 CI 出一个 debug APK，适合尝鲜，不建议作为唯一密码库。</p><a class="dl-btn secondary" href="https://github.com/Chaniug/Vaultix/releases/tag/preview" target="_blank" rel="noopener">获取预览 APK</a></article>
+        <article class="dl reveal"><span class="tag">Source · 源码</span><h3>自己构建</h3><div class="ver">Kotlin · Gradle · GPL-3.0</div><p>克隆仓库自己编译，或参与贡献。文档在 Docs/ 与 .ai/ 两个目录里。</p><a class="dl-btn secondary" href="https://github.com/Chaniug/Vaultix" target="_blank" rel="noopener">打开 GitHub 仓库</a></article>
+      </div>
+      <p class="install">需要 Android 8.0（API 26）或更高版本。首次安装请在系统设置中允许「安装未知应用」；升级不会清除已有密码库。</p>
+    </div>
+  </section>
+
+  <section class="cta">
+    <div class="wrap cta-inner">
+      <div class="reveal"><h2>剩下的，<br />在仓库里。</h2><p>代码、设计取舍、每一次修复的来龙去脉，都在那儿。GPL-3.0，欢迎一起把它磨得更好。</p>
+        <a class="btn btn-night" href="https://github.com/Chaniug/Vaultix" target="_blank" rel="noopener">打开 GitHub</a></div>
+      <div class="reveal"><img src="assets/vaultix-banner.jpg" alt="Vaultix 品牌横幅：吉祥物与产品名" loading="lazy" /></div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap foot">
+    <a class="brand" href="#top"><img src="assets/vaultix-icon.svg" alt="" />Vaultix</a>
+    <div class="foot-links">
+      <a href="https://github.com/Chaniug/Vaultix" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/Chaniug/Vaultix/releases" target="_blank" rel="noopener">Releases</a>
+      <a href="https://github.com/Chaniug/Vaultix/tree/main/Docs" target="_blank" rel="noopener">文档</a>
+      <a href="https://github.com/Chaniug/Vaultix/blob/main/SECURITY.md" target="_blank" rel="noopener">安全披露</a>
+      <a href="https://github.com/Chaniug/Vaultix/blob/main/LICENSE" target="_blank" rel="noopener">License</a>
+    </div>
+    <small>© 2026 Vaultix contributors · GPL-3.0-or-later</small>
+  </div>
+</footer>
+
+<script>
+  (function () {
+    var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    // 滚动进度
+    var bar = document.getElementById('progress');
+    var header = document.querySelector('header');
+    function onScroll() {
+      var max = document.documentElement.scrollHeight - window.innerHeight;
+      var p = max > 0 ? window.scrollY / max : 0;
+      bar.style.transform = 'scaleX(' + Math.min(1, Math.max(0, p)) + ')';
+      header.classList.toggle('scrolled', window.scrollY > 12);
+    }
+    window.addEventListener('scroll', onScroll, { passive: true });
+    onScroll();
+
+    // 章节淡入
+    var items = document.querySelectorAll('.reveal');
+    if (!reduce && 'IntersectionObserver' in window) {
+      var io = new IntersectionObserver(function (entries) {
+        entries.forEach(function (e) {
+          if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); }
+        });
+      }, { threshold: 0.1, rootMargin: '0px 0px -40px 0px' });
+      items.forEach(function (el, i) { el.style.transitionDelay = (i % 3) * 70 + 'ms'; io.observe(el); });
+    } else {
+      items.forEach(function (el) { el.classList.add('in'); });
+    }
+
+    // 数字：只跑一次，克制
+    var counters = document.querySelectorAll('[data-count]');
+    function countUp(el) {
+      var target = parseInt(el.getAttribute('data-count'), 10) || 0;
+      if (reduce || target === 0) { el.textContent = target; return; }
+      var start = performance.now(), dur = 900;
+      function step(now) {
+        var t = Math.min(1, (now - start) / dur);
+        var eased = 1 - Math.pow(1 - t, 3);
+        el.textContent = Math.round(target * eased);
+        if (t < 1) requestAnimationFrame(step);
+      }
+      requestAnimationFrame(step);
+    }
+    if ('IntersectionObserver' in window) {
+      var co = new IntersectionObserver(function (entries) {
+        entries.forEach(function (e) {
+          if (e.isIntersecting) { countUp(e.target); co.unobserve(e.target); }
+        });
+      }, { threshold: 0.6 });
+      counters.forEach(function (el) { co.observe(el); });
+    } else {
+      counters.forEach(countUp);
+    }
+
+    // 最新版本：失败就保留静态回退链接
+    fetch('https://api.github.com/repos/Chaniug/Vaultix/releases/latest', { headers: { Accept: 'application/vnd.github+json' } })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        if (!d || !d.tag_name) return;
+        document.getElementById('stable-ver').textContent = d.tag_name + ' · 最新版';
+        var apk = (d.assets || []).find(function (a) { return /\.apk$/i.test(a.name); });
+        if (apk && apk.browser_download_url) {
+          var btn = document.getElementById('stable-btn');
+          btn.href = apk.browser_download_url;
+          btn.textContent = '下载 ' + apk.name;
+        }
+      })
+      .catch(function () {});
+  })();
+</script>
+</body>
+</html>

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108" width="108" height="108" role="img" aria-label="Vaultix">
+  <rect width="108" height="108" rx="24" fill="#3B5BC4"/>
+  <path d="M37.00,40.00 L47.50,40.00 L55.00,61.00 L55.00,74.00 L51.50,74.00 Z" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="1.5" stroke-linejoin="round"/>
+  <path d="M56.50,74.00 L53.00,74.00 L53.00,61.00 L60.50,40.00 L71.00,40.00 Z" fill="#B9C6F0" stroke="#B9C6F0" stroke-width="1.5" stroke-linejoin="round"/>
+  <path d="M50.80,55.00 L57.20,55.00 L54.00,66.00 Z" fill="#3B5BC4"/>
+</svg>
