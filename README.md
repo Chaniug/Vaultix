@@ -272,13 +272,13 @@ base64 -w0 vaultix-release.jks
 
 ## 🗺 状态
 
-当前版本 **0.5.0**（见 [`VERSION`](./VERSION)；早期开发中，API 与数据格式仍可能变动）。
+当前版本 **0.12.0**（见 [`VERSION`](./VERSION)；早期开发中，API 与数据格式仍可能变动）。
 
 | 里程碑 | 状态 |
 |---|---|
 | M0 基础骨架 + `core:crypto` | ✅ DONE |
 | M1 Bitwarden 同步 | ✅ 功能与回归收官 |
-| M2 KDBX 引擎 + 集成 | 🔄 **只读 + 写回已通**；写回带条件写与冲突检测 |
+| M2 KDBX 引擎 + 集成 | ✅ 只读 + 写回已验收（服务端条件写 + 冲突检测，#185 / #190 / #286 / #287） |
 | M2-a 自动填充服务 | ✅ 主链路已通（含"解锁即回填"、保存提示三段式） |
 | M2-b 网盘同步（OneDrive / WebDAV） | ✅ 文件源与账号管理已落地 |
 | M3 平台集成 / 安全中心 | 🔄 autofill 已并入 M2-a；安全中心待做 |
@@ -286,6 +286,7 @@ base64 -w0 vaultix-release.jks
 
 - ✅ 多库并存、通行密钥、验证码（含自动复制下一个）、卡包、权限管理页、网盘账号页
 - 🚧 进行中：性能专项优化、KDBX 库内 SSH 字段映射
+- 🔄 待真机：**W6 互操作验收** —— 用 KeePassXC / KeePassDX 打开 Vaultix 写出的库，核对条目 / TOTP / 通行密钥 / 多 URL（自动化环境跑不了，这是 M2 唯一的遗留项）
 - 📋 计划：性能优化见 [Docs/progress/perf-plan.md](./Docs/progress/perf-plan.md)
 
 里程碑与验收标准见 [Docs/13-路线图与里程碑.md](./Docs/13-路线图与里程碑.md)。
