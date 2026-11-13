@@ -60,7 +60,7 @@
 `forEach { }` 要 `}` 闭合（写成 `)` 会吞掉后面所有成员函数）；
 detekt `ThrowsCount` 上限 2 ⇒ 改 `String?` 判据表 + 单一 throw，`MaxLineLength` 也要拆表格行。
 
-**提交 / CI**：（推送后回填）
+**提交 / CI**：`f5635822 fix(webdav): #288 坚果云 403 不再谎报密码错 + 自检改 PROPFIND + 专用 client` 已推送 `main`；`AI docs consistency` success（10s）、`Android CI (Debug)` success（4m23s，`Lint, test diagnostics, and debug build` 与 `Sandbox unit tests` 两个 job 全绿）；preview Release 自动更新为 `Vaultix v0.13.0-dev-f563582 · Preview`（`Vaultix-v0.13.0-dev-f563582-preview.apk`，37,575,802 B ≈ 37.6MB）。
 
 **待真机验收**：生成应用密码 + 关二次验证后测试连接应成功；仍失败时红字必须列 403
 四条原因；账号页 OK 后添加页能列目录；错密码报 401 且文案不同；不存在子目录提示
