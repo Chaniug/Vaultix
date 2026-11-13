@@ -1,30 +1,35 @@
 # Vaultix 项目长期笔记
 
 > **接力顺序（先读这四份，再动手）**：
-> 本文件（约定 / 硬约束 / 决策）→ `.ai/ISSUES.md`（坑：现象-根因-解法，最新 **#289**）→
+> 本文件（约定 / 硬约束 / 决策）→ `.ai/ISSUES.md`（坑：现象-根因-解法，最新 **#290**）→
 > `Docs/progress/next-steps.md`（待办唯一真源；历史按时间段归档，见文末索引）→ `Docs/progress/current-status.md`（进度快照）
 > → `.ai/SESSION-YYYY-MM-DD.md`（逐轮流水，需要细节才翻）。
 >
-> 最后更新：2026-11-13（**#289 连上 WebDAV 后闪退、重进账号已添加**（协程异常边界 /
-> 主线程 IO）：「账号已添加」= **凭据已落盘** ⇒ 崩溃点必然在**成功之后**
-> （`_state.update` → `refresh()` → `CloudAccountInventory.list()`：Room Flow +
-> Keystore 解密 + MSAL 会话枚举）。工程**没有全局 `CoroutineExceptionHandler`**（#98
-> 实测），而 `CloudAccountsViewModel` / `AddCloudVaultViewModel` 全是裸
-> `viewModelScope.launch` ⇒ 任一处抛出即**进程退出**；凭据写入 / 自检 / 清单读取还
-> 全压在默认主线程。修法：两个 ViewModel 共 10 个动作收口 `launchGuarded`
-> （`runCatching { block() }.onFailure { }`、取消 / `Error` 原样重抛、其余转可见
-> 错误态 + `VaultixLog.e`）、重 IO 显式 `withContext(Dispatchers.IO)`、
-> `probeWebDav()` 内部两处 `runCatching` 也区分取消以免误删刚写好的凭据、
-> 添加页四动作同步收口。
-> ⚠️ 长期教训：**没有全局兜底时，裸 `viewModelScope.launch` 的未捕获异常 = 进程退出** ——
-> 「数据已保存」只证明写盘成功，不证明写盘之后的链路安全，排查要往后读一整段；
-> **补的是异常边界本身，不是猜某一个具体异常**（成功之后有五六处可抛，逐个
-> try/catch 永远追不完）；**统一入口不要顺手切 dispatcher**（MSAL 登录必须主线程，
-> 重 IO 由调用点自己 `withContext`）；**`runCatching` 会吞掉 `CancellationException`**，
-> 必须显式重抛，否则取消被当成失败并误删凭据；**detekt `TooGenericExceptionCaught`**
-> 逼宽边界改 `runCatching`；**设置页门禁把中文日志 label 也判成 UI 硬编码中文**
-> （判据扫所有字符串字面量）⇒ 日志 label 一律 ASCII；**上一轮的完成口径会被下一轮
-> 真机反馈反转**（#288 修「连不上」，#289 是「连上了但进程死了」）。
+> 最后更新：2026-11-13（**#290 点「注销」网盘账号闪退**（资源 ID 编译期内联为 0 /
+> Compose 重组期崩溃）：真机日志两次 `Resources$NotFoundException: String resource
+> ID #0x0`，栈在 `NoticeSnackbar` → `stringResource(0)`。11 条
+> `const val SETTINGS_CLOUD_* = R.string.*` 被 Kotlin 内联成 **0**（AGP 编译期 R 类
+> 是 `0x0` 占位，运行时才 `0x7f0f01xx`），`notice = 0` 直接杀进程。修法：11 条改
+> 普通 `val`（`<clinit>` 读 `R$string.*` 真值）+ 两处变量式解析点过
+> `safeStringRes()` 认 `Resources.ID_NULL` + 无效 id 消费与可见降级。
+> ⚠️ 长期教训：**Android 编译期 R 类不是真值**，资源 id 永远不要写进
+> `const val`（要运行时 `val` 或直接 `R.string.*`）；**Compose 重组期异常不经过
+> `viewModelScope`**，`runCatching` / `CoroutineExceptionHandler` 全兜不住 ⇒
+> 变量式 `stringResource(id)` 必须先验 `Resources.ID_NULL`；**`val` 与 `const val`
+> 的差别要用 `javap -c` 看 `<clinit>` 才作数**；detekt 圈复杂度、门禁注释被另一门禁
+> 误扫（`R.string.y` 示例）也是本轮实测。
+> ⚠️ **订正 #289**：`probeWebDav()` 成功同样下发 0 ⇒ 两次闪退同源。#289 补的
+> `launchGuarded` 仍必要（裸 launch 无全局兜底确实杀进程、重 IO 压主线程），但它兜的是
+> **协程内部**异常，不是当时那次闪退的根因 —— 上一轮的完成口径再次被真机日志反转。
+> 详情见 `issues/06-界面与交互-part28.md`；
+> 上一轮 **#289 连上 WebDAV 后闪退、重进账号已添加**（协程异常边界 / 主线程 IO，
+> 归因已收窄，见上）：「账号已添加」= **凭据已落盘** ⇒ 当时判定崩溃点在**成功之后**；
+> 工程**没有全局 `CoroutineExceptionHandler`**（#98 实测），两个 ViewModel 全是裸
+> `viewModelScope.launch` ⇒ 任一处抛出即**进程退出**，且凭据写入 / 自检 / 清单读取
+> 全压在默认主线程。修法：共 10 个动作收口 `launchGuarded`（`runCatching` + 取消 /
+> `Error` 原样重抛 + 异常转可见错误态与 `VaultixLog.e`）、重 IO 显式
+> `withContext(Dispatchers.IO)`（⚠️ 不在统一入口改 dispatcher，MSAL 必须主线程）、
+> 内部两处 `runCatching` 也区分取消以免误删凭据、添加页四动作同步收口。
 > 详情见 `issues/06-界面与交互-part27.md`；
 > 上一轮 **#288 坚果云 WebDAV 403「登录不上去」**（错误分类 / 连接自检 /
 > 凭据隔离）：真机「测试连接 → 账号或密码不正确（HTTP 403）」。匿名 / 假凭据差分实测

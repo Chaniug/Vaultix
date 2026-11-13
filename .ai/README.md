@@ -24,7 +24,74 @@
 - 已接进 CI：`ci-debug.yml` 的 `sandbox-tests` job 用**同一份脚本**，与 `android-ci` 并行
   ⇒ 本地绿 ⇒ CI 不会红在同一件事上。
 
-## 🕐 最新状态（2026-11-13 · #289 连上 WebDAV 后闪退、重进账号已添加）
+## 🕐 最新状态（2026-11-13 · #290 点「注销」网盘账号闪退）
+
+> **一句话**：真机「网盘账号无法顺利从 vaultix 注销，点击注销按钮，发现闪退」。日志
+> `versionName=0.13.0-dev-731cdae`（正是 #289 preview）两次 FATAL
+> `Resources$NotFoundException: String resource ID #0x0`，栈在 `NoticeSnackbar` →
+> `stringResource(0)`，经 `Recomposer.performRecompose` / `Choreographer` ⇒
+> **Compose 重组期异常**，不是协程异常，`launchGuarded` 兜不住。
+> 接力正文：[`#290`](./issues/06-界面与交互-part28.md)。
+
+1. **取证**：`confirmRemoval()` 成功分支写 `notice = SETTINGS_CLOUD_REMOVED_WEBDAV`，
+   而 `CloudAccountsViewModel` 的 11 条提示常量是 `const val ... = R.string.*`。
+   AGP 编译期 `compile_symbol_list/.../R.txt` 与 `compile_r_class_jar/.../R.jar`
+   里资源 id 全是 `0x0` 占位（`public static int`，非 final）；运行时
+   `runtime_symbol_list` / `compile_and_runtime_r_class_jar` 才是 `0x7f0f01xx`
+   （`cloud_msg_removed_webdav = 2131689781`）。`const val` 要编译期常量
+   ⇒ Kotlin 把 **0 内联进每个调用点**，`javap -constants CloudAccountsViewModel.class`
+   显示 11 条 `SETTINGS_CLOUD_* = 0`。`strings.xml` 与 `resources.arsc` 里文案都在
+   ⇒ 不是资源被裁。全仓宽松扫描确认只有这一个文件有同款写法。
+2. **四处修法**：① 11 条改普通 `val`（非编译期常量，`<clinit>` 生成
+   `getstatic R$string.* → putstatic`，`javap -c` 已验证；运行时读非 final 真值）；
+   ② 抽 `internal safeStringRes(id)` 认 `Resources.ID_NULL`，`NoticeSnackbar` 与
+   `CloudError.Res` 两处变量式 `stringResource` 都过它；③ `NoticeSnackbar` 对无效 id
+   也 `onConsumed()`，避免 0 永远挂在 `UiState`；④ `CloudError.Res` 降级
+   `error_unknown_no_detail`，抽 `@Composable cloudErrorText()` 把页面圈复杂度
+   从 16 压回 detekt 上限 14。
+3. **⚠️ 订正 #289**：`probeWebDav()` 成功分支同样写
+   `notice = SETTINGS_CLOUD_PROBE_OK`（也是 0），且在 `refresh()` **之前** ⇒
+   #289「连上就闪退」极可能就是这个 0。#289 的 `launchGuarded` **仍必要**
+   （无全局兜底时裸 `viewModelScope.launch` 未捕获异常确实杀进程、重 IO 确实压主线程），
+   但它兜的是**协程内部**异常；重组期异常不在其作用域。⇒ 两次闪退同源，
+   #289 修了真实健壮性缺口，但没修掉当时那次闪退。
+
+**验证**：`detekt` + 全模块 `test` + `:app:assembleFullDebug`
+`BUILD SUCCESSFUL in 1m 52s`（354 tasks：37 executed / 10 from cache / 307 up-to-date）；
+**1860 例 0 失败**（186 份 XML，比 #289 的 1851 例多 9 例、多 2 份）；
+**33 项 Python 静态 / 文档门禁全绿**（17 `check_*` + 13 `selftest_*` + 编码 /
+changelog 自检 / 图标几何）。新建 `CloudAccountsResourceIdRulesTest`（4 条源码门禁）
++ `CloudAccountsResourceIdBehaviorTest`（5 例行为，含 R 值环境探针）。
+**反证**：把 1 条 `val` 改回 `const val` ⇒ 3 例立刻变红；撤掉 `safeStringRes`
+守卫 ⇒ 2 例立刻变红；源码均已恢复。
+
+**本轮 6 条坑**：编译期 R 类不是真值（`0x0` 占位）；`stringResource(0)` 是**重组期**
+异常，任何协程异常边界都兜不住；变量式资源解析必须先验 `Resources.ID_NULL`；
+`val` 与 `const val` 差一条 `getstatic`，改完要 `javap -c` 看 `<clinit>`；
+detekt `CyclomaticComplexMethod`（页面塞 `when` + `?.let` + `?:` 从 14 涨到 16）；
+测试注释里写 `R.string.y` 示例会被 `selftest_cross_file_private.py` 判成悬空引用。
+
+**提交 / CI**：`5553bda4 fix(settings): #290 注销网盘账号不再因 stringResource(0) 闪退`
+已推送 `main`；`Android CI (Debug)` **success**（17:29:58 → 17:34:34，约 4m36s，
+`Sandbox unit tests` 与 `Lint, test diagnostics, and debug build` 两个 job 全绿，
+`Run unit tests (hard gate)`、`Publish Debug APK to preview Release` 逐步通过）；
+preview Release 自动更新为 `Vaultix v0.13.0-dev-5553bda · Preview`
+（`Vaultix-v0.13.0-dev-5553bda-preview.apk`，37,575,798 B ≈ 35.8MB）。
+文档回填为第二个提交；`AI docs consistency` 由该文档提交触发。
+
+**待真机验收**：注销 WebDAV / OneDrive 账号不闪退且弹对应成功提示、账号从清单消失；
+测试连接成功（#289 主路径）不闪退并弹「连接成功，账号已保存」；重复点注销 /
+立刻返回不闪退；校验失败红字正常（`CloudError.Res` 路径）；logcat 不再出现
+`Invalid resource ID 0x00000000`。
+
+---
+
+## 上一轮（2026-11-13 · #289 连上 WebDAV 后闪退、重进账号已添加）— 归因已被 #290 收窄
+
+> ⚠️ **订正**：本段把闪退定性为「成功之后的协程未捕获异常」，但 #290 的真机日志 +
+> 字节码证明两次闪退同源，真因是 `const val R.string.* = 0` 在 Compose 重组期
+> `stringResource(0)` 崩溃。`launchGuarded` 仍必要但不是这次闪退的根因。
+> 以下保留原文作过程留痕，结论以 #290 段为准。
 
 > **一句话**：真机「连接上 webdav 后，会闪退出来。重新进入后会发现网盘账号已经添加进去了」。
 > 「账号已添加」= **凭据已落盘** ⇒ 崩溃点必然在**成功之后**；工程里没有全局
