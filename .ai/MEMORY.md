@@ -1,11 +1,32 @@
 # Vaultix 项目长期笔记
 
 > **接力顺序（先读这四份，再动手）**：
-> 本文件（约定 / 硬约束 / 决策）→ `.ai/ISSUES.md`（坑：现象-根因-解法，最新 **#288**）→
+> 本文件（约定 / 硬约束 / 决策）→ `.ai/ISSUES.md`（坑：现象-根因-解法，最新 **#289**）→
 > `Docs/progress/next-steps.md`（待办唯一真源；历史按时间段归档，见文末索引）→ `Docs/progress/current-status.md`（进度快照）
 > → `.ai/SESSION-YYYY-MM-DD.md`（逐轮流水，需要细节才翻）。
 >
-> 最后更新：2026-11-13（**#288 坚果云 WebDAV 403「登录不上去」**（错误分类 / 连接自检 /
+> 最后更新：2026-11-13（**#289 连上 WebDAV 后闪退、重进账号已添加**（协程异常边界 /
+> 主线程 IO）：「账号已添加」= **凭据已落盘** ⇒ 崩溃点必然在**成功之后**
+> （`_state.update` → `refresh()` → `CloudAccountInventory.list()`：Room Flow +
+> Keystore 解密 + MSAL 会话枚举）。工程**没有全局 `CoroutineExceptionHandler`**（#98
+> 实测），而 `CloudAccountsViewModel` / `AddCloudVaultViewModel` 全是裸
+> `viewModelScope.launch` ⇒ 任一处抛出即**进程退出**；凭据写入 / 自检 / 清单读取还
+> 全压在默认主线程。修法：两个 ViewModel 共 10 个动作收口 `launchGuarded`
+> （`runCatching { block() }.onFailure { }`、取消 / `Error` 原样重抛、其余转可见
+> 错误态 + `VaultixLog.e`）、重 IO 显式 `withContext(Dispatchers.IO)`、
+> `probeWebDav()` 内部两处 `runCatching` 也区分取消以免误删刚写好的凭据、
+> 添加页四动作同步收口。
+> ⚠️ 长期教训：**没有全局兜底时，裸 `viewModelScope.launch` 的未捕获异常 = 进程退出** ——
+> 「数据已保存」只证明写盘成功，不证明写盘之后的链路安全，排查要往后读一整段；
+> **补的是异常边界本身，不是猜某一个具体异常**（成功之后有五六处可抛，逐个
+> try/catch 永远追不完）；**统一入口不要顺手切 dispatcher**（MSAL 登录必须主线程，
+> 重 IO 由调用点自己 `withContext`）；**`runCatching` 会吞掉 `CancellationException`**，
+> 必须显式重抛，否则取消被当成失败并误删凭据；**detekt `TooGenericExceptionCaught`**
+> 逼宽边界改 `runCatching`；**设置页门禁把中文日志 label 也判成 UI 硬编码中文**
+> （判据扫所有字符串字面量）⇒ 日志 label 一律 ASCII；**上一轮的完成口径会被下一轮
+> 真机反馈反转**（#288 修「连不上」，#289 是「连上了但进程死了」）。
+> 详情见 `issues/06-界面与交互-part27.md`；
+> 上一轮 **#288 坚果云 WebDAV 403「登录不上去」**（错误分类 / 连接自检 /
 > 凭据隔离）：真机「测试连接 → 账号或密码不正确（HTTP 403）」。匿名 / 假凭据差分实测
 > 12/12 全 401 ⇒ **403 是认证已通过后的服务端拒绝**，官方 FAQ 归因为微信二次验证 /
 > 访问频率 / 应用密码被撤销 / 目录权限；旧实现把 401/403 合并成「密码错」，

@@ -24,7 +24,66 @@
 - 已接进 CI：`ci-debug.yml` 的 `sandbox-tests` job 用**同一份脚本**，与 `android-ci` 并行
   ⇒ 本地绿 ⇒ CI 不会红在同一件事上。
 
-## 🕐 最新状态（2026-11-13 · #288 坚果云 WebDAV 403「登录不上去」）
+## 🕐 最新状态（2026-11-13 · #289 连上 WebDAV 后闪退、重进账号已添加）
+
+> **一句话**：真机「连接上 webdav 后，会闪退出来。重新进入后会发现网盘账号已经添加进去了」。
+> 「账号已添加」= **凭据已落盘** ⇒ 崩溃点必然在**成功之后**；工程里没有全局
+> `CoroutineExceptionHandler`（#98 实测），而两个 ViewModel 全是裸
+> `viewModelScope.launch` ⇒ 清单读取链路里任一处抛出都会**杀进程**。定性为
+> **协程异常边界 / 主线程 IO**，不是连接失败。接力正文：[`#289`](./issues/06-界面与交互-part27.md)。
+
+1. **取证**：`probeWebDav()` 成功后依次走 `_state.update`（probe OK）→ `refresh()`
+   → `CloudAccountInventory.list()`（Room Flow `.first()` + Keystore 解密 + MSAL
+   `listCachedSessions()` + Compose 重组）。#242 早就记过「`launch` 的异常在 ViewModel
+   scope 里表现为静默终止」，但当时只在 `VaultListViewModel` 补了兜底，这两个
+   ViewModel 一直裸着。⇒ **不猜具体异常**：成功之后有五六处可抛，逐个 try/catch
+   追不完，要补的是**边界本身**。另查出凭据写入 / 自检 / 清单读取全压在默认主线程。
+2. **四处修法**：① 两个 ViewModel 共 10 个动作全部收口到 `launchGuarded(label, block)`
+   （`runCatching { block() }.onFailure { ... }`，`CancellationException` / `Error`
+   原样重抛，其余写 `VaultixLog.e(TAG, error)`、把 `busy` / `loading` / `PROBING`
+   拉回终态、错误进 `CloudError.Detail` / `UnlockUiError.Detail`，每个文件只留定义里
+   **一处**裸 launch）；② 重 IO 显式 `withContext(Dispatchers.IO)`（设置页凭据写入 +
+   自检 + 回滚 + `refresh()`、`inventory.list()`；添加页 `cloudAccounts.list()`）；
+   ③ `probeWebDav()` 内部两处 `runCatching` 也区分取消，取消被吞成「自检失败」会
+   **误删刚写好的凭据**，回滚本身也包住不许盖掉原始原因；④ 添加页
+   `pickAccount` / `openDirectory` / `goUp` / `submit` 同步收口，`return@launch`
+   → `return@launchGuarded`。
+3. **⚠️ 取舍**：刻意**不**在 `launchGuarded` 统一入口改 dispatcher ——
+   `signInOneDrive()` 走 MSAL 必须主线程；重 IO 由各调用点自己 `withContext`。
+   **判据第二次反转**：#288 修的是「连不上」，本轮真机把焦点推到同一条主路径的
+   **成功之后**。
+
+**验证**：`detekt` + `:app:assembleFullDebug` + 九模块全量单测
+`BUILD SUCCESSFUL in 3m 19s`（315 tasks：24 executed / 33 from cache / 258 up-to-date），
+**1851 例 0 失败**（184 份 XML，比 #288 的 1843 例多 8 例、多 2 份 XML）；
+**全套 Python 静态 / 文档门禁全绿**。新建 `CloudAccountsCrashGuardTest`（4 例行为）
++ `WebDavLaunchGuardRulesTest`（4 条源码门禁）。**反证**：临时撤掉 `launchGuarded`
+的异常兜底，2 例行为用例立刻变红，源码已恢复。全量验证两次被门禁拦住并修好：
+detekt `TooGenericExceptionCaught` ⇒ 改 `runCatching`；`SettingsStyleRulesTest`
+中文硬编码 ⇒ 10 个日志 label 统一改 ASCII。
+
+**本轮 6 条坑**：无全局 `CoroutineExceptionHandler` 时裸 `viewModelScope.launch`
+未捕获异常 = 进程退出（「已保存」只证明写盘成功）；detekt `TooGenericExceptionCaught`
+逼宽边界改 `runCatching`；设置页门禁把**中文日志 label** 也判成 UI 硬编码中文；
+`runCatching` 会吞 `CancellationException` 必须显式重抛；统一入口别顺手切 dispatcher
+（MSAL 必须主线程）；沙箱恢复后 `ANDROID_HOME` / `local.properties` 丢失 ⇒ Gradle 报
+`SDK location not found`，补 `sdk.dir=/opt/android-sdk` 即可，不是代码问题。
+
+**提交 / CI**：`731cdaee fix(webdav): #289 连接成功后的未捕获异常不再闪退` 已推送 `main`；
+`Android CI (Debug)` **success**（11:08:27 → 11:25:21，约 17 分钟；本轮 CI 无缓存、
+`Lint, test diagnostics, and debug build` 与 `Sandbox unit tests` 两个 job 全绿，
+其中 22 个前置门禁步骤与 `Run unit tests (hard gate)`、`Publish Debug APK to preview Release`
+逐步通过）；`Sandbox unit tests` 单独 3m10s success。
+preview Release 自动更新为 `Vaultix v0.13.0-dev-731cdae · Preview`
+（`Vaultix-v0.13.0-dev-731cdae-preview.apk`，37,575,798 B ≈ 37.6MB）。
+文档回填为第二个提交；`AI docs consistency` 由该文档提交触发。
+
+**待真机验收**：应用密码 + 关二次验证后点测试连接应成功且**不闪退**、账号出现在清单；
+成功后立刻返回 / 停留都不闪退；401 / 403 / 404 / 超时显示对应红字而非闪退；
+添加页选账号 / 进目录 / 返回 / 提交任一处故障显示错误态；注销 / OneDrive 登录 /
+换号 / 健康探测同样不闪退；异常时 logcat 能搜到 `CloudAccounts` / `AddCloudVault` 的 ERROR。
+
+## 🕐 上一轮状态（2026-11-13 · #288 坚果云 WebDAV 403「登录不上去」）
 
 > **一句话**：真机截图「测试连接 → WebDAV 账号或密码不正确（HTTP 403）」。
 > 匿名 / 假凭据差分实测 12/12 全 401 ⇒ 用户拿到的 403 是**认证已通过后的服务端拒绝**，
