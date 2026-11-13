@@ -41,6 +41,13 @@
  *   `directoryUrl()` 对已带尾斜杠的 URL 是幂等的，`PROPFIND` 因此正好打在目录上；
  * - OneDrive：把 `父路径/<一个占位文件名>` 当 `path` ——
  *   `listChildren()` 取的是 `path` 的**父目录**，占位名不会被用上。
+ *
+ * ## ★ 2026-11-13（#289）：所有动作收口到 [launchGuarded]
+ *
+ * 真机「刚连上 WebDAV 就闪退、重进后账号已添加」。设置页负责把账号配好，
+ * 本页是紧接着的下一步；两边原先都是裸 `viewModelScope.launch`，而工程里
+ * **没有全局 `CoroutineExceptionHandler`** ⇒ 任何未捕获异常都直接杀进程。
+ * ⇒ 补的是**异常边界本身**，不是猜某一个具体异常。
  * ---------------------------------------------------------------------------
  */
 package io.vaultix.vaultix.ui.addvault
@@ -50,6 +57,7 @@ import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import io.vaultix.data.kdbx.KdbxFileEntry
 import io.vaultix.data.kdbx.KdbxFileSource
+import io.vaultix.common.logging.VaultixLog
 import io.vaultix.data.repository.kdbx.WebDavUrlBuilder
 import io.vaultix.data.repository.kdbx.WebDavVaultOrigin
 import io.vaultix.domain.KdbxAddOutcome
@@ -63,6 +71,10 @@ import io.vaultix.vaultix.ui.error.UnlockUiError
 import io.vaultix.vaultix.ui.error.toUnlockUiError
 import java.util.Locale
 import javax.inject.Inject
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -70,6 +82,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** 从哪种网盘添加。 */
 enum class CloudProvider { WEBDAV, ONEDRIVE }
@@ -165,8 +178,10 @@ class AddCloudVaultViewModel @Inject constructor(
 
     /** 重新读一遍已配置账号（进页面时调；账号可能刚在设置里配好）。 */
     fun refreshConfiguredAccounts() {
-        viewModelScope.launch {
-            val accounts = cloudAccounts.list()
+        launchGuarded("refreshConfiguredAccounts") {
+            // ★ #289：清单读取是 Room Flow + Keystore 解密 + MSAL 会话枚举，
+            //   既不能占主线程，也不能因其中一处抛异常就让进程退出。
+            val accounts = withContext(Dispatchers.IO) { cloudAccounts.list() }
             _state.update { it.copy(configuredAccounts = accounts, loadingAccounts = false) }
         }
     }
@@ -206,7 +221,7 @@ class AddCloudVaultViewModel @Inject constructor(
                 error = null,
             )
         }
-        viewModelScope.launch {
+        launchGuarded("pickAccount") {
             // 把账号的身份装进现有字段，让列目录那段逻辑完全复用（不新开一条分支）。
             when (account.kind) {
                 CloudAccountKind.WEBDAV -> {
@@ -216,7 +231,7 @@ class AddCloudVaultViewModel @Inject constructor(
                     val source = runCatching { webDavSource(root) }.getOrNull()
                     if (source == null) {
                         failWith(UnlockUiError.Validation.CloudVaultSourceMissing)
-                        return@launch
+                        return@launchGuarded
                     }
                     listInto(source, rootLabel(root))
                 }
@@ -228,7 +243,7 @@ class AddCloudVaultViewModel @Inject constructor(
                     val source = oneDriveSource(oneDriveBrowsePath())
                     if (source == null) {
                         failWith(UnlockUiError.Validation.CloudSignInBroken)
-                        return@launch
+                        return@launchGuarded
                     }
                     listInto(source, root)
                 }
@@ -250,10 +265,10 @@ class AddCloudVaultViewModel @Inject constructor(
         val next = childDirectoryOf(entry) ?: return
         dirStack += next
         _state.update { it.copy(busy = true, error = null) }
-        viewModelScope.launch {
+        launchGuarded("openDirectory") {
             val source = currentSource() ?: run {
                 failWith(UnlockUiError.Validation.CloudSourceUnavailable)
-                return@launch
+                return@launchGuarded
             }
             listInto(source, labelOf(next))
         }
@@ -264,10 +279,10 @@ class AddCloudVaultViewModel @Inject constructor(
         if (dirStack.size <= ONE_LEVEL || _state.value.busy) return
         dirStack.removeAt(dirStack.lastIndex)
         _state.update { it.copy(busy = true, selectedName = "", error = null) }
-        viewModelScope.launch {
+        launchGuarded("goUp") {
             val source = currentSource() ?: run {
                 failWith(UnlockUiError.Validation.CloudSourceUnavailable)
-                return@launch
+                return@launchGuarded
             }
             listInto(source, labelOf(currentDir()))
         }
@@ -304,7 +319,7 @@ class AddCloudVaultViewModel @Inject constructor(
         }
         _state.update { it.copy(busy = true, error = null) }
 
-        viewModelScope.launch {
+        launchGuarded("submit") {
             val outcome = vaultRepository.addKdbxVault(
                 sourceUri = origin,
                 displayName = current.selectedName,
@@ -329,6 +344,30 @@ class AddCloudVaultViewModel @Inject constructor(
     }
 
     // ------------------------------------------------------------ 内部
+
+    /**
+     * 本页所有 `viewModelScope.launch` 的**唯一出口**（#289）。
+     *
+     * 与设置页 `CloudAccountsViewModel.launchGuarded` 同形状：工程里没有全局
+     * `CoroutineExceptionHandler`，裸 `launch` 里任何未捕获异常 = **进程退出**。
+     * 「选账号 → PROPFIND 解析 → 选文件 → KDF 解锁 → Room 写入」这条链路上
+     * 任一处抛出都不该让 App 直接闪退，尤其用户刚在设置页配好账号之后。
+     *
+     * ⚠️ [CancellationException] 原样重抛（页面返回导致的取消不是失败）。
+     * ⚠️ 不改 dispatcher：重 IO 由调用点自己 [withContext] 到 [Dispatchers.IO]。
+     */
+    private fun launchGuarded(label: String, block: suspend CoroutineScope.() -> Unit): Job =
+        viewModelScope.launch {
+            // ⚠️ 用 runCatching 而不是 `catch (Exception)`（detekt TooGenericExceptionCaught）；
+            //   边界本来就该宽，职责是「来源层抛什么都别杀进程」。
+            runCatching { block() }.onFailure { error ->
+                if (error is CancellationException || error is Error) throw error
+                val message = error.message?.takeIf { it.isNotBlank() } ?: error.javaClass.simpleName
+                VaultixLog.e(TAG, error) { "$label 失败：$message" }
+                _state.update { it.copy(busy = false, loadingAccounts = false) }
+                failWith(UnlockUiError.Detail(message))
+            }
+        }
 
     /**
      * 列目录并进入"浏览"阶段。
@@ -497,6 +536,8 @@ class AddCloudVaultViewModel @Inject constructor(
     //   那一步足够让他停下来看一眼上面的理由。
 
     private companion object {
+        const val TAG = "AddCloudVault"
+
         /** 目录栈只有一个元素 = 已在根目录。 */
         const val ONE_LEVEL = 1
 

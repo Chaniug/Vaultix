@@ -34,6 +34,17 @@
  * - 添加页的 `connectWebDav`：验证完立刻列目录选文件，走完会有一个库用上它。
  *
  * ⇒ 同一句"凭据先落盘再自检"，两处的**后续**不同，因此不能共用一条流程。
+ *
+ * ## ★ 2026-11-13（#289）：连接成功后闪退，重进账号却已添加
+ *
+ * 凭据落盘成功 ⇒ 崩溃点必然在**成功之后**（状态更新 / [refresh] / 重组）。
+ * 工程里没有全局 `CoroutineExceptionHandler`，而本页所有动作原先都是裸
+ * `viewModelScope.launch` ⇒ 清单读取（Room Flow + Keystore 解密 + MSAL 会话枚举）
+ * 里任何一处抛出都会直接**杀进程**。同时凭据写入/自检/清单读取全压在
+ * `viewModelScope` 默认的主线程上。
+ *
+ * ⇒ 所有动作收口到 [launchGuarded]：异常转可见错误态、重 IO 显式下 IO。
+ * ⚠️ 没有全局兜底时，「修一个具体异常」永远追不完，必须补的是**边界本身**。
  * ---------------------------------------------------------------------------
  */
 package io.vaultix.vaultix.ui.settings
@@ -45,6 +56,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import io.vaultix.common.logging.VaultixLog
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.remote.CloudAccount
 import io.vaultix.vaultix.remote.CloudAccountConnector
@@ -53,11 +65,16 @@ import io.vaultix.vaultix.remote.CloudAccountKind
 import io.vaultix.vaultix.remote.onedrive.isOneDriveAuthTemporarilyUnavailable
 import io.vaultix.vaultix.remote.onedrive.toOneDriveUserMessage
 import javax.inject.Inject
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 /** 连接自检的结果（4 态，刻意不塌成 `Boolean` —— "没测过"和"测过但失败"是两件事）。 */
@@ -144,8 +161,10 @@ class CloudAccountsViewModel @Inject constructor(
      * （token 过期、凭据被清、库被移除），缓存下来的"已连接"会变成一句假话。
      */
     fun refresh() {
-        viewModelScope.launch {
-            val accounts = inventory.list()
+        launchGuarded("refreshAccounts") {
+            // ★ #289：清单读取是 Room Flow + Keystore 解密 + MSAL 会话枚举，
+            //   既不能占主线程，更不能因为其中一处抛异常就让整个进程退出。
+            val accounts = withContext(Dispatchers.IO) { inventory.list() }
             _state.update {
                 it.copy(
                     loading = false,
@@ -253,40 +272,56 @@ class CloudAccountsViewModel @Inject constructor(
             return
         }
         _state.update { it.copy(busy = true, error = null, probe = ProbeState.PROBING, probeMessage = null) }
-        viewModelScope.launch {
-            val directoryUrl = connector.normalizeServerUrl(current.serverUrl)
-            // ① 先存凭据（否则第 ② 步的来源对象构造时就取不到凭据）
-            val credentialId = connector.saveWebDavCredential(
-                serverUrl = current.serverUrl,
-                username = current.username,
-                password = current.password,
-            )
-            // ② 自检
-            val outcome = runCatching {
-                connector.webDavSource(credentialId, directoryUrl).testConnection()
-            }.getOrElse { Result.failure(it) }
+        launchGuarded("probeWebDav") {
+            // ★ #289：整块挪到 IO。凭据写入是 Keystore AES-GCM 加密 +
+            //   SharedPreferences 写、自检是网络往返，原先全压在 viewModelScope
+            //   默认的主线程上（ANR / 卡顿），且 Keystore 的 checked exception
+            //   会直接冒泡成进程退出 —— 正是真机「账号已保存却闪退」的形状。
+            withContext(Dispatchers.IO) {
+                val directoryUrl = connector.normalizeServerUrl(current.serverUrl)
+                // ① 先存凭据（否则第 ② 步的来源对象构造时就取不到凭据）
+                val credentialId = connector.saveWebDavCredential(
+                    serverUrl = current.serverUrl,
+                    username = current.username,
+                    password = current.password,
+                )
+                // ② 自检。⚠️ 取消必须原样重抛：旧写法用 runCatching 把
+                //    CancellationException 也吞成「失败」，会误删刚写好的凭据。
+                val outcome = runCatching {
+                    connector.webDavSource(credentialId, directoryUrl).testConnection()
+                }.getOrElse { error ->
+                    // 取消 / Error 原样重抛；其余才转成「自检失败」并回滚凭据。
+                    if (error is CancellationException || error is Error) throw error
+                    Result.failure(error)
+                }
 
-            if (outcome.isSuccess) {
+                if (outcome.isSuccess) {
+                    _state.update {
+                        it.copy(
+                            busy = false,
+                            probe = ProbeState.OK,
+                            probeMessage = null,
+                            password = "",
+                            notice = SETTINGS_CLOUD_PROBE_OK,
+                        )
+                    }
+                    refresh()
+                    return@withContext
+                }
+                // ③ 失败 ⇒ 擦掉刚写的凭据。⚠️ 这里没有"库已用上它"的可能：
+                //    本页只做配置，不会走到建库那一步。
+                //    ★ #289：回滚本身也可能抛（Keystore 故障），不能让它盖掉原始原因。
+                runCatching { connector.removeWebDavCredential(credentialId) }
+                    .onFailure { rollback ->
+                        VaultixLog.w(TAG) { "回滚 WebDAV 凭据失败：${rollback.message}" }
+                    }
+                val message = outcome.exceptionOrNull()?.message
+                    ?: context.getString(SETTINGS_CLOUD_PROBE_FAILED)
                 _state.update {
-                    it.copy(
-                        busy = false,
-                        probe = ProbeState.OK,
-                        probeMessage = null,
-                        password = "",
-                        notice = SETTINGS_CLOUD_PROBE_OK,
-                    )
+                    it.copy(busy = false, probe = ProbeState.FAILED, probeMessage = message)
                 }
                 refresh()
-                return@launch
             }
-            // ③ 失败 ⇒ 擦掉刚写的凭据。⚠️ 这里没有"库已用上它"的可能：
-            //    本页只做配置，不会走到建库那一步。
-            connector.removeWebDavCredential(credentialId)
-            val message = outcome.exceptionOrNull()?.message ?: context.getString(SETTINGS_CLOUD_PROBE_FAILED)
-            _state.update {
-                it.copy(busy = false, probe = ProbeState.FAILED, probeMessage = message)
-            }
-            refresh()
         }
     }
 
@@ -302,7 +337,7 @@ class CloudAccountsViewModel @Inject constructor(
     fun signInOneDrive(activity: Activity, forceAccountChooser: Boolean = false) {
         if (_state.value.busy) return
         _state.update { it.copy(busy = true, error = null) }
-        viewModelScope.launch {
+        launchGuarded("signInOneDrive") {
             if (forceAccountChooser) {
                 // 注销是尽力而为：MSAL 侧失败也**不该**卡住换号。
                 connector.signOutOneDrive(null)
@@ -357,7 +392,7 @@ class CloudAccountsViewModel @Inject constructor(
      */
     fun probeOneDriveHealth(account: CloudAccount) {
         if (account.kind != CloudAccountKind.ONEDRIVE || !account.connected) return
-        viewModelScope.launch {
+        launchGuarded("probeOneDriveHealth") {
             connector.probeOneDriveToken(account.storedId)
                 .onSuccess {
                     _state.update { it.copy(oneDriveIssues = it.oneDriveIssues - account.storedId) }
@@ -394,7 +429,7 @@ class CloudAccountsViewModel @Inject constructor(
     fun confirmRemoval() {
         val account = _state.value.pendingRemoval ?: return
         _state.update { it.copy(busy = true, error = null, pendingRemoval = null) }
-        viewModelScope.launch {
+        launchGuarded("confirmRemoval") {
             when (account.kind) {
                 CloudAccountKind.WEBDAV -> connector.removeWebDavCredential(account.storedId)
                 CloudAccountKind.ONEDRIVE -> connector.signOutOneDrive(account.storedId)
@@ -414,6 +449,50 @@ class CloudAccountsViewModel @Inject constructor(
     }
 
     // ---------------------------------------------------------------- 内部
+
+    /**
+     * 本页所有 `viewModelScope.launch` 的**唯一出口**（#289）。
+     *
+     * ## 为什么必须有这一层
+     *
+     * 工程里**没有**全局 `CoroutineExceptionHandler`（`.ai/issues/05-KDBX本地库-part2.md`
+     * 的 #98 实测记录）：`viewModelScope.launch` 里任何未捕获异常都会冒泡成**进程退出** ——
+     * 用户看到的就是「点完测试连接、账号明明存进去了，App 却闪退」。
+     *
+     * 连接成功之后仍要跑 [refresh]：Room Flow + Keystore 解密 + MSAL 会话枚举，
+     * 这条链路上任何一处抛出都会杀掉进程；而凭据此时**已经落盘**
+     * ⇒ 重进后账号还在，与真机现象完全吻合。
+     *
+     * ⇒ 异常一律转成**看得见的错误态**：写日志（logcat 可取证）、把 `busy` /
+     * `PROBING` 拉回终态、把原因放进 `probeMessage` / `error`。**绝不重抛非取消异常**。
+     *
+     * ⚠️ [CancellationException] 必须原样重抛：页面返回导致的取消不是失败，
+     * 记 ERROR 或把 UI 改成「失败」都是假的，且取消态下每个挂起点都会立刻再抛。
+     *
+     * ⚠️ 刻意**不**在这里改 dispatcher：`signInOneDrive` 走 MSAL，必须在主线程调用。
+     * 真正重的 IO（凭据读写 / 清单读取）由各调用点自己 [withContext] 到 [Dispatchers.IO]。
+     */
+    private fun launchGuarded(label: String, block: suspend CoroutineScope.() -> Unit): Job =
+        viewModelScope.launch {
+            // ⚠️ 用 runCatching 而不是 `catch (Exception)`：detekt 的
+            //   TooGenericExceptionCaught 会拦宽泛 catch，但这个边界**本来就该宽** ——
+            //   它的职责正是「来源层抛什么都别杀进程」。与 #242 的写法一致。
+            runCatching { block() }.onFailure { error ->
+                // 取消与 Error 原样重抛：页面返回不是失败，Error 也不该被一句红字吞掉。
+                if (error is CancellationException || error is Error) throw error
+                val message = error.message?.takeIf { it.isNotBlank() } ?: error.javaClass.simpleName
+                VaultixLog.e(TAG, error) { "$label 失败：$message" }
+                _state.update {
+                    it.copy(
+                        loading = false,
+                        busy = false,
+                        probe = if (it.probe == ProbeState.PROBING) ProbeState.FAILED else it.probe,
+                        probeMessage = it.probeMessage ?: message,
+                        error = it.error ?: CloudError.Detail(message),
+                    )
+                }
+            }
+        }
 
     @StringRes
     private fun validateWebDav(current: UiState): Int? {
@@ -442,6 +521,8 @@ class CloudAccountsViewModel @Inject constructor(
         }
 
     private companion object {
+        const val TAG = "CloudAccounts"
+
         // ★ 2026-10-20（审计 §3.4）：常量从**中文串**改成 **资源 id**。
         //
         // 改前的注释写的是「文案常量而不是 stringResource：ViewModel 拿不到 Context」——
