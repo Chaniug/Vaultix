@@ -16,6 +16,11 @@
  * ⇒ 这组用例不猜具体异常，而是钉死**异常边界本身**：来源层抛什么，
  *   都不得冒出 ViewModel，且必须把 UI 拉回可操作终态。
  *
+ * ⚠️ #290 订正：#289 真机闪退的真因其实是 `const val R.string.* = 0`
+ *   导致 Compose 重组期 `stringResource(0)` 崩溃（见
+ *   `.ai/issues/06-界面与交互-part28.md`），**不在协程边界内**。本组用例钉的
+ *   「异常边界」仍是必要的健壮性契约，保留；但它不是那次闪退的根因。
+ *
  * ## 为什么用 awaitUntil 真实轮询
  *
  * `launchGuarded` 里的重 IO 走 `withContext(Dispatchers.IO)`（真实线程），

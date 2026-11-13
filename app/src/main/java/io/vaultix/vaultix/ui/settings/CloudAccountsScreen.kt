@@ -60,6 +60,7 @@
  */
 package io.vaultix.vaultix.ui.settings
 
+import android.content.res.Resources
 import androidx.annotation.StringRes
 
 import androidx.compose.foundation.clickable
@@ -265,14 +266,8 @@ fun CloudAccountsScreen(
 
             state.error?.let { error ->
                 Spacer(Modifier.height(Spacing.sm))
-                // 两类来源分开解析（见 `CloudError` 的 KDoc）。
-                ErrorText(
-                    when (error) {
-                        is CloudError.Res -> stringResource(error.id)
-                        is CloudError.Detail ->
-                            stringResource(R.string.cloud_msg_onedrive_failed_detail, error.message)
-                    },
-                )
+                // 两类来源分开解析（见 `CloudError` 的 KDoc 与 [cloudErrorText]）。
+                ErrorText(cloudErrorText(error))
             }
             Spacer(Modifier.height(Spacing.xxl))
         }
@@ -802,6 +797,11 @@ private fun String.visualTransformation(visible: Boolean): VisualTransformation 
  * ⚠️ `LaunchedEffect` 的 key 用**解析后的字符串**：id 相同时若 `values-xx`
  *   换掉了那条资源，用 id 当 key 不会重弹；用字符串则两种变化都能触发。
  *   这里的语义本来就是"显示这一句话"，用字符串更贴。
+ *
+ * ★ 2026-11-13（#290）：解析前先过 [safeStringRes]。真机两次闪退（#289 连上就退、
+ *   #290 点注销就退）都源于 `const val ... = R.string.*` 被编译期内联成 0，
+ *   这里 `stringResource(0)` 在**重组期**抛 `Resources$NotFoundException` 杀进程。
+ *   无效 id 不解析、不弹，但仍要 `onConsumed()` 把它从 state 里清掉，否则会一直卡着。
  */
 @Composable
 private fun NoticeSnackbar(
@@ -809,11 +809,47 @@ private fun NoticeSnackbar(
     hostState: SnackbarHostState,
     onConsumed: () -> Unit,
 ) {
-    val noticeText = noticeId?.let { stringResource(it) }
-    LaunchedEffect(noticeText) {
-        if (noticeText != null) {
-            hostState.showSnackbar(noticeText)
-            onConsumed()
+    val noticeText = safeStringRes(noticeId)?.let { stringResource(it) }
+    LaunchedEffect(noticeId, noticeText) {
+        when {
+            noticeText != null -> {
+                hostState.showSnackbar(noticeText)
+                onConsumed()
+            }
+            // 无效 id（含 0）：降级为不弹，但必须消费掉，避免永远挂在 UiState 上。
+            noticeId != null -> onConsumed()
         }
     }
 }
+
+/**
+ * 两类错误来源的解析（见 `CloudError` 的 KDoc）。
+ *
+ * ★ #290：[CloudError.Res] 的 id 是**变量**，必须先过 [safeStringRes]：
+ * `stringResource(0)` 会在**重组期**抛 `Resources$NotFoundException` 杀进程，
+ * 而重组异常不经 `viewModelScope` 的异常边界。无效 id 降级成通用错误句。
+ *
+ * ⚠️ 抽成独立 Composable 不是为了复用：`CloudAccountsScreen` 的圈复杂度已到
+ * detekt 上限 14，`when` + `?.let` + `?:` 全塞在页面里会直接超阈值。
+ */
+@Composable
+private fun cloudErrorText(error: CloudError): String = when (error) {
+    is CloudError.Res -> safeStringRes(error.id)
+        ?.let { stringResource(it) }
+        ?: stringResource(R.string.error_unknown_no_detail)
+    is CloudError.Detail ->
+        stringResource(R.string.cloud_msg_onedrive_failed_detail, error.message)
+}
+
+/**
+ * #290：变量式资源 id 的**唯一安全入口**。
+ *
+ * AGP 编译期 R 类把资源 id 生成为 `0x0` 占位，任何把它们写进 `const val` 的写法
+ * 都会在运行时变成 `Resources.ID_NULL`（0）；`stringResource(0)` 在 Compose 重组期
+ * 抛 `Resources$NotFoundException`，**不经过 `viewModelScope` 的异常边界**，直接杀进程。
+ *
+ * ⇒ 两处变量式解析（[NoticeSnackbar] 的 `notice`、`CloudError.Res` 的 `id`）都必须
+ *   先过这里：有效 id 原样返回，无效 id 返回 null 让调用方降级，绝不把 0 交给
+ *   `stringResource`。`internal` 便于 JVM 单测直接钉死这条判据。
+ */
+internal fun safeStringRes(@StringRes id: Int?): Int? = id?.takeIf { it != Resources.ID_NULL }

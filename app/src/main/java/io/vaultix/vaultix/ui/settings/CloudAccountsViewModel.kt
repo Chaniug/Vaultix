@@ -37,14 +37,26 @@
  *
  * ## ★ 2026-11-13（#289）：连接成功后闪退，重进账号却已添加
  *
- * 凭据落盘成功 ⇒ 崩溃点必然在**成功之后**（状态更新 / [refresh] / 重组）。
- * 工程里没有全局 `CoroutineExceptionHandler`，而本页所有动作原先都是裸
- * `viewModelScope.launch` ⇒ 清单读取（Room Flow + Keystore 解密 + MSAL 会话枚举）
- * 里任何一处抛出都会直接**杀进程**。同时凭据写入/自检/清单读取全压在
- * `viewModelScope` 默认的主线程上。
+ * 当时的定性：凭据落盘成功 ⇒ 崩点在**成功之后**；工程里没有全局
+ * `CoroutineExceptionHandler`，本页所有动作原先都是裸 `viewModelScope.launch`
+ * ⇒ 清单读取链路里任一处抛出都会**杀进程**。据此把动作收口到 [launchGuarded]
+ * （异常转可见错误态、重 IO 显式下 IO）。**这套协程异常边界本身仍必要，保留。**
  *
- * ⇒ 所有动作收口到 [launchGuarded]：异常转可见错误态、重 IO 显式下 IO。
- * ⚠️ 没有全局兜底时，「修一个具体异常」永远追不完，必须补的是**边界本身**。
+ * ## ★★ 2026-11-13（#290）：真机日志 + 字节码反转了上面这条归因
+ *
+ * 用户「点注销就闪退」的 logcat 指向 `NoticeSnackbar` → `stringResource(0)` 抛
+ * `Resources$NotFoundException`，栈里是 `Recomposer.performRecompose` /
+ * `Choreographer` ——**Compose 重组期异常，不经过 `viewModelScope`，
+ * [launchGuarded] 根本兜不住**。真因是下面这批 `SETTINGS_CLOUD_*` 原先写成
+ * `const val = R.string.*`：AGP 编译期 R 类里资源 id 是 `0x0` 占位、并非运行时真值，
+ * Kotlin `const val` 要求编译期常量 ⇒ 把 **0 内联死**，于是 `notice = 0` /
+ * `CloudError.Res(0)` → UI 变量式 `stringResource(0)` → 杀进程。
+ * `probeWebDav()` 成功同样设 `notice = SETTINGS_CLOUD_PROBE_OK`，所以 #289
+ * 「连上就闪退」极可能也是同一个 0，而不是"成功之后某处 IO 抛异常"。
+ *
+ * ⇒ 修法：① 资源 id **一律不准写进 `const val`**（改普通 `val`，运行时读真值）；
+ * ② UI 侧两个变量式解析点（`NoticeSnackbar` / `CloudError.Res`）加
+ * `Resources.ID_NULL` 守卫，任何路径再漏下 0 也只降级、不崩。
  * ---------------------------------------------------------------------------
  */
 package io.vaultix.vaultix.ui.settings
@@ -533,17 +545,29 @@ class CloudAccountsViewModel @Inject constructor(
         //
         // 这些句子与添加页的 `add_cloud_*` 同义但**场景不同**（那是"连上就能选库"，
         // 这里是"配好一个账号"），刻意不复用同一条 —— 混用会让一处的改动咬到另一处。
-        const val SETTINGS_CLOUD_FIELDS_MISSING = R.string.cloud_msg_fields_missing
-        const val SETTINGS_CLOUD_INVALID_SERVER = R.string.cloud_msg_invalid_server
-        const val SETTINGS_CLOUD_CREDENTIALS_IN_URL = R.string.cloud_msg_credentials_in_url
-        const val SETTINGS_CLOUD_PROBE_OK = R.string.cloud_msg_probe_ok
-        const val SETTINGS_CLOUD_PROBE_FAILED = R.string.cloud_msg_probe_failed
-        const val SETTINGS_CLOUD_ONEDRIVE_SIGNED_IN = R.string.cloud_msg_onedrive_signed_in
-        const val SETTINGS_CLOUD_ONEDRIVE_FAILED = R.string.cloud_msg_onedrive_failed
-        const val SETTINGS_CLOUD_ONEDRIVE_TEMP_UNAVAILABLE =
+        //
+        // ★★ 2026-11-13（#290）：上面这批原来 11 个都是 `const val`，真机上全部变成 **0**。
+        //   AGP 编译期 R 类（`compile_symbol_list/.../R.txt`、`compile_r_class_jar/.../R.jar`）
+        //   里资源 id 是 `0x0` 占位；`const val` 必须是编译期常量 ⇒ Kotlin 直接把 0
+        //   内联进每个调用点（`javap -constants` 可见 `SETTINGS_CLOUD_* = 0`）。
+        //   运行时真值只存在于 `runtime_symbol_list` / `compile_and_runtime_r_class_jar`
+        //   （`0x7f0f01xx`）。于是 `notice = 0` → UI 变量式 `stringResource(0)` →
+        //   `Resources$NotFoundException` 在重组期杀进程（#289 / #290 两次闪退同源）。
+        //   ⇒ **资源 id 只能用普通 `val`（或直接写 `R.string.*`），永不 `const val`**：
+        //     `val` 在运行时读 `R$string.*` 的真值，不会被编译期内联。
+        //   配套：`CloudAccountsScreen.safeStringRes()` 对 `Resources.ID_NULL` 再兜一层。
+        //   ⚠️ `TAG` 是普通字符串常量，`const val` 无害；别连它一起改。
+        val SETTINGS_CLOUD_FIELDS_MISSING = R.string.cloud_msg_fields_missing
+        val SETTINGS_CLOUD_INVALID_SERVER = R.string.cloud_msg_invalid_server
+        val SETTINGS_CLOUD_CREDENTIALS_IN_URL = R.string.cloud_msg_credentials_in_url
+        val SETTINGS_CLOUD_PROBE_OK = R.string.cloud_msg_probe_ok
+        val SETTINGS_CLOUD_PROBE_FAILED = R.string.cloud_msg_probe_failed
+        val SETTINGS_CLOUD_ONEDRIVE_SIGNED_IN = R.string.cloud_msg_onedrive_signed_in
+        val SETTINGS_CLOUD_ONEDRIVE_FAILED = R.string.cloud_msg_onedrive_failed
+        val SETTINGS_CLOUD_ONEDRIVE_TEMP_UNAVAILABLE =
             R.string.cloud_msg_onedrive_temp_unavailable
-        const val SETTINGS_CLOUD_ACTIVITY_MISSING = R.string.cloud_msg_activity_missing
-        const val SETTINGS_CLOUD_REMOVED_WEBDAV = R.string.cloud_msg_removed_webdav
-        const val SETTINGS_CLOUD_REMOVED_ONEDRIVE = R.string.cloud_msg_removed_onedrive
+        val SETTINGS_CLOUD_ACTIVITY_MISSING = R.string.cloud_msg_activity_missing
+        val SETTINGS_CLOUD_REMOVED_WEBDAV = R.string.cloud_msg_removed_webdav
+        val SETTINGS_CLOUD_REMOVED_ONEDRIVE = R.string.cloud_msg_removed_onedrive
     }
 }
