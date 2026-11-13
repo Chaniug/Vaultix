@@ -40,6 +40,7 @@ import android.app.Activity
 import io.vaultix.data.kdbx.KdbxFileSource
 import io.vaultix.data.repository.kdbx.WebDavKdbxFileSource
 import io.vaultix.data.repository.kdbx.WebDavUrlBuilder
+import io.vaultix.data.repository.kdbx.webDavProductionClient
 import io.vaultix.vaultix.remote.onedrive.OneDriveAccountSession
 import io.vaultix.vaultix.remote.onedrive.OneDriveAuthManager
 import io.vaultix.vaultix.remote.onedrive.OneDriveKdbxFileSource
@@ -52,9 +53,11 @@ import okhttp3.OkHttpClient
 /**
  * 网盘账号的连接动作。
  *
- * @param okHttp 给 WebDAV 来源用 —— 复用 `data:bitwarden` 装配的那一份单例
- *   （自带 Cloudflare 兼容指纹与拦截器）。**不要**在这里新建：
- *   多一份连接池、两套超时行为迟早漂移。
+ * @param okHttp 全局共享的 `OkHttpClient`（`data:bitwarden` 装配）。
+ *   ⚠️ **不能直接交给 WebDAV**：那份单例挂了 `BitwardenAuthInterceptor`，
+ *   会把我们设的 `Basic` 覆盖成 `Bearer`，还把 Bitwarden token 发到用户自己的 NAS。
+ *   [webDavSource] 一律过 [webDavProductionClient] 派生专用 client ——
+ *   `newBuilder()` 共享连接池 / 超时，只是清掉拦截器，所以**没有**第二套池行为。
  */
 @Singleton
 class CloudAccountConnector @Inject constructor(
@@ -112,7 +115,7 @@ class CloudAccountConnector @Inject constructor(
      */
     fun webDavSource(credentialId: String, directoryUrl: String): WebDavKdbxFileSource =
         WebDavKdbxFileSource(
-            client = okHttp,
+            client = webDavProductionClient(okHttp),
             fileUrl = directoryUrl,
             credentialProvider = {
                 // ⚠️ 现取而不是缓存：用户可能刚在设置页改过密码，

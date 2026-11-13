@@ -22,7 +22,7 @@
  *
  * ⇒ 条件必须在 **HTTP 边界**上交由服务端判定。只有手写 PUT + 条件头能做到。
  *
- * ## ★★ 四个坑（每一个都踩过，注释里写清楚为什么）
+ * ## ★★ 六个坑（每一个都踩过，注释里写清楚为什么）
  *
  * | # | 坑 | 本文件的做法 |
  * |---|---|---|
@@ -30,12 +30,22 @@
  * | 2 | 部分服务器**不给 ETag** | 退化为「写前预检」+**「写后读回校验」**，并**如实标注**能力有限 |
  * | 3 | ★ ETag 形态参差（`W/"x"` vs `"x"`） | 一律过 [normalizeVersionToken]，**比对与发头都用归一化后的值** |
  * | 4 | ★ 新建要用 `If-None-Match: *` | 否则两个设备并发新建同名文件会**互相静默覆盖** |
+ * | 5 | ★ 403 ≠ 密码错（#288） | 认证已过；坚果云用它表示二次验证 / 频率 / 目录权限。401 与 403 必须分流 |
+ * | 6 | ★ 自检用 HEAD 探目录（#288） | 目录 HEAD 可能 403，且与 [listChildren] 不同源 ⇒ 改 `PROPFIND Depth: 0` |
  *
  * ## 认证
  *
  * **Basic**，放在 `Authorization` 头里。
  * ⚠️ **绝不**把凭据拼进 URL（`https://user:pass@host/...`）—— 那会进日志、
  * 进崩溃报告、进 OkHttp 的 `request.url` 输出。凭据由 [credentialProvider] 现取。
+ *
+ * ## ★ 为什么生产构造点必须过 [webDavProductionClient]
+ *
+ * 全局 `OkHttpClient` 单例（`data:bitwarden` 的 `NetworkModule`）挂着
+ * `BitwardenAuthInterceptor`：除 `/identity/` 外，只要该 host 有 Bitwarden token
+ * 就无条件 `.header("Authorization", "Bearer …")` —— 会**覆盖我们刚设的 Basic**，
+ * 并把 Bitwarden access token 发到用户自己的 NAS。⇒ 所有生产构造点都必须用
+ * [webDavProductionClient] 派生一份「共享连接池、但零拦截器」的专用 client。
  * ---------------------------------------------------------------------------
  */
 package io.vaultix.data.repository.kdbx
@@ -48,6 +58,7 @@ import io.vaultix.data.kdbx.KdbxFileWriteResult
 import io.vaultix.data.kdbx.normalizeVersionToken
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.Authenticator
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -67,6 +78,39 @@ data class WebDavCredentials(val username: String, val password: String) {
     fun basicAuthHeader(): String =
         "Basic " + Base64.getEncoder().encodeToString("$username:$password".toByteArray(Charsets.UTF_8))
 }
+
+/**
+ * 从共享 `OkHttpClient` 派生 **WebDAV 专用** client（#288）。
+ *
+ * ## 为什么不能直接用注入进来的那一份
+ *
+ * 全局单例挂了 `BitwardenAuthInterceptor`（`data:bitwarden/NetworkModule`）。它的实现是
+ * 「除 `/identity/` 外，只要 `accessToken(url.host)` 非空就无条件把 `Authorization`
+ * 覆写成 `Bearer …`」。当用户把 Vaultwarden 与 WebDAV 装在**同一台 NAS**（甚至同域名
+ * 不同端口，`hostOf()` 用 `URL(server).host` 不含端口）时：
+ *
+ * 1. [WebDavKdbxFileSource.execute] 刚设好的 `Basic` 被覆盖 ⇒ 服务器报「账号或密码不正确」，
+ *    用户重填几次密码都修不好；
+ * 2. **Bitwarden 的 access token 被发到 WebDAV 端口** ⇒ 违反方案 §12「凭据不泄漏」；
+ * 3. `Bitwarden-Client-*` / 浏览器指纹头一起跟过去，个别 NAS 的 WAF 会直接 403。
+ *
+ * ⚠️ 用 `newBuilder()` 而不是 `OkHttpClient()`：前者**共享连接池 / Dispatcher / 超时**，
+ * 只是复制一份配置；后者会多一套池与超时行为，正是 `KdbxCloudSyncAppModule` 头部
+ * 那条「不要再造一个」真正担心的事。这里两者都满足。
+ *
+ * ⚠️ **必须显式清 authenticator**：`newBuilder()` 会连 `BitwardenAuthenticator` 一起复制，
+ * 401 时它可能拿 Bitwarden 的 refresh token 去刷一次，把失败原因彻底搅浑。
+ *
+ * 单测直接构造 `WebDavKdbxFileSource(client = 假服务器)`，**不走这里**——
+ * 否则假服务器的 `Interceptor` 会被一起清掉。
+ */
+fun webDavProductionClient(shared: OkHttpClient): OkHttpClient = shared.newBuilder()
+    .apply {
+        interceptors().clear()
+        networkInterceptors().clear()
+        authenticator(Authenticator { _, _ -> null })
+    }
+    .build()
 
 /**
  * WebDAV 上的一个 `.kdbx` 文件。
@@ -292,8 +336,9 @@ class WebDavKdbxFileSource(
             "WebDAV 上的文件已被其他设备修改（HTTP ${response.code}），为避免覆盖已取消写入",
         )
 
-        HTTP_UNAUTHORIZED, HTTP_FORBIDDEN ->
-            IOException("WebDAV 账号或密码不正确（HTTP ${response.code}）")
+        // ★ #288：403 不是凭据错，两者给用户的动作完全不同，不能合并成一句。
+        HTTP_UNAUTHORIZED -> IOException(credentialsMessage(response.code))
+        HTTP_FORBIDDEN -> IOException(forbiddenMessage())
 
         HTTP_INSUFFICIENT_STORAGE ->
             IOException("WebDAV 服务器空间不足（HTTP $HTTP_INSUFFICIENT_STORAGE）")
@@ -409,20 +454,101 @@ class WebDavKdbxFileSource(
         }
     }
 
+    /**
+     * 连通性自检 —— **主探 `PROPFIND Depth: 0`**，`HEAD` 只作老服务器的降级路径。
+     *
+     * ## 为什么不能只发 HEAD（#288 真机反馈）
+     *
+     * 用户填 `https://dav.jianguoyun.com/dav/` 点「测试连接」拿到 403，界面却说
+     * 「账号或密码不正确」。差分实测：坚果云对**无凭据 / 错误凭据**
+     * （任意方法、任意 UA）一律回 `401 + WWW-Authenticate: Basic realm="nutstore"`；
+     * 带正确凭据才回 403
+     * ⇒ 认证已通过，403 是服务端主动拒绝（官方 FAQ：微信二次验证、访问频率、
+     * 应用密码被撤销、目录权限），**不是密码错**。
+     *
+     * 同时 `HEAD` 探的是一个**目录 URL**：部分 WebDAV 实现（含坚果云）对目录 HEAD
+     * 直接 403/405，而 `PROPFIND` 正常 —— 坚果云官方 FAQ 里的报错原文也全是
+     * 「以响应 PROPFIND /dav 的请求」。⇒ 自检改用协议标准方法，且**与 [listChildren]
+     * 同源**：账号页显示 OK，添加页就一定能列出目录（不再有「测过却列不出」）。
+     *
+     * ⚠️ 404 不再当成功：旧注释写的是「文件不在但连接是通的」，可这里传进来的
+     * 是 `normalizeServerUrl()` 出来的**目录 URL**，404 只可能是地址填错或目录没建，
+     * 放行会让用户带着一个必失败的账号进添加页。
+     */
     override suspend fun testConnection(): Result<Unit> = runCatching {
         withContext(Dispatchers.IO) {
-            // 先 HEAD 目标文件：成功 ⇒ 文件在、凭据对。404 ⇒ 文件不在但**连接是通的**，
-            // 这仍然是"配置可用"（用户可以据此新建）。401/403 才算真失败。
-            execute(Request.Builder().url(fileUrl).head().build()).use { response ->
-                if (response.code == HTTP_UNAUTHORIZED || response.code == HTTP_FORBIDDEN) {
-                    throw IOException("WebDAV 账号或密码不正确（HTTP ${response.code}）")
-                }
-                if (response.code >= HTTP_SERVER_ERROR_FLOOR) {
-                    throw IOException("WebDAV 服务器错误（HTTP ${response.code}）")
+            val probe = Request.Builder()
+                .url(fileUrl)
+                .method("PROPFIND", PROPFIND_BODY.toRequestBody(PROPFIND_MEDIA_TYPE.toMediaType()))
+                .header("Depth", "0")
+                .build()
+            var fallbackToHead = false
+            execute(probe).use { response ->
+                val code = response.code
+                if (code == HTTP_METHOD_NOT_ALLOWED || code == HTTP_NOT_IMPLEMENTED) {
+                    // 老 / 简化实现不认 PROPFIND：降级 HEAD，但仍要按同一套判据看认证。
+                    fallbackToHead = true
+                } else {
+                    probeFailureOf(code) { response.errorMessage(ACTION_PROBE) }
+                        ?.let { throw IOException(it) }
                 }
             }
+            if (fallbackToHead) probeViaHead()
         }
     }
+
+    /** 只有 `PROPFIND` 被明确拒绝时才走的兼容路径；判据与主路径**同一套**。 */
+    private suspend fun probeViaHead() {
+        execute(Request.Builder().url(fileUrl).head().build()).use { response ->
+            // HEAD 只按认证 / 目录 / 服务端错误判，其余状态码一律算「连得通」。
+            probeFailureOf(response.code) { null }?.let { throw IOException(it) }
+        }
+    }
+
+    /**
+     * 自检的**唯一判据表**（#288）：主路径与降级路径都走它，避免「PROPFIND 说 403 是拒绝、
+     * HEAD 却说 403 是密码错」这种同一状态码两套解释。
+     *
+     * ⚠️ 返回 `String?` 而不是自己抛：detekt `ThrowsCount` 上限 2，把 throw 收口到调用方
+     * 各一处；也让「哪个分支算失败」在这里一眼可见。
+     */
+    private fun probeFailureOf(code: Int, genericDetail: () -> String?): String? = when (code) {
+        in MULTISTATUS_CODES -> null
+        HTTP_METHOD_NOT_ALLOWED, HTTP_NOT_IMPLEMENTED -> null
+        HTTP_UNAUTHORIZED -> credentialsMessage(code)
+        HTTP_FORBIDDEN -> forbiddenMessage()
+        HTTP_NOT_FOUND -> directoryMissingMessage()
+        else -> if (code >= HTTP_SERVER_ERROR_FLOOR) {
+            "WebDAV 服务器错误（HTTP $code）"
+        } else {
+            genericDetail()
+        }
+    }
+
+    /**
+     * 401：**确实可能是凭据错**，但要顺带说出最常见、且光靠重输密码修不好的原因 ——
+     * 坚果云 / 群晖等要求网页端生成的「应用密码」，登录密码在这里无效。
+     */
+    private fun credentialsMessage(code: Int): String =
+        "WebDAV 账号或密码不正确（HTTP $code）。" +
+            "坚果云 / 群晖等需在网页端生成「应用密码」，这里不能填登录密码；" +
+            "也请检查账号邮箱与密码首尾是否多了空格"
+
+    /**
+     * 403：**认证已通过、服务端主动拒绝**。绝不能再写成「账号或密码不正确」——
+     * 那会让用户无限重输一个本来正确的密码（#288 真机现场）。给可依次排除的清单。
+     */
+    private fun forbiddenMessage(): String =
+        "WebDAV 服务器拒绝访问（HTTP 403）——认证已通过，不是密码错。请依次检查：" +
+            "① 坚果云网页端「账户信息 → 安全选项」关闭微信二次验证；" +
+            "② 确认填的是应用密码且未被撤销；" +
+            "③ 访问频率超限（免费版每 30 分钟 600 次），稍后重试；" +
+            "④ 该目录是否有访问权限，或改填一个已存在的子目录"
+
+    /** 404：与 [listChildren] 同一判据，别把填错的地址说成「连上了」。 */
+    private fun directoryMissingMessage(): String =
+        "WebDAV 上找不到该目录（HTTP 404）。请把服务器地址填到库文件所在目录" +
+            "（例如 https://dav.jianguoyun.com/dav/），并确认该目录已在网盘端建好"
 
     /**
      * 发一个带认证头的请求。
@@ -445,8 +571,17 @@ class WebDavKdbxFileSource(
             }
     }
 
-    /** 把 HTTP 错误响应拼成一句能直接展示的话（响应体作为补充细节，截断到 200 字）。 */
+    /**
+     * 把 HTTP 错误响应拼成一句能直接展示的话（响应体作为补充细节，截断到 200 字）。
+     *
+     * ⚠️ 401 / 403 在这里**也要分流**：`stat()` / `read()` / `listChildren()` /
+     * `forceReplace()` 全走本函数，只在 `writeFailureOf` 分流会漏掉大半条链路 ——
+     * 「解锁时说密码错、写入时说拒绝访问」比统一错还难查。文案只有 [credentialsMessage]
+     * / [forbiddenMessage] 两处真源。
+     */
     private fun okhttp3.Response.errorMessage(action: String): String {
+        if (code == HTTP_UNAUTHORIZED) return credentialsMessage(code)
+        if (code == HTTP_FORBIDDEN) return forbiddenMessage()
         val detail = runCatching { body?.string() }.getOrNull().orEmpty()
         return "$action 失败：HTTP $code" +
             detail.take(ERROR_BODY_PREVIEW_CHARS).takeIf { it.isNotBlank() }?.let { "（$it）" }.orEmpty()
@@ -463,6 +598,9 @@ class WebDavKdbxFileSource(
         const val HTTP_UNAUTHORIZED = 401
         const val HTTP_FORBIDDEN = 403
         const val HTTP_NOT_FOUND = 404
+        /** 服务器不认 `PROPFIND` ⇒ 自检降级 HEAD（#288）。 */
+        const val HTTP_METHOD_NOT_ALLOWED = 405
+        const val HTTP_NOT_IMPLEMENTED = 501
         /** 前置条件不满足（`If-Match` / `If-None-Match` 未通过）。 */
         const val HTTP_PRECONDITION_FAILED = 412
         /** 部分服务器对 CREATE_ONLY 失败回 409 而不是 412。 */
@@ -483,6 +621,7 @@ class WebDavKdbxFileSource(
         const val ACTION_READ = "下载文件"
         const val ACTION_FORCE_WRITE = "强制覆盖文件"
         const val ACTION_LIST = "列出目录"
+        const val ACTION_PROBE = "测试连接"
 
         /** 错误响应体只展示这么多字（够定位问题，又不至于把整页 HTML 塞进对话框）。 */
         const val ERROR_BODY_PREVIEW_CHARS = 200

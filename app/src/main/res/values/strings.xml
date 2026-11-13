@@ -1699,6 +1699,7 @@
     <string name="cloud_msg_fields_missing">请填写服务器地址、账号和密码</string>
     <string name="cloud_msg_invalid_server">服务器地址不是有效的 URL</string>
     <string name="cloud_msg_credentials_in_url">请把账号密码填在下面两个框里，不要写进服务器地址（写在地址里会泄露到日志）</string>
+    <string name="cloud_webdav_password_hint">坚果云、群晖等需在网页端生成「应用密码」，登录密码无效；坚果云还需先关闭微信二次验证</string>
     <string name="cloud_msg_probe_ok">连接成功，账号已保存</string>
     <string name="cloud_msg_probe_failed">无法连接该服务器</string>
     <string name="cloud_msg_onedrive_signed_in">已登录 Microsoft 账号</string>

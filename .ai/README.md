@@ -24,7 +24,50 @@
 - 已接进 CI：`ci-debug.yml` 的 `sandbox-tests` job 用**同一份脚本**，与 `android-ci` 并行
   ⇒ 本地绿 ⇒ CI 不会红在同一件事上。
 
-## 🕐 最新状态（2026-11-12 · #287 改完 KDBX 条目立刻返回等于没保存）
+## 🕐 最新状态（2026-11-13 · #288 坚果云 WebDAV 403「登录不上去」）
+
+> **一句话**：真机截图「测试连接 → WebDAV 账号或密码不正确（HTTP 403）」。
+> 匿名 / 假凭据差分实测 12/12 全 401 ⇒ 用户拿到的 403 是**认证已通过后的服务端拒绝**，
+> 旧实现把 401/403 合并成「密码错」，用户只会无限重输；且自检用 HEAD 探目录，
+> 与 `listChildren()` 不同源。接力正文：[`#288`](./issues/06-界面与交互-part26.md)。
+
+1. **取证**：沙箱对 `dav.jianguoyun.com` 匿名 / 假 Basic × 4 方法 × 3 UA 全部回
+   `401 + WWW-Authenticate: Basic realm="nutstore"`；坚果云官方 FAQ 把 403 归因为
+   微信二次验证 / 访问频率 / 应用密码被撤销 / 目录权限。**证伪上一轮 P0**：
+   `accessTokenForHost()` 对陌生 host `return null`，坚果云域名不会命中 Bearer 覆盖。
+2. **四处修法**：① `testConnection()` 主探 `PROPFIND Depth: 0`，`405/501` 才降级 HEAD，
+   与 `listChildren()` 同源、404 不再假报成功，两条路径共用 `probeFailureOf()` 判据表；
+   ② 401/403 分流到 `credentialsMessage` / `forbiddenMessage` 两处真源，
+   **`errorMessage()` 也分流**（stat/read/list/强写的共同出口），403 明确「不是密码错」
+   + 四条可排除原因；③ 密码框下加「应用密码 / 关二次验证」提示，填之前就说清；
+   ④ 新增 `webDavProductionClient(shared)`（`newBuilder()` 共享连接池、清
+   interceptors / networkInterceptors / Authenticator），`CloudAccountConnector` 与
+   `KdbxCloudSyncCoordinator` **两个构造点**都过它，顺手修掉上一轮 P0 并订正三处过时 KDoc。
+3. **⚠️ 取舍**：P0 这次不是真因，但同机 Vaultwarden + WebDAV（同域名不同端口也会命中，
+   `hostOf()` 用 `URL(server).host` 不含端口）会覆盖 Basic 并把 token 发到 NAS，仍属必修。
+
+**验证**：`detekt` + `:app:assembleFullDebug` + 九模块全量单测
+`BUILD SUCCESSFUL in 1m 6s`，**1843 例 0 失败**（182 份 XML，比 #287 多 16 例：
+新增 12 例 + 远端 12 个提交带来的 4 例）；**33 项 Python 门禁全绿**。新建
+`WebDavConnectionTest`(7 例行为) + `WebDavConnectionRulesTest`(5 条源码门禁)。
+**反证**：临时撤掉 `interceptors().clear()`，
+`专用client必须清掉共享拦截器且保留Basic` 立刻变红（`7 tests completed, 1 failed`），
+源码已恢复。
+
+**本轮 6 条坑**：403≠401（合并文案会把用户动作锁死在重输密码）；
+自检与使用必须同源；错误分类要放**共同出口** `errorMessage()`；
+**Kotlin 块注释可嵌套**（KDoc 里写块注释起始符会吞掉后面整段代码）；
+`forEach { }` 要 `}` 闭合（写成 `)` 会吞掉后面所有成员函数）；
+detekt `ThrowsCount` 上限 2 ⇒ 改 `String?` 判据表 + 单一 throw，`MaxLineLength` 也要拆表格行。
+
+**提交 / CI**：（推送后回填）
+
+**待真机验收**：生成应用密码 + 关二次验证后测试连接应成功；仍失败时红字必须列 403
+四条原因；账号页 OK 后添加页能列目录；错密码报 401 且文案不同；不存在子目录提示
+「找不到该目录」；同机 Vaultwarden + WebDAV 时 NAS 日志无 Bearer / `Bitwarden-Client-*`；
+自建 NAS 的 PROPFIND / HEAD 两种响应都要能过。
+
+## 🕐 上一轮状态（2026-11-12 · #287 改完 KDBX 条目立刻返回等于没保存）
 
 > **一句话**：用户补充时序「点保存后停 5 秒看到『已保存到本地 · 正在同步到云端』
 > 才生效，但大部分人点完就返回」——**判据第三次反转**：#286 修的同步闸门没坏，

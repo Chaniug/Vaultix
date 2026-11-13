@@ -7,8 +7,12 @@ import javax.inject.Provider
 /**
  * 请求头预挂 Bearer（修复「每次请求先 401 再刷新 → 重启/快速解锁后必报登录失效」）。
  *
- * - 仅 api 数据端点（路径以 /api/ 开头）预挂；identity 端点（prelogin / token）
- *   不挂——登录与刷新走 grant body，不依赖 Authorization；
+ * - **只跳过** identity 端点（`/identity/`，prelogin / token 走 grant body）；
+ *   ⚠️ 除它之外的任何路径，只要该 host 有 token 就无条件预挂 ——
+ *   **不是**「仅 `/api/` 端点」。这意味着复用本 client 的非 Bitwarden 请求，
+ *   其 `Authorization` 会被 `Bearer` 覆盖（还会把 token 发到对方服务器）。
+ *   ⇒ WebDAV 必须走 `webDavProductionClient()` 派生的专用 client（见 #288），
+ *   不要指望本拦截器按路径放行。
  * - access token 由认证层按到期时间预刷新（Bastion accessTokenExpiresAt 语义，
  *   见 BitwardenAuthRepository.accessTokenForHost）；
  * - 401 后的刷新重试由 [BitwardenAuthenticator] 负责，两者互不冲突。

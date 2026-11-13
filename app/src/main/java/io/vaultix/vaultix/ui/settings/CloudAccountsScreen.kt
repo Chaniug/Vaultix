@@ -713,6 +713,15 @@ private fun WebDavFields(
         },
         modifier = Modifier.fillMaxWidth(),
     )
+    // ★ #288：真机现场用户填了登录密码 + 没关微信二次验证，服务端回 403，
+    //   界面却只说「账号或密码不正确」⇒ 无限重输。这两件事必须在**填之前**说清，
+    //   光靠失败文案补救已经晚了一轮。
+    Text(
+        text = stringResource(R.string.cloud_webdav_password_hint),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = Spacing.xs),
+    )
 }
 
 @Composable

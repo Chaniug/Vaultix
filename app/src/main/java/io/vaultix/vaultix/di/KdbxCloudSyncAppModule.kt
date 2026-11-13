@@ -15,9 +15,11 @@
  * | WebDAV 凭据 | 账号密码存 `SecureCredentialStore`（读写格式见 [WebDavCredentialStore]） | `@Provides WebDavCredentialLookup` |
  * | 会话替换 | 免密重开要 app 侧的快解锁凭据信封 | `@Provides KdbxSessionReplacer` |
  *
- * ⚠️ 这里**不**提供 `OkHttpClient` —— 那是 `data:bitwarden` 的 `NetworkModule` 已经在
- * 管的单例（带 Cloudflare 兼容指纹 + Bearer 预挂拦截器）。自己再造一个会多一份连接池，
- * 且两个客户端的超时/重试行为开始漂移。
+ * ⚠️ 这里**不**另造 `OkHttpClient` —— 全局单例由 `data:bitwarden` 的 `NetworkModule`
+ * 管（带 Cloudflare 兼容指纹 + Bearer 预挂拦截器），多一份连接池、两套超时迟早漂移。
+ * 但也**不能把它直接给 WebDAV**：那个拦截器会把 `Basic` 覆写成 `Bearer`。
+ * ⇒ 两个 WebDAV 构造点统一过 `webDavProductionClient()` 派生（`newBuilder()` 共享连接池，
+ * 只清拦截器 / Authenticator），见 `WebDavKdbxFileSource.kt` 的 KDoc 与 #288。
  *
  * ## ⚠️ OneDrive 工厂是「注册」而不是「注入」
  *

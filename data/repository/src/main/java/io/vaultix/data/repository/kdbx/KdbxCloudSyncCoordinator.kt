@@ -139,7 +139,9 @@ class KdbxCloudSyncCoordinator(
             withRemoteCache(
                 origin,
                 WebDavKdbxFileSource(
-                    client = client,
+                    // ★ #288：同步 / 解锁链路同样必须用专用 client，不能直接用全局单例。
+                    //   否则「配置页能连上、真正读库却被 Bearer 顶掉」会分裂成两种现象。
+                    client = webDavProductionClient(client),
                     fileUrl = parsed.fileUrl,
                     credentialProvider = {
                         webDavCredentials.credentials(parsed.credentialId)
