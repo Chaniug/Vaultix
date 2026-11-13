@@ -26,6 +26,10 @@
 
 ## 🕐 最新状态（2026-11-13 · #290 点「注销」网盘账号闪退）
 
+> ✅ **2026-11-14 真机验收通过**：用户回报「最新版已经不闪退了」，`v0.13.0-dev-5553bda`
+> 上注销网盘账号不再闪退，#290 主路径闭环。细分提示文案 / logcat 项未逐项回报，
+> 见 [part28 待真机验收](./issues/06-界面与交互-part28.md)。
+
 > **一句话**：真机「网盘账号无法顺利从 vaultix 注销，点击注销按钮，发现闪退」。日志
 > `versionName=0.13.0-dev-731cdae`（正是 #289 preview）两次 FATAL
 > `Resources$NotFoundException: String resource ID #0x0`，栈在 `NoticeSnackbar` →
