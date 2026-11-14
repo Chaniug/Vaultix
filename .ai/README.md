@@ -96,8 +96,13 @@
 会漂移的不是「忘了更新」，而是「不知道该更新哪几份」。已写入 `MEMORY.md` 头注。
 本轮**不改任何 `- [ ]` 待办条目**（`check_no_fix_register.py` 的 52 条登记不受影响）。
 
-**验证**：全套静态 / 文档门禁全绿（含 `check_md_links.py` 对新建 `Docs/README.md`
-的相对链接校验）；`AI docs consistency` 真实 run 结论见回填提交与本轮交付报告。
+**验证**：全套 **39 项**静态 / 文档门禁全绿（含 `check_md_links.py` 对新建
+`Docs/README.md` 相对链接的校验，262 个文件全有效）；不修登记 52 条锚点 52/52 有效；
+`git diff --check` 无空白错误。`AI docs consistency` run **43613513378** →
+`completed/success`（2026-11-14 16:03:37Z → 16:03:49Z，约 12s，headSha `463bef8`）。
+纯 `.md` 改动不在 `ci-debug.yml` paths 内，`Android CI (Debug)` 按设计不触发
+（最近一次仍是 `b28d439` 全绿）⇒ 不是漏跑、不是假绿灯。结论回填只推 `main`，
+不再推 `rele`，正式 `v0.13.2` 不受影响。
 
 ---
 
