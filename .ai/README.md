@@ -51,6 +51,23 @@
 只筛 major / 安全 / 互操作性硬 bug，出简报、不动代码；到点由用户提醒，
 不建 GitHub Actions 定时 workflow、不建自动化任务。见 `next-steps.md` 同节。
 
+**✅ 发布结论（已看到真实 run 结果后回填，非预填）**：
+`Android Stable Release` run `43542269744` → `completed/success`
+（2026-11-14 01:43:18Z → 01:51:18Z，约 8 分钟；单 job `Build & Publish Stable Release` success）。
+- `Vaultix v0.13.1` 已发布并置为 **Latest**（`v0.13.0` 已让位），`draft=false` /
+  `prerelease=false`；tag `v0.13.1` → `dd2e845b`；`origin/rele` 与 `main` 齐平（0/0），
+  `VERSION = 0.13.1`。
+- 资产 `Vaultix-v0.13.1.apk`（6.6 MB，已混淆 + 资源压缩）+ `checksums-sha256.txt`；
+  APK SHA-256 `8f1835985b8e01736fea74fa8be16e8d15c023fb39a502130cca04db17b96509`；
+  签名 `CN=Vaultix, O=Vaultix` SHA-256
+  `7e6c8c073d0c1a3b8fd8acf6e5d070acd73fdaf2986ca717de27183f395c1fd8`；attestation 已生成
+  （可 `gh attestation verify *.apk --repo Chaniug/Vaultix` 离线核验）。
+- 发布页正文**读的是手写版** `Docs/release-notes/v0.13.1.md`（未回退提交列表），
+  `## 校验和 (SHA-256)` / `## 来源证明` 两节由流水线写入；地址
+  `https://github.com/Chaniug/Vaultix/releases/tag/v0.13.1`。
+- ⚠️ 正式包是**混淆 + 固定密钥签名的独立构建**，preview 已验 #290 主路径；
+  装机侧建议覆盖安装后再复验 #288 / #289 / #290 三条主路径一次。
+
 ## 🕐 上一轮状态（2026-11-13 · #290 点「注销」网盘账号闪退）
 
 > ✅ **2026-11-14 真机验收通过**：用户回报「最新版已经不闪退了」，`v0.13.0-dev-5553bda`
