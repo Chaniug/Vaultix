@@ -48,7 +48,17 @@
 **验证**：39 项静态 / 文档门禁全绿；长名上先跑门禁 rc=1（5 条违规）→ 改完转绿；
 三轮「改坏门禁实现」变异反证均被自测抓到；改动段 `bash -n` PASS。
 
-⏳ **CI / 出包结论待真实 run 回填**（不预填）。
+**✅ CI / 出包结论（已看到真实 run 结果后回填，非预填）**：
+
+- `AI docs consistency` 43570409121 **success**（07:17:36Z → 07:17:45Z，约 9s）；
+  `Android CI (Debug)` 43570409124 **success**（07:17:36Z → 07:21:21Z，约 3m45s，
+  两 job 全绿；新接的 `Check release naming` / `Self-test release naming checker` 两步在 CI 里均 ✓）。
+- 单测 **1860 例 0 失败**；签名指纹 `7e6c8c07…1fd8`（与正式包一致，可覆盖安装）。
+- preview Release **`v0.13.1-dev-b28d439 · Preview`**（tag `preview`、`prerelease=true`、
+  `draft=false`），资产 **`Vaultix-b28d439.apk`**（37,575,802 B / 35.8 MB）；
+  CI annotation 实证 `app-full-debug.apk → Vaultix-b28d439.apk`。正文表仍列
+  版本 `0.13.1-dev-b28d439` / 提交 `b28d439` / 构建 / 签名 ⇒ **#218 身份完整**。
+- ⚠️ **只推 `main`、未推 `rele`** ⇒ 正式 `v0.13.1` 不受影响；`VERSION` 仍为 `0.13.1`。
 
 ## 🕐 前一轮（2026-11-14 · #291 两条安全红线修复）
 
