@@ -188,14 +188,19 @@ class KdbxSyncOrchestrator(
         // ⚠️ 判据问的是**来源自己**（`isRemote`），不是"工厂解析得出来" ——
         //   本地文件的工厂**恰恰解析得出来**（就是文件自己），那正是这一轮 bug 的来源。
         //   前缀 `content://` 作为**兜底**保留：来源解析不出来时也要挡。
-        val gate = localOnlyGate(origin, fileSourceFactory(origin))
+        // ⚠️ 工厂只调一次（#291）：原来 gate 判一次、放行后再 `fileSourceFactory(origin)!!`
+        //    取第二次，中间若有来源替换 / 解析失败，那句 `!!` 就是同步编排主路径上的一次 NPE。
+        //    取局部快照后，`localOnlyGate` 的 NO_SOURCE 分支已覆盖「解析不出来」，这里再显式
+        //    兜底一次：让「gate 放行但 source 为空」退化成可读的失败，而不是崩溃。
+        val resolvedSource = fileSourceFactory(origin)
+        val gate = localOnlyGate(origin, resolvedSource)
         if (gate != null) {
             // 本地库：先纠正持久化状态（旧数据可能已被写成 IN_SYNC），再如实上报。
             if (gate == LocalOnlyGate.LOCAL) markStatus(vaultId, KdbxSyncTransitions.markLocalOnly())
             return gate.outcome
         }
         // gate 为 null ⇒ 来源必然解析成功且自认是远端（见 [localOnlyGate]）。
-        val source = fileSourceFactory(origin)!!
+        val source = resolvedSource ?: return SyncOutcome.Failed("这个库还没有配置网盘来源")
 
         markStatus(vaultId, KdbxSyncTransitions.markSyncing())
 

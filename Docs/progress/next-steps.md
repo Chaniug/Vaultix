@@ -30,6 +30,19 @@
 | WebDAV 连接 | 2026-11-13 · **#288 坚果云 403「登录不上去」**（**改了生产代码**）：真机「测试连接 → WebDAV 账号或密码不正确（HTTP 403）」。匿名 / 假 Basic 凭据 × 4 方法 × 3 UA 差分实测 **12/12 全 401**（`WWW-Authenticate: Basic realm="nutstore"`）⇒ 用户带凭据拿到的 403 是**认证已通过后的服务端拒绝**（官方 FAQ：微信二次验证 / 访问频率 / 应用密码被撤销 / 目录权限），旧实现把 401/403 合并成「密码错」把用户锁死在重输密码上；**证伪上一轮 P0**（`accessTokenForHost()` 对陌生 host `return null`）但顺手修掉。四处修法：① `testConnection()` 主探 `PROPFIND Depth: 0`（`405/501` 才降级 HEAD，与 `listChildren()` 同源，404 不再假报成功），两条路径共用 `probeFailureOf()` 判据表；② 401/403 分流到 `credentialsMessage` / `forbiddenMessage` 两处真源，**`errorMessage()` 也分流**（stat/read/list/强写共同出口），403 明写「不是密码错」+ 四条可排除原因；③ 密码框下加「应用密码 / 关二次验证」提示；④ 新增 `webDavProductionClient(shared)`（`newBuilder()` 共享连接池、清 interceptors / networkInterceptors / Authenticator），`CloudAccountConnector` 与 `KdbxCloudSyncCoordinator` 两个构造点都过它，并订正三处过时 KDoc。含 6 条坑（403≠401 / 自检与使用同源 / 分类放共同出口 / **Kotlin 块注释可嵌套** / `forEach {}` 要 `}` 闭合 / detekt `ThrowsCount` 与 `MaxLineLength`），新建 `WebDavConnectionTest` 7 例 + `WebDavConnectionRulesTest` 5 条，反证撤 `interceptors().clear()` 后 P0 用例变红。门禁：**1843 例单测 0 失败**（182 份 XML）、detekt / `assembleFullDebug` 绿、33 项静态门禁全绿；CI：`f5635822` → `AI docs consistency` success（10s）、`Android CI (Debug)` success（4m23s，两 job 全绿），preview Release `Vaultix v0.13.0-dev-f563582 · Preview`（`Vaultix-v0.13.0-dev-f563582-preview.apk` 37.6MB）；[接力记录](../../.ai/issues/06-界面与交互-part26.md) |
 | 写回持久性 | 2026-11-12 · **#287 协程取消 / 写回持久性修复**（**改了生产代码**，判据第三次反转）：用户补充「点保存停 5 秒看到『已保存到本地 · 正在同步到云端』才生效，大部分人点完就返回」⇒ 根因**不是 #286 的同步闸门**，而是更前面：`mutateLocked` 已把新会话换进内存（本地立刻可见），`persist()` 旧顺序先跑 `Kdbx.verifyWrite()`（KDF 往返 1~5 s）再写脏缓存，用户在这几秒返回 ⇒ `viewModelScope` 被 `onCleared()` 取消 ⇒ `fileCache.save` / `markLocalEdited` / `autoUploader.enqueue` 全没跑 ⇒ DB 仍 `IN_SYNC`、缓存无脏标记 ⇒ #286 双真源两个都干净 ⇒ 点同步放行拉远端旧字节 `replaceSession`，改动消失。修法四道防线：① 八个写动作共用的 `serialWrite` 改 `withContext(Dispatchers.IO + NonCancellable) { writeGate.withLock { } }`（`withContext` 必须在 `withLock` **外**，等锁期也不许取消）；② 脏缓存**提到几秒自检之前**先落；③ 新增 `cacheRestore` 快照，失败恢复缓存 + 回滚会话，`CancellationException` 只重抛不跑回滚链；④ `updateItem` / `deleteItem` 统一 `launch { withContext(NonCancellable) { } }`（`launch(NonCancellable)` 已 deprecated）。⚠️ 取舍：点完保存立刻锁库 / 切后台时写回仍跑完（几秒），取消半途落盘只会制造三份矛盾的真相。含 6 条坑（deprecated 写法 / `functionBody` 从签名起点截表达式体 / 取消不是失败 / detekt `ThrowsCount` 合并 catch / `runBlocking` 而非 `runTest` / 反证撤 `NonCancellable` 必须变红），新建 `KdbxWriteDurabilityRulesTest` 5 条源码门禁 + `KdbxItemRepositoryTest` 1 条行为测试。门禁：**1827 例单测 0 失败**（179 份 XML）、detekt / `assembleFullDebug` 绿、33 项静态门禁全绿；CI：`7fc7cbc5` → `AI docs consistency` success（12s）、`Android CI (Debug)` success（4m22s，两 job 全绿），preview Release `Vaultix v0.12.0-dev-7fc7cbc · Preview`；[接力记录](../../.ai/issues/06-界面与交互-part25.md) |
 | OneDrive 同步 | 2026-11-12 · **#286 数据完整性修复**（**改了生产代码**，非观感问题）：用户报「onedrive 上的 kdbx 改完条目，上传中途返回 / 断网后刷新被云端旧内容覆盖，等于没改成功」⇒ 两个叠加根因：① `persist` 写带 `pendingLocalEdits` 的脏缓存 + `PENDING_UPLOAD`，自动上传一跑就把 DB 状态洗成 `SYNCING`/`FAILED`，而刷新闸门 `impliesLocalChanges` 不认这两个状态 ⇒ 误判「本地没改」→ 拉远端旧字节换会话 → `markResolved` 记已同步 → `fileCache.save` 清脏标记，改动永久消失；② `enqueue` 只在保存那一刻调用，全仓无冷启动 / 恢复补传入口。修法：`hasUnsyncedLocalEdits()`（DB 状态 **或** 缓存脏标记）收敛为唯一判据 + `resolveUsingRemote()` 下载**前 / 后**两道闸门 + `localChangedSinceLastSync()` 委托协调器 + `readRemoteCurrent()` 回写缓存前**现查**脏标记；新增 `resumePendingUploadsNow()` 与 `startUnlockObserver()`（订阅 `Kdbx.sessionRevision()` 按新解锁差集补传）。⚠️ **本轮第二轮补正**：第一版「启动扫一次」在**库还锁着**时是空转 —— `Kdbx.saveVia()` 要 `KdbxSessionStore` 会话，必然 `NotUnlocked` 并写假 `FAILED`；改为只补传已解锁的库（`sessionReady = Kdbx::isUnlocked`），锁态库由解锁事件精准补传。门禁：**1821 例单测 0 失败**（178 份 XML）、detekt / `assembleFullDebug` 绿、23 项静态门禁全绿；CI：`68665533` → `AI docs consistency` success（9s）、`Android CI (Debug)` success（4m51s，两 job 全绿），preview Release `Vaultix v0.12.0-dev-6866553 · Preview`；[接力记录](../../.ai/issues/06-界面与交互-part24.md) |
+| 安全红线 | 2026-11-14 · **#291 release 裸 `Log` 泄露 + 生产 3 处 `!!` NPE**（**改了生产代码**）：用户「签名一直放 GitHub Secrets，没问题；安全问题你决定怎么修」⇒ 签名链路完全不动，安全侧由助手拍板只修两项真违规。⚠️ **根因：分支 ≠ buildType** —— `BuildConfig.DEBUG` 由编译期 buildType 决定，R8 只裁 `if (BuildConfig.DEBUG) { … }` 整块，源码里一句裸 `Log.d` 在 release 照输出（`reseal $vaultId` 把完整库标识写进 logcat）。① **S2**：8 处收敛到唯一 `VaultixLog` 出口（6 处真违规 + `AutofillLogger` 2 处半合规；异常交给 `throwable` 参数、`vaultId` 经 `redact()` 脱敏、63 个调用点一行未改），白名单精确到 `VaultixApplication.kt` 门面 sink 单文件；② **S3**：3 处 `!!` 全改「取局部快照 + 空值有去向」（凭据创建 / 断言签名 / 同步编排），顺带修掉 `KdbxSyncOrchestrator` 工厂调两次的隐性 TOCTOU，**不用** `requireNotNull`（那只是把 NPE 换成另一种崩溃）；③ 新增 `check_production_safety.py` + 6 组自测，接 `ci-debug.yml` 两步；④ 同一判据存两份（Kotlin `nonUiCallSites` / Python `_ALLOW_HINTS`）在日志改 trailing lambda 后误报 UI 硬编码 ⇒ 补 `_log_lambda_mask()` 只追踪日志 lambda、selftest 7→9 条，两边都补 `VaultixLog.` 标记。❌ **不夹带**：S6 崩溃可取证（要「建」不是「修」，D07 脱敏边界待拍板）、CP 双能力分歧（`decisions.md:66` 等真机 A/B）、厂商白名单引导、**S1 依赖解析门禁（仍是 P1 第一优先，不混进本提交）**。详见 [part14](../../.ai/issues/01-构建与环境-part14.md) |
+
+## 待真机验收（#291 · release 行为）
+
+> 本轮改的是 **release 行为与崩溃路径**，本地静态检查 / 类型检查不能替代真机。
+> 逐条判据见 [`01-构建与环境-part14.md` §291.9](../../.ai/issues/01-构建与环境-part14.md)。
+
+- [ ] DEBUG 包：快速解锁登记、解锁页多库补开、开关热区告警日志仍可读（门面没被改哑），
+      且 logcat 里不再出现完整 `vaultId`。
+- [ ] 通行密钥创建（选已有登录条目 / 新建条目两分支）与断言签名（浏览器 / 原生两流程）不崩。
+- [ ] OneDrive / WebDAV KDBX 点同步正常；本地 SAF 库仍显示「本地文件」不假报「已同步」。
+- [ ] **release 包** logcat 里搜不到 `VaultixQuickUnlock` / `VaultixUnlockVm` /
+      `SettingsSwitch` / `VaultixAutofill` 的 DEBUG 行 —— **这条才是 S2 的真正验收**。
 
 ## 待真机验收（v0.13.0）
 
@@ -168,10 +181,15 @@
 > 命中即引用登记，不要重写理由、更不要重新列成待办（有 `check_no_fix_register.py` 门禁）。
 
 - [ ] **依赖解析结果纳入 CI 门禁**（最高优先，先于任何升级）：施工单见报告附录 C · S1
-- [ ] **生产 3 处 `!!` 清零**（P1，会 NPE 崩溃，排在日志之前）：报告 §2.2 / §4 · S3
-- [ ] **release 下 6 处绕过 `VaultixLog` 的直接 `Log` 收敛**（P1，由 P0 下调：不崩溃、
-      不丢数据，属日志红线与信息泄露风险；`BuildConfig.DEBUG` 由 buildType 决定，不由分支决定）：
-      报告 §2.2 / §6 订正
+- [x] **生产 3 处 `!!` 清零**（P1，报告 §2.2 / §4 · S3）· ✅ **#291 已修（2026-11-14）**：
+      三处全改「取局部快照 + 空值有去向」，不用 `requireNotNull`；`check_production_safety.py`
+      已把生产 `!!` 归零钉成 CI 红线，[part14 §291.4](../../.ai/issues/01-构建与环境-part14.md)
+- [x] **release 下 6 处绕过 `VaultixLog` 的直接 `Log` 收敛**（P1，报告 §2.2 / §6 订正）·
+      ✅ **#291 已修（2026-11-14）**：实收敛 **8 处**（含 `AutofillLogger` 2 处半合规），
+      `vaultId` 经 `redact()` 脱敏；白名单只剩 `VaultixApplication.kt` 门面 sink 一处。
+      ⚠️ 判据：`BuildConfig.DEBUG` 由 **buildType** 决定、不由分支决定，
+      R8 只裁 `if (BuildConfig.DEBUG) { … }` 整块 ⇒「源码一致」≠「产物行为一致」，
+      [part14 §291.2](../../.ai/issues/01-构建与环境-part14.md)
 - [ ] Baseline Profile：生成 `baseline-prof.txt`，覆盖冷启动 / 解锁 / 列表 / 详情 + autofill
 - [ ] Gradle 配置缓存：先验 `detekt --configuration-cache`，可用再开
 - [ ] Kover 覆盖率基线接入 CI（阈值先取实测值，不一步设 80%）

@@ -498,7 +498,12 @@ class PasskeyCreateActivity : FragmentActivity() {
                     counter = 0,
                     discoverable = discoverable,
                 )
-                if (createNewLogin || selectedLoginId == null) {
+                // ⚠️ selectedLoginId 是**可变 UI 状态**：判空后再读一次、用 `!!` 断言，
+                //    两次读取之间隔着挂起点，`onToggleNewLogin` / `onLoginSelected` 完全可能
+                //    已经把它置空 —— 真机上就是凭据创建流程里的一次 NPE（#291）。
+                //    取一次局部快照：空值自然落到「新建」，非空分支由 Kotlin 智能转换保证。
+                val targetLoginId = if (createNewLogin) null else selectedLoginId
+                if (targetLoginId == null) {
                     val item = VaultItem(
                         id = "",
                         title = rpName.ifBlank { rpId },
@@ -508,9 +513,9 @@ class PasskeyCreateActivity : FragmentActivity() {
                     )
                     itemRepository.createItem(vaultId, item)
                 } else {
-                    val login = loginCandidates.value.firstOrNull { it.id == selectedLoginId }
+                    val login = loginCandidates.value.firstOrNull { it.id == targetLoginId }
                     val merged = (login?.fido2Credentials ?: emptyList()) + cred
-                    itemRepository.updateFido2Credentials(vaultId, selectedLoginId!!, merged)
+                    itemRepository.updateFido2Credentials(vaultId, targetLoginId, merged)
                 }
                 // ⚠️ 四个必需入参一项都不能少：浏览器（Chromium）解析
                 // `AuthenticatorAttestationResponse` 时会**必读** `publicKeyAlgorithm`，

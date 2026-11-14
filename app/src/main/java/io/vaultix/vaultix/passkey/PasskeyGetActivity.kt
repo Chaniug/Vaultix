@@ -489,10 +489,14 @@ class PasskeyGetActivity : FragmentActivity() {
                 counter = 0,
                 withAttested = false,
             )
-            val signature = if (clientDataHash != null) {
+            // ⚠️ clientDataHash 是**可变属性**，判空后的 `!!` 依赖「没人在这之间改它」。
+            //    取一次局部快照：既让 Kotlin 智能转换为非空，也钉住本次签名实际用的那份哈希，
+            //    避免断言签名流程因状态漂移 NPE（#291）。
+            val externalClientDataHash = clientDataHash
+            val signature = if (externalClientDataHash != null) {
                 // 浏览器流程：**只能**用系统给的哈希（浏览器那份真实 JSON 的 SHA-256）。
                 // 自己重算 clientDataJSON 再哈希必然对不上（见上）。
-                WebAuthn.signAssertionHash(authData, clientDataHash!!, key)
+                WebAuthn.signAssertionHash(authData, externalClientDataHash, key)
             } else {
                 // 原生 App 流程：本模块自己拼 JSON、自己哈希、自己签，三处用的是同一份字节。
                 WebAuthn.signAssertion(authData, clientDataBytes, key)

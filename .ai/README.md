@@ -24,7 +24,36 @@
 - 已接进 CI：`ci-debug.yml` 的 `sandbox-tests` job 用**同一份脚本**，与 `android-ci` 并行
   ⇒ 本地绿 ⇒ CI 不会红在同一件事上。
 
-## 🕐 最新状态（2026-11-14 · v0.13.1 正式发布 + 上游改动搁置）
+## 🕐 最新状态（2026-11-14 · #291 两条安全红线修复）
+
+> **触发**：用户「软件签名的问题，我一直都把签名放到 github 上的 secret 里面的，
+> 所以签名没有什么疑问，至于安全问题，你决定如何修吧」
+> ⇒ **签名链路完全不动**（`SIGNING_*` Secrets / `release.yml` / attestation），
+> 安全侧由助手拍板范围并施工。
+
+**拍板范围**：只修「有真实损害、能本地验证、可加门禁防回归」的两项。
+
+- ✅ **S2** release 下绕过 `VaultixLog` 的裸 `Log`：实收敛 **8 处**（6 处真违规 +
+  `AutofillLogger` 2 处半合规），`reseal $vaultId` 改 `redact(vaultId)` 脱敏；
+  全仓生产代码只剩 `VaultixApplication.kt` 门面 sink 一处直接用平台 `Log`。
+- ✅ **S3** 生产 3 处 `!!`：全改「取局部快照 + 空值有去向」，**不用** `requireNotNull`
+  （那只是把 NPE 换成 `IllegalArgumentException`，对真机用户仍是点一下就崩）。
+- ✅ 新增 `check_production_safety.py` + 6 组自测，接 `ci-debug.yml` 两步；
+  `check_ui_hardcoded_text.py` 补 `_log_lambda_mask()` 修 trailing lambda 误报。
+- ❌ **不夹带**：S6 崩溃可取证（要「建」不是「修」，D07 脱敏边界待用户拍板）、
+  CP 双能力分歧（`decisions.md:66` 等真机 A/B）、厂商白名单引导、
+  **S1 依赖解析门禁（仍是 P1 第一优先，不混进本提交）**、签名链路。
+
+⚠️ **长期判据**：`BuildConfig.DEBUG` 由 **buildType** 决定、不由分支决定；R8 只裁
+`if (BuildConfig.DEBUG) { … }` 整块，源码里一句裸 `Log.d(...)` 在 release 照输出
+⇒「main 与 rele 源码一致」**不等于**产物行为一致。另一坑是「**同一判据存两份**」：
+Kotlin `nonUiCallSites` 与 Python `_ALLOW_HINTS` 各存一份日志白名单，日志改成
+trailing lambda 后语句形状变了就误报，两处都要补（#160 同源老毛病）。
+
+接力正文：[`01-构建与环境-part14.md`](./issues/01-构建与环境-part14.md)；
+P1 两项已在 `next-steps.md` 勾选，**真机验收清单**见 part14 §291.9。
+
+## 🕐 发布状态（2026-11-14 · v0.13.1 正式发布 + 上游改动搁置）
 
 > **一句话**：用户拍板「发一个 release；上游改动目前意义不大，先搁置，以后每月排查一次
 > 重大更新即可」。本轮发 **v0.13.1 稳定版**（含 #288 / #289 / #290 三个真机修复），

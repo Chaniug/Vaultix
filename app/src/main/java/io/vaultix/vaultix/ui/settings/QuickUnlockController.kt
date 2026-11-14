@@ -11,7 +11,7 @@ package io.vaultix.vaultix.ui.settings
 import io.vaultix.data.repository.LegacyQuickUnlockCleanup
 import io.vaultix.data.repository.LocalUnlockEnrollment
 import io.vaultix.datastore.VaultixPreferences
-import android.util.Log
+import io.vaultix.common.logging.VaultixLog
 import io.vaultix.domain.LocalUnlockEnrollOutcome
 import io.vaultix.domain.LocalUnlockPrepareOutcome
 import io.vaultix.domain.LocalUnlockPreparedEnrollment
@@ -864,7 +864,7 @@ class QuickUnlockController(
                     // ⚠️ 清标记失败只记日志：它是状态清理，不影响本次登记结论；
                     //   抛出去会把「指纹配好了」这个好消息变成一个报错。
                     runCatching { recovery.clearRearmPending() }
-                        .onFailure { Log.d(TAG, "清除待重装标记失败：${it.message}") }
+                        .onFailure { VaultixLog.w(TAG, it) { "清除待重装标记失败" } }
                     // 门锁开成 ⇒ 房钥匙已在内存，房间照封（纯软件，不碰 Keystore）。
                     sessionNow?.houseKeyReady = true
                     if (units.isEmpty()) return@withContext emptyMap()

@@ -167,6 +167,9 @@ class SettingsStyleRulesTest {
         val nonUiFiles = setOf("LogScrubber.kt")
         val nonUiCallSites = listOf(
             "Log.w(", "Log.d(", "Log.e(", "TAG", "buildExportText",
+            // #291：日志统一收敛到 VaultixLog 门面后，设置页的中文日志文案不再带 `Log.` 前缀。
+            // 不加这个标记，`VaultixLog.w(TAG) { "…中文…" }` 会被误判成硬编码界面文案。
+            "VaultixLog.",
         )
 
         val cjk = Regex("[\u4e00-\u9fff]")

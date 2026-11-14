@@ -166,6 +166,52 @@ def _merge_call_lines(lines: list[tuple[int, str]]) -> list[tuple[int, str]]:
     return out
 
 
+def _brace_delta(code: str) -> int:
+    """该行贡献的花括号深度变化（同样先剥字符串，防文案里的 `{` 干扰）。"""
+    stripped = LITERAL.sub('""', code)
+    return stripped.count("{") - stripped.count("}")
+
+
+def _log_lambda_mask(lines: list[tuple[int, str]]) -> list[bool]:
+    """标出「处于日志 trailing lambda 体内」的逻辑行。
+
+    ## 为什么需要（2026-11-14，#291）
+
+    `_merge_call_lines` 按**圆括号**合并语句。旧写法 `Log.w(\\n TAG,\\n "中文"\\n)` 括号
+    一直没闭合，中文行被并进含 `Log.` 的同一条逻辑行 ⇒ 正确放行。
+    日志统一收敛到门面后变成：
+
+    ```kotlin
+    VaultixLog.w(TAG) {
+        "开关热区只有 …" +
+            "行内边距太小 …"
+    }
+    ```
+
+    `VaultixLog.w(TAG) {` 的圆括号**已经平衡** ⇒ 合并提前收尾，两行中文字面量各自
+    成为独立逻辑行，不含任何 `_ALLOW_HINTS` ⇒ 被误判成「硬编码 UI 文案」。
+
+    ⚠️ 不能靠「把花括号也算进 `_paren_delta`」修：那会把 `Column { Text("中文") }`
+    整块合成一条逻辑行，块里只要出现过一句 `Log.d` 就顺手放行所有真 UI 文案 ——
+    门禁会被自己蛀空。⇒ 只追踪**以日志调用开头**的 lambda：起始行必须命中
+    `_ALLOW_HINTS` 且花括号未闭合，普通 Composable 块（不含日志 hint）完全不受影响。
+    """
+    mask: list[bool] = []
+    depth = 0
+    for _, code in lines:
+        if depth > 0:
+            mask.append(True)
+            depth = max(0, depth + _brace_delta(code))
+            continue
+        delta = _brace_delta(code)
+        if delta > 0 and any(h in code for h in _ALLOW_HINTS):
+            depth = delta
+            mask.append(True)
+        else:
+            mask.append(False)
+    return mask
+
+
 def _load_baseline() -> dict[str, set[str]]:
     """path -> 已登记的特征串集合。"""
     entries: dict[str, set[str]] = {}
@@ -195,7 +241,12 @@ def scan() -> list[tuple[str, int, str]]:
         allowed = baseline.get(rel, set())
         stripped = _strip_comments(path.read_text(encoding="utf-8").split("\n"))
         # ⚠️ 必须按"逻辑行"判断：跨行调用里关键字与文案不在同一行（见 _merge_call_lines）。
-        for no, code in _merge_call_lines(stripped):
+        logical = _merge_call_lines(stripped)
+        # ⚠️ 日志 trailing lambda 的体也是同一条语句（见 _log_lambda_mask）。
+        in_log_lambda = _log_lambda_mask(logical)
+        for (no, code), is_log_lambda in zip(logical, in_log_lambda):
+            if is_log_lambda:
+                continue
             if any(h in code for h in _ALLOW_HINTS):
                 continue
             for m in LITERAL.finditer(code):
@@ -274,7 +325,30 @@ def selftest() -> int:
     print(f"  [{'PASS' if text_ok else 'FAIL'}] 跨行 Text(...) 仍应被抓到")
     failures += 0 if text_ok else 1
 
-    total = len(cases) + 3
+    # ★ 2026-11-14（#291）：日志收敛到 `VaultixLog.d/w { }` trailing lambda 后，
+    #   lambda 体内的中文字面量必须放行，但**不能**顺手放行普通 Composable 块里的真文案。
+    lambda_lines = [
+        (1, "VaultixLog.w(TAG) {"),
+        (2, '    "开关热区只有 $maxHeight：" +'),
+        (3, '        "装不下 48dp。",'),
+        (4, "}"),
+        (5, 'Text("这句是真 UI 文案")'),
+    ]
+    lambda_mask = _log_lambda_mask(lambda_lines)
+    lambda_ok = all(lambda_mask[:4]) and not lambda_mask[4]
+    print(f"  [{'PASS' if lambda_ok else 'FAIL'}] 日志 trailing lambda 体内放行、块外仍抓")
+    failures += 0 if lambda_ok else 1
+
+    column_lines = [
+        (1, "Column {"),
+        (2, '    Text("确定要删除吗"),'),
+        (3, "}"),
+    ]
+    column_ok = not any(_log_lambda_mask(column_lines))
+    print(f"  [{'PASS' if column_ok else 'FAIL'}] 普通 Composable 块不得被日志上下文放行")
+    failures += 0 if column_ok else 1
+
+    total = len(cases) + 5
     print(f"自检：{total - failures}/{total} 通过")
     return 0 if failures == 0 else 1
 

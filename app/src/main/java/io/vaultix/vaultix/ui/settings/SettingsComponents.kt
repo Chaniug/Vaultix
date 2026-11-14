@@ -39,7 +39,7 @@
  */
 package io.vaultix.vaultix.ui.settings
 
-import android.util.Log
+import io.vaultix.common.logging.VaultixLog
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -467,11 +467,10 @@ internal fun SwitchWithTouchTarget(content: @Composable () -> Unit) {
             val reported = remember { mutableStateOf(false) }
             if (!reported.value) {
                 reported.value = true
-                Log.w(
-                    TAG,
+                VaultixLog.w(TAG) {
                     "开关热区只有 $maxHeight，低于 Material 的 $SWITCH_TOUCH_TARGET_MIN：" +
-                        "行内边距太小，装不下 48dp。请检查该行的上下 padding。",
-                )
+                        "行内边距太小，装不下 48dp。请检查该行的上下 padding。"
+                }
             }
         }
         val targetHeight = if (constrainedByParent) maxHeight else SWITCH_TOUCH_TARGET_MIN

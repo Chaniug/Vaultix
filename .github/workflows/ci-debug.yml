@@ -241,6 +241,19 @@ jobs:
       - name: Check source encoding (UTF-8 / mojibake gate)
         run: python3 "$GITHUB_WORKSPACE/.github/scripts/check-encoding.py" "$GITHUB_WORKSPACE"
 
+      # ★ 2026-11-14（#291）：生产代码的两条安全红线 —— 日志唯一出口 + 零 `!!`。
+      #
+      # R8 只裁 `if (BuildConfig.DEBUG)` 整块，裁不掉源码里一句裸 `Log.d(...)`；
+      # 而 `BuildConfig.DEBUG` 由 buildType 决定，「main 与 rele 源码一致」不等于产物一致。
+      # 11-11 整体排查实测 6 处绕过 VaultixLog 的裸 Log（`reseal $vaultId` 把完整库标识
+      # 写进 release logcat），另有 3 处生产 `!!` 落在凭据创建 / 断言签名 / 同步编排路径。
+      # 编译 / 单测 / detekt 全查不出这两类形状，故用源码文本钉死 + 配自测防假红。
+      - name: Check production safety (log facade + no !!)
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/check_production_safety.py" "$GITHUB_WORKSPACE"
+
+      - name: Self-test production safety checker
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/tests/selftest_production_safety.py"
+
       # ★ 2026-11-10：KDBX 来源标签唯一真值源门禁。
       #
       # 真机反馈 #264：OneDrive 上的 KDBX 库在**库列表**里显示「本地文件 · uit」，

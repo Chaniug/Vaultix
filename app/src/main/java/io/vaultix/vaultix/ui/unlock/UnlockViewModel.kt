@@ -1,7 +1,8 @@
 package io.vaultix.vaultix.ui.unlock
 
 import android.content.Context
-import android.util.Log
+import io.vaultix.common.logging.VaultixLog
+import io.vaultix.common.logging.redact
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -923,7 +924,9 @@ class UnlockViewModel @Inject constructor(
                         houseKeyInMemory = lockOpened,
                     )
                 }
-            }.onFailure { Log.d(TAG, "其余库补开失败（不影响已进入的库）：${it.message}") }
+            }.onFailure {
+                VaultixLog.w(TAG, it) { "其余库补开失败（不影响已进入的库）" }
+            }
         }
     }
 
@@ -955,11 +958,13 @@ class UnlockViewModel @Inject constructor(
         runCatching {
             when (val outcome = roomReseal.resealRoom(vaultId, candidate)) {
                 RoomResealOutcome.Resealed ->
-                    Log.d(TAG, "reseal $vaultId → 房间信封已用刚输的密码重包")
+                    VaultixLog.d(TAG) { "reseal ${redact(vaultId)} → 房间信封已用刚输的密码重包" }
                 else ->
-                    Log.d(TAG, "reseal $vaultId → 未重包（$outcome），下次解锁再试")
+                    VaultixLog.d(TAG) { "reseal ${redact(vaultId)} → 未重包（$outcome），下次解锁再试" }
             }
-        }.onFailure { Log.d(TAG, "reseal $vaultId → 异常：${it.message}") }
+        }.onFailure {
+            VaultixLog.w(TAG, it) { "reseal ${redact(vaultId)} → 异常" }
+        }
     }
 
     /**
