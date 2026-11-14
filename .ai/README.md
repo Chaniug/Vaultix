@@ -53,7 +53,26 @@
 （尤其「release 包 logcat 搜不到几个 tag 的 DEBUG 行」）。本地静态门禁与 main CI 全绿，
 但静态检查不能替代真机；装机后建议覆盖安装并复验一次。
 
-**✅ 发布结论**：**待 `Android Stable Release` 真实 run 结果出来后回填，不预填。**
+**✅ 发布结论（已看到真实 run 结果后回填，非预填）**：
+`Android Stable Release` run `43592092124` → `completed/success`
+（2026-11-14 11:52:44Z → 12:00:42Z，约 7m58s；单 job `Build & Publish Stable Release` success）。
+- `Vaultix v0.13.2` 已发布并置为 **Latest**（`v0.13.1` 已让位），`draft=false` /
+  `prerelease=false`；tag `v0.13.2` → `933d629d`；`origin/rele` 与 `main` 齐平（0/0），
+  本次 push 触发前远端**无** `v0.13.2` tag ⇒ 幂等清理没有覆盖任何已发布版本。
+- 资产 `Vaultix-v0.13.2.apk`（6,977,802 B / 6.65 MB，已混淆 + 资源压缩）
+  + `checksums-sha256.txt`（86 B）；
+  APK SHA-256 `804c39efed519f58c11d51f8ef131c4d86430d53f117c80ebec053c5e5b5e853`；
+  签名 `CN=Vaultix, O=Vaultix` SHA-256
+  `7e6c8c073d0c1a3b8fd8acf6e5d070acd73fdaf2986ca717de27183f395c1fd8`（与 v0.13.1 一致，
+  **可覆盖安装**）；attestation 已生成（API 查得 1 条 Sigstore bundle v0.3，
+  可 `gh attestation verify *.apk --repo Chaniug/Vaultix` 离线核验）。
+- 发布页正文**读的是手写版** `Docs/release-notes/v0.13.2.md`（未回退提交列表），
+  正文表版本 / 提交 / 构建 / 签名四项齐全，`## 校验和 (SHA-256)` / `## 来源证明`
+  两节由流水线写入；地址 `https://github.com/Chaniug/Vaultix/releases/tag/v0.13.2`。
+- main 侧本次只触发 `AI docs consistency` `43591840939` **success**（文档 / VERSION 改动
+  不在 `ci-debug.yml` paths 内，`Android CI (Debug)` 按设计不触发；代码侧零改动，
+  最近一次代码提交 `b28d439` 两 run 已全绿）⇒ 不是漏跑、不是假绿灯。
+- 文档回填提交**只推 `main`、不再推 `rele`** ⇒ 不触发二次发版。
 
 ## 🕐 前一轮（2026-11-14 · #292 预览包 / Release 命名精简）
 

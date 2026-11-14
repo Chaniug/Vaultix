@@ -19,6 +19,15 @@
 > 用户授权后**快进 rele**（`git push origin main:rele`）触发 `release.yml`。
 > ⚠️ #291 改的是 release 包行为，真机验收 4 条仍挂 `- [ ]`（尤其 release 包 logcat
 > 搜不到几个 tag 的 DEBUG 行），静态门禁 / main CI 全绿**不能替代真机**，装机后需复验。
+> ✅ **发布结论（真实 run 结果）**：`Android Stable Release` run `43592092124`
+> `completed/success`（约 7m58s）；`Vaultix v0.13.2` 已置 **Latest**，资产
+> `Vaultix-v0.13.2.apk`（6,977,802 B / 6.65 MB，混淆）+ `checksums-sha256.txt`；
+> APK SHA-256 `804c39ef…e5b5e853`、签名指纹 `7e6c8c07…1fd8`（与 v0.13.1 一致，
+> 可覆盖安装）、attestation 1 条；手写发布说明被正确采用。tag `v0.13.2` → `933d629d`，
+> `rele` 与 `main` 齐平（0/0）。⚠️ 发布前远端无 `v0.13.2` tag ⇒ 幂等清理没覆盖任何
+> 已发布版本。文档回填只推 `main` 不再推 `rele`（不触发二次发版）。
+> main 侧本次只触发 `AI docs consistency` 43591840939 success —— 版本 / 文档改动不在
+> `ci-debug.yml` paths 内，`Android CI (Debug)` 按设计不跑，**不是假绿灯**。
 > 📅 月度排查上游 = 文档约定（每月一次、只筛 major / 安全 / 互操作硬 bug、出简报不动
 > 代码、到点由用户提醒），**不建定时任务 / 自动化 workflow**。
 >
