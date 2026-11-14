@@ -5,7 +5,27 @@
 > `Docs/progress/next-steps.md`（待办唯一真源；历史按时间段归档，见文末索引）→ `Docs/progress/current-status.md`（进度快照）
 > → `.ai/SESSION-YYYY-MM-DD.md`（逐轮流水，需要细节才翻）。
 >
-> 最后更新：2026-11-13（**#290 点「注销」网盘账号闪退**（资源 ID 编译期内联为 0 /
+> 最后更新：2026-11-14（**v0.13.1 正式发布 + 上游改动搁置 + 月度排查约定**）：
+> 用户拍板「发一个 release；目前的上游改动对我意义不大，先搁置，以后每个月排查一次
+> 上游的重大更新即可」。本轮纯发布 + 文档，未改生产代码。
+> ⚠️ **发版纪律**：① 发版前先 `fetch --tags` —— 本地 `origin/rele` 缓存会过期，
+> 曾停在 v0.12.0 发布点而误判「落后 70 个提交」，真实只落后 7 个；
+> ② **必须先 bump `VERSION`** —— `v0.13.0` 已是 11-12 的 Latest 而 `VERSION` 仍写
+> `0.13.0`，`release.yml` 有「删同版本旧 Release/tag 再重建」的幂等步骤，
+> 不升版会**覆盖已发布版本**（本轮 0.13.0 → 0.13.1）；
+> ③ 发布说明放 `Docs/release-notes/vX.Y.Z.md`，changelog 步骤**优先读手写版**，
+> 别把文档回填 / CI 修红这类内部账贴给用户。
+> ⚠️ **硬约束不变**：每次合入 `rele` 都要用户明确点头（`main` 与 `rele` 分开，
+> 绝不擅自合）；本轮是用户授权后才快进 `rele` 触发 `release.yml`。
+> 4 个 `SIGNING_*` Secrets 已配，正式包混淆 + 固定密钥签名，可与 preview 覆盖安装。
+> 📅 **月度排查上游 = 文档约定，不是定时任务**：每月一次、只筛 major / 安全 /
+> 互操作性硬 bug、出简报不动代码、到点由用户提醒；**不建 GitHub Actions 定时
+> workflow、不建自动化任务**（避免又一套没人读的告警，同 `codeql.yml` 移除
+> push 触发的判据）。真源：`bitwarden/android`（移动真源，非已归档的
+> `bitwarden/mobile`）、`Kunzisoft/KeePassDX`、`PhilippC/keepass2android`。
+> 2026-11 上游调研结论（A1 BE/BS `0/1`、A2 外部改动提示、NEW 崩溃可取证等）
+> **用户已判定暂不采纳、全部不排期**，仅留 `next-steps.md` 的存档表。
+> 上一轮：2026-11-13（**#290 点「注销」网盘账号闪退**（资源 ID 编译期内联为 0 /
 > Compose 重组期崩溃）：真机日志两次 `Resources$NotFoundException: String resource
 > ID #0x0`，栈在 `NoticeSnackbar` → `stringResource(0)`。11 条
 > `const val SETTINGS_CLOUD_* = R.string.*` 被 Kotlin 内联成 **0**（AGP 编译期 R 类
