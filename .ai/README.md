@@ -24,7 +24,33 @@
 - 已接进 CI：`ci-debug.yml` 的 `sandbox-tests` job 用**同一份脚本**，与 `android-ci` 并行
   ⇒ 本地绿 ⇒ CI 不会红在同一件事上。
 
-## 🕐 最新状态（2026-11-14 · #291 两条安全红线修复）
+## 🕐 最新状态（2026-11-14 · #292 预览包 / Release 命名精简）
+
+> **触发**：用户「`Vaultix-v0.13.1-dev-fcb77f9-preview.apk` 最终生成包的名字偏长了，
+> release 名字也偏长了吧，你看看如何优化。**以后这种名字短一点，简洁一点**」。
+
+**拍板**：身份由 Release 页承载，APK 名只留「产品名 + 可对应的提交」。
+
+- ✅ preview APK `Vaultix-v<version>-preview.apk`（39 字符）→ **`Vaultix-<7位SHA>.apk`**（18）；
+  preview 标题去掉冗余 `Vaultix ` 前缀 → `v0.13.1-dev-fcb77f9 · Preview`（29）。
+- ✅ **stable 侧不动**：`Vaultix-v0.13.1.apk` / `Vaultix v0.13.1` 本就够短，
+  版本号是稳定版唯一身份，没有 `dev` / SHA / 渠道后缀可删。
+- ⚠️ **#218 身份硬约束一字不砍**（用户 11-01 自己拍的板）：标题必带版本 + 短 SHA；
+  APK 名必留 7 位 SHA，**不能**叫 `Vaultix-preview.apk`（多包互相覆盖、对不上构建）。
+  ⇒ **短 = 删重复，不是删身份**。
+- ✅ 新增 `check_release_naming.py` + 11 组真实 workflow 变异自测，接 `ci-debug.yml` 两步
+  （⚠️ 不能挂 `ci-docs.yml`：其 paths 不含 `.github/workflows/**` ⇒ 假绿灯，#218.7 同源）。
+- ✅ 长期约定 [`8.12-发布产物命名.md`](./conventions/8.12-发布产物命名.md)；
+  接力正文 [`part15.md`](./issues/01-构建与环境-part15.md)；01 篇索引 64→65。
+- ❌ **不动签名链路**、**不推 `rele`**（只推 `main`，正式 `v0.13.1` 不受影响）、
+  不改 `versionName` / `Upload APK` artifact 名。
+
+**验证**：39 项静态 / 文档门禁全绿；长名上先跑门禁 rc=1（5 条违规）→ 改完转绿；
+三轮「改坏门禁实现」变异反证均被自测抓到；改动段 `bash -n` PASS。
+
+⏳ **CI / 出包结论待真实 run 回填**（不预填）。
+
+## 🕐 前一轮（2026-11-14 · #291 两条安全红线修复）
 
 > **触发**：用户「软件签名的问题，我一直都把签名放到 github 上的 secret 里面的，
 > 所以签名没有什么疑问，至于安全问题，你决定如何修吧」

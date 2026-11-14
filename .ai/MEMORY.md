@@ -1,11 +1,24 @@
 # Vaultix 项目长期笔记
 
 > **接力顺序（先读这四份，再动手）**：
-> 本文件（约定 / 硬约束 / 决策）→ `.ai/ISSUES.md`（坑：现象-根因-解法，最新 **#291**）→
+> 本文件（约定 / 硬约束 / 决策）→ `.ai/ISSUES.md`（坑：现象-根因-解法，最新 **#292**）→
 > `Docs/progress/next-steps.md`（待办唯一真源；历史按时间段归档，见文末索引）→ `Docs/progress/current-status.md`（进度快照）
 > → `.ai/SESSION-YYYY-MM-DD.md`（逐轮流水，需要细节才翻）。
 >
-> 最后更新：2026-11-14（**#291 两条安全红线修复 · 紧接 v0.13.1 发布**）：
+> 最后更新：2026-11-14（**#292 预览包 / Release 命名精简 · 紧接 #291**）：
+> 用户「`Vaultix-v0.13.1-dev-fcb77f9-preview.apk` 名字偏长…以后这种名字短一点」。
+> ⚠️ **#218 身份硬约束不可突破**（同一用户 11-01 拍板「能被用户验证的才叫发布物的
+> 身份」）：标题必带版本 + 短 SHA，APK 名必留 7 位 SHA —— **只删重复，不删身份**，
+> 不能叫 `Vaultix-preview.apk`（多包互相覆盖、对不上构建）。
+> ⇒ preview APK 缩到 `Vaultix-<7位SHA>.apk`、标题去冗余 `Vaultix ` 前缀；
+> **stable 侧不动**（`Vaultix-v0.13.1.apk` 本就够短，版本号是唯一身份）。
+> 新增 `check_release_naming.py` + 11 组真实 workflow 变异自测，接 `ci-debug.yml` 两步：
+> ⚠️ **不能挂 `ci-docs.yml`** —— 其 paths 不含 `.github/workflows/**`，改了命名却
+> 不触发门禁 = 假绿灯（#218.7 同源）。约定真源
+> `.ai/conventions/8.12-发布产物命名.md`，接力 `issues/01-构建与环境-part15.md`。
+> ⚠️ 本轮**只推 main 未推 rele**，签名链路完全未动。
+>
+> 上一轮（同日）：**#291 两条安全红线修复 · 紧接 v0.13.1 发布** ——
 > 用户「软件签名我一直放 GitHub Secrets，没问题；安全问题你决定如何修」⇒ 签名链路
 > **完全不动**，安全侧由助手拍板：只修 S2（release 裸 `Log` 实收敛 8 处到唯一
 > `VaultixLog` 出口，`vaultId` 经 `redact()` 脱敏）与 S3（生产 3 处 `!!` 改「局部快照

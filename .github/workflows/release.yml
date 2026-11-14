@@ -323,6 +323,10 @@ jobs:
           # ---- 产物改名：`app-full-release.apk` → `Vaultix-v<version>.apk` ----
           # 2026-11-12：Gradle 给的文件名是「flavor + buildType」的组合（full/release），
           #   对下载的人毫无意义 —— Release 页上应该看到「产品名 + 版本号」。
+          #   ⚠️ 2026-11-14（#292）：preview 侧已精简为 `Vaultix-<7位SHA>.apk`，
+          #      稳定侧**不跟着改** —— `Vaultix-v0.13.1.apk`（17 字符）本就够短，
+          #      版本号是稳定版唯一身份，没有 `dev` / SHA / 渠道后缀可删。两个模板
+          #      都由 `check_release_naming.py` 钉住，约定见 8.12。
           # ⚠️ 改名**必须放在收集之前**：下面的 checksums、apk_list、attestation、
           #   Release 附件四条链路全部从这里的 `find` 派生（后两者走 `*.apk` 通配），
           #   于是它们会自动跟随新名，不需要各改一遍 —— 只改一处才是唯一不会脱节的改法。
