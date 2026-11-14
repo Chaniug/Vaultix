@@ -170,6 +170,11 @@ app/                 # UI 层：Compose 界面、导航、ViewModel、自动填�
 
 ## 📚 文档
 
+> ⚠️ **`Docs/00`~`18` 是 2026-09-07 的设计期蓝图**，写的是「当初打算怎么做」和验收目标，
+> **不能拿来描述当前实现**（逐条已知偏差见 [`Docs/README.md`](./Docs/README.md)）。
+> 当前模块 / 依赖 / 目录真源：[`.ai/conventions/8.10-架构与目录地图.md`](./.ai/conventions/8.10-架构与目录地图.md)；
+> 当前状态与下一批：[`.ai/README.md`](./.ai/README.md) 顶部「🕐 最新状态」。
+
 <details>
 <summary><b>19 篇技术文档（点开）</b></summary>
 
@@ -195,8 +200,9 @@ app/                 # UI 层：Compose 界面、导航、ViewModel、自动填�
 | 17 | [稳定性与防错规范](./Docs/17-稳定性与防错规范.md) | 序列化容错、协程取消、崩溃兜底 |
 | 18 | [Bastion 参考地图](./Docs/18-Bastion参考地图.md) | Bastion 代码/文档 → Vaultix 行为的参考索引 |
 
-进度与决策记录见 [Docs/progress/](./Docs/progress/README.md)。设计取舍的"为什么"多在
-`.ai/`（会话记录、决策定稿、坑位清单），那是本项目对齐上下文的主要入口。
+进度与决策记录见 [Docs/progress/](./Docs/progress/README.md)（**待办唯一真源**是
+[`next-steps.md`](./Docs/progress/next-steps.md)；`current-status.md` 已于 2026-11 冻结，只作过程留痕）。
+设计取舍的"为什么"多在 `.ai/`（决策定稿、长期约定、坑位清单），那是本项目对齐上下文的主要入口。
 
 </details>
 
@@ -208,12 +214,17 @@ app/                 # UI 层：Compose 界面、导航、ViewModel、自动填�
 ./gradlew detekt                      # 静态检查（复杂度/规模/命名阈值）
 ./gradlew :app:compileFullDebugKotlin # full flavor 编译
 ./gradlew :app:testFullDebugUnitTest  # 单元测试
+./gradlew :app:assembleFullDebug      # debug 出包（CI 上产出 preview APK）
 ```
 
-`.ai/tools/` 下另有 8 个本地脚本，专门抓 **detekt 查不出、本地单模块编译也不报、
-只有 CI 跨模块编译才炸**，以及**连编译都不报**的那几类问题（跨文件 `private` 调用、
-`R.string` 引用、实验性 API 的 `@OptIn` 覆盖、签名里的类型名可解析、
-多态状态被压成二值、零引用字符串、**状态变量只写不读**）：
+除 `android-ci` 外还有两个并行 job：`sandbox-tests`（纯逻辑模块真编译 + 真单测）与
+`AI docs consistency`（`.ai/` 索引与全仓 markdown 相对链接）。
+
+`.ai/tools/` 下另有 **18 个 `check_*.py` 门禁脚本 + 15 个自测**，专门抓
+**detekt 查不出、本地单模块编译也不报、只有 CI 跨模块编译才炸**，以及**连编译都不报**的
+那几类问题（跨文件 `private` 调用、`R.string` 引用、实验性 API 的 `@OptIn` 覆盖、
+签名里的类型名可解析、多态状态被压成二值、零引用字符串、**状态变量只写不读**），
+再加上发布产物形状与 release 日志安全这类跨文件契约。下面是常用的几条，完整清单见 `.ai/tools/`：
 
 ```bash
 python3 .ai/tools/check_compile_smells.py       # 跨文件 private / 重复声明 / 图标导入
@@ -223,6 +234,8 @@ python3 .ai/tools/check_experimental_optin.py   # 实验性 API 的 @OptIn 作�
 python3 .ai/tools/check_state_flattening.py     # 多态状态有没有被压成二值开关
 python3 .ai/tools/check_orphan_strings.py       # strings.xml 里零引用的字符串（报告器）
 python3 .ai/tools/check_orphan_state.py         # Compose 状态变量「只写不读」（漏渲染对话框）
+python3 .ai/tools/check_production_safety.py .  # #291：生产源码禁裸 Log / !!（release 行为红线）
+python3 .ai/tools/check_release_naming.py .     # #292：产物命名形状 + #218 身份不退化
 python3 .ai/tools/verify_sync_fields.py         # 同步字段核对（用法见脚本头）
 ```
 
@@ -238,7 +251,9 @@ python3 .ai/tools/verify_sync_fields.py         # 同步字段核对（用法见
 | `rele` | **稳定发布分支** | push / 打 `v*` tag → **签名 release APK**（混淆 + 压缩）→ GitHub Release + SHA-256 |
 
 > 约定：`main` 上开发验证 → 合入 `rele` → 自动产出稳定包。也可直接推 `vX.Y.Z` 标签。
-> 版本号见仓库根 [`VERSION`](./VERSION)。
+> 版本号见仓库根 [`VERSION`](./VERSION)；**每次快进 `rele` 都需用户明确点头**。
+> 产物的命名形状是长期约定（preview APK = `Vaultix-<7位SHA>.apk`，完整身份写在 Release 页），
+> 见 [`.ai/conventions/8.12-发布产物命名.md`](./.ai/conventions/8.12-发布产物命名.md)。
 
 **覆盖安装（debug ↔ release 互换）的前提**：`applicationId` 相同 + 签名证书相同。
 本仓库的 `ci-debug.yml` 与 `release.yml` 已共用同一套 `SIGNING_*` Secret，因此两个渠道的包可以互相覆盖安装、数据不丢。
@@ -272,7 +287,9 @@ base64 -w0 vaultix-release.jks
 
 ## 🗺 状态
 
-当前版本 **0.13.0**（见 [`VERSION`](./VERSION)；早期开发中，API 与数据格式仍可能变动）。
+当前稳定版 **0.13.2**（2026-11-14 发布，见 [`VERSION`](./VERSION) 与
+[Releases](https://github.com/Chaniug/Vaultix/releases/latest)）。**版本号以这两处为准**，
+本文档不另立真源；早期开发中，API 与数据格式仍可能变动。
 
 | 里程碑 | 状态 |
 |---|---|
@@ -286,7 +303,7 @@ base64 -w0 vaultix-release.jks
 
 - ✅ 多库并存、通行密钥、验证码（含自动复制下一个）、卡包、权限管理页、网盘账号页
 - 🚧 进行中：性能专项优化、KDBX 库内 SSH 字段映射
-- ✅ JSON⇄KDBX 互转：W1–W5 已落地（端到端往返比对，CI 1142 例零失败）
+- ✅ JSON⇄KDBX 互转：W1–W5 已落地（端到端往返比对，当时 CI 1142 例零失败）
 - ⏭ **W6 真机互操作**（KeePassXC / KeePassDX 打开**转换产物**）：按 2026-11-12 决定不单独执行。属互转验收链，**不是 M2 引擎的遗留项**；清单见 [json-kdbx-lossless-conversion.md](./Docs/progress/json-kdbx-lossless-conversion.md)
 - 📋 计划：性能优化见 [Docs/progress/perf-plan.md](./Docs/progress/perf-plan.md)
 

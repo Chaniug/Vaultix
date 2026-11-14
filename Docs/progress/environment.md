@@ -5,9 +5,14 @@
 | 项 | 值 | 备注 |
 |---|---|---|
 | Android SDK | `C:\AndroidSDK` | platforms: android-35 / 37 / 37.0；build-tools 最高 37.0.0 |
-| JDK | 17（`C:\Program Files\Microsoft\jdk-17.0.20.8-hotspot`） | AGP 9.3 最低要求即 17，无需 21 |
-| Gradle | 9.5.1（wrapper 管理） | 已缓存于 `~/.gradle/wrapper/dists` |
+| JDK | 17（`C:\Program Files\Microsoft\jdk-17.0.20.8-hotspot`） | AGP 9.5 最低要求即 17，无需 21 |
+| Gradle | **9.8.2**（`gradle/wrapper/gradle-wrapper.properties`） | 以该文件为准；本机已缓存于 `~/.gradle/wrapper/dists` |
 | `local.properties` | `sdk.dir=C\:/AndroidSDK` | **已加入 .gitignore，不入库** |
+
+> 📌 **版本真源（2026-11-14 订正）**：Gradle = `gradle-wrapper.properties`（**9.8.2**），
+> AGP / Kotlin / 依赖版本 = `gradle/libs.versions.toml`（**AGP 9.5.0 · Kotlin 2.4.21**）。
+> 本机 SDK 路径与盘符是用户本机快照，不随仓库变化；但上表的版本号**必须**跟仓库一致
+> —— 旧版这里写「Gradle 9.5.1 / AGP 9.3」，已与 wrapper 漂移。
 
 ⚠️ 本机 SDK **没有 android-36**，因此 `compileSdk` 必须 ≥ 37。
 
