@@ -53,6 +53,23 @@ trailing lambda 后语句形状变了就误报，两处都要补（#160 同源�
 接力正文：[`01-构建与环境-part14.md`](./issues/01-构建与环境-part14.md)；
 P1 两项已在 `next-steps.md` 勾选，**真机验收清单**见 part14 §291.9。
 
+**✅ CI / 出包结论（已看到真实 run 结果后回填，非预填）**：
+
+- 首轮 `99b738cb`：`AI docs consistency` 43557701739 **success**；
+  `Android CI (Debug)` 43557701747 **failure** —— 唯一违规是 detekt
+  `KdbxSyncOrchestrator.sync` 圈复杂度 **15 > 14**（为消掉 `!!` 加的 `?: return`
+  多带一个分支，撞上原本就贴边的上限）。
+  ⇒ 抽 `resolveSyncSource()` + 私有 `sealed SyncSourceResolution` 修红，见 part14 §291.10。
+- 修红 `fcb77f9d`：`AI docs consistency` 43559918223 **success**（约 12s）；
+  `Android CI (Debug)` 43559918391 **success**（05:06:44Z → 05:11:11Z，约 4m27s；
+  `Lint, test diagnostics, and debug build` 与 `Sandbox unit tests` 两个 job 全绿）。
+- preview Release **`Vaultix v0.13.1-dev-fcb77f9 · Preview`** 已出
+  （tag `preview`、`prerelease=true`），资产
+  `Vaultix-v0.13.1-dev-fcb77f9-preview.apk`（35.8 MB）：
+  `https://github.com/Chaniug/Vaultix/releases/tag/preview`
+- ⚠️ **本次只推 `main`、没有推 `rele`** ⇒ 不触发正式发版，`v0.13.1` 正式包不受影响；
+  #291 仍是**待真机验收**，代码推完不等于修好了。
+
 ## 🕐 发布状态（2026-11-14 · v0.13.1 正式发布 + 上游改动搁置）
 
 > **一句话**：用户拍板「发一个 release；上游改动目前意义不大，先搁置，以后每月排查一次

@@ -19,6 +19,10 @@
 > 「main 与 rele 源码一致」**不等于**产物行为一致；生产日志必须走门面且敏感标识脱敏。
 > 另一坑是「**同一判据存两份**」（Kotlin `nonUiCallSites` / Python `_ALLOW_HINTS` 各存
 > 一份日志白名单），日志改 trailing lambda 后语句形状变了就误报，两处都要补（#160 同源）。
+> ⚠️ **CI 首轮报红已修**：为消 `!!` 加的 `?: return` 让 `KdbxSyncOrchestrator.sync`
+> 圈复杂度 15 > 14（detekt 上限），本地 37 项 Python 门禁 / typecheck 都查不出 AST
+> 分支数 ⇒ 抽 `resolveSyncSource()` + 私有 sealed 结果类型压回 14，别用 `@Suppress`。
+> 修红 `fcb77f9d` 后两 run 全绿、preview `v0.13.1-dev-fcb77f9` 已出；**只推 main 未推 rele**。
 > ⚠️ 上一轮（同日）**v0.13.1 正式发布 + 上游改动搁置 + 月度排查约定**：
 > 用户拍板「发一个 release；目前的上游改动对我意义不大，先搁置，以后每个月排查一次
 > 上游的重大更新即可」。该轮纯发布 + 文档，未改生产代码。
