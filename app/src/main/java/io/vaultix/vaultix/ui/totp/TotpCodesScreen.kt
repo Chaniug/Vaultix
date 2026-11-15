@@ -91,7 +91,10 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import io.vaultix.common.OtpType
 import io.vaultix.common.TotpConfig
 import io.vaultix.common.TotpGenerator
@@ -332,10 +335,17 @@ private fun rememberTotpEntries(state: TotpCodesViewModel.UiState): List<TotpEnt
  */
 @Composable
 private fun TotpTickerEffect(onTick: (Long) -> Unit) {
-    LaunchedEffect(Unit) {
-        while (true) {
-            delay(TOTP_TICK_MS)
-            onTick(System.currentTimeMillis() / MILLIS_PER_SECOND)
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(lifecycleOwner) {
+        // 页面不可见时让时钟挂起：否则后台仍每秒重组一次整页 TOTP 列表，
+        // 所有可见条目跟着重算一遍验证码，纯属空转耗电。
+        // repeatOnLifecycle 每次回到 STARTED 都会重新执行 block ⇒ 回前台立即补一次
+        // 当前时间，不会出现「切回来还显示旧秒数」的窗口；前台每秒 tick 的节奏不变。
+        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                onTick(System.currentTimeMillis() / MILLIS_PER_SECOND)
+                delay(TOTP_TICK_MS)
+            }
         }
     }
 }

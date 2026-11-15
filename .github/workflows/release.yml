@@ -314,6 +314,21 @@ jobs:
         shell: bash
         run: ./gradlew --stop || true
 
+      # 只读工程改进：把 R8 裁剪报告留档，供后续量化 dex 体积与 keep 规则影响。
+      # if-no-files-found=warn ⇒ 目录随 AGP 变化也不会让发版失败（零功能风险）。
+      - name: Upload R8 shrink report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: r8-report-${{ steps.meta.outputs.version }}
+          path: |
+            app/build/outputs/mapping/fullRelease/usage.txt
+            app/build/outputs/mapping/fullRelease/seeds.txt
+            app/build/outputs/mapping/fullRelease/mapping.txt
+            app/build/outputs/mapping/fullRelease/configuration.txt
+          if-no-files-found: warn
+          retention-days: 30
+
       - name: Collect APK + SHA-256
         id: apk_meta
         shell: bash
