@@ -130,13 +130,28 @@ Vaultix 读不出 passkey」，从而去做错误的兼容层；而真因在**�
 
 ### 293.7 CI / 出包结论（已看到真实 run 结果后回填，非预填）
 
-> 施工时先留 `__TBD_*` 占位；提交、观察真实 run、核对 preview 产物后精确回填。
-> 状态：`__TBD_CI_STATUS__`
+**提交 `e0e630aa`**（`fix(passkey): #293 KDBX credentialId 原样保留…`），
+只推 `main`、**未推 `rele`** ⇒ 未触发 `release.yml`，正式 `v0.13.2` 不受影响。
 
-- `AI docs consistency`：`__TBD_DOCS_RUN__`
-- `Android CI (Debug)`：`__TBD_DEBUG_RUN__`
-- preview Release：`__TBD_PREVIEW_NAME__`，资产 `__TBD_PREVIEW_ASSET__`
-- 只推 `main`、**未推 `rele`** ⇒ 正式 `v0.13.2` 不受影响。
+- `AI docs consistency` **43676429827 → success**（04:21:47Z → 04:21:57Z，约 10s，headSha `e0e630a`）。
+- `Android CI (Debug)` **43676429706 → success**（04:21:47Z → 04:26:29Z，约 4m42s，
+  headSha `e0e630a`），**两 job 全绿**：
+  - `Lint, test diagnostics, and debug build`（04:21:50Z → 04:26:28Z）：
+    detekt `BUILD SUCCESSFUL in 18s`、`Run unit tests (hard gate)`
+    `BUILD SUCCESSFUL in 1m 6s`、上传测试报告、`Publish Debug APK to preview Release` 逐步通过；
+    **本轮新接的两步在 CI 里均 ✓** —— `Check KDBX passkey credentialId fidelity (#293)`
+    输出「✅ KDBX passkey credentialId 保真契约通过（读侧原样 · 无标准 base64 转换 ·
+    rawId 原样分支在位 · 契约测试在位）」，`Self-test KDBX passkey id checker` ✓。
+  - `Sandbox unit tests (Kotlin/Java, no SDK)`（04:21:50Z → 04:25:04Z）：纯逻辑模块
+    typecheck + 单测全绿。
+- preview Release **`v0.13.2-dev-e0e630a · Preview`**（tag `preview`、`prerelease=true`、
+  `draft=false`、published 04:26:11Z、target `e0e630aa`）：资产
+  **`Vaultix-e0e630a.apk`**（37,575,802 B / 35.8 MB）。正文表版本
+  `0.13.2-dev-e0e630a`（versionCode `13002`）/ 提交 `e0e630a` / 构建 `debug` /
+  签名 `CN=Vaultix, O=Vaultix` SHA-256 `7e6c8c07…1fd8` 四项完整。
+  **#292 短命名约定同时生效**：APK 名 `Vaultix-v0.13.2-dev-e0e630a-preview.apk` 式的
+  长名已不存在，实测就是 `Vaultix-<7位SHA>.apk`，标题也不带冗余 `Vaultix ` 前缀。
+- 文档结论回填提交只推 `main`、不再推 `rele` ⇒ 不触发二次发版。
 
 ### 293.8 明确不做 / 未决
 

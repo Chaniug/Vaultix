@@ -23,8 +23,13 @@
 > 新增契约测试 + `check_kdbx_passkey_id.py` + 11 组变异自测，接 `ci-debug.yml` 两步；
 > 门禁判据复用 `check_production_safety.sanitize()`（不抄第二份）。
 > ⚠️ 首轮 3 红全是「测试把缺陷当规格」或自造假红断言 ⇒ **红了先查测试再查代码**，
-> 但别藏自己的假红（都在 part6 §293.5 留了注释）。⚠️ 只推 `main` 未推 `rele`，
-> 真机验收与是否发 0.13.3 待用户拍板。详见 `.ai/issues/03-通行密钥与凭据提供商-part6.md`。
+> 但别藏自己的假红（都在 part6 §293.5 留了注释）。**✅ CI 真实结论**：`e0e630aa`
+> 只推 `main` 未推 `rele`；`AI docs consistency` 43676429827 success（约 10s）、
+> `Android CI (Debug)` 43676429706 success（约 4m42s，两 job 全绿，新接的
+> `Check KDBX passkey credentialId fidelity (#293)` / `Self-test …` 两步在 CI 均 ✓）、
+> preview `v0.13.2-dev-e0e630a · Preview` 资产 `Vaultix-e0e630a.apk`（35.8 MB，
+> #292 短命名约定生效）⇒ 正式 v0.13.2 不受影响。⚠️ 真机验收与是否发 0.13.3 待用户拍板。
+> 详见 `.ai/issues/03-通行密钥与凭据提供商-part6.md`。
 >
 > 上一轮：2026-11-14（**v0.13.2 正式发布 · 紧接 #292**）：
 > 用户「发一个 release 吧。已经积累了一定的内容了」⇒ 拍板 `0.13.2`（patch）+

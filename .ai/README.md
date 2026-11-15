@@ -55,6 +55,18 @@ Bitwarden 导入（`BitwardenImportMapper` 原样）与本应用注册（写 bas
 不挂 `ci-docs.yml`）。**两轮反证**：门禁 11/11；把 `normalizeCredentialId` 临时注入回
 生产代码 ⇒ 5 例立刻红，字节级还原后复绿。
 
+**✅ CI / 出包结论（已看到真实 run 结果后回填，非预填）**：`e0e630aa` 只推 `main`、未推 `rele`：
+- `AI docs consistency` 43676429827 **success**（04:21:47Z → 04:21:57Z，约 10s）。
+- `Android CI (Debug)` 43676429706 **success**（04:21:47Z → 04:26:29Z，约 4m42s，两 job 全绿）；
+  新接的 `Check KDBX passkey credentialId fidelity (#293)` / `Self-test KDBX passkey id checker`
+  两步在 CI 均 ✓（门禁输出「✅ KDBX passkey credentialId 保真契约通过」），
+  detekt（18s）/ 单测 hard gate（1m 6s）/ debug 出包全绿。
+- preview Release **`v0.13.2-dev-e0e630a · Preview`**（tag `preview`、`prerelease=true`、
+  `draft=false`），资产 **`Vaultix-e0e630a.apk`**（37,575,802 B / 35.8 MB）；正文表
+  版本 / 提交 / 构建 / 签名四项完整，**#292 短命名约定同步生效**。
+- 只推 `main`、未推 `rele` ⇒ 正式 `v0.13.2` 不受影响；文档结论回填提交同样只推 `main`，
+  不触发二次发版。
+
 ⚠️ **仍需真机验收**：preview 包上用 KDBX 库 passkey 复登 GitHub / x.com。
 用户随消息附的站点报错截图本环境未能读取，根因由对照 + 源码链路推出，未经日志实证。
 ⚠️ 是否 bump `0.13.3` 发版由用户拍板（硬约束：每次合入 `rele` 都要用户点头）。
