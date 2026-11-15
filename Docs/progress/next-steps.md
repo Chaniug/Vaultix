@@ -11,14 +11,14 @@
 
 ---
 
-## 当前状态（2026-11-14 · v0.13.2 已发布）
+## 当前状态（2026-11-15 · v0.13.4 已发布）
 
 | 项 | 值 |
 |---|---|
-| 版本 | **v0.13.2**（Latest · 混淆包 6.65 MB / 6,977,802 B · versionCode 13002 · 可覆盖 v0.13.1） |
-| 上一轮 | **v0.13.2 正式发布**：装的是 #291（release 裸 `Log` 收敛 + 生产 `!!` 清零 + CI 红线）与 #292（预览包 / Release 命名精简 + 门禁）；纯发布 + 文档，无新增生产代码 |
+| 版本 | **v0.13.4**（Latest · 混淆包 6,977,746 B · 可覆盖 v0.13.3 · [发布说明](../release-notes/v0.13.4.md)） |
+| 上一轮 | **v0.13.4 正式发布**：装的是 #293 后续的单行 PEM 私钥修复 + 诊断加固、TOTP 后台时钟挂起、查看层锁页重排与 R8 报告留存；v0.13.3 已带 #293 凭据 ID 保真。发布说明见 [v0.13.3](../release-notes/v0.13.3.md) / [v0.13.4](../release-notes/v0.13.4.md) |
 | 门禁 | 19 个 `check_*.py` + 16 个自测，连同 detekt / 编码 / 图标几何 / `assembleFullDebug` / 单测全绿；#291 起 CI 钉住「生产裸 `Log` / `!!`」，#292 起钉住「发布产物命名形状」，**#293 起钉住「KDBX passkey credentialId 逐字符保真」** |
-| KDBX 通行密钥 | 2026-11-15 · **#293 正式版 KDBX passkey 登录 GitHub / x.com 报「通行密钥有问题」**（**改了生产代码 + 测试 + 门禁**）：三条差分对照（电脑 KeePassXC 正常 / Vaultix 的 Bitwarden passkey 正常 / 只有 Vaultix 读同一 KDBX 失败）把根因收敛到 `KdbxPasskeyCodec.toCredential()` 的 `normalizeCredentialId()` —— 把 KeePass 生态的 **base64url 无填充** credentialId 转成**标准 base64**（补 `=`、换出 `+` `/`），而 `WebAuthn.rawIdFromStored()` 决策是「原样回传存储文本」（2026-09-12 真机证伪 decode→re-encode、`WebAuthnTest` ② 钉死）⇒ 断言 `id`/`rawId` 成了 RP 按 base64url 解不出的文本。修法**只动读侧**：`credentialId = credentialId` 原样、删 `normalizeCredentialId()`；**不动** `WebAuthn`、不动写方向 `fromCredential()`。订正过时溯源（`KPEX_PASSKEY_*` 由 KeePassXC 定义、KeePassDX 遵循，无 `KPXC_*` 体系）。首轮 `data/kdbx` 3 红全为「测试把缺陷当规格」或自造假红断言，逐条订正后 **274 例全绿**；新增跨模块契约测试 + `check_kdbx_passkey_id.py` + 11 组变异自测（含「KDoc 写旧函数名不误报」），接 `ci-debug.yml` 两步；两轮反证：门禁 11/11、把旧转换注入回生产代码 5 例立刻红且字节级还原复绿。**✅ CI 真实结论**：`AI docs consistency` 43676429827 success（约 10s）、`Android CI (Debug)` 43676429706 success（04:21:47Z → 04:26:29Z，约 4m42s，两 job 全绿，新接的 `Check KDBX passkey credentialId fidelity (#293)` / `Self-test …` 两步在 CI 均 ✓、门禁输出「✅ KDBX passkey credentialId 保真契约通过」）、preview `v0.13.2-dev-e0e630a · Preview` 资产 `Vaultix-e0e630a.apk`（35.8 MB，**#292 短命名约定同步生效**、正文表四项完整）。⚠️ 只推 `main` 未推 `rele`，正式 v0.13.2 不受影响；文档结论回填同样只推 `main`，不二次发版；**真机验收待办见下方 #293 区**，是否发 0.13.3 待用户拍板。详见 [part6](../../.ai/issues/03-通行密钥与凭据提供商-part6.md) |
+| KDBX 通行密钥 | 2026-11-15 · **#293 正式版 KDBX passkey 登录 GitHub / x.com 报「通行密钥有问题」**（**改了生产代码 + 测试 + 门禁**）：三条差分对照（电脑 KeePassXC 正常 / Vaultix 的 Bitwarden passkey 正常 / 只有 Vaultix 读同一 KDBX 失败）把根因收敛到 `KdbxPasskeyCodec.toCredential()` 的 `normalizeCredentialId()` —— 把 KeePass 生态的 **base64url 无填充** credentialId 转成**标准 base64**（补 `=`、换出 `+` `/`），而 `WebAuthn.rawIdFromStored()` 决策是「原样回传存储文本」（2026-09-12 真机证伪 decode→re-encode、`WebAuthnTest` ② 钉死）⇒ 断言 `id`/`rawId` 成了 RP 按 base64url 解不出的文本。修法**只动读侧**：`credentialId = credentialId` 原样、删 `normalizeCredentialId()`；**不动** `WebAuthn`、不动写方向 `fromCredential()`。订正过时溯源（`KPEX_PASSKEY_*` 由 KeePassXC 定义、KeePassDX 遵循，无 `KPXC_*` 体系）。首轮 `data/kdbx` 3 红全为「测试把缺陷当规格」或自造假红断言，逐条订正后 **274 例全绿**；新增跨模块契约测试 + `check_kdbx_passkey_id.py` + 11 组变异自测（含「KDoc 写旧函数名不误报」），接 `ci-debug.yml` 两步；两轮反证：门禁 11/11、把旧转换注入回生产代码 5 例立刻红且字节级还原复绿。**✅ CI 真实结论**：`AI docs consistency` 43676429827 success（约 10s）、`Android CI (Debug)` 43676429706 success（04:21:47Z → 04:26:29Z，约 4m42s，两 job 全绿，新接的 `Check KDBX passkey credentialId fidelity (#293)` / `Self-test …` 两步在 CI 均 ✓、门禁输出「✅ KDBX passkey credentialId 保真契约通过」）、preview `v0.13.2-dev-e0e630a · Preview` 资产 `Vaultix-e0e630a.apk`（35.8 MB，**#292 短命名约定同步生效**、正文表四项完整）。⚠️ 只推 `main` 未推 `rele`，正式 v0.13.2 不受影响；文档结论回填同样只推 `main`，不二次发版；**真机验收已于 2026-11-15 完成**，修复随 v0.13.3 / v0.13.4 发布。详见 [part6](../../.ai/issues/03-通行密钥与凭据提供商-part6.md) |
 | 整体排查 | 2026-11-11 · [报告](audit/project-audit-2026-11-11.md)：43 个依赖坐标中 **29 项已最新**、3 项禁单独升、**2 类**真违规（订正后）、3 项质量基建缺失（属「要建」） |
 | 不需要修 | 2026-11-11 · [判定方案](audit/no-fix-register-2026-11-11.md) + [52 条登记](audit/evidence/no-fix-entries-2026-11-11.md)；门禁 `check_no_fix_register.py` 已接 `ci-docs.yml` |
 | 液态玻璃 | 2026-11-11 上午 · **#280 第六轮**（**改了生产代码**）：修 `uGlow` 高斯量纲、表面流光 / 通透厚度搬回绘制层（31+ 全档）、SDF 梯度折射 + 按压透镜、跟手与亮 120 / 灭 360；detekt + 31 条玻璃单测全绿，[接力记录](../../.ai/issues/06-界面与交互-part18.md) |
@@ -36,14 +36,19 @@
 | 发布命名 | 2026-11-14 · **#292 预览包 / Release 命名精简**（纯 workflow + 门禁，**无生产代码改动**）：用户「`Vaultix-v0.13.1-dev-fcb77f9-preview.apk` 名字偏长…以后这种名字短一点」⇒ preview APK 39→18 字符 `Vaultix-<7位SHA>.apk`、标题去冗余 `Vaultix ` 前缀（37→29），**stable 侧不动**（`Vaultix-v0.13.1.apk` 本就够短）。⚠️ **#218 身份硬约束一字不砍**（同一用户 11-01 拍板）：标题必带版本 + 短 SHA、APK 名必留 7 位 SHA，**不能**叫 `Vaultix-preview.apk`（多包互相覆盖、对不上构建）⇒ **短 = 删重复，不是删身份**。新增 `check_release_naming.py`（4 模板精确匹配 / 变量数 ≤ 1 / 渲染长度预算 / #218 身份不退化 / 步骤缺失即红）+ 11 组真实 workflow 变异自测，接 `ci-debug.yml` 两步（⚠️ **不能挂 `ci-docs.yml`**：其 paths 不含 `.github/workflows/**` ⇒ 改了命名却不触发门禁 = 假绿灯，#218.7 同源）；长期约定 [8.12-发布产物命名](../../.ai/conventions/8.12-发布产物命名.md)，接力 [part15](../../.ai/issues/01-构建与环境-part15.md)，01 篇索引 64→65。验证：39 项静态 / 文档门禁全绿、长名上先跑门禁 rc=1（5 条违规）→ 改完转绿、三轮「改坏门禁实现」变异反证均被自测抓到、改动段 `bash -n` PASS。❌ 不动签名链路、不推 `rele`、不改 `versionName`。**✅ CI 真实结论**：`AI docs consistency` 43570409121 **success**（约 9s）、`Android CI (Debug)` 43570409124 **success**（07:17:36Z → 07:21:21Z，约 3m45s，两 job 全绿，新命名门禁两步在 CI 均 ✓）；1860 例单测 0 失败；preview Release **`v0.13.1-dev-b28d439 · Preview`**，资产 **`Vaultix-b28d439.apk`**（35.8 MB），CI annotation 实证 `app-full-debug.apk → Vaultix-b28d439.apk`，正文表版本 / 提交 / 构建 / 签名四项完整。⚠️ 只推 `main` 未推 `rele`，正式 `v0.13.1` 不受影响 |
 | 正式发布 | 2026-11-14 · **v0.13.2**（**纯发布 + 文档，无生产代码改动、无新增测试**）：用户「已经积累了一定的内容了」⇒ 拍板 `0.13.2`（patch，`versionCode` 自动派生 `13002 > 13001`，可覆盖安装）+ **明确授权快进 `rele` 发正式版**。发版前 `fetch --tags` 确认真实 `origin/rele` tip `dd2e845b`、先 bump `VERSION` `0.13.1 → 0.13.2`（`v0.13.1` 已是 Latest，不升版会被 `release.yml` 幂等步骤覆盖）、手写 `Docs/release-notes/v0.13.2.md` 优先于提交列表。装的是 `dd2e845b..main` 6 提交：**#291**（release 裸 `Log` 收敛 + 生产 `!!` 清零 + CI 红线、detekt 修红）、**#292**（预览包 / Release 命名精简 + 门禁）及其结论回填。⚠️ 签名链路完全不动；#291 的 release 行为真机验收 4 条仍挂 `- [ ]`，静态门禁不能替代真机。**✅ 发布结论（真实 run 结果）**：`Android Stable Release` run `43592092124` `completed/success`（约 7m58s）；`Vaultix v0.13.2` 已置 **Latest**，资产 `Vaultix-v0.13.2.apk`（6,977,802 B / 6.65 MB，混淆）+ `checksums-sha256.txt`，APK SHA-256 `804c39ef…e5b5e853`、签名指纹 `7e6c8c07…1fd8`（与 v0.13.1 一致可覆盖安装）、attestation 1 条；手写发布说明 `v0.13.2.md` 被正确采用；tag `v0.13.2` → `933d629d`，`rele` 与 `main` 齐平（0/0）。main 侧只触发 `AI docs consistency` 43591840939 success（版本 / 文档改动不在 `ci-debug.yml` paths 内，按设计不跑 debug CI）。文档回填只推 `main` 不再推 `rele` ⇒ 不触发二次发版；详见 `.ai/README.md` 顶部「最新状态」 |
 
-## 待真机验收（#293 · KDBX 通行密钥登录）
+## 真机验收（#293 · KDBX 通行密钥登录 · 主路径已闭环）
+
+> ✅ **2026-11-15 真机复验**：老 KDBX 库的 GitHub passkey 登录成功，
+> 日志 `PK assertion ready … storedIdForm=base64` + `onFinalResponseReceived`；
+> **x.com / Bitwarden 对照 / 多凭证形态未单独复验**，下方保留 `- [ ]`。
 
 > 本轮改的是 **KDBX → 领域模型 → 断言响应** 的 `credentialId` 文本形态。
 > 本地 274 例 + 门禁 + CI 全绿**不能替代真机**：这是「只有对上 RP 才暴露」的缺陷。
 > 逐条判据见 [`03-通行密钥与凭据提供商-part6.md` §293.8](../../.ai/issues/03-通行密钥与凭据提供商-part6.md)。
 
-- [ ] **主路径（用户报的那条）**：preview / debug 包解锁用户的 KDBX 库，
-      用库里保存的 passkey 登录 **GitHub** 与 **x.com**，不再提示「通行密钥有问题」，登录成功。
+- [x] **主路径（GitHub 已通过）**：preview / debug 包解锁用户的 KDBX 库，
+      用库里保存的 passkey 登录 **GitHub** 成功，不再提示「通行密钥有问题」；
+      **x.com 未单独复验**（见上方完成说明）。
 - [ ] **对照仍正常**：同一台机上 Vaultix 的 **Bitwarden 库** passkey 登录不回归；
       本应用**新建/注册**的 KDBX passkey 也能正常断言（写方向 `fromCredential` 未动）。
 - [ ] **多凭证 / 特殊 ID**：库里含 `-` / `_` 的 credentialId、一条登录挂多个 passkey
