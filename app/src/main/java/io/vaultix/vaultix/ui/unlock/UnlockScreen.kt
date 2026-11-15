@@ -1,6 +1,7 @@
 package io.vaultix.vaultix.ui.unlock
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,7 +26,6 @@ import androidx.compose.material.icons.filled.Pin
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -44,6 +44,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.painterResource
@@ -269,7 +270,18 @@ private fun ViewLockedContent(
     error: UnlockUiError?,
     onAuthenticate: () -> Unit,
 ) {
-    VaultHeader(kind = kind, name = vaultName, account = account)
+    // 主角是**密码库**：放大的库徽标 + 库名。指纹只留在按钮里，它是手段不是主体。
+    // 不复用 [VaultHeader]：主密码解锁页也在用，改公共组件会连带改掉那一页。
+    ViewLockedEmblem(kind = kind)
+    Spacer(Modifier.height(Spacing.lg))
+    Text(text = vaultName, style = MaterialTheme.typography.headlineSmall)
+    account?.let {
+        Text(
+            text = it,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
     Spacer(Modifier.height(Spacing.sm))
     Text(
         text = stringResource(R.string.unlock_view_locked_hint),
@@ -279,18 +291,17 @@ private fun ViewLockedContent(
         textAlign = TextAlign.Center,
     )
     Spacer(Modifier.height(Spacing.xl))
-    // ★ 2026-10-19：主 CTA 统一成 PrimaryActionButton（视觉 48dp / 满宽 / 统一忙碌态）——
-    //   「指纹 → 输主密码 → 两步验证」三段里的按钮高度从此一致（审计 §2.3）。
+    // ★ 2026-10-19：主 CTA 统一成 PrimaryActionButton（视觉 48dp / 满宽 / 统一忙碌态）。
+    //   2026-11-15：改 toned=false（主色底）——原先的次级灰底与纯黑背景糊在一起。
     PrimaryActionButton(
         text = stringResource(R.string.quick_unlock_biometric_button),
-        // ★ #247：忙碌态的解释文案放按钮里，页面不再另画一个转圈 ——
-        //   `busy` 本身就会在按钮内渲染一个圈，再加一个就是「两个圈」。
+        // ★ #247：忙碌态解释文案放按钮里，不再另画一个转圈（避免「两个圈」）。
         busyText = stringResource(R.string.unlock_view_lock_verifying),
         onClick = onAuthenticate,
         enabled = !submitting,
         busy = submitting,
         icon = Icons.Filled.Fingerprint,
-        toned = true,
+        toned = false,
     )
     unlockErrorText(error)?.let { message ->
         Text(
@@ -301,6 +312,48 @@ private fun ViewLockedContent(
         )
     }
 }
+
+/**
+ * 查看层锁的库徽标：**主角是密码库**。
+ *
+ * 一层极淡径向光晕 + 一道细环做底衬，中心是放大到 96dp 的 [VaultKindBadge]
+ * （官方 KDBX / Bitwarden 图标）。装饰全是静态的、纯视觉的 —— 不用文字去
+ * 解释「这是什么」，库名自己会说话。
+ *
+ * ⚠️ 曾用大号指纹当主视觉，被用户指出主次颠倒：指纹是手段，按钮里那枚够了。
+ */
+@Composable
+private fun ViewLockedEmblem(kind: VaultKind) {
+    val primary = MaterialTheme.colorScheme.primary
+    Box(
+        modifier = Modifier
+            .size(EMBLEM_SIZE)
+            .clip(CircleShape)
+            .background(
+                Brush.radialGradient(
+                    listOf(primary.copy(alpha = EMBLEM_GLOW_ALPHA), primary.copy(alpha = 0f)),
+                ),
+            )
+            .border(EMBLEM_RING_WIDTH, primary.copy(alpha = EMBLEM_RING_ALPHA), CircleShape),
+        contentAlignment = Alignment.Center,
+    ) {
+        VaultKindBadge(
+            kind = kind,
+            size = EMBLEM_BADGE_SIZE,
+            iconSize = EMBLEM_BADGE_ICON_SIZE,
+        )
+    }
+}
+
+/** 光晕外径：只比中心徽标大一圈，留出呼吸感而不喧宾夺主。 */
+private val EMBLEM_SIZE = 148.dp
+
+/** 放大后的库徽标直径（默认 56dp 太小，撑不起纯黑屏的主体）。 */
+private val EMBLEM_BADGE_SIZE = 96.dp
+private val EMBLEM_BADGE_ICON_SIZE = 48.dp
+private val EMBLEM_RING_WIDTH = 1.dp
+private const val EMBLEM_GLOW_ALPHA = 0.10f
+private const val EMBLEM_RING_ALPHA = 0.20f
 
 /** 指纹入口图标的尺寸。
  *
@@ -569,7 +622,13 @@ private fun VaultHeader(kind: VaultKind, name: String, account: String?) {
  * 因此不担心深色底上出现死白方块。商标归属见两个 drawable 的头注释。
  */
 @Composable
-private fun VaultKindBadge(kind: VaultKind) {
+private fun VaultKindBadge(
+    kind: VaultKind,
+    // 默认规格供主密码解锁页使用（零改动）；查看层锁页传更大的尺寸，
+    // 让「密码库」成为那一屏的主角。参数带默认值 ⇒ 其它调用点完全不受影响。
+    size: Dp = BADGE_SIZE,
+    iconSize: Dp = BADGE_ICON_SIZE,
+) {
     val iconRes = when (kind) {
         VaultKind.BITWARDEN -> R.drawable.ic_vault_bitwarden
         VaultKind.KDBX -> R.drawable.ic_vault_kdbx
@@ -580,7 +639,7 @@ private fun VaultKindBadge(kind: VaultKind) {
     }
     Box(
         modifier = Modifier
-            .size(BADGE_SIZE)
+            .size(size)
             .clip(CircleShape)
             .background(MaterialTheme.colorScheme.primaryContainer),
         contentAlignment = Alignment.Center,
@@ -591,7 +650,7 @@ private fun VaultKindBadge(kind: VaultKind) {
             // （字母方案下这里是纯文本，反而"读"得出，改成图片后必须显式给）。
             contentDescription = stringResource(label),
             tint = MaterialTheme.colorScheme.onPrimaryContainer,
-            modifier = Modifier.size(BADGE_ICON_SIZE),
+            modifier = Modifier.size(iconSize),
         )
     }
 }
