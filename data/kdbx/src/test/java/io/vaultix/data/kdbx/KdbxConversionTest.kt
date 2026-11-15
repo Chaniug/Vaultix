@@ -117,9 +117,11 @@ class KdbxConversionTest {
     @Test
     fun `通行密钥_往返保真且私钥字段受保护`() {
         val credential = VaultFido2Credential(
-            // ⚠️ credentialId 在 KDBX 侧走 base64url 编解码（KdbxPasskeyCodec），
-            //   取值必须是合法 base64 —— 与 KdbxPasskeyWritebackTest 同款常量。
-            credentialId = "////",
+            // ⚠️ #293：往返样本必须是**写读幂等的 base64url 无填充文本**（领域模型的真实形态）。
+            //   旧样本 "////"（标准 base64）依赖读侧 normalizeCredentialId 转回 "____" 才恒等，
+            //   而那次转换正是 KDBX passkey 真机登录失败的根因（详见 KdbxPasskeyCodec）。
+            //   "////" 的写侧转换覆盖仍在 KdbxPasskeyWritebackTest 保留，别把缺陷当规格换回来。
+            credentialId = "AQIDBA",
             rpId = "example.com",
             rpName = "Example",
             userName = "alice",
@@ -141,7 +143,8 @@ class KdbxConversionTest {
         assertWithMessage("凭证数").that(back.fido2Credentials).hasSize(1)
         val restored = back.fido2Credentials.single()
         assertWithMessage("rpId").that(restored.rpId).isEqualTo("example.com")
-        assertWithMessage("credentialId").that(restored.credentialId).isEqualTo("////")
+        // #293：读侧原样保留 KDBX 里的文本，往返逐字符一致（不是"字节等价"就算过）。
+        assertWithMessage("credentialId").that(restored.credentialId).isEqualTo("AQIDBA")
         assertWithMessage("userName").that(restored.userName).isEqualTo("alice")
         // ✅ 2026-11-01 起 counter / discoverable 不再丢：`KPEX_` 那 10 个键里确实没有
         //   它们的位子，但转换器用私有扩展 `VPX_PASSKEY_META` 带过去了。
@@ -937,7 +940,9 @@ class KdbxConversionTest {
         totp = "otpauth://totp/Example:alice?secret=JBSWY3DPEHPK3PXP&digits=7&period=45",
         fido2Credentials = listOf(
             VaultFido2Credential(
-                credentialId = "////",
+                // #293：同「通行密钥_往返保真」——用写读幂等的 base64url 文本，
+                //   整对象 isEqualTo 才不会被读侧的旧形态转换破坏。
+                credentialId = "AQIDBA",
                 rpId = "example.com",
                 rpName = "示例站点",
                 userName = "alice",

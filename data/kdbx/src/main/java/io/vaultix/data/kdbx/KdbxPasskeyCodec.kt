@@ -9,8 +9,11 @@
  * 溯源声明（GPL-3.0 合规）
  * 「KeePass 里的通行密钥以 `KPEX_PASSKEY_*` 自定义字段承载」这一约定与字段清单参考
  * Bastion（GPL-3.0，Copyright 2025 JoyinJoester）的 `keepass/KeePassDxPasskeyCodec.kt`：
- *   - 该前缀来自 **KeePassDX** 的通行密钥插件，也是目前跨客户端最通行的落法
- *     （KeePassXC 走自己的 `KPXC_*` 体系且版本间有差异，Bastion 同样只认这一套）；
+ *   - `KPEX_PASSKEY_*` 由 **KeePassXC** 定义（2.7.7 起），KeePassDX 遵循同一命名，
+ *     是 KeePass 生态（KeePassXC / KeePassDX / Strongbox / KeePassium）共享的落法；
+ *     2026-11-15 查证 KeePassDX 官方 wiki 与生态资料后订正 —— 旧注释误称
+ *     「KeePassXC 走自己的 `KPXC_*` 体系」，那会把「XC 建 / 转换的库读不出来」误判成
+ *     字段体系不兼容，而真因其实在别处（见 `toCredential` 的 #293 根因注释）；
  *   - 私钥 PEM / credentialId / userHandle 三个字段常被设为「受保护」→ 读取时必须走
  *     `EntryValue.content`（自动解密）；
  *   - `KPEX_PASSKEY_FLAG_BE` / `_BS` 是**可备份**（Backup Eligible）与**当前处于备份态**
@@ -256,10 +259,23 @@ object KdbxPasskeyCodec {
         if (userHandle.isBlank()) return null
         val fallbackRpName = title.removeSuffix(PASSKEY_TITLE_SUFFIX).trim().ifBlank { rpId }
         return VaultFido2Credential(
-            // ⚠️ credentialId 在 WebAuthn 里是**字节串**：KeePassDX 存的是 base64url
-            // 无填充文本。这里只在能解出字节时才转成标准 base64（Bitwarden 侧的表示），
-            // 解不出来就原样保留 —— 硬转换会把「非 base64 的旧数据」变成空串（等于丢凭证）。
-            credentialId = normalizeCredentialId(credentialId),
+            // ⚠️ credentialId **必须原样保留 KDBX 里的文本**，一个字符都不能改
+            //    （#293，2026-11-15 真机根因：KDBX passkey 登录 GitHub / x.com 报「通行密钥有问题」）。
+            //
+            // 旧实现在这里调 normalizeCredentialId()：把 KeePass 生态约定的 base64url
+            // 无填充文本转成标准 base64（补 `=` 填充、`-`/`_` 换回 `+`/`/`）。而断言链路
+            // WebAuthn.rawIdFromStored() 的决策是「**原样回传存储文本**」（2026-09-12 真机
+            // 证伪过 decode→re-encode；WebAuthnTest 明确钉死标准 / URL 两种形态都不得改写）。
+            // 两者相乘：断言响应的 id / rawId 变成带 `=`（且约 3/4 概率含 `+`/`/`）的
+            // 标准 base64 文本，RP / CredMan 按 base64url 解码即失败。
+            // Bitwarden 导入不经过这层转换、KeePassXC 自己读字段也不转换
+            // ⇒ 只有 Vaultix 手机版读 KDBX 时失败，与真机对照完全吻合。
+            //
+            // 「原样回传」成立的前提：领域模型里的文本 == 该凭证注册时 RP 拿到的文本。
+            // KDBX 字段正是注册时写入的那份文本，故读侧唯一正确的动作就是什么都不做。
+            // 非 base64 的历史脏数据同样原样保留（交给 rawIdFromStored 的兜底分支），
+            // 绝不能硬转换 —— 那会把旧数据变成空串，等于丢凭证。
+            credentialId = credentialId,
             rpId = rpId,
             rpName = fields.rpName.trim().ifBlank { fallbackRpName },
             userName = userName,
@@ -321,22 +337,15 @@ object KdbxPasskeyCodec {
     private const val KEY_TYPE_PUBLIC_KEY = "public-key"
     private const val KEY_CURVE_P256 = "P-256"
 
-    /** base64url（无填充）→ 标准 base64；已是标准形态 / 解不出来时原样返回。 */
-    private fun normalizeCredentialId(raw: String): String {
-        if (raw.contains('+') || raw.contains('/')) return raw
-        val decoded = runCatching {
-            val padded = raw.replace('-', '+').replace('_', '/')
-                .let { if (it.length % 4 == 0) it else it + "=".repeat(4 - it.length % 4) }
-            Base64.getDecoder().decode(padded)
-        }.getOrNull() ?: return raw
-        if (decoded.isEmpty()) return raw
-        return Base64.getEncoder().encodeToString(decoded)
-    }
-
     /**
      * 标准 base64 → base64url（无填充）；解不出来时原样返回（不破坏非 base64 的旧数据）。
      *
-     * 与 [normalizeCredentialId] 互为逆运算 ⇒ `credentialId` 能写→读往返一致。
+     * 仅用于**写方向**：`KPEX_PASSKEY_CREDENTIAL_ID` 在 KeePass 生态里的约定就是
+     * base64url 无填充文本，领域模型若持标准 base64（如某些 Bitwarden 导入）需归一后落库。
+     *
+     * ⚠️ **读方向没有、也不许有它的逆运算**（#293）：[toCredential] 原样保留字段文本，
+     *    因为断言链路 `WebAuthn.rawIdFromStored()` 要的是「注册时那份文本」。写→读的
+     *    文本形态不要求恒等（字节恒等即可），但读→断言必须逐字符一致。
      */
     fun toBase64Url(raw: String): String {
         val trimmed = raw.trim()

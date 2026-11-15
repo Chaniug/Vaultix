@@ -6,7 +6,7 @@
  * 既有 `KdbxPasskeyCodecTest` 只覆盖读方向（阶段 A），本文件钉死写方向四条：
  *   ① 字段集 10 键（与 bw2keepass 并集）
  *   ② 多凭证 `_n` 后缀（此前只读得出第一条 = 丢凭证）
- *   ③ credentialId 的 base64url ↔ 标准 base64 往返
+ *   ③ credentialId 的 base64url 落库 + 读侧原样保留（#293：不再回转标准 base64）
  *   ④ 私钥 PEM **受保护**写入（写明文 = KDBX 被别人打开即泄露私钥）
  *
  * 纯 JVM（kotpass 在 JVM 上可跑），不需要 Android 运行时。
@@ -16,6 +16,7 @@ package io.vaultix.data.kdbx
 import app.keemobile.kotpass.models.EntryFields
 import app.keemobile.kotpass.models.EntryValue
 import com.google.common.truth.Truth.assertThat
+import io.vaultix.common.WebAuthn
 import io.vaultix.model.VaultFido2Credential
 import io.vaultix.model.VaultItem
 import org.junit.Test
@@ -86,7 +87,15 @@ class KdbxPasskeyWritebackTest {
             KdbxPasskeyCodec.fromFieldMap(written),
             title = "Example",
         )
-        assertThat(read?.credentialId).isEqualTo(CREDENTIAL_ID_B64)
+        // #293：读侧原样保留 KDBX 的 base64url 文本，不再回转成标准 base64 "////"。
+        // 断言链路要的是「注册时那份文本」，文本形态由 KDBX 约定决定；字节仍恒等，
+        // 故不是丢凭证。再写一次也幂等（base64url 文本原样落库，不二次变形）。
+        assertThat(read?.credentialId).isEqualTo("____")
+        assertThat(WebAuthn.decodeBase64UrlOrStandard(read!!.credentialId))
+            .isEqualTo(WebAuthn.decodeBase64UrlOrStandard(CREDENTIAL_ID_B64))
+        assertThat(
+            KdbxPasskeyCodec.fromCredential(read, 0)["KPEX_PASSKEY_CREDENTIAL_ID"],
+        ).isEqualTo("____")
     }
 
     @Test

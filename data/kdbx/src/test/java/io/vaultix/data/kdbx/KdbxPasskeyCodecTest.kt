@@ -1,15 +1,19 @@
 package io.vaultix.data.kdbx
 
 import com.google.common.truth.Truth.assertThat
+import io.vaultix.common.WebAuthn
 import org.junit.Test
 
 /**
- * KeePass 通行密钥（KeePassDX 的 `KPEX_PASSKEY_*` 约定）映射单测。
+ * KeePass 通行密钥（`KPEX_PASSKEY_*`，KeePassXC 定义 / KeePassDX 遵循）映射单测。
  *
- * 最贵的两条：
+ * 最贵的三条：
  *  ① 必填字段缺失时必须返回 **null**（半截凭证会比"没有"更糟：列表里出现一条点进去什么都没有）；
- *  ② `credentialId` 的 base64url ↔ 标准 base64 转换：**转换失败要原样保留**，
- *     硬转会把非 base64 的旧数据变成空串（等于把用户的通行密钥弄丢了）。
+ *  ② `credentialId` **原样保留**：非 base64 的旧数据绝不硬转（会变成空串 = 丢凭证）；
+ *  ③ #293：`credentialId` 从 KDBX 读出到断言响应的 rawId **逐字符不变** ——
+ *     旧实现把它转成标准 base64（加 `=` 填充 / 换出 `+` `/`），RP 按 base64url 解码即失败。
+ *     这条跨模块契约以前没有任何测试钉住，才让读侧与 `rawIdFromStored` 的
+ *     「原样回传」决策漂移了三个月。
  */
 class KdbxPasskeyCodecTest {
 
@@ -42,16 +46,46 @@ class KdbxPasskeyCodecTest {
     }
 
     @Test
-    fun `base64url credential id is normalized to standard base64`() {
-        // "AQIDBA" (8 chars) 的 base64url 原样是 01 02 03 04；标准 base64 应为 "AQIDBA=="
+    fun `base64url credential id is preserved verbatim not padded to standard base64`() {
+        // #293：旧实现把 "AQIDBA" 转成 "AQIDBA=="（标准 base64），断言回传时 RP 不认。
         val credential = KdbxPasskeyCodec.toCredential(base)
-        assertThat(credential!!.credentialId).isEqualTo("AQIDBA==")
+        assertThat(credential!!.credentialId).isEqualTo("AQIDBA")
     }
 
     @Test
     fun `already standard base64 credential id is kept as is`() {
+        // 含 `+` 的标准形态样本：读侧一律原样保留，不做任何归一。
+        // ⚠️ 别拿它去断 `rawIdFromStored` —— 这个短串是旧测试造的畸形 base64
+        //    （长度非 4 倍数），会走该函数「非法文本 → UTF-8 兜底」分支。
+        //    rawId 契约由下面真实 32 字节 ID 的用例 + WebAuthnTest ② 覆盖。
         val credential = KdbxPasskeyCodec.toCredential(base.copy(credentialId = "AQID+BA=="))
         assertThat(credential!!.credentialId).isEqualTo("AQID+BA==")
+    }
+
+    /**
+     * #293 跨模块契约：KDBX 读出的 credentialId 必须能直接喂给断言链路而形态不变。
+     *
+     * 真机症状：KDBX 上的 passkey 登录 GitHub / x.com 报「通行密钥有问题」，
+     * 而 Bitwarden passkey 与电脑上 KeePassXC 用同一个库都正常 —— 差异只在读侧这层转换。
+     * 用 32 字节 ID（首字节含 0xFB/0xFF/0xFE，标准 base64 必现 `+` `/`）钉死
+     * 「读 → rawId」逐字符一致；把 normalize 加回来这条立刻红。
+     */
+    @Test
+    fun `KDBX credential id survives into assertion rawId byte for byte`() {
+        val bytes = byteArrayOf(0xFB.toByte(), 0xFF.toByte(), 0xFE.toByte()) +
+            ByteArray(29) { (it * 7 + 3).toByte() }
+        val stored = WebAuthn.base64Url(bytes)
+        assertThat(stored).doesNotContain("=")
+        // 同一批字节若被转成标准 base64，必然出现 '+' '/' 与 '='。
+        assertThat(java.util.Base64.getEncoder().encodeToString(bytes)).contains("+")
+
+        val credential = KdbxPasskeyCodec.toCredential(base.copy(credentialId = stored))!!
+        val rawId = WebAuthn.rawIdFromStored(credential.credentialId)
+        assertThat(rawId).isEqualTo(stored)
+        assertThat(rawId).doesNotContain("+")
+        assertThat(rawId).doesNotContain("/")
+        assertThat(rawId).doesNotContain("=")
+        assertThat(WebAuthn.describeStoredIdForm(credential.credentialId)).isEqualTo("base64")
     }
 
     @Test

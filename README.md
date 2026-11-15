@@ -220,7 +220,7 @@ app/                 # UI 层：Compose 界面、导航、ViewModel、自动填�
 除 `android-ci` 外还有两个并行 job：`sandbox-tests`（纯逻辑模块真编译 + 真单测）与
 `AI docs consistency`（`.ai/` 索引与全仓 markdown 相对链接）。
 
-`.ai/tools/` 下另有 **18 个 `check_*.py` 门禁脚本 + 15 个自测**，专门抓
+`.ai/tools/` 下另有 **19 个 `check_*.py` 门禁脚本 + 16 个自测**，专门抓
 **detekt 查不出、本地单模块编译也不报、只有 CI 跨模块编译才炸**，以及**连编译都不报**的
 那几类问题（跨文件 `private` 调用、`R.string` 引用、实验性 API 的 `@OptIn` 覆盖、
 签名里的类型名可解析、多态状态被压成二值、零引用字符串、**状态变量只写不读**），
@@ -236,6 +236,7 @@ python3 .ai/tools/check_orphan_strings.py       # strings.xml 里零引用的字
 python3 .ai/tools/check_orphan_state.py         # Compose 状态变量「只写不读」（漏渲染对话框）
 python3 .ai/tools/check_production_safety.py .  # #291：生产源码禁裸 Log / !!（release 行为红线）
 python3 .ai/tools/check_release_naming.py .     # #292：产物命名形状 + #218 身份不退化
+python3 .ai/tools/check_kdbx_passkey_id.py .    # #293：KDBX passkey credentialId 逐字符保真
 python3 .ai/tools/verify_sync_fields.py         # 同步字段核对（用法见脚本头）
 ```
 

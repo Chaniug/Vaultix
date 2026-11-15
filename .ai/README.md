@@ -24,7 +24,47 @@
 - 已接进 CI：`ci-debug.yml` 的 `sandbox-tests` job 用**同一份脚本**，与 `android-ci` 并行
   ⇒ 本地绿 ⇒ CI 不会红在同一件事上。
 
-## 🕐 最新状态（2026-11-14 · v0.13.2 正式发布）
+## 🕐 最新状态（2026-11-15 · #293 正式版 KDBX 通行密钥登录失败）
+
+> **触发（用户原话）**：「使用 kdbx 上保存的通行密钥，登录 github 或者 x.com 的时候，
+> 提示通行密钥有问题。但是使用 bitwarden 的通行密钥则没有问题，kdbx 是通过电脑上
+> XC 转换 json 后的库，XC 上没有问题，但是手机版 vaultix 上有问题，正式 release 版的」。
+> 版本 **正式 v0.13.2**（非 debug / 非 preview）。本轮**改了生产代码 + 测试 + 门禁**，
+> 只推 `main`，**未推 `rele`**，正式 v0.13.2 不受影响。
+
+**根因（三条差分对照收敛）**：同一个 KDBX 库在电脑 KeePassXC 上正常、Vaultix 的
+Bitwarden 库 passkey 正常，只有「Vaultix 读 KDBX」失败 ⇒ 排除 CP 通用链路 / 签名 /
+RP 侧，根因只可能在 `KdbxPasskeyCodec.toCredential()`。旧实现调
+`normalizeCredentialId()` 把 KeePass 生态约定的 **base64url 无填充** `credentialId`
+转成**标准 base64**（补 `=`、换出 `+` `/`）；而 `WebAuthn.rawIdFromStored()` 的决策是
+「**原样回传存储文本**」（2026-09-12 真机证伪 decode→re-encode，`WebAuthnTest` ② 钉死）。
+断言响应 `id`/`rawId` 因此成了 RP 按 base64url 解不出的文本 ⇒ 「通行密钥有问题」。
+Bitwarden 导入（`BitwardenImportMapper` 原样）与本应用注册（写 base64url）都不经这层转换，
+故只有 KDBX 中招。**字符串形态被改，编译 / 单测 / detekt 全查不出，只有真机对上 RP 才炸。**
+
+**修法**：只动读侧 —— `credentialId = credentialId` 原样、删除 `normalizeCredentialId()`；
+**不动** `WebAuthn.rawIdFromStored()`（真机验证过的决策）、不动写方向 `fromCredential()`
+（KDBX 互操作性靠 `toBase64Url`）。订正文件头过时溯源：`KPEX_PASSKEY_*` 由
+**KeePassXC 定义、KeePassDX 遵循**，不存在「KeePassXC 走 `KPXC_*` 体系」——
+旧注释差点把排查带向错误的兼容层。
+
+**验证**：`data/kdbx` 本地真编译真跑 **274 例全绿**（首轮 3 红，均为「测试把缺陷当规格」
+或我自己拿畸形 base64 做的假红断言，逐条订正，见 part6 §293.5）；新增跨模块契约测试
+`KDBX credential id survives into assertion rawId byte for byte`；新增
+`check_kdbx_passkey_id.py` + 11 组变异自测，接 `ci-debug.yml` 两步（挂 `android-ci`，
+不挂 `ci-docs.yml`）。**两轮反证**：门禁 11/11；把 `normalizeCredentialId` 临时注入回
+生产代码 ⇒ 5 例立刻红，字节级还原后复绿。
+
+⚠️ **仍需真机验收**：preview 包上用 KDBX 库 passkey 复登 GitHub / x.com。
+用户随消息附的站点报错截图本环境未能读取，根因由对照 + 源码链路推出，未经日志实证。
+⚠️ 是否 bump `0.13.3` 发版由用户拍板（硬约束：每次合入 `rele` 都要用户点头）。
+
+接力正文：[`issues/03-通行密钥与凭据提供商-part6.md`](./issues/03-通行密钥与凭据提供商-part6.md)
+（03 篇索引 24→25、新建 part6；ISSUES.md 主表原本写 25 与真值 24 不符，本轮正好对齐为 25）。
+
+---
+
+## 🕐 前一轮（2026-11-14 · v0.13.2 正式发布）
 
 > **触发**：用户「发一个 release 吧。已经积累了一定的内容了」，并明确拍板
 > **版本号 `0.13.2`（patch）** + **快进 `rele` 发正式版**（硬约束「每次合入 `rele`
