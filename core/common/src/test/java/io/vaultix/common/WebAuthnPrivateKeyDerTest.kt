@@ -93,11 +93,44 @@ class WebAuthnPrivateKeyDerTest {
     }
 
     @Test
-    fun `空 PEM 壳返回 null 且诊断串不再伪装成 0 字节 DER`() {
+    fun `空 PEM 壳被判为显式失败且带输入形态`() {
         val shell = "-----BEGIN PRIVATE KEY----------END PRIVATE KEY-----"
 
         assertThat(WebAuthn.parseEcPrivateKey(shell)).isNull()
-        assertThat(WebAuthn.describeEcPrivateKeyFailure(shell)).isEqualTo("pem-unreadable")
+        val diagnosis = WebAuthn.describeEcPrivateKeyFailure(shell)
+        assertThat(diagnosis).contains("pem-empty-body")
+        assertThat(diagnosis).contains("shape=pem-inline,lines=1")
+        assertThat(diagnosis).doesNotContain("len=0")
+    }
+
+    @Test
+    fun `诊断串报告输入形态且不含密钥内容`() {
+        val scalar = scalar32()
+        val body = base64(pkcs8(algorithmIdentifier(includeCurveParam = true), sec1(scalar)))
+        val single = "-----BEGIN PRIVATE KEY-----$body-----END PRIVATE KEY-----"
+        val multi = "-----BEGIN PRIVATE KEY-----\n$body\n-----END PRIVATE KEY-----"
+
+        assertThat(WebAuthn.describeEcPrivateKeyFailure(single))
+            .contains("shape=pem-inline,lines=1")
+        assertThat(WebAuthn.describeEcPrivateKeyFailure(multi))
+            .contains("shape=pem-block,lines=3")
+        assertThat(WebAuthn.describeEcPrivateKeyFailure(single))
+            .doesNotContain(body.take(BODY_PREFIX_LEN))
+    }
+
+    @Test
+    fun `退化输入一律不得伪装成 0 字节 DER`() {
+        val degenerate = listOf(
+            "-----BEGIN PRIVATE KEY-----",
+            "-----BEGIN PRIVATE KEY-----\n\n-----END PRIVATE KEY-----",
+            "-----BEGIN PRIVATE KEY-----!!!!-----END PRIVATE KEY-----",
+        )
+        for (value in degenerate) {
+            assertThat(WebAuthn.parseEcPrivateKey(value)).isNull()
+            val diagnosis = WebAuthn.describeEcPrivateKeyFailure(value)
+            assertThat(diagnosis).doesNotContain("len=0")
+            assertThat(diagnosis).contains("shape=")
+        }
     }
 
     // ---- 测试用 DER 构造（只处理 <128 字节的短格式长度，够用）----
@@ -139,6 +172,8 @@ class WebAuthnPrivateKeyDerTest {
 
     private companion object {
         const val SCALAR_BYTES = 32
+        /** 断言"诊断串不含密钥内容"时截取的 body 前缀长度。 */
+        const val BODY_PREFIX_LEN = 12
         const val DER_SEQUENCE = 0x30
         const val DER_INTEGER = 0x02
         const val DER_OCTET_STRING = 0x04

@@ -208,10 +208,13 @@ object WebAuthn {
         val trimmed = keyValue.trim()
         // 1) PEM（-----BEGIN PRIVATE KEY----- 或 EC PRIVATE KEY）
         if (trimmed.startsWith("-----BEGIN", ignoreCase = true)) {
-            val der = pemToDer(trimmed) ?: return null
-            return ecPrivateFromDer(der)
+            return when (val result = pemToDer(trimmed)) {
+                is PemDerResult.Ok -> ecPrivateFromDer(result.der)
+                is PemDerResult.Fail -> null
+            }
         }
-        val raw = runCatching { decodeBase64UrlOrStandard(trimmed) }.getOrNull() ?: return null
+        val raw = runCatching { decodeBase64UrlOrStandard(trimmed) }
+            .getOrNull()?.nonEmptyOrNull() ?: return null
         // 2) 裸私钥标量：**必须先归一化长度**。BigInteger.toByteArray() 在高位为 1 时多一个
         //    前导 0x00（33 字节）、值较小时又会丢掉前导 0x00（<32 字节），两种形态在真实
         //    数据里都存在。若只认「恰好 32 字节」，同一份密钥会随机解析失败（此前
@@ -275,10 +278,49 @@ object WebAuthn {
         RegexOption.IGNORE_CASE,
     )
 
-    private fun pemToDer(pem: String): ByteArray? {
+    /**
+     * PEM → DER 的结果：**成功必带非空 DER，失败必带可区分原因**。
+     *
+     * 2026-11-15 的教训不是"没想到单行 PEM"，而是"想到了也看不见"：
+     * `Base64.decode("")` 返回 0 字节且不抛异常，旧实现把它当成成功的空 DER
+     * 一路传下去，直到签名时才报 `Cannot parse passkey key`，现场日志只剩
+     * `pem-der(len=0, first=0xempty)`。⇒ 空结果必须在这里被判死并留下原因，
+     * 不允许静默降级（与 2026-09-11 审计 §9 同源）。
+     */
+    private sealed interface PemDerResult {
+        data class Ok(val der: ByteArray) : PemDerResult
+        data class Fail(val reason: String) : PemDerResult
+    }
+
+    private fun pemToDer(pem: String): PemDerResult {
         val cleaned = PEM_MARKER.replace(pem, "").filter { !it.isWhitespace() }
-        if (cleaned.isEmpty()) return null
-        return runCatching { Base64.getDecoder().decode(cleaned) }.getOrNull()
+        if (cleaned.isEmpty()) return PemDerResult.Fail("pem-empty-body")
+        val der = runCatching { Base64.getDecoder().decode(cleaned) }.getOrNull()
+            ?: return PemDerResult.Fail("pem-bad-base64")
+        if (der.isEmpty()) return PemDerResult.Fail("pem-empty-der")
+        return PemDerResult.Ok(der)
+    }
+
+    /** 空结果守卫：非空输入却解出 0 字节，一律按失败处理，绝不往下游传。 */
+    private fun ByteArray.nonEmptyOrNull(): ByteArray? = takeIf { it.isNotEmpty() }
+
+    /**
+     * 输入形态指纹：**只含结构信息，绝不含密钥内容**。
+     *
+     * 回答"这份输入是怎么包装的"——行数、是否单行内联、换行类型。
+     * 现场日志里 `shape=pem-inline,lines=1` 一眼就能指出"头体尾挤在一行"，
+     * 不必等用户把两份 PEM 贴出来对比。串是 key=value 结构，
+     * 可被脚本解析成事故输入语料（回归 fixture 的一等公民）。
+     */
+    fun describeKeyShape(keyValue: String): String {
+        val lines = keyValue.lines()
+        val shape = when {
+            !keyValue.contains("-----BEGIN", ignoreCase = true) -> "bare"
+            lines.size == 1 -> "pem-inline"
+            else -> "pem-block"
+        }
+        val crlf = keyValue.contains("\r\n")
+        return "shape=$shape,lines=${lines.size},crlf=$crlf"
     }
 
     private fun ecPrivateFromDer(der: ByteArray): PrivateKey? {
@@ -371,18 +413,24 @@ object WebAuthn {
     }
 
     /**
-     * 解析失败时的**非敏感**诊断串（长度 / 形态 / 首字节），供现场日志定位。
-     * ⚠️ 绝不返回密钥内容本身。
+     * 现场诊断串（长度 / 首字节 / **输入形态**），供 logcat 定位。
+     * ⚠️ 绝不返回密钥内容本身；失败码与 [pemToDer] 共用同一真值源，
+     * 不会再出现"解析说成功、诊断说 0 字节"的错位。
      */
     fun describeEcPrivateKeyFailure(keyValue: String?): String {
         if (keyValue.isNullOrBlank()) return "blank"
         val trimmed = keyValue.trim()
+        val shape = describeKeyShape(trimmed)
         if (trimmed.startsWith("-----BEGIN", ignoreCase = true)) {
-            val der = pemToDer(trimmed) ?: return "pem-unreadable"
-            return "pem-der(len=${der.size}, first=0x${firstHex(der)})"
+            return when (val result = pemToDer(trimmed)) {
+                is PemDerResult.Ok ->
+                    "pem-der(len=${result.der.size}, first=0x${firstHex(result.der)}, $shape)"
+                is PemDerResult.Fail -> "${result.reason}($shape)"
+            }
         }
-        val raw = runCatching { decodeBase64UrlOrStandard(trimmed) }.getOrNull() ?: return "base64-failed"
-        return "der(len=${raw.size}, first=0x${firstHex(raw)})"
+        val raw = runCatching { decodeBase64UrlOrStandard(trimmed) }
+            .getOrNull()?.nonEmptyOrNull() ?: return "base64-failed"
+        return "der(len=${raw.size}, first=0x${firstHex(raw)}, $shape)"
     }
 
     private fun firstHex(bytes: ByteArray): String =
