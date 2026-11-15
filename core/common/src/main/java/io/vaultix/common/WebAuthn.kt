@@ -261,11 +261,23 @@ object WebAuthn {
     private fun sha256(bytes: ByteArray): ByteArray =
         MessageDigest.getInstance("SHA-256").digest(bytes)
 
+    /**
+     * PEM 头尾标记（BEGIN / END，大小写不敏感）。
+     *
+     * ⚠️ 2026-11-15 真机：KeePass 生态里存在**整份 PEM 压成一行**的写法
+     * （`-----BEGIN PRIVATE KEY-----<base64>-----END PRIVATE KEY-----`）。
+     * 按行 `filter { !it.startsWith("-----") }` 会把这唯一一行整行丢掉，而
+     * `Base64.decode("")` 返回 0 字节且**不抛异常** ⇒ 静默 `Cannot parse passkey key`。
+     * 故一律按标记剥离，不依赖换行；同一份私钥在电脑 KeePassXC 上可正常签名。
+     */
+    private val PEM_MARKER = Regex(
+        """-----BEGIN[^-\r\n]*-----|-----END[^-\r\n]*-----""",
+        RegexOption.IGNORE_CASE,
+    )
+
     private fun pemToDer(pem: String): ByteArray? {
-        val cleaned = pem.lines()
-            .filter { !it.startsWith("-----") }
-            .joinToString("")
-            .trim()
+        val cleaned = PEM_MARKER.replace(pem, "").filter { !it.isWhitespace() }
+        if (cleaned.isEmpty()) return null
         return runCatching { Base64.getDecoder().decode(cleaned) }.getOrNull()
     }
 

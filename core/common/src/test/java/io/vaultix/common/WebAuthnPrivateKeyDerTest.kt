@@ -62,6 +62,44 @@ class WebAuthnPrivateKeyDerTest {
         assertThat(WebAuthn.describeEcPrivateKeyFailure(null)).isEqualTo("blank")
     }
 
+    /**
+     * 2026-11-15 真机根因：老 KDBX 里的私钥 PEM 头/体/尾挤在**同一行**，
+     * 电脑 KeePassXC 能正常登录 GitHub，Vaultix 却报 `Cannot parse passkey key`。
+     * 旧实现按行剥头尾 ⇒ 唯一一行被整行丢弃 ⇒ `decode("")` 静默得到 0 字节。
+     */
+    @Test
+    fun `单行 PEM 头体尾挤在同一行也可解析`() {
+        val scalar = scalar32()
+        val body = base64(pkcs8(algorithmIdentifier(includeCurveParam = true), sec1(scalar)))
+        val pem = "-----BEGIN PRIVATE KEY-----$body-----END PRIVATE KEY-----"
+
+        val key = WebAuthn.parseEcPrivateKey(pem)
+
+        assertThat(key).isNotNull()
+        assertThat((key as ECPrivateKey).s.toByteArray32()).isEqualTo(scalar)
+        assertThat(WebAuthn.describeEcPrivateKeyFailure(pem)).doesNotContain("len=0")
+    }
+
+    @Test
+    fun `多行 PEM 仍可解析`() {
+        val scalar = scalar32()
+        val body = base64(pkcs8(algorithmIdentifier(includeCurveParam = true), sec1(scalar)))
+        val pem = "-----BEGIN PRIVATE KEY-----\n$body\n-----END PRIVATE KEY-----"
+
+        val key = WebAuthn.parseEcPrivateKey(pem)
+
+        assertThat(key).isNotNull()
+        assertThat((key as ECPrivateKey).s.toByteArray32()).isEqualTo(scalar)
+    }
+
+    @Test
+    fun `空 PEM 壳返回 null 且诊断串不再伪装成 0 字节 DER`() {
+        val shell = "-----BEGIN PRIVATE KEY----------END PRIVATE KEY-----"
+
+        assertThat(WebAuthn.parseEcPrivateKey(shell)).isNull()
+        assertThat(WebAuthn.describeEcPrivateKeyFailure(shell)).isEqualTo("pem-unreadable")
+    }
+
     // ---- 测试用 DER 构造（只处理 <128 字节的短格式长度，够用）----
 
     private fun scalar32(): ByteArray {
