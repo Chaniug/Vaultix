@@ -252,3 +252,13 @@ flushPending 完成：推送 0 条成功，剩 1 条留在队列
 - 这是"队列为空"的**一个**候选成因，但**不等于**用户这次就是它（他那台机器是否卡过，
   日志里没有证据）。修掉它是因为它确实会让队列永远为空、且症状完全吻合。
 - 真正的定论仍等真机日志的 **A / B** 判据。
+
+### CI 与产物（2026-11-16）
+
+| 提交 | 内容 | 结论 |
+|---|---|---|
+| `58e3440b` | #297 同步必须自证（空队列留痕 + 写路径统一留痕） | `Android CI (Debug)` 43829870101 **success**（两 job 全绿）· `AI docs consistency` 43829870031 **success** |
+| `c1f3cc54` | #297 写路径闸门卡死（`saving` 复位进 `finally` + 异常收口） | `Android CI (Debug)` 43834201528 **success**（`Lint/test diagnostics/debug build` + `Sandbox unit tests` 全绿）· `AI docs consistency` 43834201510 **success** |
+
+preview 资产：**`Vaultix-c1f3cc5.apk`**（35.85 MB，`v0.13.4-dev-c1f3cc5 · Preview`）。
+装这个包复现，日志里就会带上「写路径收口 / 中断」与「flushPending 队列为空 / 待推送 N 条」两侧的证据。

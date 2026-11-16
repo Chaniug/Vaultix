@@ -68,7 +68,11 @@
   三条变异反证全红（复位移回下一句 ✅、catch 收窄 ✅、删闸门 ✅）。
   `app` **724 例全绿**、`data:bitwarden` **124**、`data:repository` **352**，detekt 通过；
   **23 个门禁 + 20 个自测**全绿（顺带把 README / next-steps 里写错的「24 个」改为 23）。
-- **下一步（需要用户配合）**：装新包复现一次，回传日志。这次一定能看到
+- **CI 实证（2026-11-16）**：`58e3440b` → `Android CI (Debug)` 43829870101 / `AI docs` 43829870031 全绿；
+  `c1f3cc54` → `Android CI (Debug)` 43834201528（`Lint/test diagnostics/debug build` +
+  `Sandbox unit tests` 两 job）/ `AI docs` 43834201510 全绿。preview 资产 **`Vaultix-c1f3cc5.apk`**
+  （35.85 MB，`v0.13.4-dev-c1f3cc5 · Preview`）。
+- **下一步（需要用户配合）**：装新包 `Vaultix-c1f3cc5.apk` 复现一次，回传日志。这次一定能看到
   `flushPending 队列为空（无待推送 op）⇒ 本次同步只做拉取，不会上传任何改动`
   或 `flushPending 开始：待推送 N 条（UPDATE=1）` + `flushPending op=UPDATE ... code=... body=...`；
   保存那一刻还会先出现 `写路径收口：updateItem 已返回（成功）· <id>` 或 `写路径中断：…`。
