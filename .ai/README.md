@@ -49,6 +49,12 @@
   这才是体感上最大的提速；真有改动时的全量下载是协议限制，短期不动。
 - ⚠️ **待 CI 真编译 + 单测**（本机无法编译）；只 push `main`，绝不推 `rele`。
   装机复现判据：日志出现 `flushPending op=UPDATE … code=200`（不再是 422），服务端修改时间推进。
+- **✅ CI 真实结论（2026-11-16 17:13，commit `5a3b6a41`）**：两 run 全 success ——
+  `Android CI (Debug)` [43837076839](https://github.com/Chaniug/Vaultix/actions/runs/43837076839)
+  （detekt `BUILD SUCCESSFUL in 18s`、新门禁输出「✅ encryptedFor 契约检查通过（#298）」、
+  4 例新测试与全量单测通过）、`AI docs consistency` 43837076961。
+  preview `v0.13.4-dev-5a3b6a4 · Preview`，资产 `Vaultix-5a3b6a4.apk`（37.6 MB）。
+  ⚠️ 只推 `main` 未推 `rele`，正式 v0.13.4 不受影响；待装机真机复验。
 
 ## 🕐 上一轮（2026-11-16 · #297 同步看不见 ⇒ 无法定位）
 
