@@ -220,7 +220,7 @@ app/                 # UI 层：Compose 界面、导航、ViewModel、自动填�
 除 `android-ci` 外还有两个并行 job：`sandbox-tests`（纯逻辑模块真编译 + 真单测）与
 `AI docs consistency`（`.ai/` 索引与全仓 markdown 相对链接）。
 
-`.ai/tools/` 下另有 **21 个 `check_*.py` 门禁脚本 + 18 个自测**，专门抓
+`.ai/tools/` 下另有 **22 个 `check_*.py` 门禁脚本 + 19 个自测**，专门抓
 **detekt 查不出、本地单模块编译也不报、只有 CI 跨模块编译才炸**，以及**连编译都不报**的
 那几类问题（跨文件 `private` 调用、`R.string` 引用、实验性 API 的 `@OptIn` 覆盖、
 签名里的类型名可解析、多态状态被压成二值、零引用字符串、**状态变量只写不读**），
@@ -239,6 +239,7 @@ python3 .ai/tools/check_release_naming.py .     # #292：产物命名形状 + #2
 python3 .ai/tools/check_kdbx_passkey_id.py .    # #293：KDBX passkey credentialId 逐字符保真
 python3 .ai/tools/check_bitwarden_revision_baseline.py .  # #294：推送后 revisionDate 基线必须推进
 python3 .ai/tools/check_item_key_write.py .     # #295：编辑条目必须用条目自己的钥匙加密字段
+python3 .ai/tools/check_http422_policy.py .     # #296：422 不得弃单，失败须留脱敏响应体
 python3 .ai/tools/verify_sync_fields.py         # 同步字段核对（用法见脚本头）
 ```
 

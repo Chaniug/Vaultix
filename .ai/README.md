@@ -24,39 +24,34 @@
 - 已接进 CI：`ci-debug.yml` 的 `sandbox-tests` job 用**同一份脚本**，与 `android-ci` 并行
   ⇒ 本地绿 ⇒ CI 不会红在同一件事上。
 
-## 🕐 最新状态（2026-11-16 · #295 编辑条目用错钥匙）
+## 🕐 最新状态（2026-11-16 · #296 HTTP 422 静默弃单）
 
-> **一句话**：改条目 → 保存 → 显示成功 → **云端却是旧值**。根因是「带条目密钥的条目
-> 被编辑时，字段仍用**账号密钥**加密」，服务端存得下、只有 Vaultix 自己解得开。
+> **一句话**：改完条目本地看着正常，点同步也"成功"，云端却没变。真机日志把链条钉死了：
+> `flushPending ... code=422 definitive=true` → 422 被当成确定性失败**弃单** →
+> 下次同步没有 pending op、revision 未变 → 直接 `Skipped`。
 
-- **现象**：在已有条目里改一条网址（或改名/改字段），保存后本地显示新值，
-  **云端没有**；点同步也不会被云端覆盖回来（说明队列已清、请求确实成功了）。
-  全程零报错。
-- **根因**：Bitwarden 有两把钥匙 —— 条目字段用**条目自己的密钥**（条目带 `key` 时），
-  `key` 本身用账号密钥包裹（官方 `toEncryptedNetworkCipher` / Keyguard
-  `buildCipherCodecPair` 同一语义）。Vaultix **读**方向一直是对的
-  （`toDomain` 条目密钥优先 → 回退账号密钥），**写**方向却一律用账号密钥，
-  且 `CipherRequest` 压根没声明 `key`。
-  ⇒ 官方客户端/网页只按 `key` 解 ⇒ `MacVerificationException` ⇒ 永远显示旧值。
-  而 Vaultix 靠回退读得回来 ⇒ **本地一切正常**。
-- **为什么测试没抓到**：`CipherMapperItemKeyTest` 只覆盖读方向。
-  而且断言若写成「Vaultix 自己能否解开」本缺陷照样通过 —— 回退把错误盖住了。
-- **修法**：`CipherRequest` 增加 `key`；`toUpdateRequest` 用
-  `contentKey = itemKey ?: key` 加密所有可编辑字段（`finally` 里清条目密钥副本）；
-  请求体 `key = stored.key.takeIf { hasItemKey }`（有则原样带回，无则**必须** null）；
-  `toStoredCipherDto` 顺延 `key`；新建路径（`toRequest`）不动。
-- **验证**：`data/bitwarden` **118 例全绿**（原 111 + 新增 7）；行为反证
-  （把 `contentKey` 改回 `key` ⇒ 4 条主契约全红，还原复绿）；
-  新增 `check_item_key_write.py` + **11 条变异自测**，接 `ci-debug.yml` 两步
-  （`android-ci` 38 → 40 步）。全工程 `compileDebugKotlin` / `compileDebugUnitTestKotlin` 通过。
-- **坑（门禁自身）**：① `sanitize()` 会把 `@SerialName("key")` 抹成 `@SerialName("")`
-  ⇒ 恒红；② 同文件里有 **5 处** `@SerialName("key") val key`（`CipherDto`/`LoginDto`/
-  `CardDto`/`SshKeyDto`/`CipherRequest`），只搜全文 ⇒ 删掉 `CipherRequest` 那行照样
-  命中 ⇒ 假绿。⇒ 必须**逐数据类括号配平切段**。两条都是自测抓出来的。
-- 详见 [07 篇 part4](./issues/07-数据与同步-part4.md)（#295）。#294 正文同篇。
+- **证据**：`vaultix_logs_20261116_142908.txt`（`0.13.4-dev-abeb7bc`，含 #295）。
+  14:28:52 收到 422；14:29:03 `sync skipped: revision 未变`。
+- **为什么不是 #295 没生效**：#295 修的是「字段用错钥匙」，那会让云端**收下但解不开**；
+  本次是服务端**直接拒收**（422）。两件事叠在同一条真机路径上，状似同一个 bug。
+- **静态排除**：对照官方 `CipherRequest` 与 Vaultwarden 1.24/1.28/1.30/1.33/main 的
+  `CipherData`，并在本机起 1.30.0 / 1.33.0 实例用同构请求体实测 PUT，全部 200
+  ⇒ 请求体结构本身不是充分原因；**必须拿到 422 响应体**才能定位具体字段。
+- **已落地的处置**：① 422 与 409 同列为可重试，**不再弃单**（用户改动保住）；
+  ② `flushPending` 失败日志带上**脱敏**响应体（`safeErrorBody`：EncString / JWT /
+  长 token 全抹掉，限长 512）——下一份日志应能直接看到 `missing field ...`；
+  ③ UPDATE 成功后清掉 `vaultixLocalRevisionDate`，让详情页「修改于」改用服务端时间，
+  不再用错误的判据判断同步。
+- **验证**：新增 3 例行为测试（`data/bitwarden` cleanTest 后 **121 例全绿** = 118+3）；
+  新增 `check_http422_policy.py` + **10 条变异自测**，接 `ci-debug.yml` 两步
+  （`android-ci` 40 → 42 步）。22 个门禁 / 19 个自测本地全绿，
+  `compileFullDebugKotlin` / `compileFullDebugUnitTestKotlin` 通过。
+- **待用户配合**：用新包复现一次并回传开发者日志，重点看
+  `VaultixSync: flushPending ... code=422 ... body=...`；据 body 再补请求体字段对齐。
 
-> 上一轮（#294 Bitwarden 推送后基线不推进）已按 8.9 §6 迁出：
-> [archive/README-状态块-2026-11-16-294.md](./archive/README-状态块-2026-11-16-294.md)。
+> 上一轮（#295 编辑条目用错钥匙）已按 8.9 §6 迁出：
+> [archive/README-状态块-2026-11-16-295.md](./archive/README-状态块-2026-11-16-295.md)。
+> 再上一轮（#294）见 [archive/README-状态块-2026-11-16-294.md](./archive/README-状态块-2026-11-16-294.md)。
 
 ---
 ## 🕐 上一轮（2026-11-15 · v0.13.4 正式发布）

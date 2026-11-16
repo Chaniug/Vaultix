@@ -293,6 +293,12 @@ jobs:
       - name: Self-test item-key write checker
         run: python3 "$GITHUB_WORKSPACE/.ai/tools/tests/selftest_item_key_write.py"
 
+      - name: Check HTTP 422 failure policy (#296)
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/check_http422_policy.py" "$GITHUB_WORKSPACE"
+
+      - name: Self-test HTTP 422 failure policy checker
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/tests/selftest_http422_policy.py"
+
       # ★ 2026-11-10：KDBX 来源标签唯一真值源门禁。
       #
       # 真机反馈 #264：OneDrive 上的 KDBX 库在**库列表**里显示「本地文件 · uit」，

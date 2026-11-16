@@ -61,6 +61,28 @@ private const val TAG = "VaultixSync"
 private const val STUCK_RETRY_THRESHOLD = 10
 
 /**
+ * HTTP 错误响应体的**脱敏**预览，只进诊断日志（#296）。
+ *
+ * 为什么需要：Vaultwarden 的业务校验错误一律 HTTP 400；422 基本只可能来自
+ * Rocket 的 `Json<CipherData>` 守卫，响应体里会写明 `missing field ...` 或
+ * `invalid type: ...`，那是定位请求字段差异的唯一直接证据。
+ *
+ * 脱敏是硬要求：错误体可能回显请求字段值（EncString 密文、token）。
+ * 这里先把 `type.iv|ct|mac` 形式的 EncString 整体抹掉，再把任何连续 24 位以上的
+ * base64/JWT 片段抹掉，最后限长 512 字符、压平换行。
+ */
+internal fun safeErrorBody(error: HttpException): String? {
+    val raw = runCatching { error.response()?.errorBody()?.string() }.getOrNull() ?: return null
+    val compact = raw.replace(Regex("""\s+"""), " ").trim()
+    if (compact.isEmpty()) return null
+    return compact
+        .replace(Regex("""\d+\.[A-Za-z0-9+/=]{8,}\|[A-Za-z0-9+/=]*\|[A-Za-z0-9+/=]{8,}"""), "<enc>")
+        .replace(Regex("""[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"""), "<jwt>")
+        .replace(Regex("""[A-Za-z0-9+/_=-]{24,}"""), "<redacted>")
+        .take(512)
+}
+
+/**
  * Bitwarden 同步执行（M1）。
  *
  * 流程：推送本地待上传 → revision 预检 → 全量拉取 → 安全校验 → 落库 →
@@ -225,11 +247,19 @@ class BitwardenSyncService @Inject constructor(
                 .onFailure { error ->
                     // 留一条**带分支判定**的诊断：排查「改动为什么没上去」时，
                     // 第一件事就是分清它走的是"弃单"还是"重试"。
+                    //
+                    // ★ #296：4xx 只记 code 不够。Vaultwarden 的 422 来自 Rocket 的
+                    //   `Json<CipherData>` 守卫（业务错误一律 400），只有响应体里的
+                    //   `missing field` / `invalid type` 才能指出是哪个请求字段出了问题。
+                    //   这里把响应体**脱敏后**记下来（EncString / 长 token 全部抹掉），
+                    //   避免下一轮继续靠猜。
                     VaultixLog.w(TAG) {
+                        val httpError = error as? HttpException
                         "flushPending op=${op.op} id=${op.cipherId} " +
-                            "code=${(error as? HttpException)?.code()} " +
+                            "code=${httpError?.code()} " +
                             "definitive=${error.isDefinitiveHttpFailure()} " +
-                            "conflict=${error.isConflictHttpFailure()}"
+                            "conflict=${error.isConflictHttpFailure()}" +
+                            (httpError?.let { safeErrorBody(it) }?.let { " body=$it" } ?: "")
                     }
                     if (handleOperationFailure(effective, error)) conflicts++
                     firstError = firstError ?: error
@@ -345,16 +375,28 @@ class BitwardenSyncService @Inject constructor(
     private suspend fun advanceLocalRevision(cipherId: String, response: CipherResponse?) {
         val fresh = response?.revisionDate?.takeIf { it.isNotBlank() } ?: return
         val row = cipherDao.get(cipherId) ?: return
-        if (row.revisionDate == fresh) return
         val payload = runCatching {
             json.decodeFromString<CipherDto>(row.encryptedPayload)
         }.getOrNull()
         val updatedPayload = payload?.let { dto ->
             runCatching {
-                json.encodeToString(CipherDto.serializer(), dto.copy(revisionDate = fresh))
+                json.encodeToString(
+                    CipherDto.serializer(),
+                    dto.copy(
+                        revisionDate = fresh,
+                        // ★ #296：这个字段只是「导入后、首次同步前」的本地展示时间。
+                        //   `CipherMapper.toDomain()` 读的是 `vaultixLocalRevisionDate ?: revisionDate`，
+                        //   不清掉它，详情页的「修改于」就永远停在导入那一刻 —— 用户正是拿这个
+                        //   时间判断"同步成功没有"，会持续得到错误结论。
+                        vaultixLocalRevisionDate = null,
+                    ),
+                )
             }.getOrNull()
-        } ?: row.encryptedPayload
-        cipherDao.upsertAll(listOf(row.copy(revisionDate = fresh, encryptedPayload = updatedPayload)))
+        }
+        if (row.revisionDate == fresh && updatedPayload == null) return
+        cipherDao.upsertAll(
+            listOf(row.copy(revisionDate = fresh, encryptedPayload = updatedPayload ?: row.encryptedPayload)),
+        )
     }
 
     private suspend fun executeOperation(api: BitwardenVaultApi, op: PendingOpEntity): CipherResponse? {
@@ -764,6 +806,16 @@ class BitwardenSyncService @Inject constructor(
         const val HTTP_CONFLICT = 409
 
         /**
+         * 422 Unprocessable Entity（#296）：**不得**当确定性失败弃单。
+         *
+         * 它是"服务端没看懂这次请求体"，而不是"目标不存在"。把它归进确定性失败
+         * 会把用户刚改的内容从队列里删掉；下一次同步没有 pending op → revision 未变
+         * → 直接 Skipped → 界面像同步成功，云端却什么都没有（用户 2026-11-16 实测）。
+         * 留队重试至少保住数据，并让每次失败都带上响应体日志。
+         */
+        const val HTTP_UNPROCESSABLE_ENTITY = 422
+
+        /**
          * 分组 prune 的"疑似服务端故障"阈值（#192）。
          *
          * 取 3 的依据：正常用户在网页端删分组是一次一个，本地"待收敛"的不会成批出现；
@@ -773,10 +825,12 @@ class BitwardenSyncService @Inject constructor(
          */
         const val FOLDER_PRUNE_SUSPECT_THRESHOLD = 3
 
-        // 4xx 中 401（登录失效，须重新登录后重推）/408/409/429（可重试）除外，
+        // 4xx 中 401（登录失效，须重新登录后重推）/408/409/422/429（可重试）除外，
         // 其余视为确定性失败（@suppress MagicNumber：HTTP 状态码区间）
         @Suppress("MagicNumber")
         private val DEFINITIVE_HTTP_CODES =
-            (400..499).filter { it !in setOf(401, HTTP_CONFLICT, 408, 429) }
+            (400..499).filter {
+                it !in setOf(401, HTTP_CONFLICT, HTTP_UNPROCESSABLE_ENTITY, 408, 429)
+            }
     }
 }

@@ -138,6 +138,35 @@ class BitwardenSyncPendingOpFailureTest {
     }
 
     @Test
+    fun `422 必须保留在队列而不是弃单`() = runTest {
+        // ★ #296：用户实测 422 被当确定性失败弃单后，下一次同步 `revision 未变`
+        //   直接 Skipped —— 界面像同步成功，云端却什么都没有。
+        //   422 是"服务端没看懂请求体"，不是"目标不存在"，必须留队重试。
+        coEvery { api.updateCipher(any(), any()) } throws httpError(422)
+
+        val result = service.sync(vaultId, server, force = true)
+
+        coVerify(exactly = 0) { pendingOpDao.remove(any()) }
+        coVerify(exactly = 1) { pendingOpDao.incrementRetry(updateOp.localId) }
+        assertThat(result).isInstanceOf(SyncOutcome.RetryableError::class.java)
+    }
+
+    @Test
+    fun `错误响应体必须脱敏后可见`() {
+        // #296：下一轮定位依赖这个 body，但绝不能把密文 / token 写进日志。
+        val enc = "2.MDAwMDAwMDAwMDAwMDAwMA==|c2VjcmV0|MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA="
+        val token = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJzZWNyZXQifQ.SignaturePart0123456789"
+        val raw = """{"error":"missing field `name`","enc":"$enc","token":"$token"}"""
+
+        val safe = safeErrorBody(httpError(422, raw))
+
+        assertThat(safe).isNotNull()
+        assertThat(safe).contains("missing field")
+        assertThat(safe).doesNotContain("c2VjcmV0")
+        assertThat(safe).doesNotContain("eyJhbGci")
+    }
+
+    @Test
     fun `404 仍然弃单`() = runTest {
         // 反证：不能为了照顾 409 就把整段 4xx 都改成"保留"——
         // 那会让 404（服务端条目已不存在）变成永远推不上去的毒丸，卡死整条队列。
@@ -200,10 +229,10 @@ class BitwardenSyncPendingOpFailureTest {
         coVerify(exactly = 0) { folderDao.deleteByIds(any()) }
     }
 
-    private fun httpError(code: Int): HttpException = HttpException(
+    private fun httpError(code: Int, body: String = "{}"): HttpException = HttpException(
         Response.error<Any>(
             code,
-            "{}".toResponseBody("application/json".toMediaType()),
+            body.toResponseBody("application/json".toMediaType()),
         ),
     )
 

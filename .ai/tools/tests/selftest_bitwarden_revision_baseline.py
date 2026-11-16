@@ -154,9 +154,11 @@ def _column_only():
         raise AssertionError("[column-only] 找不到函数结束锚点")
     body = text[start:end]
     # 把"重建载荷"整段抹掉，只留写列（用正则整段替换，避免缩进漂移打不中）。
+    # ⚠️ #296 后载荷重建里多了 `vaultixLocalRevisionDate = null`，
+    #    且 upsertAll 改成多行；这里按"从 val payload 到 cipherDao.upsertAll 结束"
+    #    整段抹掉，避免继续钉死某一行的排版。
     stripped = re.sub(
-        r"        val payload = runCatching \{[\s\S]*?\n        \} \?: row\.encryptedPayload\n"
-        r"[\s\S]*?cipherDao\.upsertAll\(listOf\(row\.copy\(revisionDate = fresh, encryptedPayload = updatedPayload\)\)\)",
+        r"        val payload = runCatching \{[\s\S]*?cipherDao\.upsertAll\([\s\S]*?\n        \)",
         "        cipherDao.upsertAll(listOf(row.copy(revisionDate = fresh)))",
         body,
         count=1,
@@ -180,10 +182,12 @@ def _no_blank_guard():
 
 @case("⑥ 载荷里的 copy 不再换 revisionDate")
 def _payload_copy_missing():
+    # #296 把 encodeToString 改成多行并多清一个字段；锚点取更小的 `dto.copy(`，
+    # 变异成 `dto.noCopy(` 后门禁的「编码参数里必须带 copy」判据必然红。
     mutate(
         SERVICE_REL,
-        "json.encodeToString(CipherDto.serializer(), dto.copy(revisionDate = fresh))",
-        "json.encodeToString(CipherDto.serializer(), dto)",
+        "dto.copy(",
+        "dto.noCopy(",
         "payload-copy",
     )
     expect_red("载荷未换 revision")

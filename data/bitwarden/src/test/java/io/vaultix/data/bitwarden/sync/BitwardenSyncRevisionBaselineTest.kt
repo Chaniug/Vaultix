@@ -178,6 +178,35 @@ class BitwardenSyncRevisionBaselineTest {
     }
 
     /**
+     * ★ #296：推送成功后必须清掉 `vaultixLocalRevisionDate`。
+     *
+     * 它是导入用的本地展示字段，`CipherMapper.toDomain()` 里优先级高于服务端 revisionDate。
+     * 不清掉的话，用户改完、推送也成功了，详情页「修改于」仍停在导入时间 ——
+     * 用户拿这个时间当同步判据，就会一直以为没同步上去（本次真机反馈的第二个症状）。
+     */
+    @Test
+    fun `UPDATE 推送成功后必须清除本地展示时间`() = runTest {
+        val before = io.vaultix.database.entity.CipherEntity(
+            id = cipherId,
+            vaultId = vaultId,
+            type = 1,
+            encryptedPayload = """{"id":"$cipherId","type":1,"revisionDate":"$staleRevision","vaultixLocalRevisionDate":"2026-10-01T00:00:00.000Z"}""",
+            revisionDate = staleRevision,
+        )
+        coEvery { cipherDao.get(cipherId) } returns before
+        coEvery { api.updateCipher(any(), any()) } returns CipherResponse(cipherId, freshRevision)
+        val rowSlot = slot<List<io.vaultix.database.entity.CipherEntity>>()
+        coEvery { cipherDao.upsertAll(capture(rowSlot)) } just runs
+
+        service.flushPending(vaultId, server)
+
+        assertThat(rowSlot.isCaptured).isTrue()
+        val saved = rowSlot.captured.single()
+        assertThat(saved.encryptedPayload).doesNotContain("vaultixLocalRevisionDate")
+        assertThat(saved.encryptedPayload).contains(freshRevision)
+    }
+
+    /**
      * 反证的另一半：服务端没回 revision（空串）时**不能**把本地写成空。
      *
      * 空基线比旧基线更坏 —— `takeIf { it.isNotBlank() }` 会把它变成"不带
