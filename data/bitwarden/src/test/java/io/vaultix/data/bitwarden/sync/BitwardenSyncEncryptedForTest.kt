@@ -54,6 +54,8 @@ class BitwardenSyncEncryptedForTest {
 
     private val vaultId = "https://vault.example.com"
     private val server = vaultId
+    /** accessTokenForHost 的 key 是纯 host——与生产 hostOf()/URL(server).host 同口径。 */
+    private val host = "vault.example.com"
     private val cipherId = "cipher-1"
     private val userId = "3fa85f64-5717-4562-b3fc-2c963f66afa6"
 
@@ -121,7 +123,7 @@ class BitwardenSyncEncryptedForTest {
     @Test
     fun `UPDATE 请求体必须带 encryptedFor 等于 user id`() = runTest {
         coEvery { pendingOpDao.listByVault(vaultId) } returns listOf(op("UPDATE"))
-        every { authRepository.accessTokenForHost(server) } returns tokenWith(userId)
+        every { authRepository.accessTokenForHost(host) } returns tokenWith(userId)
         val bodySlot = slot<CipherRequest>()
         coEvery { api.updateCipher(any(), capture(bodySlot)) } returns CipherResponse(cipherId, "rev")
 
@@ -131,6 +133,9 @@ class BitwardenSyncEncryptedForTest {
         assertThat(bodySlot.captured.encryptedFor).isEqualTo(userId)
         // 其余字段不受影响
         assertThat(bodySlot.captured.name).isEqualTo("2.iv|ct|mac")
+        // ★ 钉住"查 token 用的是 host 而非完整 URL"——首次真机验收正是栽在这里：
+        //    传 https://vault.example.com 去查 serverByHost（key 是纯 host）⇒ null ⇒ 不注入。
+        coVerify(exactly = 1) { authRepository.accessTokenForHost(host) }
         coVerify(exactly = 1) { pendingOpDao.remove(1L) }
     }
 
@@ -138,7 +143,7 @@ class BitwardenSyncEncryptedForTest {
     @Test
     fun `CREATE 请求体必须带 encryptedFor 等于 user id`() = runTest {
         coEvery { pendingOpDao.listByVault(vaultId) } returns listOf(op("CREATE"))
-        every { authRepository.accessTokenForHost(server) } returns tokenWith(userId)
+        every { authRepository.accessTokenForHost(host) } returns tokenWith(userId)
         val bodySlot = slot<CipherRequest>()
         coEvery { api.createCipher(capture(bodySlot)) } returns CipherResponse(cipherId, "rev")
 
@@ -152,7 +157,7 @@ class BitwardenSyncEncryptedForTest {
     @Test
     fun `token 缺失时不注入 encryptedFor 但同步继续`() = runTest {
         coEvery { pendingOpDao.listByVault(vaultId) } returns listOf(op("UPDATE"))
-        every { authRepository.accessTokenForHost(server) } returns null
+        every { authRepository.accessTokenForHost(host) } returns null
         val bodySlot = slot<CipherRequest>()
         coEvery { api.updateCipher(any(), capture(bodySlot)) } returns CipherResponse(cipherId, "rev")
 
@@ -167,7 +172,7 @@ class BitwardenSyncEncryptedForTest {
     @Test
     fun `sub 非 UUID 时不注入 encryptedFor`() = runTest {
         coEvery { pendingOpDao.listByVault(vaultId) } returns listOf(op("UPDATE"))
-        every { authRepository.accessTokenForHost(server) } returns tokenWith("not-a-uuid")
+        every { authRepository.accessTokenForHost(host) } returns tokenWith("not-a-uuid")
         val bodySlot = slot<CipherRequest>()
         coEvery { api.updateCipher(any(), capture(bodySlot)) } returns CipherResponse(cipherId, "rev")
 

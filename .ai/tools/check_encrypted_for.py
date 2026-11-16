@@ -81,6 +81,10 @@ def check(root):
         errors.append("userIdFromToken 未读 JWT 的 sub claim")
     if "USER_ID_PATTERN" not in sync:
         errors.append("缺少 user id 的 UUID 格式校验 USER_ID_PATTERN")
+    # ★ 首次真机验收栽过的坑：accessTokenForHost 的 key 是纯 host，
+    #    传完整 baseUrl（server）会查不到 ⇒ encryptedFor 不注入 ⇒ 依然 422。
+    if not re.search(r'accessTokenForHost\(host\)', uid_body):
+        errors.append("userIdFromToken 必须用 host（非完整 server URL）查 accessTokenForHost")
 
     # 4. 降级分支（withEncryptedFor 里必须有 null 处理）
     wef = _brace_body(sync, "private fun withEncryptedFor")
@@ -116,7 +120,11 @@ def selftest():
             ' if (userId == null) return body\n'
             ' return body.copy(encryptedFor = userId)\n'
             '}\n'
-            'private fun userIdFromToken(...) { obj["sub"]; USER_ID_PATTERN.matches(it) }\n'
+            'private fun userIdFromToken(...) {\n'
+            ' val host = URL(server).host\n'
+            ' val token = authRepository.accessTokenForHost(host)\n'
+            ' obj["sub"]; USER_ID_PATTERN.matches(it)\n'
+            '}\n'
         ),
         TEST: 'UPDATE 请求体必须带 encryptedFor 等于 user id / CREATE / token 缺失 / 非 UUID',
     }
@@ -126,6 +134,7 @@ def selftest():
         (SYNC, 'api.createCipher(ready)', 'api.createCipher(body)', "CREATE 用回原 body"),
         (SYNC, 'api.updateCipher(op.cipherId, ready)', 'api.updateCipher(op.cipherId, body)', "UPDATE 用回原 body"),
         (SYNC, 'obj["sub"]', 'obj["user"]', "取值不读 sub"),
+        (SYNC, 'accessTokenForHost(host)', 'accessTokenForHost(server)', "传完整 URL 而非 host（真机踩过的坑）"),
         (SYNC, 'if (userId == null) return body', '', "去掉降级分支"),
         (TEST, 'token 缺失', '', "删测试覆盖"),
     ]

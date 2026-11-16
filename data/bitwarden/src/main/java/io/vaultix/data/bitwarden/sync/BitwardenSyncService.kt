@@ -517,7 +517,13 @@ class BitwardenSyncService @Inject constructor(
      * 交由 [withEncryptedFor] 降级——绝不因元数据取值失败阻断同步。
      */
     private fun userIdFromToken(server: String): String? {
-        val token = authRepository.accessTokenForHost(server) ?: return null
+        // ⚠️ accessTokenForHost 的 key 是 **host**（`serverByHost[URL(server).host]`），
+        //    这里传进来的 server 是完整 baseUrl（row.origin，如 https://pwd.example.com）。
+        //    直接传 server 会查不到而返回 null —— 首次真机验收正是栽在这里（422 依旧）。
+        //    与 BitwardenAuthInterceptor 用 `url.host` 取值是同一口径。
+        val host = runCatching { java.net.URL(server).host }.getOrNull()?.takeIf { it.isNotBlank() }
+            ?: return null
+        val token = authRepository.accessTokenForHost(host) ?: return null
         return runCatching {
             val segment = token.split('.').getOrNull(1) ?: return@runCatching null
             val payload = String(java.util.Base64.getUrlDecoder().decode(segment), Charsets.UTF_8)
