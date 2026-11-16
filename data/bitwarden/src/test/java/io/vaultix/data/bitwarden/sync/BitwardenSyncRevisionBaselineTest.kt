@@ -190,7 +190,8 @@ class BitwardenSyncRevisionBaselineTest {
             id = cipherId,
             vaultId = vaultId,
             type = 1,
-            encryptedPayload = """{"id":"$cipherId","type":1,"revisionDate":"$staleRevision","vaultixLocalRevisionDate":"2026-10-01T00:00:00.000Z"}""",
+            encryptedPayload = """{"id":"$cipherId","type":1,"revisionDate":"$staleRevision",""" +
+                """"vaultixLocalRevisionDate":"2026-10-01T00:00:00.000Z"}""",
             revisionDate = staleRevision,
         )
         coEvery { cipherDao.get(cipherId) } returns before

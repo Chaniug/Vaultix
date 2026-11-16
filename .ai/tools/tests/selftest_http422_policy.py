@@ -96,12 +96,7 @@ def _wrong_code():
 
 @case("④ 失败日志不再打响应体（退回只能靠猜的状态）")
 def _no_body_log():
-    mutate(
-        gate.SYNC,
-        '(httpError?.let { safeErrorBody(it) }?.let { " body=$it" } ?: "")',
-        '""',
-        "no-body-log",
-    )
+    mutate(gate.SYNC, "logFlushFailure(\n                        op,", "logNothing(\n                        op,", "no-body-log")
     expect_red("失败日志丢掉响应体")
 
 
@@ -119,7 +114,7 @@ def _no_jwt_redaction():
 
 @case("⑦ 删掉日志限长")
 def _no_limit():
-    mutate(gate.SYNC, ".take(512)", ".take(1_000_000)", "no-limit")
+    mutate(gate.SYNC, "MAX_ERROR_BODY_CHARS = 512", "MAX_ERROR_BODY_CHARS = 1_000_000", "no-limit")
     expect_red("错误体未限长")
 
 

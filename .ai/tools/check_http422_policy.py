@@ -60,12 +60,18 @@ def _read(root: str, rel: str) -> str:
 
 
 def _method(code: str, name: str) -> str:
-    """截一个方法体：从 `fun name(` 起到下一个同缩进 `fun` 为止。"""
-    m = re.search(r"\n    (?:private |internal |public )?(?:suspend )?fun " + re.escape(name) + r"\(", code)
+    """截一个方法体：从 `fun name(` 起到下一个 `fun` 为止（缩进不敏感）。
+
+    #296 新增的 `safeErrorBody` / `logFlushFailure` 是**顶层**私有函数（无缩进），
+    只认 4 空格会取不到函数体而产生假绿，这里必须两种缩进都认。
+    """
+    m = re.search(
+        r"\n[ \t]*(?:private |internal |public )?(?:suspend )?fun " + re.escape(name) + r"\(", code
+    )
     if not m:
         return ""
     tail = code[m.end():]
-    nxt = re.search(r"\n    (?:private |internal |public )?(?:suspend )?fun ", tail)
+    nxt = re.search(r"\n[ \t]*(?:private |internal |public )?(?:suspend )?fun ", tail)
     return tail[:nxt.start()] if nxt else tail
 
 
@@ -90,10 +96,18 @@ def scan(root: str):
         )
 
     flush = _method(code, "flushPending")
-    if "safeErrorBody(" not in flush:
+    if "logFlushFailure(" not in flush:
         problems.append(
-            f"{SYNC}: flushPending 失败日志没有调用 safeErrorBody —— "
+            f"{SYNC}: flushPending 失败分支没有调用 logFlushFailure —— "
             "422 的真实原因（missing field / invalid type）进不了日志（#296）"
+        )
+
+    log_fn = _method(code, "logFlushFailure")
+    # `::safeErrorBody` 这种函数引用没有括号；只认 `safeErrorBody(` 会假红。
+    if "safeErrorBody" not in log_fn:
+        problems.append(
+            f"{SYNC}: logFlushFailure 没有调用 safeErrorBody —— "
+            "失败日志只记 code，下一轮还是只能靠猜（#296）"
         )
 
     safe_fn = re.search(r"fun safeErrorBody\(", raw)
@@ -109,8 +123,10 @@ def scan(root: str):
         ):
             if f'"{token}"' not in body:
                 problems.append(f"{SYNC}: safeErrorBody 没有替换{why}（占位符 `{token}` 缺失）")
-        if not re.search(r"\.take\(\s*\d+\s*\)", body):
+        if not re.search(r"\.take\(\s*MAX_ERROR_BODY_CHARS\s*\)", body):
             problems.append(f"{SYNC}: safeErrorBody 没有限长，错误体可能冲爆日志（#296）")
+        if not re.search(r"MAX_ERROR_BODY_CHARS\s*=\s*512", code):
+            problems.append(f"{SYNC}: 错误体限长常量不是 512（#296）")
 
     advance = _method(code, "advanceLocalRevision")
     if not re.search(r"vaultixLocalRevisionDate\s*=\s*null", advance):

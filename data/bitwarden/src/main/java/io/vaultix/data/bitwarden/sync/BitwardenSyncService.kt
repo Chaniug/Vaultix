@@ -60,6 +60,9 @@ private const val TAG = "VaultixSync"
  */
 private const val STUCK_RETRY_THRESHOLD = 10
 
+/** 诊断日志里错误响应体的最大字符数（@suppress MagicNumber：纯日志预算）。 */
+private const val MAX_ERROR_BODY_CHARS = 512
+
 /**
  * HTTP 错误响应体的**脱敏**预览，只进诊断日志（#296）。
  *
@@ -79,7 +82,30 @@ internal fun safeErrorBody(error: HttpException): String? {
         .replace(Regex("""\d+\.[A-Za-z0-9+/=]{8,}\|[A-Za-z0-9+/=]*\|[A-Za-z0-9+/=]{8,}"""), "<enc>")
         .replace(Regex("""[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"""), "<jwt>")
         .replace(Regex("""[A-Za-z0-9+/_=-]{24,}"""), "<redacted>")
-        .take(512)
+        .take(MAX_ERROR_BODY_CHARS)
+}
+
+/**
+ * 单条推送失败的诊断日志（#296）。
+ *
+ * 单独成函数是为了不让 `flushPending` 的圈复杂度继续涨：这里每多一个
+ * `?.let` / `?:` 都是一条分支，而 detekt 对 flushPending 的阈值是 14。
+ */
+private fun logFlushFailure(
+    op: PendingOpEntity,
+    error: Throwable,
+    definitive: Boolean,
+    conflict: Boolean,
+) {
+    VaultixLog.w(TAG) {
+        val httpError = error as? HttpException
+        val body = httpError?.let(::safeErrorBody)?.let { " body=$it" }.orEmpty()
+        "flushPending op=${op.op} id=${op.cipherId} " +
+            "code=${httpError?.code()} " +
+            "definitive=$definitive " +
+            "conflict=$conflict" +
+            body
+    }
 }
 
 /**
@@ -247,20 +273,14 @@ class BitwardenSyncService @Inject constructor(
                 .onFailure { error ->
                     // 留一条**带分支判定**的诊断：排查「改动为什么没上去」时，
                     // 第一件事就是分清它走的是"弃单"还是"重试"。
-                    //
-                    // ★ #296：4xx 只记 code 不够。Vaultwarden 的 422 来自 Rocket 的
-                    //   `Json<CipherData>` 守卫（业务错误一律 400），只有响应体里的
-                    //   `missing field` / `invalid type` 才能指出是哪个请求字段出了问题。
-                    //   这里把响应体**脱敏后**记下来（EncString / 长 token 全部抹掉），
-                    //   避免下一轮继续靠猜。
-                    VaultixLog.w(TAG) {
-                        val httpError = error as? HttpException
-                        "flushPending op=${op.op} id=${op.cipherId} " +
-                            "code=${httpError?.code()} " +
-                            "definitive=${error.isDefinitiveHttpFailure()} " +
-                            "conflict=${error.isConflictHttpFailure()}" +
-                            (httpError?.let { safeErrorBody(it) }?.let { " body=$it" } ?: "")
-                    }
+                    // ★ #296：4xx 只记 code 不够，响应体里的 `missing field ...`
+                    //   才能指出是哪个请求字段出了问题；脱敏与限长都在 logFlushFailure 里。
+                    logFlushFailure(
+                        op,
+                        error,
+                        error.isDefinitiveHttpFailure(),
+                        error.isConflictHttpFailure(),
+                    )
                     if (handleOperationFailure(effective, error)) conflicts++
                     firstError = firstError ?: error
                 }
