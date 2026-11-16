@@ -24,7 +24,33 @@
 - 已接进 CI：`ci-debug.yml` 的 `sandbox-tests` job 用**同一份脚本**，与 `android-ci` 并行
   ⇒ 本地绿 ⇒ CI 不会红在同一件事上。
 
-## 🕐 最新状态（2026-11-16 · #297 同步看不见 ⇒ 无法定位）
+## 🕐 最新状态（2026-11-16 · #298 请求体缺 encryptedFor ⇒ 1.37+ 服务端 422）
+
+> **一句话**：真机改网址同步，服务端始终不变——根因锁定为**请求体缺 `encryptedFor`**，
+> 而 Vaultwarden 1.37+（web-v2025.6.0）在 `Json<CipherData>` 守卫里把它设为必填，
+> 缺即在 handler 之前 **422**。官方 bitwarden-android / keyguard / Monica 三客户端都发。
+
+- **真机取证链（四层闭环，首次全落地）**：
+  ① 日志 `flushPending op=UPDATE id=d19f28e7… code=422 definitive=false`，body 是 Rocket 默认 HTML；
+  ② 从设备 `pending_ops.payload` 直读被拒请求体原文（`createdAt` 与日志相差 12ms，确证是本次）；
+  ③ 三参考项目对照都发 `encryptedFor` = JWT `sub`；
+  ④ Vaultix `CipherRequest` 全模块零出现 ⇒ 必然 422。
+  ⚠️ 推翻了两个早期错误假设：不是通行密钥（217 条里带 fido2 的 ~20 条）、不是 `creationDate` 微秒精度。
+- **为什么 #294~#297 没找到**：本地起 1.30/1.33 全 200（旧版无此必填字段），静态对照的也是旧版服务端模型；
+  变化发生在 1.37。这不是排查失误，是服务端协议静默升级。
+- **已落地修复**（本次，`58e3440b` 之后）：
+  ① `CipherRequest` 加 `@SerialName("encryptedFor")`，默认 null（存量兼容）；
+  ② 统一发送出口 `executeOperation` 在 CREATE/UPDATE 发送前注入 `encryptedFor` = access token 的 `sub`（UUID 校验），
+     **存量 op 也救活**（不必清队列）；取不到 token 时降级跳过 + WARN，不阻断同步；
+  ③ 新增 `BitwardenSyncEncryptedForTest` 4 例（UPDATE/CREATE 注入、token 缺失降级、非 UUID 降级）；
+  ④ 新增 `check_encrypted_for.py` + 7 组变异自测，接 `ci-debug.yml` 两步。
+- **对"同步快"的说明**：Bitwarden 协议只有 `GET /sync` 全量端点（Monica 亦然），无增量拉取。
+  修好本 bug 后就地消掉了"每次推 422 + 全量拉取"的无用功，revision 未变时直接 Skipped——
+  这才是体感上最大的提速；真有改动时的全量下载是协议限制，短期不动。
+- ⚠️ **待 CI 真编译 + 单测**（本机无法编译）；只 push `main`，绝不推 `rele`。
+  装机复现判据：日志出现 `flushPending op=UPDATE … code=200`（不再是 422），服务端修改时间推进。
+
+## 🕐 上一轮（2026-11-16 · #297 同步看不见 ⇒ 无法定位）
 
 > **一句话**：云端还是没变、点同步还是"成功"，但这次的日志比上一轮**更少** ——
 > 只剩一行 `sync skipped: revision 未变`，**连 `flushPending` 都没有**。

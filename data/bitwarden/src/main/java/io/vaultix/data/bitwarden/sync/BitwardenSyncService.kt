@@ -262,7 +262,7 @@ class BitwardenSyncService @Inject constructor(
         val createdIdRemap = mutableMapOf<String, String>()
         for (op in ops) {
             val effective = createdIdRemap[op.cipherId]?.let { op.copy(cipherId = it) } ?: op
-            runCatching { executeOperation(api, effective) }
+            runCatching { executeOperation(api, effective, server) }
                 .onSuccess { response ->
                     if (effective.op == OP_CREATE) {
                         remapCreatedLocalRow(effective, response)?.let { serverId ->
@@ -463,11 +463,20 @@ class BitwardenSyncService @Inject constructor(
         )
     }
 
-    private suspend fun executeOperation(api: BitwardenVaultApi, op: PendingOpEntity): CipherResponse? {
+    private suspend fun executeOperation(
+        api: BitwardenVaultApi,
+        op: PendingOpEntity,
+        server: String,
+    ): CipherResponse? {
         val body = op.payload?.let { json.decodeFromString<CipherRequest>(it) }
+        // ★ #298（2026-11-16 真机 422）：在**发送前**统一注入 encryptedFor。
+        //   放在这里而不是写路径 mapper，是为了救活存量 op —— 老队列的 payload 里
+        //   没有这个字段，但只要发送前填上就能通过 Vaultwarden 1.37+ 的守卫。
+        //   CREATE / UPDATE 都要（同一协议要求）；其余 op 无请求体，不受影响。
+        val ready = body?.let { withEncryptedFor(it, server) }
         return when (op.op) {
-            OP_CREATE -> if (body != null) api.createCipher(body) else null
-            OP_UPDATE -> if (body != null) api.updateCipher(op.cipherId, body) else null
+            OP_CREATE -> if (ready != null) api.createCipher(ready) else null
+            OP_UPDATE -> if (ready != null) api.updateCipher(op.cipherId, ready) else null
             OP_SOFT_DELETE -> {
                 api.softDeleteCipher(op.cipherId)
                 null
@@ -479,6 +488,43 @@ class BitwardenSyncService @Inject constructor(
             OP_RESTORE -> api.restoreCipher(op.cipherId)
             else -> null // 未知 op 类型：按成功移除（防毒丸条目卡死整条队列）
         }
+    }
+
+    /**
+     * 发送前给 CREATE / UPDATE 请求体补上 `encryptedFor`（#298）。
+     *
+     * 值 = 当前账号 user id = access token 的 `sub` claim（与 keyguard / 官方客户端一致）。
+     * 从已注入的 [authRepository] 取 token，**零网络往返、不依赖 sync 是否跑过**。
+     *
+     * 取不到（token 缺失 / JWT 畸形 / sub 非 UUID）时**原样返回 body 并留 WARN**：
+     * 绝不为了一个元数据字段阻断用户的同步（旧版 Vaultwarden 本就忽略它，
+     * 跳过注入在旧版上仍能成功；新版会 422，但那属于 token 异常，日志可诊断）。
+     */
+    private fun withEncryptedFor(body: CipherRequest, server: String): CipherRequest {
+        val userId = userIdFromToken(server)
+        if (userId == null) {
+            VaultixLog.w(TAG) {
+                "encryptedFor 未注入（无法从 access token 解析 user id）⇒ 旧版服务端兼容，新版可能 422"
+            }
+            return body
+        }
+        return body.copy(encryptedFor = userId)
+    }
+
+    /**
+     * JWT payload 的 `sub` = user id（对齐 keyguard `VaultwardenAccounts.userId()`）。
+     * 任一步失败（token 缺失 / 非三段式 / base64 畸形 / 无 sub / 非 UUID）返回 null，
+     * 交由 [withEncryptedFor] 降级——绝不因元数据取值失败阻断同步。
+     */
+    private fun userIdFromToken(server: String): String? {
+        val token = authRepository.accessTokenForHost(server) ?: return null
+        return runCatching {
+            val segment = token.split('.').getOrNull(1) ?: return@runCatching null
+            val payload = String(java.util.Base64.getUrlDecoder().decode(segment), Charsets.UTF_8)
+            val obj = json.parseToJsonElement(payload) as? kotlinx.serialization.json.JsonObject
+                ?: return@runCatching null
+            (obj["sub"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+        }.getOrNull()?.takeIf(USER_ID_PATTERN::matches)
     }
 
     /** 取服务端 revision；失败返回 null（交由上层决定是否继续）。 */
@@ -859,6 +905,10 @@ class BitwardenSyncService @Inject constructor(
     }
 
     private companion object {
+        /** Bitwarden user id 是标准 UUID；防止畸形 sub 被打进请求体（#298）。 */
+        val USER_ID_PATTERN =
+            Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
         const val OP_CREATE = "CREATE"
         const val OP_UPDATE = "UPDATE"
         const val OP_SOFT_DELETE = "SOFT_DELETE"

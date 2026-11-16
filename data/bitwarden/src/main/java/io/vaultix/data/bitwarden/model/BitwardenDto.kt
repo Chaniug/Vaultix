@@ -349,6 +349,32 @@ data class CipherRequest(
     @SerialName("collectionIds") val collectionIds: List<String> = emptyList(),
     @SerialName("lastKnownRevisionDate") val lastKnownRevisionDate: String? = null,
     /**
+     * 本条密文是为哪个用户加密的（= 当前账号的 user id，JWT 的 `sub` claim）。
+     *
+     * ## ★ 为什么必须有（#298，2026-11-16 真机 422）
+     *
+     * Vaultwarden **1.37+（web-v2025.6.0）** 在 `CipherData` 请求守卫里加了
+     * `encrypted_for: UserId`（当时非 Option）——请求不带即在路由 handler 之前
+     * 被 Rocket 以 **422** 拒绝，条目永远推不上去。旧版（≤1.36）没有此字段、
+     * 忽略多发的字段，所以带上它对旧版**向后兼容**。
+     *
+     * 官方两个客户端都发：bitwarden-android `CipherJsonRequest.encryptedFor`、
+     * keyguard `BitwardenCipherUploadProtocol.requireUserId(account)`；连 Monica
+     * 的旧版 Vaultwarden 兼容测试都断言 UPDATE 必须带它。故这是协议要求，
+     * 不是某个服务端的怪癖。
+     *
+     * ## 填值位置（别散在 mapper 里）
+     *
+     * 它是**请求元数据**（"为谁加密"），不是条目数据。统一在发送出口
+     * `BitwardenSyncService.executeOperation()` 注入，这样：
+     * - CREATE / UPDATE 都覆盖；
+     * - **存量 pending op**（payload 里没这个字段的老队列）也能被救活——
+     *   发送前才注入，不必改库、不必清队列。
+     *
+     * 默认 null 是为了存量 payload 的反序列化兼容；真正发送前必被填成 UUID。
+     */
+    @SerialName("encryptedFor") val encryptedFor: String? = null,
+    /**
      * 条目独立密钥的**包裹态**（EncString，被账号密钥或组织密钥包裹）。
      *
      * ## ★★ 为什么它必须能出现在请求体里（#295，2026-11-16 真机）

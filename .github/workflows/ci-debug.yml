@@ -308,6 +308,16 @@ jobs:
       - name: Self-test sync observability checker
         run: python3 "$GITHUB_WORKSPACE/.ai/tools/tests/selftest_sync_observability.py"
 
+      # ★ #298（2026-11-16 真机 422）：CREATE / UPDATE 请求体必须带 encryptedFor。
+      #   真机从 pending_ops.payload 直读的请求体确无此字段；Vaultwarden 1.37+ 在
+      #   Json<CipherData> 守卫里要求它，缺即在 handler 前 422。官方三客户端都发。
+      #   删掉注入不会编译失败、detekt 也抓不到 —— 只有本关能拦。
+      - name: Check encryptedFor on cipher upload (#298)
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/check_encrypted_for.py" "$GITHUB_WORKSPACE"
+
+      - name: Self-test encryptedFor checker
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/check_encrypted_for.py" --selftest
+
       # ★ 2026-11-10：KDBX 来源标签唯一真值源门禁。
       #
       # 真机反馈 #264：OneDrive 上的 KDBX 库在**库列表**里显示「本地文件 · uit」，
