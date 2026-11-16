@@ -24,40 +24,43 @@
 - 已接进 CI：`ci-debug.yml` 的 `sandbox-tests` job 用**同一份脚本**，与 `android-ci` 并行
   ⇒ 本地绿 ⇒ CI 不会红在同一件事上。
 
-## 🕐 最新状态（2026-11-16 · #296 HTTP 422 静默弃单）
+## 🕐 最新状态（2026-11-16 · #297 同步看不见 ⇒ 无法定位）
 
-> **一句话**：改完条目本地看着正常，点同步也"成功"，云端却没变。真机日志把链条钉死了：
-> `flushPending ... code=422 definitive=true` → 422 被当成确定性失败**弃单** →
-> 下次同步没有 pending op、revision 未变 → 直接 `Skipped`。
+> **一句话**：云端还是没变、点同步还是"成功"，但这次的日志比上一轮**更少** ——
+> 只剩一行 `sync skipped: revision 未变`，**连 `flushPending` 都没有**。
+> 于是分不清「改动没进队列」与「进了队列被清掉」，两种故障修法完全不同。
 
-- **证据**：`vaultix_logs_20261116_142908.txt`（`0.13.4-dev-abeb7bc`，含 #295）。
-  14:28:52 收到 422；14:29:03 `sync skipped: revision 未变`。
-- **为什么不是 #295 没生效**：#295 修的是「字段用错钥匙」，那会让云端**收下但解不开**；
-  本次是服务端**直接拒收**（422）。两件事叠在同一条真机路径上，状似同一个 bug。
-- **静态排除**：对照官方 `CipherRequest` 与 Vaultwarden 1.24/1.28/1.30/1.33/main 的
-  `CipherData`，并在本机起 1.30.0 / 1.33.0 实例用同构请求体实测 PUT，全部 200
-  ⇒ 请求体结构本身不是充分原因；**必须拿到 422 响应体**才能定位具体字段。
-- **已落地的处置**：① 422 与 409 同列为可重试，**不再弃单**（用户改动保住）；
-  ② `flushPending` 失败日志带上**脱敏**响应体（`safeErrorBody`：EncString / JWT /
-  长 token 全抹掉，限长 512）——下一份日志应能直接看到 `missing field ...`；
-  ③ UPDATE 成功后清掉 `vaultixLocalRevisionDate`，让详情页「修改于」改用服务端时间，
-  不再用错误的判据判断同步。
-- **验证**：新增 3 例行为测试（`data/bitwarden` cleanTest 后 **121 例全绿** = 118+3）；
-  新增 `check_http422_policy.py` + **10 条变异自测**，接 `ci-debug.yml` 两步
-  （`android-ci` 40 → 42 步）。22 个门禁 / 19 个自测本地全绿，
-  `compileFullDebugKotlin` / `compileFullDebugUnitTestKotlin` 通过。
-- **CI 回填（2026-11-16）**：`d881fb33` 两 run 全绿——
-  `Android CI (Debug)` [43825961602](https://github.com/Chaniug/Vaultix/actions/runs/43825961602)
-  （detekt / `Check HTTP 422 failure policy (#296)` / `Self-test HTTP 422 failure policy checker` /
-  unit tests 全 success），`AI docs consistency` 43825961594 success。
-  preview 包 `Vaultix-d881fb3.apk`（`0.13.4-dev-d881fb3`，versionCode 13004，35.9 MB）
-  已发到 [preview release](https://github.com/Chaniug/Vaultix/releases/tag/preview)。
-- **待用户配合**：用 preview 包复现一次并回传开发者日志，重点看
-  `VaultixSync: flushPending ... code=422 ... body=...`；据 body 再补请求体字段对齐。
+- **证据**：`vaultix_logs_20261116_155316.txt`（`0.13.4-dev-d881fb3`，**已含 #296**）。
+  15:51:54 点同步；15:51:54.315 只有 `sync skipped: revision 未变`。
+  对比上一份 `..._142908.txt` 里明明有 `flushPending ... code=422`。
+- **为什么这轮没能直接给出服务端字段**：唯一根因是**可观测性缺口**。
+  `flushPending` 在队列为空时是**静默 `return Result.success(Unit)`** ——
+  没日志、没痕迹，而 `executeSync` 随后照常报 `Skipped`（上层当成功）。
+  写路径 `flushAfterLocalWrite` 成功时同样**一条日志都没有**。
+- **静态排查（又一次）**：`BitwardenJson` 是 `explicitNulls=false`、未开
+  `encodeDefaults` ⇒ null 字段被省略；`buildUpdateRequest` 里"改 URI"路径上的
+  `type` / `match` / `reprompt` 都是有界 Int，`uri` / `name` 是 EncString 或 null
+  ⇒ **请求体值层面也不存在能凭空造出 422 的非法值**（与本地起 1.30/1.33 实测全 200 一致）。
+- **已落地的处置**：① `flushPending` 空队列**必须留 WARN**（"队列为空 + 不会上传"两层语义）；
+  ② 开头报「待推送 N 条（按 op 类型）」、收尾报「全部成功 / 剩 M 条留在队列」；
+  ③ 写路径统一出口 `flushAfterLocalWrite` 成功与失败**都留痕**，且共用 `VaultixSync` tag
+  ⇒ 用户一次 `adb logcat -s VaultixSync` 就能看到「入了什么队 + 推了什么」；
+  ④ 日志摘要只聚合 op 类型，**不得带条目 id**（`VaultixLog` 铁律）。
+- **验证**：新增 `BitwardenSyncFlushObservabilityTest` 3 例
+  （空队列留痕 / 成功报条数且无 id / 失败说明改动仍在队列），
+  `data/bitwarden` **124 例全绿**（121+3）；行为反证：把空队列改回静默 ⇒ 用例立刻红，
+  字节级还原复绿。新增 `check_sync_observability.py` + **14 条变异自测**，
+  接 `ci-debug.yml` 两步（`android-ci` 42 → 44 步）。
+  ⚠️ 写门禁时**自测抓出 3 个真实假绿**（KDoc 里同词、按"下一个 fun"截取把注释算进函数体、
+  判断常量名用了 sanitize 后的文本），均已修并有对应用例。
+- **下一步（需要用户配合）**：装新包复现一次，回传日志。这次一定能看到
+  `flushPending 队列为空（无待推送 op）⇒ 本次同步只做拉取，不会上传任何改动`
+  或 `flushPending 开始：待推送 N 条（UPDATE=1）` + `flushPending op=UPDATE ... code=... body=...`。
+  两句话直接判定故障在**写路径**还是**推送路径**，不必再猜。
 
-> 上一轮（#295 编辑条目用错钥匙）已按 8.9 §6 迁出：
-> [archive/README-状态块-2026-11-16-295.md](./archive/README-状态块-2026-11-16-295.md)。
-> 再上一轮（#294）见 [archive/README-状态块-2026-11-16-294.md](./archive/README-状态块-2026-11-16-294.md)。
+> 上一轮（#296 HTTP 422 静默弃单）已按 8.9 §6 迁出：
+> [archive/README-状态块-2026-11-16-296.md](./archive/README-状态块-2026-11-16-296.md)。
+> 再上一轮（#295 编辑条目用错钥匙）见 [archive/README-状态块-2026-11-16-295.md](./archive/README-状态块-2026-11-16-295.md)。
 
 ---
 ## 🕐 上一轮（2026-11-15 · v0.13.4 正式发布）

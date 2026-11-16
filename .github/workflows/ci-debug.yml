@@ -299,6 +299,15 @@ jobs:
       - name: Self-test HTTP 422 failure policy checker
         run: python3 "$GITHUB_WORKSPACE/.ai/tools/tests/selftest_http422_policy.py"
 
+      # ★ #297（2026-11-16 真机）：同步必须能自证"改动有没有进队列、有没有推上去"。
+      #   真机日志从「有 422」退化成只剩一行 `revision 未变`，无法区分
+      #   「没进队列」与「被清掉」—— 删掉这些日志不会有编译错误，只有本关能拦。
+      - name: Check sync observability (#297)
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/check_sync_observability.py" "$GITHUB_WORKSPACE"
+
+      - name: Self-test sync observability checker
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/tests/selftest_sync_observability.py"
+
       # ★ 2026-11-10：KDBX 来源标签唯一真值源门禁。
       #
       # 真机反馈 #264：OneDrive 上的 KDBX 库在**库列表**里显示「本地文件 · uit」，

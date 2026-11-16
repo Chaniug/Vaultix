@@ -2,6 +2,7 @@ package io.vaultix.data.repository
 
 import io.vaultix.crypto.di.CryptoDispatcher
 import io.vaultix.common.TrashCleanupPolicy
+import io.vaultix.common.logging.VaultixLog
 import io.vaultix.data.bitwarden.mapper.CipherMapper
 import io.vaultix.data.bitwarden.model.CipherDto
 import io.vaultix.data.bitwarden.model.toStoredCipherDto
@@ -618,7 +619,7 @@ class ItemRepositoryImpl @Inject constructor(
                 ?.let { dto -> mapper.toDomain(dto, key) }
         }
         if (decoded.isEmpty()) {
-            io.vaultix.common.logging.VaultixLog.d("VaultixItem") {
+            VaultixLog.d("VaultixItem") {
                 "decodeAll: rows=${rows.size} 全部解密失败 ⇒ 会话密钥不可用，作废会话要求重新解锁"
             }
             sessions.lock(vaultId)
@@ -688,8 +689,23 @@ class ItemRepositoryImpl @Inject constructor(
         val server = row?.origin?.takeIf { VaultKind.fromName(row.kind) == VaultKind.BITWARDEN }
             ?: return VaultSaveOutcome.Queued
         val flush = syncService.flushPending(vaultId, server)
-        if (flush.isSuccess) return VaultSaveOutcome.Synced
+        if (flush.isSuccess) {
+            // ★ #297（2026-11-16 真机）：写路径必须能自证"改动已上云"。
+            //
+            //   此前 `flushPending` 成功时**一条日志都没有**，于是用户日志里只剩
+            //   `sync skipped: revision 未变` —— 分不清"改动压根没进队列"（写路径没跑）
+            //   与"进了队列但被清掉"（推送路径丢了）。两种情况修法完全不同。
+            //   这条与 `flushPending` 内的「待推送 N 条」「完成：N 条全部推送成功」
+            //   串起来，日志就能证明一次编辑的完整去向了。
+            VaultixLog.w(SYNC_TAG) { "本地写回完成并已推送：$vaultId 无待推送残留" }
+            return VaultSaveOutcome.Synced
+        }
         val error = flush.exceptionOrNull()
+        // ★ #297：推送失败也必须留痕，且要说清"本地改动还在队列里"（不是丢了）。
+        VaultixLog.w(SYNC_TAG) {
+            "本地写回已落库，但推送失败（${error?.let { it::class.simpleName }}），" +
+                "改动仍在队列等待重试"
+        }
         if (createdCipherId != null && cipherDao.get(createdCipherId) == null) {
             throw IllegalStateException(
                 "服务器拒绝了这次保存，条目未保存：${error?.message.orEmpty()}",
@@ -717,3 +733,14 @@ class ItemRepositoryImpl @Inject constructor(
  */
 private const val KDBX_TRASH_CLEANUP_REASON =
     "KDBX 库的回收站由文件自身管理，不能按保留期自动清理"
+
+/**
+ * 写回与推送链路的日志 tag（#297）。
+ *
+ * 刻意与 `data:bitwarden` 的 `VaultixSync` **保持一致**，理由：排查"改动为什么没上云"
+ * 时，用户只要 `adb logcat -s VaultixSync` 就能同时看到「保存入了什么队」与
+ * 「推送推了什么」，两段日志在同一条时间线上 —— 分成两个 tag 反而要来回对时间。
+ *
+ * ⚠️ 只记 op 类型与条数，不记条目 id / 明文（`VaultixLog` 铁律）。
+ */
+private const val SYNC_TAG = "VaultixSync"

@@ -109,6 +109,18 @@ private fun logFlushFailure(
 }
 
 /**
+ * 队列里各 op 类型的条数摘要（#297）。
+ *
+ * 只记**类型与条数**，不记 id —— `VaultixLog` 的铁律要求这条摘要能出现在别人的
+ * 错误报告里而不泄露任何内容。用途是让「同步到底推了什么」在日志里一目了然。
+ */
+private fun List<PendingOpEntity>.countByOp(): String =
+    groupBy { it.op }
+        .entries
+        .joinToString(" ") { (op, list) -> "$op=${list.size}" }
+        .ifEmpty { "无" }
+
+/**
  * Bitwarden 同步执行（M1）。
  *
  * 流程：推送本地待上传 → revision 预检 → 全量拉取 → 安全校验 → 落库 →
@@ -170,7 +182,9 @@ class BitwardenSyncService @Inject constructor(
                     "本地改动未能推送（${flushFailure::class.simpleName}），稍后将重试",
                 )
             }
-            VaultixLog.d(TAG) { "sync skipped: revision 未变（$localRevision）" }
+            VaultixLog.w(TAG) {
+                "sync skipped: revision 未变（$localRevision）· 队列已空 ⇒ 本次不上传任何改动"
+            }
             return SyncOutcome.Skipped
         }
 
@@ -216,7 +230,18 @@ class BitwardenSyncService @Inject constructor(
      */
     suspend fun flushPending(vaultId: String, server: String): Result<Unit> {
         val ops = pendingOpDao.listByVault(vaultId)
-        if (ops.isEmpty()) return Result.success(Unit)
+        if (ops.isEmpty()) {
+            // ★ #297（2026-11-16 真机）：队列为空**必须留痕**。
+            //
+            //   此前这里是静默 `return Result.success(Unit)`，于是用户日志里只剩一行
+            //   `sync skipped: revision 未变` —— 无从判断"改动没进队列"还是"队列被清了"。
+            //   这两种情况的修法完全不同（写路径 vs 推送路径），没有这条日志只能靠猜。
+            VaultixLog.w(TAG) {
+                "flushPending 队列为空（无待推送 op）⇒ 本次同步只做拉取，不会上传任何改动"
+            }
+            return Result.success(Unit)
+        }
+        VaultixLog.w(TAG) { "flushPending 开始：待推送 ${ops.size} 条（${ops.countByOp()}）" }
 
         val api = apiFactory.vault(server)
         var firstError: Throwable? = null
@@ -305,7 +330,26 @@ class BitwardenSyncService @Inject constructor(
                 "有 $stuck 条改动连续失败 $STUCK_RETRY_THRESHOLD 次以上仍未推送成功（保留在队列，未丢弃）"
             }
         }
+        logFlushSummary(vaultId, ops.size, firstError != null)
         return firstError?.let { Result.failure(it) } ?: Result.success(Unit)
+    }
+
+    /**
+     * 一次 `flushPending` 的收尾统计（#297）。
+     *
+     * 与开头的「待推送 N 条」配对，日志里就能直接算出成功/失败条数，
+     * 不必再靠 422 / 409 那几行是否存在来反推。抽成独立函数是为了不抬高
+     * `flushPending` 的圈复杂度（detekt 阈值 14）。
+     */
+    private suspend fun logFlushSummary(vaultId: String, attempted: Int, hasFailure: Boolean) {
+        if (!hasFailure) {
+            VaultixLog.w(TAG) { "flushPending 完成：$attempted 条全部推送成功，队列已清空" }
+            return
+        }
+        val remaining = pendingOpDao.listByVault(vaultId).size
+        VaultixLog.w(TAG) {
+            "flushPending 完成：推送 ${attempted - remaining} 条成功，剩 $remaining 条留在队列"
+        }
     }
 
     /**
