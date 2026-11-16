@@ -169,6 +169,14 @@ class CipherMapper @Inject constructor(
         key: SymmetricCryptoKey,
     ): List<VaultItem> = dtos.map { dto -> toDomain(dto, key) }
 
+    /**
+     * 新建条目的上传体。
+     *
+     * ⚠️ 新建路径**不携带 `key`**（服务端还没有这条记录，也就没有"原密钥"可言），
+     * 因此所有字段一律用**账号密钥**加密 —— 这正是服务端与其它客户端在同一场景下的预期
+     * （见 `CipherRequest.key` 的 KDoc）。写回路径不同，那条要求用条目自己的钥匙，
+     * 见 [toUpdateRequest]。
+     */
     fun toRequest(
         item: VaultItem,
         key: SymmetricCryptoKey,
@@ -233,35 +241,73 @@ class CipherMapper @Inject constructor(
      *   非本类型条目沿用服务端原密文；
      * - custom fields：按表单意图整体写回（可增删改 + 4 种类型）；
      * - secureNote 段：仅 SecureNote 类型写入，其余沿用原值；
-     * - 条目独立密钥（per-item key）与本方法无关：保留段直接复用服务端密文，
-     *   不重新加密。
+     * - 条目独立密钥（per-item key）：★ 见下方 [contentKey] —— 条目有自己的密钥时，
+     *   **可编辑字段必须用它加密**，并把它的包裹态原样带回请求体（#295）。
      */
     fun toUpdateRequest(
         item: VaultItem,
         stored: CipherDto,
         key: SymmetricCryptoKey,
     ): CipherRequest {
+        // ★★ #295（2026-11-16 真机）：「用哪把钥匙加密字段」与「用哪把钥匙解密旧值」
+        // 是**同一个问题**，必须同一处作答。
+        //
+        // 此前的口径是「一律用账号密钥加密字段」，与读方向（条目密钥优先 → 账号密钥回退）
+        // **不对称**：带 key 的条目被编辑后，其它客户端（只按 key 解）全部解不开，
+        // 而 Vaultix 自己靠回退读得回来 ⇒ 本地一切正常、云端一片沉默。
+        //
+        // 对齐官方 `Cipher.toEncryptedNetworkCipher()`（SDK 已用该条目的
+        // EncryptionContext 加密）与 Keyguard `buildCipherCodecPair`
+        // （`itemCrypto = key != null ? 条目密钥 : 全局密钥`）。
+        val itemKey = resolveItemKey(stored, key)
+        // ★ 用「有没有」这个**显式布尔**接管两处判断，而不是在下面各写一次 `itemKey != null`：
+        //   两处口径一旦漂移，就会退化成「字段用账号密钥加密、却又带上了条目密钥的 key」
+        //   —— 那比原缺陷更难查（连 Vaultix 自己都读不回来了）。
+        val hasItemKey = itemKey != null
+        val contentKey = itemKey ?: key
+        return try {
+            buildUpdateRequest(item, stored, key, contentKey, hasItemKey)
+        } finally {
+            // 条目密钥是**复制**出来的实例（见 resolveItemKey），用完必须清零；
+            // 账号密钥由会话持有，**绝不能**在这里 clear。
+            itemKey?.clear()
+        }
+    }
+
+    /**
+     * [toUpdateRequest] 的实现体（把 try/finally 挡在外面，让密钥清理只写一次）。
+     *
+     * @param contentKey 加密**可编辑字段**用的钥匙（条目密钥优先，回退账号密钥）
+     * @param hasItemKey 条目是否本来就有自己的密钥 —— 决定请求体带不带 `key`
+     */
+    private fun buildUpdateRequest(
+        item: VaultItem,
+        stored: CipherDto,
+        accountKey: SymmetricCryptoKey,
+        contentKey: SymmetricCryptoKey,
+        hasItemKey: Boolean,
+    ): CipherRequest {
         // ★ 密码变更的连带账（#209）：`passwordRevisionDate` + `passwordHistory`。
         // 两件事必须**一起**算：它们依赖同一次"旧密码解密"，分开算会解两遍 KDF 无关的
         // 对称解密，且容易算出一个改、另一个不改的自相矛盾请求。
-        val revision = passwordRevisionPlan(item, stored, key)
+        val revision = passwordRevisionPlan(item, stored, accountKey)
         return CipherRequest(
             type = mapTypeToInt(item.type),
-            name = crypto.encryptString(item.title, key),
-            notes = item.notes.takeIf { it.isNotBlank() }?.let { crypto.encryptString(it, key) },
+            name = crypto.encryptString(item.title, contentKey),
+            notes = item.notes.takeIf { it.isNotBlank() }?.let { crypto.encryptString(it, contentKey) },
             // 2026-09-08：改为按**表单意图**写入（此前固定沿用 stored，等于用户在
             // Vaultix 里根本无法改文件夹 / 收藏 / 主密码二次验证）
             favorite = item.favorite,
             folderId = item.folderId,
             reprompt = repromptToInt(item.reprompt),
-            login = overlayLogin(item, stored, key, revision.revisionDate),
-            card = overlayCard(item, stored, key),
-            identity = overlayIdentity(item, stored, key),
+            login = overlayLogin(item, stored, contentKey, revision.revisionDate),
+            card = overlayCard(item, stored, contentKey),
+            identity = overlayIdentity(item, stored, contentKey),
             secureNote = overlaySecureNote(item, stored),
-            sshKey = overlaySshKey(item, stored, key),
+            sshKey = overlaySshKey(item, stored, contentKey),
             // 自定义字段改为按**表单意图**写回（此前固定沿用 stored.fields，
             // 等于用户在 Vaultix 里无法增删改自定义字段）
-            fields = item.customFields.map { mapCustomFieldRequest(it, key) },
+            fields = item.customFields.map { mapCustomFieldRequest(it, contentKey) },
             // ------------------------------------------------------------------
             // ★ 以下三段**只透传、不解释**（2026-09-23）：
             //
@@ -292,6 +338,14 @@ class CipherMapper @Inject constructor(
             // 集合归属透传（2026-10-21）：不带 = 服务端整体替换成空 = 条目从所有集合掉出。
             collectionIds = stored.collectionIds,
             lastKnownRevisionDate = stored.revisionDate.takeIf { it.isNotBlank() },
+            // ★★ 条目密钥的包裹态必须**原样**带回（#295）。
+            //
+            // 服务端对 key 是整体替换语义：这次编辑不带，条目在服务端就失去自己的密钥，
+            // 而字段仍是用条目密钥加密的密文 ⇒ 谁的解不开（比原缺陷更坏的死数据）。
+            //
+            // ⚠️ 反之，条目本来**没有** key 时这里必须是 null：凭空塞一个会让它在其它
+            //    客户端上跳到另一个加密域。
+            key = stored.key.takeIf { hasItemKey },
         )
     }
 
@@ -536,6 +590,11 @@ class CipherMapper @Inject constructor(
      *
      * 公开（2026-10-21）：附件下载链路需要**同一把**条目密钥去解包
      * `attachments[i].key` —— 判据只有 mapper 有一份，不能在下载器里再猜一遍。
+     *
+     * ⚠️ **返回值是新建实例，调用方负责清理**（`clear()`）：它含密钥材料，
+     * 用完不清零等于把账号密钥的副本散在堆上。`toUpdateRequest` / `mergeFido2Credentials`
+     * / `passwordRevisionPlan` 都已在 finally 里清过，新增调用点请照做。
+     * 但**绝不要**对传入的 `accountKey` 调 clear —— 那把归会话所有。
      */
     fun resolveItemKey(dto: CipherDto, accountKey: SymmetricCryptoKey): SymmetricCryptoKey? {
         val wrapped = dto.key ?: return null

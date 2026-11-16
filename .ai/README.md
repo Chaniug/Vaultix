@@ -24,44 +24,39 @@
 - 已接进 CI：`ci-debug.yml` 的 `sandbox-tests` job 用**同一份脚本**，与 `android-ci` 并行
   ⇒ 本地绿 ⇒ CI 不会红在同一件事上。
 
-## 🕐 最新状态（2026-11-16 · #294 Bitwarden 推送后基线不推进）
+## 🕐 最新状态（2026-11-16 · #295 编辑条目用错钥匙）
 
-> **一句话**：改了条目、点同步显示正常，**服务端却没有改动** —— 根因是
-> 推送成功后服务端回的 `revisionDate` 被丢弃，本地基线永远停在编辑前那一刻。
+> **一句话**：改条目 → 保存 → 显示成功 → **云端却是旧值**。根因是「带条目密钥的条目
+> 被编辑时，字段仍用**账号密钥**加密」，服务端存得下、只有 Vaultix 自己解得开。
 
-- **现象**：自建 Bitwarden（Vaultwarden）服务器，改完条目点同步界面显示正常，
-  但服务器端看不到改动。**全程零报错**。
-- **根因**：`BitwardenSyncService.flushPending()` 把 `executeOperation` 的返回值
-  **只给 CREATE 用**（`remapCreatedLocalRow`），UPDATE 的
-  `CipherResponse.revisionDate` 整个丢弃 ⇒ 本地 `revisionDate` 不推进。
-  而 `CipherMapper.toUpdateRequest()` 拿本地这份值当 `lastKnownRevisionDate`，
-  Vaultwarden（`src/api/core/ciphers.rs`）判
-  `cipher.updated_at - dt > 1s` ⇒ **直接 err 拒绝**。
-  400 落在 `DEFINITIVE_HTTP_CODES` ⇒ 按「确定性失败」弃单 ⇒ 改动只留本机，
-  `flushAfterLocalWrite` 只返回 `Queued`、UPDATE 不抛异常 ⇒ 界面显示「已保存」。
-- **用户视角的触发点**：**第二次**编辑必被拒（第一次推送成功但没推进基线）；
-  若期间在网页端改过同一条，第一次就会被拒。
-- **修法**：新增 `advanceLocalRevision()`，UPDATE 成功分支调用；**两处都写**
-  （`CipherEntity.revisionDate` 列 + `encryptedPayload` 里 `CipherDto.revisionDate`，
-  后者才是 `updateItem` 真正读的），空串**必须挡**（写成空 = 服务端放弃并发检测，
-  多设备静默互相覆盖）。CREATE / DELETE 语义不动、400 弃单判据不动。
-- **验证**：`data/bitwarden` **111 例全绿**（原 108 + 新增 3）；行为反证
-  （撤掉 `advanceLocalRevision` ⇒ 主契约立刻红，字节级还原复绿）；
-  新增 `check_bitwarden_revision_baseline.py` + **11 组变异自测**，接 `ci-debug.yml`
-  两步（`android-ci` 36 → 38 步）。
-- **坑**：首轮 3 红里 2 条是**夹具的错**（手写 payload 缺 `lastKnownRevisionDate`、
-  断言"必须有 upsert 调用"而正确行为是直接 return）—— 按纪律先查测试再查代码。
-  自测第 ⑥ 条还抓到**门禁自身假绿**（`copy(revisionDate = fresh)` 存在但没进编码参数）。
-- **✅ CI 真实结论**：`96e8728d` 只推 `main`、**未推 `rele`**（`rele` 仍 `933d629d`）⇒
-  正式 v0.13.4 不受影响；`AI docs consistency` 43808735293 success、`Android CI (Debug)`
-  43808735246 success（约 3m39s，两 job 全绿，`Check Bitwarden revision baseline advance (#294)`
-  日志实证「✅ … 契约通过（#294）」、detekt `BUILD SUCCESSFUL in 12s`）；
-  preview `v0.13.4-dev-96e8728 · Preview`，资产 `Vaultix-96e8728.apk`（35.8 MB）。
-- 详见 [07 篇 part4](./issues/07-数据与同步-part4.md)（#294）。
+- **现象**：在已有条目里改一条网址（或改名/改字段），保存后本地显示新值，
+  **云端没有**；点同步也不会被云端覆盖回来（说明队列已清、请求确实成功了）。
+  全程零报错。
+- **根因**：Bitwarden 有两把钥匙 —— 条目字段用**条目自己的密钥**（条目带 `key` 时），
+  `key` 本身用账号密钥包裹（官方 `toEncryptedNetworkCipher` / Keyguard
+  `buildCipherCodecPair` 同一语义）。Vaultix **读**方向一直是对的
+  （`toDomain` 条目密钥优先 → 回退账号密钥），**写**方向却一律用账号密钥，
+  且 `CipherRequest` 压根没声明 `key`。
+  ⇒ 官方客户端/网页只按 `key` 解 ⇒ `MacVerificationException` ⇒ 永远显示旧值。
+  而 Vaultix 靠回退读得回来 ⇒ **本地一切正常**。
+- **为什么测试没抓到**：`CipherMapperItemKeyTest` 只覆盖读方向。
+  而且断言若写成「Vaultix 自己能否解开」本缺陷照样通过 —— 回退把错误盖住了。
+- **修法**：`CipherRequest` 增加 `key`；`toUpdateRequest` 用
+  `contentKey = itemKey ?: key` 加密所有可编辑字段（`finally` 里清条目密钥副本）；
+  请求体 `key = stored.key.takeIf { hasItemKey }`（有则原样带回，无则**必须** null）；
+  `toStoredCipherDto` 顺延 `key`；新建路径（`toRequest`）不动。
+- **验证**：`data/bitwarden` **118 例全绿**（原 111 + 新增 7）；行为反证
+  （把 `contentKey` 改回 `key` ⇒ 4 条主契约全红，还原复绿）；
+  新增 `check_item_key_write.py` + **11 条变异自测**，接 `ci-debug.yml` 两步
+  （`android-ci` 38 → 40 步）。全工程 `compileDebugKotlin` / `compileDebugUnitTestKotlin` 通过。
+- **坑（门禁自身）**：① `sanitize()` 会把 `@SerialName("key")` 抹成 `@SerialName("")`
+  ⇒ 恒红；② 同文件里有 **5 处** `@SerialName("key") val key`（`CipherDto`/`LoginDto`/
+  `CardDto`/`SshKeyDto`/`CipherRequest`），只搜全文 ⇒ 删掉 `CipherRequest` 那行照样
+  命中 ⇒ 假绿。⇒ 必须**逐数据类括号配平切段**。两条都是自测抓出来的。
+- 详见 [07 篇 part4](./issues/07-数据与同步-part4.md)（#295）。#294 正文同篇。
 
-> 上一轮与更早的状态块已**整块迁出**（8.9 §6 只挪不删）：
-> [2026-11-10 ~ 11-15](./archive/README-状态块-2026-11-10至15.md) ·
-> [2026-09 ~ 10-21](./archive/README-状态块-2026-09至10.md)。
+> 上一轮（#294 Bitwarden 推送后基线不推进）已按 8.9 §6 迁出：
+> [archive/README-状态块-2026-11-16-294.md](./archive/README-状态块-2026-11-16-294.md)。
 
 ---
 ## 🕐 上一轮（2026-11-15 · v0.13.4 正式发布）

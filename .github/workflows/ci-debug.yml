@@ -287,6 +287,12 @@ jobs:
       - name: Self-test Bitwarden revision baseline checker
         run: python3 "$GITHUB_WORKSPACE/.ai/tools/tests/selftest_bitwarden_revision_baseline.py"
 
+      - name: Check item-key write direction (#295)
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/check_item_key_write.py" "$GITHUB_WORKSPACE"
+
+      - name: Self-test item-key write checker
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/tests/selftest_item_key_write.py"
+
       # ★ 2026-11-10：KDBX 来源标签唯一真值源门禁。
       #
       # 真机反馈 #264：OneDrive 上的 KDBX 库在**库列表**里显示「本地文件 · uit」，

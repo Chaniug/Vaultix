@@ -348,6 +348,33 @@ data class CipherRequest(
      */
     @SerialName("collectionIds") val collectionIds: List<String> = emptyList(),
     @SerialName("lastKnownRevisionDate") val lastKnownRevisionDate: String? = null,
+    /**
+     * 条目独立密钥的**包裹态**（EncString，被账号密钥或组织密钥包裹）。
+     *
+     * ## ★★ 为什么它必须能出现在请求体里（#295，2026-11-16 真机）
+     *
+     * Bitwarden 有**两套**密钥在用（对齐官方 `Cipher.toEncryptedNetworkCipher()` 与
+     * Keyguard `buildCipherCodecPair`）：
+     *
+     * | 加密谁 | 用什么钥匙 |
+     * |---|---|
+     * | 条目字段（name / login / fields / …） | **该条目自己的密钥**（有的话） |
+     * | `key` 这个字段本身 | 账号密钥（组织条目用组织密钥） |
+     *
+     * 此前这个类**没有声明 `key`**，于是写路径一律用账号密钥加密字段、又不带 `key`。
+     * 后果是一条「带 key 的条目」被编辑后：
+     * - Vaultix 自己读得回来（解密失败会**回退**账号密钥，把错误盖住）；
+     * - 官方客户端 / 网页**只按 key 用条目密钥解** ⇒ `MacVerificationException` ⇒
+     *   界面上仍是旧值。
+     *
+     * 用户看到的就是「保存成功、云端没变、点同步也拉不回旧版」（因为本地行确实是新内容）。
+     *
+     * ⚠️ 语义是**整体替换**：条目本来有 key 就必须原样带上，否则服务端会把它清掉，
+     *    而字段仍是条目密钥的密文 ⇒ 变成谁都解不开的死数据。
+     * ⚠️ 条目本来**没有** key（老数据）时**绝不能凭空塞一个**：那会让它在其它
+     *    客户端上跳到另一个加密域，属于更严重的破坏。
+     */
+    @SerialName("key") val key: String? = null,
 )
 
 /**
@@ -412,5 +439,7 @@ fun CipherRequest.toStoredCipherDto(
     fields = fields,
     passwordHistory = passwordHistory.ifEmpty { previous?.passwordHistory.orEmpty() },
     attachments = previous?.attachments.orEmpty(),
-    key = previous?.key,
+    // ★★ 条目密钥的包裹态必须顺延（#295）：请求体里带了（编辑）就用它，否则沿用原值。
+    // 丢了它 ⇒ 字段密文用的是条目密钥、`key` 却没了 ⇒ 这条记录再也解不开。
+    key = key ?: previous?.key,
 )

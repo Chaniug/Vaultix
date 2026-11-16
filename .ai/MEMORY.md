@@ -2,13 +2,43 @@
 
 > **接力顺序（2026-11-14 校正，先读这四份，再动手）**：
 > **`.ai/README.md` 顶部「🕐 最新状态」**（当前状态唯一真源，倒序）→
-> 本文件（约定 / 硬约束 / 决策）→ `.ai/ISSUES.md`（坑：现象-根因-解法，最新 **#294**）→
+> 本文件（约定 / 硬约束 / 决策）→ `.ai/ISSUES.md`（坑：现象-根因-解法，最新 **#295**）→
 > `Docs/progress/next-steps.md`（待办唯一真源；历史按时间段归档，见文末索引）
 > → `.ai/SESSION-YYYY-MM-DD.md`（逐轮流水，需要细节才翻）。
 > ⚠️ `Docs/progress/current-status.md` **已冻结存档**（最后更新 2026-11-01），不再是进度快照；
 > 旧版把它列在接力顺序里，会读到两周前的状态。
 >
-> 最后更新：2026-11-16（**#294 Bitwarden 推送 UPDATE 成功后基线不推进**）：
+> 最后更新：2026-11-16（**#295 编辑已有条目用错钥匙 ⇒ 云端永远旧值**）：
+> 真机「在已有条目里加/改一条网址，保存后本地显示，云端没有；点同步也拉不回旧版」。
+> **三条观察各自排掉一批假设**：本地有新值 ⇒ 保存路径没问题；云端是旧值 ⇒ 服务端没收到
+> 或收到但不认；点同步没被覆盖 ⇒ `pending_ops` 已清（否则 #91 的 `pendingIds` 会挡住覆盖）
+> ⇒ 只剩一种可能：**PUT 成功、服务端存下了，但存下来的密文解不出新值**。
+> 根因：Bitwarden 有两把钥匙 —— 条目字段用**条目自己的密钥**（条目带 `key` 时），
+> `key` 本身用账号密钥包裹（官方 `toEncryptedNetworkCipher` / Keyguard
+> `buildCipherCodecPair` 同一语义）。Vaultix **读**方向一直对（`toDomain` 条目密钥优先
+> → 回退账号密钥），**写**方向一律用账号密钥、且 `CipherRequest` 压根没声明 `key`
+> ⇒ 官方客户端/网页只按 `key` 解 ⇒ `MacVerificationException` ⇒ 永远显示旧值；
+> 而 Vaultix 靠回退读得回来 ⇒ **本地一切正常**，所以没人报错。
+> ⚠️ **长期判据**：① **加密与解密必须用同一把钥匙**，凡是「读有回退链、写只有一把钥匙」
+> 的地方都要当缺陷看（回退会把写错的错误**盖住**）；② **测试要断言"别人能不能读懂"**，
+> 不是"自己能不能读懂" —— 跨端契约上，自己读得回来几乎零信息量；
+> ③ **"两边都没变"是最强的诊断信号**，它能一句话定位到"存下来的东西不对"；
+> ④ 同一字段在 DTO 里出现多次时（本文件 `key` 出现 **5 次**），任何文本匹配检查都必须
+> **先定位到所属类型**。
+> 修法：`CipherRequest` 加 `key`；`toUpdateRequest` 用 `contentKey = itemKey ?: key`
+> 加密所有可编辑字段（`finally` 清条目密钥副本，账号密钥归会话**绝不能清**）；
+> 请求体 `key = stored.key.takeIf { hasItemKey }`（有则原样带回，无则**必须** null）；
+> `toStoredCipherDto` 顺延 `key`；新建路径 `toRequest` 不动。
+> 验证：`data:bitwarden` **118 例全绿**（原 111 + 新增 7）；行为反证（`contentKey` 改回
+> `key` ⇒ 4 条主契约全红）；新增 `check_item_key_write.py` + **11 条变异自测**，
+> `android-ci` 38 → 40 步。门禁自身被自测抓到两个坑：`sanitize()` 会抹掉
+> `@SerialName("key")` ⇒ 恒红；全文搜 `@SerialName("key")` 会命中其它 4 个类 ⇒ 假绿。
+> ⚠️ 另修一个**统计学坑**：`build/test-results/` 里留着**已删测试类**的旧 XML，按目录
+> 累加会把例数算多（本轮先报成 121，实际 118 = 111 + 7）。要报「N 例全绿」必须
+> ① `cleanTest` 或删结果目录 ② 同时核对 `src/test` 类数与 XML 类数对齐，两边不等就别报数。
+> 详见 `.ai/issues/07-数据与同步-part4.md`（#295）。
+>
+> 上一轮：2026-11-16（**#294 Bitwarden 推送 UPDATE 成功后基线不推进**）：
 > 真机「自建 Bitwarden 服务器改了条目、点同步显示正常，服务端却没有改动」。
 > 链条每一环单独看都合法：`CipherMapper.toUpdateRequest()` 把本地行的 `revisionDate`
 > 填进 `lastKnownRevisionDate` → Vaultwarden（`src/api/core/ciphers.rs`）判
