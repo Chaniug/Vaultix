@@ -52,6 +52,10 @@
 - ⚠️ 待 CI 编译 + 单测；真机复验判据：Via 注册点保存不再报 "Origin does not match relying party"，
   `PKC origin provider=https://pwd.vv1234.cn/ ... verdict=Ok`，通行密钥落进所选库。
   **v0.13.5 已发布，本修复尚未发版**（待验收后决定是否 v0.13.6）。
+- **✅ CI 绿**：两 run [43849875873](https://github.com/Chaniug/Vaultix/actions/runs/43849875873)
+  / 43849875951 success（commit `d9403903`），新门禁输出「✅ passkey origin 透传契约检查通过（#299）」+
+  变异自测 7/7；preview `v0.13.5-dev-d940390`，资产 `Vaultix-d940390.apk`（37.6 MB）。
+  待用户装此包真机复验后再决定是否发 v0.13.6；只推 main，绝不推 rele。
 
 ## 🕐 上一轮（2026-11-16 · v0.13.5 正式发布：Bitwarden 同步修复闭环）
 
