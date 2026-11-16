@@ -26,6 +26,7 @@
 > 首轮 3 红里 2 条是**夹具的错**（手写 payload 缺字段 / 断言"必须有 upsert"而正确行为是
 > 直接 return）⇒ 又是「红了先查测试」；门禁自测第 ⑥ 条还抓到**门禁自身假绿**
 > （`copy(revisionDate = fresh)` 存在但没进编码参数）。
+> **✅ CI**：`96e8728d` 只推 `main`；`AI docs consistency` 43808735293 success、`Android CI (Debug)` 43808735246 success（约 3m39s，新门禁两步 ✓、detekt 12s）；preview `v0.13.4-dev-96e8728 · Preview` / `Vaultix-96e8728.apk`。
 > 详见 `.ai/issues/07-数据与同步-part4.md`（#294）。
 >
 > 上一轮：2026-11-15（**#293 正式版 KDBX 通行密钥登录 GitHub / x.com 失败**）：

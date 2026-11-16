@@ -52,6 +52,11 @@
 - **坑**：首轮 3 红里 2 条是**夹具的错**（手写 payload 缺 `lastKnownRevisionDate`、
   断言"必须有 upsert 调用"而正确行为是直接 return）—— 按纪律先查测试再查代码。
   自测第 ⑥ 条还抓到**门禁自身假绿**（`copy(revisionDate = fresh)` 存在但没进编码参数）。
+- **✅ CI 真实结论**：`96e8728d` 只推 `main`、**未推 `rele`**（`rele` 仍 `933d629d`）⇒
+  正式 v0.13.4 不受影响；`AI docs consistency` 43808735293 success、`Android CI (Debug)`
+  43808735246 success（约 3m39s，两 job 全绿，`Check Bitwarden revision baseline advance (#294)`
+  日志实证「✅ … 契约通过（#294）」、detekt `BUILD SUCCESSFUL in 12s`）；
+  preview `v0.13.4-dev-96e8728 · Preview`，资产 `Vaultix-96e8728.apk`（35.8 MB）。
 - 详见 [07 篇 part4](./issues/07-数据与同步-part4.md)（#294）。
 
 > 上一轮与更早的状态块已**整块迁出**（8.9 §6 只挪不删）：

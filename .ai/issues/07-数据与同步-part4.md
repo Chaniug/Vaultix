@@ -138,6 +138,20 @@ if (effective.op == OP_UPDATE) {
 但把它挪到 `payload?.let` 外面、编码时仍传裸 `dto`，门禁照样绿。
 补「编码那一行的参数必须带 copy + revisionDate」的正向检查后转绿。
 
+### 294.7b CI 真实结论（观察到真实 run 后回填）
+
+- 提交 `96e8728d`，**只推 `main`、未推 `rele`**（`origin/rele` 仍 `933d629d`）⇒ 正式 v0.13.4 不受影响。
+- `AI docs consistency` run `43808735293` **success**（05:12:42Z）。
+- `Android CI (Debug)` run `43808735246` **success**（05:12:42Z → 05:16:21Z，约 3m39s，**两 job 全绿**）。
+  - `Check Bitwarden revision baseline advance (#294)` ✓，日志实证
+    `✅ Bitwarden 推送后 revisionDate 基线契约通过（#294）`；
+  - `Self-test Bitwarden revision baseline checker` ✓；
+  - `Run detekt (quality gate)` ✓ `BUILD SUCCESSFUL in 12s` ——
+    ⚠️ 这条要单独看一眼：给 `flushPending` 多加了一个 `if` + 一层 `runCatching`，
+    而 detekt 圈复杂度上限是 14。**实测没超**，但下次再往里加分支要先数。
+- preview Release `v0.13.4-dev-96e8728 · Preview`，资产 **`Vaultix-96e8728.apk`**
+  （37,592,130 B ≈ 35.8 MB），#292 短命名约定同步生效。
+
 ### 294.8 长期判据
 
 1. **服务端返回的版本令牌，是客户端的"下一次通行证"** —— 拿到了不存下来，
