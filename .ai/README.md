@@ -24,7 +24,14 @@
 - 已接进 CI：`ci-debug.yml` 的 `sandbox-tests` job 用**同一份脚本**，与 `android-ci` 并行
   ⇒ 本地绿 ⇒ CI 不会红在同一件事上。
 
-## 🕐 最新状态（2026-11-16 · #299 浏览器通行密钥 origin 透传修复（待 CI））
+## 🕐 最新状态（2026-11-16 · v0.13.6 正式发布，今日收工）
+
+> **一句话**：今日两件大事全部闭环并发版 —— ① #294~#298 Bitwarden 同步修复链
+> （`encryptedFor` 真机验收通过）；② #299 浏览器通行密钥 origin 透传（Via 真机验收通过）
+> + 真锁页视觉统一。**v0.13.6** 已发 Latest，tag `v0.13.6` → `36a78647`，
+> main / rele / tag 三者一致。只推 main + 一次快进 rele，绝不二次推 rele。
+
+## 🕐 上一轮（2026-11-16 · #299 浏览器通行密钥 origin 透传修复（已发版））
 
 > **一句话**：Via 浏览器（WebView）上注册通行密钥，弹窗点保存即报
 > "Origin does not match relying party"。根因：CP 层用真实 `callingAppInfo` 读到了 origin，
