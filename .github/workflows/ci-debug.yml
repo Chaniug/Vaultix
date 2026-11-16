@@ -254,6 +254,17 @@ jobs:
       - name: Self-test production safety checker
         run: python3 "$GITHUB_WORKSPACE/.ai/tools/tests/selftest_production_safety.py"
 
+      # ★ #299（2026-11-16 真机）：浏览器流程下 CP 层读到的真实 origin 必须透传给
+      #   PasskeyCreateActivity。Via(WebView) 上注册通行密钥点保存即报
+      #   "Origin does not match relying party" —— Activity 取回的 callingAppInfo 丢了
+      #   origin，而 CP 层有。三段交接（extra 定义 / CP 透传 / Activity 读取）缺一不可，
+      #   少传一个参数编译过、detekt 过，只有本关能拦。安全边界一道并钉：严格校验不退化。
+      - name: Check passkey origin handoff (#299)
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/check_passkey_origin_handoff.py" "$GITHUB_WORKSPACE"
+
+      - name: Self-test passkey origin handoff checker
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/check_passkey_origin_handoff.py" --selftest
+
       # ★ 2026-11-15（#293）：KDBX 通行密钥 credentialId 的跨模块保真契约。
       #
       # 真机：正式 v0.13.2 用 KDBX 库里保存的 passkey 登录 GitHub / x.com 报

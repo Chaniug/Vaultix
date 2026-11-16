@@ -235,6 +235,11 @@ class VaultixCredentialProviderService : CredentialProviderService() {
         // `CreatePublicKeyCredentialRequest`——后者是调用方侧的类，provider 侧拿不到。
         val clientDataHash = request.clientDataHash
 
+        // ★ #299：浏览器流程下，中转 Activity 用 retrieveProviderCreateCredentialRequest
+        //   取回的 callingAppInfo 会丢 origin（自证名单读不出），而这里 request.callingAppInfo
+        //   是系统给的真实对象，能读出浏览器 origin。透传给 Activity 用于 RP 归属校验，
+        //   **不是绕过校验**——Activity 仍会用 PasskeyOriginPolicy 校验它匹配 rpId。
+        val origin = CallingAppOrigin.originOrNull(request.callingAppInfo)
         val intent = PasskeyProviderIntents.createIntent(
             context = this,
             requestJson = request.requestJson,
@@ -243,6 +248,7 @@ class VaultixCredentialProviderService : CredentialProviderService() {
             userName = userName,
             userDisplayName = userDisplayName,
             clientDataHash = clientDataHash,
+            origin = origin,
         )
         val pendingIntent = PendingIntent.getActivity(
             this,

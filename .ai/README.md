@@ -24,7 +24,36 @@
 - 已接进 CI：`ci-debug.yml` 的 `sandbox-tests` job 用**同一份脚本**，与 `android-ci` 并行
   ⇒ 本地绿 ⇒ CI 不会红在同一件事上。
 
-## 🕐 最新状态（2026-11-16 · v0.13.5 正式发布：Bitwarden 同步修复闭环）
+## 🕐 最新状态（2026-11-16 · #299 浏览器通行密钥 origin 透传修复（待 CI））
+
+> **一句话**：Via 浏览器（WebView）上注册通行密钥，弹窗点保存即报
+> "Origin does not match relying party"。根因：CP 层用真实 `callingAppInfo` 读到了 origin，
+> 但 `createIntent()` 没透传；中转 Activity 用 `retrieveProviderCreateCredentialRequest()`
+> 取回的 `callingAppInfo` 在浏览器流程下丢了 origin（自证名单读不出），两条来源都空 ⇒ 校验拒绝。
+
+- **真机日志（18:16，三连失败）**：
+  `CP CREATE begin caller=mark.via origin=https://pwd.vv1234.cn/`（CP 读到）
+  → `PKC origin caller=- request=- verdict=Rejected` → `PKC rejected: origin 无法解析出主机（origin=）`。
+- **集思广益（三个参考项目）**：
+  - bitwarden：`OriginManagerImpl` 读真实 assets 资产链接名单，`validatePrivilegedApp` 校验包名+签名指纹；
+  - keyguard：`AndroidCallingAppOriginResolver`，特权名单命中取 origin，否则用调用方签名 hash；
+  - Monica：`PasskeyOriginResolver` 五级降级链，末级 `https://{rpId}` 兜底（真实 assets 名单 73 个浏览器）。
+  ⚠️ 排除"Via 不在名单"假设：CP 层用**同一个** `CallingAppOrigin.originOrNull()` 读到了 origin，
+  证明自证名单对 Via 有效。差异是 CP 与 Activity 拿到的 callingAppInfo 不是同一对象。
+- **不采纳 Monica 的 rpId 兜底**：Vaultix CREATE 侧当年**主动删掉**过 `?: "https://$rpId"`
+  （`PasskeyCreateActivity:199` 注释：凭空构造会让校验形同虚设）。本次透传的是系统给的真实 origin，
+  `PasskeyOriginPolicy.check()` 严格校验**不动**——既修浏览器又不降安全门槛。
+- **KDBX 结论（用户问）**：**同样受影响、同样被修复**。通行密钥注册共用 CP → `PasskeyCreateActivity`
+  → origin 校验，分流到 Bitwarden/KDBX 发生在**写库时**（`isKdbx()`），在校验之后。
+  故 origin 校验失败与目标库无关；一次修复两边都好。GET 侧（使用密钥）走 rpId 匹配，本就不受影响。
+- **已落地修复**：`PasskeyProviderIntents.EXTRA_ORIGIN` + createIntent 透传；CP 层读真实 origin 传入；
+  Activity 三来源 `provider > caller > request`（日志加 `provider=` 字段）；
+  新增 `check_passkey_origin_handoff.py` + 7 组变异自测（含表达式体函数与注释假红的坑）+ CI 两步。
+- ⚠️ 待 CI 编译 + 单测；真机复验判据：Via 注册点保存不再报 "Origin does not match relying party"，
+  `PKC origin provider=https://pwd.vv1234.cn/ ... verdict=Ok`，通行密钥落进所选库。
+  **v0.13.5 已发布，本修复尚未发版**（待验收后决定是否 v0.13.6）。
+
+## 🕐 上一轮（2026-11-16 · v0.13.5 正式发布：Bitwarden 同步修复闭环）
 
 > **一句话**：#294~#298 五批 Bitwarden 同步修复经两轮真机验收通过，已发 **v0.13.5 正式版**
 > （`Android Stable Release` run `43846571223` success，tag `v0.13.5` → `ab39130f`，

@@ -28,6 +28,16 @@ object PasskeyProviderIntents {
     /** get / create：浏览器流程下系统算好的 clientDataHash（原生流程为 null）。 */
     const val EXTRA_CLIENT_DATA_HASH = "vaultix.passkey.client_data_hash"
     const val EXTRA_RP_ID = "vaultix.passkey.rp_id"
+
+    /**
+     * create：CP 层用**真实 callingAppInfo** 读出的浏览器 origin（#299）。
+     *
+     * 浏览器流程下，中转 Activity 用 `retrieveProviderCreateCredentialRequest(intent)`
+     * 取回的 `callingAppInfo` 丢了 origin（自证名单读不出），而 CP 层在
+     * `onBeginCreateCredentialRequest` 里能读到真实值。故由 CP 层透传，Activity 优先采用。
+     * ⚠️ 这不是"自造 origin"——是系统给的真实来源，仍须过 [PasskeyOriginPolicy] 校验。
+     */
+    const val EXTRA_ORIGIN = "vaultix.passkey.origin"
     /** get：定位具体凭证（经已解锁仓储取私钥，不传 keyValue）。 */
     const val EXTRA_VAULT_ID = "vaultix.passkey.vault_id"
     const val EXTRA_ITEM_ID = "vaultix.passkey.item_id"
@@ -72,6 +82,7 @@ object PasskeyProviderIntents {
         userName: String,
         userDisplayName: String,
         clientDataHash: ByteArray? = null,
+        origin: String? = null,
     ): Intent = Intent(context, PasskeyCreateActivity::class.java)
         .putExtra(EXTRA_ACTION, ACTION_CREATE)
         .putExtra(EXTRA_REQUEST_JSON, requestJson)
@@ -80,6 +91,7 @@ object PasskeyProviderIntents {
         .putExtra(EXTRA_RP_NAME, rpName)
         .putExtra(EXTRA_USER_NAME, userName)
         .putExtra(EXTRA_USER_DISPLAY_NAME, userDisplayName)
+        .putExtra(EXTRA_ORIGIN, origin)
 
     /** password：仅传定位信息 (vaultId, itemId)，明文由已解锁仓储取，绝不走 Intent。 */
     fun passwordGetIntent(context: Context, vaultId: String, itemId: String): Intent =

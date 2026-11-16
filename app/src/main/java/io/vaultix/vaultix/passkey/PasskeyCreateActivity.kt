@@ -203,12 +203,19 @@ class PasskeyCreateActivity : FragmentActivity() {
         val providerReq = runCatching {
             PendingIntentHandler.retrieveProviderCreateCredentialRequest(intent)
         }.getOrNull()
+        // ★ #299 三条来源，优先级：CP 透传 > caller 自证 > requestJson.origin。
+        //   CP 层（VaultixCredentialProviderService）用真实 callingAppInfo 读出的 origin
+        //   放在 EXTRA_ORIGIN 传过来——浏览器流程（Via/Chrome WebView）下第二条自证读取
+        //   会因为取回的 callingAppInfo 丢了签名信息而返回 null，正是这条补上。
+        //   三条都仍是"实际来源"，不是凭空构造；下面 PasskeyOriginPolicy 照旧严格校验。
+        val originFromProvider = intent.getStringExtra(PasskeyProviderIntents.EXTRA_ORIGIN)
+            ?.takeIf { it.isNotBlank() }
         val originFromCaller = CallingAppOrigin.originOrNull(providerReq?.callingAppInfo)
             ?.takeIf { it.isNotBlank() }
         val originFromRequest = runCatching {
             JSONObject(requestJson).optString("origin").takeIf { it.isNotBlank() }
         }.getOrNull()
-        origin = originFromCaller ?: originFromRequest.orEmpty()
+        origin = originFromProvider ?: originFromCaller ?: originFromRequest.orEmpty()
         // clientDataHash 只挂在 CreatePublicKeyCredentialRequest 上（基类没有）→ 需下转型。
         // 由 Service 经 Intent 透传（对齐 GET 侧的 `option.clientDataHash`）。
         clientDataHash = intent.getByteArrayExtra(PasskeyProviderIntents.EXTRA_CLIENT_DATA_HASH)
@@ -225,7 +232,8 @@ class PasskeyCreateActivity : FragmentActivity() {
         // ℹ️ 用户可见文案**不含域名**（reason 只进日志）：这条提示会出现在别的 App 里。
         val verdict = PasskeyOriginPolicy.check(origin, rpId)
         AutofillLogger.d(
-            "PKC origin caller=${originFromCaller ?: "-"} request=${originFromRequest ?: "-"} " +
+            "PKC origin provider=${originFromProvider ?: "-"} " +
+                "caller=${originFromCaller ?: "-"} request=${originFromRequest ?: "-"} " +
                 "rpId=$rpId verdict=${verdict.javaClass.simpleName}",
         )
         if (verdict is PasskeyOriginPolicy.Verdict.Rejected) {
