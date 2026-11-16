@@ -378,17 +378,22 @@ private val PASSWORD_EMBLEM_SIZE = 120.dp
 private val PASSWORD_BADGE_SIZE = 80.dp
 private val PASSWORD_BADGE_ICON_SIZE = 40.dp
 
-private val EMBLEM_RING_WIDTH = 1.dp
-private const val EMBLEM_GLOW_ALPHA = 0.10f
-private const val EMBLEM_RING_ALPHA = 0.20f
+private val EMBLEM_RING_WIDTH = 1.5.dp
+/**
+ * 2026-11-16 真机对比：原 0.10/0.20 在纯黑 + 深色主题下**几乎不可见**，
+ * 放大徽标看起来只是"一个更大的锁"，完全没有查看层锁那种精致光环感。
+ * 调到 0.22/0.35：光晕能被看见、细环勾出轮廓，但仍足够克制不抢主密码表单。
+ */
+private const val EMBLEM_GLOW_ALPHA = 0.22f
+private const val EMBLEM_RING_ALPHA = 0.35f
 
 /** 指纹入口图标的尺寸。
  *
- * 2026-09-13 用户反馈「指纹的图标太大了，有点不合适」⇒ 从 64dp 收到 **44dp**。
- * 它仍是这一页唯一的主入口，但不必跟下方的实心主按钮抢体量 —— 44dp 与按钮的 48dp
- * 高度接近，视觉上落在同一层级，页面也不再头重脚轻。
+ * 2026-09-13 从 64dp 收到 44dp；2026-11-16 用户要求整体精简 ⇒ 再收到 **28dp**，
+ * 并去掉下方那行长文案。指纹在这页是「辅助快捷入口」（主操作是主密码解锁按钮），
+ * 收小后页面更像查看层锁那种干净的单列结构，也不再与放大徽标争主视觉。
  */
-private val FINGERPRINT_ICON_SIZE = 44.dp
+private val FINGERPRINT_ICON_SIZE = 28.dp
 
 /**
  * 本地快速解锁入口：**一个大号指纹图标**，压在「主密码框」与「解锁按钮」之间。
@@ -414,12 +419,15 @@ private fun QuickUnlockEntry(
         Spacer(Modifier.height(Spacing.xl))
         return
     }
+    // ★ 2026-11-16 精简：去掉「轻触指纹快速解锁」长文案（截图里最占地方的一行），
+    //   图标从 44dp 收到 28dp，contentDescription 保留读屏可用性。
+    //   指纹仍自动弹出、这里是取消后的手动出口，功能零变化 —— 只是不再抢主视觉。
     IconButton(
         onClick = onStart,
         enabled = enabled,
         modifier = Modifier
-            .padding(vertical = Spacing.sm)
-            .size(FINGERPRINT_ICON_SIZE + Spacing.lg),
+            .padding(vertical = Spacing.xs)
+            .size(FINGERPRINT_ICON_SIZE + Spacing.md),
     ) {
         Icon(
             imageVector = Icons.Filled.Fingerprint,
@@ -432,15 +440,6 @@ private fun QuickUnlockEntry(
             modifier = Modifier.size(FINGERPRINT_ICON_SIZE),
         )
     }
-    Text(
-        text = stringResource(R.string.unlock_fingerprint_hint),
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = UiSize.HairGap),
-        textAlign = TextAlign.Center,
-    )
 }
 
 /** 主密码输入 + 错误提示 + 提交；生物识别快捷入口内嵌于登录区域（密码框与解锁按钮之间）。 */
@@ -505,14 +504,10 @@ private fun PasswordForm(
     // - 只在**已启用**时出现（没启用却给入口 = 点了必然失败，那是骗人）；
     // - 2FA 步骤中不给：那一步的语义是「验验证码」，多一个出口只会让用户分神；
     // - 与指纹入口并列而非替换：两者可以同时启用，用户按当下条件挑。
+    // ★ 2026-11-16 精简：去掉 PIN 图标，压成一行轻量文字链接 ——
+    //   它和指纹一样是辅助入口，不该跟放大徽标 + 主密码表单争视觉。功能不变。
     if (state.pinUnlockAvailable && state.twoFactor == null) {
         TextButton(onClick = onPinUnlock, enabled = !state.submitting) {
-            Icon(
-                imageVector = Icons.Filled.Pin,
-                contentDescription = null,
-                modifier = Modifier.size(UiSize.InlineIcon),
-            )
-            Spacer(Modifier.width(Spacing.sm))
             Text(stringResource(R.string.pin_unlock_enter))
         }
     }
