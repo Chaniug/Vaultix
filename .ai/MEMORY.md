@@ -2,13 +2,33 @@
 
 > **接力顺序（2026-11-14 校正，先读这四份，再动手）**：
 > **`.ai/README.md` 顶部「🕐 最新状态」**（当前状态唯一真源，倒序）→
-> 本文件（约定 / 硬约束 / 决策）→ `.ai/ISSUES.md`（坑：现象-根因-解法，最新 **#293**）→
+> 本文件（约定 / 硬约束 / 决策）→ `.ai/ISSUES.md`（坑：现象-根因-解法，最新 **#294**）→
 > `Docs/progress/next-steps.md`（待办唯一真源；历史按时间段归档，见文末索引）
 > → `.ai/SESSION-YYYY-MM-DD.md`（逐轮流水，需要细节才翻）。
 > ⚠️ `Docs/progress/current-status.md` **已冻结存档**（最后更新 2026-11-01），不再是进度快照；
 > 旧版把它列在接力顺序里，会读到两周前的状态。
 >
-> 最后更新：2026-11-15（**#293 正式版 KDBX 通行密钥登录 GitHub / x.com 失败**）：
+> 最后更新：2026-11-16（**#294 Bitwarden 推送 UPDATE 成功后基线不推进**）：
+> 真机「自建 Bitwarden 服务器改了条目、点同步显示正常，服务端却没有改动」。
+> 链条每一环单独看都合法：`CipherMapper.toUpdateRequest()` 把本地行的 `revisionDate`
+> 填进 `lastKnownRevisionDate` → Vaultwarden（`src/api/core/ciphers.rs`）判
+> `cipher.updated_at - dt > 1s` **直接 err 拒绝** → 400 落在 `DEFINITIVE_HTTP_CODES`
+> 被判「确定性失败」**弃单** → `flushAfterLocalWrite` 只返回 `Queued`、UPDATE 不抛异常
+> ⇒ UI 显示「已保存」。**缺口**在 `flushPending` 把 UPDATE 的 `CipherResponse` 整个丢掉
+> （只给 CREATE 的 remap 用）⇒ 本地基线永远停在编辑前那一刻 ⇒ **第二次编辑必被拒**。
+> ⚠️ **长期判据**：① 服务端在响应里回的 `revisionDate` / `eTag` / `versionToken` 是
+> **下一次的通行证**，写接口成功分支必须问「这个值我存哪了」；② 「只给 CREATE 用」
+> 是一种常见的返回值浪费 —— UPDATE 响应看着只有 id + revision，但那个 revision 是基线；
+> ③ **半落实的纪律比没落实更危险**：#148「基线只在真跟上远端后推进」早就写在文档里，
+> 但只在 KDBX 那条链落实了，Bitwarden 侧完全没有对应实现，于是"以为覆盖了"。
+> 修法：新增 `advanceLocalRevision()`，UPDATE 成功分支调用，**列 + 载荷两处都写**
+> （载荷那份才是 `updateItem` 真正读的），空串**必须挡**（写成空 = 服务端放弃并发检测）。
+> 首轮 3 红里 2 条是**夹具的错**（手写 payload 缺字段 / 断言"必须有 upsert"而正确行为是
+> 直接 return）⇒ 又是「红了先查测试」；门禁自测第 ⑥ 条还抓到**门禁自身假绿**
+> （`copy(revisionDate = fresh)` 存在但没进编码参数）。
+> 详见 `.ai/issues/07-数据与同步-part4.md`（#294）。
+>
+> 上一轮：2026-11-15（**#293 正式版 KDBX 通行密钥登录 GitHub / x.com 失败**）：
 > 用户三条差分对照「电脑 KeePassXC 正常 / Vaultix 的 Bitwarden passkey 正常 /
 > 只有 Vaultix 读同一 KDBX 失败」⇒ 根因收敛到 `KdbxPasskeyCodec.toCredential()` 的
 > `normalizeCredentialId()`：把 KeePass 生态的 **base64url 无填充** credentialId 转成

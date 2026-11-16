@@ -24,9 +24,44 @@
 - 已接进 CI：`ci-debug.yml` 的 `sandbox-tests` job 用**同一份脚本**，与 `android-ci` 并行
   ⇒ 本地绿 ⇒ CI 不会红在同一件事上。
 
-## 🕐 最新状态（2026-11-15 · v0.13.4 正式发布）
+## 🕐 最新状态（2026-11-16 · #294 Bitwarden 推送后基线不推进）
 
-> **一句话**：真机取证 → 修复 → 正式发版闭环，今天连发 v0.13.3 / v0.13.4。
+> **一句话**：改了条目、点同步显示正常，**服务端却没有改动** —— 根因是
+> 推送成功后服务端回的 `revisionDate` 被丢弃，本地基线永远停在编辑前那一刻。
+
+- **现象**：自建 Bitwarden（Vaultwarden）服务器，改完条目点同步界面显示正常，
+  但服务器端看不到改动。**全程零报错**。
+- **根因**：`BitwardenSyncService.flushPending()` 把 `executeOperation` 的返回值
+  **只给 CREATE 用**（`remapCreatedLocalRow`），UPDATE 的
+  `CipherResponse.revisionDate` 整个丢弃 ⇒ 本地 `revisionDate` 不推进。
+  而 `CipherMapper.toUpdateRequest()` 拿本地这份值当 `lastKnownRevisionDate`，
+  Vaultwarden（`src/api/core/ciphers.rs`）判
+  `cipher.updated_at - dt > 1s` ⇒ **直接 err 拒绝**。
+  400 落在 `DEFINITIVE_HTTP_CODES` ⇒ 按「确定性失败」弃单 ⇒ 改动只留本机，
+  `flushAfterLocalWrite` 只返回 `Queued`、UPDATE 不抛异常 ⇒ 界面显示「已保存」。
+- **用户视角的触发点**：**第二次**编辑必被拒（第一次推送成功但没推进基线）；
+  若期间在网页端改过同一条，第一次就会被拒。
+- **修法**：新增 `advanceLocalRevision()`，UPDATE 成功分支调用；**两处都写**
+  （`CipherEntity.revisionDate` 列 + `encryptedPayload` 里 `CipherDto.revisionDate`，
+  后者才是 `updateItem` 真正读的），空串**必须挡**（写成空 = 服务端放弃并发检测，
+  多设备静默互相覆盖）。CREATE / DELETE 语义不动、400 弃单判据不动。
+- **验证**：`data/bitwarden` **111 例全绿**（原 108 + 新增 3）；行为反证
+  （撤掉 `advanceLocalRevision` ⇒ 主契约立刻红，字节级还原复绿）；
+  新增 `check_bitwarden_revision_baseline.py` + **11 组变异自测**，接 `ci-debug.yml`
+  两步（`android-ci` 36 → 38 步）。
+- **坑**：首轮 3 红里 2 条是**夹具的错**（手写 payload 缺 `lastKnownRevisionDate`、
+  断言"必须有 upsert 调用"而正确行为是直接 return）—— 按纪律先查测试再查代码。
+  自测第 ⑥ 条还抓到**门禁自身假绿**（`copy(revisionDate = fresh)` 存在但没进编码参数）。
+- 详见 [07 篇 part4](./issues/07-数据与同步-part4.md)（#294）。
+
+> 上一轮与更早的状态块已**整块迁出**（8.9 §6 只挪不删）：
+> [2026-11-10 ~ 11-15](./archive/README-状态块-2026-11-10至15.md) ·
+> [2026-09 ~ 10-21](./archive/README-状态块-2026-09至10.md)。
+
+---
+## 🕐 上一轮（2026-11-15 · v0.13.4 正式发布）
+
+> **一句话**：真机取证 → 修复 → 正式发版闭环，连发 v0.13.3 / v0.13.4。
 
 - **通行密钥**：单行 PEM 私钥解析修复（按 BEGIN/END 标记剥离，不再依赖换行）+ 诊断串带
   输入形态指纹；A 库私钥自始完好，**旧库无需迁移、无需重注册**。#293 凭据 ID 保真一并进正式版。
@@ -37,11 +72,6 @@
 - **发布**：v0.13.4 已置 Latest（run 43705947147，签名 7e6c8c07…）；
   说明见 [v0.13.4 发布说明](../Docs/release-notes/v0.13.4.md)。
 - **验证**：CI 1866 例单测 0 失败；TOTP 生命周期与 dev 包全链路真机复验通过。
-  逐轮细节见当天流水草稿（`.workbuddy/memory/2026-11-15.md`，本地文件、不入库）。
-
-> 上一轮与更早的状态块已**整块迁出**（8.9 §6 只挪不删）：
-> [2026-11-10 ~ 11-15](./archive/README-状态块-2026-11-10至15.md) ·
-> [2026-09 ~ 10-21](./archive/README-状态块-2026-09至10.md)。
 
 ---
 ## 🕐 更早状态（2026-11-01 ~ 2026-11-09）

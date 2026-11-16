@@ -17,7 +17,8 @@
 |---|---|
 | 版本 | **v0.13.4**（Latest · 混淆包 6,977,746 B · 可覆盖 v0.13.3 · [发布说明](../release-notes/v0.13.4.md)） |
 | 上一轮 | **v0.13.4 正式发布**：装的是 #293 后续的单行 PEM 私钥修复 + 诊断加固、TOTP 后台时钟挂起、查看层锁页重排与 R8 报告留存；v0.13.3 已带 #293 凭据 ID 保真。发布说明见 [v0.13.3](../release-notes/v0.13.3.md) / [v0.13.4](../release-notes/v0.13.4.md) |
-| 门禁 | 19 个 `check_*.py` + 16 个自测，连同 detekt / 编码 / 图标几何 / `assembleFullDebug` / 单测全绿；#291 起 CI 钉住「生产裸 `Log` / `!!`」，#292 起钉住「发布产物命名形状」，**#293 起钉住「KDBX passkey credentialId 逐字符保真」** |
+| 门禁 | **20 个** `check_*.py` + **17 个**自测，连同 detekt / 编码 / 图标几何 / `assembleFullDebug` / 单测全绿；#291 起 CI 钉住「生产裸 `Log` / `!!`」，#292 起钉住「发布产物命名形状」，#293 起钉住「KDBX passkey credentialId 逐字符保真」，**#294 起钉住「Bitwarden 推送后 revisionDate 基线必须推进」** |
+| Bitwarden 同步 | 2026-11-16 · **#294 推送 UPDATE 成功后基线不推进**（**改了生产代码 + 测试 + 门禁**）：真机「自建 Bitwarden 改了条目、点同步显示正常，服务端却没有改动」。`CipherMapper.toUpdateRequest()` 把本地行 `revisionDate` 塞进 `lastKnownRevisionDate`，Vaultwarden（`src/api/core/ciphers.rs`）判 `cipher.updated_at - dt > 1s` **直接 err 拒绝**；400 落在 `DEFINITIVE_HTTP_CODES` ⇒ 判「确定性失败」**弃单** ⇒ `flushAfterLocalWrite` 只返回 `Queued`、UPDATE 不抛异常 ⇒ UI 显示「已保存」。**缺口**：`flushPending` 把 UPDATE 的 `CipherResponse` 整个丢弃（只给 CREATE 的 remap 用）⇒ 本地基线永远停在编辑前 ⇒ **第二次编辑必被拒**。修法：新增 `advanceLocalRevision()`，UPDATE 成功分支调用，**列 + 载荷两处都写**（载荷那份才是 `updateItem` 真正读的），空串必须挡（空 = 服务端放弃并发检测）；CREATE / DELETE 语义与 400 弃单判据**不动**。新增 `BitwardenSyncRevisionBaselineTest` 3 例（`data/bitwarden` **111 例全绿**）、`check_bitwarden_revision_baseline.py` + **11 组变异自测**，接 `ci-debug.yml` 两步（`android-ci` 36 → 38 步）；行为反证撤掉回写 ⇒ 主契约立刻红、字节级还原复绿。⚠️ 只推 `main` **未推 `rele`**，正式 v0.13.4 不受影响。详见 [07 篇 part4](../../.ai/issues/07-数据与同步-part4.md) |
 | KDBX 通行密钥 | 2026-11-15 · **#293 正式版 KDBX passkey 登录 GitHub / x.com 报「通行密钥有问题」**（**改了生产代码 + 测试 + 门禁**）：三条差分对照（电脑 KeePassXC 正常 / Vaultix 的 Bitwarden passkey 正常 / 只有 Vaultix 读同一 KDBX 失败）把根因收敛到 `KdbxPasskeyCodec.toCredential()` 的 `normalizeCredentialId()` —— 把 KeePass 生态的 **base64url 无填充** credentialId 转成**标准 base64**（补 `=`、换出 `+` `/`），而 `WebAuthn.rawIdFromStored()` 决策是「原样回传存储文本」（2026-09-12 真机证伪 decode→re-encode、`WebAuthnTest` ② 钉死）⇒ 断言 `id`/`rawId` 成了 RP 按 base64url 解不出的文本。修法**只动读侧**：`credentialId = credentialId` 原样、删 `normalizeCredentialId()`；**不动** `WebAuthn`、不动写方向 `fromCredential()`。订正过时溯源（`KPEX_PASSKEY_*` 由 KeePassXC 定义、KeePassDX 遵循，无 `KPXC_*` 体系）。首轮 `data/kdbx` 3 红全为「测试把缺陷当规格」或自造假红断言，逐条订正后 **274 例全绿**；新增跨模块契约测试 + `check_kdbx_passkey_id.py` + 11 组变异自测（含「KDoc 写旧函数名不误报」），接 `ci-debug.yml` 两步；两轮反证：门禁 11/11、把旧转换注入回生产代码 5 例立刻红且字节级还原复绿。**✅ CI 真实结论**：`AI docs consistency` 43676429827 success（约 10s）、`Android CI (Debug)` 43676429706 success（04:21:47Z → 04:26:29Z，约 4m42s，两 job 全绿，新接的 `Check KDBX passkey credentialId fidelity (#293)` / `Self-test …` 两步在 CI 均 ✓、门禁输出「✅ KDBX passkey credentialId 保真契约通过」）、preview `v0.13.2-dev-e0e630a · Preview` 资产 `Vaultix-e0e630a.apk`（35.8 MB，**#292 短命名约定同步生效**、正文表四项完整）。⚠️ 只推 `main` 未推 `rele`，正式 v0.13.2 不受影响；文档结论回填同样只推 `main`，不二次发版；**真机验收已于 2026-11-15 完成**，修复随 v0.13.3 / v0.13.4 发布。详见 [part6](../../.ai/issues/03-通行密钥与凭据提供商-part6.md) |
 | 整体排查 | 2026-11-11 · [报告](audit/project-audit-2026-11-11.md)：43 个依赖坐标中 **29 项已最新**、3 项禁单独升、**2 类**真违规（订正后）、3 项质量基建缺失（属「要建」） |
 | 不需要修 | 2026-11-11 · [判定方案](audit/no-fix-register-2026-11-11.md) + [52 条登记](audit/evidence/no-fix-entries-2026-11-11.md)；门禁 `check_no_fix_register.py` 已接 `ci-docs.yml` |
@@ -56,6 +57,21 @@
 - [ ] **可取证（若仍失败）**：抓 logcat 的 `VaultixAutofill` tag，看
       `PK assertion ready … rawId=… storedIdForm=...` 一行里的 `rawId` 是否为
       **无填充 base64url**（不含 `+` `/` `=`）。这是根因是否被真正修掉的直接判据。
+
+## 待真机验收（#294 · Bitwarden 推送基线）
+
+> 本轮改的是**推送成功后的本地收敛**，判据是「服务端真的变了」，静态检查替代不了。
+> 逐条判据见 [`07-数据与同步-part4.md` §294.5 / §294.8](../../.ai/issues/07-数据与同步-part4.md)。
+
+- [ ] **连续两次编辑**（关键）：同一条目改第一次 → 等几秒 → 再改第二次 →
+      **两次都要**在网页端（Vaultwarden 的 Web UI）看到最新内容。
+      改前必错的是第二次，这条直接对上根因。
+- [ ] **网页端先改过的条目**：先在网页端改一次，再从 Vaultix 改并保存，
+      服务端应出现 Vaultix 这次的内容（基线已跟上）。
+- [ ] **不再出现静默弃单**：连续编辑若干条后，`adb logcat -s VaultixSync` 里
+      **不应**出现 `definitive=true` 的 `flushPending op=UPDATE` 行。
+- [ ] **重启后仍成立**：杀掉进程重开、解锁、再编辑一次，服务端仍能看到改动
+      （基线是落在 Room 的列 + 载荷里，不是内存）。
 
 ## 待真机验收（#291 · release 行为）
 

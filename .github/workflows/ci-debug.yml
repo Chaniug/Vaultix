@@ -270,6 +270,23 @@ jobs:
       - name: Self-test KDBX passkey id checker
         run: python3 "$GITHUB_WORKSPACE/.ai/tools/tests/selftest_kdbx_passkey_id.py"
 
+      # ★ 2026-11-16：Bitwarden 推送后 revisionDate 基线契约（#294）。
+      #
+      # 真机：自建 Bitwarden 服务器上改了条目、点同步显示正常，服务端却没有改动。
+      # 链条：CipherMapper 把本地行的 revisionDate 填进 lastKnownRevisionDate →
+      # Vaultwarden（src/api/core/ciphers.rs）判 `updated_at - dt > 1s` 直接拒绝 →
+      # 400 落在 DEFINITIVE_HTTP_CODES 被判「确定性失败」弃单 → 改动只留本机。
+      # 缺口在 flushPending 把 UPDATE 的 CipherResponse 整个丢掉（只给 CREATE 用）
+      # ⇒ 本地基线永远停在编辑前那一刻 ⇒ **第二次编辑必然被拒**。
+      # 编译 / 单测 / detekt 全查不出（每一环单独看都合法，全绿而链断）。
+      # ⇒ 钉住「UPDATE 成功分支必须回写 revisionDate（列 + 载荷两处）且挡住空串」，
+      #    配行为测试与 11 组变异自测。
+      - name: Check Bitwarden revision baseline advance (#294)
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/check_bitwarden_revision_baseline.py" "$GITHUB_WORKSPACE"
+
+      - name: Self-test Bitwarden revision baseline checker
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/tests/selftest_bitwarden_revision_baseline.py"
+
       # ★ 2026-11-10：KDBX 来源标签唯一真值源门禁。
       #
       # 真机反馈 #264：OneDrive 上的 KDBX 库在**库列表**里显示「本地文件 · uit」，

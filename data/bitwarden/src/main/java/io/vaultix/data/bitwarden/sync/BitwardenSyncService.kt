@@ -196,6 +196,30 @@ class BitwardenSyncService @Inject constructor(
                             createdIdRemap[effective.cipherId] = serverId
                         }
                     }
+                    // ★ #294（2026-11-16）：UPDATE 成功后必须把服务端的新 revisionDate
+                    //   写回本地行 —— 否则下一次编辑会带着**过期基线**出门。
+                    //
+                    //   为什么这是"必须"而不是"优化"：`CipherMapper.toUpdateRequest` 把
+                    //   本地行的 `revisionDate` 填进 `lastKnownRevisionDate`，服务端拿它做
+                    //   乐观并发校验。Vaultwarden（`src/api/core/ciphers.rs`）的判据是
+                    //   `cipher.updated_at - dt > 1s` ⇒ **直接 err 拒绝**。
+                    //   而本方法此前把 `executeOperation` 的返回值只给 CREATE 用，UPDATE
+                    //   的 `CipherResponse` 被**整个丢弃** ⇒ 本地永远停在编辑前那一刻 ⇒
+                    //   用户的第二次编辑必然被拒 ⇒ 400 落在 DEFINITIVE_HTTP_CODES 里被判
+                    //   「确定性失败」弃单 ⇒ 改动只留在本机，界面还显示"已保存"。
+                    if (effective.op == OP_UPDATE) {
+                        // ⚠️ 回写失败**不能**影响「队列已推成功」这个事实判定：
+                        //   若这里的异常冒出去，onSuccess 会被跳过 ⇒ `remove` 不执行 ⇒
+                        //   同一条 op 被重复推送（服务端收到两次同样的 UPDATE）。
+                        //   回写失败只让基线落后（多同步一次即可自愈），重复推送不是。
+                        runCatching { advanceLocalRevision(effective.cipherId, response) }
+                            .onFailure { error ->
+                                VaultixLog.w(TAG) {
+                                    "advanceLocalRevision 失败：${error::class.simpleName}" +
+                                        "（queue 已清，基线落后下次同步自愈）"
+                                }
+                            }
+                    }
                     pendingOpDao.remove(op.localId)
                 }
                 .onFailure { error ->
@@ -298,6 +322,39 @@ class BitwardenSyncService @Inject constructor(
         // 库里的行改指：**下一次** flushPending 直接从库重读，若这里不改，那次仍会 404。
         pendingOpDao.repointCipherId(oldId = op.cipherId, newId = serverId)
         return serverId
+    }
+
+    /**
+     * UPDATE 推送成功后，把服务端回的 `revisionDate` 写回本地行（#294）。
+     *
+     * ## 为什么两处都要写
+     *
+     * - `CipherEntity.revisionDate`：列值，排查与 UI 用；
+     * - `encryptedPayload` 里那份 [CipherDto] 的 `revisionDate`：**下一次编辑真正读的那个**
+     *   —— `ItemRepositoryImpl.updateItem` 先 `decodeFromString<CipherDto>(encryptedPayload)`
+     *   再交给 `toUpdateRequest`，它取的 `stored.revisionDate` 就是载荷里这份。
+     *   只改列不改载荷 ⇒ 看起来修了，实际下一次编辑照样发过期基线。
+     *
+     * ## 两个"不写"的判据
+     *
+     * - 服务端没回 revision（空串）：**保留本地原值**。写成空会让
+     *   `takeIf { it.isNotBlank() }` 把它变成"不带 lastKnownRevisionDate"，
+     *   服务端于是**放弃并发检测**，多设备并发编辑静默互相覆盖 —— 比旧基线更坏。
+     * - 本地行已不在（别处删了 / 从未落库）：静默跳过。这里失败不该让整条队列卡住。
+     */
+    private suspend fun advanceLocalRevision(cipherId: String, response: CipherResponse?) {
+        val fresh = response?.revisionDate?.takeIf { it.isNotBlank() } ?: return
+        val row = cipherDao.get(cipherId) ?: return
+        if (row.revisionDate == fresh) return
+        val payload = runCatching {
+            json.decodeFromString<CipherDto>(row.encryptedPayload)
+        }.getOrNull()
+        val updatedPayload = payload?.let { dto ->
+            runCatching {
+                json.encodeToString(CipherDto.serializer(), dto.copy(revisionDate = fresh))
+            }.getOrNull()
+        } ?: row.encryptedPayload
+        cipherDao.upsertAll(listOf(row.copy(revisionDate = fresh, encryptedPayload = updatedPayload)))
     }
 
     private suspend fun executeOperation(api: BitwardenVaultApi, op: PendingOpEntity): CipherResponse? {
