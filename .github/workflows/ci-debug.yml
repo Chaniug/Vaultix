@@ -116,7 +116,7 @@ jobs:
       # ⚠️ 缓存 key 必须带**依赖清单的哈希** —— 那份清单写在脚本里（DEPS 数组）。
       #   只按脚本整文件哈希的话，改一句注释就全量重下 200MB。
       - name: Cache typecheck libs
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.cache/vaultix-typecheck
           key: typecheck-libs-${{ runner.os }}-${{ hashFiles('.ai/tools/typecheck_kotlin.sh') }}-v1
