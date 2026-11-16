@@ -54,7 +54,16 @@
   （detekt `BUILD SUCCESSFUL in 18s`、新门禁输出「✅ encryptedFor 契约检查通过（#298）」、
   4 例新测试与全量单测通过）、`AI docs consistency` 43837076961。
   preview `v0.13.4-dev-5a3b6a4 · Preview`，资产 `Vaultix-5a3b6a4.apk`（37.6 MB）。
-  ⚠️ 只推 `main` 未推 `rele`，正式 v0.13.4 不受影响；待装机真机复验。
+  ⚠️ 只推 `main` 未推 `rele`，正式 v0.13.4 不受影响。
+- **⚠️ 首轮真机验收修红（用户装 `5a3b6a4` 复现仍 422）**：日志出现本轮新增的
+  `encryptedFor 未注入（无法从 access token 解析 user id）` ⇒ 修复代码跑了，但取值传错参数：
+  `userIdFromToken` 把 `row.origin`（`https://pwd.…`，完整 baseUrl）传给 `accessTokenForHost`，
+  而它的 key 是 `URL(server).host`（纯 host）⇒ 查不到 ⇒ 降级跳过 ⇒ 依旧 422。
+  `BitwardenAuthInterceptor` 用 `url.host` 才是同口径；单测当时也 mock 成完整 URL，跟着一起错。
+  修法：先 `URL(server).host` 再查；测试改 mock key + verify 钉住；门禁加变异用例（8/8 自测）。
+  **✅ 修复后 CI 全绿**：两 run [43840280935](https://github.com/Chaniug/Vaultix/actions/runs/43840280935)
+  / 43840280850 success，preview `v0.13.4-dev-8a0bc21`，资产 `Vaultix-8a0bc21.apk`（37.6 MB）。
+  ⇒ **待用户装 `8a0bc21` 做第二轮真机验收**；队列里 2 条存量 UPDATE 正好验证"存量也救活"。
 
 ## 🕐 上一轮（2026-11-16 · #297 同步看不见 ⇒ 无法定位）
 
