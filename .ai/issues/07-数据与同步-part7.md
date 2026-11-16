@@ -134,3 +134,121 @@ B) VaultixSync: flushPending 开始：待推送 1 条（UPDATE=1）
 
 > 同时确认保存时是否有 `本地写回完成并已推送` 或 `本地写回已落库，但推送失败` 一行 ——
 > 有它就能确定"点保存那一刻"到底发生了什么，不必再靠"本地能看到"来推断。
+
+---
+
+## 补：写路径的第一道闸门会卡死（同批 #297，2026-11-16）
+
+上面那套日志只解决了"看得见"，但排查过程中顺着「A 判据」（队列为空）往回走，
+在写路径的入口上发现了一个**能让队列永远为空的真 bug**，且完全符合用户描述。
+
+### 现象与代码
+
+三个入口都用了 `saving` 当**防连点闸门**：
+
+```kotlin
+fun updateItem(item: VaultItem) {
+    if (current.saving) return          // ← 闸门
+    _state.update { it.copy(saving = true) }
+    viewModelScope.launch {
+        val outcome = itemRepository.updateItem(...)   // ← 抛异常
+        _state.update { it.copy(saving = false) }      // ← 永远走不到
+        ...
+    }
+}
+```
+
+复位写成了调用**之后**的一句。只要调用抛出，`saving` 就**永久停在 true**，
+之后每一次点保存都被开头的 `if (...saving) return` 静默吞掉：
+
+| 用户感受 | 实际发生 |
+|---|---|
+| 内容改了，本地也看得到 | 那一次确实落库了 |
+| 再改再保存 | **一行都没写**，`saving` 卡住后所有保存直接 return |
+| 点同步 → "同步成功" | 队列空 ⇒ 无可推送 ⇒ `Skipped` ⇒ 前端归入成功类 |
+
+而仓储**确实会抛**：`ItemRepositoryImpl.createItem` / `updateItem` 里用的是
+`keyOf(vaultId) ?: error("库未解锁…")`、`cipherDao.get(id) ?: error("条目不存在…")`
+—— 是 `error(...)`（抛），不是 `Result.failure(...)`（返回）。返回值类型写着
+`Result` 容易让人以为"不会抛"，这是一处**签名与实现不一致的陷阱**。
+
+### 顺带查出的第二个问题：异常会炸 App
+
+`viewModelScope` 是监督作用域，`launch` 里逃出去的异常直接进
+`CoroutineExceptionHandler`。所以这些"预期内的失败"（库未解锁、条目不存在）
+过去是**要么崩、要么静默**，另一端没有正常路径可走。
+
+### 修法（三处，同一口径）
+
+| 文件 | 入口 | 修法 |
+|---|---|---|
+| `ItemDetailViewModel` | `updateItem` | 复位移入 `finally`；成功后补一句 `写路径收口` 日志 |
+| `ItemsViewModel` | `createItem` | 复位移入 `finally` + `catch (e: Throwable)` 收口成 `SaveEvent.Failed` |
+| `AutofillSaveViewModel` | `saveNew` / `updateExisting` | 复位移入 `finally`（否则遮罩永久停在「保存中」） |
+
+`createItem` 的 catch 顺序（**这个顺序不能换**）：
+
+```kotlin
+} catch (e: CancellationException) {
+    throw e                       // 取消必须原样上抛，不能当成保存失败
+} catch (e: Throwable) {
+    Result.failure(e)             // Catch 边界本就该宽：见下
+} finally {
+    _state.update { it.copy(saving = false) }
+}
+```
+
+> ⚠️ `Throwable` 而不是 `Exception`。原因有两层：① Android 上 `mockk` 把「没打桩的
+> 调用」落成 `AssertionError`（属 `Error`），`Exception` 接不住 —— 这是自测里真实
+> 踩到的；② 能让写路径中断的东西本来就该全留痕并提示用户，而不是挑异常族。
+> detekt `TooGenericExceptionCaught` 用**函数级** `@Suppress` + 就近注释说明理由
+> （与 `Kdbx.kt` / `VaultixCrypto.kt` 的先例一致）。
+
+三个入口的日志共用 `VaultixSync` tag（`ItemDetailViewModel` 与 `ItemsViewModel`
+各自补了 `private const val SYNC_TAG = "VaultixSync"`），于是**一次保存的完整链路**在
+`adb logcat -s VaultixSync` 下是连续的一串：
+
+```text
+写路径中断：createItem 抛出 IllegalStateException ⇒ 本地未落库、队列未入队
+   ↑ 或者
+写路径收口：updateItem 已返回（成功）· <itemId>
+flushPending 开始：待推送 1 条（UPDATE=1）
+flushPending 完成：1 条全部推送成功，队列已清空
+   ↑ 或者推送失败时
+flushPending 完成：推送 0 条成功，剩 1 条留在队列
+```
+
+### 验证
+
+`app/src/test/java/io/vaultix/vaultix/ui/items/ItemsViewModelSavingGateTest.kt` 三例：
+
+| 用例 | 防的回归 |
+|---|---|
+| 仓储抛异常时 saving 闸门必须复位 | 复位退回"下一句" |
+| 闸门复位之后第二次新建仍会真的打到仓储 | 异常没收口（第二次连不上）/ 闸门吞掉后续调用 |
+| 闸门本身仍生效_保存中再点一次不会再打仓储 | 为了复位把 `if (saving) return` 整个删掉 |
+
+**三条变异反证**（改完立刻 `cp` 还原并确认复绿）：
+
+| 变异 | 结果 |
+|---|---|
+| 复位移回"下一句" | ✅ 转红 |
+| `catch` 收窄成接不住的一类异常 | ✅ 两例转红 |
+| 删掉 `if (_state.value.saving) return` | ✅ 第三例转红（前两例仍绿 ⇒ 证明第三例不是冗余） |
+
+> 第三条变异最初是**绿的** —— 前两例抓不到"闸门被删"，因为闸门只在"上一笔未结束"
+> 时才起作用。补第三例（仓储 `awaitCancellation()` 卡住第一笔，再点第二次并断言
+> `coVerify(exactly = 1)`）才把它钉住。**"复位"与"闸门"是两个机制、故障表现相反，
+> 必须分别有用例**。
+
+### 一处自测坑（值得记）
+
+`coEvery { ... } throws X andThen Result.success(...)` 在 mockk 1.13.x 上会解析到
+`andThen(Answer)` 重载，第二次直接抛 `MockKException: no answer found` —— 表观症状是
+"第二次调用没成功"，极容易误判成业务 bug。改用 `coAnswers { if (计数++ == 0) throw ... }`。
+
+### 结论
+
+- 这是"队列为空"的**一个**候选成因，但**不等于**用户这次就是它（他那台机器是否卡过，
+  日志里没有证据）。修掉它是因为它确实会让队列永远为空、且症状完全吻合。
+- 真正的定论仍等真机日志的 **A / B** 判据。

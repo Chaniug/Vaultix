@@ -28,6 +28,18 @@
 > 文案要读原文；KDoc 里写着同样的 `return Result.success(Unit)` ⇒ 朴素 `find()`
 > 会命中注释、分支体被截空；按"下一个 `fun`"截函数体会把下一段的 KDoc 算进来 ⇒
 > 必须**花括号配平**。**"注释与代码用词雷同"是本仓库高频坑**（同 #295 的 `@SerialName("key")`）。
+>
+> **同批追加（写路径闸门卡死）**：顺着"A 判据"（队列为空）往回查，`ItemDetailViewModel.updateItem` /
+> `ItemsViewModel.createItem` / `AutofillSaveViewModel.saveNew`·`updateExisting` 四个写入口都把
+> `saving` 复位写成**调用之后的下一句**，而 `ItemRepositoryImpl` 用的是 `error(...)`（**抛**）
+> 而不是 `Result.failure(...)`（返）—— 返回类型写着 `Result` 极易误读成"不会抛"。
+> ⇒ 一次「库未解锁 / 条目不存在」就让 `saving` 永久 `true`，开头的 `if (saving) return`
+> 之后**吞掉每一次保存**：界面像保存了，实际一行没落库、一条 op 没入队，点同步只能得到"无改动"。
+> ⚠️ **长期判据**：① **`saving` / `deleting` 这类标记是闸门，不只是 UI 态** —— 卡住 = 入口失能，
+> 复位一律进 `finally`；② **`viewModelScope.launch` 里逃逸的异常会炸 App**（监督作用域），
+> 预期内的失败必须就地收口成一条用户可见的提示；③ catch 用 `Throwable` 且
+> **`catch (CancellationException) { throw it }` 必须排在前面**（取消不能当失败）；
+> ④ **"复位"与"闸门"是两个机制、故障表现相反，必须分别有用例** —— 只测复位，删掉闸门也是绿的。
 > 详见 `.ai/issues/07-数据与同步-part7.md`。
 >
 > 上一轮：2026-11-16（**#296 HTTP 422 被当确定性失败弃单 ⇒ 改动静默丢失**）：

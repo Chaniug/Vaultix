@@ -8,6 +8,7 @@ import androidx.core.content.FileProvider
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import io.vaultix.datastore.VaultixPreferences
+import io.vaultix.common.logging.VaultixLog
 import io.vaultix.domain.FolderRepository
 import io.vaultix.domain.ItemRepository
 import io.vaultix.domain.OrganizationRepository
@@ -359,8 +360,25 @@ class ItemDetailViewModel @Inject constructor(
         //    这里是第二层：让 `saving=false` 与成功提示也能正常收口，而非只保住数据。
         viewModelScope.launch {
             withContext(NonCancellable) {
-                val outcome = itemRepository.updateItem(vaultId = vaultId, item = item)
-                _state.update { it.copy(saving = false) }
+                // ★ #297（2026-11-16）：`saving` 的复位必须在 `finally` 里。
+                //
+                //   此前 `_state.update { saving = false }` 是 `updateItem(...)` 的**下一句**，
+                //   于是任何一条中途抛出（`withContext` 内部异常、事件通道关闭、
+                //   `_state.update` 自身失败）都会让 `saving` **永久停在 true**，
+                //   而本函数开头的 `if (current.saving) return` 会让**之后每一次点保存
+                //   都静默返回** —— 用户看着内容改了、界面像保存了，实际一行都没落库、
+                //   一条 op 都没入队。这正是「日志里连 flushPending 都没有」的候选成因之一：
+                //   写路径压根没跑，而之前它连一句日志都不留。
+                val outcome = try {
+                    itemRepository.updateItem(vaultId = vaultId, item = item)
+                } finally {
+                    _state.update { it.copy(saving = false) }
+                }
+                VaultixLog.w(SYNC_TAG) {
+                    // ⚠️ 不记条目标题（标题常是「公司 VPN」「银行」这类线索）——
+                    //    id 已足够在 Room 里定位，日志不外传敏感语义。
+                    "写路径收口：updateItem 已返回（${if (outcome.isSuccess) "成功" else "失败"}）· $itemId"
+                }
                 _events.send(
                     outcome.fold(
                         onSuccess = { saved ->
@@ -424,3 +442,15 @@ class ItemDetailViewModel @Inject constructor(
 
 /** 上传态最短展示时长：足以被看见，又不至于让「已完成」显得卡住。 */
 private const val MIN_UPLOAD_VISIBLE_MS = 1_200L
+
+/**
+ * 与 data 层 `ItemRepositoryImpl.SYNC_TAG` **同一个 tag**（#297）。
+ *
+ * 为什么必须一致：写路径（App 层调 `updateItem`）与推送路径（data 层 `flushPending`）
+ * 原本各记各的，日志里只能看到其中一段 ⇒ 出问题时无法判断「改动压根没入队」
+ * 还是「入队了但被服务端拒收」。两条路径共用 `VaultixSync` 之后，
+ * 一次保存的完整链路在日志里是连续的一串，一眼能看出断在哪。
+ *
+ * ⚠️ 只记事件与结果类别，绝不记条目明文（项目铁律）。
+ */
+private const val SYNC_TAG = "VaultixSync"

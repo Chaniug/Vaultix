@@ -53,10 +53,26 @@
   接 `ci-debug.yml` 两步（`android-ci` 42 → 44 步）。
   ⚠️ 写门禁时**自测抓出 3 个真实假绿**（KDoc 里同词、按"下一个 fun"截取把注释算进函数体、
   判断常量名用了 sanitize 后的文本），均已修并有对应用例。
+- **同批追加（写路径闸门卡死）**：顺着"A 判据"（队列为空）往回查，在三个写入口发现
+  `saving` 这个**防连点闸门会卡死**：复位写成 `repo.xxx()` 的**下一句**，而仓储
+  `ItemRepositoryImpl` 用的是 `error(...)`（**抛异常**）而不是 `Result.failure(...)`
+  ⇒ 一次"库未解锁 / 条目不存在"就能让 `saving` 永久 `true`，之后**每一次点保存都被
+  开头的 `if (saving) return` 静默吞掉**：界面像保存了，实际一行没落库、一条 op 没入队，
+  点同步自然只能得到"无改动"——与用户描述完全吻合。
+  处置：`ItemDetailViewModel.updateItem` / `ItemsViewModel.createItem` /
+  `AutofillSaveViewModel.saveNew`·`updateExisting` 四处复位移入 `finally`；
+  `createItem` 另加 `catch (e: CancellationException) { throw e }` →
+  `catch (e: Throwable) { Result.failure(e) }` 收口（原本逃逸会**炸 App**）。
+  三个入口共用 `VaultixSync` tag ⇒ 保存链路在日志里是连续的一串。
+- **验证（闸门）**：`ItemsViewModelSavingGateTest` 3 例（复位 / 第二次仍能打到仓储 / 闸门本身仍生效），
+  三条变异反证全红（复位移回下一句 ✅、catch 收窄 ✅、删闸门 ✅）。
+  `app` **724 例全绿**、`data:bitwarden` **124**、`data:repository` **352**，detekt 通过；
+  **23 个门禁 + 20 个自测**全绿（顺带把 README / next-steps 里写错的「24 个」改为 23）。
 - **下一步（需要用户配合）**：装新包复现一次，回传日志。这次一定能看到
   `flushPending 队列为空（无待推送 op）⇒ 本次同步只做拉取，不会上传任何改动`
-  或 `flushPending 开始：待推送 N 条（UPDATE=1）` + `flushPending op=UPDATE ... code=... body=...`。
-  两句话直接判定故障在**写路径**还是**推送路径**，不必再猜。
+  或 `flushPending 开始：待推送 N 条（UPDATE=1）` + `flushPending op=UPDATE ... code=... body=...`；
+  保存那一刻还会先出现 `写路径收口：updateItem 已返回（成功）· <id>` 或 `写路径中断：…`。
+  这几句直接判定故障在**写路径**还是**推送路径**，不必再猜。
 
 > 上一轮（#296 HTTP 422 静默弃单）已按 8.9 §6 迁出：
 > [archive/README-状态块-2026-11-16-296.md](./archive/README-状态块-2026-11-16-296.md)。

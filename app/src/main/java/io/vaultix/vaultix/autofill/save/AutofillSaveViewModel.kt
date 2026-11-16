@@ -108,10 +108,16 @@ class AutofillSaveViewModel @Inject constructor(
                 password = password,
                 uris = uri?.let { listOf(VaultUri(it)) }.orEmpty(),
             )
-            val outcome = itemRepository.createItem(vaultId, item)
+            // ★ #297：`saving` 复位必须走 `finally`。否则任何一条中途抛出
+            //   （合并网址 / 写库异常）都会让遮罩永久停在「保存中」，
+            //   用户只能杀进程。同款问题在 `ItemDetailViewModel.updateItem` 已修。
+            val outcome = try {
+                itemRepository.createItem(vaultId, item)
+            } finally {
+                _state.update { it.copy(saving = false) }
+            }
             _state.update {
                 it.copy(
-                    saving = false,
                     done = outcome.isSuccess,
                     error = outcome.exceptionOrNull()?.message,
                 )
@@ -132,10 +138,13 @@ class AutofillSaveViewModel @Inject constructor(
         val merged = mergeUri(existing)
         viewModelScope.launch {
             _state.update { it.copy(saving = true) }
-            val outcome = itemRepository.updateItem(vaultId, merged)
+            val outcome = try {
+                itemRepository.updateItem(vaultId, merged)
+            } finally {
+                _state.update { it.copy(saving = false) }
+            }
             _state.update {
                 it.copy(
-                    saving = false,
                     done = outcome.isSuccess,
                     error = outcome.exceptionOrNull()?.message,
                 )

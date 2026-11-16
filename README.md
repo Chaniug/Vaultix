@@ -220,7 +220,7 @@ app/                 # UI 层：Compose 界面、导航、ViewModel、自动填�
 除 `android-ci` 外还有两个并行 job：`sandbox-tests`（纯逻辑模块真编译 + 真单测）与
 `AI docs consistency`（`.ai/` 索引与全仓 markdown 相对链接）。
 
-`.ai/tools/` 下另有 **24 个 `check_*.py` 门禁脚本 + 20 个自测**，专门抓
+`.ai/tools/` 下另有 **23 个 `check_*.py` 门禁脚本 + 20 个自测**，专门抓
 **detekt 查不出、本地单模块编译也不报、只有 CI 跨模块编译才炸**，以及**连编译都不报**的
 那几类问题（跨文件 `private` 调用、`R.string` 引用、实验性 API 的 `@OptIn` 覆盖、
 签名里的类型名可解析、多态状态被压成二值、零引用字符串、**状态变量只写不读**），

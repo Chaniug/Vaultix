@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import io.vaultix.data.repository.BitwardenSyncOrchestrator
+import io.vaultix.common.logging.VaultixLog
 import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.domain.FolderRepository
 import io.vaultix.domain.ItemRepository
@@ -43,6 +44,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -603,12 +605,47 @@ class ItemsViewModel @Inject constructor(
     fun createItem(item: VaultItem) {
         if (_state.value.saving || item.title.isBlank()) return
         _state.update { it.copy(saving = true) }
+        // ★ #297（2026-11-16）：闸门复位 + 异常收口，两件事缺一不可。
+        //
+        //   ① 复位必须走 `finally`。此前它是 `createItem(...)` 的**下一句**，
+        //      一旦中途抛出（仓储内部用 `error(...)` 直抛，而不是包成
+        //      `Result.failure`——见 `ItemRepositoryImpl` 的 `keyOf(...) ?: error(...)`），
+        //      `saving` 会**永久停在 true**，而开头的 `if (_state.value.saving) return`
+        //      会让**之后每一次点新建都静默返回**：点了没反应、没有提示，写路径压根
+        //      没跑 ⇒ 待推送队列一条 op 都没有 ⇒ 接着点同步只能得到「无改动」。
+        //      ⚠️ `saving` 是**闸门**而不只是 UI 态：它卡住 = 所有新建被吞掉。
+        //
+        //   ② 异常本身也必须在这里收口。`viewModelScope` 用的是监督作用域，
+        //      逃出去的异常直接进 `CoroutineExceptionHandler` ⇒ **App 崩溃**。
+        //      所以"闸门复位"不能只在 `finally` 里做做样子，得真的把异常接住，
+        //      落成一条 [SaveEvent.Failed] 让用户看到原因。
+        @Suppress("TooGenericExceptionCaught") // 见下方 catch 的注释：边界本就该宽
         viewModelScope.launch {
-            val outcome = itemRepository.createItem(
-                vaultId = vaultId,
-                item = item.copy(id = ""), // id 由 data 层分配本地 uuid
-            )
-            _state.update { it.copy(saving = false) }
+            val outcome = try {
+                itemRepository.createItem(
+                    vaultId = vaultId,
+                    item = item.copy(id = ""), // id 由 data 层分配本地 uuid
+                )
+            } catch (e: CancellationException) {
+                throw e // 结构化并发：取消必须原样向上传，不能当成保存失败
+            } catch (e: Throwable) {
+                // ⚠️ 必须是 `Throwable` 而不是 `Exception`：Android 上 `mockk` 的
+                //    默认答案会把「没打桩的调用」落成 `AssertionError`（`Error` 分支），
+                //    `Exception` 接不住 ⇒ 闸门复位看着正常、实际漏了一整类中断。
+                //    语义上也该宽：能让写路径中断的东西，全都得留痕并提示用户。
+                //    ⚠️ 不接 `CancellationException` —— 它在上一分支已原样上抛。
+                VaultixLog.w(SYNC_TAG) {
+                    "写路径中断：createItem 抛出 ${e::class.simpleName} ⇒ 本地未落库、队列未入队"
+                }
+                Result.failure(e)
+            } finally {
+                // ⚠️ 顺序要紧：`saving` 必须在 catch 之后、finally 里复位 ——
+                //    放在 catch 的 `return` 路径上会漏掉 CancellationException 之外的中断。
+                _state.update { it.copy(saving = false) }
+            }
+            if (outcome.isSuccess) {
+                VaultixLog.w(SYNC_TAG) { "写路径收口：createItem 已返回（成功）" }
+            }
             val event = outcome.fold(
                 onSuccess = { saved ->
                     when (saved) {
@@ -626,3 +663,10 @@ class ItemsViewModel @Inject constructor(
         const val ARG_VAULT_ID = "vaultId"
     }
 }
+
+/**
+ * 与 data 层 `ItemRepositoryImpl.SYNC_TAG`、`ItemDetailViewModel.SYNC_TAG`
+ * **同一个 tag**（#297）：写路径与推送路径共用 `VaultixSync`，
+ * 一次保存的完整链路在日志里是连续的一串，出问题时能一眼看出断在哪一环。
+ */
+private const val SYNC_TAG = "VaultixSync"
