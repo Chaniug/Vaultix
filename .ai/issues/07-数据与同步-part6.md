@@ -84,6 +84,15 @@
   换成按函数段/更小的 `dto.copy(` 锚点，11/11 复绿。
 - 22 个静态门禁 / 19 个自测本地全绿；
   `compileFullDebugKotlin` / `compileFullDebugUnitTestKotlin` 通过。
+- **CI（2026-11-16，commit `d881fb33`）**：两 run 全绿 ——
+  `Android CI (Debug)` [43825961602](https://github.com/Chaniug/Vaultix/actions/runs/43825961602)
+  success（约 3m；`Check HTTP 422 failure policy (#296)` /
+  `Self-test HTTP 422 failure policy checker` / detekt / unit tests 全 success），
+  `AI docs consistency` 43825961594 success。preview 包 `Vaultix-d881fb3.apk`
+  （`0.13.4-dev-d881fb3`，35.9 MB）已发到 preview release。
+  首轮 `1e0498db` 的 43824448459 曾 detekt 三红（`flushPending` 复杂度 17 > 14、
+  `take(512)` 魔法数、测试行宽），抽 `logFlushFailure()` + `MAX_ERROR_BODY_CHARS` +
+  拆长行后复绿。
 
 ### 长期判据
 

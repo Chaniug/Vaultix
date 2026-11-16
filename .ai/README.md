@@ -46,7 +46,13 @@
   新增 `check_http422_policy.py` + **10 条变异自测**，接 `ci-debug.yml` 两步
   （`android-ci` 40 → 42 步）。22 个门禁 / 19 个自测本地全绿，
   `compileFullDebugKotlin` / `compileFullDebugUnitTestKotlin` 通过。
-- **待用户配合**：用新包复现一次并回传开发者日志，重点看
+- **CI 回填（2026-11-16）**：`d881fb33` 两 run 全绿——
+  `Android CI (Debug)` [43825961602](https://github.com/Chaniug/Vaultix/actions/runs/43825961602)
+  （detekt / `Check HTTP 422 failure policy (#296)` / `Self-test HTTP 422 failure policy checker` /
+  unit tests 全 success），`AI docs consistency` 43825961594 success。
+  preview 包 `Vaultix-d881fb3.apk`（`0.13.4-dev-d881fb3`，versionCode 13004，35.9 MB）
+  已发到 [preview release](https://github.com/Chaniug/Vaultix/releases/tag/preview)。
+- **待用户配合**：用 preview 包复现一次并回传开发者日志，重点看
   `VaultixSync: flushPending ... code=422 ... body=...`；据 body 再补请求体字段对齐。
 
 > 上一轮（#295 编辑条目用错钥匙）已按 8.9 §6 迁出：
