@@ -24,7 +24,14 @@
 - 已接进 CI：`ci-debug.yml` 的 `sandbox-tests` job 用**同一份脚本**，与 `android-ci` 并行
   ⇒ 本地绿 ⇒ CI 不会红在同一件事上。
 
-## 🕐 最新状态（2026-11-16 · #298 请求体缺 encryptedFor ⇒ 1.37+ 服务端 422）
+## 🕐 最新状态（2026-11-16 · v0.13.5 正式发布：Bitwarden 同步修复闭环）
+
+> **一句话**：#294~#298 五批 Bitwarden 同步修复经两轮真机验收通过，已发 **v0.13.5 正式版**
+> （`Android Stable Release` run `43846571223` success，tag `v0.13.5` → `ab39130f`，
+> 已置 Latest，APK `Vaultix-v0.13.5.apk` 6,977,746 B / SHA-256 `e2ecfe4a…d48076`。
+> ⚠️ 只推 main + 快进 rele 触发发版；发完回填只推 main，**绝不二次推 rele**。
+
+## 🕐 上一轮（2026-11-16 · #298 请求体缺 encryptedFor ⇒ 1.37+ 服务端 422）
 
 > **一句话**：真机改网址同步，服务端始终不变——根因锁定为**请求体缺 `encryptedFor`**，
 > 而 Vaultwarden 1.37+（web-v2025.6.0）在 `Json<CipherData>` 守卫里把它设为必填，
