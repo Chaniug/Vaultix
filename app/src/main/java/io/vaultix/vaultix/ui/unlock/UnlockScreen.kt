@@ -323,11 +323,36 @@ private fun ViewLockedContent(
  * ⚠️ 曾用大号指纹当主视觉，被用户指出主次颠倒：指纹是手段，按钮里那枚够了。
  */
 @Composable
-private fun ViewLockedEmblem(kind: VaultKind) {
+private fun ViewLockedEmblem(kind: VaultKind) = VaultEmblem(
+    kind = kind,
+    outerSize = EMBLEM_SIZE,
+    badgeSize = EMBLEM_BADGE_SIZE,
+    iconSize = EMBLEM_BADGE_ICON_SIZE,
+)
+
+/**
+ * 解锁页共用的库徽标：**一层极淡径向光晕 + 一道细环 + 中心官方库图标**。
+ *
+ * 查看层锁页与真锁页都用这一组件，只是尺寸不同（各自 Content 传入）——
+ * 保证两页是"同一套设计语言"，同时按各自的内容密度选尺度：
+ * - 查看层锁：只有徽标 + 一个认证按钮 ⇒ 全尺寸（[EMBLEM_SIZE] 148dp）撑起纯黑屏；
+ * - 真锁：还有密码框 / 指纹 / PIN / 解锁按钮 ⇒ 中间档（[PASSWORD_EMBLEM_SIZE] 120dp），
+ *   放大到有新版感，又不挤占表单。
+ *
+ * 装饰全是静态的、纯视觉的 —— 不用文字解释"这是什么"，库名自己会说话。
+ * ⚠️ 曾在大号指纹当主视觉时被指出主次颠倒：指纹是手段，按钮里那枚够了。
+ */
+@Composable
+private fun VaultEmblem(
+    kind: VaultKind,
+    outerSize: Dp,
+    badgeSize: Dp,
+    iconSize: Dp,
+) {
     val primary = MaterialTheme.colorScheme.primary
     Box(
         modifier = Modifier
-            .size(EMBLEM_SIZE)
+            .size(outerSize)
             .clip(CircleShape)
             .background(
                 Brush.radialGradient(
@@ -337,11 +362,7 @@ private fun ViewLockedEmblem(kind: VaultKind) {
             .border(EMBLEM_RING_WIDTH, primary.copy(alpha = EMBLEM_RING_ALPHA), CircleShape),
         contentAlignment = Alignment.Center,
     ) {
-        VaultKindBadge(
-            kind = kind,
-            size = EMBLEM_BADGE_SIZE,
-            iconSize = EMBLEM_BADGE_ICON_SIZE,
-        )
+        VaultKindBadge(kind = kind, size = badgeSize, iconSize = iconSize)
     }
 }
 
@@ -351,6 +372,12 @@ private val EMBLEM_SIZE = 148.dp
 /** 放大后的库徽标直径（默认 56dp 太小，撑不起纯黑屏的主体）。 */
 private val EMBLEM_BADGE_SIZE = 96.dp
 private val EMBLEM_BADGE_ICON_SIZE = 48.dp
+
+/** 真锁页中间档尺寸：比原 56dp 明显放大，又给密码表单留出空间。 */
+private val PASSWORD_EMBLEM_SIZE = 120.dp
+private val PASSWORD_BADGE_SIZE = 80.dp
+private val PASSWORD_BADGE_ICON_SIZE = 40.dp
+
 private val EMBLEM_RING_WIDTH = 1.dp
 private const val EMBLEM_GLOW_ALPHA = 0.10f
 private const val EMBLEM_RING_ALPHA = 0.20f
@@ -590,9 +617,20 @@ private val PIN_DOT_SIZE = Spacing.lg
  */
 @Composable
 private fun VaultHeader(kind: VaultKind, name: String, account: String?) {
-    VaultKindBadge(kind = kind)
+    // ★ 2026-11-16：真锁页换用「放大徽标 + 光晕 + 细环」的新版主视觉，
+    //   与查看层锁页（ViewLockedEmblem）成为同一套设计语言。
+    //   但尺寸取**中间档**：真锁页还有主密码框 / 指纹 / PIN / 解锁按钮，
+    //   内容密度远高于只有"徽标 + 一个按钮"的查看层锁页，全尺寸 148dp 会挤表单。
+    //   ⚠️ 只换视觉：主密码输入、2FA、指纹快捷入口、解锁按钮全部保留 ——
+    //   真锁的密钥已清空，必须靠主密码重登，绝不能看起来像"按指纹就能解"。
+    VaultEmblem(
+        kind = kind,
+        outerSize = PASSWORD_EMBLEM_SIZE,
+        badgeSize = PASSWORD_BADGE_SIZE,
+        iconSize = PASSWORD_BADGE_ICON_SIZE,
+    )
     Spacer(Modifier.height(Spacing.md))
-    Text(text = name, style = MaterialTheme.typography.titleLarge)
+    Text(text = name, style = MaterialTheme.typography.headlineSmall)
     if (account != null) {
         Text(
             text = account,
