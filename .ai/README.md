@@ -24,7 +24,43 @@
 - 已接进 CI：`ci-debug.yml` 的 `sandbox-tests` job 用**同一份脚本**，与 `android-ci` 并行
   ⇒ 本地绿 ⇒ CI 不会红在同一件事上。
 
-## 🕐 最新状态（2026-11-16 · v0.13.6 正式发布，今日收工）
+## 🕐 最新状态（2026-11-17 · #300 自动锁定审查 + 验证码 ⋮ 对齐）
+
+> **一句话**：两组用户反馈——① 「自动锁定有没有 bug」⇒ 逐环节对照 Bitwarden 后判定
+> **核心健全、一行没改**（并写明四处"看着像 bug 其实不是"的理由，防止接力者被诱导重改）；
+> 只修了一个确凿死分支：自定义时长「天」永远不可达。② 「验证码 ⋮ 偏左」⇒ 反编译取证
+> **M3 IconButton 容器恒 48dp**（2026-10-19 注释按 36dp 算错），图标视觉右移 6dp，
+> **48dp 热区原样保留**。
+
+- **自动锁定审查结论（不动核心）**：`VaultTimeout` 10 档（含 `OnSystemLock` / `OnAppRestart`）、
+  `checkForVaultTimeoutInternal` 四族穷尽分流、每库 `timerJobMap` 回前台全撤、熄屏后按
+  `elapsedRealtime()` 单调时钟重算并钳 `[0, duration]`、`isDeviceLocked` + 300ms 单次复检 +
+  可作废 token、「从不」档密钥常驻 + 界面层 `viewLock` 双层、门禁开关与 `AutoViewGate` **同源**
+  （都是 `fingerprintLockAvailable()` 投影）—— 逐条对上上游 `VaultLockManagerImpl`。
+- ⚠️ **刻意不改的四点（别再改）**：`checkForVaultTimeout(UserChanged)` 生产零调用（那是对齐上游
+  **账号切换**语义，Vaultix 单用户多库没有这个场景）；`onAppCreated` 只处理 `activeVaultId`
+  （刚起进程时非活动库本就锁着）；改档位不重算当前会话定时器（上游同样等下次切后台）；
+  `devRelaxScreenLock` 只拦 `OnAppRestart`（放开会让单测与产品语义分叉）。
+- **真 bug（已修）**：`vaultTimeoutLabel` 的 `Custom` 分支把 `MINUTES_PER_HOUR` 判断写在
+  `MINUTES_PER_DAY` 之前，而 1440 = 24 × 60 ⇒ **任何整天的分钟数必然也是整小时**，
+  `auto_lock_day_fmt` 是死资源：填 1440 显示「24 小时」、2880 显示「48 小时」，不崩不报错。
+  修法：抽纯函数 `customTimeoutUnit()`（**天在小时前**），`vaultTimeoutLabel` 改调它；
+  `CustomTimeoutUnitTest` 4 例（整天 / 23h 不被天吞 / 分钟 / 上限 69 天全遍历）。
+- **验证码 ⋮（已修）**：2026-10-19 把 `size(36.dp)` 换成 `minimumInteractiveComponentSize()` 时，
+  注释按「容器 36dp ⇒ 左右各留 8dp」推算"贴右距离不变"——**前提是错的**。反编译
+  `material3-android:1.5.0-alpha16` 的 `IconButtonKt`，字节码 `StateLayerSize = 48`
+  ⇒ 20dp 图标居中左右各留 **14dp**，视觉右缘比原设计多缩 **6dp**，正是用户说的"偏左了一点"。
+  修法：热区 `minimumInteractiveComponentSize()` **保留**、图标 `offset(x = 6.dp)` 推回右缘 8dp；
+  **只 offset 图标不 offset 按钮** ⇒ 点击手感不变、图标仍在 48dp 容器内不被裁。
+  `TotpRowMenuAlignmentTest` 4 条源码门禁（**先剥 `//` 注释**，否则 KDoc 里的「36dp」会误命中）。
+- **变异反证**：① 小时判断调回前面 ⇒ 2 例红；② 去掉 offset ⇒ 1 例红；③ 热区退回 `size(36.dp)`
+  ⇒ 2 例红。全部字节级还原后复绿。
+- **验证**：`app` **732 例全绿**（724 + 4 + 4）、detekt 通过、**23 个门禁 + 20 个自测**全绿、
+  Markdown 链接 **276 个文件**全部有效。
+- **待真机确认（两条，肉眼即可）**：设置 → 锁与安全 → 自动锁定 → 自定义填 **1440**，应显示
+  「**1 天**」（此前是「24 小时」）；验证码列表卡片右上角 ⋮ 的图标右缘应与其他列表行尾元素贴右一致。
+
+## 🕐 上一轮（2026-11-16 · v0.13.6 正式发布，今日收工）
 
 > **一句话**：今日两件大事全部闭环并发版 —— ① #294~#298 Bitwarden 同步修复链
 > （`encryptedFor` 真机验收通过）；② #299 浏览器通行密钥 origin 透传（Via 真机验收通过）

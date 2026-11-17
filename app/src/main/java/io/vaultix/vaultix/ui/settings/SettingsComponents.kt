@@ -597,19 +597,45 @@ internal fun vaultTimeoutLabel(timeout: VaultTimeout): String = when (timeout) {
             R.string.auto_lock_hour_fmt,
             requireNotNull(timeout.vaultTimeoutInMinutes) / AutoLockPresets.MINUTES_PER_HOUR,
         )
-    is VaultTimeout.Custom -> when {
-        timeout.vaultTimeoutInMinutes % AutoLockPresets.MINUTES_PER_HOUR == 0 ->
-            stringResource(
-                R.string.auto_lock_hour_fmt,
-                timeout.vaultTimeoutInMinutes / AutoLockPresets.MINUTES_PER_HOUR,
-            )
-        timeout.vaultTimeoutInMinutes % AutoLockPresets.MINUTES_PER_DAY == 0 ->
+    is VaultTimeout.Custom -> when (customTimeoutUnit(timeout.vaultTimeoutInMinutes)) {
+        AutoLockUnit.DAY ->
             stringResource(
                 R.string.auto_lock_day_fmt,
                 timeout.vaultTimeoutInMinutes / AutoLockPresets.MINUTES_PER_DAY,
             )
-        else -> stringResource(R.string.auto_lock_minutes_fmt, timeout.vaultTimeoutInMinutes)
+        AutoLockUnit.HOUR ->
+            stringResource(
+                R.string.auto_lock_hour_fmt,
+                timeout.vaultTimeoutInMinutes / AutoLockPresets.MINUTES_PER_HOUR,
+            )
+        AutoLockUnit.MINUTE ->
+            stringResource(R.string.auto_lock_minutes_fmt, timeout.vaultTimeoutInMinutes)
     }
+}
+
+/**
+ * 自定义自动锁定分钟数该显示的**单位**（抽成纯函数供 JVM 单测钉住分支顺序）。
+ *
+ * 为什么值得抽：`vaultTimeoutLabel` 是 Composable，真机之外跑不了；而「该显示天还是小时」
+ * 是一个**纯整数判定**，把判定权交给它，测试就能在不起 Compose 的情况下穷举边界。
+ */
+internal enum class AutoLockUnit { MINUTE, HOUR, DAY }
+
+/**
+ * 分钟数 → 显示单位。判据顺序是本体（见 [AutoLockUnit] 调用点）。
+ *
+ * ★ #300（2026-11-17）：**「天」必须在「小时」之前判**。
+ *   1440 = 24 × 60，任何整天的分钟数必然也是整小时 —— 若先判小时，
+ *   [AutoLockPresets.MINUTES_PER_DAY] 那一档永远不可达：`auto_lock_day_fmt` 是死资源，
+ *   用户自定义 1440 分钟（1 天）会显示「24 小时」、2880 显示「48 小时」。
+ *   这与 #297「成功不含证据」同族：写法看着覆盖到了，运行期却走不到。
+ *
+ * @param minutes 自定义分钟数，须为正（[VaultTimeout.Custom] 的 init 已保证）。
+ */
+internal fun customTimeoutUnit(minutes: Int): AutoLockUnit = when {
+    minutes % AutoLockPresets.MINUTES_PER_DAY == 0 -> AutoLockUnit.DAY
+    minutes % AutoLockPresets.MINUTES_PER_HOUR == 0 -> AutoLockUnit.HOUR
+    else -> AutoLockUnit.MINUTE
 }
 
 /**

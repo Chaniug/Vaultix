@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -1133,6 +1134,18 @@ private fun NextCodePreview(code: String) {
 }
 
 /**
+ * ⋮ 图标的**视觉右移量**（#300，6dp）。
+ *
+ * M3 `IconButton` 容器恒 48dp（`material3-android:1.5.0-alpha16` 的 StateLayerSize），
+ * 20dp 图标居中 ⇒ 左右各留 14dp；原设计意图是图标右缘距容器 8dp（对应旧版「36dp 视觉
+ * 宽度」），故需右移 14 − 8 = 6dp。**只移动图标视觉，不动 48dp 触摸热区。**
+ *
+ * 抽成常量供源码门禁测试核对，避免后人改数值时失去理由（见
+ * `TotpRowMenuAlignmentTest`）。
+ */
+internal val TotpRowMenuIconVisualNudge = 6.dp
+
+/**
  * 验证码行右上角菜单（对齐 Bastion：低频操作收进 `MoreVert`，不铺在卡片上）。
  *
  * @param onBind 「绑定到密码条目」；已绑定时传 `null`（菜单里不出现该行）。
@@ -1179,16 +1192,21 @@ private fun TotpRowMenu(
         )
     }
     Box {
-        // ★ 2026-10-19：**视觉 36dp，触摸目标 48dp**。
+        // ★ #300（2026-11-17）：**热区 48dp 不动，图标视觉右缘贴回原设计位**。
         //
-        // 改前 `Modifier.size(36.dp)` 一刀切：视觉贴右了，但**热区也塌到 36dp**，
-        // 低于 Material / WCAG 的 48dp 下限（审计 §3.2）。
+        // 2026-10-19 把 `Modifier.size(36.dp)` 换成 `minimumInteractiveComponentSize()` 时，
+        // 注释按「容器 36dp、图标 20dp 居中 ⇒ 左右各留 8dp」推算，声称"贴右距离与改前一致"。
+        // 但反编译 `material3-android:1.5.0-alpha16` 证实 **M3 IconButton 的容器恒为 48dp**
+        // （字节码 StateLayerSize = 48），20dp 图标居中实际左右各留 **14dp** —— 比注释假设
+        // 多缩了 6dp。图标视觉右缘从距卡片内缘 8dp 变成 14dp，即用户看到的「偏左了一点」。
         //
-        // 现在把两件事拆开：
-        //  · 热区：`minimumInteractiveComponentSize()` —— 保证 ≥48dp 可点（M3 自己的下限机制，
-        //    比手写 `heightIn(min = 48.dp)` 正确：后者会把 IconButton 的水波纹也拉大）；
-        //  · 视觉：图标仍 20dp，`IconButton` 空出来的 8dp 左右各一半 ⇒ 视觉宽度 ≈36dp，
-        //    贴右的距离与改前一致。
+        // 修法把两件事彻底分开：
+        //  · 热区：`minimumInteractiveComponentSize()` 保留 ⇒ ≥48dp 可点（M3 下限机制，
+        //    比手写 `heightIn(min = 48.dp)` 正确：后者连水波纹一起拉大）；
+        //  · 视觉：图标仍 20dp，用 `offset(x = 6.dp)` 把它推回原设计的贴右位置，
+        //    距容器右缘 14 − 6 = 8dp，与「36dp 视觉宽度」那版逐像素一致。
+        // ⚠️ 只 offset 图标、不 offset IconButton：热区仍以按钮中心为准，点击手感不变；
+        //    20dp 图标右移 6dp 后仍在 48dp 容器内（左 20 / 右 14），不会被裁。
         IconButton(
             onClick = { expanded = true },
             modifier = Modifier.minimumInteractiveComponentSize(),
@@ -1196,7 +1214,9 @@ private fun TotpRowMenu(
             Icon(
                 imageVector = Icons.Filled.MoreVert,
                 contentDescription = stringResource(R.string.content_desc_more_options),
-                modifier = Modifier.size(UiSize.SecondaryIcon),
+                modifier = Modifier
+                    .size(UiSize.SecondaryIcon)
+                    .offset(x = TotpRowMenuIconVisualNudge),
             )
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
