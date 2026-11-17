@@ -182,4 +182,64 @@ class ItemsMoreMenuGroupingTest {
             syncLockRow.contains("R.string.items_lock"),
         )
     }
+
+    /**
+     * ★ 2026-11-17 真机闪退（`#301.1`）：菜单里**不许出现 subcompose 组件**。
+     *
+     * `DropdownMenuPopup` 内部是 `Column(modifier.width(IntrinsicSize.Max))`
+     * （`AndroidMenu.android.kt`），开菜单时会向子树索取 **intrinsic 宽度**；
+     * 而 `BoxWithConstraints` 这类 `SubcomposeLayout` **不支持 intrinsic 测量**，被问到时直接抛
+     * `IllegalStateException: Intrinsic measurements are not currently supported by
+     * SubcomposeLayout`。
+     *
+     * 崩溃发生在**首次组合 + 测量**阶段 ⇒ 用户看到的是"点一下 App 就没了、菜单根本没出现"，
+     * 而不是"菜单闪一下"。编译、detekt、其它单测**全都查不出** —— 只有真机能看见。
+     *
+     * 所以这条要钉死：菜单里用中间省略必须走 `MiddleEllipsizedTextInIntrinsicScope`
+     * （内部用 `Modifier.layout` 回读约束，不参与 subcompose）。
+     *
+     * ⚠️ 断言读的是**剥掉 `//` 注释**后的源码：本轮两段 KDoc 里都写着
+     * `BoxWithConstraints` / `SubcomposeLayout`（就是在解释为什么不能用它们），
+     * 不剥注释会"注释命中、代码其实没写" —— 本仓库第 N 次同款坑。
+     */
+    @Test
+    fun `菜单内不允许出现不支持 intrinsic 测量的 subcompose 组件`() {
+        val offenders = listOf(
+            "BoxWithConstraints",
+            "SubcomposeLayout",
+            "LazyColumn",
+            "LazyRow",
+            "rememberTextMeasurer", // 只有 BoxWithConstraints 版才需要
+        )
+        val menuBodies = listOf(
+            "ItemsMoreMenu" to moreMenu,
+            "MenuVaultHeader" to bodyOf("MenuVaultHeader"),
+            "MenuNavItems" to navItems,
+            "MenuSyncLockRow" to syncLockRow,
+            "MenuVaultBadge" to bodyOf("MenuVaultBadge"),
+        )
+        menuBodies.forEach { (name, body) ->
+            // 逐行剥 `//` 注释（块注释里的说明文字同样会造成假绿/假红）
+            val code = body.lines()
+                .map { it.substringBefore("//") }
+                .joinToString("\n")
+            offenders.forEach { bad ->
+                assertTrue(
+                    "$name 里不能出现 $bad：DropdownMenuPopup 的 Column 用了 " +
+                        "IntrinsicSize.Max，subcompose 节点会在测量期抛异常（真机直接闪退）",
+                    !Regex("""\b$bad\b""").containsMatchIn(code),
+                )
+            }
+        }
+        // 正向钉住：必须改用 intrinsic-safe 变体
+        val header = bodyOf("MenuVaultHeader")
+        assertTrue(
+            "MenuVaultHeader 的来源行必须用 MiddleEllipsizedTextInIntrinsicScope",
+            header.contains("MiddleEllipsizedTextInIntrinsicScope("),
+        )
+        assertTrue(
+            "MenuVaultHeader 不能用普通的 MiddleEllipsizedText（内部是 BoxWithConstraints）",
+            !header.contains("MiddleEllipsizedText("),
+        )
+    }
 }

@@ -39,8 +39,12 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
@@ -116,4 +120,60 @@ private fun fitMiddle(
         if (widthOf(foldMiddle(text, keep)) <= maxPx) low = keep else high = keep - 1
     }
     return foldMiddle(text, low)
+}
+
+/**
+ * 同上，但**不依赖 `BoxWithConstraints`** —— 给处在 intrinsic 测量路径里的容器用。
+ *
+ * ## 为什么必须有这个变体（2026-11-17 真机闪退，#301）
+ *
+ * 用户在条目页顶栏 ⋮ 一点就闪退、**菜单根本没出现**。根因是两件事撞在一起：
+ *
+ * 1. M3 的 `DropdownMenuPopup` 内部是
+ *    `Column(modifier.width(IntrinsicSize.Max))`（`AndroidMenu.android.kt`），
+ *    开菜单时会向子树**索取 intrinsic 宽度**；
+ * 2. [MiddleEllipsizedText] 的 `BoxWithConstraints` 是 `SubcomposeLayout`，
+ *    **不支持 intrinsic 测量** —— 被问到时直接抛
+ *    `IllegalStateException: Intrinsic measurements are not currently supported by SubcomposeLayout`。
+ *
+ * Popup 在**首次组合 + 测量**阶段就抛，所以用户看到的是"点一下 App 就没了"，
+ * 而不是"菜单闪一下"。
+ *
+ * ## 为什么不用固定宽度硬算
+ *
+ * 菜单宽度确实恒定 280dp，理论上可以手算"280 − 左右 padding − 徽标 − 间距"。
+ * 但那把**字号、字体缩放、无障碍大字体**全部钉死在推算里 —— 用户调大字号后就会算错。
+ * 这里改用 `Text` 自己的 `onTextLayout` 回读**真实可用宽度**：测量后回调、不参与 intrinsic，
+ * 只在宽度变化时触发一次重组，代价可忽略。
+ *
+ * ⚠️ 区别只在这一个点，其余（`Clip` 而非平台省略、二分折叠）与 [MiddleEllipsizedText] 完全一致。
+ */
+@Composable
+fun MiddleEllipsizedTextInIntrinsicScope(
+    text: String,
+    modifier: Modifier = Modifier,
+    style: TextStyle = LocalTextStyle.current,
+) {
+    val measurer = rememberTextMeasurer()
+    // -1 = 还没量到过。首帧先按原样画（宽度未定），measure 后立即得到真值再折。
+    var availablePx by remember(text, style) { mutableStateOf(-1) }
+    val display = remember(text, availablePx, style, measurer) {
+        if (availablePx <= 0) text else fitMiddle(measurer, text, availablePx.toFloat(), style)
+    }
+    Text(
+        text = display,
+        style = style,
+        maxLines = 1,
+        overflow = TextOverflow.Clip,
+        modifier = modifier.layout { measurable, constraints ->
+            // 在**布局阶段**回读可用宽度：这里拿到的就是父给的 `maxWidth`。
+            // ⚠️ 不能改用 `onTextLayout`：该 API 在本项目的 Compose 版本里不在公开
+            //    `ui.text` 包下（编译期 `Unresolved reference`）。`Modifier.layout` 同样
+            //    不属于 subcompose，**不会**破坏 intrinsic 测量 —— 正是本函数存在的意义。
+            val max = constraints.maxWidth
+            if (max != availablePx) availablePx = max
+            val placeable = measurable.measure(constraints)
+            layout(placeable.width, placeable.height) { placeable.place(0, 0) }
+        },
+    )
 }

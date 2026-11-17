@@ -149,6 +149,7 @@ import io.vaultix.vaultix.ui.common.TypeBadge
 import io.vaultix.vaultix.ui.common.rememberImmersiveBarPadding
 import io.vaultix.vaultix.ui.common.rememberScrollCollapseFraction
 import io.vaultix.vaultix.ui.common.MiddleEllipsizedText
+import io.vaultix.vaultix.ui.common.MiddleEllipsizedTextInIntrinsicScope
 import io.vaultix.vaultix.ui.common.toggleSelection
 import io.vaultix.vaultix.ui.common.VaultCardInfo
 import io.vaultix.vaultix.ui.common.syncBadgeColor
@@ -1476,7 +1477,14 @@ private fun MenuVaultHeader(card: VaultCardInfo) {
             }
             // 固定宽度后**必须中间省略**：尾部是整个路径里最需要被确认的一段（文件名），
             // 尾部省略会先把它吃掉。
-            MiddleEllipsizedText(
+            //
+            // ⚠️ **必须用 InIntrinsicScope 变体**（2026-11-17 真机闪退，见 #301）：
+            //    `DropdownMenuPopup` 内部是 `Column(width(IntrinsicSize.Max))`，开菜单时会向
+            //    子树索取 intrinsic 宽度；`MiddleEllipsizedText` 的 `BoxWithConstraints` 是
+            //    `SubcomposeLayout`，**不支持 intrinsic** ⇒ 直接抛 `IllegalStateException`。
+            //    崩在首次组合 + 测量阶段 ⇒ 用户看到的是"点一下 App 就没了，菜单根本没出现"。
+            //    改回朴素 `Text` 也能不崩，但那会失去中间省略（长路径尾部文件名被吃掉）。
+            MiddleEllipsizedTextInIntrinsicScope(
                 text = card.origin,
                 modifier = Modifier.fillMaxWidth(),
                 style = MaterialTheme.typography.bodySmall.copy(
