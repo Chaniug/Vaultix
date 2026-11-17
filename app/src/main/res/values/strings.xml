@@ -1555,6 +1555,10 @@
     <string name="card_wallet_search_hint">搜索卡片</string>
     <string name="card_wallet_search_close">关闭搜索</string>
     <string name="card_wallet_new">新建银行卡</string>
+    <!-- 卡包视图切换（2026-11-17）：收拢成钱包堆栈 / 展开回平铺。 -->
+    <string name="card_wallet_collapse">收拢为钱包</string>
+    <string name="card_wallet_expand">展开卡片</string>
+    <string name="card_wallet_stack_count">%1$d 张卡</string>
     <!-- 2026-11-10 卡面造型：这三条是卡面/名片上的印刷标签，不是界面提示，故都很短。 -->
     <string name="card_face_cardholder">持卡人</string>
     <string name="card_face_valid_thru">有效期</string>

@@ -41,8 +41,16 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.clickable
+import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.ViewAgenda
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ScaffoldDefaults
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -67,6 +75,7 @@ import io.vaultix.vaultix.ui.common.rememberScrollCollapseFraction
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import io.vaultix.vaultix.ui.theme.Spacing
+import io.vaultix.vaultix.ui.theme.VaultixCorner
 
 /**
  * 卡包 Tab（Docs/08 S20 最小版 / main-shell-migration §6.1.3）。
@@ -116,6 +125,9 @@ fun CardWalletScreen(
     // （密码 / 验证码页的 query 还要参与「切库后重查」，那两页才必须放在 ViewModel）。
     var searchActive by rememberSaveable { mutableStateOf(false) }
     var query by rememberSaveable { mutableStateOf("") }
+    // 2026-11-17：视图模式。false=展开（平铺，默认行为不变），true=收拢（堆叠钱包）。
+    // rememberSaveable：切 Tab / 旋转后保持用户上次选的视图。
+    var collapsed by rememberSaveable { mutableStateOf(false) }
     val closeSearch: () -> Unit = { searchActive = false; query = "" }
     val visibleCards = remember(cards, query) { filterCards(cards, query) }
     // 搜索态自己消费返回：主界面是根路由（栈里没有上一层），不拦就会直接退回桌面。
@@ -198,6 +210,14 @@ fun CardWalletScreen(
                         topInset = topInset,
                         bottomInset = bottomInset,
                     )
+                } else if (showStacked(collapsed, searchActive)) {
+                    // 收拢态静态堆叠；搜索态强制平铺（堆叠会藏卡片，与搜索冲突）。
+                    CollapsedCardStack(
+                        cards = visibleCards,
+                        topInset = topInset,
+                        bottomInset = bottomInset,
+                        onExpand = { collapsed = false },
+                    )
                 } else {
                     LazyColumn(
                         state = listState,
@@ -249,6 +269,7 @@ fun CardWalletScreen(
                                 contentDescription = stringResource(R.string.card_wallet_search_hint),
                             )
                         }
+                        CardWalletViewToggle(collapsed = collapsed, onToggle = { collapsed = !collapsed })
                     },
                 )
             }
@@ -272,6 +293,111 @@ fun CardWalletScreen(
                 creating = null
             },
         )
+    }
+}
+
+/**
+ * 是否显示堆叠视图：仅收拢态、且不在搜索中。
+ * 抽成纯函数是为了不让 `collapsed && !searchActive` 的分支挤进主函数的
+ * detekt `CyclomaticComplexMethod`（主函数本就贴着 ≤14 上限）。
+ */
+private fun showStacked(collapsed: Boolean, searchActive: Boolean): Boolean =
+    collapsed && !searchActive
+
+/** 视图切换按钮：收拢时显示「展开」图标，展开时显示「收拢」图标。 */
+@Composable
+private fun CardWalletViewToggle(collapsed: Boolean, onToggle: () -> Unit) {
+    IconButton(onClick = onToggle) {
+        Icon(
+            imageVector = if (collapsed) Icons.Filled.ViewAgenda else Icons.Filled.Dashboard,
+            contentDescription = stringResource(
+                if (collapsed) R.string.card_wallet_expand else R.string.card_wallet_collapse,
+            ),
+        )
+    }
+}
+
+/** 收拢态最多画几层卡（顶层完整 + 下面几层露边）。 */
+private const val COLLAPSED_STACK_LAYERS = 3
+/** 堆叠时每层下移量（dp）——露出资深卡的上沿，读作"一摞"。 */
+private val STACK_LAYER_OFFSET = 12.dp
+/** 堆叠时每层的旋转角（度），底层更大，做出手随意放上的不齐感。 */
+private const val STACK_LAYER_ROTATION = 2.5f
+/** 堆叠时每层的水平缩进（dp）。 */
+private val STACK_LAYER_INSET = 6.dp
+/** 顶层卡的外圈投影（dp）。 */
+private val STACK_TOP_SHADOW = 10.dp
+
+/**
+ * 收拢态的"钱包堆栈"（2026-11-17）：把卡片错层叠放，像一摞卡插在钱包里。
+ *
+ * 设计取舍：
+ * - **静态**：不做翻转/展开动画（用户历来对堆叠转场动效评价不佳）；
+ *   点整块 = 展开回平铺，打开详情只在展开态的列表里走。
+ * - **复用卡面**：每层仍是 [CardWalletRow]，银行卡/名片造型不变，只是叠在一起。
+ * - **下面几层是装饰**：`enabled = false` 的 clickable 吃掉手势但不当按钮，
+ *   只有顶层可点；无障碍语义整块合并成一句"N 张卡，点按展开"。
+ * - 手势不碰删除：长按 / 左滑删都在展开态里，收拢态没有误触路径。
+ */
+@Composable
+private fun CollapsedCardStack(
+    cards: List<VaultItem>,
+    topInset: Dp,
+    bottomInset: Dp,
+    onExpand: () -> Unit,
+) {
+    val count = cards.size
+    val expandLabel = stringResource(R.string.card_wallet_expand)
+    val countLabel = stringResource(R.string.card_wallet_stack_count, count)
+    // graphicsLayer{} 的作用域没有 Density ⇒ 在合成期先把 dp 换算成 px。
+    val density = LocalDensity.current
+    val layerOffsetPx = with(density) { STACK_LAYER_OFFSET.toPx() }
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(
+                start = Spacing.lg,
+                top = topInset + Spacing.xl,
+                end = Spacing.lg,
+                bottom = bottomInset + Spacing.xl,
+            )
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onExpand,
+            )
+            .semantics(mergeDescendants = true) { contentDescription = "$countLabel，$expandLabel" },
+        contentAlignment = Alignment.TopCenter,
+    ) {
+        // 从最底层画到最顶层：index 越大越靠上（后绘制的盖住先绘制的）。
+        val layerCount = count.coerceAtMost(COLLAPSED_STACK_LAYERS)
+        for (layer in (layerCount - 1) downTo 0) {
+            val card = cards[layer]
+            // cards[0] 是顶层（最后绘制、盖在最上）：depth=0，不旋转不下移；
+            // layer 越大越靠底，错层与旋转越多。
+            val isTop = layer == 0
+            val depth = layer.toFloat()
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .graphicsLayer {
+                        rotationZ = if (isTop) 0f else depth * STACK_LAYER_ROTATION
+                        // 底层往上移、露出上沿，才读得出"一摞"；往下会被顶层完全盖住。
+                        translationY = -depth * layerOffsetPx
+                    }
+                    .padding(horizontal = STACK_LAYER_INSET * depth)
+                    .then(
+                        if (isTop) Modifier.shadow(STACK_TOP_SHADOW, VaultixCorner.Panel) else Modifier,
+                    ),
+            ) {
+                CardWalletRow(
+                    item = card,
+                    isSelected = false,
+                    onClick = onExpand,
+                    onLongClick = {},
+                )
+            }
+        }
     }
 }
 

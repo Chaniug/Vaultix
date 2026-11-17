@@ -85,6 +85,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -157,7 +158,7 @@ import io.vaultix.vaultix.ui.common.syncBadgeLabel
 import io.vaultix.vaultix.ui.common.vaultCardInfoOf
 import io.vaultix.vaultix.ui.common.vaultTopBarTitle
 import io.vaultix.vaultix.ui.common.vaultOriginLabel
-import io.vaultix.vaultix.ui.common.VaultixWavyProgressBar
+import io.vaultix.vaultix.ui.common.VaultixMorphingProgressBar
 import io.vaultix.vaultix.ui.shell.BottomDockOccupiedHeight
 import io.vaultix.vaultix.ui.theme.Spacing
 import io.vaultix.vaultix.ui.theme.UiSize
@@ -249,6 +250,10 @@ private object ItemsContentType {
  */
 private val FILTER_CHIP_HEIGHT = 32.dp
 
+/** chip 错位淡入：单枚时长 / 相邻间隔 / 起始下滑像素（2026-11-17）。 */
+private const val QUICK_FILTER_CHIP_APPEAR_MS = 220
+private const val QUICK_FILTER_CHIP_STAGGER_MS = 30
+private const val QUICK_FILTER_CHIP_SLIDE_PX = 8f
 
 /**
  * 列表顶部的「密码库状态」行：**来源 + 条目数**（2026-09-30 用户要求）。
@@ -1883,17 +1888,35 @@ private fun QuickFilterChips(
         horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        ItemsQuickFilter.entries.forEach { filter ->
-            FilterChip(
-                selected = filter == selected,
-                onClick = { onSelect(filter) },
-                label = { Text(stringResource(quickFilterLabelRes(filter))) },
-                leadingIcon = if (filter == selected) {
-                    { Icon(Icons.Filled.Check, contentDescription = null) }
-                } else {
-                    null
-                },
-            )
+        ItemsQuickFilter.entries.forEachIndexed { index, filter ->
+            key(filter) {
+                // 2026-11-17：错位淡入——每枚 chip 比前一枚晚 30ms 出现，像"依次铺开"。
+                // 只改自己的 alpha / 位移，不改面板高度 ⇒ 与 rememberQuickFilterRowInset
+                // 的逐帧同步契约（见 QuickFilterPanel KDoc）毫不相干，不会重现"压住条目"。
+                // key(filter) 固定组合身份，动画状态不会在重组时串到别的 chip。
+                val appear by animateFloatAsState(
+                    targetValue = 1f,
+                    animationSpec = tween(
+                        durationMillis = QUICK_FILTER_CHIP_APPEAR_MS,
+                        delayMillis = index * QUICK_FILTER_CHIP_STAGGER_MS,
+                    ),
+                    label = "chip_appear_${filter.storageKey}",
+                )
+                FilterChip(
+                    selected = filter == selected,
+                    onClick = { onSelect(filter) },
+                    label = { Text(stringResource(quickFilterLabelRes(filter))) },
+                    leadingIcon = if (filter == selected) {
+                        { Icon(Icons.Filled.Check, contentDescription = null) }
+                    } else {
+                        null
+                    },
+                    modifier = Modifier.graphicsLayer {
+                        alpha = appear
+                        translationY = (1f - appear) * QUICK_FILTER_CHIP_SLIDE_PX
+                    },
+                )
+            }
         }
     }
 }
@@ -2233,10 +2256,11 @@ private fun SyncNoteBanner(
     ) {
         when (note) {
             ItemsViewModel.SyncNote.InProgress -> {
-                // 此前这里只有一条波浪进度条、零文字：真机 18:08 那次「提示有更新
-                // → 条目出现」中间空了 36 秒，界面全程没说在等什么。
+                // 2026-11-17：240×10dp 的波浪粗条换成满宽 3dp 扫光细条
+                // （[VaultixMorphingProgressBar]，与函数 KDoc「进行中 = 细进度条」对齐）。
+                // 文字保留：真机曾出现「提示有更新 → 条目出现」中间空 36 秒而全程无说明。
                 Column {
-                    VaultixWavyProgressBar(modifier = Modifier.fillMaxWidth())
+                    VaultixMorphingProgressBar()
                     Text(
                         text = stringResource(R.string.items_sync_in_progress),
                         style = MaterialTheme.typography.bodySmall,
