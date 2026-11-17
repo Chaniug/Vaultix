@@ -1266,37 +1266,31 @@ private fun BoxScope.ItemsTopBar(
 }
 
 /**
- * 顶栏「更多」菜单（⋮）：**库身份 + 三组动作**的浮层（2026-11-17 第 5 轮重构）。
+ * 顶栏「更多」菜单（⋮）：**身份带 + 动作区**两段式浮层（2026-11-17 #302 第 6 轮重构）。
  *
- * ## 这一轮改的是「形态」，不是「内容」
+ * ## 从"三张等权白卡"到"两段主次"（#302）
  *
- * 用户原话：「这个部分的 UI 该如何设计才好看呢？信息直观，功能完善，目前感觉这个看起来
- * 很老套的样子」。此前它是**单块 `DropdownMenu` + 两条 `HorizontalDivider`**：一整片同色底板、
- * 4dp 小圆角、组与组只靠 1dp 灰线区分 —— 那是十年前 Android 菜单的样子，和本项目
- * 「16dp 圆角卡片 + 8dp 间隙」的语言根本不是一套。
+ * 第 5 轮把老菜单换成三块独立白卡后，用户仍觉得"堆、碎、没主次"。根因不是风格，是
+ * **视觉权重**：库身份（背景信息）、导航（主操作）、状态（次操作）被画成三张一模一样的
+ * 白卡，谁都不突出。第 6 轮按主次重排为两段：
  *
- * ⇒ 换成 M3 **Expressive 分组菜单**（`DropdownMenuPopup` + `DropdownMenuGroup`）：
- * 三块**各自全圆角**的独立浮块、块间是 8dp **真实间隙**（不是画出来的线）、
- * 每块自带阴影与独立点击轮廓。**没有新增任何一个功能、也没有删掉任何一个**，
- * 只把"这是三件不同的事"从"一条分隔线"升级成"空间结构本身"。
+ * | 段 | 内容 | 回答的问题 | 视觉 |
+ * |---|---|---|---|
+ * | 1 身份带 | 类型徽标 / 库名 / 条目数 / 来源 / 状态灯+文案 | **我在哪**（背景） | `surfaceContainerHigh` 淡底 |
+ * | 2 动作区 | 切换密码库 · 验证码 · 回收站 · 文件夹管理 ── 同步 / 锁定 | **做什么** | `surfaceContainer` 白卡 |
  *
- * | 组 | 内容 | 回答的问题 |
- * |---|---|---|
- * | 1 | 库身份卡（类型徽标 / 库名 / 条目数 / 来源 / 同步状态） | **我在哪** |
- * | 2 | 切换密码库 · 验证码 · 回收站 · 文件夹管理 | **去别处** |
- * | 3 | `[灯] [同步] ←weight→ [锁定]` | **对这个库做什么** |
+ * - 主次靠**底色**区分（淡底信息 vs 白卡动作），不靠卡的数量；
+ * - 动作区内两个子分区用 1dp `HorizontalDivider` 分开，而不是再拆成第二张卡 ——
+ *   它们都是"动作"，只是去别处 vs 对本库操作，没有主次关系；
+ * - 状态灯**只画一次**（在身份带），动作区底部只剩同步/锁定两个图标，见 [MenuSyncLockRow]。
  *
- * ⚠️ 第 3 组的三元素是 2026-11-08~09 改了**四轮**才定稿的（"删元素能解决拥挤，
- *    但会制造空旷"），本轮**原样保留**，只是把它关进自己的组里。改之前先读
- *    [MenuSyncLockRow] 的 KDoc。
+ * ## 不变的硬约束
  *
- * ⚠️ 宽度**必须恒定**（2026-10-04 真机对照过）：三组共用 `MENU_PANEL_WIDTH`，
+ * ⚠️ 宽度仍**恒定**（2026-10-04 真机对照过）：两段共用 `MENU_PANEL_WIDTH`，
  *    否则切库时浮层会随内容宽度跳变。见 [MENU_PANEL_WIDTH]。
- *
- * ⚠️ 「切换密码库」仍在第一组最上面（2026-09-14 / #96）：多库并存时这是"换个库看"的
+ * ⚠️ 「切换密码库」仍在导航组最上面（2026-09-14 / #96）：多库并存时这是"换个库看"的
  *    唯一正确语义入口 —— 此前用户能碰到的只有「锁定」（语义恰好相反），
  *    导致 KDBX 库「添加了却找不到」。
- *
  * ⚠️ 「验证码」只在**调用方给了入口且底部导航没有该页签**时出现；
  *    autofill 的条目路由（`ItemsRoute`）没有底部导航，那里必须留着它。
  */
@@ -1319,9 +1313,13 @@ private fun ItemsMoreMenu(
     Box {
         MenuVaultAnchor(vaultCard = vaultCard, onClick = { expanded = true })
         DropdownMenuPopup(expanded = expanded, onDismissRequest = { expanded = false }) {
-            // 库未知时只剩「去别处」和「对本库动作」两组。
+            // #302（2026-11-17）从「三张等权白卡」改成「两段主次」：
+            //   段 1 身份带 = 底色 surfaceContainerHigh 的信息带（不是白卡），回答"我在哪"；
+            //   段 2 动作区 = 一张白卡，导航项与状态行之间用 1dp 分隔线分区（不是第二张卡）。
+            // 为什么合并：三张同构白卡视觉权重相同，但身份是背景信息、导航是主操作、
+            //   状态是次操作，三者被等量呈现 ⇒ 看着"堆、碎、没主次"。
             if (vaultCard != null) {
-                MenuGroup(interaction = groupInteraction) {
+                MenuGroup(interaction = groupInteraction, tinted = true) {
                     MenuVaultHeader(card = vaultCard)
                 }
                 MenuGroupGap()
@@ -1334,11 +1332,14 @@ private fun ItemsMoreMenu(
                     onOpenFolders = onOpenFolders,
                     close = { expanded = false },
                 )
-            }
-            MenuGroupGap()
-            MenuGroup(interaction = groupInteraction) {
+                // 动作区内分区：导航（去别处）在上，对本库操作在下。
+                // 用分隔线而非第二张卡 —— 这两组都是"动作"，与主次无关，只是子分区。
+                HorizontalDivider(
+                    modifier = Modifier.padding(horizontal = Spacing.md),
+                    thickness = GROUP_BORDER_WIDTH,
+                    color = MaterialTheme.colorScheme.outlineVariant,
+                )
                 MenuSyncLockRow(
-                    card = vaultCard,
                     onSync = {
                         expanded = false
                         onRetrySync()
@@ -1359,8 +1360,9 @@ private fun ItemsMoreMenu(
  * 角标（2026-11-08）的起因是「上传和失败总也要一点提示才对」：后台上传与失败原先
  * 只由**菜单里**的状态点表达，菜单不展开就等于没有。⇒ 用 badge 而不是横幅：
  * 不占布局、不需要用户确认，收起菜单时也看得到。
- * 颜色沿用 [syncStatusDotColor]：琥珀=上传中、红=失败、蓝=冲突/有新版本；
- * `SUCCESS` 不挂（常态不喧哗，那是 quiet default 的一半）。
+ * 颜色沿用 [syncStatusDotColor]（#302 五态五色）：琥珀=同步中、蓝=上传中、
+ * 红=失败、橙=冲突；`SUCCESS` 不挂（常态不喧哗，那是 quiet default 的一半）。
+ * 角标与菜单内状态灯共用同一配色函数，天然同色、不会漂移。
  */
 @Composable
 private fun MenuVaultAnchor(vaultCard: VaultCardInfo?, onClick: () -> Unit) {
@@ -1382,7 +1384,7 @@ private fun MenuVaultAnchor(vaultCard: VaultCardInfo?, onClick: () -> Unit) {
 }
 
 /**
- * 一个**分组容器**：三块互相独立的圆角浮块之一。
+ * 一个**分组容器**：两段式浮层里的圆角浮块（身份带 1 块 + 动作区 1 块）。
  *
  * ## 为什么不用 `MenuDefaults.groupShape(index, count)`
  *
@@ -1390,9 +1392,15 @@ private fun MenuVaultAnchor(vaultCard: VaultCardInfo?, onClick: () -> Unit) {
  * 配合它自己的 `GroupSpacing = 2.dp` —— 组的边界靠**圆角半径的变化**暗示，缝只有 2dp，
  * 在低密度屏上几乎渲染成一条亚像素线，读起来仍是"一整片"。那正是用户说的"老套"。
  *
- * ⇒ 三组统一 `VaultixCorner.Panel`（16dp 四角全圆）+ 8dp 真实间隙：读起来是
- * **三张独立的卡片堆叠**，而不是"一块板被两条线分割"。代价是放弃 2dp 缝里那点
- * "连续感" —— 而这里需要的恰恰是**不连续**（三件事性质完全不同）。
+ * ⇒ 统一 `VaultixCorner.Panel`（16dp 四角全圆）+ 8dp 真实间隙：读起来是
+ * **独立的圆角浮块**，而不是"一块板被线分割"。
+ *
+ * ## #302：主次用底色区分
+ *
+ * [tinted] = true 的身份带用 `surfaceContainerHigh`（淡灰），false 的动作区用默认
+ * `surfaceContainer`（白卡 —— M3 的 group 标准色）。两者差一档刚好读出"信息 vs 动作"。
+ * ⚠️ 不用 `primaryContainer` 做身份带底色：徽标本身就是 primaryContainer 淡蓝，
+ *    同色会把徽标吃掉。
  *
  * ⚠️ 用 `groupShapes(shape, inactiveShape)` 而不是手写 `Surface`：前者仍走
  *    `DropdownMenuGroup` 的 hover / 涟漪 / 无障碍语义，只换形状。
@@ -1401,6 +1409,8 @@ private fun MenuVaultAnchor(vaultCard: VaultCardInfo?, onClick: () -> Unit) {
 @Composable
 private fun MenuGroup(
     interaction: MutableInteractionSource,
+    /** true = 身份带：用 `surfaceContainerHigh` 淡底（信息，非动作）；false = 动作区白卡。 */
+    tinted: Boolean = false,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     DropdownMenuGroup(
@@ -1409,11 +1419,20 @@ private fun MenuGroup(
             inactiveShape = VaultixCorner.Panel,
         ),
         interactionSource = interaction,
+        // #302：身份带淡底 vs 动作区白卡 —— 主次用底色区分，不靠数量和描边。
+        // surfaceContainerHigh 在浅色是 #DFDCD9 一档、深色纯黑模式 #1C1C1C，
+        // 与 surface 差一档足够读出"这是信息带"，又不会像 primaryContainer 那样
+        // 把淡蓝徽标吃掉（徽标用的是 primaryContainer，同色就没了）。
+        containerColor = if (tinted) {
+            MaterialTheme.colorScheme.surfaceContainerHigh
+        } else {
+            MenuDefaults.groupStandardContainerColor
+        },
         // ⚠️ 宽度恒定：见 MENU_PANEL_WIDTH 的说明（切库不能变形）。
         modifier = Modifier.width(MENU_PANEL_WIDTH),
-        // ⚠️ **1dp 描边是"能不能分出三块"的关键**（浅色模式尤其）：组色是
+        // ⚠️ **1dp 描边是"能不能分出两块"的关键**（浅色模式尤其）：组色是
         //   `surfaceContainer`（#F1F0EF），屏幕底是 `surface`（#FDFCFB），
-        //   两者亮度只差约 4% —— 只靠 8dp 间隙的话，浅色下三块会重新糊成一片，
+        //   两者亮度只差约 4% —— 只靠 8dp 间隙的话，浅色下信息带会重新糊进背景，
         //   等于白改。描边用的是条目卡 / 设置卡同一支 `outlineVariant`，
         //   形状语言与列表里的卡片保持一致（`EntryCard` 也是 1dp 同色描边）。
         border = BorderStroke(GROUP_BORDER_WIDTH, MaterialTheme.colorScheme.outlineVariant),
@@ -1422,11 +1441,11 @@ private fun MenuGroup(
 }
 
 /**
- * 组间间隙：**8dp，走 `Spacing` 标尺**，不用 `MenuDefaults.GroupSpacing`（那个是 2dp）。
+ * 段间间隙：**8dp，走 `Spacing` 标尺**，不用 `MenuDefaults.GroupSpacing`（那个是 2dp）。
  *
- * 2dp 是框架为"整块切开"那套视觉配的值；本实现要的是"独立卡片堆叠"，
+ * 2dp 是框架为"整块切开"那套视觉配的值；本实现要的是"独立浮块堆叠"，
  * 缝必须能被一眼看见。8dp 是项目标尺里"相关元素之间的标准间隙"那一档 ——
- * 既是设计选择，也不是随手数字。
+ * 既是设计选择，也不是随手数字。#302 两段结构只需 1 个 gap（身份带 ↔ 动作区）。
  */
 @Composable
 private fun MenuGroupGap() {
@@ -1434,17 +1453,18 @@ private fun MenuGroupGap() {
 }
 
 /**
- * 第 1 组：**库身份卡** —— 回答"我在哪、里面有多少条、云端怎么样"。
+ * 段 1 **身份带** —— 回答"我在哪、里面有多少条、云端怎么样"。
  *
  * 相比改版前多了一枚**库类型徽标**（Bitwarden / KDBX 各一张图标）：改前只有两行文本，
- * 用户得靠库名和 host 猜这是哪种库。徽标是这一组里唯一用 `primaryContainer` 的元素 ——
+ * 用户得靠库名和 host 猜这是哪种库。徽标是这一段里唯一用 `primaryContainer` 的元素 ——
  * 它是**身份**，不是动作，染整个容器会把"重要"和"可以点"混为一谈。
  *
  * 三行信息的优先级（自上而下）：
  * 1. 库名 + 条目数（`titleMedium` + `labelMedium`）：最常被确认的东西；
  * 2. 来源（`bodySmall`，**中间省略**）：长路径保头保尾，见 [MiddleEllipsizedText]；
- * 3. 同步状态（`labelSmall` + 色点）：`null` 时整行不画 —— 本地 KDBX 没有"另一端"，
- *    写「已同步」就是编造一个不存在的远端。
+ * 3. 状态行（`labelSmall` + 色点）：**菜单里唯一的状态灯**（#302 去重）。色点看
+ *    `syncDot`、文字看 `syncLine`，各自独立判断 —— 本地 KDBX 两者皆 null 时不画
+ *    （没有"另一端"，写「已同步」是编造远端）；Bitwarden 只有 `syncDot`（灯在、无文案）。
  */
 @Composable
 private fun MenuVaultHeader(card: VaultCardInfo) {
@@ -1491,24 +1511,34 @@ private fun MenuVaultHeader(card: VaultCardInfo) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 ),
             )
-            card.syncLine?.let { lineRes ->
+            // 状态行（#302 状态去重后，菜单里**唯一**的状态灯在这里）：
+            // 色点看 `syncDot`、文字看 `syncLine`，两者独立判断 —— 因为 Bitwarden 库的
+            // `syncLine` 恒为 null（vaultSyncLineResOf 只给 KDBX 网盘出文案），但它的
+            // `syncDot` 有值（resolveSyncDot 给 Bitwarden 出 SUCCESS/SYNCING/FAILED）。
+            // 若把色点嵌在 syncLine 分支里，Bitwarden 就彻底没灯 —— 那是功能回退。
+            val dot = card.syncDot
+            val lineRes = card.syncLine
+            if (dot != null || lineRes != null) {
                 Spacer(Modifier.height(Spacing.xs))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    card.syncDot?.let { dot ->
+                    if (dot != null) {
                         Icon(
                             imageVector = Icons.Filled.Circle,
-                            contentDescription = null,
+                            // 色点无文字时读屏仍要拿到状态 —— 用完整一句，不是状态词复述。
+                            contentDescription = syncStatusDotDescription(dot),
                             tint = syncStatusDotColor(dot),
                             modifier = Modifier.size(SYNC_LINE_DOT_SIZE),
                         )
-                        Spacer(Modifier.width(Spacing.xs))
+                        if (lineRes != null) Spacer(Modifier.width(Spacing.xs))
                     }
-                    Text(
-                        text = stringResource(lineRes),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = syncLineToneOf(lineRes),
-                        maxLines = 1,
-                    )
+                    if (lineRes != null) {
+                        Text(
+                            text = stringResource(lineRes),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = syncLineToneOf(lineRes),
+                            maxLines = 1,
+                        )
+                    }
                 }
             }
         }
@@ -1607,29 +1637,29 @@ private class MenuNavItem(
 )
 
 /**
- * 菜单底部固定的一行：**状态灯 / 同步 / 锁定**（2026-11-09 四次调整，本轮不改内容）。
+ * 动作区底部的固定一行：**同步 / 锁定**两个图标（#302 起不再画状态点）。
  *
- * ## 为什么是这三个元素挤一行
+ * ## 为什么去掉了状态点（2026-11-17 #302 状态去重）
  *
- * 用户真机反馈两件事，方向相反、必须同时满足：
- * 1. 「没有颜色灯显示同步状态，感觉锁按钮那一块孤零零的」—— 常态下也要看得见状态；
- * 2. 「文案不要这么多」—— 但不能靠"把状态词写一行"来实现可见性。
+ * 此前这一行是 `[●] [⟳] ←——weight——→ [🔒]`，但色点画的是 `card.syncDot` —— 与
+ * 身份带 [MenuVaultHeader] 第三行的色点**同一个数据源、同一种颜色**，同一个菜单里
+ * 把同一个状态说了两遍。#302 把身份带做成信息带后，状态色点+文字已完整落在那里，
+ * 这一行只留动作，符合"一个状态只说一次"。
  *
- * ⇒ 灯只给**颜色**（6dp 圆点，状态词交给顶部横幅），同步与锁定只给**图标**。
+ * ⚠️ 顶部 ⋮ 锚点 [MenuVaultAnchor] 的 Badge **保留** —— 那个是"菜单收起时也看得见"
+ * 的提示，与这里"展开后动作旁的状态"是两件事，见锚点 KDoc。
  *
  * ## 布局：低风险在左、高风险在右
  *
- * `[●] [⟳] ←———— weight ————→ [🔒]`
+ * `[⟳] ←———— weight ————→ [🔒]`
  * - 同步在左：它可重复、无副作用，误触成本接近零；
  * - 锁定在最右：锁了要重新输主密码，物理上离拇指扫动路径最远的位置留给它。
- * - 两者之间是 `weight` 撑出来的**真实空白**（不是相邻热区），
- *   所以不存在"两个动作零间隙"那个老问题。
+ * - 两者之间是 `weight` 撑出来的**真实空白**（不是相邻热区）。
  *
  * ⚠️ 锁定**不染 error 红**：锁库可恢复，不是不可逆动作。
  */
 @Composable
 private fun MenuSyncLockRow(
-    card: VaultCardInfo?,
     onSync: () -> Unit,
     onLock: () -> Unit,
 ) {
@@ -1639,18 +1669,7 @@ private fun MenuSyncLockRow(
             .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        val dot = card?.syncDot
-        if (dot != null) {
-            Icon(
-                imageVector = Icons.Filled.Circle,
-                // 灯不带文字，但读屏仍要能拿到状态 —— 用完整一句，不是状态词的复述。
-                contentDescription = syncStatusDotDescription(dot),
-                tint = syncStatusDotColor(dot),
-                modifier = Modifier
-                    .padding(horizontal = Spacing.md)
-                    .size(UiSize.MicroIcon),
-            )
-        }
+        // 状态点已移到身份带（#302 去重），这里只剩两个动作图标。
         IconButton(onClick = onSync) {
             Icon(
                 imageVector = Icons.Filled.Sync,
@@ -1670,7 +1689,7 @@ private fun MenuSyncLockRow(
 }
 
 /**
- * 菜单浮层的**固定**宽度 —— 三组共用，切库不变形。
+ * 菜单浮层的**固定**宽度 —— 两段共用，切库不变形。
  *
  * ## 为什么必须是固定值（2026-10-04 用户真机对照后发现）
  *

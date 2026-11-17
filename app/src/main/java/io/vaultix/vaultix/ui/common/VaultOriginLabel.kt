@@ -422,20 +422,34 @@ fun syncStatusDotDescription(dot: SyncStatusDot): String = stringResource(
 )
 
 /**
- * 红=失败、绿=成功、黄=同步中、蓝=冲突。
- *
- * ⚠️ 琥珀/绿用固定中深色：MD3 没有 success/warning 语义色，亮黄在浅底几乎看不见。
- *    状态词与圆点同色且始终成对出现，即使圆点对比度不足也能读到状态。
+ * 状态点配色常量（2026-11-17 #302）：抽成文件级 val 而非函数内字面量，
+ * 一是 detekt `MagicNumber` 对函数参数里的 `Color(0xFF…)` 会报、对属性声明不会报，
+ * 二是让"哪一态是哪色"集中在一处，改色时不会漏掉某分支。
+ * 固定中深色而非主题语义色：MD3 没有 success/warning 角色，亮黄在浅底几乎看不见。
  */
-@Suppress("MagicNumber") // 两个 ARGB 颜色字面量本身就是语义常量，抽成命名常量反而更难读
+private val SyncDotSyncing = Color(0xFFB26A00)   // 琥珀：正在跑一次同步
+private val SyncDotSuccess = Color(0xFF2E7D32)   // 绿：已对齐
+private val SyncDotUploading = Color(0xFF1565C0) // 蓝：后台在传本地改动（#302 从琥珀拆出）
+private val SyncDotConflict = Color(0xFFC2410C)  // 警示橙：要人拍板（#302 从 primary 蓝退出）
+
+/**
+ * 五态五色（2026-11-17 #302）：红=失败、绿=成功、琥珀=同步中、蓝=上传中、橙=冲突。
+ *
+ * ⚠️ **UPLOADING 与 SYNCING 必须异色**：源码里是两个枚举、文案也不同
+ *    （"正在同步" vs "正在上传改动"），此前却共用同一个琥珀 —— 用户分不出
+ *    "跑一次同步"和"后台在传本地改动"。#302 把上传拆成蓝色。
+ * ⚠️ **CONFLICT 退出 `colorScheme.primary`**：蓝是品牌 / 可点色，把"要人拍板"的
+ *    冲突染成蓝会误导；改用警示橙，与失败红、同步琥珀在色相上都分开。
+ * ⚠️ 状态词与圆点始终成对出现，即使圆点对比度不足也能从文字读到状态；
+ *    菜单锚点的 Badge 直接复用本函数，两处配色天然一致（见 `MenuVaultAnchor`）。
+ */
 @Composable
 fun syncStatusDotColor(dot: SyncStatusDot): Color = when (dot) {
     SyncStatusDot.FAILED -> MaterialTheme.colorScheme.error
-    SyncStatusDot.CONFLICT -> MaterialTheme.colorScheme.primary
-    SyncStatusDot.SYNCING,
-    SyncStatusDot.UPLOADING,
-    -> Color(0xFFB26A00)
-    SyncStatusDot.SUCCESS -> Color(0xFF2E7D32)
+    SyncStatusDot.SYNCING -> SyncDotSyncing
+    SyncStatusDot.UPLOADING -> SyncDotUploading
+    SyncStatusDot.CONFLICT -> SyncDotConflict
+    SyncStatusDot.SUCCESS -> SyncDotSuccess
 }
 
 /** KDBX 的来源分类（解析结果；供 UI 与单测共用）。 */
