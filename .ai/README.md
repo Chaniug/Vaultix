@@ -24,7 +24,38 @@
 - 已接进 CI：`ci-debug.yml` 的 `sandbox-tests` job 用**同一份脚本**，与 `android-ci` 并行
   ⇒ 本地绿 ⇒ CI 不会红在同一件事上。
 
-## 🕐 最新状态（2026-11-17 · #301.1 点 ⋮ 直接闪退，已修）
+## 🕐 最新状态（2026-11-17 · #302 ⋮ 菜单两段主次 + 状态灯五态五色，已推 main）
+
+> **一句话**：用户看完 #301 三块卡片后问「这部分还有什么好看的方案吗」，选定**方案 A**；
+> 接着追问不同颜色状态灯，选定**务实档**。本轮不推翻 #301 的 Popup / 16dp 圆角 /
+> 8dp 间隙 / 1dp 描边 / 280dp 固定宽，只重排主次并拆开状态色。
+
+- **方案 A（身份带 + 动作区）**：三张等权白卡 → 段 1 `MenuGroup(tinted = true)` 用
+  `surfaceContainerHigh` 淡底回答"我在哪"，8dp gap 后段 2 默认白卡放导航四项
+  + `HorizontalDivider` + 同步/锁定；**主次靠底色，不靠再加一张卡**。
+  取证 M3 `1.5.0-alpha16` 源码确认 `DropdownMenuGroup(containerColor = …)` 可直接传，
+  不必自绘 `Surface` 重写 hover / 涟漪 / 无障碍语义。
+- **状态灯务实档**：`SYNCING` 琥珀、`UPLOADING` 蓝、`CONFLICT` 警示橙、`FAILED` 主题 error、
+  `SUCCESS` 绿；5 态终于 5 色。`UPLOADING != SYNCING`、`CONFLICT != primary` 由门禁钉死。
+  ⚠️ 只改 `syncStatusDotColor`，不动刻意独立的 `syncBadgeColor` / `syncLineToneOf`。
+- **差点造成功能回退的坑**：原 `MenuVaultHeader` 把状态灯嵌在 `syncLine?.let` 里，而
+  Bitwarden 库 `syncLine` 恒为 null ⇒ 若只删动作区状态灯，Bitwarden 会**完全没灯**。
+  改为 `dot` 与 `lineRes` 各自独立判断，动作区只留同步/锁定两个动作。
+- **门禁 / 反证**：`ItemsMoreMenuGroupingTest` 7 → **12 条**（两段结构 / 底色契约 /
+  分隔线 / 状态灯只画一次 / 五色映射 / #301.1 intrinsic 禁入）；**5 项变异全红且都是
+  `AssertionError`，无一条编译红**，字节级还原后 12/12 复绿。测试文件里 `"Icons.Filled." + "Circle"`
+  拆写，避免被 `check_compile_smells.py` 当成漏 import。
+- **验证**：门禁 baseline `OK (12 tests)`；`check_compile_smells.py` + 其余 28 项静态 /
+  文档 / 自测 / `git diff --check` 通过。`check_orphan_strings.py --gate` 在**干净 HEAD 同样红**
+  （116 vs 基线 114，非本轮引入，CI 不跑该门禁）。沙箱无 Android SDK 且 Gradle 发行版下载超时
+  ⇒ detekt / app 全量单测交 CI。
+- **提交 / CI**：代码 `81b1cbfd feat(items): #302 ⋮ 菜单改两段主次 + 状态灯五态五色`
+  已推 `main`（未推 `rele`）；CI 结果与 preview 待回填。
+- **待真机确认**：淡底是否足够"退后一步"且不脏；深色层次；动作区分隔线是否仍显老套；
+  蓝=上传中 / 橙=冲突是否一眼可分；Bitwarden 库仍有灯；字号最大仍不溢出。
+  详见 `.ai/issues/06-界面与交互-part30.md`。
+
+## 🕐 上一轮（2026-11-17 · #301.1 点 ⋮ 直接闪退，已修）
 
 > **一句话**：用户「点三个点的按钮会闪退。直接闪退的」——确认是**条目页顶栏 ⋮**，
 > 且「**一点就崩、菜单根本没出现**」⇒ 崩在 Popup 首次组合 + 测量阶段。
