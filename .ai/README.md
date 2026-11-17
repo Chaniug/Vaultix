@@ -49,8 +49,13 @@
   文档 / 自测 / `git diff --check` 通过。`check_orphan_strings.py --gate` 在**干净 HEAD 同样红**
   （116 vs 基线 114，非本轮引入，CI 不跑该门禁）。沙箱无 Android SDK 且 Gradle 发行版下载超时
   ⇒ detekt / app 全量单测交 CI。
-- **提交 / CI**：代码 `81b1cbfd feat(items): #302 ⋮ 菜单改两段主次 + 状态灯五态五色`
-  已推 `main`（未推 `rele`）；CI 结果与 preview 待回填。
+- **提交 / CI 实证**：代码 `81b1cbfd feat(items): #302 ⋮ 菜单改两段主次 + 状态灯五态五色`
+  已推 `main`（未推 `rele`）→ `Android CI (Debug)` **44062056443 ✅**（10:08:39 → 10:13:14，
+  两 job 全绿：`Sandbox unit tests` ✅、`Lint, test diagnostics, and debug build` ✅，
+  detekt / hard-gate 单测 / 发布 preview 全过）；文档 `85bd904c` →
+  `AI docs consistency` **44063483786 ✅**（约 12s）。preview
+  **`v0.13.6-dev-81b1cbf · Preview`** / `Vaultix-81b1cbf.apk`（37,608,514 B ≈ 35.87 MB，
+  签名指纹 `7e6c8c07…395c1fd8` 与上一预览一致，可覆盖安装）。
 - **待真机确认**：淡底是否足够"退后一步"且不脏；深色层次；动作区分隔线是否仍显老套；
   蓝=上传中 / 橙=冲突是否一眼可分；Bitwarden 库仍有灯；字号最大仍不溢出。
   详见 `.ai/issues/06-界面与交互-part30.md`。

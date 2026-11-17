@@ -21,7 +21,8 @@
 > ④ 门禁测试自己也会触发静态门禁：测试里写字面量 `Icons.Filled.Circle` 被
 > `check_compile_smells.py` 当成漏 import ⇒ 用字符串拼接规避。
 > 验证：12 条门禁 baseline 绿、5 项变异均为断言红（非编译）、29 项静态/文档检查通过；
-> 代码 `81b1cbfd` 已推 main。详见 `.ai/issues/06-界面与交互-part30.md`。
+> 代码 `81b1cbfd` 已推 main；`Android CI (Debug)` **44062056443 ✅**、
+`AI docs consistency` **44063483786 ✅**，preview `Vaultix-81b1cbf.apk`。详见 `.ai/issues/06-界面与交互-part30.md`。
 >
 > 上一轮：2026-11-17（**#301.1 点 ⋮ 直接闪退**）：
 > #301 改版当天用户反馈「点三个点的按钮会闪退。直接闪退的」，确认「一点就崩、菜单根本没出现」
