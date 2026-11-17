@@ -9,6 +9,7 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -58,12 +60,15 @@ import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.DropdownMenuGroup
+import androidx.compose.material3.DropdownMenuPopup
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -87,10 +92,13 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -152,6 +160,7 @@ import io.vaultix.vaultix.ui.common.VaultixWavyProgressBar
 import io.vaultix.vaultix.ui.shell.BottomDockOccupiedHeight
 import io.vaultix.vaultix.ui.theme.Spacing
 import io.vaultix.vaultix.ui.theme.UiSize
+import io.vaultix.vaultix.ui.theme.VaultixCorner
 import kotlinx.coroutines.launch
 
 /**
@@ -1256,48 +1265,44 @@ private fun BoxScope.ItemsTopBar(
 }
 
 /**
- * 顶栏「更多」菜单（⋮）：**当前库卡片** + 按性质分组的动作（2026-09-30 用户选定「方案 B」）。
+ * 顶栏「更多」菜单（⋮）：**库身份 + 三组动作**的浮层（2026-11-17 第 5 轮重构）。
  *
- * ## 为什么改（原实现是四件事平铺成一列）
+ * ## 这一轮改的是「形态」，不是「内容」
  *
- * 平铺的毛病不在"不够好看"，而在**把四种性质不同的东西混在一起**：
+ * 用户原话：「这个部分的 UI 该如何设计才好看呢？信息直观，功能完善，目前感觉这个看起来
+ * 很老套的样子」。此前它是**单块 `DropdownMenu` + 两条 `HorizontalDivider`**：一整片同色底板、
+ * 4dp 小圆角、组与组只靠 1dp 灰线区分 —— 那是十年前 Android 菜单的样子，和本项目
+ * 「16dp 圆角卡片 + 8dp 间隙」的语言根本不是一套。
  *
- * | 动作 | 性质 |
- * |---|---|
- * | 切换密码库 | **换上下文**（我在看哪个库） |
- * | 验证码 / 回收站 | **去另一个页面**（不改数据） |
- * | 同步 / 锁定 | **对当前库做动作** ⇒ 固定在底部一行，只给图标不给文字（见 [MenuSyncLockRow]） |
+ * ⇒ 换成 M3 **Expressive 分组菜单**（`DropdownMenuPopup` + `DropdownMenuGroup`）：
+ * 三块**各自全圆角**的独立浮块、块间是 8dp **真实间隙**（不是画出来的线）、
+ * 每块自带阴影与独立点击轮廓。**没有新增任何一个功能、也没有删掉任何一个**，
+ * 只把"这是三件不同的事"从"一条分隔线"升级成"空间结构本身"。
  *
- * ⇒ 顶上一张卡片先回答"我在哪、有多少条"，下面按**前往 / 操作**分组。
- *   分组标题给的是"这几项是同一类事"这条信息 —— 那是平铺列表里**读不出来的东西**。
+ * | 组 | 内容 | 回答的问题 |
+ * |---|---|---|
+ * | 1 | 库身份卡（类型徽标 / 库名 / 条目数 / 来源 / 同步状态） | **我在哪** |
+ * | 2 | 切换密码库 · 验证码 · 回收站 · 文件夹管理 | **去别处** |
+ * | 3 | `[灯] [同步] ←weight→ [锁定]` | **对这个库做什么** |
  *
- * ⚠️ 菜单项顺序 = 使用频率（2026-09-14 用户指定的重排）：回收站 → 同步 → 锁定。
+ * ⚠️ 第 3 组的三元素是 2026-11-08~09 改了**四轮**才定稿的（"删元素能解决拥挤，
+ *    但会制造空旷"），本轮**原样保留**，只是把它关进自己的组里。改之前先读
+ *    [MenuSyncLockRow] 的 KDoc。
  *
- * ⚠️ 「同步」与「锁定」的关系在 2026-11-08~09 改了**四轮**，当前定稿是第 4 轮：
- * 1. 合成一栏（同步整行 + 尾部锁图标）→ 用户反馈"挤、怕误触"，
- *    两个热区零间隙相接，也违反 M3「一个 menu item = 一个动作」；
- * 2. 各占一行 → 锁定仍是最底部整行可点，拇指从下往上扫容易擦到；
- * 3. 同步改为「只在需要动手时出现」+ 锁定缩成右下角图标 →
- *    正常态菜单里只剩一把锁，用户反馈"孤零零的，也没有颜色灯"；
- * 4. **定稿**：底部固定一行 `[灯] [同步] ←weight→ [锁定]`，
- *    全部不写字 —— 灯给颜色、同步可点、锁定靠右（见 [MenuSyncLockRow]）。
- *    状态词交给列表顶部的常驻横幅，菜单里不再复述。
+ * ⚠️ 宽度**必须恒定**（2026-10-04 真机对照过）：三组共用 `MENU_PANEL_WIDTH`，
+ *    否则切库时浮层会随内容宽度跳变。见 [MENU_PANEL_WIDTH]。
  *
- * ⇒ 这一处反复了四轮，教训是：**"删掉元素"能解决拥挤，但会制造空旷**；
- *   真正该做的是"元素保留、文字去掉"。下次改这里前先读 [MenuSyncLockRow] 的 KDoc。
+ * ⚠️ 「切换密码库」仍在第一组最上面（2026-09-14 / #96）：多库并存时这是"换个库看"的
+ *    唯一正确语义入口 —— 此前用户能碰到的只有「锁定」（语义恰好相反），
+ *    导致 KDBX 库「添加了却找不到」。
  *
- * ⚠️ 「切换密码库」放在**最上面**（2026-09-14，issue #96）：多库并存时这是
- * 「我要换个库看」的**唯一正确语义入口**。此前用户能碰到的只有「锁定」
- * （语义恰好相反），导致 KDBX 库「添加了却找不到」，只能靠摸到设置页。
- *
- * ⚠️ 「验证码」只在**调用方给了入口且底部导航没有该页签**时显示（`onOpenTotp == null`
- * 即整项隐藏）：主界面底部已经有「验证码」页签，菜单里再来一个是重复入口；
- * 而 autofill 的条目路由（`ItemsRoute`）**没有**底部导航，那里必须留着它。
- * 「显示选项」已于同日移出本菜单（见 [ItemsTopBar] 的胶囊）。
+ * ⚠️ 「验证码」只在**调用方给了入口且底部导航没有该页签**时出现；
+ *    autofill 的条目路由（`ItemsRoute`）没有底部导航，那里必须留着它。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun ItemsMoreMenu(
-    /** 当前库（null = 库未知，此时不画卡片，菜单退化为纯动作列表）。 */
+    /** 当前库（null = 库未知，此时不画身份卡，菜单退化为两组）。 */
     vaultCard: VaultCardInfo?,
     onSwitchVault: (() -> Unit)?,
     onOpenTotp: (() -> Unit)?,
@@ -1307,82 +1312,294 @@ private fun ItemsMoreMenu(
     onLock: () -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
+    // 三组共享一个 interactionSource：M3 分组菜单的"悬停变圆角"是按组算的，
+    // 各自 remember 会让鼠标从一组划到另一组时圆角闪一下。触屏无关，平板 / DeX 有关。
+    val groupInteraction = remember { MutableInteractionSource() }
     Box {
-        // ★ 2026-11-08 三次调整：⋮ 上挂一枚状态角标（M3 `Badge`）。
-        //   起因：后台上传与失败原先只由**菜单里**的状态点表达，菜单不展开就等于没有 ——
-        //   用户原话「上传和失败总也要一点提示才对」。
-        //   ⇒ 用 badge 而不是横幅：不占布局、不需要用户确认，收起菜单时也看得到。
-        //   颜色沿用 [syncStatusDotColor]：琥珀=上传中、红=失败、蓝=冲突/有新版本；
-        //   `SUCCESS` 不挂（常态不喧哗，那是 quiet default 的一半）。
-        IconButton(onClick = { expanded = true }) {
-            BadgedBox(
-                badge = {
-                    val dot = vaultCard?.syncDot
-                    if (dot != null && dot != SyncStatusDot.SUCCESS) {
-                        Badge(containerColor = syncStatusDotColor(dot))
-                    }
-                },
-            ) {
-                Icon(
-                    Icons.Filled.MoreVert,
-                    contentDescription = stringResource(R.string.items_more_actions),
+        MenuVaultAnchor(vaultCard = vaultCard, onClick = { expanded = true })
+        DropdownMenuPopup(expanded = expanded, onDismissRequest = { expanded = false }) {
+            // 库未知时只剩「去别处」和「对本库动作」两组。
+            if (vaultCard != null) {
+                MenuGroup(interaction = groupInteraction) {
+                    MenuVaultHeader(card = vaultCard)
+                }
+                MenuGroupGap()
+            }
+            MenuGroup(interaction = groupInteraction) {
+                MenuNavItems(
+                    onSwitchVault = onSwitchVault,
+                    onOpenTotp = onOpenTotp,
+                    onOpenTrash = onOpenTrash,
+                    onOpenFolders = onOpenFolders,
+                    close = { expanded = false },
+                )
+            }
+            MenuGroupGap()
+            MenuGroup(interaction = groupInteraction) {
+                MenuSyncLockRow(
+                    card = vaultCard,
+                    onSync = {
+                        expanded = false
+                        onRetrySync()
+                    },
+                    onLock = {
+                        expanded = false
+                        onLock()
+                    },
                 )
             }
         }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            if (vaultCard != null) {
-                MenuVaultCard(card = vaultCard)
-                HorizontalDivider()
-            }
-            MenuGroupTitle(R.string.items_menu_group_navigate)
-            // 只有一个库时不必显示（没有可切换的对象），故回调为 null 即整项隐藏。
-            if (onSwitchVault != null) {
-                MenuAction(Icons.Filled.SwapHoriz, R.string.items_switch_vault) {
-                    expanded = false
-                    onSwitchVault()
+    }
+}
+
+/**
+ * 菜单锚点：⋮ 按钮 + 状态角标。
+ *
+ * 角标（2026-11-08）的起因是「上传和失败总也要一点提示才对」：后台上传与失败原先
+ * 只由**菜单里**的状态点表达，菜单不展开就等于没有。⇒ 用 badge 而不是横幅：
+ * 不占布局、不需要用户确认，收起菜单时也看得到。
+ * 颜色沿用 [syncStatusDotColor]：琥珀=上传中、红=失败、蓝=冲突/有新版本；
+ * `SUCCESS` 不挂（常态不喧哗，那是 quiet default 的一半）。
+ */
+@Composable
+private fun MenuVaultAnchor(vaultCard: VaultCardInfo?, onClick: () -> Unit) {
+    IconButton(onClick = onClick) {
+        BadgedBox(
+            badge = {
+                val dot = vaultCard?.syncDot
+                if (dot != null && dot != SyncStatusDot.SUCCESS) {
+                    Badge(containerColor = syncStatusDotColor(dot))
                 }
-            }
-            if (onOpenTotp != null) {
-                MenuAction(Icons.Filled.QrCode2, R.string.totp_screen_title) {
-                    expanded = false
-                    onOpenTotp()
-                }
-            }
-            MenuAction(Icons.Filled.Delete, R.string.trash_title) {
-                expanded = false
-                onOpenTrash()
-            }
-            // #199：文件夹是**数据**（能建/改名/删），不是"看的方式"，所以放「前往」组
-            // 而不是"显示选项"卡片 —— 那里调的是分组/密度，都是视图状态。
-            MenuAction(Icons.Filled.Folder, R.string.folders_menu_entry) {
-                expanded = false
-                onOpenFolders()
-            }
-            // ★ 2026-11-09 四次调整（用户真机反馈「没有颜色灯显示同步状态，
-            //   感觉锁按钮那一块孤零零的」）。此前为了"同步只在异常时出现"，
-            //   把常态那颗绿点一起藏了 —— 菜单底部只剩一把锁，是设计上的漏。
-            //   ⇒ 底部固定一行三元素：**灯 / 同步 / 锁定**，全部不写字。
-            //     · 灯只给颜色（异常原因由顶部横幅说，这里不复述）；
-            //     · 同步常驻可点，两个动作之间用 weight 撑开，不是零间隙相接；
-            //     · 锁定仍在最右（低风险在左、高风险在右）。
-            HorizontalDivider()
-            MenuSyncLockRow(
-                card = vaultCard,
-                onSync = {
-                    expanded = false
-                    onRetrySync()
-                },
-                onLock = {
-                    expanded = false
-                    onLock()
-                },
+            },
+        ) {
+            Icon(
+                Icons.Filled.MoreVert,
+                contentDescription = stringResource(R.string.items_more_actions),
             )
         }
     }
 }
 
 /**
- * 菜单底部固定的一行：**状态灯 / 同步 / 锁定**（2026-11-09 四次调整）。
+ * 一个**分组容器**：三块互相独立的圆角浮块之一。
+ *
+ * ## 为什么不用 `MenuDefaults.groupShape(index, count)`
+ *
+ * 框架给的是"**一整块被切开**"的语义（首组上 16 / 下 8，中组全 8，尾组上 8 / 下 16），
+ * 配合它自己的 `GroupSpacing = 2.dp` —— 组的边界靠**圆角半径的变化**暗示，缝只有 2dp，
+ * 在低密度屏上几乎渲染成一条亚像素线，读起来仍是"一整片"。那正是用户说的"老套"。
+ *
+ * ⇒ 三组统一 `VaultixCorner.Panel`（16dp 四角全圆）+ 8dp 真实间隙：读起来是
+ * **三张独立的卡片堆叠**，而不是"一块板被两条线分割"。代价是放弃 2dp 缝里那点
+ * "连续感" —— 而这里需要的恰恰是**不连续**（三件事性质完全不同）。
+ *
+ * ⚠️ 用 `groupShapes(shape, inactiveShape)` 而不是手写 `Surface`：前者仍走
+ *    `DropdownMenuGroup` 的 hover / 涟漪 / 无障碍语义，只换形状。
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun MenuGroup(
+    interaction: MutableInteractionSource,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    DropdownMenuGroup(
+        shapes = MenuDefaults.groupShapes(
+            shape = VaultixCorner.Panel,
+            inactiveShape = VaultixCorner.Panel,
+        ),
+        interactionSource = interaction,
+        // ⚠️ 宽度恒定：见 MENU_PANEL_WIDTH 的说明（切库不能变形）。
+        modifier = Modifier.width(MENU_PANEL_WIDTH),
+        // ⚠️ **1dp 描边是"能不能分出三块"的关键**（浅色模式尤其）：组色是
+        //   `surfaceContainer`（#F1F0EF），屏幕底是 `surface`（#FDFCFB），
+        //   两者亮度只差约 4% —— 只靠 8dp 间隙的话，浅色下三块会重新糊成一片，
+        //   等于白改。描边用的是条目卡 / 设置卡同一支 `outlineVariant`，
+        //   形状语言与列表里的卡片保持一致（`EntryCard` 也是 1dp 同色描边）。
+        border = BorderStroke(GROUP_BORDER_WIDTH, MaterialTheme.colorScheme.outlineVariant),
+        content = content,
+    )
+}
+
+/**
+ * 组间间隙：**8dp，走 `Spacing` 标尺**，不用 `MenuDefaults.GroupSpacing`（那个是 2dp）。
+ *
+ * 2dp 是框架为"整块切开"那套视觉配的值；本实现要的是"独立卡片堆叠"，
+ * 缝必须能被一眼看见。8dp 是项目标尺里"相关元素之间的标准间隙"那一档 ——
+ * 既是设计选择，也不是随手数字。
+ */
+@Composable
+private fun MenuGroupGap() {
+    Spacer(Modifier.height(Spacing.sm))
+}
+
+/**
+ * 第 1 组：**库身份卡** —— 回答"我在哪、里面有多少条、云端怎么样"。
+ *
+ * 相比改版前多了一枚**库类型徽标**（Bitwarden / KDBX 各一张图标）：改前只有两行文本，
+ * 用户得靠库名和 host 猜这是哪种库。徽标是这一组里唯一用 `primaryContainer` 的元素 ——
+ * 它是**身份**，不是动作，染整个容器会把"重要"和"可以点"混为一谈。
+ *
+ * 三行信息的优先级（自上而下）：
+ * 1. 库名 + 条目数（`titleMedium` + `labelMedium`）：最常被确认的东西；
+ * 2. 来源（`bodySmall`，**中间省略**）：长路径保头保尾，见 [MiddleEllipsizedText]；
+ * 3. 同步状态（`labelSmall` + 色点）：`null` 时整行不画 —— 本地 KDBX 没有"另一端"，
+ *    写「已同步」就是编造一个不存在的远端。
+ */
+@Composable
+private fun MenuVaultHeader(card: VaultCardInfo) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.lg, vertical = Spacing.md),
+        verticalAlignment = Alignment.Top,
+    ) {
+        MenuVaultBadge(kind = card.kind)
+        Spacer(Modifier.width(Spacing.md))
+        Column(modifier = Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = card.name,
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                card.countText?.let { count ->
+                    Spacer(Modifier.width(Spacing.sm))
+                    Text(
+                        text = count,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                    )
+                }
+            }
+            // 固定宽度后**必须中间省略**：尾部是整个路径里最需要被确认的一段（文件名），
+            // 尾部省略会先把它吃掉。
+            MiddleEllipsizedText(
+                text = card.origin,
+                modifier = Modifier.fillMaxWidth(),
+                style = MaterialTheme.typography.bodySmall.copy(
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                ),
+            )
+            card.syncLine?.let { lineRes ->
+                Spacer(Modifier.height(Spacing.xs))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    card.syncDot?.let { dot ->
+                        Icon(
+                            imageVector = Icons.Filled.Circle,
+                            contentDescription = null,
+                            tint = syncStatusDotColor(dot),
+                            modifier = Modifier.size(SYNC_LINE_DOT_SIZE),
+                        )
+                        Spacer(Modifier.width(Spacing.xs))
+                    }
+                    Text(
+                        text = stringResource(lineRes),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = syncLineToneOf(lineRes),
+                        maxLines = 1,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 库类型徽标：40dp 圆牌 + 品牌图标。
+ *
+ * 与解锁页的 `VaultKindBadge` 同款视觉（`primaryContainer` 底 + `onPrimaryContainer` 图标），
+ * 但**不复用**那个 composable —— 它是 `UnlockScreen` 的 private 实现，尺寸与用途都不同
+ * （那一处要撑起整屏主角）。抽公共组件需要同时改两处的尺寸参数，收益不抵风险。
+ */
+@Composable
+private fun MenuVaultBadge(kind: VaultKind) {
+    val iconRes = when (kind) {
+        VaultKind.BITWARDEN -> R.drawable.ic_vault_bitwarden
+        VaultKind.KDBX -> R.drawable.ic_vault_kdbx
+    }
+    val labelRes = when (kind) {
+        VaultKind.BITWARDEN -> R.string.vault_kind_bitwarden
+        VaultKind.KDBX -> R.string.vault_kind_kdbx
+    }
+    Box(
+        modifier = Modifier
+            .size(MENU_VAULT_BADGE_SIZE)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.primaryContainer),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            painter = painterResource(iconRes),
+            // 徽标是纯图形，读屏必须显式给出库类型名，否则这一屏对读屏用户丢失"哪种库"。
+            contentDescription = stringResource(labelRes),
+            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+            modifier = Modifier.size(MENU_VAULT_BADGE_ICON_SIZE),
+        )
+    }
+}
+
+/**
+ * 第 2 组：**去别处**（导航）。四个动作都不改数据，只是换一个页面 / 换一个库。
+ *
+ * ## 为什么不再有「前往」这个小标题
+ *
+ * 分组之前用 `MenuGroupTitle("前往")` 补一句"下面这几项是同一类事"。改成独立圆块后
+ * **这个信息已经由形态本身给出** —— 再写一遍等于用文字解释一个一眼可见的结构，
+ * 而那行 11sp 灰字正是"老套"的来源之一（它占一整行却只说了"这是一组"）。
+ *
+ * ## 为什么用列表 + `forEachIndexed` 而不是四段 `if`
+ *
+ * 组内每一项的圆角由 `MenuDefaults.itemShape(index, count)` 决定（首项上圆、尾项下圆）。
+ * 手写 `index++` 只要有一处 `if` 分支漏加，就会有一条边角塌成直角 —— 而这种缺陷
+ * 只能靠肉眼在特定组合下（只有 2 个库 / 没有验证码入口）才看得见。用列表就没有这个自由度。
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun MenuNavItems(
+    onSwitchVault: (() -> Unit)?,
+    onOpenTotp: (() -> Unit)?,
+    onOpenTrash: () -> Unit,
+    onOpenFolders: () -> Unit,
+    close: () -> Unit,
+) {
+    val items = buildList {
+        // 只有一个库时不必显示（没有可切换的对象），故回调为 null 即整项隐藏。
+        if (onSwitchVault != null) {
+            add(MenuNavItem(Icons.Filled.SwapHoriz, R.string.items_switch_vault, onSwitchVault))
+        }
+        if (onOpenTotp != null) {
+            add(MenuNavItem(Icons.Filled.QrCode2, R.string.totp_screen_title, onOpenTotp))
+        }
+        add(MenuNavItem(Icons.Filled.Delete, R.string.trash_title, onOpenTrash))
+        // #199：文件夹是**数据**（能建/改名/删），不是"看的方式"，所以放这里
+        // 而不是顶栏的"显示选项" —— 那里调的是分组/密度，都是视图状态。
+        add(MenuNavItem(Icons.Filled.Folder, R.string.folders_menu_entry, onOpenFolders))
+    }
+    items.forEachIndexed { index, item ->
+        MenuAction(
+            icon = item.icon,
+            labelRes = item.labelRes,
+            shape = MenuDefaults.itemShape(index, items.size).shape,
+            onClick = {
+                close()
+                item.onClick()
+            },
+        )
+    }
+}
+
+/** [MenuNavItems] 的一项（只是一个三元组，避免在 Composable 里写四段重复的 if）。 */
+private class MenuNavItem(
+    val icon: ImageVector,
+    @StringRes val labelRes: Int,
+    val onClick: () -> Unit,
+)
+
+/**
+ * 菜单底部固定的一行：**状态灯 / 同步 / 锁定**（2026-11-09 四次调整，本轮不改内容）。
  *
  * ## 为什么是这三个元素挤一行
  *
@@ -1391,7 +1608,6 @@ private fun ItemsMoreMenu(
  * 2. 「文案不要这么多」—— 但不能靠"把状态词写一行"来实现可见性。
  *
  * ⇒ 灯只给**颜色**（6dp 圆点，状态词交给顶部横幅），同步与锁定只给**图标**。
- *   一行三个不写字的元素，宽度绰绰有余，也不再复述状态。
  *
  * ## 布局：低风险在左、高风险在右
  *
@@ -1446,115 +1662,51 @@ private fun MenuSyncLockRow(
 }
 
 /**
- * 菜单顶部的**当前库卡片**：库名 · 条目数（同一行）/ 来源（下一行）。
+ * 菜单浮层的**固定**宽度 —— 三组共用，切库不变形。
  *
- * ## ⚠️ 宽度必须**固定**（2026-10-04 用户真机对照后发现）
+ * ## 为什么必须是固定值（2026-10-04 用户真机对照后发现）
  *
- * 此前是 `widthIn(min = MENU_CARD_MIN_WIDTH)` —— **只有下限**，实际宽度由内容撑开。
- * 于是同一份代码在两种库下量出两种宽度（真机 density 3.47）：
- * - Bitwarden 库：`pwd.vv1234.cn · 219 个条目` ⇒ 贴到下限，窄
- * - KDBX 库：`OneDrive · Keepass/valkjin.kdbx · 217 个条目` ⇒ 被内容撑宽
+ * 此前只有下限（`widthIn(min = 208.dp)`），实际宽度由内容撑开。同一份代码在两种库下
+ * 量出两种宽度（真机 density 3.47）：
+ * - Bitwarden 库：`pwd.vv1234.cn` ⇒ 贴到下限，窄
+ * - KDBX 库：`OneDrive · Keepass/valkjin.kdbx` ⇒ 被内容撑宽
  * ⇒ 同一位置的浮层在切库后**宽度会跳变**，用户视角就是"换个库界面就变形了"
  * （用户原话：「展开后与 bitwarden 那种密码库路径对比，就很不协调」）。
  *
- * ⇒ 改成 `width(MENU_CARD_WIDTH)`：切库时宽度**恒定**，浮层不跳。
- * 代价是长路径改由**中间省略**兜底（`MiddleEllipsizedText` 已有），
- * 这与本项目的取舍一致：**外框稳定 > 内容全展示**。
- *
- * ## 与列表状态行的分层（刻意不同，不是漂移）
- *
- * - 列表行：常驻、窄、必须一眼扫过 ⇒ 折到自己塞得下的长度（保头保尾）；
- * - 菜单卡片：用户主动展开、空间宽裕 ⇒ 尽量给全，实在放不下才中间省略。
- * 同一份数据、两种密度 —— 而不是让两处都去迁就最窄的那个。
- */
-@Composable
-private fun MenuVaultCard(card: VaultCardInfo) {
-    Column(
-        modifier = Modifier
-            .width(MENU_CARD_WIDTH)
-            .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
-    ) {
-        // ★ 2026-11-08：条目数紧跟库名，副标题只留来源。此前拼成
-        //   「来源 · 条目数」压在路径末尾，KDBX 长路径会把它一起省略掉。
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = card.name,
-                style = MaterialTheme.typography.titleSmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f, fill = false),
-            )
-            card.countText?.let { count ->
-                Spacer(Modifier.width(Spacing.sm))
-                Text(
-                    text = count,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                )
-            }
-        }
-        Text(
-            text = card.origin,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            // ⚠️ 固定宽度后**必须单行中间省略**：两行会把分隔线顶开、菜单高度随内容跳。
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        // ★ 第三行：同步状态（2026-11-10 真机反馈）。
-        //
-        // 此前这里**没有**这一行，而真机上却出现了「已同步」—— 那是错位来源：
-        // 它原本挂在库列表卡片的 `KdbxSyncStatusLine` 上，用户在**条目页**看到的那句
-        // 其实是别处的渲染。现在两处用**同一个纯函数**（`vaultSyncLineResOf`）：
-        // 本地 KDBX 拿到 null ⇒ 两处都不写，网盘 KDBX 两处都写同一句。
-        card.syncLine?.let { lineRes ->
-            Text(
-                text = stringResource(lineRes),
-                style = MaterialTheme.typography.labelSmall,
-                color = syncLineToneOf(lineRes),
-                maxLines = 1,
-            )
-        }
-    }
-}
-
-/** 分组小标题：只回答"下面这几项是同一类事"，不加图标（避免与动作项抢辨识度）。 */
-@Composable
-private fun MenuGroupTitle(@StringRes labelRes: Int) {
-    Text(
-        text = stringResource(labelRes),
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(start = Spacing.lg, top = Spacing.sm, bottom = Spacing.xs),
-    )
-}
-
-/**
- * 菜单卡片的**固定**宽度（2026-10-04 用户真机对照后定稿）。
- *
- * ⚠️ 此前是 `MENU_CARD_MIN_WIDTH = 208.dp` 且用 `widthIn(min =)` ——
- * **只有下限**，实际宽度由内容撑开 ⇒ 切库时浮层宽度会跳：
- * Bitwarden 库（短）贴到下限，KDBX 库（长）被撑宽 ⇒ 「很不协调」。
- *
  * 取 280.dp 的理由：能容下 KDBX 常见的 `OneDrive · Keepass/valkjin.kdbx`
- * （bodySmall 下 ≈ 220dp）并给行尾状态灯留位，窄屏（≥320dp）仍留得住边距。
- * 条目数已移到库名后（2026-11-08），长路径走**中间省略**（保头保尾，
- * 尾段的文件名是用户最想确认的），高度与切库无关。
+ * 并给行尾状态留位；窄屏（320dp）两侧各留 20dp 边距仍然成立。
+ * 长路径改由**中间省略**兜底 —— 这与本项目的取舍一致：**外框稳定 > 内容全展示**。
  */
-private val MENU_CARD_WIDTH = 280.dp
+private val MENU_PANEL_WIDTH = 280.dp
+
+/** 分组描边宽度：与 `EntryCard` 的卡片描边同值（项目里 1dp 是"卡片边界"的统一写法）。 */
+private val GROUP_BORDER_WIDTH = 1.dp
+
+/** 库身份徽标的直径（40dp：与正文两行字等高，不喧宾夺主）。 */
+private val MENU_VAULT_BADGE_SIZE = 40.dp
+
+/** 徽标内图标：22dp（40dp 圆牌内的常规视觉重量）。 */
+private val MENU_VAULT_BADGE_ICON_SIZE = 22.dp
+
+/** 同步状态行左侧的小圆点（比正文小一档，读起来像标点而不是图标）。 */
+private val SYNC_LINE_DOT_SIZE = 8.dp
 
 /**
  * 菜单项（图标 + 文案），**一个 item 一个动作**。
+ *
+ * `shape` 由调用方按 `MenuDefaults.itemShape(index, count)` 给出：组内首项的上方圆角、
+ * 尾项的下方圆角都靠它，传错就是一条直角边。
  *
  * ⚠️ 2026-11-08 清掉了 `destructive` / `trailing` 两个参数：已无调用点使用非默认值，
  *    留着只会让人以为还能标红。锁定现在是普通菜单项 —— 锁库可恢复（重新输主密码），
  *    不属破坏性动作，`error` 色留给删库/清空这类真正不可逆的入口。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun MenuAction(
     icon: ImageVector,
     @StringRes labelRes: Int,
+    shape: Shape,
     onClick: () -> Unit,
 ) {
     DropdownMenuItem(
@@ -1564,6 +1716,8 @@ private fun MenuAction(
                 color = MaterialTheme.colorScheme.onSurface,
             )
         },
+        onClick = onClick,
+        shape = shape,
         leadingIcon = {
             Icon(
                 imageVector = icon,
@@ -1571,9 +1725,9 @@ private fun MenuAction(
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         },
-        onClick = onClick,
     )
 }
+
 
 
 /**

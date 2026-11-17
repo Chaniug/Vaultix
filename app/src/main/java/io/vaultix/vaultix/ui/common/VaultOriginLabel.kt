@@ -108,6 +108,16 @@ internal fun serverHostOf(origin: String): String {
 data class VaultCardInfo(
     val name: String,
     val origin: String,
+    /**
+     * 库类型（Bitwarden / KDBX）。
+     *
+     * ⋮ 菜单的身份卡用它在库名左边画一枚类型徽标（2026-11-17）：改版前那一栏只有两行
+     * 文本，用户得靠库名和 host 去猜"这是哪种库"。**必填而不是可空** —— 每一个
+     * 能构造出 [VaultCardInfo] 的地方（当前只有 [vaultCardInfoOf]）手里都有 [VaultSummary]，
+     * 给它一个 `null` 默认值只会让"忘了传"变成"界面上少一枚徽标"，而那种缺失
+     * 不会有人报 bug。
+     */
+    val kind: VaultKind,
     val countText: String?,
     /**
      * 网盘同步状态的**角标**（null = 没什么要说的）。
@@ -194,6 +204,7 @@ enum class SyncBadge {
 fun vaultCardInfoOf(vault: VaultSummary, itemCount: Int): VaultCardInfo = VaultCardInfo(
     name = vault.name,
     origin = vaultOriginLabel(vault),
+    kind = vault.kind,
     countText = if (vault.unlocked) {
         stringResource(R.string.vault_item_count_only, itemCount)
     } else {
