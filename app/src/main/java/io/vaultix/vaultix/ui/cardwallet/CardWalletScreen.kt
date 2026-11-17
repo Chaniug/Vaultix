@@ -211,13 +211,7 @@ fun CardWalletScreen(
                         bottomInset = bottomInset,
                     )
                 } else if (showStacked(collapsed, searchActive)) {
-                    // 收拢态静态堆叠；搜索态强制平铺（堆叠会藏卡片，与搜索冲突）。
-                    CollapsedCardStack(
-                        cards = visibleCards,
-                        topInset = topInset,
-                        bottomInset = bottomInset,
-                        onExpand = { collapsed = false },
-                    )
+                    CollapsedCardStackHost(visibleCards, topInset, bottomInset) { collapsed = false }
                 } else {
                     LazyColumn(
                         state = listState,
@@ -276,10 +270,35 @@ fun CardWalletScreen(
         }
     }
 
-    if (creationBlocked) {
-        CardCreationBlockedDialog(onDismiss = { creationBlocked = false })
-    }
+    CardCreationDialogs(
+        creationBlocked = creationBlocked,
+        creating = creating,
+        saving = saving,
+        onBlockedDismiss = { creationBlocked = false },
+        onDismiss = { creating = null },
+        onSave = { item ->
+            viewModel.createCard(item)
+            creating = null
+        },
+    )
+}
 
+/**
+ * 卡包的两个创建相关弹窗（被库闸门挡下的说明 + 新建表单）。
+ * 从主函数抽出，仅为把 [CardWalletScreen] 压回 detekt `LongMethod ≤150`。
+ */
+@Composable
+private fun CardCreationDialogs(
+    creationBlocked: Boolean,
+    creating: VaultItem?,
+    saving: Boolean,
+    onBlockedDismiss: () -> Unit,
+    onDismiss: () -> Unit,
+    onSave: (VaultItem) -> Unit,
+) {
+    if (creationBlocked) {
+        CardCreationBlockedDialog(onDismiss = onBlockedDismiss)
+    }
     val draft = creating
     if (draft != null) {
         ItemFormDialog(
@@ -287,11 +306,8 @@ fun CardWalletScreen(
             initial = draft,
             saving = saving,
             typeEditable = false,
-            onDismiss = { creating = null },
-            onSave = { item ->
-                viewModel.createCard(item)
-                creating = null
-            },
+            onDismiss = onDismiss,
+            onSave = onSave,
         )
     }
 }
@@ -303,6 +319,25 @@ fun CardWalletScreen(
  */
 private fun showStacked(collapsed: Boolean, searchActive: Boolean): Boolean =
     collapsed && !searchActive
+
+/**
+ * 收拢态分支的宿主：搜索态强制平铺（堆叠会藏卡片，与搜索冲突），
+ * 这里的调用条件由 [showStacked] 保证。抽出来只为给主函数让出 detekt 行数。
+ */
+@Composable
+private fun CollapsedCardStackHost(
+    cards: List<VaultItem>,
+    topInset: Dp,
+    bottomInset: Dp,
+    onExpand: () -> Unit,
+) {
+    CollapsedCardStack(
+        cards = cards,
+        topInset = topInset,
+        bottomInset = bottomInset,
+        onExpand = onExpand,
+    )
+}
 
 /** 视图切换按钮：收拢时显示「展开」图标，展开时显示「收拢」图标。 */
 @Composable
