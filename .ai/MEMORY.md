@@ -8,7 +8,23 @@
 > ⚠️ `Docs/progress/current-status.md` **已冻结存档**（最后更新 2026-11-01），不再是进度快照；
 > 旧版把它列在接力顺序里，会读到两周前的状态。
 >
-> 最后更新：2026-11-17（**#301 条目页 ⋮ 菜单改版**）：
+> 最后更新：2026-11-17（**#301.1 点 ⋮ 直接闪退**）：
+> #301 改版当天用户反馈「点三个点的按钮会闪退。直接闪退的」，确认「一点就崩、菜单根本没出现」
+> ⇒ 崩在 Popup 首次组合 + 测量阶段。根因：`DropdownMenuPopup` 内部是
+> `Column(width(IntrinsicSize.Max))`，而我把 `MiddleEllipsizedText`（内部 `BoxWithConstraints`
+> = `SubcomposeLayout`，**不支持 intrinsic 测量**）搬进了菜单 ⇒ 测量期抛 `IllegalStateException`。
+> 本轮新增三条长期判据：
+> ① **复用组件前先问"它内部用了什么布局原语"** —— `BoxWithConstraints` / `SubcomposeLayout` /
+> `LazyXxx` 在 intrinsic 作用域里都是雷，而 `width(IntrinsicSize.Max)` 这种写法
+> **在调用点完全看不见**；搬组件到新场景 ≠ 搬组件到等价场景；
+> ② **"一点就崩、界面没出现" ⇒ 先怀疑组合 / 测量阶段，不是点击逻辑** —— 这条能立刻把
+> 排查范围从"某个 onClick 抛了"收窄到"这个 composable 树本身不合法"；
+> ③ ⚠️ **变异反证必须确认"红的是断言，不是编译"** —— 本轮**第二次**踩
+> （#301 变异① 是 import 被删，本次是漏 import + 漏括号）。编译红只证明代码不完整，
+> 它证明不了门禁有效。**这条已经从"检查项"升级为硬习惯。**
+> 详见 `.ai/issues/06-界面与交互-part29.md` 的 `301.1` 节。
+>
+> 上一轮：2026-11-17（**#301 条目页 ⋮ 菜单改版**）：
 > 用户「这个部分的 UI 该如何设计才好看呢？信息直观，功能完善，目前感觉这个看起来很老套的样子」
 > ⇒ 把「一整块 `DropdownMenu` + 两条分隔线」换成「**三块 M3 Expressive 独立卡片**」。
 > **功能一个没增、一个没删**（`ItemsMoreMenuGroupingTest` 一条用例钉死四个入口 + 两个动作）。

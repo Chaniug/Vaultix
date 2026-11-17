@@ -24,7 +24,36 @@
 - 已接进 CI：`ci-debug.yml` 的 `sandbox-tests` job 用**同一份脚本**，与 `android-ci` 并行
   ⇒ 本地绿 ⇒ CI 不会红在同一件事上。
 
-## 🕐 最新状态（2026-11-17 · #301 条目页 ⋮ 菜单改版）
+## 🕐 最新状态（2026-11-17 · #301.1 点 ⋮ 直接闪退，已修）
+
+> **一句话**：用户「点三个点的按钮会闪退。直接闪退的」——确认是**条目页顶栏 ⋮**，
+> 且「**一点就崩、菜单根本没出现**」⇒ 崩在 Popup 首次组合 + 测量阶段。
+> **根因是两个各自正确的东西撞在一起**，不是功能 bug。
+
+- **因果链**：
+  1. M3 `DropdownMenuPopup` 内部是 `Column(modifier.width(IntrinsicSize.Max))`
+     （`AndroidMenu.android.kt:165`）⇒ 开菜单时向子树**索取 intrinsic 宽度**；
+  2. 我在 #301 把组 1 来源行换成了 `MiddleEllipsizedText`，它内部是
+     **`BoxWithConstraints` = `SubcomposeLayout`，不支持 intrinsic 测量** ⇒ 直接抛
+     `IllegalStateException: Intrinsic measurements are not currently supported by SubcomposeLayout`。
+- **为什么改版前不崩**：老 `MenuVaultCard` 的来源行用的是**朴素 `Text` + Ellipsis**，
+  菜单里从来没调用过 `MiddleEllipsizedText`（`ItemsScreen.kt` 里那个调用点在**列表**的
+  `VaultStatusRow`，不在菜单）。⚠️ **我把组件从 A 场景搬到 B 场景，却没检查 B 的约束模型。**
+- **修法**：新增 `MiddleEllipsizedTextInIntrinsicScope`，用 `Modifier.layout` 在**布局阶段**
+  回读 `constraints.maxWidth`（不参与 subcompose），保留中间省略。
+  不退回朴素 `Text`（会失去中间省略，长路径尾部文件名被吃掉）；
+  不用固定 280dp 硬算（会把字号 / 无障碍大字体钉死在推算里）。
+- **门禁**：新增第 8 条「菜单内不允许出现不支持 intrinsic 测量的 subcompose 组件」
+  （`BoxWithConstraints` / `SubcomposeLayout` / `LazyColumn` / `LazyRow` /
+  `rememberTextMeasurer`），并正向钉住必须用 intrinsic-safe 变体。
+- **变异反证**：真的把 `BoxWithConstraints` 写回去 ⇒ 首轮是 `compileFullDebugKotlin FAILED`
+  （漏 import）= **假阳性**，补齐后重跑才拿到真断言红。
+  ⚠️ **"红的是断言不是编译"本轮踩了两次**（#301 变异① 与本次）。
+- **验证**：`app` **740 例 0 失败**（739 + 1）、detekt 通过、**25 门禁 + 20 自测**全绿。
+- **CI 实证**：`7ea33a81` → `Android CI (Debug)` **44030045946** 两 job 全绿；preview **`Vaultix-7ea33a8.apk`**（35.87 MB）。
+- **待真机确认**：⋮ 点开不闪退 / 来源行长路径仍**中间省略** / 系统字号调到最大仍不溢出。
+
+## 🕐 上一轮（2026-11-17 · #301 条目页 ⋮ 菜单改版）
 
 > **一句话**：用户「这个部分的 UI 该如何设计才好看呢？信息直观，功能完善，目前感觉这个看起来
 > 很老套的样子」+ 截图（条目页顶栏 ⋮ 展开的下拉）。**功能一个没增、一个没删**，
@@ -69,7 +98,7 @@
 - **视觉对比稿**：`/workspace/preview-vault-menu.html`（仓库外，不进提交）—— 双机并排
   「改前 vs 改后」+ 浅/深色切换 + 紧凑/完整切换。
 
-## 🕐 上一轮（2026-11-17 · #300 自动锁定审查 + 验证码 ⋮ 对齐）
+## 🕐 更早（2026-11-17 · #300 自动锁定审查 + 验证码 ⋮ 对齐）
 
 > **一句话**：两组用户反馈——① 「自动锁定有没有 bug」⇒ 逐环节对照 Bitwarden 后判定
 > **核心健全、一行没改**（并写明四处"看着像 bug 其实不是"的理由，防止接力者被诱导重改）；
