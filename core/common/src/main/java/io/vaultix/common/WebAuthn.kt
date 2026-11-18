@@ -59,6 +59,11 @@ object WebAuthn {
     private const val AAGUID_BYTES = 16
     /** UUID 文本承载的 credentialId 固定 16 字节（Bitwarden / Keyguard 的存储形态）。 */
     private const val UUID_BYTE_SIZE = 16
+    /**
+     * Bitwarden SDK 的 credentialId 显式前缀：`b64.<base64url>`（2026.10 版 SDK 起）。
+     * 见其 `Fido2CredentialStoreImpl.toGuidBytesOrNull`（2026-10-02, PM-44191）。
+     */
+    private const val CREDENTIAL_ID_B64_PREFIX = "b64."
     /** 兜底生成的 `user.id`（userHandle）字节数；WebAuthn 规范上限 64 字节。 */
     private const val USER_HANDLE_BYTES = 32
 
@@ -155,6 +160,12 @@ object WebAuthn {
     fun rawIdFromStored(storedId: String): String {
         val trimmed = storedId.trim()
         if (trimmed.isEmpty()) return trimmed
+        // ★ `b64.` 前缀（Bitwarden SDK 2026.10+ 形态）：前缀不是 ID 的一部分，必须剥掉。
+        //   正文本身就是 base64url，按 #293「存储态原样发出」的原则**不再重编码**。
+        if (trimmed.startsWith(CREDENTIAL_ID_B64_PREFIX, ignoreCase = true)) {
+            return trimmed.substring(CREDENTIAL_ID_B64_PREFIX.length).trim()
+                .ifEmpty { trimmed }
+        }
         // ★ UUID 文本分支（2026-09-12 定位的「登录末步校验失败」根因）：
         //   Bitwarden / Keyguard 库里 16 字节 credentialId 存成 **UUID 文本**形态
         //   （如 `5698f18a-41e0-e865-0104-c989aee7dc18`）。UUID 文本的字符集 `0-9a-f-`
@@ -170,6 +181,29 @@ object WebAuthn {
     }
 
     /**
+     * 存储态 credentialId → **原始字节**（唯一真源：断言 rawId、allow / exclude 三处共用）。
+     *
+     * 三种存储形态（对齐 Bitwarden `Fido2CredentialStoreImpl.toGuidBytesOrNull`，2026-11-18）：
+     * 1. `b64.<base64url>` —— Bitwarden SDK 显式前缀；
+     * 2. **UUID 文本** —— 旧 SDK / Keyguard 的 16 字节形态；
+     * 3. 裸 Base64 文本 —— 本应用注册时写入的形态（URL-safe 或标准）。
+     *
+     * 都解不出返回 `null`，**不**退化成 UTF-8 字节：比较场景里「解不出」必须等于「不匹配」，
+     * 否则脏数据会碰巧命中（那正是 [rawIdFromStored] 需要兜底、而匹配不能兜底的分界）。
+     */
+    fun credentialIdBytes(storedId: String): ByteArray? {
+        val trimmed = storedId.trim()
+        if (trimmed.isEmpty()) return null
+        if (trimmed.startsWith(CREDENTIAL_ID_B64_PREFIX, ignoreCase = true)) {
+            val body = trimmed.substring(CREDENTIAL_ID_B64_PREFIX.length).trim()
+            if (body.isEmpty()) return null
+            return runCatching { Base64.getUrlDecoder().decode(body) }.getOrNull()
+        }
+        uuidTextToBytes(trimmed)?.let { return it }
+        return runCatching { decodeBase64UrlOrStandard(trimmed) }.getOrNull()
+    }
+
+    /**
      * 诊断用：判定库里 [storedId] 的存储形态（`blank` / `uuid` / `base64` / `text`）。
      *
      * 与 [rawIdFromStored] 的分支一一对应，供现场日志区分「形态不对」与「解码失败」——
@@ -179,20 +213,25 @@ object WebAuthn {
         val trimmed = storedId.trim()
         return when {
             trimmed.isEmpty() -> "blank"
+            trimmed.startsWith(CREDENTIAL_ID_B64_PREFIX, ignoreCase = true) -> "b64"
             isUuidText(trimmed) -> "uuid"
             runCatching { decodeBase64UrlOrStandard(trimmed) }.isSuccess -> "base64"
             else -> "text"
         }
     }
 
-    /** UUID 文本 → `base64Url(16 字节)`（22 字符）；非 UUID 文本返回 null。 */
-    private fun uuidTextToBase64Url(text: String): String? = runCatching {
+    /** UUID 文本 → 16 字节；非 UUID 文本返回 null。 */
+    private fun uuidTextToBytes(text: String): ByteArray? = runCatching {
         val uuid = UUID.fromString(text)
-        val buffer = ByteBuffer.allocate(UUID_BYTE_SIZE)
-        buffer.putLong(uuid.mostSignificantBits)
-        buffer.putLong(uuid.leastSignificantBits)
-        base64Url(buffer.array())
+        ByteBuffer.allocate(UUID_BYTE_SIZE)
+            .putLong(uuid.mostSignificantBits)
+            .putLong(uuid.leastSignificantBits)
+            .array()
     }.getOrNull()
+
+    /** UUID 文本 → `base64Url(16 字节)`（22 字符）；非 UUID 文本返回 null。 */
+    private fun uuidTextToBase64Url(text: String): String? =
+        uuidTextToBytes(text)?.let { base64Url(it) }
 
     private fun isUuidText(text: String): Boolean =
         runCatching { UUID.fromString(text) }.isSuccess

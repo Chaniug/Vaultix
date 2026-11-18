@@ -8,6 +8,7 @@
  */
 package io.vaultix.vaultix.passkey
 
+import io.vaultix.common.WebAuthn
 import io.vaultix.model.VaultFido2Credential
 import org.json.JSONObject
 
@@ -56,7 +57,11 @@ internal object PasskeyExcludePolicy {
         }.getOrNull() ?: return emptySet()
         val ids = LinkedHashSet<String>()
         for (index in 0 until array.length()) {
-            val id = array.optJSONObject(index)?.optString("id")?.trim().orEmpty()
+            val descriptor = array.optJSONObject(index) ?: continue
+            val type = descriptor.optString("type").trim()
+            // 规范：只有 type=public-key 的描述符参与匹配（缺失时宽容处理）。
+            if (type.isNotEmpty() && type != CREDENTIAL_TYPE_PUBLIC_KEY) continue
+            val id = descriptor.optString("id").trim()
             if (id.isNotEmpty()) ids += id
         }
         return ids
@@ -76,9 +81,20 @@ internal object PasskeyExcludePolicy {
         rpId: String,
     ): VaultFido2Credential? {
         if (excluded.isEmpty() || rpId.isBlank()) return null
+        // ★ 按**原始字节**比较（2026-11-18）：此前是「原串相等」⇒ 库里存 UUID 文本、
+        //   请求里发 base64url（或反之）时同一个 ID 永远对不上，排除项形同虚设。
+        //   与 [PasskeyResolution] 的 allowCredentials 共用同一个解码入口（WebAuthn.credentialIdBytes）。
+        val excludedBytes = excluded.mapNotNull { WebAuthn.credentialIdBytes(it) }
+        if (excludedBytes.isEmpty()) return null
         return existing.firstOrNull { cred ->
-            cred.rpId == rpId && cred.credentialId.trim() in excluded
+            cred.rpId == rpId && matchesAny(cred.credentialId, excludedBytes)
         }
+    }
+
+    /** 存储态 id 是否命中任一排除项（解不出 ⇒ 不命中，绝不猜）。 */
+    private fun matchesAny(storedId: String, excludedBytes: List<ByteArray>): Boolean {
+        val bytes = WebAuthn.credentialIdBytes(storedId) ?: return false
+        return excludedBytes.any { it.contentEquals(bytes) }
     }
 
     /** 创建请求里承载排除列表的键名。 */
