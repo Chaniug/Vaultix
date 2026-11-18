@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vaultix 填充面板图标方案 · 2026-11-18</title>
+<style>
+  :root{
+    --bg:#0E1116; --panel:#171C24; --panel2:#1E2530; --line:#2B3441;
+    --txt:#E8EDF4; --dim:#9BA8BA; --dim2:#6F7C8E;
+    --accent:#7690D4; --navy:#1B2B63; --ok:#4FD1A5; --warn:#F0B36B; --bad:#F0797D;
+    --shield:#000000;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);
+    font:14px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;}
+  .wrap{max-width:1360px;margin:0 auto;padding:32px 28px 72px}
+  h1{font-size:26px;margin:0 0 6px;letter-spacing:.3px}
+  .sub{color:var(--dim);margin-bottom:24px}
+  .facts{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:28px}
+  .fact{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .fact b{display:block;color:var(--accent);font-size:12px;letter-spacing:1px;margin-bottom:4px}
+  .fact span{color:var(--dim);font-size:13px}
+  .plan{background:var(--panel);border:1px solid var(--line);border-radius:14px;
+    padding:20px;margin-bottom:18px;display:grid;grid-template-columns:290px 1fr 310px;gap:22px;align-items:start}
+  .plan.rec{border-color:#3C6E92;box-shadow:inset 0 0 0 1px rgba(118,144,212,.18)}
+  .plan h2{font-size:18px;margin:0 0 4px}
+  .badge{display:inline-block;font-size:11px;padding:2px 9px;border-radius:20px;margin-left:8px;vertical-align:2px}
+  .b-rec{background:rgba(79,209,165,.14);color:var(--ok);border:1px solid rgba(79,209,165,.35)}
+  .b-now{background:rgba(154,168,186,.12);color:var(--dim);border:1px solid var(--line)}
+  .b-bad{background:rgba(240,121,125,.12);color:var(--bad);border:1px solid rgba(240,121,125,.3)}
+  .b-min{background:rgba(240,179,107,.12);color:var(--warn);border:1px solid rgba(240,179,107,.3)}
+  .desc{color:var(--dim);font-size:13px;margin:8px 0 0}
+  .desc code{background:#0B0E13;padding:1px 5px;border-radius:4px;color:#BBD0F5;font-size:12px}
+  .scenes{display:flex;gap:16px;flex-wrap:wrap}
+  .scene{width:246px}
+  .scene .lbl{color:var(--dim2);font-size:11px;letter-spacing:1px;margin-bottom:6px}
+  /* 填充面板：宽度按系统 FillUi 约 240dp */
+  .ui{border-radius:10px;overflow:hidden;border:1px solid #3A3A3E;background:#F2F2F7;color:#1C1C1E;padding:0 0 4px}
+  .ui.dark{background:#1C1C1E;color:#F2F2F7;border-color:#3A3A3E}
+  .hdr{display:flex;align-items:center;gap:4px;height:24px;padding:6px 8px 2px;
+    color:#6E6E73;font-size:11px;font-family:sans-serif-medium,sans-serif}
+  .ui.dark .hdr{color:#A1A1A6}
+  .hdr .grow{flex:1}
+  .hdr svg{width:12px;height:12px;flex:none}
+  .row{margin:2px 4px;padding:0 8px;min-height:48px;background:#FFFFFF;border-radius:12px;
+    display:flex;align-items:center;gap:8px}
+  .ui.dark .row{background:#2C2C2E}
+  .row .ic{width:24px;height:24px;flex:none;display:flex;align-items:center;justify-content:center}
+  .row .ic svg{width:24px;height:24px}
+  .row .tx{min-width:0;line-height:1.25}
+  .row .t{font-size:15px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .row .s{font-size:13px;color:#6E6E73;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .ui.dark .row .s{color:#A1A1A6}
+  .row.brand .t{color:#3A5AA8}
+  .ui.dark .row.brand .t{color:#B9C9F5}
+  /* 放大细节 */
+  .zoom{display:flex;gap:18px;margin-top:12px;align-items:flex-end}
+  .zoom .z{text-align:center}
+  .zoom .z .cap{font-size:11px;color:var(--dim2);margin-top:4px}
+  .zoom .box{width:72px;height:72px;border-radius:10px;display:flex;align-items:center;justify-content:center;
+    background:#F2F2F7;border:1px solid #3A3A3E}
+  .zoom .box.dk{background:#1C1C1E}
+  .zoom .box svg{width:48px;height:48px}
+  .zoom .box.small svg{width:24px;height:24px}
+  .metrics{font-size:12.5px}
+  .metrics table{width:100%;border-collapse:collapse}
+  .metrics td{padding:5px 0;border-bottom:1px solid var(--line);vertical-align:top}
+  .metrics td:first-child{color:var(--dim2);width:76px}
+  .metrics .y{color:var(--ok)} .metrics .n{color:var(--bad)} .metrics .m{color:var(--warn)}
+  .note{margin-top:10px;color:var(--dim);font-size:12.5px;background:var(--panel2);
+    border-radius:8px;padding:9px 11px;border-left:2px solid var(--accent)}
+  .verdict{background:linear-gradient(135deg,#182338,#141A24);border:1px solid #34506F;
+    border-radius:14px;padding:22px 24px;margin-top:26px}
+  .verdict h3{margin:0 0 10px;font-size:18px}
+  .verdict p{margin:7px 0;color:#C9D5E6}
+  .ask{margin-top:16px;background:#0B0E13;border:1px solid var(--line);border-radius:10px;
+    padding:12px 16px;color:#E8EDF4}
+  @media(max-width:1100px){.plan{grid-template-columns:1fr}.facts{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>填充面板图标 · 对比方案</h1>
+  <div class="sub">2026-11-18 · 桌面折纸 V 已定案且效果确认，这里只解决「面板里的 Vaultix 标识」如何与之统一。</div>
+
+  <div class="facts">
+    <div class="fact"><b>它用在哪里</b><span>填充面板 header（12dp）＋ 认证行（24dp）＋ 库列表空态（72dp）。换形态要三处一起换，否则品牌分裂。</span></div>
+    <div class="fact"><b>现状的隐藏问题</b><span>图标写死黑色且 <code>shouldTintIcon=false</code>；深色面板上文字会自适应变浅，图标却仍是黑的 —— 会糊。</span></div>
+    <div class="fact"><b>现成的机制</b><span>条目已有 <code>iconTint(context)</code>：浅色 #44474E / 深色 #C4C6CF。品牌图标只是没接上它。</span></div>
+  </div>
+
+  <!-- 方案 A -->
+  <article class="plan">
+    <div>
+      <h2>A · 保持现状 <span class="badge b-now">不动</span></h2>
+      <p class="desc">盾牌 + 钥匙孔，固定黑色。<br>形态是 11-09 自绘的，与桌面折纸 V 是两套语言。</p>
+      <p class="desc">改动量：<b>0</b></p>
+    </div>
+    <div class="scenes">
+      <div class="scene"><div class="lbl">浅色面板</div>
+        <div class="ui">
+          <div class="hdr"><svg viewBox="0 0 24 24"><path fill="#000" fill-rule="evenodd" d="M12 1 L3 5 L3 11 C3 16.55 6.84 21.74 12 23 C17.16 21.74 21 16.55 21 11 L21 5 L12 1 Z M12 6.6 C13.38 6.6 14.5 7.72 14.5 9.1 C14.5 10.08 13.94 10.92 13.12 11.32 L13.12 14.5 L10.88 14.5 L10.88 11.32 C10.06 10.92 9.5 10.08 9.5 9.1 C9.5 7.72 10.62 6.6 12 6.6 Z"/></svg>Vaultix<span class="grow"></span>共 3 条</div>
+          <div class="row"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="#44474E" stroke-width="1.6"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.3 2.3 3.4 5.2 3.4 8.5s-1.1 6.2-3.4 8.5c-2.3-2.3-3.4-5.2-3.4-8.5S9.7 5.8 12 3.5z"/></svg></div><div class="tx"><div class="t">QQ</div><div class="s">337626002</div></div></div>
+          <div class="row brand"><div class="ic"><svg viewBox="0 0 24 24"><path fill="#000" fill-rule="evenodd" d="M12 1 L3 5 L3 11 C3 16.55 6.84 21.74 12 23 C17.16 21.74 21 16.55 21 11 L21 5 L12 1 Z M12 6.6 C13.38 6.6 14.5 7.72 14.5 9.1 C14.5 10.08 13.94 10.92 13.12 11.32 L13.12 14.5 L10.88 14.5 L10.88 11.32 C10.06 10.92 9.5 10.08 9.5 9.1 C9.5 7.72 10.62 6.6 12 6.6 Z"/></svg></div><div class="tx"><div class="t">在 Vaultix 中搜索</div><div class="s">解锁后可填充</div></div></div>
+        </div>
+      </div>
+      <div class="scene"><div class="lbl">深色面板（现状问题）</div>
+        <div class="ui dark">
+          <div class="hdr"><svg viewBox="0 0 24 24"><path fill="#000" fill-rule="evenodd" d="M12 1 L3 5 L3 11 C3 16.55 6.84 21.74 12 23 C17.16 21.74 21 16.55 21 11 L21 5 L12 1 Z M12 6.6 C13.38 6.6 14.5 7.72 14.5 9.1 C14.5 10.08 13.94 10.92 13.12 11.32 L13.12 14.5 L10.88 14.5 L10.88 11.32 C10.06 10.92 9.5 10.08 9.5 9.1 C9.5 7.72 10.62 6.6 12 6.6 Z"/></svg>Vaultix<span class="grow"></span>共 3 条</div>
+          <div class="row"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="#C4C6CF" stroke-width="1.6"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.3 2.3 3.4 5.2 3.4 8.5s-1.1 6.2-3.4 8.5c-2.3-2.3-3.4-5.2-3.4-8.5S9.7 5.8 12 3.5z"/></svg></div><div class="tx"><div class="t">QQ</div><div class="s">337626002</div></div></div>
+          <div class="row brand"><div class="ic"><svg viewBox="0 0 24 24"><path fill="#000" fill-rule="evenodd" d="M12 1 L3 5 L3 11 C3 16.55 6.84 21.74 12 23 C17.16 21.74 21 16.55 21 11 L21 5 L12 1 Z M12 6.6 C13.38 6.6 14.5 7.72 14.5 9.1 C14.5 10.08 13.94 10.92 13.12 11.32 L13.12 14.5 L10.88 14.5 L10.88 11.32 C10.06 10.92 9.5 10.08 9.5 9.1 C9.5 7.72 10.62 6.6 12 6.6 Z"/></svg></div><div class="tx"><div class="t">在 Vaultix 中搜索</div><div class="s">解锁后可填充</div></div></div>
+        </div>
+      </div>
+    </div>
+    <div class="metrics">
+      <table>
+        <tr><td>12dp 可读</td><td class="y">好 —— 盾牌剪影在 12dp 仍完整</td></tr>
+        <tr><td>深色面板</td><td class="n">差 —— 黑图标贴深底，几乎消失</td></tr>
+        <tr><td>品牌一致</td><td class="n">差 —— 盾牌 / 折纸 V 两套形态</td></tr>
+        <tr><td>改动</td><td>无</td></tr>
+      </table>
+      <div class="note">你之前看的「面板不像 Vaultix」大概就是这个：桌面是折纸 V，面板里却是个盾。</div>
+    </div>
+  </article>
+
+  <!-- 方案 B -->
+  <article class="plan rec">
+    <div>
+      <h2>B · 折纸 V 单色剪影 <span class="badge b-rec">推荐</span></h2>
+      <p class="desc">用单色层的两块 V（已有 <code>ic_launcher_monochrome</code> 真源），重新缩放到 24dp 安全区；接上现有 <code>iconTint(context)</code>，浅深面板各自适配。三处统一。</p>
+      <p class="desc">改动量：<b>中</b>（1 个新 drawable + 3 处引用 + 3 条断言）</p>
+    </div>
+    <div class="scenes">
+      <div class="scene"><div class="lbl">浅色面板（#44474E）</div>
+        <div class="ui">
+          <div class="hdr"><svg viewBox="0 0 24 24"><path fill="#44474E" d="M4 4 L8.94 4 L12.47 13.88 L12.47 20 L10.82 20 Z M13.18 20 L11.53 20 L11.53 13.88 L15.06 4 L20 4 Z"/></svg>Vaultix<span class="grow"></span>共 3 条</div>
+          <div class="row"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="#44474E" stroke-width="1.6"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.3 2.3 3.4 5.2 3.4 8.5s-1.1 6.2-3.4 8.5c-2.3-2.3-3.4-5.2-3.4-8.5S9.7 5.8 12 3.5z"/></svg></div><div class="tx"><div class="t">QQ</div><div class="s">337626002</div></div></div>
+          <div class="row brand"><div class="ic"><svg viewBox="0 0 24 24"><path fill="#44474E" d="M4 4 L8.94 4 L12.47 13.88 L12.47 20 L10.82 20 Z M13.18 20 L11.53 20 L11.53 13.88 L15.06 4 L20 4 Z"/></svg></div><div class="tx"><div class="t">在 Vaultix 中搜索</div><div class="s">解锁后可填充</div></div></div>
+        </div>
+        <div class="zoom">
+          <div class="z"><div class="box"><svg viewBox="0 0 24 24"><path fill="#44474E" d="M4 4 L8.94 4 L12.47 13.88 L12.47 20 L10.82 20 Z M13.18 20 L11.53 20 L11.53 13.88 L15.06 4 L20 4 Z"/></svg></div><div class="cap">24dp · 放大 2×</div></div>
+          <div class="z"><div class="box small"><svg viewBox="0 0 24 24"><path fill="#44474E" d="M4 4 L8.94 4 L12.47 13.88 L12.47 20 L10.82 20 Z M13.18 20 L11.53 20 L11.53 13.88 L15.06 4 L20 4 Z"/></svg></div><div class="cap">12dp · header 实际大小</div></div>
+        </div>
+      </div>
+      <div class="scene"><div class="lbl">深色面板（#C4C6CF）</div>
+        <div class="ui dark">
+          <div class="hdr"><svg viewBox="0 0 24 24"><path fill="#C4C6CF" d="M4 4 L8.94 4 L12.47 13.88 L12.47 20 L10.82 20 Z M13.18 20 L11.53 20 L11.53 13.88 L15.06 4 L20 4 Z"/></svg>Vaultix<span class="grow"></span>共 3 条</div>
+          <div class="row"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="#C4C6CF" stroke-width="1.6"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.3 2.3 3.4 5.2 3.4 8.5s-1.1 6.2-3.4 8.5c-2.3-2.3-3.4-5.2-3.4-8.5S9.7 5.8 12 3.5z"/></svg></div><div class="tx"><div class="t">QQ</div><div class="s">337626002</div></div></div>
+          <div class="row brand"><div class="ic"><svg viewBox="0 0 24 24"><path fill="#C4C6CF" d="M4 4 L8.94 4 L12.47 13.88 L12.47 20 L10.82 20 Z M13.18 20 L11.53 20 L11.53 13.88 L15.06 4 L20 4 Z"/></svg></div><div class="tx"><div class="t">在 Vaultix 中搜索</div><div class="s">解锁后可填充</div></div></div>
+        </div>
+      </div>
+    </div>
+    <div class="metrics">
+      <table>
+        <tr><td>12dp 可读</td><td class="y">好 —— V 是粗实心，缩到 12dp 仍是两笔</td></tr>
+        <tr><td>深色面板</td><td class="y">好 —— 接上已有明暗 tint</td></tr>
+        <tr><td>品牌一致</td><td class="y">好 —— 与桌面剪影同源</td></tr>
+        <tr><td>改动</td><td>中，纯资源 + 3 处引用，不动填充逻辑</td></tr>
+      </table>
+      <div class="note">注意：这里不是把桌面三色图标缩小塞进来 —— 那样白色半在浅色面板会直接消失。只取单色层剪影，几何同源、配色交给面板。</div>
+    </div>
+  </article>
+
+  <!-- 方案 C -->
+  <article class="plan">
+    <div>
+      <h2>C · 折纸 V 三色缩略章 <span class="badge b-bad">不建议</span></h2>
+      <p class="desc">把桌面版深蓝底 + 白/中蓝两半整体压进 24dp，做成一枚「小图标章」。</p>
+      <p class="desc">改动量：<b>中高</b>（新 drawable + 需要单色层之外的一整套）</p>
+    </div>
+    <div class="scenes">
+      <div class="scene"><div class="lbl">浅色面板 · 24dp 看着还行</div>
+        <div class="ui">
+          <div class="hdr"><svg viewBox="0 0 24 24"><rect x="1" y="1" width="22" height="22" rx="5" fill="#1B2B63"/><path fill="#FFF" d="M5 5 L8.7 5 L11.4 12.6 L11.4 18 L9.8 18 Z"/><path fill="#7690D4" d="M12.2 18 L10.7 18 L10.7 12.6 L13.4 5 L17 5 Z"/></svg>Vaultix<span class="grow"></span>共 3 条</div>
+          <div class="row brand"><div class="ic"><svg viewBox="0 0 24 24"><rect x="1" y="1" width="22" height="22" rx="5" fill="#1B2B63"/><path fill="#FFF" d="M5 5 L8.7 5 L11.4 12.6 L11.4 18 L9.8 18 Z"/><path fill="#7690D4" d="M12.2 18 L10.7 18 L10.7 12.6 L13.4 5 L17 5 Z"/></svg></div><div class="tx"><div class="t">在 Vaultix 中搜索</div><div class="s">解锁后可填充</div></div></div>
+        </div>
+        <div class="zoom"><div class="z"><div class="box small"><svg viewBox="0 0 24 24"><rect x="1" y="1" width="22" height="22" rx="5" fill="#1B2B63"/><path fill="#FFF" d="M5 5 L8.7 5 L11.4 12.6 L11.4 18 L9.8 18 Z"/><path fill="#7690D4" d="M12.2 18 L10.7 18 L10.7 12.6 L13.4 5 L17 5 Z"/></svg></div><div class="cap">12dp · 三档已糊成一坨</div></div></div>
+      </div>
+      <div class="scene"><div class="lbl">深色面板 · 蓝底融进背景</div>
+        <div class="ui dark">
+          <div class="hdr"><svg viewBox="0 0 24 24"><rect x="1" y="1" width="22" height="22" rx="5" fill="#1B2B63"/><path fill="#FFF" d="M5 5 L8.7 5 L11.4 12.6 L11.4 18 L9.8 18 Z"/><path fill="#7690D4" d="M12.2 18 L10.7 18 L10.7 12.6 L13.4 5 L17 5 Z"/></svg>Vaultix<span class="grow"></span>共 3 条</div>
+          <div class="row brand"><div class="ic"><svg viewBox="0 0 24 24"><rect x="1" y="1" width="22" height="22" rx="5" fill="#1B2B63"/><path fill="#FFF" d="M5 5 L8.7 5 L11.4 12.6 L11.4 18 L9.8 18 Z"/><path fill="#7690D4" d="M12.2 18 L10.7 18 L10.7 12.6 L13.4 5 L17 5 Z"/></svg></div><div class="tx"><div class="t">在 Vaultix 中搜索</div><div class="s">解锁后可填充</div></div></div>
+        </div>
+      </div>
+    </div>
+    <div class="metrics">
+      <table>
+        <tr><td>12dp 可读</td><td class="n">差 —— 三色在 12dp 糊成蓝方块</td></tr>
+        <tr><td>深色面板</td><td class="n">差 —— 深蓝底与深色面板融在一起</td></tr>
+        <tr><td>品牌一致</td><td class="m">形似，但在面板里读不出「V」</td></tr>
+        <tr><td>改动</td><td>中高</td></tr>
+      </table>
+      <div class="note">这正是桌面图标踩过的坑：三档明度需要 48dp 以上才有意义。面板给的是 12/24dp，颜色层次必须放弃。</div>
+    </div>
+  </article>
+
+  <!-- 方案 D -->
+  <article class="plan">
+    <div>
+      <h2>D · 盾牌只开明暗 tint <span class="badge b-min">最小修复</span></h2>
+      <p class="desc">形态不动，只把 <code>shouldTintIcon=false</code> 改成走 <code>iconTint(context)</code>，修掉深色面板的隐藏问题。</p>
+      <p class="desc">改动量：<b>小</b>（约 2 行）</p>
+    </div>
+    <div class="scenes">
+      <div class="scene"><div class="lbl">浅色面板</div>
+        <div class="ui">
+          <div class="hdr"><svg viewBox="0 0 24 24"><path fill="#44474E" fill-rule="evenodd" d="M12 1 L3 5 L3 11 C3 16.55 6.84 21.74 12 23 C17.16 21.74 21 16.55 21 11 L21 5 L12 1 Z M12 6.6 C13.38 6.6 14.5 7.72 14.5 9.1 C14.5 10.08 13.94 10.92 13.12 11.32 L13.12 14.5 L10.88 14.5 L10.88 11.32 C10.06 10.92 9.5 10.08 9.5 9.1 C9.5 7.72 10.62 6.6 12 6.6 Z"/></svg>Vaultix<span class="grow"></span>共 3 条</div>
+          <div class="row brand"><div class="ic"><svg viewBox="0 0 24 24"><path fill="#44474E" fill-rule="evenodd" d="M12 1 L3 5 L3 11 C3 16.55 6.84 21.74 12 23 C17.16 21.74 21 16.55 21 11 L21 5 L12 1 Z M12 6.6 C13.38 6.6 14.5 7.72 14.5 9.1 C14.5 10.08 13.94 10.92 13.12 11.32 L13.12 14.5 L10.88 14.5 L10.88 11.32 C10.06 10.92 9.5 10.08 9.5 9.1 C9.5 7.72 10.62 6.6 12 6.6 Z"/></svg></div><div class="tx"><div class="t">在 Vaultix 中搜索</div><div class="s">解锁后可填充</div></div></div>
+        </div>
+      </div>
+      <div class="scene"><div class="lbl">深色面板</div>
+        <div class="ui dark">
+          <div class="hdr"><svg viewBox="0 0 24 24"><path fill="#C4C6CF" fill-rule="evenodd" d="M12 1 L3 5 L3 11 C3 16.55 6.84 21.74 12 23 C17.16 21.74 21 16.55 21 11 L21 5 L12 1 Z M12 6.6 C13.38 6.6 14.5 7.72 14.5 9.1 C14.5 10.08 13.94 10.92 13.12 11.32 L13.12 14.5 L10.88 14.5 L10.88 11.32 C10.06 10.92 9.5 10.08 9.5 9.1 C9.5 7.72 10.62 6.6 12 6.6 Z"/></svg>Vaultix<span class="grow"></span>共 3 条</div>
+          <div class="row brand"><div class="ic"><svg viewBox="0 0 24 24"><path fill="#C4C6CF" fill-rule="evenodd" d="M12 1 L3 5 L3 11 C3 16.55 6.84 21.74 12 23 C17.16 21.74 21 16.55 21 11 L21 5 L12 1 Z M12 6.6 C13.38 6.6 14.5 7.72 14.5 9.1 C14.5 10.08 13.94 10.92 13.12 11.32 L13.12 14.5 L10.88 14.5 L10.88 11.32 C10.06 10.92 9.5 10.08 9.5 9.1 C9.5 7.72 10.62 6.6 12 6.6 Z"/></svg></div><div class="tx"><div class="t">在 Vaultix 中搜索</div><div class="s">解锁后可填充</div></div></div>
+        </div>
+      </div>
+    </div>
+    <div class="metrics">
+      <table>
+        <tr><td>12dp 可读</td><td class="y">好</td></tr>
+        <tr><td>深色面板</td><td class="y">好 —— 修掉了现状缺陷</td></tr>
+        <tr><td>品牌一致</td><td class="n">仍未解决 —— 还是盾牌</td></tr>
+        <tr><td>改动</td><td>小，2 行</td></tr>
+      </table>
+      <div class="note">如果你只是想让深色面板不再糊，D 就够了；如果想让面板看起来就是 Vaultix，得选 B。</div>
+    </div>
+  </article>
+
+  <div class="verdict">
+    <h3>我的建议：B</h3>
+    <p>形态上，桌面折纸 V 你已经确认好看，而面板里是另一套盾牌 —— <b>不一致本身就是问题</b>。B 用单色层剪影保持同源，同时把现状「深色面板黑图标糊掉」顺手修了，改动只在资源层和 3 处引用，不碰刚验收通过的填充逻辑。</p>
+    <p>C 看着最像桌面图标，但 12dp 下三档颜色必然糊掉，而且深蓝底在深色面板上会融进去 —— 桌面图标的成功恰恰在于它有 48dp 以上，面板没有这个空间。</p>
+    <p>另外提醒一句：<b>库列表空态那个 72dp 图标也用的是同一张盾牌</b>。选 B 的话它会一起换成折纸 V（tint 为主题色 primary），App 内会跟桌面更统一；如果你只想改面板、不动空态，也告诉我。</p>
+    <div class="ask">回一句「<b>B</b>」就行；也可以说「B，但空态不动」或「我更想看 C 的实物」。</div>
+  </div>
+</div>
+</body>
+</html>
