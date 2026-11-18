@@ -48,9 +48,22 @@ object EquivalentDomains {
         setOf("paypal.com"),
     )
 
-    /** 两个主机是否等价（完全相同或同属一个等价域组）。 */
+    /**
+     * 两个主机是否等价（完全相同或同属一个等价域组）。
+     *
+     * ⚠️ 必须先归一到**基域**再查表（2026-11-18 修正）：组里存的是 `google.com`，
+     * 而登录页通常是 `www.google.com` / `accounts.google.com`。按原串比较时
+     * `www.google.com in setOf("google.com", "youtube.com", …)` 恒为 false ——
+     * 等价域这条规则对带子域的页面**整体失效**（Bitwarden 比的就是 eTLD+1）。
+     *
+     * 同基域（`www.google.com` vs `google.com`）**不算**等价域：那是
+     * [UriMatcher.baseDomainMatch] 的 100 分档，不能拿 139 分，否则排序会失真。
+     */
     fun isEquivalent(a: String, b: String): Boolean {
         if (a == b) return true
-        return EQUIVALENCE_GROUPS.any { group -> a in group && b in group }
+        val rootA = PublicSuffixList.baseDomain(a)
+        val rootB = PublicSuffixList.baseDomain(b)
+        if (rootA == rootB) return false
+        return EQUIVALENCE_GROUPS.any { group -> rootA in group && rootB in group }
     }
 }

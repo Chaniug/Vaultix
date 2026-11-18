@@ -52,17 +52,40 @@ object BitwardenLikeAutofillMatcher {
             .thenByDescending { it.first.isFavorite }
             .thenBy { it.first.name.lowercase() }
 
+    /**
+     * 匹配并排序候选。
+     *
+     * @param webScheme 页面 scheme（`http` / `https`）。`Exact` / `StartsWith` /
+     *   `RegularExpression` 需要与「保存的完整网址」比对，缺了 scheme 就只能硬编码
+     *   `https` —— http 站点会漏匹配，也会把 `http://` 条目误判成不相等。
+     */
     fun match(
         credentials: List<AutofillCredential>,
         packageName: String?,
         webDomain: String?,
         config: MatchConfig = MatchConfig(),
-    ): List<AutofillCredential> = credentials.asSequence()
-        .map { it to scoreCredential(it, packageName, webDomain, config) }
-        .filter { it.second > 0 }
-        .sortedWith(CREDENTIAL_ORDER)
-        .map { it.first }
-        .toList()
+        webScheme: String? = null,
+    ): List<AutofillCredential> {
+        val target = MatchTarget(
+            packageName = packageName,
+            webDomain = webDomain,
+            webUri = webDomain?.let { UriMatcher.pageUri(webScheme, it) },
+        )
+        return credentials.asSequence()
+            .map { it to scoreCredential(it, target, config) }
+            .filter { it.second > 0 }
+            .sortedWith(CREDENTIAL_ORDER)
+            .map { it.first }
+            .toList()
+    }
+
+    /** 本次匹配目标的三个维度（避免把 6+ 个参数在私有函数间层层传递）。 */
+    private data class MatchTarget(
+        val packageName: String?,
+        val webDomain: String?,
+        /** `scheme://host`；没有域名时为 null。 */
+        val webUri: String?,
+    )
 
     /**
      * 🔴 **无域名排序**（2026-10-04，Firefox Android 真机日志实证）：拿不到域名时，
@@ -98,17 +121,16 @@ object BitwardenLikeAutofillMatcher {
 
     private fun scoreCredential(
         cred: AutofillCredential,
-        packageName: String?,
-        webDomain: String?,
+        target: MatchTarget,
         config: MatchConfig,
     ): Int {
         var best = 0
         for (entry in cred.uris) {
-            val s = scoreUri(entry.uri, entry.match, packageName, webDomain, config)
+            val s = scoreUri(entry.uri, entry.match, target, config)
             if (s > best) best = s
         }
         // 无 uri 时靠 appPackageName 命中包名（v1 暂未反查，预留接口）。
-        if (best == 0 && cred.appPackageName.isNotEmpty() && cred.appPackageName == packageName) {
+        if (best == 0 && cred.appPackageName.isNotEmpty() && cred.appPackageName == target.packageName) {
             best = EXACT_PACKAGE
         }
         return best
@@ -117,15 +139,19 @@ object BitwardenLikeAutofillMatcher {
     private fun scoreUri(
         uri: String,
         match: UriMatch,
-        packageName: String?,
-        webDomain: String?,
+        target: MatchTarget,
         config: MatchConfig,
     ): Int {
         if (match == UriMatch.Never) return 0
         if (uri.startsWith("androidapp://", ignoreCase = true)) {
-            return scoreAndroidAppUri(uri, packageName, config)
+            // 包名 URI 不受「严格域名」开关影响：它本身就是逐字符相等，没有更严的空间。
+            return scoreAndroidAppUri(uri, target.packageName, config)
         }
-        return scoreWebUri(uri, match, webDomain, config)
+        // 严格模式只认「主机相等」这一类证据：StartsWith / Exact / Regex 是用户自定义的
+        // 宽松规则，开着严格模式时一并作废 —— 否则设置页承诺的「只填充域名完全一致的
+        // 条目」会被一条正则或前缀规则整体绕过（2026-11-18 修正）。
+        if (config.exactDomainOnly && match != UriMatch.Domain && match != UriMatch.Host) return 0
+        return scoreWebUri(uri, match, target, config)
     }
 
     private fun scoreAndroidAppUri(uri: String, packageName: String?, config: MatchConfig): Int {
@@ -137,16 +163,19 @@ object BitwardenLikeAutofillMatcher {
     private fun scoreWebUri(
         uri: String,
         match: UriMatch,
-        webDomain: String?,
+        target: MatchTarget,
         config: MatchConfig,
     ): Int {
-        val web = webDomain ?: return 0
+        val web = target.webDomain ?: return 0
+        // 非域名规则比对的是「页面地址」而不是裸主机：少了 scheme，`^https://…` 这类
+        // 从 Bitwarden 导入的正则永远命中不了（2026-11-18 修正）。
+        val pageUri = target.webUri ?: web
         return when (match) {
             UriMatch.Domain -> scoreDomainUri(uri, web, config)
             UriMatch.Host -> scoreHostUri(uri, web)
-            UriMatch.StartsWith -> scoreStartsWithUri(uri, web)
-            UriMatch.Exact -> scoreExactUri(uri, web)
-            UriMatch.RegularExpression -> scoreRegexUri(uri, web)
+            UriMatch.StartsWith -> scoreStartsWithUri(uri, pageUri)
+            UriMatch.Exact -> scoreExactUri(uri, pageUri)
+            UriMatch.RegularExpression -> scoreRegexUri(uri, pageUri)
             UriMatch.Never -> 0
         }
     }
@@ -166,14 +195,14 @@ object BitwardenLikeAutofillMatcher {
         return if (UriMatcher.hostMatch(credHost, targetHost)) EXACT_DOMAIN else 0
     }
 
-    private fun scoreStartsWithUri(uri: String, web: String): Int =
-        if (UriMatcher.startsWithMatch(uri, "https://$web")) STARTS_WITH_MATCH else 0
+    private fun scoreStartsWithUri(uri: String, pageUri: String): Int =
+        if (UriMatcher.startsWithMatch(uri, pageUri)) STARTS_WITH_MATCH else 0
 
-    private fun scoreExactUri(uri: String, web: String): Int =
-        if (UriMatcher.exactMatch(uri, "https://$web")) STARTS_WITH_MATCH else 0
+    private fun scoreExactUri(uri: String, pageUri: String): Int =
+        if (UriMatcher.exactMatch(uri, pageUri)) STARTS_WITH_MATCH else 0
 
-    private fun scoreRegexUri(uri: String, web: String): Int =
-        if (UriMatcher.regexMatch(uri, web)) STARTS_WITH_MATCH else 0
+    private fun scoreRegexUri(uri: String, pageUri: String): Int =
+        if (UriMatcher.regexMatch(uri, pageUri)) STARTS_WITH_MATCH else 0
 
     /**
      * 基域匹配层级（无严格开关）：

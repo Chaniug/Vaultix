@@ -72,4 +72,23 @@ class PublicSuffixListTest {
     fun `implicit suffix for unknown tld`() {
         assertThat(PublicSuffixList.baseDomain("example.unknowntld")).isEqualTo("example.unknowntld")
     }
+
+    @Test
+    fun `ipv4 literal is returned as is`() {
+        assertThat(PublicSuffixList.baseDomain("192.168.1.1")).isEqualTo("192.168.1.1")
+        assertThat(PublicSuffixList.baseDomain("10.0.0.5")).isEqualTo("10.0.0.5")
+    }
+
+    @Test
+    fun `different ipv4 literals never share a base domain`() {
+        // 回归闸：不拦 IP 时两者都会被算成 `1.1` ⇒ 两台内网设备的密码会互相填充。
+        assertThat(PublicSuffixList.baseDomain("192.168.1.1"))
+            .isNotEqualTo(PublicSuffixList.baseDomain("172.16.1.1"))
+    }
+
+    @Test
+    fun `ipv4-like invalid octets are not treated as ip`() {
+        // 999 不是合法段值 ⇒ 不按 IP 处理，仍走 PSL 的隐式后缀，避免把畸形输入当身份。
+        assertThat(PublicSuffixList.baseDomain("999.1.1.1")).isEqualTo("1.1")
+    }
 }

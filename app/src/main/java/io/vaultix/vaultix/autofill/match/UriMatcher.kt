@@ -49,6 +49,18 @@ object UriMatcher {
     /** 精确匹配：保存网址与目标完全一致。 */
     fun exactMatch(credUri: String, targetUri: String): Boolean = credUri == targetUri
 
+    /**
+     * 页面地址串 `scheme://host`（**唯一真源**：匹配器与解析器共用）。
+     *
+     * scheme 只认 `http`，其余（`https` / `file:` / null）一律按 `https` ——
+     * `AssistStructure` 的 `webScheme` 可能为空，硬编码 `https` 会让 http 站点的
+     * `Exact` / `StartsWith` / `RegularExpression` 规则全部失配。
+     */
+    fun pageUri(scheme: String?, host: String): String {
+        val normalized = if (scheme.equals("http", ignoreCase = true)) "http" else "https"
+        return "$normalized://$host"
+    }
+
     /** 正则匹配（非法正则按不匹配处理）。 */
     fun regexMatch(pattern: String, targetUri: String): Boolean =
         try {

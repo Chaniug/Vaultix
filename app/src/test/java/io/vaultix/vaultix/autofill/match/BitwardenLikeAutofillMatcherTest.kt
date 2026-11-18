@@ -148,6 +148,46 @@ class BitwardenLikeAutofillMatcherTest {
         assertThat(BitwardenLikeAutofillMatcher.match(creds, null, "example.com")).isEmpty()
     }
 
+    @Test
+    fun `http scheme is honored by exact rule`() {
+        val creds = listOf(credWith("a", "http://intranet.local", UriMatch.Exact))
+        // 缺省按 https 拼页面地址 → 与存量的 http 条目不等
+        assertThat(BitwardenLikeAutofillMatcher.match(creds, null, "intranet.local")).isEmpty()
+        // 页面确实是 http → 命中
+        assertThat(
+            BitwardenLikeAutofillMatcher.match(
+                creds, null, "intranet.local", MatchConfig(), webScheme = "http",
+            ),
+        ).hasSize(1)
+    }
+
+    @Test
+    fun `startsWith compares against page uri with scheme`() {
+        val httpsCred = listOf(credWith("a", "https://example.com", UriMatch.StartsWith))
+        assertThat(BitwardenLikeAutofillMatcher.match(httpsCred, null, "example.com")).hasSize(1)
+        // 存的是 http、页面是 https ⇒ 不能命中（scheme 必须一致）
+        val httpCred = listOf(credWith("b", "http://example.com", UriMatch.StartsWith))
+        assertThat(BitwardenLikeAutofillMatcher.match(httpCred, null, "example.com")).isEmpty()
+    }
+
+    @Test
+    fun `exactDomainOnly disables loose uri rules`() {
+        // 严格模式的文案是「只填充域名完全一致的条目」⇒ StartsWith/Exact/Regex 一并作废。
+        val starts = listOf(credWith("a", "https://example.com", UriMatch.StartsWith))
+        assertThat(
+            BitwardenLikeAutofillMatcher.match(
+                starts, null, "example.com", MatchConfig(exactDomainOnly = true),
+            ),
+        ).isEmpty()
+        // Host 规则本身就是「主机完全相等」，严格模式下仍然有效。
+        val host = listOf(credWith("b", "https://example.com", UriMatch.Host))
+        assertThat(
+            BitwardenLikeAutofillMatcher.match(
+                host, null, "example.com", MatchConfig(exactDomainOnly = true),
+            ),
+        ).hasSize(1)
+    }
+
     // ---------- 无域名降级（2026-10-04 Firefox Android）----------
 
     /**
