@@ -214,6 +214,17 @@ class SettingsViewModel @Inject constructor(
             initialValue = VaultixPreferencesDefaults.THEME_MODE,
         )
 
+    /**
+     * 主题色档位原始值（blue / teal / slate / indigo）。
+     * UI 侧用 [io.vaultix.vaultix.ui.theme.VaultixAccentPalette.from] 解析，未知值回退蓝档。
+     */
+    val accentPalette: StateFlow<String> = preferences.accentPalette
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = VaultixPreferencesDefaults.ACCENT_PALETTE,
+        )
+
     // ---- 布尔型设置项：**一律是 `Boolean?`，初值 `null`** ----------------------
     //
     // 下面这一组（OLED 纯黑 / 各类开关）的 `Boolean?` 不是可选用法，是**契约**：
@@ -536,6 +547,11 @@ class SettingsViewModel @Inject constructor(
     /** 主题模式（system / light / dark），MainActivity 收集后实时切换。 */
     fun setThemeMode(mode: String) {
         viewModelScope.launch { preferences.setThemeMode(mode) }
+    }
+
+    /** 主题色档位（blue / teal / slate / indigo），MainActivity 收集后实时切换。 */
+    fun setAccentPalette(raw: String) {
+        viewModelScope.launch { preferences.setAccentPalette(raw) }
     }
 
     /** OLED 纯黑开关。 */

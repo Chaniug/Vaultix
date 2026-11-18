@@ -36,6 +36,9 @@ object VaultixPreferencesDefaults {
 
     /** 主题模式（对齐 Bastion themeMode：system / light / dark）。 */
     const val THEME_MODE = "system"
+
+    /** 主题色档位（blue / teal / slate / indigo；默认保留现行低饱和蓝）。 */
+    const val ACCENT_PALETTE = "blue"
 }
 
 /**
@@ -172,6 +175,7 @@ class VaultixPreferences @Inject constructor(
 
         val TRASH_AUTO_DELETE_DAYS = intPreferencesKey("trash_auto_delete_days")
         val THEME_MODE = stringPreferencesKey("theme_mode")
+        val ACCENT_PALETTE = stringPreferencesKey("accent_palette")
         val OLED_PURE_BLACK = booleanPreferencesKey("oled_pure_black")
         // 2026-11-09 22:20：换 key，让「默认开」真正生效。
         // 旧 key 里可能存着早期版本用户点过开关留下的 false，而旧版默认本来就是 false，
@@ -304,6 +308,10 @@ class VaultixPreferences @Inject constructor(
      */
     val themeMode: Flow<String> =
         safeData.map { it[THEME_MODE] ?: VaultixPreferencesDefaults.THEME_MODE }
+
+    /** 主题色档位原始值（UI 侧用 VaultixAccentPalette.from 解析）。 */
+    val accentPalette: Flow<String> =
+        safeData.map { it[ACCENT_PALETTE] ?: VaultixPreferencesDefaults.ACCENT_PALETTE }
 
     /** OLED 纯黑（对齐 Bastion oledPureBlackEnabled）：深色模式下 surface/background 用纯黑。 */
     val oledPureBlack: Flow<Boolean> =
@@ -672,6 +680,11 @@ class VaultixPreferences @Inject constructor(
     /** 主题模式（`system` / `light` / `dark`）。 */
     suspend fun setThemeMode(mode: String) {
         dataStore.edit { it[THEME_MODE] = mode }
+    }
+
+    /** 主题色档位（`blue` / `teal` / `slate` / `indigo`）。 */
+    suspend fun setAccentPalette(raw: String) {
+        dataStore.edit { it[ACCENT_PALETTE] = raw }
     }
 
     /** OLED 纯黑（深色模式 surface/background 纯黑）。 */
