@@ -57,12 +57,7 @@ internal object PasskeyExcludePolicy {
         }.getOrNull() ?: return emptySet()
         val ids = LinkedHashSet<String>()
         for (index in 0 until array.length()) {
-            val descriptor = array.optJSONObject(index) ?: continue
-            val type = descriptor.optString("type").trim()
-            // 规范：只有 type=public-key 的描述符参与匹配（缺失时宽容处理）。
-            if (type.isNotEmpty() && type != CREDENTIAL_TYPE_PUBLIC_KEY) continue
-            val id = descriptor.optString("id").trim()
-            if (id.isNotEmpty()) ids += id
+            credentialDescriptorIdOrNull(array.optJSONObject(index))?.let { ids += it }
         }
         return ids
     }

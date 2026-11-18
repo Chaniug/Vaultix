@@ -85,16 +85,26 @@ private fun isUsablePasskey(cred: VaultFido2Credential): Boolean =
  */
 internal const val CREDENTIAL_TYPE_PUBLIC_KEY: String = "public-key"
 
+/**
+ * 取 descriptor 里**可参与匹配**的 id；不合法返回 null。
+ *
+ * 两条规范约束：`type` 非 `public-key` 时忽略（缺失时宽容按 public-key 处理）；
+ * `id` 为空的忽略。抽成函数是为了让调用方循环只留一个出口
+ * （detekt `LoopWithTooManyJumpStatements`）。
+ */
+internal fun credentialDescriptorIdOrNull(descriptor: JSONObject?): String? {
+    if (descriptor == null) return null
+    val type = descriptor.optString("type").trim()
+    if (type.isNotEmpty() && type != CREDENTIAL_TYPE_PUBLIC_KEY) return null
+    return descriptor.optString("id").trim().takeIf { it.isNotEmpty() }
+}
+
 /** allowCredentials：[{type,id,transports}] 中的 id（base64url）。 */
 internal fun parseAllowedCredentialIds(json: JSONObject): List<String> {
     val arr = json.optJSONArray("allowCredentials") ?: return emptyList()
     val ids = mutableListOf<String>()
     for (i in 0 until arr.length()) {
-        val descriptor = arr.optJSONObject(i) ?: continue
-        val type = descriptor.optString("type").trim()
-        // 缺失 type 时宽容按 public-key 处理（存量 RP 有省略该字段的）。
-        if (type.isNotEmpty() && type != CREDENTIAL_TYPE_PUBLIC_KEY) continue
-        descriptor.optString("id").takeIf { it.isNotBlank() }?.let { ids += it }
+        credentialDescriptorIdOrNull(arr.optJSONObject(i))?.let { ids += it }
     }
     return ids
 }
