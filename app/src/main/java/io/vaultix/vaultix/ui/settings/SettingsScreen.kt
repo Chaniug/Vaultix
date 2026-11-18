@@ -79,6 +79,7 @@ import io.vaultix.vaultix.ui.theme.ThemeMode
 import io.vaultix.vaultix.ui.theme.VaultixAccentPalette
 import io.vaultix.vaultix.ui.theme.colorSchemeOf
 import io.vaultix.vaultix.ui.theme.Spacing
+import io.vaultix.vaultix.ui.theme.UiSize
 import io.vaultix.vaultix.ui.theme.VaultixCorner
 import io.vaultix.vaultix.ui.theme.supportsDynamicColor
 import io.vaultix.vaultix.util.SystemSettingsIntents
