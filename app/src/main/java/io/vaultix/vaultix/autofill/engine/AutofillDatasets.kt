@@ -51,11 +51,12 @@ object AutofillDatasets {
      * 观感规格对齐 Bitwarden `autofill_remote_view.xml`（2026-09-12 第二轮修正）：
      * **左侧 20dp 单色小图标** + 标题 / 副标题两行。此前的 40dp 彩色启动图标在系统
      * 填充面板里又大又花（用户反馈「图标太丑」），现已换成语义化单色矢量：
-     * 登录 = 地球、银行卡 = 卡片、身份 = 人像、整表认证行 = [R.drawable.ic_autofill_vaultix]。
+     * 登录 = 地球、银行卡 = 卡片、身份 = 人像、整表认证行 = [R.drawable.ic_autofill_vaultix]
+     * （Vaultix 自身标识，折纸 V 单色剪影，与桌面启动图标同源）。
      *
      * @param iconRes 条目标图标；默认登录（见 [iconFor]）。
-     * @param tintIcon 是否用前景色上色。品牌标识（[R.drawable.ic_autofill_vaultix]）传 false，
-     *   否则会被系统面板前景色冲成一块纯色，失去识别度（对齐上游 `shouldTintIcon`）。
+     * @param tintIcon 是否用前景色上色。品牌标识同样传 true：折纸 V 是纯色剪影，
+     *   染上面板前景色才能同时适配浅/深面板（此前传 false 并用固定黑，深色面板会糊）。
      */
     fun presentation(
         context: Context,
@@ -141,7 +142,7 @@ object AutofillDatasets {
         if (count <= 0) return null
         return RemoteViews(context.packageName, R.layout.autofill_header).apply {
             setTextViewText(R.id.autofill_header_count, context.getString(R.string.autofill_header_count, count))
-            // 品牌矢量是纯黑 paths，必须上色才看得见；用与副标题同档的前景色。
+            // 品牌矢量是纯色剪影，必须按面板明暗上色；用与副标题同档的前景色。
             setInt(R.id.autofill_header_icon, "setColorFilter", iconTint(context))
         }
     }
@@ -254,14 +255,14 @@ object AutofillDatasets {
         saveInfo: SaveInfo? = null,
     ): FillResponse? {
         if (ids.isEmpty()) return null
-        // 整表认证行 = Vaultix 自身入口（解锁 / 搜索）→ 用品牌盾牌，且**不上色**
-        //（对齐 Bitwarden 该处用 logo_bitwarden_icon + shouldTintIcon = false）。
+        // 整表认证行 = Vaultix 自身入口（解锁 / 搜索）→ 用品牌折纸 V 剪影，
+        // 并接上面板明暗 tint（浅 #44474E / 深 #C4C6CF），与 header 同一套着色。
         val presentation = presentation(
             context = context,
             title = title,
             subtitle = subtitle,
             iconRes = R.drawable.ic_autofill_vaultix,
-            tintIcon = false,
+            tintIcon = true,
         )
         val builder = FillResponse.Builder()
         saveInfo?.let { builder.setSaveInfo(it) }
