@@ -84,6 +84,12 @@ class AutofillCandidateSource @Inject constructor(
     /**
      * 匹配配置：域匹配宽严由用户在「设置 → 自动填充 → 填充行为」控制，
      * 默认与 Bitwarden 一致（允许基域匹配、不强制精确域）。
+     *
+     * 包名匹配是**两道闸的并集**：
+     * - [AutofillRequestContextPolicy.allowPackageMatching]：宽松档，原生 App 放行、
+     *   浏览器缺域名时禁止；
+     * - [AutofillRequestContextPolicy.allowExactPackageMatching]：`file://` 本地 H5 的
+     *   精确包名例外（App 内嵌登录页，2026-11-18 对照 Bastion 补齐）。
      */
     suspend fun matchConfigFor(parsed: ParsedStructure, webDomain: String?): MatchConfig = MatchConfig(
         allowBaseDomainMatch = preferences.autofillBaseDomainMatch.first(),
@@ -92,6 +98,11 @@ class AutofillCandidateSource @Inject constructor(
             packageName = parsed.packageName,
             webDomain = webDomain,
             isWebView = parsed.webView,
+        ) || AutofillRequestContextPolicy.allowExactPackageMatching(
+            packageName = parsed.packageName,
+            webDomain = webDomain,
+            isWebView = parsed.webView,
+            webScheme = parsed.webScheme,
         ),
     )
 
@@ -116,15 +127,22 @@ class AutofillCandidateSource @Inject constructor(
      *
      * ## 降级策略（对齐 Bitwarden 的搜索兜底语义）
      *
-     * 拿不到域名时，返回**全部登录候选**，按「收藏优先 → 名称升序」排（与
+     * **浏览器**拿不到域名时，返回**全部登录候选**，按「收藏优先 → 名称升序」排（与
      * [BitwardenLikeAutofillMatcher] 的 `CREDENTIAL_ORDER` 同序，保证有域名时降级不改变体验）。
      * 再由 [FillPlanner] / `MAX_DATASETS` 截断成有限几条 ⇒ 用户在 Firefox 上仍能看到
      * 自己的条目并一键填入，而不是面对一个空面板。
      *
-     * ⚠️ **安全边界**：降级只在「确实是登录表单」（`user`/`pass` 皆已识别）时生效，
-     * 由 Service 侧的 `noFillTarget` 闸门保证；且**不关闭** [AutofillRequestContextPolicy]
-     * 的包名匹配闸门 —— 浏览器里缺域名时包名是浏览器自己的，拿它匹配会弹出「浏览器身份」
-     * 的无关条目，那才是真的错条目。
+     * ⚠️ **安全边界（2026-11-18 收紧）**：降级**只对浏览器成立** —— 判据是
+     * [AutofillRequestContextPolicy.allowDomainlessFallback]（= 已知浏览器包名）。
+     *
+     * 原判据只有「没有域名」，而原生 App **本来就没有域名** ⇒ 每个没存
+     * `androidapp://` 条目的 App 里都会按「收藏优先 + 名称」列出整库密码，
+     * 自己那条反而不在列表里。这不是「多弹一条」，是把别的站点的密码摊在无关 App 里。
+     * 对齐 Bitwarden：原生 App 匹配不到就**一条都不给**，只留「在 Vaultix 中搜索」。
+     *
+     * 降级前提仍由 Service 侧的 `noFillTarget` 闸门保证（确实是登录表单才会走到这里），
+     * 且**不关闭** [AutofillRequestContextPolicy] 的包名匹配闸门 —— 浏览器里缺域名时
+     * 包名是浏览器自己的，拿它匹配会弹出「浏览器身份」的无关条目。
      */
     suspend fun matchLogins(
         credentials: List<AutofillCredential>,
@@ -136,9 +154,13 @@ class AutofillCandidateSource @Inject constructor(
             packageName = parsed.packageName,
             webDomain = webDomain,
             config = matchConfigFor(parsed, webDomain),
+            // http 站点必须按 http 比对：`Exact` / `StartsWith` 拿的串由它拼出。
+            webScheme = parsed.webScheme,
         )
         if (matched.isNotEmpty() || !webDomain.isNullOrBlank()) return matched
         // 走到这里 = 本次请求没有任何域名，却一个候选都没匹配上。
+        // 只有「域名该有却拿不到」的浏览器允许列全库；原生 App 返回空（上层转搜索入口）。
+        if (!AutofillRequestContextPolicy.allowDomainlessFallback(parsed.packageName)) return emptyList()
         return BitwardenLikeAutofillMatcher.orderWithoutDomain(credentials)
     }
 

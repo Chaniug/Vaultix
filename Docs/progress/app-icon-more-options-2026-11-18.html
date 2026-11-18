@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vaultix · 启动图标 · 第二页：四种设计语言</title>
+<style>
+  :root{--bg:#F7F8FA;--card:#fff;--line:#E3E6EC;--ink:#1C2330;--muted:#5F6775;
+    --p:#3B5BC4;--pc:#E3E6F2;--warn:#A6631B;--warnbg:#FBF0E0;--good:#1B6B4A;--goodbg:#E6F3EC}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    font-size:14px;line-height:1.65}
+  .wrap{max-width:1320px;margin:0 auto;padding:30px 22px 70px}
+  h1{font-size:24px;font-weight:650;margin:0 0 5px;letter-spacing:-.3px}
+  .sub{color:var(--muted);margin:0 0 18px;font-size:13px}
+  h2{font-size:17px;font-weight:650;margin:36px 0 6px}
+  h2 .tagdir{font-size:11px;color:var(--p);background:var(--pc);padding:3px 9px;border-radius:20px;margin-left:8px;vertical-align:2px}
+  h2.desc{font-size:12.5px;color:var(--muted);font-weight:400;margin:0 0 14px}
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 20px}
+  .ok{background:var(--goodbg);border-left:3px solid var(--good);padding:11px 15px;
+    border-radius:0 9px 9px 0;font-size:13px;margin:12px 0 20px}
+  .warnbox{background:var(--warnbg);border-left:3px solid var(--warn);padding:11px 15px;
+    border-radius:0 9px 9px 0;font-size:12.5px;margin:12px 0}
+  .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+  @media(max-width:1050px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+  @media(max-width:680px){.grid{grid-template-columns:1fr}}
+  .icard{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;cursor:pointer}
+  .icard.on{border-color:var(--p);box-shadow:0 0 0 2px var(--pc)}
+  .stage{background:#EEF1F6;border-radius:11px;padding:13px 8px;display:flex;align-items:center;
+    justify-content:center;gap:12px;margin-bottom:11px;min-height:104px}
+  .stage.dark{background:#292D35}
+  .lab{font-size:14px;font-weight:650;margin:0 0 3px}
+  .sub2{font-size:11.5px;color:var(--muted);display:block;min-height:32px}
+  .row{display:flex;gap:8px;align-items:center;margin-top:9px;flex-wrap:wrap}
+  .stars{font-size:11.5px;color:var(--p);letter-spacing:1.5px}
+  .stars span{color:#B9BEC8;letter-spacing:0}
+  .cost{font-size:10.5px;color:var(--muted);background:#F1F3F6;border-radius:20px;padding:2px 8px}
+  .cost.hi{background:var(--warnbg);color:var(--warn)}
+  .toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:14px 0 18px;
+    position:sticky;top:0;background:var(--bg);padding:9px 0;z-index:5}
+  .seg{display:flex;border:1px solid var(--line);border-radius:9px;overflow:hidden;background:#fff}
+  .seg button{border:0;background:#fff;color:var(--ink);padding:7px 12px;font-size:12px;cursor:pointer;
+    border-right:1px solid var(--line);font-family:inherit}
+  .seg button:last-child{border-right:0}
+  .seg button.on{background:var(--p);color:#fff}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th,td{text-align:left;padding:9px 11px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-weight:500;font-size:11.5px;background:#FAFBFC}
+  td:first-child{font-weight:600;white-space:nowrap}
+  code{background:#EEF0F4;padding:1px 5px;border-radius:4px;font-size:11.5px}
+  .ask{background:#fff;border:1px solid var(--line);border-radius:14px;padding:18px 22px}
+  .ask li{margin:8px 0}
+  .kbd{display:inline-block;border:1px solid var(--line);border-bottom-width:2px;border-radius:5px;padding:0 6px;font-size:11px;background:#FAFBFC}
+  .legend{font-size:11.5px;color:var(--muted);display:flex;gap:16px;flex-wrap:wrap;margin-top:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>启动图标 · 换一种设计语言</h1>
+  <p class="sub">2026-11-18 · 第二页（第一页是折纸 V 的换色与微调）。<b>仍未改任何代码 / 资源。</b></p>
+
+  <div class="ok">
+    <b>已记下你的拍板：</b>主题色做「A · 预设 4 档」，默认保留现行低饱和蓝。
+    这两条会在图标定案后一起落施工单，不会拆散验收。
+  </div>
+
+  <div class="panel">
+    <div class="toolbar">
+      <div class="seg" id="viewBar">
+        <button data-v="color" class="on">彩色</button>
+        <button data-v="mono">单色 / 主题图标</button>
+        <button data-v="dark">深色背景</button>
+      </div>
+      <span style="font-size:11.5px;color:var(--muted)">每组：左 48dp（桌面）· 右 24dp（抽屉最小可读）</span>
+    </div>
+    <div class="legend">
+      <span>圆形遮罩 = Android 自适应图标常见裁切</span>
+      <span>24dp 下糊掉的方案我会直接标红风险</span>
+      <span>「施工成本」指几何真源 + 单色层 + 门禁要重做的量</span>
+    </div>
+  </div>
+
+  <h2>方向 A · 回到 Vault 本义<span class="tagdir">保险库 / 金库</span></h2>
+  <p class="desc">Vaultix 的「Vault」本来就是金库。现状是「字母 V」，这个方向改用「容器/门」的隐喻——跟密码管理器清一色的盾、锁、钥匙孔都不同。</p>
+  <div class="grid" data-dir="A"></div>
+
+  <h2>方向 B · V 的几何新解<span class="tagdir">保留字母识别</span></h2>
+  <p class="desc">仍然是 V，但换掉「折纸两半」这个表达。适合你其实还想要 V、只是看腻了现行那一张的情况。</p>
+  <div class="grid" data-dir="B"></div>
+
+  <h2>方向 C · 功能隐喻<span class="tagdir">摆脱字母</span></h2>
+  <p class="desc">不依赖字母，用「能联想到保管秘密的东西」当符号。差异化最强，但要把语义讲清楚需要一点学习成本。</p>
+  <div class="grid" data-dir="C"></div>
+
+  <h2>方向 D · 负形与抽象<span class="tagdir">最极简</span></h2>
+  <p class="desc">不用实心符号，而是靠留白/负空间说出来。2026 很常见的做法，代价是 24dp 与小尺寸下风险高。</p>
+  <div class="grid" data-dir="D"></div>
+
+  <h2>横向结论</h2>
+  <div class="panel">
+    <table>
+      <tr><th>方向</th><th>一句话</th><th>24dp</th><th>品类差异</th><th>施工成本</th><th>综合</th></tr>
+      <tr><td>A 金库</td><td>最贴品牌名，一眼知道是"存东西的地方"</td><td>★★★★</td><td>★★★★★</td><td>中</td><td>★★★★☆</td></tr>
+      <tr><td>B 几何 V</td><td>延续性最好，改起来最省</td><td>★★★★</td><td>★★★</td><td>低</td><td>★★★★</td></tr>
+      <tr><td>C 隐喻</td><td>记忆点最强，但要解释</td><td>★★★</td><td>★★★★★</td><td>高</td><td>★★★☆</td></tr>
+      <tr><td>D 负形</td><td>最"潮"，也最容易在小尺寸翻车</td><td>★★</td><td>★★★★</td><td>中</td><td>★★★</td></tr>
+    </table>
+    <div class="warnbox" style="margin-top:14px">
+      <b>别忽略的成本：</b>现行折纸 V 有 <code>tools/icon/generate_launcher_icon.py</code> 做几何真源，
+      四条校验（面积质心 / 左右对称 / 66dp 安全圈 / 越界采样）+ 单色层逐字符一致 + CI 图标门禁。
+      换任何形态都意味着<b>重写脚本、重跑五轮校准、重做单色层、改门禁</b>——这不是画个新 SVG 就完事。
+    </div>
+  </div>
+
+  <h2>请拍板</h2>
+  <div class="ask">
+    <ol>
+      <li>先选<b>方向</b>：<span class="kbd">A 金库</span> / <span class="kbd">B 几何 V</span> / <span class="kbd">C 隐喻</span> / <span class="kbd">D 负形</span>？</li>
+      <li>再选该方向里<b>一个具体方案编号</b>（如 A2）。也可以告诉我"都不对，我想要 XX 的感觉"，我按那个感觉再出第三页。</li>
+      <li>图标<b>配色</b>仍用现行低饱和蓝，还是顺手换青/石墨？——主题色默认蓝已定，图标可以不同。</li>
+    </ol>
+    <p style="font-size:12px;color:var(--muted);margin:14px 0 0">
+      一个反思题：你上一页觉得"都不合适"，到底是<b>形状不对</b>，还是<b>它看起来太像别的密码管理器</b>？
+      这两个答案指向完全不同的方向——前者要换形态，后者只需换色相。
+    </p>
+  </div>
+</div>
+
+<script>
+/* 每个方案：id / 方向 / 名字 / 一句话 / 评分 / 成本 / SVG body（108 画布，中心 54,54，安全半径 33） */
+const ICONS = [
+  // ---- A 金库 ----
+  {id:'A1',dir:'A',name:'金库圆环',sub:'粗圆环 + 中心 V，像金库门的转盘',stars:4,cost:'中',shape:`
+    <circle cx="54" cy="54" r="27" fill="none" stroke="@@L@@" stroke-width="10"/>
+    <path d="M43 43 L54 64 L65 43" fill="none" stroke="@@S@@" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>`},
+  {id:'A2',dir:'A',name:'保险箱门 + V 把手',sub:'圆角方门框，V 形把手嵌在中间',stars:5,cost:'中',shape:`
+    <rect x="27" y="27" width="54" height="54" rx="13" fill="none" stroke="@@L@@" stroke-width="9"/>
+    <path d="M41 42 L54 66 L67 42" fill="none" stroke="@@S@@" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>`},
+  {id:'A3',dir:'A',name:'转盘缺口 V',sub:'实心圆盘 + V 形切口，最像"锁着的库"',stars:4,cost:'中',risk:'24dp 切口易糊',shape:`
+    <circle cx="54" cy="54" r="30" fill="@@L@@"/>
+    <path d="M39 39 L54 67 L69 39 L61 39 L54 53 L47 39 Z" fill="@@BG@@"/>`},
+
+  // ---- B 几何 V ----
+  {id:'B1',dir:'B',name:'缎带 V',sub:'两条带子折返交叉，比折纸更丰满',stars:4,cost:'低',shape:`
+    <path d="M27 31 L54 79 L63 60 L54 56 L41 35 Z" fill="@@L@@"/>
+    <path d="M81 31 L54 79 L45 60 L54 56 L67 35 Z" fill="@@S@@"/>`},
+  {id:'B2',dir:'B',name:'刻面 V',sub:'三个切面构成，宝石般的秩序感',stars:4,cost:'低',shape:`
+    <path d="M25 29 L49 79 L54 68 L38 29 Z" fill="@@L@@"/>
+    <path d="M54 68 L59 79 L83 29 L66 29 L54 57 Z" fill="@@S@@"/>
+    <path d="M49 79 L54 68 L59 79 Z" fill="@@L@@"/>`},
+  {id:'B3',dir:'B',name:'双线 V',sub:'两条平行粗线，等线 / 工业感',stars:4,cost:'低',shape:`
+    <path d="M29 31 L54 75 L79 31" fill="none" stroke="@@L@@" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M43 31 L54 53 L65 31" fill="none" stroke="@@S@@" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>`},
+
+  // ---- C 隐喻 ----
+  {id:'C1',dir:'C',name:'钥匙孔 V',sub:'上方圆孔 + 下方 V 形槽，语义直白',stars:5,cost:'中',shape:`
+    <circle cx="54" cy="41" r="12" fill="@@L@@"/>
+    <path d="M48 50 L60 50 L66 78 L42 78 Z" fill="@@L@@"/>
+    <path d="M54 57 L60 78 L48 78 Z" fill="@@S@@"/>`},
+  {id:'C2',dir:'C',name:'安全卡扣',sub:'像背带扣，扣住即安全',stars:3,cost:'高',risk:'与常见锁形趋同',shape:`
+    <rect x="30" y="46" width="48" height="32" rx="9" fill="none" stroke="@@L@@" stroke-width="9"/>
+    <path d="M41 46 V38 a13 13 0 0 1 26 0 V46" fill="none" stroke="@@S@@" stroke-width="8" stroke-linecap="round"/>`},
+  {id:'C3',dir:'C',name:'折角书签',sub:'一张卡折出 V 缺口，像"藏起来的那一页"',stars:4,cost:'高',shape:`
+    <path d="M30 26 H78 V82 H30 Z" fill="@@L@@"/>
+    <path d="M39 41 L54 68 L69 41 L61 41 L54 55 L47 41 Z" fill="@@BG@@"/>
+    <path d="M30 26 L44 26 L30 40 Z" fill="@@S@@"/>`},
+
+  // ---- D 负形 ----
+  {id:'D1',dir:'D',name:'双括号',sub:'两个粗括号相向，中间形成 V 的负形',stars:4,cost:'中',shape:`
+    <path d="M38 29 Q24 54 38 79" fill="none" stroke="@@L@@" stroke-width="11" stroke-linecap="round"/>
+    <path d="M70 29 Q84 54 70 79" fill="none" stroke="@@S@@" stroke-width="11" stroke-linecap="round"/>`},
+  {id:'D2',dir:'D',name:'三角负 V',sub:'实心三角切掉 V，最"潮"也最险',stars:3,cost:'中',risk:'24dp 高风险',shape:`
+    <path d="M54 23 L85 79 H23 Z" fill="@@L@@"/>
+    <path d="M54 48 L68 79 H40 Z" fill="@@BG@@"/>`},
+  {id:'D3',dir:'D',name:'V 形印章',sub:'圆形印章里一个实心 V，品牌感强',stars:4,cost:'中',shape:`
+    <circle cx="54" cy="54" r="30" fill="none" stroke="@@L@@" stroke-width="7"/>
+    <path d="M39 39 L54 68 L69 39 L60 39 L54 54 L48 39 Z" fill="@@S@@"/>`},
+];
+
+const THEMES = {
+  color:{bg:'#3B5BC4',L:'#FFFFFF',S:'#B6C4E8'},
+  teal:{bg:'#2E6E77',L:'#FFFFFF',S:'#A9D2D4'},
+  slate:{bg:'#4A5A6B',L:'#FFFFFF',S:'#B6C3CE'}
+};
+let view='color';
+
+function svg(ic,size){
+  const t=THEMES[currentPalette]||THEMES.color;
+  const mono=(view==='mono');
+  const bg = mono ? '#2B2F36' : t.bg;
+  const L = mono ? '#FFFFFF' : t.L;
+  const S = mono ? '#9AA3AE' : t.S;
+  const BG = mono ? '#2B2F36' : t.bg;
+  let body=ic.shape.replaceAll('@@L@@',L).replaceAll('@@S@@',S).replaceAll('@@BG@@',BG);
+  return `<svg viewBox="0 0 108 108" width="${size}" height="${size}" xmlns="http://www.w3.org/2000/svg">
+    <rect width="108" height="108" rx="24" fill="${bg}"/>${body}</svg>`;
+}
+let currentPalette='color';
+
+function render(){
+  document.querySelectorAll('.icard').forEach(card=>{
+    const ic=ICONS.find(x=>x.id===card.dataset.id);
+    const st=card.querySelector('.stage');
+    st.className='stage'+(view==='dark'?' dark':'');
+    card.querySelector('.big').innerHTML=svg(ic,66);
+    card.querySelector('.small').innerHTML=svg(ic,28);
+  });
+}
+function build(){
+  ['A','B','C','D'].forEach(dir=>{
+    const host=document.querySelector(`.grid[data-dir="${dir}"]`);
+    host.innerHTML=ICONS.filter(x=>x.dir===dir).map(ic=>`
+      <div class="icard" data-id="${ic.id}">
+        <div class="stage"><div class="big"></div><div class="small"></div></div>
+        <p class="lab">${ic.id} · ${ic.name}</p>
+        <span class="sub2">${ic.sub}</span>
+        <div class="row"><span class="stars">${'★'.repeat(ic.stars)}<span>${'★'.repeat(5-ic.stars)}</span></span>
+          <span class="cost ${ic.cost==='高'?'hi':''}">施工 ${ic.cost}</span>
+          ${ic.risk?`<span class="cost hi">${ic.risk}</span>`:''}</div>
+      </div>`).join('');
+  });
+  document.querySelectorAll('.icard').forEach(c=>c.addEventListener('click',()=>{
+    document.querySelectorAll('.icard').forEach(x=>x.classList.toggle('on',x===c));
+  }));
+  document.querySelectorAll('#viewBar button').forEach(b=>b.addEventListener('click',()=>{
+    view=b.dataset.v;
+    document.querySelectorAll('#viewBar button').forEach(x=>x.classList.toggle('on',x===b));
+    render();
+  }));
+}
+build();render();
+</script>
+</body>
+</html>

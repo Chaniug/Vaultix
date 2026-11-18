@@ -18,6 +18,8 @@ import android.view.View
 import io.vaultix.vaultix.autofill.fillassist.FillAssistMatcher
 import io.vaultix.vaultix.autofill.fillassist.FillAssistRules
 import io.vaultix.vaultix.autofill.fillassist.HostRule
+import io.vaultix.vaultix.autofill.match.AutofillFillTargetPolicy
+import io.vaultix.vaultix.autofill.match.UriMatcher
 import io.vaultix.vaultix.autofill.model.FieldHint
 import io.vaultix.vaultix.autofill.model.ParsedField
 import io.vaultix.vaultix.autofill.model.ParsedStructure
@@ -33,23 +35,39 @@ private typealias NodePath = List<Int>
 /** 把 [AssistStructure] 拆成 [ParsedStructure]（字段语义 + 登录框 id + WebView 标记）。 */
 object AssistStructureParser {
 
+    /** 系统把 `idPackage` 给成 `android` 时的占位值（不是合法包名，不能当请求 App 用）。 */
+    private const val SYSTEM_ID_PACKAGE = "android"
+
     fun parse(
         structure: AssistStructure,
         fillAssistRules: FillAssistRules = FillAssistRules.EMPTY,
     ): ParsedStructure {
-        val packageName = structure.activityComponent?.packageName
+        // 页面级元数据先扫一遍：地址栏识别与包名匹配都依赖它，必须在遍历**之前**确定。
+        // 同时补上「`activityComponent` 为 null ⇒ 包名彻底拿不到」的兜底（2026-11-18）。
+        val meta = scanPageMeta(structure)
+        val packageName = structure.activityComponent?.packageName?.takeIf { it.isNotBlank() }
+            ?: meta.idPackage
+            ?: packageNameFromWindowTitle(structure)
         // 填充辅助按**页面主机**取规则：先做一次轻量扫描拿到主机，再决定本次遍历用哪种分类。
         // 该主机没有规则（绝大多数站点）→ hostRules 为空 → 完全走原有启发式，行为不变。
-        val hostRules = fillAssistRules.forHost(firstWebDomainOf(structure))
+        val hostRules = fillAssistRules.forHost(meta.webDomain)
 
-        val fields = mutableListOf<ParsedField>()
-        val webDomains = mutableListOf<String>()
-        val urlBarHosts = mutableListOf<String>()
-        var webView = false
+        // 每个 window **分开**收（见 [chooseWindow]）：混成一张表时，分屏 / 悬浮窗里
+        // 后台窗口的登录框也会被当成「当前页面」的字段。
+        val scans = mutableListOf<WindowScan>()
         repeat(structure.windowNodeCount) { index ->
             val root = structure.getWindowNodeAt(index)?.rootViewNode ?: return@repeat
-            webView = traverse(root, fields, webDomains, urlBarHosts, packageName, hostRules) || webView
+            val scan = WindowScan()
+            scan.webView = traverse(
+                root, scan.fields, scan.webDomains, scan.urlBarHosts, packageName, hostRules,
+            )
+            scans += scan
         }
+        val active = chooseWindow(scans)
+        val fields = active.flatMap { it.fields }
+        val webDomains = active.flatMap { it.webDomains }
+        val urlBarHosts = active.flatMap { it.urlBarHosts }
+        val webView = active.any { it.webView }
 
         val domain = WebDomainResolver.resolve(
             collected = webDomains,
@@ -61,7 +79,10 @@ object AssistStructureParser {
         // （包名 + idEntry 双重匹配），再退化到结构文本扫描。该兜底只用于匹配。
         val fallbackWebDomain = domain.fallbackWebDomain
         val effectiveDomain = domain.effective
-        val webUri = effectiveDomain?.let { "https://$it" }
+        // scheme 由 `ViewNode.webScheme` 提供（此前硬写 null ⇒ http 站点被当成 https，
+        // `Exact` / `StartsWith` / `RegularExpression` 三条规则全部失配）。
+        val webScheme = meta.webScheme
+        val webUri = effectiveDomain?.let { UriMatcher.pageUri(webScheme, it) }
         val resolved = promoteUsernameField(fields)
         // 只认**可见**的账号 / 密码框：隐藏框（自动填充辅助框、隐藏的登录弹层）既不该被填，
         // 也不该凭它触发保存提示 —— 否则「只填了个搜索词」也会弹保存；`SaveInfo` 的
@@ -70,7 +91,7 @@ object AssistStructureParser {
         val passwordId = resolved.firstOrNull { it.hint == FieldHint.PASSWORD && it.isVisible }?.id
         return ParsedStructure(
             packageName = packageName,
-            webScheme = null,
+            webScheme = webScheme,
             webDomain = webDomain,
             fallbackWebDomain = fallbackWebDomain,
             webUri = webUri,
@@ -294,21 +315,88 @@ object AssistStructureParser {
         )
     }
 
-    /** 结构里第一个非空 webDomain（即页面主机）；没有则 null。 */
-    private fun firstWebDomainOf(structure: AssistStructure): String? {
-        repeat(structure.windowNodeCount) { index ->
-            val root = structure.getWindowNodeAt(index)?.rootViewNode ?: return@repeat
-            findWebDomain(root)?.let { return it }
+    /**
+     * 只取**一个** window 的解析结果（对齐 Bitwarden `selectCandidateAutofillViews`）。
+     *
+     * 分屏 / 悬浮窗时 `AssistStructure` 会带多个 window。原实现把所有 window 的字段
+     * 混成一张表 ⇒ 后台窗口的登录框也算「当前页面上的字段」，候选会填进用户没在
+     * 操作的表单里（误弹 + 误填）。
+     *
+     * 规则：优先「既有焦点、又有凭据字段」的窗口；没有就退回全部（= 老行为）。
+     * 第二个条件不可省：浏览器的地址栏也可能是独立 window 且带焦点，
+     * 只有它没有凭据字段，不会把真正的页面窗口顶掉。
+     */
+    private fun chooseWindow(scans: List<WindowScan>): List<WindowScan> {
+        val focused = scans.filter { scan ->
+            scan.fields.any { field -> field.isFocused } &&
+                scan.fields.any { field -> AutofillFillTargetPolicy.isFillTarget(field) }
         }
-        return null
+        return focused.ifEmpty { scans }
     }
 
-    private fun findWebDomain(node: ViewNode): String? {
-        node.webDomain?.takeIf { it.isNotBlank() }?.let { return it }
-        repeat(node.childCount) { index ->
-            val child = node.getChildAt(index) ?: return@repeat
-            findWebDomain(child)?.let { return it }
+    /**
+     * 一次扫描拿齐三个「页面级」元数据：权威域名、网页 scheme、视图所属包名。
+     *
+     * 为什么不塞进 [traverse]：`packageName` 要在遍历**之前**确定（地址栏识别依赖它），
+     * 而 `webScheme` 只在 WebView 的根节点上才有值 —— 两者都必须是整棵树维度的量。
+     */
+    private fun scanPageMeta(structure: AssistStructure): PageMeta {
+        var domain: String? = null
+        var scheme: String? = null
+        var idPackage: String? = null
+
+        fun visit(node: ViewNode?) {
+            if (node == null) return
+            if (domain == null) domain = node.webDomain?.takeIf { it.isNotBlank() }
+            if (scheme == null) scheme = node.webScheme?.takeIf { it.isNotBlank() }
+            if (idPackage == null) idPackage = usableIdPackage(node.idPackage)
+            for (index in 0 until node.childCount) visit(node.getChildAt(index))
+        }
+
+        repeat(structure.windowNodeCount) { index ->
+            visit(structure.getWindowNodeAt(index)?.rootViewNode)
+        }
+        return PageMeta(webDomain = domain, webScheme = scheme, idPackage = idPackage)
+    }
+
+    /**
+     * 节点的 `idPackage` 是否可用作「请求 App 的包名」。
+     *
+     * ⚠️ OS 有时把它给成 `android`（不是合法包名），照收会让包名匹配失效
+     * （对齐 Bitwarden `idPackage?.takeUnless { it.isBlank() || it == "android" }`）。
+     */
+    private fun usableIdPackage(raw: String?): String? =
+        raw?.trim()?.takeIf { it.isNotEmpty() && !it.equals(SYSTEM_ID_PACKAGE, ignoreCase = true) }
+
+    /**
+     * 从 window 标题取包名（形如 `com.foo/com.foo.MainActivity`）。
+     *
+     * 这是 `activityComponent` 与 `idPackage` 都拿不到时的最后一道兜底
+     * （对齐 Bitwarden `AssistStructure.buildPackageNameOrNull`）。
+     */
+    private fun packageNameFromWindowTitle(structure: AssistStructure): String? {
+        repeat(structure.windowNodeCount) { index ->
+            val title = structure.getWindowNodeAt(index)?.title?.toString().orEmpty()
+            if (!title.contains('/')) return@repeat
+            val pkg = title.substringBefore('/').trim()
+            // 没有点的串不是包名（窗口标题也可能只是应用名），拿它当身份只会污染匹配。
+            if (pkg.contains('.') && !pkg.equals(SYSTEM_ID_PACKAGE, ignoreCase = true)) return pkg
         }
         return null
     }
 }
+
+/** 单个 window 的解析产物（[AssistStructureParser.chooseWindow] 只挑其中一个）。 */
+private class WindowScan {
+    val fields = mutableListOf<ParsedField>()
+    val webDomains = mutableListOf<String>()
+    val urlBarHosts = mutableListOf<String>()
+    var webView: Boolean = false
+}
+
+/** 页面级元数据（域名 / scheme / 视图所属包名）。 */
+private data class PageMeta(
+    val webDomain: String?,
+    val webScheme: String?,
+    val idPackage: String?,
+)

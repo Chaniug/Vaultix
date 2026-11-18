@@ -496,6 +496,42 @@ class WebAuthnTest {
         assertThat(WebAuthn.describeStoredIdForm(storedB64Url)).isEqualTo("base64")
     }
 
+    /**
+     * Bitwarden SDK 2026.10+ 的 `b64.` 前缀形态（对齐 PM-44191，2026-11-18）。
+     *
+     * 前缀不是 ID 的一部分：既不能原样发给 RP，也不能因为「解不出」退化成 UTF-8 重编码
+     * —— 那会让断言在最后一步被 RP 拒收，且现场只看到「通行密钥有问题」。
+     */
+    @Test
+    fun `b64 prefixed credential id is unwrapped`() {
+        val raw = ByteArray(32).also { SecureRandom().nextBytes(it) }
+        val body = WebAuthn.base64Url(raw)
+        val stored = "b64.$body"
+
+        // 断言响应用的 rawId = 前缀后的正文，解码后与 RP 持有的字节完全一致
+        val rawId = WebAuthn.rawIdFromStored(stored)
+        assertThat(rawId).isEqualTo(body)
+        assertThat(java.util.Base64.getUrlDecoder().decode(rawId)).isEqualTo(raw)
+
+        // 比较入口：前缀形态与裸 base64url 必须解出同一串字节
+        val prefixed = WebAuthn.credentialIdBytes(stored) ?: error("b64. 前缀必须可解码")
+        assertThat(prefixed).isEqualTo(raw)
+
+        // 形态诊断要与 uuid / base64 分开（现场日志据此定位）
+        assertThat(WebAuthn.describeStoredIdForm(stored)).isEqualTo("b64")
+    }
+
+    /** [WebAuthn.credentialIdBytes] 必须把 UUID 文本归一为 16 字节，脏数据则返回 null。 */
+    @Test
+    fun `credentialIdBytes normalizes uuid text to sixteen bytes`() {
+        val uuidText = "5698f18a-41e0-e865-0104-c989aee7dc18"
+        val bytes = WebAuthn.credentialIdBytes(uuidText) ?: error("UUID 文本必须可解码")
+        assertThat(bytes.size).isEqualTo(16)
+        // 脏数据不得被当成 UTF-8 字节参与匹配（那会碰巧命中或误排除）
+        assertThat(WebAuthn.credentialIdBytes("not a base64 string!!!")).isNull()
+        assertThat(WebAuthn.credentialIdBytes("")).isNull()
+    }
+
     /** 空 credentialId 不得抛异常（防御：调用方可能拿到脏数据）。 */
     @Test
     fun `rawIdFromStored tolerates blank input`() {

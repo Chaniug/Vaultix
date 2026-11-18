@@ -68,26 +68,6 @@ private fun applyPureBlack(base: ColorScheme): ColorScheme = base.copy(
 fun supportsDynamicColor(sdkInt: Int = Build.VERSION.SDK_INT): Boolean =
     sdkInt >= Build.VERSION_CODES.S
 
-/**
- * 深色色板（品牌色，见 [VaultixBrandColor]）。
- *
- * ⚠️ 2026-10-05 换掉 `darkColorScheme()` 无参默认值：那是 M3 **基线紫**
- * （`primary = #D0BCFF` 一系），且它的 surface 家族同样偏紫
- * （`#141218` / `#1D1B20`，绿通道低于红通道）⇒ 深色下整屏也带紫。
- */
-private val DarkColorScheme = VaultixBrandColor.Dark
-
-/**
- * 浅色色板（品牌色，见 [VaultixBrandColor]）。
- *
- * ⚠️ 2026-10-05 换掉 `lightColorScheme()` 无参默认值 —— 这正是用户报告
- * 「默认浅色界面配色不对」的根因，详见 [VaultixBrandColor] 的 KDoc。
- *
- * 保留这个别名是为了不改动 `VaultixTheme` 里的 `when` 分支结构：
- * 动态取色与固定色板二选一，**不叠加**。
- */
-private val LightColorScheme = VaultixBrandColor.Light
-
 // 全局形状 `VaultixShapes` 已移出本文件，见 `VaultixShapes.kt`：
 // 圆角的三档语义（12 小面 / 16 大面 / 50% 药丸）与「为什么不能只改 extraSmall」
 // 都在那里推导。本文件只负责把它交给 `MaterialTheme`。
@@ -112,6 +92,7 @@ enum class ThemeMode {
  *
  * - [themeMode]：跟随系统 / 强制浅色 / 强制深色（设置页「外观 → 主题模式」，
  *   VaultixPreferences.themeMode）；
+ * - [accentPalette]：固定色板下的强调色档位（4 档预设，默认蓝）；
  * - [dynamicColor]：Material You 动态取色（Android 12+；低版本回退固定色板）。
  *   ⚠️ #285 默认改为 **false**：用户反馈「默认的浅色配色有点不符合标准」。
  *   根因是 `VaultixPreferences.dynamicColor` 旧默认 `true` ⇒ 首次启动直接吃
@@ -124,6 +105,12 @@ enum class ThemeMode {
 @Composable
 fun VaultixTheme(
     themeMode: ThemeMode = ThemeMode.SYSTEM,
+    /**
+     * 主题色档位（默认 BLUE = 现行低饱和蓝，零重复定义）。
+     *
+     * ⚠️ 只在**动态取色关闭**时生效；与 [dynamicColor] 是二选一，不叠加。
+     */
+    accentPalette: VaultixAccentPalette = VaultixAccentPalette.BLUE,
     dynamicColor: Boolean = false,
     oledPureBlack: Boolean = false,
     content: @Composable () -> Unit,
@@ -138,8 +125,8 @@ fun VaultixTheme(
     val base = when {
         dynamicColor && supportsDynamicColor() ->
             if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-        darkTheme -> DarkColorScheme
-        else -> LightColorScheme
+        darkTheme -> colorSchemeOf(accentPalette, dark = true)
+        else -> colorSchemeOf(accentPalette, dark = false)
     }
     val colorScheme = if (darkTheme && oledPureBlack) {
         applyPureBlack(base)

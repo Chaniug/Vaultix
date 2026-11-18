@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vaultix · 主题配色与图标方案对比（2026-11-18）</title>
+<style>
+  :root{
+    --bg:#F7F8FA; --card:#FFFFFF; --line:#E3E6EC; --ink:#1C2330; --muted:#5F6775;
+    --p:#3B5BC4; --pc:#E3E6F2; --p-on:#FFFFFF; --ter:#D6E6DD; --ter-on:#112C1C;
+    --surf:#FDFCFB; --surf1:#F1F0EF; --text:#1C1B1A; --text2:#5F5D5A; --stroke:#E7E5E2;
+    --warn:#A6631B; --warnbg:#FBF0E0; --good:#1B6B4A; --goodbg:#E6F3EC;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    font-size:14px;line-height:1.65}
+  .wrap{max-width:1320px;margin:0 auto;padding:30px 22px 70px}
+  h1{font-size:24px;font-weight:650;margin:0 0 6px;letter-spacing:-.3px}
+  .sub{color:var(--muted);margin:0 0 22px;font-size:13px}
+  h2{font-size:17px;font-weight:650;margin:38px 0 12px;display:flex;align-items:center;gap:9px}
+  h2 b{display:inline-flex;width:24px;height:24px;align-items:center;justify-content:center;
+    background:var(--p);color:#fff;border-radius:7px;font-size:12px}
+  h3{font-size:14px;font-weight:600;margin:22px 0 9px}
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px 20px}
+  .grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+  .grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+  @media(max-width:1000px){.grid3,.grid2{grid-template-columns:1fr}}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:17px}
+  .card.rec{border-color:var(--p);box-shadow:0 0 0 2px var(--pc)}
+  .tag{display:inline-block;font-size:11px;padding:2px 9px;border-radius:20px;margin-bottom:9px}
+  .tag.rec{background:var(--pc);color:var(--p)}
+  .tag.keep{background:var(--goodbg);color:var(--good)}
+  .tag.risk{background:var(--warnbg);color:var(--warn)}
+  .tag.base{background:#EEF0F4;color:var(--muted)}
+  .name{font-size:15px;font-weight:650;margin:0 0 6px}
+  .desc{font-size:12.5px;color:var(--muted);margin:0 0 10px;min-height:58px}
+  .stars{font-size:12px;color:var(--p);letter-spacing:2px}
+  .stars span{color:#B9BEC8;letter-spacing:0;margin-left:6px}
+  .note{background:var(--pc);border-left:3px solid var(--p);padding:12px 15px;
+    border-radius:0 9px 9px 0;font-size:13px;margin:14px 0}
+  .warnbox{background:var(--warnbg);border-left:3px solid var(--warn);padding:12px 15px;
+    border-radius:0 9px 9px 0;font-size:13px;margin:14px 0}
+  .facts{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:14px 0 4px}
+  @media(max-width:760px){.facts{grid-template-columns:1fr}}
+  .fact{background:#fff;border:1px solid var(--line);border-radius:10px;padding:12px}
+  .fact b{display:block;font-size:12.5px;margin-bottom:4px}
+  .fact small{color:var(--muted);font-size:11.5px;line-height:1.55;display:block}
+  table{width:100%;border-collapse:collapse;font-size:12.5px;background:#fff;border-radius:10px;overflow:hidden}
+  th,td{text-align:left;padding:9px 11px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-weight:500;font-size:11.5px;background:#FAFBFC}
+  td:first-child{font-weight:600;white-space:nowrap}
+  code{background:#EEF0F4;padding:1px 5px;border-radius:4px;font-size:11.5px}
+
+  /* ---- 配色选择 ---- */
+  .toolbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:14px 0 18px}
+  .seg{display:flex;border:1px solid var(--line);border-radius:9px;overflow:hidden;background:#fff}
+  .seg button{border:0;background:#fff;color:var(--ink);padding:8px 13px;font-size:12px;
+    cursor:pointer;border-right:1px solid var(--line);font-family:inherit}
+  .seg button:last-child{border-right:0}
+  .seg button.on{background:var(--p);color:#fff}
+  .swatches{display:flex;gap:9px;flex-wrap:wrap}
+  .sw{width:132px;border:1px solid var(--line);border-radius:10px;overflow:hidden;cursor:pointer;background:#fff}
+  .sw.on{border-color:var(--p);box-shadow:0 0 0 2px var(--pc)}
+  .sw i{display:block;height:30px}
+  .sw span{display:block;padding:7px 9px;font-size:11.5px;line-height:1.4}
+  .sw span em{display:block;font-style:normal;color:var(--muted);font-family:ui-monospace,Consolas,monospace;font-size:10.5px}
+
+  /* ---- 手机 mockup ---- */
+  .stagewrap{display:grid;grid-template-columns:1.05fr .95fr;gap:20px;align-items:start}
+  @media(max-width:1000px){.stagewrap{grid-template-columns:1fr}}
+  .phones{display:flex;gap:16px;justify-content:center;flex-wrap:wrap}
+  .phone{width:236px;background:var(--surf);border:1px solid var(--stroke);border-radius:26px;
+    box-shadow:0 10px 30px rgba(28,35,48,.08);overflow:hidden;color:var(--text)}
+  .pbar{height:34px;display:flex;align-items:center;justify-content:space-between;
+    padding:0 14px;font-size:10px;color:var(--text2);border-bottom:1px solid var(--stroke)}
+  .ptitle{padding:13px 15px 8px;font-size:14px;font-weight:650;display:flex;align-items:center;gap:8px}
+  .ptitle .dot{width:22px;height:22px;border-radius:7px;background:var(--p);display:grid;
+    place-items:center;color:var(--p-on);font-size:11px}
+  .psearch{margin:0 14px 10px;background:var(--surf1);border-radius:9px;padding:7px 10px;
+    font-size:11px;color:var(--text2)}
+  .prow{margin:0 10px 7px;padding:9px 10px;background:var(--surf);border:1px solid var(--stroke);
+    border-radius:11px;display:flex;align-items:center;gap:9px}
+  .prow .av{width:28px;height:28px;border-radius:9px;display:grid;place-items:center;
+    font-size:11px;font-weight:650;background:var(--pc);color:var(--p)}
+  .prow .av.g{background:var(--ter);color:var(--ter-on)}
+  .prow .tx{min-width:0;flex:1}
+  .prow .tx b{display:block;font-size:11.5px;font-weight:600}
+  .prow .tx small{display:block;font-size:10px;color:var(--text2)}
+  .pchip{font-size:9px;background:var(--pc);color:var(--p);padding:2px 6px;border-radius:20px}
+  .pdock{margin:11px 10px 12px;background:var(--surf1);border:1px solid var(--stroke);
+    border-radius:15px;padding:8px 6px;display:flex;justify-content:space-around}
+  .pdock div{text-align:center;font-size:9px;color:var(--text2)}
+  .pdock div b{display:block;width:20px;height:20px;margin:0 auto 3px;border-radius:7px;
+    background:var(--p);opacity:.85}
+  .pdock div:nth-child(2) b,.pdock div:nth-child(4) b{background:var(--text2);opacity:.35}
+  .pset{padding:6px 14px 14px;font-size:11px}
+  .pset .srow{padding:9px 0;border-bottom:1px solid var(--stroke);display:flex;justify-content:space-between}
+  .pset .srow:last-child{border:0}
+  .pset .srow b{font-weight:550}
+  .pset .srow span{color:var(--text2)}
+  .pset .srow span.acc{color:var(--p);font-weight:600}
+
+  /* ---- 图标 ---- */
+  .icons{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}
+  @media(max-width:1000px){.icons{grid-template-columns:repeat(3,minmax(0,1fr))}}
+  @media(max-width:560px){.icons{grid-template-columns:repeat(2,minmax(0,1fr))}}
+  .icard{border:1px solid var(--line);border-radius:12px;padding:13px;background:#fff;text-align:center}
+  .icard.on{border-color:var(--p);box-shadow:0 0 0 2px var(--pc)}
+  .icard .stage{background:#EFF1F5;border-radius:10px;padding:14px 6px;display:flex;
+    align-items:center;justify-content:center;gap:10px;margin-bottom:9px}
+  .icard .stage.dk{background:#26282E}
+  .icard .lab{font-size:11.5px;font-weight:600}
+  .icard .sub2{font-size:10.5px;color:var(--muted);display:block;margin-top:2px}
+  .icard .mini{font-size:10px;color:var(--muted)}
+  .ask{background:#fff;border:1px solid var(--line);border-radius:14px;padding:20px}
+  .ask li{margin:9px 0}
+  .kbd{display:inline-block;border:1px solid var(--line);border-bottom-width:2px;border-radius:5px;
+    padding:0 6px;font-size:11px;background:#FAFBFC}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>主题配色 · 图标：先看实物，再拍板</h1>
+  <p class="sub">2026-11-18 · 本文只做方案对比，<b>未改任何代码 / 资源</b>。点色板与图标会实时切换上方手机示意。</p>
+
+  <div class="facts">
+    <div class="fact"><b>① 主题模式其实是三态</b><small>设置里已有「跟随系统 / 浅色 / 深色」，你看到的两种是硬选档；另外还有动态取色、OLED 纯黑、液态玻璃三个开关。</small></div>
+    <div class="fact"><b>② 配色不是随便挑的</b><small>品牌色有单测硬门禁：主色饱和度 ≤58%、大面积容器 ≤40%、主色色相锁蓝区 200–250°、18 对 WCAG 对比度逐对实测。</small></div>
+    <div class="fact"><b>③ 图标 9 天前刚定稿</b><small>2026-11-09 拍板方案⑤「折纸 V + 现行低饱和蓝」，几何真源在 <code>tools/icon/generate_launcher_icon.py</code>，有几何门禁。</small></div>
+  </div>
+
+  <h2><b>1</b>先定机制：你想要哪种“自定义”</h2>
+  <div class="grid3">
+    <div class="card rec">
+      <span class="tag rec">推荐 · 风险最低</span>
+      <p class="name">A · 预设色板（4 档）</p>
+      <p class="desc">新增「主题色」一栏，给 4 套经过门禁校验的色板：现行蓝、松石青、石墨蓝灰、深靛。点选即生效，跟随深浅模式自动派生容器色。</p>
+      <div class="stars">★★★★★<span>改一处偏好 + 一个色板表</span></div>
+    </div>
+    <div class="card">
+      <span class="tag base">中间档</span>
+      <p class="name">B · 预设 + 色相滑块</p>
+      <p class="desc">在 A 之上给一个色相滑块（0–360°），按同一套生成规则实时派生整套角色色。自由度够用，但必须放宽「主色锁蓝区」的门禁，并在 UI 上提示高饱和风险。</p>
+      <div class="stars">★★★★<span>要改门禁 + 动态生成 + 实时对比度校验</span></div>
+    </div>
+    <div class="card">
+      <span class="tag risk">不建议</span>
+      <p class="name">C · 完整取色器</p>
+      <p class="desc">颜色环 + 明度/饱和度自由选。确实“什么都能调”，但会直接绕开 WCAG 与饱和度纪律，出问题的概率极高，且和折纸 V 的品牌识别冲突。</p>
+      <div class="stars">★★<span>品牌一致性代价大</span></div>
+    </div>
+  </div>
+  <div class="note"><b>我的判断：</b>先做 <b>A</b>。它给你“多几款配色”的体感，又不动那套已经实测过的对比度纪律；等你真机上看了几套，再决定要不要放开到 B。C 不要碰。</div>
+
+  <h2><b>2</b>看实物：4 套配色在真实页面上的样子</h2>
+  <div class="panel">
+    <div class="toolbar">
+      <div class="seg" id="paletteBar"></div>
+      <div class="seg" id="modeBar">
+        <button data-mode="light" class="on">浅色</button>
+        <button data-mode="dark">深色</button>
+      </div>
+      <span style="font-size:11.5px;color:var(--muted)" id="paletteHint"></span>
+    </div>
+    <div class="swatches" id="swatches" style="margin-bottom:18px"></div>
+
+    <div class="stagewrap">
+      <div class="phones">
+        <div class="phone" id="phoneItems">
+          <div class="pbar"><span>9:41</span><span>▮▮▮</span></div>
+          <div class="ptitle"><span class="dot">V</span> 我的密码库</div>
+          <div class="psearch">⌕　搜索条目</div>
+          <div class="prow"><div class="av">G</div><div class="tx"><b>GitHub</b><small>valkjin@example.com</small></div><span class="pchip">登录</span></div>
+          <div class="prow"><div class="av g">B</div><div class="tx"><b>招商银行</b><small>手机号登录</small></div><span class="pchip">登录</span></div>
+          <div class="prow"><div class="av">i</div><div class="tx"><b>iCloud</b><small>apple@icloud.com</small></div></div>
+          <div class="prow"><div class="av g">✦</div><div class="tx"><b>公司 Wi-Fi</b><small>已同步</small></div></div>
+          <div class="pdock"><div><b></b>条目</div><div><b></b>生成器</div><div><b></b>工具</div><div><b></b>设置</div></div>
+        </div>
+        <div class="phone" id="phoneSettings">
+          <div class="pbar"><span>9:41</span><span>▮▮▮</span></div>
+          <div class="ptitle">设置</div>
+          <div class="pset">
+            <div class="srow"><b>主题模式</b><span class="acc" id="sTheme">跟随系统</span></div>
+            <div class="srow"><b>主题色</b><span class="acc" id="sPalette">低饱和蓝</span></div>
+            <div class="srow"><b>动态取色</b><span>关</span></div>
+            <div class="srow"><b>OLED 纯黑</b><span>开</span></div>
+            <div class="srow"><b>液态玻璃底栏</b><span>开</span></div>
+            <div class="srow"><b>自动填充</b><span>已启用</span></div>
+            <div class="srow"><b>通行密钥</b><span>已启用</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <h3>四套色板逐条对照</h3>
+        <table>
+          <tr><th>方案</th><th>主色</th><th>色相 / 饱和</th><th>判断</th></tr>
+          <tr><td>现行低饱和蓝</td><td><code>#3B5BC4</code></td><td>228° / 53.7%</td><td>品牌延续最强，已过全部门禁</td></tr>
+          <tr><td>松石青</td><td><code>#2E6E77</code></td><td>186° / 44%</td><td>在密码管理器里少见，辨识度高</td></tr>
+          <tr><td>石墨蓝灰</td><td><code>#4A5A6B</code></td><td>210° / 19%</td><td>最克制，几乎不抢注意力</td></tr>
+          <tr><td>深靛</td><td><code>#5157A8</code></td><td>236° / 34%</td><td>科技感，但离 M3 基线紫较近，需实测</td></tr>
+        </table>
+        <div class="warnbox" style="margin-top:14px">
+          <b>必须说清的代价：</b>当前 <code>VaultixBrandColorTest</code> 把主色色相钉在 <b>200–250°</b>，
+          所以松石青（186°）会直接让单测红。要做多配色，得先把门禁改成
+          「<b>只钉默认档</b>」—— 可选色板改用自己的对比度 / 饱和度判据。这是一次真改动，不是加几行色值。
+        </div>
+        <p style="font-size:11.5px;color:var(--muted);margin-top:12px">
+          上面色板是<b>示意值</b>：拍板后我会按现有纪律重新生成容器色与前景色，并逐对跑 WCAG 实测，最终色号可能与这里差 1–2 个色阶。
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <h2><b>3</b>图标：形态刚定稿，能动的其实只有配色</h2>
+  <div class="panel">
+    <p class="desc" style="margin:0 0 14px">
+      现行是 2026-11-09 拍板的「折纸 V」：无容器粗 V，受光面白 + 背光面淡蓝，单色相、一个符号。
+      这个形态是按 2026 规范选出来的（细线在 24dp 会糊、渐变底已品类饱和），而且几何有门禁。
+      所以我建议你<b>先只换色</b>，别重画几何；下面最后两张是「换形态」的样子，仅供你判断有没有必要推翻定案。
+    </p>
+    <div class="toolbar">
+      <div class="seg" id="iconModeBar">
+        <button data-im="color" class="on">彩色</button>
+        <button data-im="mono">单色 / 主题图标</button>
+      </div>
+      <span style="font-size:11.5px;color:var(--muted)">左：48dp 桌面　右：24dp 抽屉（最小可读尺寸）</span>
+    </div>
+    <div class="icons" id="iconGrid"></div>
+    <div class="note">
+      <b>潮流判断：</b>现行折纸 V 本身是 2026 的路子（一个符号、粗实心、不烘焙渐变、为 mono 单独设计），<b>形态没过时</b>。
+      真正和你记忆里“蓝色 + V”不一样的大概是<b>色相</b>——密码管理器几乎全是蓝 + 盾，
+      换成青或石墨蓝灰会让它在抽屉里更容易被认出来，而成本只是换 6 个色值 + 重跑图标门禁。
+    </div>
+  </div>
+
+  <h2><b>4</b>你说“整个 APP 的细节”，还能顺手做的</h2>
+  <div class="grid3">
+    <div class="card">
+      <span class="tag keep">低风险</span>
+      <p class="name">列表密度与分组头</p>
+      <p class="desc">#282/#285 反复改过：分组头已是无背景 + 三档间距。可微调的是条目副标题的行高与状态灯留白，属于“打磨”不是“重做”。</p>
+      <div class="stars">★★★★<span>改动小、截图可验证</span></div>
+    </div>
+    <div class="card">
+      <span class="tag base">中风险</span>
+      <p class="name">底栏玻璃两档的过渡</p>
+      <p class="desc">现有「常态通透 / 液态玻璃」两档 #281 已定；可做的是让两档切换不要跳变（过渡时长与高光的插值），不动采样链路。</p>
+      <div class="stars">★★★<span>要动 shader，得真机看</span></div>
+    </div>
+    <div class="card">
+      <span class="tag risk">先别碰</span>
+      <p class="name">导航 / 动效体系</p>
+      <p class="desc">你此前定过“转场只允许 translationX、不要花哨动画”；Keyguard 最近的 predictive back 不建议抄。</p>
+      <div class="stars">★★<span>与既有约定冲突</span></div>
+    </div>
+  </div>
+
+  <h2><b>5</b>请拍板</h2>
+  <div class="ask">
+    <ol>
+      <li><b>机制</b>：主题色做 <span class="kbd">A 预设 4 档</span> / <span class="kbd">B 预设 + 色相滑块</span>？我推荐 A。</li>
+      <li><b>默认档</b>：保留现行低饱和蓝不动，还是把默认也换成松石青 / 石墨？（换默认会影响品牌一致性）</li>
+      <li><b>图标</b>：<span class="kbd">只换配色</span>（选一个）/ <span class="kbd">连形态一起重做</span>？我建议只换色，并保留折纸 V 几何。</li>
+    </ol>
+    <p style="font-size:12px;color:var(--muted);margin:15px 0 0">
+      你回一句“方案 A + 默认蓝 + 图标青”这种就行。拍板后我再落施工单、分批改、每批单跑门禁，不打乱这轮刚验证过的自动填充。
+    </p>
+  </div>
+</div>
+
+<script>
+const PALETTES = [
+  {id:'blue',   name:'低饱和蓝', p:'#3B5BC4', pc:'#E3E6F2', dark:'#A9BBF0', ter:'#D6E6DD', terOn:'#112C1C',
+   hint:'现行品牌色，全部门禁已过'},
+  {id:'teal',   name:'松石青',   p:'#2E6E77', pc:'#DCEBEC', dark:'#8FC4C9', ter:'#E3E7DC', terOn:'#1B2C1A',
+   hint:'色相 186°，需把「主色锁蓝区」门禁改为只钉默认档'},
+  {id:'slate',  name:'石墨蓝灰', p:'#4A5A6B', pc:'#E4E9EE', dark:'#AFC0D0', ter:'#E2E8E4', terOn:'#1C2A22',
+   hint:'饱和度 19%，最克制；同样需调整门禁'},
+  {id:'indigo', name:'深靛',     p:'#5157A8', pc:'#E4E5F3', dark:'#B0B4EA', ter:'#E5E3EE', terOn:'#241C33',
+   hint:'236° 仍在蓝区，门禁不用改；但要盯与基线紫的目视距离'}
+];
+const ICONS = [
+  {id:'keep', name:'现行折纸 V', sub:'折纸 V · 低饱和蓝', bg:'#3B5BC4', light:'#FFFFFF', shade:'#B6C4E8', shape:'fold', rec:true},
+  {id:'teal', name:'折纸 V · 青', sub:'只换配色', bg:'#2E6E77', light:'#FFFFFF', shade:'#A9D2D4', shape:'fold'},
+  {id:'slate',name:'折纸 V · 石墨', sub:'只换配色', bg:'#4A5A6B', light:'#FFFFFF', shade:'#B6C3CE', shape:'fold'},
+  {id:'warm', name:'折纸 V · 赤陶', sub:'只换配色（风险高）', bg:'#9C5A4A', light:'#FFFFFF', shade:'#E3B6A6', shape:'fold'},
+  {id:'stroke',name:'单笔画 V', sub:'换形态 · 要重做几何', bg:'#3B5BC4', light:'#FFFFFF', shade:'#B6C4E8', shape:'stroke'},
+  {id:'monoV', name:'实心方 + 挖空 V', sub:'换形态 · 24dp 风险', bg:'#3B5BC4', light:'#FFFFFF', shade:'#B6C4E8', shape:'cut'},
+  {id:'stack', name:'层叠双 V', sub:'换形态 · 信息量回升', bg:'#3B5BC4', light:'#FFFFFF', shade:'#B6C4E8', shape:'stack'},
+  {id:'arc',   name:'圆弧 V', sub:'换形态 · 更柔和', bg:'#3B5BC4', light:'#FFFFFF', shade:'#B6C4E8', shape:'arc'},
+  {id:'dot',   name:'V + 独立圆点', sub:'换形态 · 双焦点', bg:'#3B5BC4', light:'#FFFFFF', shade:'#B6C4E8', shape:'dot'},
+  {id:'badge', name:'回退徽章盾 + V', sub:'旧版形态 · 已否', bg:'#3B5BC4', light:'#FFFFFF', shade:'#B6C4E8', shape:'badge'}
+];
+let cur = PALETTES[0], mode='light', iconMode='color';
+
+function svgFor(ic, size){
+  // 108×108 自适应图标画布，68×68 前景，符合 66dp 安全圈语义的示意
+  const s = size, sh = ic.shade, li = ic.light;
+  const base = `<svg viewBox="0 0 108 108" width="${s}" height="${s}" xmlns="http://www.w3.org/2000/svg">`;
+  let body='';
+  if(ic.shape==='fold'){
+    body = `<path d="M24 28 L54 80 L84 28 L69 28 L54 57 L39 28 Z" fill="${li}"/>
+            <path d="M54 57 L69 28 L84 28 L54 80 Z" fill="${sh}"/>`;
+  }else if(ic.shape==='stroke'){
+    body = `<path d="M27 29 L54 77 L81 29" fill="none" stroke="${li}" stroke-width="13"
+             stroke-linecap="round" stroke-linejoin="round"/>`;
+  }else if(ic.shape==='cut'){
+    body = `<rect x="22" y="22" width="64" height="64" rx="18" fill="${li}"/>
+            <path d="M35 34 L54 68 L73 34 L64 34 L54 53 L44 34 Z" fill="${ic.bg}"/>`;
+  }else if(ic.shape==='stack'){
+    body = `<path d="M25 26 L54 74 L68 49 L58 49 L54 58 L42 35 Z" fill="${sh}"/>
+            <path d="M46 43 L60 43 L76 76 L61 76 L53 60 L45 76 L32 76 Z" fill="${li}"/>`;
+  }else if(ic.shape==='arc'){
+    body = `<path d="M30 32 Q34 28 40 34 L54 58 L68 34 Q74 28 78 32 Q83 37 77 45 L60 76 Q54 86 48 76 L31 45 Q25 37 30 32 Z" fill="${li}"/>`;
+  }else if(ic.shape==='dot'){
+    body = `<path d="M27 31 L54 76 L81 31 L67 31 L54 55 L41 31 Z" fill="${li}"/>
+            <circle cx="54" cy="82" r="6" fill="${sh}"/>`;
+  }else if(ic.shape==='badge'){
+    body = `<path d="M54 18 L80 29 L80 55 Q80 76 54 88 Q28 76 28 55 L28 29 Z" fill="${li}"/>
+            <path d="M40 38 L54 66 L68 38 L60 38 L54 52 L48 38 Z" fill="${ic.bg}"/>`;
+  }
+  return base + `<rect width="108" height="108" rx="24" fill="${iconMode==='mono'?'#2B2F36':ic.bg}"/>` +
+    (iconMode==='mono' ? body.replaceAll(li,'#FFFFFF').replaceAll(sh,'#9AA3AE') : body) + `</svg>`;
+}
+
+function applyPalette(){
+  const dark = mode==='dark';
+  const r=document.documentElement.style;
+  r.setProperty('--p', dark?cur.dark:cur.p);
+  r.setProperty('--pc', dark?'#202A3C':cur.pc);
+  r.setProperty('--p-on', dark?'#101826':'#FFFFFF');
+  r.setProperty('--ter', dark?'#23332B':cur.ter);
+  r.setProperty('--ter-on', dark?'#BFE0CB':cur.terOn);
+  r.setProperty('--surf', dark?'#121418':'#FDFCFB');
+  r.setProperty('--surf1', dark?'#1C1F24':'#F1F0EF');
+  r.setProperty('--stroke', dark?'#2A2E34':'#E7E5E2');
+  r.setProperty('--text', dark?'#ECECEC':'#1C1B1A');
+  r.setProperty('--text2', dark?'#A4A6AA':'#5F5D5A');
+  document.getElementById('sPalette').textContent=cur.name;
+  document.getElementById('sTheme').textContent=dark?'深色':'浅色';
+  document.getElementById('paletteHint').textContent=cur.hint;
+  document.querySelectorAll('#paletteBar button').forEach(b=>b.classList.toggle('on',b.dataset.id===cur.id));
+  document.querySelectorAll('#swatches .sw').forEach(s=>s.classList.toggle('on',s.dataset.id===cur.id));
+}
+
+function buildPaletteUI(){
+  document.getElementById('paletteBar').innerHTML = PALETTES.map(p=>
+    `<button data-id="${p.id}">${p.name}</button>`).join('');
+  document.getElementById('swatches').innerHTML = PALETTES.map(p=>
+    `<div class="sw" data-id="${p.id}"><i style="background:${p.p}"></i>
+      <span>${p.name}<em>${p.p}</em></span></div>`).join('');
+  document.querySelectorAll('#paletteBar button, #swatches .sw').forEach(el=>{
+    el.addEventListener('click',()=>{cur=PALETTES.find(p=>p.id===el.dataset.id);applyPalette()});
+  });
+  document.querySelectorAll('#modeBar button').forEach(b=>b.addEventListener('click',()=>{
+    mode=b.dataset.mode;
+    document.querySelectorAll('#modeBar button').forEach(x=>x.classList.toggle('on',x===b));
+    applyPalette();
+  }));
+}
+
+function buildIconUI(){
+  document.getElementById('iconGrid').innerHTML = ICONS.map(ic=>`
+    <div class="icard ${ic.rec?'on':''}" data-id="${ic.id}">
+      <div class="stage"><div id="ic-${ic.id}-48">${svgFor(ic,64)}</div>
+                         <div id="ic-${ic.id}-24">${svgFor(ic,28)}</div></div>
+      <div class="lab">${ic.name}</div><span class="sub2">${ic.sub}</span>
+      <div class="mini">${ic.rec?'★★★★★ 已定稿':''}</div>
+    </div>`).join('');
+  document.querySelectorAll('.icard').forEach(card=>card.addEventListener('click',()=>{
+    document.querySelectorAll('.icard').forEach(x=>x.classList.toggle('on',x===card));
+  }));
+  document.querySelectorAll('#iconModeBar button').forEach(b=>b.addEventListener('click',()=>{
+    iconMode=b.dataset.im;
+    document.querySelectorAll('#iconModeBar button').forEach(x=>x.classList.toggle('on',x===b));
+    ICONS.forEach(ic=>{
+      document.getElementById('ic-'+ic.id+'-48').innerHTML=svgFor(ic,64);
+      document.getElementById('ic-'+ic.id+'-24').innerHTML=svgFor(ic,28);
+    });
+  }));
+}
+
+buildPaletteUI(); buildIconUI(); applyPalette();
+</script>
+</body>
+</html>

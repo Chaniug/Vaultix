@@ -76,22 +76,48 @@ private fun isUsablePasskey(cred: VaultFido2Credential): Boolean =
         cred.rpId.isNotBlank() &&
         (cred.keyType.isNullOrBlank() || cred.keyType == "public-key")
 
+/**
+ * WebAuthn 凭据描述符的合法类型。
+ *
+ * 规范要求按 **id + type** 共同匹配：`type != "public-key"` 的描述符必须被忽略。
+ * 只按 id 匹配会把「明明是别的类型」的凭证也当作允许项（对齐 Keyguard
+ * `PasskeyTargetCheck` / Bitwarden `Fido2CredentialStoreImpl`）。
+ */
+internal const val CREDENTIAL_TYPE_PUBLIC_KEY: String = "public-key"
+
+/**
+ * 取 descriptor 里**可参与匹配**的 id；不合法返回 null。
+ *
+ * 两条规范约束：`type` 非 `public-key` 时忽略（缺失时宽容按 public-key 处理）；
+ * `id` 为空的忽略。抽成函数是为了让调用方循环只留一个出口
+ * （detekt `LoopWithTooManyJumpStatements`）。
+ */
+internal fun credentialDescriptorIdOrNull(descriptor: JSONObject?): String? {
+    if (descriptor == null) return null
+    val type = descriptor.optString("type").trim()
+    if (type.isNotEmpty() && type != CREDENTIAL_TYPE_PUBLIC_KEY) return null
+    return descriptor.optString("id").trim().takeIf { it.isNotEmpty() }
+}
+
 /** allowCredentials：[{type,id,transports}] 中的 id（base64url）。 */
 internal fun parseAllowedCredentialIds(json: JSONObject): List<String> {
     val arr = json.optJSONArray("allowCredentials") ?: return emptyList()
     val ids = mutableListOf<String>()
     for (i in 0 until arr.length()) {
-        arr.optJSONObject(i)?.optString("id")?.takeIf { it.isNotBlank() }?.let { ids += it }
+        credentialDescriptorIdOrNull(arr.optJSONObject(i))?.let { ids += it }
     }
     return ids
 }
 
-/** 容错比较 storedId 与允许列表 id（两种 base64 形态都试，转原始字节比较）。 */
+/**
+ * 比较存储态 id 与允许列表 id。
+ *
+ * 走 [WebAuthn.credentialIdBytes]：`b64.` 前缀 / UUID 文本 / 裸 base64 三种存储形态
+ * 与 RP 下发的 base64url 能对齐到同一串字节（2026-11-18，对齐 Bitwarden PM-44191）。
+ */
 private fun idMatches(storedId: String, allowed: String): Boolean {
-    val a = runCatching { WebAuthn.decodeBase64UrlOrStandard(storedId) }
-        .getOrNull() ?: return false
-    val b = runCatching { WebAuthn.decodeBase64UrlOrStandard(allowed) }
-        .getOrNull() ?: return false
+    val a = WebAuthn.credentialIdBytes(storedId) ?: return false
+    val b = WebAuthn.credentialIdBytes(allowed) ?: return false
     return a.contentEquals(b)
 }
 

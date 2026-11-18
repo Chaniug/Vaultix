@@ -30,20 +30,44 @@ object PublicSuffixList {
     // 例外规则命中后，公共后缀相对规则再上移的段数（去掉最左 label）。
     private const val EXCEPTION_LABEL_TRIM = 1
 
+    // IPv4 字面量：4 段、每段至多 3 位数字且不超过 255。
+    private const val IPV4_LABEL_COUNT = 4
+    private const val IPV4_MAX_LABEL_CHARS = 3
+    private const val IPV4_MAX_LABEL_VALUE = 255
+
     /**
      * 返回 [host] 的基域（注册域 / eTLD+1）。
      * 例：`sub.example.com` → `example.com`；`sub.example.co.uk` → `example.co.uk`；
      * `myapp.compute.amazonaws.com` → `myapp.compute.amazonaws.com`（compute.amazonaws.com 为公共后缀）。
-     * 不足两段时原样返回；自动忽略前导 `www.`。
+     * 不足两段时原样返回；自动忽略前导 `www.`；IPv4 字面量原样返回（见 [isIpv4Literal]）。
      */
     fun baseDomain(host: String): String {
         val h = host.lowercase().removePrefix("www.")
+        if (isIpv4Literal(h)) return h
         val labels = h.split('.')
         if (labels.size < MIN_LABELS_FOR_REGISTRABLE_DOMAIN) return h
         val suffixLength = prevailingSuffixLength(labels)
         if (labels.size <= suffixLength) return h
         val start = labels.size - suffixLength - 1
         return labels.subList(start, labels.size).joinToString(".")
+    }
+
+    /**
+     * 是否是 IPv4 字面量。
+     *
+     * ⚠️ **不拦这一步，内网设备会互相填密码**（2026-11-18 实测）：
+     * `192.168.1.1` 与 `172.16.1.1` 的「基域」都会被算成 `1.1` ⇒ `baseDomainMatch` 为真。
+     * Bitwarden 的 `parseDomainOrNull` 对 IP 直接返回 host 本身，Bastion 另有
+     * `AutofillHostPolicy.isIp` 守卫；这里按同样口径处理。
+     */
+    private fun isIpv4Literal(host: String): Boolean {
+        val labels = host.split('.')
+        if (labels.size != IPV4_LABEL_COUNT) return false
+        return labels.all { label ->
+            if (label.isEmpty() || label.length > IPV4_MAX_LABEL_CHARS) return@all false
+            if (label.any { ch -> ch !in '0'..'9' }) return@all false
+            (label.toIntOrNull() ?: return@all false) <= IPV4_MAX_LABEL_VALUE
+        }
     }
 
     /**

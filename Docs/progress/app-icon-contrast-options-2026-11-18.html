@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vaultix · 图标「显眼度」配色方案（几何不变）</title>
+<style>
+  :root{--bg:#F7F8FA;--card:#fff;--line:#E3E6EC;--ink:#1C2330;--muted:#5F6775;
+    --p:#3B5BC4;--pc:#E3E6F2;--warn:#A6631B;--warnbg:#FBF0E0;--good:#1B6B4A;--goodbg:#E6F3EC;
+    /* 当前选中的图标三色 */
+    --ibg:#3B5BC4;--ilight:#FFFFFF;--ishade:#B9C6F0}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    font-size:14px;line-height:1.65}
+  .wrap{max-width:1180px;margin:0 auto;padding:30px 22px 70px}
+  h1{font-size:23px;font-weight:650;margin:0 0 5px;letter-spacing:-.3px}
+  .sub{color:var(--muted);margin:0 0 18px;font-size:13px}
+  h2{font-size:16px;font-weight:650;margin:32px 0 10px}
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px 20px}
+  .diag{background:var(--warnbg);border-left:3px solid var(--warn);padding:13px 16px;
+    border-radius:0 9px 9px 0;font-size:13px;margin:14px 0}
+  .ok{background:var(--goodbg);border-left:3px solid var(--good);padding:13px 16px;
+    border-radius:0 9px 9px 0;font-size:13px;margin:14px 0}
+  .grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+  @media(max-width:950px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+  @media(max-width:520px){.grid{grid-template-columns:1fr}}
+  .opt{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:13px;cursor:pointer}
+  .opt.on{border-color:var(--p);box-shadow:0 0 0 2px var(--pc)}
+  .opt .row{display:flex;gap:11px;align-items:center;justify-content:center;background:#EEF1F6;
+    border-radius:9px;padding:12px 6px;margin-bottom:9px}
+  .opt .row.dark{background:#22262E}
+  .nm{font-size:12.5px;font-weight:650;margin:0 0 2px}
+  .hex{font-size:10.5px;color:var(--muted);font-family:ui-monospace,Consolas,monospace}
+  .ratios{font-size:10.5px;color:var(--muted);margin-top:6px}
+  .ratios b{color:var(--ink);font-weight:600}
+  .bad b{color:var(--warn)}
+  .good b{color:var(--good)}
+  .tag{font-size:10px;padding:2px 7px;border-radius:20px;margin-left:4px}
+  .tag.rec{background:var(--goodbg);color:var(--good)}
+  .tag.risk{background:var(--warnbg);color:var(--warn)}
+  .stage{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:18px}
+  @media(max-width:760px){.stage{grid-template-columns:1fr}}
+  .dev{background:#fff;border:1px solid var(--line);border-radius:14px;padding:16px}
+  .dev h3{font-size:12.5px;font-weight:600;margin:0 0 12px;color:var(--muted)}
+  .deskrow{display:flex;gap:14px;align-items:flex-end;justify-content:center;flex-wrap:wrap;
+    background:#E9EDF3;border-radius:12px;padding:22px 10px;min-height:118px}
+  .deskrow.dark{background:#1C1F26}
+  .apps{display:flex;gap:14px;align-items:flex-end}
+  .app{text-align:center;width:60px}
+  .app .ic{width:48px;height:48px;border-radius:11px;margin:0 auto 5px;display:grid;place-items:center;
+    color:#fff;font-size:13px;font-weight:700;box-shadow:0 2px 6px rgba(0,0,0,.10)}
+  .app .ic.vx{background:var(--ibg)}
+  .app .ic.vx svg{width:100%;height:100%;display:block}
+  .app small{font-size:10px;color:#4A5260}
+  .deskrow.dark small{color:#AEB4BF}
+  .drawer{display:flex;gap:12px;align-items:center;background:#F4F5F8;border-radius:10px;
+    padding:12px;min-height:64px}
+  .drawer.dark{background:#23262E}
+  .drawer .di{display:flex;gap:6px;align-items:center}
+  .drawer .di span{font-size:11px;color:#4A5260}
+  .drawer.dark .di span{color:#AEB4BF}
+  .drawer svg{display:block;width:24px;height:24px;border-radius:6px}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th,td{text-align:left;padding:9px 11px;border-bottom:1px solid var(--line)}
+  th{color:var(--muted);font-weight:500;font-size:11.5px;background:#FAFBFC}
+  code{background:#EEF0F4;padding:1px 5px;border-radius:4px;font-size:11.5px}
+  .ask{background:#fff;border:1px solid var(--line);border-radius:14px;padding:18px 22px}
+  .kbd{display:inline-block;border:1px solid var(--line);border-bottom-width:2px;border-radius:5px;padding:0 6px;font-size:11px;background:#FAFBFC}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>图标：形态不变，只解决「不显眼 + 撞色」</h1>
+  <p class="sub">2026-11-18 · 第三页。几何用 <code>tools/icon/generate_launcher_icon.py</code> 的真源 path，<b>一个顶点都没动</b>；只换三个色值。仍未改代码。</p>
+
+  <div class="diag">
+    <b>为什么现在的 V 不跳（量化）：</b>现行三色是「白 <code>#FFFFFF</code> / 折痕 <code>#B9C6F0</code> / 底 <code>#3B5BC4</code>」，
+    白与折痕的对比度只有 <b>1.69:1</b> ——24dp 下两半糊成一团淡色，折纸层次消失，V 变成一块模糊的浅蓝。
+    同时底色正落在密码管理器最拥挤的蓝区，所以和竞品趋同。
+  </div>
+
+  <h2>6 组配色（几何完全相同）</h2>
+  <div class="grid" id="opts"></div>
+
+  <div class="ok" id="verdict" style="margin-top:16px"></div>
+
+  <h2>实机大小对照（点上面任一方案切换）</h2>
+  <div class="stage">
+    <div class="dev">
+      <h3>桌面 · 48dp · 亮色壁纸</h3>
+      <div class="deskrow" id="deskLight">
+        <div class="apps">
+          <div class="app"><div class="ic" style="background:#07C160">微</div><small>微信</small></div>
+          <div class="app"><div class="ic" style="background:#1677FF">支</div><small>支付宝</small></div>
+          <div class="app"><div class="ic vx" id="vxDesk"></div><small>Vaultix</small></div>
+          <div class="app"><div class="ic" style="background:#175DDC">B</div><small>Bitwarden</small></div>
+          <div class="app"><div class="ic" style="background:#0572EC">1P</div><small>1Password</small></div>
+        </div>
+      </div>
+    </div>
+    <div class="dev">
+      <h3>抽屉 · 24dp · 最小可读</h3>
+      <div class="drawer" id="drawer">
+        <div class="di"><svg id="vxDraw"><rect width="108" height="108" fill="var(--ibg)"/></svg><span>Vaultix</span></div>
+        <div class="di"><svg viewBox="0 0 24 24"><rect width="24" height="24" rx="6" fill="#07C160"/></svg><span>微信</span></div>
+        <div class="di"><svg viewBox="0 0 24 24"><rect width="24" height="24" rx="6" fill="#1677FF"/></svg><span>支付宝</span></div>
+      </div>
+      <p style="font-size:11.5px;color:var(--muted);margin:12px 0 0">
+        24dp 下看两件事：<b>①折痕还在不在 ②从旁边图标里跳不跳出来</b>。
+      </p>
+    </div>
+  </div>
+
+  <h2>注意一个物理限制</h2>
+  <div class="panel">
+    <p style="margin:0 0 10px">同一个蓝底 `#3B5BC4` 下，「白 / 折痕 / 底」三档不可能同时拉开：</p>
+    <table>
+      <tr><th>折痕色</th><th>白 / 折痕</th><th>折痕 / 蓝底</th><th>结果</th></tr>
+      <tr><td><code>#B9C6F0</code> 现行</td><td>1.69 ❌</td><td>3.56 ✅</td><td>折痕糊，V 不显眼</td></tr>
+      <tr><td><code>#9CAEE6</code></td><td>2.19 ⚠</td><td>2.76 ⚠</td><td>两头都不够</td></tr>
+      <tr><td><code>#7690D4</code></td><td>3.13 ✅</td><td>1.93 ❌</td><td>折痕看得见，但右半融进底</td></tr>
+    </table>
+    <div class="ok" style="margin-top:14px">
+      <b>出路只有一条：把底压深。</b>底压深到 `#1B2B63`（或 `#2F3B4A`）后，折痕 `#7690D4` 能同时拿到
+      白/折 <b>3.13</b>、折/底 <b>4.27</b>、白/底 <b>13.36</b> ——三档全拉开。
+      而且深海军蓝和 Bitwarden 的亮蓝 <code>#175DDC</code>、1Password 的 <code>#0572EC</code> 明显不同，
+      一个改动同时解决你说的两件事。
+    </div>
+  </div>
+
+  <h2>请拍板</h2>
+  <div class="ask">
+    <ol>
+      <li>选一个配色方案编号：<span class="kbd">① 现行</span> <span class="kbd">④ 深海军蓝+中折痕</span> <span class="kbd">⑤ 更深底+高对比折痕</span> 等。</li>
+      <li>如果选深底，App 内主题色仍按之前拍板<b>保留现行低饱和蓝</b>——图标与界面会有一档明度差，这在品牌上叫「图标是界面的深色印章」，不算割裂；你要是介意我再给同底方案。</li>
+    </ol>
+    <p style="font-size:12px;color:var(--muted);margin:14px 0 0">
+      这批改的是 <code>res/values/colors.xml</code> 里三个 <code>ic_launcher_*</code> 值 + 图标几何脚本的色值常量；
+      几何 path 与门禁不动，CI 图标一致性检查会验证「只有颜色变了」。
+    </p>
+  </div>
+</div>
+
+<script>
+/* 几何：逐字符取自 tools/icon/generate_launcher_icon.py，一个顶点未改 */
+const LEFT  = "M37.00,40.00 L47.50,40.00 L55.00,61.00 L55.00,74.00 L51.50,74.00 Z";
+const RIGHT = "M56.50,74.00 L53.00,74.00 L53.00,61.00 L60.50,40.00 L71.00,40.00 Z";
+const TRAP  = "M50.80,55.00 L57.20,55.00 L54.00,66.00 Z";
+
+/* 色值 + 实测对比度（WCAG 2.x 相对亮度） */
+const OPTS = [
+  {id:1,name:'现行低饱和蓝',bg:'#3B5BC4',light:'#FFFFFF',shade:'#B9C6F0',
+   white:6.04,fold:1.69,edge:3.56,tag:'对照',tagCls:'',
+   note:'与竞品最接近，折痕在小尺寸消失'},
+  {id:2,name:'现行蓝 + 深折痕',bg:'#3B5BC4',light:'#FFFFFF',shade:'#8FA5E2',
+   white:6.04,fold:2.43,edge:2.49,tag:'折痕可见',tagCls:'',
+   note:'折痕稍清楚，但右半与底接近'},
+  {id:3,name:'石墨蓝灰底 + 中折痕',bg:'#2F3B4A',light:'#FFFFFF',shade:'#7690D4',
+   white:11.38,fold:3.13,edge:3.64,tag:'三档过线',tagCls:'rec',
+   note:'竞品区分最强；灰蓝与 App 主题蓝有一档色相差'},
+  {id:4,name:'深海军蓝 + 中折痕',bg:'#1B2B63',light:'#FFFFFF',shade:'#7690D4',
+   white:13.36,fold:3.13,edge:4.27,tag:'推荐',tagCls:'rec',
+   note:'三档全拉开，且拉开与竞品的距离'},
+  {id:5,name:'更深底 + 高对比折痕',bg:'#151F4A',light:'#FFFFFF',shade:'#6A84C9',
+   white:15.82,fold:3.65,edge:4.34,tag:'最显眼',tagCls:'rec',
+   note:'折痕最强，V 在深色壁纸上也清晰'},
+  {id:6,name:'青底 + 淡折痕',bg:'#1F5C66',light:'#FFFFFF',shade:'#9CAEE6',
+   white:7.55,fold:2.19,edge:3.46,tag:'撞色低',tagCls:'',
+   note:'色相最特别，但折痕仍偏弱'},
+];
+let cur=OPTS[0];
+
+/* 用 CSS 变量上色，绝不做字符串替换 —— 避免路径命令 L 被误替换 */
+function iconSVG(prefix){
+  return `<svg viewBox="0 0 108 108" xmlns="http://www.w3.org/2000/svg">
+    <rect width="108" height="108" rx="24" fill="var(--${prefix}bg)"/>
+    <path d="${LEFT}"  fill="var(--${prefix}light)"/>
+    <path d="${RIGHT}" fill="var(--${prefix}shade)"/>
+    <path d="${TRAP}"  fill="var(--${prefix}bg)"/>
+  </svg>`;
+}
+function miniSVG(){
+  return `<svg viewBox="0 0 108 108" xmlns="http://www.w3.org/2000/svg">
+    <rect width="108" height="108" rx="24" fill="var(--ibg)"/>
+    <path d="${LEFT}"  fill="var(--ilight)"/>
+    <path d="${RIGHT}" fill="var(--ishade)"/>
+    <path d="${TRAP}"  fill="var(--ibg)"/>
+  </svg>`;
+}
+function apply(){
+  const r=document.documentElement.style;
+  r.setProperty('--ibg',cur.bg);r.setProperty('--ilight',cur.light);r.setProperty('--ishade',cur.shade);
+  document.getElementById('vxDesk').innerHTML=iconSVG('i');
+  document.getElementById('vxDraw').innerHTML=
+    `<rect width="108" height="108" rx="24" fill="var(--ibg)"/>`+
+    `<path d="${LEFT}" fill="var(--ilight)"/><path d="${RIGHT}" fill="var(--ishade)"/>`+
+    `<path d="${TRAP}" fill="var(--ibg)"/>`;
+  document.querySelectorAll('.opt').forEach(el=>el.classList.toggle('on',+el.dataset.id===cur.id));
+  const good=cur.fold>=3&&cur.edge>=3;
+  document.getElementById('verdict').className=good?'ok':'diag';
+  document.getElementById('verdict').innerHTML=
+    `<b>${cur.name}</b>：白/折 <b>${cur.fold.toFixed(2)}</b> · 折/底 <b>${cur.edge.toFixed(2)}</b> · 白/底 ${cur.white.toFixed(2)}。`+
+    (good?' 三档全部拉开，24dp 下折痕和轮廓都成立。':' 有一档没拉开，小尺寸下仍会糊。');
+}
+function build(){
+  document.getElementById('opts').innerHTML=OPTS.map(o=>{
+    const good=o.fold>=3&&o.edge>=3;
+    return `<div class="opt" data-id="${o.id}" style="--cbg:${o.bg};--clight:${o.light};--cshade:${o.shade}">
+      <div class="row">
+        <div style="width:52px;height:52px">
+          <svg viewBox="0 0 108 108" width="52" height="52" xmlns="http://www.w3.org/2000/svg">
+            <rect width="108" height="108" rx="24" fill="var(--cbg)"/>
+            <path d="${LEFT}" fill="var(--clight)"/><path d="${RIGHT}" fill="var(--cshade)"/>
+            <path d="${TRAP}" fill="var(--cbg)"/>
+          </svg>
+        </div>
+        <div style="width:25px;height:25px">
+          <svg viewBox="0 0 108 108" width="25" height="25" xmlns="http://www.w3.org/2000/svg">
+            <rect width="108" height="108" rx="24" fill="var(--cbg)"/>
+            <path d="${LEFT}" fill="var(--clight)"/><path d="${RIGHT}" fill="var(--cshade)"/>
+            <path d="${TRAP}" fill="var(--cbg)"/>
+          </svg>
+        </div>
+      </div>
+      <p class="nm">${o.id}. ${o.name}${o.tag?`<span class="tag ${o.tagCls}">${o.tag}</span>`:''}</p>
+      <div class="hex">${o.bg} · ${o.shade}</div>
+      <div class="ratios ${good?'good':'bad'}">白/折 <b>${o.fold.toFixed(2)}</b> · 折/底 <b>${o.edge.toFixed(2)}</b></div>
+    </div>`;}).join('');
+  document.querySelectorAll('.opt').forEach(el=>el.addEventListener('click',()=>{
+    cur=OPTS.find(o=>o.id===+el.dataset.id);apply();
+  }));
+}
+build();apply();
+</script>
+</body>
+</html>

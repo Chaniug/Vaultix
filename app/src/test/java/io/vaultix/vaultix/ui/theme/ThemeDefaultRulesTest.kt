@@ -165,9 +165,11 @@ class ThemeDefaultRulesTest {
         // ⚠️ applyPureBlack 是**表达式体**函数（`= base.copy(...)`），没有花括号，
         //    不能用 functionBody() 取 —— 那会一路配平到下一个函数的 `{`。改为截到
         //    下一个顶层声明之前，正好覆盖整个 copy 参数块。
+        //    2026-11-18：边界锚点从已删除的 `private val DarkColorScheme` 改为
+        //    `fun supportsDynamicColor`（主题色改档后旧别名退役，锚点必须跟着换真实声明）。
         val pureBlack = theme
             .substringAfter("private fun applyPureBlack", "")
-            .substringBefore("private val DarkColorScheme", "")
+            .substringBefore("fun supportsDynamicColor", "")
         val missing = buildList {
             if (pureBlack.isEmpty()) add("找不到 applyPureBlack 参数块")
             listOf(

@@ -470,6 +470,13 @@
     <string name="theme_mode_system">跟随系统</string>
     <string name="theme_mode_light">浅色</string>
     <string name="theme_mode_dark">深色</string>
+    <string name="setting_accent_palette">主题色</string>
+    <string name="setting_accent_palette_desc">选择界面的强调色，共 4 款预设</string>
+    <string name="accent_blue">低饱和蓝（默认）</string>
+    <string name="accent_teal">松石青</string>
+    <string name="accent_slate">石墨蓝灰</string>
+    <string name="accent_indigo">深靛</string>
+    <string name="accent_palette_dynamic_note">动态取色开启时由壁纸决定颜色，主题色设置暂时不生效</string>
     <string name="setting_oled_pure_black">纯黑背景</string>
     <string name="setting_oled_pure_black_desc">深色模式使用纯黑背景（省电 / 减少烙印）</string>
     <string name="setting_liquid_glass">液态玻璃底栏</string>

@@ -13,8 +13,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.BlurOn
@@ -35,6 +38,7 @@ import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -72,7 +76,10 @@ import io.vaultix.vaultix.ui.common.TrashAutoDeleteDialog
 import io.vaultix.vaultix.ui.common.trashAutoDeleteLabel
 import io.vaultix.vaultix.ui.glass.isLiquidGlassBlurSupported
 import io.vaultix.vaultix.ui.theme.ThemeMode
+import io.vaultix.vaultix.ui.theme.VaultixAccentPalette
+import io.vaultix.vaultix.ui.theme.colorSchemeOf
 import io.vaultix.vaultix.ui.theme.Spacing
+import io.vaultix.vaultix.ui.theme.UiSize
 import io.vaultix.vaultix.ui.theme.VaultixCorner
 import io.vaultix.vaultix.ui.theme.supportsDynamicColor
 import io.vaultix.vaultix.util.SystemSettingsIntents
@@ -966,6 +973,7 @@ private fun DisplaySection(
     dynamicColor: Boolean?,
 ) {
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
+    val accentPaletteRaw by viewModel.accentPalette.collectAsStateWithLifecycle()
     val oledPureBlack by viewModel.oledPureBlack.collectAsStateWithLifecycle()
     val liquidGlassDock by viewModel.liquidGlassDock.collectAsStateWithLifecycle()
     // 系统能不能做真模糊（API 31+）。设置页要说清楚 —— 打开了却看不到模糊，
@@ -976,6 +984,7 @@ private fun DisplaySection(
     //   取色分支共用 [supportsDynamicColor] 单一真源，别在这里另写一遍 SDK_INT 比较。
     val dynamicColorSupported = remember { supportsDynamicColor() }
     var showThemeDialog by rememberSaveable { mutableStateOf(false) }
+    var showPaletteDialog by rememberSaveable { mutableStateOf(false) }
     var showDisplayOptions by rememberSaveable { mutableStateOf(false) }
 
     SettingsGroupTitle(stringResource(R.string.group_appearance))
@@ -985,6 +994,20 @@ private fun DisplaySection(
             title = stringResource(R.string.setting_theme_mode),
             subtitle = themeModeLabel(ThemeMode.from(themeMode)),
             onClick = { showThemeDialog = true },
+        )
+        SettingsDivider()
+        SettingsRow(
+            icon = { Icon(Icons.Filled.Palette, contentDescription = null) },
+            title = stringResource(R.string.setting_accent_palette),
+            subtitle = stringResource(
+                if (dynamicColor == true) {
+                    R.string.accent_palette_dynamic_note
+                } else {
+                    R.string.setting_accent_palette_desc
+                },
+            ),
+            enabled = dynamicColor != true,
+            onClick = { showPaletteDialog = true },
         )
         SettingsDivider()
         SettingsRow(
@@ -1051,6 +1074,17 @@ private fun DisplaySection(
             title = stringResource(R.string.items_display_options),
             subtitle = stringResource(R.string.setting_display_options_desc),
             onClick = { showDisplayOptions = true },
+        )
+    }
+
+    if (showPaletteDialog) {
+        AccentPaletteDialog(
+            current = VaultixAccentPalette.from(accentPaletteRaw),
+            onSelect = {
+                viewModel.setAccentPalette(it.raw)
+                showPaletteDialog = false
+            },
+            onDismiss = { showPaletteDialog = false },
         )
     }
 
@@ -1190,6 +1224,61 @@ private fun themeModeLabel(mode: ThemeMode): String = when (mode) {
     ThemeMode.SYSTEM -> stringResource(R.string.theme_mode_system)
     ThemeMode.LIGHT -> stringResource(R.string.theme_mode_light)
     ThemeMode.DARK -> stringResource(R.string.theme_mode_dark)
+}
+
+/**
+ * 主题色单选对话框（2026-11-18，4 档预设）。
+ *
+ * 色块直接取 [colorSchemeOf] 的 `primary` —— 与 [VaultixTheme] 实际渲染同源，
+ * 不另写一份「看起来差不多」的色值。未选中也能看出每档是什么颜色。
+ */
+@Composable
+private fun AccentPaletteDialog(
+    current: VaultixAccentPalette,
+    onSelect: (VaultixAccentPalette) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.setting_accent_palette)) },
+        text = {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                VaultixAccentPalette.entries.forEach { palette ->
+                    val primary = colorSchemeOf(palette, dark = false).primary
+                    val label = when (palette) {
+                        VaultixAccentPalette.BLUE -> stringResource(R.string.accent_blue)
+                        VaultixAccentPalette.TEAL -> stringResource(R.string.accent_teal)
+                        VaultixAccentPalette.SLATE -> stringResource(R.string.accent_slate)
+                        VaultixAccentPalette.INDIGO -> stringResource(R.string.accent_indigo)
+                    }
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = UiSize.TouchTarget)
+                            .padding(vertical = Spacing.xs),
+                    ) {
+                        RadioButton(selected = palette == current, onClick = { onSelect(palette) })
+                        Box(
+                            modifier = Modifier
+                                .padding(start = Spacing.sm)
+                                .size(UiSize.BadgeIcon)
+                                .clip(VaultixCorner.Small)
+                                .background(primary),
+                        )
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.bodyLarge,
+                            modifier = Modifier.padding(start = Spacing.sm),
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            DialogOutlinedActionButton(text = stringResource(R.string.action_cancel), onClick = onDismiss)
+        },
+    )
 }
 
 /** 单选列表对话框：复制后自动清除剪贴板时长。 */

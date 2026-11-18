@@ -8,6 +8,7 @@
  */
 package io.vaultix.vaultix.passkey
 
+import io.vaultix.common.WebAuthn
 import io.vaultix.model.VaultFido2Credential
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -17,10 +18,11 @@ import org.junit.Test
 /**
  * [PasskeyExcludePolicy]（#208）。
  *
- * 三条必须钉住的边界：
+ * 四条必须钉住的边界：
  * 1. 命中 ⇒ 必须拦（不拦就是"同一站点注册出两把"）；
  * 2. **解析不出来不得拦**（`excludeCredentials` 是增益语义，解析失败挡住注册代价更大）；
- * 3. **别的 rpId 的凭证不算命中**（作用域就是本次请求的 rpId）。
+ * 3. **别的 rpId 的凭证不算命中**（作用域就是本次请求的 rpId）；
+ * 4. **同一个 ID 的不同文本形态必须判为同一把**（UUID 文本 / `b64.` 前缀 / 裸 base64url）。
  */
 class PasskeyExcludePolicyTest {
 
@@ -56,6 +58,17 @@ class PasskeyExcludePolicyTest {
         assertEquals(setOf("CCC"), PasskeyExcludePolicy.excludedIds(json))
     }
 
+    @Test
+    fun excludedIds_ignoresNonPublicKeyDescriptors() {
+        // 规范：descriptor 按 id + type 匹配，type != public-key 的必须忽略。
+        val json = """{"excludeCredentials":[
+            {"id":"AAA","type":"other"},
+            {"id":"BBB","type":"public-key"},
+            {"id":"CCC"}
+        ]}"""
+        assertEquals(setOf("BBB", "CCC"), PasskeyExcludePolicy.excludedIds(json))
+    }
+
     // ---- firstConflict ----------------------------------------------------
 
     @Test
@@ -79,5 +92,28 @@ class PasskeyExcludePolicyTest {
         assertNull(PasskeyExcludePolicy.firstConflict(emptySet(), existing, "example.com"))
         // rpId 为空 ⇒ 无从谈"本次请求的 rpId"，不得判定冲突。
         assertNull(PasskeyExcludePolicy.firstConflict(setOf("AAA"), existing, ""))
+    }
+
+    @Test
+    fun firstConflict_matchesSameIdAcrossEncodingForms() {
+        // 库里存 UUID 文本（Bitwarden 同步形态），请求里发 base64url —— 同一个 16 字节 ID。
+        val uuidText = "5698f18a-41e0-e865-0104-c989aee7dc18"
+        val asB64 = WebAuthn.rawIdFromStored(uuidText)
+        val existing = listOf(cred(uuidText, "example.com"))
+        assertNotNull(
+            "同一 ID 的两种文本形态必须判为冲突",
+            PasskeyExcludePolicy.firstConflict(setOf(asB64), existing, "example.com"),
+        )
+    }
+
+    @Test
+    fun firstConflict_matchesB64PrefixedStoredId() {
+        // Bitwarden SDK 2026.10+ 把 ID 存成 `b64.<base64url>`。
+        val body = WebAuthn.base64Url(ByteArray(32) { index -> index.toByte() })
+        val existing = listOf(cred("b64.$body", "example.com"))
+        assertNotNull(
+            "b64. 前缀形态必须与裸 base64url 对齐",
+            PasskeyExcludePolicy.firstConflict(setOf(body), existing, "example.com"),
+        )
     }
 }

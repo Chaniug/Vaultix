@@ -1,11 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Vaultix 自身条目的小图标（盾牌 + 钥匙孔），用于「库已锁定 / 在 Vaultix 中搜索」这类
-  整表认证行 —— 对齐 Bitwarden 在同类行使用 `logo_bitwarden_icon` 的做法。
+  Vaultix 自身标识（填充面板 header / 认证行 / 库列表空态共用），形态为折纸 V 单色剪影。
 
-  与其他自动填充图标不同：**这个不做 tint**（`shouldTintIcon = false`），
-  以免品牌标识被系统面板的前景色冲掉。形状为 Vaultix 自绘（盾牌取自 Material Symbols
-  security 图标的轮廓，钥匙孔为本项目补的负空间，靠 fillType="evenOdd" 挖空）。
+  ── 2026-11-18 从「盾牌 + 钥匙孔」换成折纸 V ──────────────────────
+  桌面启动图标（ic_launcher_foreground）已定案为折纸 V，用户真机确认效果满意；
+  但面板里仍是旧的自绘盾牌 + 钥匙孔，等于同一品牌两套形态。本次统一。
+
+  几何真源：ic_launcher_monochrome.xml 的两块 path（108 viewport）。
+  这里不是把桌面三色图标整体缩小：白色受光面在浅色面板会直接消失，三档明度
+  需要 48dp 以上才成立，而面板只给 12dp（header）与 24dp（认证行）。
+  故只取单色剪影，V 外接框从 108 坐标系的 34x34 等比放大到本文件 24 viewport 的
+  16x16（四周各留 4dp 安全边），缩放系数 16/34。换算式：x' = (x-37)*16/34 + 4，
+  y' = (y-40)*16/34 + 4。若日后真源几何有变，必须按同一公式重算这两条 path。
+
+  着色：fillColor 写白只是给个纯色；实际颜色由调用方 tint 覆盖：
+  面板走 AutofillDatasets.iconTint()（浅 #44474E / 深 #C4C6CF），
+  库列表空态走 MaterialTheme.colorScheme.primary。
+  strokeWidth 0.7 是真源 1.5 按同系数缩放后取整，保证 12dp 下两臂仍粗实。
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
@@ -13,7 +24,15 @@
     android:viewportWidth="24"
     android:viewportHeight="24">
     <path
-        android:fillColor="#FF000000"
-        android:fillType="evenOdd"
-        android:pathData="M12,1L3,5v6c0,5.55 3.84,10.74 9,12 5.16,-1.26 9,-6.45 9,-12V5l-9,-4zM12,6.6c1.38,0 2.5,1.12 2.5,2.5 0,0.98 -0.56,1.82 -1.38,2.22V14.5h-2.24v-3.18C10.06,10.92 9.5,10.08 9.5,9.1c0,-1.38 1.12,-2.5 2.5,-2.5z" />
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M4,4 L8.94,4 L12.47,13.88 L12.47,20 L10.82,20 Z"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="0.7"
+        android:strokeLineJoin="round" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M13.18,20 L11.53,20 L11.53,13.88 L15.06,4 L20,4 Z"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="0.7"
+        android:strokeLineJoin="round" />
 </vector>

@@ -10,6 +10,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dagger.hilt.android.AndroidEntryPoint
+import io.vaultix.datastore.VaultixPreferencesDefaults
 import io.vaultix.datastore.VaultixPreferences
 import io.vaultix.domain.VaultRepository
 import io.vaultix.vaultix.autofill.AutofillIntents
@@ -17,6 +18,7 @@ import io.vaultix.vaultix.ui.VaultixApp
 import io.vaultix.vaultix.ui.glass.isLiquidGlassBlurSupported
 import io.vaultix.vaultix.ui.theme.ScreenSecurityEffect
 import io.vaultix.vaultix.ui.theme.ThemeMode
+import io.vaultix.vaultix.ui.theme.VaultixAccentPalette
 import io.vaultix.vaultix.ui.theme.VaultixTheme
 import javax.inject.Inject
 
@@ -75,6 +77,10 @@ class MainActivity : FragmentActivity() {
             //    壁纸派生色、第二帧才回品牌浅色板（闪一下色）。理由见 VaultixBrandColor §五。
             val dynamicColor by preferences.dynamicColor
                 .collectAsStateWithLifecycle(initialValue = false)
+            // 主题色档位：与 themeMode 同一取向，组合顶层收一次再注入主题。
+            // 首帧占位值必须与 VaultixPreferencesDefaults.ACCENT_PALETTE 一致（默认蓝）。
+            val accentPalette by preferences.accentPalette
+                .collectAsStateWithLifecycle(initialValue = VaultixPreferencesDefaults.ACCENT_PALETTE)
             val oledPureBlack by preferences.oledPureBlack
                 .collectAsStateWithLifecycle(initialValue = false)
             // 底栏液态玻璃：与 themeMode / dynamicColor 同一取向 —— 观感偏好只在
@@ -89,6 +95,7 @@ class MainActivity : FragmentActivity() {
 
             VaultixTheme(
                 themeMode = ThemeMode.from(themeMode),
+                accentPalette = VaultixAccentPalette.from(accentPalette),
                 dynamicColor = dynamicColor,
                 oledPureBlack = oledPureBlack,
             ) {

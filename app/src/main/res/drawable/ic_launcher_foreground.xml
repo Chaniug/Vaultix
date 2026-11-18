@@ -12,8 +12,8 @@
   - Android 自适应图标：108x108dp、中心 66dp 安全圈、外层 18dp 留给遮罩；clean edges，
     轮廓周围不得有遮罩或背景阴影；矢量优先。
   - 单色层由系统着色，故彩色层的折叠与墨阱在单色层退化为纯剪影（见 monochrome 文件头）。
-  - 配色是现行低饱和蓝 #3B5BC4（对齐 VaultixBrandColor 的 primary），
-    受光面 #FFFFFF、背光面 #B9C6F0；三档明度是本图形成立的前提。
+  - 配色（2026-11-18 方案④）：底色 #1B2B63（深海军蓝，不再与 App 内 primary 同值），
+    受光面 #FFFFFF、背光面 #7690D4；三档明度 13.36 / 3.13 / 4.27 是本图形成立的前提。
 
   历史：旧的「徽章盾 + 金 V」经 V1 至 V5 五轮几何校准，已随该图形退役。
   原文归档在 Docs/progress/app-icon-geometry-history.md；两条纪律仍适用：
