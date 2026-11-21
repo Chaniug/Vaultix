@@ -3,6 +3,18 @@ package io.vaultix.domain
 import io.vaultix.model.VaultSummary
 import kotlinx.coroutines.flow.Flow
 
+/** 指纹门锁的解封结果。 */
+sealed interface FingerprintUnlockResult {
+    /** 房钥匙已载入内存。 */
+    data object Opened : FingerprintUnlockResult
+
+    /** 密钥或信封已永久不可解，可以执行既定降级。 */
+    data object Unavailable : FingerprintUnlockResult
+
+    /** 本次读取或认证失败，全部持久状态必须保留以供重试。 */
+    data object TemporarilyUnavailable : FingerprintUnlockResult
+}
+
 /**
  * 库生命周期与同步入口（Docs/01 §5 状态机、Docs/10 §4 会话管理）。
  *
@@ -222,10 +234,9 @@ interface VaultRepository {
      * 这是解锁路径上**唯一**的 Keystore 操作（定稿硬约束 #2）；此后各库走
      * [unlockVaultFromRoom] 纯软件解密 ——「rest 库现取新 cipher」（H2）结构性不存在。
      *
-     * @return false = unwrap 失败（KEK 失效 / 信封损坏）→ 按定稿 §6 优雅降级，
-     *   **不要**静默重试（auth-per-use 下再取 cipher 也无人授权）。
+     * @return 永久不可解时才允许降级；暂时不可用必须保留全部信封。
      */
-    suspend fun completeFingerprintUnlock(cipher: javax.crypto.Cipher): Boolean
+    suspend fun completeFingerprintUnlock(cipher: javax.crypto.Cipher): FingerprintUnlockResult
 
     /**
      * 关指纹门锁（删门锁信封；**全局**，定稿 §5.1：门锁开关 = 一次 wrap 的建立/删除）。

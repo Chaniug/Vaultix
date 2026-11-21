@@ -14,6 +14,7 @@ import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import io.vaultix.datastore.VaultixPreferences
+import io.vaultix.domain.FingerprintUnlockResult
 import io.vaultix.domain.RoomResealRepository
 import io.vaultix.domain.UnlockRecoveryRepository
 import io.vaultix.domain.VaultRepository
@@ -110,7 +111,7 @@ class ViewUnlockScopeTest {
         every { repository.pinLockAvailable() } returns flowOf(false)
         coEvery { repository.prepareFingerprintUnlock() } returns
             mockk<javax.crypto.Cipher>(relaxed = true)
-        coEvery { repository.completeFingerprintUnlock(any()) } returns true
+        coEvery { repository.completeFingerprintUnlock(any()) } returns FingerprintUnlockResult.Opened
 
         // 当前库处于查看锁：构造期会同步读到（`_state` 的初值就靠这一句）。
         every { sessions.observeViewLockedVaultIds() } returns flowOf(setOf(vaultId))

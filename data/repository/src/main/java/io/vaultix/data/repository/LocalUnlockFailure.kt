@@ -37,8 +37,6 @@ package io.vaultix.data.repository
  *
  * - [android.security.keystore.KeyPermanentlyInvalidatedException]
  *   —— 用户新增/删除指纹后 KEK 被永久失效（`setInvalidatedByBiometricEnrollment(true)` 的默认后果）
- * - [java.security.UnrecoverableKeyException]
- *   —— 密钥不可恢复（陈旧句柄 / Keystore 被重置 / 设备锁屏被清除）
  * - [javax.crypto.AEADBadTagException]
  *   —— 密文校验失败（payload 与当前 KEK 不匹配，通常意味着 KEK 已被替换）
  *
@@ -60,7 +58,6 @@ internal fun Throwable.isLocalUnlockUnrecoverable(): Boolean {
     while (cursor != null && depth < MAX_CAUSE_DEPTH) {
         when (cursor) {
             is android.security.keystore.KeyPermanentlyInvalidatedException,
-            is java.security.UnrecoverableKeyException,
             is javax.crypto.AEADBadTagException,
             -> return true
         }
@@ -98,8 +95,8 @@ enum class LocalUnlockFailureKind {
     /**
      * 密码学层确认旧信封已不可解，但**钥匙本身可能仍在手里** ⇒ 可重装自愈。
      *
-     * 覆盖：`KeyPermanentlyInvalidatedException`（凭据变更）、
-     * `AEADBadTagException`（密文与当前 KEK 不匹配）、`UnrecoverableKeyException`。
+     * 覆盖：`KeyPermanentlyInvalidatedException`（凭据变更）与
+     * `AEADBadTagException`（密文与当前 KEK 不匹配）。
      */
     Rearmable,
 

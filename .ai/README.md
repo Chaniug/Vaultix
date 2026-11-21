@@ -24,7 +24,18 @@
 - 已接进 CI：`ci-debug.yml` 的 `sandbox-tests` job 用**同一份脚本**，与 `android-ci` 并行
   ⇒ 本地绿 ⇒ CI 不会红在同一件事上。
 
-## 🕐 最新状态（2026-11-18 · v0.13.8 正式发布：自动填充精准度 + 通行密钥 + 主题图标）
+## 🕐 最新状态（2026-11-21 · #303 Keystore 暂时故障不再误删快速解锁状态）
+
+- 指纹解封改为 `Opened / Unavailable / TemporarilyUnavailable`：暂时异常只报失败，不进入 rearm/degrade；
+  永久不可解才沿用原有降级与清理。
+- Never 档 auto 解封增加暂时故障态：仅密钥永久失效或信封损坏才删 `house_lock_auto`。
+- `UnrecoverableKeyException` 按可重试处理；异常链里明确的 `KeyPermanentlyInvalidatedException` 仍判永久失效。
+- 验证：`data/repository` **358 例全绿**，全部静态门禁通过。详见
+  [`issues/04-锁与解锁-part10.md`](./issues/04-锁与解锁-part10.md) #303。只推 `main`，不合 `rele`。
+
+---
+
+## 上一轮（2026-11-18 · v0.13.8 正式发布：自动填充精准度 + 通行密钥 + 主题图标）
 
 > **一句话**：用户「都没问题」验收后指令「合入 rele 发一个 release」。当日完成四条线：
 > ① 自动填充误弹/包名专项（7 处 + 12 例）；② passkey `b64.` 前缀 + allow/exclude 统一字节比较；

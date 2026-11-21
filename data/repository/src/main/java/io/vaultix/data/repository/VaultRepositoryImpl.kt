@@ -24,6 +24,7 @@ import io.vaultix.database.entity.VaultEntity
 import io.vaultix.datastore.LocalUnlockKeyStore
 import io.vaultix.datastore.SecureCredentialStore
 import io.vaultix.datastore.VaultixPreferences
+import io.vaultix.domain.FingerprintUnlockResult
 import io.vaultix.domain.KdbxAddOutcome
 import io.vaultix.domain.LocalUnlockEnrollOutcome
 import io.vaultix.domain.LocalUnlockPreparedEnrollment
@@ -735,7 +736,7 @@ class VaultRepositoryImpl @Inject constructor(
      * 解指纹门锁第二步（认证已过）：房钥匙进内存。
      * 解锁路径上**唯一**的 Keystore 操作；此后各库 [unlockVaultFromRoom] 纯软件。
      */
-    override suspend fun completeFingerprintUnlock(cipher: Cipher): Boolean =
+    override suspend fun completeFingerprintUnlock(cipher: Cipher): FingerprintUnlockResult =
         houseKeyStore.completeFingerprintUnlock(cipher)
 
     /**

@@ -13,10 +13,12 @@ import io.vaultix.crypto.PinKeyWrapper
 import io.vaultix.crypto.PinUnwrapResult
 import io.vaultix.crypto.SecureBytes
 import io.vaultix.crypto.VaultixCrypto
+import io.vaultix.datastore.AutoUnlockDecryptResult
 import io.vaultix.datastore.AutoUnlockKeyStore
 import io.vaultix.datastore.LocalUnlockKekStatus
 import io.vaultix.datastore.LocalUnlockKeyStore
 import io.vaultix.datastore.SecureCredentialStore
+import io.vaultix.domain.FingerprintUnlockResult
 import io.vaultix.domain.PIN_MAX_ATTEMPTS
 import io.vaultix.domain.PIN_MIN_LENGTH
 import io.vaultix.domain.PinChangeOutcome
@@ -305,16 +307,33 @@ class HouseKeyStore @Inject constructor(
      * 这是解锁路径上**唯一**的 Keystore 操作（硬约束 #2）——之后所有库都走
      * [openRoom] 纯软件解密，rest 库「现取新 cipher」的路径（H2）结构性不存在。
      *
-     * @return false = unwrap 失败（KEK 失效 / 信封损坏）。上层按定稿 §6 降级处理，
-     *   **不要**静默重试（auth-per-use 下再取 cipher 也无人授权）。
+     * @return 永久不可解时返回 [FingerprintUnlockResult.Unavailable]；
+     *   暂时故障保留信封并允许上层重试。
      */
-    suspend fun completeFingerprintUnlock(cipher: Cipher): Boolean =
+    suspend fun completeFingerprintUnlock(cipher: Cipher): FingerprintUnlockResult =
         withContext(Dispatchers.IO) {
             val payload = credentials.getString(FINGERPRINT_ENVELOPE_KEY)
-                ?: return@withContext false
-            runCatching { localUnlockKeyStore.unwrap(cipher, payload) }
-                .getOrElse { return@withContext false }
-                .let { adoptHouseKey(it) }
+                ?: return@withContext if (hasFingerprintEnvelope()) {
+                    FingerprintUnlockResult.TemporarilyUnavailable
+                } else {
+                    FingerprintUnlockResult.Unavailable
+                }
+            runCatching { localUnlockKeyStore.unwrap(cipher, payload) }.fold(
+                onSuccess = { plain ->
+                    if (adoptHouseKey(plain)) {
+                        FingerprintUnlockResult.Opened
+                    } else {
+                        FingerprintUnlockResult.Unavailable
+                    }
+                },
+                onFailure = { error ->
+                    if (error.isLocalUnlockUnrecoverable()) {
+                        FingerprintUnlockResult.Unavailable
+                    } else {
+                        FingerprintUnlockResult.TemporarilyUnavailable
+                    }
+                },
+            )
         }
 
     /**
@@ -485,18 +504,22 @@ class HouseKeyStore @Inject constructor(
     /**
      * 解自动恢复信封：房钥匙回内存（进程死亡后的自动恢复第一步）。
      *
-     * @return false = 信封不存在 / 不可解（密钥失效或信封损坏 —— 后者就地删除，
-     *   避免每次启动白跑一次注定失败的解密）。失败不上抛：协调器按「回主密码」降级。
+     * @return false = 信封不存在 / 不可解。仅永久失效或损坏会删除信封；
+     *   暂时故障保留信封，后续冷启动可重试。
      */
     suspend fun openAutoEnvelope(): Boolean = withContext(Dispatchers.IO) {
         val payload = credentials.getString(AUTO_ENVELOPE_KEY)
             ?: return@withContext false
-        val plain = autoUnlockKeyStore.decrypt(payload)
-        if (plain == null) {
-            credentials.remove(AUTO_ENVELOPE_KEY)
-            return@withContext false
+        when (val result = autoUnlockKeyStore.decrypt(payload)) {
+            is AutoUnlockDecryptResult.Opened -> adoptHouseKey(result.plain)
+            AutoUnlockDecryptResult.Unavailable,
+            AutoUnlockDecryptResult.Damaged,
+            -> {
+                credentials.remove(AUTO_ENVELOPE_KEY)
+                false
+            }
+            AutoUnlockDecryptResult.TemporarilyUnavailable -> false
         }
-        adoptHouseKey(plain)
     }
 
     /**

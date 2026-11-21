@@ -18,15 +18,32 @@
 package io.vaultix.datastore
 
 import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import java.security.KeyStore
+import javax.crypto.AEADBadTagException
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 import javax.inject.Inject
 import javax.inject.Singleton
+
+/** 自动恢复信封的解封结果。 */
+sealed interface AutoUnlockDecryptResult {
+    /** 解封成功，[plain] 由调用方接管并清零。 */
+    data class Opened(val plain: ByteArray) : AutoUnlockDecryptResult
+
+    /** 密钥已缺失或永久失效，旧信封不可恢复。 */
+    data object Unavailable : AutoUnlockDecryptResult
+
+    /** 信封格式或认证标签损坏。 */
+    data object Damaged : AutoUnlockDecryptResult
+
+    /** 本次读取失败，信封必须保留以供重试。 */
+    data object TemporarilyUnavailable : AutoUnlockDecryptResult
+}
 
 /**
  * 「从不锁定」档位的自动恢复门禁（对齐 Bitwarden `userAutoUnlockKey` 的载体）。
@@ -73,22 +90,25 @@ class AutoUnlockKeyStore @Inject constructor() {
         }
     }.getOrNull()
 
-    /**
-     * 解开自动恢复信封。
-     *
-     * @return 明文；null = 信封损坏 / 密钥不可用（密钥不存在或永久失效时
-     *   该信封**永久不可解**，调用方应删除它，避免每次启动白跑一次注定失败的解密）。
-     */
-    fun decrypt(payload: String): ByteArray? = runCatching {
+    /** 解开自动恢复信封，并区分永久失败与暂时故障。 */
+    fun decrypt(payload: String): AutoUnlockDecryptResult = runCatching {
         val parts = payload.split(SEPARATOR)
-        check(parts.size == 2) { "invalid auto-unlock payload" }
+        require(parts.size == 2) { "invalid auto-unlock payload" }
         val iv = Base64.decode(parts[0], Base64.NO_WRAP)
         val ciphertext = Base64.decode(parts[1], Base64.NO_WRAP)
-        val key = loadKey() ?: return null
-        Cipher.getInstance(TRANSFORMATION).apply {
+        val key = loadKey() ?: return AutoUnlockDecryptResult.Unavailable
+        val plain = Cipher.getInstance(TRANSFORMATION).apply {
             init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(TAG_BITS, iv))
         }.doFinal(ciphertext)
-    }.getOrNull()
+        AutoUnlockDecryptResult.Opened(plain)
+    }.getOrElse { error ->
+        when {
+            error.hasPermanentInvalidation() -> AutoUnlockDecryptResult.Unavailable
+            error.hasFailure<AEADBadTagException>() || error.hasFailure<IllegalArgumentException>() ->
+                AutoUnlockDecryptResult.Damaged
+            else -> AutoUnlockDecryptResult.TemporarilyUnavailable
+        }
+    }
 
     /** 删除 Keystore 密钥（信封随之永久不可解；调用方应连带删信封）。幂等。 */
     fun deleteKey() {
@@ -125,10 +145,23 @@ class AutoUnlockKeyStore @Inject constructor() {
     }
 
     /** 只读加载既有密钥（不存在返回 null）。 */
-    private fun loadKey(): SecretKey? = runCatching {
+    private fun loadKey(): SecretKey? =
         KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
             .getKey(KEY_ALIAS, null) as? SecretKey
-    }.getOrNull()
+
+    private fun Throwable.hasPermanentInvalidation(): Boolean =
+        hasFailure<KeyPermanentlyInvalidatedException>()
+
+    private inline fun <reified T : Throwable> Throwable.hasFailure(): Boolean {
+        var cursor: Throwable? = this
+        var depth = 0
+        while (cursor != null && depth < MAX_CAUSE_DEPTH) {
+            if (cursor is T) return true
+            cursor = cursor.cause
+            depth++
+        }
+        return false
+    }
 
     private companion object {
         const val ANDROID_KEYSTORE = "AndroidKeyStore"
@@ -137,5 +170,6 @@ class AutoUnlockKeyStore @Inject constructor() {
         const val KEY_SIZE_BITS = 256
         const val TAG_BITS = 128
         const val SEPARATOR = "."
+        const val MAX_CAUSE_DEPTH = 8
     }
 }

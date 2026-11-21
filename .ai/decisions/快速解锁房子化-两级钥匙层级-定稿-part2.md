@@ -22,7 +22,7 @@
 | **降级** | `UnlockRecoveryRepository.degradeFingerprintLock(): FingerprintDegradeReport` → `disableFingerprintLock()` + 回主密码 | **绝不静默**（硬约束 #5）：按 `roomsRemoved` / `remainingLocks` 三选一用户可见文案；无指纹信封时 no-op（不误伤房间信封） |
 | **StaleCredentials** | `RoomResealRepository.resealRoom(vaultId, newMasterPassword)` 复用 `LocalUnlockEnrollment.prepareForVaults` → 只重包该房间软件信封 | `UnlockViewModel` 在 `RoomUnlockOutcome.StaleCredentials` 分支用**刚输入的主密码**重包；失败一律静默（不把「能进去」这个好消息变报错） |
 | **PIN 熔断全局 5 次** | 批次 1 已把 N 信封收敛为 1 门锁信封 ⇒ 计数天然全局 | 本批无需改计数（旧每库计数随旧信封一起删除） |
-| **auto 信封失效** | `HouseKeyStore.openAutoEnvelope` 返回 null ⇒ 就地删信封自愈（批次 3.5 已做，单测已钉） | 密钥不可用 / 信封损坏不打扰用户：Never 档的恢复能力本就"想恢复才要"，恢复不了退回普通解锁即可 |
+| **auto 信封失效** | `AutoUnlockDecryptResult` 区分暂时故障 / 永久失效 / 损坏（#303） | 暂时故障保留信封并允许后续重试；仅永久失效与确认损坏删除，恢复失败退回普通解锁 |
 
 **★ 本批最重要的一条判据**：开门 / 关门的**唯一正确判据**是 `HouseKeyStore.isUnlocked`。
 误用「门锁信封存在」当判据会把 rearm 走成降级 —— 那会**连带清掉房间信封**（用户丢库）。

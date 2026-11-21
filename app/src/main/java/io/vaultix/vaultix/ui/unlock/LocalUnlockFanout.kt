@@ -8,6 +8,7 @@
  */
 package io.vaultix.vaultix.ui.unlock
 
+import io.vaultix.domain.FingerprintUnlockResult
 import io.vaultix.domain.RoomUnlockOutcome
 import io.vaultix.domain.UnlockRecoveryRepository
 import io.vaultix.domain.VaultRepository
@@ -105,7 +106,8 @@ internal object LocalUnlockFanout {
      *
      * ## 门锁失败时的分叉（失效矩阵，定稿 §6；批次 4）
      *
-     * 指纹门锁解不开有两种**完全不同**的原因，混为一谈会犯两类错误：
+     * 暂时故障只返回 [LocalUnlockMessage.LockFailed]，不进入重装或降级。
+     * 永久不可解时再按房钥匙是否在内存分为两种情况：
      *
      * | 局面 | 判据 | 动作 |
      * |---|---|---|
@@ -149,12 +151,15 @@ internal object LocalUnlockFanout {
         // ★ 诊断埋点（2026-09-17 补、房子化后保留）：排「指纹过了却又让人解锁」
         //   必须能量化到"哪个库、哪种结论"，否则只能猜。
         AutofillLogger.d("fanout start first=$first rest=${rest.size}")
-        // 门锁解不开（KEK 失效 / 信封损坏）：没钥匙，各库全是 NoKey —— 早退，
-        // 不白跑循环。首库给主密码回退提示（定稿 §6：不静默重试，如实降级）。
-        val lockOpened = runCatching { repository.completeFingerprintUnlock(cipher) }
-            .getOrElse { false }
-        if (!lockOpened) {
-            val failure = handleLockFailure(recovery)
+        // 暂时故障保留全部状态；永久不可解才进入失效善后。
+        val lockResult = runCatching { repository.completeFingerprintUnlock(cipher) }
+            .getOrElse { FingerprintUnlockResult.TemporarilyUnavailable }
+        if (lockResult != FingerprintUnlockResult.Opened) {
+            val failure = if (lockResult == FingerprintUnlockResult.TemporarilyUnavailable) {
+                LocalUnlockMessage.LockFailed
+            } else {
+                handleLockFailure(recovery)
+            }
             AutofillLogger.d("fanout lock → 门锁解封失败（${failure.name}）")
             return Result(
                 first = RoomUnlockOutcome.Unavailable(failure.name),
@@ -255,7 +260,7 @@ internal object LocalUnlockFanout {
     }
 
     /**
-     * 门锁解封失败时的失效善后分叉，返回**给用户看的原因**。
+     * 门锁永久不可解时的失效善后分叉，返回**给用户看的原因**。
      *
      * 三种局面（见 [unlockAll] 的 KDoc 表）：
      *
