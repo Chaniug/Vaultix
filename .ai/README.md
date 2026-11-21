@@ -30,8 +30,10 @@
   永久不可解才沿用原有降级与清理。
 - Never 档 auto 解封增加暂时故障态：仅密钥永久失效或信封损坏才删 `house_lock_auto`。
 - `UnrecoverableKeyException` 按可重试处理；异常链里明确的 `KeyPermanentlyInvalidatedException` 仍判永久失效。
-- 验证：`data/repository` **358 例全绿**，全部静态门禁通过。详见
-  [`issues/04-锁与解锁-part10.md`](./issues/04-锁与解锁-part10.md) #303。只推 `main`，不合 `rele`。
+- 验证：`data/repository` **358 例全绿**，全部静态门禁通过；GitHub Actions `44907156878`
+  两个 job 均成功（Debug APK 构建、完整单测、Sandbox 单测），docs `44907156930` 成功。
+- preview：`v0.13.8-dev-d9d6511 · Preview` / `Vaultix-d9d6511.apk`（37,645,466 B）。
+  详见 [`issues/04-锁与解锁-part10.md`](./issues/04-锁与解锁-part10.md) #303。只推 `main`，不合 `rele`。
 
 ---
 
