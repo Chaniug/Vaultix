@@ -16,6 +16,7 @@ import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
 import io.vaultix.domain.FingerprintDegradeReport
+import io.vaultix.domain.FingerprintUnlockResult
 import io.vaultix.domain.RoomUnlockOutcome
 import io.vaultix.domain.UnlockRecoveryRepository
 import io.vaultix.domain.VaultRepository
@@ -68,7 +69,11 @@ class LocalUnlockFanoutTest {
         roomCalls: MutableList<String> = mutableListOf(),
         outcomeOf: (String) -> RoomUnlockOutcome = { RoomUnlockOutcome.Opened },
     ): VaultRepository = mockk {
-        coEvery { completeFingerprintUnlock(cipher) } returns lockOpened
+        coEvery { completeFingerprintUnlock(cipher) } returns if (lockOpened) {
+            FingerprintUnlockResult.Opened
+        } else {
+            FingerprintUnlockResult.Unavailable
+        }
         coEvery { unlockVaultFromRoom(any()) } answers { call ->
             val id = call.invocation.args.first() as String
             roomCalls += id
@@ -225,7 +230,7 @@ class LocalUnlockFanoutTest {
     @Test
     fun `单个库开房抛异常时算进失败而不中止扇出`() = runTest {
         val repository = mockk<VaultRepository> {
-            coEvery { completeFingerprintUnlock(cipher) } returns true
+            coEvery { completeFingerprintUnlock(cipher) } returns FingerprintUnlockResult.Opened
             coEvery { unlockVaultFromRoom("a") } throws RuntimeException("boom")
             coEvery { unlockVaultFromRoom("b") } returns RoomUnlockOutcome.Opened
         }
@@ -266,7 +271,7 @@ class LocalUnlockFanoutTest {
     }
 
     private fun failedRepository(): VaultRepository = mockk {
-        coEvery { completeFingerprintUnlock(cipher) } returns false
+        coEvery { completeFingerprintUnlock(cipher) } returns FingerprintUnlockResult.Unavailable
     }
 
     @Test
@@ -291,6 +296,27 @@ class LocalUnlockFanoutTest {
         assertThat(lockMessageOf(result)).isEqualTo(LocalUnlockMessage.RearmPending)
         // 反面对照：绝不能落到任何"已关闭"局面（那是说锁被停了，与事实相反）。
         assertThat(lockMessageOf(result)).isNotEqualTo(LocalUnlockMessage.Degraded)
+    }
+
+    @Test
+    fun `门锁暂时异常_保留全部注册且不降级`() = runTest {
+        val recovery = recovery(keyInMemory = false)
+        val repository = mockk<VaultRepository> {
+            coEvery { completeFingerprintUnlock(cipher) } throws
+                android.security.keystore.UserNotAuthenticatedException()
+        }
+
+        val result = LocalUnlockFanout.unlockAll(
+            repository = repository,
+            first = "a",
+            rest = listOf("b"),
+            cipher = cipher,
+            recovery = recovery,
+        )
+
+        coVerify(exactly = 0) { recovery.markRearmPending() }
+        coVerify(exactly = 0) { recovery.degradeFingerprintLock() }
+        assertThat(lockMessageOf(result)).isEqualTo(LocalUnlockMessage.LockFailed)
     }
 
     @Test

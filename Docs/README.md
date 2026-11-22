@@ -14,7 +14,7 @@
 | **活跃真源** | [`.ai/README.md`](../.ai/README.md) 顶部、[`.ai/MEMORY.md`](../.ai/MEMORY.md)、[`.ai/ISSUES.md`](../.ai/ISSUES.md) + `issues/`、[`.ai/conventions/8.x`](../.ai/conventions/8.10-架构与目录地图.md)、[`progress/next-steps.md`](./progress/next-steps.md) | 倒序更新、接力第一站 | ✅ **只有这一类能** |
 | **设计期蓝图** | 本目录 `00`~`18`（2026-09-07） | 当时的规划与验收目标 | ❌ 只能读「当初想怎么做」，见 §2 |
 | **施工记录 / 决策** | [`progress/`](./progress/README.md)：`decisions.md`、`*-plan.md`、`*-handoff.md`、`audit/`、各 `archive-*` | 按日期冻结的过程留痕 | ⚠️ 只看结论与真源指针；过程会过时 |
-| **版本冻结** | [`release-notes/v*.md`](./release-notes/v0.13.2.md) | 发布页正文直接读它 | ❌ **不改写已发布版本** |
+| **版本冻结** | [`release-notes/v*.md`](./release-notes/)（例：[`v0.13.2.md`](./release-notes/v0.13.2.md)，仅作文件名示例；当前版本看 `VERSION` / Releases） | 发布页正文直接读它 | ❌ **不改写已发布版本** |
 | **第三方只读** | `reference/bastion/`（仓库根下） | 上游 Bastion（GPL-3.0） | ❌ 不是本项目 |
 
 另：根 [`README.md`](../README.md) 与 [`SECURITY.md`](../SECURITY.md) 面向用户，属于活跃文档，
@@ -38,7 +38,7 @@
 | 00 / 13 | [项目总览](./00-项目总览.md) §3.1、[路线图](./13-路线图与里程碑.md) M3 | 安全中心 13 类告警、5 套主题、可自定义 Dock | 安全中心**未做**（根 README 状态表仍是 ⬜）；主题是 M3 + 动态取色 + OLED 纯黑；M3/M4/M5 是**规划**，不是当前进度 |
 | 07 / 08 | 设计系统 / 界面规格 | 早期配色与逐屏布局 | #282~#285 多轮 UI 重做后已明显不符；#285 作废了 `xxxContainer` 交叉与 alpha 分档，改 M3 fixed accent roles |
 | 09 / 17 | 安全 / 稳定性 | 日志与全局崩溃兜底 | #291 才把 release 下裸 `Log` 收敛到 `VaultixLog`；#289 实测**工程没有全局 `CoroutineExceptionHandler`**，崩溃可取证（S6）仍是待决项 —— 蓝图里的「兜底」是设计要求，不是现状 |
-| 全 19 篇 | — | 2026-09-07 定稿 | 最新稳定版 **v0.13.2**（2026-11-14）；当前状态一律看 `.ai/README.md` 顶部 |
+| 全 19 篇 | — | 2026-09-07 定稿 | 当前版本一律看仓库根 `VERSION` / GitHub Releases；当前状态看 `.ai/README.md` 顶部 |
 
 ---
 
@@ -54,7 +54,7 @@
 | 发布产物命名形状 | [`.ai/conventions/8.12-发布产物命名.md`](../.ai/conventions/8.12-发布产物命名.md) |
 | 待办 / 待真机验收 | [`progress/next-steps.md`](./progress/next-steps.md) |
 | 已冻结的逐轮进度留痕 | [`progress/current-status.md`](./progress/current-status.md)（**只读**） |
-| 已发布版本的变更说明 | [`release-notes/`](./release-notes/v0.13.2.md)（按版本冻结） |
+| 已发布版本的变更说明 | [`release-notes/`](./release-notes/)（按版本冻结；当前版本看 `VERSION` / Releases） |
 
 ---
 

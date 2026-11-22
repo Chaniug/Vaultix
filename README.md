@@ -10,7 +10,7 @@
 [![Release](https://img.shields.io/github/v/release/Chaniug/Vaultix?include_prereleases&label=release)](https://github.com/Chaniug/Vaultix/releases)
 [![License](https://img.shields.io/badge/License-GPL--3.0--or--later-blue.svg)](./LICENSE)
 [![Platform](https://img.shields.io/badge/Android-8.0%2B%20(API%2026)-3DDC84?logo=android&logoColor=white)](https://developer.android.com)
-[![Kotlin](https://img.shields.io/badge/Kotlin-2.4-7F52FF?logo=kotlin&logoColor=white)](https://kotlinlang.org)
+[![Kotlin](https://img.shields.io/badge/Kotlin-2.4.21-7F52FF?logo=kotlin&logoColor=white)](https://kotlinlang.org)
 [![Compose](https://img.shields.io/badge/Jetpack%20Compose-Material%203-4285F4?logo=jetpackcompose&logoColor=white)](https://developer.android.com/jetpack/compose)
 
 [**官网**](https://vaultix.valk.ccwu.cc) · [**下载 APK**](https://github.com/Chaniug/Vaultix/releases/latest) · [**预览版**](https://github.com/Chaniug/Vaultix/releases/tag/preview)
@@ -119,14 +119,14 @@ Vaultix 是一个 Android 密码管理器。与多数同类不同的是，它**�
 
 | 层 | 选型 |
 |---|---|
-| 语言 | Kotlin 2.4 |
+| 语言 | Kotlin 2.4.21（以 `gradle/libs.versions.toml` 为准） |
 | UI | Jetpack Compose + Material 3 |
 | 异步 | Coroutines / Flow |
 | 本地存储 | Room（条目缓存）+ DataStore（偏好）+ Android Keystore（密钥） |
 | 网络 | Retrofit / OkHttp + MSAL（OneDrive） |
 | DI | Hilt |
 | KDBX | [`app.keemobile:kotpass`](https://github.com/keemobile/kotpass)（MIT） |
-| 构建 | Gradle 9 + AGP 9 · compileSdk 37 · minSdk 26 · 只出 `arm64-v8a` |
+| 构建 | Gradle 9.8.2 + AGP 9.5.0 · compileSdk 37 · minSdk 26 · 只出 `arm64-v8a`（版本以 wrapper 与 version catalog 为准） |
 | 质量门 | detekt（含复杂度/规模阈值，见 [`config/detekt`](./config/detekt/detekt.yml)） |
 
 ## 🚀 构建
@@ -220,7 +220,7 @@ app/                 # UI 层：Compose 界面、导航、ViewModel、自动填�
 除 `android-ci` 外还有两个并行 job：`sandbox-tests`（纯逻辑模块真编译 + 真单测）与
 `AI docs consistency`（`.ai/` 索引与全仓 markdown 相对链接）。
 
-`.ai/tools/` 下另有 **23 个 `check_*.py` 门禁脚本 + 20 个自测**，专门抓
+`.ai/tools/` 下另有 **25 个 `check_*.py` 门禁脚本 + 20 个自测**，专门抓
 **detekt 查不出、本地单模块编译也不报、只有 CI 跨模块编译才炸**，以及**连编译都不报**的
 那几类问题（跨文件 `private` 调用、`R.string` 引用、实验性 API 的 `@OptIn` 覆盖、
 签名里的类型名可解析、多态状态被压成二值、零引用字符串、**状态变量只写不读**），
@@ -292,9 +292,9 @@ base64 -w0 vaultix-release.jks
 
 ## 🗺 状态
 
-当前稳定版 **0.13.2**（2026-11-14 发布，见 [`VERSION`](./VERSION) 与
-[Releases](https://github.com/Chaniug/Vaultix/releases/latest)）。**版本号以这两处为准**，
-本文档不另立真源；早期开发中，API 与数据格式仍可能变动。
+当前稳定版与版本号以仓库根 [`VERSION`](./VERSION) 和
+[GitHub Releases](https://github.com/Chaniug/Vaultix/releases/latest) 为准；
+本文件不写死稳定版号（历史多次因多处硬编码而漂移）。早期开发中，API 与数据格式仍可能变动。
 
 | 里程碑 | 状态 |
 |---|---|
@@ -307,7 +307,7 @@ base64 -w0 vaultix-release.jks
 | M4 / M5 发布准备 / 1.0 | ⬜ TODO |
 
 - ✅ 多库并存、通行密钥、验证码（含自动复制下一个）、卡包、权限管理页、网盘账号页
-- 🚧 进行中：性能专项优化、KDBX 库内 SSH 字段映射
+- 🚧 计划 / 进行中：性能专项优化（见 [`perf-plan.md`](./Docs/progress/perf-plan.md)）、KDBX 库内 SSH 字段映射；以 [`next-steps.md`](./Docs/progress/next-steps.md) 顶部为准
 - ✅ JSON⇄KDBX 互转：W1–W5 已落地（端到端往返比对，当时 CI 1142 例零失败）
 - ⏭ **W6 真机互操作**（KeePassXC / KeePassDX 打开**转换产物**）：按 2026-11-12 决定不单独执行。属互转验收链，**不是 M2 引擎的遗留项**；清单见 [json-kdbx-lossless-conversion.md](./Docs/progress/json-kdbx-lossless-conversion.md)
 - 📋 计划：性能优化见 [Docs/progress/perf-plan.md](./Docs/progress/perf-plan.md)

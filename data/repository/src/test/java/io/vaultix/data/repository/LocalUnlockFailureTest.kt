@@ -34,8 +34,8 @@ class LocalUnlockFailureTest {
     }
 
     @Test
-    fun unrecoverableKey_isUnrecoverable() {
-        assertTrue(UnrecoverableKeyException("stale handle").isLocalUnlockUnrecoverable())
+    fun unrecoverableKey_isRecoverable() {
+        assertFalse(UnrecoverableKeyException("stale handle").isLocalUnlockUnrecoverable())
     }
 
     /**
@@ -121,11 +121,10 @@ class LocalUnlockFailureTest {
 
     @Test
     fun failureKind_cryptoLayerFailures_areRearmable() {
-        // 凭据变更 / 密文不匹配 / 钥匙不可恢复 ⇒ 旧信封解不开，但可能重装。
+        // 凭据变更 / 密文不匹配 ⇒ 旧信封解不开，但可能重装。
         val cryptoFailures = listOf(
             KeyPermanentlyInvalidatedException(),
             AEADBadTagException(),
-            UnrecoverableKeyException("stale handle"),
         )
 
         cryptoFailures.forEach { error ->
@@ -144,6 +143,14 @@ class LocalUnlockFailureTest {
             "UserNotAuthenticatedException 只是本次未认证，重试即可",
             LocalUnlockFailureKind.Recoverable,
             UserNotAuthenticatedException().localUnlockFailureKind(),
+        )
+    }
+
+    @Test
+    fun failureKind_unrecoverableKey_isRecoverable() {
+        assertEquals(
+            LocalUnlockFailureKind.Recoverable,
+            UnrecoverableKeyException("stale handle").localUnlockFailureKind(),
         )
     }
 

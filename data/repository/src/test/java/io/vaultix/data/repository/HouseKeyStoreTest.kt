@@ -7,12 +7,17 @@ import io.mockk.mockk
 import io.vaultix.crypto.PinKeyWrapper
 import io.vaultix.crypto.PinUnwrapResult
 import io.vaultix.crypto.VaultixCrypto
+import io.vaultix.datastore.AutoUnlockDecryptResult
 import io.vaultix.datastore.AutoUnlockKeyStore
 import io.vaultix.datastore.LocalUnlockKekStatus
 import io.vaultix.datastore.LocalUnlockKeyStore
 import io.vaultix.datastore.SecureCredentialStore
+import io.vaultix.domain.FingerprintUnlockResult
 import io.vaultix.domain.PIN_MAX_ATTEMPTS
+import java.security.ProviderException
+import java.security.UnrecoverableKeyException
 import java.util.Base64
+import javax.crypto.AEADBadTagException
 import javax.crypto.Cipher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.runTest
@@ -105,7 +110,10 @@ class HouseKeyStoreTest {
             Base64.getEncoder().encodeToString(firstArg<ByteArray>().copyOf())
         }
         every { autoUnlockKeyStore.decrypt(any()) } answers {
-            runCatching { Base64.getDecoder().decode(firstArg<String>()) }.getOrNull()
+            runCatching { Base64.getDecoder().decode(firstArg<String>()) }.fold(
+                onSuccess = { AutoUnlockDecryptResult.Opened(it) },
+                onFailure = { AutoUnlockDecryptResult.Damaged },
+            )
         }
         every { autoUnlockKeyStore.deleteKey() } just Runs
         house = HouseKeyStore(
@@ -133,7 +141,7 @@ class HouseKeyStoreTest {
         assertFalse(house.isUnlocked)
 
         // 指纹路径解回钥匙 ⇒ 能开同一份房间信封。
-        assertTrue(house.completeFingerprintUnlock(cipher))
+        assertEquals(FingerprintUnlockResult.Opened, house.completeFingerprintUnlock(cipher))
         val viaFingerprint = house.openRoom("vault-1")
         assertTrue(viaFingerprint is RoomOpen.Opened)
         assertArrayEquals(secret, (viaFingerprint as RoomOpen.Opened).payload)
@@ -145,6 +153,41 @@ class HouseKeyStoreTest {
         val viaPin = house.openRoom("vault-1")
         assertTrue(viaPin is RoomOpen.Opened)
         assertArrayEquals(secret, (viaPin as RoomOpen.Opened).payload)
+    }
+
+    @Test
+    fun `指纹暂时异常_返回暂时不可用且保留信封`() = runTest {
+        house.enrollFingerprintLock(cipher)
+        house.lock()
+        every { localUnlockKeyStore.unwrap(any(), any()) } throws ProviderException("temporarily unavailable")
+
+        val result = house.completeFingerprintUnlock(cipher)
+
+        assertEquals(FingerprintUnlockResult.TemporarilyUnavailable, result)
+        assertTrue(house.hasFingerprintEnvelope())
+        assertFalse(house.isUnlocked)
+    }
+
+    @Test
+    fun `指纹密钥暂时不可读_不得误判为永久失效`() = runTest {
+        house.enrollFingerprintLock(cipher)
+        house.lock()
+        every { localUnlockKeyStore.unwrap(any(), any()) } throws UnrecoverableKeyException("stale handle")
+
+        val result = house.completeFingerprintUnlock(cipher)
+
+        assertEquals(FingerprintUnlockResult.TemporarilyUnavailable, result)
+        assertTrue(house.hasFingerprintEnvelope())
+    }
+
+    @Test
+    fun `指纹信封认证失败_返回永久不可用`() = runTest {
+        house.enrollFingerprintLock(cipher)
+        house.lock()
+        every { localUnlockKeyStore.unwrap(any(), any()) } throws AEADBadTagException()
+
+        assertEquals(FingerprintUnlockResult.Unavailable, house.completeFingerprintUnlock(cipher))
+        assertTrue(house.hasFingerprintEnvelope())
     }
 
     // ===== 2) 房间信封篡改必败 =====
@@ -161,7 +204,7 @@ class HouseKeyStoreTest {
         store["house_room::vault-1"] = sealed.dropLast(1) + replacement
 
         house.lock()
-        assertTrue(house.completeFingerprintUnlock(cipher))
+        assertEquals(FingerprintUnlockResult.Opened, house.completeFingerprintUnlock(cipher))
         // 必须报 Damaged（AEAD tag 校验失败），而不是吐出错误明文或抛异常。
         assertTrue(house.openRoom("vault-1") is RoomOpen.Damaged)
     }
@@ -255,6 +298,31 @@ class HouseKeyStoreTest {
         val restored = house.openRoom("vault-1")
         assertTrue(restored is RoomOpen.Opened)
         assertArrayEquals(secret, (restored as RoomOpen.Opened).payload)
+    }
+
+    @Test
+    fun `auto 暂时不可读_恢复失败但保留信封等待重试`() = runTest {
+        house.enrollFingerprintLock(cipher)
+        assertTrue(house.enrollAutoEnvelope())
+        house.lock()
+        every { autoUnlockKeyStore.decrypt(any()) } returns AutoUnlockDecryptResult.TemporarilyUnavailable
+
+        assertFalse(house.openAutoEnvelope())
+
+        assertTrue(house.hasAutoEnvelope())
+        assertFalse(house.isUnlocked)
+    }
+
+    @Test
+    fun `auto 密钥永久不可用_删除不可恢复信封`() = runTest {
+        house.enrollFingerprintLock(cipher)
+        assertTrue(house.enrollAutoEnvelope())
+        house.lock()
+        every { autoUnlockKeyStore.decrypt(any()) } returns AutoUnlockDecryptResult.Unavailable
+
+        assertFalse(house.openAutoEnvelope())
+
+        assertFalse(house.hasAutoEnvelope())
     }
 
     @Test

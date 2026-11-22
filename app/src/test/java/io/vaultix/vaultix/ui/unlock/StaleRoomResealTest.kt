@@ -7,6 +7,7 @@ import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import io.vaultix.datastore.VaultixPreferences
+import io.vaultix.domain.FingerprintUnlockResult
 import io.vaultix.domain.RoomResealOutcome
 import io.vaultix.domain.RoomResealRepository
 import io.vaultix.domain.RoomUnlockOutcome
@@ -115,7 +116,7 @@ class StaleRoomResealTest {
         every { repository.fingerprintQuickUnlockAvailable(any()) } returns flowOf(false)
         every { repository.pinLockAvailable() } returns flowOf(false)
         coEvery { repository.prepareFingerprintUnlock() } returns null
-        coEvery { repository.completeFingerprintUnlock(any()) } returns true
+        coEvery { repository.completeFingerprintUnlock(any()) } returns FingerprintUnlockResult.Opened
         coEvery { repository.unlockVaultFromRoom(any()) } returns firstOutcome
 
         val sessions = mockk<VaultSessionRepository>(relaxed = true)
