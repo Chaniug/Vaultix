@@ -1,7 +1,7 @@
 [versions]
 # ===== 构建工具链：与 Bastion 对齐 =====
 # AGP 9.3.2 要求最低 Gradle 9.5.0（见 gradle-wrapper.properties，取 9.5.1）。
-agp = "9.5.0"
+agp = "9.5.2"
 # Kotlin 停在 2.3.21。升 2.4.x 会被 KSP 阻塞：KSP 至今只发到 2.3.11，
 # 没有 2.4.x，Room 编译器跑不起来。待 KSP 2.4 发布后再动。
 # Kotlin 2.4.10（当前最新稳定版）。
@@ -112,7 +112,7 @@ okio = "3.18.2"
 # 1.86 之前与 Bastion 对齐（8.4.2）；2026-11-03 升 8.6.0 是为了修依赖链上的
 # httpcore5（Bastion 侧未跟，排查差异时注意这条已不是同版本）。
 # ⚠️ 它会传递带入 androidx.appcompat / browser / constraintlayout / gson / nimbus-jose-jwt。
-msal = "8.6.0"
+msal = "8.7.0"
 
 # MSAL 的遥测链仍写 opentelemetry-api 1.62.0（common:25.0.0 的 POM），
 # 而 1.62.0 落在 GHSA-ccrj-gw8r-854m 的受影响区间（<= 1.66.0）。
@@ -169,7 +169,7 @@ zxing = "3.5.4"
 #   ⇒ **一进含 OutlinedTextField 的页面就闪退**（#239）。
 #   0.45.0 及以前只依赖 androidx.compose（不再引入 jetbrains.compose 1.12.1），故锁 0.45.0。
 #   升级此库时必须同时确认：它的 foundation 传递依赖是否仍在 material3 的 minor 内。
-markdownRenderer = "0.45.0"
+markdownRenderer = "0.46.0"
 
 # ===== core:crypto 依赖版本 =====
 # Argon2id native 实现。锁 1.6.0（与 Bastion 完全一致）：
@@ -183,12 +183,12 @@ argon2kt = "1.6.0"
 #   - 需要它做两件事：PBKDF2-SHA256（PKCS5S2ParametersGenerator 直接吃原始字节 seed，
 #     绕开 JCE PBEKeySpec 必须 char[] 的限制 —— MasterKey 是任意二进制，不能转 char[]），
 #     以及 Argon2id 的 JVM 回退（Argon2BytesGenerator）。
-bcprov = "1.86"
+bcprov = "1.87"
 
 junit = "4.13.2"
 truth = "1.4.5"
 turbine = "1.2.1"
-mockk = "1.14.11"
+mockk = "1.14.12"
 # org.json：**仅供 JVM 单测**使用的真实实现。
 #
 # AGP 的 mockable android.jar 把 `org.json.JSONObject` 的每个方法都换成
