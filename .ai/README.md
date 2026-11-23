@@ -28,7 +28,8 @@
 
 - 自动查看锁取消生物识别后不再放行；PIN 验证与计数改为互斥，失败计数使用可确认落盘。
 - 修改 PIN 增加提交中去重；计数保存失败只返回不可用，不删除门锁或库数据。
-- 本地 repository 360 例、crypto 195 例全绿；app 完整单测与 CI 结果待回填。
+- 本地 repository 360 例、crypto 195 例与 25/25 静态门禁全绿；最终 `da1f51b4` 的
+  Android CI `45206052108` 两 job 成功，preview 为 `v0.13.9-dev-da1f51b · Preview`。
 - 详见 [`SESSION-2026-11-23.md`](./SESSION-2026-11-23.md) 与
   [`issues/04-锁与解锁-part11.md`](./issues/04-锁与解锁-part11.md) #304。只推 `main`，不合 `rele`。
 
