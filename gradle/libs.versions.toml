@@ -126,7 +126,7 @@ opentelemetry = "1.67.0"
 # ② 零 GMS 依赖（ML Kit bundled 依赖 Google Play Services，国内机型不可用）；
 # ③ ZXing 是 Google Play 扫码类 SDK 集成率第一（60%+），QR 为 ISO 固定标准，
 #    解码内核成熟，不依赖 ML 模型更新。
-cameraX = "1.5.2"
+cameraX = "1.7.0"
 zxing = "3.5.4"
 
 # ---- Markdown 渲染（更新日志展示，app 模块）----
