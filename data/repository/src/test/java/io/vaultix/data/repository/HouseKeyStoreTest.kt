@@ -17,9 +17,13 @@ import io.vaultix.domain.PIN_MAX_ATTEMPTS
 import java.security.ProviderException
 import java.security.UnrecoverableKeyException
 import java.util.Base64
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import javax.crypto.AEADBadTagException
 import javax.crypto.Cipher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.newSingleThreadContext
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -79,6 +83,10 @@ class HouseKeyStoreTest {
     @Before
     fun setUp() {
         every { credentials.putString(any(), any()) } answers { store[firstArg()] = secondArg() }
+        every { credentials.putStringDurable(any(), any()) } answers {
+            store[firstArg()] = secondArg()
+            true
+        }
         every { credentials.getString(any()) } answers { store[firstArg()] }
         every { credentials.remove(any()) } answers { store.remove(firstArg<String>()); Unit }
         every { credentials.keysWithPrefix(any()) } answers {
@@ -476,6 +484,52 @@ class HouseKeyStoreTest {
         // 即使输对也不行（熔断语义：达到上限即锁死，须主密码解锁后重设）。
         // 这一条是熔断的要害：正确的 PIN 也拿不到钥匙 —— 计数检查在 unwrap 之前。
         assertEquals(PinOpen.LockedOut, house.openWithPin("123456"))
+    }
+
+    @Test
+    fun `并发错误 PIN_每次失败都计入熔断`() = runTest {
+        house.enrollPinLock("123456")
+        val firstStarted = CountDownLatch(1)
+        val secondStarted = CountDownLatch(1)
+        val releaseFirst = CountDownLatch(1)
+        every { pinKeyWrapper.unwrap(any(), any()) } answers {
+            if (firstStarted.count > 0L) {
+                firstStarted.countDown()
+                assertTrue("测试放行超时", releaseFirst.await(5, TimeUnit.SECONDS))
+            } else {
+                secondStarted.countDown()
+            }
+            PinUnwrapResult.WrongPin
+        }
+
+        val firstDispatcher = newSingleThreadContext("pin-first")
+        val secondDispatcher = newSingleThreadContext("pin-second")
+        try {
+            val first = async(firstDispatcher) { house.openWithPin("000000") }
+            assertTrue(firstStarted.await(5, TimeUnit.SECONDS))
+            val second = async(secondDispatcher) { house.openWithPin("000001") }
+            secondStarted.await(500, TimeUnit.MILLISECONDS)
+            releaseFirst.countDown()
+            first.await()
+            second.await()
+        } finally {
+            releaseFirst.countDown()
+            firstDispatcher.close()
+            secondDispatcher.close()
+        }
+
+        assertEquals("两次并发失败必须累计两次", 2, store["house_pin_attempts"]?.toInt())
+    }
+
+    @Test
+    fun `PIN 失败次数落盘失败_返回不可用且不谎报计数`() = runTest {
+        house.enrollPinLock("123456")
+        every { credentials.putStringDurable("house_pin_attempts", "1") } returns false
+
+        val result = house.openWithPin("000000")
+
+        assertTrue(result is PinOpen.Unavailable)
+        assertFalse(store.containsKey("house_pin_attempts"))
     }
 
     @Test

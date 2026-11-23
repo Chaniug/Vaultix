@@ -32,6 +32,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
@@ -190,6 +192,7 @@ class HouseKeyStore @Inject constructor(
 
     /** 内存里的房子钥匙；`null` = 未解出 / 已锁（硬约束 #1：**明文**仅存内存）。 */
     private var houseKey: SecureBytes? = null
+    private val pinMutex = Mutex()
 
     /** 房钥匙是否在内存（= 门锁开过且尚未 [lock]）。 */
     val isUnlocked: Boolean get() = houseKey != null
@@ -368,13 +371,16 @@ class HouseKeyStore @Inject constructor(
      * 计数与钥匙来源约束同指纹侧。
      */
     suspend fun enrollPinLock(pin: String): LockEnrollResult = withContext(Dispatchers.IO) {
+        pinMutex.withLock { enrollPinLockLocked(pin) }
+    }
+
+    private suspend fun enrollPinLockLocked(pin: String): LockEnrollResult {
         val key = obtainKeyForLockEnrollment()
-            ?: return@withContext LockEnrollResult.HouseKeyUnavailable
+            ?: return LockEnrollResult.HouseKeyUnavailable
         val envelope = key.useBytes { bytes -> pinKeyWrapper.wrap(pin, bytes) }
         credentials.putString(PIN_ENVELOPE_KEY, envelope)
-        // 换了新 PIN 不能被上一次的失败计数锁住（与旧 PinUnlockStore.persist 同款）。
-        clearPinFailures()
-        LockEnrollResult.Enrolled
+        clearPinFailuresLocked()
+        return LockEnrollResult.Enrolled
     }
 
     /**
@@ -403,25 +409,24 @@ class HouseKeyStore @Inject constructor(
         currentPin: String,
         newPin: String,
     ): PinChangeOutcome = withContext(Dispatchers.IO) {
-        validatePin(newPin)?.let { outcome ->
-            val minimum = (outcome as? PinEnrollOutcome.PinTooShort)?.minimum ?: PIN_MIN_LENGTH
-            return@withContext PinChangeOutcome.PinTooShort(minimum)
-        }
-        when (val opened = openWithPin(currentPin)) {
-            PinOpen.Opened -> {
-                val enrolled = enrollPinLock(newPin)
-                if (enrolled == LockEnrollResult.Enrolled) {
-                    PinChangeOutcome.Changed
-                } else {
-                    // ⚠️ 理论不可达（openWithPin 已把房钥匙送进内存，enroll 的前置必然满足）。
-                    // 但仍然如实返回，不留空：「静默没换成」会被用户下次解锁才发现 ——
-                    // 那是「假成功」里最坏的一种（闹到要用主密码，却没人告诉他 PIN 早变了）。
-                    PinChangeOutcome.Unavailable("PIN 门锁重新包裹失败，请重试")
-                }
+        pinMutex.withLock {
+            validatePin(newPin)?.let { outcome ->
+                val minimum = (outcome as? PinEnrollOutcome.PinTooShort)?.minimum ?: PIN_MIN_LENGTH
+                return@withLock PinChangeOutcome.PinTooShort(minimum)
             }
-            is PinOpen.WrongPin -> PinChangeOutcome.WrongPin(opened.remainingAttempts)
-            PinOpen.LockedOut -> PinChangeOutcome.LockedOut
-            is PinOpen.Unavailable -> PinChangeOutcome.Unavailable(opened.detail)
+            when (val opened = openWithPinLocked(currentPin)) {
+                PinOpen.Opened -> {
+                    val enrolled = enrollPinLockLocked(newPin)
+                    if (enrolled == LockEnrollResult.Enrolled) {
+                        PinChangeOutcome.Changed
+                    } else {
+                        PinChangeOutcome.Unavailable("PIN 门锁重新包裹失败，请重试")
+                    }
+                }
+                is PinOpen.WrongPin -> PinChangeOutcome.WrongPin(opened.remainingAttempts)
+                PinOpen.LockedOut -> PinChangeOutcome.LockedOut
+                is PinOpen.Unavailable -> PinChangeOutcome.Unavailable(opened.detail)
+            }
         }
     }
 
@@ -436,13 +441,17 @@ class HouseKeyStore @Inject constructor(
      * 不必等「各库真开出来」才清（旧每库信封时代的告诫在此模型下不适用）。
      */
     suspend fun openWithPin(pin: String): PinOpen = withContext(Dispatchers.IO) {
+        pinMutex.withLock { openWithPinLocked(pin) }
+    }
+
+    private fun openWithPinLocked(pin: String): PinOpen {
         val envelope = credentials.getString(PIN_ENVELOPE_KEY)
-            ?: return@withContext PinOpen.Unavailable("未启用 PIN 解锁")
-        if (pinAttempts() >= PIN_MAX_ATTEMPTS) return@withContext PinOpen.LockedOut
-        when (val result = pinKeyWrapper.unwrap(pin, envelope)) {
+            ?: return PinOpen.Unavailable("未启用 PIN 解锁")
+        if (pinAttempts() >= PIN_MAX_ATTEMPTS) return PinOpen.LockedOut
+        return when (val result = pinKeyWrapper.unwrap(pin, envelope)) {
             is PinUnwrapResult.Opened ->
                 if (adoptHouseKey(result.payload)) {
-                    clearPinFailures()
+                    clearPinFailuresLocked()
                     PinOpen.Opened
                 } else {
                     PinOpen.Unavailable("PIN 门锁信封损坏")
@@ -455,8 +464,10 @@ class HouseKeyStore @Inject constructor(
     /** 关 PIN 门锁（同 [disableFingerprintLock] 的孤儿清理逻辑）。 */
     suspend fun disablePinLock() {
         withContext(Dispatchers.IO) {
-            credentials.remove(PIN_ENVELOPE_KEY)
-            credentials.remove(PIN_ATTEMPTS_KEY)
+            pinMutex.withLock {
+                credentials.remove(PIN_ENVELOPE_KEY)
+                credentials.remove(PIN_ATTEMPTS_KEY)
+            }
         }
         trimRoomsIfNoLocksRemain()
     }
@@ -468,7 +479,13 @@ class HouseKeyStore @Inject constructor(
      * 不能被上一次的失败计数锁住）与未来需要手动重置的场景使用。
      */
     suspend fun clearPinFailures() {
-        withContext(Dispatchers.IO) { credentials.remove(PIN_ATTEMPTS_KEY) }
+        withContext(Dispatchers.IO) {
+            pinMutex.withLock { clearPinFailuresLocked() }
+        }
+    }
+
+    private fun clearPinFailuresLocked() {
+        credentials.remove(PIN_ATTEMPTS_KEY)
     }
 
     // ===== 「从不」档自动恢复信封（第三把锁，免认证，对齐 Bitwarden autoUnlockKey）=====
@@ -676,7 +693,9 @@ class HouseKeyStore @Inject constructor(
 
     private fun registerPinFailure(): PinOpen {
         val attempts = pinAttempts() + 1
-        credentials.putString(PIN_ATTEMPTS_KEY, attempts.toString())
+        if (!credentials.putStringDurable(PIN_ATTEMPTS_KEY, attempts.toString())) {
+            return PinOpen.Unavailable("PIN 失败状态暂时无法保存，请使用主密码解锁")
+        }
         return if (attempts >= PIN_MAX_ATTEMPTS) {
             PinOpen.LockedOut
         } else {

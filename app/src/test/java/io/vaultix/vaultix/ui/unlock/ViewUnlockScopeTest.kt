@@ -191,27 +191,26 @@ class ViewUnlockScopeTest {
 
     // ------------------------------------------------------------ #245（2026-11-04）
 
-    /**
-     * 用户取消**自动**门禁的弹窗 ⇒ 标记消失、回到库列表（不再被钉在认证页）。
-     *
-     * ⚠️ 为什么这条不是"放松安全"：自动门禁只管**界面**，密钥从没被它保护过；
-     * 用户取消是一次合法选择（去拿眼镜 / 手湿）。把他钉在"只有生物识别按钮"的
-     * 页面上，等于逼他为一次"不想验证"付一次验证的代价 —— 而真锁（密钥已清）
-     * 走的是另一条路径，完全不受影响。
-     */
     @Test
-    fun `自动门禁被用户取消_清标记并放行_而不是钉在认证页`() = runTest {
+    fun `自动门禁被用户取消_保持锁定且不发解锁事件`() = runTest {
         val sessions = mockk<VaultSessionRepository>(relaxed = true)
         val vm = viewLockedViewModel(sessions)
+        val events = mutableListOf<UnlockViewModel.Event>()
+        val eventJob = kotlinx.coroutines.launch(kotlinx.coroutines.Unconfined) {
+            vm.events.collect(events::add)
+        }
         advanceUntilIdle()
         org.junit.Assert.assertTrue("前置：构造后应识别为自动门禁", vm.state.value.viewLockAuto)
 
         vm.onBiometricPromptError(message = "用户取消", cancelled = true, systemAbort = false)
         advanceUntilIdle()
 
-        coVerify(exactly = 1) { sessions.clearAutoViewLocks() }
-        // 不许顺手撤销"手动查看锁"（那是用户对单库的显式指令）。
+        coVerify(exactly = 0) { sessions.clearAutoViewLocks() }
         coVerify(exactly = 0) { sessions.clearViewLock(any()) }
+        org.junit.Assert.assertTrue("取消不得发送解锁事件", events.isEmpty())
+        org.junit.Assert.assertFalse(vm.state.value.submitting)
+        org.junit.Assert.assertFalse(vm.state.value.viewUnlockStarted)
+        eventJob.cancel()
     }
 
     /**

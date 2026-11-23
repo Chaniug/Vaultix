@@ -315,6 +315,7 @@ class QuickUnlockController(
             val pin: String = "",
             val confirm: String = "",
             val error: QuickUnlockText? = null,
+            val isSubmitting: Boolean = false,
         ) : Dialog
 
         /**
@@ -698,7 +699,7 @@ class QuickUnlockController(
      */
     fun submitChangePin() {
         val current = _dialog.value as? Dialog.PinEntry ?: return
-        if (current.mode != PinMode.Change) return
+        if (current.mode != PinMode.Change || current.isSubmitting) return
         newPinInvalid(current)?.let {
             _dialog.value = current.copy(error = it)
             return
@@ -709,7 +710,9 @@ class QuickUnlockController(
             _dialog.value = current.copy(error = text(R.string.quick_unlock_pin_current_required, PIN_MIN_LENGTH))
             return
         }
-        scope.launch { runChangePin(current) }
+        val pending = current.copy(isSubmitting = true, error = null)
+        _dialog.value = pending
+        scope.launch { runChangePin(pending) }
     }
 
     /**
@@ -779,14 +782,20 @@ class QuickUnlockController(
             is PinChangeOutcome.WrongPin -> current.copy(
                 // 剩余次数由 domain 算好带下来：两处各算一遍必然漂移（同 #153 的账）。
                 error = text(R.string.quick_unlock_pin_current_wrong, outcome.remainingAttempts),
+                isSubmitting = false,
             )
             PinChangeOutcome.LockedOut -> current.copy(
                 error = text(R.string.quick_unlock_pin_locked_out),
+                isSubmitting = false,
             )
             is PinChangeOutcome.PinTooShort -> current.copy(
                 error = text(R.string.quick_unlock_pin_too_short, outcome.minimum),
+                isSubmitting = false,
             )
-            is PinChangeOutcome.Unavailable -> current.copy(error = QuickUnlockText.Detail(outcome.detail))
+            is PinChangeOutcome.Unavailable -> current.copy(
+                error = QuickUnlockText.Detail(outcome.detail),
+                isSubmitting = false,
+            )
         }
     }
 
