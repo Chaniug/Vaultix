@@ -23,7 +23,6 @@ import io.vaultix.model.VaultKind
 import io.vaultix.model.VaultSummary
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.Unconfined
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -198,7 +197,7 @@ class ViewUnlockScopeTest {
         val sessions = mockk<VaultSessionRepository>(relaxed = true)
         val vm = viewLockedViewModel(sessions)
         val events = mutableListOf<UnlockViewModel.Event>()
-        val eventJob = launch(Unconfined) {
+        val eventJob = launch(Dispatchers.Unconfined) {
             vm.events.collect(events::add)
         }
         advanceUntilIdle()

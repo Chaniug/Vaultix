@@ -486,6 +486,7 @@ class HouseKeyStoreTest {
         assertEquals(PinOpen.LockedOut, house.openWithPin("123456"))
     }
 
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     @Test
     fun `并发错误 PIN_每次失败都计入熔断`() = runTest {
         house.enrollPinLock("123456")
