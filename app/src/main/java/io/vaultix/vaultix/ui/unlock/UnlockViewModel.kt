@@ -1012,6 +1012,7 @@ class UnlockViewModel @Inject constructor(
                 autoPromptAborts = if (systemAbort) it.autoPromptAborts + 1 else it.autoPromptAborts,
             )
         }
+    }
 
     fun onPasswordChange(value: String) = _state.update { it.copy(password = value, error = null) }
     fun onPasswordVisibleChange(visible: Boolean) =

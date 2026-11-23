@@ -379,7 +379,7 @@ class HouseKeyStore @Inject constructor(
             ?: return LockEnrollResult.HouseKeyUnavailable
         val envelope = key.useBytes { bytes -> pinKeyWrapper.wrap(pin, bytes) }
         credentials.putString(PIN_ENVELOPE_KEY, envelope)
-        clearPinFailuresLocked()
+        credentials.remove(PIN_ATTEMPTS_KEY)
         return LockEnrollResult.Enrolled
     }
 
@@ -451,12 +451,21 @@ class HouseKeyStore @Inject constructor(
         return when (val result = pinKeyWrapper.unwrap(pin, envelope)) {
             is PinUnwrapResult.Opened ->
                 if (adoptHouseKey(result.payload)) {
-                    clearPinFailuresLocked()
+                    credentials.remove(PIN_ATTEMPTS_KEY)
                     PinOpen.Opened
                 } else {
                     PinOpen.Unavailable("PIN 门锁信封损坏")
                 }
-            PinUnwrapResult.WrongPin -> registerPinFailure()
+            PinUnwrapResult.WrongPin -> {
+                val attempts = pinAttempts() + 1
+                if (!credentials.putStringDurable(PIN_ATTEMPTS_KEY, attempts.toString())) {
+                    PinOpen.Unavailable("PIN 失败状态暂时无法保存，请使用主密码解锁")
+                } else if (attempts >= PIN_MAX_ATTEMPTS) {
+                    PinOpen.LockedOut
+                } else {
+                    PinOpen.WrongPin(remainingAttempts = PIN_MAX_ATTEMPTS - attempts)
+                }
+            }
             is PinUnwrapResult.Malformed -> PinOpen.Unavailable(result.detail)
         }
     }
@@ -470,22 +479,6 @@ class HouseKeyStore @Inject constructor(
             }
         }
         trimRoomsIfNoLocksRemain()
-    }
-
-    /**
-     * 清零 PIN 失败计数。
-     *
-     * [openWithPin] 验证通过时已自动清零；本方法供 [enrollPinLock]（换新 PIN
-     * 不能被上一次的失败计数锁住）与未来需要手动重置的场景使用。
-     */
-    suspend fun clearPinFailures() {
-        withContext(Dispatchers.IO) {
-            pinMutex.withLock { clearPinFailuresLocked() }
-        }
-    }
-
-    private fun clearPinFailuresLocked() {
-        credentials.remove(PIN_ATTEMPTS_KEY)
     }
 
     // ===== 「从不」档自动恢复信封（第三把锁，免认证，对齐 Bitwarden autoUnlockKey）=====
@@ -690,18 +683,6 @@ class HouseKeyStore @Inject constructor(
 
     private fun pinAttempts(): Int =
         credentials.getString(PIN_ATTEMPTS_KEY)?.toIntOrNull() ?: 0
-
-    private fun registerPinFailure(): PinOpen {
-        val attempts = pinAttempts() + 1
-        if (!credentials.putStringDurable(PIN_ATTEMPTS_KEY, attempts.toString())) {
-            return PinOpen.Unavailable("PIN 失败状态暂时无法保存，请使用主密码解锁")
-        }
-        return if (attempts >= PIN_MAX_ATTEMPTS) {
-            PinOpen.LockedOut
-        } else {
-            PinOpen.WrongPin(remainingAttempts = PIN_MAX_ATTEMPTS - attempts)
-        }
-    }
 
     private fun roomStorageKey(vaultId: String) = ROOM_ENVELOPE_PREFIX + vaultId
 
