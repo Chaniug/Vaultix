@@ -611,6 +611,7 @@ private fun PinEntryDialog(
                 DialogPrimaryButton(
                     text = stringResource(R.string.action_continue),
                     onClick = if (isChange) controller::submitChangePin else controller::submitPin,
+                    enabled = !state.isSubmitting,
                 )
             }
         }

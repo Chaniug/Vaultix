@@ -1012,32 +1012,6 @@ class UnlockViewModel @Inject constructor(
                 autoPromptAborts = if (systemAbort) it.autoPromptAborts + 1 else it.autoPromptAborts,
             )
         }
-        // ★ #245：**系统自动**打的查看锁，用户主动取消 ⇒ 标记就此消失，回到库列表。
-        //
-        //   为什么：自动门禁的语义是「离开设备后回来确认一次身份」，而用户取消
-        //   （去拿眼镜 / 手湿 / 只想先看看）本身就是一个合法选择 —— 把他钉在
-        //   「只有生物识别按钮」的这一页上，等于逼他为一次"不想验证"付一次验证的代价。
-        //   真锁（密钥已清）不会因此失守：这个标记只管**界面**，密钥从没被它保护过。
-        //
-        //   ⚠️ 手动查看锁（用户自己在主页按的锁）**不动** —— 那是一次显式指令。
-        //   ⚠️ 系统侧终止（`systemAbort`，压根没弹成）**不动** —— 那不算用户的选择。
-        if (cancelled && !systemAbort) clearAutoViewLockIfAny()
-    }
-
-    /**
-     * 若当前是**自动**查看锁，清掉它并回到主界面（#245）。
-     *
-     * 复用 [completeLocalUnlock] 那条放行路径里"清所有库的自动门禁"的同一判据
-     * （一次身份确认是全局的），避免只清当前库、别的库还带着标记 ⇒ 根导航又判一次锁。
-     */
-    private fun clearAutoViewLockIfAny() {
-        if (!_state.value.viewLockAuto) return
-        scope.launch {
-            sessionRepository.clearAutoViewLocks()
-            // ⚠️ 根导航此刻已不在"锁着"的状态 ⇒ 交回主界面。走同一个 [Event.Unlocked]：
-            //   解锁页对它的处理只有 `onUnlocked()`，与正常认证成功完全一致。
-            _events.send(Event.Unlocked)
-        }
     }
 
     fun onPasswordChange(value: String) = _state.update { it.copy(password = value, error = null) }

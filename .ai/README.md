@@ -24,7 +24,32 @@
 - 已接进 CI：`ci-debug.yml` 的 `sandbox-tests` job 用**同一份脚本**，与 `android-ci` 并行
   ⇒ 本地绿 ⇒ CI 不会红在同一件事上。
 
-## 🕐 最新状态（2026-11-21 · #303 Keystore 暂时故障不再误删快速解锁状态）
+## 🕐 最新状态（2026-11-23 · #304 查看锁与 PIN 熔断修复）
+
+- 自动查看锁取消生物识别后不再放行；PIN 验证与计数改为互斥，失败计数使用可确认落盘。
+- 修改 PIN 增加提交中去重；计数保存失败只返回不可用，不删除门锁或库数据。
+- 本地 repository 360 例、crypto 195 例与 25/25 静态门禁全绿；最终 `da1f51b4` 的
+  Android CI `45206052108` 两 job 成功，preview 为 `v0.13.9-dev-da1f51b · Preview`。
+- 详见 [`SESSION-2026-11-23.md`](./SESSION-2026-11-23.md) 与
+  [`issues/04-锁与解锁-part11.md`](./issues/04-锁与解锁-part11.md) #304。只推 `main`，不合 `rele`。
+
+---
+
+## 上一轮（2026-11-22 · v0.13.9 正式发布：Keystore 暂时故障不再误删快速解锁状态）
+
+- `VERSION` 0.13.8 → **0.13.9**；根因修复是 #303：指纹 / auto 解封区分暂时故障与永久失效，
+  暂时故障只报失败并保留信封，不触发 rearm / degrade / 删除。
+- 发布链：`865730a4`（版本 + 发布说明）→ `AI docs consistency` `44968485729` 成功 →
+  PR #20 远程合并 `main → rele`（合并提交 `bdd11fb5`）→ `Android Stable Release`
+  `44968854719` 成功 → tag `v0.13.9` 指向 `bdd11fb5`，Release 为 **Latest**。
+- 资产：`Vaultix-v0.13.9.apk`（6,998,182 B，SHA-256 `f3a29de5…9bdeef8c76`）、
+  `checksums-sha256.txt`；源码代码门禁仍以 `d9d6511f` 的 Android CI `44907156878` 为准。
+- 详见 [`SESSION-2026-11-22.md`](./SESSION-2026-11-22.md) 与
+  [`issues/04-锁与解锁-part10.md`](./issues/04-锁与解锁-part10.md) #303。发布后文档回填只推 `main`。
+
+---
+
+## 上一轮（2026-11-21 · #303 Keystore 修复落地）
 
 - 指纹解封改为 `Opened / Unavailable / TemporarilyUnavailable`：暂时异常只报失败，不进入 rearm/degrade；
   永久不可解才沿用原有降级与清理。
@@ -37,7 +62,7 @@
 
 ---
 
-## 上一轮（2026-11-18 · v0.13.8 正式发布：自动填充精准度 + 通行密钥 + 主题图标）
+## 更早（2026-11-18 · v0.13.8 正式发布：自动填充精准度 + 通行密钥 + 主题图标）
 
 > **一句话**：用户「都没问题」验收后指令「合入 rele 发一个 release」。当日完成四条线：
 > ① 自动填充误弹/包名专项（7 处 + 12 例）；② passkey `b64.` 前缀 + allow/exclude 统一字节比较；

@@ -1012,9 +1012,7 @@ private fun AutoPromptQuickUnlock(
     // 「不弹」就只剩下代价：用户从口袋掏出手机、看到一页"验证身份"、还得点一下 ——
     // 而 Bitwarden 在这一步是**直接弹**的。用户 2026-11-10 明确要求对齐。
     //
-    // ⚠️ 安全性没变：自动门禁打的是**查看锁**（密钥从没被它保护过），
-    //    用户取消认证时 `clearAutoViewLockIfAny` 仍会放行 —— 那是 #245 的另一半，
-    //    与本改动不冲突。
+    // 自动门禁取消认证后仍停留在查看锁页面，可点按钮重新验证。
     // 条件刻意控制在 3 项以内（detekt ComplexCondition 上限为 3）。
     val eligible = (viewLocked || localUnlockAvailable) &&
         !hasTwoFactor &&

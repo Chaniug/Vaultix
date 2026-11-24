@@ -62,16 +62,23 @@ class SecureCredentialStore @Inject constructor(
     }
 
     fun putString(storageKey: String, value: String) {
+        prefs.edit().putString(storageKey, encrypt(value)).apply()
+    }
+
+    /** 加密并同步写入，返回磁盘提交结果。 */
+    fun putStringDurable(storageKey: String, value: String): Boolean =
+        prefs.edit().putString(storageKey, encrypt(value)).commit()
+
+    private fun encrypt(value: String): String {
         val cipher = Cipher.getInstance(TRANSFORMATION)
         cipher.init(Cipher.ENCRYPT_MODE, key)
         val iv = cipher.iv
         val ciphertext = cipher.doFinal(value.toByteArray(Charsets.UTF_8))
-        val encoded = buildString {
+        return buildString {
             append(Base64.encodeToString(iv, Base64.NO_WRAP))
             append(SEPARATOR)
             append(Base64.encodeToString(ciphertext, Base64.NO_WRAP))
         }
-        prefs.edit().putString(storageKey, encoded).apply()
     }
 
     fun getString(storageKey: String): String? {
