@@ -29,8 +29,10 @@
 - 借鉴 KeePassDX #2805：指纹门锁 KEK 显式 `.setInvalidatedByBiometricEnrollment(true)`，
   不再依赖可能被 OEM overlay 破坏的默认值；新增剥注释源码门禁接 CI（3 变异自测）。
 - 本地 555 例逻辑测试 + 26/26 门禁全绿；门禁在旧实现红灯、加显式调用转绿。
+- 提交 `67176e0c` 的 `Android CI (Debug)` `45384271666` 整次 success（新门禁两步在 CI 实跑），
+  docs `45384271649` success；只推 `main`，不合 `rele`，待下次发版随行。
 - 详见 [`SESSION-2026-11-24.md`](./SESSION-2026-11-24.md) 与
-  [`issues/04-锁与解锁-part12.md`](./issues/04-锁与解锁-part12.md) #305。只推 `main`，不合 `rele`，待下次发版随行。
+  [`issues/04-锁与解锁-part12.md`](./issues/04-锁与解锁-part12.md) #305。
 
 ---
 
