@@ -24,7 +24,17 @@
 - 已接进 CI：`ci-debug.yml` 的 `sandbox-tests` job 用**同一份脚本**，与 `android-ci` 并行
   ⇒ 本地绿 ⇒ CI 不会红在同一件事上。
 
-## 🕐 最新状态（2026-11-24 · v0.13.10 正式发布：#304 安全修复随版）
+## 🕐 最新状态（2026-11-24 · #305 指纹 KEK 显式生物失效加固，只推 main）
+
+- 借鉴 KeePassDX #2805：指纹门锁 KEK 显式 `.setInvalidatedByBiometricEnrollment(true)`，
+  不再依赖可能被 OEM overlay 破坏的默认值；新增剥注释源码门禁接 CI（3 变异自测）。
+- 本地 555 例逻辑测试 + 26/26 门禁全绿；门禁在旧实现红灯、加显式调用转绿。
+- 详见 [`SESSION-2026-11-24.md`](./SESSION-2026-11-24.md) 与
+  [`issues/04-锁与解锁-part12.md`](./issues/04-锁与解锁-part12.md) #305。只推 `main`，不合 `rele`，待下次发版随行。
+
+---
+
+## 上一轮（2026-11-24 · v0.13.10 正式发布：#304 安全修复随版）
 
 - `VERSION` 0.13.9 → **0.13.10**；发布内容 = #304 两项 P0 安全修复（查看锁取消不再放行、PIN 熔断串行化 + 计数落盘）。
 - 发布链：版本提交 `edefe4f6` → PR #26 合并 `main → rele`（合并提交 `46b46100`）→ `Android Stable Release`

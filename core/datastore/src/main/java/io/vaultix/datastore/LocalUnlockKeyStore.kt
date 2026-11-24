@@ -216,7 +216,8 @@ class LocalUnlockKeyStore @Inject constructor() {
                     setUserAuthenticationValidityDurationSeconds(-1)
                 }
             }
-            // 默认 invalidatedByBiometricEnrollment=true：新增/删除指纹使人脸失效
+            // 生物识别增删时使 KEK 失效（#305）
+            .setInvalidatedByBiometricEnrollment(true)
             .build()
         generator.init(spec)
         return generator.generateKey()

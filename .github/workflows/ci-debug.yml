@@ -265,6 +265,18 @@ jobs:
       - name: Self-test passkey origin handoff checker
         run: python3 "$GITHUB_WORKSPACE/.ai/tools/check_passkey_origin_handoff.py" --selftest
 
+      # ★ #305（2026-11-24，KeePassDX #2805 借鉴）：指纹门锁 KEK 必须显式设置
+      #   setInvalidatedByBiometricEnrollment(true)。依赖 Android「默认 true」在部分 OEM
+      #   overlay（Samsung / Android 8.0）上不成立 ⇒ 新增指纹后旧 KEK 仍可被解开，
+      #   「生物变更即失效」的安全边界被静默击穿。编译 / detekt / 单测都看不出
+      #   「少了一句显式声明」，只有源码门禁能钉住；判据剥注释以免把注释里的
+      #   「默认 true」误当成显式设置，配 3 组变异自测。
+      - name: Check biometric invalidation enrollment (#305)
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/check_biometric_invalidation.py" "$GITHUB_WORKSPACE"
+
+      - name: Self-test biometric invalidation checker
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/check_biometric_invalidation.py" --selftest
+
       # ★ 2026-11-15（#293）：KDBX 通行密钥 credentialId 的跨模块保真契约。
       #
       # 真机：正式 v0.13.2 用 KDBX 库里保存的 passkey 登录 GitHub / x.com 报
