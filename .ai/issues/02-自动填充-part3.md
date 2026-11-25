@@ -3,7 +3,7 @@
 > 主篇索引：[`02-自动填充.md`](./02-自动填充.md)（含计数规则与重号警告）
 > 本篇 3 章 · 覆盖 #255（填充面板的**观感层**：行卡片、品牌头、宽高取舍）、
 > #306（夸克浏览器兼容名单：XML compatibility-package + Kotlin 已知浏览器集合）
-> 与 #307（夸克补名单后仍不弹：UNKNOWN 字段静默，诊断取证中）
+> 与 #307（夸克"不弹"定案：点的是地址栏/搜索框，静默是防误弹正确行为，非缺陷）
 
 ## 255. 面板「一坨黑块」：行背景资源**存在但从未接线**，图标还叠着两层圆底（2026-11-09）
 
@@ -118,9 +118,27 @@ Vaultix 不 hook、不逆向、不强改系统填充框架。补齐名单后，�
 
 ---
 
-## 307. 夸克补名单后仍不弹：字段全判 UNKNOWN → `noFillTarget` 静默（诊断取证中，2026-11-25）
+## 307. 夸克"不弹"定案：点的是地址栏/搜索框，静默是防误弹正确行为（2026-11-25 ~ 26）
 
-> ⚠️ **状态：取证中，未定案**。本条记录现象、日志证据与待验证假设；**根因未确认前不要改分类策略**。
+> ✅ **状态：已定案——非代码缺陷**。用户实际点的是夸克地址栏/首页搜索框，不是网站登录密码框；
+> UNKNOWN → `noFillTarget` 静默是设计内行为。**未改任何分类策略**。
+
+**定案证据（2026-11-26 00:37，装 `c4c027a` 后抓）**：
+```
+probe cls=android.widget.EditText inputType=0x1 a11yType=1 tag=- attrs=[-] id=bk_search_edittext viewHint=搜索历史 signal=搜索历史 bk_search_edittext
+probe cls=android.widget.EditText inputType=0x1 ... id=bk_search_edittext viewHint=搜索 signal=搜索 bk_search_edittext
+probe cls=android.widget.EditText inputType=0x20001(131073) ... id=- viewHint=搜索、提问或输入网址 signal=搜索、提问或输入网址
+fillRequest pkg=com.quark.browser webDomain=null webView=false fields=3 hints={UNKNOWN=3} targets=0
+noFillTarget → 不响应（非凭据字段，避免误弹）
+```
+- `id=bk_search_edittext` + `viewHint=搜索/搜索历史/搜索、提问或输入网址` ⇒ **地址栏/首页搜索框**。
+- `inputType=0x20001` = TYPE_CLASS_TEXT | TYPE_TEXT_VARIATION_URI（网址），非密码变体（应为 0x81/0x91）。
+- `signal` 命中 `IGNORED_TERMS` 的「搜索」⇒ 判 UNKNOWN 是**有意**（同京东搜索栏误弹的防误弹闸）。
+- 所以这里不弹密码候选**完全正确**；若强行位置兜底赋账号/密码，反而会在地址栏误弹 → 回归。
+
+**真机验收欠账（转用户）**：在夸克里真正打开网站登录页、点页内用户名/密码框（非顶部地址栏）再抓日志。
+若那时出现 `inputType=0x81/0x91` 或 `signal` 含密码/账号语义 ⇒ 分类链路正常，看匹配/候选；
+若那时仍全 UNKNOWN ⇒ 才回到下方 (a)/(b) 两档评估。**在此之前不动分类器**。
 
 **现象**：#306 两处名单已补、用户装的是含 #306 的 preview（`0.13.10-dev-7df7680`），
 夸克（com.quark.browser）点密码框仍"完全没反应"。对照 Chrome/Edge 正常、Vaultix 已设为

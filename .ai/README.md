@@ -24,18 +24,20 @@
 - 已接进 CI：`ci-debug.yml` 的 `sandbox-tests` job 用**同一份脚本**，与 `android-ci` 并行
   ⇒ 本地绿 ⇒ CI 不会红在同一件事上。
 
-## 🕐 最新状态（2026-11-25 · #307 夸克仍不弹——诊断取证阶段，只推 main）
+## 🕐 最新状态（2026-11-26 · #307 定案：非缺陷，测试点错了位置，只推 main）
 
-- 用户装含 #306 的 preview 后夸克仍不弹。日志证据：`fillRequest pkg=com.quark.browser
-  fields=2 hints={UNKNOWN=2} targets=0` + `noFillTarget` ⇒ 请求到了、字段全判 UNKNOWN、
-  `targets=0` 触发有意静默。**根因在上游"为什么没认出字段"，非名单、非"没请求"**。
-- 只加诊断不改分类策略：新增 `UnknownFieldDiagnostics`（UNKNOWN 字段原始控件元数据，
-  签名无 text、限长脱敏）+ 6 例单测接进 `AssistStructureParser`。6 绿→变异 1 红→还原绿；27/27 门禁绿。
-- **未定案**：等用户再抓一次日志看 `probe` 行决定走"扩白名单"(a) 还是"兜底推断"(b)。
-- 提交链 `0daf5f10`（detekt MagicNumber 红）→ `79848d20`（提 HEX_RADIX 常量）；
-  `Android CI (Debug)` `45651030668` 两 job 全绿，preview tag 指向 `79848d20`，docs `45649854025` 绿。
+- 用户装 `c4c027a` 再抓日志，`probe` 行定案：点的是夸克**地址栏/首页搜索框**
+  （`id=bk_search_edittext`、`viewHint=搜索/搜索历史/搜索、提问或输入网址`、
+  `inputType=0x20001`=URI），**不是网站登录密码框**。命中 `IGNORED_TERMS`「搜索」→
+  UNKNOWN → `noFillTarget` 静默是**防误弹的正确行为**。**#307 非缺陷，无代码改动**。
+- 上一轮的克制得到验证：没在错误前提上做位置兜底（否则地址栏会被误判成凭据框、引入误弹回归）。
+  诊断日志仅 debug 输出、release 无感，保留作长期取证工具。
+- **真机验收欠账**：需在夸克里打开真实网站登录页、点页内用户名/密码框（非地址栏）再抓日志；
+  届时若仍全 UNKNOWN 才进入(a)扩白名单/(b)兜底推断的评估。
+- 提交链 `0daf5f10`（detekt 红）→ `79848d20`（HEX_RADIX）→ `c4c027a3`（诊断补 formSignal 重发）；
+  `Android CI (Debug)` `45654281913` 两 job 全绿，preview `Vaultix-c4c027a.apk` 资产已核实。
 - 详见 [`SESSION-2026-11-25.md`](./SESSION-2026-11-25.md) 与
-  [`issues/02-自动填充-part3.md`](./issues/02-自动填充-part3.md) #307。
+  [`issues/02-自动填充-part3.md`](./issues/02-自动填充-part3.md) #307（已定案）。
 
 ---
 
