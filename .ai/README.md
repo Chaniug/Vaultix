@@ -24,7 +24,20 @@
 - 已接进 CI：`ci-debug.yml` 的 `sandbox-tests` job 用**同一份脚本**，与 `android-ci` 并行
   ⇒ 本地绿 ⇒ CI 不会红在同一件事上。
 
-## 🕐 最新状态（2026-11-24 · #306 夸克浏览器自动填充兼容名单，只推 main）
+## 🕐 最新状态（2026-11-25 · #307 夸克仍不弹——诊断取证阶段，只推 main）
+
+- 用户装含 #306 的 preview 后夸克仍不弹。日志证据：`fillRequest pkg=com.quark.browser
+  fields=2 hints={UNKNOWN=2} targets=0` + `noFillTarget` ⇒ 请求到了、字段全判 UNKNOWN、
+  `targets=0` 触发有意静默。**根因在上游"为什么没认出字段"，非名单、非"没请求"**。
+- 只加诊断不改分类策略：新增 `UnknownFieldDiagnostics`（UNKNOWN 字段原始控件元数据，
+  签名无 text、限长脱敏）+ 6 例单测接进 `AssistStructureParser`。6 绿→变异 1 红→还原绿；27/27 门禁绿。
+- **未定案**：等用户再抓一次日志看 `probe` 行决定走"扩白名单"(a) 还是"兜底推断"(b)。
+- 详见 [`SESSION-2026-11-25.md`](./SESSION-2026-11-25.md) 与
+  [`issues/02-自动填充-part3.md`](./issues/02-自动填充-part3.md) #307。
+
+---
+
+## 上一轮（2026-11-24 · #306 夸克浏览器自动填充兼容名单，只推 main）
 
 - 用户实测夸克不弹填充：两份名单都漏 `com.quark.browser` —— XML 缺 compatibility-package
   ⇒ webDomain 不上报；KNOWN_BROWSER_PACKAGES 缺包名 ⇒ 无域名降级也被拒 ⇒ 候选为空。

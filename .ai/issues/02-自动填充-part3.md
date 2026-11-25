@@ -1,8 +1,9 @@
-# 02-自动填充 · 第 3 篇（#255 ~ #306）
+# 02-自动填充 · 第 3 篇（#255 ~ #307）
 
 > 主篇索引：[`02-自动填充.md`](./02-自动填充.md)（含计数规则与重号警告）
-> 本篇 2 章 · 覆盖 #255（填充面板的**观感层**：行卡片、品牌头、宽高取舍）
-> 与 #306（夸克浏览器兼容名单：XML compatibility-package + Kotlin 已知浏览器集合）
+> 本篇 3 章 · 覆盖 #255（填充面板的**观感层**：行卡片、品牌头、宽高取舍）、
+> #306（夸克浏览器兼容名单：XML compatibility-package + Kotlin 已知浏览器集合）
+> 与 #307（夸克补名单后仍不弹：UNKNOWN 字段静默，诊断取证中）
 
 ## 255. 面板「一坨黑块」：行背景资源**存在但从未接线**，图标还叠着两层圆底（2026-11-09）
 
@@ -114,3 +115,49 @@ Vaultix 不 hook、不逆向、不强改系统填充框架。补齐名单后，�
 `//` `/* */` 注释后，分别要求完整元素标签与 setOf 体内的精确条目 —— 防止"只在注释里
 写过包名"造成假绿。4 段变异（XML 删元素 / XML 只写注释 / Kotlin 删条目 / Kotlin
 只写注释）全部被抓到；旧实现两条错误都红，补齐后转绿。
+
+---
+
+## 307. 夸克补名单后仍不弹：字段全判 UNKNOWN → `noFillTarget` 静默（诊断取证中，2026-11-25）
+
+> ⚠️ **状态：取证中，未定案**。本条记录现象、日志证据与待验证假设；**根因未确认前不要改分类策略**。
+
+**现象**：#306 两处名单已补、用户装的是含 #306 的 preview（`0.13.10-dev-7df7680`），
+夸克（com.quark.browser）点密码框仍"完全没反应"。对照 Chrome/Edge 正常、Vaultix 已设为
+默认自动填充服务 ⇒ 服务本身没问题，问题在夸克这一条链路的更前面。
+
+**用户导出日志（荣耀 BKQ-AN00 / Android 17）关键三行**：
+```
+fillRequest pkg=com.hihonor.appmarket ... fields=1 hints={UNKNOWN=1} targets=0 ...
+fillRequest pkg=com.quark.browser webDomain=null fallback=null webView=false fields=2 hints={UNKNOWN=2} targets=0 user=false pass=false seq=UNKNOWN,UNKNOWN
+noFillTarget → 不响应（非凭据字段，避免误弹）
+```
+（另有两次 `fields=0` 的空请求，是焦点切换时的噪声，非主因。）
+
+**三层事实（已确认）**：
+1. **请求到了我们**：有 `fillRequest` ⇒ 系统正常派单，`autofill_service.xml` 声明 /
+   服务绑定 / 默认服务设置都正常。**不是 #306 名单问题，也不是"没请求"那一档**。
+2. **字段进了解析表但没认出语义**：`fields=2 hints={UNKNOWN=2}` ⇒ 通过了
+   `isEditableNode` 准入闸，但 `HintClassifier.classify(hints, inputType, formSignal)`
+   三个信号全落空 → UNKNOWN。
+3. **`targets=0` 触发有意静默**：`buildResponse` 在 `allFillableIds` 为空时
+   `callback.onSuccess(null)`（对齐 Bitwarden `Unfillable`），**这是设计行为，不是 bug** ——
+   bug 在上游"为什么没认出字段"。
+
+**为什么日志还不够（本次改动）**：现有诊断只打**分类结果**（`seq=UNKNOWN,UNKNOWN`），
+看不到**原始控件信号**。分不清两种可能，修法相反：
+- (a) 夸克 UC 内核给了语义，但在 `htmlInfo.attributes` 的非标准键 / 值里，被
+  `BrowserUrlBars.HTML_SIGNAL_KEY_TERMS` 白名单漏掉 → 补白名单即可，低风险；
+- (b) 内核压根没给 hint / inputType / autocomplete → 只能靠"用户点了哪个框 + 字段顺序"
+  做兜底推断，有误填风险，需单独评估。
+
+**本次落地**：新增 `UnknownFieldDiagnostics`（纯函数，单测 6 例）在 `AssistStructureParser`
+对 UNKNOWN 字段打一行 `probe cls=… inputType=0x…(…) a11yType=… tag=… attrs=[…] id=… viewHint=… cd=…`。
+**安全红线**：签名里根本没有 text 参数，编译期杜绝输入值入日志；每个字段限长 80 字符 + 去换行。
+TDD：6 绿 → 去掉截断变异 1 红 → 还原 6 绿。
+
+**下一步（等用户再抓一次日志）**：看 `probe` 行的 `attrs=[…]` / `inputType` / `cls`：
+- 有 `type=password` / `autocomplete=current-password` 之类 → 走 (a)，扩白名单 + 门禁；
+- 全空且 inputType=0 → 走 (b)，先评估误填风险再决定做不做。
+
+只推 `main`，不合 `rele`。待根因确认后再决定是否留这段诊断日志。

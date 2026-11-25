@@ -177,6 +177,26 @@ object AssistStructureParser {
             // 假字段挤掉真字段（详见 [isEditableNode]）。`text` 只作为字段值。
             val signal = BrowserUrlBars.formSignalOf(node)
             val classified = classifyNode(node, hints, inputType, signal, hostRules)
+            // #307 诊断：UNKNOWN 字段的原始控件元数据。只打进了准入闸、可填、但没认出语义
+            // 的节点（夸克 UC 内核实测 fields=2 全 UNKNOWN），一次看清是白名单漏属性还是
+            // 内核没给信号。只含控件属性、绝不含 node.text（用户输入值），每行限长。
+            // ⚠️ 限频由 VaultixLog 按 tag 统一兜底（50 条/60s），这里不必重复计数。
+            if (classified?.hint == FieldHint.UNKNOWN) {
+                io.vaultix.vaultix.autofill.AutofillLogger.d(
+                    UnknownFieldDiagnostics.format(
+                        UnknownFieldDiagnostics.Probe(
+                            className = node.className,
+                            inputType = inputType,
+                            autofillType = node.autofillType,
+                            htmlTag = node.htmlInfo?.tag,
+                            htmlAttributes = node.htmlInfo?.attributes?.map { it.first to it.second },
+                            idEntry = node.idEntry,
+                            viewHint = node.hint?.toString(),
+                            contentDescription = node.contentDescription?.toString(),
+                        ),
+                    ),
+                )
+            }
             // 规则覆盖本主机时 classified 为 null 表示「该节点不被规则承认」→ **不收进字段表**
             // （对齐上游：被规则覆盖的分区以规则为准，不做启发式兜底）。
             if (classified != null) {
