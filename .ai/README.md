@@ -32,6 +32,8 @@
 - 只加诊断不改分类策略：新增 `UnknownFieldDiagnostics`（UNKNOWN 字段原始控件元数据，
   签名无 text、限长脱敏）+ 6 例单测接进 `AssistStructureParser`。6 绿→变异 1 红→还原绿；27/27 门禁绿。
 - **未定案**：等用户再抓一次日志看 `probe` 行决定走"扩白名单"(a) 还是"兜底推断"(b)。
+- 提交链 `0daf5f10`（detekt MagicNumber 红）→ `79848d20`（提 HEX_RADIX 常量）；
+  `Android CI (Debug)` `45651030668` 两 job 全绿，preview tag 指向 `79848d20`，docs `45649854025` 绿。
 - 详见 [`SESSION-2026-11-25.md`](./SESSION-2026-11-25.md) 与
   [`issues/02-自动填充-part3.md`](./issues/02-自动填充-part3.md) #307。
 
