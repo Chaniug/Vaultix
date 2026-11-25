@@ -1,7 +1,8 @@
-# 02-自动填充 · 第 3 篇（#255）
+# 02-自动填充 · 第 3 篇（#255 ~ #306）
 
 > 主篇索引：[`02-自动填充.md`](./02-自动填充.md)（含计数规则与重号警告）
-> 本篇 1 章 · 覆盖 #255（填充面板的**观感层**：行卡片、品牌头、宽高取舍）
+> 本篇 2 章 · 覆盖 #255（填充面板的**观感层**：行卡片、品牌头、宽高取舍）
+> 与 #306（夸克浏览器兼容名单：XML compatibility-package + Kotlin 已知浏览器集合）
 
 ## 255. 面板「一坨黑块」：行背景资源**存在但从未接线**，图标还叠着两层圆底（2026-11-09）
 
@@ -78,3 +79,38 @@
 这轮两个都有 —— 容器那半（面板宽度）改不了，只能明说改不了并换别的补偿；
 内容那半（行内占位）才是能动的地方。把两者混在一起调，就会去改容器宽度、
 改字号、改行高，全是白费。
+
+---
+
+## 306. 夸克浏览器不弹填充：两份兼容名单都漏了 `com.quark.browser`（2026-11-24）
+
+**现象**：用户问「目前的项目好像在夸克浏览器上无法弹出填充，是正常的吗」。此前对 Edge /
+Chrome / Via / UC 都做过兼容名单，唯独夸克没有。
+
+**根因（不是"内核无解"，是 Vaultix 自己两份名单漏了包名）**：
+
+1. `app/src/main/res/xml/autofill_service.xml` 没有夸克的 `compatibility-package`。
+   Chromium 系浏览器只有被声明为兼容填充提供方，系统才会把地址栏 `webDomain` 上报给
+   AutofillService。缺这条 ⇒ 请求里的 `webDomain` 恒为 null。
+2. `AutofillRequestContextPolicy.KNOWN_BROWSER_PACKAGES` 没有 `"com.quark.browser"`。
+   `AutofillCandidateSource.matchLogins()` 的降级逻辑是"只有已知浏览器、且拿不到域名时
+   才列全库候选"（Bitwarden 的"少给"策略，见本分类收紧史）。夸克不在名单 ⇒
+   连降级都被拒 ⇒ 候选为空。
+
+**两处的对应关系**：缺 ① 会导致拿不到域名；缺 ② 会导致即使拿不到域名也不给候选。
+任一缺失，用户看到的都是"完全不弹"。所以必须两处一起补，只补一处仍然不弹。
+
+**修法（小到只有两行）**：
+- XML 单独分组加 `<compatibility-package android:name="com.quark.browser"
+  android:maxLongVersionCode="@string/version_code_max" />`。
+- Kotlin 在 UC 系包名后加 `"com.quark.browser",`（同属阿里系，语义相邻）。
+
+**边界（明确不做什么）**：夸克是定制 Chromium，是否真的上报 `webDomain` 由它的内核决定，
+Vaultix 不 hook、不逆向、不强改系统填充框架。补齐名单后，最差情况也能走无域名降级
+"能弹能选"；能否精准匹配到具体站点的条目，取决于夸克是否上报域名 —— 这条留给真机验证。
+
+**门禁（为什么单测拦不住）**：编译 / detekt / 单测都看不出"集合里少一个字符串"。
+新增 `.ai/tools/check_quark_autofill_compat.py`，判据剥 XML `<!-- -->` 与 Kotlin
+`//` `/* */` 注释后，分别要求完整元素标签与 setOf 体内的精确条目 —— 防止"只在注释里
+写过包名"造成假绿。4 段变异（XML 删元素 / XML 只写注释 / Kotlin 删条目 / Kotlin
+只写注释）全部被抓到；旧实现两条错误都红，补齐后转绿。

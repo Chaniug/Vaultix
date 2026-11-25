@@ -24,7 +24,19 @@
 - 已接进 CI：`ci-debug.yml` 的 `sandbox-tests` job 用**同一份脚本**，与 `android-ci` 并行
   ⇒ 本地绿 ⇒ CI 不会红在同一件事上。
 
-## 🕐 最新状态（2026-11-24 · #305 指纹 KEK 显式生物失效加固，只推 main）
+## 🕐 最新状态（2026-11-24 · #306 夸克浏览器自动填充兼容名单，只推 main）
+
+- 用户实测夸克不弹填充：两份名单都漏 `com.quark.browser` —— XML 缺 compatibility-package
+  ⇒ webDomain 不上报；KNOWN_BROWSER_PACKAGES 缺包名 ⇒ 无域名降级也被拒 ⇒ 候选为空。
+- 两处各加一行；新增剥注释门禁 `check_quark_autofill_compat.py` 接 CI 两步（4 变异自测）。
+  TDD 旧实现红灯、补齐转绿，本地 27/27 门禁全绿。
+- 内核是否上报域名不受控，不 hook；最差保证"能弹能选"，精准匹配待真机。
+- 详见 [`SESSION-2026-11-24.md`](./SESSION-2026-11-24.md) 与
+  [`issues/02-自动填充-part3.md`](./issues/02-自动填充-part3.md) #306。
+
+---
+
+## 上一轮（2026-11-24 · #305 指纹 KEK 显式生物失效加固，只推 main）
 
 - 借鉴 KeePassDX #2805：指纹门锁 KEK 显式 `.setInvalidatedByBiometricEnrollment(true)`，
   不再依赖可能被 OEM overlay 破坏的默认值；新增剥注释源码门禁接 CI（3 变异自测）。

@@ -277,6 +277,16 @@ jobs:
       - name: Self-test biometric invalidation checker
         run: python3 "$GITHUB_WORKSPACE/.ai/tools/check_biometric_invalidation.py" --selftest
 
+      # ★ #306（2026-11-24）：夸克浏览器（com.quark.browser）自动填充兼容名单。
+      #   两处名单任一缺失都会让用户在夸克里"完全不弹"：XML 缺 compatibility-package
+      #   ⇒ 系统不上报 webDomain；KNOWN_BROWSER_PACKAGES 缺包名 ⇒ 无域名时连降级
+      #   列全库候选都被拒。编译 / detekt / 单测都看不出"少一个包名"，配 4 组变异自测。
+      - name: Check Quark autofill compatibility (#306)
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/check_quark_autofill_compat.py" "$GITHUB_WORKSPACE"
+
+      - name: Self-test Quark autofill compatibility checker
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/check_quark_autofill_compat.py" --selftest
+
       # ★ 2026-11-15（#293）：KDBX 通行密钥 credentialId 的跨模块保真契约。
       #
       # 真机：正式 v0.13.2 用 KDBX 库里保存的 passkey 登录 GitHub / x.com 报

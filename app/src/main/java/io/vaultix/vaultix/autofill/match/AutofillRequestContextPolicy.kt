@@ -47,6 +47,7 @@ internal object AutofillRequestContextPolicy {
         "com.ucmobile",
         "com.uc.browser.en",
         "com.uc.browser.hd",
+        "com.quark.browser",
         "com.tencent.mtt",
         "com.baidu.browser.apps",
         "com.qihoo.browser",
