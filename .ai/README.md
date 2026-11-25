@@ -30,6 +30,8 @@
   ⇒ webDomain 不上报；KNOWN_BROWSER_PACKAGES 缺包名 ⇒ 无域名降级也被拒 ⇒ 候选为空。
 - 两处各加一行；新增剥注释门禁 `check_quark_autofill_compat.py` 接 CI 两步（4 变异自测）。
   TDD 旧实现红灯、补齐转绿，本地 27/27 门禁全绿。
+- 提交 `7df7680f`：`Android CI (Debug)` `45641648112` 两 job 全 success（新门禁两步 CI 实跑），
+  docs `45641647673` success；preview tag 指向本次提交；只推 `main`，不合 `rele`。
 - 内核是否上报域名不受控，不 hook；最差保证"能弹能选"，精准匹配待真机。
 - 详见 [`SESSION-2026-11-24.md`](./SESSION-2026-11-24.md) 与
   [`issues/02-自动填充-part3.md`](./issues/02-自动填充-part3.md) #306。
