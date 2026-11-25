@@ -41,6 +41,9 @@ internal object UnknownFieldDiagnostics {
     /** 单个字符串在日志里的最大长度（截断防刷屏 / 防夹带）。 */
     private const val MAX_PART_LEN = 80
 
+    /** 十六进制进制（detekt MagicNumber：不用裸字面量 16）。 */
+    private const val HEX_RADIX = 16
+
     /**
      * 格式化成一行诊断串：`probe cls=… inputType=0x…(…) a11yType=… tag=… attrs=[…] id=… hint=… cd=…`
      *
@@ -50,7 +53,7 @@ internal object UnknownFieldDiagnostics {
     fun format(probe: Probe): String = buildString {
         append("probe ")
         append("cls=${clip(probe.className)} ")
-        append("inputType=0x${probe.inputType.toString(16)}(${probe.inputType}) ")
+        append("inputType=0x${probe.inputType.toString(HEX_RADIX)}(${probe.inputType}) ")
         append("a11yType=${probe.autofillType} ")
         append("tag=${clip(probe.htmlTag)} ")
         append("attrs=[${formatAttrs(probe.htmlAttributes)}] ")
