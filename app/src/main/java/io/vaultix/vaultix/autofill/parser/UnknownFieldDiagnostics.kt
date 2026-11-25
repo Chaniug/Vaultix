@@ -26,7 +26,13 @@ package io.vaultix.vaultix.autofill.parser
  */
 internal object UnknownFieldDiagnostics {
 
-    /** 单个未知字段的原始元数据。所有字段均可空，缺信号就填 null。 */
+    /**
+     * 单个未知字段的原始元数据。所有字段均可空，缺信号就填 null。
+     *
+     * ⚠️ 字段数卡在 detekt `LongParameterList` 上限 8 —— 要把新信号加进来，就替换掉
+     * 价值更低的一项。本轮用 [formSignal]（分类器的实际输入）换掉了 contentDescription
+     * （前者决定 hint 归类，后者在 UC 内核上通常是空标签）。
+     */
     data class Probe(
         val className: String?,
         val inputType: Int,
@@ -35,7 +41,7 @@ internal object UnknownFieldDiagnostics {
         val htmlAttributes: List<Pair<String, String>>?,
         val idEntry: String?,
         val viewHint: String?,
-        val contentDescription: String?,
+        val formSignal: String?,
     )
 
     /** 单个字符串在日志里的最大长度（截断防刷屏 / 防夹带）。 */
@@ -59,7 +65,7 @@ internal object UnknownFieldDiagnostics {
         append("attrs=[${formatAttrs(probe.htmlAttributes)}] ")
         append("id=${clip(probe.idEntry)} ")
         append("viewHint=${clip(probe.viewHint)} ")
-        append("cd=${clip(probe.contentDescription)}")
+        append("signal=${clip(probe.formSignal)}")
     }
 
     /** html 属性按 `k=v` 列出；无属性输出 `-`。 */

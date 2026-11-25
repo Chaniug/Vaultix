@@ -192,7 +192,7 @@ object AssistStructureParser {
                             htmlAttributes = node.htmlInfo?.attributes?.map { it.first to it.second },
                             idEntry = node.idEntry,
                             viewHint = node.hint?.toString(),
-                            contentDescription = node.contentDescription?.toString(),
+                            formSignal = signal,
                         ),
                     ),
                 )

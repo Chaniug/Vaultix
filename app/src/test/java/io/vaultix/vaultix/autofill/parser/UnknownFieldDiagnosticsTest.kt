@@ -27,7 +27,7 @@ class UnknownFieldDiagnosticsTest {
         htmlAttributes = listOf("type" to "password", "id" to "passwd"),
         idEntry = "quark_input",
         viewHint = "密码",
-        contentDescription = "请输入密码",
+        formSignal = "passwd password",
     )
 
     @Test
@@ -46,6 +46,13 @@ class UnknownFieldDiagnosticsTest {
     }
 
     @Test
+    fun `formSignal 进诊断串_能直接看出启发式分类输入`() {
+        // 这是定位夸克的关键：signal 是 HintClassifier 的实际输入，白名单是否漏属性看它。
+        val line = UnknownFieldDiagnostics.format(probe())
+        assertThat(line).contains("signal=passwd password")
+    }
+
+    @Test
     fun `无属性输出横线占位`() {
         val line = UnknownFieldDiagnostics.format(probe().copy(htmlAttributes = emptyList()))
         assertThat(line).contains("attrs=[-]")
@@ -57,7 +64,7 @@ class UnknownFieldDiagnosticsTest {
             UnknownFieldDiagnostics.Probe(
                 className = null, inputType = 0, autofillType = 0,
                 htmlTag = null, htmlAttributes = null,
-                idEntry = null, viewHint = null, contentDescription = null,
+                idEntry = null, viewHint = null, formSignal = null,
             ),
         )
         assertThat(line).contains("cls=-")
