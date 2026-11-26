@@ -35,7 +35,8 @@
   `fields.isEmpty()` 时单独遍历整树输出。8 单测绿 + 变异 1 红 + 还原绿；门禁 27/27。
 - 待用户装新 preview 抓 `structSummary`/`structNode` 定案；根因未定，不动分类策略。
 - 提交链 `0daf5f10`（detekt 红）→ `79848d20`（HEX_RADIX）→ `c4c027a3`（formSignal 重发）
-  → `f01e24ae`（误判定案文档）→ `待回填`（结构诊断）。
+  → `f01e24ae`（误判定案文档）→ `2476b17f`（结构诊断）；`Android CI (Debug)` `45736003514`
+  两 job 全绿，preview `Vaultix-2476b17.apk` assets 已核实。
 - 详见 [`SESSION-2026-11-25.md`](./SESSION-2026-11-25.md) 与
   [`issues/02-自动填充-part3.md`](./issues/02-自动填充-part3.md) #307（307-b 结构诊断）。
 
