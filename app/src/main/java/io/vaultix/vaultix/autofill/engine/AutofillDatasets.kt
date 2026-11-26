@@ -42,6 +42,21 @@ import io.vaultix.vaultix.autofill.model.ParsedStructure
 private const val LIGHT_ICON_TINT: Long = 0xFF44474EL
 private const val DARK_ICON_TINT: Long = 0xFFC4C6CFL
 
+/**
+ * Dataset 图标来源（#308）：把互斥的「URL 现算」与「预生成位图」合并为单一参数，
+ * 既让 `build()` 参数数守住 detekt ≤8 硬上限，也表达二者的互斥语义。
+ */
+sealed interface IconSource {
+    /** 主线程现算：查 Coil 磁盘缓存，未命中画字母头像（旧行为，兼容后台调用方）。 */
+    data class FromUrl(val url: String?) : IconSource
+
+    /** 后台已算好位图：主线程组装时直接用，不再碰磁盘（#308 推荐路径）。 */
+    data class Ready(val bitmap: Bitmap) : IconSource
+
+    /** 无图标：按标题画字母头像。 */
+    data object None : IconSource
+}
+
 /** 自动填充面板条目的构造与展示（RemoteViews，由系统渲染）。 */
 object AutofillDatasets {
 
@@ -158,13 +173,20 @@ object AutofillDatasets {
         subtitle: String,
         datasetId: String? = null,
         authIntent: PendingIntent? = null,
-        /** 站点图标 URL；为 null 时按标题画字母头像（见 [createAutofillItemIcon]）。 */
-        iconUrl: String? = null,
         category: FillCategory = FillCategory.LOGIN,
+        /**
+         * 图标来源（#308）：[IconSource.Ready] 用后台预生成的位图、主线程零 I/O；
+         * [IconSource.FromUrl] 维持旧的现算行为（兼容仍在后台调用的路径）。
+         */
+        icon: IconSource = IconSource.None,
     ): Dataset? {
         if (entries.isEmpty()) return null
-        val icon = createAutofillItemIcon(context, iconUrl, title, category)
-        val builder = datasetBuilder(presentation(context, title, subtitle, icon))
+        val iconBitmap = when (icon) {
+            is IconSource.Ready -> icon.bitmap
+            is IconSource.FromUrl -> createAutofillItemIcon(context, icon.url, title, category)
+            IconSource.None -> createAutofillItemIcon(context, null, title, category)
+        }
+        val builder = datasetBuilder(presentation(context, title, subtitle, iconBitmap))
         entries.forEach { (id, value) -> builder.setValue(id, AutofillValue.forText(value)) }
         datasetId?.let { builder.setId(it) }
         // 框架要求 IntentSender（Dataset 级认证）

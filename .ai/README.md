@@ -24,7 +24,23 @@
 - 已接进 CI：`ci-debug.yml` 的 `sandbox-tests` job 用**同一份脚本**，与 `android-ci` 并行
   ⇒ 本地绿 ⇒ CI 不会红在同一件事上。
 
-## 🕐 最新状态（2026-11-26 · #307 已结案——夸克 UC 内核限制，非缺陷，只推 main）
+## 🕐 最新状态（2026-11-26 · #308 填充组装切主线程，只推 main）
+
+- **起因**：#307 的 Edge 全链路日志夹 `AutofillValue: forText() not called on main thread`
+  （DefaultDispatcher-worker）。功能未坏，但 framework 契约要求 Parcelable 组装在主线程，
+  OEM 差异下有偶发填充 UI 异常风险。
+- **修法**：`AutofillDatasets` 加 `IconSource`（FromUrl / Ready / None，参数守 detekt ≤8）；
+  `AutofillDatasetFactory.prepareIcon()` 在后台预生成图标（Coil 磁盘 I/O 不进主线程）；
+  `VaultixAutofillService` 正常 / 锁定 / 无匹配三条分支的 dataset 与 FillResponse 组装
+  全部包进 `withContext(Dispatchers.Main)`。匹配、认证意图、SaveInfo、TOTP 票据一字未动。
+- **门禁**：新增 `check_autofill_main_thread.py`（剥注释，3 判据 + 4 变异自测），
+  本轮补接 `ci-debug.yml` 两步——写完门禁却漏接 CI 等于假绿（与 #305/#306 同训）。
+- 详见 [`SESSION-2026-11-26.md`](./SESSION-2026-11-26.md) 与
+  [`issues/02-自动填充-part3.md`](./issues/02-自动填充-part3.md) #308。
+
+---
+
+## 上一轮（2026-11-26 · #307 结案——夸克 UC 内核限制，非缺陷，只推 main）
 
 - **结案**：夸克浏览器无法填充 = 其 UC 自绘内核不向系统 AutofillService 上报可填字段 /
   不发起 `onFillRequest`。**用户实测 Bitwarden 在夸克上同样无法填充** ⇒ 行业标杆亦无解，
@@ -37,9 +53,7 @@
 - 提交链 `0daf5f10`（detekt 红）→ `79848d20` → `c4c027a3`（formSignal）→ `f01e24ae`（误判）
   → `2476b17f`（结构诊断，CI `45736003514` 全绿，preview `Vaultix-2476b17.apk` 已核实）。
   结案仅文档，最后代码提交仍是 `2476b17f`。
-- **独立待办（未修）**：Edge 日志暴露 `AutofillValue.forText() not called on main thread`，
-  `AutofillDatasets.build()` L168 在 IO dispatcher 构建 dataset，违反框架主线程约定；
-  Edge 上未致故障，属潜在稳定性隐患，后续单独评估。
+- 该轮留下的 `AutofillValue` 主线程警告**已转 #308 修复**。
 - 详见 [`SESSION-2026-11-25.md`](./SESSION-2026-11-25.md) 与
   [`issues/02-自动填充-part3.md`](./issues/02-自动填充-part3.md) #307（307-c 结案）。
 

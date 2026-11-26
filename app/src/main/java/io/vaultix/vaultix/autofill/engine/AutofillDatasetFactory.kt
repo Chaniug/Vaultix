@@ -45,6 +45,23 @@ import io.vaultix.vaultix.autofill.model.ParsedStructure
 object AutofillDatasetFactory {
 
     /**
+     * 后台预生成条目图标位图（#308）。
+     *
+     * framework 要求 `AutofillValue.forText()` / `Dataset.Builder` 在主线程构造，
+     * 但图标走 Coil **磁盘缓存**读取（[createAutofillItemIcon]），属 I/O、必须留在后台。
+     * 故把它从 [datasetFor] 的组装流程里拆出来：调用方在 Default 线程算好 [IconSource.Ready]，
+     * 再切到 Main 线程调 [datasetFor] 并传入，组装阶段就不再碰磁盘。
+     */
+    fun prepareIcon(context: Context, suggestion: FillSuggestion): IconSource = IconSource.Ready(
+        createAutofillItemIcon(
+            context = context,
+            iconUrl = suggestion.iconUrl,
+            title = suggestion.title,
+            category = suggestion.category,
+        ),
+    )
+
+    /**
      * 单条建议 → Dataset。
      *
      * 需要「先认证再回填」的两种情况：
@@ -64,6 +81,11 @@ object AutofillDatasetFactory {
          * 而 `TotpTicketStore` 需要可测（纯 JVM 单测里不能碰 Android）。
          */
         totpTickets: TotpTicketStore? = null,
+        /**
+         * 图标来源（#308）：为 null 时维持旧行为（按 [FillSuggestion.iconUrl] 现算）；
+         * 主线程组装路径应传后台经 [prepareIcon] 算好的 [IconSource.Ready]，避免在 Main 读磁盘。
+         */
+        icon: IconSource? = null,
     ): Dataset? {
         val entries = AutofillDatasets.entriesFor(parsed, suggestion)
         if (entries.isEmpty()) return null
@@ -80,10 +102,10 @@ object AutofillDatasetFactory {
             subtitle = suggestion.subtitle,
             datasetId = suggestion.id,
             authIntent = authIntent,
+            category = suggestion.category,
             // 图标优先用**站点图标**，取不到才画字母头像（见 [AutofillItemIcon]）：
             // 面板里一屏可能全是同一类条目，靠类别矢量图标分不出谁是谁。
-            iconUrl = suggestion.iconUrl,
-            category = suggestion.category,
+            icon = icon ?: IconSource.FromUrl(suggestion.iconUrl),
         )
     }
 

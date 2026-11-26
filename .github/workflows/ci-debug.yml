@@ -287,6 +287,17 @@ jobs:
       - name: Self-test Quark autofill compatibility checker
         run: python3 "$GITHUB_WORKSPACE/.ai/tools/check_quark_autofill_compat.py" --selftest
 
+      # ★ #308（2026-11-26）：FillResponse / Dataset / AutofillValue 组装必须在主线程。
+      #   Edge 真机日志出现 "AutofillValue: forText() not called on main thread"，
+      #   原实现把整条组装链放在 Dispatchers.Default，违反 framework 契约（功能未坏，
+      #   OEM 差异下有偶发填充 UI 异常风险）。修法：图标（Coil 磁盘缓存 I/O）留在后台
+      #   预生成，纯对象组装切 Main。编译 / detekt / 单测都看不出线程归属，配 4 组变异自测。
+      - name: Check autofill main-thread assembly (#308)
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/check_autofill_main_thread.py" "$GITHUB_WORKSPACE"
+
+      - name: Self-test autofill main-thread checker
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/check_autofill_main_thread.py" --selftest
+
       # ★ 2026-11-15（#293）：KDBX 通行密钥 credentialId 的跨模块保真契约。
       #
       # 真机：正式 v0.13.2 用 KDBX 库里保存的 passkey 登录 GitHub / x.com 报

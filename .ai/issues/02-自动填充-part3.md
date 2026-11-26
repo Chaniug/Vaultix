@@ -1,9 +1,10 @@
-# 02-自动填充 · 第 3 篇（#255 ~ #307）
+# 02-自动填充 · 第 3 篇（#255 ~ #308）
 
 > 主篇索引：[`02-自动填充.md`](./02-自动填充.md)（含计数规则与重号警告）
-> 本篇 3 章 · 覆盖 #255（填充面板的**观感层**：行卡片、品牌头、宽高取舍）、
-> #306（夸克浏览器兼容名单：XML compatibility-package + Kotlin 已知浏览器集合）
-> 与 #307（夸克无法填充：UC 内核系统级限制，Bitwarden 亦无解，已结案非缺陷）
+> 本篇 4 章 · 覆盖 #255（填充面板的**观感层**：行卡片、品牌头、宽高取舍）、
+> #306（夸克浏览器兼容名单：XML compatibility-package + Kotlin 已知浏览器集合）、
+> #307（夸克无法填充：UC 内核系统级限制，Bitwarden 亦无解，已结案非缺陷）
+> 与 #308（FillResponse / Dataset 组装切回主线程，图标 I/O 留后台）
 
 ## 255. 面板「一坨黑块」：行背景资源**存在但从未接线**，图标还叠着两层圆底（2026-11-09）
 
@@ -222,3 +223,38 @@ TDD：8 绿 → 摘要字段变异 1 红 → 还原 8 绿；门禁 27/27、生�
 约定。Edge 上未致故障，属潜在稳定性隐患，后续单独评估。
 
 只推 `main`，不合 `rele`。
+
+---
+
+## 308. 填充响应组装切回主线程：图标 I/O 留后台，Parcelable 归 Main（2026-11-26）
+
+**现象**：#307 的 Edge 全链路日志里夹一条系统警告
+`AutofillValue: forText() not called on main thread: Thread[DefaultDispatcher-worker-7,5,main]`。
+Edge 上填充、passkey 全部正常，**功能未坏**。
+
+**根因**：`VaultixAutofillService.scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)`，
+`onFillRequest` 里的 `buildResponse()` 整条链跑在 Default。而
+`AutofillValue.forText()` / `Dataset.Builder` / `FillResponse.Builder` 是 framework 的
+Parcelable 组装，**契约要求在主线程构造**。当前只在 Edge 日志里告警，国产 OEM ROM 上对
+RemoteViews / Parcelable 的实现差异更大，有偶发填充 UI 异常风险——属潜在稳定性隐患，值得修。
+
+**修法（只改线程归属，不改任何填充语义）**：
+1. `AutofillDatasets` 新增 `IconSource` 密封接口（`FromUrl` / `Ready` / `None`），
+   把互斥的「现算」与「预生成位图」合成一个参数——`build()` 参数数因此守住 detekt ≤8 上限。
+2. `AutofillDatasetFactory.prepareIcon()` 在**后台**预生成位图（Coil 磁盘缓存读，属 I/O），
+   `datasetFor()` 新增可选 `icon` 参数；传 null 时保持旧的 `FromUrl` 现算行为。
+3. `VaultixAutofillService.buildResponse()` 先把 `suggestions` 的图标全算好，再
+   `withContext(Dispatchers.Main)` 里做纯对象组装（dataset / addDataset / header / build）。
+   locked 与 noMatch 两条 `buildFallback()` 同样切主线程；`callback.onSuccess` 本就已在 Main。
+4. `totpTickets = totpTickets` 原样透传——**验证码复制路径一个字没动**（曾误写 null，已纠正）。
+
+**为什么不会影响现在的填充（回应真机风险疑问）**：候选匹配、字段映射、认证意图、
+SaveInfo、TOTP 票据、header 全部沿用原实现，只是把「在哪里 new 这些对象」从 Default 挪到 Main；
+图标事先算好，主线程零磁盘 I/O；三条分支（正常 / 锁定 / 无匹配）都覆盖，不存在漏网路径。
+
+**门禁**：新增 `.ai/tools/check_autofill_main_thread.py`（剥注释）三条判据——
+A 图标 I/O 不得落进 Main、B `forText` 调用点存在且组装在 Main、C Service 有 `datasetFor` 组装；
+4 组变异自测全红（组装移出 Main / I/O 移进 Main / forText 消失 / 合规绿）。
+**本轮补接 CI 两步**（`#308` 门禁 + 自测）——脚本写完却漏接 CI 等于假绿，与 #305/#306 同训。
+
+只推 `main`，不合 `rele`；待 preview APK 真机复验 Edge 警告消失且填充照常。
