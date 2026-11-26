@@ -24,21 +24,24 @@
 - 已接进 CI：`ci-debug.yml` 的 `sandbox-tests` job 用**同一份脚本**，与 `android-ci` 并行
   ⇒ 本地绿 ⇒ CI 不会红在同一件事上。
 
-## 🕐 最新状态（2026-11-26 · #307 取证中——登录页 fields=0，补结构级诊断，只推 main）
+## 🕐 最新状态（2026-11-26 · #307 已结案——夸克 UC 内核限制，非缺陷，只推 main）
 
-- ⚠️ 上一轮"非缺陷、点错位置"定案**被用户否认**：抓 00:46 日志时点的是**网站登录页密码框**。
-  地址栏那两条确属误测，但不能据此结案。**教训：日志元数据推不出用户操作，证据不足别急着定案**。
-- 登录页日志：`fillRequest pkg=com.quark.browser webView=false fields=0 hints={}`，
-  且无 probe ⇒ 没有任何节点过 `isEditableNode` 准入闸。现有探针只覆盖"进表 UNKNOWN"，对
-  "无节点 / 非标准控件被拒 / 规则拒绝"三种可能全盲。
-- 本轮补 `StructureDiagnostics`：`structSummary` 计数 + `structNode` 节点样本（含 hints），
-  `fields.isEmpty()` 时单独遍历整树输出。8 单测绿 + 变异 1 红 + 还原绿；门禁 27/27。
-- 待用户装新 preview 抓 `structSummary`/`structNode` 定案；根因未定，不动分类策略。
-- 提交链 `0daf5f10`（detekt 红）→ `79848d20`（HEX_RADIX）→ `c4c027a3`（formSignal 重发）
-  → `f01e24ae`（误判定案文档）→ `2476b17f`（结构诊断）；`Android CI (Debug)` `45736003514`
-  两 job 全绿，preview `Vaultix-2476b17.apk` assets 已核实。
+- **结案**：夸克浏览器无法填充 = 其 UC 自绘内核不向系统 AutofillService 上报可填字段 /
+  不发起 `onFillRequest`。**用户实测 Bitwarden 在夸克上同样无法填充** ⇒ 行业标杆亦无解，
+  属内核边界，**不改代码、不上无障碍兜底、不逆向内核**。
+- 三条闭环证据：① Edge 同站点全链路通（`webDomain=github.com`、`webView=true`、
+  `targets=2 matched=1 datasets=1`、passkey 完整）；② 夸克登录页零 `VaultixAutofill:` 行、
+  `onFillRequest` 未触发；③ Bitwarden 对照失败。
+- 曲折教训：名单漏项 → 点错位置（被否认）→ 请求未到入口 → Bitwarden 对照定案。
+  **竞品表现 / 用户操作无法从元数据反推，先问清 + 找对照组**；入口内诊断在入口不触发时全白加。
+- 提交链 `0daf5f10`（detekt 红）→ `79848d20` → `c4c027a3`（formSignal）→ `f01e24ae`（误判）
+  → `2476b17f`（结构诊断，CI `45736003514` 全绿，preview `Vaultix-2476b17.apk` 已核实）。
+  结案仅文档，最后代码提交仍是 `2476b17f`。
+- **独立待办（未修）**：Edge 日志暴露 `AutofillValue.forText() not called on main thread`，
+  `AutofillDatasets.build()` L168 在 IO dispatcher 构建 dataset，违反框架主线程约定；
+  Edge 上未致故障，属潜在稳定性隐患，后续单独评估。
 - 详见 [`SESSION-2026-11-25.md`](./SESSION-2026-11-25.md) 与
-  [`issues/02-自动填充-part3.md`](./issues/02-自动填充-part3.md) #307（307-b 结构诊断）。
+  [`issues/02-自动填充-part3.md`](./issues/02-自动填充-part3.md) #307（307-c 结案）。
 
 ---
 

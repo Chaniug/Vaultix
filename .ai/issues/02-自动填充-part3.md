@@ -3,7 +3,7 @@
 > 主篇索引：[`02-自动填充.md`](./02-自动填充.md)（含计数规则与重号警告）
 > 本篇 3 章 · 覆盖 #255（填充面板的**观感层**：行卡片、品牌头、宽高取舍）、
 > #306（夸克浏览器兼容名单：XML compatibility-package + Kotlin 已知浏览器集合）
-> 与 #307（夸克网站登录页密码框不弹：fields=0，补结构级诊断，取证中）
+> 与 #307（夸克无法填充：UC 内核系统级限制，Bitwarden 亦无解，已结案非缺陷）
 
 ## 255. 面板「一坨黑块」：行背景资源**存在但从未接线**，图标还叠着两层圆底（2026-11-09）
 
@@ -118,11 +118,15 @@ Vaultix 不 hook、不逆向、不强改系统填充框架。补齐名单后，�
 
 ---
 
-## 307. 夸克网站登录页密码框不弹：字段全判 UNKNOWN / fields=0（2026-11-25 ~ 26，取证中）
+## 307. 夸克浏览器无法填充：UC 内核系统级限制，非缺陷（2026-11-25 ~ 26，已结案）
 
-> ⚠️ **状态：取证中，未定案**。曾于 11-26 00:39 据地址栏日志误判为"非缺陷、点错位置"，
-> 用户已否认——抓 00:46 日志时点的是**网站登录页密码框**。教训：日志元数据无法反推用户操作，
-> **证据不足不要急着定案，先问清楚**。未改任何分类策略，只补诊断。
+> ✅ **状态：已结案——夸克 UC 内核边界，非 Vaultix 缺陷，不改代码**。
+> 定案依据（三条闭环）：① Edge 同一站点全链路通（域名/字段/匹配/dataset/passkey 全正常）；
+> ② 夸克登录页 `onFillRequest` 从未被调用；③ **用户实测 Bitwarden 在夸克上同样无法填充**。
+> 竞品对照是决定性证据——行业标杆也过不去，证明不是 Vaultix 实现问题。
+> 曲折：曾 00:39 误判"点错位置"（被否认），09:42 发现"请求未到入口"。教训：**竞品表现/
+> 用户操作这类无法从元数据反推的事实，先问清楚 + 找对照组，别凭半份日志下结论**。
+> 全程未改任何分类策略，只补诊断。
 
 **地址栏误测记录（2026-11-26 00:37，装 `c4c027a` 后抓）——这段确属点错位置**：
 ```
@@ -196,9 +200,25 @@ tag/id/hints/focus/children`（带 autofillId / focused / 可疑类名才采，�
 `AssistStructureParser.parse` 在 `fields.isEmpty()` 时单独遍历整树输出。安全红线同前。
 TDD：8 绿 → 摘要字段变异 1 红 → 还原 8 绿；门禁 27/27、生产安全红线通过。
 
-**下一步（装新 preview 再抓）**：看 `structSummary`：
-- `nodes` 很多但 `withId=0`/`textFillable=0` ⇒ 夸克没上报可填节点，走内核边界（可能需无障碍兜底）；
-- `textFillable>0` 但 `fields=0` ⇒ 节点被准入闸拒，看 `structNode cls=` 决定是否放宽 `isEditableNode`；
-- 有任何密码语义节点 ⇒ 回到 (a)/(b) 处理。
+### 307-c：结案——Bitwarden 对照 + Edge 全链路（2026-11-26 09:55）
 
-只推 `main`，不合 `rele`。根因未定，诊断日志暂留。
+新 preview（`2476b17`，含结构诊断）抓日志出现**第三次形态**：09:42 那份零 `VaultixAutofill:`
+行、`structSummary` 也不出现 ⇒ `onFillRequest` 根本没被调用。**入口没进来，入口内的诊断
+（`UnknownFieldDiagnostics` / `StructureDiagnostics`）全部白加**——停止"加诊断→发版→抓日志"循环。
+
+用户随后提供决定性对照：
+- **Edge** 同一站点：`fillRequest pkg=com.microsoft.emmx webDomain=github.com webView=true
+  fields=2 hints={USERNAME=1,PASSWORD=…} targets=2 user=true pass=true` →
+  `fillResponse candidates=212 matched=1 datasets=1` → CP GET / passkey assertion 全完成。
+- **Bitwarden 在夸克上同样无法填充**（用户实测）。
+
+三条闭环 ⇒ **夸克 UC 自绘内核不向系统 AutofillService 上报可填字段/不发起 fill request，
+行业标杆亦无解，属内核边界，非 Vaultix 缺陷，结案不改代码**。不上无障碍兜底 / 内核逆向。
+诊断日志（仅 debug、无 text、限长）保留作长期取证工具。
+
+**顺带记录待办（独立 issue，不在 #307 改）**：Edge 日志有
+`AutofillValue: forText() not called on main thread: DefaultDispatcher-worker`，
+`AutofillDatasets.build()` L168 的 `AutofillValue.forText()` 在 IO 线程构建，违反框架主线程
+约定。Edge 上未致故障，属潜在稳定性隐患，后续单独评估。
+
+只推 `main`，不合 `rele`。

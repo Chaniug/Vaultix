@@ -50,7 +50,7 @@
 > 逐条明细（# → 标题 → 分篇）见 [`02-自动填充.md`](./issues/02-自动填充.md)。
 > 2026-11-09 新增 **#255** 填充面板行卡片化（行背景资源零引用 + 图标双圆底）。
 > 2026-11-24 新增 **#306** 夸克浏览器不弹填充：两份兼容名单都漏了 `com.quark.browser`。
-> 2026-11-25 新增 **#307** 夸克网站登录页密码框不弹：fields=0，补结构级诊断（取证中，2026-11-26）。
+> 2026-11-25 新增 **#307** 夸克无法填充 → 11-26 结案：UC 内核系统级限制、Bitwarden 亦无解，非 Vaultix 缺陷。
 
 ### [03-通行密钥与凭据提供商](./issues/03-通行密钥与凭据提供商.md) — 通行密钥 / Credential Provider / 凭据回灌（25 条；2026-10-29 新增 #208 excludeCredentials，2026-10-30 新增 #211 type 用官方常量；**2026-11-15 新增 #293 正式版 KDBX passkey 登录 GitHub / x.com 报「通行密钥有问题」**：`KdbxPasskeyCodec.toCredential()` 旧实现用 `normalizeCredentialId()` 把 KeePass 生态的 base64url 无填充 ID 转成标准 base64（补 `=`、换出 `+` `/`），而 `WebAuthn.rawIdFromStored()` 的决策是「原样回传存储文本」（2026-09-12 真机证伪 decode→re-encode）⇒ 断言响应 id/rawId 成了 RP 按 base64url 解不出的文本。三条对照「Bitwarden 正常 / 电脑 KeePassXC 正常 / 只有 Vaultix 手机版读同一 KDBX 失败」把根因收敛到唯一差异路径。修法只动读侧（原样保留、删转换），**不动 `WebAuthn`**；订正文件头过时溯源（`KPEX_PASSKEY_*` 由 KeePassXC 定义、KeePassDX 遵循，不存在 `KPXC_*` 体系）；新增跨模块契约测试 + `check_kdbx_passkey_id.py` 与 11 组变异自测，接 `ci-debug.yml` 两步。详见 [part6](./issues/03-通行密钥与凭据提供商-part6.md)）
 
