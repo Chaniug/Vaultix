@@ -258,4 +258,15 @@ A 图标 I/O 不得落进 Main、B `forText` 调用点存在且组装在 Main、
 **本轮补接 CI 两步**（`#308` 门禁 + 自测）——脚本写完却漏接 CI 等于假绿，与 #305/#306 同训。
 
 提交 `91b518ea`（Android CI `45741019593` 全绿、preview `Vaultix-91b518e.apk` 已挂），
-只推 `main`，不合 `rele`。待真机复验 Edge 警告消失且填充照常。
+只推 `main`，不合 `rele`。
+
+**真机验收通过（2026-11-26 10:55，用户 HONOR BKQ-AN00 / Android 17）**：装
+`0.13.10-dev-91b518e` 后 Edge 填 GitHub 登录页，导出日志
+`vaultix_logs_20261126_105544.txt`——① `fillRequest fields=2 targets=2` →
+`fillResponse matched=1 datasets=1`，填充照常；② 全文零 `forText() not called on main thread`
+警告（旧包 `2476b17` 同场景有两条）。**#308 结案**。
+
+> 插曲：用户先发的 `vaultix_logs_20261126_095544.txt`（导出 09:55、`versionName=2476b17`）
+> 是旧包日志，比 preview 构建时间（10:18）还早 23min，物理上不可能含修复。文件名时间戳 +
+> 日志内 `versionName` + 构建时间三者核对才定位到「发错附件」，不是修复无效。教训延续 #307：
+> **先验证据本身的有效性（版本/时间），再读证据内容**。

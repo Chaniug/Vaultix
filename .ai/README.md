@@ -38,7 +38,11 @@
 - **验证**：提交 `91b518ea`，Android CI `45741019593`（4m47s，两 job + detekt + 新门禁两步全绿）、
   docs `45741019603` / `45741114251` 全绿；preview `0.13.10-dev-91b518e` /
   `Vaultix-91b518e.apk`（下载链接 HTTP 200 已核实）。
-- **真机欠账**：请用户装 preview 用 Edge 复验——填充照常 + `forText()` 主线程警告消失。
+- **真机已结案（11-26 10:55）**：用户装 preview 用 Edge 填 GitHub，日志
+  `vaultix_logs_20261126_105544.txt`——`fillResponse datasets=1` 填充照常、
+  全文零 `forText() not called on main thread` 警告（旧包 `2476b17` 同场景有两条）。
+  **先发的 `095544` 附件是旧包日志（版本 `2476b17`、导出早于 preview 构建 23min），发错附件非修复无效**——
+  延续 #307 教训：先验证据有效性（版本 / 时间）再读内容。
 - 详见 [`SESSION-2026-11-26.md`](./SESSION-2026-11-26.md) 与
   [`issues/02-自动填充-part3.md`](./issues/02-自动填充-part3.md) #308。
 
