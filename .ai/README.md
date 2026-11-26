@@ -24,20 +24,20 @@
 - 已接进 CI：`ci-debug.yml` 的 `sandbox-tests` job 用**同一份脚本**，与 `android-ci` 并行
   ⇒ 本地绿 ⇒ CI 不会红在同一件事上。
 
-## 🕐 最新状态（2026-11-26 · #307 定案：非缺陷，测试点错了位置，只推 main）
+## 🕐 最新状态（2026-11-26 · #307 取证中——登录页 fields=0，补结构级诊断，只推 main）
 
-- 用户装 `c4c027a` 再抓日志，`probe` 行定案：点的是夸克**地址栏/首页搜索框**
-  （`id=bk_search_edittext`、`viewHint=搜索/搜索历史/搜索、提问或输入网址`、
-  `inputType=0x20001`=URI），**不是网站登录密码框**。命中 `IGNORED_TERMS`「搜索」→
-  UNKNOWN → `noFillTarget` 静默是**防误弹的正确行为**。**#307 非缺陷，无代码改动**。
-- 上一轮的克制得到验证：没在错误前提上做位置兜底（否则地址栏会被误判成凭据框、引入误弹回归）。
-  诊断日志仅 debug 输出、release 无感，保留作长期取证工具。
-- **真机验收欠账**：需在夸克里打开真实网站登录页、点页内用户名/密码框（非地址栏）再抓日志；
-  届时若仍全 UNKNOWN 才进入(a)扩白名单/(b)兜底推断的评估。
-- 提交链 `0daf5f10`（detekt 红）→ `79848d20`（HEX_RADIX）→ `c4c027a3`（诊断补 formSignal 重发）；
-  `Android CI (Debug)` `45654281913` 两 job 全绿，preview `Vaultix-c4c027a.apk` 资产已核实。
+- ⚠️ 上一轮"非缺陷、点错位置"定案**被用户否认**：抓 00:46 日志时点的是**网站登录页密码框**。
+  地址栏那两条确属误测，但不能据此结案。**教训：日志元数据推不出用户操作，证据不足别急着定案**。
+- 登录页日志：`fillRequest pkg=com.quark.browser webView=false fields=0 hints={}`，
+  且无 probe ⇒ 没有任何节点过 `isEditableNode` 准入闸。现有探针只覆盖"进表 UNKNOWN"，对
+  "无节点 / 非标准控件被拒 / 规则拒绝"三种可能全盲。
+- 本轮补 `StructureDiagnostics`：`structSummary` 计数 + `structNode` 节点样本（含 hints），
+  `fields.isEmpty()` 时单独遍历整树输出。8 单测绿 + 变异 1 红 + 还原绿；门禁 27/27。
+- 待用户装新 preview 抓 `structSummary`/`structNode` 定案；根因未定，不动分类策略。
+- 提交链 `0daf5f10`（detekt 红）→ `79848d20`（HEX_RADIX）→ `c4c027a3`（formSignal 重发）
+  → `f01e24ae`（误判定案文档）→ `待回填`（结构诊断）。
 - 详见 [`SESSION-2026-11-25.md`](./SESSION-2026-11-25.md) 与
-  [`issues/02-自动填充-part3.md`](./issues/02-自动填充-part3.md) #307（已定案）。
+  [`issues/02-自动填充-part3.md`](./issues/02-自动填充-part3.md) #307（307-b 结构诊断）。
 
 ---
 
