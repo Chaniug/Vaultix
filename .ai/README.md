@@ -24,7 +24,20 @@
 - 已接进 CI：`ci-debug.yml` 的 `sandbox-tests` job 用**同一份脚本**，与 `android-ci` 并行
   ⇒ 本地绿 ⇒ CI 不会红在同一件事上。
 
-## 🕐 最新状态（2026-11-26 · #308 填充组装切主线程，只推 main）
+## 🕐 最新状态（2026-11-26 · v0.13.11 正式发布：#305/#306/#308 随版）
+
+- **发布结论（真实 run）**：用户 `发一个release` + 确认 `0.13.11 并合 rele`。`VERSION`
+  `0.13.10 → 0.13.11`，手写 `Docs/release-notes/v0.13.11.md`。因无 gh token / helper，
+  采用等价纯 git：本地 `rele-release` 合并 `origin/main`（`--no-ff`，历史 PR 同款合并提交）
+  推 `origin rele-release:rele`。`Android Stable Release` run `45746632447` **success**
+  （6m43s，仓库固定密钥签名），tag `v0.13.11` 与 `rele` 同指 `322e45a`，Release **Latest**。
+- **产物**：`Vaultix-v0.13.11.apk`（6.7 MB，混淆）、`checksums-sha256.txt`；APK SHA-256
+  `880f07e4…c60f1`，签名指纹 `7e6c8c07…1fd8`（与 v0.13.10 一致可覆盖安装），下载 HTTP 200。
+  发布说明手写版被正确采用。发布内容 = #305 指纹 KEK 显式生物失效 + #306 夸克名单 +
+  #307 诊断（仅元数据）+ #308 填充组装切主线程（真机 Edge 已验警告消失、填充照常）。
+- **只推 rele 触发发布，文档回填仍只在 main**（不再推 rele ⇒ 不二次发版）。
+
+## 上一轮（2026-11-26 · #308 填充组装切主线程，只推 main）
 
 - **起因**：#307 的 Edge 全链路日志夹 `AutofillValue: forText() not called on main thread`
   （DefaultDispatcher-worker）。功能未坏，但 framework 契约要求 Parcelable 组装在主线程，
