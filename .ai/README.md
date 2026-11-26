@@ -24,7 +24,88 @@
 - 已接进 CI：`ci-debug.yml` 的 `sandbox-tests` job 用**同一份脚本**，与 `android-ci` 并行
   ⇒ 本地绿 ⇒ CI 不会红在同一件事上。
 
-## 🕐 最新状态（2026-11-23 · #304 查看锁与 PIN 熔断修复）
+## 🕐 最新状态（2026-11-26 · #308 填充组装切主线程，只推 main）
+
+- **起因**：#307 的 Edge 全链路日志夹 `AutofillValue: forText() not called on main thread`
+  （DefaultDispatcher-worker）。功能未坏，但 framework 契约要求 Parcelable 组装在主线程，
+  OEM 差异下有偶发填充 UI 异常风险。
+- **修法**：`AutofillDatasets` 加 `IconSource`（FromUrl / Ready / None，参数守 detekt ≤8）；
+  `AutofillDatasetFactory.prepareIcon()` 在后台预生成图标（Coil 磁盘 I/O 不进主线程）；
+  `VaultixAutofillService` 正常 / 锁定 / 无匹配三条分支的 dataset 与 FillResponse 组装
+  全部包进 `withContext(Dispatchers.Main)`。匹配、认证意图、SaveInfo、TOTP 票据一字未动。
+- **门禁**：新增 `check_autofill_main_thread.py`（剥注释，3 判据 + 4 变异自测），
+  本轮补接 `ci-debug.yml` 两步——写完门禁却漏接 CI 等于假绿（与 #305/#306 同训）。
+- **验证**：提交 `91b518ea`，Android CI `45741019593`（4m47s，两 job + detekt + 新门禁两步全绿）、
+  docs `45741019603` / `45741114251` 全绿；preview `0.13.10-dev-91b518e` /
+  `Vaultix-91b518e.apk`（下载链接 HTTP 200 已核实）。
+- **真机已结案（11-26 10:55）**：用户装 preview 用 Edge 填 GitHub，日志
+  `vaultix_logs_20261126_105544.txt`——`fillResponse datasets=1` 填充照常、
+  全文零 `forText() not called on main thread` 警告（旧包 `2476b17` 同场景有两条）。
+  **先发的 `095544` 附件是旧包日志（版本 `2476b17`、导出早于 preview 构建 23min），发错附件非修复无效**——
+  延续 #307 教训：先验证据有效性（版本 / 时间）再读内容。
+- 详见 [`SESSION-2026-11-26.md`](./SESSION-2026-11-26.md) 与
+  [`issues/02-自动填充-part3.md`](./issues/02-自动填充-part3.md) #308。
+
+---
+
+## 上一轮（2026-11-26 · #307 结案——夸克 UC 内核限制，非缺陷，只推 main）
+
+- **结案**：夸克浏览器无法填充 = 其 UC 自绘内核不向系统 AutofillService 上报可填字段 /
+  不发起 `onFillRequest`。**用户实测 Bitwarden 在夸克上同样无法填充** ⇒ 行业标杆亦无解，
+  属内核边界，**不改代码、不上无障碍兜底、不逆向内核**。
+- 三条闭环证据：① Edge 同站点全链路通（`webDomain=github.com`、`webView=true`、
+  `targets=2 matched=1 datasets=1`、passkey 完整）；② 夸克登录页零 `VaultixAutofill:` 行、
+  `onFillRequest` 未触发；③ Bitwarden 对照失败。
+- 曲折教训：名单漏项 → 点错位置（被否认）→ 请求未到入口 → Bitwarden 对照定案。
+  **竞品表现 / 用户操作无法从元数据反推，先问清 + 找对照组**；入口内诊断在入口不触发时全白加。
+- 提交链 `0daf5f10`（detekt 红）→ `79848d20` → `c4c027a3`（formSignal）→ `f01e24ae`（误判）
+  → `2476b17f`（结构诊断，CI `45736003514` 全绿，preview `Vaultix-2476b17.apk` 已核实）。
+  结案仅文档，最后代码提交仍是 `2476b17f`。
+- 该轮留下的 `AutofillValue` 主线程警告**已转 #308 修复**。
+- 详见 [`SESSION-2026-11-25.md`](./SESSION-2026-11-25.md) 与
+  [`issues/02-自动填充-part3.md`](./issues/02-自动填充-part3.md) #307（307-c 结案）。
+
+---
+
+## 上一轮（2026-11-24 · #306 夸克浏览器自动填充兼容名单，只推 main）
+
+- 用户实测夸克不弹填充：两份名单都漏 `com.quark.browser` —— XML 缺 compatibility-package
+  ⇒ webDomain 不上报；KNOWN_BROWSER_PACKAGES 缺包名 ⇒ 无域名降级也被拒 ⇒ 候选为空。
+- 两处各加一行；新增剥注释门禁 `check_quark_autofill_compat.py` 接 CI 两步（4 变异自测）。
+  TDD 旧实现红灯、补齐转绿，本地 27/27 门禁全绿。
+- 提交 `7df7680f`：`Android CI (Debug)` `45641648112` 两 job 全 success（新门禁两步 CI 实跑），
+  docs `45641647673` success；preview tag 指向本次提交；只推 `main`，不合 `rele`。
+- 内核是否上报域名不受控，不 hook；最差保证"能弹能选"，精准匹配待真机。
+- 详见 [`SESSION-2026-11-24.md`](./SESSION-2026-11-24.md) 与
+  [`issues/02-自动填充-part3.md`](./issues/02-自动填充-part3.md) #306。
+
+---
+
+## 上一轮（2026-11-24 · #305 指纹 KEK 显式生物失效加固，只推 main）
+
+- 借鉴 KeePassDX #2805：指纹门锁 KEK 显式 `.setInvalidatedByBiometricEnrollment(true)`，
+  不再依赖可能被 OEM overlay 破坏的默认值；新增剥注释源码门禁接 CI（3 变异自测）。
+- 本地 555 例逻辑测试 + 26/26 门禁全绿；门禁在旧实现红灯、加显式调用转绿。
+- 提交 `67176e0c` 的 `Android CI (Debug)` `45384271666` 整次 success（新门禁两步在 CI 实跑），
+  docs `45384271649` success；只推 `main`，不合 `rele`，待下次发版随行。
+- 详见 [`SESSION-2026-11-24.md`](./SESSION-2026-11-24.md) 与
+  [`issues/04-锁与解锁-part12.md`](./issues/04-锁与解锁-part12.md) #305。
+
+---
+
+## 上一轮（2026-11-24 · v0.13.10 正式发布：#304 安全修复随版）
+
+- `VERSION` 0.13.9 → **0.13.10**；发布内容 = #304 两项 P0 安全修复（查看锁取消不再放行、PIN 熔断串行化 + 计数落盘）。
+- 发布链：版本提交 `edefe4f6` → PR #26 合并 `main → rele`（合并提交 `46b46100`）→ `Android Stable Release`
+  run `45303375086` success → tag `v0.13.10` 与 `rele` 同指 `46b46100`，Release 为 **Latest**。
+- 资产：`Vaultix-v0.13.10.apk`（6,998,186 B，SHA-256 `0d6cfcbb…9631`）、`checksums-sha256.txt`；
+  手写 `Docs/release-notes/v0.13.10.md` 被正确采用；签名指纹与 v0.13.9 一致可覆盖安装。
+- 纯发布 + 文档，无生产代码改动；源码门禁仍以 `da1f51b4` 的 Android CI `45206052108` 为准。
+- 详见 [`SESSION-2026-11-24.md`](./SESSION-2026-11-24.md)。发布后文档回填只推 `main`，不合 `rele`。
+
+---
+
+## 上一轮（2026-11-23 · #304 查看锁与 PIN 熔断修复）
 
 - 自动查看锁取消生物识别后不再放行；PIN 验证与计数改为互斥，失败计数使用可确认落盘。
 - 修改 PIN 增加提交中去重；计数保存失败只返回不可用，不删除门锁或库数据。

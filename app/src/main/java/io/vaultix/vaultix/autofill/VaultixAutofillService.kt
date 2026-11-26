@@ -287,37 +287,40 @@ class VaultixAutofillService : AutofillService() {
             // 暂存下来，解锁完成后由 AutofillActivity 用同一批 id 构造 Dataset 回灌。
             // 不暂存的后果就是用户回到浏览器还得再点一次（「解锁完还要再验证一次」）。
             pendingFillStore.stage(parsed)
-            return AutofillDatasets.buildFallback(
-                context = this,
-                ids = ids,
-                authIntent = AutofillIntents.pending(
-                    context = this,
-                    intent = AutofillIntents.create(
-                        context = this,
-                        mode = AutofillIntents.MODE_UNLOCK,
-                        title = getString(R.string.autofill_unlock_title),
-                        subtitle = getString(R.string.autofill_unlock_subtitle),
+            // #308：FillResponse / Presentation / PendingIntent 组装切主线程（契约见下方主分支注释）。
+            return withContext(Dispatchers.Main) {
+                AutofillDatasets.buildFallback(
+                    context = this@VaultixAutofillService,
+                    ids = ids,
+                    authIntent = AutofillIntents.pending(
+                        context = this@VaultixAutofillService,
+                        intent = AutofillIntents.create(
+                            context = this@VaultixAutofillService,
+                            mode = AutofillIntents.MODE_UNLOCK,
+                            title = getString(R.string.autofill_unlock_title),
+                            subtitle = getString(R.string.autofill_unlock_subtitle),
+                        ),
+                        // ⚠️⚠️ **绝不加 `FLAG_ACTIVITY_NEW_TASK`**（2026-09-13 定案，系统日志实证）。
+                        // 这是 **dataset 级认证意图**：系统会以「能收回 EXTRA_AUTHENTICATION_RESULT」
+                        // 的方式启动它，`AutofillActivity` 解锁完靠 `setResult` 把候选回灌回去。
+                        // 一旦带 NEW_TASK，Activity 被推进**独立 task** ⇒ 系统在启动后 ~16ms 就
+                        // 判定「本次认证没有返回」（系统日志原文：`onAuthenticationResult(): empty intent`）
+                        // ⇒ 我们随后构造的 FillResponse **被整个丢弃** ⇒ 用户看到的现象就是
+                        // 「指纹明明解锁成功了，却什么都没发生，只能反复解锁」。
+                        // 同一条规则也写在 `AutofillIntents` 与 `AndroidManifest` 的 `AutofillActivity`
+                        // 注释里（"不设 NEW_TASK（认证型意图）"）—— 这里曾经与服务端脱节。
+                        requestCode = REQUEST_UNLOCK,
                     ),
-                    // ⚠️⚠️ **绝不加 `FLAG_ACTIVITY_NEW_TASK`**（2026-09-13 定案，系统日志实证）。
-                    // 这是 **dataset 级认证意图**：系统会以「能收回 EXTRA_AUTHENTICATION_RESULT」
-                    // 的方式启动它，`AutofillActivity` 解锁完靠 `setResult` 把候选回灌回去。
-                    // 一旦带 NEW_TASK，Activity 被推进**独立 task** ⇒ 系统在启动后 ~16ms 就
-                    // 判定「本次认证没有返回」（系统日志原文：`onAuthenticationResult(): empty intent`）
-                    // ⇒ 我们随后构造的 FillResponse **被整个丢弃** ⇒ 用户看到的现象就是
-                    // 「指纹明明解锁成功了，却什么都没发生，只能反复解锁」。
-                    // 同一条规则也写在 `AutofillIntents` 与 `AndroidManifest` 的 `AutofillActivity`
-                    // 注释里（"不设 NEW_TASK（认证型意图）"）—— 这里曾经与服务端脱节。
-                    requestCode = REQUEST_UNLOCK,
-                ),
-                title = getString(R.string.autofill_unlock_title),
-                subtitle = getString(R.string.autofill_unlock_subtitle),
-                // ⚠️⚠️ **锁定态同样必须挂 SaveInfo**（#187，2026-10-26）。
-                // 之前这里漏了，而 `onSaveRequest` 的前提是 FillResponse 上挂着 SaveInfo ——
-                // ⇒ 用户「第一次在某站点登录」时库往往是锁着的（冷启动直接来浏览器），
-                //   于是这一路径**永远**不会收到保存提示，保存功能等于只对"已解锁用户"生效。
-                // 下面「无匹配」分支本来就挂了（那里还有一段解释），锁态分支是漏网的那个。
-                saveInfo = AutofillSaveInfo.build(parsed),
-            )
+                    title = getString(R.string.autofill_unlock_title),
+                    subtitle = getString(R.string.autofill_unlock_subtitle),
+                    // ⚠️⚠️ **锁定态同样必须挂 SaveInfo**（#187，2026-10-26）。
+                    // 之前这里漏了，而 `onSaveRequest` 的前提是 FillResponse 上挂着 SaveInfo ——
+                    // ⇒ 用户「第一次在某站点登录」时库往往是锁着的（冷启动直接来浏览器），
+                    //   于是这一路径**永远**不会收到保存提示，保存功能等于只对"已解锁用户"生效。
+                    // 下面「无匹配」分支本来就挂了（那里还有一段解释），锁态分支是漏网的那个。
+                    saveInfo = AutofillSaveInfo.build(parsed),
+                )
+            }
         }
 
         val sources = candidates.singleActiveVault(unlocked)
@@ -337,54 +340,79 @@ class VaultixAutofillService : AutofillService() {
         val saveInfo = AutofillSaveInfo.build(parsed)
         // 填充后自动复制验证码（对齐 Bitwarden：**无条件**复制，受 autoCopyTotp 开关门控）
         val copyTotp = prefs.autoCopyTotp.first()
-        val builder = FillResponse.Builder()
-        saveInfo?.let { builder.setSaveInfo(it) }
-        var added = 0
         // 上限保护：FillResponse 经 Binder 传输有大小限制，条目多时不截断会导致
         // 整个响应失败（表现为「浏览器里一点反应都没有」）。
-        for (suggestion in plan.suggestions.take(MAX_DATASETS)) {
-            val dataset = AutofillDatasetFactory
-                .datasetFor(this, parsed, suggestion, copyTotp, totpTickets) ?: continue
-            builder.addDataset(dataset)
-            added++
+        val suggestions = plan.suggestions.take(MAX_DATASETS)
+
+        // ★ #308 线程契约：AutofillValue.forText / Dataset.Builder / FillResponse.Builder
+        //   必须在**主线程**构造（framework 会对 forText 打 "not called on main thread" 警告，
+        //   OEM 差异下可能偶发填充 UI 异常）。但图标走 Coil 磁盘缓存，属 I/O，不能进主线程。
+        //   故先把所有图标在 Default（当前协程）预生成，再切 Main 只做纯对象组装。
+        val icons = suggestions.map { AutofillDatasetFactory.prepareIcon(this, it) }
+
+        // 组装（含 builder / addDataset / header / build）整体在主线程完成。
+        val (response, added) = withContext(Dispatchers.Main) {
+            val b = FillResponse.Builder()
+            saveInfo?.let { b.setSaveInfo(it) }
+            var count = 0
+            suggestions.forEachIndexed { index, suggestion ->
+                val dataset = AutofillDatasetFactory.datasetFor(
+                    context = this@VaultixAutofillService,
+                    parsed = parsed,
+                    suggestion = suggestion,
+                    copyTotpEnabled = copyTotp,
+                    totpTickets = totpTickets,
+                    icon = icons[index],
+                )
+                if (dataset != null) {
+                    b.addDataset(dataset)
+                    count++
+                }
+            }
+            if (count > 0) {
+                // 品牌头（2026-11-09）：面板里每行都是「图标 + 两行字」的通用造型，
+                // 十几家密码管理器长得一模一样，没有头用户分不清是谁给的。
+                //
+                // ⚠️ 包在 `runCatching` 里是**故意的**：`setHeader` 有两个会抛的入口
+                //   （FillResponse 上已挂整表认证 / 一个 dataset 都没有），我方两条都不满足，
+                //   但厂商 ROM 的 framework 实现未必一致。头是锦上添花，
+                //   **绝不能因为它让整次填充失败** —— 用户要的是密码能填进去。
+                runCatching { AutofillDatasets.header(this@VaultixAutofillService, count)?.let { b.setHeader(it) } }
+                b.build() to count
+            } else {
+                null to 0
+            }
         }
         AutofillLogger.d(
             "fillResponse domain=$webDomain active=${sources.firstOrNull() ?: "-"} " +
                 "unlocked=${unlocked.size} candidates=${vault.credentials.size} " +
                 "matched=${matched.size} datasets=$added",
         )
-        if (added > 0) {
-            // 品牌头（2026-11-09）：面板里每行都是「图标 + 两行字」的通用造型，
-            // 十几家密码管理器长得一模一样，没有头用户分不清是谁给的。
-            //
-            // ⚠️ 包在 `runCatching` 里是**故意的**：`setHeader` 有两个会抛的入口
-            //   （FillResponse 上已挂整表认证 / 一个 dataset 都没有），我方两条都不满足，
-            //   但厂商 ROM 的 framework 实现未必一致。头是锦上添花，
-            //   **绝不能因为它让整次填充失败** —— 用户要的是密码能填进去。
-            runCatching { AutofillDatasets.header(this, added)?.let { builder.setHeader(it) } }
-            return builder.build()
-        }
+        if (response != null) return response
 
         AutofillLogger.d("noMatch domain=$webDomain → search fallback")
-        return AutofillDatasets.buildFallback(
-            context = this,
-            ids = ids,
-            authIntent = AutofillIntents.pending(
-                context = this,
-                intent = AutofillIntents.create(
-                    context = this,
-                    mode = AutofillIntents.MODE_SEARCH,
-                    title = getString(R.string.autofill_no_match_title),
-                    subtitle = getString(R.string.autofill_no_match_subtitle),
+        // #308：FillResponse / Presentation 组装切主线程（契约见主分支注释）。
+        return withContext(Dispatchers.Main) {
+            AutofillDatasets.buildFallback(
+                context = this@VaultixAutofillService,
+                ids = ids,
+                authIntent = AutofillIntents.pending(
+                    context = this@VaultixAutofillService,
+                    intent = AutofillIntents.create(
+                        context = this@VaultixAutofillService,
+                        mode = AutofillIntents.MODE_SEARCH,
+                        title = getString(R.string.autofill_no_match_title),
+                        subtitle = getString(R.string.autofill_no_match_subtitle),
+                    ),
+                    // ⚠️ 同上（`MODE_UNLOCK` 那处的长注释）：**dataset 级认证意图不能带 NEW_TASK**，
+                    // 否则 `setResult` 的认证回灌会被系统丢掉（"empty intent"）。
+                    requestCode = REQUEST_SEARCH,
                 ),
-                // ⚠️ 同上（`MODE_UNLOCK` 那处的长注释）：**dataset 级认证意图不能带 NEW_TASK**，
-                // 否则 `setResult` 的认证回灌会被系统丢掉（"empty intent"）。
-                requestCode = REQUEST_SEARCH,
-            ),
-            title = getString(R.string.autofill_no_match_title),
-            subtitle = getString(R.string.autofill_no_match_subtitle),
-            saveInfo = saveInfo,
-        )
+                title = getString(R.string.autofill_no_match_title),
+                subtitle = getString(R.string.autofill_no_match_subtitle),
+                saveInfo = saveInfo,
+            )
+        }
     }
 
     /**

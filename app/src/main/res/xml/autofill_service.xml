@@ -102,6 +102,8 @@
     <compatibility-package android:name="com.mmbox.xbrowser" android:maxLongVersionCode="@string/version_code_max" />
     <!-- Lightning -->
     <compatibility-package android:name="idm.internet.download.manager" android:maxLongVersionCode="@string/version_code_max" />
+    <!-- Quark Browser（夸克，UC 同系 Chromium；#306） -->
+    <compatibility-package android:name="com.quark.browser" android:maxLongVersionCode="@string/version_code_max" />
     <!-- Other Chromium-based -->
     <compatibility-package android:name="org.ungoogled.chromium.stable" android:maxLongVersionCode="@string/version_code_max" />
     <compatibility-package android:name="org.ungoogled.chromium.extensions.stable" android:maxLongVersionCode="@string/version_code_max" />

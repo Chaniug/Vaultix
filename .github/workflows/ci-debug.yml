@@ -265,6 +265,39 @@ jobs:
       - name: Self-test passkey origin handoff checker
         run: python3 "$GITHUB_WORKSPACE/.ai/tools/check_passkey_origin_handoff.py" --selftest
 
+      # ★ #305（2026-11-24，KeePassDX #2805 借鉴）：指纹门锁 KEK 必须显式设置
+      #   setInvalidatedByBiometricEnrollment(true)。依赖 Android「默认 true」在部分 OEM
+      #   overlay（Samsung / Android 8.0）上不成立 ⇒ 新增指纹后旧 KEK 仍可被解开，
+      #   「生物变更即失效」的安全边界被静默击穿。编译 / detekt / 单测都看不出
+      #   「少了一句显式声明」，只有源码门禁能钉住；判据剥注释以免把注释里的
+      #   「默认 true」误当成显式设置，配 3 组变异自测。
+      - name: Check biometric invalidation enrollment (#305)
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/check_biometric_invalidation.py" "$GITHUB_WORKSPACE"
+
+      - name: Self-test biometric invalidation checker
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/check_biometric_invalidation.py" --selftest
+
+      # ★ #306（2026-11-24）：夸克浏览器（com.quark.browser）自动填充兼容名单。
+      #   两处名单任一缺失都会让用户在夸克里"完全不弹"：XML 缺 compatibility-package
+      #   ⇒ 系统不上报 webDomain；KNOWN_BROWSER_PACKAGES 缺包名 ⇒ 无域名时连降级
+      #   列全库候选都被拒。编译 / detekt / 单测都看不出"少一个包名"，配 4 组变异自测。
+      - name: Check Quark autofill compatibility (#306)
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/check_quark_autofill_compat.py" "$GITHUB_WORKSPACE"
+
+      - name: Self-test Quark autofill compatibility checker
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/check_quark_autofill_compat.py" --selftest
+
+      # ★ #308（2026-11-26）：FillResponse / Dataset / AutofillValue 组装必须在主线程。
+      #   Edge 真机日志出现 "AutofillValue: forText() not called on main thread"，
+      #   原实现把整条组装链放在 Dispatchers.Default，违反 framework 契约（功能未坏，
+      #   OEM 差异下有偶发填充 UI 异常风险）。修法：图标（Coil 磁盘缓存 I/O）留在后台
+      #   预生成，纯对象组装切 Main。编译 / detekt / 单测都看不出线程归属，配 4 组变异自测。
+      - name: Check autofill main-thread assembly (#308)
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/check_autofill_main_thread.py" "$GITHUB_WORKSPACE"
+
+      - name: Self-test autofill main-thread checker
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/check_autofill_main_thread.py" --selftest
+
       # ★ 2026-11-15（#293）：KDBX 通行密钥 credentialId 的跨模块保真契约。
       #
       # 真机：正式 v0.13.2 用 KDBX 库里保存的 passkey 登录 GitHub / x.com 报

@@ -89,6 +89,12 @@ object AssistStructureParser {
         // requiredIds 正是取自这两个 id。
         val usernameId = resolved.firstOrNull { it.hint == FieldHint.USERNAME && it.isVisible }?.id
         val passwordId = resolved.firstOrNull { it.hint == FieldHint.PASSWORD && it.isVisible }?.id
+        // #307：fields=0 时 UnknownFieldDiagnostics 一条 probe 都打不出（被准入闸拒绝的节点
+        // 不进字段表）。补一段结构级诊断，一次看清夸克登录页把输入框做成了什么控件，
+        // 区分「树里无节点」「非标准控件被准入闸拒」「规则拒绝」三种修法完全不同的情况。
+        if (fields.isEmpty()) {
+            diagnoseEmptyStructure(structure)
+        }
         return ParsedStructure(
             packageName = packageName,
             webScheme = webScheme,
@@ -177,6 +183,26 @@ object AssistStructureParser {
             // 假字段挤掉真字段（详见 [isEditableNode]）。`text` 只作为字段值。
             val signal = BrowserUrlBars.formSignalOf(node)
             val classified = classifyNode(node, hints, inputType, signal, hostRules)
+            // #307 诊断：UNKNOWN 字段的原始控件元数据。只打进了准入闸、可填、但没认出语义
+            // 的节点（夸克 UC 内核实测 fields=2 全 UNKNOWN），一次看清是白名单漏属性还是
+            // 内核没给信号。只含控件属性、绝不含 node.text（用户输入值），每行限长。
+            // ⚠️ 限频由 VaultixLog 按 tag 统一兜底（50 条/60s），这里不必重复计数。
+            if (classified?.hint == FieldHint.UNKNOWN) {
+                io.vaultix.vaultix.autofill.AutofillLogger.d(
+                    UnknownFieldDiagnostics.format(
+                        UnknownFieldDiagnostics.Probe(
+                            className = node.className,
+                            inputType = inputType,
+                            autofillType = node.autofillType,
+                            htmlTag = node.htmlInfo?.tag,
+                            htmlAttributes = node.htmlInfo?.attributes?.map { it.first to it.second },
+                            idEntry = node.idEntry,
+                            viewHint = node.hint?.toString(),
+                            formSignal = signal,
+                        ),
+                    ),
+                )
+            }
             // 规则覆盖本主机时 classified 为 null 表示「该节点不被规则承认」→ **不收进字段表**
             // （对齐上游：被规则覆盖的分区以规则为准，不做启发式兜底）。
             if (classified != null) {
@@ -332,6 +358,68 @@ object AssistStructureParser {
                 scan.fields.any { field -> AutofillFillTargetPolicy.isFillTarget(field) }
         }
         return focused.ifEmpty { scans }
+    }
+
+    /**
+     * #307：`fields=0` 时的结构级诊断。单独遍历整棵树，输出计数摘要 + 值得看的节点样本，
+     * 补上 [UnknownFieldDiagnostics] 只覆盖「进表但 UNKNOWN」节点的盲区。
+     *
+     * 只含控件元数据，绝不碰 `node.text`（安全红线见 [StructureDiagnostics]）。样本上限
+     * [StructureDiagnostics.MAX_SAMPLES] 防刷屏；VaultixLog 另有每 tag 50 条/60s 限频兜底。
+     */
+    private fun diagnoseEmptyStructure(structure: AssistStructure) {
+        var nodeCount = 0
+        var withAutofillId = 0
+        var textFillable = 0
+        var focused = 0
+        var samples = 0
+        val windows = structure.windowNodeCount
+
+        fun visit(node: ViewNode?) {
+            if (node == null) return
+            nodeCount++
+            val hasId = node.autofillId != null
+            if (hasId) withAutofillId++
+            val isText = FillTargetResolver.canReceiveValue(node.autofillType)
+            if (isText) textFillable++
+            val isFocused = node.isFocused
+            if (isFocused) focused++
+
+            if (samples < StructureDiagnostics.MAX_SAMPLES && StructureDiagnostics.isWorthSampling(
+                    hasAutofillId = hasId, isFocused = isFocused, className = node.className,
+                )
+            ) {
+                io.vaultix.vaultix.autofill.AutofillLogger.d(
+                    StructureDiagnostics.formatNode(
+                        StructureDiagnostics.NodeProbe(
+                            className = node.className,
+                            autofillType = node.autofillType,
+                            inputType = node.inputType,
+                            htmlTag = node.htmlInfo?.tag,
+                            idEntry = node.idEntry,
+                            hints = node.autofillHints?.map { it.toString() },
+                            isFocused = isFocused,
+                            childCount = node.childCount,
+                        ),
+                    ),
+                )
+                samples++
+            }
+            repeat(node.childCount) { index -> visit(node.getChildAt(index)) }
+        }
+
+        repeat(windows) { index -> visit(structure.getWindowNodeAt(index)?.rootViewNode) }
+        io.vaultix.vaultix.autofill.AutofillLogger.d(
+            StructureDiagnostics.formatSummary(
+                StructureDiagnostics.Summary(
+                    windows = windows,
+                    nodes = nodeCount,
+                    withAutofillId = withAutofillId,
+                    textFillable = textFillable,
+                    focused = focused,
+                ),
+            ),
+        )
     }
 
     /**
