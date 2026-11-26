@@ -257,4 +257,5 @@ A 图标 I/O 不得落进 Main、B `forText` 调用点存在且组装在 Main、
 4 组变异自测全红（组装移出 Main / I/O 移进 Main / forText 消失 / 合规绿）。
 **本轮补接 CI 两步**（`#308` 门禁 + 自测）——脚本写完却漏接 CI 等于假绿，与 #305/#306 同训。
 
-只推 `main`，不合 `rele`；待 preview APK 真机复验 Edge 警告消失且填充照常。
+提交 `91b518ea`（Android CI `45741019593` 全绿、preview `Vaultix-91b518e.apk` 已挂），
+只推 `main`，不合 `rele`。待真机复验 Edge 警告消失且填充照常。

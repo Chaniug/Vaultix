@@ -35,6 +35,10 @@
   全部包进 `withContext(Dispatchers.Main)`。匹配、认证意图、SaveInfo、TOTP 票据一字未动。
 - **门禁**：新增 `check_autofill_main_thread.py`（剥注释，3 判据 + 4 变异自测），
   本轮补接 `ci-debug.yml` 两步——写完门禁却漏接 CI 等于假绿（与 #305/#306 同训）。
+- **验证**：提交 `91b518ea`，Android CI `45741019593`（4m47s，两 job + detekt + 新门禁两步全绿）、
+  docs `45741019603` / `45741114251` 全绿；preview `0.13.10-dev-91b518e` /
+  `Vaultix-91b518e.apk`（下载链接 HTTP 200 已核实）。
+- **真机欠账**：请用户装 preview 用 Edge 复验——填充照常 + `forText()` 主线程警告消失。
 - 详见 [`SESSION-2026-11-26.md`](./SESSION-2026-11-26.md) 与
   [`issues/02-自动填充-part3.md`](./issues/02-自动填充-part3.md) #308。
 
