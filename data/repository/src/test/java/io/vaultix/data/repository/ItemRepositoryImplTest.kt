@@ -117,6 +117,9 @@ class ItemRepositoryImplTest {
             kdbxItemWrites = kdbxItemWrites,
             // 附件下载（2026-10-21）：本文件没有附件下载用例，relaxed mock 即可。
             attachmentDownloader = mockk(relaxed = true),
+            // 附件上传/删除（P0 · 2026-11-28）：本文件暂无写方向用例，relaxed mock 即可。
+            attachmentUploader = mockk(relaxed = true),
+            apiFactory = mockk(relaxed = true),
             cryptoDispatcher = Dispatchers.Default,
         )
         // 读路径分流要先问「这个库是什么类型」（见 observeItems）：
@@ -652,6 +655,9 @@ class ItemRepositoryImplTest {
             kdbxItemWrites = kdbxItemWrites,
             // 附件下载（2026-10-21）：本文件没有附件下载用例，relaxed mock 即可。
             attachmentDownloader = mockk(relaxed = true),
+            // 附件上传/删除（P0 · 2026-11-28）：本文件暂无写方向用例，relaxed mock 即可。
+            attachmentUploader = mockk(relaxed = true),
+            apiFactory = mockk(relaxed = true),
             cryptoDispatcher = Dispatchers.Default,
         )
 
@@ -1061,6 +1067,9 @@ class ItemRepositoryImplTest {
             kdbxItemWrites = kdbxItemWrites,
             // 附件下载（2026-10-21）：本文件没有附件下载用例，relaxed mock 即可。
             attachmentDownloader = mockk(relaxed = true),
+            // 附件上传/删除（P0 · 2026-11-28）：本文件暂无写方向用例，relaxed mock 即可。
+            attachmentUploader = mockk(relaxed = true),
+            apiFactory = mockk(relaxed = true),
             cryptoDispatcher = Dispatchers.Default,
         )
 

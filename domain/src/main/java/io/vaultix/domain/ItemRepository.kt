@@ -149,6 +149,26 @@ interface ItemRepository {
         attachmentId: String,
         sink: java.io.OutputStream,
     ): Result<Long>
+
+    /**
+     * 上传一个新附件（Bitwarden 专用端点，P0 · 2026-11-28）。
+     *
+     * 明文字节由 UI 从系统文件选择器读入后传入 —— 仓储层不依赖 Android `Uri`。
+     * 成功后用响应的 `cipherResponse.attachments` 更新本地列表，**不入普通同步队列**。
+     */
+    suspend fun addAttachment(
+        vaultId: String,
+        itemId: String,
+        fileName: String,
+        plain: ByteArray,
+    ): Result<Unit>
+
+    /** 删除一个附件（Bitwarden 专用端点，404 视同已删除）。 */
+    suspend fun removeAttachment(
+        vaultId: String,
+        itemId: String,
+        attachmentId: String,
+    ): Result<Unit>
 }
 
 /** 新建条目后的落点状态。 */

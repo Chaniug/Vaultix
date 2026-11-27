@@ -3,7 +3,10 @@ package io.vaultix.data.repository
 import io.vaultix.crypto.di.CryptoDispatcher
 import io.vaultix.common.TrashCleanupPolicy
 import io.vaultix.common.logging.VaultixLog
+import io.vaultix.data.bitwarden.attachment.BitwardenAttachmentUploader
+import io.vaultix.data.bitwarden.di.BitwardenApiFactory
 import io.vaultix.data.bitwarden.mapper.CipherMapper
+import io.vaultix.data.bitwarden.model.AttachmentDto
 import io.vaultix.data.bitwarden.model.CipherDto
 import io.vaultix.data.bitwarden.model.toStoredCipherDto
 import io.vaultix.data.bitwarden.sync.BitwardenSyncService
@@ -93,6 +96,10 @@ class ItemRepositoryImpl @Inject constructor(
     private val kdbxItemWrites: KdbxItemRepository,
     /** Bitwarden 附件下载编排（签名 URL 拉取 + 验 MAC + 解密，2026-10-21）。 */
     private val attachmentDownloader: io.vaultix.data.bitwarden.attachment.BitwardenAttachmentDownloader,
+    /** Bitwarden 附件上传编排（P0 · 2026-11-28）。 */
+    private val attachmentUploader: BitwardenAttachmentUploader,
+    /** 删除走专用端点；与上传共用的按库 API 工厂。 */
+    private val apiFactory: BitwardenApiFactory,
     @CryptoDispatcher private val cryptoDispatcher: CoroutineDispatcher,
 ) : ItemRepository {
 
@@ -554,6 +561,68 @@ class ItemRepositoryImpl @Inject constructor(
         attachmentDownloader
             .downloadTo(server, itemId, attachmentId, wrappedKey, candidates, sink)
             .getOrThrow()
+    }
+
+    override suspend fun addAttachment(
+        vaultId: String,
+        itemId: String,
+        fileName: String,
+        plain: ByteArray,
+    ): Result<Unit> = runCatching {
+        require(sessions.isUnlocked(vaultId)) { "库未解锁，无法上传附件：$vaultId" }
+        require(!isKdbx(vaultId)) { "KDBX 附件新增将在下一阶段支持，当前请用 KeePassXC 添加" }
+        val row = vaultDao.get(vaultId) ?: error("库不存在：$vaultId")
+        val server = row.origin
+            ?.takeIf { VaultKind.fromName(row.kind) == VaultKind.BITWARDEN }
+            ?: error("只有 Bitwarden 库支持上传附件")
+        val existing = cipherDao.get(itemId) ?: error("条目不存在：$itemId")
+        val dto = runCatching { json.decodeFromString<CipherDto>(existing.encryptedPayload) }
+            .getOrElse { error("条目密文损坏，无法上传附件：$itemId") }
+        val accountKey = sessions.keyOf(vaultId) ?: error("库未解锁：$vaultId")
+        // 与字段解密同构：条目独立密钥优先，没有就用账号密钥包裹新附件密钥。
+        val wrappingKey = mapper.resolveItemKey(dto, accountKey) ?: accountKey
+        val uploaded = attachmentUploader
+            .upload(server, itemId, fileName, plain, wrappingKey)
+            .getOrThrow()
+        // ★ 用响应的 cipherResponse 更新本地列表；响应没给就按官方格式兜底构造一条。
+        //   **绝不**把附件塞进 toUpdateRequest() 走普通写回（整体替换语义会覆盖）。
+        val attachments = uploaded.attachments.ifEmpty {
+            dto.attachments + AttachmentDto(
+                id = uploaded.attachmentId,
+                fileName = uploaded.encryptedFileName,
+                size = uploaded.encryptedSize,
+                key = uploaded.wrappedKey,
+            )
+        }
+        atomicWriteDao.upsertCipherLocalOnly(
+            existing.copy(encryptedPayload = json.encodeToString(dto.copy(attachments = attachments))),
+        )
+    }
+
+    override suspend fun removeAttachment(
+        vaultId: String,
+        itemId: String,
+        attachmentId: String,
+    ): Result<Unit> = runCatching {
+        require(sessions.isUnlocked(vaultId)) { "库未解锁，无法删除附件：$vaultId" }
+        require(!isKdbx(vaultId)) { "KDBX 附件删除将在下一阶段支持，当前请用 KeePassXC 删除" }
+        val row = vaultDao.get(vaultId) ?: error("库不存在：$vaultId")
+        val server = row.origin
+            ?.takeIf { VaultKind.fromName(row.kind) == VaultKind.BITWARDEN }
+            ?: error("只有 Bitwarden 库支持删除附件")
+        val response = apiFactory.vault(server).deleteAttachment(itemId, attachmentId)
+        // 404 = 服务端已不存在，视同成功（与 bastion 参考一致）。
+        require(response.code() in setOf(200, 204, 404)) { "附件删除失败：HTTP ${response.code()}" }
+        val existing = cipherDao.get(itemId) ?: return@runCatching
+        val dto = runCatching { json.decodeFromString<CipherDto>(existing.encryptedPayload) }
+            .getOrElse { return@runCatching }
+        atomicWriteDao.upsertCipherLocalOnly(
+            existing.copy(
+                encryptedPayload = json.encodeToString(
+                    dto.copy(attachments = dto.attachments.filterNot { it.id == attachmentId }),
+                ),
+            ),
+        )
     }
 
     /**

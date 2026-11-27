@@ -13,9 +13,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
@@ -48,6 +51,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -76,7 +80,6 @@ import io.vaultix.common.CardBrandDetector
 import io.vaultix.common.formatCardNumberGrouped
 import io.vaultix.model.VaultCard
 import io.vaultix.model.VaultAttachment
-import io.vaultix.model.VaultAttachmentSource
 import io.vaultix.model.VaultCustomField
 import io.vaultix.model.VaultFido2Credential
 import io.vaultix.model.VaultIdentity
@@ -88,7 +91,11 @@ import io.vaultix.model.VaultSshKey
 import io.vaultix.model.VaultUri
 import io.vaultix.vaultix.ui.theme.UiSize
 import io.vaultix.vaultix.ui.theme.VaultixCorner
+import android.provider.OpenableColumns
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.DialogTextButton
 import io.vaultix.vaultix.ui.common.AppLabel
@@ -185,6 +192,14 @@ private fun detailEventMessage(context: Context, event: ItemDetailViewModel.UiEv
             )
         // DownloadDone 不是文案事件：要发起 ACTION_VIEW（可能失败并转提示），见收集处。
         is ItemDetailViewModel.UiEvent.DownloadDone -> null
+        ItemDetailViewModel.UiEvent.AttachmentChanged ->
+            context.getString(R.string.attachment_changed)
+        is ItemDetailViewModel.UiEvent.AttachmentChangeFailed ->
+            context.getString(
+                R.string.attachment_change_failed,
+                event.message ?: context.getString(R.string.error_unknown_no_detail),
+            )
+        ItemDetailViewModel.UiEvent.AttachmentTooLarge -> context.getString(R.string.attachment_too_large)
     }
 
 /** 掩码星号数量上限（密码过长时截断显示，复制不受影响）。 */
@@ -240,7 +255,10 @@ private class DetailActions(
     val onCopyField: (String) -> Unit,
     val onCopyHistoryPassword: (String) -> Unit,
     val onDownloadAttachment: (VaultAttachment) -> Unit,
+    val onAddAttachment: (String, ByteArray) -> Unit,
+    val onRemoveAttachment: (VaultAttachment) -> Unit,
     val isDownloadingAttachment: Boolean = false,
+    val isChangingAttachment: Boolean = false,
     /**
      * 条目所属组织名（2026-10-21）。null = 个人条目 / 组织名还没解出来。
      * 做成 getter 而不是常量：组织名随解密流异步到达，条目先到时会短暂为 null。
@@ -627,6 +645,7 @@ fun ItemDetailScreen(
     val actions = remember(
         viewModel,
         state.downloadingAttachment,
+        state.changingAttachment,
         state.syncStatus,
         organizationNames,
     ) {
@@ -638,7 +657,10 @@ fun ItemDetailScreen(
             onCopyField = viewModel::copyField,
             onCopyHistoryPassword = viewModel::copyHistoryPassword,
             onDownloadAttachment = viewModel::downloadAttachment,
+            onAddAttachment = viewModel::addAttachment,
+            onRemoveAttachment = viewModel::removeAttachment,
             isDownloadingAttachment = state.downloadingAttachment,
+            isChangingAttachment = state.changingAttachment,
             organizationNameOf = { orgId -> organizationNames[orgId] },
             syncStatus = state.syncStatus,
         )
@@ -1632,14 +1654,16 @@ private fun HistoryAndAttachments(item: VaultItem, actions: DetailActions) {
             onCopyHistoryPassword = actions.onCopyHistoryPassword,
         )
     }
-    if (item.attachments.isNotEmpty()) {
-        Spacer(Modifier.height(Spacing.md))
-        AttachmentsSection(
-            attachments = item.attachments,
-            downloading = actions.isDownloadingAttachment,
-            onDownload = actions.onDownloadAttachment,
-        )
-    }
+    // ★ 空列表也要画分区：否则用户看不到「添加附件」入口，功能等于不存在。
+    Spacer(Modifier.height(Spacing.md))
+    AttachmentsSection(
+        attachments = item.attachments,
+        downloading = actions.isDownloadingAttachment,
+        changing = actions.isChangingAttachment,
+        onDownload = actions.onDownloadAttachment,
+        onAdd = actions.onAddAttachment,
+        onRemove = actions.onRemoveAttachment,
+    )
 }
 
 /**
@@ -1776,47 +1800,116 @@ private fun PasswordHistoryRow(entry: VaultPasswordHistoryEntry, onCopy: () -> U
 }
 
 /**
- * 附件分区。
+ * 附件分区（P0/P1/P2 · 2026-11-28 完整读写）。
  *
- * - Bitwarden 附件：显示文件名 / 大小，带「下载并打开」按钮 —— 下载期间
- *   其它附件的按钮一并禁用（ViewModel 同一时刻只跑一个下载，避免大文件并发）。
- * - KDBX 附件：只显示文件名 + 只读说明（kotpass 结构限制，见
- *   [io.vaultix.model.VaultAttachment] 的 KDoc），不给按钮。
+ * - 空列表也要画：否则用户根本看不到「添加附件」入口，功能等于不存在。
+ * - 下载 / 上传 / 删除同一时刻各只允许一个（ViewModel 有 `changingAttachment` 门禁），
+ *   按钮据此禁用，避免大文件并发把 UI 卡住。
+ * - 文件选择器只读 `content://` Uri 的**显示名 + 字节**，不碰路径 ——
+ *   `ACTION_OPEN_DOCUMENT` 返回的 Uri 在 SAF 下没有可移植的文件路径。
  */
 @Composable
 private fun AttachmentsSection(
     attachments: List<VaultAttachment>,
     downloading: Boolean,
+    changing: Boolean,
     onDownload: (VaultAttachment) -> Unit,
+    onAdd: (String, ByteArray) -> Unit,
+    onRemove: (VaultAttachment) -> Unit,
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var pendingRemove by remember { mutableStateOf<VaultAttachment?>(null) }
+    val pickLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val picked = withContext(Dispatchers.IO) {
+                val displayName = context.contentResolver
+                    .query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+                    ?.use { cursor ->
+                        val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                        if (index >= 0 && cursor.moveToFirst()) cursor.getString(index) else null
+                    }
+                val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                    ?: return@withContext null
+                (displayName ?: context.getString(R.string.attachment_unnamed)) to bytes
+            }
+            if (picked != null) onAdd(picked.first, picked.second)
+        }
+    }
+
     Column {
-        SectionTitle(text = stringResource(R.string.section_attachments), icon = Icons.Filled.AttachFile)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            SectionTitle(text = stringResource(R.string.section_attachments), icon = Icons.Filled.AttachFile)
+            IconButton(
+                onClick = { pickLauncher.launch("*/*") },
+                enabled = !changing,
+            ) {
+                Icon(
+                    Icons.Filled.Add,
+                    contentDescription = stringResource(R.string.attachment_add),
+                    modifier = Modifier.size(UiSize.InlineIcon),
+                )
+            }
+        }
         DetailCard {
-            Column(modifier = Modifier.padding(vertical = Spacing.sm)) {
-                attachments.forEachIndexed { index, attachment ->
-                    if (index > 0) {
-                        HorizontalDivider(
-                            modifier = Modifier.padding(start = Spacing.lg),
-                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+            if (attachments.isEmpty()) {
+                Text(
+                    text = stringResource(R.string.attachment_empty_hint),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm),
+                )
+            } else {
+                Column(modifier = Modifier.padding(vertical = Spacing.sm)) {
+                    attachments.forEachIndexed { index, attachment ->
+                        if (index > 0) {
+                            HorizontalDivider(
+                                modifier = Modifier.padding(start = Spacing.lg),
+                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                            )
+                        }
+                        AttachmentRow(
+                            attachment = attachment,
+                            downloading = downloading,
+                            changing = changing,
+                            onDownload = { onDownload(attachment) },
+                            onRemove = { pendingRemove = attachment },
                         )
                     }
-                    AttachmentRow(
-                        attachment = attachment,
-                        downloading = downloading,
-                        onDownload = { onDownload(attachment) },
-                    )
                 }
             }
         }
     }
+
+    pendingRemove?.let { target ->
+        AlertDialog(
+            onDismissRequest = { pendingRemove = null },
+            title = { Text(stringResource(R.string.attachment_remove_title)) },
+            text = { Text(stringResource(R.string.attachment_remove_message, target.fileName)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingRemove = null
+                    onRemove(target)
+                }) { Text(stringResource(R.string.attachment_remove_confirm)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingRemove = null }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
+        )
+    }
 }
 
-/** 附件单行：文件名 + 大小；Bitwarden 来源带「下载并打开」按钮。 */
+/** 附件单行：文件名 + 大小 + 下载 / 删除按钮。 */
 @Composable
 private fun AttachmentRow(
     attachment: VaultAttachment,
     downloading: Boolean,
+    changing: Boolean,
     onDownload: () -> Unit,
+    onRemove: () -> Unit,
 ) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -1831,14 +1924,7 @@ private fun AttachmentRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            if (attachment.source == VaultAttachmentSource.Kdbx) {
-                Text(
-                    text = stringResource(R.string.attachment_kdbx_readonly),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = UiSize.HairGap),
-                )
-            } else if (attachment.size > 0) {
+            if (attachment.size > 0) {
                 Text(
                     text = formatAttachmentSize(attachment.size),
                     style = MaterialTheme.typography.labelMedium,
@@ -1847,14 +1933,19 @@ private fun AttachmentRow(
                 )
             }
         }
-        if (attachment.source == VaultAttachmentSource.Bitwarden) {
-            IconButton(onClick = onDownload, enabled = !downloading) {
-                Icon(
-                    Icons.Filled.Download,
-                    contentDescription = stringResource(R.string.attachment_download),
-                    modifier = Modifier.size(UiSize.InlineIcon),
-                )
-            }
+        IconButton(onClick = onDownload, enabled = !downloading && !changing) {
+            Icon(
+                Icons.Filled.Download,
+                contentDescription = stringResource(R.string.attachment_download),
+                modifier = Modifier.size(UiSize.InlineIcon),
+            )
+        }
+        IconButton(onClick = onRemove, enabled = !changing && !downloading) {
+            Icon(
+                Icons.Filled.Delete,
+                contentDescription = stringResource(R.string.attachment_remove),
+                modifier = Modifier.size(UiSize.InlineIcon),
+            )
         }
     }
 }

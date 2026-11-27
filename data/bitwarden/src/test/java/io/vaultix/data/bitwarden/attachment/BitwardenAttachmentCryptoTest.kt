@@ -10,6 +10,8 @@ package io.vaultix.data.bitwarden.attachment
 
 import com.google.common.truth.Truth.assertThat
 import io.vaultix.crypto.SymmetricCryptoKey
+import io.vaultix.crypto.VaultixCrypto
+import kotlinx.coroutines.Dispatchers
 import java.io.ByteArrayOutputStream
 import java.security.SecureRandom
 import javax.crypto.Cipher
@@ -148,6 +150,73 @@ class BitwardenAttachmentCryptoTest {
         }
     }
 
+    // ------------------------------------------------------------ 写方向（P0 · 2026-11-28）
+
+    /**
+     * 被测 [BitwardenAttachmentCrypto.encrypt] 的输出必须能被**独立协议实现**解开 ——
+     * 只做「encrypt → decrypt 都调被测代码」是"自己验自己"，格式写反也照样绿。
+     */
+    @Test
+    fun `写方向密文能被独立协议实现解开`() {
+        val key = randomKey()
+        val plain = "上传前的明文：包含中文与换行\n第二行".toByteArray()
+
+        val encrypted = BitwardenAttachmentCrypto.encrypt(plain, key)
+
+        assertThat(decryptByProtocol(encrypted, key)).isEqualTo(plain)
+    }
+
+    @Test
+    fun `写方向密文经被测解密往返一致`() {
+        val key = randomKey()
+        val plain = ByteArray(16 * 1024 + 5).also(SecureRandom()::nextBytes)
+
+        val out = ByteArrayOutputStream()
+        BitwardenAttachmentCrypto.decrypt(BitwardenAttachmentCrypto.encrypt(plain, key), key, out)
+
+        assertThat(out.toByteArray()).isEqualTo(plain)
+    }
+
+    @Test
+    fun `写方向密文被篡改后被测解密必须报认证失败`() {
+        val key = randomKey()
+        val tampered = BitwardenAttachmentCrypto.encrypt("敏感内容".toByteArray(), key)
+        tampered[tampered.size - 1] = (tampered[tampered.size - 1] + 1).toByte()
+
+        assertThrows(AttachmentAuthException::class.java) {
+            BitwardenAttachmentCrypto.decrypt(tampered, key, ByteArrayOutputStream())
+        }
+    }
+
+    @Test
+    fun `新生成并包裹的附件密钥能按原路径解包`() {
+        val crypto = VaultixCrypto(Dispatchers.Default)
+        val wrapping = randomKey()
+
+        val (attachmentKey, wrapped) =
+            BitwardenAttachmentCrypto.generateAndWrapAttachmentKey(wrapping, crypto)
+        val unwrapped = BitwardenAttachmentCrypto.unwrapAttachmentKey(wrapped) { encoded ->
+            crypto.decrypt(encoded, wrapping)
+        }
+
+        assertThat(unwrapped.encKey.useBytes { it.copyOf() })
+            .isEqualTo(attachmentKey.encKey.useBytes { it.copyOf() })
+        assertThat(unwrapped.macKey.useBytes { it.copyOf() })
+            .isEqualTo(attachmentKey.macKey.useBytes { it.copyOf() })
+        attachmentKey.clear()
+    }
+
+    @Test
+    fun `加密文件名可被现有字符串解密链路还原`() {
+        val crypto = VaultixCrypto(Dispatchers.Default)
+        val wrapping = randomKey()
+        val name = "合同-2026.pdf"
+
+        val encoded = BitwardenAttachmentCrypto.encryptStringForAttachment(name, wrapping, crypto)
+
+        assertThat(crypto.decryptToString(encoded, wrapping)).isEqualTo(name)
+    }
+
     // ------------------------------------------------------------ 密钥解包
 
     @Test
@@ -200,6 +269,17 @@ class BitwardenAttachmentCryptoTest {
         val tag = mac.doFinal()
 
         return iv + ciphertext + tag
+    }
+
+    /** 按协议**独立**解密（不复用被测实现），用于验证写方向的字节布局。 */
+    private fun decryptByProtocol(encrypted: ByteArray, key: SymmetricCryptoKey): ByteArray {
+        val iv = encrypted.copyOfRange(0, 16)
+        val macStart = encrypted.size - 32
+        val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+        key.encKey.useBytes { enc ->
+            cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(enc, "AES"), IvParameterSpec(iv))
+        }
+        return cipher.doFinal(encrypted, 16, macStart - 16)
     }
 
     private fun randomKey(): SymmetricCryptoKey {

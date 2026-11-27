@@ -103,6 +103,21 @@ abstract class AtomicWriteDao {
         upsertCipherAndEnqueueInTransaction(row, op)
 
     /**
+     * ★ **只写本地行、不入队**（附件专用端点回写，P0 · 2026-11-28）。
+     *
+     * 附件上传/删除已经走 `POST /attachment/v2` / `DELETE /attachment/{id}` 落到服务端，
+     * 本地只需要把响应里的 `attachments` 同步进 DTO。若这里图省事复用
+     * [upsertCipherAndEnqueue]，就会额外排一个普通 `updateCipher` —— 下次同步时
+     * `toUpdateRequest()` 不带附件（刻意不透传），服务端按整体替换语义处理，
+     * 刚上传的附件可能被覆盖掉。
+     *
+     * 仍然收口在本 DAO（而不是直接调 `CipherDao.upsertAll`）：写路径只有这一个入口，
+     * `AtomicWriteBoundaryTest` 的纪律才不会被破。
+     */
+    @Transaction
+    open suspend fun upsertCipherLocalOnly(row: CipherEntity) = upsertCipher(row)
+
+    /**
      * ★ 删行 + 入队，**原子**（永久删除单个条目）。
      *
      * 为什么删除也需要原子：这里的危险方向与 upsert 相反 ——

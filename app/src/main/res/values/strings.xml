@@ -1392,6 +1392,17 @@
     <string name="attachment_download">下载并打开这个附件</string>
     <string name="attachment_downloaded_open_failed">附件已下载，但没有能打开它的应用</string>
     <string name="attachment_download_failed">附件下载失败：%1$s</string>
+    <!-- 附件读写（P0/P1/P2 · 2026-11-28） -->
+    <string name="attachment_add">添加附件</string>
+    <string name="attachment_empty_hint">还没有附件，点右上角 + 添加</string>
+    <string name="attachment_unnamed">未命名附件</string>
+    <string name="attachment_remove">删除这个附件</string>
+    <string name="attachment_remove_title">删除附件</string>
+    <string name="attachment_remove_message">确定删除「%1$s」吗？此操作会同时从服务器移除。</string>
+    <string name="attachment_remove_confirm">删除</string>
+    <string name="attachment_changed">附件已更新</string>
+    <string name="attachment_change_failed">附件操作失败：%1$s</string>
+    <string name="attachment_too_large">附件超过 100 MB 上限</string>
 
     <!-- 通用字段复制提示 -->
     <string name="copy_field">已复制</string>

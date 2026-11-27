@@ -16,7 +16,9 @@
 package io.vaultix.data.bitwarden.attachment
 
 import io.vaultix.crypto.SymmetricCryptoKey
+import io.vaultix.crypto.VaultixCrypto
 import java.io.OutputStream
+import java.security.SecureRandom
 import javax.crypto.Cipher
 import javax.crypto.Mac
 import javax.crypto.spec.IvParameterSpec
@@ -53,6 +55,9 @@ import javax.crypto.spec.SecretKeySpec
  * 那会让"打开一个带大附件的条目"直接 OOM。
  */
 internal object BitwardenAttachmentCrypto {
+
+    /** 附件密钥随机源（每次加密生成新 IV / 新附件密钥）。 */
+    private val rng = SecureRandom()
 
     /** IV 长度（AES 块长）。 */
     private const val IV_SIZE = 16
@@ -98,6 +103,75 @@ internal object BitwardenAttachmentCrypto {
             raw.fill(0)
         }
     }
+
+    // ---------------------------------------------------------------- 写方向（P0 · 2026-11-28）
+
+    /**
+     * 生成一个**新的附件独立密钥**，并用 [wrappingKey]（条目密钥优先、账号密钥兜底）
+     * 包裹成 EncString，供 `POST /attachment/v2` 的 `key` 字段使用。
+     *
+     * - 返回 `Pair(附件密钥, 包裹后的 EncString)`；调用方**上传完成后必须**
+     *   `first.clear()`（本函数在异常路径不负责清 —— 清不清由持有者决定，避免
+     *   "函数内部清了、外面还在用"）。
+     * - 64 字节原始材料 `encKey(32) ‖ macKey(32)` 在 `finally` 里立即抹除，
+     *   只留 [SymmetricCryptoKey] 各自持有的 SecureBytes 副本。
+     */
+    fun generateAndWrapAttachmentKey(
+        wrappingKey: SymmetricCryptoKey,
+        crypto: VaultixCrypto,
+    ): Pair<SymmetricCryptoKey, String> {
+        val raw = ByteArray(KEY_MATERIAL_SIZE).also(rng::nextBytes)
+        return try {
+            val attachmentKey = SymmetricCryptoKey(
+                raw.copyOfRange(0, KEY_ENC_SIZE),
+                raw.copyOfRange(KEY_ENC_SIZE, KEY_MATERIAL_SIZE),
+            )
+            attachmentKey to crypto.encrypt(raw, wrappingKey)
+        } finally {
+            raw.fill(0)
+        }
+    }
+
+    /**
+     * 把明文字节加密成 Bitwarden 附件格式：`IV(16) ‖ AES-CBC-PKCS7 密文 ‖ HMAC(32)`，
+     * 与 [decrypt] 的读格式**逐字节对齐**（HMAC 覆盖 IV ‖ 密文，不含尾缀）。
+     *
+     * ⚠️ 整份进内存：与 [decrypt] 同口径 —— 附件移动端上限 100MB，密文与明文同级。
+     * 若将来要支持更大的文件，应成对改造本函数与 [decrypt] 为流式，
+     * **不能**只改一边（那样会造成"能上传、下载端解不开"）。
+     */
+    fun encrypt(plain: ByteArray, key: SymmetricCryptoKey): ByteArray {
+        val iv = ByteArray(IV_SIZE).also(rng::nextBytes)
+        val cipher = Cipher.getInstance(TRANSFORMATION)
+        key.encKey.useBytes { encKeyBytes ->
+            cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(encKeyBytes, "AES"), IvParameterSpec(iv))
+        }
+        val ciphertext = cipher.doFinal(plain)
+        val mac = key.macKey.useBytes { macKeyBytes ->
+            val hmac = Mac.getInstance(HMAC_ALGORITHM)
+            hmac.init(SecretKeySpec(macKeyBytes, HMAC_ALGORITHM))
+            hmac.update(iv)
+            hmac.update(ciphertext)
+            hmac.doFinal()
+        }
+        return try {
+            ByteArray(IV_SIZE + ciphertext.size + MAC_SIZE).also { out ->
+                System.arraycopy(iv, 0, out, 0, IV_SIZE)
+                System.arraycopy(ciphertext, 0, out, IV_SIZE, ciphertext.size)
+                System.arraycopy(mac, 0, out, IV_SIZE + ciphertext.size, MAC_SIZE)
+            }
+        } finally {
+            ciphertext.fill(0)
+            mac.fill(0)
+        }
+    }
+
+    /**
+     * 加密附件**文件名**（短字符串走 EncString，不是附件字节布局）。
+     * 与 [decrypt] 侧的 `AttachmentDto.fileName` 网关配套：服务端存密文，展示时由 mapper 解。
+     */
+    fun encryptStringForAttachment(plaintext: String, wrappingKey: SymmetricCryptoKey, crypto: VaultixCrypto): String =
+        crypto.encryptString(plaintext, wrappingKey)
 
     /**
      * 解密 [cipherStream] 的全部内容并写入 [sink]。
