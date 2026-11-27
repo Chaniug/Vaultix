@@ -312,9 +312,10 @@ class ItemDetailViewModel @Inject constructor(
      */
     fun addAttachment(fileName: String, plain: ByteArray) {
         if (_state.value.changingAttachment) return
-        // 官方移动端单附件上限 100MB；先挡一道，避免把整份文件读进内存后才在加密失败。
+        // 兜底检查：UI 侧已按 OpenableColumns.SIZE 前置拦截，但部分 Provider 不返回
+        // SIZE（虚拟文件 / 云盘），所以读到字节后仍要再判一次，别只信前面那道。
         if (plain.size.toLong() > MAX_ATTACHMENT_BYTES) {
-            _events.trySend(UiEvent.AttachmentTooLarge)
+            onAttachmentTooLarge()
             return
         }
         _state.update { it.copy(changingAttachment = true) }
@@ -328,6 +329,15 @@ class ItemDetailViewModel @Inject constructor(
                 onFailure = { e -> _events.trySend(UiEvent.AttachmentChangeFailed(e.message)) },
             )
         }
+    }
+
+    /**
+     * UI 前置拦截到超限文件时调用（选择器回调里按 `OpenableColumns.SIZE` 判，
+     * 超限就**根本不读**文件字节）。事件与 [addAttachment] 的兜底检查共用同一条，
+     * 文案只有一处（[UiEvent.AttachmentTooLarge] → strings.xml）。
+     */
+    fun onAttachmentTooLarge() {
+        _events.trySend(UiEvent.AttachmentTooLarge)
     }
 
     /** 删除一个附件（404 视同成功；本地列表随流刷新）。 */
@@ -509,5 +519,13 @@ private const val MIN_UPLOAD_VISIBLE_MS = 1_200L
  */
 private const val SYNC_TAG = "VaultixSync"
 
-/** 官方移动端单附件上限 100MB（与 BitwardenAttachmentCrypto 的口径一致）。 */
-private const val MAX_ATTACHMENT_BYTES = 100L * 1024 * 1024
+/**
+ * 官方移动端单附件上限 100MB（对齐 Bitwarden 帮助中心 attachments 条目的
+ * 「100 MB or smaller if uploading from mobile」）。KeePass/KDBX 格式层可到 ~4GB，
+ * 但其写库是整库重写，手机端 100MB 已是务实上限，故两类来源统一用这一个数。
+ *
+ * `internal` 而非 `private`：UI 在选择器回调里先查 `OpenableColumns.SIZE` 做**前置拦截**，
+ * 超限就不读文件字节（100MB 白读一遍在低内存机型上会先 OOM）。两端共用同一常量，
+ * 避免出现「UI 用 99MB、ViewModel 用 100MB」这类各写一遍的漂移。
+ */
+internal const val MAX_ATTACHMENT_BYTES = 100L * 1024 * 1024

@@ -1,6 +1,7 @@
 package io.vaultix.vaultix.ui.detail
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -9,7 +10,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -69,6 +72,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import android.content.Intent
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import kotlin.math.roundToInt
 import io.vaultix.common.OtpUriParser
 import io.vaultix.common.TotpConfig
 import io.vaultix.common.TotpGenerator
@@ -91,13 +95,14 @@ import io.vaultix.model.VaultSshKey
 import io.vaultix.model.VaultUri
 import io.vaultix.vaultix.ui.theme.UiSize
 import io.vaultix.vaultix.ui.theme.VaultixCorner
-import android.provider.OpenableColumns
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.DialogTextButton
+import io.vaultix.vaultix.ui.common.queryDisplayName
+import io.vaultix.vaultix.ui.common.querySize
 import io.vaultix.vaultix.ui.common.AppLabel
 import io.vaultix.vaultix.ui.common.BadgeTone
 import io.vaultix.vaultix.ui.common.ItemFormDialog
@@ -256,6 +261,8 @@ private class DetailActions(
     val onDownloadAttachment: (VaultAttachment) -> Unit,
     val onAddAttachment: (String, ByteArray) -> Unit,
     val onRemoveAttachment: (VaultAttachment) -> Unit,
+    /** UI 前置拦截到超限文件时上报（选择器里按 SIZE 判，超限不读字节）。 */
+    val onAttachmentTooLarge: () -> Unit = {},
     val isDownloadingAttachment: Boolean = false,
     val isChangingAttachment: Boolean = false,
     /**
@@ -658,6 +665,7 @@ fun ItemDetailScreen(
             onDownloadAttachment = viewModel::downloadAttachment,
             onAddAttachment = viewModel::addAttachment,
             onRemoveAttachment = viewModel::removeAttachment,
+            onAttachmentTooLarge = viewModel::onAttachmentTooLarge,
             isDownloadingAttachment = state.downloadingAttachment,
             isChangingAttachment = state.changingAttachment,
             organizationNameOf = { orgId -> organizationNames[orgId] },
@@ -1662,6 +1670,7 @@ private fun HistoryAndAttachments(item: VaultItem, actions: DetailActions) {
         onDownload = actions.onDownloadAttachment,
         onAdd = actions.onAddAttachment,
         onRemove = actions.onRemoveAttachment,
+        onTooLarge = actions.onAttachmentTooLarge,
     )
 }
 
@@ -1815,6 +1824,7 @@ private fun AttachmentsSection(
     onDownload: (VaultAttachment) -> Unit,
     onAdd: (String, ByteArray) -> Unit,
     onRemove: (VaultAttachment) -> Unit,
+    onTooLarge: () -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -1822,13 +1832,15 @@ private fun AttachmentsSection(
     val pickLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         scope.launch {
+            // 前置拦截：先问系统 SIZE，超 100MB 就不读字节（低内存机型读 100MB 会先 OOM）。
+            // Provider 不报 SIZE 时返回 null，走兜底：仍读出来由 ViewModel 再判一次。
+            val declaredSize = withContext(Dispatchers.IO) { querySize(context, uri) }
+            if (declaredSize != null && declaredSize > MAX_ATTACHMENT_BYTES) {
+                onTooLarge()
+                return@launch
+            }
             val picked = withContext(Dispatchers.IO) {
-                val displayName = context.contentResolver
-                    .query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
-                    ?.use { cursor ->
-                        val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                        if (index >= 0 && cursor.moveToFirst()) cursor.getString(index) else null
-                    }
+                val displayName = queryDisplayName(context, uri)
                 val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
                     ?: return@withContext null
                 (displayName ?: context.getString(R.string.attachment_unnamed)) to bytes
@@ -1840,25 +1852,56 @@ private fun AttachmentsSection(
     Column {
         Row(verticalAlignment = Alignment.CenterVertically) {
             SectionTitle(text = stringResource(R.string.section_attachments), icon = Icons.Filled.AttachFile)
-            IconButton(
+            Spacer(Modifier.width(Spacing.sm))
+            TextButton(
                 onClick = { pickLauncher.launch("*/*") },
                 enabled = !changing,
+                contentPadding = PaddingValues(
+                    horizontal = Spacing.xs,
+                    vertical = UiSize.HairGap,
+                ),
             ) {
                 Icon(
                     Icons.Filled.Add,
-                    contentDescription = stringResource(R.string.attachment_add),
+                    contentDescription = null,
                     modifier = Modifier.size(UiSize.InlineIcon),
+                )
+                Spacer(Modifier.width(UiSize.HairGap))
+                Text(
+                    text = stringResource(R.string.attachment_add),
+                    style = MaterialTheme.typography.labelLarge,
                 )
             }
         }
         DetailCard {
             if (attachments.isEmpty()) {
-                Text(
-                    text = stringResource(R.string.attachment_empty_hint),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm),
-                )
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = UiSize.TouchTarget)
+                        .clickable(enabled = !changing) { pickLauncher.launch("*/*") }
+                        .padding(horizontal = Spacing.lg, vertical = Spacing.md),
+                ) {
+                    Icon(
+                        Icons.Filled.AttachFile,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(UiSize.SecondaryIcon),
+                    )
+                    Text(
+                        text = stringResource(R.string.attachment_empty_hint),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = Spacing.xs),
+                    )
+                    Text(
+                        text = stringResource(R.string.attachment_limit_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = UiSize.HairGap),
+                    )
+                }
             } else {
                 Column(modifier = Modifier.padding(vertical = Spacing.sm)) {
                     attachments.forEachIndexed { index, attachment ->
@@ -1908,7 +1951,13 @@ private fun AttachmentsSection(
     }
 }
 
-/** 附件单行：文件名 + 大小 + 下载 / 删除按钮。 */
+/**
+ * 附件单行：类型图标底色 + 文件名 + 大小 + 下载 / 删除按钮。
+ *
+ * 类型图标用统一的 [Icons.Filled.AttachFile] 放在 `secondaryContainer` 淡底圆角方块里：
+ * 不按扩展名分类型（会引入一整套 mime→图标映射和未知类型的兜底，收益低），
+ * 目的只是给每行一个稳定的视觉锚点，让文件名不再直接贴在卡片左边。
+ */
 @Composable
 private fun AttachmentRow(
     attachment: VaultAttachment,
@@ -1921,8 +1970,25 @@ private fun AttachmentRow(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = Spacing.lg, end = Spacing.sm, top = Spacing.sm, bottom = Spacing.sm),
+            .padding(start = Spacing.md, end = Spacing.sm, top = Spacing.sm, bottom = Spacing.sm),
     ) {
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .size(ATTACHMENT_ICON_BOX)
+                .background(
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    shape = RoundedCornerShape(UiSize.HairGap),
+                ),
+        ) {
+            Icon(
+                Icons.Filled.AttachFile,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier.size(UiSize.InlineIcon),
+            )
+        }
+        Spacer(Modifier.width(Spacing.sm))
         Column(modifier = Modifier.weight(1f).padding(end = Spacing.xs)) {
             Text(
                 text = attachment.fileName,
@@ -1956,13 +2022,21 @@ private fun AttachmentRow(
     }
 }
 
+/** 附件类型图标底色方块边长（比 [UiSize.TouchTarget] 小，纯装饰、不可点）。 */
+private val ATTACHMENT_ICON_BOX = 40.dp
+
 /** 字节换算基数：KB / MB（附件大小展示用）。 */
 private const val ATTACHMENT_SIZE_KB = 1 shl 10
 private const val ATTACHMENT_SIZE_MB = 1 shl 20
+/** 一位小数的十倍放大系数（MB 展示用）。 */
+private const val ATTACHMENT_SIZE_TENTHS = 10
 
-/** 字节数 → 可读大小（B/KB/MB，向上取整到一位小数以内的整数）。 */
+/** 字节数 → 可读大小：MB 保留 1 位小数（如 2.4 MB），KB/B 取整。 */
 private fun formatAttachmentSize(bytes: Long): String = when {
-    bytes >= ATTACHMENT_SIZE_MB -> "${bytes / ATTACHMENT_SIZE_MB} MB"
+    bytes >= ATTACHMENT_SIZE_MB -> {
+        val tenths = (bytes.toFloat() / ATTACHMENT_SIZE_MB * ATTACHMENT_SIZE_TENTHS).roundToInt()
+        "${tenths / ATTACHMENT_SIZE_TENTHS.toFloat()} MB"
+    }
     bytes >= ATTACHMENT_SIZE_KB -> "${bytes / ATTACHMENT_SIZE_KB} KB"
     else -> "$bytes B"
 }

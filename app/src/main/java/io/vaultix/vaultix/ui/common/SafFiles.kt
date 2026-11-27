@@ -42,6 +42,25 @@ fun queryDisplayName(context: Context, uri: Uri): String? = runCatching {
     }
 }.getOrNull()
 
+/**
+ * SAF URI 的字节数（拿不到返回 null，调用方应退回"读完后检查"的兜底路径）。
+ *
+ * 为什么要有它：附件上限是 100MB，若在 `readBytes()` 之后才判，100MB 已经
+ * 白读进内存一遍（低内存机型可能先 OOM）。先查 `OpenableColumns.SIZE`
+ * 可以在**碰文件字节之前**拦住超限文件。
+ *
+ * ⚠️ 部分 Provider（尤其虚拟文件 / 云盘）不返回 SIZE，或返回 0 ⇒ 一律当
+ * "未知"，不要当成"空文件"放行；兜底检查仍在 `addAttachment` 里。
+ */
+fun querySize(context: Context, uri: Uri): Long? = runCatching {
+    context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+        val index = cursor.getColumnIndex(OpenableColumns.SIZE)
+        if (index < 0 || !cursor.moveToFirst()) return@use null
+        val size = cursor.getLong(index)
+        if (size <= 0L) null else size
+    }
+}.getOrNull()
+
 /** 读整个文件为字节（失败返回 null）。 */
 fun readAllBytes(context: Context, uri: Uri): ByteArray? = runCatching {
     context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
