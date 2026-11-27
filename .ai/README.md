@@ -34,7 +34,7 @@
 - **P1 · KDBX 附件导出**（`a674bde3`）：`Kdbx.attachmentBytes()` 用 kotpass 0.13.0
   公开 `db.binaries[hash].getContent()`（无需升版/反射），下载按 hash 现取明文并 `copyOf`
   防误清会话；门禁 `check_kdbx_attachment_api.py`（4 组变异自测）。
-- **P2 · KDBX 附件新增/删除 + 安全收尾**（本轮提交，待 CI）：
+- **P2 · KDBX 附件新增/删除 + 安全收尾**（`b7e911a1`，CI 全绿）：
   `KdbxItemWriter.addAttachment/removeAttachment` 在一次 mutate 里
   `modifyBinaries{}+modifyEntry{}`（保真铁律：只 copy binaries、走 withHistory），删除后
   `removeUnusedBinaries()` 只清无引用内容；`Kdbx.applyAttachment(sealed op)` 单入口避开
@@ -45,8 +45,11 @@
 - **CI 修复**：P0 提交首轮 detekt 红 7 条（圈复杂度 / catch Throwable / MagicNumber），
   已修并配变异自测；P1 首轮单测红 1 条（删除对话框裸按钮违反 #284），已改用
   `DialogTextButton`。
+- **CI 结论**：P2 Android CI run `46044642536` **success**（detekt / 31 门禁 / Debug APK /
+  单测 1972 例全绿），docs `46044642544` success。Preview release `v0.13.11-dev-b7e911a`
+  资产 `Vaultix-b7e911a.apk` 已挂载。
 - **真源**：[`PLAN-附件完善-2026-11-27.md`](./PLAN-附件完善-2026-11-27.md)（各阶段结论已回填）、
-  过程见 [`SESSION-2026-11-27.md`](./SESSION-2026-11-27.md)。**尚无 preview / 真机验收结论**。
+  过程见 [`SESSION-2026-11-27.md`](./SESSION-2026-11-27.md)。**尚未真机验收、未发正式版**。
 
 ## 上一轮（2026-11-26 · v0.13.11 正式发布：#305/#306/#308 随版）
 
