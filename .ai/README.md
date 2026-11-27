@@ -24,7 +24,19 @@
 - 已接进 CI：`ci-debug.yml` 的 `sandbox-tests` job 用**同一份脚本**，与 `android-ci` 并行
   ⇒ 本地绿 ⇒ CI 不会红在同一件事上。
 
-## 🕐 最新状态（2026-11-26 · v0.13.11 正式发布：#305/#306/#308 随版）
+## 🕐 最新状态（2026-11-27 · 附件完善方案已产出，待用户确认起手）
+
+- **本轮**：只做调查 + 方案，**未改生产代码、未发版、未合 `rele`**。
+  用户要「附件功能如何完善」，确认「先出可落地方案 + Bitwarden/KDBX 均衡」。
+- **★ 关键技术发现（推翻旧结论）**：kotpass **0.13.0 已有公开 binary API**
+  （`db.binaries` / `modifyBinaries{}` / `BinaryData.getContent()`，Maven 最新版即 0.13.0），
+  KDBX 附件**无需升版、无需反射**即可读写；`KdbxItemMapper` 的「只能反射」注释已过时。
+  Bitwarden 上传协议清晰（`/attachment/v2` + fileUploadType 0=Azure/1=Direct），bastion 有参考。
+- **方案真源**：[`PLAN-附件完善-2026-11-27.md`](./PLAN-附件完善-2026-11-27.md)，
+  P0 Bitwarden 上传/删除 → P1 KDBX 导出 → P2 KDBX 写入+安全收尾；含文件级清单、门禁、风险、验收。
+  过程见 [`SESSION-2026-11-27.md`](./SESSION-2026-11-27.md)。待用户确认后从 P0 起手。
+
+## 上一轮（2026-11-26 · v0.13.11 正式发布：#305/#306/#308 随版）
 
 - **发布结论（真实 run）**：用户 `发一个release` + 确认 `0.13.11 并合 rele`。`VERSION`
   `0.13.10 → 0.13.11`，手写 `Docs/release-notes/v0.13.11.md`。因无 gh token / helper，
