@@ -315,6 +315,15 @@ jobs:
       - name: Self-test KDBX attachment API checker
         run: python3 "$GITHUB_WORKSPACE/.ai/tools/check_kdbx_attachment_api.py" --selftest
 
+      # ★ 附件 P2（2026-11-28）：敏感明文缓存的三条清理链路（锁库 / 删条目 /
+      #   登记表齐全 / 下载落点覆盖）。断任何一条都是「明文长期滞留磁盘」，
+      #   编译与单测都看不见。配 4 组变异自测。
+      - name: Check sensitive cache clear invariants (P2)
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/check_sensitive_cache_clear.py" "$GITHUB_WORKSPACE"
+
+      - name: Self-test sensitive cache clear checker
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/check_sensitive_cache_clear.py" --selftest
+
       # ★ 2026-11-15（#293）：KDBX 通行密钥 credentialId 的跨模块保真契约。
       #
       # 真机：正式 v0.13.2 用 KDBX 库里保存的 passkey 登录 GitHub / x.com 报

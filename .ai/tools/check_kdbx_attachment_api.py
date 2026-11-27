@@ -1,24 +1,30 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""P1：KDBX 附件导出必须走 kotpass 0.13.0 的公开 binary API，禁止反射（2026-11-28）。
+"""P1 导出 + P2 写入：KDBX 附件必须走 kotpass 0.13.0 公开 binary API，禁止反射（2026-11-28）。
 
 ## 背景
 
 旧注释称 `Meta.binaries` 是 `@PublishedApi internal`、「只能反射、密码库不可接受」。
-实测 0.13.0 tag 已有公开 `KeePassDatabase.binaries` / `BinaryData.getContent()`，
-所以 KDBX 附件导出无需升版、无需反射。本门禁钉住三点：
+实测 0.13.0 tag 已有公开 `KeePassDatabase.binaries` / `modifyBinaries{}` /
+`BinaryData.getContent()` / `removeUnusedBinaries()`，所以 KDBX 附件读写无需升版、无需反射。
 
-1. `Kdbx.attachmentBytes()` 存在且用 `db.binaries[hash]?.getContent()`；
+判据：
+
+1. `Kdbx.attachmentBytes()` 存在且用 `db.binaries[hash]?.getContent()`（P1 导出）；
 2. KDBX 模块不出现 `getDeclaredField` / `java.lang.reflect` / `isAccessible`；
-3. 过时结论已从注释里删掉（否则下一位接手者又被误导去走反射）。
+3. 过时结论已从注释里删掉（否则下一位接手者又被误导去走反射）；
+4. `KdbxItemWriter` 有 `addAttachment` / `removeAttachment`，用公开 `modifyBinaries` +
+   `BinaryData.Uncompressed`，并守 `withHistory` 保真铁律（P2 写入）；
+5. 仓储不再有「下一阶段支持」的临时拒绝（P1 下载 / P2 增删都已接通）。
 
-配套 3 组变异自测，任一被破坏都必须红。
+配套变异自测，任一被破坏都必须红。
 """
 import os
 import re
 import sys
 
 KDBX = "data/kdbx/src/main/java/io/vaultix/data/kdbx/Kdbx.kt"
+WRITER = "data/kdbx/src/main/java/io/vaultix/data/kdbx/KdbxItemWriter.kt"
 MAPPER = "data/kdbx/src/main/java/io/vaultix/data/kdbx/KdbxItemMapper.kt"
 MAPPED = "data/kdbx/src/main/java/io/vaultix/data/kdbx/KdbxMappedContent.kt"
 REPO = "data/repository/src/main/java/io/vaultix/data/repository/ItemRepositoryImpl.kt"
@@ -53,6 +59,7 @@ def _fn_body(text, marker):
 def check(root):
     errors = []
     kdbx = _read(root, KDBX)
+    writer = _read(root, WRITER)
     mapper = _read(root, MAPPER)
     mapped = _read(root, MAPPED)
     repo = _read(root, REPO)
@@ -66,7 +73,18 @@ def check(root):
         if "getContent()" not in body:
             errors.append("attachmentBytes 未用 BinaryData.getContent()（压缩态会读成 gzip 原文）")
 
-    for rel, text in [(KDBX, kdbx), (MAPPER, mapper), (MAPPED, mapped)]:
+    # P2 写入：增删走公开 API + withHistory 保真。
+    if not re.search(r"fun addAttachment\s*\(", writer) or not re.search(
+        r"fun removeAttachment\s*\(", writer
+    ):
+        errors.append("KdbxItemWriter 缺少 addAttachment/removeAttachment：KDBX 附件写入未接通")
+    else:
+        if "modifyBinaries" not in writer or "BinaryData.Uncompressed" not in writer:
+            errors.append("KDBX 附件写入未用公开 modifyBinaries/BinaryData API")
+        if "withHistory" not in writer:
+            errors.append("KDBX 附件写入未走 withHistory：改条目会丢历史，违反保真铁律")
+
+    for rel, text in [(KDBX, kdbx), (WRITER, writer), (MAPPER, mapper), (MAPPED, mapped)]:
         if re.search(r"getDeclaredField|java\.lang\.reflect|isAccessible", text):
             errors.append(f"{rel} 出现反射访问 kotpass internal：密码库纪律红线")
 
@@ -75,6 +93,8 @@ def check(root):
 
     if "KDBX 附件暂不支持导出" in repo:
         errors.append("ItemRepositoryImpl 仍拒绝 KDBX 附件下载（P1 接通后必须删掉）")
+    if "下一阶段支持" in repo:
+        errors.append("ItemRepositoryImpl 仍有「下一阶段支持」临时拒绝（P2 接通后必须删掉）")
     return errors
 
 
@@ -87,6 +107,16 @@ def selftest():
             "    val hashKey = ByteString.fromHex(hash)\n"
             "    return db.binaries[hashKey]?.getContent()\n"
             "  }\n"
+            "}\n"
+        ),
+        WRITER: (
+            "object KdbxItemWriter {\n"
+            "  fun addAttachment(db: Db, id: String, name: String, plain: ByteArray): R {\n"
+            "    val b = BinaryData.Uncompressed(false, plain)\n"
+            "    val d2 = db.modifyBinaries { it + (b.hash to b) }\n"
+            "    return d2.modifyEntry(uuid) { withHistory { copy(binaries = binaries + ref) } }\n"
+            "  }\n"
+            "  fun removeAttachment(db: Db, id: String, aid: String): R = db.removeUnusedBinaries()\n"
             "}\n"
         ),
         MAPPER: "// 附件字节导出见 Kdbx.attachmentBytes\nobject KdbxItemMapper\n",
@@ -103,6 +133,12 @@ def selftest():
         ("仓储继续拒绝 KDBX", REPO,
          "  fun downloadAttachment() { sink.write(bytes) }\n",
          "  fun downloadAttachment() { require(!isKdbx(vaultId)) { \"KDBX 附件暂不支持导出\" } }\n"),
+        ("P2 写入丢失 withHistory 保真", WRITER,
+         "    return d2.modifyEntry(uuid) { withHistory { copy(binaries = binaries + ref) } }\n",
+         "    return d2.modifyEntry(uuid) { copy(binaries = binaries + ref) }\n"),
+        ("P2 仓储临时拒绝未删", REPO,
+         "  fun downloadAttachment() { sink.write(bytes) }\n",
+         "  fun downloadAttachment() { require(!isKdbx) { \"KDBX 附件新增将在下一阶段支持\" } }\n"),
     ]
     passed = 0
     with tempfile.TemporaryDirectory() as td:

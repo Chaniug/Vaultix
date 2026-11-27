@@ -1887,15 +1887,22 @@ private fun AttachmentsSection(
             title = { Text(stringResource(R.string.attachment_remove_title)) },
             text = { Text(stringResource(R.string.attachment_remove_message, target.fileName)) },
             confirmButton = {
-                TextButton(onClick = {
-                    pendingRemove = null
-                    onRemove(target)
-                }) { Text(stringResource(R.string.attachment_remove_confirm)) }
+                DialogTextButton(
+                    text = stringResource(R.string.attachment_remove_confirm),
+                    contentColor = MaterialTheme.colorScheme.error,
+                    enabled = !changing,
+                    onClick = {
+                        pendingRemove = null
+                        onRemove(target)
+                    },
+                )
             },
             dismissButton = {
-                TextButton(onClick = { pendingRemove = null }) {
-                    Text(stringResource(R.string.action_cancel))
-                }
+                DialogTextButton(
+                    text = stringResource(R.string.action_cancel),
+                    enabled = !changing,
+                    onClick = { pendingRemove = null },
+                )
             },
         )
     }

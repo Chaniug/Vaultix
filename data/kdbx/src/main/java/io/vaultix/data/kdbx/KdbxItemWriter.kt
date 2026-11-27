@@ -35,6 +35,8 @@ import app.keemobile.kotpass.constants.BasicField
 import app.keemobile.kotpass.cryptography.EncryptedValue
 import app.keemobile.kotpass.database.KeePassDatabase
 import app.keemobile.kotpass.database.getEntry
+import app.keemobile.kotpass.database.modifiers.binaries
+import app.keemobile.kotpass.database.modifiers.modifyBinaries
 import app.keemobile.kotpass.database.modifiers.modifyEntry
 import app.keemobile.kotpass.database.modifiers.modifyEntries
 import app.keemobile.kotpass.database.modifiers.modifyGroup
@@ -42,8 +44,11 @@ import app.keemobile.kotpass.database.modifiers.modifyParentGroup
 import app.keemobile.kotpass.database.modifiers.moveEntry
 import app.keemobile.kotpass.database.modifiers.removeEntry
 import app.keemobile.kotpass.database.modifiers.removeGroup
+import app.keemobile.kotpass.database.modifiers.removeUnusedBinaries
 import app.keemobile.kotpass.database.modifiers.withHistory
 import app.keemobile.kotpass.database.modifiers.withRecycleBin
+import app.keemobile.kotpass.models.BinaryData
+import app.keemobile.kotpass.models.BinaryReference
 import app.keemobile.kotpass.models.Entry
 import app.keemobile.kotpass.models.EntryFields
 import app.keemobile.kotpass.models.EntryValue
@@ -288,6 +293,91 @@ internal object KdbxItemWriter {
         database.getEntry { it.uuid == uuid }
             ?: return KdbxWriteResult(database, uuid, applied = false)
         return KdbxWriteResult(database.removeEntry(uuid), uuid)
+    }
+
+    // ------------------------------------------------------------ 附件（P2 · 2026-11-28）
+
+    /**
+     * 给条目新增一个附件（KDBX binary）。
+     *
+     * ## 为什么在同一次调用里同时改库级 binaries 与条目引用
+     *
+     * KDBX 把附件内容存在库级 `Meta.binaries`（hash → 二进制），条目里只存
+     * `BinaryReference(hash, name)` 引用。两步缺一不可：只加库级 = 内容在但没有任何条目
+     * 引用（会被 `removeUnusedBinaries` 清掉）；只加引用 = 条目指向不存在的 hash（KeePassXC
+     * 打开发现附件为空）。这里与 [removeAttachment] 一样，作为**一次 mutator** 整体返回，
+     * 复用 `Kdbx.mutate` 的指纹 / 回滚 / 落盘链路。
+     *
+     * `BinaryData.Uncompressed(false, plain)` 的构造会按内容算 SHA-256 hash —— 同名/同内容
+     * 天然去重，不需要我们自己算。
+     *
+     * @param attachmentId 直接传明文字节；调用方负责大小上限与读取。
+     */
+    fun addAttachment(
+        database: KeePassDatabase,
+        itemId: String,
+        fileName: String,
+        plain: ByteArray,
+    ): KdbxWriteResult {
+        val uuid = entryUuidOf(itemId) ?: return KdbxWriteResult(database, null, applied = false)
+        database.getEntry { it.uuid == uuid }
+            ?: return KdbxWriteResult(database, uuid, applied = false)
+
+        val binary = BinaryData.Uncompressed(false, plain)
+        val reference = BinaryReference(binary.hash, fileName)
+        // ① 库级内容表；② 条目引用表（withHistory 留历史，且不碰其它字段 —— 保真铁律）。
+        val withContent = database.modifyBinaries { current -> current + (binary.hash to binary) }
+        val withRef = withContent.modifyEntry(uuid) {
+            withHistory { copy(binaries = binaries + reference) }
+        }
+        return KdbxWriteResult(withRef, uuid)
+    }
+
+    /**
+     * 从条目删除一个附件，并调用 `removeUnusedBinaries()` 清掉**完全无人引用**的二进制内容。
+     *
+     * ⚠️ **被删的附件通常不会立刻从文件消失**：`withHistory` 把改动前的条目存成历史快照，
+     *   而 kotpass 的 `removeUnusedBinaries()` 把 `history + 当前条目` 一起算作「仍在引用」。
+     *   这是 KeePass 的正确语义（历史版本里的附件仍要能打开），与 KeePassXC 一致 ——
+     *   二进制会在该条目的历史被 KeePass 清理后、下一次 `removeUnusedBinaries()` 时回收。
+     *   所以这里的 `removeUnusedBinaries()` 只在「连历史都没引用」时（例如新建后立刻删、
+     *   未产生历史）才真正抹掉字节，属于**机会式回收**，不是删除的必然后果。
+     *
+     * @param attachmentId 附件的 hash hex（即 `VaultAttachment.id`）。
+     *   ⚠️ 用 hash 而非文件名定位：同名附件可能有多份，文件名不是唯一标识。
+     */
+    fun removeAttachment(
+        database: KeePassDatabase,
+        itemId: String,
+        attachmentId: String,
+    ): KdbxWriteResult {
+        val uuid = entryUuidOf(itemId) ?: return KdbxWriteResult(database, null, applied = false)
+        val hash = parseHashHex(attachmentId)
+            ?: return KdbxWriteResult(database, uuid, applied = false)
+        val entry = database.getEntry { it.uuid == uuid }?.second
+            ?: return KdbxWriteResult(database, uuid, applied = false)
+        if (entry.binaries.none { it.hash == hash }) {
+            // 目标引用不存在：applied=false，避免上层写出一份"看着成功、其实啥都没删"的库。
+            return KdbxWriteResult(database, uuid, applied = false)
+        }
+
+        val withoutRef = database.modifyEntry(uuid) {
+            withHistory { copy(binaries = binaries.filterNot { it.hash == hash }) }
+        }
+        // 只清无引用内容：别的条目仍引用同一 hash 时会被 removeUnusedBinaries 保留。
+        return KdbxWriteResult(withoutRef.removeUnusedBinaries(), uuid)
+    }
+
+    /** hex hash → ByteString（与 `Kdbx.attachmentBytes` 的解析口径一致）。 */
+    private fun parseHashHex(hex: String): okio.ByteString? {
+        if (hex.isEmpty() || hex.length % 2 != 0) return null
+        val bytes = ByteArray(hex.length / 2) { i ->
+            val hi = Character.digit(hex[i * 2], HEX_RADIX)
+            val lo = Character.digit(hex[i * 2 + 1], HEX_RADIX)
+            if (hi < 0 || lo < 0) return null
+            ((hi shl 4) or lo).toByte()
+        }
+        return okio.ByteString.of(*bytes)
     }
 
     // ------------------------------------------------------------------ 分组（文件夹）
@@ -958,3 +1048,4 @@ internal fun entryUuidOf(itemId: String): UUID? =
 private const val TAG = "VaultixKdbxWrite"
 private const val FOLDER_ID_PREFIX = "kdbx-group:"
 private const val ENTRY_ID_PREFIX = "kdbx-entry:"
+private const val HEX_RADIX = 16

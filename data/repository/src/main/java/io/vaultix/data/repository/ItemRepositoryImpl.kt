@@ -576,8 +576,13 @@ class ItemRepositoryImpl @Inject constructor(
         fileName: String,
         plain: ByteArray,
     ): Result<Unit> = runCatching {
+        // KDBX 走内存会话 + kdbx 文件，与 Bitwarden 的 Room 密文行完全是两套存储。
+        if (isKdbx(vaultId)) {
+            require(Kdbx.isUnlocked(vaultId)) { "KDBX 库未解锁，无法新增附件：$vaultId" }
+            kdbxItemWrites.addAttachment(vaultId, itemId, fileName, plain).getOrThrow()
+            return@runCatching
+        }
         require(sessions.isUnlocked(vaultId)) { "库未解锁，无法上传附件：$vaultId" }
-        require(!isKdbx(vaultId)) { "KDBX 附件新增将在下一阶段支持，当前请用 KeePassXC 添加" }
         val row = vaultDao.get(vaultId) ?: error("库不存在：$vaultId")
         val server = row.origin
             ?.takeIf { VaultKind.fromName(row.kind) == VaultKind.BITWARDEN }
@@ -611,8 +616,12 @@ class ItemRepositoryImpl @Inject constructor(
         itemId: String,
         attachmentId: String,
     ): Result<Unit> = runCatching {
+        if (isKdbx(vaultId)) {
+            require(Kdbx.isUnlocked(vaultId)) { "KDBX 库未解锁，无法删除附件：$vaultId" }
+            kdbxItemWrites.removeAttachment(vaultId, itemId, attachmentId).getOrThrow()
+            return@runCatching
+        }
         require(sessions.isUnlocked(vaultId)) { "库未解锁，无法删除附件：$vaultId" }
-        require(!isKdbx(vaultId)) { "KDBX 附件删除将在下一阶段支持，当前请用 KeePassXC 删除" }
         val row = vaultDao.get(vaultId) ?: error("库不存在：$vaultId")
         val server = row.origin
             ?.takeIf { VaultKind.fromName(row.kind) == VaultKind.BITWARDEN }

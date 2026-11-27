@@ -847,13 +847,6 @@ object Kdbx {
      * WebDAV 给的是"账号或密码不对"），只有它空着时才用兜底句 ——
      * 那才是真正对用户有用的信息，别用兜底句盖掉它。
      */
-    private fun readFailure(error: Exception): KdbxFailure = KdbxFailure(
-        KdbxOpenError.SourceUnavailable(
-            error.message?.takeIf { it.isNotBlank() } ?: "无法读取该库文件，请重新选择",
-        ),
-        error,
-    )
-
     /** 已登记的会话内容（未解锁 / 已锁返回 null）。 */
     fun contentOf(vaultId: String): KdbxUnlockedContent? = KdbxSessionStore.get(vaultId)?.let { session ->
         KdbxUnlockedContent(
@@ -896,6 +889,30 @@ object Kdbx {
         // ⚠️ 必须 copy：`BinaryData.Uncompressed.getContent()` 返回的是**内部 rawContent 本身**，
         //    调用方清空副本（导出后的标准动作）会把会话里的那份也抹掉。
         return db.binaries[hash]?.getContent()?.copyOf()
+    }
+
+    /**
+     * 给条目新增附件（P2 · 2026-11-28）。与 [createItem] 等写方法同形：内存事务 + 编码，
+     * 落盘由调用方（[KdbxItemRepository]）决定。
+     */
+    /**
+     * 附件写操作（P2 · 2026-11-28）。与 [createItem] 等写方法同形：内存事务 + 编码，
+     * 落盘由调用方（[KdbxItemRepository]）决定。
+     *
+     * 用 sealed [KdbxAttachmentOp] 把增/删收在一个入口，是为了不挤爆本 object 的
+     * detekt 40 函数预算 —— 两种操作都走同一条 [mutate] 链路，只是 mutator 不同。
+     */
+    suspend fun applyAttachment(
+        vaultId: String,
+        itemId: String,
+        op: KdbxAttachmentOp,
+    ): Result<KdbxPendingWrite> = mutate(vaultId) { database ->
+        when (op) {
+            is KdbxAttachmentOp.Add ->
+                KdbxItemWriter.addAttachment(database, itemId, op.fileName, op.plain)
+            is KdbxAttachmentOp.Remove ->
+                KdbxItemWriter.removeAttachment(database, itemId, op.attachmentId)
+        }
     }
 
     /** hex 解析基数（detekt MagicNumber）。 */
@@ -1405,4 +1422,26 @@ sealed class KdbxWriteFailure(message: String, cause: Throwable? = null) : Excep
         "远端已被其他设备修改，为保护数据已取消写入。请选择：用远端覆盖本地 / 用本地覆盖远端 / 保留两份",
         cause,
     )
+}
+
+/**
+ * 把「来源读不到」翻译成一句**用户能照着做**的话。
+ *
+ * 从 [Kdbx] object 外提为文件级函数：附件读写接入后 object 已达 detekt 的 40 函数上限，
+ * 而这个翻译函数是纯函数（只依赖参数），外提不改变任何行为，只为腾出函数预算。
+ */
+private fun readFailure(error: Exception): KdbxFailure = KdbxFailure(
+    KdbxOpenError.SourceUnavailable(
+        error.message?.takeIf { it.isNotBlank() } ?: "无法读取该库文件，请重新选择",
+    ),
+    error,
+)
+
+/** 一次附件写操作的意图（P2）。sealed 让 [Kdbx.applyAttachment] 只有一个入口。 */
+sealed interface KdbxAttachmentOp {
+    /** 新增附件：[plain] 是明文原始字节，[fileName] 是显示名。 */
+    data class Add(val fileName: String, val plain: ByteArray) : KdbxAttachmentOp
+
+    /** 删除附件：[attachmentId] 是 hash hex（即 `VaultAttachment.id`）。 */
+    data class Remove(val attachmentId: String) : KdbxAttachmentOp
 }

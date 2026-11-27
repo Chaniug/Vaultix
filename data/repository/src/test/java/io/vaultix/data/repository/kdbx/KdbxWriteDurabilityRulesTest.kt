@@ -55,7 +55,7 @@ class KdbxWriteDurabilityRulesTest {
      * 若某个写动作绕过 `serialWrite`，那条路径就完全没有保护。
      */
     @Test
-    fun `八个写动作全部收口在不可取消的serialWrite`() {
+    fun `十个写动作全部收口在不可取消的serialWrite`() {
         val src = itemRepo()
         val body = functionBody(src, "serialWrite")
         assertTrue(
@@ -68,8 +68,9 @@ class KdbxWriteDurabilityRulesTest {
                 body.indexOf("withContext") < body.indexOf("writeGate.withLock"),
         )
         assertEquals(
-            "八个写动作都必须走 serialWrite；新增写动作时同步改这里并确认它也受保护",
-            8,
+            "十个写动作（5 条目 + 3 分组 + 2 附件 P2）都必须走 serialWrite；" +
+                "新增写动作时同步改这里并确认它也受保护",
+            10,
             Regex("""serialWrite\s*\{""").findAll(src).count(),
         )
     }
