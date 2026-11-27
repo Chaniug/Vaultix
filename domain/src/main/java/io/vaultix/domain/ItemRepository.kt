@@ -138,8 +138,8 @@ interface ItemRepository {
      *
      * - Bitwarden 来源：签名 URL 下载（无鉴权 client）→ 解包附件密钥 →
      *   先验 MAC、再解密（未认证内容一个字节都不会写进 [sink]）。
-     * - KDBX 来源：当前实现返回失败（kotpass 未暴露按 hash 取二进制的公开入口，
-     *   见 `KdbxItemMapper` 的说明），UI 侧不给下载入口。
+     * - KDBX 来源（P1 · 2026-11-28）：按 `VaultAttachment.id`（hash hex）从会话库里
+     *   现取明文并写入 [sink]，走 kotpass 0.13.0 公开 binary API，不常驻 `VaultItem`。
      *
      * @return 成功时携带写出的明文字节数。
      */

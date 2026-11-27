@@ -86,71 +86,56 @@ class BitwardenAttachmentUploader @Inject constructor(
             val (attachmentKey, wrappedKey) =
                 BitwardenAttachmentCrypto.generateAndWrapAttachmentKey(wrappingKey, crypto)
 
-            val encrypted: ByteArray
-            val encryptedFileName: String
+            // 单一 try/finally 兜住**所有**异常路径：加密失败、拿上传 URL 失败、
+            // 服务端未返回 id、上传失败都在此统一抹除密钥材料。相比每个分支各写
+            // 一遍 catch-and-clear，这里不会漏掉新增分支，也避开 TooGenericExceptionCaught。
+            var encrypted: ByteArray? = null
             try {
-                encrypted = BitwardenAttachmentCrypto.encrypt(plain, attachmentKey)
-                encryptedFileName =
+                val enc = BitwardenAttachmentCrypto.encrypt(plain, attachmentKey).also {
+                    encrypted = it
+                }
+                val encryptedFileName =
                     BitwardenAttachmentCrypto.encryptStringForAttachment(fileName, wrappingKey, crypto)
-            } catch (e: Throwable) {
-                attachmentKey.clear()
-                throw e
-            }
 
-            val api = apiFactory.vault(server)
-            val meta = try {
-                api.createAttachmentUploadUrl(
+                val api = apiFactory.vault(server)
+                val meta = api.createAttachmentUploadUrl(
                     cipherId,
                     AttachmentUploadRequest(
                         key = wrappedKey,
                         fileName = encryptedFileName,
-                        fileSize = encrypted.size.toString(),
+                        fileSize = enc.size.toString(),
                     ),
                 )
-            } catch (e: Throwable) {
-                encrypted.fill(0)
-                attachmentKey.clear()
-                throw e
-            }
 
-            val attachmentId = meta.attachmentId?.takeIf { it.isNotBlank() }
-                ?: meta.cipherResponse?.attachments?.maxByOrNull { it.id }?.id
-                ?: run {
-                    encrypted.fill(0)
-                    attachmentKey.clear()
-                    error("服务端未返回附件 id")
-                }
+                val attachmentId = meta.attachmentId?.takeIf { it.isNotBlank() }
+                    ?: meta.cipherResponse?.attachments?.maxByOrNull { it.id }?.id
+                    ?: error("服务端未返回附件 id")
 
-            try {
                 when (meta.fileUploadType) {
                     FILE_UPLOAD_TYPE_DIRECT -> uploadDirect(
                         api = api,
                         cipherId = cipherId,
                         attachmentId = attachmentId,
                         wrappedKey = wrappedKey,
-                        encrypted = encrypted,
+                        encrypted = enc,
                     )
                     else -> uploadAzure(
                         url = meta.url ?: error("服务端未返回 Azure 上传地址"),
-                        encrypted = encrypted,
+                        encrypted = enc,
                     )
                 }
-            } catch (e: Throwable) {
-                encrypted.fill(0)
-                attachmentKey.clear()
-                throw e
+
+                Uploaded(
+                    attachmentId = attachmentId,
+                    wrappedKey = wrappedKey,
+                    encryptedFileName = encryptedFileName,
+                    attachments = meta.cipherResponse?.attachments.orEmpty(),
+                    encryptedSize = enc.size.toLong(),
+                )
             } finally {
-                encrypted.fill(0)
+                encrypted?.fill(0)
                 attachmentKey.clear()
             }
-
-            Uploaded(
-                attachmentId = attachmentId,
-                wrappedKey = wrappedKey,
-                encryptedFileName = encryptedFileName,
-                attachments = meta.cipherResponse?.attachments.orEmpty(),
-                encryptedSize = encrypted.size.toLong(),
-            )
         }
     }
 

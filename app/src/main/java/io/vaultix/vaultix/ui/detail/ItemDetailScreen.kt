@@ -179,28 +179,27 @@ private fun detailEventMessage(context: Context, event: ItemDetailViewModel.UiEv
         ItemDetailViewModel.UiEvent.SaveQueued -> context.getString(R.string.item_saved_queued)
         is ItemDetailViewModel.UiEvent.SaveFailed ->
             // 兜底理由同 ItemsScreen（见 UiEvent.SaveFailed 的 KDoc）。
-            context.getString(
-                R.string.item_save_failed,
-                event.message ?: context.getString(R.string.error_unknown_no_detail),
-            )
+            failureText(context, R.string.item_save_failed, event.message)
         ItemDetailViewModel.UiEvent.Deleted -> null
         is ItemDetailViewModel.UiEvent.DownloadFailed ->
             // 兜底理由同 [UiEvent.SaveFailed]：没细节时说什么归呈现层。
-            context.getString(
-                R.string.attachment_download_failed,
-                event.message ?: context.getString(R.string.error_unknown_no_detail),
-            )
+            failureText(context, R.string.attachment_download_failed, event.message)
         // DownloadDone 不是文案事件：要发起 ACTION_VIEW（可能失败并转提示），见收集处。
         is ItemDetailViewModel.UiEvent.DownloadDone -> null
         ItemDetailViewModel.UiEvent.AttachmentChanged ->
             context.getString(R.string.attachment_changed)
         is ItemDetailViewModel.UiEvent.AttachmentChangeFailed ->
-            context.getString(
-                R.string.attachment_change_failed,
-                event.message ?: context.getString(R.string.error_unknown_no_detail),
-            )
+            failureText(context, R.string.attachment_change_failed, event.message)
         ItemDetailViewModel.UiEvent.AttachmentTooLarge -> context.getString(R.string.attachment_too_large)
     }
+
+/**
+ * 带理由的失败文案：没细节时回落通用兜底串。
+ *
+ * 抽出来既避免三处重复的三元表达式，也把 [detailEventMessage] 的圈复杂度压回门禁内。
+ */
+private fun failureText(context: Context, resId: Int, message: String?): String =
+    context.getString(resId, message ?: context.getString(R.string.error_unknown_no_detail))
 
 /** 掩码星号数量上限（密码过长时截断显示，复制不受影响）。 */
 private const val MAX_MASK_LENGTH = 24

@@ -60,7 +60,8 @@ data class KdbxMappedContent(
      * **每次读列表都要把库里所有附件读进内存** —— 一个 80MB 的库会直接把列表页拖垮。
      *
      * ⇒ 这里只留"有哪些 hash、各自叫什么"，字节在真正要导出时按 hash 现取
-     * （`Kdbx.binaryOf(vaultId, hash)`）。这也与 `VaultAttachment` 只承载元信息的约定一致。
+     * （`Kdbx.attachmentBytes(vaultId, hash)`，走 kotpass 0.13.0 公开 binary API）。
+     * 这也与 `VaultAttachment` 只承载元信息的约定一致。
      */
     val binaryNames: Map<String, String> = emptyMap(),
 )

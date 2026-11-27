@@ -544,9 +544,16 @@ class ItemRepositoryImpl @Inject constructor(
         attachmentId: String,
         sink: java.io.OutputStream,
     ): Result<Long> = runCatching {
+        // KDBX 分流（P1 · 2026-11-28）：走 kotpass 0.13.0 公开 binary API 现取明文。
+        if (isKdbx(vaultId)) {
+            require(Kdbx.isUnlocked(vaultId)) { "KDBX 库未解锁，无法导出附件：$vaultId" }
+            val bytes = Kdbx.attachmentBytes(vaultId, attachmentId)
+                ?: error("附件不存在或已被清理：$attachmentId")
+            sink.write(bytes)
+            bytes.fill(0)
+            return@runCatching bytes.size.toLong()
+        }
         require(sessions.isUnlocked(vaultId)) { "库未解锁，无法下载附件：$vaultId" }
-        // KDBX 分流：结构限制（kotpass 未公开按 hash 取二进制的入口），诚实失败。
-        require(!isKdbx(vaultId)) { "KDBX 附件暂不支持导出" }
         val row = vaultDao.get(vaultId)
         val server = row?.origin
             ?.takeIf { VaultKind.fromName(row.kind) == VaultKind.BITWARDEN }
@@ -612,7 +619,7 @@ class ItemRepositoryImpl @Inject constructor(
             ?: error("只有 Bitwarden 库支持删除附件")
         val response = apiFactory.vault(server).deleteAttachment(itemId, attachmentId)
         // 404 = 服务端已不存在，视同成功（与 bastion 参考一致）。
-        require(response.code() in setOf(200, 204, 404)) { "附件删除失败：HTTP ${response.code()}" }
+        require(response.code() in ATTACHMENT_DELETE_OK_CODES) { "附件删除失败：HTTP ${response.code()}" }
         val existing = cipherDao.get(itemId) ?: return@runCatching
         val dto = runCatching { json.decodeFromString<CipherDto>(existing.encryptedPayload) }
             .getOrElse { return@runCatching }
@@ -790,6 +797,9 @@ class ItemRepositoryImpl @Inject constructor(
         const val OP_SOFT_DELETE = "SOFT_DELETE"
         const val OP_RESTORE = "RESTORE"
         const val OP_DELETE = "DELETE"
+
+        /** 附件删除的成功状态码：200 OK / 204 No Content / 404 已不存在（幂等）。 */
+        val ATTACHMENT_DELETE_OK_CODES = setOf(200, 204, 404)
     }
 }
 

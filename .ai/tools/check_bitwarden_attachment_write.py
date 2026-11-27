@@ -15,7 +15,15 @@
    否则「上传成功但别人下载解不开」。
 
 判据全部**剥注释**后检查，避免「注释里写了」被当成「代码里做了」的假绿。
-配套 4 组变异自测，每条不变量各删一次，都必须红。
+配套变异自测，每条不变量各删一次，都必须红。
+
+## ③ 密钥清理判据的两种合规形态（2026-11-28 重构）
+早期实现用「每处 catch 各 clear 一次」⇒ 判据是 clear() ≥3。该形态容易漏新分支。
+现改为单一 `try { … } finally { … }` 统一清理 ⇒ 判据扩展为两种形态任一即可：
+  - 旧形态：`.clear()` 出现 ≥3 次（分散 catch-and-clear）；
+  - 新形态：`finally` 块内同时出现 `.clear()` 与 `.fill(`（finally 兜住所有异常路径，
+    既清密钥又抹密文字节，比分散清理更严密）。
+只删掉清理（两种形态都不满足）必须红 —— 自测里新增该变异钉住。
 """
 import os
 import re
@@ -58,6 +66,26 @@ def _fn_body(text, marker):
     return text[start:]
 
 
+def _has_finally_cleanup(code):
+    """是否存在 finally 块内同时清密钥与抹密文字节（统一清理形态）。"""
+    for m in re.finditer(r"finally\s*\{", code):
+        start = m.end() - 1
+        depth = 0
+        end = start
+        for i in range(start, len(code)):
+            if code[i] == "{":
+                depth += 1
+            elif code[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    end = i
+                    break
+        block = code[start:end]
+        if ".clear()" in block and ".fill(" in block:
+            return True
+    return False
+
+
 def check(root):
     errors = []
     crypto = _strip_comments(_read(root, CRYPTO))
@@ -88,8 +116,13 @@ def check(root):
     else:
         if "@AttachmentHttpClient" not in uploader:
             errors.append("上传编排未注入 @AttachmentHttpClient：Bearer 会泄露给第三方对象存储")
-        if len(re.findall(r"\.clear\(\)", uploader)) < 3:
-            errors.append("上传编排的附件密钥 clear() 覆盖不足（含异常路径至少 3 处）")
+        dispersed_cleanup = len(re.findall(r"\.clear\(\)", uploader)) >= 3
+        unified_cleanup = _has_finally_cleanup(uploader)
+        if not (dispersed_cleanup or unified_cleanup):
+            errors.append(
+                "上传编排的附件密钥清理覆盖不足：需分散 clear() ≥3 处，"
+                "或 finally 块内统一 clear()+fill()（覆盖所有异常路径）"
+            )
 
     # ④ 附件不进普通写回。
     body = _fn_body(mapper, "fun toUpdateRequest")
@@ -122,9 +155,15 @@ def selftest():
             "class BitwardenAttachmentUploader @Inject constructor(\n"
             "  @AttachmentHttpClient private val http: OkHttpClient,\n"
             ") {\n"
-            "  fun a() { key.clear() }\n"
-            "  fun b() { key.clear() }\n"
-            "  fun c() { key.clear() }\n"
+            "  suspend fun upload() {\n"
+            "    var encrypted: ByteArray? = null\n"
+            "    try {\n"
+            "      encrypted = crypto.encrypt(plain)\n"
+            "    } finally {\n"
+            "      encrypted?.fill(0)\n"
+            "      key.clear()\n"
+            "    }\n"
+            "  }\n"
             "}\n"
         ),
         MAPPER: (
@@ -143,6 +182,11 @@ def selftest():
          "  @POST(\"ciphers/{id}/attachment/v2\") suspend fun url(): R\n", ""),
         ("上传编排去掉 @AttachmentHttpClient", UPLOADER,
          "@AttachmentHttpClient private val http: OkHttpClient,", "private val http: OkHttpClient,"),
+        ("删掉 finally 密钥清理", UPLOADER,
+         "    } finally {\n"
+         "      encrypted?.fill(0)\n"
+         "      key.clear()\n"
+         "    }\n", "    }\n"),
         ("普通写回塞进 attachments", MAPPER,
          "    val name = item.name\n", "    val name = item.name\n    val attachments = stored.attachments\n"),
     ]
