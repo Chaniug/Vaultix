@@ -24,6 +24,21 @@
 - 已接进 CI：`ci-debug.yml` 的 `sandbox-tests` job 用**同一份脚本**，与 `android-ci` 并行
   ⇒ 本地绿 ⇒ CI 不会红在同一件事上。
 
+## 🎉 最新正式版 v0.13.12（2026-11-28 发布）
+
+- **发布结论（真实 run）**：用户 `发一个release` + 确认 `0.13.12 并合 rele`。`VERSION`
+  `0.13.11 → 0.13.12`，手写 `Docs/release-notes/v0.13.12.md`。沿用等价纯 git：
+  本地 `rele-release` 合并 `origin/main`（`--no-ff`）推 `origin rele-release:rele`。
+  `Android Stable Release` run `46133685466` **success**（Build & Publish 单 job 一次过），
+  tag `v0.13.12` 与 `rele` 同指 `954461ec`，Release **Latest**、非 prerelease / 非 draft。
+- **产物**：`Vaultix-v0.13.12.apk`（6.71 MB，混淆开启）、`checksums-sha256.txt`；
+  APK SHA-256 `389550ff…29d77`，签名指纹 `7e6c8c07…c1fd8`
+  （**与 v0.13.11 一致，可覆盖安装**），下载 HTTP 200 已核实。
+- **发布内容** = 附件 P0/P1/P2（Bitwarden 上传删除 + KDBX 导出新增删除 + 敏感缓存清理）
+  + 附件区 UI 务实档改版 + 默认折叠 + 100MB 前置 SIZE 预检 + detekt 拆分修复。
+- **只推 rele 触发发布，文档回填仍只在 main**（不再推 rele ⇒ 不二次发版）。
+- ⚠️ 附件新增/删除路径**尚未真机逐项验收**，release notes 已如实写明，建议升级后先小附件走通。
+
 ## 🕐 最新状态（2026-11-28 · 附件区默认折叠 + 100MB 前置预检）
 
 - **★ 追加改动（提交 `92eb3579`）**：用户反馈「没必要这么明显，大部分人不看附件」⇒
