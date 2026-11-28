@@ -24,9 +24,16 @@
 - 已接进 CI：`ci-debug.yml` 的 `sandbox-tests` job 用**同一份脚本**，与 `android-ci` 并行
   ⇒ 本地绿 ⇒ CI 不会红在同一件事上。
 
-## 🕐 最新状态（2026-11-28 · 附件区 UI 务实档改版 + 100MB 前置预检）
+## 🕐 最新状态（2026-11-28 · 附件区默认折叠 + 100MB 前置预检）
 
-- **用户诉求**：「添加附件的 UI 有点丑；附件大小 Bitwarden 有硬性规范，看一下标准」。
+- **★ 追加改动（提交 `92eb3579`）**：用户反馈「没必要这么明显，大部分人不看附件」⇒
+  附件区改**默认折叠**：平时只画一行「📎 附件 · N」+ 展开箭头（48dp 整行可点），
+  展开态才画列表 / 空态添加区 / 列表末尾「+ 添加附件」；`rememberSaveable` 保状态。
+  新增 `attachment_count` / `attachment_expand` / `attachment_collapse` 三条文案。
+  29 项门禁本地全绿；CI / preview 待回填。只推 `main`。
+- **上一轮（提交 `6b47fa7a`，务实档 UI + 100MB 前置预检，CI `46085412174` success，
+  preview `Vaultix-6b47fa7.apk`）**：用户诉求「添加附件的 UI 有点丑；附件大小 Bitwarden
+  有硬性规范，看一下标准」。
   选定 **UI 务实档 + 统一 100MB（修预检时序）**；只推 `main`，未发版、未合 `rele`。
 - **规范依据（已查证官方源）**：Bitwarden 单附件 **500MB**（网页/桌面）、
   **移动端上传 100MB 硬限**，付费账户总量 5GB（[帮助中心](https://bitwarden.com/help/attachments)、
@@ -49,7 +56,8 @@
   单测 / sandbox 单测全绿）。Preview release `v0.13.11-dev-6b47fa7` 资产
   `Vaultix-6b47fa7.apk`（35.95 MB）已挂载：
   https://github.com/Chaniug/Vaultix/releases/download/preview/Vaultix-6b47fa7.apk
-- **真源**：[`SESSION-2026-11-28.md`](./SESSION-2026-11-28.md)。
+- **真源**：[`SESSION-2026-11-28.md`](./SESSION-2026-11-28.md)（务实档 + 预检）、
+  [`SESSION-2026-11-28-part2.md`](./SESSION-2026-11-28-part2.md)（默认折叠）。
   **未真机验收、未发正式版、未合 `rele`**。
 
 ## 上一轮（2026-11-28 · 附件完善 P0/P1/P2 全部实施完成）
