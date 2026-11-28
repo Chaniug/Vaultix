@@ -288,6 +288,47 @@ data class AttachmentDownloadResponse(
 )
 
 /**
+ * 附件上传请求（`POST /ciphers/{id}/attachment/v2`，P0 · 2026-11-28）。
+ *
+ * ⚠️ 三个字段的语义极易搞混，按官方服务端 `AttachmentRequestModel` 对齐：
+ * - `key`：附件独立密钥被条目/账号密钥包裹后的 EncString（**不是**明文密钥）；
+ * - `fileName`：**加密后**的文件名 EncString；
+ * - `fileSize`：**密文**长度（字符串），不是原文字节数 —— 服务端按这个数分配对象存储。
+ */
+@Serializable
+data class AttachmentUploadRequest(
+    @SerialName("key") val key: String,
+    @SerialName("fileName") val fileName: String,
+    @SerialName("fileSize") val fileSize: String,
+)
+
+/**
+ * 上传 URL 响应。
+ *
+ * `fileUploadType`（官方 `FileUploadType`）：**0 = Direct Multipart**（上传回本服务端
+ * `/api/ciphers/{id}/attachment/{aid}`，带 Bearer）；**1 = Azure Blob PUT**（`url` 是
+ * 第三方签名 URL，**绝不能**带 Bearer —— 见 `BitwardenAttachmentUploader`）。
+ * ⚠️ bastion 里的常量定义与此一致；方案文档早期版本曾写反，以本注释与代码为准。
+ */
+@Serializable
+data class AttachmentUploadResponse(
+    @SerialName("fileUploadType") val fileUploadType: Int = 0,
+    @SerialName("url") val url: String? = null,
+    @SerialName("cipherResponse") val cipherResponse: AttachmentCipherResponse? = null,
+    @SerialName("attachmentId") val attachmentId: String? = null,
+)
+
+/**
+ * 上传/删除响应里的条目快照。只取本地写回需要的字段：
+ * 用 `attachments` 更新本地列表，**不要**把整条快照塞进 `toUpdateRequest()`。
+ */
+@Serializable
+data class AttachmentCipherResponse(
+    @SerialName("id") val id: String = "",
+    @SerialName("attachments") val attachments: List<AttachmentDto> = emptyList(),
+)
+
+/**
  * 创建 / 更新条目请求体。
  *
  * login/card/identity/secureNote/sshKey/fields 均为**可空保留段**：

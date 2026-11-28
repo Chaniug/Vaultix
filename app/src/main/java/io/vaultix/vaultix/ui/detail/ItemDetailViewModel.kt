@@ -105,6 +105,15 @@ class ItemDetailViewModel @Inject constructor(
 
         /** 附件下载失败（解包失败 / MAC 不匹配 / 网络）。`message` 语义同 [SaveFailed]。 */
         data class DownloadFailed(val message: String?) : UiEvent
+
+        /** 附件上传 / 删除成功（列表由解密流自动刷新，这里只负责提示）。 */
+        data object AttachmentChanged : UiEvent
+
+        /** 附件上传 / 删除失败。`message` 语义同 [SaveFailed]。 */
+        data class AttachmentChangeFailed(val message: String?) : UiEvent
+
+        /** 附件超过 100MB 上限（文案归 strings.xml，不在 ViewModel 里拼中文）。 */
+        data object AttachmentTooLarge : UiEvent
     }
 
     data class UiState(
@@ -139,6 +148,8 @@ class ItemDetailViewModel @Inject constructor(
         val syncStatus: KdbxCloudSyncStatus? = null,
         /** 正在下载附件（同一时刻只允许一个，UI 据此禁用其它附件的下载按钮）。 */
         val downloadingAttachment: Boolean = false,
+        /** 正在上传 / 删除附件（与下载分开，避免"上传中却把下载按钮也灰掉"）。 */
+        val changingAttachment: Boolean = false,
     )
 
     private val _state = MutableStateFlow(UiState())
@@ -288,6 +299,59 @@ class ItemDetailViewModel @Inject constructor(
                 onFailure = { e ->
                     _events.trySend(UiEvent.DownloadFailed(e.message))
                 },
+            )
+        }
+    }
+
+    /**
+     * 上传一个新附件（P0 · 2026-11-28）。文件名与明文字节由 UI 从系统文件选择器读入，
+     * ViewModel 不碰 Android `Uri`（那样会把 Android 框架依赖带进这一层）。
+     *
+     * 成功后**不手动改 UI 的 item**：本地 DTO 更新会经 observeItems 流自动重发，
+     * 手改一份等于同一事实存两份（本项目的老教训）。
+     */
+    fun addAttachment(fileName: String, plain: ByteArray) {
+        if (_state.value.changingAttachment) return
+        // 兜底检查：UI 侧已按 OpenableColumns.SIZE 前置拦截，但部分 Provider 不返回
+        // SIZE（虚拟文件 / 云盘），所以读到字节后仍要再判一次，别只信前面那道。
+        if (plain.size.toLong() > MAX_ATTACHMENT_BYTES) {
+            onAttachmentTooLarge()
+            return
+        }
+        _state.update { it.copy(changingAttachment = true) }
+        viewModelScope.launch {
+            val result = runCatching {
+                itemRepository.addAttachment(vaultId, itemId, fileName, plain).getOrThrow()
+            }
+            _state.update { it.copy(changingAttachment = false) }
+            result.fold(
+                onSuccess = { _events.trySend(UiEvent.AttachmentChanged) },
+                onFailure = { e -> _events.trySend(UiEvent.AttachmentChangeFailed(e.message)) },
+            )
+        }
+    }
+
+    /**
+     * UI 前置拦截到超限文件时调用（选择器回调里按 `OpenableColumns.SIZE` 判，
+     * 超限就**根本不读**文件字节）。事件与 [addAttachment] 的兜底检查共用同一条，
+     * 文案只有一处（[UiEvent.AttachmentTooLarge] → strings.xml）。
+     */
+    fun onAttachmentTooLarge() {
+        _events.trySend(UiEvent.AttachmentTooLarge)
+    }
+
+    /** 删除一个附件（404 视同成功；本地列表随流刷新）。 */
+    fun removeAttachment(attachment: VaultAttachment) {
+        if (_state.value.changingAttachment) return
+        _state.update { it.copy(changingAttachment = true) }
+        viewModelScope.launch {
+            val result = runCatching {
+                itemRepository.removeAttachment(vaultId, itemId, attachment.id).getOrThrow()
+            }
+            _state.update { it.copy(changingAttachment = false) }
+            result.fold(
+                onSuccess = { _events.trySend(UiEvent.AttachmentChanged) },
+                onFailure = { e -> _events.trySend(UiEvent.AttachmentChangeFailed(e.message)) },
             )
         }
     }
@@ -454,3 +518,14 @@ private const val MIN_UPLOAD_VISIBLE_MS = 1_200L
  * ⚠️ 只记事件与结果类别，绝不记条目明文（项目铁律）。
  */
 private const val SYNC_TAG = "VaultixSync"
+
+/**
+ * 官方移动端单附件上限 100MB（对齐 Bitwarden 帮助中心 attachments 条目的
+ * 「100 MB or smaller if uploading from mobile」）。KeePass/KDBX 格式层可到 ~4GB，
+ * 但其写库是整库重写，手机端 100MB 已是务实上限，故两类来源统一用这一个数。
+ *
+ * `internal` 而非 `private`：UI 在选择器回调里先查 `OpenableColumns.SIZE` 做**前置拦截**，
+ * 超限就不读文件字节（100MB 白读一遍在低内存机型上会先 OOM）。两端共用同一常量，
+ * 避免出现「UI 用 99MB、ViewModel 用 100MB」这类各写一遍的漂移。
+ */
+internal const val MAX_ATTACHMENT_BYTES = 100L * 1024 * 1024

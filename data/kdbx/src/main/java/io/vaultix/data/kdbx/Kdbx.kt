@@ -21,7 +21,9 @@
 package io.vaultix.data.kdbx
 
 import app.keemobile.kotpass.database.KeePassDatabase
+import app.keemobile.kotpass.database.modifiers.binaries
 import io.vaultix.common.logging.VaultixLog
+import okio.ByteString
 import io.vaultix.model.VaultFolder
 import io.vaultix.model.VaultItem
 import java.io.ByteArrayInputStream
@@ -845,13 +847,6 @@ object Kdbx {
      * WebDAV 给的是"账号或密码不对"），只有它空着时才用兜底句 ——
      * 那才是真正对用户有用的信息，别用兜底句盖掉它。
      */
-    private fun readFailure(error: Exception): KdbxFailure = KdbxFailure(
-        KdbxOpenError.SourceUnavailable(
-            error.message?.takeIf { it.isNotBlank() } ?: "无法读取该库文件，请重新选择",
-        ),
-        error,
-    )
-
     /** 已登记的会话内容（未解锁 / 已锁返回 null）。 */
     fun contentOf(vaultId: String): KdbxUnlockedContent? = KdbxSessionStore.get(vaultId)?.let { session ->
         KdbxUnlockedContent(
@@ -862,6 +857,66 @@ object Kdbx {
             credentialLabel = session.credentialLabel,
         )
     }
+
+    /**
+     * 按 hash 取库内附件的**明文**字节（P1 · 2026-11-28）。
+     *
+     * ## 为什么这里可以直接用公开 API
+     *
+     * 旧注释说 `Meta.binaries` 是 `@PublishedApi internal`、需反射访问—— 已过时。
+     * kotpass 0.13.0（当前版本，也是上游最新版）提供了公开的
+     * `KeePassDatabase.binaries` 扩展与 `BinaryData.getContent()`（自动处理 GZIP 压缩态），
+     * 无需升版、无需反射。仓库里的 `.ai/tools/check_kdbx_attachment_api.py` 钉住这条。
+     *
+     * @param hashHex 条目 `BinaryReference.hash.hex()`（即 `VaultAttachment.id`）。
+     * @return 明文副本；库未解锁 / hash 不存在 / hex 非法时返回 null（不抛，导出场景按
+     *   「附件不存在」处理即可）。
+     */
+    fun attachmentBytes(vaultId: String, hashHex: String): ByteArray? {
+        val db = KdbxSessionStore.get(vaultId)?.database ?: return null
+        // hex → ByteString 就地解析（不抽成函数：Kdbx 对象函数数已顶到 detekt 40 上限）。
+        // 手写而不依赖 `ByteString.fromHex`：后者在 okio 3.18.2 上不可用，
+        // 而 `ByteString.of(vararg)` 是全版本稳定 API。
+        if (hashHex.isEmpty() || hashHex.length % 2 != 0) return null
+        val hash = ByteString.of(
+            *ByteArray(hashHex.length / 2) { i ->
+                val hi = Character.digit(hashHex[i * 2], HEX_RADIX)
+                val lo = Character.digit(hashHex[i * 2 + 1], HEX_RADIX)
+                if (hi < 0 || lo < 0) return null
+                ((hi shl 4) or lo).toByte()
+            },
+        )
+        // ⚠️ 必须 copy：`BinaryData.Uncompressed.getContent()` 返回的是**内部 rawContent 本身**，
+        //    调用方清空副本（导出后的标准动作）会把会话里的那份也抹掉。
+        return db.binaries[hash]?.getContent()?.copyOf()
+    }
+
+    /**
+     * 给条目新增附件（P2 · 2026-11-28）。与 [createItem] 等写方法同形：内存事务 + 编码，
+     * 落盘由调用方（[KdbxItemRepository]）决定。
+     */
+    /**
+     * 附件写操作（P2 · 2026-11-28）。与 [createItem] 等写方法同形：内存事务 + 编码，
+     * 落盘由调用方（[KdbxItemRepository]）决定。
+     *
+     * 用 sealed [KdbxAttachmentOp] 把增/删收在一个入口，是为了不挤爆本 object 的
+     * detekt 40 函数预算 —— 两种操作都走同一条 [mutate] 链路，只是 mutator 不同。
+     */
+    suspend fun applyAttachment(
+        vaultId: String,
+        itemId: String,
+        op: KdbxAttachmentOp,
+    ): Result<KdbxPendingWrite> = mutate(vaultId) { database ->
+        when (op) {
+            is KdbxAttachmentOp.Add ->
+                KdbxItemWriter.addAttachment(database, itemId, op.fileName, op.plain)
+            is KdbxAttachmentOp.Remove ->
+                KdbxItemWriter.removeAttachment(database, itemId, op.attachmentId)
+        }
+    }
+
+    /** hex 解析基数（detekt MagicNumber）。 */
+    private const val HEX_RADIX = 16
 
     /** 该库是否已解锁（内存里有会话）。 */
     fun isUnlocked(vaultId: String): Boolean = KdbxSessionStore.get(vaultId) != null
@@ -1367,4 +1422,26 @@ sealed class KdbxWriteFailure(message: String, cause: Throwable? = null) : Excep
         "远端已被其他设备修改，为保护数据已取消写入。请选择：用远端覆盖本地 / 用本地覆盖远端 / 保留两份",
         cause,
     )
+}
+
+/**
+ * 把「来源读不到」翻译成一句**用户能照着做**的话。
+ *
+ * 从 [Kdbx] object 外提为文件级函数：附件读写接入后 object 已达 detekt 的 40 函数上限，
+ * 而这个翻译函数是纯函数（只依赖参数），外提不改变任何行为，只为腾出函数预算。
+ */
+private fun readFailure(error: Exception): KdbxFailure = KdbxFailure(
+    KdbxOpenError.SourceUnavailable(
+        error.message?.takeIf { it.isNotBlank() } ?: "无法读取该库文件，请重新选择",
+    ),
+    error,
+)
+
+/** 一次附件写操作的意图（P2）。sealed 让 [Kdbx.applyAttachment] 只有一个入口。 */
+sealed interface KdbxAttachmentOp {
+    /** 新增附件：[plain] 是明文原始字节，[fileName] 是显示名。 */
+    data class Add(val fileName: String, val plain: ByteArray) : KdbxAttachmentOp
+
+    /** 删除附件：[attachmentId] 是 hash hex（即 `VaultAttachment.id`）。 */
+    data class Remove(val attachmentId: String) : KdbxAttachmentOp
 }

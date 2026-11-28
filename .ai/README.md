@@ -24,7 +24,88 @@
 - 已接进 CI：`ci-debug.yml` 的 `sandbox-tests` job 用**同一份脚本**，与 `android-ci` 并行
   ⇒ 本地绿 ⇒ CI 不会红在同一件事上。
 
-## 🕐 最新状态（2026-11-26 · #308 填充组装切主线程，只推 main）
+## 🕐 最新状态（2026-11-28 · 附件区默认折叠 + 100MB 前置预检）
+
+- **★ 追加改动（提交 `92eb3579`）**：用户反馈「没必要这么明显，大部分人不看附件」⇒
+  附件区改**默认折叠**：平时只画一行「📎 附件 · N」+ 展开箭头（48dp 整行可点），
+  展开态才画列表 / 空态添加区 / 列表末尾「+ 添加附件」；`rememberSaveable` 保状态。
+  新增 `attachment_count` / `attachment_expand` / `attachment_collapse` 三条文案。
+  首轮 CI detekt 红 2 条（LongMethod 158>150 / Cyclomatic 15>14），已在 `7bc17963`
+  抽出 `AttachmentHeaderRow` + `AttachmentExpandedCard` 修复；29 项门禁本地全绿。
+  **CI 终局 `46123518653` success**（docs `46123518695` success）；preview
+  `Vaultix-7bc1796.apk`（35.95 MB）：
+  https://github.com/Chaniug/Vaultix/releases/download/preview/Vaultix-7bc1796.apk
+  只推 `main`。
+- **上一轮（提交 `6b47fa7a`，务实档 UI + 100MB 前置预检，CI `46085412174` success，
+  preview `Vaultix-6b47fa7.apk`）**：用户诉求「添加附件的 UI 有点丑；附件大小 Bitwarden
+  有硬性规范，看一下标准」。
+  选定 **UI 务实档 + 统一 100MB（修预检时序）**；只推 `main`，未发版、未合 `rele`。
+- **规范依据（已查证官方源）**：Bitwarden 单附件 **500MB**（网页/桌面）、
+  **移动端上传 100MB 硬限**，付费账户总量 5GB（[帮助中心](https://bitwarden.com/help/attachments)、
+  [Send 文档](https://www.bitwarden.com/help/create-send/)）；KeePass/KDBX 格式层 **~4GB**
+  （UInt32、作者明确不可配置，[作者答复](https://sourceforge.net/p/keepass/discussion/329221/thread/89ff8fb2)、
+  [KDBX 规范](https://keepass.info/help/kb/kdbx.html)），但写库是整库重写，手机端 100MB 务实。
+  ⇒ **不改数值**，100MB 对齐 Bitwarden 移动端硬限，KDBX 沿用同一上限。
+- **提交 `6b47fa7a`（4 文件，+137/-26）**：
+  - `SafFiles.kt` 新增 `querySize()`（查 `OpenableColumns.SIZE`，拿不到/为 0 返回 null）；
+  - `ItemDetailScreen.kt` 选择器回调**先查 SIZE 再决定是否读字节**（超限 → `onTooLarge` 直接上报，
+    低内存机型不再白读 100MB）；入口改带文字的「+ 添加附件」`TextButton`；空态改可点区域
+    + 标注单附件上限；附件行加 `secondaryContainer` 淡底类型图标锚点；MB 展示保留 1 位小数；
+  - `ItemDetailViewModel.kt` `MAX_ATTACHMENT_BYTES` 改 `internal` 共用 + 新增 `onAttachmentTooLarge()`
+    事件入口，字节级检查保留为兜底（Provider 不报 SIZE 时）；
+  - `strings.xml` 空态文案改「点此添加」+ 新增 `attachment_limit_hint` + 超限文案明确「单个附件」；
+    删除已零引用的 `attachment_kdbx_readonly` 残留。
+- **本地**：29 项门禁全绿（另 2 项不接受根参数，单独跑绿）；`check_ui_hardcoded_text` /
+  `check_compile_smells` / 附件三门禁均绿。Compose 真编译交 CI（沙箱无 SDK）。
+- **CI 结论**：Android CI run `46085412174` **success**（lint / detekt / 31 门禁 / Debug APK /
+  单测 / sandbox 单测全绿）。Preview release `v0.13.11-dev-6b47fa7` 资产
+  `Vaultix-6b47fa7.apk`（35.95 MB）已挂载：
+  https://github.com/Chaniug/Vaultix/releases/download/preview/Vaultix-6b47fa7.apk
+- **真源**：[`SESSION-2026-11-28.md`](./SESSION-2026-11-28.md)（务实档 + 预检）、
+  [`SESSION-2026-11-28-part2.md`](./SESSION-2026-11-28-part2.md)（默认折叠）。
+  **未真机验收、未发正式版、未合 `rele`**。
+
+## 上一轮（2026-11-28 · 附件完善 P0/P1/P2 全部实施完成）
+
+- **用户诉求**：`全部做完，注意观察github action`。三阶段全落地，**只推 `main`，未发版、未合 `rele`**。
+- **P0 · Bitwarden 附件上传/删除**（`9d91e265`）：写方向加密（`BitwardenAttachmentCrypto`
+  16B IV + AES-CBC-PKCS7 + HMAC）、三个专用端点、`BitwardenAttachmentUploader`
+  （0=Direct Multipart 带 Bearer / 1=Azure PUT 无 Bearer）、详情页添加/删除 UI、
+  门禁 `check_bitwarden_attachment_write.py`（5 组变异自测）。
+- **P1 · KDBX 附件导出**（`a674bde3`）：`Kdbx.attachmentBytes()` 用 kotpass 0.13.0
+  公开 `db.binaries[hash].getContent()`（无需升版/反射），下载按 hash 现取明文并 `copyOf`
+  防误清会话；门禁 `check_kdbx_attachment_api.py`（4 组变异自测）。
+- **P2 · KDBX 附件新增/删除 + 安全收尾**（`b7e911a1`，CI 全绿）：
+  `KdbxItemWriter.addAttachment/removeAttachment` 在一次 mutate 里
+  `modifyBinaries{}+modifyEntry{}`（保真铁律：只 copy binaries、走 withHistory），删除后
+  `removeUnusedBinaries()` 只清无引用内容；`Kdbx.applyAttachment(sealed op)` 单入口避开
+  40 函数上限；仓储层 KDBX 分支 + UI 自动复用；门禁 `check_sensitive_cache_clear.py`
+  （4 组变异自测）钉住锁库/删条目清理链路。
+- **★ 订正**：方案初稿把 `fileUploadType` 写反——正确是 **0=Direct Multipart（带 Bearer）、
+  1=Azure Blob PUT（无 Bearer）**，以 bastion 常量为准；PLAN/SESSION 已回填。
+- **CI 修复**：P0 提交首轮 detekt 红 7 条（圈复杂度 / catch Throwable / MagicNumber），
+  已修并配变异自测；P1 首轮单测红 1 条（删除对话框裸按钮违反 #284），已改用
+  `DialogTextButton`。
+- **CI 结论**：P2 Android CI run `46044642536` **success**（detekt / 31 门禁 / Debug APK /
+  单测 1972 例全绿），docs `46044642544` success。Preview release `v0.13.11-dev-b7e911a`
+  资产 `Vaultix-b7e911a.apk` 已挂载。
+- **真源**：[`PLAN-附件完善-2026-11-27.md`](./PLAN-附件完善-2026-11-27.md)（各阶段结论已回填）、
+  过程见 [`SESSION-2026-11-27.md`](./SESSION-2026-11-27.md)。**尚未真机验收、未发正式版**。
+
+## 上一轮（2026-11-26 · v0.13.11 正式发布：#305/#306/#308 随版）
+
+- **发布结论（真实 run）**：用户 `发一个release` + 确认 `0.13.11 并合 rele`。`VERSION`
+  `0.13.10 → 0.13.11`，手写 `Docs/release-notes/v0.13.11.md`。因无 gh token / helper，
+  采用等价纯 git：本地 `rele-release` 合并 `origin/main`（`--no-ff`，历史 PR 同款合并提交）
+  推 `origin rele-release:rele`。`Android Stable Release` run `45746632447` **success**
+  （6m43s，仓库固定密钥签名），tag `v0.13.11` 与 `rele` 同指 `322e45a`，Release **Latest**。
+- **产物**：`Vaultix-v0.13.11.apk`（6.7 MB，混淆）、`checksums-sha256.txt`；APK SHA-256
+  `880f07e4…c60f1`，签名指纹 `7e6c8c07…1fd8`（与 v0.13.10 一致可覆盖安装），下载 HTTP 200。
+  发布说明手写版被正确采用。发布内容 = #305 指纹 KEK 显式生物失效 + #306 夸克名单 +
+  #307 诊断（仅元数据）+ #308 填充组装切主线程（真机 Edge 已验警告消失、填充照常）。
+- **只推 rele 触发发布，文档回填仍只在 main**（不再推 rele ⇒ 不二次发版）。
+
+## 上一轮（2026-11-26 · #308 填充组装切主线程，只推 main）
 
 - **起因**：#307 的 Edge 全链路日志夹 `AutofillValue: forText() not called on main thread`
   （DefaultDispatcher-worker）。功能未坏，但 framework 契约要求 Parcelable 组装在主线程，

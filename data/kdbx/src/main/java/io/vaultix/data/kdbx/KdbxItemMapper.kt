@@ -199,12 +199,11 @@ private fun Entry.toVaultItem(
         // 2026-10-21 补入：附件元信息。此前 **整块没读** ⇒ 库里挂着附件的条目在界面上
         // 完全看不出来（底层数据完好，只是没人展示），用户会以为"附件丢了"。
         //
-        // ⚠️ **只做"可见"，暂不做"导出"** —— 不是偷懒，是 kotpass 0.13.0 的结构限制：
-        //    `Entry.binaries` 只是 `BinaryReference`（hash + name），字节在
-        //    `Meta.binaries` 里，而**那个属性是 `@PublishedApi internal`**（已用 javap
-        //    核对字节码），从模块外拿不到；`KeePassDatabase` 也没有任何公开的
-        //    "按 hash 取二进制"的扩展函数。⇒ 想导出只能反射，那在密码库里不可接受。
-        //    解锁路径见 `.ai/issues/05` 的对应条目（升级 kotpass / 上游加公开 API）。
+        // ★ 2026-11-28 订正：此前注释称需反射访问、密码库不可接受——**已过时**。
+        //    kotpass 0.13.0（当前版本，也是上游最新版）已有公开
+        //    `KeePassDatabase.binaries` 与 `BinaryData.getContent()`，导出走
+        //    `Kdbx.attachmentBytes(vaultId, hash)`，不升版、不反射。
+        //    `Entry.binaries` 本身仍是 `BinaryReference`（hash + name），这里照旧只映射元信息。
         // ⚠️ 名字优先取引用上的 `name`（KDBX 允许同一个二进制在不同条目上叫不同名字），
         //    没有才回落到库里记的名字，再没有就给占位名 —— **不丢这一条**。
         attachments = binaries.mapNotNull { ref ->

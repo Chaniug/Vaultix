@@ -298,6 +298,32 @@ jobs:
       - name: Self-test autofill main-thread checker
         run: python3 "$GITHUB_WORKSPACE/.ai/tools/check_autofill_main_thread.py" --selftest
 
+      # ★ 附件 P0（2026-11-28）：Bitwarden 写方向四条不变量（无鉴权 client /
+      #   附件不进 toUpdateRequest / 异常清密钥 / 与 decrypt 格式对齐）。
+      #   编译与单测都看不出 Bearer 会不会泄露给第三方对象存储，配 4 组变异自测。
+      - name: Check Bitwarden attachment write invariants (P0)
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/check_bitwarden_attachment_write.py" "$GITHUB_WORKSPACE"
+
+      - name: Self-test Bitwarden attachment write checker
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/check_bitwarden_attachment_write.py" --selftest
+
+      # ★ 附件 P1（2026-11-28）：KDBX 附件必须走 kotpass 0.13.0 公开 binary API，
+      #   禁止反射、禁止过时「只能反射」结论继续误导人。配 4 组变异自测。
+      - name: Check KDBX attachment public API (P1)
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/check_kdbx_attachment_api.py" "$GITHUB_WORKSPACE"
+
+      - name: Self-test KDBX attachment API checker
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/check_kdbx_attachment_api.py" --selftest
+
+      # ★ 附件 P2（2026-11-28）：敏感明文缓存的三条清理链路（锁库 / 删条目 /
+      #   登记表齐全 / 下载落点覆盖）。断任何一条都是「明文长期滞留磁盘」，
+      #   编译与单测都看不见。配 4 组变异自测。
+      - name: Check sensitive cache clear invariants (P2)
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/check_sensitive_cache_clear.py" "$GITHUB_WORKSPACE"
+
+      - name: Self-test sensitive cache clear checker
+        run: python3 "$GITHUB_WORKSPACE/.ai/tools/check_sensitive_cache_clear.py" --selftest
+
       # ★ 2026-11-15（#293）：KDBX 通行密钥 credentialId 的跨模块保真契约。
       #
       # 真机：正式 v0.13.2 用 KDBX 库里保存的 passkey 登录 GitHub / x.com 报

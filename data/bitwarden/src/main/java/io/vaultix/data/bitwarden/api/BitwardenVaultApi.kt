@@ -15,16 +15,22 @@
 package io.vaultix.data.bitwarden.api
 
 import io.vaultix.data.bitwarden.model.AttachmentDownloadResponse
+import io.vaultix.data.bitwarden.model.AttachmentUploadRequest
+import io.vaultix.data.bitwarden.model.AttachmentUploadResponse
 import io.vaultix.data.bitwarden.model.CipherRequest
 import io.vaultix.data.bitwarden.model.CipherResponse
 import io.vaultix.data.bitwarden.model.FolderDto
 import io.vaultix.data.bitwarden.model.FolderListResponse
 import io.vaultix.data.bitwarden.model.FolderRequest
 import io.vaultix.data.bitwarden.model.SyncResponse
+import okhttp3.MultipartBody
+import retrofit2.Response
 import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
+import retrofit2.http.Multipart
 import retrofit2.http.POST
+import retrofit2.http.Part
 import retrofit2.http.PUT
 import retrofit2.http.Path
 
@@ -72,6 +78,40 @@ interface BitwardenVaultApi {
         @Path("id") id: String,
         @Path("attachmentId") attachmentId: String,
     ): AttachmentDownloadResponse
+
+    // ---- 附件写方向（P0 · 2026-11-28）------------------------------------
+
+    /**
+     * 申请附件上传地址（`POST /ciphers/{id}/attachment/v2`）。
+     *
+     * ⚠️ 走默认 client（带 Bearer）—— 这是**官方 API 端点**，不是第三方对象存储。
+     * 响应里的 `cipherResponse.attachments` 用于更新本地列表（不要走普通写回）。
+     */
+    @POST("ciphers/{id}/attachment/v2")
+    suspend fun createAttachmentUploadUrl(
+        @Path("id") id: String,
+        @Body body: AttachmentUploadRequest,
+    ): AttachmentUploadResponse
+
+    /**
+     * Direct Multipart 上传（`fileUploadType=0`，目标仍在本服务端 ⇒ 带 Bearer）。
+     * `key` part 是 EncString 文本，`data` part 是**密文字节**，别对调。
+     */
+    @Multipart
+    @POST("ciphers/{id}/attachment/{attachmentId}")
+    suspend fun uploadAttachmentDirect(
+        @Path("id") id: String,
+        @Path("attachmentId") attachmentId: String,
+        @Part key: MultipartBody.Part,
+        @Part data: MultipartBody.Part,
+    ): Response<Unit>
+
+    /** 删除单个附件（404 视为已不存在，由编排器判成功）。 */
+    @DELETE("ciphers/{id}/attachment/{attachmentId}")
+    suspend fun deleteAttachment(
+        @Path("id") id: String,
+        @Path("attachmentId") attachmentId: String,
+    ): Response<Unit>
 
     /** 永久删除。 */
     @DELETE("ciphers/{id}/delete")

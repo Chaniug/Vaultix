@@ -1,6 +1,7 @@
 package io.vaultix.vaultix.ui.detail
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -9,13 +10,18 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
@@ -48,6 +54,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -65,6 +72,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import android.content.Intent
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import kotlin.math.roundToInt
 import io.vaultix.common.OtpUriParser
 import io.vaultix.common.TotpConfig
 import io.vaultix.common.TotpGenerator
@@ -76,7 +84,6 @@ import io.vaultix.common.CardBrandDetector
 import io.vaultix.common.formatCardNumberGrouped
 import io.vaultix.model.VaultCard
 import io.vaultix.model.VaultAttachment
-import io.vaultix.model.VaultAttachmentSource
 import io.vaultix.model.VaultCustomField
 import io.vaultix.model.VaultFido2Credential
 import io.vaultix.model.VaultIdentity
@@ -88,9 +95,14 @@ import io.vaultix.model.VaultSshKey
 import io.vaultix.model.VaultUri
 import io.vaultix.vaultix.ui.theme.UiSize
 import io.vaultix.vaultix.ui.theme.VaultixCorner
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import io.vaultix.vaultix.R
 import io.vaultix.vaultix.ui.common.DialogTextButton
+import io.vaultix.vaultix.ui.common.queryDisplayName
+import io.vaultix.vaultix.ui.common.querySize
 import io.vaultix.vaultix.ui.common.AppLabel
 import io.vaultix.vaultix.ui.common.BadgeTone
 import io.vaultix.vaultix.ui.common.ItemFormDialog
@@ -172,20 +184,27 @@ private fun detailEventMessage(context: Context, event: ItemDetailViewModel.UiEv
         ItemDetailViewModel.UiEvent.SaveQueued -> context.getString(R.string.item_saved_queued)
         is ItemDetailViewModel.UiEvent.SaveFailed ->
             // 兜底理由同 ItemsScreen（见 UiEvent.SaveFailed 的 KDoc）。
-            context.getString(
-                R.string.item_save_failed,
-                event.message ?: context.getString(R.string.error_unknown_no_detail),
-            )
+            failureText(context, R.string.item_save_failed, event.message)
         ItemDetailViewModel.UiEvent.Deleted -> null
         is ItemDetailViewModel.UiEvent.DownloadFailed ->
             // 兜底理由同 [UiEvent.SaveFailed]：没细节时说什么归呈现层。
-            context.getString(
-                R.string.attachment_download_failed,
-                event.message ?: context.getString(R.string.error_unknown_no_detail),
-            )
+            failureText(context, R.string.attachment_download_failed, event.message)
         // DownloadDone 不是文案事件：要发起 ACTION_VIEW（可能失败并转提示），见收集处。
         is ItemDetailViewModel.UiEvent.DownloadDone -> null
+        ItemDetailViewModel.UiEvent.AttachmentChanged ->
+            context.getString(R.string.attachment_changed)
+        is ItemDetailViewModel.UiEvent.AttachmentChangeFailed ->
+            failureText(context, R.string.attachment_change_failed, event.message)
+        ItemDetailViewModel.UiEvent.AttachmentTooLarge -> context.getString(R.string.attachment_too_large)
     }
+
+/**
+ * 带理由的失败文案：没细节时回落通用兜底串。
+ *
+ * 抽出来既避免三处重复的三元表达式，也把 [detailEventMessage] 的圈复杂度压回门禁内。
+ */
+private fun failureText(context: Context, resId: Int, message: String?): String =
+    context.getString(resId, message ?: context.getString(R.string.error_unknown_no_detail))
 
 /** 掩码星号数量上限（密码过长时截断显示，复制不受影响）。 */
 private const val MAX_MASK_LENGTH = 24
@@ -240,7 +259,12 @@ private class DetailActions(
     val onCopyField: (String) -> Unit,
     val onCopyHistoryPassword: (String) -> Unit,
     val onDownloadAttachment: (VaultAttachment) -> Unit,
+    val onAddAttachment: (String, ByteArray) -> Unit,
+    val onRemoveAttachment: (VaultAttachment) -> Unit,
+    /** UI 前置拦截到超限文件时上报（选择器里按 SIZE 判，超限不读字节）。 */
+    val onAttachmentTooLarge: () -> Unit = {},
     val isDownloadingAttachment: Boolean = false,
+    val isChangingAttachment: Boolean = false,
     /**
      * 条目所属组织名（2026-10-21）。null = 个人条目 / 组织名还没解出来。
      * 做成 getter 而不是常量：组织名随解密流异步到达，条目先到时会短暂为 null。
@@ -627,6 +651,7 @@ fun ItemDetailScreen(
     val actions = remember(
         viewModel,
         state.downloadingAttachment,
+        state.changingAttachment,
         state.syncStatus,
         organizationNames,
     ) {
@@ -638,7 +663,11 @@ fun ItemDetailScreen(
             onCopyField = viewModel::copyField,
             onCopyHistoryPassword = viewModel::copyHistoryPassword,
             onDownloadAttachment = viewModel::downloadAttachment,
+            onAddAttachment = viewModel::addAttachment,
+            onRemoveAttachment = viewModel::removeAttachment,
+            onAttachmentTooLarge = viewModel::onAttachmentTooLarge,
             isDownloadingAttachment = state.downloadingAttachment,
+            isChangingAttachment = state.changingAttachment,
             organizationNameOf = { orgId -> organizationNames[orgId] },
             syncStatus = state.syncStatus,
         )
@@ -1632,14 +1661,17 @@ private fun HistoryAndAttachments(item: VaultItem, actions: DetailActions) {
             onCopyHistoryPassword = actions.onCopyHistoryPassword,
         )
     }
-    if (item.attachments.isNotEmpty()) {
-        Spacer(Modifier.height(Spacing.md))
-        AttachmentsSection(
-            attachments = item.attachments,
-            downloading = actions.isDownloadingAttachment,
-            onDownload = actions.onDownloadAttachment,
-        )
-    }
+    // ★ 空列表也要画分区：否则用户看不到「添加附件」入口，功能等于不存在。
+    Spacer(Modifier.height(Spacing.md))
+    AttachmentsSection(
+        attachments = item.attachments,
+        downloading = actions.isDownloadingAttachment,
+        changing = actions.isChangingAttachment,
+        onDownload = actions.onDownloadAttachment,
+        onAdd = actions.onAddAttachment,
+        onRemove = actions.onRemoveAttachment,
+        onTooLarge = actions.onAttachmentTooLarge,
+    )
 }
 
 /**
@@ -1776,22 +1808,189 @@ private fun PasswordHistoryRow(entry: VaultPasswordHistoryEntry, onCopy: () -> U
 }
 
 /**
- * 附件分区。
+ * 附件分区（P0/P1/P2 · 2026-11-28 读写完整；同日改为**默认折叠**）。
  *
- * - Bitwarden 附件：显示文件名 / 大小，带「下载并打开」按钮 —— 下载期间
- *   其它附件的按钮一并禁用（ViewModel 同一时刻只跑一个下载，避免大文件并发）。
- * - KDBX 附件：只显示文件名 + 只读说明（kotpass 结构限制，见
- *   [io.vaultix.model.VaultAttachment] 的 KDoc），不给按钮。
+ * - **默认折叠**：绝大多数条目没有附件、或用户不关心附件 ⇒ 平时只画一行轻量标题
+ *   （「附件 · N」+ 展开箭头）。N 让人知道有几份，但不打扰；点开才画列表与添加入口。
+ *   折叠状态用 `rememberSaveable`，转屏 / 进程重建不丢。
+ * - 展开态里下载 / 上传 / 删除同一时刻各只允许一个（ViewModel 有 `changingAttachment`
+ *   门禁），按钮据此禁用，避免大文件并发把 UI 卡住。
+ * - 文件选择器只读 `content://` Uri 的**显示名 + 字节**，不碰路径 ——
+ *   `ACTION_OPEN_DOCUMENT` 返回的 Uri 在 SAF 下没有可移植的文件路径。
  */
 @Composable
 private fun AttachmentsSection(
     attachments: List<VaultAttachment>,
     downloading: Boolean,
+    changing: Boolean,
     onDownload: (VaultAttachment) -> Unit,
+    onAdd: (String, ByteArray) -> Unit,
+    onRemove: (VaultAttachment) -> Unit,
+    onTooLarge: () -> Unit,
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var pendingRemove by remember { mutableStateOf<VaultAttachment?>(null) }
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    val pickLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            // 前置拦截：先问系统 SIZE，超 100MB 就不读字节（低内存机型读 100MB 会先 OOM）。
+            // Provider 不报 SIZE 时返回 null，走兜底：仍读出来由 ViewModel 再判一次。
+            val declaredSize = withContext(Dispatchers.IO) { querySize(context, uri) }
+            if (declaredSize != null && declaredSize > MAX_ATTACHMENT_BYTES) {
+                onTooLarge()
+                return@launch
+            }
+            val picked = withContext(Dispatchers.IO) {
+                val displayName = queryDisplayName(context, uri)
+                val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                    ?: return@withContext null
+                (displayName ?: context.getString(R.string.attachment_unnamed)) to bytes
+            }
+            if (picked != null) onAdd(picked.first, picked.second)
+        }
+    }
+
     Column {
-        SectionTitle(text = stringResource(R.string.section_attachments), icon = Icons.Filled.AttachFile)
-        DetailCard {
+        AttachmentHeaderRow(
+            expanded = expanded,
+            count = attachments.size,
+            onToggle = { expanded = !expanded },
+        )
+        if (expanded) {
+            AttachmentExpandedCard(
+                attachments = attachments,
+                downloading = downloading,
+                changing = changing,
+                onDownload = onDownload,
+                onAdd = { pickLauncher.launch("*/*") },
+                onRemove = { pendingRemove = it },
+            )
+        }
+    }
+
+    pendingRemove?.let { target ->
+        AlertDialog(
+            onDismissRequest = { pendingRemove = null },
+            title = { Text(stringResource(R.string.attachment_remove_title)) },
+            text = { Text(stringResource(R.string.attachment_remove_message, target.fileName)) },
+            confirmButton = {
+                DialogTextButton(
+                    text = stringResource(R.string.attachment_remove_confirm),
+                    contentColor = MaterialTheme.colorScheme.error,
+                    enabled = !changing,
+                    onClick = {
+                        pendingRemove = null
+                        onRemove(target)
+                    },
+                )
+            },
+            dismissButton = {
+                DialogTextButton(
+                    text = stringResource(R.string.action_cancel),
+                    enabled = !changing,
+                    onClick = { pendingRemove = null },
+                )
+            },
+        )
+    }
+}
+
+/**
+ * 附件折叠行：整行 48dp 可点（无障碍触摸目标）。
+ *
+ * 标题沿用 [SectionTitle] 的字阶与配色，但自带点击与箭头——不放常驻「+」按钮，
+ * 避免大多数不看附件的用户被它抢注意力。数量只在真有附件时显示：让人知道有几份，
+ * 但不展开内容、不打扰。
+ */
+@Composable
+private fun AttachmentHeaderRow(expanded: Boolean, count: Int, onToggle: () -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = UiSize.TouchTarget)
+            .clickable(onClick = onToggle)
+            .padding(horizontal = Spacing.xs),
+    ) {
+        Icon(
+            Icons.Filled.AttachFile,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(UiSize.InlineIcon),
+        )
+        Spacer(Modifier.width(Spacing.sm))
+        Text(
+            text = stringResource(R.string.section_attachments),
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (count > 0) {
+            Spacer(Modifier.width(Spacing.xs))
+            Text(
+                text = stringResource(R.string.attachment_count, count),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Spacer(Modifier.weight(1f))
+        Icon(
+            imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+            contentDescription = stringResource(
+                if (expanded) R.string.attachment_collapse else R.string.attachment_expand,
+            ),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(UiSize.InlineIcon),
+        )
+    }
+}
+
+/**
+ * 附件展开态内容：空态可点添加区 / 列表 + 末尾添加按钮。
+ *
+ * 从 [AttachmentsSection] 抽出来是为了压 detekt 的 LongMethod / CyclomaticComplexMethod
+ * （折叠 + 选择 + 删除确认 + 内容全挤一个函数会超 150 行 / 复杂度 14）。
+ */
+@Composable
+private fun AttachmentExpandedCard(
+    attachments: List<VaultAttachment>,
+    downloading: Boolean,
+    changing: Boolean,
+    onDownload: (VaultAttachment) -> Unit,
+    onAdd: () -> Unit,
+    onRemove: (VaultAttachment) -> Unit,
+) {
+    DetailCard {
+        if (attachments.isEmpty()) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = UiSize.TouchTarget)
+                    .clickable(enabled = !changing, onClick = onAdd)
+                    .padding(horizontal = Spacing.lg, vertical = Spacing.md),
+            ) {
+                Icon(
+                    Icons.Filled.AttachFile,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(UiSize.SecondaryIcon),
+                )
+                Text(
+                    text = stringResource(R.string.attachment_empty_hint),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = Spacing.xs),
+                )
+                Text(
+                    text = stringResource(R.string.attachment_limit_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = UiSize.HairGap),
+                )
+            }
+        } else {
             Column(modifier = Modifier.padding(vertical = Spacing.sm)) {
                 attachments.forEachIndexed { index, attachment ->
                     if (index > 0) {
@@ -1803,7 +2002,29 @@ private fun AttachmentsSection(
                     AttachmentRow(
                         attachment = attachment,
                         downloading = downloading,
+                        changing = changing,
                         onDownload = { onDownload(attachment) },
+                        onRemove = { onRemove(attachment) },
+                    )
+                }
+                // 有附件时也要能继续添加：放在列表末尾的轻量文字按钮，不占顶部视觉。
+                TextButton(
+                    onClick = onAdd,
+                    enabled = !changing,
+                    contentPadding = PaddingValues(
+                        horizontal = Spacing.lg,
+                        vertical = UiSize.HairGap,
+                    ),
+                ) {
+                    Icon(
+                        Icons.Filled.Add,
+                        contentDescription = null,
+                        modifier = Modifier.size(UiSize.InlineIcon),
+                    )
+                    Spacer(Modifier.width(UiSize.HairGap))
+                    Text(
+                        text = stringResource(R.string.attachment_add),
+                        style = MaterialTheme.typography.labelLarge,
                     )
                 }
             }
@@ -1811,19 +2032,44 @@ private fun AttachmentsSection(
     }
 }
 
-/** 附件单行：文件名 + 大小；Bitwarden 来源带「下载并打开」按钮。 */
+/**
+ * 附件单行：类型图标底色 + 文件名 + 大小 + 下载 / 删除按钮。
+ *
+ * 类型图标用统一的 [Icons.Filled.AttachFile] 放在 `secondaryContainer` 淡底圆角方块里：
+ * 不按扩展名分类型（会引入一整套 mime→图标映射和未知类型的兜底，收益低），
+ * 目的只是给每行一个稳定的视觉锚点，让文件名不再直接贴在卡片左边。
+ */
 @Composable
 private fun AttachmentRow(
     attachment: VaultAttachment,
     downloading: Boolean,
+    changing: Boolean,
     onDownload: () -> Unit,
+    onRemove: () -> Unit,
 ) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = Spacing.lg, end = Spacing.sm, top = Spacing.sm, bottom = Spacing.sm),
+            .padding(start = Spacing.md, end = Spacing.sm, top = Spacing.sm, bottom = Spacing.sm),
     ) {
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .size(ATTACHMENT_ICON_BOX)
+                .background(
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    shape = RoundedCornerShape(UiSize.HairGap),
+                ),
+        ) {
+            Icon(
+                Icons.Filled.AttachFile,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier.size(UiSize.InlineIcon),
+            )
+        }
+        Spacer(Modifier.width(Spacing.sm))
         Column(modifier = Modifier.weight(1f).padding(end = Spacing.xs)) {
             Text(
                 text = attachment.fileName,
@@ -1831,14 +2077,7 @@ private fun AttachmentRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            if (attachment.source == VaultAttachmentSource.Kdbx) {
-                Text(
-                    text = stringResource(R.string.attachment_kdbx_readonly),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = UiSize.HairGap),
-                )
-            } else if (attachment.size > 0) {
+            if (attachment.size > 0) {
                 Text(
                     text = formatAttachmentSize(attachment.size),
                     style = MaterialTheme.typography.labelMedium,
@@ -1847,25 +2086,38 @@ private fun AttachmentRow(
                 )
             }
         }
-        if (attachment.source == VaultAttachmentSource.Bitwarden) {
-            IconButton(onClick = onDownload, enabled = !downloading) {
-                Icon(
-                    Icons.Filled.Download,
-                    contentDescription = stringResource(R.string.attachment_download),
-                    modifier = Modifier.size(UiSize.InlineIcon),
-                )
-            }
+        IconButton(onClick = onDownload, enabled = !downloading && !changing) {
+            Icon(
+                Icons.Filled.Download,
+                contentDescription = stringResource(R.string.attachment_download),
+                modifier = Modifier.size(UiSize.InlineIcon),
+            )
+        }
+        IconButton(onClick = onRemove, enabled = !changing && !downloading) {
+            Icon(
+                Icons.Filled.Delete,
+                contentDescription = stringResource(R.string.attachment_remove),
+                modifier = Modifier.size(UiSize.InlineIcon),
+            )
         }
     }
 }
 
+/** 附件类型图标底色方块边长（比 [UiSize.TouchTarget] 小，纯装饰、不可点）。 */
+private val ATTACHMENT_ICON_BOX = 40.dp
+
 /** 字节换算基数：KB / MB（附件大小展示用）。 */
 private const val ATTACHMENT_SIZE_KB = 1 shl 10
 private const val ATTACHMENT_SIZE_MB = 1 shl 20
+/** 一位小数的十倍放大系数（MB 展示用）。 */
+private const val ATTACHMENT_SIZE_TENTHS = 10
 
-/** 字节数 → 可读大小（B/KB/MB，向上取整到一位小数以内的整数）。 */
+/** 字节数 → 可读大小：MB 保留 1 位小数（如 2.4 MB），KB/B 取整。 */
 private fun formatAttachmentSize(bytes: Long): String = when {
-    bytes >= ATTACHMENT_SIZE_MB -> "${bytes / ATTACHMENT_SIZE_MB} MB"
+    bytes >= ATTACHMENT_SIZE_MB -> {
+        val tenths = (bytes.toFloat() / ATTACHMENT_SIZE_MB * ATTACHMENT_SIZE_TENTHS).roundToInt()
+        "${tenths / ATTACHMENT_SIZE_TENTHS.toFloat()} MB"
+    }
     bytes >= ATTACHMENT_SIZE_KB -> "${bytes / ATTACHMENT_SIZE_KB} KB"
     else -> "$bytes B"
 }

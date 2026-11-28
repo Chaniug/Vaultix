@@ -1388,10 +1388,24 @@
 
     <!-- 条目附件（Bitwarden 元信息 / KDBX 库内二进制，2026-10-21） -->
     <string name="section_attachments">附件</string>
-    <string name="attachment_kdbx_readonly">附件存在这个密码库里，当前版本暂不支持导出</string>
     <string name="attachment_download">下载并打开这个附件</string>
     <string name="attachment_downloaded_open_failed">附件已下载，但没有能打开它的应用</string>
     <string name="attachment_download_failed">附件下载失败：%1$s</string>
+    <!-- 附件读写（P0/P1/P2 · 2026-11-28） -->
+    <string name="attachment_add">添加附件</string>
+    <string name="attachment_count">%1$d 个</string>
+    <string name="attachment_expand">展开附件列表</string>
+    <string name="attachment_collapse">收起附件列表</string>
+    <string name="attachment_empty_hint">还没有附件，点此添加</string>
+    <string name="attachment_limit_hint">单个附件不超过 100 MB</string>
+    <string name="attachment_unnamed">未命名附件</string>
+    <string name="attachment_remove">删除这个附件</string>
+    <string name="attachment_remove_title">删除附件</string>
+    <string name="attachment_remove_message">确定删除「%1$s」吗？此操作会同时从库中移除。</string>
+    <string name="attachment_remove_confirm">删除</string>
+    <string name="attachment_changed">附件已更新</string>
+    <string name="attachment_change_failed">附件操作失败：%1$s</string>
+    <string name="attachment_too_large">单个附件超过 100 MB 上限</string>
 
     <!-- 通用字段复制提示 -->
     <string name="copy_field">已复制</string>

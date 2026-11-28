@@ -34,6 +34,7 @@ package io.vaultix.data.repository
 import io.vaultix.database.dao.VaultDao
 import io.vaultix.common.logging.VaultixLog
 import io.vaultix.data.kdbx.Kdbx
+import io.vaultix.data.kdbx.KdbxAttachmentOp
 import io.vaultix.data.kdbx.KdbxFailure
 import io.vaultix.data.kdbx.KdbxWriteFailure
 import io.vaultix.data.kdbx.folderIdOf
@@ -181,6 +182,43 @@ class KdbxItemRepository @Inject constructor(
                 persist(vaultId, write)
             }
         }
+
+    // ---------------------------------------------------------------- 附件（P2 · 2026-11-28）
+
+    /** 新增附件：与五个条目写动作走同一条 [serialWrite] → mutate → [persist] 链路。 */
+    suspend fun addAttachment(
+        vaultId: String,
+        itemId: String,
+        fileName: String,
+        plain: ByteArray,
+    ): Result<VaultSaveOutcome> = serialWrite {
+        runCatching {
+            assertWritable(vaultId)
+            val write = Kdbx.applyAttachment(
+                vaultId,
+                itemId,
+                KdbxAttachmentOp.Add(fileName, plain),
+            ).getOrElse { throw it.toUserFacing() }
+            persist(vaultId, write)
+        }
+    }
+
+    /** 删除附件：[attachmentId] 是 hash hex。 */
+    suspend fun removeAttachment(
+        vaultId: String,
+        itemId: String,
+        attachmentId: String,
+    ): Result<VaultSaveOutcome> = serialWrite {
+        runCatching {
+            assertWritable(vaultId)
+            val write = Kdbx.applyAttachment(
+                vaultId,
+                itemId,
+                KdbxAttachmentOp.Remove(attachmentId),
+            ).getOrElse { throw it.toUserFacing() }
+            persist(vaultId, write)
+        }
+    }
 
     // ---------------------------------------------------------------- 文件夹（分组）
 
