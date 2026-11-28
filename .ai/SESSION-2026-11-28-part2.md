@@ -31,12 +31,21 @@
 - 本地 29 项 `check_*.py` 门禁全绿；`check_orphan_state` 扫 225 个 kt 文件 0 个孤儿状态
   （`expanded` 被读被写，不算孤儿）。UI 硬编码文案门禁绿。
 - Compose 真编译交 CI（沙箱无 Android SDK）。
+- **首轮 CI `46122777099` detekt 红 2 条**（提交 `92eb3579`）：
+  `AttachmentsSection` too long（158 > 150）+ CyclomaticComplexity（15 > 14）。
+  折叠行 / 空态 / 列表 / 删除确认全挤一个函数导致。
+  **修复（提交 `7bc17963`）**：抽出 `AttachmentHeaderRow`（折叠行，40 行）
+  与 `AttachmentExpandedCard`（展开态，~80 行）两个 Composable；
+  主函数只剩状态 + 选择器回调 + 两个调用（~74 行代码）。本地门禁复核绿。
+  ⇒ **教训复用**：给已有 Composable 加 `if (expanded)` 整块分支时，先估行数与圈复杂度，
+  Compose 分支很容易把单函数推过 150 行 / 14 复杂度，拆函数比加 `@Suppress` 更干净。
 
 ## 4. CI / preview / 待办
-> 待 CI 出结果后回填。
-
-- Android CI run：__待回填__
-- Preview：__待回填__
+- **Android CI run `46123518653` success**（lint / detekt / 31 门禁 / Debug APK / 单测 /
+  sandbox 单测全绿；首轮 `46122777099` detekt 红已由 `7bc17963` 修复）；
+  docs CI `46123518695` success。
+- **Preview**：`v0.13.11-dev-7bc1796` / `Vaultix-7bc1796.apk`（35.95 MB），
+  https://github.com/Chaniug/Vaultix/releases/download/preview/Vaultix-7bc1796.apk
 - **未真机验收、未发正式版、未合 `rele`**。真机重点：① 折叠行点一次展开、再点收起，
   转屏后状态保持；② 有附件时折叠行显示「N 个」；③ 展开后空态点整块可拉起选择器，
   有附件时列表末尾「+ 添加附件」可拉起选择器；④ 100MB 超限提示仍正常。

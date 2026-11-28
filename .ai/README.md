@@ -30,7 +30,12 @@
   附件区改**默认折叠**：平时只画一行「📎 附件 · N」+ 展开箭头（48dp 整行可点），
   展开态才画列表 / 空态添加区 / 列表末尾「+ 添加附件」；`rememberSaveable` 保状态。
   新增 `attachment_count` / `attachment_expand` / `attachment_collapse` 三条文案。
-  29 项门禁本地全绿；CI / preview 待回填。只推 `main`。
+  首轮 CI detekt 红 2 条（LongMethod 158>150 / Cyclomatic 15>14），已在 `7bc17963`
+  抽出 `AttachmentHeaderRow` + `AttachmentExpandedCard` 修复；29 项门禁本地全绿。
+  **CI 终局 `46123518653` success**（docs `46123518695` success）；preview
+  `Vaultix-7bc1796.apk`（35.95 MB）：
+  https://github.com/Chaniug/Vaultix/releases/download/preview/Vaultix-7bc1796.apk
+  只推 `main`。
 - **上一轮（提交 `6b47fa7a`，务实档 UI + 100MB 前置预检，CI `46085412174` success，
   preview `Vaultix-6b47fa7.apk`）**：用户诉求「添加附件的 UI 有点丑；附件大小 Bitwarden
   有硬性规范，看一下标准」。
