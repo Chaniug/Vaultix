@@ -24,7 +24,35 @@
 - 已接进 CI：`ci-debug.yml` 的 `sandbox-tests` job 用**同一份脚本**，与 `android-ci` 并行
   ⇒ 本地绿 ⇒ CI 不会红在同一件事上。
 
-## 🕐 最新状态（2026-11-28 · 附件完善 P0/P1/P2 全部实施完成）
+## 🕐 最新状态（2026-11-28 · 附件区 UI 务实档改版 + 100MB 前置预检）
+
+- **用户诉求**：「添加附件的 UI 有点丑；附件大小 Bitwarden 有硬性规范，看一下标准」。
+  选定 **UI 务实档 + 统一 100MB（修预检时序）**；只推 `main`，未发版、未合 `rele`。
+- **规范依据（已查证官方源）**：Bitwarden 单附件 **500MB**（网页/桌面）、
+  **移动端上传 100MB 硬限**，付费账户总量 5GB（[帮助中心](https://bitwarden.com/help/attachments)、
+  [Send 文档](https://www.bitwarden.com/help/create-send/)）；KeePass/KDBX 格式层 **~4GB**
+  （UInt32、作者明确不可配置，[作者答复](https://sourceforge.net/p/keepass/discussion/329221/thread/89ff8fb2)、
+  [KDBX 规范](https://keepass.info/help/kb/kdbx.html)），但写库是整库重写，手机端 100MB 务实。
+  ⇒ **不改数值**，100MB 对齐 Bitwarden 移动端硬限，KDBX 沿用同一上限。
+- **提交 `6b47fa7a`（4 文件，+137/-26）**：
+  - `SafFiles.kt` 新增 `querySize()`（查 `OpenableColumns.SIZE`，拿不到/为 0 返回 null）；
+  - `ItemDetailScreen.kt` 选择器回调**先查 SIZE 再决定是否读字节**（超限 → `onTooLarge` 直接上报，
+    低内存机型不再白读 100MB）；入口改带文字的「+ 添加附件」`TextButton`；空态改可点区域
+    + 标注单附件上限；附件行加 `secondaryContainer` 淡底类型图标锚点；MB 展示保留 1 位小数；
+  - `ItemDetailViewModel.kt` `MAX_ATTACHMENT_BYTES` 改 `internal` 共用 + 新增 `onAttachmentTooLarge()`
+    事件入口，字节级检查保留为兜底（Provider 不报 SIZE 时）；
+  - `strings.xml` 空态文案改「点此添加」+ 新增 `attachment_limit_hint` + 超限文案明确「单个附件」；
+    删除已零引用的 `attachment_kdbx_readonly` 残留。
+- **本地**：29 项门禁全绿（另 2 项不接受根参数，单独跑绿）；`check_ui_hardcoded_text` /
+  `check_compile_smells` / 附件三门禁均绿。Compose 真编译交 CI（沙箱无 SDK）。
+- **CI 结论**：Android CI run `46085412174` **success**（lint / detekt / 31 门禁 / Debug APK /
+  单测 / sandbox 单测全绿）。Preview release `v0.13.11-dev-6b47fa7` 资产
+  `Vaultix-6b47fa7.apk`（35.95 MB）已挂载：
+  https://github.com/Chaniug/Vaultix/releases/download/preview/Vaultix-6b47fa7.apk
+- **真源**：[`SESSION-2026-11-28.md`](./SESSION-2026-11-28.md)。
+  **未真机验收、未发正式版、未合 `rele`**。
+
+## 上一轮（2026-11-28 · 附件完善 P0/P1/P2 全部实施完成）
 
 - **用户诉求**：`全部做完，注意观察github action`。三阶段全落地，**只推 `main`，未发版、未合 `rele`**。
 - **P0 · Bitwarden 附件上传/删除**（`9d91e265`）：写方向加密（`BitwardenAttachmentCrypto`
