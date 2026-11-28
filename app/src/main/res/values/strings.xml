@@ -1393,6 +1393,9 @@
     <string name="attachment_download_failed">附件下载失败：%1$s</string>
     <!-- 附件读写（P0/P1/P2 · 2026-11-28） -->
     <string name="attachment_add">添加附件</string>
+    <string name="attachment_count">%1$d 个</string>
+    <string name="attachment_expand">展开附件列表</string>
+    <string name="attachment_collapse">收起附件列表</string>
     <string name="attachment_empty_hint">还没有附件，点此添加</string>
     <string name="attachment_limit_hint">单个附件不超过 100 MB</string>
     <string name="attachment_unnamed">未命名附件</string>

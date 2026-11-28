@@ -1808,11 +1808,13 @@ private fun PasswordHistoryRow(entry: VaultPasswordHistoryEntry, onCopy: () -> U
 }
 
 /**
- * 附件分区（P0/P1/P2 · 2026-11-28 完整读写）。
+ * 附件分区（P0/P1/P2 · 2026-11-28 读写完整；同日改为**默认折叠**）。
  *
- * - 空列表也要画：否则用户根本看不到「添加附件」入口，功能等于不存在。
- * - 下载 / 上传 / 删除同一时刻各只允许一个（ViewModel 有 `changingAttachment` 门禁），
- *   按钮据此禁用，避免大文件并发把 UI 卡住。
+ * - **默认折叠**：绝大多数条目没有附件、或用户不关心附件 ⇒ 平时只画一行轻量标题
+ *   （「附件 · N」+ 展开箭头）。N 让人知道有几份，但不打扰；点开才画列表与添加入口。
+ *   折叠状态用 `rememberSaveable`，转屏 / 进程重建不丢。
+ * - 展开态里下载 / 上传 / 删除同一时刻各只允许一个（ViewModel 有 `changingAttachment`
+ *   门禁），按钮据此禁用，避免大文件并发把 UI 卡住。
  * - 文件选择器只读 `content://` Uri 的**显示名 + 字节**，不碰路径 ——
  *   `ACTION_OPEN_DOCUMENT` 返回的 Uri 在 SAF 下没有可移植的文件路径。
  */
@@ -1829,6 +1831,7 @@ private fun AttachmentsSection(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var pendingRemove by remember { mutableStateOf<VaultAttachment?>(null) }
+    var expanded by rememberSaveable { mutableStateOf(false) }
     val pickLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         scope.launch {
@@ -1850,74 +1853,113 @@ private fun AttachmentsSection(
     }
 
     Column {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            SectionTitle(text = stringResource(R.string.section_attachments), icon = Icons.Filled.AttachFile)
+        // 折叠行：整行 48dp 可点（无障碍触摸目标）。标题沿用 SectionTitle 的字阶/配色，
+        // 但自带点击与箭头——不放常驻「+」按钮，避免大多数不看附件的用户被它抢注意力。
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = UiSize.TouchTarget)
+                .clickable { expanded = !expanded }
+                .padding(horizontal = Spacing.xs),
+        ) {
+            Icon(
+                Icons.Filled.AttachFile,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(UiSize.InlineIcon),
+            )
             Spacer(Modifier.width(Spacing.sm))
-            TextButton(
-                onClick = { pickLauncher.launch("*/*") },
-                enabled = !changing,
-                contentPadding = PaddingValues(
-                    horizontal = Spacing.xs,
-                    vertical = UiSize.HairGap,
-                ),
-            ) {
-                Icon(
-                    Icons.Filled.Add,
-                    contentDescription = null,
-                    modifier = Modifier.size(UiSize.InlineIcon),
-                )
-                Spacer(Modifier.width(UiSize.HairGap))
+            Text(
+                text = stringResource(R.string.section_attachments),
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (attachments.isNotEmpty()) {
+                Spacer(Modifier.width(Spacing.xs))
                 Text(
-                    text = stringResource(R.string.attachment_add),
-                    style = MaterialTheme.typography.labelLarge,
+                    text = stringResource(R.string.attachment_count, attachments.size),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            Spacer(Modifier.weight(1f))
+            Icon(
+                imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                contentDescription = stringResource(
+                    if (expanded) R.string.attachment_collapse else R.string.attachment_expand,
+                ),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(UiSize.InlineIcon),
+            )
         }
-        DetailCard {
-            if (attachments.isEmpty()) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = UiSize.TouchTarget)
-                        .clickable(enabled = !changing) { pickLauncher.launch("*/*") }
-                        .padding(horizontal = Spacing.lg, vertical = Spacing.md),
-                ) {
-                    Icon(
-                        Icons.Filled.AttachFile,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(UiSize.SecondaryIcon),
-                    )
-                    Text(
-                        text = stringResource(R.string.attachment_empty_hint),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = Spacing.xs),
-                    )
-                    Text(
-                        text = stringResource(R.string.attachment_limit_hint),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = UiSize.HairGap),
-                    )
-                }
-            } else {
-                Column(modifier = Modifier.padding(vertical = Spacing.sm)) {
-                    attachments.forEachIndexed { index, attachment ->
-                        if (index > 0) {
-                            HorizontalDivider(
-                                modifier = Modifier.padding(start = Spacing.lg),
-                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+        if (expanded) {
+            DetailCard {
+                if (attachments.isEmpty()) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = UiSize.TouchTarget)
+                            .clickable(enabled = !changing) { pickLauncher.launch("*/*") }
+                            .padding(horizontal = Spacing.lg, vertical = Spacing.md),
+                    ) {
+                        Icon(
+                            Icons.Filled.AttachFile,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(UiSize.SecondaryIcon),
+                        )
+                        Text(
+                            text = stringResource(R.string.attachment_empty_hint),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = Spacing.xs),
+                        )
+                        Text(
+                            text = stringResource(R.string.attachment_limit_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = UiSize.HairGap),
+                        )
+                    }
+                } else {
+                    Column(modifier = Modifier.padding(vertical = Spacing.sm)) {
+                        attachments.forEachIndexed { index, attachment ->
+                            if (index > 0) {
+                                HorizontalDivider(
+                                    modifier = Modifier.padding(start = Spacing.lg),
+                                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                                )
+                            }
+                            AttachmentRow(
+                                attachment = attachment,
+                                downloading = downloading,
+                                changing = changing,
+                                onDownload = { onDownload(attachment) },
+                                onRemove = { pendingRemove = attachment },
                             )
                         }
-                        AttachmentRow(
-                            attachment = attachment,
-                            downloading = downloading,
-                            changing = changing,
-                            onDownload = { onDownload(attachment) },
-                            onRemove = { pendingRemove = attachment },
-                        )
+                        // 有附件时也要能继续添加：放在列表末尾的轻量文字按钮，不占顶部视觉。
+                        TextButton(
+                            onClick = { pickLauncher.launch("*/*") },
+                            enabled = !changing,
+                            contentPadding = PaddingValues(
+                                horizontal = Spacing.lg,
+                                vertical = UiSize.HairGap,
+                            ),
+                        ) {
+                            Icon(
+                                Icons.Filled.Add,
+                                contentDescription = null,
+                                modifier = Modifier.size(UiSize.InlineIcon),
+                            )
+                            Spacer(Modifier.width(UiSize.HairGap))
+                            Text(
+                                text = stringResource(R.string.attachment_add),
+                                style = MaterialTheme.typography.labelLarge,
+                            )
+                        }
                     }
                 }
             }
